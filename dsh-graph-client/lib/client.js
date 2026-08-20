@@ -1,6 +1,6 @@
 // dsh-graph-client — 浏览器半边：手写 classic script，零构建。
-// 二维泳道看板：横轴生命周期阶段，纵轴版本 + 独立目标 + backlog。
-// 已发布版本默认收起置底（点击展开）；目标卡显示上下文子卡片，点击展开详情。
+// 二维泳道看板。视觉约定：卡片类型用「粗左边框 + 颜色 + 图标」区分；
+// 依赖关系用琥珀色左边框 + 「⛓ 等待」标识；详情走 modal 弹窗；事件话术人类化。
 window.__ModuleLoader__.load({
   id: "dsh-graph-client",
   factory(require) {
@@ -16,51 +16,78 @@ window.__ModuleLoader__.load({
       { key: "blocked", label: "阻塞", statuses: ["blocked"] },
     ];
 
+    const STATUS_LABEL = {
+      draft: "草稿", planning: "规划中", collecting: "收集中", ready: "就绪",
+      in_progress: "执行中", review: "评审中", delivered: "已交付", blocked: "阻塞",
+    };
+
+    const EVENT_LABEL = {
+      "goal.created": "创建目标", "goal.planned": "完成规划", "criteria.confirmed": "确认判据",
+      "goal.transition": null, "attempt.started": "派发执行", "attempt.status_reported": null,
+      "completion.claimed": "声明完成", "review.passed": "评审通过", "review.failed": "评审未通过",
+      "goal.moved": "排期移动", "card.created": "创建卡片", "card.filled": "填充卡片",
+      "card.reviewed": "复核卡片", "evidence.added": "登记证据", "memory.promoted": "沉淀记忆",
+      "version.created": "创建版本", "version.released": "发布版本",
+      "version.scope_changed": "调整版本范围", "version.integration_decided": "集成测试决策",
+      "goal.deleted": "删除目标", "card.deleted": "删除卡片", "attempt.bound": "绑定子代理",
+    };
+
+    function humanEvent(e) {
+      const d = e.details ?? {};
+      let what = EVENT_LABEL[e.event];
+      if (what === null || what === undefined) {
+        if (e.event === "goal.transition") what = `状态流转：${STATUS_LABEL[d.from] ?? d.from} → ${STATUS_LABEL[d.to] ?? d.to}`;
+        else if (e.event === "attempt.status_reported") what = `汇报：${d.status ?? ""}`;
+        else what = e.event;
+      }
+      const who = String(e.actor ?? "")
+        .replace(/^human:/, "").replace(/^supervisor:.*/, "监督代理")
+        .replace(/^agent:session-.*/, "执行代理").replace(/^agent:/, "代理:");
+      const when = String(e.ts ?? "").replace("T", " ").slice(5, 16);
+      return `${when}  ${what}（${who}）`;
+    }
+
     const S = {
-      wrap: { padding: 12, fontFamily: "inherit", fontSize: 13, color: "inherit", overflowX: "auto" },
+      wrap: { padding: 12, fontSize: 13, color: "inherit", overflowX: "auto" },
       head: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
       grid: { display: "grid", gridTemplateColumns: "130px repeat(6, minmax(150px, 1fr))", gap: 4 },
       laneLabel: { fontWeight: 600, padding: "8px 6px", borderTop: "1px solid rgba(128,128,128,.35)" },
       stageHead: { fontWeight: 600, textAlign: "center", padding: 4, opacity: 0.75 },
       cell: { borderTop: "1px solid rgba(128,128,128,.35)", padding: 4, minHeight: 40, verticalAlign: "top" },
-      card: {
+      goalCard: {
         border: "1px solid rgba(128,128,128,.45)",
-        borderRadius: 6,
-        padding: "6px 8px",
-        marginBottom: 6,
-        background: "rgba(128,128,128,.08)",
-        cursor: "pointer",
+        borderLeft: "5px solid #4c8dff",
+        borderRadius: 6, padding: "6px 8px", marginBottom: 6,
+        background: "rgba(128,128,128,.08)", cursor: "pointer",
       },
-      cardBlocked: { border: "1px solid #d66" },
+      depCard: { borderLeft: "5px solid #e0a53a" },
+      blockedCard: { borderLeft: "5px solid #d66" },
+      subCard: {
+        border: "1px solid rgba(128,128,128,.35)",
+        borderLeft: "4px solid #3aa675",
+        borderRadius: 5, padding: "2px 6px", margin: "4px 0 0 10px",
+        fontSize: 11, opacity: 0.9,
+      },
       title: { fontWeight: 600, marginBottom: 2 },
       meta: { opacity: 0.65, fontSize: 12 },
       statusLine: { fontStyle: "italic", opacity: 0.85, marginTop: 3 },
-      chip: {
-        display: "inline-block",
-        fontSize: 11,
-        padding: "1px 6px",
-        margin: "3px 4px 0 0",
-        borderRadius: 8,
-        border: "1px solid rgba(128,128,128,.4)",
-        opacity: 0.85,
-      },
       collapsed: {
-        padding: "6px",
-        opacity: 0.75,
+        padding: "6px", opacity: 0.75, cursor: "pointer", userSelect: "none",
         borderTop: "1px dashed rgba(128,128,128,.35)",
-        cursor: "pointer",
-        userSelect: "none",
       },
-      detail: {
-        border: "1px solid rgba(128,128,128,.5)",
-        borderRadius: 6,
-        padding: 10,
-        margin: "4px 0 8px",
-        background: "rgba(128,128,128,.12)",
-        whiteSpace: "pre-wrap",
-        fontSize: 12,
+      overlay: {
+        position: "fixed", inset: 0, background: "rgba(0,0,0,.55)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
       },
+      modal: {
+        background: "#1e1f24", color: "#e6e6e6", borderRadius: 10,
+        maxWidth: 720, width: "90%", maxHeight: "80vh", overflowY: "auto",
+        padding: "16px 20px", fontSize: 13, lineHeight: 1.6,
+      },
+      modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
+      modalH: { fontWeight: 700, marginBottom: 4 },
       btn: { fontSize: 12, padding: "2px 10px", cursor: "pointer" },
+      close: { float: "right", cursor: "pointer", opacity: 0.7, fontSize: 16 },
     };
 
     function stageOf(status) {
@@ -68,45 +95,42 @@ window.__ModuleLoader__.load({
       return "describe";
     }
 
-    const CARD_STATUS_ICON = { empty: "○", collecting: "◌", filled: "●", reviewed: "✔" };
+    const CARD_STATUS_ICON = { empty: "○ 待收集", collecting: "◌ 收集中", filled: "● 已填充", reviewed: "✔ 已复核" };
 
-    function Card(g, expanded, onToggle) {
+    // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出
+    function Card(g, onOpen) {
+      const blocked = g.status === "blocked";
+      const hasDep = (g.depends_on ?? []).length > 0;
+      const style = {
+        ...S.goalCard,
+        ...(hasDep ? S.depCard : {}),
+        ...(blocked ? S.blockedCard : {}),
+      };
       const badges = [];
       if (g.reviewer === "human") badges.push("👤人审");
       if (g.reviewer === "ai") badges.push("🤖AI审");
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
-      if (g.depends_on?.length) badges.push("⛓" + g.depends_on.join(","));
       return h(
         "div",
-        {
-          key: g.id,
-          style: { ...S.card, ...(g.status === "blocked" ? S.cardBlocked : {}) },
-          title: "点击查看详情",
-          onClick: (e) => {
-            e.stopPropagation();
-            onToggle(g.id);
-          },
-        },
-        h("div", { style: S.title }, (expanded ? "▾ " : "▸ ") + g.title),
-        h("div", { style: S.meta }, g.id + (badges.length ? " ｜ " + badges.join(" ") : "")),
+        { key: g.id, style, title: "点击打开详情", onClick: () => onOpen(g.id) },
+        h("div", { style: S.title }, `🎯 ${g.title}`),
+        h("div", { style: S.meta },
+          `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`),
+        hasDep
+          ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${g.depends_on.join("、")} 交付`)
+          : null,
         g.status_line ? h("div", { style: S.statusLine }, "⏳ " + g.status_line) : null,
-        g.status === "blocked" && g.blocked_reason
+        blocked && g.blocked_reason
           ? h("div", { style: { ...S.statusLine, color: "#d66" } }, "⛔ " + g.blocked_reason)
           : null,
-        g.cards?.length
-          ? h(
-              "div",
-              null,
-              g.cards.map((c) =>
-                h("span", { key: c.id, style: S.chip, title: c.id + " / " + c.status },
-                  (CARD_STATUS_ICON[c.status] ?? "?") + " " + c.title),
-              ),
-            )
-          : null,
+        (g.cards ?? []).map((c) =>
+          h("div", { key: c.id, style: S.subCard, title: c.id },
+            `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`)),
       );
     }
 
-    function GoalDetail(props) {
+    // 详情 modal：扼要分区 + 人类化事件
+    function GoalModal(props) {
       const [state, setState] = React.useState({ loading: true });
       React.useEffect(() => {
         let alive = true;
@@ -116,33 +140,57 @@ window.__ModuleLoader__.load({
           .catch((e) => alive && setState({ loading: false, error: String(e) }));
         return () => { alive = false; };
       }, [props.id]);
-      if (state.loading) return h("div", { style: S.detail }, "加载详情…");
-      if (state.error) return h("div", { style: S.detail }, "详情获取失败：" + state.error);
-      const d = state.data;
-      if (d.error) return h("div", { style: S.detail }, "详情错误：" + d.error);
+
+      const section = (body, name) => {
+        const m = new RegExp(`## ${name}\\n([\\s\\S]*?)(?=\\n## |$)`).exec(body ?? "");
+        return m ? m[1].trim() : null;
+      };
+
+      let content;
+      if (state.loading) content = "加载详情…";
+      else if (state.error) content = "详情获取失败：" + state.error;
+      else if (state.data.error) content = "详情错误：" + state.data.error;
+      else {
+        const d = state.data;
+        const desc = section(d.body, "目标描述");
+        const crit = section(d.body, "质量判据");
+        const plan = section(d.body, "收集计划");
+        content = [
+          desc ? h("div", { key: "d", style: S.modalSection },
+            h("div", { style: S.modalH }, "📋 目标描述"), desc) : null,
+          plan ? h("div", { key: "p", style: S.modalSection },
+            h("div", { style: S.modalH }, "🔍 收集计划"), plan) : null,
+          crit ? h("div", { key: "c", style: S.modalSection },
+            h("div", { style: S.modalH }, "✅ 质量判据"), crit) : null,
+          (d.cards ?? []).length
+            ? h("div", { key: "k", style: S.modalSection },
+                h("div", { style: S.modalH }, "📇 上下文卡片"),
+                d.cards.map((c) => h("div", { key: c.id, style: S.subCard },
+                  `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)))
+            : null,
+          (d.events ?? []).length
+            ? h("div", { key: "e", style: S.modalSection },
+                h("div", { style: S.modalH }, "🕘 近期动态"),
+                d.events.slice(-10).map((e, i) =>
+                  h("div", { key: i, style: S.meta }, humanEvent(e))))
+            : null,
+        ];
+      }
+
       return h(
         "div",
-        { style: S.detail },
-        h("div", { style: { fontWeight: 600, marginBottom: 6 } },
-          `${d.meta.id} · ${d.meta.title} · ${d.meta.status}`),
-        h("div", null, (d.body ?? "").trim() || "（无正文）"),
-        d.events?.length
-          ? h(
-              "div",
-              { style: { marginTop: 8, opacity: 0.75 } },
-              h("div", { style: { fontWeight: 600 } }, "近期事件："),
-              d.events.slice(-12).map((e, i) =>
-                h("div", { key: i, style: S.meta },
-                  `${(e.ts ?? "").replace("T", " ").slice(0, 19)}  ${e.event}  by ${e.actor}`),
-              ),
-            )
-          : null,
+        { style: S.overlay, onClick: props.onClose },
+        h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
+          h("span", { style: S.close, onClick: props.onClose }, "✕"),
+          h("div", { style: { fontWeight: 700, fontSize: 15 } }, `🎯 ${props.title ?? props.id}`),
+          h("div", { style: S.meta }, props.id),
+          content),
       );
     }
 
     function KanbanView() {
       const [state, setState] = React.useState({ loading: true });
-      const [expandedGoal, setExpandedGoal] = React.useState(null);
+      const [modalGoal, setModalGoal] = React.useState(null);
       const [openReleased, setOpenReleased] = React.useState({});
       const load = () => {
         fetch("/api/dsh-graph")
@@ -163,21 +211,11 @@ window.__ModuleLoader__.load({
 
       const active = b.versions.filter((v) => v.status !== "released");
       const released = b.versions.filter((v) => v.status === "released");
-
-      const toggleGoal = (id) => setExpandedGoal(expandedGoal === id ? null : id);
-
       const lane = (label, goals, key) => {
-        const cells = STAGES.map((s) => {
-          const cellGoals = goals.filter((g) => stageOf(g.status) === s.key);
-          return h(
-            "div",
-            { key: s.key, style: S.cell },
-            cellGoals.map((g) => Card(g, expandedGoal === g.id, toggleGoal)),
-            cellGoals.some((g) => expandedGoal === g.id)
-              ? h(GoalDetail, { id: expandedGoal })
-              : null,
-          );
-        });
+        const cells = STAGES.map((s) =>
+          h("div", { key: s.key, style: S.cell },
+            goals.filter((g) => stageOf(g.status) === s.key).map((g) => Card(g, setModalGoal))),
+        );
         return [h("div", { key: key + "-label", style: S.laneLabel }, label), ...cells];
       };
 
@@ -189,41 +227,35 @@ window.__ModuleLoader__.load({
       const releasedRows = released.map((v) => {
         const open = !!openReleased[v.slug];
         return [
-          h(
-            "div",
-            {
-              key: "rel-" + v.slug,
-              style: S.collapsed,
-              title: "点击展开/收起",
-              onClick: () => setOpenReleased({ ...openReleased, [v.slug]: !open }),
-            },
-            `${open ? "▾" : "▸"} ${v.name} ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`,
-          ),
-          open
-            ? h("div", { key: "relx-" + v.slug, style: S.grid },
-                ...lane(v.name, v.goals, "rellane-" + v.slug))
-            : null,
+          h("div", {
+            key: "rel-" + v.slug, style: S.collapsed, title: "点击展开/收起",
+            onClick: () => setOpenReleased({ ...openReleased, [v.slug]: !open }),
+          }, `${open ? "▾" : "▸"} ${v.name} ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`),
+          open ? h("div", { key: "relx-" + v.slug, style: S.grid },
+            ...lane(v.name, v.goals, "rellane-" + v.slug)) : null,
         ];
       });
+
+      const modalGoalData = modalGoal
+        ? [...active.flatMap((v) => v.goals), ...released.flatMap((v) => v.goals),
+           ...b.standalone, ...b.backlog].find((g) => g.id === modalGoal)
+        : null;
 
       return h(
         "div",
         { style: S.wrap },
-        h(
-          "div",
-          { style: S.head },
+        h("div", { style: S.head },
           h("strong", null, "dsh-graph 看板"),
           h("span", { style: S.meta }, "数据时间：" + (b.generated_at ?? "").replace("T", " ").slice(0, 19)),
-          h("button", { style: S.btn, onClick: load }, "刷新"),
-        ),
-        h(
-          "div",
-          { style: S.grid },
+          h("button", { style: S.btn, onClick: load }, "刷新")),
+        h("div", { style: S.grid },
           h("div", { style: S.stageHead }, "泳道＼阶段"),
           STAGES.map((s) => h("div", { key: s.key, style: S.stageHead }, s.label)),
-          ...rows,
-        ),
+          ...rows),
         ...releasedRows,
+        modalGoal
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null) })
+          : null,
       );
     }
 

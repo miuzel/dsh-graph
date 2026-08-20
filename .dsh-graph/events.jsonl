@@ -145,3 +145,4 @@
 {"ts":"2026-08-20T18:13:16.898Z","actor":"supervisor:k3","event":"card.filled","goal":"g-102","details":{"card":"card-fb306499","by":"supervisor:k3"}}
 {"ts":"2026-08-20T18:13:16.970Z","actor":"supervisor:k3","event":"card.created","goal":"g-102","details":{"card":"card-94c86099","title":"参照项目 dsh-project-kanban 观察","kind":"text"}}
 {"ts":"2026-08-20T18:13:17.041Z","actor":"supervisor:k3","event":"card.filled","goal":"g-102","details":{"card":"card-94c86099","by":"supervisor:k3"}}
+{"ts":"2026-08-20T23:50:00+08:00","actor":"human:负责人","event":"evidence.added","goal":"g-102","details":{"note":"看板实测反馈：1 从属关系看不出 2 卡片类型缺视觉区分（左边框+颜色+图标）3 详情改 modal、卡片只留关键信息 4 事件话术人类化 5 收集项应任务化为独立卡片（子代理执行、过程可见、结果注入 runner 上下文）"}}
