@@ -79,3 +79,19 @@
 {"ts":"2026-08-20T12:44:37.527Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-101","details":{"from":"in_progress","to":"review"}}
 {"ts":"2026-08-20T21:05:00+08:00","actor":"agent:k3","event":"completion.claimed","goal":"g-101","details":{"attempt":"att-001","evidence":"check_plugin.sh PASS（15 单测+CLI 冒烟+隔离环境真实加载）；判据4-6 需 live 验证","caveats":["判据4 subagent 派发仅实现未实测（隔离环境无凭据）","判据5 人工 gate 停轮为行为承诺","判据6 dogfood 2.0 需负责人配合安装到 web profile"]}}
 {"ts":"2026-08-20T21:15:00+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-101","details":{"evidence_id":"ev-03","summary":"插件已热加载进 web profile（~/.dsh/profiles/web/cordis.patch.yml，原文件已备份 .bak-dsh-graph）；marker 自测：10 工具注册 + validate PASS"}}
+{"ts":"2026-08-20T13:25:31.694Z","actor":"human:负责人","event":"card.created","goal":"g-101","details":{"card":"card-b561d092","title":"测试卡片（待删除）","kind":"text"}}
+{"ts":"2026-08-20T13:25:31.768Z","actor":"human:负责人","event":"card.filled","goal":"g-101","details":{"card":"card-b561d092","by":"human:负责人"}}
+{"ts":"2026-08-20T21:30:00+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-101","details":{"evidence_id":"ev-04","summary":"发现#8：热加载注册的工具不进入既有会话的工具目录（host 注册表有、模型侧不可见）；需新会话验证"}}
+{"ts":"2026-08-20T13:49:41.296Z","actor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2","event":"card.created","goal":"g-101","details":{"card":"card-74640f91","title":"新会话测试卡","kind":"text"}}
+{"ts":"2026-08-20T14:48:01.635Z","actor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2","event":"goal.created","goal":"g-f8317edc","details":{"title":"验证插件全流程","version":null}}
+{"ts":"2026-08-20T14:48:08.077Z","actor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2","event":"criteria.confirmed","goal":"g-f8317edc","details":{"criteria_count":2,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-20T14:48:35.171Z","actor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2","event":"goal.transition","goal":"g-f8317edc","details":{"from":"draft","to":"planning"}}
+{"ts":"2026-08-20T14:48:39.351Z","actor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2","event":"goal.transition","goal":"g-f8317edc","details":{"from":"planning","to":"collecting"}}
+{"ts":"2026-08-20T14:48:43.055Z","actor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2","event":"goal.transition","goal":"g-f8317edc","details":{"from":"collecting","to":"ready"}}
+{"ts":"2026-08-20T14:48:46.344Z","actor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2","event":"goal.transition","goal":"g-f8317edc","details":{"from":"ready","to":"in_progress"}}
+{"ts":"2026-08-20T14:49:53.038Z","actor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2","event":"attempt.started","goal":"g-f8317edc","details":{"attempt":"att-001","executor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2"}}
+{"ts":"2026-08-20T14:49:59.039Z","actor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2","event":"attempt.status_reported","goal":"g-f8317edc","details":{"attempt":"att-001","status":"已按用户指令走通 create → criteria → 状态机 → attempt，正在收尾进入 review。"}}
+{"ts":"2026-08-20T14:50:03.590Z","actor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2","event":"goal.transition","goal":"g-f8317edc","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-20T21:40:00+08:00","actor":"supervisor:k3","event":"goal.moved","goal":"g-f8317edc","details":{"from":"backlog/g-f8317edc.md","to":"goals/g-f8317edc/goal.md","note":"补记：dogfood 会话手动移动未记事件（发现#9 的实证）"}}
+{"ts":"2026-08-20T21:40:01+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-101","details":{"evidence_id":"ev-05","summary":"发现#9：工具面缺排期操作，dogfood 会话被迫手动 mv 且漏记 goal.moved。已修：core moveGoal + CLI move-goal + 插件 graph_move_goal"}}
+{"ts":"2026-08-20T21:40:02+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-101","details":{"evidence_id":"ev-06","summary":"发现#10：startContinuable spec 形态错误（parent 应置于 request 内、需 provider/label/signal），child_id 为 null。已按 dsh-subagent 类型定义修正，待 live 复测"}}

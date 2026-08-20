@@ -20,6 +20,7 @@ import {
   startAttempt,
   reportStatus,
   bindAttemptChild,
+  moveGoal,
 } from "../core/ops.ts";
 
 export const name = "dsh-graph-host";
@@ -96,6 +97,17 @@ export function apply(ctx, config) {
     },
     {
       def: {
+        name: "graph_move_goal",
+        description: "排期移动目标：backlog ↔ 独立 goals/ ↔ 版本。文件移动即归属变更，记 goal.moved 事件。",
+        parameters: params(
+          { goal: str, to: { type: "string", enum: ["backlog", "standalone", "version"] }, version: str },
+          ["goal", "to"],
+        ),
+      },
+      run: (a, ex) => { moveGoal(root, a.goal, { to: a.to, version: a.version, actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
+      def: {
         name: "graph_validate",
         description: "全量不变式校验（状态、归属、判据、依赖环、卡片引用）。返回问题列表。",
         parameters: params({}, []),
@@ -131,15 +143,25 @@ export function apply(ctx, config) {
         const subagents = ctx.get?.("subagents");
         if (subagents && ex?.agent) {
           try {
+            // 挑选具备可续轮能力的提供方（prepareContinuable 存在即能力）
+            const provider =
+              subagents.list().find((n) => {
+                const p = subagents.getProvider(n);
+                return typeof p?.prepareContinuable === "function";
+              }) ?? "spawn";
             const prompt = [
               `你是 dsh-graph 目标 ${a.goal} 的执行 attempt ${attempt}。`,
               `工作区 .dsh-graph 下有该目标的 goal.md（描述、质量判据、上下文卡片）。`,
               `执行过程中周期性调用 graph_report_status 汇报一句最新状态；完成后声明完成并等待 review。`,
             ].join("\n");
             const started = await subagents.startContinuable({
-              parent: ex.agent,
+              provider,
               label: `graph:${a.goal}/${attempt}`,
-              prompt: text(prompt),
+              request: {
+                parent: ex.agent,
+                prompt: text(prompt),
+              },
+              signal: ex.signal,
             });
             bindAttemptChild(root, a.goal, attempt, started.childId, actorOf(ex));
             result.child_id = started.childId;

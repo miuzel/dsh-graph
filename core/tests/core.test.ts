@@ -12,6 +12,7 @@ import {
   replaceSection,
   criteriaPresent,
 } from "../model.ts";
+import { readEvents } from "../events.ts";
 import {
   init,
   createGoal,
@@ -21,6 +22,8 @@ import {
   rebuild,
   findGoalFile,
   loadGoal,
+  moveGoal,
+  addCard,
   GraphError,
 } from "../ops.ts";
 
@@ -164,4 +167,22 @@ test("set-criteria 对缺少质量判据小节的草稿自动追加小节", () =
   const after = loadGoal(findGoalFile(root, id));
   assert.ok(after.body.includes("## 质量判据"));
   assert.ok(after.body.includes("1. 甲"));
+});
+
+test("move-goal：backlog↔standalone↔version，带附件拒绝回 backlog", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" }); // backlog 平铺
+  transition(root, id, "planning", { actor: "test" });
+  moveGoal(root, id, { to: "standalone", actor: "test" });
+  let doc = loadGoal(findGoalFile(root, id));
+  assert.equal(doc.meta.version, null);
+  moveGoal(root, id, { to: "version", version: "v-x", actor: "test" });
+  doc = loadGoal(findGoalFile(root, id));
+  assert.equal(doc.meta.version, "v-x");
+  assert.deepEqual(validate(root), []);
+  // 带上 cards 附件后拒绝回 backlog
+  addCard(root, id, { title: "c", kind: "text", actor: "test" });
+  assert.throws(() => moveGoal(root, id, { to: "backlog", actor: "test" }), /附件/);
+  const events = readEvents(root).filter((e) => e.event === "goal.moved");
+  assert.equal(events.length, 2);
 });

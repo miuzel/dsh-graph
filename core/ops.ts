@@ -5,9 +5,11 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
+  rmdirSync,
   writeFileSync,
 } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   parseDoc,
@@ -582,5 +584,57 @@ export function bindAttemptChild(
     event: "attempt.bound",
     goal: goalId,
     details: { attempt: attemptId, child_id: childId },
+  });
+}
+
+/**
+ * 排期/位置移动（backlog ↔ standalone goals/ ↔ versions/<v>/）。
+ * 文件移动即归属变更，记 goal.moved 事件（不影响状态机状态）。
+ */
+export function moveGoal(
+  root: string,
+  id: string,
+  opts: { to: "backlog" | "standalone" | "version"; version?: string; actor: string },
+): void {
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  let targetFile: string;
+  if (opts.to === "backlog") {
+    if (basename(file) === "goal.md") {
+      const extras = readdirSync(dirname(file)).filter((x) => x !== "goal.md");
+      if (extras.length > 0) {
+        throw new GraphError("目标已有 cards/attempts 等目录附件，不能移回 backlog 平铺");
+      }
+    }
+    targetFile = join(root, "backlog", `${id}.md`);
+    doc.meta.version = null;
+  } else if (opts.to === "standalone") {
+    targetFile = join(root, "goals", id, "goal.md");
+    doc.meta.version = null;
+  } else if (opts.to === "version") {
+    if (!opts.version) throw new GraphError("移动到版本需要指定 version");
+    targetFile = join(root, "versions", opts.version, "goals", id, "goal.md");
+    doc.meta.version = opts.version;
+  } else {
+    throw new GraphError(`非法移动目标：${opts.to}`);
+  }
+  if (targetFile === file) return;
+  if (existsSync(targetFile)) throw new GraphError(`目标位置已存在：${targetFile}`);
+  mkdirSync(dirname(targetFile), { recursive: true });
+  const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
+  renameSync(file, targetFile);
+  if (srcDir) {
+    try {
+      rmdirSync(srcDir); // 仅当空目录
+    } catch {
+      /* 有附件目录则保留 */
+    }
+  }
+  saveGoal(targetFile, doc);
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "goal.moved",
+    goal: id,
+    details: { from: relative(root, file), to: relative(root, targetFile) },
   });
 }

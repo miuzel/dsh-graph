@@ -16,6 +16,7 @@ import {
   reviewCard,
   startAttempt,
   reportStatus,
+  moveGoal,
 } from "./ops.ts";
 
 interface Args {
@@ -141,6 +142,19 @@ function main(): void {
       console.log("ok");
       return;
     }
+    case "move-goal": {
+      const to = need(args, "to");
+      if (to !== "backlog" && to !== "standalone" && to !== "version") {
+        throw new GraphError("--to 只能是 backlog | standalone | version");
+      }
+      moveGoal(args.root, need(args, "goal"), {
+        to,
+        version: flag(args, "version"),
+        actor,
+      });
+      console.log("ok");
+      return;
+    }
     case "validate": {
       const problems = validate(args.root);
       if (problems.length > 0) {
@@ -162,7 +176,7 @@ function main(): void {
     }
     default:
       throw new GraphError(
-        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|start-attempt|report-status|validate|rebuild> [flags]",
+        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|start-attempt|report-status|move-goal|validate|rebuild> [flags]",
       );
   }
 }
