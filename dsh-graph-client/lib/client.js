@@ -56,6 +56,8 @@ window.__ModuleLoader__.load({
       .dg-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-btn { transition: filter .12s ease; }
       .dg-btn:hover { filter: brightness(1.25); }
+      .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
+      .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
     `;
 
     const S = {
@@ -118,7 +120,7 @@ window.__ModuleLoader__.load({
     const CARD_STATUS_ICON = { empty: "○ 待收集", collecting: "◌ 收集中", filled: "● 已填充", reviewed: "✔ 已复核" };
 
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
-    function Card(g, onOpen, onOpenCard) {
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard) {
       const blocked = g.status === "blocked";
       const hasDep = (g.depends_on ?? []).length > 0;
       const style = {
@@ -132,7 +134,8 @@ window.__ModuleLoader__.load({
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
       return h(
         "div",
-        { key: g.id, style, className: "dg-card", title: "点击打开详情", onClick: () => onOpen(g.id) },
+        { key: g.id, style, className: "dg-card" + (activeGoal ? " dg-card-active" : ""),
+          title: "点击打开详情", onClick: () => onOpen(g.id) },
         h("div", { style: S.title }, `🎯 ${g.title}`),
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`),
@@ -146,7 +149,8 @@ window.__ModuleLoader__.load({
         (g.cards ?? []).map((c) =>
           h("div", {
             key: c.id,
-            style: { ...S.subCard, cursor: "pointer" }, className: "dg-sub",
+            style: { ...S.subCard, cursor: "pointer" },
+            className: "dg-sub" + (activeCard === c.id ? " dg-sub-active" : ""),
             title: (c.summary ?? "") + "（点击打开上下文抽屉）",
             onClick: (e) => { e.stopPropagation(); onOpenCard(g.id, c.id); },
           }, `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`)),
@@ -296,7 +300,8 @@ window.__ModuleLoader__.load({
         const cells = STAGES.map((s) =>
           h("div", { key: s.key, style: S.cell },
             goals.filter((g) => stageOf(g.status) === s.key).map((g) =>
-              Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId })))),
+              Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+                modalGoal === g.id, drawerCard?.cardId))),
         );
         return [h("div", { key: key + "-label", style: S.laneLabel }, label), ...cells];
       };
