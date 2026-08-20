@@ -50,8 +50,8 @@ window.__ModuleLoader__.load({
         else what = e.event;
       }
       const who = String(e.actor ?? "")
-        .replace(/^human:/, "").replace(/^supervisor:.*/, "主管智能体")
-        .replace(/^agent:session-.*/, "执行智能体").replace(/^agent:/, "智能体:");
+        .replace(/^human:/, "").replace(/^supervisor:.*/, "主管 Agent")
+        .replace(/^agent:session-.*/, "Agent（另一会话）").replace(/^agent:/, "Agent:");
       const when = String(e.ts ?? "").replace("T", " ").slice(5, 16);
       return `${when}  ${what}（${who}）`;
     }
