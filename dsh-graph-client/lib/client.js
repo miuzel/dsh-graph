@@ -52,7 +52,11 @@ window.__ModuleLoader__.load({
       const who = String(e.actor ?? "")
         .replace(/^human:/, "").replace(/^supervisor:.*/, "主管 Agent")
         .replace(/^agent:session-.*/, "Agent（另一会话）").replace(/^agent:/, "Agent:");
-      const when = String(e.ts ?? "").replace("T", " ").slice(5, 16);
+      let when = "";
+      try {
+        const dt = new Date(e.ts);
+        when = `${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")} ${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
+      } catch { when = String(e.ts ?? "").slice(5, 16); }
       return `${when}  ${what}（${who}）`;
     }
 

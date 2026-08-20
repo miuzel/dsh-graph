@@ -154,3 +154,4 @@
 {"ts":"2026-08-20T19:28:34.665Z","actor":"human:负责人","event":"goal.amended","goal":"g-102","details":{"note":"（补记 次日反馈）收集计划并入上下文卡片；子卡带摘要；抽屉展示摘要+全文+子代理链接"}}
 {"ts":"2026-08-20T19:28:34.732Z","actor":"human:负责人","event":"goal.amended","goal":"g-102","details":{"note":"（补记 抽屉反馈）抽屉独立样式；弹层打开时卡片保持高亮"}}
 {"ts":"2026-08-20T19:28:34.800Z","actor":"human:负责人","event":"goal.amended","goal":"g-102","details":{"note":"（补记 履历反馈）近期动态只留关键节点与修订记录；目标内容体现最终修订"}}
+{"ts":"2026-08-21T00:40:00+08:00","actor":"human:负责人","event":"evidence.added","goal":"g-102","details":{"note":"发现#18：事件时间戳时区混乱（引擎 UTC vs 手写 +08:00），看板显示未做时区转换；已修：引擎统一本地时区 ISO，看板按本地解析"}}

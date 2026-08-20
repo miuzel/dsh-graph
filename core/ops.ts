@@ -18,7 +18,7 @@ import {
   criteriaPresent,
   type GoalDoc,
 } from "./model.ts";
-import { appendEvent, readEvents, replayStatuses } from "./events.ts";
+import { appendEvent, readEvents, replayStatuses, nowIso } from "./events.ts";
 import { GraphError, STATUSES, assertTransition } from "./machine.ts";
 
 export { GraphError };
@@ -140,7 +140,7 @@ export function createGoal(
     title: opts.title,
     status: "draft",
     blocked_reason: null,
-    created_at: new Date().toISOString(),
+    created_at: nowIso(),
     created_by: opts.actor,
     version: opts.version ?? null,
     scope: opts.scope ?? [],
@@ -164,7 +164,7 @@ export function createGoal(
           id: "v-" + randomUUID().slice(0, 8),
           name: opts.version,
           status: "planning",
-          created_at: new Date().toISOString(),
+          created_at: nowIso(),
         },
         body: "\n## 范围\n\n（隐式创建：由 create-goal --version 带入）\n",
       });
@@ -484,7 +484,7 @@ export function fillCard(
   if (opts.summary !== undefined) doc.meta.summary = opts.summary;
   doc.meta.status = "filled";
   doc.meta.filled_by = opts.by;
-  doc.meta.filled_at = new Date().toISOString();
+  doc.meta.filled_at = nowIso();
   saveGoal(file, doc);
   appendEvent(root, {
     actor: opts.actor,
@@ -544,7 +544,7 @@ export function startAttempt(
     goal: goalId,
     executor: opts.executor,
     sandbox: "directory",
-    started_at: new Date().toISOString(),
+    started_at: nowIso(),
     claimed_at: null,
     status_line: null,
     result: "pending",
@@ -834,7 +834,7 @@ export function boardProjection(root: string): {
       }
     }
   }
-  return { generated_at: new Date().toISOString(), versions, standalone, backlog };
+  return { generated_at: nowIso(), versions, standalone, backlog };
 }
 
 /** 目标的上下文卡片摘要列表（看板子卡片）。 */

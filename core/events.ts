@@ -13,7 +13,17 @@ export interface GraphEvent {
 }
 
 export function nowIso(): string {
-  return new Date().toISOString();
+  // 本地时区 ISO（含偏移），与历史手写事件（+08:00）保持一致
+  const d = new Date();
+  const off = -d.getTimezoneOffset();
+  const sign = off >= 0 ? "+" : "-";
+  const hh = String(Math.floor(Math.abs(off) / 60)).padStart(2, "0");
+  const mm = String(Math.abs(off) % 60).padStart(2, "0");
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${sign}${hh}:${mm}`
+  );
 }
 
 export function appendEvent(
