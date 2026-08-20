@@ -447,6 +447,9 @@ export function addCard(
     filled_by: null,
     filled_at: null,
     content_ref: null,
+    summary: null,            // 一句摘要（看板芯片/抽屉标题下显示）
+    child_id: null,           // 收集子代理 id（graph_collect_card 绑定）
+    parent_session_id: null,  // 派发方会话 id（GUI 打开子代理用）
   };
   saveGoal(join(cardDir, `${cardId}.md`), { meta, body: "\n" });
   const doc = loadGoal(file);
@@ -477,11 +480,12 @@ export function fillCard(
   root: string,
   goalId: string,
   cardId: string,
-  opts: { text?: string; contentRef?: string; by: string; actor: string },
+  opts: { text?: string; contentRef?: string; summary?: string; by: string; actor: string },
 ): void {
   const { file, doc } = loadCard(root, goalId, cardId);
   if (opts.text !== undefined) doc.body = "\n" + opts.text + "\n";
   if (opts.contentRef !== undefined) doc.meta.content_ref = opts.contentRef;
+  if (opts.summary !== undefined) doc.meta.summary = opts.summary;
   doc.meta.status = "filled";
   doc.meta.filled_by = opts.by;
   doc.meta.filled_at = new Date().toISOString();
@@ -827,6 +831,9 @@ export function goalCards(root: string, goalId: string): Array<Record<string, an
         kind: doc.meta.kind,
         status: doc.meta.status,
         filled_by: doc.meta.filled_by ?? null,
+        summary: doc.meta.summary ?? null,
+        child_id: doc.meta.child_id ?? null,
+        parent_session_id: doc.meta.parent_session_id ?? null,
       });
     } catch {
       /* 跳过坏卡片 */
@@ -843,10 +850,24 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
     .filter((e) => e.goal === goalId)
     .slice(-50)
     .map((e) => ({ ts: e.ts, actor: e.actor, event: e.event, details: e.details }));
+  const cards = goalCards(root, goalId).map((c) => {
+    // 附全文（抽屉展示）
+    const dir = basename(file) === "goal.md" ? dirname(file) : null;
+    let content = "";
+    if (dir) {
+      const cf = join(dir, "cards", `${c.id}.md`);
+      if (existsSync(cf)) {
+        try {
+          content = loadGoal(cf).body.trim();
+        } catch { /* 忽略 */ }
+      }
+    }
+    return { ...c, content };
+  });
   return {
     meta: doc.meta,
     body: doc.body,
-    cards: goalCards(root, goalId),
+    cards,
     events,
   };
 }

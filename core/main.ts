@@ -109,6 +109,7 @@ function main(): void {
       fillCard(args.root, need(args, "goal"), need(args, "card"), {
         text: flag(args, "text"),
         contentRef: flag(args, "content-ref"),
+        summary: flag(args, "summary"),
         by: flag(args, "by") ?? actor,
         actor,
       });

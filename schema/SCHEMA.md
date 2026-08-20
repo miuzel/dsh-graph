@@ -134,6 +134,9 @@ skill_refs: []              # planning 引用的技能
 ```
 
 - `kind`：`text | file | image | data`；`status`：`empty | collecting | filled | reviewed`；
+- `summary`：一句摘要；`child_id` / `parent_session_id`：收集子代理身份（看板抽屉可打开对应会话）；
+- **收集计划的项即上下文卡片**（负责人 2026-08-20 决策）：goal.md 的"收集计划"小节不再单独
+  维护待办清单，收集项直接建模为卡片；看板上卡片可打开抽屉查看摘要、全文与子代理链接；
 - `filled_by` 记录填充来源：`human:<name>` / `agent:<childId>` / `goal:<id>`（子目标交付回填）；
 - 卡片创建时**只要求 title 与 kind**——查什么、怎么查在收集运行时填充，不预设；
 - 目标 frontmatter 以 `context_cards: ["card-01", ...]` 有序引用，顺序即注入顺序；

@@ -83,9 +83,9 @@ export function apply(ctx, config) {
       def: {
         name: "graph_fill_card",
         description: "填充上下文卡片内容（text 或 content_ref），状态变为 filled。",
-        parameters: params({ goal: str, card: str, text: str, content_ref: str }, ["goal", "card"]),
+        parameters: params({ goal: str, card: str, text: str, content_ref: str, summary: str }, ["goal", "card"]),
       },
-      run: (a, ex) => { fillCard(root, a.goal, a.card, { text: a.text, contentRef: a.content_ref, by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => { fillCard(root, a.goal, a.card, { text: a.text, contentRef: a.content_ref, summary: a.summary, by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
     },
     {
       def: {

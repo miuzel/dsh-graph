@@ -97,8 +97,8 @@ window.__ModuleLoader__.load({
 
     const CARD_STATUS_ICON = { empty: "○ 待收集", collecting: "◌ 收集中", filled: "● 已填充", reviewed: "✔ 已复核" };
 
-    // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出
-    function Card(g, onOpen) {
+    // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
+    function Card(g, onOpen, onOpenCard) {
       const blocked = g.status === "blocked";
       const hasDep = (g.depends_on ?? []).length > 0;
       const style = {
@@ -124,8 +124,74 @@ window.__ModuleLoader__.load({
           ? h("div", { style: { ...S.statusLine, color: "#d66" } }, "⛔ " + g.blocked_reason)
           : null,
         (g.cards ?? []).map((c) =>
-          h("div", { key: c.id, style: S.subCard, title: c.id },
-            `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`)),
+          h("div", {
+            key: c.id,
+            style: { ...S.subCard, cursor: "pointer" },
+            title: (c.summary ?? "") + "（点击打开上下文抽屉）",
+            onClick: (e) => { e.stopPropagation(); onOpenCard(g.id, c.id); },
+          }, `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`)),
+      );
+    }
+
+    // 上下文抽屉：摘要 + 全文 + 子代理 id/链接
+    function CardDrawer(props) {
+      const [state, setState] = React.useState({ loading: true });
+      React.useEffect(() => {
+        let alive = true;
+        fetch("/api/dsh-graph/goal?id=" + encodeURIComponent(props.goalId))
+          .then((r) => r.json())
+          .then((data) => alive && setState({ loading: false, data }))
+          .catch((e) => alive && setState({ loading: false, error: String(e) }));
+        return () => { alive = false; };
+      }, [props.goalId]);
+
+      let inner;
+      if (state.loading) inner = "加载中…";
+      else if (state.error) inner = "获取失败：" + state.error;
+      else {
+        const card = (state.data.cards ?? []).find((c) => c.id === props.cardId);
+        if (!card) inner = "卡片不存在：" + props.cardId;
+        else {
+          const childLink = card.child_id
+            ? h("div", { style: S.modalSection, key: "child" },
+                h("div", { style: S.modalH }, "🤖 收集子代理"),
+                h("div", { style: S.meta }, `id：${card.child_id}`),
+                card.parent_session_id
+                  ? h("button", {
+                      style: { ...S.btn, marginTop: 4 },
+                      onClick: () => {
+                        try {
+                          const rt = appCtx?.get?.("sessions");
+                          rt?.openSubagent?.({ parentSessionId: card.parent_session_id, childId: card.child_id });
+                        } catch (e) { console.warn("openSubagent failed", e); }
+                      },
+                    }, "在会话中打开")
+                  : null)
+            : null;
+          inner = [
+            h("div", { key: "t", style: { fontWeight: 700, fontSize: 14 } },
+              `📇 ${card.title}`),
+            h("div", { key: "m", style: S.meta },
+              `${card.id} ｜ ${card.kind} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
+            card.summary ? h("div", { key: "s", style: S.modalSection },
+              h("div", { style: S.modalH }, "摘要"), card.summary) : null,
+            h("div", { key: "body", style: S.modalSection },
+              h("div", { style: S.modalH }, "全文"),
+              card.content?.trim() || "（尚未采集内容）"),
+            childLink,
+          ];
+        }
+      }
+      return h(
+        "div",
+        { style: S.overlay, onClick: props.onClose },
+        h("div", {
+          style: { ...S.modal, maxWidth: 420, marginLeft: "auto", height: "100vh",
+                   maxHeight: "100vh", borderRadius: 0 },
+          onClick: (e) => e.stopPropagation(),
+        },
+          h("span", { style: S.close, onClick: props.onClose }, "✕"),
+          inner),
       );
     }
 
@@ -191,6 +257,7 @@ window.__ModuleLoader__.load({
     function KanbanView() {
       const [state, setState] = React.useState({ loading: true });
       const [modalGoal, setModalGoal] = React.useState(null);
+      const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
       const load = () => {
         fetch("/api/dsh-graph")
@@ -214,7 +281,8 @@ window.__ModuleLoader__.load({
       const lane = (label, goals, key) => {
         const cells = STAGES.map((s) =>
           h("div", { key: s.key, style: S.cell },
-            goals.filter((g) => stageOf(g.status) === s.key).map((g) => Card(g, setModalGoal))),
+            goals.filter((g) => stageOf(g.status) === s.key).map((g) =>
+              Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId })))),
         );
         return [h("div", { key: key + "-label", style: S.laneLabel }, label), ...cells];
       };
@@ -256,13 +324,19 @@ window.__ModuleLoader__.load({
         modalGoal
           ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null) })
           : null,
+        drawerCard
+          ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
+                            onClose: () => setDrawerCard(null) })
+          : null,
       );
     }
 
+    let appCtx = null;
     return {
       name: "dsh-graph-client",
       inject: ["slots"],
       apply(ctx) {
+        appCtx = ctx;
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
             { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: "看板" },
