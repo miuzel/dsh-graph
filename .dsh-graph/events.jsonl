@@ -161,3 +161,4 @@
 {"ts":"2026-08-21T03:42:30+08:00","actor":"supervisor:k3","event":"card.created","goal":"g-107","details":{"card":"card-e453207d","title":"客户端会话实时 API 调研","kind":"text"}}
 {"ts":"2026-08-21T00:55:00+08:00","actor":"supervisor:k3","event":"card.collecting","goal":"g-107","details":{"card":"card-e453207d","child_id":"7d0c90e1-9cc4-4bbc-8a80-1c69e3ae107b","note":"g-106 流程人工预演：收集子代理绑定卡片，产出将回填并注入执行阶段上下文"}}
 {"ts":"2026-08-21T01:05:00+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-107","details":{"evidence_id":"ev-01","summary":"收集子代理 7d0c90e1 调研客户端实时 API 失败（空报告）；需缩小范围重新调研（纯文档读取，不做实机验证）"}}
+{"ts":"2026-08-21T05:18:59+08:00","event":"evidence.added","goal":"g-102","actor":"supervisor:k3","details":{"evidence_id":"ev-05","summary":"发现#19：运行时 skill 注册缺 source 字段——catalog 可见但 skill 工具加载报 source must be a string；已修：skills.register 补 source。另：skill 内容为插件加载期快照，指南更新需重启 GUI 生效"}}

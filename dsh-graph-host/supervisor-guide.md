@@ -26,9 +26,13 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 
 1. `graph_add_card` 占位（empty）——只登记"需要哪方面的资料"，不预设查什么、怎么查；
 2. 派发收集子代理（`graph_collect_card`，或手工绑定）：卡片 → collecting，
-   记录 `child_id` 与 `parent_session_id`（看板可跳转其会话）；
+   记录 `child_id` 与 `parent_session_id`（看板可跳转其会话）。
+   `parent_session_id` 工具化时取 `exec.agent.session.id`；手工绑定时可
+   按工作区+时间从 `~/.dsh/sessions` 推断（如 g-107 card-e453207d 的人工预演）；
 3. 子代理产出回填：`graph_fill_card` 写全文 + 一句 `summary` → filled；
-   重要资料可 `graph_review_card` → reviewed；
+   重要资料可 `graph_review_card` → reviewed。
+   调研类收集子代理任务范围要窄、纯文档读取为主，不做实机验证
+   （反例：g-107 ev-01，宽范围调研产出空报告）；
 4. 执行 attempt 启动时，按 `context_cards` 顺序把 filled/reviewed 卡片注入执行
    子代理上下文，注入清单记入 `attempt.started` 的 `details.injected_cards`；
 5. 收集子代理输出简单干净时，**复用其会话续轮进入执行阶段**（缓存友好），

@@ -193,7 +193,7 @@ export function apply(ctx, config) {
   return ctx.effect(() => {
     // 注册 supervisor 工作指南为运行时技能（可选服务，缺失时静默）
     const skills = ctx.get?.('skills');
-    if (skills) { try { skills.register({ name: 'dsh-graph-supervisor', description: 'dsh-graph 主管 Agent 工作指南', content: GUIDE }); } catch { /* 静默 */ } }
+    if (skills) { try { skills.register({ name: 'dsh-graph-supervisor', description: 'dsh-graph 主管 Agent 工作指南', source: 'dsh-graph-host', content: GUIDE }); } catch { /* 静默 */ } }
 
     const disposers = tools.map((t) =>
       ctx.tools.register({ ...t.def, output: objOut, execute: (args, exec) => t.run(args, exec) }),
