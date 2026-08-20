@@ -21,6 +21,7 @@ import {
   reportStatus,
   bindAttemptChild,
   moveGoal,
+  amendGoal,
 } from "../core/ops.ts";
 
 export const name = "dsh-graph-host";
@@ -105,6 +106,14 @@ export function apply(ctx, config) {
         ),
       },
       run: (a, ex) => { moveGoal(root, a.goal, { to: a.to, version: a.version, actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
+      def: {
+        name: "graph_amend_goal",
+        description: "记录对目标的修订/补充（人工反馈的一等记录）；可选把修订内容追加进目标描述，使目标内容体现最终修订。",
+        parameters: params({ goal: str, note: str, append: str }, ["goal", "note"]),
+      },
+      run: (a, ex) => { amendGoal(root, a.goal, { note: a.note, appendDescription: a.append, actor: actorOf(ex) }); return { ok: true }; },
     },
     {
       def: {

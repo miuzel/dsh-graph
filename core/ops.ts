@@ -916,3 +916,32 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
     events,
   };
 }
+
+/** 修订目标：把修订说明追加进「目标描述」，并记 goal.amended 事件（人工反馈的一等记录）。 */
+export function amendGoal(
+  root: string,
+  id: string,
+  opts: { note: string; appendDescription?: string; actor: string },
+): void {
+  if (!opts.note.trim()) throw new GraphError("修订说明不能为空");
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  if (opts.appendDescription) {
+    const desc = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
+    if (desc) {
+      doc.body = doc.body.replace(
+        /## 目标描述\n([\s\S]*?)(?=\n## |$)/,
+        `## 目标描述\n${desc[1].replace(/\n*$/, "")}\n\n${opts.appendDescription}\n\n`,
+      );
+    } else {
+      doc.body = doc.body.replace(/\n*$/, "") + "\n\n## 目标描述\n\n" + opts.appendDescription + "\n";
+    }
+  }
+  saveGoal(file, doc);
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "goal.amended",
+    goal: id,
+    details: { note: opts.note },
+  });
+}

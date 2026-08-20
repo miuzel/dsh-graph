@@ -17,6 +17,7 @@ import {
   startAttempt,
   reportStatus,
   moveGoal,
+  amendGoal,
 } from "./ops.ts";
 
 interface Args {
@@ -143,6 +144,15 @@ function main(): void {
       console.log("ok");
       return;
     }
+    case "amend-goal": {
+      amendGoal(args.root, need(args, "goal"), {
+        note: need(args, "note"),
+        appendDescription: flag(args, "append"),
+        actor,
+      });
+      console.log("ok");
+      return;
+    }
     case "move-goal": {
       const to = need(args, "to");
       if (to !== "backlog" && to !== "standalone" && to !== "version") {
@@ -177,7 +187,7 @@ function main(): void {
     }
     default:
       throw new GraphError(
-        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|start-attempt|report-status|move-goal|validate|rebuild> [flags]",
+        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|start-attempt|report-status|move-goal|amend-goal|validate|rebuild> [flags]",
       );
   }
 }

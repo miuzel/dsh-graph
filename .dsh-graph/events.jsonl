@@ -150,3 +150,7 @@
 {"ts":"2026-08-20T18:57:24.884Z","actor":"supervisor:k3","event":"card.filled","goal":"g-102","details":{"card":"card-94c86099","by":"supervisor:k3"}}
 {"ts":"2026-08-20T23:50:01+08:00","actor":"supervisor:k3","event":"goal.created","goal":"g-106","details":{"title":"收集项任务化：卡片绑定收集子代理","note":"补记：手工建卡时漏记事件（又被 rebuild 抓出）"}}
 {"ts":"2026-08-21T00:20:00+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-102","details":{"evidence_id":"ev-04","summary":"发现#17：host 半边插件代码变更需重启 GUI（client 半边刷新即可，host 半边不热重载）；症状为端点返回旧字段集。配方文档应补充此运维事实"}}
+{"ts":"2026-08-20T19:28:34.597Z","actor":"human:负责人","event":"goal.amended","goal":"g-102","details":{"note":"（补记 23:50 反馈）详情改 modal、卡片只留关键信息、hover 反馈贯穿、收集项任务化（另立 g-106）"}}
+{"ts":"2026-08-20T19:28:34.665Z","actor":"human:负责人","event":"goal.amended","goal":"g-102","details":{"note":"（补记 次日反馈）收集计划并入上下文卡片；子卡带摘要；抽屉展示摘要+全文+子代理链接"}}
+{"ts":"2026-08-20T19:28:34.732Z","actor":"human:负责人","event":"goal.amended","goal":"g-102","details":{"note":"（补记 抽屉反馈）抽屉独立样式；弹层打开时卡片保持高亮"}}
+{"ts":"2026-08-20T19:28:34.800Z","actor":"human:负责人","event":"goal.amended","goal":"g-102","details":{"note":"（补记 履历反馈）近期动态只留关键节点与修订记录；目标内容体现最终修订"}}

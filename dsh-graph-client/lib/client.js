@@ -32,12 +32,21 @@ window.__ModuleLoader__.load({
       "goal.deleted": "删除目标", "card.deleted": "删除卡片", "attempt.bound": "绑定子代理",
     };
 
+    // 近期动态只保留对人有用的事件：泳道切换、修订与人工补充、判据/评审/交付关键节点
+    const MEANINGFUL = new Set([
+      "goal.transition", "goal.amended", "scope.note", "criteria.confirmed",
+      "completion.claimed", "review.passed", "review.failed", "attempt.started",
+      "goal.moved", "goal.created",
+    ]);
+
     function humanEvent(e) {
       const d = e.details ?? {};
       let what = EVENT_LABEL[e.event];
       if (what === null || what === undefined) {
         if (e.event === "goal.transition") what = `状态流转：${STATUS_LABEL[d.from] ?? d.from} → ${STATUS_LABEL[d.to] ?? d.to}`;
         else if (e.event === "attempt.status_reported") what = `汇报：${d.status ?? ""}`;
+        else if (e.event === "goal.amended") what = `修订：${d.note ?? ""}`;
+        else if (e.event === "scope.note") what = `补充：${d.note ?? ""}`;
         else what = e.event;
       }
       const who = String(e.actor ?? "")
@@ -257,12 +266,15 @@ window.__ModuleLoader__.load({
                 d.cards.map((c) => h("div", { key: c.id, style: S.subCard },
                   `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)))
             : null,
-          (d.events ?? []).length
-            ? h("div", { key: "e", style: S.modalSection },
-                h("div", { style: S.modalH }, "🕘 近期动态"),
-                d.events.slice(-10).map((e, i) =>
-                  h("div", { key: i, style: S.meta }, humanEvent(e))))
-            : null,
+          (() => {
+            const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));
+            return meaningful.length
+              ? h("div", { key: "e", style: S.modalSection },
+                  h("div", { style: S.modalH }, "🕘 近期动态"),
+                  meaningful.slice(-10).map((e, i) =>
+                    h("div", { key: i, style: S.meta }, humanEvent(e))))
+              : null;
+          })(),
         ];
       }
 
