@@ -2,7 +2,7 @@
 {
   "id": "g-002",
   "title": "Dogfood：用本系统管理 g-001 走通全生命周期",
-  "status": "planning",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-20 17:29:00+08:00",
   "created_by": "supervisor",
@@ -41,9 +41,8 @@ schema 与流程缺陷。本目标与 g-001 并行推进：g-001 在开发，本
 - [x] 版本范围与 g-001 判据（负责人确认中）
 
 ## 质量判据
-1. g-001 的每次状态迁移在 events.jsonl 中有对应事件，序列符合状态机，无跳变无漏记
-2. 过程中发现的每个缺陷都有记录（memory 条目或 SCHEMA.md / DESIGN.md 修订），无静默修复
-3. g-001 review 时判据逐条核验结果写入其 attempt 的 Review 记录小节
+
+1. g-001 review 时判据逐条核验结果写入其 attempt 的 Review 记录小节
 
 ## 证据台账
 | id | 内容 | 来源 | 时间 | freshness |

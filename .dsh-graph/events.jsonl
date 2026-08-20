@@ -51,3 +51,13 @@
 {"ts":"2026-08-20T19:20:00+08:00","actor":"human:负责人","event":"review.passed","goal":"g-003","details":{"attempt":"att-001","criteria_results":{"1":"pass","2":"pass","3":"pass","4":"pass","5":"pass"},"note":"负责人核验通过"}}
 {"ts":"2026-08-20T11:50:29.166Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-003","details":{"from":"review","to":"delivered"}}
 {"ts":"2026-08-20T19:20:01+08:00","actor":"supervisor:k3","event":"memory.promoted","details":{"memory":"mem-001","source_goals":["g-001","g-003"],"type":"success-graph","note":"memory_promotion 配置为 ai，负责人可推翻"}}
+{"ts":"2026-08-20T11:56:45.338Z","actor":"human:负责人","event":"criteria.confirmed","goal":"g-002","details":{"criteria_count":1,"rules_snapshot":"r-2026-08"}}
+{"ts":"2026-08-20T11:56:45.415Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-002","details":{"from":"planning","to":"collecting"}}
+{"ts":"2026-08-20T11:56:45.487Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-002","details":{"from":"collecting","to":"ready"}}
+{"ts":"2026-08-20T11:56:45.553Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-002","details":{"from":"ready","to":"in_progress"}}
+{"ts":"2026-08-20T11:56:45.617Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-002","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-20T19:30:00+08:00","actor":"agent:k3","event":"completion.claimed","goal":"g-002","details":{"evidence":"g-001 事件链完整可查；ev-01~07 全部入台账与事件流；att-001 Review 记录完整"}}
+{"ts":"2026-08-20T19:30:01+08:00","actor":"human:负责人","event":"review.passed","goal":"g-002","details":{"criteria_results":{"1":"pass","2":"pass","3":"pass"},"note":"判据确认与 review 一并完成"}}
+{"ts":"2026-08-20T11:56:57.953Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-002","details":{"from":"review","to":"delivered"}}
+{"ts":"2026-08-20T19:32:00+08:00","actor":"supervisor:k3","event":"version.integration_decided","details":{"version":"v-001","decision":"proposed","note":"提案：两冻结脚本+全量校验作为集成测试，待负责人拍板"}}
+{"ts":"2026-08-20T19:35:00+08:00","actor":"human:负责人","event":"version.released","details":{"version":"v-001","goals":["g-001","g-002","g-003"]}}

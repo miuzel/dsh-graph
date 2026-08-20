@@ -2,7 +2,7 @@
 {
   "id": "v-001",
   "name": "v0.1 核心闭环",
-  "status": "planning",
+  "status": "released",
   "created_at": "2026-08-20 17:29:00+08:00"
 }
 ---
@@ -23,9 +23,17 @@ g-001 产出核心引擎；g-002 以纯人工文件操作方式驱动 g-001 的�
 g-002 是管理过程的本身。
 
 ## 集成测试决策
-（待 g-002 交付后由负责人决策）
+supervisor 提案（2026-08-20）：以两个冻结验收脚本 + 真实图根全量校验作为集成测试——
+- scripts/check_core.sh：PASS（9 单测 + CLI 冒烟）
+- scripts/check_cards.sh：PASS（13 单测 + 卡片冒烟）
+- 真实 .dsh-graph：validate PASS / rebuild consistent
+三者均离线可重复（R-04）。
+
+**决策（负责人，2026-08-20）：集成测试通过，发布 v0.1。**
 
 ## 人工测试与测试数据
 g-002 即本期的人工测试入口。
 
 ## 发布记录
+
+- v0.1 released @ 2026-08-20（负责人决策；git tag v0.1）
