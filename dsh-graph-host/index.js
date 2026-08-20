@@ -7,7 +7,9 @@
  * - 副作用收进 ctx.effect。
  */
 import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   createGoal,
   setCriteria,
@@ -38,6 +40,8 @@ const strArr = { type: "array", items: { type: "string" } };
 function params(properties, required) {
   return { type: "object", properties, required };
 }
+
+const GUIDE = readFileSync(new URL("./supervisor-guide.md", import.meta.url), "utf8");
 
 export function apply(ctx, config) {
   const root = resolve(process.cwd(), config?.root ?? ".dsh-graph");
@@ -187,6 +191,10 @@ export function apply(ctx, config) {
   ];
 
   return ctx.effect(() => {
+    // 注册 supervisor 工作指南为运行时技能（可选服务，缺失时静默）
+    const skills = ctx.get?.('skills');
+    if (skills) { try { skills.register({ name: 'dsh-graph-supervisor', description: 'dsh-graph 主管 Agent 工作指南', content: GUIDE }); } catch { /* 静默 */ } }
+
     const disposers = tools.map((t) =>
       ctx.tools.register({ ...t.def, output: objOut, execute: (args, exec) => t.run(args, exec) }),
     );
