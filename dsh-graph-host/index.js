@@ -139,7 +139,8 @@ export function apply(ctx, config) {
       run: async (a, ex) => {
         const executor = a.executor ?? actorOf(ex);
         const attempt = startAttempt(root, a.goal, { executor, actor: actorOf(ex) });
-        const result = { attempt, child_id: null, note: undefined };
+        // 注意：返回值必须是无损 JSON——绝不写入值为 undefined 的字段（registry 会拒绝）
+        const result = { attempt, child_id: null };
         const subagents = ctx.get?.("subagents");
         if (subagents && ex?.agent) {
           try {

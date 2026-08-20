@@ -1,0 +1,17 @@
+{
+  "plugin": "dsh-graph-host",
+  "tools": [
+    "graph_create_goal",
+    "graph_set_criteria",
+    "graph_transition",
+    "graph_add_card",
+    "graph_fill_card",
+    "graph_review_card",
+    "graph_move_goal",
+    "graph_validate",
+    "graph_rebuild",
+    "graph_report_status",
+    "graph_start_attempt"
+  ],
+  "validate": "PASS"
+}

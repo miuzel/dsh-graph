@@ -598,22 +598,27 @@ export function moveGoal(
 ): void {
   const file = findGoalFile(root, id);
   const doc = loadGoal(file);
+  const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
   let targetFile: string;
+  let targetDirForm: boolean;
   if (opts.to === "backlog") {
-    if (basename(file) === "goal.md") {
-      const extras = readdirSync(dirname(file)).filter((x) => x !== "goal.md");
+    if (srcDir) {
+      const extras = readdirSync(srcDir).filter((x) => x !== "goal.md");
       if (extras.length > 0) {
         throw new GraphError("目标已有 cards/attempts 等目录附件，不能移回 backlog 平铺");
       }
     }
     targetFile = join(root, "backlog", `${id}.md`);
+    targetDirForm = false;
     doc.meta.version = null;
   } else if (opts.to === "standalone") {
     targetFile = join(root, "goals", id, "goal.md");
+    targetDirForm = true;
     doc.meta.version = null;
   } else if (opts.to === "version") {
     if (!opts.version) throw new GraphError("移动到版本需要指定 version");
     targetFile = join(root, "versions", opts.version, "goals", id, "goal.md");
+    targetDirForm = true;
     doc.meta.version = opts.version;
   } else {
     throw new GraphError(`非法移动目标：${opts.to}`);
@@ -621,13 +626,17 @@ export function moveGoal(
   if (targetFile === file) return;
   if (existsSync(targetFile)) throw new GraphError(`目标位置已存在：${targetFile}`);
   mkdirSync(dirname(targetFile), { recursive: true });
-  const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
-  renameSync(file, targetFile);
-  if (srcDir) {
-    try {
-      rmdirSync(srcDir); // 仅当空目录
-    } catch {
-      /* 有附件目录则保留 */
+  if (srcDir && targetDirForm) {
+    // 目录形态互转：整体移动目录（cards/ attempts/ 一起走）
+    renameSync(srcDir, dirname(targetFile));
+  } else {
+    renameSync(file, targetFile);
+    if (srcDir) {
+      try {
+        rmdirSync(srcDir); // 仅当空目录（移回 backlog 平铺方向）
+      } catch {
+        /* 有附件目录则保留 */
+      }
     }
   }
   saveGoal(targetFile, doc);
