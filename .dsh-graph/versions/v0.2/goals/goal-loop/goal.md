@@ -2,11 +2,11 @@
 {
   "id": "g-101",
   "title": "目标闭环 DSH 插件（goal-loop）",
-  "status": "draft",
+  "status": "planning",
   "blocked_reason": null,
   "created_at": "2026-08-20 17:29:00+08:00",
   "created_by": "supervisor",
-  "version": null,
+  "version": "v0.2",
   "scope": [],
   "depends_on": [],
   "review": {
@@ -25,6 +25,11 @@
 ## 目标描述
 把核心层包装为 DSH 插件（cordis 插件包）：驱动单目标全生命周期（生成取证计划与判据 →
 收集信息 → 派发 attempt → 判据核验 → 处置分支路由）。依赖 g-001 的核心层。
+
+**状态汇报（负责人指定）**：执行中的 attempt agent 周期性调用插件工具汇报**一句可展示
+的工作状态**（如"正在实现 validate 环检测"），写入 attempt 状态行并追加
+`attempt.status_reported` 事件；看板卡片只显示最新一句，代替流式思考/生成输出。
+执行 agent 的指导（persona/skill/工具描述）必须包含汇报要求。
 
 **多会话管理（负责人指定）**：收集阶段的工具调用与原始内容在 subagent 内消化，仅精炼
 证据回流，保证执行阶段上下文干净；当收集 agent 输出简单干净时，直接复用该 subagent

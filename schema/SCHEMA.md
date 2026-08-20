@@ -154,6 +154,7 @@ executor: agent:k3          # agent:<model> | human:<name> | external:<desc>
 sandbox_path: .dsh-graph/.../attempts/att-01J4XA77Q1   # worktree 或目录
 started_at: 2025-08-20T11:00:00+08:00
 claimed_at: null            # 完成声明时间；声明即触发 review
+status_line: null           # 执行中 agent 汇报的一句最新状态（卡片显示用；每次汇报追加 attempt.status_reported 事件，卡面只取最新）
 result: pending             # pending | selected | merged | rejected | superseded
 ---
 
@@ -271,7 +272,8 @@ goal.created / goal.planned / criteria.confirmed / goal.transition /
 dependency.added / evidence.added / goal.ready / attempt.started /
 completion.claimed / review.passed / review.failed / pk.compared /
 goal.delivered / goal.reworked / goal.blocked / goal.unblocked /
-goal.spawned / goal.moved / card.created / card.collecting / card.filled / card.reviewed / version.scope_changed / version.integration_decided /
+goal.spawned / goal.moved / card.created / card.collecting / card.filled / card.reviewed /
+attempt.status_reported / version.scope_changed / version.integration_decided /
 version.released / memory.promoted / skill.proposed /
 skill.created`
 

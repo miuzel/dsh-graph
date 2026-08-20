@@ -1,0 +1,6 @@
+[dsh-hello-plugin] apply() config={"greeting":"from-bundle-layer"}
+[dsh-hello-plugin] ctx.tools=object register=function
+[dsh-hello-plugin] registered; tools now visible = hello_marker
+[dsh-hello-plugin] get('hello_marker') = FOUND
+[dsh-hello-plugin] apply() config={"greeting":"from-overlay"}
+[dsh-hello-plugin] ctx.tools=object register=function

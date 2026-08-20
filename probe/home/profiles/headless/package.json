@@ -1,0 +1,16 @@
+{
+  "name": "dsh-profile-headless",
+  "private": true,
+  "dependencies": {
+    "dsh-hello-plugin": "link:/home/miuzel/workspace/personal/dsh-graph/probe/dsh-hello-plugin"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-headless",
+        "dsh-hello-plugin"
+      ]
+    }
+  }
+}
