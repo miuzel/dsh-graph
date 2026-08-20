@@ -164,7 +164,7 @@ export function apply(ctx, config) {
               },
               signal: ex.signal,
             });
-            bindAttemptChild(root, a.goal, attempt, started.childId, actorOf(ex));
+            bindAttemptChild(root, a.goal, attempt, started.childId, actorOf(ex), ex.agent?.session?.id);
             result.child_id = started.childId;
           } catch (e) {
             result.note = `subagent 派发失败（attempt 已本地创建）：${e?.message ?? e}`;

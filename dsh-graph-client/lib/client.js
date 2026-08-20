@@ -138,7 +138,8 @@ window.__ModuleLoader__.load({
           title: "点击打开详情", onClick: () => onOpen(g.id) },
         h("div", { style: S.title }, `🎯 ${g.title}`),
         h("div", { style: S.meta },
-          `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`),
+          `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
+          sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 执行会话")),
         hasDep
           ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${g.depends_on.join("、")} 交付`)
           : null,
@@ -151,9 +152,13 @@ window.__ModuleLoader__.load({
             key: c.id,
             style: { ...S.subCard, cursor: "pointer" },
             className: "dg-sub" + (activeCard === c.id ? " dg-sub-active" : ""),
-            title: (c.summary ?? "") + "（点击打开上下文抽屉）",
+            title: "点击打开上下文抽屉",
             onClick: (e) => { e.stopPropagation(); onOpenCard(g.id, c.id); },
-          }, `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`)),
+          },
+            h("div", null,
+              `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`,
+              sessionLinkBtn(c.parent_session_id, c.child_id, "↗")),
+            c.summary ? h("div", { style: { opacity: 0.75, marginTop: 1 } }, c.summary) : null)),
       );
     }
 
@@ -248,7 +253,7 @@ window.__ModuleLoader__.load({
             h("div", { style: S.modalH }, "✅ 质量判据"), crit) : null,
           (d.cards ?? []).length
             ? h("div", { key: "k", style: S.modalSection },
-                h("div", { style: S.modalH }, "📇 上下文卡片"),
+                h("div", { style: S.modalH }, "🗂 信息收集"),
                 d.cards.map((c) => h("div", { key: c.id, style: S.subCard },
                   `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)))
             : null,
@@ -352,6 +357,21 @@ window.__ModuleLoader__.load({
     }
 
     let appCtx = null;
+    function openChildSession(parentSessionId, childId) {
+      try {
+        const rt = appCtx?.get?.("sessions");
+        rt?.openSubagent?.({ parentSessionId, childSessionId: childId, mode: "continuable" });
+      } catch (e) { console.warn("[dsh-graph-client] openSubagent failed", e); }
+    }
+    function sessionLinkBtn(parentSessionId, childId, label) {
+      if (!childId) return null;
+      return h("button", {
+        style: { ...S.btn, fontSize: 11, padding: "0 8px", marginLeft: 6 },
+        className: "dg-btn",
+        title: parentSessionId ? "跳转到子代理会话" : "子代理 id（父会话未知，仅展示）",
+        onClick: (e) => { e.stopPropagation(); if (parentSessionId) openChildSession(parentSessionId, childId); },
+      }, label ?? "↗ 会话");
+    }
     return {
       name: "dsh-graph-client",
       inject: ["slots"],

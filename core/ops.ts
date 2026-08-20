@@ -590,12 +590,14 @@ export function bindAttemptChild(
   attemptId: string,
   childId: string,
   actor: string,
+  parentSessionId?: string,
 ): void {
   const goalFile = findGoalFile(root, goalId);
   const file = join(goalDirOf(goalFile), "attempts", attemptId, "attempt.md");
   if (!existsSync(file)) throw new GraphError(`attempt 不存在：${attemptId}（目标 ${goalId}）`);
   const doc = loadGoal(file);
   doc.meta.child_id = childId;
+  if (parentSessionId) doc.meta.parent_session_id = parentSessionId;
   saveGoal(file, doc);
   appendEvent(root, {
     actor,
@@ -717,6 +719,25 @@ export function boardProjection(root: string): {
         }
       }
     }
+    // 最新一个绑定了子代理的 attempt（卡片会话链接用）
+    let attemptChild: Record<string, any> = {};
+    if (dir) {
+      const attDir = join(dir, "attempts");
+      if (existsSync(attDir)) {
+        const atts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort().reverse();
+        for (const a of atts) {
+          const f = join(attDir, a, "attempt.md");
+          if (!existsSync(f)) continue;
+          try {
+            const m = loadGoal(f).meta;
+            if (m.child_id) {
+              attemptChild = { child_id: m.child_id, parent_session_id: m.parent_session_id ?? null };
+              break;
+            }
+          } catch { /* 跳过 */ }
+        }
+      }
+    }
     // 上下文卡片摘要（目标目录 cards/ 下）
     const cards: Array<Record<string, any>> = [];
     if (dir) {
@@ -726,7 +747,12 @@ export function boardProjection(root: string): {
           if (!f.endsWith(".md")) continue;
           try {
             const cm = loadGoal(join(cdir, f)).meta;
-            cards.push({ id: cm.id, title: cm.title, kind: cm.kind, status: cm.status });
+            cards.push({
+              id: cm.id, title: cm.title, kind: cm.kind, status: cm.status,
+              summary: cm.summary ?? null,
+              child_id: cm.child_id ?? null,
+              parent_session_id: cm.parent_session_id ?? null,
+            });
           } catch {
             /* 跳过坏卡片 */
           }
@@ -742,6 +768,8 @@ export function boardProjection(root: string): {
       depends_on: (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((d: any) =>
         String(d?.goal ?? d),
       ),
+      attempt_child_id: attemptChild.child_id ?? null,
+      attempt_parent_session_id: attemptChild.parent_session_id ?? null,
       pk_lanes: meta.pk?.lanes ?? 1,
       blocked_reason: meta.blocked_reason ?? null,
       cards,
@@ -860,10 +888,31 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
     }
     return { ...c, content };
   });
+  const attempts: Array<Record<string, any>> = [];
+  {
+    const dir = basename(file) === "goal.md" ? dirname(file) : null;
+    const attDir = dir ? join(dir, "attempts") : null;
+    if (attDir && existsSync(attDir)) {
+      for (const a of readdirSync(attDir).sort()) {
+        const f = join(attDir, a, "attempt.md");
+        if (!existsSync(f)) continue;
+        try {
+          const m = loadGoal(f).meta;
+          attempts.push({
+            id: m.id, executor: m.executor, result: m.result,
+            status_line: m.status_line ?? null,
+            child_id: m.child_id ?? null,
+            parent_session_id: m.parent_session_id ?? null,
+          });
+        } catch { /* 跳过 */ }
+      }
+    }
+  }
   return {
     meta: doc.meta,
     body: doc.body,
     cards,
+    attempts,
     events,
   };
 }
