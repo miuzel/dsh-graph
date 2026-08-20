@@ -47,6 +47,17 @@ window.__ModuleLoader__.load({
       return `${when}  ${what}（${who}）`;
     }
 
+    const HOVER_CSS = `
+      .dg-card { transition: box-shadow .12s ease, transform .12s ease, border-color .12s ease; }
+      .dg-card:hover { box-shadow: 0 0 0 2px rgba(76,141,255,.55); transform: translateY(-1px); }
+      .dg-card:active { transform: translateY(0); box-shadow: 0 0 0 2px rgba(76,141,255,.8); }
+      .dg-sub { transition: background .12s ease; }
+      .dg-sub:hover { background: rgba(58,166,117,.22); }
+      .dg-collapsed:hover { background: rgba(128,128,128,.14); }
+      .dg-btn { transition: filter .12s ease; }
+      .dg-btn:hover { filter: brightness(1.25); }
+    `;
+
     const S = {
       wrap: { padding: 12, fontSize: 13, color: "inherit", overflowX: "auto" },
       head: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
@@ -79,6 +90,15 @@ window.__ModuleLoader__.load({
         position: "fixed", inset: 0, background: "rgba(0,0,0,.55)",
         display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
       },
+      drawer: {
+        position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
+        background: "#1e1f24", color: "#e6e6e6", zIndex: 10000,
+        boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
+        padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
+        fontFamily: "inherit",
+      },
+      drawerSection: { marginTop: 14 },
+      drawerH: { fontWeight: 700, fontSize: 13, marginBottom: 6, opacity: 0.9 },
       modal: {
         background: "#1e1f24", color: "#e6e6e6", borderRadius: 10,
         maxWidth: 720, width: "90%", maxHeight: "80vh", overflowY: "auto",
@@ -112,7 +132,7 @@ window.__ModuleLoader__.load({
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
       return h(
         "div",
-        { key: g.id, style, title: "点击打开详情", onClick: () => onOpen(g.id) },
+        { key: g.id, style, className: "dg-card", title: "点击打开详情", onClick: () => onOpen(g.id) },
         h("div", { style: S.title }, `🎯 ${g.title}`),
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`),
@@ -126,7 +146,7 @@ window.__ModuleLoader__.load({
         (g.cards ?? []).map((c) =>
           h("div", {
             key: c.id,
-            style: { ...S.subCard, cursor: "pointer" },
+            style: { ...S.subCard, cursor: "pointer" }, className: "dg-sub",
             title: (c.summary ?? "") + "（点击打开上下文抽屉）",
             onClick: (e) => { e.stopPropagation(); onOpenCard(g.id, c.id); },
           }, `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`)),
@@ -153,8 +173,8 @@ window.__ModuleLoader__.load({
         if (!card) inner = "卡片不存在：" + props.cardId;
         else {
           const childLink = card.child_id
-            ? h("div", { style: S.modalSection, key: "child" },
-                h("div", { style: S.modalH }, "🤖 收集子代理"),
+            ? h("div", { style: S.drawerSection, key: "child" },
+                h("div", { style: S.drawerH }, "🤖 收集子代理"),
                 h("div", { style: S.meta }, `id：${card.child_id}`),
                 card.parent_session_id
                   ? h("button", {
@@ -173,23 +193,20 @@ window.__ModuleLoader__.load({
               `📇 ${card.title}`),
             h("div", { key: "m", style: S.meta },
               `${card.id} ｜ ${card.kind} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
-            card.summary ? h("div", { key: "s", style: S.modalSection },
-              h("div", { style: S.modalH }, "摘要"), card.summary) : null,
-            h("div", { key: "body", style: S.modalSection },
-              h("div", { style: S.modalH }, "全文"),
-              card.content?.trim() || "（尚未采集内容）"),
+            card.summary ? h("div", { key: "s", style: S.drawerSection },
+              h("div", { style: S.drawerH }, "摘要"), card.summary) : null,
+            h("div", { key: "body", style: S.drawerSection },
+              h("div", { style: S.drawerH }, "全文"),
+              h("div", { style: { whiteSpace: "pre-wrap" } }, card.content?.trim() || "（尚未采集内容）")),
             childLink,
           ];
         }
       }
       return h(
         "div",
-        { style: S.overlay, onClick: props.onClose },
-        h("div", {
-          style: { ...S.modal, maxWidth: 420, marginLeft: "auto", height: "100vh",
-                   maxHeight: "100vh", borderRadius: 0 },
-          onClick: (e) => e.stopPropagation(),
-        },
+        null,
+        h("div", { style: { ...S.overlay, background: "rgba(0,0,0,.35)" }, onClick: props.onClose }),
+        h("div", { style: S.drawer, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: props.onClose }, "✕"),
           inner),
       );
@@ -220,12 +237,9 @@ window.__ModuleLoader__.load({
         const d = state.data;
         const desc = section(d.body, "目标描述");
         const crit = section(d.body, "质量判据");
-        const plan = section(d.body, "收集计划");
         content = [
           desc ? h("div", { key: "d", style: S.modalSection },
             h("div", { style: S.modalH }, "📋 目标描述"), desc) : null,
-          plan ? h("div", { key: "p", style: S.modalSection },
-            h("div", { style: S.modalH }, "🔍 收集计划"), plan) : null,
           crit ? h("div", { key: "c", style: S.modalSection },
             h("div", { style: S.modalH }, "✅ 质量判据"), crit) : null,
           (d.cards ?? []).length
@@ -296,7 +310,7 @@ window.__ModuleLoader__.load({
         const open = !!openReleased[v.slug];
         return [
           h("div", {
-            key: "rel-" + v.slug, style: S.collapsed, title: "点击展开/收起",
+            key: "rel-" + v.slug, style: S.collapsed, className: "dg-collapsed", title: "点击展开/收起",
             onClick: () => setOpenReleased({ ...openReleased, [v.slug]: !open }),
           }, `${open ? "▾" : "▸"} ${v.name} ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`),
           open ? h("div", { key: "relx-" + v.slug, style: S.grid },
@@ -312,10 +326,11 @@ window.__ModuleLoader__.load({
       return h(
         "div",
         { style: S.wrap },
+        h("style", null, HOVER_CSS),
         h("div", { style: S.head },
           h("strong", null, "dsh-graph 看板"),
           h("span", { style: S.meta }, "数据时间：" + (b.generated_at ?? "").replace("T", " ").slice(0, 19)),
-          h("button", { style: S.btn, onClick: load }, "刷新")),
+          h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新")),
         h("div", { style: S.grid },
           h("div", { style: S.stageHead }, "泳道＼阶段"),
           STAGES.map((s) => h("div", { key: s.key, style: S.stageHead }, s.label)),

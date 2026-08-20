@@ -33,8 +33,7 @@ DSH client-plugin 形态的看板：横轴生命周期阶段、纵轴版本泳�
 
 ## 收集计划
 
-- [ ] client-plugin 最小可行加载路径（subagent 6113206f 调研中）
-- [ ] 参考项目 https://github.com/StruggleYang/dsh-project-kanban （功能不同，参考其 client-plugin 形态，负责人指定）
+（已并入上下文卡片：两项收集即为本目标的两张卡片，见「上下文卡片」）
 
 ## 质量判据
 
