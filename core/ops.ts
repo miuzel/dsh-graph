@@ -184,7 +184,12 @@ export function setCriteria(
   const doc = loadGoal(file);
   const content =
     "\n" + criteria.map((c, i) => `${i + 1}. ${c}`).join("\n") + "\n";
-  doc.body = replaceSection(doc.body, "质量判据", content);
+  try {
+    doc.body = replaceSection(doc.body, "质量判据", content);
+  } catch {
+    // 小节不存在（如 backlog 草稿模板缺标准小节）：追加到正文末尾
+    doc.body = doc.body.replace(/\n*$/, "") + "\n\n## 质量判据\n" + content;
+  }
   if (!doc.meta.rules_snapshot) {
     doc.meta.rules_snapshot = readRulesVersion(root);
   }
@@ -486,5 +491,96 @@ export function reviewCard(
     event: "card.reviewed",
     goal: goalId,
     details: { card: cardId, by: opts.by },
+  });
+}
+
+// ---- Attempt（SCHEMA §3） ----
+
+const ATTEMPT_BODY = `
+## 执行笔记
+
+（执行者自由记录）
+
+## Review 记录
+
+<!-- 受管小节 -->
+`;
+
+/** 创建 attempt 目录与 attempt.md，追加 attempt.started 事件；返回 attempt id。 */
+export function startAttempt(
+  root: string,
+  goalId: string,
+  opts: { executor: string; actor: string },
+): string {
+  const goalFile = findGoalFile(root, goalId);
+  const dir = join(goalDirOf(goalFile), "attempts");
+  mkdirSync(dir, { recursive: true });
+  const seq = readdirSync(dir).filter((d) => d.startsWith("att-")).length + 1;
+  const attId = `att-${String(seq).padStart(3, "0")}`;
+  const attDir = join(dir, attId);
+  mkdirSync(join(attDir, "delivery"), { recursive: true });
+  const meta: Record<string, any> = {
+    id: attId,
+    goal: goalId,
+    executor: opts.executor,
+    sandbox: "directory",
+    started_at: new Date().toISOString(),
+    claimed_at: null,
+    status_line: null,
+    result: "pending",
+    child_id: null,
+  };
+  saveGoal(join(attDir, "attempt.md"), { meta, body: ATTEMPT_BODY });
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "attempt.started",
+    goal: goalId,
+    details: { attempt: attId, executor: opts.executor },
+  });
+  return attId;
+}
+
+/** 更新 attempt 的一句最新状态，追加 attempt.status_reported 事件。 */
+export function reportStatus(
+  root: string,
+  goalId: string,
+  attemptId: string,
+  line: string,
+  actor: string,
+): void {
+  if (!line.trim()) throw new GraphError("status 不能为空");
+  const goalFile = findGoalFile(root, goalId);
+  const file = join(goalDirOf(goalFile), "attempts", attemptId, "attempt.md");
+  if (!existsSync(file)) throw new GraphError(`attempt 不存在：${attemptId}（目标 ${goalId}）`);
+  const doc = loadGoal(file);
+  doc.meta.status_line = line;
+  saveGoal(file, doc);
+  appendEvent(root, {
+    actor,
+    event: "attempt.status_reported",
+    goal: goalId,
+    details: { attempt: attemptId, status: line },
+  });
+}
+
+/** 把 subagent childId 绑定到 attempt（startContinuable 之后调用）。 */
+export function bindAttemptChild(
+  root: string,
+  goalId: string,
+  attemptId: string,
+  childId: string,
+  actor: string,
+): void {
+  const goalFile = findGoalFile(root, goalId);
+  const file = join(goalDirOf(goalFile), "attempts", attemptId, "attempt.md");
+  if (!existsSync(file)) throw new GraphError(`attempt 不存在：${attemptId}（目标 ${goalId}）`);
+  const doc = loadGoal(file);
+  doc.meta.child_id = childId;
+  saveGoal(file, doc);
+  appendEvent(root, {
+    actor,
+    event: "attempt.bound",
+    goal: goalId,
+    details: { attempt: attemptId, child_id: childId },
   });
 }

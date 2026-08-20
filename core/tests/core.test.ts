@@ -151,3 +151,17 @@ test("rebuild 发现 frontmatter 被篡改的 drift", () => {
   assert.equal(drift.length, 1);
   assert.ok(drift[0].includes("不一致"));
 });
+
+test("set-criteria 对缺少质量判据小节的草稿自动追加小节", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  // 删掉模板的质量判据小节，模拟 backlog 草稿
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  doc.body = doc.body.replace(/## 质量判据[\s\S]*?(?=## 证据台账)/, "");
+  writeFileSync(file, serializeDoc(doc), "utf8");
+  setCriteria(root, id, ["甲"], "test");
+  const after = loadGoal(findGoalFile(root, id));
+  assert.ok(after.body.includes("## 质量判据"));
+  assert.ok(after.body.includes("1. 甲"));
+});

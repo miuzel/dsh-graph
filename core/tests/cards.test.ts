@@ -93,3 +93,20 @@ test("validate 发现悬空卡片引用；卡片事件不干扰 rebuild", () => 
   const problems = validate(root);
   assert.ok(problems.some((p) => p.includes("悬空卡片引用")));
 });
+
+test("start-attempt / report-status 生命周期与事件", async () => {
+  const { startAttempt, reportStatus } = await import("../ops.ts");
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  const att = startAttempt(root, id, { executor: "agent:test", actor: "test" });
+  assert.equal(att, "att-001");
+  reportStatus(root, id, att, "正在实现", "test");
+  const file = join(root, "versions", "v-t", "goals", id, "attempts", att, "attempt.md");
+  const meta = loadGoal(file).meta;
+  assert.equal(meta.status_line, "正在实现");
+  assert.throws(() => reportStatus(root, id, att, "  ", "test"), GraphError);
+  assert.throws(() => reportStatus(root, id, "att-999", "x", "test"), GraphError);
+  const events = readEvents(root).map((e) => e.event);
+  assert.ok(events.includes("attempt.started"));
+  assert.ok(events.includes("attempt.status_reported"));
+});

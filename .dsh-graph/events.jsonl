@@ -72,3 +72,10 @@
 {"ts":"2026-08-20T12:29:05.344Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-101","details":{"from":"planning","to":"collecting"}}
 {"ts":"2026-08-20T12:29:05.415Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-101","details":{"from":"collecting","to":"ready"}}
 {"ts":"2026-08-20T20:40:00+08:00","actor":"human:负责人","event":"scope.note","details":{"note":"版本非串行：多版本可并行 active，泳道拖拽仅展示态；开发任务配套分支管理，版本提交时做代码范围管理。已写入 DESIGN.md §2/§8.6"}}
+{"ts":"2026-08-20T12:39:59.247Z","actor":"human:负责人","event":"criteria.confirmed","goal":"g-101","details":{"criteria_count":1,"rules_snapshot":"r-2026-08"}}
+{"ts":"2026-08-20T12:39:59.312Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-101","details":{"from":"ready","to":"in_progress"}}
+{"ts":"2026-08-20T20:50:00+08:00","actor":"supervisor:k3","event":"attempt.started","goal":"g-101","details":{"attempt":"att-001","executor":"agent:k3"}}
+{"ts":"2026-08-20T12:44:37.460Z","actor":"agent:k3","event":"attempt.status_reported","goal":"g-101","details":{"attempt":"att-001","status":"check_plugin PASS：插件真实加载、10 工具注册、core 自测通过"}}
+{"ts":"2026-08-20T12:44:37.527Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-101","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-20T21:05:00+08:00","actor":"agent:k3","event":"completion.claimed","goal":"g-101","details":{"attempt":"att-001","evidence":"check_plugin.sh PASS（15 单测+CLI 冒烟+隔离环境真实加载）；判据4-6 需 live 验证","caveats":["判据4 subagent 派发仅实现未实测（隔离环境无凭据）","判据5 人工 gate 停轮为行为承诺","判据6 dogfood 2.0 需负责人配合安装到 web profile"]}}
+{"ts":"2026-08-20T21:15:00+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-101","details":{"evidence_id":"ev-03","summary":"插件已热加载进 web profile（~/.dsh/profiles/web/cordis.patch.yml，原文件已备份 .bak-dsh-graph）；marker 自测：10 工具注册 + validate PASS"}}

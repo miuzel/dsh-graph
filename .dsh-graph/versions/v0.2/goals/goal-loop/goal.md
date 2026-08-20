@@ -2,7 +2,7 @@
 {
   "id": "g-101",
   "title": "目标闭环 DSH 插件（goal-loop）",
-  "status": "ready",
+  "status": "review",
   "blocked_reason": null,
   "created_at": "2026-08-20 17:29:00+08:00",
   "created_by": "supervisor",
@@ -43,3 +43,7 @@
   的绑定与创建/复用/归档决策记录，**不自建会话管理**；
 - 技能沉淀走 `ctx.skills.register`（`dsh-skill` 运行时注册）或写 SKILL.md 由
   `dsh-skill-filesystem` 发现。
+
+## 质量判据
+
+1. [script] scripts/check_plugin.sh

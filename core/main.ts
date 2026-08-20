@@ -14,6 +14,8 @@ import {
   addCard,
   fillCard,
   reviewCard,
+  startAttempt,
+  reportStatus,
 } from "./ops.ts";
 
 interface Args {
@@ -120,6 +122,25 @@ function main(): void {
       console.log("ok");
       return;
     }
+    case "start-attempt": {
+      const attId = startAttempt(args.root, need(args, "goal"), {
+        executor: flag(args, "executor") ?? actor,
+        actor,
+      });
+      console.log(attId); // 只输出 attempt id
+      return;
+    }
+    case "report-status": {
+      reportStatus(
+        args.root,
+        need(args, "goal"),
+        need(args, "attempt"),
+        need(args, "status"),
+        actor,
+      );
+      console.log("ok");
+      return;
+    }
     case "validate": {
       const problems = validate(args.root);
       if (problems.length > 0) {
@@ -141,7 +162,7 @@ function main(): void {
     }
     default:
       throw new GraphError(
-        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|validate|rebuild> [flags]",
+        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|start-attempt|report-status|validate|rebuild> [flags]",
       );
   }
 }
