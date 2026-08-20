@@ -2,7 +2,7 @@
 {
   "id": "g-101",
   "title": "目标闭环 DSH 插件（goal-loop）",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-20 17:29:00+08:00",
   "created_by": "supervisor",
@@ -19,10 +19,7 @@
   },
   "rules_snapshot": "r-2026-08",
   "skill_refs": [],
-  "context_cards": [
-    "card-b561d092",
-    "card-74640f91"
-  ]
+  "context_cards": []
 }
 ---
 

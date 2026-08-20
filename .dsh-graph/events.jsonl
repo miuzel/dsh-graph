@@ -116,3 +116,15 @@
 {"ts":"2026-08-20T16:09:19.779Z","actor":"agent:session-260c614d-ffaf-4c7c-93c8-ec4210963de2","event":"attempt.bound","goal":"g-f8317edc","details":{"attempt":"att-004","child_id":"c5a5fa17-4974-4a26-b85f-ae03cb60ab91"}}
 {"ts":"2026-08-20T16:09:57.619Z","actor":"agent:c5a5fa17-4974-4a26-b85f-ae03cb60ab91","event":"attempt.status_reported","goal":"g-f8317edc","details":{"attempt":"att-004","status":"att-004 启动：读取 goal/卡片/前序 attempt，开始独立复核插件全流程"}}
 {"ts":"2026-08-20T22:05:00+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-101","details":{"evidence_id":"ev-09","summary":"判据4 live 验证完成：att-004 绑定 child_id c5a5fa17，子 agent 自主调用 graph_report_status 写 status_line；插件代码热重载生效（cordis HMR），无需重启 GUI"}}
+{"ts":"2026-08-20T16:10:23.731Z","actor":"agent:c5a5fa17-4974-4a26-b85f-ae03cb60ab91","event":"card.created","goal":"g-f8317edc","details":{"card":"card-359bfd68","title":"att-004 独立复核记录","kind":"text"}}
+{"ts":"2026-08-20T16:10:33.867Z","actor":"agent:c5a5fa17-4974-4a26-b85f-ae03cb60ab91","event":"card.filled","goal":"g-f8317edc","details":{"card":"card-359bfd68","by":"agent:c5a5fa17-4974-4a26-b85f-ae03cb60ab91"}}
+{"ts":"2026-08-20T16:10:40.018Z","actor":"agent:c5a5fa17-4974-4a26-b85f-ae03cb60ab91","event":"card.reviewed","goal":"g-f8317edc","details":{"card":"card-359bfd68","by":"agent:c5a5fa17-4974-4a26-b85f-ae03cb60ab91"}}
+{"ts":"2026-08-20T16:10:46.135Z","actor":"agent:c5a5fa17-4974-4a26-b85f-ae03cb60ab91","event":"attempt.status_reported","goal":"g-f8317edc","details":{"attempt":"att-004","status":"att-004 复核完成：事件链/负向拒绝/卡片闭环/validate/rebuild 全 PASS，写执行笔记后声明完成待 review"}}
+{"ts":"2026-08-20T16:11:15.848Z","actor":"agent:c5a5fa17-4974-4a26-b85f-ae03cb60ab91","event":"attempt.status_reported","goal":"g-f8317edc","details":{"attempt":"att-004","status":"att-004 完成：全流程复核 PASS，执行笔记与证据卡片 card-359bfd68 已就位，声明完成等待 review"}}
+{"ts":"2026-08-20T22:15:00+08:00","actor":"human:负责人","event":"review.passed","goal":"g-101","details":{"attempt":"att-001","criteria_results":{"1":"pass","2":"pass","3":"pass","4":"pass","5":"pass","6":"pass","7":"pass"},"note":"7 判据全部通过"}}
+{"ts":"2026-08-20T16:12:05.609Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-101","details":{"from":"review","to":"delivered"}}
+{"ts":"2026-08-20T22:16:00+08:00","actor":"human:负责人","event":"card.deleted","goal":"g-101","details":{"cards":["card-b561d092","card-74640f91"],"note":"测试数据清理"}}
+{"ts":"2026-08-20T22:16:01+08:00","actor":"human:负责人","event":"goal.deleted","goal":"g-f8317edc","details":{"note":"dogfood 测试目标清理（含 4 个 attempt 记录）；其子 agent 会话留在原会话历史中"}}
+{"ts":"2026-08-20T22:20:00+08:00","actor":"human:负责人","event":"version.integration_decided","details":{"version":"v-002","decision":"pass","note":"三冻结脚本全 PASS"}}
+{"ts":"2026-08-20T22:20:01+08:00","actor":"human:负责人","event":"version.released","details":{"version":"v-002","tag":"v0.2.0","goals":["g-101"]}}
+{"ts":"2026-08-20T22:20:02+08:00","actor":"supervisor:k3","event":"memory.promoted","details":{"memory":"mem-002","source_goals":["g-101"],"type":"failure-pattern"}}
