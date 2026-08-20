@@ -67,3 +67,8 @@
 {"ts":"2026-08-20T19:42:01+08:00","actor":"supervisor:k3","event":"goal.moved","goal":"g-101","details":{"from":"backlog/goal-loop-plugin.md","to":"versions/v0.2/goals/goal-loop/goal.md"}}
 {"ts":"2026-08-20T19:50:00+08:00","actor":"human:负责人","event":"scope.note","goal":"g-101","details":{"note":"新增需求：执行 agent 用一句状态汇报代替流式输出（卡片可显示）；已写入 g-101 描述与 DESIGN.md §8.6"}}
 {"ts":"2026-08-20T19:50:01+08:00","actor":"human:负责人","event":"scope.note","details":{"note":"看板：已完成版本默认收起置底，收起泳道显示一句摘要；文字版看板结构确认符合预期"}}
+{"ts":"2026-08-20T20:30:00+08:00","actor":"subagent:22f89fc2","event":"evidence.added","goal":"g-101","details":{"evidence_id":"ev-02","summary":"插件加载路径实机验证完成：三条路径跑通，配方落盘 docs/plugin-loading-recipe.md；关键坑：--help 吞加载失败、禁 default 导出、运行时零 @deepseek-ai import"}}
+{"ts":"2026-08-20T20:30:01+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-002","details":{"evidence_id":"ev-08","summary":"发现#7：git add -A 把收集 subagent 的 scratch 目录卷进提交——佐证'执行者交付物范围需受控'；已清理并保留配方文档"}}
+{"ts":"2026-08-20T12:29:05.344Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-101","details":{"from":"planning","to":"collecting"}}
+{"ts":"2026-08-20T12:29:05.415Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-101","details":{"from":"collecting","to":"ready"}}
+{"ts":"2026-08-20T20:40:00+08:00","actor":"human:负责人","event":"scope.note","details":{"note":"版本非串行：多版本可并行 active，泳道拖拽仅展示态；开发任务配套分支管理，版本提交时做代码范围管理。已写入 DESIGN.md §2/§8.6"}}
