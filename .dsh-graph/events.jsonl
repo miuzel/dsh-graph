@@ -48,3 +48,6 @@
 {"ts":"2026-08-20T19:00:00+08:00","actor":"supervisor:k3","event":"attempt.started","goal":"g-003","details":{"attempt":"att-001","executor":"agent:k3"}}
 {"ts":"2026-08-20T11:42:25.437Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-003","details":{"from":"in_progress","to":"review"}}
 {"ts":"2026-08-20T19:10:00+08:00","actor":"agent:k3","event":"completion.claimed","goal":"g-003","details":{"attempt":"att-001","evidence":"node --test 13/13 通过；scripts/check_cards.sh PASS（建卡/填充/复核/拒绝/悬空引用/重建）；check_core.sh 回归 PASS；真实图根 validate+rebuild 一致"}}
+{"ts":"2026-08-20T19:20:00+08:00","actor":"human:负责人","event":"review.passed","goal":"g-003","details":{"attempt":"att-001","criteria_results":{"1":"pass","2":"pass","3":"pass","4":"pass","5":"pass"},"note":"负责人核验通过"}}
+{"ts":"2026-08-20T11:50:29.166Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-003","details":{"from":"review","to":"delivered"}}
+{"ts":"2026-08-20T19:20:01+08:00","actor":"supervisor:k3","event":"memory.promoted","details":{"memory":"mem-001","source_goals":["g-001","g-003"],"type":"success-graph","note":"memory_promotion 配置为 ai，负责人可推翻"}}

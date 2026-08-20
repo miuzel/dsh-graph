@@ -6,7 +6,7 @@
   "sandbox": "主工作区（v0.1 单 lane，免隔离）",
   "started_at": "2026-08-20T19:00:00+08:00",
   "claimed_at": "2026-08-20T19:10:00+08:00",
-  "result": "pending"
+  "result": "selected"
 }
 ---
 
@@ -20,3 +20,15 @@ check_cards.sh PASS，check_core.sh 回归 PASS。
 
 ## Review 记录
 <!-- 受管小节 -->
+审核方：human:负责人（2026-08-20）
+
+| 判据 | 结果 |
+|------|------|
+| 1 建卡与 context_cards 保序 | ✅ 通过 |
+| 2 fill/review 生命周期与事件 | ✅ 通过 |
+| 3 validate 悬空引用/归属/backlog 拒绝 | ✅ 通过 |
+| 4 卡片事件不干扰 rebuild | ✅ 通过 |
+| 5 check_cards.sh PASS | ✅ 通过 |
+
+结论：通过交付。附注（非阻塞）：执行方自述 completion.claimed 与转 review
+顺序颠倒的履历瑕疵，后续由 goal-loop 模块把声明做成迁移前置条件来杜绝。

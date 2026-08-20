@@ -2,7 +2,7 @@
 {
   "id": "g-003",
   "title": "上下文卡片模型与核心命令",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-20T18:50:00+08:00",
   "created_by": "supervisor",
