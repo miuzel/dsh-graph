@@ -1,5 +1,0 @@
-- insert:
-    - id: hello-overlay
-      name: dsh-hello-plugin
-      config:
-        greeting: from-overlay

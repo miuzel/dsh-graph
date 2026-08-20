@@ -1,7 +1,0 @@
-# bundle layer: rows are composed into the profile tree, so the specifier is
-# resolved from the PROFILE directory -> use the bare package name.
-- insert:
-    - id: hello-plugin
-      name: dsh-hello-plugin
-      config:
-        greeting: from-bundle-layer

@@ -1,4 +1,0 @@
-[dsh-hello-plugin] apply() config={"greeting":"hi-from-patch"}
-[dsh-hello-plugin] ctx.tools=object register=function
-[dsh-hello-plugin] registered; tools now visible = hello_marker
-[dsh-hello-plugin] get('hello_marker') = FOUND
