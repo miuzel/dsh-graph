@@ -160,6 +160,24 @@ export function createGoal(
     mkdirSync(join(root, "versions", opts.version, "goals", id), {
       recursive: true,
     });
+    // 隐式版本：version.md 不存在时补骨架（发现#14）
+    const vfile = join(root, "versions", opts.version, "version.md");
+    if (!existsSync(vfile)) {
+      saveGoal(vfile, {
+        meta: {
+          id: "v-" + randomUUID().slice(0, 8),
+          name: opts.version,
+          status: "planning",
+          created_at: new Date().toISOString(),
+        },
+        body: "\n## 范围\n\n（隐式创建：由 create-goal --version 带入）\n",
+      });
+      appendEvent(root, {
+        actor: opts.actor,
+        event: "version.created",
+        details: { version: opts.version, implicit: true },
+      });
+    }
   } else {
     file = join(root, "backlog", `${id}.md`);
     mkdirSync(join(root, "backlog"), { recursive: true });
@@ -646,4 +664,189 @@ export function moveGoal(
     goal: id,
     details: { from: relative(root, file), to: relative(root, targetFile) },
   });
+}
+
+// ---- 看板数据投影（供 host 端点与文字版看板共用） ----
+
+export interface BoardGoal {
+  id: string;
+  title: string;
+  status: string;
+  status_line: string | null;
+  reviewer: string | null;
+  depends_on: string[];
+  pk_lanes: number;
+  blocked_reason: string | null;
+}
+
+export interface BoardVersion {
+  slug: string;
+  id: string | null;
+  name: string;
+  status: string;
+  goals: BoardGoal[];
+}
+
+export function boardProjection(root: string): {
+  generated_at: string;
+  versions: BoardVersion[];
+  standalone: BoardGoal[];
+  backlog: BoardGoal[];
+} {
+  const goalItem = (file: string): BoardGoal => {
+    const meta = loadGoal(file).meta;
+    // 取最新一个带 status_line 的 attempt
+    let statusLine: string | null = null;
+    const dir = basename(file) === "goal.md" ? dirname(file) : null;
+    if (dir) {
+      const attDir = join(dir, "attempts");
+      if (existsSync(attDir)) {
+        const atts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort();
+        for (let i = atts.length - 1; i >= 0; i--) {
+          const f = join(attDir, atts[i], "attempt.md");
+          if (!existsSync(f)) continue;
+          try {
+            const m = loadGoal(f).meta;
+            if (m.status_line) {
+              statusLine = m.status_line;
+              break;
+            }
+          } catch {
+            /* 坏的 attempt 文件跳过 */
+          }
+        }
+      }
+    }
+    // 上下文卡片摘要（目标目录 cards/ 下）
+    const cards: Array<Record<string, any>> = [];
+    if (dir) {
+      const cdir = join(dir, "cards");
+      if (existsSync(cdir)) {
+        for (const f of readdirSync(cdir).sort()) {
+          if (!f.endsWith(".md")) continue;
+          try {
+            const cm = loadGoal(join(cdir, f)).meta;
+            cards.push({ id: cm.id, title: cm.title, kind: cm.kind, status: cm.status });
+          } catch {
+            /* 跳过坏卡片 */
+          }
+        }
+      }
+    }
+    return {
+      id: String(meta.id),
+      title: String(meta.title ?? meta.id),
+      status: String(meta.status ?? "unknown"),
+      status_line: statusLine,
+      reviewer: meta.review?.reviewer ?? null,
+      depends_on: (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((d: any) =>
+        String(d?.goal ?? d),
+      ),
+      pk_lanes: meta.pk?.lanes ?? 1,
+      blocked_reason: meta.blocked_reason ?? null,
+      cards,
+    };
+  };
+  const versions: BoardVersion[] = [];
+  const vdir = join(root, "versions");
+  if (existsSync(vdir)) {
+    for (const v of readdirSync(vdir).sort()) {
+      const vfile = join(vdir, v, "version.md");
+      if (!existsSync(vfile)) continue;
+      let vmeta: Record<string, any> = {};
+      try {
+        vmeta = loadGoal(vfile).meta;
+      } catch {
+        /* 坏版本文件按未知处理 */
+      }
+      const goals: BoardGoal[] = [];
+      const gdir = join(vdir, v, "goals");
+      if (existsSync(gdir)) {
+        for (const g of readdirSync(gdir).sort()) {
+          const gf = join(gdir, g, "goal.md");
+          if (!existsSync(gf)) continue;
+          try {
+            goals.push(goalItem(gf));
+          } catch {
+            /* 坏目标文件跳过 */
+          }
+        }
+      }
+      versions.push({
+        slug: v,
+        id: vmeta.id ?? null,
+        name: String(vmeta.name ?? v),
+        status: String(vmeta.status ?? "unknown"),
+        goals,
+      });
+    }
+  }
+  const standalone: BoardGoal[] = [];
+  const sdir = join(root, "goals");
+  if (existsSync(sdir)) {
+    for (const g of readdirSync(sdir).sort()) {
+      const gf = join(sdir, g, "goal.md");
+      if (!existsSync(gf)) continue;
+      try {
+        standalone.push(goalItem(gf));
+      } catch {
+        /* 跳过 */
+      }
+    }
+  }
+  const backlog: BoardGoal[] = [];
+  const bdir = join(root, "backlog");
+  if (existsSync(bdir)) {
+    for (const f of readdirSync(bdir).sort()) {
+      if (!f.endsWith(".md")) continue;
+      try {
+        backlog.push(goalItem(join(bdir, f)));
+      } catch {
+        /* 跳过 */
+      }
+    }
+  }
+  return { generated_at: new Date().toISOString(), versions, standalone, backlog };
+}
+
+/** 目标的上下文卡片摘要列表（看板子卡片）。 */
+export function goalCards(root: string, goalId: string): Array<Record<string, any>> {
+  const file = findGoalFile(root, goalId);
+  const dir = basename(file) === "goal.md" ? dirname(file) : null;
+  if (!dir) return [];
+  const cdir = join(dir, "cards");
+  if (!existsSync(cdir)) return [];
+  const out: Array<Record<string, any>> = [];
+  for (const f of readdirSync(cdir).sort()) {
+    if (!f.endsWith(".md")) continue;
+    try {
+      const doc = loadGoal(join(cdir, f));
+      out.push({
+        id: doc.meta.id,
+        title: doc.meta.title,
+        kind: doc.meta.kind,
+        status: doc.meta.status,
+        filled_by: doc.meta.filled_by ?? null,
+      });
+    } catch {
+      /* 跳过坏卡片 */
+    }
+  }
+  return out;
+}
+
+/** 目标详情（看板详情弹层）：meta + 正文小节 + 卡片 + 近期事件。 */
+export function goalDetail(root: string, goalId: string): Record<string, any> {
+  const file = findGoalFile(root, goalId);
+  const doc = loadGoal(file);
+  const events = readEvents(root)
+    .filter((e) => e.goal === goalId)
+    .slice(-50)
+    .map((e) => ({ ts: e.ts, actor: e.actor, event: e.event, details: e.details }));
+  return {
+    meta: doc.meta,
+    body: doc.body,
+    cards: goalCards(root, goalId),
+    events,
+  };
 }

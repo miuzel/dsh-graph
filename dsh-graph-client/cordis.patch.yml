@@ -1,0 +1,7 @@
+# dsh-graph-client 的 bundle 层（dsh plugin add 时自动激活）
+# 注意：root 当前硬编码为本项目路径（本地开发）；通用化留待后续版本。
+- insert:
+    - id: dsh-graph-client
+      name: dsh-graph-client
+      config:
+        root: /home/miuzel/workspace/personal/dsh-graph/.dsh-graph

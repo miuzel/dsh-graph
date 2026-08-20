@@ -128,3 +128,20 @@
 {"ts":"2026-08-20T22:20:00+08:00","actor":"human:负责人","event":"version.integration_decided","details":{"version":"v-002","decision":"pass","note":"三冻结脚本全 PASS"}}
 {"ts":"2026-08-20T22:20:01+08:00","actor":"human:负责人","event":"version.released","details":{"version":"v-002","tag":"v0.2.0","goals":["g-101"]}}
 {"ts":"2026-08-20T22:20:02+08:00","actor":"supervisor:k3","event":"memory.promoted","details":{"memory":"mem-002","source_goals":["g-101"],"type":"failure-pattern"}}
+{"ts":"2026-08-20T22:30:00+08:00","actor":"supervisor:k3","event":"version.created","details":{"version":"v-003","name":"v0.3 看板可视化","goals":["g-102"]}}
+{"ts":"2026-08-20T22:30:01+08:00","actor":"human:负责人","event":"version.scope_changed","details":{"version":"v-003","added":["g-102"],"note":"负责人指示：实施 v0.3，期间继续发布文字版看板"}}
+{"ts":"2026-08-20T22:30:02+08:00","actor":"supervisor:k3","event":"goal.moved","goal":"g-102","details":{"from":"backlog/kanban-plugin.md","to":"versions/v0.3/goals/kanban/goal.md"}}
+{"ts":"2026-08-20T16:16:41.993Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-102","details":{"from":"draft","to":"planning"}}
+{"ts":"2026-08-20T22:45:00+08:00","actor":"human:负责人","event":"evidence.added","goal":"g-102","details":{"note":"指定参考项目 dsh-project-kanban（GitHub），调研 subagent 续跑中"}}
+{"ts":"2026-08-20T23:00:00+08:00","actor":"subagent:6113206f","event":"evidence.added","goal":"g-102","details":{"evidence_id":"ev-01","summary":"client-plugin 路径实机验证通过：手写纯 JS 可行（无构建门禁）；配方落盘 docs/client-plugin-loading-recipe.md；爆炸半径警告：坏 bundle 会拖垮整个 GUI"}}
+{"ts":"2026-08-20T17:03:42.479Z","actor":"human:负责人","event":"criteria.confirmed","goal":"g-102","details":{"criteria_count":1,"rules_snapshot":"r-2026-08"}}
+{"ts":"2026-08-20T17:03:42.560Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-102","details":{"from":"planning","to":"collecting"}}
+{"ts":"2026-08-20T17:03:42.637Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-102","details":{"from":"collecting","to":"ready"}}
+{"ts":"2026-08-20T17:03:42.715Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-102","details":{"from":"ready","to":"in_progress"}}
+{"ts":"2026-08-20T23:10:00+08:00","actor":"supervisor:k3","event":"attempt.started","goal":"g-102","details":{"attempt":"att-001","executor":"agent:k3"}}
+{"ts":"2026-08-20T23:20:00+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-102","details":{"evidence_id":"ev-02","summary":"发现#15：冻结脚本自身 argv 占位符笔误（node -e 需要占位参数）；另发现#14：createGoal 带版本时不生成 version.md 骨架，已修并补隐式 version.created 事件"}}
+{"ts":"2026-08-20T23:25:00+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-102","details":{"evidence_id":"ev-03","summary":"发现#16：bundle patch 硬编码 root 使隔离测试用了真实图数据；已修：脚本用用户层 patch 按 id 覆盖 config.root 指向隔离图根。已知限制：root 解析策略（按会话工作区）留待后续版本"}}
+{"ts":"2026-08-20T18:13:16.822Z","actor":"supervisor:k3","event":"card.created","goal":"g-102","details":{"card":"card-fb306499","title":"client-plugin 加载配方要点","kind":"text"}}
+{"ts":"2026-08-20T18:13:16.898Z","actor":"supervisor:k3","event":"card.filled","goal":"g-102","details":{"card":"card-fb306499","by":"supervisor:k3"}}
+{"ts":"2026-08-20T18:13:16.970Z","actor":"supervisor:k3","event":"card.created","goal":"g-102","details":{"card":"card-94c86099","title":"参照项目 dsh-project-kanban 观察","kind":"text"}}
+{"ts":"2026-08-20T18:13:17.041Z","actor":"supervisor:k3","event":"card.filled","goal":"g-102","details":{"card":"card-94c86099","by":"supervisor:k3"}}

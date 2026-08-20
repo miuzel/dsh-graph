@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import {
   init,
   createGoal,
+  startAttempt,
   addCard,
   fillCard,
   reviewCard,
@@ -109,4 +110,19 @@ test("start-attempt / report-status 生命周期与事件", async () => {
   const events = readEvents(root).map((e) => e.event);
   assert.ok(events.includes("attempt.started"));
   assert.ok(events.includes("attempt.status_reported"));
+});
+
+test("boardProjection：版本/独立/backlog + status_line 投影", async () => {
+  const { boardProjection, reportStatus } = await import("../ops.ts");
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "目标甲", version: "v-t", actor: "test" });
+  const att = startAttempt(root, id, { executor: "agent:t", actor: "test" });
+  reportStatus(root, id, att, "正在写投影", "test");
+  createGoal(root, { title: "暂存乙", actor: "test" });
+  const b = boardProjection(root);
+  assert.equal(b.versions.length, 1);
+  assert.equal(b.versions[0].goals[0].status_line, "正在写投影");
+  assert.equal(b.versions[0].goals[0].reviewer, "human");
+  assert.equal(b.backlog.length, 1);
+  assert.equal(b.standalone.length, 0);
 });
