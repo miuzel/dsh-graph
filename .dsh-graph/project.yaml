@@ -1,0 +1,18 @@
+name: dsh-graph
+description: 基于图的目标管理 DSH 插件体系（见 DESIGN.md）
+defaults:
+  review:
+    reviewer: human        # 本期全部由负责人审核
+    prompt: null
+  pk:
+    lanes: 1
+    sandbox: directory
+  disposition: {}
+supervisor:
+  automation:
+    scope_planning: human      # 版本范围由负责人确认
+    integration_decision: human
+    rework: human
+    memory_promotion: ai       # 我（supervisor）提炼，负责人可随时推翻
+    skill_proposal: human
+    release: human

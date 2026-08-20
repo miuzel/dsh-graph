@@ -1,0 +1,50 @@
+{"ts":"2026-08-20T17:29:00+08:00","actor":"supervisor:k3","event":"project.initialized","details":{"name":"dsh-graph","schema":"schema/SCHEMA.md v0.1"}}
+{"ts":"2026-08-20T17:29:01+08:00","actor":"supervisor:k3","event":"rules.changed","details":{"version":"r-2026-08","note":"初始规则 R-01..R-04"}}
+{"ts":"2026-08-20T17:29:02+08:00","actor":"supervisor:k3","event":"version.created","details":{"version":"v-001","name":"v0.1 核心闭环","goals":["g-001","g-002"]}}
+{"ts":"2026-08-20T17:29:03+08:00","actor":"supervisor:k3","event":"goal.created","goal":"g-001","details":{"title":"核心层 Python 参考实现","version":"v0.1"}}
+{"ts":"2026-08-20T17:29:04+08:00","actor":"supervisor:k3","event":"goal.planned","goal":"g-001","details":{"criteria_count":5,"rules_snapshot":"r-2026-08","acceptance_script":"scripts/check_core.sh"}}
+{"ts":"2026-08-20T17:29:05+08:00","actor":"supervisor:k3","event":"goal.created","goal":"g-002","details":{"title":"Dogfood：用本系统管理 g-001 走通全生命周期","version":"v0.1"}}
+{"ts":"2026-08-20T17:29:06+08:00","actor":"supervisor:k3","event":"goal.planned","goal":"g-002","details":{"criteria_count":3,"rules_snapshot":"r-2026-08"}}
+{"ts":"2026-08-20T17:29:07+08:00","actor":"supervisor:k3","event":"dependency.added","goal":"g-002","details":{"depends_on":"g-001","consumes":["core/ 交付物与 delivered 状态"]}}
+{"ts":"2026-08-20T17:29:08+08:00","actor":"supervisor:k3","event":"goal.created","goal":"g-101","details":{"title":"目标闭环 DSH 插件（goal-loop）","version":null}}
+{"ts":"2026-08-20T17:29:09+08:00","actor":"supervisor:k3","event":"goal.created","goal":"g-102","details":{"title":"Kanban 二维泳道看板（client-plugin）","version":null}}
+{"ts":"2026-08-20T17:29:10+08:00","actor":"supervisor:k3","event":"goal.created","goal":"g-103","details":{"title":"版本管理插件（version-supervisor）","version":null}}
+{"ts":"2026-08-20T17:29:11+08:00","actor":"supervisor:k3","event":"goal.created","goal":"g-104","details":{"title":"PK 沙盒编排与对比评审","version":null}}
+{"ts":"2026-08-20T17:29:12+08:00","actor":"supervisor:k3","event":"goal.created","goal":"g-105","details":{"title":"记忆提炼与技能沉淀机制","version":null}}
+{"ts":"2026-08-20T17:35:32+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-001","details":{"evidence_id":"ev-01","summary":"DSH goal 工具行为：会话级单一目标，不可复用为多目标状态机"}}
+{"ts":"2026-08-20T17:35:33+08:00","actor":"supervisor:k3","event":"goal.transition","goal":"g-001","details":{"from":"planning","to":"collecting","note":"收集项全部完成前推进；判据确认仍待负责人"}}
+{"ts":"2026-08-20T17:35:34+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-002","details":{"evidence_id":"ev-01","summary":"发现#1：CLI 需 set-criteria，已补入 g-001 描述"}}
+{"ts":"2026-08-20T17:35:35+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-002","details":{"evidence_id":"ev-02","summary":"发现#2：事件类型缺 goal.transition，已补入 SCHEMA.md"}}
+{"ts":"2026-08-20T17:40:00+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-002","details":{"evidence_id":"ev-03","summary":"发现#3：人工 gate 流程不能用 goal 自动续轮驱动，需逐轮交互在 gate 处停轮"}}
+{"ts":"2026-08-20T17:45:00+08:00","actor":"human:负责人","event":"rules.changed","details":{"version":"r-2026-08-2","note":"R-01 修订：核心层改用 TypeScript（Node ≥23.6 原生 TS），运行时与工具链零依赖"}}
+{"ts":"2026-08-20T17:45:01+08:00","actor":"supervisor:k3","event":"goal.planned","goal":"g-001","details":{"revision":2,"note":"按负责人指示 replan：Python→TypeScript；验收脚本同步重写为第二版","rules_snapshot":"r-2026-08-2"}}
+{"ts":"2026-08-20T17:45:02+08:00","actor":"human:负责人","event":"scope.note","goal":"g-101","details":{"note":"goal-loop 插件需多会话管理：收集 subagent 输出干净时复用续轮进执行阶段，提高缓存命中；已写入 g-101 描述与 DESIGN.md §8.2"}}
+{"ts":"2026-08-20T17:55:00+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-101","details":{"evidence_id":"ev-01","summary":"源码调研：dsh-tools defineTool 注册、dsh-subagent ctx.subagents（startContinuable/followup/interrupt/listChildren + 结算通知）、dsh-skill ctx.skills.register——多会话管理无需自建"}}
+{"ts":"2026-08-20T18:05:00+08:00","actor":"subagent:5e0109e7","event":"evidence.added","goal":"g-101","details":{"evidence_id":"ev-02","summary":"全景调研报告：打包形态=host+client 两包；goal 服务不可承载三层图；client RPC 白名单限制走 webServer 自建通道；storage/HMR/打包机制确认"}}
+{"ts":"2026-08-20T18:05:01+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-002","details":{"evidence_id":"ev-04","summary":"收集 subagent 模式首次实战成功：粗读在主上下文外消化，精炼报告回流，主上下文保持干净"}}
+{"ts":"2026-08-20T18:15:00+08:00","actor":"human:负责人","event":"rules.changed","details":{"version":"r-2026-08-3","note":"新增 R-05：目标自足、版本可选；目标闭环不得依赖版本模块；确认两包制打包形态"}}
+{"ts":"2026-08-20T18:15:01+08:00","actor":"supervisor:k3","event":"schema.revised","details":{"note":"SCHEMA.md 新增 goals/ 独立目标目录；version:null 语义改为'未入版本'；DESIGN.md §2/§8.6/原则9 同步"}}
+{"ts":"2026-08-20T18:20:00+08:00","actor":"human:负责人","event":"criteria.confirmed","goal":"g-001","details":{"criteria_count":5,"acceptance_script":"scripts/check_core.sh","rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-20T18:20:01+08:00","actor":"supervisor:k3","event":"goal.transition","goal":"g-001","details":{"from":"collecting","to":"ready"}}
+{"ts":"2026-08-20T18:20:02+08:00","actor":"supervisor:k3","event":"attempt.started","goal":"g-001","details":{"attempt":"att-001","executor":"agent:k3"}}
+{"ts":"2026-08-20T18:20:03+08:00","actor":"supervisor:k3","event":"goal.transition","goal":"g-001","details":{"from":"ready","to":"in_progress","note":"判据确认后开工，实现 core/（补记：与 attempt.started 同时）"}}
+{"ts":"2026-08-20T10:42:53.326Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-001","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-20T18:40:00+08:00","actor":"agent:k3","event":"completion.claimed","goal":"g-001","details":{"attempt":"att-001","evidence":"node --test 9/9 通过；scripts/check_core.sh PASS（冒烟含非法迁移拒绝、validate、rebuild）；真实图根 validate PASS / rebuild consistent"}}
+{"ts":"2026-08-20T18:40:01+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-002","details":{"evidence_id":"ev-05","summary":"发现#4：补记迁移漏事件被 rebuild 抓出；replay 语义扩展"}}
+{"ts":"2026-08-20T18:40:02+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-002","details":{"evidence_id":"ev-06","summary":"发现#5：rules_snapshot 由 setCriteria 自动快照；init 生成骨架规则文件"}}
+{"ts":"2026-08-20T18:50:00+08:00","actor":"supervisor:k3","event":"goal.created","goal":"g-003","details":{"title":"上下文卡片模型与核心命令","version":null,"note":"负责人澄清收集语义后派生：卡片是占位实体，内容运行时填充，不预设查什么/怎么查"}}
+{"ts":"2026-08-20T18:50:01+08:00","actor":"supervisor:k3","event":"schema.revised","details":{"note":"DESIGN.md 新增 §2.2 上下文卡片模型；SCHEMA.md 新增 §2.5 卡片契约与 4 个卡片事件"}}
+{"ts":"2026-08-20T18:55:00+08:00","actor":"human:负责人","event":"review.passed","goal":"g-001","details":{"attempt":"att-001","criteria_results":{"1":"pass","2":"pass","3":"pass","4":"pass","5":"pass"},"note":"负责人逐条核验通过"}}
+{"ts":"2026-08-20T11:26:44.738Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-001","details":{"from":"review","to":"delivered"}}
+{"ts":"2026-08-20T18:56:00+08:00","actor":"human:负责人","event":"version.scope_changed","details":{"version":"v-001","added":["g-003"],"note":"负责人批准：卡片模型为闭环必需件，v0.1 扩为三目标"}}
+{"ts":"2026-08-20T18:56:01+08:00","actor":"supervisor:k3","event":"goal.transition","goal":"g-003","details":{"from":"backlog","to":"versions/v0.1/goals/context-cards","note":"文件移动即排期"}}
+{"ts":"2026-08-20T18:57:00+08:00","actor":"supervisor:k3","event":"goal.moved","goal":"g-003","details":{"from":"backlog/context-cards.md","to":"versions/v0.1/goals/context-cards/goal.md","note":"排期移动（非状态迁移）；修正此前误记为 goal.transition 的事件"}}
+{"ts":"2026-08-20T18:57:01+08:00","actor":"supervisor:k3","event":"evidence.added","goal":"g-002","details":{"evidence_id":"ev-07","summary":"发现#6：排期移动被误记为 goal.transition（to 为路径而非状态），replay 被污染当场抓出。处置：新增 goal.moved 事件类型 + replay 忽略非法状态值"}}
+{"ts":"2026-08-20T11:29:55.413Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-003","details":{"from":"draft","to":"planning"}}
+{"ts":"2026-08-20T11:36:50.106Z","actor":"human:负责人","event":"criteria.confirmed","goal":"g-003","details":{"criteria_count":1,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-20T11:36:50.183Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-003","details":{"from":"planning","to":"collecting"}}
+{"ts":"2026-08-20T11:36:50.252Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-003","details":{"from":"collecting","to":"ready"}}
+{"ts":"2026-08-20T11:36:50.321Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-003","details":{"from":"ready","to":"in_progress"}}
+{"ts":"2026-08-20T19:00:00+08:00","actor":"supervisor:k3","event":"attempt.started","goal":"g-003","details":{"attempt":"att-001","executor":"agent:k3"}}
+{"ts":"2026-08-20T11:42:25.437Z","actor":"supervisor:k3","event":"goal.transition","goal":"g-003","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-20T19:10:00+08:00","actor":"agent:k3","event":"completion.claimed","goal":"g-003","details":{"attempt":"att-001","evidence":"node --test 13/13 通过；scripts/check_cards.sh PASS（建卡/填充/复核/拒绝/悬空引用/重建）；check_core.sh 回归 PASS；真实图根 validate+rebuild 一致"}}
