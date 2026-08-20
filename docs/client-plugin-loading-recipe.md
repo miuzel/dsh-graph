@@ -115,3 +115,9 @@ dsh-graph-client/                # 单包双半（对照 kanban，不必拆两�
 - 数据通道：单端点 `{method, args}` JSON POST（kanban 模式，易加方法）；只读场景 GET 即可。
 - host 半若要复用 `core/`（零依赖 TS 库）：保持「host 薄适配层 + core 纯逻辑」，`core/` 可被 Node 26 直跑。
 - 演进路径：手写 bundle 验证 → 需要 CSS 管线/多文件时再上 tsdown（`exports["./client"]` 指产物即可，宿主无构建要求）。
+
+## 运维事实补充（发现#17）
+
+- client 半边（lib/client.js）变更：浏览器刷新即生效；
+- host 半边（index.js，如注册的 HTTP 端点）变更：**需重启 dsh web** 才会重新执行 apply；
+  症状是旧端点/旧字段继续服务。开发与验收时务必区分两边。
