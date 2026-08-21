@@ -8,7 +8,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
-import { resolve, dirname, relative } from "node:path";
+import { relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createGoal,
@@ -27,11 +27,18 @@ import {
   bindAttemptChild,
   moveGoal,
   amendGoal,
+  requestAcceptReview,
+  resolveAccept,
   boardProjection,
   readSupervisorSession,
   readExecutorModel,
   findGoalFile,
+  init,
 } from "../core/ops.ts";
+import { resolveRoot } from "../core/root.ts";
+
+// g-112：两半共用同一 root 解析函数（re-export 供验收/测试直接核对函数同一性）
+export { resolveRoot } from "../core/root.ts";
 
 export const name = "dsh-graph-host";
 export const inject = ["tools"];
@@ -64,7 +71,8 @@ function params(properties, required) {
 const GUIDE = readFileSync(new URL("./supervisor-guide.md", import.meta.url), "utf8");
 
 export function apply(ctx, config) {
-  const root = resolve(process.cwd(), config?.root ?? ".dsh-graph");
+  // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
+  const root = resolveRoot(config);
   const actorOf = (exec) => `agent:${exec?.agent?.id ?? "dsh"}`;
 
   /** @type {Array<{def: object, run: (args: any, exec: any) => any}>} */
@@ -201,6 +209,11 @@ export function apply(ctx, config) {
               `每做一个动作就及时调用 graph_report_status 更新，参数 goal="${a.goal}"、attempt="${attempt}"、status=<一句话简短描述你此刻在干什么>。`,
               `status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab 样式」「跑验收脚本」），不要攒到结束才写、不要长篇。`,
               `开工、每完成一块、遇到阻塞、转向新任务、临近完成，都要立即更新；这句就是卡片上实时显示的那一行，滞留或失实等于对负责人隐瞒进展。`,
+              `【泳道迁移——你自己做，卡片位置是状态的投影】看板列＝状态的投影，状态滞留＝卡片滞留，必须及时调用 graph_transition：`,
+              `开工时（若当前非 in_progress）graph_transition(goal="${a.goal}", to="in_progress")；`,
+              `完成后 graph_transition(goal="${a.goal}", to="review")；`,
+              `遇到阻塞 graph_transition(goal="${a.goal}", to="blocked", reason=<一句话原因>)；`,
+              `迁移要与 graph_report_status 同步进行，别只改 status_line 不动卡片；若迁移被引擎拒绝（如判据未登记、状态不允许），保留 status 汇报并继续工作，不要反复硬试。`,
               `完成后用 graph_report_status 汇报最终状态，声明完成并等待 review。`,
             ].filter(Boolean).join("\n");
             const request = { parent: ex.agent, prompt: text(prompt) };
@@ -230,9 +243,35 @@ export function apply(ctx, config) {
         return result;
       },
     },
+    {
+      def: {
+        name: "graph_resolve_accept",
+        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。",
+        parameters: params({
+          goal: str,
+          verdict: { type: "string", enum: ["accept", "object"] },
+          objection: str,
+          force: { type: "boolean" },
+          reason: str,
+        }, ["goal", "verdict"]),
+      },
+      run: (a, ex) => {
+        resolveAccept(root, a.goal, {
+          actor: actorOf(ex),
+          verdict: a.verdict,
+          objection: a.objection,
+          force: a.force,
+          reason: a.reason,
+        });
+        return { ok: true };
+      },
+    },
   ];
 
   return ctx.effect(() => {
+    // g-112：幂等初始化数据骨架——发布后新用户装上自动建 backlog/goals/versions/memory +
+    // events.jsonl/index.json/rules.md（不建 project.yaml、不带 demo 数据）；重复 apply 不重复建
+    init(root);
     // 注册 supervisor 工作指南为运行时技能（可选服务，缺失时静默）
     const skills = ctx.get?.('skills');
     if (skills) { try { skills.register({ name: 'dsh-graph-supervisor', description: 'dsh-graph 主管 Agent 工作指南', source: 'dsh-graph-host', content: GUIDE }); } catch { /* 静默 */ } }

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   parseDoc,
   serializeDoc,
@@ -24,7 +24,11 @@ import {
   loadGoal,
   moveGoal,
   addCard,
+  bindCardChild,
   readSupervisorSession,
+  requestAcceptReview,
+  resolveAccept,
+  readAcceptStatus,
   GraphError,
 } from "../ops.ts";
 
@@ -238,6 +242,104 @@ test("move-goal：backlog↔standalone↔version，带附件拒绝回 backlog", 
   assert.throws(() => moveGoal(root, id, { to: "backlog", actor: "test" }), /附件/);
   const events = readEvents(root).filter((e) => e.event === "goal.moved");
   assert.equal(events.length, 2);
+});
+
+// ---- g-109 卡片收集绑定（bindCardChild） ----
+
+test("bindCardChild 写 card.collecting 事件并绑定 child_id/status", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  const card = addCard(root, id, { title: "c", kind: "text", actor: "test" });
+  bindCardChild(root, id, card, { childId: "child-abc", parentSessionId: "session-x", actor: "human:gui" });
+  // 事件先行：card.collecting 已记
+  const ev = readEvents(root).filter((e) => e.event === "card.collecting");
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].details.card, card);
+  assert.equal(ev[0].details.child_id, "child-abc");
+  // 卡片文件 meta 更新：child_id / parent_session_id / status=collecting
+  const cardFile = join(dirname(findGoalFile(root, id)), "cards", `${card}.md`);
+  const meta = loadGoal(cardFile).meta;
+  assert.equal(meta.child_id, "child-abc");
+  assert.equal(meta.parent_session_id, "session-x");
+  assert.equal(meta.status, "collecting");
+});
+
+test("bindCardChild 不存在的卡片抛错", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  assert.throws(() => bindCardChild(root, id, "card-nope", { childId: "c1", actor: "test" }), /卡片不存在/);
+});
+
+// ---- g-109 接受机制（requestAcceptReview / resolveAccept / readAcceptStatus） ----
+
+test("requestAcceptReview 写 review.requested 事件并返回 pending", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  const r = requestAcceptReview(root, id, "human:gui");
+  assert.equal(r.pending, true);
+  assert.equal(r.goal, id);
+  const ev = readEvents(root).filter((e) => e.event === "review.requested");
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].details.targetStage, "draft");
+  assert.equal(ev[0].details.what, "描述");
+});
+
+test("resolveAccept accept 按阶段映射追加事件", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  transition(root, id, "planning", { actor: "test" });
+  requestAcceptReview(root, id, "human:gui");
+  resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" });
+  const ev = readEvents(root);
+  assert.ok(ev.some((e) => e.event === "description.confirmed"));
+});
+
+test("resolveAccept object 写 review.objected", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  requestAcceptReview(root, id, "human:gui");
+  resolveAccept(root, id, { actor: "supervisor:k3", verdict: "object", objection: "描述不够清晰" });
+  const ev = readEvents(root);
+  assert.ok(ev.some((e) => e.event === "review.objected" && e.details.objection === "描述不够清晰"));
+  const st = readAcceptStatus(root, id);
+  assert.equal(st.state, "objection");
+});
+
+test("resolveAccept force 直接生效并记录理由", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  resolveAccept(root, id, { actor: "human:gui", verdict: "accept", force: true, reason: "紧急上线" });
+  const ev = readEvents(root);
+  assert.ok(ev.some((e) => e.event === "goal.amended" && e.details.note.includes("紧急上线")));
+  assert.ok(ev.some((e) => e.event === "description.confirmed"));
+});
+
+test("readAcceptStatus 状态流转：none → pending → resolved", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  assert.equal(readAcceptStatus(root, id).state, "none");
+  requestAcceptReview(root, id, "human:gui");
+  assert.equal(readAcceptStatus(root, id).state, "pending");
+  resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" });
+  assert.equal(readAcceptStatus(root, id).state, "resolved");
+});
+
+test("ready 状态下 resolveAccept(accept) 写 criteria.confirmed 且不抛异常、状态仍 ready", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  transition(root, id, "planning", { actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  requestAcceptReview(root, id, "human:gui");
+  // 不应抛异常
+  resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" });
+  // 状态仍应为 ready
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "ready");
+  // 应有 criteria.confirmed 事件
+  const ev = readEvents(root);
+  assert.ok(ev.some((e) => e.event === "criteria.confirmed"));
+  // readAcceptStatus 应返回 resolved
+  assert.equal(readAcceptStatus(root, id).state, "resolved");
 });
 
 // ---- project.yaml supervisor.session（g-108） ----

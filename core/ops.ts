@@ -18,7 +18,7 @@ import {
   criteriaPresent,
   type GoalDoc,
 } from "./model.ts";
-import { appendEvent, readEvents, replayStatuses, nowIso } from "./events.ts";
+import { appendEvent, readEvents, replayStatuses, nowIso, type GraphEvent } from "./events.ts";
 import { GraphError, STATUSES, assertTransition } from "./machine.ts";
 
 export { GraphError };
@@ -72,13 +72,15 @@ export function findGoalFile(root: string, id: string): string {
   throw new GraphError(`目标不存在：${id}`);
 }
 
-/** 初始化图根目录骨架。 */
+/** 初始化图根目录骨架（幂等，g-112）：重复调用不重复建、不重复记 project.initialized。
+ *  建 backlog/goals/versions/memory + events.jsonl/index.json/rules.md；不建 project.yaml、不带 demo 数据。 */
 export function init(root: string): void {
+  const events = join(root, "events.jsonl");
+  const fresh = !existsSync(events); // 以事件流是否存在判定「是否首次初始化」
   for (const d of ["backlog", "goals", "versions", "memory/long-term"]) {
     mkdirSync(join(root, d), { recursive: true });
   }
-  const events = join(root, "events.jsonl");
-  if (!existsSync(events)) writeFileSync(events, "", "utf8");
+  if (fresh) writeFileSync(events, "", "utf8");
   const index = join(root, "index.json");
   if (!existsSync(index)) writeFileSync(index, "{}\n", "utf8");
   const rules = join(root, "rules.md");
@@ -89,7 +91,7 @@ export function init(root: string): void {
       "utf8",
     );
   }
-  appendEvent(root, { actor: "core", event: "project.initialized", details: { root } });
+  if (fresh) appendEvent(root, { actor: "core", event: "project.initialized", details: { root } });
 }
 
 /** 读取规则库版本；frontmatter 允许 JSON 或简单 `version: x` 行。 */
@@ -601,6 +603,26 @@ export function reviewCard(
   });
 }
 
+/** 把收集子代理绑定到卡片（g-109）：写 child_id/parent_session_id、置 status=collecting，并记 card.collecting 事件（事件先行）。 */
+export function bindCardChild(
+  root: string,
+  goalId: string,
+  cardId: string,
+  opts: { childId: string; parentSessionId?: string | null; actor: string },
+): void {
+  const { file, doc } = loadCard(root, goalId, cardId);
+  doc.meta.child_id = opts.childId;
+  doc.meta.parent_session_id = opts.parentSessionId ?? null;
+  doc.meta.status = "collecting";
+  saveGoal(file, doc);
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "card.collecting",
+    goal: goalId,
+    details: { card: cardId, child_id: opts.childId },
+  });
+}
+
 // ---- Attempt（SCHEMA §3） ----
 
 const ATTEMPT_BODY = `
@@ -1087,4 +1109,142 @@ export function amendGoal(
     goal: id,
     details: { note: opts.note },
   });
+}
+
+/** 主管复核接受请求（兼容旧名，内部转发 requestAcceptReview / resolveAccept）。 */
+export function acceptReview(
+  root: string,
+  id: string,
+  opts: { actor: string; force?: boolean; reason?: string },
+): { ok: boolean; objection?: string; pending?: boolean } {
+  if (opts.force) {
+    resolveAccept(root, id, { actor: opts.actor, verdict: "accept", force: true, reason: opts.reason });
+    return { ok: true };
+  }
+  const r = requestAcceptReview(root, id, opts.actor);
+  return { ok: false, pending: r.pending };
+}
+
+/** 请求主管复核接受：追加 review.requested 事件，返回 {pending:true}。
+ *  details 带 targetStage=当前 status、what=描述/判据/review、snapshot 简要。 */
+export function requestAcceptReview(
+  root: string,
+  id: string,
+  actor: string,
+): { pending: true; goal: string } {
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  const status = String(doc.meta.status ?? "");
+  const allowed = ["draft", "planning", "collecting", "ready", "review"];
+  if (!allowed.includes(status)) {
+    throw new GraphError(`当前状态 ${status} 不允许接受操作`);
+  }
+  const what =
+    status === "draft" || status === "planning"
+      ? "描述"
+      : status === "collecting" || status === "ready"
+        ? "判据"
+        : "review";
+  const snapshot = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/)?.[1]?.trim()?.slice(0, 200) ?? "";
+  appendEvent(root, {
+    actor,
+    event: "review.requested",
+    goal: id,
+    details: { targetStage: status, what, snapshot },
+  });
+  return { pending: true, goal: id };
+}
+
+/** 主管裁决接受请求。
+ *  verdict="accept" → 按阶段追加 description.confirmed / criteria.confirmed(actor=human) / review.passed+transition delivered
+ *  verdict="object" → 追加 review.objected（details.objection=异议内容）
+ *  force=true + reason → 记 goal.amended（理由），直接走 accept 分支 */
+export function resolveAccept(
+  root: string,
+  id: string,
+  opts: { actor: string; verdict: "accept" | "object"; objection?: string; force?: boolean; reason?: string },
+): { ok: boolean } {
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  const status = String(doc.meta.status ?? "");
+
+  if (opts.force) {
+    if (opts.reason) {
+      appendEvent(root, {
+        actor: opts.actor,
+        event: "goal.amended",
+        goal: id,
+        details: { note: `强制接受理由：${opts.reason}` },
+      });
+    }
+    // force 直接走 accept 分支
+    applyAcceptMapping(root, id, status, opts.actor);
+    return { ok: true };
+  }
+
+  if (opts.verdict === "object") {
+    if (!opts.objection?.trim()) throw new GraphError("异议内容不能为空");
+    appendEvent(root, {
+      actor: opts.actor,
+      event: "review.objected",
+      goal: id,
+      details: { objection: opts.objection },
+    });
+    return { ok: true };
+  }
+
+  // verdict === "accept"
+  applyAcceptMapping(root, id, status, opts.actor);
+  return { ok: true };
+}
+
+/** 接受生效的阶段映射（内部复用） */
+function applyAcceptMapping(root: string, id: string, status: string, actor: string): void {
+  if (status === "draft" || status === "planning") {
+    appendEvent(root, { actor, event: "description.confirmed", goal: id, details: {} });
+  } else if (status === "collecting") {
+    transition(root, id, "ready", { actor });
+    appendEvent(root, { actor, event: "criteria.confirmed", goal: id, details: { actor: "human" } });
+  } else if (status === "ready") {
+    // 已在 ready，不再 transition，仅追加 criteria.confirmed
+    appendEvent(root, { actor, event: "criteria.confirmed", goal: id, details: { actor: "human" } });
+  } else if (status === "review") {
+    transition(root, id, "delivered", { actor });
+    appendEvent(root, { actor, event: "review.passed", goal: id, details: {} });
+  }
+}
+
+/** 读取目标的接受复核状态（事件流查询）。
+ *  返回：{state: 'pending'|'resolved'|'objection'|'none', result?:object} */
+export function readAcceptStatus(
+  root: string,
+  id: string,
+): { state: "pending" | "resolved" | "objection" | "none"; result?: Record<string, any> } {
+  const events = readEvents(root).filter((e) => e.goal === id);
+  let latestRequested: GraphEvent | null = null;
+  let latestResolved: GraphEvent | null = null;
+  let latestObjected: GraphEvent | null = null;
+  for (const e of events) {
+    if (e.event === "review.requested") latestRequested = e;
+    if (e.event === "description.confirmed" || e.event === "criteria.confirmed" || e.event === "review.passed") {
+      latestResolved = e;
+    }
+    if (e.event === "review.objected") latestObjected = e;
+  }
+  if (!latestRequested) return { state: "none" };
+  // 检查是否有比 requested 更新的 resolved 或 objected
+  const reqIdx = events.indexOf(latestRequested);
+  if (latestObjected) {
+    const objIdx = events.indexOf(latestObjected);
+    if (objIdx > reqIdx) {
+      return { state: "objection", result: { objection: latestObjected.details?.objection, by: latestObjected.actor } };
+    }
+  }
+  if (latestResolved) {
+    const resIdx = events.indexOf(latestResolved);
+    if (resIdx > reqIdx) {
+      return { state: "resolved", result: { event: latestResolved.event, by: latestResolved.actor } };
+    }
+  }
+  return { state: "pending" };
 }

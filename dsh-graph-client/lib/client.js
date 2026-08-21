@@ -473,6 +473,10 @@ window.__ModuleLoader__.load({
     // 当前模型查询（api.sessions.models，无投影走 RPC；30s 轮询）。
     // origin=subagent 的子会话被 host 围栏拒绝（agent-busy: owned by subagent routing，
     // dsh-api-remotes 源码级设计），此时退化查询父会话并标注 fromParent。
+    // 查询某会话的当前模型选择。
+    // g-109 判据反馈：子代理会话的 models 查询常失败（continuable idle 后无 live agent），
+    // 旧逻辑回退父会话会把「父会话模型」冒充子代理实际模型（如用 flash 派发却显示 v4-pro），
+    // 误导负责人。现改为失败即报错，由调用方用「重新执行指定路由」或「查询不可用」兜底。
     function useSessionModel(sessionId, parentId) {
       const [model, setModel] = React.useState(null); // {provider, model, fromParent}
       const [modelErr, setModelErr] = React.useState(null);
@@ -481,21 +485,17 @@ window.__ModuleLoader__.load({
         let alive = true;
         const load = async () => {
           try {
-            let r = await connectionRt.api.sessions.models({ sessionId });
-            let fromParent = false;
-            if (!r?.result?.ok && parentId) {
-              r = await connectionRt.api.sessions.models({ sessionId: parentId });
-              fromParent = true;
-            }
+            const r = await connectionRt.api.sessions.models({ sessionId });
             if (!alive) return;
             if (r?.result?.ok) {
-              setModel({ ...(r.result.value.current ?? {}), fromParent });
+              setModel({ ...(r.result.value.current ?? {}), fromParent: false });
               setModelErr(null);
             } else {
+              setModel(null);
               setModelErr(r?.result?.error?.message ?? "查询失败");
             }
           } catch (e) {
-            if (alive) setModelErr(String(e?.message ?? e));
+            if (alive) { setModel(null); setModelErr(String(e?.message ?? e)); }
           }
         };
         load();
@@ -507,6 +507,119 @@ window.__ModuleLoader__.load({
 
     // 完整实时面板（抽屉/详情用）：实时条 + 模型 + 直达指令 + 最近记录。
     // collapsible=true 时默认折叠，点击标题行展开；折叠态标题行内联显示状态/token/模型摘要。
+    // g-109 判据反馈：实时会话控件中的「重新执行」——选择 provider/model 重新拉一个子代理。
+    // kind="exec" → start-execution（目标执行子代理）；kind="collect" → start-collection（卡片收集子代理，需 cardId+prompt）。
+    // 下拉数据源 = spawn-options 的 modelGroups（LLM provider 分组目录）；subagent provider（spawn/fork）不暴露给用户。
+    function ReExecBox(props) {
+      const { goalId, kind, cardId, prompt } = props;
+      const [opts, setOpts] = React.useState(null); // {modelGroups, default}
+      const [provider, setProvider] = React.useState("");
+      const [model, setModel] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [busy, setBusy] = React.useState(false);
+
+      React.useEffect(() => {
+        let alive = true;
+        fetch("/api/dsh-graph/spawn-options")
+          .then((r) => r.json())
+          .then((d) => {
+            if (!alive) return;
+            setOpts(d);
+            // g-109 判据反馈：默认 = project.yaml executor（spawn-options.default）；
+            // provider 不在目录 → 选第一个；model 默认取 project.yaml，若不在所选 provider
+            // 的模型清单 → 选该清单第一个（不再出现「模型写死」且 provider/model 失配）。
+            const groups = d?.modelGroups ?? [];
+            const defP = d?.default?.provider ?? "";
+            const defM = d?.default?.model ?? "";
+            const effProvider = groups.some((g) => g.id === defP) ? defP : (groups[0]?.id ?? "");
+            const g0 = groups.find((x) => x.id === effProvider);
+            const ms = g0?.models ?? [];
+            const effModel = ms.some((m) => m.id === defM) ? defM : (ms[0]?.id ?? "");
+            setProvider(effProvider);
+            setModel(effModel);
+          })
+          .catch(() => alive && setOpts({ modelGroups: null, default: null }));
+        return () => { alive = false; };
+      }, []);
+
+      const groups = opts?.modelGroups ?? [];
+      const currentGroup = groups.find((g) => g.id === provider) ?? null;
+      const modelChoices = currentGroup?.models ?? [];
+
+      const relaunch = async () => {
+        setBusy(true);
+        setNote("重新派发中…");
+        try {
+          const url = kind === "collect" ? "/api/dsh-graph/start-collection" : "/api/dsh-graph/start-execution";
+          const body = { goal: goalId, provider: provider || undefined, model: model || undefined };
+          if (kind === "collect") { body.card = cardId; body.prompt = prompt; }
+          const r = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            if (data.child_id) {
+              const route = data.model_route ? `（${data.model_route}）` : "";
+              setNote("✅ 已重新派发子代理，id：" + data.child_id + " " + route);
+              showToast("✅ 已重新派发子代理 " + route);
+              if (data.model_route) props.onRelaunched?.(data.model_route);
+            } else {
+              setNote("⚠️ 子代理启动失败：" + (data.child_error || "无 child_id"));
+            }
+          } else {
+            setNote("⚠️ 派发失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setBusy(false);
+      };
+
+      const selStyle = {
+        fontSize: 12, padding: "2px 6px", cursor: "pointer", maxWidth: 160,
+        background: "rgba(128,128,128,.10)", color: "inherit",
+        border: "1px solid rgba(128,128,128,.35)", borderRadius: 4,
+      };
+      // 深色主题：浏览器原生 option 默认白底，下拉展开时突兀 → 显式深色底
+      const optStyle = { background: "#2a2b31", color: "#e6e6e6" };
+      const defP = opts?.default?.provider ?? "";
+      const defM = opts?.default?.model ?? "";
+      // 无模型目录（llm 服务不可用）：只显示默认模型 + 提示，仍可重新派发（走 project.yaml 默认）
+      const noCatalog = !groups.length;
+      return h("div", { style: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4 } },
+        h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+          h("span", { style: { ...S.meta, fontSize: 11 } }, "🔄 重新派发子代理："),
+          noCatalog
+            ? h("span", { style: { ...S.meta, fontSize: 11 } },
+                defP ? `模型 ${defP}/${defM}` : "模型目录不可用")
+            : [
+                h("select", {
+                  style: selStyle, value: provider,
+                  title: "LLM provider（缺省 project.yaml executor.provider）",
+                  onChange: (e) => { setProvider(e.target.value); setModel(""); },
+                },
+                  groups.map((g) => h("option", { key: g.id, value: g.id, style: optStyle }, g.name ?? g.id))),
+                h("select", {
+                  style: selStyle, value: model,
+                  disabled: !modelChoices.length,
+                  title: "模型（缺省 project.yaml executor.model）",
+                  onChange: (e) => setModel(e.target.value),
+                },
+                  !modelChoices.length
+                    ? h("option", { value: defM, style: optStyle }, defM ? `默认 ${defM}` : "model 不可用")
+                    : [h("option", { key: "", value: "", style: optStyle }, "默认"),
+                       ...modelChoices.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))]),
+              ],
+          h("button", {
+            style: { ...S.btn, padding: "3px 10px", fontSize: 12 }, className: "dg-btn dg-relaunch",
+            disabled: busy, onClick: relaunch,
+          }, busy ? "派发中…" : (kind === "collect" ? "🔄 重新收集" : "🔄 重新执行"))),
+        note ? h("div", { style: { ...S.meta, marginTop: 2 } }, note) : null,
+      );
+    }
+
     function SessionPanel(props) {
       const collapsible = !!props.collapsible;
       const [open, setOpen] = React.useState(!collapsible);
@@ -519,14 +632,16 @@ window.__ModuleLoader__.load({
 
       const running = !!(snap && snap.running);
       const meter = liveMeter(usage, pressure);
+      // g-109 判据反馈：sessions.models 对子代理查询失败时，用「重新执行指定路由」兜底（绝不用父会话模型冒充）
+      const relaunchRoute = props.relaunchRoute ?? null;
       const modelText = model
         ? `${model.provider}/${model.model}` + (model.fromParent ? "（父会话，子代理继承）" : "")
-        : modelErr ? "不可用：" + modelErr : "查询中…";
+        : relaunchRoute ? `按重新执行指定：${relaunchRoute}` : modelErr ? "不可用：" + modelErr : "查询中…";
       // 折叠态标题行的内联摘要：状态 + token/ctx + 模型短名
       const collapsedBits = [
         running ? "🟢" : "⚪",
         meter || null,
-        model ? model.model + (model.fromParent ? "*" : "") : null,
+        model ? model.model : relaunchRoute ? "重派:" + String(relaunchRoute).split("/").pop() : null,
       ].filter(Boolean).join(" ｜ ");
       return h(
         "div",
@@ -552,6 +667,12 @@ window.__ModuleLoader__.load({
             "模型：" + modelText
             + (mode ? ` ｜ 模式：${mode === "continuable" ? "可续轮" : "一次性"}` : "")),
           h(PromptBox, { key: "p", parentId: props.parentId, childId: props.childId }),
+          // g-109 判据反馈：实时会话控件内「重新执行」——子代理出错/无法运行时换 provider/model 重拉
+          props.goalId
+            ? h(ReExecBox, { key: "rx", goalId: props.goalId, kind: props.relaunchKind ?? "exec",
+                             cardId: props.relaunchCardId, prompt: props.relaunchPrompt,
+                             onRelaunched: props.onRelaunched })
+            : null,
           h("div", { key: "r", style: { marginTop: 6 } },
             h("button", {
               style: S.btn, className: "dg-btn",
@@ -684,9 +805,13 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // 上下文抽屉：摘要 + 全文 + 子代理 id/链接
+    // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑
     function CardDrawer(props) {
       const [state, setState] = React.useState({ loading: true });
+      const [promptText, setPromptText] = React.useState("");
+      const [collectNote, setCollectNote] = React.useState(null);
+      const [collecting, setCollecting] = React.useState(false);
+      const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新收集的模型路由
       React.useEffect(() => {
         let alive = true;
         fetch("/api/dsh-graph/goal?id=" + encodeURIComponent(props.goalId))
@@ -703,6 +828,8 @@ window.__ModuleLoader__.load({
         const card = (state.data.cards ?? []).find((c) => c.id === props.cardId);
         if (!card) inner = "卡片不存在：" + props.cardId;
         else {
+          // g-109：自动生成收集提示词草稿（卡片标题+目标上下文模板）
+          const autoPrompt = `请收集关于「${card.title}」的上下文信息。\n\n目标：${state.data.meta?.title ?? props.goalId}\n\n请基于目标上下文，收集与该卡片相关的详细信息。`;
           const childLink = card.child_id
             ? h("div", { style: S.drawerSection, key: "child" },
                 h("div", { style: { ...S.drawerH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
@@ -716,6 +843,51 @@ window.__ModuleLoader__.load({
                     : null),
                 h("div", { style: S.meta }, `id：${card.child_id}`))
             : null;
+          // g-109：收集提示词编辑区（空卡片显示）
+          const collectPanel = card.status === "empty" || card.status === "collecting"
+            ? h("div", { style: S.drawerSection, key: "collect", className: "dg-collect-prompt" },
+                h("div", { style: S.drawerH }, "📝 收集提示词"),
+                h("textarea", {
+                  style: { ...S.promptInput, width: "100%", minHeight: 80, resize: "vertical", marginTop: 4 },
+                  value: promptText || autoPrompt,
+                  onChange: (e) => setPromptText(e.target.value),
+                }),
+                h("button", {
+                  style: { ...S.btn, marginTop: 6, padding: "4px 14px" }, className: "dg-btn",
+                  disabled: collecting,
+                  onClick: async () => {
+                    setCollecting(true);
+                    setCollectNote("派发中…");
+                    try {
+                      const r = await fetch("/api/dsh-graph/start-collection", {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({
+                          goal: props.goalId,
+                          card: props.cardId,
+                          prompt: promptText || autoPrompt,
+                        }),
+                      });
+                      const data = await r.json();
+                      if (data.ok) {
+                        if (data.child_error) {
+                          setCollectNote("⚠️ 子代理启动失败：" + data.child_error);
+                        } else if (data.child_id) {
+                          setCollectNote("✅ 已派发收集子代理，id：" + data.child_id);
+                        } else {
+                          setCollectNote("⚠️ 子代理未启动（无 child_id）");
+                        }
+                      } else {
+                        setCollectNote("⚠️ 派发失败：" + (data.error || "未知错误"));
+                      }
+                    } catch (e) {
+                      setCollectNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                    }
+                    setCollecting(false);
+                  },
+                }, "开始收集"),
+                collectNote ? h("div", { style: { ...S.meta, marginTop: 4 } }, collectNote) : null)
+            : null;
           inner = [
             h("div", { key: "t", style: { fontWeight: 700, fontSize: 14 } },
               `📇 ${card.title}`),
@@ -727,9 +899,14 @@ window.__ModuleLoader__.load({
             h("div", { key: "body", style: S.drawerSection },
               h("div", { style: S.drawerH }, "全文"),
               h("div", { style: { whiteSpace: "pre-wrap" } }, card.content?.trim() || "（尚未采集内容）")),
+            collectPanel,
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
+            // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集
             card.child_id
-              ? h(SessionPanel, { key: "live", parentId: card.parent_session_id, childId: card.child_id, collapsible: true })
+              ? h(SessionPanel, { key: "live", parentId: card.parent_session_id, childId: card.child_id, collapsible: true,
+                                  goalId: props.goalId, relaunchKind: "collect",
+                                  relaunchCardId: props.cardId, relaunchPrompt: promptText || autoPrompt,
+                                  relaunchRoute, onRelaunched: setRelaunchRoute })
               : null,
           ];
         }
@@ -772,7 +949,13 @@ window.__ModuleLoader__.load({
         try {
           const res = await session.prompt(
             [{ type: "text", text: `【${props.goalId} 判据反馈】${criterion}\n${t}` }], "queue");
-          if (res?.ok) { setFbNote("✅ 反馈已排队送达执行会话"); setFbText(""); setFbIdx(-1); }
+          if (res?.ok) {
+            setFbNote("✅ 反馈已排队送达执行会话");
+            setFbText("");
+            setFbIdx(-1);
+            // g-109：判据反馈提交后自动关闭弹窗
+            if (props.onClose) props.onClose();
+          }
           else setFbNote("⚠️ 反馈发送失败：" + (res?.error?.message ?? "未知错误"));
         } catch (e) { setFbNote("⚠️ 反馈发送失败：" + String(e?.message ?? e)); }
       };
@@ -801,19 +984,336 @@ window.__ModuleLoader__.load({
         fbNote ? h("div", { style: { ...S.meta, marginTop: 3 } }, fbNote) : null);
     }
 
+    // 轻量 toast：底部居中浮层，约 2.5s 自动消失（零依赖，不引入 DSH 内部组件）
+    function showToast(text) {
+      const host = document.createElement("div");
+      host.style.cssText =
+        "position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:99999;" +
+        "background:rgba(30,30,30,.94);color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;" +
+        "box-shadow:0 4px 16px rgba(0,0,0,.35);pointer-events:none;opacity:0;transition:opacity .18s ease;max-width:80vw;";
+      host.textContent = text;
+      document.body.appendChild(host);
+      requestAnimationFrame(() => { host.style.opacity = "1"; });
+      setTimeout(() => {
+        host.style.opacity = "0";
+        setTimeout(() => { if (host.parentNode) document.body.removeChild(host); }, 200);
+      }, 2500);
+    }
+
+    // 复制文本到剪贴板：优先 Clipboard API（需安全上下文+用户手势），失败回退 execCommand（textarea 选中法）
+    async function copyText(text) {
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch { /* 回退 */ }
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        return ok;
+      } catch {
+        return false;
+      }
+    }
+
+    // g-109：目标描述区执行/反馈交互组件（执行按钮直接创建子代理；接受默认经主管 Agent 复核，
+    // 无异议生效，有异议显示在按钮处并转「强制接受」，可选理由记 goal.amended 事件供学习）
+    function AcceptFeedback(props) {
+      const { goalId, status, events, supervisorSession } = props;
+      const [mode, setMode] = React.useState("idle"); // idle | feedback
+      const [fbText, setFbText] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [loading, setLoading] = React.useState(false);
+      const [forceMode, setForceMode] = React.useState(false); // 异议后是否展开强制接受理由输入
+      const [forceReason, setForceReason] = React.useState("");
+      // 反馈预填模板（复制与显示共用，保证一致）
+      const prefillText = fbText.trim() ? `【${goalId} 反馈】\n${fbText.trim()}` : "";
+
+      // 接受复核状态（与 core readAcceptStatus 同语义的事件流推断）：
+      // none（未请求）/ pending（已请求待主管裁决）/ objection（主管异议）/ resolved（已生效）
+      const evs = events ?? [];
+      let lastReq = -1, lastObj = -1, lastRes = -1;
+      evs.forEach((e, i) => {
+        if (e.event === "review.requested") lastReq = i;
+        if (e.event === "review.objected") lastObj = i;
+        if (["description.confirmed", "criteria.confirmed", "review.passed"].includes(e.event)) lastRes = i;
+      });
+      let acceptState = "none";
+      if (lastReq >= 0) {
+        if (lastObj > lastReq) acceptState = "objection";
+        else if (lastRes > lastReq) acceptState = "resolved";
+        else acceptState = "pending";
+      }
+      const objectionText = acceptState === "objection" ? evs[lastObj]?.details?.objection : null;
+
+      // 接受：默认经主管 Agent 复核（review.requested → 主管裁决）
+      const doAccept = async () => {
+        setLoading(true);
+        try {
+          const r = await fetch("/api/dsh-graph/accept", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId }),
+          });
+          const data = await r.json();
+          if (data.pending) setNote("✅ 已请求主管复核接受，等待主管裁决（无异议即生效）");
+          else if (data.ok) setNote("✅ 已接受");
+          else setNote("⚠️ 接受失败：" + (data.error || "未知错误"));
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+      // 强制接受：跳过主管复核，可选理由记入 goal.amended 事件
+      const doForceAccept = async () => {
+        setLoading(true);
+        try {
+          const r = await fetch("/api/dsh-graph/accept", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, force: true, reason: forceReason.trim() || undefined }),
+          });
+          const data = await r.json();
+          if (data.ok) setNote(forceReason.trim() ? "✅ 已强制接受（理由已记入事件）" : "✅ 已强制接受");
+          else setNote("⚠️ 强制接受失败：" + (data.error || "未知错误"));
+          setForceMode(false);
+          setForceReason("");
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const startExecution = async () => {
+        setLoading(true);
+        try {
+          const r = await fetch("/api/dsh-graph/start-execution", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            if (data.child_id) {
+              setNote("✅ 已派发执行子代理，id：" + data.child_id);
+            } else if (data.child_error) {
+              setNote("⚠️ 子代理启动失败：" + data.child_error);
+            } else {
+              setNote("⚠️ 子代理未启动（无 child_id）");
+            }
+          } else {
+            setNote("⚠️ 执行失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const openSupervisorWithFeedback = async () => {
+        try {
+          const rt = sessionsRt ?? appCtx?.get?.("sessions");
+          if (!rt) { setNote("⚠️ 会话服务不可用"); return; }
+          // 打开主管会话（id 由 board 端点下发 project.yaml supervisor.session，g-108）
+          if (!supervisorSession) { setNote("⚠️ 未配置主管会话（project.yaml 的 supervisor.session）"); return; }
+          // 自动复制预填内容（负责人指示），再切到主管对话窗直接粘贴发送
+          const copied = prefillText ? await copyText(prefillText) : false;
+          rt.open?.(supervisorSession);
+          activateChatTab();
+          if (copied) {
+            showToast("✅ 预填内容已复制，到主管对话窗 Ctrl+V 直接粘贴发送");
+            setNote("✅ 预填内容已复制，已切换到主管对话窗，直接粘贴发送");
+          } else {
+            setNote("⚠️ 自动复制失败（浏览器限制），请手动复制下方预填内容；已切换到主管对话窗");
+          }
+        } catch (e) {
+          setNote("⚠️ 跳转失败：" + String(e?.message ?? e));
+        }
+      };
+
+      // 是否有活跃「执行」attempt（已启动但未完成）。
+      // g-109 定点 bug：「开始收集」也写 attempt.started（executor=agent:collect），
+      // 若不加区分，只收集过未执行的目标其 🚀 执行/💬 反馈会被误藏。
+      // 只认非 collect 的 attempt：凡非收集类（agent:collect）的 attempt 都视为活跃执行。
+      const hasActiveAttempt = (events ?? []).some(
+        (e) => e.event === "attempt.started" && e.details?.executor !== "agent:collect",
+      );
+      // review 及之后阶段、或已有活跃 attempt，不显示执行/反馈按钮
+      const allowed = ["draft", "planning", "collecting", "ready"];
+      if (!allowed.includes(status) || hasActiveAttempt) return null;
+
+      return h("div", { style: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6 } },
+        h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+          acceptState === "none"
+            ? h("button", {
+                style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn dg-accept",
+                disabled: loading, onClick: doAccept,
+              }, "✅ 接受")
+            : acceptState === "pending"
+              ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待裁决")
+              : acceptState === "resolved"
+                ? h("span", { style: { ...S.meta, fontSize: 12, color: "#3aa675" } }, "✅ 已接受生效")
+                : null,
+          h("button", {
+            style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
+            disabled: loading,
+            onClick: startExecution,
+          }, "🚀 执行"),
+          h("button", {
+            style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
+            disabled: loading,
+            onClick: () => { setMode(mode === "feedback" ? "idle" : "feedback"); setNote(null); },
+          }, "💬 反馈")),
+        // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
+        acceptState === "objection"
+          ? h("div", { key: "obj", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
+              h("div", { style: { ...S.meta, color: "#e0a53a" } },
+                "⚠️ 主管异议：" + (objectionText ?? "（无内容）")),
+              forceMode
+                ? [
+                    h("input", {
+                      style: { ...S.promptInput, flex: 1 },
+                      value: forceReason, placeholder: "强制接受理由（可选，将记入事件）…",
+                      onChange: (e) => setForceReason(e.target.value),
+                      onKeyDown: (e) => { if (e.key === "Enter") doForceAccept(); },
+                    }),
+                    h("div", { style: { display: "flex", gap: 6 } },
+                      h("button", {
+                        style: { ...S.btn, fontSize: 12 }, className: "dg-btn dg-accept",
+                        disabled: loading, onClick: doForceAccept,
+                      }, "确认强制接受"),
+                      h("button", {
+                        style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
+                        disabled: loading, onClick: () => { setForceMode(false); setForceReason(""); },
+                      }, "取消")),
+                  ]
+                : h("button", {
+                    style: { ...S.btn, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn dg-accept",
+                    onClick: () => setForceMode(true),
+                  }, "强制接受（跳过复核）"),
+            )
+          : null,
+        mode === "feedback"
+          ? h("div", { style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
+              h("input", {
+                style: { ...S.promptInput, flex: 1 },
+                value: fbText, placeholder: "输入反馈内容…",
+                onChange: (e) => setFbText(e.target.value),
+              }),
+              h("button", {
+                style: { ...S.btn, fontSize: 11, alignSelf: "flex-start" }, className: "dg-btn",
+                onClick: openSupervisorWithFeedback,
+              }, "→ 去主管对话窗发送"),
+              fbText.trim()
+                ? h("div", { style: { ...S.meta, padding: "4px 6px", background: "rgba(128,128,128,.08)", borderRadius: 4 } },
+                    "预填内容（已自动复制）：",
+                    h("pre", { style: { margin: "4px 0 0", whiteSpace: "pre-wrap", fontSize: 11 } },
+                      prefillText))
+                : null)
+          : null,
+        note ? h("div", { style: { ...S.meta, marginTop: 2 } }, note) : null,
+      );
+    }
+
+    // g-109：新增信息收集任务组件（弹窗内信息收集区）
+    function AddCardBox(props) {
+      const { goalId, supervisorSession } = props;
+      const [mode, setMode] = React.useState("idle"); // idle | naming | chat
+      const [title, setTitle] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [loading, setLoading] = React.useState(false);
+
+      const addByName = async () => {
+        const t = title.trim();
+        if (!t) return;
+        setLoading(true);
+        try {
+          const r = await fetch("/api/dsh-graph/add-card", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, title: t, kind: "text" }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setNote("✅ 已创建任务：" + data.card);
+            setTitle("");
+            setMode("idle");
+          } else {
+            setNote("⚠️ 创建失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      // 对话创建：打开主管会话让用户直接输入需求
+      const openSupervisorChat = () => {
+        try {
+          const rt = sessionsRt ?? appCtx?.get?.("sessions");
+          if (!rt) { setNote("⚠️ 会话服务不可用"); return; }
+          // 主管会话 id 由 board 端点下发（project.yaml supervisor.session，g-108）
+          if (!supervisorSession) { setNote("⚠️ 未配置主管会话（project.yaml 的 supervisor.session）"); return; }
+          rt.open?.(supervisorSession);
+          activateChatTab();
+          setNote("✅ 已切换到对话窗，请直接输入收集需求");
+        } catch (e) {
+          setNote("⚠️ 跳转失败：" + String(e?.message ?? e));
+        }
+      };
+
+      return h("div", { style: { marginTop: 8 }, className: "dg-card-add" },
+        h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
+          h("span", { style: { ...S.meta, fontSize: 11 } }, "新增信息收集任务："),
+          h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("naming"); setNote(null); } }, "📝 一句话任务"),
+          h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("chat"); setNote(null); } }, "💬 通过对话创建")),
+        mode === "naming"
+          ? h("div", { style: { display: "flex", gap: 4, marginTop: 4 } },
+              h("input", {
+                style: { ...S.promptInput, flex: 1 },
+                value: title, placeholder: "输入任务描述…",
+                onChange: (e) => setTitle(e.target.value),
+                onKeyDown: (e) => { if (e.key === "Enter") addByName(); },
+              }),
+              h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建"))
+          : null,
+        mode === "chat"
+          ? h("div", { style: { marginTop: 4, padding: "6px 8px", borderRadius: 4, background: "rgba(76,141,255,.08)" } },
+              h("div", null, "点击按钮切换到主管对话窗，直接描述你想收集的信息，主管 Agent 会帮你创建任务并派发子代理。"),
+              h("button", {
+                style: { ...S.btn, marginTop: 6 }, className: "dg-btn",
+                onClick: openSupervisorChat,
+              }, "→ 去对话窗输入需求"))
+          : null,
+        note ? h("div", { style: { ...S.meta, marginTop: 2 } }, note) : null,
+      );
+    }
+
     // 详情 modal：g-a92e1406 改为 tab 结构（详情 / 近期动态）
     function GoalModal(props) {
       const [state, setState] = React.useState({ loading: true });
       const [tab, setTab] = React.useState("detail"); // "detail" | "activity"
       const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
       const [logFilter, setLogFilter] = React.useState(""); // "" 全部 / 事件名
+      const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新执行的模型路由（显示兜底）
       React.useEffect(() => {
         let alive = true;
-        fetch("/api/dsh-graph/goal?id=" + encodeURIComponent(props.id))
+        // g-109 判据：接受默认经主管复核——20s 轮询详情，主管裁决（无异议生效/有异议）自动反映到按钮处
+        const load = () => fetch("/api/dsh-graph/goal?id=" + encodeURIComponent(props.id))
           .then((r) => r.json())
           .then((data) => alive && setState({ loading: false, data }))
           .catch((e) => alive && setState({ loading: false, error: String(e) }));
-        return () => { alive = false; };
+        load();
+        const t = setInterval(load, 20000);
+        return () => { alive = false; clearInterval(t); };
       }, [props.id]);
 
       const section = (body, name) => {
@@ -861,11 +1361,19 @@ window.__ModuleLoader__.load({
               : null,
         ];
         // g-107：📡 会话实时面板上移至标题与状态摘要下方（默认折叠，点击展开）
+        // g-109 判据反馈：最新 attempt 无 child_id（子代理启动失败）时也给出「重新执行」兜底区
         const att = (d.attempts ?? []).filter((a) => a.child_id).slice(-1)[0];
+        const anyAtt = (d.attempts ?? []).length > 0;
         livePanel = att
           ? h(SessionPanel, { parentId: att.parent_session_id, childId: att.child_id, collapsible: true,
-                              statusLine: lastAtt?.status_line ?? null })
-          : null;
+                              statusLine: lastAtt?.status_line ?? null,
+                              goalId: props.id, relaunchKind: "exec",
+                              relaunchRoute, onRelaunched: setRelaunchRoute })
+          : anyAtt
+            ? h("div", { key: "relaunch-fallback", style: { ...S.livePanel, marginTop: 6 } },
+                h("div", { style: { ...S.meta, marginBottom: 2 } }, "⚠️ 最新子代理未启动/不可用，可换 provider/model 重新派发："),
+                h(ReExecBox, { goalId: props.id, kind: "exec", onRelaunched: setRelaunchRoute }))
+            : null;
 
         // g-a92e1406：tab 内容（占位文案视觉降级：trim 后以「（待」开头 → 小字灰色放标题右侧）
         // 识别逻辑：trim 后以「（待」开头 → 占位；若占位后仍有正文，剥离占位行只显示正文
@@ -881,28 +1389,33 @@ window.__ModuleLoader__.load({
           const rest = t.replace(/^（待[^）]*）\s*/, "").trim();
           return { isPh: true, marker, body: rest };
         }
-        function sectionBlock(key, title, body, extra) {
+        function sectionBlock(key, title, body, extra, hideBodyWhenExtra) {
           const { isPh, marker, body: content } = parsePlaceholder(body);
-          // 有 extra（富组件，如 CriteriaChecklist）时不渲染 body 文本，避免判据显示两遍
           return h("div", { key, style: S.modalSection },
             h("div", { style: S.modalH },
               title,
               isPh && !content ? h("span", { style: { ...S.meta, fontSize: 12, marginLeft: 6, fontWeight: 400 } }, marker) : null),
-            extra != null ? null : (isPh && !content ? null : content),
+            hideBodyWhenExtra && extra != null ? null : (isPh && !content ? null : content),
             extra ?? null);
         }
         const detailTab = [
-          desc != null ? sectionBlock("d", "📋 目标描述", desc) : null,
-          crit != null ? sectionBlock("c", "✅ 质量判据（勾选确认 / 逐条反馈）", crit,
-            !isPlaceholder(crit)
-              ? h(CriteriaChecklist, { goalId: props.id, crit, att })
-              : null) : null,
+          desc != null ? sectionBlock("d", "📋 目标描述", desc,
+            h(AcceptFeedback, { goalId: props.id, status, events: d.events, supervisorSession: props.supervisorSession })) : null,
+          // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
+          crit != null ? sectionBlock("c", "✅ 质量判据", crit,
+            !isPlaceholder(crit) && ["ready", "in_progress", "review", "delivered"].includes(status)
+              ? h(CriteriaChecklist, { goalId: props.id, crit, att, onClose: props.onClose })
+              : null, true) : null,
           (d.cards ?? []).length
             ? h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🗂 信息收集"),
                 d.cards.map((c) => h("div", { key: c.id, style: S.subCard },
-                  `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)))
-            : null,
+                  `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
+                h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession }))
+            : h("div", { key: "k", style: S.modalSection },
+                h("div", { style: S.modalH }, "🗂 信息收集"),
+                h("div", { style: S.meta }, "（暂无上下文卡片）"),
+                h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession })),
         ];
         const activityTab = (() => {
           const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));
@@ -1097,7 +1610,7 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
