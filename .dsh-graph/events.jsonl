@@ -185,3 +185,5 @@
 {"ts":"2026-08-21T11:39:05+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-a92e1406","details":{"note":"建卡即进入规划（负责人指示已含需求细节）；描述阶段不提前收集——本目标无外部未知，无需收集"}}
 {"ts":"2026-08-21T11:39:18+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.transition","goal":"g-a92e1406","details":{"from":"draft","to":"planning"}}
 {"ts":"2026-08-21T11:46:19+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-a92e1406","details":{"note":"负责人补充：近期动态改 modal 独立 tab；新增依赖 g-107（等其完成再执行）"}}
+{"ts":"2026-08-21T11:49:53+08:00","event":"evidence.added","goal":"g-102","actor":"human:负责人","details":{"evidence_id":"ev-09","summary":"发现#23：已交付依赖仍显示 ⛓ 等待——client hasDep 只看 depends_on 非空、不看依赖状态；应只显示未交付依赖。修复排队在 g-107 之后（避免与执行子代理并行改 client.js），并入 g-a92e1406 范围"}}
+{"ts":"2026-08-21T11:49:53+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-a92e1406","details":{"note":"发现#23 并入范围：依赖徽章只显示未交付依赖（g-102 已交付但 g-107 仍显示等待的缺陷）"}}
