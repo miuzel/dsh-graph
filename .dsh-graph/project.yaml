@@ -18,5 +18,5 @@ supervisor:
     skill_proposal: human
     release: human
 executor:
-  provider: kimi-coding     # 执行子代理模型路由（不继承父会话，防余额/配额串号；graph_start_attempt 参数可覆盖）
-  model: kimi-for-coding
+  provider: deepseek        # 执行子代理模型路由（不继承父会话，防余额/配额串号；graph_start_attempt 参数可覆盖）
+  model: deepseek-v4-flash
