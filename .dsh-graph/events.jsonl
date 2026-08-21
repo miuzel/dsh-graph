@@ -542,3 +542,12 @@
 {"ts":"2026-08-22T03:19:43+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.transition","goal":"g-113","details":{"from":"ready","to":"in_progress"}}
 {"ts":"2026-08-22T03:19:46+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"attempt.started","goal":"g-113","details":{"attempt":"att-001","executor":"subagent"}}
 {"ts":"2026-08-22T03:19:46+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"attempt.bound","goal":"g-113","details":{"attempt":"att-001","child_id":"3f0d9f04-408a-47f4-b150-05603967d5fa"}}
+{"ts":"2026-08-22T03:23:17+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"supervisor.status_reported","details":{"status":"g-113 部分自修：host 工具随会话 workspace + 使用指引 skill 已提交；client board 待做"}}
+{"ts":"2026-08-22T03:26:13+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"supervisor.status_reported","details":{"status":"executor provider 改 deepseek-official（之前照口述写 deepseek 未核实，已修）"}}
+{"ts":"2026-08-22T03:27:19+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"attempt.started","goal":"g-113","details":{"attempt":"att-002","executor":"subagent"}}
+{"ts":"2026-08-22T03:27:19+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"attempt.bound","goal":"g-113","details":{"attempt":"att-002","child_id":"ea561db6-143a-4716-a74c-58ce50a37eb8"}}
+{"ts":"2026-08-22T03:27:21+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"读取目标文件，了解任务"}}
+{"ts":"2026-08-22T03:27:36+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"supervisor.status_reported","details":{"status":"g-113 att-002 已派（deepseek-official 生效）：做 client board 端点 workspace 传递"}}
+{"ts":"2026-08-22T03:27:43+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"调研 client 端点如何拿会话 workspace"}}
+{"ts":"2026-08-22T03:31:00+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"实施 client 端点 workspace 跟随"}}
+{"ts":"2026-08-22T03:33:21+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"跑测试与验收脚本回归"}}

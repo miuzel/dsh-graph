@@ -18,8 +18,11 @@ dsh plugin --profile web add dsh-graph-client
 
 ## 数据目录
 
-与 `dsh-graph-host` 共用同一 root 解析：默认工作区 `.dsh-graph`，可用用户层
-`cordis.patch.yml` 按 id 覆盖 `config.root`；首次加载自动建骨架（幂等）。
+与 `dsh-graph-host` 共用同一 root 解析，且 root 跟随**会话 workspace**（g-113）：
+HTTP 请求本身不带会话，前端把当前会话的 workspace（`session.header.cwd` 的客户端投影）作为
+`?workspace=` 查询参数随每个 `/api/dsh-graph*` 请求发送，端点据此读该项目自己的 `.dsh-graph`
+（缺参时兜底 `process.cwd()`）；首次触达某 workspace 自动建骨架（幂等）。
+可用用户层 `cordis.patch.yml` 按 id 覆盖 `config.root`。
 
 ## 依赖关系
 

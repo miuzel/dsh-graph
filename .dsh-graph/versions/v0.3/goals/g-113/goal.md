@@ -43,6 +43,12 @@
 
 | id | 内容 | 来源 | 时间 | freshness |
 |----|------|------|------|-----------|
+| ev-001 | 52/52 单测全绿（含 g-113 新增 8 项：client 端点 ?workspace=/body.workspace 跟随、全新项目自动 init 骨架、host 工具 session.header.cwd/sandboxPolicy 跟随、start-execution/start-attempt 相对路径基准） | core/tests/*.test.ts | 2026-08-22 | 新鲜 |
+| ev-002 | 8/8 验收脚本全绿（check_core/cards/plugin/g107/g108/g109/ga92e1406/kanban） | scripts/check_*.sh | 2026-08-22 | 新鲜 |
+| ev-003 | 跨项目实测：board 端点带 ?workspace=/home/miuzel/workspace/personal/comma-cli 读到 comma-cli/.dsh-graph 的 board-probe-1 目标；不串 dsh-graph 仓库目标；profile web 骨架（~/.dsh/profiles/web/.dsh-graph）无新写入 | tmp/g113-probe.mjs（probe PASS） | 2026-08-22 | 新鲜 |
+| ev-004 | 全新空项目开箱：board 首次访问自动在项目内 init 骨架（backlog/goals/versions/memory + events.jsonl/rules.md），graph_create_goal（session.header.cwd=新项目）目标落新项目 .dsh-graph | tmp/g113-probe.mjs（probe PASS） | 2026-08-22 | 新鲜 |
+| ev-005 | usage skill 注册：dsh-graph（工具清单/生命周期/判据先行）+ dsh-graph-supervisor 均被 mock skills 服务捕获 | tmp/g113-probe.mjs（probe PASS） | 2026-08-22 | 新鲜 |
+| ev-006 | 修正连带 bug：start-attempt/start-execution 注入的目标文件相对路径改为以 workspace 根为基准（.dsh-graph/versions/...，此前漏 .dsh-graph 前缀导致子代理 read 不到） | core/tests/plugin.test.ts + client.test.ts 回归 | 2026-08-22 | 新鲜 |
 
 ## 处置分支
 

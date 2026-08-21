@@ -5,9 +5,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, relative } from "node:path";
 import { init, createGoal, findGoalFile, loadGoal } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dsh-graph-client/index.js";
@@ -52,6 +52,39 @@ function setup() {
   };
   apply(ctx, { root });
   return { root, routes, goalId };
+}
+
+// g-113：无 config.root 的 apply（完全由请求 workspace 决定 root，与生产默认一致）
+function setupNoConfigRoot() {
+  const routes = new Map<string, any>();
+  const ctx: any = {
+    get: () => undefined,
+    effect: (fn: () => unknown) => fn(),
+    webServer: {
+      register: (def: any) => {
+        routes.set(def.path, def.handler);
+        return () => {};
+      },
+    },
+  };
+  apply(ctx, {});
+  return { routes };
+}
+
+function makeProject(base: string, name: string, title: string): { ws: string; goalId: string; title: string } {
+  const ws = join(base, name);
+  init(join(ws, ".dsh-graph"));
+  // 带 version（backlog 目标无目录不能建卡，见 addCard 业务规则）；id 为 per-root 顺序 g-001，断言必须按标题
+  const goalId = createGoal(join(ws, ".dsh-graph"), { title, version: "v-t", actor: "test" });
+  return { ws, goalId, title };
+}
+
+function boardGoalTitles(body: any): string[] {
+  return [
+    ...body.versions.flatMap((v: any) => v.goals),
+    ...body.standalone,
+    ...body.backlog,
+  ].map((g: any) => g.title);
 }
 
 const post = async (routes: Map<string, any>, path: string, body: unknown) => {
@@ -155,4 +188,125 @@ test("start-execution 无 subagents：attempt 本地创建、child_error 上报�
   assert.ok(typeof r.body.child_error === "string");
   const events = readEvents(root);
   assert.ok(events.some((e) => e.event === "attempt.started" && e.goal === goalId));
+});
+
+// ===== g-113：client board 端点跟随请求 workspace（前端带 ?workspace= / body.workspace） =====
+
+test("g-113 board 端点跟随 ?workspace=：读该项目自己的 .dsh-graph，而非默认/进程 cwd 骨架", () => {
+  const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
+  const a = makeProject(base, "proj-a", "A 项目目标");
+  const b = makeProject(base, "proj-b", "B 项目目标");
+  const { routes } = setupNoConfigRoot();
+  const handler = routes.get("/api/dsh-graph");
+  const res = fakeResponse();
+  handler({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(b.ws) }, res);
+  assert.equal(res._code, 200);
+  const titles = boardGoalTitles(res._body);
+  assert.ok(titles.includes(b.title), "board 含 workspace 项目的目标");
+  assert.ok(!titles.includes(a.title), "board 不含其他项目目标");
+  // 反向：workspace=a 时读 a 的目标
+  const res2 = fakeResponse();
+  handler({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(a.ws) }, res2);
+  const titles2 = boardGoalTitles(res2._body);
+  assert.ok(titles2.includes(a.title));
+  assert.ok(!titles2.includes(b.title));
+});
+
+test("g-113 写端点跟随 body.workspace：add-card 写到该项目 .dsh-graph（事件落该项目）", async () => {
+  const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
+  const b = makeProject(base, "proj-b", "B 项目目标");
+  const { routes } = setupNoConfigRoot();
+  const handler = routes.get("/api/dsh-graph/add-card");
+  const req = fakeRequest("POST", { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws });
+  const res = fakeResponse();
+  const p = handler(req, res);
+  emitBody(req, { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws });
+  await p;
+  assert.equal(res._code, 200);
+  assert.equal(res._body.ok, true);
+  assert.ok(typeof res._body.card === "string");
+  const ev = readEvents(join(b.ws, ".dsh-graph")).filter((e) => e.event === "card.created");
+  assert.equal(ev.length, 1, "卡片事件落在 workspace 项目自己的 .dsh-graph");
+  assert.equal(ev[0].goal, b.goalId);
+});
+
+test("g-113 写端点同时接受 query 参数 workspace（前端 POST 也走 ?workspace=）", async () => {
+  const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
+  const b = makeProject(base, "proj-b", "B 项目目标");
+  const { routes } = setupNoConfigRoot();
+  const handler = routes.get("/api/dsh-graph/accept");
+  const req = fakeRequest("POST", { goal: b.goalId });
+  req.url = "/api/dsh-graph/accept?workspace=" + encodeURIComponent(b.ws);
+  const res = fakeResponse();
+  const p = handler(req, res);
+  emitBody(req, { goal: b.goalId });
+  await p;
+  assert.equal(res._code, 200);
+  assert.equal(res._body.pending, true);
+  const ev = readEvents(join(b.ws, ".dsh-graph")).filter((e) => e.event === "review.requested");
+  assert.equal(ev.length, 1, "review.requested 落在 workspace 项目自己的 .dsh-graph");
+});
+
+test("g-113 无 workspace 参数时回退 config.root（现有行为不回归）", async () => {
+  const { root, routes, goalId } = setup(); // config.root = temp
+  const handler = routes.get("/api/dsh-graph/goal");
+  const res = fakeResponse();
+  handler({ method: "GET", url: "/api/dsh-graph/goal?id=" + encodeURIComponent(goalId) }, res);
+  assert.equal(res._code, 200);
+  assert.equal(res._body.meta?.id, goalId, "无 workspace 时按 config.root 解析（绝对 root 覆盖兜底）");
+});
+
+test("g-113 端点触达全新 workspace 时自动 init 骨架（开箱即用，不落 profile 骨架）", () => {
+  const freshWs = join(mkdtempSync(join(tmpdir(), "dsh-graph-fresh-")), "brand-new-proj");
+  const { routes } = setupNoConfigRoot();
+  const handler = routes.get("/api/dsh-graph");
+  const res = fakeResponse();
+  handler({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(freshWs) }, res);
+  assert.equal(res._code, 200);
+  assert.deepEqual(boardGoalTitles(res._body), [], "全新项目 board 返回空看板");
+  for (const d of ["backlog", "goals", "versions", "memory/long-term"]) {
+    assert.ok(existsSync(join(freshWs, ".dsh-graph", d)), `目录 ${d} 已在项目内自动建`);
+  }
+  assert.ok(existsSync(join(freshWs, ".dsh-graph", "events.jsonl")), "events.jsonl 已在项目内自动建");
+  assert.ok(existsSync(join(freshWs, ".dsh-graph", "rules.md")), "rules.md 已在项目内自动建");
+  // 骨架建在项目内，而非默认/进程 cwd（profile web 骨架未被写入新目标）
+  assert.ok(!existsSync(join(process.cwd(), ".dsh-graph", "versions", "v-t")), "未污染默认骨架");
+});
+
+test("g-113 start-execution 注入目标相对路径以请求 workspace 为基准（.dsh-graph/versions/...）", async () => {
+  const base = mkdtempSync(join(tmpdir(), "dsh-graph-client-rel-"));
+  const ws = join(base, "proj");
+  init(join(ws, ".dsh-graph"));
+  const goalId = createGoal(join(ws, ".dsh-graph"), { title: "rel 目标", version: "v-t", actor: "test" });
+  writeFileSync(join(ws, ".dsh-graph", "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
+  let capturedPrompt = "";
+  const routes = new Map<string, any>();
+  const ctx: any = {
+    get: (name: string) => {
+      if (name === "subagents") return {
+        list: () => ["spawn"],
+        getProvider: () => ({ prepareContinuable: () => {} }),
+        startContinuable: async (opts: any) => {
+          capturedPrompt = opts.request?.prompt?.[0]?.text ?? "";
+          return { childId: "c-x" };
+        },
+      };
+      if (name === "agents") return { get: () => ({ id: "sess-super" }) };
+      return undefined;
+    },
+    effect: (fn: () => unknown) => fn(),
+    webServer: { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } },
+  };
+  apply(ctx, {});
+  const handler = routes.get("/api/dsh-graph/start-execution");
+  const req = fakeRequest("POST", { goal: goalId });
+  req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
+  const res = fakeResponse();
+  const p = handler(req, res);
+  emitBody(req, { goal: goalId });
+  await p;
+  assert.equal(res._code, 200);
+  assert.equal(res._body.child_id, "c-x");
+  const expected = relative(ws, findGoalFile(join(ws, ".dsh-graph"), goalId));
+  assert.ok(capturedPrompt.includes(expected), `prompt 含 workspace 根基准相对路径：${expected}`);
 });

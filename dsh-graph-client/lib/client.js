@@ -520,7 +520,7 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         let alive = true;
-        fetch("/api/dsh-graph/spawn-options")
+        fetch(graphUrl("/api/dsh-graph/spawn-options"))
           .then((r) => r.json())
           .then((d) => {
             if (!alive) return;
@@ -553,7 +553,7 @@ window.__ModuleLoader__.load({
           const url = kind === "collect" ? "/api/dsh-graph/start-collection" : "/api/dsh-graph/start-execution";
           const body = { goal: goalId, provider: provider || undefined, model: model || undefined };
           if (kind === "collect") { body.card = cardId; body.prompt = prompt; }
-          const r = await fetch(url, {
+          const r = await fetch(graphUrl(url), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
@@ -814,7 +814,7 @@ window.__ModuleLoader__.load({
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新收集的模型路由
       React.useEffect(() => {
         let alive = true;
-        fetch("/api/dsh-graph/goal?id=" + encodeURIComponent(props.goalId))
+        fetch(graphUrl("/api/dsh-graph/goal", { id: props.goalId }))
           .then((r) => r.json())
           .then((data) => alive && setState({ loading: false, data }))
           .catch((e) => alive && setState({ loading: false, error: String(e) }));
@@ -859,7 +859,7 @@ window.__ModuleLoader__.load({
                     setCollecting(true);
                     setCollectNote("派发中…");
                     try {
-                      const r = await fetch("/api/dsh-graph/start-collection", {
+                      const r = await fetch(graphUrl("/api/dsh-graph/start-collection"), {
                         method: "POST",
                         headers: { "content-type": "application/json" },
                         body: JSON.stringify({
@@ -1058,7 +1058,7 @@ window.__ModuleLoader__.load({
       const doAccept = async () => {
         setLoading(true);
         try {
-          const r = await fetch("/api/dsh-graph/accept", {
+          const r = await fetch(graphUrl("/api/dsh-graph/accept"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ goal: goalId }),
@@ -1076,7 +1076,7 @@ window.__ModuleLoader__.load({
       const doForceAccept = async () => {
         setLoading(true);
         try {
-          const r = await fetch("/api/dsh-graph/accept", {
+          const r = await fetch(graphUrl("/api/dsh-graph/accept"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ goal: goalId, force: true, reason: forceReason.trim() || undefined }),
@@ -1095,7 +1095,7 @@ window.__ModuleLoader__.load({
       const startExecution = async () => {
         setLoading(true);
         try {
-          const r = await fetch("/api/dsh-graph/start-execution", {
+          const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ goal: goalId }),
@@ -1236,7 +1236,7 @@ window.__ModuleLoader__.load({
         if (!t) return;
         setLoading(true);
         try {
-          const r = await fetch("/api/dsh-graph/add-card", {
+          const r = await fetch(graphUrl("/api/dsh-graph/add-card"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ goal: goalId, title: t, kind: "text" }),
@@ -1307,7 +1307,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         let alive = true;
         // g-109 判据：接受默认经主管复核——20s 轮询详情，主管裁决（无异议生效/有异议）自动反映到按钮处
-        const load = () => fetch("/api/dsh-graph/goal?id=" + encodeURIComponent(props.id))
+        const load = () => fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }))
           .then((r) => r.json())
           .then((data) => alive && setState({ loading: false, data }))
           .catch((e) => alive && setState({ loading: false, error: String(e) }));
@@ -1528,7 +1528,7 @@ window.__ModuleLoader__.load({
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
       const load = () => {
-        fetch("/api/dsh-graph")
+        fetch(graphUrl("/api/dsh-graph"))
           .then((r) => r.json())
           .then((data) => setState({ loading: false, data }))
           .catch((e) => setState({ loading: false, error: String(e) }));
@@ -1622,6 +1622,27 @@ window.__ModuleLoader__.load({
     let appCtx = null;
     let sessionsRt = null;
     let connectionRt = null;
+    // g-113：当前会话 workspace（session.header.cwd 的客户端投影——sessions 列表条目带 cwd）。
+    // 看板与全部 /api/dsh-graph* 请求都必须带上它：dsh web 服务进程的 cwd 在 bwrap 沙箱里固定
+    // （≈ ~/.dsh/profiles/web），不带 workspace 端点会读 profile 本地空骨架而非项目自己的 .dsh-graph。
+    function currentWorkspace() {
+      try {
+        const rt = sessionsRt ?? appCtx?.get?.("sessions");
+        const snap = rt?.list?.getSnapshot?.();
+        const current = snap?.current;
+        const item = (snap?.items ?? []).find?.((s) => s.sessionId === current);
+        return item?.cwd || null;
+      } catch { return null; }
+    }
+    // 给 /api/dsh-graph* 请求统一追加 ?workspace=（GET/POST 通用；已知则带，未知则裸路径）
+    function graphUrl(path, extraParams = {}) {
+      const p = new URLSearchParams(extraParams);
+      const ws = currentWorkspace();
+      if (ws) p.set("workspace", ws);
+      const qs = p.toString();
+      if (!qs) return path;
+      return path + (path.includes("?") ? "&" : "?") + qs;
+    }
     // 跳转后把会话页切回「对话」tab：chat 是 conversation.view 中 order=0 的固定首 tab；
     // tab 选中态存在 ui-conversation 的 per-session chatStore 内、无跨插件 API（源码核实），
     // 故在跳转后点一下首 tab（仅当当前选中不是它）。无 tab 栏（单视图）时不动。

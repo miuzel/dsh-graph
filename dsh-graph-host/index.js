@@ -76,7 +76,16 @@ const USAGE = [
 export function apply(ctx, config) {
   // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
   const root = resolveRoot(config); // 默认（init/marker 等无会话上下文时用）
-  const rootFor = (ex) => resolveRoot(config, ex?.agent?.session?.header?.cwd ?? process.cwd()); // g-113 会话 workspace 跟随
+  // g-113 会话 workspace 跟随：session.header.cwd 优先（工具调用所在会话），
+  // 缺失时兜底 sandboxPolicy.workspaceRoot（部署级 workspace 根），再无则 process.cwd()（CLI/headless）。
+  // 解析后幂等 init：工具首次触达某个 workspace 时确保其 .dsh-graph 骨架齐全（开箱即用，
+  // 与 apply 期 init 同款：backlog/goals/versions/memory + events.jsonl/index.json/rules.md）。
+  const sessionWorkspace = (ex) => ex?.agent?.session?.header?.cwd ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? process.cwd();
+  const rootFor = (ex) => {
+    const r = resolveRoot(config, sessionWorkspace(ex));
+    init(r);
+    return r;
+  };
   const actorOf = (exec) => `agent:${exec?.agent?.id ?? "dsh"}`;
 
   /** @type {Array<{def: object, run: (args: any, exec: any) => any}>} */
@@ -204,8 +213,10 @@ export function apply(ctx, config) {
                 return typeof p?.prepareContinuable === "function";
               }) ?? "spawn";
             // 模型路由：工具参数 > project.yaml executor.provider/model > 继承父会话
+            // g-113 修正：子代理工作目录 = 父会话 workspace（startContinuable 继承 session.header.cwd），
+            // 目标文件相对路径必须相对 workspace 根（如 .dsh-graph/versions/...），不是相对 .dsh-graph 目录本身
             const goalFile = findGoalFile(rootFor(ex), a.goal);
-            const rel = goalFile ? relative(rootFor(ex), goalFile) : null;
+            const rel = goalFile ? relative(sessionWorkspace(ex), goalFile) : null;
             const prompt = [
               `你是 dsh-graph 目标 ${a.goal} 的执行 attempt ${attempt}。`,
               rel ? `目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。` : null,

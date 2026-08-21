@@ -30,7 +30,25 @@ export const inject = ["webServer"];
 
 export function apply(ctx, config) {
   // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
-  const root = resolveRoot(config);
+  const root = resolveRoot(config); // 默认（init/marker 等无请求上下文时用）
+  // g-113 会话 workspace 跟随：HTTP 请求本身不带会话，workspace 由前端显式携带
+  // （query 参数 ?workspace= 或 POST body.workspace）——前端从当前会话 session.header.cwd 派生。
+  // 缺失时兜底 process.cwd()（无 GUI 上下文 / 测试直调）。
+  const workspaceOf = (req, body) => {
+    try {
+      const q = new URL(req?.url ?? "", "http://x").searchParams.get("workspace");
+      return q || body?.workspace || process.cwd();
+    } catch {
+      return body?.workspace || process.cwd();
+    }
+  };
+  // 解析后幂等 init：端点首次触达某个 workspace 时确保其 .dsh-graph 骨架齐全（开箱即用，
+  // 与 apply 期 init 同款；board/写端点不会因缺骨架半成品落盘）
+  const rootFor = (req, body) => {
+    const r = resolveRoot(config, workspaceOf(req, body));
+    init(r);
+    return r;
+  };
   const json = (res, code, data) => {
     res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(data));
@@ -51,9 +69,9 @@ export function apply(ctx, config) {
   // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
   // （parent.options / childSessionMeta / captureDelegatedPolicyOverrides），传 null 必然失败。
   // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。
-  const resolveSpawnParent = () => {
+  const resolveSpawnParent = (rootFor) => {
     try {
-      const supervisorId = readSupervisorSession(root);
+      const supervisorId = readSupervisorSession(rootFor);
       if (!supervisorId) return { supervisorId: null, parent: null, error: "未配置 supervisor.session（project.yaml）" };
       const agents = ctx.get?.("agents");
       const parent = agents?.get?.(supervisorId) ?? null;
@@ -66,10 +84,10 @@ export function apply(ctx, config) {
   // 派发一个可续轮子代理（模型路由：overrides 优先，其次 project.yaml executor.provider/model，与 graph_start_attempt 一致）。
   // overrides: {provider?, model?} —— 由「重新执行」的 provider/model 选择器显式指定。
   // 返回 {childId, parentSessionId, error}；error 非空表示未派发成功。
-  const spawnChild = async (label, promptText, req, overrides = {}) => {
+  const spawnChild = async (label, promptText, req, rootFor, overrides = {}) => {
     const subagents = ctx.get?.("subagents");
     if (!subagents) return { childId: null, parentSessionId: null, error: "subagents 服务不可用" };
-    const { supervisorId, parent, error } = resolveSpawnParent();
+    const { supervisorId, parent, error } = resolveSpawnParent(rootFor);
     if (error) return { childId: null, parentSessionId: null, error };
     const ac = new AbortController();
     req.on("close", () => ac.abort());
@@ -84,7 +102,7 @@ export function apply(ctx, config) {
         return { childId: null, parentSessionId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）` };
       }
       const request = { parent, prompt: [{ type: "text", text: promptText }] };
-      const cfg = readExecutorModel(root);
+      const cfg = readExecutorModel(rootFor);
       const agentOptions = {};
       const effProvider = overrides.provider ?? cfg.provider;
       const effModel = overrides.model ?? cfg.model;
@@ -100,7 +118,7 @@ export function apply(ctx, config) {
   // 枚举派发选项（重新执行选择器用）：LLM provider 分组模型目录（ctx.llm 注册表）+ 默认（project.yaml executor）。
   // 注意区分两个 provider 概念：subagent provider（spawn/fork，子代理创建方式，用户不可选）与
   // LLM provider（deepseek/kimi，模型路由，用户可选）。此处只暴露 LLM 目录，避免用户把 spawn/fork 当模型路由。
-  const readSpawnOptions = async () => {
+  const readSpawnOptions = async (rootFor) => {
     let modelGroups = null;
     try {
       const llm = ctx.get?.("llm");
@@ -115,7 +133,7 @@ export function apply(ctx, config) {
         if (!modelGroups.length) modelGroups = null;
       }
     } catch { modelGroups = null; }
-    const def = readExecutorModel(root);
+    const def = readExecutorModel(rootFor);
     return {
       modelGroups,
       default: { provider: def.provider, model: def.model },
@@ -129,7 +147,7 @@ export function apply(ctx, config) {
       path: "/api/dsh-graph",
       handler: (_req, res) => {
         try {
-          json(res, 200, boardPayload(root));
+          json(res, 200, boardPayload(rootFor(_req)));
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
         }
@@ -142,7 +160,7 @@ export function apply(ctx, config) {
         try {
           const id = new URL(req.url ?? "", "http://x").searchParams.get("id");
           if (!id) return json(res, 400, { error: "missing id" });
-          json(res, 200, goalDetail(root, id));
+          json(res, 200, goalDetail(rootFor(req), id));
         } catch (e) {
           json(res, 404, { error: String(e?.message ?? e) });
         }
@@ -160,10 +178,10 @@ export function apply(ctx, config) {
           const { goal, force, reason } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
           if (force) {
-            resolveAccept(root, goal, { actor: "human:gui", verdict: "accept", force: true, reason });
+            resolveAccept(rootFor(req, body), goal, { actor: "human:gui", verdict: "accept", force: true, reason });
             json(res, 200, { ok: true });
           } else {
-            const result = requestAcceptReview(root, goal, "human:gui");
+            const result = requestAcceptReview(rootFor(req, body), goal, "human:gui");
             json(res, 200, { pending: true, goal: result.goal });
           }
         } catch (e) {
@@ -181,7 +199,7 @@ export function apply(ctx, config) {
           const body = await readBody(req);
           const { goal, verdict, objection, force, reason } = body;
           if (!goal || !verdict) return json(res, 400, { error: "missing goal or verdict" });
-          resolveAccept(root, goal, { actor: "human:gui", verdict, objection, force, reason });
+          resolveAccept(rootFor(req, body), goal, { actor: "human:gui", verdict, objection, force, reason });
           json(res, 200, { ok: true });
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
@@ -197,7 +215,7 @@ export function apply(ctx, config) {
           const body = await readBody(req);
           const { goal, text } = body;
           if (!goal || typeof text !== "string") return json(res, 400, { error: "missing goal or text" });
-          amendGoal(root, goal, { note: "直接编辑目标描述", appendDescription: text, actor: "human:gui" });
+          amendGoal(rootFor(req, body), goal, { note: "直接编辑目标描述", appendDescription: text, actor: "human:gui" });
           json(res, 200, { ok: true });
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
@@ -213,7 +231,7 @@ export function apply(ctx, config) {
           const body = await readBody(req);
           const { goal, title, kind } = body;
           if (!goal || !title || !kind) return json(res, 400, { error: "missing goal/title/kind" });
-          const card = addCard(root, goal, { title, kind, actor: "human:gui" });
+          const card = addCard(rootFor(req, body), goal, { title, kind, actor: "human:gui" });
           json(res, 200, { ok: true, card });
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
@@ -229,19 +247,21 @@ export function apply(ctx, config) {
           const body = await readBody(req);
           const { goal, card, prompt, provider, model } = body;
           if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
-          const attempt = startAttempt(root, goal, { executor: "agent:collect", actor: "human:gui" });
+          const rootForReq = rootFor(req, body);
+          const attempt = startAttempt(rootForReq, goal, { executor: "agent:collect", actor: "human:gui" });
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
             prompt || `请收集关于「${card}」的上下文信息。`,
             req,
+            rootForReq,
             { provider, model },
           );
           if (spawned.error) {
             console.error("[dsh-graph-client] start-collection 子代理启动失败:", spawned.error);
           } else {
             // 事件先行：attempt.bound → card.collecting（bindCardChild 写 child_id/parent_session_id）
-            bindAttemptChild(root, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
-            bindCardChild(root, goal, card, { childId: spawned.childId, parentSessionId: spawned.parentSessionId, actor: "human:gui" });
+            bindAttemptChild(rootForReq, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
+            bindCardChild(rootForReq, goal, card, { childId: spawned.childId, parentSessionId: spawned.parentSessionId, actor: "human:gui" });
           }
           json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error });
         } catch (e) {
@@ -259,14 +279,17 @@ export function apply(ctx, config) {
           const body = await readBody(req);
           const { goal, provider, model } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
-          const goalFile = findGoalFile(root, goal);
+          const rootForReq = rootFor(req, body);
+          const goalFile = findGoalFile(rootForReq, goal);
           const doc = loadGoal(goalFile);
           const descMatch = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
           const critMatch = doc.body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
           const desc = descMatch ? descMatch[1].trim() : "（无描述）";
           const crit = critMatch ? critMatch[1].trim() : "（无判据）";
-          const attempt = startAttempt(root, goal, { executor: "agent:executor", actor: "human:gui" });
-          const rel = relative(process.cwd(), goalFile); // 精确相对路径（子代理工作目录=仓库根，与数据目录根不同）
+          const attempt = startAttempt(rootForReq, goal, { executor: "agent:executor", actor: "human:gui" });
+          // g-113 修正：子代理工作目录 = 会话 workspace（继承 session.header.cwd），
+          // 相对路径以 workspace 根为基准（.dsh-graph/versions/...），不是服务进程 cwd 或 .dsh-graph 目录
+          const rel = relative(workspaceOf(req, body), goalFile);
           const prompt = `你是 dsh-graph 目标 ${goal} 的执行 attempt ${attempt}。
 目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。
 
@@ -289,11 +312,11 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
 迁移要与 graph_report_status 同步进行，别只改 status_line 不动卡片；若迁移被引擎拒绝（如判据未登记、状态不允许），保留 status 汇报并继续工作，不要反复硬试。
 
 完成后用 graph_report_status 汇报最终状态，声明完成并等待 review。`;
-          const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, { provider, model });
+          const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, rootForReq, { provider, model });
           if (spawned.error) {
             console.error("[dsh-graph-client] start-execution 子代理启动失败:", spawned.error);
           } else {
-            bindAttemptChild(root, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
+            bindAttemptChild(rootForReq, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
           }
           json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: spawned.model_route ?? null });
         } catch (e) {
@@ -305,9 +328,9 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
     const d8 = ctx.webServer.register({
       kind: "exact",
       path: "/api/dsh-graph/spawn-options",
-      handler: async (_req, res) => {
+      handler: async (req, res) => {
         try {
-          json(res, 200, await readSpawnOptions());
+          json(res, 200, await readSpawnOptions(rootFor(req)));
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
         }

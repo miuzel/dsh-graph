@@ -28,9 +28,11 @@ dsh plugin --profile <name> add dsh-graph-host
 
 ## 数据目录
 
-默认 root 为工作区（`process.cwd()`）下的 `.dsh-graph`（g-112 统一解析），可用 profile 用户层
-`cordis.patch.yml` 按 id 覆盖 `config.root`。首次加载自动生成骨架（`backlog/`、`goals/`、
-`versions/`、`events.jsonl`、`rules.md`），幂等、不建 demo 数据。
+root 跟随**会话 workspace**（g-113）：工具按调用会话的 `session.header.cwd` 解析 `.dsh-graph`
+（无会话上下文时兜底 `sandboxPolicy.workspaceRoot`，再兜底 `process.cwd()`）——在哪个项目开会话，
+数据就落在哪个项目自己的 `.dsh-graph`，绝不读 dsh web 服务进程 cwd（bwrap 沙箱里固定为 profile 目录）下的空骨架。
+可用 profile 用户层 `cordis.patch.yml` 按 id 覆盖 `config.root`。首次触达某 workspace 自动生成骨架
+（`backlog/`、`goals/`、`versions/`、`events.jsonl`、`rules.md`），幂等、不建 demo 数据。
 
 ## 与 dsh-graph-client 的关系
 
