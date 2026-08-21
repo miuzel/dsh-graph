@@ -143,6 +143,21 @@ export function readSupervisorStatus(root: string): string | null {
   return latest;
 }
 
+/** 读取 supervisor 最新状态的时间戳（epoch ms；无则 null）——供客户端判断状态是否过期清空。 */
+export function readSupervisorStatusAt(root: string): number | null {
+  let latest: number | null = null;
+  try {
+    for (const e of readEvents(root)) {
+      if (e.event !== "supervisor.status_reported") continue;
+      const t = Date.parse(String(e.ts ?? ""));
+      if (Number.isFinite(t)) latest = t;
+    }
+  } catch {
+    /* 事件流异常时返回已读到的最新值 */
+  }
+  return latest;
+}
+
 /** 读取 project.yaml 的 executor.provider/model（执行子代理模型路由，负责人 2026-08 指示：
  *  子代理不继承父会话模型，统一走配置的 provider 防余额/配额串号）。
  *  零依赖行扫描；缺失字段返回 null。 */

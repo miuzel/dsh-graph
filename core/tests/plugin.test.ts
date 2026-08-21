@@ -49,6 +49,9 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
   assert.ok(typeof att.note === "string");
   await call("graph_report_status", { goal, attempt: att.attempt, status: "测试中" });
   await call("graph_report_supervisor_status", { status: "主管调度中" });
+  const { readSupervisorStatus, readSupervisorStatusAt } = await import("../ops.ts");
+  assert.equal(readSupervisorStatus(root), "主管调度中");
+  assert.equal(typeof readSupervisorStatusAt(root), "number");
   await call("graph_amend_goal", { goal, note: "测试修订", append: "补充：修订内容" });
   await call("graph_move_goal", { goal, to: "standalone" });
   const v = await call("graph_validate", {});

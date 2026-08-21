@@ -332,6 +332,16 @@ window.__ModuleLoader__.load({
           "🔌 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
       }
       const running = !!(snap && snap.running);
+      // g-a92e1406 追加（负责人指示）：新一轮开始（running false→true）时清空上次 status，
+      // 等 supervisor 快速替换成最新——记录 running 翻转时刻，旧于它的状态视为过期清空。
+      const runningSinceRef = React.useRef(null);
+      React.useEffect(() => {
+        if (running && runningSinceRef.current == null) runningSinceRef.current = Date.now();
+        if (!running) runningSinceRef.current = null;
+      }, [running]);
+      const staleStatus =
+        running && props.statusAt != null && runningSinceRef.current != null &&
+        props.statusAt < runningSinceRef.current;
       const line = snap && snap.chat ? lastStreamLine(snap.chat.legacy.partial) : null;
       const meter = liveMeter(usage, pressure);
       return h(
@@ -345,12 +355,16 @@ window.__ModuleLoader__.load({
             meter || "投影待推送")),
         // g-a92e1406：status_line 摘要并入状态小窗——运行中前缀 ⏳ 走 StatusLine 带动画
         //（流动背景 + 图标 pulse），空闲（刚执行完）前缀 ✅ 保持静态；⛔ 阻塞行由调用方静态渲染。
-        props.statusLine
-          ? (running
-              ? h(StatusLine, { text: props.statusLine, blocked: false, running: true })
-              : h("div", { style: S.liveLine, title: "最近已完成：" + props.statusLine },
-                  "✅ " + props.statusLine))
-          : null,
+        // 过期清空：新一轮已开始但 status 仍是旧轮时间戳 → 显示等待态而非误导性旧状态。
+        staleStatus
+          ? h("div", { style: S.liveLine, title: "新一轮已开始，等待 supervisor 更新状态" },
+              "🔄 等待最新状态…")
+          : props.statusLine
+              ? (running
+                  ? h(StatusLine, { text: props.statusLine, blocked: false, running: true })
+                  : h("div", { style: S.liveLine, title: "最近已完成：" + props.statusLine },
+                      "✅ " + props.statusLine))
+              : null,
         line ? h("div", { style: S.liveLine, title: line }, "⏵ " + line) : null,
       );
     }
@@ -570,7 +584,7 @@ window.__ModuleLoader__.load({
         { style: S.supervisorBar, className: "dg-supervisor" },
         h("span", { style: { fontWeight: 600, flexShrink: 0 } }, "🧭 主管"),
         h("div", { style: { flex: 1, minWidth: 0 } },
-          h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null })),
+          h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null, statusAt: props.statusAt ?? null })),
         h("span", { style: { ...S.meta, flexShrink: 0 } },
           model ? `${model.provider}/${model.model}` : modelErr ? "模型不可用" : "模型查询中…"),
         h("button", {
@@ -1075,7 +1089,7 @@ window.__ModuleLoader__.load({
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
-          ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null })
+          ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null, statusAt: b.supervisorStatusAt ?? null })
           : null,
         h("div", { style: S.grid },
           h("div", { style: S.stageHead }, "泳道＼阶段"),

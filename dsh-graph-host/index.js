@@ -23,6 +23,7 @@ import {
   reportStatus,
   reportSupervisorStatus,
   readSupervisorStatus,
+  readSupervisorStatusAt,
   bindAttemptChild,
   moveGoal,
   amendGoal,
@@ -43,6 +44,8 @@ export function boardPayload(root) {
     supervisorSession: readSupervisorSession(root),
     // g-a92e1406 判据 3① 扩展：supervisor 状态栏显示 supervisor 自己的 status_line（事件流最新一条）
     supervisorStatus: readSupervisorStatus(root),
+    // 状态新鲜度（负责人 2026-08 指示：新一轮开始应清空上次 status，等快速替换）——时间戳供客户端过期清空
+    supervisorStatusAt: readSupervisorStatusAt(root),
   };
 }
 

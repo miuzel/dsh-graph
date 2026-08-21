@@ -99,6 +99,11 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
 
 ## 执行规范
 
+- **主管自报状态（每轮开始立即）**：supervisor 自己也要用
+  `graph_report_supervisor_status` 在**每轮开始的第一时间**报一句最新状态，
+  覆盖上一轮残留——否则看板顶部会长时间显示过期 status（负责人 2026-08 指出）。
+  客户端已有过期清空机制（新一轮 running 翻转时旧状态显示「🔄 等待最新状态…」），
+  主管应尽快替换；
 - `graph_start_attempt` 派发执行；**status_line 由执行子代理自己更新**
   （`graph_report_status`），**supervisor 绝不替子代理汇报**——卡片上那句话
   是子代理的自述，代劳即伪造进展（spawn 提示词模板已内联更新方法，见
