@@ -2,7 +2,7 @@
 {
   "id": "g-107",
   "title": "卡片会话内嵌：实时状态与看板直达指令",
-  "status": "in_progress",
+  "status": "review",
   "blocked_reason": null,
   "created_at": "2026-08-21T00:50:00+08:00",
   "created_by": "human:负责人",

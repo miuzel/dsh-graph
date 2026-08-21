@@ -130,15 +130,20 @@ const GOAL_BODY = `
 （暂无）
 `;
 
-/** 连号 id：扫描现有目标取最大数字编号 +1（g-001…g-9999）。
+/** 连号 id：扫描所有目标的 frontmatter meta.id 取最大数字编号 +1（g-001…g-9999）。
+ *  注意必须读 frontmatter 而非路径——真实仓库目录/文件名是 slug（如 goals/session-embed/），
+ *  g-id 只存在于 meta.id（发现#24：按路径推导曾误生成 g-001 撞号）。
  *  历史上的随机 8 位 id（如 g-a92e1406、g-77647351）不匹配 \d{1,4}，自然跳过；
  *  既有 id 永不改写（事件流引用它们，R-02）。 */
 function nextGoalSeq(root: string): string {
   let max = 0;
   for (const f of listGoalFiles(root)) {
-    const id = basename(f) === "goal.md"
-      ? basename(dirname(f))
-      : basename(f).replace(/\.md$/, "");
+    let id = "";
+    try {
+      id = String(loadGoal(f).meta.id ?? "");
+    } catch {
+      continue;
+    }
     const m = /^g-(\d{1,4})$/.exec(id);
     if (m) max = Math.max(max, parseInt(m[1], 10));
   }

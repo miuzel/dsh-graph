@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -140,7 +140,7 @@ test("validate 检测依赖环", () => {
   assert.ok(problems.some((p) => p.includes("依赖环")));
 });
 
-test("createGoal 连号 id：跳过随机 8 位旧 id", () => {
+test("createGoal 连号 id：读 frontmatter，跳过随机 id 与 slug 目录名", () => {
   const root = tmpRoot();
   const a = createGoal(root, { title: "a", actor: "test" });
   const b = createGoal(root, { title: "b", actor: "test" });
@@ -157,8 +157,17 @@ test("createGoal 连号 id：跳过随机 8 位旧 id", () => {
     serializeDoc({ meta: { id: "g-77647351", status: "draft" }, body: "" }),
     "utf8",
   );
+  // 真实仓库惯例（发现#24）：目录/文件用 slug 名，g-id 只在 frontmatter
+  mkdirSync(join(root, "versions", "v9", "goals", "session-embed"), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(root, "versions", "v9", "goals", "session-embed", "goal.md"),
+    serializeDoc({ meta: { id: "g-107", status: "review" }, body: "" }),
+    "utf8",
+  );
   const c = createGoal(root, { title: "c", actor: "test" });
-  assert.equal(c, "g-003");
+  assert.equal(c, "g-108");
 });
 
 // ---- rebuild ----
