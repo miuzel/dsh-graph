@@ -2,7 +2,7 @@
 {
   "id": "g-111",
   "title": "v0.3 对外发布与插件商店上架",
-  "status": "ready",
+  "status": "review",
   "blocked_reason": null,
   "created_at": "2026-08-21T20:04:44+08:00",
   "created_by": "agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b",
