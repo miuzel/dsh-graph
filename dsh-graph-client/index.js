@@ -32,14 +32,16 @@ export function apply(ctx, config) {
   // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
   const root = resolveRoot(config); // 默认（init/marker 等无请求上下文时用）
   // g-113 会话 workspace 跟随：HTTP 请求本身不带会话，workspace 由前端显式携带
-  // （query 参数 ?workspace= 或 POST body.workspace）——前端从当前会话 session.header.cwd 派生。
+  // （query 参数 ?workspace= / ?root=，或 POST body.workspace / body.root）——
+  // 前端从当前会话 session.header.cwd 派生。两个参数名等价（brief 建议 root），
+  // 语义都是「workspace 根」，传入 resolveRoot 的 workspaceRoot 参数（→ <ws>/.dsh-graph）。
   // 缺失时兜底 process.cwd()（无 GUI 上下文 / 测试直调）。
   const workspaceOf = (req, body) => {
     try {
-      const q = new URL(req?.url ?? "", "http://x").searchParams.get("workspace");
-      return q || body?.workspace || process.cwd();
+      const sp = new URL(req?.url ?? "", "http://x").searchParams;
+      return sp.get("workspace") || sp.get("root") || body?.workspace || body?.root || process.cwd();
     } catch {
-      return body?.workspace || process.cwd();
+      return body?.workspace || body?.root || process.cwd();
     }
   };
   // 解析后幂等 init：端点首次触达某个 workspace 时确保其 .dsh-graph 骨架齐全（开箱即用，

@@ -247,6 +247,20 @@ test("g-113 写端点同时接受 query 参数 workspace（前端 POST 也走 ?w
   assert.equal(ev.length, 1, "review.requested 落在 workspace 项目自己的 .dsh-graph");
 });
 
+test("g-113 board 端点接受 ?root= 别名（与 ?workspace= 等价，均指 workspace 根）", () => {
+  const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
+  const a = makeProject(base, "proj-a", "A 项目目标");
+  const b = makeProject(base, "proj-b", "B 项目目标");
+  const { routes } = setupNoConfigRoot();
+  const handler = routes.get("/api/dsh-graph");
+  const res = fakeResponse();
+  handler({ method: "GET", url: "/api/dsh-graph?root=" + encodeURIComponent(b.ws) }, res);
+  assert.equal(res._code, 200);
+  const titles = boardGoalTitles(res._body);
+  assert.ok(titles.includes(b.title), "?root= 读到 workspace 项目目标");
+  assert.ok(!titles.includes(a.title), "?root= 不串其他项目");
+});
+
 test("g-113 无 workspace 参数时回退 config.root（现有行为不回归）", async () => {
   const { root, routes, goalId } = setup(); // config.root = temp
   const handler = routes.get("/api/dsh-graph/goal");

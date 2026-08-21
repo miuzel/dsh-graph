@@ -6,7 +6,7 @@
   "sandbox": "directory",
   "started_at": "2026-08-22T03:27:19+08:00",
   "claimed_at": null,
-  "status_line": "完成，52测试+8脚本+跨项目probe全绿",
+  "status_line": "对齐 brief：加 root 别名，跑全量验证",
   "result": "pending",
   "child_id": "ea561db6-143a-4716-a74c-58ce50a37eb8",
   "parent_session_id": "session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b"
@@ -16,6 +16,14 @@
 ## 执行笔记
 
 ### att-002 执行记录（2026-08-22）
+
+**补记（复核对齐 brief）**：客户端取 workspace 的确切方式已核实两条路径并选用更直接的——
+`ctx.sessions.list.getSnapshot()` 的 `{items, current}`，items 条目带 `cwd`（session.header.cwd 客户端投影）；
+备选 `ctx.get("workspaces")`（`ctx.reflect.provide` 提供）`list.getSnapshot().items` 含
+`{workspaceId, path, sessionIds}`，需按 `sessionIds.includes(current)` 映射到 `path`，与 header.cwd 同目录。
+端点参数已加 `?root=` 别名（与 `?workspace=` 等价，语义均为 workspace 根 → `<ws>/.dsh-graph`），
+新增 `?root=` 隔离读取测试；resolveRoot 冒烟（不同 workspace 不同 root、默认回退 process.cwd()、
+config.root 相对/绝对语义）并入 probe。53/53 单测 + 8/8 冻结脚本 + probe PASS。
 
 **承接**：c279b45 已完成 host 工具 root 跟随会话 workspace（rootFor(ex)）+ 注册普通 agent 使用指引 skill；遗留 client board 端点 workspace 传递。
 
