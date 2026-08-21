@@ -71,6 +71,7 @@ window.__ModuleLoader__.load({
       .dg-btn:hover { filter: brightness(1.25); }
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
+      .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); }
     `;
 
     const S = {
@@ -142,6 +143,12 @@ window.__ModuleLoader__.load({
         flex: 1, minWidth: 0, fontSize: 12, padding: "3px 6px",
         background: "rgba(0,0,0,.25)", color: "inherit",
         border: "1px solid rgba(128,128,128,.4)", borderRadius: 4,
+      },
+      // g-108 看板顶部 supervisor 状态栏
+      supervisorBar: {
+        display: "flex", alignItems: "center", gap: 10, marginBottom: 8,
+        padding: "4px 10px", border: "1px solid rgba(58,166,117,.45)",
+        borderRadius: 6, background: "rgba(30,31,36,.92)", fontSize: 12,
       },
       recordItem: {
         marginTop: 3, padding: "3px 6px", borderRadius: 4,
@@ -280,7 +287,8 @@ window.__ModuleLoader__.load({
       ].filter(Boolean).join(" ｜ ");
     }
 
-    // 卡片内嵌实时条：摘要行（运行/空闲 + token/上下文占用 合一）+ 最新流式行
+    // 卡片内嵌实时条：摘要行（运行/空闲 + token/上下文占用 合一）+ status_line 摘要 + 最新流式行。
+    // status_line 进入状态小窗：运行中前缀 ⏳（进行中），子代理空闲（刚执行完）前缀 ✅（最近已完成）。
     function LiveStrip(props) {
       const { session } = useBoundSession(props.parentId, props.childId);
       const snap = useSessionSnapshot(session);
@@ -303,6 +311,10 @@ window.__ModuleLoader__.load({
           h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
                                textOverflow: "ellipsis", whiteSpace: "nowrap" } },
             meter || "投影待推送")),
+        props.statusLine
+          ? h("div", { style: S.liveLine, title: (running ? "进行中" : "最近已完成") + "：" + props.statusLine },
+              (running ? "⏳ " : "✅ ") + props.statusLine)
+          : null,
         line ? h("div", { style: S.liveLine, title: line }, "⏵ " + line) : null,
       );
     }
@@ -408,30 +420,21 @@ window.__ModuleLoader__.load({
       return h("div", { style: { marginTop: 4, fontSize: 12 } }, body);
     }
 
-    // 完整实时面板（抽屉/详情用）：实时条 + 模型 + 直达指令 + 最近记录。
-    // collapsible=true 时默认折叠，点击标题行展开；折叠态标题行内联显示状态/token/模型摘要。
-    function SessionPanel(props) {
-      const collapsible = !!props.collapsible;
-      const [open, setOpen] = React.useState(!collapsible);
-      const { session, mode } = useBoundSession(props.parentId, props.childId);
-      const snap = useSessionSnapshot(session);
-      const usage = useProjectionValue(session, "tokenUsage");
-      const pressure = useProjectionValue(session, "contextPressure");
+    // 当前模型查询（api.sessions.models，无投影走 RPC；30s 轮询）。
+    // origin=subagent 的子会话被 host 围栏拒绝（agent-busy: owned by subagent routing，
+    // dsh-api-remotes 源码级设计），此时退化查询父会话并标注 fromParent。
+    function useSessionModel(sessionId, parentId) {
       const [model, setModel] = React.useState(null); // {provider, model, fromParent}
       const [modelErr, setModelErr] = React.useState(null);
-      const [showRecords, setShowRecords] = React.useState(false);
       React.useEffect(() => {
-        if (!props.childId || !connectionRt) return;
+        if (!sessionId || !connectionRt) return;
         let alive = true;
         const load = async () => {
-          // api.sessions.models：当前模型无投影，走 RPC。
-          // 注意：origin=subagent 的会话被 host 围栏拒绝（agent-busy: owned by subagent
-          // routing，dsh-api-remotes 源码级设计），此时退化查询父会话并标注来源。
           try {
-            let r = await connectionRt.api.sessions.models({ sessionId: props.childId });
+            let r = await connectionRt.api.sessions.models({ sessionId });
             let fromParent = false;
-            if (!r?.result?.ok && props.parentId) {
-              r = await connectionRt.api.sessions.models({ sessionId: props.parentId });
+            if (!r?.result?.ok && parentId) {
+              r = await connectionRt.api.sessions.models({ sessionId: parentId });
               fromParent = true;
             }
             if (!alive) return;
@@ -448,7 +451,21 @@ window.__ModuleLoader__.load({
         load();
         const t = setInterval(load, 30000);
         return () => { alive = false; clearInterval(t); };
-      }, [props.childId, props.parentId]);
+      }, [sessionId, parentId]);
+      return { model, modelErr };
+    }
+
+    // 完整实时面板（抽屉/详情用）：实时条 + 模型 + 直达指令 + 最近记录。
+    // collapsible=true 时默认折叠，点击标题行展开；折叠态标题行内联显示状态/token/模型摘要。
+    function SessionPanel(props) {
+      const collapsible = !!props.collapsible;
+      const [open, setOpen] = React.useState(!collapsible);
+      const { session, mode } = useBoundSession(props.parentId, props.childId);
+      const snap = useSessionSnapshot(session);
+      const usage = useProjectionValue(session, "tokenUsage");
+      const pressure = useProjectionValue(session, "contextPressure");
+      const { model, modelErr } = useSessionModel(props.childId, props.parentId);
+      const [showRecords, setShowRecords] = React.useState(false);
 
       const running = !!(snap && snap.running);
       const meter = liveMeter(usage, pressure);
@@ -496,10 +513,42 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // g-108 看板顶部 supervisor 状态栏：复用 LiveStrip（运行/空闲、最新流式行、tok/ctx）
+    // + 模型名（useSessionModel，顶层会话直接查）+ 一键跳转主管对话。
+    // 会话 id 来自 board 端点下发的 supervisorSession（project.yaml），不硬编码。
+    function SupervisorBar(props) {
+      const { model, modelErr } = useSessionModel(props.id, null);
+      const jump = () => {
+        try {
+          sessionsRt?.open?.(props.id); // supervisor 是顶层会话，直接 open
+          activateChatTab();            // 已在该会话看板 tab 时切回「对话」
+        } catch (e) {
+          console.warn("[dsh-graph-client] 跳转主管会话失败", e);
+        }
+      };
+      return h(
+        "div",
+        { style: S.supervisorBar, className: "dg-supervisor" },
+        h("span", { style: { fontWeight: 600, flexShrink: 0 } }, "🧭 主管"),
+        h("div", { style: { flex: 1, minWidth: 0 } },
+          h(LiveStrip, { parentId: null, childId: props.id })),
+        h("span", { style: { ...S.meta, flexShrink: 0 } },
+          model ? `${model.provider}/${model.model}` : modelErr ? "模型不可用" : "模型查询中…"),
+        h("button", {
+          style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
+          title: "跳转到主管 Agent 对话窗", onClick: jump,
+        }, "↗ 主管对话"),
+      );
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard) {
+    // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus) {
       const blocked = g.status === "blocked";
-      const hasDep = (g.depends_on ?? []).length > 0;
+      const deps = g.depends_on ?? [];
+      const pendingDeps = deps.filter((d) => goalStatus?.[d] !== "delivered");
+      const metDeps = deps.filter((d) => goalStatus?.[d] === "delivered");
+      const hasDep = pendingDeps.length > 0;
       const style = {
         ...S.goalCard,
         ...(hasDep ? S.depCard : {}),
@@ -518,17 +567,23 @@ window.__ModuleLoader__.load({
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 执行会话")),
         hasDep
-          ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${g.depends_on.join("、")} 交付`)
+          ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
           : null,
-        g.status_line ? h("div", { style: S.statusLine }, "⏳ " + g.status_line) : null,
+        metDeps.length
+          ? h("div", { style: { ...S.meta, color: "#3aa675" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+          : null,
         blocked && g.blocked_reason
           ? h("div", { style: { ...S.statusLine, color: "#d66" } }, "⛔ " + g.blocked_reason)
           : null,
-        // g-107：执行会话内嵌实时条（状态 + token 摘要一行；指令框只在详情弹窗内）
+        // g-107/g-108：执行会话内嵌实时条——status_line 摘要并入状态小窗
+        //（运行中 ⏳ / 空闲刚执行完 ✅）；无执行会话时退化为独立状态行
         g.attempt_child_id
           ? h("div", { key: "live", onClick: (e) => e.stopPropagation() },
-              h(LiveStrip, { parentId: g.attempt_parent_session_id, childId: g.attempt_child_id }))
-          : null,
+              h(LiveStrip, { parentId: g.attempt_parent_session_id, childId: g.attempt_child_id,
+                             statusLine: g.status_line }))
+          : g.status_line
+            ? h("div", { style: S.statusLine }, "⏳ " + g.status_line)
+            : null,
         (g.cards ?? []).map((c) =>
           h("div", {
             key: c.id,
@@ -609,6 +664,63 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // 质量判据 checklist（确认阶段）：每条一个勾选框（localStorage 按目标持久化，仅前端评审草稿）
+    // + 「💬 反馈」按钮——展开输入框，经 session.prompt 排队送达该目标的执行会话（复用 g-107 通路）。
+    function CriteriaChecklist(props) {
+      const items = String(props.crit ?? "").split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l && !l.startsWith("<!--"));
+      const storeKey = "dsh-graph.crit." + props.goalId;
+      const readChecked = () => {
+        try { return JSON.parse(localStorage.getItem(storeKey) ?? "[]"); } catch { return []; }
+      };
+      const [checked, setChecked] = React.useState(readChecked);
+      const [fbIdx, setFbIdx] = React.useState(-1);
+      const [fbText, setFbText] = React.useState("");
+      const [fbNote, setFbNote] = React.useState(null);
+      const { session } = useBoundSession(props.att?.parent_session_id ?? null, props.att?.child_id ?? null);
+      if (!items.length) return null;
+      const toggle = (line) => {
+        const next = checked.includes(line) ? checked.filter((t) => t !== line) : [...checked, line];
+        setChecked(next);
+        try { localStorage.setItem(storeKey, JSON.stringify(next)); } catch {}
+      };
+      const sendFb = async (criterion) => {
+        const t = fbText.trim();
+        if (!t) return;
+        if (!session?.prompt) { setFbNote("⚠️ 执行会话未接入，反馈无法送达"); return; }
+        try {
+          const res = await session.prompt(
+            [{ type: "text", text: `【${props.goalId} 判据反馈】${criterion}\n${t}` }], "queue");
+          if (res?.ok) { setFbNote("✅ 反馈已排队送达执行会话"); setFbText(""); setFbIdx(-1); }
+          else setFbNote("⚠️ 反馈发送失败：" + (res?.error?.message ?? "未知错误"));
+        } catch (e) { setFbNote("⚠️ 反馈发送失败：" + String(e?.message ?? e)); }
+      };
+      return h("div", null,
+        items.map((line, i) => {
+          const done = checked.includes(line);
+          const label = line.replace(/^\d+[.、)]\s*/, "");
+          return h("div", { key: i, style: { marginBottom: 3 } },
+            h("div", { style: { display: "flex", alignItems: "flex-start", gap: 6 } },
+              h("input", { type: "checkbox", checked: done, onChange: () => toggle(line),
+                           style: { flexShrink: 0, cursor: "pointer", marginTop: 2 } }),
+              h("span", { style: { flex: 1, minWidth: 0, opacity: done ? 0.55 : 1,
+                                   textDecoration: done ? "line-through" : "none" } }, label),
+              h("button", { style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
+                            title: "针对此判据向执行会话反馈",
+                            onClick: () => { setFbIdx(fbIdx === i ? -1 : i); setFbNote(null); } },
+                "💬 反馈")),
+            fbIdx === i
+              ? h("div", { style: { display: "flex", gap: 4, marginTop: 3, marginLeft: 22 } },
+                  h("input", { style: S.promptInput, value: fbText, placeholder: "反馈内容…",
+                               onChange: (e) => setFbText(e.target.value),
+                               onKeyDown: (e) => { if (e.key === "Enter") sendFb(line); } }),
+                  h("button", { style: S.btn, className: "dg-btn", onClick: () => sendFb(line) }, "发送"))
+              : null);
+        }),
+        fbNote ? h("div", { style: { ...S.meta, marginTop: 3 } }, fbNote) : null);
+    }
+
     // 详情 modal：扼要分区 + 人类化事件
     function GoalModal(props) {
       const [state, setState] = React.useState({ loading: true });
@@ -649,10 +761,15 @@ window.__ModuleLoader__.load({
           "归属：" + (meta.version ? `版本 ${meta.version}` : "独立/backlog"),
           meta.review?.reviewer === "human" ? "👤人审" : meta.review?.reviewer === "ai" ? "🤖AI审" : null,
         ].filter(Boolean);
+        const pendingDeps = deps.filter((d) => props.goalStatus?.[d] !== "delivered");
+        const metDeps = deps.filter((d) => props.goalStatus?.[d] === "delivered");
         headMeta = [
           h("div", { key: "m1", style: S.meta }, bits.join(" ｜ ")),
-          deps.length
-            ? h("div", { key: "m2", style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${deps.join("、")} 交付`)
+          pendingDeps.length
+            ? h("div", { key: "m2", style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
+            : null,
+          metDeps.length
+            ? h("div", { key: "m2b", style: { ...S.meta, color: "#3aa675" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
             : null,
           status === "blocked" && meta.blocked_reason
             ? h("div", { key: "m3", style: { ...S.meta, color: "#d66" } }, "⛔ " + meta.blocked_reason)
@@ -669,7 +786,8 @@ window.__ModuleLoader__.load({
           desc ? h("div", { key: "d", style: S.modalSection },
             h("div", { style: S.modalH }, "📋 目标描述"), desc) : null,
           crit ? h("div", { key: "c", style: S.modalSection },
-            h("div", { style: S.modalH }, "✅ 质量判据"), crit) : null,
+            h("div", { style: S.modalH }, "✅ 质量判据（勾选确认 / 逐条反馈）"),
+            h(CriteriaChecklist, { goalId: props.id, crit, att })) : null,
           (d.cards ?? []).length
             ? h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🗂 信息收集"),
@@ -724,12 +842,17 @@ window.__ModuleLoader__.load({
 
       const active = b.versions.filter((v) => v.status !== "released");
       const released = b.versions.filter((v) => v.status === "released");
+      // 全量目标 id→status 映射（依赖徽章状态化，发现#23：已交付依赖算「依赖满足」）
+      const goalStatus = {};
+      for (const v of b.versions) for (const g of v.goals) goalStatus[g.id] = g.status;
+      for (const g of b.standalone) goalStatus[g.id] = g.status;
+      for (const g of b.backlog) goalStatus[g.id] = g.status;
       const lane = (label, goals, key) => {
         const cells = STAGES.map((s) =>
           h("div", { key: s.key, style: S.cell },
             goals.filter((g) => stageOf(g.status) === s.key).map((g) =>
               Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
-                modalGoal === g.id, drawerCard?.cardId))),
+                modalGoal === g.id, drawerCard?.cardId, goalStatus))),
         );
         return [h("div", { key: key + "-label", style: S.laneLabel }, label), ...cells];
       };
@@ -764,13 +887,15 @@ window.__ModuleLoader__.load({
           h("strong", null, "dsh-graph 看板"),
           h("span", { style: S.meta }, "数据时间：" + (b.generated_at ?? "").replace("T", " ").slice(0, 19)),
           h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新")),
+        // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）
+        b.supervisorSession ? h(SupervisorBar, { id: b.supervisorSession }) : null,
         h("div", { style: S.grid },
           h("div", { style: S.stageHead }, "泳道＼阶段"),
           STAGES.map((s) => h("div", { key: s.key, style: S.stageHead }, s.label)),
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,

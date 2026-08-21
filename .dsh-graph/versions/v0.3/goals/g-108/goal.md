@@ -2,7 +2,7 @@
 {
   "id": "g-108",
   "title": "看板顶部 supervisor 会话状态栏：复用实时控件+一键跳转主管对话",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-21T12:32:14+08:00",
   "created_by": "supervisor:k3",

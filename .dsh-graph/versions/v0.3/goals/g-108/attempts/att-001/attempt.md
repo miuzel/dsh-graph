@@ -6,7 +6,7 @@
   "sandbox": "directory",
   "started_at": "2026-08-21T15:15:03+08:00",
   "claimed_at": "2026-08-21T15:40:49+08:00",
-  "status_line": "判据5依赖徽章状态化已含 modal 同步；check_g108+5回归+冒烟全绿；amend 已登记，转 review 待实测",
+  "status_line": "追加：详情弹窗质量判据改为 checklist（勾选 localStorage 持久化 + 逐条💬反馈经 session.prompt 送执行会话）；全脚本 PASS",
   "result": "pending",
   "child_id": "43ad9d40-cf2b-4c59-afd9-3e5e2e676526",
   "parent_session_id": "session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b"

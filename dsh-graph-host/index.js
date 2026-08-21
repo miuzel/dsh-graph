@@ -24,10 +24,18 @@ import {
   bindAttemptChild,
   moveGoal,
   amendGoal,
+  boardProjection,
+  readSupervisorSession,
 } from "../core/ops.ts";
 
 export const name = "dsh-graph-host";
 export const inject = ["tools"];
+
+/** 看板端点载荷：board 投影 + supervisorSession（project.yaml 的 supervisor.session，g-108）。
+ *  由 dsh-graph-client 的 host 半边（/api/dsh-graph）消费，会话 id 不在任何代码里硬编码。 */
+export function boardPayload(root) {
+  return { ...boardProjection(root), supervisorSession: readSupervisorSession(root) };
+}
 
 const text = (s) => [{ type: "text", text: s }];
 const objOut = {

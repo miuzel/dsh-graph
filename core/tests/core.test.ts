@@ -24,6 +24,7 @@ import {
   loadGoal,
   moveGoal,
   addCard,
+  readSupervisorSession,
   GraphError,
 } from "../ops.ts";
 
@@ -215,4 +216,22 @@ test("move-goal：backlog↔standalone↔version，带附件拒绝回 backlog", 
   assert.throws(() => moveGoal(root, id, { to: "backlog", actor: "test" }), /附件/);
   const events = readEvents(root).filter((e) => e.event === "goal.moved");
   assert.equal(events.length, 2);
+});
+
+// ---- project.yaml supervisor.session（g-108） ----
+
+test("readSupervisorSession：读 supervisor.session，去注释/引号，缺失返回 null", () => {
+  const root = tmpRoot();
+  assert.equal(readSupervisorSession(root), null); // 无 project.yaml
+  writeFileSync(
+    join(root, "project.yaml"),
+    'name: t\nsupervisor:\n  session: session-abc123   # 主管会话\n  automation:\n    release: human\n',
+  );
+  assert.equal(readSupervisorSession(root), "session-abc123");
+  // 引号形态
+  writeFileSync(join(root, "project.yaml"), 'supervisor:\n  session: "session-quoted"\n');
+  assert.equal(readSupervisorSession(root), "session-quoted");
+  // 别的块的 session 不算
+  writeFileSync(join(root, "project.yaml"), 'other:\n  session: nope\n');
+  assert.equal(readSupervisorSession(root), null);
 });

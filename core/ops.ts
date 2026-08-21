@@ -107,6 +107,16 @@ export function readRulesVersion(root: string): string | null {
   return m ? m[1] : null;
 }
 
+/** 读取 project.yaml 的 supervisor.session（看板顶部状态栏数据源，g-108）。
+ *  零依赖行扫描：supervisor: 块内的 session: 标量，去引号与行尾注释；缺失返回 null。 */
+export function readSupervisorSession(root: string): string | null {
+  const file = join(root, "project.yaml");
+  if (!existsSync(file)) return null;
+  const text = readFileSync(file, "utf8");
+  const m = text.match(/^supervisor:\s*\n(?:[ \t].*\n)*?[ \t]+session:\s*"?([^\s"#]+)"?/m);
+  return m ? m[1] : null;
+}
+
 const GOAL_BODY = `
 ## 目标描述
 

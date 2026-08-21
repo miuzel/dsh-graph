@@ -1,7 +1,8 @@
 // dsh-graph-client — host 半边（Node）：具名导出，禁止 export default。
-// 职责：注册 GET /api/dsh-graph（看板投影）与 /api/dsh-graph/goal?id=（目标详情）。
+// 职责：注册 GET /api/dsh-graph（看板投影 + supervisorSession，g-108）与 /api/dsh-graph/goal?id=（目标详情）。
 import { resolve } from "node:path";
-import { boardProjection, goalDetail } from "../core/ops.ts";
+import { goalDetail } from "../core/ops.ts";
+import { boardPayload } from "../dsh-graph-host/index.js";
 
 export const name = "dsh-graph-client";
 export const inject = ["webServer"];
@@ -20,7 +21,7 @@ export function apply(ctx, config) {
       path: "/api/dsh-graph",
       handler: (_req, res) => {
         try {
-          json(res, 200, boardProjection(root));
+          json(res, 200, boardPayload(root));
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
         }
