@@ -6,7 +6,7 @@
   "sandbox": "directory",
   "started_at": "2026-08-21T11:21:14+08:00",
   "claimed_at": "2026-08-21T11:53:50+08:00",
-  "status_line": "五轮意见落地：实时会话标题加跳转按钮，跳转后自动切回对话 tab；验收+回归+冒烟全绿，等待复测",
+  "status_line": "六轮修复：模型查询被拒根因定位（subagent 围栏）并退化父会话；折叠态内联状态/token/模型；全绿待复测",
   "result": "pending",
   "child_id": "43ad9d40-cf2b-4c59-afd9-3e5e2e676526",
   "parent_session_id": "session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b"
@@ -53,7 +53,12 @@ Review 记录（均已记 goal.amended）：
   （卡片/抽屉/弹窗共用 openChildSession）后自动切回「对话」tab——tab 选中态存于
   ui-conversation 的 per-session chatStore、无跨插件 API，采用双 rAF 后点击首 tab
   （chat = conversation.view order 0 固定首 tab）的 DOM 方式，单视图无 tab 栏时不动。
-五轮调整后 check_g107.sh、四个回归脚本与离线冒烟均全绿。
+- 六轮（2026-08-21）：修模型常驻「查询中…」——根因：session.models 对 origin=subagent
+  会话被 host 围栏拒绝（agent-busy "owned by subagent routing"，dsh-api-remotes
+  createApiRemoteAgentResolver，实机复现后源码定位）。改为先查子会话、被拒退化父会话
+  并标注「（父会话，子代理继承）」；失败显示错误文本而非永远查询中。折叠态标题行
+  内联摘要：状态灯 + tok/ctx + 模型短名（父会话来源加 *）；模型查询不再等展开。
+六轮调整后 check_g107.sh、四个回归脚本与离线冒烟均全绿。
 
 验证：
 - `scripts/check_g107.sh` 全绿（冻结脚本，未改）；
@@ -64,7 +69,10 @@ Review 记录（均已记 goal.amended）：
 已知边界：
 - 会话不在客户端列表时（如宿主重启后子代理会话未回列）实时条显示「未接入」，
   列表刷新后自动接入；
-- 目录未收录的子代理跳过地址配置，prompt 走 session.prompt 默认路由，失败会明示。
+- 目录未收录的子代理跳过地址配置，prompt 走 session.prompt 默认路由，失败会明示；
+- 子代理模型经 session.models 查子会话会被 host 围栏拒绝（agent-busy），面板退化查
+  父会话并标注来源——子代理实际使用不同模型时显示的是父会话选择（DSH 无子会话模型
+  查询通道，六轮实机确认）。
 
 ## Review 记录
 

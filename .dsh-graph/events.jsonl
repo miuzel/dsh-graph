@@ -212,3 +212,6 @@
 {"ts":"2026-08-21T12:35:32+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-109","details":{"note":"负责人补充：描述区加「接受」按钮+反馈输入框——gate 确认从线性对话搬到看板"}}
 {"ts":"2026-08-21T12:36:22+08:00","actor":"supervisor:k3","event":"goal.created","goal":"g-110","details":{"title":"目标卡片操作：暂缓（移回 backlog）、与现有目标合并、删除","version":null}}
 {"ts":"2026-08-21T12:36:42+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-110","details":{"note":"负责人指示进 backlog 排队；需求已含操作语义，备忘实现要点备排期时启用"}}
+{"ts":"2026-08-21T14:55:59+08:00","actor":"agent:43ad9d40-cf2b-4c59-afd9-3e5e2e676526","event":"goal.amended","goal":"g-107","details":{"note":"负责人 review 六轮：①修模型常驻「查询中…」——根因：session.models 对 origin=subagent 会话被 host 围栏拒绝（agent-busy: owned by subagent routing，dsh-api-remotes），已改为先查子会话、被拒则退化父会话并标注「（父会话，子代理继承）」，失败时显示错误而非永远查询中；②折叠态标题行内联显示更多信息：状态灯 + tok/ctx + 模型短名（父会话来源加 * 标注），模型查询不再等展开。"}}
+{"ts":"2026-08-21T14:57:03+08:00","actor":"agent:43ad9d40-cf2b-4c59-afd9-3e5e2e676526","event":"attempt.status_reported","goal":"g-107","details":{"attempt":"att-001","status":"六轮修复：模型查询被拒根因定位（subagent 围栏）并退化父会话；折叠态内联状态/token/模型；全绿待复测"}}
+{"ts":"2026-08-21T14:59:21+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.transition","goal":"g-107","details":{"from":"review","to":"delivered"}}
