@@ -14,6 +14,12 @@
       "consumes": [
         "看板弹窗/抽屉结构与 client.js（避免并行改同一文件）"
       ]
+    },
+    {
+      "goal": "g-108",
+      "consumes": [
+        "顶部状态栏布局落定（串行改 client.js）"
+      ]
     }
   ],
   "review": {
@@ -24,7 +30,7 @@
     "lanes": 1,
     "sandbox": "directory"
   },
-  "rules_snapshot": null,
+  "rules_snapshot": "r-2026-08-3",
   "skill_refs": []
 }
 ---
@@ -53,10 +59,20 @@
 - review 阶段：接受＝评审通过，记 review.passed 并 →delivered；
 「反馈」＝graph_amend_goal 追加式修订（原有机制）。
 
+负责人确认的「接受」语义（最终版）：点击接受时，**默认主管 Agent 进行复核确认**；主管无异议则接受生效；**有异议时在接受按钮处显示异议内容，按钮变为「强制接受」**（避免 AI 幻觉卡住流程）；强制接受时用户可选填接受理由，记入事件供 Agent 学习（goal.amended note 或专用事件，actor=human）。
+
+接受生效的阶段映射不变：描述阶段→description.confirmed；判据待确认→criteria.confirmed；review→review.passed + delivered。
+
+实现方向：host 端点接受请求后转发主管会话复核（异步），返回异议/无异议；前端按结果显示确认或「强制接受+理由」态。
+
 
 ## 质量判据
 
-（待登记；进入 in_progress 前必须非空且已确认）
+1. 弹窗目标描述区：「接受」+「反馈」输入框；接受默认经主管 Agent 复核——无异议生效，有异议显示在按钮处并转为「强制接受」（可选理由记事件供学习）；生效映射：描述→description.confirmed、判据→criteria.confirmed(actor=human)、review→review.passed+delivered；反馈=追加式修订
+2. 弹窗信息收集区可新增上下文卡片：直接命名（空占位）／通过对话（建卡即准备派发收集）
+3. 抽屉对未填充卡片自动生成收集提示词草稿（卡片标题+目标上下文模板）、textarea 可编辑，「开始收集」派发子代理并绑定卡片（↗ 可跳）
+4. 全部写操作走新增 host 端点（事件先行），前端无直改文件路径
+5. [script] scripts/check_g109.sh 全绿 + 负责人浏览器人工实测
 
 ## 证据台账
 

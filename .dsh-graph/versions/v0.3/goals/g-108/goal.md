@@ -2,7 +2,7 @@
 {
   "id": "g-108",
   "title": "看板顶部 supervisor 会话状态栏：复用实时控件+一键跳转主管对话",
-  "status": "planning",
+  "status": "in_progress",
   "blocked_reason": null,
   "created_at": "2026-08-21T12:32:14+08:00",
   "created_by": "supervisor:k3",
@@ -24,7 +24,7 @@
     "lanes": 1,
     "sandbox": "directory"
   },
-  "rules_snapshot": null,
+  "rules_snapshot": "r-2026-08-3",
   "skill_refs": []
 }
 ---
@@ -44,7 +44,10 @@
 
 ## 质量判据
 
-（待登记；进入 in_progress 前必须非空且已确认）
+1. 看板顶部固定 supervisor 状态栏：复用 LiveStrip 控件（运行/空闲、最新流式行、tok/ctx、模型名）
+2. 一键跳转主管对话窗（sessions.open + 复用 activateChatTab 切对话 tab；已在该会话看板 tab 时切回对话）
+3. supervisor 会话 id 记入 project.yaml（supervisor.session），host board 端点以下发字段 supervisorSession 提供给 client，代码不硬编码会话 id
+4. [script] scripts/check_g108.sh 全绿 + 负责人浏览器人工实测
 
 ## 证据台账
 

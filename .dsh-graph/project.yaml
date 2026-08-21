@@ -9,6 +9,7 @@ defaults:
     sandbox: directory
   disposition: {}
 supervisor:
+  session: session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b   # 主管 Agent 会话（g-108 顶部状态栏数据源；换会话时更新）
   automation:
     scope_planning: human      # 版本范围由负责人确认
     integration_decision: human
