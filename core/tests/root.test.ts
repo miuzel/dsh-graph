@@ -55,7 +55,7 @@ test("resolveRoot：默认 workspace 根（process.cwd()）基准 + .dsh-graph�
   assert.equal(resolveRoot({ root: "/abs/g" }, "/base"), "/abs/g");
 });
 
-test("host/client 两半与 core 的 resolveRoot 行为一致（g-111 B7 后为包内副本，断言行为等价 + 内容同步）", async () => {
+test("host/client 两半与 core 的 resolveRoot 行为一致（g-111 B7：包内为编译产物 .js，断言行为等价 + 产物同步）", async () => {
   const coreRoot = resolveRoot;
   const hostMod = await import("../../dsh-graph-host/index.js");
   const clientMod = await import("../../dsh-graph-client/index.js");
@@ -65,12 +65,14 @@ test("host/client 两半与 core 的 resolveRoot 行为一致（g-111 B7 后为�
     assert.equal(hostMod.resolveRoot(c, "/base"), coreRoot(c, "/base"), `host resolveRoot(${JSON.stringify(c)}) 与 core 一致`);
     assert.equal(clientMod.resolveRoot(c, "/base"), coreRoot(c, "/base"), `client resolveRoot(${JSON.stringify(c)}) 与 core 一致`);
   }
-  // 内容同步：两包 core/root.ts 与根 core/root.ts 逐字节一致（sync-core.sh 强制，防副本漂移）
-  const rootSrc = readFileSync(new URL("../../core/root.ts", import.meta.url), "utf8");
-  const hostSrc = readFileSync(new URL("../../dsh-graph-host/core/root.ts", import.meta.url), "utf8");
-  const clientSrc = readFileSync(new URL("../../dsh-graph-client/core/root.ts", import.meta.url), "utf8");
-  assert.equal(hostSrc, rootSrc, "host/core/root.ts 与根 core 内容一致");
-  assert.equal(clientSrc, rootSrc, "client/core/root.ts 与根 core 内容一致");
+  // 产物同步：两包 core/root.js 为根 core/root.ts 的编译产物（sync-core.sh 强制，防副本漂移）
+  // 校验方式：两包产物逐字节一致，且产物包含根源码的关键逻辑（resolve 调用 + 默认 .dsh-graph）
+  const hostJs = readFileSync(new URL("../../dsh-graph-host/core/root.js", import.meta.url), "utf8");
+  const clientJs = readFileSync(new URL("../../dsh-graph-client/core/root.js", import.meta.url), "utf8");
+  assert.equal(hostJs, clientJs, "host/client core/root.js 产物一致");
+  assert.match(hostJs, /resolve\(workspaceRoot/, "产物包含统一解析逻辑");
+  assert.match(hostJs, /\.dsh-graph/, "产物保留默认 .dsh-graph");
+  assert.ok(!hostJs.includes(".ts\""), "产物无 .ts 引用（node_modules 下 .ts 不可加载）");
 });
 
 test("init 幂等：重复调用不重复建骨架、不重复记 project.initialized", () => {

@@ -6,7 +6,7 @@
   "sandbox": "directory",
   "started_at": "2026-08-22T00:55:03+08:00",
   "claimed_at": null,
-  "status_line": "缺口补齐完成，等负责人发布gate",
+  "status_line": "B8修复完成0.3.1，真实安装验收过",
   "result": "pending",
   "child_id": "94a1db5c-0971-4ce7-8ab6-288c6705b8af",
   "parent_session_id": "session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b"
@@ -46,12 +46,35 @@ git 无 remote/user.name/email；npm 官方 registry 可达且两包名+裸名 d
 - 隔离 DSH_HOME `dsh plugin add` host 成功（tgz→profile manifest 正确）；client 因沙箱
   pnpm supply-chain policy/sqlite 只读限制失败（非包问题，官方发布后无此问题）。
 
-**⑤ 发布手册与上架清单（判据 3）**——落盘 `docs/release-handbook.md` v1：
+**⑤ 发布手册与上架清单（判据 3）**——落盘 `docs/release-handbook.md` v2：
 分步命令（建 repo/topic、publish、本地验收、PR awesome-dsh-plugin）+ PR 模板自查清单 + 剩余
 人工 gate（B4 git 配置、B5 topic、B6 npm 登录）。
 
-**剩余（判据 4，人工 gate 等负责人）**：git user/remote 配置 → commit → 建公开 repo+打 topic
-→ npm 官方登录（需凭据）→ pnpm publish 两包 → 本地 dsh plugin add 验收 → PR awesome-dsh-plugin。
+### att-003 补充：B8 关键 bug 修复（发布包带 .ts 不可加载，负责人指出）
+
+**问题实机复现**：Node 原生 type-stripping 对 node_modules 下的 .ts 硬禁用
+（`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`）——本地 core/*.ts 不在 node_modules 下能跑，
+但 npm 包装进用户 node_modules 后必然崩。前一轮「解包 tgz 后 import」验证是假他机（未装 node_modules）。
+
+**修复（发布包 ship 编译后的 .js）**：
+1. 根 package.json + devDependencies（typescript ^5.7、@types/node）+ tsconfig.json
+   （module: esnext、rewriteRelativeImportExtensions——TS 5.7 自动把 ./x.ts import 重写为 ./x.js）；
+2. `scripts/sync-core.sh` 语义改为 build：tsc 编译 core/*.ts → core-dist/*.js → 复制进两包 core/
+   → 校验两包产物一致 + 无 .ts 泄漏；
+3. 两包 index.js import `./core/*.ts` → `./core/*.js`；engines 降为 node>=22（无 type-stripping 依赖）；
+4. 两包 files 白名单含编译后 core/*.js；prepack = sync-core.sh + 断言 core/ops.js 存在；
+5. root.test.ts「内容一致」断言改为校验两包 core/root.js 产物一致 + 无 .ts 引用；
+6. 版本号 0.3.0 → **0.3.1**（负责人定：修复后发 0.3.1，确认后再 publish）。
+
+**真实验收（不再是解包假验证）**：tgz 装进**全新隔离 DSH_HOME 的 node_modules** →
+- headless 启动：marker 落盘（14 个 graph_* 工具注册 + validate PASS）；
+- web 启动（端口 4317）：`/api/dsh-graph` 返回正确 JSON（含 supervisorSession 字段）、
+  首页含 plugins/dsh-graph-client/client.js；
+- node_modules 下 `import('dsh-graph-host'/'dsh-graph-client')` 均成功（无 type-stripping 错误）；
+- node --check ✅；43/43 单测 ✅；8 冻结脚本全 PASS ✅。
+
+**剩余（判据 4，人工 gate 等负责人）**：B6 npm 官方登录（凭据）→ git user/remote 配置 → commit
+→ 建公开 repo+打 topic → pnpm publish 两包（0.3.1）→ 本地 dsh plugin add 验收 → PR awesome-dsh-plugin。
 
 ## Review 记录
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-graph-client",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "dsh-graph 的 client 半边：在 DSH Web 界面内渲染二维泳道目标看板（看板/详情/写操作工作台），host 半边注册 /api/dsh-graph REST 端点。",
   "license": "MIT",
   "type": "module",
@@ -34,10 +34,10 @@
     "url": "https://github.com/miuzel/dsh-graph.git"
   },
   "engines": {
-    "node": ">=23.6"
+    "node": ">=22"
   },
   "scripts": {
-    "prepack": "bash ../scripts/sync-core.sh && node -e \"require('node:fs').existsSync('core/ops.ts') || (console.error('core 未同步'), process.exit(1))\"",
+    "prepack": "bash ../scripts/sync-core.sh && node -e \"require('node:fs').existsSync('core/ops.js') || (console.error('core 未同步'), process.exit(1))\"",
     "test": "node --test ../core/tests/*.test.ts"
   },
   "dsh": {

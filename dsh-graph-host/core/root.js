@@ -6,10 +6,6 @@
  * config.root 仍可覆盖（用户层 patch / --patch overlay）：绝对路径原样返回，相对路径以 workspace 根为基准。
  */
 import { resolve } from "node:path";
-
-export function resolveRoot(
-  config?: { root?: string } | null,
-  workspaceRoot: string = process.cwd(),
-): string {
-  return resolve(workspaceRoot, config?.root ?? ".dsh-graph");
+export function resolveRoot(config, workspaceRoot = process.cwd()) {
+    return resolve(workspaceRoot, config?.root ?? ".dsh-graph");
 }

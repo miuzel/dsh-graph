@@ -1,8 +1,9 @@
 # dsh-graph v0.3 发布手册与商店上架清单（g-111）
 
-> 状态：**v1（att-003 执行阶段产物）**。
-> 前置缺口已补齐：g-112 已交付（root 通用化）、B7 打包结构已实现、两包元数据/LICENCE/README 完成、
-> 43/43 单测 + 8 验收脚本全绿、他机视角加载验证通过。剩余人工 gate 见 §1 表。
+> 状态：**v2（att-003 执行阶段产物，含关键 bug 修复）**。
+> 前置缺口已补齐：g-112 已交付（root 通用化）、B7 打包结构已实现（**ship 编译后 .js**）、
+> 两包元数据/LICENCE/README 完成、43/43 单测 + 8 验收脚本全绿、**真实全新 profile 安装加载验证通过**。
+> 剩余人工 gate 见 §1 表（B6 npm 登录凭据）。
 > 依据：调研卡 card-996e88de + docs/release-prep-gh-recon.md（att-003 实机侦查）。
 
 ## 0. 总体路径（负责人定案）
@@ -21,6 +22,7 @@
 | B5 | 无 dsh-plugin topic（建 repo 后打） | g-111 执行 | ⏳ 建 repo 时打 |
 | B6 | **npm 官方 registry 未登录**（npmmirror 镜像无账号） | 人工 gate | ⚠️ 需负责人凭据 |
 | B7 | **跨包打包结构**：client/host 均依赖包外 core，client 跨包引 host | g-111 执行 | ✅ **已解决**（见 §6） |
+| B8 | **发布包带 .ts 源码不可加载**（node_modules 下 type-stripping 硬禁用） | g-111 执行 | ✅ **已修复**（编译 .js，见 §6.1） |
 
 ## 2. 发布缺口补齐（B2/B3/B7——已完成）
 
@@ -93,27 +95,60 @@ DSH_HOME=/tmp/dsh-pub-check dsh --profile web "ping"   # 断言插件加载激�
 验收点：profile 内安装包（非 link:）、root 解析正确（g-112 后不再硬编码）、
 `/api/dsh-graph` 端点在 web 模式可访问。
 
-> att-003 已用本地 tgz 解包 + 隔离 DSH_HOME 验证过加载链路；正式发布后按本命令复验一次即可。
+> att-003 已用**真实全新 profile（隔离 DSH_HOME）+ tgz 安装**验证加载链路：headless 启动 marker
+> 落盘（14 工具注册 + validate PASS）、web 启动 `/api/dsh-graph` 返回正确 JSON 且首页含
+> client.js bundle。正式发布后按本命令复验一次即可。
 
-## 6. 打包结构（B7——已实现，方案 B）
+## 6. 打包结构（B7+B8——已实现，方案 B + .js 编译）
 
-**问题**：两包源码均 `import "../core/ops.ts"`（包外），client 还 `import { boardPayload } from "../dsh-graph-host/index.js"`（跨包）；npm 发布后这些引用全部失效。
+### 6.0 关键 bug（B8）：发布包必须 ship 编译后的 .js
 
-**方案 B（已实现）**：
+**实机复现**：Node 原生 type-stripping 对 `node_modules` 下的 .ts **硬禁用**：
+
+```
+node -e "import('./node_modules/probe/index.ts')"
+→ ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING: Stripping types is currently
+  unsupported for files under node_modules
+```
+
+本地仓库内 core/*.ts 能跑（不在 node_modules 下），但 npm 包安装后一定在用户
+node_modules 下 → **带 .ts 的包必然崩**。修复：core/*.ts 编译为 .js 进包。
+
+### 6.1 编译链路（已实现）
+
+1. 根 `package.json` 加 `devDependencies: typescript ^5.7 + @types/node`（构建期依赖，
+   R-01 零运行时依赖不受影响）；`tsconfig.json`：`module: esnext`、`target: es2022`、
+   `allowImportingTsExtensions + rewriteRelativeImportExtensions`（TS 5.7+ 自动把
+   `./x.ts` import 重写为 `./x.js`）；
+2. `scripts/sync-core.sh`（语义 = build）：`tsc -p tsconfig.json` → `core-dist/*.js`
+   → 复制进两包 `core/` → 校验两包产物与编译输出一致 + **无 .ts 泄漏**；
+3. 两包 `index.js` import 从 `./core/*.ts` 改为 `./core/*.js`；`engines.node` 降到 `>=22`
+   （编译后无 type-stripping 依赖）；`files` 白名单即含编译后的 `core/*.js`；
+4. 两包 `prepack` = `bash ../scripts/sync-core.sh` + 断言 `core/ops.js` 存在；
+5. `root.test.ts`「内容一致」断言改为校验两包 `core/root.js` 产物逐字节一致 + 无 .ts 引用。
+
+### 6.2 跨包结构（B7，前一轮已实现）
 
 1. `boardPayload` 从 `dsh-graph-host/index.js` **移入 `core/ops.ts`**（它只依赖 core 内函数），
    host/client 均改为从 core import 并 re-export —— **消除跨包依赖**；
-2. 根 `core/` 复制为两包内 `core/` 副本（`scripts/sync-core.sh` 强制同步 + 一致性校验，
-   prepack 前必跑；`core/tests` 不进包）——**包自包含**；
+2. 根 `core/` 为唯一事实来源，产物经 sync-core.sh 进包——**包自包含**；
 3. 两包 `index.js` import 改为 `./core/...`（包内相对路径）；
-4. `root.test.ts` 的「模块同一性」断言演进为「行为等价 + 内容一致」（B7 后两半持包内副本，
-   实例不同但内容必须一致——防分叉的实质不变）；
-5. `check_g108.sh` 静态检查 `supervisorSession` 于 host/index.js——boardPayload 迁移后
+4. `check_g108.sh` 静态检查 `supervisorSession` 于 host/index.js——boardPayload 迁移后
    该字符串位于 core/ops.ts，已在 host re-export 注释处如实说明字段来源（脚本冻结未改）。
 
 **备选方案**（如负责人倾向）：
 - A. core 抽独立 npm 包（`dsh-graph-core`）：三包发布，host/client `dependencies` 引它——最干净但多一个发布物；
 - C. 合并单包：放弃 host/client 拆分——最简单但偏离现有结构。
+
+### 6.3 编译产物文件（两包各 6 个，与根 core/*.ts 一一对应）
+
+`core/events.js` `core/machine.js` `core/main.js` `core/model.js` `core/ops.js` `core/root.js`
+
+**验收证据（att-003 实机）**：`node --check` ✅；43/43 单测 ✅；8 冻结脚本全 PASS ✅；
+真实全新 profile（隔离 DSH_HOME）+ `pnpm add <tgz>` 装进 node_modules → headless 启动
+marker 落盘（14 工具注册 + validate PASS）；web 启动（端口 4317）`/api/dsh-graph`
+返回 `{"generated_at":…,"versions":[],"supervisorSession":null,…}`、首页含
+`plugins/dsh-graph-client/client.js`。
 
 ## 7. 上架 awesome-dsh-plugin（B5+B6 后）
 
@@ -161,8 +196,10 @@ PR 合并后，dsh-market / DshMarketPlace / DSH Get 三家自动带出（同源
 
 - [x] g-112 root 通用化完成（client patch 无硬编码路径，host/client 同一解析基准）
 - [x] B7 打包结构实现（boardPayload 移 core、core 副本进包、sync-core.sh、import 改包内路径）
+- [x] **B8 修复：core 编译为 .js 进包（node_modules 下可加载）**——tsconfig/tsc 链路 + sync-core.sh build 语义 + import 改 .js + 无 .ts 泄漏
 - [x] 两包 private:false + LICENSE + README + npm 元数据 + files 白名单 + prepack 脚本
-- [x] 43/43 单测 + 8 验收脚本全绿 + 他机视角加载验证
+- [x] 43/43 单测 + 8 验收脚本全绿 + **真实全新 profile 安装加载验证（headless marker + web /api/dsh-graph）**
+- [ ] **发布版本号：0.3.1**（B8 修复后发布，负责人确认后执行）
 - [ ] git user/remote 配置、代码 commit 全量入库
 - [ ] 建公开 repo miuzel/dsh-graph + dsh-plugin topic（B6 凭据由负责人提供）
 - [ ] npm 官方登录 → pnpm publish 两包 → npm view 核验

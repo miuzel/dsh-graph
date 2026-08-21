@@ -527,3 +527,7 @@
 {"ts":"2026-08-22T01:42:14+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.transition","goal":"g-111","details":{"from":"ready","to":"in_progress"}}
 {"ts":"2026-08-22T01:42:17+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.transition","goal":"g-111","details":{"from":"in_progress","to":"review"}}
 {"ts":"2026-08-22T01:42:21+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"supervisor.status_reported","details":{"status":"g-111 已挪到 review（判据 1/2/3 落地，判据 4 发布执行等你 gate）"}}
+{"ts":"2026-08-22T02:17:45+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"supervisor.status_reported","details":{"status":"发布包带 .ts 源码 node_modules 下崩，已派执行方改编译 .js；0.3.0 待撤"}}
+{"ts":"2026-08-22T02:18:02+08:00","actor":"agent:94a1db5c-0971-4ce7-8ab6-288c6705b8af","event":"attempt.status_reported","goal":"g-111","details":{"attempt":"att-003","status":"修复发布包.ts不可加载bug"}}
+{"ts":"2026-08-22T02:19:36+08:00","actor":"agent:94a1db5c-0971-4ce7-8ab6-288c6705b8af","event":"attempt.status_reported","goal":"g-111","details":{"attempt":"att-003","status":"npm pack+真实profile安装验收"}}
+{"ts":"2026-08-22T02:23:24+08:00","actor":"agent:94a1db5c-0971-4ce7-8ab6-288c6705b8af","event":"attempt.status_reported","goal":"g-111","details":{"attempt":"att-003","status":"B8修复完成0.3.1，真实安装验收过"}}
