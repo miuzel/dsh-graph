@@ -179,7 +179,10 @@ export function apply(ctx, config) {
             const prompt = [
               `你是 dsh-graph 目标 ${a.goal} 的执行 attempt ${attempt}。`,
               rel ? `目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。` : null,
-              `执行过程中周期性调用 graph_report_status 汇报一句最新状态；完成后声明完成并等待 review。`,
+              `【状态汇报——你自己做，supervisor 不会替你更新】看板卡片上的状态摘要（status_line）由你自行维护：`,
+              `进展/阶段性变化时调用工具 graph_report_status，参数 goal="${a.goal}"、attempt="${attempt}"、status=<一句人话的最新工作状态>。`,
+              `例如刚开工、每完成一块、遇到阻塞、临近完成，都更新一句；这句就是卡片上显示的那一行，滞留不更新等于对负责人隐瞒进展。`,
+              `完成后用 graph_report_status 汇报最终状态，声明完成并等待 review。`,
             ].filter(Boolean).join("\n");
             const request = { parent: ex.agent, prompt: text(prompt) };
             const agentOptions = {};

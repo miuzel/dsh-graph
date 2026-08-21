@@ -99,8 +99,10 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
 
 ## 执行规范
 
-- `graph_start_attempt` 派发执行；要求执行子代理**周期性 `graph_report_status`
-  汇报一句最新状态**（看板卡片只显示这一句，代替流式输出）；
+- `graph_start_attempt` 派发执行；**status_line 由执行子代理自己更新**
+  （`graph_report_status`），**supervisor 绝不替子代理汇报**——卡片上那句话
+  是子代理的自述，代劳即伪造进展（spawn 提示词模板已内联更新方法，见
+  host/index.js）；
 - **派发提示词规范（防找错文件）**：
   - 目标描述、判据、范围要点**全文内联**进提示词，不让子代理自己去读
     goal.md（目标目录是 slug/连号混排，子代理猜路径必踩坑——发现：
