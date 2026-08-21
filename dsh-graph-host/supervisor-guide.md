@@ -34,7 +34,11 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 3. **执行方声明完成** → `in_progress→review`，卡片移入"确认"列，
    停轮等人工审核；
 4. **负责人 verdict**：通过 → `review→delivered`；打回 → `review→in_progress`
-   并开新 attempt（不沿用失败 attempt）；
+   并开新 attempt（不沿用失败 attempt）。
+   **review 期间一旦子代理收到反馈重新开始改动/修 bug，立即把卡片
+   `review→in_progress` 放回执行 lane**——看板必须反映"正在改动"的事实，
+   改完重新声明完成再回 review；小修可续用当前 attempt 会话（缓存友好），
+   打回重做才开新 attempt；
 5. 任何阶段受阻 → `→blocked` 必须带具体 reason；解除只能回到 `blocked_from`。
 
 要点：状态迁移一律走工具（事件先行，R-02），**绝不手改 frontmatter 状态
