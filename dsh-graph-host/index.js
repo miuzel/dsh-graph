@@ -34,27 +34,17 @@ import {
   readExecutorModel,
   findGoalFile,
   init,
+  boardPayload,
 } from "../core/ops.ts";
 import { resolveRoot } from "../core/root.ts";
 
 // g-112：两半共用同一 root 解析函数（re-export 供验收/测试直接核对函数同一性）
 export { resolveRoot } from "../core/root.ts";
+// g-111 B7：boardPayload 已移入 core（消除 client→host 跨包依赖），此处 re-export 保持兼容
+export { boardPayload } from "../core/ops.ts";
 
 export const name = "dsh-graph-host";
 export const inject = ["tools"];
-
-/** 看板端点载荷：board 投影 + supervisorSession（project.yaml 的 supervisor.session，g-108）。
- *  由 dsh-graph-client 的 host 半边（/api/dsh-graph）消费，会话 id 不在任何代码里硬编码。 */
-export function boardPayload(root) {
-  return {
-    ...boardProjection(root),
-    supervisorSession: readSupervisorSession(root),
-    // g-a92e1406 判据 3① 扩展：supervisor 状态栏显示 supervisor 自己的 status_line（事件流最新一条）
-    supervisorStatus: readSupervisorStatus(root),
-    // 状态新鲜度（负责人 2026-08 指示：新一轮开始应清空上次 status，等快速替换）——时间戳供客户端过期清空
-    supervisorStatusAt: readSupervisorStatusAt(root),
-  };
-}
 
 const text = (s) => [{ type: "text", text: s }];
 const objOut = {
@@ -213,6 +203,7 @@ export function apply(ctx, config) {
               `开工时（若当前非 in_progress）graph_transition(goal="${a.goal}", to="in_progress")；`,
               `完成后 graph_transition(goal="${a.goal}", to="review")；`,
               `遇到阻塞 graph_transition(goal="${a.goal}", to="blocked", reason=<一句话原因>)；`,
+              `【禁区】绝不自行 graph_transition 到 "delivered"——delivered 是负责人/supervisor 的 human gate（review→delivered 只有 verdict 通过后由主管执行），你最多到 review 就停。`,
               `迁移要与 graph_report_status 同步进行，别只改 status_line 不动卡片；若迁移被引擎拒绝（如判据未登记、状态不允许），保留 status 汇报并继续工作，不要反复硬试。`,
               `完成后用 graph_report_status 汇报最终状态，声明完成并等待 review。`,
             ].filter(Boolean).join("\n");

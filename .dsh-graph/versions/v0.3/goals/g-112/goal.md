@@ -2,7 +2,7 @@
 {
   "id": "g-112",
   "title": "root 通用化：数据目录解析与初始化（去除 client 硬编码绝对路径）",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-21T20:59:04+08:00",
   "created_by": "agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b",
