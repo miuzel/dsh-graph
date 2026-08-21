@@ -20,6 +20,27 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 7. **目标内容体现最终修订**：负责人的补充与修正用 `graph_amend_goal` 记录，
    并把最终版写进目标描述——后续执行者读到的是最终版，不是初版。
 
+## 阶段推进规范
+
+卡片在看板上的横向位置由你**主动推进**——每到阶段边界立即调用
+`graph_transition` 移动卡片，绝不让状态滞留（看板列＝状态的投影，滞留即
+对负责人撒谎）：
+
+1. **描述完成**（建卡、修订落定、范围明确）→ `draft→planning→collecting`，
+   卡片从"描述"列移入"收集"列；
+2. **收集完成**（上下文卡片全部 filled/reviewed）→ `collecting→ready`；
+   判据登记并经负责人确认后 → `ready→in_progress`，卡片移入"执行"列，
+   同时派发执行 attempt（进 in_progress 的判据门禁由引擎强制）；
+3. **执行方声明完成** → `in_progress→review`，卡片移入"确认"列，
+   停轮等人工审核；
+4. **负责人 verdict**：通过 → `review→delivered`；打回 → `review→in_progress`
+   并开新 attempt（不沿用失败 attempt）；
+5. 任何阶段受阻 → `→blocked` 必须带具体 reason；解除只能回到 `blocked_from`。
+
+要点：状态迁移一律走工具（事件先行，R-02），**绝不手改 frontmatter 状态
+字段**；判据确认与 review verdict 是人工 gate，停轮等输入，不用自动续轮
+冲过去。
+
 ## 信息收集规范
 
 收集项即上下文卡片，一张卡一个收集任务：
