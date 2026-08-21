@@ -496,7 +496,8 @@ window.__ModuleLoader__.load({
             : h("span", { style: { flex: 1 } }),
           sessionLinkBtn(props.parentId, props.childId, "↗ 打开会话")),
         !open ? null : [
-          h(LiveStrip, { key: "s", parentId: props.parentId, childId: props.childId }),
+          h(LiveStrip, { key: "s", parentId: props.parentId, childId: props.childId,
+                         statusLine: props.statusLine }),
           h("div", { key: "m", style: { ...S.meta, marginTop: 3 } },
             "模型：" + modelText
             + (mode ? ` ｜ 模式：${mode === "continuable" ? "可续轮" : "一次性"}` : "")),
@@ -780,7 +781,8 @@ window.__ModuleLoader__.load({
         // g-107：📡 会话实时面板上移至标题与状态摘要下方（默认折叠，点击展开）
         const att = (d.attempts ?? []).filter((a) => a.child_id).slice(-1)[0];
         livePanel = att
-          ? h(SessionPanel, { parentId: att.parent_session_id, childId: att.child_id, collapsible: true })
+          ? h(SessionPanel, { parentId: att.parent_session_id, childId: att.child_id, collapsible: true,
+                              statusLine: lastAtt?.status_line ?? null })
           : null;
         content = [
           desc ? h("div", { key: "d", style: S.modalSection },
