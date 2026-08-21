@@ -1,6 +1,6 @@
 {
   "name": "dsh-graph-host",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "dsh-graph 的 host 半边：把 dsh-graph 核心层包装为 DSH cordis 插件，向 agent 暴露 graph_* 目标生命周期工具（建卡/判据/迁移/派发/评审/交付）。",
   "license": "MIT",
   "type": "module",
