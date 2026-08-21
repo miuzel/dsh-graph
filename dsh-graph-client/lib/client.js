@@ -1605,6 +1605,9 @@ window.__ModuleLoader__.load({
         h("div", { style: S.head },
           h("strong", null, "dsh-graph 看板"),
           h("span", { style: S.meta }, "数据时间：" + (b.generated_at ?? "").replace("T", " ").slice(0, 19)),
+          // g-113 临时诊断（定位后移除）：显示当前解析的 workspace 与会话 id
+          h("span", { style: { ...S.meta, color: "#e0a53a", marginLeft: 8 } },
+            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅")),
           h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新")),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
@@ -1629,26 +1632,43 @@ window.__ModuleLoader__.load({
     let appCtx = null;
     let sessionsRt = null;
     let connectionRt = null;
+    let workspacesRt = null;
     // g-113 定点 bug：看板按「被查看会话」取 workspace——conversation.view 是 session 作用域 slot，
     // 渲染回调的 props.sessionId 就是该视图当前挂载的会话（renderer 把 info.sessionId 注入为
     // props.sessionId），不能用全局聚焦会话 list.current 代替（多窗口/子代理视图时两者可能不同）。
     // KanbanView(props) 挂载时写入，currentWorkspace() 优先按它查 cwd；找不到再回退 list.current。
     let viewedSessionId = null;
-    // g-113：当前被查看会话的 workspace（session.header.cwd 的客户端投影——sessions 列表条目带 cwd）。
-    // 看板与全部 /api/dsh-graph* 请求都必须带上它：dsh web 服务进程的 cwd 在 bwrap 沙箱里固定
-    // （≈ ~/.dsh/profiles/web），不带 workspace 端点会读 profile 本地空骨架而非项目自己的 .dsh-graph。
+    // g-113 定点 bug 2：workspace 数据源改用 workspaces 服务——sessions 条目 cwd 并非总有
+    // （DSH 源码 dsh-client-runtime/client.js:9233 `...entry.cwd !== void 0 ? { cwd: entry.cwd } : {}`，
+    // aseit-ella 会话条目 cwd 为空），可靠来源是 workspaces 服务：
+    // `workspaces.list.getSnapshot().items` 每条 `{ workspaceId, path, title, sessionIds, ... }`
+    // （host workspaceView：dsh-host-apiproxy lib 793-801；runtime project() 直接透传 items），
+    // path 即该 workspace 目录，`sessionIds.includes(被查看会话)` 即归属映射
+    // （同文件 :9866 `summary.cwd === workspace.path && workspace.sessionIds.includes(summary.id)`）。
+    // 优先级：被查看会话（workspaces）→ 被查看会话（sessions cwd）→ list.current（workspaces）
+    // → list.current（sessions cwd）→ null（裸路径，端点兜底 process.cwd()）。
     function currentWorkspace() {
       try {
+        const wsItems = workspacesRt?.list?.getSnapshot?.()?.items
+          ?? appCtx?.get?.("workspaces")?.list?.getSnapshot?.()?.items ?? [];
+        const wsOf = (sid) => wsItems.find?.((w) => w.sessionIds.includes(sid));
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
         const snap = rt?.list?.getSnapshot?.();
         const items = snap?.items ?? [];
         if (viewedSessionId) {
+          const w = wsOf(viewedSessionId);
+          if (w?.path) return w.path;
           const viewed = items.find?.((s) => s.sessionId === viewedSessionId);
           if (viewed?.cwd) return viewed.cwd;
         }
         const current = snap?.current;
-        const item = items.find?.((s) => s.sessionId === current);
-        return item?.cwd || null;
+        if (current) {
+          const w = wsOf(current);
+          if (w?.path) return w.path;
+          const item = items.find?.((s) => s.sessionId === current);
+          if (item?.cwd) return item.cwd;
+        }
+        return null;
       } catch { return null; }
     }
     // 给 /api/dsh-graph* 请求统一追加 ?workspace=（GET/POST 通用；已知则带，未知则裸路径）
@@ -1712,6 +1732,9 @@ window.__ModuleLoader__.load({
         appCtx = ctx;
         sessionsRt = ctx.sessions ?? null;
         connectionRt = ctx.connection ?? null;
+        // workspaces 服务经 ctx.get(name) 可选查找即可取到（runner 的 ctx.get 方法不要求 inject 声明，
+        // 注入门禁只拦 ctx.workspaces 属性访问；workspaces 由 client-runtime `ctx.reflect.provide` 提供）
+        workspacesRt = ctx.get?.("workspaces") ?? null;
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
             { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: "看板" },

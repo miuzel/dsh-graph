@@ -6,7 +6,7 @@
   "sandbox": "directory",
   "started_at": "2026-08-22T03:27:19+08:00",
   "claimed_at": null,
-  "status_line": "定点 bug 已修：看板按被查看会话取 workspace",
+  "status_line": "workspaces 数据源已修，待负责人刷 DEBUG 验证",
   "result": "pending",
   "child_id": "ea561db6-143a-4716-a74c-58ce50a37eb8",
   "parent_session_id": "session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b"
@@ -16,6 +16,28 @@
 ## 执行笔记
 
 ### att-002 执行记录（2026-08-22）
+
+**补记 3（定点 bug 2：currentWorkspace 数据源改用 workspaces 服务）**：负责人实测诊断
+`props.sessionId=session-cb8ef13b`（aseit-ella 会话，取对了）但 `currentWorkspace()` 返回 ∅——
+sessions 列表条目 cwd 并非总有（DSH 源码 `dsh-client-runtime/client.js:9233`
+`...entry.cwd !== void 0 ? { cwd: entry.cwd } : {}`，aseit-ella 会话条目 cwd 为空）。
+修法：
+- `currentWorkspace()` 优先用 **workspaces 服务**：
+  `ctx.get("workspaces").list.getSnapshot().items.find(w => w.sessionIds.includes(viewedSessionId))?.path`；
+  取不到再回退 sessions 条目 cwd → list.current（workspaces → sessions cwd）→ null（裸路径，端点兜底）。
+- 字段名核实：workspace 条目 `{ workspaceId, path, title, sessionIds, ... }`
+  （host `dsh-host-apiproxy/lib/index.js:793-801` workspaceView；client-runtime `project()`
+  直接透传 manager.items，`itemViews()` 为 workspace.getSnapshot().view）；归属映射
+  `sessionIds.includes(sessionId)`（同文件 :9866 `summary.cwd === workspace.path && workspace.sessionIds.includes(summary.id)`）。
+- 注入方式：runner 的 `ctx.get(name)` 方法不要求 inject 声明（`dsh-cordis-client-runner/lib/client.js`
+  proxy get trap：`prop === "get" → readService(name, false)`，注入门禁只拦 `ctx.workspaces` 属性访问），
+  故 **不** 加进 inject（避免破坏冻结脚本 check_g107 的精确字符串断言），apply 里
+  `workspacesRt = ctx.get?.("workspaces") ?? null`。
+- DEBUG 行（负责人添加，看板头部 sessionId/ws）保留，等负责人确认 aseit-ella 看板 ws 非 ∅ 后再移除。
+- 逻辑仿真（tmp/g113-viewed-session-sim.mjs）7 项全过，含定点场景：被查看会话 sessions 无 cwd
+  时走 workspaces.path 得到 aseit-ella 目录、URL 带 ?workspace=。
+验证：node --check 通过；53/53 单测；8/8 冻结脚本（g107 inject 断言保持）；probe PASS。
+真浏览器需负责人刷新验证 DEBUG 行 ws 不再是 ∅。
 
 **补记 2（定点 bug：看板按「被查看会话」取 workspace）**：负责人实测 aseit-ella 会话看板仍显示
 dsh-graph 卡片——`currentWorkspace()` 原用全局聚焦 `list.current`，但看板是「按会话渲染」的。
