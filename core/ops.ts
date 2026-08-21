@@ -130,11 +130,26 @@ const GOAL_BODY = `
 （暂无）
 `;
 
+/** 连号 id：扫描现有目标取最大数字编号 +1（g-001…g-9999）。
+ *  历史上的随机 8 位 id（如 g-a92e1406、g-77647351）不匹配 \d{1,4}，自然跳过；
+ *  既有 id 永不改写（事件流引用它们，R-02）。 */
+function nextGoalSeq(root: string): string {
+  let max = 0;
+  for (const f of listGoalFiles(root)) {
+    const id = basename(f) === "goal.md"
+      ? basename(dirname(f))
+      : basename(f).replace(/\.md$/, "");
+    const m = /^g-(\d{1,4})$/.exec(id);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return "g-" + String(max + 1).padStart(3, "0");
+}
+
 export function createGoal(
   root: string,
   opts: { title: string; version?: string; scope?: string[]; actor: string },
 ): string {
-  const id = "g-" + randomUUID().slice(0, 8);
+  const id = nextGoalSeq(root);
   const meta: Record<string, any> = {
     id,
     title: opts.title,

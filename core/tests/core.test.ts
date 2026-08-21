@@ -140,6 +140,27 @@ test("validate 检测依赖环", () => {
   assert.ok(problems.some((p) => p.includes("依赖环")));
 });
 
+test("createGoal 连号 id：跳过随机 8 位旧 id", () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "a", actor: "test" });
+  const b = createGoal(root, { title: "b", actor: "test" });
+  assert.equal(a, "g-001");
+  assert.equal(b, "g-002");
+  // 历史随机 id（含全数字的 8 位 hex）不影响连号序列
+  writeFileSync(
+    join(root, "backlog", "g-a92e1406.md"),
+    serializeDoc({ meta: { id: "g-a92e1406", status: "draft" }, body: "" }),
+    "utf8",
+  );
+  writeFileSync(
+    join(root, "backlog", "g-77647351.md"),
+    serializeDoc({ meta: { id: "g-77647351", status: "draft" }, body: "" }),
+    "utf8",
+  );
+  const c = createGoal(root, { title: "c", actor: "test" });
+  assert.equal(c, "g-003");
+});
+
 // ---- rebuild ----
 
 test("rebuild 发现 frontmatter 被篡改的 drift", () => {

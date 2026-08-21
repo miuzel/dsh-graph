@@ -51,7 +51,8 @@
 
 ```markdown
 ---
-id: g-01J4X9K2M8            # 全局唯一，创建时生成，永不复用
+id: g-108                 # 连号制：创建时取现有最大数字编号 +1（g-001…g-9999），永不复用、永不改写
+                          # （历史随机 8 位 id 如 g-a92e1406 合法存在，不参与连号序列）
 title: 实现登录接口限流
 status: collecting          # 状态机见 §7
 blocked_reason: null        # status=blocked 时必填
