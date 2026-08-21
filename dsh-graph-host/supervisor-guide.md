@@ -43,13 +43,19 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 
 ## 信息收集规范
 
-收集项即上下文卡片，一张卡一个收集任务：
+收集项即上下文卡片，一张卡一个收集任务。
+
+**前提：需求描述已定稿（目标离开描述阶段）。** 描述未完成前不列收集清单、
+不建上下文卡片、不派发收集子代理——需求可能变，提前收集是浪费
+（负责人 2026-08-21 指示）：
 
 1. `graph_add_card` 占位（empty）——只登记"需要哪方面的资料"，不预设查什么、怎么查；
 2. 派发收集子代理（`graph_collect_card`，或手工绑定）：卡片 → collecting，
    记录 `child_id` 与 `parent_session_id`（看板可跳转其会话）。
-   `parent_session_id` 工具化时取 `exec.agent.session.id`；手工绑定时可
-   按工作区+时间从 `~/.dsh/sessions` 推断（如 g-107 card-e453207d 的人工预演）；
+   `parent_session_id` 工具化时取 `exec.agent.session.id`；手工绑定时**必须
+   从子代理会话文件头反查**：`zstd -dc ~/.dsh/sessions/<工作区目录>/<child_id>/session.jsonl.zstd | head -1`
+   的 `parentSession` 字段（权威来源）。禁止靠工作区+时间推断——已翻车
+   （发现#22，推断错会话导致 ↗ 跳到新会话页）；
 3. 子代理产出回填：`graph_fill_card` 写全文 + 一句 `summary` → filled；
    重要资料可 `graph_review_card` → reviewed。
    调研类收集子代理任务范围要窄、纯文档读取为主，不做实机验证

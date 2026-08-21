@@ -2,7 +2,7 @@
 {
   "id": "g-102",
   "title": "Kanban 二维泳道看板（client-plugin）",
-  "status": "in_progress",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-20 17:29:00+08:00",
   "created_by": "supervisor",

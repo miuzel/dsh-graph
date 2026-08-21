@@ -2,7 +2,7 @@
 {
   "id": "g-107",
   "title": "卡片会话内嵌：实时状态与看板直达指令",
-  "status": "ready",
+  "status": "in_progress",
   "blocked_reason": null,
   "created_at": "2026-08-21T00:50:00+08:00",
   "created_by": "human:负责人",
@@ -46,7 +46,14 @@
 复用 DSH 客户端会话机制（Session 对象/投影/RPC），不自建轮询外的数据通道。
 
 ## 质量判据
-（待 planning 登记）
+
+1. 绑定 child_id 的卡片内嵌实时区：子代理运行/空闲状态 + 最新一行流式输出（session.open() + chat.legacy.partial）
+2. token 用量 + 上下文窗口占用（投影 faceOf tokenUsage/contextPressure，无需 open，看板常驻）
+3. 当前模型名显示（api.sessions.models）
+4. 看板直达指令：卡片内向 continuable 子代理发文本（session.prompt，queue/steer）；多模态降级：子代理图片源码级不支持（SUBAGENT_IMAGE_UNSUPPORTED），前端必须明确提示而非静默失败
+5. 查看最近会话记录（chat.nodes 或 api.subagents.history）
+6. client inject 升级为 [slots, sessions, connection]
+7. [script] scripts/check_g107.sh 全绿；另由负责人浏览器逐条人工实测
 
 ## 证据台账
 | id | 内容 | 来源 | 时间 | freshness |
