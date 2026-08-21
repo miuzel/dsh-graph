@@ -132,7 +132,7 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
     前缀），禁止"自己去找到 goal.md"式指令；
   - 冻结脚本路径、验收命令逐条写全；
 - **模型路由**：执行子代理**不继承父会话模型**——统一走 project.yaml 的
-  `executor.provider/model`（当前 deepseek/deepseek-v4-flash），
+  `executor.provider/model`（当前 deepseek-official/deepseek-v4-flash），
   `graph_start_attempt` 的 provider/model 参数可临时覆盖；路由结果显示在
   返回的 `model_route` 字段。背景：默认路由曾把子代理打到余额不足的
   newapi-aseit（403 insufficient_user_quota 空失败，负责人指正）；
