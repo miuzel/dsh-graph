@@ -201,12 +201,7 @@ window.__ModuleLoader__.load({
                 card.parent_session_id
                   ? h("button", {
                       style: { ...S.btn, marginTop: 4 },
-                      onClick: () => {
-                        try {
-                          const rt = appCtx?.get?.("sessions");
-                          rt?.openSubagent?.({ parentSessionId: card.parent_session_id, childId: card.child_id });
-                        } catch (e) { console.warn("openSubagent failed", e); }
-                      },
+                      onClick: () => { openChildSession(card.parent_session_id, card.child_id); },
                     }, "在会话中打开")
                   : null)
             : null;
@@ -373,11 +368,27 @@ window.__ModuleLoader__.load({
     }
 
     let appCtx = null;
-    function openChildSession(parentSessionId, childId) {
+    let sessionsRt = null;
+    async function openChildSession(parentSessionId, childId) {
+      const rt = sessionsRt ?? appCtx?.get?.("sessions");
       try {
-        const rt = appCtx?.get?.("sessions");
-        rt?.openSubagent?.({ parentSessionId, childSessionId: childId, mode: "continuable" });
-      } catch (e) { console.warn("[dsh-graph-client] openSubagent failed", e); }
+        if (!rt) return;
+        // 目录必须先加载，否则 selectSubagent 抛 "not a healthy catalog child"（发现#21）
+        rt.setSubagentCatalogOpen?.(parentSessionId, true);
+        await rt.refreshSubagents?.(parentSessionId);
+        const entries = rt.list?.getSnapshot?.().subagentsByParent?.[parentSessionId]?.entries ?? [];
+        const entry = entries.find((e) => e.kind === "child" && e.id === childId);
+        if (entry) {
+          rt.openSubagent?.({ parentSessionId, childSessionId: childId, mode: entry.mode });
+        } else {
+          // 目录里没有（不健康/已清理）：退化为打开父会话
+          console.warn("[dsh-graph-client] child not in catalog, opening parent:", childId);
+          rt.open?.(parentSessionId);
+        }
+      } catch (e) {
+        console.warn("[dsh-graph-client] openSubagent failed", e);
+        try { rt?.open?.(parentSessionId); } catch { /* 静默 */ }
+      }
     }
     function sessionLinkBtn(parentSessionId, childId, label) {
       if (!childId) return null;
@@ -390,9 +401,10 @@ window.__ModuleLoader__.load({
     }
     return {
       name: "dsh-graph-client",
-      inject: ["slots"],
+      inject: ["slots", "sessions"],
       apply(ctx) {
         appCtx = ctx;
+        sessionsRt = ctx.sessions ?? null;
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
             { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: "看板" },
