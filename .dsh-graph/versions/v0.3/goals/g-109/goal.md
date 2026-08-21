@@ -8,7 +8,14 @@
   "created_by": "supervisor:k3",
   "version": "v0.3",
   "scope": [],
-  "depends_on": [{ "goal": "g-107", "consumes": ["看板弹窗/抽屉结构与 client.js（避免并行改同一文件）"] }],
+  "depends_on": [
+    {
+      "goal": "g-107",
+      "consumes": [
+        "看板弹窗/抽屉结构与 client.js（避免并行改同一文件）"
+      ]
+    }
+  ],
   "review": {
     "reviewer": "human",
     "prompt": null
@@ -36,6 +43,15 @@
 - 直接改文本＝替换 goal.md「目标描述」小节 + 记 goal.amended（note 注明"直接编辑"）；人工反馈＝graph_amend_goal 追加式（原机制）；
 - 抽屉提示词模板由卡片标题+目标上下文自动生成，渲染为可编辑 textarea，「开始收集」时派发子代理并绑定卡片（child_id/parent_session_id，看板 ↗ 可跳）；
 - 与 backlog g-106（收集项任务化 graph_collect_card 工具）关系：本目标是 UI 半边；g-106 工具落地后切换到它，不重复造派发逻辑。
+
+负责人补充需求（动机：不再依赖线性对话确认待决项，gate 在看板上直接行使）：
+目标卡片弹窗的目标描述部分直接提供「✅ 接受」按钮 + 带文字输入框的「💬 反馈」功能。
+
+语义提案（待负责人确认）：「接受」按当前阶段映射为确认事件——
+- 描述阶段（draft/planning）：确认描述，记 description.confirmed 事件，可推进下一阶段；
+- 判据已登记待确认（ready 前）：确认判据，记 criteria.confirmed（actor=human）；
+- review 阶段：接受＝评审通过，记 review.passed 并 →delivered；
+「反馈」＝graph_amend_goal 追加式修订（原有机制）。
 
 
 ## 质量判据

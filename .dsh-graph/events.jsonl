@@ -209,3 +209,4 @@
 {"ts":"2026-08-21T12:33:41+08:00","actor":"supervisor:k3","event":"goal.created","goal":"g-109","details":{"title":"看板可写交互：目标描述编辑与人工反馈、上下文卡片添加、抽屉收集提示词可编辑","version":"v0.3"}}
 {"ts":"2026-08-21T12:34:17+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-109","details":{"note":"建卡即进入规划（负责人指示已含需求细节）；无外部未知，不派发收集"}}
 {"ts":"2026-08-21T12:34:25+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.transition","goal":"g-109","details":{"from":"draft","to":"planning"}}
+{"ts":"2026-08-21T12:35:32+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-109","details":{"note":"负责人补充：描述区加「接受」按钮+反馈输入框——gate 确认从线性对话搬到看板"}}
