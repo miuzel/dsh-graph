@@ -61,9 +61,22 @@ function params(properties, required) {
 
 const GUIDE = readFileSync(new URL("./supervisor-guide.md", import.meta.url), "utf8");
 
+// g-113：普通 agent 的 dsh-graph 使用指引（精简，非主管繁文）
+const USAGE = [
+  "dsh-graph 是把工作组织成「目标看板」的插件。你有 graph_* 工具可用：",
+  "- graph_create_goal(title[, version, scope]) 建目标（进 backlog，带 version 则排期）；",
+  "- graph_set_criteria(goal, criteria[]) 先登记质量判据（判据先于执行，硬规则）；",
+  "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
+  "- graph_add_card / graph_fill_card / graph_review_card 管理目标下的上下文卡片（信息收集）；",
+  "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展（看板卡片显示这句）；",
+  "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账。",
+  "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
+].join("\n");
+
 export function apply(ctx, config) {
   // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
-  const root = resolveRoot(config);
+  const root = resolveRoot(config); // 默认（init/marker 等无会话上下文时用）
+  const rootFor = (ex) => resolveRoot(config, ex?.agent?.session?.header?.cwd ?? process.cwd()); // g-113 会话 workspace 跟随
   const actorOf = (exec) => `agent:${exec?.agent?.id ?? "dsh"}`;
 
   /** @type {Array<{def: object, run: (args: any, exec: any) => any}>} */
@@ -74,7 +87,7 @@ export function apply(ctx, config) {
         description: "创建目标（默认进 backlog；带 version 则排期入版本）。返回目标 id。",
         parameters: params({ title: str, version: str, scope: strArr }, ["title"]),
       },
-      run: (a, ex) => ({ goal: createGoal(root, { title: a.title, version: a.version, scope: a.scope, actor: actorOf(ex) }) }),
+      run: (a, ex) => ({ goal: createGoal(rootFor(ex), { title: a.title, version: a.version, scope: a.scope, actor: actorOf(ex) }) }),
     },
     {
       def: {
@@ -82,7 +95,7 @@ export function apply(ctx, config) {
         description: "登记目标的质量判据（判据先于执行；自动快照规则库版本）。",
         parameters: params({ goal: str, criteria: strArr }, ["goal", "criteria"]),
       },
-      run: (a, ex) => { setCriteria(root, a.goal, a.criteria, actorOf(ex)); return { ok: true }; },
+      run: (a, ex) => { setCriteria(rootFor(ex), a.goal, a.criteria, actorOf(ex)); return { ok: true }; },
     },
     {
       def: {
@@ -90,7 +103,7 @@ export function apply(ctx, config) {
         description: "目标状态迁移。状态机与不变式由核心层强制；进 blocked 必须给 reason。",
         parameters: params({ goal: str, to: str, reason: str }, ["goal", "to"]),
       },
-      run: (a, ex) => { transition(root, a.goal, a.to, { reason: a.reason, actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => { transition(rootFor(ex), a.goal, a.to, { reason: a.reason, actor: actorOf(ex) }); return { ok: true }; },
     },
     {
       def: {
@@ -101,7 +114,7 @@ export function apply(ctx, config) {
           ["goal", "title", "kind"],
         ),
       },
-      run: (a, ex) => ({ card: addCard(root, a.goal, { title: a.title, kind: a.kind, actor: actorOf(ex) }) }),
+      run: (a, ex) => ({ card: addCard(rootFor(ex), a.goal, { title: a.title, kind: a.kind, actor: actorOf(ex) }) }),
     },
     {
       def: {
@@ -109,7 +122,7 @@ export function apply(ctx, config) {
         description: "填充上下文卡片内容（text 或 content_ref），状态变为 filled。",
         parameters: params({ goal: str, card: str, text: str, content_ref: str, summary: str }, ["goal", "card"]),
       },
-      run: (a, ex) => { fillCard(root, a.goal, a.card, { text: a.text, contentRef: a.content_ref, summary: a.summary, by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => { fillCard(rootFor(ex), a.goal, a.card, { text: a.text, contentRef: a.content_ref, summary: a.summary, by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
     },
     {
       def: {
@@ -117,7 +130,7 @@ export function apply(ctx, config) {
         description: "复核已填充的上下文卡片（filled → reviewed）。",
         parameters: params({ goal: str, card: str }, ["goal", "card"]),
       },
-      run: (a, ex) => { reviewCard(root, a.goal, a.card, { by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => { reviewCard(rootFor(ex), a.goal, a.card, { by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
     },
     {
       def: {
@@ -128,7 +141,7 @@ export function apply(ctx, config) {
           ["goal", "to"],
         ),
       },
-      run: (a, ex) => { moveGoal(root, a.goal, { to: a.to, version: a.version, actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => { moveGoal(rootFor(ex), a.goal, { to: a.to, version: a.version, actor: actorOf(ex) }); return { ok: true }; },
     },
     {
       def: {
@@ -136,7 +149,7 @@ export function apply(ctx, config) {
         description: "记录对目标的修订/补充（人工反馈的一等记录）；可选把修订内容追加进目标描述，使目标内容体现最终修订。",
         parameters: params({ goal: str, note: str, append: str }, ["goal", "note"]),
       },
-      run: (a, ex) => { amendGoal(root, a.goal, { note: a.note, appendDescription: a.append, actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => { amendGoal(rootFor(ex), a.goal, { note: a.note, appendDescription: a.append, actor: actorOf(ex) }); return { ok: true }; },
     },
     {
       def: {
@@ -144,7 +157,7 @@ export function apply(ctx, config) {
         description: "全量不变式校验（状态、归属、判据、依赖环、卡片引用）。返回问题列表。",
         parameters: params({}, []),
       },
-      run: () => ({ problems: validate(root) }),
+      run: (a, ex) => ({ problems: validate(rootFor(ex)) }),
     },
     {
       def: {
@@ -152,7 +165,7 @@ export function apply(ctx, config) {
         description: "从事件流重建各目标状态并与 frontmatter 对账。返回 drift 列表。",
         parameters: params({}, []),
       },
-      run: () => ({ drift: rebuild(root) }),
+      run: (a, ex) => ({ drift: rebuild(rootFor(ex)) }),
     },
     {
       def: {
@@ -160,7 +173,7 @@ export function apply(ctx, config) {
         description: "汇报当前 attempt 的一句最新工作状态（会显示在看板卡片上）。执行过程中应周期性调用。",
         parameters: params({ goal: str, attempt: str, status: str }, ["goal", "attempt", "status"]),
       },
-      run: (a, ex) => { reportStatus(root, a.goal, a.attempt, a.status, actorOf(ex)); return { ok: true }; },
+      run: (a, ex) => { reportStatus(rootFor(ex), a.goal, a.attempt, a.status, actorOf(ex)); return { ok: true }; },
     },
     {
       def: {
@@ -168,7 +181,7 @@ export function apply(ctx, config) {
         description: "supervisor 汇报自己的一句最新工作状态（显示在看板顶部状态栏，带运行动画）。status 要简短（一句人话）。",
         parameters: params({ status: str }, ["status"]),
       },
-      run: (a, ex) => { reportSupervisorStatus(root, a.status, actorOf(ex)); return { ok: true }; },
+      run: (a, ex) => { reportSupervisorStatus(rootFor(ex), a.status, actorOf(ex)); return { ok: true }; },
     },
     {
       def: {
@@ -178,7 +191,7 @@ export function apply(ctx, config) {
       },
       run: async (a, ex) => {
         const executor = a.executor ?? actorOf(ex);
-        const attempt = startAttempt(root, a.goal, { executor, actor: actorOf(ex) });
+        const attempt = startAttempt(rootFor(ex), a.goal, { executor, actor: actorOf(ex) });
         // 注意：返回值必须是无损 JSON——绝不写入值为 undefined 的字段（registry 会拒绝）
         const result = { attempt, child_id: null };
         const subagents = ctx.get?.("subagents");
@@ -191,8 +204,8 @@ export function apply(ctx, config) {
                 return typeof p?.prepareContinuable === "function";
               }) ?? "spawn";
             // 模型路由：工具参数 > project.yaml executor.provider/model > 继承父会话
-            const goalFile = findGoalFile(root, a.goal);
-            const rel = goalFile ? relative(root, goalFile) : null;
+            const goalFile = findGoalFile(rootFor(ex), a.goal);
+            const rel = goalFile ? relative(rootFor(ex), goalFile) : null;
             const prompt = [
               `你是 dsh-graph 目标 ${a.goal} 的执行 attempt ${attempt}。`,
               rel ? `目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。` : null,
@@ -211,7 +224,7 @@ export function apply(ctx, config) {
             const request = { parent: ex.agent, prompt: text(prompt) };
             const agentOptions = {};
             // 模型路由：工具参数 > project.yaml executor.provider/model > 继承父会话（每次调用现读，改配置免重启）
-            const cfg = readExecutorModel(root);
+            const cfg = readExecutorModel(rootFor(ex));
             const effProvider = a.provider ?? cfg.provider ?? null;
             const effModel = a.model ?? cfg.model ?? null;
             if (effProvider) agentOptions.provider = effProvider;
@@ -223,7 +236,7 @@ export function apply(ctx, config) {
               request,
               signal: ex.signal,
             });
-            bindAttemptChild(root, a.goal, attempt, started.childId, actorOf(ex), ex.agent?.session?.id);
+            bindAttemptChild(rootFor(ex), a.goal, attempt, started.childId, actorOf(ex), ex.agent?.session?.id);
             result.child_id = started.childId;
             if (effProvider || effModel) result.model_route = `${effProvider ?? "继承"}/${effModel ?? "继承"}`;
           } catch (e) {
@@ -248,7 +261,7 @@ export function apply(ctx, config) {
         }, ["goal", "verdict"]),
       },
       run: (a, ex) => {
-        resolveAccept(root, a.goal, {
+        resolveAccept(rootFor(ex), a.goal, {
           actor: actorOf(ex),
           verdict: a.verdict,
           objection: a.objection,
@@ -267,6 +280,8 @@ export function apply(ctx, config) {
     // 注册 supervisor 工作指南为运行时技能（可选服务，缺失时静默）
     const skills = ctx.get?.('skills');
     if (skills) { try { skills.register({ name: 'dsh-graph-supervisor', description: 'dsh-graph 主管 Agent 工作指南', source: 'dsh-graph-host', content: GUIDE }); } catch { /* 静默 */ } }
+    // g-113：普通 agent 的 dsh-graph 使用指引（新会话开箱即用）
+    if (skills) { try { skills.register({ name: 'dsh-graph', description: 'dsh-graph 目标看板：用 graph_* 工具管理目标/判据/卡片/执行', source: 'dsh-graph-host', content: USAGE }); } catch { /* 静默 */ } }
 
     const disposers = tools.map((t) =>
       ctx.tools.register({ ...t.def, output: objOut, execute: (args, exec) => t.run(args, exec) }),
