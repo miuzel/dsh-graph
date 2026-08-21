@@ -108,6 +108,11 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
   - 必须引用的文件给**工作目录相对精确路径**（含 versions/vX.Y/goals/
     前缀），禁止"自己去找到 goal.md"式指令；
   - 冻结脚本路径、验收命令逐条写全；
+- **模型路由**：执行子代理**不继承父会话模型**——统一走 project.yaml 的
+  `executor.provider/model`（当前 kimi-coding/kimi-for-coding），
+  `graph_start_attempt` 的 provider/model 参数可临时覆盖；路由结果显示在
+  返回的 `model_route` 字段。背景：默认路由曾把子代理打到余额不足的
+  newapi-aseit（403 insufficient_user_quota 空失败，负责人指正）；
 - 完成声明 ≠ 交付：声明后进入 review，默认人工审；不通过则打回开新 attempt；
 - 验收脚本（判据中的 `[script]` 项）由规划方在 planning 时冻结（R-03），
   执行方不得修改；脚本报错优先怀疑实现与设计，不是脚本。

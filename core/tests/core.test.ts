@@ -73,6 +73,20 @@ test("无收集需求时 planning→ready 直达合法", () => {
   assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "ready");
 });
 
+test("readExecutorModel 读取 executor.provider/model，缺失返回 null", async () => {
+  const { readExecutorModel } = await import("../ops.ts");
+  const root = tmpRoot();
+  assert.deepEqual(readExecutorModel(root), { provider: null, model: null });
+  writeFileSync(
+    join(root, "project.yaml"),
+    "name: t\nexecutor:\n  provider: kimi-coding   # 注释\n  model: kimi-for-coding\n",
+  );
+  assert.deepEqual(readExecutorModel(root), {
+    provider: "kimi-coding",
+    model: "kimi-for-coding",
+  });
+});
+
 test("跳阶段迁移被拒绝", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", actor: "test" });

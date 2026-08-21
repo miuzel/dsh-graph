@@ -8,7 +8,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createGoal,
@@ -26,6 +26,8 @@ import {
   amendGoal,
   boardProjection,
   readSupervisorSession,
+  readExecutorModel,
+  findGoalFile,
 } from "../core/ops.ts";
 
 export const name = "dsh-graph-host";
@@ -154,8 +156,8 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_start_attempt",
-        description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。",
-        parameters: params({ goal: str, executor: str }, ["goal"]),
+        description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。",
+        parameters: params({ goal: str, executor: str, provider: str, model: str }, ["goal"]),
       },
       run: async (a, ex) => {
         const executor = a.executor ?? actorOf(ex);
@@ -171,22 +173,32 @@ export function apply(ctx, config) {
                 const p = subagents.getProvider(n);
                 return typeof p?.prepareContinuable === "function";
               }) ?? "spawn";
+            // 模型路由：工具参数 > project.yaml executor.provider/model > 继承父会话
+            const goalFile = findGoalFile(root, a.goal);
+            const rel = goalFile ? relative(root, goalFile) : null;
             const prompt = [
               `你是 dsh-graph 目标 ${a.goal} 的执行 attempt ${attempt}。`,
-              `工作区 .dsh-graph 下有该目标的 goal.md（描述、质量判据、上下文卡片）。`,
+              rel ? `目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。` : null,
               `执行过程中周期性调用 graph_report_status 汇报一句最新状态；完成后声明完成并等待 review。`,
-            ].join("\n");
+            ].filter(Boolean).join("\n");
+            const request = { parent: ex.agent, prompt: text(prompt) };
+            const agentOptions = {};
+            // 模型路由：工具参数 > project.yaml executor.provider/model > 继承父会话（每次调用现读，改配置免重启）
+            const cfg = readExecutorModel(root);
+            const effProvider = a.provider ?? cfg.provider ?? null;
+            const effModel = a.model ?? cfg.model ?? null;
+            if (effProvider) agentOptions.provider = effProvider;
+            if (effModel) agentOptions.model = effModel;
+            if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
             const started = await subagents.startContinuable({
               provider,
               label: `graph:${a.goal}/${attempt}`,
-              request: {
-                parent: ex.agent,
-                prompt: text(prompt),
-              },
+              request,
               signal: ex.signal,
             });
             bindAttemptChild(root, a.goal, attempt, started.childId, actorOf(ex), ex.agent?.session?.id);
             result.child_id = started.childId;
+            if (effProvider || effModel) result.model_route = `${effProvider ?? "继承"}/${effModel ?? "继承"}`;
           } catch (e) {
             result.note = `subagent 派发失败（attempt 已本地创建）：${e?.message ?? e}`;
           }

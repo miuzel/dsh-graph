@@ -117,6 +117,22 @@ export function readSupervisorSession(root: string): string | null {
   return m ? m[1] : null;
 }
 
+/** 读取 project.yaml 的 executor.provider/model（执行子代理模型路由，负责人 2026-08 指示：
+ *  子代理不继承父会话模型，统一走配置的 provider 防余额/配额串号）。
+ *  零依赖行扫描；缺失字段返回 null。 */
+export function readExecutorModel(root: string): { provider: string | null; model: string | null } {
+  const file = join(root, "project.yaml");
+  if (!existsSync(file)) return { provider: null, model: null };
+  const text = readFileSync(file, "utf8");
+  const block = text.match(/^executor:\s*\n((?:[ \t].*\n)*)/m);
+  if (!block) return { provider: null, model: null };
+  const grab = (k: string): string | null => {
+    const m = block[1].match(new RegExp(`^[ \\t]+${k}:\\s*"?([^\\s"#]+)"?`, "m"));
+    return m ? m[1] : null;
+  };
+  return { provider: grab("provider"), model: grab("model") };
+}
+
 const GOAL_BODY = `
 ## 目标描述
 
