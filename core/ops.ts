@@ -117,6 +117,32 @@ export function readSupervisorSession(root: string): string | null {
   return m ? m[1] : null;
 }
 
+/** supervisor 汇报自己的状态摘要（看板顶部状态栏 status_line，g-a92e1406 判据 3① 扩展）。
+ *  事件流唯一真相源（R-02）：只追加 supervisor.status_reported 事件，读取时取最新一条。 */
+export function reportSupervisorStatus(root: string, line: string, actor: string): void {
+  if (!line.trim()) throw new GraphError("status 不能为空");
+  appendEvent(root, {
+    actor,
+    event: "supervisor.status_reported",
+    details: { status: line },
+  });
+}
+
+/** 读取 supervisor 最新一条状态摘要（事件流，坏行跳过）；无则 null。 */
+export function readSupervisorStatus(root: string): string | null {
+  let latest: string | null = null;
+  try {
+    for (const e of readEvents(root)) {
+      if (e.event !== "supervisor.status_reported") continue;
+      const s = String(e.details?.status ?? "").trim();
+      if (s) latest = s;
+    }
+  } catch {
+    /* 事件流异常时返回已读到的最新值（可能为 null） */
+  }
+  return latest;
+}
+
 /** 读取 project.yaml 的 executor.provider/model（执行子代理模型路由，负责人 2026-08 指示：
  *  子代理不继承父会话模型，统一走配置的 provider 防余额/配额串号）。
  *  零依赖行扫描；缺失字段返回 null。 */
@@ -725,6 +751,13 @@ export interface BoardGoal {
   depends_on: string[];
   pk_lanes: number;
   blocked_reason: string | null;
+  attempt_child_id?: string | null;
+  attempt_parent_session_id?: string | null;
+  created_at?: string | null;
+  attempt_started_at?: string | null;
+  /** 被复用派生（g-a92e1406）：子代理被跨目标复用时，旧绑定目标标 reused_by = 新目标 id */
+  reused_by?: string | null;
+  cards?: Array<Record<string, any>>;
 }
 
 export interface BoardVersion {
@@ -777,7 +810,11 @@ export function boardProjection(root: string): {
           try {
             const m = loadGoal(f).meta;
             if (m.child_id) {
-              attemptChild = { child_id: m.child_id, parent_session_id: m.parent_session_id ?? null };
+              attemptChild = {
+                child_id: m.child_id,
+                parent_session_id: m.parent_session_id ?? null,
+                started_at: m.started_at ?? null,
+              };
               break;
             }
           } catch { /* 跳过 */ }
@@ -816,6 +853,9 @@ export function boardProjection(root: string): {
       ),
       attempt_child_id: attemptChild.child_id ?? null,
       attempt_parent_session_id: attemptChild.parent_session_id ?? null,
+      created_at: String(meta.created_at ?? ""),
+      attempt_started_at: attemptChild.started_at ?? null,
+      reused_by: null,
       pk_lanes: meta.pk?.lanes ?? 1,
       blocked_reason: meta.blocked_reason ?? null,
       cards,
@@ -880,6 +920,48 @@ export function boardProjection(root: string): {
       }
     }
   }
+  // 被复用派生（g-a92e1406）：同一 child_id 跨目标绑定时，旧绑定加 reused 标记。
+  // 数据双源：① attempt.reused 事件（权威方向：goal=旧绑定, details.reused_by="新目标/att-N"）
+  //           ② 绑定记录兜底（无事件时按绑定 attempt 的 started_at 定旧新，最早者为旧绑定）
+  const allGoals = [
+    ...versions.flatMap((v) => v.goals),
+    ...standalone,
+    ...backlog,
+  ];
+  const reusedBy = new Map<string, string>(); // oldGoalId -> newGoalId
+  try {
+    for (const e of readEvents(root)) {
+      if (e.event !== "attempt.reused" || !e.goal) continue;
+      const rb = String(e.details?.reused_by ?? "");
+      const newGoal = rb.split("/")[0];
+      if (newGoal) reusedBy.set(String(e.goal), newGoal);
+    }
+  } catch {
+    /* 事件流异常时退化为绑定记录 */
+  }
+  // 绑定记录：同一 child 出现在多个目标，且无事件方向 → 按绑定时间定旧/新
+  const byChild = new Map<string, BoardGoal[]>();
+  for (const g of allGoals) {
+    if (!g.attempt_child_id) continue;
+    const arr = byChild.get(g.attempt_child_id) ?? [];
+    arr.push(g);
+    byChild.set(g.attempt_child_id, arr);
+  }
+  for (const arr of byChild.values()) {
+    if (arr.length < 2) continue;
+    // 该 child 已有事件方向（旧→新）则跳过兜底
+    const decided = arr.filter((g) => reusedBy.has(g.id));
+    if (decided.length > 0) continue;
+    arr.sort((a, b) =>
+      String(a.attempt_started_at ?? a.created_at ?? "").localeCompare(
+        String(b.attempt_started_at ?? b.created_at ?? ""),
+      ),
+    );
+    const oldG = arr[0];
+    const newG = arr[arr.length - 1];
+    if (oldG.id !== newG.id) reusedBy.set(oldG.id, newG.id);
+  }
+  for (const g of allGoals) g.reused_by = reusedBy.get(g.id) ?? null;
   return { generated_at: nowIso(), versions, standalone, backlog };
 }
 

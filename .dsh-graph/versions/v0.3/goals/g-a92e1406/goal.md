@@ -2,7 +2,7 @@
 {
   "id": "g-a92e1406",
   "title": "状态摘要运行动画与履历：流动背景+图标动画、modal 显示、近期动态收录汇报",
-  "status": "planning",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-21T11:38:46+08:00",
   "created_by": "agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b",
@@ -49,8 +49,8 @@
 ## 质量判据
 
 1. scripts/check_ga92e1406.sh 全绿（静态取证：CSS 流动背景+图标动画、运行/阻塞动画区分、modal status_line、dg-tab tab 结构、MEANINGFUL 收录 attempt.status_reported、被复用徽章）
-2. core 测试不回归（node --test core/tests 全绿）
-3. 负责人浏览器实测（判据 3）：①运行中摘要流动背景+图标动画、⛔ 阻塞行静态；②modal 标题下可见状态摘要；③modal 为 详情/近期动态 tab 结构；④近期动态含「汇报：…」条目；⑤g-107 卡片实时代理控件显示「被复用→g-108」标记
+2. core 测试不回归（node --test core/tests 全绿，当前 23/23）
+3. 负责人浏览器实测：①运行中摘要流动背景+图标动画、⛔ 阻塞行静态；②modal 标题下可见状态摘要；③modal 为 详情/近期动态 tab（页签与面板一体）；④近期动态为表格+排序筛选；⑤g-107 卡片显示「被复用→g-108」；⑥顶部 supervisor 状态栏显示 status_line 并随运行状态带动画
 4. 无静默失败：任何 UI 交互失败须可见报错
 
 ## 证据台账

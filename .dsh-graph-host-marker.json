@@ -12,6 +12,7 @@
     "graph_validate",
     "graph_rebuild",
     "graph_report_status",
+    "graph_report_supervisor_status",
     "graph_start_attempt"
   ],
   "validate": "PASS"

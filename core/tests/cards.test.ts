@@ -4,12 +4,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { readFileSync } from "node:fs";
 import {
   init,
   createGoal,
   startAttempt,
+  bindAttemptChild,
   addCard,
   fillCard,
   reviewCard,
@@ -20,7 +21,7 @@ import {
   GraphError,
 } from "../ops.ts";
 import { serializeDoc } from "../model.ts";
-import { readEvents } from "../events.ts";
+import { readEvents, appendEvent } from "../events.ts";
 
 function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-cards-"));
@@ -125,4 +126,53 @@ test("boardProjection：版本/独立/backlog + status_line 投影", async () =>
   assert.equal(b.versions[0].goals[0].reviewer, "human");
   assert.equal(b.backlog.length, 1);
   assert.equal(b.standalone.length, 0);
+});
+
+test("boardProjection：被复用派生（attempt.reused 事件 + 绑定记录双源）", async () => {
+  const { boardProjection } = await import("../ops.ts");
+  const root = tmpRoot();
+  const oldId = createGoal(root, { title: "旧绑定甲", version: "v-t", actor: "test" });
+  const newId = createGoal(root, { title: "新绑定乙", version: "v-t", actor: "test" });
+  const attOld = startAttempt(root, oldId, { executor: "agent:t", actor: "test" });
+  const attNew = startAttempt(root, newId, { executor: "agent:t", actor: "test" });
+  // 同一 child 绑定到两个目标（跨目标复用）
+  bindAttemptChild(root, oldId, attOld, "child-r", "test");
+  bindAttemptChild(root, newId, attNew, "child-r", "test");
+  // attempt.reused 事件：旧绑定 → 新目标（权威方向）
+  appendEvent(root, {
+    actor: "supervisor:k3",
+    event: "attempt.reused",
+    goal: oldId,
+    details: { attempt: attOld, child_id: "child-r", reused_by: `${newId}/${attNew}` },
+  });
+  const b = boardProjection(root);
+  const byId = new Map(b.versions[0].goals.map((g) => [g.id, g]));
+  assert.equal(byId.get(oldId)?.reused_by, newId);
+  assert.equal(byId.get(newId)?.reused_by, null);
+  // 事件流异常时退化为绑定记录（按绑定时间定旧/新）
+  const root2 = tmpRoot();
+  const a2 = createGoal(root2, { title: "甲2", version: "v-t", actor: "test" });
+  const b2 = createGoal(root2, { title: "乙2", version: "v-t", actor: "test" });
+  const attA2 = startAttempt(root2, a2, { executor: "agent:t", actor: "test" });
+  const attB2 = startAttempt(root2, b2, { executor: "agent:t", actor: "test" });
+  // 固定绑定时间：a2 先绑定（旧绑定），b2 后绑定（新绑定），避免同秒抖动
+  const { loadGoal, saveGoal, findGoalFile } = await import("../ops.ts");
+  const fileA = join(dirname(findGoalFile(root2, a2)), "attempts", attA2, "attempt.md");
+  const docA = loadGoal(fileA);
+  docA.meta.started_at = "2026-08-21T01:00:00+08:00";
+  saveGoal(fileA, docA);
+  bindAttemptChild(root2, a2, attA2, "child-x", "test");
+  bindAttemptChild(root2, b2, attB2, "child-x", "test");
+  const b2p = boardProjection(root2);
+  const byId2 = new Map(b2p.versions[0].goals.map((g) => [g.id, g]));
+  // 无事件：a2（先绑定）为旧绑定 → reused_by = b2；b2 不打标
+  assert.equal(byId2.get(a2)?.reused_by, b2);
+  assert.equal(byId2.get(b2)?.reused_by, null);
+  // 未复用（child 不跨目标）不打标
+  const root3 = tmpRoot();
+  const c3 = createGoal(root3, { title: "丙3", version: "v-t", actor: "test" });
+  const attC3 = startAttempt(root3, c3, { executor: "agent:t", actor: "test" });
+  bindAttemptChild(root3, c3, attC3, "child-uniq", "test");
+  const b3p = boardProjection(root3);
+  assert.equal(b3p.versions[0].goals[0].reused_by, null);
 });

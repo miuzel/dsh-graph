@@ -11,6 +11,8 @@
 #   v3：补 modal tab 结构断言（第 4 条）与「被复用」徽章断言（第 6 条），
 #       对应负责人补充的 tab 承载要求与会话复用政策；
 #       断言使用专名标记 dg-tab / 被复用，避免真空通过。
+#   v4：修复 SIGPIPE 竞态（att-004 上报）——awk|grep -q 在 pipefail 下 grep 提前
+#       退出致 awk SIGPIPE 间歇 FAIL；item3/item5 改 grep "…">/dev/null 读完再退。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 C=dsh-graph-client/lib/client.js
@@ -29,7 +31,7 @@ grep -q "dg-running\|dg-flow\|dg-pulse" "$C" \
 
 echo "== 3. modal 标题下方显示状态摘要 =="
 # GoalModal 内渲染 attempts 的 status_line
-awk '/function GoalModal/,/^    }$/' "$C" | grep -q "status_line" \
+awk '/function GoalModal/,/^    }$/' "$C" | grep "status_line" >/dev/null \
   || { echo "FAIL: modal 未渲染 status_line"; exit 1; }
 
 echo "== 4. modal 改为 tab 结构（详情 / 近期动态） =="
@@ -42,7 +44,7 @@ grep -q "详情" "$C"     || { echo "FAIL: 缺「详情」tab 标签"; exit 1; }
 echo "== 5. 状态汇报履历进入近期动态白名单 =="
 grep -q '"attempt.status_reported"' "$C" \
   || { echo "FAIL: attempt.status_reported 未出现"; exit 1; }
-awk '/const MEANINGFUL = new Set/,/]);/' "$C" | grep -q "attempt.status_reported" \
+awk '/const MEANINGFUL = new Set/,/]);/' "$C" | grep "attempt.status_reported" >/dev/null \
   || { echo "FAIL: MEANINGFUL 白名单未含 attempt.status_reported"; exit 1; }
 
 echo "== 6. 被复用徽章（同一 child 跨目标绑定时旧绑定打标） =="

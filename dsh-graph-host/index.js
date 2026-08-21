@@ -21,6 +21,8 @@ import {
   reviewCard,
   startAttempt,
   reportStatus,
+  reportSupervisorStatus,
+  readSupervisorStatus,
   bindAttemptChild,
   moveGoal,
   amendGoal,
@@ -36,7 +38,12 @@ export const inject = ["tools"];
 /** 看板端点载荷：board 投影 + supervisorSession（project.yaml 的 supervisor.session，g-108）。
  *  由 dsh-graph-client 的 host 半边（/api/dsh-graph）消费，会话 id 不在任何代码里硬编码。 */
 export function boardPayload(root) {
-  return { ...boardProjection(root), supervisorSession: readSupervisorSession(root) };
+  return {
+    ...boardProjection(root),
+    supervisorSession: readSupervisorSession(root),
+    // g-a92e1406 判据 3① 扩展：supervisor 状态栏显示 supervisor 自己的 status_line（事件流最新一条）
+    supervisorStatus: readSupervisorStatus(root),
+  };
 }
 
 const text = (s) => [{ type: "text", text: s }];
@@ -152,6 +159,14 @@ export function apply(ctx, config) {
         parameters: params({ goal: str, attempt: str, status: str }, ["goal", "attempt", "status"]),
       },
       run: (a, ex) => { reportStatus(root, a.goal, a.attempt, a.status, actorOf(ex)); return { ok: true }; },
+    },
+    {
+      def: {
+        name: "graph_report_supervisor_status",
+        description: "supervisor 汇报自己的一句最新工作状态（显示在看板顶部状态栏，带运行动画）。status 要简短（一句人话）。",
+        parameters: params({ status: str }, ["status"]),
+      },
+      run: (a, ex) => { reportSupervisorStatus(root, a.status, actorOf(ex)); return { ok: true }; },
     },
     {
       def: {

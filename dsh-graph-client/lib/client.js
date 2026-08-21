@@ -33,13 +33,15 @@ window.__ModuleLoader__.load({
     };
 
     // 近期动态只保留对人有用的事件：泳道切换、修订与人工补充、判据/评审/交付关键节点
+    // g-a92e1406：补 attempt.status_reported（状态汇报履历）
     const MEANINGFUL = new Set([
       "goal.transition", "goal.amended", "scope.note", "criteria.confirmed",
       "completion.claimed", "review.passed", "review.failed", "attempt.started",
-      "goal.moved", "goal.created",
+      "goal.moved", "goal.created", "attempt.status_reported",
     ]);
 
-    function humanEvent(e) {
+    // 拆出事件三要素（时间/事件/执行者），供表格列渲染与 humanEvent 复用
+    function eventParts(e) {
       const d = e.details ?? {};
       let what = EVENT_LABEL[e.event];
       if (what === null || what === undefined) {
@@ -57,6 +59,11 @@ window.__ModuleLoader__.load({
         const dt = new Date(e.ts);
         when = `${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")} ${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
       } catch { when = String(e.ts ?? "").slice(5, 16); }
+      return { when, what, who };
+    }
+
+    function humanEvent(e) {
+      const { when, what, who } = eventParts(e);
       return `${when}  ${what}（${who}）`;
     }
 
@@ -72,6 +79,31 @@ window.__ModuleLoader__.load({
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
       .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); }
+      /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */
+      @keyframes dg-flow-bg {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+      }
+      @keyframes dg-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.45; transform: scale(1.25); }
+      }
+      @keyframes dg-spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      .dg-running-flow {
+        background: linear-gradient(90deg, rgba(76,141,255,0.30), rgba(58,166,117,0.42), rgba(76,141,255,0.30));
+        background-size: 200% 100%;
+        animation: dg-flow-bg 2.5s ease infinite;
+        border-radius: 4px;
+        padding: 2px 6px;
+        box-shadow: inset 0 0 0 1px rgba(76,141,255,.45);
+      }
+      .dg-running-flow .dg-icon-pulse { animation: dg-pulse 1.2s ease-in-out infinite; display: inline-block; }
+      .dg-running-flow .dg-icon-spin { animation: dg-spin 1.5s linear infinite; display: inline-block; }
+      /* 阻塞行保持静态，无动画类 */
     `;
 
     const S = {
@@ -311,9 +343,13 @@ window.__ModuleLoader__.load({
           h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
                                textOverflow: "ellipsis", whiteSpace: "nowrap" } },
             meter || "投影待推送")),
+        // g-a92e1406：status_line 摘要并入状态小窗——运行中前缀 ⏳ 走 StatusLine 带动画
+        //（流动背景 + 图标 pulse），空闲（刚执行完）前缀 ✅ 保持静态；⛔ 阻塞行由调用方静态渲染。
         props.statusLine
-          ? h("div", { style: S.liveLine, title: (running ? "进行中" : "最近已完成") + "：" + props.statusLine },
-              (running ? "⏳ " : "✅ ") + props.statusLine)
+          ? (running
+              ? h(StatusLine, { text: props.statusLine, blocked: false, running: true })
+              : h("div", { style: S.liveLine, title: "最近已完成：" + props.statusLine },
+                  "✅ " + props.statusLine))
           : null,
         line ? h("div", { style: S.liveLine, title: line }, "⏵ " + line) : null,
       );
@@ -517,6 +553,8 @@ window.__ModuleLoader__.load({
     // g-108 看板顶部 supervisor 状态栏：复用 LiveStrip（运行/空闲、最新流式行、tok/ctx）
     // + 模型名（useSessionModel，顶层会话直接查）+ 一键跳转主管对话。
     // 会话 id 来自 board 端点下发的 supervisorSession（project.yaml），不硬编码。
+    // g-a92e1406 判据 3① 扩展：statusLine 传 supervisor 自己的 status_line（事件流最新一条），
+    // 运行中由 LiveStrip 走 StatusLine 带动画（流动背景 + 图标 pulse）。
     function SupervisorBar(props) {
       const { model, modelErr } = useSessionModel(props.id, null);
       const jump = () => {
@@ -532,7 +570,7 @@ window.__ModuleLoader__.load({
         { style: S.supervisorBar, className: "dg-supervisor" },
         h("span", { style: { fontWeight: 600, flexShrink: 0 } }, "🧭 主管"),
         h("div", { style: { flex: 1, minWidth: 0 } },
-          h(LiveStrip, { parentId: null, childId: props.id })),
+          h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null })),
         h("span", { style: { ...S.meta, flexShrink: 0 } },
           model ? `${model.provider}/${model.model}` : modelErr ? "模型不可用" : "模型查询中…"),
         h("button", {
@@ -542,8 +580,18 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // g-a92e1406：被复用徽章——同一 child_id 跨目标绑定时旧绑定显示「被复用→新目标」
+    function ReusedBadge(props) {
+      const { childId, reusedBy } = props;
+      if (!childId || !reusedBy) return null;
+      return h("div", { style: { ...S.meta, color: "#e0a53a", marginTop: 2 } },
+        `♻️ 被复用→${reusedBy}`);
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
+    // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
+    // 客户端直接消费 g.reused_by，不再用数组顺序猜测旧/新绑定。
     function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus) {
       const blocked = g.status === "blocked";
       const deps = g.depends_on ?? [];
@@ -559,6 +607,7 @@ window.__ModuleLoader__.load({
       if (g.reviewer === "human") badges.push("👤人审");
       if (g.reviewer === "ai") badges.push("🤖AI审");
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
+      const reusedBy = g.reused_by ?? null;
       return h(
         "div",
         { key: g.id, style, className: "dg-card" + (activeGoal ? " dg-card-active" : ""),
@@ -576,15 +625,16 @@ window.__ModuleLoader__.load({
         blocked && g.blocked_reason
           ? h("div", { style: { ...S.statusLine, color: "#d66" } }, "⛔ " + g.blocked_reason)
           : null,
-        // g-107/g-108：执行会话内嵌实时条——status_line 摘要并入状态小窗
-        //（运行中 ⏳ / 空闲刚执行完 ✅）；无执行会话时退化为独立状态行
+        // g-a92e1406：执行会话内嵌实时条——status_line 摘要并入状态小窗
+        //（运行中 ⏳ / 空闲刚执行完 ✅）；无执行会话时退化为独立状态行（带动画）
         g.attempt_child_id
           ? h("div", { key: "live", onClick: (e) => e.stopPropagation() },
               h(LiveStrip, { parentId: g.attempt_parent_session_id, childId: g.attempt_child_id,
                              statusLine: g.status_line }))
           : g.status_line
-            ? h("div", { style: S.statusLine }, "⏳ " + g.status_line)
+            ? h(StatusLine, { text: g.status_line, blocked: g.status === "blocked", running: g.status === "in_progress" })
             : null,
+        reusedBy ? h(ReusedBadge, { childId: g.attempt_child_id, reusedBy }) : null,
         (g.cards ?? []).map((c) =>
           h("div", {
             key: c.id,
@@ -602,6 +652,21 @@ window.__ModuleLoader__.load({
               ? h("div", { onClick: (e) => e.stopPropagation() },
                   h(LiveStrip, { parentId: c.parent_session_id, childId: c.child_id }))
               : null)),
+      );
+    }
+
+    // g-a92e1406：状态摘要行——运行中带流动背景+图标动画，阻塞行静态
+    function StatusLine(props) {
+      const { text, blocked, running } = props;
+      if (!text) return null;
+      if (blocked) {
+        return h("div", { style: { ...S.statusLine, color: "#d66" } }, "⛔ " + text);
+      }
+      const animClass = running ? "dg-running-flow" : "";
+      return h(
+        "div", { className: animClass, style: { ...S.statusLine, marginTop: 3 } },
+        h("span", { className: running ? "dg-icon-pulse" : "" }, "⏳ "),
+        text,
       );
     }
 
@@ -722,9 +787,12 @@ window.__ModuleLoader__.load({
         fbNote ? h("div", { style: { ...S.meta, marginTop: 3 } }, fbNote) : null);
     }
 
-    // 详情 modal：扼要分区 + 人类化事件
+    // 详情 modal：g-a92e1406 改为 tab 结构（详情 / 近期动态）
     function GoalModal(props) {
       const [state, setState] = React.useState({ loading: true });
+      const [tab, setTab] = React.useState("detail"); // "detail" | "activity"
+      const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
+      const [logFilter, setLogFilter] = React.useState(""); // "" 全部 / 事件名
       React.useEffect(() => {
         let alive = true;
         fetch("/api/dsh-graph/goal?id=" + encodeURIComponent(props.id))
@@ -775,7 +843,7 @@ window.__ModuleLoader__.load({
           status === "blocked" && meta.blocked_reason
             ? h("div", { key: "m3", style: { ...S.meta, color: "#d66" } }, "⛔ " + meta.blocked_reason)
             : statusLine
-              ? h("div", { key: "m3", style: { ...S.meta, fontStyle: "italic" } }, "⏳ " + statusLine)
+              ? h(StatusLine, { key: "m3", text: statusLine, blocked: false, running: status === "in_progress" })
               : null,
         ];
         // g-107：📡 会话实时面板上移至标题与状态摘要下方（默认折叠，点击展开）
@@ -784,27 +852,134 @@ window.__ModuleLoader__.load({
           ? h(SessionPanel, { parentId: att.parent_session_id, childId: att.child_id, collapsible: true,
                               statusLine: lastAtt?.status_line ?? null })
           : null;
-        content = [
-          desc ? h("div", { key: "d", style: S.modalSection },
-            h("div", { style: S.modalH }, "📋 目标描述"), desc) : null,
-          crit ? h("div", { key: "c", style: S.modalSection },
-            h("div", { style: S.modalH }, "✅ 质量判据（勾选确认 / 逐条反馈）"),
-            h(CriteriaChecklist, { goalId: props.id, crit, att })) : null,
+
+        // g-a92e1406：tab 内容（占位文案视觉降级：trim 后以「（待」开头 → 小字灰色放标题右侧）
+        // 识别逻辑：trim 后以「（待」开头 → 占位；若占位后仍有正文，剥离占位行只显示正文
+        function isPlaceholder(text) {
+          const t = String(text ?? "").trim();
+          return t.startsWith("（待");
+        }
+        function parsePlaceholder(text) {
+          const t = String(text ?? "").trim();
+          if (!t.startsWith("（待")) return { isPh: false, marker: null, body: t };
+          const m = t.match(/^（待[^）]*）/);
+          const marker = m ? m[0] : "（待填写）";
+          const rest = t.replace(/^（待[^）]*）\s*/, "").trim();
+          return { isPh: true, marker, body: rest };
+        }
+        function sectionBlock(key, title, body, extra) {
+          const { isPh, marker, body: content } = parsePlaceholder(body);
+          // 有 extra（富组件，如 CriteriaChecklist）时不渲染 body 文本，避免判据显示两遍
+          return h("div", { key, style: S.modalSection },
+            h("div", { style: S.modalH },
+              title,
+              isPh && !content ? h("span", { style: { ...S.meta, fontSize: 12, marginLeft: 6, fontWeight: 400 } }, marker) : null),
+            extra != null ? null : (isPh && !content ? null : content),
+            extra ?? null);
+        }
+        const detailTab = [
+          desc != null ? sectionBlock("d", "📋 目标描述", desc) : null,
+          crit != null ? sectionBlock("c", "✅ 质量判据（勾选确认 / 逐条反馈）", crit,
+            !isPlaceholder(crit)
+              ? h(CriteriaChecklist, { goalId: props.id, crit, att })
+              : null) : null,
           (d.cards ?? []).length
             ? h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🗂 信息收集"),
                 d.cards.map((c) => h("div", { key: c.id, style: S.subCard },
                   `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)))
             : null,
-          (() => {
-            const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));
-            return meaningful.length
-              ? h("div", { key: "e", style: S.modalSection },
-                  h("div", { style: S.modalH }, "🕘 近期动态"),
-                  meaningful.slice(-10).map((e, i) =>
-                    h("div", { key: i, style: S.meta }, humanEvent(e))))
-              : null;
-          })(),
+        ];
+        const activityTab = (() => {
+          const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));
+          if (!meaningful.length) {
+            return [h("div", { key: "empty", style: S.meta }, "（暂无近期动态）")];
+          }
+          // 简单筛选：按事件类型过滤；排序：按 ts 升/降
+          const filtered = logFilter ? meaningful.filter((e) => e.event === logFilter) : meaningful;
+          const sorted = [...filtered].sort((a, b) =>
+            logSort === "asc" ? String(a.ts).localeCompare(String(b.ts))
+                              : String(b.ts).localeCompare(String(a.ts)));
+          const typeOptions = [...MEANINGFUL].map((ev) =>
+            h("option", { key: ev, value: ev }, EVENT_LABEL[ev] ?? ev));
+          const th = { textAlign: "left", padding: "4px 8px", fontWeight: 700,
+                       borderBottom: "1px solid rgba(128,128,128,.45)", fontSize: 12 };
+          const td = { padding: "3px 8px", borderBottom: "1px solid rgba(128,128,128,.12)", fontSize: 12 };
+          return [
+            // 排序 / 筛选工具条
+            h("div", { key: "tools", style: { display: "flex", gap: 8, alignItems: "center", marginBottom: 6 } },
+              h("span", { style: { ...S.meta, fontSize: 11 } }, `共 ${sorted.length} 条`),
+              h("select", {
+                value: logFilter,
+                onChange: (e) => setLogFilter(e.target.value),
+                style: { fontSize: 12, padding: "2px 6px", cursor: "pointer",
+                         background: "rgba(128,128,128,.10)", color: "inherit",
+                         border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
+              },
+                h("option", { value: "" }, "全部类型"), ...typeOptions),
+              h("button", {
+                onClick: () => setLogSort(logSort === "asc" ? "desc" : "asc"),
+                style: { ...S.btn, border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
+              }, logSort === "asc" ? "↑ 时间正序" : "↓ 时间倒序")),
+            // 事件日志表格：时间 / 事件 / 执行者
+            h("table", { key: "tbl", style: { width: "100%", borderCollapse: "collapse" } },
+              h("thead", null, h("tr", null,
+                h("th", { style: th }, "时间"),
+                h("th", { style: th }, "事件"),
+                h("th", { style: th }, "执行者"))),
+              h("tbody", null,
+                sorted.map((e, i) => {
+                  const { when, what, who } = eventParts(e);
+                  return h("tr", { key: i, style: i % 2 ? { background: "rgba(128,128,128,.05)" } : undefined },
+                    h("td", { style: { ...td, whiteSpace: "nowrap", opacity: 0.85 } }, when),
+                    h("td", { style: td }, what),
+                    h("td", { style: { ...td, whiteSpace: "nowrap", opacity: 0.7 } }, who));
+                }))),
+          ];
+        })();
+
+        content = [
+          // g-a92e1406：tab 切换栏（页签式——选中页签与下方面板同底色、无下边框、下移覆盖分隔线，
+          // 从面板"长出"形成视觉关联；未选中页签扁平透明，区别于普通按钮）
+          h("div", {
+            key: "tabs",
+            style: { display: "flex", gap: 4, marginTop: 12, alignItems: "flex-end",
+                     borderBottom: "1px solid rgba(128,128,128,.35)" },
+            className: "dg-tab",
+          },
+            h("button", {
+              style: {
+                fontSize: 12, padding: "5px 14px", cursor: "pointer",
+                marginBottom: -1, borderRadius: "6px 6px 0 0",
+                border: "1px solid " + (tab === "detail" ? "rgba(128,128,128,.35)" : "transparent"),
+                borderBottom: "none",
+                background: tab === "detail" ? "rgba(128,128,128,.10)" : "transparent",
+                fontWeight: tab === "detail" ? 700 : 400,
+                color: tab === "detail" ? "#8ab4ff" : "inherit",
+                opacity: tab === "detail" ? 1 : 0.7,
+              },
+              onClick: () => setTab("detail"),
+            }, "📋 详情"),
+            h("button", {
+              style: {
+                fontSize: 12, padding: "5px 14px", cursor: "pointer",
+                marginBottom: -1, borderRadius: "6px 6px 0 0",
+                border: "1px solid " + (tab === "activity" ? "rgba(128,128,128,.35)" : "transparent"),
+                borderBottom: "none",
+                background: tab === "activity" ? "rgba(128,128,128,.10)" : "transparent",
+                fontWeight: tab === "activity" ? 700 : 400,
+                color: tab === "activity" ? "#8ab4ff" : "inherit",
+                opacity: tab === "activity" ? 1 : 0.7,
+              },
+              onClick: () => setTab("activity"),
+            }, "🕘 近期动态")),
+          // 面板容器：与页签一体（上边框由 tab 栏分隔线承接），包住当前 tab 内容
+          h("div", {
+            key: "panel",
+            style: { border: "1px solid rgba(128,128,128,.35)", borderTop: "none",
+                     borderRadius: "0 6px 6px 6px", padding: "10px 12px",
+                     background: "rgba(128,128,128,.06)" },
+          }, tab === "detail" ? detailTab : activityTab),
         ];
       }
 
@@ -849,6 +1024,14 @@ window.__ModuleLoader__.load({
       for (const v of b.versions) for (const g of v.goals) goalStatus[g.id] = g.status;
       for (const g of b.standalone) goalStatus[g.id] = g.status;
       for (const g of b.backlog) goalStatus[g.id] = g.status;
+      // g-a92e1406：被复用徽章派生已移交 boardProjection（attempt.reused 事件 + 绑定记录双源），
+      // 客户端直接消费 g.reused_by，不再用数组顺序猜测旧/新绑定。
+      const allGoals = [
+        ...active.flatMap((v) => v.goals),
+        ...released.flatMap((v) => v.goals),
+        ...b.standalone,
+        ...b.backlog,
+      ];
       const lane = (label, goals, key) => {
         const cells = STAGES.map((s) =>
           h("div", { key: s.key, style: S.cell },
@@ -889,8 +1072,11 @@ window.__ModuleLoader__.load({
           h("strong", null, "dsh-graph 看板"),
           h("span", { style: S.meta }, "数据时间：" + (b.generated_at ?? "").replace("T", " ").slice(0, 19)),
           h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新")),
-        // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）
-        b.supervisorSession ? h(SupervisorBar, { id: b.supervisorSession }) : null,
+        // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
+        // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
+        b.supervisorSession
+          ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null })
+          : null,
         h("div", { style: S.grid },
           h("div", { style: S.stageHead }, "泳道＼阶段"),
           STAGES.map((s) => h("div", { key: s.key, style: S.stageHead }, s.label)),

@@ -28,7 +28,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 12);
+  assert.equal(registered.length, 13);
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
@@ -48,6 +48,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
   assert.equal(att.child_id, null); // 无 subagents → 降级
   assert.ok(typeof att.note === "string");
   await call("graph_report_status", { goal, attempt: att.attempt, status: "测试中" });
+  await call("graph_report_supervisor_status", { status: "主管调度中" });
   await call("graph_amend_goal", { goal, note: "测试修订", append: "补充：修订内容" });
   await call("graph_move_goal", { goal, to: "standalone" });
   const v = await call("graph_validate", {});
