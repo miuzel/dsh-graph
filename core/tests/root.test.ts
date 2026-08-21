@@ -55,12 +55,22 @@ test("resolveRoot：默认 workspace 根（process.cwd()）基准 + .dsh-graph�
   assert.equal(resolveRoot({ root: "/abs/g" }, "/base"), "/abs/g");
 });
 
-test("host/client 两半与 core 共用同一 resolveRoot 函数（模块同一性）", async () => {
+test("host/client 两半与 core 的 resolveRoot 行为一致（g-111 B7 后为包内副本，断言行为等价 + 内容同步）", async () => {
   const coreRoot = resolveRoot;
   const hostMod = await import("../../dsh-graph-host/index.js");
   const clientMod = await import("../../dsh-graph-client/index.js");
-  assert.equal(hostMod.resolveRoot, coreRoot, "host re-export 同一函数");
-  assert.equal(clientMod.resolveRoot, coreRoot, "client re-export 同一函数");
+  // 行为等价：相同输入 → 相同输出（防分叉的实质）
+  const cases = [undefined, null, {}, { root: undefined }, { root: ".dsh-graph" }, { root: "data/g" }, { root: "/abs/g" }];
+  for (const c of cases) {
+    assert.equal(hostMod.resolveRoot(c, "/base"), coreRoot(c, "/base"), `host resolveRoot(${JSON.stringify(c)}) 与 core 一致`);
+    assert.equal(clientMod.resolveRoot(c, "/base"), coreRoot(c, "/base"), `client resolveRoot(${JSON.stringify(c)}) 与 core 一致`);
+  }
+  // 内容同步：两包 core/root.ts 与根 core/root.ts 逐字节一致（sync-core.sh 强制，防副本漂移）
+  const rootSrc = readFileSync(new URL("../../core/root.ts", import.meta.url), "utf8");
+  const hostSrc = readFileSync(new URL("../../dsh-graph-host/core/root.ts", import.meta.url), "utf8");
+  const clientSrc = readFileSync(new URL("../../dsh-graph-client/core/root.ts", import.meta.url), "utf8");
+  assert.equal(hostSrc, rootSrc, "host/core/root.ts 与根 core 内容一致");
+  assert.equal(clientSrc, rootSrc, "client/core/root.ts 与根 core 内容一致");
 });
 
 test("init 幂等：重复调用不重复建骨架、不重复记 project.initialized", () => {

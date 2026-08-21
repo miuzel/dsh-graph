@@ -1,7 +1,8 @@
 {
   "name": "dsh-graph-client",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.3.0",
+  "description": "dsh-graph 的 client 半边：在 DSH Web 界面内渲染二维泳道目标看板（看板/详情/写操作工作台），host 半边注册 /api/dsh-graph REST 端点。",
+  "license": "MIT",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -9,6 +10,35 @@
     "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "core",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "plugin",
+    "goals",
+    "kanban",
+    "graph",
+    "ui"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/miuzel/dsh-graph.git"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "prepack": "bash ../scripts/sync-core.sh && node -e \"require('node:fs').existsSync('core/ops.ts') || (console.error('core 未同步'), process.exit(1))\"",
+    "test": "node --test ../core/tests/*.test.ts"
   },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },

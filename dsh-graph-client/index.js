@@ -17,13 +17,13 @@ import {
   readExecutorModel,
   init,
   boardPayload,
-} from "../core/ops.ts";
-import { resolveRoot } from "../core/root.ts";
+} from "./core/ops.ts";
+import { resolveRoot } from "./core/root.ts";
 
 // g-112：两半共用同一 root 解析函数（re-export 供验收/测试直接核对函数同一性）
-export { resolveRoot } from "../core/root.ts";
+export { resolveRoot } from "./core/root.ts";
 // g-111 B7：boardPayload 已移入 core，client 不再跨包依赖 dsh-graph-host
-export { boardPayload } from "../core/ops.ts";
+export { boardPayload } from "./core/ops.ts";
 
 export const name = "dsh-graph-client";
 export const inject = ["webServer"];

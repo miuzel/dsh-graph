@@ -1,13 +1,42 @@
 {
   "name": "dsh-graph-host",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.3.0",
+  "description": "dsh-graph 的 host 半边：把 dsh-graph 核心层包装为 DSH cordis 插件，向 agent 暴露 graph_* 目标生命周期工具（建卡/判据/迁移/派发/评审/交付）。",
+  "license": "MIT",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "core",
+    "cordis.patch.yml",
+    "supervisor-guide.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "plugin",
+    "goals",
+    "kanban",
+    "graph"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/miuzel/dsh-graph.git"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "prepack": "bash ../scripts/sync-core.sh && node -e \"require('node:fs').existsSync('core/ops.ts') || (console.error('core 未同步'), process.exit(1))\"",
+    "test": "node --test ../core/tests/*.test.ts"
   },
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
 }

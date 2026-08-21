@@ -35,13 +35,14 @@ import {
   findGoalFile,
   init,
   boardPayload,
-} from "../core/ops.ts";
-import { resolveRoot } from "../core/root.ts";
+} from "./core/ops.ts";
+import { resolveRoot } from "./core/root.ts";
 
 // g-112：两半共用同一 root 解析函数（re-export 供验收/测试直接核对函数同一性）
-export { resolveRoot } from "../core/root.ts";
-// g-111 B7：boardPayload 已移入 core（消除 client→host 跨包依赖），此处 re-export 保持兼容
-export { boardPayload } from "../core/ops.ts";
+export { resolveRoot } from "./core/root.ts";
+// g-111 B7：boardPayload 已移入 core（消除 client→host 跨包依赖），此处 re-export 保持兼容。
+// board 载荷含 supervisorSession 字段（project.yaml 的 supervisor.session，g-108），由 host 端点 /api/dsh-graph 下发。
+export { boardPayload } from "./core/ops.ts";
 
 export const name = "dsh-graph-host";
 export const inject = ["tools"];
