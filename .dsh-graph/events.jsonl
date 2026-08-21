@@ -165,3 +165,4 @@
 {"ts":"2026-08-21T05:20:11+08:00","event":"card.collecting","goal":"g-107","actor":"supervisor:k3","details":{"card":"card-e453207d","child_id":"1200b2a5-a468-48f3-b462-31eb2db7e299","note":"重派：首次调研空报告（ev-01），按教训缩小范围为纯源码读取"}}
 {"ts":"2026-08-21T09:55:16+08:00","actor":"cli","event":"card.filled","goal":"g-107","details":{"card":"card-e453207d","by":"subagent:1200b2a5"}}
 {"ts":"2026-08-21T09:55:37+08:00","actor":"cli","event":"card.reviewed","goal":"g-107","details":{"card":"card-e453207d","by":"supervisor:k3"}}
+{"ts":"2026-08-21T10:51:39+08:00","event":"evidence.added","goal":"g-102","actor":"supervisor:k3","details":{"evidence_id":"ev-06","summary":"发现#20：沙箱内 spawn dsh web 写 ~/.dsh 被 EROFS 拒（只读挂载），GUI 重启必须在用户终端执行或走 danger-full-access；发现#19 修复经真实重启验证：skill 可正常加载"}}

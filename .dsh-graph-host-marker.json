@@ -8,6 +8,7 @@
     "graph_fill_card",
     "graph_review_card",
     "graph_move_goal",
+    "graph_amend_goal",
     "graph_validate",
     "graph_rebuild",
     "graph_report_status",

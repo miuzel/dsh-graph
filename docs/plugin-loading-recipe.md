@@ -204,6 +204,8 @@ import '@deepseek-ai/cordis'（realpath 在 profiles 之外） → Cannot find p
    加 `--store-dir <可写目录>` 即通过（此为沙箱限制，真实环境无此问题）。
 9. **未验证项**：`watchUserPatches` 的热加载（改 `cordis.patch.yml` 免重启生效）文档有述、本次未测；
    模型真正调用 `hello_marker`（隔离 home 无凭据，且不动用户凭据/token）——但工具已在注册表中被 `get()` 命中。
+10. **重启 `dsh web` 必须在用户终端执行**（发现#20）：沙箱内 spawn 的进程写 `~/.dsh` 被 EROFS 拒
+    （只读挂载），detached 重启脚本不可靠；agent 侧要重启需走 `danger-full-access` 或请用户手工执行。
 
 ---
 
