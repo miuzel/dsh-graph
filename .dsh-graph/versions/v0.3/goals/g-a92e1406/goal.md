@@ -24,7 +24,7 @@
     "lanes": 1,
     "sandbox": "directory"
   },
-  "rules_snapshot": null,
+  "rules_snapshot": "r-2026-08-3",
   "skill_refs": []
 }
 ---
@@ -41,14 +41,17 @@
 
 依赖：等 g-107 完成后再执行（两者都改 client.js 看板视图，避免冲突）。
 
-范围补充（发现#23）：依赖徽章逻辑修复——⛓ 等待 只显示**未交付**的依赖（按 board 投影中依赖目标的 status 过滤），已交付依赖不再显示。
+范围补充（发现#23）：依赖徽章逻辑修复——⛓ 等待 只显示**未交付**的依赖（按 board 投影中依赖目标的 status 过滤），已交付依赖不再显示。【已移交 g-108 完成（判据 5），本目标不再覆盖】
 
 范围补充（负责人指示）：子代理被跨目标复用时，原绑定卡片的实时代理控件显示「被复用→新目标」标记。派生逻辑：boardProjection 汇总各目标 attempt/卡片绑定的 child_id，同一 child_id 出现在多个目标 → 旧绑定加 reused 标记（数据：attempt.reused 事件 + 绑定记录双源）。
 
 
 ## 质量判据
 
-（待登记；进入 in_progress 前必须非空且已确认）
+1. scripts/check_ga92e1406.sh 全绿（静态取证：CSS 流动背景+图标动画、运行/阻塞动画区分、modal status_line、dg-tab tab 结构、MEANINGFUL 收录 attempt.status_reported、被复用徽章）
+2. core 测试不回归（node --test core/tests 全绿）
+3. 负责人浏览器实测（判据 3）：①运行中摘要流动背景+图标动画、⛔ 阻塞行静态；②modal 标题下可见状态摘要；③modal 为 详情/近期动态 tab 结构；④近期动态含「汇报：…」条目；⑤g-107 卡片实时代理控件显示「被复用→g-108」标记
+4. 无静默失败：任何 UI 交互失败须可见报错
 
 ## 证据台账
 
