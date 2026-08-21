@@ -41,6 +41,8 @@
 - 跳转 = sessions.open(id) + 切对话 tab（复用 openChildSession 的 activateChatTab 逻辑；若用户已在该会话的看板 tab，跳转即切回对话 tab）；
 - 跳转目标就是主管会话本身（当前为 session-b00ed183）。
 
+执行中范围补充（负责人指示，发现#23 从 g-a92e1406 移入）：依赖徽章按状态显示——未交付依赖显示「⛓ 等待 X 交付」（琥珀）；已交付依赖显示「✅ 依赖满足：g-107 已交付」（绿色/中性），不再一概只按 depends_on 非空显示等待。
+
 
 ## 质量判据
 
@@ -48,6 +50,7 @@
 2. 一键跳转主管对话窗（sessions.open + 复用 activateChatTab 切对话 tab；已在该会话看板 tab 时切回对话）
 3. supervisor 会话 id 记入 project.yaml（supervisor.session），host board 端点以下发字段 supervisorSession 提供给 client，代码不硬编码会话 id
 4. [script] scripts/check_g108.sh 全绿 + 负责人浏览器人工实测
+5. 依赖徽章状态化（发现#23）：未交付依赖显示「⛓ 等待 X 交付」，已交付依赖显示「✅ 依赖满足：X 已交付」，不再只看 depends_on 非空
 
 ## 证据台账
 

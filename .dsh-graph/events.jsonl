@@ -224,3 +224,7 @@
 {"ts":"2026-08-21T15:15:03+08:00","actor":"supervisor:k3","event":"attempt.bound","goal":"g-108","details":{"attempt":"att-001","child_id":"43ad9d40-cf2b-4c59-afd9-3e5e2e676526"}}
 {"ts":"2026-08-21T15:16:38+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-109","details":{"note":"负责人确认判据（含修订）：接受按钮默认经主管 Agent 复核，异议显示并转为「强制接受」（可选理由供学习）"}}
 {"ts":"2026-08-21T15:18:44+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"criteria.confirmed","goal":"g-109","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-21T15:20:50+08:00","actor":"agent:43ad9d40-cf2b-4c59-afd9-3e5e2e676526","event":"attempt.status_reported","goal":"g-108","details":{"attempt":"att-001","status":"已读 g-108 目标与冻结脚本，开始实现：core 读 project.yaml supervisor.session → host board 下发 supervisorSession → client 顶部状态栏"}}
+{"ts":"2026-08-21T15:28:43+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-108","details":{"note":"负责人指示：依赖徽章状态化（等待/依赖满足两种显示）立即修，从 g-a92e1406 移入 g-108 在制范围"}}
+{"ts":"2026-08-21T15:28:43+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-a92e1406","details":{"note":"范围移出：发现#23 依赖徽章状态化修复按负责人指示移入 g-108 在制执行（原\"范围补充（发现#23）\"作废）"}}
+{"ts":"2026-08-21T15:28:57+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"criteria.confirmed","goal":"g-108","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
