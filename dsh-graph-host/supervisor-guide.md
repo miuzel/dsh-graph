@@ -75,6 +75,11 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 机制：DSH `sessions.fork({sessionId, atSeq?})` 已存在（fork 携带源历史、
 按 parentSessionId 嵌套谱系）；主管侧的工具化路径（fork+compact 一步完成）
 待补，暂以手工/客户端 RPC 执行。
+**复用时必须改子代理名称**：fork 创建时设新 label（如 `graph:g-108/att-001`）——
+DSH 无 rename API（label 只在 spawn 时写入 descriptor），直复用改不了名，
+这是 fork 复用的又一理由。**原绑定卡片的实时代理要标记「被复用」**：
+board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被复用→新目标」；
+复用时主动记 `attempt.reused` 事件（child_id、reused_by）作为派生数据。
 
 **何时复用、何时新开**（指导原则）：
 
