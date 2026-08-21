@@ -69,6 +69,13 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 5. 收集子代理输出简单干净时，**复用其会话续轮进入执行阶段**（缓存友好），
    不另开新会话。
 
+**会话复用政策**（负责人 2026-08-21 定）：跨目标复用保持主管判断（宽松），
+但复用前应先 **fork 新子代理 + compact 上下文**——卡片绑定干净的新子代理
+（继承压缩后的上下文），原子代理留在原 turn 可续（后续可对原会话继续对话）。
+机制：DSH `sessions.fork({sessionId, atSeq?})` 已存在（fork 携带源历史、
+按 parentSessionId 嵌套谱系）；主管侧的工具化路径（fork+compact 一步完成）
+待补，暂以手工/客户端 RPC 执行。
+
 ## 执行规范
 
 - `graph_start_attempt` 派发执行；要求执行子代理**周期性 `graph_report_status`
