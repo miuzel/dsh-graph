@@ -168,8 +168,9 @@ window.__ModuleLoader__.load({
             title: "点击打开上下文抽屉",
             onClick: (e) => { e.stopPropagation(); onOpenCard(g.id, c.id); },
           },
-            h("div", null,
-              `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`,
+            h("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
+              h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
               sessionLinkBtn(c.parent_session_id, c.child_id, "↗")),
             c.summary ? h("div", { style: { opacity: 0.75, marginTop: 1 } }, c.summary) : null)),
       );
@@ -196,26 +197,28 @@ window.__ModuleLoader__.load({
         else {
           const childLink = card.child_id
             ? h("div", { style: S.drawerSection, key: "child" },
-                h("div", { style: S.drawerH }, "🤖 收集子代理"),
-                h("div", { style: S.meta }, `id：${card.child_id}`),
-                card.parent_session_id
-                  ? h("button", {
-                      style: { ...S.btn, marginTop: 4 },
-                      onClick: () => { openChildSession(card.parent_session_id, card.child_id); },
-                    }, "在会话中打开")
-                  : null)
+                h("div", { style: { ...S.drawerH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
+                  "🤖 收集子代理",
+                  card.parent_session_id
+                    ? h("button", {
+                        style: S.btn,
+                        className: "dg-btn",
+                        onClick: () => { openChildSession(card.parent_session_id, card.child_id); },
+                      }, "↗ 在会话中打开")
+                    : null),
+                h("div", { style: S.meta }, `id：${card.child_id}`))
             : null;
           inner = [
             h("div", { key: "t", style: { fontWeight: 700, fontSize: 14 } },
               `📇 ${card.title}`),
             h("div", { key: "m", style: S.meta },
               `${card.id} ｜ ${card.kind} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
+            childLink,
             card.summary ? h("div", { key: "s", style: S.drawerSection },
               h("div", { style: S.drawerH }, "摘要"), card.summary) : null,
             h("div", { key: "body", style: S.drawerSection },
               h("div", { style: S.drawerH }, "全文"),
               h("div", { style: { whiteSpace: "pre-wrap" } }, card.content?.trim() || "（尚未采集内容）")),
-            childLink,
           ];
         }
       }
@@ -393,7 +396,7 @@ window.__ModuleLoader__.load({
     function sessionLinkBtn(parentSessionId, childId, label) {
       if (!childId) return null;
       return h("button", {
-        style: { ...S.btn, fontSize: 11, padding: "0 8px", marginLeft: 6 },
+        style: { ...S.btn, fontSize: 11, padding: "0 6px", marginLeft: 6, flexShrink: 0 },
         className: "dg-btn",
         title: parentSessionId ? "跳转到子代理会话" : "子代理 id（父会话未知，仅展示）",
         onClick: (e) => { e.stopPropagation(); if (parentSessionId) openChildSession(parentSessionId, childId); },
