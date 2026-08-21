@@ -184,3 +184,4 @@
 {"ts":"2026-08-21T11:38:46+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.created","goal":"g-a92e1406","details":{"title":"状态摘要运行动画与履历：流动背景+图标动画、modal 显示、近期动态收录汇报","version":"v0.3"}}
 {"ts":"2026-08-21T11:39:05+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-a92e1406","details":{"note":"建卡即进入规划（负责人指示已含需求细节）；描述阶段不提前收集——本目标无外部未知，无需收集"}}
 {"ts":"2026-08-21T11:39:18+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.transition","goal":"g-a92e1406","details":{"from":"draft","to":"planning"}}
+{"ts":"2026-08-21T11:46:19+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.amended","goal":"g-a92e1406","details":{"note":"负责人补充：近期动态改 modal 独立 tab；新增依赖 g-107（等其完成再执行）"}}
