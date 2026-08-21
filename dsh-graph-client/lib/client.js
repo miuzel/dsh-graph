@@ -1522,11 +1522,18 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function KanbanView() {
+    function KanbanView(props) {
       const [state, setState] = React.useState({ loading: true });
       const [modalGoal, setModalGoal] = React.useState(null);
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
+      // g-113 定点 bug：从 slot props 取「被查看会话」id（conversation.view 渲染回调注入的
+      // session 作用域字段，字段名 props.sessionId——renderer 的 standardProps 里
+      // standard["sessionId"] = info.sessionId）。必须先于 load effect 声明，挂载即生效。
+      React.useEffect(() => {
+        viewedSessionId = props?.sessionId ?? null;
+        return () => { viewedSessionId = null; };
+      }, [props?.sessionId]);
       const load = () => {
         fetch(graphUrl("/api/dsh-graph"))
           .then((r) => r.json())
@@ -1622,15 +1629,25 @@ window.__ModuleLoader__.load({
     let appCtx = null;
     let sessionsRt = null;
     let connectionRt = null;
-    // g-113：当前会话 workspace（session.header.cwd 的客户端投影——sessions 列表条目带 cwd）。
+    // g-113 定点 bug：看板按「被查看会话」取 workspace——conversation.view 是 session 作用域 slot，
+    // 渲染回调的 props.sessionId 就是该视图当前挂载的会话（renderer 把 info.sessionId 注入为
+    // props.sessionId），不能用全局聚焦会话 list.current 代替（多窗口/子代理视图时两者可能不同）。
+    // KanbanView(props) 挂载时写入，currentWorkspace() 优先按它查 cwd；找不到再回退 list.current。
+    let viewedSessionId = null;
+    // g-113：当前被查看会话的 workspace（session.header.cwd 的客户端投影——sessions 列表条目带 cwd）。
     // 看板与全部 /api/dsh-graph* 请求都必须带上它：dsh web 服务进程的 cwd 在 bwrap 沙箱里固定
     // （≈ ~/.dsh/profiles/web），不带 workspace 端点会读 profile 本地空骨架而非项目自己的 .dsh-graph。
     function currentWorkspace() {
       try {
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
         const snap = rt?.list?.getSnapshot?.();
+        const items = snap?.items ?? [];
+        if (viewedSessionId) {
+          const viewed = items.find?.((s) => s.sessionId === viewedSessionId);
+          if (viewed?.cwd) return viewed.cwd;
+        }
         const current = snap?.current;
-        const item = (snap?.items ?? []).find?.((s) => s.sessionId === current);
+        const item = items.find?.((s) => s.sessionId === current);
         return item?.cwd || null;
       } catch { return null; }
     }

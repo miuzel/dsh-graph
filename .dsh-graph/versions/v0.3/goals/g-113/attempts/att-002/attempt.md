@@ -6,7 +6,7 @@
   "sandbox": "directory",
   "started_at": "2026-08-22T03:27:19+08:00",
   "claimed_at": null,
-  "status_line": "对齐 brief：加 root 别名，跑全量验证",
+  "status_line": "定点 bug 已修：看板按被查看会话取 workspace",
   "result": "pending",
   "child_id": "ea561db6-143a-4716-a74c-58ce50a37eb8",
   "parent_session_id": "session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b"
@@ -16,6 +16,21 @@
 ## 执行笔记
 
 ### att-002 执行记录（2026-08-22）
+
+**补记 2（定点 bug：看板按「被查看会话」取 workspace）**：负责人实测 aseit-ella 会话看板仍显示
+dsh-graph 卡片——`currentWorkspace()` 原用全局聚焦 `list.current`，但看板是「按会话渲染」的。
+修法：
+- `KanbanView(props)` 接收 conversation.view 渲染回调的 slot props，取**被查看会话 id**；
+- 字段名确认为 **`props.sessionId`**（DSH 源码证据：`dsh-client-ui-renderer/lib/client.js:562`
+  `standard["sessionId"] = info.sessionId`；`dsh-client-runtime/lib/client.js:8748-8754`
+  `materializeInfo` 返回 `{ sessionId: binding.sessionId, ... }`；conversation.view 为 session
+  作用域 slot，渲染于 per-session ConversationSession 内）；
+- `viewedSessionId` 模块变量由 KanbanView 挂载 effect 写入，`currentWorkspace()` 优先级：
+  被查看会话 cwd → `list.current` cwd → null（裸路径，端点兜底 process.cwd()）；
+- 逻辑仿真（tmp/g113-viewed-session-sim.mjs）7 项全过：被查看≠current 时取被查看、
+  条目缺失/无 cwd 回退 current、无会话裸路径、已有 query 追加 &workspace=。
+验证：node --check 通过；53/53 单测；8/8 冻结脚本；probe PASS。
+真浏览器端到端（aseit-ella 会话看板）需负责人重启 profile 后实测。
 
 **补记（复核对齐 brief）**：客户端取 workspace 的确切方式已核实两条路径并选用更直接的——
 `ctx.sessions.list.getSnapshot()` 的 `{items, current}`，items 条目带 `cwd`（session.header.cwd 客户端投影）；

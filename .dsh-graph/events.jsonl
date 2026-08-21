@@ -555,3 +555,9 @@
 {"ts":"2026-08-22T03:37:31+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"goal.transition","goal":"g-113","details":{"from":"in_progress","to":"review"}}
 {"ts":"2026-08-22T03:38:22+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"supervisor.status_reported","details":{"status":"g-113 att-002 复核全绿（52/52、8 脚本、关键实现逐行确认），进 review 待负责人 verdict"}}
 {"ts":"2026-08-22T03:38:56+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"对齐 brief：加 root 别名，跑全量验证"}}
+{"ts":"2026-08-22T03:39:26+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"复核完成：root 别名+冒烟全绿，review 待复核"}}
+{"ts":"2026-08-22T03:53:18+08:00","actor":"agent:session-cb8ef13b-3c1e-498d-839e-97f4dab9154d","event":"goal.created","goal":"g-114","details":{"title":"测试目标卡片","version":null}}
+{"ts":"2026-08-22T03:56:53+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.transition","goal":"g-113","details":{"from":"review","to":"in_progress","reason":"负责人实测：看板未按被查看会话取 workspace（currentWorkspace 用全局聚焦会话、KanbanView 忽略 slot props），派回 att-002 修"}}
+{"ts":"2026-08-22T03:56:57+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"supervisor.status_reported","details":{"status":"g-113 打回：看板未按被查看会话取 workspace，已派 att-002 修 KanbanView 接 slot props"}}
+{"ts":"2026-08-22T03:56:59+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"调研 conversation.view slot props"}}
+{"ts":"2026-08-22T04:01:19+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"定点 bug 已修：看板按被查看会话取 workspace"}}
