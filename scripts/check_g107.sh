@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # g-107 验收脚本 —— 由规划方（supervisor）在判据确认时编写并冻结（R-03）。
 # 执行方不得修改本文件；如需变更走判据变更流程。
+# planner 修订（g-116 合并单包改名）：client 路径 dsh-graph-client/ → dsh-graph-host/（单包 dsh-graph）。
 # 验证：client.js 静态取证（inject 升级、实时状态/投影/模型/发指令/降级提示/历史记录
 # 六个能力点的 API 落点）。浏览器逐条实测为判据第 7 条，由负责人人工执行。
 set -euo pipefail
 cd "$(dirname "$0")/.."
-C=dsh-graph-client/lib/client.js
+C=dsh-graph-host/lib/client.js
 
 echo "== 0. 语法 =="
 node --check "$C"

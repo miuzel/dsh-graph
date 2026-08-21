@@ -1,8 +1,8 @@
-// dsh-graph-client — 浏览器半边：手写 classic script，零构建。
+// dsh-graph — 浏览器半边（npm 包名 = dsh-graph；内部 host 插件 id 保留 dsh-graph-host）：手写 classic script，零构建。
 // 二维泳道看板。视觉约定：卡片类型用「粗左边框 + 颜色 + 图标」区分；
 // 依赖关系用琥珀色左边框 + 「⛓ 等待」标识；详情走 modal 弹窗；事件话术人类化。
 window.__ModuleLoader__.load({
-  id: "dsh-graph-client",
+  id: "dsh-graph",
   factory(require) {
     const React = require("react");
     const h = React.createElement;
@@ -223,11 +223,11 @@ window.__ModuleLoader__.load({
                 { parentSessionId: parentId, childSessionId: childId, mode: entry.mode }, true);
             }
           } catch (e) {
-            console.warn("[dsh-graph-client] 子代理地址配置失败", e);
+            console.warn("[dsh-graph-host] 子代理地址配置失败", e);
           }
         }
         try { await session.open(); } catch (e) {
-          console.warn("[dsh-graph-client] session.open() 失败", e);
+          console.warn("[dsh-graph-host] session.open() 失败", e);
         }
       })();
       boundSetup.set(childId, p);
@@ -251,7 +251,7 @@ window.__ModuleLoader__.load({
       const session = React.useMemo(() => {
         if (!sessionsRt || !childId) return null;
         try { return sessionsRt.binding(childId)?.session ?? null; }
-        catch (e) { console.warn("[dsh-graph-client] binding 解析失败", e); return null; }
+        catch (e) { console.warn("[dsh-graph-host] binding 解析失败", e); return null; }
       }, [childId, listSnap]);
       const [mode, setMode] = React.useState(boundModes.get(childId) ?? null);
       React.useEffect(() => {
@@ -697,7 +697,7 @@ window.__ModuleLoader__.load({
           sessionsRt?.open?.(props.id); // supervisor 是顶层会话，直接 open
           activateChatTab();            // 已在该会话看板 tab 时切回「对话」
         } catch (e) {
-          console.warn("[dsh-graph-client] 跳转主管会话失败", e);
+          console.warn("[dsh-graph-host] 跳转主管会话失败", e);
         }
       };
       return h(
@@ -1707,12 +1707,12 @@ window.__ModuleLoader__.load({
           activateChatTab();
         } else {
           // 目录里没有（不健康/已清理）：退化为打开父会话
-          console.warn("[dsh-graph-client] child not in catalog, opening parent:", childId);
+          console.warn("[dsh-graph-host] child not in catalog, opening parent:", childId);
           rt.open?.(parentSessionId);
           activateChatTab();
         }
       } catch (e) {
-        console.warn("[dsh-graph-client] openSubagent failed", e);
+        console.warn("[dsh-graph-host] openSubagent failed", e);
         try { rt?.open?.(parentSessionId); activateChatTab(); } catch { /* 静默 */ }
       }
     }
@@ -1726,7 +1726,7 @@ window.__ModuleLoader__.load({
       }, label ?? "↗ 会话");
     }
     return {
-      name: "dsh-graph-client",
+      name: "dsh-graph",
       inject: ["slots", "sessions", "connection"],
       apply(ctx) {
         appCtx = ctx;
@@ -1741,7 +1741,7 @@ window.__ModuleLoader__.load({
             (props) => h(KanbanView, props),
           ),
         );
-        console.log("[dsh-graph-client] client apply: kanban view registered");
+        console.log("[dsh-graph-host] client apply: kanban view registered");
       },
     };
   },

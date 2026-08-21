@@ -1,16 +1,19 @@
-# dsh-graph-host
+# dsh-graph
 
-dsh-graph 的 host 半边：把 dsh-graph 核心层包装为 [DSH](https://github.com/deepseek-ai/deepseek-harness)（DeepSeek Harness）cordis 插件。
+dsh-graph 单包（g-116：host 与 client 合并；npm 包名 = dsh-graph，内部 host 插件 id 保留 dsh-graph-host）：把 dsh-graph 核心层包装为 [DSH](https://github.com/deepseek-ai/deepseek-harness)（DeepSeek Harness）cordis 插件，**一个包同时提供两个半边**：
 
-它向 agent 暴露 `graph_*` 工具，覆盖目标全生命周期：建卡、判据登记、状态迁移、上下文卡片收集、执行 attempt 派发、评审裁决、交付与沉淀。数据以文件 + 事件流形式落在工作区的 `.dsh-graph` 目录，git 友好、可审计。
+- **host 半边**：向 agent 暴露 `graph_*` 工具，覆盖目标全生命周期：建卡、判据登记、状态迁移、上下文卡片收集、执行 attempt 派发、评审裁决、交付与沉淀；同时注册 `/api/dsh-graph*` REST 端点（看板投影 / 详情 / 写操作）。
+- **client 半边**：浏览器二维泳道看板（`lib/client.js`，经 `dsh.client` 声明 + `exports["./client"]` 编入 `__DSH_BOOT__`，渲染进 `conversation.view` 槽）。
+
+数据以文件 + 事件流形式落在工作区的 `.dsh-graph` 目录，git 友好、可审计。
 
 ## 安装
 
 ```sh
-dsh plugin --profile <name> add dsh-graph-host
+dsh plugin --profile <name> add dsh-graph
 ```
 
-> 需要 Node ≥ 23.6（core 为 TypeScript，依赖 Node 原生 type-stripping 运行）。
+> 需要 Node ≥ 22（包内 core 为编译后 .js）。
 
 ## 提供的工具
 
@@ -34,11 +37,11 @@ root 跟随**会话 workspace**（g-113）：工具按调用会话的 `session.h
 可用 profile 用户层 `cordis.patch.yml` 按 id 覆盖 `config.root`。首次触达某 workspace 自动生成骨架
 （`backlog/`、`goals/`、`versions/`、`events.jsonl`、`rules.md`），幂等、不建 demo 数据。
 
-## 与 dsh-graph-client 的关系
+## 与 dsh-graph-client 的关系（g-116 合并后）
 
-- `dsh-graph-host`：工具层（agent 用），headless / web 皆可；
-- `dsh-graph-client`：看板 UI 层（浏览器），依赖 host 的 `/api/dsh-graph` 端点；
-- 二者共享同一 core（`core/` 目录，由 `scripts/sync-core.sh` 同步，内容一致）。
+- 原 `dsh-graph-client` 包已并入本包（0.3.2 两包作废，0.4.0 起单包发布）；
+- 看板 UI 层（浏览器）即本包 `lib/client.js`，消费本包 `/api/dsh-graph` 端点；
+- core（`core/` 目录，由 `scripts/sync-core.sh` 同步）为唯一事实来源。
 
 ## 开发
 

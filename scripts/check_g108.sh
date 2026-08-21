@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # g-108 验收脚本 —— 由规划方（supervisor）在判据确认时编写并冻结（R-03）。
 # 执行方不得修改本文件；如需变更走判据变更流程。
+# planner 修订（g-116 合并单包改名）：client 路径 dsh-graph-client/ → dsh-graph-host/（单包 dsh-graph）。
 # 验证：看板顶部 supervisor 状态栏（复用 LiveStrip、跳转对话 tab）、
 # 会话 id 来自 project.yaml（不硬编码）、board 端点下发（字段名 supervisorSession）。
 # 浏览器逐条实测为判据第 4 条，由负责人人工执行。
@@ -11,7 +12,7 @@
 # 使 awk SIGPIPE 间歇 FAIL（client.js 输出量增大后高频触发）；item3 改 grep "…">/dev/null 读完再退。
 set -euo pipefail
 cd "$(dirname "$0")/.."
-C=dsh-graph-client/lib/client.js
+C=dsh-graph-host/lib/client.js
 
 echo "== 0. 语法 =="
 node --check "$C"

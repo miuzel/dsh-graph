@@ -68,8 +68,8 @@ git config user.email "<github 绑定邮箱>"
 **包名占用核验（官方 registry 实机）**：
 
 ```
-GET https://registry.npmjs.org/dsh-graph-host   → 404（未被占用 ✅ 可发布）
-GET https://registry.npmjs.org/dsh-graph-client → 404（未被占用 ✅ 可发布）
+GET https://registry.npmjs.org/dsh-graph   → 404（未被占用 ✅ 可发布；g-116 命名更正：包名=repo 名）
+GET https://registry.npmjs.org/dsh-graph-client → 404（g-116 合并后废弃，不再发布）
 ```
 
 **发布硬前置（人工 gate）**：`pnpm publish` 前必须先对官方 registry 登录——需要 npm 账号
@@ -83,7 +83,7 @@ GET https://registry.npmjs.org/dsh-graph-client → 404（未被占用 ✅ 可�
 |----|------|
 | dsh | ✅ v0.1.0-rc.7（fnm node 环境） |
 | `dsh plugin --profile <name> add <pkg>` | 语法可用；**实机执行报 ENOENT 是因为本沙箱对 `~/.dsh/profiles/<new>` 只读**（`profiles/web` 已存在且可读）——真实环境无此问题 |
-| 当前安装形态 | `dsh-graph-client` 经 `link:/home/.../dsh-graph-client` 装进 web profile；host 半边经 profile 用户层 `cordis.patch.yml` insert 相对路径加载 |
+| 当前安装形态（g-116 后） | 单包 `dsh-graph`（目录 dsh-graph-host/，npm 名 dsh-graph）经 bundle patch 插入（tools/skills/webServer + conversation.view 看板同包） |
 
 ## 5. 上架目标仓库（awesome-dsh-plugin）核验
 
@@ -104,8 +104,7 @@ PR 模板（.github/pull_request_template.md）已取全文，见发布手册上
 **两包均依赖包外代码，npm 打包后不可用，必须先定设计**：
 
 ```
-dsh-graph-client/index.js  import { ... } from "../core/ops.ts";            ← 包外 core/
-dsh-graph-client/index.js  import { boardPayload } from "../dsh-graph-host/index.js";  ← 跨包引用 host
+（g-116 合并后无此结构：单包 index.js import "./core/*.js"，boardPayload 由 core re-export）
 dsh-graph-host/index.js    import { ... } from "../core/ops.ts";            ← 包外 core/
 ```
 

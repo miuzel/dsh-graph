@@ -1,6 +1,7 @@
-/** dsh-graph-client host 半边（/api/dsh-graph 写端点）冒烟测试：g-109。
+/** dsh-graph-host 单包（g-116 合并后）webServer 半边（/api/dsh-graph 写端点）冒烟测试：g-109。
  *  mock webServer/ctx，无 subagents 服务 → 验证降级路径（attempt 本地创建、child_error 上报、
  *  卡片不误翻 collecting）；有 body 的 POST 走 readBody + 事件先行断言。
+ *  g-116：原 client 端点并入 host 包 index.js，此处 apply 指向合并后的 dsh-graph-host。
  */
 
 import { test } from "node:test";
@@ -10,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join, dirname, relative } from "node:path";
 import { init, createGoal, findGoalFile, loadGoal } from "../ops.ts";
 import { readEvents } from "../events.ts";
-import { apply } from "../../dsh-graph-client/index.js";
+import { apply } from "../../dsh-graph-host/index.js";
 
 function fakeRequest(method: string, body: unknown) {
   const req: any = {
@@ -36,19 +37,16 @@ function fakeResponse() {
 }
 
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), "dsh-graph-client-"));
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-host-"));
   init(root);
   const goalId = createGoal(root, { title: "测试目标", version: "v-t", actor: "test" });
   const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
   const ctx: any = {
-    get: () => undefined, // 无 subagents/agents 服务 → 降级分支
+    get: (name: string) => (name === "webServer" ? webServer : undefined), // 无 subagents/agents 服务 → 降级分支
     effect: (fn: () => unknown) => fn(),
-    webServer: {
-      register: (def: any) => {
-        routes.set(def.path, def.handler);
-        return () => {};
-      },
-    },
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
   };
   apply(ctx, { root });
   return { root, routes, goalId };
@@ -57,15 +55,12 @@ function setup() {
 // g-113：无 config.root 的 apply（完全由请求 workspace 决定 root，与生产默认一致）
 function setupNoConfigRoot() {
   const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
   const ctx: any = {
-    get: () => undefined,
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
     effect: (fn: () => unknown) => fn(),
-    webServer: {
-      register: (def: any) => {
-        routes.set(def.path, def.handler);
-        return () => {};
-      },
-    },
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
   };
   apply(ctx, {});
   return { routes };
@@ -288,15 +283,17 @@ test("g-113 端点触达全新 workspace 时自动 init 骨架（开箱即用，
 });
 
 test("g-113 start-execution 注入目标相对路径以请求 workspace 为基准（.dsh-graph/versions/...）", async () => {
-  const base = mkdtempSync(join(tmpdir(), "dsh-graph-client-rel-"));
+  const base = mkdtempSync(join(tmpdir(), "dsh-graph-host-rel-"));
   const ws = join(base, "proj");
   init(join(ws, ".dsh-graph"));
   const goalId = createGoal(join(ws, ".dsh-graph"), { title: "rel 目标", version: "v-t", actor: "test" });
   writeFileSync(join(ws, ".dsh-graph", "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   let capturedPrompt = "";
   const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
   const ctx: any = {
     get: (name: string) => {
+      if (name === "webServer") return webServer;
       if (name === "subagents") return {
         list: () => ["spawn"],
         getProvider: () => ({ prepareContinuable: () => {} }),
@@ -309,7 +306,8 @@ test("g-113 start-execution 注入目标相对路径以请求 workspace 为基�
       return undefined;
     },
     effect: (fn: () => unknown) => fn(),
-    webServer: { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } },
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
   };
   apply(ctx, {});
   const handler = routes.get("/api/dsh-graph/start-execution");

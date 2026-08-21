@@ -2,7 +2,7 @@
   "name": "dsh-graph",
   "private": true,
   "type": "module",
-  "description": "dsh-graph monorepo 根（构建期依赖；发布物为 dsh-graph-host / dsh-graph-client 两包）",
+  "description": "dsh-graph monorepo 根（构建期依赖；发布物为单包 dsh-graph，g-116 合并）",
   "scripts": {
     "build": "bash scripts/build-core.sh",
     "test": "node --test core/tests/*.test.ts",

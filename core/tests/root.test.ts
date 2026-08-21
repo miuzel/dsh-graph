@@ -1,8 +1,7 @@
-/** g-112 root 通用化验收测试：
+/** g-112 root 通用化验收测试（g-116 合并后修订）：
  *  1. resolveRoot 统一解析（workspace 根 = process.cwd() 基准，默认 .dsh-graph，config.root 可覆盖）；
- *  2. host/client 两半 re-export 同一 resolveRoot 函数（模块同一性）；
- *  3. host apply 幂等调 core init()：root 不存在自动建骨架，重复 apply 不重复建、不重复记事件；
- *  4. client apply 同样幂等建骨架（任一半边先加载即可用）。
+ *  2. 单包 index.js 与 core 的 resolveRoot 函数行为一致（re-export，模块同一性）+ 包内 core 产物同步校验；
+ *  3. 单包 apply 幂等调 core init()：root 不存在自动建骨架，重复 apply 不重复建、不重复记事件。
  */
 
 import { test } from "node:test";
@@ -14,15 +13,13 @@ import { init, listGoalFiles } from "../ops.ts";
 import { resolveRoot } from "../root.ts";
 import { readEvents } from "../events.ts";
 import { apply as applyHost } from "../../dsh-graph-host/index.js";
-import { apply as applyClient } from "../../dsh-graph-client/index.js";
 
 function mockCtx(extra: Record<string, unknown> = {}) {
+  const webServer = { register: () => () => {} };
   return {
-    get: () => undefined,
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
     effect: (fn: () => unknown) => fn(),
-    webServer: {
-      register: () => () => {},
-    },
+    webServer,
     tools: {
       register: () => () => {},
       get: () => ({}),
@@ -55,21 +52,17 @@ test("resolveRoot：默认 workspace 根（process.cwd()）基准 + .dsh-graph�
   assert.equal(resolveRoot({ root: "/abs/g" }, "/base"), "/abs/g");
 });
 
-test("host/client 两半与 core 的 resolveRoot 行为一致（g-111 B7：包内为编译产物 .js，断言行为等价 + 产物同步）", async () => {
+test("单包 index.js 与 core 的 resolveRoot 行为一致（g-116：合并后单包 re-export + 产物同步）", async () => {
   const coreRoot = resolveRoot;
   const hostMod = await import("../../dsh-graph-host/index.js");
-  const clientMod = await import("../../dsh-graph-client/index.js");
   // 行为等价：相同输入 → 相同输出（防分叉的实质）
   const cases = [undefined, null, {}, { root: undefined }, { root: ".dsh-graph" }, { root: "data/g" }, { root: "/abs/g" }];
   for (const c of cases) {
     assert.equal(hostMod.resolveRoot(c, "/base"), coreRoot(c, "/base"), `host resolveRoot(${JSON.stringify(c)}) 与 core 一致`);
-    assert.equal(clientMod.resolveRoot(c, "/base"), coreRoot(c, "/base"), `client resolveRoot(${JSON.stringify(c)}) 与 core 一致`);
   }
-  // 产物同步：两包 core/root.js 为根 core/root.ts 的编译产物（sync-core.sh 强制，防副本漂移）
-  // 校验方式：两包产物逐字节一致，且产物包含根源码的关键逻辑（resolve 调用 + 默认 .dsh-graph）
+  // 产物同步：包内 core/root.js 为根 core/root.ts 的编译产物（sync-core.sh 强制，防副本漂移）
+  // 校验方式：产物包含根源码的关键逻辑（resolve 调用 + 默认 .dsh-graph），且无 .ts 引用
   const hostJs = readFileSync(new URL("../../dsh-graph-host/core/root.js", import.meta.url), "utf8");
-  const clientJs = readFileSync(new URL("../../dsh-graph-client/core/root.js", import.meta.url), "utf8");
-  assert.equal(hostJs, clientJs, "host/client core/root.js 产物一致");
   assert.match(hostJs, /resolve\(workspaceRoot/, "产物包含统一解析逻辑");
   assert.match(hostJs, /\.dsh-graph/, "产物保留默认 .dsh-graph");
   assert.ok(!hostJs.includes(".ts\""), "产物无 .ts 引用（node_modules 下 .ts 不可加载）");
@@ -89,7 +82,7 @@ test("init 幂等：重复调用不重复建骨架、不重复记 project.initia
   assert.match(readFileSync(join(root, "rules.md"), "utf8"), /"version": "r-init"/);
 });
 
-test("host apply 幂等调 core init：root 不存在自动建骨架，重复 apply 不重复建", () => {
+test("单包 apply 幂等调 core init：root 不存在自动建骨架，重复 apply 不重复建", () => {
   const base = mkdtempSync(join(tmpdir(), "dsh-graph-host-"));
   const root = join(base, "g"); // 不存在的子目录 → 触发自动建骨架
   applyHost(mockCtx(), { root });
@@ -102,12 +95,26 @@ test("host apply 幂等调 core init：root 不存在自动建骨架，重复 ap
   assert.equal(evs.length, 1, "重复 apply 只记一次 project.initialized");
 });
 
-test("client apply 幂等调 init：任一半边先加载即自动建骨架", () => {
-  const base = mkdtempSync(join(tmpdir(), "dsh-graph-client-"));
-  const root = join(base, "g");
-  applyClient(mockCtx(), { root });
-  assertSkeleton(root);
-  applyClient(mockCtx(), { root });
-  const evs = readEvents(root).filter((e) => e.event === "project.initialized");
-  assert.equal(evs.length, 1, "重复 apply 只记一次 project.initialized");
+test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路由）两个半边", () => {
+  const registered: any[] = [];
+  const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
+  };
+  applyHost(ctx, { root: join(mkdtempSync(join(tmpdir(), "dsh-graph-dual-")), "g") });
+  // host 半边：14 个 graph_* 工具
+  const toolNames = registered.map((d) => d.name).filter((n) => n.startsWith("graph_"));
+  assert.equal(toolNames.length, 14, "单包注册 14 个 graph_* 工具");
+  // client 半边：/api/dsh-graph* 全部端点（原 client 包 9 条路由）
+  for (const p of ["/api/dsh-graph", "/api/dsh-graph/goal", "/api/dsh-graph/accept",
+    "/api/dsh-graph/resolve-accept", "/api/dsh-graph/edit-description",
+    "/api/dsh-graph/add-card", "/api/dsh-graph/start-collection",
+    "/api/dsh-graph/start-execution", "/api/dsh-graph/spawn-options"]) {
+    assert.ok(routes.has(p), `路由 ${p} 已注册`);
+  }
 });
+

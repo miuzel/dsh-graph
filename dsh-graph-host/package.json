@@ -1,18 +1,20 @@
 {
-  "name": "dsh-graph-host",
-  "version": "0.3.2",
-  "description": "dsh-graph 的 host 半边：把 dsh-graph 核心层包装为 DSH cordis 插件，向 agent 暴露 graph_* 目标生命周期工具（建卡/判据/迁移/派发/评审/交付）。",
+  "name": "dsh-graph",
+  "version": "0.4.0",
+  "description": "dsh-graph 单包（host+client 合并，g-116）：把 dsh-graph 核心层包装为 DSH cordis 插件，同时提供 graph_* 目标生命周期工具（建卡/判据/迁移/派发/评审/交付）、/api/dsh-graph REST 端点与浏览器二维泳道看板（conversation.view）。包名 = repo 名（负责人定案）；内部 host 插件 id 保留 dsh-graph-host。",
   "license": "MIT",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
+    "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
     "core",
+    "lib",
     "cordis.patch.yml",
     "supervisor-guide.md",
     "README.md",
@@ -25,7 +27,8 @@
     "plugin",
     "goals",
     "kanban",
-    "graph"
+    "graph",
+    "ui"
   ],
   "repository": {
     "type": "git",
@@ -35,8 +38,14 @@
     "node": ">=22"
   },
   "scripts": {
-    "prepack": "bash ../scripts/sync-core.sh && node -e \"require('node:fs').existsSync('core/ops.js') || (console.error('core 未编译'), process.exit(1))\"",
+    "prepack": "bash ../scripts/sync-core.sh && node -e \"require('node:fs').existsSync('core/ops.js') || (console.error('core 未同步'), process.exit(1))\"",
     "test": "node --test ../core/tests/*.test.ts"
   },
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-runtime"]
+    }
+  }
 }

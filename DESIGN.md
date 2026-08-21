@@ -207,19 +207,19 @@ Review 结论按预登记规则路由，不是执行者临场决定。标准分�
 ## 8. 插件体系架构
 
 "一切皆为插件"，但插件之下有一个共享核心层（数据模型与求值语义的唯一权威）。
-打包形态经源码调研定为**两个 npm 包**（cordis 插件）：
+打包形态经 g-116 定为**单 npm 包** `dsh-graph`（cordis 插件，host/client 合并；包名=repo 名，目录名 dsh-graph-host/）：
 
-- **`dsh-graph-host`**：核心层 + 目标闭环 + 版本管理 + backlog + 协作层，同一个
-  host 插件包（共享核心层必须同包，避免跨包私有状态）。`apply(ctx)` 注入
-  `tools` / `subagents` / `agents` / `sessions` / `skills` / `webServer`；
-- **`dsh-graph-client`**：看板 client-plugin（`exports["./client"]` + `dsh.client`
-  声明，`lib/client.js` 经 `window.__ModuleLoader__` 注册）。
+- **`dsh-graph`**（npm 包）：核心层 + 目标闭环 + 版本管理 + backlog + 协作层 + 看板，单包双半（内部 host 插件 id 保留 dsh-graph-host）。
+  `apply(ctx)` 注入 `tools` / `subagents` / `agents` / `sessions` / `skills`（webServer 经
+  `ctx.get` 惰性轮询注册，headless 组合静默跳过）；
+- **client 半边**：同包 `lib/client.js`（`exports["./client"]` + `dsh.client`
+  声明，经 `window.__ModuleLoader__` 注册进 `conversation.view` 槽）。
 
 逻辑分层（同包内的模块边界）：
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  kanban 可视化（dsh-graph-client，二维泳道+交互入口）   │
+│  kanban 可视化（dsh-graph 包内 lib/client.js，二维泳道+交互） │
 ├──────────┬───────────┬──────────┬───────────────────┤
 │ 目标闭环  │ 版本管理   │ backlog  │ 协作层（多人场景）   │
 │ 模块      │ 模块       │ 模块     │ 角色/权限/通知      │
@@ -268,7 +268,7 @@ Review 结论按预登记规则路由，不是执行者临场决定。标准分�
 
 核心层保持用户无关；多人语义全部在此层：**角色**（认领者 / 判据所有者 / 审核者）、**权责分离**（reviewer ≠ executor）、认领与并发冲突解决、权限（谁能改判据、谁能置完成、谁能打回）、通知与订阅（依赖上游交付时通知下游）。
 
-### 8.6 Kanban 可视化（dsh-graph-client）
+### 8.6 Kanban 可视化（dsh-graph 包内 lib/client.js）
 
 - **二维泳道**：横轴 = 生命周期阶段（描述 / 收集 / 执行 / 确认 / 交付），纵轴 = 版本分组 + 独立目标区 + backlog 区。目标卡片从左游到右；跨泳道依赖边连线渲染；PK 目标在卡内展示 N 路 attempt 进度。**已完成的版本默认收起并置底**，收起后泳道只显示一句摘要（如"v0.1 ✅ 3 目标 · released 2026-08-20"）。**泳道可拖拽排序，顺序仅展示态**——多个版本可同时开展；
 - **卡片状态行**：执行中的 attempt 由 agent 周期性调用插件工具**汇报一句可展示的工作状态**（如"正在实现 validate 环检测"），卡片上只显示这行最新状态——**用一句状态代替流式思考与生成输出**（卡片视图看不过来流式内容）。汇报历史进事件流（`attempt.status_reported`），卡片只取最新；

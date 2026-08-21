@@ -97,16 +97,17 @@ Node 侧模拟浏览器契约（无浏览器 smoke）：`new Function('window', 
 5. 从 `@deepseek-ai/dsh-client-runtime` 导入值必须 `require('@deepseek-ai/dsh-client-runtime/client')`（图行别名到包行）；裸包名不在种子表时会走图行同一份，但官方警告：不在 externals 表的裸名会内联第二实例（scope-tag Symbol 失配）。
 6. 本沙箱：pnpm 需 `--store-dir` 可写目录；`/tmp` 跨 bash 调用不保留（探针台放工作区 `tmp/`，已 gitignore）。
 
-## 6. 给 dsh-graph-client 的结构建议
+## 6. 结构落地（g-116 已按此合并为单包）
 
 ```
-dsh-graph-client/                # 单包双半（对照 kanban，不必拆两包）
+dsh-graph-host/                  # 单包双半（对照 kanban；npm 包名 = dsh-graph，目录名保留 dsh-graph-host）
   package.json                   # dsh.bundle.patch + dsh.client{platform:web, inject:["@deepseek-ai/dsh-client-runtime"]}
-  cordis.patch.yml               # insert 自己
-  index.js                       # host 半：inject:['webServer']（要工具再加 'tools'）
-                                 #   register exact 路由 /api/dsh-graph → 读 .dsh-graph 返回 JSON
+                                 #   exports["./client"] → ./lib/client.js
+  cordis.patch.yml               # 一条 insert 自己（host+client 两个半边同由该 entry 提供）
+  index.js                       # host 半：graph_* 工具（inject:['tools']）+ /api/dsh-graph* 端点
+                                 #   webServer 经 ctx.get 惰性轮询注册（headless 组合静默跳过）
   lib/client.js                  # 手写 __ModuleLoader__ 骨架；require('react') 种子
-                                 #   apply: slots.inject('conversation.view', register({id:'graph', label:'图谱', order}, View))
+                                 #   apply: slots.inject('conversation.view', register({id:'dsh-graph-kanban', order:80, label:'看板'}, View))
                                  #   View 内 fetch('/api/dsh-graph') 渲染二维泳道卡片墙
 ```
 

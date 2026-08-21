@@ -1,9 +1,0 @@
-# dsh-graph-client 的 bundle 层（dsh plugin add 时自动激活）
-# root 默认相对 workspace 根（process.cwd()，DSH 官方「运行目录=默认 workspace 根」约定），
-# 与 host 半边同一解析：resolve(workspaceRoot, config.root ?? ".dsh-graph")（g-112）。
-# 需要指向别处时，用用户层 patch（~/.dsh/profiles/<name>/cordis.patch.yml）按 id 覆盖 root，勿改本文件。
-- insert:
-    - id: dsh-graph-client
-      name: dsh-graph-client
-      config:
-        root: .dsh-graph

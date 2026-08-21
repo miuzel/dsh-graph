@@ -1003,8 +1003,8 @@ export function boardProjection(root: string): {
 }
 
 /** 看板端点载荷：board 投影 + supervisorSession（g-108）。
- *  由 dsh-graph-client 的 host 半边（/api/dsh-graph）消费，会话 id 不在任何代码里硬编码。
- *  g-111 B7：从 dsh-graph-host/index.js 移入 core，消除 client→host 跨包依赖（发布结构要求）。 */
+ *  由 dsh-graph-host 的 client 半边（/api/dsh-graph）消费，会话 id 不在任何代码里硬编码。
+ *  g-111 B7：从 dsh-graph-host/index.js 移入 core，消除跨包依赖（g-116 合并后单包内复用）。 */
 export function boardPayload(root: string) {
   return {
     ...boardProjection(root),

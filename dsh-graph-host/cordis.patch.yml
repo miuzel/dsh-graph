@@ -1,7 +1,13 @@
-# dsh-graph-host 的 bundle 层：以裸包名插入 profile 树（dsh plugin add 时自动激活）
-# root 相对 workspace 根（process.cwd()），与 client 同一解析 resolve(workspaceRoot, config.root ?? ".dsh-graph")（g-112）。
+# dsh-graph 的 bundle 层：以裸包名插入 profile 树（dsh plugin add 时自动激活）。
+# g-116 单包合并：一条 insert 同时承载两个半边——
+#   host 半边：graph_* 工具 + skill 注册 + /api/dsh-graph* 端点（本包 index.js）；
+#   client 半边：浏览器看板（lib/client.js，经 package.json 的 dsh.client + exports["./client"]
+#                 由 client-modules 编入 __DSH_BOOT__，渲染进 conversation.view 槽）。
+# name 用 npm 包名 dsh-graph（裸包名 → client-modules 按 <name>/package.json 解析 dsh.client，
+# bundle URL 为 /plugins/dsh-graph/client.js）；id 保留内部插件名 dsh-graph-host（用户层 patch 按 id 覆盖 config）。
+# root 相对 workspace 根（process.cwd()），统一解析 resolve(workspaceRoot, config.root ?? ".dsh-graph")（g-112）。
 - insert:
     - id: dsh-graph-host
-      name: dsh-graph-host
+      name: dsh-graph
       config:
         root: .dsh-graph

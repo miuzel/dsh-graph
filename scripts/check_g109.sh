@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # g-109 验收脚本 —— 由规划方（supervisor）在 planning 时编写并冻结（R-03）。
 # 执行方不得修改本文件；如需变更走判据变更流程。
+# planner 修订（g-116 合并单包改名）：client 路径 dsh-graph-client/ → dsh-graph-host/（单包 dsh-graph）。
 #
 # 修订记录（仅规划方）：
 #   v1：接受/强制接受主管复核流程（requestAcceptReview/resolveAccept）。
@@ -17,13 +18,13 @@
 #
 # 判别标记（实现前均不存在，防真空通过）：
 #   client.js: 强制接受 / dg-accept / dg-card-add / dg-collect-prompt / 开始收集
-#   dsh-graph-client/index.js: /api/dsh-graph/accept、/api/dsh-graph/edit-description、
+#   dsh-graph-host/index.js: /api/dsh-graph/accept、/api/dsh-graph/edit-description、
 #     /api/dsh-graph/add-card、/api/dsh-graph/start-collection
 #   core/ops.ts: acceptReview
 set -euo pipefail
 cd "$(dirname "$0")/.."
-CL=dsh-graph-client/lib/client.js
-IDX=dsh-graph-client/index.js
+CL=dsh-graph-host/lib/client.js
+IDX=dsh-graph-host/index.js
 CORE=core/ops.ts
 
 echo "== 0. 语法 =="

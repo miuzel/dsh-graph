@@ -16,7 +16,7 @@
 
 | 路径 | 用户操作 | 适用 |
 |---|---|---|
-| **A. bundle 包 + `dsh plugin add`** | 一条命令，`dsh.profile.bundles` 自动追加 | 正式交付 `dsh-graph-host` |
+| **A. bundle 包 + `dsh plugin add`** | 一条命令，`dsh.profile.bundles` 自动追加 | 正式交付 `dsh-graph`（g-116 单包） |
 | **B. profile `cordis.patch.yml` 手写 `insert`** | 编辑一个 YAML | 本地开发 / 快速试 |
 | **C. `--patch overlay.yml` 覆盖层** | 完全不改 profile 文件 | 一次性实验、不污染 profile |
 
@@ -209,7 +209,7 @@ import '@deepseek-ai/cordis'（realpath 在 profiles 之外） → Cannot find p
 
 ---
 
-## 7. 对 `dsh-graph-host` 包结构的建议
+## 7. 对 dsh-graph 单包包结构的建议（g-116 合并后：目录 dsh-graph-host/，npm 名 dsh-graph）
 
 ```
 dsh-graph-host/
