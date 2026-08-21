@@ -26,8 +26,10 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 `graph_transition` 移动卡片，绝不让状态滞留（看板列＝状态的投影，滞留即
 对负责人撒谎）：
 
-1. **描述完成**（建卡、修订落定、范围明确）→ `draft→planning→collecting`，
-   卡片从"描述"列移入"收集"列；
+1. **描述完成**（建卡、修订落定、范围明确）→ `draft→planning`；
+   有信息要收集 → `planning→collecting`，卡片移入"收集"列；
+   **无收集需求（调研结论已在描述/凭常识可做）→ `planning→ready` 直达**，
+   不为走流程而收集（收集不是形式主义）；
 2. **收集完成**（上下文卡片全部 filled/reviewed）→ `collecting→ready`；
    判据登记并经负责人确认后 → `ready→in_progress`，卡片移入"执行"列，
    同时派发执行 attempt（进 in_progress 的判据门禁由引擎强制）；

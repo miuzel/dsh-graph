@@ -65,6 +65,14 @@ test("合法迁移链 draft→planning→collecting→ready", () => {
   assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "ready");
 });
 
+test("无收集需求时 planning→ready 直达合法", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  transition(root, id, "planning", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "ready");
+});
+
 test("跳阶段迁移被拒绝", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", actor: "test" });

@@ -254,6 +254,8 @@ draft → planning → collecting → ready → in_progress → review → deliv
                                                      review → delivered 同时派生新目标（部分实现/遗留问题）
 ```
 
+补充：无收集需求时允许 `planning → ready` 直达（跳过 collecting；收集不是形式主义，负责人 2026-08 指示）。
+
 ### 7.2 版本状态机
 
 ```

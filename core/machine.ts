@@ -20,7 +20,7 @@ export type Status = (typeof STATUSES)[number];
 /** 有向边；blocked 的解除目标由 meta.blocked_from 决定（见 ops.transition）。 */
 const EDGES: Record<Status, ReadonlySet<Status>> = {
   draft: new Set(["planning", "blocked"]),
-  planning: new Set(["collecting", "blocked"]),
+  planning: new Set(["collecting", "ready", "blocked"]), // planning→ready：无收集需求时直达（负责人 2026-08 指示）
   collecting: new Set(["ready", "planning", "blocked"]),
   ready: new Set(["in_progress", "collecting", "blocked"]),
   in_progress: new Set(["review", "blocked"]),
