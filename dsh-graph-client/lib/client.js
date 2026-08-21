@@ -763,7 +763,7 @@ window.__ModuleLoader__.load({
         // g-a92e1406：执行会话内嵌实时条——status_line 摘要并入状态小窗
         //（运行中 ⏳ / 空闲刚执行完 ✅）；无执行会话时退化为独立状态行（带动画）
         g.attempt_child_id
-          ? h("div", { key: "live", onClick: (e) => e.stopPropagation() },
+          ? h("div", { key: "live" },
               h(LiveStrip, { parentId: g.attempt_parent_session_id, childId: g.attempt_child_id,
                              statusLine: g.status_line }))
           : g.status_line
