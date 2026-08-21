@@ -551,3 +551,5 @@
 {"ts":"2026-08-22T03:27:43+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"调研 client 端点如何拿会话 workspace"}}
 {"ts":"2026-08-22T03:31:00+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"实施 client 端点 workspace 跟随"}}
 {"ts":"2026-08-22T03:33:21+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"跑测试与验收脚本回归"}}
+{"ts":"2026-08-22T03:37:31+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"完成，52测试+8脚本+跨项目probe全绿"}}
+{"ts":"2026-08-22T03:37:31+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"goal.transition","goal":"g-113","details":{"from":"in_progress","to":"review"}}

@@ -6,7 +6,7 @@
   "sandbox": "directory",
   "started_at": "2026-08-22T03:27:19+08:00",
   "claimed_at": null,
-  "status_line": "跑测试与验收脚本回归",
+  "status_line": "完成，52测试+8脚本+跨项目probe全绿",
   "result": "pending",
   "child_id": "ea561db6-143a-4716-a74c-58ce50a37eb8",
   "parent_session_id": "session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b"
