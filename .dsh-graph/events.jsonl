@@ -553,3 +553,5 @@
 {"ts":"2026-08-22T03:33:21+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"跑测试与验收脚本回归"}}
 {"ts":"2026-08-22T03:37:31+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"完成，52测试+8脚本+跨项目probe全绿"}}
 {"ts":"2026-08-22T03:37:31+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"goal.transition","goal":"g-113","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-22T03:38:22+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"supervisor.status_reported","details":{"status":"g-113 att-002 复核全绿（52/52、8 脚本、关键实现逐行确认），进 review 待负责人 verdict"}}
+{"ts":"2026-08-22T03:38:56+08:00","actor":"agent:ea561db6-143a-4716-a74c-58ce50a37eb8","event":"attempt.status_reported","goal":"g-113","details":{"attempt":"att-002","status":"对齐 brief：加 root 别名，跑全量验证"}}
