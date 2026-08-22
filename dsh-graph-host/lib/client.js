@@ -171,7 +171,7 @@ window.__ModuleLoader__.load({
       grid: { display: "grid", gridTemplateColumns: "130px repeat(6, minmax(150px, 1fr))", gap: 4 },
       laneLabel: { fontWeight: 600, padding: "8px 6px", borderTop: "1px solid rgba(128,128,128,.35)" },
       stageHead: { fontWeight: 600, textAlign: "center", padding: 4, opacity: 0.75 },
-      cell: { borderTop: "1px solid rgba(128,128,128,.35)", borderBottom: "1px solid rgba(128,128,128,.35)", padding: 4, minHeight: 40, verticalAlign: "top" },
+      cell: { borderTop: "1px solid rgba(128,128,128,.35)", padding: 4, minHeight: 40, verticalAlign: "top" },
       goalCard: {
         border: "1px solid rgba(128,128,128,.45)",
         borderLeft: "5px solid #4c8dff",
