@@ -875,3 +875,6 @@
 {"ts":"2026-08-22T16:23:41+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-106 已归档（能力由 g-119/g-120 覆盖）；backlog 剩 g-103/104/105/114；v0.5 待执行"}}
 {"ts":"2026-08-22T16:25:55+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-110","details":{"note":"负责人 2026-08-22 v0.5 GUI 补充：卡片删除/归档按钮（GUI 二次确认+输入卡片 id 防误删）；添加卡片入口+弹窗（kind 可选）。"}}
 {"ts":"2026-08-22T16:26:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-110","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T16:26:11+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-110 已补全 v0.5 GUI 需求（卡片删除/归档按钮+二次确认输 id；添加弹窗）；v0.5 三目标判据就绪待派发"}}
+{"ts":"2026-08-22T16:27:52+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-110","details":{"note":"负责人 2026-08-22 v0.5 GUI 补充：GUI 直接创建目标入口+弹窗（现建 goal 只能跟主管聊天，graph_create_goal 无 GUI/端点）。"}}
+{"ts":"2026-08-22T16:27:55+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-110","details":{"criteria_count":6,"rules_snapshot":"r-2026-08-3"}}

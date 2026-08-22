@@ -35,6 +35,14 @@
 - UI：目标卡片（或弹窗）加操作菜单——暂缓/合并/删除，走 host 写端点（事件先行）；合并需选择目标目标（下拉/搜索现有目标）；删除需二次确认；
 - 依赖：与 g-109 同改看板 UI，排期时注意文件冲突（串行）。
 
+## 补充 3（负责人 2026-08-22 v0.5 GUI 细化）
+
+**GUI 直接创建目标（goal）入口 + 弹窗**：现 GUI 无建 goal 能力——「添加信息收集任务」只在目标详情内建卡片，无法发起新 goal；建 goal 只能跟主管聊天（graph_create_goal 工具）。需：
+- host 新增 `/api/dsh-graph/create-goal` 端点（POST title/version/scope，调 core createGoal，事件先行 goal.created）；
+- GUI 看板主界面加「新建目标」入口 + 弹窗（填标题、可选 version 排期、scope）。
+
+
+
 ## 补充 2（负责人 2026-08-22 v0.5 GUI 细化）
 
 1. **卡片删除/归档**：不仅 core 需要删除、归档功能，**卡片上也要删除/归档按钮**——删除操作的 GUI 应**二次确认防误删，要求输入卡片 id**（防止手滑删错）；
@@ -57,7 +65,8 @@ v0.5 GUI 功能范围确认：本目标（g-110）扩展纳入**上下文卡片�
 2. GUI 目标卡片操作菜单：暂缓（moveGoal 回 backlog）/合并（选目标目标）/删除——删除需二次确认且要求输入目标 id 防误删
 3. GUI 上下文卡片删除/归档按钮：删除需二次确认且要求输入卡片 id（负责人 2026-08-22 明确）
 4. GUI 添加卡片入口+弹窗：可填标题、选择 kind=text/file/image/data（现 add-card 仅按名字+固定 text）
-5. 全量测试与冻结脚本 PASS，graph_validate 无问题
+5. GUI 直接创建目标（goal）入口+弹窗：host 新增 /api/dsh-graph/create-goal 端点（title/version/scope，事件先行 goal.created）+ 看板主界面「新建目标」按钮（现建 goal 只能跟主管聊天）
+6. 全量测试与冻结脚本 PASS，graph_validate 无问题
 
 ## 证据台账
 
