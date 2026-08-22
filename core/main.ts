@@ -77,7 +77,6 @@ function main(): void {
       const id = createGoal(args.root, {
         title: need(args, "title"),
         version: flag(args, "version"),
-        scope: flagAll(args, "scope"),
         actor,
       });
       console.log(id); // 只输出 id，供脚本捕获

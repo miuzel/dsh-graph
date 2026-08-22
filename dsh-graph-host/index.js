@@ -79,7 +79,7 @@ const GUIDE = readFileSync(new URL("./supervisor-guide.md", import.meta.url), "u
 // g-113：普通 agent 的 dsh-graph 使用指引（精简，非主管繁文）
 const USAGE = [
   "dsh-graph 是把工作组织成「目标看板」的插件。你有 graph_* 工具可用：",
-  "- graph_create_goal(title[, version, scope]) 建目标（进 backlog，带 version 则排期）；",
+  "- graph_create_goal(title[, version]) 建目标（进 backlog，带 version 则排期）；",
   "- graph_set_criteria(goal, criteria[]) 先登记质量判据（判据先于执行，硬规则）；",
   "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
   "- graph_add_card / graph_fill_card / graph_review_card 管理目标下的上下文卡片（信息收集）；",
@@ -99,11 +99,25 @@ const GUIDE_HINT = [
   "（完整 supervisor 工作守则不自动注入；如需，显式调用 skill dsh-graph-supervisor 加载。）",
 ].join("\n");
 
+// g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
+// 提醒内容强调主管铁律：只做规划/派发/把关/复核、实现交子代理、每动作后
+// graph_report_supervisor_status、review→delivered 必须等负责人 verdict。
+// token 成本约 80 字，简短精炼。
+const SUPERVISOR_DISCIPLINE = [
+  "⚠️ **主管纪律提醒**（每 turn 自动注入）：",
+  "1. **只做规划、派发、把关、复核**——绝不自己实现、写代码、长调研；",
+  "2. 自己动手仅限：一句话决策、一行小修、graph_start_attempt 派发执行；",
+  "3. **每动作后 graph_report_supervisor_status**——看板实时显示状态；",
+  "4. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；",
+  "5. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。",
+].join("\n");
+
+
 // g-118：dsh-graph help 命令内容源（graph_help 工具输出 + 引导提示词指向它）。
 // 使用说明 + claim 指引；不含主管守则（完整守则仍在 supervisor-guide.md / skill）。
 const HELP_TEXT = [
   "dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具：",
-  "- graph_create_goal(title[, version, scope]) 建目标（进 backlog，带 version 则排期）；",
+  "- graph_create_goal(title[, version]) 建目标（进 backlog，带 version 则排期）；",
   "- graph_set_criteria(goal, criteria[]) 先登记质量判据（判据先于执行，硬规则）；",
   "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
   "- graph_add_card / graph_fill_card / graph_review_card 管理目标下的上下文卡片（信息收集）；",
@@ -151,9 +165,9 @@ export function apply(ctx, config) {
       def: {
         name: "graph_create_goal",
         description: "创建目标（默认进 backlog；带 version 则排期入版本）。返回目标 id。",
-        parameters: params({ title: str, version: str, scope: strArr }, ["title"]),
+        parameters: params({ title: str, version: str }, ["title"]),
       },
-      run: (a, ex) => ({ goal: createGoal(rootFor(ex), { title: a.title, version: a.version, scope: a.scope, actor: actorOf(ex) }) }),
+      run: (a, ex) => ({ goal: createGoal(rootFor(ex), { title: a.title, version: a.version, actor: actorOf(ex) }) }),
     },
     {
       def: {
@@ -450,10 +464,10 @@ export function apply(ctx, config) {
   const resolveSpawnParent = (rootForReq) => {
     try {
       const supervisorId = readSupervisorSession(rootForReq);
-      if (!supervisorId) return { supervisorId: null, parent: null, error: "未配置 supervisor.session（project.yaml）" };
+      if (!supervisorId) return { supervisorId: null, parent: null, error: "未配置 supervisor.session（project.yaml）——请先在该 workspace 运行 graph_claim_supervisor() 完成主管会话接管，再派发执行" };
       const agents = ctx.get?.("agents");
       const parent = agents?.get?.(supervisorId) ?? null;
-      if (!parent) return { supervisorId, parent: null, error: `主管会话 ${supervisorId} 无 live Agent（可能未在运行）` };
+      if (!parent) return { supervisorId, parent: null, error: `主管会话 ${supervisorId} 无 live Agent（可能未在运行）——请确认该主管会话已开启/在运行，或重新 graph_claim_supervisor()` };
       return { supervisorId, parent, error: null };
     } catch (e) {
       return { supervisorId: null, parent: null, error: String(e?.message ?? e) };
@@ -587,9 +601,9 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, to, reason } = body;
+          const { goal, to, reason, force } = body;
           if (!goal || !to) return json(res, 400, { error: "missing goal or to" });
-          transition(rootForReq(req, body), goal, to, { reason, actor: "human:gui" });
+          transition(rootForReq(req, body), goal, to, { reason, force, actor: "human:gui" });
           json(res, 200, { ok: true });
         } catch (e) {
           // GraphError → 400（参照 /accept 模式但用 400 而非 500）
@@ -788,12 +802,12 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { title, version, scope, description } = body;
+          const { title, version, description } = body;
           if (!title || typeof title !== "string" || !title.trim()) {
             return json(res, 400, { error: "missing title" });
           }
           const r = rootForReq(req, body);
-          const goalId = createGoal(r, { title: title.trim(), version, scope, description, actor: "human:gui" });
+          const goalId = createGoal(r, { title: title.trim(), version, description, actor: "human:gui" });
           json(res, 200, { ok: true, goal: goalId });
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
@@ -836,8 +850,34 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           order: 10,
           text: () => GUIDE_HINT,
         }));
+        // g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
+        // text(context) 里取 sessionId=context?.agent?.session?.id；
+        // 再取 cwd=context?.agent?.session?.header?.cwd（当前会话 workspace）；
+        // 用 resolveRoot(config, cwd) 得该项目 .dsh-graph；readSupervisorSession(该项目root)；
+        // supervisorId===sessionId 时返回 SUPERVISOR_DISCIPLINE，否则空。
+        // cwd 缺失则不注入（避免误注入）。
+        disposers.push(sp.section({
+          name: "dsh-graph-supervisor-discipline",
+          order: 11,
+          text: (context) => {
+            try {
+              const sessionId = context?.agent?.session?.id;
+              if (!sessionId) return "";
+              // 读当前会话 workspace 的项目 .dsh-graph/project.yaml 的 supervisor.session
+              const cwd = context?.agent?.session?.header?.cwd;
+              if (!cwd) return ""; // cwd 缺失则不注入（避免误注入）
+              const projectRoot = resolveRoot(config, cwd);
+              const supervisorId = readSupervisorSession(projectRoot);
+              if (!supervisorId || supervisorId !== sessionId) return "";
+              return "\n" + SUPERVISOR_DISCIPLINE;
+            } catch {
+              return "";
+            }
+          },
+        }));
         sectionState.registered = true;
         process.stderr.write(`[dsh-graph-host] g-118: guide hint section 已注册（所有会话注入引导提示词，root=${root}）\n`);
+        process.stderr.write(`[dsh-graph-host] g-131: supervisor discipline section 已注册（仅主管会话注入纪律提醒，按会话 workspace 解析）\n`);
       } catch (e) {
         console.error("[dsh-graph-host] g-118 guide hint section 注册失败:", e?.message ?? e);
       }

@@ -16,11 +16,11 @@ export const STATUSES = [
 const EDGES = {
     draft: new Set(["planning", "blocked"]),
     planning: new Set(["collecting", "ready", "blocked"]), // planning→ready：无收集需求时直达（负责人 2026-08 指示）
-    collecting: new Set(["ready", "planning", "blocked"]),
+    collecting: new Set(["ready", "planning", "blocked", "in_progress"]), // collecting→in_progress：跳过 ready 直接执行（人工拖动视为授权）
     ready: new Set(["in_progress", "collecting", "blocked"]),
-    in_progress: new Set(["review", "blocked"]),
+    in_progress: new Set(["review", "blocked", "collecting"]), // in_progress→collecting = 中断回退重新收集（负责人 2026-08-22）
     review: new Set(["delivered", "in_progress", "blocked"]), // review→in_progress = 打回
-    delivered: new Set(),
+    delivered: new Set(["review"]), // delivered→review：负责人备注后回 review 补充/修 bug（负责人 2026-08-22）
     blocked: new Set(), // 特殊处理：只能回 blocked_from
 };
 /**
@@ -53,7 +53,7 @@ export function assertTransition(meta, to, ctx) {
             throw new GraphError("进入 blocked 必须提供 reason");
         }
     }
-    if (to === "in_progress") {
+    if (to === "in_progress" && !ctx.force) {
         if (!meta.rules_snapshot) {
             throw new GraphError("进入 in_progress 前必须记录 rules_snapshot");
         }

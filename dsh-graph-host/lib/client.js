@@ -1285,6 +1285,19 @@ window.__ModuleLoader__.load({
       const startExecution = async () => {
         setLoading(true);
         try {
+          // Step 1: force transition 到 in_progress（人工操作视为授权）
+          const tr = await fetch(graphUrl("/api/dsh-graph/transition"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, to: "in_progress", force: true }),
+          });
+          const trData = await tr.json();
+          if (!trData.ok) {
+            setNote("⚠️ 状态迁移失败：" + (trData.error || "未知错误"));
+            setLoading(false);
+            return;
+          }
+          // Step 2: 派发执行子代理
           const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -1299,6 +1312,7 @@ window.__ModuleLoader__.load({
             } else {
               setNote("⚠️ 子代理未启动（无 child_id）");
             }
+            load(); // 刷新看板
           } else {
             setNote("⚠️ 执行失败：" + (data.error || "未知错误"));
           }
@@ -1797,38 +1811,82 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // g-77647351：进执行列确认弹窗（复用卡片中「执行」按钮逻辑，替代服务端报错兜底）
-    // 展示目标信息 + 判据/规则快照状态提示，用户确认后调 start-execution 派发子代理
+    // g-77647351：进执行列确认弹窗
+    // 无子代理 → force transition + start-execution 派新子代理
+    // 有子代理 → force transition + 通过 session.prompt 给旧子代理排队重新执行（不派新）
     function InProgressPrompt(props) {
-      const { goalId, goalData, onConfirm, onCancel } = props;
+      const { goalId, goalData, supervisorSession, onConfirm, onCancel } = props;
       const [loading, setLoading] = React.useState(false);
       const [note, setNote] = React.useState(null);
       const hasChild = !!(goalData?.attempt_child_id);
       const hasCriteria = !!(goalData?.criteria_count);
-      const hasRules = !!(goalData?.rules_snapshot);
+      const oldChildId = goalData?.attempt_child_id ?? null;
+      const oldParentId = goalData?.attempt_parent_session_id ?? null;
+
+      // 有子代理时用 session.prompt 排队重新执行，无子代理时派新
+      const { session: oldSession } = useBoundSession(oldParentId, oldChildId);
 
       const startExec = async () => {
+        if (!supervisorSession) {
+          setNote("⚠️ 该 workspace 未配置 supervisor.session（project.yaml）。请先在此 workspace 运行 graph_claim_supervisor() 完成主管会话接管，再执行。");
+          return;
+        }
         setLoading(true);
-        setNote("派发中…");
         try {
-          const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
+          // Step 1: force transition 到 in_progress（人工拖动视为授权）
+          setNote("迁移中…");
+          const tr = await fetch(graphUrl("/api/dsh-graph/transition"), {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId }),
+            body: JSON.stringify({ goal: goalId, to: "in_progress", force: true }),
           });
-          const data = await r.json();
-          if (data.ok) {
-            if (data.child_id) {
-              setNote("✅ 已派发执行子代理，id：" + data.child_id);
-              showToast("✅ 已派发执行子代理");
-            } else if (data.child_error) {
-              setNote("⚠️ 子代理启动失败：" + data.child_error);
-            } else {
-              setNote("⚠️ 子代理未启动（无 child_id）");
+          const trData = await tr.json();
+          if (!trData.ok) {
+            setNote("⚠️ 状态迁移失败：" + (trData.error || "未知错误"));
+            setLoading(false);
+            return;
+          }
+
+          if (hasChild && oldSession?.prompt) {
+            // 有子代理 → 排队发"重新执行"消息，不派新子代理
+            setNote("发送重新执行指令…");
+            try {
+              const res = await oldSession.prompt(
+                [{ type: "text", text: `【重新执行】用户从看板拖放触发重新执行目标 ${goalId}。请从头开始执行目标描述和质量判据中的任务。` }],
+                "queue",
+              );
+              if (res?.ok) {
+                setNote("✅ 已向子代理排队发送重新执行指令");
+                showToast("✅ 已向子代理发送重新执行指令");
+              } else {
+                setNote("⚠️ 发送失败：" + (res?.error?.message ?? "未知错误") + "。请打开子代理会话手动操作。");
+              }
+            } catch (e) {
+              setNote("⚠️ 发送失败：" + String(e?.message ?? e) + "。请打开子代理会话手动操作。");
             }
-            setTimeout(() => { onConfirm(); }, 1200);
+            setTimeout(() => { onConfirm(); }, 1500);
           } else {
-            setNote("⚠️ 执行失败：" + (data.error || "未知错误"));
+            // 无子代理 → 派发新执行子代理
+            setNote("派发子代理…");
+            const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ goal: goalId }),
+            });
+            const data = await r.json();
+            if (data.ok) {
+              if (data.child_id) {
+                setNote("✅ 已派发执行子代理，id：" + data.child_id);
+                showToast("✅ 已派发执行子代理");
+              } else if (data.child_error) {
+                setNote("⚠️ 子代理启动失败：" + data.child_error);
+              } else {
+                setNote("⚠️ 子代理未启动（无 child_id）");
+              }
+              setTimeout(() => { onConfirm(); }, 1200);
+            } else {
+              setNote("⚠️ 执行失败：" + (data.error || "未知错误"));
+            }
           }
         } catch (e) {
           setNote("⚠️ 请求失败：" + String(e?.message ?? e));
@@ -1843,22 +1901,83 @@ window.__ModuleLoader__.load({
             `🚀 执行「${goalData?.title ?? goalId}」`),
           h("div", { style: { ...S.meta, marginBottom: 8 } },
             hasChild
-              ? "⚠️ 该目标已有执行子代理，继续将重新派发。"
-              : "将为目标创建执行子代理，子代理会自动迁移状态到「执行中」。"),
+              ? "该目标已有执行子代理。将向其发送重新执行指令（排队），不另起新子代理。"
+              : "将为目标创建执行子代理，状态迁移到「执行中」。"),
+          // 有子代理时：提供链接让用户自己打开会话管理
+          hasChild && oldChildId
+            ? h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 8 } },
+                h("span", { style: { fontSize: 12 } }, "🔗 子代理："),
+                h("button", {
+                  style: { ...S.btn, fontSize: 12, padding: "2px 8px" }, className: "dg-btn",
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    if (oldParentId) openChildSession(oldParentId, oldChildId);
+                  },
+                }, oldChildId.slice(0, 8) + "… ↗"))
+            : null,
           !hasCriteria
             ? h("div", { style: { ...S.meta, color: "#e0a53a", marginBottom: 4 } },
-                "⚠️ 质量判据尚未登记——子代理可能因判据缺失无法开始执行。")
+                "⚠️ 质量判据尚未登记——将以授权模式强制迁移到执行列。")
             : null,
-          h("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
+          h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
             h("button", {
               style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
               disabled: loading, onClick: startExec,
-            }, loading ? "派发中…" : "🚀 确认执行"),
+            }, loading ? "处理中…" : (hasChild ? "🔄 重新执行" : "🚀 确认执行")),
             h("button", {
               style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
               onClick: onCancel,
             }, "取消")),
           note ? h("div", { style: { ...S.meta, marginTop: 6 } }, note) : null,
+        ),
+      );
+    }
+
+    // g-77647351：交付确认弹窗——告知主管需做代码合并等交付工作，提供跳转主管会话按钮
+    function DeliverPrompt(props) {
+      const { goalId, goalTitle, supervisorSession, onConfirm, onCancel } = props;
+      const promptText = `【交付通知】目标「${goalTitle ?? goalId}」（${goalId}）即将标记为已交付。请进行最终复核：代码合并、文档更新等交付工作。`;
+      const jumpToSupervisor = async () => {
+        try {
+          const copied = await copyText(promptText);
+          const rt = sessionsRt ?? appCtx?.get?.("sessions");
+          if (rt && supervisorSession) {
+            rt.open?.(supervisorSession);
+            activateChatTab();
+          }
+          if (copied) {
+            showToast("✅ 预填内容已复制，到主管对话窗 Ctrl+V 直接粘贴发送");
+          }
+        } catch { /* 静默 */ }
+      };
+      return h("div", { style: S.overlay, onClick: onCancel },
+        h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
+          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
+            `📦 交付「${goalTitle ?? goalId}」`),
+          h("div", { style: { ...S.meta, marginBottom: 8, lineHeight: 1.8 } },
+            "交付前请确保以下工作已完成：", h("br"),
+            "• 代码已合并到主分支", h("br"),
+            "• 相关文档/配置已更新", h("br"),
+            "• 已通知主管进行最终复核", h("br"),
+            h("br"),
+            h("span", { style: { color: "#e0a53a" } },
+              "⚠️ 标记为「已交付」后需主管评审通过才能正式完成。")),
+          h("div", { style: { display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" } },
+            supervisorSession
+              ? h("button", {
+                  style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
+                  onClick: jumpToSupervisor,
+                }, "↗ 告知主管")
+              : null,
+            h("button", {
+              style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
+              onClick: () => onConfirm(),
+            }, "📦 确认交付"),
+            h("button", {
+              style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
+              onClick: onCancel,
+            }, "取消")),
         ),
       );
     }
@@ -1875,7 +1994,6 @@ window.__ModuleLoader__.load({
       const [newGoalTitle, setNewGoalTitle] = React.useState("");
       const [newGoalVersion, setNewGoalVersion] = React.useState("");
       const [newGoalDesc, setNewGoalDesc] = React.useState("");
-      const [newGoalScope, setNewGoalScope] = React.useState("");
       const [createNote, setCreateNote] = React.useState(null);
       const [creating, setCreating] = React.useState(false);
       // g-77647351：拖拽状态机
@@ -1961,6 +2079,8 @@ window.__ModuleLoader__.load({
       const [backwardPrompt, setBackwardPrompt] = React.useState(null); // {goalId, toStatus, hasChild, childId, parentId}
       // g-77647351：进执行列确认弹窗状态（复用执行按钮逻辑，替代服务端报错）
       const [inProgressPrompt, setInProgressPrompt] = React.useState(null); // {goalId}
+      // g-77647351：交付确认弹窗状态
+      const [deliverPrompt, setDeliverPrompt] = React.useState(null); // {goalId, goalTitle, toStatus}
 
       // g-77647351：同列重排提交（照抄 commitSessionDrag）
       function commitSameColumnDrag(activeDrag, over) {
@@ -2019,7 +2139,12 @@ window.__ModuleLoader__.load({
               showToast(`✅ ${goalId} 已移动到 ${targetLaneKey}`);
               load();
             } else {
-              showToast("⚠️ 移动失败：" + (data.error || "未知错误"));
+              const err = data.error || "未知错误";
+              if (err.includes("不能移回 backlog 平铺")) {
+                showToast("⚠️ 目标有附件（cards/attempts），不能移回 backlog。可移到独立目标或版本中。");
+              } else {
+                showToast("⚠️ 移动失败：" + err);
+              }
             }
           })
           .catch((e) => showToast("⚠️ 请求失败：" + String(e?.message ?? e)));
@@ -2065,9 +2190,11 @@ window.__ModuleLoader__.load({
           showToast("⚠️ blocked 状态只能解除回原状态（由服务端校验）");
           return;
         }
-        // 判据 3：delivered 终态需确认
+        // 判据 3：delivered 终态 → 弹窗告知主管需做交付工作
         if (overStageKey === "deliver") {
-          if (!confirm("确认将目标移至「已交付」？（终态，需主管评审）")) return;
+          const goalData = allGoals.find((g) => g.id === goalId);
+          setDeliverPrompt({ goalId, goalTitle: goalData?.title ?? goalId, toStatus });
+          return;
         }
         // 判据 4：回退方向询问理由
         if (isBackward(fromStatus, toStatus)) {
@@ -2265,7 +2392,6 @@ window.__ModuleLoader__.load({
           const body = { title: t };
           if (newGoalVersion.trim()) body.version = newGoalVersion.trim();
           if (newGoalDesc.trim()) body.description = newGoalDesc.trim();
-          if (newGoalScope.trim()) body.scope = newGoalScope.trim().split(",").map(s => s.trim()).filter(Boolean);
           const r = await fetch(graphUrl("/api/dsh-graph/create-goal"), {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -2354,14 +2480,6 @@ window.__ModuleLoader__.load({
                     h("option", { value: "" }, "backlog（默认）"),
                     // 版本选项来自 board 数据的 versions 列表
                     ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug }, v.slug)))),
-                h("div", { style: { marginBottom: 12 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "范围（可选，逗号分隔）"),
-                  h("input", {
-                    style: { ...S.promptInput, width: "100%" },
-                    value: newGoalScope,
-                    placeholder: "如 core, dsh-graph-host",
-                    onChange: (e) => setNewGoalScope(e.target.value),
-                  })),
                 h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13 },
@@ -2392,14 +2510,29 @@ window.__ModuleLoader__.load({
               onCancel: () => setBackwardPrompt(null),
             })
           : null,
-        // g-77647351：进执行列确认弹窗（复用执行按钮逻辑）
+        // g-77647351：进执行列确认弹窗
         inProgressPrompt
           ? h(InProgressPrompt, {
               key: "in-progress-prompt",
               goalId: inProgressPrompt.goalId,
               goalData: allGoals.find((g) => g.id === inProgressPrompt.goalId) ?? null,
+              supervisorSession: b.supervisorSession ?? null,
               onConfirm: () => { setInProgressPrompt(null); load(); },
               onCancel: () => setInProgressPrompt(null),
+            })
+          : null,
+        // g-77647351：交付确认弹窗
+        deliverPrompt
+          ? h(DeliverPrompt, {
+              key: "deliver-prompt",
+              goalId: deliverPrompt.goalId,
+              goalTitle: deliverPrompt.goalTitle,
+              supervisorSession: b.supervisorSession ?? null,
+              onConfirm: () => {
+                setDeliverPrompt(null);
+                commitCrossColumnDrag(deliverPrompt.goalId, deliverPrompt.toStatus);
+              },
+              onCancel: () => setDeliverPrompt(null),
             })
           : null,
       );

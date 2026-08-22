@@ -2,7 +2,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, writeFileSync, } from "node:fs";
 import { join, basename, dirname, relative } from "node:path";
 import { randomUUID } from "node:crypto";
-import { parseDoc, serializeDoc, replaceSection, criteriaPresent, } from "./model.js";
+import { parseDoc, serializeDoc, replaceSection, criteriaPresent, countCriteria, } from "./model.js";
 import { appendEvent, readEvents, replayStatuses, nowIso } from "./events.js";
 import { GraphError, STATUSES, assertTransition } from "./machine.js";
 export { GraphError };
@@ -380,7 +380,7 @@ export function createGoal(root, opts) {
         created_at: nowIso(),
         created_by: opts.actor,
         version: opts.version ?? null,
-        scope: opts.scope ?? [],
+        scope: [],
         depends_on: [],
         review: { reviewer: "human", prompt: null },
         pk: { lanes: 1, sandbox: "directory" },
@@ -469,6 +469,7 @@ export function transition(root, id, to, opts) {
         body: doc.body,
         criteriaConfirmed,
         reason: opts.reason,
+        force: opts.force,
     });
     if (to === "blocked") {
         doc.meta.blocked_from = from;
@@ -964,7 +965,8 @@ export function moveGoal(root, id, opts) {
 }
 export function boardProjection(root) {
     const goalItem = (file) => {
-        const meta = loadGoal(file).meta;
+        const doc = loadGoal(file);
+        const meta = doc.meta;
         // 取最新一个带 status_line 的 attempt
         let statusLine = null;
         const dir = basename(file) === "goal.md" ? dirname(file) : null;
@@ -1052,6 +1054,8 @@ export function boardProjection(root) {
             pk_lanes: meta.pk?.lanes ?? 1,
             blocked_reason: meta.blocked_reason ?? null,
             cards,
+            criteria_count: countCriteria(doc.body),
+            rules_snapshot: meta.rules_snapshot ?? null,
         };
     };
     const versions = [];

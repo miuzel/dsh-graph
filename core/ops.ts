@@ -17,6 +17,7 @@ import {
   serializeDoc,
   replaceSection,
   criteriaPresent,
+  countCriteria,
   type GoalDoc,
 } from "./model.ts";
 import { appendEvent, readEvents, replayStatuses, nowIso, type GraphEvent } from "./events.ts";
@@ -397,7 +398,7 @@ function nextGoalSeq(root: string): string {
 
 export function createGoal(
   root: string,
-  opts: { title: string; version?: string; scope?: string[]; description?: string; actor: string },
+  opts: { title: string; version?: string; description?: string; actor: string },
 ): string {
   const id = nextGoalSeq(root);
   const meta: Record<string, any> = {
@@ -408,7 +409,7 @@ export function createGoal(
     created_at: nowIso(),
     created_by: opts.actor,
     version: opts.version ?? null,
-    scope: opts.scope ?? [],
+    scope: [],
     depends_on: [],
     review: { reviewer: "human", prompt: null },
     pk: { lanes: 1, sandbox: "directory" },
@@ -496,7 +497,7 @@ export function transition(
   root: string,
   id: string,
   to: string,
-  opts: { reason?: string; actor: string },
+  opts: { reason?: string; actor: string; force?: boolean },
 ): void {
   const file = findGoalFile(root, id);
   const doc = loadGoal(file);
@@ -509,6 +510,7 @@ export function transition(
     body: doc.body,
     criteriaConfirmed,
     reason: opts.reason,
+    force: opts.force,
   });
   if (to === "blocked") {
     doc.meta.blocked_from = from;
@@ -1075,6 +1077,9 @@ export interface BoardGoal {
   /** 被复用派生（g-a92e1406）：子代理被跨目标复用时，旧绑定目标标 reused_by = 新目标 id */
   reused_by?: string | null;
   cards?: Array<Record<string, any>>;
+  /** 质量判据实质行数（g-77647351 看板「判据未登记」提示数据源）；≥1 即已登记 */
+  criteria_count?: number;
+  rules_snapshot?: string | null;
 }
 
 export interface BoardVersion {
@@ -1092,7 +1097,8 @@ export function boardProjection(root: string): {
   backlog: BoardGoal[];
 } {
   const goalItem = (file: string): BoardGoal => {
-    const meta = loadGoal(file).meta;
+    const doc = loadGoal(file);
+    const meta = doc.meta;
     // 取最新一个带 status_line 的 attempt
     let statusLine: string | null = null;
     const dir = basename(file) === "goal.md" ? dirname(file) : null;
@@ -1176,6 +1182,8 @@ export function boardProjection(root: string): {
       pk_lanes: meta.pk?.lanes ?? 1,
       blocked_reason: meta.blocked_reason ?? null,
       cards,
+      criteria_count: countCriteria(doc.body),
+      rules_snapshot: meta.rules_snapshot ?? null,
     };
   };
   const versions: BoardVersion[] = [];
