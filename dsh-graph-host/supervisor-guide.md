@@ -98,10 +98,14 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
    打回重做才开新 attempt；
 5. 任何阶段受阻 → `→blocked` 必须带具体 reason；解除只能回到 `blocked_from`。
 
-6. **交付前置（负责人 2026-08-22）：到 delivered 的目标，其改动必须已 git commit**——
-   supervisor 在 `review→delivered` 前核对工作树，确保该目标涉及的源码 / 文档 /
-   `.dsh-graph` 目标文件**已提交**；未 commit 不得 delivered（代码落库才算交付，
-   避免「状态 delivered 但代码没提交」的假交付）。
+6. **交付前置（负责人 2026-08-22 定，2026-08-23 细化 commit 归属）：到 delivered 的目标，其改动必须已 git commit**——
+   但**区分谁、何时 commit**：
+   - **worktree 开发**（隔离分支）：子代理在 worktree 内 commit OK；supervisor 复核通过后
+     merge/`git checkout --` 到 main（只合代码，别重置 `.dsh-graph`）。
+   - **直接 main 开发**：子代理**不提前 commit**——review 还会修 bug，提前提交会产生碎
+     提交/与后续修改冲突。正确：子代理把**改动留在工作树不提交**，supervisor 复核+
+     修完 bug 后，**统一提交一个最终 commit**（交付前置：delivered 前该目标改动已落库）。
+   - 即：commit 由 supervisor 在交付前**统一收口**；子代理无需（也不应）在 main 上抢提交。
 
 要点：状态迁移一律走工具（事件先行，R-02），**绝不手改 frontmatter 状态
 字段**；判据确认与 review verdict 是人工 gate，停轮等输入，不用自动续轮
