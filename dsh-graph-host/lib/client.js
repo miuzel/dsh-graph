@@ -2407,8 +2407,8 @@ window.__ModuleLoader__.load({
           h("button", {
             style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
             className: "dg-btn",
-            title: version ? `在 ${version} 新建目标` : "新建目标（backlog）",
-            onClick: () => openCreateGoal(version),
+            title: key === "standalone" ? "新建独立目标" : (version ? `在 ${version} 新建目标` : "新建目标（backlog）"),
+            onClick: () => openCreateGoal(key === "standalone" ? "standalone" : version),
           }, "＋"));
         return [labelEl, ...cells];
       };
@@ -2610,9 +2610,10 @@ window.__ModuleLoader__.load({
                     value: newGoalVersion,
                     onChange: (e) => setNewGoalVersion(e.target.value),
                   },
-                    h("option", { value: "" }, "backlog（默认）"),
+                    h("option", { value: "", style: { background: "#2a2b31", color: "#e6e6e6" } }, "backlog（默认）"),
+                    h("option", { value: "standalone", style: { background: "#2a2b31", color: "#e6e6e6" } }, "独立目标"),
                     // 版本选项来自 board 数据的 versions 列表
-                    ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug }, v.slug)))),
+                    ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug, style: { background: "#2a2b31", color: "#e6e6e6" } }, v.slug)))),
                 h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13 },

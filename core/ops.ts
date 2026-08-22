@@ -401,8 +401,9 @@ export function createGoal(
   opts: { title: string; version?: string; description?: string; actor: string },
 ): string {
   const id = nextGoalSeq(root);
-  // g-137：带 version → 初始状态 planning；不带 version（backlog）→ draft
-  const initialStatus = opts.version ? "planning" : "draft";
+  // g-137：带 version（非 standalone）→ planning；backlog/standalone → draft
+  const isStandalone = opts.version === "standalone";
+  const initialStatus = (opts.version && !isStandalone) ? "planning" : "draft";
   const meta: Record<string, any> = {
     id,
     title: opts.title,
@@ -410,7 +411,7 @@ export function createGoal(
     blocked_reason: null,
     created_at: nowIso(),
     created_by: opts.actor,
-    version: opts.version ?? null,
+    version: isStandalone ? null : (opts.version ?? null),
     depends_on: [],
     review: { reviewer: "human", prompt: null },
     pk: { lanes: 1, sandbox: "directory" },
@@ -418,7 +419,11 @@ export function createGoal(
     skill_refs: [],
   };
   let file: string;
-  if (opts.version) {
+  if (isStandalone) {
+    // g-129/g-137：创建独立目标 → root/goals/<id>/goal.md，version=null
+    file = join(root, "goals", id, "goal.md");
+    mkdirSync(join(root, "goals", id), { recursive: true });
+  } else if (opts.version) {
     file = join(root, "versions", opts.version, "goals", id, "goal.md");
     mkdirSync(join(root, "versions", opts.version, "goals", id), {
       recursive: true,
