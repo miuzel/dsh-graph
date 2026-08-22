@@ -2,7 +2,7 @@
 {
   "id": "v-004",
   "name": "v0.4 单包时代（0.4.x）",
-  "status": "active",
+  "status": "released",
   "created_at": "2026-08-22T13:02:00+08:00"
 }
 ---
