@@ -132,18 +132,23 @@ window.__ModuleLoader__.load({
       }
       .dg-summary-clamp:hover { text-decoration: underline; }
       /* g-137：backlog 行平铺展示样式 */
+      .dg-backlog-lane {
+        background: rgba(0,0,0,.15);
+        border-radius: 6px;
+        margin: 4px 0;
+      }
       .dg-backlog-flat {
         display: flex;
         flex-wrap: wrap;
-        gap: 6px;
+        gap: 8px;
         padding: 8px;
         min-height: 40px;
         align-content: flex-start;
       }
       .dg-backlog-flat .dg-card {
-        flex: 0 0 auto;
-        max-width: 280px;
-        min-width: 200px;
+        flex: 0 0 220px;
+        width: 220px;
+        box-sizing: border-box;
       }
       .dg-backlog-flat .dg-cell-drop-active {
         background: rgba(76,141,255,.08);
@@ -166,7 +171,7 @@ window.__ModuleLoader__.load({
       grid: { display: "grid", gridTemplateColumns: "130px repeat(6, minmax(150px, 1fr))", gap: 4 },
       laneLabel: { fontWeight: 600, padding: "8px 6px", borderTop: "1px solid rgba(128,128,128,.35)" },
       stageHead: { fontWeight: 600, textAlign: "center", padding: 4, opacity: 0.75 },
-      cell: { borderTop: "1px solid rgba(128,128,128,.35)", padding: 4, minHeight: 40, verticalAlign: "top" },
+      cell: { borderTop: "1px solid rgba(128,128,128,.35)", borderBottom: "1px solid rgba(128,128,128,.35)", padding: 4, minHeight: 40, verticalAlign: "top" },
       goalCard: {
         border: "1px solid rgba(128,128,128,.45)",
         borderLeft: "5px solid #4c8dff",
@@ -2414,8 +2419,8 @@ window.__ModuleLoader__.load({
           }, "＋"));
         const flatCell = h("div", {
           key: key + "-flat",
-          style: { gridColumn: "1 / -1", minHeight: 40 },
-          className: isOverThisCell ? "dg-cell-drop-active" : "",
+          style: { gridColumn: "1 / -1", minHeight: 40, borderTop: "1px solid rgba(128,128,128,.35)" },
+          className: "dg-backlog-lane" + (isOverThisCell ? " dg-cell-drop-active" : ""),
           onDragOver: drag ? (e) => {
             e.preventDefault();
             e.dataTransfer.dropEffect = "move";
