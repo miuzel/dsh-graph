@@ -932,3 +932,5 @@
 {"ts":"2026-08-22T16:54:03+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-130 调研完成已复核（含 3 决策点待负责人拍板）；等 g-129 编辑器调研"}}
 {"ts":"2026-08-22T16:54:12+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.filled","goal":"g-129","details":{"card":"card-cc069a44","by":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"}}
 {"ts":"2026-08-22T16:54:14+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.reviewed","goal":"g-129","details":{"card":"card-cc069a44","by":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"}}
+{"ts":"2026-08-22T16:54:25+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"v0.5 三调研完成；待负责人定 4 个决策点后按依赖派发执行"}}
+{"ts":"2026-08-22T16:55:49+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-130","details":{"note":"负责人 2026-08-22 定案：①正文中 h2 降级为 h3（不报错）；②### 开头保留不剥离；③validate() 增加「目标描述小节重复」不变式。全部采纳调研推荐。"}}
