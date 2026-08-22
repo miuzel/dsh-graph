@@ -135,7 +135,7 @@ window.__ModuleLoader__.load({
       .dg-backlog-lane {
         background: rgba(0,0,0,.15);
         border-radius: 6px;
-        margin: 4px 0;
+        padding: 4px;
       }
       .dg-backlog-flat {
         display: flex;
@@ -2424,7 +2424,7 @@ window.__ModuleLoader__.load({
           }, "＋"));
         const flatCell = h("div", {
           key: key + "-flat",
-          style: { gridColumn: "2 / -1", minHeight: 40, borderTop: "1px solid rgba(128,128,128,.35)" },
+          style: { gridColumn: "2 / 8", minHeight: 40, borderTop: "1px solid rgba(128,128,128,.35)" },
           className: "dg-backlog-lane" + (isOverThisCell ? " dg-cell-drop-active" : ""),
           onDragOver: drag ? (e) => {
             e.preventDefault();
