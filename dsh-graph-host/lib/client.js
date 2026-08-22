@@ -2517,24 +2517,27 @@ window.__ModuleLoader__.load({
                 if (d > maxDays) maxDays = d;
               }
             }
-            const duration = maxDays >= 1 ? ` · ${Math.floor(maxDays)}天` : "";
-            const summaryText = `⛔ ×${orderedGoals.length}${duration}`;
+            const duration = maxDays >= 1 ? `${Math.floor(maxDays)}天` : "";
+            // g-127：用换行符让窄条内自然竖排（文字保持水平，不旋转）
+            const summaryText = duration
+              ? h(React.Fragment, null, "⛔", h("br"), `×${orderedGoals.length}`, h("br"), duration)
+              : h(React.Fragment, null, "⛔", h("br"), `×${orderedGoals.length}`);
             return h("div", {
               key: s.key,
               style: {
                 ...S.cell,
                 background: isOverThisCell ? "rgba(76,141,255,.10)" : laneBg,
-                writingMode: "vertical-rl",
-                textOrientation: "mixed",
                 textAlign: "center",
-                padding: "10px 4px",
+                padding: "10px 2px",
                 minWidth: 0,
                 width: 36,
                 cursor: "pointer",
                 userSelect: "none",
                 fontSize: 11,
                 opacity: 0.85,
-                whiteSpace: "nowrap",
+                lineHeight: 1.3,
+                wordBreak: "break-all",
+                overflow: "hidden",
               },
               className: "dg-blocked-collapsed" + (isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? " dg-cell-drop-active" : ""),
               onClick: (e) => { e.stopPropagation(); setBlockedColumnCollapsed(false); },

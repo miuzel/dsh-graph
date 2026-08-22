@@ -6,7 +6,7 @@
   "sandbox": "directory",
   "started_at": "2026-08-23T02:36:23+08:00",
   "claimed_at": null,
-  "status_line": "本轮完成，等待 review",
+  "status_line": "已修正文字方向，重新提交 review",
   "result": "pending",
   "child_id": "03a77e03-460c-470e-8dd3-af1e2b4fd05e",
   "parent_session_id": "session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"
