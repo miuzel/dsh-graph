@@ -1803,6 +1803,9 @@ window.__ModuleLoader__.load({
       const [archiveNote, setArchiveNote] = React.useState(null);
       const isArchived = state.data?.meta?.archived === true;
       const canArchive = ["draft", "planning", "delivered"].includes(state.data?.meta?.status);
+      // g-140: 删除操作（仅已归档目标可删除，二次确认）
+      const [deleteConfirm, setDeleteConfirm] = React.useState(false);
+      const [deleteNote, setDeleteNote] = React.useState(null);
 
       const doArchive = async () => {
         try {
@@ -1852,6 +1855,28 @@ window.__ModuleLoader__.load({
         }
       };
 
+      // g-140: 删除已归档目标（仅已归档目标可删除，二次确认）
+      const doDelete = async () => {
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/delete"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.id }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setDeleteNote("✅ 已删除");
+            showToast("✅ 目标已删除");
+            props.onArchived?.(); // 刷新看板：删除后卡片立即消失
+            setDeleteConfirm(false);
+          } else {
+            setDeleteNote("⚠️ 删除失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+      };
+
       const titleEl = renaming
         ? h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 4 } },
             h("span", null, "🎯"),
@@ -1892,7 +1917,28 @@ window.__ModuleLoader__.load({
                     onClick: doArchive,
                   }, "📦 归档")
                 : null,
-            archiveNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, archiveNote) : null);
+            // g-140: 删除按钮（仅已归档目标显示，二次确认）
+            isArchived
+              ? (deleteConfirm
+                ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
+                    h("span", { style: { ...S.meta, fontSize: 11, color: "#d66" } }, "确认删除？"),
+                    h("button", {
+                      style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(214,102,102,.3)" }, className: "dg-btn",
+                      title: "确认删除（不可恢复）",
+                      onClick: doDelete,
+                    }, "🗑 确认"),
+                    h("button", {
+                      style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
+                      onClick: () => { setDeleteConfirm(false); setDeleteNote(null); },
+                    }, "取消"))
+                : h("button", {
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(214,102,102,.2)" }, className: "dg-btn",
+                    title: "删除目标（仅已归档目标可删除，含卡片/attempts）",
+                    onClick: () => { setDeleteConfirm(true); setDeleteNote(null); },
+                  }, "🗑 删除"))
+              : null,
+            archiveNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, archiveNote) : null,
+            deleteNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, deleteNote) : null);
 
       return h(
         "div",

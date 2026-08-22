@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   rmdirSync,
   writeFileSync,
 } from "node:fs";
@@ -1233,6 +1234,62 @@ export function unarchiveGoal(
 /** 判断目标文件是否在 archived 目录下。 */
 function isArchivedFile(file: string): boolean {
   return file.includes("/archived/") || file.includes("\\archived\\");
+}
+
+// ---- 目标删除（g-140） ----
+
+/** 删除已归档目标：仅已归档（在 archived 目录下）且无活跃子代理（所有 attempt result !== "pending"）的目标可删除。
+ *  删除 = 删目标目录（含 cards/attempts） + 记 goal.deleted 事件（R-02，details 含 id）。
+ *  backlog 平铺文件（无目录）直接删文件 + 记事件。 */
+export function deleteGoal(
+  root: string,
+  id: string,
+  opts: { actor: string },
+): void {
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  // 前置校验 1：仅已归档目标可删除
+  if (!isArchivedFile(file) && !doc.meta.archived) {
+    throw new GraphError(`目标 ${id} 未归档，不能删除——请先归档再删除`);
+  }
+  // 前置校验 2：不能有活跃子代理（attempt result === "pending" 表示未结束）
+  const dir = basename(file) === "goal.md" ? dirname(file) : null;
+  if (dir) {
+    const attDir = join(dir, "attempts");
+    if (existsSync(attDir)) {
+      for (const d of readdirSync(attDir)) {
+        if (!d.startsWith("att-")) continue;
+        const attFile = join(attDir, d, "attempt.md");
+        if (!existsSync(attFile)) continue;
+        try {
+          const att = loadGoal(attFile);
+          if (att.meta.result === "pending") {
+            throw new GraphError(
+              `目标 ${id} 有活跃子代理 ${d}（result=pending），不能删除——请先停止或等其结束`,
+            );
+          }
+        } catch (e) {
+          if (e instanceof GraphError) throw e;
+          // 坏的 attempt 文件跳过
+        }
+      }
+    }
+  }
+  // 执行删除
+  if (dir) {
+    // 目录形态：删整个目标目录（含 cards/ attempts/）
+    rmSync(dir, { recursive: true, force: true });
+  } else {
+    // backlog 平铺文件：直接删文件
+    rmSync(file, { force: true });
+  }
+  // 记 goal.deleted 事件（R-02，details 含 id）
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "goal.deleted",
+    goal: id,
+    details: { id },
+  });
 }
 
 // ---- 看板数据投影（供 host 端点与文字版看板共用） ----

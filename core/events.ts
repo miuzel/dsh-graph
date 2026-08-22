@@ -66,11 +66,14 @@ export function readEvents(root: string): GraphEvent[] {
  * goal.created → draft（无 version）或 planning（有 version）；
  * goal.planned 在 draft 时 → planning；goal.transition → details.to。
  * （goal.planned 视为 planning 阶段的隐式进入，覆盖规划期未显式迁移的补记场景。）
+ * g-140：goal.deleted 为终态——replay 时标记已删除目标，后续事件忽略。
  */
 export function replayStatuses(events: GraphEvent[]): Map<string, string> {
   const statuses = new Map<string, string>();
   for (const ev of events) {
     if (!ev.goal) continue;
+    // g-140：已删除目标不再响应任何事件
+    if (statuses.get(ev.goal) === "deleted") continue;
     if (ev.event === "goal.created") {
       // g-137：带 version → 初始状态 planning；不带 version → draft
       const hasVersion = ev.details?.version != null;
@@ -85,6 +88,10 @@ export function replayStatuses(events: GraphEvent[]): Map<string, string> {
       (STATUSES as readonly string[]).includes(ev.details.to)
     ) {
       statuses.set(ev.goal, ev.details.to);
+    }
+    // g-140：goal.deleted 终态
+    if (ev.event === "goal.deleted") {
+      statuses.set(ev.goal, "deleted");
     }
   }
   return statuses;

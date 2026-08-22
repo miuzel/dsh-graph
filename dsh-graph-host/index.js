@@ -39,6 +39,7 @@ import {
   resolveAccept,
   archiveGoal,
   unarchiveGoal,
+  deleteGoal,
   boardProjection,
   readSupervisorSession,
   readExecutorModel,
@@ -449,6 +450,14 @@ export function apply(ctx, config) {
         parameters: params({ goal: str }, ["goal"]),
       },
       run: (a, ex) => { unarchiveGoal(rootFor(ex), a.goal, { actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
+      def: {
+        name: "graph_delete_goal",
+        description: "删除已归档目标（含其卡片/attempts 目录）。仅已归档目标可删除，且不能有活跃子代理。记 goal.deleted 事件。",
+        parameters: params({ goal: str }, ["goal"]),
+      },
+      run: (a, ex) => { deleteGoal(rootFor(ex), a.goal, { actor: actorOf(ex) }); return { ok: true }; },
     },
   ];
 
@@ -891,6 +900,23 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           const { goal } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
           unarchiveGoal(rootForReq(req, body), goal, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-140: 删除已归档目标端点
+    {
+      path: "/api/dsh-graph/delete",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          deleteGoal(rootForReq(req, body), goal, { actor: "human:gui" });
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
