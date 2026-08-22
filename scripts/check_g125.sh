@@ -28,6 +28,13 @@ awk '/const chevron = h\("button"/,/^      }, collapsed \? "▸" : "▾"\);$/' "
 grep -q 'const titleRow = h("div"' "$C" || { echo "FAIL: 缺标题行 titleRow（chevron+标题同行）"; exit 1; }
 awk '/const titleRow = h\("div"/,/titleRow,/' "$C" | grep -q "chevron" \
   || { echo "FAIL: titleRow 未包含 chevron（三角未在标题左侧）"; exit 1; }
+# fb3（负责人反馈）：三角按钮样式——暗底纹、窄宽度、不用 S.btn/dg-btn（避免播放按钮观感、不占整列）
+grep -q "className: \"dg-chevron\"" "$C" || { echo "FAIL: chevron 未用独立 .dg-chevron 类"; exit 1; }
+grep -q '\.dg-chevron {' "$C" || { echo "FAIL: 缺 .dg-chevron 样式"; exit 1; }
+grep -q "background: rgba(128,128,128,.18);" "$C" || { echo "FAIL: .dg-chevron 缺暗底纹（rgba(128,128,128,.18)）"; exit 1; }
+grep -q "min-width: 16px;" "$C" || { echo "FAIL: .dg-chevron 缺窄宽度约束（min-width: 16px）"; exit 1; }
+awk '/const chevron = h\("button"/,/^      }, collapsed \? "▸" : "▾"\);$/' "$C" | grep -q "S.btn" \
+  && { echo "FAIL: chevron 仍复用 S.btn（默认按钮背景→播放按钮观感）"; exit 1; }
 # 折叠态分支只渲染核心（标题+状态一行），不渲染 status_line/deps/livestrip/执行按钮/上下文卡片
 awk '/if \(collapsed\) \{/,/^      }$/' "$C" | grep -q "titleRow" \
   || { echo "FAIL: 折叠态缺标题行"; exit 1; }

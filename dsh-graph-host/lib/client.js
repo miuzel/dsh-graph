@@ -76,6 +76,23 @@ window.__ModuleLoader__.load({
       .dg-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-btn { transition: filter .12s ease; }
       .dg-btn:hover { filter: brightness(1.25); }
+      /* g-125 fb3：三角展开/收起按钮——暗底纹、窄宽度，不占整列、不像播放按钮 */
+      .dg-chevron {
+        background: rgba(128,128,128,.18);
+        border: none;
+        border-radius: 4px;
+        padding: 0 3px;
+        min-width: 16px;
+        width: auto;
+        flex: 0 0 auto;
+        color: inherit;
+        cursor: pointer;
+        line-height: 1.6;
+        font-size: 11px;
+        opacity: .8;
+        transition: background .12s ease, opacity .12s ease;
+      }
+      .dg-chevron:hover { background: rgba(128,128,128,.32); opacity: 1; }
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
       .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); }
@@ -800,9 +817,10 @@ window.__ModuleLoader__.load({
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
       const reusedBy = g.reused_by ?? null;
       // g-125：标题左侧小三角（▸ 折叠 / ▾ 展开），所有卡片统一；点击卡片其余区域打开详情
+      // fb3：独立 .dg-chevron 样式——暗底纹、窄宽度（不用 S.btn/dg-btn，避免播放按钮观感）
       const chevron = h("button", {
-        style: { ...S.btn, fontSize: 11, padding: "0 4px", marginRight: 4, flexShrink: 0, lineHeight: 1.2 },
-        className: "dg-btn dg-chevron",
+        style: { marginRight: 4 },
+        className: "dg-chevron",
         title: collapsed ? "展开查看依赖/实时会话/上下文卡片等完整信息" : "收起为精简视图",
         onClick: (e) => { e.stopPropagation(); onToggleExpand(g.id); },
       }, collapsed ? "▸" : "▾");
