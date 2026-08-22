@@ -2,7 +2,7 @@
 {
   "id": "g-140",
   "title": "目标删除：删除目标（含其卡片/attempts 目录；delivered/评审中需确认）",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-23T01:09:32+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",
