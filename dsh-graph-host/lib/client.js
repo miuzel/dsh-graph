@@ -766,7 +766,7 @@ window.__ModuleLoader__.load({
                                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
                 collapsedBits || "（无状态）")
             : h("span", { style: { flex: 1 } }),
-          sessionLinkBtn(props.parentId, props.childId, "↗ 打开会话")),
+          sessionLinkBtn(props.parentId, props.childId, "↗ 转到对话")),
         !open ? null : [
           h(LiveStrip, { key: "s", parentId: props.parentId, childId: props.childId,
                          statusLine }),
@@ -937,7 +937,7 @@ window.__ModuleLoader__.load({
         titleRow,
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
-          sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 执行会话")),
+          sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
         hasDep
           ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
           : null,
@@ -1027,7 +1027,7 @@ window.__ModuleLoader__.load({
                         style: S.btn,
                         className: "dg-btn",
                         onClick: () => { openChildSession(card.parent_session_id, card.child_id); },
-                      }, "↗ 在会话中打开")
+                      }, "↗ 转到对话")
                     : null),
                 h("div", { style: S.meta }, `id：${card.child_id}`))
             : null;
