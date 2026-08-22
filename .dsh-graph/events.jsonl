@@ -881,3 +881,11 @@
 {"ts":"2026-08-22T16:28:05+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-110 补全 GUI 建目标需求（create-goal 端点+新建按钮）；v0.5 判据就绪待派发"}}
 {"ts":"2026-08-22T16:30:09+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-110","details":{"note":"负责人 2026-08-22 v0.5 GUI 补充：目标卡片/上下文卡片抽屉提供 goal.md 文件链接，用户可直接用编辑器打开自由编辑。"}}
 {"ts":"2026-08-22T16:30:13+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-110","details":{"criteria_count":7,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T16:30:22+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-110 已补 goal.md 文件链接需求（7 条判据）；v0.5 三目标就绪待派发"}}
+{"ts":"2026-08-22T16:32:47+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.created","goal":"g-128","details":{"title":"GUI 卡片管理：上下文卡片新增/删除/归档/split + 添加弹窗（kind 可选）","version":"v0.5"}}
+{"ts":"2026-08-22T16:32:50+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.created","goal":"g-129","details":{"title":"GUI 建目标入口 + goal.md 文件链接（create-goal 端点 + 打开链接编辑器编辑）","version":"v0.5"}}
+{"ts":"2026-08-22T16:32:54+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-128","details":{"note":"从 g-110 拆出（负责人 2026-08-22：g-110 太大）：卡片管理——新增/删除/归档/split + 添加弹窗。"}}
+{"ts":"2026-08-22T16:32:57+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-129","details":{"note":"从 g-110 拆出（负责人 2026-08-22：g-110 太大）：GUI 建目标入口/弹窗 + goal.md 文件链接。"}}
+{"ts":"2026-08-22T16:33:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-110","details":{"criteria_count":3,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T16:33:04+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-128","details":{"criteria_count":6,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T16:33:07+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-129","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}

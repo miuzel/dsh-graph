@@ -69,13 +69,9 @@ v0.5 GUI 功能范围确认：本目标（g-110）扩展纳入**上下文卡片�
 
 ## 质量判据
 
-1. core 新增引擎 op：deleteGoal（删文件+记 goal.deleted）、deleteCard（删卡片文件+context_cards 移除引用+记 card.deleted）、mergeGoal（A 并入 B，A 记 deleted/merged_into）——事件先行 R-02
+1. core 新增引擎 op：deleteGoal（删文件+记 goal.deleted）、mergeGoal（A 并入 B，A 记 deleted/merged_into）——事件先行 R-02
 2. GUI 目标卡片操作菜单：暂缓（moveGoal 回 backlog）/合并（选目标目标）/删除——删除需二次确认且要求输入目标 id 防误删
-3. GUI 上下文卡片删除/归档按钮：删除需二次确认且要求输入卡片 id（负责人 2026-08-22 明确）
-4. GUI 添加卡片入口+弹窗：可填标题、选择 kind=text/file/image/data（现 add-card 仅按名字+固定 text）
-5. GUI 直接创建目标（goal）入口+弹窗：host 新增 /api/dsh-graph/create-goal 端点（title/version/scope，事件先行 goal.created）+ 看板主界面「新建目标」按钮（现建 goal 只能跟主管聊天）
-6. goal.md 文件链接：core goalDetail 暴露 goal.md 路径；GUI 目标详情/卡片抽屉提供「打开 goal.md」链接（可复制路径 + 打开动作，用户可用编辑器自由编辑）
-7. 全量测试与冻结脚本 PASS，graph_validate 无问题
+3. 全量测试与冻结脚本 PASS，graph_validate 无问题
 
 ## 证据台账
 
