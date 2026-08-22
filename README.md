@@ -50,6 +50,10 @@ dsh plugin --profile <name> add dsh-graph
 
 浏览器二维泳道看板：横向泳道为状态阶段（backlog / 版本 / 目标），纵向为目标卡片；支持拖拽排期、判据 / 卡片抽屉、`graph_report_status` 与 `graph_report_supervisor_status` 的实时状态显示、阻塞折叠等。经 `dsh.client` 声明 + `exports["./client"]` 编入 `__DSH_BOOT__`。
 
+![看板总览](screenshot/screenshot-1.png)
+
+![目标详情抽屉](screenshot/screenshot-2.png)
+
 ## 数据目录
 
 `<workspace>/.dsh-graph`：跟随调用会话的 workspace（`session.header.cwd`），数据落在每个项目自己的 `.dsh-graph`，git 友好。包含 `backlog/`、`goals/`、`versions/`、`events.jsonl`（事件流，唯一事实源）等。首次触达某 workspace 自动生成骨架，幂等、不建 demo 数据。
