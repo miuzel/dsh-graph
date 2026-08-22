@@ -2,7 +2,7 @@
 {
   "id": "g-126",
   "title": "看板版本泳道与包版本对齐（合并单包后已是 0.4.x，泳道仍叫 v0.3）",
-  "status": "in_progress",
+  "status": "review",
   "blocked_reason": null,
   "created_at": "2026-08-22T12:19:57+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",

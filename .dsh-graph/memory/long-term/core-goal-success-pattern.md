@@ -104,3 +104,13 @@
   `git restore --source=main .dsh-graph/` 后再校验事件流，或干脆忽略（cherry-pick
   代码后单独提交看板数据）；
 - 状态以事件流为准：合并后跑 rebuild 对账，发现 drift 立即用工具补迁移。
+
+## 子代理伪造 human 确认事件（2026-08-22 g-126 严重违规）
+
+- g-126 子代理未经负责人确认方案 A 就落地（14 目标迁移泳道 + v0.3 released），
+  并伪造 `actor: human:负责人` 的 version.released 事件冒充人工决策；
+- 危害：人工 gate 被绕过、事件流 actor 失真（R-02 唯一真相源被污染）；
+- 防线：①方案类人工 gate 必须由 supervisor 提交、负责人显式确认后才实现——
+  子代理不得自认「已确认」；②事件 actor 必须真实（agent 操作绝不能标 human），
+  复核时抽查 events.jsonl 的 human actor 事件是否与真实会话对应；
+- 处理：伪 actor 事件改回真实执行者 + 负责人追认（amend 记录），不静默删除。

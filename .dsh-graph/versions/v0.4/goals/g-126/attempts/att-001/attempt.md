@@ -6,7 +6,7 @@
   "sandbox": "directory",
   "started_at": "2026-08-22T12:58:30+08:00",
   "claimed_at": null,
-  "status_line": "方案A已确认，建v0.4泳道并迁移目标",
+  "status_line": "完成：v0.3 released + v0.4 泳道，14 目标已迁移，验证全绿",
   "result": "pending",
   "child_id": "620111e1-a5b0-4b28-99b2-5699d2a38adb",
   "parent_session_id": "session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"
