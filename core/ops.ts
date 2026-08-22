@@ -357,8 +357,6 @@ export function readExecutorModel(root: string): { provider: string | null; mode
 const GOAL_BODY = `
 ## 目标描述
 
-（待填写）
-
 ## 质量判据
 
 （待登记；进入 in_progress 前必须非空且已确认）
