@@ -2,7 +2,7 @@
 {
   "id": "v-005",
   "name": "v0.5",
-  "status": "planning",
+  "status": "released",
   "created_at": "2026-08-22T16:00:00+08:00"
 }
 ---
@@ -17,3 +17,5 @@ v0.5 GUI 功能迭代（负责人 2026-08-22 定范围）：看板操作类 GUI 
 - g-110 目标卡片操作：暂缓/合并/删除 + 上下文卡片新增/删除
 
 ## 发布记录
+
+- v0.5.1 released（负责人 2026-08-23 明确指示）：npm `dsh-graph@0.5.1` 已发布；awesome-dsh-plugin PR #2773 待合并，g-111 保持 blocked 跟踪商店上架。
