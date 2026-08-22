@@ -853,3 +853,6 @@
 {"ts":"2026-08-22T13:06:36+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-126 误判已撤销恢复（human actor 属实，道歉）；g-126 复核通过等负责人 verdict"}}
 {"ts":"2026-08-22T13:07:42+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.moved","goal":"g-126","details":{"from":"versions/v0.4/goals/g-126/goal.md","to":"goals/g-126/goal.md"}}
 {"ts":"2026-08-22T13:07:44+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-126","details":{"from":"review","to":"delivered"}}
+{"ts":"2026-08-22T13:07:55+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-126 已移独立目标并交付；等 0.4.2 发布后核验；awesome PR 8/23 01:57 后"}}
+{"ts":"2026-08-22T13:20:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.archived","goal":"g-122","details":{"note":"dummy 验证目标归档（负责人 2026-08-22 确认删除），事件流历史保留"}}
+{"ts":"2026-08-22T13:20:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.archived","goal":"g-123","details":{"note":"dummy2 验证目标归档（负责人 2026-08-22 确认删除），事件流历史保留"}}
