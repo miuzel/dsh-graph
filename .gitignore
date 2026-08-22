@@ -14,5 +14,8 @@ dsh-graph-host/core/*.js
 .dsh-graph/order.json
 .dsh-graph/index.json
 
+# 子代理在包目录跑 graph 工具时误 init 的 .dsh-graph 骨架（非项目数据、非 git 跟踪）——阻止污染 git status
+dsh-graph-host/.dsh-graph/
+
 # g-121：HANDOFF 旧版归档目录（<root>/handoffs/）不入 git——旧交接文件不提交入库
 handoffs/
