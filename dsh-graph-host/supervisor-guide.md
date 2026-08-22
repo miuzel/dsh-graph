@@ -137,6 +137,11 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
   - 必须引用的文件给**工作目录相对精确路径**（含 versions/vX.Y/goals/
     前缀），禁止"自己去找到 goal.md"式指令；
   - 冻结脚本路径、验收命令逐条写全；
+- **worktree 隔离（负责人 2026-08-22 指示）**：并发/复杂的执行任务，子代理
+  宜先 `git worktree add` 独立工作树（与 main 隔离）再改代码，review 交付
+  阶段由 supervisor 复核通过后合并回 main——避免并发子代理互相踩提交、
+  避免半成品直接落 main。简单/单文件小修可不走 worktree（主管判断）；
+
 - **模型路由**：执行子代理**不继承父会话模型**——统一走 project.yaml 的
   `executor.provider/model`（当前 deepseek-official/deepseek-v4-flash），
   `graph_start_attempt` 的 provider/model 参数可临时覆盖；路由结果显示在
