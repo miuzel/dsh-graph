@@ -8,5 +8,11 @@ core-dist/
 # g-129/core：编译产物不入 git——来源是 core/*.ts（唯一事实源），发布时由 prepack 用 sync-core 生成进包
 dsh-graph-host/core/*.js
 
+# g-129/.dsh-graph：运行态高频变化不入 git（状态以 goal.md frontmatter 为耐久副本，board 读 frontmatter）；
+# 目标/版本/记忆/配置等耐久项目知识仍跟踪
+.dsh-graph/events.jsonl
+.dsh-graph/order.json
+.dsh-graph/index.json
+
 # g-121：HANDOFF 旧版归档目录（<root>/handoffs/）不入 git——旧交接文件不提交入库
 handoffs/
