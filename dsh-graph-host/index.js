@@ -91,7 +91,7 @@ const USAGE = [
 // 注入内容只告知「如何」接管：claim 新 supervisor 的用法 + dsh-graph help 命令存在。
 const GUIDE_HINT = [
   "dsh-graph 是把工作组织成「目标看板」的插件。本会话可用 graph_* 工具管理目标/判据/卡片/执行。",
-  "想接管 supervisor？调用 graph_claim_supervisor（更新 project.yaml 的 supervisor.session 并返回 HANDOFF 交接全文，g-117）。",
+  "【重要】本会话默认是普通会话，**不要自动接管 supervisor**（graph_claim_supervisor 只在负责人明确要求你接管时调用——自动接管会让临时会话争抢主管角色）。",
   "查看 dsh-graph 使用说明与 claim 指引：调用 graph_help。",
   "（完整 supervisor 工作守则不自动注入；如需，显式调用 skill dsh-graph-supervisor 加载。）",
 ].join("\n");
@@ -111,6 +111,7 @@ const HELP_TEXT = [
   "- graph_handoff() / graph_claim_supervisor() 换会话交接（g-117）。",
   "",
   "## 接管 supervisor（换会话，g-117）",
+  "**仅在负责人明确要求你接管 supervisor 时执行**——默认任何会话都不得自动 claim（避免临时会话争抢主管角色）：",
   "1. 旧会话：graph_handoff() —— 生成/更新 .dsh-graph/HANDOFF.md（board 投影 + 长期记忆 + 环境事实）；",
   "2. 新会话：graph_claim_supervisor() —— 把 project.yaml 的 supervisor.session 更新为当前会话 id，记 supervisor.claimed 事件（幂等），并返回 HANDOFF 全文。",
   "",

@@ -76,6 +76,10 @@ test("g-118：所有会话（含执行子代理/无 agent）渲染简短引导�
     assert.ok(out.includes("graph_claim_supervisor"), "引导含 claim 用法");
     assert.ok(out.includes("graph_help"), "引导含 help 命令存在提示");
     assert.ok(out.includes("不自动注入"), "引导说明完整守则不自动注入");
+    // 缺陷回归（负责人 2026-08-22 实测）：新会话用户只说「你好」就自动 claim——
+    // 引导措辞必须是「仅在负责人明确要求时接管」，不得诱导自动接管
+    assert.ok(out.includes("不要自动接管"), "引导明确禁止自动接管 supervisor");
+    assert.ok(out.includes("只在负责人明确要求"), "claim 触发条件限定为负责人明确要求");
   }
   // 无 agent / 无 session 也应渲染（引导提示词对所有会话无害）
   assert.ok(text({}).includes("graph_claim_supervisor"));
@@ -111,6 +115,7 @@ test("g-118：graph_help 工具注册，输出使用说明 + claim 指引（不�
   assert.ok(out.help.includes("graph_claim_supervisor"), "help 含 claim 指引");
   assert.ok(out.help.includes("graph_handoff"), "help 含换会话步骤");
   assert.ok(out.help.includes("graph_create_goal"), "help 含工具清单");
+  assert.ok(out.help.includes("仅在负责人明确要求"), "help 限定 claim 仅在负责人明确要求时");
   assert.ok(!out.help.includes("绝不自己实现"), "help 不含主管铁律（完整守则走 skill）");
 });
 
