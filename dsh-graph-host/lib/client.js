@@ -1689,37 +1689,6 @@ window.__ModuleLoader__.load({
         })();
 
         content = [
-          // g-129: goal.md 文件链接放在详情 tab 顶部（tab 外，始终可见）
-          d.goalFile
-            ? h("div", { key: "goalfile", style: { display: "flex", alignItems: "center", gap: 6, marginTop: 8, marginBottom: 4 } },
-                h("span", { style: { fontWeight: 600, fontSize: 12 } }, "📄 goal.md"),
-                h("button", {
-                  style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
-                  className: "dg-btn",
-                  title: "点击用系统默认编辑器打开 goal.md",
-                  onClick: async (e) => {
-                    e.stopPropagation();
-                    try {
-                      const conn = connectionRt ?? appCtx?.get?.("connection");
-                      if (conn?.api?.host?.openPath) {
-                        const result = await conn.api.host.openPath({ path: d.goalFile });
-                        if (result?.opened) { showToast("✅ 已打开 goal.md"); return; }
-                      }
-                      await copyText(d.goalFile);
-                      showToast("✅ 路径已复制到剪贴板（打开不可用）");
-                    } catch {
-                      await copyText(d.goalFile);
-                      showToast("✅ 路径已复制到剪贴板");
-                    }
-                  },
-                }, "打开"),
-                h("button", {
-                  style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
-                  className: "dg-btn",
-                  title: "复制 goal.md 路径",
-                  onClick: async (e) => { e.stopPropagation(); const ok = await copyText(d.goalFile); if (ok) showToast("✅ 路径已复制到剪贴板"); },
-                }, "复制路径"))
-            : null,
           // g-a92e1406：tab 切换栏（页签式——选中页签与下方面板同底色、无下边框、下移覆盖分隔线，
           // 从面板"长出"形成视觉关联；未选中页签扁平透明，区别于普通按钮）
           h("div", {
@@ -1753,7 +1722,38 @@ window.__ModuleLoader__.load({
                 opacity: tab === "activity" ? 1 : 0.7,
               },
               onClick: () => setTab("activity"),
-            }, "🕘 近期动态")),
+            }, "🕘 近期动态"),
+            // g-129: goal.md 链接放在 tab 行右侧
+            d.goalFile
+              ? h("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, marginBottom: 1 } },
+                  h("span", { style: { fontSize: 11, opacity: 0.7 } }, "📄 goal.md"),
+                  h("button", {
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                    className: "dg-btn",
+                    title: "用系统默认编辑器打开 goal.md",
+                    onClick: async (e) => {
+                      e.stopPropagation();
+                      try {
+                        const conn = connectionRt ?? appCtx?.get?.("connection");
+                        if (conn?.api?.host?.openPath) {
+                          const result = await conn.api.host.openPath({ path: d.goalFile });
+                          if (result?.opened) { showToast("✅ 已打开 goal.md"); return; }
+                        }
+                        await copyText(d.goalFile);
+                        showToast("✅ 路径已复制（打开不可用）");
+                      } catch {
+                        await copyText(d.goalFile);
+                        showToast("✅ 路径已复制");
+                      }
+                    },
+                  }, "打开"),
+                  h("button", {
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                    className: "dg-btn",
+                    title: "复制 goal.md 路径",
+                    onClick: async (e) => { e.stopPropagation(); const ok = await copyText(d.goalFile); if (ok) showToast("✅ 路径已复制"); },
+                  }, "复制路径"))
+              : null),
           // 面板容器：与页签一体（上边框由 tab 栏分隔线承接），包住当前 tab 内容
           h("div", {
             key: "panel",
