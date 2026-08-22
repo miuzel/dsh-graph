@@ -171,6 +171,18 @@ test("validate 检测依赖环", () => {
   assert.ok(problems.some((p) => p.includes("依赖环")));
 });
 
+test("validate 检测目标描述小节重复", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  // 手动构造重复小节的 body
+  doc.body = "\n## 目标描述\n\n第一次内容\n\n## 目标描述\n\n第二次内容\n";
+  writeFileSync(file, serializeDoc(doc), "utf8");
+  const problems = validate(root);
+  assert.ok(problems.some((p) => p.includes("目标描述小节重复")));
+});
+
 test("createGoal 连号 id：读 frontmatter，跳过随机 id 与 slug 目录名", () => {
   const root = tmpRoot();
   const a = createGoal(root, { title: "a", actor: "test" });

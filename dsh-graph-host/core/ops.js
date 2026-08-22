@@ -562,6 +562,11 @@ export function validate(root) {
             !criteriaPresent(doc.body)) {
             problems.push(`${id}: ${meta.status} 状态但质量判据为空`);
         }
+        // 目标描述小节重复检查
+        const descMatches = doc.body.match(/## 目标描述/g);
+        if (descMatches && descMatches.length > 1) {
+            problems.push(`${id}: 目标描述小节重复`);
+        }
         problems.push(...locationProblems(root, file, meta));
         // 卡片引用完整性
         if (Array.isArray(meta.context_cards) && basename(file) === "goal.md") {
