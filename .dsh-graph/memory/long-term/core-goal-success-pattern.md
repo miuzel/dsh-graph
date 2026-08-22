@@ -140,3 +140,15 @@
   重复小节——改为行首锚定 `/^## 目标描述$/gm`（正文引用不计）；
 - 另：子代理误在 dsh-graph-host/ 包目录建 .dsh-graph 数据（root 解析到包内），已删——
   提醒子代理 graph 工具数据都在仓库根 .dsh-graph/，别在包目录跑。
+
+## 多子代理并发改同一 client.js 的整合教训（2026-08-22 g-129+g-77647351）
+
+- g-129（UI 按钮）与 g-77647351（拖放）并行改 client.js，分叉在两个 commit：
+  1de03f8（版本选择器/正文/版本lane按钮，无 drag）vs 88cd46d（drag 完整，无版本选择器）；
+- supervisor 手工 merge 多次出错（冲突标记、覆盖丢失 drag、误删版本按钮），最终靠
+  「git diff 生成补丁 + apply」+ 手工补 3 项增强（openCreateGoal/lane version 参数/
+  return 版本按钮）才完整；
+- 教训：①同文件并发目标应错开派发（g-110/g-129 描述已提示「同改看板 UI 需串行」，
+  没遵守）；②supervisor 手工 merge 大文件（487 行差异）极易出错——优先用 git 补丁
+  或让单一子代理负责整合；③merge 后逐功能 grep 验证（drag/选择器/按钮各计数），
+  不信「语法 OK」。
