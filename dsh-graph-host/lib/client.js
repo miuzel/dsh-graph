@@ -1936,13 +1936,52 @@ window.__ModuleLoader__.load({
         saveOrder(newOrder);
       }
 
+      // g-77647351：跨 lane 拖放提交（moveGoal 归属变更，状态保持）
+      function commitCrossLaneMove(goalId, targetLaneKey) {
+        let to, version;
+        if (targetLaneKey === "standalone") {
+          to = "standalone";
+        } else if (targetLaneKey === "backlog") {
+          to = "backlog";
+        } else if (targetLaneKey.startsWith("v-")) {
+          to = "version";
+          version = targetLaneKey.slice(2);
+        } else {
+          showToast("⚠️ 未知目标泳道：" + targetLaneKey);
+          return;
+        }
+        const body = { goal: goalId, to };
+        if (version) body.version = version;
+        fetch(graphUrl("/api/dsh-graph/move-goal"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        })
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.ok) {
+              showToast(`✅ ${goalId} 已移动到 ${targetLaneKey}`);
+              load();
+            } else {
+              showToast("⚠️ 移动失败：" + (data.error || "未知错误"));
+            }
+          })
+          .catch((e) => showToast("⚠️ 请求失败：" + String(e?.message ?? e)));
+      }
+
       // g-77647351：提交拖放（入口）
       function commitGoalDrag(activeDrag, over) {
         if (dropCommitted.current) return;
         dropCommitted.current = true;
         setDrag(null);
         const { goalId, fromStatus, overGoalId, overStageKey, overHalf, laneKey } = activeDrag;
+        const overLaneKey = activeDrag.overLaneKey ?? laneKey;
         const fromStage = stageOf(fromStatus);
+        // 跨 lane 拖放 → moveGoal 归属变更（状态保持，不涉及 transition）
+        if (overLaneKey !== laneKey) {
+          commitCrossLaneMove(goalId, overLaneKey);
+          return;
+        }
         if (fromStage === overStageKey) {
           // 同列重排
           if (overGoalId) {
@@ -2052,7 +2091,7 @@ window.__ModuleLoader__.load({
         setShowCreateGoal(true);
         setCreateNote(null);
       };
-      // g-77647351：泳道渲染（带拖放支持）；g-129 版本 lane 标题「＋」预选版本
+      // g-77647351：泳道渲染（带拖放支持，跨 lane 拖放改归属）；g-129 版本 lane 标题「＋」预选版本
       const lane = (label, goals, key, version) => {
         const cells = STAGES.map((s) => {
           const cellGoals = goals.filter((g) => stageOf(g.status) === s.key);
@@ -2062,37 +2101,39 @@ window.__ModuleLoader__.load({
           const goalIds = cellGoals.map((g) => g.id);
           const reconciled = reconciledGoalOrder(goalIds, stored);
           const orderedGoals = reconciled.map((id) => cellGoals.find((g) => g.id === id)).filter(Boolean);
-          const sameDrag = drag && drag.laneKey === key;
+          // g-77647351：anyDrag = 有拖动进行中（不限同 lane，允许跨 lane 拖放）
+          const anyDrag = drag !== null;
+          const isOverThisCell = anyDrag && drag.overStageKey === s.key && drag.overLaneKey === key;
           return h("div", {
             key: s.key,
             style: S.cell,
-            className: sameDrag && !orderedGoals.some((g) => g.id === drag.goalId) && drag.overStageKey === s.key ? "dg-cell-drop-active" : "",
-            onDragOver: sameDrag ? (e) => {
+            className: isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? "dg-cell-drop-active" : "",
+            onDragOver: anyDrag ? (e) => {
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
-              // 列空白区域：设 overStageKey 但无 overGoalId
+              // 列空白区域：设 overStageKey + overLaneKey 但无 overGoalId
               if (!orderedGoals.length) {
-                setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: s.key, overHalf: "after" } : d);
+                setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" } : d);
               }
             } : undefined,
-            onDrop: sameDrag ? (e) => {
+            onDrop: anyDrag ? (e) => {
               e.preventDefault();
               if (!orderedGoals.length) {
-                commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overHalf: "after" }, null);
+                commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
               }
             } : undefined,
           },
             orderedGoals.map((g) => {
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
-              const isDragTarget = sameDrag && drag.overGoalId === g.id;
+              const isDragTarget = isOverThisCell && drag.overGoalId === g.id;
               return Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
-                // g-77647351：drag props
+                // g-77647351：drag props（active 仍限同 lane 卡片，marker/over 不限）
                 {
-                  active: sameDrag && drag.goalId === g.id,
+                  active: drag && drag.goalId === g.id,
                   marker: isDragTarget ? drag.overHalf : null,
                   start: () => {
                     dropCommitted.current = false;
@@ -2101,17 +2142,18 @@ window.__ModuleLoader__.load({
                       fromStatus: g.status,
                       overGoalId: null,
                       overStageKey: s.key,
+                      overLaneKey: key,
                       overHalf: null,
                       laneKey: key,
                     });
                   },
                   over: isDragTarget ? { id: g.id, half: drag.overHalf } : null,
                   hover: (half) => {
-                    setDrag((d) => d ? { ...d, overGoalId: g.id, overStageKey: s.key, overHalf: half } : d);
+                    setDrag((d) => d ? { ...d, overGoalId: g.id, overStageKey: s.key, overLaneKey: key, overHalf: half } : d);
                   },
                   drop: (half) => {
                     if (!drag) return;
-                    commitGoalDrag({ ...drag, overGoalId: g.id, overStageKey: s.key, overHalf: half }, { id: g.id, half });
+                    commitGoalDrag({ ...drag, overGoalId: g.id, overStageKey: s.key, overLaneKey: key, overHalf: half }, { id: g.id, half });
                   },
                   end: () => {
                     if (drag?.overGoalId) {

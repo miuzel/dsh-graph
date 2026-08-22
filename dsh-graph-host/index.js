@@ -624,6 +624,23 @@ export function apply(ctx, config) {
         }
       },
     },
+    // g-77647351：move-goal 端点（跨 lane 拖放触发归属变更）
+    {
+      path: "/api/dsh-graph/move-goal",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, to, version } = body;
+          if (!goal || !to) return json(res, 400, { error: "missing goal or to" });
+          moveGoal(rootForReq(req, body), goal, { to, version, actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
     {
       path: "/api/dsh-graph/edit-description",
       handler: async (req, res) => {
