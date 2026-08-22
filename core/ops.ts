@@ -401,10 +401,12 @@ export function createGoal(
   opts: { title: string; version?: string; description?: string; actor: string },
 ): string {
   const id = nextGoalSeq(root);
+  // g-137：带 version → 初始状态 planning；不带 version（backlog）→ draft
+  const initialStatus = opts.version ? "planning" : "draft";
   const meta: Record<string, any> = {
     id,
     title: opts.title,
-    status: "draft",
+    status: initialStatus,
     blocked_reason: null,
     created_at: nowIso(),
     created_by: opts.actor,
@@ -1011,6 +1013,8 @@ export function moveGoal(
   const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
   let targetFile: string;
   let targetDirForm: boolean;
+  // g-137：记录迁移前状态，迁移后根据目标位置调整状态
+  const prevStatus = doc.meta.status as string;
   if (opts.to === "backlog") {
     if (srcDir) {
       const extras = readdirSync(srcDir).filter((x) => x !== "goal.md");
@@ -1021,15 +1025,24 @@ export function moveGoal(
     targetFile = join(root, "backlog", `${id}.md`);
     targetDirForm = false;
     doc.meta.version = null;
+    // g-137：进 backlog → 状态变为 draft
+    if (prevStatus !== "draft") {
+      doc.meta.status = "draft";
+    }
   } else if (opts.to === "standalone") {
     targetFile = join(root, "goals", id, "goal.md");
     targetDirForm = true;
     doc.meta.version = null;
+    // g-137：standalone 不动状态
   } else if (opts.to === "version") {
     if (!opts.version) throw new GraphError("移动到版本需要指定 version");
     targetFile = join(root, "versions", opts.version, "goals", id, "goal.md");
     targetDirForm = true;
     doc.meta.version = opts.version;
+    // g-137：进版本 → 状态变为 planning
+    if (prevStatus !== "planning") {
+      doc.meta.status = "planning";
+    }
   } else {
     throw new GraphError(`非法移动目标：${opts.to}`);
   }

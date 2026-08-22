@@ -131,6 +131,23 @@ window.__ModuleLoader__.load({
         word-break: break-word;
       }
       .dg-summary-clamp:hover { text-decoration: underline; }
+      /* g-137：backlog 行平铺展示样式 */
+      .dg-backlog-flat {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px;
+        min-height: 40px;
+        align-content: flex-start;
+      }
+      .dg-backlog-flat .dg-card {
+        flex: 0 0 auto;
+        max-width: 280px;
+        min-width: 200px;
+      }
+      .dg-backlog-flat .dg-cell-drop-active {
+        background: rgba(76,141,255,.08);
+      }
       /* g-77647351：拖放视觉反馈 */
       .dg-dragging { opacity: 0.45; transform: scale(0.97); }
       .dg-drop-before { border-top: 2px solid #4c8dff !important; }
@@ -2160,6 +2177,12 @@ window.__ModuleLoader__.load({
         const fromStage = stageOf(fromStatus);
         // 跨 lane 拖放 → moveGoal 归属变更（状态保持，不涉及 transition）
         if (overLaneKey !== laneKey) {
+          // g-137：backlog 卡拖入版本 lane 的落点限定
+          // 从 backlog 拖到版本 lane 时，只能落到「描述」列（overStageKey === "describe"）
+          if (laneKey === "backlog" && overLaneKey.startsWith("v-") && overStageKey !== "describe") {
+            showToast("⚠️ backlog 卡片只能拖到版本的「描述」列，不能直接到收集/执行/确认/交付/阻塞列");
+            return;
+          }
           commitCrossLaneMove(goalId, overLaneKey);
           return;
         }
@@ -2289,7 +2312,13 @@ window.__ModuleLoader__.load({
           const orderedGoals = reconciled.map((id) => cellGoals.find((g) => g.id === id)).filter(Boolean);
           // g-77647351：anyDrag = 有拖动进行中（不限同 lane，允许跨 lane 拖放）
           const anyDrag = drag !== null;
-          const isOverThisCell = anyDrag && drag.overStageKey === s.key && drag.overLaneKey === key;
+          // g-137：backlog 卡拖到版本 lane 时，无论悬停在哪一列，都高亮「描述」列
+          const isFromBacklog = anyDrag && drag.laneKey === "backlog";
+          const isOverThisLane = anyDrag && drag.overLaneKey === key;
+          const isOverThisCell = anyDrag && (
+            (isFromBacklog && isOverThisLane && s.key === "describe") || // backlog→版本：只高亮描述列
+            (!isFromBacklog && drag.overStageKey === s.key && drag.overLaneKey === key) // 其他情况：正常高亮
+          );
           return h("div", {
             key: s.key,
             style: S.cell,
@@ -2299,7 +2328,9 @@ window.__ModuleLoader__.load({
               e.dataTransfer.dropEffect = "move";
               // 列空白区域：设 overStageKey + overLaneKey 但无 overGoalId
               if (!orderedGoals.length) {
-                setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" } : d);
+                // g-137：backlog 卡拖到版本 lane 时，overStageKey 固定为 "describe"
+                const effectiveStageKey = (isFromBacklog && isOverThisLane) ? "describe" : s.key;
+                setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: effectiveStageKey, overLaneKey: key, overHalf: "after" } : d);
               }
             } : undefined,
             onDrop: anyDrag ? (e) => {
@@ -2335,11 +2366,15 @@ window.__ModuleLoader__.load({
                   },
                   over: isDragTarget ? { id: g.id, half: drag.overHalf } : null,
                   hover: (half) => {
-                    setDrag((d) => d ? { ...d, overGoalId: g.id, overStageKey: s.key, overLaneKey: key, overHalf: half } : d);
+                    // g-137：backlog 卡拖到版本 lane 时，overStageKey 固定为 "describe"
+                    const effectiveStageKey = (isFromBacklog && isOverThisLane) ? "describe" : s.key;
+                    setDrag((d) => d ? { ...d, overGoalId: g.id, overStageKey: effectiveStageKey, overLaneKey: key, overHalf: half } : d);
                   },
                   drop: (half) => {
                     if (!drag) return;
-                    commitGoalDrag({ ...drag, overGoalId: g.id, overStageKey: s.key, overLaneKey: key, overHalf: half }, { id: g.id, half });
+                    // g-137：backlog 卡拖到版本 lane 时，overStageKey 固定为 "describe"
+                    const effectiveStageKey = (isFromBacklog && isOverThisLane) ? "describe" : s.key;
+                    commitGoalDrag({ ...drag, overGoalId: g.id, overStageKey: effectiveStageKey, overLaneKey: key, overHalf: half }, { id: g.id, half });
                   },
                   end: () => {
                     if (drag?.overGoalId) {
@@ -2366,10 +2401,87 @@ window.__ModuleLoader__.load({
         return [labelEl, ...cells];
       };
 
+      // g-137：backlog 行平铺展示函数
+      const backlogRow = (label, goals, key) => {
+        const isOverThisCell = drag && drag.overLaneKey === key;
+        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative" } },
+          label,
+          h("button", {
+            style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+            className: "dg-btn",
+            title: "新建目标（backlog）",
+            onClick: () => openCreateGoal(null),
+          }, "＋"));
+        const flatCell = h("div", {
+          key: key + "-flat",
+          style: { gridColumn: "1 / -1", minHeight: 40 },
+          className: isOverThisCell ? "dg-cell-drop-active" : "",
+          onDragOver: drag ? (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            if (!goals.length) {
+              setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" } : d);
+            }
+          } : undefined,
+          onDrop: drag ? (e) => {
+            e.preventDefault();
+            if (!goals.length) {
+              commitGoalDrag({ ...drag, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" }, null);
+            }
+          } : undefined,
+        },
+          h("div", { className: "dg-backlog-flat" },
+            goals.map((g) => {
+              const defExpanded = g.status !== "delivered" && g.status !== "blocked";
+              const expanded = expandedGoals[g.id] ?? defExpanded;
+              const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
+              return Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+                modalGoal === g.id, drawerCard?.cardId, goalStatus,
+                expanded,
+                (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
+                {
+                  active: drag && drag.goalId === g.id,
+                  marker: isDragTarget ? drag.overHalf : null,
+                  start: () => {
+                    dropCommitted.current = false;
+                    setDrag({
+                      goalId: g.id,
+                      fromStatus: g.status,
+                      overGoalId: null,
+                      overStageKey: "describe",
+                      overLaneKey: key,
+                      overHalf: null,
+                      laneKey: key,
+                    });
+                  },
+                  over: isDragTarget ? { id: g.id, half: drag.overHalf } : null,
+                  hover: (half) => {
+                    setDrag((d) => d ? { ...d, overGoalId: g.id, overStageKey: "describe", overLaneKey: key, overHalf: half } : d);
+                  },
+                  drop: (half) => {
+                    if (!drag) return;
+                    commitGoalDrag({ ...drag, overGoalId: g.id, overStageKey: "describe", overLaneKey: key, overHalf: half }, { id: g.id, half });
+                  },
+                  end: () => {
+                    if (drag?.overGoalId) {
+                      commitGoalDrag(drag, { id: drag.overGoalId, half: drag.overHalf });
+                    } else {
+                      setDrag(null);
+                    }
+                    dropCommitted.current = false;
+                  },
+                },
+              );
+            }),
+          ),
+        );
+        return [labelEl, flatCell];
+      };
+
       const rows = [];
       for (const v of active) rows.push(...lane(`🏷 ${v.name}`, v.goals, "v-" + v.slug, v.slug));
       rows.push(...lane("独立目标", b.standalone, "standalone", null));
-      rows.push(...lane("backlog", b.backlog, "backlog", null));
+      rows.push(...backlogRow("backlog", b.backlog, "backlog"));
 
       const releasedRows = released.map((v) => {
         const open = !!openReleased[v.slug];

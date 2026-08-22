@@ -41,7 +41,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
 
   const { goal } = await call("graph_create_goal", { title: "t", version: "v-t" });
   await call("graph_set_criteria", { goal, criteria: ["通过"] });
-  await call("graph_transition", { goal, to: "planning" });
+  // g-137：带 version 的目标初始状态已是 planning，无需再迁移
   const { card } = await call("graph_add_card", { goal, title: "c", kind: "text" });
   // g-119：graph_bind_collect_card 绑定收集子代理（无会话上下文 → parent_session_id 缺省 null）
   await call("graph_bind_collect_card", { goal, card, child_id: "child-t" });

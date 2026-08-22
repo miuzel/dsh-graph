@@ -145,7 +145,8 @@ test("accept（非 force）：写 review.requested 事件", async () => {
   assert.equal(r.body.pending, true);
   const ev = readEvents(root).filter((e) => e.event === "review.requested");
   assert.equal(ev.length, 1);
-  assert.equal(ev[0].details.targetStage, "draft");
+  // g-137：带 version 的目标初始状态为 planning
+  assert.equal(ev[0].details.targetStage, "planning");
 });
 
 test("edit-description：改目标描述 + goal.amended 事件", async () => {

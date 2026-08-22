@@ -303,7 +303,7 @@ test("requestAcceptReview 写 review.requested 事件并返回 pending", () => {
 test("resolveAccept accept 按阶段映射追加事件", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  transition(root, id, "planning", { actor: "test" });
+  // g-137：带 version 的目标初始状态已是 planning，无需再迁移
   requestAcceptReview(root, id, "human:gui");
   resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" });
   const ev = readEvents(root);
