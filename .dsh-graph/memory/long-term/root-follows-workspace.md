@@ -18,3 +18,13 @@ source_goal: g-113（versions/v0.3/goals/g-113），交付于 2a72715
 - 看板是 `conversation.view`（session 作用域 slot）按会话渲染；`props.sessionId` 由 renderer 注入（dsh-client-ui-renderer:562 `standard["sessionId"] = info.sessionId`）。
 - 看板头部 DEBUG 行（`sessionId=… ws=…`）保留作诊断，定位「读错项目」直接看它。
 - 遗留小瑕疵：apply 期 `init(root)` 用 process.cwd() 会在 profile 目录留空骨架，可后续清理（改为只按 workspace init）。
+
+## 子代理 workspace 继承确认（2026-08-22 g-129 看板空白排查）
+
+- 子代理会话 header.cwd 必继承父会话（实测 20d4a779 的 cwd=父 workspace、parentSession=父 id）——
+  **不存在「子代理进入另一个 workspace」的交互路径**；
+- 切到子代理会话看板空白的根因：client 的 sessions.list summary 可能不含子代理条目的
+  cwd/parentSessionId（cwd 是 optional 字段）→ currentWorkspace 解析失败 → 端点读
+  process.cwd() 空骨架；
+- 修复：currentWorkspace 增加 lastGoodWorkspace 缓存回退（记住主会话 workspace，切子代理
+  时回退）+ parentSessionId 单层回溯；负责人确认方案正确。
