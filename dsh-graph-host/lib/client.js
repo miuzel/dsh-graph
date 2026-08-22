@@ -2422,6 +2422,11 @@ window.__ModuleLoader__.load({
             title: "新建目标（backlog）",
             onClick: () => openCreateGoal(null),
           }, "＋"));
+        // g-137 修复：backlog 平铺也按 order.json 对账排序（否则拖放重排保存了却不生效）
+        const backStored = orderMap[`${key}|describe`] ?? [];
+        const orderedGoals = reconciledGoalOrder(goals.map((g) => g.id), backStored)
+          .map((id) => goals.find((g) => g.id === id))
+          .filter(Boolean);
         const flatCell = h("div", {
           key: key + "-flat",
           style: { gridColumn: "2 / -1", minHeight: 40, borderTop: "1px solid rgba(128,128,128,.35)" },
@@ -2441,7 +2446,7 @@ window.__ModuleLoader__.load({
           } : undefined,
         },
           h("div", { className: "dg-backlog-flat" },
-            goals.map((g) => {
+            orderedGoals.map((g) => {
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
