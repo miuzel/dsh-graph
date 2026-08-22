@@ -5,5 +5,8 @@ probe/
 
 core-dist/
 
+# g-129/core：编译产物不入 git——来源是 core/*.ts（唯一事实源），发布时由 prepack 用 sync-core 生成进包
+dsh-graph-host/core/*.js
+
 # g-121：HANDOFF 旧版归档目录（<root>/handoffs/）不入 git——旧交接文件不提交入库
 handoffs/

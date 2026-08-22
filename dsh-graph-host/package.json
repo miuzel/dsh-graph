@@ -39,6 +39,7 @@
   },
   "scripts": {
     "prepack": "bash ../scripts/sync-core.sh && node -e \"require('node:fs').existsSync('core/ops.js') || (console.error('core 未同步'), process.exit(1))\"",
+    "build": "bash ../scripts/sync-core.sh",
     "test": "node --test ../core/tests/*.test.ts"
   },
   "dsh": {
