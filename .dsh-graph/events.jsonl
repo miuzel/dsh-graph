@@ -997,3 +997,6 @@
 {"ts":"2026-08-22T17:18:51+08:00","actor":"agent:455ce1e8-3866-45e8-a393-ac50fceba198","event":"attempt.status_reported","goal":"g-77647351","details":{"attempt":"att-001","status":"创建工作树 + 实现 transition 端点"}}
 {"ts":"2026-08-22T17:20:41+08:00","actor":"agent:455ce1e8-3866-45e8-a393-ac50fceba198","event":"attempt.status_reported","goal":"g-77647351","details":{"attempt":"att-001","status":"实现前端拖拽状态机"}}
 {"ts":"2026-08-22T17:20:45+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-129 收到负责人 5 点 UI 反馈，子代理补改中（按钮样式/位置/版本选择器/正文可选/scope 说明）"}}
+{"ts":"2026-08-22T17:29:59+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-77647351 拖放 + g-129 UI 已合并落地（8d56c63）；两目标待复核交付；教训已沉淀"}}
+{"ts":"2026-08-22T17:30:26+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-77647351","details":{"from":"collecting","to":"ready"}}
+{"ts":"2026-08-22T17:30:31+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-77647351","details":{"from":"ready","to":"in_progress"}}

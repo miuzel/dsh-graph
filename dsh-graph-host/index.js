@@ -367,6 +367,9 @@ export function apply(ctx, config) {
               signal: ex.signal,
             });
             bindAttemptChild(rootFor(ex), a.goal, attempt, started.childId, actorOf(ex), ex.agent?.session?.id);
+            // 负责人 2026-08-22：开始执行的目标必须落到执行 lane——派发成功后自动迁 in_progress
+            //（若已 in_progress 或门槛未满足则静默，子代理自行汇报）
+            try { transition(rootFor(ex), a.goal, "in_progress", { reason: "attempt 派发（graph_start_attempt）", actor: actorOf(ex) }); } catch { /* 已在 in_progress 或迁移被拒 */ }
             result.child_id = started.childId;
             if (effProvider || effModel) result.model_route = `${effProvider ?? "继承"}/${effModel ?? "继承"}`;
           } catch (e) {
@@ -741,6 +744,8 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
             console.error("[dsh-graph-host] start-execution 子代理启动失败:", spawned.error);
           } else {
             bindAttemptChild(rRoot, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
+            // 负责人 2026-08-22：执行按钮派发后目标必须落到执行 lane——自动迁 in_progress
+            try { transition(rRoot, goal, "in_progress", { reason: "attempt 派发（GUI 执行）", actor: "human:gui" }); } catch { /* 已在 in_progress 或迁移被拒 */ }
           }
           json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: spawned.model_route ?? null, injected_cards: injectedCards });
         } catch (e) {

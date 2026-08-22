@@ -162,6 +162,10 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
   替子代理代劳 transition**——看板列＝状态的投影，子代理不主动移卡即状态
   滞留（负责人 2026-08 指出）。子代理迁移被引擎拒绝（判据未登记等）时它
   会保留 status 汇报继续工作，supervisor 只需在复核时把关状态与产出一致；
+  **执行派发自动落执行 lane（负责人 2026-08-22 补充）**：`graph_start_attempt`
+  工具与 GUI「执行」按钮派发成功后**自动 transition 到 in_progress**（引擎层
+  start-execution/工具已内置，避免子代理漏移、目标滞留收集/ready lane）；
+  若迁移被拒（门槛未满足），supervisor 复核时注意把关；
   **禁区：执行子代理不得自移 `review→delivered`**——delivered 是 human gate，
   只有负责人 verdict 通过后由 supervisor 执行（g-112 教训：执行方误把
   「主管技术复核通过」当「确认交付」自移 delivered，已记录并追认）。
