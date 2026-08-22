@@ -16,26 +16,33 @@ echo "== 0. 语法 =="
 node --check "$C"
 node --check "$H"
 
-echo "== 1. delivered/blocked 卡片默认折叠精简（判据 1） =="
-# 折叠态判定：delivered 或 blocked 且未展开 → collapsed
-grep -q 'const collapsed = (g.status === "delivered" || blocked) && !expanded;' "$C" \
-  || { echo "FAIL: 缺 collapsed 折叠态判定"; exit 1; }
-# 折叠态分支只渲染核心（标题/状态/阻塞原因/status_line/展开按钮），不渲染 deps/livestrip/执行按钮/上下文卡片
-awk '/if \(collapsed\) \{/,/^      }$/' "$C" | grep -q "expandBtn" \
-  || { echo "FAIL: 折叠态缺展开按钮引用"; exit 1; }
-# 展开按钮文案：折叠态「▸ 展开完整」，展开态「▾ 收起精简」（expandBtn 定义在折叠分支之前）
-grep -q "▸ 展开完整" "$C" || { echo "FAIL: 缺展开按钮文案（▸ 展开完整）"; exit 1; }
-grep -q "▾ 收起精简" "$C" || { echo "FAIL: 缺收起按钮文案（▾ 收起精简）"; exit 1; }
-# 折叠态分支不得包含上下文卡片列表渲染（g.cards ?? []).map）
+echo "== 1. delivered/blocked 卡片默认折叠精简（判据 1，负责人 fb1 修订：三角按钮置标题左侧） =="
+# 折叠态判定：所有卡片统一 collapsed = !expanded（三角 ▸/▾ 标题左侧）；delivered/blocked 默认折叠由
+# KanbanView 的 defExpanded 决定（delivered/blocked → false，其余 → true），手动切换记入 expandedGoals
+grep -q "const collapsed = !expanded;" "$C" || { echo "FAIL: 缺 collapsed 折叠态判定"; exit 1; }
+grep -q "const defExpanded = g.status !== \"delivered\" && g.status !== \"blocked\";" "$C" \
+  || { echo "FAIL: 缺 delivered/blocked 默认折叠（defExpanded）"; exit 1; }
+# 三角按钮（▸/▾）在标题左侧：chevron 先于标题渲染在同一行（titleRow 内 chevron 在前）
+awk '/const chevron = h\("button"/,/^      }, collapsed \? "▸" : "▾"\);$/' "$C" | grep -q "▸" \
+  || { echo "FAIL: 缺折叠三角 ▸"; exit 1; }
+grep -q 'const titleRow = h("div"' "$C" || { echo "FAIL: 缺标题行 titleRow（chevron+标题同行）"; exit 1; }
+awk '/const titleRow = h\("div"/,/titleRow,/' "$C" | grep -q "chevron" \
+  || { echo "FAIL: titleRow 未包含 chevron（三角未在标题左侧）"; exit 1; }
+# 折叠态分支只渲染核心（标题+状态一行），不渲染 status_line/deps/livestrip/执行按钮/上下文卡片
+awk '/if \(collapsed\) \{/,/^      }$/' "$C" | grep -q "titleRow" \
+  || { echo "FAIL: 折叠态缺标题行"; exit 1; }
+awk '/if \(collapsed\) \{/,/^      }$/' "$C" | grep -q "status_line" \
+  && { echo "FAIL: 折叠态仍渲染 status_line（负责人 fb1：折叠态不显示 status_line）"; exit 1; }
 awk '/if \(collapsed\) \{/,/^      }$/' "$C" | grep -q "(g.cards ?? \[\]).map" \
   && { echo "FAIL: 折叠态仍渲染上下文卡片列表"; exit 1; }
 awk '/if \(collapsed\) \{/,/^      }$/' "$C" | grep -q "sessionLinkBtn" \
   && { echo "FAIL: 折叠态仍渲染执行会话按钮"; exit 1; }
 awk '/if \(collapsed\) \{/,/^      }$/' "$C" | grep -q "LiveStrip" \
   && { echo "FAIL: 折叠态仍渲染 livestrip"; exit 1; }
-# 完整分支仍渲染依赖与上下文卡片（未误删活动阶段信息）
+# 完整分支仍渲染依赖/执行按钮/livestrip/上下文卡片（未误删活动阶段信息）
 grep -q "⛓ 等待" "$C" || { echo "FAIL: 完整视图丢依赖等待标识"; exit 1; }
 grep -q "(g.cards ?? \[\]).map" "$C" || { echo "FAIL: 完整视图丢上下文卡片列表"; exit 1; }
+grep -q "sessionLinkBtn(g.attempt_parent_session_id" "$C" || { echo "FAIL: 完整视图丢执行会话按钮"; exit 1; }
 echo "PASS: 判据 1"
 
 echo "== 2. 上下文摘要折叠 2 行（判据 2） =="

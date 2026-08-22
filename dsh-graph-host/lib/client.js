@@ -778,12 +778,13 @@ window.__ModuleLoader__.load({
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
     // 客户端直接消费 g.reused_by，不再用数组顺序猜测旧/新绑定。
-    // g-125：delivered/blocked 阶段卡片默认折叠精简——只留核心（标题/状态/摘要/结果），
-    // 隐藏依赖、livestrip、执行会话按钮、上下文卡片列表（活动阶段信息），可展开查看完整。
-    // expanded 状态由 KanbanView 提升（expandedGoals），Card 保持纯函数（无 hooks）。
+    // g-125：所有卡片统一用标题左侧小三角展开/收起；delivered/blocked 默认折叠精简
+    //（折叠态只留标题+状态行，隐藏依赖/livestrip/执行按钮/上下文卡片），可展开查看完整。
+    // expanded 默认值由 KanbanView 决定（delivered/blocked 默认 false，其余默认 true），
+    // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand) {
       const blocked = g.status === "blocked";
-      const collapsed = (g.status === "delivered" || blocked) && !expanded;
+      const collapsed = !expanded;
       const deps = g.depends_on ?? [];
       const pendingDeps = deps.filter((d) => goalStatus?.[d] !== "delivered");
       const metDeps = deps.filter((d) => goalStatus?.[d] === "delivered");
@@ -798,34 +799,34 @@ window.__ModuleLoader__.load({
       if (g.reviewer === "ai") badges.push("🤖AI审");
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
       const reusedBy = g.reused_by ?? null;
-      const expandBtn = h("button", {
-        style: { ...S.btn, fontSize: 11, marginTop: 4 }, className: "dg-btn",
+      // g-125：标题左侧小三角（▸ 折叠 / ▾ 展开），所有卡片统一；点击卡片其余区域打开详情
+      const chevron = h("button", {
+        style: { ...S.btn, fontSize: 11, padding: "0 4px", marginRight: 4, flexShrink: 0, lineHeight: 1.2 },
+        className: "dg-btn dg-chevron",
         title: collapsed ? "展开查看依赖/实时会话/上下文卡片等完整信息" : "收起为精简视图",
         onClick: (e) => { e.stopPropagation(); onToggleExpand(g.id); },
-      }, collapsed ? "▸ 展开完整" : "▾ 收起精简");
+      }, collapsed ? "▸" : "▾");
+      const titleRow = h("div", { style: { display: "flex", alignItems: "flex-start" } },
+        chevron,
+        h("div", {
+          style: { ...S.title, flex: 1, minWidth: 0, ...(collapsed ? { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" } : {}) },
+        }, `🎯 ${g.title}`));
       if (collapsed) {
-        // g-125 折叠态：仅核心——标题/状态/阻塞原因（结果）/status_line（摘要）+ 展开按钮
+        // g-125 折叠态：仅核心——标题（≤2 行）+ 状态一行；不显示状态摘要、依赖、livestrip、执行按钮、上下文卡片
         return h(
           "div",
           { key: g.id, style, className: "dg-card" + (activeGoal ? " dg-card-active" : ""),
             title: "点击打开详情", onClick: () => onOpen(g.id) },
-          h("div", { style: S.title }, `🎯 ${g.title}`),
+          titleRow,
           h("div", { style: S.meta },
             `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`),
-          blocked && g.blocked_reason
-            ? h("div", { style: { ...S.statusLine, color: "#d66" } }, "⛔ " + g.blocked_reason)
-            : null,
-          g.status_line
-            ? h("div", { style: { ...S.statusLine, opacity: 0.85 } }, g.status_line)
-            : null,
-          expandBtn,
         );
       }
       return h(
         "div",
         { key: g.id, style, className: "dg-card" + (activeGoal ? " dg-card-active" : ""),
           title: "点击打开详情", onClick: () => onOpen(g.id) },
-        h("div", { style: S.title }, `🎯 ${g.title}`),
+        titleRow,
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 执行会话")),
@@ -865,7 +866,6 @@ window.__ModuleLoader__.load({
               ? h("div", { onClick: (e) => e.stopPropagation() },
                   h(LiveStrip, { parentId: c.parent_session_id, childId: c.child_id }))
               : null)),
-        (g.status === "delivered" || blocked) ? expandBtn : null,
       );
     }
 
@@ -1651,11 +1651,16 @@ window.__ModuleLoader__.load({
       const lane = (label, goals, key) => {
         const cells = STAGES.map((s) =>
           h("div", { key: s.key, style: S.cell },
-            goals.filter((g) => stageOf(g.status) === s.key).map((g) =>
-              Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+            goals.filter((g) => stageOf(g.status) === s.key).map((g) => {
+              // g-125：delivered/blocked 默认折叠（expanded=false），其余阶段默认展开；
+              // 用户手动切换后记录到 expandedGoals（undefined = 未切换，用阶段默认值）
+              const defExpanded = g.status !== "delivered" && g.status !== "blocked";
+              const expanded = expandedGoals[g.id] ?? defExpanded;
+              return Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
-                !!expandedGoals[g.id],
-                (id) => setExpandedGoals((p) => ({ ...p, [id]: !p[id] }))))),
+                expanded,
+                (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })));
+            })),
         );
         return [h("div", { key: key + "-label", style: S.laneLabel }, label), ...cells];
       };
