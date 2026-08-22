@@ -31,8 +31,6 @@
 
 ## 目标描述
 
-（待填写）
-
 负责人需求原话：在看板顶部显示 supervisor agent 会话的状态信息，复用卡片内的智能体状态控件（LiveStrip），可一键跳转到 supervisor agent 的对话窗。
 
 实现要点：
