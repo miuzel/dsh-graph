@@ -878,3 +878,6 @@
 {"ts":"2026-08-22T16:26:11+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-110 已补全 v0.5 GUI 需求（卡片删除/归档按钮+二次确认输 id；添加弹窗）；v0.5 三目标判据就绪待派发"}}
 {"ts":"2026-08-22T16:27:52+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-110","details":{"note":"负责人 2026-08-22 v0.5 GUI 补充：GUI 直接创建目标入口+弹窗（现建 goal 只能跟主管聊天，graph_create_goal 无 GUI/端点）。"}}
 {"ts":"2026-08-22T16:27:55+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-110","details":{"criteria_count":6,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T16:28:05+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-110 补全 GUI 建目标需求（create-goal 端点+新建按钮）；v0.5 判据就绪待派发"}}
+{"ts":"2026-08-22T16:30:09+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-110","details":{"note":"负责人 2026-08-22 v0.5 GUI 补充：目标卡片/上下文卡片抽屉提供 goal.md 文件链接，用户可直接用编辑器打开自由编辑。"}}
+{"ts":"2026-08-22T16:30:13+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-110","details":{"criteria_count":7,"rules_snapshot":"r-2026-08-3"}}
