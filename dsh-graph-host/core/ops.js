@@ -380,7 +380,6 @@ export function createGoal(root, opts) {
         created_at: nowIso(),
         created_by: opts.actor,
         version: opts.version ?? null,
-        scope: [],
         depends_on: [],
         review: { reviewer: "human", prompt: null },
         pk: { lanes: 1, sandbox: "directory" },
