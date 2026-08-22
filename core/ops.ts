@@ -1038,7 +1038,10 @@ export function moveGoal(
     targetFile = join(root, "goals", id, "goal.md");
     targetDirForm = true;
     doc.meta.version = null;
-    // g-137：standalone 不动状态
+    // g-129/g-137：进 standalone → 状态变为 planning（同版本，非 backlog 草稿）
+    if (prevStatus !== "planning") {
+      doc.meta.status = "planning";
+    }
   } else if (opts.to === "version") {
     if (!opts.version) throw new GraphError("移动到版本需要指定 version");
     targetFile = join(root, "versions", opts.version, "goals", id, "goal.md");
