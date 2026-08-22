@@ -783,3 +783,6 @@
 {"ts":"2026-08-22T12:14:20+08:00","actor":"agent:4ec422f2-3657-4369-a074-7b8e1018f07a","event":"attempt.status_reported","goal":"g-124","details":{"attempt":"att-001","status":"全部改动+验收通过，待 review"}}
 {"ts":"2026-08-22T12:14:20+08:00","actor":"agent:4ec422f2-3657-4369-a074-7b8e1018f07a","event":"goal.transition","goal":"g-124","details":{"from":"in_progress","to":"review"}}
 {"ts":"2026-08-22T12:14:48+08:00","actor":"test","event":"goal.created","goal":"g-126","details":{"title":"模板验证 tmp","version":null}}
+{"ts":"2026-08-22T12:16:04+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-124 已交付（延续时长+收尾更新 status）；g-125 待复核；模板占位已根治"}}
+{"ts":"2026-08-22T12:16:43+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-124","details":{"from":"review","to":"delivered"}}
+{"ts":"2026-08-22T12:16:49+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-124 已交付（补迁移）；g-125 执行中；吸取复核后漏迁移教训"}}

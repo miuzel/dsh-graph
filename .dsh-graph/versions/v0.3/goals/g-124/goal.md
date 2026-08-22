@@ -2,7 +2,7 @@
 {
   "id": "g-124",
   "title": "状态行改进：tooltip 显示状态延续时间 + supervisor/子代理结束工作前更新 status",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-22T12:09:28+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",

@@ -78,3 +78,9 @@
   再单独编辑文件（保持事件先行）。
 - startAttempt 派发后：frontmatter 可能因缓存读成旧状态，以事件流/工具返回为准（g-121/g-124
   误判过滞留，实际已 in_progress）。
+
+## 复核通过后必须立即迁 delivered（2026-08-22 g-124）
+
+- g-124 复核通过+代码合并推送后，漏掉 review→delivered 状态迁移（看板停在确认 lane，
+  负责人指出）——技术复核通过 ≠ 状态落定，两件事都要做；
+- 规则：代码合并/验收通过那一刻，立即 graph_transition(review→delivered) 并补 graph_validate。
