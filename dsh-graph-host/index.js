@@ -618,7 +618,7 @@ export function apply(ctx, config) {
           const attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
-            prompt || `请收集关于「${card}」的上下文信息。\n\n回填要求：全文写进 text；summary 写一句话要点式摘要（≤100 字左右，g-125），不要长文。`,
+            prompt || `请收集关于「${card}」的上下文信息。\n\n回填要求：全文写进 text；summary 写一句话要点式摘要（≤100 字左右），不要长文。`,
             req,
             rRoot,
             { provider, model },

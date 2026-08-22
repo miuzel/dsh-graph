@@ -55,11 +55,20 @@ echo "PASS: 判据 2"
 echo "== 3. summary 写法约束（判据 3） =="
 # 工具描述：graph_fill_card 的 summary 必须简短（一句话要点、≤100 字左右）
 grep -q "一句话要点式、≤100 字左右" "$H" || { echo "FAIL: graph_fill_card 工具描述缺 summary 长度约束"; exit 1; }
-# supervisor-guide 信息收集规范沉淀写法要求
-grep -q "summary 写法约束（g-125）" "$G" || { echo "FAIL: supervisor-guide 缺 summary 写法约束条目"; exit 1; }
+# supervisor-guide 信息收集规范沉淀写法要求（不带目标编号——提示词/指南文本对模型读者无干扰）
+grep -q "summary 写法约束" "$G" || { echo "FAIL: supervisor-guide 缺 summary 写法约束条目"; exit 1; }
 grep -q "≤100 字左右" "$G" || { echo "FAIL: supervisor-guide 缺 ≤100 字约束"; exit 1; }
 # 收集提示词回填要求（client autoPrompt + host 收集默认提示词）
 grep -q "一句话要点式摘要" "$C" || { echo "FAIL: client 收集提示词缺 summary 写法要求"; exit 1; }
+grep -q "一句话要点式摘要（≤100 字左右）" "$H" || { echo "FAIL: host 收集默认提示词缺 summary 写法要求"; exit 1; }
+# fb2（负责人反馈）：注入模型的提示词文本不得含目标编号（g-125 等）——干扰模型读者；
+# 只查提示词文本行（description / autoPrompt / prompt 字符串），代码注释不注入模型、不算违规
+grep -n "g-125" "$H" | grep -E "description:|prompt \|\||prompt\|\|" \
+  && { echo "FAIL: host 提示词文本含目标编号 g-125"; exit 1; }
+grep -n "g-125" "$C" | grep -E "const autoPrompt" \
+  && { echo "FAIL: client 提示词文本含目标编号 g-125"; exit 1; }
+grep -q "summary 写法约束（g-125）" "$G" \
+  && { echo "FAIL: supervisor-guide 条目仍带目标编号 g-125"; exit 1; }
 echo "PASS: 判据 3"
 
 echo "== 4. 核心单测回归（判据 4） =="
