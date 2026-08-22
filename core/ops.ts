@@ -1,6 +1,7 @@
 /** 核心操作：init / createGoal / setCriteria / transition / validate / rebuild。 */
 
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -248,12 +249,39 @@ export function generateHandoff(
     "",
   );
   const content = parts.join("\n");
-  if (opts.write) writeFileSync(join(root, "HANDOFF.md"), content, "utf8");
+  if (opts.write) writeHandoff(root, content);
   return content;
+}
+
+/** g-121：HANDOFF 写盘统一入口（graph_handoff 与 claimSupervisor 共用）——
+ *  若 <root>/HANDOFF.md 已存在且内容不同，先把旧版归档到 <root>/handoffs/HANDOFF-<ts>.md，
+ *  再写新文件。归档目录 handoffs/ 不入 git（仓库根 .gitignore 排除，g-121 判据 2）。 */
+export function writeHandoff(root: string, content: string): void {
+  const target = join(root, "HANDOFF.md");
+  if (existsSync(target) && readFileSync(target, "utf8") !== content) {
+    const dir = join(root, "handoffs");
+    mkdirSync(dir, { recursive: true });
+    const ts = handoffTs();
+    copyFileSync(target, join(dir, `HANDOFF-${ts}.md`));
+  }
+  writeFileSync(target, content, "utf8");
+}
+
+/** g-121：文件系统安全的时间戳（YYYYMMDD-HHmmss-fff，本地时区），供归档文件名使用。 */
+function handoffTs(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const pad3 = (n: number) => String(n).padStart(3, "0");
+  return (
+    `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
+    `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}-` +
+    `${pad3(d.getMilliseconds())}`
+  );
 }
 
 /** supervisor 会话交接（g-117）：把 project.yaml 的 supervisor.session 更新为 sessionId，
  *  记 supervisor.claimed 事件（幂等：值未变不重复记事件），并返回 HANDOFF 交接全文。
+ *  返回 HANDOFF 时同时落盘（写盘统一走 writeHandoff 归档逻辑，g-121 判据 3）。
  *  sessionId 取 ex.agent.session.id 同链（调用方注入）。 */
 export function claimSupervisor(
   root: string,
@@ -266,7 +294,7 @@ export function claimSupervisor(
   if (readSupervisorSession(root) !== sessionId) {
     writeSupervisorSession(root, sessionId, actor);
   }
-  return { supervisor_session: sessionId, handoff: generateHandoff(root) };
+  return { supervisor_session: sessionId, handoff: generateHandoff(root, { write: true }) };
 }
 
 /** supervisor 汇报自己的状态摘要（看板顶部状态栏 status_line，g-a92e1406 判据 3① 扩展）。
@@ -783,6 +811,82 @@ export function bindCardChild(
   });
 }
 
+// ---- 已收集卡片成果注入（g-120） ----
+
+export interface HarvestedCard {
+  id: string;
+  title: string;
+  kind: string;
+  status: string;
+  summary: string | null;
+  /** 卡片正文全文（trim 后；空卡片为 ""） */
+  content: string;
+}
+
+/** 按 context_cards 顺序读取 filled/reviewed 卡片的成果（title+summary+正文全文），
+ *  跳过 empty/collecting；无成果卡片时返回空数组（g-120）。
+ *  悬空引用与坏卡片跳过（由 validate 报告），不在此抛错。 */
+export function harvestedCards(root: string, goalId: string): HarvestedCard[] {
+  const file = findGoalFile(root, goalId);
+  const dir = basename(file) === "goal.md" ? dirname(file) : null;
+  if (!dir) return [];
+  const doc = loadGoal(file);
+  const refs = Array.isArray(doc.meta.context_cards) ? doc.meta.context_cards : [];
+  const out: HarvestedCard[] = [];
+  for (const ref of refs) {
+    const id = String(ref);
+    const cardFile = join(dir, "cards", `${id}.md`);
+    if (!existsSync(cardFile)) continue; // 悬空引用（validate 管）
+    try {
+      const card = loadGoal(cardFile);
+      const status = String(card.meta.status ?? "");
+      if (status !== "filled" && status !== "reviewed") continue; // 跳过 empty/collecting
+      out.push({
+        id,
+        title: String(card.meta.title ?? id),
+        kind: String(card.meta.kind ?? ""),
+        status,
+        summary: card.meta.summary ?? null,
+        content: card.body.trim(),
+      });
+    } catch {
+      /* 坏卡片跳过（validate 管） */
+    }
+  }
+  return out;
+}
+
+/** 生成「已收集上下文卡片成果」注入段（g-120，供执行派发 prompt）：按 context_cards 顺序
+ *  列出每张卡的 title/summary/正文全文，子代理直接使用、无需猜卡片路径。
+ *  无 filled/reviewed 卡片时返回带「（无）」说明的短段（恒非 null，调用方总能注入）。 */
+export function formatHarvestedCardsSection(root: string, goalId: string): string {
+  const cards = harvestedCards(root, goalId);
+  if (cards.length === 0) {
+    return [
+      `## 已收集上下文卡片成果（g-120 注入）`,
+      ``,
+      `（无：context_cards 为空或没有 filled/reviewed 卡片，无需复用，直接按目标描述/判据执行）`,
+    ].join("\n");
+  }
+  const items = cards.map((c, i) => {
+    const meta = [
+      `id=${c.id}`,
+      `status=${c.status}`,
+      c.kind ? `kind=${c.kind}` : null,
+      c.summary ? `摘要：${c.summary}` : null,
+    ].filter(Boolean).join("，");
+    const body = c.content
+      ? c.content.split("\n").map((l) => `  ${l}`).join("\n")
+      : "  （正文为空）";
+    return `- **${c.title}**（${meta}）\n${body}`;
+  });
+  return [
+    `## 已收集上下文卡片成果（g-120 注入：按 context_cards 顺序，子代理直接使用，无需猜卡片路径）`,
+    ``,
+    items.join("\n\n"),
+  ].join("\n");
+}
+
 // ---- Attempt（SCHEMA §3） ----
 
 const ATTEMPT_BODY = `
@@ -795,11 +899,13 @@ const ATTEMPT_BODY = `
 <!-- 受管小节 -->
 `;
 
-/** 创建 attempt 目录与 attempt.md，追加 attempt.started 事件；返回 attempt id。 */
+/** 创建 attempt 目录与 attempt.md，追加 attempt.started 事件；返回 attempt id。
+ *  opts.injectedCards：已注入执行子代理 prompt 的卡片 id 清单（按注入顺序，g-120）；
+ *  提供时记入 attempt.started 的 details.injected_cards（含空数组＝明确注入零张）。 */
 export function startAttempt(
   root: string,
   goalId: string,
-  opts: { executor: string; actor: string },
+  opts: { executor: string; actor: string; injectedCards?: string[] },
 ): string {
   const goalFile = findGoalFile(root, goalId);
   const dir = join(goalDirOf(goalFile), "attempts");
@@ -824,7 +930,13 @@ export function startAttempt(
     actor: opts.actor,
     event: "attempt.started",
     goal: goalId,
-    details: { attempt: attId, executor: opts.executor },
+    details: {
+      attempt: attId,
+      executor: opts.executor,
+      ...(Array.isArray(opts.injectedCards)
+        ? { injected_cards: opts.injectedCards }
+        : {}),
+    },
   });
   return attId;
 }

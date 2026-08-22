@@ -45,6 +45,8 @@ import {
   goalDetail,
   loadGoal,
   bindCardChild,
+  harvestedCards,
+  formatHarvestedCardsSection,
 } from "./core/ops.js";
 import { resolveRoot } from "./core/root.js";
 
@@ -118,6 +120,14 @@ const HELP_TEXT = [
   "完整 supervisor 工作守则（阶段推进/信息收集/执行规范/环境事实等）见 skill dsh-graph-supervisor，显式调用加载。",
   "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
 ].join("\n");
+
+// g-120：worktree 隔离指令（负责人 2026-08-22 指示）——与 supervisor-guide.md 执行规范
+// 「worktree 隔离」条目保持一致。两处执行派发（graph_start_attempt 工具 + start-execution
+// 端点）默认注入本段；派发方可显式关闭（工具参数 worktree=false / 端点 body.worktree=false）
+// 跳过 worktree（简单/单文件小修）。数据分工：代码改动在 worktree，看板数据 .dsh-graph/
+// 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）。
+const WORKTREE_GUIDE = `【worktree 隔离（负责人 2026-08-22 指示）】并发/复杂的执行任务：先 \`git worktree add\` 一个独立工作树（与 main 隔离）再改代码，review 交付阶段由 supervisor 复核通过后合并回 main——避免并发子代理互相踩提交、半成品直接落 main。简单/单文件小修可跳过 worktree（本段由派发方开关：worktree=false 时省略）。
+数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
 
 export function apply(ctx, config) {
   // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
@@ -269,7 +279,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_handoff",
-        description: "生成/更新 .dsh-graph/HANDOFF.md 换会话交接文档（g-117）：board 投影 + 长期记忆 + 关键环境事实段自动拼接。产物不依赖会话上下文；返回交接全文。旧会话交接时调用。",
+        description: "生成/更新 .dsh-graph/HANDOFF.md 换会话交接文档（g-117）：board 投影 + 长期记忆 + 关键环境事实段自动拼接。产物不依赖会话上下文；返回交接全文。旧会话交接时调用。写盘前若旧 HANDOFF.md 存在且内容不同，先归档到 <root>/handoffs/HANDOFF-<时间戳>.md（g-121，归档目录不入 git）。",
         parameters: params({}, []),
       },
       run: (a, ex) => {
@@ -281,7 +291,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_claim_supervisor",
-        description: "新会话接手时调用：把 project.yaml 的 supervisor.session 更新为当前会话 id（ex.agent.session 链），记 supervisor.claimed 事件（幂等：重复调用不重复记），并把 HANDOFF.md 交接全文作为返回值返回（无需再读文件）。",
+        description: "新会话接手时调用：把 project.yaml 的 supervisor.session 更新为当前会话 id（ex.agent.session 链），记 supervisor.claimed 事件（幂等：重复调用不重复记），返回 HANDOFF 交接全文并同时落盘 HANDOFF.md（写盘统一走归档逻辑：旧版先归档到 <root>/handoffs/，g-121）。",
         parameters: params({}, []),
       },
       run: (a, ex) => {
@@ -293,14 +303,18 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_start_attempt",
-        description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。",
-        parameters: params({ goal: str, executor: str, provider: str, model: str }, ["goal"]),
+        description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。worktree=false 时省略 spawn 提示词里的 worktree 隔离指令（简单/单文件小修可跳过，默认注入）。",
+        parameters: params({ goal: str, executor: str, provider: str, model: str, worktree: { type: "boolean" } }, ["goal"]),
       },
       run: async (a, ex) => {
         const executor = a.executor ?? actorOf(ex);
-        const attempt = startAttempt(rootFor(ex), a.goal, { executor, actor: actorOf(ex) });
+        const r = rootFor(ex);
+        // g-120：按 context_cards 顺序收集 filled/reviewed 卡片成果，注入清单记入 attempt.started 的
+        // details.injected_cards（事件先行：必须在 startAttempt 之前算好，与 prompt 注入内容一致）
+        const injectedCards = harvestedCards(r, a.goal).map((c) => c.id);
+        const attempt = startAttempt(r, a.goal, { executor, actor: actorOf(ex), injectedCards });
         // 注意：返回值必须是无损 JSON——绝不写入值为 undefined 的字段（registry 会拒绝）
-        const result = { attempt, child_id: null };
+        const result = { attempt, child_id: null, injected_cards: injectedCards };
         const subagents = ctx.get?.("subagents");
         if (subagents && ex?.agent) {
           try {
@@ -313,11 +327,16 @@ export function apply(ctx, config) {
             // 模型路由：工具参数 > project.yaml executor.provider/model > 继承父会话
             // g-113 修正：子代理工作目录 = 父会话 workspace（startContinuable 继承 session.header.cwd），
             // 目标文件相对路径必须相对 workspace 根（如 .dsh-graph/versions/...），不是相对 .dsh-graph 目录本身
-            const goalFile = findGoalFile(rootFor(ex), a.goal);
+            const goalFile = findGoalFile(r, a.goal);
             const rel = goalFile ? relative(sessionWorkspace(ex), goalFile) : null;
+            // g-120：已收集卡片成果段（子代理直接使用，无需猜卡片路径）+ worktree 隔离指令（可开关）
+            const cardsSection = formatHarvestedCardsSection(r, a.goal);
+            const worktreeBlock = a.worktree === false ? null : WORKTREE_GUIDE;
             const prompt = [
               `你是 dsh-graph 目标 ${a.goal} 的执行 attempt ${attempt}。`,
               rel ? `目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。` : null,
+              cardsSection,
+              worktreeBlock,
               `【状态汇报——你自己做，supervisor 不会替你更新】看板卡片上的状态摘要（status_line）由你自行维护：`,
               `每做一个动作就及时调用 graph_report_status 更新，参数 goal="${a.goal}"、attempt="${attempt}"、status=<一句话简短描述你此刻在干什么>。`,
               `status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab 样式」「跑验收脚本」），不要攒到结束才写、不要长篇。`,
@@ -623,7 +642,7 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, provider, model } = body;
+          const { goal, provider, model, worktree } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
           const rRoot = rootForReq(req, body);
           const goalFile = findGoalFile(rRoot, goal);
@@ -632,7 +651,14 @@ export function apply(ctx, config) {
           const critMatch = doc.body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
           const desc = descMatch ? descMatch[1].trim() : "（无描述）";
           const crit = critMatch ? critMatch[1].trim() : "（无判据）";
-          const attempt = startAttempt(rRoot, goal, { executor: "agent:executor", actor: "human:gui" });
+          // g-120：按 context_cards 顺序收集 filled/reviewed 卡片成果——注入清单先于
+          // startAttempt 算出（事件先行，记入 attempt.started 的 details.injected_cards），
+          // 成果段注入 spawn prompt（子代理直接使用，无需猜卡片路径）
+          const injectedCards = harvestedCards(rRoot, goal).map((c) => c.id);
+          const cardsSection = formatHarvestedCardsSection(rRoot, goal);
+          // worktree 隔离指令（g-120）：body.worktree=false 关闭（简单/单文件小修跳过），默认注入
+          const worktreeBlock = worktree === false ? "" : WORKTREE_GUIDE;
+          const attempt = startAttempt(rRoot, goal, { executor: "agent:executor", actor: "human:gui", injectedCards });
           // g-113 修正：子代理工作目录 = 会话 workspace（继承 session.header.cwd），
           // 相对路径以 workspace 根为基准（.dsh-graph/versions/...），不是服务进程 cwd 或 .dsh-graph 目录
           const rel = relative(workspaceOf(req, body), goalFile);
@@ -644,6 +670,10 @@ ${desc}
 
 ## 质量判据
 ${crit}
+
+${cardsSection}
+
+${worktreeBlock}
 
 【状态汇报——你自己做，supervisor 不会替你更新】看板卡片上的状态摘要（status_line）由你自行维护：
 每做一个动作就及时调用 graph_report_status 更新，参数 goal="${goal}"、attempt="${attempt}"、status=<一句话简短描述你此刻在干什么>。
@@ -664,7 +694,7 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           } else {
             bindAttemptChild(rRoot, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
           }
-          json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: spawned.model_route ?? null });
+          json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: spawned.model_route ?? null, injected_cards: injectedCards });
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
         }

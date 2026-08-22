@@ -1,6 +1,6 @@
 # HANDOFF（换会话交接）
 
-> 由 graph_handoff 自动生成于 2026-08-22T11:37:05+08:00（g-117）。图根：`/home/miuzel/workspace/personal/dsh-graph/.dsh-graph`。
+> 由 graph_handoff 自动生成于 2026-08-22T11:40:33+08:00（g-117）。图根：`/home/miuzel/workspace/personal/dsh-graph/.dsh-graph`。
 > 你的职责指南：dsh-graph-host/supervisor-guide.md（注册为 skill `dsh-graph-supervisor`）。
 
 ## 目标看板
@@ -24,7 +24,7 @@
 - **g-113（dsh-graph 新项目开箱即用：root 跟随会话 workspace + 使用指引注入）**：`delivered`（workspaces 数据源已修，待负责人刷 DEBUG 验证）
 - **g-116（合并单包：dsh-graph-client 并入 dsh-graph-host）**：`delivered`（✅ 包名改 dsh-graph 完成，等规划方修订 kanban 断言）
 - **g-117（supervisor 会话交接：一键 handoff + 自动更新主管会话 id）**：`delivered`
-- **g-118（supervisor 守则自动注入：新 supervisor 会话无需显式调用 skill 即拿到工作守则）**：`review`（新设计改造完：引导提示词+graph_help，72测试全绿）
+- **g-118（supervisor 守则自动注入：新 supervisor 会话无需显式调用 skill 即拿到工作守则）**：`review`（5条判据逐条对照完成，等待 review）
 - **g-119（收集卡绑定工具 graph_bind_collect_card + supervisor skill 绑定约束）**：`delivered`（完成：工具+guide+7单测，71测试8脚本全绿）
 - **g-120（执行派发注入已收集卡片成果（context_cards 内容注入执行子代理 + injected_cards 事件））**：`ready`
 - **g-a92e1406（状态摘要运行动画与履历：流动背景+图标动画、modal 显示、近期动态收录汇报）**：`delivered`（判据 3① 二次扩展（supervisor 状态栏）实现完成：新增 supervisor.status_reported 事件（R-02 事件流唯一真相源）+ reportSupervisorStatus/readSupervisorStatus（读最新一条）+ host 工具 graph_report_supervisor_status + boardPayload 下发 supervisorStatus + SupervisorBar 传 statusLine 复用 LiveStrip 动画。core 23/23、冻结脚本断言内容 6/6 恒真、事件流测试数据已清理。另发现冻结脚本 awk|grep -q+pipefail 存在 SIGPIPE 竞态（间歇 FAIL 非逻辑回归），已上报。）
@@ -47,7 +47,7 @@
 
 ## 进行中（下一步就干）
 
-- **g-118（supervisor 守则自动注入：新 supervisor 会话无需显式调用 skill 即拿到工作守则）**：`review`（新设计改造完：引导提示词+graph_help，72测试全绿）
+- **g-118（supervisor 守则自动注入：新 supervisor 会话无需显式调用 skill 即拿到工作守则）**：`review`（5条判据逐条对照完成，等待 review）
 - **g-120（执行派发注入已收集卡片成果（context_cards 内容注入执行子代理 + injected_cards 事件））**：`ready`
 - **g-115（测试目标卡片流程）**：`draft`
 - **g-106（收集项任务化：卡片绑定收集子代理）**：`draft`
@@ -89,11 +89,12 @@
 
 ## 长期记忆
 
-`memory/long-term/` 下 9 个文件：
+`memory/long-term/` 下 10 个文件：
 - client-session-embed-pattern.md
 - core-goal-success-pattern.md
 - dsh-plugin-pitfalls.md
 - executor-worktree-isolation.md
+- guide-injection-redesign.md
 - kanban-write-root-genericize.md
 - root-follows-workspace.md
 - status-anim-modal-tab-reused-supervisor-status.md

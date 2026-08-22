@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -28,6 +28,7 @@ import {
   readSupervisorSession,
   writeSupervisorSession,
   generateHandoff,
+  writeHandoff,
   claimSupervisor,
   requestAcceptReview,
   resolveAccept,
@@ -435,4 +436,69 @@ test("claimSupervisor：更新 session + 记事件（幂等）+ 返回 HANDOFF �
   assert.ok(r2.handoff.length > 0);
   // 缺 session id 抛错
   assert.throws(() => claimSupervisor(root, "", "agent:new"), GraphError);
+});
+
+// ---- g-121：HANDOFF 旧版归档 ----
+
+test("generateHandoff(opts.write) g-121：首写无归档；二次写内容不同时旧文件归档（内容/时间戳/目录）", () => {
+  const root = tmpRoot();
+  createGoal(root, { title: "归档目标", version: "v-t", actor: "test" });
+  // 首写：无旧文件，不产生归档
+  const c1 = generateHandoff(root, { write: true });
+  assert.equal(readFileSync(join(root, "HANDOFF.md"), "utf8"), c1);
+  assert.equal(existsSync(join(root, "handoffs")), false, "首写不应创建归档目录");
+  // 二次写：board 变化（新增目标）→ 内容不同 → 旧版归档
+  createGoal(root, { title: "归档目标2", version: "v-t", actor: "test" });
+  const c2 = generateHandoff(root, { write: true });
+  assert.notEqual(c1, c2, "board 变化后内容应不同");
+  const files = readdirSync(join(root, "handoffs")).filter((f) => f.startsWith("HANDOFF-"));
+  assert.equal(files.length, 1, "应恰好归档一份旧文件");
+  assert.match(files[0], /^HANDOFF-\d{8}-\d{6}-\d{3}\.md$/, "归档文件名应带时间戳");
+  // 归档内容 = 旧 HANDOFF.md 内容
+  assert.equal(readFileSync(join(root, "handoffs", files[0]), "utf8"), c1);
+  // 新文件内容 = 新生成的 HANDOFF
+  assert.equal(readFileSync(join(root, "HANDOFF.md"), "utf8"), c2);
+});
+
+test("writeHandoff g-121：内容相同不归档（幂等写盘）", () => {
+  const root = tmpRoot();
+  writeHandoff(root, "v1");
+  assert.equal(existsSync(join(root, "handoffs")), false);
+  writeHandoff(root, "v1"); // 内容相同 → 不归档
+  assert.equal(existsSync(join(root, "handoffs")), false, "内容相同不应归档");
+  writeHandoff(root, "v2"); // 内容不同 → 归档
+  const files = readdirSync(join(root, "handoffs")).filter((f) => f.startsWith("HANDOFF-"));
+  assert.equal(files.length, 1);
+  assert.equal(readFileSync(join(root, "handoffs", files[0]), "utf8"), "v1");
+  assert.equal(readFileSync(join(root, "HANDOFF.md"), "utf8"), "v2");
+});
+
+test("claimSupervisor g-121：返回 HANDOFF 时同时落盘（写盘走归档逻辑）", () => {
+  const root = tmpRoot();
+  createGoal(root, { title: "claim 归档目标", version: "v-t", actor: "test" });
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: old-session\n");
+  // 首次 claim：无旧 HANDOFF，不归档，直接落盘
+  const r1 = claimSupervisor(root, "session-new", "agent:new");
+  assert.equal(readFileSync(join(root, "HANDOFF.md"), "utf8"), r1.handoff, "claim 返回时应同时落盘");
+  assert.equal(existsSync(join(root, "handoffs")), false, "首写不归档");
+  // 二次 claim：board 变化 → 旧 HANDOFF 归档
+  createGoal(root, { title: "claim 归档目标2", version: "v-t", actor: "test" });
+  const r2 = claimSupervisor(root, "session-new", "agent:new");
+  const files = readdirSync(join(root, "handoffs")).filter((f) => f.startsWith("HANDOFF-"));
+  assert.equal(files.length, 1, "二次 claim 应归档旧版");
+  assert.equal(readFileSync(join(root, "handoffs", files[0]), "utf8"), r1.handoff);
+  assert.equal(readFileSync(join(root, "HANDOFF.md"), "utf8"), r2.handoff);
+  // 幂等（事件）不受影响：仍只记一条
+  assert.equal(readEvents(root).filter((e) => e.event === "supervisor.claimed").length, 1);
+});
+
+test("g-121：归档目录不进 git（仓库根 .gitignore 排除 handoffs/）", () => {
+  const root = tmpRoot();
+  writeHandoff(root, "v1");
+  writeHandoff(root, "v2"); // 触发归档 → <root>/handoffs/
+  assert.equal(existsSync(join(root, "handoffs")), true);
+  // 仓库根 .gitignore 断言（相对于测试文件定位仓库根）
+  const repoRoot = join(dirname(new URL(import.meta.url).pathname), "..", "..");
+  const gi = readFileSync(join(repoRoot, ".gitignore"), "utf8");
+  assert.match(gi, /handoffs\//, "仓库根 .gitignore 应排除 handoffs/ 目录");
 });

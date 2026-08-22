@@ -4,3 +4,6 @@ node_modules/
 probe/
 
 core-dist/
+
+# g-121：HANDOFF 旧版归档目录（<root>/handoffs/）不入 git——旧交接文件不提交入库
+handoffs/

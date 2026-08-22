@@ -2,7 +2,7 @@
 {
   "id": "g-118",
   "title": "supervisor 守则自动注入：新 supervisor 会话无需显式调用 skill 即拿到工作守则",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-22T10:49:16+08:00",
   "created_by": "agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b",
