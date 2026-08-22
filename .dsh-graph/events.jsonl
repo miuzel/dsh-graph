@@ -805,3 +805,5 @@
 {"ts":"2026-08-22T12:44:37+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"细化 worktree 约定：简单改动可直接 main，子代理自决；同步 guide+spawn 提示词"}}
 {"ts":"2026-08-22T12:45:28+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"worktree 约定已细化；g-125 fb1+fb2 已合并，停在 review 等负责人 verdict"}}
 {"ts":"2026-08-22T12:47:36+08:00","actor":"agent:94152bab-be98-42b4-bf95-69fee4d44602","event":"attempt.status_reported","goal":"g-125","details":{"attempt":"att-001","status":"fb3 完成：三角按钮暗底纹窄宽度，等复核"}}
+{"ts":"2026-08-22T12:47:55+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-125 fb3 已直接提交 main（a8bb67b，新约定生效）；停在 review 等负责人 verdict"}}
+{"ts":"2026-08-22T12:49:22+08:00","actor":"agent:94152bab-be98-42b4-bf95-69fee4d44602","event":"attempt.status_reported","goal":"g-125","details":{"attempt":"att-001","status":"fb4 完成：按钮与标题 inline 同行，等复核"}}
