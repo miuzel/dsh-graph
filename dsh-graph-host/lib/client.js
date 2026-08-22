@@ -1675,6 +1675,7 @@ window.__ModuleLoader__.load({
       const [newGoalTitle, setNewGoalTitle] = React.useState("");
       const [newGoalVersion, setNewGoalVersion] = React.useState("");
       const [newGoalScope, setNewGoalScope] = React.useState("");
+      const [newGoalDesc, setNewGoalDesc] = React.useState("");
       const [createNote, setCreateNote] = React.useState(null);
       const [creating, setCreating] = React.useState(false);
       // g-113 定点 bug：从 slot props 取「被查看会话」id（conversation.view 渲染回调注入的
@@ -1757,8 +1758,9 @@ window.__ModuleLoader__.load({
         setCreateNote("创建中…");
         try {
           const body = { title: t };
-          if (newGoalVersion.trim()) body.version = newGoalVersion.trim();
+          if (newGoalVersion) body.version = newGoalVersion;
           if (newGoalScope.trim()) body.scope = newGoalScope.trim().split(",").map(s => s.trim()).filter(Boolean);
+          if (newGoalDesc.trim()) body.description = newGoalDesc.trim();
           const r = await fetch(graphUrl("/api/dsh-graph/create-goal"), {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -1770,6 +1772,7 @@ window.__ModuleLoader__.load({
             setNewGoalTitle("");
             setNewGoalVersion("");
             setNewGoalScope("");
+            setNewGoalDesc("");
             load(); // 刷新看板
             setTimeout(() => setShowCreateGoal(false), 1500);
           } else {
@@ -1796,20 +1799,22 @@ window.__ModuleLoader__.load({
           // g-113 临时诊断（定位后移除）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "#e0a53a", marginLeft: 8 } },
             "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅")),
-          h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新"),
-          // g-129: 新建目标按钮
-          h("button", {
-            style: { ...S.btn, marginLeft: 8, padding: "4px 12px", fontSize: 13 },
-            className: "dg-btn",
-            onClick: () => setShowCreateGoal(true),
-          }, "＋ 新建目标")),
+          h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新")),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
           ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null, statusAt: b.supervisorStatusAt ?? null })
           : null,
         h("div", { style: S.grid },
-          h("div", { style: S.stageHead }, "泳道＼阶段"),
+          h("div", { style: { ...S.stageHead, position: "relative" } },
+            "泳道＼阶段",
+            // g-129: 新建目标按钮放在描述 lane 标题上
+            h("button", {
+              style: { ...S.btn, position: "absolute", right: 4, top: 2, fontSize: 11, padding: "1px 6px" },
+              className: "dg-btn",
+              title: "新建目标",
+              onClick: () => setShowCreateGoal(true),
+            }, "＋ 新建")),
           STAGES.map((s) => h("div", { key: s.key, style: S.stageHead }, s.label)),
           ...rows),
         ...releasedRows,
@@ -1836,19 +1841,29 @@ window.__ModuleLoader__.load({
                     onKeyDown: (e) => { if (e.key === "Enter") createGoal(); },
                   })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "版本（可选）"),
-                  h("input", {
-                    style: { ...S.promptInput, width: "100%" },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "版本"),
+                  h("select", {
+                    style: { ...S.promptInput, width: "100%", cursor: "pointer" },
                     value: newGoalVersion,
-                    placeholder: "如 v0.5（留空则进 backlog）",
                     onChange: (e) => setNewGoalVersion(e.target.value),
+                  },
+                    h("option", { value: "" }, "backlog（默认）"),
+                    // 版本选项来自 board 数据的 versions 列表
+                    ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug }, v.slug)))),
+                h("div", { style: { marginBottom: 8 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "正文（可选）"),
+                  h("textarea", {
+                    style: { ...S.promptInput, width: "100%", minHeight: 80, resize: "vertical" },
+                    value: newGoalDesc,
+                    placeholder: "目标描述正文（可选，创建后可编辑 goal.md）…",
+                    onChange: (e) => setNewGoalDesc(e.target.value),
                   })),
                 h("div", { style: { marginBottom: 12 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "范围（可选，逗号分隔）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "范围（可选）"),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: newGoalScope,
-                    placeholder: "如 core, dsh-graph-host",
+                    placeholder: "影响范围：如 core, dsh-graph-host（逗号分隔）",
                     onChange: (e) => setNewGoalScope(e.target.value),
                   })),
                 h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },

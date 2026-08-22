@@ -721,12 +721,12 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { title, version, scope } = body;
+          const { title, version, scope, description } = body;
           if (!title || typeof title !== "string" || !title.trim()) {
             return json(res, 400, { error: "missing title" });
           }
           const r = rootForReq(req, body);
-          const goalId = createGoal(r, { title: title.trim(), version, scope, actor: "human:gui" });
+          const goalId = createGoal(r, { title: title.trim(), version, scope, description, actor: "human:gui" });
           json(res, 200, { ok: true, goal: goalId });
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });

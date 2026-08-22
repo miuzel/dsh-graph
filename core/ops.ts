@@ -397,7 +397,7 @@ function nextGoalSeq(root: string): string {
 
 export function createGoal(
   root: string,
-  opts: { title: string; version?: string; scope?: string[]; actor: string },
+  opts: { title: string; version?: string; scope?: string[]; description?: string; actor: string },
 ): string {
   const id = nextGoalSeq(root);
   const meta: Record<string, any> = {
@@ -443,7 +443,12 @@ export function createGoal(
     file = join(root, "backlog", `${id}.md`);
     mkdirSync(join(root, "backlog"), { recursive: true });
   }
-  saveGoal(file, { meta, body: GOAL_BODY });
+  // g-129: 支持初始描述——有 description 时替换 GOAL_BODY 的目标描述小节占位
+  let body = GOAL_BODY;
+  if (opts.description?.trim()) {
+    body = body.replace(/## 目标描述\n/, `## 目标描述\n\n${opts.description.trim()}\n`);
+  }
+  saveGoal(file, { meta, body });
   appendEvent(root, {
     actor: opts.actor,
     event: "goal.created",
