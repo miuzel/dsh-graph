@@ -2324,6 +2324,14 @@ window.__ModuleLoader__.load({
           if (w?.path) return w.path;
           const viewed = items.find?.((s) => s.sessionId === viewedSessionId);
           if (viewed?.cwd) return viewed.cwd;
+          // g-129 修复（负责人 2026-08-22）：子代理会话不在 workspace 映射且无 cwd 时，
+          // 沿 parentSessionId 链回溯父会话的 workspace（子代理继承父会话 workspace）
+          if (viewed?.parentSessionId) {
+            const parent = items.find?.((s) => s.sessionId === viewed.parentSessionId);
+            if (parent?.cwd) return parent.cwd;
+            const pw = wsOf(viewed.parentSessionId);
+            if (pw?.path) return pw.path;
+          }
         }
         const current = snap?.current;
         if (current) {
@@ -2331,6 +2339,13 @@ window.__ModuleLoader__.load({
           if (w?.path) return w.path;
           const item = items.find?.((s) => s.sessionId === current);
           if (item?.cwd) return item.cwd;
+          // g-129 修复：current 是子代理时回溯父会话 workspace
+          if (item?.parentSessionId) {
+            const parent = items.find?.((s) => s.sessionId === item.parentSessionId);
+            if (parent?.cwd) return parent.cwd;
+            const pw = wsOf(item.parentSessionId);
+            if (pw?.path) return pw.path;
+          }
         }
         return null;
       } catch { return null; }

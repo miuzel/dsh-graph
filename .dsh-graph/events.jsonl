@@ -1003,3 +1003,4 @@
 {"ts":"2026-08-22T17:31:35+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"执行派发自动落执行 lane 已实现（4b04fa9）；g-77647351 已迁 in_progress；guide 已补充"}}
 {"ts":"2026-08-22T17:32:41+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"worktree 约束已二次强化（444e2bb）：并发同文件必须 worktree；后续派发严格执行"}}
 {"ts":"2026-08-22T17:35:58+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-129 UI 反馈全部落地（版本lane按钮/选择器/正文/去头部按钮）；等负责人 verdict"}}
+{"ts":"2026-08-22T17:39:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-129 全部完成（版本/独立/backlog lane ＋按钮，104 测试绿）；等负责人 verdict"}}
