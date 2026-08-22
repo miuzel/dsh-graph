@@ -671,3 +671,4 @@
 {"ts":"2026-08-22T11:35:17+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-119 已交付；g-118 判据确认（5 条），att-001 改造中；g-120 待确认判据"}}
 {"ts":"2026-08-22T11:36:23+08:00","actor":"agent:f6755d54-b094-4957-a028-1774c68a6ae0","event":"attempt.status_reported","goal":"g-118","details":{"attempt":"att-001","status":"新设计改造完：引导提示词+graph_help，72测试全绿"}}
 {"ts":"2026-08-22T11:36:26+08:00","actor":"agent:f6755d54-b094-4957-a028-1774c68a6ae0","event":"goal.transition","goal":"g-118","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-22T11:37:05+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-118 改造复核通过、g-119 已交付，统一提交 5334bb4；g-120 待确认判据"}}
