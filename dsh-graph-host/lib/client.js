@@ -434,33 +434,39 @@ window.__ModuleLoader__.load({
       const staleDur = staleStatus && props.statusAt != null ? fmtElapsed(props.statusAt, now) : null;
       const line = snap && snap.chat ? lastStreamLine(snap.chat.legacy.partial) : null;
       const meter = liveMeter(usage, pressure);
-      // g-129：流式内容放第一行状态右边（同行），tok/ctx 移入 tooltip——流式时有时无不再引起高度变化
+      // g-129 负责人 2026-08-22 格式：第一行 = 状态 + 流式内容（同行，流式时有时无不引起高度变化），
+      // 右侧有足够宽度时显示 tok/ctx；第二行 = status_line 固定显示。
       const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
       const statusFull = running ? "运行中" : "空闲";
-      const tooltipBits = [
-        statusFull + (running ? (staleDur ? "（状态已延续 " + staleDur + "）" : "") : ""),
-        props.statusLine ? "状态：" + props.statusLine : null,
-        meter ? "资源：" + meter : null,
-        line ? "流式：" + line : null,
-      ].filter(Boolean);
-      const tooltip = tooltipBits.join("\n");
+      // 第二行 status_line 内容（stale 时也显示全文，tooltip 补延续时长——g-124）
+      const statusRowText = props.statusLine
+        ? (running ? "⏳ " : "✅ ") + props.statusLine
+        : (staleStatus ? "⏳ 状态延续 " + staleDur : null);
       const lineEl = line
         ? h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
                                 textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 } },
             "⏵ " + line)
-        : null;
+        : h("span", { style: { ...S.meta, fontSize: 10, flex: 1, overflow: "hidden",
+                               textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "…");
       return h(
         "div",
-        { style: S.liveStrip, title: tooltip },
-        // 第一行：状态 + 流式内容（同行）；流式无时不新增行（结构稳定）
+        { style: S.liveStrip, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
+        // 第一行：状态 + 流式内容（同行）；右侧有空间时显示 tok/ctx（flex 布局自动压缩）
         h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
           h("span", { style: { color: running ? "#3aa675" : "rgba(128,128,128,.9)", flexShrink: 0 } },
             statusLabel),
-          lineEl || h("span", { style: { ...S.meta, fontSize: 10, flex: 1, overflow: "hidden",
-                                         textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-            props.statusLine
-              ? (running ? "⏳ " : "✅ ") + props.statusLine
-              : (staleStatus ? "⏳ 状态延续 " + staleDur : "投影待推送"))),
+          lineEl,
+          meter
+            ? h("span", { style: { ...S.meta, fontSize: 10, flexShrink: 0, marginLeft: 4 } }, meter)
+            : null),
+        // 第二行：status_line 固定显示（stale 时也显示全文）
+        statusRowText
+          ? h("div", {
+              style: { ...S.liveLine, marginTop: 1, fontSize: 10, overflow: "hidden",
+                       textOverflow: "ellipsis", whiteSpace: "nowrap" },
+              title: props.statusLine ? props.statusLine + (staleDur ? "（状态已延续 " + staleDur + "）" : "") : undefined,
+            }, statusRowText)
+          : null,
       );
     }
 
