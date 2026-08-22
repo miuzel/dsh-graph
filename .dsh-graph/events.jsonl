@@ -896,3 +896,6 @@
 {"ts":"2026-08-22T16:36:30+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.created","goal":"g-130","details":{"title":"goal.md 修改后格式检查：文件变更检测 + 校验告警（编辑器自由编辑配套）","version":"v0.5"}}
 {"ts":"2026-08-22T16:36:35+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-130","details":{"note":"负责人 2026-08-22 提出：goal.md 被修改后检查格式的 hook 机制（与 g-129 文件链接配套）。"}}
 {"ts":"2026-08-22T16:36:38+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-130","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T16:36:47+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-130 已立项（goal.md 修改后格式检查）；v0.5 六目标齐备待派发"}}
+{"ts":"2026-08-22T16:37:23+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-130","details":{"note":"负责人 2026-08-22 方案转向：不做文件监听，改在 graph_amend_goal 工具内实现格式约束（剥离标题+append 规范化）。"}}
+{"ts":"2026-08-22T16:37:27+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-130","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
