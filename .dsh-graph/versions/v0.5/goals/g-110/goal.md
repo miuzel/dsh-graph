@@ -2,7 +2,7 @@
 {
   "id": "g-110",
   "title": "目标卡片归档（草稿/规划中/已交付可归档，看板右上角显示开关，回到原泳道带已归档标记，可取消归档）",
-  "status": "planning",
+  "status": "review",
   "blocked_reason": null,
   "created_at": "2026-08-21T12:36:22+08:00",
   "created_by": "supervisor:k3",
@@ -39,6 +39,9 @@
 - 已归档可取消归档（恢复原位置、状态保持）；
 - 实现：把 goal 实际移入对应 archived 目录——版本 goals→`versions/vX/archived/<id>/`、独立目标→`goals/archived/<id>/`、backlog→`backlog/archived/<id>.md`；已归档在勾选显示时回到原泳道、带「已归档」标记；
 - 归档／取消归档走 graph 工具 + 事件流（R-02）。
+
+实现要点：1) 新增 archiveGoal/unarchiveGoal op（move 到/移出 对应 archived 目录 + 记 goal.archived / goal.unarchived 事件，R-02）；2) boardProjection 默认不含 archived（隐藏），增加 includeArchived 选项（端点 ?includeArchived=1）时把 archived 目标也列入并打 archived:true 标记，回到原泳道；3) client 右上角「显示已归档」checkbox → 控制请求 includeArchived；4) 归档/取档约束状态（仅 draft/planning/delivered 可归档）；5) 存档目录路径见上。
+
 
 ## 补充 4（负责人 2026-08-22 v0.5 GUI 细化）
 
