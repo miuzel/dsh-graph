@@ -34,3 +34,7 @@
 ## supervisor 会话 id 变更
 - 旧：session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b（本会话，因 compact/token-meter 问题弃用）
 - 新：见 project.yaml 的 `supervisor.session`（换会话后由负责人更新）
+
+## 已立项待办（换会话后接手）
+- **g-117「supervisor 会话交接：一键 handoff + 自动更新主管会话 id」**（已写好描述+判据，draft）：交付 `graph_handoff`（自动生成 HANDOFF.md）+ `graph_claim_supervisor`（自动把 project.yaml 的 supervisor.session 改为当前会话 id、记事件、返回 HANDOFF 内容）。这是把「换会话手改+手写交接」做成功能，优先级高，建议新会话第一件事就做它——做完下次换会话就一键了。
+- g-111（发布）待 awesome PR；g-116（合并单包）待发布 0.4.0；g-105（自带 memory 管理）在 backlog。
