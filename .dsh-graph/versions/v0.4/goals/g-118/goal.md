@@ -6,7 +6,7 @@
   "blocked_reason": null,
   "created_at": "2026-08-22T10:49:16+08:00",
   "created_by": "agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b",
-  "version": "v0.3",
+  "version": "v0.4",
   "scope": [],
   "depends_on": [],
   "review": {
