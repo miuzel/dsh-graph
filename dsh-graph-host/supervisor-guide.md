@@ -125,11 +125,16 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
 
 ## 执行规范
 
-- **主管自报状态（每轮开始立即）**：supervisor 自己也要用
+- **主管自报状态（每轮开始立即 + 持续更新）**：supervisor 自己也要用
   `graph_report_supervisor_status` 在**每轮开始的第一时间**报一句最新状态，
   覆盖上一轮残留——否则看板顶部会长时间显示过期 status（负责人 2026-08 指出）。
   客户端已有过期清空机制（新一轮 running 翻转时旧状态显示「🔄 等待最新状态…」），
   主管应尽快替换；
+  **不止轮首**：每完成一个动作/阶段变化（派发执行、收集回填、复核结论、
+  提交推送、状态迁移、等负责人输入时）都立即更新一句——与执行子代理
+  「每做一个动作就写一句」的标准对等（负责人 2026-08-22 指出：大部分时间
+  没更新 status line，看板顶部长期显示过期状态）。等人工输入的空窗期也要
+  报「正在等 X」，让负责人知道你没卡死；
 - `graph_start_attempt` 派发执行；**status_line 由执行子代理自己更新**
   （`graph_report_status`），**supervisor 绝不替子代理汇报**——卡片上那句话
   是子代理的自述，代劳即伪造进展（spawn 提示词模板已内联更新方法，见
@@ -154,6 +159,11 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
   宜先 `git worktree add` 独立工作树（与 main 隔离）再改代码，review 交付
   阶段由 supervisor 复核通过后合并回 main——避免并发子代理互相踩提交、
   避免半成品直接落 main。简单/单文件小修可不走 worktree（主管判断）；
+  worktree 指令（g-120）由执行派发默认注入 spawn 提示词，可显式关闭跳过：
+  `graph_start_attempt` 传 `worktree=false`、GUI 端点
+  `/api/dsh-graph/start-execution` 传 body `worktree: false`；
+  数据分工：代码改动在 worktree，看板数据 `.dsh-graph/` 仍在主工作树写
+  （graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）；
 
 - **模型路由**：执行子代理**不继承父会话模型**——统一走 project.yaml 的
   `executor.provider/model`（当前 deepseek-official/deepseek-v4-flash），
