@@ -16,3 +16,11 @@
 - 子代理 worktree 与看板数据（.dsh-graph/ 本身也在 git 仓库内）的交互：
   worktree 里 .dsh-graph 事件流与 main 的合并冲突需在 review 阶段处理——
   工具化时需明确「看板数据仍在主工作树写，代码改动在 worktree」的分工。
+
+## 细化（2026-08-22 负责人补充）：子代理自决，简单改动直接 main
+
+- 负责人指出：supervisor 自动合并 worktree 给子代理造成困扰；
+- 约定：**简单的一两行改动、且与现有工作无冲突 → 子代理可直接在 main 分支修改，
+  不必 worktree**；worktree 与否由**子代理自己决定**，supervisor 不代劳合并、
+  不强行套 worktree；
+- 已同步 supervisor-guide「worktree 隔离」条目与 WORKTREE_GUIDE 常量（spawn 提示词）。

@@ -126,7 +126,7 @@ const HELP_TEXT = [
 // 端点）默认注入本段；派发方可显式关闭（工具参数 worktree=false / 端点 body.worktree=false）
 // 跳过 worktree（简单/单文件小修）。数据分工：代码改动在 worktree，看板数据 .dsh-graph/
 // 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）。
-const WORKTREE_GUIDE = `【worktree 隔离（负责人 2026-08-22 指示）】并发/复杂的执行任务：先 \`git worktree add\` 一个独立工作树（与 main 隔离）再改代码，review 交付阶段由 supervisor 复核通过后合并回 main——避免并发子代理互相踩提交、半成品直接落 main。简单/单文件小修可跳过 worktree（本段由派发方开关：worktree=false 时省略）。
+const WORKTREE_GUIDE = `【worktree 隔离（负责人 2026-08-22 指示）】并发/复杂的执行任务：先 \`git worktree add\` 一个独立工作树（与 main 隔离）再改代码，review 交付阶段由 supervisor 复核通过后合并回 main——避免并发子代理互相踩提交、半成品直接落 main。**简单的一两行改动、且与现有工作无冲突时，可直接在当前 main 分支修改，不必 worktree——worktree 与否由你自己决定**（本段由派发方开关：worktree=false 时省略）。
 数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
 
 export function apply(ctx, config) {
