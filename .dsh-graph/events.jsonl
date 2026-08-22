@@ -989,3 +989,11 @@
 {"ts":"2026-08-22T17:16:37+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-129 复核通过（openPath 方案 A 修正，10ddb2d）；停在 review 等负责人 verdict"}}
 {"ts":"2026-08-22T17:16:47+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-77647351","details":{"note":"负责人 2026-08-22 补充拖放约束：人工拖动视为授权；进执行列无子代理视同点执行；后→前拖动询问理由（有子代理给子代理，否则给主管）。"}}
 {"ts":"2026-08-22T17:16:51+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-77647351","details":{"criteria_count":6,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T17:17:02+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-77647351 拖放约束已记录（判据 6 条）；g-129 等 verdict；后续派发 g-110/g-77647351"}}
+{"ts":"2026-08-22T17:17:33+08:00","actor":"human:gui","event":"attempt.started","goal":"g-77647351","details":{"attempt":"att-001","executor":"agent:executor","injected_cards":["card-f0ec7190"]}}
+{"ts":"2026-08-22T17:17:33+08:00","actor":"human:gui","event":"attempt.bound","goal":"g-77647351","details":{"attempt":"att-001","child_id":"455ce1e8-3866-45e8-a393-ac50fceba198"}}
+{"ts":"2026-08-22T17:17:38+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"复核缺陷已修复，等待 review"}}
+{"ts":"2026-08-22T17:17:40+08:00","actor":"agent:455ce1e8-3866-45e8-a393-ac50fceba198","event":"attempt.status_reported","goal":"g-77647351","details":{"attempt":"att-001","status":"开工：读取代码结构"}}
+{"ts":"2026-08-22T17:18:51+08:00","actor":"agent:455ce1e8-3866-45e8-a393-ac50fceba198","event":"attempt.status_reported","goal":"g-77647351","details":{"attempt":"att-001","status":"创建工作树 + 实现 transition 端点"}}
+{"ts":"2026-08-22T17:20:41+08:00","actor":"agent:455ce1e8-3866-45e8-a393-ac50fceba198","event":"attempt.status_reported","goal":"g-77647351","details":{"attempt":"att-001","status":"实现前端拖拽状态机"}}
+{"ts":"2026-08-22T17:20:45+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-129 收到负责人 5 点 UI 反馈，子代理补改中（按钮样式/位置/版本选择器/正文可选/scope 说明）"}}

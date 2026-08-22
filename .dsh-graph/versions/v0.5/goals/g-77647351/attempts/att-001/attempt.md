@@ -1,14 +1,14 @@
 ---
 {
   "id": "att-001",
-  "goal": "g-129",
+  "goal": "g-77647351",
   "executor": "agent:executor",
   "sandbox": "directory",
-  "started_at": "2026-08-22T17:09:45+08:00",
+  "started_at": "2026-08-22T17:17:33+08:00",
   "claimed_at": null,
-  "status_line": "复核缺陷已修复，等待 review",
+  "status_line": "实现前端拖拽状态机",
   "result": "pending",
-  "child_id": "20d4a779-65e6-4fce-b02a-a17e8864da21",
+  "child_id": "455ce1e8-3866-45e8-a393-ac50fceba198",
   "parent_session_id": "session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"
 }
 ---

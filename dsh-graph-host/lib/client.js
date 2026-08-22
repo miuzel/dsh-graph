@@ -1807,15 +1807,18 @@ window.__ModuleLoader__.load({
           : null,
         h("div", { style: S.grid },
           h("div", { style: { ...S.stageHead, position: "relative" } },
-            "泳道＼阶段",
-            // g-129: 新建目标按钮放在描述 lane 标题上
-            h("button", {
-              style: { ...S.btn, position: "absolute", right: 4, top: 2, fontSize: 11, padding: "1px 6px" },
-              className: "dg-btn",
-              title: "新建目标",
-              onClick: () => setShowCreateGoal(true),
-            }, "＋ 新建")),
-          STAGES.map((s) => h("div", { key: s.key, style: S.stageHead }, s.label)),
+            "泳道＼阶段"),
+          STAGES.map((s, si) => h("div", { key: s.key, style: { ...S.stageHead, position: "relative" } },
+            s.label,
+            // g-129: 新建目标按钮放在描述 lane 标题上（描述列 = STAGES[0]）
+            si === 0
+              ? h("button", {
+                  style: { ...S.btn, position: "absolute", right: 4, top: 2, fontSize: 11, padding: "1px 6px" },
+                  className: "dg-btn",
+                  title: "新建目标",
+                  onClick: () => setShowCreateGoal(true),
+                }, "＋ 新建")
+              : null)),
           ...rows),
         ...releasedRows,
         modalGoal
