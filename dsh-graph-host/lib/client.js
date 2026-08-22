@@ -2302,6 +2302,10 @@ window.__ModuleLoader__.load({
     // props.sessionId），不能用全局聚焦会话 list.current 代替（多窗口/子代理视图时两者可能不同）。
     // KanbanView(props) 挂载时写入，currentWorkspace() 优先按它查 cwd；找不到再回退 list.current。
     let viewedSessionId = null;
+    // g-129 修复：缓存最近一次成功解析的 workspace——切到子代理会话（不在 workspace 映射、
+    // 无 cwd/parentSessionId 可用）时回退缓存，避免看板读 process.cwd() 空骨架而空白。
+    let lastGoodWorkspace = null;
+    function setLastGoodWorkspace(ws) { if (ws) lastGoodWorkspace = ws; }
     // g-113 定点 bug 2：workspace 数据源改用 workspaces 服务——sessions 条目 cwd 并非总有
     // （DSH 源码 dsh-client-runtime/client.js:9233 `...entry.cwd !== void 0 ? { cwd: entry.cwd } : {}`，
     // aseit-ella 会话条目 cwd 为空），可靠来源是 workspaces 服务：
@@ -2321,34 +2325,35 @@ window.__ModuleLoader__.load({
         const items = snap?.items ?? [];
         if (viewedSessionId) {
           const w = wsOf(viewedSessionId);
-          if (w?.path) return w.path;
+          if (w?.path) { setLastGoodWorkspace(w.path); return w.path };
           const viewed = items.find?.((s) => s.sessionId === viewedSessionId);
-          if (viewed?.cwd) return viewed.cwd;
+          if (viewed?.cwd) { setLastGoodWorkspace(viewed.cwd); return viewed.cwd };
           // g-129 修复（负责人 2026-08-22）：子代理会话不在 workspace 映射且无 cwd 时，
           // 沿 parentSessionId 链回溯父会话的 workspace（子代理继承父会话 workspace）
           if (viewed?.parentSessionId) {
             const parent = items.find?.((s) => s.sessionId === viewed.parentSessionId);
-            if (parent?.cwd) return parent.cwd;
+            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd };
             const pw = wsOf(viewed.parentSessionId);
-            if (pw?.path) return pw.path;
+            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path };
           }
         }
         const current = snap?.current;
         if (current) {
           const w = wsOf(current);
-          if (w?.path) return w.path;
+          if (w?.path) { setLastGoodWorkspace(w.path); return w.path };
           const item = items.find?.((s) => s.sessionId === current);
-          if (item?.cwd) return item.cwd;
+          if (item?.cwd) { setLastGoodWorkspace(item.cwd); return item.cwd };
           // g-129 修复：current 是子代理时回溯父会话 workspace
           if (item?.parentSessionId) {
             const parent = items.find?.((s) => s.sessionId === item.parentSessionId);
-            if (parent?.cwd) return parent.cwd;
+            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd };
             const pw = wsOf(item.parentSessionId);
-            if (pw?.path) return pw.path;
+            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path };
           }
         }
+        if (lastGoodWorkspace) return lastGoodWorkspace;
         return null;
-      } catch { return null; }
+      } catch { if (lastGoodWorkspace) return lastGoodWorkspace; return null; }
     }
     // 给 /api/dsh-graph* 请求统一追加 ?workspace=（GET/POST 通用；已知则带，未知则裸路径）
     function graphUrl(path, extraParams = {}) {
