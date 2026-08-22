@@ -907,3 +907,5 @@
 {"ts":"2026-08-22T16:39:37+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"v0.5 依赖与收集分析完成（6 目标依赖登记+3 张调研卡）；等负责人确认后派发收集"}}
 {"ts":"2026-08-22T16:40:31+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-128","details":{"note":"负责人 2026-08-22：卡片 split 暂缓（不常见，交主管智能体按需处理），g-128 收窄为增删/归档/弹窗。"}}
 {"ts":"2026-08-22T16:40:34+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-128","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T16:40:44+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-128 split 已暂缓（交主管智能体）；v0.5 规划定稿，等确认派发收集/执行"}}
+{"ts":"2026-08-22T16:45:12+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-128","details":{"note":"彻底清除 split 功能残留（标题/描述/splitCard 条目/待确认小节），仅保留「split 暂缓」记录——负责人 2026-08-22 指出。"}}
