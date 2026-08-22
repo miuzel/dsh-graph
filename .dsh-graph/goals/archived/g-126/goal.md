@@ -21,7 +21,8 @@
     "sandbox": "directory"
   },
   "rules_snapshot": "r-2026-08-3",
-  "skill_refs": []
+  "skill_refs": [],
+  "archived": true
 }
 ---
 

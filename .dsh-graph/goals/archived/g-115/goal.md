@@ -24,7 +24,8 @@
   "skill_refs": [],
   "context_cards": [
     "card-fb9874b8"
-  ]
+  ],
+  "archived": true
 }
 ---
 
