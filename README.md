@@ -2,10 +2,10 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
-单包发布：npm 包名 `dsh-graph`（当前版本 0.5.1），内部 host 插件 id 保留 `dsh-graph-host`。一个包同时提供两个半边：
+单包发布：npm 包名 `dsh-graph`（当前版本 0.5.1），内部 host 插件 id 保留 `dsh-graph-host`。g-116 已将 host 与 client 合并进同一包（原 `dsh-graph-client` 已并入，0.4.0 起单包发布），一个包即同时提供：
 
-- **host 半边**：向 agent 暴露 22 个 `graph_*` 工具，覆盖目标全生命周期；并注册 `/api/dsh-graph*` REST 端点（看板投影 / 详情 / 写操作）。
-- **client 半边**：浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
+- 面向 agent 的 22 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点（看板投影 / 详情 / 写操作）；
+- 浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
 
 数据以文件 + 事件流形式落在工作区的 `.dsh-graph` 目录，git 友好、可审计。
 
@@ -46,7 +46,7 @@ dsh plugin --profile <name> add dsh-graph
 
 各工具具体含义见 `dsh-graph-host/README.md` 或 `graph_help`。
 
-## 看板（client 半边）
+## 看板（浏览器客户端）
 
 浏览器二维泳道看板：横向泳道为状态阶段（backlog / 版本 / 目标），纵向为目标卡片；支持拖拽排期、判据 / 卡片抽屉、`graph_report_status` 与 `graph_report_supervisor_status` 的实时状态显示、阻塞折叠等。经 `dsh.client` 声明 + `exports["./client"]` 编入 `__DSH_BOOT__`。
 
