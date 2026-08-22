@@ -1541,47 +1541,6 @@ window.__ModuleLoader__.load({
             : statusLine
               ? h(StatusLine, { key: "m3", text: statusLine, blocked: false, running: status === "in_progress" })
               : null,
-          // g-129: goal.md 文件链接（方案 A：复用 DSH 现成 host.openPath，ProducedFiles 同款链路）
-          d.goalFile
-            ? h("div", { key: "m4", style: { ...S.meta, marginTop: 4, display: "flex", alignItems: "center", gap: 6 } },
-                h("span", null, "📄 goal.md："),
-                h("button", {
-                  style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
-                  className: "dg-btn",
-                  title: "点击用系统默认编辑器打开 goal.md",
-                  onClick: async (e) => {
-                    e.stopPropagation();
-                    try {
-                      // 复用 DSH 现成链路：connection.api.host.openPath（ProducedFiles 同款）
-                      const conn = connectionRt ?? appCtx?.get?.("connection");
-                      if (conn?.api?.host?.openPath) {
-                        const result = await conn.api.host.openPath({ path: d.goalFile });
-                        if (result?.opened) {
-                          showToast("✅ 已打开 goal.md");
-                          return;
-                        }
-                      }
-                      // 回退：connection 不可用或 openPath 返回 opened:false → 复制路径
-                      await copyText(d.goalFile);
-                      showToast("✅ 路径已复制到剪贴板（打开不可用）");
-                    } catch {
-                      // 回退：复制路径
-                      await copyText(d.goalFile);
-                      showToast("✅ 路径已复制到剪贴板");
-                    }
-                  },
-                }, "打开"),
-                h("button", {
-                  style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
-                  className: "dg-btn",
-                  title: "复制 goal.md 路径",
-                  onClick: async (e) => {
-                    e.stopPropagation();
-                    const ok = await copyText(d.goalFile);
-                    if (ok) showToast("✅ 路径已复制到剪贴板");
-                  },
-                }, "复制路径"))
-            : null,
         ];
         // g-107：📡 会话实时面板上移至标题与状态摘要下方（默认折叠，点击展开）
         // g-109 判据反馈：最新 attempt 无 child_id（子代理启动失败）时也给出「重新执行」兜底区
