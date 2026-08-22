@@ -957,3 +957,6 @@
 {"ts":"2026-08-22T17:02:31+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"本轮完成/空闲待命"}}
 {"ts":"2026-08-22T17:02:31+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"goal.transition","goal":"g-130","details":{"from":"in_progress","to":"review"}}
 {"ts":"2026-08-22T17:02:55+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"重新检查 validate 实现"}}
+{"ts":"2026-08-22T17:03:31+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-130 复核通过（含行首锚定修正）停在 review；等负责人 verdict；后续 g-110→g-128→g-129"}}
+{"ts":"2026-08-22T17:04:07+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"本轮完成/空闲待命"}}
+{"ts":"2026-08-22T17:08:56+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-130","details":{"from":"review","to":"delivered"}}

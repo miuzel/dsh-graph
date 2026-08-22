@@ -2,7 +2,7 @@
 {
   "id": "g-130",
   "title": "goal.md 格式约束：graph_amend_goal 工具内剥离标题 + append 规范化（防重复小节）",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-22T16:36:30+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",
