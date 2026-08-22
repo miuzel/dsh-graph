@@ -923,3 +923,12 @@
 {"ts":"2026-08-22T16:52:09+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-129","details":{"from":"planning","to":"collecting"}}
 {"ts":"2026-08-22T16:52:09+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-77647351","details":{"from":"planning","to":"collecting"}}
 {"ts":"2026-08-22T16:52:09+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-130","details":{"from":"planning","to":"collecting"}}
+{"ts":"2026-08-22T16:52:19+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-129/g-77647351/g-130 已切 collecting lane（f527cd3）；3 调研子代理并行中"}}
+{"ts":"2026-08-22T16:53:44+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.filled","goal":"g-77647351","details":{"card":"card-f0ec7190","by":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"}}
+{"ts":"2026-08-22T16:53:47+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.reviewed","goal":"g-77647351","details":{"card":"card-f0ec7190","by":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"}}
+{"ts":"2026-08-22T16:53:50+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-77647351 调研完成已复核（HTML5 DnD 方案+两缺口）；等 g-129/g-130 调研回填"}}
+{"ts":"2026-08-22T16:53:58+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.filled","goal":"g-130","details":{"card":"card-ee78c929","by":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"}}
+{"ts":"2026-08-22T16:54:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.reviewed","goal":"g-130","details":{"card":"card-ee78c929","by":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"}}
+{"ts":"2026-08-22T16:54:03+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-130 调研完成已复核（含 3 决策点待负责人拍板）；等 g-129 编辑器调研"}}
+{"ts":"2026-08-22T16:54:12+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.filled","goal":"g-129","details":{"card":"card-cc069a44","by":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"}}
+{"ts":"2026-08-22T16:54:14+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.reviewed","goal":"g-129","details":{"card":"card-cc069a44","by":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"}}

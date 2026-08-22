@@ -2,7 +2,7 @@
 {
   "id": "g-129",
   "title": "GUI 建目标入口 + goal.md 文件链接（create-goal 端点 + 打开链接编辑器编辑）",
-  "status": "draft",
+  "status": "collecting",
   "blocked_reason": null,
   "created_at": "2026-08-22T16:32:50+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",
