@@ -28,6 +28,8 @@ dsh plugin --profile <name> add dsh-graph
 | `graph_validate` / `graph_rebuild` | 全量不变式校验 / 事件流对账 |
 | `graph_report_status` / `graph_report_supervisor_status` | 状态汇报（看板实时显示） |
 | `graph_resolve_accept` | 评审裁决 |
+| `graph_handoff` | 换会话交接：生成/更新 `.dsh-graph/HANDOFF.md`（board 投影 + 长期记忆 + 环境事实） |
+| `graph_claim_supervisor` | 新会话接手：更新 `supervisor.session` 为当前会话 id + 记事件 + 返回 HANDOFF 全文（幂等） |
 
 ## 数据目录
 
