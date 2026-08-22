@@ -2,7 +2,7 @@
 {
   "id": "g-117",
   "title": "supervisor 会话交接：一键 handoff + 自动更新主管会话 id",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-22T10:36:30+08:00",
   "created_by": "agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b",

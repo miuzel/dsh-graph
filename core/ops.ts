@@ -683,7 +683,7 @@ export function addCard(
     filled_at: null,
     content_ref: null,
     summary: null,            // 一句摘要（看板芯片/抽屉标题下显示）
-    child_id: null,           // 收集子代理 id（graph_collect_card 绑定）
+    child_id: null,           // 收集子代理 id（graph_bind_collect_card 绑定）
     parent_session_id: null,  // 派发方会话 id（GUI 打开子代理用）
   };
   saveGoal(join(cardDir, `${cardId}.md`), { meta, body: "\n" });
@@ -753,7 +753,9 @@ export function reviewCard(
   });
 }
 
-/** 把收集子代理绑定到卡片（g-109）：写 child_id/parent_session_id、置 status=collecting，并记 card.collecting 事件（事件先行）。 */
+/** 把收集子代理绑定到卡片（g-109）：写 child_id/parent_session_id、置 status=collecting，并记 card.collecting 事件（事件先行）。
+ *  g-119：幂等——同一 child_id+parent_session_id 对同一卡片重复绑定（状态已 collecting）为 no-op，
+ *  不重写、不重复记事件（防重试/重复派发刷事件流）；换 child（重新收集）或换 parent 仍正常写。 */
 export function bindCardChild(
   root: string,
   goalId: string,
@@ -761,8 +763,16 @@ export function bindCardChild(
   opts: { childId: string; parentSessionId?: string | null; actor: string },
 ): void {
   const { file, doc } = loadCard(root, goalId, cardId);
+  const parentSessionId = opts.parentSessionId ?? null;
+  if (
+    doc.meta.status === "collecting" &&
+    doc.meta.child_id === opts.childId &&
+    (doc.meta.parent_session_id ?? null) === parentSessionId
+  ) {
+    return;
+  }
   doc.meta.child_id = opts.childId;
-  doc.meta.parent_session_id = opts.parentSessionId ?? null;
+  doc.meta.parent_session_id = parentSessionId;
   doc.meta.status = "collecting";
   saveGoal(file, doc);
   appendEvent(root, {

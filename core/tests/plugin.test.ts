@@ -29,7 +29,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 16);
+  assert.equal(registered.length, 18); // g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
@@ -43,6 +43,8 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
   await call("graph_set_criteria", { goal, criteria: ["通过"] });
   await call("graph_transition", { goal, to: "planning" });
   const { card } = await call("graph_add_card", { goal, title: "c", kind: "text" });
+  // g-119：graph_bind_collect_card 绑定收集子代理（无会话上下文 → parent_session_id 缺省 null）
+  await call("graph_bind_collect_card", { goal, card, child_id: "child-t" });
   await call("graph_fill_card", { goal, card, text: "内容" });
   await call("graph_review_card", { goal, card });
   const att = await call("graph_start_attempt", { goal });

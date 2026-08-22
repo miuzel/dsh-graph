@@ -48,7 +48,7 @@ set -e
 test -f "$TMP/marker.json" || { echo "FAIL: marker 未生成（插件未加载）"; tail -20 "$TMP/run.log"; exit 1; }
 node -e '
 const m = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8"));
-const need = ["graph_create_goal","graph_set_criteria","graph_transition","graph_add_card","graph_fill_card","graph_review_card","graph_validate","graph_rebuild","graph_report_status","graph_start_attempt"];
+const need = ["graph_create_goal","graph_set_criteria","graph_transition","graph_add_card","graph_fill_card","graph_review_card","graph_validate","graph_rebuild","graph_report_status","graph_start_attempt","graph_bind_collect_card","graph_help"];
 const missing = need.filter((t) => !m.tools.includes(t));
 if (missing.length) { console.error("FAIL: 工具未注册: " + missing.join(",")); process.exit(1); }
 if (m.validate !== "PASS") { console.error("FAIL: 插件内 core validate 未通过: " + m.validate); process.exit(1); }

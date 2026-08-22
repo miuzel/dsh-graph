@@ -2,8 +2,8 @@
 {
   "id": "g-111",
   "title": "v0.3 对外发布与插件商店上架",
-  "status": "review",
-  "blocked_reason": null,
+  "status": "blocked",
+  "blocked_reason": "负责人 2026-08-22 指示暂搁置：awesome-dsh-plugin PR 需仓库满 1 天（约 8/23 01:57 +08:00 后开），且 0.4.1 发布待负责人自执行（OTP）。条件满足后解除。",
   "created_at": "2026-08-21T20:04:44+08:00",
   "created_by": "agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b",
   "version": "v0.3",
@@ -25,7 +25,8 @@
   "skill_refs": [],
   "context_cards": [
     "card-996e88de"
-  ]
+  ],
+  "blocked_from": "review"
 }
 ---
 

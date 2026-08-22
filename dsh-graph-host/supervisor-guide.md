@@ -74,12 +74,16 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 （负责人 2026-08-21 指示）：
 
 1. `graph_add_card` 占位（empty）——只登记"需要哪方面的资料"，不预设查什么、怎么查；
-2. 派发收集子代理（`graph_collect_card`，或手工绑定）：卡片 → collecting，
-   记录 `child_id` 与 `parent_session_id`（看板可跳转其会话）。
-   `parent_session_id` 工具化时取 `exec.agent.session.id`；手工绑定时**必须
-   从子代理会话文件头反查**：`zstd -dc ~/.dsh/sessions/<工作区目录>/<child_id>/session.jsonl.zstd | head -1`
-   的 `parentSession` 字段（权威来源）。禁止靠工作区+时间推断——已翻车
-   （发现#22，推断错会话导致 ↗ 跳到新会话页）；
+2. 派发收集子代理后**必须立即**用 `graph_bind_collect_card(goal, card, child_id[, parent_session_id])`
+   把 child_id 绑定到卡片：卡片 → collecting，写 `child_id`/`parent_session_id`，
+   记 `card.collecting` 事件（事件先行，R-02）——**未绑定即流程违规**
+   （g-118 教训：主管侧无绑定工具，只能写 tmp 探针脚本直调 core 补绑）。
+   `parent_session_id` 的**权威来源是子代理会话文件头**：
+   `zstd -dc ~/.dsh/sessions/<工作区目录>/<child_id>/session.jsonl.zstd | head -1`
+   的 `parentSession` 字段。工具缺省取当前会话 id（主管派发场景即主管会话，
+   应与子代理会话头 parentSession 一致）；不一致或补绑历史子代理时**显式传入
+   反查值**。**禁止按工作区+时间推断**——已翻车（发现#22，推断错会话导致
+   ↗ 跳到新会话页）；
 3. 子代理产出回填：`graph_fill_card` 写全文 + 一句 `summary` → filled；
    重要资料可 `graph_review_card` → reviewed。
    调研类收集子代理任务范围要窄、纯文档读取为主，不做实机验证
@@ -185,7 +189,8 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
 `graph_create_goal` 建卡（可带 version 排期）｜ `graph_move_goal` 排期移动｜
 `graph_set_criteria` 登记判据（自动快照规则版本）｜ `graph_transition` 状态迁移｜
 `graph_amend_goal` 修订记录｜ `graph_add_card / graph_fill_card / graph_review_card`
-信息收集卡｜ `graph_start_attempt` 派发执行（自动绑子代理）｜ `graph_report_status`
+信息收集卡｜ `graph_bind_collect_card` 收集子代理绑卡（parent_session_id 反查会话头）｜
+`graph_start_attempt` 派发执行（自动绑子代理）｜ `graph_report_status`
 状态汇报｜ `graph_validate` 全量校验｜ `graph_rebuild` 事件流对账
 
 ## 换会话（g-117：一键交接）

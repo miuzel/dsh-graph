@@ -2,7 +2,7 @@
 {
   "id": "g-119",
   "title": "收集卡绑定工具 graph_bind_collect_card + supervisor skill 绑定约束",
-  "status": "ready",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-22T11:09:05+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",

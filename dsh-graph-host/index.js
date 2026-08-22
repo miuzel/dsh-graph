@@ -85,6 +85,39 @@ const USAGE = [
   "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
 ].join("\n");
 
+// g-118（负责人 2026-08-22 设计转向）：注入**简短引导提示词**（非完整守则）——
+// 完整 supervisor 守则（supervisor-guide.md）不自动注入，仍走显式 skill 调用
+// （dsh-graph-supervisor），避免临时会话被注入主管角色而争抢 supervisor。
+// 注入内容只告知「如何」接管：claim 新 supervisor 的用法 + dsh-graph help 命令存在。
+const GUIDE_HINT = [
+  "dsh-graph 是把工作组织成「目标看板」的插件。本会话可用 graph_* 工具管理目标/判据/卡片/执行。",
+  "想接管 supervisor？调用 graph_claim_supervisor（更新 project.yaml 的 supervisor.session 并返回 HANDOFF 交接全文，g-117）。",
+  "查看 dsh-graph 使用说明与 claim 指引：调用 graph_help。",
+  "（完整 supervisor 工作守则不自动注入；如需，显式调用 skill dsh-graph-supervisor 加载。）",
+].join("\n");
+
+// g-118：dsh-graph help 命令内容源（graph_help 工具输出 + 引导提示词指向它）。
+// 使用说明 + claim 指引；不含主管守则（完整守则仍在 supervisor-guide.md / skill）。
+const HELP_TEXT = [
+  "dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具：",
+  "- graph_create_goal(title[, version, scope]) 建目标（进 backlog，带 version 则排期）；",
+  "- graph_set_criteria(goal, criteria[]) 先登记质量判据（判据先于执行，硬规则）；",
+  "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
+  "- graph_add_card / graph_fill_card / graph_review_card 管理目标下的上下文卡片（信息收集）；",
+  "- graph_bind_collect_card(goal, card, child_id) 把收集子代理绑定到卡片（g-119）；",
+  "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展；",
+  "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账；",
+  "- graph_report_supervisor_status(status) 主管自报状态（看板顶部状态栏）；graph_resolve_accept 评审裁决；",
+  "- graph_handoff() / graph_claim_supervisor() 换会话交接（g-117）。",
+  "",
+  "## 接管 supervisor（换会话，g-117）",
+  "1. 旧会话：graph_handoff() —— 生成/更新 .dsh-graph/HANDOFF.md（board 投影 + 长期记忆 + 环境事实）；",
+  "2. 新会话：graph_claim_supervisor() —— 把 project.yaml 的 supervisor.session 更新为当前会话 id，记 supervisor.claimed 事件（幂等），并返回 HANDOFF 全文。",
+  "",
+  "完整 supervisor 工作守则（阶段推进/信息收集/执行规范/环境事实等）见 skill dsh-graph-supervisor，显式调用加载。",
+  "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
+].join("\n");
+
 export function apply(ctx, config) {
   // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
   const root = resolveRoot(config); // 默认（init/marker 等无会话上下文时用）
@@ -152,6 +185,34 @@ export function apply(ctx, config) {
         parameters: params({ goal: str, card: str }, ["goal", "card"]),
       },
       run: (a, ex) => { reviewCard(rootFor(ex), a.goal, a.card, { by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
+      // g-119：supervisor 侧把已派发的收集子代理绑定到上下文卡片（此前只有 GUI 的
+      // /api/dsh-graph/start-collection 端点走 bindCardChild，主管只能写 tmp 探针脚本 hack）
+      def: {
+        name: "graph_bind_collect_card",
+        description: "把已派发的收集子代理绑定到上下文卡片：写 child_id/parent_session_id、置 status=collecting，并记 card.collecting 事件（事件先行，R-02）。parent_session_id 缺省取当前会话 id（子代理会话文件头 parentSession 为权威来源，需不一致时显式传入）；重复绑定同一 child 幂等（不重复记事件）。",
+        parameters: params({ goal: str, card: str, child_id: str, parent_session_id: str }, ["goal", "card", "child_id"]),
+      },
+      run: (a, ex) => {
+        if (!a.goal || !a.card || !a.child_id) {
+          throw new Error("graph_bind_collect_card 缺参：需要 goal/card/child_id（parent_session_id 可选）");
+        }
+        const parentSessionId = a.parent_session_id ?? ex?.agent?.session?.id ?? null;
+        bindCardChild(rootFor(ex), a.goal, a.card, { childId: a.child_id, parentSessionId, actor: actorOf(ex) });
+        return { ok: true, card: a.card, child_id: a.child_id, parent_session_id: parentSessionId };
+      },
+    },
+    {
+      // g-118：dsh-graph help 命令——输出使用说明 + supervisor 接管（claim）指引。
+      // 与引导提示词（systemPrompt section GUIDE_HINT）呼应：提示词告知 help 命令存在，
+      // help 给出完整工具清单与换会话步骤。不含主管守则（完整守则走 skill 显式调用）。
+      def: {
+        name: "graph_help",
+        description: "输出 dsh-graph 使用说明与 supervisor 接管（claim）指引：graph_* 工具清单、graph_handoff/graph_claim_supervisor 换会话步骤。",
+        parameters: params({}, []),
+      },
+      run: () => ({ help: HELP_TEXT }),
     },
     {
       def: {
@@ -635,6 +696,47 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
       ctx.tools.register({ ...t.def, output: objOut, execute: (args, exec) => t.run(args, exec) }),
     );
 
+    // g-118：supervisor 守则自动注入（不依赖显式 skill 调用）——
+    // g-118（负责人 2026-08-22 设计转向）：在所有会话注入**简短引导提示词**（非完整守则）。
+    // systemPrompt.section 注册一个恒定渲染 GUIDE_HINT 的提示词段落：所有会话（主管/普通/
+    // 执行子代理）都看到「如何 claim 新 supervisor + graph_help 命令存在」，内容轻量无害，
+    // 只告知「如何」接管、不授予主管角色——完整 supervisor 守则绝不自动注入（仍走显式
+    // skill dsh-graph-supervisor 调用），避免临时会话被注入主管角色而争抢 supervisor。
+    // 方案 A 机制复用（调研结论）：section.text 渲染进 system prompt；此处无空文本分支，
+    // 恒渲染 GUIDE_HINT（简短，token 成本 ~120 字）。
+    // systemPrompt 服务可能晚激活（dsh-base bundle 行，激活时序不保证）：轮询注册。
+    const sectionState = { registered: false, timer: null };
+    const registerGuideSection = () => {
+      if (sectionState.registered) return;
+      const sp = ctx.get?.("systemPrompt");
+      if (!sp) return;
+      try {
+        disposers.push(sp.section({
+          name: "dsh-graph-guide-hint",
+          order: 10,
+          text: () => GUIDE_HINT,
+        }));
+        sectionState.registered = true;
+        process.stderr.write(`[dsh-graph-host] g-118: guide hint section 已注册（所有会话注入引导提示词，root=${root}）\n`);
+      } catch (e) {
+        console.error("[dsh-graph-host] g-118 guide hint section 注册失败:", e?.message ?? e);
+      }
+    };
+    registerGuideSection();
+    if (!sectionState.registered) {
+      let sectionTicks = 0;
+      const pollSection = () => {
+        if (sectionState.registered) return;
+        sectionTicks++;
+        registerGuideSection();
+        if (sectionState.registered) return;
+        if (sectionTicks >= 40) return; // 20s 上限；无 systemPrompt 的组合静默跳过（skill 目录兜底）
+        sectionState.timer = setTimeout(pollSection, 500);
+        sectionState.timer.unref?.();
+      };
+      pollSection();
+    }
+
     // webServer 由 web-app 行提供，可能在 apply 之后才激活：轮询注册（同参考实现）。
     const routeState = { registered: false, timer: null };
     const registerHttpRoutes = () => {
@@ -684,6 +786,7 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
     }
     return () => {
       if (routeState.timer) clearTimeout(routeState.timer);
+      if (sectionState.timer) clearTimeout(sectionState.timer);
       disposers.forEach((d) => d());
     };
   });

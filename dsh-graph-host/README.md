@@ -30,6 +30,20 @@ dsh plugin --profile <name> add dsh-graph
 | `graph_resolve_accept` | 评审裁决 |
 | `graph_handoff` | 换会话交接：生成/更新 `.dsh-graph/HANDOFF.md`（board 投影 + 长期记忆 + 环境事实） |
 | `graph_claim_supervisor` | 新会话接手：更新 `supervisor.session` 为当前会话 id + 记事件 + 返回 HANDOFF 全文（幂等） |
+| `graph_bind_collect_card` | 把已派发的收集子代理绑定到上下文卡片（写 child_id/parent_session_id、置 collecting、记事件；重复绑定同 child 幂等） |
+| `graph_help` | 输出 dsh-graph 使用说明 + supervisor 接管（claim）指引（g-118） |
+
+## 引导提示词自动注入（g-118）
+
+dsh-graph-host 经 `ctx.systemPrompt.section()` 在**所有会话**注入一条**简短引导提示词**（非完整守则）：
+告知如何用 `graph_claim_supervisor` 接管 supervisor、存在 `graph_help` 命令查看使用说明。
+内容轻量无害（告知「如何」接管，不授予主管角色）——
+
+- **完整 supervisor 工作守则不自动注入**：仍走显式 `skill dsh-graph-supervisor` 调用，
+  避免临时会话被注入主管角色而争抢 supervisor；
+- 隔离：主管守则**绝不**出现在任何会话的自动注入里（含执行子代理）。
+
+详见 `docs/guide-auto-injection.md`。
 
 ## 数据目录
 
