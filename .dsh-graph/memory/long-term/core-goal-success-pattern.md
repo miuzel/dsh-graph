@@ -92,3 +92,15 @@
 - delivered 是终态不可回退——一旦越权无法撤销，只能靠负责人追认；
 - 正确做法：复核通过后**停轮等 verdict**，负责人同意后才 transition 到 delivered；
   若已漏迁移，先问 verdict 再迁，绝不自行补迁。
+
+## worktree 合并严禁重置 .dsh-graph 数据（2026-08-22 g-125 事故）
+
+- g-125 cherry-pick 时我执行 `git checkout main -- .dsh-graph/` 想清理分支数据差异，
+  结果把 g-125 的子代理状态迁移（ready→in_progress→review）事件和 frontmatter 全回退
+  到 main 快照（in_progress）——负责人指出「停留在 in_progress」；
+- 教训：worktree 分支里的 .dsh-graph/ 差异（events/goal/attempt）是**分支创建时的
+  主工作树快照**，不是分支作者的改动——合并时**只 cherry-pick 代码文件**（host/core/
+  scripts/docs），**绝不 checkout 重置 .dsh-graph/**；若需丢弃分支数据差异，用
+  `git restore --source=main .dsh-graph/` 后再校验事件流，或干脆忽略（cherry-pick
+  代码后单独提交看板数据）；
+- 状态以事件流为准：合并后跑 rebuild 对账，发现 drift 立即用工具补迁移。
