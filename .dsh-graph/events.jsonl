@@ -960,3 +960,16 @@
 {"ts":"2026-08-22T17:03:31+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-130 复核通过（含行首锚定修正）停在 review；等负责人 verdict；后续 g-110→g-128→g-129"}}
 {"ts":"2026-08-22T17:04:07+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"本轮完成/空闲待命"}}
 {"ts":"2026-08-22T17:08:56+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-130","details":{"from":"review","to":"delivered"}}
+{"ts":"2026-08-22T17:09:09+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-130 已交付（808ea30）；下一步派发 g-110（目标操作）"}}
+{"ts":"2026-08-22T17:09:45+08:00","actor":"human:gui","event":"attempt.started","goal":"g-129","details":{"attempt":"att-001","executor":"agent:executor","injected_cards":["card-cc069a44"]}}
+{"ts":"2026-08-22T17:09:45+08:00","actor":"human:gui","event":"attempt.bound","goal":"g-129","details":{"attempt":"att-001","child_id":"20d4a779-65e6-4fce-b02a-a17e8864da21"}}
+{"ts":"2026-08-22T17:09:51+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"开工：读取目标文件，加载执行技能"}}
+{"ts":"2026-08-22T17:10:35+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"正在分析现有代码结构"}}
+{"ts":"2026-08-22T17:10:40+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"goal.transition","goal":"g-129","details":{"from":"collecting","to":"blocked","reason":"需要先完成 collecting→ready→in_progress 状态迁移"}}
+{"ts":"2026-08-22T17:10:48+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"准备迁移状态到 ready"}}
+{"ts":"2026-08-22T17:10:53+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"goal.transition","goal":"g-129","details":{"from":"blocked","to":"collecting"}}
+{"ts":"2026-08-22T17:10:57+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-77647351","details":{"note":"修复 g-77647351 目标描述（旧模板占位「待填写」→ 补真实描述，负责人 2026-08-22 指出格式问题）。"}}
+{"ts":"2026-08-22T17:10:59+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"检查目标状态与判据"}}
+{"ts":"2026-08-22T17:11:01+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-77647351","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T17:11:09+08:00","actor":"cli","event":"criteria.confirmed","goal":"g-129","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T17:11:09+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"goal.transition","goal":"g-129","details":{"from":"collecting","to":"ready"}}
