@@ -30,6 +30,7 @@ window.__ModuleLoader__.load({
       "version.created": "创建版本", "version.released": "发布版本",
       "version.scope_changed": "调整版本范围", "version.integration_decided": "集成测试决策",
       "goal.deleted": "删除目标", "card.deleted": "删除卡片", "attempt.bound": "绑定子代理",
+      "goal.renamed": "重命名目标",
     };
 
     // 近期动态只保留对人有用的事件：泳道切换、修订与人工补充、判据/评审/交付关键节点
@@ -37,7 +38,7 @@ window.__ModuleLoader__.load({
     const MEANINGFUL = new Set([
       "goal.transition", "goal.amended", "scope.note", "criteria.confirmed",
       "completion.claimed", "review.passed", "review.failed", "attempt.started",
-      "goal.moved", "goal.created", "attempt.status_reported",
+      "goal.moved", "goal.created", "attempt.status_reported", "goal.renamed",
     ]);
 
     // 拆出事件三要素（时间/事件/执行者），供表格列渲染与 humanEvent 复用
@@ -48,6 +49,7 @@ window.__ModuleLoader__.load({
         if (e.event === "goal.transition") what = `状态流转：${STATUS_LABEL[d.from] ?? d.from} → ${STATUS_LABEL[d.to] ?? d.to}`;
         else if (e.event === "attempt.status_reported") what = `汇报：${d.status ?? ""}`;
         else if (e.event === "goal.amended") what = `修订：${d.note ?? ""}`;
+        else if (e.event === "goal.renamed") what = `重命名：${d.old_title ?? ""} → ${d.new_title ?? ""}`;
         else if (e.event === "scope.note") what = `补充：${d.note ?? ""}`;
         else what = e.event;
       }
@@ -1530,6 +1532,9 @@ window.__ModuleLoader__.load({
       const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
       const [logFilter, setLogFilter] = React.useState(""); // "" 全部 / 事件名
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新执行的模型路由（显示兜底）
+      const [renaming, setRenaming] = React.useState(false);
+      const [newTitle, setNewTitle] = React.useState("");
+      const [renameNote, setRenameNote] = React.useState(null);
       React.useEffect(() => {
         let alive = true;
         // g-109 判据：接受默认经主管复核——20s 轮询详情，主管裁决（无异议生效/有异议）自动反映到按钮处
@@ -1765,12 +1770,67 @@ window.__ModuleLoader__.load({
         ];
       }
 
+      const doRename = async () => {
+        const t = newTitle.trim();
+        if (!t) { setRenameNote("标题不能为空"); return; }
+        if (t === (props.title ?? props.id)) { setRenaming(false); return; }
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/rename-goal"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.id, title: t }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setRenaming(false);
+            setRenameNote(null);
+            // 刷新详情数据
+            const goalRes = await fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }));
+            const goalData = await goalRes.json();
+            if (!goalData.error) setState({ loading: false, data: goalData });
+            // 触发父组件刷新看板
+            if (props.onRenamed) props.onRenamed(props.id, t);
+          } else {
+            setRenameNote("⚠️ 重命名失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setRenameNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+      };
+
+      const titleEl = renaming
+        ? h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 4 } },
+            h("span", null, "🎯"),
+            h("input", {
+              style: { ...S.promptInput, flex: 1, fontSize: 15, fontWeight: 700 },
+              value: newTitle,
+              onChange: (e) => setNewTitle(e.target.value),
+              onKeyDown: (e) => { if (e.key === "Enter") doRename(); if (e.key === "Escape") setRenaming(false); },
+              autoFocus: true,
+            }),
+            h("button", {
+              style: { ...S.btn, padding: "2px 10px" }, className: "dg-btn",
+              onClick: doRename,
+            }, "确认"),
+            h("button", {
+              style: { ...S.btn, padding: "2px 10px" }, className: "dg-btn",
+              onClick: () => { setRenaming(false); setRenameNote(null); },
+            }, "取消"),
+            renameNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, renameNote) : null)
+        : h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+            h("span", { style: { fontWeight: 700, fontSize: 15 } }, `🎯 ${props.title ?? props.id}`),
+            h("button", {
+              style: { ...S.btn, fontSize: 11, padding: "1px 6px", opacity: 0.7 }, className: "dg-btn",
+              title: "重命名目标",
+              onClick: (e) => { e.stopPropagation(); setNewTitle(props.title ?? props.id); setRenaming(true); setRenameNote(null); },
+            }, "✏️"));
+
       return h(
         "div",
         { style: S.overlay, onClick: props.onClose },
         h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: props.onClose }, "✕"),
-          h("div", { style: { fontWeight: 700, fontSize: 15 } }, `🎯 ${props.title ?? props.id}`),
+          titleEl,
           headMeta,
           livePanel,
           content),
@@ -2574,7 +2634,7 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load() })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,

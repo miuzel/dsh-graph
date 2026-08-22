@@ -132,14 +132,14 @@ test("g-118：systemPrompt 服务缺失时静默跳过（headless / 测试组合
   apply(ctx, { root }); // 不抛错即可（无 systemPrompt → 静默跳过）
 });
 
-test("g-118/g-119：注入不影响 graph_* 工具注册（16 + bind + help = 18）", () => {
+test("g-118/g-119：注入不影响 graph_* 工具注册（16 + bind + help + rename = 19）", () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g118-"));
   const root = resolveRoot({}, ws);
   init(root);
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: session-super-1\n");
   const { ctx, registered, sections } = makeMockCtx();
   apply(ctx, { root });
-  assert.equal(registered.length, 18, "g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help = 18");
+  assert.equal(registered.length, 19, "g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help + g-141 graph_rename_goal = 19");
   assert.equal(sections.filter((s) => s.name === "dsh-graph-guide-hint").length, 1, "section 只注册一次");
 });
 

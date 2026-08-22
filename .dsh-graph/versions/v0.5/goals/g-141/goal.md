@@ -2,7 +2,7 @@
 {
   "id": "g-141",
   "title": "GUI 目标重命名：在目标操作里填新标题，更新 goal.md title + 事件流",
-  "status": "planning",
+  "status": "review",
   "blocked_reason": null,
   "created_at": "2026-08-23T01:11:22+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",

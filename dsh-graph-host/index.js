@@ -34,6 +34,7 @@ import {
   bindAttemptChild,
   moveGoal,
   amendGoal,
+  renameGoal,
   requestAcceptReview,
   resolveAccept,
   boardProjection,
@@ -258,6 +259,17 @@ export function apply(ctx, config) {
         parameters: params({ goal: str, note: str, append: str }, ["goal", "note"]),
       },
       run: (a, ex) => { amendGoal(rootFor(ex), a.goal, { note: a.note, appendDescription: a.append, actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
+      def: {
+        name: "graph_rename_goal",
+        description: "重命名目标：更新 goal.md 的 meta.title，记 goal.renamed 事件（旧/新标题）。title 非空、去首尾空白；相同标题为 no-op。",
+        parameters: params({ goal: str, title: str }, ["goal", "title"]),
+      },
+      run: (a, ex) => {
+        const result = renameGoal(rootFor(ex), a.goal, { title: a.title, actor: actorOf(ex) });
+        return { ok: true, ...result };
+      },
     },
     {
       def: {
@@ -667,6 +679,22 @@ export function apply(ctx, config) {
           json(res, 200, { ok: true });
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/rename-goal",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, title } = body;
+          if (!goal || !title || typeof title !== "string") return json(res, 400, { error: "missing goal or title" });
+          const result = renameGoal(rootForReq(req, body), goal, { title, actor: "human:gui" });
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },

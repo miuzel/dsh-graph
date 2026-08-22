@@ -1506,6 +1506,30 @@ export function amendGoal(
   });
 }
 
+/** 重命名目标：更新 goal.md 的 meta.title，记 goal.renamed 事件（旧/新标题）。
+ *  校验：title 非空、去首尾空白；相同标题视为 no-op（不记事件）。 */
+export function renameGoal(
+  root: string,
+  id: string,
+  opts: { title: string; actor: string },
+): { old_title: string; new_title: string } {
+  const newTitle = opts.title.trim();
+  if (!newTitle) throw new GraphError("标题不能为空");
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  const oldTitle = String(doc.meta.title ?? "");
+  if (oldTitle === newTitle) return { old_title: oldTitle, new_title: newTitle };
+  doc.meta.title = newTitle;
+  saveGoal(file, doc);
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "goal.renamed",
+    goal: id,
+    details: { old_title: oldTitle, new_title: newTitle },
+  });
+  return { old_title: oldTitle, new_title: newTitle };
+}
+
 /** 主管复核接受请求（兼容旧名，内部转发 requestAcceptReview / resolveAccept）。 */
 export function acceptReview(
   root: string,

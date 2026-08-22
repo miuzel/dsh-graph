@@ -29,7 +29,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 18); // g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help
+  assert.equal(registered.length, 19); // g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help + g-141 graph_rename_goal
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
