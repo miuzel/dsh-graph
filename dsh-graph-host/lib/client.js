@@ -305,6 +305,20 @@ window.__ModuleLoader__.load({
       return String(n);
     }
 
+    // 状态延续时长（statusAt 距今多久）——g-124 staleStatus 分支显示用（负责人 2026-08-22）
+    function fmtElapsed(ts, now) {
+      const ms = now - ts;
+      if (!(ms > 0)) return "刚刚";
+      const s = Math.floor(ms / 1000);
+      if (s < 60) return s + " 秒";
+      const m = Math.floor(s / 60);
+      if (m < 60) return m + " 分钟";
+      const h = Math.floor(m / 60);
+      if (h < 24) return h + " 小时" + (m % 60 ? " " + (m % 60) + " 分" : "");
+      const d = Math.floor(h / 24);
+      return d + " 天" + (h % 24 ? " " + (h % 24) + " 小时" : "");
+    }
+
     // token/上下文占用的紧凑文本（LiveStrip 与 SessionPanel 折叠态共用）
     function liveMeter(usage, pressure) {
       const tokTotal = usage
@@ -342,6 +356,15 @@ window.__ModuleLoader__.load({
       const staleStatus =
         running && props.statusAt != null && runningSinceRef.current != null &&
         props.statusAt < runningSinceRef.current;
+      // g-124（负责人 2026-08-22）：staleStatus 不再用等待占位文案——
+      // 改为显示当前状态延续时长（statusAt 距今多久，行内 + tooltip）；30s 时钟驱动刷新。
+      const [now, setNow] = React.useState(() => Date.now());
+      React.useEffect(() => {
+        if (!staleStatus) return;
+        const t = setInterval(() => setNow(Date.now()), 30000);
+        return () => clearInterval(t);
+      }, [staleStatus]);
+      const staleDur = staleStatus && props.statusAt != null ? fmtElapsed(props.statusAt, now) : null;
       const line = snap && snap.chat ? lastStreamLine(snap.chat.legacy.partial) : null;
       const meter = liveMeter(usage, pressure);
       return h(
@@ -355,10 +378,11 @@ window.__ModuleLoader__.load({
             meter || "投影待推送")),
         // g-a92e1406：status_line 摘要并入状态小窗——运行中前缀 ⏳ 走 StatusLine 带动画
         //（流动背景 + 图标 pulse），空闲（刚执行完）前缀 ✅ 保持静态；⛔ 阻塞行由调用方静态渲染。
-        // 过期清空：新一轮已开始但 status 仍是旧轮时间戳 → 显示等待态而非误导性旧状态。
+        // 过期清空：新一轮已开始但 status 仍是旧轮时间戳 → 显示状态延续时长而非误导性旧状态
+        //（g-124：去等待占位，改为 statusAt 距今时长，行内 + tooltip）。
         staleStatus
-          ? h("div", { style: S.liveLine, title: "新一轮已开始，等待 supervisor 更新状态" },
-              "🔄 等待最新状态…")
+          ? h("div", { style: S.liveLine, title: "新一轮已开始，当前状态已延续 " + staleDur + "（等待状态更新）" },
+              "⏳ 状态延续 " + staleDur)
           : props.statusLine
               ? (running
                   ? h(StatusLine, { text: props.statusLine, blocked: false, running: true })

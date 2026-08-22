@@ -772,3 +772,14 @@
 {"ts":"2026-08-22T12:10:57+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"attempt.bound","goal":"g-124","details":{"attempt":"att-001","child_id":"4ec422f2-3657-4369-a074-7b8e1018f07a"}}
 {"ts":"2026-08-22T12:11:03+08:00","actor":"agent:4ec422f2-3657-4369-a074-7b8e1018f07a","event":"attempt.status_reported","goal":"g-124","details":{"attempt":"att-001","status":"读目标，定位 client.js/host 代码"}}
 {"ts":"2026-08-22T12:11:03+08:00","actor":"agent:4ec422f2-3657-4369-a074-7b8e1018f07a","event":"goal.transition","goal":"g-124","details":{"from":"ready","to":"in_progress"}}
+{"ts":"2026-08-22T12:11:21+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-124 执行中（状态行 tooltip 延续时间 + 结束前更新 status）；append 防呆待排期 backlog"}}
+{"ts":"2026-08-22T12:12:33+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-124 执行中；建 g-125（交付/阻塞卡片折叠精简 + 摘要 2 行 + 写法约束）"}}
+{"ts":"2026-08-22T12:12:36+08:00","actor":"agent:4ec422f2-3657-4369-a074-7b8e1018f07a","event":"attempt.status_reported","goal":"g-124","details":{"attempt":"att-001","status":"worktree 建好，改 client.js 延续时长"}}
+{"ts":"2026-08-22T12:12:36+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.created","goal":"g-125","details":{"title":"看板卡片精简：交付/阻塞卡片默认折叠（隐藏依赖/livestrip/执行按钮/上下文卡片），摘要折叠 2 行 + 摘要写法约束","version":"v0.3"}}
+{"ts":"2026-08-22T12:12:41+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-125","details":{"note":"负责人 2026-08-22 UI 反馈：交付/阻塞卡片默认折叠精简（隐藏依赖/livestrip/执行按钮/上下文卡片）；上下文卡片摘要折叠 2 行；约束摘要写法。"}}
+{"ts":"2026-08-22T12:12:44+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-125","details":{"criteria_count":4,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T12:12:48+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-125","details":{"from":"draft","to":"planning"}}
+{"ts":"2026-08-22T12:12:51+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-125","details":{"from":"planning","to":"ready"}}
+{"ts":"2026-08-22T12:14:20+08:00","actor":"agent:4ec422f2-3657-4369-a074-7b8e1018f07a","event":"attempt.status_reported","goal":"g-124","details":{"attempt":"att-001","status":"全部改动+验收通过，待 review"}}
+{"ts":"2026-08-22T12:14:20+08:00","actor":"agent:4ec422f2-3657-4369-a074-7b8e1018f07a","event":"goal.transition","goal":"g-124","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-22T12:14:48+08:00","actor":"test","event":"goal.created","goal":"g-126","details":{"title":"模板验证 tmp","version":null}}

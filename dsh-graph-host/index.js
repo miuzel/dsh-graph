@@ -341,6 +341,7 @@ export function apply(ctx, config) {
               `每做一个动作就及时调用 graph_report_status 更新，参数 goal="${a.goal}"、attempt="${attempt}"、status=<一句话简短描述你此刻在干什么>。`,
               `status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab 样式」「跑验收脚本」），不要攒到结束才写、不要长篇。`,
               `开工、每完成一块、遇到阻塞、转向新任务、临近完成，都要立即更新；这句就是卡片上实时显示的那一行，滞留或失实等于对负责人隐瞒进展。`,
+              `【结束工作前更新 status】本轮收尾/即将空闲前，再调用一次 graph_report_status 把 status 更新为完成态（如「本轮完成/空闲待命」），避免空闲时 status 仍显示「正在做 X」——看板如实反映空闲/完成状态；`,
               `【泳道迁移——你自己做，卡片位置是状态的投影】看板列＝状态的投影，状态滞留＝卡片滞留，必须及时调用 graph_transition：`,
               `开工时（若当前非 in_progress）graph_transition(goal="${a.goal}", to="in_progress")；`,
               `完成后 graph_transition(goal="${a.goal}", to="review")；`,
@@ -679,6 +680,8 @@ ${worktreeBlock}
 每做一个动作就及时调用 graph_report_status 更新，参数 goal="${goal}"、attempt="${attempt}"、status=<一句话简短描述你此刻在干什么>。
 status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab 样式」「跑验收脚本」），不要攒到结束才写、不要长篇。
 开工、每完成一块、遇到阻塞、转向新任务、临近完成，都要立即更新；这句就是卡片上实时显示的那一行，滞留或失实等于对负责人隐瞒进展。
+
+【结束工作前更新 status】本轮收尾/即将空闲前，再调用一次 graph_report_status 把 status 更新为完成态（如「本轮完成/空闲待命」），避免空闲时 status 仍显示「正在做 X」——看板如实反映空闲/完成状态。
 
 【泳道迁移——你自己做，卡片位置是状态的投影】看板列＝状态的投影，状态滞留＝卡片滞留，必须及时调用 graph_transition：
 开工时（若当前非 in_progress）graph_transition(goal="${goal}", to="in_progress")；

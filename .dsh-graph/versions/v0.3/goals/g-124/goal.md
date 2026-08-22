@@ -2,7 +2,7 @@
 {
   "id": "g-124",
   "title": "状态行改进：tooltip 显示状态延续时间 + supervisor/子代理结束工作前更新 status",
-  "status": "in_progress",
+  "status": "review",
   "blocked_reason": null,
   "created_at": "2026-08-22T12:09:28+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",
@@ -50,6 +50,11 @@
 
 | id | 内容 | 来源 | 时间 | freshness |
 |----|------|------|------|-----------|
+| ev-001 | client.js staleStatus 分支去「🔄 等待最新状态…」占位，改显状态延续时长（statusAt 距今，行内 ⏳ 状态延续 X + tooltip，30s 时钟刷新）；新增 fmtElapsed 格式化函数 | scripts/check_g124.sh + git diff（branch g124/wt-att-001 @3263bb1） | 2026-08-22 | fresh |
+| ev-002 | supervisor-guide.md 新增「每轮收尾更新为完成态（空闲待命/本轮完成/等待输入）」规范，并同步更新过期清空机制描述（旧状态过期→显示状态延续时长） | git diff | 2026-08-22 | fresh |
+| ev-003 | host/index.js 两处 spawn 提示词（graph_start_attempt 工具 + start-execution 端点）均加「结束工作前更新 status」指令（grep 计数=2，awk 锚点各自命中） | scripts/check_g124.sh | 2026-08-22 | fresh |
+| ev-004 | check_g124.sh 全 PASS；g-108/g-a92e1406 共享回归 PASS；core 单测 PASS（node --test） | scripts/check_g124.sh / check_g108.sh / check_ga92e1406.sh | 2026-08-22 | fresh |
+| ev-005 | graph_validate 全量不变式校验无问题（problems: []） | graph_validate 工具 | 2026-08-22 | fresh |
 
 ## 处置分支
 
