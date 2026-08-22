@@ -30,3 +30,11 @@
 - 插件加载自测 marker 文件：在 apply 里写"注册了什么 + core validate 结果"，让验收
   脚本断言进程内真实状态；
 - 新会话 dogfood 是检验"模型真实调用工具"的唯一可信路径。
+
+## 发布认证：负责人用 2FA 设备验证，不用 OTP 参数（2026-08-22）
+
+- 负责人发布 npm 用 **2FA 设备验证**（pnpm publish 不带 --otp，走交互式/设备验证；
+  若提示 OTP 在终端输入 2FA 码）；unpublish 是敏感操作 npm 强制 2FA（仍需 OTP 参数或交互输入）；
+- 不要再给负责人发带 `--otp=<码>` 占位的发布命令——用交互式 2FA 版本：
+  `pnpm publish --registry=https://registry.npmjs.org --no-git-checks`；
+- 相关：发布由负责人自执行（OTP/2FA 在负责人侧），supervisor 负责发布后核验 registry。
