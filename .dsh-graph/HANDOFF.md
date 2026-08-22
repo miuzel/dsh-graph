@@ -1,6 +1,6 @@
 # HANDOFF（换会话交接）
 
-> 由 graph_handoff 自动生成于 2026-08-22T11:59:21+08:00（g-117）。图根：`/home/miuzel/workspace/personal/dsh-graph/.dsh-graph`。
+> 由 graph_handoff 自动生成于 2026-08-22T12:06:56+08:00（g-117）。图根：`/home/miuzel/workspace/personal/dsh-graph/.dsh-graph`。
 > 你的职责指南：dsh-graph-host/supervisor-guide.md（注册为 skill `dsh-graph-supervisor`）。
 
 ## 目标看板
@@ -26,9 +26,10 @@
 - **g-117（supervisor 会话交接：一键 handoff + 自动更新主管会话 id）**：`delivered`
 - **g-118（supervisor 守则自动注入：新 supervisor 会话无需显式调用 skill 即拿到工作守则）**：`delivered`（5条判据逐条对照完成，等待 review）
 - **g-119（收集卡绑定工具 graph_bind_collect_card + supervisor skill 绑定约束）**：`delivered`（完成：工具+guide+7单测，71测试8脚本全绿）
-- **g-120（执行派发注入已收集卡片成果（context_cards 内容注入执行子代理 + injected_cards 事件））**：`review`（与 g-121 共存复验：85 测+双冻结脚本+validate 全绿）
-- **g-121（HANDOFF 旧版归档：生成新 HANDOFF 前打包旧文件，归档目录不入 git）**：`review`（完成：归档+4单测，85测试8脚本全绿）
-- **g-122（dummy：g-120 实机验证（收集→执行注入观察））**：`in_progress`（注入段+辨识标记核对一致）
+- **g-120（执行派发注入已收集卡片成果（context_cards 内容注入执行子代理 + injected_cards 事件））**：`delivered`（与 g-121 共存复验：85 测+双冻结脚本+validate 全绿）
+- **g-121（HANDOFF 旧版归档：生成新 HANDOFF 前打包旧文件，归档目录不入 git）**：`delivered`（完成：归档+4单测，85测试8脚本全绿）
+- **g-122（dummy：g-120 实机验证（收集→执行注入观察））**：`delivered`（完成：GUI执行路径注入验证通过）
+- **g-123（dummy2：负责人 GUI 手动验证执行注入（g-120））**：`delivered`（注入验证通过，交 review）
 - **g-a92e1406（状态摘要运行动画与履历：流动背景+图标动画、modal 显示、近期动态收录汇报）**：`delivered`（判据 3① 二次扩展（supervisor 状态栏）实现完成：新增 supervisor.status_reported 事件（R-02 事件流唯一真相源）+ reportSupervisorStatus/readSupervisorStatus（读最新一条）+ host 工具 graph_report_supervisor_status + boardPayload 下发 supervisorStatus + SupervisorBar 传 statusLine 复用 LiveStrip 动画。core 23/23、冻结脚本断言内容 6/6 恒真、事件流测试数据已清理。另发现冻结脚本 awk|grep -q+pipefail 存在 SIGPIPE 竞态（间歇 FAIL 非逻辑回归），已上报。）
 - **g-102（Kanban 二维泳道看板（client-plugin））**：`delivered`
 - **g-107（卡片会话内嵌：实时状态与看板直达指令）**：`delivered`（六轮修复：模型查询被拒根因定位（subagent 围栏）并退化父会话；折叠态内联状态/token/模型；全绿待复测）（被复用→g-108）
@@ -49,9 +50,6 @@
 
 ## 进行中（下一步就干）
 
-- **g-120（执行派发注入已收集卡片成果（context_cards 内容注入执行子代理 + injected_cards 事件））**：`review`（与 g-121 共存复验：85 测+双冻结脚本+validate 全绿）
-- **g-121（HANDOFF 旧版归档：生成新 HANDOFF 前打包旧文件，归档目录不入 git）**：`review`（完成：归档+4单测，85测试8脚本全绿）
-- **g-122（dummy：g-120 实机验证（收集→执行注入观察））**：`in_progress`（注入段+辨识标记核对一致）
 - **g-115（测试目标卡片流程）**：`draft`
 - **g-106（收集项任务化：卡片绑定收集子代理）**：`draft`
 - **g-105（记忆提炼与技能沉淀机制）**：`draft`
@@ -75,6 +73,10 @@
 - **g-117**：supervisor 会话交接：一键 handoff + 自动更新主管会话 id
 - **g-118**：supervisor 守则自动注入：新 supervisor 会话无需显式调用 skill 即拿到工作守则
 - **g-119**：收集卡绑定工具 graph_bind_collect_card + supervisor skill 绑定约束
+- **g-120**：执行派发注入已收集卡片成果（context_cards 内容注入执行子代理 + injected_cards 事件）
+- **g-121**：HANDOFF 旧版归档：生成新 HANDOFF 前打包旧文件，归档目录不入 git
+- **g-122**：dummy：g-120 实机验证（收集→执行注入观察）
+- **g-123**：dummy2：负责人 GUI 手动验证执行注入（g-120）
 - **g-a92e1406**：状态摘要运行动画与履历：流动背景+图标动画、modal 显示、近期动态收录汇报
 - **g-102**：Kanban 二维泳道看板（client-plugin）
 - **g-107**：卡片会话内嵌：实时状态与看板直达指令
