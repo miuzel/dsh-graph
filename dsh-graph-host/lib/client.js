@@ -2195,6 +2195,8 @@ window.__ModuleLoader__.load({
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
       const [showArchived, setShowArchived] = React.useState(false);
+      // g-127: 阻塞列默认折叠（竖向窄条汇总，点击展开）
+      const [blockedColumnCollapsed, setBlockedColumnCollapsed] = React.useState(true);
       // g-77647351：拖拽状态机
       const [drag, setDrag] = React.useState(null); // {goalId, fromStatus, overGoalId, overStageKey, overHalf, laneKey}
       const dropCommitted = React.useRef(false);
@@ -2505,6 +2507,54 @@ window.__ModuleLoader__.load({
           );
           // g-137：交替背景色
           const laneBg = laneIndex % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.08)";
+          // g-127：阻塞列折叠态——竖条汇总替代卡片列表
+          if (s.key === "blocked" && blockedColumnCollapsed && orderedGoals.length) {
+            // 计算最长阻塞时间（从 created_at 到现在）
+            let maxDays = 0;
+            for (const g of orderedGoals) {
+              if (g.created_at) {
+                const d = (Date.now() - new Date(g.created_at).getTime()) / 86400000;
+                if (d > maxDays) maxDays = d;
+              }
+            }
+            const duration = maxDays >= 1 ? ` · ${Math.floor(maxDays)}天` : "";
+            const summaryText = `⛔ ×${orderedGoals.length}${duration}`;
+            return h("div", {
+              key: s.key,
+              style: {
+                ...S.cell,
+                background: isOverThisCell ? "rgba(76,141,255,.10)" : laneBg,
+                writingMode: "vertical-rl",
+                textOrientation: "mixed",
+                textAlign: "center",
+                padding: "10px 4px",
+                minWidth: 0,
+                width: 36,
+                cursor: "pointer",
+                userSelect: "none",
+                fontSize: 11,
+                opacity: 0.85,
+                whiteSpace: "nowrap",
+              },
+              className: "dg-blocked-collapsed" + (isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? " dg-cell-drop-active" : ""),
+              onClick: (e) => { e.stopPropagation(); setBlockedColumnCollapsed(false); },
+              title: `点击展开阻塞列（${orderedGoals.length} 项）`,
+              // g-127：折叠态仍支持拖放（拖入阻塞列）
+              onDragOver: anyDrag ? (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                if (!orderedGoals.length) {
+                  setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" } : d);
+                }
+              } : undefined,
+              onDrop: anyDrag ? (e) => {
+                e.preventDefault();
+                if (!orderedGoals.length) {
+                  commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
+                }
+              } : undefined,
+            }, summaryText);
+          }
           return h("div", {
             key: s.key,
             style: { ...S.cell, background: isOverThisCell ? "rgba(76,141,255,.10)" : laneBg },
@@ -2754,9 +2804,23 @@ window.__ModuleLoader__.load({
         b.supervisorSession
           ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null, statusAt: b.supervisorStatusAt ?? null })
           : null,
-        h("div", { style: S.grid },
+        // g-127：折叠时最后一列窄化为 36px
+        h("div", { style: { ...S.grid, gridTemplateColumns: blockedColumnCollapsed
+            ? "130px repeat(5, minmax(150px, 1fr)) 36px"
+            : "130px repeat(6, minmax(150px, 1fr))" } },
           h("div", { style: S.stageHead }, "泳道＼阶段"),
-          STAGES.map((s) => h("div", { key: s.key, style: S.stageHead }, s.label)),
+          STAGES.map((s) => {
+            // g-127：blocked 列头可点击切换折叠/展开
+            if (s.key === "blocked") {
+              return h("div", {
+                key: s.key,
+                style: { ...S.stageHead, cursor: "pointer", userSelect: "none" },
+                onClick: () => setBlockedColumnCollapsed((p) => !p),
+                title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
+              }, s.label + (blockedColumnCollapsed ? " ▸" : " ▾"));
+            }
+            return h("div", { key: s.key, style: S.stageHead }, s.label);
+          }),
           ...rows),
         ...releasedRows,
         modalGoal
