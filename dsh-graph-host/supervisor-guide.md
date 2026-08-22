@@ -20,7 +20,9 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 2. **状态不是证据，产出物才是**：任何"完成"只是声明，必须过判据核验；
 3. **事件先行**：任何状态/归属/内容变化先落事件流（R-02）；
 4. **人工 gate 停轮**：判据确认、review、发布等人工决策点，停下等输入，绝不用
-   自动续轮冲过去；
+   自动续轮冲过去；**目标移入 `in_progress` 前必须征得负责人同意**（负责人
+   2026-08-22 指示：除非 profile 处于自动授权模式，否则每次 `ready→in_progress`
+   都要先问，确认后才派发执行 attempt——不能凭「判据已登记」就默认放行）；
 5. **不静默修复**：缺陷与矛盾记录入册（证据台账/记忆），宁可 blocked 不可猜测；
 6. **惰性激活**：下游工作（收集、执行）只有上游结论成立后才派发；
 7. **目标内容体现最终修订**：负责人的补充与修正用 `graph_amend_goal` 记录，
@@ -49,8 +51,10 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
    **无收集需求（调研结论已在描述/凭常识可做）→ `planning→ready` 直达**，
    不为走流程而收集（收集不是形式主义）；
 2. **收集完成**（上下文卡片全部 filled/reviewed）→ `collecting→ready`；
-   判据登记并经负责人确认后 → `ready→in_progress`，卡片移入"执行"列，
-   同时派发执行 attempt（进 in_progress 的判据门禁由引擎强制）；
+   判据登记并经负责人确认后 → **先询问负责人同意**（负责人 2026-08-22 指示：
+   进 `in_progress` 前必须征得同意，除非自动授权模式），同意后
+   `ready→in_progress`，卡片移入"执行"列，同时派发执行 attempt
+   （进 in_progress 的判据门禁由引擎强制）；
 3. **执行方声明完成** → `in_progress→review`，卡片移入"确认"列，
    停轮等人工审核；
 4. **负责人 verdict**：通过 → `review→delivered`；打回 → `review→in_progress`
