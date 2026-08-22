@@ -2536,7 +2536,6 @@ window.__ModuleLoader__.load({
             setCreateNote("✅ 已创建目标：" + data.goal);
             setNewGoalTitle("");
             setNewGoalVersion("");
-            setNewGoalScope("");
             load(); // 刷新看板
             setTimeout(() => setShowCreateGoal(false), 1500);
           } else {
