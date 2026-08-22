@@ -2,7 +2,7 @@
 {
   "id": "g-110",
   "title": "目标卡片归档（草稿/规划中/已交付可归档，看板右上角显示开关，回到原泳道带已归档标记，可取消归档）",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-21T12:36:22+08:00",
   "created_by": "supervisor:k3",
