@@ -1368,6 +1368,7 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
     cards,
     attempts,
     events,
+    goalFile: file,  // g-129: 暴露 goal.md 路径（绝对路径）
   };
 }
 

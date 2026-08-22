@@ -714,6 +714,25 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
         }
       },
     },
+    // g-129: 新增创建目标端点
+    {
+      path: "/api/dsh-graph/create-goal",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { title, version, scope } = body;
+          if (!title || typeof title !== "string" || !title.trim()) {
+            return json(res, 400, { error: "missing title" });
+          }
+          const r = rootForReq(req, body);
+          const goalId = createGoal(r, { title: title.trim(), version, scope, actor: "human:gui" });
+          json(res, 200, { ok: true, goal: goalId });
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
   ];
 
   return ctx.effect(() => {

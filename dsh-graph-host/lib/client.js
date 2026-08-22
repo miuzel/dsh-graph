@@ -1459,6 +1459,46 @@ window.__ModuleLoader__.load({
             : statusLine
               ? h(StatusLine, { key: "m3", text: statusLine, blocked: false, running: status === "in_progress" })
               : null,
+          // g-129: goal.md 文件链接
+          d.goalFile
+            ? h("div", { key: "m4", style: { ...S.meta, marginTop: 4, display: "flex", alignItems: "center", gap: 6 } },
+                h("span", null, "📄 goal.md："),
+                h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                  className: "dg-btn",
+                  title: "点击用系统默认编辑器打开 goal.md",
+                  onClick: async (e) => {
+                    e.stopPropagation();
+                    try {
+                      const r = await fetch(graphUrl("/api/dsh-graph/open-path"), {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ path: d.goalFile }),
+                      });
+                      const data = await r.json();
+                      if (!data.opened) {
+                        // 回退：复制路径
+                        await copyText(d.goalFile);
+                        showToast("✅ 路径已复制到剪贴板");
+                      }
+                    } catch {
+                      // 回退：复制路径
+                      await copyText(d.goalFile);
+                      showToast("✅ 路径已复制到剪贴板");
+                    }
+                  },
+                }, "打开"),
+                h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                  className: "dg-btn",
+                  title: "复制 goal.md 路径",
+                  onClick: async (e) => {
+                    e.stopPropagation();
+                    const ok = await copyText(d.goalFile);
+                    if (ok) showToast("✅ 路径已复制到剪贴板");
+                  },
+                }, "复制路径"))
+            : null,
         ];
         // g-107：📡 会话实时面板上移至标题与状态摘要下方（默认折叠，点击展开）
         // g-109 判据反馈：最新 attempt 无 child_id（子代理启动失败）时也给出「重新执行」兜底区
@@ -1629,6 +1669,13 @@ window.__ModuleLoader__.load({
       const [openReleased, setOpenReleased] = React.useState({});
       // g-125：delivered/blocked 卡片展开完整视图的开关（默认折叠精简）
       const [expandedGoals, setExpandedGoals] = React.useState({});
+      // g-129: 新建目标弹窗状态
+      const [showCreateGoal, setShowCreateGoal] = React.useState(false);
+      const [newGoalTitle, setNewGoalTitle] = React.useState("");
+      const [newGoalVersion, setNewGoalVersion] = React.useState("");
+      const [newGoalScope, setNewGoalScope] = React.useState("");
+      const [createNote, setCreateNote] = React.useState(null);
+      const [creating, setCreating] = React.useState(false);
       // g-113 定点 bug：从 slot props 取「被查看会话」id（conversation.view 渲染回调注入的
       // session 作用域字段，字段名 props.sessionId——renderer 的 standardProps 里
       // standard["sessionId"] = info.sessionId）。必须先于 load effect 声明，挂载即生效。
@@ -1702,6 +1749,37 @@ window.__ModuleLoader__.load({
         ];
       });
 
+      const createGoal = async () => {
+        const t = newGoalTitle.trim();
+        if (!t) { setCreateNote("⚠️ 请输入目标标题"); return; }
+        setCreating(true);
+        setCreateNote("创建中…");
+        try {
+          const body = { title: t };
+          if (newGoalVersion.trim()) body.version = newGoalVersion.trim();
+          if (newGoalScope.trim()) body.scope = newGoalScope.trim().split(",").map(s => s.trim()).filter(Boolean);
+          const r = await fetch(graphUrl("/api/dsh-graph/create-goal"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setCreateNote("✅ 已创建目标：" + data.goal);
+            setNewGoalTitle("");
+            setNewGoalVersion("");
+            setNewGoalScope("");
+            load(); // 刷新看板
+            setTimeout(() => setShowCreateGoal(false), 1500);
+          } else {
+            setCreateNote("⚠️ 创建失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setCreateNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setCreating(false);
+      };
+
       const modalGoalData = modalGoal
         ? [...active.flatMap((v) => v.goals), ...released.flatMap((v) => v.goals),
            ...b.standalone, ...b.backlog].find((g) => g.id === modalGoal)
@@ -1717,7 +1795,13 @@ window.__ModuleLoader__.load({
           // g-113 临时诊断（定位后移除）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "#e0a53a", marginLeft: 8 } },
             "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅")),
-          h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新")),
+          h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新"),
+          // g-129: 新建目标按钮
+          h("button", {
+            style: { ...S.btn, marginLeft: 8, padding: "4px 12px", fontSize: 13 },
+            className: "dg-btn",
+            onClick: () => setShowCreateGoal(true),
+          }, "＋ 新建目标")),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
@@ -1734,6 +1818,51 @@ window.__ModuleLoader__.load({
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             onClose: () => setDrawerCard(null) })
+          : null,
+        // g-129: 新建目标弹窗
+        showCreateGoal
+          ? h("div", { style: S.overlay, onClick: () => setShowCreateGoal(false) },
+              h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
+                h("span", { style: S.close, onClick: () => setShowCreateGoal(false) }, "✕"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "＋ 新建目标"),
+                h("div", { style: { marginBottom: 8 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "标题 *"),
+                  h("input", {
+                    style: { ...S.promptInput, width: "100%" },
+                    value: newGoalTitle,
+                    placeholder: "输入目标标题…",
+                    onChange: (e) => setNewGoalTitle(e.target.value),
+                    onKeyDown: (e) => { if (e.key === "Enter") createGoal(); },
+                  })),
+                h("div", { style: { marginBottom: 8 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "版本（可选）"),
+                  h("input", {
+                    style: { ...S.promptInput, width: "100%" },
+                    value: newGoalVersion,
+                    placeholder: "如 v0.5（留空则进 backlog）",
+                    onChange: (e) => setNewGoalVersion(e.target.value),
+                  })),
+                h("div", { style: { marginBottom: 12 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "范围（可选，逗号分隔）"),
+                  h("input", {
+                    style: { ...S.promptInput, width: "100%" },
+                    value: newGoalScope,
+                    placeholder: "如 core, dsh-graph-host",
+                    onChange: (e) => setNewGoalScope(e.target.value),
+                  })),
+                h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+                  h("button", {
+                    style: { ...S.btn, padding: "6px 16px", fontSize: 13 },
+                    className: "dg-btn",
+                    disabled: creating,
+                    onClick: createGoal,
+                  }, creating ? "创建中…" : "创建"),
+                  h("button", {
+                    style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
+                    className: "dg-btn",
+                    onClick: () => setShowCreateGoal(false),
+                  }, "取消")),
+                createNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, createNote) : null))
           : null,
       );
     }
