@@ -2127,15 +2127,13 @@ window.__ModuleLoader__.load({
         });
         const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative" } },
           label,
-          // g-129: 版本 lane 标题下方加「+」按钮，点击自动预选该版本
-          version
-            ? h("button", {
-                style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
-                className: "dg-btn",
-                title: `在 ${version} 新建目标`,
-                onClick: () => openCreateGoal(version),
-              }, "＋")
-            : null);
+          // g-129: 每个 lane 标题右下角加「+」按钮（版本 lane 预选版本，独立/backlog 进 backlog）
+          h("button", {
+            style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+            className: "dg-btn",
+            title: version ? `在 ${version} 新建目标` : "新建目标（backlog）",
+            onClick: () => openCreateGoal(version),
+          }, "＋"));
         return [labelEl, ...cells];
       };
 
