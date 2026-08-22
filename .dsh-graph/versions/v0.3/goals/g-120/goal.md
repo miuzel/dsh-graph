@@ -33,15 +33,10 @@
 
 修复：core 新增读取函数（按 context_cards 顺序返回 filled/reviewed 卡片的 title+summary+正文），host 两处执行派发在 prompt 里注入「已收集上下文卡片成果」段，attempt.started 事件 details 记 injected_cards。
 
-## 补充（负责人 2026-08-22）：worktree 隔离约定
-
-并发/复杂的执行任务：子代理宜先 `git worktree add` 独立工作树再改代码，review
-交付阶段由 supervisor 复核通过后合并回 main。本目标（g-120）改 spawn 提示词时
-一并考虑：在「已收集卡片成果」注入段旁，按需附带 worktree 指令（主管可在
-graph_start_attempt 参数或提示词模板里开关；至少文档化，不强制所有任务走
-worktree——简单小修可跳过）。注意看板数据 .dsh-graph/ 也在 git 仓库内，
-worktree 与主工作树的数据/事件流分工需在实现时明确（代码改 worktree、
-看板数据仍在主工作树写，review 合并时处理冲突）。
+**worktree 隔离（负责人 2026-08-22 指示，纳入本目标交付范围）**：并发/复杂的执行任务，子代理宜先 `git worktree add` 独立工作树（与 main 隔离）再改代码，review 交付阶段由 supervisor 复核通过后合并回 main——避免并发子代理互相踩提交、半成品直接落 main。本目标改 spawn 提示词时一并实现：
+- 在「已收集卡片成果」注入段旁附带 worktree 指令（提示词模板内联；主管可在 `graph_start_attempt` 参数或提示词模板里开关，至少文档化，不强制所有任务走 worktree——简单/单文件小修可跳过）；
+- 明确 worktree 与主工作树的数据/事件流分工：**代码改动在 worktree，看板数据 `.dsh-graph/` 仍在主工作树写**（看板/事件流不被 worktree 分支隔离，避免状态漂移），review 合并回 main 时处理冲突；
+- supervisor-guide.md 执行规范已沉淀 worktree 条目（2026-08-22），spawn 提示词与该条目保持一致。
 
 
 
@@ -50,8 +45,9 @@ worktree 与主工作树的数据/事件流分工需在实现时明确（代码�
 1. core 新增函数：按 context_cards 顺序读取 filled/reviewed 卡片的成果（title+summary+正文全文），跳过 empty/collecting；无卡片时返回空
 2. host 两处执行派发（graph_start_attempt 工具 prompt + /api/dsh-graph/start-execution 端点 prompt）注入「已收集上下文卡片成果」段：按顺序列出每张卡的 title/summary/正文，子代理无需自己猜卡片路径
 3. attempt.started 事件 details 记 injected_cards（注入的卡片 id 清单，按注入顺序）
-4. 单测覆盖：core 读取函数（顺序/过滤状态/无卡片）；host 两处 prompt 含卡片成果段；事件含 injected_cards；全量测试与冻结脚本 PASS
-5. graph_validate 无问题
+4. spawn 提示词附带 worktree 隔离指令（负责人 2026-08-22 指示）：并发/复杂任务子代理先 git worktree add 独立工作树再改代码，review 交付阶段复核通过后合并回 main；指令可开关（参数/模板），简单小修可跳过；明确代码改 worktree、看板数据 .dsh-graph/ 仍在主工作树写的数据分工
+5. 单测覆盖：core 读取函数（顺序/过滤状态/无卡片）；host 两处 prompt 含卡片成果段；事件含 injected_cards；prompt 含 worktree 指令断言；全量测试与冻结脚本 PASS
+6. graph_validate 无问题
 
 ## 证据台账
 

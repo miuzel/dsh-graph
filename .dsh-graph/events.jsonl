@@ -647,3 +647,11 @@
 {"ts":"2026-08-22T11:25:44+08:00","actor":"agent:f6755d54-b094-4957-a028-1774c68a6ae0","event":"attempt.status_reported","goal":"g-118","details":{"attempt":"att-001","status":"调研完：方案A systemPrompt.section 条件注入"}}
 {"ts":"2026-08-22T11:26:06+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-119","details":{"note":"修正目标描述小节：此前 append 参数自带「## 目标描述」标题导致文件出现重复小节、看板显示「（待填写）」；已合并为一个目标描述小节（负责人 2026-08-22 指出）。"}}
 {"ts":"2026-08-22T11:26:06+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-120","details":{"note":"修正目标描述小节：此前 append 参数自带「## 目标描述」标题导致重复小节（看板取第一个显示「待填写」）；已合并描述并调整 worktree 补充小节位置（负责人 2026-08-22 指出）。"}}
+{"ts":"2026-08-22T11:26:25+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-119/g-120 描述已修正并推送；三个目标 ready 等判据确认"}}
+{"ts":"2026-08-22T11:27:19+08:00","actor":"human:gui","event":"attempt.started","goal":"g-119","details":{"attempt":"att-001","executor":"agent:executor"}}
+{"ts":"2026-08-22T11:27:19+08:00","actor":"human:gui","event":"attempt.bound","goal":"g-119","details":{"attempt":"att-001","child_id":"bcc3122e-5117-4d22-9b49-a9be6bb56cc7"}}
+{"ts":"2026-08-22T11:27:23+08:00","actor":"agent:bcc3122e-5117-4d22-9b49-a9be6bb56cc7","event":"attempt.status_reported","goal":"g-119","details":{"attempt":"att-001","status":"开工：梳理 host/core 结构"}}
+{"ts":"2026-08-22T11:27:23+08:00","actor":"agent:bcc3122e-5117-4d22-9b49-a9be6bb56cc7","event":"goal.transition","goal":"g-119","details":{"from":"ready","to":"in_progress"}}
+{"ts":"2026-08-22T11:27:56+08:00","actor":"agent:f6755d54-b094-4957-a028-1774c68a6ae0","event":"attempt.status_reported","goal":"g-118","details":{"attempt":"att-001","status":"实现完 systemPrompt.section 注入，跑测试"}}
+{"ts":"2026-08-22T11:28:45+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-120","details":{"criteria_count":6,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T11:28:47+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-120","details":{"note":"负责人反馈：worktree 描述需正式进入目标描述与判据。已将「补充：worktree 隔离约定」小节并入目标描述主体（纳入交付范围），判据第 4 条补 worktree 指令（可开关、数据分工明确），第 5 条单测补 prompt 含 worktree 指令断言。"}}
