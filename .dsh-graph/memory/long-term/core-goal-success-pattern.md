@@ -28,3 +28,13 @@
 - 把排期移动记成 `goal.transition`（to 填路径）——污染 replay；
 - 用 DSH goal 自动续轮驱动人工 gate 流程——冲过所有人工决策点；
 - 手工填 rules_snapshot——应引擎自动快照。
+
+## 建卡描述的正确姿势（2026-08-22 踩坑）
+
+- `graph_create_goal` 生成的 body 是固定模板，**不支持初始描述**（GOAL_BODY 占位
+  「（待填写）」）；
+- 补描述用 `graph_amend_goal(goal, note=..., append=...)`，**append 只传正文内容，
+  绝不自带「## 目标描述」标题**——amendGoal 内部 replace 已把内容并入目标描述
+  小节；自带标题会产生重复小节，看板取第一个（「（待填写）」）显示（g-119/g-120
+  教训，负责人 2026-08-22 指出）；
+- 同理 append 里也不要带「## 补充」等顶级标题：它会插到描述小节内。
