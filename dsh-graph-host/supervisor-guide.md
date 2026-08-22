@@ -143,8 +143,27 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
   返回的 `model_route` 字段。背景：默认路由曾把子代理打到余额不足的
   newapi-aseit（403 insufficient_user_quota 空失败，负责人指正）；
 - 完成声明 ≠ 交付：声明后进入 review，默认人工审；不通过则打回开新 attempt；
+- **复核纪律（逐行对照，不信脚本 PASS）**：子代理声明「完成/修复」后，supervisor
+  复核时**逐行读最终代码、逐条件分支验证声明的行为是否真实现**——脚本 PASS 是必要
+  非充分（教训：att-001 声明与代码不符、att-004 越权修掉 3 个真缺陷；check 脚本
+  grep 标记抓不到行为回归）。验证前 **sleep 2s 等文件写入稳定**，避免瞬时误报；
 - 验收脚本（判据中的 `[script]` 项）由规划方在 planning 时冻结（R-03），
   执行方不得修改；脚本报错优先怀疑实现与设计，不是脚本。
+
+## 环境事实与排查（必读，来自历次翻车）
+
+- **本地 dev 的 root 覆盖必须用相对值 `.dsh-graph`**：绝对路径会被
+  `path.resolve(workspace, config.root)` 顶掉、破坏 workspace 跟随（host/client
+  两半都踩过）；发布包 bundle patch 本就是相对值，无此问题。
+- **sessions 列表条目 `cwd` 不可靠**（DSH 源码 `...entry.cwd !== void 0 ? {cwd}:{}`）：
+  取当前会话 workspace 用 **workspaces 服务** `workspaces.list.getSnapshot().items.find(w => w.sessionIds.includes(sid))?.path`。
+- **冻结脚本 SIGPIPE 竞态**：`awk '…' | grep -q '…'` 在 `set -o pipefail` 下 grep 提前
+  退出会让 awk 被 SIGPIPE、间歇 FAIL；管道里改 `grep "…" >/dev/null`（读完再退）。
+- **子代理「空失败」排查**：`zstd -dc ~/.dsh/sessions/<项目key>/<child_id>/session.jsonl.zstd | tail`
+  看末行 `turn/end` 的 error（常见 403 余额不足 / no adapter / 限流）。
+- **子代理 spawn 两个 provider 概念别混**：subagent provider（spawn/fork，选带
+  prepareContinuable 能力的）≠ LLM provider（agentOptions，用户可选）；找不到
+  subagent provider 时明确报错列已注册名，绝不回退字面量 "spawn"。
 
 ## 工具速查
 

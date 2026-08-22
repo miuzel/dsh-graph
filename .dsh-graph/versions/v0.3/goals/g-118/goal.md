@@ -33,6 +33,10 @@
 
 注：与 g-117（graph_handoff/claim_supervisor）互补——g-117 管「换会话状态」，本目标管「换会话后守则自动到位」。
 
+**关键设计约束（负责人提出）：注入必须按会话作用域隔离**——
+- 主管会话（`session.id === project.yaml 的 supervisor.session`）→ 注入 `dsh-graph-supervisor`（主管守则）；
+- 其余会话/执行子代理 → 注入 `dsh-graph`（普通使用指引）或什么都不注入，**绝不能**把主管守则注入执行子代理，否则它们会误以为自己是主管、反而违背「执行/实现」角色。
+
 ## 质量判据
 
 1. 调研 DSH 自动注入机制（dsh-agent-instructions / skill 自动触发）并给出可行方案
