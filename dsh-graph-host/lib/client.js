@@ -400,8 +400,8 @@ window.__ModuleLoader__.load({
       ].filter(Boolean).join(" ｜ ");
     }
 
-    // 卡片内嵌实时条：摘要行（运行/空闲 + token/上下文占用 合一）+ status_line 摘要 + 最新流式行。
-    // status_line 进入状态小窗：运行中前缀 ⏳（进行中），子代理空闲（刚执行完）前缀 ✅（最近已完成）。
+    // 卡片内嵌实时条（g-129 负责人 2026-08-22 格式调整）：第一行 = 运行状态 + 流式内容（同行，
+    // 流式时有时无不再引起高度变化）；status_line + tok/ctx 放 tooltip（悬浮查看）。
     function LiveStrip(props) {
       const { session } = useBoundSession(props.parentId, props.childId);
       const snap = useSessionSnapshot(session);
@@ -434,32 +434,33 @@ window.__ModuleLoader__.load({
       const staleDur = staleStatus && props.statusAt != null ? fmtElapsed(props.statusAt, now) : null;
       const line = snap && snap.chat ? lastStreamLine(snap.chat.legacy.partial) : null;
       const meter = liveMeter(usage, pressure);
+      // g-129：流式内容放第一行状态右边（同行），tok/ctx 移入 tooltip——流式时有时无不再引起高度变化
+      const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
+      const statusFull = running ? "运行中" : "空闲";
+      const tooltipBits = [
+        statusFull + (running ? (staleDur ? "（状态已延续 " + staleDur + "）" : "") : ""),
+        props.statusLine ? "状态：" + props.statusLine : null,
+        meter ? "资源：" + meter : null,
+        line ? "流式：" + line : null,
+      ].filter(Boolean);
+      const tooltip = tooltipBits.join("\n");
+      const lineEl = line
+        ? h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
+                                textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 } },
+            "⏵ " + line)
+        : null;
       return h(
         "div",
-        { style: S.liveStrip },
+        { style: S.liveStrip, title: tooltip },
+        // 第一行：状态 + 流式内容（同行）；流式无时不新增行（结构稳定）
         h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
           h("span", { style: { color: running ? "#3aa675" : "rgba(128,128,128,.9)", flexShrink: 0 } },
-            running ? "🟢 运行中" : "⚪ 空闲"),
-          h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
-                               textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-            meter || "投影待推送")),
-        // g-a92e1406：status_line 摘要并入状态小窗——运行中前缀 ⏳ 走 StatusLine 带动画
-        //（流动背景 + 图标 pulse），空闲（刚执行完）前缀 ✅ 保持静态；⛔ 阻塞行由调用方静态渲染。
-        // 过期清空：新一轮已开始但 status 仍是旧轮时间戳 → 行内仍显示 status_line 全文
-        //（不能只显示「状态延续 X」= 等于没显示状态），tooltip 补延续时长（g-124 判据反馈）。
-        staleStatus
-          ? (props.statusLine
-              ? h("div", { style: S.liveLine, title: props.statusLine + "（状态已延续 " + staleDur + "）" },
-                  "⏳ " + props.statusLine)
-              : h("div", { style: S.liveLine, title: "新一轮已开始，状态已延续 " + staleDur },
-                  "⏳ 状态延续 " + staleDur))
-          : props.statusLine
-              ? (running
-                  ? h(StatusLine, { text: props.statusLine, blocked: false, running: true })
-                  : h("div", { style: S.liveLine, title: "最近已完成：" + props.statusLine },
-                      "✅ " + props.statusLine))
-              : null,
-        line ? h("div", { style: S.liveLine, title: line }, "⏵ " + line) : null,
+            statusLabel),
+          lineEl || h("span", { style: { ...S.meta, fontSize: 10, flex: 1, overflow: "hidden",
+                                         textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+            props.statusLine
+              ? (running ? "⏳ " : "✅ ") + props.statusLine
+              : (staleStatus ? "⏳ 状态延续 " + staleDur : "投影待推送"))),
       );
     }
 
