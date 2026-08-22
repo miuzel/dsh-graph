@@ -17,7 +17,7 @@
     "lanes": 1,
     "sandbox": "directory"
   },
-  "rules_snapshot": null,
+  "rules_snapshot": "r-2026-08-3",
   "skill_refs": []
 }
 ---
@@ -35,6 +35,13 @@
 - UI：目标卡片（或弹窗）加操作菜单——暂缓/合并/删除，走 host 写端点（事件先行）；合并需选择目标目标（下拉/搜索现有目标）；删除需二次确认；
 - 依赖：与 g-109 同改看板 UI，排期时注意文件冲突（串行）。
 
+## 补充 2（负责人 2026-08-22 v0.5 GUI 细化）
+
+1. **卡片删除/归档**：不仅 core 需要删除、归档功能，**卡片上也要删除/归档按钮**——删除操作的 GUI 应**二次确认防误删，要求输入卡片 id**（防止手滑删错）；
+2. **添加卡片入口 + 弹窗**：GUI 增加添加卡片的入口和弹窗（现 add-card 按名字添加、kind 固定 text；需弹窗可选择 kind=text/file/image/data、填标题）。
+
+
+
 ## 补充（负责人 2026-08-22 v0.5 规划）
 
 v0.5 GUI 功能范围确认：本目标（g-110）扩展纳入**上下文卡片的新增、删除**：
@@ -46,7 +53,11 @@ v0.5 GUI 功能范围确认：本目标（g-110）扩展纳入**上下文卡片�
 
 ## 质量判据
 
-（待登记；进入 in_progress 前必须非空且已确认）
+1. core 新增引擎 op：deleteGoal（删文件+记 goal.deleted）、deleteCard（删卡片文件+context_cards 移除引用+记 card.deleted）、mergeGoal（A 并入 B，A 记 deleted/merged_into）——事件先行 R-02
+2. GUI 目标卡片操作菜单：暂缓（moveGoal 回 backlog）/合并（选目标目标）/删除——删除需二次确认且要求输入目标 id 防误删
+3. GUI 上下文卡片删除/归档按钮：删除需二次确认且要求输入卡片 id（负责人 2026-08-22 明确）
+4. GUI 添加卡片入口+弹窗：可填标题、选择 kind=text/file/image/data（现 add-card 仅按名字+固定 text）
+5. 全量测试与冻结脚本 PASS，graph_validate 无问题
 
 ## 证据台账
 
