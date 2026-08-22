@@ -1366,6 +1366,67 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
   };
 }
 
+/**
+ * 规范化 appendDescription 文本：
+ * 1. 开头 ## / # 标题 → 剥离标题保留正文（### 开头不剥离）
+ * 2. 只含标题无正文 → 抛 GraphError
+ * 3. 正文中 h2 → 降级为 h3（代码围栏内不处理）
+ * 4. 首尾空行清理
+ */
+export function normalizeAppend(raw: string): { text: string; normalized: boolean } {
+  let text = raw;
+  let normalized = false;
+
+  // 1. 剥离开头的 h1/h2 标题（保留正文）
+  //    /^#{1,2}[ \t]+\S/ 匹配 # 或 ## 开头的行
+  const lines = text.split("\n");
+  let startIdx = 0;
+  while (startIdx < lines.length && lines[startIdx].trim() === "") {
+    startIdx++;
+  }
+  if (startIdx < lines.length) {
+    const firstLine = lines[startIdx];
+    // h1 或 h2 开头（但不匹配 ###）
+    if (/^[ \t]{0,3}#{1,2}[ \t]+\S/.test(firstLine) && !/^#{3}/.test(firstLine)) {
+      // 剥离标题行，保留后续内容
+      lines.splice(startIdx, 1);
+      normalized = true;
+    }
+  }
+
+  // 检查是否只含标题无正文
+  const afterStrip = lines.join("\n").trim();
+  if (afterStrip === "") {
+    throw new GraphError("append 只含标题没有正文");
+  }
+
+  // 2. 降级正文中 h2 → h3（代码围栏内不处理）
+  let inFence = false;
+  const fencePattern = /^(`{3,}|~{3,})/;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (fencePattern.test(line.trimStart())) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence) {
+      // 匹配 h2（## 开头）但不匹配 h3+（### 开头）
+      if (/^[ \t]{0,3}##[ \t]+/.test(line) && !/^#{3}/.test(line)) {
+        lines[i] = line.replace(/^([ \t]{0,3})##([ \t]+)/, "$1###$2");
+        normalized = true;
+      }
+    }
+  }
+
+  // 3. 首尾空行清理
+  text = lines.join("\n").replace(/^\n+/, "").replace(/\n+$/, "").trim();
+
+  // 确保首行无前导空行
+  text = text.trimStart();
+
+  return { text, normalized };
+}
+
 /** 修订目标：把修订说明追加进「目标描述」，并记 goal.amended 事件（人工反馈的一等记录）。 */
 export function amendGoal(
   root: string,
@@ -1375,15 +1436,23 @@ export function amendGoal(
   if (!opts.note.trim()) throw new GraphError("修订说明不能为空");
   const file = findGoalFile(root, id);
   const doc = loadGoal(file);
+  let appendNormalized = false;
   if (opts.appendDescription) {
-    const desc = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
-    if (desc) {
-      doc.body = doc.body.replace(
-        /## 目标描述\n([\s\S]*?)(?=\n## |$)/,
-        `## 目标描述\n${desc[1].replace(/\n*$/, "")}\n\n${opts.appendDescription}\n\n`,
-      );
+    // 纯空白视为未传（跳 append 仍记 note）
+    if (opts.appendDescription.trim() === "") {
+      // 跳过 append，不报错
     } else {
-      doc.body = doc.body.replace(/\n*$/, "") + "\n\n## 目标描述\n\n" + opts.appendDescription + "\n";
+      const { text, normalized } = normalizeAppend(opts.appendDescription);
+      appendNormalized = normalized;
+      const desc = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
+      if (desc) {
+        doc.body = doc.body.replace(
+          /## 目标描述\n([\s\S]*?)(?=\n## |$)/,
+          `## 目标描述\n${desc[1].replace(/\n*$/, "")}\n\n${text}\n\n`,
+        );
+      } else {
+        doc.body = doc.body.replace(/\n*$/, "") + "\n\n## 目标描述\n\n" + text + "\n";
+      }
     }
   }
   saveGoal(file, doc);
@@ -1391,7 +1460,10 @@ export function amendGoal(
     actor: opts.actor,
     event: "goal.amended",
     goal: id,
-    details: { note: opts.note },
+    details: {
+      note: opts.note,
+      ...(appendNormalized ? { append_normalized: true } : {}),
+    },
   });
 }
 
