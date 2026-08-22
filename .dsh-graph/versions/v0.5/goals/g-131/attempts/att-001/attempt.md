@@ -1,14 +1,14 @@
 ---
 {
   "id": "att-001",
-  "goal": "g-77647351",
-  "executor": "agent:executor",
+  "goal": "g-131",
+  "executor": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",
   "sandbox": "directory",
-  "started_at": "2026-08-22T17:17:33+08:00",
+  "started_at": "2026-08-22T20:28:50+08:00",
   "claimed_at": null,
-  "status_line": "交付弹窗：告知主管+跳转按钮，等待 review",
+  "status_line": "本轮完成/空闲待命",
   "result": "pending",
-  "child_id": "455ce1e8-3866-45e8-a393-ac50fceba198",
+  "child_id": "a89ddc8b-6566-464f-9fc4-df07f31f9bd6",
   "parent_session_id": "session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"
 }
 ---

@@ -2,7 +2,7 @@
 {
   "id": "g-77647351",
   "title": "看板卡片拖放交互（泳道内排序、跨列拖动触发状态迁移）",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-21T11:20:02+08:00",
   "created_by": "agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b",
