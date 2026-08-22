@@ -1,7 +1,7 @@
 ---
 {
   "id": "g-110",
-  "title": "目标卡片操作：暂缓（移回 backlog）、与现有目标合并、删除",
+  "title": "目标卡片归档（草稿/规划中/已交付可归档，看板右上角显示开关，回到原泳道带已归档标记，可取消归档）",
   "status": "planning",
   "blocked_reason": null,
   "created_at": "2026-08-21T12:36:22+08:00",
@@ -31,14 +31,14 @@
 
 ## 目标描述
 
-负责人需求原话：目标卡片可以选择暂缓、与现有目标合并或删除操作；本目标进 backlog 排队。
+（原「暂缓／合并／删除」已拆分为独立目标 g-138 暂缓 / g-139 合并 / g-140 删除。本目标聚焦「卡片归档」。）
 
-实现要点：
-- **暂缓**＝排期移动回 backlog（复用现有 moveGoal，卡片从版本泳道退回 backlog 泳道，记 goal.moved）；
-- **删除**：需新增引擎 op deleteGoal——删文件 + 记 goal.deleted 事件（有先例：g-f8317edc 手工删除漏事件；replay 须容忍 deleted 终态）；
-- **合并**（A 并入 B）：需新增引擎 op mergeGoal——A 的描述/判据/依赖以修订形式追加进 B（记 B 的 goal.amended，note 注明来源 A），A 记 goal.deleted（details.merged_into=B）后删除；卡片/attempts 附件随删除清理；
-- UI：目标卡片（或弹窗）加操作菜单——暂缓/合并/删除，走 host 写端点（事件先行）；合并需选择目标目标（下拉/搜索现有目标）；删除需二次确认；
-- 依赖：与 g-109 同改看板 UI，排期时注意文件冲突（串行）。
+负责人需求（2026-08-23）：新增卡片归档功能。
+- 仅「草稿 draft / 规划中 planning / 已交付 delivered」可归档；其它状态拒绝并提示；
+- 默认不显示已归档卡片；看板右上角加「显示已归档」checkbox；
+- 已归档可取消归档（恢复原位置、状态保持）；
+- 实现：把 goal 实际移入对应 archived 目录——版本 goals→`versions/vX/archived/<id>/`、独立目标→`goals/archived/<id>/`、backlog→`backlog/archived/<id>.md`；已归档在勾选显示时回到原泳道、带「已归档」标记；
+- 归档／取消归档走 graph 工具 + 事件流（R-02）。
 
 ## 补充 4（负责人 2026-08-22 v0.5 GUI 细化）
 
@@ -74,9 +74,12 @@ v0.5 GUI 功能范围确认：本目标（g-110）扩展纳入**上下文卡片�
 
 ## 质量判据
 
-1. core 新增引擎 op：deleteGoal（删文件+记 goal.deleted）、mergeGoal（A 并入 B，A 记 deleted/merged_into）——事件先行 R-02
-2. GUI 目标卡片操作菜单：暂缓（moveGoal 回 backlog）/合并（选目标目标）/删除——删除需二次确认且要求输入目标 id 防误删
-3. 全量测试与冻结脚本 PASS，graph_validate 无问题
+1. 归档：move 目标到其归属的 archived 子目录——版本 goals→versions/vX/archived/<id>/；standalone→goals/archived/<id>/；backlog→backlog/archived/<id>.md；board 默认不读 archived → 默认隐藏
+2. 仅 draft / planning / delivered 可归档（其它状态拒绝并提示）
+3. 看板右上角「显示已归档」checkbox：默认关（不显示）；勾选→把 archived 目标也列入看板**回到原泳道**、带「已归档」标记；取消勾选恢复隐藏
+4. 已归档可取消归档（移回原位置 goals/backlog，状态保持原样）
+5. 归档/取消归档走 graph 工具 + 事件流（R-02），不手改文件；boardProjection/工具需覆盖各 archived 目录并打 archived 标记
+6. 改源 core/*.ts + sync-core；node --check；node --test core/tests/*.test.ts 全过；graph_validate 无问题；不破坏已交付功能
 
 ## 证据台账
 
