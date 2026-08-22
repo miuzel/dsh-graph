@@ -55,6 +55,7 @@
 | ev-003 | host/index.js 两处 spawn 提示词（graph_start_attempt 工具 + start-execution 端点）均加「结束工作前更新 status」指令（grep 计数=2，awk 锚点各自命中） | scripts/check_g124.sh | 2026-08-22 | fresh |
 | ev-004 | check_g124.sh 全 PASS；g-108/g-a92e1406 共享回归 PASS；core 单测 PASS（node --test） | scripts/check_g124.sh / check_g108.sh / check_ga92e1406.sh | 2026-08-22 | fresh |
 | ev-005 | graph_validate 全量不变式校验无问题（problems: []） | graph_validate 工具 | 2026-08-22 | fresh |
+| ev-006 | 判据反馈修复（负责人 2026-08-22）：staleStatus 行内显示 status_line 全文（⏳ + statusLine），tooltip = 状态全文 +（状态已延续 X）；无 statusLine 兜底显示延续时长。check_g124.sh 判据 1 断言同步更新；check_g124/g-108/g-a92e1406 全 PASS、core 单测 PASS、graph_validate 无问题 | commit fb7599f（main） | 2026-08-22 | fresh |
 
 ## 处置分支
 

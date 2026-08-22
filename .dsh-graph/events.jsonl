@@ -807,3 +807,6 @@
 {"ts":"2026-08-22T12:47:36+08:00","actor":"agent:94152bab-be98-42b4-bf95-69fee4d44602","event":"attempt.status_reported","goal":"g-125","details":{"attempt":"att-001","status":"fb3 完成：三角按钮暗底纹窄宽度，等复核"}}
 {"ts":"2026-08-22T12:47:55+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-125 fb3 已直接提交 main（a8bb67b，新约定生效）；停在 review 等负责人 verdict"}}
 {"ts":"2026-08-22T12:49:22+08:00","actor":"agent:94152bab-be98-42b4-bf95-69fee4d44602","event":"attempt.status_reported","goal":"g-125","details":{"attempt":"att-001","status":"fb4 完成：按钮与标题 inline 同行，等复核"}}
+{"ts":"2026-08-22T12:49:39+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-125 fb4 已复核通过（inline 布局，d34f8cc）；停在 review 等负责人 verdict"}}
+{"ts":"2026-08-22T12:52:02+08:00","actor":"agent:4ec422f2-3657-4369-a074-7b8e1018f07a","event":"attempt.status_reported","goal":"g-124","details":{"attempt":"att-001","status":"判据反馈修复：stale 显示状态全文+tooltip延续时长"}}
+{"ts":"2026-08-22T12:52:22+08:00","actor":"agent:4ec422f2-3657-4369-a074-7b8e1018f07a","event":"attempt.status_reported","goal":"g-124","details":{"attempt":"att-001","status":"反馈修复完成，commit fb7599f 待复核"}}
