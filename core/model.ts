@@ -106,3 +106,11 @@ export function criteriaPresent(body: string): boolean {
   const stripped = t.replace(/<!--[\s\S]*?-->/g, "");
   return stripped.split("\n").some((l) => l.trim() !== "");
 }
+
+/** 判据小节的实质内容行数（去掉 HTML 注释后非空行；≥1 即视为已登记判据）。g-77647351 看板用。 */
+export function countCriteria(body: string): number {
+  const t = sectionText(body, "质量判据");
+  if (t === null) return 0;
+  const stripped = t.replace(/<!--[\s\S]*?-->/g, "");
+  return stripped.split("\n").filter((l) => l.trim() !== "").length;
+}

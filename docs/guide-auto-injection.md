@@ -61,11 +61,47 @@ if (sp) {
   graph_handoff/graph_claim_supervisor 步骤 + 完整守则走 skill 的说明）。
 - 与引导提示词呼应：引导提示词告知 help 命令存在，help 给出完整说明。
 
+### 2.3 主管纪律提醒（g-131，仅主管会话注入）
+
+```js
+const SUPERVISOR_DISCIPLINE = [
+  "⚠️ **主管纪律提醒**（每 turn 自动注入）：",
+  "1. **只做规划、派发、把关、复核**——绝不自己实现、写代码、长调研；",
+  "2. 自己动手仅限：一句话决策、一行小修、graph_start_attempt 派发执行；",
+  "3. **每动作后 graph_report_supervisor_status**——看板实时显示状态；",
+  "4. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；",
+  "5. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。",
+].join("\n");
+
+// apply() 的 registerGuideSection 内：
+sp.section({
+  name: "dsh-graph-supervisor-discipline",
+  order: 11,
+  text: (context) => {
+    try {
+      const sessionId = context?.agent?.session?.id;
+      if (!sessionId) return "";
+      const supervisorId = readSupervisorSession(root);
+      if (!supervisorId || supervisorId !== sessionId) return "";
+      return "\n" + SUPERVISOR_DISCIPLINE;
+    } catch {
+      return "";
+    }
+  },
+});
+```
+
+- **仅主管会话注入**：通过 `context.agent.session.id` 与 `project.yaml` 的 `supervisor.session` 比对，
+  不匹配时返回空字符串（零 token 成本）；
+- **每 turn 开头可见**：order=11，在 GUIDE_HINT (order=10) 之后渲染；
+- **内容简短**：~80 字，强调主管铁律（规划/派发/把关/复核、不自实现、status 汇报、等 verdict）。
+
 ### 隔离约束（负责人设计约束）
 
 | 内容 | 注入范围 |
 |------|----------|
 | 简短引导提示词（GUIDE_HINT） | **所有会话**（含执行子代理），轻量无害 |
+| 主管纪律提醒（SUPERVISOR_DISCIPLINE，g-131） | **仅主管会话**（project.yaml supervisor.session 匹配时） |
 | 完整 supervisor 守则（supervisor-guide.md） | **绝不自动注入**任何会话；仅经显式 `skill dsh-graph-supervisor` 调用 |
 
 ## 3. 验证

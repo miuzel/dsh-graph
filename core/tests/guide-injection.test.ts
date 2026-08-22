@@ -142,3 +142,77 @@ test("g-118/g-119：注入不影响 graph_* 工具注册（16 + bind + help = 18
   assert.equal(registered.length, 18, "g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help = 18");
   assert.equal(sections.filter((s) => s.name === "dsh-graph-guide-hint").length, 1, "section 只注册一次");
 });
+
+// g-131：主管纪律提醒测试
+test("g-131：注册 dsh-graph-supervisor-discipline section（仅主管会话注入）", () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g131-"));
+  const root = resolveRoot({}, ws);
+  init(root);
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: session-super-1\n");
+  const { ctx, sections } = makeMockCtx();
+  apply(ctx, { root });
+  const section = sections.find((s) => s.name === "dsh-graph-supervisor-discipline");
+  assert.ok(section, "应注册 dsh-graph-supervisor-discipline section");
+  assert.equal(typeof section.text, "function", "text 应为渲染函数");
+});
+
+test("g-131：主管会话注入纪律提醒，普通/子代理会话不注入", () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g131-"));
+  const root = resolveRoot({}, ws);
+  init(root);
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: session-super-1\n");
+  const { ctx, sections } = makeMockCtx();
+  apply(ctx, { root });
+  const section = sections.find((s) => s.name === "dsh-graph-supervisor-discipline");
+  assert.ok(section);
+
+  // 主管会话：应注入纪律提醒
+  const superOut = section.text({ agent: { session: { id: "session-super-1", header: { cwd: ws } } } });
+  assert.ok(superOut.length > 0, "主管会话应渲染纪律提醒");
+  assert.ok(superOut.includes("主管纪律提醒"), "提醒含标题");
+  assert.ok(superOut.includes("只做规划、派发、把关、复核"), "提醒含铁律1");
+  assert.ok(superOut.includes("graph_report_supervisor_status"), "提醒含 status 汇报");
+  assert.ok(superOut.includes("review→delivered 必须等负责人 verdict"), "提醒含 verdict 要求");
+
+  // 普通会话：不注入
+  const normalOut = section.text({ agent: { session: { id: "session-normal-1", header: { cwd: ws } } } });
+  assert.equal(normalOut, "", "普通会话不应渲染纪律提醒");
+
+  // 子代理会话：不注入
+  const execOut = section.text({ agent: { session: { id: "session-exec-1", header: { cwd: ws } } } });
+  assert.equal(execOut, "", "子代理会话不应渲染纪律提醒");
+
+  // 无 agent：不注入
+  assert.equal(section.text({}), "", "无 agent 不应渲染纪律提醒");
+  assert.equal(section.text(undefined), "", "undefined context 不应渲染纪律提醒");
+});
+
+test("g-131：未配置 supervisor.session 时不注入任何会话", () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g131-"));
+  const root = resolveRoot({}, ws);
+  init(root);
+  // 不写 project.yaml 或无 supervisor.session
+  writeFileSync(join(root, "project.yaml"), "# empty\n");
+  const { ctx, sections } = makeMockCtx();
+  apply(ctx, { root });
+  const section = sections.find((s) => s.name === "dsh-graph-supervisor-discipline");
+  assert.ok(section);
+  assert.equal(section.text({ agent: { session: { id: "session-any", header: { cwd: ws } } } }), "",
+    "未配置 supervisor.session 时不应注入纪律提醒");
+});
+
+test("g-131：纪律提醒含主管铁律特征内容（与 g-118 隔离断言互补）", () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g131-"));
+  const root = resolveRoot({}, ws);
+  init(root);
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: session-super-1\n");
+  const { ctx, sections } = makeMockCtx();
+  apply(ctx, { root });
+  const section = sections.find((s) => s.name === "dsh-graph-supervisor-discipline");
+  assert.ok(section);
+  const out = section.text({ agent: { session: { id: "session-super-1", header: { cwd: ws } } } });
+  // 铁律特征内容（g-118 隔离断言验证 GUIDE_HINT 不含这些，g-131 验证 discipline section 含这些）
+  assert.ok(out.includes("绝不自己实现"), "纪律提醒含铁律「绝不自己实现」");
+  assert.ok(out.includes("一句话决策"), "纪律提醒含「一句话决策」");
+  assert.ok(out.includes("完整守则见 skill dsh-graph-supervisor"), "提醒指引完整守则走 skill");
+});

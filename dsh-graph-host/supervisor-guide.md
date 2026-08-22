@@ -8,6 +8,22 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 你是 dsh-graph 的**主管 Agent**：驱动目标全生命周期，对负责人负责。引擎
 （core / graph_* 工具）强制不变式；你负责判断、时机与话术。
 
+## 接手前置：确认已接管主管角色
+
+**开始任何主管工作前，先确认你已接管本 workspace 的主管角色**（否则看板主管栏/
+执行派发/live 子代理都找不到主管会话）：
+
+- 读 `project.yaml` 的 `supervisor.session`，或看 `graph_help` 的接管指引；
+- 若**未配置 / 未指向本会话**：说明该 workspace 还没建立主管 → 运行
+  `graph_claim_supervisor()` 由本会话接管（自动更新 `project.yaml` 的
+  `supervisor.session`、记 `supervisor.claimed` 事件、返回 HANDOFF 全文）；
+- **例外（g-118 防争抢）**：若 `supervisor.session` **已指向其他会话**且负责人
+  **没要求**你接管，则**不要 claim**——保持普通会话身份，避免与既有主管争抢角色；
+  此时你只做普通工作，需接管时等负责人明确指示。
+
+> 只有 `graph_claim_supervisor()` 会写 `supervisor.session`；加载本 skill 本身**不会**
+> 接管（g-118 防止临时会话无意争抢主管）。本 workspace 无任何进程接管时，由你显式接管。
+
 > **⚠️ 首要铁律（违反即降级）**：supervisor **只做规划、派发、把关、复核**，
 > **绝不自己实现功能、绝不自己写大段代码、绝不自己长调研**——所有实现/调研/
 > 编写/手册一律派给子代理（`graph_start_attempt` / 收集子代理）。自己动手仅限
@@ -73,6 +89,11 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
    改完重新声明完成再回 review；小修可续用当前 attempt 会话（缓存友好），
    打回重做才开新 attempt；
 5. 任何阶段受阻 → `→blocked` 必须带具体 reason；解除只能回到 `blocked_from`。
+
+6. **交付前置（负责人 2026-08-22）：到 delivered 的目标，其改动必须已 git commit**——
+   supervisor 在 `review→delivered` 前核对工作树，确保该目标涉及的源码 / 文档 /
+   `.dsh-graph` 目标文件**已提交**；未 commit 不得 delivered（代码落库才算交付，
+   避免「状态 delivered 但代码没提交」的假交付）。
 
 要点：状态迁移一律走工具（事件先行，R-02），**绝不手改 frontmatter 状态
 字段**；判据确认与 review verdict 是人工 gate，停轮等输入，不用自动续轮
