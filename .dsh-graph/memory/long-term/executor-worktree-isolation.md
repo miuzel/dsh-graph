@@ -24,3 +24,11 @@
   不必 worktree**；worktree 与否由**子代理自己决定**，supervisor 不代劳合并、
   不强行套 worktree；
 - 已同步 supervisor-guide「worktree 隔离」条目与 WORKTREE_GUIDE 常量（spawn 提示词）。
+
+## 二次强化（2026-08-22 负责人：并发同文件必须 worktree）
+
+- 背景：g-129 与 g-77647351 并发改 client.js 都直接 main（各自认为「简单改动」），
+  造成分叉冲突、supervisor merge 地狱（手工合并 487 行出错多次）；
+- 强化约定：**「直接 main」仅限真正一两行 + 唯一文件改动 + 无其他目标并发改该文件**；
+  多目标并发改同一文件 → 子代理**必须 worktree**，不得自认为简单就直改 main；
+- 已同步 supervisor-guide「worktree 隔离」条目 + WORKTREE_GUIDE 常量（spawn 提示词）。

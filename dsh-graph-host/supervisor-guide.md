@@ -176,13 +176,13 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
   - 必须引用的文件给**工作目录相对精确路径**（含 versions/vX.Y/goals/
     前缀），禁止"自己去找到 goal.md"式指令；
   - 冻结脚本路径、验收命令逐条写全；
-- **worktree 隔离（负责人 2026-08-22 指示，含 2026-08-22 细化）**：并发/复杂的
+- **worktree 隔离（负责人 2026-08-22 指示，含 2026-08-22 二次强化）**：并发/复杂的
   执行任务，子代理宜先 `git worktree add` 独立工作树（与 main 隔离）再改代码，
   review 交付阶段由 supervisor 复核通过后合并回 main——避免并发子代理互相踩提交、
-  避免半成品直接落 main。**简单的一两行改动、且与现有工作无冲突时，子代理可直接
-  在 main 分支修改，不必 worktree**（负责人 2026-08-22 细化：worktree 与否由子代理
-  自己决定，supervisor 不代劳合并、不强行套 worktree——自动合并 worktree 反而给
-  子代理造成困扰）；
+  避免半成品直接落 main。**「直接 main」仅限真正的一两行、且是唯一改动的文件、且
+  无其他目标并发改该文件**（负责人 2026-08-22 二次强化：g-129 与 g-77647351 并发改
+  client.js 都直接 main，造成分叉冲突、merge 地狱——**多目标并发改同一文件时，子代理
+  必须 worktree**，不得因「自认为改动简单」而直接 main）；
   worktree 指令（g-120）由执行派发默认注入 spawn 提示词，可显式关闭跳过：
   `graph_start_attempt` 传 `worktree=false`、GUI 端点
   `/api/dsh-graph/start-execution` 传 body `worktree: false`；
