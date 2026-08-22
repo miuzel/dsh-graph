@@ -1797,6 +1797,72 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // g-77647351：进执行列确认弹窗（复用卡片中「执行」按钮逻辑，替代服务端报错兜底）
+    // 展示目标信息 + 判据/规则快照状态提示，用户确认后调 start-execution 派发子代理
+    function InProgressPrompt(props) {
+      const { goalId, goalData, onConfirm, onCancel } = props;
+      const [loading, setLoading] = React.useState(false);
+      const [note, setNote] = React.useState(null);
+      const hasChild = !!(goalData?.attempt_child_id);
+      const hasCriteria = !!(goalData?.criteria_count);
+      const hasRules = !!(goalData?.rules_snapshot);
+
+      const startExec = async () => {
+        setLoading(true);
+        setNote("派发中…");
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            if (data.child_id) {
+              setNote("✅ 已派发执行子代理，id：" + data.child_id);
+              showToast("✅ 已派发执行子代理");
+            } else if (data.child_error) {
+              setNote("⚠️ 子代理启动失败：" + data.child_error);
+            } else {
+              setNote("⚠️ 子代理未启动（无 child_id）");
+            }
+            setTimeout(() => { onConfirm(); }, 1200);
+          } else {
+            setNote("⚠️ 执行失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      return h("div", { style: S.overlay, onClick: onCancel },
+        h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
+          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
+            `🚀 执行「${goalData?.title ?? goalId}」`),
+          h("div", { style: { ...S.meta, marginBottom: 8 } },
+            hasChild
+              ? "⚠️ 该目标已有执行子代理，继续将重新派发。"
+              : "将为目标创建执行子代理，子代理会自动迁移状态到「执行中」。"),
+          !hasCriteria
+            ? h("div", { style: { ...S.meta, color: "#e0a53a", marginBottom: 4 } },
+                "⚠️ 质量判据尚未登记——子代理可能因判据缺失无法开始执行。")
+            : null,
+          h("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
+            h("button", {
+              style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
+              disabled: loading, onClick: startExec,
+            }, loading ? "派发中…" : "🚀 确认执行"),
+            h("button", {
+              style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
+              onClick: onCancel,
+            }, "取消")),
+          note ? h("div", { style: { ...S.meta, marginTop: 6 } }, note) : null,
+        ),
+      );
+    }
+
     function KanbanView(props) {
       const [state, setState] = React.useState({ loading: true });
       const [modalGoal, setModalGoal] = React.useState(null);
@@ -1882,20 +1948,6 @@ window.__ModuleLoader__.load({
           const data = await r.json();
           if (data.ok) {
             showToast(`✅ ${goalId} → ${STATUS_LABEL[toStatus] ?? toStatus}`);
-            // 判据 4：进执行列无子代理 → 视同点击「执行」
-            if (toStatus === "in_progress") {
-              try {
-                const execR = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
-                  method: "POST",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify({ goal: goalId }),
-                });
-                const execData = await execR.json();
-                if (execData.ok && execData.child_id) {
-                  showToast("✅ 已自动派发执行子代理");
-                }
-              } catch { /* 静默 */ }
-            }
             load(); // 刷新看板
           } else {
             showToast("⚠️ 迁移失败：" + (data.error || "未知错误"));
@@ -1907,6 +1959,8 @@ window.__ModuleLoader__.load({
 
       // g-77647351：回退询问理由弹窗状态
       const [backwardPrompt, setBackwardPrompt] = React.useState(null); // {goalId, toStatus, hasChild, childId, parentId}
+      // g-77647351：进执行列确认弹窗状态（复用执行按钮逻辑，替代服务端报错）
+      const [inProgressPrompt, setInProgressPrompt] = React.useState(null); // {goalId}
 
       // g-77647351：同列重排提交（照抄 commitSessionDrag）
       function commitSameColumnDrag(activeDrag, over) {
@@ -2029,8 +2083,11 @@ window.__ModuleLoader__.load({
           });
           return;
         }
-        // 判据 4：进执行列无子代理 → start-execution（在 commitCrossColumnDrag 里自动处理）
-        // blocked→reason
+        // 判据 3+4：进执行列 → 弹窗确认（复用执行按钮逻辑，替代服务端报错兜底）
+        if (overStageKey === "execute") {
+          setInProgressPrompt({ goalId });
+          return;
+        }
         if (toStatus === "blocked") {
           const reason = prompt("请输入阻塞原因：");
           if (!reason || !reason.trim()) return;
@@ -2333,6 +2390,16 @@ window.__ModuleLoader__.load({
                 setBackwardPrompt(null);
               },
               onCancel: () => setBackwardPrompt(null),
+            })
+          : null,
+        // g-77647351：进执行列确认弹窗（复用执行按钮逻辑）
+        inProgressPrompt
+          ? h(InProgressPrompt, {
+              key: "in-progress-prompt",
+              goalId: inProgressPrompt.goalId,
+              goalData: allGoals.find((g) => g.id === inProgressPrompt.goalId) ?? null,
+              onConfirm: () => { setInProgressPrompt(null); load(); },
+              onCancel: () => setInProgressPrompt(null),
             })
           : null,
       );

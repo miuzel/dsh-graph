@@ -1026,3 +1026,6 @@
 {"ts":"2026-08-22T18:18:33+08:00","actor":"agent:455ce1e8-3866-45e8-a393-ac50fceba198","event":"goal.transition","goal":"g-77647351","details":{"from":"in_progress","to":"review"}}
 {"ts":"2026-08-22T18:18:38+08:00","actor":"agent:455ce1e8-3866-45e8-a393-ac50fceba198","event":"attempt.status_reported","goal":"g-77647351","details":{"attempt":"att-001","status":"跨 lane 拖放修复完成，等待 review"}}
 {"ts":"2026-08-22T18:18:57+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-77647351 跨 version 拖放已修复（be7a98f）；待负责人重启实测 + verdict"}}
+{"ts":"2026-08-22T20:00:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"拖放占位指示已修复（fba1569，非空列悬停显示 marker）；待负责人重启验证"}}
+{"ts":"2026-08-22T20:06:15+08:00","actor":"agent:455ce1e8-3866-45e8-a393-ac50fceba198","event":"attempt.status_reported","goal":"g-77647351","details":{"attempt":"att-001","status":"改进 in_progress 拖放体验"}}
+{"ts":"2026-08-22T20:08:45+08:00","actor":"agent:455ce1e8-3866-45e8-a393-ac50fceba198","event":"attempt.status_reported","goal":"g-77647351","details":{"attempt":"att-001","status":"in_progress 弹窗改进完成，等待 review"}}
