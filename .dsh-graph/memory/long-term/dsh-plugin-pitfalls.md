@@ -51,3 +51,11 @@
   project.yaml/数据残留），隔离环境会话读到残留 root 所致；清空 /tmp 测试目录即正常；
 - 排查纪律：隔离环境测试前先清空 DSH_HOME 目录，避免旧数据污染判断（g-126 已定
   「先核实再断言」，本条补充「先清环境再断言 bug」）。
+
+## executor 模型变更（2026-08-22）
+
+- 负责人指示：子代理模型从 deepseek-official/deepseek-v4-flash 改为
+  **xiaomi-token-plan-cn / mimo-v2.5-pro**（小米 provider）；
+- project.yaml executor 已更新；graph_start_attempt 的 model_route 应显示
+  xiaomi-token-plan-cn/mimo-v2.5-pro；若派发 403/无 adapter，provider 名需与
+  DSH 实际注册名核对。

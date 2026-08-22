@@ -18,5 +18,5 @@ supervisor:
     skill_proposal: human
     release: human
 executor:
-  provider: deepseek-official   # 执行子代理模型路由（DSH DeepSeek 官方 adapter 的 provider 名；graph_start_attempt 参数可覆盖）
-  model: deepseek-v4-flash
+  provider: xiaomi-token-plan-cn   # 执行子代理模型路由（DSH provider 名；graph_start_attempt 参数可覆盖。负责人 2026-08-22：deepseek-official → 小米）
+  model: mimo-v2.5-pro
