@@ -1014,3 +1014,7 @@
 {"ts":"2026-08-22T17:56:38+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"goal.md 链接移 tab 外始终可见（21a5025，af5ccf2）；g-129 UI 全部完成待 verdict"}}
 {"ts":"2026-08-22T18:02:47+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"goal.md 链接已合并到 tab 行右侧去重（caf0cd0，922826f）；g-129 待 verdict"}}
 {"ts":"2026-08-22T18:05:47+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"goal.md 链接彻底去重（仅 tab 行一处，b42d17e）；g-129 全部完成待重启验证"}}
+{"ts":"2026-08-22T18:11:50+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-129 多轮 UI 迭代完成（ddba1cc，104 测试绿）；等负责人重启验证 + verdict"}}
+{"ts":"2026-08-22T18:13:31+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-129 验证通过（子代理会话看板正常）；等负责人 verdict 交付"}}
+{"ts":"2026-08-22T18:13:47+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-129","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-22T18:13:51+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-129","details":{"from":"review","to":"delivered"}}
