@@ -904,3 +904,6 @@
 {"ts":"2026-08-22T16:39:22+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.created","goal":"g-77647351","details":{"card":"card-f0ec7190","title":"调研：看板卡片拖放实现方案（HTML5 DnD / pointer 事件 / 现有组件）","kind":"text"}}
 {"ts":"2026-08-22T16:39:22+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.created","goal":"g-130","details":{"card":"card-ee78c929","title":"确认：append 剥离标题边界（剥离 vs 告警；纯标题 append 行为）","kind":"text"}}
 {"ts":"2026-08-22T16:39:26+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-128","details":{"note":"splitCard 细节待与负责人确认（边界/原卡状态/引用处理），实现前确认避免返工。"}}
+{"ts":"2026-08-22T16:39:37+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"v0.5 依赖与收集分析完成（6 目标依赖登记+3 张调研卡）；等负责人确认后派发收集"}}
+{"ts":"2026-08-22T16:40:31+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-128","details":{"note":"负责人 2026-08-22：卡片 split 暂缓（不常见，交主管智能体按需处理），g-128 收窄为增删/归档/弹窗。"}}
+{"ts":"2026-08-22T16:40:34+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-128","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
