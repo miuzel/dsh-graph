@@ -2,7 +2,7 @@
 {
   "id": "g-127",
   "title": "看板阻塞列默认收起折叠：竖向显示阻塞项个数与时间，为其他泳道让出横向宽度",
-  "status": "draft",
+  "status": "planning",
   "blocked_reason": null,
   "created_at": "2026-08-22T12:55:16+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",

@@ -2,7 +2,7 @@
 {
   "id": "g-110",
   "title": "目标卡片操作：暂缓（移回 backlog）、与现有目标合并、删除",
-  "status": "draft",
+  "status": "planning",
   "blocked_reason": null,
   "created_at": "2026-08-21T12:36:22+08:00",
   "created_by": "supervisor:k3",
