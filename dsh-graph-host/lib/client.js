@@ -131,6 +131,16 @@ window.__ModuleLoader__.load({
         word-break: break-word;
       }
       .dg-summary-clamp:hover { text-decoration: underline; }
+      /* g-77647351：拖放视觉反馈 */
+      .dg-dragging { opacity: 0.45; transform: scale(0.97); }
+      .dg-drop-before { border-top: 2px solid #4c8dff !important; }
+      .dg-drop-after { border-bottom: 2px solid #4c8dff !important; }
+      .dg-cell-drop-active { background: rgba(76,141,255,.10); border-radius: 4px; }
+      .dg-drag-ghost { position: fixed; pointer-events: none; z-index: 99999; opacity: 0.85;
+        max-width: 260px; padding: 6px 10px; border-radius: 6px;
+        background: rgba(30,31,36,.92); border: 1px solid rgba(76,141,255,.55);
+        box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; font-weight: 600;
+        color: #e6e6e6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     `;
 
     const S = {
@@ -219,6 +229,36 @@ window.__ModuleLoader__.load({
     function stageOf(status) {
       for (const s of STAGES) if (s.statuses.includes(status)) return s.key;
       return "describe";
+    }
+
+    // g-77647351：拖放辅助函数
+    /** Pointer-position half of a card (insert line above or below). */
+    function rowHalf(e) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      return e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    }
+    /** 将列 key 映射回一个代表状态（用于 transition 目标） */
+    function stageDefaultStatus(stageKey) {
+      const stage = STAGES.find((s) => s.key === stageKey);
+      return stage ? stage.statuses[0] : null;
+    }
+    /** 跨列拖动时解析目标状态：from+toStageKey → 具体 to 状态 */
+    function resolveTargetStatus(fromStatus, toStageKey) {
+      // blocked 只能回 blocked_from（由服务端强制，前端预判提示）
+      if (fromStatus === "blocked") return null; // 前端不预设，服务端校验
+      // planning→collect 二义默认 collecting
+      if (toStageKey === "collect") return "collecting";
+      if (toStageKey === "describe") return "planning";
+      return stageDefaultStatus(toStageKey);
+    }
+    /** 判断是否为回退方向（后→前，如 delivered→execute） */
+    const STAGE_ORDER = STAGES.map((s) => s.key);
+    function isBackward(fromStatus, toStatus) {
+      const fromStage = stageOf(fromStatus);
+      const toStage = stageOf(toStatus);
+      if (fromStage === toStage) return false;
+      // delivered 终态特殊：任何离开 delivered 的方向都是回退（但 delivered 无出边，服务端会拒）
+      return STAGE_ORDER.indexOf(toStage) < STAGE_ORDER.indexOf(fromStage);
     }
 
     const CARD_STATUS_ICON = { empty: "○ 待收集", collecting: "◌ 收集中", filled: "● 已填充", reviewed: "✔ 已复核" };
@@ -802,7 +842,8 @@ window.__ModuleLoader__.load({
     //（折叠态只留标题+状态行，隐藏依赖/livestrip/执行按钮/上下文卡片），可展开查看完整。
     // expanded 默认值由 KanbanView 决定（delivered/blocked 默认 false，其余默认 true），
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand) {
+    // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag) {
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -831,12 +872,46 @@ window.__ModuleLoader__.load({
       const titleRow = h("div", { style: { lineHeight: 1.5 } },
         chevron,
         h("span", { style: { ...S.title, display: "inline", verticalAlign: "middle" } }, `🎯 ${g.title}`));
+      // g-77647351：拖放 class 合并
+      const dragClass = [
+        "dg-card",
+        activeGoal ? " dg-card-active" : "",
+        drag?.active ? " dg-dragging" : "",
+        drag?.marker === "before" ? " dg-drop-before" : "",
+        drag?.marker === "after" ? " dg-drop-after" : "",
+      ].filter(Boolean).join(" ");
+      // g-77647351：拖放事件 props
+      const dragProps = drag ? {
+        draggable: true,
+        onDragStart: (e) => {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", g.id);
+          drag.start();
+        },
+        onDragEnd: () => {
+          if (drag?.over) drag.drop(drag.over);
+          else drag.end();
+        },
+      } : {};
+      const dropProps = drag ? {
+        onDragOver: (e) => {
+          if (!drag.active) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          drag.hover(rowHalf(e));
+        },
+        onDrop: (e) => {
+          if (!drag.active) return;
+          e.preventDefault();
+          drag.drop(rowHalf(e));
+        },
+      } : {};
       if (collapsed) {
         // g-125 折叠态：仅核心——标题（≤2 行）+ 状态一行；不显示状态摘要、依赖、livestrip、执行按钮、上下文卡片
         return h(
           "div",
-          { key: g.id, style, className: "dg-card" + (activeGoal ? " dg-card-active" : ""),
-            title: "点击打开详情", onClick: () => onOpen(g.id) },
+          { key: g.id, style, className: dragClass,
+            title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
           titleRow,
           h("div", { style: S.meta },
             `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`),
@@ -844,8 +919,8 @@ window.__ModuleLoader__.load({
       }
       return h(
         "div",
-        { key: g.id, style, className: "dg-card" + (activeGoal ? " dg-card-active" : ""),
-          title: "点击打开详情", onClick: () => onOpen(g.id) },
+        { key: g.id, style, className: dragClass,
+          title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
         titleRow,
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
@@ -1663,6 +1738,62 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // g-77647351：回退询问理由弹窗（后→前方向拖动时）
+    // 判据 4：有子代理 → 作为子代理消息补充（send_message）；无子代理 → 补充给主管
+    function BackwardReasonPrompt(props) {
+      const { goalId, toStatus, hasChild, childId, parentId, onConfirm, onCancel } = props;
+      const [reason, setReason] = React.useState("");
+      const [sending, setSending] = React.useState(false);
+      const [sent, setSent] = React.useState(false);
+      // 如果有子代理，通过 session.prompt 发送理由
+      const { session } = useBoundSession(parentId, childId);
+      const sendReason = async () => {
+        if (!reason.trim()) { onConfirm(""); return; }
+        if (hasChild && session?.prompt) {
+          setSending(true);
+          try {
+            await session.prompt(
+              [{ type: "text", text: `【${goalId} 回退理由】${reason.trim()}` }], "queue");
+            setSent(true);
+            setTimeout(() => onConfirm(reason.trim()), 800);
+          } catch {
+            onConfirm(reason.trim());
+          }
+          setSending(false);
+        } else {
+          onConfirm(reason.trim());
+        }
+      };
+      return h("div", { style: S.overlay, onClick: onCancel },
+        h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
+          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
+            `⬅️ 回退到「${STATUS_LABEL[toStatus] ?? toStatus}」`),
+          h("div", { style: { ...S.meta, marginBottom: 8 } },
+            `目标 ${goalId} 将从当前状态回退到「${STATUS_LABEL[toStatus] ?? toStatus}」。`,
+            h("br"),
+            hasChild
+              ? "理由将作为消息发送给执行子代理。"
+              : "理由将作为补充信息记录（无执行子代理时供主管参考）。"),
+          h("textarea", {
+            style: { ...S.promptInput, width: "100%", minHeight: 80, resize: "vertical", marginTop: 4 },
+            value: reason,
+            placeholder: "请输入回退理由（可选）…",
+            onChange: (e) => setReason(e.target.value),
+          }),
+          h("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
+            h("button", {
+              style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
+              disabled: sending, onClick: sendReason,
+            }, sending ? "发送中…" : (sent ? "✅ 已发送" : "确认回退")),
+            h("button", {
+              style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
+              onClick: onCancel,
+            }, "取消")),
+        ),
+      );
+    }
+
     function KanbanView(props) {
       const [state, setState] = React.useState({ loading: true });
       const [modalGoal, setModalGoal] = React.useState(null);
@@ -1674,10 +1805,207 @@ window.__ModuleLoader__.load({
       const [showCreateGoal, setShowCreateGoal] = React.useState(false);
       const [newGoalTitle, setNewGoalTitle] = React.useState("");
       const [newGoalVersion, setNewGoalVersion] = React.useState("");
-      const [newGoalScope, setNewGoalScope] = React.useState("");
       const [newGoalDesc, setNewGoalDesc] = React.useState("");
+      const [newGoalScope, setNewGoalScope] = React.useState("");
       const [createNote, setCreateNote] = React.useState(null);
       const [creating, setCreating] = React.useState(false);
+      // g-77647351：拖拽状态机
+      const [drag, setDrag] = React.useState(null); // {goalId, fromStatus, overGoalId, overStageKey, overHalf, laneKey}
+      const dropCommitted = React.useRef(false);
+      const [orderMap, setOrderMap] = React.useState({}); // {laneKey: {stageKey: goalId[]}}
+      const [transitionNote, setTransitionNote] = React.useState(null);
+
+      // g-77647351：document 级兜底（拖到列表外不显示 rejected）
+      React.useEffect(() => {
+        if (!drag) return;
+        const acceptDrag = (e) => {
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        };
+        const acceptDrop = (e) => { e.preventDefault(); };
+        document.addEventListener("dragover", acceptDrag);
+        document.addEventListener("drop", acceptDrop);
+        return () => {
+          document.removeEventListener("dragover", acceptDrag);
+          document.removeEventListener("drop", acceptDrop);
+        };
+      }, [drag !== null]);
+
+      // g-77647351：加载排序
+      const loadOrder = () => {
+        fetch(graphUrl("/api/dsh-graph/order"))
+          .then((r) => r.json())
+          .then((data) => setOrderMap(data))
+          .catch(() => {});
+      };
+      const saveOrder = (newOrder) => {
+        setOrderMap(newOrder);
+        fetch(graphUrl("/api/dsh-graph/order"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(newOrder),
+        }).catch(() => {});
+      };
+
+      // g-77647351：对账排序（reconciledSessionOrder 模式）
+      function reconciledGoalOrder(goalIds, stored) {
+        if (!stored || !stored.length) return [...goalIds];
+        const byId = new Map(goalIds.map((id) => [id, id]));
+        const ordered = [];
+        const included = new Set();
+        for (const key of stored) {
+          const id = byId.get(key);
+          if (id === undefined || included.has(key)) continue;
+          ordered.push(id);
+          included.add(key);
+        }
+        for (const id of goalIds) {
+          if (included.has(id)) continue;
+          ordered.push(id);
+        }
+        return ordered;
+      }
+
+      // g-77647351：跨列拖动提交（transition API 调用）
+      async function commitCrossColumnDrag(goalId, toStatus, reason) {
+        try {
+          const body = { goal: goalId, to: toStatus };
+          if (reason) body.reason = reason;
+          const r = await fetch(graphUrl("/api/dsh-graph/transition"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            showToast(`✅ ${goalId} → ${STATUS_LABEL[toStatus] ?? toStatus}`);
+            // 判据 4：进执行列无子代理 → 视同点击「执行」
+            if (toStatus === "in_progress") {
+              try {
+                const execR = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ goal: goalId }),
+                });
+                const execData = await execR.json();
+                if (execData.ok && execData.child_id) {
+                  showToast("✅ 已自动派发执行子代理");
+                }
+              } catch { /* 静默 */ }
+            }
+            load(); // 刷新看板
+          } else {
+            showToast("⚠️ 迁移失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          showToast("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+      }
+
+      // g-77647351：回退询问理由弹窗状态
+      const [backwardPrompt, setBackwardPrompt] = React.useState(null); // {goalId, toStatus, hasChild, childId, parentId}
+
+      // g-77647351：同列重排提交（照抄 commitSessionDrag）
+      function commitSameColumnDrag(activeDrag, over) {
+        if (dropCommitted.current) return;
+        dropCommitted.current = true;
+        setDrag(null);
+        const { goalId, laneKey, overGoalId, overHalf } = activeDrag;
+        const stageKey = STAGES.find((s) => s.statuses.includes(activeDrag.fromStatus))?.key;
+        if (!stageKey) return;
+        const currentOrderKey = `${laneKey}|${stageKey}`;
+        const stored = orderMap[currentOrderKey] ?? [];
+        const laneGoals = allGoals.filter((g) => {
+          const gStage = stageOf(g.status);
+          if (gStage !== stageKey) return false;
+          // 同一泳道
+          const gLane = goalLane(g);
+          return gLane === laneKey;
+        });
+        const goalIds = laneGoals.map((g) => g.id);
+        const reconciled = reconciledGoalOrder(goalIds, stored);
+        // 计算新位置
+        const filtered = reconciled.filter((id) => id !== goalId);
+        const anchorIdx = overHalf === "before" ? filtered.indexOf(overGoalId) : filtered.indexOf(overGoalId) + 1;
+        if (anchorIdx < 0) return;
+        filtered.splice(anchorIdx, 0, goalId);
+        // 检查是否真的变了
+        if (filtered.join(",") === reconciled.join(",")) return;
+        const newOrder = { ...orderMap, [currentOrderKey]: filtered };
+        saveOrder(newOrder);
+      }
+
+      // g-77647351：提交拖放（入口）
+      function commitGoalDrag(activeDrag, over) {
+        if (dropCommitted.current) return;
+        dropCommitted.current = true;
+        setDrag(null);
+        const { goalId, fromStatus, overGoalId, overStageKey, overHalf, laneKey } = activeDrag;
+        const fromStage = stageOf(fromStatus);
+        if (fromStage === overStageKey) {
+          // 同列重排
+          if (overGoalId) {
+            const currentOrderKey = `${laneKey}|${fromStage}`;
+            const stored = orderMap[currentOrderKey] ?? [];
+            const laneGoals = allGoals.filter((g) => stageOf(g.status) === fromStage && goalLane(g) === laneKey);
+            const goalIds = laneGoals.map((g) => g.id);
+            const reconciled = reconciledGoalOrder(goalIds, stored);
+            const filtered = reconciled.filter((id) => id !== goalId);
+            const anchorIdx = overHalf === "before" ? filtered.indexOf(overGoalId) : filtered.indexOf(overGoalId) + 1;
+            if (anchorIdx >= 0) {
+              filtered.splice(anchorIdx, 0, goalId);
+              if (filtered.join(",") !== reconciled.join(",")) {
+                saveOrder({ ...orderMap, [`${laneKey}|${fromStage}`]: filtered });
+              }
+            }
+          }
+          return;
+        }
+        // 跨列 → transition
+        // 判据 3：planning→collect 二义默认 collecting
+        let toStatus = resolveTargetStatus(fromStatus, overStageKey);
+        if (!toStatus) {
+          // blocked 只能回 blocked_from，前端无法预判，提示用户
+          showToast("⚠️ blocked 状态只能解除回原状态（由服务端校验）");
+          return;
+        }
+        // 判据 3：delivered 终态需确认
+        if (overStageKey === "deliver") {
+          if (!confirm("确认将目标移至「已交付」？（终态，需主管评审）")) return;
+        }
+        // 判据 4：回退方向询问理由
+        if (isBackward(fromStatus, toStatus)) {
+          // 查找该目标的执行子代理信息
+          const goalData = allGoals.find((g) => g.id === goalId);
+          const hasChild = !!(goalData?.attempt_child_id);
+          setBackwardPrompt({
+            goalId,
+            toStatus,
+            hasChild,
+            childId: goalData?.attempt_child_id ?? null,
+            parentId: goalData?.attempt_parent_session_id ?? null,
+          });
+          return;
+        }
+        // 判据 4：进执行列无子代理 → start-execution（在 commitCrossColumnDrag 里自动处理）
+        // blocked→reason
+        if (toStatus === "blocked") {
+          const reason = prompt("请输入阻塞原因：");
+          if (!reason || !reason.trim()) return;
+          commitCrossColumnDrag(goalId, toStatus, reason.trim());
+          return;
+        }
+        commitCrossColumnDrag(goalId, toStatus);
+      }
+
+      // g-77647351：辅助——确定目标属于哪个泳道
+      function goalLane(g) {
+        for (const v of active) if (v.goals.some((vg) => vg.id === g.id)) return "v-" + v.slug;
+        if (b.standalone.some((sg) => sg.id === g.id)) return "standalone";
+        if (b.backlog.some((bg) => bg.id === g.id)) return "backlog";
+        return "backlog";
+      }
+
       // g-113 定点 bug：从 slot props 取「被查看会话」id（conversation.view 渲染回调注入的
       // session 作用域字段，字段名 props.sessionId——renderer 的 standardProps 里
       // standard["sessionId"] = info.sessionId）。必须先于 load effect 声明，挂载即生效。
@@ -1688,7 +2016,7 @@ window.__ModuleLoader__.load({
       const load = () => {
         fetch(graphUrl("/api/dsh-graph"))
           .then((r) => r.json())
-          .then((data) => setState({ loading: false, data }))
+          .then((data) => { setState({ loading: false, data }); loadOrder(); })
           .catch((e) => setState({ loading: false, error: String(e) }));
       };
       React.useEffect(() => {
@@ -1723,21 +2051,80 @@ window.__ModuleLoader__.load({
         setShowCreateGoal(true);
         setCreateNote(null);
       };
-
+      // g-77647351：泳道渲染（带拖放支持）；g-129 版本 lane 标题「＋」预选版本
       const lane = (label, goals, key, version) => {
-        const cells = STAGES.map((s) =>
-          h("div", { key: s.key, style: S.cell },
-            goals.filter((g) => stageOf(g.status) === s.key).map((g) => {
-              // g-125：delivered/blocked 默认折叠（expanded=false），其余阶段默认展开；
-              // 用户手动切换后记录到 expandedGoals（undefined = 未切换，用阶段默认值）
+        const cells = STAGES.map((s) => {
+          const cellGoals = goals.filter((g) => stageOf(g.status) === s.key);
+          // 排序对账
+          const orderKey = `${key}|${s.key}`;
+          const stored = orderMap[orderKey] ?? [];
+          const goalIds = cellGoals.map((g) => g.id);
+          const reconciled = reconciledGoalOrder(goalIds, stored);
+          const orderedGoals = reconciled.map((id) => cellGoals.find((g) => g.id === id)).filter(Boolean);
+          const sameDrag = drag && drag.laneKey === key;
+          return h("div", {
+            key: s.key,
+            style: S.cell,
+            className: sameDrag && !orderedGoals.some((g) => g.id === drag.goalId) && drag.overStageKey === s.key ? "dg-cell-drop-active" : "",
+            onDragOver: sameDrag ? (e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              // 列空白区域：设 overStageKey 但无 overGoalId
+              if (!orderedGoals.length) {
+                setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: s.key, overHalf: "after" } : d);
+              }
+            } : undefined,
+            onDrop: sameDrag ? (e) => {
+              e.preventDefault();
+              if (!orderedGoals.length) {
+                commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overHalf: "after" }, null);
+              }
+            } : undefined,
+          },
+            orderedGoals.map((g) => {
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
+              const isDragTarget = sameDrag && drag.overGoalId === g.id;
               return Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
-                (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })));
-            })),
-        );
+                (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
+                // g-77647351：drag props
+                {
+                  active: sameDrag && drag.goalId === g.id,
+                  marker: isDragTarget ? drag.overHalf : null,
+                  start: () => {
+                    dropCommitted.current = false;
+                    setDrag({
+                      goalId: g.id,
+                      fromStatus: g.status,
+                      overGoalId: null,
+                      overStageKey: s.key,
+                      overHalf: null,
+                      laneKey: key,
+                    });
+                  },
+                  over: isDragTarget ? { id: g.id, half: drag.overHalf } : null,
+                  hover: (half) => {
+                    setDrag((d) => d ? { ...d, overGoalId: g.id, overStageKey: s.key, overHalf: half } : d);
+                  },
+                  drop: (half) => {
+                    if (!drag) return;
+                    commitGoalDrag({ ...drag, overGoalId: g.id, overStageKey: s.key, overHalf: half }, { id: g.id, half });
+                  },
+                  end: () => {
+                    if (drag?.overGoalId) {
+                      commitGoalDrag(drag, { id: drag.overGoalId, half: drag.overHalf });
+                    } else {
+                      setDrag(null);
+                    }
+                    dropCommitted.current = false;
+                  },
+                },
+              );
+            }),
+          );
+        });
         const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative" } },
           label,
           // g-129: 版本 lane 标题下方加「+」按钮，点击自动预选该版本
@@ -1776,9 +2163,9 @@ window.__ModuleLoader__.load({
         setCreateNote("创建中…");
         try {
           const body = { title: t };
-          if (newGoalVersion) body.version = newGoalVersion;
-          if (newGoalScope.trim()) body.scope = newGoalScope.trim().split(",").map(s => s.trim()).filter(Boolean);
+          if (newGoalVersion.trim()) body.version = newGoalVersion.trim();
           if (newGoalDesc.trim()) body.description = newGoalDesc.trim();
+          if (newGoalScope.trim()) body.scope = newGoalScope.trim().split(",").map(s => s.trim()).filter(Boolean);
           const r = await fetch(graphUrl("/api/dsh-graph/create-goal"), {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -1790,7 +2177,6 @@ window.__ModuleLoader__.load({
             setNewGoalTitle("");
             setNewGoalVersion("");
             setNewGoalScope("");
-            setNewGoalDesc("");
             load(); // 刷新看板
             setTimeout(() => setShowCreateGoal(false), 1500);
           } else {
@@ -1817,26 +2203,21 @@ window.__ModuleLoader__.load({
           // g-113 临时诊断（定位后移除）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "#e0a53a", marginLeft: 8 } },
             "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅")),
-          h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新")),
+          h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新"),
+          // g-129: 新建目标按钮
+          h("button", {
+            style: { ...S.btn, marginLeft: 8, padding: "4px 12px", fontSize: 13 },
+            className: "dg-btn",
+            onClick: () => setShowCreateGoal(true),
+          }, "＋ 新建目标")),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
           ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null, statusAt: b.supervisorStatusAt ?? null })
           : null,
         h("div", { style: S.grid },
-          h("div", { style: { ...S.stageHead, position: "relative" } },
-            "泳道＼阶段"),
-          STAGES.map((s, si) => h("div", { key: s.key, style: { ...S.stageHead, position: "relative" } },
-            s.label,
-            // g-129: 新建目标按钮放在描述 lane 标题上（描述列 = STAGES[0]）
-            si === 0
-              ? h("button", {
-                  style: { ...S.btn, position: "absolute", right: 4, top: 2, fontSize: 11, padding: "1px 6px" },
-                  className: "dg-btn",
-                  title: "新建目标",
-                  onClick: () => setShowCreateGoal(true),
-                }, "＋ 新建")
-              : null)),
+          h("div", { style: S.stageHead }, "泳道＼阶段"),
+          STAGES.map((s) => h("div", { key: s.key, style: S.stageHead }, s.label)),
           ...rows),
         ...releasedRows,
         modalGoal
@@ -1862,29 +2243,29 @@ window.__ModuleLoader__.load({
                     onKeyDown: (e) => { if (e.key === "Enter") createGoal(); },
                   })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "版本"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "正文（可选）"),
+                  h("textarea", {
+                    style: { ...S.promptInput, width: "100%", minHeight: 64, resize: "vertical" },
+                    value: newGoalDesc,
+                    placeholder: "目标描述（可选）…",
+                    onChange: (e) => setNewGoalDesc(e.target.value),
+                  })),
+                h("div", { style: { marginBottom: 8 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "版本（可选）"),
                   h("select", {
-                    style: { ...S.promptInput, width: "100%", cursor: "pointer" },
+                    style: { ...S.promptInput, width: "100%" },
                     value: newGoalVersion,
                     onChange: (e) => setNewGoalVersion(e.target.value),
                   },
                     h("option", { value: "" }, "backlog（默认）"),
                     // 版本选项来自 board 数据的 versions 列表
                     ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug }, v.slug)))),
-                h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "正文（可选）"),
-                  h("textarea", {
-                    style: { ...S.promptInput, width: "100%", minHeight: 80, resize: "vertical" },
-                    value: newGoalDesc,
-                    placeholder: "目标描述正文（可选，创建后可编辑 goal.md）…",
-                    onChange: (e) => setNewGoalDesc(e.target.value),
-                  })),
                 h("div", { style: { marginBottom: 12 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "范围（可选）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "范围（可选，逗号分隔）"),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: newGoalScope,
-                    placeholder: "影响范围：如 core, dsh-graph-host（逗号分隔）",
+                    placeholder: "如 core, dsh-graph-host",
                     onChange: (e) => setNewGoalScope(e.target.value),
                   })),
                 h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
@@ -1900,6 +2281,22 @@ window.__ModuleLoader__.load({
                     onClick: () => setShowCreateGoal(false),
                   }, "取消")),
                 createNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, createNote) : null))
+          : null,
+        // g-77647351：回退询问理由弹窗
+        backwardPrompt
+          ? h(BackwardReasonPrompt, {
+              key: "backward-prompt",
+              goalId: backwardPrompt.goalId,
+              toStatus: backwardPrompt.toStatus,
+              hasChild: backwardPrompt.hasChild,
+              childId: backwardPrompt.childId,
+              parentId: backwardPrompt.parentId,
+              onConfirm: (reason) => {
+                commitCrossColumnDrag(backwardPrompt.goalId, backwardPrompt.toStatus, reason || undefined);
+                setBackwardPrompt(null);
+              },
+              onCancel: () => setBackwardPrompt(null),
+            })
           : null,
       );
     }

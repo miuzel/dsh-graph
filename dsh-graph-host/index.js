@@ -47,6 +47,7 @@ import {
   bindCardChild,
   harvestedCards,
   formatHarvestedCardsSection,
+  GraphError,
 } from "./core/ops.js";
 import { resolveRoot } from "./core/root.js";
 
@@ -571,6 +572,50 @@ export function apply(ctx, config) {
           if (!goal || !verdict) return json(res, 400, { error: "missing goal or verdict" });
           resolveAccept(rootForReq(req, body), goal, { actor: "human:gui", verdict, objection, force, reason });
           json(res, 200, { ok: true });
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-77647351：transition 端点（拖放跨列触发状态迁移）
+    {
+      path: "/api/dsh-graph/transition",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, to, reason } = body;
+          if (!goal || !to) return json(res, 400, { error: "missing goal or to" });
+          transition(rootForReq(req, body), goal, to, { reason, actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          // GraphError → 400（参照 /accept 模式但用 400 而非 500）
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-77647351：order 端点（排序持久化）
+    {
+      path: "/api/dsh-graph/order",
+      handler: async (req, res) => {
+        try {
+          const r = rootForReq(req);
+          const orderFile = join(r, "order.json");
+          if (req.method === "GET") {
+            try {
+              const data = JSON.parse(readFileSync(orderFile, "utf8"));
+              json(res, 200, data);
+            } catch {
+              json(res, 200, {});
+            }
+          } else if (req.method === "POST") {
+            const body = await readBody(req);
+            writeFileSync(orderFile, JSON.stringify(body, null, 2), "utf8");
+            json(res, 200, { ok: true });
+          } else {
+            json(res, 405, { error: "method not allowed" });
+          }
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
         }
