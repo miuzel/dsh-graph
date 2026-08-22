@@ -1252,7 +1252,9 @@ export function deleteGoal(
   if (!isArchivedFile(file) && !doc.meta.archived) {
     throw new GraphError(`目标 ${id} 未归档，不能删除——请先归档再删除`);
   }
-  // 前置校验 2：不能有活跃子代理（attempt result === "pending" 表示未结束）
+  // 前置校验 2：不能有活跃子代理——注意 result=pending 不视为活跃（pending 可能空闲/已完成，
+  // result 恒为 pending 不更新，负责人 2026-08-23）。仅当子代理 status_line 仍在进行中
+  // （未表明 空闲/完成/待命/已交付 等结束态）才视为活跃。
   const dir = basename(file) === "goal.md" ? dirname(file) : null;
   if (dir) {
     const attDir = join(dir, "attempts");
@@ -1263,9 +1265,11 @@ export function deleteGoal(
         if (!existsSync(attFile)) continue;
         try {
           const att = loadGoal(attFile);
-          if (att.meta.result === "pending") {
+          const sl = String(att.meta.status_line ?? "").trim();
+          const done = /空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(sl);
+          if (att.meta.result === "pending" && sl !== "" && !done) {
             throw new GraphError(
-              `目标 ${id} 有活跃子代理 ${d}（result=pending），不能删除——请先停止或等其结束`,
+              `目标 ${id} 有进行中的子代理 ${d}（status_line="${sl}"），不能删除——请先停止或等其结束`,
             );
           }
         } catch (e) {

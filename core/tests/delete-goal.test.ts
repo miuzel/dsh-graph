@@ -94,19 +94,39 @@ test("deleteGoal：已归档独立目标可删除", () => {
 
 // ---- 前置校验 2：有活跃子代理时拒绝删除 ----
 
-test("deleteGoal：有活跃子代理（attempt pending）时拒绝删除", () => {
+test("deleteGoal：有进行中子代理（status_line 在进行）时拒绝删除", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "有子代理", version: "v-t", actor: "test" });
   // 创建一个 attempt（默认 result=pending）
-  startAttempt(root, id, { executor: "test", actor: "test" });
+  const attId = startAttempt(root, id, { executor: "test", actor: "test" });
+  // 子代理 status_line 表明仍在进行（非空闲/完成）——才视为活跃
+  const attFile = join(root, "versions", "v-t", "goals", id, "attempts", attId, "attempt.md");
+  const adoc = loadGoal(attFile);
+  adoc.meta.status_line = "正在实现目标功能";
+  writeFileSync(attFile, serializeDoc(adoc), "utf8");
   // 归档（planning 可归档）
   archiveGoal(root, id, { actor: "test" });
   // 尝试删除——应拒绝
   assert.throws(
     () => deleteGoal(root, id, { actor: "test" }),
-    (e) => e instanceof GraphError && e.message.includes("活跃子代理"),
-    "有活跃子代理时应拒绝删除",
+    (e) => e instanceof GraphError && e.message.includes("进行中的子代理"),
+    "有进行中子代理时应拒绝删除",
   );
+});
+
+test("deleteGoal：子代理 result=pending 但 status_line 为空闲/完成时允许删除", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "子代理空闲", version: "v-t", actor: "test" });
+  const attId = startAttempt(root, id, { executor: "test", actor: "test" });
+  // status_line 表明已空闲/完成——不视为活跃，允许删除
+  const attFile = join(root, "versions", "v-t", "goals", id, "attempts", attId, "attempt.md");
+  const adoc = loadGoal(attFile);
+  adoc.meta.status_line = "空闲待命";
+  writeFileSync(attFile, serializeDoc(adoc), "utf8");
+  archiveGoal(root, id, { actor: "test" });
+  deleteGoal(root, id, { actor: "test" });
+  const archivedDir = join(root, "versions", "v-t", "archived", id);
+  assert.ok(!existsSync(archivedDir), "空闲子代理目标应可删除");
 });
 
 test("deleteGoal：attempt 已结束（非 pending）时可删除", () => {
