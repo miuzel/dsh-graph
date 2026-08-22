@@ -37,6 +37,8 @@ import {
   renameGoal,
   requestAcceptReview,
   resolveAccept,
+  archiveGoal,
+  unarchiveGoal,
   boardProjection,
   readSupervisorSession,
   readExecutorModel,
@@ -85,6 +87,7 @@ const USAGE = [
   "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
   "- graph_add_card / graph_fill_card / graph_review_card 管理目标下的上下文卡片（信息收集）；",
   "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展（看板卡片显示这句）；",
+  "- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；",
   "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账。",
   "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
 ].join("\n");
@@ -125,6 +128,7 @@ const HELP_TEXT = [
   "- graph_bind_collect_card(goal, card, child_id) 把收集子代理绑定到卡片（g-119）；",
   "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展；",
   "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账；",
+  "- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；",
   "- graph_report_supervisor_status(status) 主管自报状态（看板顶部状态栏）；graph_resolve_accept 评审裁决；",
   "- graph_handoff() / graph_claim_supervisor() 换会话交接（g-117）。",
   "",
@@ -430,6 +434,22 @@ export function apply(ctx, config) {
         return { ok: true };
       },
     },
+    {
+      def: {
+        name: "graph_archive_goal",
+        description: "归档目标（仅 draft/planning/delivered 可归档）。移动到对应 archived 目录，记 goal.archived 事件。",
+        parameters: params({ goal: str }, ["goal"]),
+      },
+      run: (a, ex) => { archiveGoal(rootFor(ex), a.goal, { actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
+      def: {
+        name: "graph_unarchive_goal",
+        description: "取消归档目标（移回原位置，状态保持原样）。记 goal.unarchived 事件。",
+        parameters: params({ goal: str }, ["goal"]),
+      },
+      run: (a, ex) => { unarchiveGoal(rootFor(ex), a.goal, { actor: actorOf(ex) }); return { ok: true }; },
+    },
   ];
 
   // ===== client 半边：/api/dsh-graph* REST 端点（原 dsh-graph-client/index.js，g-116 并入） =====
@@ -550,7 +570,9 @@ export function apply(ctx, config) {
       path: "/api/dsh-graph",
       handler: (_req, res) => {
         try {
-          json(res, 200, boardPayload(rootForReq(_req)));
+          const sp = new URL(_req?.url ?? "", "http://x").searchParams;
+          const includeArchived = sp.get("includeArchived") === "1" || sp.get("includeArchived") === "true";
+          json(res, 200, boardPayload(rootForReq(_req), { includeArchived }));
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
         }
@@ -839,6 +861,40 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           json(res, 200, { ok: true, goal: goalId });
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-110: 归档目标端点
+    {
+      path: "/api/dsh-graph/archive",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          archiveGoal(rootForReq(req, body), goal, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-110: 取消归档目标端点
+    {
+      path: "/api/dsh-graph/unarchive",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          unarchiveGoal(rootForReq(req, body), goal, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },

@@ -896,6 +896,7 @@ window.__ModuleLoader__.load({
       if (g.reviewer === "human") badges.push("👤人审");
       if (g.reviewer === "ai") badges.push("🤖AI审");
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
+      if (g.archived) badges.push("📦已归档");
       const reusedBy = g.reused_by ?? null;
       // g-125：标题左侧小三角（▸ 折叠 / ▾ 展开），所有卡片统一；点击卡片其余区域打开详情
       // fb3：独立 .dg-chevron 样式——暗底纹、窄宽度（不用 S.btn/dg-btn，避免播放按钮观感）
@@ -1798,6 +1799,57 @@ window.__ModuleLoader__.load({
         }
       };
 
+      // g-110: 归档/取消归档操作
+      const [archiveNote, setArchiveNote] = React.useState(null);
+      const isArchived = state.data?.meta?.archived === true;
+      const canArchive = ["draft", "planning", "delivered"].includes(state.data?.meta?.status);
+
+      const doArchive = async () => {
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/archive"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.id }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setArchiveNote("✅ 已归档");
+            showToast("✅ 目标已归档");
+            // 刷新详情
+            const goalRes = await fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }));
+            const goalData = await goalRes.json();
+            if (!goalData.error) setState({ loading: false, data: goalData });
+          } else {
+            setArchiveNote("⚠️ 归档失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setArchiveNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+      };
+
+      const doUnarchive = async () => {
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/unarchive"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.id }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setArchiveNote("✅ 已取消归档");
+            showToast("✅ 已取消归档");
+            // 刷新详情
+            const goalRes = await fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }));
+            const goalData = await goalRes.json();
+            if (!goalData.error) setState({ loading: false, data: goalData });
+          } else {
+            setArchiveNote("⚠️ 取消归档失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setArchiveNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+      };
+
       const titleEl = renaming
         ? h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 4 } },
             h("span", null, "🎯"),
@@ -1817,13 +1869,28 @@ window.__ModuleLoader__.load({
               onClick: () => { setRenaming(false); setRenameNote(null); },
             }, "取消"),
             renameNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, renameNote) : null)
-        : h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+        : h("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
             h("span", { style: { fontWeight: 700, fontSize: 15 } }, `🎯 ${props.title ?? props.id}`),
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "1px 6px", opacity: 0.7 }, className: "dg-btn",
               title: "重命名目标",
               onClick: (e) => { e.stopPropagation(); setNewTitle(props.title ?? props.id); setRenaming(true); setRenameNote(null); },
-            }, "✏️"));
+            }, "✏️"),
+            // g-110: 归档/取消归档按钮
+            isArchived
+              ? h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(58,166,117,.2)" }, className: "dg-btn",
+                  title: "取消归档（恢复到原位置）",
+                  onClick: doUnarchive,
+                }, "📤 取消归档")
+              : canArchive
+                ? h("button", {
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(128,128,128,.2)" }, className: "dg-btn",
+                    title: "归档目标（仅 draft/planning/delivered 可归档）",
+                    onClick: doArchive,
+                  }, "📦 归档")
+                : null,
+            archiveNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, archiveNote) : null);
 
       return h(
         "div",
@@ -2078,6 +2145,8 @@ window.__ModuleLoader__.load({
       const [newGoalDesc, setNewGoalDesc] = React.useState("");
       const [createNote, setCreateNote] = React.useState(null);
       const [creating, setCreating] = React.useState(false);
+      // g-110: 显示已归档目标的开关
+      const [showArchived, setShowArchived] = React.useState(false);
       // g-77647351：拖拽状态机
       const [drag, setDrag] = React.useState(null); // {goalId, fromStatus, overGoalId, overStageKey, overHalf, laneKey}
       const dropCommitted = React.useRef(false);
@@ -2328,7 +2397,8 @@ window.__ModuleLoader__.load({
         return () => { viewedSessionId = null; };
       }, [props?.sessionId]);
       const load = () => {
-        fetch(graphUrl("/api/dsh-graph"))
+        const params = showArchived ? "?includeArchived=1" : "";
+        fetch(graphUrl("/api/dsh-graph" + params))
           .then((r) => r.json())
           .then((data) => { setState({ loading: false, data }); loadOrder(); })
           .catch((e) => setState({ loading: false, error: String(e) }));
@@ -2337,7 +2407,7 @@ window.__ModuleLoader__.load({
         load();
         const t = setInterval(load, 15000);
         return () => clearInterval(t);
-      }, []);
+      }, [showArchived]); // showArchived 变化时重新加载
 
       if (state.loading) return h("div", { style: S.wrap }, "dsh-graph 看板加载中…");
       if (state.error) return h("div", { style: S.wrap }, "看板数据获取失败：" + state.error);
@@ -2620,6 +2690,14 @@ window.__ModuleLoader__.load({
           h("strong", null, "dsh-graph 看板"),
           h("span", { style: S.meta }, "数据时间：" + (b.generated_at ?? "").replace("T", " ").slice(0, 19)),
           h("button", { style: { ...S.btn, marginLeft: 8 }, className: "dg-btn", onClick: load }, "刷新"),
+          // g-110: 显示已归档目标的 checkbox
+          h("label", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 12, cursor: "pointer", fontSize: 12, opacity: 0.8 } },
+            h("input", {
+              type: "checkbox",
+              checked: showArchived,
+              onChange: (e) => setShowArchived(e.target.checked),
+            }),
+            "显示已归档"),
           // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
             "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅"))),

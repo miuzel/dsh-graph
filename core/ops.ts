@@ -25,18 +25,43 @@ import { GraphError, STATUSES, assertTransition } from "./machine.ts";
 
 export { GraphError };
 
-/** 扫描图根下全部目标文件：backlog/*.md、goals/<id>/goal.md、versions/<v>/goals/<id>/goal.md。 */
-export function listGoalFiles(root: string): string[] {
+/** 扫描图根下全部目标文件：backlog/*.md、goals/<id>/goal.md、versions/<v>/goals/<id>/goal.md。
+ *  opts.includeArchived=true 时也扫描 archived 目录下的目标。 */
+export function listGoalFiles(root: string, opts?: { includeArchived?: boolean }): string[] {
   const out: string[] = [];
+  const includeArchived = opts?.includeArchived ?? false;
   const backlog = join(root, "backlog");
   if (existsSync(backlog)) {
     for (const f of readdirSync(backlog)) {
-      if (f.endsWith(".md")) out.push(join(backlog, f));
+      if (f.endsWith(".md")) {
+        const fp = join(backlog, f);
+        if (!includeArchived && isArchivedFile(fp)) continue;
+        out.push(fp);
+      }
+    }
+    // backlog/archived/ 目录
+    if (includeArchived) {
+      const backlogArchived = join(backlog, "archived");
+      if (existsSync(backlogArchived)) {
+        for (const f of readdirSync(backlogArchived)) {
+          if (f.endsWith(".md")) out.push(join(backlogArchived, f));
+        }
+      }
     }
   }
   const goals = join(root, "goals");
   if (existsSync(goals)) {
     for (const d of readdirSync(goals)) {
+      if (d === "archived") {
+        if (includeArchived) {
+          const archivedDir = join(goals, "archived");
+          for (const ad of readdirSync(archivedDir)) {
+            const p = join(archivedDir, ad, "goal.md");
+            if (existsSync(p)) out.push(p);
+          }
+        }
+        continue;
+      }
       const p = join(goals, d, "goal.md");
       if (existsSync(p)) out.push(p);
     }
@@ -45,10 +70,21 @@ export function listGoalFiles(root: string): string[] {
   if (existsSync(versions)) {
     for (const v of readdirSync(versions)) {
       const gdir = join(versions, v, "goals");
-      if (!existsSync(gdir)) continue;
-      for (const d of readdirSync(gdir)) {
-        const p = join(gdir, d, "goal.md");
-        if (existsSync(p)) out.push(p);
+      if (existsSync(gdir)) {
+        for (const d of readdirSync(gdir)) {
+          const p = join(gdir, d, "goal.md");
+          if (existsSync(p)) out.push(p);
+        }
+      }
+      // versions/vX/archived/ 目录
+      if (includeArchived) {
+        const archivedDir = join(versions, v, "archived");
+        if (existsSync(archivedDir)) {
+          for (const d of readdirSync(archivedDir)) {
+            const p = join(archivedDir, d, "goal.md");
+            if (existsSync(p)) out.push(p);
+          }
+        }
       }
     }
   }
@@ -64,7 +100,16 @@ export function saveGoal(file: string, doc: GoalDoc): void {
 }
 
 export function findGoalFile(root: string, id: string): string {
+  // 先搜索非归档目录
   for (const f of listGoalFiles(root)) {
+    try {
+      if (loadGoal(f).meta.id === id) return f;
+    } catch {
+      // 解析失败的文件由 validate 报告，这里跳过
+    }
+  }
+  // 再搜索归档目录（归档目标也需要能找到）
+  for (const f of listGoalFiles(root, { includeArchived: true })) {
     try {
       if (loadGoal(f).meta.id === id) return f;
     } catch {
@@ -1079,6 +1124,117 @@ export function moveGoal(
   });
 }
 
+// ---- 目标归档/取消归档（g-110） ----
+
+/** 归档目标：仅 draft/planning/delivered 可归档；移动到对应 archived 目录。
+ *  版本 goals→versions/vX/archived/<id>/；standalone→goals/archived/<id>/；backlog→backlog/archived/<id>.md。
+ *  归档后目标保持原状态不变，记 goal.archived 事件。 */
+export function archiveGoal(
+  root: string,
+  id: string,
+  opts: { actor: string },
+): void {
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  const status = doc.meta.status as string;
+  // 只有 draft/planning/delivered 可归档
+  if (!["draft", "planning", "delivered"].includes(status)) {
+    throw new GraphError(`目标 ${id} 当前状态为 ${status}，只有 draft/planning/delivered 可归档`);
+  }
+  const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
+  const rel = file.slice(root.length + 1);
+  const parts = rel.split("/");
+  let targetFile: string;
+  if (parts[0] === "versions") {
+    // 版本目标 → versions/vX/archived/<id>/goal.md
+    const ver = parts[1];
+    targetFile = join(root, "versions", ver, "archived", id, "goal.md");
+  } else if (parts[0] === "goals") {
+    // 独立目标 → goals/archived/<id>/goal.md
+    targetFile = join(root, "goals", "archived", id, "goal.md");
+  } else if (parts[0] === "backlog") {
+    // backlog 目标 → backlog/archived/<id>.md
+    targetFile = join(root, "backlog", "archived", `${id}.md`);
+  } else {
+    throw new GraphError(`无法确定目标 ${id} 的当前位置：${rel}`);
+  }
+  if (existsSync(targetFile)) throw new GraphError(`归档位置已存在：${targetFile}`);
+  // 标记已归档
+  doc.meta.archived = true;
+  mkdirSync(dirname(targetFile), { recursive: true });
+  if (srcDir) {
+    // 目录形态：整体移动目录（cards/ attempts/ 一起走）
+    renameSync(srcDir, dirname(targetFile));
+  } else {
+    renameSync(file, targetFile);
+  }
+  saveGoal(targetFile, doc);
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "goal.archived",
+    goal: id,
+    details: { from: relative(root, file), to: relative(root, targetFile), status },
+  });
+}
+
+/** 取消归档：移回原位置（版本 goals/、独立 goals/、backlog/），状态保持原样。
+ *  从 archived 目录移出，清除 archived 标记，记 goal.unarchived 事件。 */
+export function unarchiveGoal(
+  root: string,
+  id: string,
+  opts: { actor: string },
+): void {
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  if (!doc.meta.archived) {
+    throw new GraphError(`目标 ${id} 未归档，无需取消归档`);
+  }
+  const rel = file.slice(root.length + 1);
+  const parts = rel.split("/");
+  let targetFile: string;
+  if (parts[0] === "versions" && parts[1] === "archived") {
+    // versions/archived/<id>/goal.md → 需要知道原版本，从 meta.version 取
+    const ver = doc.meta.version;
+    if (!ver) throw new GraphError(`归档目标 ${id} 缺少 version 字段，无法恢复到版本目录`);
+    targetFile = join(root, "versions", ver, "goals", id, "goal.md");
+  } else if (parts[0] === "versions" && parts[2] === "archived") {
+    // versions/vX/archived/<id>/goal.md → versions/vX/goals/<id>/goal.md
+    const ver = parts[1];
+    targetFile = join(root, "versions", ver, "goals", id, "goal.md");
+  } else if (parts[0] === "goals" && parts[1] === "archived") {
+    // goals/archived/<id>/goal.md → goals/<id>/goal.md
+    targetFile = join(root, "goals", id, "goal.md");
+  } else if (parts[0] === "backlog" && parts[1] === "archived") {
+    // backlog/archived/<id>.md → backlog/<id>.md
+    targetFile = join(root, "backlog", `${id}.md`);
+  } else {
+    throw new GraphError(`无法确定归档目标 ${id} 的位置：${rel}`);
+  }
+  if (existsSync(targetFile)) throw new GraphError(`恢复位置已存在：${targetFile}`);
+  // 清除归档标记
+  doc.meta.archived = false;
+  const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
+  mkdirSync(dirname(targetFile), { recursive: true });
+  if (srcDir) {
+    // 目录形态：整体移动目录（cards/ attempts/ 一起走）
+    renameSync(srcDir, dirname(targetFile));
+  } else {
+    renameSync(file, targetFile);
+  }
+  saveGoal(targetFile, doc);
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "goal.unarchived",
+    goal: id,
+    details: { from: relative(root, file), to: relative(root, targetFile) },
+  });
+}
+
+/** 判断目标文件是否在 archived 目录下。 */
+function isArchivedFile(file: string): boolean {
+  return file.includes("/archived/") || file.includes("\\archived\\");
+}
+
 // ---- 看板数据投影（供 host 端点与文字版看板共用） ----
 
 export interface BoardGoal {
@@ -1100,6 +1256,8 @@ export interface BoardGoal {
   /** 质量判据实质行数（g-77647351 看板「判据未登记」提示数据源）；≥1 即已登记 */
   criteria_count?: number;
   rules_snapshot?: string | null;
+  /** g-110：目标是否已归档 */
+  archived?: boolean;
 }
 
 export interface BoardVersion {
@@ -1110,15 +1268,17 @@ export interface BoardVersion {
   goals: BoardGoal[];
 }
 
-export function boardProjection(root: string): {
+export function boardProjection(root: string, opts?: { includeArchived?: boolean }): {
   generated_at: string;
   versions: BoardVersion[];
   standalone: BoardGoal[];
   backlog: BoardGoal[];
 } {
+  const includeArchived = opts?.includeArchived ?? false;
   const goalItem = (file: string): BoardGoal => {
     const doc = loadGoal(file);
     const meta = doc.meta;
+    const archived = meta.archived === true || isArchivedFile(file);
     // 取最新一个带 status_line 的 attempt
     let statusLine: string | null = null;
     const dir = basename(file) === "goal.md" ? dirname(file) : null;
@@ -1201,6 +1361,7 @@ export function boardProjection(root: string): {
       reused_by: null,
       pk_lanes: meta.pk?.lanes ?? 1,
       blocked_reason: meta.blocked_reason ?? null,
+      archived,
       cards,
       criteria_count: countCriteria(doc.body),
       rules_snapshot: meta.rules_snapshot ?? null,
@@ -1231,6 +1392,21 @@ export function boardProjection(root: string): {
           }
         }
       }
+      // g-110：归档目标（versions/vX/archived/）
+      if (includeArchived) {
+        const archivedDir = join(vdir, v, "archived");
+        if (existsSync(archivedDir)) {
+          for (const g of readdirSync(archivedDir).sort()) {
+            const gf = join(archivedDir, g, "goal.md");
+            if (!existsSync(gf)) continue;
+            try {
+              goals.push(goalItem(gf));
+            } catch {
+              /* 坏目标文件跳过 */
+            }
+          }
+        }
+      }
       versions.push({
         slug: v,
         id: vmeta.id ?? null,
@@ -1244,6 +1420,22 @@ export function boardProjection(root: string): {
   const sdir = join(root, "goals");
   if (existsSync(sdir)) {
     for (const g of readdirSync(sdir).sort()) {
+      if (g === "archived") {
+        // g-110：独立归档目标（goals/archived/）
+        if (includeArchived) {
+          const archivedDir = join(sdir, "archived");
+          for (const ag of readdirSync(archivedDir).sort()) {
+            const gf = join(archivedDir, ag, "goal.md");
+            if (!existsSync(gf)) continue;
+            try {
+              standalone.push(goalItem(gf));
+            } catch {
+              /* 跳过 */
+            }
+          }
+        }
+        continue;
+      }
       const gf = join(sdir, g, "goal.md");
       if (!existsSync(gf)) continue;
       try {
@@ -1257,6 +1449,21 @@ export function boardProjection(root: string): {
   const bdir = join(root, "backlog");
   if (existsSync(bdir)) {
     for (const f of readdirSync(bdir).sort()) {
+      if (f === "archived") {
+        // g-110：backlog 归档目标（backlog/archived/）
+        if (includeArchived) {
+          const archivedDir = join(bdir, "archived");
+          for (const af of readdirSync(archivedDir).sort()) {
+            if (!af.endsWith(".md")) continue;
+            try {
+              backlog.push(goalItem(join(archivedDir, af)));
+            } catch {
+              /* 跳过 */
+            }
+          }
+        }
+        continue;
+      }
       if (!f.endsWith(".md")) continue;
       try {
         backlog.push(goalItem(join(bdir, f)));
@@ -1312,10 +1519,11 @@ export function boardProjection(root: string): {
 
 /** 看板端点载荷：board 投影 + supervisorSession（g-108）。
  *  由 dsh-graph-host 的 client 半边（/api/dsh-graph）消费，会话 id 不在任何代码里硬编码。
- *  g-111 B7：从 dsh-graph-host/index.js 移入 core，消除跨包依赖（g-116 合并后单包内复用）。 */
-export function boardPayload(root: string) {
+ *  g-111 B7：从 dsh-graph-host/index.js 移入 core，消除跨包依赖（g-116 合并后单包内复用）。
+ *  g-110：opts.includeArchived 控制是否包含已归档目标。 */
+export function boardPayload(root: string, opts?: { includeArchived?: boolean }) {
   return {
-    ...boardProjection(root),
+    ...boardProjection(root, opts),
     supervisorSession: readSupervisorSession(root),
     // g-a92e1406 判据 3① 扩展：supervisor 状态栏显示 supervisor 自己的 status_line（事件流最新一条）
     supervisorStatus: readSupervisorStatus(root),
