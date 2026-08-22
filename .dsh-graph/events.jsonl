@@ -1012,3 +1012,4 @@
 {"ts":"2026-08-22T17:52:15+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"LiveStrip 已改单行结构（流式同行+tok/ctx 入 tooltip，39cc822）；待重启验证"}}
 {"ts":"2026-08-22T17:53:57+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"LiveStrip 稳定两行布局完成（8ba9dc7）；待重启验证"}}
 {"ts":"2026-08-22T17:56:38+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"goal.md 链接移 tab 外始终可见（21a5025，af5ccf2）；g-129 UI 全部完成待 verdict"}}
+{"ts":"2026-08-22T18:02:47+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"goal.md 链接已合并到 tab 行右侧去重（caf0cd0，922826f）；g-129 待 verdict"}}
