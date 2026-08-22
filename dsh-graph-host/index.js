@@ -184,7 +184,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_fill_card",
-        description: "填充上下文卡片内容（text 或 content_ref），状态变为 filled。",
+        description: "填充上下文卡片内容（text 或 content_ref），状态变为 filled。summary 是看板子卡片上显示的一句话摘要，必须简短：一句话要点式、≤100 字左右（看板默认折叠显示 2 行，长摘要会被截断）——细节写进 text 全文，不要把长文塞进 summary。",
         parameters: params({ goal: str, card: str, text: str, content_ref: str, summary: str }, ["goal", "card"]),
       },
       run: (a, ex) => { fillCard(rootFor(ex), a.goal, a.card, { text: a.text, contentRef: a.content_ref, summary: a.summary, by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
@@ -618,7 +618,7 @@ export function apply(ctx, config) {
           const attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
-            prompt || `请收集关于「${card}」的上下文信息。`,
+            prompt || `请收集关于「${card}」的上下文信息。\n\n回填要求：全文写进 text；summary 写一句话要点式摘要（≤100 字左右，g-125），不要长文。`,
             req,
             rRoot,
             { provider, model },

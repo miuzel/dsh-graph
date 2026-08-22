@@ -104,6 +104,16 @@ window.__ModuleLoader__.load({
       .dg-running-flow .dg-icon-pulse { animation: dg-pulse 1.2s ease-in-out infinite; display: inline-block; }
       .dg-running-flow .dg-icon-spin { animation: dg-spin 1.5s linear infinite; display: inline-block; }
       /* 阻塞行保持静态，无动画类 */
+      /* g-125：上下文摘要默认折叠 2 行（截断+省略），展开全文 */
+      .dg-summary-clamp {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        word-break: break-word;
+      }
+      .dg-summary-clamp:hover { text-decoration: underline; }
     `;
 
     const S = {
@@ -747,12 +757,33 @@ window.__ModuleLoader__.load({
         `♻️ 被复用→${reusedBy}`);
     }
 
+    // g-125：上下文摘要默认折叠到 2 行（截断+省略号），点击展开全文；
+    // 短摘要（≤40 字）不折叠，直接整行显示。状态提升自 Card（无 hooks 的纯函数）外。
+    function CardSummary(props) {
+      const [open, setOpen] = React.useState(false);
+      const { summary } = props;
+      if (!summary) return null;
+      if (summary.length <= 40) {
+        return h("div", { style: { opacity: 0.75, marginTop: 1 } }, summary);
+      }
+      return h("div", {
+        style: { opacity: 0.75, marginTop: 1, cursor: "pointer" },
+        className: open ? "dg-summary-open" : "dg-summary-clamp",
+        title: open ? "点击收起摘要" : "点击展开摘要全文",
+        onClick: (e) => { e.stopPropagation(); setOpen(!open); },
+      }, summary);
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
     // 客户端直接消费 g.reused_by，不再用数组顺序猜测旧/新绑定。
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus) {
+    // g-125：delivered/blocked 阶段卡片默认折叠精简——只留核心（标题/状态/摘要/结果），
+    // 隐藏依赖、livestrip、执行会话按钮、上下文卡片列表（活动阶段信息），可展开查看完整。
+    // expanded 状态由 KanbanView 提升（expandedGoals），Card 保持纯函数（无 hooks）。
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand) {
       const blocked = g.status === "blocked";
+      const collapsed = (g.status === "delivered" || blocked) && !expanded;
       const deps = g.depends_on ?? [];
       const pendingDeps = deps.filter((d) => goalStatus?.[d] !== "delivered");
       const metDeps = deps.filter((d) => goalStatus?.[d] === "delivered");
@@ -767,6 +798,29 @@ window.__ModuleLoader__.load({
       if (g.reviewer === "ai") badges.push("🤖AI审");
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
       const reusedBy = g.reused_by ?? null;
+      const expandBtn = h("button", {
+        style: { ...S.btn, fontSize: 11, marginTop: 4 }, className: "dg-btn",
+        title: collapsed ? "展开查看依赖/实时会话/上下文卡片等完整信息" : "收起为精简视图",
+        onClick: (e) => { e.stopPropagation(); onToggleExpand(g.id); },
+      }, collapsed ? "▸ 展开完整" : "▾ 收起精简");
+      if (collapsed) {
+        // g-125 折叠态：仅核心——标题/状态/阻塞原因（结果）/status_line（摘要）+ 展开按钮
+        return h(
+          "div",
+          { key: g.id, style, className: "dg-card" + (activeGoal ? " dg-card-active" : ""),
+            title: "点击打开详情", onClick: () => onOpen(g.id) },
+          h("div", { style: S.title }, `🎯 ${g.title}`),
+          h("div", { style: S.meta },
+            `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`),
+          blocked && g.blocked_reason
+            ? h("div", { style: { ...S.statusLine, color: "#d66" } }, "⛔ " + g.blocked_reason)
+            : null,
+          g.status_line
+            ? h("div", { style: { ...S.statusLine, opacity: 0.85 } }, g.status_line)
+            : null,
+          expandBtn,
+        );
+      }
       return h(
         "div",
         { key: g.id, style, className: "dg-card" + (activeGoal ? " dg-card-active" : ""),
@@ -806,11 +860,12 @@ window.__ModuleLoader__.load({
               h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
                 `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
               sessionLinkBtn(c.parent_session_id, c.child_id, "↗")),
-            c.summary ? h("div", { style: { opacity: 0.75, marginTop: 1 } }, c.summary) : null,
+            h(CardSummary, { summary: c.summary }),
             c.child_id
               ? h("div", { onClick: (e) => e.stopPropagation() },
                   h(LiveStrip, { parentId: c.parent_session_id, childId: c.child_id }))
               : null)),
+        (g.status === "delivered" || blocked) ? expandBtn : null,
       );
     }
 
@@ -853,7 +908,8 @@ window.__ModuleLoader__.load({
         if (!card) inner = "卡片不存在：" + props.cardId;
         else {
           // g-109：自动生成收集提示词草稿（卡片标题+目标上下文模板）
-          const autoPrompt = `请收集关于「${card.title}」的上下文信息。\n\n目标：${state.data.meta?.title ?? props.goalId}\n\n请基于目标上下文，收集与该卡片相关的详细信息。`;
+          // g-125：回填要求——summary 一句话要点式 ≤100 字（看板摘要折叠 2 行，长摘要被截断）
+          const autoPrompt = `请收集关于「${card.title}」的上下文信息。\n\n目标：${state.data.meta?.title ?? props.goalId}\n\n请基于目标上下文，收集与该卡片相关的详细信息。\n\n回填要求：全文写进 text；summary 写一句话要点式摘要（≤100 字左右），不要长文。`;
           const childLink = card.child_id
             ? h("div", { style: S.drawerSection, key: "child" },
                 h("div", { style: { ...S.drawerH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
@@ -1551,6 +1607,8 @@ window.__ModuleLoader__.load({
       const [modalGoal, setModalGoal] = React.useState(null);
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
+      // g-125：delivered/blocked 卡片展开完整视图的开关（默认折叠精简）
+      const [expandedGoals, setExpandedGoals] = React.useState({});
       // g-113 定点 bug：从 slot props 取「被查看会话」id（conversation.view 渲染回调注入的
       // session 作用域字段，字段名 props.sessionId——renderer 的 standardProps 里
       // standard["sessionId"] = info.sessionId）。必须先于 load effect 声明，挂载即生效。
@@ -1595,7 +1653,9 @@ window.__ModuleLoader__.load({
           h("div", { key: s.key, style: S.cell },
             goals.filter((g) => stageOf(g.status) === s.key).map((g) =>
               Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
-                modalGoal === g.id, drawerCard?.cardId, goalStatus))),
+                modalGoal === g.id, drawerCard?.cardId, goalStatus,
+                !!expandedGoals[g.id],
+                (id) => setExpandedGoals((p) => ({ ...p, [id]: !p[id] }))))),
         );
         return [h("div", { key: key + "-label", style: S.laneLabel }, label), ...cells];
       };
