@@ -856,3 +856,8 @@
 {"ts":"2026-08-22T13:07:55+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-126 已移独立目标并交付；等 0.4.2 发布后核验；awesome PR 8/23 01:57 后"}}
 {"ts":"2026-08-22T13:20:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.archived","goal":"g-122","details":{"note":"dummy 验证目标归档（负责人 2026-08-22 确认删除），事件流历史保留"}}
 {"ts":"2026-08-22T13:20:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.archived","goal":"g-123","details":{"note":"dummy2 验证目标归档（负责人 2026-08-22 确认删除），事件流历史保留"}}
+{"ts":"2026-08-22T13:08:45+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-122/g-123 dummy 已归档删除；v0.4 剩 11 目标；等 0.4.2 发布核验"}}
+{"ts":"2026-08-22T13:12:07+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"0.4.2 已发布核验通过（含全部新工具）；0.3.2 待撤；awesome PR 8/23 01:57 后"}}
+{"ts":"2026-08-22T15:32:36+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"排查 /tmp 隔离环境 claim 抢占主项目主管 bug：等负责人提供 DSH_HOME 文件确认 root 落点"}}
+{"ts":"2026-08-22T15:33:17+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"等负责人新空目录复现 claim 抢占 bug（确认 root 解析落点）"}}
+{"ts":"2026-08-22T16:09:02+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"根据 /tmp 违规复盘：完善 guide 四类确认 gate（开工/审核/发布/排期）+ 授权边界措辞"}}
