@@ -909,3 +909,17 @@
 {"ts":"2026-08-22T16:40:34+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-128","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
 {"ts":"2026-08-22T16:40:44+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-128 split 已暂缓（交主管智能体）；v0.5 规划定稿，等确认派发收集/执行"}}
 {"ts":"2026-08-22T16:45:12+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-128","details":{"note":"彻底清除 split 功能残留（标题/描述/splitCard 条目/待确认小节），仅保留「split 暂缓」记录——负责人 2026-08-22 指出。"}}
+{"ts":"2026-08-22T16:45:23+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-128 split 残留已彻底清除（a2ba741）；v0.5 六目标定稿待派发"}}
+{"ts":"2026-08-22T16:47:17+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"等负责人提供 mimo-v2.5-pro 的 provider 配置（DSH 未见 mimo adapter）"}}
+{"ts":"2026-08-22T16:50:39+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"executor 已改 xiaomi-token-plan-cn/mimo-v2.5-pro（8d18bc4）；v0.5 待派发"}}
+{"ts":"2026-08-22T16:50:55+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"开始派发 v0.5：3 张调研收集卡并行（g-129/g-77647351/g-130）"}}
+{"ts":"2026-08-22T16:51:15+08:00","actor":"agent:current-supervisor","event":"card.collecting","goal":"g-129","details":{"card":"card-cc069a44","child_id":"9b70f32c-6b15-48f5-adbf-a370479234a6"}}
+{"ts":"2026-08-22T16:51:15+08:00","actor":"agent:current-supervisor","event":"card.collecting","goal":"g-77647351","details":{"card":"card-f0ec7190","child_id":"492b3b32-d471-4619-beda-dcbd99e73b6f"}}
+{"ts":"2026-08-22T16:51:15+08:00","actor":"agent:current-supervisor","event":"card.collecting","goal":"g-130","details":{"card":"card-ee78c929","child_id":"34a09829-4144-40b1-b382-60aeb94a7b11"}}
+{"ts":"2026-08-22T16:51:19+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"v0.5 派发中：3 调研子代理已绑卡并行（g-129 编辑器/g-77647351 拖放/g-130 append 边界）"}}
+{"ts":"2026-08-22T16:52:06+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-129","details":{"from":"draft","to":"planning"}}
+{"ts":"2026-08-22T16:52:06+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-77647351","details":{"from":"draft","to":"planning"}}
+{"ts":"2026-08-22T16:52:06+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-130","details":{"from":"draft","to":"planning"}}
+{"ts":"2026-08-22T16:52:09+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-129","details":{"from":"planning","to":"collecting"}}
+{"ts":"2026-08-22T16:52:09+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-77647351","details":{"from":"planning","to":"collecting"}}
+{"ts":"2026-08-22T16:52:09+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-130","details":{"from":"planning","to":"collecting"}}

@@ -125,3 +125,9 @@
   仅全自动模式或 Full access 豁免；「方向授权 ≠ 逐目标放行」；
 - 简单任务例外：一两行改动可先做后追认，但不得擅自扩大范围；
 - 已入 supervisor-guide 不可妥协#4（skill 内容源），新会话自动拿到。
+
+## 派发收集时同步切目标到 collecting lane（2026-08-22 负责人提醒）
+
+- 派发收集子代理后，除绑卡片（card collecting）外，**目标状态也要 draft→planning→collecting**
+  迁移——看板泳道才显示收集列；只绑卡不迁目标，目标仍停描述列（负责人指出）；
+- 状态机：draft 不能直接到 collecting，需先 planning（draft→planning→collecting）。
