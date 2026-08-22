@@ -2414,7 +2414,7 @@ window.__ModuleLoader__.load({
       // g-137：backlog 行平铺展示函数
       const backlogRow = (label, goals, key) => {
         const isOverThisCell = drag && drag.overLaneKey === key;
-        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative" } },
+        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative", background: "rgba(0,0,0,.12)" } },
           label,
           h("button", {
             style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
