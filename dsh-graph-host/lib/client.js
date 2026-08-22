@@ -2329,7 +2329,7 @@ window.__ModuleLoader__.load({
           const laneBg = laneIndex % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.08)";
           return h("div", {
             key: s.key,
-            style: { ...S.cell, background: laneBg },
+            style: { ...S.cell, background: isOverThisCell ? "rgba(76,141,255,.10)" : laneBg },
             className: isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? "dg-cell-drop-active" : "",
             onDragOver: anyDrag ? (e) => {
               e.preventDefault();
