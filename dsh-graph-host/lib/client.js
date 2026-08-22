@@ -2203,13 +2203,7 @@ window.__ModuleLoader__.load({
           // g-113 临时诊断（定位后移除）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "#e0a53a", marginLeft: 8 } },
             "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅")),
-          h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新"),
-          // g-129: 新建目标按钮
-          h("button", {
-            style: { ...S.btn, marginLeft: 8, padding: "4px 12px", fontSize: 13 },
-            className: "dg-btn",
-            onClick: () => setShowCreateGoal(true),
-          }, "＋ 新建目标")),
+          h("button", { style: S.btn, className: "dg-btn", onClick: load }, "刷新")),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
