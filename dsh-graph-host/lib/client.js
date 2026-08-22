@@ -442,6 +442,8 @@ window.__ModuleLoader__.load({
       const statusRowText = props.statusLine
         ? (running ? "⏳ " : "✅ ") + props.statusLine
         : (staleStatus ? "⏳ 状态延续 " + staleDur : null);
+      // g-129: 空闲时 status_line 背景不带动画
+      const statusRowClass = running && props.statusLine ? "dg-running-flow" : "";
       const lineEl = line
         ? h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
                                 textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 } },
@@ -462,6 +464,7 @@ window.__ModuleLoader__.load({
         // 第二行：status_line 固定显示（stale 时也显示全文）
         statusRowText
           ? h("div", {
+              className: statusRowClass,
               style: { ...S.liveLine, marginTop: 1, fontSize: 10, overflow: "hidden",
                        textOverflow: "ellipsis", whiteSpace: "nowrap" },
               title: props.statusLine ? props.statusLine + (staleDur ? "（状态已延续 " + staleDur + "）" : "") : undefined,
@@ -733,14 +736,17 @@ window.__ModuleLoader__.load({
 
       const running = !!(snap && snap.running);
       const meter = liveMeter(usage, pressure);
+      const statusLine = props.statusLine ?? null;
+      const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
       // g-109 判据反馈：sessions.models 对子代理查询失败时，用「重新执行指定路由」兜底（绝不用父会话模型冒充）
       const relaunchRoute = props.relaunchRoute ?? null;
       const modelText = model
         ? `${model.provider}/${model.model}` + (model.fromParent ? "（父会话，子代理继承）" : "")
         : relaunchRoute ? `按重新执行指定：${relaunchRoute}` : modelErr ? "不可用：" + modelErr : "查询中…";
-      // 折叠态标题行的内联摘要：状态 + token/ctx + 模型短名
+      // 折叠态标题行的内联摘要：状态 + statusLine + token/ctx + 模型短名
       const collapsedBits = [
-        running ? "🟢" : "⚪",
+        statusLabel,
+        statusLine ? (running ? "⏳ " : "✅ ") + statusLine : null,
         meter || null,
         model ? model.model : relaunchRoute ? "重派:" + String(relaunchRoute).split("/").pop() : null,
       ].filter(Boolean).join(" ｜ ");
@@ -755,15 +761,15 @@ window.__ModuleLoader__.load({
           },
           h("span", { style: { flexShrink: 0 } },
             (collapsible ? (open ? "▾ " : "▸ ") : "") + "📡 实时会话"),
-          collapsible && !open && collapsedBits
+          collapsible && !open
             ? h("span", { style: { ...S.meta, fontSize: 11, flex: 1, minWidth: 0,
                                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-                collapsedBits)
+                collapsedBits || "（无状态）")
             : h("span", { style: { flex: 1 } }),
           sessionLinkBtn(props.parentId, props.childId, "↗ 打开会话")),
         !open ? null : [
           h(LiveStrip, { key: "s", parentId: props.parentId, childId: props.childId,
-                         statusLine: props.statusLine }),
+                         statusLine }),
           h("div", { key: "m", style: { ...S.meta, marginTop: 3 } },
             "模型：" + modelText
             + (mode ? ` ｜ 模式：${mode === "continuable" ? "可续轮" : "一次性"}` : "")),
@@ -1538,9 +1544,7 @@ window.__ModuleLoader__.load({
             : null,
           status === "blocked" && meta.blocked_reason
             ? h("div", { key: "m3", style: { ...S.meta, color: "#d66" } }, "⛔ " + meta.blocked_reason)
-            : statusLine
-              ? h(StatusLine, { key: "m3", text: statusLine, blocked: false, running: status === "in_progress" })
-              : null,
+            : null,
         ];
         // g-107：📡 会话实时面板上移至标题与状态摘要下方（默认折叠，点击展开）
         // g-109 判据反馈：最新 attempt 无 child_id（子代理启动失败）时也给出「重新执行」兜底区
