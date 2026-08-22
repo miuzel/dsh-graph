@@ -38,3 +38,8 @@
 - 不要再给负责人发带 `--otp=<码>` 占位的发布命令——用交互式 2FA 版本：
   `pnpm publish --registry=https://registry.npmjs.org --no-git-checks`；
 - 相关：发布由负责人自执行（OTP/2FA 在负责人侧），supervisor 负责发布后核验 registry。
+
+## 0.3.2 弃用决策（2026-08-22）
+
+- 0.3.2 两包（dsh-graph-host/client）**不撤包、标记弃用**（deprecate）——合并前的旧双包结构，
+  由单包 dsh-graph@0.4.2+ 取代；0.4.0 保留不弃用（新插件用户少，无需打扰）。
