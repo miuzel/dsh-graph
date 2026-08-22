@@ -2,7 +2,7 @@
 {
   "id": "g-120",
   "title": "执行派发注入已收集卡片成果（context_cards 内容注入执行子代理 + injected_cards 事件）",
-  "status": "review",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-22T11:22:16+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",

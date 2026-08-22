@@ -2,7 +2,7 @@
 {
   "id": "g-122",
   "title": "dummy：g-120 实机验证（收集→执行注入观察）",
-  "status": "in_progress",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-22T11:55:12+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",
