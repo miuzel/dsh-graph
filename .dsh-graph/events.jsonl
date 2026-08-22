@@ -973,3 +973,16 @@
 {"ts":"2026-08-22T17:11:01+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-77647351","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
 {"ts":"2026-08-22T17:11:09+08:00","actor":"cli","event":"criteria.confirmed","goal":"g-129","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
 {"ts":"2026-08-22T17:11:09+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"goal.transition","goal":"g-129","details":{"from":"collecting","to":"ready"}}
+{"ts":"2026-08-22T17:11:15+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"goal.transition","goal":"g-129","details":{"from":"ready","to":"in_progress"}}
+{"ts":"2026-08-22T17:11:15+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"状态迁移完成，开始执行"}}
+{"ts":"2026-08-22T17:11:20+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-77647351 格式已修复（描述+判据 5 条）；发现 amendGoal 占位未自动替换，拟补 g-130"}}
+{"ts":"2026-08-22T17:11:37+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"修改 core goalDetail 暴露路径"}}
+{"ts":"2026-08-22T17:12:09+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"添加 create-goal 端点"}}
+{"ts":"2026-08-22T17:13:03+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"添加新建目标弹窗完成"}}
+{"ts":"2026-08-22T17:13:59+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"添加 goal.md 链接完成，运行测试"}}
+{"ts":"2026-08-22T17:14:20+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"运行全量测试中"}}
+{"ts":"2026-08-22T17:14:29+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"测试通过，准备提交"}}
+{"ts":"2026-08-22T17:14:45+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"本轮完成/空闲待命"}}
+{"ts":"2026-08-22T17:14:45+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"goal.transition","goal":"g-129","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-22T17:15:28+08:00","actor":"agent:20d4a779-65e6-4fce-b02a-a17e8864da21","event":"attempt.status_reported","goal":"g-129","details":{"attempt":"att-001","status":"本轮完成，等待 review verdict"}}
+{"ts":"2026-08-22T17:15:34+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-129","details":{"from":"review","to":"in_progress","reason":"复核发现缺陷：「打开 goal.md」按钮调用 /api/dsh-graph/open-path 端点但该端点不存在（index.js 无此路由，client 也无 connection.api.host.openPath）——方案 A（host.openPath）未实现，按钮实际 404 后回退复制路径。打回补实现。"}}

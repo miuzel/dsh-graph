@@ -1459,7 +1459,7 @@ window.__ModuleLoader__.load({
             : statusLine
               ? h(StatusLine, { key: "m3", text: statusLine, blocked: false, running: status === "in_progress" })
               : null,
-          // g-129: goal.md 文件链接
+          // g-129: goal.md 文件链接（方案 A：复用 DSH 现成 host.openPath，ProducedFiles 同款链路）
           d.goalFile
             ? h("div", { key: "m4", style: { ...S.meta, marginTop: 4, display: "flex", alignItems: "center", gap: 6 } },
                 h("span", null, "📄 goal.md："),
@@ -1470,17 +1470,18 @@ window.__ModuleLoader__.load({
                   onClick: async (e) => {
                     e.stopPropagation();
                     try {
-                      const r = await fetch(graphUrl("/api/dsh-graph/open-path"), {
-                        method: "POST",
-                        headers: { "content-type": "application/json" },
-                        body: JSON.stringify({ path: d.goalFile }),
-                      });
-                      const data = await r.json();
-                      if (!data.opened) {
-                        // 回退：复制路径
-                        await copyText(d.goalFile);
-                        showToast("✅ 路径已复制到剪贴板");
+                      // 复用 DSH 现成链路：connection.api.host.openPath（ProducedFiles 同款）
+                      const conn = connectionRt ?? appCtx?.get?.("connection");
+                      if (conn?.api?.host?.openPath) {
+                        const result = await conn.api.host.openPath({ path: d.goalFile });
+                        if (result?.opened) {
+                          showToast("✅ 已打开 goal.md");
+                          return;
+                        }
                       }
+                      // 回退：connection 不可用或 openPath 返回 opened:false → 复制路径
+                      await copyText(d.goalFile);
+                      showToast("✅ 路径已复制到剪贴板（打开不可用）");
                     } catch {
                       // 回退：复制路径
                       await copyText(d.goalFile);
