@@ -865,3 +865,8 @@
 {"ts":"2026-08-22T16:12:41+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"确认 claim 抢占非 bug（/tmp 旧残留所致）；无需代码修复；回归主线待办"}}
 {"ts":"2026-08-22T16:00:00+08:00","actor":"human:负责人","event":"version.released","details":{"version":"v-004","name":"v0.4 单包时代（0.4.x）","note":"v0.4 release（负责人 2026-08-22）：0.4.x 单包时代终结，发布 0.4.0/0.4.2/0.4.3；g-111 上架后续在 0.5 发最新版"}}
 {"ts":"2026-08-22T16:00:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"version.created","details":{"version":"v-005","name":"v0.5","implicit":false}}
+{"ts":"2026-08-22T16:19:41+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"v0.4 已 release（8d2a360）；v0.5 泳道已建待规划；等负责人定 0.5 范围"}}
+{"ts":"2026-08-22T16:21:17+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.moved","goal":"g-127","details":{"from":"backlog/g-127.md","to":"versions/v0.5/goals/g-127/goal.md"}}
+{"ts":"2026-08-22T16:21:17+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.moved","goal":"g-77647351","details":{"from":"backlog/g-77647351.md","to":"versions/v0.5/goals/g-77647351/goal.md"}}
+{"ts":"2026-08-22T16:21:17+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.moved","goal":"g-110","details":{"from":"backlog/g-110.md","to":"versions/v0.5/goals/g-110/goal.md"}}
+{"ts":"2026-08-22T16:21:30+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-110","details":{"note":"负责人 2026-08-22 v0.5 规划：g-110 扩展纳入上下文卡片新增（已具备）/删除（需新增 deleteCard op）GUI 功能。"}}
