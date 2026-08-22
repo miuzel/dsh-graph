@@ -106,9 +106,9 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
     tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
   };
   applyHost(ctx, { root: join(mkdtempSync(join(tmpdir(), "dsh-graph-dual-")), "g") });
-  // host 半边：14 个 graph_* 工具
+  // host 半边：16 个 graph_* 工具（g-117 新增 graph_handoff / graph_claim_supervisor）
   const toolNames = registered.map((d) => d.name).filter((n) => n.startsWith("graph_"));
-  assert.equal(toolNames.length, 14, "单包注册 14 个 graph_* 工具");
+  assert.equal(toolNames.length, 16, "单包注册 16 个 graph_* 工具");
   // client 半边：/api/dsh-graph* 全部端点（原 client 包 9 条路由）
   for (const p of ["/api/dsh-graph", "/api/dsh-graph/goal", "/api/dsh-graph/accept",
     "/api/dsh-graph/resolve-accept", "/api/dsh-graph/edit-description",

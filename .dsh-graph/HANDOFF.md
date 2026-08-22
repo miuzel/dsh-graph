@@ -1,40 +1,90 @@
 # HANDOFF（换会话交接）
 
-> 给新 supervisor 会话的第一份阅读材料。工作目录 /home/miuzel/workspace/personal/dsh-graph。
+> 由 graph_handoff 自动生成于 2026-08-22T10:42:56+08:00（g-117）。图根：`/home/miuzel/workspace/personal/dsh-graph/.dsh-graph`。
 > 你的职责指南：dsh-graph-host/supervisor-guide.md（注册为 skill `dsh-graph-supervisor`）。
 
-## 当前状态（2026-08-22 换会话时）
+## 目标看板
 
-### v0.3 目标看板
-- **已交付**：g-107（会话内嵌）、g-108（主管栏）、g-a92e1406（状态摘要动画）、g-109（看板可写工作台）、g-112（root 通用化）、g-113（root 跟随会话 workspace）、g-116（client 并入 host 合并单包）
-- **g-111（发布）**：npm 0.3.1 已发（两包），待 awesome-dsh-plugin PR 收尾（仓库需 ≥1 天 + ≥10 commits）
-- **g-116（合并单包）**：本地验收通过（单包 `dsh-graph@0.4.0` 14 工具 + 看板 + 2 skill 齐备），**待发布 0.4.0**
+### 版本 v0.1（released）
 
-### 进行中（下一步就干）
-1. 发布单包 `dsh-graph@0.4.0`：`cd dsh-graph-host && pnpm publish --registry=https://registry.npmjs.org --no-git-checks --otp=<码>`
-2. 发布后撤旧包：`npm unpublish dsh-graph-host@0.3.2` / `npm unpublish dsh-graph-client@0.3.2`（均需 OTP）
-3. awesome-dsh-plugin 上架：`data/plugins/miuzel__dsh-graph.yml`，详见 docs/release-handbook.md §7
+- **g-003（上下文卡片模型与核心命令）**：`delivered`
+- **g-001（核心层 TypeScript 参考实现）**：`delivered`
+- **g-002（Dogfood：用本系统管理 g-001 走通全生命周期）**：`delivered`
 
-### 关键环境事实（务必记住）
-- **executor provider = `deepseek-official`/deepseek-v4-flash**（「deepseek」是错名；DSH adapter 注册名是 `deepseek-official`，源码 dsh-llm-deepseek `const PROVIDER = "deepseek-official"`）
-- **本地 dev 的 root 覆盖必须用相对值 `.dsh-graph`**（绝对路径会被 `path.resolve` 顶掉、破坏 workspace 跟随；host/client 两半都踩过）
-- pnpm 11 supply-chain 策略在 **`pnpm-workspace.yaml`** 设 `minimumReleaseAge`（不是 .npmrc）
-- 冻结脚本 R-03：执行方不得改；规划方（supervisor）可改但必须加 revision 注记
-- 子代理 spawn 两个 provider 概念别混：subagent provider（spawn/fork）≠ LLM provider（agentOptions）
+### 版本 v0.2（released）
 
-### 记忆
-- mem-005/006/007 在 `.dsh-graph/memory/long-term/`
-- mnemon 已下线；dsh-graph 自带 memory 管理在 backlog **g-105**（方案已起草，放回 backlog）
+- **g-101（目标闭环 DSH 插件（goal-loop））**：`delivered`（check_plugin PASS：插件真实加载、10 工具注册、core 自测通过）
 
-### 调试遗留
-- 看板头部 DEBUG 行（`sessionId=… ws=…`）**保留**作诊断（负责人指示）
-- g-114/g-115 是调试期测试目标，可删
-- `.dsh-graph/memory/long-term/` 里 mem 文件是事件流外的长期记忆，supervisor 交付时继续在此沉淀
+### 版本 v0.3（active）
 
-## supervisor 会话 id 变更
-- 旧：session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b（本会话，因 compact/token-meter 问题弃用）
-- 新：见 project.yaml 的 `supervisor.session`（换会话后由负责人更新）
+- **g-108（看板顶部 supervisor 会话状态栏：复用实时控件+一键跳转主管对话）**：`delivered`（追加：status_line 摘要并入状态小窗（LiveStrip），图标随子代理状态——运行中 ⏳ / 空闲 ✅ 最近已完成；全脚本 PASS）
+- **g-109（看板可写交互：目标描述编辑与人工反馈、上下文卡片添加、抽屉收集提示词可编辑）**：`delivered`（提示词加泳道迁移指令，38/38全绿）
+- **g-111（v0.3 对外发布与插件商店上架）**：`review`（B8修复完成0.3.1，真实安装验收过）
+- **g-112（root 通用化：数据目录解析与初始化（去除 client 硬编码绝对路径））**：`delivered`（已交付：review→delivered 落定）
+- **g-113（dsh-graph 新项目开箱即用：root 跟随会话 workspace + 使用指引注入）**：`delivered`（workspaces 数据源已修，待负责人刷 DEBUG 验证）
+- **g-116（合并单包：dsh-graph-client 并入 dsh-graph-host）**：`review`（✅ 包名改 dsh-graph 完成，等规划方修订 kanban 断言）
+- **g-117（supervisor 会话交接：一键 handoff + 自动更新主管会话 id）**：`in_progress`
+- **g-a92e1406（状态摘要运行动画与履历：流动背景+图标动画、modal 显示、近期动态收录汇报）**：`delivered`（判据 3① 二次扩展（supervisor 状态栏）实现完成：新增 supervisor.status_reported 事件（R-02 事件流唯一真相源）+ reportSupervisorStatus/readSupervisorStatus（读最新一条）+ host 工具 graph_report_supervisor_status + boardPayload 下发 supervisorStatus + SupervisorBar 传 statusLine 复用 LiveStrip 动画。core 23/23、冻结脚本断言内容 6/6 恒真、事件流测试数据已清理。另发现冻结脚本 awk|grep -q+pipefail 存在 SIGPIPE 竞态（间歇 FAIL 非逻辑回归），已上报。）
+- **g-102（Kanban 二维泳道看板（client-plugin））**：`delivered`
+- **g-107（卡片会话内嵌：实时状态与看板直达指令）**：`delivered`（六轮修复：模型查询被拒根因定位（subagent 围栏）并退化父会话；折叠态内联状态/token/模型；全绿待复测）（被复用→g-108）
 
-## 已立项待办（换会话后接手）
-- **g-117「supervisor 会话交接：一键 handoff + 自动更新主管会话 id」**（已写好描述+判据，draft）：交付 `graph_handoff`（自动生成 HANDOFF.md）+ `graph_claim_supervisor`（自动把 project.yaml 的 supervisor.session 改为当前会话 id、记事件、返回 HANDOFF 内容）。这是把「换会话手改+手写交接」做成功能，优先级高，建议新会话第一件事就做它——做完下次换会话就一键了。
-- g-111（发布）待 awesome PR；g-116（合并单包）待发布 0.4.0；g-105（自带 memory 管理）在 backlog。
+### 独立目标
+
+- **g-115（测试目标卡片流程）**：`draft`
+
+### backlog
+
+- **g-106（收集项任务化：卡片绑定收集子代理）**：`draft`
+- **g-105（记忆提炼与技能沉淀机制）**：`draft`
+- **g-110（目标卡片操作：暂缓（移回 backlog）、与现有目标合并、删除）**：`draft`
+- **g-114（测试目标卡片）**：`draft`
+- **g-77647351（看板卡片拖放交互（泳道内排序、跨列拖动触发状态迁移））**：`draft`
+- **g-104（PK 沙盒编排与对比评审）**：`draft`
+- **g-103（版本管理插件（version-supervisor））**：`draft`
+
+## 进行中（下一步就干）
+
+- **g-111（v0.3 对外发布与插件商店上架）**：`review`（B8修复完成0.3.1，真实安装验收过）
+- **g-116（合并单包：dsh-graph-client 并入 dsh-graph-host）**：`review`（✅ 包名改 dsh-graph 完成，等规划方修订 kanban 断言）
+- **g-117（supervisor 会话交接：一键 handoff + 自动更新主管会话 id）**：`in_progress`
+- **g-115（测试目标卡片流程）**：`draft`
+- **g-106（收集项任务化：卡片绑定收集子代理）**：`draft`
+- **g-105（记忆提炼与技能沉淀机制）**：`draft`
+- **g-110（目标卡片操作：暂缓（移回 backlog）、与现有目标合并、删除）**：`draft`
+- **g-114（测试目标卡片）**：`draft`
+- **g-77647351（看板卡片拖放交互（泳道内排序、跨列拖动触发状态迁移））**：`draft`
+- **g-104（PK 沙盒编排与对比评审）**：`draft`
+- **g-103（版本管理插件（version-supervisor））**：`draft`
+
+## 已交付
+
+- **g-003**：上下文卡片模型与核心命令
+- **g-001**：核心层 TypeScript 参考实现
+- **g-002**：Dogfood：用本系统管理 g-001 走通全生命周期
+- **g-101**：目标闭环 DSH 插件（goal-loop）
+- **g-108**：看板顶部 supervisor 会话状态栏：复用实时控件+一键跳转主管对话
+- **g-109**：看板可写交互：目标描述编辑与人工反馈、上下文卡片添加、抽屉收集提示词可编辑
+- **g-112**：root 通用化：数据目录解析与初始化（去除 client 硬编码绝对路径）
+- **g-113**：dsh-graph 新项目开箱即用：root 跟随会话 workspace + 使用指引注入
+- **g-a92e1406**：状态摘要运行动画与履历：流动背景+图标动画、modal 显示、近期动态收录汇报
+- **g-102**：Kanban 二维泳道看板（client-plugin）
+- **g-107**：卡片会话内嵌：实时状态与看板直达指令
+
+## 关键环境事实（固定段）
+
+- **executor provider** = `deepseek-official`/deepseek-v4-flash（「deepseek」是错名；DSH adapter 注册名是 deepseek-official）
+- **本地 dev 的 root 覆盖必须用相对值 `.dsh-graph`**（绝对路径会被 `path.resolve` 顶掉、破坏 workspace 跟随）
+- **pnpm 11 supply-chain 策略在 `pnpm-workspace.yaml` 设 `minimumReleaseAge`**（不是 .npmrc）
+- **冻结脚本 R-03**：执行方不得改；规划方（supervisor）可改但必须加 revision 注记
+- **子代理 spawn 两个 provider 概念别混**：subagent provider（spawn/fork）≠ LLM provider（agentOptions）
+
+## 长期记忆
+
+`memory/long-term/` 下 7 个文件：
+- client-session-embed-pattern.md
+- core-goal-success-pattern.md
+- dsh-plugin-pitfalls.md
+- kanban-write-root-genericize.md
+- root-follows-workspace.md
+- status-anim-modal-tab-reused-supervisor-status.md
+- supervisor-bar-dep-badge.md

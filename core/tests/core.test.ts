@@ -26,6 +26,9 @@ import {
   addCard,
   bindCardChild,
   readSupervisorSession,
+  writeSupervisorSession,
+  generateHandoff,
+  claimSupervisor,
   requestAcceptReview,
   resolveAccept,
   readAcceptStatus,
@@ -358,4 +361,78 @@ test("readSupervisorSession：读 supervisor.session，去注释/引号，缺失
   // 别的块的 session 不算
   writeFileSync(join(root, "project.yaml"), 'other:\n  session: nope\n');
   assert.equal(readSupervisorSession(root), null);
+});
+
+// ---- g-117：supervisor 会话交接（graph_handoff / graph_claim_supervisor） ----
+
+test("writeSupervisorSession：替换值保留注释与其他键，原子写 + 记 supervisor.claimed", () => {
+  const root = tmpRoot();
+  writeFileSync(
+    join(root, "project.yaml"),
+    'name: t\nsupervisor:\n  session: old-session   # 主管会话\n  automation:\n    release: human\nexecutor:\n  provider: deepseek-official\n',
+  );
+  writeSupervisorSession(root, "session-new", "agent:s");
+  const text = readFileSync(join(root, "project.yaml"), "utf8");
+  assert.match(text, /session: session-new/);
+  assert.match(text, /# 主管会话/); // 行尾注释保留
+  assert.match(text, /release: human/); // 其他键保留
+  assert.match(text, /provider: deepseek-official/);
+  assert.equal(readSupervisorSession(root), "session-new");
+  const claimed = readEvents(root).filter((e) => e.event === "supervisor.claimed");
+  assert.equal(claimed.length, 1);
+  assert.equal(claimed[0].actor, "agent:s");
+  assert.equal(claimed[0].details.supervisor_session, "session-new");
+});
+
+test("writeSupervisorSession：无 supervisor 块时文末新建；有块无 session 键时插入", () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, "project.yaml"), "name: t\ndescription: x\n");
+  writeSupervisorSession(root, "s-1", "agent:s");
+  assert.equal(readSupervisorSession(root), "s-1");
+  assert.match(readFileSync(join(root, "project.yaml"), "utf8"), /supervisor:\n  session: s-1/);
+  // 有块无 session 键：插入且保留其他键
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  automation:\n    release: human\n");
+  writeSupervisorSession(root, "s-2", "agent:s");
+  assert.equal(readSupervisorSession(root), "s-2");
+  assert.match(readFileSync(join(root, "project.yaml"), "utf8"), /release: human/);
+});
+
+test("generateHandoff：board 投影 + 环境事实 + 长期记忆，不依赖会话上下文", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "交接测试目标", version: "v-t", actor: "test" });
+  writeFileSync(join(root, "memory", "long-term", "mem-x.md"), "内容");
+  const content = generateHandoff(root);
+  assert.match(content, /# HANDOFF（换会话交接）/);
+  assert.match(content, /交接测试目标/);
+  assert.match(content, /deepseek-official/);
+  assert.match(content, /mem-x\.md/);
+  assert.match(content, new RegExp(id)); // 目标 id 出现在看板段
+  // 产物不依赖会话：同一 root 两次生成内容一致（除时间戳行）
+  const content2 = generateHandoff(root);
+  assert.match(content2, /交接测试目标/);
+});
+
+test("generateHandoff(opts.write)：落盘 HANDOFF.md 且内容与返回值一致", () => {
+  const root = tmpRoot();
+  createGoal(root, { title: "写盘目标", version: "v-t", actor: "test" });
+  const content = generateHandoff(root, { write: true });
+  assert.equal(readFileSync(join(root, "HANDOFF.md"), "utf8"), content);
+});
+
+test("claimSupervisor：更新 session + 记事件（幂等）+ 返回 HANDOFF 全文", () => {
+  const root = tmpRoot();
+  createGoal(root, { title: "claim 目标", version: "v-t", actor: "test" });
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: old-session\n");
+  const r1 = claimSupervisor(root, "session-new", "agent:new");
+  assert.equal(r1.supervisor_session, "session-new");
+  assert.equal(readSupervisorSession(root), "session-new");
+  assert.match(r1.handoff, /# HANDOFF（换会话交接）/);
+  assert.match(r1.handoff, /claim 目标/);
+  assert.equal(readEvents(root).filter((e) => e.event === "supervisor.claimed").length, 1);
+  // 幂等：同会话重复调用不重复记事件
+  const r2 = claimSupervisor(root, "session-new", "agent:new");
+  assert.equal(readEvents(root).filter((e) => e.event === "supervisor.claimed").length, 1);
+  assert.ok(r2.handoff.length > 0);
+  // 缺 session id 抛错
+  assert.throws(() => claimSupervisor(root, "", "agent:new"), GraphError);
 });

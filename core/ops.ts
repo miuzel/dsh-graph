@@ -119,6 +119,156 @@ export function readSupervisorSession(root: string): string | null {
   return m ? m[1] : null;
 }
 
+/** 写 project.yaml 的 supervisor.session（g-117）：原子写（临时文件 + rename）、事件先行。
+ *  零依赖行编辑：无 supervisor 块则新建；有块无 session 键则插入（跟随块内已有缩进）；
+ *  有则替换值并保留行尾注释与其他键。事件：supervisor.claimed（actor 为调用者）。
+ *  幂等由 claimSupervisor 把关（值未变不重复记事件）；本 op 每次调用都写 + 记事件。 */
+export function writeSupervisorSession(root: string, sessionId: string, actor: string): void {
+  if (!sessionId.trim()) throw new GraphError("session id 不能为空");
+  const file = join(root, "project.yaml");
+  const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const lines = text.split("\n");
+  const blockIdx = lines.findIndex((l) => /^supervisor:\s*$/.test(l));
+  if (blockIdx >= 0) {
+    // 在块内找 session 行（块 = supervisor: 后的缩进行）
+    let sessionIdx = -1;
+    let indent = "  ";
+    for (let i = blockIdx + 1; i < lines.length; i++) {
+      const l = lines[i];
+      if (!/^[ \t]/.test(l)) break; // 块结束
+      const sm = l.match(/^([ \t]+)session:/);
+      if (sm) {
+        sessionIdx = i;
+        indent = sm[1];
+        break;
+      }
+    }
+    if (sessionIdx >= 0) {
+      // 保留行尾注释：`session: <value>  [comment]` → 只换 value
+      const m = lines[sessionIdx].match(/^([ \t]+session:\s*)[^\s"#]+(\s*#.*)?$/);
+      const tail = m ? (m[2] ?? "") : "";
+      lines[sessionIdx] = `${indent}session: ${sessionId}${tail}`;
+    } else {
+      lines.splice(blockIdx + 1, 0, `${indent}session: ${sessionId}`);
+    }
+    writeFileSync(`${file}.tmp`, lines.join("\n"), "utf8");
+  } else {
+    // 无 supervisor 块：文末追加新块
+    const block = `supervisor:\n  session: ${sessionId}`;
+    const trimmed = text.replace(/\s+$/, "");
+    writeFileSync(`${file}.tmp`, trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`, "utf8");
+  }
+  renameSync(`${file}.tmp`, file);
+  appendEvent(root, {
+    actor,
+    event: "supervisor.claimed",
+    details: { supervisor_session: sessionId },
+  });
+}
+
+/** 生成交接文档全文（g-117）：board 投影 + 长期记忆 + 固定环境事实段。
+ *  产物不依赖会话上下文（不读 session、不读 ex）；opts.write 时落盘 <root>/HANDOFF.md。
+ *  结构：目标看板（按版本/独立/backlog）→ 进行中（下一步就干）→ 已交付 → 阻塞 →
+ *  关键环境事实（固定段）→ 长期记忆。 */
+export function generateHandoff(
+  root: string,
+  opts: { write?: boolean } = {},
+): string {
+  const board = boardProjection(root);
+  const line = (g: {
+    id: string; title: string; status: string; status_line?: string | null;
+    blocked_reason?: string | null; reused_by?: string | null;
+  }): string => {
+    let s = `- **${g.id}（${g.title}）**：\`${g.status}\``;
+    if (g.blocked_reason) s += ` —— ${g.blocked_reason}`;
+    if (g.status_line) s += `（${g.status_line}）`;
+    if (g.reused_by) s += `（被复用→${g.reused_by}）`;
+    return s;
+  };
+  const parts: string[] = [];
+  parts.push("# HANDOFF（换会话交接）", "");
+  parts.push(`> 由 graph_handoff 自动生成于 ${nowIso()}（g-117）。图根：\`${root}\`。`);
+  parts.push("> 你的职责指南：dsh-graph-host/supervisor-guide.md（注册为 skill `dsh-graph-supervisor`）。", "");
+  parts.push("## 目标看板", "");
+  for (const v of board.versions) {
+    parts.push(`### 版本 ${v.slug}（${v.status}）`, "");
+    for (const g of v.goals) parts.push(line(g));
+    parts.push("");
+  }
+  if (board.standalone.length) {
+    parts.push("### 独立目标", "");
+    for (const g of board.standalone) parts.push(line(g));
+    parts.push("");
+  }
+  if (board.backlog.length) {
+    parts.push("### backlog", "");
+    for (const g of board.backlog) parts.push(line(g));
+    parts.push("");
+  }
+  const all = [
+    ...board.versions.flatMap((v) => v.goals),
+    ...board.standalone,
+    ...board.backlog,
+  ];
+  const active = all.filter((g) => g.status !== "delivered" && g.status !== "blocked");
+  const delivered = all.filter((g) => g.status === "delivered");
+  const blocked = all.filter((g) => g.status === "blocked");
+  if (active.length) {
+    parts.push("## 进行中（下一步就干）", "");
+    for (const g of active) parts.push(line(g));
+    parts.push("");
+  }
+  if (delivered.length) {
+    parts.push("## 已交付", "");
+    parts.push(delivered.map((g) => `- **${g.id}**：${g.title}`).join("\n"), "");
+  }
+  if (blocked.length) {
+    parts.push("## 阻塞", "");
+    for (const g of blocked) parts.push(line(g));
+    parts.push("");
+  }
+  parts.push("## 关键环境事实（固定段）", "");
+  parts.push(
+    "- **executor provider** = `deepseek-official`/deepseek-v4-flash（「deepseek」是错名；DSH adapter 注册名是 deepseek-official）",
+    "- **本地 dev 的 root 覆盖必须用相对值 `.dsh-graph`**（绝对路径会被 `path.resolve` 顶掉、破坏 workspace 跟随）",
+    "- **pnpm 11 supply-chain 策略在 `pnpm-workspace.yaml` 设 `minimumReleaseAge`**（不是 .npmrc）",
+    "- **冻结脚本 R-03**：执行方不得改；规划方（supervisor）可改但必须加 revision 注记",
+    "- **子代理 spawn 两个 provider 概念别混**：subagent provider（spawn/fork）≠ LLM provider（agentOptions）",
+    "",
+  );
+  const memDir = join(root, "memory", "long-term");
+  const memFiles = existsSync(memDir)
+    ? readdirSync(memDir).filter((f) => f.endsWith(".md")).sort()
+    : [];
+  parts.push("## 长期记忆", "");
+  parts.push(
+    memFiles.length
+      ? `\`memory/long-term/\` 下 ${memFiles.length} 个文件：\n${memFiles.map((f) => `- ${f}`).join("\n")}`
+      : "（无）",
+    "",
+  );
+  const content = parts.join("\n");
+  if (opts.write) writeFileSync(join(root, "HANDOFF.md"), content, "utf8");
+  return content;
+}
+
+/** supervisor 会话交接（g-117）：把 project.yaml 的 supervisor.session 更新为 sessionId，
+ *  记 supervisor.claimed 事件（幂等：值未变不重复记事件），并返回 HANDOFF 交接全文。
+ *  sessionId 取 ex.agent.session.id 同链（调用方注入）。 */
+export function claimSupervisor(
+  root: string,
+  sessionId: string,
+  actor: string,
+): { supervisor_session: string; handoff: string } {
+  if (!sessionId || !sessionId.trim()) {
+    throw new GraphError("无法确定当前会话 id（ex.agent.session.id 缺失）");
+  }
+  if (readSupervisorSession(root) !== sessionId) {
+    writeSupervisorSession(root, sessionId, actor);
+  }
+  return { supervisor_session: sessionId, handoff: generateHandoff(root) };
+}
+
 /** supervisor 汇报自己的状态摘要（看板顶部状态栏 status_line，g-a92e1406 判据 3① 扩展）。
  *  事件流唯一真相源（R-02）：只追加 supervisor.status_reported 事件，读取时取最新一条。 */
 export function reportSupervisorStatus(root: string, line: string, actor: string): void {

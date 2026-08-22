@@ -13,7 +13,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
-import { relative } from "node:path";
+import { relative, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createGoal,
@@ -29,6 +29,8 @@ import {
   reportSupervisorStatus,
   readSupervisorStatus,
   readSupervisorStatusAt,
+  generateHandoff,
+  claimSupervisor,
   bindAttemptChild,
   moveGoal,
   amendGoal,
@@ -201,6 +203,30 @@ export function apply(ctx, config) {
         parameters: params({ status: str }, ["status"]),
       },
       run: (a, ex) => { reportSupervisorStatus(rootFor(ex), a.status, actorOf(ex)); return { ok: true }; },
+    },
+    {
+      def: {
+        name: "graph_handoff",
+        description: "生成/更新 .dsh-graph/HANDOFF.md 换会话交接文档（g-117）：board 投影 + 长期记忆 + 关键环境事实段自动拼接。产物不依赖会话上下文；返回交接全文。旧会话交接时调用。",
+        parameters: params({}, []),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        const content = generateHandoff(r, { write: true });
+        return { ok: true, path: join(r, "HANDOFF.md"), handoff: content };
+      },
+    },
+    {
+      def: {
+        name: "graph_claim_supervisor",
+        description: "新会话接手时调用：把 project.yaml 的 supervisor.session 更新为当前会话 id（ex.agent.session 链），记 supervisor.claimed 事件（幂等：重复调用不重复记），并把 HANDOFF.md 交接全文作为返回值返回（无需再读文件）。",
+        parameters: params({}, []),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        const res = claimSupervisor(r, ex?.agent?.session?.id, actorOf(ex));
+        return { supervisor_session: res.supervisor_session, handoff: res.handoff };
+      },
     },
     {
       def: {

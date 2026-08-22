@@ -148,6 +148,18 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
 信息收集卡｜ `graph_start_attempt` 派发执行（自动绑子代理）｜ `graph_report_status`
 状态汇报｜ `graph_validate` 全量校验｜ `graph_rebuild` 事件流对账
 
+## 换会话（g-117：一键交接）
+
+换会话不再是手改 project.yaml + 手写 HANDOFF.md：
+
+1. **旧会话交接**：`graph_handoff` —— 自动生成/更新 `.dsh-graph/HANDOFF.md`
+   （board 投影 + 长期记忆 + 关键环境事实段），产物不依赖会话上下文；
+2. **新会话接手**：`graph_claim_supervisor` —— 把 project.yaml 的
+   `supervisor.session` 更新为当前会话 id（ex.agent.session 链）、记
+   `supervisor.claimed` 事件（幂等：重复调用不重复记），并把 HANDOFF 全文作为
+   返回值直接注入上下文（无需再读文件）。看板顶部主管栏读
+   `readSupervisorSession`（现读），claim 后立即指向新会话。
+
 ## 沉淀
 
 - 目标交付时提炼长期记忆（成功图 / 失败模式 / 偏好），条目必须带来源目标引用；

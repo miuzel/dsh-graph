@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { init, findGoalFile, loadGoal, createGoal } from "../ops.ts";
+import { init, findGoalFile, loadGoal, createGoal, readSupervisorSession } from "../ops.ts";
 import { resolveRoot } from "../root.ts";
 import { apply } from "../../dsh-graph-host/index.js";
 
@@ -29,7 +29,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 14);
+  assert.equal(registered.length, 16);
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
@@ -137,4 +137,41 @@ test("g-113 graph_start_attempt 注入目标相对路径以 workspace 根为基�
   const expected = relative(ws, findGoalFile(join(ws, ".dsh-graph"), goalId));
   assert.ok(capturedPrompt.includes(expected), `prompt 含 workspace 根基准相对路径：${expected}`);
   assert.ok(capturedPrompt.includes(".dsh-graph/versions/v-t/goals/"), "路径带 .dsh-graph 前缀（不是 versions/... 裸相对）");
+});
+
+// ===== g-117：graph_handoff / graph_claim_supervisor（换会话交接工具） =====
+
+test("g-117 graph_handoff / graph_claim_supervisor：生成交接 + claim 会话（幂等）", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-handoff-"));
+  init(root);
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: old-session\n");
+  createGoal(root, { title: "handoff 目标", version: "v-t", actor: "test" });
+  const registered: any[] = [];
+  const ctx = {
+    get: () => undefined,
+    effect: (fn: () => unknown) => fn(),
+    tools: {
+      register: (def: any) => { registered.push(def); return () => {}; },
+      get: () => ({}),
+    },
+  };
+  apply(ctx as any, { root });
+  const byName = new Map(registered.map((d) => [d.name, d]));
+  const exec = {
+    agent: { id: "a1", session: { id: "session-claim", header: { cwd: root } } },
+    signal: new AbortController().signal,
+  };
+  // graph_handoff：生成 + 落盘，产物含 board/环境事实
+  const h = await byName.get("graph_handoff")!.execute({}, exec);
+  assert.equal(h.ok, true);
+  assert.match(h.handoff, /handoff 目标/);
+  assert.match(h.handoff, /deepseek-official/);
+  assert.ok(JSON.parse(JSON.stringify(h)), "输出无损 JSON");
+  // graph_claim_supervisor：更新 session + 幂等 + 返回 HANDOFF
+  const c1 = await byName.get("graph_claim_supervisor")!.execute({}, exec);
+  assert.equal(c1.supervisor_session, "session-claim");
+  assert.equal(readSupervisorSession(root), "session-claim");
+  assert.match(c1.handoff, /# HANDOFF（换会话交接）/);
+  const c2 = await byName.get("graph_claim_supervisor")!.execute({}, exec);
+  assert.equal(c2.supervisor_session, "session-claim");
 });

@@ -599,3 +599,8 @@
 {"ts":"2026-08-22T10:23:30+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"supervisor.status_reported","details":{"status":"单包 dsh-graph 验收：14 工具 + 看板 + 新 bundle 名全通过"}}
 {"ts":"2026-08-22T10:36:30+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"goal.created","goal":"g-117","details":{"title":"supervisor 会话交接：一键 handoff + 自动更新主管会话 id","version":"v0.3"}}
 {"ts":"2026-08-22T10:36:50+08:00","actor":"agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b","event":"criteria.confirmed","goal":"g-117","details":{"criteria_count":4,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T10:42:36+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-117","details":{"criteria_count":4,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T10:42:39+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-117","details":{"from":"draft","to":"planning"}}
+{"ts":"2026-08-22T10:42:40+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-117","details":{"from":"planning","to":"ready"}}
+{"ts":"2026-08-22T10:42:41+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-117","details":{"from":"ready","to":"in_progress"}}
+{"ts":"2026-08-22T10:42:56+08:00","actor":"agent:current-supervisor","event":"supervisor.claimed","details":{"supervisor_session":"session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"}}
