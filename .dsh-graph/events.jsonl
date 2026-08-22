@@ -605,3 +605,4 @@
 {"ts":"2026-08-22T10:42:41+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-117","details":{"from":"ready","to":"in_progress"}}
 {"ts":"2026-08-22T10:42:56+08:00","actor":"agent:current-supervisor","event":"supervisor.claimed","details":{"supervisor_session":"session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"}}
 {"ts":"2026-08-22T10:44:41+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-117 已实现并 claim 完成，等 OTP 发 0.4.1"}}
+{"ts":"2026-08-22T10:47:53+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-117","details":{"from":"in_progress","to":"review"}}

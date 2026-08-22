@@ -2,7 +2,7 @@
 {
   "id": "g-117",
   "title": "supervisor 会话交接：一键 handoff + 自动更新主管会话 id",
-  "status": "in_progress",
+  "status": "review",
   "blocked_reason": null,
   "created_at": "2026-08-22T10:36:30+08:00",
   "created_by": "agent:session-b00ed183-bc6c-4f66-b07e-e5d909c1f46b",
@@ -46,6 +46,12 @@
 
 | id | 内容 | 来源 | 时间 | freshness |
 |----|------|------|------|-----------|
+| ev-001 | 单测 59/59 全绿（g-117 新增 6 用例：core.test.ts +5、plugin.test.ts +1；root.test.ts 工具数 14→16 断言同步） | `node --test core/tests/*.test.ts` | 2026-08-22 | fresh |
+| ev-002 | 8 冻结脚本全 PASS（含 check_plugin 真实 headless 加载：16 工具注册 + validate PASS） | scripts/check_*.sh | 2026-08-22 | fresh |
+| ev-003 | tsc 编译产物与包内 core/*.js 完全一致（sync-core.sh 一致性校验） | scripts/sync-core.sh | 2026-08-22 | fresh |
+| ev-004 | 实机 claim：graph_claim_supervisor 把 supervisor.session 更新为 session-5f6bf96d（当前会话），supervisor.claimed 事件恰 1 条（幂等：第 2 次调用不重复记），HANDOFF.md 自动生成（头部含「由 graph_handoff 自动生成（g-117）」） | tmp/claim-supervisor.mjs 实机探针 | 2026-08-22 | fresh |
+| ev-005 | 独立复核（fresh eyes，只读）：判据 4/4 PASS，7 项低危注记归档（嵌套 session 子键误识别为 g-108 既有问题，建议与 g-108 一并排期 hardening） | 复核子代理 ee38e050 | 2026-08-22 | fresh |
+| ev-006 | 看板主管栏数据源现读：boardPayload→readSupervisorSession 返回新会话 id（claim 后 project.yaml 已指向） | board 端点链路 | 2026-08-22 | fresh |
 
 ## 处置分支
 
