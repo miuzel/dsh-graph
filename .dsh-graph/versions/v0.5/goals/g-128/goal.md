@@ -11,7 +11,14 @@
     "core",
     "dsh-graph-host"
   ],
-  "depends_on": [],
+  "depends_on": [
+    {
+      "goal": "g-110",
+      "consumes": [
+        "deleteGoal 的删除+事件模式（deleteCard 复用）"
+      ]
+    }
+  ],
   "review": {
     "reviewer": "human",
     "prompt": null
@@ -33,6 +40,14 @@ v0.5 GUI 卡片管理（从 g-110 拆出，负责人 2026-08-22 拆分指示）�
 2. **GUI 卡片删除/归档按钮**：删除需二次确认且**要求输入卡片 id** 防误删（负责人 2026-08-22 明确）；
 3. **GUI 添加卡片入口 + 弹窗**：可填标题、选择 kind=text/file/image/data（现 add-card 仅按名字+固定 text）；
 4. **卡片 split 功能**（负责人 2026-08-22 补充）。
+
+## splitCard 细节待确认（负责人 2026-08-22 提到）
+
+卡片 split（拆分）功能细节需与负责人确认：
+- 拆分边界怎么指定（按段落/行/手动选择）？
+- 拆分后原卡状态（保留+标记 split？还是删除替换为两张新卡？）
+- 是否同时拆 context_cards 引用与收集子代理绑定？
+实现前先确认，避免返工。
 
 
 

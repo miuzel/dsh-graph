@@ -8,7 +8,14 @@
   "created_by": "supervisor:k3",
   "version": "v0.5",
   "scope": [],
-  "depends_on": [],
+  "depends_on": [
+    {
+      "goal": "g-109",
+      "consumes": [
+        "看板 UI 同区改造（目标卡片操作菜单）"
+      ]
+    }
+  ],
   "review": {
     "reviewer": "human",
     "prompt": null

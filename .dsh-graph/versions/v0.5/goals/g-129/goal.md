@@ -11,7 +11,14 @@
     "core",
     "dsh-graph-host"
   ],
-  "depends_on": [],
+  "depends_on": [
+    {
+      "goal": "g-109",
+      "consumes": [
+        "看板 UI 同区（新建目标按钮/弹窗）"
+      ]
+    }
+  ],
   "review": {
     "reviewer": "human",
     "prompt": null
@@ -21,7 +28,10 @@
     "sandbox": "directory"
   },
   "rules_snapshot": "r-2026-08-3",
-  "skill_refs": []
+  "skill_refs": [],
+  "context_cards": [
+    "card-cc069a44"
+  ]
 }
 ---
 

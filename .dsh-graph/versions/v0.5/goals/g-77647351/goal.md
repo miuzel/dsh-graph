@@ -18,7 +18,10 @@
     "sandbox": "directory"
   },
   "rules_snapshot": null,
-  "skill_refs": []
+  "skill_refs": [],
+  "context_cards": [
+    "card-f0ec7190"
+  ]
 }
 ---
 

@@ -899,3 +899,8 @@
 {"ts":"2026-08-22T16:36:47+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-130 已立项（goal.md 修改后格式检查）；v0.5 六目标齐备待派发"}}
 {"ts":"2026-08-22T16:37:23+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-130","details":{"note":"负责人 2026-08-22 方案转向：不做文件监听，改在 graph_amend_goal 工具内实现格式约束（剥离标题+append 规范化）。"}}
 {"ts":"2026-08-22T16:37:27+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-130","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T16:37:38+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-130 改为 amendGoal 工具内格式约束（剥离标题+规范化）；v0.5 六目标就绪"}}
+{"ts":"2026-08-22T16:39:22+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.created","goal":"g-129","details":{"card":"card-cc069a44","title":"调研：DSH web GUI 打开文件/编辑器机制（goal.md 链接打开方式）","kind":"text"}}
+{"ts":"2026-08-22T16:39:22+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.created","goal":"g-77647351","details":{"card":"card-f0ec7190","title":"调研：看板卡片拖放实现方案（HTML5 DnD / pointer 事件 / 现有组件）","kind":"text"}}
+{"ts":"2026-08-22T16:39:22+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.created","goal":"g-130","details":{"card":"card-ee78c929","title":"确认：append 剥离标题边界（剥离 vs 告警；纯标题 append 行为）","kind":"text"}}
+{"ts":"2026-08-22T16:39:26+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-128","details":{"note":"splitCard 细节待与负责人确认（边界/原卡状态/引用处理），实现前确认避免返工。"}}
