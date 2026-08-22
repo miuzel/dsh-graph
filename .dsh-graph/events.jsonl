@@ -795,3 +795,13 @@
 {"ts":"2026-08-22T12:19:43+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"收到版本泳道调整需求（0.4.x vs v0.3），等 g-125 完成后处理；先记录"}}
 {"ts":"2026-08-22T12:19:57+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.created","goal":"g-126","details":{"title":"看板版本泳道与包版本对齐（合并单包后已是 0.4.x，泳道仍叫 v0.3）","version":null}}
 {"ts":"2026-08-22T12:20:02+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-126","details":{"note":"负责人 2026-08-22 指示：合并单包后版本已是 0.4.x 但看板泳道还是 v0.3，需适当调整；等当前任务（g-125）完成后处理。"}}
+{"ts":"2026-08-22T12:27:47+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-125 代码已合并（afd2159），停在 review 等负责人 verdict；之后处理 g-126"}}
+{"ts":"2026-08-22T12:29:20+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-125","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-22T12:29:34+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-125 状态已恢复 review（cherry-pick 误重置已修复+教训沉淀）；等负责人 verdict"}}
+{"ts":"2026-08-22T12:40:21+08:00","actor":"agent:94152bab-be98-42b4-bf95-69fee4d44602","event":"attempt.status_reported","goal":"g-125","details":{"attempt":"att-001","status":"按反馈改：三角按钮置标题左侧，折叠态去 status_line"}}
+{"ts":"2026-08-22T12:42:51+08:00","actor":"agent:94152bab-be98-42b4-bf95-69fee4d44602","event":"attempt.status_reported","goal":"g-125","details":{"attempt":"att-001","status":"fb1 完成：三角置标题左侧，折叠态去 status_line，等复核"}}
+{"ts":"2026-08-22T12:43:28+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-125 fb1 已合并（6576496），停在 review 等负责人 verdict；之后处理 g-126"}}
+{"ts":"2026-08-22T12:44:35+08:00","actor":"agent:94152bab-be98-42b4-bf95-69fee4d44602","event":"attempt.status_reported","goal":"g-125","details":{"attempt":"att-001","status":"fb2 完成：提示词去 g-125 编号，等复核"}}
+{"ts":"2026-08-22T12:44:37+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"细化 worktree 约定：简单改动可直接 main，子代理自决；同步 guide+spawn 提示词"}}
+{"ts":"2026-08-22T12:45:28+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"worktree 约定已细化；g-125 fb1+fb2 已合并，停在 review 等负责人 verdict"}}
+{"ts":"2026-08-22T12:47:36+08:00","actor":"agent:94152bab-be98-42b4-bf95-69fee4d44602","event":"attempt.status_reported","goal":"g-125","details":{"attempt":"att-001","status":"fb3 完成：三角按钮暗底纹窄宽度，等复核"}}
