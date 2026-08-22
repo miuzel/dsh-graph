@@ -199,12 +199,9 @@ PR 合并后，dsh-market / DshMarketPlace / DSH Get 三家自动带出（同源
 - [x] **发布版本号：0.4.0**（2026-08-22 10:24 已发，g-116 单包合并版；**不含 g-117 工具**）
 - [x] git user/remote 配置、代码 commit 全量入库（81 commits 已推 origin/main）
 - [x] 建公开 repo miuzel/dsh-graph（2026-08-21 17:56Z）+ dsh-plugin topic
-- [ ] **npm 发布 0.4.1**（含 g-117 graph_handoff/graph_claim_supervisor；0.4.0 保留）——由负责人执行：
-      `cd dsh-graph-host && pnpm publish --registry=https://registry.npmjs.org --no-git-checks --otp=<码>`
-      发布后核验 `curl -s https://registry.npmjs.org/dsh-graph | ...` 0.4.1 的 index.js 含 graph_handoff
-- [ ] **撤 0.3.2 两旧包**（72h 窗口内，负责人执行）：
-      `npm unpublish dsh-graph-host@0.3.2 --registry=https://registry.npmjs.org --otp=<码>`
-      `npm unpublish dsh-graph-client@0.3.2 --registry=https://registry.npmjs.org --otp=<码>`
-- [ ] 本地全新 profile `dsh plugin add` 验收通过（0.4.1 发布后）
+- [ ] **npm 发布 0.5.1**（v0.5 特性集：拖放 g-77647351 / 建目标 g-129 / append 规范 g-130 / 主管提醒 g-131 / backlog 平铺 g-137 / 重命名 g-141 / 归档 g-110 / 删除 g-140 / 阻塞折叠 g-127 + g-117 交接工具；0.3.2 弃用不动）——由负责人执行：
+      `cd dsh-graph-host && pnpm publish --registry=https://registry.npmjs.org --no-git-checks`（2FA 设备验证；若 token 失效先 `npm login`）
+      发布后核验 `curl -s https://registry.npmjs.org/dsh-graph | grep '"version"'` 为 0.5.1，`.../index.js` 含 graph_archive_goal/delete_goal/rename_goal
+- [ ] 本地全新 profile `dsh plugin add` 验收通过（0.5.1 发布后）
 - [ ] **PR awesome-dsh-plugin**：分支 `miuzel/awesome-dsh-plugin:add-dsh-graph` 已备好（YAML + 双 README 再生成 1838 条，diff 仅 +1 行/README）；
       仓库满 1 天（约 2026-08-23 01:57 +08:00，CI 自动检查）后 `gh pr create --repo awesome-dsh-plugin/awesome-dsh-plugin --fill` → 合并 → 三家商店带出
