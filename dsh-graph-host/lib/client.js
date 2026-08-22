@@ -1717,7 +1717,14 @@ window.__ModuleLoader__.load({
         ...b.standalone,
         ...b.backlog,
       ];
-      const lane = (label, goals, key) => {
+      // g-129: 打开新建目标弹窗，预选版本
+      const openCreateGoal = (version) => {
+        setNewGoalVersion(version || "");
+        setShowCreateGoal(true);
+        setCreateNote(null);
+      };
+
+      const lane = (label, goals, key, version) => {
         const cells = STAGES.map((s) =>
           h("div", { key: s.key, style: S.cell },
             goals.filter((g) => stageOf(g.status) === s.key).map((g) => {
@@ -1731,13 +1738,24 @@ window.__ModuleLoader__.load({
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })));
             })),
         );
-        return [h("div", { key: key + "-label", style: S.laneLabel }, label), ...cells];
+        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative" } },
+          label,
+          // g-129: 版本 lane 标题下方加「+」按钮，点击自动预选该版本
+          version
+            ? h("button", {
+                style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+                className: "dg-btn",
+                title: `在 ${version} 新建目标`,
+                onClick: () => openCreateGoal(version),
+              }, "＋")
+            : null);
+        return [labelEl, ...cells];
       };
 
       const rows = [];
-      for (const v of active) rows.push(...lane(`🏷 ${v.name}`, v.goals, "v-" + v.slug));
-      rows.push(...lane("独立目标", b.standalone, "standalone"));
-      rows.push(...lane("backlog", b.backlog, "backlog"));
+      for (const v of active) rows.push(...lane(`🏷 ${v.name}`, v.goals, "v-" + v.slug, v.slug));
+      rows.push(...lane("独立目标", b.standalone, "standalone", null));
+      rows.push(...lane("backlog", b.backlog, "backlog", null));
 
       const releasedRows = released.map((v) => {
         const open = !!openReleased[v.slug];
