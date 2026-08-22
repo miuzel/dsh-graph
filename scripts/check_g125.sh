@@ -35,6 +35,13 @@ grep -q "background: rgba(128,128,128,.18);" "$C" || { echo "FAIL: .dg-chevron �
 grep -q "min-width: 16px;" "$C" || { echo "FAIL: .dg-chevron 缺窄宽度约束（min-width: 16px）"; exit 1; }
 awk '/const chevron = h\("button"/,/^      }, collapsed \? "▸" : "▾"\);$/' "$C" | grep -q "S.btn" \
   && { echo "FAIL: chevron 仍复用 S.btn（默认按钮背景→播放按钮观感）"; exit 1; }
+# fb4（负责人反馈）：按钮与标题 inline 同行（非 flex 列）——标题换行第二行从行首开始，不被按钮占宽
+awk '/const titleRow = h\("div"/,/titleRow,/' "$C" | grep -q "lineHeight: 1.5" \
+  || { echo "FAIL: titleRow 缺 lineHeight（inline 布局）"; exit 1; }
+awk '/const titleRow = h\("div"/,/titleRow,/' "$C" | grep -q "display: \"inline\"" \
+  || { echo "FAIL: 标题未用 inline（标题换行会被按钮占宽）"; exit 1; }
+awk '/const titleRow = h\("div"/,/titleRow,/' "$C" | grep -q "display: \"flex\"" \
+  && { echo "FAIL: titleRow 仍用 flex 列布局（标题换行被按钮占宽）"; exit 1; }
 # 折叠态分支只渲染核心（标题+状态一行），不渲染 status_line/deps/livestrip/执行按钮/上下文卡片
 awk '/if \(collapsed\) \{/,/^      }$/' "$C" | grep -q "titleRow" \
   || { echo "FAIL: 折叠态缺标题行"; exit 1; }

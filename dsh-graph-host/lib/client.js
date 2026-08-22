@@ -818,17 +818,16 @@ window.__ModuleLoader__.load({
       const reusedBy = g.reused_by ?? null;
       // g-125：标题左侧小三角（▸ 折叠 / ▾ 展开），所有卡片统一；点击卡片其余区域打开详情
       // fb3：独立 .dg-chevron 样式——暗底纹、窄宽度（不用 S.btn/dg-btn，避免播放按钮观感）
+      // fb4：按钮与标题 inline 同行（非 flex 列）——标题换行时第二行从行首开始，不被按钮占去宽度
       const chevron = h("button", {
-        style: { marginRight: 4 },
+        style: { marginRight: 4, verticalAlign: "middle", display: "inline-block" },
         className: "dg-chevron",
         title: collapsed ? "展开查看依赖/实时会话/上下文卡片等完整信息" : "收起为精简视图",
         onClick: (e) => { e.stopPropagation(); onToggleExpand(g.id); },
       }, collapsed ? "▸" : "▾");
-      const titleRow = h("div", { style: { display: "flex", alignItems: "flex-start" } },
+      const titleRow = h("div", { style: { lineHeight: 1.5 } },
         chevron,
-        h("div", {
-          style: { ...S.title, flex: 1, minWidth: 0, ...(collapsed ? { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" } : {}) },
-        }, `🎯 ${g.title}`));
+        h("span", { style: { ...S.title, display: "inline", verticalAlign: "middle" } }, `🎯 ${g.title}`));
       if (collapsed) {
         // g-125 折叠态：仅核心——标题（≤2 行）+ 状态一行；不显示状态摘要、依赖、livestrip、执行按钮、上下文卡片
         return h(
