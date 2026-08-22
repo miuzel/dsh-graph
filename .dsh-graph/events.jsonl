@@ -889,3 +889,6 @@
 {"ts":"2026-08-22T16:33:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-110","details":{"criteria_count":3,"rules_snapshot":"r-2026-08-3"}}
 {"ts":"2026-08-22T16:33:04+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-128","details":{"criteria_count":6,"rules_snapshot":"r-2026-08-3"}}
 {"ts":"2026-08-22T16:33:07+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-129","details":{"criteria_count":5,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T16:33:18+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-110 已拆分为 g-110（目标操作）/g-128（卡片管理+split）/g-129（建目标+文件链接）；v0.5 共 5 目标"}}
+{"ts":"2026-08-22T16:35:09+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-128","details":{"note":"修复目标描述重复空节（GOAL_BODY 模板无占位后 amend 仍带标题导致双节，看板取空节不显示）——负责人 2026-08-22 指出。"}}
+{"ts":"2026-08-22T16:35:09+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-129","details":{"note":"修复目标描述重复空节（同 g-128）——负责人 2026-08-22 指出。"}}

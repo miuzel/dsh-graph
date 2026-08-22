@@ -27,9 +27,6 @@
 
 ## 目标描述
 
-
-## 目标描述
-
 v0.5 GUI 建目标 + 文件链接（从 g-110 拆出，负责人 2026-08-22 拆分指示）：
 
 1. **GUI 直接创建目标（goal）**：host 新增 `/api/dsh-graph/create-goal` 端点（POST title/version/scope，调 core createGoal，事件先行 goal.created）+ 看板主界面「新建目标」按钮/弹窗——现建 goal 只能跟主管聊天（graph_create_goal 工具无 GUI/端点）；
