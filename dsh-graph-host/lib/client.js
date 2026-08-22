@@ -2344,7 +2344,9 @@ window.__ModuleLoader__.load({
             onDrop: anyDrag ? (e) => {
               e.preventDefault();
               if (!orderedGoals.length) {
-                commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
+                // g-137：backlog 卡拖到版本 lane 时，落点固定为 "describe"（其它列放手也落描述列）
+                const effectiveStageKey = (isFromBacklog && isOverThisLane) ? "describe" : s.key;
+                commitGoalDrag({ ...drag, overGoalId: null, overStageKey: effectiveStageKey, overLaneKey: key, overHalf: "after" }, null);
               }
             } : undefined,
           },
