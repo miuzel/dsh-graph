@@ -934,3 +934,26 @@
 {"ts":"2026-08-22T16:54:14+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"card.reviewed","goal":"g-129","details":{"card":"card-cc069a44","by":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"}}
 {"ts":"2026-08-22T16:54:25+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"v0.5 三调研完成；待负责人定 4 个决策点后按依赖派发执行"}}
 {"ts":"2026-08-22T16:55:49+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.amended","goal":"g-130","details":{"note":"负责人 2026-08-22 定案：①正文中 h2 降级为 h3（不报错）；②### 开头保留不剥离；③validate() 增加「目标描述小节重复」不变式。全部采纳调研推荐。"}}
+{"ts":"2026-08-22T16:56:00+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-130","details":{"from":"collecting","to":"ready"}}
+{"ts":"2026-08-22T16:56:03+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-130","details":{"from":"ready","to":"in_progress"}}
+{"ts":"2026-08-22T16:56:06+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"attempt.started","goal":"g-130","details":{"attempt":"att-001","executor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","injected_cards":["card-ee78c929"]}}
+{"ts":"2026-08-22T16:56:06+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"attempt.bound","goal":"g-130","details":{"attempt":"att-001","child_id":"ece1c1fa-2fe7-4ae3-97e4-3ef98043085c"}}
+{"ts":"2026-08-22T16:56:10+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-130 执行中（ece1c1fa，mimo 模型生效，注入 append 规格卡）；后续 g-110→g-128→g-129"}}
+{"ts":"2026-08-22T16:56:11+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"开工：读取目标文件，评估现状"}}
+{"ts":"2026-08-22T16:56:55+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"正在实现 normalizeAppend 纯函数"}}
+{"ts":"2026-08-22T16:57:31+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"正在编写 normalizeAppend 测试"}}
+{"ts":"2026-08-22T16:58:06+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"正在运行 sync-core.sh"}}
+{"ts":"2026-08-22T16:58:20+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"正在运行测试"}}
+{"ts":"2026-08-22T16:59:26+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"正在运行全量测试"}}
+{"ts":"2026-08-22T16:59:38+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"正在运行 graph_validate"}}
+{"ts":"2026-08-22T17:00:19+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"本轮完成/空闲待命"}}
+{"ts":"2026-08-22T17:00:19+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"goal.transition","goal":"g-130","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-22T17:01:01+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"goal.transition","goal":"g-130","details":{"from":"review","to":"in_progress","reason":"复核发现 validate 重复小节不变式缺失（负责人决策点 3），子代理补修中——review→in_progress 放回执行 lane（指南：收到反馈重新改动立即回执行）。"}}
+{"ts":"2026-08-22T17:01:03+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-130 复核发现 validate 不变式缺失，已打回 in_progress 补修（ece1c1fa）"}}
+{"ts":"2026-08-22T17:01:27+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"本轮完成/空闲待命"}}
+{"ts":"2026-08-22T17:01:40+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"正在补充 validate 重复小节检查"}}
+{"ts":"2026-08-22T17:01:43+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"criteria.confirmed","goal":"g-130","details":{"criteria_count":6,"rules_snapshot":"r-2026-08-3"}}
+{"ts":"2026-08-22T17:01:51+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-130 二次打回：validate 不变式仍未实现（判据已写死第 6 条），子代理补修中；误建包目录已清"}}
+{"ts":"2026-08-22T17:02:31+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"本轮完成/空闲待命"}}
+{"ts":"2026-08-22T17:02:31+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"goal.transition","goal":"g-130","details":{"from":"in_progress","to":"review"}}
+{"ts":"2026-08-22T17:02:55+08:00","actor":"agent:ece1c1fa-2fe7-4ae3-97e4-3ef98043085c","event":"attempt.status_reported","goal":"g-130","details":{"attempt":"att-001","status":"重新检查 validate 实现"}}

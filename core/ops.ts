@@ -605,8 +605,8 @@ export function validate(root: string): string[] {
     ) {
       problems.push(`${id}: ${meta.status} 状态但质量判据为空`);
     }
-    // 目标描述小节重复检查
-    const descMatches = doc.body.match(/## 目标描述/g);
+    // 目标描述小节重复检查（g-130）：行首锚定的独立小节标题，正文内引用不计
+    const descMatches = doc.body.match(/^## 目标描述$/gm);
     if (descMatches && descMatches.length > 1) {
       problems.push(`${id}: 目标描述小节重复`);
     }

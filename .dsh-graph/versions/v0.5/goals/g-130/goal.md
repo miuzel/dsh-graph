@@ -2,7 +2,7 @@
 {
   "id": "g-130",
   "title": "goal.md 格式约束：graph_amend_goal 工具内剥离标题 + append 规范化（防重复小节）",
-  "status": "collecting",
+  "status": "review",
   "blocked_reason": null,
   "created_at": "2026-08-22T16:36:30+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",
@@ -51,6 +51,7 @@ v0.5（负责人 2026-08-22 提出，方案转向后）：**goal.md 格式约束
 3. 用户手改 goal.md 的格式问题仍由 graph_validate 兜底（g-129 文件链接配套说明）
 4. 单测覆盖：append 带头标题被剥离、正常正文不受影响、重复小节不产生；全量测试与冻结脚本 PASS
 5. graph_validate 无问题
+6. validate() 新增「目标描述小节重复」不变式：body 中 ## 目标描述 出现 >1 次 → problems.push(id: 目标描述小节重复)（只报告不改文件，负责人决策点 3）
 
 ## 证据台账
 
