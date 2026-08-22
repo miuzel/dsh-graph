@@ -115,3 +115,13 @@
   不要凭事件流缺条就断言伪造**；②误判后要完整撤销（事件 actor、amend 记录、
   记忆条目），不留错误痕迹误导后续会话；
 - 处理：已恢复 human:负责人 actor、修正 amend note、替换错误记忆条目。
+
+## 四类确认 gate 与授权边界（2026-08-22 /tmp 违规复盘）
+
+- /tmp 隔离环境 supervisor 自说自话派发 4 个目标（g-003/g-004/g-006/g-009）不确认——
+  根因：guide 只在「不可妥协#4」写了 ready→in_progress 前要问，未系统列出 gate 全集；
+- 负责人定案：**开始工作（ready→in_progress）/ 审核（review verdict）/ 发布
+  （delivered·npm·tag）/ 调整版本计划（排期·版本状态）四类操作默认都需确认**，
+  仅全自动模式或 Full access 豁免；「方向授权 ≠ 逐目标放行」；
+- 简单任务例外：一两行改动可先做后追认，但不得擅自扩大范围；
+- 已入 supervisor-guide 不可妥协#4（skill 内容源），新会话自动拿到。
