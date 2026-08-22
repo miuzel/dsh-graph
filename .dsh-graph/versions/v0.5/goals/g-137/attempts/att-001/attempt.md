@@ -6,7 +6,7 @@
   "sandbox": "directory",
   "started_at": "2026-08-23T00:02:30+08:00",
   "claimed_at": null,
-  "status_line": "已完成 UI 改进：卡片对齐、背景色、边框",
+  "status_line": "已完成 UI 改进并提交",
   "result": "pending",
   "child_id": "5f85324d-ee9c-4200-a3cd-0ab6db51e154",
   "parent_session_id": "session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36"

@@ -2306,7 +2306,8 @@ window.__ModuleLoader__.load({
         setCreateNote(null);
       };
       // g-77647351：泳道渲染（带拖放支持，跨 lane 拖放改归属）；g-129 版本 lane 标题「＋」预选版本
-      const lane = (label, goals, key, version) => {
+      // g-137：laneIndex 用于交替背景色
+      const lane = (label, goals, key, version, laneIndex = 0) => {
         const cells = STAGES.map((s) => {
           const cellGoals = goals.filter((g) => stageOf(g.status) === s.key);
           // 排序对账
@@ -2324,9 +2325,11 @@ window.__ModuleLoader__.load({
             (isFromBacklog && isOverThisLane && s.key === "describe") || // backlog→版本：只高亮描述列
             (!isFromBacklog && drag.overStageKey === s.key && drag.overLaneKey === key) // 其他情况：正常高亮
           );
+          // g-137：交替背景色
+          const laneBg = laneIndex % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.08)";
           return h("div", {
             key: s.key,
-            style: S.cell,
+            style: { ...S.cell, background: laneBg },
             className: isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? "dg-cell-drop-active" : "",
             onDragOver: anyDrag ? (e) => {
               e.preventDefault();
@@ -2394,7 +2397,9 @@ window.__ModuleLoader__.load({
             }),
           );
         });
-        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative" } },
+        // g-137：labelEl 交替背景色
+        const labelBg = laneIndex % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.08)";
+        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative", background: labelBg } },
           label,
           // g-129: 每个 lane 标题右下角加「+」按钮（版本 lane 预选版本，独立/backlog 进 backlog）
           h("button", {
@@ -2484,11 +2489,16 @@ window.__ModuleLoader__.load({
       };
 
       const rows = [];
-      for (const v of active) rows.push(...lane(`🏷 ${v.name}`, v.goals, "v-" + v.slug, v.slug));
-      rows.push(...lane("独立目标", b.standalone, "standalone", null));
+      let laneIndex = 0;
+      for (const v of active) {
+        rows.push(...lane(`🏷 ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
+        laneIndex++;
+      }
+      rows.push(...lane("独立目标", b.standalone, "standalone", null, laneIndex));
+      laneIndex++;
       rows.push(...backlogRow("backlog", b.backlog, "backlog"));
 
-      const releasedRows = released.map((v) => {
+      const releasedRows = released.map((v, idx) => {
         const open = !!openReleased[v.slug];
         return [
           h("div", {
@@ -2496,7 +2506,7 @@ window.__ModuleLoader__.load({
             onClick: () => setOpenReleased({ ...openReleased, [v.slug]: !open }),
           }, `${open ? "▾" : "▸"} ${v.name} ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`),
           open ? h("div", { key: "relx-" + v.slug, style: S.grid },
-            ...lane(v.name, v.goals, "rellane-" + v.slug)) : null,
+            ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx)) : null,
         ];
       });
 
