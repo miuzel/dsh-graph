@@ -1815,6 +1815,7 @@ window.__ModuleLoader__.load({
           if (data.ok) {
             setArchiveNote("✅ 已归档");
             showToast("✅ 目标已归档");
+            props.onArchived?.(); // 刷新看板：归档后卡片立即消失
             // 刷新详情
             const goalRes = await fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }));
             const goalData = await goalRes.json();
@@ -1838,6 +1839,7 @@ window.__ModuleLoader__.load({
           if (data.ok) {
             setArchiveNote("✅ 已取消归档");
             showToast("✅ 已取消归档");
+            props.onArchived?.(); // 刷新看板：取消归档后卡片回到看板
             // 刷新详情
             const goalRes = await fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }));
             const goalData = await goalRes.json();
@@ -2712,7 +2714,7 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load() })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load() })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
