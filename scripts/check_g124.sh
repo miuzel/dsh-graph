@@ -2,7 +2,8 @@
 # g-124 验收脚本 —— 状态行改进：tooltip 显示状态延续时间 + supervisor/子代理结束工作前更新 status。
 # 执行方（att-001）编写；如需变更走判据变更流程（R-03）。
 # 验证点：
-#   1. client.js staleStatus 分支显示状态延续时长（statusAt 距今），不再显示「🔄 等待最新状态…」；
+#   1. client.js staleStatus 分支：行内显示 status_line 全文，tooltip 补延续时长（statusAt 距今），
+#      不再显示「🔄 等待最新状态…」占位、不只剩延续时长（g-124 判据反馈 2026-08-22）；
 #   2. supervisor-guide.md 含「结束工作前更新 status 为完成态（空闲待命）」规范；
 #   3. host/index.js 两处 spawn 提示词（graph_start_attempt 工具 + start-execution 端点）
 #      均含「结束工作前更新 status」指令（≥2 处）；
@@ -16,8 +17,9 @@ H=dsh-graph-host/index.js
 echo "== 0. 语法 =="
 node --check "$C"
 
-echo "== 1. client staleStatus 分支显示状态延续时长，不再显示等待占位 =="
-grep -q "状态延续" "$C" || { echo "FAIL: client.js 缺延续时长显示（状态延续）"; exit 1; }
+echo "== 1. client staleStatus 分支：行内显示 status_line 全文，tooltip 补延续时长，无等待占位 =="
+grep -q '"⏳ " + props.statusLine' "$C" || { echo "FAIL: stale 分支行内未显示 status_line 全文（⏳ + statusLine）"; exit 1; }
+grep -q "状态已延续" "$C" || { echo "FAIL: tooltip 缺状态延续时长（状态已延续）"; exit 1; }
 ! grep -q "等待最新状态" "$C" || { echo "FAIL: client.js 仍残留「🔄 等待最新状态…」占位"; exit 1; }
 grep -q "fmtElapsed" "$C" || { echo "FAIL: client.js 缺延续时长格式化函数 fmtElapsed"; exit 1; }
 

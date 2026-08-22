@@ -405,11 +405,14 @@ window.__ModuleLoader__.load({
             meter || "投影待推送")),
         // g-a92e1406：status_line 摘要并入状态小窗——运行中前缀 ⏳ 走 StatusLine 带动画
         //（流动背景 + 图标 pulse），空闲（刚执行完）前缀 ✅ 保持静态；⛔ 阻塞行由调用方静态渲染。
-        // 过期清空：新一轮已开始但 status 仍是旧轮时间戳 → 显示状态延续时长而非误导性旧状态
-        //（g-124：去等待占位，改为 statusAt 距今时长，行内 + tooltip）。
+        // 过期清空：新一轮已开始但 status 仍是旧轮时间戳 → 行内仍显示 status_line 全文
+        //（不能只显示「状态延续 X」= 等于没显示状态），tooltip 补延续时长（g-124 判据反馈）。
         staleStatus
-          ? h("div", { style: S.liveLine, title: "新一轮已开始，当前状态已延续 " + staleDur + "（等待状态更新）" },
-              "⏳ 状态延续 " + staleDur)
+          ? (props.statusLine
+              ? h("div", { style: S.liveLine, title: props.statusLine + "（状态已延续 " + staleDur + "）" },
+                  "⏳ " + props.statusLine)
+              : h("div", { style: S.liveLine, title: "新一轮已开始，状态已延续 " + staleDur },
+                  "⏳ 状态延续 " + staleDur))
           : props.statusLine
               ? (running
                   ? h(StatusLine, { text: props.statusLine, blocked: false, running: true })
