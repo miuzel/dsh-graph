@@ -1025,3 +1025,4 @@
 {"ts":"2026-08-22T18:18:28+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"收到新需求：上下文卡片可复用（跨目标复制/移动）+ 全局卡片管理 tab；并入 g-128 规划"}}
 {"ts":"2026-08-22T18:18:33+08:00","actor":"agent:455ce1e8-3866-45e8-a393-ac50fceba198","event":"goal.transition","goal":"g-77647351","details":{"from":"in_progress","to":"review"}}
 {"ts":"2026-08-22T18:18:38+08:00","actor":"agent:455ce1e8-3866-45e8-a393-ac50fceba198","event":"attempt.status_reported","goal":"g-77647351","details":{"attempt":"att-001","status":"跨 lane 拖放修复完成，等待 review"}}
+{"ts":"2026-08-22T18:18:57+08:00","actor":"agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36","event":"supervisor.status_reported","details":{"status":"g-77647351 跨 version 拖放已修复（be7a98f）；待负责人重启实测 + verdict"}}

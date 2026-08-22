@@ -908,13 +908,15 @@ window.__ModuleLoader__.load({
       } : {};
       const dropProps = drag ? {
         onDragOver: (e) => {
-          if (!drag.active) return;
+          // 修复（负责人 2026-08-22）：拖过任意卡片（非源）都应响应并显示 marker 占位——
+          // 原守卫 !drag.active 只对源卡片 true，导致目标位置不为空时无 drop 指示。
+          if (drag.goalId === g.id) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = "move";
           drag.hover(rowHalf(e));
         },
         onDrop: (e) => {
-          if (!drag.active) return;
+          if (drag.goalId === g.id) return;
           e.preventDefault();
           drag.drop(rowHalf(e));
         },
