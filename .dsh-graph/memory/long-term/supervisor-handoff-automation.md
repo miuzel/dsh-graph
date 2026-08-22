@@ -24,3 +24,10 @@
 
 - 判据「actor=当前会话」在事件里体现为 actor 字段；事件 details.supervisor_session
   才是会话 id 本体。
+
+## 复核补充（g-117 负责人复核 2026-08-22）
+
+- 改 host 插件代码后**必须重启 dsh web 服务**，新 graph_* 工具才在会话中可见：
+  profile link 本地工作树 ≠ 运行中进程持新代码（内存快照）。复核时新会话列工具
+  只有 14 个（缺 graph_claim_supervisor），重启后 16 个齐全。环境事实已入
+  supervisor-guide.md。

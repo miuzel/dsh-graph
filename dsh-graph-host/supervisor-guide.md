@@ -164,6 +164,11 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
 - **子代理 spawn 两个 provider 概念别混**：subagent provider（spawn/fork，选带
   prepareContinuable 能力的）≠ LLM provider（agentOptions，用户可选）；找不到
   subagent provider 时明确报错列已注册名，绝不回退字面量 "spawn"。
+- **改 host 插件代码后必须重启 dsh web 服务才生效**：运行中的服务进程持有
+  启动时加载的插件内存快照，profile 即使 link 到本地工作树，新注册的 graph_*
+  工具/端点在新会话里也看不到（g-117 复核：新会话列工具只有 14 个、缺
+  graph_claim_supervisor，重启后 16 个齐全）。验证工具可见性前先确认服务
+  重启过。
 
 ## 工具速查
 

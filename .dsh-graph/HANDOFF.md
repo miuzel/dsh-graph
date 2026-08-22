@@ -1,6 +1,6 @@
 # HANDOFF（换会话交接）
 
-> 由 graph_handoff 自动生成于 2026-08-22T10:48:15+08:00（g-117）。图根：`/home/miuzel/workspace/personal/dsh-graph/.dsh-graph`。
+> 由 graph_handoff 自动生成于 2026-08-22T11:17:25+08:00（g-117）。图根：`/home/miuzel/workspace/personal/dsh-graph/.dsh-graph`。
 > 你的职责指南：dsh-graph-host/supervisor-guide.md（注册为 skill `dsh-graph-supervisor`）。
 
 ## 目标看板
@@ -19,11 +19,13 @@
 
 - **g-108（看板顶部 supervisor 会话状态栏：复用实时控件+一键跳转主管对话）**：`delivered`（追加：status_line 摘要并入状态小窗（LiveStrip），图标随子代理状态——运行中 ⏳ / 空闲 ✅ 最近已完成；全脚本 PASS）
 - **g-109（看板可写交互：目标描述编辑与人工反馈、上下文卡片添加、抽屉收集提示词可编辑）**：`delivered`（提示词加泳道迁移指令，38/38全绿）
-- **g-111（v0.3 对外发布与插件商店上架）**：`review`（B8修复完成0.3.1，真实安装验收过）
+- **g-111（v0.3 对外发布与插件商店上架）**：`blocked` —— 负责人 2026-08-22 指示暂搁置：awesome-dsh-plugin PR 需仓库满 1 天（约 8/23 01:57 +08:00 后开），且 0.4.1 发布待负责人自执行（OTP）。条件满足后解除。（B8修复完成0.3.1，真实安装验收过）
 - **g-112（root 通用化：数据目录解析与初始化（去除 client 硬编码绝对路径））**：`delivered`（已交付：review→delivered 落定）
 - **g-113（dsh-graph 新项目开箱即用：root 跟随会话 workspace + 使用指引注入）**：`delivered`（workspaces 数据源已修，待负责人刷 DEBUG 验证）
-- **g-116（合并单包：dsh-graph-client 并入 dsh-graph-host）**：`review`（✅ 包名改 dsh-graph 完成，等规划方修订 kanban 断言）
+- **g-116（合并单包：dsh-graph-client 并入 dsh-graph-host）**：`delivered`（✅ 包名改 dsh-graph 完成，等规划方修订 kanban 断言）
 - **g-117（supervisor 会话交接：一键 handoff + 自动更新主管会话 id）**：`review`
+- **g-118（supervisor 守则自动注入：新 supervisor 会话无需显式调用 skill 即拿到工作守则）**：`ready`
+- **g-119（收集卡绑定工具 graph_bind_collect_card + supervisor skill 绑定约束）**：`ready`
 - **g-a92e1406（状态摘要运行动画与履历：流动背景+图标动画、modal 显示、近期动态收录汇报）**：`delivered`（判据 3① 二次扩展（supervisor 状态栏）实现完成：新增 supervisor.status_reported 事件（R-02 事件流唯一真相源）+ reportSupervisorStatus/readSupervisorStatus（读最新一条）+ host 工具 graph_report_supervisor_status + boardPayload 下发 supervisorStatus + SupervisorBar 传 statusLine 复用 LiveStrip 动画。core 23/23、冻结脚本断言内容 6/6 恒真、事件流测试数据已清理。另发现冻结脚本 awk|grep -q+pipefail 存在 SIGPIPE 竞态（间歇 FAIL 非逻辑回归），已上报。）
 - **g-102（Kanban 二维泳道看板（client-plugin））**：`delivered`
 - **g-107（卡片会话内嵌：实时状态与看板直达指令）**：`delivered`（六轮修复：模型查询被拒根因定位（subagent 围栏）并退化父会话；折叠态内联状态/token/模型；全绿待复测）（被复用→g-108）
@@ -44,9 +46,9 @@
 
 ## 进行中（下一步就干）
 
-- **g-111（v0.3 对外发布与插件商店上架）**：`review`（B8修复完成0.3.1，真实安装验收过）
-- **g-116（合并单包：dsh-graph-client 并入 dsh-graph-host）**：`review`（✅ 包名改 dsh-graph 完成，等规划方修订 kanban 断言）
 - **g-117（supervisor 会话交接：一键 handoff + 自动更新主管会话 id）**：`review`
+- **g-118（supervisor 守则自动注入：新 supervisor 会话无需显式调用 skill 即拿到工作守则）**：`ready`
+- **g-119（收集卡绑定工具 graph_bind_collect_card + supervisor skill 绑定约束）**：`ready`
 - **g-115（测试目标卡片流程）**：`draft`
 - **g-106（收集项任务化：卡片绑定收集子代理）**：`draft`
 - **g-105（记忆提炼与技能沉淀机制）**：`draft`
@@ -66,9 +68,14 @@
 - **g-109**：看板可写交互：目标描述编辑与人工反馈、上下文卡片添加、抽屉收集提示词可编辑
 - **g-112**：root 通用化：数据目录解析与初始化（去除 client 硬编码绝对路径）
 - **g-113**：dsh-graph 新项目开箱即用：root 跟随会话 workspace + 使用指引注入
+- **g-116**：合并单包：dsh-graph-client 并入 dsh-graph-host
 - **g-a92e1406**：状态摘要运行动画与履历：流动背景+图标动画、modal 显示、近期动态收录汇报
 - **g-102**：Kanban 二维泳道看板（client-plugin）
 - **g-107**：卡片会话内嵌：实时状态与看板直达指令
+
+## 阻塞
+
+- **g-111（v0.3 对外发布与插件商店上架）**：`blocked` —— 负责人 2026-08-22 指示暂搁置：awesome-dsh-plugin PR 需仓库满 1 天（约 8/23 01:57 +08:00 后开），且 0.4.1 发布待负责人自执行（OTP）。条件满足后解除。（B8修复完成0.3.1，真实安装验收过）
 
 ## 关键环境事实（固定段）
 
