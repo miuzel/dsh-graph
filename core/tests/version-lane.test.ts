@@ -2,10 +2,10 @@
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, renameSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, renameSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { init, createGoal, boardProjection, moveGoal } from "../ops.ts";
+import { init, createGoal, boardProjection, moveGoal, rebuild } from "../ops.ts";
 import { createVersion, renameVersion, deleteVersion } from "../ops.ts";
 import { readEvents } from "../events.ts";
 
@@ -230,5 +230,195 @@ describe("版本泳道管理集成", () => {
     const events3 = readEvents(root);
     const lastEvent3 = events3[events3.length - 1];
     assert.equal(lastEvent3.event, "version.deleted");
+  });
+
+  it("事件元数据：version.created 包含完整元数据用于 rebuild/replay", () => {
+    createVersion(root, { slug: "v0.7", name: "版本 0.7", actor: "test" });
+    const events = readEvents(root);
+    const created = events.find((e) => e.event === "version.created");
+    assert.ok(created, "应记录 version.created 事件");
+    // 验证事件包含完整元数据
+    assert.equal(created.details.version, "v0.7");
+    assert.equal(created.details.name, "版本 0.7");
+    assert.ok(created.details.version_id, "应包含 version_id");
+    assert.equal(created.details.status, "planning");
+    assert.ok(created.details.created_at, "应包含 created_at");
+    assert.equal(created.details.implicit, false);
+  });
+
+  it("事件元数据：version.renamed 包含完整元数据用于 rebuild/replay", () => {
+    createVersion(root, { slug: "v0.7", name: "版本 0.7", actor: "test" });
+    renameVersion(root, { slug: "v0.7", newSlug: "v0.8", newName: "版本 0.8", actor: "test" });
+    const events = readEvents(root);
+    const renamed = events.find((e) => e.event === "version.renamed");
+    assert.ok(renamed, "应记录 version.renamed 事件");
+    // 验证事件包含完整元数据
+    assert.equal(renamed.details.old_slug, "v0.7");
+    assert.equal(renamed.details.new_slug, "v0.8");
+    assert.equal(renamed.details.old_name, "版本 0.7");
+    assert.equal(renamed.details.new_name, "版本 0.8");
+    assert.ok(renamed.details.version_id, "应包含 version_id");
+    assert.ok(renamed.details.old_status, "应包含 old_status");
+    assert.ok(renamed.details.new_status, "应包含 new_status");
+  });
+
+  it("事件元数据：version.deleted 包含完整元数据用于 rebuild/replay", () => {
+    createVersion(root, { slug: "v0.7", actor: "test" });
+    deleteVersion(root, { slug: "v0.7", actor: "test" });
+    const events = readEvents(root);
+    const deleted = events.find((e) => e.event === "version.deleted");
+    assert.ok(deleted, "应记录 version.deleted 事件");
+    // 验证事件包含完整元数据
+    assert.equal(deleted.details.version, "v0.7");
+    assert.equal(deleted.details.deleted_version_dir, "versions/v0.7");
+    assert.equal(deleted.details.had_goals, false);
+    assert.equal(deleted.details.had_archived, false);
+  });
+
+  it("rename 预检：冲突失败不留下假事件", () => {
+    createVersion(root, { slug: "v0.7", actor: "test" });
+    createVersion(root, { slug: "v0.8", actor: "test" });
+    const eventsBefore = readEvents(root).length;
+    // 尝试重命名到已存在的 slug，应失败
+    assert.throws(() => renameVersion(root, { slug: "v0.7", newSlug: "v0.8", actor: "test" }), /已存在/);
+    // 验证事件数量未增加（没有假事件）
+    const eventsAfter = readEvents(root).length;
+    assert.equal(eventsAfter, eventsBefore, "冲突失败不应留下假事件");
+  });
+
+  it("保守删除：拒绝含有孤儿内容的版本", () => {
+    createVersion(root, { slug: "v0.7", actor: "test" });
+    // 创建孤儿文件
+    const orphanFile = join(root, "versions", "v0.7", "orphan.txt");
+    writeFileSync(orphanFile, "orphan content");
+    assert.throws(() => deleteVersion(root, { slug: "v0.7", actor: "test" }), /未知内容/);
+  });
+
+  it("保守删除：拒绝 goals/ 目录内有孤儿文件", () => {
+    createVersion(root, { slug: "v0.7", actor: "test" });
+    // 在 goals/ 目录内创建孤儿文件（非目录）
+    const orphanFile = join(root, "versions", "v0.7", "goals", "orphan.txt");
+    writeFileSync(orphanFile, "orphan content");
+    assert.throws(() => deleteVersion(root, { slug: "v0.7", actor: "test" }), /orphan\.txt/);
+  });
+
+  it("保守删除：拒绝 archived/ 目录内有孤儿文件", () => {
+    createVersion(root, { slug: "v0.7", actor: "test" });
+    // 创建 archived 目录并在子目录中添加孤儿文件（不含 goal.md，不触发 versionHasGoals）
+    const archivedDir = join(root, "versions", "v0.7", "archived", "orphan-dir");
+    mkdirSync(archivedDir, { recursive: true });
+    writeFileSync(join(archivedDir, "mystery.txt"), "orphan content");
+    assert.throws(() => deleteVersion(root, { slug: "v0.7", actor: "test" }), /mystery\.txt/);
+  });
+
+  it("完整目标枚举：重命名更新全局 archived 目标", () => {
+    createVersion(root, { slug: "v0.7", actor: "test" });
+    const goalId = createGoal(root, { title: "归档目标", version: "v0.7", actor: "test" });
+    // 手动移动到全局 archived 目录
+    const globalArchivedDir = join(root, "versions", "archived");
+    if (!existsSync(globalArchivedDir)) {
+      mkdirSync(globalArchivedDir, { recursive: true });
+    }
+    const goalDir = join(root, "versions", "v0.7", "goals", goalId);
+    renameSync(goalDir, join(globalArchivedDir, goalId));
+    // 重命名版本
+    renameVersion(root, { slug: "v0.7", newSlug: "v0.8", actor: "test" });
+    // 验证全局 archived 目标 version 引用更新
+    const goalContent = readFileSync(join(globalArchivedDir, goalId, "goal.md"), "utf8");
+    assert.ok(goalContent.includes("v0.8"), "全局 archived 目标 version 引用应更新为 v0.8");
+  });
+
+  it("rebuild：version 事件已持久化但 version.md 丢失时可恢复", () => {
+    createVersion(root, { slug: "v0.7", name: "版本 0.7", actor: "test" });
+    // 模拟 version.md 丢失
+    const vfile = join(root, "versions", "v0.7", "version.md");
+    rmSync(vfile);
+    assert.ok(!existsSync(vfile));
+    // rebuild 应恢复
+    const drift = rebuild(root);
+    assert.ok(drift.some((d) => d.includes("v0.7") && d.includes("恢复")), "应报告版本恢复");
+    assert.ok(existsSync(vfile), "version.md 应被恢复");
+    const content = readFileSync(vfile, "utf8");
+    assert.ok(content.includes("版本 0.7"), "恢复的 version.md 应包含 name");
+    assert.ok(content.includes("planning"), "恢复的 version.md 应包含 status");
+  });
+
+  it("rebuild：version 事件已持久化但整个版本目录丢失时可恢复", () => {
+    createVersion(root, { slug: "v0.7", name: "版本 0.7", actor: "test" });
+    // 模拟整个版本目录丢失
+    const vdir = join(root, "versions", "v0.7");
+    rmSync(vdir, { recursive: true, force: true });
+    assert.ok(!existsSync(vdir));
+    // rebuild 应恢复
+    const drift = rebuild(root);
+    assert.ok(drift.some((d) => d.includes("v0.7") && d.includes("恢复")), "应报告版本恢复");
+    assert.ok(existsSync(join(vdir, "version.md")), "version.md 应被恢复");
+    assert.ok(existsSync(join(vdir, "goals")), "goals/ 目录应被恢复");
+  });
+
+  it("rebuild：version.renamed 事件正确追踪 slug 变更", () => {
+    createVersion(root, { slug: "v0.7", name: "版本 0.7", actor: "test" });
+    renameVersion(root, { slug: "v0.7", newSlug: "v0.8", newName: "版本 0.8", actor: "test" });
+    // 删除 v0.8 的 version.md 模拟丢失
+    const vfile = join(root, "versions", "v0.8", "version.md");
+    rmSync(vfile);
+    // rebuild 应从 renamed 事件追踪到 v0.8 并恢复
+    const drift = rebuild(root);
+    assert.ok(drift.some((d) => d.includes("v0.8") && d.includes("恢复")), "应报告 v0.8 恢复");
+    assert.ok(existsSync(vfile), "v0.8/version.md 应被恢复");
+    const content = readFileSync(vfile, "utf8");
+    assert.ok(content.includes("版本 0.8"), "恢复的 name 应为 renamed 后的名称");
+  });
+
+  it("rebuild：version.deleted 后不恢复已删除版本", () => {
+    createVersion(root, { slug: "v0.7", actor: "test" });
+    deleteVersion(root, { slug: "v0.7", actor: "test" });
+    // rebuild 不应恢复已删除版本
+    const drift = rebuild(root);
+    assert.ok(!drift.some((d) => d.includes("v0.7")), "不应报告已删除版本");
+    assert.ok(!existsSync(join(root, "versions", "v0.7")), "已删除版本不应被恢复");
+  });
+
+  it("rename 预检：NUL 字符失败不留下假事件", () => {
+    createVersion(root, { slug: "v0.7", actor: "test" });
+    const eventsBefore = readEvents(root).length;
+    assert.throws(() => renameVersion(root, { slug: "v0.7", newSlug: "v0.8\0bad", actor: "test" }), /NUL/);
+    const eventsAfter = readEvents(root).length;
+    assert.equal(eventsAfter, eventsBefore, "NUL 失败不应留下假事件");
+  });
+
+  it("rename 预检：路径分隔符失败不留下假事件", () => {
+    createVersion(root, { slug: "v0.7", actor: "test" });
+    const eventsBefore = readEvents(root).length;
+    assert.throws(() => renameVersion(root, { slug: "v0.7", newSlug: "v0.8/bad", actor: "test" }), /路径分隔符/);
+    const eventsAfter = readEvents(root).length;
+    assert.equal(eventsAfter, eventsBefore, "路径分隔符失败不应留下假事件");
+  });
+
+  it("delete 预检：nested orphan 拒绝不留下假删除事件", () => {
+    createVersion(root, { slug: "v0.7", actor: "test" });
+    // 在 goals/ 下放孤儿文件（非目录），触发非目录文件检查
+    const orphanFile = join(root, "versions", "v0.7", "goals", "mystery.txt");
+    writeFileSync(orphanFile, "orphan");
+    const eventsBefore = readEvents(root).length;
+    assert.throws(() => deleteVersion(root, { slug: "v0.7", actor: "test" }), /mystery\.txt/);
+    const eventsAfter = readEvents(root).length;
+    assert.equal(eventsAfter, eventsBefore, "nested orphan 拒绝不应留下假删除事件");
+  });
+
+  it("delete 事件：包含完整版本元数据快照", () => {
+    createVersion(root, { slug: "v0.7", name: "版本 0.7", actor: "test" });
+    deleteVersion(root, { slug: "v0.7", actor: "test" });
+    const events = readEvents(root);
+    const deleted = events.find((e) => e.event === "version.deleted");
+    assert.ok(deleted, "应记录 version.deleted 事件");
+    assert.equal(deleted.details.version, "v0.7");
+    assert.ok(deleted.details.version_id, "应包含 version_id");
+    assert.equal(deleted.details.name, "版本 0.7");
+    assert.equal(deleted.details.status, "planning");
+    assert.ok(deleted.details.created_at, "应包含 created_at");
+    assert.equal(deleted.details.deleted_version_dir, "versions/v0.7");
+    assert.equal(deleted.details.had_goals, false);
+    assert.equal(deleted.details.had_archived, false);
   });
 });

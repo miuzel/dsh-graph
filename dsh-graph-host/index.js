@@ -52,6 +52,14 @@ import {
   harvestedCards,
   formatHarvestedCardsSection,
   formatCollectPrompt,
+  recordAttemptHandoff,
+  harvestReviewedAttemptHandoffs,
+  formatReviewedAttemptHandoffsSection,
+  readGoalDirective,
+  setGoalDirective,
+  readGoalComments,
+  appendGoalComment,
+  formatGoalDirectiveSection,
   GraphError,
   createVersion,
   renameVersion,
@@ -92,6 +100,7 @@ const USAGE = [
   "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
   "- graph_add_card / graph_fill_card / graph_review_card 管理目标下的上下文卡片（信息收集）；",
   "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展（看板卡片显示这句）；",
+  "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff（g-150）；",
   "- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；",
   "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账。",
   "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
@@ -132,6 +141,7 @@ const HELP_TEXT = [
   "- graph_add_card / graph_fill_card / graph_review_card 管理目标下的上下文卡片（信息收集）；",
   "- graph_bind_collect_card(goal, card, child_id) 把收集子代理绑定到卡片（g-119）；",
   "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展；",
+  "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff（g-150）；",
   "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账；",
   "- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；",
   "- graph_report_supervisor_status(status) 主管自报状态（看板顶部状态栏）；graph_resolve_accept 评审裁决；",
@@ -221,6 +231,81 @@ export function apply(ctx, config) {
         parameters: params({ goal: str, card: str }, ["goal", "card"]),
       },
       run: (a, ex) => { reviewCard(rootFor(ex), a.goal, a.card, { by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
+      // g-150：主管登记 attempt handoff（返工约束、前序失败、推荐基线、验收命令）。
+      // 只有已 claim 的 supervisor 或负责人应调用；写入 handoff 文件 + 追加确认事件。
+      def: {
+        name: "graph_record_attempt_handoff",
+        description: "主管/负责人登记前序 attempt 的返工 handoff（g-150，单文件简化）：记录已核实失败、返工约束（禁止项）、推荐基线/保留项与验收命令。每个 goal 仅一个 handoff，新登记覆盖旧内容；旧历史由事件流保留。source_attempts 必须属于该 goal。",
+        parameters: params(
+          {
+            goal: str,
+            source_attempts: strArr,
+            failures: str,
+            constraints: str,
+            baseline: str,
+            verification: str,
+          },
+          ["goal", "source_attempts", "failures", "constraints", "baseline", "verification"],
+        ),
+      },
+      run: (a, ex) => {
+        // g-150 review 问题 1：确认身份必须由可信上下文推导，不可用 caller 提供的任意 actor
+        // 优先使用 supervisor session id（如果已配置且当前会话是 supervisor），
+        // 否则使用 human:gui（负责人 GUI 操作）或 agent:<id> 兜底
+        const r = rootFor(ex);
+        const supervisorSession = readSupervisorSession(r);
+        const currentSessionId = ex?.agent?.session?.id;
+        let confirmedBy;
+        if (supervisorSession && currentSessionId === supervisorSession) {
+          confirmedBy = `supervisor:${currentSessionId}`;
+        } else if (currentSessionId) {
+          // 非 supervisor 会话但有 session id——使用 agent 格式（core 层会校验）
+          confirmedBy = `agent:${currentSessionId}`;
+        } else {
+          // 无 session 信息（如 GUI 操作无 agent）——默认 human:gui
+          confirmedBy = "human:gui";
+        }
+        const hfId = recordAttemptHandoff(r, a.goal, {
+          source_attempts: a.source_attempts,
+          failures: a.failures,
+          constraints: a.constraints,
+          baseline: a.baseline,
+          verification: a.verification,
+          confirmed_by: confirmedBy,
+          actor: actorOf(ex),
+        });
+        return { ok: true, handoff: hfId };
+      },
+    },
+    {
+      // g-150：设置/替换目标的「最近指令」——下一次 attempt 生效的补充任务、边界和验收。
+      // 写入 goal.md 的 `## 最近指令` 小节 + 追加 goal.directive_set 事件（事件先行）。
+      def: {
+        name: "graph_set_directive",
+        description: "设置/替换目标的「最近指令」（g-150）：写下一次 attempt 生效的补充任务、边界和验收。写入 goal.md 的「最近指令」小节并追加事件；新 attempt 派发时自动读取注入初始 prompt。directive 为空字符串时清空指令。",
+        parameters: params({ goal: str, directive: str }, ["goal", "directive"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        setGoalDirective(r, a.goal, a.directive, actorOf(ex));
+        return { ok: true, goal: a.goal };
+      },
+    },
+    {
+      // g-150：向目标的「评论」小节追加一条可追溯的历史讨论/反馈。
+      // 不自动注入 prompt，执行者可通过目标文件查看。事件先行。
+      def: {
+        name: "graph_add_comment",
+        description: "向目标的「评论」小节追加一条可追溯的历史讨论/反馈（g-150）。评论不自动注入执行 prompt，但执行者可通过 goal.md 查看历史。事件先行。",
+        parameters: params({ goal: str, text: str }, ["goal", "text"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        appendGoalComment(r, a.goal, a.text, actorOf(ex));
+        return { ok: true, goal: a.goal };
+      },
     },
     {
       // g-119：supervisor 侧把已派发的收集子代理绑定到上下文卡片（此前只有 GUI 的
@@ -339,18 +424,31 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_start_attempt",
-        description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。worktree=false 时省略 spawn 提示词里的 worktree 隔离指令（简单/单文件小修可跳过，默认注入）。",
-        parameters: params({ goal: str, executor: str, provider: str, model: str, worktree: { type: "boolean" } }, ["goal"]),
+        description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。worktree=false 时省略 spawn 提示词里的 worktree 隔离指令（简单/单文件小修可跳过，默认注入）。attempt_brief 是主管为本次 attempt 提供的可审计 brief/directive（g-150），写入 attempt meta 与事件；缺省时保持当前 prompt 兼容。",
+        parameters: params({ goal: str, executor: str, provider: str, model: str, worktree: { type: "boolean" }, attempt_brief: str }, ["goal"]),
       },
       run: async (a, ex) => {
+        // 校验 attempt_brief 类型（g-150 review 问题 4）
+        if (a.attempt_brief !== undefined && a.attempt_brief !== null && typeof a.attempt_brief !== "string") {
+          throw new GraphError("attempt_brief 必须是 string 类型");
+        }
         const executor = a.executor ?? actorOf(ex);
         const r = rootFor(ex);
         // g-120：按 context_cards 顺序收集 filled/reviewed 卡片成果，注入清单记入 attempt.started 的
         // details.injected_cards（事件先行：必须在 startAttempt 之前算好，与 prompt 注入内容一致）
         const injectedCards = harvestedCards(r, a.goal).map((c) => c.id);
-        const attempt = startAttempt(r, a.goal, { executor, actor: actorOf(ex), injectedCards });
+        // g-150：读取已确认且未被覆盖的 attempt handoff（事件先行：必须在 startAttempt 之前算好）
+        const confirmedHandoffs = harvestReviewedAttemptHandoffs(r, a.goal);
+        const injectedHandoffRefs = confirmedHandoffs.map((h) => ({ id: h.id, revision: h.revision, source_attempts: h.source_attempts }));
+        const handoffsSection = formatReviewedAttemptHandoffsSection(r, a.goal);
+        // g-150 范围扩展：读取最近指令（eventually 注入 prompt；空时不影响现有 prompt 行为）
+        const directiveSection = formatGoalDirectiveSection(r, a.goal);
+        const goalFile = findGoalFile(r, a.goal);
+        const goalRel = goalFile ? relative(sessionWorkspace(ex), goalFile) : null;
+        const attempt = startAttempt(r, a.goal, { executor, actor: actorOf(ex), injectedCards, injectedHandoffs: injectedHandoffRefs, attemptBrief: a.attempt_brief ?? undefined, injectedDirective: readGoalDirective(r, a.goal) ?? undefined });
         // 注意：返回值必须是无损 JSON——绝不写入值为 undefined 的字段（registry 会拒绝）
-        const result = { attempt, child_id: null, injected_cards: injectedCards };
+        const result = { attempt, child_id: null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs };
+        if (a.attempt_brief) result.brief = a.attempt_brief;
         const subagents = ctx.get?.("subagents");
         if (subagents && ex?.agent) {
           try {
@@ -363,14 +461,18 @@ export function apply(ctx, config) {
             // 模型路由：工具参数 > project.yaml executor.provider/model > 继承父会话
             // g-113 修正：子代理工作目录 = 父会话 workspace（startContinuable 继承 session.header.cwd），
             // 目标文件相对路径必须相对 workspace 根（如 .dsh-graph/versions/...），不是相对 .dsh-graph 目录本身
-            const goalFile = findGoalFile(r, a.goal);
-            const rel = goalFile ? relative(sessionWorkspace(ex), goalFile) : null;
+            const rel = goalRel;
             // g-120：已收集卡片成果段（子代理直接使用，无需猜卡片路径）+ worktree 隔离指令（可开关）
             const cardsSection = formatHarvestedCardsSection(r, a.goal);
             const worktreeBlock = a.worktree === false ? null : WORKTREE_GUIDE;
+            // g-150：brief 段（主管为本次 attempt 提供的 directive）
+            const briefSection = a.attempt_brief ? `## 本次 attempt brief/directive（g-150 主管登记）\n\n${a.attempt_brief}` : null;
             const prompt = [
               `你是 dsh-graph 目标 ${a.goal} 的执行 attempt ${attempt}。`,
               rel ? `目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。` : null,
+              handoffsSection || null,
+              briefSection,
+              directiveSection || null,
               cardsSection,
               worktreeBlock,
               `【状态汇报——你自己做，supervisor 不会替你更新】看板卡片上的状态摘要（status_line）由你自行维护：`,
@@ -787,8 +889,12 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, provider, model, worktree } = body;
+          const { goal, provider, model, worktree, attempt_brief } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
+          // 校验 attempt_brief 类型（g-150 review 问题 4）
+          if (attempt_brief !== undefined && attempt_brief !== null && typeof attempt_brief !== "string") {
+            return json(res, 400, { error: "attempt_brief 必须是 string 类型" });
+          }
           const rRoot = rootForReq(req, body);
           const goalFile = findGoalFile(rRoot, goal);
           const doc = loadGoal(goalFile);
@@ -801,16 +907,29 @@ export function apply(ctx, config) {
           // 成果段注入 spawn prompt（子代理直接使用，无需猜卡片路径）
           const injectedCards = harvestedCards(rRoot, goal).map((c) => c.id);
           const cardsSection = formatHarvestedCardsSection(rRoot, goal);
+          // g-150：读取已确认且未被覆盖的 attempt handoff（事件先行）
+          const confirmedHandoffs = harvestReviewedAttemptHandoffs(rRoot, goal);
+          const injectedHandoffRefs = confirmedHandoffs.map((h) => ({ id: h.id, revision: h.revision, source_attempts: h.source_attempts }));
+          const handoffsSection = formatReviewedAttemptHandoffsSection(rRoot, goal);
+          // g-150 范围扩展：读取最近指令（注入 prompt；空时不影响现有 prompt 行为）
+          const directiveSection = formatGoalDirectiveSection(rRoot, goal);
           // worktree 隔离指令（g-120）：body.worktree=false 关闭（简单/单文件小修跳过），默认注入
           const worktreeBlock = worktree === false ? "" : WORKTREE_GUIDE;
-          const attempt = startAttempt(rRoot, goal, { executor: "agent:executor", actor: "human:gui", injectedCards });
+          const currentDirective = readGoalDirective(rRoot, goal);
+          const attempt = startAttempt(rRoot, goal, { executor: "agent:executor", actor: "human:gui", injectedCards, injectedHandoffs: injectedHandoffRefs, attemptBrief: attempt_brief ?? undefined, injectedDirective: currentDirective ?? undefined });
           // g-113 修正：子代理工作目录 = 会话 workspace（继承 session.header.cwd），
           // 相对路径以 workspace 根为基准（.dsh-graph/versions/...），不是服务进程 cwd 或 .dsh-graph 目录
           const rel = relative(workspaceOf(req, body), goalFile);
+          // g-150：brief 段（主管为本次 attempt 提供的 directive）
+          const briefSection = attempt_brief ? `## 本次 attempt brief/directive（g-150 主管登记）\n\n${attempt_brief}` : "";
           const prompt = `你是 dsh-graph 目标 ${goal} 的执行 attempt ${attempt}。
 目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。
 
-## 目标描述
+${handoffsSection}
+
+${briefSection}
+
+${directiveSection ? directiveSection + "\n" : ""}## 目标描述
 ${desc}
 
 ## 质量判据
@@ -843,7 +962,7 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
             // 负责人 2026-08-22：执行按钮派发后目标必须落到执行 lane——自动迁 in_progress
             try { transition(rRoot, goal, "in_progress", { reason: "attempt 派发（GUI 执行）", actor: "human:gui" }); } catch { /* 已在 in_progress 或迁移被拒 */ }
           }
-          json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: spawned.model_route ?? null, injected_cards: injectedCards });
+          json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: spawned.model_route ?? null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs });
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
         }
@@ -874,6 +993,65 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           const r = rootForReq(req, body);
           const goalId = createGoal(r, { title: title.trim(), version, description, actor: "human:gui" });
           json(res, 200, { ok: true, goal: goalId });
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-150: 设置/替换目标的最近指令
+    {
+      path: "/api/dsh-graph/set-directive",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, directive } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          if (directive === undefined || directive === null) return json(res, 400, { error: "missing directive" });
+          if (typeof directive !== "string") return json(res, 400, { error: "directive 必须是 string 类型" });
+          const rRoot = rootForReq(req, body);
+          setGoalDirective(rRoot, goal, directive, "human:gui");
+          json(res, 200, { ok: true, goal });
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-150: 向目标追加评论
+    {
+      path: "/api/dsh-graph/add-comment",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, text } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          if (!text || typeof text !== "string" || !text.trim()) return json(res, 400, { error: "评论内容不能为空" });
+          const rRoot = rootForReq(req, body);
+          appendGoalComment(rRoot, goal, text, "human:gui");
+          json(res, 200, { ok: true, goal });
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-150: 通过 GUI 登记 handoff（单文件简化，新覆盖旧）
+    {
+      path: "/api/dsh-graph/record-handoff",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, source_attempts, failures, constraints, baseline, verification } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          if (!Array.isArray(source_attempts) || !source_attempts.length) return json(res, 400, { error: "source_attempts 不能为空" });
+          if (!failures || !constraints || !baseline || !verification) return json(res, 400, { error: "failures/constraints/baseline/verification 不能为空" });
+          const rRoot = rootForReq(req, body);
+          const hfId = recordAttemptHandoff(rRoot, goal, {
+            source_attempts, failures, constraints, baseline, verification,
+            confirmed_by: "human:gui", actor: "human:gui",
+          });
+          json(res, 200, { ok: true, handoff: hfId });
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
         }
@@ -941,6 +1119,10 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           if (!slug || typeof slug !== "string" || !slug.trim()) {
             return json(res, 400, { error: "missing slug" });
           }
+          // 严格校验 name
+          if (name !== undefined && (typeof name !== "string" || !name.trim())) {
+            return json(res, 400, { error: "name must be a non-empty string" });
+          }
           const r = rootForReq(req, body);
           const result = createVersion(r, { slug: slug.trim(), name, actor: "human:gui" });
           json(res, 200, { ok: true, ...result });
@@ -960,6 +1142,13 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           const { slug, newSlug, newName } = body;
           if (!slug || typeof slug !== "string" || !slug.trim()) {
             return json(res, 400, { error: "missing slug" });
+          }
+          // 严格校验 newSlug 和 newName
+          if (newSlug !== undefined && (typeof newSlug !== "string" || !newSlug.trim())) {
+            return json(res, 400, { error: "newSlug must be a non-empty string" });
+          }
+          if (newName !== undefined && (typeof newName !== "string" || !newName.trim())) {
+            return json(res, 400, { error: "newName must be a non-empty string" });
           }
           const r = rootForReq(req, body);
           const result = renameVersion(r, { slug: slug.trim(), newSlug, newName, actor: "human:gui" });

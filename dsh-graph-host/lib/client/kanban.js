@@ -18,6 +18,8 @@
       const [newVersionName, setNewVersionName] = React.useState("");
       const [createVersionNote, setCreateVersionNote] = React.useState(null);
       const [creatingVersion, setCreatingVersion] = React.useState(false);
+      // g-134: 看板渲染 key，用于强制重绘
+      const [kanbanRenderKey, setKanbanRenderKey] = React.useState(0);
       const [renameVersionTarget, setRenameVersionTarget] = React.useState(null); // {slug, name}
       const [renameVersionSlug, setRenameVersionSlug] = React.useState("");
       const [renameVersionName, setRenameVersionName] = React.useState("");
@@ -356,7 +358,7 @@
               ? h(React.Fragment, null, "⛔", h("br"), `×${orderedGoals.length}`, h("br"), duration)
               : h(React.Fragment, null, "⛔", h("br"), `×${orderedGoals.length}`);
             return h("div", {
-              key: s.key,
+              key: key + "-" + s.key, // 使用 lane key + stage key 作为唯一 key
               style: {
                 ...S.cell,
                 background: isOverThisCell ? "rgba(76,141,255,.10)" : laneBg,
@@ -392,7 +394,7 @@
             }, summaryText);
           }
           return h("div", {
-            key: s.key,
+            key: key + "-" + s.key, // 使用 lane key + stage key 作为唯一 key
             style: { ...S.cell, background: isOverThisCell ? "rgba(76,141,255,.10)" : laneBg },
             className: isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? "dg-cell-drop-active" : "",
             onDragOver: anyDrag ? (e) => {
@@ -477,7 +479,7 @@
           title: version ? `点击查看版本 ${version} 详情` : undefined,
           onClick: version ? (e) => {
             e.stopPropagation();
-            const v = board.versions.find((v) => v.slug === version);
+            const v = b.versions.find((ver) => ver.slug === version);
             if (v) {
               setVersionDetailTarget({
                 slug: v.slug,
@@ -689,7 +691,9 @@
             setRenameVersionTarget(null);
             setRenameVersionSlug("");
             setRenameVersionName("");
-            load(); // 刷新看板
+            setVersionDetailTarget(null); // 清理版本详情弹窗状态
+            load(); // 刷新看板数据
+            setKanbanRenderKey((k) => k + 1); // 强制重绘看板
             setTimeout(() => setRenameVersionNote(null), 1500);
           } else {
             setRenameVersionNote("⚠️ 重命名失败：" + (data.error || "未知错误"));
@@ -716,7 +720,9 @@
           if (data.ok) {
             setDeleteVersionNote("✅ 已删除版本：" + data.slug);
             setDeleteVersionTarget(null);
-            load(); // 刷新看板
+            setVersionDetailTarget(null); // 清理版本详情弹窗状态
+            load(); // 刷新看板数据
+            setKanbanRenderKey((k) => k + 1); // 强制重绘看板
             setTimeout(() => setDeleteVersionNote(null), 1500);
           } else {
             setDeleteVersionNote("⚠️ 删除失败：" + (data.error || "未知错误"));
@@ -734,7 +740,7 @@
 
       return h(
         "div",
-        { style: S.wrap },
+        { key: "kanban-" + kanbanRenderKey, style: S.wrap },
         h("style", null, HOVER_CSS),
         h("div", { style: S.head },
           h("strong", null, "dsh-graph 看板"),

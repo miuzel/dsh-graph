@@ -106,10 +106,10 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
     tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
   };
   applyHost(ctx, { root: join(mkdtempSync(join(tmpdir(), "dsh-graph-dual-")), "g") });
-  // host 半边：22 个 graph_* 工具（g-117 新增 graph_handoff / graph_claim_supervisor；
-  // g-119 新增 graph_bind_collect_card；g-118 新增 graph_help；g-141 新增 graph_rename_goal；g-110 新增 archive/unarchive；g-140 新增 delete）
+  // host 半边：25 个 graph_* 工具（g-117 新增 graph_handoff / graph_claim_supervisor；
+  // g-119 新增 graph_bind_collect_card；g-118 新增 graph_help；g-141 新增 graph_rename_goal；g-110 新增 archive/unarchive；g-140 新增 delete；g-150 新增 graph_record_attempt_handoff；g-150 范围扩展新增 graph_set_directive / graph_add_comment）
   const toolNames = registered.map((d) => d.name).filter((n) => n.startsWith("graph_"));
-  assert.equal(toolNames.length, 22, "单包注册 22 个 graph_* 工具");
+  assert.equal(toolNames.length, 25, "单包注册 25 个 graph_* 工具");
   // client 半边：/api/dsh-graph* 全部端点（原 client 包 + g-110 archive/unarchive + g-140 delete）
   for (const p of ["/api/dsh-graph", "/api/dsh-graph/goal", "/api/dsh-graph/accept",
     "/api/dsh-graph/resolve-accept", "/api/dsh-graph/edit-description",

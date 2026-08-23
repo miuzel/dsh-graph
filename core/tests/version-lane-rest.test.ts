@@ -295,19 +295,19 @@ test("版本管理 REST API 集成：创建→重命名→删除完整流程", a
   assert.ok(v);
   assert.equal(v.goals.length, 1);
   assert.equal(v.goals[0].id, goalId);
-  // 移走目标（模拟清空版本）
-  // 注意：这里需要使用 moveGoal，但 REST API 没有直接暴露
-  // 我们直接操作文件系统来模拟
+  // 移走目标（模拟清空版本）——需清理空目录
   const goalFile = join(root, "versions", "v0.8", "goals", goalId, "goal.md");
   const standaloneDir = join(root, "goals", goalId);
   const fs = await import("node:fs");
   fs.mkdirSync(standaloneDir, { recursive: true });
   fs.renameSync(goalFile, join(standaloneDir, "goal.md"));
+  // 清理空的目标目录
+  const goalDirInVersion = join(root, "versions", "v0.8", "goals", goalId);
+  fs.rmdirSync(goalDirInVersion);
   // 删除空版本
   const deleteRes = await post(routes, "/api/dsh-graph/delete-version", {
     slug: "v0.8",
   });
-  console.log("Delete response:", deleteRes);
   assert.equal(deleteRes.code, 200);
   // 验证版本已删除
   board = boardProjection(root);

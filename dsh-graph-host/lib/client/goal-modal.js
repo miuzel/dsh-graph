@@ -1,6 +1,293 @@
+    // g-150：handoff 组件（显示当前有效 handoff + 登记新 handoff）
+    function HandoffBox(props) {
+      const { goalId, handoff, attempts, onRefresh } = props;
+      const [showForm, setShowForm] = React.useState(false);
+      const [form, setForm] = React.useState({ source_attempts: "", failures: "", constraints: "", baseline: "", verification: "" });
+      const [note, setNote] = React.useState(null);
+      const [loading, setLoading] = React.useState(false);
+
+      const doRecord = async () => {
+        const src = form.source_attempts.split(",").map((s) => s.trim()).filter(Boolean);
+        if (!src.length) { setNote("⚠️ 来源 attempt 不能为空"); return; }
+        if (!form.failures.trim() || !form.constraints.trim() || !form.baseline.trim() || !form.verification.trim()) {
+          setNote("⚠️ 所有字段必填"); return;
+        }
+        setLoading(true);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/record-handoff"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, source_attempts: src, ...form }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setNote("✅ handoff 已登记");
+            setShowForm(false);
+            setForm({ source_attempts: "", failures: "", constraints: "", baseline: "", verification: "" });
+            onRefresh?.();
+          } else {
+            setNote("⚠️ 登记失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const hasHf = handoff && handoff.failures;
+      const attOptions = (attempts ?? []).map((a) => a.id);
+
+      return h("div", { style: S.modalSection },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+          h("div", { style: S.modalH },
+            "🔄 返工 Handoff",
+            hasHf ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4, fontWeight: 400 } },
+              `（rev ${handoff.revision}，来源：${(handoff.source_attempts ?? []).join(", ")}）`) : null),
+          h("button", {
+            style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
+            onClick: () => { setShowForm(!showForm); setNote(null); },
+          }, showForm ? "取消" : hasHf ? "✏️ 更新 Handoff" : "📝 登记 Handoff")),
+        // 显示当前 handoff
+        hasHf
+          ? h("div", { style: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4, fontSize: 12 } },
+              h("div", { style: { opacity: 0.65, fontSize: 11 } },
+                `确认人：${handoff.confirmed_by}　｜　时间：${handoff.confirmed_at}`),
+              h("div", null,
+                h("strong", null, "已核实失败/风险："),
+                h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.failures)),
+              h("div", null,
+                h("strong", null, "返工约束（禁止项）："),
+                h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.constraints)),
+              h("div", null,
+                h("strong", null, "推荐基线/必须保留项："),
+                h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.baseline)),
+              h("div", null,
+                h("strong", null, "验收命令："),
+                h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.verification)))
+          : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6, marginTop: 4 } }, "（无已登记 handoff）"),
+        // 登记表单
+        showForm
+          ? h("div", { style: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6, padding: "8px 10px", borderRadius: 6, background: "rgba(128,128,128,.08)" } },
+              h("div", { style: { fontSize: 11, opacity: 0.7 } }, hasHf ? "更新将覆盖当前 handoff（revision 递增）" : "登记后新 attempt 派发时自动注入"),
+              h("div", null,
+                h("label", { style: { fontSize: 11, opacity: 0.8 } }, "来源 attempt（逗号分隔）"),
+                attOptions.length
+                  ? h("div", { style: { display: "flex", gap: 4, flexWrap: "wrap", marginTop: 2 } },
+                      ...attOptions.map((a) =>
+                        h("button", {
+                          key: a, style: { ...S.btn, fontSize: 11, padding: "1px 6px",
+                            background: form.source_attempts.includes(a) ? "rgba(76,141,255,.25)" : undefined },
+                          className: "dg-btn",
+                          onClick: () => {
+                            const cur = form.source_attempts.split(",").map((s) => s.trim()).filter(Boolean);
+                            const next = cur.includes(a) ? cur.filter((x) => x !== a) : [...cur, a];
+                            setForm({ ...form, source_attempts: next.join(", ") });
+                          },
+                        }, a)))
+                  : null,
+                h("input", {
+                  style: { ...S.promptInput, fontSize: 12, marginTop: 2 }, value: form.source_attempts,
+                  onChange: (e) => setForm({ ...form, source_attempts: e.target.value }),
+                  placeholder: "att-001, att-002",
+                })),
+              ...[
+                ["failures", "已核实失败/风险"],
+                ["constraints", "返工约束（禁止项）"],
+                ["baseline", "推荐基线/必须保留项"],
+                ["verification", "验收命令"],
+              ].map(([key, label]) =>
+                h("div", { key },
+                  h("label", { style: { fontSize: 11, opacity: 0.8 } }, label),
+                  h("textarea", {
+                    style: { ...S.promptInput, minHeight: 36, resize: "vertical", fontFamily: "inherit", fontSize: 12, marginTop: 2, width: "100%", boxSizing: "border-box" },
+                    value: form[key],
+                    onChange: (e) => setForm({ ...form, [key]: e.target.value }),
+                    placeholder: label,
+                  }))),
+              h("button", {
+                style: { ...S.btn, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn",
+                disabled: loading, onClick: doRecord,
+              }, "✅ 登记 Handoff"))
+          : null,
+        note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
+    }
+
+    // g-150：最近指令组件（显示 + 编辑）
+    function DirectiveBox(props) {
+      const { goalId, directive, onRefresh } = props;
+      const [editing, setEditing] = React.useState(false);
+      const [text, setText] = React.useState(directive ?? "");
+      const [note, setNote] = React.useState(null);
+      const [loading, setLoading] = React.useState(false);
+
+      // 同步外部 directive 变化
+      React.useEffect(() => { setText(directive ?? ""); }, [directive]);
+
+      const doSave = async () => {
+        setLoading(true);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/set-directive"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, directive: text }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setNote("✅ 指令已更新");
+            setEditing(false);
+            onRefresh?.();
+          } else {
+            setNote("⚠️ 更新失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const doClear = async () => {
+        setLoading(true);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/set-directive"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, directive: "" }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setNote("✅ 指令已清空");
+            setText("");
+            setEditing(false);
+            onRefresh?.();
+          } else {
+            setNote("⚠️ 清空失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const hasContent = (directive ?? "").trim().length > 0;
+
+      return h("div", { style: S.modalSection },
+        h("div", { style: S.modalH },
+          "📌 最近指令",
+          h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 6, fontWeight: 400 } },
+            "（下次 attempt 自动注入；小范围修复优先 send_message 续办已有会话）")),
+        editing
+          ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+              h("textarea", {
+                style: { ...S.promptInput, minHeight: 60, resize: "vertical", fontFamily: "inherit", fontSize: 12 },
+                value: text,
+                onChange: (e) => setText(e.target.value),
+                placeholder: "输入对下次 attempt 的补充任务、边界和验收要求…",
+              }),
+              h("div", { style: { display: "flex", gap: 6 } },
+                h("button", {
+                  style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
+                  disabled: loading, onClick: doSave,
+                }, "💾 保存"),
+                text.trim()
+                  ? h("button", {
+                      style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
+                      disabled: loading, onClick: doClear,
+                    }, "🗑 清空")
+                  : null,
+                h("button", {
+                  style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
+                  disabled: loading, onClick: () => { setEditing(false); setText(directive ?? ""); setNote(null); },
+                }, "取消")))
+          : h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
+              hasContent
+                ? h("div", { style: { ...S.meta, whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.5, padding: "4px 0" } }, directive)
+                : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, "（无最近指令）"),
+              h("button", {
+                style: { ...S.btn, fontSize: 11, alignSelf: "flex-start" }, className: "dg-btn",
+                onClick: () => { setEditing(true); setText(directive ?? ""); setNote(null); },
+              }, hasContent ? "✏️ 编辑指令" : "📝 设置指令")),
+        note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
+    }
+
+    // g-150：评论组件（历史查看 + 追加）
+    function CommentsBox(props) {
+      const { goalId, comments, onRefresh } = props;
+      const [expanded, setExpanded] = React.useState(false);
+      const [showAdd, setShowAdd] = React.useState(false);
+      const [text, setText] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [loading, setLoading] = React.useState(false);
+
+      const doAdd = async () => {
+        const t = text.trim();
+        if (!t) return;
+        setLoading(true);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/add-comment"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, text: t }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setNote("✅ 评论已添加");
+            setText("");
+            setShowAdd(false);
+            onRefresh?.();
+          } else {
+            setNote("⚠️ 添加失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const count = comments.length;
+
+      return h("div", { style: S.modalSection },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+          h("div", { style: S.modalH },
+            "💬 评论",
+            count > 0 ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4, fontWeight: 400 } }, `（${count} 条）`) : null),
+          count > 0
+            ? h("button", {
+                style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn dg-chevron",
+                onClick: () => setExpanded(!expanded),
+              }, expanded ? "▲" : "▼")
+            : null,
+          h("button", {
+            style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
+            onClick: () => { setShowAdd(!showAdd); setNote(null); },
+          }, showAdd ? "取消" : "➕ 添加评论")),
+        // 评论历史（可展开/收起）
+        expanded && count > 0
+          ? h("div", { style: { marginTop: 6, maxHeight: 240, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 } },
+              comments.map((c, i) =>
+                h("div", { key: i, style: { padding: "6px 8px", borderRadius: 4, background: "rgba(128,128,128,.08)", fontSize: 12 } },
+                  h("div", { style: { fontSize: 11, opacity: 0.65, marginBottom: 2 } }, `${c.ts} ｜ ${c.author}`),
+                  h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4 } }, c.text))))
+          : null,
+        // 添加评论输入
+        showAdd
+          ? h("div", { style: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4 } },
+              h("textarea", {
+                style: { ...S.promptInput, minHeight: 50, resize: "vertical", fontFamily: "inherit", fontSize: 12 },
+                value: text,
+                onChange: (e) => setText(e.target.value),
+                placeholder: "输入评论内容…（可追溯的历史讨论/反馈）",
+              }),
+              h("button", {
+                style: { ...S.btn, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn",
+                disabled: loading || !text.trim(), onClick: doAdd,
+              }, "💬 发表评论"))
+          : null,
+        note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
+    }
+
     function GoalModal(props) {
       const [state, setState] = React.useState({ loading: true });
-      const [tab, setTab] = React.useState("detail"); // "detail" | "activity"
+      const [tab, setTab] = React.useState("detail"); // "detail" | "context" | "activity"
       const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
       const [logFilter, setLogFilter] = React.useState(""); // "" 全部 / 事件名
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新执行的模型路由（显示兜底）
@@ -121,6 +408,12 @@
                 h("div", { style: S.meta }, "（暂无上下文卡片）"),
                 h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession })),
         ];
+        // g-150：执行上下文 tab（handoff + 最近指令 + 评论）
+        const contextTab = [
+          h(HandoffBox, { key: "hf", goalId: props.id, handoff: d.handoff, attempts: d.attempts, onRefresh: load }),
+          h(DirectiveBox, { key: "dir", goalId: props.id, directive: d.directive, onRefresh: load }),
+          h(CommentsBox, { key: "cmt", goalId: props.id, comments: d.comments ?? [], onRefresh: load }),
+        ];
         const activityTab = (() => {
           const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));
           if (!meaningful.length) {
@@ -204,6 +497,19 @@
               },
               onClick: () => setTab("activity"),
             }, "🕘 近期动态"),
+            h("button", {
+              style: {
+                fontSize: 12, padding: "5px 14px", cursor: "pointer",
+                marginBottom: -1, borderRadius: "6px 6px 0 0",
+                border: "1px solid " + (tab === "context" ? "rgba(128,128,128,.35)" : "transparent"),
+                borderBottom: "none",
+                background: tab === "context" ? "rgba(128,128,128,.10)" : "transparent",
+                fontWeight: tab === "context" ? 700 : 400,
+                color: tab === "context" ? "#8ab4ff" : "inherit",
+                opacity: tab === "context" ? 1 : 0.7,
+              },
+              onClick: () => setTab("context"),
+            }, "📌 执行上下文"),
             // g-129: goal.md 链接放在 tab 行右侧
             d.goalFile
               ? h("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, marginBottom: 1 } },
@@ -241,7 +547,7 @@
             style: { border: "1px solid rgba(128,128,128,.35)", borderTop: "none",
                      borderRadius: "0 6px 6px 6px", padding: "10px 12px",
                      background: "rgba(128,128,128,.06)" },
-          }, tab === "detail" ? detailTab : activityTab),
+          }, tab === "detail" ? detailTab : tab === "context" ? contextTab : activityTab),
         ];
       }
 

@@ -17,16 +17,26 @@ import {
   parseDoc,
   serializeDoc,
   replaceSection,
+  sectionText,
   criteriaPresent,
   countCriteria,
   type GoalDoc,
 } from "./model.ts";
-import { appendEvent, readEvents, replayStatuses, nowIso, type GraphEvent } from "./events.ts";
+import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso, type GraphEvent } from "./events.ts";
 import { GraphError, STATUSES, assertTransition } from "./machine.ts";
 import { createVersion, renameVersion, deleteVersion } from "./version-lane.ts";
 
 export { GraphError };
 export { createVersion, renameVersion, deleteVersion };
+
+/** 防止用户输入内容中包含 `## ` 或 `### ` 开头的行，破坏 goal.md section 边界。
+ *  将行首 `## ` / `### ` 转义为 `\## ` / `\### `（Markdown 不渲染为标题）。
+ *  用于 setGoalDirective 和 appendGoalComment 的输入保护（g-150 返工阻断项 #5）。 */
+function sanitizeHeadingContent(text: string): string {
+  // 匹配行首可选空白 + 2-3 个 # + 至少一个空格（标题语法）
+  // 替换为 \## 或 \###（Markdown 不渲染为标题）
+  return text.replace(/^([ \t]{0,3})(###[ \t]+|##[ \t]+)/gm, "$1\\$2");
+}
 
 /** 扫描图根下全部目标文件：backlog/*.md、goals/<id>/goal.md、versions/<v>/goals/<id>/goal.md。
  *  opts.includeArchived=true 时也扫描 archived 目录下的目标。 */
@@ -410,6 +420,14 @@ const GOAL_BODY = `
 
 （待登记；进入 in_progress 前必须非空且已确认）
 
+## 最近指令
+
+<!-- 下一次 attempt 生效的补充任务、边界和验收；新 attempt spawn 前自动读取注入 -->
+
+## 评论
+
+<!-- 可追溯的历史讨论/反馈；不自动注入 prompt，执行者可通过目标文件查看 -->
+
 ## 证据台账
 
 | id | 内容 | 来源 | 时间 | freshness |
@@ -479,19 +497,28 @@ export function createGoal(
     // 隐式版本：version.md 不存在时补骨架（发现#14）
     const vfile = join(root, "versions", opts.version, "version.md");
     if (!existsSync(vfile)) {
+      const vId = "v-" + randomUUID().slice(0, 8);
+      const vCreatedAt = nowIso();
       saveGoal(vfile, {
         meta: {
-          id: "v-" + randomUUID().slice(0, 8),
+          id: vId,
           name: opts.version,
           status: "planning",
-          created_at: nowIso(),
+          created_at: vCreatedAt,
         },
         body: "\n## 范围\n\n（隐式创建：由 create-goal --version 带入）\n",
       });
       appendEvent(root, {
         actor: opts.actor,
         event: "version.created",
-        details: { version: opts.version, implicit: true },
+        details: {
+          version: opts.version,
+          name: opts.version,
+          version_id: vId,
+          status: "planning",
+          created_at: vCreatedAt,
+          implicit: true,
+        },
       });
     }
   } else {
@@ -544,6 +571,143 @@ export function setCriteria(
       rules_snapshot: doc.meta.rules_snapshot,
     },
   });
+}
+
+// ---- 最近指令（directive）与评论（comments）—— g-150 范围扩展 ----
+// 设计兼容性：最近指令是 goal 级持久化设置，仅在 graph_start_attempt / start-execution
+// 创建新 attempt 时被读取注入。它不影响 send_message 续办既有 agent 会话的路径——
+// 小范围 review 修复应优先 send_message 到已有 child，不必新建 attempt（负责人规则）。
+// 评论仅写入 goal.md 供人工查看，不自动注入任何 prompt。
+
+/** 读取目标的「最近指令」：从 goal.md body 的 `## 最近指令` 小节提取纯文本。
+ *  小节不存在或为空（仅含 HTML 注释/空白）返回 null。 */
+export function readGoalDirective(root: string, goalId: string): string | null {
+  const file = findGoalFile(root, goalId);
+  const doc = loadGoal(file);
+  const raw = sectionText(doc.body, "最近指令");
+  if (raw === null) return null;
+  // 去掉 HTML 注释和首尾空白
+  const cleaned = raw.replace(/<!--[\s\S]*?-->/g, "").trim();
+  return cleaned || null;
+}
+
+/** 设置/替换目标的「最近指令」——覆盖 `## 最近指令` 小节内容。
+ *  事件先行：先追加 goal.directive_set 事件，再写文件。
+ *  directive 为空字符串时清空小节（保留占位 HTML 注释）。 */
+export function setGoalDirective(
+  root: string,
+  goalId: string,
+  directive: string,
+  actor: string,
+): void {
+  if (typeof directive !== "string") throw new GraphError("directive 必须是 string 类型");
+  const file = findGoalFile(root, goalId);
+  const doc = loadGoal(file);
+  const trimmed = directive.trim();
+  // 防止 directive 内容包含 ## 标题破坏 section 边界（g-150 返工阻断项 #5）
+  const safe = sanitizeHeadingContent(trimmed);
+  // 构造小节内容：有实质内容时以空行开头、换行结尾；无内容时保留占位注释
+  const sectionContent = safe
+    ? `\n${safe}\n\n`
+    : `\n<!-- 下一次 attempt 生效的补充任务、边界和验收；新 attempt spawn 前自动读取注入 -->\n\n`;
+  try {
+    doc.body = replaceSection(doc.body, "最近指令", sectionContent);
+  } catch {
+    // 小节不存在（老目标模板）：追加到目标描述和质量判据之间
+    const marker = "\n## 质量判据\n";
+    const idx = doc.body.indexOf(marker);
+    if (idx >= 0) {
+      doc.body = doc.body.slice(0, idx) + `\n## 最近指令\n${sectionContent}` + doc.body.slice(idx);
+    } else {
+      // 都没有则追加到末尾
+      doc.body = doc.body.replace(/\n*$/, "") + `\n\n## 最近指令\n${sectionContent}`;
+    }
+  }
+  // 事件先行
+  appendEvent(root, {
+    actor,
+    event: "goal.directive_set",
+    goal: goalId,
+    details: { directive: trimmed || null },
+  });
+  saveGoal(file, doc);
+}
+
+/** 读取目标的「评论」历史：从 goal.md body 的 `## 评论` 小节解析结构化评论列表。
+ *  评论以 `### <时间> | <作者>` 开头分隔，正文到下一个 ### 或小节末尾。
+ *  无评论或小节不存在返回空数组。 */
+export function readGoalComments(root: string, goalId: string): Array<{ ts: string; author: string; text: string }> {
+  const file = findGoalFile(root, goalId);
+  const doc = loadGoal(file);
+  const raw = sectionText(doc.body, "评论");
+  if (raw === null) return [];
+  const cleaned = raw.replace(/<!--[\s\S]*?-->/g, "").trim();
+  if (!cleaned) return [];
+  const comments: Array<{ ts: string; author: string; text: string }> = [];
+  const lines = cleaned.split("\n");
+  let current: { ts: string; author: string; text: string } | null = null;
+  for (const line of lines) {
+    const m = /^###\s+(.+?)\s*\|\s*(.+)$/.exec(line.trim());
+    if (m) {
+      if (current) comments.push(current);
+      current = { ts: m[1].trim(), author: m[2].trim(), text: "" };
+    } else if (current) {
+      current.text += (current.text ? "\n" : "") + line;
+    }
+  }
+  if (current) comments.push(current);
+  // 清理每条评论的首尾空白
+  for (const c of comments) c.text = c.text.trim();
+  return comments;
+}
+
+/** 向目标的「评论」小节追加一条评论。
+ *  事件先行：先追加 goal.comment_added 事件，再写文件。 */
+export function appendGoalComment(
+  root: string,
+  goalId: string,
+  text: string,
+  actor: string,
+): void {
+  if (typeof text !== "string" || !text.trim()) throw new GraphError("评论内容不能为空");
+  const file = findGoalFile(root, goalId);
+  const doc = loadGoal(file);
+  const ts = nowIso();
+  const authorLabel = actor.replace(/^human:/, "").replace(/^supervisor:/, "主管:").replace(/^agent:/, "Agent:");
+  // 防止评论内容包含 ## / ### 标题破坏 section 边界（g-150 返工阻断项 #5）
+  const safeText = sanitizeHeadingContent(text.trim());
+  const entry = `\n### ${ts} | ${authorLabel}\n\n${safeText}\n`;
+  // 事件先行
+  appendEvent(root, {
+    actor,
+    event: "goal.comment_added",
+    goal: goalId,
+    details: { text: text.trim(), ts },
+  });
+  const raw = sectionText(doc.body, "评论");
+  if (raw === null) {
+    // 小节不存在（老目标模板）：追加到末尾
+    doc.body = doc.body.replace(/\n*$/, "") + `\n\n## 评论\n${entry}\n`;
+  } else {
+    // 追加到现有小节末尾
+    const sectionContent = raw.replace(/<!--[\s\S]*?-->/g, "").trimEnd();
+    const newContent = (sectionContent ? `\n${sectionContent}` : "") + entry + "\n";
+    try {
+      doc.body = replaceSection(doc.body, "评论", newContent);
+    } catch {
+      // 不应到这里，但保底
+      doc.body = doc.body.replace(/\n*$/, "") + entry;
+    }
+  }
+  saveGoal(file, doc);
+}
+
+/** 格式化最近指令注入段（供执行派发 prompt）。
+ *  无指令时返回空字符串（调用方条件拼接，不影响无指令 prompt）。 */
+export function formatGoalDirectiveSection(root: string, goalId: string): string {
+  const directive = readGoalDirective(root, goalId);
+  if (!directive) return "";
+  return `## 最近指令（g-150 注入：目标 ${goalId} 的当前补充约束）\n\n${directive}\n`;
 }
 
 /** 状态迁移：状态机校验 → 写回 frontmatter（保留正文）→ 追加事件。 */
@@ -717,8 +881,12 @@ export function validate(root: string): string[] {
 
 /** 从事件流重建状态并与 frontmatter 比对；返回 drift 列表。 */
 export function rebuild(root: string): string[] {
-  const replayed = replayStatuses(readEvents(root));
+  const events = readEvents(root);
+  const replayed = replayStatuses(events);
+  const versionLanes = replayVersionLanes(events);
   const drift: string[] = [];
+
+  // 目标状态对账
   for (const file of listGoalFiles(root)) {
     let doc: GoalDoc;
     try {
@@ -736,6 +904,22 @@ export function rebuild(root: string): string[] {
       );
     }
   }
+
+  // 版本泳道对账：事件流中存活但磁盘缺失 → 需恢复
+  for (const [slug, lane] of versionLanes) {
+    if (!lane.alive) continue; // 已删除版本无需对账
+    const vdir = join(root, "versions", slug);
+    const vfile = join(vdir, "version.md");
+    if (!existsSync(vfile)) {
+      drift.push(`版本 ${slug}: 事件流中存活但 version.md 缺失，需从事件恢复`);
+      // 从事件重建版本目录与 version.md
+      mkdirSync(join(vdir, "goals"), { recursive: true });
+      const body = "\n## 范围\n\n（由 rebuild 从事件流恢复）\n";
+      const doc: GoalDoc = { meta: lane.meta, body };
+      writeFileSync(vfile, serializeDoc(doc), "utf8");
+    }
+  }
+
   return drift;
 }
 
@@ -974,6 +1158,282 @@ export function formatHarvestedCardsSection(root: string, goalId: string): strin
   ].join("\n");
 }
 
+// ---- Attempt Handoff（g-150，单文件简化） ----
+
+/** 手动确认的 attempt 返工 handoff 记录（主管/负责人登记，可注入新 attempt prompt）。
+ *  每个 goal 仅保留一个当前有效 handoff（handoff.md），新登记覆盖旧内容。 */
+export interface AttemptHandoff {
+  id: string;
+  goal: string;
+  status: "confirmed";
+  source_attempts: string[];
+  confirmed_by: string;
+  confirmed_at: string;
+  revision: number;
+  /** 已核实失败/风险 */
+  failures: string;
+  /** 返工约束（禁止项） */
+  constraints: string;
+  /** 推荐基线/必须保留项 */
+  baseline: string;
+  /** 验收命令 */
+  verification: string;
+}
+
+/** handoff 文件的正文模板（结构化可读指令，供新执行者阅读）。 */
+function handoffBody(h: AttemptHandoff): string {
+  const lines: string[] = [];
+  lines.push(`## 已核实失败/风险`);
+  lines.push(``);
+  lines.push(h.failures);
+  lines.push(``);
+  lines.push(`## 返工约束（禁止项）`);
+  lines.push(``);
+  lines.push(h.constraints);
+  lines.push(``);
+  lines.push(`## 推荐基线/必须保留项`);
+  lines.push(``);
+  lines.push(h.baseline);
+  lines.push(``);
+  lines.push(`## 验收命令`);
+  lines.push(``);
+  lines.push(h.verification);
+  lines.push(``);
+  lines.push(`## 来源与裁决说明`);
+  lines.push(``);
+  lines.push(`来源 attempt：${h.source_attempts.join(", ") || "（无）"}`);
+  lines.push(`确认人：${h.confirmed_by}`);
+  lines.push(`确认时间：${h.confirmed_at}`);
+  return lines.join("\n");
+}
+
+/** 校验 confirmed_by 是否为可信的确认来源（g-150 review 问题 1）。
+ *  可信来源：① human:* 类型的 actor（如 human:gui，负责人 GUI 操作）；
+ *  ② supervisor:<sessionId> 格式且 sessionId 匹配 project.yaml 的 supervisor.session。
+ *  不可信来源（如 agent:*）会被拒绝，防止任意 caller 伪造确认身份。 */
+function validateConfirmedBy(root: string, confirmed_by: string): void {
+  if (!confirmed_by || !confirmed_by.trim()) {
+    throw new GraphError("confirmed_by 不能为空");
+  }
+  // human:* 类型是可信的（负责人直接操作）
+  if (confirmed_by.startsWith("human:")) return;
+  // supervisor:<sessionId> 需要校验 sessionId 匹配 project.yaml 的 supervisor.session
+  if (confirmed_by.startsWith("supervisor:")) {
+    const sessionId = confirmed_by.slice("supervisor:".length);
+    const configuredSession = readSupervisorSession(root);
+    if (configuredSession && sessionId === configuredSession) return;
+    // 未配置 supervisor.session 时，允许 supervisor:* 前缀（首次 claim 前的引导阶段）
+    if (!configuredSession) return;
+    throw new GraphError(
+      `确认身份 ${confirmed_by} 不匹配已配置的 supervisor.session（${configuredSession}）——只有已 claim 的主管会话或负责人可确认 handoff`,
+    );
+  }
+  // 本地可信工作区：agent:* 格式允许（g-150 返工阻断项 #1）
+  // confirmed_by 仅为审计溯源字段，不作为安全边界
+  if (confirmed_by.startsWith("agent:")) return;
+  // 其他未知前缀仍拒绝
+  throw new GraphError(
+    `确认身份 ${confirmed_by} 前缀未知——仅支持 human:*、supervisor:* 或 agent:*`,
+  );
+}
+
+/** 主管/负责人登记 attempt handoff（g-150，单文件简化）。
+ *  每个 goal 仅一个 handoff.md；新登记覆盖旧内容（旧历史由事件流保留）。
+ *  事件先行：确认事件在 handoff 文件写入之前追加。 */
+export function recordAttemptHandoff(
+  root: string,
+  goalId: string,
+  opts: {
+    source_attempts: string[];
+    failures: string;
+    constraints: string;
+    baseline: string;
+    verification: string;
+    confirmed_by: string;
+    actor: string;
+  },
+): string {
+  // 校验确认身份可信
+  validateConfirmedBy(root, opts.confirmed_by);
+
+  // 校验 source attempts 属于该 goal
+  const goalFile = findGoalFile(root, goalId);
+  const dir = goalDirOf(goalFile);
+  for (const att of opts.source_attempts) {
+    const attFile = join(dir, "attempts", att, "attempt.md");
+    if (!existsSync(attFile)) {
+      throw new GraphError(`来源 attempt 不存在：${att}（目标 ${goalId}）`);
+    }
+  }
+
+  const now = nowIso();
+  const hfFile = join(dir, "handoff.md");
+  const isNew = !existsSync(hfFile);
+
+  // 读旧 handoff 的 revision（覆盖时递增）
+  let revision = 1;
+  if (!isNew) {
+    try {
+      const oldDoc = loadGoal(hfFile);
+      const oldRev = (oldDoc.meta as Record<string, unknown>).revision;
+      if (typeof oldRev === "number" && oldRev >= 1) revision = oldRev + 1;
+    } catch { /* 坏文件从 1 开始 */ }
+  }
+
+  const handoff: AttemptHandoff = {
+    id: "handoff",
+    goal: goalId,
+    status: "confirmed",
+    source_attempts: opts.source_attempts,
+    confirmed_by: opts.confirmed_by,
+    confirmed_at: now,
+    revision,
+    failures: opts.failures,
+    constraints: opts.constraints,
+    baseline: opts.baseline,
+    verification: opts.verification,
+  };
+
+  // 事件先行：先写确认事件，再写 handoff 文件
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "attempt.handoff.confirmed",
+    goal: goalId,
+    details: {
+      handoff: "handoff",
+      revision,
+      source_attempts: opts.source_attempts,
+      overwrote_previous: !isNew,
+    },
+  });
+
+  // 写 handoff 文件（覆盖）
+  saveGoal(hfFile, { meta: handoff, body: handoffBody(handoff) });
+
+  return "handoff";
+}
+
+/** 读取目标的当前有效 attempt handoff（g-150，单文件简化）。
+ *  优先读 <goal>/handoff.md；若不存在则兼容读取遗留 handoffs/ 目录中最新 confirmed。
+ *  malformed 数据安全降级，不崩溃。 */
+export function harvestReviewedAttemptHandoffs(root: string, goalId: string): AttemptHandoff[] {
+  const goalFile = findGoalFile(root, goalId);
+  const dir = goalDirOf(goalFile);
+
+  // 优先：单文件 handoff.md
+  const singleFile = join(dir, "handoff.md");
+  if (existsSync(singleFile)) {
+    try {
+      const doc = loadGoal(singleFile);
+      const raw = doc.meta as Record<string, unknown>;
+      if (raw.status === "confirmed" && raw.id && raw.confirmed_by && raw.confirmed_at) {
+        const h: AttemptHandoff = {
+          id: String(raw.id) || "handoff",
+          goal: goalId,
+          status: "confirmed",
+          source_attempts: Array.isArray(raw.source_attempts) ? raw.source_attempts as string[] : [],
+          confirmed_by: String(raw.confirmed_by),
+          confirmed_at: String(raw.confirmed_at),
+          revision: typeof raw.revision === "number" ? raw.revision : 1,
+          failures: String(raw.failures ?? ""),
+          constraints: String(raw.constraints ?? ""),
+          baseline: String(raw.baseline ?? ""),
+          verification: String(raw.verification ?? ""),
+        };
+        if (h.failures && h.constraints && h.baseline && h.verification) return [h];
+      }
+    } catch { /* 坏文件跳过 */ }
+  }
+
+  // 兼容遗留：handoffs/ 目录下多个文件，取最新 confirmed
+  const handoffsDir = join(dir, "handoffs");
+  if (!existsSync(handoffsDir)) return [];
+  const files = readdirSync(handoffsDir).filter((f) => f.startsWith("hf-") && f.endsWith(".md"));
+  const all: AttemptHandoff[] = [];
+  for (const f of files) {
+    try {
+      const doc = loadGoal(join(handoffsDir, f));
+      const raw = doc.meta as Record<string, unknown>;
+      if (raw.status !== "confirmed") continue;
+      if (raw.superseded_by != null) continue;
+      if (!raw.id || !raw.confirmed_by || !raw.confirmed_at) continue;
+      if (!Array.isArray(raw.source_attempts) || !raw.failures || !raw.constraints || !raw.baseline || !raw.verification) continue;
+      const supersedes = Array.isArray(raw.supersedes)
+        ? (raw.supersedes as unknown[]).filter((x): x is string => typeof x === "string")
+        : [];
+      // 用 superseded 事件和 supersedes 链排除被淘汰的
+      const supersededEvents = readEvents(root).filter(
+        (e) => e.event === "attempt.handoff.superseded" && e.goal === goalId,
+      );
+      const supersededIds = new Set(supersededEvents.map((e) => e.details?.old_handoff).filter(Boolean));
+      if (supersededIds.has(raw.id as string)) continue;
+      // 检查是否被其他 handoff 的 supersedes 引用
+      const isSupersededByOther = files.some((other) => {
+        if (other === f) return false;
+        try {
+          const otherDoc = loadGoal(join(handoffsDir, other));
+          const otherMeta = otherDoc.meta as Record<string, unknown>;
+          if (otherMeta.status !== "confirmed") return false;
+          const otherSupersedes = Array.isArray(otherMeta.supersedes) ? otherMeta.supersedes as string[] : [];
+          return otherSupersedes.includes(raw.id as string);
+        } catch { return false; }
+      });
+      if (isSupersededByOther) continue;
+      all.push({
+        id: raw.id as string,
+        goal: goalId,
+        status: "confirmed",
+        source_attempts: raw.source_attempts as string[],
+        confirmed_by: raw.confirmed_by as string,
+        confirmed_at: raw.confirmed_at as string,
+        revision: typeof raw.revision === "number" ? raw.revision : 1,
+        failures: raw.failures as string,
+        constraints: raw.constraints as string,
+        baseline: raw.baseline as string,
+        verification: raw.verification as string,
+      });
+    } catch { /* 坏文件跳过 */ }
+  }
+  if (all.length === 0) return [];
+  // 取最新
+  all.sort((a, b) => a.confirmed_at.localeCompare(b.confirmed_at));
+  return [all[all.length - 1]];
+}
+
+/** 格式化已确认 handoff 注入段（g-150，供执行派发 prompt）。
+ *  无有效 handoff 时返回空字符串（调用方条件拼接，不影响无历史 prompt）。 */
+export function formatReviewedAttemptHandoffsSection(root: string, goalId: string): string {
+  const handoffs = harvestReviewedAttemptHandoffs(root, goalId);
+  if (handoffs.length === 0) return "";
+
+  const h = handoffs[0]; // 单文件简化：最多一个
+  const meta = [
+    `来源 attempt：${h.source_attempts.join(", ")}`,
+    `确认人：${h.confirmed_by}`,
+    `确认时间：${h.confirmed_at}`,
+    `revision：${h.revision}`,
+  ].filter(Boolean).join("；");
+
+  const sections = [
+    `## 前序 attempt 已确认 handoff（g-150 注入：仅主管/负责人确认的返工约束，非 agent 自述）`,
+    ``,
+    `（${meta}）`,
+    ``,
+    `**已核实失败/风险：**`,
+    ...h.failures.split("\n").map((l) => `${l}`),
+    ``,
+    `**返工约束（禁止项）：**`,
+    ...h.constraints.split("\n").map((l) => `${l}`),
+    ``,
+    `**推荐基线/必须保留项：**`,
+    ...h.baseline.split("\n").map((l) => `${l}`),
+    ``,
+    `**验收命令：**`,
+    ...h.verification.split("\n").map((l) => `${l}`),
+  ];
+  return sections.join("\n");
+}
+
 /** 生成收集子代理的完整提示词（g-145）：注入仓库根、goal/card 元数据、收集范围、
  *  精确回填模板和禁区。用户提供的 prompt 作为附加要求追加在末尾。 */
 export function formatCollectPrompt(
@@ -1075,12 +1535,29 @@ const ATTEMPT_BODY = `
 
 /** 创建 attempt 目录与 attempt.md，追加 attempt.started 事件；返回 attempt id。
  *  opts.injectedCards：已注入执行子代理 prompt 的卡片 id 清单（按注入顺序，g-120）；
- *  提供时记入 attempt.started 的 details.injected_cards（含空数组＝明确注入零张）。 */
+ *  提供时记入 attempt.started 的 details.injected_cards（含空数组＝明确注入零张）。
+ *  opts.injectedHandoffs：已注入执行子代理 prompt 的 handoff 引用清单（g-150）；
+ *  提供时记入 attempt.started 的 details.injected_handoffs 与 attempt.md meta。
+ *  opts.attemptBrief：主管为本次 attempt 提供的可审计 brief/directive（g-150）；
+ *  提供时记入 attempt.started 的 details.brief 与 attempt.md meta。
+ *  opts.injectedDirective：从 goal.md「最近指令」小节读取并注入 prompt 的内容快照（g-150 范围扩展）；
+ *  提供时记入 attempt.started 的 details.injected_directive 与 attempt.md meta。 */
 export function startAttempt(
   root: string,
   goalId: string,
-  opts: { executor: string; actor: string; injectedCards?: string[] },
+  opts: {
+    executor: string;
+    actor: string;
+    injectedCards?: string[];
+    injectedHandoffs?: Array<{ id: string; revision: number; source_attempts: string[] }>;
+    attemptBrief?: string;
+    injectedDirective?: string;
+  },
 ): string {
+  // 校验 attemptBrief 类型（g-150 review 问题 4：必须是 string 或 undefined，不可是其他类型）
+  if (opts.attemptBrief !== undefined && typeof opts.attemptBrief !== "string") {
+    throw new GraphError("attemptBrief 必须是 string 类型");
+  }
   const goalFile = findGoalFile(root, goalId);
   const dir = join(goalDirOf(goalFile), "attempts");
   mkdirSync(dir, { recursive: true });
@@ -1099,18 +1576,42 @@ export function startAttempt(
     result: "pending",
     child_id: null,
   };
+  // g-150：写入 injected_handoffs 和 brief 到 attempt meta（审计可追溯）
+  // 无 handoff/brief 时保持当前 prompt 兼容（g-150 review 问题 5）
+  if (Array.isArray(opts.injectedHandoffs)) {
+    meta.injected_handoffs = opts.injectedHandoffs;
+  }
+  if (opts.attemptBrief && opts.attemptBrief.trim()) {
+    meta.brief = opts.attemptBrief;
+  }
+  // g-150 范围扩展：写入最近指令快照到 attempt meta（审计可追溯）
+  if (opts.injectedDirective && opts.injectedDirective.trim()) {
+    meta.injected_directive = opts.injectedDirective.trim();
+  }
   saveGoal(join(attDir, "attempt.md"), { meta, body: ATTEMPT_BODY });
+  const details: Record<string, any> = {
+    attempt: attId,
+    executor: opts.executor,
+    ...(Array.isArray(opts.injectedCards)
+      ? { injected_cards: opts.injectedCards }
+      : {}),
+    // 空值表达一致（g-150 review 问题 4）：有 injectedHandoffs 且非空时记录，空数组也明确记录
+    ...(Array.isArray(opts.injectedHandoffs)
+      ? { injected_handoffs: opts.injectedHandoffs }
+      : {}),
+    ...(opts.attemptBrief && opts.attemptBrief.trim()
+      ? { brief: opts.attemptBrief }
+      : {}),
+    // g-150 范围扩展：记录注入的最近指令快照
+    ...(opts.injectedDirective && opts.injectedDirective.trim()
+      ? { injected_directive: opts.injectedDirective.trim() }
+      : {}),
+  };
   appendEvent(root, {
     actor: opts.actor,
     event: "attempt.started",
     goal: goalId,
-    details: {
-      attempt: attId,
-      executor: opts.executor,
-      ...(Array.isArray(opts.injectedCards)
-        ? { injected_cards: opts.injectedCards }
-        : {}),
-    },
+    details,
   });
   return attId;
 }
@@ -1776,6 +2277,12 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
       }
     }
   }
+  // g-150：读取最近指令和评论历史
+  const directive = readGoalDirective(root, goalId);
+  const comments = readGoalComments(root, goalId);
+  // g-150：读取当前有效 handoff
+  const handoffs = harvestReviewedAttemptHandoffs(root, goalId);
+  const handoff = handoffs.length > 0 ? handoffs[0] : null;
   return {
     meta: doc.meta,
     body: doc.body,
@@ -1783,6 +2290,9 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
     attempts,
     events,
     goalFile: file,  // g-129: 暴露 goal.md 路径（绝对路径）
+    directive,
+    comments,
+    handoff,
   };
 }
 

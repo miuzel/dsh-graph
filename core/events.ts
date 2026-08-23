@@ -62,6 +62,53 @@ export function readEvents(root: string): GraphEvent[] {
 }
 
 /**
+ * 从事件流重建各版本泳道最终状态：
+ * version.created → 存活；version.renamed → slug 变更；version.deleted → 删除。
+ * 返回 Map<slug, { alive, meta }>，其中 alive=false 表示已删除。
+ */
+export function replayVersionLanes(events: GraphEvent[]): Map<string, { alive: boolean; meta: Record<string, any> }> {
+  const lanes = new Map<string, { alive: boolean; meta: Record<string, any> }>();
+  for (const ev of events) {
+    if (ev.event === "version.created") {
+      const slug = ev.details?.version;
+      if (!slug) continue;
+      lanes.set(slug, {
+        alive: true,
+        meta: {
+          id: ev.details.version_id ?? null,
+          name: ev.details.name ?? slug,
+          status: ev.details.status ?? "planning",
+          created_at: ev.details.created_at ?? ev.ts,
+        },
+      });
+    } else if (ev.event === "version.renamed") {
+      const oldSlug = ev.details?.old_slug;
+      const newSlug = ev.details?.new_slug;
+      if (!oldSlug || !newSlug) continue;
+      const existing = lanes.get(oldSlug);
+      if (existing && existing.alive) {
+        lanes.delete(oldSlug);
+        lanes.set(newSlug, {
+          alive: true,
+          meta: {
+            ...existing.meta,
+            name: ev.details.new_name ?? existing.meta.name,
+          },
+        });
+      }
+    } else if (ev.event === "version.deleted") {
+      const slug = ev.details?.version;
+      if (!slug) continue;
+      const existing = lanes.get(slug);
+      if (existing) {
+        lanes.set(slug, { ...existing, alive: false });
+      }
+    }
+  }
+  return lanes;
+}
+
+/**
  * 从事件流重建各目标状态：
  * goal.created → draft（无 version）或 planning（有 version）；
  * goal.planned 在 draft 时 → planning；goal.transition → details.to。

@@ -29,7 +29,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 22); // g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help + g-141 graph_rename_goal + g-110 archive/unarchive + g-140 delete
+  assert.equal(registered.length, 25); // g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help + g-141 graph_rename_goal + g-110 archive/unarchive + g-140 delete + g-150 graph_record_attempt_handoff + g-150 范围扩展 graph_set_directive / graph_add_comment
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
@@ -50,6 +50,16 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
   const att = await call("graph_start_attempt", { goal });
   assert.equal(att.child_id, null); // 无 subagents → 降级
   assert.ok(typeof att.note === "string");
+  // g-150：graph_record_attempt_handoff 登记返工 handoff
+  const hf = await call("graph_record_attempt_handoff", {
+    goal,
+    source_attempts: [att.attempt],
+    failures: "失败点",
+    constraints: "禁止项",
+    baseline: "基线",
+    verification: "npm test",
+  });
+  assert.ok(hf.handoff, "返回 handoff id");
   await call("graph_report_status", { goal, attempt: att.attempt, status: "测试中" });
   await call("graph_report_supervisor_status", { status: "主管调度中" });
   const { readSupervisorStatus, readSupervisorStatusAt } = await import("../ops.ts");
