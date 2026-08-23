@@ -187,7 +187,7 @@ test("start-collection 有 subagents：验证使用 formatCollectPrompt 生成�
   assert.equal(res._body.child_id, "c-test");
 
   // 验证捕获的提示词包含所有必要字段
-  assert.ok(capturedPrompt.includes(`**仓库根目录**：\`${root}\``), "应包含仓库根目录");
+  assert.ok(capturedPrompt.includes("**工作目录**：当前分配的 worktree/当前工作目录"), "应包含当前工作目录约束");
   assert.ok(capturedPrompt.includes(`- id: \`${goalId}\``), "应包含 goal id");
   assert.ok(capturedPrompt.includes(`- 标题: 测试目标`), "应包含 goal 标题");
   assert.ok(capturedPrompt.includes(`- id: \`${card}\``), "应包含 card id");
@@ -244,7 +244,7 @@ test("start-collection 用户 prompt 作为附加要求追加，不可替代强�
   assert.equal(res._code, 200);
 
   // 强制段仍然存在
-  assert.ok(capturedPrompt.includes(`**仓库根目录**：\`${root}\``), "强制段：仓库根");
+  assert.ok(capturedPrompt.includes("**工作目录**：当前分配的 worktree/当前工作目录"), "强制段：当前工作目录");
   assert.ok(capturedPrompt.includes(`graph_fill_card(goal="${goalId}"`), "强制段：回填模板");
   assert.ok(capturedPrompt.includes("**禁区（严格遵守）**"), "强制段：禁区");
   // 用户附加要求追加在末尾

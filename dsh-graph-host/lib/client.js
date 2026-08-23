@@ -1051,7 +1051,7 @@ window.__ModuleLoader__.load({
           const autoPrompt = [
             `## 收集任务上下文`,
             ``,
-            `**仓库根目录**：\`${root}\``,
+            `**工作目录**：当前分配的 worktree/当前工作目录（不要猜测 .dsh-graph 文件路径）`,
             ``,
             `**目标信息**：`,
             `- id: \`${props.goalId}\``,
@@ -1077,7 +1077,7 @@ window.__ModuleLoader__.load({
             `1. 不得猜测 \`.dsh-graph\` 文件路径——所有路径已在上方提供`,
             `2. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${card.id}\``,
             `3. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
-            `4. 所有 graph 工具操作必须在仓库根目录 \`${root}\` 下运行`,
+            `4. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
           ].join("\n");
           const childLink = card.child_id
             ? h("div", { style: S.drawerSection, key: "child" },

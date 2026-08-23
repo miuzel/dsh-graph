@@ -997,7 +997,7 @@ export function formatCollectPrompt(
   const sections = [
     `## 收集任务上下文`,
     ``,
-    `**仓库根目录**：\`${root}\``,
+    `**工作目录**：当前分配的 worktree/当前工作目录（不要猜测 .dsh-graph 文件路径）`,
     ``,
     `**目标信息**：`,
     `- id: \`${goalId}\``,
@@ -1023,7 +1023,7 @@ export function formatCollectPrompt(
     `1. 不得猜测 \`.dsh-graph\` 文件路径——所有路径已在上方提供`,
     `2. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${cardId}\``,
     `3. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
-    `4. 所有 graph 工具操作必须在仓库根目录 \`${root}\` 下运行`,
+    `4. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
   ];
   
   // 如果有用户提供的附加要求，追加在末尾
@@ -1781,7 +1781,6 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
     attempts,
     events,
     goalFile: file,  // g-129: 暴露 goal.md 路径（绝对路径）
-    root: root,      // g-145: 暴露仓库根目录（供 GUI 收集 prompt 使用）
   };
 }
 
