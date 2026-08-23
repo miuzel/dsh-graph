@@ -41,14 +41,22 @@ function versionHasGoals(root: string, slug: string): boolean {
   const goalsDir = join(vdir, "goals");
   if (existsSync(goalsDir)) {
     const entries = readdirSync(goalsDir).filter((d) => !d.startsWith("."));
-    if (entries.length > 0) return true;
+    // 检查每个目录是否包含 goal.md 文件
+    for (const entry of entries) {
+      const goalFile = join(goalsDir, entry, "goal.md");
+      if (existsSync(goalFile)) return true;
+    }
   }
   
   // 检查 archived/ 目录
   const archivedDir = join(vdir, "archived");
   if (existsSync(archivedDir)) {
     const entries = readdirSync(archivedDir).filter((d) => !d.startsWith("."));
-    if (entries.length > 0) return true;
+    // 检查每个目录是否包含 goal.md 文件
+    for (const entry of entries) {
+      const goalFile = join(archivedDir, entry, "goal.md");
+      if (existsSync(goalFile)) return true;
+    }
   }
   
   return false;
