@@ -810,19 +810,20 @@ export function fillCard(
   const { file, doc } = loadCard(root, goalId, cardId);
   
   // g-145：绑定保护——如果卡片处于 collecting 状态且有 child_id，
-  // 则只有绑定的 child 或 supervisor/human 可以填充
+  // 则只有绑定的 child 或非 collect agent（human/supervisor 通过工具调用）可以填充。
+  // human actor 以 "human:" 开头；supervisor/其他 agent 以 "agent:" 开头但 by !== child_id。
+  // 区分方式：绑定 child 的 by === child_id → 直接放行；human → 放行；其余 → mismatch 软事件。
   if (doc.meta.status === "collecting" && doc.meta.child_id) {
     const isBoundChild = opts.by === doc.meta.child_id;
-    const isSupervisorOrHuman = opts.actor === "human:gui" || opts.actor === "agent:supervisor";
-    if (!isBoundChild && !isSupervisorOrHuman) {
-      // 记录 fill_mismatch 事件，但不阻止填充（兼容人工/supervisor 回填）
+    const isHuman = opts.actor.startsWith("human:");
+    if (!isBoundChild && !isHuman) {
       appendEvent(root, {
         actor: opts.actor,
         event: "card.fill_mismatch",
         goal: goalId,
-        details: { 
-          card: cardId, 
-          by: opts.by, 
+        details: {
+          card: cardId,
+          by: opts.by,
           expected_child: doc.meta.child_id,
           message: "填充者与绑定的 child 不匹配"
         },
