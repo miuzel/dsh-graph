@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, relative } from "node:path";
 import { init, createGoal, findGoalFile, loadGoal, setCriteria, transition } from "../ops.ts";
@@ -525,4 +525,71 @@ test("g-113 start-execution 注入目标相对路径以请求 workspace 为基�
   assert.equal(res._body.child_id, "c-x");
   const expected = relative(ws, findGoalFile(join(ws, ".dsh-graph"), goalId));
   assert.ok(capturedPrompt.includes(expected), `prompt 含 workspace 根基准相对路径：${expected}`);
+});
+
+// ===== g-148：模块源/生成 bundle onRefresh 注入契约回归 =====
+
+test("g-148 模块源契约：goal-actions.js AcceptFeedback 解构 onRefresh 并在成功路径调用 onRefresh?.()", () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  // AcceptFeedback 解构 onRefresh
+  assert.ok(
+    /const\s*\{\s*goalId\s*,\s*status\s*,\s*events\s*,\s*supervisorSession\s*,\s*onRefresh\s*\}\s*=\s*props/.test(src),
+    "AcceptFeedback props 解构包含 onRefresh");
+  // 成功路径调用 onRefresh?.()
+  assert.ok(
+    /onRefresh\?\.\(\)/.test(src),
+    "startExecution 成功分支调用 onRefresh?.()");
+});
+
+test("g-148 模块源契约：goal-actions.js AcceptFeedback 成功路径无裸 load() 调用", () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  // 提取 AcceptFeedback 函数体（从 function AcceptFeedback 到同级函数定义或文件末尾）
+  const fnMatch = /function AcceptFeedback\(props\)\s*\{([\s\S]*?)(?=\n    function |\n    \/\/ g-\d+[：:]|\n\s*\}$)/.exec(src);
+  assert.ok(fnMatch, "找到 AcceptFeedback 函数体");
+  const fnBody = fnMatch[1];
+  // AcceptFeedback 函数体内不应有裸 load()（onRefresh?.() 是正确的）
+  const bareLoadCalls = fnBody.match(/(?<!\.)load\(\)/g);
+  assert.ok(!bareLoadCalls, "AcceptFeedback 函数体内无裸 load() 调用");
+});
+
+test("g-148 模块源契约：goal-modal.js 向 AcceptFeedback 传递 onRefresh: load", () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  // GoalModal 中渲染 AcceptFeedback 时传入 onRefresh: load
+  assert.ok(
+    /onRefresh:\s*load/.test(src),
+    "GoalModal 向 AcceptFeedback 传递 onRefresh: load");
+  // load 使用 useCallback 定义（稳定引用）
+  assert.ok(
+    /const\s+load\s*=\s*React\.useCallback/.test(src),
+    "load 使用 useCallback 定义为稳定回调");
+});
+
+test("g-148 生成 bundle 契约：client.js 含 onRefresh 解构/调用且无裸 load()，保留 generated header", () => {
+  const bundle = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  // generated header 存在
+  assert.ok(
+    bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"),
+    "client.js 保留 GENERATED FILE header");
+  // AcceptFeedback 解构 onRefresh
+  assert.ok(
+    /const\s*\{\s*goalId\s*,\s*status\s*,\s*events\s*,\s*supervisorSession\s*,\s*onRefresh\s*\}\s*=\s*props/.test(bundle),
+    "生成 bundle: AcceptFeedback 解构包含 onRefresh");
+  // 成功路径调用 onRefresh?.()
+  assert.ok(
+    /onRefresh\?\.\(\)/.test(bundle),
+    "生成 bundle: startExecution 成功分支调用 onRefresh?.()");
+  // GoalModal 向 AcceptFeedback 传递 onRefresh: load
+  assert.ok(
+    /onRefresh:\s*load/.test(bundle),
+    "生成 bundle: GoalModal 传递 onRefresh: load");
+  // 提取 AcceptFeedback 函数体，验证无裸 load()
+  const fnMatch = /function AcceptFeedback\(props\)\s*\{([\s\S]*?)(?=\n\s{2,4}function |\n\s{2,4}\/\/ g-\d+[：:]|\n\s{2,4}\/\/ 详情 modal)/.exec(bundle);
+  assert.ok(fnMatch, "生成 bundle: 找到 AcceptFeedback 函数体");
+  const fnBody = fnMatch[1];
+  const bareLoadCalls = fnBody.match(/(?<!\.)load\(\)/g);
+  assert.ok(!bareLoadCalls, "生成 bundle: AcceptFeedback 函数体内无裸 load() 调用");
 });
