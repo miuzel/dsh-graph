@@ -90,13 +90,20 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
    （进 in_progress 的判据门禁由引擎强制）；
 3. **执行方声明完成** → `in_progress→review`，卡片移入"确认"列，
    停轮等人工审核；
-4. **负责人 verdict**：通过 → `review→delivered`；打回 → `review→in_progress`
-   并开新 attempt（不沿用失败 attempt）。
+4. **负责人 verdict**：通过 → `review→delivered`；较大返工或新范围打回 →
+   `review→in_progress` 并开新 attempt（不沿用失败 attempt）。
    **review 期间一旦子代理收到反馈重新开始改动/修 bug，立即把卡片
-   `review→in_progress` 放回执行 lane**——看板必须反映"正在改动"的事实，
-   改完重新声明完成再回 review；小修可续用当前 attempt 会话（缓存友好），
-   打回重做才开新 attempt；
+   `review→in_progress` 放回执行 lane**——看板必须反映"正在改动"的事实。
+   对同一 goal 的小范围 review 缺陷，优先复用原执行 Agent 的既有 attempt 会话，
+   以 `send_message` 发送精确修复反馈；不必新建 attempt，也不必新增 context card。
+   此例外仅适用于已有 Agent 的后续返工，不改变新 child 的首次主要任务、边界与
+   验收必须在 spawn 前进入初始 prompt 的要求；较大返工或新范围仍遵循既有负责人
+   gate／新 attempt 政策。改完重新声明完成再回 review；打回重做才开新 attempt；
 5. 任何阶段受阻 → `→blocked` 必须带具体 reason；解除只能回到 `blocked_from`。
+
+### Review strictness calibration（项目专属）
+
+Review 严格度**不是全局默认值**。首次初始化/接手一个项目时（最迟在首次实质技术复核前），supervisor 应请负责人明确该项目的 review 原则：威胁/信任模型（本地可信或多用户/对抗）；必须阻断的类别（判据、正常流程、数据丢失、输入错误）；对 legacy/畸形可选数据的防御性兼容要求；所需证据（测试、代码审查、UI smoke、生成工件）；并发与崩溃恢复预期；以及集成/合并纪律。将负责人的回答写入该项目持久的 goal/supervisor memory，并在后续 review 中据此执行；**不得把本项目的选择硬编码为通用规则**。
 
 6. **交付前置（负责人 2026-08-22 定，2026-08-23 细化 commit 归属）：到 delivered 的目标，其改动必须已 git commit**——
    但**区分谁、何时 commit**：
