@@ -13,7 +13,7 @@
 | **g-142** | client.js 重构 | 将单体 `client.js` 拆分为 14 个职责模块（`kanban.js`、`goal-modal.js`、`card-drawer.js` 等），新增 `scripts/build-client.sh` 构建链路，Generated File Policy 防止直接编辑产物 |
 | **g-134** | 版本泳道管理 | 支持创建、重命名、删除空版本泳道；版本详情弹窗（含重命名/删除按钮）；版本元数据与看板操作入口 |
 | **g-135** | 版本泳道发布 | 发布 gate：版本下所有目标须处于 delivered 状态方可标记 released；记录 `version.released` 事件 |
-| **g-149** | .dsh-graph 数据仓库解耦 | `.dsh-graph` 从主代码仓库移入独立内层 Git 仓库；`events.jsonl` 跟踪；父仓库 `.gitignore` 排除；提供迁移脚本 `migrate-dsh-graph-repo.sh`；canonical root 解析消除 `process.cwd()` 回退 |
+| **g-149** | .dsh-graph 数据仓库解耦 | `.dsh-graph` 从主代码仓库移入独立内层 Git 仓库；`events.jsonl` 跟踪；父仓库 `.gitignore` 排除；提供迁移脚本 `scripts/migrate-dsh-graph-repo.sh`（仅源码仓库提供，不在 npm 包内）；host/REST 无明确 workspace 时不再以服务进程 cwd 自动 init 骨架 |
 | **g-150** | 执行 attempt handoff | `graph_start_attempt` 注入前序失败与返工约束；goal directive、comments 支持；单文件 handoff 简化 |
 | **g-151** | 上下文卡片收集提示词 UX 改进 | 收集提示词编辑框高度增大；卡片抽屉 UX 优化 |
 | **g-152** | 阻塞列折叠交互优化 | 阻塞列折叠/展开改为点击列标题触发，不再独占一行按钮 |
@@ -46,7 +46,7 @@
    - 父仓库的 `.gitignore` 已包含 `/.dsh-graph/`，父仓库不再跟踪看板数据
    - `.dsh-graph/events.jsonl` 和目标文件由内层 Git 仓库独立管理
    - **内层仓库默认无 remote**——数据仍在本地，remote/push 需显式配置
-   - 提供迁移脚本：`bash scripts/migrate-dsh-graph-repo.sh`
+   - 提供迁移脚本 `scripts/migrate-dsh-graph-repo.sh`（仅源码仓库提供，不在 npm 发布包内）
 
    **升级步骤**：
 
@@ -54,8 +54,11 @@
    # 1. 更新 dsh-graph 插件
    dsh plugin update dsh-graph
 
-   # 2. 如已有 .dsh-graph 目录且需要迁移到独立仓库结构
-   bash <plugin-root>/scripts/migrate-dsh-graph-repo.sh
+   # 2. 如已有 .dsh-graph 目录且需要迁移到独立仓库结构，
+   #    从 v0.6.1 源码 checkout 在目标代码仓库根运行迁移脚本：
+   git clone --branch v0.6.1 https://github.com/miuzel/dsh-graph.git /tmp/dsh-graph-src
+   bash /tmp/dsh-graph-src/scripts/migrate-dsh-graph-repo.sh
+   rm -rf /tmp/dsh-graph-src
    ```
 
 2. **客户端代码重构（g-142）**
@@ -78,6 +81,7 @@
 1. **内层 .dsh-graph 仓库无 remote**：默认仅本地存储，负责人需自行配置 remote 实现云端同步/备份
 2. **客户端单文件产物**：虽已拆分为模块化源文件，但发布包中 `client.js` 仍是合并后的单文件——浏览器加载不支持 ES module 分发
 3. **worktree 隔离限制**：graph_* 工具在 linked worktree 中写 `.dsh-graph` 数据时会使用 canonical root 解析回主工作树；极少数边界场景（worktree 路径含特殊字符）可能有兼容性问题
+4. **process.cwd() 兼容回退仍存在**：`resolveRoot` 函数在无显式 workspace 参数时仍以 `process.cwd()` 作为最后兜底（CLI/headless 等无会话上下文场景）。g-149 的变更是 host apply 和 REST 端点在无明确 workspace 时**不再自动 init 骨架**，而非移除 resolver 本身的默认参数
 
 ## 回退说明
 

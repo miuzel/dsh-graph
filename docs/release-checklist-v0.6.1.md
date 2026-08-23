@@ -12,7 +12,7 @@
 - [x] `tsc` 编译通过：`bash scripts/sync-core.sh` → 7 个 `.js` 产物，无 `.ts` 泄漏
 - [x] `node --check dsh-graph-host/lib/client.js` → 语法 OK
 - [x] `client.js` 含 `⚠️ GENERATED FILE` 标记
-- [x] `node --test core/tests/*.test.ts` → **343/343 pass**（主树；worktree 342/343 为环境耦合，见下方说明）
+- [x] `node --test core/tests/*.test.ts` → **343/343 pass**（主树）
 - [x] `npm pack --dry-run` → 28 files, 172.8 kB, shasum `473e1d1e134085c1b829f28a243a8a332d40cff9`
 - [x] Parent/inner Git 边界：父仓库 `.gitignore` 排除 `/.dsh-graph/`，内层仓库无 remote
 
@@ -35,7 +35,7 @@
 
 ---
 
-## 3. 合并到 main
+## 3. 合并到 main 并构建
 
 ```sh
 # 在主工作树执行
@@ -46,57 +46,89 @@ git merge release-prep/v0.6.1 --no-ff -m "chore(release): merge v0.6.1 release-p
 
 ---
 
-## 4. npm 发布（需先登录官方 registry）
-
-```sh
-# 前置：登录（需要负责人凭据）
-npm login --registry=https://registry.npmjs.org
-
-# 发布
-cd /home/miuzel/workspace/personal/dsh-graph/dsh-graph-host
-pnpm publish --registry=https://registry.npmjs.org --no-git-checks
-```
-
-> 注意：本机 `~/.npmrc` 可能指向 npmmirror 镜像——必须显式指定官方 registry。
-
----
-
-## 5. Git tag（发布后）
+## 4. 发布前完整构建与验证
 
 ```sh
 cd /home/miuzel/workspace/personal/dsh-graph
-git tag -a v0.6.1 -m "v0.6.1: 版本泳道生命周期、数据仓库解耦、上下文卡片增强、客户端重构"
-git push origin main --tags
+
+# 4.1 重新构建 client.js（从模块化源文件组装）
+bash scripts/build-client.sh
+
+# 4.2 同步 core 编译产物到发布包
+bash scripts/sync-core.sh
+
+# 4.3 client.js 语法检查
+node --check dsh-graph-host/lib/client.js
+
+# 4.4 全量测试
+node --test core/tests/*.test.ts
+# 预期：343/343 pass
+# 已知：若在 worktree 中运行，plugin.test.ts:93 会因缺少 .dsh-graph fixture 失败 1 条
+# （process.cwd() 耦合测试环境，非代码回归；在主树运行可全绿）
+
+# 4.5 pack dry-run（核验包内容）
+cd dsh-graph-host && npm pack --dry-run && cd ..
+# 预期：28 files, ~173 kB, 无意外文件、无 .ts 泄漏
 ```
 
 ---
 
-## 6. 发布后验证
+## 5. npm 认证与发布
 
 ```sh
-# 6.1 核验 npm 版本
+cd /home/miuzel/workspace/personal/dsh-graph
+
+# 5.1 验证 npm 登录态（不使用 npm login；若失败需负责人手动解决凭据）
+npm whoami --registry=https://registry.npmjs.org
+# 预期：输出 npm 用户名
+# 若报 ENEEDAUTH：设置 NODE_AUTH_TOKEN 环境变量或更新 ~/.npmrc 中
+#   //registry.npmjs.org/:_authToken=<token>
+
+# 5.2 发布（注意：不使用 --no-git-checks，依赖正常 git 状态校验）
+cd dsh-graph-host
+pnpm publish --registry=https://registry.npmjs.org
+```
+
+> 注意：本机 `~/.npmrc` 可能指向 npmmirror 镜像——必须显式指定官方 registry。
+> `--no-git-checks` 不应使用：merge 到 main 后工作树应干净，正常 git 检查是安全网。
+
+---
+
+## 6. 仅 publish 成功后：tag 和 push
+
+```sh
+cd /home/miuzel/workspace/personal/dsh-graph
+
+# 6.1 打 tag
+git tag -a v0.6.1 -m "v0.6.1: 版本泳道生命周期、数据仓库解耦、上下文卡片增强、客户端重构"
+
+# 6.2 推送 main + tag
+GIT_SSH_COMMAND="ssh -F /dev/null" git push origin main --tags
+```
+
+> `GIT_SSH_COMMAND="ssh -F /dev/null"` 绕过本机 `/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf` 权限问题（实机验证，见 docs/release-prep-gh-recon.md §1）。
+
+---
+
+## 7. 发布后验证
+
+```sh
+# 7.1 核验 npm 版本
 npm view dsh-graph version --registry=https://registry.npmjs.org
 # 期望输出：0.6.1
 
-# 6.2 核验包内容
-curl -s https://registry.npmjs.org/dsh-graph/0.6.1 | node -e "
-  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-  console.log('version:', d.version);
-  console.log('files:', Object.keys(d.dist || {}).join(', '));
-"
-
-# 6.3 全新 profile 安装验收
+# 7.2 全新 profile 安装验收
 DSH_HOME=/tmp/dsh-v061-check dsh plugin --profile test add dsh-graph
 DSH_HOME=/tmp/dsh-v061-check dsh --profile test "graph_help"
 # 期望：graph_* 工具注册成功，help 输出包含版本信息
 
-# 6.4 清理验收环境
+# 7.3 清理验收环境
 rm -rf /tmp/dsh-v061-check
 ```
 
 ---
 
-## 7. 可选：清理 worktree
+## 8. 可选：清理 worktree
 
 ```sh
 # 发布确认无误后
@@ -114,3 +146,10 @@ git branch -d release-prep/v0.6.1
 | `dsh-graph-host/package.json` | 修改 | version 0.5.2 → 0.6.1 |
 | `README.md` | 修改 | 版本引用 0.5.1 → 0.6.1 |
 | `docs/release-notes-v0.6.1.md` | 新增 | 完整 release notes、迁移、回退、限制 |
+| `docs/release-checklist-v0.6.1.md` | 新增 | 逐项确认清单 + 手动命令 |
+
+## 附注：scripts/migrate-dsh-graph-repo.sh 不在 npm 包内
+
+迁移脚本 `scripts/migrate-dsh-graph-repo.sh` 仅在源码仓库中提供。
+npm 发布包（`dsh-graph-host/`）的 `files` 白名单不包含 `scripts/` 目录。
+需要运行迁移的用户应从 v0.6.1 源码 checkout 获取该脚本（见 release notes 升级步骤）。
