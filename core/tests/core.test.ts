@@ -260,6 +260,101 @@ test("move-goal：backlog↔standalone↔version，带附件拒绝回 backlog", 
   assert.equal(events.length, 2);
 });
 
+// ---- g-147：standalone ↔ version 迁移保留生命周期状态 ----
+
+test("move-goal：standalone ↔ version 迁移保留 delivered 状态（g-145 场景）", () => {
+  const root = tmpRoot();
+  // 创建独立目标并推进到 delivered 状态
+  const id = createGoal(root, { title: "t", actor: "test" }); // backlog
+  transition(root, id, "planning", { actor: "test" });
+  moveGoal(root, id, { to: "standalone", actor: "test" }); // backlog → standalone, 变为 planning
+  setCriteria(root, id, ["测试判据"], "test"); // 设置判据以允许进入 in_progress
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test" });
+  transition(root, id, "review", { actor: "test" });
+  transition(root, id, "delivered", { actor: "test" });
+  
+  // 验证当前状态为 delivered
+  let doc = loadGoal(findGoalFile(root, id));
+  assert.equal(doc.meta.status, "delivered");
+  
+  // standalone → version，应保留 delivered 状态
+  moveGoal(root, id, { to: "version", version: "v0.5", actor: "test" });
+  doc = loadGoal(findGoalFile(root, id));
+  assert.equal(doc.meta.status, "delivered");
+  assert.equal(doc.meta.version, "v0.5");
+  
+  // version → standalone，仍应保留 delivered 状态
+  moveGoal(root, id, { to: "standalone", actor: "test" });
+  doc = loadGoal(findGoalFile(root, id));
+  assert.equal(doc.meta.status, "delivered");
+  assert.equal(doc.meta.version, null);
+  
+  // 验证事件序列：只有 goal.moved，没有额外的 goal.transition
+  const movedEvents = readEvents(root).filter((e) => e.event === "goal.moved");
+  assert.equal(movedEvents.length, 3); // backlog→standalone, standalone→version, version→standalone
+  const transitionEvents = readEvents(root).filter((e) => e.event === "goal.transition");
+  // 应该只有我们手动调用的 transition，没有由 moveGoal 触发的额外 transition
+  assert.equal(transitionEvents.length, 6); // planning, collecting, ready, in_progress, review, delivered
+});
+
+test("move-goal：standalone ↔ version 迁移保留 collecting 状态", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  transition(root, id, "planning", { actor: "test" });
+  moveGoal(root, id, { to: "standalone", actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  
+  let doc = loadGoal(findGoalFile(root, id));
+  assert.equal(doc.meta.status, "collecting");
+  
+  moveGoal(root, id, { to: "version", version: "v1", actor: "test" });
+  doc = loadGoal(findGoalFile(root, id));
+  assert.equal(doc.meta.status, "collecting");
+  assert.equal(doc.meta.version, "v1");
+});
+
+test("move-goal：standalone ↔ version 迁移保留 blocked 状态", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  transition(root, id, "planning", { actor: "test" });
+  moveGoal(root, id, { to: "standalone", actor: "test" });
+  setCriteria(root, id, ["测试判据"], "test"); // 设置判据以允许进入 in_progress
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test" });
+  transition(root, id, "blocked", { actor: "test", reason: "等待依赖" });
+  
+  let doc = loadGoal(findGoalFile(root, id));
+  assert.equal(doc.meta.status, "blocked");
+  
+  moveGoal(root, id, { to: "version", version: "v2", actor: "test" });
+  doc = loadGoal(findGoalFile(root, id));
+  assert.equal(doc.meta.status, "blocked");
+  assert.equal(doc.meta.version, "v2");
+});
+
+test("move-goal：backlog → standalone 仍变为 planning", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" }); // draft
+  
+  moveGoal(root, id, { to: "standalone", actor: "test" });
+  const doc = loadGoal(findGoalFile(root, id));
+  assert.equal(doc.meta.status, "planning");
+  assert.equal(doc.meta.version, null);
+});
+
+test("move-goal：backlog → version 仍变为 planning", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" }); // draft
+  
+  moveGoal(root, id, { to: "version", version: "v3", actor: "test" });
+  const doc = loadGoal(findGoalFile(root, id));
+  assert.equal(doc.meta.status, "planning");
+  assert.equal(doc.meta.version, "v3");
+});
+
 // ---- g-109 卡片收集绑定（bindCardChild） ----
 
 test("bindCardChild 写 card.collecting 事件并绑定 child_id/status", () => {

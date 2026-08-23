@@ -1194,8 +1194,8 @@ export function moveGoal(
     targetFile = join(root, "goals", id, "goal.md");
     targetDirForm = true;
     doc.meta.version = null;
-    // g-129/g-137：进 standalone → 状态变为 planning（同版本，非 backlog 草稿）
-    if (prevStatus !== "planning") {
+    // g-147：只有从 backlog（draft 状态）进入时才变为 planning
+    if (prevStatus === "draft") {
       doc.meta.status = "planning";
     }
   } else if (opts.to === "version") {
@@ -1203,8 +1203,8 @@ export function moveGoal(
     targetFile = join(root, "versions", opts.version, "goals", id, "goal.md");
     targetDirForm = true;
     doc.meta.version = opts.version;
-    // g-137：进版本 → 状态变为 planning
-    if (prevStatus !== "planning") {
+    // g-147：只有从 backlog（draft 状态）进入时才变为 planning
+    if (prevStatus === "draft") {
       doc.meta.status = "planning";
     }
   } else {
