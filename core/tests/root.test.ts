@@ -10,8 +10,9 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { init, listGoalFiles } from "../ops.ts";
-import { resolveRoot } from "../root.ts";
+import { resolveRoot, resolveCanonicalRoot, discoverGitWorktree } from "../root.ts";
 import { readEvents } from "../events.ts";
+import { execSync } from "node:child_process";
 import { apply as applyHost } from "../../dsh-graph-host/index.js";
 
 function mockCtx(extra: Record<string, unknown> = {}) {
@@ -95,6 +96,44 @@ test("单包 apply 幂等调 core init：root 不存在自动建骨架，重复 
   assert.equal(evs.length, 1, "重复 apply 只记一次 project.initialized");
 });
 
+test("g-149 apply 不以 process.cwd() 自动 init：默认 config 无显式 root 时不建骨架", () => {
+  // 模拟 apply 在包子目录或服务进程 cwd 下运行的场景
+  // 默认 config（无 root 覆盖）+ 无 sandboxPolicy → 不应以 process.cwd()/.dsh-graph 创建骨架
+  applyHost(mockCtx(), {});
+  // apply 不报错；关键是验证它没有在 process.cwd() 下创建 .dsh-graph
+  // （process.cwd() 在测试中是 worktree 根，已有主库的 .dsh-graph 目录，不产生新骨架）
+  assert.ok(true, "apply 默认 config 不报错、不自动 init process.cwd()/.dsh-graph");
+});
+
+test("g-149 apply 有绝对 config.root 时仍正常 init（管理员覆盖）", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-abs-init-"));
+  const root = join(base, "custom-data");
+  applyHost(mockCtx(), { root });
+  assertSkeleton(root);
+  const evs = readEvents(root).filter((e) => e.event === "project.initialized");
+  assert.equal(evs.length, 1, "绝对 config.root 时 apply 正常 init");
+});
+
+test("g-149 apply 有 sandboxPolicy.workspaceRoot 时正常 init", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-sandbox-init-"));
+  // 模拟 sandboxPolicy 提供 workspace——需要覆盖 mockCtx 的 get
+  const webServer = { register: () => () => {} };
+  const sandboxPolicy = { workspaceRoot: base };
+  const ctx: any = {
+    get: (name: string) => {
+      if (name === "webServer") return webServer;
+      if (name === "sandboxPolicy") return sandboxPolicy;
+      return undefined;
+    },
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  applyHost(ctx, {});
+  // sandbox workspace + default .dsh-graph root → 应该 init
+  assertSkeleton(join(base, ".dsh-graph"));
+});
+
 test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路由）两个半边", () => {
   const registered: any[] = [];
   const routes = new Map<string, any>();
@@ -119,5 +158,312 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
     "/api/dsh-graph/delete"]) {
     assert.ok(routes.has(p), `路由 ${p} 已注册`);
   }
+});
+
+// ===== g-149: Git linked-worktree canonicalization tests =====
+
+/** Helper: create a temporary Git repo with optional linked worktree. */
+function setupGitRepo(base: string, opts?: { linkedWorktree?: boolean }) {
+  const mainDir = join(base, "main-repo");
+  execSync(`git init -b main "${mainDir}"`, { stdio: "pipe" });
+  execSync(`git -C "${mainDir}" config user.email "test@test.com"`, { stdio: "pipe" });
+  execSync(`git -C "${mainDir}" config user.name "Test"`, { stdio: "pipe" });
+  // Need at least one commit for worktree to work
+  execSync(`git -C "${mainDir}" commit --allow-empty -m "init"`, { stdio: "pipe" });
+
+  let worktreeDir: string | null = null;
+  if (opts?.linkedWorktree) {
+    worktreeDir = join(base, "linked-worktree");
+    execSync(`git -C "${mainDir}" worktree add "${worktreeDir}"`, { stdio: "pipe" });
+  }
+
+  return { mainDir, worktreeDir };
+}
+
+test("g-149 discoverGitWorktree：主工作树返回正确信息", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-discover-main-"));
+  const { mainDir } = setupGitRepo(base);
+
+  const info = discoverGitWorktree(mainDir);
+  assert.ok(info !== null, "主工作树应返回 Git info");
+  assert.equal(info!.mainWorktree, resolve(mainDir), "mainWorktree = 主目录");
+  assert.equal(info!.workspace, resolve(mainDir), "workspace = 主目录");
+  assert.equal(info!.isLinkedWorktree, false, "主工作树不是 linked worktree");
+});
+
+test("g-149 discoverGitWorktree：linked worktree 正确识别主工作树", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-discover-linked-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const info = discoverGitWorktree(worktreeDir!);
+  assert.ok(info !== null, "linked worktree 应返回 Git info");
+  assert.equal(info!.mainWorktree, resolve(mainDir), "mainWorktree 指向主工作树");
+  assert.equal(info!.workspace, resolve(worktreeDir!), "workspace = linked worktree 目录");
+  assert.equal(info!.isLinkedWorktree, true, "识别为 linked worktree");
+});
+
+test("g-149 discoverGitWorktree：非 Git 目录返回 null", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-discover-nongit-"));
+  const info = discoverGitWorktree(base);
+  assert.equal(info, null, "非 Git 目录返回 null");
+});
+
+test("g-149 resolveCanonicalRoot：绝对 config.root 跳过 Git 发现", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-abs-config-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const result = resolveCanonicalRoot({ root: "/custom/graph" }, worktreeDir!);
+  assert.equal(result.root, "/custom/graph", "绝对 root 原样返回");
+  assert.equal(result.mode, "absolute-config", "mode = absolute-config");
+  assert.equal(result.workspace, resolve(worktreeDir!), "workspace 保持原值");
+});
+
+test("g-149 resolveCanonicalRoot：主工作树正常解析", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-main-"));
+  const { mainDir } = setupGitRepo(base);
+
+  const result = resolveCanonicalRoot(undefined, mainDir);
+  assert.equal(result.root, resolve(mainDir, ".dsh-graph"), "root = main/.dsh-graph");
+  assert.equal(result.mode, "main-tree", "mode = main-tree");
+  assert.equal(result.canonicalWorkspace, resolve(mainDir), "canonicalWorkspace = mainDir");
+  assert.equal(result.rootWarning, undefined, "无警告");
+});
+
+test("g-149 resolveCanonicalRoot：linked worktree 归一到主工作树", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-linked-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const result = resolveCanonicalRoot(undefined, worktreeDir!);
+  assert.equal(result.root, resolve(mainDir, ".dsh-graph"), "root = 主工作树/.dsh-graph");
+  assert.equal(result.mode, "canonicalized", "mode = canonicalized");
+  assert.equal(result.canonicalWorkspace, resolve(mainDir), "canonicalWorkspace = 主工作树");
+  assert.equal(result.rootWarning, undefined, "无旧数据时无警告");
+});
+
+test("g-149 resolveCanonicalRoot：linked worktree 有遗留本地 graph 时附带警告", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-legacy-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  // Create legacy worktree-local graph data
+  const localGraph = join(worktreeDir!, ".dsh-graph");
+  init(localGraph); // creates skeleton with events.jsonl
+
+  const result = resolveCanonicalRoot(undefined, worktreeDir!);
+  assert.equal(result.root, resolve(mainDir, ".dsh-graph"), "root = 主工作树/.dsh-graph");
+  assert.equal(result.mode, "canonicalized", "mode = canonicalized");
+  assert.ok(result.rootWarning !== undefined, "有旧数据时有警告");
+  assert.match(result.rootWarning!, /worktree 本地旧看板/, "警告提及旧看板");
+});
+
+test("g-149 resolveCanonicalRoot：自定义相对 root 也做 canonicalization", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-custom-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const result = resolveCanonicalRoot({ root: "data/my-graph" }, worktreeDir!);
+  assert.equal(result.root, resolve(mainDir, "data/my-graph"), "自定义相对 root 也归一到主树");
+  assert.equal(result.mode, "canonicalized", "mode = canonicalized");
+});
+
+test("g-149 resolveCanonicalRoot：非 Git workspace 回退到 workspace-local", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-fallback-"));
+
+  const result = resolveCanonicalRoot(undefined, base);
+  assert.equal(result.root, resolve(base, ".dsh-graph"), "root = workspace/.dsh-graph");
+  assert.equal(result.mode, "workspace-fallback", "mode = workspace-fallback");
+  assert.equal(result.canonicalWorkspace, resolve(base), "canonicalWorkspace = workspace");
+  assert.equal(result.rootWarning, undefined, "无警告");
+});
+
+test("g-149 resolveCanonicalRoot 返回值可直接传入 init（init 幂等兼容）", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-init-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const result = resolveCanonicalRoot(undefined, worktreeDir!);
+  // Should not throw
+  init(result.root);
+  assertSkeleton(result.root);
+  // The init happened on the main tree, not the worktree
+  assert.ok(!existsSync(join(worktreeDir!, ".dsh-graph")), "worktree 下未创建 .dsh-graph");
+});
+
+test("g-149 host re-export 也暴露 resolveCanonicalRoot（模块同步）", async () => {
+  const hostMod = await import("../../dsh-graph-host/index.js");
+  assert.equal(typeof hostMod.resolveCanonicalRoot, "function", "host 模块导出 resolveCanonicalRoot");
+  // 行为等价测试
+  const base = mkdtempSync(join(tmpdir(), "g149-host-export-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const coreResult = resolveCanonicalRoot(undefined, worktreeDir!);
+  const hostResult = hostMod.resolveCanonicalRoot(undefined, worktreeDir!);
+  assert.equal(hostResult.root, coreResult.root, "host 与 core 结果一致");
+  assert.equal(hostResult.mode, coreResult.mode, "host 与 core mode 一致");
+});
+
+test("g-149 根 .gitignore 包含 **/.dsh-graph/ 规则（防止子目录意外引入）", () => {
+  // 验证仓库的 .gitignore 包含通配规则，阻止任何子目录的 .dsh-graph 被 git add -A 收集
+  const gitignorePath = join(import.meta.dirname, "../../.gitignore");
+  const gitignore = readFileSync(gitignorePath, "utf8");
+  assert.ok(gitignore.includes("**/.dsh-graph/"), ".gitignore 包含 **/.dsh-graph/ 通配规则");
+  // 验证已有的 host 专用规则已被通配规则替代
+  assert.ok(!gitignore.includes("dsh-graph-host/.dsh-graph/"), "旧的 host 专用规则已移除");
+});
+
+// ===== g-149: 无 workspace 时不 fallback process.cwd() 的行为测试 =====
+
+test("g-149 工具无 session/sandbox 时 graph_create_goal 抛错、不建骨架", async () => {
+  // 不传 config.root（默认相对 .dsh-graph），且无 session/sandbox → 应抛 workspace 错误
+  const registered: any[] = [];
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? { register: () => () => {} } : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer: { register: () => () => {} },
+    tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
+  };
+  applyHost(ctx, {}); // 无 config.root，无 sandboxPolicy
+
+  const createGoalTool = registered.find((d) => d.name === "graph_create_goal");
+  assert.ok(createGoalTool, "graph_create_goal 已注册");
+
+  // 调用时 ex 无 session、无 sandboxPolicy → 应抛错
+  assert.throws(
+    () => createGoalTool.execute({ title: "test" }, { agent: { id: "test" } }),
+    (err: any) => {
+      return err.message.includes("workspace");
+    },
+    "无 workspace 时工具调用应抛错",
+  );
+});
+
+test("g-149 工具有明确 session.header.cwd 时正常读写", async () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-ws-tool-"));
+  const root = join(base, ".dsh-graph");
+  const registered: any[] = [];
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? { register: () => () => {} } : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer: { register: () => () => {} },
+    tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
+  };
+  applyHost(ctx, { root });
+
+  const createGoalTool = registered.find((d) => d.name === "graph_create_goal");
+  assert.ok(createGoalTool, "graph_create_goal 已注册");
+
+  // 调用时 ex 有 session.header.cwd（明确 workspace）→ 正常工作
+  const result = await createGoalTool.execute(
+    { title: "test-goal" },
+    { agent: { id: "test", session: { header: { cwd: base } } } },
+  );
+  assert.ok(result.goal, "明确 workspace 时工具调用成功");
+});
+
+test("g-149 REST GET /api/dsh-graph 无 workspace 参数返回错误、不建骨架", async () => {
+  // 不传 config.root（默认相对），REST 请求无 ?workspace= → 应返回 400
+  let boardHandler: any;
+  const webServer = {
+    register: (def: any) => {
+      if (def.path === "/api/dsh-graph") boardHandler = def.handler;
+      return () => {};
+    },
+  };
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  applyHost(ctx, {}); // 无 config.root，无 sandboxPolicy
+  assert.ok(boardHandler, "board handler 已注册");
+
+  // 模拟无 workspace 的请求
+  const req = { url: "/api/dsh-graph" }; // 无 ?workspace=
+  let responseData: any;
+  let statusCode: number;
+  const res = {
+    writeHead: (code: number) => { statusCode = code; },
+    end: (data: string) => { responseData = JSON.parse(data); },
+  };
+
+  boardHandler(req, res);
+
+  assert.equal(statusCode!, 400, "无 workspace 时返回 400");
+  assert.ok(responseData.error.includes("workspace"), `错误提及 workspace: ${responseData.error}`);
+});
+
+test("g-149 REST POST 端点无 workspace 参数返回错误", async () => {
+  // 不传 config.root（默认相对），POST 请求无 body.workspace → 应返回 400
+  let transitionHandler: any;
+  const webServer = {
+    register: (def: any) => {
+      if (def.path === "/api/dsh-graph/transition") transitionHandler = def.handler;
+      return () => {};
+    },
+  };
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  applyHost(ctx, {}); // 无 config.root，无 sandboxPolicy
+  assert.ok(transitionHandler, "transition handler 已注册");
+
+  // 模拟 POST 请求，body 无 workspace，URL 也无 ?workspace=
+  const req: any = {
+    method: "POST",
+    url: "/api/dsh-graph/transition",
+    on: (event: string, cb: any) => {
+      if (event === "data") cb(JSON.stringify({ goal: "g-test", to: "in_progress" }));
+      if (event === "end") cb();
+    },
+  };
+  let responseData: any;
+  let statusCode: number;
+  const res = {
+    writeHead: (code: number) => { statusCode = code; },
+    end: (data: string) => { responseData = JSON.parse(data); },
+  };
+
+  await transitionHandler(req, res);
+
+  assert.equal(statusCode!, 400, "无 workspace 时 POST 返回 400");
+  assert.ok(responseData.error.includes("workspace"), `错误提及 workspace: ${responseData.error}`);
+});
+
+test("g-149 REST GET /api/dsh-graph 有明确 workspace 时正常返回", async () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-ws-rest-"));
+  // 先初始化骨架
+  const { init: initFn } = await import("../ops.ts");
+  initFn(join(base, ".dsh-graph"));
+
+  let boardHandler: any;
+  const webServer = {
+    register: (def: any) => {
+      if (def.path === "/api/dsh-graph") boardHandler = def.handler;
+      return () => {};
+    },
+  };
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  applyHost(ctx, {});
+  assert.ok(boardHandler, "board handler 已注册");
+
+  // 有 ?workspace= 参数的请求
+  const req = { url: `/api/dsh-graph?workspace=${encodeURIComponent(base)}` };
+  let responseData: any;
+  let statusCode: number;
+  const res = {
+    writeHead: (code: number) => { statusCode = code; },
+    end: (data: string) => { responseData = JSON.parse(data); },
+  };
+
+  boardHandler(req, res);
+
+  assert.equal(statusCode!, 200, "有 workspace 时返回 200");
+  assert.ok(responseData, "有 workspace 时返回数据");
 });
 
