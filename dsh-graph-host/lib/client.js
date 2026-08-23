@@ -183,7 +183,7 @@ window.__ModuleLoader__.load({
       head: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
       grid: { display: "grid", gridTemplateColumns: "130px repeat(6, minmax(150px, 1fr))", gap: 4 },
       laneLabel: { fontWeight: 600, padding: "8px 6px", borderTop: "1px solid rgba(128,128,128,.35)" },
-      stageHead: { fontWeight: 600, textAlign: "center", padding: 4, opacity: 0.75 },
+      stageHead: { fontWeight: 600, textAlign: "center", padding: 4, opacity: 0.75, whiteSpace: "nowrap" },
       cell: { borderTop: "1px solid rgba(128,128,128,.35)", padding: 4, minHeight: 40, verticalAlign: "top" },
       goalCard: {
         border: "1px solid rgba(128,128,128,.45)",
@@ -1008,7 +1008,7 @@ window.__ModuleLoader__.load({
                 `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
               sessionLinkBtn(c.parent_session_id, c.child_id, "↗")),
             h(CardSummary, { summary: c.summary }),
-            c.child_id
+            c.child_id && c.status !== "filled" && c.status !== "reviewed"
               ? h("div", { onClick: (e) => e.stopPropagation() },
                   h(LiveStrip, { parentId: c.parent_session_id, childId: c.child_id }))
               : null)),
@@ -1059,8 +1059,16 @@ window.__ModuleLoader__.load({
           const cardKind = card.kind ?? "text";
           const root = state.data.root ?? "（仓库根未知）";
 
-          const autoPrompt = [
+          // 可编辑的收集信息目标部分
+          const editablePart = [
             `## 收集任务上下文`,
+            ``,
+            `**收集范围**：`,
+            `请收集与卡片「${cardTitle}」相关的详细上下文信息，用于填充该卡片。`,
+          ].join("\n");
+
+          // 只读的规范约束部分
+          const readonlyPart = [
             ``,
             `**工作目录**：当前分配的 worktree/当前工作目录（不要猜测 .dsh-graph 文件路径）`,
             ``,
@@ -1072,9 +1080,6 @@ window.__ModuleLoader__.load({
             `- id: \`${card.id}\``,
             `- 标题: ${cardTitle}`,
             `- 类型: ${cardKind}`,
-            ``,
-            `**收集范围**：`,
-            `请收集与卡片「${cardTitle}」相关的详细上下文信息，用于填充该卡片。`,
             ``,
             `**回填要求**：`,
             `1. 全文写进 \`text\` 参数`,
@@ -1090,6 +1095,8 @@ window.__ModuleLoader__.load({
             `3. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
             `4. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
           ].join("\n");
+
+          const autoPrompt = editablePart + readonlyPart;
           const childLink = card.child_id
             ? h("div", { style: S.drawerSection, key: "child" },
                 h("div", { style: { ...S.drawerH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
@@ -1107,11 +1114,34 @@ window.__ModuleLoader__.load({
           const collectPanel = card.status === "empty" || card.status === "collecting"
             ? h("div", { style: S.drawerSection, key: "collect", className: "dg-collect-prompt" },
                 h("div", { style: S.drawerH }, "📝 收集提示词"),
-                h("textarea", {
-                  style: { ...S.promptInput, width: "100%", minHeight: 80, resize: "vertical", marginTop: 4 },
-                  value: promptText || autoPrompt,
-                  onChange: (e) => setPromptText(e.target.value),
-                }),
+                // 可编辑的收集信息目标部分
+                h("div", { style: { marginTop: 4, marginBottom: 8 } },
+                  h("div", { style: { fontWeight: 600, fontSize: 12, opacity: 0.9, marginBottom: 4 } }, "收集信息目标（可编辑）"),
+                  h("textarea", {
+                    style: { ...S.promptInput, width: "100%", minHeight: 100, resize: "vertical", marginTop: 2 },
+                    value: promptText ? promptText.split(readonlyPart)[0] : editablePart,
+                    onChange: (e) => {
+                      const newEditable = e.target.value;
+                      setPromptText(newEditable + readonlyPart);
+                    },
+                  })),
+                // 只读的规范约束部分
+                h("div", { style: { marginTop: 4, marginBottom: 8 } },
+                  h("div", { style: { fontWeight: 600, fontSize: 12, opacity: 0.9, marginBottom: 4 } }, "规范约束（只读）"),
+                  h("div", {
+                    style: {
+                      ...S.promptInput,
+                      width: "100%",
+                      minHeight: 80,
+                      maxHeight: 200,
+                      overflowY: "auto",
+                      marginTop: 2,
+                      whiteSpace: "pre-wrap",
+                      opacity: 0.7,
+                      pointerEvents: "none",
+                      userSelect: "none",
+                    },
+                  }, readonlyPart)),
                 h("button", {
                   style: { ...S.btn, marginTop: 6, padding: "4px 14px" }, className: "dg-btn",
                   disabled: collecting,
@@ -1974,8 +2004,18 @@ window.__ModuleLoader__.load({
           (d.cards ?? []).length
             ? h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🗂 信息收集"),
-                d.cards.map((c) => h("div", { key: c.id, style: S.subCard },
-                  `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
+                d.cards.map((c) => h("div", {
+                  key: c.id,
+                  style: { ...S.subCard, cursor: "pointer" },
+                  className: "dg-sub",
+                  title: "点击打开上下文抽屉",
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    if (props.onOpenCard) {
+                      props.onOpenCard(props.id, c.id);
+                    }
+                  },
+                }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
                 h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession }))
             : h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🗂 信息收集"),
@@ -3318,20 +3358,24 @@ window.__ModuleLoader__.load({
           h("div", { style: S.stageHead }, "泳道＼阶段"),
           STAGES.map((s) => {
             // g-127：blocked 列头可点击切换折叠/展开
+            // g-152：折叠态列头只显示 ▸（36px 窄条，竖条单元格已有 ⛔ 标识）
             if (s.key === "blocked") {
               return h("div", {
                 key: s.key,
-                style: { ...S.stageHead, cursor: "pointer", userSelect: "none" },
+                style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
+                  // g-152：折叠态只显示箭头，不显示文字，避免窄列换行
+                  ...(blockedColumnCollapsed ? { width: 36, minWidth: 36, overflow: "hidden", fontSize: 14 } : {}),
+                },
                 onClick: () => setBlockedColumnCollapsed((p) => !p),
                 title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
-              }, s.label + (blockedColumnCollapsed ? " ▸" : " ▾"));
+              }, blockedColumnCollapsed ? "▸" : s.label + " ▾");
             }
             return h("div", { key: s.key, style: S.stageHead }, s.label);
           }),
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load() })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,

@@ -781,20 +781,24 @@
           h("div", { style: S.stageHead }, "泳道＼阶段"),
           STAGES.map((s) => {
             // g-127：blocked 列头可点击切换折叠/展开
+            // g-152：折叠态列头只显示 ▸（36px 窄条，竖条单元格已有 ⛔ 标识）
             if (s.key === "blocked") {
               return h("div", {
                 key: s.key,
-                style: { ...S.stageHead, cursor: "pointer", userSelect: "none" },
+                style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
+                  // g-152：折叠态只显示箭头，不显示文字，避免窄列换行
+                  ...(blockedColumnCollapsed ? { width: 36, minWidth: 36, overflow: "hidden", fontSize: 14 } : {}),
+                },
                 onClick: () => setBlockedColumnCollapsed((p) => !p),
                 title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
-              }, s.label + (blockedColumnCollapsed ? " ▸" : " ▾"));
+              }, blockedColumnCollapsed ? "▸" : s.label + " ▾");
             }
             return h("div", { key: s.key, style: S.stageHead }, s.label);
           }),
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load() })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,

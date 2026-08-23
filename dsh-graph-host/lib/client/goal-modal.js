@@ -400,8 +400,18 @@
           (d.cards ?? []).length
             ? h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🗂 信息收集"),
-                d.cards.map((c) => h("div", { key: c.id, style: S.subCard },
-                  `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
+                d.cards.map((c) => h("div", {
+                  key: c.id,
+                  style: { ...S.subCard, cursor: "pointer" },
+                  className: "dg-sub",
+                  title: "点击打开上下文抽屉",
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    if (props.onOpenCard) {
+                      props.onOpenCard(props.id, c.id);
+                    }
+                  },
+                }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
                 h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession }))
             : h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🗂 信息收集"),

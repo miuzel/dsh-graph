@@ -38,8 +38,16 @@
           const cardKind = card.kind ?? "text";
           const root = state.data.root ?? "（仓库根未知）";
 
-          const autoPrompt = [
+          // 可编辑的收集信息目标部分
+          const editablePart = [
             `## 收集任务上下文`,
+            ``,
+            `**收集范围**：`,
+            `请收集与卡片「${cardTitle}」相关的详细上下文信息，用于填充该卡片。`,
+          ].join("\n");
+
+          // 只读的规范约束部分
+          const readonlyPart = [
             ``,
             `**工作目录**：当前分配的 worktree/当前工作目录（不要猜测 .dsh-graph 文件路径）`,
             ``,
@@ -51,9 +59,6 @@
             `- id: \`${card.id}\``,
             `- 标题: ${cardTitle}`,
             `- 类型: ${cardKind}`,
-            ``,
-            `**收集范围**：`,
-            `请收集与卡片「${cardTitle}」相关的详细上下文信息，用于填充该卡片。`,
             ``,
             `**回填要求**：`,
             `1. 全文写进 \`text\` 参数`,
@@ -69,6 +74,8 @@
             `3. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
             `4. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
           ].join("\n");
+
+          const autoPrompt = editablePart + readonlyPart;
           const childLink = card.child_id
             ? h("div", { style: S.drawerSection, key: "child" },
                 h("div", { style: { ...S.drawerH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
@@ -86,11 +93,34 @@
           const collectPanel = card.status === "empty" || card.status === "collecting"
             ? h("div", { style: S.drawerSection, key: "collect", className: "dg-collect-prompt" },
                 h("div", { style: S.drawerH }, "📝 收集提示词"),
-                h("textarea", {
-                  style: { ...S.promptInput, width: "100%", minHeight: 80, resize: "vertical", marginTop: 4 },
-                  value: promptText || autoPrompt,
-                  onChange: (e) => setPromptText(e.target.value),
-                }),
+                // 可编辑的收集信息目标部分
+                h("div", { style: { marginTop: 4, marginBottom: 8 } },
+                  h("div", { style: { fontWeight: 600, fontSize: 12, opacity: 0.9, marginBottom: 4 } }, "收集信息目标（可编辑）"),
+                  h("textarea", {
+                    style: { ...S.promptInput, width: "100%", minHeight: 100, resize: "vertical", marginTop: 2 },
+                    value: promptText ? promptText.split(readonlyPart)[0] : editablePart,
+                    onChange: (e) => {
+                      const newEditable = e.target.value;
+                      setPromptText(newEditable + readonlyPart);
+                    },
+                  })),
+                // 只读的规范约束部分
+                h("div", { style: { marginTop: 4, marginBottom: 8 } },
+                  h("div", { style: { fontWeight: 600, fontSize: 12, opacity: 0.9, marginBottom: 4 } }, "规范约束（只读）"),
+                  h("div", {
+                    style: {
+                      ...S.promptInput,
+                      width: "100%",
+                      minHeight: 80,
+                      maxHeight: 200,
+                      overflowY: "auto",
+                      marginTop: 2,
+                      whiteSpace: "pre-wrap",
+                      opacity: 0.7,
+                      pointerEvents: "none",
+                      userSelect: "none",
+                    },
+                  }, readonlyPart)),
                 h("button", {
                   style: { ...S.btn, marginTop: 6, padding: "4px 14px" }, className: "dg-btn",
                   disabled: collecting,

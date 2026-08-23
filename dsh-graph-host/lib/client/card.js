@@ -138,7 +138,7 @@
                 `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
               sessionLinkBtn(c.parent_session_id, c.child_id, "↗")),
             h(CardSummary, { summary: c.summary }),
-            c.child_id
+            c.child_id && c.status !== "filled" && c.status !== "reviewed"
               ? h("div", { onClick: (e) => e.stopPropagation() },
                   h(LiveStrip, { parentId: c.parent_session_id, childId: c.child_id }))
               : null)),
