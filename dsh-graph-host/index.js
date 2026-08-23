@@ -51,6 +51,7 @@ import {
   bindCardChild,
   harvestedCards,
   formatHarvestedCardsSection,
+  formatCollectPrompt,
   GraphError,
 } from "./core/ops.js";
 import { resolveRoot } from "./core/root.js";
@@ -754,9 +755,11 @@ export function apply(ctx, config) {
           if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
           const rRoot = rootForReq(req, body);
           const attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
+          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区
+          const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt);
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
-            prompt || `请收集关于「${card}」的上下文信息。\n\n回填要求：全文写进 text；summary 写一句话要点式摘要（≤100 字左右），不要长文。`,
+            fullPrompt,
             req,
             rRoot,
             { provider, model },
