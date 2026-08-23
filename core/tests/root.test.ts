@@ -308,3 +308,162 @@ test("g-149 根 .gitignore 包含 **/.dsh-graph/ 规则（防止子目录意外�
   assert.ok(!gitignore.includes("dsh-graph-host/.dsh-graph/"), "旧的 host 专用规则已移除");
 });
 
+// ===== g-149: 无 workspace 时不 fallback process.cwd() 的行为测试 =====
+
+test("g-149 工具无 session/sandbox 时 graph_create_goal 抛错、不建骨架", async () => {
+  // 不传 config.root（默认相对 .dsh-graph），且无 session/sandbox → 应抛 workspace 错误
+  const registered: any[] = [];
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? { register: () => () => {} } : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer: { register: () => () => {} },
+    tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
+  };
+  applyHost(ctx, {}); // 无 config.root，无 sandboxPolicy
+
+  const createGoalTool = registered.find((d) => d.name === "graph_create_goal");
+  assert.ok(createGoalTool, "graph_create_goal 已注册");
+
+  // 调用时 ex 无 session、无 sandboxPolicy → 应抛错
+  assert.throws(
+    () => createGoalTool.execute({ title: "test" }, { agent: { id: "test" } }),
+    (err: any) => {
+      return err.message.includes("workspace");
+    },
+    "无 workspace 时工具调用应抛错",
+  );
+});
+
+test("g-149 工具有明确 session.header.cwd 时正常读写", async () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-ws-tool-"));
+  const root = join(base, ".dsh-graph");
+  const registered: any[] = [];
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? { register: () => () => {} } : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer: { register: () => () => {} },
+    tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
+  };
+  applyHost(ctx, { root });
+
+  const createGoalTool = registered.find((d) => d.name === "graph_create_goal");
+  assert.ok(createGoalTool, "graph_create_goal 已注册");
+
+  // 调用时 ex 有 session.header.cwd（明确 workspace）→ 正常工作
+  const result = await createGoalTool.execute(
+    { title: "test-goal" },
+    { agent: { id: "test", session: { header: { cwd: base } } } },
+  );
+  assert.ok(result.goal, "明确 workspace 时工具调用成功");
+});
+
+test("g-149 REST GET /api/dsh-graph 无 workspace 参数返回错误、不建骨架", async () => {
+  // 不传 config.root（默认相对），REST 请求无 ?workspace= → 应返回 400
+  let boardHandler: any;
+  const webServer = {
+    register: (def: any) => {
+      if (def.path === "/api/dsh-graph") boardHandler = def.handler;
+      return () => {};
+    },
+  };
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  applyHost(ctx, {}); // 无 config.root，无 sandboxPolicy
+  assert.ok(boardHandler, "board handler 已注册");
+
+  // 模拟无 workspace 的请求
+  const req = { url: "/api/dsh-graph" }; // 无 ?workspace=
+  let responseData: any;
+  let statusCode: number;
+  const res = {
+    writeHead: (code: number) => { statusCode = code; },
+    end: (data: string) => { responseData = JSON.parse(data); },
+  };
+
+  boardHandler(req, res);
+
+  assert.equal(statusCode!, 400, "无 workspace 时返回 400");
+  assert.ok(responseData.error.includes("workspace"), `错误提及 workspace: ${responseData.error}`);
+});
+
+test("g-149 REST POST 端点无 workspace 参数返回错误", async () => {
+  // 不传 config.root（默认相对），POST 请求无 body.workspace → 应返回 400
+  let transitionHandler: any;
+  const webServer = {
+    register: (def: any) => {
+      if (def.path === "/api/dsh-graph/transition") transitionHandler = def.handler;
+      return () => {};
+    },
+  };
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  applyHost(ctx, {}); // 无 config.root，无 sandboxPolicy
+  assert.ok(transitionHandler, "transition handler 已注册");
+
+  // 模拟 POST 请求，body 无 workspace，URL 也无 ?workspace=
+  const req: any = {
+    method: "POST",
+    url: "/api/dsh-graph/transition",
+    on: (event: string, cb: any) => {
+      if (event === "data") cb(JSON.stringify({ goal: "g-test", to: "in_progress" }));
+      if (event === "end") cb();
+    },
+  };
+  let responseData: any;
+  let statusCode: number;
+  const res = {
+    writeHead: (code: number) => { statusCode = code; },
+    end: (data: string) => { responseData = JSON.parse(data); },
+  };
+
+  await transitionHandler(req, res);
+
+  assert.equal(statusCode!, 400, "无 workspace 时 POST 返回 400");
+  assert.ok(responseData.error.includes("workspace"), `错误提及 workspace: ${responseData.error}`);
+});
+
+test("g-149 REST GET /api/dsh-graph 有明确 workspace 时正常返回", async () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-ws-rest-"));
+  // 先初始化骨架
+  const { init: initFn } = await import("../ops.ts");
+  initFn(join(base, ".dsh-graph"));
+
+  let boardHandler: any;
+  const webServer = {
+    register: (def: any) => {
+      if (def.path === "/api/dsh-graph") boardHandler = def.handler;
+      return () => {};
+    },
+  };
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  applyHost(ctx, {});
+  assert.ok(boardHandler, "board handler 已注册");
+
+  // 有 ?workspace= 参数的请求
+  const req = { url: `/api/dsh-graph?workspace=${encodeURIComponent(base)}` };
+  let responseData: any;
+  let statusCode: number;
+  const res = {
+    writeHead: (code: number) => { statusCode = code; },
+    end: (data: string) => { responseData = JSON.parse(data); },
+  };
+
+  boardHandler(req, res);
+
+  assert.equal(statusCode!, 200, "有 workspace 时返回 200");
+  assert.ok(responseData, "有 workspace 时返回数据");
+});
+

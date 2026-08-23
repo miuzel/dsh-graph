@@ -13,7 +13,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
-import { relative, join, resolve } from "node:path";
+import { relative, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createGoal,
@@ -175,12 +175,21 @@ export function apply(ctx, config) {
   // 它们有明确 session cwd 或 GUI request workspace 才 init。
   const root = resolveRoot(config); // 仅日志/marker 用
   // g-113 会话 workspace 跟随：session.header.cwd 优先（工具调用所在会话），
-  // 缺失时兜底 sandboxPolicy.workspaceRoot（部署级 workspace 根），再无则 process.cwd()（CLI/headless）。
-  // g-149 扩展：使用 resolveCanonicalRoot 做 Git linked-worktree 归一化——
-  // code worktree 的 session cwd 会自动归一到主工作树的 graph root，不会在 worktree 下 init 第二份。
-  const sessionWorkspace = (ex) => ex?.agent?.session?.header?.cwd ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? process.cwd();
-  const rootFor = (ex) => {
+  // 缺失时兜底 sandboxPolicy.workspaceRoot（部署级 workspace 根）。
+  // g-149 修复：不再兜底 process.cwd()——无明确 workspace 时返回 null，
+  // 由 rootFor/rootForMeta 抛错，避免在服务进程 cwd 下意外 init .dsh-graph。
+  // 绝对 config.root 时跳过 workspace 要求（root 完全由配置决定）。
+  const isAbsoluteConfig = !!(config?.root && resolve(config.root) === config.root);
+  const sessionWorkspace = (ex) => ex?.agent?.session?.header?.cwd ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? null;
+  // g-149：workspace 校验——无明确 workspace 且非绝对 config.root 时抛 GraphError
+  const requireWorkspace = (ex) => {
+    if (isAbsoluteConfig) return config.root; // 绝对 root 不需要 workspace
     const ws = sessionWorkspace(ex);
+    if (!ws) throw new GraphError("graph_* 工具需要明确的会话 workspace（session.header.cwd 或 sandboxPolicy.workspaceRoot），当前无可用 workspace");
+    return ws;
+  };
+  const rootFor = (ex) => {
+    const ws = requireWorkspace(ex);
     const canonical = resolveCanonicalRoot(config, ws);
     init(canonical.root);
     // 如果发现遗留 worktree 本地 graph，记录警告到 stderr
@@ -191,7 +200,7 @@ export function apply(ctx, config) {
   };
   // g-149：rootForMeta 返回带元数据的解析结果（诊断用）
   const rootForMeta = (ex) => {
-    const ws = sessionWorkspace(ex);
+    const ws = requireWorkspace(ex);
     const canonical = resolveCanonicalRoot(config, ws);
     init(canonical.root);
     if (canonical.rootWarning) {
@@ -466,7 +475,10 @@ export function apply(ctx, config) {
         // g-150 范围扩展：读取最近指令（eventually 注入 prompt；空时不影响现有 prompt 行为）
         const directiveSection = formatGoalDirectiveSection(r, a.goal);
         const goalFile = findGoalFile(r, a.goal);
-        const goalRel = goalFile ? relative(sessionWorkspace(ex), goalFile) : null;
+        // g-149：sessionWorkspace 可能返回 null（绝对 config.root + 无 session），
+        // 此时用 r 的父目录作为相对路径基准
+        const ws = sessionWorkspace(ex) ?? dirname(r);
+        const goalRel = goalFile ? relative(ws, goalFile) : null;
         const attempt = startAttempt(r, a.goal, { executor, actor: actorOf(ex), injectedCards, injectedHandoffs: injectedHandoffRefs, attemptBrief: a.attempt_brief ?? undefined, injectedDirective: readGoalDirective(r, a.goal) ?? undefined });
         // 注意：返回值必须是无损 JSON——绝不写入值为 undefined 的字段（registry 会拒绝）
         const result = { attempt, child_id: null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs };
@@ -594,20 +606,28 @@ export function apply(ctx, config) {
   // （query 参数 ?workspace= / ?root=，或 POST body.workspace / body.root）——
   // 前端从当前会话 session.header.cwd 派生。两个参数名等价（brief 建议 root），
   // 语义都是「workspace 根」，传入 resolveRoot 的 workspaceRoot 参数（→ <ws>/.dsh-graph）。
-  // 缺失时兜底 process.cwd()（无 GUI 上下文 / 测试直调）。
+  // g-149 修复：不再兜底 process.cwd()——无显式参数时返回 null，
+  // 由 rootForReq 返回 GraphError，避免在服务进程 cwd 下意外 init .dsh-graph。
   const workspaceOf = (req, body) => {
     try {
       const sp = new URL(req?.url ?? "", "http://x").searchParams;
-      return sp.get("workspace") || sp.get("root") || body?.workspace || body?.root || process.cwd();
+      return sp.get("workspace") || sp.get("root") || body?.workspace || body?.root || null;
     } catch {
-      return body?.workspace || body?.root || process.cwd();
+      return body?.workspace || body?.root || null;
     }
+  };
+  // g-149：REST 路径 workspace 校验——无显式参数且非绝对 config.root 时抛错
+  const requireWorkspaceOf = (req, body) => {
+    if (isAbsoluteConfig) return config.root; // 绝对 root 不需要 workspace
+    const ws = workspaceOf(req, body);
+    if (!ws) throw new GraphError("REST 端点需要明确的 workspace 参数（?workspace= 或 body.workspace），当前请求无可用 workspace");
+    return ws;
   };
   // 解析后幂等 init：端点首次触达某个 workspace 时确保其 .dsh-graph 骨架齐全（开箱即用，
   // 与 apply 期 init 同款；board/写端点不会因缺骨架半成品落盘）
   // g-149 扩展：使用 resolveCanonicalRoot 做 Git linked-worktree 归一化
   const rootForReq = (req, body) => {
-    const ws = workspaceOf(req, body);
+    const ws = requireWorkspaceOf(req, body);
     const canonical = resolveCanonicalRoot(config, ws);
     init(canonical.root);
     if (canonical.rootWarning) {
@@ -617,7 +637,7 @@ export function apply(ctx, config) {
   };
   // g-149：带元数据的 REST root 解析（诊断用，board 响应附加 graphRoot/rootMode）
   const rootForReqMeta = (req, body) => {
-    const ws = workspaceOf(req, body);
+    const ws = requireWorkspaceOf(req, body);
     const canonical = resolveCanonicalRoot(config, ws);
     init(canonical.root);
     if (canonical.rootWarning) {
@@ -736,7 +756,8 @@ export function apply(ctx, config) {
           if (meta.rootWarning) payload._diagnostics.rootWarning = meta.rootWarning;
           json(res, 200, payload);
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -770,7 +791,8 @@ export function apply(ctx, config) {
             json(res, 200, { pending: true, goal: result.goal });
           }
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -786,7 +808,8 @@ export function apply(ctx, config) {
           resolveAccept(rootForReq(req, body), goal, { actor: "human:gui", verdict, objection, force, reason });
           json(res, 200, { ok: true });
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -830,7 +853,8 @@ export function apply(ctx, config) {
             json(res, 405, { error: "method not allowed" });
           }
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -862,7 +886,8 @@ export function apply(ctx, config) {
           amendGoal(rootForReq(req, body), goal, { note: "直接编辑目标描述", appendDescription: text, actor: "human:gui" });
           json(res, 200, { ok: true });
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -893,7 +918,8 @@ export function apply(ctx, config) {
           const card = addCard(rootForReq(req, body), goal, { title, kind, actor: "human:gui" });
           json(res, 200, { ok: true, card });
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -925,7 +951,8 @@ export function apply(ctx, config) {
           }
           json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error });
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -966,7 +993,10 @@ export function apply(ctx, config) {
           const attempt = startAttempt(rRoot, goal, { executor: "agent:executor", actor: "human:gui", injectedCards, injectedHandoffs: injectedHandoffRefs, attemptBrief: attempt_brief ?? undefined, injectedDirective: currentDirective ?? undefined });
           // g-113 修正：子代理工作目录 = 会话 workspace（继承 session.header.cwd），
           // 相对路径以 workspace 根为基准（.dsh-graph/versions/...），不是服务进程 cwd 或 .dsh-graph 目录
-          const rel = relative(workspaceOf(req, body), goalFile);
+          // g-149：workspaceOf 可能返回 null（无显式 workspace 但有绝对 config.root），
+          // 此时用 rRoot 的父目录作为相对路径基准
+          const ws = workspaceOf(req, body) ?? dirname(rRoot);
+          const rel = relative(ws, goalFile);
           // g-150：brief 段（主管为本次 attempt 提供的 directive）
           const briefSection = attempt_brief ? `## 本次 attempt brief/directive（g-150 主管登记）\n\n${attempt_brief}` : "";
           const prompt = `你是 dsh-graph 目标 ${goal} 的执行 attempt ${attempt}。
@@ -1011,7 +1041,8 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           }
           json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: spawned.model_route ?? null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs });
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -1022,7 +1053,8 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
         try {
           json(res, 200, await readSpawnOptions(rootForReq(req)));
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -1041,7 +1073,8 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           const goalId = createGoal(r, { title: title.trim(), version, description, actor: "human:gui" });
           json(res, 200, { ok: true, goal: goalId });
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -1060,7 +1093,8 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           setGoalDirective(rRoot, goal, directive, "human:gui");
           json(res, 200, { ok: true, goal });
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -1078,7 +1112,8 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           appendGoalComment(rRoot, goal, text, "human:gui");
           json(res, 200, { ok: true, goal });
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -1100,7 +1135,8 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           });
           json(res, 200, { ok: true, handoff: hfId });
         } catch (e) {
-          json(res, 500, { error: String(e?.message ?? e) });
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
