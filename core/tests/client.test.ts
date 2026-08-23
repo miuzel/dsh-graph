@@ -138,6 +138,72 @@ test("start-collection 无 subagents：attempt 本地创建、child_error 上报
   assert.equal(loadGoal(cardFile).meta.status, "empty");
 });
 
+test("start-collection 有 subagents：验证使用 formatCollectPrompt 生成完整提示词", async () => {
+  // 创建临时工作区
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-collect-test-"));
+  const root = join(ws, ".dsh-graph");
+  init(root);
+  const goalId = createGoal(root, { title: "测试目标", version: "v-t", actor: "test" });
+  
+  // 创建 project.yaml 文件，配置 supervisor.session
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
+  
+  // 模拟 subagents 服务
+  let capturedPrompt = "";
+  const subagentsService = {
+    list: () => ["spawn"],
+    getProvider: () => ({ prepareContinuable: () => {} }),
+    startContinuable: async (opts: any) => {
+      capturedPrompt = opts.request?.prompt?.[0]?.text ?? "";
+      return { childId: "c-test", parentSessionId: "p-test" };
+    },
+  };
+  
+  const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const ctx: any = {
+    get: (name: string) => {
+      console.log("[test ctx.get] called with:", name);
+      if (name === "webServer") return webServer;
+      if (name === "subagents") return subagentsService;
+      if (name === "agents") return { get: () => ({ id: "sess-super" }) };
+      return undefined;
+    },
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  apply(ctx, {});
+  
+  // 创建卡片
+  const goalFile = findGoalFile(root, goalId);
+  const { body } = await post(routes, "/api/dsh-graph/add-card",
+    { goal: goalId, title: "测试卡片", kind: "text" });
+  const card = body.card;
+  
+  const handler = routes.get("/api/dsh-graph/start-collection");
+  const req = fakeRequest("POST", { goal: goalId, card });
+  req.url = "/api/dsh-graph/start-collection?workspace=" + encodeURIComponent(ws);
+  const res = fakeResponse();
+  const p = handler(req, res);
+  emitBody(req, { goal: goalId, card });
+  await p;
+  
+  // 调试信息
+  console.log("capturedPrompt length:", capturedPrompt.length);
+  console.log("capturedPrompt first 200 chars:", capturedPrompt.substring(0, 200));
+  
+  // 验证捕获的提示词包含所有必要字段
+  assert.ok(capturedPrompt.includes(`**仓库根目录**：\`${root}\``), "应包含仓库根目录");
+  assert.ok(capturedPrompt.includes(`- id: \`${goalId}\``), "应包含 goal id");
+  assert.ok(capturedPrompt.includes(`- 标题: 测试目标`), "应包含 goal 标题");
+  assert.ok(capturedPrompt.includes(`- id: \`${card}\``), "应包含 card id");
+  assert.ok(capturedPrompt.includes(`- 标题: 测试卡片`), "应包含 card 标题");
+  assert.ok(capturedPrompt.includes(`- 类型: text`), "应包含 card 类型");
+  assert.ok(capturedPrompt.includes(`graph_fill_card(goal="${goalId}", card="${card}", text=<全文>, summary=<≤100字摘要>)`), "应包含精确回填模板");
+  assert.ok(capturedPrompt.includes("**禁区（严格遵守）**"), "应包含禁区说明");
+});
+
 test("accept（非 force）：写 review.requested 事件", async () => {
   const { root, routes, goalId } = setup();
   const r = await post(routes, "/api/dsh-graph/accept", { goal: goalId });

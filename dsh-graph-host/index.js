@@ -51,15 +51,17 @@ import {
   bindCardChild,
   harvestedCards,
   formatHarvestedCardsSection,
+  formatCollectPrompt,
+  getCardMeta,
   GraphError,
-} from "./core/ops.js";
-import { resolveRoot } from "./core/root.js";
+} from "../core/ops.ts";
+import { resolveRoot } from "../core/root.ts";
 
 // g-112：两半共用同一 root 解析函数（re-export 供验收/测试直接核对函数同一性）
-export { resolveRoot } from "./core/root.js";
+export { resolveRoot } from "../core/root.ts";
 // g-111 B7：boardPayload 已移入 core（消除 client→host 跨包依赖），此处 re-export 保持兼容。
 // board 载荷含 supervisorSession 字段（project.yaml 的 supervisor.session，g-108），由 host 端点 /api/dsh-graph 下发。
-export { boardPayload } from "./core/ops.js";
+export { boardPayload } from "../core/ops.ts";
 
 export const name = "dsh-graph-host";
 // 只硬依赖 tools：webServer 由 web-app 行提供且可能在 apply 之后才激活，经 ctx.get 轮询注册
@@ -151,6 +153,7 @@ const WORKTREE_GUIDE = `【worktree 隔离（负责人 2026-08-22 指示）】�
 数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
 
 export function apply(ctx, config) {
+  process.stderr.write(`[apply] ctx.get.toString(): ${ctx.get.toString().substring(0, 80)}\n`);
   // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
   const root = resolveRoot(config); // 默认（init/marker 等无会话上下文时用）
   // g-113 会话 workspace 跟随：session.header.cwd 优先（工具调用所在会话），
@@ -519,7 +522,10 @@ export function apply(ctx, config) {
   // 返回 {childId, parentSessionId, error}；error 非空表示未派发成功。
   const spawnChild = async (label, promptText, req, rootForReq, overrides = {}) => {
     const subagents = ctx.get?.("subagents");
-    if (!subagents) return { childId: null, parentSessionId: null, error: "subagents 服务不可用" };
+    if (!subagents) {
+      process.stderr.write(`[spawnChild] ctx.get identity: ${ctx.get.toString().substring(0, 100)}\n`);
+      return { childId: null, parentSessionId: null, error: "subagents 服务不可用" };
+    }
     const { supervisorId, parent, error } = resolveSpawnParent(rootForReq);
     if (error) return { childId: null, parentSessionId: null, error };
     const ac = new AbortController();
@@ -754,9 +760,13 @@ export function apply(ctx, config) {
           if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
           const rRoot = rootForReq(req, body);
           const attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
+          
+          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区
+          const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt);
+          
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
-            prompt || `请收集关于「${card}」的上下文信息。\n\n回填要求：全文写进 text；summary 写一句话要点式摘要（≤100 字左右），不要长文。`,
+            fullPrompt,
             req,
             rRoot,
             { provider, model },
@@ -1012,6 +1022,7 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
     const registerHttpRoutes = () => {
       if (routeState.registered) return;
       const webServer = ctx.get?.("webServer");
+      process.stderr.write(`[registerHttpRoutes] webServer identity: ${webServer?.register?.toString().substring(0, 80)}\n`);
       if (!webServer) return;
       try {
         for (const r of httpRoutes()) disposers.push(webServer.register(r));

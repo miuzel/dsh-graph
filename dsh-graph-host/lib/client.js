@@ -1042,9 +1042,43 @@ window.__ModuleLoader__.load({
         const card = (state.data.cards ?? []).find((c) => c.id === props.cardId);
         if (!card) inner = "卡片不存在：" + props.cardId;
         else {
-          // g-109：自动生成收集提示词草稿（卡片标题+目标上下文模板）
-          // g-125：回填要求——summary 一句话要点式 ≤100 字（看板摘要折叠 2 行，长摘要被截断）
-          const autoPrompt = `请收集关于「${card.title}」的上下文信息。\n\n目标：${state.data.meta?.title ?? props.goalId}\n\n请基于目标上下文，收集与该卡片相关的详细信息。\n\n回填要求：全文写进 text；summary 写一句话要点式摘要（≤100 字左右），不要长文。`;
+          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区
+          const goalTitle = state.data.meta?.title ?? props.goalId;
+          const cardTitle = card.title;
+          const cardKind = card.kind ?? "text";
+          const root = state.data.root ?? "（仓库根未知）";
+          
+          const autoPrompt = [
+            `## 收集任务上下文`,
+            ``,
+            `**仓库根目录**：\`${root}\``,
+            ``,
+            `**目标信息**：`,
+            `- id: \`${props.goalId}\``,
+            `- 标题: ${goalTitle}`,
+            ``,
+            `**卡片信息**：`,
+            `- id: \`${card.id}\``,
+            `- 标题: ${cardTitle}`,
+            `- 类型: ${cardKind}`,
+            ``,
+            `**收集范围**：`,
+            `请收集与卡片「${cardTitle}」相关的详细上下文信息，用于填充该卡片。`,
+            ``,
+            `**回填要求**：`,
+            `1. 全文写进 \`text\` 参数`,
+            `2. \`summary\` 写一句话要点式摘要（≤100 字左右），不要长文`,
+            `3. 完成后必须调用以下精确命令回填结果：`,
+            `\`\`\``,
+            `graph_fill_card(goal="${props.goalId}", card="${card.id}", text=<全文>, summary=<≤100字摘要>)`,
+            `\`\`\``,
+            ``,
+            `**禁区（严格遵守）**：`,
+            `1. 不得猜测 \`.dsh-graph\` 文件路径——所有路径已在上方提供`,
+            `2. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${card.id}\``,
+            `3. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
+            `4. 所有 graph 工具操作必须在仓库根目录 \`${root}\` 下运行`,
+          ].join("\n");
           const childLink = card.child_id
             ? h("div", { style: S.drawerSection, key: "child" },
                 h("div", { style: { ...S.drawerH, display: "flex", alignItems: "center", justifyContent: "space-between" } },

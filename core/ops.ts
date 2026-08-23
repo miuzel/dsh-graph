@@ -808,6 +808,28 @@ export function fillCard(
   opts: { text?: string; contentRef?: string; summary?: string; by: string; actor: string },
 ): void {
   const { file, doc } = loadCard(root, goalId, cardId);
+  
+  // g-145：绑定保护——如果卡片处于 collecting 状态且有 child_id，
+  // 则只有绑定的 child 或 supervisor/human 可以填充
+  if (doc.meta.status === "collecting" && doc.meta.child_id) {
+    const isBoundChild = opts.by === doc.meta.child_id;
+    const isSupervisorOrHuman = opts.actor === "human:gui" || opts.actor === "agent:supervisor";
+    if (!isBoundChild && !isSupervisorOrHuman) {
+      // 记录 fill_mismatch 事件，但不阻止填充（兼容人工/supervisor 回填）
+      appendEvent(root, {
+        actor: opts.actor,
+        event: "card.fill_mismatch",
+        goal: goalId,
+        details: { 
+          card: cardId, 
+          by: opts.by, 
+          expected_child: doc.meta.child_id,
+          message: "填充者与绑定的 child 不匹配"
+        },
+      });
+    }
+  }
+  
   if (opts.text !== undefined) doc.body = "\n" + opts.text + "\n";
   if (opts.contentRef !== undefined) doc.meta.content_ref = opts.contentRef;
   if (opts.summary !== undefined) doc.meta.summary = opts.summary;
@@ -947,6 +969,93 @@ export function formatHarvestedCardsSection(root: string, goalId: string): strin
     ``,
     items.join("\n\n"),
   ].join("\n");
+}
+
+/** 生成收集子代理的完整提示词（g-145）：注入仓库根、goal/card 元数据、收集范围、
+ *  精确回填模板和禁区。用户提供的 prompt 作为附加要求追加在末尾。 */
+export function formatCollectPrompt(
+  root: string,
+  goalId: string,
+  cardId: string,
+  userPrompt?: string,
+): string {
+  // 加载 goal 和 card 元数据
+  const goalFile = findGoalFile(root, goalId);
+  const goalDoc = loadGoal(goalFile);
+  const goalTitle = goalDoc.meta.title ?? goalId;
+  
+  const cardFile = join(goalDirOf(goalFile), "cards", `${cardId}.md`);
+  if (!existsSync(cardFile)) {
+    throw new GraphError(`卡片不存在：${cardId}（目标 ${goalId}）`);
+  }
+  const cardDoc = loadGoal(cardFile);
+  const cardTitle = cardDoc.meta.title ?? cardId;
+  const cardKind = cardDoc.meta.kind ?? "text";
+  
+  // 构建结构化提示词
+  const sections = [
+    `## 收集任务上下文`,
+    ``,
+    `**仓库根目录**：\`${root}\``,
+    ``,
+    `**目标信息**：`,
+    `- id: \`${goalId}\``,
+    `- 标题: ${goalTitle}`,
+    ``,
+    `**卡片信息**：`,
+    `- id: \`${cardId}\``,
+    `- 标题: ${cardTitle}`,
+    `- 类型: ${cardKind}`,
+    ``,
+    `**收集范围**：`,
+    `请收集与卡片「${cardTitle}」相关的详细上下文信息，用于填充该卡片。`,
+    ``,
+    `**回填要求**：`,
+    `1. 全文写进 \`text\` 参数`,
+    `2. \`summary\` 写一句话要点式摘要（≤100 字左右），不要长文`,
+    `3. 完成后必须调用以下精确命令回填结果：`,
+    `\`\`\``,
+    `graph_fill_card(goal="${goalId}", card="${cardId}", text=<全文>, summary=<≤100字摘要>)`,
+    `\`\`\``,
+    ``,
+    `**禁区（严格遵守）**：`,
+    `1. 不得猜测 \`.dsh-graph\` 文件路径——所有路径已在上方提供`,
+    `2. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${cardId}\``,
+    `3. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
+    `4. 所有 graph 工具操作必须在仓库根目录 \`${root}\` 下运行`,
+  ];
+  
+  // 如果有用户提供的附加要求，追加在末尾
+  if (userPrompt && userPrompt.trim()) {
+    sections.push(
+      ``,
+      `**用户附加要求**：`,
+      userPrompt.trim(),
+    );
+  }
+  
+  return sections.join("\n");
+}
+
+/** 获取卡片元数据（供 GUI 收集 prompt 使用） */
+export function getCardMeta(
+  root: string,
+  goalId: string,
+  cardId: string,
+): { title: string; kind: string; goalTitle: string } {
+  const goalFile = findGoalFile(root, goalId);
+  const goalDoc = loadGoal(goalFile);
+  const goalTitle = goalDoc.meta.title ?? goalId;
+  
+  const cardFile = join(goalDirOf(goalFile), "cards", `${cardId}.md`);
+  if (!existsSync(cardFile)) {
+    throw new GraphError(`卡片不存在：${cardId}（目标 ${goalId}）`);
+  }
+  const cardDoc = loadGoal(cardFile);
+  const cardTitle = cardDoc.meta.title ?? cardId;
+  const cardKind = cardDoc.meta.kind ?? "text";
+  
+  return { title: cardTitle, kind: cardKind, goalTitle };
 }
 
 // ---- Attempt（SCHEMA §3） ----
@@ -1671,6 +1780,7 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
     attempts,
     events,
     goalFile: file,  // g-129: 暴露 goal.md 路径（绝对路径）
+    root: root,      // g-145: 暴露仓库根目录（供 GUI 收集 prompt 使用）
   };
 }
 
