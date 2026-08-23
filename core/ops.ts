@@ -23,8 +23,10 @@ import {
 } from "./model.ts";
 import { appendEvent, readEvents, replayStatuses, nowIso, type GraphEvent } from "./events.ts";
 import { GraphError, STATUSES, assertTransition } from "./machine.ts";
+import { createVersion, renameVersion, deleteVersion } from "./version-lane.ts";
 
 export { GraphError };
+export { createVersion, renameVersion, deleteVersion };
 
 /** 扫描图根下全部目标文件：backlog/*.md、goals/<id>/goal.md、versions/<v>/goals/<id>/goal.md。
  *  opts.includeArchived=true 时也扫描 archived 目录下的目标。 */

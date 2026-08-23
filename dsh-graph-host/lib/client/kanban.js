@@ -12,6 +12,20 @@
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
       const [showArchived, setShowArchived] = React.useState(false);
+      // g-134: 版本泳道管理状态
+      const [showCreateVersion, setShowCreateVersion] = React.useState(false);
+      const [newVersionSlug, setNewVersionSlug] = React.useState("");
+      const [newVersionName, setNewVersionName] = React.useState("");
+      const [createVersionNote, setCreateVersionNote] = React.useState(null);
+      const [creatingVersion, setCreatingVersion] = React.useState(false);
+      const [renameVersionTarget, setRenameVersionTarget] = React.useState(null); // {slug, name}
+      const [renameVersionSlug, setRenameVersionSlug] = React.useState("");
+      const [renameVersionName, setRenameVersionName] = React.useState("");
+      const [renameVersionNote, setRenameVersionNote] = React.useState(null);
+      const [renamingVersion, setRenamingVersion] = React.useState(false);
+      const [deleteVersionTarget, setDeleteVersionTarget] = React.useState(null); // {slug, name}
+      const [deleteVersionNote, setDeleteVersionNote] = React.useState(null);
+      const [deletingVersion, setDeletingVersion] = React.useState(false);
       // g-127: 阻塞列默认折叠（竖向窄条汇总，点击展开）
       const [blockedColumnCollapsed, setBlockedColumnCollapsed] = React.useState(true);
       // g-77647351：拖拽状态机
@@ -547,6 +561,41 @@
       let laneIndex = 0;
       for (const v of active) {
         rows.push(...lane(`🏷 ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
+        // g-134: 版本泳道管理按钮（重命名/删除）
+        rows.push(
+          h("div", {
+            key: "v-actions-" + v.slug,
+            style: {
+              gridColumn: "1 / -1",
+              display: "flex",
+              gap: 6,
+              padding: "2px 0 2px 130px",
+              fontSize: 11,
+              opacity: 0.7,
+            },
+          },
+            h("button", {
+              style: { ...S.btn, padding: "1px 6px", fontSize: 10 },
+              className: "dg-btn",
+              title: `重命名版本 ${v.slug}`,
+              onClick: () => {
+                setRenameVersionTarget({ slug: v.slug, name: v.name });
+                setRenameVersionSlug(v.slug);
+                setRenameVersionName(v.name);
+                setRenameVersionNote(null);
+              },
+            }, "✏️ 重命名"),
+            h("button", {
+              style: { ...S.btn, padding: "1px 6px", fontSize: 10, color: "#ff6b6b" },
+              className: "dg-btn",
+              title: `删除版本 ${v.slug}（仅空版本可删）`,
+              onClick: () => {
+                setDeleteVersionTarget({ slug: v.slug, name: v.name });
+                setDeleteVersionNote(null);
+              },
+            }, "🗑️ 删除"),
+          ),
+        );
         laneIndex++;
       }
       rows.push(...lane("独立目标", b.standalone, "standalone", null, laneIndex));
@@ -595,6 +644,97 @@
         setCreating(false);
       };
 
+      // g-134: 创建版本泳道
+      const createVersionFn = async () => {
+        const s = newVersionSlug.trim();
+        if (!s) { setCreateVersionNote("⚠️ 请输入版本 slug"); return; }
+        setCreatingVersion(true);
+        setCreateVersionNote("创建中…");
+        try {
+          const body = { slug: s };
+          if (newVersionName.trim()) body.name = newVersionName.trim();
+          const r = await fetch(graphUrl("/api/dsh-graph/create-version"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setCreateVersionNote("✅ 已创建版本：" + data.slug);
+            setNewVersionSlug("");
+            setNewVersionName("");
+            load(); // 刷新看板
+            setTimeout(() => setShowCreateVersion(false), 1500);
+          } else {
+            setCreateVersionNote("⚠️ 创建失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setCreateVersionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setCreatingVersion(false);
+      };
+
+      // g-134: 重命名版本泳道
+      const renameVersionFn = async () => {
+        if (!renameVersionTarget) return;
+        const newSlug = renameVersionSlug.trim();
+        const newName = renameVersionName.trim();
+        if (!newSlug && !newName) { setRenameVersionNote("⚠️ 请输入新 slug 或新名称"); return; }
+        setRenamingVersion(true);
+        setRenameVersionNote("重命名中…");
+        try {
+          const body = { slug: renameVersionTarget.slug };
+          if (newSlug) body.newSlug = newSlug;
+          if (newName) body.newName = newName;
+          const r = await fetch(graphUrl("/api/dsh-graph/rename-version"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setRenameVersionNote("✅ 已重命名版本");
+            setRenameVersionTarget(null);
+            setRenameVersionSlug("");
+            setRenameVersionName("");
+            load(); // 刷新看板
+            setTimeout(() => setRenameVersionNote(null), 1500);
+          } else {
+            setRenameVersionNote("⚠️ 重命名失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setRenameVersionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setRenamingVersion(false);
+      };
+
+      // g-134: 删除版本泳道
+      const deleteVersionFn = async () => {
+        if (!deleteVersionTarget) return;
+        setDeletingVersion(true);
+        setDeleteVersionNote("删除中…");
+        try {
+          const body = { slug: deleteVersionTarget.slug };
+          const r = await fetch(graphUrl("/api/dsh-graph/delete-version"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setDeleteVersionNote("✅ 已删除版本：" + data.slug);
+            setDeleteVersionTarget(null);
+            load(); // 刷新看板
+            setTimeout(() => setDeleteVersionNote(null), 1500);
+          } else {
+            setDeleteVersionNote("⚠️ 删除失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setDeleteVersionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setDeletingVersion(false);
+      };
+
       const modalGoalData = modalGoal
         ? [...active.flatMap((v) => v.goals), ...released.flatMap((v) => v.goals),
            ...b.standalone, ...b.backlog].find((g) => g.id === modalGoal)
@@ -618,7 +758,19 @@
             "显示已归档"),
           // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
-            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅"))),
+            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅")),
+          // g-134: 创建版本泳道按钮
+          h("button", {
+            style: { ...S.btn, marginLeft: 8 },
+            className: "dg-btn",
+            title: "新建版本泳道",
+            onClick: () => {
+              setShowCreateVersion(true);
+              setNewVersionSlug("");
+              setNewVersionName("");
+              setCreateVersionNote(null);
+            },
+          }, "＋ 新建版本")),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
@@ -738,6 +890,105 @@
               },
               onCancel: () => setDeliverPrompt(null),
             })
+          : null,
+        // g-134: 创建版本泳道弹窗
+        showCreateVersion
+          ? h("div", { style: S.overlay, onClick: () => setShowCreateVersion(false) },
+              h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
+                h("span", { style: S.close, onClick: () => setShowCreateVersion(false) }, "✕"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "＋ 新建版本泳道"),
+                h("div", { style: { marginBottom: 8 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "版本 Slug *"),
+                  h("input", {
+                    style: { ...S.promptInput, width: "100%" },
+                    value: newVersionSlug,
+                    placeholder: "如 v0.7（不含路径分隔符）",
+                    onChange: (e) => setNewVersionSlug(e.target.value),
+                    onKeyDown: (e) => { if (e.key === "Enter") createVersionFn(); },
+                  })),
+                h("div", { style: { marginBottom: 8 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "显示名称（可选）"),
+                  h("input", {
+                    style: { ...S.promptInput, width: "100%" },
+                    value: newVersionName,
+                    placeholder: "默认与 slug 相同",
+                    onChange: (e) => setNewVersionName(e.target.value),
+                    onKeyDown: (e) => { if (e.key === "Enter") createVersionFn(); },
+                  })),
+                h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+                  h("button", {
+                    style: { ...S.btn, padding: "6px 16px", fontSize: 13 },
+                    className: "dg-btn",
+                    disabled: creatingVersion,
+                    onClick: createVersionFn,
+                  }, creatingVersion ? "创建中…" : "创建"),
+                  h("button", {
+                    style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
+                    className: "dg-btn",
+                    onClick: () => setShowCreateVersion(false),
+                  }, "取消")),
+                createVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, createVersionNote) : null))
+          : null,
+        // g-134: 重命名版本泳道弹窗
+        renameVersionTarget
+          ? h("div", { style: S.overlay, onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); } },
+              h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
+                h("span", { style: S.close, onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); } }, "✕"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "✏️ 重命名版本泳道"),
+                h("div", { style: { marginBottom: 8, fontSize: 13, opacity: 0.8 } }, `当前：${renameVersionTarget.name}（${renameVersionTarget.slug}）`),
+                h("div", { style: { marginBottom: 8 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "新 Slug（可选）"),
+                  h("input", {
+                    style: { ...S.promptInput, width: "100%" },
+                    value: renameVersionSlug,
+                    placeholder: "留空则保持原 slug",
+                    onChange: (e) => setRenameVersionSlug(e.target.value),
+                    onKeyDown: (e) => { if (e.key === "Enter") renameVersionFn(); },
+                  })),
+                h("div", { style: { marginBottom: 8 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "新名称（可选）"),
+                  h("input", {
+                    style: { ...S.promptInput, width: "100%" },
+                    value: renameVersionName,
+                    placeholder: "留空则保持原名称",
+                    onChange: (e) => setRenameVersionName(e.target.value),
+                    onKeyDown: (e) => { if (e.key === "Enter") renameVersionFn(); },
+                  })),
+                h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+                  h("button", {
+                    style: { ...S.btn, padding: "6px 16px", fontSize: 13 },
+                    className: "dg-btn",
+                    disabled: renamingVersion,
+                    onClick: renameVersionFn,
+                  }, renamingVersion ? "重命名中…" : "重命名"),
+                  h("button", {
+                    style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
+                    className: "dg-btn",
+                    onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); },
+                  }, "取消")),
+                renameVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, renameVersionNote) : null))
+          : null,
+        // g-134: 删除版本泳道确认弹窗
+        deleteVersionTarget
+          ? h("div", { style: S.overlay, onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); } },
+              h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
+                h("span", { style: S.close, onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); } }, "✕"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "🗑️ 删除版本泳道"),
+                h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } }, `确定删除版本 ${deleteVersionTarget.name}（${deleteVersionTarget.slug}）？`),
+                h("div", { style: { marginBottom: 12, fontSize: 12, color: "#ff6b6b" } }, "⚠️ 此操作不可逆，仅删除空版本（无任何目标含归档）"),
+                h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+                  h("button", {
+                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, background: "#e74c3c", color: "#fff" },
+                    className: "dg-btn",
+                    disabled: deletingVersion,
+                    onClick: deleteVersionFn,
+                  }, deletingVersion ? "删除中…" : "确认删除"),
+                  h("button", {
+                    style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
+                    className: "dg-btn",
+                    onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); },
+                  }, "取消")),
+                deleteVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, deleteVersionNote) : null))
           : null,
       );
     }

@@ -53,6 +53,9 @@ import {
   formatHarvestedCardsSection,
   formatCollectPrompt,
   GraphError,
+  createVersion,
+  renameVersion,
+  deleteVersion,
 } from "./core/ops.js";
 import { resolveRoot } from "./core/root.js";
 
@@ -921,6 +924,66 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           if (!goal) return json(res, 400, { error: "missing goal" });
           deleteGoal(rootForReq(req, body), goal, { actor: "human:gui" });
           json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-134: 创建版本泳道端点
+    {
+      path: "/api/dsh-graph/create-version",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { slug, name } = body;
+          if (!slug || typeof slug !== "string" || !slug.trim()) {
+            return json(res, 400, { error: "missing slug" });
+          }
+          const r = rootForReq(req, body);
+          const result = createVersion(r, { slug: slug.trim(), name, actor: "human:gui" });
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-134: 重命名版本泳道端点
+    {
+      path: "/api/dsh-graph/rename-version",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { slug, newSlug, newName } = body;
+          if (!slug || typeof slug !== "string" || !slug.trim()) {
+            return json(res, 400, { error: "missing slug" });
+          }
+          const r = rootForReq(req, body);
+          const result = renameVersion(r, { slug: slug.trim(), newSlug, newName, actor: "human:gui" });
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-134: 删除版本泳道端点
+    {
+      path: "/api/dsh-graph/delete-version",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { slug } = body;
+          if (!slug || typeof slug !== "string" || !slug.trim()) {
+            return json(res, 400, { error: "missing slug" });
+          }
+          const r = rootForReq(req, body);
+          const result = deleteVersion(r, { slug: slug.trim(), actor: "human:gui" });
+          json(res, 200, { ok: true, ...result });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
