@@ -19,4 +19,4 @@ v0.5 GUI 功能迭代（负责人 2026-08-22 定范围）：看板操作类 GUI 
 ## 发布记录
 
 - v0.5.1 released（负责人 2026-08-23 明确指示）：npm `dsh-graph@0.5.1` 已发布；awesome-dsh-plugin PR #2773 待合并，g-111 保持 blocked 跟踪商店上架。
-- v0.5.2 发布准备：g-145 热修复，修正收集子代理上下文、精确卡片回填及 `agent:<child_id>` 绑定保护；g-147 热修复，修正 `moveGoal` 归属迁移规则，standalone ↔ version 迁移保留生命周期状态；本条仅记录发布内容，不新增 released event。
+- v0.5.2 released（负责人 2026-08-23 自行发布）：npm `dsh-graph@0.5.2` 已发布，git tag `v0.5.2` 已推送；包含 g-145 收集子代理上下文/精确卡片回填/`agent:<child_id>` 绑定保护热修复，以及 g-147 `moveGoal` 的 standalone ↔ version 生命周期状态保留修复。
