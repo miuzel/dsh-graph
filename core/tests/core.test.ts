@@ -274,23 +274,23 @@ test("move-goal：standalone ↔ version 迁移保留 delivered 状态（g-145 �
   transition(root, id, "in_progress", { actor: "test" });
   transition(root, id, "review", { actor: "test" });
   transition(root, id, "delivered", { actor: "test" });
-  
+
   // 验证当前状态为 delivered
   let doc = loadGoal(findGoalFile(root, id));
   assert.equal(doc.meta.status, "delivered");
-  
+
   // standalone → version，应保留 delivered 状态
   moveGoal(root, id, { to: "version", version: "v0.5", actor: "test" });
   doc = loadGoal(findGoalFile(root, id));
   assert.equal(doc.meta.status, "delivered");
   assert.equal(doc.meta.version, "v0.5");
-  
+
   // version → standalone，仍应保留 delivered 状态
   moveGoal(root, id, { to: "standalone", actor: "test" });
   doc = loadGoal(findGoalFile(root, id));
   assert.equal(doc.meta.status, "delivered");
   assert.equal(doc.meta.version, null);
-  
+
   // 验证事件序列：只有 goal.moved，没有额外的 goal.transition
   const movedEvents = readEvents(root).filter((e) => e.event === "goal.moved");
   assert.equal(movedEvents.length, 3); // backlog→standalone, standalone→version, version→standalone
@@ -305,10 +305,10 @@ test("move-goal：standalone ↔ version 迁移保留 collecting 状态", () => 
   transition(root, id, "planning", { actor: "test" });
   moveGoal(root, id, { to: "standalone", actor: "test" });
   transition(root, id, "collecting", { actor: "test" });
-  
+
   let doc = loadGoal(findGoalFile(root, id));
   assert.equal(doc.meta.status, "collecting");
-  
+
   moveGoal(root, id, { to: "version", version: "v1", actor: "test" });
   doc = loadGoal(findGoalFile(root, id));
   assert.equal(doc.meta.status, "collecting");
@@ -325,10 +325,10 @@ test("move-goal：standalone ↔ version 迁移保留 blocked 状态", () => {
   transition(root, id, "ready", { actor: "test" });
   transition(root, id, "in_progress", { actor: "test" });
   transition(root, id, "blocked", { actor: "test", reason: "等待依赖" });
-  
+
   let doc = loadGoal(findGoalFile(root, id));
   assert.equal(doc.meta.status, "blocked");
-  
+
   moveGoal(root, id, { to: "version", version: "v2", actor: "test" });
   doc = loadGoal(findGoalFile(root, id));
   assert.equal(doc.meta.status, "blocked");
@@ -338,7 +338,7 @@ test("move-goal：standalone ↔ version 迁移保留 blocked 状态", () => {
 test("move-goal：backlog → standalone 仍变为 planning", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", actor: "test" }); // draft
-  
+
   moveGoal(root, id, { to: "standalone", actor: "test" });
   const doc = loadGoal(findGoalFile(root, id));
   assert.equal(doc.meta.status, "planning");
@@ -348,7 +348,7 @@ test("move-goal：backlog → standalone 仍变为 planning", () => {
 test("move-goal：backlog → version 仍变为 planning", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", actor: "test" }); // draft
-  
+
   moveGoal(root, id, { to: "version", version: "v3", actor: "test" });
   const doc = loadGoal(findGoalFile(root, id));
   assert.equal(doc.meta.status, "planning");
