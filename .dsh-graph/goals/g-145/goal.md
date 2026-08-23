@@ -47,6 +47,12 @@
 
 | id | 内容 | 来源 | 时间 | freshness |
 |----|------|------|------|-----------|
+| ev-001 | formatCollectPrompt 函数实现，生成完整收集提示词 | core/ops.ts | 2026-08-23 | 当前版本 |
+| ev-002 | fill_mismatch 绑定保护机制实现 | core/ops.ts | 2026-08-23 | 当前版本 |
+| ev-003 | collect-prompt.test.ts 测试覆盖 | core/tests/collect-prompt.test.ts | 2026-08-23 | 当前版本 |
+| ev-004 | client.test.ts 测试覆盖 REST 路径 | core/tests/client.test.ts | 2026-08-23 | 当前版本 |
+| ev-005 | 所有测试通过（146/146） | node --test core/tests/*.test.ts | 2026-08-23 | 当前版本 |
+| ev-006 | 绑定保护机制验证：非绑定 actor 填充 collecting 卡片记录 mismatch 事件 | 手动测试 | 2026-08-23 | 当前版本 |
 
 ## 处置分支
 
