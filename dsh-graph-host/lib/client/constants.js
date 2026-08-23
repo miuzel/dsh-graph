@@ -19,7 +19,7 @@
       "goal.moved": "排期移动", "card.created": "创建卡片", "card.filled": "填充卡片",
       "card.reviewed": "复核卡片", "evidence.added": "登记证据", "memory.promoted": "沉淀记忆",
       "version.created": "创建版本", "version.released": "发布版本",
-      "version.scope_changed": "调整版本范围", "version.integration_decided": "集成测试决策",
+      "version.status_changed": "版本状态变更", "version.scope_changed": "调整版本范围", "version.integration_decided": "集成测试决策",
       "goal.deleted": "删除目标", "card.deleted": "删除卡片", "attempt.bound": "绑定子代理",
       "goal.renamed": "重命名目标",
       "goal.directive_set": "设置最近指令", "goal.comment_added": "添加评论",

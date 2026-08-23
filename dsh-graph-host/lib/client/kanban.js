@@ -30,6 +30,11 @@
       const [deletingVersion, setDeletingVersion] = React.useState(false);
       // g-134: 版本详情弹窗状态
       const [versionDetailTarget, setVersionDetailTarget] = React.useState(null); // {slug, name, status, goals_count}
+      // g-135: 版本详情弹窗扩展状态（摘要/范围/阻塞清单/操作结果）
+      const [versionDetailData, setVersionDetailData] = React.useState(null); // fetched detail
+      const [versionDetailLoading, setVersionDetailLoading] = React.useState(false);
+      const [versionActionNote, setVersionActionNote] = React.useState(null);
+      const [versionActionLoading, setVersionActionLoading] = React.useState(false);
       // g-127: 阻塞列默认折叠（竖向窄条汇总，点击展开）
       const [blockedColumnCollapsed, setBlockedColumnCollapsed] = React.useState(true);
       // g-77647351：拖拽状态机
@@ -53,6 +58,24 @@
           document.removeEventListener("drop", acceptDrop);
         };
       }, [drag !== null]);
+
+      // g-135：版本详情弹窗打开时自动获取详情数据
+      const loadVersionDetail = (slug) => {
+        setVersionDetailLoading(true);
+        setVersionDetailData(null);
+        setVersionActionNote(null);
+        fetch(graphUrl(`/api/dsh-graph/version-detail?slug=${encodeURIComponent(slug)}`))
+          .then((r) => r.json())
+          .then((data) => {
+            setVersionDetailLoading(false);
+            if (data.ok) setVersionDetailData(data);
+            else setVersionActionNote("⚠️ 加载失败：" + (data.error || "未知错误"));
+          })
+          .catch((e) => {
+            setVersionDetailLoading(false);
+            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          });
+      };
 
       // g-77647351：加载排序
       const loadOrder = () => {
@@ -487,6 +510,8 @@
                 status: v.status,
                 goals_count: v.goals.length,
               });
+              // g-135: 自动加载版本详情数据（摘要/范围/阻塞清单）
+              loadVersionDetail(v.slug);
             }
           } : undefined,
         },
@@ -786,8 +811,8 @@
               return h("div", {
                 key: s.key,
                 style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
-                  // g-152：折叠态只显示箭头，不显示文字，避免窄列换行
-                  ...(blockedColumnCollapsed ? { width: 36, minWidth: 36, overflow: "hidden", fontSize: 14 } : {}),
+                  // g-152：折叠态只显示箭头，不显示文字，避免窄列换行；minWidth:0 让 grid 36px track 自然约束宽度，padding 由 boxSizing 撑满
+                  ...(blockedColumnCollapsed ? { minWidth: 0, padding: "4px 0", overflow: "hidden", fontSize: 14, boxSizing: "border-box", textAlign: "center" } : {}),
                 },
                 onClick: () => setBlockedColumnCollapsed((p) => !p),
                 title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
@@ -802,7 +827,8 @@
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
-                            onClose: () => setDrawerCard(null) })
+                            onClose: () => setDrawerCard(null),
+                            onDeleted: () => { setDrawerCard(null); load(); } })
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal
@@ -893,20 +919,151 @@
               onCancel: () => setDeliverPrompt(null),
             })
           : null,
-        // g-134: 版本详情弹窗
+        // g-134/g-135: 版本详情弹窗（含摘要/范围/working/released 操作）
         versionDetailTarget
-          ? h("div", { style: S.overlay, onClick: () => setVersionDetailTarget(null) },
-              h("div", { style: { ...S.modal, minWidth: 320 }, onClick: (e) => e.stopPropagation() },
-                h("span", { style: S.close, onClick: () => setVersionDetailTarget(null) }, "✕"),
+          ? h("div", { style: S.overlay, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } },
+              h("div", { style: { ...S.modal, minWidth: 360, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
+                h("span", { style: S.close, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, `🏷 版本详情：${versionDetailTarget.name}`),
-                h("div", { style: { marginBottom: 8, fontSize: 13, opacity: 0.8 } },
+                // 基本信息
+                h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } },
                   h("div", null, `Slug：${versionDetailTarget.slug}`),
-                  h("div", null, `状态：${versionDetailTarget.status}`),
+                  h("div", null, `状态：${versionDetailTarget.status === "released" ? "🟢 released" : versionDetailTarget.status === "active" ? "🔵 active（进行中）" : `⚪ ${versionDetailTarget.status}`}`),
                   h("div", null, `目标数量：${versionDetailTarget.goals_count}`),
                 ),
-                h("div", { style: { display: "flex", gap: 8, marginTop: 16 } },
+                // g-135: 版本摘要/范围（从 version.md 的「范围」小节读取）
+                h("div", { style: { marginBottom: 12 } },
+                  h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4 } }, "📋 版本摘要 / 主要功能范围"),
+                  versionDetailLoading
+                    ? h("div", { style: { fontSize: 12, opacity: 0.5 } }, "加载中…")
+                    : (versionDetailData?.summary || versionDetailData?.scope)
+                      ? h("div", { style: { fontSize: 12, whiteSpace: "pre-wrap", lineHeight: 1.5, padding: "6px 8px", borderRadius: 4, background: "rgba(128,128,128,.08)" } },
+                          versionDetailData.summary || versionDetailData.scope)
+                      : h("div", { style: { fontSize: 12, opacity: 0.45, fontStyle: "italic" } }, "（版本摘要为空——请在版本 version.md 的「范围」小节补充）"),
+                ),
+                // g-135: 阻塞目标清单（发布前置条件不满足时展示）
+                versionDetailData && versionDetailData.blocking && versionDetailData.blocking.length > 0
+                  ? h("div", { style: { marginBottom: 12, padding: "8px 10px", borderRadius: 6, background: "rgba(255,107,107,.12)", border: "1px solid rgba(255,107,107,.3)" } },
+                      h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4, color: "#ff6b6b" } }, `⛔ 阻塞目标（${versionDetailData.blocking.length} 个未 delivered）`),
+                      ...versionDetailData.blocking.map((g) =>
+                        h("div", { key: g.id, style: { fontSize: 12, padding: "2px 0", opacity: 0.85 } },
+                          `• ${g.id}（${g.title}）：${g.status}`)
+                      ))
+                  : null,
+                // g-135: 操作提示
+                versionActionNote
+                  ? h("div", { style: { marginBottom: 8, fontSize: 12, padding: "4px 8px", borderRadius: 4, background: "rgba(128,128,128,.08)" } }, versionActionNote)
+                  : null,
+                // g-135: working/released 操作按钮 + 重命名/删除
+                h("div", { style: { display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" } },
+                  // 标记为 working（active）—— 当非 active 时显示
+                  versionDetailTarget.status !== "active" && versionDetailTarget.status !== "released"
+                    ? h("button", {
+                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, background: "rgba(76,141,255,.15)", border: "1px solid rgba(76,141,255,.4)" },
+                        className: "dg-btn",
+                        disabled: versionActionLoading,
+                        onClick: () => {
+                          if (!confirm(`确认将版本 ${versionDetailTarget.slug} 标记为 working（进行中）？`)) return;
+                          setVersionActionLoading(true);
+                          setVersionActionNote(null);
+                          fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify({ slug: versionDetailTarget.slug, status: "active" }),
+                          }).then((r) => r.json()).then((data) => {
+                            setVersionActionLoading(false);
+                            if (data.ok) {
+                              setVersionActionNote("✅ 已标记为 working（active）");
+                              // g-135 fix #2：同步更新 target 状态，modal 按钮立刻反映
+                              setVersionDetailTarget((prev) => prev ? { ...prev, status: "active" } : prev);
+                              loadVersionDetail(versionDetailTarget.slug);
+                              load(); // 刷新看板
+                            } else {
+                              setVersionActionNote("⚠️ 操作失败：" + (data.error || "未知错误"));
+                            }
+                          }).catch((e) => {
+                            setVersionActionLoading(false);
+                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                          });
+                        },
+                      }, "▶ 标记为 working")
+                    : null,
+                  // active 状态可切换回 planning
+                  versionDetailTarget.status === "active"
+                    ? h("button", {
+                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
+                        className: "dg-btn",
+                        disabled: versionActionLoading,
+                        onClick: () => {
+                          if (!confirm(`确认将版本 ${versionDetailTarget.slug} 切回 planning？`)) return;
+                          setVersionActionLoading(true);
+                          setVersionActionNote(null);
+                          fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify({ slug: versionDetailTarget.slug, status: "planning" }),
+                          }).then((r) => r.json()).then((data) => {
+                            setVersionActionLoading(false);
+                            if (data.ok) {
+                              setVersionActionNote("✅ 已切回 planning");
+                              // g-135 fix #2：同步更新 target 状态
+                              setVersionDetailTarget((prev) => prev ? { ...prev, status: "planning" } : prev);
+                              loadVersionDetail(versionDetailTarget.slug);
+                              load();
+                            } else {
+                              setVersionActionNote("⚠️ 操作失败：" + (data.error || "未知错误"));
+                            }
+                          }).catch((e) => {
+                            setVersionActionLoading(false);
+                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                          });
+                        },
+                      }, "↩ 切回 planning")
+                    : null,
+                  // 标记为 released —— 仅非 released 时显示
+                  versionDetailTarget.status !== "released"
+                    ? h("button", {
+                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#4caf50", background: "rgba(76,175,80,.12)", border: "1px solid rgba(76,175,80,.4)" },
+                        className: "dg-btn",
+                        disabled: versionActionLoading,
+                        onClick: () => {
+                          // 先检查阻塞清单
+                          const blocking = versionDetailData?.blocking ?? [];
+                          if (blocking.length > 0) {
+                            setVersionActionNote(`⛔ 无法发布：仍有 ${blocking.length} 个未 delivered 的目标`);
+                            return;
+                          }
+                          if (!confirm(`确认发布版本 ${versionDetailTarget.slug}？\n\n此操作需要负责人确认，发布后版本状态将变为 released。`)) return;
+                          setVersionActionLoading(true);
+                          setVersionActionNote(null);
+                          fetch(graphUrl("/api/dsh-graph/release-version"), {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify({ slug: versionDetailTarget.slug }),
+                          }).then((r) => r.json()).then((data) => {
+                            setVersionActionLoading(false);
+                            if (data.ok === true) {
+                              setVersionActionNote("✅ 版本已发布为 released");
+                              // g-135 fix #2：同步更新 target 状态，modal 按钮立刻反映（不再显示 released 按钮）
+                              setVersionDetailTarget((prev) => prev ? { ...prev, status: "released" } : prev);
+                              loadVersionDetail(versionDetailTarget.slug);
+                              load();
+                            } else if (data.ok === false && data.blocking) {
+                              setVersionActionNote(`⛔ 无法发布：${data.blocking.length} 个目标未 delivered`);
+                              loadVersionDetail(versionDetailTarget.slug); // 刷新阻塞清单
+                            } else {
+                              setVersionActionNote("⚠️ 发布失败：" + (data.error || "未知错误"));
+                            }
+                          }).catch((e) => {
+                            setVersionActionLoading(false);
+                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                          });
+                        },
+                      }, "🚀 标记为 released")
+                    : null,
+                  // 重命名
                   h("button", {
-                    style: { ...S.btn, padding: "6px 16px", fontSize: 13 },
+                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
                     className: "dg-btn",
                     onClick: () => {
                       setRenameVersionTarget({ slug: versionDetailTarget.slug, name: versionDetailTarget.name });
@@ -914,15 +1071,18 @@
                       setRenameVersionName(versionDetailTarget.name);
                       setRenameVersionNote(null);
                       setVersionDetailTarget(null);
+                      setVersionDetailData(null);
                     },
                   }, "✏️ 重命名"),
+                  // 删除
                   h("button", {
-                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff6b6b" },
+                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff6b6b", opacity: 0.7 },
                     className: "dg-btn",
                     onClick: () => {
                       setDeleteVersionTarget({ slug: versionDetailTarget.slug, name: versionDetailTarget.name });
                       setDeleteVersionNote(null);
                       setVersionDetailTarget(null);
+                      setVersionDetailData(null);
                     },
                   }, "🗑️ 删除"),
                 ),

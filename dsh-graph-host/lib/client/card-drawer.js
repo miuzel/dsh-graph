@@ -9,13 +9,17 @@
       );
     }
 
-    // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑
+    // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑 + g-128 删除按钮
     function CardDrawer(props) {
       const [state, setState] = React.useState({ loading: true });
       const [promptText, setPromptText] = React.useState("");
       const [collectNote, setCollectNote] = React.useState(null);
       const [collecting, setCollecting] = React.useState(false);
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新收集的模型路由
+      // g-128：删除确认状态
+      const [deleteConfirm, setDeleteConfirm] = React.useState(false);
+      const [deleteIdInput, setDeleteIdInput] = React.useState("");
+      const [deleteNote, setDeleteNote] = React.useState(null);
       React.useEffect(() => {
         let alive = true;
         fetch(graphUrl("/api/dsh-graph/goal", { id: props.goalId }))
@@ -97,7 +101,7 @@
                 h("div", { style: { marginTop: 4, marginBottom: 8 } },
                   h("div", { style: { fontWeight: 600, fontSize: 12, opacity: 0.9, marginBottom: 4 } }, "收集信息目标（可编辑）"),
                   h("textarea", {
-                    style: { ...S.promptInput, width: "100%", minHeight: 100, resize: "vertical", marginTop: 2 },
+                    style: { ...S.promptInput, width: "100%", minHeight: 150, resize: "vertical", marginTop: 2 },
                     value: promptText ? promptText.split(readonlyPart)[0] : editablePart,
                     onChange: (e) => {
                       const newEditable = e.target.value;
@@ -169,6 +173,63 @@
               h("div", { style: S.drawerH }, "全文"),
               h("div", { style: { whiteSpace: "pre-wrap" } }, card.content?.trim() || "（尚未采集内容）")),
             collectPanel,
+            // g-128：卡片删除按钮（二次确认 + 输入卡片 id 防误删）
+            h("div", { key: "del", style: { ...S.drawerSection, borderTop: "1px solid rgba(128,128,128,.25)", paddingTop: 8 } },
+              deleteConfirm
+                ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+                    h("div", { style: { ...S.meta, color: "#d66", fontSize: 12 } },
+                      `⚠️ 确认删除卡片「${card.title}」？请输入卡片 id 确认：`),
+                    h("div", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } },
+                      `id：${card.id}`),
+                    h("input", {
+                      style: { ...S.promptInput, fontSize: 12 },
+                      value: deleteIdInput,
+                      placeholder: "输入卡片 id 确认删除…",
+                      onChange: (e) => setDeleteIdInput(e.target.value),
+                    }),
+                    h("div", { style: { display: "flex", gap: 6 } },
+                      h("button", {
+                        style: { ...S.btn, fontSize: 11, padding: "2px 8px", background: deleteIdInput.trim() === card.id ? "rgba(214,102,102,.3)" : undefined },
+                        className: "dg-btn",
+                        disabled: deleteIdInput.trim() !== card.id,
+                        onClick: async () => {
+                          try {
+                            const r = await fetch(graphUrl("/api/dsh-graph/delete-card"), {
+                              method: "POST",
+                              headers: { "content-type": "application/json" },
+                              body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                            });
+                            const data = await r.json();
+                            if (data.ok) {
+                              setDeleteNote("✅ 卡片已删除");
+                              showToast("✅ 卡片已删除");
+                              setDeleteConfirm(false);
+                              setDeleteIdInput("");
+                              // 关闭抽屉并刷新
+                              props.onClose?.();
+                              if (props.onDeleted) props.onDeleted();
+                            } else {
+                              setDeleteNote("⚠️ 删除失败：" + (data.error || "未知错误"));
+                            }
+                          } catch (e) {
+                            setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                          }
+                        },
+                      }, "🗑 确认删除"),
+                      h("button", {
+                        style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                        className: "dg-btn",
+                        onClick: () => { setDeleteConfirm(false); setDeleteIdInput(""); setDeleteNote(null); },
+                      }, "取消"))
+                  )
+                : h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
+                    h("button", {
+                      style: { ...S.btn, fontSize: 11, padding: "2px 8px", background: "rgba(214,102,102,.2)" },
+                      className: "dg-btn",
+                      title: "删除此卡片（需输入卡片 id 确认）",
+                      onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
+                    }, "🗑 删除卡片")),
+              deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } }, deleteNote) : null),
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集
             card.child_id

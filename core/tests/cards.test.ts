@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { readFileSync } from "node:fs";
@@ -12,12 +12,14 @@ import {
   startAttempt,
   bindAttemptChild,
   addCard,
+  deleteCard,
   fillCard,
   reviewCard,
   validate,
   rebuild,
   findGoalFile,
   loadGoal,
+  bindCardChild,
   GraphError,
 } from "../ops.ts";
 import { serializeDoc } from "../model.ts";
@@ -175,4 +177,95 @@ test("boardProjection：被复用派生（attempt.reused 事件 + 绑定记录�
   bindAttemptChild(root3, c3, attC3, "child-uniq", "test");
   const b3p = boardProjection(root3);
   assert.equal(b3p.versions[0].goals[0].reused_by, null);
+});
+
+// ---- g-128：deleteCard 单元测试 ----
+
+test("deleteCard：删除卡片文件 + context_cards 移除引用 + card.deleted 事件", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  const c1 = addCard(root, id, { title: "甲", kind: "text", actor: "test" });
+  const c2 = addCard(root, id, { title: "乙", kind: "data", actor: "test" });
+  // 删除 c1
+  deleteCard(root, id, c1, { actor: "test" });
+  // c1 文件不存在
+  const cardFile = join(root, "versions", "v-t", "goals", id, "cards", `${c1}.md`);
+  assert.ok(!existsSync(cardFile), "卡片文件应已删除");
+  // context_cards 只剩 c2
+  const meta = loadGoal(findGoalFile(root, id)).meta;
+  assert.deepEqual(meta.context_cards, [c2]);
+  // card.deleted 事件
+  const events = readEvents(root).filter((e) => e.event === "card.deleted");
+  assert.equal(events.length, 1);
+  assert.equal(events[0].goal, id);
+  assert.equal(events[0].details.card, c1);
+  assert.equal(events[0].details.title, "甲");
+  assert.equal(events[0].details.kind, "text");
+});
+
+test("deleteCard：正在收集中的卡片不可删除", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  const c = addCard(root, id, { title: "甲", kind: "text", actor: "test" });
+  // 模拟收集状态
+  bindCardChild(root, id, c, { childId: "child-test", actor: "test" });
+  assert.throws(
+    () => deleteCard(root, id, c, { actor: "test" }),
+    (e) => e instanceof GraphError && e.message.includes("正在收集"),
+    "收集中的卡片应拒绝删除",
+  );
+});
+
+test("deleteCard：删除后 validate 仍通过", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  const c1 = addCard(root, id, { title: "甲", kind: "text", actor: "test" });
+  const c2 = addCard(root, id, { title: "乙", kind: "data", actor: "test" });
+  deleteCard(root, id, c1, { actor: "test" });
+  assert.deepEqual(validate(root), []);
+  assert.deepEqual(rebuild(root), []);
+});
+
+test("deleteCard：删除不存在的卡片抛错", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  assert.throws(
+    () => deleteCard(root, id, "card-nonexist", { actor: "test" }),
+    GraphError,
+  );
+});
+
+// ---- backlog 目标：详情可读、建卡拒绝 ----
+
+import { goalDetail } from "../ops.ts";
+
+test("backlog 目标 goalDetail 正常返回 draft + 空卡片", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "backlog item", actor: "test" });
+  const d = goalDetail(root, id);
+  assert.equal(d.meta.status, "draft");
+  assert.equal(d.meta.id, id);
+  assert.deepEqual(d.cards, []);
+  assert.deepEqual(d.attempts, []);
+  assert.ok(d.goalFile.includes("/backlog/"), "goalFile 应在 backlog 目录");
+  assert.ok(!d.goalFile.endsWith("/goal.md"), "backlog 文件名不是 goal.md");
+});
+
+test("backlog 目标 addCard 仍被拒绝", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "backlog item", actor: "test" });
+  assert.throws(
+    () => addCard(root, id, { title: "x", kind: "text", actor: "test" }),
+    /暂存目标（backlog）没有目录/,
+  );
+});
+
+test("非 backlog 目标 goalDetail 返回正常且可建卡", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "standalone", version: "standalone", actor: "test" });
+  const d = goalDetail(root, id);
+  assert.equal(d.meta.status, "draft");
+  assert.ok(d.goalFile.endsWith("/goal.md"), "standalone 文件名应为 goal.md");
+  const c = addCard(root, id, { title: "card1", kind: "text", actor: "test" });
+  assert.ok(c.startsWith("card-"));
 });

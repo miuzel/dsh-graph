@@ -2,7 +2,7 @@
       head: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
       grid: { display: "grid", gridTemplateColumns: "130px repeat(6, minmax(150px, 1fr))", gap: 4 },
       laneLabel: { fontWeight: 600, padding: "8px 6px", borderTop: "1px solid rgba(128,128,128,.35)" },
-      stageHead: { fontWeight: 600, textAlign: "center", padding: 4, opacity: 0.75 },
+      stageHead: { fontWeight: 600, textAlign: "center", padding: 4, opacity: 0.75, whiteSpace: "nowrap" },
       cell: { borderTop: "1px solid rgba(128,128,128,.35)", padding: 4, minHeight: 40, verticalAlign: "top" },
       goalCard: {
         border: "1px solid rgba(128,128,128,.45)",

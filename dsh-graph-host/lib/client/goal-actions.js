@@ -317,10 +317,12 @@
     }
 
     // g-109：新增信息收集任务组件（弹窗内信息收集区）
+    // g-128：新增信息收集任务组件（弹窗内信息收集区）——支持标题+kind 选择
     function AddCardBox(props) {
       const { goalId, supervisorSession } = props;
       const [mode, setMode] = React.useState("idle"); // idle | naming | chat
       const [title, setTitle] = React.useState("");
+      const [kind, setKind] = React.useState("text"); // g-128：卡片类型可选
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
 
@@ -332,12 +334,13 @@
           const r = await fetch(graphUrl("/api/dsh-graph/add-card"), {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, title: t, kind: "text" }),
+            body: JSON.stringify({ goal: goalId, title: t, kind }),
           });
           const data = await r.json();
           if (data.ok) {
             setNote("✅ 已创建任务：" + data.card);
             setTitle("");
+            setKind("text");
             setMode("idle");
           } else {
             setNote("⚠️ 创建失败：" + (data.error || "未知错误"));
@@ -363,20 +366,34 @@
         }
       };
 
+      // g-128：kind 选项标签
+      const kindLabels = { text: "📝 文本", file: "📄 文件", image: "🖼 图片", data: "📊 数据" };
+
       return h("div", { style: { marginTop: 8 }, className: "dg-card-add" },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
           h("span", { style: { ...S.meta, fontSize: 11 } }, "新增信息收集任务："),
           h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("naming"); setNote(null); } }, "📝 一句话任务"),
           h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("chat"); setNote(null); } }, "💬 通过对话创建")),
         mode === "naming"
-          ? h("div", { style: { display: "flex", gap: 4, marginTop: 4 } },
-              h("input", {
-                style: { ...S.promptInput, flex: 1 },
-                value: title, placeholder: "输入任务描述…",
-                onChange: (e) => setTitle(e.target.value),
-                onKeyDown: (e) => { if (e.key === "Enter") addByName(); },
-              }),
-              h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建"))
+          ? h("div", { style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 4 } },
+              h("div", { style: { display: "flex", gap: 4, alignItems: "center" } },
+                h("input", {
+                  style: { ...S.promptInput, flex: 1 },
+                  value: title, placeholder: "输入任务描述…",
+                  onChange: (e) => setTitle(e.target.value),
+                  onKeyDown: (e) => { if (e.key === "Enter") addByName(); },
+                }),
+                // g-128：kind 选择下拉框
+                h("select", {
+                  value: kind,
+                  onChange: (e) => setKind(e.target.value),
+                  style: { fontSize: 12, padding: "4px 6px", cursor: "pointer",
+                           background: "rgba(128,128,128,.10)", color: "inherit",
+                           border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
+                },
+                  ...Object.entries(kindLabels).map(([k, v]) =>
+                    h("option", { key: k, value: k }, v))),
+                h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建")))
           : null,
         mode === "chat"
           ? h("div", { style: { marginTop: 4, padding: "6px 8px", borderRadius: 4, background: "rgba(76,141,255,.08)" } },

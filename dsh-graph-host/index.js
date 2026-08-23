@@ -22,6 +22,7 @@ import {
   validate,
   rebuild,
   addCard,
+  deleteCard,
   fillCard,
   reviewCard,
   startAttempt,
@@ -64,6 +65,10 @@ import {
   createVersion,
   renameVersion,
   deleteVersion,
+  releaseVersion,
+  setVersionStatus,
+  validateVersionRelease,
+  versionDetail,
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot } from "./core/root.js";
 
@@ -100,7 +105,7 @@ const USAGE = [
   "- graph_create_goal(title[, version]) 建目标（进 backlog，带 version 则排期）；",
   "- graph_set_criteria(goal, criteria[]) 先登记质量判据（判据先于执行，硬规则）；",
   "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
-  "- graph_add_card / graph_fill_card / graph_review_card 管理目标下的上下文卡片（信息收集）；",
+  "- graph_add_card / graph_fill_card / graph_review_card / graph_delete_card 管理目标下的上下文卡片（信息收集）；",
   "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展（看板卡片显示这句）；",
   "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff（g-150）；",
   "- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；",
@@ -140,7 +145,7 @@ const HELP_TEXT = [
   "- graph_create_goal(title[, version]) 建目标（进 backlog，带 version 则排期）；",
   "- graph_set_criteria(goal, criteria[]) 先登记质量判据（判据先于执行，硬规则）；",
   "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
-  "- graph_add_card / graph_fill_card / graph_review_card 管理目标下的上下文卡片（信息收集）；",
+  "- graph_add_card / graph_fill_card / graph_review_card / graph_delete_card 管理目标下的上下文卡片（信息收集）；",
   "- graph_bind_collect_card(goal, card, child_id) 把收集子代理绑定到卡片（g-119）；",
   "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展；",
   "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff（g-150）；",
@@ -262,6 +267,15 @@ export function apply(ctx, config) {
         parameters: params({ goal: str, card: str }, ["goal", "card"]),
       },
       run: (a, ex) => { reviewCard(rootFor(ex), a.goal, a.card, { by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
+      // g-128：删除上下文卡片（删文件 + 移除 context_cards 引用 + 记 card.deleted 事件，事件先行 R-02）
+      def: {
+        name: "graph_delete_card",
+        description: "删除目标的上下文卡片（删卡片文件 + context_cards 移除引用 + 记 card.deleted 事件，事件先行 R-02）。正在收集中的卡片（status=collecting）不可删除。",
+        parameters: params({ goal: str, card: str }, ["goal", "card"]),
+      },
+      run: (a, ex) => { deleteCard(rootFor(ex), a.goal, a.card, { actor: actorOf(ex) }); return { ok: true }; },
     },
     {
       // g-150：主管登记 attempt handoff（返工约束、前序失败、推荐基线、验收命令）。
@@ -923,6 +937,23 @@ export function apply(ctx, config) {
         }
       },
     },
+    // g-128: 删除上下文卡片端点
+    {
+      path: "/api/dsh-graph/delete-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          deleteCard(rootForReq(req, body), goal, card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
     {
       path: "/api/dsh-graph/start-collection",
       handler: async (req, res) => {
@@ -1256,6 +1287,69 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           const r = rootForReq(req, body);
           const result = deleteVersion(r, { slug: slug.trim(), actor: "human:gui" });
           json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-135: 版本详情端点（弹窗展示摘要/范围/阻塞清单）
+    {
+      path: "/api/dsh-graph/version-detail",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const url = new URL(req.url, "http://localhost");
+          const slug = url.searchParams.get("slug");
+          if (!slug || !slug.trim()) {
+            return json(res, 400, { error: "missing slug" });
+          }
+          const r = rootForReq(req);
+          const result = versionDetail(r, slug.trim());
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-135: 发布版本端点（负责人确认 → released guard → 版本投影更新）
+    {
+      path: "/api/dsh-graph/release-version",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { slug } = body;
+          if (!slug || typeof slug !== "string" || !slug.trim()) {
+            return json(res, 400, { error: "missing slug" });
+          }
+          const r = rootForReq(req, body);
+          const result = releaseVersion(r, { slug: slug.trim(), actor: "human:gui" });
+          json(res, 200, result);
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-135: 设置版本状态端点（working → active 等）
+    {
+      path: "/api/dsh-graph/set-version-status",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { slug, status } = body;
+          if (!slug || typeof slug !== "string" || !slug.trim()) {
+            return json(res, 400, { error: "missing slug" });
+          }
+          if (!status || typeof status !== "string" || !status.trim()) {
+            return json(res, 400, { error: "missing status" });
+          }
+          const r = rootForReq(req, body);
+          setVersionStatus(r, { slug: slug.trim(), status: status.trim(), actor: "human:gui" });
+          json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });

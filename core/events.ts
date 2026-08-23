@@ -64,6 +64,7 @@ export function readEvents(root: string): GraphEvent[] {
 /**
  * 从事件流重建各版本泳道最终状态：
  * version.created → 存活；version.renamed → slug 变更；version.deleted → 删除。
+ * version.released → 状态 released；version.status_changed → 状态切换（g-135）。
  * 返回 Map<slug, { alive, meta }>，其中 alive=false 表示已删除。
  */
 export function replayVersionLanes(events: GraphEvent[]): Map<string, { alive: boolean; meta: Record<string, any> }> {
@@ -102,6 +103,28 @@ export function replayVersionLanes(events: GraphEvent[]): Map<string, { alive: b
       const existing = lanes.get(slug);
       if (existing) {
         lanes.set(slug, { ...existing, alive: false });
+      }
+    } else if (ev.event === "version.released") {
+      // g-135：版本发布事件 → 状态设为 released
+      const slug = ev.details?.version;
+      if (!slug) continue;
+      const existing = lanes.get(slug);
+      if (existing && existing.alive) {
+        lanes.set(slug, {
+          alive: true,
+          meta: { ...existing.meta, status: "released" },
+        });
+      }
+    } else if (ev.event === "version.status_changed") {
+      // g-135：版本状态切换事件（如 working → active）
+      const slug = ev.details?.version;
+      if (!slug) continue;
+      const existing = lanes.get(slug);
+      if (existing && existing.alive) {
+        lanes.set(slug, {
+          alive: true,
+          meta: { ...existing.meta, status: ev.details.new_status ?? existing.meta.status },
+        });
       }
     }
   }

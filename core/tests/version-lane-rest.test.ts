@@ -58,6 +58,17 @@ const post = async (routes: Map<string, any>, path: string, body: unknown) => {
   return { code: res._code, body: res._body };
 };
 
+const get = async (routes: Map<string, any>, path: string, query?: string) => {
+  const handler = routes.get(path);
+  assert.ok(handler, `路由 ${path} 已注册`);
+  const req = fakeRequest("GET", null);
+  req.url = query ? `?${query}` : "";
+  const res = fakeResponse();
+  const p = handler(req, res);
+  await p;
+  return { code: res._code, body: res._body };
+};
+
 test("create-version 端点：正常创建版本", async () => {
   const { root, routes } = setup();
   const { code, body } = await post(routes, "/api/dsh-graph/create-version", {
@@ -350,4 +361,131 @@ test("版本管理 REST API：事件先行验证", async () => {
   const events3 = readEvents(root);
   const lastEvent3 = events3[events3.length - 1];
   assert.equal(lastEvent3.event, "version.deleted");
+});
+
+// ---- g-135: 版本发布 REST API 测试 ----
+
+test("version-detail 端点：正常获取版本详情", async () => {
+  const { root, routes } = setup();
+  await post(routes, "/api/dsh-graph/create-version", { slug: "v1.0", name: "1.0" });
+  const res = await get(routes, "/api/dsh-graph/version-detail", "slug=v1.0");
+  assert.equal(res.code, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.slug, "v1.0");
+  assert.equal(res.body.name, "1.0");
+  assert.equal(res.body.status, "planning");
+  assert.ok(typeof res.body.goals_count === "number");
+  assert.ok(Array.isArray(res.body.blocking));
+});
+
+test("version-detail 端点：缺少 slug 返回 400", async () => {
+  const { routes } = setup();
+  const res = await get(routes, "/api/dsh-graph/version-detail");
+  assert.equal(res.code, 400);
+  assert.ok(res.body.error.includes("missing slug"));
+});
+
+test("release-version 端点：正常发布（无阻塞目标）", async () => {
+  const { root, routes } = setup();
+  await post(routes, "/api/dsh-graph/create-version", { slug: "v1.0" });
+  const res = await post(routes, "/api/dsh-graph/release-version", { slug: "v1.0" });
+  assert.equal(res.code, 200);
+  assert.equal(res.body.ok, true);
+  // 验证事件
+  const events = readEvents(root);
+  const released = events.find((e: any) => e.event === "version.released" && e.details?.version === "v1.0");
+  assert.ok(released, "应记录 version.released 事件");
+  assert.equal(released.actor, "human:gui"); // REST 端点 actor 为 human:gui
+});
+
+test("release-version 端点：有阻塞目标时返回阻塞清单", async () => {
+  const { root, routes } = setup();
+  await post(routes, "/api/dsh-graph/create-version", { slug: "v1.0" });
+  // 创建一个未 delivered 的目标
+  createGoal(root, { title: "阻塞目标", version: "v1.0", actor: "test" });
+  const res = await post(routes, "/api/dsh-graph/release-version", { slug: "v1.0" });
+  assert.equal(res.code, 200);
+  assert.equal(res.body.ok, false);
+  assert.ok(Array.isArray(res.body.blocking));
+  assert.equal(res.body.blocking.length, 1);
+  assert.equal(res.body.blocking[0].title, "阻塞目标");
+  // 不应写 version.released 事件
+  const events = readEvents(root);
+  const released = events.find((e: any) => e.event === "version.released");
+  assert.equal(released, undefined, "不应写 version.released 事件");
+});
+
+test("release-version 端点：缺少 slug 返回 400", async () => {
+  const { routes } = setup();
+  const res = await post(routes, "/api/dsh-graph/release-version", {});
+  assert.equal(res.code, 400);
+  assert.ok(res.body.error.includes("missing slug"));
+});
+
+test("release-version 端点：POST 方法强制要求", async () => {
+  const { routes } = setup();
+  const handler = routes.get("/api/dsh-graph/release-version");
+  const req = fakeRequest("GET", null);
+  const res = fakeResponse();
+  await handler(req, res);
+  assert.equal(res._code, 405);
+});
+
+test("set-version-status 端点：正常设置 working（active）", async () => {
+  const { root, routes } = setup();
+  await post(routes, "/api/dsh-graph/create-version", { slug: "v1.0" });
+  const res = await post(routes, "/api/dsh-graph/set-version-status", { slug: "v1.0", status: "active" });
+  assert.equal(res.code, 200);
+  assert.equal(res.body.ok, true);
+  // 验证事件
+  const events = readEvents(root);
+  const changed = events.find((e: any) => e.event === "version.status_changed" && e.details?.version === "v1.0");
+  assert.ok(changed, "应记录 version.status_changed 事件");
+  assert.equal(changed.details.old_status, "planning");
+  assert.equal(changed.details.new_status, "active");
+});
+
+test("set-version-status 端点：缺少参数返回 400", async () => {
+  const { routes } = setup();
+  const res1 = await post(routes, "/api/dsh-graph/set-version-status", { status: "active" });
+  assert.equal(res1.code, 400);
+  const res2 = await post(routes, "/api/dsh-graph/set-version-status", { slug: "v1.0" });
+  assert.equal(res2.code, 400);
+});
+
+test("set-version-status 端点：拒绝 released（必须经 releaseVersion）", async () => {
+  const { root, routes } = setup();
+  await post(routes, "/api/dsh-graph/create-version", { slug: "v1.0" });
+  const res = await post(routes, "/api/dsh-graph/set-version-status", { slug: "v1.0", status: "released" });
+  assert.equal(res.code, 400);
+  assert.ok(res.body.error.includes("setVersionStatus"), "错误信息应提及 setVersionStatus");
+  // 不应写 version.status_changed 事件
+  const events = readEvents(root).filter((e: any) => e.event === "version.status_changed");
+  assert.equal(events.length, 0, "拒绝后不应写 status_changed 事件");
+});
+
+test("set-version-status 端点：拒绝无效状态", async () => {
+  const { routes } = setup();
+  await post(routes, "/api/dsh-graph/create-version", { slug: "v1.0" });
+  const res = await post(routes, "/api/dsh-graph/set-version-status", { slug: "v1.0", status: "bogus" });
+  assert.equal(res.code, 400);
+  assert.ok(res.body.error.includes("非法版本状态"));
+});
+
+test("set-version-status 端点：released 终态 guard——released→planning 被拒绝", async () => {
+  const { root, routes } = setup();
+  await post(routes, "/api/dsh-graph/create-version", { slug: "v1.0" });
+  await post(routes, "/api/dsh-graph/release-version", { slug: "v1.0" });
+  // 确认已 released
+  const detail1 = await get(routes, "/api/dsh-graph/version-detail", "slug=v1.0");
+  assert.equal(detail1.body.status, "released");
+  const eventsBefore = readEvents(root).length;
+  // 尝试 released → planning
+  const res = await post(routes, "/api/dsh-graph/set-version-status", { slug: "v1.0", status: "planning" });
+  assert.equal(res.code, 400);
+  assert.ok(res.body.error.includes("终态"), "错误信息应提及终态");
+  // 状态不变、事件不变
+  const detail2 = await get(routes, "/api/dsh-graph/version-detail", "slug=v1.0");
+  assert.equal(detail2.body.status, "released");
+  assert.equal(readEvents(root).length, eventsBefore, "拒绝后不应写事件");
 });

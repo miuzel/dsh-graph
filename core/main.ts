@@ -21,6 +21,7 @@ import {
   deleteGoal,
   archiveGoal,
   unarchiveGoal,
+  deleteCard,
 } from "./ops.ts";
 
 interface Args {
@@ -127,6 +128,11 @@ function main(): void {
       console.log("ok");
       return;
     }
+    case "delete-card": {
+      deleteCard(args.root, need(args, "goal"), need(args, "card"), { actor });
+      console.log("ok");
+      return;
+    }
     case "start-attempt": {
       const attId = startAttempt(args.root, need(args, "goal"), {
         executor: flag(args, "executor") ?? actor,
@@ -204,7 +210,7 @@ function main(): void {
     }
     default:
       throw new GraphError(
-        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|start-attempt|report-status|move-goal|amend-goal|archive-goal|unarchive-goal|delete-goal|validate|rebuild> [flags]",
+        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|delete-card|start-attempt|report-status|move-goal|amend-goal|archive-goal|unarchive-goal|delete-goal|validate|rebuild> [flags]",
       );
   }
 }

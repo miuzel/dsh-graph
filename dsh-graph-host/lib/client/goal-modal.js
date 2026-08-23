@@ -389,6 +389,8 @@
             hideBodyWhenExtra && extra != null ? null : (isPh && !content ? null : content),
             extra ?? null);
         }
+        // 判断是否是 backlog 目标（backlog 目标不能建卡）
+        const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
             h(AcceptFeedback, { goalId: props.id, status, events: d.events, supervisorSession: props.supervisorSession, onRefresh: load })) : null,
@@ -412,11 +414,15 @@
                     }
                   },
                 }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
-                h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession }))
+                isBacklog
+                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
+                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession }))
             : h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🗂 信息收集"),
                 h("div", { style: S.meta }, "（暂无上下文卡片）"),
-                h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession })),
+                isBacklog
+                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
+                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession })),
         ];
         // g-150：执行上下文 tab（handoff + 最近指令 + 评论）
         const contextTab = [

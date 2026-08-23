@@ -132,14 +132,14 @@ test("g-118：systemPrompt 服务缺失时静默跳过（headless / 测试组合
   apply(ctx, { root }); // 不抛错即可（无 systemPrompt → 静默跳过）
 });
 
-test("g-118/g-119：注入不影响 graph_* 工具注册（16 + bind + help + rename + archive/unarchive + delete + record_attempt_handoff + set_directive + add_comment = 25）", () => {
+test("g-118/g-119：注入不影响 graph_* 工具注册（16 + bind + help + rename + archive/unarchive + delete + record_attempt_handoff + set_directive + add_comment + delete_card = 26）", () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g118-"));
   const root = resolveRoot({}, ws);
   init(root);
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: session-super-1\n");
   const { ctx, registered, sections } = makeMockCtx();
   apply(ctx, { root });
-  assert.equal(registered.length, 25, "g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help + g-141 graph_rename_goal + g-110 archive/unarchive + g-140 delete + g-150 graph_record_attempt_handoff + g-150 范围扩展 graph_set_directive / graph_add_comment = 25");
+  assert.equal(registered.length, 26, "g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help + g-141 graph_rename_goal + g-110 archive/unarchive + g-140 delete + g-150 graph_record_attempt_handoff + g-150 范围扩展 graph_set_directive / graph_add_comment + g-128 graph_delete_card = 26");
   assert.equal(sections.filter((s) => s.name === "dsh-graph-guide-hint").length, 1, "section 只注册一次");
 });
 

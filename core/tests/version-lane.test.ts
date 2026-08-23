@@ -5,9 +5,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, renameSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { init, createGoal, boardProjection, moveGoal, rebuild } from "../ops.ts";
-import { createVersion, renameVersion, deleteVersion } from "../ops.ts";
-import { readEvents } from "../events.ts";
+import { init, createGoal, setCriteria, boardProjection, moveGoal, rebuild, transition, archiveGoal } from "../ops.ts";
+import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail } from "../ops.ts";
+import { readEvents, replayVersionLanes, appendEvent } from "../events.ts";
 
 let root: string;
 
@@ -420,5 +420,262 @@ describe("版本泳道管理集成", () => {
     assert.equal(deleted.details.deleted_version_dir, "versions/v0.7");
     assert.equal(deleted.details.had_goals, false);
     assert.equal(deleted.details.had_archived, false);
+  });
+});
+
+// ---- g-135: 版本发布 guard 与版本状态管理 ----
+
+describe("releaseVersion（g-135）", () => {
+  it("全部目标 delivered 时发布成功", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    const g1 = createGoal(root, { title: "g1", version: "v1.0", actor: "test" });
+    const g2 = createGoal(root, { title: "g2", version: "v1.0", actor: "test" });
+    // 把两个目标迁移到 delivered（先移到独立目标以便迁移状态）
+    for (const g of [g1, g2]) {
+      moveGoal(root, g, { to: "standalone", actor: "test" });
+      setCriteria(root, g, ["测试判据"], "test");
+      transition(root, g, "ready", { actor: "test", force: true });
+      transition(root, g, "in_progress", { actor: "test" });
+      transition(root, g, "review", { actor: "test" });
+      transition(root, g, "delivered", { actor: "test", force: true });
+    }
+    // 把目标移回版本
+    for (const g of [g1, g2]) moveGoal(root, g, { to: "version", version: "v1.0", actor: "test" });
+    const result = releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    assert.deepEqual(result, { ok: true });
+    // 验证事件
+    const events = readEvents(root);
+    const released = events.find((e) => e.event === "version.released" && e.details.version === "v1.0");
+    assert.ok(released, "应记录 version.released 事件");
+    assert.equal(released.details.old_status, "planning");
+    assert.equal(released.details.new_status, "released");
+    // 验证版本状态
+    const detail = versionDetail(root, "v1.0");
+    assert.equal(detail.status, "released");
+  });
+
+  it("存在未 delivered 目标时拒绝发布并返回阻塞清单", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    const g1 = createGoal(root, { title: "目标A", version: "v1.0", actor: "test" });
+    const g2 = createGoal(root, { title: "目标B", version: "v1.0", actor: "test" });
+    // 只把 g1 移到 delivered
+    moveGoal(root, g1, { to: "standalone", actor: "test" });
+    setCriteria(root, g1, ["测试判据"], "test");
+    transition(root, g1, "ready", { actor: "test", force: true });
+    transition(root, g1, "in_progress", { actor: "test" });
+    transition(root, g1, "review", { actor: "test" });
+    transition(root, g1, "delivered", { actor: "test", force: true });
+    moveGoal(root, g1, { to: "version", version: "v1.0", actor: "test" });
+    // g2 仍在 planning，不应发布
+    const eventsBefore = readEvents(root).length;
+    const result = releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    assert.equal(result.ok, false);
+    if (result.ok === false) {
+      assert.equal(result.blocking.length, 1);
+      assert.equal(result.blocking[0].title, "目标B");
+      assert.equal(result.blocking[0].status, "planning");
+    }
+    // 不应写 version.released 事件
+    const eventsAfter = readEvents(root);
+    assert.equal(eventsAfter.length, eventsBefore, "不应写任何事件");
+    // 版本状态不变
+    const detail = versionDetail(root, "v1.0");
+    assert.equal(detail.status, "planning");
+  });
+
+  it("归档目标不计入阻塞清单", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    const g1 = createGoal(root, { title: "已归档目标", version: "v1.0", actor: "test" });
+    // 归档 g1
+    archiveGoal(root, g1, { actor: "test" });
+    // 没有非归档目标 → 应该可以发布
+    const result = releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    assert.deepEqual(result, { ok: true });
+  });
+
+  it("执行子代理（agent:*）不能发布", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    assert.throws(() => releaseVersion(root, { slug: "v1.0", actor: "agent:session-abc" }), /执行子代理不能直接发布/);
+  });
+
+  it("已 released 的版本不能重复发布", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    assert.throws(() => releaseVersion(root, { slug: "v1.0", actor: "human:负责人" }), /已经是 released/);
+  });
+});
+
+describe("setVersionStatus（g-135）", () => {
+  it("working 操作：planning → active，事件先行", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    setVersionStatus(root, { slug: "v1.0", status: "active", actor: "human:gui" });
+    const events = readEvents(root);
+    const changed = events.find((e) => e.event === "version.status_changed" && e.details.version === "v1.0");
+    assert.ok(changed, "应记录 version.status_changed 事件");
+    assert.equal(changed.details.old_status, "planning");
+    assert.equal(changed.details.new_status, "active");
+    const detail = versionDetail(root, "v1.0");
+    assert.equal(detail.status, "active");
+  });
+
+  it("幂等：相同状态不重复写事件", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    setVersionStatus(root, { slug: "v1.0", status: "active", actor: "test" });
+    const count1 = readEvents(root).length;
+    setVersionStatus(root, { slug: "v1.0", status: "active", actor: "test" });
+    const count2 = readEvents(root).length;
+    assert.equal(count2, count1, "幂等不应重复记事件");
+  });
+
+  it("拒绝 released：必须经 releaseVersion", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    const eventsBefore = readEvents(root).length;
+    assert.throws(
+      () => setVersionStatus(root, { slug: "v1.0", status: "released", actor: "human:gui" }),
+      /不能通过 setVersionStatus 直接设为 released/,
+    );
+    // 不应新增任何事件
+    const eventsAfter = readEvents(root).length;
+    assert.equal(eventsAfter, eventsBefore, "拒绝后不应写事件");
+    // 版本状态不变
+    assert.equal(versionDetail(root, "v1.0").status, "planning");
+  });
+
+  it("拒绝无效状态（如 bogus、delivered 等）", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    assert.throws(
+      () => setVersionStatus(root, { slug: "v1.0", status: "bogus", actor: "test" }),
+      /非法版本状态/,
+    );
+    assert.throws(
+      () => setVersionStatus(root, { slug: "v1.0", status: "delivered", actor: "test" }),
+      /非法版本状态/,
+    );
+  });
+
+  it("released 终态 guard：released → planning 被拒绝", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    assert.equal(versionDetail(root, "v1.0").status, "released");
+    const eventsBefore = readEvents(root).length;
+    assert.throws(
+      () => setVersionStatus(root, { slug: "v1.0", status: "planning", actor: "human:gui" }),
+      /released 是终态/,
+    );
+    // 状态不变、事件不变
+    assert.equal(versionDetail(root, "v1.0").status, "released");
+    assert.equal(readEvents(root).length, eventsBefore, "拒绝后不应写事件");
+  });
+
+  it("released 终态 guard：released → active 被拒绝", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    const eventsBefore = readEvents(root).length;
+    assert.throws(
+      () => setVersionStatus(root, { slug: "v1.0", status: "active", actor: "human:gui" }),
+      /released 是终态/,
+    );
+    assert.equal(versionDetail(root, "v1.0").status, "released");
+    assert.equal(readEvents(root).length, eventsBefore);
+  });
+});
+
+describe("validateVersionRelease（g-135）", () => {
+  it("空版本返回空阻塞清单", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    const blocking = validateVersionRelease(root, "v1.0");
+    assert.equal(blocking.length, 0);
+  });
+
+  it("返回所有未 delivered 的非归档目标", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    createGoal(root, { title: "A", version: "v1.0", actor: "test" });
+    createGoal(root, { title: "B", version: "v1.0", actor: "test" });
+    const blocking = validateVersionRelease(root, "v1.0");
+    assert.equal(blocking.length, 2);
+    assert.ok(blocking.every((g) => g.status === "planning"));
+  });
+});
+
+describe("versionDetail（g-135）", () => {
+  it("返回版本元数据 + 范围小节", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0 正式版", actor: "test" });
+    // 写入版本范围
+    const vfile = join(root, "versions", "v1.0", "version.md");
+    const content = readFileSync(vfile, "utf8");
+    writeFileSync(vfile, content.replace("（手动创建的版本泳道）", "首个正式发布版本，包含核心层 + 看板"), "utf8");
+    const detail = versionDetail(root, "v1.0");
+    assert.equal(detail.slug, "v1.0");
+    assert.equal(detail.name, "1.0 正式版");
+    assert.equal(detail.status, "planning");
+    assert.ok(detail.summary?.includes("首个正式发布版本"), "应包含范围内容");
+    assert.equal(detail.blocking.length, 0); // 空版本无阻塞
+  });
+
+  it("无范围小节时 summary 为 null（空态）", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    // 删除 body 中的范围小节
+    const vfile = join(root, "versions", "v1.0", "version.md");
+    writeFileSync(vfile, '---\n{"id":"v-test","name":"1.0","status":"planning"}\n---\n\n（无范围）\n', "utf8");
+    const detail = versionDetail(root, "v1.0");
+    assert.equal(detail.summary, null);
+  });
+
+  it("阻塞清单随非 delivered 目标变化", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    createGoal(root, { title: "阻塞目标", version: "v1.0", actor: "test" });
+    const detail = versionDetail(root, "v1.0");
+    assert.equal(detail.blocking.length, 1);
+    assert.equal(detail.blocking[0].title, "阻塞目标");
+  });
+
+  it("版本不存在时抛错", () => {
+    assert.throws(() => versionDetail(root, "nonexistent"), /不存在/);
+  });
+});
+
+describe("replayVersionLanes 兼容性（g-135）", () => {
+  it("version.released 事件正确追踪状态", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    const events = readEvents(root);
+    const lanes = replayVersionLanes(events);
+    const v1 = lanes.get("v1.0");
+    assert.ok(v1, "v1.0 应存在");
+    assert.equal(v1.alive, true);
+    assert.equal(v1.meta.status, "released");
+  });
+
+  it("version.status_changed 事件正确追踪状态", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    setVersionStatus(root, { slug: "v1.0", status: "active", actor: "test" });
+    const events = readEvents(root);
+    const lanes = replayVersionLanes(events);
+    const v1 = lanes.get("v1.0");
+    assert.ok(v1, "v1.0 应存在");
+    assert.equal(v1.meta.status, "active");
+  });
+
+  it("历史 version.released 事件（无 version.status_changed）继续兼容", () => {
+    // 模拟历史：version.created + version.released（无 status_changed 中间事件）
+    createVersion(root, { slug: "v0.5", name: "0.5", actor: "test" });
+    // 手动写一个历史风格的 version.released 事件
+    appendEvent(root, {
+      actor: "human:负责人",
+      event: "version.released",
+      details: { version: "v0.5", version_id: "v-old", name: "0.5", old_status: "planning", new_status: "released" },
+    });
+    const events = readEvents(root);
+    const lanes = replayVersionLanes(events);
+    const v05 = lanes.get("v0.5");
+    assert.ok(v05, "v0.5 应存在");
+    assert.equal(v05.meta.status, "released");
+  });
+
+  it("rebuild 与 version.released/status_changed 事件一致", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    const drift = rebuild(root);
+    assert.equal(drift.length, 0, "rebuild 不应有 drift");
   });
 });

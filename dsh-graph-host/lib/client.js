@@ -31,7 +31,7 @@ window.__ModuleLoader__.load({
       "goal.moved": "排期移动", "card.created": "创建卡片", "card.filled": "填充卡片",
       "card.reviewed": "复核卡片", "evidence.added": "登记证据", "memory.promoted": "沉淀记忆",
       "version.created": "创建版本", "version.released": "发布版本",
-      "version.scope_changed": "调整版本范围", "version.integration_decided": "集成测试决策",
+      "version.status_changed": "版本状态变更", "version.scope_changed": "调整版本范围", "version.integration_decided": "集成测试决策",
       "goal.deleted": "删除目标", "card.deleted": "删除卡片", "attempt.bound": "绑定子代理",
       "goal.renamed": "重命名目标",
       "goal.directive_set": "设置最近指令", "goal.comment_added": "添加评论",
@@ -1030,13 +1030,17 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑
+    // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑 + g-128 删除按钮
     function CardDrawer(props) {
       const [state, setState] = React.useState({ loading: true });
       const [promptText, setPromptText] = React.useState("");
       const [collectNote, setCollectNote] = React.useState(null);
       const [collecting, setCollecting] = React.useState(false);
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新收集的模型路由
+      // g-128：删除确认状态
+      const [deleteConfirm, setDeleteConfirm] = React.useState(false);
+      const [deleteIdInput, setDeleteIdInput] = React.useState("");
+      const [deleteNote, setDeleteNote] = React.useState(null);
       React.useEffect(() => {
         let alive = true;
         fetch(graphUrl("/api/dsh-graph/goal", { id: props.goalId }))
@@ -1118,7 +1122,7 @@ window.__ModuleLoader__.load({
                 h("div", { style: { marginTop: 4, marginBottom: 8 } },
                   h("div", { style: { fontWeight: 600, fontSize: 12, opacity: 0.9, marginBottom: 4 } }, "收集信息目标（可编辑）"),
                   h("textarea", {
-                    style: { ...S.promptInput, width: "100%", minHeight: 100, resize: "vertical", marginTop: 2 },
+                    style: { ...S.promptInput, width: "100%", minHeight: 150, resize: "vertical", marginTop: 2 },
                     value: promptText ? promptText.split(readonlyPart)[0] : editablePart,
                     onChange: (e) => {
                       const newEditable = e.target.value;
@@ -1190,6 +1194,63 @@ window.__ModuleLoader__.load({
               h("div", { style: S.drawerH }, "全文"),
               h("div", { style: { whiteSpace: "pre-wrap" } }, card.content?.trim() || "（尚未采集内容）")),
             collectPanel,
+            // g-128：卡片删除按钮（二次确认 + 输入卡片 id 防误删）
+            h("div", { key: "del", style: { ...S.drawerSection, borderTop: "1px solid rgba(128,128,128,.25)", paddingTop: 8 } },
+              deleteConfirm
+                ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+                    h("div", { style: { ...S.meta, color: "#d66", fontSize: 12 } },
+                      `⚠️ 确认删除卡片「${card.title}」？请输入卡片 id 确认：`),
+                    h("div", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } },
+                      `id：${card.id}`),
+                    h("input", {
+                      style: { ...S.promptInput, fontSize: 12 },
+                      value: deleteIdInput,
+                      placeholder: "输入卡片 id 确认删除…",
+                      onChange: (e) => setDeleteIdInput(e.target.value),
+                    }),
+                    h("div", { style: { display: "flex", gap: 6 } },
+                      h("button", {
+                        style: { ...S.btn, fontSize: 11, padding: "2px 8px", background: deleteIdInput.trim() === card.id ? "rgba(214,102,102,.3)" : undefined },
+                        className: "dg-btn",
+                        disabled: deleteIdInput.trim() !== card.id,
+                        onClick: async () => {
+                          try {
+                            const r = await fetch(graphUrl("/api/dsh-graph/delete-card"), {
+                              method: "POST",
+                              headers: { "content-type": "application/json" },
+                              body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                            });
+                            const data = await r.json();
+                            if (data.ok) {
+                              setDeleteNote("✅ 卡片已删除");
+                              showToast("✅ 卡片已删除");
+                              setDeleteConfirm(false);
+                              setDeleteIdInput("");
+                              // 关闭抽屉并刷新
+                              props.onClose?.();
+                              if (props.onDeleted) props.onDeleted();
+                            } else {
+                              setDeleteNote("⚠️ 删除失败：" + (data.error || "未知错误"));
+                            }
+                          } catch (e) {
+                            setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                          }
+                        },
+                      }, "🗑 确认删除"),
+                      h("button", {
+                        style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                        className: "dg-btn",
+                        onClick: () => { setDeleteConfirm(false); setDeleteIdInput(""); setDeleteNote(null); },
+                      }, "取消"))
+                  )
+                : h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
+                    h("button", {
+                      style: { ...S.btn, fontSize: 11, padding: "2px 8px", background: "rgba(214,102,102,.2)" },
+                      className: "dg-btn",
+                      title: "删除此卡片（需输入卡片 id 确认）",
+                      onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
+                    }, "🗑 删除卡片")),
+              deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } }, deleteNote) : null),
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集
             card.child_id
@@ -1528,10 +1589,12 @@ window.__ModuleLoader__.load({
     }
 
     // g-109：新增信息收集任务组件（弹窗内信息收集区）
+    // g-128：新增信息收集任务组件（弹窗内信息收集区）——支持标题+kind 选择
     function AddCardBox(props) {
       const { goalId, supervisorSession } = props;
       const [mode, setMode] = React.useState("idle"); // idle | naming | chat
       const [title, setTitle] = React.useState("");
+      const [kind, setKind] = React.useState("text"); // g-128：卡片类型可选
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
 
@@ -1543,12 +1606,13 @@ window.__ModuleLoader__.load({
           const r = await fetch(graphUrl("/api/dsh-graph/add-card"), {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, title: t, kind: "text" }),
+            body: JSON.stringify({ goal: goalId, title: t, kind }),
           });
           const data = await r.json();
           if (data.ok) {
             setNote("✅ 已创建任务：" + data.card);
             setTitle("");
+            setKind("text");
             setMode("idle");
           } else {
             setNote("⚠️ 创建失败：" + (data.error || "未知错误"));
@@ -1574,20 +1638,34 @@ window.__ModuleLoader__.load({
         }
       };
 
+      // g-128：kind 选项标签
+      const kindLabels = { text: "📝 文本", file: "📄 文件", image: "🖼 图片", data: "📊 数据" };
+
       return h("div", { style: { marginTop: 8 }, className: "dg-card-add" },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
           h("span", { style: { ...S.meta, fontSize: 11 } }, "新增信息收集任务："),
           h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("naming"); setNote(null); } }, "📝 一句话任务"),
           h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("chat"); setNote(null); } }, "💬 通过对话创建")),
         mode === "naming"
-          ? h("div", { style: { display: "flex", gap: 4, marginTop: 4 } },
-              h("input", {
-                style: { ...S.promptInput, flex: 1 },
-                value: title, placeholder: "输入任务描述…",
-                onChange: (e) => setTitle(e.target.value),
-                onKeyDown: (e) => { if (e.key === "Enter") addByName(); },
-              }),
-              h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建"))
+          ? h("div", { style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 4 } },
+              h("div", { style: { display: "flex", gap: 4, alignItems: "center" } },
+                h("input", {
+                  style: { ...S.promptInput, flex: 1 },
+                  value: title, placeholder: "输入任务描述…",
+                  onChange: (e) => setTitle(e.target.value),
+                  onKeyDown: (e) => { if (e.key === "Enter") addByName(); },
+                }),
+                // g-128：kind 选择下拉框
+                h("select", {
+                  value: kind,
+                  onChange: (e) => setKind(e.target.value),
+                  style: { fontSize: 12, padding: "4px 6px", cursor: "pointer",
+                           background: "rgba(128,128,128,.10)", color: "inherit",
+                           border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
+                },
+                  ...Object.entries(kindLabels).map(([k, v]) =>
+                    h("option", { key: k, value: k }, v))),
+                h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建")))
           : null,
         mode === "chat"
           ? h("div", { style: { marginTop: 4, padding: "6px 8px", borderRadius: 4, background: "rgba(76,141,255,.08)" } },
@@ -1993,6 +2071,8 @@ window.__ModuleLoader__.load({
             hideBodyWhenExtra && extra != null ? null : (isPh && !content ? null : content),
             extra ?? null);
         }
+        // 判断是否是 backlog 目标（backlog 目标不能建卡）
+        const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
             h(AcceptFeedback, { goalId: props.id, status, events: d.events, supervisorSession: props.supervisorSession, onRefresh: load })) : null,
@@ -2016,11 +2096,15 @@ window.__ModuleLoader__.load({
                     }
                   },
                 }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
-                h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession }))
+                isBacklog
+                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
+                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession }))
             : h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🗂 信息收集"),
                 h("div", { style: S.meta }, "（暂无上下文卡片）"),
-                h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession })),
+                isBacklog
+                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
+                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession })),
         ];
         // g-150：执行上下文 tab（handoff + 最近指令 + 评论）
         const contextTab = [
@@ -2607,6 +2691,11 @@ window.__ModuleLoader__.load({
       const [deletingVersion, setDeletingVersion] = React.useState(false);
       // g-134: 版本详情弹窗状态
       const [versionDetailTarget, setVersionDetailTarget] = React.useState(null); // {slug, name, status, goals_count}
+      // g-135: 版本详情弹窗扩展状态（摘要/范围/阻塞清单/操作结果）
+      const [versionDetailData, setVersionDetailData] = React.useState(null); // fetched detail
+      const [versionDetailLoading, setVersionDetailLoading] = React.useState(false);
+      const [versionActionNote, setVersionActionNote] = React.useState(null);
+      const [versionActionLoading, setVersionActionLoading] = React.useState(false);
       // g-127: 阻塞列默认折叠（竖向窄条汇总，点击展开）
       const [blockedColumnCollapsed, setBlockedColumnCollapsed] = React.useState(true);
       // g-77647351：拖拽状态机
@@ -2630,6 +2719,24 @@ window.__ModuleLoader__.load({
           document.removeEventListener("drop", acceptDrop);
         };
       }, [drag !== null]);
+
+      // g-135：版本详情弹窗打开时自动获取详情数据
+      const loadVersionDetail = (slug) => {
+        setVersionDetailLoading(true);
+        setVersionDetailData(null);
+        setVersionActionNote(null);
+        fetch(graphUrl(`/api/dsh-graph/version-detail?slug=${encodeURIComponent(slug)}`))
+          .then((r) => r.json())
+          .then((data) => {
+            setVersionDetailLoading(false);
+            if (data.ok) setVersionDetailData(data);
+            else setVersionActionNote("⚠️ 加载失败：" + (data.error || "未知错误"));
+          })
+          .catch((e) => {
+            setVersionDetailLoading(false);
+            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          });
+      };
 
       // g-77647351：加载排序
       const loadOrder = () => {
@@ -3064,6 +3171,8 @@ window.__ModuleLoader__.load({
                 status: v.status,
                 goals_count: v.goals.length,
               });
+              // g-135: 自动加载版本详情数据（摘要/范围/阻塞清单）
+              loadVersionDetail(v.slug);
             }
           } : undefined,
         },
@@ -3363,8 +3472,8 @@ window.__ModuleLoader__.load({
               return h("div", {
                 key: s.key,
                 style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
-                  // g-152：折叠态只显示箭头，不显示文字，避免窄列换行
-                  ...(blockedColumnCollapsed ? { width: 36, minWidth: 36, overflow: "hidden", fontSize: 14 } : {}),
+                  // g-152：折叠态只显示箭头，不显示文字，避免窄列换行；minWidth:0 让 grid 36px track 自然约束宽度，padding 由 boxSizing 撑满
+                  ...(blockedColumnCollapsed ? { minWidth: 0, padding: "4px 0", overflow: "hidden", fontSize: 14, boxSizing: "border-box", textAlign: "center" } : {}),
                 },
                 onClick: () => setBlockedColumnCollapsed((p) => !p),
                 title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
@@ -3379,7 +3488,8 @@ window.__ModuleLoader__.load({
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
-                            onClose: () => setDrawerCard(null) })
+                            onClose: () => setDrawerCard(null),
+                            onDeleted: () => { setDrawerCard(null); load(); } })
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal
@@ -3470,20 +3580,151 @@ window.__ModuleLoader__.load({
               onCancel: () => setDeliverPrompt(null),
             })
           : null,
-        // g-134: 版本详情弹窗
+        // g-134/g-135: 版本详情弹窗（含摘要/范围/working/released 操作）
         versionDetailTarget
-          ? h("div", { style: S.overlay, onClick: () => setVersionDetailTarget(null) },
-              h("div", { style: { ...S.modal, minWidth: 320 }, onClick: (e) => e.stopPropagation() },
-                h("span", { style: S.close, onClick: () => setVersionDetailTarget(null) }, "✕"),
+          ? h("div", { style: S.overlay, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } },
+              h("div", { style: { ...S.modal, minWidth: 360, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
+                h("span", { style: S.close, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, `🏷 版本详情：${versionDetailTarget.name}`),
-                h("div", { style: { marginBottom: 8, fontSize: 13, opacity: 0.8 } },
+                // 基本信息
+                h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } },
                   h("div", null, `Slug：${versionDetailTarget.slug}`),
-                  h("div", null, `状态：${versionDetailTarget.status}`),
+                  h("div", null, `状态：${versionDetailTarget.status === "released" ? "🟢 released" : versionDetailTarget.status === "active" ? "🔵 active（进行中）" : `⚪ ${versionDetailTarget.status}`}`),
                   h("div", null, `目标数量：${versionDetailTarget.goals_count}`),
                 ),
-                h("div", { style: { display: "flex", gap: 8, marginTop: 16 } },
+                // g-135: 版本摘要/范围（从 version.md 的「范围」小节读取）
+                h("div", { style: { marginBottom: 12 } },
+                  h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4 } }, "📋 版本摘要 / 主要功能范围"),
+                  versionDetailLoading
+                    ? h("div", { style: { fontSize: 12, opacity: 0.5 } }, "加载中…")
+                    : (versionDetailData?.summary || versionDetailData?.scope)
+                      ? h("div", { style: { fontSize: 12, whiteSpace: "pre-wrap", lineHeight: 1.5, padding: "6px 8px", borderRadius: 4, background: "rgba(128,128,128,.08)" } },
+                          versionDetailData.summary || versionDetailData.scope)
+                      : h("div", { style: { fontSize: 12, opacity: 0.45, fontStyle: "italic" } }, "（版本摘要为空——请在版本 version.md 的「范围」小节补充）"),
+                ),
+                // g-135: 阻塞目标清单（发布前置条件不满足时展示）
+                versionDetailData && versionDetailData.blocking && versionDetailData.blocking.length > 0
+                  ? h("div", { style: { marginBottom: 12, padding: "8px 10px", borderRadius: 6, background: "rgba(255,107,107,.12)", border: "1px solid rgba(255,107,107,.3)" } },
+                      h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4, color: "#ff6b6b" } }, `⛔ 阻塞目标（${versionDetailData.blocking.length} 个未 delivered）`),
+                      ...versionDetailData.blocking.map((g) =>
+                        h("div", { key: g.id, style: { fontSize: 12, padding: "2px 0", opacity: 0.85 } },
+                          `• ${g.id}（${g.title}）：${g.status}`)
+                      ))
+                  : null,
+                // g-135: 操作提示
+                versionActionNote
+                  ? h("div", { style: { marginBottom: 8, fontSize: 12, padding: "4px 8px", borderRadius: 4, background: "rgba(128,128,128,.08)" } }, versionActionNote)
+                  : null,
+                // g-135: working/released 操作按钮 + 重命名/删除
+                h("div", { style: { display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" } },
+                  // 标记为 working（active）—— 当非 active 时显示
+                  versionDetailTarget.status !== "active" && versionDetailTarget.status !== "released"
+                    ? h("button", {
+                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, background: "rgba(76,141,255,.15)", border: "1px solid rgba(76,141,255,.4)" },
+                        className: "dg-btn",
+                        disabled: versionActionLoading,
+                        onClick: () => {
+                          if (!confirm(`确认将版本 ${versionDetailTarget.slug} 标记为 working（进行中）？`)) return;
+                          setVersionActionLoading(true);
+                          setVersionActionNote(null);
+                          fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify({ slug: versionDetailTarget.slug, status: "active" }),
+                          }).then((r) => r.json()).then((data) => {
+                            setVersionActionLoading(false);
+                            if (data.ok) {
+                              setVersionActionNote("✅ 已标记为 working（active）");
+                              // g-135 fix #2：同步更新 target 状态，modal 按钮立刻反映
+                              setVersionDetailTarget((prev) => prev ? { ...prev, status: "active" } : prev);
+                              loadVersionDetail(versionDetailTarget.slug);
+                              load(); // 刷新看板
+                            } else {
+                              setVersionActionNote("⚠️ 操作失败：" + (data.error || "未知错误"));
+                            }
+                          }).catch((e) => {
+                            setVersionActionLoading(false);
+                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                          });
+                        },
+                      }, "▶ 标记为 working")
+                    : null,
+                  // active 状态可切换回 planning
+                  versionDetailTarget.status === "active"
+                    ? h("button", {
+                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
+                        className: "dg-btn",
+                        disabled: versionActionLoading,
+                        onClick: () => {
+                          if (!confirm(`确认将版本 ${versionDetailTarget.slug} 切回 planning？`)) return;
+                          setVersionActionLoading(true);
+                          setVersionActionNote(null);
+                          fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify({ slug: versionDetailTarget.slug, status: "planning" }),
+                          }).then((r) => r.json()).then((data) => {
+                            setVersionActionLoading(false);
+                            if (data.ok) {
+                              setVersionActionNote("✅ 已切回 planning");
+                              // g-135 fix #2：同步更新 target 状态
+                              setVersionDetailTarget((prev) => prev ? { ...prev, status: "planning" } : prev);
+                              loadVersionDetail(versionDetailTarget.slug);
+                              load();
+                            } else {
+                              setVersionActionNote("⚠️ 操作失败：" + (data.error || "未知错误"));
+                            }
+                          }).catch((e) => {
+                            setVersionActionLoading(false);
+                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                          });
+                        },
+                      }, "↩ 切回 planning")
+                    : null,
+                  // 标记为 released —— 仅非 released 时显示
+                  versionDetailTarget.status !== "released"
+                    ? h("button", {
+                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#4caf50", background: "rgba(76,175,80,.12)", border: "1px solid rgba(76,175,80,.4)" },
+                        className: "dg-btn",
+                        disabled: versionActionLoading,
+                        onClick: () => {
+                          // 先检查阻塞清单
+                          const blocking = versionDetailData?.blocking ?? [];
+                          if (blocking.length > 0) {
+                            setVersionActionNote(`⛔ 无法发布：仍有 ${blocking.length} 个未 delivered 的目标`);
+                            return;
+                          }
+                          if (!confirm(`确认发布版本 ${versionDetailTarget.slug}？\n\n此操作需要负责人确认，发布后版本状态将变为 released。`)) return;
+                          setVersionActionLoading(true);
+                          setVersionActionNote(null);
+                          fetch(graphUrl("/api/dsh-graph/release-version"), {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify({ slug: versionDetailTarget.slug }),
+                          }).then((r) => r.json()).then((data) => {
+                            setVersionActionLoading(false);
+                            if (data.ok === true) {
+                              setVersionActionNote("✅ 版本已发布为 released");
+                              // g-135 fix #2：同步更新 target 状态，modal 按钮立刻反映（不再显示 released 按钮）
+                              setVersionDetailTarget((prev) => prev ? { ...prev, status: "released" } : prev);
+                              loadVersionDetail(versionDetailTarget.slug);
+                              load();
+                            } else if (data.ok === false && data.blocking) {
+                              setVersionActionNote(`⛔ 无法发布：${data.blocking.length} 个目标未 delivered`);
+                              loadVersionDetail(versionDetailTarget.slug); // 刷新阻塞清单
+                            } else {
+                              setVersionActionNote("⚠️ 发布失败：" + (data.error || "未知错误"));
+                            }
+                          }).catch((e) => {
+                            setVersionActionLoading(false);
+                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                          });
+                        },
+                      }, "🚀 标记为 released")
+                    : null,
+                  // 重命名
                   h("button", {
-                    style: { ...S.btn, padding: "6px 16px", fontSize: 13 },
+                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
                     className: "dg-btn",
                     onClick: () => {
                       setRenameVersionTarget({ slug: versionDetailTarget.slug, name: versionDetailTarget.name });
@@ -3491,15 +3732,18 @@ window.__ModuleLoader__.load({
                       setRenameVersionName(versionDetailTarget.name);
                       setRenameVersionNote(null);
                       setVersionDetailTarget(null);
+                      setVersionDetailData(null);
                     },
                   }, "✏️ 重命名"),
+                  // 删除
                   h("button", {
-                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff6b6b" },
+                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff6b6b", opacity: 0.7 },
                     className: "dg-btn",
                     onClick: () => {
                       setDeleteVersionTarget({ slug: versionDetailTarget.slug, name: versionDetailTarget.name });
                       setDeleteVersionNote(null);
                       setVersionDetailTarget(null);
+                      setVersionDetailData(null);
                     },
                   }, "🗑️ 删除"),
                 ),

@@ -1,4 +1,4 @@
-/** 版本泳道管理：创建/重命名/删除版本泳道（g-134）。 */
+/** 版本泳道管理：创建/重命名/删除版本泳道（g-134）+ 发布 guard（g-135）。 */
 
 import {
   existsSync,
@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
-import { parseDoc, serializeDoc, type GoalDoc } from "./model.ts";
+import { parseDoc, serializeDoc, sectionText, type GoalDoc } from "./model.ts";
 import { appendEvent, readEvents, nowIso } from "./events.ts";
 import { GraphError } from "./machine.ts";
 
@@ -393,4 +393,187 @@ export function deleteVersion(
   rmdirSync(vdir);
 
   return { slug };
+}
+
+// ---- g-135: 版本发布 guard 与版本状态管理 ----
+
+/** 校验版本内全部非归档目标均为 delivered；返回阻塞目标列表（空 = 可发布）。 */
+export function validateVersionRelease(root: string, slug: string): Array<{ id: string; title: string; status: string }> {
+  const vdir = join(root, "versions", slug);
+  if (!existsSync(vdir)) throw new GraphError(`版本 ${slug} 不存在`);
+
+  const blocking: Array<{ id: string; title: string; status: string }> = [];
+  const goalsDir = join(vdir, "goals");
+  if (existsSync(goalsDir)) {
+    for (const entry of readdirSync(goalsDir)) {
+      const gf = join(goalsDir, entry, "goal.md");
+      if (!existsSync(gf)) continue;
+      try {
+        const doc = parseDoc(readFileSync(gf, "utf8"));
+        if (doc.meta.archived === true) continue; // 跳过归档
+        if (doc.meta.status !== "delivered") {
+          blocking.push({
+            id: String(doc.meta.id ?? entry),
+            title: String(doc.meta.title ?? entry),
+            status: String(doc.meta.status ?? "unknown"),
+          });
+        }
+      } catch {
+        /* 坏目标文件跳过 */
+      }
+    }
+  }
+  return blocking;
+}
+
+/** 发布版本：由负责人确认后将版本标为 released。
+ *  校验：全部非归档目标必须为 delivered；否则返回阻塞清单、不写任何状态。
+ *  事件先行：先写 version.released 事件，再更新 version.md 的 status。
+ *  actor 必须是 human:* 或 supervisor:* 前缀（负责人确认路径），agent:* 被拒绝。 */
+export function releaseVersion(
+  root: string,
+  opts: { slug: string; actor: string },
+): { ok: true } | { ok: false; blocking: Array<{ id: string; title: string; status: string }> } {
+  const slug = opts.slug.trim();
+  if (!slug) throw new GraphError("版本 slug 不能为空");
+
+  // 校验 actor 身份：仅 human:* 或 supervisor:* 可发布
+  if (!opts.actor.startsWith("human:") && !opts.actor.startsWith("supervisor:")) {
+    throw new GraphError(`发布操作仅限负责人确认（actor=${opts.actor}），执行子代理不能直接发布`);
+  }
+
+  const vdir = join(root, "versions", slug);
+  if (!existsSync(vdir)) throw new GraphError(`版本 ${slug} 不存在`);
+
+  const meta = loadVersionMeta(root, slug);
+  if (meta.status === "released") {
+    throw new GraphError(`版本 ${slug} 已经是 released 状态`);
+  }
+
+  // 校验发布前置条件：全部非归档目标必须为 delivered
+  const blocking = validateVersionRelease(root, slug);
+  if (blocking.length > 0) {
+    return { ok: false, blocking };
+  }
+
+  // R-02：事件先行——先写 version.released 事件，再更新版本状态
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "version.released",
+    details: {
+      version: slug,
+      version_id: meta.id,
+      name: meta.name,
+      old_status: meta.status,
+      new_status: "released",
+    },
+  });
+
+  // 更新 version.md 的 status
+  saveVersionMeta(root, slug, { ...meta, status: "released" });
+
+  return { ok: true };
+}
+
+/** 合法的 setVersionStatus 目标状态（不含 released——released 只能经 releaseVersion）。 */
+const VERSION_STATUS_ALLOWLIST = ["planning", "active"] as const;
+
+/** 设置版本状态（working → active / active → planning 等）。
+ *  released 只能经 releaseVersion 路径，此函数拒绝。
+ *  事件先行：先写 version.status_changed 事件，再更新 version.md。 */
+export function setVersionStatus(
+  root: string,
+  opts: { slug: string; status: string; actor: string },
+): void {
+  const slug = opts.slug.trim();
+  if (!slug) throw new GraphError("版本 slug 不能为空");
+
+  const newStatus = opts.status.trim();
+  // released 只能经 releaseVersion（含 delivered-goal guard），不能走此直接路径
+  if (newStatus === "released") {
+    throw new GraphError("不能通过 setVersionStatus 直接设为 released——请使用 releaseVersion（含发布前置校验）");
+  }
+  // allowlist：只接受合法的非 released 状态
+  if (!(VERSION_STATUS_ALLOWLIST as readonly string[]).includes(newStatus)) {
+    throw new GraphError(`非法版本状态：${newStatus}（合法值：${(VERSION_STATUS_ALLOWLIST as readonly string[]).join(", ")}）`);
+  }
+
+  const vdir = join(root, "versions", slug);
+  if (!existsSync(vdir)) throw new GraphError(`版本 ${slug} 不存在`);
+
+  const meta = loadVersionMeta(root, slug);
+  const oldStatus = meta.status;
+  if (oldStatus === newStatus) return; // 幂等
+
+  // released 是终态——不允许回退到 planning/active
+  if (oldStatus === "released") {
+    throw new GraphError("版本已 released，不能回退到其他状态——released 是终态");
+  }
+
+  // R-02：事件先行
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "version.status_changed",
+    details: {
+      version: slug,
+      version_id: meta.id,
+      old_status: oldStatus,
+      new_status: newStatus,
+    },
+  });
+
+  saveVersionMeta(root, slug, { ...meta, status: newStatus });
+}
+
+/** 读取版本详情：元数据 + 范围/摘要（从 version.md body 的「范围」小节提取）。 */
+export function versionDetail(root: string, slug: string): {
+  slug: string;
+  id: string | null;
+  name: string;
+  status: string;
+  created_at: string;
+  summary: string | null;
+  scope: string | null;
+  goals_count: number;
+  blocking: Array<{ id: string; title: string; status: string }>;
+} {
+  const vdir = join(root, "versions", slug);
+  if (!existsSync(vdir)) throw new GraphError(`版本 ${slug} 不存在`);
+
+  const vfile = join(vdir, "version.md");
+  const doc = parseDoc(readFileSync(vfile, "utf8"));
+  const meta = doc.meta;
+
+  // 从 body 提取「范围」小节内容作为摘要/范围
+  const scopeRaw = sectionText(doc.body, "范围");
+  const scope = scopeRaw ? scopeRaw.replace(/<!--[\s\S]*?-->/g, "").trim() || null : null;
+
+  // 统计非归档目标数
+  let goalsCount = 0;
+  const goalsDir = join(vdir, "goals");
+  if (existsSync(goalsDir)) {
+    for (const entry of readdirSync(goalsDir)) {
+      const gf = join(goalsDir, entry, "goal.md");
+      if (!existsSync(gf)) continue;
+      try {
+        const gdoc = parseDoc(readFileSync(gf, "utf8"));
+        if (gdoc.meta.archived !== true) goalsCount++;
+      } catch { /* 跳过 */ }
+    }
+  }
+
+  // 发布前置校验（非 released 状态时检查阻塞清单）
+  const blocking = meta.status === "released" ? [] : validateVersionRelease(root, slug);
+
+  return {
+    slug,
+    id: meta.id ?? null,
+    name: String(meta.name ?? slug),
+    status: String(meta.status ?? "unknown"),
+    created_at: String(meta.created_at ?? ""),
+    summary: scope,
+    scope,
+    goals_count: goalsCount,
+    blocking,
+  };
 }

@@ -24,10 +24,10 @@ import {
 } from "./model.ts";
 import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso, type GraphEvent } from "./events.ts";
 import { GraphError, STATUSES, assertTransition } from "./machine.ts";
-import { createVersion, renameVersion, deleteVersion } from "./version-lane.ts";
+import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail } from "./version-lane.ts";
 
 export { GraphError };
-export { createVersion, renameVersion, deleteVersion };
+export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 
 /** 防止用户输入内容中包含 `## ` 或 `### ` 开头的行，破坏 goal.md section 边界。
  *  将行首 `## ` / `### ` 转义为 `\## ` / `\### `（Markdown 不渲染为标题）。
@@ -982,6 +982,10 @@ function loadCard(
   cardId: string,
 ): { file: string; doc: GoalDoc } {
   const goalFile = findGoalFile(root, goalId);
+  // backlog 目标没有目录结构，无法存储卡片
+  if (basename(goalFile) !== "goal.md") {
+    throw new GraphError(`暂存目标（backlog）不能有上下文卡片，请先排期移入 goals/ 或版本`);
+  }
   const file = join(goalDirOf(goalFile), "cards", `${cardId}.md`);
   if (!existsSync(file)) throw new GraphError(`卡片不存在：${cardId}（目标 ${goalId}）`);
   return { file, doc: loadGoal(file) };
@@ -1050,6 +1054,40 @@ export function reviewCard(
     goal: goalId,
     details: { card: cardId, by: opts.by },
   });
+}
+
+/** 删除上下文卡片（g-128）：删卡片文件 + context_cards 移除引用 + 记 card.deleted 事件（事件先行 R-02）。
+ *  前置校验：卡片存在；正在收集中的卡片（status=collecting）拒绝删除（需先停止子代理）。 */
+export function deleteCard(
+  root: string,
+  goalId: string,
+  cardId: string,
+  opts: { actor: string },
+): void {
+  const { file, doc } = loadCard(root, goalId, cardId);
+  // 前置校验：正在收集中的卡片不可删除
+  if (doc.meta.status === "collecting") {
+    throw new GraphError(`卡片 ${cardId} 正在收集子代理中，不能删除——请先停止子代理或等其完成`);
+  }
+  // 事件先行（R-02）
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "card.deleted",
+    goal: goalId,
+    details: { card: cardId, title: doc.meta.title, kind: doc.meta.kind },
+  });
+  // 从 goal 的 context_cards 移除引用
+  const goalFile = findGoalFile(root, goalId);
+  const goalDoc = loadGoal(goalFile);
+  if (Array.isArray(goalDoc.meta.context_cards)) {
+    const idx = goalDoc.meta.context_cards.indexOf(cardId);
+    if (idx >= 0) {
+      goalDoc.meta.context_cards.splice(idx, 1);
+      saveGoal(goalFile, goalDoc);
+    }
+  }
+  // 删卡片文件
+  rmSync(file, { force: true });
 }
 
 /** 把收集子代理绑定到卡片（g-109）：写 child_id/parent_session_id、置 status=collecting，并记 card.collecting 事件（事件先行）。
@@ -1258,6 +1296,10 @@ export function recordAttemptHandoff(
 
   // 校验 source attempts 属于该 goal
   const goalFile = findGoalFile(root, goalId);
+  // backlog 目标没有目录结构，无法存储 handoff
+  if (basename(goalFile) !== "goal.md") {
+    throw new GraphError(`暂存目标（backlog）不能有 handoff，请先排期移入 goals/ 或版本`);
+  }
   const dir = goalDirOf(goalFile);
   for (const att of opts.source_attempts) {
     const attFile = join(dir, "attempts", att, "attempt.md");
@@ -1318,6 +1360,8 @@ export function recordAttemptHandoff(
  *  malformed 数据安全降级，不崩溃。 */
 export function harvestReviewedAttemptHandoffs(root: string, goalId: string): AttemptHandoff[] {
   const goalFile = findGoalFile(root, goalId);
+  // backlog 目标没有目录结构，无法存储 handoff 文件
+  if (basename(goalFile) !== "goal.md") return [];
   const dir = goalDirOf(goalFile);
 
   // 优先：单文件 handoff.md
@@ -1444,6 +1488,10 @@ export function formatCollectPrompt(
 ): string {
   // 加载 goal 和 card 元数据
   const goalFile = findGoalFile(root, goalId);
+  // backlog 目标没有目录结构，无法格式化收集提示词
+  if (basename(goalFile) !== "goal.md") {
+    throw new GraphError(`暂存目标（backlog）不能有收集提示词，请先排期移入 goals/ 或版本`);
+  }
   const goalDoc = loadGoal(goalFile);
   const goalTitle = goalDoc.meta.title ?? goalId;
   
@@ -1507,6 +1555,10 @@ export function getCardMeta(
   cardId: string,
 ): { title: string; kind: string; goalTitle: string } {
   const goalFile = findGoalFile(root, goalId);
+  // backlog 目标没有目录结构，无法获取卡片元数据
+  if (basename(goalFile) !== "goal.md") {
+    throw new GraphError(`暂存目标（backlog）不能有上下文卡片，请先排期移入 goals/ 或版本`);
+  }
   const goalDoc = loadGoal(goalFile);
   const goalTitle = goalDoc.meta.title ?? goalId;
   
@@ -1559,6 +1611,10 @@ export function startAttempt(
     throw new GraphError("attemptBrief 必须是 string 类型");
   }
   const goalFile = findGoalFile(root, goalId);
+  // backlog 目标没有目录结构，无法创建 attempt
+  if (basename(goalFile) !== "goal.md") {
+    throw new GraphError(`暂存目标（backlog）不能有执行 attempt，请先排期移入 goals/ 或版本`);
+  }
   const dir = join(goalDirOf(goalFile), "attempts");
   mkdirSync(dir, { recursive: true });
   const seq = readdirSync(dir).filter((d) => d.startsWith("att-")).length + 1;
@@ -1626,6 +1682,10 @@ export function reportStatus(
 ): void {
   if (!line.trim()) throw new GraphError("status 不能为空");
   const goalFile = findGoalFile(root, goalId);
+  // backlog 目标没有目录结构，无法更新 attempt 状态
+  if (basename(goalFile) !== "goal.md") {
+    throw new GraphError(`暂存目标（backlog）不能有执行 attempt，请先排期移入 goals/ 或版本`);
+  }
   const file = join(goalDirOf(goalFile), "attempts", attemptId, "attempt.md");
   if (!existsSync(file)) throw new GraphError(`attempt 不存在：${attemptId}（目标 ${goalId}）`);
   const doc = loadGoal(file);
@@ -1649,6 +1709,10 @@ export function bindAttemptChild(
   parentSessionId?: string,
 ): void {
   const goalFile = findGoalFile(root, goalId);
+  // backlog 目标没有目录结构，无法绑定 attempt child
+  if (basename(goalFile) !== "goal.md") {
+    throw new GraphError(`暂存目标（backlog）不能有执行 attempt，请先排期移入 goals/ 或版本`);
+  }
   const file = join(goalDirOf(goalFile), "attempts", attemptId, "attempt.md");
   if (!existsSync(file)) throw new GraphError(`attempt 不存在：${attemptId}（目标 ${goalId}）`);
   const doc = loadGoal(file);
