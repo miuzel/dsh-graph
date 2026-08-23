@@ -40,10 +40,6 @@ for part in "${PARTS[@]}"; do
     cat "$file" >> "$OUT"
     # 添加空行分隔（与原始文件第 9 行一致）
     echo "" >> "$OUT"
-  elif [ "$part" = "card-drawer" ]; then
-    # card-drawer.js 第 40 行有历史遗留尾随空白（原始 client.js 第 1050 行）
-    # 模块文件已修复空白，构建时恢复原始的尾随空白
-    cat "$file" | sed '40s/$/          /' >> "$OUT"
   else
     cat "$file" >> "$OUT"
   fi

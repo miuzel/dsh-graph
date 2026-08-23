@@ -1047,7 +1047,7 @@ window.__ModuleLoader__.load({
           const cardTitle = card.title;
           const cardKind = card.kind ?? "text";
           const root = state.data.root ?? "（仓库根未知）";
-          
+
           const autoPrompt = [
             `## 收集任务上下文`,
             ``,
