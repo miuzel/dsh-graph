@@ -2,7 +2,7 @@
 {
   "id": "g-134",
   "title": "看板版本泳道管理：创建/重命名版本泳道（独立目标与 backlog 除外），空版本泳道可删除",
-  "status": "collecting",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-22T22:26:14+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",
@@ -24,7 +24,9 @@
   "rules_snapshot": "r-2026-08-3",
   "skill_refs": [],
   "context_cards": [
-    "card-b26ad014"
+    "card-b26ad014",
+    "card-d41d01f6",
+    "card-f2f7055d"
   ]
 }
 ---

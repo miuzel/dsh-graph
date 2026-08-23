@@ -2,7 +2,7 @@
 {
   "id": "g-142",
   "title": "client js文件很大，不利于后续维护了，需要进行重构",
-  "status": "collecting",
+  "status": "delivered",
   "blocked_reason": null,
   "created_at": "2026-08-23T01:23:08+08:00",
   "created_by": "human:gui",
