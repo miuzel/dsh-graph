@@ -191,6 +191,27 @@ test("fill_mismatch：supervisor（agent:<session>）回填记 mismatch（by !==
   assert.equal(cardDoc.meta.status, "filled", "supervisor 回填仍应 filled");
 });
 
+test("fill_mismatch：by 为 agent:<child_id> 时正常回填无 mismatch（真实工具身份）", () => {
+  const { root, goalId, cardId } = setupCollectingCard();
+  // 真实工具调用时 by 是 "agent:<child_id>" 格式
+  fillCard(root, goalId, cardId, { text: "工具内容", summary: "工具摘要", by: "agent:child-abc", actor: "agent:child-abc" });
+  const events = readEvents(root).filter((e) => e.event === "card.fill_mismatch" && e.details?.card === cardId);
+  assert.equal(events.length, 0, "by 为 agent:<child_id> 时不应产生 mismatch");
+  const cardDoc = loadGoal(join(dirname(findGoalFile(root, goalId)), "cards", `${cardId}.md`));
+  assert.equal(cardDoc.meta.status, "filled", "agent:<child_id> 回填应 filled");
+});
+
+test("fill_mismatch：by 为 agent:<other> 时记 mismatch", () => {
+  const { root, goalId, cardId } = setupCollectingCard();
+  // 其他 agent 的 by 是 "agent:<other>" 格式
+  fillCard(root, goalId, cardId, { text: "其他内容", summary: "其他摘要", by: "agent:other-session", actor: "agent:other-session" });
+  const events = readEvents(root).filter((e) => e.event === "card.fill_mismatch" && e.details?.card === cardId);
+  assert.equal(events.length, 1, "by 为 agent:<other> 时应产生 mismatch");
+  assert.equal(events[0].details.expected_child, "child-abc");
+  const cardDoc = loadGoal(join(dirname(findGoalFile(root, goalId)), "cards", `${cardId}.md`));
+  assert.equal(cardDoc.meta.status, "filled", "即使 mismatch 仍应 filled");
+});
+
 test("fill_mismatch：非 collecting 状态的卡片不触发 mismatch 检查", () => {
   const root = setup();
   const goalId = createGoal(root, { title: "测试目标", version: "v-t", actor: "test" });

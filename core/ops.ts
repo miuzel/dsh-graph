@@ -812,9 +812,9 @@ export function fillCard(
   // g-145：绑定保护——如果卡片处于 collecting 状态且有 child_id，
   // 则只有绑定的 child 或非 collect agent（human/supervisor 通过工具调用）可以填充。
   // human actor 以 "human:" 开头；supervisor/其他 agent 以 "agent:" 开头但 by !== child_id。
-  // 区分方式：绑定 child 的 by === child_id → 直接放行；human → 放行；其余 → mismatch 软事件。
+  // 区分方式：绑定 child 的 by === child_id 或 by === "agent:" + child_id → 直接放行；human → 放行；其余 → mismatch 软事件。
   if (doc.meta.status === "collecting" && doc.meta.child_id) {
-    const isBoundChild = opts.by === doc.meta.child_id;
+    const isBoundChild = opts.by === doc.meta.child_id || opts.by === `agent:${doc.meta.child_id}`;
     const isHuman = opts.actor.startsWith("human:");
     if (!isBoundChild && !isHuman) {
       appendEvent(root, {
