@@ -10,8 +10,9 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { init, listGoalFiles } from "../ops.ts";
-import { resolveRoot } from "../root.ts";
+import { resolveRoot, resolveCanonicalRoot, discoverGitWorktree } from "../root.ts";
 import { readEvents } from "../events.ts";
+import { execSync } from "node:child_process";
 import { apply as applyHost } from "../../dsh-graph-host/index.js";
 
 function mockCtx(extra: Record<string, unknown> = {}) {
@@ -119,5 +120,144 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
     "/api/dsh-graph/delete"]) {
     assert.ok(routes.has(p), `路由 ${p} 已注册`);
   }
+});
+
+// ===== g-149: Git linked-worktree canonicalization tests =====
+
+/** Helper: create a temporary Git repo with optional linked worktree. */
+function setupGitRepo(base: string, opts?: { linkedWorktree?: boolean }) {
+  const mainDir = join(base, "main-repo");
+  execSync(`git init -b main "${mainDir}"`, { stdio: "pipe" });
+  execSync(`git -C "${mainDir}" config user.email "test@test.com"`, { stdio: "pipe" });
+  execSync(`git -C "${mainDir}" config user.name "Test"`, { stdio: "pipe" });
+  // Need at least one commit for worktree to work
+  execSync(`git -C "${mainDir}" commit --allow-empty -m "init"`, { stdio: "pipe" });
+
+  let worktreeDir: string | null = null;
+  if (opts?.linkedWorktree) {
+    worktreeDir = join(base, "linked-worktree");
+    execSync(`git -C "${mainDir}" worktree add "${worktreeDir}"`, { stdio: "pipe" });
+  }
+
+  return { mainDir, worktreeDir };
+}
+
+test("g-149 discoverGitWorktree：主工作树返回正确信息", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-discover-main-"));
+  const { mainDir } = setupGitRepo(base);
+
+  const info = discoverGitWorktree(mainDir);
+  assert.ok(info !== null, "主工作树应返回 Git info");
+  assert.equal(info!.mainWorktree, resolve(mainDir), "mainWorktree = 主目录");
+  assert.equal(info!.workspace, resolve(mainDir), "workspace = 主目录");
+  assert.equal(info!.isLinkedWorktree, false, "主工作树不是 linked worktree");
+});
+
+test("g-149 discoverGitWorktree：linked worktree 正确识别主工作树", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-discover-linked-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const info = discoverGitWorktree(worktreeDir!);
+  assert.ok(info !== null, "linked worktree 应返回 Git info");
+  assert.equal(info!.mainWorktree, resolve(mainDir), "mainWorktree 指向主工作树");
+  assert.equal(info!.workspace, resolve(worktreeDir!), "workspace = linked worktree 目录");
+  assert.equal(info!.isLinkedWorktree, true, "识别为 linked worktree");
+});
+
+test("g-149 discoverGitWorktree：非 Git 目录返回 null", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-discover-nongit-"));
+  const info = discoverGitWorktree(base);
+  assert.equal(info, null, "非 Git 目录返回 null");
+});
+
+test("g-149 resolveCanonicalRoot：绝对 config.root 跳过 Git 发现", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-abs-config-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const result = resolveCanonicalRoot({ root: "/custom/graph" }, worktreeDir!);
+  assert.equal(result.root, "/custom/graph", "绝对 root 原样返回");
+  assert.equal(result.mode, "absolute-config", "mode = absolute-config");
+  assert.equal(result.workspace, resolve(worktreeDir!), "workspace 保持原值");
+});
+
+test("g-149 resolveCanonicalRoot：主工作树正常解析", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-main-"));
+  const { mainDir } = setupGitRepo(base);
+
+  const result = resolveCanonicalRoot(undefined, mainDir);
+  assert.equal(result.root, resolve(mainDir, ".dsh-graph"), "root = main/.dsh-graph");
+  assert.equal(result.mode, "main-tree", "mode = main-tree");
+  assert.equal(result.canonicalWorkspace, resolve(mainDir), "canonicalWorkspace = mainDir");
+  assert.equal(result.rootWarning, undefined, "无警告");
+});
+
+test("g-149 resolveCanonicalRoot：linked worktree 归一到主工作树", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-linked-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const result = resolveCanonicalRoot(undefined, worktreeDir!);
+  assert.equal(result.root, resolve(mainDir, ".dsh-graph"), "root = 主工作树/.dsh-graph");
+  assert.equal(result.mode, "canonicalized", "mode = canonicalized");
+  assert.equal(result.canonicalWorkspace, resolve(mainDir), "canonicalWorkspace = 主工作树");
+  assert.equal(result.rootWarning, undefined, "无旧数据时无警告");
+});
+
+test("g-149 resolveCanonicalRoot：linked worktree 有遗留本地 graph 时附带警告", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-legacy-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  // Create legacy worktree-local graph data
+  const localGraph = join(worktreeDir!, ".dsh-graph");
+  init(localGraph); // creates skeleton with events.jsonl
+
+  const result = resolveCanonicalRoot(undefined, worktreeDir!);
+  assert.equal(result.root, resolve(mainDir, ".dsh-graph"), "root = 主工作树/.dsh-graph");
+  assert.equal(result.mode, "canonicalized", "mode = canonicalized");
+  assert.ok(result.rootWarning !== undefined, "有旧数据时有警告");
+  assert.match(result.rootWarning!, /worktree 本地旧看板/, "警告提及旧看板");
+});
+
+test("g-149 resolveCanonicalRoot：自定义相对 root 也做 canonicalization", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-custom-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const result = resolveCanonicalRoot({ root: "data/my-graph" }, worktreeDir!);
+  assert.equal(result.root, resolve(mainDir, "data/my-graph"), "自定义相对 root 也归一到主树");
+  assert.equal(result.mode, "canonicalized", "mode = canonicalized");
+});
+
+test("g-149 resolveCanonicalRoot：非 Git workspace 回退到 workspace-local", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-fallback-"));
+
+  const result = resolveCanonicalRoot(undefined, base);
+  assert.equal(result.root, resolve(base, ".dsh-graph"), "root = workspace/.dsh-graph");
+  assert.equal(result.mode, "workspace-fallback", "mode = workspace-fallback");
+  assert.equal(result.canonicalWorkspace, resolve(base), "canonicalWorkspace = workspace");
+  assert.equal(result.rootWarning, undefined, "无警告");
+});
+
+test("g-149 resolveCanonicalRoot 返回值可直接传入 init（init 幂等兼容）", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-canonical-init-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const result = resolveCanonicalRoot(undefined, worktreeDir!);
+  // Should not throw
+  init(result.root);
+  assertSkeleton(result.root);
+  // The init happened on the main tree, not the worktree
+  assert.ok(!existsSync(join(worktreeDir!, ".dsh-graph")), "worktree 下未创建 .dsh-graph");
+});
+
+test("g-149 host re-export 也暴露 resolveCanonicalRoot（模块同步）", async () => {
+  const hostMod = await import("../../dsh-graph-host/index.js");
+  assert.equal(typeof hostMod.resolveCanonicalRoot, "function", "host 模块导出 resolveCanonicalRoot");
+  // 行为等价测试
+  const base = mkdtempSync(join(tmpdir(), "g149-host-export-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const coreResult = resolveCanonicalRoot(undefined, worktreeDir!);
+  const hostResult = hostMod.resolveCanonicalRoot(undefined, worktreeDir!);
+  assert.equal(hostResult.root, coreResult.root, "host 与 core 结果一致");
+  assert.equal(hostResult.mode, coreResult.mode, "host 与 core mode 一致");
 });
 

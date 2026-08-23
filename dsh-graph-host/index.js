@@ -65,10 +65,12 @@ import {
   renameVersion,
   deleteVersion,
 } from "./core/ops.js";
-import { resolveRoot } from "./core/root.js";
+import { resolveRoot, resolveCanonicalRoot } from "./core/root.js";
 
 // g-112：两半共用同一 root 解析函数（re-export 供验收/测试直接核对函数同一性）
 export { resolveRoot } from "./core/root.js";
+// g-149：canonical root 解析（Git linked-worktree 归一化）
+export { resolveCanonicalRoot } from "./core/root.js";
 // g-111 B7：boardPayload 已移入 core（消除 client→host 跨包依赖），此处 re-export 保持兼容。
 // board 载荷含 supervisorSession 字段（project.yaml 的 supervisor.session，g-108），由 host 端点 /api/dsh-graph 下发。
 export { boardPayload } from "./core/ops.js";
@@ -166,16 +168,32 @@ const WORKTREE_GUIDE = `【worktree 隔离（负责人 2026-08-22 指示）】�
 
 export function apply(ctx, config) {
   // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
+  // g-149：apply 默认 root 保持当前行为（无会话上下文时不走 Git 发现）
   const root = resolveRoot(config); // 默认（init/marker 等无会话上下文时用）
   // g-113 会话 workspace 跟随：session.header.cwd 优先（工具调用所在会话），
   // 缺失时兜底 sandboxPolicy.workspaceRoot（部署级 workspace 根），再无则 process.cwd()（CLI/headless）。
-  // 解析后幂等 init：工具首次触达某个 workspace 时确保其 .dsh-graph 骨架齐全（开箱即用，
-  // 与 apply 期 init 同款：backlog/goals/versions/memory + events.jsonl/index.json/rules.md）。
+  // g-149 扩展：使用 resolveCanonicalRoot 做 Git linked-worktree 归一化——
+  // code worktree 的 session cwd 会自动归一到主工作树的 graph root，不会在 worktree 下 init 第二份。
   const sessionWorkspace = (ex) => ex?.agent?.session?.header?.cwd ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? process.cwd();
   const rootFor = (ex) => {
-    const r = resolveRoot(config, sessionWorkspace(ex));
-    init(r);
-    return r;
+    const ws = sessionWorkspace(ex);
+    const canonical = resolveCanonicalRoot(config, ws);
+    init(canonical.root);
+    // 如果发现遗留 worktree 本地 graph，记录警告到 stderr
+    if (canonical.rootWarning) {
+      process.stderr.write(`[dsh-graph-host] ⚠️ ${canonical.rootWarning}\n`);
+    }
+    return canonical.root;
+  };
+  // g-149：rootForMeta 返回带元数据的解析结果（诊断用）
+  const rootForMeta = (ex) => {
+    const ws = sessionWorkspace(ex);
+    const canonical = resolveCanonicalRoot(config, ws);
+    init(canonical.root);
+    if (canonical.rootWarning) {
+      process.stderr.write(`[dsh-graph-host] ⚠️ ${canonical.rootWarning}\n`);
+    }
+    return canonical;
   };
   const actorOf = (exec) => `agent:${exec?.agent?.id ?? "dsh"}`;
 
@@ -583,10 +601,25 @@ export function apply(ctx, config) {
   };
   // 解析后幂等 init：端点首次触达某个 workspace 时确保其 .dsh-graph 骨架齐全（开箱即用，
   // 与 apply 期 init 同款；board/写端点不会因缺骨架半成品落盘）
+  // g-149 扩展：使用 resolveCanonicalRoot 做 Git linked-worktree 归一化
   const rootForReq = (req, body) => {
-    const r = resolveRoot(config, workspaceOf(req, body));
-    init(r);
-    return r;
+    const ws = workspaceOf(req, body);
+    const canonical = resolveCanonicalRoot(config, ws);
+    init(canonical.root);
+    if (canonical.rootWarning) {
+      process.stderr.write(`[dsh-graph-host] ⚠️ ${canonical.rootWarning}\n`);
+    }
+    return canonical.root;
+  };
+  // g-149：带元数据的 REST root 解析（诊断用，board 响应附加 graphRoot/rootMode）
+  const rootForReqMeta = (req, body) => {
+    const ws = workspaceOf(req, body);
+    const canonical = resolveCanonicalRoot(config, ws);
+    init(canonical.root);
+    if (canonical.rootWarning) {
+      process.stderr.write(`[dsh-graph-host] ⚠️ ${canonical.rootWarning}\n`);
+    }
+    return canonical;
   };
   const json = (res, code, data) => {
     res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
@@ -687,7 +720,17 @@ export function apply(ctx, config) {
         try {
           const sp = new URL(_req?.url ?? "", "http://x").searchParams;
           const includeArchived = sp.get("includeArchived") === "1" || sp.get("includeArchived") === "true";
-          json(res, 200, boardPayload(rootForReq(_req), { includeArchived }));
+          // g-149：board 响应附加 graph root 诊断信息
+          const meta = rootForReqMeta(_req);
+          const payload = boardPayload(meta.root, { includeArchived });
+          payload._diagnostics = {
+            workspace: meta.workspace,
+            graphRoot: meta.root,
+            rootMode: meta.mode,
+            canonicalWorkspace: meta.canonicalWorkspace,
+          };
+          if (meta.rootWarning) payload._diagnostics.rootWarning = meta.rootWarning;
+          json(res, 200, payload);
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
         }
@@ -1216,9 +1259,10 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           text: () => GUIDE_HINT,
         }));
         // g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
+        // g-149：使用 resolveCanonicalRoot 确保 worktree 会话也能正确读到主树 project.yaml
         // text(context) 里取 sessionId=context?.agent?.session?.id；
         // 再取 cwd=context?.agent?.session?.header?.cwd（当前会话 workspace）；
-        // 用 resolveRoot(config, cwd) 得该项目 .dsh-graph；readSupervisorSession(该项目root)；
+        // 用 resolveCanonicalRoot(config, cwd) 得该项目 canonical .dsh-graph；readSupervisorSession(该项目root)；
         // supervisorId===sessionId 时返回 SUPERVISOR_DISCIPLINE，否则空。
         // cwd 缺失则不注入（避免误注入）。
         disposers.push(sp.section({
@@ -1228,11 +1272,12 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
             try {
               const sessionId = context?.agent?.session?.id;
               if (!sessionId) return "";
-              // 读当前会话 workspace 的项目 .dsh-graph/project.yaml 的 supervisor.session
+              // 读当前会话 workspace 的项目 canonical .dsh-graph/project.yaml 的 supervisor.session
               const cwd = context?.agent?.session?.header?.cwd;
               if (!cwd) return ""; // cwd 缺失则不注入（避免误注入）
-              const projectRoot = resolveRoot(config, cwd);
-              const supervisorId = readSupervisorSession(projectRoot);
+              const canonical = resolveCanonicalRoot(config, cwd);
+              init(canonical.root);
+              const supervisorId = readSupervisorSession(canonical.root);
               if (!supervisorId || supervisorId !== sessionId) return "";
               return "\n" + SUPERVISOR_DISCIPLINE;
             } catch {
