@@ -2,7 +2,7 @@
 {
   "id": "g-145",
   "title": "收集子代理上下文注入：明确绑定卡片与 graph_fill_card 回填指令",
-  "status": "planning",
+  "status": "review",
   "blocked_reason": null,
   "created_at": "2026-08-23T11:21:46+08:00",
   "created_by": "agent:session-5f6bf96d-1abf-46da-aa7c-bc99e32d7b36",
