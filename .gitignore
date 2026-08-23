@@ -19,3 +19,6 @@ dsh-graph-host/.dsh-graph/
 
 # g-121：HANDOFF 旧版归档目录（<root>/handoffs/）不入 git——旧交接文件不提交入库
 handoffs/
+
+# g-142：worktree 目录不入 git——避免误提交 .worktrees/** 污染
+.worktrees/
