@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, relative } from "node:path";
-import { init, createGoal, findGoalFile, loadGoal } from "../ops.ts";
+import { init, createGoal, findGoalFile, loadGoal, setCriteria, transition } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dsh-graph-host/index.js";
 
@@ -297,6 +297,96 @@ test("start-execution 无 subagents：attempt 本地创建、child_error 上报�
   assert.ok(typeof r.body.child_error === "string");
   const events = readEvents(root);
   assert.ok(events.some((e) => e.event === "attempt.started" && e.goal === goalId));
+});
+
+// ===== g-148：GUI ready→in_progress force transition + start-execution 成功链回归 =====
+
+test("g-148 GUI 两步执行链：force ready→in_progress + start-execution 成功派发子代理", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g148-"));
+  const root = join(ws, ".dsh-graph");
+  init(root);
+  const goalId = createGoal(root, { title: "g-148 测试目标", version: "v-t", actor: "test" });
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
+  // 准备目标到 ready（需先设判据再迁移）
+  setCriteria(root, goalId, ["测试判据"], "test");
+  transition(root, goalId, "ready", { actor: "test" });
+
+  const subagentsService = {
+    list: () => ["spawn"],
+    getProvider: () => ({ prepareContinuable: () => {} }),
+    startContinuable: async () => ({ childId: "c-g148", parentSessionId: "p-g148" }),
+  };
+  const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const ctx: any = {
+    get: (name: string) => {
+      if (name === "webServer") return webServer;
+      if (name === "subagents") return subagentsService;
+      if (name === "agents") return { get: () => ({ id: "sess-super" }) };
+      return undefined;
+    },
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  apply(ctx, {});
+
+  // Step 1：GUI 模拟 force transition ready → in_progress
+  const tr = await post(routes, "/api/dsh-graph/transition",
+    { goal: goalId, to: "in_progress", force: true, workspace: ws });
+  assert.equal(tr.code, 200);
+  assert.equal(tr.body.ok, true, "force ready→in_progress 成功");
+
+  // Step 2：start-execution
+  const exec = await post(routes, "/api/dsh-graph/start-execution",
+    { goal: goalId, workspace: ws });
+  assert.equal(exec.code, 200);
+  assert.equal(exec.body.ok, true);
+  assert.equal(exec.body.child_id, "c-g148", "子代理已派发");
+  assert.ok(!exec.body.child_error, "无子代理错误");
+
+  // 验证事件链
+  const events = readEvents(root);
+  assert.ok(events.some((e) => e.event === "goal.transition" && e.goal === goalId &&
+    e.details?.to === "in_progress" && e.actor === "human:gui"),
+    "force transition 事件已记录");
+  assert.ok(events.some((e) => e.event === "attempt.started" && e.goal === goalId),
+    "attempt.started 事件已记录");
+  assert.ok(events.some((e) => e.event === "attempt.bound" && e.goal === goalId &&
+    e.details?.child_id === "c-g148"),
+    "attempt.bound 事件已记录");
+
+  // 验证目标最终状态为 in_progress
+  const goalDoc = loadGoal(findGoalFile(root, goalId));
+  assert.equal(goalDoc.meta.status, "in_progress");
+});
+
+test("g-148 GUI 两步执行链：transition 端点校验缺失参数", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g148-fail-"));
+  const root = join(ws, ".dsh-graph");
+  init(root);
+  createGoal(root, { title: "g-148 失败测试", version: "v-t", actor: "test" });
+
+  const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  apply(ctx, {});
+
+  // 缺少 goal 参数 → 400
+  const tr = await post(routes, "/api/dsh-graph/transition",
+    { to: "in_progress", force: true, workspace: ws });
+  assert.equal(tr.code, 400, "缺失 goal 返回 400");
+  assert.ok(tr.body.error, "错误信息存在");
+
+  // 不存在的目标 → 400
+  const tr2 = await post(routes, "/api/dsh-graph/transition",
+    { goal: "g-nonexist", to: "in_progress", force: true, workspace: ws });
+  assert.equal(tr2.code, 400, "不存在的目标返回 400");
 });
 
 // ===== g-113：client board 端点跟随请求 workspace（前端带 ?workspace= / body.workspace） =====

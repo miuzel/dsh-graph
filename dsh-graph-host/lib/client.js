@@ -1276,7 +1276,7 @@ window.__ModuleLoader__.load({
     // g-109：目标描述区执行/反馈交互组件（执行按钮直接创建子代理；接受默认经主管 Agent 复核，
     // 无异议生效，有异议显示在按钮处并转「强制接受」，可选理由记 goal.amended 事件供学习）
     function AcceptFeedback(props) {
-      const { goalId, status, events, supervisorSession } = props;
+      const { goalId, status, events, supervisorSession, onRefresh } = props;
       const [mode, setMode] = React.useState("idle"); // idle | feedback
       const [fbText, setFbText] = React.useState("");
       const [note, setNote] = React.useState(null);
@@ -1371,7 +1371,7 @@ window.__ModuleLoader__.load({
             } else {
               setNote("⚠️ 子代理未启动（无 child_id）");
             }
-            load(); // 刷新看板
+            onRefresh?.(); // g-148：刷新看板（回调由父组件 GoalModal 传入）
           } else {
             setNote("⚠️ 执行失败：" + (data.error || "未知错误"));
           }
@@ -1570,17 +1570,20 @@ window.__ModuleLoader__.load({
       const [renaming, setRenaming] = React.useState(false);
       const [newTitle, setNewTitle] = React.useState("");
       const [renameNote, setRenameNote] = React.useState(null);
-      React.useEffect(() => {
-        let alive = true;
-        // g-109 判据：接受默认经主管复核——20s 轮询详情，主管裁决（无异议生效/有异议）自动反映到按钮处
-        const load = () => fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }))
+      // g-148：load 提升到组件体，供 AcceptFeedback 通过 onRefresh 回调刷新详情
+      const aliveRef = React.useRef(true);
+      const load = React.useCallback(() =>
+        fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }))
           .then((r) => r.json())
-          .then((data) => alive && setState({ loading: false, data }))
-          .catch((e) => alive && setState({ loading: false, error: String(e) }));
+          .then((data) => aliveRef.current && setState({ loading: false, data }))
+          .catch((e) => aliveRef.current && setState({ loading: false, error: String(e) })),
+      [props.id]);
+      React.useEffect(() => {
+        aliveRef.current = true;
         load();
         const t = setInterval(load, 20000);
-        return () => { alive = false; clearInterval(t); };
-      }, [props.id]);
+        return () => { aliveRef.current = false; clearInterval(t); };
+      }, [load]);
 
       const section = (body, name) => {
         const m = new RegExp(`## ${name}\\n([\\s\\S]*?)(?=\\n## |$)`).exec(body ?? "");
@@ -1664,7 +1667,7 @@ window.__ModuleLoader__.load({
         }
         const detailTab = [
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
-            h(AcceptFeedback, { goalId: props.id, status, events: d.events, supervisorSession: props.supervisorSession })) : null,
+            h(AcceptFeedback, { goalId: props.id, status, events: d.events, supervisorSession: props.supervisorSession, onRefresh: load })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           crit != null ? sectionBlock("c", "✅ 质量判据", crit,
             !isPlaceholder(crit) && ["ready", "in_progress", "review", "delivered"].includes(status)
