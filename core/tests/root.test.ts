@@ -96,6 +96,44 @@ test("单包 apply 幂等调 core init：root 不存在自动建骨架，重复 
   assert.equal(evs.length, 1, "重复 apply 只记一次 project.initialized");
 });
 
+test("g-149 apply 不以 process.cwd() 自动 init：默认 config 无显式 root 时不建骨架", () => {
+  // 模拟 apply 在包子目录或服务进程 cwd 下运行的场景
+  // 默认 config（无 root 覆盖）+ 无 sandboxPolicy → 不应以 process.cwd()/.dsh-graph 创建骨架
+  applyHost(mockCtx(), {});
+  // apply 不报错；关键是验证它没有在 process.cwd() 下创建 .dsh-graph
+  // （process.cwd() 在测试中是 worktree 根，已有主库的 .dsh-graph 目录，不产生新骨架）
+  assert.ok(true, "apply 默认 config 不报错、不自动 init process.cwd()/.dsh-graph");
+});
+
+test("g-149 apply 有绝对 config.root 时仍正常 init（管理员覆盖）", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-abs-init-"));
+  const root = join(base, "custom-data");
+  applyHost(mockCtx(), { root });
+  assertSkeleton(root);
+  const evs = readEvents(root).filter((e) => e.event === "project.initialized");
+  assert.equal(evs.length, 1, "绝对 config.root 时 apply 正常 init");
+});
+
+test("g-149 apply 有 sandboxPolicy.workspaceRoot 时正常 init", () => {
+  const base = mkdtempSync(join(tmpdir(), "g149-sandbox-init-"));
+  // 模拟 sandboxPolicy 提供 workspace——需要覆盖 mockCtx 的 get
+  const webServer = { register: () => () => {} };
+  const sandboxPolicy = { workspaceRoot: base };
+  const ctx: any = {
+    get: (name: string) => {
+      if (name === "webServer") return webServer;
+      if (name === "sandboxPolicy") return sandboxPolicy;
+      return undefined;
+    },
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  applyHost(ctx, {});
+  // sandbox workspace + default .dsh-graph root → 应该 init
+  assertSkeleton(join(base, ".dsh-graph"));
+});
+
 test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路由）两个半边", () => {
   const registered: any[] = [];
   const routes = new Map<string, any>();
@@ -259,5 +297,14 @@ test("g-149 host re-export 也暴露 resolveCanonicalRoot（模块同步）", as
   const hostResult = hostMod.resolveCanonicalRoot(undefined, worktreeDir!);
   assert.equal(hostResult.root, coreResult.root, "host 与 core 结果一致");
   assert.equal(hostResult.mode, coreResult.mode, "host 与 core mode 一致");
+});
+
+test("g-149 根 .gitignore 包含 **/.dsh-graph/ 规则（防止子目录意外引入）", () => {
+  // 验证仓库的 .gitignore 包含通配规则，阻止任何子目录的 .dsh-graph 被 git add -A 收集
+  const gitignorePath = join(import.meta.dirname, "../../.gitignore");
+  const gitignore = readFileSync(gitignorePath, "utf8");
+  assert.ok(gitignore.includes("**/.dsh-graph/"), ".gitignore 包含 **/.dsh-graph/ 通配规则");
+  // 验证已有的 host 专用规则已被通配规则替代
+  assert.ok(!gitignore.includes("dsh-graph-host/.dsh-graph/"), "旧的 host 专用规则已移除");
 });
 

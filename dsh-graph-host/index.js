@@ -13,7 +13,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
-import { relative, join } from "node:path";
+import { relative, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createGoal,
@@ -168,8 +168,12 @@ const WORKTREE_GUIDE = `【worktree 隔离（负责人 2026-08-22 指示）】�
 
 export function apply(ctx, config) {
   // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
-  // g-149：apply 默认 root 保持当前行为（无会话上下文时不走 Git 发现）
-  const root = resolveRoot(config); // 默认（init/marker 等无会话上下文时用）
+  // g-149 修复：apply 级别的 root 仅用于日志和 marker 自测——不调用 init()。
+  // 无明确 workspace 的 apply 路径（process.cwd() 基准）不得创建骨架，
+  // 避免在 package 子目录、子 Agent cwd 等非项目根意外 init。
+  // 所有实际数据读写通过 rootFor(ex) / rootForReq(req, body) 走，
+  // 它们有明确 session cwd 或 GUI request workspace 才 init。
+  const root = resolveRoot(config); // 仅日志/marker 用
   // g-113 会话 workspace 跟随：session.header.cwd 优先（工具调用所在会话），
   // 缺失时兜底 sandboxPolicy.workspaceRoot（部署级 workspace 根），再无则 process.cwd()（CLI/headless）。
   // g-149 扩展：使用 resolveCanonicalRoot 做 Git linked-worktree 归一化——
@@ -1225,9 +1229,22 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
   ];
 
   return ctx.effect(() => {
-    // g-112：幂等初始化数据骨架——发布后新用户装上自动建 backlog/goals/versions/memory +
-    // events.jsonl/index.json/rules.md（不建 project.yaml、不带 demo 数据）；重复 apply 不重复建
-    init(root);
+    // g-149 修复：不再在 apply 时以 process.cwd() 基准 init 骨架。
+    // 有明确 config.root（绝对路径或显式覆盖）时，init 到该路径；
+    // 有 sandboxPolicy.workspaceRoot 时，以该 workspace + config.root 解析后 init；
+    // 否则推迟到首次 rootFor(ex)/rootForReq(req,body) 有明确 workspace 时才 init。
+    // 这防止在 package 子目录、子 Agent cwd 等非项目根意外创建 .dsh-graph 骨架。
+    const explicitRoot = config?.root;
+    const sandboxWs = ctx.get?.("sandboxPolicy")?.workspaceRoot;
+    if (explicitRoot && resolve(explicitRoot) === explicitRoot) {
+      // 绝对 config.root：apply 时 init（管理员显式指定了数据位置）
+      init(root);
+    } else if (sandboxWs) {
+      // 有 sandboxPolicy workspace：以 canonical 解析后 init（无论 config.root 是否显式）
+      init(resolveCanonicalRoot(config, sandboxWs).root);
+    }
+    // 无 sandboxPolicy 且无显式绝对 root：推迟 init，
+    // 等工具/REST 端点有 session/request workspace 时再 init。
     // 注册 supervisor 工作指南为运行时技能（可选服务，缺失时静默）
     const skills = ctx.get?.('skills');
     if (skills) { try { skills.register({ name: 'dsh-graph-supervisor', description: 'dsh-graph 主管 Agent 工作指南', source: 'dsh-graph-host', content: GUIDE }); } catch { /* 静默 */ } }

@@ -58,6 +58,35 @@ dsh plugin --profile <name> add dsh-graph
 
 `<workspace>/.dsh-graph`：跟随调用会话的 workspace（`session.header.cwd`），数据落在每个项目自己的 `.dsh-graph`，git 友好。包含 `backlog/`、`goals/`、`versions/`、`events.jsonl`（事件流，唯一事实源）等。首次触达某 workspace 自动生成骨架，幂等、不建 demo 数据。
 
+### 独立数据仓库模式（g-149）
+
+`.dsh-graph` 可从父代码仓库解耦为**独立 Git 仓库**，实现代码提交/分支切换/worktree 合并不再覆盖看板状态。
+
+**核心行为：**
+- **Git linked-worktree canonicalization**：同一项目的主工作树、代码 worktree、GUI/host 和 `graph_*` 工具解析同一 canonical graph root，不会在 code worktree 下 init 第二份 `.dsh-graph`。通过 `git worktree list --porcelain` 发现主工作树，相对 `config.root` 归一到主树路径；显式绝对 `config.root` 跳过 Git 发现。
+- **安全 fallback**：非 Git 目录、Git 不可用、或 `git worktree` 命令失败时，回退到 workspace-local 解析（当前行为不变）。
+- **apply 不自动 init**：插件 `apply()` 不再以 `process.cwd()` 基准创建骨架。有 `sandboxPolicy.workspaceRoot`、显式 session cwd 或绝对 `config.root` 时正常 init；否则推迟到首次工具/REST 调用有明确 workspace 时。
+
+**迁移（仅由脚本在显式 `--apply` 时执行，不做裸迁移）：**
+```sh
+# dry-run 预览（默认，不修改任何文件）
+bash scripts/migrate-dsh-graph-repo.sh
+
+# 执行迁移（创建内层 Git 仓库、父库 untrack/ignore）
+bash scripts/migrate-dsh-graph-repo.sh --apply
+
+# 可选：配置专用数据仓库远端（不自动 push）
+bash scripts/migrate-dsh-graph-repo.sh --apply --remote <data-repo-url>
+```
+
+**事件流策略**：内层数据仓库**跟踪 `events.jsonl`**（R-02 审计与 rebuild 证据）。`order.json`、`index.json`、`handoffs/` 等派生/运行态内容由内层 `.gitignore` 排除。
+
+**远端推送**：显式可选，绝不自动 push。设置远端后以 `git -C .dsh-graph push -u origin main` 手动推送。
+
+**禁止事项**：
+- supervisor 和子 Agent **不得**使用 `git add -f`、`git rm --cached` 等方式把 `.dsh-graph` 数据重新纳入父代码仓库 Git——数据归内层仓库管理。
+- 不得在子目录或 linked worktree 下运行 `git -C .dsh-graph init`——canonical root 解析已自动归一到主工作树。
+
 ## 仓库结构（monorepo）
 
 - `core/`——核心层源码（唯一事实源），经 `scripts/sync-core.sh` 编译成 `dsh-graph-host/core/*.js` 进发布包。

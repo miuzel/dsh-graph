@@ -228,13 +228,16 @@ board 投影派生——child_id 被多个目标绑定 → 旧绑定显示「被
   `/api/dsh-graph/start-execution` 传 body `worktree: false`；
   数据分工：代码改动在 worktree，看板数据 `.dsh-graph/` 仍在主工作树写
   （graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）；
-- **只在仓库根跑 graph_* 工具（负责人 2026-08-22）**：执行/调研子代理务必以
+- **只在仓库根跑 graph_* 工具（负责人 2026-08-22；g-149 修订）**：执行/调研子代理务必以
   **仓库根**为工作目录跑 graph_* 工具，**绝不在包目录（如 `dsh-graph-host/`）下跑**——
   否则工具会按会话 cwd 在包目录自动 init 出一个 `.dsh-graph/` 骨架（「子代理误建数据
-  目录」的已知问题，曾多次清理）。该目录非项目数据，已 gitignore
-  （`dsh-graph-host/.dsh-graph/`）防 git 污染，但会弄乱工作区——子代理应统一在
-  仓库根的 `.dsh-graph/` 读写看板数据；supervisor 派发时若发现子代理 cwd 落在包目录，
-  及时纠正。
+  目录」的已知问题，曾多次清理）。父仓库 `.gitignore` 以 `**/.dsh-graph/` 通配规则
+  防止任何子目录的 `.dsh-graph` 被 `git add -A` 收集（覆盖包目录、子 Agent cwd、
+  linked worktree 等所有场景），但会弄乱工作区——子代理应统一在仓库根的 `.dsh-graph/`
+  读写看板数据；supervisor 派发时若发现子代理 cwd 落在包目录，及时纠正。
+  **禁止** supervisor 或子 Agent 使用 `git add -f`、`git rm --cached` 等方式把
+  `.dsh-graph` 数据重新纳入父代码仓库 Git——数据归内层独立仓库管理，迁移由
+  `scripts/migrate-dsh-graph-repo.sh --apply` 显式执行。
 
 - **模型路由**：执行子代理**不继承父会话模型**——统一走 project.yaml 的
   `executor.provider/model`（当前 deepseek-official/deepseek-v4-flash），

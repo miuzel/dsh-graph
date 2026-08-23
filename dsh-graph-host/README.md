@@ -53,6 +53,10 @@ root 跟随**会话 workspace**（g-113）：工具按调用会话的 `session.h
 可用 profile 用户层 `cordis.patch.yml` 按 id 覆盖 `config.root`。首次触达某 workspace 自动生成骨架
 （`backlog/`、`goals/`、`versions/`、`events.jsonl`、`rules.md`），幂等、不建 demo 数据。
 
+**g-149 canonical root**：Git linked worktree 自动归一到主工作树的 graph root（`resolveCanonicalRoot`），不会在 code worktree 下 init 第二份。`apply()` 不再以 `process.cwd()` 自动创建骨架——有明确 session/request workspace 或 `sandboxPolicy` 时才 init。详见根 README「独立数据仓库模式」。
+
+**数据 repo 边界**：`.dsh-graph` 可由独立 Git 仓库管理（内层仓库跟踪 `events.jsonl`）。父仓库 `.gitignore` 以 `**/.dsh-graph/` 通配规则防止子目录意外引入。supervisor 和子 Agent 不得用 `git add -f` 把 `.dsh-graph` 数据重新纳入父代码仓库 Git。
+
 ## 与 dsh-graph-client 的关系（g-116 合并后）
 
 - 原 `dsh-graph-client` 包已并入本包（0.3.2 两包作废，0.4.0 起单包发布）；
