@@ -35,10 +35,10 @@ After modifying source modules and rebuilding:
 1. **Always work with source modules** — never edit `dsh-graph-host/lib/client.js` directly
 2. **Rebuild after changes** — run `bash scripts/build-client.sh`
 3. **Verify compatibility** — ensure ModuleLoader contract and all tests pass
-4. **Commit source modules** — commit changes to `dsh-graph-host/lib/client/*.js`, not the generated file
+4. **Commit source modules and generated file** — commit changes to `dsh-graph-host/lib/client/*.js` **and** the rebuilt `dsh-graph-host/lib/client.js`
 
 ## Important Notes
 
 - The generated file maintains the `window.__ModuleLoader__.load` contract required by the dsh client
-- The generated marker is added after the initial comments but before the ModuleLoader call
+- The generated marker is added at the top of the file before any module content
 - This policy prevents accidental modification of generated code and ensures build consistency
