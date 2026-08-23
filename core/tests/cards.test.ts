@@ -21,6 +21,7 @@ import {
   loadGoal,
   bindCardChild,
   GraphError,
+  goalCards,
 } from "../ops.ts";
 import { serializeDoc } from "../model.ts";
 import { readEvents, appendEvent } from "../events.ts";
@@ -268,4 +269,28 @@ test("非 backlog 目标 goalDetail 返回正常且可建卡", () => {
   assert.ok(d.goalFile.endsWith("/goal.md"), "standalone 文件名应为 goal.md");
   const c = addCard(root, id, { title: "card1", kind: "text", actor: "test" });
   assert.ok(c.startsWith("card-"));
+});
+
+test("g-154：goalDetail 卡片含 cardFile 绝对路径（指向实际卡片 .md 文件）", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "g154-test", version: "v-t", actor: "test" });
+  const c1 = addCard(root, id, { title: "卡A", kind: "text", actor: "test" });
+  const d = goalDetail(root, id);
+  const card = d.cards.find((c: any) => c.id === c1);
+  assert.ok(card, "卡片应存在");
+  assert.ok(card.cardFile, "cardFile 应存在");
+  assert.ok(card.cardFile.endsWith(`${c1}.md`), "cardFile 应以卡片 id.md 结尾");
+  assert.ok(existsSync(card.cardFile), "cardFile 指向的文件应存在");
+  // cardFile 与 goalFile 同目录下 cards/
+  assert.ok(card.cardFile.includes("/cards/"), "cardFile 应在 cards/ 目录下");
+});
+
+test("g-154：goalCards 也暴露 cardFile 字段", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "g154-cards", version: "v-t", actor: "test" });
+  const c1 = addCard(root, id, { title: "卡B", kind: "data", actor: "test" });
+  const cards = goalCards(root, id);
+  assert.equal(cards.length, 1);
+  assert.ok(cards[0].cardFile, "goalCards 返回的卡片也应含 cardFile");
+  assert.ok(cards[0].cardFile.endsWith(`${c1}.md`));
 });

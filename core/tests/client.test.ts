@@ -593,3 +593,37 @@ test("g-148 生成 bundle 契约：client.js 含 onRefresh 解构/调用且无�
   const bareLoadCalls = fnBody.match(/(?<!\.)load\(\)/g);
   assert.ok(!bareLoadCalls, "生成 bundle: AcceptFeedback 函数体内无裸 load() 调用");
 });
+
+// g-154：卡片抽屉文件入口 UI 契约回归
+test("g-154 生成 bundle 契约：card-drawer.js 含 cardFile 开放/复制逻辑 + 无文件降级", () => {
+  const bundle = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  // CardDrawer 含 cardFile 开放逻辑
+  assert.ok(
+    /card\.cardFile/.test(bundle),
+    "生成 bundle: CardDrawer 引用 card.cardFile");
+  // 含 openPath 调用（复用 file-link 机制）
+  assert.ok(
+    /openPath.*card\.cardFile|card\.cardFile.*openPath/s.test(bundle),
+    "生成 bundle: CardDrawer 通过 openPath 打开卡片文件");
+  // 含复制路径逻辑
+  assert.ok(
+    /copyText\(card\.cardFile\)/.test(bundle),
+    "生成 bundle: CardDrawer 含复制卡片文件路径逻辑");
+  // 无文件降级状态
+  assert.ok(
+    /无文件路径/.test(bundle),
+    "生成 bundle: CardDrawer 含无文件路径降级文案");
+});
+
+// g-154：编译产物 dsh-graph-host/core/ops.js 含 goalCards cardFile 字段（防止 sync-core 遗漏）
+test("g-154 编译产物契约：dsh-graph-host/core/ops.js goalCards 输出含 cardFile 字段", () => {
+  const compiledOps = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/core/ops.js"), "utf8");
+  assert.ok(
+    /cardFile:\s*cardFilePath/.test(compiledOps),
+    "编译 ops.js: goalCards 输出含 cardFile: cardFilePath");
+  assert.ok(
+    /if\s*\(c\.cardFile\)/.test(compiledOps),
+    "编译 ops.js: goalDetail 使用 c.cardFile 读取全文");
+});

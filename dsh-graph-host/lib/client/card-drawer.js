@@ -161,11 +161,46 @@
                 }, "开始收集"),
                 collectNote ? h("div", { style: { ...S.meta, marginTop: 4 } }, collectNote) : null)
             : null;
+          // g-154: 卡片文件入口（复用 goal.md 同类的 file-link/open-file 机制）
+          const cardFileEntry = card.cardFile
+            ? h("div", { key: "f", style: { ...S.drawerSection, display: "flex", alignItems: "center", gap: 6 } },
+                h("span", { style: { fontSize: 11, opacity: 0.7 } }, "📄 卡片文件"),
+                h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                  className: "dg-btn",
+                  title: "用系统默认编辑器打开卡片文件",
+                  onClick: async (e) => {
+                    e.stopPropagation();
+                    try {
+                      const conn = connectionRt ?? appCtx?.get?.("connection");
+                      if (conn?.api?.host?.openPath) {
+                        const result = await conn.api.host.openPath({ path: card.cardFile });
+                        if (result?.opened) { showToast("✅ 已打开卡片文件"); return; }
+                      }
+                      await copyText(card.cardFile);
+                      showToast("✅ 路径已复制（打开不可用）");
+                    } catch {
+                      await copyText(card.cardFile);
+                      showToast("✅ 路径已复制");
+                    }
+                  },
+                }, "打开"),
+                h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                  className: "dg-btn",
+                  title: "复制卡片文件路径",
+                  onClick: async (e) => { e.stopPropagation(); const ok = await copyText(card.cardFile); if (ok) showToast("✅ 路径已复制"); },
+                }, "复制路径"))
+            : h("div", { key: "f", style: { ...S.drawerSection, display: "flex", alignItems: "center", gap: 6, opacity: 0.5 } },
+                h("span", { style: { fontSize: 11 } }, "📄 卡片文件"),
+                h("span", { style: { fontSize: 11 } }, "（无文件路径）"));
+
           inner = [
             h("div", { key: "t", style: { fontWeight: 700, fontSize: 14 } },
               `📇 ${card.title}`),
             h("div", { key: "m", style: S.meta },
               `${card.id} ｜ ${card.kind} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
+            cardFileEntry,
             childLink,
             card.summary ? h("div", { key: "s", style: S.drawerSection },
               h("div", { style: S.drawerH }, "摘要"), card.summary) : null,

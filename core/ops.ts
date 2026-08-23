@@ -2280,8 +2280,9 @@ export function goalCards(root: string, goalId: string): Array<Record<string, an
   const out: Array<Record<string, any>> = [];
   for (const f of readdirSync(cdir).sort()) {
     if (!f.endsWith(".md")) continue;
+    const cardFilePath = join(cdir, f);
     try {
-      const doc = loadGoal(join(cdir, f));
+      const doc = loadGoal(cardFilePath);
       out.push({
         id: doc.meta.id,
         title: doc.meta.title,
@@ -2291,6 +2292,7 @@ export function goalCards(root: string, goalId: string): Array<Record<string, an
         summary: doc.meta.summary ?? null,
         child_id: doc.meta.child_id ?? null,
         parent_session_id: doc.meta.parent_session_id ?? null,
+        cardFile: cardFilePath, // g-154: 暴露卡片文件绝对路径
       });
     } catch {
       /* 跳过坏卡片 */
@@ -2308,16 +2310,12 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
     .slice(-50)
     .map((e) => ({ ts: e.ts, actor: e.actor, event: e.event, details: e.details }));
   const cards = goalCards(root, goalId).map((c) => {
-    // 附全文（抽屉展示）
-    const dir = basename(file) === "goal.md" ? dirname(file) : null;
+    // 附全文（抽屉展示）；cardFile 由 goalCards 提供
     let content = "";
-    if (dir) {
-      const cf = join(dir, "cards", `${c.id}.md`);
-      if (existsSync(cf)) {
-        try {
-          content = loadGoal(cf).body.trim();
-        } catch { /* 忽略 */ }
-      }
+    if (c.cardFile) {
+      try {
+        content = loadGoal(c.cardFile).body.trim();
+      } catch { /* 忽略 */ }
     }
     return { ...c, content };
   });
