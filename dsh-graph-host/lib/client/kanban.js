@@ -37,6 +37,10 @@
       const [versionActionLoading, setVersionActionLoading] = React.useState(false);
       // g-127: 阻塞列默认折叠（竖向窄条汇总，点击展开）
       const [blockedColumnCollapsed, setBlockedColumnCollapsed] = React.useState(true);
+      // g-156: 交付列默认展开（首次打开及刷新默认展开，折叠状态只在当前页面/会话生效）
+      const [deliverColumnCollapsed, setDeliverColumnCollapsed] = React.useState(false);
+      // g-162: 泳道折叠状态（active 版本泳道、独立目标泳道、backlog 泳道独立折叠，默认展开；只在当前页面生效）
+      const [collapsedLanes, setCollapsedLanes] = React.useState({});
       // g-77647351：拖拽状态机
       const [drag, setDrag] = React.useState(null); // {goalId, fromStatus, overGoalId, overStageKey, overHalf, laneKey}
       const dropCommitted = React.useRef(false);
@@ -344,9 +348,50 @@
         setCreateNote(null);
       };
       // g-77647351：泳道渲染（带拖放支持，跨 lane 拖放改归属）；g-129 版本 lane 标题「＋」预选版本
-      // g-137：laneIndex 用于交替背景色
+      // g-137：laneIndex 用于交替背景色；g-162：阶段列横向交替深浅
       const lane = (label, goals, key, version, laneIndex = 0) => {
-        const cells = STAGES.map((s) => {
+        // g-162: 泳道折叠状态
+        const isCollapsed = !!collapsedLanes[key];
+        // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
+        const baseBg = "rgba(255,255,255,.03)";
+        const stageBg = (stageIdx) => stageIdx % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.05)";
+        // g-162: 折叠态——显示摘要行
+        if (isCollapsed) {
+          return [
+            h("div", {
+              key: key + "-label",
+              style: {
+                ...S.laneLabel,
+                position: "relative",
+                background: baseBg,
+                cursor: "pointer",
+              },
+              title: "点击展开泳道",
+              onClick: (e) => {
+                e.stopPropagation();
+                setCollapsedLanes((prev) => ({ ...prev, [key]: false }));
+              },
+            },
+              h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
+              h("button", {
+                style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+                className: "dg-btn",
+                title: version ? `在 ${version} 新建目标` : (key === "standalone" ? "新建独立目标" : "新建目标（backlog）"),
+                onClick: (e) => {
+                  e.stopPropagation();
+                  openCreateGoal(key === "standalone" ? "standalone" : version);
+                },
+              }, "＋")),
+            h("div", {
+              key: key + "-collapsed-summary",
+              style: { gridColumn: "2 / -1", ...S.cell, background: baseBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
+              title: "点击展开泳道",
+              onClick: () => setCollapsedLanes((prev) => ({ ...prev, [key]: false })),
+            }, `▸ ${goals.length} 目标 · 点击展开`),
+          ];
+        }
+        // 展开态：正常渲染各阶段列
+        const cells = STAGES.map((s, sIdx) => {
           const cellGoals = goals.filter((g) => stageOf(g.status) === s.key);
           // 排序对账
           const orderKey = `${key}|${s.key}`;
@@ -363,8 +408,8 @@
             (isFromBacklog && isOverThisLane && s.key === "describe") || // backlog→版本：只高亮描述列
             (!isFromBacklog && drag.overStageKey === s.key && drag.overLaneKey === key) // 其他情况：正常高亮
           );
-          // g-137：交替背景色
-          const laneBg = laneIndex % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.08)";
+          // g-162: 阶段列横向交替深浅背景
+          const laneBg = stageBg(sIdx);
           // g-127：阻塞列折叠态——竖条汇总替代卡片列表
           if (s.key === "blocked" && blockedColumnCollapsed && orderedGoals.length) {
             // 计算最长阻塞时间（从 created_at 到现在）
@@ -415,6 +460,44 @@
                 }
               } : undefined,
             }, summaryText);
+          }
+          // g-156: 交付列折叠态——竖条汇总替代卡片列表
+          if (s.key === "deliver" && deliverColumnCollapsed) {
+            const count = orderedGoals.length;
+            return h("div", {
+              key: key + "-" + s.key,
+              style: {
+                ...S.cell,
+                background: isOverThisCell ? "rgba(76,141,255,.10)" : laneBg,
+                textAlign: "center",
+                padding: "10px 2px",
+                minWidth: 0,
+                width: 36,
+                cursor: "pointer",
+                userSelect: "none",
+                fontSize: 11,
+                opacity: 0.85,
+                lineHeight: 1.3,
+                wordBreak: "break-all",
+                overflow: "hidden",
+              },
+              className: "dg-deliver-collapsed" + (isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? " dg-cell-drop-active" : ""),
+              onClick: (e) => { e.stopPropagation(); setDeliverColumnCollapsed(false); },
+              title: `点击展开交付列（${count} 项）`,
+              onDragOver: anyDrag ? (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                if (!orderedGoals.length) {
+                  setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" } : d);
+                }
+              } : undefined,
+              onDrop: anyDrag ? (e) => {
+                e.preventDefault();
+                if (!orderedGoals.length) {
+                  commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
+                }
+              } : undefined,
+            }, h(React.Fragment, null, "📦", h("br"), `×${count}`));
           }
           return h("div", {
             key: key + "-" + s.key, // 使用 lane key + stage key 作为唯一 key
@@ -488,8 +571,8 @@
             }),
           );
         });
-        // g-137：labelEl 交替背景色
-        const labelBg = laneIndex % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.08)";
+        // g-162: 统一基础背景层级
+        const labelBg = baseBg;
         const labelEl = h("div", {
           key: key + "-label",
           style: {
@@ -516,6 +599,16 @@
           } : undefined,
         },
           label,
+          // g-162: 泳道折叠/展开按钮
+          h("button", {
+            style: { ...S.btn, position: "absolute", left: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+            className: "dg-btn",
+            title: "折叠泳道",
+            onClick: (e) => {
+              e.stopPropagation();
+              setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
+            },
+          }, "▾"),
           // g-129: 每个 lane 标题右下角加「+」按钮（版本 lane 预选版本，独立/backlog 进 backlog）
           h("button", {
             style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
@@ -529,11 +622,55 @@
         return [labelEl, ...cells];
       };
 
-      // g-137：backlog 行平铺展示函数
+      // g-137：backlog 行平铺展示函数；g-162: 支持独立折叠
       const backlogRow = (label, goals, key) => {
+        // g-162: backlog 泳道折叠状态
+        const isCollapsed = !!collapsedLanes[key];
+        const backlogBg = "rgba(0,0,0,.12)";
+        // g-162: 折叠态——显示摘要行
+        if (isCollapsed) {
+          return [
+            h("div", {
+              key: key + "-label",
+              style: { ...S.laneLabel, position: "relative", background: backlogBg, cursor: "pointer" },
+              title: "点击展开泳道",
+              onClick: (e) => {
+                e.stopPropagation();
+                setCollapsedLanes((prev) => ({ ...prev, [key]: false }));
+              },
+            },
+              h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
+              h("button", {
+                style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+                className: "dg-btn",
+                title: "新建目标（backlog）",
+                onClick: (e) => {
+                  e.stopPropagation();
+                  openCreateGoal(null);
+                },
+              }, "＋")),
+            h("div", {
+              key: key + "-collapsed-summary",
+              style: { gridColumn: "2 / -1", ...S.cell, background: backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
+              title: "点击展开泳道",
+              onClick: () => setCollapsedLanes((prev) => ({ ...prev, [key]: false })),
+            }, `▸ ${goals.length} 目标 · 点击展开`),
+          ];
+        }
+        // 展开态：正常渲染
         const isOverThisCell = drag && drag.overLaneKey === key;
-        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative", background: "rgba(0,0,0,.12)" } },
+        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative", background: backlogBg } },
           label,
+          // g-162: 泳道折叠按钮
+          h("button", {
+            style: { ...S.btn, position: "absolute", left: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+            className: "dg-btn",
+            title: "折叠泳道",
+            onClick: (e) => {
+              e.stopPropagation();
+              setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
+            },
+          }, "▾"),
           h("button", {
             style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
             className: "dg-btn",
