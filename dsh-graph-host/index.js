@@ -1348,7 +1348,7 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
             return json(res, 400, { error: "missing status" });
           }
           const r = rootForReq(req, body);
-          setVersionStatus(r, { slug: slug.trim(), status: status.trim(), actor: "human:gui" });
+          setVersionStatus(r, { slug: slug.trim(), status: status.trim(), actor: "human:gui", confirmed: body.confirmed === true });
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;

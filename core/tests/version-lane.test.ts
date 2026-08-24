@@ -553,30 +553,62 @@ describe("setVersionStatus（g-135）", () => {
     );
   });
 
-  it("released 终态 guard：released → planning 被拒绝", () => {
+  it("released 终态 guard：released -> planning 被拒绝", () => {
     createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
     releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
     assert.equal(versionDetail(root, "v1.0").status, "released");
     const eventsBefore = readEvents(root).length;
     assert.throws(
       () => setVersionStatus(root, { slug: "v1.0", status: "planning", actor: "human:gui" }),
-      /released 是终态/,
+      /版本已 released，只能恢复为 active/,
     );
     // 状态不变、事件不变
     assert.equal(versionDetail(root, "v1.0").status, "released");
     assert.equal(readEvents(root).length, eventsBefore, "拒绝后不应写事件");
   });
 
-  it("released 终态 guard：released → active 被拒绝", () => {
+  it("released 终态 guard：released -> active 需要确认", () => {
     createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
     releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
     const eventsBefore = readEvents(root).length;
     assert.throws(
       () => setVersionStatus(root, { slug: "v1.0", status: "active", actor: "human:gui" }),
-      /released 是终态/,
+      /恢复 released 版本需要明确确认/,
     );
     assert.equal(versionDetail(root, "v1.0").status, "released");
     assert.equal(readEvents(root).length, eventsBefore);
+  });
+
+  it("released -> active 成功：confirmed=true + human actor 记录审计事件", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    setVersionStatus(root, { slug: "v1.0", status: "active", actor: "human:gui", confirmed: true });
+    assert.equal(versionDetail(root, "v1.0").status, "active");
+    const changed = readEvents(root).find((e) => e.event === "version.status_changed" && e.details.version === "v1.0" && e.details.new_status === "active");
+    assert.ok(changed, "应记录 released->active 的 version.status_changed 事件");
+    assert.equal(changed.details.old_status, "released");
+  });
+
+  it("released -> active 拒绝：agent actor 不能恢复", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    assert.throws(
+      () => setVersionStatus(root, { slug: "v1.0", status: "active", actor: "agent:k3", confirmed: true }),
+      /仅限负责人确认/,
+    );
+    assert.equal(versionDetail(root, "v1.0").status, "released");
+  });
+
+  it("恢复后再次发布仍执行全部目标 delivered guard", () => {
+    createVersion(root, { slug: "v1.0", name: "1.0", actor: "test" });
+    createGoal(root, { title: "未完成目标", version: "v1.0", actor: "test" });
+    releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    setVersionStatus(root, { slug: "v1.0", status: "active", actor: "human:gui", confirmed: true });
+    const result = releaseVersion(root, { slug: "v1.0", actor: "human:负责人" });
+    assert.equal(result.ok, false);
+    if (result.ok) throw new Error("应被未 delivered 目标阻塞");
+    assert.equal(result.blocking.length, 1);
+    assert.equal(versionDetail(root, "v1.0").status, "active");
   });
 });
 

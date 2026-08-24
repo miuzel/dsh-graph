@@ -478,12 +478,13 @@ export function releaseVersion(
 /** 合法的 setVersionStatus 目标状态（不含 released——released 只能经 releaseVersion）。 */
 const VERSION_STATUS_ALLOWLIST = ["planning", "active"] as const;
 
-/** 设置版本状态（working → active / active → planning 等）。
+/** 设置版本状态（working -> active / active -> planning 等）。
  *  released 只能经 releaseVersion 路径，此函数拒绝。
- *  事件先行：先写 version.status_changed 事件，再更新 version.md。 */
+ *  事件先行：先写 version.status_changed 事件，再更新 version.md。
+ *  released->active 例外：需要 confirmed=true + human/supervisor actor。 */
 export function setVersionStatus(
   root: string,
-  opts: { slug: string; status: string; actor: string },
+  opts: { slug: string; status: string; actor: string; confirmed?: boolean },
 ): void {
   const slug = opts.slug.trim();
   if (!slug) throw new GraphError("版本 slug 不能为空");
@@ -493,7 +494,7 @@ export function setVersionStatus(
   if (newStatus === "released") {
     throw new GraphError("不能通过 setVersionStatus 直接设为 released——请使用 releaseVersion（含发布前置校验）");
   }
-  // allowlist：只接受合法的非 released 状态
+  // allowlist：只接受合法的非 released 状态（released→active 例外路径绕过 allowlist）
   if (!(VERSION_STATUS_ALLOWLIST as readonly string[]).includes(newStatus)) {
     throw new GraphError(`非法版本状态：${newStatus}（合法值：${(VERSION_STATUS_ALLOWLIST as readonly string[]).join(", ")}）`);
   }
@@ -505,9 +506,17 @@ export function setVersionStatus(
   const oldStatus = meta.status;
   if (oldStatus === newStatus) return; // 幂等
 
-  // released 是终态——不允许回退到 planning/active
+  // released→active 例外路径：需要确认标志和可信 actor
   if (oldStatus === "released") {
-    throw new GraphError("版本已 released，不能回退到其他状态——released 是终态");
+    if (newStatus !== "active") {
+      throw new GraphError("版本已 released，只能恢复为 active，不能回退到其他状态");
+    }
+    if (!opts.confirmed) {
+      throw new GraphError("恢复 released 版本需要明确确认（confirmed=true）");
+    }
+    if (!opts.actor.startsWith("human:") && !opts.actor.startsWith("supervisor:")) {
+      throw new GraphError(`恢复 released 版本仅限负责人确认（actor=${opts.actor}），执行子代理不能操作`);
+    }
   }
 
   // R-02：事件先行

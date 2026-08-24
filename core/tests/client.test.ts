@@ -627,3 +627,16 @@ test("g-154 编译产物契约：dsh-graph-host/core/ops.js goalCards 输出含 
     /if\s*\(c\.cardFile\)/.test(compiledOps),
     "编译 ops.js: goalDetail 使用 c.cardFile 读取全文");
 });
+
+// g-160：released 版本详情入口、受控恢复与刷新契约
+ test("g-160 client 源契约：released 详情入口和二次确认恢复", () => {
+  const source = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+  assert.match(source, /title:\s*"打开版本详情"/);
+  assert.match(source, /key:\s*"rel-"\s*\+\s*v\.slug[\s\S]*?onClick:\s*\(\)\s*=>\s*\{\s*setOpenReleased/);
+  assert.match(source, /versionDetailTarget\.status === "released"/);
+  assert.match(source, /撤销发布状态/);
+  assert.match(source, /status:\s*"active",\s*confirmed:\s*true/);
+  assert.match(source, /loadVersionDetail\(versionDetailTarget\.slug\)/);
+  assert.match(source, /load\(\)/);
+});

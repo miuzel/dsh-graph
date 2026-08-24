@@ -64,6 +64,7 @@
         setVersionDetailLoading(true);
         setVersionDetailData(null);
         setVersionActionNote(null);
+        setReactivateConfirm(false);
         fetch(graphUrl(`/api/dsh-graph/version-detail?slug=${encodeURIComponent(slug)}`))
           .then((r) => r.json())
           .then((data) => {
@@ -76,6 +77,9 @@
             setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
           });
       };
+      // g-160：恢复 released 版本为 active 的状态
+      const [reactivatingVersion, setReactivatingVersion] = React.useState(false);
+      const [reactivateConfirm, setReactivateConfirm] = React.useState(false);
 
       // g-77647351：加载排序
       const loadOrder = () => {
@@ -625,9 +629,26 @@
         const open = !!openReleased[v.slug];
         return [
           h("div", {
-            key: "rel-" + v.slug, style: S.collapsed, className: "dg-collapsed", title: "点击展开/收起",
-            onClick: () => setOpenReleased({ ...openReleased, [v.slug]: !open }),
-          }, `${open ? "▾" : "▸"} ${v.name} ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`),
+            key: "rel-" + v.slug, style: { ...S.collapsed, cursor: "pointer" }, className: "dg-collapsed",
+            title: "点击展开/收起；点击版本名称打开详情",
+            onClick: () => { setOpenReleased({ ...openReleased, [v.slug]: !open }); },
+          },
+            h("span", {
+              style: { cursor: "pointer" },
+              onClick: (e) => { e.stopPropagation(); setOpenReleased({ ...openReleased, [v.slug]: !open }); },
+            }, `${open ? "▾" : "▸"}`),
+            " ",
+            h("span", {
+              style: { cursor: "pointer", textDecoration: "underline dotted" },
+              onClick: (e) => {
+                e.stopPropagation();
+                setVersionDetailTarget({ slug: v.slug, name: v.name, status: v.status, goals_count: v.goals.length });
+                loadVersionDetail(v.slug);
+              },
+              title: "打开版本详情",
+            }, `${v.name}`),
+            ` ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`
+          ),
           open ? h("div", { key: "relx-" + v.slug, style: S.grid },
             ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx)) : null,
         ];
@@ -1060,6 +1081,57 @@
                           });
                         },
                       }, "🚀 标记为 released")
+                    : null,
+                  // g-160: 恢复 released 版本为 active —— 仅 released 时显示
+                  versionDetailTarget.status === "released"
+                    ? reactivateConfirm
+                      ? h("div", { style: { padding: "8px 12px", borderRadius: 6, background: "rgba(255,152,0,.15)", border: "1px solid rgba(255,152,0,.4)", fontSize: 12, lineHeight: 1.5 } },
+                          h("div", { style: { fontWeight: 600, marginBottom: 4, color: "#ff9800" } }, "⚠️ 确认恢复版本？"),
+                          h("div", { style: { marginBottom: 8, opacity: 0.85 } }, `恢复 ${versionDetailTarget.slug} 将撤销发布状态，使版本重新进入 active（进行中）。已交付的目标不受影响，再次发布仍需满足全部目标 delivered 等校验。`),
+                          h("div", { style: { display: "flex", gap: 8 } },
+                            h("button", {
+                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff9800", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
+                              className: "dg-btn",
+                              disabled: reactivatingVersion,
+                              onClick: () => {
+                                setReactivatingVersion(true);
+                                setVersionActionNote(null);
+                                fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                                  method: "POST",
+                                  headers: { "content-type": "application/json" },
+                                  body: JSON.stringify({ slug: versionDetailTarget.slug, status: "active", confirmed: true }),
+                                }).then((r) => r.json()).then((data) => {
+                                  setReactivatingVersion(false);
+                                  setReactivateConfirm(false);
+                                  if (data.ok) {
+                                    setVersionActionNote("✅ 版本已恢复为 active");
+                                    setVersionDetailTarget((prev) => prev ? { ...prev, status: "active" } : prev);
+                                    loadVersionDetail(versionDetailTarget.slug);
+                                    load();
+                                  } else {
+                                    setVersionActionNote("⚠️ 恢复失败：" + (data.error || "未知错误"));
+                                  }
+                                }).catch((e) => {
+                                  setReactivatingVersion(false);
+                                  setReactivateConfirm(false);
+                                  setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                                });
+                              },
+                            }, "确认恢复为 active"),
+                            h("button", {
+                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
+                              className: "dg-btn",
+                              disabled: reactivatingVersion,
+                              onClick: () => { setReactivateConfirm(false); setVersionActionNote(null); },
+                            }, "取消"),
+                          )
+                        )
+                      : h("button", {
+                          style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff9800", background: "rgba(255,152,0,.08)", border: "1px solid rgba(255,152,0,.3)" },
+                          className: "dg-btn",
+                          disabled: versionActionLoading,
+                          onClick: () => { setReactivateConfirm(true); setVersionActionNote(null); },
+                        }, "♻️ 恢复为 active")
                     : null,
                   // 重命名
                   h("button", {
