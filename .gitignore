@@ -5,8 +5,10 @@ probe/
 
 core-dist/
 
-# g-129/core：编译产物不入 git——来源是 core/*.ts（唯一事实源），发布时由 prepack 用 sync-core 生成进包
-dsh-graph-host/core/*.js
+# 从源码直接安装（github:owner/repo 等）时 dsh 不会执行 prepack，所以
+# dsh-graph-host/core/*.js 编译产物必须随源码跟踪，否则插件加载缺 ops/events 等模块。
+# 唯一事实源仍是 core/*.ts；改 core 后运行 scripts/sync-core.sh 并把产物一起提交。
+# （npm 发布仍走 prepack sync-core 生成，属正常。）
 
 # g-149：看板数据由 .dsh-graph 内层 Git 仓库独立管理；父代码仓库不再跟踪。
 /.dsh-graph/

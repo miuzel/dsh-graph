@@ -2,6 +2,16 @@
 
 ## Generated File Policy
 
+### `dsh-graph-host/core/*.js` (compiled core)
+
+These are compiled from `core/*.ts` and are **tracked in git** — GitHub source installs
+(`github:owner/repo`) do not run prepack, so the plugin would fail to load without them.
+
+- `core/*.ts` is the single source of truth. Never edit `dsh-graph-host/core/*.js` by hand.
+- After changing `core/*.ts`, run `bash scripts/sync-core.sh` and **commit the regenerated
+  `dsh-graph-host/core/*.js` together with the source**.
+- `core-dist/` is a build intermediate and stays gitignored.
+
 ### `dsh-graph-host/lib/client.js`
 
 This file is **auto-generated** and must **NOT** be edited directly.
