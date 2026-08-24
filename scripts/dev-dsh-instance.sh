@@ -16,6 +16,9 @@
 #      绑定到本地 dsh-graph-host（link:），其余 bundle 复用 web 壳的最小集
 #      （@deepseek-ai/dsh-base + @deepseek-ai/dsh-web-app + dsh-graph）。
 #   2. 在 <PORT>（默认 3082，避开已被占用的 3081）上拉起 `dsh --profile <PROFILE> --port <PORT>`。
+#      测试实例跑在**独立 DSH_HOME**（默认 /tmp/dsh-graph-test-home）下，与主
+#      ~/.dsh 的 sessions/storages 完全隔离 —— 两个 web 实例同时启动不再抢写同一份
+#      session log（此前用 ~/.dsh 做测试 home 会写坏 session log，根因已修复）。
 #   3. 可选：把主 web profile 的 dsh-graph 从本地 link 切回已发布的 `^0.6.1`。
 #
 # 用法
@@ -28,7 +31,8 @@
 #   scripts/dev-dsh-instance.sh status          # 打印两个 profile 的 dsh-graph 依赖与端口占用
 #
 # 环境变量（均可覆盖，脚本内已给合理默认值）
-#   DSH_HOME=$HOME/.dsh          profiles 根
+#   DSH_HOME=$HOME/.dsh           主 dsh 的家（只用于切换主 profile，测试实例不碰它）
+#   TEST_HOME=/tmp/dsh-graph-test-home   测试实例的**独立** DSH_HOME（隔离 sessions/storages）
 #   PROFILE=dsh-graph-test       测试 profile 名
 #   PORT=3082                    测试实例端口（必须 ≠ 3080）
 #   CWD=…                        测试实例的工作目录（决定 .dsh-graph 数据落在哪）
@@ -43,17 +47,22 @@ SELF="${BASH_SOURCE[0]}"
 REPO_ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 
 # ---- 常量 / 可覆盖默认值 ----
+# 主 dsh 的家：只作「主 profile 切换」的参考 && 读取下，**绝不**用作测试实例的 DSH_HOME。
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
+# 测试实例的独立 DSH_HOME：和主 ~/.dsh 分开，避免两个 web 实例同时启动时写坏同一份
+# sessions/（用户反馈的根因）。默认放 /tmp（可覆盖；profile 由 setup 幂等重建）。
+TEST_HOME="${TEST_HOME:-/tmp/dsh-graph-test-home}"
 PROFILE="${PROFILE:-dsh-graph-test}"
 PORT="${PORT:-3082}"
 HOST_DIR="${HOST_DIR:-$REPO_ROOT/dsh-graph-host}"
 PUBLISHED_VER="${PUBLISHED_VER:-^0.6.1}"
 MAIN_PROFILE="${MAIN_PROFILE:-web}"
-# 测试实例的工作目录：默认放在 $DSH_HOME 下、非 git 仓库，确保 .dsh-graph 完全独立，
-# 不会和主 GUI/代码仓库的那份发生 g-149 canonicalize 合并。
-CWD="${CWD:-$DSH_HOME/dev-workspace/$PROFILE}"
+# 测试实例的工作目录：决定 .dsh-graph 数据落点。默认放在测试 home 下、非 git 仓库，
+# 确保数据完全独立，不会和主 GUI/代码仓库的那份发生 g-149 canonicalize 合并。
+CWD="${CWD:-$TEST_HOME/workspace/$PROFILE}"
 
-PROFILE_DIR="$DSH_HOME/profiles/$PROFILE"
+# 测试 profile 目录：位于**独立**的测试 home 下；主 profile 目录仍指向主 ~/.dsh。
+PROFILE_DIR="$TEST_HOME/profiles/$PROFILE"
 MAIN_DIR="$DSH_HOME/profiles/$MAIN_PROFILE"
 
 # ---- 基建检查 ----
@@ -84,7 +93,7 @@ show_dep() { # $1 = profile dir
   fi
 }
 
-# ---- setup：写入测试 profile 的全部文件并安装/对账 ----
+# ---- setup：写入测试 profile 的全部文件并安装/对账（都在独立 TEST_HOME 下） ----
 setup() {
   echo "==> 准备测试 profile：$PROFILE_DIR"
   mkdir -p "$PROFILE_DIR" "$CWD"
@@ -136,8 +145,9 @@ WS
   printf 'minimum-release-age=0\n' > "$PROFILE_DIR/.npmrc"
 
   # 安装并把 bundle 层与安装态对账（base/web-app 来自 dsh 安装，无需 pnpm 装）。
-  echo "==> dsh plugin --profile $PROFILE install"
-  dsh plugin --profile "$PROFILE" install
+  # 通过 DSH_HOME=$TEST_HOME 把 profile 落在独立的测试 home 下，隔离 sessions/storages。
+  echo "==> DSH_HOME=$TEST_HOME dsh plugin --profile $PROFILE install"
+  DSH_HOME="$TEST_HOME" dsh plugin --profile "$PROFILE" install
 
   echo "==> 测试 profile 就绪"
   show_dep "$PROFILE_DIR"
@@ -162,17 +172,19 @@ run() {
   if [ "$PORT" = "3080" ]; then
     die "--port 不能是 3080（那是主 dsh）。请另选，例如 --port 3082"
   fi
-  echo "==> 启动测试 dsh：--profile $PROFILE --port $PORT"
+  echo "==> 启动测试 dsh：DSH_HOME=$TEST_HOME dsh --profile $PROFILE --port $PORT"
   echo "    cwd=$CWD（.dsh-graph 数据落在 $CWD/.dsh-graph）"
   echo "    浏览器地址：http://127.0.0.1:$PORT"
   echo "    （默认 --no-open；需要自动开浏览器请追加 --open）"
+  echo "    提示：测试实例使用独立 DSH_HOME=$TEST_HOME，与主 $MAIN_PROFILE（$DSH_HOME）隔离，"
+  echo "          不会再和主实例抢写同一份 sessions/。"
   mkdir -p "$CWD"
   # 把解析后的参数透传给 web 应用（如 --open / --trusted-host …）。
   cd "$CWD"
   local launch_args=()
   [ -n "$host" ] && launch_args+=(--host "$host")
   launch_args+=(--port "$PORT" "${app_args[@]}")
-  exec dsh --profile "$PROFILE" "${launch_args[@]}"
+  exec env DSH_HOME="$TEST_HOME" dsh --profile "$PROFILE" "${launch_args[@]}"
 }
 
 # ---- 修改一个 profile 的 dsh-graph 依赖到给定 spec ----
