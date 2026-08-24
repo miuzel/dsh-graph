@@ -2,6 +2,16 @@
  * 目标文件的解析与写回：Markdown 正文 + JSON frontmatter。
  * frontmatter 采用 JSON（YAML 的子集），Node 标准库直接可解析（R-01 零依赖）。
  */
+// g-158：四种固定类型、默认 task、非法值回退 task
+export const GOAL_TYPES = ["feature", "bug", "task", "improvement"];
+export const DEFAULT_GOAL_TYPE = "task";
+/** 将任意值规范化为合法类型；非法/空值回退 task（不抛错）。 */
+export function normalizeGoalType(raw) {
+    const s = String(raw ?? "").trim().toLowerCase();
+    if (GOAL_TYPES.includes(s))
+        return s;
+    return DEFAULT_GOAL_TYPE;
+}
 const DELIM = "---";
 /** 解析 Markdown 文档：第一个 --- 与第二个 --- 之间为 JSON frontmatter。 */
 export function parseDoc(text) {

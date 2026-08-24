@@ -8,6 +8,7 @@
       const [newGoalTitle, setNewGoalTitle] = React.useState("");
       const [newGoalVersion, setNewGoalVersion] = React.useState("");
       const [newGoalDesc, setNewGoalDesc] = React.useState("");
+      const [newGoalType, setNewGoalType] = React.useState("task"); // g-158
       const [createNote, setCreateNote] = React.useState(null);
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
@@ -863,6 +864,8 @@
           const body = { title: t };
           if (newGoalVersion.trim()) body.version = newGoalVersion.trim();
           if (newGoalDesc.trim()) body.description = newGoalDesc.trim();
+          // g-158：新建目标类型透传（默认 task）
+          body.type = normalizeGoalType(newGoalType);
           const r = await fetch(graphUrl("/api/dsh-graph/create-goal"), {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -873,6 +876,7 @@
             setCreateNote("✅ 已创建目标：" + data.goal);
             setNewGoalTitle("");
             setNewGoalVersion("");
+            setNewGoalType("task"); // g-158 重置为新目标默认类型
             load(); // 刷新看板
             setTimeout(() => setShowCreateGoal(false), 1500);
           } else {
@@ -1104,6 +1108,24 @@
                     h("option", { value: "standalone", style: { background: "#2a2b31", color: "#e6e6e6" } }, "独立目标"),
                     // 版本选项来自 board 数据的 versions 列表
                     ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug, style: { background: "#2a2b31", color: "#e6e6e6" } }, v.slug)))),
+                h("div", { style: { marginBottom: 8 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "类型（默认 task）"),
+                  h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+                    ...GOAL_TYPES.map((t) =>
+                      h("button", {
+                        key: t,
+                        style: {
+                          display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11,
+                          padding: "3px 8px", cursor: "pointer", borderRadius: 4,
+                          border: "1px solid " + (t === newGoalType ? goalTypeColor(t) : "rgba(128,128,128,.4)"),
+                          background: t === newGoalType ? goalTypeColor(t) : "rgba(128,128,128,.1)",
+                          color: t === newGoalType ? "#fff" : "inherit",
+                          fontWeight: t === newGoalType ? 700 : 400,
+                        },
+                        className: "dg-btn",
+                        title: GOAL_TYPE_LABELS[t],
+                        onClick: () => setNewGoalType(t),
+                      }, GOAL_TYPE_ABBREV[t], h("span", null, GOAL_TYPE_LABELS[t]))))),
                 h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13 },

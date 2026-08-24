@@ -97,7 +97,8 @@ test("g-109 写端点全部注册（accept/edit-description/add-card/start-colle
   const { routes } = setup();
   for (const p of ["/api/dsh-graph/accept", "/api/dsh-graph/resolve-accept",
     "/api/dsh-graph/edit-description", "/api/dsh-graph/add-card",
-    "/api/dsh-graph/start-collection", "/api/dsh-graph/start-execution"]) {
+    "/api/dsh-graph/start-collection", "/api/dsh-graph/start-execution",
+    "/api/dsh-graph/set-goal-type", "/api/dsh-graph/create-goal"]) {
     assert.ok(routes.has(p), `${p} 已注册`);
   }
 });
@@ -626,4 +627,45 @@ test("g-154 编译产物契约：dsh-graph-host/core/ops.js goalCards 输出含 
   assert.ok(
     /if\s*\(c\.cardFile\)/.test(compiledOps),
     "编译 ops.js: goalDetail 使用 c.cardFile 读取全文");
+});
+
+// g-158：REST 端到端——create-goal type 透传 + set-goal-type 事件
+test("g-158 create-goal REST 透传 type（默认 task/指定/非法回退）", async () => {
+  const { root, routes } = setup();
+  // 指定 type
+  const r1 = await post(routes, "/api/dsh-graph/create-goal", { title: "Feature", type: "feature" });
+  assert.equal(r1.code, 200);
+  const f = findGoalFile(root, r1.body.goal);
+  assert.equal(loadGoal(f).meta.type, "feature", "create-goal 应持久化指定 type");
+  // 缺省 type → task
+  const r2 = await post(routes, "/api/dsh-graph/create-goal", { title: "默认" });
+  const f2 = findGoalFile(root, r2.body.goal);
+  assert.equal(loadGoal(f2).meta.type, "task", "缺省 type 应为 task");
+  // 非法 type → task
+  const r3 = await post(routes, "/api/dsh-graph/create-goal", { title: "非法", type: "nope" });
+  const f3 = findGoalFile(root, r3.body.goal);
+  assert.equal(loadGoal(f3).meta.type, "task", "非法 type 应回退 task");
+});
+
+test("g-158 set-goal-type REST：更新 type + 记 goal.type_changed 事件 + no-op", async () => {
+  const { root, routes, goalId } = setup();
+  const before = loadGoal(findGoalFile(root, goalId));
+  assert.equal(before.meta.type, "task");
+  const r = await post(routes, "/api/dsh-graph/set-goal-type", { goal: goalId, type: "bug" });
+  assert.equal(r.code, 200);
+  assert.equal(r.body.ok, true);
+  assert.equal(r.body.old_type, "task");
+  assert.equal(r.body.new_type, "bug");
+  assert.equal(loadGoal(findGoalFile(root, goalId)).meta.type, "bug");
+  const ev = readEvents(root).find((e) => e.event === "goal.type_changed" && e.goal === goalId);
+  assert.ok(ev, "应记录 goal.type_changed 事件");
+  assert.equal(ev.details.old_type, "task");
+  assert.equal(ev.details.new_type, "bug");
+  // no-op：相同类型不写事件
+  const beforeCount = readEvents(root).filter((e) => e.event === "goal.type_changed").length;
+  const r2 = await post(routes, "/api/dsh-graph/set-goal-type", { goal: goalId, type: "bug" });
+  assert.equal(r2.body.old_type, "bug");
+  assert.equal(r2.body.new_type, "bug");
+  const afterCount = readEvents(root).filter((e) => e.event === "goal.type_changed").length;
+  assert.equal(afterCount, beforeCount, "相同类型 no-op 不追加事件");
 });

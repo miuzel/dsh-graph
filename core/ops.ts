@@ -20,7 +20,9 @@ import {
   sectionText,
   criteriaPresent,
   countCriteria,
+  normalizeGoalType,
   type GoalDoc,
+  type GoalType,
 } from "./model.ts";
 import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso, type GraphEvent } from "./events.ts";
 import { GraphError, STATUSES, assertTransition } from "./machine.ts";
@@ -464,7 +466,7 @@ function nextGoalSeq(root: string): string {
 
 export function createGoal(
   root: string,
-  opts: { title: string; version?: string; description?: string; actor: string },
+  opts: { title: string; version?: string; description?: string; type?: string; actor: string },
 ): string {
   const id = nextGoalSeq(root);
   // g-137：带 version（非 standalone）→ planning；backlog/standalone → draft
@@ -474,6 +476,7 @@ export function createGoal(
     id,
     title: opts.title,
     status: initialStatus,
+    type: normalizeGoalType(opts.type),
     blocked_reason: null,
     created_at: nowIso(),
     created_by: opts.actor,
@@ -1979,6 +1982,8 @@ export interface BoardGoal {
   id: string;
   title: string;
   status: string;
+  /** g-158：目标类型（feature/bug/task/improvement），默认 task */
+  type: GoalType;
   status_line: string | null;
   reviewer: string | null;
   depends_on: string[];
@@ -2087,6 +2092,7 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
       id: String(meta.id),
       title: String(meta.title ?? meta.id),
       status: String(meta.status ?? "unknown"),
+      type: normalizeGoalType(meta.type),
       status_line: statusLine,
       reviewer: meta.review?.reviewer ?? null,
       depends_on: (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((d: any) =>
@@ -2481,6 +2487,29 @@ export function renameGoal(
     details: { old_title: oldTitle, new_title: newTitle },
   });
   return { old_title: oldTitle, new_title: newTitle };
+}
+
+/** g-158：设置目标类型（feature/bug/task/improvement），记 goal.type_changed 事件。
+ *  非法类型安全回退 task；相同类型视为 no-op（不记事件）；类型变更不改变生命周期语义。 */
+export function setGoalType(
+  root: string,
+  id: string,
+  opts: { type: string; actor: string },
+): { old_type: GoalType; new_type: GoalType } {
+  const newType = normalizeGoalType(opts.type);
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  const oldType = normalizeGoalType(doc.meta.type);
+  if (oldType === newType) return { old_type: oldType, new_type: newType };
+  doc.meta.type = newType;
+  saveGoal(file, doc);
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "goal.type_changed",
+    goal: id,
+    details: { old_type: oldType, new_type: newType },
+  });
+  return { old_type: oldType, new_type: newType };
 }
 
 /** 主管复核接受请求（兼容旧名，内部转发 requestAcceptReview / resolveAccept）。 */

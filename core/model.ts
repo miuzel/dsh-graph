@@ -3,6 +3,18 @@
  * frontmatter 采用 JSON（YAML 的子集），Node 标准库直接可解析（R-01 零依赖）。
  */
 
+// g-158：四种固定类型、默认 task、非法值回退 task
+export const GOAL_TYPES = ["feature", "bug", "task", "improvement"] as const;
+export type GoalType = (typeof GOAL_TYPES)[number];
+export const DEFAULT_GOAL_TYPE: GoalType = "task";
+
+/** 将任意值规范化为合法类型；非法/空值回退 task（不抛错）。 */
+export function normalizeGoalType(raw: unknown): GoalType {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if ((GOAL_TYPES as readonly string[]).includes(s)) return s as GoalType;
+  return DEFAULT_GOAL_TYPE;
+}
+
 export interface GoalDoc {
   meta: Record<string, any>;
   body: string;

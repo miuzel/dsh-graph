@@ -104,37 +104,8 @@ window.__ModuleLoader__.load({
       .dg-sub { transition: background .12s ease; }
       .dg-sub:hover { background: rgba(58,166,117,.22); }
       .dg-collapsed:hover { background: rgba(128,128,128,.14); }
-      .dg-deliver-collapsed:hover { background: rgba(128,128,128,.14); }
-      .dg-blocked-collapsed:hover { background: rgba(128,128,128,.14); }
-      .dg-btn { transition: background .12s ease, border-color .12s ease, filter .12s ease; }
-      .dg-btn:hover { filter: brightness(1.20); background: rgba(128,128,128,.25); }
-      .dg-btn:active { filter: brightness(0.95); }
-      .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
-      /* g-153：主要操作按钮 hover/active/disabled */
-      .dg-btn-primary { transition: background .12s ease, border-color .12s ease, filter .12s ease; }
-      .dg-btn-primary:hover { background: rgba(76,141,255,.30); border-color: rgba(76,141,255,.55); }
-      .dg-btn-primary:active { background: rgba(76,141,255,.40); }
-      .dg-btn-primary:disabled { opacity: 0.45; cursor: default; }
-      /* g-153：危险操作按钮 hover/active/disabled */
-      .dg-btn-danger { transition: background .12s ease, border-color .12s ease, filter .12s ease; }
-      .dg-btn-danger:hover { background: rgba(214,102,102,.30); border-color: rgba(214,102,102,.50); }
-      .dg-btn-danger:active { background: rgba(214,102,102,.42); }
-      .dg-btn-danger:disabled { opacity: 0.45; cursor: default; }
-      /* g-153：接受/确认操作按钮 hover/active/disabled */
-      .dg-btn-accept { transition: background .12s ease, border-color .12s ease, filter .12s ease; }
-      .dg-btn-accept:hover { background: rgba(58,166,117,.30); border-color: rgba(58,166,117,.55); }
-      .dg-btn-accept:active { background: rgba(58,166,117,.42); }
-      .dg-btn-accept:disabled { opacity: 0.45; cursor: default; }
-      /* g-153：下拉菜单/选择控件暗色主题 */
-      .dg-select {
-        font-size: 12px; padding: 3px 8px; cursor: pointer;
-        background: rgba(30,31,36,.92); color: #e6e6e6;
-        border: 1px solid rgba(128,128,128,.35); border-radius: 4px;
-        transition: border-color .12s ease;
-      }
-      .dg-select:hover { border-color: rgba(128,128,128,.55); }
-      .dg-select:focus { border-color: rgba(76,141,255,.55); outline: none; }
-      .dg-select option { background: #222328; color: #e6e6e6; }
+      .dg-btn { transition: filter .12s ease; }
+      .dg-btn:hover { filter: brightness(1.25); }
       /* g-125 fb3：三角展开/收起按钮——暗底纹、窄宽度，不占整列、不像播放按钮 */
       .dg-chevron {
         background: rgba(128,128,128,.18);
@@ -272,37 +243,7 @@ window.__ModuleLoader__.load({
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
-      // g-153：共享按钮样式 token——暗色主题下确保可读性与层级
-      btn: {
-        fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(128,128,128,.15)", color: "#e6e6e6",
-        border: "1px solid rgba(128,128,128,.30)", borderRadius: 4,
-      },
-      // g-153：主要操作按钮（蓝底高亮）
-      btnPrimary: {
-        fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(76,141,255,.18)", color: "#8ab4ff",
-        border: "1px solid rgba(76,141,255,.40)", borderRadius: 4,
-      },
-      // g-153：危险操作按钮（红底红字）
-      btnDanger: {
-        fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(214,102,102,.18)", color: "#f08080",
-        border: "1px solid rgba(214,102,102,.35)", borderRadius: 4,
-      },
-      // g-153：接受/确认操作按钮（绿底绿字）
-      btnAccept: {
-        fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(58,166,117,.18)", color: "#6ee7a0",
-        border: "1px solid rgba(58,166,117,.40)", borderRadius: 4,
-      },
-      // g-153：下拉菜单/选择控件样式 token
-      select: {
-        fontSize: 12, padding: "3px 8px", cursor: "pointer",
-        background: "rgba(30,31,36,.92)", color: "#e6e6e6",
-        border: "1px solid rgba(128,128,128,.35)", borderRadius: 4,
-      },
-      selectOption: { background: "#222328", color: "#e6e6e6" },
+      btn: { fontSize: 12, padding: "2px 10px", cursor: "pointer" },
       close: { float: "right", cursor: "pointer", opacity: 0.7, fontSize: 16 },
       // g-107 会话内嵌实时区
       liveStrip: {
@@ -792,8 +733,13 @@ window.__ModuleLoader__.load({
         setBusy(false);
       };
 
-      const selStyle = S.select;
-      const optStyle = S.selectOption;
+      const selStyle = {
+        fontSize: 12, padding: "2px 6px", cursor: "pointer", maxWidth: 160,
+        background: "rgba(128,128,128,.10)", color: "inherit",
+        border: "1px solid rgba(128,128,128,.35)", borderRadius: 4,
+      };
+      // 深色主题：浏览器原生 option 默认白底，下拉展开时突兀 → 显式深色底
+      const optStyle = { background: "#2a2b31", color: "#e6e6e6" };
       const defP = opts?.default?.provider ?? "";
       const defM = opts?.default?.model ?? "";
       // 无模型目录（llm 服务不可用）：只显示默认模型 + 提示，仍可重新派发（走 project.yaml 默认）
@@ -807,14 +753,12 @@ window.__ModuleLoader__.load({
             : [
                 h("select", {
                   style: selStyle, value: provider,
-                  className: "dg-select",
                   title: "LLM provider（缺省 project.yaml executor.provider）",
                   onChange: (e) => { setProvider(e.target.value); setModel(""); },
                 },
                   groups.map((g) => h("option", { key: g.id, value: g.id, style: optStyle }, g.name ?? g.id))),
                 h("select", {
                   style: selStyle, value: model,
-                  className: "dg-select",
                   disabled: !modelChoices.length,
                   title: "模型（缺省 project.yaml executor.model）",
                   onChange: (e) => setModel(e.target.value),
@@ -971,9 +915,9 @@ window.__ModuleLoader__.load({
       const pendingDeps = deps.filter((d) => goalStatus?.[d] !== "delivered");
       const metDeps = deps.filter((d) => goalStatus?.[d] === "delivered");
       const hasDep = pendingDeps.length > 0;
-      // g-158：类型色覆盖默认左侧色条（优先级：blocked > dep > type）
+      // g-158：类型色覆盖默认左侧色条（blocked/dep 语义用状态文本/标记表达，左栏始终类型色）
       const tColor = goalTypeColor(g.type);
-      const borderColor = tColor; // g-158：始终使用类型色，blocked/dep 语义用状态文本/标记表达
+      const borderColor = tColor;
       const style = {
         ...S.goalCard,
         ...(hasDep ? S.depCard : {}),
@@ -981,7 +925,7 @@ window.__ModuleLoader__.load({
         borderLeft: `5px solid ${borderColor}`,
       };
       const badges = [];
-      // g-158：类型标记 badge（F/B/T/I + tooltip）
+      // g-158：类型标记 badge（F/B/T/I + tooltip）——标题左侧，颜色与左栏/弹窗同源
       const aType = normalizeGoalType(g.type);
       const tBadge = h("span", {
         key: "type-badge",
@@ -1335,8 +1279,8 @@ window.__ModuleLoader__.load({
                     }),
                     h("div", { style: { display: "flex", gap: 6 } },
                       h("button", {
-                        style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
-                        className: "dg-btn-danger",
+                        style: { ...S.btn, fontSize: 11, padding: "2px 8px", background: deleteIdInput.trim() === card.id ? "rgba(214,102,102,.3)" : undefined },
+                        className: "dg-btn",
                         disabled: deleteIdInput.trim() !== card.id,
                         onClick: async () => {
                           try {
@@ -1370,8 +1314,8 @@ window.__ModuleLoader__.load({
                   )
                 : h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
                     h("button", {
-                      style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
-                      className: "dg-btn-danger",
+                      style: { ...S.btn, fontSize: 11, padding: "2px 8px", background: "rgba(214,102,102,.2)" },
+                      className: "dg-btn",
                       title: "删除此卡片（需输入卡片 id 确认）",
                       onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
                     }, "🗑 删除卡片")),
@@ -1644,7 +1588,7 @@ window.__ModuleLoader__.load({
         h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
           acceptState === "none"
             ? h("button", {
-                style: { ...S.btnAccept, padding: "4px 12px", fontSize: 13 }, className: "dg-btn-accept",
+                style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn dg-accept",
                 disabled: loading, onClick: doAccept,
               }, "✅ 接受")
             : acceptState === "pending"
@@ -1677,7 +1621,7 @@ window.__ModuleLoader__.load({
                     }),
                     h("div", { style: { display: "flex", gap: 6 } },
                       h("button", {
-                        style: { ...S.btnAccept, fontSize: 12 }, className: "dg-btn-accept",
+                        style: { ...S.btn, fontSize: 12 }, className: "dg-btn dg-accept",
                         disabled: loading, onClick: doForceAccept,
                       }, "确认强制接受"),
                       h("button", {
@@ -1686,7 +1630,7 @@ window.__ModuleLoader__.load({
                       }, "取消")),
                   ]
                 : h("button", {
-                    style: { ...S.btnAccept, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn-accept",
+                    style: { ...S.btn, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn dg-accept",
                     onClick: () => setForceMode(true),
                   }, "强制接受（跳过复核）"),
             )
@@ -2262,14 +2206,14 @@ window.__ModuleLoader__.load({
               h("select", {
                 value: logFilter,
                 onChange: (e) => setLogFilter(e.target.value),
-                style: S.select,
-                className: "dg-select",
+                style: { fontSize: 12, padding: "2px 6px", cursor: "pointer",
+                         background: "rgba(128,128,128,.10)", color: "inherit",
+                         border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
               },
                 h("option", { value: "" }, "全部类型"), ...typeOptions),
               h("button", {
                 onClick: () => setLogSort(logSort === "asc" ? "desc" : "asc"),
-                style: { ...S.btn },
-                className: "dg-btn",
+                style: { ...S.btn, border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
               }, logSort === "asc" ? "↑ 时间正序" : "↓ 时间倒序")),
             // 事件日志表格：时间 / 事件 / 执行者
             h("table", { key: "tbl", style: { width: "100%", borderCollapse: "collapse" } },
@@ -2405,7 +2349,7 @@ window.__ModuleLoader__.load({
         }
       };
 
-      // g-158：设置目标类型
+      // g-158：设置目标类型（只改 type，不改变量生命周期语义）
       const doSetType = async (newType) => {
         setTypeNote(null);
         try {
@@ -2422,7 +2366,7 @@ window.__ModuleLoader__.load({
             const goalRes = await fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }));
             const goalData = await goalRes.json();
             if (!goalData.error) setState({ loading: false, data: goalData });
-            if (props.onRenamed) props.onRenamed(); // 刷新看板
+            if (props.onRenamed) props.onRenamed(props.id, props.title); // 刷新看板（类型变化反映到卡片色）
           } else {
             setTypeNote("⚠️ 设置失败：" + (data.error || "未知错误"));
           }
@@ -2509,7 +2453,7 @@ window.__ModuleLoader__.load({
         }
       };
 
-      // g-158：当前目标类型（从 state.data.meta.type 读取，回退 task）
+      // g-158：当前目标类型（从 state.data.meta.type 读取，回退 task）与类型色
       const currentType = normalizeGoalType(state.data?.meta?.type);
       const currentTypeColor = goalTypeColor(currentType);
 
@@ -2533,7 +2477,7 @@ window.__ModuleLoader__.load({
             }, "取消"),
             renameNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, renameNote) : null)
         : h("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
-            // g-158：类型标记 badge（在标题最左侧，颜色与弹窗顶部边框一致）
+            // g-158：类型标记 badge（标题最左侧，颜色与弹窗顶部边框、卡片左栏同源）
             h("span", {
               style: {
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -2590,7 +2534,7 @@ window.__ModuleLoader__.load({
                 ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
                     h("span", { style: { ...S.meta, fontSize: 11, color: "#d66" } }, "确认删除？"),
                     h("button", {
-                      style: { ...S.btnDanger, fontSize: 11, padding: "1px 6px" }, className: "dg-btn-danger",
+                      style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(214,102,102,.3)" }, className: "dg-btn",
                       title: "确认删除（不可恢复）",
                       onClick: doDelete,
                     }, "🗑 确认"),
@@ -2599,7 +2543,7 @@ window.__ModuleLoader__.load({
                       onClick: () => { setDeleteConfirm(false); setDeleteNote(null); },
                     }, "取消"))
                 : h("button", {
-                    style: { ...S.btnDanger, fontSize: 11, padding: "1px 6px" }, className: "dg-btn-danger",
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(214,102,102,.2)" }, className: "dg-btn",
                     title: "删除目标（仅已归档目标可删除，含卡片/attempts）",
                     onClick: () => { setDeleteConfirm(true); setDeleteNote(null); },
                   }, "🗑 删除"))
@@ -2611,7 +2555,6 @@ window.__ModuleLoader__.load({
       return h(
         "div",
         { style: S.overlay, onClick: props.onClose },
-        // g-158：弹窗顶部边框使用类型色（与卡片左侧色条、标题 badge 同色）
         h("div", { style: { ...S.modal, borderTop: `3px solid ${currentTypeColor}` }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: props.onClose }, "✕"),
           titleEl,
@@ -2666,7 +2609,7 @@ window.__ModuleLoader__.load({
           }),
           h("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
             h("button", {
-              style: { ...S.btnPrimary, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-primary",
+              style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
               disabled: sending, onClick: sendReason,
             }, sending ? "发送中…" : (sent ? "✅ 已发送" : "确认回退")),
             h("button", {
@@ -2787,7 +2730,7 @@ window.__ModuleLoader__.load({
             : null,
           h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
             h("button", {
-              style: { ...S.btnPrimary, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-primary",
+              style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
               disabled: loading, onClick: startExec,
             }, loading ? "处理中…" : (hasChild ? "🔄 重新执行" : "🚀 确认执行")),
             h("button", {
@@ -2837,7 +2780,7 @@ window.__ModuleLoader__.load({
                 }, "↗ 告知主管")
               : null,
             h("button", {
-              style: { ...S.btnAccept, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-accept",
+              style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
               onClick: () => onConfirm(),
             }, "📦 确认交付"),
             h("button", {
@@ -2860,6 +2803,7 @@ window.__ModuleLoader__.load({
       const [newGoalTitle, setNewGoalTitle] = React.useState("");
       const [newGoalVersion, setNewGoalVersion] = React.useState("");
       const [newGoalDesc, setNewGoalDesc] = React.useState("");
+      const [newGoalType, setNewGoalType] = React.useState("task"); // g-158
       const [createNote, setCreateNote] = React.useState(null);
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
@@ -3715,6 +3659,8 @@ window.__ModuleLoader__.load({
           const body = { title: t };
           if (newGoalVersion.trim()) body.version = newGoalVersion.trim();
           if (newGoalDesc.trim()) body.description = newGoalDesc.trim();
+          // g-158：新建目标类型透传（默认 task）
+          body.type = normalizeGoalType(newGoalType);
           const r = await fetch(graphUrl("/api/dsh-graph/create-goal"), {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -3725,6 +3671,7 @@ window.__ModuleLoader__.load({
             setCreateNote("✅ 已创建目标：" + data.goal);
             setNewGoalTitle("");
             setNewGoalVersion("");
+            setNewGoalType("task"); // g-158 重置为新目标默认类型
             load(); // 刷新看板
             setTimeout(() => setShowCreateGoal(false), 1500);
           } else {
@@ -3956,6 +3903,24 @@ window.__ModuleLoader__.load({
                     h("option", { value: "standalone", style: { background: "#2a2b31", color: "#e6e6e6" } }, "独立目标"),
                     // 版本选项来自 board 数据的 versions 列表
                     ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug, style: { background: "#2a2b31", color: "#e6e6e6" } }, v.slug)))),
+                h("div", { style: { marginBottom: 8 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "类型（默认 task）"),
+                  h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+                    ...GOAL_TYPES.map((t) =>
+                      h("button", {
+                        key: t,
+                        style: {
+                          display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11,
+                          padding: "3px 8px", cursor: "pointer", borderRadius: 4,
+                          border: "1px solid " + (t === newGoalType ? goalTypeColor(t) : "rgba(128,128,128,.4)"),
+                          background: t === newGoalType ? goalTypeColor(t) : "rgba(128,128,128,.1)",
+                          color: t === newGoalType ? "#fff" : "inherit",
+                          fontWeight: t === newGoalType ? 700 : 400,
+                        },
+                        className: "dg-btn",
+                        title: GOAL_TYPE_LABELS[t],
+                        onClick: () => setNewGoalType(t),
+                      }, GOAL_TYPE_ABBREV[t], h("span", null, GOAL_TYPE_LABELS[t]))))),
                 h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13 },

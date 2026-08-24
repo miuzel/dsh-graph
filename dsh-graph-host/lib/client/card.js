@@ -28,12 +28,28 @@
       const pendingDeps = deps.filter((d) => goalStatus?.[d] !== "delivered");
       const metDeps = deps.filter((d) => goalStatus?.[d] === "delivered");
       const hasDep = pendingDeps.length > 0;
+      // g-158：类型色覆盖默认左侧色条（blocked/dep 语义用状态文本/标记表达，左栏始终类型色）
+      const tColor = goalTypeColor(g.type);
+      const borderColor = tColor;
       const style = {
         ...S.goalCard,
         ...(hasDep ? S.depCard : {}),
         ...(blocked ? S.blockedCard : {}),
+        borderLeft: `5px solid ${borderColor}`,
       };
       const badges = [];
+      // g-158：类型标记 badge（F/B/T/I + tooltip）——标题左侧，颜色与左栏/弹窗同源
+      const aType = normalizeGoalType(g.type);
+      const tBadge = h("span", {
+        key: "type-badge",
+        style: {
+          display: "inline-block", width: 16, height: 16, lineHeight: "16px",
+          textAlign: "center", borderRadius: 3, fontSize: 10, fontWeight: 700,
+          background: goalTypeColor(aType), color: "#fff",
+          verticalAlign: "middle", marginRight: 2,
+        },
+        title: GOAL_TYPE_LABELS[aType] ?? aType,
+      }, GOAL_TYPE_ABBREV[aType] ?? aType[0]?.toUpperCase());
       if (g.reviewer === "human") badges.push("👤人审");
       if (g.reviewer === "ai") badges.push("🤖AI审");
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
@@ -50,6 +66,7 @@
       }, collapsed ? "▸" : "▾");
       const titleRow = h("div", { style: { lineHeight: 1.5 } },
         chevron,
+        tBadge,
         h("span", { style: { ...S.title, display: "inline", verticalAlign: "middle" } }, `🎯 ${g.title}`));
       // g-77647351：拖放 class 合并
       const dragClass = [

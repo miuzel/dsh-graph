@@ -12,6 +12,20 @@
       in_progress: "执行中", review: "评审中", delivered: "已交付", blocked: "阻塞",
     };
 
+    // g-158：目标类型视觉配置——颜色、缩写、完整名（四者共用同一语义色）
+    const GOAL_TYPES = ["feature", "bug", "task", "improvement"];
+    const GOAL_TYPE_COLORS = { feature: "#4c8dff", bug: "#d66", task: "#8a8a8a", improvement: "#3aa675" };
+    const GOAL_TYPE_ABBREV = { feature: "F", bug: "B", task: "T", improvement: "I" };
+    const GOAL_TYPE_LABELS = { feature: "feature", bug: "bug", task: "task", improvement: "improvement" };
+    // g-158：规范化类型——非法值安全回退 task
+    function normalizeGoalType(raw) {
+      return GOAL_TYPES.includes(raw) ? raw : "task";
+    }
+    // g-158：获取类型色——回退 task 色
+    function goalTypeColor(type) {
+      return GOAL_TYPE_COLORS[normalizeGoalType(type)] ?? GOAL_TYPE_COLORS.task;
+    }
+
     const EVENT_LABEL = {
       "goal.created": "创建目标", "goal.planned": "完成规划", "criteria.confirmed": "确认判据",
       "goal.transition": null, "attempt.started": "派发执行", "attempt.status_reported": null,
@@ -22,6 +36,7 @@
       "version.status_changed": "版本状态变更", "version.scope_changed": "调整版本范围", "version.integration_decided": "集成测试决策",
       "goal.deleted": "删除目标", "card.deleted": "删除卡片", "attempt.bound": "绑定子代理",
       "goal.renamed": "重命名目标",
+      "goal.type_changed": "变更类型", // g-158
       "goal.directive_set": "设置最近指令", "goal.comment_added": "添加评论",
       "attempt.handoff.confirmed": "确认返工 handoff", "attempt.handoff.superseded": "覆盖旧 handoff",
     };
@@ -32,6 +47,7 @@
       "goal.transition", "goal.amended", "scope.note", "criteria.confirmed",
       "completion.claimed", "review.passed", "review.failed", "attempt.started",
       "goal.moved", "goal.created", "attempt.status_reported", "goal.renamed",
+      "goal.type_changed", // g-158
       "goal.directive_set", "goal.comment_added",
       "attempt.handoff.confirmed", "attempt.handoff.superseded",
     ]);
@@ -45,6 +61,7 @@
         else if (e.event === "attempt.status_reported") what = `汇报：${d.status ?? ""}`;
         else if (e.event === "goal.amended") what = `修订：${d.note ?? ""}`;
         else if (e.event === "goal.renamed") what = `重命名：${d.old_title ?? ""} → ${d.new_title ?? ""}`;
+        else if (e.event === "goal.type_changed") what = `变更类型：${GOAL_TYPE_LABELS[d.old_type] ?? d.old_type} → ${GOAL_TYPE_LABELS[d.new_type] ?? d.new_type}`; // g-158
         else if (e.event === "scope.note") what = `补充：${d.note ?? ""}`;
         else if (e.event === "goal.directive_set") what = `设置指令：${(d.directive ?? "").slice(0, 80)}${(d.directive ?? "").length > 80 ? "…" : ""}`;
         else if (e.event === "goal.comment_added") what = `评论：${(d.text ?? "").slice(0, 60)}${(d.text ?? "").length > 60 ? "…" : ""}`;
