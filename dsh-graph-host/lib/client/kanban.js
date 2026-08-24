@@ -63,6 +63,90 @@
         };
       }, [drag !== null]);
 
+      // g-157：拖动自动滚动——指针靠近视口顶部/底部时自动滚动页面
+      React.useEffect(() => {
+        if (!drag) return;
+
+        // 查找真实垂直滚动容器（向上查找 overflow-y 为 auto/scroll 的祖先）
+        function findScrollContainer() {
+          // 从 S.wrap 的 DOM 节点开始查找
+          const wrapEl = document.querySelector('[style*="padding: 12px"][style*="overflowX: auto"]');
+          if (!wrapEl) return document.documentElement;
+          
+          let el = wrapEl;
+          while (el && el !== document.documentElement) {
+            const style = window.getComputedStyle(el);
+            const overflowY = style.overflowY;
+            if ((overflowY === "auto" || overflowY === "scroll") && 
+                el.scrollHeight > el.clientHeight) {
+              return el;
+            }
+            el = el.parentElement;
+          }
+          // 回退到 documentElement（页面级滚动）
+          return document.documentElement;
+        }
+
+        const scrollContainer = findScrollContainer();
+        const THRESHOLD = 80; // 顶部/底部触发区域高度（px）
+        const MAX_SPEED = 20; // 最大滚动速度（px/帧）
+        let pointerY = 0;
+        let rafId = null;
+        let isScrolling = false;
+
+        // 更新指针位置
+        function handleDragOver(e) {
+          pointerY = e.clientY;
+        }
+
+        // 自动滚动循环
+        function autoScroll() {
+          const containerRect = scrollContainer.getBoundingClientRect();
+          const scrollTop = scrollContainer.scrollTop;
+          const scrollHeight = scrollContainer.scrollHeight;
+          const clientHeight = scrollContainer.clientHeight;
+          
+          // 计算指针相对于视口的位置
+          const viewportHeight = window.innerHeight;
+          const pointerFromTop = pointerY;
+          const pointerFromBottom = viewportHeight - pointerY;
+
+          let scrollDelta = 0;
+
+          // 接近顶部：向上滚动
+          if (pointerFromTop < THRESHOLD && scrollTop > 0) {
+            const ratio = 1 - (pointerFromTop / THRESHOLD);
+            scrollDelta = -Math.ceil(MAX_SPEED * ratio);
+          }
+          // 接近底部：向下滚动
+          else if (pointerFromBottom < THRESHOLD && scrollTop < scrollHeight - clientHeight) {
+            const ratio = 1 - (pointerFromBottom / THRESHOLD);
+            scrollDelta = Math.ceil(MAX_SPEED * ratio);
+          }
+
+          if (scrollDelta !== 0) {
+            scrollContainer.scrollTop += scrollDelta;
+          }
+
+          rafId = requestAnimationFrame(autoScroll);
+        }
+
+        // 启动自动滚动
+        document.addEventListener("dragover", handleDragOver);
+        rafId = requestAnimationFrame(autoScroll);
+        isScrolling = true;
+
+        // 清理函数
+        return () => {
+          document.removeEventListener("dragover", handleDragOver);
+          if (rafId) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+          isScrolling = false;
+        };
+      }, [drag !== null]);
+
       // g-135：版本详情弹窗打开时自动获取详情数据
       const loadVersionDetail = (slug) => {
         setVersionDetailLoading(true);
@@ -354,7 +438,7 @@
         const isCollapsed = !!collapsedLanes[key];
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
         const baseBg = "rgba(255,255,255,.03)";
-        const stageBg = (stageIdx) => stageIdx % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.05)";
+        const stageBg = (stageIdx) => stageIdx % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)";
         // g-162: 折叠态——显示摘要行
         if (isCollapsed) {
           return [
@@ -411,7 +495,7 @@
           // g-162: 阶段列横向交替深浅背景
           const laneBg = stageBg(sIdx);
           // g-127：阻塞列折叠态——竖条汇总替代卡片列表
-          if (s.key === "blocked" && blockedColumnCollapsed && orderedGoals.length) {
+          if (s.key === "blocked" && blockedColumnCollapsed) {
             // 计算最长阻塞时间（从 created_at 到现在）
             let maxDays = 0;
             for (const g of orderedGoals) {
@@ -936,10 +1020,19 @@
         b.supervisorSession
           ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null, statusAt: b.supervisorStatusAt ?? null })
           : null,
-        // g-127：折叠时最后一列窄化为 36px
-        h("div", { style: { ...S.grid, gridTemplateColumns: blockedColumnCollapsed
-            ? "130px repeat(5, minmax(150px, 1fr)) 36px"
-            : "130px repeat(6, minmax(150px, 1fr))" } },
+        // g-127/g-156：折叠时对应列窄化为 36px（blocked 和 deliver 独立折叠）
+        h("div", { style: { ...S.grid, gridTemplateColumns:
+          // STAGES 顺序: describe, collect, execute, confirm, deliver, blocked
+          // 每列根据折叠状态决定宽度
+          ["130px",
+            "minmax(150px, 1fr)",  // describe
+            "minmax(150px, 1fr)",  // collect
+            "minmax(150px, 1fr)",  // execute
+            "minmax(150px, 1fr)",  // confirm
+            deliverColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // deliver
+            blockedColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // blocked
+          ].join(" ")
+        } },
           h("div", { style: S.stageHead }, "泳道＼阶段"),
           STAGES.map((s) => {
             // g-127：blocked 列头可点击切换折叠/展开
@@ -948,12 +1041,22 @@
               return h("div", {
                 key: s.key,
                 style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
-                  // g-152：折叠态只显示箭头，不显示文字，避免窄列换行；minWidth:0 让 grid 36px track 自然约束宽度，padding 由 boxSizing 撑满
                   ...(blockedColumnCollapsed ? { minWidth: 0, padding: "4px 0", overflow: "hidden", fontSize: 14, boxSizing: "border-box", textAlign: "center" } : {}),
                 },
                 onClick: () => setBlockedColumnCollapsed((p) => !p),
                 title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
               }, blockedColumnCollapsed ? "▸" : s.label + " ▾");
+            }
+            // g-156：deliver 列头可点击切换折叠/展开（与 blocked 一致的交互）
+            if (s.key === "deliver") {
+              return h("div", {
+                key: s.key,
+                style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
+                  ...(deliverColumnCollapsed ? { minWidth: 0, padding: "4px 0", overflow: "hidden", fontSize: 14, boxSizing: "border-box", textAlign: "center" } : {}),
+                },
+                onClick: () => setDeliverColumnCollapsed((p) => !p),
+                title: deliverColumnCollapsed ? "点击展开交付列" : "点击收起交付列",
+              }, deliverColumnCollapsed ? "▸" : s.label + " ▾");
             }
             return h("div", { key: s.key, style: S.stageHead }, s.label);
           }),
