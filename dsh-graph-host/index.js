@@ -36,6 +36,7 @@ import {
   moveGoal,
   amendGoal,
   renameGoal,
+  setGoalType,
   requestAcceptReview,
   resolveAccept,
   archiveGoal,
@@ -220,10 +221,10 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_create_goal",
-        description: "创建目标（默认进 backlog；带 version 则排期入版本）。返回目标 id。",
-        parameters: params({ title: str, version: str }, ["title"]),
+        description: "创建目标（默认进 backlog；带 version 则排期入版本）。可选 type 指定类型（feature/bug/task/improvement，默认 task）。返回目标 id。",
+        parameters: params({ title: str, version: str, type: str }, ["title"]),
       },
-      run: (a, ex) => ({ goal: createGoal(rootFor(ex), { title: a.title, version: a.version, actor: actorOf(ex) }) }),
+      run: (a, ex) => ({ goal: createGoal(rootFor(ex), { title: a.title, version: a.version, type: a.type, actor: actorOf(ex) }) }),
     },
     {
       def: {
@@ -407,6 +408,17 @@ export function apply(ctx, config) {
       },
       run: (a, ex) => {
         const result = renameGoal(rootFor(ex), a.goal, { title: a.title, actor: actorOf(ex) });
+        return { ok: true, ...result };
+      },
+    },
+    {
+      def: {
+        name: "graph_set_goal_type",
+        description: "设置目标类型（feature/bug/task/improvement），只更新 meta.type 并记 goal.type_changed 事件（old_type/new_type/actor）；不改 status/version/执行。非法类型安全回退 task；相同类型为 no-op。",
+        parameters: params({ goal: str, type: str }, ["goal", "type"]),
+      },
+      run: (a, ex) => {
+        const result = setGoalType(rootFor(ex), a.goal, { type: a.type, actor: actorOf(ex) });
         return { ok: true, ...result };
       },
     },
@@ -922,6 +934,23 @@ export function apply(ctx, config) {
       },
     },
     {
+      // g-158：设置目标类型（feature/bug/task/improvement），记 goal.type_changed 事件
+      path: "/api/dsh-graph/set-goal-type",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, type } = body;
+          if (!goal || !type || typeof type !== "string") return json(res, 400, { error: "missing goal or type" });
+          const result = setGoalType(rootForReq(req, body), goal, { type, actor: "human:gui" });
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
       path: "/api/dsh-graph/add-card",
       handler: async (req, res) => {
         try {
@@ -1096,12 +1125,12 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { title, version, description } = body;
+          const { title, version, description, type } = body;
           if (!title || typeof title !== "string" || !title.trim()) {
             return json(res, 400, { error: "missing title" });
           }
           const r = rootForReq(req, body);
-          const goalId = createGoal(r, { title: title.trim(), version, description, actor: "human:gui" });
+          const goalId = createGoal(r, { title: title.trim(), version, description, type, actor: "human:gui" });
           json(res, 200, { ok: true, goal: goalId });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;

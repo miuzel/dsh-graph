@@ -294,6 +294,9 @@
       const [renaming, setRenaming] = React.useState(false);
       const [newTitle, setNewTitle] = React.useState("");
       const [renameNote, setRenameNote] = React.useState(null);
+      // g-158：类型编辑状态
+      const [typeEditing, setTypeEditing] = React.useState(false);
+      const [typeNote, setTypeNote] = React.useState(null);
       // g-148：load 提升到组件体，供 AcceptFeedback 通过 onRefresh 回调刷新详情
       const aliveRef = React.useRef(true);
       const load = React.useCallback(() =>
@@ -452,14 +455,14 @@
               h("select", {
                 value: logFilter,
                 onChange: (e) => setLogFilter(e.target.value),
-                style: { fontSize: 12, padding: "2px 6px", cursor: "pointer",
-                         background: "rgba(128,128,128,.10)", color: "inherit",
-                         border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
+                style: S.select,
+                className: "dg-select",
               },
                 h("option", { value: "" }, "全部类型"), ...typeOptions),
               h("button", {
                 onClick: () => setLogSort(logSort === "asc" ? "desc" : "asc"),
-                style: { ...S.btn, border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
+                style: { ...S.btn },
+                className: "dg-btn",
               }, logSort === "asc" ? "↑ 时间正序" : "↓ 时间倒序")),
             // 事件日志表格：时间 / 事件 / 执行者
             h("table", { key: "tbl", style: { width: "100%", borderCollapse: "collapse" } },
@@ -595,6 +598,32 @@
         }
       };
 
+      // g-158：设置目标类型（只改 type，不改变量生命周期语义）
+      const doSetType = async (newType) => {
+        setTypeNote(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/set-goal-type"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.id, type: newType }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setTypeEditing(false);
+            setTypeNote(null);
+            // 刷新详情数据
+            const goalRes = await fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }));
+            const goalData = await goalRes.json();
+            if (!goalData.error) setState({ loading: false, data: goalData });
+            if (props.onRenamed) props.onRenamed(); // 刷新看板
+          } else {
+            setTypeNote("⚠️ 设置失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setTypeNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+      };
+
       // g-110: 归档/取消归档操作
       const [archiveNote, setArchiveNote] = React.useState(null);
       const isArchived = state.data?.meta?.archived === true;
@@ -673,6 +702,10 @@
         }
       };
 
+      // g-158：当前目标类型（从 state.data.meta.type 读取，回退 task）与类型色
+      const currentType = normalizeGoalType(state.data?.meta?.type);
+      const currentTypeColor = goalTypeColor(currentType);
+
       const titleEl = renaming
         ? h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 4 } },
             h("span", null, "🎯"),
@@ -693,6 +726,37 @@
             }, "取消"),
             renameNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, renameNote) : null)
         : h("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
+            // g-158：类型标记 badge（标题最左侧，颜色与弹窗顶部边框、卡片左栏同源）
+            h("span", {
+              style: {
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 20, height: 20, lineHeight: "20px", borderRadius: 4, fontSize: 12, fontWeight: 700,
+                background: currentTypeColor, color: "#fff", cursor: "pointer", flexShrink: 0,
+              },
+              title: `类型：${GOAL_TYPE_LABELS[currentType]}（点击切换）`,
+              onClick: (e) => { e.stopPropagation(); setTypeEditing(!typeEditing); setTypeNote(null); },
+            }, GOAL_TYPE_ABBREV[currentType]),
+            // g-158：类型选择器弹出（点击 badge 展开）
+            typeEditing
+              ? h("div", { style: { display: "flex", gap: 3, alignItems: "center" } },
+                  ...GOAL_TYPES.map((t) =>
+                    h("button", {
+                      key: t,
+                      style: {
+                        fontSize: 11, padding: "1px 6px", cursor: "pointer",
+                        border: "1px solid " + (t === currentType ? goalTypeColor(t) : "rgba(128,128,128,.4)"),
+                        borderRadius: 3, background: t === currentType ? goalTypeColor(t) : "rgba(128,128,128,.1)",
+                        color: t === currentType ? "#fff" : "inherit", fontWeight: t === currentType ? 700 : 400,
+                      },
+                      className: "dg-btn",
+                      title: GOAL_TYPE_LABELS[t],
+                      onClick: () => doSetType(t),
+                    }, GOAL_TYPE_ABBREV[t])),
+                  h("button", {
+                    style: { ...S.btn, fontSize: 10, padding: "0 4px" }, className: "dg-btn",
+                    onClick: () => { setTypeEditing(false); setTypeNote(null); },
+                  }, "✕"))
+              : null,
             h("span", { style: { fontWeight: 700, fontSize: 15 } }, `🎯 ${props.title ?? props.id}`),
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "1px 6px", opacity: 0.7 }, className: "dg-btn",
@@ -719,7 +783,7 @@
                 ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
                     h("span", { style: { ...S.meta, fontSize: 11, color: "#d66" } }, "确认删除？"),
                     h("button", {
-                      style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(214,102,102,.3)" }, className: "dg-btn",
+                      style: { ...S.btnDanger, fontSize: 11, padding: "1px 6px" }, className: "dg-btn-danger",
                       title: "确认删除（不可恢复）",
                       onClick: doDelete,
                     }, "🗑 确认"),
@@ -728,18 +792,20 @@
                       onClick: () => { setDeleteConfirm(false); setDeleteNote(null); },
                     }, "取消"))
                 : h("button", {
-                    style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(214,102,102,.2)" }, className: "dg-btn",
+                    style: { ...S.btnDanger, fontSize: 11, padding: "1px 6px" }, className: "dg-btn-danger",
                     title: "删除目标（仅已归档目标可删除，含卡片/attempts）",
                     onClick: () => { setDeleteConfirm(true); setDeleteNote(null); },
                   }, "🗑 删除"))
               : null,
             archiveNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, archiveNote) : null,
-            deleteNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, deleteNote) : null);
+            deleteNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, deleteNote) : null,
+            typeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, typeNote) : null);
 
       return h(
         "div",
         { style: S.overlay, onClick: props.onClose },
-        h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
+        // g-158：弹窗顶部边框使用类型色（与卡片左侧色条、标题 badge 同色）
+        h("div", { style: { ...S.modal, borderTop: `3px solid ${currentTypeColor}` }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: props.onClose }, "✕"),
           titleEl,
           headMeta,

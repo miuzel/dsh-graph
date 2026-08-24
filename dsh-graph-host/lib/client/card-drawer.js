@@ -224,8 +224,8 @@
                     }),
                     h("div", { style: { display: "flex", gap: 6 } },
                       h("button", {
-                        style: { ...S.btn, fontSize: 11, padding: "2px 8px", background: deleteIdInput.trim() === card.id ? "rgba(214,102,102,.3)" : undefined },
-                        className: "dg-btn",
+                        style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
+                        className: "dg-btn-danger",
                         disabled: deleteIdInput.trim() !== card.id,
                         onClick: async () => {
                           try {
@@ -259,8 +259,8 @@
                   )
                 : h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
                     h("button", {
-                      style: { ...S.btn, fontSize: 11, padding: "2px 8px", background: "rgba(214,102,102,.2)" },
-                      className: "dg-btn",
+                      style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
+                      className: "dg-btn-danger",
                       title: "删除此卡片（需输入卡片 id 确认）",
                       onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
                     }, "🗑 删除卡片")),

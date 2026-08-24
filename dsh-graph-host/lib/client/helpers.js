@@ -45,7 +45,37 @@
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
-      btn: { fontSize: 12, padding: "2px 10px", cursor: "pointer" },
+      // g-153：共享按钮样式 token——暗色主题下确保可读性与层级
+      btn: {
+        fontSize: 12, padding: "2px 10px", cursor: "pointer",
+        background: "rgba(128,128,128,.15)", color: "#e6e6e6",
+        border: "1px solid rgba(128,128,128,.30)", borderRadius: 4,
+      },
+      // g-153：主要操作按钮（蓝底高亮）
+      btnPrimary: {
+        fontSize: 12, padding: "2px 10px", cursor: "pointer",
+        background: "rgba(76,141,255,.18)", color: "#8ab4ff",
+        border: "1px solid rgba(76,141,255,.40)", borderRadius: 4,
+      },
+      // g-153：危险操作按钮（红底红字）
+      btnDanger: {
+        fontSize: 12, padding: "2px 10px", cursor: "pointer",
+        background: "rgba(214,102,102,.18)", color: "#f08080",
+        border: "1px solid rgba(214,102,102,.35)", borderRadius: 4,
+      },
+      // g-153：接受/确认操作按钮（绿底绿字）
+      btnAccept: {
+        fontSize: 12, padding: "2px 10px", cursor: "pointer",
+        background: "rgba(58,166,117,.18)", color: "#6ee7a0",
+        border: "1px solid rgba(58,166,117,.40)", borderRadius: 4,
+      },
+      // g-153：下拉菜单/选择控件样式 token
+      select: {
+        fontSize: 12, padding: "3px 8px", cursor: "pointer",
+        background: "rgba(30,31,36,.92)", color: "#e6e6e6",
+        border: "1px solid rgba(128,128,128,.35)", borderRadius: 4,
+      },
+      selectOption: { background: "#222328", color: "#e6e6e6" },
       close: { float: "right", cursor: "pointer", opacity: 0.7, fontSize: 16 },
       // g-107 会话内嵌实时区
       liveStrip: {

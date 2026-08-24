@@ -41,7 +41,7 @@
           }),
           h("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
             h("button", {
-              style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
+              style: { ...S.btnPrimary, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-primary",
               disabled: sending, onClick: sendReason,
             }, sending ? "发送中…" : (sent ? "✅ 已发送" : "确认回退")),
             h("button", {
@@ -162,7 +162,7 @@
             : null,
           h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
             h("button", {
-              style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
+              style: { ...S.btnPrimary, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-primary",
               disabled: loading, onClick: startExec,
             }, loading ? "处理中…" : (hasChild ? "🔄 重新执行" : "🚀 确认执行")),
             h("button", {
@@ -212,7 +212,7 @@
                 }, "↗ 告知主管")
               : null,
             h("button", {
-              style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
+              style: { ...S.btnAccept, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-accept",
               onClick: () => onConfirm(),
             }, "📦 确认交付"),
             h("button", {

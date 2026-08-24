@@ -275,13 +275,8 @@
         setBusy(false);
       };
 
-      const selStyle = {
-        fontSize: 12, padding: "2px 6px", cursor: "pointer", maxWidth: 160,
-        background: "rgba(128,128,128,.10)", color: "inherit",
-        border: "1px solid rgba(128,128,128,.35)", borderRadius: 4,
-      };
-      // 深色主题：浏览器原生 option 默认白底，下拉展开时突兀 → 显式深色底
-      const optStyle = { background: "#2a2b31", color: "#e6e6e6" };
+      const selStyle = S.select;
+      const optStyle = S.selectOption;
       const defP = opts?.default?.provider ?? "";
       const defM = opts?.default?.model ?? "";
       // 无模型目录（llm 服务不可用）：只显示默认模型 + 提示，仍可重新派发（走 project.yaml 默认）
@@ -295,12 +290,14 @@
             : [
                 h("select", {
                   style: selStyle, value: provider,
+                  className: "dg-select",
                   title: "LLM provider（缺省 project.yaml executor.provider）",
                   onChange: (e) => { setProvider(e.target.value); setModel(""); },
                 },
                   groups.map((g) => h("option", { key: g.id, value: g.id, style: optStyle }, g.name ?? g.id))),
                 h("select", {
                   style: selStyle, value: model,
+                  className: "dg-select",
                   disabled: !modelChoices.length,
                   title: "模型（缺省 project.yaml executor.model）",
                   onChange: (e) => setModel(e.target.value),

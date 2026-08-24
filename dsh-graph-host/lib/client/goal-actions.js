@@ -247,7 +247,7 @@
         h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
           acceptState === "none"
             ? h("button", {
-                style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn dg-accept",
+                style: { ...S.btnAccept, padding: "4px 12px", fontSize: 13 }, className: "dg-btn-accept",
                 disabled: loading, onClick: doAccept,
               }, "✅ 接受")
             : acceptState === "pending"
@@ -280,7 +280,7 @@
                     }),
                     h("div", { style: { display: "flex", gap: 6 } },
                       h("button", {
-                        style: { ...S.btn, fontSize: 12 }, className: "dg-btn dg-accept",
+                        style: { ...S.btnAccept, fontSize: 12 }, className: "dg-btn-accept",
                         disabled: loading, onClick: doForceAccept,
                       }, "确认强制接受"),
                       h("button", {
@@ -289,7 +289,7 @@
                       }, "取消")),
                   ]
                 : h("button", {
-                    style: { ...S.btn, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn dg-accept",
+                    style: { ...S.btnAccept, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn-accept",
                     onClick: () => setForceMode(true),
                   }, "强制接受（跳过复核）"),
             )

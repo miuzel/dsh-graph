@@ -8,6 +8,10 @@
       const [newGoalTitle, setNewGoalTitle] = React.useState("");
       const [newGoalVersion, setNewGoalVersion] = React.useState("");
       const [newGoalDesc, setNewGoalDesc] = React.useState("");
+      const [newGoalType, setNewGoalType] = React.useState("task"); // g-158
+      // g-159: 记录打开弹窗时的入口版本；null 表示普通入口，需按当前 active 默认值重置
+      const [createGoalEntryVersion, setCreateGoalEntryVersion] = React.useState(null);
+      const [createGoalInitialized, setCreateGoalInitialized] = React.useState(false);
       const [createNote, setCreateNote] = React.useState(null);
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
@@ -67,83 +71,64 @@
       React.useEffect(() => {
         if (!drag) return;
 
-        // 查找真实垂直滚动容器（向上查找 overflow-y 为 auto/scroll 的祖先）
+        // 从看板根节点向上查找真正的垂直滚动容器；不要依赖 React style 的属性名格式。
         function findScrollContainer() {
-          // 从 S.wrap 的 DOM 节点开始查找
-          const wrapEl = document.querySelector('[style*="padding: 12px"][style*="overflowX: auto"]');
-          if (!wrapEl) return document.documentElement;
-          
+          const wrapEl = document.querySelector('[style*="padding: 12px"]');
           let el = wrapEl;
-          while (el && el !== document.documentElement) {
+          while (el && el !== document.body) {
             const style = window.getComputedStyle(el);
-            const overflowY = style.overflowY;
-            if ((overflowY === "auto" || overflowY === "scroll") && 
-                el.scrollHeight > el.clientHeight) {
-              return el;
-            }
+            if ((style.overflowY === "auto" || style.overflowY === "scroll") &&
+                el.scrollHeight > el.clientHeight) return el;
             el = el.parentElement;
           }
-          // 回退到 documentElement（页面级滚动）
-          return document.documentElement;
+          return document.scrollingElement || document.documentElement;
         }
 
         const scrollContainer = findScrollContainer();
-        const THRESHOLD = 80; // 顶部/底部触发区域高度（px）
+        const THRESHOLD = 80; // 视口顶部/底部触发区域（px）
         const MAX_SPEED = 20; // 最大滚动速度（px/帧）
         let pointerY = 0;
+        let pointerKnown = false;
         let rafId = null;
-        let isScrolling = false;
+        let active = true;
 
-        // 更新指针位置
+        // 使用捕获阶段，确保拖过卡片/泳道时仍能收到原生 dragover。
         function handleDragOver(e) {
           pointerY = e.clientY;
+          pointerKnown = Number.isFinite(pointerY) && pointerY >= 0 && pointerY <= window.innerHeight;
+        }
+        function handleDragLeave(e) {
+          if (!e.relatedTarget || e.clientY < 0 || e.clientY > window.innerHeight) pointerKnown = false;
         }
 
-        // 自动滚动循环
         function autoScroll() {
-          const containerRect = scrollContainer.getBoundingClientRect();
-          const scrollTop = scrollContainer.scrollTop;
-          const scrollHeight = scrollContainer.scrollHeight;
-          const clientHeight = scrollContainer.clientHeight;
-          
-          // 计算指针相对于视口的位置
-          const viewportHeight = window.innerHeight;
-          const pointerFromTop = pointerY;
-          const pointerFromBottom = viewportHeight - pointerY;
-
-          let scrollDelta = 0;
-
-          // 接近顶部：向上滚动
-          if (pointerFromTop < THRESHOLD && scrollTop > 0) {
-            const ratio = 1 - (pointerFromTop / THRESHOLD);
-            scrollDelta = -Math.ceil(MAX_SPEED * ratio);
+          if (!active) return;
+          if (pointerKnown) {
+            const scrollTop = scrollContainer.scrollTop;
+            const maxScroll = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+            const fromTop = pointerY;
+            const fromBottom = window.innerHeight - pointerY;
+            let delta = 0;
+            if (fromTop < THRESHOLD && scrollTop > 0) {
+              delta = -Math.ceil(MAX_SPEED * (1 - fromTop / THRESHOLD));
+            } else if (fromBottom < THRESHOLD && scrollTop < maxScroll) {
+              delta = Math.ceil(MAX_SPEED * (1 - fromBottom / THRESHOLD));
+            }
+            if (delta) scrollContainer.scrollTop = Math.max(0, Math.min(maxScroll, scrollTop + delta));
           }
-          // 接近底部：向下滚动
-          else if (pointerFromBottom < THRESHOLD && scrollTop < scrollHeight - clientHeight) {
-            const ratio = 1 - (pointerFromBottom / THRESHOLD);
-            scrollDelta = Math.ceil(MAX_SPEED * ratio);
-          }
-
-          if (scrollDelta !== 0) {
-            scrollContainer.scrollTop += scrollDelta;
-          }
-
           rafId = requestAnimationFrame(autoScroll);
         }
 
-        // 启动自动滚动
-        document.addEventListener("dragover", handleDragOver);
+        window.addEventListener("dragover", handleDragOver, true);
+        window.addEventListener("dragleave", handleDragLeave, true);
         rafId = requestAnimationFrame(autoScroll);
-        isScrolling = true;
 
-        // 清理函数
         return () => {
-          document.removeEventListener("dragover", handleDragOver);
-          if (rafId) {
-            cancelAnimationFrame(rafId);
-            rafId = null;
-          }
-          isScrolling = false;
+          active = false;
+          window.removeEventListener("dragover", handleDragOver, true);
+          window.removeEventListener("dragleave", handleDragLeave, true);
+          if (rafId !== null) cancelAnimationFrame(rafId);
+          rafId = null;
         };
       }, [drag !== null]);
 
@@ -425,9 +410,16 @@
         ...b.standalone,
         ...b.backlog,
       ];
-      // g-129: 打开新建目标弹窗，预选版本
+      // g-129/g-159: 打开新建目标弹窗；普通入口预选最新 active，泳道入口固定预选目标版本
       const openCreateGoal = (version) => {
-        setNewGoalVersion(version || "");
+        const entryVersion = version ?? null;
+        // 关闭后重开仍保留未提交草稿；只有成功创建后才开始新一轮初始化。
+        if (!createGoalInitialized) {
+          const latestActive = [...b.versions].filter((v) => v.status === "active").at(-1)?.slug ?? "";
+          setCreateGoalEntryVersion(entryVersion);
+          setNewGoalVersion(entryVersion ?? latestActive);
+          setCreateGoalInitialized(true);
+        }
         setShowCreateGoal(true);
         setCreateNote(null);
       };
@@ -863,6 +855,8 @@
           const body = { title: t };
           if (newGoalVersion.trim()) body.version = newGoalVersion.trim();
           if (newGoalDesc.trim()) body.description = newGoalDesc.trim();
+          // g-158：新建目标类型透传（默认 task）
+          body.type = normalizeGoalType(newGoalType);
           const r = await fetch(graphUrl("/api/dsh-graph/create-goal"), {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -872,7 +866,11 @@
           if (data.ok) {
             setCreateNote("✅ 已创建目标：" + data.goal);
             setNewGoalTitle("");
-            setNewGoalVersion("");
+            setNewGoalDesc("");
+            setNewGoalType("task"); // g-158 重置为新目标默认类型
+            const latestActive = [...b.versions].filter((v) => v.status === "active").at(-1)?.slug ?? "";
+            setNewGoalVersion(createGoalEntryVersion ?? latestActive);
+            setCreateGoalInitialized(false);
             load(); // 刷新看板
             setTimeout(() => setShowCreateGoal(false), 1500);
           } else {
@@ -1104,6 +1102,24 @@
                     h("option", { value: "standalone", style: { background: "#2a2b31", color: "#e6e6e6" } }, "独立目标"),
                     // 版本选项来自 board 数据的 versions 列表
                     ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug, style: { background: "#2a2b31", color: "#e6e6e6" } }, v.slug)))),
+                h("div", { style: { marginBottom: 8 } },
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "类型（默认 task）"),
+                  h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+                    ...GOAL_TYPES.map((t) =>
+                      h("button", {
+                        key: t,
+                        style: {
+                          display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11,
+                          padding: "3px 8px", cursor: "pointer", borderRadius: 4,
+                          border: "1px solid " + (t === newGoalType ? goalTypeColor(t) : "rgba(128,128,128,.4)"),
+                          background: t === newGoalType ? goalTypeColor(t) : "rgba(128,128,128,.1)",
+                          color: t === newGoalType ? "#fff" : "inherit",
+                          fontWeight: t === newGoalType ? 700 : 400,
+                        },
+                        className: "dg-btn",
+                        title: GOAL_TYPE_LABELS[t],
+                        onClick: () => setNewGoalType(t),
+                      }, GOAL_TYPE_ABBREV[t], h("span", null, GOAL_TYPE_LABELS[t]))))),
                 h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13 },

@@ -2,7 +2,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, rmdirSync, writeFileSync, } from "node:fs";
 import { join, basename, dirname, relative } from "node:path";
 import { randomUUID } from "node:crypto";
-import { parseDoc, serializeDoc, replaceSection, sectionText, criteriaPresent, countCriteria, } from "./model.js";
+import { parseDoc, serializeDoc, replaceSection, sectionText, criteriaPresent, countCriteria, normalizeGoalType, } from "./model.js";
 import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso } from "./events.js";
 import { GraphError, STATUSES, assertTransition } from "./machine.js";
 import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail } from "./version-lane.js";
@@ -446,6 +446,7 @@ export function createGoal(root, opts) {
         id,
         title: opts.title,
         status: initialStatus,
+        type: normalizeGoalType(opts.type),
         blocked_reason: null,
         created_at: nowIso(),
         created_by: opts.actor,
@@ -1886,6 +1887,7 @@ export function boardProjection(root, opts) {
             id: String(meta.id),
             title: String(meta.title ?? meta.id),
             status: String(meta.status ?? "unknown"),
+            type: normalizeGoalType(meta.type),
             status_line: statusLine,
             reviewer: meta.review?.reviewer ?? null,
             depends_on: (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((d) => String(d?.goal ?? d)),
@@ -2285,6 +2287,25 @@ export function renameGoal(root, id, opts) {
         details: { old_title: oldTitle, new_title: newTitle },
     });
     return { old_title: oldTitle, new_title: newTitle };
+}
+/** g-158：设置目标类型（feature/bug/task/improvement），记 goal.type_changed 事件。
+ *  非法类型安全回退 task；相同类型视为 no-op（不记事件）；类型变更不改变生命周期语义。 */
+export function setGoalType(root, id, opts) {
+    const newType = normalizeGoalType(opts.type);
+    const file = findGoalFile(root, id);
+    const doc = loadGoal(file);
+    const oldType = normalizeGoalType(doc.meta.type);
+    if (oldType === newType)
+        return { old_type: oldType, new_type: newType };
+    doc.meta.type = newType;
+    saveGoal(file, doc);
+    appendEvent(root, {
+        actor: opts.actor,
+        event: "goal.type_changed",
+        goal: id,
+        details: { old_type: oldType, new_type: newType },
+    });
+    return { old_type: oldType, new_type: newType };
 }
 /** 主管复核接受请求（兼容旧名，内部转发 requestAcceptReview / resolveAccept）。 */
 export function acceptReview(root, id, opts) {
