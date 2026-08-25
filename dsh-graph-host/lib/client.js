@@ -1580,15 +1580,25 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // g-168：仅将确实在执行中的非收集 attempt 视为活跃。
+    // result=pending 本身不够：旧 attempt 可能长期 pending，需 status_line 明确未结束。
+    function hasActiveExecutionAttempt(attempts) {
+      return (attempts ?? []).some((a) => {
+        if (a?.executor === "agent:collect" || a?.result !== "pending") return false;
+        const line = String(a?.status_line ?? "").trim();
+        return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
+      });
+    }
+
     // g-168：定义/润色入口。两条路径都只产生建议，不改目标或状态。
     function DefinitionPolish(props) {
-      const { goalId, goalPath, supervisorSession, status, events } = props;
+      const { goalId, goalPath, supervisorSession, status, attempts } = props;
       const [mode, setMode] = React.useState("idle"); // idle | supervisor | pm
       const [guidance, setGuidance] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
       const allowed = ["draft", "planning", "collecting", "ready"];
-      const hasActiveAttempt = (events ?? []).some((e) => e.event === "attempt.started" && e.details?.executor !== "agent:collect");
+      const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       if (!allowed.includes(status) || hasActiveAttempt) return null;
       const request = `【${goalId} 定义/润色请求】\n目标 ID：${goalId}\ngoal.md 工作区相对路径：${String(goalPath ?? "（路径未知）")}\n人工指导意见：${guidance.trim() || "（无）"}`;
       const openSupervisor = async () => {
@@ -1629,6 +1639,7 @@ window.__ModuleLoader__.load({
     // 无异议生效，有异议显示在按钮处并转「强制接受」，可选理由记 goal.amended 事件供学习）
     function AcceptFeedback(props) {
       const { goalId, status, events, supervisorSession, onRefresh } = props;
+      const { attempts } = props;
       const [mode, setMode] = React.useState("idle"); // idle | feedback
       const [fbText, setFbText] = React.useState("");
       const [note, setNote] = React.useState(null);
@@ -1758,9 +1769,7 @@ window.__ModuleLoader__.load({
       // g-109 定点 bug：「开始收集」也写 attempt.started（executor=agent:collect），
       // 若不加区分，只收集过未执行的目标其 🚀 执行/💬 反馈会被误藏。
       // 只认非 collect 的 attempt：凡非收集类（agent:collect）的 attempt 都视为活跃执行。
-      const hasActiveAttempt = (events ?? []).some(
-        (e) => e.event === "attempt.started" && e.details?.executor !== "agent:collect",
-      );
+      const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       // review 及之后阶段、或已有活跃 attempt，不显示执行/反馈按钮
       const allowed = ["draft", "planning", "collecting", "ready"];
       if (!allowed.includes(status) || hasActiveAttempt) return null;
@@ -1783,7 +1792,7 @@ window.__ModuleLoader__.load({
             onClick: startExecution,
           }, "🚀 执行"),
           h(DefinitionPolish, {
-            goalId, goalPath: props.goalPath, supervisorSession, status, events,
+            goalId, goalPath: props.goalPath, supervisorSession, status, events, attempts,
           })),
         // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
         acceptState === "objection"
@@ -2326,7 +2335,7 @@ window.__ModuleLoader__.load({
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
-            h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, supervisorSession: props.supervisorSession, onRefresh: load })) : null,
+            h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           crit != null ? sectionBlock("c", "✅ 质量判据", crit,
             !isPlaceholder(crit) && ["ready", "in_progress", "review", "delivered"].includes(status)

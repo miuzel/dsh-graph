@@ -841,6 +841,17 @@ test("g-168 定义/润色源契约：按钮同排且请求仅含路径与指导�
   assert.ok(/goal_path:\s*goalPath/.test(actions), "PM 请求传递路径而非正文");
 });
 
+test("g-168 活跃 attempt 回归：历史 completed/空闲不隐藏入口", () => {
+  const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  const match = /function hasActiveExecutionAttempt\(attempts\)\s*\{[\s\S]*?\n    \}/.exec(actions);
+  assert.ok(match, "找到活跃 attempt 判断函数");
+  const isActive = new Function(`return (${match[0]})`)();
+  assert.equal(isActive([{ executor: "agent:executor", result: "completed", status_line: "完成" }]), false);
+  assert.equal(isActive([{ executor: "agent:executor", result: "pending", status_line: "空闲待命" }]), false);
+  assert.equal(isActive([{ executor: "agent:collect", result: "pending", status_line: "正在收集" }]), false);
+  assert.equal(isActive([{ executor: "agent:executor", result: "pending", status_line: "正在执行定义润色" }]), true);
+});
+
 test("g-168 host prompt 契约：PM 读取 goal.md 并附带指导意见", () => {
   const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
   assert.ok(/const \{ goal, goal_path, guidance \}/.test(host));

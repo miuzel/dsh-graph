@@ -396,7 +396,7 @@
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
-            h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, supervisorSession: props.supervisorSession, onRefresh: load })) : null,
+            h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           crit != null ? sectionBlock("c", "✅ 质量判据", crit,
             !isPlaceholder(crit) && ["ready", "in_progress", "review", "delivered"].includes(status)
