@@ -864,7 +864,10 @@ test("g-168 复制失败 fallback：初始隐藏且只在失败后显示可复�
 test("g-168 交互反馈：主管复制成功 toast 与 PM 润色动画", () => {
   const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
   assert.ok(/if \(copied\) showToast\("✅ 请求已复制到剪贴板/.test(actions));
-  assert.ok(/loading && mode === "pm" \? "dg-running-flow"/.test(actions));
+  assert.ok(/const pmRunning = loading && mode === "pm"/.test(actions));
+  assert.ok(/className: pmRunning \? "dg-running-flow"/.test(actions));
+  assert.ok(/animation: "dg-polish-flow 1\.8s ease infinite"/.test(actions));
+  assert.ok(/@keyframes dg-polish-flow/.test(actions), "组件自带动画样式，避免依赖外层注入");
   assert.ok(/setLoading\(false\)/.test(actions), "PM 完成后解除 loading 动画");
 });
 

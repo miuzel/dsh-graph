@@ -152,7 +152,14 @@
         } catch (e) { setNote("⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e)); }
         setLoading(false);
       };
-      return h("div", { className: loading && mode === "pm" ? "dg-running-flow" : undefined },
+      const pmRunning = loading && mode === "pm";
+      const pmStyle = pmRunning ? {
+        border: "1px solid rgba(76,141,255,.75)", borderRadius: 4, padding: "2px 6px",
+        background: "linear-gradient(90deg, rgba(76,141,255,.16), rgba(58,166,117,.30), rgba(76,141,255,.16))",
+        backgroundSize: "200% 100%", animation: "dg-polish-flow 1.8s ease infinite",
+      } : undefined;
+      return h("div", { className: pmRunning ? "dg-running-flow" : undefined, style: pmStyle },
+        pmRunning ? h("style", null, "@keyframes dg-polish-flow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }") : null,
         h("button", { style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn", disabled: loading, onClick: () => { setMode(mode === "idle" ? "supervisor" : "idle"); setNote(null); } }, "📝 定义/润色"),
         mode !== "idle" ? h("div", { style: { display: "flex", flexDirection: "column", gap: 5, marginTop: 5 } },
           h("div", { style: S.meta }, "可填写额外指导意见，再选择处理方式："),
