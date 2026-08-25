@@ -170,10 +170,9 @@ window.__ModuleLoader__.load({
       .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); }
       /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */
       @keyframes dg-flow-bg {
-        0% { background-position: 0% 50%; }
-        50% { background-position: 100% 50%; }
-        100% { background-position: 0% 50%; }
-      }
+         0%, 80% { background-position: 0% 50%; opacity: 1; }
+        100% { background-position: 100% 50%; opacity: 0; }
+              }
       @keyframes dg-pulse {
         0%, 100% { opacity: 1; transform: scale(1); }
         50% { opacity: 0.45; transform: scale(1.25); }
@@ -1053,7 +1052,7 @@ window.__ModuleLoader__.load({
          ...style,
          background: "linear-gradient(90deg, rgba(76,141,255,.18), rgba(58,166,117,.34), rgba(76,141,255,.18))",
          backgroundSize: "200% 100%",
-         animation: "dg-flow-bg 1.8s ease infinite",
+         animation: "dg-flow-bg 2.5s ease 1 forwards",
          borderTop: "1px solid rgba(76,141,255,.85)",
          borderRight: "1px solid rgba(76,141,255,.65)",
          borderBottom: "1px solid rgba(76,141,255,.85)",
@@ -1642,7 +1641,7 @@ window.__ModuleLoader__.load({
         } catch (e) { setNote("⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e)); }
         finally {
           // spawnChild 通常很快返回；保持 accepted-running 动画至少一小段可观察时间。
-          const remaining = Math.max(0, 700 - (Date.now() - startedAt));
+          const remaining = Math.max(0, 2500 - (Date.now() - startedAt));
           if (remaining) await new Promise((resolve) => setTimeout(resolve, remaining));
           onPmFinished?.(goalId);
           setLoading(false);
@@ -1652,10 +1651,10 @@ window.__ModuleLoader__.load({
       const pmStyle = pmRunning ? {
         border: "1px solid rgba(76,141,255,.75)", borderRadius: 4, padding: "2px 6px",
         background: "linear-gradient(90deg, rgba(76,141,255,.16), rgba(58,166,117,.30), rgba(76,141,255,.16))",
-        backgroundSize: "200% 100%", animation: "dg-polish-flow 1.8s ease infinite",
+        backgroundSize: "200% 100%", animation: "dg-flow-bg 2.5s ease 1 forwards",
       } : undefined;
       return h("div", { className: pmRunning ? "dg-running-flow" : undefined, style: pmStyle },
-        pmRunning ? h("style", null, "@keyframes dg-polish-flow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }") : null,
+
         h("button", { style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn", disabled: loading, onClick: () => { setMode(mode === "idle" ? "supervisor" : "idle"); setNote(null); } }, "📝 定义/润色"),
         mode !== "idle" ? h("div", { style: { display: "flex", flexDirection: "column", gap: 5, marginTop: 5 } },
           h("div", { style: S.meta }, "可填写额外指导意见，再选择处理方式："),

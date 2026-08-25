@@ -866,11 +866,11 @@ test("g-168 交互反馈：主管复制成功 toast 与 PM 润色动画", () => 
   assert.ok(/if \(copied\) showToast\("✅ 请求已复制到剪贴板/.test(actions));
   assert.ok(/const pmRunning = loading && mode === "pm"/.test(actions));
   assert.ok(/className: pmRunning \? "dg-running-flow"/.test(actions));
-  assert.ok(/animation: "dg-polish-flow 1\.8s ease infinite"/.test(actions));
-  assert.ok(/@keyframes dg-polish-flow/.test(actions), "组件自带动画样式，避免依赖外层注入");
+  assert.ok(/animation: "dg-flow-bg 2\.5s ease 1 forwards"/.test(actions));
   assert.ok(/setLoading\(false\)/.test(actions), "PM 完成后解除 loading 动画");
   assert.ok(/const startedAt = Date\.now\(\)/.test(actions));
-  assert.ok(/700 - \(Date\.now\(\) - startedAt\)/.test(actions), "accepted-running 至少保持短时可观察");
+  assert.ok(/2500 - \(Date\.now\(\) - startedAt\)/.test(actions), "accepted-running 至少保持 2500ms 可观察");
+  assert.ok(!/700|1\.8s/.test(actions), "PM 控件不残留旧动画时长");
   assert.ok(/finally \{[\s\S]*setLoading\(false\)/.test(actions), "成功/业务失败/异常均最终解除 loading");
 });
 
@@ -879,6 +879,7 @@ test("g-168 PM 结果反馈：关闭弹窗并把动画挂在看板卡片", () =>
   const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
   const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
   const card = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/card.js"), "utf8");
+  const constants = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
   assert.ok(/onPmStarted\?\.\(goalId\)/.test(actions));
   assert.ok(/onClose\?\.\(\)/.test(actions), "PM 点击后关闭详情弹窗");
   assert.ok(/onPmFinished\?\.\(goalId\)/.test(actions));
@@ -888,7 +889,9 @@ test("g-168 PM 结果反馈：关闭弹窗并把动画挂在看板卡片", () =>
   assert.ok(/g\._polishActive \? " dg-running-flow"/.test(card), "动画 class 挂在 goal card");
   assert.ok(/const cardStyle = g\._polishActive \?/.test(card));
   assert.ok(/background: "linear-gradient\(90deg/.test(card), "卡片 inline gradient 覆盖默认背景");
-  assert.ok(/animation: "dg-flow-bg 1\.8s ease infinite"/.test(card));
+  assert.ok(/animation: "dg-flow-bg 2\.5s ease 1 forwards"/.test(card));
+  assert.ok(/@keyframes dg-flow-bg[\s\S]*0%, 80%[\s\S]*opacity: 1[\s\S]*100%[\s\S]*opacity: 0/.test(constants), "全局样式提供前 2000ms 可见、最后 500ms 淡出");
+  assert.ok(/animation: dg-flow-bg 2\.5s ease infinite/.test(constants));
   assert.equal((card.match(/style: cardStyle, className: dragClass/g) ?? []).length, 2, "折叠/展开路径都使用动画样式");
 });
 

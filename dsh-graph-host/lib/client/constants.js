@@ -158,10 +158,9 @@
       .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); }
       /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */
       @keyframes dg-flow-bg {
-        0% { background-position: 0% 50%; }
-        50% { background-position: 100% 50%; }
-        100% { background-position: 0% 50%; }
-      }
+         0%, 80% { background-position: 0% 50%; opacity: 1; }
+        100% { background-position: 100% 50%; opacity: 0; }
+              }
       @keyframes dg-pulse {
         0%, 100% { opacity: 1; transform: scale(1); }
         50% { opacity: 0.45; transform: scale(1.25); }

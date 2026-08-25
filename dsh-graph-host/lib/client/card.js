@@ -97,7 +97,7 @@
          ...style,
          background: "linear-gradient(90deg, rgba(76,141,255,.18), rgba(58,166,117,.34), rgba(76,141,255,.18))",
          backgroundSize: "200% 100%",
-         animation: "dg-flow-bg 1.8s ease infinite",
+         animation: "dg-flow-bg 2.5s ease 1 forwards",
          borderTop: "1px solid rgba(76,141,255,.85)",
          borderRight: "1px solid rgba(76,141,255,.65)",
          borderBottom: "1px solid rgba(76,141,255,.85)",
