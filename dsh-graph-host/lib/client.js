@@ -1168,7 +1168,7 @@ window.__ModuleLoader__.load({
       const titleRow = h("div", { style: { lineHeight: 1.5 } },
         chevron,
         tBadge,
-        h("span", { style: { ...S.title, display: "inline", verticalAlign: "middle" } }, `🎯 ${g.title}`));
+        h("span", { style: { ...S.title, display: "inline", verticalAlign: "middle" } }, g.title));
       // g-77647351：拖放 class 合并
       const dragClass = [
         "dg-card",
