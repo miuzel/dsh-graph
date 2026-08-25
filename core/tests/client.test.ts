@@ -1259,7 +1259,10 @@ test("g-171 模块源契约：kanban.js 复用现有 load/15s 轮询做 10 秒�
   // 以服务端 generated_at - updated_at 判定 10 秒窗口
   assert.ok(/const gen = Date\.parse\(data\.generated_at\)/.test(kanban), "用服务端 generated_at 判定窗口");
   assert.ok(/const age = gen - ts/.test(kanban), "窗口 = generated_at - updated_at");
-  assert.ok(/age < 0 \|\| age >= 10000/.test(kanban), "仅 10 秒窗口内播放");
+  // 容忍 ≤1s 负 age（旧版 generated_at 秒级截断，同秒修改会得到 -999ms），超过 10 秒不播放
+  assert.ok(/const safeAge = Math\.max\(0, age\)/.test(kanban), "负 age 按 0 处理（同秒修改补播）");
+  assert.ok(/age < -1000 \|\| safeAge >= 10000/.test(kanban), "仅 10 秒窗口内播放，未来>1s/已过 10s 不播放");
+  assert.ok(/const remaining = Math\.max\(0, 10000 - safeAge\)/.test(kanban), "动画时长 = 剩余毫秒");
   // 按 goalId+updated_at 防当前页重复播放（内存 token）
   assert.ok(/const token = g\.id \+ ":" \+ ts/.test(kanban), "token = goalId:updated_at");
   assert.ok(/seenUpdateTokens\.current\.has\(token\)/.test(kanban), "同一 token 不重播");
@@ -1303,6 +1306,7 @@ test("g-171 生成 bundle 契约：client.js 含更新强调逻辑且保留 gene
   assert.ok(/prefers-reduced-motion: reduce/.test(bundle), "生成 bundle: 含 reduced-motion 降级");
   assert.ok(/onClose: \(\) => \{ setModalGoal\(null\); load\(\); \}/.test(bundle), "生成 bundle: 弹窗关闭触发 load()");
   assert.ok(/setInterval\(load, 15000\)/.test(bundle), "生成 bundle: 保留 15 秒轮询");
+  assert.ok(/safeAge >= 10000/.test(bundle), "生成 bundle: 负 age 容忍（同秒修改补播）");
 });
 
 // ===== g-176：浅色主题适配——共享样式 token 化源契约 =====

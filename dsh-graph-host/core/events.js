@@ -13,6 +13,19 @@ export function nowIso() {
     return (`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
         `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${sign}${hh}:${mm}`);
 }
+/** 毫秒精度 nowIso：boardProjection 的 generated_at 使用它（g-171），
+ *  与 updated_at（goal.md mtimeMs，毫秒级）同秒比较时不会被秒级截断产生负 age。 */
+export function nowIsoMs() {
+    const d = new Date();
+    const off = -d.getTimezoneOffset();
+    const sign = off >= 0 ? "+" : "-";
+    const hh = String(Math.floor(Math.abs(off) / 60)).padStart(2, "0");
+    const mm = String(Math.abs(off) % 60).padStart(2, "0");
+    const pad = (n) => String(n).padStart(2, "0");
+    return (`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+        `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
+        `.${String(d.getMilliseconds()).padStart(3, "0")}${sign}${hh}:${mm}`);
+}
 export function appendEvent(root, ev) {
     const rec = { ts: ev.ts ?? nowIso(), ...ev };
     appendFileSync(join(root, "events.jsonl"), JSON.stringify(rec) + "\n", "utf8");

@@ -416,11 +416,14 @@
           // 旧 payload 无 updated_at → 无动画，兼容渲染
           if (typeof ts !== "number" || !Number.isFinite(ts)) continue;
           const age = gen - ts; // 服务端时间窗口（毫秒）
-          if (age < 0 || age >= 10000) continue; // 未来/已过 10 秒 → 不播放
+          // 容忍 ≤1s 的负 age：旧版 generated_at 为秒级精度（无毫秒），同秒修改会得到 -999ms 的负值；
+          // 视为“刚修改”而非未来时间，保证编辑后立即刷新能补播。超过 10 秒不播放。
+          const safeAge = Math.max(0, age);
+          if (age < -1000 || safeAge >= 10000) continue; // 未来(>1s)/已过 10 秒 → 不播放
           const token = g.id + ":" + ts;
           if (seenUpdateTokens.current.has(token)) continue; // 同一 token 不重播
           seenUpdateTokens.current.add(token);
-          const remaining = Math.max(0, 10000 - age);
+          const remaining = Math.max(0, 10000 - safeAge);
           setUpdateEmphasis((prev) => ({ ...prev, [g.id]: { remaining, token } }));
           if (emphasisTimers.current[g.id]) clearTimeout(emphasisTimers.current[g.id]);
           emphasisTimers.current[g.id] = setTimeout(() => {

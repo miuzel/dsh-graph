@@ -355,3 +355,19 @@ test("boardProjection：缺失/不可读 goal.md 时 updated_at 为 null 且不�
   assert.equal(legacy.updated_at, undefined, "旧 payload 无 updated_at 字段");
   assert.ok(legacy.id && legacy.title && legacy.status, "旧 payload 其余字段仍完整");
 });
+
+test("boardProjection：generated_at 为毫秒精度，同秒修改 updated_at 不产生负 age（g-171 回退修复）", async () => {
+  const { boardProjection } = await import("../ops.ts");
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "ms 精度", version: "v-t", actor: "test" });
+  const gf = findGoalFile(root, id);
+  // 同秒内重写 goal.md，使 mtime 与 generated_at 处于同一秒（旧秒级截断会得到 -999ms 的负 age）
+  writeFileSync(gf, readFileSync(gf, "utf8"));
+  const b = boardProjection(root);
+  const g = b.versions[0].goals.find((x) => x.id === id)!;
+  // generated_at 必须是毫秒精度（含 .SSS），否则与 mtimeMs 同秒比较会被截断为负
+  assert.ok(/\.\d{3}\+\d{2}:\d{2}$/.test(b.generated_at), `generated_at 应含毫秒：${b.generated_at}`);
+  const age = Date.parse(b.generated_at) - g.updated_at;
+  // 毫秒精度下最多差 1ms（mtime 亚毫秒四舍五入），绝不应出现秒级截断的 -999ms 量级
+  assert.ok(age > -1000, `同秒修改的 age 应 > -1000ms（实际 ${age}ms），否则动画会被 age<0 跳过`);
+});

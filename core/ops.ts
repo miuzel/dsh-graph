@@ -27,7 +27,7 @@ import {
   type GoalDoc,
   type GoalType,
 } from "./model.ts";
-import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso, type GraphEvent } from "./events.ts";
+import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso, nowIsoMs, type GraphEvent } from "./events.ts";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.ts";
 import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail } from "./version-lane.ts";
 
@@ -2903,7 +2903,7 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
     if (oldG.id !== newG.id) reusedBy.set(oldG.id, newG.id);
   }
   for (const g of allGoals) g.reused_by = reusedBy.get(g.id) ?? null;
-  return { generated_at: nowIso(), versions, standalone, backlog };
+  return { generated_at: nowIsoMs(), versions, standalone, backlog };
 }
 
 /** 看板端点载荷：board 投影 + supervisorSession（g-108）。
