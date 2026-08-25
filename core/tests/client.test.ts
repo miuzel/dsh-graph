@@ -285,6 +285,20 @@ test("g-164 released 泳道与 active/version 泳道共用同一动态列模板�
   assert.equal((source.match(/gridTemplateColumns: gridCols/g) || []).length, 2);
 });
 
+test("g-174 标题栏源契约：version 链接、新建版本入口迁移、设置按钮位于 DEBUG 左侧", () => {
+  const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
+  const head = source.slice(source.indexOf('h("div", { style: S.head },'), source.indexOf("// g-108：顶部 supervisor 状态栏"));
+  // 标题栏显示插件版本链接，新标签打开插件官网。
+  assert.match(head, /href: "https:\/\/github\.com\/miuzel\/dsh-graph",\s*\n\s*target: "_blank"/);
+  assert.match(head, /"version: " \+ PLUGIN_VERSION/);
+  // 标题栏不再重复显示「＋ 新建版本」（已迁至看板左上角，见 g-164 契约断言）。
+  assert.doesNotMatch(head, /"＋ 新建版本"/);
+  // 负责人 2026-08-25 review：设置按钮 ⚙ 位于 DEBUG 信息之前（DEBUG 左侧）。
+  const gear = head.indexOf('"⚙")');
+  const debug = head.indexOf("DEBUG sessionId=");
+  assert.ok(gear >= 0 && debug >= 0 && gear < debug, "⚙ 看板设置按钮应在 DEBUG 信息之前");
+});
+
 test("g-156 交付/阻塞折叠列源契约：会话态、窄栏标题与数量均保留", () => {
   const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
   // 折叠状态必须由 React state 持有，不能落到 workspace 或持久化存储。
