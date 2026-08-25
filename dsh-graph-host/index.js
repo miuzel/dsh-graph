@@ -1433,6 +1433,23 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
         }
       },
     },
+    // g-138: 暂缓目标端点（由详情弹窗二次确认后调用）
+    {
+      path: "/api/dsh-graph/postpone",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, reason } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          postponeGoal(rootForReq(req, body), goal, { actor: "human:gui", reason });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
     // g-110: 取消归档目标端点
     {
       path: "/api/dsh-graph/unarchive",

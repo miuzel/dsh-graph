@@ -2681,6 +2681,12 @@ window.__ModuleLoader__.load({
       const [archiveNote, setArchiveNote] = React.useState(null);
       const isArchived = state.data?.meta?.archived === true;
       const canArchive = ["draft", "planning", "delivered"].includes(state.data?.meta?.status);
+      // g-138：暂缓操作（仅版本/standalone 目标，二次确认）
+      const [postponeConfirm, setPostponeConfirm] = React.useState(false);
+      const [postponeNote, setPostponeNote] = React.useState(null);
+      const goalFile = String(state.data?.goalFile ?? "");
+      const isBacklogGoal = goalFile.includes("/backlog/") || goalFile.includes("\\\\backlog\\\\");
+      const canPostpone = !isArchived && !isBacklogGoal && Boolean(state.data?.meta?.status);
       // g-140: 删除操作（仅已归档目标可删除，二次确认）
       const [deleteConfirm, setDeleteConfirm] = React.useState(false);
       const [deleteNote, setDeleteNote] = React.useState(null);
@@ -2706,6 +2712,29 @@ window.__ModuleLoader__.load({
           }
         } catch (e) {
           setArchiveNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+      };
+
+      // g-138：二次确认后调用单向暂缓接口，成功后关闭详情并刷新看板
+      const doPostpone = async () => {
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/postpone"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.id }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setPostponeNote("✅ 已暂缓");
+            showToast("✅ 目标已暂缓并移回 backlog");
+            setPostponeConfirm(false);
+            props.onArchived?.();
+            props.onClose?.();
+          } else {
+            setPostponeNote("⚠️ 暂缓失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setPostponeNote("⚠️ 请求失败：" + String(e?.message ?? e));
         }
       };
 
@@ -2830,6 +2859,26 @@ window.__ModuleLoader__.load({
                     onClick: doArchive,
                   }, "📦 归档")
                 : null,
+            // g-138：暂缓按钮位于归档按钮右侧，点击后要求二次确认
+            canPostpone
+              ? (postponeConfirm
+                ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
+                    h("span", { style: { ...S.meta, fontSize: 11, color: "#d66" } }, "确认暂缓？"),
+                    h("button", {
+                      style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(224,165,58,.2)" }, className: "dg-btn",
+                      title: "确认将目标移回 backlog",
+                      onClick: doPostpone,
+                    }, "⏸ 确认"),
+                    h("button", {
+                      style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
+                      onClick: () => { setPostponeConfirm(false); setPostponeNote(null); },
+                    }, "取消"))
+                : h("button", {
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(224,165,58,.2)" }, className: "dg-btn",
+                    title: "暂缓目标（移回 backlog，保留卡片与 attempts）",
+                    onClick: () => { setPostponeConfirm(true); setPostponeNote(null); },
+                  }, "⏸ 暂缓"))
+              : null,
             // g-140: 删除按钮（仅已归档目标显示，二次确认）
             isArchived
               ? (deleteConfirm
@@ -2851,6 +2900,7 @@ window.__ModuleLoader__.load({
                   }, "🗑 删除"))
               : null,
             archiveNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, archiveNote) : null,
+            postponeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, postponeNote) : null,
             deleteNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, deleteNote) : null,
             typeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, typeNote) : null);
 
