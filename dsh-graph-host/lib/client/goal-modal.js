@@ -414,7 +414,7 @@
             }, "✏️ 判据")) : null,
           (d.cards ?? []).length
             ? h("div", { key: "k", style: S.modalSection },
-                h("div", { style: S.modalH }, "🗂 信息收集"),
+                h("div", { style: S.modalH }, "🔎 信息收集"),
                 d.cards.map((c) => h("div", {
                   key: c.id,
                   style: { ...S.subCard, cursor: "pointer" },
@@ -431,7 +431,7 @@
                   ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
                   : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession }))
             : h("div", { key: "k", style: S.modalSection },
-                h("div", { style: S.modalH }, "🗂 信息收集"),
+                h("div", { style: S.modalH }, "🔎 信息收集"),
                 h("div", { style: S.meta }, "（暂无上下文卡片）"),
                 isBacklog
                   ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")

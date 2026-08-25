@@ -1365,3 +1365,23 @@ test("g-176 局部硬编码例外逐项主题化：设置/版本操作/tab/卡�
   // 实心危险按钮（红底白字）与卡片左栏语义色保留（两主题均可用，非暗色例外）
   assert.match(kanban, /background: "#e74c3c", color: "#fff"/);
 });
+
+// ===== g-179：目标详情弹窗「🗂 信息收集」标题 emoji 统一替换为「🔎 信息收集」=====
+
+test("g-179 模块源契约：goal-modal.js 信息收集标题统一为 🔎 信息收集（无旧 🗂）", () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  // 实际显示的标题两处（有卡/无卡分支）均为新 emoji
+  const matches = src.match(/h\("div", \{ style: S\.modalH \}, "🔎 信息收集"\)/g) ?? [];
+  assert.equal(matches.length, 2, "goal-modal.js 两处信息收集标题均为 🔎 信息收集");
+  assert.ok(!src.includes("🗂"), "goal-modal.js 不残留旧 emoji 🗂");
+});
+
+test("g-179 生成 bundle 契约：client.js 标题同步为 🔎 信息收集且保留 generated header", () => {
+  const bundle = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
+  const matches = bundle.match(/h\("div", \{ style: S\.modalH \}, "🔎 信息收集"\)/g) ?? [];
+  assert.equal(matches.length, 2, "生成 bundle: 两处信息收集标题均为 🔎 信息收集");
+  assert.ok(!bundle.includes("🗂"), "生成 bundle: 不残留旧 emoji 🗂");
+});
