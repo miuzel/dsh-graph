@@ -31,7 +31,7 @@
     function ReusedBadge(props) {
       const { childId, reusedBy } = props;
       if (!childId || !reusedBy) return null;
-      return h("div", { style: { ...S.meta, color: "#e0a53a", marginTop: 2 } },
+      return h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginTop: 2 } },
         `♻️ 被复用→${reusedBy}`);
     }
 

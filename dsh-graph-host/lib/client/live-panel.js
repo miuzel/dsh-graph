@@ -49,7 +49,7 @@
         { style: S.liveStrip, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
         // 第一行：状态 + 流式内容（同行）；右侧有空间时显示 tok/ctx（flex 布局自动压缩）
         h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
-          h("span", { style: { color: running ? "#3aa675" : "rgba(128,128,128,.9)", flexShrink: 0 } },
+          h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
             statusLabel),
           lineEl,
           meter

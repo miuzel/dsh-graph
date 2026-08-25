@@ -112,7 +112,8 @@ window.__ModuleLoader__.load({
       .dg-deliver-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-blocked-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-btn { transition: background .12s ease, border-color .12s ease, filter .12s ease; }
-      .dg-btn:hover { filter: brightness(1.20); background: rgba(128,128,128,.25); }
+      /* g-176：hover 不再用 brightness(1.20)（浅色主题下会洗白），改用主题化背景加深 */
+      .dg-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.25)); }
       .dg-btn:active { filter: brightness(0.95); }
       .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
       /* g-162：普通泳道内容底部居中的扁平折叠入口；released 不使用此控件 */
@@ -122,11 +123,12 @@ window.__ModuleLoader__.load({
         display: flex; align-items: center; justify-content: center;
       }
       .dg-lane-collapse { transition: transform .14s ease, background .14s ease, filter .14s ease; }
-      .dg-lane-collapse:hover { background: rgba(128,128,128,.28); transform: translateX(-50%) translateY(-2px); filter: brightness(1.15); }
+      /* g-176：hover 去掉 brightness(1.15)（浅色主题下会洗白），保留背景加深 */
+      .dg-lane-collapse:hover { background: rgba(128,128,128,.28); transform: translateX(-50%) translateY(-2px); }
       .dg-lane-collapse:active { transform: translateX(-50%) translateY(0); }
       .dg-lane-collapse-triangle {
         width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent;
-        border-bottom: 5px solid rgba(220,220,220,.82);
+        border-bottom: 5px solid var(--dsw-alias-label-tertiary, rgba(220,220,220,.82));
       }
       /* g-153：主要操作按钮 hover/active/disabled */
       .dg-btn-primary { transition: background .12s ease, border-color .12s ease, filter .12s ease; }
@@ -143,16 +145,16 @@ window.__ModuleLoader__.load({
       .dg-btn-accept:hover { background: rgba(58,166,117,.30); border-color: rgba(58,166,117,.55); }
       .dg-btn-accept:active { background: rgba(58,166,117,.42); }
       .dg-btn-accept:disabled { opacity: 0.45; cursor: default; }
-      /* g-153：下拉菜单/选择控件暗色主题 */
+      /* g-153：下拉菜单/选择控件——g-176：改 DSH 主题变量并保留暗色 fallback */
       .dg-select {
         font-size: 12px; padding: 3px 8px; cursor: pointer;
-        background: rgba(30,31,36,.92); color: #e6e6e6;
-        border: 1px solid rgba(128,128,128,.35); border-radius: 4px;
+        background: var(--dsw-alias-bg-layer-2, rgba(30,31,36,.92)); color: var(--dsw-alias-label-primary, #e6e6e6);
+        border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35)); border-radius: 4px;
         transition: border-color .12s ease;
       }
       .dg-select:hover { border-color: rgba(128,128,128,.55); }
       .dg-select:focus { border-color: rgba(76,141,255,.55); outline: none; }
-      .dg-select option { background: #222328; color: #e6e6e6; }
+      .dg-select option { background: var(--dsw-alias-bg-layer-3, #222328); color: var(--dsw-alias-label-primary, #e6e6e6); }
       /* g-125 fb3：三角展开/收起按钮——暗底纹、窄宽度，不占整列、不像播放按钮 */
       .dg-chevron {
         background: rgba(128,128,128,.18);
@@ -299,12 +301,12 @@ window.__ModuleLoader__.load({
         borderTop: "1px dashed rgba(128,128,128,.35)",
       },
       overlay: {
-        position: "fixed", inset: 0, background: "rgba(0,0,0,.55)",
+        position: "fixed", inset: 0, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.55))",
         display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
       },
       drawer: {
         position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
-        background: "#1e1f24", color: "#e6e6e6", zIndex: 10000,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10000,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
@@ -312,43 +314,46 @@ window.__ModuleLoader__.load({
       drawerSection: { marginTop: 14 },
       drawerH: { fontWeight: 700, fontSize: 13, marginBottom: 6, opacity: 0.9 },
       modal: {
-        background: "#1e1f24", color: "#e6e6e6", borderRadius: 10,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", borderRadius: 10,
         maxWidth: 720, width: "90%", maxHeight: "80vh", overflowY: "auto",
         padding: "16px 20px", fontSize: 13, lineHeight: 1.6,
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
-      // g-153：共享按钮样式 token——暗色主题下确保可读性与层级
+      // g-153：共享按钮样式 token——暗色主题下确保可读性与层级；g-176：改 DSH 主题变量并保留暗色 fallback
       btn: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(128,128,128,.15)", color: "#e6e6e6",
-        border: "1px solid rgba(128,128,128,.30)", borderRadius: 4,
+        background: "var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15))",
+        color: "var(--dsw-alias-label-primary, #e6e6e6)",
+        border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30))", borderRadius: 4,
       },
       // g-153：主要操作按钮（蓝底高亮）
       btnPrimary: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(76,141,255,.18)", color: "#8ab4ff",
-        border: "1px solid rgba(76,141,255,.40)", borderRadius: 4,
+        background: "var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.18))",
+        color: "var(--dsw-alias-state-business-primary, #8ab4ff)",
+        border: "1px solid var(--dsw-alias-state-business-primary, rgba(76,141,255,.40))", borderRadius: 4,
       },
       // g-153：危险操作按钮（红底红字）
       btnDanger: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(214,102,102,.18)", color: "#f08080",
+        background: "rgba(214,102,102,.18)", color: "var(--dsw-alias-state-error-primary, #f08080)",
         border: "1px solid rgba(214,102,102,.35)", borderRadius: 4,
       },
       // g-153：接受/确认操作按钮（绿底绿字）
       btnAccept: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(58,166,117,.18)", color: "#6ee7a0",
+        background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-primary, #6ee7a0)",
         border: "1px solid rgba(58,166,117,.40)", borderRadius: 4,
       },
       // g-153：下拉菜单/选择控件样式 token
       select: {
         fontSize: 12, padding: "3px 8px", cursor: "pointer",
-        background: "rgba(30,31,36,.92)", color: "#e6e6e6",
-        border: "1px solid rgba(128,128,128,.35)", borderRadius: 4,
+        background: "var(--dsw-alias-bg-layer-2, rgba(30,31,36,.92))",
+        color: "var(--dsw-alias-label-primary, #e6e6e6)",
+        border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))", borderRadius: 4,
       },
-      selectOption: { background: "#222328", color: "#e6e6e6" },
+      selectOption: { background: "var(--dsw-alias-bg-layer-3, #222328)", color: "var(--dsw-alias-label-primary, #e6e6e6)" },
       close: { float: "right", cursor: "pointer", opacity: 0.7, fontSize: 16 },
       // g-107 会话内嵌实时区
       liveStrip: {
@@ -367,14 +372,14 @@ window.__ModuleLoader__.load({
       promptRow: { display: "flex", gap: 4, alignItems: "center" },
       promptInput: {
         flex: 1, minWidth: 0, fontSize: 12, padding: "3px 6px",
-        background: "rgba(0,0,0,.25)", color: "inherit",
-        border: "1px solid rgba(128,128,128,.4)", borderRadius: 4,
+        background: "var(--dsw-alias-bg-layer-2, rgba(0,0,0,.25))", color: "inherit",
+        border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.4))", borderRadius: 4,
       },
       // g-108 看板顶部 supervisor 状态栏
       supervisorBar: {
         display: "flex", alignItems: "center", gap: 10, marginBottom: 8,
         padding: "4px 10px", border: "1px solid rgba(58,166,117,.45)",
-        borderRadius: 6, background: "rgba(30,31,36,.92)", fontSize: 12,
+        borderRadius: 6, background: "var(--dsw-alias-bg-module-platform, rgba(30,31,36,.92))", fontSize: 12,
       },
       recordItem: {
         marginTop: 3, padding: "3px 6px", borderRadius: 4,
@@ -612,7 +617,7 @@ window.__ModuleLoader__.load({
         { style: S.liveStrip, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
         // 第一行：状态 + 流式内容（同行）；右侧有空间时显示 tok/ctx（flex 布局自动压缩）
         h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
-          h("span", { style: { color: running ? "#3aa675" : "rgba(128,128,128,.9)", flexShrink: 0 } },
+          h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
             statusLabel),
           lineEl,
           meter
@@ -984,7 +989,7 @@ window.__ModuleLoader__.load({
     function ReusedBadge(props) {
       const { childId, reusedBy } = props;
       if (!childId || !reusedBy) return null;
-      return h("div", { style: { ...S.meta, color: "#e0a53a", marginTop: 2 } },
+      return h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginTop: 2 } },
         `♻️ 被复用→${reusedBy}`);
     }
 
@@ -1231,13 +1236,13 @@ window.__ModuleLoader__.load({
           }),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
         hasDep
-          ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
+          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
           : null,
         metDeps.length
-          ? h("div", { style: { ...S.meta, color: "#3aa675" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-success-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
           : null,
         blocked && g.blocked_reason
-          ? h("div", { style: { ...S.statusLine, color: "#d66" } }, "⛔ " + g.blocked_reason)
+          ? h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + g.blocked_reason)
           : null,
         // g-a92e1406：执行会话内嵌实时条——status_line 摘要并入状态小窗
         //（运行中 ⏳ / 空闲刚执行完 ✅）；无执行会话时退化为独立状态行（带动画）
@@ -1274,7 +1279,7 @@ window.__ModuleLoader__.load({
       const { text, blocked, running } = props;
       if (!text) return null;
       if (blocked) {
-        return h("div", { style: { ...S.statusLine, color: "#d66" } }, "⛔ " + text);
+        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + text);
       }
       const animClass = running ? "dg-running-flow" : "";
       return h(
@@ -1487,7 +1492,7 @@ window.__ModuleLoader__.load({
             h("div", { key: "del", style: { ...S.drawerSection, borderTop: "1px solid rgba(128,128,128,.25)", paddingTop: 8 } },
               deleteConfirm
                 ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
-                    h("div", { style: { ...S.meta, color: "#d66", fontSize: 12 } },
+                    h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #d66)", fontSize: 12 } },
                       `⚠️ 确认删除卡片「${card.title}」？请输入卡片 id 确认：`),
                     h("div", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } },
                       `id：${card.id}`),
@@ -1554,7 +1559,7 @@ window.__ModuleLoader__.load({
       return h(
         "div",
         null,
-        h("div", { style: { ...S.overlay, background: "rgba(0,0,0,.35)" }, onClick: props.onClose }),
+        h("div", { style: { ...S.overlay, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.35))" }, onClick: props.onClose }),
         h("div", { style: S.drawer, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: props.onClose }, "✕"),
           inner),
@@ -1631,7 +1636,7 @@ window.__ModuleLoader__.load({
       const host = document.createElement("div");
       host.style.cssText =
         "position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:99999;" +
-        "background:rgba(30,30,30,.94);color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;" +
+        "background:var(--dsw-alias-toast-bg, rgba(30,30,30,.94));color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;" +
         "box-shadow:0 4px 16px rgba(0,0,0,.35);pointer-events:none;opacity:0;transition:opacity .18s ease;max-width:80vw;";
       host.textContent = text;
       document.body.appendChild(host);
@@ -1890,7 +1895,7 @@ window.__ModuleLoader__.load({
             : acceptState === "pending"
               ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待裁决")
               : acceptState === "resolved"
-                ? h("span", { style: { ...S.meta, fontSize: 12, color: "#3aa675" } }, "✅ 已接受生效")
+                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-state-success-primary, #3aa675)" } }, "✅ 已接受生效")
                 : null,
           h("button", {
             style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
@@ -1904,7 +1909,7 @@ window.__ModuleLoader__.load({
         // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
         acceptState === "objection"
           ? h("div", { key: "obj", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
-              h("div", { style: { ...S.meta, color: "#e0a53a" } },
+              h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
                 "⚠️ 主管异议：" + (objectionText ?? "（无内容）")),
               forceMode
                 ? [
@@ -2392,13 +2397,13 @@ window.__ModuleLoader__.load({
         headMeta = [
           h("div", { key: "m1", style: S.meta }, bits.join(" ｜ ")),
           pendingDeps.length
-            ? h("div", { key: "m2", style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
+            ? h("div", { key: "m2", style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
             : null,
           metDeps.length
-            ? h("div", { key: "m2b", style: { ...S.meta, color: "#3aa675" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+            ? h("div", { key: "m2b", style: { ...S.meta, color: "var(--dsw-alias-state-success-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
             : null,
           status === "blocked" && meta.blocked_reason
-            ? h("div", { key: "m3", style: { ...S.meta, color: "#d66" } }, "⛔ " + meta.blocked_reason)
+            ? h("div", { key: "m3", style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + meta.blocked_reason)
             : null,
         ];
         // g-107：📡 会话实时面板上移至标题与状态摘要下方（默认折叠，点击展开）
@@ -2554,7 +2559,7 @@ window.__ModuleLoader__.load({
                 borderBottom: "none",
                 background: tab === "detail" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "detail" ? 700 : 400,
-                color: tab === "detail" ? "#8ab4ff" : "inherit",
+                color: tab === "detail" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "detail" ? 1 : 0.7,
               },
               onClick: () => setTab("detail"),
@@ -2567,7 +2572,7 @@ window.__ModuleLoader__.load({
                 borderBottom: "none",
                 background: tab === "activity" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "activity" ? 700 : 400,
-                color: tab === "activity" ? "#8ab4ff" : "inherit",
+                color: tab === "activity" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "activity" ? 1 : 0.7,
               },
               onClick: () => setTab("activity"),
@@ -2580,7 +2585,7 @@ window.__ModuleLoader__.load({
                 borderBottom: "none",
                 background: tab === "context" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "context" ? 700 : 400,
-                color: tab === "context" ? "#8ab4ff" : "inherit",
+                color: tab === "context" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "context" ? 1 : 0.7,
               },
               onClick: () => setTab("context"),
@@ -2866,7 +2871,7 @@ window.__ModuleLoader__.load({
             canPostpone
               ? (postponeConfirm
                 ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
-                    h("span", { style: { ...S.meta, fontSize: 11, color: "#d66" } }, "确认暂缓？"),
+                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "确认暂缓？"),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(224,165,58,.2)" }, className: "dg-btn",
                       title: "确认将目标移回 backlog",
@@ -2886,7 +2891,7 @@ window.__ModuleLoader__.load({
             isArchived
               ? (deleteConfirm
                 ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
-                    h("span", { style: { ...S.meta, fontSize: 11, color: "#d66" } }, "确认删除？"),
+                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "确认删除？"),
                     h("button", {
                       style: { ...S.btnDanger, fontSize: 11, padding: "1px 6px" }, className: "dg-btn-danger",
                       title: "确认删除（不可恢复）",
@@ -3013,7 +3018,7 @@ window.__ModuleLoader__.load({
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
-            h("div", { style: { ...S.meta, marginTop: 6, color: "#d66" } }, "加载失败：" + state.error)));
+            h("div", { style: { ...S.meta, marginTop: 6, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "加载失败：" + state.error)));
       }
       const goalTitle = state.data?.meta?.title ?? null;
       const rowBtn = (label, tip, onClick, extra) => h("button", {
@@ -3222,7 +3227,7 @@ window.__ModuleLoader__.load({
                 }, oldChildId.slice(0, 8) + "… ↗"))
             : null,
           !hasCriteria
-            ? h("div", { style: { ...S.meta, color: "#e0a53a", marginBottom: 4 } },
+            ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginBottom: 4 } },
                 "⚠️ 质量判据尚未登记——将以授权模式强制迁移到执行列。")
             : null,
           h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
@@ -3267,7 +3272,7 @@ window.__ModuleLoader__.load({
             "• 相关文档/配置已更新", h("br"),
             "• 已通知主管进行最终复核", h("br"),
             h("br"),
-            h("span", { style: { color: "#e0a53a" } },
+            h("span", { style: { color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
               "⚠️ 标记为「已交付」后需主管评审通过才能正式完成。")),
           h("div", { style: { display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" } },
             supervisorSession
@@ -4386,7 +4391,7 @@ window.__ModuleLoader__.load({
             target: "_blank",
             rel: "noreferrer",
             title: "dsh-graph 插件官网",
-            style: { ...S.meta, color: "#8ab4ff", cursor: "pointer", textDecoration: "underline" },
+            style: { ...S.meta, color: "var(--dsw-alias-state-business-primary, #8ab4ff)", cursor: "pointer", textDecoration: "underline" },
           }, "version: " + PLUGIN_VERSION),
           h("span", { style: S.meta }, "数据时间：" + (b.generated_at ?? "").replace("T", " ").slice(0, 19)),
           h("button", { style: { ...S.btn, marginLeft: 8 }, className: "dg-btn", onClick: load }, "刷新"),
@@ -4499,10 +4504,10 @@ window.__ModuleLoader__.load({
                     value: newGoalVersion,
                     onChange: (e) => setNewGoalVersion(e.target.value),
                   },
-                    h("option", { value: "", style: { background: "#2a2b31", color: "#e6e6e6" } }, "backlog（默认）"),
-                    h("option", { value: "standalone", style: { background: "#2a2b31", color: "#e6e6e6" } }, "独立目标"),
+                    h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "backlog（默认）"),
+                    h("option", { value: "standalone", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "独立目标"),
                     // 版本选项来自 board 数据的 versions 列表
-                    ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug, style: { background: "#2a2b31", color: "#e6e6e6" } }, v.slug)))),
+                    ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug, style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, v.slug)))),
                 h("div", { style: { marginBottom: 8 } },
                   h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "类型（默认 task）"),
                   h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
@@ -4616,7 +4621,7 @@ window.__ModuleLoader__.load({
                 // g-135: 阻塞目标清单（发布前置条件不满足时展示）
                 versionDetailData && versionDetailData.blocking && versionDetailData.blocking.length > 0
                   ? h("div", { style: { marginBottom: 12, padding: "8px 10px", borderRadius: 6, background: "rgba(255,107,107,.12)", border: "1px solid rgba(255,107,107,.3)" } },
-                      h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4, color: "#ff6b6b" } }, `⛔ 阻塞目标（${versionDetailData.blocking.length} 个未 delivered）`),
+                      h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, `⛔ 阻塞目标（${versionDetailData.blocking.length} 个未 delivered）`),
                       ...versionDetailData.blocking.map((g) =>
                         h("div", { key: g.id, style: { fontSize: 12, padding: "2px 0", opacity: 0.85 } },
                           `• ${g.id}（${g.title}）：${g.status}`)
@@ -4695,7 +4700,7 @@ window.__ModuleLoader__.load({
                   // 标记为 released —— 仅非 released 时显示
                   versionDetailTarget.status !== "released"
                     ? h("button", {
-                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#4caf50", background: "rgba(76,175,80,.12)", border: "1px solid rgba(76,175,80,.4)" },
+                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-success-primary, #4caf50)", background: "rgba(76,175,80,.12)", border: "1px solid rgba(76,175,80,.4)" },
                         className: "dg-btn",
                         disabled: versionActionLoading,
                         onClick: () => {
@@ -4737,11 +4742,11 @@ window.__ModuleLoader__.load({
                   versionDetailTarget.status === "released"
                     ? reactivateConfirm
                       ? h("div", { style: { padding: "8px 12px", borderRadius: 6, background: "rgba(255,152,0,.15)", border: "1px solid rgba(255,152,0,.4)", fontSize: 12, lineHeight: 1.5 } },
-                          h("div", { style: { fontWeight: 600, marginBottom: 4, color: "#ff9800" } }, "⚠️ 确认恢复版本？"),
+                          h("div", { style: { fontWeight: 600, marginBottom: 4, color: "var(--dsw-alias-state-warn-label, #ff9800)" } }, "⚠️ 确认恢复版本？"),
                           h("div", { style: { marginBottom: 8, opacity: 0.85 } }, `恢复 ${versionDetailTarget.slug} 将撤销发布状态，使版本重新进入 active（进行中）。已交付的目标不受影响，再次发布仍需满足全部目标 delivered 等校验。`),
                           h("div", { style: { display: "flex", gap: 8 } },
                             h("button", {
-                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff9800", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
+                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-warn-label, #ff9800)", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
                               className: "dg-btn",
                               disabled: reactivatingVersion,
                               onClick: () => {
@@ -4778,7 +4783,7 @@ window.__ModuleLoader__.load({
                           )
                         )
                       : h("button", {
-                          style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff9800", background: "rgba(255,152,0,.08)", border: "1px solid rgba(255,152,0,.3)" },
+                          style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-warn-label, #ff9800)", background: "rgba(255,152,0,.08)", border: "1px solid rgba(255,152,0,.3)" },
                           className: "dg-btn",
                           disabled: versionActionLoading,
                           onClick: () => { setReactivateConfirm(true); setVersionActionNote(null); },
@@ -4786,7 +4791,7 @@ window.__ModuleLoader__.load({
                     : null,
                   // 删除
                   h("button", {
-                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff6b6b", opacity: 0.7 },
+                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-error-primary, #ff6b6b)", opacity: 0.7 },
                     className: "dg-btn",
                     onClick: () => {
                       setDeleteVersionTarget({ slug: versionDetailTarget.slug, name: versionDetailTarget.name });
@@ -4886,7 +4891,7 @@ window.__ModuleLoader__.load({
                 h("span", { style: S.close, onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); } }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "🗑️ 删除版本泳道"),
                 h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } }, `确定删除版本 ${deleteVersionTarget.name}（${deleteVersionTarget.slug}）？`),
-                h("div", { style: { marginBottom: 12, fontSize: 12, color: "#ff6b6b" } }, "⚠️ 此操作不可逆，仅删除空版本（无任何目标含归档）"),
+                h("div", { style: { marginBottom: 12, fontSize: 12, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, "⚠️ 此操作不可逆，仅删除空版本（无任何目标含归档）"),
                 h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13, background: "#e74c3c", color: "#fff" },
@@ -5022,15 +5027,15 @@ window.__ModuleLoader__.load({
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: props.onClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
-            error ? h("div", { style: { ...S.meta, color: "#f08080", marginTop: 8 } }, error) : null,
+            error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 8 } }, error) : null,
             h("button", { style: { ...S.btn, marginTop: 10 }, className: "dg-btn", onClick: load }, "重试")));
       }
 
       const auto = form.supervisor?.automation ?? {};
       const automationOptions = (val) => [
-        h("option", { value: "", style: { background: "#2a2b31", color: "#e6e6e6" } }, "（未设置）"),
-        h("option", { value: "human", style: { background: "#2a2b31", color: "#e6e6e6" } }, "human（人工）"),
-        h("option", { value: "ai", style: { background: "#2a2b31", color: "#e6e6e6" } }, "ai（自动）"),
+        h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（未设置）"),
+        h("option", { value: "human", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "human（人工）"),
+        h("option", { value: "ai", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "ai（自动）"),
       ];
       const promptOverride = (key, label) => {
         const ov = form.prompt_overrides?.[key] ?? { state: "default", value: null };
@@ -5104,7 +5109,7 @@ window.__ModuleLoader__.load({
         }
       };
       const opt = (key, value, label) =>
-        h("option", { key, value, style: { background: "#2a2b31", color: "#e6e6e6" } }, label);
+        h("option", { key, value, style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, label);
       const providerOptions = (() => {
         const opts = [opt("__blank-p", "", "（继承父会话）")];
         // 已存 provider 未在合法目录中（含目录未就绪时无法校验）→ 保留为固定 option
@@ -5222,8 +5227,8 @@ window.__ModuleLoader__.load({
             h("button", { style: { ...S.btn, padding: "6px 16px", fontSize: 13 }, className: "dg-btn", disabled: saving, onClick: save },
               saving ? "保存中…" : "保存"),
             h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: props.onClose }, "关闭"),
-            note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "#6ee7a0" : "#f08080", marginLeft: 8 } }, note.text) : null),
-          error ? h("div", { style: { ...S.meta, color: "#f08080", marginTop: 6 } }, error) : null));
+            note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "var(--dsw-alias-state-success-primary, #6ee7a0)" : "var(--dsw-alias-state-error-primary, #f08080)", marginLeft: 8 } }, note.text) : null),
+          error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 6 } }, error) : null));
     }
     // g-133：dsh-graph profile 级全局默认设置页（settings.section：看板设置）。
     // 仅保留子代理默认 provider、默认 model id、子代理默认补充提示词。

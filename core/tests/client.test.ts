@@ -1304,3 +1304,64 @@ test("g-171 生成 bundle 契约：client.js 含更新强调逻辑且保留 gene
   assert.ok(/onClose: \(\) => \{ setModalGoal\(null\); load\(\); \}/.test(bundle), "生成 bundle: 弹窗关闭触发 load()");
   assert.ok(/setInterval\(load, 15000\)/.test(bundle), "生成 bundle: 保留 15 秒轮询");
 });
+
+// ===== g-176：浅色主题适配——共享样式 token 化源契约 =====
+
+test("g-176 共享样式 token 化：S/HOVER_CSS 使用 DSH 主题变量并保留暗色 fallback", () => {
+  const helpers = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  const constants = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
+  const bundle = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  // modal/drawer 背景与文字走主题变量（浅色可读），fallback 保留原暗色
+  assert.match(helpers, /background: "var\(--dsw-alias-bg-layer-1, #1e1f24\)"/);
+  assert.match(helpers, /color: "var\(--dsw-alias-label-primary, #e6e6e6\)"/);
+  assert.match(helpers, /overlay: \{[\s\S]*?var\(--dsw-alias-bg-mask-1, rgba\(0,0,0,\.55\)\)/);
+  // 按钮四族：普通/主要/危险/接受 文字色主题化（fallback 原暗色）
+  assert.match(helpers, /btn: \{[\s\S]*?var\(--dsw-alias-interactive-bg-hover-solid, rgba\(128,128,128,\.15\)\)/);
+  assert.match(helpers, /btnPrimary: \{[\s\S]*?var\(--dsw-alias-state-business-primary, #8ab4ff\)/);
+  assert.match(helpers, /btnDanger: \{[\s\S]*?var\(--dsw-alias-state-error-primary, #f08080\)/);
+  assert.match(helpers, /btnAccept: \{[\s\S]*?var\(--dsw-alias-state-success-primary, #6ee7a0\)/);
+  // 选择控件/输入/主管栏背景主题化
+  assert.match(helpers, /select: \{[\s\S]*?var\(--dsw-alias-bg-layer-2, rgba\(30,31,36,\.92\)\)/);
+  assert.match(helpers, /selectOption: \{ background: "var\(--dsw-alias-bg-layer-3, #222328\)"/);
+  assert.match(helpers, /promptInput: \{[\s\S]*?var\(--dsw-alias-bg-layer-2, rgba\(0,0,0,\.25\)\)/);
+  assert.match(helpers, /supervisorBar: \{[\s\S]*?var\(--dsw-alias-bg-module-platform, rgba\(30,31,36,\.92\)\)/);
+  // HOVER_CSS：hover 不再用 brightness 洗白（浅色主题下不可用），select 主题化
+  assert.doesNotMatch(constants, /\.dg-btn:hover \{ filter: brightness\(1\.20\)/);
+  assert.match(constants, /\.dg-btn:hover \{ background: var\(--dsw-alias-interactive-bg-hover/);
+  assert.doesNotMatch(constants, /\.dg-lane-collapse:hover[\s\S]{0,160}filter: brightness\(1\.15\)/);
+  assert.match(constants, /\.dg-select \{[\s\S]*?background: var\(--dsw-alias-bg-layer-2/);
+  assert.match(constants, /\.dg-select option \{ background: var\(--dsw-alias-bg-layer-3, #222328\)/);
+  // 生成 bundle 同步含主题变量且保留 GENERATED header
+  assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "bundle 保留 GENERATED header");
+  assert.match(bundle, /var\(--dsw-alias-bg-layer-1, #1e1f24\)/);
+  assert.match(bundle, /var\(--dsw-alias-state-warn-label, #e0a53a\)/);
+});
+
+test("g-176 局部硬编码例外逐项主题化：设置/版本操作/tab/卡片语义色", () => {
+  const kanban = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+  const modal = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  const settings = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  const card = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/card.js"), "utf8");
+  const drawer = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/card-drawer.js"), "utf8");
+  // 版本 select option 与 settings option 不再硬编码暗色 #2a2b31
+  assert.doesNotMatch(kanban, /background: "#2a2b31"/);
+  assert.doesNotMatch(settings, /background: "#2a2b31"/);
+  assert.match(kanban, /background: "var\(--dsw-alias-bg-layer-3, #2a2b31\)"/);
+  assert.match(settings, /background: "var\(--dsw-alias-bg-layer-3, #2a2b31\)"/);
+  // tab 选中色与版本操作/卡片/抽屉语义色主题化（不再残留浅色不可读的亮色文字）
+  assert.match(modal, /tab === "detail" \? "var\(--dsw-alias-state-business-primary, #8ab4ff\)" : "inherit"/);
+  assert.doesNotMatch(modal, /color: "#8ab4ff"/);
+  assert.doesNotMatch(kanban, /color: "#ff6b6b"|color: "#ff9800"|color: "#4caf50"/);
+  assert.doesNotMatch(card, /color: "#e0a53a"|color: "#3aa675"|color: "#d66"/);
+  assert.doesNotMatch(drawer, /color: "#d66"/);
+  // 实心危险按钮（红底白字）与卡片左栏语义色保留（两主题均可用，非暗色例外）
+  assert.match(kanban, /background: "#e74c3c", color: "#fff"/);
+});

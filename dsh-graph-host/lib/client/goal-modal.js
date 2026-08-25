@@ -346,13 +346,13 @@
         headMeta = [
           h("div", { key: "m1", style: S.meta }, bits.join(" ｜ ")),
           pendingDeps.length
-            ? h("div", { key: "m2", style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
+            ? h("div", { key: "m2", style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
             : null,
           metDeps.length
-            ? h("div", { key: "m2b", style: { ...S.meta, color: "#3aa675" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+            ? h("div", { key: "m2b", style: { ...S.meta, color: "var(--dsw-alias-state-success-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
             : null,
           status === "blocked" && meta.blocked_reason
-            ? h("div", { key: "m3", style: { ...S.meta, color: "#d66" } }, "⛔ " + meta.blocked_reason)
+            ? h("div", { key: "m3", style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + meta.blocked_reason)
             : null,
         ];
         // g-107：📡 会话实时面板上移至标题与状态摘要下方（默认折叠，点击展开）
@@ -508,7 +508,7 @@
                 borderBottom: "none",
                 background: tab === "detail" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "detail" ? 700 : 400,
-                color: tab === "detail" ? "#8ab4ff" : "inherit",
+                color: tab === "detail" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "detail" ? 1 : 0.7,
               },
               onClick: () => setTab("detail"),
@@ -521,7 +521,7 @@
                 borderBottom: "none",
                 background: tab === "activity" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "activity" ? 700 : 400,
-                color: tab === "activity" ? "#8ab4ff" : "inherit",
+                color: tab === "activity" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "activity" ? 1 : 0.7,
               },
               onClick: () => setTab("activity"),
@@ -534,7 +534,7 @@
                 borderBottom: "none",
                 background: tab === "context" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "context" ? 700 : 400,
-                color: tab === "context" ? "#8ab4ff" : "inherit",
+                color: tab === "context" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "context" ? 1 : 0.7,
               },
               onClick: () => setTab("context"),
@@ -820,7 +820,7 @@
             canPostpone
               ? (postponeConfirm
                 ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
-                    h("span", { style: { ...S.meta, fontSize: 11, color: "#d66" } }, "确认暂缓？"),
+                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "确认暂缓？"),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(224,165,58,.2)" }, className: "dg-btn",
                       title: "确认将目标移回 backlog",
@@ -840,7 +840,7 @@
             isArchived
               ? (deleteConfirm
                 ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
-                    h("span", { style: { ...S.meta, fontSize: 11, color: "#d66" } }, "确认删除？"),
+                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "确认删除？"),
                     h("button", {
                       style: { ...S.btnDanger, fontSize: 11, padding: "1px 6px" }, className: "dg-btn-danger",
                       title: "确认删除（不可恢复）",
