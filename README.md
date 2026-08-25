@@ -2,7 +2,7 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
-单包发布：npm 包名 `dsh-graph`。一个包同时提供：
+单包发布：npm 包名 `dsh-graph`（已发布 0.6.1；main 内部 v0.7 未发布）。一个包同时提供：
 
 - 面向 agent 的 28 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
 - 浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
