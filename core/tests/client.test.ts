@@ -886,6 +886,10 @@ test("g-168 PM 结果反馈：关闭弹窗并把动画挂在看板卡片", () =>
   assert.ok(/onPmStarted: setPolishGoal[\s\S]*onPmFinished: \(\) => setPolishGoal\(null\)/.test(kanban));
   assert.ok(/_polishActive: polishGoal === g\.id/.test(kanban));
   assert.ok(/g\._polishActive \? " dg-running-flow"/.test(card), "动画 class 挂在 goal card");
+  assert.ok(/const cardStyle = g\._polishActive \?/.test(card));
+  assert.ok(/background: "linear-gradient\(90deg/.test(card), "卡片 inline gradient 覆盖默认背景");
+  assert.ok(/animation: "dg-flow-bg 1\.8s ease infinite"/.test(card));
+  assert.equal((card.match(/style: cardStyle, className: dragClass/g) ?? []).length, 2, "折叠/展开路径都使用动画样式");
 });
 
 test("g-168 host prompt 契约：PM 读取 goal.md 并附带指导意见", () => {

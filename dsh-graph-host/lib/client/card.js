@@ -90,9 +90,20 @@
         ...S.goalCard,
         ...(hasDep ? S.depCard : {}),
         ...(blocked ? S.blockedCard : {}),
-        borderLeft: `5px solid ${borderColor}`,
+        /* g-168 polish border */ borderLeft: `5px solid ${borderColor}`,
       };
-      const badges = [];
+      // g-168：inline 覆盖 S.goalCard.background，确保 PM 润色动画在折叠/展开卡片都可见。
+       const cardStyle = g._polishActive ? {
+         ...style,
+         background: "linear-gradient(90deg, rgba(76,141,255,.18), rgba(58,166,117,.34), rgba(76,141,255,.18))",
+         backgroundSize: "200% 100%",
+         animation: "dg-flow-bg 1.8s ease infinite",
+         borderTop: "1px solid rgba(76,141,255,.85)",
+         borderRight: "1px solid rgba(76,141,255,.65)",
+         borderBottom: "1px solid rgba(76,141,255,.85)",
+         boxShadow: "0 0 0 2px rgba(76,141,255,.32), 0 0 12px rgba(58,166,117,.28)",
+       } : style;
+       const badges = [];
       // g-158：类型标记 badge（F/B/T/I + tooltip）——标题左侧，颜色与左栏/弹窗同源
       const aType = normalizeGoalType(g.type);
       const tBadge = h("span", {
@@ -164,7 +175,7 @@
         // g-125 折叠态：仅核心——标题（≤2 行）+ 状态一行；不显示状态摘要、依赖、livestrip、执行按钮、上下文卡片
         return h(
           "div",
-          { key: g.id, style, className: dragClass,
+          { key: g.id, style: cardStyle, className: dragClass,
             title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
           titleRow,
           h("div", { style: S.meta },
@@ -178,7 +189,7 @@
       }
       return h(
         "div",
-        { key: g.id, style, className: dragClass,
+        { key: g.id, style: cardStyle, className: dragClass,
           title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
         titleRow,
         h("div", { style: S.meta },
