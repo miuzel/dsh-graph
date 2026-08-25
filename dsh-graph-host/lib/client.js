@@ -4200,8 +4200,9 @@ window.__ModuleLoader__.load({
         const open = !!openReleased[v.slug];
         return [
           h("div", {
-            key: "rel-" + v.slug, style: S.collapsed, className: "dg-collapsed",
+            key: "rel-" + v.slug, style: { ...S.collapsed, cursor: "pointer" }, className: "dg-collapsed",
             title: "点击展开/收起；点击版本名称打开详情",
+            onClick: () => { setOpenReleased({ ...openReleased, [v.slug]: !open }); },
           },
             h("span", {
               style: { cursor: "pointer" },
