@@ -107,15 +107,15 @@
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: props.onClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
-            error ? h("div", { style: { ...S.meta, color: "#f08080", marginTop: 8 } }, error) : null,
+            error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 8 } }, error) : null,
             h("button", { style: { ...S.btn, marginTop: 10 }, className: "dg-btn", onClick: load }, "重试")));
       }
 
       const auto = form.supervisor?.automation ?? {};
       const automationOptions = (val) => [
-        h("option", { value: "", style: { background: "#2a2b31", color: "#e6e6e6" } }, "（未设置）"),
-        h("option", { value: "human", style: { background: "#2a2b31", color: "#e6e6e6" } }, "human（人工）"),
-        h("option", { value: "ai", style: { background: "#2a2b31", color: "#e6e6e6" } }, "ai（自动）"),
+        h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（未设置）"),
+        h("option", { value: "human", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "human（人工）"),
+        h("option", { value: "ai", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "ai（自动）"),
       ];
       const promptOverride = (key, label) => {
         const ov = form.prompt_overrides?.[key] ?? { state: "default", value: null };
@@ -189,7 +189,7 @@
         }
       };
       const opt = (key, value, label) =>
-        h("option", { key, value, style: { background: "#2a2b31", color: "#e6e6e6" } }, label);
+        h("option", { key, value, style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, label);
       const providerOptions = (() => {
         const opts = [opt("__blank-p", "", "（继承父会话）")];
         // 已存 provider 未在合法目录中（含目录未就绪时无法校验）→ 保留为固定 option
@@ -307,6 +307,6 @@
             h("button", { style: { ...S.btn, padding: "6px 16px", fontSize: 13 }, className: "dg-btn", disabled: saving, onClick: save },
               saving ? "保存中…" : "保存"),
             h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: props.onClose }, "关闭"),
-            note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "#6ee7a0" : "#f08080", marginLeft: 8 } }, note.text) : null),
-          error ? h("div", { style: { ...S.meta, color: "#f08080", marginTop: 6 } }, error) : null));
+            note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "var(--dsw-alias-state-success-primary, #6ee7a0)" : "var(--dsw-alias-state-error-primary, #f08080)", marginLeft: 8 } }, note.text) : null),
+          error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 6 } }, error) : null));
     }

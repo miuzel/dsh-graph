@@ -1094,7 +1094,7 @@
             target: "_blank",
             rel: "noreferrer",
             title: "dsh-graph 插件官网",
-            style: { ...S.meta, color: "#8ab4ff", cursor: "pointer", textDecoration: "underline" },
+            style: { ...S.meta, color: "var(--dsw-alias-state-business-primary, #8ab4ff)", cursor: "pointer", textDecoration: "underline" },
           }, "version: " + PLUGIN_VERSION),
           h("span", { style: S.meta }, "数据时间：" + (b.generated_at ?? "").replace("T", " ").slice(0, 19)),
           h("button", { style: { ...S.btn, marginLeft: 8 }, className: "dg-btn", onClick: load }, "刷新"),
@@ -1207,10 +1207,10 @@
                     value: newGoalVersion,
                     onChange: (e) => setNewGoalVersion(e.target.value),
                   },
-                    h("option", { value: "", style: { background: "#2a2b31", color: "#e6e6e6" } }, "backlog（默认）"),
-                    h("option", { value: "standalone", style: { background: "#2a2b31", color: "#e6e6e6" } }, "独立目标"),
+                    h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "backlog（默认）"),
+                    h("option", { value: "standalone", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "独立目标"),
                     // 版本选项来自 board 数据的 versions 列表
-                    ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug, style: { background: "#2a2b31", color: "#e6e6e6" } }, v.slug)))),
+                    ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug, style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, v.slug)))),
                 h("div", { style: { marginBottom: 8 } },
                   h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "类型（默认 task）"),
                   h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
@@ -1324,7 +1324,7 @@
                 // g-135: 阻塞目标清单（发布前置条件不满足时展示）
                 versionDetailData && versionDetailData.blocking && versionDetailData.blocking.length > 0
                   ? h("div", { style: { marginBottom: 12, padding: "8px 10px", borderRadius: 6, background: "rgba(255,107,107,.12)", border: "1px solid rgba(255,107,107,.3)" } },
-                      h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4, color: "#ff6b6b" } }, `⛔ 阻塞目标（${versionDetailData.blocking.length} 个未 delivered）`),
+                      h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, `⛔ 阻塞目标（${versionDetailData.blocking.length} 个未 delivered）`),
                       ...versionDetailData.blocking.map((g) =>
                         h("div", { key: g.id, style: { fontSize: 12, padding: "2px 0", opacity: 0.85 } },
                           `• ${g.id}（${g.title}）：${g.status}`)
@@ -1403,7 +1403,7 @@
                   // 标记为 released —— 仅非 released 时显示
                   versionDetailTarget.status !== "released"
                     ? h("button", {
-                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#4caf50", background: "rgba(76,175,80,.12)", border: "1px solid rgba(76,175,80,.4)" },
+                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-success-primary, #4caf50)", background: "rgba(76,175,80,.12)", border: "1px solid rgba(76,175,80,.4)" },
                         className: "dg-btn",
                         disabled: versionActionLoading,
                         onClick: () => {
@@ -1445,11 +1445,11 @@
                   versionDetailTarget.status === "released"
                     ? reactivateConfirm
                       ? h("div", { style: { padding: "8px 12px", borderRadius: 6, background: "rgba(255,152,0,.15)", border: "1px solid rgba(255,152,0,.4)", fontSize: 12, lineHeight: 1.5 } },
-                          h("div", { style: { fontWeight: 600, marginBottom: 4, color: "#ff9800" } }, "⚠️ 确认恢复版本？"),
+                          h("div", { style: { fontWeight: 600, marginBottom: 4, color: "var(--dsw-alias-state-warn-label, #ff9800)" } }, "⚠️ 确认恢复版本？"),
                           h("div", { style: { marginBottom: 8, opacity: 0.85 } }, `恢复 ${versionDetailTarget.slug} 将撤销发布状态，使版本重新进入 active（进行中）。已交付的目标不受影响，再次发布仍需满足全部目标 delivered 等校验。`),
                           h("div", { style: { display: "flex", gap: 8 } },
                             h("button", {
-                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff9800", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
+                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-warn-label, #ff9800)", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
                               className: "dg-btn",
                               disabled: reactivatingVersion,
                               onClick: () => {
@@ -1486,7 +1486,7 @@
                           )
                         )
                       : h("button", {
-                          style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff9800", background: "rgba(255,152,0,.08)", border: "1px solid rgba(255,152,0,.3)" },
+                          style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-warn-label, #ff9800)", background: "rgba(255,152,0,.08)", border: "1px solid rgba(255,152,0,.3)" },
                           className: "dg-btn",
                           disabled: versionActionLoading,
                           onClick: () => { setReactivateConfirm(true); setVersionActionNote(null); },
@@ -1494,7 +1494,7 @@
                     : null,
                   // 删除
                   h("button", {
-                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff6b6b", opacity: 0.7 },
+                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-error-primary, #ff6b6b)", opacity: 0.7 },
                     className: "dg-btn",
                     onClick: () => {
                       setDeleteVersionTarget({ slug: versionDetailTarget.slug, name: versionDetailTarget.name });
@@ -1594,7 +1594,7 @@
                 h("span", { style: S.close, onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); } }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "🗑️ 删除版本泳道"),
                 h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } }, `确定删除版本 ${deleteVersionTarget.name}（${deleteVersionTarget.slug}）？`),
-                h("div", { style: { marginBottom: 12, fontSize: 12, color: "#ff6b6b" } }, "⚠️ 此操作不可逆，仅删除空版本（无任何目标含归档）"),
+                h("div", { style: { marginBottom: 12, fontSize: 12, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, "⚠️ 此操作不可逆，仅删除空版本（无任何目标含归档）"),
                 h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13, background: "#e74c3c", color: "#fff" },

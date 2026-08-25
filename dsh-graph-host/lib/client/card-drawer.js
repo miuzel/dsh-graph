@@ -1,5 +1,5 @@
       if (blocked) {
-        return h("div", { style: { ...S.statusLine, color: "#d66" } }, "⛔ " + text);
+        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + text);
       }
       const animClass = running ? "dg-running-flow" : "";
       return h(
@@ -212,7 +212,7 @@
             h("div", { key: "del", style: { ...S.drawerSection, borderTop: "1px solid rgba(128,128,128,.25)", paddingTop: 8 } },
               deleteConfirm
                 ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
-                    h("div", { style: { ...S.meta, color: "#d66", fontSize: 12 } },
+                    h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #d66)", fontSize: 12 } },
                       `⚠️ 确认删除卡片「${card.title}」？请输入卡片 id 确认：`),
                     h("div", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } },
                       `id：${card.id}`),
@@ -279,7 +279,7 @@
       return h(
         "div",
         null,
-        h("div", { style: { ...S.overlay, background: "rgba(0,0,0,.35)" }, onClick: props.onClose }),
+        h("div", { style: { ...S.overlay, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.35))" }, onClick: props.onClose }),
         h("div", { style: S.drawer, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: props.onClose }, "✕"),
           inner),

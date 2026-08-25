@@ -26,12 +26,12 @@
         borderTop: "1px dashed rgba(128,128,128,.35)",
       },
       overlay: {
-        position: "fixed", inset: 0, background: "rgba(0,0,0,.55)",
+        position: "fixed", inset: 0, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.55))",
         display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
       },
       drawer: {
         position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
-        background: "#1e1f24", color: "#e6e6e6", zIndex: 10000,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10000,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
@@ -39,43 +39,46 @@
       drawerSection: { marginTop: 14 },
       drawerH: { fontWeight: 700, fontSize: 13, marginBottom: 6, opacity: 0.9 },
       modal: {
-        background: "#1e1f24", color: "#e6e6e6", borderRadius: 10,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", borderRadius: 10,
         maxWidth: 720, width: "90%", maxHeight: "80vh", overflowY: "auto",
         padding: "16px 20px", fontSize: 13, lineHeight: 1.6,
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
-      // g-153：共享按钮样式 token——暗色主题下确保可读性与层级
+      // g-153：共享按钮样式 token——暗色主题下确保可读性与层级；g-176：改 DSH 主题变量并保留暗色 fallback
       btn: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(128,128,128,.15)", color: "#e6e6e6",
-        border: "1px solid rgba(128,128,128,.30)", borderRadius: 4,
+        background: "var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15))",
+        color: "var(--dsw-alias-label-primary, #e6e6e6)",
+        border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30))", borderRadius: 4,
       },
       // g-153：主要操作按钮（蓝底高亮）
       btnPrimary: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(76,141,255,.18)", color: "#8ab4ff",
-        border: "1px solid rgba(76,141,255,.40)", borderRadius: 4,
+        background: "var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.18))",
+        color: "var(--dsw-alias-state-business-primary, #8ab4ff)",
+        border: "1px solid var(--dsw-alias-state-business-primary, rgba(76,141,255,.40))", borderRadius: 4,
       },
       // g-153：危险操作按钮（红底红字）
       btnDanger: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(214,102,102,.18)", color: "#f08080",
+        background: "rgba(214,102,102,.18)", color: "var(--dsw-alias-state-error-primary, #f08080)",
         border: "1px solid rgba(214,102,102,.35)", borderRadius: 4,
       },
       // g-153：接受/确认操作按钮（绿底绿字）
       btnAccept: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(58,166,117,.18)", color: "#6ee7a0",
+        background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-primary, #6ee7a0)",
         border: "1px solid rgba(58,166,117,.40)", borderRadius: 4,
       },
       // g-153：下拉菜单/选择控件样式 token
       select: {
         fontSize: 12, padding: "3px 8px", cursor: "pointer",
-        background: "rgba(30,31,36,.92)", color: "#e6e6e6",
-        border: "1px solid rgba(128,128,128,.35)", borderRadius: 4,
+        background: "var(--dsw-alias-bg-layer-2, rgba(30,31,36,.92))",
+        color: "var(--dsw-alias-label-primary, #e6e6e6)",
+        border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))", borderRadius: 4,
       },
-      selectOption: { background: "#222328", color: "#e6e6e6" },
+      selectOption: { background: "var(--dsw-alias-bg-layer-3, #222328)", color: "var(--dsw-alias-label-primary, #e6e6e6)" },
       close: { float: "right", cursor: "pointer", opacity: 0.7, fontSize: 16 },
       // g-107 会话内嵌实时区
       liveStrip: {
@@ -94,14 +97,14 @@
       promptRow: { display: "flex", gap: 4, alignItems: "center" },
       promptInput: {
         flex: 1, minWidth: 0, fontSize: 12, padding: "3px 6px",
-        background: "rgba(0,0,0,.25)", color: "inherit",
-        border: "1px solid rgba(128,128,128,.4)", borderRadius: 4,
+        background: "var(--dsw-alias-bg-layer-2, rgba(0,0,0,.25))", color: "inherit",
+        border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.4))", borderRadius: 4,
       },
       // g-108 看板顶部 supervisor 状态栏
       supervisorBar: {
         display: "flex", alignItems: "center", gap: 10, marginBottom: 8,
         padding: "4px 10px", border: "1px solid rgba(58,166,117,.45)",
-        borderRadius: 6, background: "rgba(30,31,36,.92)", fontSize: 12,
+        borderRadius: 6, background: "var(--dsw-alias-bg-module-platform, rgba(30,31,36,.92))", fontSize: 12,
       },
       recordItem: {
         marginTop: 3, padding: "3px 6px", borderRadius: 4,

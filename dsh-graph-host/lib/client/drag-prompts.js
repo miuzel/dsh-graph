@@ -157,7 +157,7 @@
                 }, oldChildId.slice(0, 8) + "… ↗"))
             : null,
           !hasCriteria
-            ? h("div", { style: { ...S.meta, color: "#e0a53a", marginBottom: 4 } },
+            ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginBottom: 4 } },
                 "⚠️ 质量判据尚未登记——将以授权模式强制迁移到执行列。")
             : null,
           h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
@@ -202,7 +202,7 @@
             "• 相关文档/配置已更新", h("br"),
             "• 已通知主管进行最终复核", h("br"),
             h("br"),
-            h("span", { style: { color: "#e0a53a" } },
+            h("span", { style: { color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
               "⚠️ 标记为「已交付」后需主管评审通过才能正式完成。")),
           h("div", { style: { display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" } },
             supervisorSession

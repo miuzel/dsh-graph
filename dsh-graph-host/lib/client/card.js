@@ -238,13 +238,13 @@
           }),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
         hasDep
-          ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
+          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
           : null,
         metDeps.length
-          ? h("div", { style: { ...S.meta, color: "#3aa675" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-success-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
           : null,
         blocked && g.blocked_reason
-          ? h("div", { style: { ...S.statusLine, color: "#d66" } }, "⛔ " + g.blocked_reason)
+          ? h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + g.blocked_reason)
           : null,
         // g-a92e1406：执行会话内嵌实时条——status_line 摘要并入状态小窗
         //（运行中 ⏳ / 空闲刚执行完 ✅）；无执行会话时退化为独立状态行（带动画）

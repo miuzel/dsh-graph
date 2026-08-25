@@ -70,7 +70,7 @@
       const host = document.createElement("div");
       host.style.cssText =
         "position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:99999;" +
-        "background:rgba(30,30,30,.94);color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;" +
+        "background:var(--dsw-alias-toast-bg, rgba(30,30,30,.94));color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;" +
         "box-shadow:0 4px 16px rgba(0,0,0,.35);pointer-events:none;opacity:0;transition:opacity .18s ease;max-width:80vw;";
       host.textContent = text;
       document.body.appendChild(host);
@@ -329,7 +329,7 @@
             : acceptState === "pending"
               ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待裁决")
               : acceptState === "resolved"
-                ? h("span", { style: { ...S.meta, fontSize: 12, color: "#3aa675" } }, "✅ 已接受生效")
+                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-state-success-primary, #3aa675)" } }, "✅ 已接受生效")
                 : null,
           h("button", {
             style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
@@ -343,7 +343,7 @@
         // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
         acceptState === "objection"
           ? h("div", { key: "obj", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
-              h("div", { style: { ...S.meta, color: "#e0a53a" } },
+              h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
                 "⚠️ 主管异议：" + (objectionText ?? "（无内容）")),
               forceMode
                 ? [

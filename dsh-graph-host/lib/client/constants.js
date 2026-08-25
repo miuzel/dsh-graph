@@ -100,7 +100,8 @@
       .dg-deliver-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-blocked-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-btn { transition: background .12s ease, border-color .12s ease, filter .12s ease; }
-      .dg-btn:hover { filter: brightness(1.20); background: rgba(128,128,128,.25); }
+      /* g-176：hover 不再用 brightness(1.20)（浅色主题下会洗白），改用主题化背景加深 */
+      .dg-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.25)); }
       .dg-btn:active { filter: brightness(0.95); }
       .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
       /* g-162：普通泳道内容底部居中的扁平折叠入口；released 不使用此控件 */
@@ -110,11 +111,12 @@
         display: flex; align-items: center; justify-content: center;
       }
       .dg-lane-collapse { transition: transform .14s ease, background .14s ease, filter .14s ease; }
-      .dg-lane-collapse:hover { background: rgba(128,128,128,.28); transform: translateX(-50%) translateY(-2px); filter: brightness(1.15); }
+      /* g-176：hover 去掉 brightness(1.15)（浅色主题下会洗白），保留背景加深 */
+      .dg-lane-collapse:hover { background: rgba(128,128,128,.28); transform: translateX(-50%) translateY(-2px); }
       .dg-lane-collapse:active { transform: translateX(-50%) translateY(0); }
       .dg-lane-collapse-triangle {
         width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent;
-        border-bottom: 5px solid rgba(220,220,220,.82);
+        border-bottom: 5px solid var(--dsw-alias-label-tertiary, rgba(220,220,220,.82));
       }
       /* g-153：主要操作按钮 hover/active/disabled */
       .dg-btn-primary { transition: background .12s ease, border-color .12s ease, filter .12s ease; }
@@ -131,16 +133,16 @@
       .dg-btn-accept:hover { background: rgba(58,166,117,.30); border-color: rgba(58,166,117,.55); }
       .dg-btn-accept:active { background: rgba(58,166,117,.42); }
       .dg-btn-accept:disabled { opacity: 0.45; cursor: default; }
-      /* g-153：下拉菜单/选择控件暗色主题 */
+      /* g-153：下拉菜单/选择控件——g-176：改 DSH 主题变量并保留暗色 fallback */
       .dg-select {
         font-size: 12px; padding: 3px 8px; cursor: pointer;
-        background: rgba(30,31,36,.92); color: #e6e6e6;
-        border: 1px solid rgba(128,128,128,.35); border-radius: 4px;
+        background: var(--dsw-alias-bg-layer-2, rgba(30,31,36,.92)); color: var(--dsw-alias-label-primary, #e6e6e6);
+        border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35)); border-radius: 4px;
         transition: border-color .12s ease;
       }
       .dg-select:hover { border-color: rgba(128,128,128,.55); }
       .dg-select:focus { border-color: rgba(76,141,255,.55); outline: none; }
-      .dg-select option { background: #222328; color: #e6e6e6; }
+      .dg-select option { background: var(--dsw-alias-bg-layer-3, #222328); color: var(--dsw-alias-label-primary, #e6e6e6); }
       /* g-125 fb3：三角展开/收起按钮——暗底纹、窄宽度，不占整列、不像播放按钮 */
       .dg-chevron {
         background: rgba(128,128,128,.18);
