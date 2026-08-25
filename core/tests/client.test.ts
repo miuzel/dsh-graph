@@ -869,6 +869,9 @@ test("g-168 交互反馈：主管复制成功 toast 与 PM 润色动画", () => 
   assert.ok(/animation: "dg-polish-flow 1\.8s ease infinite"/.test(actions));
   assert.ok(/@keyframes dg-polish-flow/.test(actions), "组件自带动画样式，避免依赖外层注入");
   assert.ok(/setLoading\(false\)/.test(actions), "PM 完成后解除 loading 动画");
+  assert.ok(/const startedAt = Date\.now\(\)/.test(actions));
+  assert.ok(/700 - \(Date\.now\(\) - startedAt\)/.test(actions), "accepted-running 至少保持短时可观察");
+  assert.ok(/finally \{[\s\S]*setLoading\(false\)/.test(actions), "成功/业务失败/异常均最终解除 loading");
 });
 
 test("g-168 host prompt 契约：PM 读取 goal.md 并附带指导意见", () => {

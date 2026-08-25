@@ -143,6 +143,7 @@
         setLoading(false);
       };
       const askPm = async () => {
+        const startedAt = Date.now();
         setLoading(true); setMode("pm"); setNote("⏳ 产品经理 Agent 正在处理…");
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/define-polish"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: goalId, goal_path: goalPath, guidance: guidance.trim() }) });
@@ -150,7 +151,12 @@
           if (data.ok) setNote("✅ 产品经理 Agent 已受理，建议将返回主管会话");
           else setNote("⚠️ 产品经理 Agent 失败：" + (data.child_error || data.error || "未知错误"));
         } catch (e) { setNote("⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e)); }
-        setLoading(false);
+        finally {
+          // spawnChild 通常很快返回；保持 accepted-running 动画至少一小段可观察时间。
+          const remaining = Math.max(0, 700 - (Date.now() - startedAt));
+          if (remaining) await new Promise((resolve) => setTimeout(resolve, remaining));
+          setLoading(false);
+        }
       };
       const pmRunning = loading && mode === "pm";
       const pmStyle = pmRunning ? {
