@@ -861,6 +861,13 @@ test("g-168 复制失败 fallback：初始隐藏且只在失败后显示可复�
   assert.ok(!/h\("pre"[\s\S]*request/.test(actions), "初始界面不展示大段 prefill");
 });
 
+test("g-168 交互反馈：主管复制成功 toast 与 PM 润色动画", () => {
+  const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  assert.ok(/if \(copied\) showToast\("✅ 请求已复制到剪贴板/.test(actions));
+  assert.ok(/loading && mode === "pm" \? "dg-running-flow"/.test(actions));
+  assert.ok(/setLoading\(false\)/.test(actions), "PM 完成后解除 loading 动画");
+});
+
 test("g-168 host prompt 契约：PM 读取 goal.md 并附带指导意见", () => {
   const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
   assert.ok(/const \{ goal, goal_path, guidance \}/.test(host));

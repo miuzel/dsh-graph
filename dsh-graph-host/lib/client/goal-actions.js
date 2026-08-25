@@ -135,7 +135,8 @@
           if (!supervisorSession) throw new Error("未配置主管会话（project.yaml 的 supervisor.session）");
           const copied = await copyText(request);
           rt.open?.(supervisorSession); activateChatTab();
-          setMode("supervisor");
+          if (copied) showToast("✅ 请求已复制到剪贴板，可在主管对话窗粘贴发送");
+           setMode("supervisor");
            setFallback(!copied);
           setNote(copied ? "✅ 请求已复制，已打开主管会话，请粘贴发送" : "⚠️ 自动复制失败，请手动复制下方请求");
         } catch (e) { setNote("⚠️ 主管路径失败：" + String(e?.message ?? e)); }
@@ -151,7 +152,7 @@
         } catch (e) { setNote("⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e)); }
         setLoading(false);
       };
-      return h("div", null,
+      return h("div", { className: loading && mode === "pm" ? "dg-running-flow" : undefined },
         h("button", { style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn", disabled: loading, onClick: () => { setMode(mode === "idle" ? "supervisor" : "idle"); setNote(null); } }, "📝 定义/润色"),
         mode !== "idle" ? h("div", { style: { display: "flex", flexDirection: "column", gap: 5, marginTop: 5 } },
           h("div", { style: S.meta }, "可填写额外指导意见，再选择处理方式："),
