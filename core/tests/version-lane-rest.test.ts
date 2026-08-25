@@ -472,7 +472,7 @@ test("set-version-status 端点：拒绝无效状态", async () => {
   assert.ok(res.body.error.includes("非法版本状态"));
 });
 
-test("set-version-status 端点：released 终态 guard——released→planning 被拒绝", async () => {
+test("set-version-status 端点：released 终态 guard——released->planning 被拒绝", async () => {
   const { root, routes } = setup();
   await post(routes, "/api/dsh-graph/create-version", { slug: "v1.0" });
   await post(routes, "/api/dsh-graph/release-version", { slug: "v1.0" });
@@ -480,12 +480,31 @@ test("set-version-status 端点：released 终态 guard——released→planning
   const detail1 = await get(routes, "/api/dsh-graph/version-detail", "slug=v1.0");
   assert.equal(detail1.body.status, "released");
   const eventsBefore = readEvents(root).length;
-  // 尝试 released → planning
+  // 尝试 released -> planning
   const res = await post(routes, "/api/dsh-graph/set-version-status", { slug: "v1.0", status: "planning" });
   assert.equal(res.code, 400);
-  assert.ok(res.body.error.includes("终态"), "错误信息应提及终态");
+  assert.ok(res.body.error.includes("只能恢复为 active"), "错误信息应提及只能恢复为 active");
   // 状态不变、事件不变
   const detail2 = await get(routes, "/api/dsh-graph/version-detail", "slug=v1.0");
   assert.equal(detail2.body.status, "released");
   assert.equal(readEvents(root).length, eventsBefore, "拒绝后不应写事件");
+});
+
+test("set-version-status 端点：released->active 需要 confirmed=true", async () => {
+  const { root, routes } = setup();
+  await post(routes, "/api/dsh-graph/create-version", { slug: "v1.0" });
+  await post(routes, "/api/dsh-graph/release-version", { slug: "v1.0" });
+  // 无 confirmed → 拒绝
+  const res1 = await post(routes, "/api/dsh-graph/set-version-status", { slug: "v1.0", status: "active" });
+  assert.equal(res1.code, 400);
+  assert.ok(res1.body.error.includes("需要明确确认"));
+  // 有 confirmed → 成功
+  const res2 = await post(routes, "/api/dsh-graph/set-version-status", { slug: "v1.0", status: "active", confirmed: true });
+  assert.equal(res2.code, 200);
+  assert.equal(res2.body.ok, true);
+  const detail = await get(routes, "/api/dsh-graph/version-detail", "slug=v1.0");
+  assert.equal(detail.body.status, "active");
+  // 审计事件
+  const changed = readEvents(root).find((e: any) => e.event === "version.status_changed" && e.details?.version === "v1.0" && e.details?.new_status === "active");
+  assert.ok(changed, "应记录 released->active 事件");
 });

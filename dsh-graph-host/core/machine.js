@@ -2,6 +2,9 @@
 import { criteriaPresent } from "./model.js";
 export class GraphError extends Error {
 }
+/** g-170：并发冲突（乐观 base_items 不一致）专用错误——REST 层映射为 409。 */
+export class GraphConflictError extends GraphError {
+}
 export const STATUSES = [
     "draft",
     "planning",

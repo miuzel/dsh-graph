@@ -22,6 +22,7 @@ import {
   archiveGoal,
   unarchiveGoal,
   deleteCard,
+  postponeGoal,
 } from "./ops.ts";
 
 interface Args {
@@ -189,6 +190,11 @@ function main(): void {
       console.log("ok");
       return;
     }
+    case "postpone-goal": {
+      postponeGoal(args.root, need(args, "goal"), { actor, reason: flag(args, "reason") });
+      console.log("ok");
+      return;
+    }
     case "validate": {
       const problems = validate(args.root);
       if (problems.length > 0) {
@@ -210,7 +216,7 @@ function main(): void {
     }
     default:
       throw new GraphError(
-        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|delete-card|start-attempt|report-status|move-goal|amend-goal|archive-goal|unarchive-goal|delete-goal|validate|rebuild> [flags]",
+        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|delete-card|start-attempt|report-status|move-goal|amend-goal|archive-goal|unarchive-goal|delete-goal|postpone-goal|validate|rebuild> [flags]",
       );
   }
 }

@@ -28,6 +28,7 @@
 
     const EVENT_LABEL = {
       "goal.created": "创建目标", "goal.planned": "完成规划", "criteria.confirmed": "确认判据",
+      "criteria.updated": "更新判据", // g-170
       "goal.transition": null, "attempt.started": "派发执行", "attempt.status_reported": null,
       "completion.claimed": "声明完成", "review.passed": "评审通过", "review.failed": "评审未通过",
       "goal.moved": "排期移动", "card.created": "创建卡片", "card.filled": "填充卡片",
@@ -45,6 +46,7 @@
     // g-a92e1406：补 attempt.status_reported（状态汇报履历）
     const MEANINGFUL = new Set([
       "goal.transition", "goal.amended", "scope.note", "criteria.confirmed",
+      "criteria.updated", // g-170
       "completion.claimed", "review.passed", "review.failed", "attempt.started",
       "goal.moved", "goal.created", "attempt.status_reported", "goal.renamed",
       "goal.type_changed", // g-158
@@ -165,6 +167,30 @@
       @keyframes dg-polish-flow {
          0%, 80% { background-position: 0% 50%; opacity: 1; }
          100% { background-position: 100% 50%; opacity: 0; }
+       }
+       /* g-171：更新强调动画——左侧类型色边框金属光泽浮层（10 秒生命周期内循环扫光并淡出） */
+       .dg-update-sheen {
+         position: absolute; left: -5px; top: 0; bottom: 0; width: 5px;
+         overflow: hidden; pointer-events: none; border-radius: 6px 0 0 6px;
+         /* 时长由内联 animationDuration（剩余毫秒）覆盖；forwards 结束停留不可见 */
+         animation: dg-update-fade 10s linear forwards;
+       }
+       .dg-update-sheen-bar {
+         position: absolute; left: 0; right: 0; top: 0; height: 40%;
+         background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.92), rgba(205,212,224,.55), rgba(255,255,255,0));
+         animation: dg-update-sheen-sweep 1.6s linear infinite;
+       }
+       @keyframes dg-update-sheen-sweep {
+         0% { transform: translateY(-130%); }
+         100% { transform: translateY(230%); }
+       }
+       @keyframes dg-update-fade {
+         0% { opacity: 1; }
+         100% { opacity: 0; }
+       }
+       @media (prefers-reduced-motion: reduce) {
+         .dg-update-sheen, .dg-update-sheen-bar { animation: none !important; }
+         .dg-update-sheen { opacity: 0; }
        }
        @keyframes dg-pulse {
         0%, 100% { opacity: 1; transform: scale(1); }

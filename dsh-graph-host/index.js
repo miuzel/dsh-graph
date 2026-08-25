@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import {
   createGoal,
   setCriteria,
+  updateCriteria,
   transition,
   validate,
   rebuild,
@@ -42,6 +43,7 @@ import {
   archiveGoal,
   unarchiveGoal,
   deleteGoal,
+  postponeGoal,
   boardProjection,
   readSupervisorSession,
   readExecutorModel,
@@ -63,6 +65,7 @@ import {
   appendGoalComment,
   formatGoalDirectiveSection,
   GraphError,
+  GraphConflictError,
   createVersion,
   renameVersion,
   deleteVersion,
@@ -70,8 +73,18 @@ import {
   setVersionStatus,
   validateVersionRelease,
   versionDetail,
+  resolveModelRoute,
+  resolvePromptOverride,
+  readPromptOverrideValue,
+  readProjectConfig,
+  writeProjectConfig,
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot } from "./core/root.js";
+// g-133：接入 DSH profile 级用户设置（dsh-settings）。为避免在 @deepseek-ai/* 不可解析的上下文
+// （工作树 link、仅 headless、无 settings 供应商的组合）导致整个插件加载失败、拖垮 GUI，
+// 这里不静态 import @deepseek-ai/*；改为在 apply() 内**守卫式动态 import** schemastery（仅 schema），
+// settings 服务经 ctx.inject(["settings"]) 等待（参照已上线的 dsh-subagent-model-picker）。
+// 解析失败或 settings 服务缺失时优雅降级：namespace 不注册、看板/工具/模型路由不受影响。
 
 // g-112：两半共用同一 root 解析函数（re-export 供验收/测试直接核对函数同一性）
 export { resolveRoot } from "./core/root.js";
@@ -94,6 +107,23 @@ const objOut = {
 const str = { type: "string" };
 const strArr = { type: "array", items: { type: "string" } };
 
+// g-133：dsh-graph profile 级全局默认（DSH settings namespace「dsh-graph」）。
+// 仅保留子代理 provider/model/补充提示词；主管提示词属于 workspace 配置（g-132）。
+const GRAPH_SETTINGS_NS = "dsh-graph"; // 合法 namespace（[a-z][a-z0-9-]*）
+const GRAPH_SETTINGS_DEFAULTS = Object.freeze({
+  subagentProvider: "",
+  subagentModel: "",
+  subagentPrompt: "",
+});
+// schema 需 schemastery（@deepseek-ai/*），经守卫式动态 import 构建（见 buildGraphSettingsSchema）。
+function buildGraphSettingsSchema(z) {
+  return z.object({
+    subagentProvider: z.string().default(""),
+    subagentModel: z.string().default(""),
+    subagentPrompt: z.string().default(""),
+  });
+}
+
 function params(properties, required) {
   return { type: "object", properties, required };
 }
@@ -108,7 +138,7 @@ const USAGE = [
   "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
   "- graph_add_card / graph_fill_card / graph_review_card / graph_delete_card 管理目标下的上下文卡片（信息收集）；",
   "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展（看板卡片显示这句）；",
-  "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff（g-150）；",
+  "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff；",
   "- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；",
   "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账。",
   "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
@@ -147,15 +177,15 @@ const HELP_TEXT = [
   "- graph_set_criteria(goal, criteria[]) 先登记质量判据（判据先于执行，硬规则）；",
   "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
   "- graph_add_card / graph_fill_card / graph_review_card / graph_delete_card 管理目标下的上下文卡片（信息收集）；",
-  "- graph_bind_collect_card(goal, card, child_id) 把收集子代理绑定到卡片（g-119）；",
+  "- graph_bind_collect_card(goal, card, child_id) 把收集子代理绑定到卡片；",
   "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展；",
-  "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff（g-150）；",
+  "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff；",
   "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账；",
   "- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；",
   "- graph_report_supervisor_status(status) 主管自报状态（看板顶部状态栏）；graph_resolve_accept 评审裁决；",
-  "- graph_handoff() / graph_claim_supervisor() 换会话交接（g-117）。",
+  "- graph_handoff() / graph_claim_supervisor() 换会话交接。",
   "",
-  "## 接管 supervisor（换会话，g-117）",
+  "## 接管 supervisor",
   "**仅在负责人明确要求你接管 supervisor 时执行**——默认任何会话都不得自动 claim（避免临时会话争抢主管角色）：",
   "1. 旧会话：graph_handoff() —— 生成/更新 .dsh-graph/HANDOFF.md（board 投影 + 长期记忆 + 环境事实）；",
   "2. 新会话：graph_claim_supervisor() —— 把 project.yaml 的 supervisor.session 更新为当前会话 id，记 supervisor.claimed 事件（幂等），并返回 HANDOFF 全文。",
@@ -169,7 +199,7 @@ const HELP_TEXT = [
 // 端点）默认注入本段；派发方可显式关闭（工具参数 worktree=false / 端点 body.worktree=false）
 // 跳过 worktree（简单/单文件小修）。数据分工：代码改动在 worktree，看板数据 .dsh-graph/
 // 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）。
-const WORKTREE_GUIDE = `【worktree 隔离（负责人 2026-08-22 指示）】并发/复杂的执行任务：先 \`git worktree add\` 一个独立工作树（与 main 隔离）再改代码，review 交付阶段由 supervisor 复核通过后合并回 main——避免并发子代理互相踩提交、半成品直接落 main。**「直接 main」仅限真正的一两行、唯一文件改动、且无其他目标并发改该文件；多目标并发改同一文件时必须 worktree，不得自认为改动简单就直改 main**（g-129/g-77647351 并发改 client.js 直 main 造成分叉冲突的教训）（本段由派发方开关：worktree=false 时省略）。
+const WORKTREE_GUIDE = `【worktree 隔离】并发/复杂的执行任务：先 \`git worktree add\` 一个独立工作树（与 main 隔离）再改代码，review 交付阶段由 supervisor 复核通过后合并回 main——避免并发子代理互相踩提交、半成品直接落 main。**「直接 main」仅限真正的一两行、唯一文件改动、且无其他目标并发改该文件；多目标并发改同一文件时必须 worktree，不得自认为改动简单就直改 main**。
 【worktree 命名规范】新建 attempt 工作树必须命名为 .worktrees/g-<goal-number>-att-<NN>，分支使用相同后缀（例如 g-125-att-03、g-163-att-03）；不要使用省略 goal id 或未补零的歧义名称。
 数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
 
@@ -188,6 +218,65 @@ export function apply(ctx, config) {
   // 绝对 config.root 时跳过 workspace 要求（root 完全由配置决定）。
   const isAbsoluteConfig = !!(config?.root && resolve(config.root) === config.root);
   const sessionWorkspace = (ex) => ex?.agent?.session?.header?.cwd ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? null;
+  // g-133：注册 dsh-graph settings namespace（profile 级全局默认）。
+  // 守卫式动态 import schemastery（@deepseek-ai/*），失败/缺失时优雅降级（plugin 始终可加载）。
+  // ctx.inject(["settings"], cb) 等待 settings 服务出现（同 dsh-subagent-model-picker 的已上线模式）；
+  // settings 服务缺失（无 provider 组合）时 namespace 不注册、看板/工具/模型路由不受影响。
+  // owner scope 的 get() 读当前 resolved 值（用户改 profile 设置后实时反映），watch() 可订阅变化。
+  let graphSettingsScope = null;
+  const setupGraphSettings = async () => {
+    let z;
+    try {
+      z = (await import("@deepseek-ai/schemastery")).default;
+      if (!z) return; // 解析到空：降级
+    } catch {
+      process.stderr.write("[dsh-graph-host] g-133: @deepseek-ai/schemastery 不可解析，profile 全局默认降级（模型路由/提示词走 project.yaml/继承）\n");
+      return;
+    }
+    const schema = buildGraphSettingsSchema(z);
+    if (typeof ctx.inject !== "function") return; // 无 inject 的上下文（如部分 mock）降级
+    ctx.inject(["settings"], (sctx) => {
+      try {
+        graphSettingsScope = sctx.settings.register(GRAPH_SETTINGS_NS, schema, {
+          base: { ...GRAPH_SETTINGS_DEFAULTS },
+        });
+        sctx.effect(() => () => { graphSettingsScope = null; });
+      } catch (e) {
+        // duplicate registration 或存储段非法：降级（读取走默认/继承）
+        process.stderr.write(`[dsh-graph-host] g-133 settings 注册失败（降级，模型路由/提示词走默认）：${e?.message ?? e}\n`);
+      }
+    });
+  };
+  setupGraphSettings();
+  /** 读 dsh-graph profile 全局默认（settings service 缺失或未注册时返回默认空值）。 */
+  const readGraphSettings = () => {
+    try {
+      const v = graphSettingsScope?.get?.() ?? null;
+      if (!v) return { ...GRAPH_SETTINGS_DEFAULTS };
+      return {
+        subagentProvider: v.subagentProvider ?? "",
+        subagentModel: v.subagentModel ?? "",
+        subagentPrompt: v.subagentPrompt ?? "",
+      };
+    } catch {
+      return { ...GRAPH_SETTINGS_DEFAULTS };
+    }
+  };
+  // g-133：workspace 子代理补充提示词覆盖字段读取（与 g-132 三态语义对齐，核心逻辑在 core/ops.ts）。
+  // project.yaml 的对应字段三种取值：`default`/缺失 → 继承全局；非空文本 → 覆盖；
+  // 显式空值（'' 或 ""）→ 禁用全局提示词。字段名为 `defaults.subagent_prompt`。
+  const readPromptOverride = (rootFor, key) => {
+    try {
+      const file = join(rootFor, "project.yaml");
+      if (!existsSync(file)) return "default";
+      return readPromptOverrideValue(readFileSync(file, "utf8"), key);
+    } catch {
+      return "default";
+    }
+  };
+  // 把「全局提示词 + workspace 覆盖值」合成最终注入值（三态，核心逻辑在 core/ops.ts）。
+  const effectivePrompt = (globalPrompt, override) =>
+    resolvePromptOverride(globalPrompt, override);
   // g-149：workspace 校验——无明确 workspace 且非绝对 config.root 时抛 GraphError
   const requireWorkspace = (ex) => {
     if (isAbsoluteConfig) return config.root; // 绝对 root 不需要 workspace
@@ -527,7 +616,12 @@ export function apply(ctx, config) {
             const cardsSection = formatHarvestedCardsSection(r, a.goal);
             const worktreeBlock = a.worktree === false ? null : WORKTREE_GUIDE;
             // g-150：brief 段（主管为本次 attempt 提供的 directive）
-            const briefSection = a.attempt_brief ? `## 本次 attempt brief/directive（g-150 主管登记）\n\n${a.attempt_brief}` : null;
+            const briefSection = a.attempt_brief ? `## 本次 attempt brief/directive\n\n${a.attempt_brief}` : null;
+            // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
+            const subagentPromptSection = (() => {
+              const p = effectivePrompt(readGraphSettings().subagentPrompt, readPromptOverride(r, "subagent_prompt"));
+              return p ? `## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）\n\n${p}` : null;
+            })();
             const prompt = [
               `你是 dsh-graph 目标 ${a.goal} 的执行 attempt ${attempt}。`,
               rel ? `目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。` : null,
@@ -535,6 +629,7 @@ export function apply(ctx, config) {
               briefSection,
               directiveSection || null,
               cardsSection,
+              subagentPromptSection,
               worktreeBlock,
               `【状态汇报——你自己做，supervisor 不会替你更新】看板卡片上的状态摘要（status_line）由你自行维护：`,
               `每做一个动作就及时调用 graph_report_status 更新，参数 goal="${a.goal}"、attempt="${attempt}"、status=<一句话简短描述你此刻在干什么>。`,
@@ -551,10 +646,15 @@ export function apply(ctx, config) {
             ].filter(Boolean).join("\n");
             const request = { parent: ex.agent, prompt: text(prompt) };
             const agentOptions = {};
-            // 模型路由：工具参数 > project.yaml executor.provider/model > 继承父会话（每次调用现读，改配置免重启）
-            const cfg = readExecutorModel(rootFor(ex));
-            const effProvider = a.provider ?? cfg.provider ?? null;
-            const effModel = a.model ?? cfg.model ?? null;
+            // 模型路由：工具参数 > project.yaml executor.provider/model > profile 全局默认（dsh-graph 设置）> 继承父会话
+            //（每次调用现读，改配置免重启；合成逻辑在 core/ops.ts resolveModelRoute）
+            const eff = resolveModelRoute(
+              { provider: a.provider, model: a.model },
+              readExecutorModel(rootFor(ex)),
+              readGraphSettings(),
+            );
+            const effProvider = eff.provider;
+            const effModel = eff.model;
             if (effProvider) agentOptions.provider = effProvider;
             if (effModel) agentOptions.model = effModel;
             if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
@@ -625,6 +725,14 @@ export function apply(ctx, config) {
         parameters: params({ goal: str }, ["goal"]),
       },
       run: (a, ex) => { deleteGoal(rootFor(ex), a.goal, { actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
+      def: {
+        name: "graph_postpone_goal",
+        description: "暂缓目标：将版本/独立目标移回 backlog 目录形态并置为 draft（保留 cards/attempts）。存在活跃 agent 时拒绝操作。",
+        parameters: params({ goal: str, reason: str }, ["goal"]),
+      },
+      run: (a, ex) => { postponeGoal(rootFor(ex), a.goal, { actor: actorOf(ex), reason: a.reason }); return { ok: true }; },
     },
   ];
 
@@ -704,6 +812,21 @@ export function apply(ctx, config) {
       return { supervisorId: null, parent: null, error: String(e?.message ?? e) };
     }
   };
+  // g-132：读取 workspace 的子代理补充提示词覆盖，生成注入段。
+  // 三态：default 继承 profile 全局值（不注入）；override 注入自定义文本；disable 注入「已禁用」声明。
+  const promptOverrideSection = (rootResolve, key) => {
+    let ov;
+    try { ov = readPromptOverride(rootResolve(), key); } catch { return ""; }
+    if (!ov) return "";
+    const label = "子代理";
+    if (ov.state === "override" && ov.value) {
+      return `## 补充提示词（${label}，workspace 覆盖）\n\n${ov.value}`;
+    }
+    if (ov.state === "disable") {
+      return `## 补充提示词（${label}，workspace 覆盖）\n\n（本 workspace 已显式禁用全局 ${label} 补充提示词）`;
+    }
+    return "";
+  };
   // 派发一个可续轮子代理（模型路由：overrides 优先，其次 project.yaml executor.provider/model，与 graph_start_attempt 一致）。
   // overrides: {provider?, model?} —— 由「重新执行」的 provider/model 选择器显式指定。
   // 返回 {childId, parentSessionId, error}；error 非空表示未派发成功。
@@ -725,10 +848,15 @@ export function apply(ctx, config) {
         return { childId: null, parentSessionId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）` };
       }
       const request = { parent, prompt: [{ type: "text", text: promptText }] };
-      const cfg = readExecutorModel(rootForReq);
+      // g-133：模型路由合成（overrides > project.yaml > profile 全局默认 > 继承），核心逻辑在 core/ops.ts
+      const eff = resolveModelRoute(
+        { provider: overrides.provider, model: overrides.model },
+        readExecutorModel(rootForReq),
+        readGraphSettings(),
+      );
       const agentOptions = {};
-      const effProvider = overrides.provider ?? cfg.provider;
-      const effModel = overrides.model ?? cfg.model;
+      const effProvider = eff.provider;
+      const effModel = eff.model;
       if (effProvider) agentOptions.provider = effProvider;
       if (effModel) agentOptions.model = effModel;
       if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
@@ -757,9 +885,11 @@ export function apply(ctx, config) {
       }
     } catch { modelGroups = null; }
     const def = readExecutorModel(rootForReq);
+    // g-133：默认路由展示 = project.yaml executor/project（优先）+ profile 全局默认（缺省）
+    const eff = resolveModelRoute(null, def, readGraphSettings());
     return {
       modelGroups,
-      default: { provider: def.provider, model: def.model },
+      default: { provider: eff.provider, model: eff.model },
     };
   };
 
@@ -797,6 +927,36 @@ export function apply(ctx, config) {
           json(res, 200, goalDetail(rootForReq(req), id));
         } catch (e) {
           json(res, 404, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-170：判据编辑保存端点（方案 A）——trim/去重/1..N 重排/保留注释；
+    // base_items 乐观并发 token 不一致 → 409；force=true 时以本地内容覆盖（D8）。
+    {
+      path: "/api/dsh-graph/set-criteria",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, items, base_items, force } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          if (!Array.isArray(items) || items.some((it) => typeof it !== "string")) {
+            return json(res, 400, { error: "items 必须是字符串数组" });
+          }
+          const result = updateCriteria(rootForReq(req, body), goal, {
+            items,
+            base_items: Array.isArray(base_items) ? base_items.map(String) : null,
+            force: force === true,
+            actor: "human:gui",
+          });
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          // 并发冲突 → 409（客户端据 D8 自动以本地内容覆盖重试）
+          if (e instanceof GraphConflictError) {
+            return json(res, 409, { error: String(e?.message ?? e) });
+          }
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
         }
       },
     },
@@ -1083,13 +1243,20 @@ export function apply(ctx, config) {
           const ws = workspaceOf(req, body) ?? dirname(rRoot);
           const rel = relative(ws, goalFile);
           // g-150：brief 段（主管为本次 attempt 提供的 directive）
-          const briefSection = attempt_brief ? `## 本次 attempt brief/directive（g-150 主管登记）\n\n${attempt_brief}` : "";
+          const briefSection = attempt_brief ? `## 本次 attempt brief/directive\n\n${attempt_brief}` : "";
+          // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
+          const subagentPromptSection = (() => {
+            const p = effectivePrompt(readGraphSettings().subagentPrompt, readPromptOverride(rRoot, "subagent_prompt"));
+            return p ? `## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）\n\n${p}` : "";
+          })();
           const prompt = `你是 dsh-graph 目标 ${goal} 的执行 attempt ${attempt}。
 目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。
 
 ${handoffsSection}
 
 ${briefSection}
+
+${subagentPromptSection}
 
 ${directiveSection ? directiveSection + "\n" : ""}## 目标描述
 ${desc}
@@ -1137,6 +1304,30 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
       handler: async (req, res) => {
         try {
           json(res, 200, await readSpawnOptions(rootForReq(req)));
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-132：读取/写回当前 workspace 的 project.yaml 安全配置（settings 弹窗）
+    {
+      path: "/api/dsh-graph/settings",
+      handler: async (req, res) => {
+        try {
+          if (req.method === "POST") {
+            const body = await readBody(req);
+            const r = rootForReq(req, body);
+            writeProjectConfig(r, body, "human:gui");
+            return json(res, 200, { ok: true, config: readProjectConfig(r) });
+          }
+          if (req.method === "GET") {
+            // att-002：下发当前 canonical workspace 的 .dsh-graph/project.yaml 绝对路径
+            //（客户端只消费服务端路径，禁止自行拼接 graphRoot）
+            const meta = rootForReqMeta(req);
+            return json(res, 200, { ...readProjectConfig(meta.root), configFile: join(meta.root, "project.yaml") });
+          }
+          return json(res, 405, { error: "method not allowed" });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
@@ -1402,7 +1593,7 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
             return json(res, 400, { error: "missing status" });
           }
           const r = rootForReq(req, body);
-          setVersionStatus(r, { slug: slug.trim(), status: status.trim(), actor: "human:gui" });
+          setVersionStatus(r, { slug: slug.trim(), status: status.trim(), actor: "human:gui", confirmed: body.confirmed === true });
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;

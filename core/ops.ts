@@ -9,6 +9,7 @@ import {
   renameSync,
   rmSync,
   rmdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join, basename, dirname, relative } from "node:path";
@@ -22,14 +23,15 @@ import {
   countCriteria,
   criteriaItems,
   normalizeGoalType,
+  rebuildCriteriaSection,
   type GoalDoc,
   type GoalType,
 } from "./model.ts";
 import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso, type GraphEvent } from "./events.ts";
-import { GraphError, STATUSES, assertTransition } from "./machine.ts";
+import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.ts";
 import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail } from "./version-lane.ts";
 
-export { GraphError };
+export { GraphError, GraphConflictError };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 
 /** 防止用户输入内容中包含 `## ` 或 `### ` 开头的行，破坏 goal.md section 边界。
@@ -41,7 +43,8 @@ function sanitizeHeadingContent(text: string): string {
   return text.replace(/^([ \t]{0,3})(###[ \t]+|##[ \t]+)/gm, "$1\\$2");
 }
 
-/** 扫描图根下全部目标文件：backlog/*.md、goals/<id>/goal.md、versions/<v>/goals/<id>/goal.md。
+/** 扫描图根下全部目标文件：backlog/*.md、backlog/<id>/goal.md、
+ *  goals/<id>/goal.md、versions/<v>/goals/<id>/goal.md。
  *  opts.includeArchived=true 时也扫描 archived 目录下的目标。 */
 export function listGoalFiles(root: string, opts?: { includeArchived?: boolean }): string[] {
   const out: string[] = [];
@@ -49,20 +52,27 @@ export function listGoalFiles(root: string, opts?: { includeArchived?: boolean }
   const backlog = join(root, "backlog");
   if (existsSync(backlog)) {
     for (const f of readdirSync(backlog)) {
+      if (f === "archived") {
+        if (includeArchived) {
+          const backlogArchived = join(backlog, "archived");
+          for (const af of readdirSync(backlogArchived)) {
+            if (af.endsWith(".md")) out.push(join(backlogArchived, af));
+            const nested = join(backlogArchived, af, "goal.md");
+            if (existsSync(nested)) out.push(nested);
+          }
+        }
+        continue;
+      }
+      // 扁平 backlog/<id>.md
       if (f.endsWith(".md")) {
         const fp = join(backlog, f);
         if (!includeArchived && isArchivedFile(fp)) continue;
         out.push(fp);
+        continue;
       }
-    }
-    // backlog/archived/ 目录
-    if (includeArchived) {
-      const backlogArchived = join(backlog, "archived");
-      if (existsSync(backlogArchived)) {
-        for (const f of readdirSync(backlogArchived)) {
-          if (f.endsWith(".md")) out.push(join(backlogArchived, f));
-        }
-      }
+      // 目录形态 backlog/<id>/goal.md（暂缓后迁移落点）
+      const nested = join(backlog, f, "goal.md");
+      if (existsSync(nested)) out.push(nested);
     }
   }
   const goals = join(root, "goals");
@@ -416,6 +426,400 @@ export function readExecutorModel(root: string): { provider: string | null; mode
   return { provider: grab("provider"), model: grab("model") };
 }
 
+// ===== g-132：workspace 配置管理（project.yaml 安全配置字段读写） =====
+// 零依赖行级编辑（保留注释 / 未知键 / 顺序）；写入为「读入全部 lines → 校验 → 逐字段行编辑 →
+// 原子写（tmp + rename）」，任一校验失败直接抛 GraphError，不落盘半写入。
+// 字段范围（本期）：executor.provider/model、defaults.review、defaults.pk、supervisor.automation、
+// prompt_overrides.subagent（子代理补充提示词 workspace 覆盖，三态）。
+
+export interface PromptOverride {
+  state: "default" | "override" | "disable";
+  value: string | null;
+}
+
+export interface ProjectConfig {
+  executor: { provider: string | null; model: string | null };
+  defaults: {
+    review: { reviewer: string | null; prompt: string | null };
+    pk: { lanes: number | null; sandbox: string | null };
+  };
+  supervisor: { automation: Record<string, string | null> };
+  prompt_overrides: { subagent: PromptOverride };
+}
+
+const AUTOMATION_KEYS = [
+  "scope_planning",
+  "integration_decision",
+  "rework",
+  "memory_promotion",
+  "skill_proposal",
+  "release",
+] as const;
+const AUTOMATION_VALUES = ["human", "ai"] as const;
+const PROMPT_OVERRIDE_KEYS = ["subagent"] as const;
+
+/** 行缩进长度（空格/tab 计长）。 */
+function lineIndent(l: string): number {
+  return /^[ \t]*/.exec(l)![0].length;
+}
+
+/** 在 lines[start..end) 内找「恰好为 indent 缩进的 key[:]」行，返回行号或 -1。 */
+function findKeyLine(lines: string[], key: string, indent: number, start: number, end: number): number {
+  const prefix = " ".repeat(indent);
+  for (let i = start; i < end; i++) {
+    const l = lines[i];
+    if (l.trim() === "") continue;
+    if (!l.startsWith(prefix)) continue;
+    const body = l.slice(prefix.length);
+    if (body === key || body.startsWith(key + ":")) return i;
+  }
+  return -1;
+}
+
+/** block 头行（<indent><key>:）的「内容行」结束索引（exclusive）：首个缩进 <= blockIndent 的行。
+ *  注释行（首个非空白是 #）不参与结构判定——它们不缩进/不结块，跨块注释（如块内被 # 注释掉的
+ *  字段行）不干扰块边界。 */
+function blockChildrenEnd(lines: string[], blockIdx: number, blockIndent: number): number {
+  for (let i = blockIdx + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.trim() === "") continue;
+    if (/^[ \t]*#/.test(l)) continue; // comment-only line: 不参与块边界
+    if (lineIndent(l) <= blockIndent) return i;
+  }
+  return lines.length;
+}
+
+/** 解析 YAML 单行标量（支持双引号/单引号/裸值；截断行尾注释），返回解码值或 ""。 */
+function parseYamlScalar(raw: string): string | null {
+  let s = raw.trim();
+  if (s === "" || s === "null" || s === "~") return null;
+  if (s.startsWith('"')) return decodeDoubleQuoted(s);
+  if (s.startsWith("'")) return decodeSingleQuoted(s);
+  // 裸值：去掉行尾注释（以「空白+#」为界）
+  const idx = s.search(/\s#/);
+  if (idx >= 0) s = s.slice(0, idx);
+  s = s.trim();
+  return s === "" ? null : s;
+}
+
+function decodeDoubleQuoted(s: string): string {
+  let out = "";
+  let i = 1;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === '"') return out;
+    if (c === "\\") {
+      const n = s[i + 1];
+      if (n === "n") out += "\n";
+      else if (n === "t") out += "\t";
+      else if (n === "r") out += "\r";
+      else if (n === '"') out += '"';
+      else if (n === "\\") out += "\\";
+      else if (n === "/") out += "/";
+      else if (n === "u") { out += String.fromCharCode(parseInt(s.slice(i + 2, i + 6), 16)); i += 4; }
+      else if (n === "U") { out += String.fromCodePoint(parseInt(s.slice(i + 2, i + 10), 16)); i += 8; }
+      else out += "\\" + n;
+      i += 2;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+function decodeSingleQuoted(s: string): string {
+  let out = "";
+  let i = 1;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "'") {
+      // '' → 单引号
+      if (s[i + 1] === "'") { out += "'"; i += 2; continue; }
+      return out;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/** 把 raw（`key: <value>  # comment` 的值部分）拆成 value 与注释（注释含前导空白；无注释则 ""）。 */
+function splitValueComment(raw: string): { value: string; comment: string } {
+  const t = raw.trimStart();
+  let inDQ = false, inSQ = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (inDQ) { if (c === "\\") { i++; continue; } if (c === '"') inDQ = false; continue; }
+    if (inSQ) { if (c === "'") inSQ = false; continue; }
+    if (c === '"') { inDQ = true; continue; }
+    if (c === "'") { inSQ = true; continue; }
+    if (c === "#" && (i === 0 || /[ \t]/.test(t[i - 1]))) {
+      let j = i - 1;
+      while (j > 0 && /[ \t]/.test(t[j])) j--;
+      return { value: t.slice(0, j + 1).trimEnd(), comment: t.slice(j + 1) };
+    }
+  }
+  return { value: t.trimEnd(), comment: "" };
+}
+
+/** 读取叶子标量（路径如 ["defaults","pk","lanes"]）。缺失返回 null。 */
+function readScalarByPath(lines: string[], path: string[]): string | null {
+  let start = 0, end = lines.length, indent = 0;
+  let idx = -1;
+  for (let lvl = 0; lvl < path.length; lvl++) {
+    const key = path[lvl];
+    idx = findKeyLine(lines, key, indent, start, end);
+    if (idx < 0) return null;
+    const keyIndent = lineIndent(lines[idx]);
+    if (lvl < path.length - 1) {
+      indent = keyIndent + 2;
+      start = idx + 1;
+      end = blockChildrenEnd(lines, idx, keyIndent);
+    } else {
+      const raw = lines[idx].slice(keyIndent + key.length + 1); // `key: `
+      return parseYamlScalar(raw);
+    }
+  }
+  return null;
+}
+
+/** 读取 prompt_overrides.<key> 的三态覆盖。未配置/缺失 → default（继承 profile 全局值）。 */
+export function readPromptOverride(root: string, key: "subagent"): PromptOverride {
+  const file = join(root, "project.yaml");
+  if (!existsSync(file)) return { state: "default", value: null };
+  const lines = readFileSync(file, "utf8").split("\n");
+  const { value } = readPromptOverrideConfig(lines, key);
+  if (value === null) return { state: "default", value: null };
+  return value;
+}
+
+function readPromptOverrideConfig(lines: string[], key: string): { value: PromptOverride | null } {
+  const poIdx = findKeyLine(lines, "prompt_overrides", 0, 0, lines.length);
+  if (poIdx < 0) return { value: null }; // 未配置 → default
+  const indent = lineIndent(lines[poIdx]);
+  const end = blockChildrenEnd(lines, poIdx, indent);
+  const kIdx = findKeyLine(lines, key, indent + 2, poIdx + 1, end);
+  if (kIdx < 0) return { value: null }; // 未配置该键 → default
+  const raw = lines[kIdx].slice(lineIndent(lines[kIdx]) + key.length + 1);
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed === "null" || trimmed === "~") return { value: { state: "disable", value: null } };
+  if (trimmed === "default") return { value: { state: "default", value: null } };
+  if (trimmed === '""' || trimmed === "''") return { value: { state: "disable", value: null } };
+  const decoded = parseYamlScalar(raw);
+  if (decoded === null) return { value: { state: "disable", value: null } };
+  if (decoded === "") return { value: { state: "disable", value: null } };
+  return { value: { state: "override", value: decoded } };
+}
+
+/** 读取整个 workspace 配置（settings 面板回填用）。 */
+export function readProjectConfig(root: string): ProjectConfig {
+  const file = join(root, "project.yaml");
+  if (!existsSync(file)) {
+    return {
+      executor: { provider: null, model: null },
+      defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
+      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])) },
+      prompt_overrides: { subagent: { state: "default", value: null } },
+    };
+  }
+  const lines = readFileSync(file, "utf8").split("\n");
+  const scal = (path: string[]): string | null => readScalarByPath(lines, path);
+  const auto: Record<string, string | null> = {};
+  for (const k of AUTOMATION_KEYS) auto[k] = scal(["supervisor", "automation", k]);
+  const lanesRaw = scal(["defaults", "pk", "lanes"]);
+  const subagent = readPromptOverrideConfig(lines, "subagent").value ?? { state: "default", value: null };
+  return {
+    executor: { provider: scal(["executor", "provider"]), model: scal(["executor", "model"]) },
+    defaults: {
+      review: { reviewer: scal(["defaults", "review", "reviewer"]), prompt: scal(["defaults", "review", "prompt"]) },
+      pk: { lanes: lanesRaw === null ? null : parseInt(lanesRaw, 10), sandbox: scal(["defaults", "pk", "sandbox"]) },
+    },
+    supervisor: { automation: auto },
+    prompt_overrides: { subagent },
+  };
+}
+
+/** 校验配置 patch（字段类型与允许值）。不合法抛 GraphError。 */
+function validateConfigPatch(patch: any): void {
+  if (patch === null || typeof patch !== "object") throw new GraphError("配置必须是对象");
+  const needObj = (v: any, name: string) => { if (v !== undefined && v !== null && typeof v !== "object") throw new GraphError(`${name} 必须是对象`); };
+  const needStr = (v: any, name: string, { nullable = false, nonEmpty = false } = {}) => {
+    if (v === undefined || v === null) { if (!nullable) throw new GraphError(`${name} 不能为空`); return; }
+    if (typeof v !== "string") throw new GraphError(`${name} 必须是字符串`);
+    if (nonEmpty && v.trim() === "") throw new GraphError(`${name} 不能为空`);
+  };
+  if ("executor" in patch) {
+    needObj(patch.executor, "executor");
+    const e = patch.executor ?? {};
+    needStr(e.provider, "executor.provider", { nullable: true });
+    needStr(e.model, "executor.model", { nullable: true });
+  }
+  if ("defaults" in patch) {
+    needObj(patch.defaults, "defaults");
+    const d = patch.defaults ?? {};
+    needObj(d.review, "defaults.review");
+    needObj(d.pk, "defaults.pk");
+    const rv = d.review ?? {}, pk = d.pk ?? {};
+    needStr(rv.reviewer, "defaults.review.reviewer", { nullable: true, nonEmpty: false });
+    needStr(rv.prompt, "defaults.review.prompt", { nullable: true });
+    if ("lanes" in pk) {
+      const lanes = pk.lanes;
+      if (lanes !== null && lanes !== undefined && (!Number.isInteger(lanes) || lanes < 1)) throw new GraphError("defaults.pk.lanes 必须是 >=1 的整数");
+    }
+    needStr(pk.sandbox, "defaults.pk.sandbox", { nullable: true, nonEmpty: false });
+  }
+  if ("supervisor" in patch) {
+    needObj(patch.supervisor, "supervisor");
+    const s = patch.supervisor ?? {};
+    needObj(s.automation, "supervisor.automation");
+    const auto = s.automation ?? {};
+    for (const k of AUTOMATION_KEYS) {
+      if (!(k in auto)) continue;
+      const v = auto[k];
+      if (v === null || v === undefined) continue;
+      if (typeof v !== "string" || !(AUTOMATION_VALUES as readonly string[]).includes(v)) {
+        throw new GraphError(`supervisor.automation.${k} 只允许 ${AUTOMATION_VALUES.join("/")}`);
+      }
+    }
+  }
+  if ("prompt_overrides" in patch) {
+    needObj(patch.prompt_overrides, "prompt_overrides");
+    const po = patch.prompt_overrides ?? {};
+    for (const key of PROMPT_OVERRIDE_KEYS) {
+      if (!(key in po)) continue;
+      const v = po[key];
+      needObj(v, `prompt_overrides.${key}`);
+      const o = v ?? {};
+      if (o.state !== undefined && !["default", "override", "disable"].includes(o.state)) throw new GraphError(`prompt_overrides.${key}.state 只允许 default/override/disable`);
+      needStr(o.value, `prompt_overrides.${key}.value`, { nullable: true });
+    }
+  }
+}
+
+/** g-132 写入 project.yaml 安全配置字段。patch 为部分字段（缺省字段不动）。
+ *  整读 → 校验 → 行编辑 → 原子写（tmp + rename）；校验失败抛 GraphError 不落盘。
+ *  仅当确有值变化时记 project.config_set 事件（幂等/防噪音）。unknown 键与注释保留。 */
+export function writeProjectConfig(root: string, patch: any, actor: string): void {
+  validateConfigPatch(patch);
+  const file = join(root, "project.yaml");
+  const original = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const lines = original === "" ? [] : original.split("\n");
+
+  // 通用：把 leaf 标量设为 value（null/"" 清空）；encode 返回写入的标量文本。
+  const setScalar = (path: string[], value: string | number, encode?: (v: any) => string) => {
+    const enc = encode ?? ((v: any) => (v === null || v === undefined || v === "" ? "" : String(v)));
+    setScalarAtPath(lines, path, value, enc);
+  };
+
+  if (patch.executor) {
+    if ("provider" in patch.executor) setScalar(["executor", "provider"], patch.executor.provider ?? "");
+    if ("model" in patch.executor) setScalar(["executor", "model"], patch.executor.model ?? "");
+  }
+  if (patch.defaults) {
+    const d = patch.defaults ?? {};
+    if (d.review) {
+      if ("reviewer" in d.review) setScalar(["defaults", "review", "reviewer"], d.review.reviewer ?? "");
+      if ("prompt" in d.review) setScalar(["defaults", "review", "prompt"], d.review.prompt ?? "");
+    }
+    if (d.pk) {
+      if ("lanes" in d.pk) setScalar(["defaults", "pk", "lanes"], String(d.pk.lanes ?? 1));
+      if ("sandbox" in d.pk) setScalar(["defaults", "pk", "sandbox"], d.pk.sandbox ?? "");
+    }
+  }
+  if (patch.supervisor && patch.supervisor.automation) {
+    for (const k of AUTOMATION_KEYS) {
+      if (k in patch.supervisor.automation) setScalar(["supervisor", "automation", k], patch.supervisor.automation[k] ?? "");
+    }
+  }
+  if (patch.prompt_overrides) {
+    for (const key of PROMPT_OVERRIDE_KEYS) {
+      const o = patch.prompt_overrides[key];
+      if (!o) continue;
+      const state = o.state ?? (o.value ? "override" : "default");
+      let encoded = "default";
+      if (state === "disable") encoded = '""';
+      else if (state === "override") encoded = JSON.stringify(o.value ?? "");
+      setScalar(["prompt_overrides", key], "", () => encoded);
+    }
+  }
+
+  const updated = lines.join("\n");
+  if (updated === original) {
+    // 无实际变化：不写盘、不记事件
+    return;
+  }
+  writeFileSync(`${file}.tmp`, updated, "utf8");
+  renameSync(`${file}.tmp`, file);
+  const changed: string[] = [];
+  for (const k of Object.keys(patch ?? {})) changed.push(k);
+  appendEvent(root, {
+    actor,
+    event: "project.config_set",
+    details: { fields: changed },
+  });
+}
+
+/** 在 lines 上按路径把叶子标量设为 encode(value)（保留行尾注释；缺失块按缩进创建；整条链缺失则文末补）。 */
+function setScalarAtPath(lines: string[], path: string[], value: string | number, encode: (v: any) => string): void {
+  const ensureBlock = (parentIdx: number, parentEnd: number, childIndent: string, childKey: string): number => {
+    // 在 parent 块内容结束处（end）插入 `childIndent+childKey:` 头，并返回其行号
+    lines.splice(parentEnd, 0, `${childIndent}${childKey}:`);
+    // 插入后块尾全局后移；本轮只需行号（无子级）
+    return parentEnd;
+  };
+  // 根块查找/创建
+  const rootKey = path[0];
+  let rootIdx = findKeyLine(lines, rootKey, 0, 0, lines.length);
+  if (rootIdx < 0) {
+    buildMissingChain(lines, path, encode(value));
+    return;
+  }
+  let parentIdx = rootIdx;
+  let parentIndent = lineIndent(lines[parentIdx]);
+  for (let lvl = 1; lvl < path.length - 1; lvl++) {
+    const key = path[lvl];
+    const childIndent = " ".repeat(parentIndent + 2);
+    const end = blockChildrenEnd(lines, parentIdx, parentIndent);
+    const keyIdx = findKeyLine(lines, key, childIndent.length, parentIdx + 1, end);
+    if (keyIdx < 0) {
+      // 插入中间块头
+      const inserted = ensureBlock(parentIdx, end, childIndent, key);
+      parentIdx = inserted;
+      parentIndent = childIndent.length;
+      continue;
+    }
+    parentIdx = keyIdx;
+    parentIndent = lineIndent(lines[keyIdx]);
+  }
+  // 现在 parentIdx 为叶子块的父块头；设置叶子键
+  const leafKey = path[path.length - 1];
+  const leafIndent = " ".repeat(parentIndent + 2);
+  const end = blockChildrenEnd(lines, parentIdx, parentIndent);
+  const leafIdx = findKeyLine(lines, leafKey, leafIndent.length, parentIdx + 1, end);
+  const encoded = encode(value);
+  if (leafIdx < 0) {
+    lines.splice(end, 0, `${leafIndent}${leafKey}: ${encoded}`);
+  } else {
+    const existing = lines[leafIdx];
+    const afterKey = existing.slice(lineIndent(existing) + leafKey.length + 1);
+    const { comment } = splitValueComment(afterKey);
+    const trimmedEnc = encoded.trim();
+    lines[leafIdx] = `${leafIndent}${leafKey}: ${trimmedEnc}${comment}`;
+  }
+}
+
+/** 路径整条链缺失时，在文末补建（保持块缩进层级）。 */
+function buildMissingChain(lines: string[], path: string[], leafValue: string): void {
+  // 去掉文末空行
+  while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+  if (lines.length && lines[lines.length - 1] !== "") lines.push("");
+  for (let lvl = 0; lvl < path.length - 1; lvl++) {
+    lines.push(" ".repeat(lvl * 2) + `${path[lvl]}:`);
+  }
+  lines.push(" ".repeat((path.length - 1) * 2) + `${path[path.length - 1]}: ${leafValue}`);
+}
+
 const GOAL_BODY = `
 ## 目标描述
 
@@ -575,6 +979,105 @@ export function setCriteria(
       rules_snapshot: doc.meta.rules_snapshot,
     },
   });
+}
+
+// ---- g-170：GUI 判据编辑（方案 A） ----
+
+/** 判据编辑保存选项（POST /api/dsh-graph/set-criteria → updateCriteria）。 */
+export interface UpdateCriteriaOpts {
+  /** 用户编辑后的判据原文列表（去编号；服务端统一 trim、去空、去重校验、1..N 重排）。 */
+  items: string[];
+  /** 乐观并发 token：客户端打开编辑器时读到的有序判据 key（criteriaItems 同构）；
+   *  与服务器当前判据不一致即视为并发变化（D8）。null/undefined 表示不做并发校验。 */
+  base_items?: string[] | null;
+  /** 并发变化时强制以本地内容覆盖服务器（D8：自动重试覆盖，不静默丢弃本地修改）。 */
+  force?: boolean;
+  actor: string;
+}
+
+/**
+ * g-170：更新目标质量判据（GUI 编辑保存路径）。
+ * 语义（负责人确认的 D3/D5/D6/D8）：
+ * - 统一 trim、去掉空行、拒绝重复文本，按 1..N 重排写入；
+ * - 只替换判据项行，保留 goal.md 小节的 HTML 注释/占位等既有内容（rebuildCriteriaSection）；
+ * - D3：空列表仅 draft/planning/collecting/ready 允许，in_progress/review/delivered 拒绝；
+ * - D5：始终记录 criteria.updated，绝不自动记录 criteria.confirmed，不触碰 rules_snapshot
+ *   （执行确认与 validate/in_progress 门槛保留给既有 setCriteria / accept 路径）；
+ * - D8：base_items 与服务器当前判据不一致且未 force → 抛 GraphConflictError（REST 409）；
+ *   force=true 时以本地内容覆盖，并把 conflicted=true 记入事件 details（可审计）。
+ * 既有 setCriteria（agent 登记/确认判据）语义保持不变。
+ */
+export function updateCriteria(
+  root: string,
+  id: string,
+  opts: UpdateCriteriaOpts,
+): { criteria_count: number; items: string[]; conflicted: boolean } {
+  // 规范化：trim + 丢弃空行
+  const normalized = (opts.items ?? [])
+    .map((s) => String(s ?? "").trim())
+    .filter((s) => s !== "");
+  // 拒绝重复（trim 后精确匹配）
+  const seen = new Set<string>();
+  for (const s of normalized) {
+    if (seen.has(s)) throw new GraphError(`判据重复：${s}`);
+    seen.add(s);
+  }
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  const status = String(doc.meta.status ?? "");
+  // D3：空列表按状态放行/拒绝
+  if (normalized.length === 0 && ["in_progress", "review", "delivered"].includes(status)) {
+    throw new GraphError(`当前状态（${status}）不允许清空质量判据——仅草稿/规划/收集/就绪可空`);
+  }
+  // D8：乐观并发校验（base_items 与当前判据比较）
+  const current = criteriaItems(doc.body);
+  const base = Array.isArray(opts.base_items) ? opts.base_items.map(String) : null;
+  let conflicted = false;
+  if (base !== null) {
+    const same =
+      current.length === base.length &&
+      current.every((c, i) => c === base[i]);
+    if (!same) {
+      if (opts.force === true) conflicted = true;
+      else {
+        throw new GraphConflictError(
+          "质量判据已被其他编辑修改（并发冲突）——请刷新后重试；或确认以本地内容覆盖",
+        );
+      }
+    }
+  }
+  // 写回：优先重建既有小节（保留注释/未知内容），小节缺失时追加
+  const raw = sectionText(doc.body, "质量判据");
+  let content: string;
+  if (raw === null) {
+    content = normalized.length
+      ? "\n" + normalized.map((c, i) => `${i + 1}. ${c}`).join("\n") + "\n"
+      : "\n";
+  } else {
+    content = rebuildCriteriaSection(raw, normalized);
+  }
+  try {
+    doc.body = replaceSection(doc.body, "质量判据", content);
+  } catch {
+    doc.body = doc.body.replace(/\n*$/, "") + "\n\n## 质量判据" + content;
+  }
+  saveGoal(file, doc);
+  // D5：始终 criteria.updated，不冒充 criteria.confirmed，不写 rules_snapshot
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "criteria.updated",
+    goal: id,
+    details: {
+      criteria_count: normalized.length,
+      base_items: base,
+      conflicted,
+    },
+  });
+  return {
+    criteria_count: normalized.length,
+    items: normalized.map((c, i) => `${i + 1}. ${c}`),
+    conflicted,
+  };
 }
 
 // ---- 最近指令（directive）与评论（comments）—— g-150 范围扩展 ----
@@ -1002,7 +1505,7 @@ export function fillCard(
   opts: { text?: string; contentRef?: string; summary?: string; by: string; actor: string },
 ): void {
   const { file, doc } = loadCard(root, goalId, cardId);
-  
+
   // g-145：绑定保护——如果卡片处于 collecting 状态且有 child_id，
   // 则只有绑定的 child 或非 collect agent（human/supervisor 通过工具调用）可以填充。
   // human actor 以 "human:" 开头；supervisor/其他 agent 以 "agent:" 开头但 by !== child_id。
@@ -1024,7 +1527,7 @@ export function fillCard(
       });
     }
   }
-  
+
   if (opts.text !== undefined) doc.body = "\n" + opts.text + "\n";
   if (opts.contentRef !== undefined) doc.meta.content_ref = opts.contentRef;
   if (opts.summary !== undefined) doc.meta.summary = opts.summary;
@@ -1498,7 +2001,7 @@ export function formatCollectPrompt(
   }
   const goalDoc = loadGoal(goalFile);
   const goalTitle = goalDoc.meta.title ?? goalId;
-  
+
   const cardFile = join(goalDirOf(goalFile), "cards", `${cardId}.md`);
   if (!existsSync(cardFile)) {
     throw new GraphError(`卡片不存在：${cardId}（目标 ${goalId}）`);
@@ -1506,7 +2009,7 @@ export function formatCollectPrompt(
   const cardDoc = loadGoal(cardFile);
   const cardTitle = cardDoc.meta.title ?? cardId;
   const cardKind = cardDoc.meta.kind ?? "text";
-  
+
   // 构建结构化提示词
   const sections = [
     `## 收集任务上下文`,
@@ -1539,7 +2042,7 @@ export function formatCollectPrompt(
     `3. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
     `4. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
   ];
-  
+
   // 如果有用户提供的附加要求，追加在末尾
   if (userPrompt && userPrompt.trim()) {
     sections.push(
@@ -1548,7 +2051,7 @@ export function formatCollectPrompt(
       userPrompt.trim(),
     );
   }
-  
+
   return sections.join("\n");
 }
 
@@ -1565,7 +2068,7 @@ export function getCardMeta(
   }
   const goalDoc = loadGoal(goalFile);
   const goalTitle = goalDoc.meta.title ?? goalId;
-  
+
   const cardFile = join(goalDirOf(goalFile), "cards", `${cardId}.md`);
   if (!existsSync(cardFile)) {
     throw new GraphError(`卡片不存在：${cardId}（目标 ${goalId}）`);
@@ -1573,7 +2076,7 @@ export function getCardMeta(
   const cardDoc = loadGoal(cardFile);
   const cardTitle = cardDoc.meta.title ?? cardId;
   const cardKind = cardDoc.meta.kind ?? "text";
-  
+
   return { title: cardTitle, kind: cardKind, goalTitle };
 }
 
@@ -1835,8 +2338,12 @@ export function archiveGoal(
     // 独立目标 → goals/archived/<id>/goal.md
     targetFile = join(root, "goals", "archived", id, "goal.md");
   } else if (parts[0] === "backlog") {
-    // backlog 目标 → backlog/archived/<id>.md
-    targetFile = join(root, "backlog", "archived", `${id}.md`);
+    // backlog 目标：目录形态 → backlog/archived/<id>/goal.md；扁平 → backlog/archived/<id>.md
+    if (srcDir) {
+      targetFile = join(root, "backlog", "archived", id, "goal.md");
+    } else {
+      targetFile = join(root, "backlog", "archived", `${id}.md`);
+    }
   } else {
     throw new GraphError(`无法确定目标 ${id} 的当前位置：${rel}`);
   }
@@ -1873,6 +2380,7 @@ export function unarchiveGoal(
   }
   const rel = file.slice(root.length + 1);
   const parts = rel.split("/");
+  const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
   let targetFile: string;
   if (parts[0] === "versions" && parts[1] === "archived") {
     // versions/archived/<id>/goal.md → 需要知道原版本，从 meta.version 取
@@ -1887,15 +2395,18 @@ export function unarchiveGoal(
     // goals/archived/<id>/goal.md → goals/<id>/goal.md
     targetFile = join(root, "goals", id, "goal.md");
   } else if (parts[0] === "backlog" && parts[1] === "archived") {
-    // backlog/archived/<id>.md → backlog/<id>.md
-    targetFile = join(root, "backlog", `${id}.md`);
+    // backlog/archived/<id>/goal.md → backlog/<id>/goal.md；backlog/archived/<id>.md → backlog/<id>.md
+    if (srcDir) {
+      targetFile = join(root, "backlog", id, "goal.md");
+    } else {
+      targetFile = join(root, "backlog", `${id}.md`);
+    }
   } else {
     throw new GraphError(`无法确定归档目标 ${id} 的位置：${rel}`);
   }
   if (existsSync(targetFile)) throw new GraphError(`恢复位置已存在：${targetFile}`);
   // 清除归档标记
   doc.meta.archived = false;
-  const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
   mkdirSync(dirname(targetFile), { recursive: true });
   if (srcDir) {
     // 目录形态：整体移动目录（cards/ attempts/ 一起走）
@@ -1915,6 +2426,104 @@ export function unarchiveGoal(
 /** 判断目标文件是否在 archived 目录下。 */
 function isArchivedFile(file: string): boolean {
   return file.includes("/archived/") || file.includes("\\archived\\");
+}
+
+/** 判断目标是否属于 backlog 目录（含 archived/backlog 子路径）。 */
+function isBacklogFile(file: string, root: string): boolean {
+  const rel = file.slice(root.length + 1);
+  return rel.startsWith("backlog/") || rel.startsWith("backlog\\");
+}
+
+/** 判断是否有进行中的执行子代理（基于 attempt status_line 的启发式检测）。
+ *  与 deleteGoal 使用同一判定口径：result=pending 且 status_line 未表明空闲/完成等结束态。 */
+function _hasActiveAttempts_postpone(dir: string): boolean {
+  const attDir = join(dir, "attempts");
+  if (!existsSync(attDir)) return false;
+  for (const d of readdirSync(attDir)) {
+    if (!d.startsWith("att-")) continue;
+    const attFile = join(attDir, d, "attempt.md");
+    if (!existsSync(attFile)) continue;
+    try {
+      const att = loadGoal(attFile);
+      const sl = String(att.meta.status_line ?? "").trim();
+      // 已绑定 child_id 即代表仍有可运行的子代理；不得替用户中断。
+      if (att.meta.result === "pending" && att.meta.child_id) return true;
+      const done = /空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(sl);
+      if (att.meta.result === "pending" && sl !== "" && !done) return true;
+    } catch {
+      /* 坏文件跳过 */
+    }
+  }
+  return false;
+}
+
+/** 暂缓目标：把版本/独立目标迁回 backlog 目录形态并置为 draft。
+ *  - 前置条件：无进行中的执行 attempt（否则拒绝）。
+ *  - 有附件目录时整体迁为 backlog/<id>/goal.md，保留 cards/attempts。
+ *  - 迁移后 version=null、status=draft，记 goal.postponed 事件（R-02）。
+ *  - 不提供恢复/继续入口：后续继续由负责人重新规划。 */
+export function postponeGoal(
+  root: string,
+  id: string,
+  opts: { actor: string; reason?: string },
+): void {
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  const rel = file.slice(root.length + 1);
+  const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
+
+  if (isBacklogFile(file, root)) {
+    throw new GraphError(`目标 ${id} 已在 backlog，无需暂缓`);
+  }
+
+  if (srcDir && _hasActiveAttempts_postpone(srcDir)) {
+    const reason = "存在进行中的执行子代理";
+    appendEvent(root, {
+      actor: opts.actor,
+      event: "goal.postpone_blocked",
+      goal: id,
+      details: { from: rel, reason },
+    });
+    throw new GraphError(`目标 ${id} 有进行中的子代理，不能暂缓——请等待完成或先自行中断`);
+  }
+
+  const from = rel;
+  const prevVersion = doc.meta.version ?? null;
+  const prevStatus = doc.meta.status as string;
+
+  const targetDir = join(root, "backlog", id);
+  const targetFile = join(targetDir, "goal.md");
+  if (existsSync(targetFile)) {
+    throw new GraphError(`暂缓目标位置已存在：${targetFile}`);
+  }
+
+  // 事件/检查完成后才执行单次目录 rename，避免失败留下半迁移目录。
+  if (srcDir) {
+    mkdirSync(join(root, "backlog"), { recursive: true });
+    renameSync(srcDir, targetDir);
+  } else {
+    mkdirSync(targetDir, { recursive: true });
+    renameSync(file, targetFile);
+  }
+
+  doc.meta.version = null;
+  if (prevStatus !== "draft") {
+    doc.meta.status = "draft";
+  }
+  saveGoal(targetFile, doc);
+
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "goal.postponed",
+    goal: id,
+    details: {
+      from,
+      to: relative(root, targetFile),
+      prev_version: prevVersion,
+      prev_status: prevStatus,
+      reason: opts.reason ?? null,
+    },
+  });
 }
 
 // ---- 目标删除（g-140） ----
@@ -1983,7 +2592,7 @@ export interface BoardGoal {
   id: string;
   title: string;
   status: string;
-  /** g-158：目标类型（feature/bug/task/improvement），默认 task */
+  /** g-158：目标类型 */
   type: GoalType;
   status_line: string | null;
   reviewer: string | null;
@@ -1999,11 +2608,13 @@ export interface BoardGoal {
   cards?: Array<Record<string, any>>;
   /** 质量判据实质行数（g-77647351 看板「判据未登记」提示数据源）；≥1 即已登记 */
   criteria_count?: number;
-  /** g-163：与 checklist 同源的稳定、有序判据 key。 */
   criteria_items?: string[];
   rules_snapshot?: string | null;
   /** g-110：目标是否已归档 */
   archived?: boolean;
+  /** g-171：goal.md 的最后修改时间（statSync mtimeMs），供客户端「更新强调动画」10 秒窗口判定；
+   *  仅下发毫秒时间戳，不暴露文件路径；缺失/不可读时为 null（旧 payload 兼容）。 */
+  updated_at?: number | null;
 }
 
 export interface BoardVersion {
@@ -2025,6 +2636,13 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
     const doc = loadGoal(file);
     const meta = doc.meta;
     const archived = meta.archived === true || isArchivedFile(file);
+    // g-171：goal.md 的 mtime（毫秒）——更新强调动画触发源；不可读/缺失时 null（旧 payload 兼容）
+    let updatedAt: number | null = null;
+    try {
+      updatedAt = statSync(file).mtimeMs;
+    } catch {
+      /* 文件缺失/不可读 → null，不阻塞看板 */
+    }
     // 取最新一个带 status_line 的 attempt
     let statusLine: string | null = null;
     const dir = basename(file) === "goal.md" ? dirname(file) : null;
@@ -2113,6 +2731,7 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
       criteria_count: countCriteria(doc.body),
       criteria_items: criteriaItems(doc.body),
       rules_snapshot: meta.rules_snapshot ?? null,
+      updated_at: updatedAt,
     };
   };
   const versions: BoardVersion[] = [];
@@ -2202,9 +2821,20 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
         if (includeArchived) {
           const archivedDir = join(bdir, "archived");
           for (const af of readdirSync(archivedDir).sort()) {
-            if (!af.endsWith(".md")) continue;
+            // 扁平 backlog/archived/<id>.md
+            if (af.endsWith(".md")) {
+              try {
+                backlog.push(goalItem(join(archivedDir, af)));
+              } catch {
+                /* 跳过 */
+              }
+              continue;
+            }
+            // 目录形态 backlog/archived/<id>/goal.md（暂缓后归档）
+            const nested = join(archivedDir, af, "goal.md");
+            if (!existsSync(nested)) continue;
             try {
-              backlog.push(goalItem(join(archivedDir, af)));
+              backlog.push(goalItem(nested));
             } catch {
               /* 跳过 */
             }
@@ -2212,9 +2842,20 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
         }
         continue;
       }
-      if (!f.endsWith(".md")) continue;
+      // 扁平 backlog/<id>.md
+      if (f.endsWith(".md")) {
+        try {
+          backlog.push(goalItem(join(bdir, f)));
+        } catch {
+          /* 跳过 */
+        }
+        continue;
+      }
+      // 目录形态 backlog/<id>/goal.md（暂缓落点）
+      const nested = join(bdir, f, "goal.md");
+      if (!existsSync(nested)) continue;
       try {
-        backlog.push(goalItem(join(bdir, f)));
+        backlog.push(goalItem(nested));
       } catch {
         /* 跳过 */
       }
@@ -2358,6 +2999,9 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
   return {
     meta: doc.meta,
     body: doc.body,
+    // g-170：判据编辑弹窗数据源（与看板 criteria_items 同构，供 base_items 乐观并发 token）
+    criteria_items: criteriaItems(doc.body),
+    criteria_count: countCriteria(doc.body),
     cards,
     attempts,
     events,
@@ -2493,8 +3137,7 @@ export function renameGoal(
   return { old_title: oldTitle, new_title: newTitle };
 }
 
-/** g-158：设置目标类型（feature/bug/task/improvement），记 goal.type_changed 事件。
- *  非法类型安全回退 task；相同类型视为 no-op（不记事件）；类型变更不改变生命周期语义。 */
+/** g-158：设置目标类型并记录 goal.type_changed；相同类型 no-op。 */
 export function setGoalType(
   root: string,
   id: string,
@@ -2652,4 +3295,37 @@ export function readAcceptStatus(
     }
   }
   return { state: "pending" };
+}
+
+/** g-133：模型路由优先级合成——单次派发 override > workspace project.yaml 明确值 > profile 全局默认 > 继承。 */
+export function resolveModelRoute(
+  overrides: { provider?: string | null; model?: string | null } | null,
+  projectCfg: { provider: string | null; model: string | null },
+  globalCfg: { subagentProvider: string; subagentModel: string },
+): { provider: string | null; model: string | null } {
+  const provider = overrides?.provider ?? projectCfg.provider ?? globalCfg.subagentProvider ?? null;
+  const model = overrides?.model ?? projectCfg.model ?? globalCfg.subagentModel ?? null;
+  return { provider: provider || null, model: model || null };
+}
+
+/** g-133：补充提示词三态合成。 */
+export function resolvePromptOverride(globalPrompt: string, overrideValue: string): string | null {
+  if (overrideValue === "") return null;
+  if (overrideValue === "default") return globalPrompt;
+  return overrideValue;
+}
+
+/** g-133：从 project.yaml 文本解析补充提示词覆盖字段。 */
+export function readPromptOverrideValue(projectYamlText: string, key: string): string {
+  const m = projectYamlText.match(new RegExp(`^\\s*${key}:\\s*([^\\n]*)$`, "m"));
+  if (!m) return "default";
+  let raw = m[1].trim();
+  if (raw === "" || raw.toLowerCase() === "default") return "default";
+  if (raw[0] === "'" || raw[0] === '"') {
+    const quoted = raw.match(/^(['"])([\s\S]*)\1$/);
+    return quoted ? quoted[2] : raw;
+  }
+  const hash = raw.indexOf("#");
+  if (hash >= 0) raw = raw.slice(0, hash).trim();
+  return raw;
 }

@@ -76,7 +76,8 @@
     // expanded 默认值由 KanbanView 决定（delivered/blocked 默认 false，其余默认 true），
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag) {
+    // g-170：onOpenCriteria 回调——卡片 meta 行「✏️ 判据」入口（打开判据编辑弹窗）
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag, onOpenCriteria) {
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -93,8 +94,17 @@
         /* g-168 polish border */ borderLeft: `5px solid ${borderColor}`,
       };
       // g-168：PM 润色仅通过透明遮罩覆盖卡片边框，卡片本体保持可见。
-       const cardStyle = g._polishActive ? { ...style, position: "relative", animation: "none" } : style;
+      // g-171：更新强调浮层（left:-5px 覆盖 5px 类型色边框）同样需要卡片定位锚点。
+       const cardStyle = g._polishActive ? { ...style, position: "relative", animation: "none" } : g._updateEmphasis ? { ...style, position: "relative" } : style;
 
+      // g-171：更新强调——左侧类型色边框上的金属光泽浮层（10 秒生命周期内循环扫光并淡出）。
+      // 折叠/展开两条路径都挂载同一浮层；pointer-events:none + aria-hidden，不改变布局/点击/拖拽。
+      const updateSheen = g._updateEmphasis ? h("div", {
+        key: "update-sheen-" + g._updateEmphasis.token,
+        className: "dg-update-sheen",
+        "aria-hidden": "true",
+        style: { animationDuration: g._updateEmphasis.remaining + "ms" },
+      }, h("div", { className: "dg-update-sheen-bar" })) : null;
 
 
 
@@ -154,6 +164,25 @@
         onDragStart: (e) => {
           e.dataTransfer.effectAllowed = "move";
           e.dataTransfer.setData("text/plain", g.id);
+          // g-173 follow-up：backlog 卡片默认拖拽虚影会渲染整个 .dg-backlog-flat 行
+          // （flex-wrap 容器内多卡同行）。显式把当前卡片克隆节点作为 setDragImage，
+          // 虚影只显示当前这一张卡；克隆节点置于视口外并同步宽度，避免布局塌缩。
+          try {
+            const src = e.currentTarget;
+            const ghost = src.cloneNode(true);
+            ghost.classList.remove("dg-dragging", "dg-running-flow", "dg-drop-before", "dg-drop-after");
+            const rect = src.getBoundingClientRect();
+            ghost.style.position = "fixed";
+            ghost.style.left = "-9999px";
+            ghost.style.top = "0";
+            ghost.style.width = rect.width + "px";
+            ghost.style.margin = "0";
+            ghost.style.pointerEvents = "none";
+            ghost.style.zIndex = "99999";
+            document.body.appendChild(ghost);
+            e.dataTransfer.setDragImage(ghost, 16, 10);
+            setTimeout(() => { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); }, 0);
+          } catch { /* setDragImage 不可用时保持浏览器默认虚影 */ }
           drag.start();
         },
         onDragEnd: () => {
@@ -183,6 +212,7 @@
           { key: g.id, style: cardStyle, className: dragClass,
             title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
           polishOverlay,
+          updateSheen,
            titleRow,
           h("div", { style: S.meta },
             `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
@@ -190,7 +220,13 @@
                goalId: g.id,
                items: g.criteria_items ?? g.criteriaItems,
                count: g.criteria_count ?? g.criteriaCount,
-             })),
+             }),
+             h("button", {
+               style: { ...S.btn, fontSize: 10, padding: "0 4px", marginLeft: 4, flexShrink: 0 },
+               className: "dg-btn",
+               title: "编辑质量判据（保存后清空该目标已有勾选）",
+               onClick: (e) => { e.stopPropagation(); onOpenCriteria?.(g.id); },
+             }, "✏️ 判据")),
         );
       }
       return h(
@@ -198,6 +234,7 @@
         { key: g.id, style: cardStyle, className: dragClass,
           title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
         polishOverlay,
+        updateSheen,
            titleRow,
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
@@ -206,6 +243,12 @@
             items: g.criteria_items ?? g.criteriaItems,
             count: g.criteria_count ?? g.criteriaCount,
           }),
+          h("button", {
+            style: { ...S.btn, fontSize: 10, padding: "0 4px", marginLeft: 4, flexShrink: 0 },
+            className: "dg-btn",
+            title: "编辑质量判据（保存后清空该目标已有勾选）",
+            onClick: (e) => { e.stopPropagation(); onOpenCriteria?.(g.id); },
+          }, "✏️ 判据"),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
         hasDep
           ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)

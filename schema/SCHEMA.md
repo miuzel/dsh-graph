@@ -182,7 +182,7 @@ result: pending             # pending | selected | merged | rejected | supersede
 ---
 id: v-01J4VZ88KX
 name: v0.3
-status: active              # planning | active | integrating | released
+status: active              # planning | active | integrating | released（可经负责人确认恢复 active）
 created_at: 2025-08-18T09:00:00+08:00
 ---
 
@@ -260,7 +260,10 @@ draft → planning → collecting → ready → in_progress → review → deliv
 
 ```
 planning → active → integrating → released
+                         released ──(负责人确认，version.status_changed)──→ active
 ```
+
+`released` 是发布后的默认终态；仅 `human:*` / `supervisor:*` 通过受控接口并明确确认，才可撤销发布恢复为 `active`。恢复不会绕过再次发布时的全部非归档目标 `delivered` guard；拒绝或取消确认不写状态事件。
 
 ### 7.3 事件（events.jsonl，每行一个事件）
 
@@ -274,14 +277,18 @@ planning → active → integrating → released
 ```
 
 事件类型全集（草案）：`project.initialized / rules.changed / version.created /
-goal.created / goal.planned / criteria.confirmed / goal.transition /
+goal.created / goal.planned / criteria.confirmed / criteria.updated / goal.transition /
 dependency.added / evidence.added / goal.ready / attempt.started /
 completion.claimed / review.passed / review.failed / pk.compared /
 goal.delivered / goal.reworked / goal.blocked / goal.unblocked /
 goal.spawned / goal.moved / card.created / card.collecting / card.filled / card.reviewed /
 attempt.status_reported / version.scope_changed / version.integration_decided /
-version.released / memory.promoted / skill.proposed /
+version.released / version.status_changed / memory.promoted / skill.proposed /
 skill.created`
+
+> g-170：`criteria.updated` 由 GUI 判据编辑保存（POST /api/dsh-graph/set-criteria）记录，
+> details 含 `criteria_count` / `base_items` / `conflicted`；编辑绝不自动记录 `criteria.confirmed`
+> （执行确认仍走既有 setCriteria/accept 路径）。
 
 原则：**任何状态迁移必须伴随事件**；events.jsonl 是唯一真相源，goal.md 的
 frontmatter 状态可视为事件流的物化投影，允许从事件流重建。

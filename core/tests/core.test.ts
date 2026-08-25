@@ -36,6 +36,9 @@ import {
   readAcceptStatus,
   boardProjection,
   boardPayload,
+  readProjectConfig,
+  writeProjectConfig,
+  readPromptOverride,
   GraphError,
 } from "../ops.ts";
 
@@ -527,6 +530,143 @@ test("writeSupervisorSession：无 supervisor 块时文末新建；有块无 ses
   writeSupervisorSession(root, "s-2", "agent:s");
   assert.equal(readSupervisorSession(root), "s-2");
   assert.match(readFileSync(join(root, "project.yaml"), "utf8"), /release: human/);
+});
+
+// ---- g-132：workspace 配置读写（project.yaml 安全配置字段） ----
+
+const SAMPLE_CONFIG = `name: dsh-graph
+description: 基于图的目标管理 DSH 插件体系
+defaults:
+  review:
+    reviewer: human        # 本期全部由负责人审核
+    prompt: null
+  pk:
+    lanes: 1
+    sandbox: directory
+  disposition: {}
+supervisor:
+  session: session-abc   # 主管 Agent 会话
+  automation:
+    scope_planning: human      # 版本范围由负责人确认
+    integration_decision: human
+    rework: human
+    memory_promotion: ai       # 我（supervisor）提炼
+    skill_proposal: human
+    release: human
+executor:
+  provider: openai-codex
+  model: gpt-5.6-luna
+prompt_overrides:
+  subagent: default
+`;
+
+test("readProjectConfig：回填 executor/defaults/automation/prompt_overrides（含注释与未知键）", () => {
+  const root = tmpRoot();
+  writeFileSync(
+    join(root, "project.yaml"),
+    SAMPLE_CONFIG + "unknown_block:\n  mystery: keep-me   # 未知键保留\n",
+  );
+  const cfg = readProjectConfig(root);
+  assert.deepEqual(cfg.executor, { provider: "openai-codex", model: "gpt-5.6-luna" });
+  assert.deepEqual(cfg.defaults.review, { reviewer: "human", prompt: null });
+  assert.deepEqual(cfg.defaults.pk, { lanes: 1, sandbox: "directory" });
+  assert.deepEqual(cfg.supervisor.automation, {
+    scope_planning: "human", integration_decision: "human", rework: "human",
+    memory_promotion: "ai", skill_proposal: "human", release: "human",
+  });
+  assert.deepEqual(cfg.prompt_overrides.subagent, { state: "default", value: null });
+});
+
+test("writeProjectConfig：写 executor/defaults/automation 保留注释与未知键，记 project.config_set", () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, "project.yaml"), SAMPLE_CONFIG + "unknown_block:\n  mystery: keep-me\n");
+  writeProjectConfig(root, {
+    executor: { provider: "xiaomi", model: "mimo" },
+    defaults: { review: { reviewer: "ai" }, pk: { lanes: 3, sandbox: "directory" } },
+    supervisor: { automation: { memory_promotion: "human" } },
+  }, "human:gui");
+  const text = readFileSync(join(root, "project.yaml"), "utf8");
+  assert.match(text, /provider: xiaomi/);
+  assert.match(text, /model: mimo/);
+  assert.match(text, /reviewer: ai/);
+  assert.match(text, /lanes: 3/);
+  assert.match(text, /memory_promotion: human/);
+  assert.match(text, /# 本期全部由负责人审核/); // 注释保留
+  assert.match(text, /unknown_block:/);      // 未知键保留
+  assert.match(text, /mystery: keep-me/);
+  assert.match(text, /name: dsh-graph/);      // 其他键保留
+  const evts = readEvents(root).filter((e) => e.event === "project.config_set");
+  assert.equal(evts.length, 1);
+  assert.equal(evts[0].actor, "human:gui");
+  assert.ok(evts[0].details.fields.includes("executor"));
+});
+
+test("writeProjectConfig：无 project.yaml 时创建；三态提示词覆盖可往返", () => {
+  const root = tmpRoot();
+  // 无 project.yaml
+  writeProjectConfig(root, { executor: { provider: "p1", model: "m1" } }, "human:gui");
+  assert.equal(readProjectConfig(root).executor.provider, "p1");
+  // 提示词覆盖：override
+  writeProjectConfig(root, { prompt_overrides: { subagent: { state: "override", value: "多行\n提示 # C" } } }, "human:gui");
+  let ov = readPromptOverride(root, "subagent");
+  assert.equal(ov.state, "override");
+  assert.equal(ov.value, "多行\n提示 # C");
+  // disable
+  writeProjectConfig(root, { prompt_overrides: { subagent: { state: "disable" } } }, "human:gui");
+  assert.equal(readPromptOverride(root, "subagent").state, "disable");
+  // 写回 default
+  writeProjectConfig(root, { prompt_overrides: { subagent: { state: "default" } } }, "human:gui");
+  assert.equal(readPromptOverride(root, "subagent").state, "default");
+  // 未配置键 → default
+  assert.equal("supervisor" in readProjectConfig(root).prompt_overrides, false);
+});
+
+test("writeProjectConfig：非法值抛 GraphError 且不半写入（文件保持原样）", () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, "project.yaml"), SAMPLE_CONFIG);
+  const before = readFileSync(join(root, "project.yaml"), "utf8");
+  assert.throws(() => writeProjectConfig(root, { defaults: { pk: { lanes: 0 } } }, "human:gui"), GraphError);
+  assert.throws(() => writeProjectConfig(root, { supervisor: { automation: { release: "robot" } } }, "human:gui"), GraphError);
+  assert.throws(() => writeProjectConfig(root, { prompt_overrides: { subagent: { state: "ghost" } } }, "human:gui"), GraphError);
+  assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), before);
+  assert.equal(readEvents(root).filter((e) => e.event === "project.config_set").length, 0);
+});
+
+test("writeProjectConfig：值未变时不写盘、不记事件（幂等）", () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, "project.yaml"), SAMPLE_CONFIG);
+  const before = readFileSync(join(root, "project.yaml"), "utf8");
+  writeProjectConfig(root, { executor: { provider: "openai-codex" } }, "human:gui"); // 值与现有一致
+  assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), before);
+  assert.equal(readEvents(root).filter((e) => e.event === "project.config_set").length, 0);
+});
+
+test("g-132 回归：块内被 # 注释的字段行不干扰读取/写回（保留注释）", () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, "project.yaml"),
+    "executor:\n#  provider: xiaomi-token-plan-cn   # 旧 provider（注释掉）\n#  model: mimo-v2.5-pro\n  provider: openai-codex\n  model: gpt-5.6-luna\n");
+  const cfg = readProjectConfig(root);
+  assert.deepEqual(cfg.executor, { provider: "openai-codex", model: "gpt-5.6-luna" });
+  // 写回新值，仍保留被注释掉的旧行
+  writeProjectConfig(root, { executor: { provider: "xiaomi" } }, "human:gui");
+  const text = readFileSync(join(root, "project.yaml"), "utf8");
+  assert.match(text, /provider: xiaomi/);
+  assert.match(text, /#  provider: xiaomi-token-plan-cn/); // 被注释的旧行保留
+  assert.equal(readProjectConfig(root).executor.provider, "xiaomi");
+});
+
+test("g-132 源契约：config 读写函数 + 三态继承语义在 core/ops.ts 落位", () => {
+  const src = readFileSync(join(process.cwd(), "core", "ops.ts"), "utf8");
+  assert.match(src, /export function readProjectConfig/);
+  assert.match(src, /export function writeProjectConfig/);
+  assert.match(src, /export function readPromptOverride/);
+  // 三态语义：default 继承 / override 覆盖 / disable 禁用
+  assert.match(src, /"default" \| "override" \| "disable"/);
+  assert.match(src, /default（继承 profile 全局值）/);
+  assert.match(src, /project\.config_set/);   // 事件
+  assert.match(src, /renameSync/);           // 原子写
+  assert.match(src, /未配置\/缺失 → default/);
+   assert.doesNotMatch(src, /PROMPT_OVERRIDE_KEYS = \["subagent", "supervisor"\]/); // 未配置默认为 default
 });
 
 test("generateHandoff：board 投影 + 环境事实 + 长期记忆，不依赖会话上下文", () => {

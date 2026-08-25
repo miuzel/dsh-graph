@@ -40,6 +40,7 @@ window.__ModuleLoader__.load({
 
     const EVENT_LABEL = {
       "goal.created": "创建目标", "goal.planned": "完成规划", "criteria.confirmed": "确认判据",
+      "criteria.updated": "更新判据", // g-170
       "goal.transition": null, "attempt.started": "派发执行", "attempt.status_reported": null,
       "completion.claimed": "声明完成", "review.passed": "评审通过", "review.failed": "评审未通过",
       "goal.moved": "排期移动", "card.created": "创建卡片", "card.filled": "填充卡片",
@@ -57,6 +58,7 @@ window.__ModuleLoader__.load({
     // g-a92e1406：补 attempt.status_reported（状态汇报履历）
     const MEANINGFUL = new Set([
       "goal.transition", "goal.amended", "scope.note", "criteria.confirmed",
+      "criteria.updated", // g-170
       "completion.claimed", "review.passed", "review.failed", "attempt.started",
       "goal.moved", "goal.created", "attempt.status_reported", "goal.renamed",
       "goal.type_changed", // g-158
@@ -177,6 +179,30 @@ window.__ModuleLoader__.load({
       @keyframes dg-polish-flow {
          0%, 80% { background-position: 0% 50%; opacity: 1; }
          100% { background-position: 100% 50%; opacity: 0; }
+       }
+       /* g-171：更新强调动画——左侧类型色边框金属光泽浮层（10 秒生命周期内循环扫光并淡出） */
+       .dg-update-sheen {
+         position: absolute; left: -5px; top: 0; bottom: 0; width: 5px;
+         overflow: hidden; pointer-events: none; border-radius: 6px 0 0 6px;
+         /* 时长由内联 animationDuration（剩余毫秒）覆盖；forwards 结束停留不可见 */
+         animation: dg-update-fade 10s linear forwards;
+       }
+       .dg-update-sheen-bar {
+         position: absolute; left: 0; right: 0; top: 0; height: 40%;
+         background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.92), rgba(205,212,224,.55), rgba(255,255,255,0));
+         animation: dg-update-sheen-sweep 1.6s linear infinite;
+       }
+       @keyframes dg-update-sheen-sweep {
+         0% { transform: translateY(-130%); }
+         100% { transform: translateY(230%); }
+       }
+       @keyframes dg-update-fade {
+         0% { opacity: 1; }
+         100% { opacity: 0; }
+       }
+       @media (prefers-reduced-motion: reduce) {
+         .dg-update-sheen, .dg-update-sheen-bar { animation: none !important; }
+         .dg-update-sheen { opacity: 0; }
        }
        @keyframes dg-pulse {
         0%, 100% { opacity: 1; transform: scale(1); }
@@ -1040,7 +1066,8 @@ window.__ModuleLoader__.load({
     // expanded 默认值由 KanbanView 决定（delivered/blocked 默认 false，其余默认 true），
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag) {
+    // g-170：onOpenCriteria 回调——卡片 meta 行「✏️ 判据」入口（打开判据编辑弹窗）
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag, onOpenCriteria) {
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -1057,8 +1084,17 @@ window.__ModuleLoader__.load({
         /* g-168 polish border */ borderLeft: `5px solid ${borderColor}`,
       };
       // g-168：PM 润色仅通过透明遮罩覆盖卡片边框，卡片本体保持可见。
-       const cardStyle = g._polishActive ? { ...style, position: "relative", animation: "none" } : style;
+      // g-171：更新强调浮层（left:-5px 覆盖 5px 类型色边框）同样需要卡片定位锚点。
+       const cardStyle = g._polishActive ? { ...style, position: "relative", animation: "none" } : g._updateEmphasis ? { ...style, position: "relative" } : style;
 
+      // g-171：更新强调——左侧类型色边框上的金属光泽浮层（10 秒生命周期内循环扫光并淡出）。
+      // 折叠/展开两条路径都挂载同一浮层；pointer-events:none + aria-hidden，不改变布局/点击/拖拽。
+      const updateSheen = g._updateEmphasis ? h("div", {
+        key: "update-sheen-" + g._updateEmphasis.token,
+        className: "dg-update-sheen",
+        "aria-hidden": "true",
+        style: { animationDuration: g._updateEmphasis.remaining + "ms" },
+      }, h("div", { className: "dg-update-sheen-bar" })) : null;
 
 
 
@@ -1118,6 +1154,25 @@ window.__ModuleLoader__.load({
         onDragStart: (e) => {
           e.dataTransfer.effectAllowed = "move";
           e.dataTransfer.setData("text/plain", g.id);
+          // g-173 follow-up：backlog 卡片默认拖拽虚影会渲染整个 .dg-backlog-flat 行
+          // （flex-wrap 容器内多卡同行）。显式把当前卡片克隆节点作为 setDragImage，
+          // 虚影只显示当前这一张卡；克隆节点置于视口外并同步宽度，避免布局塌缩。
+          try {
+            const src = e.currentTarget;
+            const ghost = src.cloneNode(true);
+            ghost.classList.remove("dg-dragging", "dg-running-flow", "dg-drop-before", "dg-drop-after");
+            const rect = src.getBoundingClientRect();
+            ghost.style.position = "fixed";
+            ghost.style.left = "-9999px";
+            ghost.style.top = "0";
+            ghost.style.width = rect.width + "px";
+            ghost.style.margin = "0";
+            ghost.style.pointerEvents = "none";
+            ghost.style.zIndex = "99999";
+            document.body.appendChild(ghost);
+            e.dataTransfer.setDragImage(ghost, 16, 10);
+            setTimeout(() => { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); }, 0);
+          } catch { /* setDragImage 不可用时保持浏览器默认虚影 */ }
           drag.start();
         },
         onDragEnd: () => {
@@ -1147,6 +1202,7 @@ window.__ModuleLoader__.load({
           { key: g.id, style: cardStyle, className: dragClass,
             title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
           polishOverlay,
+          updateSheen,
            titleRow,
           h("div", { style: S.meta },
             `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
@@ -1154,7 +1210,13 @@ window.__ModuleLoader__.load({
                goalId: g.id,
                items: g.criteria_items ?? g.criteriaItems,
                count: g.criteria_count ?? g.criteriaCount,
-             })),
+             }),
+             h("button", {
+               style: { ...S.btn, fontSize: 10, padding: "0 4px", marginLeft: 4, flexShrink: 0 },
+               className: "dg-btn",
+               title: "编辑质量判据（保存后清空该目标已有勾选）",
+               onClick: (e) => { e.stopPropagation(); onOpenCriteria?.(g.id); },
+             }, "✏️ 判据")),
         );
       }
       return h(
@@ -1162,6 +1224,7 @@ window.__ModuleLoader__.load({
         { key: g.id, style: cardStyle, className: dragClass,
           title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
         polishOverlay,
+        updateSheen,
            titleRow,
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
@@ -1170,6 +1233,12 @@ window.__ModuleLoader__.load({
             items: g.criteria_items ?? g.criteriaItems,
             count: g.criteria_count ?? g.criteriaCount,
           }),
+          h("button", {
+            style: { ...S.btn, fontSize: 10, padding: "0 4px", marginLeft: 4, flexShrink: 0 },
+            className: "dg-btn",
+            title: "编辑质量判据（保存后清空该目标已有勾选）",
+            onClick: (e) => { e.stopPropagation(); onOpenCriteria?.(g.id); },
+          }, "✏️ 判据"),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
         hasDep
           ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
@@ -2803,6 +2872,142 @@ window.__ModuleLoader__.load({
 
     // g-77647351：回退询问理由弹窗（后→前方向拖动时）
     // 判据 4：有子代理 → 作为子代理消息补充（send_message）；无子代理 → 补充给主管
+    // g-170：质量判据编辑弹窗（方案 A）——卡片 meta 行「✏️ 判据」入口打开。
+    // 逐行编辑/新增/删除/上移/下移；保存统一 trim/去重/1..N 重排（服务端 updateCriteria）；
+    // D6：进入编辑前明确告知保存后清空该目标已有 localStorage 勾选，保存成功后清空；
+    // D8：携带 base_items 乐观并发 token，409 冲突时自动以本地内容覆盖服务器重试（force=true），
+    //     不静默丢弃本地修改，并给出可理解反馈。
+    function CriteriaModal(props) {
+      const { goalId, onClose, onSaved } = props;
+      const [state, setState] = React.useState({ loading: true });
+      const [rows, setRows] = React.useState([]);
+      const [baseItems, setBaseItems] = React.useState(null);
+      const [note, setNote] = React.useState(null);
+      const [saving, setSaving] = React.useState(false);
+
+      // 与 core criteriaItems 同构的「N. 」编号前缀剥离（编辑行只保留原文）
+      const stripNum = (s) => String(s).replace(/^\d+[.、)]\s*/, "");
+
+      React.useEffect(() => {
+        fetch(graphUrl("/api/dsh-graph/goal", { id: goalId }))
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.error) { setState({ loading: false, error: data.error }); return; }
+            const items = Array.isArray(data.criteria_items) ? data.criteria_items : [];
+            setBaseItems(items);
+            setRows(items.map(stripNum));
+            setState({ loading: false, data });
+          })
+          .catch((e) => setState({ loading: false, error: String(e) }));
+      }, [goalId]);
+
+      const setRow = (i, v) => setRows(rows.map((r, j) => (j === i ? v : r)));
+      const removeRow = (i) => setRows(rows.filter((_, j) => j !== i));
+      const moveRow = (i, dir) => {
+        const j = i + dir;
+        if (j < 0 || j >= rows.length) return;
+        const next = [...rows];
+        [next[i], next[j]] = [next[j], next[i]];
+        setRows(next);
+      };
+      const addRow = () => setRows([...rows, ""]);
+
+      // D8：保存携带 base_items；409 冲突 → 自动以本地内容覆盖服务器重试（force=true）
+      const doSave = async () => {
+        setSaving(true); setNote(null);
+        const items = rows.map((s) => s.trim()).filter((s) => s !== "");
+        const post = (force) => fetch(graphUrl("/api/dsh-graph/set-criteria"), {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ goal: goalId, items, base_items: baseItems ?? [], force: !!force }),
+        });
+        try {
+          let r = await post(false);
+          let data = await r.json();
+          if (r.status === 409) {
+            // D8：并发变化 → 自动以本地编辑内容覆盖服务器，不静默丢弃本地修改
+            setNote("⚠️ 检测到判据已被其他编辑修改，正在以本地内容覆盖服务器…");
+            r = await post(true);
+            data = await r.json();
+            if (data.ok) setNote("✅ 已保存（并发覆盖）");
+          }
+          if (data.ok) {
+            // D6：保存成功后清空该目标已有 localStorage 勾选
+            try { localStorage.removeItem("dsh-graph.crit." + goalId); } catch {}
+            window.dispatchEvent(new Event("dsh-graph.criteria-changed"));
+            showToast("✅ 判据已保存（勾选已清空）");
+            onSaved?.();
+            onClose?.();
+          } else {
+            setNote("⚠️ 保存失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setSaving(false);
+      };
+
+      if (state.loading) {
+        return h("div", { style: S.overlay, onClick: onClose },
+          h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
+            h("span", { style: S.close, onClick: onClose }, "✕"),
+            h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
+            h("div", { style: { ...S.meta, marginTop: 6 } }, "加载中…")));
+      }
+      if (state.error) {
+        return h("div", { style: S.overlay, onClick: onClose },
+          h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
+            h("span", { style: S.close, onClick: onClose }, "✕"),
+            h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
+            h("div", { style: { ...S.meta, marginTop: 6, color: "#d66" } }, "加载失败：" + state.error)));
+      }
+      const goalTitle = state.data?.meta?.title ?? null;
+      const rowBtn = (label, tip, onClick, extra) => h("button", {
+        style: { ...S.btn, fontSize: 11, padding: "0 5px", flexShrink: 0, ...(extra ?? {}) },
+        className: "dg-btn",
+        title: tip,
+        onClick: (e) => { e.stopPropagation(); onClick(); },
+      }, label);
+      return h("div", { style: S.overlay, onClick: onClose },
+        h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
+          h("span", { style: S.close, onClick: onClose }, "✕"),
+          h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
+          goalTitle ? h("div", { style: { ...S.meta, marginTop: 2 } }, `${goalId} ｜ ${goalTitle}`) : null,
+          // D6：进入编辑前明确告知保存后果
+          h("div", { style: { marginTop: 8, padding: "6px 8px", borderRadius: 4, fontSize: 12,
+            background: "rgba(224,165,58,.14)", border: "1px solid rgba(224,165,58,.4)" } },
+            "⚠️ 保存后将清空该目标已有的判据勾选状态。"),
+          h("div", { style: { marginTop: 10, display: "flex", flexDirection: "column", gap: 4 } },
+            rows.length === 0
+              ? h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6, padding: "4px 0" } },
+                  "（暂无判据——点击下方「➕ 新增判据」添加）")
+              : rows.map((row, i) =>
+                  h("div", { key: i, style: { display: "flex", alignItems: "center", gap: 4 } },
+                    h("span", { style: { ...S.meta, fontSize: 11, width: 22, flexShrink: 0, textAlign: "right" } },
+                      `${i + 1}.`),
+                    h("input", {
+                      style: { ...S.promptInput, flex: 1 },
+                      value: row,
+                      placeholder: "判据内容…",
+                      onChange: (e) => setRow(i, e.target.value),
+                    }),
+                    rowBtn("↑", "上移", () => moveRow(i, -1), { opacity: i === 0 ? 0.35 : 1 }),
+                    rowBtn("↓", "下移", () => moveRow(i, 1), { opacity: i === rows.length - 1 ? 0.35 : 1 }),
+                    rowBtn("🗑", "删除该条", () => removeRow(i))))),
+          h("button", {
+            style: { ...S.btn, marginTop: 8 }, className: "dg-btn",
+            onClick: addRow,
+          }, "➕ 新增判据"),
+          h("div", { style: { display: "flex", gap: 6, marginTop: 12 } },
+            h("button", {
+              style: { ...S.btnAccept, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-accept",
+              disabled: saving, onClick: doSave,
+            }, saving ? "保存中…" : "💾 保存"),
+            h("button", {
+              style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
+              disabled: saving, onClick: onClose,
+            }, "取消")),
+          note ? h("div", { style: { ...S.meta, marginTop: 6, fontSize: 11 } }, note) : null));
+    }
     function BackwardReasonPrompt(props) {
       const { goalId, toStatus, hasChild, childId, parentId, onConfirm, onCancel } = props;
       const [reason, setReason] = React.useState("");
@@ -3031,6 +3236,7 @@ window.__ModuleLoader__.load({
     function KanbanView(props) {
       const [state, setState] = React.useState({ loading: true });
       const [modalGoal, setModalGoal] = React.useState(null);
+      const [criteriaGoal, setCriteriaGoal] = React.useState(null); // g-170：判据编辑弹窗
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
@@ -3081,8 +3287,22 @@ window.__ModuleLoader__.load({
       // g-77647351：拖拽状态机
       const [drag, setDrag] = React.useState(null); // {goalId, fromStatus, overGoalId, overStageKey, overHalf, laneKey}
       const dropCommitted = React.useRef(false);
+      // g-173：看板根节点 ref——自动滚动 effect 从它向上找真实垂直滚动容器
+      //（比 querySelector('[style*="padding: 12px"]') 更精确：不会误命中页面其它内联 padding 元素）
+      const boardRootRef = React.useRef(null);
       const [orderMap, setOrderMap] = React.useState({}); // {laneKey: {stageKey: goalId[]}}
       const [transitionNote, setTransitionNote] = React.useState(null);
+      // g-132：右上角齿轮 → 看板设置弹窗
+      const [showSettings, setShowSettings] = React.useState(false);
+      // g-171：更新强调动画状态——goalId -> { remaining, token }（token = goalId:updated_at）
+      const [updateEmphasis, setUpdateEmphasis] = React.useState({});
+      const seenUpdateTokens = React.useRef(new Set()); // 当前页内存：防同一 token 重复播放
+      const emphasisTimers = React.useRef({}); // goalId -> timer id
+      // g-171：卸载时清理强调动画计时器
+      React.useEffect(() => () => {
+        for (const t of Object.values(emphasisTimers.current)) clearTimeout(t);
+        emphasisTimers.current = {};
+      }, []);
 
       // g-77647351：document 级兜底（拖到列表外不显示 rejected）
       React.useEffect(() => {
@@ -3105,10 +3325,13 @@ window.__ModuleLoader__.load({
         if (!drag) return;
 
         // 从看板根节点向上查找真正的垂直滚动容器；不要依赖 React style 的属性名格式。
+        // g-173：锚定 boardRootRef（精确命中本看板根），不再用全局 querySelector 猜
+        //「第一个 padding:12px 元素」——3082 页面里那可能不是看板根，导致回退到
+        // documentElement（dsh app frame overflow:hidden，scrollTop 永远无效）。
         function findScrollContainer() {
-          const wrapEl = document.querySelector('[style*="padding: 12px"]');
-          let el = wrapEl;
-          while (el && el !== document.body) {
+          let el = boardRootRef.current;
+          if (!el) el = document.querySelector('[style*="padding: 12px"]');
+          while (el && el !== document.documentElement) {
             const style = window.getComputedStyle(el);
             if ((style.overflowY === "auto" || style.overflowY === "scroll") &&
                 el.scrollHeight > el.clientHeight) return el;
@@ -3170,6 +3393,7 @@ window.__ModuleLoader__.load({
         setVersionDetailLoading(true);
         setVersionDetailData(null);
         setVersionActionNote(null);
+        setReactivateConfirm(false);
         fetch(graphUrl(`/api/dsh-graph/version-detail?slug=${encodeURIComponent(slug)}`))
           .then((r) => r.json())
           .then((data) => {
@@ -3182,6 +3406,9 @@ window.__ModuleLoader__.load({
             setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
           });
       };
+      // g-160：恢复 released 版本为 active 的状态
+      const [reactivatingVersion, setReactivatingVersion] = React.useState(false);
+      const [reactivateConfirm, setReactivateConfirm] = React.useState(false);
 
       // g-77647351：加载排序
       const loadOrder = () => {
@@ -3410,11 +3637,46 @@ window.__ModuleLoader__.load({
         viewedSessionId = props?.sessionId ?? null;
         return () => { viewedSessionId = null; };
       }, [props?.sessionId]);
+      // g-171：更新强调动画——服务端 generated_at - updated_at 判定 10 秒窗口，
+      // 按 goalId+updated_at 防当前页重复播放；整页刷新可对窗口内目标补播。
+      // 只复用现有 load()（首次/手动刷新/写操作后）与 15 秒轮询，不新增任何数据通道。
+      const applyUpdateEmphasis = (data) => {
+        if (!data || typeof data.generated_at !== "string") return;
+        const gen = Date.parse(data.generated_at);
+        if (!Number.isFinite(gen)) return;
+        const allGoals = [
+          ...(data.versions ?? []).flatMap((v) => v.goals ?? []),
+          ...(data.standalone ?? []),
+          ...(data.backlog ?? []),
+        ];
+        for (const g of allGoals) {
+          const ts = g.updated_at;
+          // 旧 payload 无 updated_at → 无动画，兼容渲染
+          if (typeof ts !== "number" || !Number.isFinite(ts)) continue;
+          const age = gen - ts; // 服务端时间窗口（毫秒）
+          if (age < 0 || age >= 10000) continue; // 未来/已过 10 秒 → 不播放
+          const token = g.id + ":" + ts;
+          if (seenUpdateTokens.current.has(token)) continue; // 同一 token 不重播
+          seenUpdateTokens.current.add(token);
+          const remaining = Math.max(0, 10000 - age);
+          setUpdateEmphasis((prev) => ({ ...prev, [g.id]: { remaining, token } }));
+          if (emphasisTimers.current[g.id]) clearTimeout(emphasisTimers.current[g.id]);
+          emphasisTimers.current[g.id] = setTimeout(() => {
+            setUpdateEmphasis((prev) => {
+              if (!prev[g.id] || prev[g.id].token !== token) return prev;
+              const next = { ...prev };
+              delete next[g.id];
+              return next;
+            });
+            delete emphasisTimers.current[g.id];
+          }, remaining + 100);
+        }
+      };
       const load = () => {
         const params = showArchived ? "?includeArchived=1" : "";
         fetch(graphUrl("/api/dsh-graph" + params))
           .then((r) => r.json())
-          .then((data) => { setState({ loading: false, data }); loadOrder(); })
+          .then((data) => { setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); })
           .catch((e) => setState({ loading: false, error: String(e) }));
       };
       React.useEffect(() => {
@@ -3559,13 +3821,13 @@ window.__ModuleLoader__.load({
               onDragOver: anyDrag ? (e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "move";
-                if (!orderedGoals.length) {
+                if (!e.target.closest?.(".dg-card")) {
                   setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" } : d);
                 }
               } : undefined,
               onDrop: anyDrag ? (e) => {
                 e.preventDefault();
-                if (!orderedGoals.length) {
+                if (!e.target.closest?.(".dg-card")) {
                   commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
                 }
               } : undefined,
@@ -3597,13 +3859,13 @@ window.__ModuleLoader__.load({
               onDragOver: anyDrag ? (e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "move";
-                if (!orderedGoals.length) {
+                if (!e.target.closest?.(".dg-card")) {
                   setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" } : d);
                 }
               } : undefined,
               onDrop: anyDrag ? (e) => {
                 e.preventDefault();
-                if (!orderedGoals.length) {
+                if (!e.target.closest?.(".dg-card")) {
                   commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
                 }
               } : undefined,
@@ -3616,8 +3878,8 @@ window.__ModuleLoader__.load({
             onDragOver: anyDrag ? (e) => {
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
-              // 列空白区域：设 overStageKey + overLaneKey 但无 overGoalId
-              if (!orderedGoals.length) {
+              // 列空白区域：容器及其非卡片子元素触发，避免覆盖卡片落点
+              if (!e.target.closest?.(".dg-card")) {
                 // g-137：backlog 卡拖到版本 lane 时，overStageKey 固定为 "describe"
                 const effectiveStageKey = (isFromBacklog && isOverThisLane) ? "describe" : s.key;
                 setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: effectiveStageKey, overLaneKey: key, overHalf: "after" } : d);
@@ -3625,7 +3887,7 @@ window.__ModuleLoader__.load({
             } : undefined,
             onDrop: anyDrag ? (e) => {
               e.preventDefault();
-              if (!orderedGoals.length) {
+              if (!e.target.closest?.(".dg-card")) {
                 // g-137：backlog 卡拖到版本 lane 时，落点固定为 "describe"（其它列放手也落描述列）
                 const effectiveStageKey = (isFromBacklog && isOverThisLane) ? "describe" : s.key;
                 commitGoalDrag({ ...drag, overGoalId: null, overStageKey: effectiveStageKey, overLaneKey: key, overHalf: "after" }, null);
@@ -3636,7 +3898,7 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -3677,6 +3939,8 @@ window.__ModuleLoader__.load({
                     dropCommitted.current = false;
                   },
                 },
+                // g-170：卡片 meta 行「✏️ 判据」入口 → 判据编辑弹窗
+                setCriteriaGoal,
               );
             }),
           );
@@ -3801,13 +4065,13 @@ window.__ModuleLoader__.load({
           onDragOver: drag ? (e) => {
             e.preventDefault();
             e.dataTransfer.dropEffect = "move";
-            if (!goals.length) {
+            if (!e.target?.closest?.(".dg-card")) {
               setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" } : d);
             }
           } : undefined,
           onDrop: drag ? (e) => {
             e.preventDefault();
-            if (!goals.length) {
+            if (!e.target?.closest?.(".dg-card")) {
               commitGoalDrag({ ...drag, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" }, null);
             }
           } : undefined,
@@ -3817,7 +4081,7 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -3853,6 +4117,8 @@ window.__ModuleLoader__.load({
                     dropCommitted.current = false;
                   },
                 },
+                // g-170：卡片 meta 行「✏️ 判据」入口 → 判据编辑弹窗
+                setCriteriaGoal,
               );
             }),
           ),
@@ -3887,9 +4153,25 @@ window.__ModuleLoader__.load({
         const open = !!openReleased[v.slug];
         return [
           h("div", {
-            key: "rel-" + v.slug, style: S.collapsed, className: "dg-collapsed", title: "点击展开/收起",
-            onClick: () => setOpenReleased({ ...openReleased, [v.slug]: !open }),
-          }, `${open ? "▾" : "▸"} ${v.name} ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`),
+            key: "rel-" + v.slug, style: S.collapsed, className: "dg-collapsed",
+            title: "点击展开/收起；点击版本名称打开详情",
+          },
+            h("span", {
+              style: { cursor: "pointer" },
+              onClick: (e) => { e.stopPropagation(); setOpenReleased({ ...openReleased, [v.slug]: !open }); },
+            }, `${open ? "▾" : "▸"}`),
+            " ",
+            h("span", {
+              style: { cursor: "pointer", textDecoration: "underline dotted" },
+              onClick: (e) => {
+                e.stopPropagation();
+                setVersionDetailTarget({ slug: v.slug, name: v.name, status: v.status, goals_count: v.goals.length });
+                loadVersionDetail(v.slug);
+              },
+              title: "打开版本详情",
+            }, `${v.name}`),
+            ` ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`
+          ),
           open ? h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: gridCols } },
             ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx, false)) : null,
         ];
@@ -4033,7 +4315,17 @@ window.__ModuleLoader__.load({
 
       return h(
         "div",
-        { key: "kanban-" + kanbanRenderKey, style: S.wrap },
+        { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
+           onDragLeave: drag ? (e) => {
+             // 进入子元素不清除；离开整个看板内容（如进入页面顶部/底部边缘、
+             // header/composer 等视口触发区）时只清除悬停落点，不结束整个拖拽——
+             // g-173：结束 drag 会让 g-157 自动滚动 effect 立即卸载，边缘自动滚动失效；
+             // 保持 drag 存活，回到看板时由单元格 onDragOver 重新建立落点，
+             // 真正的清理仍由 dragend/drop/取消（原生事件）路径完成。
+             if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
+               setDrag((d) => (d ? { ...d, overGoalId: null, overStageKey: null, overLaneKey: null, overHalf: null } : d));
+             }
+           } : undefined },
         h("style", null, HOVER_CSS),
         h("div", { style: S.head },
           h("strong", null, "dsh-graph 看板"),
@@ -4061,7 +4353,14 @@ window.__ModuleLoader__.load({
               setNewVersionName("");
               setCreateVersionNote(null);
             },
-          }, "＋ 新建版本")),
+          }, "＋ 新建版本"),
+          // g-132: 右上角齿轮 → 看板设置
+          h("button", {
+            style: { ...S.btn, marginLeft: 8, fontSize: 16, lineHeight: 1, padding: "2px 8px" },
+            className: "dg-btn",
+            title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
+            onClick: () => setShowSettings(true),
+          }, "⚙")),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
@@ -4104,7 +4403,11 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          : null,
+        // g-170：判据编辑弹窗（方案 A）——保存后刷新看板
+        criteriaGoal
+          ? h(CriteriaModal, { goalId: criteriaGoal, onClose: () => setCriteriaGoal(null), onSaved: () => load() })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
@@ -4360,6 +4663,57 @@ window.__ModuleLoader__.load({
                         },
                       }, "🚀 标记为 released")
                     : null,
+                  // g-160: 恢复 released 版本为 active —— 仅 released 时显示
+                  versionDetailTarget.status === "released"
+                    ? reactivateConfirm
+                      ? h("div", { style: { padding: "8px 12px", borderRadius: 6, background: "rgba(255,152,0,.15)", border: "1px solid rgba(255,152,0,.4)", fontSize: 12, lineHeight: 1.5 } },
+                          h("div", { style: { fontWeight: 600, marginBottom: 4, color: "#ff9800" } }, "⚠️ 确认恢复版本？"),
+                          h("div", { style: { marginBottom: 8, opacity: 0.85 } }, `恢复 ${versionDetailTarget.slug} 将撤销发布状态，使版本重新进入 active（进行中）。已交付的目标不受影响，再次发布仍需满足全部目标 delivered 等校验。`),
+                          h("div", { style: { display: "flex", gap: 8 } },
+                            h("button", {
+                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff9800", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
+                              className: "dg-btn",
+                              disabled: reactivatingVersion,
+                              onClick: () => {
+                                setReactivatingVersion(true);
+                                setVersionActionNote(null);
+                                fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                                  method: "POST",
+                                  headers: { "content-type": "application/json" },
+                                  body: JSON.stringify({ slug: versionDetailTarget.slug, status: "active", confirmed: true }),
+                                }).then((r) => r.json()).then((data) => {
+                                  setReactivatingVersion(false);
+                                  setReactivateConfirm(false);
+                                  if (data.ok) {
+                                    setVersionActionNote("✅ 版本已恢复为 active");
+                                    setVersionDetailTarget((prev) => prev ? { ...prev, status: "active" } : prev);
+                                    loadVersionDetail(versionDetailTarget.slug);
+                                    load();
+                                  } else {
+                                    setVersionActionNote("⚠️ 恢复失败：" + (data.error || "未知错误"));
+                                  }
+                                }).catch((e) => {
+                                  setReactivatingVersion(false);
+                                  setReactivateConfirm(false);
+                                  setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                                });
+                              },
+                            }, "确认恢复为 active"),
+                            h("button", {
+                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
+                              className: "dg-btn",
+                              disabled: reactivatingVersion,
+                              onClick: () => { setReactivateConfirm(false); setVersionActionNote(null); },
+                            }, "取消"),
+                          )
+                        )
+                      : h("button", {
+                          style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff9800", background: "rgba(255,152,0,.08)", border: "1px solid rgba(255,152,0,.3)" },
+                          className: "dg-btn",
+                          disabled: versionActionLoading,
+                          onClick: () => { setReactivateConfirm(true); setVersionActionNote(null); },
+                        }, "♻️ 恢复为 active")
+                    : null,
                   // 重命名
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
@@ -4386,6 +4740,10 @@ window.__ModuleLoader__.load({
                   }, "🗑️ 删除"),
                 ),
               ))
+          : null,
+        // g-132: 看板设置弹窗（gear 入口）
+        showSettings
+          ? h(SettingsModal, { onClose: () => setShowSettings(false), onSaved: () => load() })
           : null,
         // g-134: 创建版本泳道弹窗
         showCreateVersion
@@ -4498,6 +4856,641 @@ window.__ModuleLoader__.load({
     // props.sessionId），不能用全局聚焦会话 list.current 代替（多窗口/子代理视图时两者可能不同）。
     // KanbanView(props) 挂载时写入，currentWorkspace() 优先按它查 cwd；找不到再回退 list.current。
     let viewedSessionId = null;
+    // ===== g-132：workspace 看板设置弹窗（读取/可视化编辑 .dsh-graph/project.yaml 安全配置） =====
+    // 字段范围（本期）：executor.provider/model、defaults.review、defaults.pk、supervisor.automation、
+    // 子代理补充提示词 workspace 覆盖（三态：default 继承 / 自定义覆盖 / 显式空禁用）。
+    // 保存走 PUT/POST /api/dsh-graph/settings（原子写；保留注释/未知键；失败不半写入）。
+    function SettingsModal(props) {
+      const [loading, setLoading] = React.useState(true);
+      const [form, setForm] = React.useState(null);
+      const [saving, setSaving] = React.useState(false);
+      const [note, setNote] = React.useState(null); // {kind:"ok"|"err", text}
+      const [error, setError] = React.useState(null);
+      const [showAdvanced, setShowAdvanced] = React.useState(false);
+      // att-002：服务端下发的 canonical .dsh-graph/project.yaml 绝对路径（只消费，不自行猜 graphRoot）
+      const [configFile, setConfigFile] = React.useState(null);
+
+      const set = (path, value) => {
+        setForm((f) => {
+          const next = JSON.parse(JSON.stringify(f));
+          let cur = next;
+          for (let i = 0; i < path.length - 1; i++) {
+             if (!cur[path[i]] || typeof cur[path[i]] !== "object") cur[path[i]] = {};
+             cur = cur[path[i]];
+           }
+          cur[path[path.length - 1]] = value;
+          return next;
+        });
+      };
+      // 三态提示词切换：default/disable 清空 value，override 保留文本
+      const setPromptState = (key, state) => {
+        set(["prompt_overrides", key, "state"], state);
+        if (state !== "override") set(["prompt_overrides", key, "value"], null);
+      };
+      const setPromptValue = (key, value) => set(["prompt_overrides", key, "value"], value);
+
+      const load = async () => {
+        setLoading(true); setError(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/settings"));
+          const data = await r.json();
+          if (!r.ok) throw new Error(data?.error || ("请求失败 " + r.status));
+          setForm(data);
+          setConfigFile(data.configFile ?? null);
+        } catch (e) {
+          setError("加载配置失败：" + String(e?.message ?? e));
+        } finally { setLoading(false); }
+      };
+      React.useEffect(() => { load(); }, []);
+      // 目录化 select（与 settings.js g-133 同源）：挂载时用同 scope 的 gConnectionApi/loadHostCatalog
+      // 读取当前 Host 的 llm.providers/llm.models 合法目录。RPC 缺失/失败时目录状态置 unavailable，
+      // 降级为「提示 + 保留已存值」，不阻止保存。provider 只列 active 且有模型目录的 provider；
+      // model 按当前 provider 过滤；空项代表继承父会话；未列出的已存旧值保留为固定 option。
+      const [catalog, setCatalog] = React.useState({ status: "loading" });
+      React.useEffect(() => {
+        let alive = true;
+        if (!gConnectionApi?.llm?.providers || !gConnectionApi?.llm?.models) { setCatalog({ status: "unavailable" }); return; }
+        loadHostCatalog(gConnectionApi)
+          .then((c) => { if (alive) setCatalog(c); })
+          .catch(() => { if (alive) setCatalog({ status: "unavailable" }); });
+        return () => { alive = false; };
+      }, []);
+
+      const save = async () => {
+        if (!form) return;
+        setSaving(true); setNote(null); setError(null);
+        const lanesRaw = form.defaults?.pk?.lanes;
+        const lanes = lanesRaw === null || lanesRaw === "" ? 1 : Number(lanesRaw);
+        if (!Number.isInteger(lanes) || lanes < 1) {
+          setNote({ kind: "err", text: "pk.lanes 必须是 >=1 的整数" });
+          setSaving(false); return;
+        }
+        const patch = {
+          executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "" },
+          defaults: {
+            review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
+            pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
+          },
+          supervisor: { automation: { ...(form.supervisor?.automation ?? {}) } },
+          prompt_overrides: {
+            subagent: form.prompt_overrides?.subagent ?? { state: "default", value: null },
+
+          },
+        };
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/settings"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(patch),
+          });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data?.error || ("保存失败 " + r.status));
+          setForm(data.config ?? form); // 用服务端回填的最新配置刷新
+          setNote({ kind: "ok", text: "✅ 已保存（刷新/重开弹窗值保留）" });
+          props.onSaved?.();
+        } catch (e) {
+          setNote({ kind: "err", text: "保存失败：" + String(e?.message ?? e) });
+        } finally { setSaving(false); }
+      };
+
+      if (loading) {
+        return h("div", { style: S.overlay, onClick: props.onClose },
+          h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
+            h("span", { style: S.close, onClick: props.onClose }, "✕"),
+            h("div", { style: S.modalH }, "看板设置"),
+            h("div", { style: { ...S.meta, marginTop: 8 } }, "正在读取配置…")));
+      }
+      if (!form) {
+        return h("div", { style: S.overlay, onClick: props.onClose },
+          h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
+            h("span", { style: S.close, onClick: props.onClose }, "✕"),
+            h("div", { style: S.modalH }, "看板设置"),
+            error ? h("div", { style: { ...S.meta, color: "#f08080", marginTop: 8 } }, error) : null,
+            h("button", { style: { ...S.btn, marginTop: 10 }, className: "dg-btn", onClick: load }, "重试")));
+      }
+
+      const auto = form.supervisor?.automation ?? {};
+      const automationOptions = (val) => [
+        h("option", { value: "", style: { background: "#2a2b31", color: "#e6e6e6" } }, "（未设置）"),
+        h("option", { value: "human", style: { background: "#2a2b31", color: "#e6e6e6" } }, "human（人工）"),
+        h("option", { value: "ai", style: { background: "#2a2b31", color: "#e6e6e6" } }, "ai（自动）"),
+      ];
+      const promptOverride = (key, label) => {
+        const ov = form.prompt_overrides?.[key] ?? { state: "default", value: null };
+        const body =
+          ov.state === "override"
+            ? h("textarea", {
+                style: { ...S.promptInput, width: "100%", minHeight: 56, resize: "vertical" },
+                value: ov.value ?? "",
+                placeholder: "输入覆盖文本（支持空格/引号/#/多行）…",
+                onChange: (e) => setPromptValue(key, e.target.value),
+              })
+            : h("div", { style: S.meta },
+                ov.state === "default" ? "（继承当前 profile 全局提示词）" : "（全局提示词被禁用）");
+        const stateBtn = (st) => h("button", {
+          key: st,
+          className: "dg-btn",
+          style: {
+            ...S.btn, fontSize: 11, padding: "2px 8px", cursor: "pointer",
+            border: "1px solid " + (ov.state === st ? "rgba(76,141,255,.55)" : "rgba(128,128,128,.3)"),
+            background: ov.state === st ? "rgba(76,141,255,.15)" : "rgba(128,128,128,.12)",
+            fontWeight: ov.state === st ? 700 : 400,
+          },
+          title: st === "default" ? "继承当前 DSH profile 全局值" : (st === "override" ? "自定义文本覆盖全局" : "显式禁用全局提示词"),
+          onClick: () => setPromptState(key, st),
+        }, st === "default" ? "default（继承）" : (st === "override" ? "override（覆盖）" : "disable（禁用）"));
+        return h("div", { style: { marginBottom: 10 } },
+          h("div", { style: { fontWeight: 600, marginBottom: 4 } }, label),
+          h("div", { style: { display: "flex", gap: 6, marginBottom: 4 } },
+            ["default", "override", "disable"].map((st) => stateBtn(st))),
+          body);
+      };
+
+      // ===== g-133：provider/model 合法目录派生（与 settings.js 页面同源逻辑，字段换成 executor.*） =====
+      // 目录仅 advisory 可选列表：未列出的已存旧值保留为固定 option（带「未列出/读取中/不可用」后缀），
+      // 不拦截保存；空值 = 继承父会话。保存仍写 form.executor.provider/model 到 workspace project.yaml。
+      const catReady = catalog.status === "ready";
+      const providerById = new Map(catReady ? catalog.providers.map((p) => [p.provider, p]) : []);
+      const groupById = new Map(catReady ? catalog.groups.map((g) => [g.id, g]) : []);
+      const providerLabel = (id) => {
+        const p = providerById.get(id);
+        if (p?.displayName && p.displayName !== id) return p.displayName + "（" + id + "）";
+        return p?.displayName || groupById.get(id)?.name || id;
+      };
+      const legalProviders = catReady
+        ? catalog.providers.filter((p) => p.active && (groupById.get(p.provider)?.models.length ?? 0) > 0)
+        : [];
+      const legalProviderIds = new Set(legalProviders.map((p) => p.provider));
+      const allLegalModels = []; // 未选 provider 时全量合法模型（label: provider/name 区分）
+      const legalModelsByProvider = new Map(); // providerId -> Set(modelId)
+      if (catReady) {
+        for (const g of catalog.groups) {
+          const ids = new Set();
+          for (const m of g.models) {
+            ids.add(m.id);
+            allLegalModels.push({ value: m.id, label: providerLabel(g.id) + "/" + (m.name ?? m.id) });
+          }
+          legalModelsByProvider.set(g.id, ids);
+        }
+      }
+      const curProvider = form.executor?.provider ?? "";
+      const curModel = form.executor?.model ?? "";
+      const legacySuffix = catReady
+        ? "（已存值，当前目录未列出）"
+        : (catalog.status === "loading" ? "（目录读取中…）" : "（目录不可用）");
+      // provider 切换：切到合法新 provider 且现有 model 不属于其目录则清空 model（保留空=继承语义）；
+      // 切到已存 legacy provider / 留空不强行清空，避免丢失已存 model。
+      const onProviderChange = (v) => {
+        set(["executor", "provider"], v);
+        if (v !== "" && legalProviderIds.has(v) && curModel !== "" && !(legalModelsByProvider.get(v)?.has(curModel))) {
+          set(["executor", "model"], "");
+        }
+      };
+      const opt = (key, value, label) =>
+        h("option", { key, value, style: { background: "#2a2b31", color: "#e6e6e6" } }, label);
+      const providerOptions = (() => {
+        const opts = [opt("__blank-p", "", "（继承父会话）")];
+        // 已存 provider 未在合法目录中（含目录未就绪时无法校验）→ 保留为固定 option
+        if (curProvider !== "" && !(catReady && legalProviderIds.has(curProvider))) {
+          opts.push(opt("__cur-p", curProvider, curProvider + legacySuffix));
+        }
+        if (catReady) for (const p of legalProviders) opts.push(opt(p.provider, p.provider, providerLabel(p.provider)));
+        return opts;
+      })();
+      const modelOptions = (() => {
+        const opts = [opt("__blank-m", "", "（继承父会话）")];
+        // 已存 model 是否出现在目录中：目录就绪时按所选 provider 校验；未就绪时无法校验 → 一律保留
+        const curListed = catReady && (curProvider !== ""
+          ? (legalModelsByProvider.get(curProvider)?.has(curModel) ?? false)
+          : allLegalModels.some((m) => m.value === curModel));
+        if (curModel !== "" && !curListed) opts.push(opt("__cur-m", curModel, curModel + legacySuffix));
+        if (catReady) {
+          if (curProvider !== "") {
+            const g = groupById.get(curProvider);
+            if (g) for (const m of g.models) opts.push(opt(g.id + "/" + m.id, m.id, m.name ?? m.id));
+          } else {
+            for (const m of allLegalModels) opts.push(opt(m.label, m.value, m.label));
+          }
+        }
+        return opts;
+      })();
+
+      return h("div", { style: S.overlay, onClick: props.onClose },
+        h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
+          h("span", { style: S.close, onClick: props.onClose }, "✕"),
+          h("div", { style: S.modalH }, "看板设置"),
+          h("div", { style: S.meta }, "编辑当前 workspace 的 .dsh-graph/project.yaml 安全配置；写回保留未知键与注释。"),
+          // att-002：配置文件操作入口——复用 goal-modal 的 Host openPath/copyText/toast/fallback 机制
+          configFile
+            ? h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginTop: 4 } },
+                h("span", { style: { fontSize: 11, opacity: 0.7 } }, "📄 project.yaml"),
+                h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                  className: "dg-btn",
+                  title: "用系统默认编辑器打开 project.yaml",
+                  onClick: async (e) => {
+                    e.stopPropagation();
+                    try {
+                      const conn = connectionRt ?? appCtx?.get?.("connection");
+                      if (conn?.api?.host?.openPath) {
+                        const result = await conn.api.host.openPath({ path: configFile });
+                        if (result?.opened) { showToast("✅ 已打开 project.yaml"); return; }
+                      }
+                      await copyText(configFile);
+                      showToast("✅ 路径已复制（打开不可用）");
+                    } catch {
+                      await copyText(configFile);
+                      showToast("✅ 路径已复制");
+                    }
+                  },
+                }, "打开"),
+                h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                  className: "dg-btn",
+                  title: "复制 project.yaml 路径",
+                  onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast("✅ 路径已复制"); },
+                }, "复制路径"))
+            : null,
+           h("button", { className: "dg-btn", style: { ...S.btn, marginTop: 6, fontSize: 12 }, onClick: () => setShowAdvanced((v) => !v) }, showAdvanced ? "隐藏高级/仅存储字段" : "显示高级/仅存储字段"),
+          h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+
+          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "执行子代理模型路由"),
+          // g-133：两列并排各占一半的可收缩 flex 布局——父容器 minWidth:0、子列 flex:"1 1 0"+minWidth:0、
+          // 控件 boxSizing:"border-box"，避免 provider/model 两列在窄容器下重叠/溢出。
+          h("div", { style: { display: "flex", gap: 8, minWidth: 0 } },
+            h("div", { style: { flex: "1 1 0", minWidth: 0 } },
+              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "provider"),
+              h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curProvider, onChange: (e) => onProviderChange(e.target.value) },
+                ...providerOptions)),
+            h("div", { style: { flex: "1 1 0", minWidth: 0 } },
+              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "model"),
+              h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curModel, onChange: (e) => set(["executor", "model"], e.target.value) },
+                ...modelOptions))),
+          h("div", { style: { ...S.meta, marginTop: 4 } },
+            catReady
+              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；已存但未列出的旧值保留为固定选项、仍可保存。"
+              : (catalog.status === "loading" ? "正在读取当前 Host 的合法 provider/model 目录…" : "当前 Host 目录不可用（llm.providers/models 缺失）——已存值保留可选、仍可保存。")),
+
+          h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, "高级/仅存储字段"),
+          h("div", { style: { display: showAdvanced ? "flex" : "none", gap: 8, flexWrap: "wrap" } },
+            h("div", { style: { flex: "1 1 120px" } },
+              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "review.reviewer"),
+              h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.review?.reviewer ?? "", onChange: (e) => set(["defaults", "review", "reviewer"], e.target.value) })),
+            h("div", { style: { flex: "1 1 120px" } },
+              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "review.prompt"),
+              h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.review?.prompt ?? "", onChange: (e) => set(["defaults", "review", "prompt"], e.target.value === "" ? null : e.target.value) })),
+            h("div", { style: { flex: "1 1 90px" } },
+              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "pk.lanes"),
+              h("input", { style: { ...S.promptInput, width: "100%" }, type: "number", min: 1, value: form.defaults?.pk?.lanes ?? 1, onChange: (e) => set(["defaults", "pk", "lanes"], e.target.value) })),
+            h("div", { style: { flex: "1 1 120px" } },
+              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "pk.sandbox"),
+              h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.pk?.sandbox ?? "", onChange: (e) => set(["defaults", "pk", "sandbox"], e.target.value) }))),
+
+          h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, "主管自动化（高级/仅存储字段）"),
+          h("div", { style: { display: showAdvanced ? "grid" : "none", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 } },
+            Object.keys({ scope_planning: "范围规划", integration_decision: "集成决策", rework: "返工决策", memory_promotion: "记忆提炼", skill_proposal: "技能提案", release: "发布" }).map((k) =>
+              h("div", { key: k },
+                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, k),
+                h("select", { style: { ...S.promptInput, width: "100%" }, value: auto[k] ?? "", onChange: (e) => set(["supervisor", "automation", k], e.target.value === "" ? null : e.target.value) },
+                  ...automationOptions(auto[k]))))),
+
+          h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "补充提示词 workspace 覆盖"),
+          promptOverride("subagent", "子代理补充提示词"),
+
+
+          h("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 6 } },
+            h("button", { style: { ...S.btn, padding: "6px 16px", fontSize: 13 }, className: "dg-btn", disabled: saving, onClick: save },
+              saving ? "保存中…" : "保存"),
+            h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: props.onClose }, "关闭"),
+            note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "#6ee7a0" : "#f08080", marginLeft: 8 } }, note.text) : null),
+          error ? h("div", { style: { ...S.meta, color: "#f08080", marginTop: 6 } }, error) : null));
+    }
+    // g-133：dsh-graph profile 级全局默认设置页（settings.section：看板设置）。
+    // 仅保留子代理默认 provider、默认 model id、子代理默认补充提示词。
+    // 该配置写入当前 DSH profile 的用户级全局设置（settingsScope.bind({namespace:"dsh-graph"})），
+    // 不写当前 workspace；provider/model 仅作缺省值（workspace project.yaml 明确配置优先）。
+    // 覆盖层：settings scope 按 profile 隔离；memory scope 通过 Host settings RPC 兼容读写。
+    // g-133：provider/model 由自由文本 input 改为合法目录 select——目录来自 ctx.get('connection').api
+    // 的 llm.providers/llm.models（仅 advisory 可选列表，不拦截保存）；settings.yaml 已存但目录
+    // 未列出的旧值保留为「已存值（当前目录未列出）」固定 option（不可自由编辑、可继续保存）。
+    const GRAPH_SETTINGS_NS = "dsh-graph";
+    // plugin.js apply 里绑定后的 settings scope（从 ctx.settingsScope.bind 得到），组件经它读写。
+    let gSettingsScope = null;
+    // g-133：数据源 = ctx.get('connection').api（registerGraphSettingsSection 捕获），挂载时读 llm 目录。
+    let gConnectionApi = null;
+
+    // 3082 的 settingsScope 在非 loopback 浏览器上下文会是 memory；此时仍可
+    // 通过已存在的 profile settings RPC 读写 Host，而不是把配置伪装成 workspace 数据。
+    function createGraphSettingsApiScope(api) {
+      if (!api?.settings?.describe || !api?.settings?.mutate) return null;
+      let snapshot = { status: "loading", value: null, writable: false, revision: undefined };
+      const listeners = new Set();
+      const notify = () => listeners.forEach((listener) => listener());
+      const scope = {
+        getSnapshot: () => snapshot,
+        subscribe: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+        async load() {
+          const response = await api.settings.describe({});
+          if (!response?.result?.ok) throw new Error(response?.result?.error?.message ?? "读取 profile 设置失败");
+          const view = response.result.value;
+          const row = view.namespaces?.find((candidate) => candidate.ns === GRAPH_SETTINGS_NS);
+          if (!row) {
+            snapshot = { ...snapshot, status: "unavailable", writable: view.writable !== false };
+          } else {
+            snapshot = { status: "ready", value: row.value ?? {}, writable: view.writable !== false, revision: row.revision };
+          }
+          notify();
+        },
+        async set(field, value) {
+          const response = await api.settings.mutate({
+            ns: GRAPH_SETTINGS_NS,
+            ops: [{ op: "set", path: [field], value }],
+            ...(snapshot.revision === undefined ? {} : { expectedRevision: snapshot.revision }),
+          });
+          if (!response?.result?.ok) throw new Error(response?.result?.error?.message ?? "保存 profile 设置失败");
+          const row = response.result.value;
+          snapshot = { ...snapshot, status: "ready", value: row.value ?? snapshot.value, revision: row.revision };
+          notify();
+        },
+      };
+      scope.load().catch((error) => {
+        snapshot = { ...snapshot, status: "unavailable", error: String(error?.message ?? error) };
+        notify();
+      });
+      return scope;
+    }
+
+    // 优先使用官方 settingsScope；memory scope 只提供本地空壳，必须改用 Host API。
+    function bindGraphSettingsScope(ctx) {
+      try {
+        const bound = ctx?.get?.("settingsScope")?.bind({ namespace: GRAPH_SETTINGS_NS });
+        if (bound && bound.getSnapshot?.().mode !== "memory") return (gSettingsScope = bound);
+        const connection = ctx?.get?.("connection") ?? ctx?.connection;
+        return (gSettingsScope = createGraphSettingsApiScope(connection?.api));
+      } catch {
+        gSettingsScope = null;
+        return null;
+      }
+    }
+
+    // g-133：从当前 Host 并行读取合法 provider/model 目录（connection.api.llm RPC）。
+    // providers: [{provider, displayName, active,...}]；models: {groups:[{id,name,models:[{id,name,...}]}], failures:[...]}。
+    // 浏览器侧 RPC 结果形如 { result: { ok, value } }；RPC 缺失/失败时返回 {status:"unavailable"}，
+    // 组件降级为「显示提示 + 保留已存值」，不让整个设置页崩溃。
+    async function loadHostCatalog(api) {
+      if (!api?.llm?.providers || !api?.llm?.models) return { status: "unavailable" };
+      const [pRes, mRes] = await Promise.allSettled([api.llm.providers({}), api.llm.models({})]);
+      const pv = pRes.status === "fulfilled" ? pRes.value?.result?.value : null;
+      const mv = mRes.status === "fulfilled" ? mRes.value?.result?.value : null;
+      if (!pv || !mv) return { status: "unavailable" };
+      return {
+        status: "ready",
+        providers: Array.isArray(pv.providers) ? pv.providers : [],
+        groups: Array.isArray(mv.groups) ? mv.groups : [],
+        failures: Array.isArray(mv.failures) ? mv.failures : [],
+      };
+    }
+
+    const GSS = {
+      panel: { display: "flex", flexDirection: "column", gap: 14, maxWidth: 720 },
+      title: { margin: 0, fontSize: 16, fontWeight: 600, color: "var(--dsw-alias-label-primary)" },
+      desc: { margin: 0, fontSize: 13, lineHeight: 1.6, color: "var(--dsw-alias-label-tertiary)" },
+      field: { display: "flex", flexDirection: "column", gap: 6 },
+      label: { fontSize: 12, fontWeight: 600, color: "var(--dsw-alias-label-secondary)" },
+      hint: { fontSize: 11, color: "var(--dsw-alias-label-tertiary)" },
+      select: {
+        boxSizing: "border-box", width: "100%", border: "1px solid var(--dsw-alias-border-l2)",
+        borderRadius: 8, padding: "6px 10px", fontSize: 13, color: "var(--dsw-alias-label-primary)",
+        background: "var(--dsw-alias-bg-layer-1)", fontFamily: "inherit",
+      },
+      textarea: {
+        boxSizing: "border-box", width: "100%", minHeight: 72, resize: "vertical",
+        border: "1px solid var(--dsw-alias-border-l2)", borderRadius: 8, padding: "6px 10px",
+        fontSize: 13, color: "var(--dsw-alias-label-primary)", background: "var(--dsw-alias-bg-layer-1)",
+        fontFamily: "inherit",
+      },
+      row: { display: "flex", gap: 8, alignItems: "center" },
+      btnPrimary: {
+        boxSizing: "border-box", height: 32, cursor: "pointer", border: "none", borderRadius: 16,
+        padding: "0 14px", fontSize: 13, background: "var(--dsw-alias-button-primary-fill)",
+        color: "var(--dsw-alias-label-primary-foreground)",
+      },
+      noteOk: { fontSize: 12, color: "var(--dsw-alias-state-success-primary)" },
+      noteErr: { fontSize: 12, color: "var(--dsw-alias-state-error-primary)" },
+      note: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)" },
+      badge: { fontSize: 11, color: "var(--dsw-alias-label-tertiary)" },
+    };
+
+    // 看板设置页组件：读/写 dsh-graph profile 全局默认。
+    function GraphSettingsSection(_props) {
+      const [snap, setSnap] = React.useState(gSettingsScope ? gSettingsScope.getSnapshot() : null);
+      const [draft, setDraft] = React.useState(null);
+      const [saving, setSaving] = React.useState(false);
+      const [saved, setSaved] = React.useState("");
+      const [error, setError] = React.useState("");
+      const [catalog, setCatalog] = React.useState({ status: "loading" });
+      React.useEffect(() => {
+        if (!gSettingsScope) return;
+        const upd = () => { const s = gSettingsScope.getSnapshot(); setSnap(s); };
+        upd();
+        const un = gSettingsScope.subscribe(upd);
+        return un;
+      }, []);
+      // g-133：挂载时用捕获的 connection.api 并行读取 llm.providers/llm.models（当前 Host 合法目录）。
+      // RPC 缺失/失败时目录状态置 unavailable，页面降级为「提示 + 保留已存值」，不崩溃。
+      React.useEffect(() => {
+        let alive = true;
+        const api = gConnectionApi;
+        if (!api?.llm?.providers || !api?.llm?.models) { setCatalog({ status: "unavailable" }); return; }
+        loadHostCatalog(api)
+          .then((c) => { if (alive) setCatalog(c); })
+          .catch(() => { if (alive) setCatalog({ status: "unavailable" }); });
+        return () => { alive = false; };
+      }, []);
+
+      // 没有 settings scope 且没有 Host API：整页降级（确实无持久化能力）
+      if (!gSettingsScope) {
+        return h("div", { style: GSS.panel },
+          h("h3", { style: GSS.title }, "看板设置"),
+          h("p", { style: GSS.desc }, "当前 DSH profile 未暴露设置服务（settingsScope 缺失），无法读写 dsh-graph 全局配置。"),
+        );
+      }
+      const status = snap?.status ?? "loading";
+      const value = snap?.value ?? null;
+      const writable = snap?.writable !== false;
+
+      if (status === "loading") {
+        return h("div", { style: GSS.panel },
+          h("h3", { style: GSS.title }, "看板设置"),
+          h("p", { style: GSS.note }, "正在读取 dsh-graph 全局配置…"),
+        );
+      }
+      if (status === "unavailable") {
+        return h("div", { style: GSS.panel },
+          h("h3", { style: GSS.title }, "看板设置"),
+          h("p", { style: GSS.desc }, "此 profile 未暴露 dsh-graph 设置命名空间（可能未连接 Host，或为 memory 模式），无法读写全局配置。"),
+        );
+      }
+
+      // 当前已保存快照 + 本地草稿（草稿缺省即当前值）
+      const draftValue = draft ?? {
+        subagentProvider: value?.subagentProvider ?? "",
+        subagentModel: value?.subagentModel ?? "",
+        subagentPrompt: value?.subagentPrompt ?? "",
+      };
+      const setField = (k, v) => setDraft({ ...draftValue, [k]: v });
+
+      // g-133：合法目录派生。合法 provider = active 且有非空模型目录；model 合法 = 属于所选 provider 目录
+      //（未选 provider 时属于任一目录）；空值 = 继承父会话。目录仅作 advisory 可选列表，不拦截保存。
+      const catReady = catalog.status === "ready";
+      const providerById = new Map(catReady ? catalog.providers.map((p) => [p.provider, p]) : []);
+      const groupById = new Map(catReady ? catalog.groups.map((g) => [g.id, g]) : []);
+      const providerLabel = (id) => {
+        const p = providerById.get(id);
+        if (p?.displayName && p.displayName !== id) return p.displayName + "（" + id + "）";
+        return p?.displayName || groupById.get(id)?.name || id;
+      };
+      const legalProviders = catReady
+        ? catalog.providers.filter((p) => p.active && (groupById.get(p.provider)?.models.length ?? 0) > 0)
+        : [];
+      const legalProviderIds = new Set(legalProviders.map((p) => p.provider));
+      const allLegalModels = []; // 未选 provider 时全量合法模型（label: provider/name 区分）
+      const legalModelsByProvider = new Map(); // providerId -> Set(modelId)
+      if (catReady) {
+        for (const g of catalog.groups) {
+          const ids = new Set();
+          for (const m of g.models) {
+            ids.add(m.id);
+            allLegalModels.push({ value: m.id, label: providerLabel(g.id) + "/" + (m.name ?? m.id) });
+          }
+          legalModelsByProvider.set(g.id, ids);
+        }
+      }
+      const curProvider = draftValue.subagentProvider ?? "";
+      const curModel = draftValue.subagentModel ?? "";
+      // 已存旧值未出现在目录时的 option 后缀：目录就绪 → 「已存值（当前目录未列出）」；
+      // 目录未就绪 → 按读取中/不可用提示，保证已存值始终可见可选（advisory，不拦截保存）。
+      const legacySuffix = catReady
+        ? "（已存值，当前目录未列出）"
+        : (catalog.status === "loading" ? "（目录读取中…）" : "（目录不可用）");
+      // provider 切换：切到合法新 provider 且现有 model 不属于其目录则清空 model（保留空=继承语义）；
+      // 切到已存 legacy provider / 留空不强行清空，避免丢失已存 model。
+      const onProviderChange = (v) => {
+        const next = { ...draftValue, subagentProvider: v };
+        if (v !== "" && legalProviderIds.has(v) && curModel !== "" && !(legalModelsByProvider.get(v)?.has(curModel))) {
+          next.subagentModel = "";
+        }
+        setDraft(next);
+      };
+      const providerOptions = (() => {
+        const opts = [h("option", { key: "__blank-p", value: "" }, "（继承父会话）")];
+        // 已存 provider 未在合法目录中（含目录未就绪时无法校验）→ 保留为固定 option
+        if (curProvider !== "" && !(catReady && legalProviderIds.has(curProvider))) {
+          opts.push(h("option", { key: "__cur-p", value: curProvider }, curProvider + legacySuffix));
+        }
+        if (catReady) for (const p of legalProviders) {
+          opts.push(h("option", { key: p.provider, value: p.provider }, providerLabel(p.provider)));
+        }
+        return opts;
+      })();
+      const modelOptions = (() => {
+        const opts = [h("option", { key: "__blank-m", value: "" }, "（继承父会话）")];
+        // 已存 model 是否出现在目录中：目录就绪时按所选 provider 校验；未就绪时无法校验 → 一律保留
+        const curListed = catReady && (curProvider !== ""
+          ? (legalModelsByProvider.get(curProvider)?.has(curModel) ?? false)
+          : allLegalModels.some((m) => m.value === curModel));
+        if (curModel !== "" && !curListed) {
+          opts.push(h("option", { key: "__cur-m", value: curModel }, curModel + legacySuffix));
+        }
+        if (catReady) {
+          if (curProvider !== "") {
+            const g = groupById.get(curProvider);
+            if (g) for (const m of g.models) opts.push(h("option", { key: g.id + "/" + m.id, value: m.id }, m.name ?? m.id));
+          } else {
+            for (const m of allLegalModels) opts.push(h("option", { key: m.label, value: m.value }, m.label));
+          }
+        }
+        return opts;
+      })();
+
+      const save = async () => {
+        if (!gSettingsScope || !writable) return;
+        // g-133：目录仅作 advisory 可选列表，不拦截保存——留空继承、已存旧值、目录合法项均可保存。
+        setSaving(true); setError(""); setSaved("");
+        try {
+          // 一次提交，按字段逐个 set（settings scope 每字段 revision-fenced 写入）。
+          await gSettingsScope.set("subagentProvider", draftValue.subagentProvider ?? "");
+          await gSettingsScope.set("subagentModel", draftValue.subagentModel ?? "");
+          await gSettingsScope.set("subagentPrompt", draftValue.subagentPrompt ?? "");
+          setSaved("已保存到当前 profile。");
+          setDraft(null); // 成功后才归位草稿（快照已更新）
+        } catch (e) {
+          // 失败保留草稿（用户可纠错重试）且不丢已保存旧值（settings 失败不落盘）
+          setError("保存失败：" + String(e?.message ?? e));
+        } finally {
+          setSaving(false);
+        }
+      };
+
+      return h("div", { style: GSS.panel },
+        h("h3", { style: GSS.title }, "看板设置"),
+        h("p", { style: GSS.desc },
+          "管理 dsh-graph 的 profile 级全局默认：子代理默认 provider/model 与补充提示词。" +
+          "该配置写入当前 DSH profile，跨 workspace 生效；workspace 的 project.yaml 明确配置优先。" +
+          "补充提示词默认为空，workspace 用 default/自定义文本/显式空值选择继承、覆盖或禁用。"),
+        h("p", { style: GSS.badge }, status === "ready" && !writable ? "当前为只读（Host 设置不可写）。" : ""),
+        h("div", { style: GSS.field },
+          h("label", { style: GSS.label }, "子代理默认 provider"),
+          h("select", { style: GSS.select, value: curProvider, disabled: !writable,
+            onChange: (e) => onProviderChange(e.target.value) }, ...providerOptions),
+          h("span", { style: GSS.hint },
+            catReady
+              ? "仅作缺省值：graph_start_attempt 单次指定的 provider 与 workspace project.yaml 的 executor.provider 更优先；留空继承父会话。目录仅作可选列表（advisory），已存但未列出的旧值保留为固定选项、仍可保存。"
+              : (catalog.status === "loading" ? "正在读取当前 Host 的合法 provider 目录…" : "无法读取当前 Host 的合法 provider 目录（llm.providers/models 不可用），目录加载失败——已存值保留可选，可先编辑补充提示词。"))),
+        h("div", { style: GSS.field },
+          h("label", { style: GSS.label }, "子代理默认 model id"),
+          h("select", { style: GSS.select, value: curModel, disabled: !writable,
+            onChange: (e) => setField("subagentModel", e.target.value) }, ...modelOptions),
+          h("span", { style: GSS.hint },
+            catReady
+              ? "按所选 provider 过滤；未选 provider 时列出全部目录模型（provider/模型名）。同理仅作缺省值，单次 model 与 project.yaml 的 executor.model 更优先；留空继承父会话。"
+              : (catalog.status === "loading" ? "正在读取当前 Host 的合法模型目录…" : "无法读取当前 Host 的合法模型目录（llm.providers/models 不可用），目录加载失败——已存值保留可选，可先编辑补充提示词。"))),
+        catReady && catalog.failures.length > 0
+          ? h("span", { style: GSS.hint }, "部分 provider 的模型目录读取失败（" + catalog.failures.map((f) => f.id).join("、") + "），相关 provider 暂不可选。")
+          : null,
+        h("div", { style: GSS.field },
+          h("label", { style: GSS.label }, "子代理默认补充提示词"),
+          h("textarea", { style: GSS.textarea, value: draftValue.subagentPrompt, disabled: !writable,
+            placeholder: "可选：注入到每个执行子代理 prompt 的补充内容（默认空）",
+            onChange: (e) => setField("subagentPrompt", e.target.value) }),
+          h("span", { style: GSS.hint }, "默认为空；workspace 覆盖字段 default 继承此项，自定义文本覆盖，显式空值禁用该项全局提示词。")),
+        h("div", { style: GSS.row },
+          h("button", { style: GSS.btnPrimary, disabled: saving || !writable, onClick: save },
+            saving ? "保存中…" : "保存"),
+          saved ? h("span", { style: GSS.noteOk }, saved) : null,
+          error ? h("span", { style: GSS.noteErr }, error) : null),
+      );
+    }
+
+    // 注册「看板设置」settings.section 页（plugin.js apply 调用）。settingsScope 缺失时整页降级。
+    function registerGraphSettingsSection(ctx) {
+      try {
+        // g-133：数据源捕获 —— ctx.get('connection').api（组件挂载时读 llm.providers/models 目录）。
+        gConnectionApi = (() => {
+          try { return (ctx?.get?.("connection") ?? ctx?.connection)?.api ?? null; } catch { return null; }
+        })();
+        bindGraphSettingsScope(ctx);
+        ctx.slots.inject("settings.section", () =>
+          ctx.slots.register(
+            { name: "settings.section", id: "dsh-graph-settings", order: 60, label: "看板设置" },
+            (props) => h(GraphSettingsSection, props),
+          ),
+        );
+      } catch { /* slots 缺失或重复注册：静默（不影响看板/工具） */ }
+    }
     // g-129 修复：缓存最近一次成功解析的 workspace——切到子代理会话（不在 workspace 映射、
     // 无 cwd/parentSessionId 可用）时回退缓存，避免看板读 process.cwd() 空骨架而空白。
     let lastGoodWorkspace = null;
@@ -4621,6 +5614,9 @@ window.__ModuleLoader__.load({
             (props) => h(KanbanView, props),
           ),
         );
+        // g-133：注册「看板设置」settings.section 页（profile 级全局默认配置）。
+        // settingsScope 缺失 / slots 未就绪时整页降级，不影响看板与工具。
+        try { registerGraphSettingsSection(ctx); } catch { /* 静默 */ }
         console.log("[dsh-graph-host] client apply: kanban view registered");
       },
     };

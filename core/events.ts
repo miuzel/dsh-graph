@@ -159,6 +159,10 @@ export function replayStatuses(events: GraphEvent[]): Map<string, string> {
     ) {
       statuses.set(ev.goal, ev.details.to);
     }
+    // g-138：goal.postponed 回到 backlog → draft
+    if (ev.event === "goal.postponed") {
+      statuses.set(ev.goal, "draft");
+    }
     // g-140：goal.deleted 终态
     if (ev.event === "goal.deleted") {
       statuses.set(ev.goal, "deleted");

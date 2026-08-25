@@ -10,7 +10,8 @@ import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, relative } from "node:path";
 import vm from "node:vm";
-import { init, createGoal, findGoalFile, loadGoal, setCriteria, transition } from "../ops.ts";
+import { init, createGoal, findGoalFile, loadGoal, saveGoal, setCriteria, transition, readProjectConfig } from "../ops.ts";
+import { criteriaItems, replaceSection, sectionText } from "../model.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dsh-graph-host/index.js";
 
@@ -94,6 +95,38 @@ const post = async (routes: Map<string, any>, path: string, body: unknown) => {
   return { code: res._code, body: res._body };
 };
 
+const get = async (routes: Map<string, any>, path: string) => {
+  const handler = routes.get(path);
+  assert.ok(handler, `路由 ${path} 已注册`);
+  const req = fakeRequest("GET", null);
+  const res = fakeResponse();
+  await handler(req, res);
+  return { code: res._code, body: res._body };
+};
+
+test("g-132 settings 端点：GET 回填当前配置、POST 写回并保留值，不半写入", async () => {
+  const { root, routes } = setup();
+  const empty = await get(routes, "/api/dsh-graph/settings");
+  assert.equal(empty.code, 200);
+  assert.deepEqual(empty.body.executor, { provider: null, model: null });
+  // att-002：GET 下发当前 canonical workspace 的 project.yaml 绝对路径
+  assert.equal(empty.body.configFile, join(root, "project.yaml"));
+  const write = await post(routes, "/api/dsh-graph/settings",
+    { executor: { provider: "openai-codex", model: "gpt-5.6-luna" }, prompt_overrides: { subagent: { state: "override", value: "子代理补充" } } });
+  assert.equal(write.code, 200);
+  assert.equal(write.body.ok, true);
+  const again = await get(routes, "/api/dsh-graph/settings");
+  assert.equal(again.code, 200);
+  assert.deepEqual(again.body.executor, { provider: "openai-codex", model: "gpt-5.6-luna" });
+  assert.deepEqual(again.body.prompt_overrides.subagent, { state: "override", value: "子代理补充" });
+  assert.equal(again.body.configFile, join(root, "project.yaml"));
+  // 非法值 → 400 且不半写入
+  const bad = await post(routes, "/api/dsh-graph/settings", { defaults: { pk: { lanes: 0 } } });
+  assert.equal(bad.code, 400);
+  assert.equal(readProjectConfig(root).defaults.pk.lanes, null);
+  assert.equal(readEvents(root).filter((e) => e.event === "project.config_set").length, 1);
+});
+
 test("g-157 拖动自动滚动源契约：仅拖动时监听并清理 RAF/监听器", () => {
   const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
   assert.match(source, /g-157：拖动自动滚动/);
@@ -103,6 +136,111 @@ test("g-157 拖动自动滚动源契约：仅拖动时监听并清理 RAF/监听
   assert.match(source, /window\.removeEventListener\("dragover", handleDragOver, true\)/);
   assert.match(source, /window\.removeEventListener\("dragleave", handleDragLeave, true\)/);
   assert.doesNotMatch(source, /overflowX: auto/);
+});
+
+test("g-173 自动滚动边缘回归源契约：离板只清落点不结束 drag，滚动容器锚定看板根", () => {
+  const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
+  // 1) 看板根 ref：自动滚动 effect 从 boardRootRef 向上找真实滚动容器（不靠全局 querySelector 猜）
+  assert.match(source, /const boardRootRef = React\.useRef\(null\)/);
+  assert.match(source, /let el = boardRootRef\.current/);
+  assert.match(source, /ref: boardRootRef/);
+  // 2) 根级 onDragLeave：离开看板内容（进入页面顶部/底部边缘、header/composer）时
+  //    只清除悬停落点，绝不 setDrag(null)——否则 g-157 effect 立即卸载、边缘自动滚动失效
+  const dlStart = source.indexOf("onDragLeave: drag ? (e) => {");
+  const dlEnd = source.indexOf("} : undefined }", dlStart);
+  const dlBody = source.slice(dlStart, dlEnd);
+  assert.ok(dlStart > 0 && dlEnd > dlStart, "根级 onDragLeave 处理器存在");
+  assert.ok(dlBody.includes("e.currentTarget.contains(e.relatedTarget)"), "仍按 relatedTarget 判定是否离开看板");
+  assert.match(dlBody, /overGoalId: null, overStageKey: null/);
+  assert.doesNotMatch(dlBody, /setDrag\(null\)/, "离开看板不得结束整个 drag（否则边缘自动滚动失效）");
+  // 3) 真正结束仍由原生 dragend/drop/取消路径清理：commit 路径保留 setDrag(null)
+  assert.match(source, /function commitGoalDrag\(activeDrag, over\) \{\s*if \(dropCommitted\.current\) return;\s*dropCommitted\.current = true;\s*setDrag\(null\);/);
+  assert.match(source, /const dropCommitted = React\.useRef\(false\)/);
+});
+
+test("g-173 follow-up 拖拽虚影源契约：onDragStart 用当前卡片克隆做 setDragImage（backlog 不整行虚影）", () => {
+  const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/card.js"), "utf8");
+  const dsStart = source.indexOf("onDragStart: (e) => {");
+  const dsEnd = source.indexOf("drag.start();", dsStart);
+  const dsBody = source.slice(dsStart, dsEnd);
+  assert.ok(dsStart > 0 && dsEnd > dsStart, "onDragStart 处理器存在");
+  assert.match(dsBody, /const src = e\.currentTarget/, "以事件源（当前卡片 div）为克隆基准");
+  assert.match(dsBody, /src\.cloneNode\(true\)/, "虚影为当前卡片克隆节点（而非容器/整行）");
+  assert.match(dsBody, /setDragImage\(ghost, 16, 10\)/, "显式 setDragImage 设置拖拽影像");
+  assert.match(dsBody, /document\.body\.appendChild\(ghost\)/, "克隆节点挂载到 DOM 供截图");
+  assert.match(dsBody, /removeChild\(ghost\)/, "截图后移除克隆节点，不残留 DOM");
+  assert.match(dsBody, /classList\.remove\("dg-dragging"/, "克隆不携带半透明拖拽态样式");
+});
+
+test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + 写回保留注释", () => {
+  const kanban = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
+  assert.match(kanban, /g-132：右上角齿轮 → 看板设置/);
+  assert.match(kanban, /setShowSettings/);
+  assert.match(kanban, /h\(SettingsModal,/);
+  const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  assert.match(modal, /g-132：workspace 看板设置弹窗/);
+  assert.match(modal, /三态：default 继承 /);
+  assert.match(modal, /fetch\(graphUrl\("\/api\/dsh-graph\/settings"\)\)/);
+  assert.match(modal, /method: "POST"/);
+  assert.match(modal, /"default", "override", "disable"/);
+  assert.match(modal, /保留未知键与注释/);
+  assert.match(modal, /显示高级\/仅存储字段/);
+  assert.match(modal, /display: showAdvanced \? "flex" : "none"/);
+  assert.match(modal, /display: showAdvanced \? "grid" : "none"/);
+  assert.match(modal, /h\("hr", \{ style: \{ display: showAdvanced \? "block" : "none"/);
+  assert.match(modal, /if \(!cur\[path\[i\]\].*typeof cur\[path\[i\]\] !== "object"/s);
+  assert.doesNotMatch(modal, /主管补充提示词/);
+  assert.doesNotMatch(modal, /prompt_overrides.*supervisor/);
+  const host = readFileSync(join(process.cwd(), "dsh-graph-host/index.js"), "utf8");
+  assert.doesNotMatch(host, /promptOverrideSection\([^\n]*"supervisor"/);
+  assert.doesNotMatch(host, /主管补充提示词/);
+  // att-002：settings GET 下发 canonical project.yaml 绝对路径（服务端唯一来源）
+  assert.match(host, /configFile: join\(meta\.root, "project\.yaml"\)/);
+  // att-002：说明区域配置文件操作入口——只消费服务端 configFile，不自行拼接 graphRoot
+  assert.match(modal, /setConfigFile\(data\.configFile \?\? null\)/);
+  assert.match(modal, /connectionRt \?\? appCtx\?\.get\?\.\("connection"\)/);
+  assert.match(modal, /conn\.api\.host\.openPath\(\{ path: configFile \}\)/);
+  assert.match(modal, /"✅ 已打开 project\.yaml"/);
+  // open/copy/fallback 行为源契约：openPath 可用且成功才 return；不可用/异常均回退复制绝对路径
+  const openIdx = modal.indexOf("conn.api.host.openPath({ path: configFile })");
+  const fallbackIdx = modal.indexOf('showToast("✅ 路径已复制（打开不可用）")');
+  const copyIdx = modal.indexOf("await copyText(configFile);");
+  assert.ok(openIdx > 0 && fallbackIdx > openIdx && copyIdx > 0, "openPath 应先于 fallback 复制");
+  assert.ok((modal.match(/copyText\(configFile\)/g) || []).length >= 3, "打开回退 + 复制按钮均应复制绝对路径");
+  assert.match(modal, /"📄 project\.yaml"/);
+  assert.match(modal, /title: "用系统默认编辑器打开 project\.yaml"/);
+  assert.match(modal, /title: "复制 project\.yaml 路径"/);
+  assert.match(modal, /\}, "打开"\)/);
+  assert.match(modal, /\}, "复制路径"\)/);
+  const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
+  assert.match(bundle, /function SettingsModal/);
+});
+
+test("g-133 源契约：workspace 弹窗 executor provider/model 目录化 select + 可收缩布局", () => {
+  const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  // 挂载时用同 scope 的 gConnectionApi/loadHostCatalog 读 Host 合法目录（llm.providers/llm.models）
+  assert.match(modal, /loadHostCatalog\(gConnectionApi\)/);
+  assert.match(modal, /llm\.providers/);
+  assert.match(modal, /llm\.models/);
+  // RPC 缺失/失败时目录置 unavailable，降级为提示 + 保留已存值，不阻止保存
+  assert.match(modal, /setCatalog\(\{ status: "unavailable" \}\)/);
+  assert.match(modal, /if \(alive\) setCatalog\(c\)/);
+  // provider 只列 active 且有模型目录的 provider；model 按当前 provider 过滤
+  assert.match(modal, /catalog\.providers\.filter\(\(p\) => p\.active && \(groupById\.get\(p\.provider\)\?\.models\.length \?\? 0\) > 0\)/);
+  assert.match(modal, /legalModelsByProvider\.get\(curProvider\)/);
+  // 空项代表继承父会话；未列出的已存旧值保留为固定 option（advisory，不拦截保存）
+  assert.match(modal, /"（继承父会话）"/);
+  assert.match(modal, /"（已存值，当前目录未列出）"/);
+  assert.match(modal, /legacySuffix/);
+  // provider/model 控件由 input 改为 select（boxSizing:"border-box"）
+  assert.match(modal, /h\("select", \{ style: \{ \.\.\.S\.promptInput, width: "100%", boxSizing: "border-box" \}, value: curProvider/);
+  assert.match(modal, /h\("select", \{ style: \{ \.\.\.S\.promptInput, width: "100%", boxSizing: "border-box" \}, value: curModel/);
+  // 可收缩布局：父容器 minWidth:0、子列 flex:"1 1 0"+minWidth:0（两列并排各占一半）
+  assert.match(modal, /display: "flex", gap: 8, minWidth: 0/);
+  assert.match(modal, /flex: "1 1 0", minWidth: 0/);
+  // 保存仍写 form.executor.provider/model 到 workspace project.yaml
+  assert.match(modal, /executor: \{ provider: form\.executor\?\.provider \?\? "", model: form\.executor\?\.model \?\? "" \}/);
 });
 
 test("g-163 判据方块按有序 key 渲染并支持即时同步", () => {
@@ -251,6 +389,26 @@ test("g-163 Card 真实调用链转发 camelCase criteriaItems", () => {
     false,
     "模板占位判据不应渲染方块",
   );
+});
+
+test("g-165 各类列空白区域拖拽目标与离列清除源契约", () => {
+  const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
+  const cardSource = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/card.js"), "utf8");
+  const flatStart = source.indexOf('const flatCell = h("div"');
+  const flatEnd = source.indexOf('return [labelEl, flatCell]', flatStart);
+  const flat = source.slice(flatStart, flatEnd);
+  assert.ok(flat.includes('className: "dg-backlog-lane"'));
+  assert.ok(flat.includes('onDragOver: drag ? (e) =>'));
+  assert.ok(flat.includes('if (!e.target?.closest?.(".dg-card"))'));
+  assert.doesNotMatch(flat, /!goals\.length/);
+  assert.ok(flat.includes('overStageKey: "describe", overLaneKey: key'));
+  assert.ok(source.includes('className: "dg-blocked-collapsed"'));
+  assert.ok(source.includes('className: "dg-deliver-collapsed"'));
+  assert.equal((source.match(/!e\.target\.closest\?\.\("\.dg-card"\)/g) ?? []).length >= 6, true);
+  assert.ok(source.includes('onDragLeave: drag ? (e) =>'));
+  assert.ok(source.includes('e.currentTarget.contains(e.relatedTarget)'));
+  assert.ok(cardSource.includes('drag.hover(rowHalf(e))'));
+  assert.ok(cardSource.includes('drag.drop(rowHalf(e))'));
 });
 
 test("g-109 写端点全部注册（accept/edit-description/add-card/start-collection）", () => {
@@ -433,6 +591,152 @@ test("edit-description：改目标描述 + goal.amended 事件", async () => {
   assert.ok(doc.body.includes("新描述内容"));
   const ev = readEvents(root).filter((e) => e.event === "goal.amended");
   assert.ok(ev.length >= 1);
+});
+
+// ---- g-170：判据编辑保存端点（方案 A） ----
+
+test("g-170 set-criteria：保存成功 trim/去重拒绝/1..N 重排 + criteria.updated（不冒充 confirmed）", async () => {
+  const { root, routes, goalId } = setup();
+  const r = await post(routes, "/api/dsh-graph/set-criteria",
+    { goal: goalId, items: ["  甲  ", "", "乙", "丙  "], base_items: [] });
+  assert.equal(r.code, 200);
+  assert.equal(r.body.ok, true);
+  assert.deepEqual(r.body.items, ["1. 甲", "2. 乙", "3. 丙"]);
+  const doc = loadGoal(findGoalFile(root, goalId));
+  assert.deepEqual(criteriaItems(doc.body), ["1. 甲", "2. 乙", "3. 丙"]);
+  const events = readEvents(root).filter((e) => e.goal === goalId);
+  assert.equal(events.filter((e) => e.event === "criteria.updated").length, 1);
+  assert.equal(events.some((e) => e.event === "criteria.confirmed"), false, "编辑不得自动 confirmed");
+});
+
+test("g-170 set-criteria：重复文本拒绝（400）", async () => {
+  const { routes, goalId } = setup();
+  const r = await post(routes, "/api/dsh-graph/set-criteria",
+    { goal: goalId, items: ["甲", " 甲 "], base_items: [] });
+  assert.equal(r.code, 400);
+  assert.match(r.body.error, /重复/);
+});
+
+test("g-170 set-criteria：D3 空列表——planning 允许，in_progress 拒绝", async () => {
+  const { root, routes, goalId } = setup();
+  // setup() 目标带 version → planning；清空允许
+  const clear = await post(routes, "/api/dsh-graph/set-criteria",
+    { goal: goalId, items: [], base_items: [] });
+  assert.equal(clear.code, 200);
+  // 进 in_progress 后再清空 → 400
+  await post(routes, "/api/dsh-graph/set-criteria", { goal: goalId, items: ["判据"], base_items: [] });
+  await post(routes, "/api/dsh-graph/transition", { goal: goalId, to: "collecting" });
+  await post(routes, "/api/dsh-graph/transition", { goal: goalId, to: "ready" });
+  await post(routes, "/api/dsh-graph/transition", { goal: goalId, to: "in_progress", force: true });
+  const reject = await post(routes, "/api/dsh-graph/set-criteria",
+    { goal: goalId, items: [], base_items: ["1. 判据"] });
+  assert.equal(reject.code, 400);
+  assert.match(reject.body.error, /不允许清空质量判据/);
+});
+
+test("g-170 set-criteria：D8 base_items 不一致 → 409；force=true → 200 覆盖并记 conflicted", async () => {
+  const { root, routes, goalId } = setup();
+  await post(routes, "/api/dsh-graph/set-criteria", { goal: goalId, items: ["甲", "乙"], base_items: [] });
+  // 并发冲突（base 过期）
+  const conflict = await post(routes, "/api/dsh-graph/set-criteria",
+    { goal: goalId, items: ["丙"], base_items: ["1. 旧甲"] });
+  assert.equal(conflict.code, 409);
+  assert.match(conflict.body.error, /并发冲突/);
+  // 服务器内容未被改动
+  let doc = loadGoal(findGoalFile(root, goalId));
+  assert.deepEqual(criteriaItems(doc.body), ["1. 甲", "2. 乙"]);
+  // force=true 覆盖
+  const overwrite = await post(routes, "/api/dsh-graph/set-criteria",
+    { goal: goalId, items: ["丙"], base_items: ["1. 旧甲"], force: true });
+  assert.equal(overwrite.code, 200);
+  assert.equal(overwrite.body.conflicted, true);
+  doc = loadGoal(findGoalFile(root, goalId));
+  assert.deepEqual(criteriaItems(doc.body), ["1. 丙"]);
+  const updated = readEvents(root).filter((e) => e.event === "criteria.updated");
+  assert.ok(updated.some((e) => e.details.conflicted === true), "覆盖事件记录 conflicted 供审计");
+});
+
+test("g-170 set-criteria：保留小节注释；goal 端点下发 criteria_items（base_items 数据源）", async () => {
+  const { root, routes, goalId } = setup();
+  const goalFile = findGoalFile(root, goalId);
+  const doc = loadGoal(goalFile);
+  doc.body = replaceSection(doc.body, "质量判据",
+    sectionText(doc.body, "质量判据")! + "\n<!-- 备注 -->\n");
+  saveGoal(goalFile, doc);
+  const r = await post(routes, "/api/dsh-graph/set-criteria",
+    { goal: goalId, items: ["甲"], base_items: [] });
+  assert.equal(r.code, 200);
+  assert.ok(loadGoal(goalFile).body.includes("<!-- 备注 -->"));
+  // goal 端点下发 criteria_items
+  const handler = routes.get("/api/dsh-graph/goal");
+  const res = fakeResponse();
+  handler({ method: "GET", url: `/api/dsh-graph/goal?id=${goalId}`, on: () => {} }, res);
+  assert.equal(res._code, 200);
+  assert.deepEqual(res._body.criteria_items, ["1. 甲"]);
+});
+
+test("g-170 set-criteria：缺 items / 非字符串数组 → 400", async () => {
+  const { routes, goalId } = setup();
+  const missing = await post(routes, "/api/dsh-graph/set-criteria", { goal: goalId });
+  assert.equal(missing.code, 400);
+  const badType = await post(routes, "/api/dsh-graph/set-criteria",
+    { goal: goalId, items: [1, 2] });
+  assert.equal(badType.code, 400);
+});
+
+// ---- g-170：客户端源契约（源模块 + 生成 bundle） ----
+
+test("g-170 卡片 meta 行「✏️ 判据」入口：stopPropagation 不误触发卡片打开", () => {
+  const card = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/card.js"), "utf8");
+  assert.match(card, /onOpenCriteria/);
+  assert.match(card, /"✏️ 判据"/);
+  assert.match(card, /onClick: \(e\) => \{ e\.stopPropagation\(\); onOpenCriteria\?\.\(g\.id\);/);
+  assert.match(card, /title: "编辑质量判据（保存后清空该目标已有勾选）"/);
+  // 折叠与展开两条 meta 行都有入口
+  assert.equal((card.match(/"✏️ 判据"/g) || []).length, 2);
+});
+
+test("g-170 判据编辑弹窗源契约：D6 清勾选告知/清空、D8 base_items 409 自动覆盖重试", () => {
+  const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/criteria-modal.js"), "utf8");
+  assert.match(modal, /function CriteriaModal\(props\)/);
+  // D6：进入编辑前明确告知 + 保存后清空 localStorage 勾选
+  assert.match(modal, /保存后将清空该目标已有的判据勾选状态/);
+  assert.match(modal, /localStorage\.removeItem\("dsh-graph\.crit\." \+ goalId\)/);
+  assert.match(modal, /dsh-graph\.criteria-changed/);
+  // D8：base_items token + 409 自动以本地内容覆盖重试（force=true）
+  assert.match(modal, /base_items: baseItems \?\? \[\]/);
+  assert.match(modal, /r\.status === 409/);
+  assert.match(modal, /以本地内容覆盖服务器/);
+  assert.match(modal, /force: !!force/);
+  assert.match(modal, /post\(true\)/);
+  // 逐行编辑能力
+  assert.match(modal, /"➕ 新增判据"/);
+  assert.match(modal, /"上移"/);
+  assert.match(modal, /"下移"/);
+  assert.match(modal, /"删除该条"/);
+});
+
+test("g-170 kanban 接线：传 onOpenCriteria 给 Card 并渲染 CriteriaModal", () => {
+  const kanban = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
+  assert.match(kanban, /const \[criteriaGoal, setCriteriaGoal\] = React\.useState\(null\)/);
+  assert.equal((kanban.match(/setCriteriaGoal,$/gm) || []).length, 2, "两处 Card 调用都传 onOpenCriteria");
+  assert.match(kanban, /h\(CriteriaModal, \{ goalId: criteriaGoal/);
+  assert.match(kanban, /onSaved: \(\) => load\(\)/);
+});
+
+test("g-170 build-client PARTS 收录 criteria-modal 且 bundle 含生成标记与弹窗代码", () => {
+  const script = readFileSync(join(process.cwd(), "scripts/build-client.sh"), "utf8");
+  assert.match(script, /"criteria-modal"/);
+  const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
+  assert.match(bundle, /function CriteriaModal\(props\)/);
+  assert.match(bundle, /"✏️ 判据"/);
+});
+
+test("g-170 constants：criteria.updated 事件有标签并计入近期动态", () => {
+  const src = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/constants.js"), "utf8");
+  assert.match(src, /"criteria\.updated": "更新判据"/);
+  assert.match(src, /"criteria\.updated", \/\/ g-170/);
 });
 
 test("spawn-options：无 llm 服务时容错返回（重新执行选择器数据源）", async () => {
@@ -906,4 +1210,72 @@ test("g-168 host prompt 契约：PM 读取 goal.md 并附带指导意见", () =>
   assert.ok(/goal\.md 工作区相对路径/.test(host));
   assert.ok(/read 工具读取上述 goal\.md/.test(host));
   assert.ok(!/目标标题：\$\{String\(title/.test(host));
+});
+
+// g-160：released 版本详情入口、受控恢复与刷新契约
+test("g-160 client 源契约：released 详情入口和二次确认恢复", () => {
+  const source = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+  assert.match(source, /title:\s*"打开版本详情"/);
+  assert.match(source, /versionDetailTarget\.status === "released"/);
+  assert.match(source, /撤销发布状态/);
+  assert.match(source, /status:\s*"active",\s*confirmed:\s*true/);
+  assert.match(source, /loadVersionDetail\(versionDetailTarget\.slug\)/);
+  assert.match(source, /load\(\)/);
+});
+
+// ===== g-171：更新强调动画（updated_at 10 秒窗口）源/生成 bundle 契约 =====
+
+test("g-171 模块源契约：kanban.js 复用现有 load/15s 轮询做 10 秒窗口判定且不新增数据通道", () => {
+  const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+  // 复用现有首次加载/手动刷新/写操作后的 load() 与 15 秒轮询
+  assert.ok(/const load = \(\) => \{[\s\S]*setState\(\{ loading: false, data \}\); loadOrder\(\); applyUpdateEmphasis\(data\)/.test(kanban), "load() 成功路径调用 applyUpdateEmphasis");
+  assert.ok(/setInterval\(load, 15000\)/.test(kanban), "保留既有 15 秒轮询");
+  // 以服务端 generated_at - updated_at 判定 10 秒窗口
+  assert.ok(/const gen = Date\.parse\(data\.generated_at\)/.test(kanban), "用服务端 generated_at 判定窗口");
+  assert.ok(/const age = gen - ts/.test(kanban), "窗口 = generated_at - updated_at");
+  assert.ok(/age < 0 \|\| age >= 10000/.test(kanban), "仅 10 秒窗口内播放");
+  // 按 goalId+updated_at 防当前页重复播放（内存 token）
+  assert.ok(/const token = g\.id \+ ":" \+ ts/.test(kanban), "token = goalId:updated_at");
+  assert.ok(/seenUpdateTokens\.current\.has\(token\)/.test(kanban), "同一 token 不重播");
+  // 不新增高频轮询 / WebSocket / SSE / 文件推送
+  assert.ok(!/setInterval\(load, [1-9]000\)/.test(kanban.replace("setInterval(load, 15000)", "")), "不新增其他轮询频率");
+  assert.ok(!/new WebSocket|EventSource/.test(kanban), "不新增 WebSocket/SSE");
+  // 详情弹窗关闭触发一次 load()
+  assert.ok(/onClose: \(\) => \{ setModalGoal\(null\); load\(\); \}/.test(kanban), "详情弹窗关闭触发一次 load()");
+  // 卡片透传 _updateEmphasis
+  assert.ok(/_updateEmphasis: updateEmphasis\[g\.id\] \?\? null/.test(kanban), "Card 透传 _updateEmphasis");
+});
+
+test("g-171 模块源契约：card.js 折叠/展开路径都挂载金属光泽浮层", () => {
+  const card = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/card.js"), "utf8");
+  assert.ok(/const updateSheen = g\._updateEmphasis \? h\("div"/.test(card), "更新强调浮层元素");
+  assert.ok(/className: "dg-update-sheen"/.test(card), "浮层使用 dg-update-sheen class");
+  assert.ok(/className: "dg-update-sheen-bar"/.test(card), "浮层内扫光条使用 dg-update-sheen-bar class");
+  assert.ok(/animationDuration: g\._updateEmphasis\.remaining \+ "ms"/.test(card), "动画时长 = 剩余毫秒");
+  assert.equal((card.match(/updateSheen,/g) ?? []).length, 2, "折叠/展开两条路径都挂载浮层");
+  assert.equal((card.match(/style: cardStyle, className: dragClass/g) ?? []).length, 2, "折叠/展开路径都使用卡片样式（布局不变）");
+  assert.ok(/g\._polishActive \? \{ \.\.\.style, position: "relative", animation: "none" \} : g\._updateEmphasis \? \{ \.\.\.style, position: "relative" \} : style/.test(card), "更新强调时卡片提供定位锚点且不改变 g-168 语义");
+});
+
+test("g-171 模块源契约：constants.js 含扫光/fade keyframe 与 reduced-motion 降级", () => {
+  const constants = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
+  assert.ok(/@keyframes dg-update-sheen-sweep[\s\S]*translateY\(-130%\)[\s\S]*translateY\(230%\)/.test(constants), "扫光 keyframe 由上到下");
+  assert.ok(/@keyframes dg-update-fade[\s\S]*opacity: 1[\s\S]*opacity: 0/.test(constants), "整体淡出 keyframe");
+  assert.ok(/\.dg-update-sheen \{[\s\S]*pointer-events: none/.test(constants), "浮层不拦截交互");
+  assert.ok(/\.dg-update-sheen-bar \{[\s\S]*animation: dg-update-sheen-sweep 1\.6s linear infinite/.test(constants), "扫光条循环");
+  assert.ok(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.dg-update-sheen, \.dg-update-sheen-bar \{ animation: none !important; \}/.test(constants), "reduced-motion 禁用动画");
+});
+
+test("g-171 生成 bundle 契约：client.js 含更新强调逻辑且保留 generated header", () => {
+  const bundle = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
+  assert.ok(/applyUpdateEmphasis/.test(bundle), "生成 bundle: 含 applyUpdateEmphasis");
+  assert.ok(/dg-update-sheen/.test(bundle), "生成 bundle: 含 dg-update-sheen 浮层");
+  assert.ok(/dg-update-sheen-bar/.test(bundle), "生成 bundle: 含扫光条");
+  assert.ok(/dg-update-fade/.test(bundle), "生成 bundle: 含 fade keyframe");
+  assert.ok(/prefers-reduced-motion: reduce/.test(bundle), "生成 bundle: 含 reduced-motion 降级");
+  assert.ok(/onClose: \(\) => \{ setModalGoal\(null\); load\(\); \}/.test(bundle), "生成 bundle: 弹窗关闭触发 load()");
+  assert.ok(/setInterval\(load, 15000\)/.test(bundle), "生成 bundle: 保留 15 秒轮询");
 });

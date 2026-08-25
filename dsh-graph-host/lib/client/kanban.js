@@ -1,4 +1,5 @@
       const [modalGoal, setModalGoal] = React.useState(null);
+      const [criteriaGoal, setCriteriaGoal] = React.useState(null); // g-170：判据编辑弹窗
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
@@ -49,8 +50,22 @@
       // g-77647351：拖拽状态机
       const [drag, setDrag] = React.useState(null); // {goalId, fromStatus, overGoalId, overStageKey, overHalf, laneKey}
       const dropCommitted = React.useRef(false);
+      // g-173：看板根节点 ref——自动滚动 effect 从它向上找真实垂直滚动容器
+      //（比 querySelector('[style*="padding: 12px"]') 更精确：不会误命中页面其它内联 padding 元素）
+      const boardRootRef = React.useRef(null);
       const [orderMap, setOrderMap] = React.useState({}); // {laneKey: {stageKey: goalId[]}}
       const [transitionNote, setTransitionNote] = React.useState(null);
+      // g-132：右上角齿轮 → 看板设置弹窗
+      const [showSettings, setShowSettings] = React.useState(false);
+      // g-171：更新强调动画状态——goalId -> { remaining, token }（token = goalId:updated_at）
+      const [updateEmphasis, setUpdateEmphasis] = React.useState({});
+      const seenUpdateTokens = React.useRef(new Set()); // 当前页内存：防同一 token 重复播放
+      const emphasisTimers = React.useRef({}); // goalId -> timer id
+      // g-171：卸载时清理强调动画计时器
+      React.useEffect(() => () => {
+        for (const t of Object.values(emphasisTimers.current)) clearTimeout(t);
+        emphasisTimers.current = {};
+      }, []);
 
       // g-77647351：document 级兜底（拖到列表外不显示 rejected）
       React.useEffect(() => {
@@ -73,10 +88,13 @@
         if (!drag) return;
 
         // 从看板根节点向上查找真正的垂直滚动容器；不要依赖 React style 的属性名格式。
+        // g-173：锚定 boardRootRef（精确命中本看板根），不再用全局 querySelector 猜
+        //「第一个 padding:12px 元素」——3082 页面里那可能不是看板根，导致回退到
+        // documentElement（dsh app frame overflow:hidden，scrollTop 永远无效）。
         function findScrollContainer() {
-          const wrapEl = document.querySelector('[style*="padding: 12px"]');
-          let el = wrapEl;
-          while (el && el !== document.body) {
+          let el = boardRootRef.current;
+          if (!el) el = document.querySelector('[style*="padding: 12px"]');
+          while (el && el !== document.documentElement) {
             const style = window.getComputedStyle(el);
             if ((style.overflowY === "auto" || style.overflowY === "scroll") &&
                 el.scrollHeight > el.clientHeight) return el;
@@ -138,6 +156,7 @@
         setVersionDetailLoading(true);
         setVersionDetailData(null);
         setVersionActionNote(null);
+        setReactivateConfirm(false);
         fetch(graphUrl(`/api/dsh-graph/version-detail?slug=${encodeURIComponent(slug)}`))
           .then((r) => r.json())
           .then((data) => {
@@ -150,6 +169,9 @@
             setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
           });
       };
+      // g-160：恢复 released 版本为 active 的状态
+      const [reactivatingVersion, setReactivatingVersion] = React.useState(false);
+      const [reactivateConfirm, setReactivateConfirm] = React.useState(false);
 
       // g-77647351：加载排序
       const loadOrder = () => {
@@ -378,11 +400,46 @@
         viewedSessionId = props?.sessionId ?? null;
         return () => { viewedSessionId = null; };
       }, [props?.sessionId]);
+      // g-171：更新强调动画——服务端 generated_at - updated_at 判定 10 秒窗口，
+      // 按 goalId+updated_at 防当前页重复播放；整页刷新可对窗口内目标补播。
+      // 只复用现有 load()（首次/手动刷新/写操作后）与 15 秒轮询，不新增任何数据通道。
+      const applyUpdateEmphasis = (data) => {
+        if (!data || typeof data.generated_at !== "string") return;
+        const gen = Date.parse(data.generated_at);
+        if (!Number.isFinite(gen)) return;
+        const allGoals = [
+          ...(data.versions ?? []).flatMap((v) => v.goals ?? []),
+          ...(data.standalone ?? []),
+          ...(data.backlog ?? []),
+        ];
+        for (const g of allGoals) {
+          const ts = g.updated_at;
+          // 旧 payload 无 updated_at → 无动画，兼容渲染
+          if (typeof ts !== "number" || !Number.isFinite(ts)) continue;
+          const age = gen - ts; // 服务端时间窗口（毫秒）
+          if (age < 0 || age >= 10000) continue; // 未来/已过 10 秒 → 不播放
+          const token = g.id + ":" + ts;
+          if (seenUpdateTokens.current.has(token)) continue; // 同一 token 不重播
+          seenUpdateTokens.current.add(token);
+          const remaining = Math.max(0, 10000 - age);
+          setUpdateEmphasis((prev) => ({ ...prev, [g.id]: { remaining, token } }));
+          if (emphasisTimers.current[g.id]) clearTimeout(emphasisTimers.current[g.id]);
+          emphasisTimers.current[g.id] = setTimeout(() => {
+            setUpdateEmphasis((prev) => {
+              if (!prev[g.id] || prev[g.id].token !== token) return prev;
+              const next = { ...prev };
+              delete next[g.id];
+              return next;
+            });
+            delete emphasisTimers.current[g.id];
+          }, remaining + 100);
+        }
+      };
       const load = () => {
         const params = showArchived ? "?includeArchived=1" : "";
         fetch(graphUrl("/api/dsh-graph" + params))
           .then((r) => r.json())
-          .then((data) => { setState({ loading: false, data }); loadOrder(); })
+          .then((data) => { setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); })
           .catch((e) => setState({ loading: false, error: String(e) }));
       };
       React.useEffect(() => {
@@ -527,13 +584,13 @@
               onDragOver: anyDrag ? (e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "move";
-                if (!orderedGoals.length) {
+                if (!e.target.closest?.(".dg-card")) {
                   setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" } : d);
                 }
               } : undefined,
               onDrop: anyDrag ? (e) => {
                 e.preventDefault();
-                if (!orderedGoals.length) {
+                if (!e.target.closest?.(".dg-card")) {
                   commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
                 }
               } : undefined,
@@ -565,13 +622,13 @@
               onDragOver: anyDrag ? (e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "move";
-                if (!orderedGoals.length) {
+                if (!e.target.closest?.(".dg-card")) {
                   setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" } : d);
                 }
               } : undefined,
               onDrop: anyDrag ? (e) => {
                 e.preventDefault();
-                if (!orderedGoals.length) {
+                if (!e.target.closest?.(".dg-card")) {
                   commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
                 }
               } : undefined,
@@ -584,8 +641,8 @@
             onDragOver: anyDrag ? (e) => {
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
-              // 列空白区域：设 overStageKey + overLaneKey 但无 overGoalId
-              if (!orderedGoals.length) {
+              // 列空白区域：容器及其非卡片子元素触发，避免覆盖卡片落点
+              if (!e.target.closest?.(".dg-card")) {
                 // g-137：backlog 卡拖到版本 lane 时，overStageKey 固定为 "describe"
                 const effectiveStageKey = (isFromBacklog && isOverThisLane) ? "describe" : s.key;
                 setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: effectiveStageKey, overLaneKey: key, overHalf: "after" } : d);
@@ -593,7 +650,7 @@
             } : undefined,
             onDrop: anyDrag ? (e) => {
               e.preventDefault();
-              if (!orderedGoals.length) {
+              if (!e.target.closest?.(".dg-card")) {
                 // g-137：backlog 卡拖到版本 lane 时，落点固定为 "describe"（其它列放手也落描述列）
                 const effectiveStageKey = (isFromBacklog && isOverThisLane) ? "describe" : s.key;
                 commitGoalDrag({ ...drag, overGoalId: null, overStageKey: effectiveStageKey, overLaneKey: key, overHalf: "after" }, null);
@@ -604,7 +661,7 @@
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -645,6 +702,8 @@
                     dropCommitted.current = false;
                   },
                 },
+                // g-170：卡片 meta 行「✏️ 判据」入口 → 判据编辑弹窗
+                setCriteriaGoal,
               );
             }),
           );
@@ -769,13 +828,13 @@
           onDragOver: drag ? (e) => {
             e.preventDefault();
             e.dataTransfer.dropEffect = "move";
-            if (!goals.length) {
+            if (!e.target?.closest?.(".dg-card")) {
               setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" } : d);
             }
           } : undefined,
           onDrop: drag ? (e) => {
             e.preventDefault();
-            if (!goals.length) {
+            if (!e.target?.closest?.(".dg-card")) {
               commitGoalDrag({ ...drag, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" }, null);
             }
           } : undefined,
@@ -785,7 +844,7 @@
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -821,6 +880,8 @@
                     dropCommitted.current = false;
                   },
                 },
+                // g-170：卡片 meta 行「✏️ 判据」入口 → 判据编辑弹窗
+                setCriteriaGoal,
               );
             }),
           ),
@@ -855,9 +916,25 @@
         const open = !!openReleased[v.slug];
         return [
           h("div", {
-            key: "rel-" + v.slug, style: S.collapsed, className: "dg-collapsed", title: "点击展开/收起",
-            onClick: () => setOpenReleased({ ...openReleased, [v.slug]: !open }),
-          }, `${open ? "▾" : "▸"} ${v.name} ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`),
+            key: "rel-" + v.slug, style: S.collapsed, className: "dg-collapsed",
+            title: "点击展开/收起；点击版本名称打开详情",
+          },
+            h("span", {
+              style: { cursor: "pointer" },
+              onClick: (e) => { e.stopPropagation(); setOpenReleased({ ...openReleased, [v.slug]: !open }); },
+            }, `${open ? "▾" : "▸"}`),
+            " ",
+            h("span", {
+              style: { cursor: "pointer", textDecoration: "underline dotted" },
+              onClick: (e) => {
+                e.stopPropagation();
+                setVersionDetailTarget({ slug: v.slug, name: v.name, status: v.status, goals_count: v.goals.length });
+                loadVersionDetail(v.slug);
+              },
+              title: "打开版本详情",
+            }, `${v.name}`),
+            ` ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`
+          ),
           open ? h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: gridCols } },
             ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx, false)) : null,
         ];
@@ -1001,7 +1078,17 @@
 
       return h(
         "div",
-        { key: "kanban-" + kanbanRenderKey, style: S.wrap },
+        { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
+           onDragLeave: drag ? (e) => {
+             // 进入子元素不清除；离开整个看板内容（如进入页面顶部/底部边缘、
+             // header/composer 等视口触发区）时只清除悬停落点，不结束整个拖拽——
+             // g-173：结束 drag 会让 g-157 自动滚动 effect 立即卸载，边缘自动滚动失效；
+             // 保持 drag 存活，回到看板时由单元格 onDragOver 重新建立落点，
+             // 真正的清理仍由 dragend/drop/取消（原生事件）路径完成。
+             if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
+               setDrag((d) => (d ? { ...d, overGoalId: null, overStageKey: null, overLaneKey: null, overHalf: null } : d));
+             }
+           } : undefined },
         h("style", null, HOVER_CSS),
         h("div", { style: S.head },
           h("strong", null, "dsh-graph 看板"),
@@ -1029,7 +1116,14 @@
               setNewVersionName("");
               setCreateVersionNote(null);
             },
-          }, "＋ 新建版本")),
+          }, "＋ 新建版本"),
+          // g-132: 右上角齿轮 → 看板设置
+          h("button", {
+            style: { ...S.btn, marginLeft: 8, fontSize: 16, lineHeight: 1, padding: "2px 8px" },
+            className: "dg-btn",
+            title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
+            onClick: () => setShowSettings(true),
+          }, "⚙")),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
@@ -1072,7 +1166,11 @@
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          : null,
+        // g-170：判据编辑弹窗（方案 A）——保存后刷新看板
+        criteriaGoal
+          ? h(CriteriaModal, { goalId: criteriaGoal, onClose: () => setCriteriaGoal(null), onSaved: () => load() })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
@@ -1328,6 +1426,57 @@
                         },
                       }, "🚀 标记为 released")
                     : null,
+                  // g-160: 恢复 released 版本为 active —— 仅 released 时显示
+                  versionDetailTarget.status === "released"
+                    ? reactivateConfirm
+                      ? h("div", { style: { padding: "8px 12px", borderRadius: 6, background: "rgba(255,152,0,.15)", border: "1px solid rgba(255,152,0,.4)", fontSize: 12, lineHeight: 1.5 } },
+                          h("div", { style: { fontWeight: 600, marginBottom: 4, color: "#ff9800" } }, "⚠️ 确认恢复版本？"),
+                          h("div", { style: { marginBottom: 8, opacity: 0.85 } }, `恢复 ${versionDetailTarget.slug} 将撤销发布状态，使版本重新进入 active（进行中）。已交付的目标不受影响，再次发布仍需满足全部目标 delivered 等校验。`),
+                          h("div", { style: { display: "flex", gap: 8 } },
+                            h("button", {
+                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff9800", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
+                              className: "dg-btn",
+                              disabled: reactivatingVersion,
+                              onClick: () => {
+                                setReactivatingVersion(true);
+                                setVersionActionNote(null);
+                                fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                                  method: "POST",
+                                  headers: { "content-type": "application/json" },
+                                  body: JSON.stringify({ slug: versionDetailTarget.slug, status: "active", confirmed: true }),
+                                }).then((r) => r.json()).then((data) => {
+                                  setReactivatingVersion(false);
+                                  setReactivateConfirm(false);
+                                  if (data.ok) {
+                                    setVersionActionNote("✅ 版本已恢复为 active");
+                                    setVersionDetailTarget((prev) => prev ? { ...prev, status: "active" } : prev);
+                                    loadVersionDetail(versionDetailTarget.slug);
+                                    load();
+                                  } else {
+                                    setVersionActionNote("⚠️ 恢复失败：" + (data.error || "未知错误"));
+                                  }
+                                }).catch((e) => {
+                                  setReactivatingVersion(false);
+                                  setReactivateConfirm(false);
+                                  setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                                });
+                              },
+                            }, "确认恢复为 active"),
+                            h("button", {
+                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
+                              className: "dg-btn",
+                              disabled: reactivatingVersion,
+                              onClick: () => { setReactivateConfirm(false); setVersionActionNote(null); },
+                            }, "取消"),
+                          )
+                        )
+                      : h("button", {
+                          style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff9800", background: "rgba(255,152,0,.08)", border: "1px solid rgba(255,152,0,.3)" },
+                          className: "dg-btn",
+                          disabled: versionActionLoading,
+                          onClick: () => { setReactivateConfirm(true); setVersionActionNote(null); },
+                        }, "♻️ 恢复为 active")
+                    : null,
                   // 重命名
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
@@ -1354,6 +1503,10 @@
                   }, "🗑️ 删除"),
                 ),
               ))
+          : null,
+        // g-132: 看板设置弹窗（gear 入口）
+        showSettings
+          ? h(SettingsModal, { onClose: () => setShowSettings(false), onSaved: () => load() })
           : null,
         // g-134: 创建版本泳道弹窗
         showCreateVersion

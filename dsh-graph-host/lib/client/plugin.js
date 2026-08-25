@@ -121,6 +121,9 @@
             (props) => h(KanbanView, props),
           ),
         );
+        // g-133：注册「看板设置」settings.section 页（profile 级全局默认配置）。
+        // settingsScope 缺失 / slots 未就绪时整页降级，不影响看板与工具。
+        try { registerGraphSettingsSection(ctx); } catch { /* 静默 */ }
         console.log("[dsh-graph-host] client apply: kanban view registered");
       },
     };

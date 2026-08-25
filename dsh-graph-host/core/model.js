@@ -119,3 +119,49 @@ export function criteriaItems(body) {
 export function countCriteria(body) {
     return criteriaItems(body).length;
 }
+/**
+ * g-170：重写质量判据小节内容（不含 `## 质量判据` 标题行，与 sectionText 同构）。
+ * 只替换「判据项行」（与 criteriaItems 同源定义：非空、非 HTML 注释、非模板占位行），
+ * 其余内容——HTML 注释、空行——原样保留；有实质判据时模板占位行一并移除。
+ * newItems 为空时仅删除判据项行（占位行保留，草稿清空后仍提示登记）。
+ * 返回新小节内容。
+ */
+export function rebuildCriteriaSection(raw, newItems) {
+    // 先屏蔽 HTML 注释（可跨行），避免注释内形似判据的行被误判
+    const comments = [];
+    let cIdx = 0;
+    const masked = raw.replace(/<!--[\s\S]*?-->/g, (m) => {
+        comments.push(m);
+        return `\u0000DG_COMMENT_${cIdx++}\u0000`;
+    });
+    const lines = masked.split("\n");
+    const isCommentSentinel = (t) => /^\u0000DG_COMMENT_\d+\u0000$/.test(t);
+    const out = [];
+    let inserted = false;
+    for (const line of lines) {
+        const trimmed = line.trim();
+        const sentinel = isCommentSentinel(trimmed);
+        // 判据项行：非注释、非空、非模板占位；有实质判据时占位行也一并删除（脚手架不再需要）
+        const droppable = !sentinel && trimmed !== "" &&
+            (newItems.length > 0 || !CRITERIA_PLACEHOLDERS.has(trimmed));
+        if (droppable) {
+            if (!inserted && newItems.length > 0) {
+                newItems.forEach((it, i) => out.push(`${i + 1}. ${it}`));
+                inserted = true;
+            }
+            continue; // 判据项行（及有实质判据时的占位行）不保留
+        }
+        out.push(line);
+    }
+    if (!inserted && newItems.length > 0) {
+        // 没有既有判据项行（空节/纯注释/纯占位）：文末补空行后插入新列表
+        if (out.length > 0 && out[out.length - 1] !== "")
+            out.push("");
+        newItems.forEach((it, i) => out.push(`${i + 1}. ${it}`));
+    }
+    let result = out.join("\n");
+    for (let i = 0; i < comments.length; i++) {
+        result = result.replace(`\u0000DG_COMMENT_${i}\u0000`, comments[i]);
+    }
+    return result;
+}

@@ -1,0 +1,11 @@
+# dsh-graph monorepo workspace（g-133 依赖解析修复）：dsh-graph-host/index.js 的守卫式
+# 动态 import @deepseek-ai/schemastery 从插件**真实路径**向上解析；profile 以 link: 安装时
+# peer 依赖不会落到仓库根，导致解析失败。把 dsh-graph-host 纳入仓库根 workspace 并
+# 以 hoisted nodeLinker 安装，使仓库根 node_modules 可直接解析该 runtime 依赖。
+packages:
+  - .
+  - 'dsh-graph-host'
+
+settings:
+  nodeLinker: hoisted
+  autoInstallPeers: false

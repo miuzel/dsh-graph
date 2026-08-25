@@ -3,7 +3,7 @@
  * 用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|validate|rebuild> [flags]
  */
 import { GraphError } from "./machine.js";
-import { init, createGoal, setCriteria, transition, validate, rebuild, addCard, fillCard, reviewCard, startAttempt, reportStatus, moveGoal, amendGoal, deleteGoal, archiveGoal, unarchiveGoal, deleteCard, } from "./ops.js";
+import { init, createGoal, setCriteria, transition, validate, rebuild, addCard, fillCard, reviewCard, startAttempt, reportStatus, moveGoal, amendGoal, deleteGoal, archiveGoal, unarchiveGoal, deleteCard, postponeGoal, } from "./ops.js";
 function parseArgs(argv) {
     const args = { root: ".dsh-graph", flags: new Map() };
     let i = 0;
@@ -157,6 +157,11 @@ function main() {
             console.log("ok");
             return;
         }
+        case "postpone-goal": {
+            postponeGoal(args.root, need(args, "goal"), { actor, reason: flag(args, "reason") });
+            console.log("ok");
+            return;
+        }
         case "validate": {
             const problems = validate(args.root);
             if (problems.length > 0) {
@@ -181,7 +186,7 @@ function main() {
             return;
         }
         default:
-            throw new GraphError("用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|delete-card|start-attempt|report-status|move-goal|amend-goal|archive-goal|unarchive-goal|delete-goal|validate|rebuild> [flags]");
+            throw new GraphError("用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|delete-card|start-attempt|report-status|move-goal|amend-goal|archive-goal|unarchive-goal|delete-goal|postpone-goal|validate|rebuild> [flags]");
     }
 }
 try {

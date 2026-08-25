@@ -21,8 +21,11 @@ PARTS=(
   "card-drawer"
   "goal-actions"
   "goal-modal"
+  "criteria-modal"
   "drag-prompts"
   "kanban"
+  "settings-modal"
+  "settings"
   "plugin"
   "_wrapper-bottom"
 )

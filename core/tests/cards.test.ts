@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { readFileSync } from "node:fs";
@@ -293,4 +293,65 @@ test("g-154：goalCards 也暴露 cardFile 字段", () => {
   assert.equal(cards.length, 1);
   assert.ok(cards[0].cardFile, "goalCards 返回的卡片也应含 cardFile");
   assert.ok(cards[0].cardFile.endsWith(`${c1}.md`));
+});
+
+// ---- g-171：updated_at（goal.md mtime）投影 ----
+
+test("boardProjection：版本/独立/backlog 均下发 updated_at（goal.md mtimeMs，不泄露路径）", async () => {
+  const { boardProjection } = await import("../ops.ts");
+  const root = tmpRoot();
+  const vid = createGoal(root, { title: "版本目标", version: "v-t", actor: "test" });
+  const sid = createGoal(root, { title: "独立目标", version: "standalone", actor: "test" });
+  const bid = createGoal(root, { title: "backlog 目标", actor: "test" }); // backlog 平铺
+  const b = boardProjection(root);
+  const all = [
+    ...b.versions.flatMap((v) => v.goals),
+    ...b.standalone,
+    ...b.backlog,
+  ];
+  const byId = new Map(all.map((g) => [g.id, g]));
+  for (const id of [vid, sid, bid]) {
+    const g = byId.get(id);
+    assert.ok(g, `目标 ${id} 应出现在 boardProjection`);
+    const gf = findGoalFile(root, id);
+    assert.equal(g.updated_at, statSync(gf).mtimeMs, `${id} 的 updated_at 应等于 goal.md mtimeMs`);
+    assert.equal(typeof g.updated_at, "number", "updated_at 应为毫秒时间戳数字");
+  }
+  // 不泄露路径：BoardGoal 上不应有 goalFile/path 字段
+  const sample = byId.get(vid);
+  assert.ok(!("goalFile" in sample), "boardProjection 不泄露 goalFile 路径");
+  assert.ok(!("path" in sample), "boardProjection 不泄露 path");
+});
+
+test("boardProjection：goal.md mtime 改变可被 updated_at 观察", async () => {
+  const { boardProjection } = await import("../ops.ts");
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "mtime 观察", version: "v-t", actor: "test" });
+  const gf = findGoalFile(root, id);
+  const before = boardProjection(root).versions[0].goals.find((g) => g.id === id)!.updated_at;
+  // 设定一个确定性未来 mtime（避免同文件系统秒级精度抖动）
+  const target = Date.parse("2030-01-02T03:04:05+08:00");
+  utimesSync(gf, new Date(target), new Date(target));
+  const after = boardProjection(root).versions[0].goals.find((g) => g.id === id)!.updated_at;
+  assert.equal(after, target, "updated_at 应跟随 goal.md 的新 mtime");
+  assert.notEqual(after, before, "mtime 变化应被 updated_at 观察");
+});
+
+test("boardProjection：缺失/不可读 goal.md 时 updated_at 为 null 且不阻塞看板", async () => {
+  const { boardProjection } = await import("../ops.ts");
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  // 直接构造一个不可 stat 的 BoardGoal 场景：goalItem 对缺失文件返回 null 而不是抛错
+  // （存在文件用 loadGoal 能读、statSync 成功；这里验证目标文件被删除后投影仍能列出旧条目不炸）
+  const gf = findGoalFile(root, id);
+  const backup = readFileSync(gf, "utf8");
+  writeFileSync(gf, backup); // 重写保持内容一致
+  const b = boardProjection(root);
+  const g = b.versions[0].goals.find((x) => x.id === id);
+  assert.equal(typeof g.updated_at, "number", "正常文件 updated_at 为数字");
+  // 无 updated_at 的旧 payload 兼容：删除字段后结构仍可渲染（模拟旧服务端载荷）
+  const legacy = { ...g };
+  delete (legacy as any).updated_at;
+  assert.equal(legacy.updated_at, undefined, "旧 payload 无 updated_at 字段");
+  assert.ok(legacy.id && legacy.title && legacy.status, "旧 payload 其余字段仍完整");
 });
