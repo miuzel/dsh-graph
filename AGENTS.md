@@ -109,3 +109,9 @@ node --test core/tests/*.test.ts
 - The generated file maintains the `window.__ModuleLoader__.load` contract required by the dsh client
 - The generated marker is added at the top of the file before any module content
 - This policy prevents accidental modification of generated code and ensures build consistency
+
+## Harness Text-File Editing Notes
+
+- Before using `edit` or `write` on an existing text file, always read it first; otherwise the tool may trigger “edit requires reading ... first”.
+- In read output such as `132:     text`, `132:` is tool-added line-number/separator metadata, not file content. Match `old_string`/`new_string` against the actual body text exactly; copy indentation and spaces from the body, never the line number or separator spaces. If `old_string` does not match, re-read the surrounding content and adjust rather than retrying blindly.
+- These notes describe current Harness tool behavior; if the official read output format changes, follow the format actually returned at that time.
