@@ -114,4 +114,5 @@ node --test core/tests/*.test.ts
 
 - Before using `edit` or `write` on an existing text file, always read it first; otherwise the tool may trigger “edit requires reading ... first”.
 - In read output such as `132:     text`, `132:` is tool-added line-number metadata, and the first space after the colon is also a separator; neither belongs to the file content. Match `old_string`/`new_string` against the actual body text exactly; copy indentation and spaces only from the body after that separator, never the line number or separator space. If `old_string` does not match, re-read the surrounding content and adjust rather than retrying blindly.
+- `grep` patterns are parsed as ripgrep regular expressions and are not automatically escaped. When searching for literal text, escape regex metacharacters yourself (for example, write `Card\(g,` rather than `Card(g,`), and escape `[ ] . ? + * | ^ $` and other metacharacters as needed.
 - These notes describe current Harness tool behavior; if the official read output format changes, follow the format actually returned at that time.
