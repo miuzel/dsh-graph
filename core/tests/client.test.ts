@@ -276,8 +276,9 @@ test("g-164 released 泳道与 active/version 泳道共用同一动态列模板�
   assert.match(source, /const gridCols = \["130px",/);
   assert.match(source, /deliverColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ deliver/);
   assert.match(source, /blockedColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ blocked/);
-  // 顶部表头网格：(1) 处使用 gridCols。
-  assert.match(source, /h\("div", \{ style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \} \},\s*\n\s*h\("div", \{ style: S\.stageHead \}, "泳道＼阶段"\)/);
+  // 顶部表头网格：(1) 处使用 gridCols；首个单元格为左上角 stageHead 锚点
+  //（g-174 起承载「＋ 新建版本」入口，替换原「泳道＼阶段」文字）。
+  assert.match(source, /h\("div", \{ style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \} \},[\s\S]*?h\("div", \{ style: S\.stageHead \},\s*\n\s*h\("button", \{[\s\S]*?\}, "＋ 新建版本"\)\)/);
   // released 泳道网格：(1) 处使用 gridCols（relx- 容器），保证与上方泳道列宽/顺序一致。
   assert.match(source, /relx-" \+ v\.slug, style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \}/);
   // 全文件恰好两处（顶部表头 + released 泳道）引用该共享模板，不存在各排各的静态模板。
