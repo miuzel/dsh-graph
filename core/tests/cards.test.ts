@@ -365,8 +365,9 @@ test("boardProjection：generated_at 为毫秒精度，同秒修改 updated_at �
   writeFileSync(gf, readFileSync(gf, "utf8"));
   const b = boardProjection(root);
   const g = b.versions[0].goals.find((x) => x.id === id)!;
-  // generated_at 必须是毫秒精度（含 .SSS），否则与 mtimeMs 同秒比较会被截断为负
-  assert.ok(/\.\d{3}\+\d{2}:\d{2}$/.test(b.generated_at), `generated_at 应含毫秒：${b.generated_at}`);
+  // generated_at 必须是毫秒精度（含 .SSS），否则与 mtimeMs 同秒比较会被截断为负；
+  // 时区偏移兼容 +/-（东/西时区均可移植运行）
+  assert.ok(/\.\d{3}[+-]\d{2}:\d{2}$/.test(b.generated_at), `generated_at 应含毫秒：${b.generated_at}`);
   const age = Date.parse(b.generated_at) - g.updated_at;
   // 毫秒精度下最多差 1ms（mtime 亚毫秒四舍五入），绝不应出现秒级截断的 -999ms 量级
   assert.ok(age > -1000, `同秒修改的 age 应 > -1000ms（实际 ${age}ms），否则动画会被 age<0 跳过`);
