@@ -349,7 +349,7 @@
             ? h("div", { key: "m2", style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
             : null,
           metDeps.length
-            ? h("div", { key: "m2b", style: { ...S.meta, color: "var(--dsw-alias-state-success-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+            ? h("div", { key: "m2b", style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
             : null,
           status === "blocked" && meta.blocked_reason
             ? h("div", { key: "m3", style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + meta.blocked_reason)
@@ -508,7 +508,7 @@
                 borderBottom: "none",
                 background: tab === "detail" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "detail" ? 700 : 400,
-                color: tab === "detail" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
+                color: tab === "detail" ? "var(--dsw-alias-label-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "detail" ? 1 : 0.7,
               },
               onClick: () => setTab("detail"),
@@ -521,7 +521,7 @@
                 borderBottom: "none",
                 background: tab === "activity" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "activity" ? 700 : 400,
-                color: tab === "activity" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
+                color: tab === "activity" ? "var(--dsw-alias-label-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "activity" ? 1 : 0.7,
               },
               onClick: () => setTab("activity"),
@@ -534,7 +534,7 @@
                 borderBottom: "none",
                 background: tab === "context" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "context" ? 700 : 400,
-                color: tab === "context" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
+                color: tab === "context" ? "var(--dsw-alias-label-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "context" ? 1 : 0.7,
               },
               onClick: () => setTab("context"),

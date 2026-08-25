@@ -327,11 +327,12 @@ window.__ModuleLoader__.load({
         color: "var(--dsw-alias-label-primary, #e6e6e6)",
         border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30))", borderRadius: 4,
       },
-      // g-153：主要操作按钮（蓝底高亮）
+      // g-153：主要操作按钮（蓝底高亮）；g-176 follow-up：浅色下克制化——
+      // tertiary 淡底 + label-primary 文字（高对比），语义由 primary 边框保留
       btnPrimary: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
         background: "var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.18))",
-        color: "var(--dsw-alias-state-business-primary, #8ab4ff)",
+        color: "var(--dsw-alias-label-primary, #8ab4ff)",
         border: "1px solid var(--dsw-alias-state-business-primary, rgba(76,141,255,.40))", borderRadius: 4,
       },
       // g-153：危险操作按钮（红底红字）
@@ -340,11 +341,13 @@ window.__ModuleLoader__.load({
         background: "rgba(214,102,102,.18)", color: "var(--dsw-alias-state-error-primary, #f08080)",
         border: "1px solid rgba(214,102,102,.35)", borderRadius: 4,
       },
-      // g-153：接受/确认操作按钮（绿底绿字）
+      // g-153：接受/确认操作按钮（绿底绿字）；g-176 follow-up：浅色下对比修复——
+      // tertiary 淡绿底 + label-primary 文字（≥12:1），语义由 primary 绿边与 ✅ 保留
       btnAccept: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-primary, #6ee7a0)",
-        border: "1px solid rgba(58,166,117,.40)", borderRadius: 4,
+        background: "var(--dsw-alias-state-success-tertiary, rgba(58,166,117,.18))",
+        color: "var(--dsw-alias-label-primary, #6ee7a0)",
+        border: "1px solid var(--dsw-alias-state-success-primary, rgba(58,166,117,.40))", borderRadius: 4,
       },
       // g-153：下拉菜单/选择控件样式 token
       select: {
@@ -1239,7 +1242,7 @@ window.__ModuleLoader__.load({
           ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
           : null,
         metDeps.length
-          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-success-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
           : null,
         blocked && g.blocked_reason
           ? h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + g.blocked_reason)
@@ -1895,7 +1898,7 @@ window.__ModuleLoader__.load({
             : acceptState === "pending"
               ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待裁决")
               : acceptState === "resolved"
-                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-state-success-primary, #3aa675)" } }, "✅ 已接受生效")
+                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, "✅ 已接受生效")
                 : null,
           h("button", {
             style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
@@ -2400,7 +2403,7 @@ window.__ModuleLoader__.load({
             ? h("div", { key: "m2", style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
             : null,
           metDeps.length
-            ? h("div", { key: "m2b", style: { ...S.meta, color: "var(--dsw-alias-state-success-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+            ? h("div", { key: "m2b", style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
             : null,
           status === "blocked" && meta.blocked_reason
             ? h("div", { key: "m3", style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + meta.blocked_reason)
@@ -2559,7 +2562,7 @@ window.__ModuleLoader__.load({
                 borderBottom: "none",
                 background: tab === "detail" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "detail" ? 700 : 400,
-                color: tab === "detail" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
+                color: tab === "detail" ? "var(--dsw-alias-label-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "detail" ? 1 : 0.7,
               },
               onClick: () => setTab("detail"),
@@ -2572,7 +2575,7 @@ window.__ModuleLoader__.load({
                 borderBottom: "none",
                 background: tab === "activity" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "activity" ? 700 : 400,
-                color: tab === "activity" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
+                color: tab === "activity" ? "var(--dsw-alias-label-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "activity" ? 1 : 0.7,
               },
               onClick: () => setTab("activity"),
@@ -2585,7 +2588,7 @@ window.__ModuleLoader__.load({
                 borderBottom: "none",
                 background: tab === "context" ? "rgba(128,128,128,.10)" : "transparent",
                 fontWeight: tab === "context" ? 700 : 400,
-                color: tab === "context" ? "var(--dsw-alias-state-business-primary, #8ab4ff)" : "inherit",
+                color: tab === "context" ? "var(--dsw-alias-label-primary, #8ab4ff)" : "inherit",
                 opacity: tab === "context" ? 1 : 0.7,
               },
               onClick: () => setTab("context"),
@@ -4700,7 +4703,7 @@ window.__ModuleLoader__.load({
                   // 标记为 released —— 仅非 released 时显示
                   versionDetailTarget.status !== "released"
                     ? h("button", {
-                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-success-primary, #4caf50)", background: "rgba(76,175,80,.12)", border: "1px solid rgba(76,175,80,.4)" },
+                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-label-primary, #4caf50)", background: "rgba(76,175,80,.12)", border: "1px solid rgba(76,175,80,.4)" },
                         className: "dg-btn",
                         disabled: versionActionLoading,
                         onClick: () => {
@@ -4746,7 +4749,7 @@ window.__ModuleLoader__.load({
                           h("div", { style: { marginBottom: 8, opacity: 0.85 } }, `恢复 ${versionDetailTarget.slug} 将撤销发布状态，使版本重新进入 active（进行中）。已交付的目标不受影响，再次发布仍需满足全部目标 delivered 等校验。`),
                           h("div", { style: { display: "flex", gap: 8 } },
                             h("button", {
-                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-warn-label, #ff9800)", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
+                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-label-primary, #ff9800)", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
                               className: "dg-btn",
                               disabled: reactivatingVersion,
                               onClick: () => {
@@ -4783,7 +4786,7 @@ window.__ModuleLoader__.load({
                           )
                         )
                       : h("button", {
-                          style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-warn-label, #ff9800)", background: "rgba(255,152,0,.08)", border: "1px solid rgba(255,152,0,.3)" },
+                          style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-label-primary, #ff9800)", background: "rgba(255,152,0,.08)", border: "1px solid rgba(255,152,0,.3)" },
                           className: "dg-btn",
                           disabled: versionActionLoading,
                           onClick: () => { setReactivateConfirm(true); setVersionActionNote(null); },
@@ -5227,7 +5230,7 @@ window.__ModuleLoader__.load({
             h("button", { style: { ...S.btn, padding: "6px 16px", fontSize: 13 }, className: "dg-btn", disabled: saving, onClick: save },
               saving ? "保存中…" : "保存"),
             h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: props.onClose }, "关闭"),
-            note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "var(--dsw-alias-state-success-primary, #6ee7a0)" : "var(--dsw-alias-state-error-primary, #f08080)", marginLeft: 8 } }, note.text) : null),
+            note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "var(--dsw-alias-label-primary, #6ee7a0)" : "var(--dsw-alias-state-error-primary, #f08080)", marginLeft: 8 } }, note.text) : null),
           error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 6 } }, error) : null));
     }
     // g-133：dsh-graph profile 级全局默认设置页（settings.section：看板设置）。

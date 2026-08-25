@@ -52,11 +52,12 @@
         color: "var(--dsw-alias-label-primary, #e6e6e6)",
         border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30))", borderRadius: 4,
       },
-      // g-153：主要操作按钮（蓝底高亮）
+      // g-153：主要操作按钮（蓝底高亮）；g-176 follow-up：浅色下克制化——
+      // tertiary 淡底 + label-primary 文字（高对比），语义由 primary 边框保留
       btnPrimary: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
         background: "var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.18))",
-        color: "var(--dsw-alias-state-business-primary, #8ab4ff)",
+        color: "var(--dsw-alias-label-primary, #8ab4ff)",
         border: "1px solid var(--dsw-alias-state-business-primary, rgba(76,141,255,.40))", borderRadius: 4,
       },
       // g-153：危险操作按钮（红底红字）
@@ -65,11 +66,13 @@
         background: "rgba(214,102,102,.18)", color: "var(--dsw-alias-state-error-primary, #f08080)",
         border: "1px solid rgba(214,102,102,.35)", borderRadius: 4,
       },
-      // g-153：接受/确认操作按钮（绿底绿字）
+      // g-153：接受/确认操作按钮（绿底绿字）；g-176 follow-up：浅色下对比修复——
+      // tertiary 淡绿底 + label-primary 文字（≥12:1），语义由 primary 绿边与 ✅ 保留
       btnAccept: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
-        background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-primary, #6ee7a0)",
-        border: "1px solid rgba(58,166,117,.40)", borderRadius: 4,
+        background: "var(--dsw-alias-state-success-tertiary, rgba(58,166,117,.18))",
+        color: "var(--dsw-alias-label-primary, #6ee7a0)",
+        border: "1px solid var(--dsw-alias-state-success-primary, rgba(58,166,117,.40))", borderRadius: 4,
       },
       // g-153：下拉菜单/选择控件样式 token
       select: {

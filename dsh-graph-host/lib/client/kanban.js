@@ -1403,7 +1403,7 @@
                   // 标记为 released —— 仅非 released 时显示
                   versionDetailTarget.status !== "released"
                     ? h("button", {
-                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-success-primary, #4caf50)", background: "rgba(76,175,80,.12)", border: "1px solid rgba(76,175,80,.4)" },
+                        style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-label-primary, #4caf50)", background: "rgba(76,175,80,.12)", border: "1px solid rgba(76,175,80,.4)" },
                         className: "dg-btn",
                         disabled: versionActionLoading,
                         onClick: () => {
@@ -1449,7 +1449,7 @@
                           h("div", { style: { marginBottom: 8, opacity: 0.85 } }, `恢复 ${versionDetailTarget.slug} 将撤销发布状态，使版本重新进入 active（进行中）。已交付的目标不受影响，再次发布仍需满足全部目标 delivered 等校验。`),
                           h("div", { style: { display: "flex", gap: 8 } },
                             h("button", {
-                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-warn-label, #ff9800)", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
+                              style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-label-primary, #ff9800)", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
                               className: "dg-btn",
                               disabled: reactivatingVersion,
                               onClick: () => {
@@ -1486,7 +1486,7 @@
                           )
                         )
                       : h("button", {
-                          style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-state-warn-label, #ff9800)", background: "rgba(255,152,0,.08)", border: "1px solid rgba(255,152,0,.3)" },
+                          style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-label-primary, #ff9800)", background: "rgba(255,152,0,.08)", border: "1px solid rgba(255,152,0,.3)" },
                           className: "dg-btn",
                           disabled: versionActionLoading,
                           onClick: () => { setReactivateConfirm(true); setVersionActionNote(null); },

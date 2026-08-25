@@ -241,7 +241,7 @@
           ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
           : null,
         metDeps.length
-          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-success-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
           : null,
         blocked && g.blocked_reason
           ? h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + g.blocked_reason)
