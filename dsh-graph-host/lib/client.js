@@ -3305,6 +3305,11 @@ window.__ModuleLoader__.load({
       // onClose 的 load() 补播窗口内目标。
       const modalGoalRef = React.useRef(null);
       modalGoalRef.current = modalGoal;
+      // g-171 回退修复：记录弹窗打开时该目标的 updated_at（mtime）与"关闭后待强制补播"标记。
+      // 用户经外部编辑器编辑 goal.md（耗时通常 >10s）后关闭弹窗时已超 10 秒窗口，
+      // 但目标 mtime 确实变了——关闭弹窗是明确"我要看结果"的动作，应强制补播一次完整动画。
+      const modalGoalOpenTsRef = React.useRef(null); // 弹窗打开时目标的 updated_at
+      const forceReplayRef = React.useRef(null); // {goalId, openTs} 待关闭后强制补播
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
@@ -3747,11 +3752,42 @@ window.__ModuleLoader__.load({
           }, remaining + 100);
         }
       };
+      // g-171 回退修复：关闭弹窗后强制补播——若目标在弹窗打开期间被外部修改
+      // （最新 payload 的 updated_at ≠ 打开时记录值），即使已超 10 秒窗口也补播一次
+      // 完整 10 秒动画（用户经外部编辑器编辑 goal.md 常见耗时 >10s，关闭弹窗是明确的
+      // "我要看结果"动作）。轮询/普通 load 仍走 10 秒窗口，不受影响。
+      const applyForceReplay = (data) => {
+        const fr = forceReplayRef.current;
+        if (!fr || !data || typeof data.generated_at !== "string") return;
+        forceReplayRef.current = null; // 只消费一次
+        const g = [
+          ...(data.versions ?? []).flatMap((v) => v.goals ?? []),
+          ...(data.standalone ?? []),
+          ...(data.backlog ?? []),
+        ].find((x) => x.id === fr.goalId);
+        if (!g || typeof g.updated_at !== "number") return;
+        if (g.updated_at === fr.openTs) return; // 弹窗期间未被修改 → 不强制
+        const token = g.id + ":" + g.updated_at;
+        if (seenUpdateTokens.current.has(token)) return; // 窗口判定已播过 → 不重复
+        seenUpdateTokens.current.add(token);
+        const remaining = 10000; // 完整生命周期
+        setUpdateEmphasis((prev) => ({ ...prev, [g.id]: { remaining, token } }));
+        if (emphasisTimers.current[g.id]) clearTimeout(emphasisTimers.current[g.id]);
+        emphasisTimers.current[g.id] = setTimeout(() => {
+          setUpdateEmphasis((prev) => {
+            if (!prev[g.id] || prev[g.id].token !== token) return prev;
+            const next = { ...prev };
+            delete next[g.id];
+            return next;
+          });
+          delete emphasisTimers.current[g.id];
+        }, remaining + 100);
+      };
       const load = () => {
         const params = showArchived ? "?includeArchived=1" : "";
         fetch(graphUrl("/api/dsh-graph" + params))
           .then((r) => r.json())
-          .then((data) => { setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); })
+          .then((data) => { setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data); })
           .catch((e) => setState({ loading: false, error: String(e) }));
       };
       React.useEffect(() => {
@@ -4384,6 +4420,12 @@ window.__ModuleLoader__.load({
         ? [...active.flatMap((v) => v.goals), ...released.flatMap((v) => v.goals),
            ...b.standalone, ...b.backlog].find((g) => g.id === modalGoal)
         : null;
+      // g-171 回退修复：弹窗打开瞬间记录该目标的 updated_at（mtime），供关闭时
+      // 比较"弹窗期间是否被外部修改"以决定强制补播。只在首次打开时记录，不随轮询覆盖。
+      if (modalGoal && modalGoalData && typeof modalGoalData.updated_at === "number"
+          && modalGoalOpenTsRef.current === null) {
+        modalGoalOpenTsRef.current = modalGoalData.updated_at;
+      }
 
       return h(
         "div",
@@ -4483,7 +4525,7 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,

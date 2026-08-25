@@ -1270,10 +1270,14 @@ test("g-171 模块源契约：kanban.js 复用现有 load/15s 轮询做 10 秒�
   assert.ok(!/setInterval\(load, [1-9]000\)/.test(kanban.replace("setInterval(load, 15000)", "")), "不新增其他轮询频率");
   assert.ok(!/new WebSocket|EventSource/.test(kanban), "不新增 WebSocket/SSE");
   // 详情弹窗关闭触发一次 load()
-  assert.ok(/onClose: \(\) => \{ modalGoalRef\.current = null; setModalGoal\(null\); load\(\); \}/.test(kanban), "详情弹窗关闭触发一次 load()");
+  assert.ok(/onClose: \(\) => \{ forceReplayRef\.current = \{ goalId: modalGoal, openTs: modalGoalOpenTsRef\.current \}; modalGoalOpenTsRef\.current = null; modalGoalRef\.current = null; setModalGoal\(null\); load\(\); \}/.test(kanban), "详情弹窗关闭触发一次 load() 并记录强制补播目标");
   // g-171 回退修复：弹窗打开期间跳过播放（不消费 token），关闭后补播窗口内目标
   assert.ok(/const modalGoalRef = React\.useRef\(null\);[\s\S]*modalGoalRef\.current = modalGoal/.test(kanban), "modalGoalRef 镜像弹窗状态供 load 闭包判定");
   assert.ok(/if \(modalGoalRef\.current\) return;[\s\S]*const gen = Date\.parse\(data\.generated_at\)/.test(kanban), "弹窗打开期间跳过播放，关闭后 load() 补播");
+  // g-171 回退修复：关闭弹窗后强制补播——弹窗期间被外部修改（mtime 变）即使超 10s 窗口也播完整动画
+  assert.ok(/const applyForceReplay = \(data\) => \{[\s\S]*if \(g\.updated_at === fr\.openTs\) return;[\s\S]*const remaining = 10000/.test(kanban), "关闭弹窗强制补播：mtime 变化即完整 10s 播放");
+  assert.ok(/applyUpdateEmphasis\(data\); applyForceReplay\(data\)/.test(kanban), "load() 成功路径先窗口判定再强制补播判定");
+  assert.ok(/modalGoalOpenTsRef\.current === null[\s\S]*modalGoalOpenTsRef\.current = modalGoalData\.updated_at/.test(kanban), "弹窗打开瞬间记录目标 mtime");
   // 卡片透传 _updateEmphasis
   assert.ok(/_updateEmphasis: updateEmphasis\[g\.id\] \?\? null/.test(kanban), "Card 透传 _updateEmphasis");
 });
@@ -1307,8 +1311,9 @@ test("g-171 生成 bundle 契约：client.js 含更新强调逻辑且保留 gene
   assert.ok(/dg-update-sheen-bar/.test(bundle), "生成 bundle: 含扫光条");
   assert.ok(/dg-update-fade/.test(bundle), "生成 bundle: 含 fade keyframe");
   assert.ok(/prefers-reduced-motion: reduce/.test(bundle), "生成 bundle: 含 reduced-motion 降级");
-  assert.ok(/onClose: \(\) => \{ modalGoalRef\.current = null; setModalGoal\(null\); load\(\); \}/.test(bundle), "生成 bundle: 弹窗关闭触发 load()");
+  assert.ok(/onClose: \(\) => \{ forceReplayRef\.current = \{ goalId: modalGoal, openTs: modalGoalOpenTsRef\.current \}/.test(bundle), "生成 bundle: 弹窗关闭触发 load() 并记录强制补播");
   assert.ok(/modalGoalRef\.current = modalGoal/.test(bundle), "生成 bundle: modalGoalRef 镜像弹窗状态");
+  assert.ok(/applyForceReplay/.test(bundle), "生成 bundle: 含关闭弹窗强制补播");
   assert.ok(/setInterval\(load, 15000\)/.test(bundle), "生成 bundle: 保留 15 秒轮询");
   assert.ok(/safeAge >= 10000/.test(bundle), "生成 bundle: 负 age 容忍（同秒修改补播）");
 });
