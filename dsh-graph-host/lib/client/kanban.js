@@ -1,5 +1,4 @@
       const [modalGoal, setModalGoal] = React.useState(null);
-      const [criteriaGoal, setCriteriaGoal] = React.useState(null); // g-170：判据编辑弹窗
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
@@ -702,8 +701,6 @@
                     dropCommitted.current = false;
                   },
                 },
-                // g-170：卡片 meta 行「✏️ 判据」入口 → 判据编辑弹窗
-                setCriteriaGoal,
               );
             }),
           );
@@ -880,8 +877,6 @@
                     dropCommitted.current = false;
                   },
                 },
-                // g-170：卡片 meta 行「✏️ 判据」入口 → 判据编辑弹窗
-                setCriteriaGoal,
               );
             }),
           ),
@@ -1167,10 +1162,6 @@
         ...releasedRows,
         modalGoal
           ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
-          : null,
-        // g-170：判据编辑弹窗（方案 A）——保存后刷新看板
-        criteriaGoal
-          ? h(CriteriaModal, { goalId: criteriaGoal, onClose: () => setCriteriaGoal(null), onSaved: () => load() })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,

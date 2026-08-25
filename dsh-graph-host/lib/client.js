@@ -1066,8 +1066,7 @@ window.__ModuleLoader__.load({
     // expanded 默认值由 KanbanView 决定（delivered/blocked 默认 false，其余默认 true），
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
-    // g-170：onOpenCriteria 回调——卡片 meta 行「✏️ 判据」入口（打开判据编辑弹窗）
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag, onOpenCriteria) {
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag) {
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -1210,13 +1209,7 @@ window.__ModuleLoader__.load({
                goalId: g.id,
                items: g.criteria_items ?? g.criteriaItems,
                count: g.criteria_count ?? g.criteriaCount,
-             }),
-             h("button", {
-               style: { ...S.btn, fontSize: 10, padding: "0 4px", marginLeft: 4, flexShrink: 0 },
-               className: "dg-btn",
-               title: "编辑质量判据（保存后清空该目标已有勾选）",
-               onClick: (e) => { e.stopPropagation(); onOpenCriteria?.(g.id); },
-             }, "✏️ 判据")),
+             })),
         );
       }
       return h(
@@ -1233,12 +1226,6 @@ window.__ModuleLoader__.load({
             items: g.criteria_items ?? g.criteriaItems,
             count: g.criteria_count ?? g.criteriaCount,
           }),
-          h("button", {
-            style: { ...S.btn, fontSize: 10, padding: "0 4px", marginLeft: 4, flexShrink: 0 },
-            className: "dg-btn",
-            title: "编辑质量判据（保存后清空该目标已有勾选）",
-            onClick: (e) => { e.stopPropagation(); onOpenCriteria?.(g.id); },
-          }, "✏️ 判据"),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
         hasDep
           ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
@@ -2347,6 +2334,7 @@ window.__ModuleLoader__.load({
       const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
       const [logFilter, setLogFilter] = React.useState(""); // "" 全部 / 事件名
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新执行的模型路由（显示兜底）
+      const [criteriaOpen, setCriteriaOpen] = React.useState(false); // g-170：判据编辑弹窗（详情内「质量判据」标题处入口）
       const [renaming, setRenaming] = React.useState(false);
       const [newTitle, setNewTitle] = React.useState("");
       const [renameNote, setRenameNote] = React.useState(null);
@@ -2439,12 +2427,14 @@ window.__ModuleLoader__.load({
           const rest = t.replace(/^（待[^）]*）\s*/, "").trim();
           return { isPh: true, marker, body: rest };
         }
-        function sectionBlock(key, title, body, extra, hideBodyWhenExtra) {
+        // g-170：titleExtra 渲染在小节标题右侧（判据编辑入口用）
+        function sectionBlock(key, title, body, extra, hideBodyWhenExtra, titleExtra) {
           const { isPh, marker, body: content } = parsePlaceholder(body);
           return h("div", { key, style: S.modalSection },
             h("div", { style: S.modalH },
               title,
-              isPh && !content ? h("span", { style: { ...S.meta, fontSize: 12, marginLeft: 6, fontWeight: 400 } }, marker) : null),
+              isPh && !content ? h("span", { style: { ...S.meta, fontSize: 12, marginLeft: 6, fontWeight: 400 } }, marker) : null,
+              titleExtra ?? null),
             hideBodyWhenExtra && extra != null ? null : (isPh && !content ? null : content),
             extra ?? null);
         }
@@ -2454,10 +2444,17 @@ window.__ModuleLoader__.load({
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
             h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
+          // g-170：「✏️ 判据」编辑入口放在小节标题处（负责人 2026-08-25 指示），点击打开判据编辑弹窗
           crit != null ? sectionBlock("c", "✅ 质量判据", crit,
             !isPlaceholder(crit) && ["ready", "in_progress", "review", "delivered"].includes(status)
               ? h(CriteriaChecklist, { goalId: props.id, crit, att, onClose: props.onClose })
-              : null, true) : null,
+              : null, true,
+            h("button", {
+              style: { ...S.btnPrimary, fontSize: 11, padding: "1px 6px", marginLeft: 6, verticalAlign: "middle", opacity: 1 },
+              className: "dg-btn",
+              title: "编辑质量判据（保存后清空该目标已有勾选）",
+              onClick: (e) => { e.stopPropagation(); setCriteriaOpen(true); },
+            }, "✏️ 判据")) : null,
           (d.cards ?? []).length
             ? h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🗂 信息收集"),
@@ -2857,22 +2854,27 @@ window.__ModuleLoader__.load({
             deleteNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, deleteNote) : null,
             typeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, typeNote) : null);
 
-      return h(
-        "div",
-        { style: S.overlay, onClick: props.onClose },
-        // g-158：弹窗顶部边框使用类型色（与卡片左侧色条、标题 badge 同色）
-        h("div", { style: { ...S.modal, borderTop: `3px solid ${currentTypeColor}` }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: props.onClose }, "✕"),
-          titleEl,
-          headMeta,
-          livePanel,
-          content),
+      return h(React.Fragment, null,
+        h("div",
+          { style: S.overlay, onClick: props.onClose },
+          // g-158：弹窗顶部边框使用类型色（与卡片左侧色条、标题 badge 同色）
+          h("div", { style: { ...S.modal, borderTop: `3px solid ${currentTypeColor}` }, onClick: (e) => e.stopPropagation() },
+            h("span", { style: S.close, onClick: props.onClose }, "✕"),
+            titleEl,
+            headMeta,
+            livePanel,
+            content),
+        ),
+        // g-170：判据编辑弹窗（详情内「质量判据」标题处入口打开）——保存后刷新详情
+        criteriaOpen
+          ? h(CriteriaModal, { goalId: props.id, onClose: () => setCriteriaOpen(false), onSaved: () => { setCriteriaOpen(false); load(); } })
+          : null,
       );
     }
 
     // g-77647351：回退询问理由弹窗（后→前方向拖动时）
     // 判据 4：有子代理 → 作为子代理消息补充（send_message）；无子代理 → 补充给主管
-    // g-170：质量判据编辑弹窗（方案 A）——卡片 meta 行「✏️ 判据」入口打开。
+    // g-170：质量判据编辑弹窗（方案 A）——详情弹窗「质量判据」标题处入口打开。
     // 逐行编辑/新增/删除/上移/下移；保存统一 trim/去重/1..N 重排（服务端 updateCriteria）；
     // D6：进入编辑前明确告知保存后清空该目标已有 localStorage 勾选，保存成功后清空；
     // D8：携带 base_items 乐观并发 token，409 冲突时自动以本地内容覆盖服务器重试（force=true），
@@ -3236,7 +3238,6 @@ window.__ModuleLoader__.load({
     function KanbanView(props) {
       const [state, setState] = React.useState({ loading: true });
       const [modalGoal, setModalGoal] = React.useState(null);
-      const [criteriaGoal, setCriteriaGoal] = React.useState(null); // g-170：判据编辑弹窗
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
@@ -3939,8 +3940,6 @@ window.__ModuleLoader__.load({
                     dropCommitted.current = false;
                   },
                 },
-                // g-170：卡片 meta 行「✏️ 判据」入口 → 判据编辑弹窗
-                setCriteriaGoal,
               );
             }),
           );
@@ -4117,8 +4116,6 @@ window.__ModuleLoader__.load({
                     dropCommitted.current = false;
                   },
                 },
-                // g-170：卡片 meta 行「✏️ 判据」入口 → 判据编辑弹窗
-                setCriteriaGoal,
               );
             }),
           ),
@@ -4404,10 +4401,6 @@ window.__ModuleLoader__.load({
         ...releasedRows,
         modalGoal
           ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
-          : null,
-        // g-170：判据编辑弹窗（方案 A）——保存后刷新看板
-        criteriaGoal
-          ? h(CriteriaModal, { goalId: criteriaGoal, onClose: () => setCriteriaGoal(null), onSaved: () => load() })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,

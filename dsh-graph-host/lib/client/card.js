@@ -76,8 +76,7 @@
     // expanded 默认值由 KanbanView 决定（delivered/blocked 默认 false，其余默认 true），
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
-    // g-170：onOpenCriteria 回调——卡片 meta 行「✏️ 判据」入口（打开判据编辑弹窗）
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag, onOpenCriteria) {
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag) {
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -220,13 +219,7 @@
                goalId: g.id,
                items: g.criteria_items ?? g.criteriaItems,
                count: g.criteria_count ?? g.criteriaCount,
-             }),
-             h("button", {
-               style: { ...S.btn, fontSize: 10, padding: "0 4px", marginLeft: 4, flexShrink: 0 },
-               className: "dg-btn",
-               title: "编辑质量判据（保存后清空该目标已有勾选）",
-               onClick: (e) => { e.stopPropagation(); onOpenCriteria?.(g.id); },
-             }, "✏️ 判据")),
+             })),
         );
       }
       return h(
@@ -243,12 +236,6 @@
             items: g.criteria_items ?? g.criteriaItems,
             count: g.criteria_count ?? g.criteriaCount,
           }),
-          h("button", {
-            style: { ...S.btn, fontSize: 10, padding: "0 4px", marginLeft: 4, flexShrink: 0 },
-            className: "dg-btn",
-            title: "编辑质量判据（保存后清空该目标已有勾选）",
-            onClick: (e) => { e.stopPropagation(); onOpenCriteria?.(g.id); },
-          }, "✏️ 判据"),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
         hasDep
           ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)

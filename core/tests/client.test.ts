@@ -686,14 +686,20 @@ test("g-170 set-criteria：缺 items / 非字符串数组 → 400", async () => 
 
 // ---- g-170：客户端源契约（源模块 + 生成 bundle） ----
 
-test("g-170 卡片 meta 行「✏️ 判据」入口：stopPropagation 不误触发卡片打开", () => {
+test("g-170 判据编辑入口位于详情弹窗「质量判据」标题处（负责人 2026-08-25 指示，不在看板卡片）", () => {
+  const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  // 标题处入口：sectionBlock 支持 titleExtra，质量判据小节标题右侧挂「✏️ 判据」按钮
+  assert.match(modal, /function sectionBlock\(key, title, body, extra, hideBodyWhenExtra, titleExtra\)/);
+  assert.match(modal, /"✅ 质量判据"/);
+  assert.match(modal, /"✏️ 判据"/);
+  assert.match(modal, /onClick: \(e\) => \{ e\.stopPropagation\(\); setCriteriaOpen\(true\);/);
+  assert.match(modal, /criteriaOpen, setCriteriaOpen\] = React\.useState\(false\)/);
+  // 打开 CriteriaModal 并传 onSaved 刷新详情
+  assert.match(modal, /h\(CriteriaModal, \{ goalId: props\.id, onClose: \(\) => setCriteriaOpen\(false\), onSaved: \(\) => \{ setCriteriaOpen\(false\); load\(\); \} \}\)/);
+  // 看板卡片不再有判据编辑入口（还原）
   const card = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/card.js"), "utf8");
-  assert.match(card, /onOpenCriteria/);
-  assert.match(card, /"✏️ 判据"/);
-  assert.match(card, /onClick: \(e\) => \{ e\.stopPropagation\(\); onOpenCriteria\?\.\(g\.id\);/);
-  assert.match(card, /title: "编辑质量判据（保存后清空该目标已有勾选）"/);
-  // 折叠与展开两条 meta 行都有入口
-  assert.equal((card.match(/"✏️ 判据"/g) || []).length, 2);
+  assert.doesNotMatch(card, /✏️ 判据/);
+  assert.doesNotMatch(card, /onOpenCriteria/);
 });
 
 test("g-170 判据编辑弹窗源契约：D6 清勾选告知/清空、D8 base_items 409 自动覆盖重试", () => {
@@ -716,12 +722,11 @@ test("g-170 判据编辑弹窗源契约：D6 清勾选告知/清空、D8 base_it
   assert.match(modal, /"删除该条"/);
 });
 
-test("g-170 kanban 接线：传 onOpenCriteria 给 Card 并渲染 CriteriaModal", () => {
+test("g-170 kanban 不再承载判据编辑入口（已移到详情弹窗）", () => {
   const kanban = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
-  assert.match(kanban, /const \[criteriaGoal, setCriteriaGoal\] = React\.useState\(null\)/);
-  assert.equal((kanban.match(/setCriteriaGoal,$/gm) || []).length, 2, "两处 Card 调用都传 onOpenCriteria");
-  assert.match(kanban, /h\(CriteriaModal, \{ goalId: criteriaGoal/);
-  assert.match(kanban, /onSaved: \(\) => load\(\)/);
+  assert.doesNotMatch(kanban, /criteriaGoal/);
+  assert.doesNotMatch(kanban, /CriteriaModal/);
+  assert.doesNotMatch(kanban, /✏️ 判据/);
 });
 
 test("g-170 build-client PARTS 收录 criteria-modal 且 bundle 含生成标记与弹窗代码", () => {

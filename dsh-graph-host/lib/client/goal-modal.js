@@ -291,6 +291,7 @@
       const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
       const [logFilter, setLogFilter] = React.useState(""); // "" 全部 / 事件名
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新执行的模型路由（显示兜底）
+      const [criteriaOpen, setCriteriaOpen] = React.useState(false); // g-170：判据编辑弹窗（详情内「质量判据」标题处入口）
       const [renaming, setRenaming] = React.useState(false);
       const [newTitle, setNewTitle] = React.useState("");
       const [renameNote, setRenameNote] = React.useState(null);
@@ -383,12 +384,14 @@
           const rest = t.replace(/^（待[^）]*）\s*/, "").trim();
           return { isPh: true, marker, body: rest };
         }
-        function sectionBlock(key, title, body, extra, hideBodyWhenExtra) {
+        // g-170：titleExtra 渲染在小节标题右侧（判据编辑入口用）
+        function sectionBlock(key, title, body, extra, hideBodyWhenExtra, titleExtra) {
           const { isPh, marker, body: content } = parsePlaceholder(body);
           return h("div", { key, style: S.modalSection },
             h("div", { style: S.modalH },
               title,
-              isPh && !content ? h("span", { style: { ...S.meta, fontSize: 12, marginLeft: 6, fontWeight: 400 } }, marker) : null),
+              isPh && !content ? h("span", { style: { ...S.meta, fontSize: 12, marginLeft: 6, fontWeight: 400 } }, marker) : null,
+              titleExtra ?? null),
             hideBodyWhenExtra && extra != null ? null : (isPh && !content ? null : content),
             extra ?? null);
         }
@@ -398,10 +401,17 @@
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
             h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
+          // g-170：「✏️ 判据」编辑入口放在小节标题处（负责人 2026-08-25 指示），点击打开判据编辑弹窗
           crit != null ? sectionBlock("c", "✅ 质量判据", crit,
             !isPlaceholder(crit) && ["ready", "in_progress", "review", "delivered"].includes(status)
               ? h(CriteriaChecklist, { goalId: props.id, crit, att, onClose: props.onClose })
-              : null, true) : null,
+              : null, true,
+            h("button", {
+              style: { ...S.btnPrimary, fontSize: 11, padding: "1px 6px", marginLeft: 6, verticalAlign: "middle", opacity: 1 },
+              className: "dg-btn",
+              title: "编辑质量判据（保存后清空该目标已有勾选）",
+              onClick: (e) => { e.stopPropagation(); setCriteriaOpen(true); },
+            }, "✏️ 判据")) : null,
           (d.cards ?? []).length
             ? h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🗂 信息收集"),
@@ -801,16 +811,21 @@
             deleteNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, deleteNote) : null,
             typeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, typeNote) : null);
 
-      return h(
-        "div",
-        { style: S.overlay, onClick: props.onClose },
-        // g-158：弹窗顶部边框使用类型色（与卡片左侧色条、标题 badge 同色）
-        h("div", { style: { ...S.modal, borderTop: `3px solid ${currentTypeColor}` }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: props.onClose }, "✕"),
-          titleEl,
-          headMeta,
-          livePanel,
-          content),
+      return h(React.Fragment, null,
+        h("div",
+          { style: S.overlay, onClick: props.onClose },
+          // g-158：弹窗顶部边框使用类型色（与卡片左侧色条、标题 badge 同色）
+          h("div", { style: { ...S.modal, borderTop: `3px solid ${currentTypeColor}` }, onClick: (e) => e.stopPropagation() },
+            h("span", { style: S.close, onClick: props.onClose }, "✕"),
+            titleEl,
+            headMeta,
+            livePanel,
+            content),
+        ),
+        // g-170：判据编辑弹窗（详情内「质量判据」标题处入口打开）——保存后刷新详情
+        criteriaOpen
+          ? h(CriteriaModal, { goalId: props.id, onClose: () => setCriteriaOpen(false), onSaved: () => { setCriteriaOpen(false); load(); } })
+          : null,
       );
     }
 
