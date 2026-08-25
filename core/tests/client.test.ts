@@ -890,6 +890,8 @@ test("g-168 PM 结果反馈：关闭弹窗并把动画挂在看板卡片", () =>
   assert.ok(/const cardStyle = g\._polishActive \?/.test(card));
   assert.ok(/background: "linear-gradient\(90deg/.test(card), "卡片 inline gradient 覆盖默认背景");
   assert.ok(/animation: "dg-polish-flow 2\.5s ease 1 forwards"/.test(card));
+  const flowKeyframes = /@keyframes dg-flow-bg\s*\{([\s\S]*?)\n\s*\}/.exec(constants)?.[1] ?? "";
+  assert.ok(!/opacity/.test(flowKeyframes), "dg-flow-bg 不得修改既有运行态透明度");
   assert.ok(/@keyframes dg-flow-bg[\s\S]*0% \{ background-position: 0% 50%; \}[\s\S]*50% \{ background-position: 100% 50%; \}[\s\S]*100% \{ background-position: 0% 50%; \}/.test(constants), "既有运行态 keyframe 仅平移背景");
   assert.ok(/@keyframes dg-polish-flow[\s\S]*0%, 80%[\s\S]*opacity: 1[\s\S]*100%[\s\S]*opacity: 0/.test(constants), "PM keyframe 最后 500ms 淡出");
   assert.ok(/animation: dg-flow-bg 2\.5s ease infinite/.test(constants));
