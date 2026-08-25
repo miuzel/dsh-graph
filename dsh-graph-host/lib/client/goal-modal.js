@@ -313,6 +313,9 @@
         return () => { aliveRef.current = false; clearInterval(t); };
       }, [load]);
 
+      // g-181：主 overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
+      const backdropGuard = useBackdropClose(props.onClose);
+
       const section = (body, name) => {
         const m = new RegExp(`## ${name}\\n([\\s\\S]*?)(?=\\n## |$)`).exec(body ?? "");
         return m ? m[1].trim() : null;
@@ -863,7 +866,7 @@
 
       return h(React.Fragment, null,
         h("div",
-          { style: S.overlay, onClick: props.onClose },
+          { style: S.overlay, ...backdropGuard },
           // g-158：弹窗顶部边框使用类型色（与卡片左侧色条、标题 badge 同色）
           h("div", { style: { ...S.modal, borderTop: `3px solid ${currentTypeColor}` }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: props.onClose }, "✕"),
