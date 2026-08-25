@@ -58,6 +58,9 @@
         return () => { alive = false; };
       }, []);
 
+      // g-181：backdrop 误关保护——组件顶部调用（多分支共享同一 guard，保持 Hook 顺序稳定）
+      const backdropGuard = useBackdropClose(props.onClose);
+
       const save = async () => {
         if (!form) return;
         setSaving(true); setNote(null); setError(null);
@@ -96,14 +99,14 @@
       };
 
       if (loading) {
-        return h("div", { style: S.overlay, onClick: props.onClose },
+        return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: props.onClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
             h("div", { style: { ...S.meta, marginTop: 8 } }, "正在读取配置…")));
       }
       if (!form) {
-        return h("div", { style: S.overlay, onClick: props.onClose },
+        return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: props.onClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
@@ -217,7 +220,7 @@
         return opts;
       })();
 
-      return h("div", { style: S.overlay, onClick: props.onClose },
+      return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: props.onClose }, "✕"),
           h("div", { style: S.modalH }, "看板设置"),

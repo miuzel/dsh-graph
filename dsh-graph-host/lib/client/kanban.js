@@ -496,6 +496,14 @@
         return () => clearInterval(t);
       }, [showArchived]); // showArchived 变化时重新加载
 
+      // g-181：5 个父级 overlay 的 backdrop 误关保护——内容起点后释放到 backdrop 的合成 click 吞掉。
+      // 必须在任何 early return 之前调用（Rules of Hooks），各 overlay 独立 ref，关闭回调保持原样。
+      const createGoalGuard = useBackdropClose(() => setShowCreateGoal(false));
+      const versionDetailGuard = useBackdropClose(() => { setVersionDetailTarget(null); setVersionDetailData(null); });
+      const createVersionGuard = useBackdropClose(() => setShowCreateVersion(false));
+      const renameVersionGuard = useBackdropClose(() => { setRenameVersionTarget(null); setRenameVersionNote(null); });
+      const deleteVersionGuard = useBackdropClose(() => { setDeleteVersionTarget(null); setDeleteVersionNote(null); });
+
       if (state.loading) return h("div", { style: S.wrap }, "dsh-graph 看板加载中…");
       if (state.error) return h("div", { style: S.wrap }, "看板数据获取失败：" + state.error);
       const b = state.data;
@@ -1234,7 +1242,7 @@
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal
-          ? h("div", { style: S.overlay, onClick: () => setShowCreateGoal(false) },
+          ? h("div", { style: S.overlay, ...createGoalGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowCreateGoal(false) }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "＋ 新建目标"),
@@ -1341,7 +1349,7 @@
           : null,
         // g-134/g-135: 版本详情弹窗（含摘要/范围/working/released 操作）
         versionDetailTarget
-          ? h("div", { style: S.overlay, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } },
+          ? h("div", { style: S.overlay, ...versionDetailGuard },
               h("div", { style: { ...S.modal, minWidth: 360, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } }, "✕"),
                 // g-177: 重命名按钮移到版本标题右边（跟 goal 卡片交互一致：标题行内小 ✏️）
@@ -1567,7 +1575,7 @@
           : null,
         // g-134: 创建版本泳道弹窗
         showCreateVersion
-          ? h("div", { style: S.overlay, onClick: () => setShowCreateVersion(false) },
+          ? h("div", { style: S.overlay, ...createVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowCreateVersion(false) }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "＋ 新建版本泳道"),
@@ -1605,7 +1613,7 @@
           : null,
         // g-134: 重命名版本泳道弹窗
         renameVersionTarget
-          ? h("div", { style: S.overlay, onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); } },
+          ? h("div", { style: S.overlay, ...renameVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); } }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "✏️ 重命名版本泳道"),
@@ -1644,7 +1652,7 @@
           : null,
         // g-134: 删除版本泳道确认弹窗
         deleteVersionTarget
-          ? h("div", { style: S.overlay, onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); } },
+          ? h("div", { style: S.overlay, ...deleteVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); } }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "🗑️ 删除版本泳道"),

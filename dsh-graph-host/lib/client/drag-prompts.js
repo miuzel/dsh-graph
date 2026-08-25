@@ -5,6 +5,8 @@
       const [sent, setSent] = React.useState(false);
       // 如果有子代理，通过 session.prompt 发送理由
       const { session } = useBoundSession(parentId, childId);
+      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
+      const backdropGuard = useBackdropClose(onCancel);
       const sendReason = async () => {
         if (!reason.trim()) { onConfirm(""); return; }
         if (hasChild && session?.prompt) {
@@ -22,7 +24,7 @@
           onConfirm(reason.trim());
         }
       };
-      return h("div", { style: S.overlay, onClick: onCancel },
+      return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
@@ -66,6 +68,9 @@
 
       // 有子代理时用 session.prompt 排队重新执行，无子代理时派新
       const { session: oldSession } = useBoundSession(oldParentId, oldChildId);
+
+      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
+      const backdropGuard = useBackdropClose(onCancel);
 
       const startExec = async () => {
         if (!supervisorSession) {
@@ -135,7 +140,7 @@
         setLoading(false);
       };
 
-      return h("div", { style: S.overlay, onClick: onCancel },
+      return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
@@ -177,6 +182,8 @@
     // g-77647351：交付确认弹窗——告知主管需做代码合并等交付工作，提供跳转主管会话按钮
     function DeliverPrompt(props) {
       const { goalId, goalTitle, supervisorSession, onConfirm, onCancel } = props;
+      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
+      const backdropGuard = useBackdropClose(onCancel);
       const promptText = `【交付通知】目标「${goalTitle ?? goalId}」（${goalId}）即将标记为已交付。请进行最终复核：代码合并、文档更新等交付工作。`;
       const jumpToSupervisor = async () => {
         try {
@@ -191,7 +198,7 @@
           }
         } catch { /* 静默 */ }
       };
-      return h("div", { style: S.overlay, onClick: onCancel },
+      return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },

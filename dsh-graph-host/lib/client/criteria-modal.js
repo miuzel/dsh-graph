@@ -11,6 +11,9 @@
       const [note, setNote] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
 
+      // g-181：backdrop 误关保护——组件顶部调用（多分支共享同一 guard，保持 Hook 顺序稳定）
+      const backdropGuard = useBackdropClose(onClose);
+
       // 与 core criteriaItems 同构的「N. 」编号前缀剥离（编辑行只保留原文）
       const stripNum = (s) => String(s).replace(/^\d+[.、)]\s*/, "");
 
@@ -73,14 +76,14 @@
       };
 
       if (state.loading) {
-        return h("div", { style: S.overlay, onClick: onClose },
+        return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
             h("div", { style: { ...S.meta, marginTop: 6 } }, "加载中…")));
       }
       if (state.error) {
-        return h("div", { style: S.overlay, onClick: onClose },
+        return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
@@ -93,7 +96,7 @@
         title: tip,
         onClick: (e) => { e.stopPropagation(); onClick(); },
       }, label);
-      return h("div", { style: S.overlay, onClick: onClose },
+      return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: onClose }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),

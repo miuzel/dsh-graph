@@ -445,6 +445,24 @@ window.__ModuleLoader__.load({
 
     const CARD_STATUS_ICON = { empty: "○ 待收集", collecting: "◌ 收集中", filled: "● 已填充", reviewed: "✔ 已复核" };
 
+    // g-181：父级 overlay backdrop 误关保护。根因：pointerdown 在内容、mouseup 在 backdrop 时，
+    // 浏览器把 click 派发到 overlay 自身（事件路径不经过 panel），panel 的 stopPropagation 拦不住。
+    // 仅检查 e.target === e.currentTarget 无效（该场景 click 的 target 就是 overlay）。
+    // 方案：onPointerDown 记录手势起点（e.target !== e.currentTarget = 起点在内容）；
+    // onClick 若起点在内容则清零并吞掉本次合成 click（不关闭），否则照常 onClose?.()。
+    // useRef 跨重渲染稳定（如 GoalModal 定时 load 重建内容）；pointer 事件兼容鼠标/触摸；
+    // 返回的 guard 对象 spread 到 overlay 元素上（onPointerDown/onClick 成对出现）。
+    function useBackdropClose(onClose) {
+      const insideRef = React.useRef(false);
+      return {
+        onPointerDown: (e) => { insideRef.current = e.target !== e.currentTarget; },
+        onClick: (e) => {
+          if (insideRef.current) { insideRef.current = false; e.stopPropagation(); return; }
+          onClose?.();
+        },
+      };
+    }
+
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====
     // 数据源：sessions.binding(childId).session（uSES 快照 subscribe/getSnapshot），
     // 流式行读 chat.legacy.partial（必须先 session.open()），token/上下文走投影
@@ -2387,6 +2405,9 @@ window.__ModuleLoader__.load({
         return () => { aliveRef.current = false; clearInterval(t); };
       }, [load]);
 
+      // g-181：主 overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
+      const backdropGuard = useBackdropClose(props.onClose);
+
       const section = (body, name) => {
         const m = new RegExp(`## ${name}\\n([\\s\\S]*?)(?=\\n## |$)`).exec(body ?? "");
         return m ? m[1].trim() : null;
@@ -2937,7 +2958,7 @@ window.__ModuleLoader__.load({
 
       return h(React.Fragment, null,
         h("div",
-          { style: S.overlay, onClick: props.onClose },
+          { style: S.overlay, ...backdropGuard },
           // g-158：弹窗顶部边框使用类型色（与卡片左侧色条、标题 badge 同色）
           h("div", { style: { ...S.modal, borderTop: `3px solid ${currentTypeColor}` }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: props.onClose }, "✕"),
@@ -2967,6 +2988,9 @@ window.__ModuleLoader__.load({
       const [baseItems, setBaseItems] = React.useState(null);
       const [note, setNote] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
+
+      // g-181：backdrop 误关保护——组件顶部调用（多分支共享同一 guard，保持 Hook 顺序稳定）
+      const backdropGuard = useBackdropClose(onClose);
 
       // 与 core criteriaItems 同构的「N. 」编号前缀剥离（编辑行只保留原文）
       const stripNum = (s) => String(s).replace(/^\d+[.、)]\s*/, "");
@@ -3030,14 +3054,14 @@ window.__ModuleLoader__.load({
       };
 
       if (state.loading) {
-        return h("div", { style: S.overlay, onClick: onClose },
+        return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
             h("div", { style: { ...S.meta, marginTop: 6 } }, "加载中…")));
       }
       if (state.error) {
-        return h("div", { style: S.overlay, onClick: onClose },
+        return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
@@ -3050,7 +3074,7 @@ window.__ModuleLoader__.load({
         title: tip,
         onClick: (e) => { e.stopPropagation(); onClick(); },
       }, label);
-      return h("div", { style: S.overlay, onClick: onClose },
+      return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: onClose }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
@@ -3098,6 +3122,8 @@ window.__ModuleLoader__.load({
       const [sent, setSent] = React.useState(false);
       // 如果有子代理，通过 session.prompt 发送理由
       const { session } = useBoundSession(parentId, childId);
+      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
+      const backdropGuard = useBackdropClose(onCancel);
       const sendReason = async () => {
         if (!reason.trim()) { onConfirm(""); return; }
         if (hasChild && session?.prompt) {
@@ -3115,7 +3141,7 @@ window.__ModuleLoader__.load({
           onConfirm(reason.trim());
         }
       };
-      return h("div", { style: S.overlay, onClick: onCancel },
+      return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
@@ -3159,6 +3185,9 @@ window.__ModuleLoader__.load({
 
       // 有子代理时用 session.prompt 排队重新执行，无子代理时派新
       const { session: oldSession } = useBoundSession(oldParentId, oldChildId);
+
+      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
+      const backdropGuard = useBackdropClose(onCancel);
 
       const startExec = async () => {
         if (!supervisorSession) {
@@ -3228,7 +3257,7 @@ window.__ModuleLoader__.load({
         setLoading(false);
       };
 
-      return h("div", { style: S.overlay, onClick: onCancel },
+      return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
@@ -3270,6 +3299,8 @@ window.__ModuleLoader__.load({
     // g-77647351：交付确认弹窗——告知主管需做代码合并等交付工作，提供跳转主管会话按钮
     function DeliverPrompt(props) {
       const { goalId, goalTitle, supervisorSession, onConfirm, onCancel } = props;
+      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
+      const backdropGuard = useBackdropClose(onCancel);
       const promptText = `【交付通知】目标「${goalTitle ?? goalId}」（${goalId}）即将标记为已交付。请进行最终复核：代码合并、文档更新等交付工作。`;
       const jumpToSupervisor = async () => {
         try {
@@ -3284,7 +3315,7 @@ window.__ModuleLoader__.load({
           }
         } catch { /* 静默 */ }
       };
-      return h("div", { style: S.overlay, onClick: onCancel },
+      return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
@@ -3815,6 +3846,14 @@ window.__ModuleLoader__.load({
         const t = setInterval(load, 15000);
         return () => clearInterval(t);
       }, [showArchived]); // showArchived 变化时重新加载
+
+      // g-181：5 个父级 overlay 的 backdrop 误关保护——内容起点后释放到 backdrop 的合成 click 吞掉。
+      // 必须在任何 early return 之前调用（Rules of Hooks），各 overlay 独立 ref，关闭回调保持原样。
+      const createGoalGuard = useBackdropClose(() => setShowCreateGoal(false));
+      const versionDetailGuard = useBackdropClose(() => { setVersionDetailTarget(null); setVersionDetailData(null); });
+      const createVersionGuard = useBackdropClose(() => setShowCreateVersion(false));
+      const renameVersionGuard = useBackdropClose(() => { setRenameVersionTarget(null); setRenameVersionNote(null); });
+      const deleteVersionGuard = useBackdropClose(() => { setDeleteVersionTarget(null); setDeleteVersionNote(null); });
 
       if (state.loading) return h("div", { style: S.wrap }, "dsh-graph 看板加载中…");
       if (state.error) return h("div", { style: S.wrap }, "看板数据获取失败：" + state.error);
@@ -4554,7 +4593,7 @@ window.__ModuleLoader__.load({
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal
-          ? h("div", { style: S.overlay, onClick: () => setShowCreateGoal(false) },
+          ? h("div", { style: S.overlay, ...createGoalGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowCreateGoal(false) }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "＋ 新建目标"),
@@ -4661,7 +4700,7 @@ window.__ModuleLoader__.load({
           : null,
         // g-134/g-135: 版本详情弹窗（含摘要/范围/working/released 操作）
         versionDetailTarget
-          ? h("div", { style: S.overlay, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } },
+          ? h("div", { style: S.overlay, ...versionDetailGuard },
               h("div", { style: { ...S.modal, minWidth: 360, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } }, "✕"),
                 // g-177: 重命名按钮移到版本标题右边（跟 goal 卡片交互一致：标题行内小 ✏️）
@@ -4887,7 +4926,7 @@ window.__ModuleLoader__.load({
           : null,
         // g-134: 创建版本泳道弹窗
         showCreateVersion
-          ? h("div", { style: S.overlay, onClick: () => setShowCreateVersion(false) },
+          ? h("div", { style: S.overlay, ...createVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowCreateVersion(false) }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "＋ 新建版本泳道"),
@@ -4925,7 +4964,7 @@ window.__ModuleLoader__.load({
           : null,
         // g-134: 重命名版本泳道弹窗
         renameVersionTarget
-          ? h("div", { style: S.overlay, onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); } },
+          ? h("div", { style: S.overlay, ...renameVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); } }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "✏️ 重命名版本泳道"),
@@ -4964,7 +5003,7 @@ window.__ModuleLoader__.load({
           : null,
         // g-134: 删除版本泳道确认弹窗
         deleteVersionTarget
-          ? h("div", { style: S.overlay, onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); } },
+          ? h("div", { style: S.overlay, ...deleteVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); } }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "🗑️ 删除版本泳道"),
@@ -5056,6 +5095,9 @@ window.__ModuleLoader__.load({
         return () => { alive = false; };
       }, []);
 
+      // g-181：backdrop 误关保护——组件顶部调用（多分支共享同一 guard，保持 Hook 顺序稳定）
+      const backdropGuard = useBackdropClose(props.onClose);
+
       const save = async () => {
         if (!form) return;
         setSaving(true); setNote(null); setError(null);
@@ -5094,14 +5136,14 @@ window.__ModuleLoader__.load({
       };
 
       if (loading) {
-        return h("div", { style: S.overlay, onClick: props.onClose },
+        return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: props.onClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
             h("div", { style: { ...S.meta, marginTop: 8 } }, "正在读取配置…")));
       }
       if (!form) {
-        return h("div", { style: S.overlay, onClick: props.onClose },
+        return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { style: S.close, onClick: props.onClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
@@ -5215,7 +5257,7 @@ window.__ModuleLoader__.load({
         return opts;
       })();
 
-      return h("div", { style: S.overlay, onClick: props.onClose },
+      return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
           h("span", { style: S.close, onClick: props.onClose }, "✕"),
           h("div", { style: S.modalH }, "看板设置"),

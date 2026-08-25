@@ -153,4 +153,22 @@
 
     const CARD_STATUS_ICON = { empty: "○ 待收集", collecting: "◌ 收集中", filled: "● 已填充", reviewed: "✔ 已复核" };
 
+    // g-181：父级 overlay backdrop 误关保护。根因：pointerdown 在内容、mouseup 在 backdrop 时，
+    // 浏览器把 click 派发到 overlay 自身（事件路径不经过 panel），panel 的 stopPropagation 拦不住。
+    // 仅检查 e.target === e.currentTarget 无效（该场景 click 的 target 就是 overlay）。
+    // 方案：onPointerDown 记录手势起点（e.target !== e.currentTarget = 起点在内容）；
+    // onClick 若起点在内容则清零并吞掉本次合成 click（不关闭），否则照常 onClose?.()。
+    // useRef 跨重渲染稳定（如 GoalModal 定时 load 重建内容）；pointer 事件兼容鼠标/触摸；
+    // 返回的 guard 对象 spread 到 overlay 元素上（onPointerDown/onClick 成对出现）。
+    function useBackdropClose(onClose) {
+      const insideRef = React.useRef(false);
+      return {
+        onPointerDown: (e) => { insideRef.current = e.target !== e.currentTarget; },
+        onClick: (e) => {
+          if (insideRef.current) { insideRef.current = false; e.stopPropagation(); return; }
+          onClose?.();
+        },
+      };
+    }
+
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====
