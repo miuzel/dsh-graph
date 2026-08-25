@@ -4441,7 +4441,7 @@ window.__ModuleLoader__.load({
                 onClick: () => setBlockedColumnCollapsed((p) => !p),
                 title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
               }, blockedColumnCollapsed
-                ? h(React.Fragment, null, "阻", h("br"), "塞")
+                ? "▸"
                 : s.label + " ▾");
             }
             // g-156：deliver 列头可点击切换折叠/展开（与 blocked 一致的交互）
@@ -4454,7 +4454,7 @@ window.__ModuleLoader__.load({
                 onClick: () => setDeliverColumnCollapsed((p) => !p),
                 title: deliverColumnCollapsed ? "点击展开交付列" : "点击收起交付列",
               }, deliverColumnCollapsed
-                ? h(React.Fragment, null, "交", h("br"), "付")
+                ? "▸"
                 : s.label + " ▾");
             }
             return h("div", { key: s.key, style: S.stageHead }, s.label);
