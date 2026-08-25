@@ -1270,7 +1270,10 @@ test("g-171 模块源契约：kanban.js 复用现有 load/15s 轮询做 10 秒�
   assert.ok(!/setInterval\(load, [1-9]000\)/.test(kanban.replace("setInterval(load, 15000)", "")), "不新增其他轮询频率");
   assert.ok(!/new WebSocket|EventSource/.test(kanban), "不新增 WebSocket/SSE");
   // 详情弹窗关闭触发一次 load()
-  assert.ok(/onClose: \(\) => \{ setModalGoal\(null\); load\(\); \}/.test(kanban), "详情弹窗关闭触发一次 load()");
+  assert.ok(/onClose: \(\) => \{ modalGoalRef\.current = null; setModalGoal\(null\); load\(\); \}/.test(kanban), "详情弹窗关闭触发一次 load()");
+  // g-171 回退修复：弹窗打开期间跳过播放（不消费 token），关闭后补播窗口内目标
+  assert.ok(/const modalGoalRef = React\.useRef\(null\);[\s\S]*modalGoalRef\.current = modalGoal/.test(kanban), "modalGoalRef 镜像弹窗状态供 load 闭包判定");
+  assert.ok(/if \(modalGoalRef\.current\) return;[\s\S]*const gen = Date\.parse\(data\.generated_at\)/.test(kanban), "弹窗打开期间跳过播放，关闭后 load() 补播");
   // 卡片透传 _updateEmphasis
   assert.ok(/_updateEmphasis: updateEmphasis\[g\.id\] \?\? null/.test(kanban), "Card 透传 _updateEmphasis");
 });
@@ -1304,7 +1307,8 @@ test("g-171 生成 bundle 契约：client.js 含更新强调逻辑且保留 gene
   assert.ok(/dg-update-sheen-bar/.test(bundle), "生成 bundle: 含扫光条");
   assert.ok(/dg-update-fade/.test(bundle), "生成 bundle: 含 fade keyframe");
   assert.ok(/prefers-reduced-motion: reduce/.test(bundle), "生成 bundle: 含 reduced-motion 降级");
-  assert.ok(/onClose: \(\) => \{ setModalGoal\(null\); load\(\); \}/.test(bundle), "生成 bundle: 弹窗关闭触发 load()");
+  assert.ok(/onClose: \(\) => \{ modalGoalRef\.current = null; setModalGoal\(null\); load\(\); \}/.test(bundle), "生成 bundle: 弹窗关闭触发 load()");
+  assert.ok(/modalGoalRef\.current = modalGoal/.test(bundle), "生成 bundle: modalGoalRef 镜像弹窗状态");
   assert.ok(/setInterval\(load, 15000\)/.test(bundle), "生成 bundle: 保留 15 秒轮询");
   assert.ok(/safeAge >= 10000/.test(bundle), "生成 bundle: 负 age 容忍（同秒修改补播）");
 });

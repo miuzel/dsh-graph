@@ -1,4 +1,10 @@
       const [modalGoal, setModalGoal] = React.useState(null);
+      // g-171 回退修复：镜像 modalGoal 供 load 闭包判定（load 被 15s 轮询闭包捕获，
+      // 直接读 state 会拿到首次渲染的 null）。详情弹窗打开期间跳过更新强调播放，
+      // 避免轮询/保存触发的 load 在弹窗遮罩下抢播并消费 token；关闭弹窗后由
+      // onClose 的 load() 补播窗口内目标。
+      const modalGoalRef = React.useRef(null);
+      modalGoalRef.current = modalGoal;
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
@@ -404,6 +410,10 @@
       // 只复用现有 load()（首次/手动刷新/写操作后）与 15 秒轮询，不新增任何数据通道。
       const applyUpdateEmphasis = (data) => {
         if (!data || typeof data.generated_at !== "string") return;
+        // g-171 回退修复：详情弹窗打开期间跳过播放（弹窗遮罩盖住看板，此时播放
+        // 用户看不到，还会消费 token 导致关闭弹窗后不重播）；关闭弹窗时
+        // onClose 置空 modalGoalRef 并 load()，窗口内目标随后补播。
+        if (modalGoalRef.current) return;
         const gen = Date.parse(data.generated_at);
         if (!Number.isFinite(gen)) return;
         const allGoals = [
@@ -1173,7 +1183,7 @@
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
