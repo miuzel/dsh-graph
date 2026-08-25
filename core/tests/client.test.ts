@@ -852,6 +852,15 @@ test("g-168 活跃 attempt 回归：历史 completed/空闲不隐藏入口", () 
   assert.equal(isActive([{ executor: "agent:executor", result: "pending", status_line: "正在执行定义润色" }]), true);
 });
 
+test("g-168 复制失败 fallback：初始隐藏且只在失败后显示可复制请求", () => {
+  const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  assert.ok(/const \[fallback, setFallback\] = React\.useState\(false\)/.test(actions));
+  assert.ok(/setFallback\(!copied\)/.test(actions));
+  assert.ok(/fallback \? h\("textarea"/.test(actions));
+  assert.ok(/readOnly:\s*true[\s\S]*value:\s*request/.test(actions));
+  assert.ok(!/h\("pre"[\s\S]*request/.test(actions), "初始界面不展示大段 prefill");
+});
+
 test("g-168 host prompt 契约：PM 读取 goal.md 并附带指导意见", () => {
   const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
   assert.ok(/const \{ goal, goal_path, guidance \}/.test(host));

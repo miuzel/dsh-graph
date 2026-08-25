@@ -1597,6 +1597,7 @@ window.__ModuleLoader__.load({
       const [guidance, setGuidance] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
+      const [fallback, setFallback] = React.useState(false);
       const allowed = ["draft", "planning", "collecting", "ready"];
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       if (!allowed.includes(status) || hasActiveAttempt) return null;
@@ -1610,7 +1611,8 @@ window.__ModuleLoader__.load({
           const copied = await copyText(request);
           rt.open?.(supervisorSession); activateChatTab();
           setMode("supervisor");
-          setNote(copied ? "✅ 请求已复制，已打开主管会话，请粘贴发送" : "⚠️ 自动复制失败，请手动复制下方预览");
+           setFallback(!copied);
+          setNote(copied ? "✅ 请求已复制，已打开主管会话，请粘贴发送" : "⚠️ 自动复制失败，请手动复制下方请求");
         } catch (e) { setNote("⚠️ 主管路径失败：" + String(e?.message ?? e)); }
         setLoading(false);
       };
@@ -1632,7 +1634,8 @@ window.__ModuleLoader__.load({
           h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
             h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: openSupervisor }, "发送给主管（复制请求）"),
             h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: askPm }, "交给产品经理 Agent")),
-          note ? h("div", { style: S.meta }, note) : null) : null);
+          note ? h("div", { style: S.meta }, note) : null,
+          fallback ? h("textarea", { readOnly: true, value: request, style: { ...S.promptInput, minHeight: 72, resize: "vertical", fontFamily: "monospace", fontSize: 11 }, "aria-label": "定义润色请求手动复制内容" }) : null) : null);
     }
 
     // g-109：目标描述区执行/反馈交互组件（执行按钮直接创建子代理；接受默认经主管 Agent 复核，
