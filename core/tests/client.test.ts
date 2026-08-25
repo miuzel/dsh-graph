@@ -1287,7 +1287,9 @@ test("g-171 模块源契约：card.js 折叠/展开路径都挂载金属光泽�
   assert.ok(/const updateSheen = g\._updateEmphasis \? h\("div"/.test(card), "更新强调浮层元素");
   assert.ok(/className: "dg-update-sheen"/.test(card), "浮层使用 dg-update-sheen class");
   assert.ok(/className: "dg-update-sheen-bar"/.test(card), "浮层内扫光条使用 dg-update-sheen-bar class");
-  assert.ok(/animationDuration: g\._updateEmphasis\.remaining \+ "ms"/.test(card), "动画时长 = 剩余毫秒");
+  // g-171 回退修复：动画时长走内联 animation（不依赖 class 的 animation，避免
+  // prefers-reduced-motion 的 !important 以外问题；且时长精确由内联控制）
+  assert.ok(/animation: "dg-update-fade " \+ g\._updateEmphasis\.remaining \+ "ms linear forwards"/.test(card), "动画时长 = 剩余毫秒（内联 animation）");
   assert.equal((card.match(/updateSheen,/g) ?? []).length, 2, "折叠/展开两条路径都挂载浮层");
   assert.equal((card.match(/style: cardStyle, className: dragClass/g) ?? []).length, 2, "折叠/展开路径都使用卡片样式（布局不变）");
   assert.ok(/g\._polishActive \? \{ \.\.\.style, position: "relative", animation: "none" \} : g\._updateEmphasis \? \{ \.\.\.style, position: "relative" \} : style/.test(card), "更新强调时卡片提供定位锚点且不改变 g-168 语义");
@@ -1300,6 +1302,12 @@ test("g-171 模块源契约：constants.js 含扫光/fade keyframe 与 reduced-m
   assert.ok(/\.dg-update-sheen \{[\s\S]*pointer-events: none/.test(constants), "浮层不拦截交互");
   assert.ok(/\.dg-update-sheen-bar \{[\s\S]*animation: dg-update-sheen-sweep 1\.6s linear infinite/.test(constants), "扫光条循环");
   assert.ok(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.dg-update-sheen, \.dg-update-sheen-bar \{ animation: none !important; \}/.test(constants), "reduced-motion 禁用动画");
+  // g-171 回退修复：reduced-motion 下浮层降级为静态斜向金属光泽高光可见（不隐藏——
+  // 原 opacity:0 导致系统开"减少动态效果"时更新强调完全不可见；也不用纯色整条填充
+  // 避免误判为类型色改变）——135° 对角线渐变直接画一宽一细两条高光（细亮线+宽柔光带，
+  // 中间暗间隙分隔+两侧羽化），不用旋转子条（stop 沿 5px 水平分布像素太少）
+  assert.ok(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.dg-update-sheen \{[\s\S]*background: linear-gradient\(135deg,[\s\S]*rgba\(255,255,255,\.95\) 45%[\s\S]*rgba\(255,255,255,\.6\) 72%[\s\S]*\.dg-update-sheen-bar \{ display: none; \}/.test(constants), "reduced-motion 降级为静态斜向金属光泽高光（135° 对角线双峰）而非隐藏");
+  assert.ok(!/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.dg-update-sheen \{ opacity: 0; \}/.test(constants), "reduced-motion 不再把浮层 opacity 置 0");
 });
 
 test("g-171 生成 bundle 契约：client.js 含更新强调逻辑且保留 generated header", () => {
@@ -1311,6 +1319,7 @@ test("g-171 生成 bundle 契约：client.js 含更新强调逻辑且保留 gene
   assert.ok(/dg-update-sheen-bar/.test(bundle), "生成 bundle: 含扫光条");
   assert.ok(/dg-update-fade/.test(bundle), "生成 bundle: 含 fade keyframe");
   assert.ok(/prefers-reduced-motion: reduce/.test(bundle), "生成 bundle: 含 reduced-motion 降级");
+  assert.ok(/linear-gradient\(135deg,[\s\S]*rgba\(255,255,255,\.95\) 45%[\s\S]*rgba\(255,255,255,\.6\) 72%/.test(bundle), "生成 bundle: reduced-motion 降级为静态斜向金属光泽高光（135° 对角线双峰）");
   assert.ok(/onClose: \(\) => \{ forceReplayRef\.current = \{ goalId: modalGoal, openTs: modalGoalOpenTsRef\.current \}/.test(bundle), "生成 bundle: 弹窗关闭触发 load() 并记录强制补播");
   assert.ok(/modalGoalRef\.current = modalGoal/.test(bundle), "生成 bundle: modalGoalRef 镜像弹窗状态");
   assert.ok(/applyForceReplay/.test(bundle), "生成 bundle: 含关闭弹窗强制补播");

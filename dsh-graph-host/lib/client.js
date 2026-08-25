@@ -207,7 +207,24 @@ window.__ModuleLoader__.load({
        }
        @media (prefers-reduced-motion: reduce) {
          .dg-update-sheen, .dg-update-sheen-bar { animation: none !important; }
-         .dg-update-sheen { opacity: 0; }
+         /* g-171 回退修复：reduced-motion 下不隐藏浮层（原 opacity:0 导致用户系统开
+            "减少动态效果"时动画完全不可见）。降级为静态斜向金属光泽高光——135° 对角线
+            渐变直接在浮层上画"一宽一细两条高光"（细亮线 + 宽柔光带，中间暗间隙分隔，
+            两侧羽化）。不用旋转子条（stop 沿 5px 水平方向分布像素太少，羽化无余地）；
+            135° 渐变轴沿浮层对角线（长度≈卡片高度），stop 百分比有足够像素跨度。
+            不用纯色整条填充（避免误判为类型色改变）。 */
+         .dg-update-sheen {
+           background: linear-gradient(135deg,
+             rgba(255,255,255,0) 0%,
+             rgba(255,255,255,0) 35%,
+             rgba(255,255,255,.95) 45%,
+             rgba(255,255,255,0) 52%,
+             rgba(255,255,255,.35) 62%,
+             rgba(255,255,255,.6) 72%,
+             rgba(255,255,255,0) 85%,
+             rgba(255,255,255,0) 100%);
+         }
+         .dg-update-sheen-bar { display: none; }
        }
        @keyframes dg-pulse {
         0%, 100% { opacity: 1; transform: scale(1); }
@@ -1099,11 +1116,14 @@ window.__ModuleLoader__.load({
 
       // g-171：更新强调——左侧类型色边框上的金属光泽浮层（10 秒生命周期内循环扫光并淡出）。
       // 折叠/展开两条路径都挂载同一浮层；pointer-events:none + aria-hidden，不改变布局/点击/拖拽。
+      // 实现采用内联 animation（不依赖 .dg-update-sheen class 的 opacity），避免
+      // prefers-reduced-motion 把浮层整体 opacity:0 隐藏——"哪个目标被更新"是功能性信息，
+      // 降级为静态可见而非完全消失（g-171 回退修复：用户系统开减少动态效果导致动画不可见）。
       const updateSheen = g._updateEmphasis ? h("div", {
         key: "update-sheen-" + g._updateEmphasis.token,
         className: "dg-update-sheen",
         "aria-hidden": "true",
-        style: { animationDuration: g._updateEmphasis.remaining + "ms" },
+        style: { animation: "dg-update-fade " + g._updateEmphasis.remaining + "ms linear forwards" },
       }, h("div", { className: "dg-update-sheen-bar" })) : null;
 
 
