@@ -117,7 +117,7 @@
 
     // g-168：定义/润色入口。两条路径都只产生建议，不改目标或状态。
     function DefinitionPolish(props) {
-      const { goalId, goalPath, supervisorSession, status, attempts } = props;
+      const { goalId, goalPath, supervisorSession, status, attempts, onPmStarted, onPmFinished, onClose } = props;
       const [mode, setMode] = React.useState("idle"); // idle | supervisor | pm
       const [guidance, setGuidance] = React.useState("");
       const [note, setNote] = React.useState(null);
@@ -144,7 +144,9 @@
       };
       const askPm = async () => {
         const startedAt = Date.now();
+        onPmStarted?.(goalId);
         setLoading(true); setMode("pm"); setNote("⏳ 产品经理 Agent 正在处理…");
+        onClose?.();
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/define-polish"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: goalId, goal_path: goalPath, guidance: guidance.trim() }) });
           const data = await r.json();
@@ -155,6 +157,7 @@
           // spawnChild 通常很快返回；保持 accepted-running 动画至少一小段可观察时间。
           const remaining = Math.max(0, 700 - (Date.now() - startedAt));
           if (remaining) await new Promise((resolve) => setTimeout(resolve, remaining));
+          onPmFinished?.(goalId);
           setLoading(false);
         }
       };
@@ -335,6 +338,7 @@
           }, "🚀 执行"),
           h(DefinitionPolish, {
             goalId, goalPath: props.goalPath, supervisorSession, status, events, attempts,
+            onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose,
           })),
         // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
         acceptState === "objection"

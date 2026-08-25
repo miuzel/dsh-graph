@@ -1086,6 +1086,7 @@ window.__ModuleLoader__.load({
         drag?.active ? " dg-dragging" : "",
         drag?.marker === "before" ? " dg-drop-before" : "",
         drag?.marker === "after" ? " dg-drop-after" : "",
+        g._polishActive ? " dg-running-flow" : "",
       ].filter(Boolean).join(" ");
       // g-77647351：拖放事件 props
       const dragProps = drag ? {
@@ -1592,7 +1593,7 @@ window.__ModuleLoader__.load({
 
     // g-168：定义/润色入口。两条路径都只产生建议，不改目标或状态。
     function DefinitionPolish(props) {
-      const { goalId, goalPath, supervisorSession, status, attempts } = props;
+      const { goalId, goalPath, supervisorSession, status, attempts, onPmStarted, onPmFinished, onClose } = props;
       const [mode, setMode] = React.useState("idle"); // idle | supervisor | pm
       const [guidance, setGuidance] = React.useState("");
       const [note, setNote] = React.useState(null);
@@ -1619,7 +1620,9 @@ window.__ModuleLoader__.load({
       };
       const askPm = async () => {
         const startedAt = Date.now();
+        onPmStarted?.(goalId);
         setLoading(true); setMode("pm"); setNote("⏳ 产品经理 Agent 正在处理…");
+        onClose?.();
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/define-polish"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: goalId, goal_path: goalPath, guidance: guidance.trim() }) });
           const data = await r.json();
@@ -1630,6 +1633,7 @@ window.__ModuleLoader__.load({
           // spawnChild 通常很快返回；保持 accepted-running 动画至少一小段可观察时间。
           const remaining = Math.max(0, 700 - (Date.now() - startedAt));
           if (remaining) await new Promise((resolve) => setTimeout(resolve, remaining));
+          onPmFinished?.(goalId);
           setLoading(false);
         }
       };
@@ -1810,6 +1814,7 @@ window.__ModuleLoader__.load({
           }, "🚀 执行"),
           h(DefinitionPolish, {
             goalId, goalPath: props.goalPath, supervisorSession, status, events, attempts,
+            onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose,
           })),
         // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
         acceptState === "objection"
@@ -2352,7 +2357,7 @@ window.__ModuleLoader__.load({
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
-            h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load })) : null,
+            h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           crit != null ? sectionBlock("c", "✅ 质量判据", crit,
             !isPlaceholder(crit) && ["ready", "in_progress", "review", "delivered"].includes(status)
@@ -3000,6 +3005,7 @@ window.__ModuleLoader__.load({
     function KanbanView(props) {
       const [state, setState] = React.useState({ loading: true });
       const [modalGoal, setModalGoal] = React.useState(null);
+      const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
       // g-125：delivered/blocked 卡片展开完整视图的开关（默认折叠精简）
@@ -3604,7 +3610,7 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag.overGoalId === g.id;
-              return Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _polishActive: polishGoal === g.id }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -3785,7 +3791,7 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
-              return Card(g, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _polishActive: polishGoal === g.id }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -4072,7 +4078,7 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => setModalGoal(null), onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,

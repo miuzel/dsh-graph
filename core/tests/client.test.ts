@@ -874,6 +874,20 @@ test("g-168 交互反馈：主管复制成功 toast 与 PM 润色动画", () => 
   assert.ok(/finally \{[\s\S]*setLoading\(false\)/.test(actions), "成功/业务失败/异常均最终解除 loading");
 });
 
+test("g-168 PM 结果反馈：关闭弹窗并把动画挂在看板卡片", () => {
+  const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+  const card = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/card.js"), "utf8");
+  assert.ok(/onPmStarted\?\.\(goalId\)/.test(actions));
+  assert.ok(/onClose\?\.\(\)/.test(actions), "PM 点击后关闭详情弹窗");
+  assert.ok(/onPmFinished\?\.\(goalId\)/.test(actions));
+  assert.ok(/onPmStarted: props\.onPmStarted[\s\S]*onPmFinished: props\.onPmFinished/.test(modal));
+  assert.ok(/onPmStarted: setPolishGoal[\s\S]*onPmFinished: \(\) => setPolishGoal\(null\)/.test(kanban));
+  assert.ok(/_polishActive: polishGoal === g\.id/.test(kanban));
+  assert.ok(/g\._polishActive \? " dg-running-flow"/.test(card), "动画 class 挂在 goal card");
+});
+
 test("g-168 host prompt 契约：PM 读取 goal.md 并附带指导意见", () => {
   const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
   assert.ok(/const \{ goal, goal_path, guidance \}/.test(host));

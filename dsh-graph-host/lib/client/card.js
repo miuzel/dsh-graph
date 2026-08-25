@@ -130,6 +130,7 @@
         drag?.active ? " dg-dragging" : "",
         drag?.marker === "before" ? " dg-drop-before" : "",
         drag?.marker === "after" ? " dg-drop-after" : "",
+        g._polishActive ? " dg-running-flow" : "",
       ].filter(Boolean).join(" ");
       // g-77647351：拖放事件 props
       const dragProps = drag ? {
