@@ -170,10 +170,15 @@ window.__ModuleLoader__.load({
       .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); }
       /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */
       @keyframes dg-flow-bg {
-         0%, 80% { background-position: 0% 50%; opacity: 1; }
-        100% { background-position: 100% 50%; opacity: 0; }
+         0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+         100% { background-position: 0% 50%; }
               }
-      @keyframes dg-pulse {
+      @keyframes dg-polish-flow {
+         0%, 80% { background-position: 0% 50%; opacity: 1; }
+         100% { background-position: 100% 50%; opacity: 0; }
+       }
+       @keyframes dg-pulse {
         0%, 100% { opacity: 1; transform: scale(1); }
         50% { opacity: 0.45; transform: scale(1.25); }
       }
@@ -1052,7 +1057,7 @@ window.__ModuleLoader__.load({
          ...style,
          background: "linear-gradient(90deg, rgba(76,141,255,.18), rgba(58,166,117,.34), rgba(76,141,255,.18))",
          backgroundSize: "200% 100%",
-         animation: "dg-flow-bg 2.5s ease 1 forwards",
+         animation: "dg-polish-flow 2.5s ease 1 forwards",
          borderTop: "1px solid rgba(76,141,255,.85)",
          borderRight: "1px solid rgba(76,141,255,.65)",
          borderBottom: "1px solid rgba(76,141,255,.85)",
@@ -1651,7 +1656,7 @@ window.__ModuleLoader__.load({
       const pmStyle = pmRunning ? {
         border: "1px solid rgba(76,141,255,.75)", borderRadius: 4, padding: "2px 6px",
         background: "linear-gradient(90deg, rgba(76,141,255,.16), rgba(58,166,117,.30), rgba(76,141,255,.16))",
-        backgroundSize: "200% 100%", animation: "dg-flow-bg 2.5s ease 1 forwards",
+        backgroundSize: "200% 100%", animation: "dg-polish-flow 2.5s ease 1 forwards",
       } : undefined;
       return h("div", { className: pmRunning ? "dg-running-flow" : undefined, style: pmStyle },
 

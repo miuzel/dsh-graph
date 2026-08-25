@@ -165,7 +165,7 @@
       const pmStyle = pmRunning ? {
         border: "1px solid rgba(76,141,255,.75)", borderRadius: 4, padding: "2px 6px",
         background: "linear-gradient(90deg, rgba(76,141,255,.16), rgba(58,166,117,.30), rgba(76,141,255,.16))",
-        backgroundSize: "200% 100%", animation: "dg-flow-bg 2.5s ease 1 forwards",
+        backgroundSize: "200% 100%", animation: "dg-polish-flow 2.5s ease 1 forwards",
       } : undefined;
       return h("div", { className: pmRunning ? "dg-running-flow" : undefined, style: pmStyle },
 
