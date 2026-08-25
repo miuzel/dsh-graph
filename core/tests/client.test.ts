@@ -1320,9 +1320,14 @@ test("g-176 共享样式 token 化：S/HOVER_CSS 使用 DSH 主题变量并保�
   assert.match(helpers, /overlay: \{[\s\S]*?var\(--dsw-alias-bg-mask-1, rgba\(0,0,0,\.55\)\)/);
   // 按钮四族：普通/主要/危险/接受 文字色主题化（fallback 原暗色）
   assert.match(helpers, /btn: \{[\s\S]*?var\(--dsw-alias-interactive-bg-hover-solid, rgba\(128,128,128,\.15\)\)/);
-  assert.match(helpers, /btnPrimary: \{[\s\S]*?var\(--dsw-alias-state-business-primary, #8ab4ff\)/);
+  // g-176 follow-up：主要/接受按钮 = tertiary 淡底 + label-primary 文字（浅色高对比克制），语义由 primary 边框保留
+  assert.match(helpers, /btnPrimary: \{[\s\S]*?var\(--dsw-alias-state-business-tertiary, rgba\(76,141,255,\.18\)\)/);
+  assert.match(helpers, /btnPrimary: \{[\s\S]*?color: "var\(--dsw-alias-label-primary, #8ab4ff\)"/);
+  assert.match(helpers, /btnPrimary: \{[\s\S]*?border: "1px solid var\(--dsw-alias-state-business-primary, rgba\(76,141,255,\.40\)\)"/);
   assert.match(helpers, /btnDanger: \{[\s\S]*?var\(--dsw-alias-state-error-primary, #f08080\)/);
-  assert.match(helpers, /btnAccept: \{[\s\S]*?var\(--dsw-alias-state-success-primary, #6ee7a0\)/);
+  assert.match(helpers, /btnAccept: \{[\s\S]*?var\(--dsw-alias-state-success-tertiary, rgba\(58,166,117,\.18\)\)/);
+  assert.match(helpers, /btnAccept: \{[\s\S]*?color: "var\(--dsw-alias-label-primary, #6ee7a0\)"/);
+  assert.match(helpers, /btnAccept: \{[\s\S]*?border: "1px solid var\(--dsw-alias-state-success-primary, rgba\(58,166,117,\.40\)\)"/);
   // 选择控件/输入/主管栏背景主题化
   assert.match(helpers, /select: \{[\s\S]*?var\(--dsw-alias-bg-layer-2, rgba\(30,31,36,\.92\)\)/);
   assert.match(helpers, /selectOption: \{ background: "var\(--dsw-alias-bg-layer-3, #222328\)"/);
@@ -1357,11 +1362,17 @@ test("g-176 局部硬编码例外逐项主题化：设置/版本操作/tab/卡�
   assert.match(kanban, /background: "var\(--dsw-alias-bg-layer-3, #2a2b31\)"/);
   assert.match(settings, /background: "var\(--dsw-alias-bg-layer-3, #2a2b31\)"/);
   // tab 选中色与版本操作/卡片/抽屉语义色主题化（不再残留浅色不可读的亮色文字）
-  assert.match(modal, /tab === "detail" \? "var\(--dsw-alias-state-business-primary, #8ab4ff\)" : "inherit"/);
+  // g-176 follow-up：tabs 选中改 label-primary（克制），成功类文字不再用亮绿
+  assert.match(modal, /tab === "detail" \? "var\(--dsw-alias-label-primary, #8ab4ff\)" : "inherit"/);
   assert.doesNotMatch(modal, /color: "#8ab4ff"/);
+  assert.doesNotMatch(modal, /color: "var\(--dsw-alias-state-success-primary, #3aa675\)"/);
+  assert.doesNotMatch(card, /color: "var\(--dsw-alias-state-success-primary, #3aa675\)"/);
   assert.doesNotMatch(kanban, /color: "#ff6b6b"|color: "#ff9800"|color: "#4caf50"/);
   assert.doesNotMatch(card, /color: "#e0a53a"|color: "#3aa675"|color: "#d66"/);
   assert.doesNotMatch(drawer, /color: "#d66"/);
+  // 版本操作 released/恢复按钮文字克制化为 label-primary（语义色保留在边框/底色）
+  assert.match(kanban, /color: "var\(--dsw-alias-label-primary, #4caf50\)"/);
+  assert.match(kanban, /color: "var\(--dsw-alias-label-primary, #ff9800\)"/);
   // 实心危险按钮（红底白字）与卡片左栏语义色保留（两主题均可用，非暗色例外）
   assert.match(kanban, /background: "#e74c3c", color: "#fff"/);
 });
