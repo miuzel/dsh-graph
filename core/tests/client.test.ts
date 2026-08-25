@@ -276,12 +276,27 @@ test("g-164 released 泳道与 active/version 泳道共用同一动态列模板�
   assert.match(source, /const gridCols = \["130px",/);
   assert.match(source, /deliverColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ deliver/);
   assert.match(source, /blockedColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ blocked/);
-  // 顶部表头网格：(1) 处使用 gridCols。
-  assert.match(source, /h\("div", \{ style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \} \},\s*\n\s*h\("div", \{ style: S\.stageHead \}, "泳道＼阶段"\)/);
+  // 顶部表头网格：(1) 处使用 gridCols；首个单元格为左上角 stageHead 锚点
+  //（g-174 起承载「＋ 新建版本」入口，替换原「泳道＼阶段」文字）。
+  assert.match(source, /h\("div", \{ style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \} \},[\s\S]*?h\("div", \{ style: S\.stageHead \},\s*\n\s*h\("button", \{[\s\S]*?\}, "＋ 新建版本"\)\)/);
   // released 泳道网格：(1) 处使用 gridCols（relx- 容器），保证与上方泳道列宽/顺序一致。
   assert.match(source, /relx-" \+ v\.slug, style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \}/);
   // 全文件恰好两处（顶部表头 + released 泳道）引用该共享模板，不存在各排各的静态模板。
   assert.equal((source.match(/gridTemplateColumns: gridCols/g) || []).length, 2);
+});
+
+test("g-174 标题栏源契约：version 链接、新建版本入口迁移、设置按钮位于 DEBUG 左侧", () => {
+  const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
+  const head = source.slice(source.indexOf('h("div", { style: S.head },'), source.indexOf("// g-108：顶部 supervisor 状态栏"));
+  // 标题栏显示插件版本链接，新标签打开插件官网。
+  assert.match(head, /href: "https:\/\/github\.com\/miuzel\/dsh-graph",\s*\n\s*target: "_blank"/);
+  assert.match(head, /"version: " \+ PLUGIN_VERSION/);
+  // 标题栏不再重复显示「＋ 新建版本」（已迁至看板左上角，见 g-164 契约断言）。
+  assert.doesNotMatch(head, /"＋ 新建版本"/);
+  // 负责人 2026-08-25 review：设置按钮 ⚙ 位于 DEBUG 信息之前（DEBUG 左侧）。
+  const gear = head.indexOf('"⚙")');
+  const debug = head.indexOf("DEBUG sessionId=");
+  assert.ok(gear >= 0 && debug >= 0 && gear < debug, "⚙ 看板设置按钮应在 DEBUG 信息之前");
 });
 
 test("g-156 交付/阻塞折叠列源契约：会话态、窄栏标题与数量均保留", () => {

@@ -1088,6 +1088,14 @@
         h("style", null, HOVER_CSS),
         h("div", { style: S.head },
           h("strong", null, "dsh-graph 看板"),
+          // g-174：标题栏显示插件版本，点击以新标签打开插件官网
+          h("a", {
+            href: "https://github.com/miuzel/dsh-graph",
+            target: "_blank",
+            rel: "noreferrer",
+            title: "dsh-graph 插件官网",
+            style: { ...S.meta, color: "#8ab4ff", cursor: "pointer", textDecoration: "underline" },
+          }, "version: " + PLUGIN_VERSION),
           h("span", { style: S.meta }, "数据时间：" + (b.generated_at ?? "").replace("T", " ").slice(0, 19)),
           h("button", { style: { ...S.btn, marginLeft: 8 }, className: "dg-btn", onClick: load }, "刷新"),
           // g-110: 显示已归档目标的 checkbox
@@ -1098,28 +1106,16 @@
               onChange: (e) => setShowArchived(e.target.checked),
             }),
             "显示已归档"),
-          // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
-          h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
-            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅")),
-          // g-134: 创建版本泳道按钮
-          h("button", {
-            style: { ...S.btn, marginLeft: 8 },
-            className: "dg-btn",
-            title: "新建版本泳道",
-            onClick: () => {
-              setShowCreateVersion(true);
-              setNewVersionSlug("");
-              setNewVersionName("");
-              setCreateVersionNote(null);
-            },
-          }, "＋ 新建版本"),
-          // g-132: 右上角齿轮 → 看板设置
+          // g-132: 右上角齿轮 → 看板设置（负责人 2026-08-25 review：置于 DEBUG 信息之前，即 DEBUG 左侧）
           h("button", {
             style: { ...S.btn, marginLeft: 8, fontSize: 16, lineHeight: 1, padding: "2px 8px" },
             className: "dg-btn",
             title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
             onClick: () => setShowSettings(true),
-          }, "⚙")),
+          }, "⚙"),
+          // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
+          h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
+            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅"))),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
@@ -1128,7 +1124,19 @@
         // g-127/g-156/g-164：折叠时对应列窄化为 36px（blocked 和 deliver 独立折叠），
         // 列模板统一由 gridCols 按当前折叠状态动态计算，与 released 泳道网格保持一致
         h("div", { style: { ...S.grid, gridTemplateColumns: gridCols } },
-          h("div", { style: S.stageHead }, "泳道＼阶段"),
+          // g-174：新建版本入口从标题栏移至看板左上角（原「泳道＼阶段」单元格），复用 g-134 状态与弹窗逻辑
+          h("div", { style: S.stageHead },
+            h("button", {
+              style: { ...S.btn, fontSize: 12, padding: "2px 8px" },
+              className: "dg-btn",
+              title: "新建版本泳道",
+              onClick: () => {
+                setShowCreateVersion(true);
+                setNewVersionSlug("");
+                setNewVersionName("");
+                setCreateVersionNote(null);
+              },
+            }, "＋ 新建版本")),
           STAGES.map((s) => {
             // g-127：blocked 列头可点击切换折叠/展开
             // g-152：折叠态列头只显示 ▸（36px 窄条，竖条单元格已有 ⛔ 标识）
