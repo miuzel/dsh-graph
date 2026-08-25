@@ -14,13 +14,14 @@
 - [x] `bash scripts/sync-core.sh` 通过（无 core 差异）
 - [x] `node --check dsh-graph-host/lib/client.js` → 语法 OK，含 `⚠️ GENERATED FILE` 标记
 - [x] `node --test core/tests/*.test.ts` → 全绿（主树 cwd）
-- [x] `npm pack --dry-run`（等价 pack + tarball listing）→ version `0.7.1`，31 files / 241.7 kB，shasum `97b76cb36275be4acdfda480091b8be0c63bb068`，无 .ts/tests/scripts/.dsh-graph/.session/worktrees/mock 数据
+- [x] `npm pack --dry-run`（等价 pack + tarball listing）→ package `dsh-graph` version `0.7.1`、31 files（约 240 kB），白名单与无敏感文件核对通过（含 `core/*.js`、`lib/client.js`、`README.md`、`LICENSE`、`cordis.patch.yml`、`supervisor-guide.md`、`package.json`；不含 .ts/tests/scripts/.dsh-graph/.session/worktrees/mock 数据）
 - [x] `git diff --check` 通过（无空白错误）
 
 ### 已知环境差异（非阻塞）
 
 - `core/tests/plugin.test.ts` 的 `g-113 host 工具按 session.header.cwd 建目标` 用例在 **worktree** 下会因 `process.cwd()` 无 `.dsh-graph` fixture 失败——在主工作树 cwd 运行全绿（v0.6.1 同款已知项，非代码回归）。
 - 沙箱内 `~/.npm` 为只读（EROFS）：`npm pack` 需 `--cache` 指向可写目录（如 `--cache=/tmp/npm-cache`）。真实终端环境无此限制。
+- pack shasum 随 npm/tar 元数据与构建环境变化，**不可作为跨环境固定验收值**。验收以 package name/version、文件数/大小近似、白名单与无敏感文件为准。本次构建环境实测 shasum 为 `97b76cb36275be4acdfda480091b8be0c63bb068`（仅作本次环境输出示例；main 上复核实测为 `efaa8ac…`，属预期差异）。
 - 两张截图（`screenshot/screenshot-1.png`、`screenshot/screenshot-2.png`）位于仓库根、由根 `README.md` 引用；发布包 files 白名单不含 `screenshot/`（与 v0.6.1 一致），包内 `README.md` 不引用截图、无失效链接。
 
 ---
