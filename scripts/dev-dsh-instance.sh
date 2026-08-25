@@ -19,7 +19,7 @@
 #      测试实例跑在**独立 DSH_HOME**（默认 /tmp/dsh-graph-test-home）下，与主
 #      ~/.dsh 的 sessions/storages 完全隔离 —— 两个 web 实例同时启动不再抢写同一份
 #      session log（此前用 ~/.dsh 做测试 home 会写坏 session log，根因已修复）。
-#   3. 可选：把主 web profile 的 dsh-graph 从本地 link 切回已发布的 `^0.6.1`。
+#   3. 可选：把主 web profile 的 dsh-graph 从本地 link 切回已发布的 `^0.7.1`。
 #
 # 用法
 # ----
@@ -37,7 +37,7 @@
 #   PORT=3082                    测试实例端口（必须 ≠ 3080）
 #   CWD=…                        测试实例的工作目录（决定 .dsh-graph 数据落在哪）
 #   HOST_DIR=…$REPO/dsh-graph-host  本地 host 插件目录
-#   PUBLISHED_VER=^0.6.1         已发布版本 spec
+#   PUBLISHED_VER=^0.7.1         已发布版本 spec
 #   MAIN_PROFILE=web             主 profile 名
 #
 set -euo pipefail
@@ -55,7 +55,7 @@ TEST_HOME="${TEST_HOME:-/tmp/dsh-graph-test-home}"
 PROFILE="${PROFILE:-dsh-graph-test}"
 PORT="${PORT:-3082}"
 HOST_DIR="${HOST_DIR:-$REPO_ROOT/dsh-graph-host}"
-PUBLISHED_VER="${PUBLISHED_VER:-^0.6.1}"
+PUBLISHED_VER="${PUBLISHED_VER:-^0.7.1}"
 MAIN_PROFILE="${MAIN_PROFILE:-web}"
 # 测试实例的工作目录：决定 .dsh-graph 数据落点。默认放在测试 home 下、非 git 仓库，
 # 确保数据完全独立，不会和主 GUI/代码仓库的那份发生 g-149 canonicalize 合并。
@@ -188,7 +188,7 @@ run() {
 }
 
 # ---- 修改一个 profile 的 dsh-graph 依赖到给定 spec ----
-set_main_dep() { # $1 = spec（如 ^0.6.1 或 link:/…/dsh-graph-host）
+set_main_dep() { # $1 = spec（如 ^0.7.1 或 link:/…/dsh-graph-host）
   local spec="$1"
   [ -f "$MAIN_DIR/package.json" ] || die "主 profile 不存在：$MAIN_DIR"
   node -e '
