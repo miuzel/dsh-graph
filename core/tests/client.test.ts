@@ -299,14 +299,19 @@ test("g-174 标题栏源契约：version 链接、新建版本入口迁移、设
   assert.ok(gear >= 0 && debug >= 0 && gear < debug, "⚙ 看板设置按钮应在 DEBUG 信息之前");
 });
 
-test("g-156 交付/阻塞折叠列源契约：会话态、窄栏标题与数量均保留", () => {
+test("g-156/g-175 交付/阻塞折叠列源契约：会话态、窄栏标题与数量均保留", () => {
   const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
   // 折叠状态必须由 React state 持有，不能落到 workspace 或持久化存储。
   assert.match(source, /const \[deliverColumnCollapsed, setDeliverColumnCollapsed\] = React\.useState\(false\)/);
   assert.doesNotMatch(source, /localStorage|sessionStorage/);
-  // 交付与阻塞窄栏都显示可识别的标题，并保留卡片计数。
-  assert.match(source, /deliverColumnCollapsed\s*\?\s*\n?\s*h\(React\.Fragment, null, "交", h\("br"\), "付"\)/);
-  assert.match(source, /blockedColumnCollapsed\s*\?\s*\n?\s*h\(React\.Fragment, null, "阻", h\("br"\), "塞"\)/);
+  // g-175：折叠态列头只显示一个展开图标 ▸（不再竖排「交/付」「阻/塞」两行，
+  // 因为列内窄条单元格已含「交付/阻塞」文字与计数，无需重复）。
+  assert.match(source, /deliverColumnCollapsed\s*\?\s*\n?\s*"▸"/);
+  assert.match(source, /blockedColumnCollapsed\s*\?\s*\n?\s*"▸"/);
+  // 展开态列头保留「列名 + ▾」收起图标。
+  assert.match(source, /deliverColumnCollapsed[\s\S]*?: s\.label \+ " ▾"\)/);
+  assert.match(source, /blockedColumnCollapsed[\s\S]*?: s\.label \+ " ▾"\)/);
+  // 列内窄条单元格仍显示「交/付」「阻/塞」+ 数量，保证折叠态可识别。
   assert.match(source, /"交", h\("br"\), "付", h\("br"\), `×\$\{count\}`/);
   assert.match(source, /"阻", h\("br"\), "塞", h\("br"\), `×\$\{orderedGoals\.length\}`/);
   // 两列折叠后固定窄宽度，避免横向布局溢出。
