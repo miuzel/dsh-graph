@@ -938,8 +938,12 @@ window.__ModuleLoader__.load({
         h("span", { style: { fontWeight: 600, flexShrink: 0 } }, "🧭 主管"),
         h("div", { style: { flex: 1, minWidth: 0 } },
           h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null, statusAt: props.statusAt ?? null })),
-        h("span", { style: { ...S.meta, flexShrink: 0 } },
-          model ? `${model.provider}/${model.model}` : modelErr ? "模型不可用" : "模型查询中…"),
+        model
+          ? h("div", { style: { ...S.meta, flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", lineHeight: 1.2 } },
+              h("span", null, model.provider),
+              h("span", null, model.model))
+          : h("span", { style: { ...S.meta, flexShrink: 0 } },
+              modelErr ? "模型不可用" : "模型查询中…"),
         h("button", {
           style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
           title: "跳转到主管 Agent 对话窗", onClick: jump,
