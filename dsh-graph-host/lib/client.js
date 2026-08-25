@@ -1052,17 +1052,22 @@ window.__ModuleLoader__.load({
         ...(blocked ? S.blockedCard : {}),
         /* g-168 polish border */ borderLeft: `5px solid ${borderColor}`,
       };
-      // g-168：inline 覆盖 S.goalCard.background，确保 PM 润色动画在折叠/展开卡片都可见。
-       const cardStyle = g._polishActive ? {
-         ...style,
-         background: "linear-gradient(90deg, rgba(76,141,255,.18), rgba(58,166,117,.34), rgba(76,141,255,.18))",
-         backgroundSize: "200% 100%",
-         animation: "dg-polish-flow 2.5s ease 1 forwards",
-         borderTop: "1px solid rgba(76,141,255,.85)",
-         borderRight: "1px solid rgba(76,141,255,.65)",
-         borderBottom: "1px solid rgba(76,141,255,.85)",
-         boxShadow: "0 0 0 2px rgba(76,141,255,.32), 0 0 12px rgba(58,166,117,.28)",
-       } : style;
+      // g-168：PM 润色仅通过透明遮罩覆盖卡片边框，卡片本体保持可见。
+       const cardStyle = g._polishActive ? { ...style, position: "relative", animation: "none" } : style;
+
+
+
+
+       const polishOverlay = g._polishActive ? h("div", {
+         key: "polish-overlay", "aria-hidden": "true",
+         style: {
+           position: "absolute", inset: 0, pointerEvents: "none", borderRadius: 6,
+           border: "2px solid rgba(76,141,255,.82)",
+           background: "linear-gradient(90deg, rgba(76,141,255,.08), rgba(58,166,117,.22), rgba(76,141,255,.08))",
+           backgroundSize: "200% 100%", boxShadow: "0 0 0 2px rgba(76,141,255,.28), 0 0 12px rgba(58,166,117,.26)",
+           animation: "dg-polish-flow 2.5s ease 1 forwards",
+         },
+       }) : null;
        const badges = [];
       // g-158：类型标记 badge（F/B/T/I + tooltip）——标题左侧，颜色与左栏/弹窗同源
       const aType = normalizeGoalType(g.type);
@@ -1137,7 +1142,8 @@ window.__ModuleLoader__.load({
           "div",
           { key: g.id, style: cardStyle, className: dragClass,
             title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
-          titleRow,
+          polishOverlay,
+           titleRow,
           h("div", { style: S.meta },
             `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
              h(CriteriaProgress, {
@@ -1151,7 +1157,8 @@ window.__ModuleLoader__.load({
         "div",
         { key: g.id, style: cardStyle, className: dragClass,
           title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
-        titleRow,
+        polishOverlay,
+           titleRow,
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
           h(CriteriaProgress, {

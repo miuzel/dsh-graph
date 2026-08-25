@@ -888,8 +888,10 @@ test("g-168 PM 结果反馈：关闭弹窗并把动画挂在看板卡片", () =>
   assert.ok(/_polishActive: polishGoal === g\.id/.test(kanban));
   assert.ok(/g\._polishActive \? " dg-running-flow"/.test(card), "动画 class 挂在 goal card");
   assert.ok(/const cardStyle = g\._polishActive \?/.test(card));
-  assert.ok(/background: "linear-gradient\(90deg/.test(card), "卡片 inline gradient 覆盖默认背景");
-  assert.ok(/animation: "dg-polish-flow 2\.5s ease 1 forwards"/.test(card));
+  assert.ok(/const polishOverlay = g\._polishActive \? h\("div"/.test(card), "PM 动画使用透明遮罩");
+  assert.ok(/position: "absolute", inset: 0, pointerEvents: "none"/.test(card));
+  assert.ok(/animation: "none"/.test(card), "卡片本体不参与淡出");
+  assert.ok(/animation: "dg-polish-flow 2\.5s ease 1 forwards"/.test(card), "遮罩执行淡出动画");
   const flowKeyframes = /@keyframes dg-flow-bg\s*\{([\s\S]*?)\n\s*\}/.exec(constants)?.[1] ?? "";
   assert.ok(!/opacity/.test(flowKeyframes), "dg-flow-bg 不得修改既有运行态透明度");
   assert.ok(/@keyframes dg-flow-bg[\s\S]*0% \{ background-position: 0% 50%; \}[\s\S]*50% \{ background-position: 100% 50%; \}[\s\S]*100% \{ background-position: 0% 50%; \}/.test(constants), "既有运行态 keyframe 仅平移背景");
