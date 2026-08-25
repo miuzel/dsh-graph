@@ -4581,7 +4581,22 @@ window.__ModuleLoader__.load({
           ? h("div", { style: S.overlay, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } },
               h("div", { style: { ...S.modal, minWidth: 360, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } }, "✕"),
-                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, `🏷️ 版本详情：${versionDetailTarget.name}`),
+                // g-177: 重命名按钮移到版本标题右边（跟 goal 卡片交互一致：标题行内小 ✏️）
+                h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 12, flexWrap: "wrap" } },
+                  h("span", { style: { fontWeight: 700, fontSize: 15 } }, `🏷️ 版本详情：${versionDetailTarget.name}`),
+                  h("button", {
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px", opacity: 0.7 }, className: "dg-btn",
+                    title: "重命名版本",
+                    onClick: () => {
+                      setRenameVersionTarget({ slug: versionDetailTarget.slug, name: versionDetailTarget.name });
+                      setRenameVersionSlug(versionDetailTarget.slug);
+                      setRenameVersionName(versionDetailTarget.name);
+                      setRenameVersionNote(null);
+                      setVersionDetailTarget(null);
+                      setVersionDetailData(null);
+                    },
+                  }, "✏️"),
+                ),
                 // 基本信息
                 h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } },
                   h("div", null, `Slug：${versionDetailTarget.slug}`),
@@ -4769,19 +4784,6 @@ window.__ModuleLoader__.load({
                           onClick: () => { setReactivateConfirm(true); setVersionActionNote(null); },
                         }, "♻️ 恢复为 active")
                     : null,
-                  // 重命名
-                  h("button", {
-                    style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
-                    className: "dg-btn",
-                    onClick: () => {
-                      setRenameVersionTarget({ slug: versionDetailTarget.slug, name: versionDetailTarget.name });
-                      setRenameVersionSlug(versionDetailTarget.slug);
-                      setRenameVersionName(versionDetailTarget.name);
-                      setRenameVersionNote(null);
-                      setVersionDetailTarget(null);
-                      setVersionDetailData(null);
-                    },
-                  }, "✏️ 重命名"),
                   // 删除
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "#ff6b6b", opacity: 0.7 },
