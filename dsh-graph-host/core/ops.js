@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameS
 import { join, basename, dirname, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import { parseDoc, serializeDoc, replaceSection, sectionText, criteriaPresent, countCriteria, criteriaItems, normalizeGoalType, rebuildCriteriaSection, } from "./model.js";
-import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso } from "./events.js";
+import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso, nowIsoMs } from "./events.js";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.js";
 import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail } from "./version-lane.js";
 export { GraphError, GraphConflictError };
@@ -2735,7 +2735,7 @@ export function boardProjection(root, opts) {
     }
     for (const g of allGoals)
         g.reused_by = reusedBy.get(g.id) ?? null;
-    return { generated_at: nowIso(), versions, standalone, backlog };
+    return { generated_at: nowIsoMs(), versions, standalone, backlog };
 }
 /** 看板端点载荷：board 投影 + supervisorSession（g-108）。
  *  由 dsh-graph-host 的 client 半边（/api/dsh-graph）消费，会话 id 不在任何代码里硬编码。

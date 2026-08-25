@@ -207,7 +207,24 @@ window.__ModuleLoader__.load({
        }
        @media (prefers-reduced-motion: reduce) {
          .dg-update-sheen, .dg-update-sheen-bar { animation: none !important; }
-         .dg-update-sheen { opacity: 0; }
+         /* g-171 回退修复：reduced-motion 下不隐藏浮层（原 opacity:0 导致用户系统开
+            "减少动态效果"时动画完全不可见）。降级为静态斜向金属光泽高光——135° 对角线
+            渐变直接在浮层上画"一宽一细两条高光"（细亮线 + 宽柔光带，中间暗间隙分隔，
+            两侧羽化）。不用旋转子条（stop 沿 5px 水平方向分布像素太少，羽化无余地）；
+            135° 渐变轴沿浮层对角线（长度≈卡片高度），stop 百分比有足够像素跨度。
+            不用纯色整条填充（避免误判为类型色改变）。 */
+         .dg-update-sheen {
+           background: linear-gradient(135deg,
+             rgba(255,255,255,0) 0%,
+             rgba(255,255,255,0) 35%,
+             rgba(255,255,255,.95) 45%,
+             rgba(255,255,255,0) 52%,
+             rgba(255,255,255,.35) 62%,
+             rgba(255,255,255,.6) 72%,
+             rgba(255,255,255,0) 85%,
+             rgba(255,255,255,0) 100%);
+         }
+         .dg-update-sheen-bar { display: none; }
        }
        @keyframes dg-pulse {
         0%, 100% { opacity: 1; transform: scale(1); }
@@ -1099,11 +1116,14 @@ window.__ModuleLoader__.load({
 
       // g-171：更新强调——左侧类型色边框上的金属光泽浮层（10 秒生命周期内循环扫光并淡出）。
       // 折叠/展开两条路径都挂载同一浮层；pointer-events:none + aria-hidden，不改变布局/点击/拖拽。
+      // 实现采用内联 animation（不依赖 .dg-update-sheen class 的 opacity），避免
+      // prefers-reduced-motion 把浮层整体 opacity:0 隐藏——"哪个目标被更新"是功能性信息，
+      // 降级为静态可见而非完全消失（g-171 回退修复：用户系统开减少动态效果导致动画不可见）。
       const updateSheen = g._updateEmphasis ? h("div", {
         key: "update-sheen-" + g._updateEmphasis.token,
         className: "dg-update-sheen",
         "aria-hidden": "true",
-        style: { animationDuration: g._updateEmphasis.remaining + "ms" },
+        style: { animation: "dg-update-fade " + g._updateEmphasis.remaining + "ms linear forwards" },
       }, h("div", { className: "dg-update-sheen-bar" })) : null;
 
 
@@ -3299,6 +3319,17 @@ window.__ModuleLoader__.load({
     function KanbanView(props) {
       const [state, setState] = React.useState({ loading: true });
       const [modalGoal, setModalGoal] = React.useState(null);
+      // g-171 回退修复：镜像 modalGoal 供 load 闭包判定（load 被 15s 轮询闭包捕获，
+      // 直接读 state 会拿到首次渲染的 null）。详情弹窗打开期间跳过更新强调播放，
+      // 避免轮询/保存触发的 load 在弹窗遮罩下抢播并消费 token；关闭弹窗后由
+      // onClose 的 load() 补播窗口内目标。
+      const modalGoalRef = React.useRef(null);
+      modalGoalRef.current = modalGoal;
+      // g-171 回退修复：记录弹窗打开时该目标的 updated_at（mtime）与"关闭后待强制补播"标记。
+      // 用户经外部编辑器编辑 goal.md（耗时通常 >10s）后关闭弹窗时已超 10 秒窗口，
+      // 但目标 mtime 确实变了——关闭弹窗是明确"我要看结果"的动作，应强制补播一次完整动画。
+      const modalGoalOpenTsRef = React.useRef(null); // 弹窗打开时目标的 updated_at
+      const forceReplayRef = React.useRef(null); // {goalId, openTs} 待关闭后强制补播
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       const [openReleased, setOpenReleased] = React.useState({});
@@ -3704,6 +3735,10 @@ window.__ModuleLoader__.load({
       // 只复用现有 load()（首次/手动刷新/写操作后）与 15 秒轮询，不新增任何数据通道。
       const applyUpdateEmphasis = (data) => {
         if (!data || typeof data.generated_at !== "string") return;
+        // g-171 回退修复：详情弹窗打开期间跳过播放（弹窗遮罩盖住看板，此时播放
+        // 用户看不到，还会消费 token 导致关闭弹窗后不重播）；关闭弹窗时
+        // onClose 置空 modalGoalRef 并 load()，窗口内目标随后补播。
+        if (modalGoalRef.current) return;
         const gen = Date.parse(data.generated_at);
         if (!Number.isFinite(gen)) return;
         const allGoals = [
@@ -3716,11 +3751,14 @@ window.__ModuleLoader__.load({
           // 旧 payload 无 updated_at → 无动画，兼容渲染
           if (typeof ts !== "number" || !Number.isFinite(ts)) continue;
           const age = gen - ts; // 服务端时间窗口（毫秒）
-          if (age < 0 || age >= 10000) continue; // 未来/已过 10 秒 → 不播放
+          // 容忍 ≤1s 的负 age：旧版 generated_at 为秒级精度（无毫秒），同秒修改会得到 -999ms 的负值；
+          // 视为“刚修改”而非未来时间，保证编辑后立即刷新能补播。超过 10 秒不播放。
+          const safeAge = Math.max(0, age);
+          if (age < -1000 || safeAge >= 10000) continue; // 未来(>1s)/已过 10 秒 → 不播放
           const token = g.id + ":" + ts;
           if (seenUpdateTokens.current.has(token)) continue; // 同一 token 不重播
           seenUpdateTokens.current.add(token);
-          const remaining = Math.max(0, 10000 - age);
+          const remaining = Math.max(0, 10000 - safeAge);
           setUpdateEmphasis((prev) => ({ ...prev, [g.id]: { remaining, token } }));
           if (emphasisTimers.current[g.id]) clearTimeout(emphasisTimers.current[g.id]);
           emphasisTimers.current[g.id] = setTimeout(() => {
@@ -3734,11 +3772,42 @@ window.__ModuleLoader__.load({
           }, remaining + 100);
         }
       };
+      // g-171 回退修复：关闭弹窗后强制补播——若目标在弹窗打开期间被外部修改
+      // （最新 payload 的 updated_at ≠ 打开时记录值），即使已超 10 秒窗口也补播一次
+      // 完整 10 秒动画（用户经外部编辑器编辑 goal.md 常见耗时 >10s，关闭弹窗是明确的
+      // "我要看结果"动作）。轮询/普通 load 仍走 10 秒窗口，不受影响。
+      const applyForceReplay = (data) => {
+        const fr = forceReplayRef.current;
+        if (!fr || !data || typeof data.generated_at !== "string") return;
+        forceReplayRef.current = null; // 只消费一次
+        const g = [
+          ...(data.versions ?? []).flatMap((v) => v.goals ?? []),
+          ...(data.standalone ?? []),
+          ...(data.backlog ?? []),
+        ].find((x) => x.id === fr.goalId);
+        if (!g || typeof g.updated_at !== "number") return;
+        if (g.updated_at === fr.openTs) return; // 弹窗期间未被修改 → 不强制
+        const token = g.id + ":" + g.updated_at;
+        if (seenUpdateTokens.current.has(token)) return; // 窗口判定已播过 → 不重复
+        seenUpdateTokens.current.add(token);
+        const remaining = 10000; // 完整生命周期
+        setUpdateEmphasis((prev) => ({ ...prev, [g.id]: { remaining, token } }));
+        if (emphasisTimers.current[g.id]) clearTimeout(emphasisTimers.current[g.id]);
+        emphasisTimers.current[g.id] = setTimeout(() => {
+          setUpdateEmphasis((prev) => {
+            if (!prev[g.id] || prev[g.id].token !== token) return prev;
+            const next = { ...prev };
+            delete next[g.id];
+            return next;
+          });
+          delete emphasisTimers.current[g.id];
+        }, remaining + 100);
+      };
       const load = () => {
         const params = showArchived ? "?includeArchived=1" : "";
         fetch(graphUrl("/api/dsh-graph" + params))
           .then((r) => r.json())
-          .then((data) => { setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); })
+          .then((data) => { setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data); })
           .catch((e) => setState({ loading: false, error: String(e) }));
       };
       React.useEffect(() => {
@@ -4371,6 +4440,12 @@ window.__ModuleLoader__.load({
         ? [...active.flatMap((v) => v.goals), ...released.flatMap((v) => v.goals),
            ...b.standalone, ...b.backlog].find((g) => g.id === modalGoal)
         : null;
+      // g-171 回退修复：弹窗打开瞬间记录该目标的 updated_at（mtime），供关闭时
+      // 比较"弹窗期间是否被外部修改"以决定强制补播。只在首次打开时记录，不随轮询覆盖。
+      if (modalGoal && modalGoalData && typeof modalGoalData.updated_at === "number"
+          && modalGoalOpenTsRef.current === null) {
+        modalGoalOpenTsRef.current = modalGoalData.updated_at;
+      }
 
       return h(
         "div",
@@ -4470,7 +4545,7 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,

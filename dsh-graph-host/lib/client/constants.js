@@ -195,7 +195,24 @@
        }
        @media (prefers-reduced-motion: reduce) {
          .dg-update-sheen, .dg-update-sheen-bar { animation: none !important; }
-         .dg-update-sheen { opacity: 0; }
+         /* g-171 回退修复：reduced-motion 下不隐藏浮层（原 opacity:0 导致用户系统开
+            "减少动态效果"时动画完全不可见）。降级为静态斜向金属光泽高光——135° 对角线
+            渐变直接在浮层上画"一宽一细两条高光"（细亮线 + 宽柔光带，中间暗间隙分隔，
+            两侧羽化）。不用旋转子条（stop 沿 5px 水平方向分布像素太少，羽化无余地）；
+            135° 渐变轴沿浮层对角线（长度≈卡片高度），stop 百分比有足够像素跨度。
+            不用纯色整条填充（避免误判为类型色改变）。 */
+         .dg-update-sheen {
+           background: linear-gradient(135deg,
+             rgba(255,255,255,0) 0%,
+             rgba(255,255,255,0) 35%,
+             rgba(255,255,255,.95) 45%,
+             rgba(255,255,255,0) 52%,
+             rgba(255,255,255,.35) 62%,
+             rgba(255,255,255,.6) 72%,
+             rgba(255,255,255,0) 85%,
+             rgba(255,255,255,0) 100%);
+         }
+         .dg-update-sheen-bar { display: none; }
        }
        @keyframes dg-pulse {
         0%, 100% { opacity: 1; transform: scale(1); }

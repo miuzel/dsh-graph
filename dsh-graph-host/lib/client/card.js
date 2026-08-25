@@ -98,11 +98,14 @@
 
       // g-171：更新强调——左侧类型色边框上的金属光泽浮层（10 秒生命周期内循环扫光并淡出）。
       // 折叠/展开两条路径都挂载同一浮层；pointer-events:none + aria-hidden，不改变布局/点击/拖拽。
+      // 实现采用内联 animation（不依赖 .dg-update-sheen class 的 opacity），避免
+      // prefers-reduced-motion 把浮层整体 opacity:0 隐藏——"哪个目标被更新"是功能性信息，
+      // 降级为静态可见而非完全消失（g-171 回退修复：用户系统开减少动态效果导致动画不可见）。
       const updateSheen = g._updateEmphasis ? h("div", {
         key: "update-sheen-" + g._updateEmphasis.token,
         className: "dg-update-sheen",
         "aria-hidden": "true",
-        style: { animationDuration: g._updateEmphasis.remaining + "ms" },
+        style: { animation: "dg-update-fade " + g._updateEmphasis.remaining + "ms linear forwards" },
       }, h("div", { className: "dg-update-sheen-bar" })) : null;
 
 
