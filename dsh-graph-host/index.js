@@ -170,6 +170,7 @@ const HELP_TEXT = [
 // 跳过 worktree（简单/单文件小修）。数据分工：代码改动在 worktree，看板数据 .dsh-graph/
 // 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）。
 const WORKTREE_GUIDE = `【worktree 隔离（负责人 2026-08-22 指示）】并发/复杂的执行任务：先 \`git worktree add\` 一个独立工作树（与 main 隔离）再改代码，review 交付阶段由 supervisor 复核通过后合并回 main——避免并发子代理互相踩提交、半成品直接落 main。**「直接 main」仅限真正的一两行、唯一文件改动、且无其他目标并发改该文件；多目标并发改同一文件时必须 worktree，不得自认为改动简单就直改 main**（g-129/g-77647351 并发改 client.js 直 main 造成分叉冲突的教训）（本段由派发方开关：worktree=false 时省略）。
+【worktree 命名规范】新建 attempt 工作树必须命名为 .worktrees/g-<goal-number>-att-<NN>，分支使用相同后缀（例如 g-125-att-03、g-163-att-03）；不要使用省略 goal id 或未补零的歧义名称。
 数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
 
 export function apply(ctx, config) {
@@ -1010,6 +1011,30 @@ export function apply(ctx, config) {
             bindCardChild(rRoot, goal, card, { childId: spawned.childId, parentSessionId: spawned.parentSessionId, actor: "human:gui" });
           }
           json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-168：定义/润色交给固定产品经理 Agent；不创建 attempt、不修改目标状态
+    {
+      path: "/api/dsh-graph/define-polish",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, goal_path, guidance } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          const rRoot = rootForReq(req, body);
+          const goalFile = findGoalFile(rRoot, goal);
+          const ws = workspaceOf(req, body) ?? dirname(rRoot);
+          const goalRel = relative(ws, goalFile);
+          const cfg = readExecutorModel(rRoot);
+          const prompt = `你是固定的产品经理 Agent。请只向主管 Agent 返回“目标定义/润色建议”，不要调用任何 graph_* 工具，不要修改目标、不改变状态、版本或执行语义。\n\n目标 ID：${goal}\ngoal.md 工作区相对路径：${goalRel}\n人工指导意见：${String(guidance ?? "").trim() || "（无）"}\n\n请先用 read 工具读取上述 goal.md，再围绕目标价值、背景、范围、可验证判据、边界/错误路径、风险和人工核验给出简洁、可执行的润色建议；保留原意，不直接替换或写入目标。`;
+          const spawned = await spawnChild(`graph:define-polish/${goal}`, prompt, req, rRoot, cfg);
+          if (spawned.error) return json(res, 200, { ok: false, child_error: spawned.error });
+          json(res, 200, { ok: true, child_id: spawned.childId, model_route: spawned.model_route ?? null });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });

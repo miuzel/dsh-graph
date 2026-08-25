@@ -47,6 +47,21 @@ After modifying source modules and rebuilding:
 3. **Verify compatibility** — ensure ModuleLoader contract and all tests pass
 4. **Commit source modules and generated file** — commit changes to `dsh-graph-host/lib/client/*.js` **and** the rebuilt `dsh-graph-host/lib/client.js`
 
+## Worktree Naming
+
+Use a stable, auditable name for every isolated attempt worktree:
+
+```text
+.worktrees/g-<goal-number>-att-<NN>
+```
+
+Examples: `.worktrees/g-125-att-03`, `.worktrees/g-163-att-03`.
+
+- `<NN>` is the zero-padded attempt number for that goal.
+- The worktree branch should use the same suffix, such as `g-125-att-03`.
+- Do not use ambiguous names such as `.worktrees/att-003`, `.worktrees/g165-att001`, or names that omit the goal id.
+- Existing active/review worktrees are not renamed automatically; apply this convention to new attempts and explicit follow-up work.
+
 ## Isolated Dev/Test dsh Instance (two profiles)
 
 Development and verification run in a profile that is **fully isolated** from the main

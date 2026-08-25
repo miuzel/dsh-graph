@@ -20,6 +20,7 @@ import {
   sectionText,
   criteriaPresent,
   countCriteria,
+  criteriaItems,
   normalizeGoalType,
   type GoalDoc,
   type GoalType,
@@ -1998,6 +1999,8 @@ export interface BoardGoal {
   cards?: Array<Record<string, any>>;
   /** 质量判据实质行数（g-77647351 看板「判据未登记」提示数据源）；≥1 即已登记 */
   criteria_count?: number;
+  /** g-163：与 checklist 同源的稳定、有序判据 key。 */
+  criteria_items?: string[];
   rules_snapshot?: string | null;
   /** g-110：目标是否已归档 */
   archived?: boolean;
@@ -2108,6 +2111,7 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
       archived,
       cards,
       criteria_count: countCriteria(doc.body),
+      criteria_items: criteriaItems(doc.body),
       rules_snapshot: meta.rules_snapshot ?? null,
     };
   };

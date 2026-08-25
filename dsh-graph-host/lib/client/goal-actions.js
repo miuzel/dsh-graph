@@ -3,9 +3,10 @@
     // 质量判据 checklist（确认阶段）：每条一个勾选框（localStorage 按目标持久化，仅前端评审草稿）
     // + 「💬 反馈」按钮——展开输入框，经 session.prompt 排队送达该目标的执行会话（复用 g-107 通路）。
     function CriteriaChecklist(props) {
-      const items = String(props.crit ?? "").split("\n")
+      // 与 core/model.ts criteriaItems 同源：先移除跨行 HTML 注释，再按行 trim。
+      const items = String(props.crit ?? "").replace(/<!--[\s\S]*?-->/g, "").split("\n")
         .map((l) => l.trim())
-        .filter((l) => l && !l.startsWith("<!--"));
+        .filter((l) => l);
       const storeKey = "dsh-graph.crit." + props.goalId;
       const readChecked = () => {
         try { return JSON.parse(localStorage.getItem(storeKey) ?? "[]"); } catch { return []; }
@@ -20,6 +21,7 @@
         const next = checked.includes(line) ? checked.filter((t) => t !== line) : [...checked, line];
         setChecked(next);
         try { localStorage.setItem(storeKey, JSON.stringify(next)); } catch {}
+        window.dispatchEvent(new Event("dsh-graph.criteria-changed"));
       };
       const sendFb = async (criterion) => {
         const t = fbText.trim();
@@ -101,6 +103,51 @@
       } catch {
         return false;
       }
+    }
+
+    // g-168：定义/润色入口。两条路径都只产生建议，不改目标或状态。
+    function DefinitionPolish(props) {
+      const { goalId, goalPath, supervisorSession, status, events } = props;
+      const [mode, setMode] = React.useState("idle"); // idle | supervisor | pm
+      const [guidance, setGuidance] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [loading, setLoading] = React.useState(false);
+      const allowed = ["draft", "planning", "collecting", "ready"];
+      const hasActiveAttempt = (events ?? []).some((e) => e.event === "attempt.started" && e.details?.executor !== "agent:collect");
+      if (!allowed.includes(status) || hasActiveAttempt) return null;
+      const request = `【${goalId} 定义/润色请求】\n目标 ID：${goalId}\ngoal.md 工作区相对路径：${String(goalPath ?? "（路径未知）")}\n人工指导意见：${guidance.trim() || "（无）"}`;
+      const openSupervisor = async () => {
+        setLoading(true); setNote(null);
+        try {
+          const rt = sessionsRt ?? appCtx?.get?.("sessions");
+          if (!rt) throw new Error("会话服务不可用");
+          if (!supervisorSession) throw new Error("未配置主管会话（project.yaml 的 supervisor.session）");
+          const copied = await copyText(request);
+          rt.open?.(supervisorSession); activateChatTab();
+          setMode("supervisor");
+          setNote(copied ? "✅ 请求已复制，已打开主管会话，请粘贴发送" : "⚠️ 自动复制失败，请手动复制下方预览");
+        } catch (e) { setNote("⚠️ 主管路径失败：" + String(e?.message ?? e)); }
+        setLoading(false);
+      };
+      const askPm = async () => {
+        setLoading(true); setMode("pm"); setNote("⏳ 产品经理 Agent 正在处理…");
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/define-polish"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: goalId, goal_path: goalPath, guidance: guidance.trim() }) });
+          const data = await r.json();
+          if (data.ok) setNote("✅ 产品经理 Agent 已受理，建议将返回主管会话");
+          else setNote("⚠️ 产品经理 Agent 失败：" + (data.child_error || data.error || "未知错误"));
+        } catch (e) { setNote("⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e)); }
+        setLoading(false);
+      };
+      return h("div", null,
+        h("button", { style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn", disabled: loading, onClick: () => { setMode(mode === "idle" ? "supervisor" : "idle"); setNote(null); } }, "📝 定义/润色"),
+        mode !== "idle" ? h("div", { style: { display: "flex", flexDirection: "column", gap: 5, marginTop: 5 } },
+          h("div", { style: S.meta }, "可填写额外指导意见，再选择处理方式："),
+          h("textarea", { style: { ...S.promptInput, minHeight: 48, resize: "vertical", fontFamily: "inherit", fontSize: 12 }, value: guidance, placeholder: "人工指导意见（可选）…", onChange: (e) => setGuidance(e.target.value) }),
+          h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: openSupervisor }, "发送给主管（复制请求）"),
+            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: askPm }, "交给产品经理 Agent")),
+          note ? h("div", { style: S.meta }, note) : null) : null);
     }
 
     // g-109：目标描述区执行/反馈交互组件（执行按钮直接创建子代理；接受默认经主管 Agent 复核，
@@ -260,11 +307,9 @@
             disabled: loading,
             onClick: startExecution,
           }, "🚀 执行"),
-          h("button", {
-            style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
-            disabled: loading,
-            onClick: () => { setMode(mode === "feedback" ? "idle" : "feedback"); setNote(null); },
-          }, "💬 反馈")),
+          h(DefinitionPolish, {
+            goalId, goalPath: props.goalPath, supervisorSession, status, events,
+          })),
         // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
         acceptState === "objection"
           ? h("div", { key: "obj", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },

@@ -12,6 +12,61 @@
       }, summary);
     }
 
+    const CRITERIA_PLACEHOLDERS = new Set([
+      "（待登记）",
+      "（待登记；进入 in_progress 前必须非空且已确认）",
+      "（待填写）",
+    ]);
+
+    // g-163：按当前判据有序 key 渲染方块，不用完成数量推断前缀。
+    function CriteriaProgress(props) {
+      // criteria_count 是零态的权威信号；即使旧 payload 误带一条占位项也不显示方块。
+      const reportedCount = props.count ?? props.criteria_count ?? props.criteriaCount;
+      if (reportedCount != null && Number(reportedCount) === 0) return null;
+      // BoardGoal 的 snake_case 字段是唯一正式契约；兼容旧/第三方 payload
+      // 的 camelCase 别名，避免字段契约不一致时整行被误判为 0 条。
+      const rawItems = props.items ?? props.criteria_items ?? props.criteriaItems;
+      const keys = Array.isArray(rawItems)
+        ? [...new Set(rawItems.map(String).map((key) => key.trim()).filter((key) => key && !CRITERIA_PLACEHOLDERS.has(key)))]
+        : [];
+      const storeKey = "dsh-graph.crit." + props.goalId;
+      const readChecked = () => {
+        try { const value = JSON.parse(localStorage.getItem(storeKey) ?? "[]"); return Array.isArray(value) ? value : []; }
+        catch { return []; }
+      };
+      const [checked, setChecked] = React.useState(readChecked);
+      React.useEffect(() => {
+        const refresh = () => setChecked(readChecked());
+        window.addEventListener("storage", refresh);
+        window.addEventListener("dsh-graph.criteria-changed", refresh);
+        return () => {
+          window.removeEventListener("storage", refresh);
+          window.removeEventListener("dsh-graph.criteria-changed", refresh);
+        };
+      }, [storeKey]);
+      if (!keys.length) return null;
+      // 仅精确匹配当前有序 key；未知、过期及重复 checked 自然不会计数。
+      const checkedSet = new Set(Array.isArray(checked) ? checked.map(String) : []);
+      const done = keys.filter((key) => checkedSet.has(key)).length;
+      const total = keys.length;
+      const label = `质量判据：已完成 ${done}/${total}`;
+      // emoji 是双宽字形：每格固定窄宽并 scaleX 收窄，最多保留 10 格，避免长列表撑宽卡片。
+      const shown = keys.slice(0, 10);
+      const blocks = shown.map((key) => h("span", {
+        key, className: "dg-criteria-block", "aria-hidden": "true",
+        style: { display: "inline-block", width: 5, transform: "scaleX(.2)", transformOrigin: "right center" },
+      }, checkedSet.has(key) ? "🟩" : "◽"));
+      if (total > shown.length) {
+        blocks.push(h("span", { key: "count", style: { letterSpacing: "normal", marginLeft: -2 } }, `${done}/${total}`));
+      }
+      return h("span", {
+        className: "dg-criteria-progress", role: "img", title: label, "aria-label": label,
+        style: { display: "inline-block", maxWidth: "100%", height: 16, lineHeight: "16px",
+          whiteSpace: "nowrap", overflow: "hidden", verticalAlign: "middle", fontSize: 11,
+          letterSpacing: "-3px", marginLeft: 0, paddingRight: 2 },
+      }, blocks);
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
@@ -50,7 +105,7 @@
         },
         title: GOAL_TYPE_LABELS[aType] ?? aType,
       }, GOAL_TYPE_ABBREV[aType] ?? aType[0]?.toUpperCase());
-      if (g.reviewer === "human") badges.push("👤人审");
+      if (g.reviewer === "human") badges.push("👤");
       if (g.reviewer === "ai") badges.push("🤖AI审");
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
       if (g.archived) badges.push("📦已归档");
@@ -112,7 +167,12 @@
             title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
           titleRow,
           h("div", { style: S.meta },
-            `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`),
+            `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
+             h(CriteriaProgress, {
+               goalId: g.id,
+               items: g.criteria_items ?? g.criteriaItems,
+               count: g.criteria_count ?? g.criteriaCount,
+             })),
         );
       }
       return h(
@@ -122,6 +182,11 @@
         titleRow,
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
+          h(CriteriaProgress, {
+            goalId: g.id,
+            items: g.criteria_items ?? g.criteriaItems,
+            count: g.criteria_count ?? g.criteriaCount,
+          }),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
         hasDep
           ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)

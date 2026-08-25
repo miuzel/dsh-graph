@@ -110,6 +110,19 @@ window.__ModuleLoader__.load({
       .dg-btn:hover { filter: brightness(1.20); background: rgba(128,128,128,.25); }
       .dg-btn:active { filter: brightness(0.95); }
       .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
+      /* g-162：普通泳道内容底部居中的扁平折叠入口；released 不使用此控件 */
+      .dg-lane-collapse {
+        position: absolute; left: 50%; right: auto; bottom: 2px; transform: translateX(-50%); width: 32px; height: 9px; padding: 0; border: 1px solid rgba(128,128,128,.42);
+        border-radius: 2px; background: rgba(128,128,128,.16); cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .dg-lane-collapse { transition: transform .14s ease, background .14s ease, filter .14s ease; }
+      .dg-lane-collapse:hover { background: rgba(128,128,128,.28); transform: translateX(-50%) translateY(-2px); filter: brightness(1.15); }
+      .dg-lane-collapse:active { transform: translateX(-50%) translateY(0); }
+      .dg-lane-collapse-triangle {
+        width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent;
+        border-bottom: 5px solid rgba(220,220,220,.82);
+      }
       /* g-153：主要操作按钮 hover/active/disabled */
       .dg-btn-primary { transition: background .12s ease, border-color .12s ease, filter .12s ease; }
       .dg-btn-primary:hover { background: rgba(76,141,255,.30); border-color: rgba(76,141,255,.55); }
@@ -955,6 +968,61 @@ window.__ModuleLoader__.load({
       }, summary);
     }
 
+    const CRITERIA_PLACEHOLDERS = new Set([
+      "（待登记）",
+      "（待登记；进入 in_progress 前必须非空且已确认）",
+      "（待填写）",
+    ]);
+
+    // g-163：按当前判据有序 key 渲染方块，不用完成数量推断前缀。
+    function CriteriaProgress(props) {
+      // criteria_count 是零态的权威信号；即使旧 payload 误带一条占位项也不显示方块。
+      const reportedCount = props.count ?? props.criteria_count ?? props.criteriaCount;
+      if (reportedCount != null && Number(reportedCount) === 0) return null;
+      // BoardGoal 的 snake_case 字段是唯一正式契约；兼容旧/第三方 payload
+      // 的 camelCase 别名，避免字段契约不一致时整行被误判为 0 条。
+      const rawItems = props.items ?? props.criteria_items ?? props.criteriaItems;
+      const keys = Array.isArray(rawItems)
+        ? [...new Set(rawItems.map(String).map((key) => key.trim()).filter((key) => key && !CRITERIA_PLACEHOLDERS.has(key)))]
+        : [];
+      const storeKey = "dsh-graph.crit." + props.goalId;
+      const readChecked = () => {
+        try { const value = JSON.parse(localStorage.getItem(storeKey) ?? "[]"); return Array.isArray(value) ? value : []; }
+        catch { return []; }
+      };
+      const [checked, setChecked] = React.useState(readChecked);
+      React.useEffect(() => {
+        const refresh = () => setChecked(readChecked());
+        window.addEventListener("storage", refresh);
+        window.addEventListener("dsh-graph.criteria-changed", refresh);
+        return () => {
+          window.removeEventListener("storage", refresh);
+          window.removeEventListener("dsh-graph.criteria-changed", refresh);
+        };
+      }, [storeKey]);
+      if (!keys.length) return null;
+      // 仅精确匹配当前有序 key；未知、过期及重复 checked 自然不会计数。
+      const checkedSet = new Set(Array.isArray(checked) ? checked.map(String) : []);
+      const done = keys.filter((key) => checkedSet.has(key)).length;
+      const total = keys.length;
+      const label = `质量判据：已完成 ${done}/${total}`;
+      // emoji 是双宽字形：每格固定窄宽并 scaleX 收窄，最多保留 10 格，避免长列表撑宽卡片。
+      const shown = keys.slice(0, 10);
+      const blocks = shown.map((key) => h("span", {
+        key, className: "dg-criteria-block", "aria-hidden": "true",
+        style: { display: "inline-block", width: 5, transform: "scaleX(.2)", transformOrigin: "right center" },
+      }, checkedSet.has(key) ? "🟩" : "◽"));
+      if (total > shown.length) {
+        blocks.push(h("span", { key: "count", style: { letterSpacing: "normal", marginLeft: -2 } }, `${done}/${total}`));
+      }
+      return h("span", {
+        className: "dg-criteria-progress", role: "img", title: label, "aria-label": label,
+        style: { display: "inline-block", maxWidth: "100%", height: 16, lineHeight: "16px",
+          whiteSpace: "nowrap", overflow: "hidden", verticalAlign: "middle", fontSize: 11,
+          letterSpacing: "-3px", marginLeft: 0, paddingRight: 2 },
+      }, blocks);
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
@@ -993,7 +1061,7 @@ window.__ModuleLoader__.load({
         },
         title: GOAL_TYPE_LABELS[aType] ?? aType,
       }, GOAL_TYPE_ABBREV[aType] ?? aType[0]?.toUpperCase());
-      if (g.reviewer === "human") badges.push("👤人审");
+      if (g.reviewer === "human") badges.push("👤");
       if (g.reviewer === "ai") badges.push("🤖AI审");
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
       if (g.archived) badges.push("📦已归档");
@@ -1055,7 +1123,12 @@ window.__ModuleLoader__.load({
             title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
           titleRow,
           h("div", { style: S.meta },
-            `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`),
+            `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
+             h(CriteriaProgress, {
+               goalId: g.id,
+               items: g.criteria_items ?? g.criteriaItems,
+               count: g.criteria_count ?? g.criteriaCount,
+             })),
         );
       }
       return h(
@@ -1065,6 +1138,11 @@ window.__ModuleLoader__.load({
         titleRow,
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
+          h(CriteriaProgress, {
+            goalId: g.id,
+            items: g.criteria_items ?? g.criteriaItems,
+            count: g.criteria_count ?? g.criteriaCount,
+          }),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
         hasDep
           ? h("div", { style: { ...S.meta, color: "#e0a53a" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
@@ -1400,9 +1478,10 @@ window.__ModuleLoader__.load({
     // 质量判据 checklist（确认阶段）：每条一个勾选框（localStorage 按目标持久化，仅前端评审草稿）
     // + 「💬 反馈」按钮——展开输入框，经 session.prompt 排队送达该目标的执行会话（复用 g-107 通路）。
     function CriteriaChecklist(props) {
-      const items = String(props.crit ?? "").split("\n")
+      // 与 core/model.ts criteriaItems 同源：先移除跨行 HTML 注释，再按行 trim。
+      const items = String(props.crit ?? "").replace(/<!--[\s\S]*?-->/g, "").split("\n")
         .map((l) => l.trim())
-        .filter((l) => l && !l.startsWith("<!--"));
+        .filter((l) => l);
       const storeKey = "dsh-graph.crit." + props.goalId;
       const readChecked = () => {
         try { return JSON.parse(localStorage.getItem(storeKey) ?? "[]"); } catch { return []; }
@@ -1417,6 +1496,7 @@ window.__ModuleLoader__.load({
         const next = checked.includes(line) ? checked.filter((t) => t !== line) : [...checked, line];
         setChecked(next);
         try { localStorage.setItem(storeKey, JSON.stringify(next)); } catch {}
+        window.dispatchEvent(new Event("dsh-graph.criteria-changed"));
       };
       const sendFb = async (criterion) => {
         const t = fbText.trim();
@@ -1498,6 +1578,51 @@ window.__ModuleLoader__.load({
       } catch {
         return false;
       }
+    }
+
+    // g-168：定义/润色入口。两条路径都只产生建议，不改目标或状态。
+    function DefinitionPolish(props) {
+      const { goalId, goalPath, supervisorSession, status, events } = props;
+      const [mode, setMode] = React.useState("idle"); // idle | supervisor | pm
+      const [guidance, setGuidance] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [loading, setLoading] = React.useState(false);
+      const allowed = ["draft", "planning", "collecting", "ready"];
+      const hasActiveAttempt = (events ?? []).some((e) => e.event === "attempt.started" && e.details?.executor !== "agent:collect");
+      if (!allowed.includes(status) || hasActiveAttempt) return null;
+      const request = `【${goalId} 定义/润色请求】\n目标 ID：${goalId}\ngoal.md 工作区相对路径：${String(goalPath ?? "（路径未知）")}\n人工指导意见：${guidance.trim() || "（无）"}`;
+      const openSupervisor = async () => {
+        setLoading(true); setNote(null);
+        try {
+          const rt = sessionsRt ?? appCtx?.get?.("sessions");
+          if (!rt) throw new Error("会话服务不可用");
+          if (!supervisorSession) throw new Error("未配置主管会话（project.yaml 的 supervisor.session）");
+          const copied = await copyText(request);
+          rt.open?.(supervisorSession); activateChatTab();
+          setMode("supervisor");
+          setNote(copied ? "✅ 请求已复制，已打开主管会话，请粘贴发送" : "⚠️ 自动复制失败，请手动复制下方预览");
+        } catch (e) { setNote("⚠️ 主管路径失败：" + String(e?.message ?? e)); }
+        setLoading(false);
+      };
+      const askPm = async () => {
+        setLoading(true); setMode("pm"); setNote("⏳ 产品经理 Agent 正在处理…");
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/define-polish"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: goalId, goal_path: goalPath, guidance: guidance.trim() }) });
+          const data = await r.json();
+          if (data.ok) setNote("✅ 产品经理 Agent 已受理，建议将返回主管会话");
+          else setNote("⚠️ 产品经理 Agent 失败：" + (data.child_error || data.error || "未知错误"));
+        } catch (e) { setNote("⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e)); }
+        setLoading(false);
+      };
+      return h("div", null,
+        h("button", { style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn", disabled: loading, onClick: () => { setMode(mode === "idle" ? "supervisor" : "idle"); setNote(null); } }, "📝 定义/润色"),
+        mode !== "idle" ? h("div", { style: { display: "flex", flexDirection: "column", gap: 5, marginTop: 5 } },
+          h("div", { style: S.meta }, "可填写额外指导意见，再选择处理方式："),
+          h("textarea", { style: { ...S.promptInput, minHeight: 48, resize: "vertical", fontFamily: "inherit", fontSize: 12 }, value: guidance, placeholder: "人工指导意见（可选）…", onChange: (e) => setGuidance(e.target.value) }),
+          h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: openSupervisor }, "发送给主管（复制请求）"),
+            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: askPm }, "交给产品经理 Agent")),
+          note ? h("div", { style: S.meta }, note) : null) : null);
     }
 
     // g-109：目标描述区执行/反馈交互组件（执行按钮直接创建子代理；接受默认经主管 Agent 复核，
@@ -1657,11 +1782,9 @@ window.__ModuleLoader__.load({
             disabled: loading,
             onClick: startExecution,
           }, "🚀 执行"),
-          h("button", {
-            style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
-            disabled: loading,
-            onClick: () => { setMode(mode === "feedback" ? "idle" : "feedback"); setNote(null); },
-          }, "💬 反馈")),
+          h(DefinitionPolish, {
+            goalId, goalPath: props.goalPath, supervisorSession, status, events,
+          })),
         // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
         acceptState === "objection"
           ? h("div", { key: "obj", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
@@ -2203,7 +2326,7 @@ window.__ModuleLoader__.load({
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
-            h(AcceptFeedback, { goalId: props.id, status, events: d.events, supervisorSession: props.supervisorSession, onRefresh: load })) : null,
+            h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, supervisorSession: props.supervisorSession, onRefresh: load })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           crit != null ? sectionBlock("c", "✅ 质量判据", crit,
             !isPlaceholder(crit) && ["ready", "in_progress", "review", "delivered"].includes(status)
@@ -3277,9 +3400,9 @@ window.__ModuleLoader__.load({
       };
       // g-77647351：泳道渲染（带拖放支持，跨 lane 拖放改归属）；g-129 版本 lane 标题「＋」预选版本
       // g-137：laneIndex 用于交替背景色；g-162：阶段列横向交替深浅
-      const lane = (label, goals, key, version, laneIndex = 0) => {
-        // g-162: 泳道折叠状态
-        const isCollapsed = !!collapsedLanes[key];
+      const lane = (label, goals, key, version, laneIndex = 0, collapsible = true) => {
+        // g-162: 普通泳道折叠状态；released 仅复用 lane 布局，不增加折叠入口
+        const isCollapsed = collapsible && !!collapsedLanes[key];
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
         const baseBg = "rgba(255,255,255,.03)";
         const stageBg = (stageIdx) => stageIdx % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)";
@@ -3290,6 +3413,7 @@ window.__ModuleLoader__.load({
               key: key + "-label",
               style: {
                 ...S.laneLabel,
+                 paddingRight: 40,
                 position: "relative",
                 background: baseBg,
                 cursor: "pointer",
@@ -3302,7 +3426,7 @@ window.__ModuleLoader__.load({
             },
               h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
               h("button", {
-                style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+                style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
                 className: "dg-btn",
                 title: version ? `在 ${version} 新建目标` : (key === "standalone" ? "新建独立目标" : "新建目标（backlog）"),
                 onClick: (e) => {
@@ -3351,8 +3475,8 @@ window.__ModuleLoader__.load({
             const duration = maxDays >= 1 ? `${Math.floor(maxDays)}天` : "";
             // g-127：用换行符让窄条内自然竖排（文字保持水平，不旋转）
             const summaryText = duration
-              ? h(React.Fragment, null, "⛔", h("br"), `×${orderedGoals.length}`, h("br"), duration)
-              : h(React.Fragment, null, "⛔", h("br"), `×${orderedGoals.length}`);
+              ? h(React.Fragment, null, "阻", h("br"), "塞", h("br"), `×${orderedGoals.length}`, h("br"), duration)
+              : h(React.Fragment, null, "阻", h("br"), "塞", h("br"), `×${orderedGoals.length}`);
             return h("div", {
               key: key + "-" + s.key, // 使用 lane key + stage key 作为唯一 key
               style: {
@@ -3425,7 +3549,7 @@ window.__ModuleLoader__.load({
                   commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
                 }
               } : undefined,
-            }, h(React.Fragment, null, "📦", h("br"), `×${count}`));
+            }, h(React.Fragment, null, "交", h("br"), "付", h("br"), `×${count}`));
           }
           return h("div", {
             key: key + "-" + s.key, // 使用 lane key + stage key 作为唯一 key
@@ -3505,6 +3629,7 @@ window.__ModuleLoader__.load({
           key: key + "-label",
           style: {
             ...S.laneLabel,
+                 paddingRight: 40,
             position: "relative",
             background: labelBg,
             cursor: version ? "pointer" : "default",
@@ -3527,26 +3652,26 @@ window.__ModuleLoader__.load({
           } : undefined,
         },
           label,
-          // g-162: 泳道折叠/展开按钮
-          h("button", {
-            style: { ...S.btn, position: "absolute", left: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
-            className: "dg-btn",
-            title: "折叠泳道",
-            onClick: (e) => {
-              e.stopPropagation();
-              setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
-            },
-          }, "▾"),
           // g-129: 每个 lane 标题右下角加「+」按钮（版本 lane 预选版本，独立/backlog 进 backlog）
           h("button", {
-            style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+            style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
             className: "dg-btn",
             title: key === "standalone" ? "新建独立目标" : (version ? `在 ${version} 新建目标` : "新建目标（backlog）"),
             onClick: (e) => {
               e.stopPropagation();
               openCreateGoal(key === "standalone" ? "standalone" : version);
             },
-          }, "＋"));
+          }, "＋"),
+
+           collapsible ? h("button", {
+             className: "dg-lane-collapse",
+             title: "折叠泳道",
+             "aria-label": "折叠泳道",
+             onClick: (e) => {
+               e.stopPropagation();
+               setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
+             },
+           }, h("span", { className: "dg-lane-collapse-triangle" })) : null);
         return [labelEl, ...cells];
       };
 
@@ -3560,7 +3685,7 @@ window.__ModuleLoader__.load({
           return [
             h("div", {
               key: key + "-label",
-              style: { ...S.laneLabel, position: "relative", background: backlogBg, cursor: "pointer" },
+              style: { ...S.laneLabel, paddingRight: 40, position: "relative", background: backlogBg, cursor: "pointer" },
               title: "点击展开泳道",
               onClick: (e) => {
                 e.stopPropagation();
@@ -3569,7 +3694,7 @@ window.__ModuleLoader__.load({
             },
               h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
               h("button", {
-                style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+                style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
                 className: "dg-btn",
                 title: "新建目标（backlog）",
                 onClick: (e) => {
@@ -3587,20 +3712,21 @@ window.__ModuleLoader__.load({
         }
         // 展开态：正常渲染
         const isOverThisCell = drag && drag.overLaneKey === key;
-        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative", background: backlogBg } },
+        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, paddingRight: 40, position: "relative", background: backlogBg } },
           label,
           // g-162: 泳道折叠按钮
           h("button", {
-            style: { ...S.btn, position: "absolute", left: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
-            className: "dg-btn",
+            style: { position: "absolute", left: "50%", right: "auto", bottom: 2 },
+            className: "dg-lane-collapse",
             title: "折叠泳道",
+            "aria-label": "折叠泳道",
             onClick: (e) => {
               e.stopPropagation();
               setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
             },
-          }, "▾"),
+          }, h("span", { className: "dg-lane-collapse-triangle" })),
           h("button", {
-            style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+            style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
             className: "dg-btn",
             title: "新建目标（backlog）",
             onClick: () => openCreateGoal(null),
@@ -3676,10 +3802,23 @@ window.__ModuleLoader__.load({
         return [labelEl, flatCell];
       };
 
+      // g-164：动态列模板——按当前交付/阻塞折叠状态计算列宽，供顶部表头网格与 released 泳道网格共用。
+      // 保证 released 泳道展开后与 active/version 泳道左侧标题宽/阶段列宽/列顺序完全一致；
+      // 折叠列保留窄栏 36px，普通阶段列保持既有的 minmax(150px, 1fr) 宽。
+      // STAGES 顺序: describe, collect, execute, confirm, deliver, blocked
+      const gridCols = ["130px",
+        "minmax(150px, 1fr)",  // describe
+        "minmax(150px, 1fr)",  // collect
+        "minmax(150px, 1fr)",  // execute
+        "minmax(150px, 1fr)",  // confirm
+        deliverColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // deliver
+        blockedColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // blocked
+      ].join(" ");
+
       const rows = [];
       let laneIndex = 0;
       for (const v of active) {
-        rows.push(...lane(`🏷 ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
+        rows.push(...lane(`🏷️ ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
         laneIndex++;
       }
       rows.push(...lane("独立目标", b.standalone, "standalone", null, laneIndex));
@@ -3693,8 +3832,8 @@ window.__ModuleLoader__.load({
             key: "rel-" + v.slug, style: S.collapsed, className: "dg-collapsed", title: "点击展开/收起",
             onClick: () => setOpenReleased({ ...openReleased, [v.slug]: !open }),
           }, `${open ? "▾" : "▸"} ${v.name} ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`),
-          open ? h("div", { key: "relx-" + v.slug, style: S.grid },
-            ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx)) : null,
+          open ? h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: gridCols } },
+            ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx, false)) : null,
         ];
       });
 
@@ -3870,19 +4009,9 @@ window.__ModuleLoader__.load({
         b.supervisorSession
           ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null, statusAt: b.supervisorStatusAt ?? null })
           : null,
-        // g-127/g-156：折叠时对应列窄化为 36px（blocked 和 deliver 独立折叠）
-        h("div", { style: { ...S.grid, gridTemplateColumns:
-          // STAGES 顺序: describe, collect, execute, confirm, deliver, blocked
-          // 每列根据折叠状态决定宽度
-          ["130px",
-            "minmax(150px, 1fr)",  // describe
-            "minmax(150px, 1fr)",  // collect
-            "minmax(150px, 1fr)",  // execute
-            "minmax(150px, 1fr)",  // confirm
-            deliverColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // deliver
-            blockedColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // blocked
-          ].join(" ")
-        } },
+        // g-127/g-156/g-164：折叠时对应列窄化为 36px（blocked 和 deliver 独立折叠），
+        // 列模板统一由 gridCols 按当前折叠状态动态计算，与 released 泳道网格保持一致
+        h("div", { style: { ...S.grid, gridTemplateColumns: gridCols } },
           h("div", { style: S.stageHead }, "泳道＼阶段"),
           STAGES.map((s) => {
             // g-127：blocked 列头可点击切换折叠/展开
@@ -3895,7 +4024,9 @@ window.__ModuleLoader__.load({
                 },
                 onClick: () => setBlockedColumnCollapsed((p) => !p),
                 title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
-              }, blockedColumnCollapsed ? "▸" : s.label + " ▾");
+              }, blockedColumnCollapsed
+                ? h(React.Fragment, null, "阻", h("br"), "塞")
+                : s.label + " ▾");
             }
             // g-156：deliver 列头可点击切换折叠/展开（与 blocked 一致的交互）
             if (s.key === "deliver") {
@@ -3906,7 +4037,9 @@ window.__ModuleLoader__.load({
                 },
                 onClick: () => setDeliverColumnCollapsed((p) => !p),
                 title: deliverColumnCollapsed ? "点击展开交付列" : "点击收起交付列",
-              }, deliverColumnCollapsed ? "▸" : s.label + " ▾");
+              }, deliverColumnCollapsed
+                ? h(React.Fragment, null, "交", h("br"), "付")
+                : s.label + " ▾");
             }
             return h("div", { key: s.key, style: S.stageHead }, s.label);
           }),
@@ -4032,7 +4165,7 @@ window.__ModuleLoader__.load({
           ? h("div", { style: S.overlay, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } },
               h("div", { style: { ...S.modal, minWidth: 360, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } }, "✕"),
-                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, `🏷 版本详情：${versionDetailTarget.name}`),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, `🏷️ 版本详情：${versionDetailTarget.name}`),
                 // 基本信息
                 h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } },
                   h("div", null, `Slug：${versionDetailTarget.slug}`),

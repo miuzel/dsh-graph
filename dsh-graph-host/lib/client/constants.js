@@ -98,6 +98,19 @@
       .dg-btn:hover { filter: brightness(1.20); background: rgba(128,128,128,.25); }
       .dg-btn:active { filter: brightness(0.95); }
       .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
+      /* g-162：普通泳道内容底部居中的扁平折叠入口；released 不使用此控件 */
+      .dg-lane-collapse {
+        position: absolute; left: 50%; right: auto; bottom: 2px; transform: translateX(-50%); width: 32px; height: 9px; padding: 0; border: 1px solid rgba(128,128,128,.42);
+        border-radius: 2px; background: rgba(128,128,128,.16); cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .dg-lane-collapse { transition: transform .14s ease, background .14s ease, filter .14s ease; }
+      .dg-lane-collapse:hover { background: rgba(128,128,128,.28); transform: translateX(-50%) translateY(-2px); filter: brightness(1.15); }
+      .dg-lane-collapse:active { transform: translateX(-50%) translateY(0); }
+      .dg-lane-collapse-triangle {
+        width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent;
+        border-bottom: 5px solid rgba(220,220,220,.82);
+      }
       /* g-153：主要操作按钮 hover/active/disabled */
       .dg-btn-primary { transition: background .12s ease, border-color .12s ease, filter .12s ease; }
       .dg-btn-primary:hover { background: rgba(76,141,255,.30); border-color: rgba(76,141,255,.55); }

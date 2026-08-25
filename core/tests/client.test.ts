@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, relative } from "node:path";
+import vm from "node:vm";
 import { init, createGoal, findGoalFile, loadGoal, setCriteria, transition } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dsh-graph-host/index.js";
@@ -102,6 +103,154 @@ test("g-157 拖动自动滚动源契约：仅拖动时监听并清理 RAF/监听
   assert.match(source, /window\.removeEventListener\("dragover", handleDragOver, true\)/);
   assert.match(source, /window\.removeEventListener\("dragleave", handleDragLeave, true\)/);
   assert.doesNotMatch(source, /overflowX: auto/);
+});
+
+test("g-163 判据方块按有序 key 渲染并支持即时同步", () => {
+  const card = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/card.js"), "utf8");
+  const actions = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  assert.match(card, /function CriteriaProgress\(props\)/);
+  assert.match(card, /props\.items/);
+  assert.match(card, /CRITERIA_PLACEHOLDERS/);
+  assert.match(card, /!CRITERIA_PLACEHOLDERS\.has\(key\)/);
+  assert.match(card, /checkedSet\.has\(key\) \? "🟩" : "◽"/);
+  assert.match(card, /role: "img"/);
+  assert.match(card, /"aria-label": label/);
+  assert.match(card, /letterSpacing: "-3px"/);
+  assert.match(card, /width: 5, transform: "scaleX\(\.2\)"/);
+  assert.match(card, /letterSpacing: "-3px", marginLeft: 0, paddingRight: 2/);
+  assert.match(card, /keys\.slice\(0, 10\)/);
+  assert.match(card, /Number\(reportedCount\) === 0/);
+  assert.match(card, /count: g\.criteria_count \?\? g\.criteriaCount/);
+  assert.match(card, /badges\.push\("👤"\)/);
+  assert.match(card, /`\$\{done\}\/\$\{total\}`/);
+  assert.match(card, /dsh-graph\.criteria-changed/);
+  assert.match(actions, /localStorage\.setItem\(storeKey, JSON\.stringify\(next\)\)/);
+  assert.match(actions, /window\.dispatchEvent\(new Event\("dsh-graph\.criteria-changed"\)\)/);
+  assert.match(card, /window\.addEventListener\("storage", refresh\)/);
+  assert.match(card, /if \(!keys\.length\) return null/);
+  assert.match(actions, /与 core\/model\.ts criteriaItems 同源/);
+});
+
+test("g-164 released 泳道与 active/version 泳道共用同一动态列模板源契约", () => {
+  const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
+  // 顶部表头网格与 released 泳道网格必须共用同一份按折叠状态动态计算的列模板，
+  // 否则 released 泳道展开并折叠交付/阻塞列时列宽与上方泳道错位。
+  assert.match(source, /const gridCols = \["130px",/);
+  assert.match(source, /deliverColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ deliver/);
+  assert.match(source, /blockedColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ blocked/);
+  // 顶部表头网格：(1) 处使用 gridCols。
+  assert.match(source, /h\("div", \{ style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \} \},\s*\n\s*h\("div", \{ style: S\.stageHead \}, "泳道＼阶段"\)/);
+  // released 泳道网格：(1) 处使用 gridCols（relx- 容器），保证与上方泳道列宽/顺序一致。
+  assert.match(source, /relx-" \+ v\.slug, style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \}/);
+  // 全文件恰好两处（顶部表头 + released 泳道）引用该共享模板，不存在各排各的静态模板。
+  assert.equal((source.match(/gridTemplateColumns: gridCols/g) || []).length, 2);
+});
+
+test("g-156 交付/阻塞折叠列源契约：会话态、窄栏标题与数量均保留", () => {
+  const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
+  // 折叠状态必须由 React state 持有，不能落到 workspace 或持久化存储。
+  assert.match(source, /const \[deliverColumnCollapsed, setDeliverColumnCollapsed\] = React\.useState\(false\)/);
+  assert.doesNotMatch(source, /localStorage|sessionStorage/);
+  // 交付与阻塞窄栏都显示可识别的标题，并保留卡片计数。
+  assert.match(source, /deliverColumnCollapsed\s*\?\s*\n?\s*h\(React\.Fragment, null, "交", h\("br"\), "付"\)/);
+  assert.match(source, /blockedColumnCollapsed\s*\?\s*\n?\s*h\(React\.Fragment, null, "阻", h\("br"\), "塞"\)/);
+  assert.match(source, /"交", h\("br"\), "付", h\("br"\), `×\$\{count\}`/);
+  assert.match(source, /"阻", h\("br"\), "塞", h\("br"\), `×\$\{orderedGoals\.length\}`/);
+  // 两列折叠后固定窄宽度，避免横向布局溢出。
+  assert.match(source, /deliverColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)"/);
+  assert.match(source, /blockedColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)"/);
+});
+
+test("g-162 普通泳道折叠入口位于内容底部且 released 不重复添加", () => {
+  const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
+  assert.match(source, /const \[collapsedLanes, setCollapsedLanes\] = React\.useState\(\{\}\)/);
+  assert.match(source, /className: "dg-lane-collapse"/);
+  assert.match(source, /className: "dg-lane-collapse-triangle"/);
+  assert.match(source, /gridColumn: "2 \/ -1"/);
+  assert.match(source, /collapsible = true/);
+  assert.match(source, /lane\(v\.name, v\.goals, "rellane-" \+ v\.slug, null, laneIndex \+ idx, false\)/);
+  assert.doesNotMatch(source, /title: "折叠泳道"[\s\S]{0,180}lane\(v\.name, v\.goals, "rellane-/);
+  assert.doesNotMatch(source, /localStorage|sessionStorage/);
+  const backlogControl = source.slice(source.indexOf("// g-162: 泳道折叠按钮"), source.indexOf("// g-137 修复"));
+  assert.match(backlogControl, /className: "dg-lane-collapse"/);
+  assert.match(backlogControl, /className: "dg-lane-collapse-triangle"/);
+  assert.match(backlogControl, /"aria-label": "折叠泳道"/);
+  assert.doesNotMatch(backlogControl, /className: "dg-btn",\s*title: "折叠泳道"|\}, "▾"\)/);
+  const laneCreate = source.slice(source.indexOf("// g-129: 每个 lane 标题右下角"), source.indexOf("return [labelEl, ...cells]"));
+  assert.match(laneCreate, /position: "absolute", right: 6, top: 8, bottom: "auto"/);
+  assert.equal((source.match(/paddingRight: 40/g) || []).length, 4, "active/version 与 backlog 的展开/折叠标题均预留 + 空间");
+  assert.doesNotMatch(laneCreate, /position: version \? "static"/);
+  assert.ok(laneCreate.indexOf("// g-129: 每个 lane 标题右下角") < laneCreate.indexOf("collapsible ? h(\"button\""), "展开态应先渲染 + 再渲染折叠按钮");
+  const backlogLane = source.slice(source.indexOf("const backlogRow"), source.indexOf("// g-137 修复"));
+  assert.match(backlogLane, /position: "absolute", right: 6, top: 8, bottom: "auto"/);
+  assert.match(backlogLane, /paddingRight: 40/);
+  assert.doesNotMatch(source, /position: version \? "static"/);
+});
+
+test("g-163 Card 真实调用链转发 camelCase criteriaItems", () => {
+  const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/card.js"), "utf8");
+  const elements: any[] = [];
+  const h = (type: any, props: any, ...children: any[]) => {
+    const value = typeof type === "function" ? type({ ...(props ?? {}), children })
+      : { type, props: props ?? {}, children };
+    elements.push(value);
+    return value;
+  };
+  const context: any = {
+    React: {
+      createElement: h,
+      useState: (initial: any) => [typeof initial === "function" ? initial() : initial, () => {}],
+      useEffect: () => {},
+    },
+    h,
+    S: new Proxy({}, { get: () => ({}) }),
+    STATUS_LABEL: { in_progress: "进行中" },
+    CARD_STATUS_ICON: {},
+    GOAL_TYPE_LABELS: { feature: "功能" },
+    GOAL_TYPE_ABBREV: { feature: "F" },
+    goalTypeColor: () => "#000",
+    normalizeGoalType: () => "feature",
+    rowHalf: () => "after",
+    localStorage: { getItem: () => JSON.stringify(["第一"]) },
+    window: { addEventListener: () => {}, removeEventListener: () => {} },
+  };
+  const progressStart = source.indexOf("const CRITERIA_PLACEHOLDERS");
+  const cardStart = source.indexOf("function Card(");
+  const cardEnd = source.indexOf("\n    // g-a92e1406：状态摘要行", cardStart);
+  assert.ok(progressStart > 0 && cardStart > progressStart && cardEnd > cardStart);
+  const progress = source.slice(progressStart, source.indexOf("    // 目标卡", progressStart));
+  const card = source.slice(cardStart, cardEnd);
+  new vm.Script(`(function () {\n${progress}\n${card}\nglobalThis.__Card = Card;\n})()`).runInNewContext(context);
+  context.__Card(
+    { id: "g-camel", title: "camel", status: "in_progress", criteriaItems: ["第一", "第二"] },
+    () => {}, () => {}, false, null, {}, false, () => {}, null,
+  );
+  const progressView = elements.find((entry) => entry?.props?.role === "img");
+  assert.ok(progressView, "Card 真实调用应渲染 CriteriaProgress");
+  assert.equal(progressView.props["aria-label"], "质量判据：已完成 1/2");
+  assert.deepEqual(Array.from(progressView.children[0], (entry: any) => entry?.children?.[0]), ["🟩", "◽"]);
+
+  const beforeZero = elements.length;
+  context.__Card(
+    { id: "g-zero", title: "zero", status: "in_progress", criteriaItems: ["占位"], criteria_count: 0 },
+    () => {}, () => {}, false, null, {}, false, () => {}, null,
+  );
+  assert.equal(
+    elements.slice(beforeZero).some((entry) => entry?.props?.role === "img"),
+    false,
+    "criteria_count=0 时不应渲染方块",
+  );
+
+  const beforePlaceholder = elements.length;
+  context.__Card(
+    { id: "g-placeholder", title: "placeholder", status: "in_progress", criteriaItems: ["（待登记；进入 in_progress 前必须非空且已确认）"] },
+    () => {}, () => {}, false, null, {}, false, () => {}, null,
+  );
+  assert.equal(
+    elements.slice(beforePlaceholder).some((entry) => entry?.props?.role === "img"),
+    false,
+    "模板占位判据不应渲染方块",
+  );
 });
 
 test("g-109 写端点全部注册（accept/edit-description/add-card/start-collection）", () => {
@@ -679,4 +828,23 @@ test("g-158 set-goal-type REST：更新 type + 记 goal.type_changed 事件 + no
   assert.equal(r2.body.new_type, "bug");
   const afterCount = readEvents(root).filter((e) => e.event === "goal.type_changed").length;
   assert.equal(afterCount, beforeCount, "相同类型 no-op 不追加事件");
+});
+
+test("g-168 定义/润色源契约：按钮同排且请求仅含路径与指导意见", () => {
+  const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  assert.ok(/function DefinitionPolish\(props\)/.test(actions));
+  assert.ok(/goalPath/.test(actions) && /guidance/.test(actions));
+  assert.ok(!/h\("pre"[\s\S]*request/.test(actions), "不渲染完整请求预览");
+  assert.ok(/display: \"flex\", gap: 6, alignItems: \"center\"/.test(actions), "入口位于 AcceptFeedback flex 行");
+  assert.ok(/goalPath:[\s\S]*d\.goalFile/.test(modal), "GoalModal 传递 goal.md 路径");
+  assert.ok(/goal_path:\s*goalPath/.test(actions), "PM 请求传递路径而非正文");
+});
+
+test("g-168 host prompt 契约：PM 读取 goal.md 并附带指导意见", () => {
+  const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  assert.ok(/const \{ goal, goal_path, guidance \}/.test(host));
+  assert.ok(/goal\.md 工作区相对路径/.test(host));
+  assert.ok(/read 工具读取上述 goal\.md/.test(host));
+  assert.ok(!/目标标题：\$\{String\(title/.test(host));
 });

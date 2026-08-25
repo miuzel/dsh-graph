@@ -425,9 +425,9 @@
       };
       // g-77647351：泳道渲染（带拖放支持，跨 lane 拖放改归属）；g-129 版本 lane 标题「＋」预选版本
       // g-137：laneIndex 用于交替背景色；g-162：阶段列横向交替深浅
-      const lane = (label, goals, key, version, laneIndex = 0) => {
-        // g-162: 泳道折叠状态
-        const isCollapsed = !!collapsedLanes[key];
+      const lane = (label, goals, key, version, laneIndex = 0, collapsible = true) => {
+        // g-162: 普通泳道折叠状态；released 仅复用 lane 布局，不增加折叠入口
+        const isCollapsed = collapsible && !!collapsedLanes[key];
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
         const baseBg = "rgba(255,255,255,.03)";
         const stageBg = (stageIdx) => stageIdx % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)";
@@ -438,6 +438,7 @@
               key: key + "-label",
               style: {
                 ...S.laneLabel,
+                 paddingRight: 40,
                 position: "relative",
                 background: baseBg,
                 cursor: "pointer",
@@ -450,7 +451,7 @@
             },
               h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
               h("button", {
-                style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+                style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
                 className: "dg-btn",
                 title: version ? `在 ${version} 新建目标` : (key === "standalone" ? "新建独立目标" : "新建目标（backlog）"),
                 onClick: (e) => {
@@ -499,8 +500,8 @@
             const duration = maxDays >= 1 ? `${Math.floor(maxDays)}天` : "";
             // g-127：用换行符让窄条内自然竖排（文字保持水平，不旋转）
             const summaryText = duration
-              ? h(React.Fragment, null, "⛔", h("br"), `×${orderedGoals.length}`, h("br"), duration)
-              : h(React.Fragment, null, "⛔", h("br"), `×${orderedGoals.length}`);
+              ? h(React.Fragment, null, "阻", h("br"), "塞", h("br"), `×${orderedGoals.length}`, h("br"), duration)
+              : h(React.Fragment, null, "阻", h("br"), "塞", h("br"), `×${orderedGoals.length}`);
             return h("div", {
               key: key + "-" + s.key, // 使用 lane key + stage key 作为唯一 key
               style: {
@@ -573,7 +574,7 @@
                   commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
                 }
               } : undefined,
-            }, h(React.Fragment, null, "📦", h("br"), `×${count}`));
+            }, h(React.Fragment, null, "交", h("br"), "付", h("br"), `×${count}`));
           }
           return h("div", {
             key: key + "-" + s.key, // 使用 lane key + stage key 作为唯一 key
@@ -653,6 +654,7 @@
           key: key + "-label",
           style: {
             ...S.laneLabel,
+                 paddingRight: 40,
             position: "relative",
             background: labelBg,
             cursor: version ? "pointer" : "default",
@@ -675,26 +677,26 @@
           } : undefined,
         },
           label,
-          // g-162: 泳道折叠/展开按钮
-          h("button", {
-            style: { ...S.btn, position: "absolute", left: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
-            className: "dg-btn",
-            title: "折叠泳道",
-            onClick: (e) => {
-              e.stopPropagation();
-              setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
-            },
-          }, "▾"),
           // g-129: 每个 lane 标题右下角加「+」按钮（版本 lane 预选版本，独立/backlog 进 backlog）
           h("button", {
-            style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+            style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
             className: "dg-btn",
             title: key === "standalone" ? "新建独立目标" : (version ? `在 ${version} 新建目标` : "新建目标（backlog）"),
             onClick: (e) => {
               e.stopPropagation();
               openCreateGoal(key === "standalone" ? "standalone" : version);
             },
-          }, "＋"));
+          }, "＋"),
+
+           collapsible ? h("button", {
+             className: "dg-lane-collapse",
+             title: "折叠泳道",
+             "aria-label": "折叠泳道",
+             onClick: (e) => {
+               e.stopPropagation();
+               setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
+             },
+           }, h("span", { className: "dg-lane-collapse-triangle" })) : null);
         return [labelEl, ...cells];
       };
 
@@ -708,7 +710,7 @@
           return [
             h("div", {
               key: key + "-label",
-              style: { ...S.laneLabel, position: "relative", background: backlogBg, cursor: "pointer" },
+              style: { ...S.laneLabel, paddingRight: 40, position: "relative", background: backlogBg, cursor: "pointer" },
               title: "点击展开泳道",
               onClick: (e) => {
                 e.stopPropagation();
@@ -717,7 +719,7 @@
             },
               h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
               h("button", {
-                style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+                style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
                 className: "dg-btn",
                 title: "新建目标（backlog）",
                 onClick: (e) => {
@@ -735,20 +737,21 @@
         }
         // 展开态：正常渲染
         const isOverThisCell = drag && drag.overLaneKey === key;
-        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, position: "relative", background: backlogBg } },
+        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, paddingRight: 40, position: "relative", background: backlogBg } },
           label,
           // g-162: 泳道折叠按钮
           h("button", {
-            style: { ...S.btn, position: "absolute", left: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
-            className: "dg-btn",
+            style: { position: "absolute", left: "50%", right: "auto", bottom: 2 },
+            className: "dg-lane-collapse",
             title: "折叠泳道",
+            "aria-label": "折叠泳道",
             onClick: (e) => {
               e.stopPropagation();
               setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
             },
-          }, "▾"),
+          }, h("span", { className: "dg-lane-collapse-triangle" })),
           h("button", {
-            style: { ...S.btn, position: "absolute", right: 4, bottom: 2, fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+            style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
             className: "dg-btn",
             title: "新建目标（backlog）",
             onClick: () => openCreateGoal(null),
@@ -824,10 +827,23 @@
         return [labelEl, flatCell];
       };
 
+      // g-164：动态列模板——按当前交付/阻塞折叠状态计算列宽，供顶部表头网格与 released 泳道网格共用。
+      // 保证 released 泳道展开后与 active/version 泳道左侧标题宽/阶段列宽/列顺序完全一致；
+      // 折叠列保留窄栏 36px，普通阶段列保持既有的 minmax(150px, 1fr) 宽。
+      // STAGES 顺序: describe, collect, execute, confirm, deliver, blocked
+      const gridCols = ["130px",
+        "minmax(150px, 1fr)",  // describe
+        "minmax(150px, 1fr)",  // collect
+        "minmax(150px, 1fr)",  // execute
+        "minmax(150px, 1fr)",  // confirm
+        deliverColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // deliver
+        blockedColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // blocked
+      ].join(" ");
+
       const rows = [];
       let laneIndex = 0;
       for (const v of active) {
-        rows.push(...lane(`🏷 ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
+        rows.push(...lane(`🏷️ ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
         laneIndex++;
       }
       rows.push(...lane("独立目标", b.standalone, "standalone", null, laneIndex));
@@ -841,8 +857,8 @@
             key: "rel-" + v.slug, style: S.collapsed, className: "dg-collapsed", title: "点击展开/收起",
             onClick: () => setOpenReleased({ ...openReleased, [v.slug]: !open }),
           }, `${open ? "▾" : "▸"} ${v.name} ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`),
-          open ? h("div", { key: "relx-" + v.slug, style: S.grid },
-            ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx)) : null,
+          open ? h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: gridCols } },
+            ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx, false)) : null,
         ];
       });
 
@@ -1018,19 +1034,9 @@
         b.supervisorSession
           ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null, statusAt: b.supervisorStatusAt ?? null })
           : null,
-        // g-127/g-156：折叠时对应列窄化为 36px（blocked 和 deliver 独立折叠）
-        h("div", { style: { ...S.grid, gridTemplateColumns:
-          // STAGES 顺序: describe, collect, execute, confirm, deliver, blocked
-          // 每列根据折叠状态决定宽度
-          ["130px",
-            "minmax(150px, 1fr)",  // describe
-            "minmax(150px, 1fr)",  // collect
-            "minmax(150px, 1fr)",  // execute
-            "minmax(150px, 1fr)",  // confirm
-            deliverColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // deliver
-            blockedColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // blocked
-          ].join(" ")
-        } },
+        // g-127/g-156/g-164：折叠时对应列窄化为 36px（blocked 和 deliver 独立折叠），
+        // 列模板统一由 gridCols 按当前折叠状态动态计算，与 released 泳道网格保持一致
+        h("div", { style: { ...S.grid, gridTemplateColumns: gridCols } },
           h("div", { style: S.stageHead }, "泳道＼阶段"),
           STAGES.map((s) => {
             // g-127：blocked 列头可点击切换折叠/展开
@@ -1043,7 +1049,9 @@
                 },
                 onClick: () => setBlockedColumnCollapsed((p) => !p),
                 title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
-              }, blockedColumnCollapsed ? "▸" : s.label + " ▾");
+              }, blockedColumnCollapsed
+                ? h(React.Fragment, null, "阻", h("br"), "塞")
+                : s.label + " ▾");
             }
             // g-156：deliver 列头可点击切换折叠/展开（与 blocked 一致的交互）
             if (s.key === "deliver") {
@@ -1054,7 +1062,9 @@
                 },
                 onClick: () => setDeliverColumnCollapsed((p) => !p),
                 title: deliverColumnCollapsed ? "点击展开交付列" : "点击收起交付列",
-              }, deliverColumnCollapsed ? "▸" : s.label + " ▾");
+              }, deliverColumnCollapsed
+                ? h(React.Fragment, null, "交", h("br"), "付")
+                : s.label + " ▾");
             }
             return h("div", { key: s.key, style: S.stageHead }, s.label);
           }),
@@ -1180,7 +1190,7 @@
           ? h("div", { style: S.overlay, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } },
               h("div", { style: { ...S.modal, minWidth: 360, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } }, "✕"),
-                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, `🏷 版本详情：${versionDetailTarget.name}`),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, `🏷️ 版本详情：${versionDetailTarget.name}`),
                 // 基本信息
                 h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } },
                   h("div", null, `Slug：${versionDetailTarget.slug}`),

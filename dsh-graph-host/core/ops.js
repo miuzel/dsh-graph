@@ -2,7 +2,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, rmdirSync, writeFileSync, } from "node:fs";
 import { join, basename, dirname, relative } from "node:path";
 import { randomUUID } from "node:crypto";
-import { parseDoc, serializeDoc, replaceSection, sectionText, criteriaPresent, countCriteria, normalizeGoalType, } from "./model.js";
+import { parseDoc, serializeDoc, replaceSection, sectionText, criteriaPresent, countCriteria, criteriaItems, normalizeGoalType, } from "./model.js";
 import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso } from "./events.js";
 import { GraphError, STATUSES, assertTransition } from "./machine.js";
 import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail } from "./version-lane.js";
@@ -1901,6 +1901,7 @@ export function boardProjection(root, opts) {
             archived,
             cards,
             criteria_count: countCriteria(doc.body),
+            criteria_items: criteriaItems(doc.body),
             rules_snapshot: meta.rules_snapshot ?? null,
         };
     };

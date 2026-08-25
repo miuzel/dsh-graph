@@ -96,19 +96,26 @@ export function replaceSection(body, name, content) {
     const next = [...lines.slice(0, start + 1), content, ...lines.slice(end)];
     return next.join("\n");
 }
-/** 判据小节是否有实质内容（去掉 HTML 注释后仍有非空行）。 */
+const CRITERIA_PLACEHOLDERS = new Set([
+    "（待登记）",
+    "（待登记；进入 in_progress 前必须非空且已确认）",
+    "（待填写）",
+]);
+/** 判据小节是否有实质内容（去掉 HTML 注释和模板占位行）。 */
 export function criteriaPresent(body) {
+    return criteriaItems(body).length > 0;
+}
+/** 质量判据的稳定有序 key：与客户端 checklist 使用同一规范化行文本。 */
+export function criteriaItems(body) {
     const t = sectionText(body, "质量判据");
     if (t === null)
-        return false;
+        return [];
     const stripped = t.replace(/<!--[\s\S]*?-->/g, "");
-    return stripped.split("\n").some((l) => l.trim() !== "");
+    return stripped.split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l !== "" && !CRITERIA_PLACEHOLDERS.has(l));
 }
 /** 判据小节的实质内容行数（去掉 HTML 注释后非空行；≥1 即视为已登记判据）。g-77647351 看板用。 */
 export function countCriteria(body) {
-    const t = sectionText(body, "质量判据");
-    if (t === null)
-        return 0;
-    const stripped = t.replace(/<!--[\s\S]*?-->/g, "");
-    return stripped.split("\n").filter((l) => l.trim() !== "").length;
+    return criteriaItems(body).length;
 }

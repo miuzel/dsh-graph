@@ -11,6 +11,7 @@ import {
   sectionText,
   replaceSection,
   criteriaPresent,
+  criteriaItems,
 } from "../model.ts";
 import { readEvents } from "../events.ts";
 import {
@@ -33,6 +34,8 @@ import {
   requestAcceptReview,
   resolveAccept,
   readAcceptStatus,
+  boardProjection,
+  boardPayload,
   GraphError,
 } from "../ops.ts";
 
@@ -60,6 +63,27 @@ test("sectionText/replaceSection/criteriaPresent", () => {
   const next = replaceSection(body, "质量判据", "\n1. 通过测试\n");
   assert.equal(criteriaPresent(next), true);
   assert.equal(sectionText(next, "其他")!.trim(), "x");
+});
+
+test("criteriaItems 保留判据原顺序并忽略注释/空行", () => {
+  assert.deepEqual(criteriaItems("\n## 质量判据\n\n1. 第一\n<!-- 跨行\n注释 -->\n（待登记；进入 in_progress 前必须非空且已确认）\n（待登记）\n（待填写）\n\n2. 第二\n3. 第三\n"), ["1. 第一", "2. 第二", "3. 第三"]);
+});
+
+test("boardProjection 提供与判据顺序一致的 criteria_items", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "criteria", actor: "test" });
+  setCriteria(root, id, ["第一", "第二", "第三"], "test");
+  const goal = boardProjection(root).backlog.find((g) => g.id === id);
+  assert.deepEqual(goal?.criteria_items, ["1. 第一", "2. 第二", "3. 第三"]);
+});
+
+test("boardPayload 下发有序 criteria_items，而非只有 criteria_count", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "payload criteria", actor: "test" });
+  setCriteria(root, id, ["第一", "第二", "第三"], "test");
+  const goal = boardPayload(root).backlog.find((g) => g.id === id);
+  assert.equal(goal?.criteria_count, 3);
+  assert.deepEqual(goal?.criteria_items, ["1. 第一", "2. 第二", "3. 第三"]);
 });
 
 // ---- 状态机 ----
