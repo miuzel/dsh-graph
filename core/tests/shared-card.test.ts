@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import {
@@ -43,6 +43,8 @@ import {
   deleteAttachment,
   attachmentsDir,
   attachmentReferenceCount,
+  attachmentDigest,
+  sanitizeAttachmentPath,
 } from "../ops.ts";
 
 function tmpRoot(): string {
@@ -85,7 +87,7 @@ test("共享卡多 goal 引用同一份权威；修改后各引用读一致（�
   addSharedCardRef(root, a, sid, "test");
   addSharedCardRef(root, b, sid, "test");
   assert.equal(referenceCount(root, sid), 2);
-  assert.deepEqual(referencingGoals(root, sid).sort(), [a, b].sort());
+  assert.deepEqual(referencingGoals(root, sid).map((g) => g.id).sort(), [a, b].sort());
   fillCard(root, a, sid, { text: "权威内容 v1", by: "human:x", actor: "test" });
   reviewCard(root, a, sid, { by: "human:y", actor: "test" });
   const ha = harvestedCards(root, a);
@@ -307,9 +309,11 @@ test("boardProjection / goalDetail 下发共享卡 scope 与引用 goal 清单�
   const dcard = d.cards.find((c) => c.id === sid)!;
   assert.equal(dcard.scope, "shared");
   assert.ok(dcard.content.includes("x"));
-  // sharedCards 下发 referencingGoals（供共享面板逐 goal 解引用）
+  // sharedCards 下发 referencingGoals（含 id/title/archived，供共享面板逐 goal 解引用）
   const list = sharedCards(root);
-  assert.deepEqual(list[0].referencingGoals, [a]);
+  assert.deepEqual(list[0].referencingGoals.map((g: any) => g.id), [a]);
+  assert.deepEqual(list[0].referencingGoals[0].title, "A");
+  assert.equal(list[0].referencingGoals[0].archived, false);
 });
 
 test("deleteGoal / archiveGoal / moveGoal 不改变共享卡独立物理归属（判据 #5）", () => {
@@ -352,11 +356,17 @@ test("路径安全：卡片/goal id 与附件名拒绝绝对路径/穿越/分隔
   // addSharedCardRef / removeSharedCardRef / referenceCount 均校验
   assert.throws(() => addSharedCardRef(root, a, "../x", "test"), /路径片段|分隔符/);
   assert.throws(() => referenceCount(root, "a/b"), /路径片段|分隔符/);
-  // 附件名安全
-  assert.throws(() => storeAttachment(root, { name: "../../etc/passwd", content: "x", actor: "test" }), /不安全/);
-  assert.throws(() => storeAttachment(root, { name: "/tmp/x", content: "x", actor: "test" }), /不安全/);
-  assert.throws(() => storeAttachment(root, { name: "a/b", content: "x", actor: "test" }), /不安全/);
+  // 附件名/路径安全
+  assert.throws(() => storeAttachment(root, { name: "../../etc/passwd", content: "x", actor: "test" }), /非法片段|非法路径/);
+  assert.throws(() => storeAttachment(root, { name: "/tmp/x", content: "x", actor: "test" }), /绝对路径/);
+  assert.throws(() => storeAttachment(root, { name: "a\\b", content: "x", actor: "test" }), /反斜杠/);
+  assert.throws(() => storeAttachment(root, { name: "a/../b", content: "x", actor: "test" }), /非法片段/);
   assert.throws(() => storeAttachment(root, { name: "", content: "x", actor: "test" }), /不能为空/);
+  // g-183 返工：安全子目录允许（此前被拒）
+  const sub = storeAttachment(root, { name: "sub/a.md", content: "子目录", actor: "test" });
+  assert.equal(sub, "sub/a.md");
+  assert.ok(existsSync(join(attachmentsDir(root), "sub", "a.md")));
+  assert.ok(listAttachments(root).includes("sub/a.md"));
 });
 
 test("附件：存储/去重/引用解析/删除引用守卫/卡片删除不误删附件", () => {
@@ -409,4 +419,93 @@ test("backlog 目标可引用共享卡并在注入/展示中解析（一致性�
   // 展示：goalCards 也给出该共享卡
   assert.equal(goalCards(root, gid).some((c) => c.id === sid && c.scope === "shared"), true);
   assert.deepEqual(validate(root), []);
+});
+
+test("parseAttachmentRefs 安全过滤：越界/恶意引用被丢弃，允许安全子目录", () => {
+  // '@att/../secret.txt' → 丢弃（不返回 '../secret.txt'）
+  assert.deepEqual(parseAttachmentRefs("x @att/../secret.txt"), []);
+  assert.deepEqual(parseAttachmentRefs("@att/./a.md @att/../../b"), []);
+  // 安全相对子目录保留
+  assert.deepEqual(parseAttachmentRefs("见 @att/docs/report.md 与 @att/a.txt"), ["docs/report.md", "a.txt"]);
+  assert.deepEqual(parseAttachmentRefs("无引用"), []);
+  // sanitizeAttachmentPath 拒绝
+  assert.throws(() => sanitizeAttachmentPath("../x"), /非法片段/);
+  assert.throws(() => sanitizeAttachmentPath("/abs"), /绝对路径/);
+  assert.throws(() => sanitizeAttachmentPath("a\\b"), /反斜杠/);
+  assert.throws(() => sanitizeAttachmentPath("a:z"), /冒号/);
+  assert.throws(() => sanitizeAttachmentPath("a/\0b"), /NUL/);
+});
+
+test("symlink 逃逸拒绝：dangling symlink 指向 attachments 外的目标时 store/delete 均拒绝", () => {
+  const root = tmpRoot();
+  const outside = join(root, "..", `out-${Date.now()}`);
+  mkdirSync(outside, { recursive: true });
+  const attDir = attachmentsDir(root);
+  mkdirSync(attDir, { recursive: true });
+  const escapeName = "escape.bin";
+  // 建 dangling symlink escape.bin → 指向 attachments 外
+  symlinkSync(join(outside, "target.bin"), join(attDir, escapeName));
+  // store 到 escape.bin 必须拒绝（won't follow symlink writes outside）
+  assert.throws(
+    () => storeAttachment(root, { name: escapeName, content: "x", actor: "test" }),
+    /symlink/,
+  );
+  assert.ok(!existsSync(join(outside, "target.bin")), "不应写入 attachments 外部文件");
+  // 子目录为 symlink 时也拒绝
+  const subLink = "sub";
+  symlinkSync(join(outside, "dir"), join(attDir, subLink));
+  assert.throws(
+    () => storeAttachment(root, { name: "sub/f.md", content: "x", actor: "test" }),
+    /symlink/,
+  );
+});
+
+test("context_cards 恶意 ref 不绕过安全解析：goalCards/harvestedCards 跳过、validate 报告", async () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const gf = findGoalFile(root, a);
+  // 向 context_cards 塞越界 ref（../ 与绝对路径），模拟恶意 goal.md
+  const doc = loadGoal(gf);
+  doc.meta.context_cards = ["../../../etc/passwd", "/etc/shadow"];
+  const { serializeDoc } = await import("../model.ts");
+  writeFileSync(gf, serializeDoc(doc), "utf8");
+  // goalCards / harvestedCards 不应 join 越界路径（跳过恶意 ref，不读外部文件）
+  assert.deepEqual(goalCards(root, a), []);
+  assert.deepEqual(harvestedCards(root, a), []);
+  // validate 报告越界 ref（安全解析兜底）
+  const problems = validate(root);
+  assert.ok(problems.some((p) => /卡片引用不安全/.test(p)), "validate 应报告引用不安全");
+});
+
+test("harvested 注入保留附件 refs + 审计摘要；storeAttachment 支持 base64/二进制 + 子目录唯一名", () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  // base64 存二进制（模拟图片）到安全子目录
+  const bin = storeAttachment(root, { name: "img/x.png", base64: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64"), actor: "test" });
+  assert.equal(bin, "img/x.png");
+  const dg = attachmentDigest(root, "img/x.png");
+  assert.ok(dg && dg.length === 16, "附件摘要应为 16 位 sha1 前缀");
+  // 子目录内容不同 → 唯一名
+  const bin2 = storeAttachment(root, { name: "img/x.png", base64: Buffer.from([0x01, 0x02]).toString("base64"), actor: "test" });
+  assert.notEqual(bin2, "img/x.png");
+  assert.ok(bin2.startsWith("img/x-"));
+  // 填充正文引用附件 → 注入与展示保留 refs
+  const oc = addCard(root, a, { title: "附件卡", scope: "goal", actor: "test" });
+  fillCard(root, a, oc, { text: "图见 @att/img/x.png", by: "human:x", actor: "test" });
+  const hs = harvestedCards(root, a);
+  assert.equal(hs.length, 1);
+  assert.deepEqual(hs[0].attachments, ["img/x.png"]);
+  const sec = formatHarvestedCardsSection(root, a);
+  assert.ok(sec.includes("@att/img/x.png"), "注入段应显式列出附件引用");
+  assert.ok(!sec.includes("kind="), "注入段不再输出旧 kind");
+  const d = goalDetail(root, a);
+  assert.deepEqual(d.cards.find((c) => c.id === oc)!.attachments, ["img/x.png"]);
+  // 删除卡片不误删附件：删自有卡后附件仍存在且引用计数归零
+  assert.equal(attachmentReferenceCount(root, "img/x.png"), 1);
+  deleteCard(root, a, oc, { actor: "test" });
+  assert.ok(existsSync(join(attachmentsDir(root), "img/x.png")), "删除卡片不应删除附件");
+  assert.equal(attachmentReferenceCount(root, "img/x.png"), 0);
+  // 零引用后可显式删除
+  deleteAttachment(root, "img/x.png", { actor: "test" });
+  assert.ok(!existsSync(join(attachmentsDir(root), "img/x.png")));
 });

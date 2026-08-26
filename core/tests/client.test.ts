@@ -531,8 +531,8 @@ test("start-collection 有 subagents：验证使用 formatCollectPrompt 生成�
   assert.ok(capturedPrompt.includes(`- 标题: 测试目标`), "应包含 goal 标题");
   assert.ok(capturedPrompt.includes(`- id: \`${card}\``), "应包含 card id");
   assert.ok(capturedPrompt.includes(`- 标题: 测试卡片`), "应包含 card 标题");
-  assert.ok(capturedPrompt.includes(`- 类型: text`), "应包含 card 类型");
-  assert.ok(capturedPrompt.includes(`graph_fill_card(goal="${goalId}", card="${card}", text=<全文>, summary=<≤100字摘要>)`), "应包含精确回填模板");
+  assert.ok(capturedPrompt.includes("**canonical 附件根（绝对路径，非 worktree 相对路径）**"), "应包含 canonical 附件根");
+  assert.ok(capturedPrompt.includes(`graph_fill_card(goal="${goalId}", card="${card}", text=<全文可含 @att/<name>>, summary=<≤100字摘要>)`), "应包含精确回填模板");
   assert.ok(capturedPrompt.includes("**禁区（严格遵守）**"), "应包含禁区说明");
 });
 
@@ -1601,10 +1601,13 @@ test("g-183 attachment REST：存储/路径安全/删除引用守卫", async () 
   assert.ok(existsSync(join(root, "attachments", "note.md")));
   const list = await get(routes, "/api/dsh-graph/attachments");
   assert.ok(list.body.attachments.includes("note.md"));
-  // 路径安全：穿越/绝对路径/分隔符 → 400
+  // 路径安全：穿越/绝对路径/反斜杠/子目录越界 → 400
   assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "../../etc/passwd", content: "x" })).code, 400);
   assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "/abs/x", content: "x" })).code, 400);
-  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "a/b", content: "x" })).code, 400);
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "a\\b", content: "x" })).code, 400);
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "a/../b", content: "x" })).code, 400);
+  // 安全子目录允许
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "sub/docs.md", content: "子目录" })).code, 200);
   // 引用守卫：把引用写进一个 goal 正文，再尝试删除被引用附件 → 400
   const goalFile = findGoalFile(root, goalId);
   const goalDoc = loadGoal(goalFile);
@@ -1619,6 +1622,19 @@ test("g-183 attachment REST：存储/路径安全/删除引用守卫", async () 
   const delOk = await post(routes, "/api/dsh-graph/delete-attachment", { name: "note.md" });
   assert.equal(delOk.code, 200);
   assert.ok(!existsSync(join(root, "attachments", "note.md")));
+});
+
+test("g-183 attachment REST：base64 二进制上传（图片/Excel）与稳定引用", async () => {
+  const { root, routes, goalId } = setup();
+  const b64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64");
+  const store = await post(routes, "/api/dsh-graph/store-attachment", { name: "chart.png", base64: b64 });
+  assert.equal(store.code, 200);
+  assert.equal(store.body.name, "chart.png");
+  assert.equal(store.body.ref, "@att/chart.png");
+  const bytes = readFileSync(join(root, "attachments", "chart.png"));
+  assert.deepEqual(Array.from(bytes), [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], "应按二进制落盘");
+  // 缺 content/base64 → 400
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "x.md" })).code, 400);
 });
 
 test("g-183 membership REST：未引用共享卡的 goal 无法 start-collection（400）", async () => {

@@ -36,11 +36,11 @@
         const card = (state.data.cards ?? []).find((c) => c.id === props.cardId);
         if (!card) inner = "卡片不存在：" + props.cardId;
         else {
-          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区
+          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、canonical 附件根、回填模板和禁区
           const goalTitle = state.data.meta?.title ?? props.goalId;
           const cardTitle = card.title;
-          const cardKind = card.kind ?? "text";
           const root = state.data.root ?? "（仓库根未知）";
+          const attRoot = state.data.attachmentsDir ?? (root !== "（仓库根未知）" ? root + "/attachments" : "（附件根未知）");
 
           // 可编辑的收集信息目标部分
           const editablePart = [
@@ -53,7 +53,7 @@
           // 只读的规范约束部分
           const readonlyPart = [
             ``,
-            `**工作目录**：当前分配的 worktree/当前工作目录（不要猜测 .dsh-graph 文件路径）`,
+            `**canonical 附件根（绝对路径）**：\`${attRoot}\``,
             ``,
             `**目标信息**：`,
             `- id: \`${props.goalId}\``,
@@ -62,21 +62,23 @@
             `**卡片信息**：`,
             `- id: \`${card.id}\``,
             `- 标题: ${cardTitle}`,
-            `- 类型: ${cardKind}`,
             ``,
             `**回填要求**：`,
-            `1. 全文写进 \`text\` 参数`,
-            `2. \`summary\` 写一句话要点式摘要（≤100 字左右），不要长文`,
-            `3. 完成后必须调用以下精确命令回填结果：`,
+            `1. 把正文全文写进 \`text\` 参数；\`summary\` 写一句话要点式摘要（≤100 字左右），不长文。`,
+            `2. 若收集到文件附件（md/txt、图片、csv/Excel、二进制）用 \`graph_store_attachment\`：文本用 content、二进制/图片用 base64，写入上述 canonical 附件根；返回稳定相对引用名。`,
+            `3. 回调正文或 goal.md 时用 \`@att/<相对引用名>\` 引用附件（可含安全子目录）。`,
+            `4. 完成后调用以下精确命令回填结果：`,
             `\`\`\``,
-            `graph_fill_card(goal="${props.goalId}", card="${card.id}", text=<全文>, summary=<≤100字摘要>)`,
+            `graph_fill_card(goal="${props.goalId}", card="${card.id}", text=<全文可含 @att/<name>>, summary=<≤100字摘要>)`,
             `\`\`\``,
             ``,
+            `**附件安全与边界**：`,
+            `只写入上述 canonical 附件根；拒绝绝对路径、./.. 穿越、反斜杠、NUL；不得访问/引用 \`.dsh-graph\` 之外文件；互联网抓取仅限 http(s)，设超时/大小上限，禁 file://、localhost、内网（SSRF）。`,
+            ``,
             `**禁区（严格遵守）**：`,
-            `1. 不得猜测 \`.dsh-graph\` 文件路径——所有路径已在上方提供`,
-            `2. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${card.id}\``,
-            `3. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
-            `4. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
+            `1. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${card.id}\``,
+            `2. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
+            `3. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
           ].join("\n");
 
           const autoPrompt = editablePart + readonlyPart;
@@ -199,11 +201,18 @@
             h("div", { key: "t", style: { fontWeight: 700, fontSize: 14 } },
               `📇 ${card.title}`),
             h("div", { key: "m", style: S.meta },
-              `${card.id} ｜ ${card.kind} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
+              `${card.id} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
             cardFileEntry,
             childLink,
             card.summary ? h("div", { key: "s", style: S.drawerSection },
               h("div", { style: S.drawerH }, "摘要"), card.summary) : null,
+            // 附件引用（安全展示，不内联渲染用户 Markdown/HTML/SVG）
+            (Array.isArray(card.attachments) && card.attachments.length)
+              ? h("div", { key: "att", style: S.drawerSection },
+                  h("div", { style: S.drawerH }, "📎 附件引用"),
+                  card.attachments.map((a) =>
+                    h("div", { key: a, style: { ...S.meta, fontSize: 12 } }, `@att/${a}`)))
+              : null,
             h("div", { key: "body", style: S.drawerSection },
               h("div", { style: S.drawerH }, "全文"),
               h("div", { style: { whiteSpace: "pre-wrap" } }, card.content?.trim() || "（尚未采集内容）")),

@@ -131,17 +131,22 @@ skill_refs: []              # planning 引用的技能
 }
 ---
 
-（正文即卡片内容；kind 为 file/image 时正文为说明、content_ref 指向文件路径）
+（正文即卡片内容。卡片统一为「正文 + 可选附件引用」模型：正文里用 `@att/<相对路径>` 引用附件，
+不再限制 text/file/image/data 类型，也不驱动任何业务分支；kind/content_ref 仅为兼容读取字段。）
 ```
 
-- `kind`：`text | file | image | data`；`status`：`empty | collecting | filled | reviewed`；
+- `status`：`empty | collecting | filled | reviewed`；
 - `summary`：一句摘要；`child_id` / `parent_session_id`：收集子代理身份（看板抽屉可打开对应会话）；
 - **收集计划的项即上下文卡片**（负责人 2026-08-20 决策）：goal.md 的"收集计划"小节不再单独
   维护待办清单，收集项直接建模为卡片；看板上卡片可打开抽屉查看摘要、全文与子代理链接；
 - `filled_by` 记录填充来源：`human:<name>` / `agent:<childId>` / `goal:<id>`（子目标交付回填）；
-- 卡片创建时**只要求 title 与 kind**——查什么、怎么查在收集运行时填充，不预设；
+- 卡片创建只要求 `title`（默认共享卡，`scope=goal` 显式建自有卡）；`kind` 为兼容字段、不限制、不参与业务分支；
 - 目标 frontmatter 以 `context_cards: ["card-01", ...]` 有序引用，顺序即注入顺序；
-- attempt 启动时把 `filled/reviewed` 卡片按序注入 runner 上下文，注入清单记入
+- **附件**：合法相对路径可含安全子目录（如 `docs/report.md`），引用格式 `@att/<相对路径>`；附件实体
+  存放于项目根 `.dsh-graph/attachments/`；拒绝绝对路径、`. / ..` 穿越、NUL、反斜杠、越界
+  （realpath/lstat 包含校验）、对称链接的目录/目标与不安全覆盖；写入用 temp+fsync+rename（原子，不留半文件）。
+  goal.md 正文同样可用 `@att/<相对路径>` 引用附件，引用保留/解析并有可审计校验（引用计数/摘要）。
+- attempt 启动时把 `filled/reviewed` 卡片按序注入 runner 上下文（含正文引用的附件 refs + 审计摘要），注入清单记入
   `attempt.started` 事件的 `details.injected_cards`；
 - 相关命令：`add-card` / `fill-card` / `review-card`；相关事件：
   `card.created / card.collecting / card.filled / card.reviewed`；

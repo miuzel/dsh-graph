@@ -4,11 +4,9 @@
       const { onClose, onRefresh, sharedCards, goals } = props;
       const [cards, setCards] = React.useState(Array.isArray(sharedCards) ? sharedCards : []);
       const [title, setTitle] = React.useState("");
-      const [kind, setKind] = React.useState("text");
       const [note, setNote] = React.useState(null);
       const [attachGoalId, setAttachGoalId] = React.useState("");
       const byId = new Map((goals ?? []).map((g) => [g.id, g]));
-      const kindLabels = { text: "📝 文本", file: "📄 文件", image: "🖼 图片", data: "📊 数据" };
 
       const refresh = async () => {
         try {
@@ -24,7 +22,7 @@
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/create-shared-card"), {
             method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ title: t, kind }),
+            body: JSON.stringify({ title: t }),
           });
           const d = await r.json();
           if (d.ok) { setNote("✅ 已创建共享卡：" + d.card); setTitle(""); refresh(); onRefresh?.(); }
@@ -79,19 +77,27 @@
             h("span", { style: { flex: 1 } }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
             h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} 个 goal 引用`)),
           h("div", { style: { ...S.meta, fontSize: 11 } },
-            `id=${c.id} ｜ kind=${c.kind}${c.summary ? " ｜ " + c.summary : ""}`),
+            `id=${c.id}${c.summary ? " ｜ " + c.summary : ""}`),
+          // 正文引用附件
+          (Array.isArray(c.attachments) && c.attachments.length)
+            ? h("div", { style: { ...S.meta, fontSize: 11 } },
+                "📎 附件：" + c.attachments.map((a) => `@att/${a}`).join("，"))
+            : null,
           // 引用它的 goal 清单：每项一个真实解除引用（只移除该 goal 引用，保留共享卡与其他引用；零引用仅显式删除）
           h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", marginTop: 4 } },
             h("span", { style: { ...S.meta, fontSize: 11 } }, "🔎 引用 goal："),
             refs.length === 0
               ? h("span", { style: { ...S.meta, fontSize: 11 } }, "（无引用 goal）")
-              : refs.map((gid) => h("button", {
-                  key: gid,
-                  style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-                  className: "dg-btn",
-                  title: `移除 ${gid} 对这张共享卡的引用（保留共享卡本身）`,
-                  onClick: () => unreference(c.id, gid),
-                }, "➖ " + gid))),
+              : refs.map((ref) => {
+                  const label = ref.title ? `${ref.title}${ref.archived ? "（归档）" : ""}` : ref.id;
+                  return h("button", {
+                    key: ref.id,
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                    className: "dg-btn",
+                    title: `移除 ${label} 对这张共享卡的引用（保留共享卡本身）`,
+                    onClick: () => unreference(c.id, ref.id),
+                  }, "➖ " + label);
+                })),
           h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4, alignItems: "center" } },
             h("select", {
               value: attachGoalId,
@@ -114,7 +120,7 @@
           h("div", { style: S.modalH }, "🔗 共享上下文管理面板"),
           h("div", { style: { ...S.meta, marginBottom: 6 } },
             "共享卡只保存一份权威内容，可被多个 goal 引用；被引用时不可删除，解除全部引用后仅可显式删除。"),
-          // 新建共享卡
+          // 新建共享卡（正文 + 可选附件引用，不设 kind 类型）
           h("div", { style: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8 } },
             h("input", {
               style: { ...S.promptInput, flex: 1 },
@@ -122,10 +128,6 @@
               onChange: (e) => setTitle(e.target.value),
               onKeyDown: (e) => { if (e.key === "Enter") createCard(); },
             }),
-            h("select", {
-              value: kind, onChange: (e) => setKind(e.target.value),
-              style: { fontSize: 12, padding: "4px 6px" },
-            }, ...Object.entries(kindLabels).map(([k, v]) => h("option", { key: k, value: k }, v))),
             h("button", { style: S.btn, className: "dg-btn", onClick: createCard }, "＋ 新建共享卡")),
           note ? h("div", { style: { ...S.meta, marginBottom: 6 } }, note) : null,
           (cards.length === 0)

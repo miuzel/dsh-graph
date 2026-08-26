@@ -70,7 +70,7 @@ import {
   deleteAttachment,
   parseAttachmentRefs,
   attachmentsDir,
-  sanitizeAttachmentName,
+  sanitizeAttachmentPath,
   formatAttachmentRef,
   recordAttemptHandoff,
   harvestReviewedAttemptHandoffs,
@@ -351,10 +351,10 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_add_card",
-        description: "为目标创建上下文卡片（empty 占位）。返回卡片 id。默认创建共享卡（scope=shared，落共享池并挂到该 goal）；goal 自有卡必须显式传 scope=\"goal\"。kind 不再限定 text/file/image/data，任意非空字符串。",
+        description: "为目标创建上下文卡片（empty 占位）。返回卡片 id。默认创建共享卡（scope=shared，落共享池并挂到该 goal）；goal 自有卡必须显式传 scope=\"goal\"。卡片统一为正文 + 可选附件引用（@att/<name>），kind 仅为兼容读取字段、可不传、不限定类型。",
         parameters: params(
           { goal: str, title: str, kind: str, scope: { type: "string", enum: ["goal", "shared"] } },
-          ["goal", "title", "kind"],
+          ["goal", "title"],
         ),
       },
       run: (a, ex) => ({ card: addCard(rootFor(ex), a.goal, { title: a.title, kind: a.kind, scope: a.scope, actor: actorOf(ex) }) }),
@@ -362,10 +362,10 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_store_attachment",
-        description: "存储一个上下文附件到项目根 .dsh-graph/attachments/，返回稳定引用名（用 @att/<附件名> 在卡片正文/goal.md 引用）。name 非空且不含绝对路径/../路径分隔符；拒绝不安全覆盖与异常半文件。",
-        parameters: params({ name: str, content: str }, ["name", "content"]),
+        description: "存储一个上下文附件到项目根 .dsh-graph/attachments/（可含安全子目录），返回稳定引用名（用 @att/<相对引用名> 在卡片正文/goal.md 引用）。文本用 content；二进制/图片/Excel 用 base64。name 拒绝绝对路径、./.. 穿越、反斜杠、NUL；目标已存在且内容不同会生成唯一名（不覆盖）；异常不留半文件。",
+        parameters: params({ name: str, content: str, base64: str }, ["name"]),
       },
-      run: (a, ex) => ({ name: storeAttachment(rootFor(ex), { name: a.name, content: a.content, actor: actorOf(ex) }) }),
+      run: (a, ex) => ({ name: storeAttachment(rootFor(ex), { name: a.name, content: a.content, base64: a.base64, actor: actorOf(ex) }) }),
     },
     {
       def: {
@@ -378,7 +378,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_fill_card",
-        description: "填充上下文卡片内容（text 或 content_ref），状态变为 filled。summary 是看板子卡片上显示的一句话摘要，必须简短：一句话要点式、≤100 字左右（看板默认折叠显示 2 行，长摘要会被截断）——细节写进 text 全文，不要把长文塞进 summary。",
+        description: "填充上下文卡片（正文 + 可选附件引用）。text 写卡片正文全文；正文与 goal.md 里用 @att/<相对引用名> 引用附件。summary 是一句话要点式摘要（≤100 字左右），细节写进 text。content_ref 仅为兼容读取字段。",
         parameters: params({ goal: str, card: str, text: str, content_ref: str, summary: str }, ["goal", "card"]),
       },
       run: (a, ex) => { fillCard(rootFor(ex), a.goal, a.card, { text: a.text, contentRef: a.content_ref, summary: a.summary, by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
@@ -829,6 +829,14 @@ export function apply(ctx, config) {
       });
       req.on("error", reject);
     });
+  // g-183：原始二进制上传（图片/Excel/二进制附件）；返回 Buffer，供 storeAttachment 直接落盘
+  const readRawBody = (req) =>
+    new Promise((resolve, reject) => {
+      const chunks = [];
+      req.on("data", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+      req.on("end", () => resolve(Buffer.concat(chunks)));
+      req.on("error", reject);
+    });
   // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
   // （parent.options / childSessionMeta / captureDelegatedPolicyOverrides），传 null 必然失败。
   // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。
@@ -1179,7 +1187,7 @@ export function apply(ctx, config) {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
           const { title, kind } = body;
-          if (!title || !kind) return json(res, 400, { error: "missing title/kind" });
+          if (!title) return json(res, 400, { error: "missing title" });
           const card = createSharedCard(rootForReq(req, body), { title, kind, actor: "human:gui" });
           json(res, 200, { ok: true, card });
         } catch (e) {
@@ -1303,10 +1311,27 @@ export function apply(ctx, config) {
       handler: async (req, res) => {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
-          const body = await readBody(req);
-          const { name, content } = body;
-          if (!name || typeof content !== "string") return json(res, 400, { error: "missing name or content" });
-          const stored = storeAttachment(rootForReq(req, body), { name, content, actor: "human:gui" });
+          const ct = String(req.headers?.["content-type"] ?? "");
+          let stored;
+          // 原始二进制上传：body 即文件字节，文件名走 query/header `x-attachment-name`
+          if (ct.includes("application/octet-stream") || ct.includes("application/x-www-form-urlencoded")) {
+            const sp = new URL(req.url ?? "", "http://x").searchParams;
+            const name = sp.get("name") ?? req.headers?.["x-attachment-name"];
+            if (!name) return json(res, 400, { error: "missing name (query ?name= 或 x-attachment-name)" });
+            const raw = await readRawBody(req);
+            stored = storeAttachment(rootForReq(req), { name: String(name), bytes: raw, actor: "human:gui" });
+          } else {
+            const body = await readBody(req);
+            const { name, content, base64 } = body;
+            if (!name) return json(res, 400, { error: "missing name" });
+            if (typeof base64 === "string") {
+              stored = storeAttachment(rootForReq(req, body), { name, base64, actor: "human:gui" });
+            } else if (typeof content === "string") {
+              stored = storeAttachment(rootForReq(req, body), { name, content, actor: "human:gui" });
+            } else {
+              return json(res, 400, { error: "需要 content 或 base64（或原始二进制上传）" });
+            }
+          }
           json(res, 200, { ok: true, name: stored, ref: formatAttachmentRef(stored) });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
@@ -1339,9 +1364,10 @@ export function apply(ctx, config) {
           const { goal, card, prompt, provider, model } = body;
           if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
           const rRoot = rootForReq(req, body);
-          const attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
-          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区
+          // g-183 返工 F：先完整校验（resolveCard 成员关系/backlog/卡状态权限）生成提示词，
+          //  再创建 attempt/子代理——校验失败不得留下 attempt/事件副作用。
           const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt);
+          const attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
             fullPrompt,
