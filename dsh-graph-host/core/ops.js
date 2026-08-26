@@ -1754,7 +1754,7 @@ export function convertOwnedToShared(root, goalId, cardId, opts) {
     if (existsSync(newFile)) {
         throw new GraphError(`共享卡目标已存在：${newId}，请重试（避免覆盖）`);
     }
-    // 事务语义（R-02 + 失败可追溯）：先记 conversion_started；step-1 写新副本成功后才记 shared_converted；
+    // 事务语义（R-02 + 失败可追溯）：先记 conversion_started；仅当 step-1/2/3 全部成功（step-3 rm 后）才记 shared_converted；
     // step-1/2/3 任一失败都记 conversion_failed（含 rollback），从不让成功事件误导。
     appendEvent(root, {
         actor: opts.actor,
@@ -1778,13 +1778,6 @@ export function convertOwnedToShared(root, goalId, cardId, opts) {
         });
         throw e;
     }
-    // step-1 成功：才记 converted
-    appendEvent(root, {
-        actor: opts.actor,
-        event: "card.shared_converted",
-        goal: goalIdSafe,
-        details: { card: cardId, from: "goal", to: newId },
-    });
     // 二：把 goal 的 context_cards 引用自 cardId 改为 newId（失败回滚共享副本）
     const goalFile = findGoalFile(root, goalIdSafe);
     try {
@@ -1805,7 +1798,7 @@ export function convertOwnedToShared(root, goalId, cardId, opts) {
         catch (re) {
             restoreErr = re;
         }
-        // 补偿审计：step-2 目标引用保存失败，初始 shared_converted 事件需以失败补偿事件纠正
+        // 补偿审计：step-2 目标引用保存失败（此时尚未记 shared_converted，不误导）
         appendEvent(root, {
             actor: opts.actor,
             event: "card.conversion_failed",
@@ -1870,6 +1863,13 @@ export function convertOwnedToShared(root, goalId, cardId, opts) {
         }
         throw e;
     }
+    // 三步全部成功（step-3 rm 已提交）才记 converted
+    appendEvent(root, {
+        actor: opts.actor,
+        event: "card.shared_converted",
+        goal: goalIdSafe,
+        details: { card: cardId, from: "goal", to: newId },
+    });
     return newId;
 }
 /** 把共享卡转换回 goal 自有卡：仅当引用计数恰好为 1（且该 goal 是唯一引用者）时成功（判据 #4）。
@@ -1903,7 +1903,7 @@ export function convertSharedToOwned(root, goalId, cardId, opts) {
     if (existsSync(newFile)) {
         throw new GraphError(`goal 自有卡目标已存在：${newId}，请重试（避免覆盖）`);
     }
-    // 事务语义（R-02 + 失败可追溯）：先记 conversion_started；step-1 写新副本成功后才记 owned_converted。
+    // 事务语义（R-02 + 失败可追溯）：先记 conversion_started；仅当 step-1/2/3 全部成功（step-3 rm 后）才记 owned_converted。
     appendEvent(root, {
         actor: opts.actor,
         event: "card.conversion_started",
@@ -1925,13 +1925,6 @@ export function convertSharedToOwned(root, goalId, cardId, opts) {
         });
         throw e;
     }
-    // step-1 成功：才记 converted
-    appendEvent(root, {
-        actor: opts.actor,
-        event: "card.owned_converted",
-        goal: goalIdSafe,
-        details: { card: cardId, from: "shared", to: newId },
-    });
     // 二：把 goal 的 context_cards 引用自 cardId 改为 newId（失败回滚自有副本）
     try {
         const goalDoc2 = loadGoal(goalFile);
@@ -1951,7 +1944,7 @@ export function convertSharedToOwned(root, goalId, cardId, opts) {
         catch (re) {
             restoreErr = re;
         }
-        // 补偿审计：step-2 目标引用保存失败，初始 owned_converted 事件需以失败补偿事件纠正
+        // 补偿审计：step-2 目标引用保存失败（此时尚未记 owned_converted，不误导）
         appendEvent(root, {
             actor: opts.actor,
             event: "card.conversion_failed",
@@ -2016,6 +2009,13 @@ export function convertSharedToOwned(root, goalId, cardId, opts) {
         }
         throw e;
     }
+    // 三步全部成功（step-3 rm 已提交）才记 converted
+    appendEvent(root, {
+        actor: opts.actor,
+        event: "card.owned_converted",
+        goal: goalIdSafe,
+        details: { card: cardId, from: "shared", to: newId },
+    });
     return newId;
 }
 /** 从 goal 解除对共享卡的引用（共享卡本体保留在共享池，零引用也仅可显式删除）。 */
