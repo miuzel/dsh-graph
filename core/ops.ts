@@ -1802,17 +1802,36 @@ export function convertOwnedToShared(
   if (existsSync(newFile)) {
     throw new GraphError(`共享卡目标已存在：${newId}，请重试（避免覆盖）`);
   }
-  // 事件先行（R-02）：记录转换前的 goal 归属与新 id
+  // 事务语义（R-02 + 失败可追溯）：先记 conversion_started；step-1 写新副本成功后才记 shared_converted；
+  // step-1/2/3 任一失败都记 conversion_failed（含 rollback），从不让成功事件误导。
   appendEvent(root, {
     actor: opts.actor,
-    event: "card.shared_converted",
+    event: "card.conversion_started",
     goal: goalIdSafe,
     details: { card: cardId, from: "goal", to: newId },
   });
   // 一：写入共享池权威副本（scope=shared、新 id）
   const newMeta: Record<string, any> = { ...doc.meta, id: newId, scope: "shared" };
   delete newMeta.goal;
-  saveGoal(newFile, { meta: newMeta, body: doc.body });
+  try {
+    saveGoal(newFile, { meta: newMeta, body: doc.body });
+  } catch (e) {
+    // step-1 失败：原子写保证无半文件；无变更需回滚（goal 引用未改、旧卡未动）
+    appendEvent(root, {
+      actor: opts.actor,
+      event: "card.conversion_failed",
+      goal: goalIdSafe,
+      details: { card: cardId, from: "goal", to: newId, error: String((e as Error).message), rollback: "ok" },
+    });
+    throw e;
+  }
+  // step-1 成功：才记 converted
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "card.shared_converted",
+    goal: goalIdSafe,
+    details: { card: cardId, from: "goal", to: newId },
+  });
   // 二：把 goal 的 context_cards 引用自 cardId 改为 newId（失败回滚共享副本）
   const goalFile = findGoalFile(root, goalIdSafe);
   try {
@@ -1925,15 +1944,34 @@ export function convertSharedToOwned(
   if (existsSync(newFile)) {
     throw new GraphError(`goal 自有卡目标已存在：${newId}，请重试（避免覆盖）`);
   }
+  // 事务语义（R-02 + 失败可追溯）：先记 conversion_started；step-1 写新副本成功后才记 owned_converted。
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "card.conversion_started",
+    goal: goalIdSafe,
+    details: { card: cardId, from: "shared", to: newId },
+  });
+  // 一：写入 goal 自有目录（新 card-* id）
+  const newMeta: Record<string, any> = { ...doc.meta, id: newId, scope: "goal", goal: goalIdSafe };
+  try {
+    saveGoal(newFile, { meta: newMeta, body: doc.body });
+  } catch (e) {
+    // step-1 失败：原子写保证无半文件；无变更需回滚（goal 引用未改、共享卡未动）
+    appendEvent(root, {
+      actor: opts.actor,
+      event: "card.conversion_failed",
+      goal: goalIdSafe,
+      details: { card: cardId, from: "shared", to: newId, error: String((e as Error).message), rollback: "ok" },
+    });
+    throw e;
+  }
+  // step-1 成功：才记 converted
   appendEvent(root, {
     actor: opts.actor,
     event: "card.owned_converted",
     goal: goalIdSafe,
     details: { card: cardId, from: "shared", to: newId },
   });
-  // 一：写入 goal 自有目录（新 card-* id）
-  const newMeta: Record<string, any> = { ...doc.meta, id: newId, scope: "goal", goal: goalIdSafe };
-  saveGoal(newFile, { meta: newMeta, body: doc.body });
   // 二：把 goal 的 context_cards 引用自 cardId 改为 newId（失败回滚自有副本）
   try {
     const goalDoc2 = loadGoal(goalFile);

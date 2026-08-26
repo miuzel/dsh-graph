@@ -733,3 +733,45 @@ test("转换 step-2 目标引用保存失败：补 conversion_failed/rolled_back
   assert.ok(evs.some((e) => e.event === "card.conversion_failed" && e.details.from === "goal" && e.details.rollback === "ok"), "应有 conversion_failed(from=goal, rollback=ok)");
   assert.ok(evs.some((e) => e.event === "card.conversion_rolled_back"), "应有 conversion_rolled_back");
 });
+
+test("转换 step-1 写新副本失败：记 conversion_started+conversion_failed，绝不误记 converted（两种方向）", () => {
+  // --- own→shared：shared-cards 只读使 saveGoal(newFile) 失败 ---
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const oc = addCard(root, a, { title: "转共享", scope: "goal", actor: "test" });
+  fillCard(root, a, oc, { text: "内容", by: "human:x", actor: "test" });
+  const sharedDir = join(root, "shared-cards");
+  chmodSync(sharedDir, 0o555);
+  let err: any = null;
+  try { convertOwnedToShared(root, a, oc, { actor: "test" }); } catch (e) { err = e; }
+  chmodSync(sharedDir, 0o755);
+  assert.ok(err, "own→shared step-1 失败应抛出");
+  const evs = readEvents(root).filter((e) => e.event === "card.conversion_started" || e.event === "card.conversion_failed" || e.event === "card.shared_converted");
+  assert.ok(evs.some((e) => e.event === "card.conversion_started"), "应有 conversion_started");
+  assert.ok(evs.some((e) => e.event === "card.conversion_failed" && e.details.rollback === "ok"), "应有 conversion_failed(rollback=ok)");
+  assert.ok(!evs.some((e) => e.event === "card.shared_converted"), "step-1 失败不得误记 shared_converted");
+  assert.ok(existsSync(join(dirname(findGoalFile(root, a)), "cards", `${oc}.md`)), "旧自有卡仍在");
+  assert.ok(loadGoal(findGoalFile(root, a)).meta.context_cards.map(String).includes(oc), "goal 仍引用原 card id");
+  assert.deepEqual(sharedCards(root), [], "无孤儿共享卡");
+
+  // --- shared→own：goal 卡片目录只读使 saveGoal(newFile) 失败 ---
+  const root2 = tmpRoot();
+  const a2 = createGoal(root2, { title: "A2", version: "v-t", actor: "test" });
+  const sid = createSharedCard(root2, { title: "转自有", actor: "test" });
+  addSharedCardRef(root2, a2, sid, "test");
+  fillCard(root2, a2, sid, { text: "内容", by: "human:x", actor: "test" });
+  const ownDir2 = join(dirname(findGoalFile(root2, a2)), "cards");
+  mkdirSync(ownDir2, { recursive: true }); // 先建卡片目录再只读，模拟 step-1 写新自有卡失败
+  chmodSync(ownDir2, 0o555);
+  let err2: any = null;
+  try { convertSharedToOwned(root2, a2, sid, { actor: "test" }); } catch (e) { err2 = e; }
+  chmodSync(ownDir2, 0o755);
+  assert.ok(err2, "shared→own step-1 失败应抛出");
+  const evs2 = readEvents(root2).filter((e) => e.event === "card.conversion_started" || e.event === "card.conversion_failed" || e.event === "card.owned_converted");
+  assert.ok(evs2.some((e) => e.event === "card.conversion_started"), "应有 conversion_started");
+  assert.ok(evs2.some((e) => e.event === "card.conversion_failed" && e.details.rollback === "ok"), "应有 conversion_failed(rollback=ok)");
+  assert.ok(!evs2.some((e) => e.event === "card.owned_converted"), "step-1 失败不得误记 owned_converted");
+  assert.ok(existsSync(join(root2, "shared-cards", `${sid}.md`)), "共享卡仍在");
+  assert.ok(loadGoal(findGoalFile(root2, a2)).meta.context_cards.map(String).includes(sid), "goal 仍引用原 shared id");
+  assert.ok(!existsSync(ownDir2) || readdirSync(ownDir2).length === 0, "无孤儿自有卡");
+});
