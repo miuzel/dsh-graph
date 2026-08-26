@@ -1724,26 +1724,31 @@ function mkStreamReq(opts: { contentType?: string; url?: string } = {}) {
     headers: { "content-type": opts.contentType ?? "application/json" },
     url: opts.url ?? "/api/dsh-graph/store-attachment",
     destroyed: false,
+    paused: false,
     on(ev: string, cb: (v?: any) => void) { listeners[ev] = cb; },
     destroy() { this.destroyed = true; },
+    pause() { this.paused = true; },
+    unpipe() { this.paused = true; },
   };
   return { req, emit: (ev: string, v?: any) => listeners[ev]?.(v) };
 }
 
-test("流式读取累计超过上限立即拒绝并销毁（raw/JSON 两种 reader）", async () => {
-  // raw reader：小上限，超限即拒绝 + destroy
+test("流式读取累计超过上限立即拒绝并暂停（不销毁 socket，raw/JSON）", async () => {
+  // raw reader：小上限，超限即拒绝 + pause（不 destroy）
   const a = mkStreamReq();
   const p1 = readRawBodyCapped(a.req, 100);
   a.emit("data", Buffer.alloc(200, 0x41));
   await assert.rejects(p1, /超过 100 字节上限/);
-  assert.equal(a.req.destroyed, true, "超限应销毁请求");
-  // JSON reader：小上限，超限即拒绝 + destroy
+  assert.equal(a.req.paused, true, "超限应暂停流（不销毁 socket）");
+  assert.equal(a.req.destroyed, false, "不应销毁 socket");
+  // JSON reader：小上限，超限即拒绝 + pause
   const b = mkStreamReq();
   const p2 = readBodyCapped(b.req, 20);
   b.emit("data", "{\"name\":\"x\",\"content\":\"");
   b.emit("data", "一长串内容超过上限");
   await assert.rejects(p2, /超过 20 字节上限/);
-  assert.equal(b.req.destroyed, true, "超限应销毁请求");
+  assert.equal(b.req.paused, true, "超限应暂停流（不销毁 socket）");
+  assert.equal(b.req.destroyed, false, "不应销毁 socket");
   // raw 正常：chunked 多 chunk 累计在限内 → 成功
   const c = mkStreamReq();
   const p3 = readRawBodyCapped(c.req, 100);

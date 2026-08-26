@@ -120,13 +120,14 @@ export const MAX_ATTACHMENT_JSON_BYTES = Math.ceil(MAX_ATTACHMENT_BYTES * 5 / 3)
 // 普通 JSON REST（add-card/start-collection/unreference/转换/delete 等）统一 body 上限（1MB 足够管理类 payload）。
 export const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
-/** 销毁请求（停止继续分发 data），防超大请求继续占内存。 */
-function destroyReq(req) {
-  try { req.destroy?.(); } catch { /* 忽略 */ }
-  try { req.socket?.destroy?.(); } catch { /* 忽略 */ }
+/** 超限时停止累积（pause/unpipe），但**不销毁 socket**——让 handler 能写出可读的 4xx 响应。
+ *  真实 HTTP 下若不 pause 而 destroy，客户端会收到 ECONNRESET 而读不到响应（v6 复现）。 */
+function stopOversized(req) {
+  try { req.pause?.(); } catch { /* 忽略 */ }
+  try { req.unpipe?.(); } catch { /* 忽略 */ }
 }
 
-/** 流式读取原始二进制 body，累计超过 maxBytes 立即拒绝并销毁（不留半状态）。 */
+/** 流式读取原始二进制 body，累计超过 maxBytes 立即停止累积并 reject（handler 回 4xx；不留半状态）。 */
 export function readRawBodyCapped(req, maxBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -134,7 +135,7 @@ export function readRawBodyCapped(req, maxBytes) {
     req.on("data", (c) => {
       const b = Buffer.isBuffer(c) ? c : Buffer.from(c);
       total += b.length;
-      if (total > maxBytes) { destroyReq(req); reject(new GraphError(`请求体超过 ${maxBytes} 字节上限`)); return; }
+      if (total > maxBytes) { stopOversized(req); reject(new GraphError(`请求体超过 ${maxBytes} 字节上限`)); return; }
       chunks.push(b);
     });
     req.on("end", () => resolve(Buffer.concat(chunks)));
@@ -142,7 +143,7 @@ export function readRawBodyCapped(req, maxBytes) {
   });
 }
 
-/** 流式读取 JSON body，累计超过 maxBytes 立即拒绝并销毁。 */
+/** 流式读取 JSON body，累计超过 maxBytes 立即停止累积并 reject（handler 回 4xx）。 */
 export function readBodyCapped(req, maxBytes) {
   return new Promise((resolve, reject) => {
     let buf = "";
@@ -150,7 +151,7 @@ export function readBodyCapped(req, maxBytes) {
     req.on("data", (c) => {
       const s = String(c);
       total += Buffer.byteLength(s);
-      if (total > maxBytes) { destroyReq(req); reject(new GraphError(`请求体超过 ${maxBytes} 字节上限`)); return; }
+      if (total > maxBytes) { stopOversized(req); reject(new GraphError(`请求体超过 ${maxBytes} 字节上限`)); return; }
       buf += s;
     });
     req.on("end", () => {
