@@ -1778,7 +1778,30 @@ export function convertOwnedToShared(root, goalId, cardId, opts) {
         saveGoal(goalFile, goalDoc);
     }
     catch (e) {
-        rmSync(newFile, { force: true });
+        let restoreErr = null;
+        try {
+            rmSync(newFile, { force: true });
+        }
+        catch (re) {
+            restoreErr = re;
+        }
+        // 补偿审计：step-2 目标引用保存失败，初始 shared_converted 事件需以失败补偿事件纠正
+        appendEvent(root, {
+            actor: opts.actor,
+            event: "card.conversion_failed",
+            goal: goalIdSafe,
+            details: { card: cardId, from: "goal", to: newId, error: String(e.message), rollback: restoreErr ? "failed" : "ok" },
+        });
+        if (!restoreErr) {
+            appendEvent(root, {
+                actor: opts.actor,
+                event: "card.conversion_rolled_back",
+                goal: goalIdSafe,
+                details: { card: cardId, from: "goal", to: newId },
+            });
+        }
+        if (restoreErr)
+            throw new GraphError(`卡片 ${cardId} 转换失败且回滚出错，需人工恢复：${String(restoreErr.message)}`);
         throw e;
     }
     // 三：删除自有副本（此时目标已指向共享权威，删除不再有读者断引用）。
@@ -1881,7 +1904,30 @@ export function convertSharedToOwned(root, goalId, cardId, opts) {
         saveGoal(goalFile, goalDoc2);
     }
     catch (e) {
-        rmSync(newFile, { force: true });
+        let restoreErr = null;
+        try {
+            rmSync(newFile, { force: true });
+        }
+        catch (re) {
+            restoreErr = re;
+        }
+        // 补偿审计：step-2 目标引用保存失败，初始 owned_converted 事件需以失败补偿事件纠正
+        appendEvent(root, {
+            actor: opts.actor,
+            event: "card.conversion_failed",
+            goal: goalIdSafe,
+            details: { card: cardId, from: "shared", to: newId, error: String(e.message), rollback: restoreErr ? "failed" : "ok" },
+        });
+        if (!restoreErr) {
+            appendEvent(root, {
+                actor: opts.actor,
+                event: "card.conversion_rolled_back",
+                goal: goalIdSafe,
+                details: { card: cardId, from: "shared", to: newId },
+            });
+        }
+        if (restoreErr)
+            throw new GraphError(`共享卡 ${cardId} 转换失败且回滚出错，需人工恢复：${String(restoreErr.message)}`);
         throw e;
     }
     // 三：删除共享池权威副本（此时目标已指向自有卡）。

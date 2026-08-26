@@ -10,6 +10,7 @@ import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, relative } from "node:path";
 import vm from "node:vm";
+import http from "node:http";
 import { init, createGoal, findGoalFile, loadGoal, saveGoal, setCriteria, transition, readProjectConfig } from "../ops.ts";
 import { criteriaItems, replaceSection, sectionText } from "../model.ts";
 import { readEvents } from "../events.ts";
@@ -1831,4 +1832,26 @@ test("readBodyCapped 跨 chunk UTF-8 多字节字符不损坏（Buffer 累积后
   a.emit("end");
   const parsed = await p;
   assert.equal(parsed.name, "测试内容", "跨 buffer chunk 的 UTF-8 字符应正确还原");
+});
+
+test("真实 HTTP：readBodyCapped 超限返回可读 400（无 ECONNRESET）且不落盘", async () => {
+  const server = http.createServer((req, res) => {
+    readBodyCapped(req, 100)
+      .then(() => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true })); })
+      .catch((e) => { res.writeHead(400, { "content-type": "application/json; charset=utf-8" }); res.end(JSON.stringify({ error: String(e.message) })); });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as any).port;
+  const status = await new Promise<number>((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port, method: "POST", headers: { "transfer-encoding": "chunked", "content-type": "application/json" } }, (res) => {
+      let body = "";
+      res.on("data", (d) => { body += d; });
+      res.on("end", () => resolve(res.statusCode ?? 0));
+    });
+    req.on("error", (e) => reject(new Error("client error: " + String((e as any).code ?? e))));
+    req.write('{"x":"' + "A".repeat(500) + '"}'); // >100 上限
+    req.end();
+  });
+  server.close();
+  assert.equal(status, 400, "真实 HTTP 客户端应读到 400（而非 ECONNRESET）");
 });

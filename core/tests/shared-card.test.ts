@@ -710,3 +710,26 @@ test("只读附件操作不创建目录（read/info/delete/digest/validate）；
   assert.ok(problems.some((p) => /附件引用不存在 @att\/new\/deep\/missing\.md/.test(p)), "validate 应报缺失引用");
   assert.deepEqual(attSnapshot(root), snap, "validate 不应创建缺失目录/文件");
 });
+
+test("转换 step-2 目标引用保存失败：补 conversion_failed/rolled_back 事件且状态一致", () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const oc = addCard(root, a, { title: "转共享", scope: "goal", actor: "test" });
+  fillCard(root, a, oc, { text: "内容", by: "human:x", actor: "test" });
+  const goalDir = dirname(findGoalFile(root, a));
+  // 让 goal.md 的原子写（atomicWrite 在 goalDir 写 temp）失败，触发 step-2 catch
+  chmodSync(goalDir, 0o555);
+  let err: any = null;
+  try { convertOwnedToShared(root, a, oc, { actor: "test" }); } catch (e) { err = e; }
+  chmodSync(goalDir, 0o755);
+  assert.ok(err, "step-2 失败应抛出");
+  // 旧自有卡仍在，goal 仍引用原 card id，无孤儿共享卡
+  assert.ok(existsSync(join(goalDir, "cards", `${oc}.md`)), "旧自有卡仍在");
+  const d = loadGoal(findGoalFile(root, a));
+  assert.ok(d.meta.context_cards.map(String).includes(oc), "goal 仍引用原 card id");
+  assert.deepEqual(sharedCards(root), [], "无孤儿共享卡");
+  // 补偿审计事件：conversion_failed(from=goal, rollback=ok) + conversion_rolled_back
+  const evs = readEvents(root).filter((e) => e.event.startsWith("card.conversion_"));
+  assert.ok(evs.some((e) => e.event === "card.conversion_failed" && e.details.from === "goal" && e.details.rollback === "ok"), "应有 conversion_failed(from=goal, rollback=ok)");
+  assert.ok(evs.some((e) => e.event === "card.conversion_rolled_back"), "应有 conversion_rolled_back");
+});
