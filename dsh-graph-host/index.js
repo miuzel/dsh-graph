@@ -114,6 +114,50 @@ export { resolveCanonicalRoot } from "./core/root.js";
 // board 载荷含 supervisorSession 字段（project.yaml 的 supervisor.session，g-108），由 host 端点 /api/dsh-graph 下发。
 export { boardPayload } from "./core/ops.js";
 
+// g-183 返工 v4：流式上限（防无 header/伪造 Content-Length/chunked 的超大请求先进内存被拒）。
+// JSON/base64 envelope 上限需容纳 50MB 二进制 base64 编码开销（~4/3）+ JSON 键，但拒绝更大。
+export const MAX_ATTACHMENT_JSON_BYTES = Math.ceil(MAX_ATTACHMENT_BYTES * 5 / 3) + 1024 * 1024;
+
+/** 销毁请求（停止继续分发 data），防超大请求继续占内存。 */
+function destroyReq(req) {
+  try { req.destroy?.(); } catch { /* 忽略 */ }
+  try { req.socket?.destroy?.(); } catch { /* 忽略 */ }
+}
+
+/** 流式读取原始二进制 body，累计超过 maxBytes 立即拒绝并销毁（不留半状态）。 */
+export function readRawBodyCapped(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (c) => {
+      const b = Buffer.isBuffer(c) ? c : Buffer.from(c);
+      total += b.length;
+      if (total > maxBytes) { destroyReq(req); reject(new GraphError(`请求体超过 ${maxBytes} 字节上限`)); return; }
+      chunks.push(b);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+/** 流式读取 JSON body，累计超过 maxBytes 立即拒绝并销毁。 */
+export function readBodyCapped(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    let total = 0;
+    req.on("data", (c) => {
+      const s = String(c);
+      total += Buffer.byteLength(s);
+      if (total > maxBytes) { destroyReq(req); reject(new GraphError(`请求体超过 ${maxBytes} 字节上限`)); return; }
+      buf += s;
+    });
+    req.on("end", () => {
+      try { resolve(buf ? JSON.parse(buf) : {}); } catch (e) { reject(e); }
+    });
+    req.on("error", reject);
+  });
+}
+
 export const name = "dsh-graph-host";
 // 只硬依赖 tools：webServer 由 web-app 行提供且可能在 apply 之后才激活，经 ctx.get 轮询注册
 // （同 dsh-project-kanban 参考实现），保证 headless（仅工具）与 web（工具+端点+看板）两种组合都可用。
@@ -837,14 +881,6 @@ export function apply(ctx, config) {
       });
       req.on("error", reject);
     });
-  // g-183：原始二进制上传（图片/Excel/二进制附件）；返回 Buffer，供 storeAttachment 直接落盘
-  const readRawBody = (req) =>
-    new Promise((resolve, reject) => {
-      const chunks = [];
-      req.on("data", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
-      req.on("end", () => resolve(Buffer.concat(chunks)));
-      req.on("error", reject);
-    });
   // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
   // （parent.options / childSessionMeta / captureDelegatedPolicyOverrides），传 null 必然失败。
   // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。
@@ -1325,8 +1361,7 @@ export function apply(ctx, config) {
         try {
           const sp = new URL(req.url ?? "", "http://x").searchParams;
           const name = sp.get("name");
-          if (!name) return json(res, 400, { error: "missing name" });
-          if (typeof name !== "string" || name.length > 512) return json(res, 400, { error: "invalid name" });
+          if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
           const info = readAttachment(rootForReq(req), name);
           const disp = info.inline ? "inline" : "attachment";
           res.writeHead(200, {
@@ -1348,22 +1383,25 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const ct = String(req.headers?.["content-type"] ?? "");
+          const isRaw = ct.includes("application/octet-stream") || ct.includes("application/x-www-form-urlencoded");
+          const maxBody = isRaw ? MAX_ATTACHMENT_BYTES : MAX_ATTACHMENT_JSON_BYTES;
+          // content-length 仅作快速失败；真正防护是流式累计上限（防无 header/伪造/ chunked）
           const cl = Number(req.headers?.["content-length"] || 0);
-          if (cl > MAX_ATTACHMENT_BYTES) return json(res, 400, { error: "content-length 超过大小上限" });
+          if (cl > maxBody) return json(res, 400, { error: "content-length 超过大小上限" });
           let stored;
           let rRoot;
           // 原始二进制上传：body 即文件字节，文件名走 query/header `x-attachment-name`
-          if (ct.includes("application/octet-stream") || ct.includes("application/x-www-form-urlencoded")) {
+          if (isRaw) {
             const sp = new URL(req.url ?? "", "http://x").searchParams;
             const name = sp.get("name") ?? req.headers?.["x-attachment-name"];
-            if (!name || typeof name !== "string" || name.length > 512) return json(res, 400, { error: "missing/invalid name" });
+            if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
             rRoot = rootForReq(req);
-            const raw = await readRawBody(req);
+            const raw = await readRawBodyCapped(req, MAX_ATTACHMENT_BYTES);
             stored = storeAttachment(rRoot, { name, bytes: raw, actor: "human:gui" });
           } else {
-            const body = await readBody(req);
+            const body = await readBodyCapped(req, MAX_ATTACHMENT_JSON_BYTES);
             const { name, content, base64 } = body;
-            if (!name || typeof name !== "string" || name.length > 512) return json(res, 400, { error: "missing/invalid name" });
+            if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
             rRoot = rootForReq(req, body);
             if (typeof base64 === "string") {
               // base64 大小预检（避免解码后超限）
@@ -1391,7 +1429,7 @@ export function apply(ctx, config) {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
           const { name } = body;
-          if (!name) return json(res, 400, { error: "missing name" });
+          if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
           deleteAttachment(rootForReq(req, body), name, { actor: "human:gui" });
           json(res, 200, { ok: true });
         } catch (e) {

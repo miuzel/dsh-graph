@@ -13,7 +13,7 @@ import vm from "node:vm";
 import { init, createGoal, findGoalFile, loadGoal, saveGoal, setCriteria, transition, readProjectConfig } from "../ops.ts";
 import { criteriaItems, replaceSection, sectionText } from "../model.ts";
 import { readEvents } from "../events.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply, readRawBodyCapped, readBodyCapped, MAX_ATTACHMENT_JSON_BYTES } from "../../dsh-graph-host/index.js";
 
 function fakeRequest(method: string, body: unknown) {
   const req: any = {
@@ -1708,4 +1708,74 @@ test("g-183 collecting：unreference-shared-card 对 collected 共享卡返回 4
   const unref = await post(routes, "/api/dsh-graph/unreference-shared-card", { goal: goalId, card: sid });
   assert.equal(unref.code, 400);
   assert.ok(String(unref.body.error).includes("正在收集中"), "collecting 共享卡解除引用应被拒");
+});
+
+// 流式上限辅助：构造可触发 data/end/error/destroy 的假请求
+function mkStreamReq(opts: { contentType?: string; url?: string } = {}) {
+  const listeners: Record<string, (v?: any) => void> = {};
+  const req: any = {
+    method: "POST",
+    headers: { "content-type": opts.contentType ?? "application/json" },
+    url: opts.url ?? "/api/dsh-graph/store-attachment",
+    destroyed: false,
+    on(ev: string, cb: (v?: any) => void) { listeners[ev] = cb; },
+    destroy() { this.destroyed = true; },
+  };
+  return { req, emit: (ev: string, v?: any) => listeners[ev]?.(v) };
+}
+
+test("流式读取累计超过上限立即拒绝并销毁（raw/JSON 两种 reader）", async () => {
+  // raw reader：小上限，超限即拒绝 + destroy
+  const a = mkStreamReq();
+  const p1 = readRawBodyCapped(a.req, 100);
+  a.emit("data", Buffer.alloc(200, 0x41));
+  await assert.rejects(p1, /超过 100 字节上限/);
+  assert.equal(a.req.destroyed, true, "超限应销毁请求");
+  // JSON reader：小上限，超限即拒绝 + destroy
+  const b = mkStreamReq();
+  const p2 = readBodyCapped(b.req, 20);
+  b.emit("data", "{\"name\":\"x\",\"content\":\"");
+  b.emit("data", "一长串内容超过上限");
+  await assert.rejects(p2, /超过 20 字节上限/);
+  assert.equal(b.req.destroyed, true, "超限应销毁请求");
+  // raw 正常：chunked 多 chunk 累计在限内 → 成功
+  const c = mkStreamReq();
+  const p3 = readRawBodyCapped(c.req, 100);
+  c.emit("data", Buffer.from("hel"));
+  c.emit("data", Buffer.from("lo"));
+  c.emit("end");
+  assert.deepEqual(await p3, Buffer.from("hello"));
+});
+
+test("store-attachment 原始上传：无 content-length + 超过上限 → 400 且无文件/事件", async () => {
+  const { root, routes } = setup();
+  const handler = routes.get("/api/dsh-graph/store-attachment");
+  // 无 content-length（模拟 chunked），超大 raw body
+  const s = mkStreamReq({ contentType: "application/octet-stream", url: "/api/dsh-graph/store-attachment?name=big.bin" });
+  const res = fakeResponse();
+  const p = handler(s.req, res);
+  s.emit("data", Buffer.alloc(51 * 1024 * 1024, 0x41)); // ≈51MB > MAX_ATTACHMENT_BYTES(50MB)
+  s.emit("end");
+  await p;
+  assert.equal(res._code, 400, "超限应拒绝");
+  assert.ok(!existsSync(join(root, "attachments", "big.bin")), "超限不得写文件");
+  const evs = readEvents(root).filter((e) => e.event === "attachment.stored");
+  assert.equal(evs.length, 0, "超限不得记 attachment.stored 事件");
+});
+
+test("store-attachment JSON：无 content-length + chunked 在限内 → 成功（流式解析）", async () => {
+  const { root, routes } = setup();
+  const handler = routes.get("/api/dsh-graph/store-attachment");
+  const s = mkStreamReq({ contentType: "application/json", url: "/api/dsh-graph/store-attachment" });
+  const res = fakeResponse();
+  const p = handler(s.req, res);
+  s.emit("data", JSON.stringify({ name: "chunked.md", content: "流式内容" }).slice(0, 20));
+  s.emit("data", JSON.stringify({ name: "chunked.md", content: "流式内容" }).slice(20));
+  s.emit("end");
+  await p;
+  assert.equal(res._code, 200, "chunked 在限内应成功: " + (res._body?.error ?? ""));
+  assert.ok(existsSync(join(root, "attachments", "chunked.md")));
+  assert.ok(typeof res._body.ref === "string");
+  // JSON envelope 上限应允许 50MB base64 开销（粗略验证常量足够大）
+  assert.ok(MAX_ATTACHMENT_JSON_BYTES > 50 * 1024 * 1024 * 4 / 3, "JSON envelope 应容纳 50MB base64 开销");
 });
