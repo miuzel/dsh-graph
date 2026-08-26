@@ -398,6 +398,7 @@
       const [mode, setMode] = React.useState("idle"); // idle | naming | chat
       const [title, setTitle] = React.useState("");
       const [kind, setKind] = React.useState("text"); // g-128：卡片类型可选
+      const [scope, setScope] = React.useState("shared"); // g-183：新建默认共享卡，可选 goal 自有
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
 
@@ -409,7 +410,7 @@
           const r = await fetch(graphUrl("/api/dsh-graph/add-card"), {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, title: t, kind }),
+            body: JSON.stringify({ goal: goalId, title: t, kind, scope }),
           });
           const data = await r.json();
           if (data.ok) {
@@ -468,6 +469,17 @@
                 },
                   ...Object.entries(kindLabels).map(([k, v]) =>
                     h("option", { key: k, value: k }, v))),
+                // g-183：卡片作用域——默认共享（多 goal 复用），可选 goal 自有
+                h("select", {
+                  value: scope,
+                  onChange: (e) => setScope(e.target.value),
+                  style: { fontSize: 12, padding: "4px 6px", cursor: "pointer",
+                           background: "rgba(128,128,128,.10)", color: "inherit",
+                           border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
+                  title: "默认创建共享卡（多 goal 复用）；可选直接在 goal 内创建自有卡",
+                },
+                  h("option", { value: "shared" }, "🔗 共享卡（默认）"),
+                  h("option", { value: "goal" }, "📁 本 goal 自有卡")),
                 h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建")))
           : null,
         mode === "chat"

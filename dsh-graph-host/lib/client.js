@@ -1306,6 +1306,10 @@ window.__ModuleLoader__.load({
             h("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
               h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
                 `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
+              c.scope === "shared"
+                ? h("span", { style: { flexShrink: 0, fontSize: 10, padding: "0 4px", borderRadius: 3, background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-label, #3aa675)" } },
+                    "🔗共享")
+                : null,
               sessionLinkBtn(c.parent_session_id, c.child_id, "↗")),
             h(CardSummary, { summary: c.summary }),
             c.child_id && c.status !== "filled" && c.status !== "reviewed"
@@ -1578,7 +1582,41 @@ window.__ModuleLoader__.load({
                         onClick: () => { setDeleteConfirm(false); setDeleteIdInput(""); setDeleteNote(null); },
                       }, "取消"))
                   )
-                : h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
+                : h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+                    // g-183：共享/自有转换入口（核心层守卫引用计数与归属）
+                    card.scope === "shared"
+                      ? h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          title: "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("✅ 已转回本 goal 自有卡"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "📁 转回自有卡")
+                      : h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          title: "转为共享卡（原 goal 保留引用，内容进入共享池供多 goal 复用）",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-shared"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("🔗 已转为共享卡"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "🔗 转为共享卡"),
                     h("button", {
                       style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
                       className: "dg-btn-danger",
@@ -2005,6 +2043,7 @@ window.__ModuleLoader__.load({
       const [mode, setMode] = React.useState("idle"); // idle | naming | chat
       const [title, setTitle] = React.useState("");
       const [kind, setKind] = React.useState("text"); // g-128：卡片类型可选
+      const [scope, setScope] = React.useState("shared"); // g-183：新建默认共享卡，可选 goal 自有
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
 
@@ -2016,7 +2055,7 @@ window.__ModuleLoader__.load({
           const r = await fetch(graphUrl("/api/dsh-graph/add-card"), {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, title: t, kind }),
+            body: JSON.stringify({ goal: goalId, title: t, kind, scope }),
           });
           const data = await r.json();
           if (data.ok) {
@@ -2075,6 +2114,17 @@ window.__ModuleLoader__.load({
                 },
                   ...Object.entries(kindLabels).map(([k, v]) =>
                     h("option", { key: k, value: k }, v))),
+                // g-183：卡片作用域——默认共享（多 goal 复用），可选 goal 自有
+                h("select", {
+                  value: scope,
+                  onChange: (e) => setScope(e.target.value),
+                  style: { fontSize: 12, padding: "4px 6px", cursor: "pointer",
+                           background: "rgba(128,128,128,.10)", color: "inherit",
+                           border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
+                  title: "默认创建共享卡（多 goal 复用）；可选直接在 goal 内创建自有卡",
+                },
+                  h("option", { value: "shared" }, "🔗 共享卡（默认）"),
+                  h("option", { value: "goal" }, "📁 本 goal 自有卡")),
                 h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建")))
           : null,
         mode === "chat"
@@ -2521,7 +2571,14 @@ window.__ModuleLoader__.load({
                       props.onOpenCard(props.id, c.id);
                     }
                   },
-                }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
+                },
+                  h("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
+                    h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                      `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`),
+                    c.scope === "shared"
+                      ? h("span", { style: { flexShrink: 0, fontSize: 10, padding: "0 4px", borderRadius: 3, background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-label, #3aa675)" } },
+                          "🔗共享")
+                      : null))),
                 isBacklog
                   ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
                   : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession }))
@@ -3418,6 +3475,8 @@ window.__ModuleLoader__.load({
       const [transitionNote, setTransitionNote] = React.useState(null);
       // g-132：右上角齿轮 → 看板设置弹窗
       const [showSettings, setShowSettings] = React.useState(false);
+      // g-183：右上角 🔗 → 共享上下文管理面板
+      const [showSharedPanel, setShowSharedPanel] = React.useState(false);
       // g-171：更新强调动画状态——goalId -> { remaining, token }（token = goalId:updated_at）
       const [updateEmphasis, setUpdateEmphasis] = React.useState({});
       const seenUpdateTokens = React.useRef(new Set()); // 当前页内存：防同一 token 重复播放
@@ -4527,6 +4586,13 @@ window.__ModuleLoader__.load({
             title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
             onClick: () => setShowSettings(true),
           }, "⚙"),
+          // g-183: 右上角 🔗 → 共享上下文管理面板
+          h("button", {
+            style: { ...S.btn, marginLeft: 8, fontSize: 16, lineHeight: 1, padding: "2px 8px" },
+            className: "dg-btn",
+            title: "共享上下文管理面板（创建/查看共享卡、挂到 goal、删除保护）",
+            onClick: () => setShowSharedPanel(true),
+          }, "🔗"),
           // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
             "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅"))),
@@ -4924,6 +4990,19 @@ window.__ModuleLoader__.load({
         showSettings
           ? h(SettingsModal, { onClose: () => setShowSettings(false), onSaved: () => load() })
           : null,
+        // g-183: 共享上下文管理面板（🔗 入口）
+        showSharedPanel
+          ? h(SharedCardsModal, {
+              onClose: () => setShowSharedPanel(false),
+              onRefresh: () => load(),
+              sharedCards: b.sharedCards ?? [],
+              goals: [
+                ...(b.versions ?? []).flatMap((v) => v.goals ?? []),
+                ...(b.standalone ?? []),
+                ...(b.backlog ?? []),
+              ].map((g) => ({ id: g.id, title: g.title })),
+            })
+          : null,
         // g-134: 创建版本泳道弹窗
         showCreateVersion
           ? h("div", { style: S.overlay, ...createVersionGuard },
@@ -5035,6 +5114,151 @@ window.__ModuleLoader__.load({
     // props.sessionId），不能用全局聚焦会话 list.current 代替（多窗口/子代理视图时两者可能不同）。
     // KanbanView(props) 挂载时写入，currentWorkspace() 优先按它查 cwd；找不到再回退 list.current。
     let viewedSessionId = null;
+    // g-183：共享上下文卡管理面板——创建/查看共享卡、挂到 goal、解除引用、零引用显式删除。
+    // 单个共享权威内容可被多个 goal 引用，避免每个 goal 复制、内容分叉。
+    function SharedCardsModal(props) {
+      const { onClose, onRefresh, sharedCards, goals } = props;
+      const [cards, setCards] = React.useState(Array.isArray(sharedCards) ? sharedCards : []);
+      const [title, setTitle] = React.useState("");
+      const [kind, setKind] = React.useState("text");
+      const [note, setNote] = React.useState(null);
+      const [attachGoalId, setAttachGoalId] = React.useState("");
+      const byId = new Map((goals ?? []).map((g) => [g.id, g]));
+      const kindLabels = { text: "📝 文本", file: "📄 文件", image: "🖼 图片", data: "📊 数据" };
+
+      const refresh = async () => {
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/shared-cards"));
+          const d = await r.json();
+          if (d && Array.isArray(d.cards)) setCards(d.cards);
+        } catch { /* 静默 */ }
+      };
+
+      const createCard = async () => {
+        const t = title.trim();
+        if (!t) { setNote("请输入标题"); return; }
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/create-shared-card"), {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ title: t, kind }),
+          });
+          const d = await r.json();
+          if (d.ok) { setNote("✅ 已创建共享卡：" + d.card); setTitle(""); refresh(); onRefresh?.(); }
+          else setNote("⚠️ 创建失败：" + (d.error || "未知错误"));
+        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+      };
+
+      const attachToGoal = async (cardId) => {
+        const gid = attachGoalId || (goals && goals[0] && goals[0].id);
+        if (!gid) { setNote("⚠️ 请先选择要挂载的目标"); return; }
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/attach-shared-card"), {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: gid, card: cardId }),
+          });
+          const d = await r.json();
+          if (d.ok) { setNote("✅ 已挂到 " + gid); refresh(); onRefresh?.(); }
+          else setNote("⚠️ 挂载失败：" + (d.error || "未知错误"));
+        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+      };
+
+      const unreference = async (cardId, gid) => {
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/unreference-shared-card"), {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: gid, card: cardId }),
+          });
+          const d = await r.json();
+          if (d.ok) { setNote("✅ 已解除 " + gid + " 引用"); refresh(); onRefresh?.(); }
+          else setNote("⚠️ 解除失败：" + (d.error || "未知错误"));
+        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+      };
+
+      const removeCard = async (cardId) => {
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/delete-shared-card"), {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ card: cardId }),
+          });
+          const d = await r.json();
+          if (d.ok) { setNote("✅ 已删除共享卡：" + cardId); refresh(); onRefresh?.(); }
+          else setNote("⚠️ 删除失败：" + (d.error || "未知错误"));
+        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+      };
+
+      const backdropGuard = useBackdropClose(onClose);
+      const cardRow = (c) => {
+        const refStr = `${c.refCount} 个 goal 引用`;
+        return h("div", { key: c.id, style: { ...S.subCard, marginBottom: 6 } },
+          h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+            h("span", { style: { flex: 1 } }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, refStr)),
+          h("div", { style: { ...S.meta, fontSize: 11 } },
+            `id=${c.id} ｜ kind=${c.kind}${c.summary ? " ｜ " + c.summary : ""}`),
+          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 } },
+            h("select", {
+              value: attachGoalId,
+              onChange: (e) => setAttachGoalId(e.target.value),
+              style: { fontSize: 11, padding: "2px 4px" },
+            },
+              h("option", { value: "" }, "┅ 挂到目标…"),
+              ...(goals ?? []).map((g) => h("option", { key: g.id, value: g.id }, `${g.id} ${g.title}`))),
+            h("button", { style: S.btn, className: "dg-btn", onClick: () => attachToGoal(c.id) }, "⇄ 挂到 goal"),
+            ...(c.refCount > 0 ? [] : [
+              h("button", { style: S.btn, className: "dg-btn", onClick: () => removeCard(c.id) }, "🗑 显式删除"),
+            ]),
+            h("button", {
+              style: S.btn, className: "dg-btn",
+              title: c.refCount === 1 ? "转为 goal 自有卡（引用计数为 1）" : "引用计数>1 无法转自有",
+              onClick: () => unreferenceRef(c.id),
+            }, "↘ 解除引用")));
+      };
+
+      // 引用计数为 1 时一键解除全部引用并转自有（走核心层守卫）
+      const unreferenceRef = async (cardId) => {
+        const refs = (cards.find((c) => c.id === cardId)?.refCount ?? 0);
+        if (refs === 1) {
+          const gid = attachGoalId || (goals && goals[0] && goals[0].id);
+          if (!gid) { setNote("⚠️ 请选择目标以执行转自有"); return; }
+          try {
+            const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
+              method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({ goal: gid, card: cardId }),
+            });
+            const d = await r.json();
+            if (d.ok) { setNote("✅ 已转为 " + gid + " 自有卡"); refresh(); onRefresh?.(); }
+            else setNote("⚠️ 转换失败：" + (d.error || "未知错误"));
+          } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+        } else {
+          setNote("⚠️ 引用计数 " + refs + "，需先解除其余引用（在目标详情可解除）");
+        }
+      };
+
+      return h("div", { style: S.overlay, ...backdropGuard },
+        h("div", { style: { ...S.modal, maxWidth: 640, maxHeight: "80vh", overflowY: "auto" }, onClick: (e) => e.stopPropagation() },
+          h("div", { style: S.modalH }, "🔗 共享上下文管理面板"),
+          h("div", { style: { ...S.meta, marginBottom: 6 } },
+            "共享卡只保存一份权威内容，可被多个 goal 引用；被引用时不可删除，解除全部引用后仅可显式删除。"),
+          // 新建共享卡
+          h("div", { style: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8 } },
+            h("input", {
+              style: { ...S.promptInput, flex: 1 },
+              value: title, placeholder: "新建共享卡标题…",
+              onChange: (e) => setTitle(e.target.value),
+              onKeyDown: (e) => { if (e.key === "Enter") createCard(); },
+            }),
+            h("select", {
+              value: kind, onChange: (e) => setKind(e.target.value),
+              style: { fontSize: 12, padding: "4px 6px" },
+            }, ...Object.entries(kindLabels).map(([k, v]) => h("option", { key: k, value: k }, v))),
+            h("button", { style: S.btn, className: "dg-btn", onClick: createCard }, "＋ 新建共享卡")),
+          note ? h("div", { style: { ...S.meta, marginBottom: 6 } }, note) : null,
+          (cards.length === 0)
+            ? h("div", { style: S.meta }, "（暂无共享卡）")
+            : h("div", { style: { marginTop: 4 } }, cards.map(cardRow)),
+          h("div", { style: { marginTop: 10, display: "flex", justifyContent: "flex-end" } },
+            h("button", { style: S.btn, className: "dg-btn", onClick: onClose }, "关闭"))));
+    }
     // ===== g-132：workspace 看板设置弹窗（读取/可视化编辑 .dsh-graph/project.yaml 安全配置） =====
     // 字段范围（本期）：executor.provider/model、defaults.review、defaults.pk、supervisor.automation、
     // 子代理补充提示词 workspace 覆盖（三态：default 继承 / 自定义覆盖 / 显式空禁用）。

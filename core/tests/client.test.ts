@@ -1421,16 +1421,17 @@ test("g-179 生成 bundle 契约：client.js 标题同步为 🔎 信息收集�
 
 // ===== g-181：父级 overlay backdrop 误关保护（内容起点文本选择/拖拽到弹窗外松开不误关）=====
 
-// 五个受影响模块的 guard 接入预期（每处 style: S.overlay 都必须走 useBackdropClose guard，
-// 禁止裸 style: S.overlay, onClick:；panel stopPropagation 保留）。
+// 五个受影响模块 + g-183 共享面板（shared-panel.js）的 guard 接入预期（每处 style: S.overlay 都必须走
+// useBackdropClose guard，禁止裸 style: S.overlay, onClick:；panel stopPropagation 保留）。
 const G181_MODULES: Record<string, number> = {
   "goal-modal.js": 1,
   "criteria-modal.js": 3,
   "settings-modal.js": 3,
   "drag-prompts.js": 3,
   "kanban.js": 5,
+  "shared-panel.js": 1,
 };
-const G181_TOTAL = Object.values(G181_MODULES).reduce((a, b) => a + b, 0); // 15
+const G181_TOTAL = Object.values(G181_MODULES).reduce((a, b) => a + b, 0); // 16
 
 test("g-181 源契约：helpers.js 提供共享 useBackdropClose（useRef 起点 + pointerdown + onClick 吞合成 click）", () => {
   const helpers = readFileSync(
@@ -1445,7 +1446,7 @@ test("g-181 源契约：helpers.js 提供共享 useBackdropClose（useRef 起点
   assert.match(helpers, /onClose\?\.\(\);/);
 });
 
-test("g-181 源契约：五个模块全部 style: S.overlay 均接 guard（共 15 处），无裸 overlay onClick，panel stopPropagation 保留", () => {
+test("g-181 源契约：各模块全部 style: S.overlay 均接 guard（共 16 处），无裸 overlay onClick，panel stopPropagation 保留", () => {
   for (const [file, expected] of Object.entries(G181_MODULES)) {
     const src = readFileSync(
       join(import.meta.dirname, "../../dsh-graph-host/lib/client", file), "utf8");
@@ -1459,14 +1460,14 @@ test("g-181 源契约：五个模块全部 style: S.overlay 均接 guard（共 1
     const stopProp = src.match(/onClick: \(e\) => e\.stopPropagation\(\)/g) ?? [];
     assert.ok(stopProp.length >= expected, `${file}: panel stopPropagation 保留（>= ${expected}，实际 ${stopProp.length}）`);
   }
-  // 全量约束 15 个父级 overlay 入口
+  // 全量约束 16 个父级 overlay 入口
   let total = 0;
   for (const file of Object.keys(G181_MODULES)) {
     const src = readFileSync(
       join(import.meta.dirname, "../../dsh-graph-host/lib/client", file), "utf8");
     total += (src.match(/style: S\.overlay, \.\.\.\w+Guard/g) ?? []).length;
   }
-  assert.equal(total, G181_TOTAL, `五个模块共 ${G181_TOTAL} 个父级 overlay 全部接 guard`);
+  assert.equal(total, G181_TOTAL, `各模块共 ${G181_TOTAL} 个父级 overlay 全部接 guard`);
 });
 
 test("g-181 源契约：card-drawer.js sibling overlay/drawer 结构不改（保留自身 onClick: props.onClose）", () => {
@@ -1511,7 +1512,7 @@ test("g-181 hook 逻辑模拟：内容起点→backdrop 不关；backdrop→back
   assert.equal(closed, 2, "吞掉合成 click 后 ref 清零，下一次 backdrop 点击仍关闭");
 });
 
-test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、15 个 guard overlay、保留 GENERATED header", () => {
+test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、16 个 guard overlay、保留 GENERATED header", () => {
   const bundle = readFileSync(
     join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
@@ -1522,7 +1523,67 @@ test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、15 个 guard
   assert.equal(guarded.length, G181_TOTAL, `生成 bundle: ${G181_TOTAL} 个父级 overlay 全部接 guard`);
   const bare = bundle.match(/style: S\.overlay, onClick:/g) ?? [];
   assert.equal(bare.length, 0, "生成 bundle: 无裸 style: S.overlay, onClick:");
-  // panel stopPropagation 保留（>= 15 处 overlay panel；允许额外按钮内 stopPropagation）
+  // panel stopPropagation 保留（>= 16 处 overlay panel；允许额外按钮内 stopPropagation）
   const stopProp = bundle.match(/onClick: \(e\) => e\.stopPropagation\(\)/g) ?? [];
   assert.ok(stopProp.length >= G181_TOTAL, `生成 bundle: panel stopPropagation 保留（>= ${G181_TOTAL}，实际 ${stopProp.length}）`);
+});
+
+// ---- g-183：共享卡 REST 端点契约 ----
+
+test("g-183 shared-card REST：创建→挂 goal→列表→解引用→删除 全链路", async () => {
+  const { root, routes, goalId } = setup();
+  // 创建共享卡
+  const create = await post(routes, "/api/dsh-graph/create-shared-card", { title: "REST 共享", kind: "text" });
+  assert.equal(create.code, 200);
+  const sid = create.body.card;
+  assert.ok(sid.startsWith("shared-"), "REST 创建共享卡应带 shared- 前缀");
+  // 挂到 goal
+  const attach = await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  assert.equal(attach.code, 200);
+  // 列表含 refCount=1
+  const list = await get(routes, "/api/dsh-graph/shared-cards");
+  assert.equal(list.code, 200);
+  assert.equal(list.body.cards.length, 1);
+  assert.equal(list.body.cards[0].id, sid);
+  assert.equal(list.body.cards[0].refCount, 1);
+  // boardPayload 顶层也下发 sharedCards
+  const board = await get(routes, "/api/dsh-graph");
+  assert.equal(board.code, 200);
+  assert.equal(board.body.sharedCards.length, 1);
+  // 解引用 → refCount 0
+  const unref = await post(routes, "/api/dsh-graph/unreference-shared-card", { goal: goalId, card: sid });
+  assert.equal(unref.code, 200);
+  const list2 = await get(routes, "/api/dsh-graph/shared-cards");
+  assert.equal(list2.body.cards[0].refCount, 0);
+  // 删除零引用共享卡
+  const del = await post(routes, "/api/dsh-graph/delete-shared-card", { card: sid });
+  assert.equal(del.code, 200);
+  const list3 = await get(routes, "/api/dsh-graph/shared-cards");
+  assert.equal(list3.body.cards.length, 0);
+});
+
+test("g-183 shared-card REST：被引用删除被拒；转换端点 200", async () => {
+  const { root, routes, goalId } = setup();
+  const create = await post(routes, "/api/dsh-graph/create-shared-card", { title: "REST 保护", kind: "text" });
+  const sid = create.body.card;
+  await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  // 被引用删除 → 400
+  const del = await post(routes, "/api/dsh-graph/delete-shared-card", { card: sid });
+  assert.equal(del.code, 400);
+  assert.ok(String(del.body.error).includes("引用"), "被引用删除应提示引用");
+  // 共享→自有转换：引用计数 1 → 成功
+  const toOwned = await post(routes, "/api/dsh-graph/convert-card-to-owned", { goal: goalId, card: sid });
+  assert.equal(toOwned.code, 200);
+  // 转换后该卡已非共享卡
+  const list = await get(routes, "/api/dsh-graph/shared-cards");
+  assert.equal(list.body.cards.length, 0);
+  // 自有→共享转换：goal 自有卡转换为共享
+  const addOwned = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "自有转共享", kind: "text" });
+  assert.equal(addOwned.code, 200);
+  const ocId = addOwned.body.card;
+  assert.ok(ocId.startsWith("card-"), "默认 add-card 应为 goal 自有");
+  const toShared = await post(routes, "/api/dsh-graph/convert-card-to-shared", { goal: goalId, card: ocId });
+  assert.equal(toShared.code, 200);
+  const list2 = await get(routes, "/api/dsh-graph/shared-cards");
+  assert.ok(list2.body.cards.some((c: any) => c.id === ocId), "转换后应出现在共享池");
 });

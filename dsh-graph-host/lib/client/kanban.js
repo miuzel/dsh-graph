@@ -67,6 +67,8 @@
       const [transitionNote, setTransitionNote] = React.useState(null);
       // g-132：右上角齿轮 → 看板设置弹窗
       const [showSettings, setShowSettings] = React.useState(false);
+      // g-183：右上角 🔗 → 共享上下文管理面板
+      const [showSharedPanel, setShowSharedPanel] = React.useState(false);
       // g-171：更新强调动画状态——goalId -> { remaining, token }（token = goalId:updated_at）
       const [updateEmphasis, setUpdateEmphasis] = React.useState({});
       const seenUpdateTokens = React.useRef(new Set()); // 当前页内存：防同一 token 重复播放
@@ -1176,6 +1178,13 @@
             title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
             onClick: () => setShowSettings(true),
           }, "⚙"),
+          // g-183: 右上角 🔗 → 共享上下文管理面板
+          h("button", {
+            style: { ...S.btn, marginLeft: 8, fontSize: 16, lineHeight: 1, padding: "2px 8px" },
+            className: "dg-btn",
+            title: "共享上下文管理面板（创建/查看共享卡、挂到 goal、删除保护）",
+            onClick: () => setShowSharedPanel(true),
+          }, "🔗"),
           // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
             "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅"))),
@@ -1572,6 +1581,19 @@
         // g-132: 看板设置弹窗（gear 入口）
         showSettings
           ? h(SettingsModal, { onClose: () => setShowSettings(false), onSaved: () => load() })
+          : null,
+        // g-183: 共享上下文管理面板（🔗 入口）
+        showSharedPanel
+          ? h(SharedCardsModal, {
+              onClose: () => setShowSharedPanel(false),
+              onRefresh: () => load(),
+              sharedCards: b.sharedCards ?? [],
+              goals: [
+                ...(b.versions ?? []).flatMap((v) => v.goals ?? []),
+                ...(b.standalone ?? []),
+                ...(b.backlog ?? []),
+              ].map((g) => ({ id: g.id, title: g.title })),
+            })
           : null,
         // g-134: 创建版本泳道弹窗
         showCreateVersion

@@ -131,7 +131,7 @@ export function findGoalFile(root, id) {
 export function init(root) {
     const events = join(root, "events.jsonl");
     const fresh = !existsSync(events); // 以事件流是否存在判定「是否首次初始化」
-    for (const d of ["backlog", "goals", "versions", "memory/long-term"]) {
+    for (const d of ["backlog", "goals", "versions", "memory/long-term", "shared-cards"]) {
         mkdirSync(join(root, d), { recursive: true });
     }
     if (fresh)
@@ -1324,19 +1324,27 @@ export function validate(root) {
             problems.push(`${id}: 目标描述小节重复`);
         }
         problems.push(...locationProblems(root, file, meta));
-        // 卡片引用完整性
+        // 卡片引用完整性（g-183：自有卡 + 共享卡引用均可解析；共享卡允许零引用）
         if (Array.isArray(meta.context_cards) && basename(file) === "goal.md") {
             const dir = file.slice(0, file.length - "goal.md".length);
             for (const ref of meta.context_cards) {
-                const cardFile = join(dir, "cards", `${ref}.md`);
+                let cardFile = join(dir, "cards", `${ref}.md`);
+                let scope = "goal";
                 if (!existsSync(cardFile)) {
-                    problems.push(`${id}: 悬空卡片引用 ${ref}`);
-                    continue;
+                    cardFile = join(sharedCardsDir(root), `${ref}.md`);
+                    if (!existsSync(cardFile)) {
+                        problems.push(`${id}: 悬空卡片引用 ${ref}`);
+                        continue;
+                    }
+                    scope = "shared";
                 }
                 try {
                     const card = loadGoal(cardFile).meta;
-                    if (card.goal !== id) {
+                    if (scope === "goal" && card.goal !== id) {
                         problems.push(`${id}: 卡片 ${ref} 归属不一致（card.goal=${card.goal}）`);
+                    }
+                    if (scope === "shared" && card.scope !== "shared") {
+                        problems.push(`${id}: 共享卡 ${ref} 缺少 scope=shared 标记`);
                     }
                     if (!CARD_STATUSES.includes(card.status)) {
                         problems.push(`${id}: 卡片 ${ref} 非法状态 ${card.status}`);
@@ -1366,6 +1374,27 @@ export function validate(root) {
     }
     catch (e) {
         problems.push(e.message);
+    }
+    // g-183：共享池完整性——每张共享卡必须 scope=shared、状态合法；悬空引用已在各 goal 引用处检查
+    const sdir = sharedCardsDir(root);
+    if (existsSync(sdir)) {
+        for (const f of readdirSync(sdir).sort()) {
+            if (!f.endsWith(".md"))
+                continue;
+            const cardId = f.slice(0, -3);
+            try {
+                const card = loadGoal(join(sdir, f)).meta;
+                if (card.scope !== "shared") {
+                    problems.push(`共享卡 ${cardId}: 缺少 scope=shared 标记`);
+                }
+                if (!CARD_STATUSES.includes(card.status)) {
+                    problems.push(`共享卡 ${cardId}: 非法状态 ${card.status}`);
+                }
+            }
+            catch (e) {
+                problems.push(`共享卡 ${cardId}: 解析失败：${e.message}`);
+            }
+        }
     }
     return problems;
 }
@@ -1413,6 +1442,31 @@ export function rebuild(root) {
 // ---- 上下文卡片（SCHEMA §2.5） ----
 export const CARD_KINDS = ["text", "file", "image", "data"];
 export const CARD_STATUSES = ["empty", "collecting", "filled", "reviewed"];
+export const CARD_SCOPES = ["goal", "shared"];
+/** 项目的独立共享卡池（与 versions/goals/backlog 平级；g-183）。 */
+export function sharedCardsDir(root) {
+    return join(root, "shared-cards");
+}
+const SHARED_CARD_PREFIX = "shared-";
+/** 判断卡片 id 是否位于共享命名空间（仅用于快速判定；权威以 resolveCard 位置为准）。 */
+function isSharedCardId(id) {
+    return id.startsWith(SHARED_CARD_PREFIX);
+}
+/** 单张卡的摘要字段（供 board/详情/列表共用），scope 默认 "goal"。 */
+function cardSummaryFields(meta, cardFilePath, scope) {
+    return {
+        id: meta.id,
+        title: meta.title,
+        kind: meta.kind,
+        status: meta.status,
+        filled_by: meta.filled_by ?? null,
+        summary: meta.summary ?? null,
+        child_id: meta.child_id ?? null,
+        parent_session_id: meta.parent_session_id ?? null,
+        scope,
+        cardFile: cardFilePath, // g-154: 暴露卡片文件绝对路径
+    };
+}
 /** 目标文件所在目录；backlog 平铺文件没有目录，不能建卡。 */
 function goalDirOf(file) {
     if (basename(file) !== "goal.md") {
@@ -1423,6 +1477,13 @@ function goalDirOf(file) {
 export function addCard(root, goalId, opts) {
     if (!CARD_KINDS.includes(opts.kind)) {
         throw new GraphError(`非法卡片 kind：${opts.kind}（${CARD_KINDS.join("|")}）`);
+    }
+    // g-183：默认 goal 自有（兼容既有工具/测试语义），scope="shared" 时创建共享卡并挂到该 goal。
+    const scope = opts.scope ?? "goal";
+    if (scope === "shared") {
+        const sharedId = createSharedCard(root, { title: opts.title, kind: opts.kind, actor: opts.actor });
+        addSharedCardRef(root, goalId, sharedId, opts.actor);
+        return sharedId;
     }
     const file = findGoalFile(root, goalId);
     const dir = goalDirOf(file);
@@ -1456,16 +1517,209 @@ export function addCard(root, goalId, opts) {
     });
     return cardId;
 }
-function loadCard(root, goalId, cardId) {
+/** 解析卡片：goal 自有目录优先，其次项目共享池（g-183）。
+ *  返回 file（物理文件）/doc/scope。旧自有卡路径与字符串引用保持可读。 */
+export function resolveCard(root, goalId, cardId) {
     const goalFile = findGoalFile(root, goalId);
-    // backlog 目标没有目录结构，无法存储卡片
-    if (basename(goalFile) !== "goal.md") {
-        throw new GraphError(`暂存目标（backlog）不能有上下文卡片，请先排期移入 goals/ 或版本`);
+    // backlog 目标没有目录结构，无法存储自有卡；但可引用共享卡（resolve 到共享池）
+    if (basename(goalFile) === "goal.md") {
+        const ownFile = join(goalDirOf(goalFile), "cards", `${cardId}.md`);
+        if (existsSync(ownFile))
+            return { file: ownFile, doc: loadGoal(ownFile), scope: "goal" };
     }
-    const file = join(goalDirOf(goalFile), "cards", `${cardId}.md`);
-    if (!existsSync(file))
-        throw new GraphError(`卡片不存在：${cardId}（目标 ${goalId}）`);
-    return { file, doc: loadGoal(file) };
+    const sharedFile = join(sharedCardsDir(root), `${cardId}.md`);
+    if (existsSync(sharedFile))
+        return { file: sharedFile, doc: loadGoal(sharedFile), scope: "shared" };
+    throw new GraphError(`卡片不存在：${cardId}（目标 ${goalId}）`);
+}
+function loadCard(root, goalId, cardId) {
+    return resolveCard(root, goalId, cardId);
+}
+// ---- 共享卡操作（g-183） ----
+/** 在共享池创建一张零引用共享卡（面板「新建共享卡」）。返回卡片 id。 */
+export function createSharedCard(root, opts) {
+    if (!CARD_KINDS.includes(opts.kind)) {
+        throw new GraphError(`非法卡片 kind：${opts.kind}（${CARD_KINDS.join("|")}）`);
+    }
+    const dir = sharedCardsDir(root);
+    mkdirSync(dir, { recursive: true });
+    const cardId = SHARED_CARD_PREFIX + randomUUID().slice(0, 8);
+    const meta = {
+        id: cardId,
+        scope: "shared", // 共享卡无单一属主
+        title: opts.title,
+        kind: opts.kind,
+        status: "empty",
+        filled_by: null,
+        filled_at: null,
+        content_ref: null,
+        summary: null, // 一句摘要（看板芯片/抽屉标题下显示）
+        child_id: null,
+        parent_session_id: null,
+    };
+    saveGoal(join(dir, `${cardId}.md`), { meta, body: "\n" });
+    appendEvent(root, {
+        actor: opts.actor,
+        event: "card.shared_created",
+        details: { card: cardId, title: opts.title, kind: opts.kind },
+    });
+    return cardId;
+}
+/** 在 goal 的 context_cards 中追加一条共享卡引用（幂等：已引用则跳过）。 */
+export function addSharedCardRef(root, goalId, sharedId, actor) {
+    // 必须是共享池中的卡
+    const sharedFile = join(sharedCardsDir(root), `${sharedId}.md`);
+    if (!existsSync(sharedFile)) {
+        throw new GraphError(`共享卡不存在：${sharedId}（请先在共享管理面板创建）`);
+    }
+    const goalFile = findGoalFile(root, goalId);
+    const goalDoc = loadGoal(goalFile);
+    if (!Array.isArray(goalDoc.meta.context_cards))
+        goalDoc.meta.context_cards = [];
+    if (!goalDoc.meta.context_cards.includes(sharedId)) {
+        goalDoc.meta.context_cards.push(sharedId);
+        saveGoal(goalFile, goalDoc);
+        appendEvent(root, {
+            actor,
+            event: "card.shared_referenced",
+            goal: goalId,
+            details: { card: sharedId },
+        });
+    }
+}
+/** 统计共享卡被多少个 goal（含已归档）引用。 */
+export function referenceCount(root, sharedId) {
+    let count = 0;
+    for (const file of listGoalFiles(root, { includeArchived: true })) {
+        let doc;
+        try {
+            doc = loadGoal(file);
+        }
+        catch {
+            continue;
+        }
+        const refs = Array.isArray(doc.meta.context_cards) ? doc.meta.context_cards : [];
+        if (refs.map(String).includes(sharedId))
+            count++;
+    }
+    return count;
+}
+/** 列出共享池全部共享卡（面板数据源，按 id 排序）。 */
+export function sharedCards(root) {
+    const dir = sharedCardsDir(root);
+    if (!existsSync(dir))
+        return [];
+    const out = [];
+    for (const f of readdirSync(dir).sort()) {
+        if (!f.endsWith(".md"))
+            continue;
+        const cardFile = join(dir, f);
+        try {
+            const doc = loadGoal(cardFile);
+            out.push({
+                ...cardSummaryFields(doc.meta, cardFile, "shared"),
+                refCount: referenceCount(root, String(doc.meta.id)),
+                content: doc.body.trim(),
+            });
+        }
+        catch {
+            /* 跳过坏卡片 */
+        }
+    }
+    return out;
+}
+/** 把 goal 自有卡转换为共享卡：原 goal 继续保留引用；内容不丢失（g-183 判据 #3）。 */
+export function convertOwnedToShared(root, goalId, cardId, opts) {
+    const { file, doc, scope } = resolveCard(root, goalId, cardId);
+    if (scope !== "goal") {
+        throw new GraphError(`卡片 ${cardId} 已是共享卡，无需转换`);
+    }
+    const dir = sharedCardsDir(root);
+    mkdirSync(dir, { recursive: true });
+    // 事件先行（R-02）：记录转换前的 goal 归属
+    appendEvent(root, {
+        actor: opts.actor,
+        event: "card.shared_converted",
+        goal: goalId,
+        details: { card: cardId, from: "goal" },
+    });
+    // 变更后写入共享池（权威物理内容），再删除自有副本
+    doc.meta.scope = "shared";
+    delete doc.meta.goal;
+    saveGoal(join(dir, `${cardId}.md`), { meta: doc.meta, body: doc.body });
+    rmSync(file, { force: true });
+}
+/** 把共享卡转换回 goal 自有卡：仅当引用计数恰好为 1（且该 goal 是唯一引用者）时成功（判据 #4）。 */
+export function convertSharedToOwned(root, goalId, cardId, opts) {
+    const { file, doc, scope } = resolveCard(root, goalId, cardId);
+    if (scope !== "shared") {
+        throw new GraphError(`卡片 ${cardId} 是 goal 自有卡，无需转换`);
+    }
+    const refs = referenceCount(root, cardId);
+    if (refs !== 1) {
+        throw new GraphError(`共享卡 ${cardId} 被 ${refs} 个 goal 引用，只有引用计数恰为 1 时才能转回 goal 自有卡——请先解除其余引用`);
+    }
+    // 确认唯一引用者是当前 goal（否则拒绝，即使计数为 1 也应归属引用方）
+    const goalFile = findGoalFile(root, goalId);
+    const goalDoc = loadGoal(goalFile);
+    const refsList = Array.isArray(goalDoc.meta.context_cards) ? goalDoc.meta.context_cards : [];
+    if (!refsList.map(String).includes(cardId)) {
+        throw new GraphError(`共享卡 ${cardId} 未被目标 ${goalId} 引用，无法转换（请在引用方操作）`);
+    }
+    // 事件先行（R-02）
+    appendEvent(root, {
+        actor: opts.actor,
+        event: "card.owned_converted",
+        goal: goalId,
+        details: { card: cardId, from: "shared" },
+    });
+    // 变更后写回 goal 自有目录，再从共享池删除权威副本
+    const goalFile2 = findGoalFile(root, goalId);
+    const ownDir = join(goalDirOf(goalFile2), "cards");
+    mkdirSync(ownDir, { recursive: true });
+    doc.meta.scope = "goal";
+    doc.meta.goal = goalId;
+    saveGoal(join(ownDir, `${cardId}.md`), { meta: doc.meta, body: doc.body });
+    rmSync(file, { force: true });
+}
+/** 从 goal 解除对共享卡的引用（共享卡本体保留在共享池，零引用也仅可显式删除）。 */
+export function removeSharedCardRef(root, goalId, sharedId, actor) {
+    const goalFile = findGoalFile(root, goalId);
+    const goalDoc = loadGoal(goalFile);
+    if (!Array.isArray(goalDoc.meta.context_cards))
+        return;
+    const idx = goalDoc.meta.context_cards.indexOf(sharedId);
+    if (idx < 0) {
+        throw new GraphError(`目标 ${goalId} 未引用共享卡 ${sharedId}`);
+    }
+    goalDoc.meta.context_cards.splice(idx, 1);
+    saveGoal(goalFile, goalDoc);
+    appendEvent(root, {
+        actor,
+        event: "card.shared_unreferenced",
+        goal: goalId,
+        details: { card: sharedId },
+    });
+}
+/** 显式删除零引用共享卡；被引用的共享卡禁止删除（判据 #5）。 */
+export function deleteSharedCard(root, sharedId, opts) {
+    const file = join(sharedCardsDir(root), `${sharedId}.md`);
+    if (!existsSync(file)) {
+        // 可能是自有卡——拒绝并提示（避免误删 goal 自有卡）
+        throw new GraphError(`共享卡不存在：${sharedId}（或该卡是 goal 自有卡）`);
+    }
+    const refs = referenceCount(root, sharedId);
+    if (refs > 0) {
+        throw new GraphError(`共享卡 ${sharedId} 被 ${refs} 个 goal 引用，不能删除——请先在共享管理面板解除引用`);
+    }
+    const doc = loadGoal(file);
+    // 事件先行（R-02）
+    appendEvent(root, {
+        actor: opts.actor,
+        event: "card.shared_deleted",
+        details: { card: sharedId, title: doc.meta.title, kind: doc.meta.kind, refCount: refs },
+    });
+    rmSync(file, { force: true });
 }
 export function fillCard(root, goalId, cardId, opts) {
     const { file, doc } = loadCard(root, goalId, cardId);
@@ -1522,9 +1776,13 @@ export function reviewCard(root, goalId, cardId, opts) {
     });
 }
 /** 删除上下文卡片（g-128）：删卡片文件 + context_cards 移除引用 + 记 card.deleted 事件（事件先行 R-02）。
- *  前置校验：卡片存在；正在收集中的卡片（status=collecting）拒绝删除（需先停止子代理）。 */
+ *  前置校验：卡片存在；正在收集中的卡片（status=collecting）拒绝删除（需先停止子代理）。
+ *  g-183：被引用/任何共享卡不可经 deleteCard 删除——共享卡走 deleteSharedCard（零引用显式删除）。 */
 export function deleteCard(root, goalId, cardId, opts) {
-    const { file, doc } = loadCard(root, goalId, cardId);
+    const { file, doc, scope } = loadCard(root, goalId, cardId);
+    if (scope === "shared") {
+        throw new GraphError(`共享卡 ${cardId} 被 goal 引用，不能删除——请在共享管理面板先解除引用（零引用后再显式删除）`);
+    }
     // 前置校验：正在收集中的卡片不可删除
     if (doc.meta.status === "collecting") {
         throw new GraphError(`卡片 ${cardId} 正在收集子代理中，不能删除——请先停止子代理或等其完成`);
@@ -1553,8 +1811,12 @@ export function deleteCard(root, goalId, cardId, opts) {
  *  g-119：幂等——同一 child_id+parent_session_id 对同一卡片重复绑定（状态已 collecting）为 no-op，
  *  不重写、不重复记事件（防重试/重复派发刷事件流）；换 child（重新收集）或换 parent 仍正常写。 */
 export function bindCardChild(root, goalId, cardId, opts) {
-    const { file, doc } = loadCard(root, goalId, cardId);
+    const { file, doc, scope } = loadCard(root, goalId, cardId);
     const parentSessionId = opts.parentSessionId ?? null;
+    // g-183：共享卡 collecting 时只允许一个权威收集者——换 child 重新收集被拒绝（判据 #6）。
+    if (scope === "shared" && doc.meta.status === "collecting" && doc.meta.child_id && doc.meta.child_id !== opts.childId) {
+        throw new GraphError(`共享卡 ${cardId} 正在由 ${doc.meta.child_id} 收集，不能并行收集——只允许一个权威收集者（如需重收先停止该子代理）`);
+    }
     if (doc.meta.status === "collecting" &&
         doc.meta.child_id === opts.childId &&
         (doc.meta.parent_session_id ?? null) === parentSessionId) {
@@ -1573,7 +1835,8 @@ export function bindCardChild(root, goalId, cardId, opts) {
 }
 /** 按 context_cards 顺序读取 filled/reviewed 卡片的成果（title+summary+正文全文），
  *  跳过 empty/collecting；无成果卡片时返回空数组（g-120）。
- *  悬空引用与坏卡片跳过（由 validate 报告），不在此抛错。 */
+ *  悬空引用与坏卡片跳过（由 validate 报告），不在此抛错。
+ *  g-183：共享引用解析到共享池权威内容（各 goal 引用读同一份）。 */
 export function harvestedCards(root, goalId) {
     const file = findGoalFile(root, goalId);
     const dir = basename(file) === "goal.md" ? dirname(file) : null;
@@ -1584,9 +1847,18 @@ export function harvestedCards(root, goalId) {
     const out = [];
     for (const ref of refs) {
         const id = String(ref);
-        const cardFile = join(dir, "cards", `${id}.md`);
-        if (!existsSync(cardFile))
-            continue; // 悬空引用（validate 管）
+        let cardFile = dir ? join(dir, "cards", `${id}.md`) : null;
+        let scope = "goal";
+        if (cardFile && existsSync(cardFile)) {
+            // 自有卡：优先
+        }
+        else {
+            const sharedFile = join(sharedCardsDir(root), `${id}.md`);
+            if (!existsSync(sharedFile))
+                continue; // 悬空引用（validate 管）
+            cardFile = sharedFile;
+            scope = "shared";
+        }
         try {
             const card = loadGoal(cardFile);
             const status = String(card.meta.status ?? "");
@@ -1598,6 +1870,7 @@ export function harvestedCards(root, goalId) {
                 kind: String(card.meta.kind ?? ""),
                 status,
                 summary: card.meta.summary ?? null,
+                scope,
                 content: card.body.trim(),
             });
         }
@@ -1624,6 +1897,7 @@ export function formatHarvestedCardsSection(root, goalId) {
             `id=${c.id}`,
             `status=${c.status}`,
             c.kind ? `kind=${c.kind}` : null,
+            c.scope === "shared" ? `scope=共享` : null,
             c.summary ? `摘要：${c.summary}` : null,
         ].filter(Boolean).join("，");
         const body = c.content
@@ -1898,11 +2172,9 @@ export function formatCollectPrompt(root, goalId, cardId, userPrompt) {
     }
     const goalDoc = loadGoal(goalFile);
     const goalTitle = goalDoc.meta.title ?? goalId;
-    const cardFile = join(goalDirOf(goalFile), "cards", `${cardId}.md`);
-    if (!existsSync(cardFile)) {
-        throw new GraphError(`卡片不存在：${cardId}（目标 ${goalId}）`);
-    }
-    const cardDoc = loadGoal(cardFile);
+    // g-183：共享卡经 resolveCard 解析到共享池权威内容
+    const card = resolveCard(root, goalId, cardId);
+    const cardDoc = card.doc;
     const cardTitle = cardDoc.meta.title ?? cardId;
     const cardKind = cardDoc.meta.kind ?? "text";
     // 构建结构化提示词
@@ -1952,11 +2224,8 @@ export function getCardMeta(root, goalId, cardId) {
     }
     const goalDoc = loadGoal(goalFile);
     const goalTitle = goalDoc.meta.title ?? goalId;
-    const cardFile = join(goalDirOf(goalFile), "cards", `${cardId}.md`);
-    if (!existsSync(cardFile)) {
-        throw new GraphError(`卡片不存在：${cardId}（目标 ${goalId}）`);
-    }
-    const cardDoc = loadGoal(cardFile);
+    // g-183：共享卡经 resolveCard 解析到共享池权威内容
+    const cardDoc = resolveCard(root, goalId, cardId).doc;
     const cardTitle = cardDoc.meta.title ?? cardId;
     const cardKind = cardDoc.meta.kind ?? "text";
     return { title: cardTitle, kind: cardKind, goalTitle };
@@ -2500,29 +2769,8 @@ export function boardProjection(root, opts) {
                 }
             }
         }
-        // 上下文卡片摘要（目标目录 cards/ 下）
-        const cards = [];
-        if (dir) {
-            const cdir = join(dir, "cards");
-            if (existsSync(cdir)) {
-                for (const f of readdirSync(cdir).sort()) {
-                    if (!f.endsWith(".md"))
-                        continue;
-                    try {
-                        const cm = loadGoal(join(cdir, f)).meta;
-                        cards.push({
-                            id: cm.id, title: cm.title, kind: cm.kind, status: cm.status,
-                            summary: cm.summary ?? null,
-                            child_id: cm.child_id ?? null,
-                            parent_session_id: cm.parent_session_id ?? null,
-                        });
-                    }
-                    catch {
-                        /* 跳过坏卡片 */
-                    }
-                }
-            }
-        }
+        // 上下文卡片摘要（自有卡 + 该 goal 引用的共享卡；g-183 scope 区分）
+        const cards = goalCards(root, String(meta.id));
         return {
             id: String(meta.id),
             title: String(meta.title ?? meta.id),
@@ -2749,38 +2997,52 @@ export function boardPayload(root, opts) {
         supervisorStatus: readSupervisorStatus(root),
         // 状态新鲜度（负责人 2026-08 指示：新一轮开始应清空上次 status，等快速替换）——时间戳供客户端过期清空
         supervisorStatusAt: readSupervisorStatusAt(root),
+        // g-183：共享卡面板数据源（创建/查看/删除/引用计数）
+        sharedCards: sharedCards(root),
     };
 }
-/** 目标的上下文卡片摘要列表（看板子卡片）。 */
+/** 目标的上下文卡片摘要列表（看板子卡片）。
+ *  g-183：自有卡（goal 目录扫描）+ 该 goal 引用的共享卡（共享池权威内容，scope=shared），同处展示。 */
 export function goalCards(root, goalId) {
     const file = findGoalFile(root, goalId);
     const dir = basename(file) === "goal.md" ? dirname(file) : null;
-    if (!dir)
-        return [];
-    const cdir = join(dir, "cards");
-    if (!existsSync(cdir))
-        return [];
     const out = [];
-    for (const f of readdirSync(cdir).sort()) {
-        if (!f.endsWith(".md"))
+    const seen = new Set();
+    if (dir) {
+        const cdir = join(dir, "cards");
+        if (existsSync(cdir)) {
+            for (const f of readdirSync(cdir).sort()) {
+                if (!f.endsWith(".md"))
+                    continue;
+                const id = f.slice(0, -3);
+                const cardFilePath = join(cdir, f);
+                try {
+                    const doc = loadGoal(cardFilePath);
+                    out.push({ ...cardSummaryFields(doc.meta, cardFilePath, "goal") });
+                    seen.add(id);
+                }
+                catch {
+                    /* 跳过坏卡片 */
+                }
+            }
+        }
+    }
+    // 共享引用：解析到共享池，追加展示（不重复数量，scope=shared 供客户端打共享标签）
+    const goalDoc = loadGoal(file);
+    for (const ref of Array.isArray(goalDoc.meta.context_cards) ? goalDoc.meta.context_cards : []) {
+        const id = String(ref);
+        if (seen.has(id))
             continue;
-        const cardFilePath = join(cdir, f);
+        const sharedFile = join(sharedCardsDir(root), `${id}.md`);
+        if (!existsSync(sharedFile))
+            continue; // 悬空引用（validate 管）；自有卡非 context_cards 已在上方扫出
         try {
-            const doc = loadGoal(cardFilePath);
-            out.push({
-                id: doc.meta.id,
-                title: doc.meta.title,
-                kind: doc.meta.kind,
-                status: doc.meta.status,
-                filled_by: doc.meta.filled_by ?? null,
-                summary: doc.meta.summary ?? null,
-                child_id: doc.meta.child_id ?? null,
-                parent_session_id: doc.meta.parent_session_id ?? null,
-                cardFile: cardFilePath, // g-154: 暴露卡片文件绝对路径
-            });
+            const doc = loadGoal(sharedFile);
+            out.push({ ...cardSummaryFields(doc.meta, sharedFile, "shared") });
+            seen.add(id);
         }
         catch {
-            /* 跳过坏卡片 */
+            /* 跳过坏共享卡 */
         }
     }
     return out;

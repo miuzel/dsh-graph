@@ -24,6 +24,7 @@ PARTS=(
   "criteria-modal"
   "drag-prompts"
   "kanban"
+  "shared-panel"
   "settings-modal"
   "settings"
   "plugin"

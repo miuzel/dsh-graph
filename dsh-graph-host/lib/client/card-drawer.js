@@ -257,7 +257,41 @@
                         onClick: () => { setDeleteConfirm(false); setDeleteIdInput(""); setDeleteNote(null); },
                       }, "取消"))
                   )
-                : h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
+                : h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+                    // g-183：共享/自有转换入口（核心层守卫引用计数与归属）
+                    card.scope === "shared"
+                      ? h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          title: "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("✅ 已转回本 goal 自有卡"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "📁 转回自有卡")
+                      : h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          title: "转为共享卡（原 goal 保留引用，内容进入共享池供多 goal 复用）",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-shared"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("🔗 已转为共享卡"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "🔗 转为共享卡"),
                     h("button", {
                       style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
                       className: "dg-btn-danger",

@@ -56,6 +56,14 @@ import {
   harvestedCards,
   formatHarvestedCardsSection,
   formatCollectPrompt,
+  createSharedCard,
+  addSharedCardRef,
+  deleteSharedCard,
+  removeSharedCardRef,
+  convertOwnedToShared,
+  convertSharedToOwned,
+  sharedCards,
+  referenceCount,
   recordAttemptHandoff,
   harvestReviewedAttemptHandoffs,
   formatReviewedAttemptHandoffsSection,
@@ -335,13 +343,13 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_add_card",
-        description: "为目标创建上下文卡片（empty 占位）。返回卡片 id。",
+        description: "为目标创建上下文卡片（empty 占位）。返回卡片 id。scope 可选（不传默认 goal 自有；传 shared 创建共享卡并挂到该 goal）。",
         parameters: params(
-          { goal: str, title: str, kind: { type: "string", enum: ["text", "file", "image", "data"] } },
+          { goal: str, title: str, kind: { type: "string", enum: ["text", "file", "image", "data"] }, scope: { type: "string", enum: ["goal", "shared"] } },
           ["goal", "title", "kind"],
         ),
       },
-      run: (a, ex) => ({ card: addCard(rootFor(ex), a.goal, { title: a.title, kind: a.kind, actor: actorOf(ex) }) }),
+      run: (a, ex) => ({ card: addCard(rootFor(ex), a.goal, { title: a.title, kind: a.kind, scope: a.scope, actor: actorOf(ex) }) }),
     },
     {
       def: {
@@ -1117,10 +1125,119 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, title, kind } = body;
+          const { goal, title, kind, scope } = body;
           if (!goal || !title || !kind) return json(res, 400, { error: "missing goal/title/kind" });
-          const card = addCard(rootForReq(req, body), goal, { title, kind, actor: "human:gui" });
+          const card = addCard(rootForReq(req, body), goal, { title, kind, scope, actor: "human:gui" });
           json(res, 200, { ok: true, card });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-183: 共享卡管理端点（面板 CRUD / 引用 / 转换）
+    {
+      path: "/api/dsh-graph/shared-cards",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          json(res, 200, { cards: sharedCards(rootForReq(req)) });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/create-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { title, kind } = body;
+          if (!title || !kind) return json(res, 400, { error: "missing title/kind" });
+          const card = createSharedCard(rootForReq(req, body), { title, kind, actor: "human:gui" });
+          json(res, 200, { ok: true, card });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/attach-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          addSharedCardRef(rootForReq(req, body), goal, card, "human:gui");
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/unreference-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          removeSharedCardRef(rootForReq(req, body), goal, card, "human:gui");
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/delete-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { card } = body;
+          if (!card) return json(res, 400, { error: "missing card" });
+          deleteSharedCard(rootForReq(req, body), card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/convert-card-to-shared",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          convertOwnedToShared(rootForReq(req, body), goal, card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/convert-card-to-owned",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          convertSharedToOwned(rootForReq(req, body), goal, card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
