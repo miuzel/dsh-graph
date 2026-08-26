@@ -1554,6 +1554,9 @@ export function addCard(
   }
   // g-183：新建默认共享卡（最终需求），goal 自有必须显式 scope="goal"。
   const scope = opts.scope ?? "shared";
+  if (scope !== "shared" && scope !== "goal") {
+    throw new GraphError(`非法卡片 scope：${scope}（仅支持 shared|goal）`);
+  }
   if (scope === "shared") {
     // g-183 返工 #5：先校验 goal 存在，避免无效 goal 先建共享文件留孤儿；失败则清理已建共享卡。
     const goalIdSafe = assertSafeId(goalId, "goal id");
@@ -1826,16 +1829,23 @@ export function convertOwnedToShared(
   }
   // 三：删除自有副本（此时目标已指向共享权威，删除不再有读者断引用）。
   //  若最后一步 rm 失败，回滚：goal 引用还原为旧 id，删除共享副本，恢复原状（不留双副本）。
+  //  回滚失败不吞异常：显式抛出 GraphError 并说明需人工恢复的可恢复状态。
   try {
     rmSync(file, { force: true });
   } catch (e) {
+    let restoreErr: unknown = null;
     try {
       const rb = loadGoal(goalFile);
       const rrefs = Array.isArray(rb.meta.context_cards) ? rb.meta.context_cards : [];
       const ridx = rrefs.indexOf(newId);
       if (ridx >= 0) { rrefs[ridx] = cardId; rb.meta.context_cards = rrefs; saveGoal(goalFile, rb); }
       rmSync(newFile, { force: true });
-    } catch { /* 回滚尽力而为 */ }
+    } catch (re) { restoreErr = re; }
+    if (restoreErr) {
+      throw new GraphError(
+        `卡片 ${cardId} 转换清理失败且回滚出错，需人工恢复（目标引用与新/旧文件或不一致）：${String((restoreErr as Error).message)}`,
+      );
+    }
     throw e;
   }
   return newId;
@@ -1903,16 +1913,23 @@ export function convertSharedToOwned(
   }
   // 三：删除共享池权威副本（此时目标已指向自有卡）。
   //  若最后一步 rm 失败，回滚：goal 引用还原为旧 shared id，删除自有副本，恢复原状（不留双副本）。
+  //  回滚失败不吞异常：显式抛出 GraphError 并说明需人工恢复的可恢复状态。
   try {
     rmSync(file, { force: true });
   } catch (e) {
+    let restoreErr: unknown = null;
     try {
       const rb = loadGoal(goalFile);
       const rrefs = Array.isArray(rb.meta.context_cards) ? rb.meta.context_cards : [];
       const ridx = rrefs.indexOf(newId);
       if (ridx >= 0) { rrefs[ridx] = cardId; rb.meta.context_cards = rrefs; saveGoal(goalFile, rb); }
       rmSync(newFile, { force: true });
-    } catch { /* 回滚尽力而为 */ }
+    } catch (re) { restoreErr = re; }
+    if (restoreErr) {
+      throw new GraphError(
+        `共享卡 ${cardId} 转换清理失败且回滚出错，需人工恢复（目标引用与新/旧文件或不一致）：${String((restoreErr as Error).message)}`,
+      );
+    }
     throw e;
   }
   return newId;
@@ -2090,9 +2107,9 @@ export function attachmentContentType(name: string): { type: string; inline: boo
     pdf: "application/pdf", zip: "application/zip", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   };
   const type = map[ext] ?? "application/octet-stream";
-  // 内联渲染有 XSS 风险的文本/标记类型 → 强制下载（不 inline）
-  const dangerous = ["text/html", "text/css", "text/javascript", "image/svg+xml", "application/xml", "text/markdown", "text/csv"].includes(type);
-  return { type, inline: !dangerous };
+  // 内联渲染有 XSS 风险的文本/标记类型 → 强制下载（不 inline）。Markdown(.md) 一律强制下载。
+  const forceDownload = ext === "md" || ext === "mdtext" || ["text/html", "text/css", "text/javascript", "image/svg+xml", "application/xml", "text/markdown", "text/csv"].includes(type);
+  return { type, inline: !forceDownload };
 }
 
 /** 读附件：校验根/子目录 symlink + 越界，返回 {buffer, size, digest, contentType, inline}。 */
@@ -2190,8 +2207,10 @@ export function storeAttachment(
 
 /** 递归列出项目全部附件相对路径（含安全子目录；目录不存在返回空）。 */
 export function listAttachments(root: string): string[] {
-  // 根 symlink 拒绝（ensureAttachmentsRoot 校验）；不存在返回空
-  if (!existsSync(attachmentsDir(root))) return [];
+  // 根 symlink 拒绝（即使 dangling：lstat 才能识别；existsSync 跟随连接可能返回 false 静默 []）
+  const rootSt = tryLstat(attachmentsDir(root));
+  if (!rootSt) return [];
+  if (rootSt.isSymbolicLink()) throw new GraphError(`attachments 根不允许是 symlink：${attachmentsDir(root)}`);
   const dir = ensureAttachmentsRoot(root);
   const out: string[] = [];
   const walk = (rel: string) => {
@@ -2895,7 +2914,8 @@ export function formatCollectPrompt(
   const card = resolveCard(root, goalId, cardId);
   const cardDoc = card.doc;
   const cardTitle = cardDoc.meta.title ?? cardId;
-  const attRoot = resolve(attachmentsDir(root)); // canonical absolute attachments 根
+  // g-183 返工 #6：canonical attachments 根必须经 symlink 拒绝的 resolver（避免向收集 agent 泄漏外部路径）
+  const attRoot = ensureAttachmentsRoot(root);
 
   // 构建结构化提示词
   const sections = [

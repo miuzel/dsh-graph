@@ -1620,7 +1620,8 @@ window.__ModuleLoader__.load({
                       : h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
-                          title: "转为共享卡（原 goal 保留引用，内容进入共享池供多 goal 复用）",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可转换" : "转为共享卡（原 goal 保留引用，内容进入共享池供多 goal 复用）",
                           onClick: async () => {
                             try {
                               const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-shared"), {
@@ -5216,16 +5217,19 @@ window.__ModuleLoader__.load({
             h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} 个 goal 引用`)),
           h("div", { style: { ...S.meta, fontSize: 11 } },
             `id=${c.id}${c.summary ? " ｜ " + c.summary : ""}`),
-          // 正文引用附件（安全下载链接，不内联渲染）
+          // 正文引用附件（安全下载链接，不内联渲染）——逐项渲染为节点（勿拼接 React 元素为字符串）
           (Array.isArray(c.attachments) && c.attachments.length)
             ? h("div", { style: { ...S.meta, fontSize: 11 } },
-                "📎 附件：" + c.attachments.map((a) =>
+                "📎 附件：",
+                ...c.attachments.map((a) => [
                   h("a", {
                     key: a,
                     href: graphUrl("/api/dsh-graph/attachment?name=" + encodeURIComponent(a)),
                     target: "_blank", rel: "noopener noreferrer",
                     style: { color: "var(--dsw-alias-label-link, #4c8dff)", textDecoration: "underline", marginRight: 4 },
-                  }, `@att/${a}`)).join("，"))
+                  }, `@att/${a}`),
+                  "，",
+                ]))
             : null,
           // 引用它的 goal 清单：每项一个真实解除引用（只移除该 goal 引用，保留共享卡与其他引用；零引用仅显式删除）
           h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", marginTop: 4 } },

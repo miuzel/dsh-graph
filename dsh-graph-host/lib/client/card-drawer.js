@@ -295,7 +295,8 @@
                       : h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
-                          title: "转为共享卡（原 goal 保留引用，内容进入共享池供多 goal 复用）",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可转换" : "转为共享卡（原 goal 保留引用，内容进入共享池供多 goal 复用）",
                           onClick: async () => {
                             try {
                               const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-shared"), {

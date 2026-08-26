@@ -1671,6 +1671,10 @@ test("add-card REST：kind 可选（goal-actions 已不发 kind），omission �
   // 缺失 goal → 400
   const r4 = await post(routes, "/api/dsh-graph/add-card", { title: "x" });
   assert.equal(r4.code, 400);
+  // 非法 scope（enum 校验）→ 400（不再静默建自有卡）
+  const r5 = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "x", scope: "bogus" });
+  assert.equal(r5.code, 400, "非法 scope 应被拒: " + r5.body.error);
+  assert.ok(String(r5.body.error).includes("非法卡片 scope"), "应提示非法 scope");
 });
 
 test("g-183 attachment REST：安全下载端点（canonical读、content-type、拒绝越界 name）", async () => {
@@ -1684,6 +1688,8 @@ test("g-183 attachment REST：安全下载端点（canonical读、content-type�
   assert.equal(res._code, 200, "应能下载附件");
   assert.equal(res._headers["content-type"], "text/plain");
   assert.equal(res._body.toString(), "hello 附件");
+  // Markdown 也强制 attachment（不内联）
+  assert.ok(String(res._headers["content-disposition"]).startsWith("attachment"), "Markdown 应强制下载");
   // HTML/Markdown 等强制 attachment 不 inline
   await post(routes, "/api/dsh-graph/store-attachment", { name: "bad.html", content: "<script>alert(1)</script>" });
   const res2 = { _code: 0, _headers: null, _body: null, writeHead(c: number, h: any) { this._code = c; this._headers = h; }, end(s: any) { this._body = s; } };
@@ -1778,4 +1784,16 @@ test("store-attachment JSON：无 content-length + chunked 在限内 → 成功�
   assert.ok(typeof res._body.ref === "string");
   // JSON envelope 上限应允许 50MB base64 开销（粗略验证常量足够大）
   assert.ok(MAX_ATTACHMENT_JSON_BYTES > 50 * 1024 * 1024 * 4 / 3, "JSON envelope 应容纳 50MB base64 开销");
+});
+
+test("source-contract：shared-panel 附件逐项渲染为节点；card-drawer own→shared/解除/转自有收集中禁用", () => {
+  const panel = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/shared-panel.js"), "utf8");
+  // 不应把 React/Preact 元素用字符串拼接（会变成 [object Object]）
+  assert.ok(!panel.includes("+ c.attachments.map("), "shared-panel 不应拼接 React 元素为字符串");
+  assert.ok(!panel.includes(".join(\"，\")"), "shared-panel 附件不应 join 字符串");
+  assert.ok(panel.includes('"📎 附件："'), "should still label attachments");
+  const drawer = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/card-drawer.js"), "utf8");
+  // own→shared / 解除引用 / 转自有卡 三个按钮均应对 collecting 禁用
+  const count = (drawer.match(/disabled: card\.status === "collecting"/g) ?? []).length;
+  assert.ok(count >= 3, `card-drawer 应有 3 处 collecting 禁用（实际 ${count}）`);
 });

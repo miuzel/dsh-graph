@@ -3,9 +3,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readFileSync, symlinkSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, symlinkSync, writeFileSync, mkdirSync, rmSync, chmodSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 import {
   init,
   createGoal,
@@ -47,6 +47,8 @@ import {
   sanitizeAttachmentPath,
   attachmentInfo,
   readAttachment,
+  attachmentContentType,
+  formatCollectPrompt,
 } from "../ops.ts";
 
 function tmpRoot(): string {
@@ -586,4 +588,76 @@ test("attachmentReferenceCount 精确计数 + attachmentInfo/readAttachment/vali
   const problems = validate(root);
   assert.ok(problems.some((p) => /附件引用不存在 @att\/nope\.md/.test(p)), "应报告缺失附件: " + problems.join("|"));
   assert.ok(problems.some((p) => /附件引用不安全/.test(p)), "应报告不安全引用: " + problems.join("|"));
+});
+
+test("addCard 非法 scope 拒绝（'bogus' 不再静默建自有卡）", () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  assert.throws(() => addCard(root, a, { title: "x", scope: "bogus" as any, actor: "test" }), /非法卡片 scope/);
+  // 合法 shared / goal 均可
+  assert.ok(addCard(root, a, { title: "s", scope: "shared", actor: "test" }).startsWith("shared-"));
+  assert.ok(addCard(root, a, { title: "g", scope: "goal", actor: "test" }).startsWith("card-"));
+});
+
+test("attachmentContentType：Markdown/HTML/SVG 不 inline，图片/文本可 inline", () => {
+  assert.equal(attachmentContentType("doc.md").inline, false, "Markdown 不内联");
+  assert.equal(attachmentContentType("doc.md").type, "text/plain");
+  assert.equal(attachmentContentType("x.html").inline, false);
+  assert.equal(attachmentContentType("x.svg").inline, false);
+  assert.equal(attachmentContentType("img.png").inline, true);
+  assert.equal(attachmentContentType("a.txt").inline, true);
+});
+
+test("listAttachments 对 dangling root symlink 抛错（不静默返回 []）；formatCollectPrompt 根 symlink 报错", () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const sid = createSharedCard(root, { title: "收集", actor: "test" });
+  addSharedCardRef(root, a, sid, "test");
+  const attDir = attachmentsDir(root);
+  rmSync(attDir, { recursive: true, force: true });
+  const outside = join(root, "..", `out-list-${Date.now()}`);
+  mkdirSync(outside, { recursive: true });
+  symlinkSync(outside, attDir); // dangling root symlink
+  // listAttachments 应抛错而不是静默 []
+  assert.throws(() => listAttachments(root), /symlink/);
+  // formatCollectPrompt 也应走 symlink 拒绝 resolver，不泄漏外部路径
+  assert.throws(() => formatCollectPrompt(root, a, sid), /symlink/);
+});
+
+test("转换最后 rm 失败回滚：shared→own / own→shared 均恢复一致且抛出", () => {
+  // --- shared→own：最后删除共享池副本失败 ---
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const sid = createSharedCard(root, { title: "转自有", actor: "test" });
+  addSharedCardRef(root, a, sid, "test");
+  fillCard(root, a, sid, { text: "内容", by: "human:x", actor: "test" });
+  const sharedDir = join(root, "shared-cards");
+  chmodSync(sharedDir, 0o555); // 使 rmSync(sharedFile) 失败（EACCES）
+  let err: any = null;
+  try { convertSharedToOwned(root, a, sid, { actor: "test" }); } catch (e) { err = e; }
+  chmodSync(sharedDir, 0o755);
+  assert.ok(err, "转换应抛错（rm 失败）");
+  assert.ok(existsSync(join(sharedDir, `${sid}.md`)), "回滚后共享池副本仍在");
+  const d = loadGoal(findGoalFile(root, a));
+  assert.ok(d.meta.context_cards.map(String).includes(sid), "回滚后 goal 仍引用原 shared id");
+  assert.equal(referenceCount(root, sid), 1, "回滚后引用计数恢复为 1");
+  // 无孤儿自有文件（回滚已删除新自有卡）
+  const ownDir = join(dirname(findGoalFile(root, a)), "cards");
+  assert.ok(!existsSync(ownDir) || readdirSync(ownDir).length === 0, "回滚后 goal 卡片目录无孤儿文件");
+
+  // --- own→shared：最后删除自有副本失败 ---
+  const root2 = tmpRoot();
+  const a2 = createGoal(root2, { title: "A2", version: "v-t", actor: "test" });
+  const oc = addCard(root2, a2, { title: "转共享", scope: "goal", actor: "test" });
+  fillCard(root2, a2, oc, { text: "内容", by: "human:x", actor: "test" });
+  const goalCardsDir = join(dirname(findGoalFile(root2, a2)), "cards");
+  chmodSync(goalCardsDir, 0o555);
+  let err2: any = null;
+  try { convertOwnedToShared(root2, a2, oc, { actor: "test" }); } catch (e) { err2 = e; }
+  chmodSync(goalCardsDir, 0o755);
+  assert.ok(err2, "own→shared 转换应抛错（rm 失败）");
+  assert.ok(existsSync(join(goalCardsDir, `${oc}.md`)), "回滚后自有副本仍在");
+  const d2 = loadGoal(findGoalFile(root2, a2));
+  assert.ok(d2.meta.context_cards.map(String).includes(oc), "回滚后 goal 仍引用原 card id");
+  assert.equal(sharedCards(root2).length, 0, "回滚后无孤儿共享卡");
 });
