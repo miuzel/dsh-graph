@@ -50,6 +50,7 @@ import {
   attachmentContentType,
   formatCollectPrompt,
 } from "../ops.ts";
+import { readEvents } from "../events.ts";
 
 function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-shared-"));
@@ -644,6 +645,10 @@ test("转换最后 rm 失败回滚：shared→own / own→shared 均恢复一致
   // 无孤儿自有文件（回滚已删除新自有卡）
   const ownDir = join(dirname(findGoalFile(root, a)), "cards");
   assert.ok(!existsSync(ownDir) || readdirSync(ownDir).length === 0, "回滚后 goal 卡片目录无孤儿文件");
+  // 补偿审计事件：conversion_failed（rollback=ok）+ conversion_rolled_back
+  const evs = readEvents(root).filter((e) => e.event.startsWith("card.conversion_"));
+  assert.ok(evs.some((e) => e.event === "card.conversion_failed" && e.details.rollback === "ok" && e.goal === a), "应有 conversion_failed(rollback=ok) 事件");
+  assert.ok(evs.some((e) => e.event === "card.conversion_rolled_back" && e.goal === a), "应有 conversion_rolled_back 事件");
 
   // --- own→shared：最后删除自有副本失败 ---
   const root2 = tmpRoot();
@@ -660,4 +665,7 @@ test("转换最后 rm 失败回滚：shared→own / own→shared 均恢复一致
   const d2 = loadGoal(findGoalFile(root2, a2));
   assert.ok(d2.meta.context_cards.map(String).includes(oc), "回滚后 goal 仍引用原 card id");
   assert.equal(sharedCards(root2).length, 0, "回滚后无孤儿共享卡");
+  const evs2 = readEvents(root2).filter((e) => e.event.startsWith("card.conversion_"));
+  assert.ok(evs2.some((e) => e.event === "card.conversion_failed" && e.details.rollback === "ok" && e.goal === a2), "own→shared 应有 conversion_failed(rollback=ok)");
+  assert.ok(evs2.some((e) => e.event === "card.conversion_rolled_back" && e.goal === a2), "own→shared 应有 conversion_rolled_back");
 });

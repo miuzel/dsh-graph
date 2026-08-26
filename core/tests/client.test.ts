@@ -1797,3 +1797,19 @@ test("source-contract：shared-panel 附件逐项渲染为节点；card-drawer o
   const count = (drawer.match(/disabled: card\.status === "collecting"/g) ?? []).length;
   assert.ok(count >= 3, `card-drawer 应有 3 处 collecting 禁用（实际 ${count}）`);
 });
+
+test("普通 JSON endpoint：超大 chunked（无 content-length）→ 400 且无副作用", async () => {
+  const { root, routes, goalId } = setup();
+  // 所有普通 JSON REST 走 capped readBody（MAX_JSON_BODY_BYTES=1MB）
+  const handler = routes.get("/api/dsh-graph/add-card");
+  const s = mkStreamReq({ contentType: "application/json", url: "/api/dsh-graph/add-card" });
+  const res = fakeResponse();
+  const p = handler(s.req, res);
+  s.emit("data", Buffer.alloc(1024 * 1024 + 1024, 0x41)); // >1MB
+  s.emit("end");
+  await p;
+  assert.equal(res._code, 400, "普通 JSON endpoint 超限应拒绝");
+  const doc = loadGoal(findGoalFile(root, goalId));
+  assert.equal((doc.meta.context_cards ?? []).length, 0, "超限不应创建卡片");
+  assert.equal(readEvents(root).filter((e) => e.event === "card.created").length, 0, "超限不应记 card.created 事件");
+});

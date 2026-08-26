@@ -117,6 +117,8 @@ export { boardPayload } from "./core/ops.js";
 // g-183 返工 v4：流式上限（防无 header/伪造 Content-Length/chunked 的超大请求先进内存被拒）。
 // JSON/base64 envelope 上限需容纳 50MB 二进制 base64 编码开销（~4/3）+ JSON 键，但拒绝更大。
 export const MAX_ATTACHMENT_JSON_BYTES = Math.ceil(MAX_ATTACHMENT_BYTES * 5 / 3) + 1024 * 1024;
+// 普通 JSON REST（add-card/start-collection/unreference/转换/delete 等）统一 body 上限（1MB 足够管理类 payload）。
+export const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
 /** 销毁请求（停止继续分发 data），防超大请求继续占内存。 */
 function destroyReq(req) {
@@ -868,19 +870,8 @@ export function apply(ctx, config) {
     res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(data));
   };
-  const readBody = (req) =>
-    new Promise((resolve, reject) => {
-      let buf = "";
-      req.on("data", (c) => (buf += c));
-      req.on("end", () => {
-        try {
-          resolve(buf ? JSON.parse(buf) : {});
-        } catch (e) {
-          reject(e);
-        }
-      });
-      req.on("error", reject);
-    });
+  // 所有普通 JSON REST 统一走 capped reader（防超大 JSON OOM；附件 endpoint 用更大的 MAX_ATTACHMENT_JSON_BYTES）
+  const readBody = (req) => readBodyCapped(req, MAX_JSON_BODY_BYTES);
   // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
   // （parent.options / childSessionMeta / captureDelegatedPolicyOverrides），传 null 必然失败。
   // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。

@@ -1784,6 +1784,7 @@ export function convertOwnedToShared(root, goalId, cardId, opts) {
     // 三：删除自有副本（此时目标已指向共享权威，删除不再有读者断引用）。
     //  若最后一步 rm 失败，回滚：goal 引用还原为旧 id，删除共享副本，恢复原状（不留双副本）。
     //  回滚失败不吞异常：显式抛出 GraphError 并说明需人工恢复的可恢复状态。
+    //  补偿审计：追加 card.conversion_failed（含 rollback 状态）与 card.conversion_rolled_back，事件可追溯。
     try {
         rmSync(file, { force: true });
     }
@@ -1802,6 +1803,24 @@ export function convertOwnedToShared(root, goalId, cardId, opts) {
         }
         catch (re) {
             restoreErr = re;
+        }
+        appendEvent(root, {
+            actor: opts.actor,
+            event: "card.conversion_failed",
+            goal: goalIdSafe,
+            details: {
+                card: cardId, from: "goal", to: newId,
+                error: String(e.message),
+                rollback: restoreErr ? "failed" : "ok",
+            },
+        });
+        if (!restoreErr) {
+            appendEvent(root, {
+                actor: opts.actor,
+                event: "card.conversion_rolled_back",
+                goal: goalIdSafe,
+                details: { card: cardId, from: "goal", to: newId },
+            });
         }
         if (restoreErr) {
             throw new GraphError(`卡片 ${cardId} 转换清理失败且回滚出错，需人工恢复（目标引用与新/旧文件或不一致）：${String(restoreErr.message)}`);
@@ -1868,6 +1887,7 @@ export function convertSharedToOwned(root, goalId, cardId, opts) {
     // 三：删除共享池权威副本（此时目标已指向自有卡）。
     //  若最后一步 rm 失败，回滚：goal 引用还原为旧 shared id，删除自有副本，恢复原状（不留双副本）。
     //  回滚失败不吞异常：显式抛出 GraphError 并说明需人工恢复的可恢复状态。
+    //  补偿审计：追加 card.conversion_failed（含 rollback 状态）与 card.conversion_rolled_back，事件可追溯。
     try {
         rmSync(file, { force: true });
     }
@@ -1886,6 +1906,24 @@ export function convertSharedToOwned(root, goalId, cardId, opts) {
         }
         catch (re) {
             restoreErr = re;
+        }
+        appendEvent(root, {
+            actor: opts.actor,
+            event: "card.conversion_failed",
+            goal: goalIdSafe,
+            details: {
+                card: cardId, from: "shared", to: newId,
+                error: String(e.message),
+                rollback: restoreErr ? "failed" : "ok",
+            },
+        });
+        if (!restoreErr) {
+            appendEvent(root, {
+                actor: opts.actor,
+                event: "card.conversion_rolled_back",
+                goal: goalIdSafe,
+                details: { card: cardId, from: "shared", to: newId },
+            });
         }
         if (restoreErr) {
             throw new GraphError(`共享卡 ${cardId} 转换清理失败且回滚出错，需人工恢复（目标引用与新/旧文件或不一致）：${String(restoreErr.message)}`);
