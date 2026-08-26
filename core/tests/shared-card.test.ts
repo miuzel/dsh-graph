@@ -669,3 +669,44 @@ test("转换最后 rm 失败回滚：shared→own / own→shared 均恢复一致
   assert.ok(evs2.some((e) => e.event === "card.conversion_failed" && e.details.rollback === "ok" && e.goal === a2), "own→shared 应有 conversion_failed(rollback=ok)");
   assert.ok(evs2.some((e) => e.event === "card.conversion_rolled_back" && e.goal === a2), "own→shared 应有 conversion_rolled_back");
 });
+
+// 递归列出 attachments 下所有相对路径（文件+目录），用于前后快照对比
+function attSnapshot(root: string): string[] {
+  const dir = attachmentsDir(root);
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    const abs = join(dir, rel);
+    for (const e of readdirSync(abs, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      out.push(r + (e.isDirectory() ? "/" : ""));
+      if (e.isDirectory()) walk(r);
+    }
+  };
+  if (existsSync(dir)) walk("");
+  return out.sort();
+}
+
+test("只读附件操作不创建目录（read/info/delete/digest/validate）；store 才创建", async () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  // store 创建 docs/report.md（含安全子目录）
+  storeAttachment(root, { name: "docs/report.md", content: "内容", actor: "test" });
+  const snap = attSnapshot(root);
+  assert.ok(snap.includes("docs/report.md"), "store 应已创建 docs/report.md");
+  // 只读：读缺失文件（docs 已存在；missing.txt 不存在）——不得创建文件
+  assert.throws(() => readAttachment(root, "docs/missing.txt"), /不存在|不是/);
+  // 父目录也不存在（全新子目录）——不得创建子目录
+  assert.equal(attachmentInfo(root, "new/deep/file.md").exists, false);
+  assert.throws(() => deleteAttachment(root, "new/deep/file.md", { actor: "test" }), /不存在/);
+  assert.equal(attachmentDigest(root, "new/deep/file.md"), null);
+  assert.deepEqual(attSnapshot(root), snap, "只读操作不应改变树（不创建任何子目录/文件）");
+  assert.ok(!existsSync(join(attachmentsDir(root), "docs", "missing.txt")), "不得创建缺失文件");
+  // validate 报缺失但不创建
+  const gf = findGoalFile(root, a);
+  const doc = loadGoal(gf);
+  doc.body += "\n见 @att/new/deep/missing.md\n";
+  writeFileSync(gf, (await import("../model.ts")).serializeDoc(doc), "utf8");
+  const problems = validate(root);
+  assert.ok(problems.some((p) => /附件引用不存在 @att\/new\/deep\/missing\.md/.test(p)), "validate 应报缺失引用");
+  assert.deepEqual(attSnapshot(root), snap, "validate 不应创建缺失目录/文件");
+});

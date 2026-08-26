@@ -1818,3 +1818,17 @@ test("普通 JSON endpoint：超大 chunked（无 content-length）→ 400 且�
   assert.equal((doc.meta.context_cards ?? []).length, 0, "超限不应创建卡片");
   assert.equal(readEvents(root).filter((e) => e.event === "card.created").length, 0, "超限不应记 card.created 事件");
 });
+
+test("readBodyCapped 跨 chunk UTF-8 多字节字符不损坏（Buffer 累积后一次解码）", async () => {
+  const a = mkStreamReq();
+  const p = readBodyCapped(a.req, 4096);
+  const json = JSON.stringify({ name: "测试内容" });
+  const buf = Buffer.from(json, "utf8");
+  const mid = buf.indexOf("测"); // UTF-8 多字节起点
+  assert.ok(mid > 0);
+  a.emit("data", buf.slice(0, mid + 1)); // 覆盖 "测" 的第一个字节，把多字节字符劈开
+  a.emit("data", buf.slice(mid + 1));
+  a.emit("end");
+  const parsed = await p;
+  assert.equal(parsed.name, "测试内容", "跨 buffer chunk 的 UTF-8 字符应正确还原");
+});

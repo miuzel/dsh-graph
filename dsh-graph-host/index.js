@@ -143,19 +143,23 @@ export function readRawBodyCapped(req, maxBytes) {
   });
 }
 
-/** 流式读取 JSON body，累计超过 maxBytes 立即停止累积并 reject（handler 回 4xx）。 */
+/** 流式读取 JSON body，累计超过 maxBytes 立即停止累积并 reject（handler 回 4xx）。
+ *  按 Buffer 累积、最后一次性 toString 解码，避免跨 chunk 的 UTF-8 多字节字符被逐 chunk 解码损坏。 */
 export function readBodyCapped(req, maxBytes) {
   return new Promise((resolve, reject) => {
-    let buf = "";
+    const chunks = [];
     let total = 0;
     req.on("data", (c) => {
-      const s = String(c);
-      total += Buffer.byteLength(s);
+      const b = Buffer.isBuffer(c) ? c : Buffer.from(String(c), "utf8");
+      total += b.length;
       if (total > maxBytes) { stopOversized(req); reject(new GraphError(`请求体超过 ${maxBytes} 字节上限`)); return; }
-      buf += s;
+      chunks.push(b);
     });
     req.on("end", () => {
-      try { resolve(buf ? JSON.parse(buf) : {}); } catch (e) { reject(e); }
+      try {
+        const text = chunks.length ? Buffer.concat(chunks).toString("utf8") : "";
+        resolve(text ? JSON.parse(text) : {});
+      } catch (e) { reject(e); }
     });
     req.on("error", reject);
   });

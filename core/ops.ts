@@ -2099,24 +2099,38 @@ function tryLstat(p: string): ReturnType<typeof lstatSync> | null {
 }
 
 /** 确保 attachments 根存在并返回其 canonical realpath；根自身若为 symlink 一律拒绝。
- *  所有附件操作（store/list/read/delete/digest）统一经此入口，保证根/子目录 containment 一致。 */
-function ensureAttachmentsRoot(root: string): string {
+ *  createDirs=true（store）会 mkdir 缺失根；createDirs=false（只读）时根缺失返回 null，不改变树。 */
+function ensureAttachmentsRoot(root: string, createDirs = true): string | null {
   const dir = attachmentsDir(root);
   if (tryLstat(dir)?.isSymbolicLink()) {
     throw new GraphError(`attachments 根不允许是 symlink：${dir}`);
   }
-  mkdirSync(dir, { recursive: true });
-  // 再检查一次（防 mkdir/realtime 竞态）：若现在已是 symlink，拒绝
+  if (!tryLstat(dir)) {
+    if (!createDirs) return null; // 只读操作：根不存在即视为无附件，不创建目录
+    mkdirSync(dir, { recursive: true });
+  }
+  // 再检查（防 mkdir/realtime 竞态）：若已是 symlink，拒绝
   if (tryLstat(dir)?.isSymbolicLink()) {
     throw new GraphError(`attachments 根不允许是 symlink：${dir}`);
   }
   return realpathSync(dir);
 }
 
-/** 解析附件相对路径到 canonical 绝对路径，校验根/子目录 symlink 与越界；返回 {realRoot, relSegs, file}。 */
-function resolveAttachmentPath(root: string, relPath: string): { realRoot: string; segs: string[]; file: string } {
+/** attachments 根的 canonical 绝对路径（不创建目录；仅用于 prompt 展示，拒绝 symlink）。 */
+function attachmentsCanonicalPath(root: string): string {
+  const dir = attachmentsDir(root);
+  if (tryLstat(dir)?.isSymbolicLink()) {
+    throw new GraphError(`attachments 根不允许是 symlink：${dir}`);
+  }
+  return resolve(dir);
+}
+
+/** 解析附件相对路径到 canonical 绝对路径，校验根/子目录 symlink 与越界；返回 {realRoot, segs, file}。
+ *  createDirs=true 时缺失子目录会被创建（仅 store 用）；false 时缺失根/子目录返回 null，不改变树。 */
+function resolveAttachmentPath(root: string, relPath: string, createDirs = false): { realRoot: string; segs: string[]; file: string } | null {
   const safeName = sanitizeAttachmentPath(relPath);
-  const realRoot = ensureAttachmentsRoot(root);
+  const realRoot = ensureAttachmentsRoot(root, createDirs);
+  if (realRoot === null) return null; // 根不存在：视为文件不存在
   const segs = safeName.split("/");
   const base = segs[segs.length - 1];
   let cur = realRoot;
@@ -2125,7 +2139,10 @@ function resolveAttachmentPath(root: string, relPath: string): { realRoot: strin
     const st = tryLstat(cur);
     if (st && st.isSymbolicLink()) throw new GraphError(`附件路径含 symlink 目录：${seg}`);
     if (st && !st.isDirectory()) throw new GraphError(`附件路径段不是目录：${seg}`);
-    if (!st) mkdirSync(cur, { recursive: true });
+    if (!st) {
+      if (!createDirs) return null; // 父目录缺失 → 文件不存在（不创建）
+      mkdirSync(cur, { recursive: true });
+    }
   }
   const dirReal = realpathSync(cur);
   if (!(dirReal === realRoot || dirReal.startsWith(realRoot + sep))) {
@@ -2150,12 +2167,13 @@ export function attachmentContentType(name: string): { type: string; inline: boo
   return { type, inline: !forceDownload };
 }
 
-/** 读附件：校验根/子目录 symlink + 越界，返回 {buffer, size, digest, contentType, inline}。 */
+/** 读附件：校验根/子目录 symlink + 越界，返回 {buffer, size, digest, contentType, inline}。只读不创建目录。 */
 export function readAttachment(root: string, name: string): { buffer: Buffer; size: number; digest: string; contentType: string; inline: boolean } {
-  const { file } = resolveAttachmentPath(root, name);
-  const st = tryLstat(file);
+  const r = resolveAttachmentPath(root, name);
+  if (!r) throw new GraphError(`附件不存在：${name}`);
+  const st = tryLstat(r.file);
   if (!st || !st.isFile() || st.isSymbolicLink()) throw new GraphError(`附件不存在或非普通文件：${name}`);
-  const buffer = readFileSync(file);
+  const buffer = readFileSync(r.file);
   const digest = createHash("sha1").update(buffer).digest("hex").slice(0, 16);
   const ct = attachmentContentType(name);
   return { buffer, size: buffer.length, digest, contentType: ct.type, inline: ct.inline };
@@ -2211,7 +2229,9 @@ export function storeAttachment(
   if (data.length > MAX_ATTACHMENT_BYTES) {
     throw new GraphError(`附件过大（${data.length} 字节 > ${MAX_ATTACHMENT_BYTES}），拒绝存储`);
   }
-  const { realRoot: attRootReal, segs, file } = resolveAttachmentPath(root, relPath);
+  const r = resolveAttachmentPath(root, relPath, true);
+  if (!r) throw new GraphError("附件存储失败：attachments 根不可用"); // createDirs=true 下根缺失会被创建，不应为 null
+  const { realRoot: attRootReal, segs, file } = r;
   const parentReal = dirname(file);
   if (!(parentReal === attRootReal || parentReal.startsWith(attRootReal + sep))) {
     throw new GraphError("附件路径越界（realpath 不在 attachments 根内）");
@@ -2249,7 +2269,8 @@ export function listAttachments(root: string): string[] {
   const rootSt = tryLstat(attachmentsDir(root));
   if (!rootSt) return [];
   if (rootSt.isSymbolicLink()) throw new GraphError(`attachments 根不允许是 symlink：${attachmentsDir(root)}`);
-  const dir = ensureAttachmentsRoot(root);
+  const dir = ensureAttachmentsRoot(root, false);
+  if (!dir) return [];
   const out: string[] = [];
   const walk = (rel: string) => {
     const abs = join(dir, rel);
@@ -2309,15 +2330,16 @@ export function attachmentReferenceCount(root: string, name: string): number {
  *  根/子目录 symlink 与越界由 resolveAttachmentPath 统一拒绝。 */
 export function deleteAttachment(root: string, name: string, opts: { actor: string }): void {
   const safeName = sanitizeAttachmentPath(name);
-  const { file } = resolveAttachmentPath(root, safeName);
-  const st = tryLstat(file);
+  const r = resolveAttachmentPath(root, safeName);
+  if (!r) throw new GraphError(`附件不存在：${safeName}`);
+  const st = tryLstat(r.file);
   if (!st || !st.isFile() || st.isSymbolicLink()) throw new GraphError(`附件不存在或非普通文件：${safeName}`);
   const refs = attachmentReferenceCount(root, safeName);
   if (refs > 0) {
     throw new GraphError(`附件 ${safeName} 仍被 ${refs} 处引用，不能删除——请先解除引用`);
   }
   appendEvent(root, { actor: opts.actor, event: "attachment.deleted", details: { name: safeName } });
-  rmSync(file, { force: true });
+  rmSync(r.file, { force: true });
 }
 
 /** 校验所有 goal 正文与卡片正文中 @att 引用：越界/不安全 ref 报错、引用缺失文件报错（g-183 返工 #7）。 */
@@ -2332,10 +2354,11 @@ export function attachmentProblems(root: string): string[] {
         problems.push(`${where}: 附件引用不安全 @att/${raw}`);
         continue;
       }
-      // 存在性：需能被安全解析且文件存在
+      // 存在性：需能被安全解析且文件存在（只读解析，不创建目录）
       try {
-        const { file } = resolveAttachmentPath(root, raw);
-        const st = tryLstat(file);
+        const r = resolveAttachmentPath(root, raw);
+        if (!r) { problems.push(`${where}: 附件引用不存在 @att/${raw}`); continue; }
+        const st = tryLstat(r.file);
         if (!st || !st.isFile() || st.isSymbolicLink()) problems.push(`${where}: 附件引用不存在 @att/${raw}`);
       } catch (e) {
         problems.push(`${where}: 附件引用无法解析 @att/${raw}：${(e as Error).message}`);
@@ -2544,10 +2567,11 @@ function cardAttachmentNames(doc: GoalDoc): string[] {
 export function attachmentDigest(root: string, name: string): string | null {
   try {
     const safeName = sanitizeAttachmentPath(name);
-    const { file } = resolveAttachmentPath(root, safeName);
-    const st = tryLstat(file);
+    const r = resolveAttachmentPath(root, safeName);
+    if (!r) return null;
+    const st = tryLstat(r.file);
     if (!st || !st.isFile() || st.isSymbolicLink()) return null;
-    return createHash("sha1").update(readFileSync(file)).digest("hex").slice(0, 16);
+    return createHash("sha1").update(readFileSync(r.file)).digest("hex").slice(0, 16);
   } catch {
     return null;
   }
@@ -2952,8 +2976,8 @@ export function formatCollectPrompt(
   const card = resolveCard(root, goalId, cardId);
   const cardDoc = card.doc;
   const cardTitle = cardDoc.meta.title ?? cardId;
-  // g-183 返工 #6：canonical attachments 根必须经 symlink 拒绝的 resolver（避免向收集 agent 泄漏外部路径）
-  const attRoot = ensureAttachmentsRoot(root);
+  // g-183 返工 #6/#8：canonical attachments 根必须经 symlink 拒绝、且只读不创建目录（避免泄漏外部路径/改变树）
+  const attRoot = attachmentsCanonicalPath(root);
 
   // 构建结构化提示词
   const sections = [
