@@ -1412,6 +1412,8 @@ export function validate(root) {
             }
         }
     }
+    // g-183：@att 附件引用完整性（不安全/缺失报告）
+    problems.push(...attachmentProblems(root));
     return problems;
 }
 /** 从事件流重建状态并与 frontmatter 比对；返回 drift 列表。 */
@@ -1525,8 +1527,20 @@ export function addCard(root, goalId, opts) {
     // g-183：新建默认共享卡（最终需求），goal 自有必须显式 scope="goal"。
     const scope = opts.scope ?? "shared";
     if (scope === "shared") {
+        // g-183 返工 #5：先校验 goal 存在，避免无效 goal 先建共享文件留孤儿；失败则清理已建共享卡。
+        const goalIdSafe = assertSafeId(goalId, "goal id");
+        findGoalFile(root, goalIdSafe); // 不存在抛错（不产生任何文件）
         const sharedId = createSharedCard(root, { title: opts.title, kind: opts.kind, actor: opts.actor });
-        addSharedCardRef(root, goalId, sharedId, opts.actor);
+        try {
+            addSharedCardRef(root, goalIdSafe, sharedId, opts.actor);
+        }
+        catch (e) {
+            try {
+                rmSync(join(sharedCardsDir(root), `${sharedId}.md`), { force: true });
+            }
+            catch { /* 忽略 */ }
+            throw e;
+        }
         return sharedId;
     }
     const file = findGoalFile(root, goalId);
@@ -1726,6 +1740,9 @@ export function convertOwnedToShared(root, goalId, cardId, opts) {
     if (scope !== "goal") {
         throw new GraphError(`卡片 ${cardId} 已是共享卡，无需转换`);
     }
+    if (doc.meta.status === "collecting") {
+        throw new GraphError(`卡片 ${cardId} 正在收集中，不能转换——请先停止/完成收集`);
+    }
     const goalIdSafe = assertSafeId(goalId, "goal id");
     const dir = sharedCardsDir(root);
     mkdirSync(dir, { recursive: true });
@@ -1790,6 +1807,9 @@ export function convertSharedToOwned(root, goalId, cardId, opts) {
     const { file, doc, scope } = resolveCard(root, goalId, cardId);
     if (scope !== "shared") {
         throw new GraphError(`卡片 ${cardId} 是 goal 自有卡，无需转换`);
+    }
+    if (doc.meta.status === "collecting") {
+        throw new GraphError(`共享卡 ${cardId} 正在收集中，不能转换——请先停止/完成收集`);
     }
     const goalIdSafe = assertSafeId(goalId, "goal id");
     const refs = referenceCount(root, cardId);
@@ -1861,6 +1881,14 @@ export function convertSharedToOwned(root, goalId, cardId, opts) {
 export function removeSharedCardRef(root, goalId, sharedId, actor) {
     const goalIdSafe = assertSafeId(goalId, "goal id");
     const sharedIdSafe = assertSafeId(sharedId, "共享卡 id");
+    // g-183 返工 #4：collecting 中的共享卡拒绝解除引用（避免收集 owner 解除后绑定 child 回填因成员守卫失败丢成果）。
+    const sharedFile = join(sharedCardsDir(root), `${sharedIdSafe}.md`);
+    if (existsSync(sharedFile)) {
+        const sdoc = loadGoal(sharedFile);
+        if (sdoc.meta.status === "collecting") {
+            throw new GraphError(`共享卡 ${sharedIdSafe} 正在收集中，不能解除引用——请先停止/完成收集子代理（否则绑定收集者回填会被成员守卫拒绝）`);
+        }
+    }
     const goalFile = findGoalFile(root, goalIdSafe);
     const goalDoc = loadGoal(goalFile);
     if (!Array.isArray(goalDoc.meta.context_cards))
@@ -1977,11 +2005,68 @@ function tryLstat(p) {
         return null;
     }
 }
-/** 确保 attachments 根存在并返回其 canonical realpath。 */
+/** 确保 attachments 根存在并返回其 canonical realpath；根自身若为 symlink 一律拒绝。
+ *  所有附件操作（store/list/read/delete/digest）统一经此入口，保证根/子目录 containment 一致。 */
 function ensureAttachmentsRoot(root) {
     const dir = attachmentsDir(root);
+    if (tryLstat(dir)?.isSymbolicLink()) {
+        throw new GraphError(`attachments 根不允许是 symlink：${dir}`);
+    }
     mkdirSync(dir, { recursive: true });
+    // 再检查一次（防 mkdir/realtime 竞态）：若现在已是 symlink，拒绝
+    if (tryLstat(dir)?.isSymbolicLink()) {
+        throw new GraphError(`attachments 根不允许是 symlink：${dir}`);
+    }
     return realpathSync(dir);
+}
+/** 解析附件相对路径到 canonical 绝对路径，校验根/子目录 symlink 与越界；返回 {realRoot, relSegs, file}。 */
+function resolveAttachmentPath(root, relPath) {
+    const safeName = sanitizeAttachmentPath(relPath);
+    const realRoot = ensureAttachmentsRoot(root);
+    const segs = safeName.split("/");
+    const base = segs[segs.length - 1];
+    let cur = realRoot;
+    for (const seg of segs.slice(0, -1)) {
+        cur = join(cur, seg);
+        const st = tryLstat(cur);
+        if (st && st.isSymbolicLink())
+            throw new GraphError(`附件路径含 symlink 目录：${seg}`);
+        if (st && !st.isDirectory())
+            throw new GraphError(`附件路径段不是目录：${seg}`);
+        if (!st)
+            mkdirSync(cur, { recursive: true });
+    }
+    const dirReal = realpathSync(cur);
+    if (!(dirReal === realRoot || dirReal.startsWith(realRoot + sep))) {
+        throw new GraphError("附件路径越界（realpath 不在 attachments 根内）");
+    }
+    return { realRoot, segs, file: join(dirReal, base) };
+}
+/** 根据扩展名推断 Content-Type；标记安全内联与否（HTML/Markdown/SVG 等强制下载）。 */
+export function attachmentContentType(name) {
+    const ext = (basename(name).split(".").pop() ?? "").toLowerCase();
+    const map = {
+        txt: "text/plain", md: "text/plain", mdtext: "text/plain", html: "text/html", htm: "text/html",
+        svg: "image/svg+xml", xml: "application/xml", css: "text/css", js: "text/javascript", json: "application/json",
+        png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp",
+        csv: "text/csv", xls: "application/vnd.ms-excel", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        pdf: "application/pdf", zip: "application/zip", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    };
+    const type = map[ext] ?? "application/octet-stream";
+    // 内联渲染有 XSS 风险的文本/标记类型 → 强制下载（不 inline）
+    const dangerous = ["text/html", "text/css", "text/javascript", "image/svg+xml", "application/xml", "text/markdown", "text/csv"].includes(type);
+    return { type, inline: !dangerous };
+}
+/** 读附件：校验根/子目录 symlink + 越界，返回 {buffer, size, digest, contentType, inline}。 */
+export function readAttachment(root, name) {
+    const { file } = resolveAttachmentPath(root, name);
+    const st = tryLstat(file);
+    if (!st || !st.isFile() || st.isSymbolicLink())
+        throw new GraphError(`附件不存在或非普通文件：${name}`);
+    const buffer = readFileSync(file);
+    const digest = createHash("sha1").update(buffer).digest("hex").slice(0, 16);
+    const ct = attachmentContentType(name);
+    return { buffer, size: buffer.length, digest, contentType: ct.type, inline: ct.inline };
 }
 /** 原子写入：temp 文件 + fsync + rename；失败删除 temp（不留半文件），并 fsync 目录。 */
 function atomicWrite(target, data) {
@@ -2052,29 +2137,15 @@ export function storeAttachment(root, opts) {
     if (data.length > MAX_ATTACHMENT_BYTES) {
         throw new GraphError(`附件过大（${data.length} 字节 > ${MAX_ATTACHMENT_BYTES}），拒绝存储`);
     }
-    const attRootReal = ensureAttachmentsRoot(root);
-    const segs = relPath.split("/");
-    const base = segs.pop();
-    // 逐级创建子目录，途中任何 symlink/非目录拒绝
-    let cur = attRootReal;
-    for (const seg of segs) {
-        cur = join(cur, seg);
-        const st = tryLstat(cur);
-        if (st && st.isSymbolicLink())
-            throw new GraphError(`附件路径含 symlink 目录：${seg}`);
-        if (st && !st.isDirectory())
-            throw new GraphError(`附件路径段不是目录：${seg}`);
-        if (!st)
-            mkdirSync(cur, { recursive: true });
-    }
-    // realpath 包含校验（父目录 canonical 必须落在 attachments 根内）
-    const dirReal = realpathSync(cur);
-    if (!(dirReal === attRootReal || dirReal.startsWith(attRootReal + sep))) {
+    const { realRoot: attRootReal, segs, file } = resolveAttachmentPath(root, relPath);
+    const parentReal = dirname(file);
+    if (!(parentReal === attRootReal || parentReal.startsWith(attRootReal + sep))) {
         throw new GraphError("附件路径越界（realpath 不在 attachments 根内）");
     }
-    let target = join(dirReal, base);
+    let target = file;
     let finalRel = relPath;
     const digest = createHash("sha1").update(data).digest("hex");
+    const base = segs[segs.length - 1];
     const tst = tryLstat(target);
     if (tst) {
         if (tst.isSymbolicLink())
@@ -2088,8 +2159,8 @@ export function storeAttachment(root, opts) {
         const b = dot > 0 ? base.slice(0, dot) : base;
         const e = dot > 0 ? base.slice(dot) : "";
         const newBase = `${b}-${digest.slice(0, 8)}${e}`;
-        target = join(dirReal, newBase);
-        finalRel = [...segs, newBase].join("/");
+        target = join(parentReal, newBase);
+        finalRel = [...segs.slice(0, -1), newBase].join("/");
         if (tryLstat(target))
             throw new GraphError(`唯一名目标已存在：${finalRel}`);
     }
@@ -2103,9 +2174,10 @@ export function storeAttachment(root, opts) {
 }
 /** 递归列出项目全部附件相对路径（含安全子目录；目录不存在返回空）。 */
 export function listAttachments(root) {
-    const dir = attachmentsDir(root);
-    if (!existsSync(dir))
+    // 根 symlink 拒绝（ensureAttachmentsRoot 校验）；不存在返回空
+    if (!existsSync(attachmentsDir(root)))
         return [];
+    const dir = ensureAttachmentsRoot(root);
     const out = [];
     const walk = (rel) => {
         const abs = join(dir, rel);
@@ -2123,10 +2195,20 @@ export function listAttachments(root) {
     walk("");
     return out;
 }
+/** 附件信息：仅在文件实际存在时返回 {name,size,digest,exists}，否则 exists=false。 */
+export function attachmentInfo(root, name) {
+    const safeName = sanitizeAttachmentPath(name);
+    try {
+        const { buffer } = readAttachment(root, safeName);
+        return { name: safeName, exists: true, size: buffer.length, digest: createHash("sha1").update(buffer).digest("hex").slice(0, 16) };
+    }
+    catch {
+        return { name: safeName, exists: false, size: null, digest: null };
+    }
+}
 /** 统计某个附件相对路径在「所有 goal 正文 + 所有卡片正文（自有卡 + 共享池，含已归档）」中的引用次数。 */
 export function attachmentReferenceCount(root, name) {
     const safeName = sanitizeAttachmentPath(name);
-    const ref = formatAttachmentRef(safeName);
     let count = 0;
     const bodies = [];
     for (const gfile of listGoalFiles(root, { includeArchived: true })) {
@@ -2159,29 +2241,17 @@ export function attachmentReferenceCount(root, name) {
             catch { /* 跳过 */ }
         }
     }
+    // 用 parseAttachmentRefs 精确计数：仅当正文实际解析出该附件 ref 才 +1（避免 foo 误配 foo2）
     for (const body of bodies)
-        if (body.includes(ref))
+        if (parseAttachmentRefs(body).includes(safeName))
             count++;
     return count;
 }
-/** 显式删除附件；仍被引用的附件禁止删除（解除/删除卡片不误删仍引用附件）。 */
+/** 显式删除附件；仍被引用的附件禁止删除（解除/删除卡片不误删仍引用附件）。
+ *  根/子目录 symlink 与越界由 resolveAttachmentPath 统一拒绝。 */
 export function deleteAttachment(root, name, opts) {
     const safeName = sanitizeAttachmentPath(name);
-    const attRootReal = ensureAttachmentsRoot(root);
-    const segs = safeName.split("/");
-    const base = segs[segs.length - 1];
-    const parent = join(attRootReal, ...segs.slice(0, -1));
-    let dirReal;
-    try {
-        dirReal = realpathSync(parent);
-    }
-    catch {
-        throw new GraphError(`附件不存在：${safeName}`);
-    }
-    if (!(dirReal === attRootReal || dirReal.startsWith(attRootReal + sep))) {
-        throw new GraphError("附件路径越界（无法删除）");
-    }
-    const file = join(dirReal, base);
+    const { file } = resolveAttachmentPath(root, safeName);
     const st = tryLstat(file);
     if (!st || !st.isFile() || st.isSymbolicLink())
         throw new GraphError(`附件不存在或非普通文件：${safeName}`);
@@ -2191,6 +2261,67 @@ export function deleteAttachment(root, name, opts) {
     }
     appendEvent(root, { actor: opts.actor, event: "attachment.deleted", details: { name: safeName } });
     rmSync(file, { force: true });
+}
+/** 校验所有 goal 正文与卡片正文中 @att 引用：越界/不安全 ref 报错、引用缺失文件报错（g-183 返工 #7）。 */
+export function attachmentProblems(root) {
+    const problems = [];
+    const checkBody = (where, body) => {
+        const re = /@att\/([^\s]+)/g;
+        let m;
+        while ((m = re.exec(body)) !== null) {
+            const raw = m[1];
+            if (!isValidAttachmentPath(raw)) {
+                problems.push(`${where}: 附件引用不安全 @att/${raw}`);
+                continue;
+            }
+            // 存在性：需能被安全解析且文件存在
+            try {
+                const { file } = resolveAttachmentPath(root, raw);
+                const st = tryLstat(file);
+                if (!st || !st.isFile() || st.isSymbolicLink())
+                    problems.push(`${where}: 附件引用不存在 @att/${raw}`);
+            }
+            catch (e) {
+                problems.push(`${where}: 附件引用无法解析 @att/${raw}：${e.message}`);
+            }
+        }
+    };
+    for (const gfile of listGoalFiles(root, { includeArchived: true })) {
+        let doc;
+        try {
+            doc = loadGoal(gfile);
+        }
+        catch {
+            continue;
+        }
+        const label = `目标 ${String(doc.meta.id ?? basename(gfile))}`;
+        checkBody(label, doc.body);
+        if (basename(gfile) === "goal.md") {
+            const cdir = join(dirname(gfile), "cards");
+            if (existsSync(cdir)) {
+                for (const f of readdirSync(cdir)) {
+                    if (!f.endsWith(".md"))
+                        continue;
+                    try {
+                        checkBody(`${label}/卡片 ${f}`, loadGoal(join(cdir, f)).body);
+                    }
+                    catch { /* 跳过 */ }
+                }
+            }
+        }
+    }
+    const sdir = sharedCardsDir(root);
+    if (existsSync(sdir)) {
+        for (const f of readdirSync(sdir)) {
+            if (!f.endsWith(".md"))
+                continue;
+            try {
+                checkBody(`共享卡 ${f}`, loadGoal(join(sdir, f)).body);
+            }
+            catch { /* 跳过 */ }
+        }
+    }
+    return problems;
 }
 export function fillCard(root, goalId, cardId, opts) {
     const { file, doc, scope } = loadCard(root, goalId, cardId);
@@ -2317,13 +2448,7 @@ function cardAttachmentNames(doc) {
 export function attachmentDigest(root, name) {
     try {
         const safeName = sanitizeAttachmentPath(name);
-        const attRootReal = realpathSync(attachmentsDir(root));
-        const segs = safeName.split("/");
-        const base = segs[segs.length - 1];
-        const parentReal = realpathSync(join(attRootReal, ...segs.slice(0, -1)));
-        if (!(parentReal === attRootReal || parentReal.startsWith(attRootReal + sep)))
-            return null;
-        const file = join(parentReal, base);
+        const { file } = resolveAttachmentPath(root, safeName);
         const st = tryLstat(file);
         if (!st || !st.isFile() || st.isSymbolicLink())
             return null;

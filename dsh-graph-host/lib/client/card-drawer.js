@@ -206,12 +206,18 @@
             childLink,
             card.summary ? h("div", { key: "s", style: S.drawerSection },
               h("div", { style: S.drawerH }, "摘要"), card.summary) : null,
-            // 附件引用（安全展示，不内联渲染用户 Markdown/HTML/SVG）
+            // 附件引用（安全下载链接，不内联渲染用户 Markdown/HTML/SVG）
             (Array.isArray(card.attachments) && card.attachments.length)
               ? h("div", { key: "att", style: S.drawerSection },
                   h("div", { style: S.drawerH }, "📎 附件引用"),
                   card.attachments.map((a) =>
-                    h("div", { key: a, style: { ...S.meta, fontSize: 12 } }, `@att/${a}`)))
+                    h("div", { key: a, style: { ...S.meta, fontSize: 12 } },
+                      h("a", {
+                        href: graphUrl("/api/dsh-graph/attachment?name=" + encodeURIComponent(a)),
+                        target: "_blank", rel: "noopener noreferrer",
+                        style: { color: "var(--dsw-alias-label-link, #4c8dff)", textDecoration: "underline" },
+                      }, `@att/${a}`),
+                      "（下载）")))
               : null,
             h("div", { key: "body", style: S.drawerSection },
               h("div", { style: S.drawerH }, "全文"),
@@ -272,7 +278,8 @@
                       ? h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
-                          title: "移除当前 goal 对这张共享卡的引用（保留共享卡与其他引用；零引用仅可在共享面板显式删除）",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可解除引用" : "移除当前 goal 对这张共享卡的引用（保留共享卡与其他引用；零引用仅可在共享面板显式删除）",
                           onClick: async () => {
                             try {
                               const r = await fetch(graphUrl("/api/dsh-graph/unreference-shared-card"), {
@@ -305,7 +312,8 @@
                       ? h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
-                          title: "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡（其余引用请先在共享面板解除）",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可解除引用" : "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡（其余引用请先在共享面板解除）",
                           onClick: async () => {
                             try {
                               const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {

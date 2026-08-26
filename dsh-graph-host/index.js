@@ -13,7 +13,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
-import { relative, join, resolve, dirname } from "node:path";
+import { relative, join, resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createGoal,
@@ -69,6 +69,10 @@ import {
   listAttachments,
   deleteAttachment,
   parseAttachmentRefs,
+  attachmentInfo,
+  readAttachment,
+  attachmentContentType,
+  MAX_ATTACHMENT_BYTES,
   attachmentsDir,
   sanitizeAttachmentPath,
   formatAttachmentRef,
@@ -365,7 +369,11 @@ export function apply(ctx, config) {
         description: "存储一个上下文附件到项目根 .dsh-graph/attachments/（可含安全子目录），返回稳定引用名（用 @att/<相对引用名> 在卡片正文/goal.md 引用）。文本用 content；二进制/图片/Excel 用 base64。name 拒绝绝对路径、./.. 穿越、反斜杠、NUL；目标已存在且内容不同会生成唯一名（不覆盖）；异常不留半文件。",
         parameters: params({ name: str, content: str, base64: str }, ["name"]),
       },
-      run: (a, ex) => ({ name: storeAttachment(rootFor(ex), { name: a.name, content: a.content, base64: a.base64, actor: actorOf(ex) }) }),
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        const name = storeAttachment(r, { name: a.name, content: a.content, base64: a.base64, actor: actorOf(ex) });
+        return { name, ref: formatAttachmentRef(name), digest: attachmentInfo(r, name).digest ?? null };
+      },
     },
     {
       def: {
@@ -1158,7 +1166,9 @@ export function apply(ctx, config) {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
           const { goal, title, kind, scope } = body;
-          if (!goal || !title || !kind) return json(res, 400, { error: "missing goal/title/kind" });
+          // g-183 返工 #1：kind 真正可选（goal-actions 不再发送 kind）；仅 goal/title 必填
+          if (!goal || !title || typeof title !== "string") return json(res, 400, { error: "missing goal/title" });
+          if (kind !== undefined && kind !== null && typeof kind !== "string") return json(res, 400, { error: "kind 必须是字符串" });
           const card = addCard(rootForReq(req, body), goal, { title, kind, scope, actor: "human:gui" });
           json(res, 200, { ok: true, card });
         } catch (e) {
@@ -1293,13 +1303,39 @@ export function apply(ctx, config) {
         }
       },
     },
-    // g-183：附件管理端点（存储/列出/删除；路径安全与引用守卫由 core 层强制）
+    // g-183：附件管理端点（列出/读取下载/存储/删除；路径安全与引用守卫由 core 层强制）
     {
       path: "/api/dsh-graph/attachments",
       handler: (req, res) => {
         try {
           if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
-          json(res, 200, { attachments: listAttachments(rootForReq(req)) });
+          const root = rootForReq(req);
+          const names = listAttachments(root);
+          json(res, 200, { attachments: names, infos: names.map((n) => attachmentInfo(root, n)) });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-183 返工 #2：安全读取/下载附件（canonical containment + content-type；HTML/Markdown/SVG 强制下载不内联）
+    {
+      path: "/api/dsh-graph/attachment",
+      handler: (req, res) => {
+        try {
+          const sp = new URL(req.url ?? "", "http://x").searchParams;
+          const name = sp.get("name");
+          if (!name) return json(res, 400, { error: "missing name" });
+          if (typeof name !== "string" || name.length > 512) return json(res, 400, { error: "invalid name" });
+          const info = readAttachment(rootForReq(req), name);
+          const disp = info.inline ? "inline" : "attachment";
+          res.writeHead(200, {
+            "content-type": info.contentType,
+            "content-length": String(info.size),
+            "content-disposition": `${disp}; filename*=UTF-8''${encodeURIComponent(basename(name))}`,
+            "cache-control": "no-store",
+          });
+          res.end(info.buffer);
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
@@ -1312,27 +1348,36 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const ct = String(req.headers?.["content-type"] ?? "");
+          const cl = Number(req.headers?.["content-length"] || 0);
+          if (cl > MAX_ATTACHMENT_BYTES) return json(res, 400, { error: "content-length 超过大小上限" });
           let stored;
+          let rRoot;
           // 原始二进制上传：body 即文件字节，文件名走 query/header `x-attachment-name`
           if (ct.includes("application/octet-stream") || ct.includes("application/x-www-form-urlencoded")) {
             const sp = new URL(req.url ?? "", "http://x").searchParams;
             const name = sp.get("name") ?? req.headers?.["x-attachment-name"];
-            if (!name) return json(res, 400, { error: "missing name (query ?name= 或 x-attachment-name)" });
+            if (!name || typeof name !== "string" || name.length > 512) return json(res, 400, { error: "missing/invalid name" });
+            rRoot = rootForReq(req);
             const raw = await readRawBody(req);
-            stored = storeAttachment(rootForReq(req), { name: String(name), bytes: raw, actor: "human:gui" });
+            stored = storeAttachment(rRoot, { name, bytes: raw, actor: "human:gui" });
           } else {
             const body = await readBody(req);
             const { name, content, base64 } = body;
-            if (!name) return json(res, 400, { error: "missing name" });
+            if (!name || typeof name !== "string" || name.length > 512) return json(res, 400, { error: "missing/invalid name" });
+            rRoot = rootForReq(req, body);
             if (typeof base64 === "string") {
-              stored = storeAttachment(rootForReq(req, body), { name, base64, actor: "human:gui" });
+              // base64 大小预检（避免解码后超限）
+              const approx = Math.floor(base64.length * 3 / 4);
+              if (approx > MAX_ATTACHMENT_BYTES) return json(res, 400, { error: "base64 大小超过上限" });
+              stored = storeAttachment(rRoot, { name, base64, actor: "human:gui" });
             } else if (typeof content === "string") {
-              stored = storeAttachment(rootForReq(req, body), { name, content, actor: "human:gui" });
+              stored = storeAttachment(rRoot, { name, content, actor: "human:gui" });
             } else {
               return json(res, 400, { error: "需要 content 或 base64（或原始二进制上传）" });
             }
           }
-          json(res, 200, { ok: true, name: stored, ref: formatAttachmentRef(stored) });
+          const digest = attachmentInfo(rRoot, stored).digest;
+          json(res, 200, { ok: true, name: stored, ref: formatAttachmentRef(stored), digest });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });

@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readFileSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, symlinkSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import {
@@ -45,6 +45,8 @@ import {
   attachmentReferenceCount,
   attachmentDigest,
   sanitizeAttachmentPath,
+  attachmentInfo,
+  readAttachment,
 } from "../ops.ts";
 
 function tmpRoot(): string {
@@ -508,4 +510,80 @@ test("harvested 注入保留附件 refs + 审计摘要；storeAttachment 支持 
   // 零引用后可显式删除
   deleteAttachment(root, "img/x.png", { actor: "test" });
   assert.ok(!existsSync(join(attachmentsDir(root), "img/x.png")));
+});
+
+test("attachments 根自身 symlink 拒绝（store/list/read/delete/digest 一致）", () => {
+  const root = tmpRoot();
+  const outside = join(root, "..", `out-root-${Date.now()}`);
+  mkdirSync(outside, { recursive: true });
+  const attDir = attachmentsDir(root);
+  rmSync(attDir, { recursive: true, force: true });
+  symlinkSync(outside, attDir);
+  // 根为 symlink → 所有附件操作拒绝，绝不写出到外部
+  assert.throws(() => storeAttachment(root, { name: "escape.md", content: "ESCAPED", actor: "test" }), /symlink/);
+  assert.throws(() => listAttachments(root), /symlink/);
+  assert.throws(() => readAttachment(root, "escape.md"), /symlink/);
+  assert.throws(() => deleteAttachment(root, "escape.md", { actor: "test" }), /symlink/);
+  assert.equal(attachmentDigest(root, "escape.md"), null);
+  assert.ok(!existsSync(join(outside, "escape.md")), "不得写出到 attachments 外部");
+});
+
+test("collecting 共享卡拒绝解除引用（removeSharedCardRef）", () => {
+  const root = tmpRoot();
+  const sid = createSharedCard(root, { title: "收集解除", actor: "test" });
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  addSharedCardRef(root, a, sid, "test");
+  bindCardChild(root, a, sid, { childId: "child-1", actor: "test" });
+  assert.throws(() => removeSharedCardRef(root, a, sid, "test"), /正在收集中/);
+  assert.equal(referenceCount(root, sid), 1, "collecting 中引用不应被解除");
+  // 完成后可解除
+  fillCard(root, a, sid, { text: "完成", by: "child-1", actor: "test" });
+  removeSharedCardRef(root, a, sid, "test");
+  assert.equal(referenceCount(root, sid), 0);
+});
+
+test("addCard 默认 shared 传入无效 goal 不留下孤儿共享卡", () => {
+  const root = tmpRoot();
+  const before = sharedCards(root).length;
+  assert.throws(() => addCard(root, "g-9999", { title: "x", actor: "test" }), /目标不存在|不存在/);
+  assert.equal(sharedCards(root).length, before, "不应留下孤儿共享卡");
+});
+
+test("collecting 卡拒绝转换（own→shared / shared→own）", () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const oc = addCard(root, a, { title: "自有收集", scope: "goal", actor: "test" });
+  bindCardChild(root, a, oc, { childId: "child-1", actor: "test" });
+  assert.throws(() => convertOwnedToShared(root, a, oc, { actor: "test" }), /正在收集中/);
+  const sid = createSharedCard(root, { title: "共享收集", actor: "test" });
+  addSharedCardRef(root, a, sid, "test");
+  bindCardChild(root, a, sid, { childId: "child-2", actor: "test" });
+  assert.throws(() => convertSharedToOwned(root, a, sid, { actor: "test" }), /正在收集中/);
+});
+
+test("attachmentReferenceCount 精确计数 + attachmentInfo/readAttachment/validate 缺失与不安全 ref", () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  storeAttachment(root, { name: "foo.md", content: "x", actor: "test" });
+  storeAttachment(root, { name: "foo2.md", content: "y", actor: "test" });
+  const oc = addCard(root, a, { title: "c", scope: "goal", actor: "test" });
+  fillCard(root, a, oc, { text: "见 @att/foo.md 与 @att/foo2.md", by: "human:x", actor: "test" });
+  // 精确计数：foo=1、foo2=1；若只引用 foo 则 foo2 为 0（不误配）
+  assert.equal(attachmentReferenceCount(root, "foo.md"), 1);
+  assert.equal(attachmentReferenceCount(root, "foo2.md"), 1);
+  deleteCard(root, a, oc, { actor: "test" });
+  assert.equal(attachmentReferenceCount(root, "foo.md"), 0);
+  assert.equal(attachmentReferenceCount(root, "foo2.md"), 0);
+  // attachmentInfo 存在性
+  assert.equal(attachmentInfo(root, "foo.md").exists, true);
+  assert.equal(attachmentInfo(root, "missing.md").exists, false);
+  const info = readAttachment(root, "foo.md");
+  assert.equal(info.buffer.toString(), "x");
+  assert.equal(info.contentType, "text/plain");
+  // validate 报告缺失与不安全 ref
+  const oc2 = addCard(root, a, { title: "c2", scope: "goal", actor: "test" });
+  fillCard(root, a, oc2, { text: "见 @att/nope.md 与 @att/../evil", by: "human:x", actor: "test" });
+  const problems = validate(root);
+  assert.ok(problems.some((p) => /附件引用不存在 @att\/nope\.md/.test(p)), "应报告缺失附件: " + problems.join("|"));
+  assert.ok(problems.some((p) => /附件引用不安全/.test(p)), "应报告不安全引用: " + problems.join("|"));
 });

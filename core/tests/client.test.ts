@@ -1598,9 +1598,11 @@ test("g-183 attachment REST：存储/路径安全/删除引用守卫", async () 
   assert.equal(store.code, 200);
   assert.equal(store.body.name, "note.md");
   assert.equal(store.body.ref, "@att/note.md");
+  assert.ok(typeof store.body.digest === "string" && store.body.digest.length === 16, "应返回 16 位审计摘要");
   assert.ok(existsSync(join(root, "attachments", "note.md")));
   const list = await get(routes, "/api/dsh-graph/attachments");
   assert.ok(list.body.attachments.includes("note.md"));
+  assert.ok(list.body.infos.some((i: any) => i.name === "note.md" && i.exists && i.size > 0), "列表应含附件存在性信息");
   // 路径安全：穿越/绝对路径/反斜杠/子目录越界 → 400
   assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "../../etc/passwd", content: "x" })).code, 400);
   assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "/abs/x", content: "x" })).code, 400);
@@ -1652,4 +1654,58 @@ test("g-183 membership REST：未引用共享卡的 goal 无法 start-collection
   const ok = await post(routes, "/api/dsh-graph/start-collection", { goal: goalId, card: sid });
   assert.equal(ok.code, 200);
   assert.ok(typeof ok.body.child_error === "string");
+});
+
+test("add-card REST：kind 可选（goal-actions 已不发 kind），omission 建卡成功", async () => {
+  const { root, routes, goalId } = setup();
+  // 不传 kind
+  const r = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "无 kind 任务" });
+  assert.equal(r.code, 200, "kind omission 应成功: " + r.body.error);
+  assert.ok(typeof r.body.card === "string");
+  // 显式传 kind 也能建
+  const r2 = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "带 kind", kind: "text" });
+  assert.equal(r2.code, 200);
+  // 无效 kind 类型 → 400
+  const r3 = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "x", kind: 123 });
+  assert.equal(r3.code, 400);
+  // 缺失 goal → 400
+  const r4 = await post(routes, "/api/dsh-graph/add-card", { title: "x" });
+  assert.equal(r4.code, 400);
+});
+
+test("g-183 attachment REST：安全下载端点（canonical读、content-type、拒绝越界 name）", async () => {
+  const { root, routes } = setup();
+  await post(routes, "/api/dsh-graph/store-attachment", { name: "doc.md", content: "hello 附件" });
+  const handler = routes.get("/api/dsh-graph/attachment");
+  // 正常读取
+  const res = { _code: 0, _headers: null, _body: null, writeHead(c: number, h: any) { this._code = c; this._headers = h; }, end(s: any) { this._body = s; } };
+  const req = fakeRequest("GET", null); req.url = "/api/dsh-graph/attachment?name=doc.md";
+  await handler(req, res);
+  assert.equal(res._code, 200, "应能下载附件");
+  assert.equal(res._headers["content-type"], "text/plain");
+  assert.equal(res._body.toString(), "hello 附件");
+  // HTML/Markdown 等强制 attachment 不 inline
+  await post(routes, "/api/dsh-graph/store-attachment", { name: "bad.html", content: "<script>alert(1)</script>" });
+  const res2 = { _code: 0, _headers: null, _body: null, writeHead(c: number, h: any) { this._code = c; this._headers = h; }, end(s: any) { this._body = s; } };
+  const req2 = fakeRequest("GET", null); req2.url = "/api/dsh-graph/attachment?name=bad.html";
+  await handler(req2, res2);
+  assert.equal(res2._code, 200);
+  assert.ok(String(res2._headers["content-disposition"]).startsWith("attachment"), "危险类型应强制下载");
+  // 越界 name → 400
+  const res3 = { _code: 0, _headers: null, _body: null, writeHead(c: number, h: any) { this._code = c; this._headers = h; }, end(s: any) { this._body = s; } };
+  const req3 = fakeRequest("GET", null); req3.url = "/api/dsh-graph/attachment?name=../x";
+  await handler(req3, res3);
+  assert.equal(res3._code, 400, "越界 name 应拒绝");
+});
+
+test("g-183 collecting：unreference-shared-card 对 collected 共享卡返回 400（API 守卫）", async () => {
+  const { root, routes, goalId } = setup();
+  const sid = (await post(routes, "/api/dsh-graph/create-shared-card", { title: "REST 收集守卫" })).body.card;
+  await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  // 模拟收集绑定：直接 bindCardChild 核心层（无 subagents 时 start-collection 不会绑定）
+  const { bindCardChild } = await import("../ops.ts");
+  bindCardChild(root, goalId, sid, { childId: "child-c", actor: "test" });
+  const unref = await post(routes, "/api/dsh-graph/unreference-shared-card", { goal: goalId, card: sid });
+  assert.equal(unref.code, 400);
+  assert.ok(String(unref.body.error).includes("正在收集中"), "collecting 共享卡解除引用应被拒");
 });

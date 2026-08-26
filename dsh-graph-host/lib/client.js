@@ -1531,12 +1531,18 @@ window.__ModuleLoader__.load({
             childLink,
             card.summary ? h("div", { key: "s", style: S.drawerSection },
               h("div", { style: S.drawerH }, "摘要"), card.summary) : null,
-            // 附件引用（安全展示，不内联渲染用户 Markdown/HTML/SVG）
+            // 附件引用（安全下载链接，不内联渲染用户 Markdown/HTML/SVG）
             (Array.isArray(card.attachments) && card.attachments.length)
               ? h("div", { key: "att", style: S.drawerSection },
                   h("div", { style: S.drawerH }, "📎 附件引用"),
                   card.attachments.map((a) =>
-                    h("div", { key: a, style: { ...S.meta, fontSize: 12 } }, `@att/${a}`)))
+                    h("div", { key: a, style: { ...S.meta, fontSize: 12 } },
+                      h("a", {
+                        href: graphUrl("/api/dsh-graph/attachment?name=" + encodeURIComponent(a)),
+                        target: "_blank", rel: "noopener noreferrer",
+                        style: { color: "var(--dsw-alias-label-link, #4c8dff)", textDecoration: "underline" },
+                      }, `@att/${a}`),
+                      "（下载）")))
               : null,
             h("div", { key: "body", style: S.drawerSection },
               h("div", { style: S.drawerH }, "全文"),
@@ -1597,7 +1603,8 @@ window.__ModuleLoader__.load({
                       ? h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
-                          title: "移除当前 goal 对这张共享卡的引用（保留共享卡与其他引用；零引用仅可在共享面板显式删除）",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可解除引用" : "移除当前 goal 对这张共享卡的引用（保留共享卡与其他引用；零引用仅可在共享面板显式删除）",
                           onClick: async () => {
                             try {
                               const r = await fetch(graphUrl("/api/dsh-graph/unreference-shared-card"), {
@@ -1630,7 +1637,8 @@ window.__ModuleLoader__.load({
                       ? h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
-                          title: "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡（其余引用请先在共享面板解除）",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可解除引用" : "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡（其余引用请先在共享面板解除）",
                           onClick: async () => {
                             try {
                               const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
@@ -5208,10 +5216,16 @@ window.__ModuleLoader__.load({
             h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} 个 goal 引用`)),
           h("div", { style: { ...S.meta, fontSize: 11 } },
             `id=${c.id}${c.summary ? " ｜ " + c.summary : ""}`),
-          // 正文引用附件
+          // 正文引用附件（安全下载链接，不内联渲染）
           (Array.isArray(c.attachments) && c.attachments.length)
             ? h("div", { style: { ...S.meta, fontSize: 11 } },
-                "📎 附件：" + c.attachments.map((a) => `@att/${a}`).join("，"))
+                "📎 附件：" + c.attachments.map((a) =>
+                  h("a", {
+                    key: a,
+                    href: graphUrl("/api/dsh-graph/attachment?name=" + encodeURIComponent(a)),
+                    target: "_blank", rel: "noopener noreferrer",
+                    style: { color: "var(--dsw-alias-label-link, #4c8dff)", textDecoration: "underline", marginRight: 4 },
+                  }, `@att/${a}`)).join("，"))
             : null,
           // 引用它的 goal 清单：每项一个真实解除引用（只移除该 goal 引用，保留共享卡与其他引用；零引用仅显式删除）
           h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", marginTop: 4 } },
@@ -5224,10 +5238,15 @@ window.__ModuleLoader__.load({
                     key: ref.id,
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                     className: "dg-btn",
-                    title: `移除 ${label} 对这张共享卡的引用（保留共享卡本身）`,
+                    disabled: installing,
+                    title: installing ? "收集中不可解除引用" : `移除 ${label} 对这张共享卡的引用（保留共享卡本身）`,
                     onClick: () => unreference(c.id, ref.id),
                   }, "➖ " + label);
                 })),
+          installing
+            ? h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } },
+                "🔒 收集中：仅解除引用/不可删除；绑定 goal 不可解除（已禁用）")
+            : null,
           h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4, alignItems: "center" } },
             h("select", {
               value: attachGoalId,
