@@ -35,8 +35,8 @@ function tmpRoot(): string {
 test("add-card 建卡并按序登记 context_cards", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  const c1 = addCard(root, id, { title: "甲", kind: "text", actor: "test" });
-  const c2 = addCard(root, id, { title: "乙", kind: "data", actor: "test" });
+  const c1 = addCard(root, id, { title: "甲", kind: "text", actor: "test", scope: "goal" });
+  const c2 = addCard(root, id, { title: "乙", kind: "data", actor: "test", scope: "goal" });
   const meta = loadGoal(findGoalFile(root, id)).meta;
   assert.deepEqual(meta.context_cards, [c1, c2]);
   const card = loadGoal(
@@ -46,24 +46,32 @@ test("add-card 建卡并按序登记 context_cards", () => {
   assert.equal(card.meta.goal, id);
 });
 
-test("非法 kind 与 backlog 目标建卡被拒绝", () => {
+test("卡片 kind 任意非空字符串；空 kind 拒绝；backlog 显式 scope=goal 仍拒绝", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  // 任意非空 kind 被接受（g-183 附件模型：不再按 text/file/image/data 分支）
+  const vid = addCard(root, id, { title: "视频", kind: "video", scope: "goal", actor: "test" });
+  assert.ok(vid.startsWith("card-"), "任意 kind 应可建卡");
+  // 空 kind 拒绝
   assert.throws(
-    () => addCard(root, id, { title: "x", kind: "video", actor: "test" }),
+    () => addCard(root, id, { title: "x", kind: "", actor: "test" }),
     GraphError,
   );
   const bid = createGoal(root, { title: "b", actor: "test" }); // backlog 平铺
+  // backlog 显式 goal 自有仍拒绝（无目录）
   assert.throws(
-    () => addCard(root, bid, { title: "x", kind: "text", actor: "test" }),
+    () => addCard(root, bid, { title: "x", kind: "text", scope: "goal", actor: "test" }),
     /先排期/,
   );
+  // backlog 默认（shared）创建共享卡并挂载成功（一致性；新增范围）
+  const bsc = addCard(root, bid, { title: "x", kind: "text", actor: "test" });
+  assert.ok(bsc.startsWith("shared-"), "backlog 默认应建共享卡");
 });
 
 test("fill-card / review-card 生命周期与事件", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  const c = addCard(root, id, { title: "甲", kind: "text", actor: "test" });
+  const c = addCard(root, id, { title: "甲", kind: "text", actor: "test", scope: "goal" });
   // 未填充不能复核
   assert.throws(
     () => reviewCard(root, id, c, { by: "human:a", actor: "test" }),
@@ -86,7 +94,7 @@ test("fill-card / review-card 生命周期与事件", () => {
 test("validate 发现悬空卡片引用；卡片事件不干扰 rebuild", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  const c = addCard(root, id, { title: "甲", kind: "text", actor: "test" });
+  const c = addCard(root, id, { title: "甲", kind: "text", actor: "test", scope: "goal" });
   fillCard(root, id, c, { text: "x", by: "human:a", actor: "test" });
   assert.deepEqual(validate(root), []);
   assert.deepEqual(rebuild(root), []);
@@ -185,8 +193,8 @@ test("boardProjection：被复用派生（attempt.reused 事件 + 绑定记录�
 test("deleteCard：删除卡片文件 + context_cards 移除引用 + card.deleted 事件", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  const c1 = addCard(root, id, { title: "甲", kind: "text", actor: "test" });
-  const c2 = addCard(root, id, { title: "乙", kind: "data", actor: "test" });
+  const c1 = addCard(root, id, { title: "甲", kind: "text", actor: "test", scope: "goal" });
+  const c2 = addCard(root, id, { title: "乙", kind: "data", actor: "test", scope: "goal" });
   // 删除 c1
   deleteCard(root, id, c1, { actor: "test" });
   // c1 文件不存在
@@ -207,7 +215,7 @@ test("deleteCard：删除卡片文件 + context_cards 移除引用 + card.delete
 test("deleteCard：正在收集中的卡片不可删除", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  const c = addCard(root, id, { title: "甲", kind: "text", actor: "test" });
+  const c = addCard(root, id, { title: "甲", kind: "text", actor: "test", scope: "goal" });
   // 模拟收集状态
   bindCardChild(root, id, c, { childId: "child-test", actor: "test" });
   assert.throws(
@@ -220,8 +228,8 @@ test("deleteCard：正在收集中的卡片不可删除", () => {
 test("deleteCard：删除后 validate 仍通过", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  const c1 = addCard(root, id, { title: "甲", kind: "text", actor: "test" });
-  const c2 = addCard(root, id, { title: "乙", kind: "data", actor: "test" });
+  const c1 = addCard(root, id, { title: "甲", kind: "text", actor: "test", scope: "goal" });
+  const c2 = addCard(root, id, { title: "乙", kind: "data", actor: "test", scope: "goal" });
   deleteCard(root, id, c1, { actor: "test" });
   assert.deepEqual(validate(root), []);
   assert.deepEqual(rebuild(root), []);
@@ -256,7 +264,7 @@ test("backlog 目标 addCard 仍被拒绝", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "backlog item", actor: "test" });
   assert.throws(
-    () => addCard(root, id, { title: "x", kind: "text", actor: "test" }),
+    () => addCard(root, id, { title: "x", kind: "text", actor: "test", scope: "goal" }),
     /暂存目标（backlog）没有目录/,
   );
 });
@@ -267,14 +275,14 @@ test("非 backlog 目标 goalDetail 返回正常且可建卡", () => {
   const d = goalDetail(root, id);
   assert.equal(d.meta.status, "draft");
   assert.ok(d.goalFile.endsWith("/goal.md"), "standalone 文件名应为 goal.md");
-  const c = addCard(root, id, { title: "card1", kind: "text", actor: "test" });
+  const c = addCard(root, id, { title: "card1", kind: "text", actor: "test", scope: "goal" });
   assert.ok(c.startsWith("card-"));
 });
 
 test("g-154：goalDetail 卡片含 cardFile 绝对路径（指向实际卡片 .md 文件）", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "g154-test", version: "v-t", actor: "test" });
-  const c1 = addCard(root, id, { title: "卡A", kind: "text", actor: "test" });
+  const c1 = addCard(root, id, { title: "卡A", kind: "text", actor: "test", scope: "goal" });
   const d = goalDetail(root, id);
   const card = d.cards.find((c: any) => c.id === c1);
   assert.ok(card, "卡片应存在");
@@ -288,7 +296,7 @@ test("g-154：goalDetail 卡片含 cardFile 绝对路径（指向实际卡片 .m
 test("g-154：goalCards 也暴露 cardFile 字段", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "g154-cards", version: "v-t", actor: "test" });
-  const c1 = addCard(root, id, { title: "卡B", kind: "data", actor: "test" });
+  const c1 = addCard(root, id, { title: "卡B", kind: "data", actor: "test", scope: "goal" });
   const cards = goalCards(root, id);
   assert.equal(cards.length, 1);
   assert.ok(cards[0].cardFile, "goalCards 返回的卡片也应含 cardFile");

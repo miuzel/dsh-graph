@@ -38,10 +38,10 @@ function tmpRoot(): string {
 /** 造一个带 4 张卡的目标：c1=filled、c2=filled+reviewed、c3=empty、c4=collecting。 */
 function goalWithCards(root: string): { goal: string; c1: string; c2: string; c3: string; c4: string } {
   const goal = createGoal(root, { title: "g120 目标", version: "v-t", actor: "test" });
-  const c1 = addCard(root, goal, { title: "甲", kind: "text", actor: "test" });
-  const c2 = addCard(root, goal, { title: "乙", kind: "data", actor: "test" });
-  const c3 = addCard(root, goal, { title: "丙", kind: "text", actor: "test" });
-  const c4 = addCard(root, goal, { title: "丁", kind: "file", actor: "test" });
+  const c1 = addCard(root, goal, { title: "甲", kind: "text", actor: "test", scope: "goal" });
+  const c2 = addCard(root, goal, { title: "乙", kind: "data", actor: "test", scope: "goal" });
+  const c3 = addCard(root, goal, { title: "丙", kind: "text", actor: "test", scope: "goal" });
+  const c4 = addCard(root, goal, { title: "丁", kind: "file", actor: "test", scope: "goal" });
   fillCard(root, goal, c1, { text: "甲正文", summary: "甲摘要", by: "human:a", actor: "test" });
   fillCard(root, goal, c2, { text: "乙正文", summary: "乙摘要", by: "human:a", actor: "test" });
   reviewCard(root, goal, c2, { by: "human:b", actor: "test" });
@@ -83,7 +83,7 @@ test("g-120：harvestedCards 顺序取自 meta.context_cards（乱序/文件系�
 test("g-120：harvestedCards 无成果卡片返回空；formatHarvestedCardsSection 无卡时给「（无）」段", () => {
   const root = tmpRoot();
   const goal = createGoal(root, { title: "t2", version: "v-t", actor: "test" });
-  addCard(root, goal, { title: "x", kind: "text", actor: "test" }); // 只有 empty
+  addCard(root, goal, { title: "x", kind: "text", actor: "test", scope: "goal" }); // 只有 empty
   assert.deepEqual(harvestedCards(root, goal), []);
   const sec = formatHarvestedCardsSection(root, goal);
   assert.ok(sec.includes("已收集上下文卡片成果"), "无卡也注入段标题");
@@ -106,8 +106,8 @@ test("g-120：formatHarvestedCardsSection 按序含 title/summary/正文全文",
 test("g-120：startAttempt 带 injectedCards 时事件 details 记 injected_cards（含空数组）", () => {
   const root = tmpRoot();
   const goal = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  const c1 = addCard(root, goal, { title: "a", kind: "text", actor: "test" });
-  const c2 = addCard(root, goal, { title: "b", kind: "text", actor: "test" });
+  const c1 = addCard(root, goal, { title: "a", kind: "text", actor: "test", scope: "goal" });
+  const c2 = addCard(root, goal, { title: "b", kind: "text", actor: "test", scope: "goal" });
   startAttempt(root, goal, { executor: "agent:t", actor: "test", injectedCards: [c2, c1] });
   const ev = readEvents(root).filter((e) => e.event === "attempt.started");
   assert.equal(ev.length, 1);
@@ -269,7 +269,7 @@ test("g-120：start-execution 端点 worktree=false 省略 worktree 指令；无
   const root2 = join(ws2, ".dsh-graph");
   init(root2);
   const goal2 = createGoal(root2, { title: "empty-only", version: "v-t", actor: "test" });
-  addCard(root2, goal2, { title: "x", kind: "text", actor: "test" });
+  addCard(root2, goal2, { title: "x", kind: "text", actor: "test", scope: "goal" });
   writeFileSync(join(root2, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured2: { prompt?: string } = {};
   const { routes: routes2 } = makeHostCtx(captured2);

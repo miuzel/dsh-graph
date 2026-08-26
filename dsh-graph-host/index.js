@@ -64,6 +64,14 @@ import {
   convertSharedToOwned,
   sharedCards,
   referenceCount,
+  referencingGoals,
+  storeAttachment,
+  listAttachments,
+  deleteAttachment,
+  parseAttachmentRefs,
+  attachmentsDir,
+  sanitizeAttachmentName,
+  formatAttachmentRef,
   recordAttemptHandoff,
   harvestReviewedAttemptHandoffs,
   formatReviewedAttemptHandoffsSection,
@@ -343,13 +351,29 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_add_card",
-        description: "为目标创建上下文卡片（empty 占位）。返回卡片 id。scope 可选（不传默认 goal 自有；传 shared 创建共享卡并挂到该 goal）。",
+        description: "为目标创建上下文卡片（empty 占位）。返回卡片 id。默认创建共享卡（scope=shared，落共享池并挂到该 goal）；goal 自有卡必须显式传 scope=\"goal\"。kind 不再限定 text/file/image/data，任意非空字符串。",
         parameters: params(
-          { goal: str, title: str, kind: { type: "string", enum: ["text", "file", "image", "data"] }, scope: { type: "string", enum: ["goal", "shared"] } },
+          { goal: str, title: str, kind: str, scope: { type: "string", enum: ["goal", "shared"] } },
           ["goal", "title", "kind"],
         ),
       },
       run: (a, ex) => ({ card: addCard(rootFor(ex), a.goal, { title: a.title, kind: a.kind, scope: a.scope, actor: actorOf(ex) }) }),
+    },
+    {
+      def: {
+        name: "graph_store_attachment",
+        description: "存储一个上下文附件到项目根 .dsh-graph/attachments/，返回稳定引用名（用 @att/<附件名> 在卡片正文/goal.md 引用）。name 非空且不含绝对路径/../路径分隔符；拒绝不安全覆盖与异常半文件。",
+        parameters: params({ name: str, content: str }, ["name", "content"]),
+      },
+      run: (a, ex) => ({ name: storeAttachment(rootFor(ex), { name: a.name, content: a.content, actor: actorOf(ex) }) }),
+    },
+    {
+      def: {
+        name: "graph_delete_attachment",
+        description: "显式删除附件；仍被任何卡片/目标正文引用的附件禁止删除（解除/删除卡片不误删仍被引用的附件）。",
+        parameters: params({ name: str }, ["name"]),
+      },
+      run: (a, ex) => { deleteAttachment(rootFor(ex), a.name, { actor: actorOf(ex) }); return { ok: true }; },
     },
     {
       def: {
@@ -1254,6 +1278,51 @@ export function apply(ctx, config) {
           const { goal, card } = body;
           if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
           deleteCard(rootForReq(req, body), goal, card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-183：附件管理端点（存储/列出/删除；路径安全与引用守卫由 core 层强制）
+    {
+      path: "/api/dsh-graph/attachments",
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          json(res, 200, { attachments: listAttachments(rootForReq(req)) });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/store-attachment",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { name, content } = body;
+          if (!name || typeof content !== "string") return json(res, 400, { error: "missing name or content" });
+          const stored = storeAttachment(rootForReq(req, body), { name, content, actor: "human:gui" });
+          json(res, 200, { ok: true, name: stored, ref: formatAttachmentRef(stored) });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/delete-attachment",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { name } = body;
+          if (!name) return json(res, 400, { error: "missing name" });
+          deleteAttachment(rootForReq(req, body), name, { actor: "human:gui" });
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;

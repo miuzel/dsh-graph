@@ -1583,24 +1583,24 @@ window.__ModuleLoader__.load({
                       }, "取消"))
                   )
                 : h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                    // g-183：共享/自有转换入口（核心层守卫引用计数与归属）
+                    // g-183：共享/自有转换 + 解除引用（goal 详情方向独立；核心层守卫引用计数与归属）
                     card.scope === "shared"
                       ? h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
-                          title: "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡",
+                          title: "移除当前 goal 对这张共享卡的引用（保留共享卡与其他引用；零引用仅可在共享面板显式删除）",
                           onClick: async () => {
                             try {
-                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
+                              const r = await fetch(graphUrl("/api/dsh-graph/unreference-shared-card"), {
                                 method: "POST", headers: { "content-type": "application/json" },
                                 body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
                               });
                               const data = await r.json();
-                              if (data.ok) { showToast("✅ 已转回本 goal 自有卡"); props.onDeleted?.(); }
-                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                              if (data.ok) { showToast("✅ 已解除本 goal 引用"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 解除失败：" + (data.error || "未知错误"));
                             } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
                           },
-                        }, "📁 转回自有卡")
+                        }, "➖ 解除引用")
                       : h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
@@ -1617,12 +1617,33 @@ window.__ModuleLoader__.load({
                             } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
                           },
                         }, "🔗 转为共享卡"),
-                    h("button", {
-                      style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
-                      className: "dg-btn-danger",
-                      title: "删除此卡片（需输入卡片 id 确认）",
-                      onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
-                    }, "🗑 删除卡片")),
+                    card.scope === "shared"
+                      ? h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          title: "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡（其余引用请先在共享面板解除）",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("✅ 已转回本 goal 自有卡"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "📁 转回自有卡")
+                      : null,
+                    // 仅 goal 自有卡可删除（共享卡走解除引用/共享面板显式删除，避免必然报错）
+                    card.scope !== "shared"
+                      ? h("button", {
+                          style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn-danger",
+                          title: "删除此卡片（需输入卡片 id 确认）",
+                          onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
+                        }, "🗑 删除卡片")
+                      : null),
               deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } }, deleteNote) : null),
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集
@@ -5188,14 +5209,27 @@ window.__ModuleLoader__.load({
 
       const backdropGuard = useBackdropClose(onClose);
       const cardRow = (c) => {
-        const refStr = `${c.refCount} 个 goal 引用`;
+        const refs = Array.isArray(c.referencingGoals) ? c.referencingGoals : [];
+        const installing = c.status === "collecting";
         return h("div", { key: c.id, style: { ...S.subCard, marginBottom: 6 } },
           h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
             h("span", { style: { flex: 1 } }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
-            h("span", { style: { ...S.meta, fontSize: 11 } }, refStr)),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} 个 goal 引用`)),
           h("div", { style: { ...S.meta, fontSize: 11 } },
             `id=${c.id} ｜ kind=${c.kind}${c.summary ? " ｜ " + c.summary : ""}`),
-          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 } },
+          // 引用它的 goal 清单：每项一个真实解除引用（只移除该 goal 引用，保留共享卡与其他引用；零引用仅显式删除）
+          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", marginTop: 4 } },
+            h("span", { style: { ...S.meta, fontSize: 11 } }, "🔎 引用 goal："),
+            refs.length === 0
+              ? h("span", { style: { ...S.meta, fontSize: 11 } }, "（无引用 goal）")
+              : refs.map((gid) => h("button", {
+                  key: gid,
+                  style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                  className: "dg-btn",
+                  title: `移除 ${gid} 对这张共享卡的引用（保留共享卡本身）`,
+                  onClick: () => unreference(c.id, gid),
+                }, "➖ " + gid))),
+          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4, alignItems: "center" } },
             h("select", {
               value: attachGoalId,
               onChange: (e) => setAttachGoalId(e.target.value),
@@ -5204,34 +5238,12 @@ window.__ModuleLoader__.load({
               h("option", { value: "" }, "┅ 挂到目标…"),
               ...(goals ?? []).map((g) => h("option", { key: g.id, value: g.id }, `${g.id} ${g.title}`))),
             h("button", { style: S.btn, className: "dg-btn", onClick: () => attachToGoal(c.id) }, "⇄ 挂到 goal"),
-            ...(c.refCount > 0 ? [] : [
+            ...(c.refCount === 0 && !installing ? [
               h("button", { style: S.btn, className: "dg-btn", onClick: () => removeCard(c.id) }, "🗑 显式删除"),
-            ]),
-            h("button", {
-              style: S.btn, className: "dg-btn",
-              title: c.refCount === 1 ? "转为 goal 自有卡（引用计数为 1）" : "引用计数>1 无法转自有",
-              onClick: () => unreferenceRef(c.id),
-            }, "↘ 解除引用")));
-      };
-
-      // 引用计数为 1 时一键解除全部引用并转自有（走核心层守卫）
-      const unreferenceRef = async (cardId) => {
-        const refs = (cards.find((c) => c.id === cardId)?.refCount ?? 0);
-        if (refs === 1) {
-          const gid = attachGoalId || (goals && goals[0] && goals[0].id);
-          if (!gid) { setNote("⚠️ 请选择目标以执行转自有"); return; }
-          try {
-            const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
-              method: "POST", headers: { "content-type": "application/json" },
-              body: JSON.stringify({ goal: gid, card: cardId }),
-            });
-            const d = await r.json();
-            if (d.ok) { setNote("✅ 已转为 " + gid + " 自有卡"); refresh(); onRefresh?.(); }
-            else setNote("⚠️ 转换失败：" + (d.error || "未知错误"));
-          } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
-        } else {
-          setNote("⚠️ 引用计数 " + refs + "，需先解除其余引用（在目标详情可解除）");
-        }
+            ] : []),
+            installing
+              ? h("span", { style: { ...S.meta, fontSize: 11 } }, "🔒 收集中，仅解除引用/不可删除")
+              : null));
       };
 
       return h("div", { style: S.overlay, ...backdropGuard },

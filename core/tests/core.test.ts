@@ -281,7 +281,7 @@ test("move-goal：backlog↔standalone↔version，带附件拒绝回 backlog", 
   assert.equal(doc.meta.version, "v-x");
   assert.deepEqual(validate(root), []);
   // 带上 cards 附件后拒绝回 backlog
-  addCard(root, id, { title: "c", kind: "text", actor: "test" });
+  addCard(root, id, { title: "c", kind: "text", actor: "test", scope: "goal" });
   assert.throws(() => moveGoal(root, id, { to: "backlog", actor: "test" }), /附件/);
   const events = readEvents(root).filter((e) => e.event === "goal.moved");
   assert.equal(events.length, 2);
@@ -387,7 +387,7 @@ test("move-goal：backlog → version 仍变为 planning", () => {
 test("bindCardChild 写 card.collecting 事件并绑定 child_id/status", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  const card = addCard(root, id, { title: "c", kind: "text", actor: "test" });
+  const card = addCard(root, id, { title: "c", kind: "text", actor: "test", scope: "goal" });
   bindCardChild(root, id, card, { childId: "child-abc", parentSessionId: "session-x", actor: "human:gui" });
   // 事件先行：card.collecting 已记
   const ev = readEvents(root).filter((e) => e.event === "card.collecting");

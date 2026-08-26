@@ -258,24 +258,24 @@
                       }, "取消"))
                   )
                 : h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                    // g-183：共享/自有转换入口（核心层守卫引用计数与归属）
+                    // g-183：共享/自有转换 + 解除引用（goal 详情方向独立；核心层守卫引用计数与归属）
                     card.scope === "shared"
                       ? h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
-                          title: "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡",
+                          title: "移除当前 goal 对这张共享卡的引用（保留共享卡与其他引用；零引用仅可在共享面板显式删除）",
                           onClick: async () => {
                             try {
-                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
+                              const r = await fetch(graphUrl("/api/dsh-graph/unreference-shared-card"), {
                                 method: "POST", headers: { "content-type": "application/json" },
                                 body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
                               });
                               const data = await r.json();
-                              if (data.ok) { showToast("✅ 已转回本 goal 自有卡"); props.onDeleted?.(); }
-                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                              if (data.ok) { showToast("✅ 已解除本 goal 引用"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 解除失败：" + (data.error || "未知错误"));
                             } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
                           },
-                        }, "📁 转回自有卡")
+                        }, "➖ 解除引用")
                       : h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
@@ -292,12 +292,33 @@
                             } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
                           },
                         }, "🔗 转为共享卡"),
-                    h("button", {
-                      style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
-                      className: "dg-btn-danger",
-                      title: "删除此卡片（需输入卡片 id 确认）",
-                      onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
-                    }, "🗑 删除卡片")),
+                    card.scope === "shared"
+                      ? h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          title: "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡（其余引用请先在共享面板解除）",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("✅ 已转回本 goal 自有卡"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "📁 转回自有卡")
+                      : null,
+                    // 仅 goal 自有卡可删除（共享卡走解除引用/共享面板显式删除，避免必然报错）
+                    card.scope !== "shared"
+                      ? h("button", {
+                          style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn-danger",
+                          title: "删除此卡片（需输入卡片 id 确认）",
+                          onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
+                        }, "🗑 删除卡片")
+                      : null),
               deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } }, deleteNote) : null),
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集

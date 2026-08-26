@@ -29,7 +29,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 28); // g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help + g-141 graph_rename_goal + g-110 archive/unarchive + g-140 delete + g-150 graph_record_attempt_handoff + g-150 范围扩展 graph_set_directive / graph_add_comment + g-128 graph_delete_card + g-158 graph_set_goal_type + g-138 graph_postpone_goal
+  assert.equal(registered.length, 30); // g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help + g-141 graph_rename_goal + g-110 archive/unarchive + g-140 delete + g-150 graph_record_attempt_handoff + g-150 范围扩展 graph_set_directive / graph_add_comment + g-128 graph_delete_card + g-158 graph_set_goal_type + g-138 graph_postpone_goal + g-183 graph_store_attachment / graph_delete_attachment
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
@@ -42,7 +42,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
   const { goal } = await call("graph_create_goal", { title: "t", version: "v-t" });
   await call("graph_set_criteria", { goal, criteria: ["通过"] });
   // g-137：带 version 的目标初始状态已是 planning，无需再迁移
-  const { card } = await call("graph_add_card", { goal, title: "c", kind: "text" });
+  const { card } = await call("graph_add_card", { goal, title: "c", kind: "text", scope: "goal" });
   // g-119：graph_bind_collect_card 绑定收集子代理（无会话上下文 → parent_session_id 缺省 null）
   await call("graph_bind_collect_card", { goal, card, child_id: "child-t" });
   await call("graph_fill_card", { goal, card, text: "内容" });

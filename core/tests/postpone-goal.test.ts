@@ -66,7 +66,7 @@ test("postponeGoal：独立目标迁回 backlog 目录形态", () => {
 test("postponeGoal：带卡片/attempt 的目标整体迁移到 backlog 目录", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "带附件暂缓", version: "v-t", actor: "test" });
-  const card = addCard(root, id, { title: "卡片", kind: "text", actor: "test" });
+  const card = addCard(root, id, { title: "卡片", kind: "text", actor: "test", scope: "goal" });
   const att = startAttempt(root, id, { executor: "test", actor: "test" });
 
   // attempt 状态置为结束，避免被活跃检测拦截

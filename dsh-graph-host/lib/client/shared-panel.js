@@ -72,14 +72,27 @@
 
       const backdropGuard = useBackdropClose(onClose);
       const cardRow = (c) => {
-        const refStr = `${c.refCount} 个 goal 引用`;
+        const refs = Array.isArray(c.referencingGoals) ? c.referencingGoals : [];
+        const installing = c.status === "collecting";
         return h("div", { key: c.id, style: { ...S.subCard, marginBottom: 6 } },
           h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
             h("span", { style: { flex: 1 } }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
-            h("span", { style: { ...S.meta, fontSize: 11 } }, refStr)),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} 个 goal 引用`)),
           h("div", { style: { ...S.meta, fontSize: 11 } },
             `id=${c.id} ｜ kind=${c.kind}${c.summary ? " ｜ " + c.summary : ""}`),
-          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 } },
+          // 引用它的 goal 清单：每项一个真实解除引用（只移除该 goal 引用，保留共享卡与其他引用；零引用仅显式删除）
+          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", marginTop: 4 } },
+            h("span", { style: { ...S.meta, fontSize: 11 } }, "🔎 引用 goal："),
+            refs.length === 0
+              ? h("span", { style: { ...S.meta, fontSize: 11 } }, "（无引用 goal）")
+              : refs.map((gid) => h("button", {
+                  key: gid,
+                  style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                  className: "dg-btn",
+                  title: `移除 ${gid} 对这张共享卡的引用（保留共享卡本身）`,
+                  onClick: () => unreference(c.id, gid),
+                }, "➖ " + gid))),
+          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4, alignItems: "center" } },
             h("select", {
               value: attachGoalId,
               onChange: (e) => setAttachGoalId(e.target.value),
@@ -88,34 +101,12 @@
               h("option", { value: "" }, "┅ 挂到目标…"),
               ...(goals ?? []).map((g) => h("option", { key: g.id, value: g.id }, `${g.id} ${g.title}`))),
             h("button", { style: S.btn, className: "dg-btn", onClick: () => attachToGoal(c.id) }, "⇄ 挂到 goal"),
-            ...(c.refCount > 0 ? [] : [
+            ...(c.refCount === 0 && !installing ? [
               h("button", { style: S.btn, className: "dg-btn", onClick: () => removeCard(c.id) }, "🗑 显式删除"),
-            ]),
-            h("button", {
-              style: S.btn, className: "dg-btn",
-              title: c.refCount === 1 ? "转为 goal 自有卡（引用计数为 1）" : "引用计数>1 无法转自有",
-              onClick: () => unreferenceRef(c.id),
-            }, "↘ 解除引用")));
-      };
-
-      // 引用计数为 1 时一键解除全部引用并转自有（走核心层守卫）
-      const unreferenceRef = async (cardId) => {
-        const refs = (cards.find((c) => c.id === cardId)?.refCount ?? 0);
-        if (refs === 1) {
-          const gid = attachGoalId || (goals && goals[0] && goals[0].id);
-          if (!gid) { setNote("⚠️ 请选择目标以执行转自有"); return; }
-          try {
-            const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
-              method: "POST", headers: { "content-type": "application/json" },
-              body: JSON.stringify({ goal: gid, card: cardId }),
-            });
-            const d = await r.json();
-            if (d.ok) { setNote("✅ 已转为 " + gid + " 自有卡"); refresh(); onRefresh?.(); }
-            else setNote("⚠️ 转换失败：" + (d.error || "未知错误"));
-          } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
-        } else {
-          setNote("⚠️ 引用计数 " + refs + "，需先解除其余引用（在目标详情可解除）");
-        }
+            ] : []),
+            installing
+              ? h("span", { style: { ...S.meta, fontSize: 11 } }, "🔒 收集中，仅解除引用/不可删除")
+              : null));
       };
 
       return h("div", { style: S.overlay, ...backdropGuard },

@@ -445,7 +445,7 @@ test("add-card：建卡 + card.created 事件（事件先行）", async () => {
   const { root, routes, goalId } = setup();
   const goalFile = findGoalFile(root, goalId);
   const { code, body } = await post(routes, "/api/dsh-graph/add-card",
-    { goal: goalId, title: "调研 A", kind: "text" });
+    { goal: goalId, title: "调研 A", kind: "text", scope: "goal" });
   assert.equal(code, 200);
   assert.equal(body.ok, true);
   assert.ok(typeof body.card === "string");
@@ -461,7 +461,7 @@ test("start-collection 无 subagents：attempt 本地创建、child_error 上报
   const { root, routes, goalId } = setup();
   const goalFile = findGoalFile(root, goalId);
   const { body } = await post(routes, "/api/dsh-graph/add-card",
-    { goal: goalId, title: "c", kind: "text" });
+    { goal: goalId, title: "c", kind: "text", scope: "goal" });
   const card = body.card;
   const r = await post(routes, "/api/dsh-graph/start-collection", { goal: goalId, card });
   assert.equal(r.code, 200);
@@ -511,7 +511,7 @@ test("start-collection 有 subagents：验证使用 formatCollectPrompt 生成�
 
   // add-card 必须带 workspace，否则卡片建到 process.cwd()
   const addRes = await post(routes, "/api/dsh-graph/add-card",
-    { goal: goalId, title: "测试卡片", kind: "text", workspace: ws });
+    { goal: goalId, title: "测试卡片", kind: "text", workspace: ws, scope: "goal" });
   assert.equal(addRes.code, 200);
   const card = addRes.body.card;
 
@@ -569,7 +569,7 @@ test("start-collection 用户 prompt 作为附加要求追加，不可替代强�
   apply(ctx, {});
 
   const addRes = await post(routes, "/api/dsh-graph/add-card",
-    { goal: goalId, title: "用户提示卡", kind: "text", workspace: ws });
+    { goal: goalId, title: "用户提示卡", kind: "text", workspace: ws, scope: "goal" });
   assert.equal(addRes.code, 200);
   const card = addRes.body.card;
 
@@ -909,7 +909,7 @@ test("g-113 写端点跟随 body.workspace：add-card 写到该项目 .dsh-graph
   const req = fakeRequest("POST", { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws });
   const res = fakeResponse();
   const p = handler(req, res);
-  emitBody(req, { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws });
+  emitBody(req, { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws, scope: "goal" });
   await p;
   assert.equal(res._code, 200);
   assert.equal(res._body.ok, true);
@@ -1577,13 +1577,63 @@ test("g-183 shared-card REST：被引用删除被拒；转换端点 200", async 
   // 转换后该卡已非共享卡
   const list = await get(routes, "/api/dsh-graph/shared-cards");
   assert.equal(list.body.cards.length, 0);
-  // 自有→共享转换：goal 自有卡转换为共享
-  const addOwned = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "自有转共享", kind: "text" });
+  // 自有→共享转换：goal 自有卡转换为共享（默认 add-card 为 shared；此处显式建自有卡）
+  const addOwned = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "自有转共享", kind: "text", scope: "goal" });
   assert.equal(addOwned.code, 200);
   const ocId = addOwned.body.card;
-  assert.ok(ocId.startsWith("card-"), "默认 add-card 应为 goal 自有");
+  assert.ok(ocId.startsWith("card-"), "显式 scope=goal 的 add-card 应为 goal 自有");
   const toShared = await post(routes, "/api/dsh-graph/convert-card-to-shared", { goal: goalId, card: ocId });
   assert.equal(toShared.code, 200);
+  const oldOwnedFile = join(dirname(findGoalFile(root, goalId)), "cards", `${ocId}.md`);
+  assert.ok(!existsSync(oldOwnedFile), "转换后旧自有副本应删除（不留双副本）");
   const list2 = await get(routes, "/api/dsh-graph/shared-cards");
-  assert.ok(list2.body.cards.some((c: any) => c.id === ocId), "转换后应出现在共享池");
+  assert.equal(list2.body.cards.length, 1, "转换后共享池恰 1 张");
+  assert.ok(list2.body.cards[0].id.startsWith("shared-"), "转换后应以 shared-* 新 id 落入共享池");
+});
+
+test("g-183 attachment REST：存储/路径安全/删除引用守卫", async () => {
+  const { root, routes, goalId } = setup();
+  // 正常存储
+  const store = await post(routes, "/api/dsh-graph/store-attachment", { name: "note.md", content: "正文\n引用 @att/note.md" });
+  assert.equal(store.code, 200);
+  assert.equal(store.body.name, "note.md");
+  assert.equal(store.body.ref, "@att/note.md");
+  assert.ok(existsSync(join(root, "attachments", "note.md")));
+  const list = await get(routes, "/api/dsh-graph/attachments");
+  assert.ok(list.body.attachments.includes("note.md"));
+  // 路径安全：穿越/绝对路径/分隔符 → 400
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "../../etc/passwd", content: "x" })).code, 400);
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "/abs/x", content: "x" })).code, 400);
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "a/b", content: "x" })).code, 400);
+  // 引用守卫：把引用写进一个 goal 正文，再尝试删除被引用附件 → 400
+  const goalFile = findGoalFile(root, goalId);
+  const goalDoc = loadGoal(goalFile);
+  goalDoc.body += "\n附件见 @att/note.md\n";
+  saveGoal(goalFile, goalDoc);
+  const delRef = await post(routes, "/api/dsh-graph/delete-attachment", { name: "note.md" });
+  assert.equal(delRef.code, 400, "仍被引用的附件禁止删除");
+  // 移除引用后可删除
+  const doc2 = loadGoal(goalFile);
+  doc2.body = doc2.body.replace(/附件见 @att\/note\.md/, "");
+  saveGoal(goalFile, doc2);
+  const delOk = await post(routes, "/api/dsh-graph/delete-attachment", { name: "note.md" });
+  assert.equal(delOk.code, 200);
+  assert.ok(!existsSync(join(root, "attachments", "note.md")));
+});
+
+test("g-183 membership REST：未引用共享卡的 goal 无法 start-collection（400）", async () => {
+  const { root, routes, goalId } = setup();
+  const sid = (await post(routes, "/api/dsh-graph/create-shared-card", { title: "守卫 REST", kind: "text" })).body.card;
+  // 挂到一个 goal（setup 的 goalId）
+  await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  // 建第二个 goal，未引用该共享卡
+  const other = createGoal(root, { title: "其他", version: "v-t", actor: "test" });
+  // 未引用 goal 对共享卡 start-collection → 400（resolveCard 成员校验拒绝）
+  const r = await post(routes, "/api/dsh-graph/start-collection", { goal: other, card: sid });
+  assert.equal(r.code, 400);
+  assert.ok(String(r.body.error).includes("未被目标"), "未引用 goal 应被拒绝: " + r.body.error);
+  // 已引用 goal 正常（无 subagents → child_error 字符串）
+  const ok = await post(routes, "/api/dsh-graph/start-collection", { goal: goalId, card: sid });
+  assert.equal(ok.code, 200);
+  assert.ok(typeof ok.body.child_error === "string");
 });
