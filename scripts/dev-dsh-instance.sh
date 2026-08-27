@@ -16,10 +16,10 @@
 #      绑定到本地 dsh-graph-host（link:），其余 bundle 复用 web 壳的最小集
 #      （@deepseek-ai/dsh-base + @deepseek-ai/dsh-web-app + dsh-graph）。
 #   2. 在 <PORT>（默认 3082，避开已被占用的 3081）上拉起 `dsh --profile <PROFILE> --port <PORT>`。
-#      测试实例跑在**独立 DSH_HOME**（默认 /tmp/dsh-graph-test-home）下，与主
+#      测试实例跑在**独立 DSH_HOME**（默认 $REPO_ROOT/tmp/test-review）下，与主
 #      ~/.dsh 的 sessions/storages 完全隔离 —— 两个 web 实例同时启动不再抢写同一份
 #      session log（此前用 ~/.dsh 做测试 home 会写坏 session log，根因已修复）。
-#   3. 可选：把主 web profile 的 dsh-graph 从本地 link 切回已发布的 `^0.7.1`。
+#   3. 可选：把主 web profile 的 dsh-graph 从本地 link 切回已发布的 `^0.7.2`。
 #
 # 用法
 # ----
@@ -39,7 +39,7 @@
 #   HOST_DIR=…$REPO/dsh-graph-host  本地 host 插件目录
 #   pnpm_config_store_dir=…      pnpm store（优先级高于 PNPM_STORE_DIR）
 #   PNPM_STORE_DIR=…             pnpm store（未设置时使用仓库 tmp/test-review/.pnpm-store）
-#   PUBLISHED_VER=^0.7.1         已发布版本 spec
+#   PUBLISHED_VER=^0.7.2         已发布版本 spec
 #   MAIN_PROFILE=web             主 profile 名
 #
 # pnpm store 会在安装前创建并以 pnpm_config_store_dir 导出，确保 pnpm install
@@ -60,10 +60,10 @@ TEST_HOME="${TEST_HOME:-$REPO_ROOT/tmp/test-review}"
 PROFILE="${PROFILE:-dsh-graph-test}"
 PORT="${PORT:-3082}"
 HOST_DIR="${HOST_DIR:-$REPO_ROOT/dsh-graph-host}"
-PUBLISHED_VER="${PUBLISHED_VER:-^0.7.1}"
+PUBLISHED_VER="${PUBLISHED_VER:-^0.7.2}"
 MAIN_PROFILE="${MAIN_PROFILE:-web}"
-# 测试实例的工作目录：决定 .dsh-graph 数据落点。默认放在测试 home 下、非 git 仓库，
-# 确保数据完全独立，不会和主 GUI/代码仓库的那份发生 g-149 canonicalize 合并。
+# 测试实例的工作目录决定 .dsh-graph 数据落点；setup 会写入绝对
+# .dsh-graph config.root，避免 linked worktree 的 g-149 canonicalization 合并。
 CWD="${CWD:-$TEST_HOME/workspace/$PROFILE}"
 # pnpm 的 store 必须位于确定可创建、可写的位置；显式覆盖优先。
 if [ -n "${pnpm_config_store_dir:-}" ]; then
@@ -210,7 +210,7 @@ run() {
 }
 
 # ---- 修改一个 profile 的 dsh-graph 依赖到给定 spec ----
-set_main_dep() { # $1 = spec（如 ^0.7.1 或 link:/…/dsh-graph-host）
+set_main_dep() { # $1 = spec（如 ^0.7.2 或 link:/…/dsh-graph-host）
   local spec="$1"
   [ -f "$MAIN_DIR/package.json" ] || die "主 profile 不存在：$MAIN_DIR"
   node -e '
