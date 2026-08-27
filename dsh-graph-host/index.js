@@ -579,7 +579,7 @@ export function apply(ctx, config) {
       def: {
         name: "graph_start_attempt",
         description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。默认强制注入独立 worktree 隔离提示；仅 supervisor 明确传 worktree=false 并说明理由时才关闭。attempt_brief 是主管为本次 attempt 提供的可审计 brief/directive（g-150），写入 attempt meta 与事件。",
-        parameters: params({ goal: str, executor: str, provider: str, model: str, worktree: { type: "boolean" }, attempt_brief: str }, ["goal"]),
+        parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, worktree: { type: "boolean" }, attempt_brief: str }, ["goal"]),
       },
       run: async (a, ex) => {
         // 校验 attempt_brief 类型（g-150 review 问题 4）
@@ -588,6 +588,54 @@ export function apply(ctx, config) {
         }
         const executor = a.executor ?? actorOf(ex);
         const r = rootFor(ex);
+        // g-202：传 card 时统一走上下文收集派发，不创建 Goal execution attempt。
+        // 先生成 prompt（同时校验 goal/card），再尝试启动；只有成功启动后才绑定卡片。
+        if (a.card !== undefined && a.card !== null) {
+          const fullPrompt = formatCollectPrompt(r, a.goal, a.card, a.attempt_brief);
+          const eff = resolveModelRoute(
+            { provider: a.provider, model: a.model },
+            readExecutorModel(r),
+            readGraphSettings(),
+          );
+          const effProvider = eff.provider;
+          const effModel = eff.model;
+          const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
+          const result = { card: a.card, child_id: null, child_error: null };
+          const subagents = ctx.get?.("subagents");
+          if (!subagents || !ex?.agent) {
+            result.child_error = "subagents 服务不可用或无调用 agent";
+            return result;
+          }
+          try {
+            const provider = (subagents.list?.() ?? []).find((n) => {
+              try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
+            });
+            if (!provider) throw new Error(`无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`);
+            const request = { parent: ex.agent, prompt: text(fullPrompt) };
+            const agentOptions = {};
+            if (effProvider) agentOptions.provider = effProvider;
+            if (effModel) agentOptions.model = effModel;
+            if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
+            const started = await subagents.startContinuable({
+              provider,
+              label: `graph:collect/${a.goal}/${a.card}`,
+              request,
+              signal: ex.signal,
+            });
+            bindCardChild(r, a.goal, a.card, {
+              childId: started.childId,
+              parentSessionId: started.parentSessionId ?? ex.agent?.session?.id ?? null,
+              actor: actorOf(ex),
+              provider: effProvider,
+              model: effModel,
+            });
+            result.child_id = started.childId;
+            if (effRoute) result.model_route = effRoute;
+          } catch (e) {
+            result.child_error = String(e?.message ?? e);
+          }
+          return result;
+        }
         // g-120：按 context_cards 顺序收集 filled/reviewed 卡片成果，注入清单记入 attempt.started 的
         // details.injected_cards（事件先行：必须在 startAttempt 之前算好，与 prompt 注入内容一致）
         const injectedCards = harvestedCards(r, a.goal).map((c) => c.id);
@@ -1188,14 +1236,8 @@ export function apply(ctx, config) {
           const effProvider = eff.provider;
           const effModel = eff.model;
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
-          const attempt = startAttempt(rRoot, goal, {
-            executor: "agent:collect",
-            actor: "human:gui",
-            provider: effProvider,
-            model: effModel,
-            modelRoute: effRoute,
-          });
-          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区
+          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区。
+          // 收集派发不是 Goal execution attempt，不创建 attempt 记录。
           const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt);
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
@@ -1207,11 +1249,10 @@ export function apply(ctx, config) {
           if (spawned.error) {
             console.error("[dsh-graph-host] start-collection 子代理启动失败:", spawned.error);
           } else {
-            // 事件先行：attempt.bound → card.collecting（bindCardChild 写 child_id/parent_session_id）
-            bindAttemptChild(rRoot, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId, effProvider, effModel, effRoute);
+            // 事件先行：card.collecting（bindCardChild 写 child_id/parent_session_id）。
             bindCardChild(rRoot, goal, card, { childId: spawned.childId, parentSessionId: spawned.parentSessionId, actor: "human:gui", provider: effProvider, model: effModel });
           }
-          json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
+          json(res, 200, { ok: true, card, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });

@@ -457,7 +457,7 @@ test("add-card：建卡 + card.created 事件（事件先行）", async () => {
   assert.ok((doc.meta.context_cards ?? []).includes(body.card));
 });
 
-test("start-collection 无 subagents：attempt 本地创建、child_error 上报、卡片不误翻 collecting", async () => {
+test("start-collection 无 subagents：child_error 上报、卡片不误翻 collecting且不创建 attempt", async () => {
   const { root, routes, goalId } = setup();
   const goalFile = findGoalFile(root, goalId);
   const { body } = await post(routes, "/api/dsh-graph/add-card",
@@ -466,12 +466,12 @@ test("start-collection 无 subagents：attempt 本地创建、child_error 上报
   const r = await post(routes, "/api/dsh-graph/start-collection", { goal: goalId, card });
   assert.equal(r.code, 200);
   assert.equal(r.body.ok, true);
-  assert.ok(r.body.attempt.startsWith("att-"));
+  assert.equal(r.body.card, card);
   assert.equal(r.body.child_id, null);
   assert.ok(typeof r.body.child_error === "string");
-  // attempt.started 已记（事件先行），卡片保持 empty（未派发成功不得翻 collecting）
+  // 收集失败不得创建 Goal execution attempt 或翻卡片 collecting。
   const events = readEvents(root);
-  assert.ok(events.some((e) => e.event === "attempt.started" && e.goal === goalId));
+  assert.ok(!events.some((e) => e.event === "attempt.started" && e.goal === goalId));
   assert.ok(!events.some((e) => e.event === "card.collecting"));
   const cardFile = join(dirname(goalFile), "cards", `${card}.md`);
   assert.equal(loadGoal(cardFile).meta.status, "empty");

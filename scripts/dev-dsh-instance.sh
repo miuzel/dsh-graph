@@ -32,13 +32,18 @@
 #
 # 环境变量（均可覆盖，脚本内已给合理默认值）
 #   DSH_HOME=$HOME/.dsh           主 dsh 的家（只用于切换主 profile，测试实例不碰它）
-#   TEST_HOME=/tmp/dsh-graph-test-home   测试实例的**独立** DSH_HOME（隔离 sessions/storages）
+#   TEST_HOME=$REPO_ROOT/tmp/test-review   测试实例的**独立** DSH_HOME（隔离 sessions/storages）
 #   PROFILE=dsh-graph-test       测试 profile 名
 #   PORT=3082                    测试实例端口（必须 ≠ 3080）
 #   CWD=…                        测试实例的工作目录（决定 .dsh-graph 数据落在哪）
 #   HOST_DIR=…$REPO/dsh-graph-host  本地 host 插件目录
+#   pnpm_config_store_dir=…      pnpm store（优先级高于 PNPM_STORE_DIR）
+#   PNPM_STORE_DIR=…             pnpm store（未设置时使用仓库 tmp/test-review/.pnpm-store）
 #   PUBLISHED_VER=^0.7.1         已发布版本 spec
 #   MAIN_PROFILE=web             主 profile 名
+#
+# pnpm store 会在安装前创建并以 pnpm_config_store_dir 导出，确保 pnpm install
+# 及随后启动的 dsh 进程使用同一个可写目录；store 不属于 git tracked 产物。
 #
 set -euo pipefail
 
@@ -50,8 +55,8 @@ REPO_ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 # 主 dsh 的家：只作「主 profile 切换」的参考 && 读取下，**绝不**用作测试实例的 DSH_HOME。
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 # 测试实例的独立 DSH_HOME：和主 ~/.dsh 分开，避免两个 web 实例同时启动时写坏同一份
-# sessions/（用户反馈的根因）。默认放 /tmp（可覆盖；profile 由 setup 幂等重建）。
-TEST_HOME="${TEST_HOME:-/tmp/dsh-graph-test-home}"
+# sessions/（用户反馈的根因）。默认放仓库 tmp/test-review（可覆盖；profile 由 setup 幂等重建）。
+TEST_HOME="${TEST_HOME:-$REPO_ROOT/tmp/test-review}"
 PROFILE="${PROFILE:-dsh-graph-test}"
 PORT="${PORT:-3082}"
 HOST_DIR="${HOST_DIR:-$REPO_ROOT/dsh-graph-host}"
@@ -60,6 +65,14 @@ MAIN_PROFILE="${MAIN_PROFILE:-web}"
 # 测试实例的工作目录：决定 .dsh-graph 数据落点。默认放在测试 home 下、非 git 仓库，
 # 确保数据完全独立，不会和主 GUI/代码仓库的那份发生 g-149 canonicalize 合并。
 CWD="${CWD:-$TEST_HOME/workspace/$PROFILE}"
+# pnpm 的 store 必须位于确定可创建、可写的位置；显式覆盖优先。
+if [ -n "${pnpm_config_store_dir:-}" ]; then
+  PNPM_STORE_DIR="$pnpm_config_store_dir"
+elif [ -n "${PNPM_STORE_DIR:-}" ]; then
+  PNPM_STORE_DIR="$PNPM_STORE_DIR"
+else
+  PNPM_STORE_DIR="$REPO_ROOT/tmp/test-review/.pnpm-store"
+fi
 
 # 测试 profile 目录：位于**独立**的测试 home 下；主 profile 目录仍指向主 ~/.dsh。
 PROFILE_DIR="$TEST_HOME/profiles/$PROFILE"
@@ -72,6 +85,12 @@ need pnpm
 need node
 
 die() { echo "错误：$*" >&2; exit 1; }
+
+# mkdir 也验证父目录权限；导出同时兼容 pnpm 配置名和显式大写覆盖。
+mkdir -p "$PNPM_STORE_DIR" || die "无法创建 pnpm store：$PNPM_STORE_DIR"
+[ -d "$PNPM_STORE_DIR" ] && [ -w "$PNPM_STORE_DIR" ] || die "pnpm store 不可写：$PNPM_STORE_DIR"
+export PNPM_STORE_DIR
+export pnpm_config_store_dir="$PNPM_STORE_DIR"
 
 [ -f "$HOST_DIR/package.json" ] || die "本地 host 插件目录不存在：$HOST_DIR"
 HOST_NAME="$(node -e 'console.log(require(process.argv[1]).name)' "$HOST_DIR/package.json")"
@@ -95,6 +114,7 @@ show_dep() { # $1 = profile dir
 
 # ---- setup：写入测试 profile 的全部文件并安装/对账（都在独立 TEST_HOME 下） ----
 setup() {
+  echo "==> 使用 pnpm store：$PNPM_STORE_DIR"
   echo "==> 准备测试 profile：$PROFILE_DIR"
   mkdir -p "$PROFILE_DIR" "$CWD"
 
@@ -125,13 +145,14 @@ MANIFEST
 # --patch overlays. Edit cordis.patch.yml, not this file.
 []
 ROOT
-  cat > "$PROFILE_DIR/cordis.patch.yml" <<'PATCH'
-# 测试 profile 用户 patch 层：默认无覆盖。如需覆盖 dsh-graph-host 的 config（如把
-# root 指到绝对路径以强制隔离数据目录），在此用 id 覆盖：
-# - id: dsh-graph-host
-#   config:
-#     root: /abs/path/to/.dsh-graph
-[]
+  # 测试 profile 使用绝对 root，绕过 worktree canonicalization，确保即使默认
+  # CWD 位于仓库 tmp/ 下也不会把数据误判到主仓库的 .dsh-graph。
+  graph_root="$(cd "$CWD" && pwd -P)/.dsh-graph"
+  graph_root_yaml="${graph_root//\'/\'\'}"
+  cat > "$PROFILE_DIR/cordis.patch.yml" <<PATCH
+- id: dsh-graph-host
+  config:
+    root: '$graph_root_yaml'
 PATCH
 
   # pnpm / npm 相关配置，与主 web profile 保持一致。
@@ -173,6 +194,7 @@ run() {
     die "--port 不能是 3080（那是主 dsh）。请另选，例如 --port 3082"
   fi
   echo "==> 启动测试 dsh：DSH_HOME=$TEST_HOME dsh --profile $PROFILE --port $PORT"
+  echo "    pnpm store=$PNPM_STORE_DIR"
   echo "    cwd=$CWD（.dsh-graph 数据落在 $CWD/.dsh-graph）"
   echo "    浏览器地址：http://127.0.0.1:$PORT"
   echo "    （默认 --no-open；需要自动开浏览器请追加 --open）"

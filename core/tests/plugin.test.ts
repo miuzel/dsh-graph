@@ -4,9 +4,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
-import { init, findGoalFile, loadGoal, createGoal, readSupervisorSession } from "../ops.ts";
+import { join, relative, dirname } from "node:path";
+import { init, findGoalFile, loadGoal, createGoal, setCriteria, transition, readSupervisorSession } from "../ops.ts";
 import { resolveRoot } from "../root.ts";
+import { readEvents } from "../events.ts";
 import { apply } from "../../dsh-graph-host/index.js";
 
 function assertLossless(v: unknown): void {
@@ -102,8 +103,10 @@ test("g-113 host 工具按 session.header.cwd 建目标（不用服务进程 cwd
   assert.ok(goalFile.startsWith(join(ws, ".dsh-graph")), "目标落在会话 workspace 的 .dsh-graph");
   // 进程 cwd（服务进程沙箱根）下即使有同名 id（per-root 顺序 g-001 会撞仓库自身目标），
   // 内容也绝不是本次创建的——标题不同即证明数据没落到服务进程 cwd
-  const cwdFile = findGoalFile(resolveRoot({}, process.cwd()), out.goal);
-  assert.notEqual(loadGoal(cwdFile).meta.title, "ws 目标", "数据未落到服务进程 cwd 的项目");
+  const cwdRoot = resolveRoot({}, process.cwd());
+  let cwdTitle: string | null = null;
+  try { cwdTitle = loadGoal(findGoalFile(cwdRoot, out.goal)).meta.title; } catch { /* 进程 cwd 项目没有同名目标 */ }
+  assert.notEqual(cwdTitle, "ws 目标", "数据未落到服务进程 cwd 的项目");
 });
 
 test("g-113 host 工具兜底 sandboxPolicy.workspaceRoot（无 session header 时）", async () => {
@@ -149,6 +152,83 @@ test("g-113 graph_start_attempt 注入目标相对路径以 workspace 根为基�
   const expected = relative(ws, findGoalFile(join(ws, ".dsh-graph"), goalId));
   assert.ok(capturedPrompt.includes(expected), `prompt 含 workspace 根基准相对路径：${expected}`);
   assert.ok(capturedPrompt.includes(".dsh-graph/versions/v-t/goals/"), "路径带 .dsh-graph 前缀（不是 versions/... 裸相对）");
+});
+
+// ===== g-202：graph_start_attempt 统一覆盖 Goal execution 与 card collection =====
+
+test("g-202 graph_start_attempt：无 card 创建并绑定 Goal attempt、ready→in_progress", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-g202-exec-"));
+  init(root);
+  const goal = createGoal(root, { title: "执行目标", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["通过"], "test");
+  transition(root, goal, "ready", { actor: "test" });
+  const registered: any[] = [];
+  const ctx = {
+    get: (name: string) => name === "subagents" ? {
+      list: () => ["spawn"], getProvider: () => ({ prepareContinuable: () => {} }),
+      startContinuable: async () => ({ childId: "exec-child", parentSessionId: "parent" }),
+    } : undefined,
+    effect: (fn: () => unknown) => fn(),
+    tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) },
+  };
+  apply(ctx as any, { root });
+  const exec = { agent: { session: { id: "super" } }, signal: new AbortController().signal };
+  const out = await new Map(registered.map((d) => [d.name, d])).get("graph_start_attempt")!.execute({ goal }, exec);
+  assert.match(out.attempt, /^att-/);
+  assert.equal(out.child_id, "exec-child");
+  assert.equal(loadGoal(findGoalFile(root, goal)).meta.status, "in_progress");
+  assert.ok(readEvents(root).some((e) => e.event === "attempt.bound" && e.details.child_id === "exec-child"));
+});
+
+test("g-202 graph_start_attempt：合法 card 用标准 prompt 派发并绑定，不创建 Goal attempt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-g202-card-"));
+  init(root);
+  const goal = createGoal(root, { title: "收集目标", version: "v-t", actor: "test" });
+  const registered: any[] = [];
+  let request: any;
+  const ctx = {
+    get: (name: string) => name === "subagents" ? {
+      list: () => ["spawn"], getProvider: () => ({ prepareContinuable: () => {} }),
+      startContinuable: async (opts: any) => { request = opts; return { childId: "collect-child", parentSessionId: "parent" }; },
+    } : undefined,
+    effect: (fn: () => unknown) => fn(),
+    tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) },
+  };
+  apply(ctx as any, { root });
+  const byName = new Map(registered.map((d) => [d.name, d]));
+  const card = (await byName.get("graph_add_card")!.execute({ goal, title: "资料", kind: "text" }, { agent: undefined })).card;
+  const exec = { agent: { session: { id: "super" } }, signal: new AbortController().signal };
+  const brief = "CARD_BRIEF_SENTINEL";
+  const out = await byName.get("graph_start_attempt")!.execute({ goal, card, provider: "p", model: "m", attempt_brief: brief }, exec);
+  assert.deepEqual(Object.keys(out).sort(), ["card", "child_id", "child_error", "model_route"].sort());
+  assert.equal(out.child_id, "collect-child");
+  assert.match(request.request.prompt[0].text, new RegExp(`graph_fill_card\\(goal=\\"${goal}\\", card=\\"${card}`));
+  assert.ok(request.request.prompt[0].text.includes(brief), "card 收集 prompt 应保留 attempt_brief");
+  assert.equal(loadGoal(findGoalFile(root, goal)).meta.status, "planning");
+  const cardFile = join(dirname(findGoalFile(root, goal)), "cards", `${card}.md`);
+  assert.equal(loadGoal(cardFile).meta.status, "collecting");
+  const events = readEvents(root);
+  assert.ok(events.some((e) => e.event === "card.collecting"));
+  assert.ok(!events.some((e) => e.event === "attempt.started"));
+  assert.equal(loadGoal(cardFile).meta.provider, "p");
+  assert.equal(loadGoal(cardFile).meta.model, "m");
+});
+
+test("g-202 graph_start_attempt：无 subagents/非法 goal-card 返回明确错误且不污染状态", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-g202-errors-"));
+  init(root);
+  const goal = createGoal(root, { title: "错误目标", version: "v-t", actor: "test" });
+  const registered: any[] = [];
+  const ctx = { get: () => undefined, effect: (fn: () => unknown) => fn(), tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) } };
+  apply(ctx as any, { root });
+  const byName = new Map(registered.map((d) => [d.name, d]));
+  const card = (await byName.get("graph_add_card")!.execute({ goal, title: "资料", kind: "text" }, { agent: undefined })).card;
+  const exec = { agent: { session: { id: "super" } }, signal: new AbortController().signal };
+  const out = await byName.get("graph_start_attempt")!.execute({ goal, card }, exec);
+  assert.equal(out.card, card); assert.equal(out.child_id, null); assert.match(out.child_error, /subagents/);
+  assert.equal(loadGoal(join(dirname(findGoalFile(root, goal)), "cards", `${card}.md`)).meta.status, "empty");
+  await assert.rejects(() => byName.get("graph_start_attempt")!.execute({ goal: "g-999", card }, exec), /目标不存在/);
+  await assert.rejects(() => byName.get("graph_start_attempt")!.execute({ goal, card: "card-nope" }, exec), /卡片不存在/);
 });
 
 // ===== g-117：graph_handoff / graph_claim_supervisor（换会话交接工具） =====
