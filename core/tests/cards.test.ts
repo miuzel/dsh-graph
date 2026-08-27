@@ -295,7 +295,24 @@ test("g-154：goalCards 也暴露 cardFile 字段", () => {
   assert.ok(cards[0].cardFile.endsWith(`${c1}.md`));
 });
 
-// ---- g-171：updated_at（goal.md mtime）投影 ----
+test("g-200：boardProjection 仅将执行子代理 attempt 投影为 attempt_child_id，排除 agent:collect 收集子代理", async () => {
+  const { boardProjection, startAttempt, bindAttemptChild } = await import("../ops.ts");
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "收集目标", version: "v-t", actor: "test" });
+  // 1. 只有 agent:collect 收集 attempt 绑定 child 时，Goal 本身的 attempt_child_id 应为 null
+  const attCollect = startAttempt(root, id, { executor: "agent:collect", actor: "test" });
+  bindAttemptChild(root, id, attCollect, "child-collect-123", "test");
+  const b1 = boardProjection(root);
+  const goal1 = b1.versions[0].goals.find((g) => g.id === id);
+  assert.equal(goal1?.attempt_child_id, null, "收集 attempt 不应写入 goal 自身的 attempt_child_id");
+
+  // 2. 一旦有普通执行 attempt 绑定 child，Goal 的 attempt_child_id 正常投影该执行子代理
+  const attExec = startAttempt(root, id, { executor: "agent:executor", actor: "test" });
+  bindAttemptChild(root, id, attExec, "child-exec-456", "test");
+  const b2 = boardProjection(root);
+  const goal2 = b2.versions[0].goals.find((g) => g.id === id);
+  assert.equal(goal2?.attempt_child_id, "child-exec-456", "执行 attempt 正常投影为 goal 自身的 attempt_child_id");
+});
 
 test("boardProjection：版本/独立/backlog 均下发 updated_at（goal.md mtimeMs，不泄露路径）", async () => {
   const { boardProjection } = await import("../ops.ts");

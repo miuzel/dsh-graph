@@ -269,6 +269,7 @@
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集
             card.child_id
               ? h(SessionPanel, { key: "live", parentId: card.parent_session_id, childId: card.child_id, collapsible: true,
+                                  provider: card.provider, model: card.model,
                                   goalId: props.goalId, relaunchKind: "collect",
                                   relaunchCardId: props.cardId, relaunchPrompt: promptText || autoPrompt,
                                   relaunchRoute, onRelaunched: setRelaunchRoute })

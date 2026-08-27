@@ -16,6 +16,8 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 - 读 `project.yaml` 的 `supervisor.session`，或看 `graph_help` 的接管指引；
 - 若**未配置 / 未指向本会话**：运行 `graph_claim_supervisor()` 由本会话接管
   （更新 `supervisor.session`、记 `supervisor.claimed` 事件、返回 HANDOFF 全文）；
+- **查阅长期记忆索引**：初始化/接管时，**务必先阅读 `.dsh-graph/memory/long-term/INDEX.md`**，
+  掌握既有架构模式、历史教训与避坑规范；
 - **防争抢**：若 `supervisor.session` 已指向其他会话且负责人没要求你接管，则
   **不要 claim**——保持普通会话身份，等负责人明确指示。
 
@@ -153,7 +155,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   等人工输入的空窗期也要报「正在等 X」，让负责人知道你没卡死；
 - **每轮收尾更新为完成态**：结束工作前最后一步把 status 更新为「空闲待命 / 本轮完成 /
   等待输入」等完成态——看板如实反映空闲/完成状态；
-- `graph_start_attempt` 派发执行；**status_line 由执行子代理自己更新**
+- `graph_start_attempt` 派发执行；传入可选 `card` 参数时统一派发卡片收集（自动生成完整收集提示词并绑定卡片）；**status_line 由执行/收集子代理自己更新**
   （`graph_report_status`），**supervisor 绝不替子代理汇报**——卡片上那句话是子代理的
   自述，代劳即伪造进展。要求子代理**及时**更新：每做一个动作就写一句，**简短
   （一句人话，尽量 20 字内）**，不攒到结束、不写长篇；
@@ -178,14 +180,9 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   - 必须引用的文件给**工作目录相对精确路径**（含 versions/vX.Y/goals/ 前缀），禁止
     「自己去找到 goal.md」式指令；
   - 冻结脚本路径、验收命令逐条写全；
-- **worktree 隔离**：并发/复杂的执行任务，子代理先 `git worktree add` 独立工作树
-  （与 main 隔离）再改代码，review 交付阶段由 supervisor 复核通过后合并回 main——
-  避免并发子代理互相踩提交、半成品直接落 main。**「直接 main」仅限真正的一两行、
-  唯一文件改动、且无其他目标并发改该文件；多目标并发改同一文件时必须 worktree**，
-  不得自认为改动简单就直改 main；
-  worktree 指令由执行派发默认注入 spawn 提示词，可显式关闭：`graph_start_attempt`
-  传 `worktree=false`、GUI 端点 `/api/dsh-graph/start-execution` 传 body
-  `worktree: false`；
+- **worktree 隔离（Supervisor 强制默认）**：除非 supervisor 在派发时明确写出 override，所有执行/收集/调研/实现子代理都必须先 `git worktree add` 独立工作树（与 main 隔离）再改代码；**子代理不得自行判断「简单」而绕过隔离，也不得直接修改 main**。supervisor 调用 `graph_start_attempt` 时必须显式传 `worktree=true`（并在 attempt brief 与提示词中写明专属 worktree 路径）；只有以下两类例外可直接 main：① supervisor 明确传 `worktree=false` 并在 brief 记录理由的真正一两行、唯一文件小修；② supervisor 自己进行文档/记忆等小修改。没有明确 override 一律视为必须隔离；
+  review 交付阶段由 supervisor 复核通过后合并到目标集成分支：当前版本合并 main，未来版本合并对应版本测试/集成分支（如 `v0.8-test`），不得把未来版本代码带入 main；避免并发子代理互相踩提交、半成品直接落目标分支；
+  worktree 指令由执行派发注入 spawn 提示词；GUI 端点仅在 supervisor 明确批准时才可传 body `worktree: false`；
   数据分工：代码改动在 worktree，看板数据 `.dsh-graph/` 仍在主工作树写（graph_*
   工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）；
 - **只在仓库根跑 graph_* 工具**：执行/调研子代理务必以**仓库根**为工作目录跑
@@ -200,6 +197,22 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 - **复核纪律（逐行对照，不信脚本 PASS）**：子代理声明「完成/修复」后，supervisor
   复核时**逐行读最终代码、逐条件分支验证声明的行为是否真实现**——脚本 PASS 是必要
   非充分。验证前 **sleep 2s 等文件写入稳定**，避免瞬时误报；
+- **并发 Worktree 实施与流水线复核机制**：
+  - **跨版本/并发特性物理隔离（支持前瞻规划）**：支持在新版本（如 v0.8）规划与并发派发特性；所有并发开发必须在专属 `.worktrees/g-xxx-att-xx` 分支中进行；验证通过后**不合并到 main**，而是**合并到对应版本集成分支（如 `v0.8-test`）**，确保 main 分支的稳定与发版不受未来版本影响，实现真正的全异步并行推进；
+  - **单目标完工即审**：当派发多个并行 worktree 任务时，某个独立任务一完工，supervisor **立即在该独立 worktree 中启动独立测试实例进行代码与实机复核**，无需阻塞等待所有任务全部完工；
+  - **并发回报暂存（避免遗忘）**：在复核某一个目标期间，若其他并发子代理发来完成汇报，supervisor 必须**先将回报信息记录/暂存到临时记忆文件（如 `.dsh-graph/memory/review-queue.md`）**；
+  - **完成取下一个**：当前目标复核完成并标记后，查阅暂存记忆文件按序取出下一个就绪目标继续独立验证，直至队列全部复核完毕；
+- **判据自验与勾选规范（区分人类操作与 Supervisor 自验）**：
+  - **禁止使用 `[x]` 前缀**：页面 Checklist（复选框/进度条）是基于本地 localStorage 供**人类负责人（Human Reviewer）**在 Web UI 上交互打勾与最终把关的；若 Supervisor 在判据前写 `[x]` 会与人类勾选混淆。
+  - **统一使用 `✅已验` 尾缀**：Supervisor / Review 子代理在完成实机、代码审查与自动化验证后，若判据已严格达标，使用 `graph_set_criteria` 在**每条通过判据文本的末尾追加 `✅已验`**，并在目标评论区追加详尽的测试核验记录与证据；未通过或未测试的项保持原文本不变。
+- **复核反馈必须可执行（跨模型对齐）**：发现问题时，不能只报「这里有 bug/请修复」。
+  每条 blocker/major/minor 都必须同时写清：①**证据**（精确文件/行、触发条件、实际与
+  预期行为，必要时给最小复现）；②**原理/不变量简介**（系统要保护什么、为什么当前
+  分支违反它，以及影响范围）；③**预期修复方式建议**（建议改动的边界/数据流/事务步骤、
+  必须保留与禁止引入的行为）；④**验证方法**（应新增/运行的测试和命令）。用能让另一
+  个模型直接定位并动手的完整句子，明确哪些是必须修、哪些只是可选方案；不要只依赖
+  主管与 reviewer 之间的隐含上下文或缩写术语。反馈发给执行子代理时，优先按
+  「现象 → 原理 → 修复方向 → 验证」顺序，并在返工 prompt 中复述约束。
 - 验收脚本（判据中的 `[script]` 项）由规划方在 planning 时冻结，执行方不得修改；
   脚本报错优先怀疑实现与设计，不是脚本；
 - **发现排期/归属变化先查事件 actor**：发现目标被移动/改排期时，**先看该卡片
@@ -229,7 +242,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 `graph_set_criteria` 登记判据（自动快照规则版本）｜ `graph_transition` 状态迁移｜
 `graph_amend_goal` 修订记录｜ `graph_add_card / graph_fill_card / graph_review_card`
 信息收集卡｜ `graph_bind_collect_card` 收集子代理绑卡（parent_session_id 反查会话头）｜
-`graph_start_attempt` 派发执行（自动绑子代理）｜ `graph_report_status`
+`graph_start_attempt` 派发执行或收集（传 `card` 自动绑卡）｜ `graph_report_status`
 状态汇报｜ `graph_validate` 全量校验｜ `graph_rebuild` 事件流对账
 
 ## 换会话
@@ -243,7 +256,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 
 ## 沉淀
 
-- 目标交付时提炼长期记忆（成功图 / 失败模式 / 偏好），条目必须带来源目标引用；
+- **提炼长期记忆与更新索引**：目标交付时提炼长期记忆（成功图 / 失败模式 / 偏好），条目必须带来源目标引用；**新增/修改长期记忆文件时必须同步更新 `.dsh-graph/memory/long-term/INDEX.md` 索引表**；
 - 重复出现的任务模式，向负责人提议沉淀为 skill（前瞻式），或把成功的 first run
   固化为 skill（回溯式）。
 

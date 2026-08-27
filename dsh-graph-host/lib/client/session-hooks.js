@@ -74,6 +74,70 @@
       return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     }
 
+    // g-195: 子代理实时流式 peek 节流 hook（≤5fps / ≥200ms 刷新上限）
+    // 仅用于 peek 展示（LiveStrip / SessionPanel 折叠态等），普通高频推送合并到 trailing flush；
+    // 流结束/错误/运行态翻转等关键边界在下一合法时间槽完成最终呈现，不丢尾包，卸载时清理定时器。
+    function useThrottledLiveSession(session, intervalMs = 200) {
+      const [liveState, setLiveState] = React.useState(() => {
+        const snap = session ? session.getSnapshot() : null;
+        return {
+          snap,
+          line: snap && snap.chat ? lastStreamLine(snap.chat.legacy.partial) : null,
+          running: !!(snap && snap.running),
+        };
+      });
+
+      React.useEffect(() => {
+        if (!session) {
+          setLiveState({ snap: null, line: null, running: false });
+          return;
+        }
+
+        let timer = null;
+        let lastFlush = 0;
+        let unmounted = false;
+
+        const flush = () => {
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          lastFlush = Date.now();
+          if (unmounted) return;
+          const s = session.getSnapshot();
+          setLiveState({
+            snap: s,
+            line: s && s.chat ? lastStreamLine(s.chat.legacy.partial) : null,
+            running: !!(s && s.running),
+          });
+        };
+
+        const onUpdate = () => {
+          const now = Date.now();
+          const elapsed = now - lastFlush;
+          if (elapsed >= intervalMs) {
+            flush();
+          } else if (!timer) {
+            // Trailing edge: 在剩余时间槽排期执行 flush，保证 ≤5fps (≥200ms) 且不丢尾包
+            timer = setTimeout(flush, intervalMs - elapsed);
+          }
+        };
+
+        // 初始同步一次最新状态
+        flush();
+
+        const unsub = session.subscribe(onUpdate);
+
+        return () => {
+          unmounted = true;
+          if (timer) clearTimeout(timer);
+          if (typeof unsub === "function") unsub();
+        };
+      }, [session, intervalMs]);
+
+      return liveState;
+    }
+
     // 投影值（faceOf 返回 identity-stable 的 uSES face；投影推送不要求 open，看板常驻）
     function useProjectionValue(session, key) {
       const face = React.useMemo(

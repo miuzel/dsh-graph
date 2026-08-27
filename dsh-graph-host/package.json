@@ -43,7 +43,8 @@
     "@deepseek-ai/dsh-settings": "^0.1.0-rc.6"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "yaml": "^2.9.0"
   },
   "scripts": {
     "prepack": "bash ../scripts/sync-core.sh && node -e \"require('node:fs').existsSync('core/ops.js') || (console.error('core 未同步'), process.exit(1))\"",

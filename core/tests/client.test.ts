@@ -1526,3 +1526,332 @@ test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、15 个 guard
   const stopProp = bundle.match(/onClick: \(e\) => e\.stopPropagation\(\)/g) ?? [];
   assert.ok(stopProp.length >= G181_TOTAL, `生成 bundle: panel stopPropagation 保留（>= ${G181_TOTAL}，实际 ${stopProp.length}）`);
 });
+
+test("g-200 LiveStrip 隔离契约：Card 仅在 Goal 处于执行态或有活跃 execution attempt 时渲染 Goal LiveStrip，避免与 context card 重复", () => {
+  const cardSrc = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/card.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(cardSrc, /function hasActiveGoalExecutionAttempt\(attempts\)/, "card.js 包含活跃 execution attempt 判定");
+  assert.match(cardSrc, /g\.attempt_child_id && \(g\.status === "in_progress" \|\| hasActiveGoalExecutionAttempt\(g\.attempts\)\)/, "Goal 卡片主体按执行状态与活跃 attempt 隔离 LiveStrip");
+  assert.match(bundle, /hasActiveGoalExecutionAttempt/, "生成的 bundle 中包含 hasActiveGoalExecutionAttempt");
+
+  const elements: any[] = [];
+  const h = (type: any, props: any, ...children: any[]) => {
+    const el = { type, props, children: children.flat() };
+    elements.push(el);
+    return el;
+  };
+
+  const context: any = {
+    React: {
+      useMemo: (fn: any) => fn(),
+      useCallback: (fn: any) => fn,
+      useState: (init: any) => [init, () => {}],
+      useEffect: () => {},
+      useRef: (init: any) => ({ current: init }),
+      useSyncExternalStore: () => null,
+    },
+    h,
+    S: {
+      goalCard: {}, depCard: {}, blockedCard: {}, subCard: {}, title: {}, meta: {}, statusLine: {},
+    },
+    STATUS_LABEL: { planning: "规划中", collecting: "收集信息", in_progress: "执行中" },
+    CARD_STATUS_ICON: { empty: "○ 待收集", collecting: "◌ 收集中", filled: "● 已填充", reviewed: "✔ 已复核" },
+    GOAL_TYPE_LABELS: { feature: "Feature" },
+    GOAL_TYPE_ABBREV: { feature: "F" },
+    normalizeGoalType: () => "feature",
+    goalTypeColor: () => "#4c8dff",
+    sessionLinkBtn: () => null,
+    CriteriaProgress: () => null,
+    CardSummary: () => null,
+    ReusedBadge: () => null,
+    StatusLine: (props: any) => h("div", { className: "mock-status-line", ...props }),
+    LiveStrip: (props: any) => h("div", { className: "mock-live-strip", ...props }),
+    rowHalf: () => "after",
+  };
+
+  const fnStart = cardSrc.indexOf("function hasActiveGoalExecutionAttempt(");
+  const fnEnd = cardSrc.indexOf("\n    // g-a92e1406：状态摘要行", fnStart);
+  assert.ok(fnStart >= 0 && fnEnd > fnStart);
+  const cardCode = cardSrc.slice(fnStart, fnEnd);
+
+  new vm.Script(`(function () {\n${cardCode}\nglobalThis.__Card = Card;\nglobalThis.__hasActive = hasActiveGoalExecutionAttempt;\n})()`).runInNewContext(context);
+
+  // 1. 仅有上下文卡片 collecting、Goal 处于 collecting / planning 时，Goal 主体不渲染 LiveStrip，只有卡片自己渲染 LiveStrip
+  elements.length = 0;
+  const goalCollectingOnly = {
+    id: "g-collecting",
+    status: "collecting",
+    attempt_child_id: "child-collect-1",
+    attempt_parent_session_id: "parent-session-1",
+    attempts: [{ id: "att-001", executor: "agent:collect", result: "pending", status_line: "正在收集" }],
+    cards: [
+      { id: "c1", title: "卡片1", status: "collecting", child_id: "child-collect-1", parent_session_id: "parent-session-1" },
+    ],
+  };
+  context.__Card(goalCollectingOnly, () => {}, () => {}, false, null, {}, true, () => {}, null);
+  const liveStrips1 = elements.filter((e) => e?.type === context.LiveStrip || e?.props?.className === "mock-live-strip");
+  assert.equal(liveStrips1.length, 1, "只应渲染卡片上的 1 个 LiveStrip，Goal 主体不得重复渲染");
+  assert.equal(liveStrips1[0].props.childId, "child-collect-1");
+
+  // 2. Goal 处于 in_progress 且存在 attempt_child_id 时，Goal LiveStrip 正常展示
+  elements.length = 0;
+  const goalInProgress = {
+    id: "g-running",
+    status: "in_progress",
+    attempt_child_id: "child-exec-1",
+    attempt_parent_session_id: "parent-session-1",
+    attempts: [{ id: "att-001", executor: "agent:executor", result: "pending", status_line: "正在执行代码" }],
+    cards: [],
+  };
+  context.__Card(goalInProgress, () => {}, () => {}, false, null, {}, true, () => {}, null);
+  const liveStrips2 = elements.filter((e) => e?.type === context.LiveStrip || e?.props?.className === "mock-live-strip");
+  assert.equal(liveStrips2.length, 1, "Goal in_progress 时正常渲染 Goal LiveStrip");
+  assert.equal(liveStrips2[0].props.childId, "child-exec-1");
+
+  // 3. Goal 执行与多张卡片 collecting 并存时，各自展示互不覆盖
+  elements.length = 0;
+  const goalBoth = {
+    id: "g-both",
+    status: "in_progress",
+    attempt_child_id: "child-exec-1",
+    attempt_parent_session_id: "parent-session-1",
+    attempts: [{ id: "att-001", executor: "agent:executor", result: "pending", status_line: "正在执行代码" }],
+    cards: [
+      { id: "c1", title: "卡片1", status: "collecting", child_id: "child-c1", parent_session_id: "parent-session-1" },
+      { id: "c2", title: "卡片2", status: "collecting", child_id: "child-c2", parent_session_id: "parent-session-1" },
+      { id: "c3", title: "卡片3", status: "filled", child_id: "child-c3", parent_session_id: "parent-session-1" },
+    ],
+  };
+  context.__Card(goalBoth, () => {}, () => {}, false, null, {}, true, () => {}, null);
+  const liveStrips3 = elements.filter((e) => e?.type === context.LiveStrip || e?.props?.className === "mock-live-strip");
+  assert.equal(liveStrips3.length, 3, "Goal 1 个 + collecting 卡片 2 个 = 共 3 个 LiveStrip（filled 卡片不展示）");
+  assert.equal(liveStrips3[0].props.childId, "child-exec-1");
+  assert.equal(liveStrips3[1].props.childId, "child-c1");
+  assert.equal(liveStrips3[2].props.childId, "child-c2");
+});
+
+// ===== g-198：一句话任务创建成功后立即触发 onRefresh 刷新上下文卡片列表 =====
+
+test("g-198 模块源契约：goal-actions.js AddCardBox 接收 onRefresh 并在创建成功分支触发", () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  assert.match(src, /function AddCardBox\(props\)\s*\{\s*const\s*\{\s*goalId\s*,\s*supervisorSession\s*,\s*onRefresh\s*\}\s*=\s*props/);
+  // 成功分支调用 onRefresh?.()
+  assert.match(src, /if\s*\(data\.ok\)\s*\{[\s\S]*?onRefresh\?\.\(\);[\s\S]*?\}\s*else/);
+});
+
+test("g-198 模块源契约：goal-modal.js 向 AddCardBox 传递 onRefresh: load", () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  const matches = src.match(/h\(AddCardBox,\s*\{\s*goalId:\s*props\.id,\s*supervisorSession:\s*props\.supervisorSession,\s*onRefresh:\s*load\s*\}\)/g) ?? [];
+  assert.equal(matches.length, 2, "GoalModal 在有卡片和无卡片两种分支均向 AddCardBox 传入 onRefresh: load");
+});
+
+test("g-198 生成 bundle 契约：client.js 包含 AddCardBox onRefresh 调用与 GoalModal 传参", () => {
+  const bundle = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
+  assert.match(bundle, /function AddCardBox\(props\)\s*\{\s*const\s*\{\s*goalId\s*,\s*supervisorSession\s*,\s*onRefresh\s*\}\s*=\s*props/);
+  assert.match(bundle, /if\s*\(data\.ok\)\s*\{[\s\S]*?onRefresh\?\.\(\);[\s\S]*?\}\s*else/);
+  const matches = bundle.match(/h\(AddCardBox,\s*\{\s*goalId:\s*props\.id,\s*supervisorSession:\s*props\.supervisorSession,\s*onRefresh:\s*load\s*\}\)/g) ?? [];
+  assert.equal(matches.length, 2, "生成 bundle: 两个 AddCardBox 调用均传入 onRefresh: load");
+});
+
+// g-195: 子代理实时流式 peek 节流与性能保障测试
+test("g-195 源契约：session-hooks.js 提供 useThrottledLiveSession 并包含 trailing-edge 与卸载清理", () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
+  assert.match(src, /function useThrottledLiveSession\(session, intervalMs = 200\)/);
+  assert.match(src, /const \[liveState, setLiveState\] = React\.useState/);
+  assert.match(src, /setTimeout\(flush, intervalMs - elapsed\)/);
+  assert.match(src, /clearTimeout\(timer\)/);
+  assert.match(src, /unsub\(\)/);
+});
+
+test("g-195 源契约：LiveStrip 组件使用 useThrottledLiveSession 节流 peek 流式输出", () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/live-panel.js"), "utf8");
+  assert.match(src, /const \{ snap, line, running \} = useThrottledLiveSession\(session, 200\);/);
+});
+
+test("g-195 节流器逻辑模拟：高频更新（>20 chunk/s）硬上限 ≤5fps（≥200ms），尾包与完成态不丢失，卸载后无残留 timer", async () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
+
+  // 构造模拟测试环境运行 useThrottledLiveSession
+  let stateSetter: any = null;
+  let effectCleanup: any = null;
+  let registeredEffect: any = null;
+
+  const mockReact: any = {
+    useState: (initial: any) => {
+      let state = typeof initial === "function" ? initial() : initial;
+      stateSetter = (updater: any) => {
+        state = typeof updater === "function" ? updater(state) : updater;
+        renders.push(state);
+      };
+      return [state, stateSetter];
+    },
+    useEffect: (fn: any, deps: any) => {
+      registeredEffect = fn;
+    },
+    useCallback: (fn: any) => fn,
+    useMemo: (fn: any) => fn(),
+  };
+
+  const renders: any[] = [];
+  let listeners: Array<() => void> = [];
+  let unsubCalled = false;
+
+  let currentSnapshot: any = {
+    running: true,
+    chat: {
+      legacy: {
+        partial: {
+          blocks: [{ kind: "text", text: "chunk 0" }],
+        },
+      },
+    },
+  };
+
+  const mockSession = {
+    getSnapshot: () => currentSnapshot,
+    subscribe: (cb: () => void) => {
+      listeners.push(cb);
+      return () => {
+        unsubCalled = true;
+        listeners = listeners.filter((l) => l !== cb);
+      };
+    },
+  };
+
+  // 提取 useThrottledLiveSession 及辅助函数 lastStreamLine
+  const lastStreamLineStart = src.indexOf("function lastStreamLine(");
+  const lastStreamLineEnd = src.indexOf("function fmtTok(");
+  const hookStart = src.indexOf("function useThrottledLiveSession(");
+  const hookEnd = src.indexOf("function LiveStrip(");
+
+  const scriptCode = `
+    const React = mockReact;
+    ${src.slice(lastStreamLineStart, lastStreamLineEnd)}
+    ${src.slice(hookStart, hookEnd)}
+    globalThis.__useThrottledLiveSession = useThrottledLiveSession;
+  `;
+
+  const ctx: any = {
+    mockReact,
+    setTimeout,
+    clearTimeout,
+    Date,
+    console,
+    globalThis: {},
+  };
+  vm.createContext(ctx);
+  new vm.Script(scriptCode).runInContext(ctx);
+
+  const hook = ctx.globalThis.__useThrottledLiveSession;
+  hook(mockSession, 200);
+  effectCleanup = registeredEffect();
+
+  // 初始 flush 应该有 1 次 render
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].line, "chunk 0");
+
+  // 模拟 1 秒内密集触发 25 次高频事件（>20 chunk/s）
+  const startTime = Date.now();
+  for (let i = 1; i <= 25; i++) {
+    currentSnapshot = {
+      running: true,
+      chat: {
+        legacy: {
+          partial: {
+            blocks: [{ kind: "text", text: "chunk " + i }],
+          },
+        },
+      },
+    };
+    for (const l of listeners) l();
+    // 每次间隔 20ms
+    await new Promise((r) => setTimeout(r, 20));
+  }
+
+  // 等待尾包 timer (200ms) 触发
+  await new Promise((r) => setTimeout(r, 250));
+
+  // 500ms 内触发 25 次更新，但在 200ms 节流限制下，总渲染次数应在 3~5 次之间（≤5fps），绝不能退化为 25 次
+  assert.ok(renders.length <= 6, `渲染次数受到硬上限节流限制（实际渲染次数：${renders.length}，远小于 25）`);
+  // 验证 trailing edge: 最终渲染必须呈现最后一个 chunk (chunk 25)，不丢尾包
+  const lastRender = renders[renders.length - 1];
+  assert.equal(lastRender.line, "chunk 25", "trailing flush 完整呈现最后一个 chunk 25");
+
+  // 测试流结束/完成态（running: false）
+  currentSnapshot = {
+    running: false,
+    chat: {
+      legacy: {
+        partial: {
+          blocks: [{ kind: "text", text: "task completed" }],
+        },
+      },
+    },
+  };
+  for (const l of listeners) l();
+  await new Promise((r) => setTimeout(r, 250));
+  const finalRender = renders[renders.length - 1];
+  assert.equal(finalRender.running, false, "完成态 running=false 成功反映");
+  assert.equal(finalRender.line, "task completed", "完成态最终文本正确呈现");
+
+  // 测试卸载清理
+  effectCleanup();
+  assert.ok(unsubCalled, "卸载时 session.unsubscribe 被正常调用");
+});
+
+test("g-195 并发隔离与异常/空流降级：多 session 实例独立调度且空流/无 session 安全降级", async () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
+
+  const mockReact: any = {
+    useState: (initial: any) => {
+      let state = typeof initial === "function" ? initial() : initial;
+      return [state, (updater: any) => {
+        state = typeof updater === "function" ? updater(state) : updater;
+      }];
+    },
+    useEffect: (fn: any) => { fn(); },
+    useCallback: (fn: any) => fn,
+    useMemo: (fn: any) => fn(),
+  };
+
+  const lastStreamLineStart = src.indexOf("function lastStreamLine(");
+  const lastStreamLineEnd = src.indexOf("function fmtTok(");
+  const hookStart = src.indexOf("function useThrottledLiveSession(");
+  const hookEnd = src.indexOf("function LiveStrip(");
+
+  const scriptCode = `
+    const React = mockReact;
+    ${src.slice(lastStreamLineStart, lastStreamLineEnd)}
+    ${src.slice(hookStart, hookEnd)}
+    globalThis.__useThrottledLiveSession = useThrottledLiveSession;
+  `;
+
+  const ctx: any = { mockReact, globalThis: {} };
+  vm.createContext(ctx);
+  new vm.Script(scriptCode).runInContext(ctx);
+  const hook = ctx.globalThis.__useThrottledLiveSession;
+
+  // 1. null session 降级
+  const nullResult = hook(null, 200);
+  assert.equal(nullResult.snap, null);
+  assert.equal(nullResult.line, null);
+  assert.equal(nullResult.running, false);
+
+  // 2. 空流 session 降级
+  const emptySession = {
+    getSnapshot: () => ({ running: false, chat: null }),
+    subscribe: () => () => {},
+  };
+  const emptyResult = hook(emptySession, 200);
+  assert.equal(emptyResult.line, null);
+  assert.equal(emptyResult.running, false);
+  assert.equal(emptyResult.snap.running, false);
+});

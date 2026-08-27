@@ -1,12 +1,12 @@
-      const snap = useSessionSnapshot(session);
+      // g-195: 使用 useThrottledLiveSession 限制 peek 流式刷新为 ≤5fps (≥200ms)
+      const { snap, line, running } = useThrottledLiveSession(session, 200);
       const usage = useProjectionValue(session, "tokenUsage");
       const pressure = useProjectionValue(session, "contextPressure");
       if (!props.childId) return null;
       if (!session) {
         return h("div", { style: S.liveStrip, title: props.childId },
-          "🔌 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
+          "⚠️ 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
       }
-      const running = !!(snap && snap.running);
       // g-a92e1406 追加（负责人指示）：新一轮开始（running false→true）时清空上次 status，
       // 等 supervisor 快速替换成最新——记录 running 翻转时刻，旧于它的状态视为过期清空。
       const runningSinceRef = React.useRef(null);
@@ -26,8 +26,7 @@
         return () => clearInterval(t);
       }, [staleStatus]);
       const staleDur = staleStatus && props.statusAt != null ? fmtElapsed(props.statusAt, now) : null;
-      const line = snap && snap.chat ? lastStreamLine(snap.chat.legacy.partial) : null;
-      const meter = liveMeter(usage, pressure);
+            const meter = liveMeter(usage, pressure);
       // g-129 负责人 2026-08-22 格式：第一行 = 状态 + 流式内容（同行，流式时有时无不引起高度变化），
       // 右侧有足够宽度时显示 tok/ctx；第二行 = status_line 固定显示。
       const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
@@ -44,14 +43,18 @@
             "⏵ " + line)
         : h("span", { style: { ...S.meta, fontSize: 10, flex: 1, overflow: "hidden",
                                textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "…");
+      const modelTitle = props.model ? `模型：${props.provider ? props.provider + "/" : ""}${props.model}` : null;
       return h(
         "div",
-        { style: S.liveStrip, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
+        { style: S.liveStrip, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
         // 第一行：状态 + 流式内容（同行）；右侧有空间时显示 tok/ctx（flex 布局自动压缩）
         h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
           h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
             statusLabel),
           lineEl,
+          props.model
+            ? h("span", { style: { ...S.meta, fontSize: 9, flexShrink: 0, opacity: 0.85, padding: "0 2px" }, title: modelTitle }, props.model)
+            : null,
           meter
             ? h("span", { style: { ...S.meta, fontSize: 10, flexShrink: 0, marginLeft: 4 } }, meter)
             : null),
@@ -175,6 +178,42 @@
     // g-109 判据反馈：子代理会话的 models 查询常失败（continuable idle 后无 live agent），
     // 旧逻辑回退父会话会把「父会话模型」冒充子代理实际模型（如用 flash 派发却显示 v4-pro），
     // 误导负责人。现改为失败即报错，由调用方用「重新执行指定路由」或「查询不可用」兜底。
+    // g-194: 格式化模型展示文案，优雅降级，绝不向用户展示 owned by subagent routing 等内部错误
+    function formatModelDisplay(dynamicModel, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr) {
+      if (dynamicModel && dynamicModel.model) {
+        const p = dynamicModel.provider ? `${dynamicModel.provider}/` : "";
+        return `${p}${dynamicModel.model}` + (dynamicModel.fromParent ? "（父会话，子代理继承）" : "");
+      }
+      if (staticProvider || staticModel) {
+        if (staticProvider && staticModel) return `${staticProvider}/${staticModel}`;
+        if (staticModel) return `${staticModel}（继承/默认 provider）`;
+        return `${staticProvider}（继承/默认 model）`;
+      }
+      if (staticRoute) {
+        return staticRoute;
+      }
+      if (relaunchRoute) {
+        return `按重新执行指定：${relaunchRoute}`;
+      }
+      if (modelErr) {
+        // 如果包含内部 routing 错误或私有 session 错误，转为安全的“默认配置/未指定”或“会话已隔离”
+        if (typeof modelErr === "string" && (modelErr.includes("owned by subagent routing") || modelErr.includes("agent-busy") || modelErr.includes("session"))) {
+          return "默认配置/未指定";
+        }
+        return "不可用：" + modelErr;
+      }
+      return "默认配置/未指定";
+    }
+
+    function formatShortModelDisplay(dynamicModel, staticProvider, staticModel, staticRoute, relaunchRoute) {
+      if (dynamicModel && dynamicModel.model) return dynamicModel.model;
+      if (staticModel) return staticModel;
+      if (staticRoute) return String(staticRoute).split("/").pop();
+      if (relaunchRoute) return "重派:" + String(relaunchRoute).split("/").pop();
+      return null;
+    }
+
+    // 完整实时面板（抽屉/详情用）：实时条 + 模型 + 直达指令 + 最近记录。
     function useSessionModel(sessionId, parentId) {
       const [model, setModel] = React.useState(null); // {provider, model, fromParent}
       const [modelErr, setModelErr] = React.useState(null);
@@ -330,16 +369,19 @@
       const statusLine = props.statusLine ?? null;
       const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
       // g-109 判据反馈：sessions.models 对子代理查询失败时，用「重新执行指定路由」兜底（绝不用父会话模型冒充）
+      // g-194: 优先消费服务端下发的静态 provider / model / model_route，消除 subagent routing 报错
       const relaunchRoute = props.relaunchRoute ?? null;
-      const modelText = model
-        ? `${model.provider}/${model.model}` + (model.fromParent ? "（父会话，子代理继承）" : "")
-        : relaunchRoute ? `按重新执行指定：${relaunchRoute}` : modelErr ? "不可用：" + modelErr : "查询中…";
+      const staticProvider = props.provider ?? null;
+      const staticModel = props.model ?? null;
+      const staticRoute = props.modelRoute ?? null;
+      const modelText = formatModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr);
+      const shortModel = formatShortModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute);
       // 折叠态标题行的内联摘要：状态 + statusLine + token/ctx + 模型短名
       const collapsedBits = [
         statusLabel,
         statusLine ? (running ? "⏳ " : "✅ ") + statusLine : null,
         meter || null,
-        model ? model.model : relaunchRoute ? "重派:" + String(relaunchRoute).split("/").pop() : null,
+        shortModel,
       ].filter(Boolean).join(" ｜ ");
       return h(
         "div",
@@ -360,6 +402,7 @@
           sessionLinkBtn(props.parentId, props.childId, "↗ 转到对话")),
         !open ? null : [
           h(LiveStrip, { key: "s", parentId: props.parentId, childId: props.childId,
+                         provider: staticProvider, model: staticModel,
                          statusLine }),
           h("div", { key: "m", style: { ...S.meta, marginTop: 3 } },
             "模型：" + modelText

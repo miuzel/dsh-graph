@@ -360,10 +360,12 @@
         ];
         // g-107：📡 会话实时面板上移至标题与状态摘要下方（默认折叠，点击展开）
         // g-109 判据反馈：最新 attempt 无 child_id（子代理启动失败）时也给出「重新执行」兜底区
-        const att = (d.attempts ?? []).filter((a) => a.child_id).slice(-1)[0];
-        const anyAtt = (d.attempts ?? []).length > 0;
+        // g-107 & g-200：实时会话面板（仅展示 Goal 自身的执行 attempt，排除收集子代理）
+        const att = (d.attempts ?? []).filter((a) => a.child_id && a.executor !== "agent:collect").slice(-1)[0];
+        const anyAtt = (d.attempts ?? []).filter((a) => a.executor !== "agent:collect").length > 0;
         livePanel = att
           ? h(SessionPanel, { parentId: att.parent_session_id, childId: att.child_id, collapsible: true,
+                              provider: att.provider, model: att.model, modelRoute: att.model_route,
                               statusLine: lastAtt?.status_line ?? null,
                               goalId: props.id, relaunchKind: "exec",
                               relaunchRoute, onRelaunched: setRelaunchRoute })
@@ -432,13 +434,13 @@
                 }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
                 isBacklog
                   ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
-                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession }))
+                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession, onRefresh: load }))
             : h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🔎 信息收集"),
                 h("div", { style: S.meta }, "（暂无上下文卡片）"),
                 isBacklog
                   ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
-                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession })),
+                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession, onRefresh: load })),
         ];
         // g-150：执行上下文 tab（handoff + 最近指令 + 评论）
         const contextTab = [

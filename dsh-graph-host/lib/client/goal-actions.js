@@ -393,8 +393,9 @@
 
     // g-109：新增信息收集任务组件（弹窗内信息收集区）
     // g-128：新增信息收集任务组件（弹窗内信息收集区）——支持标题+kind 选择
+    // g-198：支持 onRefresh 回调，创建成功后立即通知父组件刷新卡片列表
     function AddCardBox(props) {
-      const { goalId, supervisorSession } = props;
+      const { goalId, supervisorSession, onRefresh } = props;
       const [mode, setMode] = React.useState("idle"); // idle | naming | chat
       const [title, setTitle] = React.useState("");
       const [kind, setKind] = React.useState("text"); // g-128：卡片类型可选
@@ -417,6 +418,7 @@
             setTitle("");
             setKind("text");
             setMode("idle");
+            onRefresh?.();
           } else {
             setNote("⚠️ 创建失败：" + (data.error || "未知错误"));
           }

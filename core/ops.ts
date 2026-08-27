@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { join, basename, dirname, relative } from "node:path";
 import { randomUUID } from "node:crypto";
+import { parse as parseYaml } from "yaml";
 import {
   parseDoc,
   serializeDoc,
@@ -410,20 +411,27 @@ export function readSupervisorStatusAt(root: string): number | null {
   return latest;
 }
 
-/** 读取 project.yaml 的 executor.provider/model（执行子代理模型路由，负责人 2026-08 指示：
- *  子代理不继承父会话模型，统一走配置的 provider 防余额/配额串号）。
- *  零依赖行扫描；缺失字段返回 null。 */
+/** 读取 project.yaml 的 executor.provider/model。
+ * 使用 YAML 解析器处理注释、空行和合法标量；配置缺失或解析失败时安全降级。 */
 export function readExecutorModel(root: string): { provider: string | null; model: string | null } {
   const file = join(root, "project.yaml");
-  if (!existsSync(file)) return { provider: null, model: null };
-  const text = readFileSync(file, "utf8");
-  const block = text.match(/^executor:\s*\n((?:[ \t].*\n)*)/m);
-  if (!block) return { provider: null, model: null };
-  const grab = (k: string): string | null => {
-    const m = block[1].match(new RegExp(`^[ \\t]+${k}:\\s*"?([^\\s"#]+)"?`, "m"));
-    return m ? m[1] : null;
-  };
-  return { provider: grab("provider"), model: grab("model") };
+  try {
+    if (!existsSync(file)) return { provider: null, model: null };
+    const document = parseYaml(readFileSync(file, "utf8"));
+    const executor = document && typeof document === "object" && !Array.isArray(document)
+      ? (document as Record<string, unknown>).executor
+      : null;
+    if (!executor || typeof executor !== "object" || Array.isArray(executor)) {
+      return { provider: null, model: null };
+    }
+    const value = (key: string): string | null => {
+      const raw = (executor as Record<string, unknown>)[key];
+      return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
+    };
+    return { provider: value("provider"), model: value("model") };
+  } catch {
+    return { provider: null, model: null };
+  }
 }
 
 // ===== g-132：workspace 配置管理（project.yaml 安全配置字段读写） =====
@@ -1599,31 +1607,49 @@ export function deleteCard(
 
 /** 把收集子代理绑定到卡片（g-109）：写 child_id/parent_session_id、置 status=collecting，并记 card.collecting 事件（事件先行）。
  *  g-119：幂等——同一 child_id+parent_session_id 对同一卡片重复绑定（状态已 collecting）为 no-op，
- *  不重写、不重复记事件（防重试/重复派发刷事件流）；换 child（重新收集）或换 parent 仍正常写。 */
+ *  不重写、不重复记事件（防重试/重复派发刷事件流）；换 child（重新收集）或换 parent 仍正常写。
+ *  g-194：支持持久化 provider / model。 */
 export function bindCardChild(
   root: string,
   goalId: string,
   cardId: string,
-  opts: { childId: string; parentSessionId?: string | null; actor: string },
+  opts: {
+    childId: string;
+    parentSessionId?: string | null;
+    actor: string;
+    provider?: string | null;
+    model?: string | null;
+  },
 ): void {
   const { file, doc } = loadCard(root, goalId, cardId);
   const parentSessionId = opts.parentSessionId ?? null;
+  const provider = opts.provider !== undefined ? (opts.provider || null) : (doc.meta.provider ?? null);
+  const model = opts.model !== undefined ? (opts.model || null) : (doc.meta.model ?? null);
   if (
     doc.meta.status === "collecting" &&
     doc.meta.child_id === opts.childId &&
-    (doc.meta.parent_session_id ?? null) === parentSessionId
+    (doc.meta.parent_session_id ?? null) === parentSessionId &&
+    (doc.meta.provider ?? null) === provider &&
+    (doc.meta.model ?? null) === model
   ) {
     return;
   }
   doc.meta.child_id = opts.childId;
   doc.meta.parent_session_id = parentSessionId;
   doc.meta.status = "collecting";
+  if (provider) doc.meta.provider = provider;
+  else if (doc.meta.provider) delete doc.meta.provider;
+  if (model) doc.meta.model = model;
+  else if (doc.meta.model) delete doc.meta.model;
   saveGoal(file, doc);
+  const details: Record<string, any> = { card: cardId, child_id: opts.childId };
+  if (provider) details.provider = provider;
+  if (model) details.model = model;
   appendEvent(root, {
     actor: opts.actor,
     event: "card.collecting",
     goal: goalId,
-    details: { card: cardId, child_id: opts.childId },
+    details,
   });
 }
 
@@ -2100,7 +2126,8 @@ const ATTEMPT_BODY = `
  *  opts.attemptBrief：主管为本次 attempt 提供的可审计 brief/directive（g-150）；
  *  提供时记入 attempt.started 的 details.brief 与 attempt.md meta。
  *  opts.injectedDirective：从 goal.md「最近指令」小节读取并注入 prompt 的内容快照（g-150 范围扩展）；
- *  提供时记入 attempt.started 的 details.injected_directive 与 attempt.md meta。 */
+ *  提供时记入 attempt.started 的 details.injected_directive 与 attempt.md meta。
+ *  opts.provider / opts.model / opts.modelRoute：模型路由信息（g-194）。 */
 export function startAttempt(
   root: string,
   goalId: string,
@@ -2111,6 +2138,9 @@ export function startAttempt(
     injectedHandoffs?: Array<{ id: string; revision: number; source_attempts: string[] }>;
     attemptBrief?: string;
     injectedDirective?: string;
+    provider?: string | null;
+    model?: string | null;
+    modelRoute?: string | null;
   },
 ): string {
   // 校验 attemptBrief 类型（g-150 review 问题 4：必须是 string 或 undefined，不可是其他类型）
@@ -2139,6 +2169,15 @@ export function startAttempt(
     result: "pending",
     child_id: null,
   };
+  if (opts.provider && opts.provider.trim()) {
+    meta.provider = opts.provider.trim();
+  }
+  if (opts.model && opts.model.trim()) {
+    meta.model = opts.model.trim();
+  }
+  if (opts.modelRoute && opts.modelRoute.trim()) {
+    meta.model_route = opts.modelRoute.trim();
+  }
   // g-150：写入 injected_handoffs 和 brief 到 attempt meta（审计可追溯）
   // 无 handoff/brief 时保持当前 prompt 兼容（g-150 review 问题 5）
   if (Array.isArray(opts.injectedHandoffs)) {
@@ -2155,6 +2194,9 @@ export function startAttempt(
   const details: Record<string, any> = {
     attempt: attId,
     executor: opts.executor,
+    ...(opts.provider && opts.provider.trim() ? { provider: opts.provider.trim() } : {}),
+    ...(opts.model && opts.model.trim() ? { model: opts.model.trim() } : {}),
+    ...(opts.modelRoute && opts.modelRoute.trim() ? { model_route: opts.modelRoute.trim() } : {}),
     ...(Array.isArray(opts.injectedCards)
       ? { injected_cards: opts.injectedCards }
       : {}),
@@ -2206,7 +2248,8 @@ export function reportStatus(
   });
 }
 
-/** 把 subagent childId 绑定到 attempt（startContinuable 之后调用）。 */
+/** 把 subagent childId 绑定到 attempt（startContinuable 之后调用）。
+ *  g-194：支持持久化 provider / model / modelRoute。 */
 export function bindAttemptChild(
   root: string,
   goalId: string,
@@ -2214,6 +2257,9 @@ export function bindAttemptChild(
   childId: string,
   actor: string,
   parentSessionId?: string,
+  provider?: string | null,
+  model?: string | null,
+  modelRoute?: string | null,
 ): void {
   const goalFile = findGoalFile(root, goalId);
   // backlog 目标没有目录结构，无法绑定 attempt child
@@ -2225,12 +2271,19 @@ export function bindAttemptChild(
   const doc = loadGoal(file);
   doc.meta.child_id = childId;
   if (parentSessionId) doc.meta.parent_session_id = parentSessionId;
+  if (provider && provider.trim()) doc.meta.provider = provider.trim();
+  if (model && model.trim()) doc.meta.model = model.trim();
+  if (modelRoute && modelRoute.trim()) doc.meta.model_route = modelRoute.trim();
   saveGoal(file, doc);
+  const details: Record<string, any> = { attempt: attemptId, child_id: childId };
+  if (doc.meta.provider) details.provider = doc.meta.provider;
+  if (doc.meta.model) details.model = doc.meta.model;
+  if (doc.meta.model_route) details.model_route = doc.meta.model_route;
   appendEvent(root, {
     actor,
     event: "attempt.bound",
     goal: goalId,
-    details: { attempt: attemptId, child_id: childId },
+    details,
   });
 }
 
@@ -2601,6 +2654,8 @@ export interface BoardGoal {
   blocked_reason: string | null;
   attempt_child_id?: string | null;
   attempt_parent_session_id?: string | null;
+  attempt_provider?: string | null;
+  attempt_model?: string | null;
   created_at?: string | null;
   attempt_started_at?: string | null;
   /** 被复用派生（g-a92e1406）：子代理被跨目标复用时，旧绑定目标标 reused_by = 新目标 id */
@@ -2665,7 +2720,7 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
         }
       }
     }
-    // 最新一个绑定了子代理的 attempt（卡片会话链接用）
+    // 最新一个绑定了子代理的执行 attempt（排除 agent:collect 收集子代理，卡片会话链接用）
     let attemptChild: Record<string, any> = {};
     if (dir) {
       const attDir = join(dir, "attempts");
@@ -2676,10 +2731,12 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
           if (!existsSync(f)) continue;
           try {
             const m = loadGoal(f).meta;
-            if (m.child_id) {
+            if (m.child_id && m.executor !== "agent:collect") {
               attemptChild = {
                 child_id: m.child_id,
                 parent_session_id: m.parent_session_id ?? null,
+                provider: m.provider ?? null,
+                model: m.model ?? null,
                 started_at: m.started_at ?? null,
               };
               break;
@@ -2702,6 +2759,8 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
               summary: cm.summary ?? null,
               child_id: cm.child_id ?? null,
               parent_session_id: cm.parent_session_id ?? null,
+              provider: cm.provider ?? null,
+              model: cm.model ?? null,
             });
           } catch {
             /* 跳过坏卡片 */
@@ -2721,6 +2780,8 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
       ),
       attempt_child_id: attemptChild.child_id ?? null,
       attempt_parent_session_id: attemptChild.parent_session_id ?? null,
+      attempt_provider: attemptChild.provider ?? null,
+      attempt_model: attemptChild.model ?? null,
       created_at: String(meta.created_at ?? ""),
       attempt_started_at: attemptChild.started_at ?? null,
       reused_by: null,
@@ -2943,6 +3004,8 @@ export function goalCards(root: string, goalId: string): Array<Record<string, an
         summary: doc.meta.summary ?? null,
         child_id: doc.meta.child_id ?? null,
         parent_session_id: doc.meta.parent_session_id ?? null,
+        provider: doc.meta.provider ?? null,
+        model: doc.meta.model ?? null,
         cardFile: cardFilePath, // g-154: 暴露卡片文件绝对路径
       });
     } catch {
@@ -2985,6 +3048,9 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
             status_line: m.status_line ?? null,
             child_id: m.child_id ?? null,
             parent_session_id: m.parent_session_id ?? null,
+            provider: m.provider ?? null,
+            model: m.model ?? null,
+            model_route: m.model_route ?? null,
           });
         } catch { /* 跳过 */ }
       }

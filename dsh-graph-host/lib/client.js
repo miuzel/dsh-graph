@@ -540,6 +540,70 @@ window.__ModuleLoader__.load({
       return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     }
 
+    // g-195: 子代理实时流式 peek 节流 hook（≤5fps / ≥200ms 刷新上限）
+    // 仅用于 peek 展示（LiveStrip / SessionPanel 折叠态等），普通高频推送合并到 trailing flush；
+    // 流结束/错误/运行态翻转等关键边界在下一合法时间槽完成最终呈现，不丢尾包，卸载时清理定时器。
+    function useThrottledLiveSession(session, intervalMs = 200) {
+      const [liveState, setLiveState] = React.useState(() => {
+        const snap = session ? session.getSnapshot() : null;
+        return {
+          snap,
+          line: snap && snap.chat ? lastStreamLine(snap.chat.legacy.partial) : null,
+          running: !!(snap && snap.running),
+        };
+      });
+
+      React.useEffect(() => {
+        if (!session) {
+          setLiveState({ snap: null, line: null, running: false });
+          return;
+        }
+
+        let timer = null;
+        let lastFlush = 0;
+        let unmounted = false;
+
+        const flush = () => {
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          lastFlush = Date.now();
+          if (unmounted) return;
+          const s = session.getSnapshot();
+          setLiveState({
+            snap: s,
+            line: s && s.chat ? lastStreamLine(s.chat.legacy.partial) : null,
+            running: !!(s && s.running),
+          });
+        };
+
+        const onUpdate = () => {
+          const now = Date.now();
+          const elapsed = now - lastFlush;
+          if (elapsed >= intervalMs) {
+            flush();
+          } else if (!timer) {
+            // Trailing edge: 在剩余时间槽排期执行 flush，保证 ≤5fps (≥200ms) 且不丢尾包
+            timer = setTimeout(flush, intervalMs - elapsed);
+          }
+        };
+
+        // 初始同步一次最新状态
+        flush();
+
+        const unsub = session.subscribe(onUpdate);
+
+        return () => {
+          unmounted = true;
+          if (timer) clearTimeout(timer);
+          if (typeof unsub === "function") unsub();
+        };
+      }, [session, intervalMs]);
+
+      return liveState;
+    }
+
     // 投影值（faceOf 返回 identity-stable 的 uSES face；投影推送不要求 open，看板常驻）
     function useProjectionValue(session, key) {
       const face = React.useMemo(
@@ -604,15 +668,15 @@ window.__ModuleLoader__.load({
     // 流式时有时无不再引起高度变化）；status_line + tok/ctx 放 tooltip（悬浮查看）。
     function LiveStrip(props) {
       const { session } = useBoundSession(props.parentId, props.childId);
-      const snap = useSessionSnapshot(session);
+      // g-195: 使用 useThrottledLiveSession 限制 peek 流式刷新为 ≤5fps (≥200ms)
+      const { snap, line, running } = useThrottledLiveSession(session, 200);
       const usage = useProjectionValue(session, "tokenUsage");
       const pressure = useProjectionValue(session, "contextPressure");
       if (!props.childId) return null;
       if (!session) {
         return h("div", { style: S.liveStrip, title: props.childId },
-          "🔌 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
+          "⚠️ 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
       }
-      const running = !!(snap && snap.running);
       // g-a92e1406 追加（负责人指示）：新一轮开始（running false→true）时清空上次 status，
       // 等 supervisor 快速替换成最新——记录 running 翻转时刻，旧于它的状态视为过期清空。
       const runningSinceRef = React.useRef(null);
@@ -632,8 +696,7 @@ window.__ModuleLoader__.load({
         return () => clearInterval(t);
       }, [staleStatus]);
       const staleDur = staleStatus && props.statusAt != null ? fmtElapsed(props.statusAt, now) : null;
-      const line = snap && snap.chat ? lastStreamLine(snap.chat.legacy.partial) : null;
-      const meter = liveMeter(usage, pressure);
+            const meter = liveMeter(usage, pressure);
       // g-129 负责人 2026-08-22 格式：第一行 = 状态 + 流式内容（同行，流式时有时无不引起高度变化），
       // 右侧有足够宽度时显示 tok/ctx；第二行 = status_line 固定显示。
       const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
@@ -650,14 +713,18 @@ window.__ModuleLoader__.load({
             "⏵ " + line)
         : h("span", { style: { ...S.meta, fontSize: 10, flex: 1, overflow: "hidden",
                                textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "…");
+      const modelTitle = props.model ? `模型：${props.provider ? props.provider + "/" : ""}${props.model}` : null;
       return h(
         "div",
-        { style: S.liveStrip, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
+        { style: S.liveStrip, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
         // 第一行：状态 + 流式内容（同行）；右侧有空间时显示 tok/ctx（flex 布局自动压缩）
         h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
           h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
             statusLabel),
           lineEl,
+          props.model
+            ? h("span", { style: { ...S.meta, fontSize: 9, flexShrink: 0, opacity: 0.85, padding: "0 2px" }, title: modelTitle }, props.model)
+            : null,
           meter
             ? h("span", { style: { ...S.meta, fontSize: 10, flexShrink: 0, marginLeft: 4 } }, meter)
             : null),
@@ -781,6 +848,42 @@ window.__ModuleLoader__.load({
     // g-109 判据反馈：子代理会话的 models 查询常失败（continuable idle 后无 live agent），
     // 旧逻辑回退父会话会把「父会话模型」冒充子代理实际模型（如用 flash 派发却显示 v4-pro），
     // 误导负责人。现改为失败即报错，由调用方用「重新执行指定路由」或「查询不可用」兜底。
+    // g-194: 格式化模型展示文案，优雅降级，绝不向用户展示 owned by subagent routing 等内部错误
+    function formatModelDisplay(dynamicModel, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr) {
+      if (dynamicModel && dynamicModel.model) {
+        const p = dynamicModel.provider ? `${dynamicModel.provider}/` : "";
+        return `${p}${dynamicModel.model}` + (dynamicModel.fromParent ? "（父会话，子代理继承）" : "");
+      }
+      if (staticProvider || staticModel) {
+        if (staticProvider && staticModel) return `${staticProvider}/${staticModel}`;
+        if (staticModel) return `${staticModel}（继承/默认 provider）`;
+        return `${staticProvider}（继承/默认 model）`;
+      }
+      if (staticRoute) {
+        return staticRoute;
+      }
+      if (relaunchRoute) {
+        return `按重新执行指定：${relaunchRoute}`;
+      }
+      if (modelErr) {
+        // 如果包含内部 routing 错误或私有 session 错误，转为安全的“默认配置/未指定”或“会话已隔离”
+        if (typeof modelErr === "string" && (modelErr.includes("owned by subagent routing") || modelErr.includes("agent-busy") || modelErr.includes("session"))) {
+          return "默认配置/未指定";
+        }
+        return "不可用：" + modelErr;
+      }
+      return "默认配置/未指定";
+    }
+
+    function formatShortModelDisplay(dynamicModel, staticProvider, staticModel, staticRoute, relaunchRoute) {
+      if (dynamicModel && dynamicModel.model) return dynamicModel.model;
+      if (staticModel) return staticModel;
+      if (staticRoute) return String(staticRoute).split("/").pop();
+      if (relaunchRoute) return "重派:" + String(relaunchRoute).split("/").pop();
+      return null;
+    }
+
+    // 完整实时面板（抽屉/详情用）：实时条 + 模型 + 直达指令 + 最近记录。
     function useSessionModel(sessionId, parentId) {
       const [model, setModel] = React.useState(null); // {provider, model, fromParent}
       const [modelErr, setModelErr] = React.useState(null);
@@ -936,16 +1039,19 @@ window.__ModuleLoader__.load({
       const statusLine = props.statusLine ?? null;
       const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
       // g-109 判据反馈：sessions.models 对子代理查询失败时，用「重新执行指定路由」兜底（绝不用父会话模型冒充）
+      // g-194: 优先消费服务端下发的静态 provider / model / model_route，消除 subagent routing 报错
       const relaunchRoute = props.relaunchRoute ?? null;
-      const modelText = model
-        ? `${model.provider}/${model.model}` + (model.fromParent ? "（父会话，子代理继承）" : "")
-        : relaunchRoute ? `按重新执行指定：${relaunchRoute}` : modelErr ? "不可用：" + modelErr : "查询中…";
+      const staticProvider = props.provider ?? null;
+      const staticModel = props.model ?? null;
+      const staticRoute = props.modelRoute ?? null;
+      const modelText = formatModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr);
+      const shortModel = formatShortModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute);
       // 折叠态标题行的内联摘要：状态 + statusLine + token/ctx + 模型短名
       const collapsedBits = [
         statusLabel,
         statusLine ? (running ? "⏳ " : "✅ ") + statusLine : null,
         meter || null,
-        model ? model.model : relaunchRoute ? "重派:" + String(relaunchRoute).split("/").pop() : null,
+        shortModel,
       ].filter(Boolean).join(" ｜ ");
       return h(
         "div",
@@ -966,6 +1072,7 @@ window.__ModuleLoader__.load({
           sessionLinkBtn(props.parentId, props.childId, "↗ 转到对话")),
         !open ? null : [
           h(LiveStrip, { key: "s", parentId: props.parentId, childId: props.childId,
+                         provider: staticProvider, model: staticModel,
                          statusLine }),
           h("div", { key: "m", style: { ...S.meta, marginTop: 3 } },
             "模型：" + modelText
@@ -1101,6 +1208,15 @@ window.__ModuleLoader__.load({
           whiteSpace: "nowrap", overflow: "hidden", verticalAlign: "middle", fontSize: 11,
           letterSpacing: "-3px", marginLeft: 0, paddingRight: 2 },
       }, blocks);
+    }
+
+    // g-200：判断 Goal 是否有正在活跃的执行 attempt（排除收集子代理）
+    function hasActiveGoalExecutionAttempt(attempts) {
+      return (attempts ?? []).some((a) => {
+        if (a?.executor === "agent:collect" || a?.result !== "pending") return false;
+        const line = String(a?.status_line ?? "").trim();
+        return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
+      });
     }
 
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
@@ -1285,11 +1401,14 @@ window.__ModuleLoader__.load({
         blocked && g.blocked_reason
           ? h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + g.blocked_reason)
           : null,
-        // g-a92e1406：执行会话内嵌实时条——status_line 摘要并入状态小窗
-        //（运行中 ⏳ / 空闲刚执行完 ✅）；无执行会话时退化为独立状态行（带动画）
-        g.attempt_child_id
+        // g-a92e1406 & g-200：执行会话内嵌实时条——status_line 摘要并入状态小窗
+        //（运行中 ⏳ / 空闲刚执行完 ✅）；当且仅当 Goal 处于执行态（in_progress）或有明确活跃执行 attempt 时展示 Goal LiveStrip；
+        // 仅有上下文卡片处于 collecting 时隐藏 Goal LiveStrip，避免在 Goal 与子卡片重复展示；
+        // 无执行会话但有 status_line 时退化为独立状态行（带动画）
+        g.attempt_child_id && (g.status === "in_progress" || hasActiveGoalExecutionAttempt(g.attempts))
           ? h("div", { key: "live" },
               h(LiveStrip, { parentId: g.attempt_parent_session_id, childId: g.attempt_child_id,
+                             provider: g.attempt_provider, model: g.attempt_model,
                              statusLine: g.status_line }))
           : g.status_line
             ? h(StatusLine, { text: g.status_line, blocked: g.status === "blocked", running: g.status === "in_progress" })
@@ -1310,7 +1429,8 @@ window.__ModuleLoader__.load({
             h(CardSummary, { summary: c.summary }),
             c.child_id && c.status !== "filled" && c.status !== "reviewed"
               ? h("div", { onClick: (e) => e.stopPropagation() },
-                  h(LiveStrip, { parentId: c.parent_session_id, childId: c.child_id }))
+                  h(LiveStrip, { parentId: c.parent_session_id, childId: c.child_id,
+                                 provider: c.provider, model: c.model }))
               : null)),
       );
     }
@@ -1590,6 +1710,7 @@ window.__ModuleLoader__.load({
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集
             card.child_id
               ? h(SessionPanel, { key: "live", parentId: card.parent_session_id, childId: card.child_id, collapsible: true,
+                                  provider: card.provider, model: card.model,
                                   goalId: props.goalId, relaunchKind: "collect",
                                   relaunchCardId: props.cardId, relaunchPrompt: promptText || autoPrompt,
                                   relaunchRoute, onRelaunched: setRelaunchRoute })
@@ -2000,8 +2121,9 @@ window.__ModuleLoader__.load({
 
     // g-109：新增信息收集任务组件（弹窗内信息收集区）
     // g-128：新增信息收集任务组件（弹窗内信息收集区）——支持标题+kind 选择
+    // g-198：支持 onRefresh 回调，创建成功后立即通知父组件刷新卡片列表
     function AddCardBox(props) {
-      const { goalId, supervisorSession } = props;
+      const { goalId, supervisorSession, onRefresh } = props;
       const [mode, setMode] = React.useState("idle"); // idle | naming | chat
       const [title, setTitle] = React.useState("");
       const [kind, setKind] = React.useState("text"); // g-128：卡片类型可选
@@ -2024,6 +2146,7 @@ window.__ModuleLoader__.load({
             setTitle("");
             setKind("text");
             setMode("idle");
+            onRefresh?.();
           } else {
             setNote("⚠️ 创建失败：" + (data.error || "未知错误"));
           }
@@ -2452,10 +2575,12 @@ window.__ModuleLoader__.load({
         ];
         // g-107：📡 会话实时面板上移至标题与状态摘要下方（默认折叠，点击展开）
         // g-109 判据反馈：最新 attempt 无 child_id（子代理启动失败）时也给出「重新执行」兜底区
-        const att = (d.attempts ?? []).filter((a) => a.child_id).slice(-1)[0];
-        const anyAtt = (d.attempts ?? []).length > 0;
+        // g-107 & g-200：实时会话面板（仅展示 Goal 自身的执行 attempt，排除收集子代理）
+        const att = (d.attempts ?? []).filter((a) => a.child_id && a.executor !== "agent:collect").slice(-1)[0];
+        const anyAtt = (d.attempts ?? []).filter((a) => a.executor !== "agent:collect").length > 0;
         livePanel = att
           ? h(SessionPanel, { parentId: att.parent_session_id, childId: att.child_id, collapsible: true,
+                              provider: att.provider, model: att.model, modelRoute: att.model_route,
                               statusLine: lastAtt?.status_line ?? null,
                               goalId: props.id, relaunchKind: "exec",
                               relaunchRoute, onRelaunched: setRelaunchRoute })
@@ -2524,13 +2649,13 @@ window.__ModuleLoader__.load({
                 }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
                 isBacklog
                   ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
-                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession }))
+                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession, onRefresh: load }))
             : h("div", { key: "k", style: S.modalSection },
                 h("div", { style: S.modalH }, "🔎 信息收集"),
                 h("div", { style: S.meta }, "（暂无上下文卡片）"),
                 isBacklog
                   ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
-                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession })),
+                  : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession, onRefresh: load })),
         ];
         // g-150：执行上下文 tab（handoff + 最近指令 + 评论）
         const contextTab = [

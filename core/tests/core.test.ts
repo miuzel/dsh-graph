@@ -122,6 +122,26 @@ test("readExecutorModel 读取 executor.provider/model，缺失返回 null", asy
   });
 });
 
+test("readExecutorModel 使用 YAML 语义读取注释/空行，并安全降级非法配置", async () => {
+  const { readExecutorModel } = await import("../ops.ts");
+  const root = tmpRoot();
+  writeFileSync(join(root, "project.yaml"), [
+    "name: unrelated",
+    "executor:",
+    "# 注释不应截断子键",
+    "  provider: openai-codex # inline comment",
+    "",
+    "  model: gpt-5.6-luna",
+    "other: wrong",
+    "",
+  ].join("\n"));
+  assert.deepEqual(readExecutorModel(root), { provider: "openai-codex", model: "gpt-5.6-luna" });
+  writeFileSync(join(root, "project.yaml"), "executor: [unterminated");
+  assert.deepEqual(readExecutorModel(root), { provider: null, model: null });
+  writeFileSync(join(root, "project.yaml"), "executor:\n  provider: 42\n  model: null\n");
+  assert.deepEqual(readExecutorModel(root), { provider: null, model: null });
+});
+
 test("跳阶段迁移被拒绝", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", actor: "test" });

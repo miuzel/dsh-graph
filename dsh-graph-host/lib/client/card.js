@@ -67,6 +67,15 @@
       }, blocks);
     }
 
+    // g-200：判断 Goal 是否有正在活跃的执行 attempt（排除收集子代理）
+    function hasActiveGoalExecutionAttempt(attempts) {
+      return (attempts ?? []).some((a) => {
+        if (a?.executor === "agent:collect" || a?.result !== "pending") return false;
+        const line = String(a?.status_line ?? "").trim();
+        return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
+      });
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
@@ -249,11 +258,14 @@
         blocked && g.blocked_reason
           ? h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + g.blocked_reason)
           : null,
-        // g-a92e1406：执行会话内嵌实时条——status_line 摘要并入状态小窗
-        //（运行中 ⏳ / 空闲刚执行完 ✅）；无执行会话时退化为独立状态行（带动画）
-        g.attempt_child_id
+        // g-a92e1406 & g-200：执行会话内嵌实时条——status_line 摘要并入状态小窗
+        //（运行中 ⏳ / 空闲刚执行完 ✅）；当且仅当 Goal 处于执行态（in_progress）或有明确活跃执行 attempt 时展示 Goal LiveStrip；
+        // 仅有上下文卡片处于 collecting 时隐藏 Goal LiveStrip，避免在 Goal 与子卡片重复展示；
+        // 无执行会话但有 status_line 时退化为独立状态行（带动画）
+        g.attempt_child_id && (g.status === "in_progress" || hasActiveGoalExecutionAttempt(g.attempts))
           ? h("div", { key: "live" },
               h(LiveStrip, { parentId: g.attempt_parent_session_id, childId: g.attempt_child_id,
+                             provider: g.attempt_provider, model: g.attempt_model,
                              statusLine: g.status_line }))
           : g.status_line
             ? h(StatusLine, { text: g.status_line, blocked: g.status === "blocked", running: g.status === "in_progress" })
@@ -274,7 +286,8 @@
             h(CardSummary, { summary: c.summary }),
             c.child_id && c.status !== "filled" && c.status !== "reviewed"
               ? h("div", { onClick: (e) => e.stopPropagation() },
-                  h(LiveStrip, { parentId: c.parent_session_id, childId: c.child_id }))
+                  h(LiveStrip, { parentId: c.parent_session_id, childId: c.child_id,
+                                 provider: c.provider, model: c.model }))
               : null)),
       );
     }

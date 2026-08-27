@@ -194,12 +194,10 @@ const HELP_TEXT = [
   "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
 ].join("\n");
 
-// g-120：worktree 隔离指令（负责人 2026-08-22 指示）——与 supervisor-guide.md 执行规范
-// 「worktree 隔离」条目保持一致。两处执行派发（graph_start_attempt 工具 + start-execution
-// 端点）默认注入本段；派发方可显式关闭（工具参数 worktree=false / 端点 body.worktree=false）
-// 跳过 worktree（简单/单文件小修）。数据分工：代码改动在 worktree，看板数据 .dsh-graph/
-// 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）。
-const WORKTREE_GUIDE = `【worktree 隔离】并发/复杂的执行任务：先 \`git worktree add\` 一个独立工作树（与 main 隔离）再改代码，review 交付阶段由 supervisor 复核通过后合并回 main——避免并发子代理互相踩提交、半成品直接落 main。**「直接 main」仅限真正的一两行、唯一文件改动、且无其他目标并发改该文件；多目标并发改同一文件时必须 worktree，不得自认为改动简单就直改 main**。
+// g-120：worktree 隔离指令（Supervisor 强制默认）——与 supervisor-guide.md 执行规范保持一致。
+// graph_start_attempt / start-execution 默认注入本段；只有 supervisor 明确 override 才能跳过。
+const WORKTREE_GUIDE = `【强制 worktree 隔离】本次任务默认必须在独立 worktree 中完成：先确认当前仓库根与目标分支，再执行 \`git worktree add .worktrees/g-<goal-number>-att-<NN> -b g-<goal-number>-att-<NN>\`，之后所有代码/测试/生成文件改动只能发生在该 worktree；**禁止直接修改 main 或其他目标分支，也禁止自行以「简单改动」为理由绕过隔离**。完成后在 worktree 提交，等待 supervisor 复核；当前版本由 supervisor 合并 main，未来版本合并对应版本集成/测试分支（如 v0.8-test）。
+【唯一例外】仅当 supervisor 在本次派发的 attempt brief 中明确写出 \`worktree=false\` 与理由时，才允许真正的一两行、唯一文件小修直接 main；文档/长期记忆等小修改由 supervisor 自己处理，子代理不得擅自套用例外。
 【worktree 命名规范】新建 attempt 工作树必须命名为 .worktrees/g-<goal-number>-att-<NN>，分支使用相同后缀（例如 g-125-att-03、g-163-att-03）；不要使用省略 goal id 或未补零的歧义名称。
 数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
 
@@ -449,15 +447,24 @@ export function apply(ctx, config) {
       def: {
         name: "graph_bind_collect_card",
         description: "把已派发的收集子代理绑定到上下文卡片：写 child_id/parent_session_id、置 status=collecting，并记 card.collecting 事件（事件先行，R-02）。parent_session_id 缺省取当前会话 id（子代理会话文件头 parentSession 为权威来源，需不一致时显式传入）；重复绑定同一 child 幂等（不重复记事件）。",
-        parameters: params({ goal: str, card: str, child_id: str, parent_session_id: str }, ["goal", "card", "child_id"]),
+        parameters: params({ goal: str, card: str, child_id: str, parent_session_id: str, provider: str, model: str }, ["goal", "card", "child_id"]),
       },
       run: (a, ex) => {
         if (!a.goal || !a.card || !a.child_id) {
           throw new Error("graph_bind_collect_card 缺参：需要 goal/card/child_id（parent_session_id 可选）");
         }
         const parentSessionId = a.parent_session_id ?? ex?.agent?.session?.id ?? null;
-        bindCardChild(rootFor(ex), a.goal, a.card, { childId: a.child_id, parentSessionId, actor: actorOf(ex) });
-        return { ok: true, card: a.card, child_id: a.child_id, parent_session_id: parentSessionId };
+        bindCardChild(rootFor(ex), a.goal, a.card, {
+          childId: a.child_id,
+          parentSessionId,
+          actor: actorOf(ex),
+          provider: a.provider ?? null,
+          model: a.model ?? null,
+        });
+        const out = { ok: true, card: a.card, child_id: a.child_id, parent_session_id: parentSessionId };
+        if (a.provider) out.provider = a.provider;
+        if (a.model) out.model = a.model;
+        return out;
       },
     },
     {
@@ -571,7 +578,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_start_attempt",
-        description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。worktree=false 时省略 spawn 提示词里的 worktree 隔离指令（简单/单文件小修可跳过，默认注入）。attempt_brief 是主管为本次 attempt 提供的可审计 brief/directive（g-150），写入 attempt meta 与事件；缺省时保持当前 prompt 兼容。",
+        description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。默认强制注入独立 worktree 隔离提示；仅 supervisor 明确传 worktree=false 并说明理由时才关闭。attempt_brief 是主管为本次 attempt 提供的可审计 brief/directive（g-150），写入 attempt meta 与事件。",
         parameters: params({ goal: str, executor: str, provider: str, model: str, worktree: { type: "boolean" }, attempt_brief: str }, ["goal"]),
       },
       run: async (a, ex) => {
@@ -595,10 +602,29 @@ export function apply(ctx, config) {
         // 此时用 r 的父目录作为相对路径基准
         const ws = sessionWorkspace(ex) ?? dirname(r);
         const goalRel = goalFile ? relative(ws, goalFile) : null;
-        const attempt = startAttempt(r, a.goal, { executor, actor: actorOf(ex), injectedCards, injectedHandoffs: injectedHandoffRefs, attemptBrief: a.attempt_brief ?? undefined, injectedDirective: readGoalDirective(r, a.goal) ?? undefined });
+        const eff = resolveModelRoute(
+          { provider: a.provider, model: a.model },
+          readExecutorModel(r),
+          readGraphSettings(),
+        );
+        const effProvider = eff.provider;
+        const effModel = eff.model;
+        const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
+        const attempt = startAttempt(r, a.goal, {
+          executor,
+          actor: actorOf(ex),
+          injectedCards,
+          injectedHandoffs: injectedHandoffRefs,
+          attemptBrief: a.attempt_brief ?? undefined,
+          injectedDirective: readGoalDirective(r, a.goal) ?? undefined,
+          provider: effProvider,
+          model: effModel,
+          modelRoute: effRoute,
+        });
         // 注意：返回值必须是无损 JSON——绝不写入值为 undefined 的字段（registry 会拒绝）
         const result = { attempt, child_id: null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs };
         if (a.attempt_brief) result.brief = a.attempt_brief;
+        if (effRoute) result.model_route = effRoute;
         const subagents = ctx.get?.("subagents");
         if (subagents && ex?.agent) {
           try {
@@ -646,15 +672,6 @@ export function apply(ctx, config) {
             ].filter(Boolean).join("\n");
             const request = { parent: ex.agent, prompt: text(prompt) };
             const agentOptions = {};
-            // 模型路由：工具参数 > project.yaml executor.provider/model > profile 全局默认（dsh-graph 设置）> 继承父会话
-            //（每次调用现读，改配置免重启；合成逻辑在 core/ops.ts resolveModelRoute）
-            const eff = resolveModelRoute(
-              { provider: a.provider, model: a.model },
-              readExecutorModel(rootFor(ex)),
-              readGraphSettings(),
-            );
-            const effProvider = eff.provider;
-            const effModel = eff.model;
             if (effProvider) agentOptions.provider = effProvider;
             if (effModel) agentOptions.model = effModel;
             if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
@@ -664,12 +681,22 @@ export function apply(ctx, config) {
               request,
               signal: ex.signal,
             });
-            bindAttemptChild(rootFor(ex), a.goal, attempt, started.childId, actorOf(ex), ex.agent?.session?.id);
+            bindAttemptChild(
+              rootFor(ex),
+              a.goal,
+              attempt,
+              started.childId,
+              actorOf(ex),
+              ex.agent?.session?.id,
+              effProvider,
+              effModel,
+              effRoute,
+            );
             // 负责人 2026-08-22：开始执行的目标必须落到执行 lane——派发成功后自动迁 in_progress
             //（若已 in_progress 或门槛未满足则静默，子代理自行汇报）
             try { transition(rootFor(ex), a.goal, "in_progress", { reason: "attempt 派发（graph_start_attempt）", actor: actorOf(ex) }); } catch { /* 已在 in_progress 或迁移被拒 */ }
             result.child_id = started.childId;
-            if (effProvider || effModel) result.model_route = `${effProvider ?? "继承"}/${effModel ?? "继承"}`;
+            if (effRoute) result.model_route = effRoute;
           } catch (e) {
             result.note = `subagent 派发失败（attempt 已本地创建）：${e?.message ?? e}`;
           }
@@ -1153,7 +1180,21 @@ export function apply(ctx, config) {
           const { goal, card, prompt, provider, model } = body;
           if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
           const rRoot = rootForReq(req, body);
-          const attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
+          const eff = resolveModelRoute(
+            { provider, model },
+            readExecutorModel(rRoot),
+            readGraphSettings(),
+          );
+          const effProvider = eff.provider;
+          const effModel = eff.model;
+          const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
+          const attempt = startAttempt(rRoot, goal, {
+            executor: "agent:collect",
+            actor: "human:gui",
+            provider: effProvider,
+            model: effModel,
+            modelRoute: effRoute,
+          });
           // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区
           const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt);
           const spawned = await spawnChild(
@@ -1161,16 +1202,16 @@ export function apply(ctx, config) {
             fullPrompt,
             req,
             rRoot,
-            { provider, model },
+            { provider: effProvider, model: effModel },
           );
           if (spawned.error) {
             console.error("[dsh-graph-host] start-collection 子代理启动失败:", spawned.error);
           } else {
             // 事件先行：attempt.bound → card.collecting（bindCardChild 写 child_id/parent_session_id）
-            bindAttemptChild(rRoot, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
-            bindCardChild(rRoot, goal, card, { childId: spawned.childId, parentSessionId: spawned.parentSessionId, actor: "human:gui" });
+            bindAttemptChild(rRoot, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId, effProvider, effModel, effRoute);
+            bindCardChild(rRoot, goal, card, { childId: spawned.childId, parentSessionId: spawned.parentSessionId, actor: "human:gui", provider: effProvider, model: effModel });
           }
-          json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error });
+          json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
@@ -1232,10 +1273,28 @@ export function apply(ctx, config) {
           const handoffsSection = formatReviewedAttemptHandoffsSection(rRoot, goal);
           // g-150 范围扩展：读取最近指令（注入 prompt；空时不影响现有 prompt 行为）
           const directiveSection = formatGoalDirectiveSection(rRoot, goal);
-          // worktree 隔离指令（g-120）：body.worktree=false 关闭（简单/单文件小修跳过），默认注入
+          // Supervisor 默认强制 worktree 隔离；仅明确批准的 body.worktree=false 才关闭（g-202）
           const worktreeBlock = worktree === false ? "" : WORKTREE_GUIDE;
           const currentDirective = readGoalDirective(rRoot, goal);
-          const attempt = startAttempt(rRoot, goal, { executor: "agent:executor", actor: "human:gui", injectedCards, injectedHandoffs: injectedHandoffRefs, attemptBrief: attempt_brief ?? undefined, injectedDirective: currentDirective ?? undefined });
+          const eff = resolveModelRoute(
+            { provider, model },
+            readExecutorModel(rRoot),
+            readGraphSettings(),
+          );
+          const effProvider = eff.provider;
+          const effModel = eff.model;
+          const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
+          const attempt = startAttempt(rRoot, goal, {
+            executor: "agent:executor",
+            actor: "human:gui",
+            injectedCards,
+            injectedHandoffs: injectedHandoffRefs,
+            attemptBrief: attempt_brief ?? undefined,
+            injectedDirective: currentDirective ?? undefined,
+            provider: effProvider,
+            model: effModel,
+            modelRoute: effRoute,
+          });
           // g-113 修正：子代理工作目录 = 会话 workspace（继承 session.header.cwd），
           // 相对路径以 workspace 根为基准（.dsh-graph/versions/...），不是服务进程 cwd 或 .dsh-graph 目录
           // g-149：workspaceOf 可能返回 null（无显式 workspace 但有绝对 config.root），
@@ -1283,15 +1342,33 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
 迁移要与 graph_report_status 同步进行，别只改 status_line 不动卡片；若迁移被引擎拒绝（如判据未登记、状态不允许），保留 status 汇报并继续工作，不要反复硬试。
 
 完成后用 graph_report_status 汇报最终状态，声明完成并等待 review。`;
-          const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, rRoot, { provider, model });
+          const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, rRoot, { provider: effProvider, model: effModel });
           if (spawned.error) {
             console.error("[dsh-graph-host] start-execution 子代理启动失败:", spawned.error);
           } else {
-            bindAttemptChild(rRoot, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
+            bindAttemptChild(
+              rRoot,
+              goal,
+              attempt,
+              spawned.childId,
+              "human:gui",
+              spawned.parentSessionId,
+              effProvider,
+              effModel,
+              effRoute,
+            );
             // 负责人 2026-08-22：执行按钮派发后目标必须落到执行 lane——自动迁 in_progress
             try { transition(rRoot, goal, "in_progress", { reason: "attempt 派发（GUI 执行）", actor: "human:gui" }); } catch { /* 已在 in_progress 或迁移被拒 */ }
           }
-          json(res, 200, { ok: true, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: spawned.model_route ?? null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs });
+          json(res, 200, {
+            ok: true,
+            attempt,
+            child_id: spawned.childId,
+            child_error: spawned.error,
+            model_route: effRoute,
+            injected_cards: injectedCards,
+            injected_handoffs: injectedHandoffRefs,
+          });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
