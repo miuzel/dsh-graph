@@ -198,10 +198,12 @@ test("g-202 graph_start_attempt：合法 card 用标准 prompt 派发并绑定�
   const byName = new Map(registered.map((d) => [d.name, d]));
   const card = (await byName.get("graph_add_card")!.execute({ goal, title: "资料", kind: "text" }, { agent: undefined })).card;
   const exec = { agent: { session: { id: "super" } }, signal: new AbortController().signal };
-  const out = await byName.get("graph_start_attempt")!.execute({ goal, card, provider: "p", model: "m" }, exec);
+  const brief = "CARD_BRIEF_SENTINEL";
+  const out = await byName.get("graph_start_attempt")!.execute({ goal, card, provider: "p", model: "m", attempt_brief: brief }, exec);
   assert.deepEqual(Object.keys(out).sort(), ["card", "child_id", "child_error", "model_route"].sort());
   assert.equal(out.child_id, "collect-child");
   assert.match(request.request.prompt[0].text, new RegExp(`graph_fill_card\\(goal=\\"${goal}\\", card=\\"${card}`));
+  assert.ok(request.request.prompt[0].text.includes(brief), "card 收集 prompt 应保留 attempt_brief");
   assert.equal(loadGoal(findGoalFile(root, goal)).meta.status, "planning");
   const cardFile = join(dirname(findGoalFile(root, goal)), "cards", `${card}.md`);
   assert.equal(loadGoal(cardFile).meta.status, "collecting");

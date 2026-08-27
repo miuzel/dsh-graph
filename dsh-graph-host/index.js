@@ -591,7 +591,7 @@ export function apply(ctx, config) {
         // g-202：传 card 时统一走上下文收集派发，不创建 Goal execution attempt。
         // 先生成 prompt（同时校验 goal/card），再尝试启动；只有成功启动后才绑定卡片。
         if (a.card !== undefined && a.card !== null) {
-          const fullPrompt = formatCollectPrompt(r, a.goal, a.card);
+          const fullPrompt = formatCollectPrompt(r, a.goal, a.card, a.attempt_brief);
           const eff = resolveModelRoute(
             { provider: a.provider, model: a.model },
             readExecutorModel(r),
