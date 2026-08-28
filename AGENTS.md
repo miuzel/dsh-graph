@@ -117,3 +117,40 @@ node --test core/tests/*.test.ts
 - For multiline `edit`, read output adds a line number, colon, and exactly one separator space to every line. When constructing multiline `old_string`/`new_string`, remove exactly that one separator space from every line, including the second and later lines after each `\n`; preserve any remaining spaces that belong to the body. This also applies to blank or whitespace-only lines: after each `\n`, discard the displayed line's first space before counting body spaces. For example, if read shows `132:    first` and `133:    second` (the first space after each colon is metadata, leaving three body spaces), use `   first\n   second`, not `   first\n    second`. Do not fix only the first line; if matching fails, re-read the surrounding multiple lines and check each line individually.
 - `grep` patterns are parsed as ripgrep regular expressions and are not automatically escaped. When searching for literal text, escape regex metacharacters yourself (for example, write `Card\(g,` rather than `Card(g,`), and escape `[ ] . ? + * | ^ $` and other metacharacters as needed.
 - These notes describe current Harness tool behavior; if the official read output format changes, follow the format actually returned at that time.
+
+## Security & Review Boundary (v0.8)
+
+> 本章节固化 v0.8 本地开发工具的审查边界，防止 fresh review 对本地工具无限升级攻击模型。
+> 来源：g-206（负责人确认）。
+
+### 威胁模型：单用户本地、owner-trusted
+
+- **适用场景**：dsh-graph 作为本地 dsh 插件运行，工作区由单一用户拥有并信任。
+- **强制基线（必须阻断）**：
+  1. **跨 workspace 越界**——插件不得访问当前工作区之外的文件系统路径；
+  2. **凭据泄漏**——API key、token、密码不得明文写入非受控日志或返回给无权限调用方；
+  3. **明显 symlink / 路径错误**——对 `..`、符号链接、绝对路径拼接等常见路径操纵必须有防御；
+  4. **普通并发数据丢失**——单用户本地多进程场景下，必须保证有限本地锁 / CAS 和正常数据完整性；
+  5. **未授权破坏性写入**——不得在无确认情况下执行 `rm -rf`、覆写生产配置等不可逆操作；
+  6. **错误输入崩溃**——对畸形输入、空值、超大值等必须返回可控错误，不得未捕获异常导致进程崩溃。
+- **边界外（不作为每个功能的强制 BLOCK，若功能确实需要再单独提高等级）**：
+  - 同 UID 恶意 FD 复用；
+  - 内核级全量 TOCTOU；
+  - 分布式一致性；
+  - 无限递归 rollback。
+
+### 并发模型：单用户本地多进程
+
+- 要求**有限本地锁 / CAS**和正常数据完整性；
+- **不要求**分布式系统语义（如分布式事务、线性一致性、Paxos/Raft）。
+
+### `@att/` 路径语法：明确受限
+
+- `@att/` 采取**明确受限语法**，仅用于引用附件/资源；
+- 已知限制必须记录在相关目标或长期记忆中；
+- **不无限扩张 regex 边界**——每新增一种 `@att/` 变体需单独评估并记录。
+
+### 共享基础设施优先
+
+- 共享事务 / 错误处理与 REST schema middleware 优先于各功能重复修复；
+- 新增功能应先复用现有中间件，再考虑局部补丁。
