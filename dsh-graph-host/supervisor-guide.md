@@ -112,10 +112,12 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
 
 收集项即上下文卡片，一张卡一个收集任务。**前提：需求描述已定稿（目标离开描述阶段）**
 ——描述未完成前不列收集清单、不建上下文卡片、不派发收集子代理（需求可能变，提前收集
-是浪费）：
+是浪费）。**普通开发/实现/复核目标的标准派发是 `graph_start_attempt(goal=..., worktree=true)`，
+未传 `card` 完全合法，不表示缺上下文、不表示流程违规，也不应被要求先创建 card**：
 
 1. `graph_add_card` 占位（empty）——只登记「需要哪方面的资料」，不预设查什么、怎么查；
-2. 派发收集子代理后**必须立即**用 `graph_bind_collect_card(goal, card, child_id[, parent_session_id])`
+   **仅在目标确有信息收集需求时才创建 card，不为走流程而收集**；
+2. 派发**收集子代理**后**必须立即**用 `graph_bind_collect_card(goal, card, child_id[, parent_session_id])`
    把 child_id 绑定到卡片：卡片 → collecting，写 `child_id`/`parent_session_id`，
    记 `card.collecting` 事件（事件先行）——**未绑定即流程违规**。
    `parent_session_id` 的**权威来源是子代理会话文件头**（`parentSession` 字段）；
@@ -127,7 +129,15 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
    调研类收集子代理任务范围要窄、纯文档读取为主，不做实机验证；
 4. 执行 attempt 启动时，按 `context_cards` 顺序把 filled/reviewed 卡片注入执行子代理
    上下文，注入清单记入 `attempt.started` 的 `details.injected_cards`；
+   **`injected_cards: []` 仅表示本次执行无预填充卡片，不代表错误、不代表缺上下文、
+   不代表必须先创建 card**；
 5. 收集子代理输出简单干净时，**复用其会话续轮进入执行阶段**（缓存友好），不另开新会话。
+
+**生命周期区分（不可混淆）**：
+- **开发生命周期**：`goal → attempt → child`（代码实现、功能开发、复核验证）
+- **收集生命周期**：`goal → card → collecting child`（资料调研、信息收集）
+普通 `subagent` 做边界清晰的辅助任务时，不会自动生成 graph attempt/状态记录，
+但这与 card 是否存在**无关**——没有 card 不代表流程缺失，有 card 也不代表必须生成 attempt。
 
 **会话复用政策**：跨目标复用保持主管判断（宽松），但复用前应先 **fork 新子代理 +
 compact 上下文**——卡片绑定干净的新子代理（继承压缩后的上下文），原子代理留在原 turn
@@ -155,7 +165,9 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   等人工输入的空窗期也要报「正在等 X」，让负责人知道你没卡死；
 - **每轮收尾更新为完成态**：结束工作前最后一步把 status 更新为「空闲待命 / 本轮完成 /
   等待输入」等完成态——看板如实反映空闲/完成状态；
-- `graph_start_attempt` 派发执行；传入可选 `card` 参数时统一派发卡片收集（自动生成完整收集提示词并绑定卡片）；**status_line 由执行/收集子代理自己更新**
+- `graph_start_attempt` 派发**执行** attempt（标准写法 `graph_start_attempt(goal=..., worktree=true)`，
+  `card` 参数**仅用于信息收集**——传 `card` 时自动生成完整收集提示词并绑定卡片）；
+  **status_line 由执行/收集子代理自己更新**
   （`graph_report_status`），**supervisor 绝不替子代理汇报**——卡片上那句话是子代理的
   自述，代劳即伪造进展。要求子代理**及时**更新：每做一个动作就写一句，**简短
   （一句人话，尽量 20 字内）**，不攒到结束、不写长篇；
@@ -241,8 +253,8 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 `graph_create_goal` 建卡（可带 version 排期）｜ `graph_move_goal` 排期移动｜
 `graph_set_criteria` 登记判据（自动快照规则版本）｜ `graph_transition` 状态迁移｜
 `graph_amend_goal` 修订记录｜ `graph_add_card / graph_fill_card / graph_review_card`
-信息收集卡｜ `graph_bind_collect_card` 收集子代理绑卡（parent_session_id 反查会话头）｜
-`graph_start_attempt` 派发执行或收集（传 `card` 自动绑卡）｜ `graph_report_status`
+信息收集卡（仅当目标确有收集需求时使用）｜ `graph_bind_collect_card` 收集子代理绑卡（parent_session_id 反查会话头）｜
+`graph_start_attempt` 派发执行 attempt（`card` 参数仅用于信息收集派发）｜ `graph_report_status`
 状态汇报｜ `graph_validate` 全量校验｜ `graph_rebuild` 事件流对账
 
 ## 换会话
