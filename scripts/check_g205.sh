@@ -5,7 +5,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# The target file is in the worktree root under dsh-graph-host/
 GUIDE="${SCRIPT_DIR}/../dsh-graph-host/supervisor-guide.md"
 
 if [[ ! -f "$GUIDE" ]]; then
@@ -42,6 +41,22 @@ fi
 
 if ! grep -q '不为走流程而收集' "$GUIDE"; then
     fail "missing: '不为走流程而收集'"
+fi
+
+# 2b. graph_add_card is for real collection needs only
+if ! grep -q 'graph_add_card' "$GUIDE"; then
+    fail "missing: 'graph_add_card' mention"
+fi
+
+# 2c. collecting → filled/reviewed lifecycle
+if ! grep -q 'collecting' "$GUIDE"; then
+    fail "missing: 'collecting' lifecycle state"
+fi
+if ! grep -q 'filled' "$GUIDE"; then
+    fail "missing: 'filled' lifecycle state"
+fi
+if ! grep -q 'reviewed' "$GUIDE"; then
+    fail "missing: 'reviewed' lifecycle state"
 fi
 
 # 3. graph_bind_collect_card is for collecting child only
@@ -85,46 +100,61 @@ if ! grep -q '没有 card 不代表流程缺失' "$GUIDE"; then
 fi
 
 # 7. graph_start_attempt card parameter semantics
-if ! grep -q '`card` 参数..仅用于信息收集' "$GUIDE"; then
+if ! grep -q '`card` 参数.*仅用于信息收集' "$GUIDE"; then
     fail "missing: '\`card\` 参数仅用于信息收集'"
 fi
 
 # 8. Standard dispatch pattern preserved
-if ! grep -q 'graph_start_attempt(goal=\.\.\., worktree=true)' "$GUIDE"; then
+if ! grep -q 'graph_start_attempt(goal=\.*, worktree=true)' "$GUIDE"; then
     fail "missing: standard dispatch pattern 'graph_start_attempt(goal=..., worktree=true)'"
 fi
 
 # ---- Negative checks: guide MUST NOT contain misleading reverse statements ----
 
 # Must NOT say missing card is a violation / error / must-create
-# (allow the positive clarification "也不应被要求先创建 card" which contains "先创建 card")
-# Check for standalone negative statements, not the positive clarifications
-if grep -qE '缺.*card.*违规|缺少.*card.*错误|未传.*card.*违规' "$GUIDE"; then
-    # Verify these are not part of the positive clarification
-    if grep -qE '不表示缺上下文、不表示流程违规' "$GUIDE"; then
-        # The line contains positive clarification, but grep -qE matched something else
-        # Let's do a more precise check: look for actual standalone negative statements
-        :
-    fi
-    # Re-check more narrowly: lines that say missing card IS a violation
-    if grep -qE '^.*缺.*card.*违规.*$' "$GUIDE"; then
-        fail "found misleading reverse statement about missing card"
-    fi
+# Extract lines that contain standalone negative claims (not within positive clarifications)
+# We grep for bad phrases, then verify they only appear inside positive clarification context
+BAD_CARD_LINES=$(grep -nE '缺.*card|缺少.*card|未传.*card|必须先创建.*card' "$GUIDE" || true)
+if [[ -n "$BAD_CARD_LINES" ]]; then
+    # Check if any of these lines are NOT part of positive clarifications
+    # Positive lines contain "不表示" or "不代表" or "也不应被要求"
+    while IFS= read -r line; do
+        if [[ -n "$line" ]] && ! echo "$line" | grep -qE '不表示|不代表|也不应被要求'; then
+            fail "found misleading reverse statement about missing card: $line"
+        fi
+    done <<< "$BAD_CARD_LINES"
 fi
 
-# Must NOT say graph_start_attempt card is for execution dispatch
-if grep -qE 'graph_start_attempt.*card.*执行|card.*参数.*执行' "$GUIDE"; then
-    # But we need to allow "card 参数仅用于信息收集" which contains "信息收集"
-    # and "派发执行 attempt" which is correct. Let's be more specific:
-    # Re-check: the bad pattern would be "card...执行" without "信息收集" nearby
-    # We already checked positive above, so just check for outright bad phrases
-    :
+# Must NOT say card parameter is for execution/development dispatch
+# The guide must NOT say "card...执行" or "card...开发" in the context of graph_start_attempt
+# Positive: "card 参数仅用于信息收集" is OK
+# Negative: any line that says card is for execution/development
+# Allow "执行 attempt 启动时" and "本次执行无预填充卡片" which are about attempt injection, not card semantics
+BAD_CARD_EXEC_LINES=$(grep -nE 'card.*执行|card.*开发' "$GUIDE" || true)
+if [[ -n "$BAD_CARD_EXEC_LINES" ]]; then
+    while IFS= read -r line; do
+        if [[ -n "$line" ]]; then
+            # Skip lines that are about attempt injection mechanics (not card semantics)
+            if echo "$line" | grep -qE '执行 attempt 启动|执行无预填充卡片|context_cards.*注入'; then
+                continue
+            fi
+            # Skip lines that already clarify card is for collection
+            if echo "$line" | grep -qE '信息收集|收集子代理'; then
+                continue
+            fi
+            fail "found card incorrectly associated with execution/development: $line"
+        fi
+    done <<< "$BAD_CARD_EXEC_LINES"
 fi
 
 # Must NOT equate injected_cards: [] with error
-# (allow the positive clarification "不代表错误" which contains "错误")
-if grep -qE 'injected_cards.*违规|injected_cards.*缺失' "$GUIDE"; then
-    fail "found misleading statement equating injected_cards with error"
+BAD_INJECTED_LINES=$(grep -nE 'injected_cards.*错误|injected_cards.*违规|injected_cards.*缺失' "$GUIDE" || true)
+if [[ -n "$BAD_INJECTED_LINES" ]]; then
+    while IFS= read -r line; do
+        if [[ -n "$line" ]] && ! echo "$line" | grep -qE '不代表|不表示'; then
+            fail "found injected_cards incorrectly equated with error: $line"
+        fi
+    done <<< "$BAD_INJECTED_LINES"
 fi
 
 # ---- Summary ----
