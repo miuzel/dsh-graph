@@ -6,9 +6,13 @@ import { parse as parseYaml } from "yaml";
 import { parseDoc, serializeDoc, replaceSection, sectionText, criteriaPresent, countCriteria, criteriaItems, normalizeGoalType, rebuildCriteriaSection, } from "./model.js";
 import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso, nowIsoMs } from "./events.js";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.js";
-import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail } from "./version-lane.js";
+import { withTx, atomicWrite, TxError } from "./transaction.js";
+import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema } from "./schema.js";
+import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail, } from "./version-lane.js";
 export { GraphError, GraphConflictError };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
+export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema };
+export { TxError };
 /** 防止用户输入内容中包含 `## ` 或 `### ` 开头的行，破坏 goal.md section 边界。
  *  将行首 `## ` / `### ` 转义为 `\## ` / `\### `（Markdown 不渲染为标题）。
  *  用于 setGoalDirective 和 appendGoalComment 的输入保护（g-150 返工阻断项 #5）。 */
@@ -177,52 +181,57 @@ export function readSupervisorSession(root) {
 /** 写 project.yaml 的 supervisor.session（g-117）：原子写（临时文件 + rename）、事件先行。
  *  零依赖行编辑：无 supervisor 块则新建；有块无 session 键则插入（跟随块内已有缩进）；
  *  有则替换值并保留行尾注释与其他键。事件：supervisor.claimed（actor 为调用者）。
- *  幂等由 claimSupervisor 把关（值未变不重复记事件）；本 op 每次调用都写 + 记事件。 */
+ *  幂等由 claimSupervisor 把关（值未变不重复记事件）；本 op 每次调用都写 + 记事件。
+ *  g-207：迁移到事务模板——锁保护下读-改-写，原子文件操作，事件先行。 */
 export function writeSupervisorSession(root, sessionId, actor) {
     if (!sessionId.trim())
         throw new GraphError("session id 不能为空");
     const file = join(root, "project.yaml");
-    const text = existsSync(file) ? readFileSync(file, "utf8") : "";
-    const lines = text.split("\n");
-    const blockIdx = lines.findIndex((l) => /^supervisor:\s*$/.test(l));
-    if (blockIdx >= 0) {
-        // 在块内找 session 行（块 = supervisor: 后的缩进行）
-        let sessionIdx = -1;
-        let indent = "  ";
-        for (let i = blockIdx + 1; i < lines.length; i++) {
-            const l = lines[i];
-            if (!/^[ \t]/.test(l))
-                break; // 块结束
-            const sm = l.match(/^([ \t]+)session:/);
-            if (sm) {
-                sessionIdx = i;
-                indent = sm[1];
-                break;
+    const result = withTx({ root, actor }, { lockName: "project.yaml" }, (ctx) => {
+        const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+        const lines = text.split("\n");
+        const blockIdx = lines.findIndex((l) => /^supervisor:\s*$/.test(l));
+        if (blockIdx >= 0) {
+            let sessionIdx = -1;
+            let indent = "  ";
+            for (let i = blockIdx + 1; i < lines.length; i++) {
+                const l = lines[i];
+                if (!/^[ \t]/.test(l))
+                    break;
+                const sm = l.match(/^([ \t]+)session:/);
+                if (sm) {
+                    sessionIdx = i;
+                    indent = sm[1];
+                    break;
+                }
             }
-        }
-        if (sessionIdx >= 0) {
-            // 保留行尾注释：`session: <value>  [comment]` → 只换 value
-            const m = lines[sessionIdx].match(/^([ \t]+session:\s*)[^\s"#]+(\s*#.*)?$/);
-            const tail = m ? (m[2] ?? "") : "";
-            lines[sessionIdx] = `${indent}session: ${sessionId}${tail}`;
+            if (sessionIdx >= 0) {
+                const m = lines[sessionIdx].match(/^([ \t]+session:\s*)[^\s"#]+(\s*#.*)?$/);
+                const tail = m ? (m[2] ?? "") : "";
+                lines[sessionIdx] = `${indent}session: ${sessionId}${tail}`;
+            }
+            else {
+                lines.splice(blockIdx + 1, 0, `${indent}session: ${sessionId}`);
+            }
+            atomicWrite(file, lines.join("\n"));
         }
         else {
-            lines.splice(blockIdx + 1, 0, `${indent}session: ${sessionId}`);
+            const block = `supervisor:\n  session: ${sessionId}`;
+            const trimmed = text.replace(/\s+$/, "");
+            atomicWrite(file, trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`);
         }
-        writeFileSync(`${file}.tmp`, lines.join("\n"), "utf8");
-    }
-    else {
-        // 无 supervisor 块：文末追加新块
-        const block = `supervisor:\n  session: ${sessionId}`;
-        const trimmed = text.replace(/\s+$/, "");
-        writeFileSync(`${file}.tmp`, trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`, "utf8");
-    }
-    renameSync(`${file}.tmp`, file);
-    appendEvent(root, {
-        actor,
-        event: "supervisor.claimed",
-        details: { supervisor_session: sessionId },
+        return {
+            value: undefined,
+            events: [{
+                    actor: ctx.actor,
+                    event: "supervisor.claimed",
+                    details: { supervisor_session: sessionId },
+                }],
+        };
     });
+    if (!result.ok) {
+        throw new GraphError(`supervisor.session 写入失败（${result.phase}）：${result.error}`);
+    }
 }
 /** 生成交接文档全文（g-117）：board 投影 + 长期记忆 + 固定环境事实段。
  *  产物不依赖会话上下文（不读 session、不读 ex）；opts.write 时落盘 <root>/HANDOFF.md。
@@ -716,9 +725,17 @@ function validateConfigPatch(patch) {
     }
 }
 /** g-132 写入 project.yaml 安全配置字段。patch 为部分字段（缺省字段不动）。
- *  整读 → 校验 → 行编辑 → 原子写（tmp + rename）；校验失败抛 GraphError 不落盘。
- *  仅当确有值变化时记 project.config_set 事件（幂等/防噪音）。unknown 键与注释保留。 */
+ *  整读 → schema 校验 → 行编辑 → 原子写（tmp + rename）；校验失败抛 GraphError 不落盘。
+ *  仅当确有值变化时记 project.config_set 事件（幂等/防噪音）。
+ *  g-207：新增 schema 校验入口，拒绝未知字段与隐式 coercion。 */
 export function writeProjectConfig(root, patch, actor) {
+    // g-207：schema 严格校验（拒绝未知字段、类型不匹配、隐式 coercion）
+    const schemaResult = validateSchema(patch, settingsPostSchema);
+    if (!schemaResult.valid) {
+        const resp = schemaErrorResponse(schemaResult.errors);
+        throw new GraphError(`project.yaml patch 校验失败：${resp.error} — ${resp.details.map((d) => `${d.field}(${d.code})`).join(", ")}`);
+    }
+    // 保留原有的 validateConfigPatch 作为二次校验（值范围、业务规则）
     validateConfigPatch(patch);
     const file = join(root, "project.yaml");
     const original = existsSync(file) ? readFileSync(file, "utf8") : "";

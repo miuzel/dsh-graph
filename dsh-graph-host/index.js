@@ -78,6 +78,9 @@ import {
   readPromptOverrideValue,
   readProjectConfig,
   writeProjectConfig,
+  validateSchema,
+  schemaErrorResponse,
+  settingsPostSchema,
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot } from "./core/root.js";
 // g-133：接入 DSH profile 级用户设置（dsh-settings）。为避免在 @deepseek-ai/* 不可解析的上下文
@@ -1429,6 +1432,7 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
       },
     },
     // g-132：读取/写回当前 workspace 的 project.yaml 安全配置（settings 弹窗）
+    // g-207：POST 走 schema 严格校验（拒绝未知字段、隐式 coercion、类型不匹配）
     {
       path: "/api/dsh-graph/settings",
       handler: async (req, res) => {
@@ -1436,6 +1440,12 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           if (req.method === "POST") {
             const body = await readBody(req);
             const r = rootForReq(req, body);
+            // g-207：schema 校验入口——拒绝未知字段、隐式 coercion、类型不匹配
+            const v = validateSchema(body, settingsPostSchema);
+            if (!v.valid) {
+              const resp = schemaErrorResponse(v.errors);
+              return json(res, 400, { error: resp.error, details: resp.details });
+            }
             writeProjectConfig(r, body, "human:gui");
             return json(res, 200, { ok: true, config: readProjectConfig(r) });
           }
