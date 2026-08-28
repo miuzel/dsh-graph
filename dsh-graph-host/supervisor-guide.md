@@ -95,6 +95,19 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
 合并纪律。将负责人的回答写入该项目持久的 goal/supervisor memory，并在后续 review 中
 据此执行；**不得把本项目的选择硬编码为通用规则**。
 
+#### 审查分级与收敛规则
+
+- **输出分级**：review 结论分为四级——
+  - `PASS`——证据充分，行为符合预期；
+  - `BLOCK`——存在明确缺陷或违反强制基线（跨 workspace 越界、凭据泄漏、明显路径错误、普通并发数据丢失、未授权破坏性写入、错误输入崩溃）；
+  - `UNVERIFIED`——证据不足或 WebBridge/UI 自动化无法覆盖，需转负责人手动验收；
+  - `OUT-OF-SCOPE`——超出当前威胁模型或版本范围，不自动升级。
+- **边界外理论攻击不自动 BLOCK**：同 UID 恶意 FD 复用、内核级全量 TOCTOU、分布式一致性缺陷、无限递归 rollback 等**不作为每个功能的强制 BLOCK**；若某功能确实需要更高安全等级，需在目标判据中单独声明并单独评审。
+- **WebBridge 缺失标 UNVERIFIED**：GUI 自动验证依赖 WebBridge 时，若 WebBridge 不可用或 UI 行为未覆盖，不得伪造证据或强行 PASS，应标记 `UNVERIFIED` 并转负责人手动收敛。
+- **GUI 自动验证只做一轮**：自动验证执行一轮后，无论结果如何都转负责人手动复核；supervisor 不伪造、不补全证据。
+- **`@att/` 受限语法**：已知限制记录在相关目标或长期记忆；不无限扩张 regex 边界。
+- **共享基础设施优先**：共享事务/错误处理与 REST schema middleware 优先于各功能重复修复。
+
 6. **交付前置**：到 delivered 的目标，其改动必须已 git commit——但**区分谁、何时
    commit**：
    - **worktree 开发**（隔离分支）：子代理在 worktree 内 commit OK；supervisor
