@@ -68,8 +68,8 @@ Not every task needs a new worktree. Choose isolation level by the risk of the c
 
 **核心原则**：
 - `main` 分支**只承载已发布版本，只读**——任何开发、测试、review 改动不得在 main 上进行；
-- Supervisor 为每个版本先建立 `<version>-test`（或等价命名）开发集成分支，再预创建并登记子代理 worktree；
-- 子代理直接在给定的 worktree 中工作，**绝不自行拉树、建分支、改分支**；
+- Supervisor 为每个版本先建立 `<version>-test`（或等价命名）开发集成分支。**默认直接将 main worktree 切换至该 `<version>-test` 分支作为权威集成与人工验证工作区**，统一使用主仓库根下的 `./tmp/test-review` 启动测试环境，避免多 worktree 导致测试环境与数据存储目录碎片化；
+- Supervisor 预创建并登记子代理 worktree（在 `<version>-test` 基线上预创建专属 `.worktrees/g-xxx-att-xx`）；子代理直接在给定的 worktree 中工作，**绝不自行拉树、建分支、改分支**；
 - 非平凡源码/测试/生成物/有副作用/并行改动仍必须隔离在独立 worktree。
 
 ### worktree = true（强制隔离，默认）

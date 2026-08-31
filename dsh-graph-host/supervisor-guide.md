@@ -213,11 +213,12 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   - 冻结脚本路径、验收命令逐条写全；
 - **worktree 隔离（Supervisor 强制默认）**：
   - **main 只读**：`main` 分支只承载已发布版本，任何开发、测试、review 改动不得在 main 上进行；
-  - **预创建 worktree**：supervisor 为每个版本先建立 `<version>-test`（或等价命名）开发集成分支，再预创建并登记子代理 worktree；子代理直接在给定树工作，**绝不自行拉树/建分支/改分支**；
+  - **版本集成分支与主工作区（main worktree）**：supervisor 为当前推进版本建立 `<version>-test` 集成分支。**默认直接将 main worktree 切换至该 `<version>-test` 分支作为权威集成与人工验证工作区**，统一使用主仓库根下的 `./tmp/test-review` 启动测试环境，避免多 worktree 导致测试环境与数据存储目录碎片化；
+  - **预创建 worktree**：supervisor 预创建并登记子代理 worktree（在 `<version>-test` 基线上预创建专属 `.worktrees/g-xxx-att-xx` 工作树并登记）；子代理直接在给定树工作，**绝不自行拉树/建分支/改分支**；
   - **worktree=true**：非平凡源码/测试/生成物/有副作用/并行改动必须隔离；brief 必须写明专属路径、版本分支、基线 commit、禁止自行拉树/建分支/改分支；
   - **worktree=false 快速通道**：仅以下两类可豁免——① 只读审计/静态检查（brief 明确禁止写文件，需构建副作用时复用 audit worktree）；② 特别小的独立文档/记忆修改（supervisor 直接在当前版本分支做，或子代理显式豁免并记录理由）；只写 graph 数据（看板状态、事件流）可显式不建 worktree，改源码仍隔离；
   - **铁律**：`worktree=false` 绝不意味着可直接修改 main；即使豁免，仍禁止修改多文件源码、修改生成物、修改测试、在任意分支直接提交碎提交；
-  -  review 交付阶段由 supervisor 复核通过后合并到目标集成分支：当前版本合并 main，未来版本合并对应版本测试/集成分支（如 `<version>-test`），不得把未来版本代码带入 main；避免并发子代理互相踩提交、半成品直接落目标分支；
+  -  review 交付阶段由 supervisor 复核通过后合并到当前版本集成分支（`<version>-test`），版本发布前不合并到 main；避免并发子代理互相踩提交、半成品直接落目标分支；
   -  worktree 指令由执行派发注入 spawn 提示词；GUI 端点仅在 supervisor 明确批准时才可传 body `worktree: false`；
   -  数据分工：代码改动在 worktree，看板数据 `.dsh-graph/` 仍在主工作树写（graph_*
     工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）；
