@@ -1,5 +1,5 @@
       const [modalGoal, setModalGoal] = React.useState(null);
-      // g-171 回退修复：镜像 modalGoal 供 load 闭包判定（load 被 15s 轮询闭包捕获，
+      // g-171 回退修复：镜像 modalGoal 供 load 闭包判定（load 被 30s 轮询闭包捕获，
       // 直接读 state 会拿到首次渲染的 null）。详情弹窗打开期间跳过更新强调播放，
       // 避免轮询/保存触发的 load 在弹窗遮罩下抢播并消费 token；关闭弹窗后由
       // onClose 的 load() 补播窗口内目标。
@@ -412,7 +412,7 @@
       }, [props?.sessionId]);
       // g-171：更新强调动画——服务端 generated_at - updated_at 判定 10 秒窗口，
       // 按 goalId+updated_at 防当前页重复播放；整页刷新可对窗口内目标补播。
-      // 只复用现有 load()（首次/手动刷新/写操作后）与 15 秒轮询，不新增任何数据通道。
+      // 只复用现有 load()（首次/手动刷新/写操作后）与 30 秒轮询，不新增任何数据通道。
       const applyUpdateEmphasis = (data) => {
         if (!data || typeof data.generated_at !== "string") return;
         // g-171 回退修复：详情弹窗打开期间跳过播放（弹窗遮罩盖住看板，此时播放
@@ -483,6 +483,25 @@
           delete emphasisTimers.current[g.id];
         }, remaining + 100);
       };
+      const [refreshIntervalSec, setRefreshIntervalSec] = React.useState(getRefreshInterval);
+      React.useEffect(() => {
+        const onIntervalChange = (e) => {
+          const next = e?.detail?.interval ?? getRefreshInterval();
+          setRefreshIntervalSec(next);
+        };
+        const onStorage = (e) => {
+          if (e.key === REFRESH_INTERVAL_KEY) {
+            setRefreshIntervalSec(getRefreshInterval());
+          }
+        };
+        window.addEventListener("dsh-graph.refresh-interval-changed", onIntervalChange);
+        window.addEventListener("storage", onStorage);
+        return () => {
+          window.removeEventListener("dsh-graph.refresh-interval-changed", onIntervalChange);
+          window.removeEventListener("storage", onStorage);
+        };
+      }, []);
+
       const load = () => {
         const params = showArchived ? "?includeArchived=1" : "";
         fetch(graphUrl("/api/dsh-graph" + params))
@@ -492,8 +511,6 @@
       };
       React.useEffect(() => {
         load();
-        const t = setInterval(load, 15000);
-        return () => clearInterval(t);
       }, [showArchived]); // showArchived 变化时重新加载
 
       // g-181：5 个父级 overlay 的 backdrop 误关保护——内容起点后释放到 backdrop 的合成 click 吞掉。
@@ -1159,7 +1176,12 @@
             title: "dsh-graph 插件官网",
             style: { ...S.meta, color: "var(--dsw-alias-state-business-primary, #8ab4ff)", cursor: "pointer", textDecoration: "underline" },
           }, "version: " + PLUGIN_VERSION),
-          h("span", { style: S.meta }, "数据时间：" + (b.generated_at ?? "").replace("T", " ").slice(0, 19)),
+          // g-214：局部化倒计时组件渲染数据更新时间及剩余秒数倒计时
+          h(RefreshCountdown, {
+            generatedAt: b.generated_at,
+            intervalSec: refreshIntervalSec,
+            onTriggerRefresh: load,
+          }),
           h("button", { style: { ...S.btn, marginLeft: 8 }, className: "dg-btn", onClick: load }, "刷新"),
           // g-110: 显示已归档目标的 checkbox
           h("label", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 12, cursor: "pointer", fontSize: 12, opacity: 0.8 } },

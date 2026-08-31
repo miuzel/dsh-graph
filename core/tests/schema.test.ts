@@ -248,6 +248,14 @@ test("settingsPostSchema：合法 project.yaml patch 通过", () => {
       review: { reviewer: "human" },
       pk: { lanes: 2 },
     },
+    supervisor: {
+      automation: {
+        scope_planning: null,
+        integration_decision: "human",
+        rework: "",
+        memory_promotion: "ai",
+      },
+    },
   };
   const result = validateSchema(patch, settingsPostSchema);
   assert.equal(result.valid, true);

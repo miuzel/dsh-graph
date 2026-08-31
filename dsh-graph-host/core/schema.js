@@ -78,7 +78,8 @@ function validateField(value, schema, path, errors) {
     const types = Array.isArray(schema.type)
         ? schema.type
         : [schema.type];
-    const allowedTypes = schema.nullable && !types.includes("null")
+    const isNullable = schema.nullable || (schema.enum && schema.enum.includes(null));
+    const allowedTypes = isNullable && !types.includes("null")
         ? [...types, "null"]
         : types;
     // null 值特殊处理
@@ -255,12 +256,12 @@ export const projectConfigPatchSchema = {
                 automation: {
                     type: "object",
                     properties: {
-                        scope_planning: { type: "string", enum: ["human", "ai", null] },
-                        integration_decision: { type: "string", enum: ["human", "ai", null] },
-                        rework: { type: "string", enum: ["human", "ai", null] },
-                        memory_promotion: { type: "string", enum: ["human", "ai", null] },
-                        skill_proposal: { type: "string", enum: ["human", "ai", null] },
-                        release: { type: "string", enum: ["human", "ai", null] },
+                        scope_planning: { type: "string", enum: ["human", "ai", ""], nullable: true },
+                        integration_decision: { type: "string", enum: ["human", "ai", ""], nullable: true },
+                        rework: { type: "string", enum: ["human", "ai", ""], nullable: true },
+                        memory_promotion: { type: "string", enum: ["human", "ai", ""], nullable: true },
+                        skill_proposal: { type: "string", enum: ["human", "ai", ""], nullable: true },
+                        release: { type: "string", enum: ["human", "ai", ""], nullable: true },
                     },
                     additionalProperties: false,
                 },

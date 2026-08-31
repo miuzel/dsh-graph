@@ -171,4 +171,152 @@
       };
     }
 
+    // ===== g-214：看板刷新间隔配置与自定义倒计时 =====
+    const REFRESH_INTERVAL_KEY = "dsh-graph.refresh-interval";
+    const DEFAULT_REFRESH_INTERVAL = 15;
+    const MIN_REFRESH_INTERVAL = 5;
+
+    function getRefreshInterval() {
+      try {
+        const raw = localStorage.getItem(REFRESH_INTERVAL_KEY);
+        if (raw === null || raw === "") return DEFAULT_REFRESH_INTERVAL;
+        const val = Number(raw);
+        if (!Number.isFinite(val) || val < MIN_REFRESH_INTERVAL) return MIN_REFRESH_INTERVAL;
+        return Math.floor(val);
+      } catch {
+        return DEFAULT_REFRESH_INTERVAL;
+      }
+    }
+
+    function setRefreshInterval(val) {
+      let num = Number(val);
+      if (!Number.isFinite(num) || num < MIN_REFRESH_INTERVAL) {
+        num = MIN_REFRESH_INTERVAL;
+      } else {
+        num = Math.floor(num);
+      }
+      try {
+        localStorage.setItem(REFRESH_INTERVAL_KEY, String(num));
+      } catch {}
+      window.dispatchEvent(new CustomEvent("dsh-graph.refresh-interval-changed", { detail: { interval: num } }));
+      return num;
+    }
+
+    // g-214：局部化倒计时组件，避免每秒 tick 引起整个看板大面积重绘；
+    // g-211：融合 visibilitychange 感知，页面后台时暂停倒计时，切回前台补偿触发
+    function RefreshCountdown(props) {
+      const { generatedAt, intervalSec, onTriggerRefresh } = props;
+      const [remaining, setRemaining] = React.useState(intervalSec);
+      const nextTriggerAtRef = React.useRef(Date.now() + intervalSec * 1000);
+      const lastRefreshTimeRef = React.useRef(Date.now());
+      const onTriggerRef = React.useRef(onTriggerRefresh);
+      onTriggerRef.current = onTriggerRefresh;
+
+      // 周期或数据时间（手动/自动刷新完成）更新时重置倒计时终点
+      React.useEffect(() => {
+        lastRefreshTimeRef.current = Date.now();
+        nextTriggerAtRef.current = Date.now() + intervalSec * 1000;
+        setRemaining(intervalSec);
+      }, [generatedAt, intervalSec]);
+
+      // 独立 1 秒 tick 驱动平滑递减，归零时触发刷新；融合后台暂停与切回补偿
+      React.useEffect(() => {
+        let timer = null;
+        const startTimer = () => {
+          if (!timer) {
+            timer = setInterval(() => {
+              const now = Date.now();
+              const leftMs = nextTriggerAtRef.current - now;
+              const leftSec = Math.max(0, Math.ceil(leftMs / 1000));
+              setRemaining(leftSec);
+              if (leftSec <= 0) {
+                nextTriggerAtRef.current = Date.now() + intervalSec * 1000;
+                lastRefreshTimeRef.current = Date.now();
+                onTriggerRef.current?.();
+              }
+            }, 1000);
+          }
+        };
+        const stopTimer = () => {
+          if (timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+        };
+
+        const handleVisibilityChange = () => {
+          if (typeof document === "undefined") return;
+          if (document.visibilityState === "visible") {
+            const now = Date.now();
+            // 切回前台且距离上次刷新达到阈值（10 秒）立即补偿刷新
+            if (now - lastRefreshTimeRef.current >= 10000) {
+              nextTriggerAtRef.current = now + intervalSec * 1000;
+              lastRefreshTimeRef.current = now;
+              setRemaining(intervalSec);
+              onTriggerRef.current?.();
+            } else {
+              const leftMs = nextTriggerAtRef.current - now;
+              setRemaining(Math.max(0, Math.ceil(leftMs / 1000)));
+            }
+            startTimer();
+          } else {
+            // 后台/隐藏时暂停倒计时与轮询
+            stopTimer();
+          }
+        };
+
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+          // 当前在后台不启动
+        } else {
+          startTimer();
+        }
+
+        if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+          document.addEventListener("visibilitychange", handleVisibilityChange);
+        }
+
+        return () => {
+          stopTimer();
+          if (typeof document !== "undefined" && typeof document.removeEventListener === "function") {
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
+          }
+        };
+      }, [intervalSec]);
+
+      const timeStr = (generatedAt ?? "").replace("T", " ").slice(0, 19);
+      // 进度比例 0..1（随倒计时递减）
+      const progress = intervalSec > 0 ? remaining / intervalSec : 0;
+      return h("span", {
+        style: { ...S.meta, display: "inline-flex", alignItems: "center", gap: 5, userSelect: "none" },
+        title: `已配置自动刷新周期：${intervalSec}s（距离下次自动刷新约 ${remaining}s）`,
+      },
+        `更新于 ${timeStr}`,
+        h("span", {
+          style: {
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 2,
+            opacity: 0.7,
+            fontSize: 11,
+            fontVariantNumeric: "tabular-nums",
+            cursor: "default",
+          },
+        },
+          h("span", {
+            style: {
+              display: "inline-block",
+              width: 10,
+              height: 10,
+              borderRadius: "50%",
+              border: "1.5px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))",
+              borderTopColor: "var(--dsw-alias-state-business-primary, #4c8dff)",
+              transform: `rotate(${Math.round((1 - progress) * 360)}deg)`,
+              transition: "transform 1s linear",
+              boxSizing: "border-box",
+              flexShrink: 0,
+            },
+          }),
+          h("span", { style: { minWidth: "18px", textAlign: "right", opacity: 0.85, fontSize: 10 } }, `${remaining}s`)));
+    }
+
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====

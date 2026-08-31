@@ -403,10 +403,11 @@ export function reportSupervisorStatus(root: string, line: string, actor: string
 }
 
 /** 读取 supervisor 最新一条状态摘要（事件流，坏行跳过）；无则 null。 */
-export function readSupervisorStatus(root: string): string | null {
+export function readSupervisorStatus(rootOrEvents: string | GraphEvent[]): string | null {
   let latest: string | null = null;
   try {
-    for (const e of readEvents(root)) {
+    const events = typeof rootOrEvents === "string" ? readEvents(rootOrEvents) : rootOrEvents;
+    for (const e of events) {
       if (e.event !== "supervisor.status_reported") continue;
       const s = String(e.details?.status ?? "").trim();
       if (s) latest = s;
@@ -418,10 +419,11 @@ export function readSupervisorStatus(root: string): string | null {
 }
 
 /** 读取 supervisor 最新状态的时间戳（epoch ms；无则 null）——供客户端判断状态是否过期清空。 */
-export function readSupervisorStatusAt(root: string): number | null {
+export function readSupervisorStatusAt(rootOrEvents: string | GraphEvent[]): number | null {
   let latest: number | null = null;
   try {
-    for (const e of readEvents(root)) {
+    const events = typeof rootOrEvents === "string" ? readEvents(rootOrEvents) : rootOrEvents;
+    for (const e of events) {
       if (e.event !== "supervisor.status_reported") continue;
       const t = Date.parse(String(e.ts ?? ""));
       if (Number.isFinite(t)) latest = t;
@@ -1263,6 +1265,9 @@ export function transition(
   opts: { reason?: string; actor: string; force?: boolean },
 ): void {
   const file = findGoalFile(root, id);
+  if (isBacklogFile(file, root)) {
+    throw new GraphError(`目标 ${id} 位于 backlog（草稿），不允许阶段迁移；请先排期进入版本或独立目标`);
+  }
   const doc = loadGoal(file);
   const events = readEvents(root);
   const criteriaConfirmed = events.some(
@@ -2360,6 +2365,34 @@ export function moveGoal(
     targetFile = join(root, "versions", opts.version, "goals", id, "goal.md");
     targetDirForm = true;
     doc.meta.version = opts.version;
+    // 隐式版本：version.md 不存在时补骨架（与 createGoal 一致）
+    const vfile = join(root, "versions", opts.version, "version.md");
+    if (!existsSync(vfile)) {
+      const vId = "v-" + randomUUID().slice(0, 8);
+      const vCreatedAt = nowIso();
+      mkdirSync(join(root, "versions", opts.version), { recursive: true });
+      saveGoal(vfile, {
+        meta: {
+          id: vId,
+          name: opts.version,
+          status: "planning",
+          created_at: vCreatedAt,
+        },
+        body: "\n## 范围\n\n（隐式创建：由 move-goal --version 带入）\n",
+      });
+      appendEvent(root, {
+        actor: opts.actor,
+        event: "version.created",
+        details: {
+          version: opts.version,
+          name: opts.version,
+          version_id: vId,
+          status: "planning",
+          created_at: vCreatedAt,
+          implicit: true,
+        },
+      });
+    }
     // g-147：只有从 backlog（draft 状态）进入时才变为 planning
     if (prevStatus === "draft") {
       doc.meta.status = "planning";
@@ -2710,13 +2743,14 @@ export interface BoardVersion {
   goals: BoardGoal[];
 }
 
-export function boardProjection(root: string, opts?: { includeArchived?: boolean }): {
+export function boardProjection(root: string, opts?: { includeArchived?: boolean; events?: GraphEvent[] }): {
   generated_at: string;
   versions: BoardVersion[];
   standalone: BoardGoal[];
   backlog: BoardGoal[];
 } {
   const includeArchived = opts?.includeArchived ?? false;
+  const events = opts?.events ?? readEvents(root);
   const goalItem = (file: string): BoardGoal => {
     const doc = loadGoal(file);
     const meta = doc.meta;
@@ -2962,7 +2996,7 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
   ];
   const reusedBy = new Map<string, string>(); // oldGoalId -> newGoalId
   try {
-    for (const e of readEvents(root)) {
+    for (const e of events) {
       if (e.event !== "attempt.reused" || !e.goal) continue;
       const rb = String(e.details?.reused_by ?? "");
       const newGoal = rb.split("/")[0];
@@ -3000,15 +3034,22 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
 /** 看板端点载荷：board 投影 + supervisorSession（g-108）。
  *  由 dsh-graph-host 的 client 半边（/api/dsh-graph）消费，会话 id 不在任何代码里硬编码。
  *  g-111 B7：从 dsh-graph-host/index.js 移入 core，消除跨包依赖（g-116 合并后单包内复用）。
- *  g-110：opts.includeArchived 控制是否包含已归档目标。 */
+ *  g-110：opts.includeArchived 控制是否包含已归档目标。
+ *  g-211：合并 readEvents 为单次文件读取与解析，复用内存事件数组给 supervisor 状态与 boardProjection。 */
 export function boardPayload(root: string, opts?: { includeArchived?: boolean }) {
+  let events: GraphEvent[] = [];
+  try {
+    events = readEvents(root);
+  } catch {
+    /* 事件流异常时保留空数组，降级处理 */
+  }
   return {
-    ...boardProjection(root, opts),
+    ...boardProjection(root, { includeArchived: opts?.includeArchived, events }),
     supervisorSession: readSupervisorSession(root),
     // g-a92e1406 判据 3① 扩展：supervisor 状态栏显示 supervisor 自己的 status_line（事件流最新一条）
-    supervisorStatus: readSupervisorStatus(root),
+    supervisorStatus: readSupervisorStatus(events),
     // 状态新鲜度（负责人 2026-08 指示：新一轮开始应清空上次 status，等快速替换）——时间戳供客户端过期清空
-    supervisorStatusAt: readSupervisorStatusAt(root),
+    supervisorStatusAt: readSupervisorStatusAt(events),
   };
 }
 

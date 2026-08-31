@@ -18,36 +18,83 @@
  */
 import { resolve, isAbsolute } from "node:path";
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+/** Default TTL for canonical root / git worktree cache: 30 seconds. */
+export const DEFAULT_CANONICAL_CACHE_TTL_MS = 30_000;
+const worktreeInfoCache = new Map();
+const canonicalRootCache = new Map();
+/**
+ * Inspect .git path (directory or worktree pointer file) mtime for cache invalidation.
+ * Returns null if .git is not found or stat fails.
+ */
+function getGitMtime(workspaceRoot) {
+    try {
+        const gitPath = resolve(workspaceRoot, ".git");
+        if (existsSync(gitPath)) {
+            return statSync(gitPath).mtimeMs;
+        }
+    }
+    catch {
+        // Ignore stat failures
+    }
+    return null;
+}
+/** Clear all in-memory git worktree and canonical root caches (testing/debugging). */
+export function _clearCanonicalRootCache() {
+    worktreeInfoCache.clear();
+    canonicalRootCache.clear();
+}
+/** Check whether a cache entry is still valid (TTL not expired and .git mtime unchanged). */
+function isCacheEntryValid(workspaceKey, entry, ttlMs) {
+    if (Date.now() - entry.timestamp > ttlMs) {
+        return false;
+    }
+    const currentMtime = getGitMtime(workspaceKey);
+    if (currentMtime !== entry.gitMtimeMs) {
+        return false;
+    }
+    return true;
+}
 export function resolveRoot(config, workspaceRoot = process.cwd()) {
     return resolve(workspaceRoot, config?.root ?? ".dsh-graph");
 }
+/** Custom runner for git exec commands (overridable in tests/mocking). */
+export const _gitRunner = {
+    execSync: (cmd, options) => execSync(cmd, options),
+};
 /**
  * Discover Git worktree metadata for a workspace directory.
  * Uses `git worktree list --porcelain` whose first entry is always the main worktree.
+ * Results are cached in memory per workspace with TTL and .git mtime validation.
  * Returns null if the workspace is not inside a Git repo, git is unavailable,
  * or the command fails for any reason (safe fallback).
  */
-export function discoverGitWorktree(workspaceRoot) {
+export function discoverGitWorktree(workspaceRoot, options) {
+    const workspaceKey = resolve(workspaceRoot);
+    const ttlMs = options?.ttlMs ?? DEFAULT_CANONICAL_CACHE_TTL_MS;
+    if (ttlMs > 0) {
+        const cached = worktreeInfoCache.get(workspaceKey);
+        if (cached && isCacheEntryValid(workspaceKey, cached, ttlMs)) {
+            return cached.value;
+        }
+    }
+    let info = null;
+    const gitMtimeMs = getGitMtime(workspaceKey);
     try {
         // First, verify this is a Git repo (any kind — main or linked worktree)
-        execSync("git rev-parse --is-inside-work-tree", {
-            cwd: workspaceRoot,
+        _gitRunner.execSync("git rev-parse --is-inside-work-tree", {
+            cwd: workspaceKey,
             timeout: 5000,
             stdio: ["pipe", "pipe", "pipe"],
         });
-    }
-    catch {
-        return null; // not a git repo or git unavailable
-    }
-    try {
-        const output = execSync("git worktree list --porcelain", {
-            cwd: workspaceRoot,
+        const rawOutput = _gitRunner.execSync("git worktree list --porcelain", {
+            cwd: workspaceKey,
             timeout: 5000,
             encoding: "utf8",
             stdio: ["pipe", "pipe", "pipe"],
         });
         // Parse the first worktree entry (always the main worktree)
+        const output = typeof rawOutput === "string" ? rawOutput : String(rawOutput);
         const lines = output.split("\n");
         let mainPath = null;
         for (const line of lines) {
@@ -56,23 +103,30 @@ export function discoverGitWorktree(workspaceRoot) {
                 break;
             }
         }
-        if (!mainPath)
-            return null;
-        // Resolve the workspace to an absolute canonical path for comparison
-        const resolvedWorkspace = resolve(workspaceRoot);
-        const isLinked = resolvedWorkspace !== resolve(mainPath);
-        return {
-            mainWorktree: resolve(mainPath),
-            workspace: resolvedWorkspace,
-            isLinkedWorktree: isLinked,
-        };
+        if (mainPath) {
+            const resolvedWorkspace = workspaceKey;
+            const isLinked = resolvedWorkspace !== resolve(mainPath);
+            info = {
+                mainWorktree: resolve(mainPath),
+                workspace: resolvedWorkspace,
+                isLinkedWorktree: isLinked,
+            };
+        }
     }
     catch {
-        return null; // git worktree command failed
+        info = null; // not a git repo, git command failed, or git unavailable
     }
+    if (ttlMs > 0) {
+        worktreeInfoCache.set(workspaceKey, {
+            value: info,
+            timestamp: Date.now(),
+            gitMtimeMs,
+        });
+    }
+    return info;
 }
 /**
- * Canonical graph root resolver (g-149).
+ * Canonical graph root resolver (g-149, g-210 cached).
  *
  * Wraps `resolveRoot` with Git linked-worktree detection:
  * - Explicit absolute `config.root`: returns as-is, no Git discovery.
@@ -80,10 +134,12 @@ export function discoverGitWorktree(workspaceRoot) {
  *   canonicalizes to `<main-worktree>/<config.root>`. If discovery fails, falls back to
  *   normal `resolveRoot` with mode "workspace-fallback".
  * - Detects legacy worktree-local `.dsh-graph` directories and attaches warnings.
+ * - Caches results in memory per (workspace, config.root) key to eliminate per-request
+ *   synchronous git subprocess calls.
  *
  * The `init` function is NOT called here — callers decide whether/where to init.
  */
-export function resolveCanonicalRoot(config, workspaceRoot = process.cwd()) {
+export function resolveCanonicalRoot(config, workspaceRoot = process.cwd(), options) {
     const rawRoot = config?.root;
     const workspace = resolve(workspaceRoot);
     // Case 1: explicit absolute config.root — bypass Git discovery entirely
@@ -95,41 +151,59 @@ export function resolveCanonicalRoot(config, workspaceRoot = process.cwd()) {
             mode: "absolute-config",
         };
     }
-    // Case 2: relative config.root (including default ".dsh-graph")
     const relRoot = rawRoot ?? ".dsh-graph";
+    const ttlMs = options?.ttlMs ?? DEFAULT_CANONICAL_CACHE_TTL_MS;
+    const cacheKey = `${workspace}::${relRoot}`;
+    if (ttlMs > 0) {
+        const cached = canonicalRootCache.get(cacheKey);
+        if (cached && isCacheEntryValid(workspace, cached, ttlMs)) {
+            return cached.value;
+        }
+    }
     const localRoot = resolve(workspace, relRoot);
     // Attempt Git discovery
-    const gitInfo = discoverGitWorktree(workspace);
+    const gitInfo = discoverGitWorktree(workspace, { ttlMs });
+    let result;
     if (!gitInfo) {
         // Not a Git repo or git unavailable — workspace-local fallback
-        return {
+        result = {
             root: localRoot,
             workspace,
             canonicalWorkspace: workspace,
             mode: "workspace-fallback",
         };
     }
-    // If workspace IS the main worktree, normal resolution
-    if (!gitInfo.isLinkedWorktree) {
-        return {
+    else if (!gitInfo.isLinkedWorktree) {
+        // If workspace IS the main worktree, normal resolution
+        result = {
             root: localRoot,
             workspace,
             canonicalWorkspace: workspace,
             mode: "main-tree",
         };
     }
-    // Linked worktree — canonicalize to main worktree
-    const canonicalRoot = resolve(gitInfo.mainWorktree, relRoot);
-    let rootWarning;
-    // Detect legacy worktree-local graph data
-    if (existsSync(localRoot) && existsSync(resolve(localRoot, "events.jsonl"))) {
-        rootWarning = `发现 worktree 本地旧看板 ${localRoot}；canonical graph root 为 ${canonicalRoot}。旧数据不会自动合并或删除，请手动迁移。`;
+    else {
+        // Linked worktree — canonicalize to main worktree
+        const canonicalRoot = resolve(gitInfo.mainWorktree, relRoot);
+        let rootWarning;
+        // Detect legacy worktree-local graph data
+        if (existsSync(localRoot) && existsSync(resolve(localRoot, "events.jsonl"))) {
+            rootWarning = `发现 worktree 本地旧看板 ${localRoot}；canonical graph root 为 ${canonicalRoot}。旧数据不会自动合并或删除，请手动迁移。`;
+        }
+        result = {
+            root: canonicalRoot,
+            workspace,
+            canonicalWorkspace: gitInfo.mainWorktree,
+            mode: "canonicalized",
+            rootWarning,
+        };
     }
-    return {
-        root: canonicalRoot,
-        workspace,
-        canonicalWorkspace: gitInfo.mainWorktree,
-        mode: "canonicalized",
-        rootWarning,
-    };
+    if (ttlMs > 0) {
+        canonicalRootCache.set(cacheKey, {
+            value: result,
+            timestamp: Date.now(),
+            gitMtimeMs: getGitMtime(workspace),
+        });
+    }
+    return result;
 }

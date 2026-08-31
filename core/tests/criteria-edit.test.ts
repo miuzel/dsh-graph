@@ -96,7 +96,7 @@ test("updateCriteria：D3 空列表草稿允许、in_progress/review/delivered �
 
 test("updateCriteria：D5 记录 criteria.updated，不冒充 criteria.confirmed，不写 rules_snapshot", () => {
   const root = tmpRoot();
-  const id = createGoal(root, { title: "t", actor: "test" });
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
   updateCriteria(root, id, { items: ["甲"], actor: "test" });
   const events = readEvents(root).filter((e) => e.goal === id);
   const updated = events.filter((e) => e.event === "criteria.updated");
@@ -108,7 +108,6 @@ test("updateCriteria：D5 记录 criteria.updated，不冒充 criteria.confirmed
   const doc = loadGoal(findGoalFile(root, id));
   assert.equal(doc.meta.rules_snapshot, null);
   // 进入 in_progress 仍被既有门槛拦截（无 confirmed 事件）
-  transition(root, id, "planning", { actor: "test" });
   transition(root, id, "collecting", { actor: "test" });
   transition(root, id, "ready", { actor: "test" });
   assert.throws(() => transition(root, id, "in_progress", { actor: "test" }), GraphError);

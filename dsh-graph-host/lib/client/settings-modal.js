@@ -11,6 +11,19 @@
       const [showAdvanced, setShowAdvanced] = React.useState(false);
       // att-002：服务端下发的 canonical .dsh-graph/project.yaml 绝对路径（只消费，不自行猜 graphRoot）
       const [configFile, setConfigFile] = React.useState(null);
+      // g-214：刷新间隔配置（localStorage 持久化，下限 5s）
+      const [refreshIntervalInput, setRefreshIntervalInput] = React.useState(() => String(getRefreshInterval()));
+      const [intervalWarn, setIntervalWarn] = React.useState(null);
+
+      const handleIntervalChange = (val) => {
+        setRefreshIntervalInput(val);
+        const num = Number(val);
+        if (val.trim() === "" || !Number.isFinite(num) || num < MIN_REFRESH_INTERVAL) {
+          setIntervalWarn("刷新间隔最小限制为 5 秒（保存时将自动纠偏为 5s）");
+        } else {
+          setIntervalWarn(null);
+        }
+      };
 
       const set = (path, value) => {
         setForm((f) => {
@@ -64,11 +77,21 @@
       const save = async () => {
         if (!form) return;
         setSaving(true); setNote(null); setError(null);
+        // g-214: 保存并持久化刷新间隔到 localStorage（非法值或 <5s 自动纠偏为 5s）
+        const correctedInterval = setRefreshInterval(refreshIntervalInput);
+        setRefreshIntervalInput(String(correctedInterval));
+        setIntervalWarn(null);
         const lanesRaw = form.defaults?.pk?.lanes;
-        const lanes = lanesRaw === null || lanesRaw === "" ? 1 : Number(lanesRaw);
+        const lanes = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
         if (!Number.isInteger(lanes) || lanes < 1) {
           setNote({ kind: "err", text: "pk.lanes 必须是 >=1 的整数" });
           setSaving(false); return;
+        }
+        const rawAuto = form.supervisor?.automation ?? {};
+        const cleanAuto = {};
+        for (const [k, v] of Object.entries(rawAuto)) {
+          if (v === "human" || v === "ai") cleanAuto[k] = v;
+          else cleanAuto[k] = null;
         }
         const patch = {
           executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "" },
@@ -76,10 +99,9 @@
             review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
             pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
           },
-          supervisor: { automation: { ...(form.supervisor?.automation ?? {}) } },
+          supervisor: { automation: cleanAuto },
           prompt_overrides: {
             subagent: form.prompt_overrides?.subagent ?? { state: "default", value: null },
-
           },
         };
         try {
@@ -91,8 +113,8 @@
           const data = await r.json();
           if (!r.ok) throw new Error(data?.error || ("保存失败 " + r.status));
           setForm(data.config ?? form); // 用服务端回填的最新配置刷新
-          setNote({ kind: "ok", text: "✅ 已保存（刷新/重开弹窗值保留）" });
           props.onSaved?.();
+          props.onClose?.();
         } catch (e) {
           setNote({ kind: "err", text: "保存失败：" + String(e?.message ?? e) });
         } finally { setSaving(false); }
@@ -257,6 +279,21 @@
                 }, "复制路径"))
             : null,
            h("button", { className: "dg-btn", style: { ...S.btn, marginTop: 6, fontSize: 12 }, onClick: () => setShowAdvanced((v) => !v) }, showAdvanced ? "隐藏高级/仅存储字段" : "显示高级/仅存储字段"),
+          h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+          h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0 } },
+            h("span", { style: { fontWeight: 700, fontSize: 12, flexShrink: 0 } }, "看板数据自动刷新："),
+            h("input", {
+              style: { ...S.promptInput, width: 38, flex: "none", padding: "2px 4px", textAlign: "center", fontSize: 12, boxSizing: "border-box" },
+              type: "number",
+              min: MIN_REFRESH_INTERVAL,
+              step: 1,
+              value: refreshIntervalInput,
+              onChange: (e) => handleIntervalChange(e.target.value),
+            }),
+            h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } }, "秒"),
+            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, "（下限 5 秒）")),
+          intervalWarn ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2 } }, "⚠️ " + intervalWarn) : null,
+
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
 
           h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "执行子代理模型路由"),
