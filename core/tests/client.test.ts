@@ -1249,13 +1249,13 @@ test("g-160 client 源契约：released 详情入口和二次确认恢复", () =
   assert.match(source, /load\(\)/);
 });
 
-// ===== g-171：更新强调动画（updated_at 10 秒窗口）源/生成 bundle 契约 =====
+// ===== g-171/g-211/g-214：更新强调动画（updated_at 10 秒窗口）源/生成 bundle 契约 =====
 
-test("g-171 模块源契约：kanban.js 复用现有 load/15s 轮询做 10 秒窗口判定且不新增数据通道", () => {
+test("g-171/g-211/g-214 模块源契约：kanban.js 复用现有 load 与 RefreshCountdown 倒计时且接入 visibilitychange", () => {
   const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
-  // 复用现有首次加载/手动刷新/写操作后的 load() 与 15 秒轮询
+  // 复用现有首次加载/手动刷新/写操作后的 load() 与轮询/倒计时
   assert.ok(/const load = \(\) => \{[\s\S]*setState\(\{ loading: false, data \}\); loadOrder\(\); applyUpdateEmphasis\(data\)/.test(kanban), "load() 成功路径调用 applyUpdateEmphasis");
-  assert.ok(/setInterval\(load, 15000\)/.test(kanban), "保留既有 15 秒轮询");
+  assert.ok(/RefreshCountdown/.test(kanban), "由 RefreshCountdown 负责倒计时与自动刷新");
   // 以服务端 generated_at - updated_at 判定 10 秒窗口
   assert.ok(/const gen = Date\.parse\(data\.generated_at\)/.test(kanban), "用服务端 generated_at 判定窗口");
   assert.ok(/const age = gen - ts/.test(kanban), "窗口 = generated_at - updated_at");
@@ -1266,8 +1266,7 @@ test("g-171 模块源契约：kanban.js 复用现有 load/15s 轮询做 10 秒�
   // 按 goalId+updated_at 防当前页重复播放（内存 token）
   assert.ok(/const token = g\.id \+ ":" \+ ts/.test(kanban), "token = goalId:updated_at");
   assert.ok(/seenUpdateTokens\.current\.has\(token\)/.test(kanban), "同一 token 不重播");
-  // 不新增高频轮询 / WebSocket / SSE / 文件推送
-  assert.ok(!/setInterval\(load, [1-9]000\)/.test(kanban.replace("setInterval(load, 15000)", "")), "不新增其他轮询频率");
+  // 不新增 WebSocket / SSE / 文件推送
   assert.ok(!/new WebSocket|EventSource/.test(kanban), "不新增 WebSocket/SSE");
   // 详情弹窗关闭触发一次 load()
   assert.ok(/onClose: \(\) => \{ forceReplayRef\.current = \{ goalId: modalGoal, openTs: modalGoalOpenTsRef\.current \}; modalGoalOpenTsRef\.current = null; modalGoalRef\.current = null; setModalGoal\(null\); load\(\); \}/.test(kanban), "详情弹窗关闭触发一次 load() 并记录强制补播目标");
@@ -1310,7 +1309,7 @@ test("g-171 模块源契约：constants.js 含扫光/fade keyframe 与 reduced-m
   assert.ok(!/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.dg-update-sheen \{ opacity: 0; \}/.test(constants), "reduced-motion 不再把浮层 opacity 置 0");
 });
 
-test("g-171 生成 bundle 契约：client.js 含更新强调逻辑且保留 generated header", () => {
+test("g-171/g-211/g-214 生成 bundle 契约：client.js 含更新强调逻辑且保留 generated header", () => {
   const bundle = readFileSync(
     join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
@@ -1323,8 +1322,82 @@ test("g-171 生成 bundle 契约：client.js 含更新强调逻辑且保留 gene
   assert.ok(/onClose: \(\) => \{ forceReplayRef\.current = \{ goalId: modalGoal, openTs: modalGoalOpenTsRef\.current \}/.test(bundle), "生成 bundle: 弹窗关闭触发 load() 并记录强制补播");
   assert.ok(/modalGoalRef\.current = modalGoal/.test(bundle), "生成 bundle: modalGoalRef 镜像弹窗状态");
   assert.ok(/applyForceReplay/.test(bundle), "生成 bundle: 含关闭弹窗强制补播");
-  assert.ok(/setInterval\(load, 15000\)/.test(bundle), "生成 bundle: 保留 15 秒轮询");
+  assert.ok(/RefreshCountdown/.test(bundle), "生成 bundle: 含倒计时组件");
+  assert.ok(/更新于/.test(bundle), "生成 bundle: 含更新于时间展示");
   assert.ok(/safeAge >= 10000/.test(bundle), "生成 bundle: 负 age 容忍（同秒修改补播）");
+  // g-211：visibilitychange 接入
+  assert.ok(/visibilitychange/.test(bundle), "生成 bundle: 含 visibilitychange 监听");
+  assert.ok(/visibilityState/.test(bundle), "生成 bundle: 含 visibilityState 状态判断");
+});
+
+test("g-211 前端 visibilitychange 调度逻辑契约模拟", () => {
+  let timerId = null;
+  let intervalMs = 0;
+  let clearedCount = 0;
+  let loadCallCount = 0;
+  let lastRefreshTime = 0;
+
+  const mockLoad = () => {
+    loadCallCount++;
+    lastRefreshTime = Date.now();
+  };
+
+  const startTimer = () => {
+    if (!timerId) {
+      timerId = 123;
+      intervalMs = 30000;
+    }
+  };
+
+  const stopTimer = () => {
+    if (timerId) {
+      clearedCount++;
+      timerId = null;
+      intervalMs = 0;
+    }
+  };
+
+  let visibilityState = "visible";
+  const handleVisibilityChange = () => {
+    if (visibilityState === "visible") {
+      if (Date.now() - lastRefreshTime >= 10000) {
+        mockLoad();
+      }
+      startTimer();
+    } else {
+      stopTimer();
+    }
+  };
+
+  // 1. 初始前台挂载
+  mockLoad();
+  startTimer();
+  assert.equal(loadCallCount, 1);
+  assert.equal(timerId, 123);
+  assert.equal(intervalMs, 30000);
+
+  // 2. 切到后台
+  visibilityState = "hidden";
+  handleVisibilityChange();
+  assert.equal(timerId, null, "后台暂停定时轮询");
+  assert.equal(clearedCount, 1);
+
+  // 3. 立即切回前台（未超 10s 阈值）
+  visibilityState = "visible";
+  handleVisibilityChange();
+  assert.equal(loadCallCount, 1, "未超阈值不立即触发补偿刷新");
+  assert.equal(timerId, 123, "切回前台重启定时器");
+
+  // 4. 再次切到后台并在 15 秒后切回前台
+  visibilityState = "hidden";
+  handleVisibilityChange();
+  assert.equal(timerId, null);
+  lastRefreshTime = Date.now() - 15000; // 模拟过去 15s
+
+  visibilityState = "visible";
+  handleVisibilityChange();
+  assert.equal(loadCallCount, 2, "达到 10s 阈值切回前台立即补偿一次刷新");
+  assert.equal(timerId, 123, "重启定时器");
 });
 
 // ===== g-176：浅色主题适配——共享样式 token 化源契约 =====
@@ -1854,4 +1927,38 @@ test("g-195 并发隔离与异常/空流降级：多 session 实例独立调度�
   assert.equal(emptyResult.line, null);
   assert.equal(emptyResult.running, false);
   assert.equal(emptyResult.snap.running, false);
+});
+
+// ===== g-214：自定义看板刷新间隔与倒计时契约 =====
+
+test("g-214 源契约：helpers.js 包含刷新间隔存取与纠偏函数 + RefreshCountdown 局部化组件", () => {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  assert.match(helpers, /REFRESH_INTERVAL_KEY = "dsh-graph\.refresh-interval"/);
+  assert.match(helpers, /MIN_REFRESH_INTERVAL = 5/);
+  assert.match(helpers, /DEFAULT_REFRESH_INTERVAL = 15/);
+  assert.match(helpers, /function getRefreshInterval\(\)/);
+  assert.match(helpers, /function setRefreshInterval\(val\)/);
+  assert.match(helpers, /function RefreshCountdown\(props\)/);
+});
+
+test("g-214 源契约：settings-modal.js 包含刷新间隔配置输入与 <5s 自动纠偏/校验", () => {
+  const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  assert.match(modal, /refreshIntervalInput/);
+  assert.match(modal, /handleIntervalChange/);
+  assert.match(modal, /setRefreshInterval\(refreshIntervalInput\)/);
+  assert.match(modal, /看板数据自动刷新/);
+  assert.match(modal, /刷新间隔最小限制为 5 秒/);
+});
+
+test("g-214 源契约：kanban.js 挂载 RefreshCountdown 与刷新间隔监听", () => {
+  const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+  assert.match(kanban, /h\(RefreshCountdown,/);
+  assert.match(kanban, /dsh-graph\.refresh-interval-changed/);
+});
+
+test("g-214 生成 bundle 契约：client.js 包含 g-214 倒计时与刷新间隔配置逻辑", () => {
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(bundle, /RefreshCountdown/);
+  assert.match(bundle, /dsh-graph\.refresh-interval/);
+  assert.match(bundle, /MIN_REFRESH_INTERVAL = 5/);
 });

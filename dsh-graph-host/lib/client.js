@@ -234,6 +234,11 @@ window.__ModuleLoader__.load({
         0% { transform: rotate(0deg); }
         100% { transform: rotate(360deg); }
       }
+      .dg-spin {
+        display: inline-block;
+        animation: dg-spin 1.5s linear infinite;
+        transform-origin: center center;
+      }
       .dg-running-flow {
         background: linear-gradient(90deg, rgba(76,141,255,0.30), rgba(58,166,117,0.42), rgba(76,141,255,0.30));
         background-size: 200% 100%;
@@ -461,6 +466,154 @@ window.__ModuleLoader__.load({
           onClose?.();
         },
       };
+    }
+
+    // ===== g-214：看板刷新间隔配置与自定义倒计时 =====
+    const REFRESH_INTERVAL_KEY = "dsh-graph.refresh-interval";
+    const DEFAULT_REFRESH_INTERVAL = 15;
+    const MIN_REFRESH_INTERVAL = 5;
+
+    function getRefreshInterval() {
+      try {
+        const raw = localStorage.getItem(REFRESH_INTERVAL_KEY);
+        if (raw === null || raw === "") return DEFAULT_REFRESH_INTERVAL;
+        const val = Number(raw);
+        if (!Number.isFinite(val) || val < MIN_REFRESH_INTERVAL) return MIN_REFRESH_INTERVAL;
+        return Math.floor(val);
+      } catch {
+        return DEFAULT_REFRESH_INTERVAL;
+      }
+    }
+
+    function setRefreshInterval(val) {
+      let num = Number(val);
+      if (!Number.isFinite(num) || num < MIN_REFRESH_INTERVAL) {
+        num = MIN_REFRESH_INTERVAL;
+      } else {
+        num = Math.floor(num);
+      }
+      try {
+        localStorage.setItem(REFRESH_INTERVAL_KEY, String(num));
+      } catch {}
+      window.dispatchEvent(new CustomEvent("dsh-graph.refresh-interval-changed", { detail: { interval: num } }));
+      return num;
+    }
+
+    // g-214：局部化倒计时组件，避免每秒 tick 引起整个看板大面积重绘；
+    // g-211：融合 visibilitychange 感知，页面后台时暂停倒计时，切回前台补偿触发
+    function RefreshCountdown(props) {
+      const { generatedAt, intervalSec, onTriggerRefresh } = props;
+      const [remaining, setRemaining] = React.useState(intervalSec);
+      const nextTriggerAtRef = React.useRef(Date.now() + intervalSec * 1000);
+      const lastRefreshTimeRef = React.useRef(Date.now());
+      const onTriggerRef = React.useRef(onTriggerRefresh);
+      onTriggerRef.current = onTriggerRefresh;
+
+      // 周期或数据时间（手动/自动刷新完成）更新时重置倒计时终点
+      React.useEffect(() => {
+        lastRefreshTimeRef.current = Date.now();
+        nextTriggerAtRef.current = Date.now() + intervalSec * 1000;
+        setRemaining(intervalSec);
+      }, [generatedAt, intervalSec]);
+
+      // 独立 1 秒 tick 驱动平滑递减，归零时触发刷新；融合后台暂停与切回补偿
+      React.useEffect(() => {
+        let timer = null;
+        const startTimer = () => {
+          if (!timer) {
+            timer = setInterval(() => {
+              const now = Date.now();
+              const leftMs = nextTriggerAtRef.current - now;
+              const leftSec = Math.max(0, Math.ceil(leftMs / 1000));
+              setRemaining(leftSec);
+              if (leftSec <= 0) {
+                nextTriggerAtRef.current = Date.now() + intervalSec * 1000;
+                lastRefreshTimeRef.current = Date.now();
+                onTriggerRef.current?.();
+              }
+            }, 1000);
+          }
+        };
+        const stopTimer = () => {
+          if (timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+        };
+
+        const handleVisibilityChange = () => {
+          if (typeof document === "undefined") return;
+          if (document.visibilityState === "visible") {
+            const now = Date.now();
+            // 切回前台且距离上次刷新达到阈值（10 秒）立即补偿刷新
+            if (now - lastRefreshTimeRef.current >= 10000) {
+              nextTriggerAtRef.current = now + intervalSec * 1000;
+              lastRefreshTimeRef.current = now;
+              setRemaining(intervalSec);
+              onTriggerRef.current?.();
+            } else {
+              const leftMs = nextTriggerAtRef.current - now;
+              setRemaining(Math.max(0, Math.ceil(leftMs / 1000)));
+            }
+            startTimer();
+          } else {
+            // 后台/隐藏时暂停倒计时与轮询
+            stopTimer();
+          }
+        };
+
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+          // 当前在后台不启动
+        } else {
+          startTimer();
+        }
+
+        if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+          document.addEventListener("visibilitychange", handleVisibilityChange);
+        }
+
+        return () => {
+          stopTimer();
+          if (typeof document !== "undefined" && typeof document.removeEventListener === "function") {
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
+          }
+        };
+      }, [intervalSec]);
+
+      const timeStr = (generatedAt ?? "").replace("T", " ").slice(0, 19);
+      // 进度比例 0..1（随倒计时递减）
+      const progress = intervalSec > 0 ? remaining / intervalSec : 0;
+      return h("span", {
+        style: { ...S.meta, display: "inline-flex", alignItems: "center", gap: 5, userSelect: "none" },
+        title: `已配置自动刷新周期：${intervalSec}s（距离下次自动刷新约 ${remaining}s）`,
+      },
+        `更新于 ${timeStr}`,
+        h("span", {
+          style: {
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 2,
+            opacity: 0.7,
+            fontSize: 11,
+            fontVariantNumeric: "tabular-nums",
+            cursor: "default",
+          },
+        },
+          h("span", {
+            style: {
+              display: "inline-block",
+              width: 10,
+              height: 10,
+              borderRadius: "50%",
+              border: "1.5px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))",
+              borderTopColor: "var(--dsw-alias-state-business-primary, #4c8dff)",
+              transform: `rotate(${Math.round((1 - progress) * 360)}deg)`,
+              transition: "transform 1s linear",
+              boxSizing: "border-box",
+              flexShrink: 0,
+            },
+          }),
+          h("span", { style: { minWidth: "18px", textAlign: "right", opacity: 0.85, fontSize: 10 } }, `${remaining}s`)));
     }
 
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====
@@ -3475,7 +3628,7 @@ window.__ModuleLoader__.load({
     function KanbanView(props) {
       const [state, setState] = React.useState({ loading: true });
       const [modalGoal, setModalGoal] = React.useState(null);
-      // g-171 回退修复：镜像 modalGoal 供 load 闭包判定（load 被 15s 轮询闭包捕获，
+      // g-171 回退修复：镜像 modalGoal 供 load 闭包判定（load 被 30s 轮询闭包捕获，
       // 直接读 state 会拿到首次渲染的 null）。详情弹窗打开期间跳过更新强调播放，
       // 避免轮询/保存触发的 load 在弹窗遮罩下抢播并消费 token；关闭弹窗后由
       // onClose 的 load() 补播窗口内目标。
@@ -3888,7 +4041,7 @@ window.__ModuleLoader__.load({
       }, [props?.sessionId]);
       // g-171：更新强调动画——服务端 generated_at - updated_at 判定 10 秒窗口，
       // 按 goalId+updated_at 防当前页重复播放；整页刷新可对窗口内目标补播。
-      // 只复用现有 load()（首次/手动刷新/写操作后）与 15 秒轮询，不新增任何数据通道。
+      // 只复用现有 load()（首次/手动刷新/写操作后）与 30 秒轮询，不新增任何数据通道。
       const applyUpdateEmphasis = (data) => {
         if (!data || typeof data.generated_at !== "string") return;
         // g-171 回退修复：详情弹窗打开期间跳过播放（弹窗遮罩盖住看板，此时播放
@@ -3959,6 +4112,25 @@ window.__ModuleLoader__.load({
           delete emphasisTimers.current[g.id];
         }, remaining + 100);
       };
+      const [refreshIntervalSec, setRefreshIntervalSec] = React.useState(getRefreshInterval);
+      React.useEffect(() => {
+        const onIntervalChange = (e) => {
+          const next = e?.detail?.interval ?? getRefreshInterval();
+          setRefreshIntervalSec(next);
+        };
+        const onStorage = (e) => {
+          if (e.key === REFRESH_INTERVAL_KEY) {
+            setRefreshIntervalSec(getRefreshInterval());
+          }
+        };
+        window.addEventListener("dsh-graph.refresh-interval-changed", onIntervalChange);
+        window.addEventListener("storage", onStorage);
+        return () => {
+          window.removeEventListener("dsh-graph.refresh-interval-changed", onIntervalChange);
+          window.removeEventListener("storage", onStorage);
+        };
+      }, []);
+
       const load = () => {
         const params = showArchived ? "?includeArchived=1" : "";
         fetch(graphUrl("/api/dsh-graph" + params))
@@ -3968,8 +4140,6 @@ window.__ModuleLoader__.load({
       };
       React.useEffect(() => {
         load();
-        const t = setInterval(load, 15000);
-        return () => clearInterval(t);
       }, [showArchived]); // showArchived 变化时重新加载
 
       // g-181：5 个父级 overlay 的 backdrop 误关保护——内容起点后释放到 backdrop 的合成 click 吞掉。
@@ -4635,7 +4805,12 @@ window.__ModuleLoader__.load({
             title: "dsh-graph 插件官网",
             style: { ...S.meta, color: "var(--dsw-alias-state-business-primary, #8ab4ff)", cursor: "pointer", textDecoration: "underline" },
           }, "version: " + PLUGIN_VERSION),
-          h("span", { style: S.meta }, "数据时间：" + (b.generated_at ?? "").replace("T", " ").slice(0, 19)),
+          // g-214：局部化倒计时组件渲染数据更新时间及剩余秒数倒计时
+          h(RefreshCountdown, {
+            generatedAt: b.generated_at,
+            intervalSec: refreshIntervalSec,
+            onTriggerRefresh: load,
+          }),
           h("button", { style: { ...S.btn, marginLeft: 8 }, className: "dg-btn", onClick: load }, "刷新"),
           // g-110: 显示已归档目标的 checkbox
           h("label", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 12, cursor: "pointer", fontSize: 12, opacity: 0.8 } },
@@ -5173,6 +5348,19 @@ window.__ModuleLoader__.load({
       const [showAdvanced, setShowAdvanced] = React.useState(false);
       // att-002：服务端下发的 canonical .dsh-graph/project.yaml 绝对路径（只消费，不自行猜 graphRoot）
       const [configFile, setConfigFile] = React.useState(null);
+      // g-214：刷新间隔配置（localStorage 持久化，下限 5s）
+      const [refreshIntervalInput, setRefreshIntervalInput] = React.useState(() => String(getRefreshInterval()));
+      const [intervalWarn, setIntervalWarn] = React.useState(null);
+
+      const handleIntervalChange = (val) => {
+        setRefreshIntervalInput(val);
+        const num = Number(val);
+        if (val.trim() === "" || !Number.isFinite(num) || num < MIN_REFRESH_INTERVAL) {
+          setIntervalWarn("刷新间隔最小限制为 5 秒（保存时将自动纠偏为 5s）");
+        } else {
+          setIntervalWarn(null);
+        }
+      };
 
       const set = (path, value) => {
         setForm((f) => {
@@ -5226,11 +5414,21 @@ window.__ModuleLoader__.load({
       const save = async () => {
         if (!form) return;
         setSaving(true); setNote(null); setError(null);
+        // g-214: 保存并持久化刷新间隔到 localStorage（非法值或 <5s 自动纠偏为 5s）
+        const correctedInterval = setRefreshInterval(refreshIntervalInput);
+        setRefreshIntervalInput(String(correctedInterval));
+        setIntervalWarn(null);
         const lanesRaw = form.defaults?.pk?.lanes;
-        const lanes = lanesRaw === null || lanesRaw === "" ? 1 : Number(lanesRaw);
+        const lanes = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
         if (!Number.isInteger(lanes) || lanes < 1) {
           setNote({ kind: "err", text: "pk.lanes 必须是 >=1 的整数" });
           setSaving(false); return;
+        }
+        const rawAuto = form.supervisor?.automation ?? {};
+        const cleanAuto = {};
+        for (const [k, v] of Object.entries(rawAuto)) {
+          if (v === "human" || v === "ai") cleanAuto[k] = v;
+          else cleanAuto[k] = null;
         }
         const patch = {
           executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "" },
@@ -5238,10 +5436,9 @@ window.__ModuleLoader__.load({
             review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
             pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
           },
-          supervisor: { automation: { ...(form.supervisor?.automation ?? {}) } },
+          supervisor: { automation: cleanAuto },
           prompt_overrides: {
             subagent: form.prompt_overrides?.subagent ?? { state: "default", value: null },
-
           },
         };
         try {
@@ -5253,8 +5450,8 @@ window.__ModuleLoader__.load({
           const data = await r.json();
           if (!r.ok) throw new Error(data?.error || ("保存失败 " + r.status));
           setForm(data.config ?? form); // 用服务端回填的最新配置刷新
-          setNote({ kind: "ok", text: "✅ 已保存（刷新/重开弹窗值保留）" });
           props.onSaved?.();
+          props.onClose?.();
         } catch (e) {
           setNote({ kind: "err", text: "保存失败：" + String(e?.message ?? e) });
         } finally { setSaving(false); }
@@ -5419,6 +5616,21 @@ window.__ModuleLoader__.load({
                 }, "复制路径"))
             : null,
            h("button", { className: "dg-btn", style: { ...S.btn, marginTop: 6, fontSize: 12 }, onClick: () => setShowAdvanced((v) => !v) }, showAdvanced ? "隐藏高级/仅存储字段" : "显示高级/仅存储字段"),
+          h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+          h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0 } },
+            h("span", { style: { fontWeight: 700, fontSize: 12, flexShrink: 0 } }, "看板数据自动刷新："),
+            h("input", {
+              style: { ...S.promptInput, width: 38, flex: "none", padding: "2px 4px", textAlign: "center", fontSize: 12, boxSizing: "border-box" },
+              type: "number",
+              min: MIN_REFRESH_INTERVAL,
+              step: 1,
+              value: refreshIntervalInput,
+              onChange: (e) => handleIntervalChange(e.target.value),
+            }),
+            h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } }, "秒"),
+            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, "（下限 5 秒）")),
+          intervalWarn ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2 } }, "⚠️ " + intervalWarn) : null,
+
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
 
           h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "执行子代理模型路由"),

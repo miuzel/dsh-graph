@@ -36,6 +36,7 @@ import {
   readAcceptStatus,
   boardProjection,
   boardPayload,
+  reportSupervisorStatus,
   readProjectConfig,
   writeProjectConfig,
   readPromptOverride,
@@ -89,12 +90,39 @@ test("boardPayload 下发有序 criteria_items，而非只有 criteria_count", (
   assert.deepEqual(goal?.criteria_items, ["1. 第一", "2. 第二", "3. 第三"]);
 });
 
+test("g-211 boardPayload 源码静态契约：单次 readEvents 并复用 events 内存数组", () => {
+  const opsSource = readFileSync(join(import.meta.dirname, "../ops.ts"), "utf8");
+  // 定位 boardPayload 函数实现
+  const boardPayloadMatch = opsSource.match(/export function boardPayload\([\s\S]*?\n\}/);
+  assert.ok(boardPayloadMatch, "找到 boardPayload 函数实现");
+  const fnBody = boardPayloadMatch[0];
+
+  // 1. 验证仅调用 1 次 readEvents(root)
+  const readEventsCalls = fnBody.match(/readEvents\(root\)/g) ?? [];
+  assert.equal(readEventsCalls.length, 1, "boardPayload 函数体内仅有 1 处 readEvents(root) 调用");
+
+  // 2. 验证把 events 传入 boardProjection, readSupervisorStatus, readSupervisorStatusAt
+  assert.ok(/boardProjection\(root,\s*\{[\s\S]*?events\s*\}?\)/.test(fnBody), "boardProjection 接收 events 内存数组");
+  assert.ok(/readSupervisorStatus\(events\)/.test(fnBody), "readSupervisorStatus 接收 events 内存数组");
+  assert.ok(/readSupervisorStatusAt\(events\)/.test(fnBody), "readSupervisorStatusAt 接收 events 内存数组");
+
+  // 3. 验证功能正常且返回值完整
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "g211 test", actor: "test" });
+  setCriteria(root, id, ["判据1"], "test");
+  reportSupervisorStatus(root, "主管工作中", "supervisor");
+
+  const payload = boardPayload(root);
+  assert.equal(payload.supervisorStatus, "主管工作中");
+  assert.ok(typeof payload.supervisorStatusAt === "number");
+  assert.ok(payload.backlog.some((g) => g.id === id));
+});
+
 // ---- 状态机 ----
 
-test("合法迁移链 draft→planning→collecting→ready", () => {
+test("合法迁移链 planning→collecting→ready", () => {
   const root = tmpRoot();
-  const id = createGoal(root, { title: "t", actor: "test" });
-  transition(root, id, "planning", { actor: "test" });
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
   transition(root, id, "collecting", { actor: "test" });
   transition(root, id, "ready", { actor: "test" });
   assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "ready");
@@ -102,10 +130,15 @@ test("合法迁移链 draft→planning→collecting→ready", () => {
 
 test("无收集需求时 planning→ready 直达合法", () => {
   const root = tmpRoot();
-  const id = createGoal(root, { title: "t", actor: "test" });
-  transition(root, id, "planning", { actor: "test" });
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
   transition(root, id, "ready", { actor: "test" });
   assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "ready");
+});
+
+test("backlog 目标（draft）直接进行阶段迁移被拒绝，必须先 moveGoal 排期", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  assert.throws(() => transition(root, id, "planning", { actor: "test" }), /backlog.*不允许阶段迁移/);
 });
 
 test("readExecutorModel 读取 executor.provider/model，缺失返回 null", async () => {
@@ -153,8 +186,7 @@ test("跳阶段迁移被拒绝", () => {
 
 test("blocked 必须有 reason；解除只能回原状态", () => {
   const root = tmpRoot();
-  const id = createGoal(root, { title: "t", actor: "test" });
-  transition(root, id, "planning", { actor: "test" });
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
   assert.throws(
     () => transition(root, id, "blocked", { actor: "test" }),
     /reason/,
@@ -170,8 +202,7 @@ test("blocked 必须有 reason；解除只能回原状态", () => {
 
 test("无判据不得进 in_progress；set-criteria 后自动快照规则版本并放行", () => {
   const root = tmpRoot();
-  const id = createGoal(root, { title: "t", actor: "test", scope: ["core/"] });
-  transition(root, id, "planning", { actor: "test" });
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test", scope: ["core/"] });
   transition(root, id, "collecting", { actor: "test" });
   transition(root, id, "ready", { actor: "test" });
   assert.throws(
@@ -264,8 +295,7 @@ test("createGoal 连号 id：读 frontmatter，跳过随机 id 与 slug 目录�
 
 test("rebuild 发现 frontmatter 被篡改的 drift", () => {
   const root = tmpRoot();
-  const id = createGoal(root, { title: "t", actor: "test" });
-  transition(root, id, "planning", { actor: "test" });
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
   assert.deepEqual(rebuild(root), []);
   const file = findGoalFile(root, id);
   const raw = readFileSync(file, "utf8");
@@ -292,7 +322,6 @@ test("set-criteria 对缺少质量判据小节的草稿自动追加小节", () =
 test("move-goal：backlog↔standalone↔version，带附件拒绝回 backlog", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", actor: "test" }); // backlog 平铺
-  transition(root, id, "planning", { actor: "test" });
   moveGoal(root, id, { to: "standalone", actor: "test" });
   let doc = loadGoal(findGoalFile(root, id));
   assert.equal(doc.meta.version, null);
@@ -313,7 +342,6 @@ test("move-goal：standalone ↔ version 迁移保留 delivered 状态（g-145 �
   const root = tmpRoot();
   // 创建独立目标并推进到 delivered 状态
   const id = createGoal(root, { title: "t", actor: "test" }); // backlog
-  transition(root, id, "planning", { actor: "test" });
   moveGoal(root, id, { to: "standalone", actor: "test" }); // backlog → standalone, 变为 planning
   setCriteria(root, id, ["测试判据"], "test"); // 设置判据以允许进入 in_progress
   transition(root, id, "collecting", { actor: "test" });
@@ -343,13 +371,12 @@ test("move-goal：standalone ↔ version 迁移保留 delivered 状态（g-145 �
   assert.equal(movedEvents.length, 3); // backlog→standalone, standalone→version, version→standalone
   const transitionEvents = readEvents(root).filter((e) => e.event === "goal.transition");
   // 应该只有我们手动调用的 transition，没有由 moveGoal 触发的额外 transition
-  assert.equal(transitionEvents.length, 6); // planning, collecting, ready, in_progress, review, delivered
+  assert.equal(transitionEvents.length, 5); // collecting, ready, in_progress, review, delivered
 });
 
 test("move-goal：standalone ↔ version 迁移保留 collecting 状态", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", actor: "test" });
-  transition(root, id, "planning", { actor: "test" });
   moveGoal(root, id, { to: "standalone", actor: "test" });
   transition(root, id, "collecting", { actor: "test" });
 
@@ -365,7 +392,6 @@ test("move-goal：standalone ↔ version 迁移保留 collecting 状态", () => 
 test("move-goal：standalone ↔ version 迁移保留 blocked 状态", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", actor: "test" });
-  transition(root, id, "planning", { actor: "test" });
   moveGoal(root, id, { to: "standalone", actor: "test" });
   setCriteria(root, id, ["测试判据"], "test"); // 设置判据以允许进入 in_progress
   transition(root, id, "collecting", { actor: "test" });
@@ -484,8 +510,7 @@ test("readAcceptStatus 状态流转：none → pending → resolved", () => {
 
 test("ready 状态下 resolveAccept(accept) 写 criteria.confirmed 且不抛异常、状态仍 ready", () => {
   const root = tmpRoot();
-  const id = createGoal(root, { title: "t", actor: "test" });
-  transition(root, id, "planning", { actor: "test" });
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
   transition(root, id, "collecting", { actor: "test" });
   transition(root, id, "ready", { actor: "test" });
   requestAcceptReview(root, id, "human:gui");

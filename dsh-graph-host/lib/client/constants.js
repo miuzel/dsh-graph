@@ -222,6 +222,11 @@
         0% { transform: rotate(0deg); }
         100% { transform: rotate(360deg); }
       }
+      .dg-spin {
+        display: inline-block;
+        animation: dg-spin 1.5s linear infinite;
+        transform-origin: center center;
+      }
       .dg-running-flow {
         background: linear-gradient(90deg, rgba(76,141,255,0.30), rgba(58,166,117,0.42), rgba(76,141,255,0.30));
         background-size: 200% 100%;

@@ -82,7 +82,7 @@ import {
   schemaErrorResponse,
   settingsPostSchema,
 } from "./core/ops.js";
-import { resolveRoot, resolveCanonicalRoot } from "./core/root.js";
+import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 // g-133：接入 DSH profile 级用户设置（dsh-settings）。为避免在 @deepseek-ai/* 不可解析的上下文
 // （工作树 link、仅 headless、无 settings 供应商的组合）导致整个插件加载失败、拖垮 GUI，
 // 这里不静态 import @deepseek-ai/*；改为在 apply() 内**守卫式动态 import** schemastery（仅 schema），
@@ -92,7 +92,7 @@ import { resolveRoot, resolveCanonicalRoot } from "./core/root.js";
 // g-112：两半共用同一 root 解析函数（re-export 供验收/测试直接核对函数同一性）
 export { resolveRoot } from "./core/root.js";
 // g-149：canonical root 解析（Git linked-worktree 归一化）
-export { resolveCanonicalRoot } from "./core/root.js";
+export { resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 // g-111 B7：boardPayload 已移入 core（消除 client→host 跨包依赖），此处 re-export 保持兼容。
 // board 载荷含 supervisorSession 字段（project.yaml 的 supervisor.session，g-108），由 host 端点 /api/dsh-graph 下发。
 export { boardPayload } from "./core/ops.js";

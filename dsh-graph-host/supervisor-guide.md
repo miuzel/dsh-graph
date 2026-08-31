@@ -84,6 +84,9 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
    不必新建 attempt，也不必新增 context card。此例外仅适用于已有 Agent 的后续返工，
    不改变新 child 首次主要任务、边界与验收必须在 spawn 前进入初始 prompt 的要求；
    较大返工或新范围仍遵循既有负责人 gate／新 attempt 政策；
+   **fresh reviewer 是新会话但不等于新 worktree**：同一候选的小范围反馈优先
+   `send_message` 复用原 attempt 会话；只有新范围、实质返工、或无法安全复用（如
+   原 attempt 已清理/上下文过长/带失败史）时才开新 attempt；
 5. 任何阶段受阻 → `→blocked` 必须带具体 reason；解除只能回到 `blocked_from`。
 
 ### Review 严格度校准（项目专属）
@@ -116,7 +119,9 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
      产生碎提交/与后续修改冲突。正确：改动留在工作树不提交，supervisor 复核+修完
      bug 后，**统一提交一个最终 commit**；
    - 即 commit 由 supervisor 在交付前**统一收口**；子代理无需（也不应）在 main 上
-     抢提交。
+     抢提交；
+   - **旧 worktree 清理**：删除前逐项确认——无未提交改动、无活跃代理、无唯一审计
+     证据、可由 commit 恢复——禁止批量 `rm -rf`。
 
 要点：状态迁移一律走工具（事件先行），**绝不手改 frontmatter 状态字段**；判据确认
 与 review verdict 是人工 gate，停轮等输入，不用自动续轮冲过去。
@@ -166,6 +171,9 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   直接延续（继续改同一文件，组件知识与负责人多轮 review 偏好都在上下文里）；
   ② 同目标内收集→执行续轮（调研结论刚在上下文里，重读即浪费）；
 - **评审/验证角色永用新人**——复核者对被审代码必须无作者偏见；
+  **但 fresh reviewer 不必新 worktree**：只读审计、静态检查、不可变 commit 验证可
+  在已有 audit worktree 上执行，或显式 `worktree=false`（brief 禁止写文件）；需要
+  构建副作用时复用 audit worktree，不重复新建；
 - **会话已长/杂/带失败史时宁开新**：上下文膨胀与误导内容的成本高于重建上下文的成本；
 - 决定复用 → 必须走 fork+compact；判断不确定时新开，宁可损失缓存，不可损失干净。
 
@@ -178,9 +186,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   等人工输入的空窗期也要报「正在等 X」，让负责人知道你没卡死；
 - **每轮收尾更新为完成态**：结束工作前最后一步把 status 更新为「空闲待命 / 本轮完成 /
   等待输入」等完成态——看板如实反映空闲/完成状态；
-- `graph_start_attempt` 派发**执行** attempt（标准写法 `graph_start_attempt(goal=..., worktree=true)`，
-  `card` 参数**仅用于信息收集**——传 `card` 时自动生成完整收集提示词并绑定卡片）；
-  **status_line 由执行/收集子代理自己更新**
+- `graph_start_attempt` 派发执行；传入可选 `card` 参数时统一派发卡片收集（自动生成完整收集提示词并绑定卡片）；**status_line 由执行/收集子代理自己更新**
   （`graph_report_status`），**supervisor 绝不替子代理汇报**——卡片上那句话是子代理的
   自述，代劳即伪造进展。要求子代理**及时**更新：每做一个动作就写一句，**简短
   （一句人话，尽量 20 字内）**，不攒到结束、不写长篇；
@@ -205,11 +211,16 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   - 必须引用的文件给**工作目录相对精确路径**（含 versions/vX.Y/goals/ 前缀），禁止
     「自己去找到 goal.md」式指令；
   - 冻结脚本路径、验收命令逐条写全；
-- **worktree 隔离（Supervisor 强制默认）**：除非 supervisor 在派发时明确写出 override，所有执行/收集/调研/实现子代理都必须先 `git worktree add` 独立工作树（与 main 隔离）再改代码；**子代理不得自行判断「简单」而绕过隔离，也不得直接修改 main**。supervisor 调用 `graph_start_attempt` 时必须显式传 `worktree=true`（并在 attempt brief 与提示词中写明专属 worktree 路径）；只有以下两类例外可直接 main：① supervisor 明确传 `worktree=false` 并在 brief 记录理由的真正一两行、唯一文件小修；② supervisor 自己进行文档/记忆等小修改。没有明确 override 一律视为必须隔离；
-  review 交付阶段由 supervisor 复核通过后合并到目标集成分支：当前版本合并 main，未来版本合并对应版本测试/集成分支（如 `v0.8-test`），不得把未来版本代码带入 main；避免并发子代理互相踩提交、半成品直接落目标分支；
-  worktree 指令由执行派发注入 spawn 提示词；GUI 端点仅在 supervisor 明确批准时才可传 body `worktree: false`；
-  数据分工：代码改动在 worktree，看板数据 `.dsh-graph/` 仍在主工作树写（graph_*
-  工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）；
+- **worktree 隔离（Supervisor 强制默认）**：
+  - **main 只读**：`main` 分支只承载已发布版本，任何开发、测试、review 改动不得在 main 上进行；
+  - **预创建 worktree**：supervisor 为每个版本先建立 `<version>-test`（或等价命名）开发集成分支，再预创建并登记子代理 worktree；子代理直接在给定树工作，**绝不自行拉树/建分支/改分支**；
+  - **worktree=true**：非平凡源码/测试/生成物/有副作用/并行改动必须隔离；brief 必须写明专属路径、版本分支、基线 commit、禁止自行拉树/建分支/改分支；
+  - **worktree=false 快速通道**：仅以下两类可豁免——① 只读审计/静态检查（brief 明确禁止写文件，需构建副作用时复用 audit worktree）；② 特别小的独立文档/记忆修改（supervisor 直接在当前版本分支做，或子代理显式豁免并记录理由）；只写 graph 数据（看板状态、事件流）可显式不建 worktree，改源码仍隔离；
+  - **铁律**：`worktree=false` 绝不意味着可直接修改 main；即使豁免，仍禁止修改多文件源码、修改生成物、修改测试、在任意分支直接提交碎提交；
+  -  review 交付阶段由 supervisor 复核通过后合并到目标集成分支：当前版本合并 main，未来版本合并对应版本测试/集成分支（如 `<version>-test`），不得把未来版本代码带入 main；避免并发子代理互相踩提交、半成品直接落目标分支；
+  -  worktree 指令由执行派发注入 spawn 提示词；GUI 端点仅在 supervisor 明确批准时才可传 body `worktree: false`；
+  -  数据分工：代码改动在 worktree，看板数据 `.dsh-graph/` 仍在主工作树写（graph_*
+    工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）；
 - **只在仓库根跑 graph_* 工具**：执行/调研子代理务必以**仓库根**为工作目录跑
   graph_* 工具，**绝不在包目录（如 `dsh-graph-host/`）下跑**——否则工具会按会话 cwd
   在包目录自动 init 出一个 `.dsh-graph/` 骨架，弄乱工作区。**禁止**用 `git add -f`、
@@ -223,7 +234,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   复核时**逐行读最终代码、逐条件分支验证声明的行为是否真实现**——脚本 PASS 是必要
   非充分。验证前 **sleep 2s 等文件写入稳定**，避免瞬时误报；
 - **并发 Worktree 实施与流水线复核机制**：
-  - **跨版本/并发特性物理隔离（支持前瞻规划）**：支持在新版本（如 v0.8）规划与并发派发特性；所有并发开发必须在专属 `.worktrees/g-xxx-att-xx` 分支中进行；验证通过后**不合并到 main**，而是**合并到对应版本集成分支（如 `v0.8-test`）**，确保 main 分支的稳定与发版不受未来版本影响，实现真正的全异步并行推进；
+  - **跨版本/并发特性物理隔离（支持前瞻规划）**：支持在新版本规划与并发派发特性；所有并发开发必须在专属 `.worktrees/g-xxx-att-xx` 分支中进行；验证通过后**不合并到 main**，而是**合并到对应版本集成分支（如 `<version>-test`）**，确保 main 分支的稳定与发版不受未来版本影响，实现真正的全异步并行推进；
   - **单目标完工即审**：当派发多个并行 worktree 任务时，某个独立任务一完工，supervisor **立即在该独立 worktree 中启动独立测试实例进行代码与实机复核**，无需阻塞等待所有任务全部完工；
   - **并发回报暂存（避免遗忘）**：在复核某一个目标期间，若其他并发子代理发来完成汇报，supervisor 必须**先将回报信息记录/暂存到临时记忆文件（如 `.dsh-graph/memory/review-queue.md`）**；
   - **完成取下一个**：当前目标复核完成并标记后，查阅暂存记忆文件按序取出下一个就绪目标继续独立验证，直至队列全部复核完毕；

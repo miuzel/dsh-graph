@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { init, listGoalFiles } from "../ops.ts";
-import { resolveRoot, resolveCanonicalRoot, discoverGitWorktree } from "../root.ts";
+import { resolveRoot, resolveCanonicalRoot, discoverGitWorktree, _clearCanonicalRootCache, _gitRunner, DEFAULT_CANONICAL_CACHE_TTL_MS } from "../root.ts";
 import { readEvents } from "../events.ts";
 import { execSync } from "node:child_process";
 import { apply as applyHost } from "../../dsh-graph-host/index.js";
@@ -468,3 +468,184 @@ test("g-149 REST GET /api/dsh-graph 有明确 workspace 时正常返回", async 
   assert.ok(responseData, "有 workspace 时返回数据");
 });
 
+// ===== g-210: 内存缓存与失效机制测试 =====
+
+test("g-210 缓存命中：同一 workspace 多次调用不重复执行 git 子进程", async () => {
+  _clearCanonicalRootCache();
+  const base = mkdtempSync(join(tmpdir(), "g210-cache-hit-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const origExecSync = _gitRunner.execSync;
+  let execSyncCount = 0;
+
+  try {
+    _gitRunner.execSync = function (...args: any[]) {
+      execSyncCount++;
+      return (origExecSync as any).apply(this, args);
+    };
+
+    // 首次调用：未命中缓存，触发 git 子进程
+    const res1 = resolveCanonicalRoot(undefined, worktreeDir!);
+    const countAfterFirst = execSyncCount;
+    assert.ok(countAfterFirst >= 2, "首次调用执行 rev-parse 与 worktree list");
+
+    // 第二次、第三次调用：命中内存缓存，子进程执行次数不再增加
+    const res2 = resolveCanonicalRoot(undefined, worktreeDir!);
+    const res3 = resolveCanonicalRoot(undefined, worktreeDir!);
+
+    assert.equal(execSyncCount, countAfterFirst, "后续调用应从内存缓存读取，不再执行 execSync");
+    assert.deepEqual(res2, res1, "缓存结果与首次结果一致");
+    assert.deepEqual(res3, res1, "多次缓存结果一致");
+
+    // discoverGitWorktree 也直接命中同一 workspace 缓存
+    const info1 = discoverGitWorktree(worktreeDir!);
+    assert.equal(execSyncCount, countAfterFirst, "discoverGitWorktree 命中缓存不增加 execSync");
+    assert.equal(info1?.isLinkedWorktree, true);
+  } finally {
+    _gitRunner.execSync = origExecSync;
+  }
+});
+
+test("g-210 缓存重置：_clearCanonicalRootCache 后重新执行发现", async () => {
+  _clearCanonicalRootCache();
+  const base = mkdtempSync(join(tmpdir(), "g210-cache-clear-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const origExecSync = _gitRunner.execSync;
+  let execSyncCount = 0;
+
+  try {
+    _gitRunner.execSync = function (...args: any[]) {
+      execSyncCount++;
+      return (origExecSync as any).apply(this, args);
+    };
+
+    resolveCanonicalRoot(undefined, worktreeDir!);
+    const count1 = execSyncCount;
+    assert.ok(count1 > 0);
+
+    // 清理缓存
+    _clearCanonicalRootCache();
+
+    // 再次调用应重新执行 git 命令
+    resolveCanonicalRoot(undefined, worktreeDir!);
+    assert.ok(execSyncCount > count1, "清空缓存后再次调用重新触发 execSync");
+  } finally {
+    _gitRunner.execSync = origExecSync;
+  }
+});
+
+test("g-210 TTL 过期失效：超过 ttlMs 后重新执行 git 命令", async () => {
+  _clearCanonicalRootCache();
+  const base = mkdtempSync(join(tmpdir(), "g210-cache-ttl-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const origExecSync = _gitRunner.execSync;
+  let execSyncCount = 0;
+
+  try {
+    _gitRunner.execSync = function (...args: any[]) {
+      execSyncCount++;
+      return (origExecSync as any).apply(this, args);
+    };
+
+    // 设置很短的 TTL (30ms)
+    resolveCanonicalRoot(undefined, worktreeDir!, { ttlMs: 30 });
+    const count1 = execSyncCount;
+
+    // 立即再次调用：命中缓存
+    resolveCanonicalRoot(undefined, worktreeDir!, { ttlMs: 30 });
+    assert.equal(execSyncCount, count1, "TTL 内命中缓存");
+
+    // 等待 50ms 过期
+    await new Promise((r) => setTimeout(r, 50));
+
+    // 过期后调用：重新执行
+    resolveCanonicalRoot(undefined, worktreeDir!, { ttlMs: 30 });
+    assert.ok(execSyncCount > count1, "TTL 过期后重新触发 execSync");
+  } finally {
+    _gitRunner.execSync = origExecSync;
+  }
+});
+
+test("g-210 .git mtime 变更失效：工作树或 Git 状态发生变化时自动刷新", async () => {
+  _clearCanonicalRootCache();
+  const base = mkdtempSync(join(tmpdir(), "g210-cache-mtime-"));
+  const { mainDir, worktreeDir } = setupGitRepo(base, { linkedWorktree: true });
+
+  const origExecSync = _gitRunner.execSync;
+  let execSyncCount = 0;
+
+  try {
+    _gitRunner.execSync = function (...args: any[]) {
+      execSyncCount++;
+      return (origExecSync as any).apply(this, args);
+    };
+
+    resolveCanonicalRoot(undefined, worktreeDir!);
+    const count1 = execSyncCount;
+
+    // 命中缓存
+    resolveCanonicalRoot(undefined, worktreeDir!);
+    assert.equal(execSyncCount, count1);
+
+    // 模拟 .git 文件/目录 mtime 改变（如 git worktree 更新或 touch .git）
+    const gitPath = join(worktreeDir!, ".git");
+    const { utimesSync } = await import("node:fs");
+    const futureTime = (Date.now() + 10000) / 1000;
+    utimesSync(gitPath, futureTime, futureTime);
+
+    // .git mtime 变动后，缓存失效，重新执行 git
+    resolveCanonicalRoot(undefined, worktreeDir!);
+    assert.ok(execSyncCount > count1, ".git mtime 变化后缓存失效并重新触发 execSync");
+  } finally {
+    _gitRunner.execSync = origExecSync;
+  }
+});
+
+test("g-210 非 Git 仓库路径降级缓存：同一非 Git workspace 也缓存 null 结果，避免重复报错", async () => {
+  _clearCanonicalRootCache();
+  const base = mkdtempSync(join(tmpdir(), "g210-nongit-cache-"));
+
+  const origExecSync = _gitRunner.execSync;
+  let execSyncCount = 0;
+
+  try {
+    _gitRunner.execSync = function (...args: any[]) {
+      execSyncCount++;
+      return (origExecSync as any).apply(this, args);
+    };
+
+    const res1 = resolveCanonicalRoot(undefined, base);
+    assert.equal(res1.mode, "workspace-fallback");
+    const count1 = execSyncCount;
+    assert.ok(count1 >= 1, "首次对非 Git 目录尝试 rev-parse 失败");
+
+    // 再次调用同一非 Git 目录：命中 fallback 缓存，不再抛异常/执行 execSync
+    const res2 = resolveCanonicalRoot(undefined, base);
+    assert.equal(res2.mode, "workspace-fallback");
+    assert.equal(execSyncCount, count1, "非 Git 目录重复调用命中缓存");
+  } finally {
+    _gitRunner.execSync = origExecSync;
+  }
+});
+
+test("g-210 不同 workspace 路径隔离：不同路径拥有独立的缓存条目", async () => {
+  _clearCanonicalRootCache();
+  const base1 = mkdtempSync(join(tmpdir(), "g210-iso-1-"));
+  const base2 = mkdtempSync(join(tmpdir(), "g210-iso-2-"));
+  const repo1 = setupGitRepo(base1, { linkedWorktree: true });
+  const repo2 = setupGitRepo(base2, { linkedWorktree: false });
+
+  const res1 = resolveCanonicalRoot(undefined, repo1.worktreeDir!);
+  const res2 = resolveCanonicalRoot(undefined, repo2.mainDir);
+
+  assert.equal(res1.canonicalWorkspace, resolve(repo1.mainDir));
+  assert.equal(res2.canonicalWorkspace, resolve(repo2.mainDir));
+  assert.notEqual(res1.canonicalWorkspace, res2.canonicalWorkspace, "不同 workspace 相互隔离");
+});
+
+test("g-210 host 模块同步暴露 _clearCanonicalRootCache", async () => {
+  const hostMod = await import("../../dsh-graph-host/index.js");
+  assert.equal(typeof hostMod._clearCanonicalRootCache, "function", "host 导出 _clearCanonicalRootCache");
+});
