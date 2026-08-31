@@ -60,7 +60,7 @@ TEST_HOME="${TEST_HOME:-$REPO_ROOT/tmp/test-review}"
 PROFILE="${PROFILE:-dsh-graph-test}"
 PORT="${PORT:-3082}"
 HOST_DIR="${HOST_DIR:-$REPO_ROOT/dsh-graph-host}"
-PUBLISHED_VER="${PUBLISHED_VER:-^0.7.2}"
+PUBLISHED_VER="${PUBLISHED_VER:-^0.7.3}"
 MAIN_PROFILE="${MAIN_PROFILE:-web}"
 # 测试实例的工作目录决定 .dsh-graph 数据落点；setup 会写入绝对
 # .dsh-graph config.root，避免 linked worktree 的 g-149 canonicalization 合并。

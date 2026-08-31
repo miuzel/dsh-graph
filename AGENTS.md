@@ -134,7 +134,7 @@ dsh, so an in-progress plugin can never break the production GUI.
 ```sh
 bash scripts/dev-dsh-instance.sh run [--port N] [--host H] [--open]  # setup + start test instance (default 3082)
 bash scripts/dev-dsh-instance.sh setup            # create/install profile only, don't start
-bash scripts/dev-dsh-instance.sh main-published   # point main profile at published dsh-graph (^0.7.2) + reinstall
+bash scripts/dev-dsh-instance.sh main-published   # point main profile at published dsh-graph (^0.7.3) + reinstall
 bash scripts/dev-dsh-instance.sh main-dev         # point main profile back at local link: dev host
 bash scripts/dev-dsh-instance.sh status           # show both profiles' dsh-graph dep + port usage
 ```
