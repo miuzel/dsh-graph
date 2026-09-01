@@ -1,5 +1,5 @@
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
-    const PLUGIN_VERSION = "0.7.3";
+    const PLUGIN_VERSION = "0.8.1-alpha";
 
     const STAGES = [
       { key: "describe", label: "描述", statuses: ["draft", "planning"] },
@@ -162,7 +162,25 @@
       .dg-chevron:hover { background: rgba(128,128,128,.32); opacity: 1; }
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
-      .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); }
+      .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); background: var(--dsw-alias-bg-base, rgba(30,31,36,.85)); }
+      /* g-216: 看板以低层级保留 composerSeat 输入框；看板打开时禁用并降下宿主 widthHandle，避免其遮挡/抢占看板边缘。 */
+      .wSkVaW_root:has(.dg-kanban-root) .wSkVaW_widthHandle,
+      .wSkVaW_body:has(.dg-kanban-root) .wSkVaW_widthHandle {
+        z-index: 0 !important;
+        pointer-events: none !important;
+      }
+      /* 弹窗与抽屉等蒙层打开时，隐藏原生 widthHandle，防止手柄遮挡/穿透弹层与边缘溢出 */
+      .wSkVaW_root:has(.dg-modal-open) .wSkVaW_widthHandle,
+      .wSkVaW_body:has(.dg-modal-open) .wSkVaW_widthHandle,
+      .wSkVaW_root:has([style*="position: fixed"]) .wSkVaW_widthHandle,
+      .wSkVaW_root:has([style*="position:fixed"]) .wSkVaW_widthHandle,
+      .wSkVaW_body:has([style*="position: fixed"]) .wSkVaW_widthHandle,
+      .wSkVaW_body:has([style*="position:fixed"]) .wSkVaW_widthHandle,
+      body:has(.dg-modal-open) [data-width-handle],
+      body:has([style*="position: fixed"]) [data-width-handle],
+      body:has([style*="position:fixed"]) [data-width-handle] {
+        display: none !important;
+      }
       /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */
       @keyframes dg-flow-bg {
          0% { background-position: 0% 50%; }
@@ -275,7 +293,7 @@
       .dg-drop-before { border-top: 2px solid #4c8dff !important; }
       .dg-drop-after { border-bottom: 2px solid #4c8dff !important; }
       .dg-cell-drop-active { background: rgba(76,141,255,.10); border-radius: 4px; }
-      .dg-drag-ghost { position: fixed; pointer-events: none; z-index: 99999; opacity: 0.85;
+      .dg-drag-ghost { position: fixed; pointer-events: none; z-index: 100000; opacity: 0.85;
         max-width: 260px; padding: 6px 10px; border-radius: 6px;
         background: rgba(30,31,36,.92); border: 1px solid rgba(76,141,255,.55);
         box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; font-weight: 600;

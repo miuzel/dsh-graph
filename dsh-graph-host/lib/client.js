@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const h = React.createElement;
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
-    const PLUGIN_VERSION = "0.7.3";
+    const PLUGIN_VERSION = "0.8.1-alpha";
 
     const STAGES = [
       { key: "describe", label: "描述", statuses: ["draft", "planning"] },
@@ -174,7 +174,25 @@ window.__ModuleLoader__.load({
       .dg-chevron:hover { background: rgba(128,128,128,.32); opacity: 1; }
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
-      .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); }
+      .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); background: var(--dsw-alias-bg-base, rgba(30,31,36,.85)); }
+      /* g-216: 看板以低层级保留 composerSeat 输入框；看板打开时禁用并降下宿主 widthHandle，避免其遮挡/抢占看板边缘。 */
+      .wSkVaW_root:has(.dg-kanban-root) .wSkVaW_widthHandle,
+      .wSkVaW_body:has(.dg-kanban-root) .wSkVaW_widthHandle {
+        z-index: 0 !important;
+        pointer-events: none !important;
+      }
+      /* 弹窗与抽屉等蒙层打开时，隐藏原生 widthHandle，防止手柄遮挡/穿透弹层与边缘溢出 */
+      .wSkVaW_root:has(.dg-modal-open) .wSkVaW_widthHandle,
+      .wSkVaW_body:has(.dg-modal-open) .wSkVaW_widthHandle,
+      .wSkVaW_root:has([style*="position: fixed"]) .wSkVaW_widthHandle,
+      .wSkVaW_root:has([style*="position:fixed"]) .wSkVaW_widthHandle,
+      .wSkVaW_body:has([style*="position: fixed"]) .wSkVaW_widthHandle,
+      .wSkVaW_body:has([style*="position:fixed"]) .wSkVaW_widthHandle,
+      body:has(.dg-modal-open) [data-width-handle],
+      body:has([style*="position: fixed"]) [data-width-handle],
+      body:has([style*="position:fixed"]) [data-width-handle] {
+        display: none !important;
+      }
       /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */
       @keyframes dg-flow-bg {
          0% { background-position: 0% 50%; }
@@ -287,7 +305,7 @@ window.__ModuleLoader__.load({
       .dg-drop-before { border-top: 2px solid #4c8dff !important; }
       .dg-drop-after { border-bottom: 2px solid #4c8dff !important; }
       .dg-cell-drop-active { background: rgba(76,141,255,.10); border-radius: 4px; }
-      .dg-drag-ghost { position: fixed; pointer-events: none; z-index: 99999; opacity: 0.85;
+      .dg-drag-ghost { position: fixed; pointer-events: none; z-index: 100000; opacity: 0.85;
         max-width: 260px; padding: 6px 10px; border-radius: 6px;
         background: rgba(30,31,36,.92); border: 1px solid rgba(76,141,255,.55);
         box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; font-weight: 600;
@@ -295,7 +313,7 @@ window.__ModuleLoader__.load({
     `;
 
     const S = {
-      wrap: { padding: 12, fontSize: 13, color: "inherit", overflowX: "auto" },
+      wrap: { padding: 12, fontSize: 13, color: "inherit", overflowX: "auto", position: "relative", zIndex: 1, minWidth: 0 },
       head: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
       grid: { display: "grid", gridTemplateColumns: "130px repeat(6, minmax(150px, 1fr))", gap: 4 },
       laneLabel: { fontWeight: 600, padding: "8px 6px", borderTop: "1px solid rgba(128,128,128,.35)" },
@@ -324,11 +342,11 @@ window.__ModuleLoader__.load({
       },
       overlay: {
         position: "fixed", inset: 0, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.55))",
-        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000,
       },
       drawer: {
         position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
-        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10000,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10001,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
@@ -338,7 +356,7 @@ window.__ModuleLoader__.load({
       modal: {
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", borderRadius: 10,
         maxWidth: 720, width: "90%", maxHeight: "80vh", overflowY: "auto",
-        padding: "16px 20px", fontSize: 13, lineHeight: 1.6,
+        padding: "16px 20px", fontSize: 13, lineHeight: 1.6, position: "relative", zIndex: 10002,
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
@@ -499,6 +517,48 @@ window.__ModuleLoader__.load({
       return num;
     }
 
+    // g-222：跨版本打开 Host 工作区路径（优先 0.1.2+ session.openWorkspacePath，回退 0.1.1-rc host.openPath）。
+    // 依赖 plugin.inject 声明 "remote.session"：session 命名空间服务由 api-gateway 在兄弟 fiber 提供，
+    // 仅 inject "remote" 时 ctx.remote.session 属性访问走 fiber 向上遍历会在 root fiber 抛
+    // 'cannot get property "remote.session" without inject'（g-222 根因）；inject 后本 fiber store
+    // 才有实现，属性访问与调用均正常。
+    // 返回 { opened: boolean, error?: string }：opened=true 表示已交给系统打开；error 携带可理解失败原因。
+    async function openHostPath(path) {
+      if (!path) return { opened: false, error: "路径为空" };
+      try {
+        // g-222: Access remote.session via ctx.get() for backward compatibility
+        // In 0.1.2+, remote.session is available; in 0.1.1-rc.2 it's not
+        const remoteSession = appCtx?.get?.("remote.session") ?? null;
+        const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
+        const openFn = remoteSession?.openWorkspacePath ?? remote?.session?.openWorkspacePath ?? (typeof remote?.["session/openWorkspacePath"] === "function" ? remote["session/openWorkspacePath"].bind(remote) : null);
+        if (typeof openFn === "function") {
+          const res = await openFn({ path });
+          if (res && ("opened" in res ? res.opened : res.ok === true)) return { opened: true };
+          if (res && res.ok === false && res.error && res.error.message) {
+            return { opened: false, error: String(res.error.message) };
+          }
+        }
+      } catch (e) {
+        return { opened: false, error: String(e?.message ?? e) };
+      }
+      try {
+        const conn = connectionRt ?? appCtx?.get?.("connection");
+        if (typeof conn?.api?.host?.openPath === "function") {
+          const result = await conn.api.host.openPath({ path });
+          if (result?.opened) return { opened: true };
+        }
+      } catch (e) {
+        return { opened: false, error: String(e?.message ?? e) };
+      }
+      return { opened: false };
+    }
+    // g-222：toast 展示用的错误文案（截断过长原始错误，保留首段）
+    function openErrorText(err) {
+      if (!err) return "";
+      const s = String(err).replace(/^path open failed:\s*/i, "").split("\n")[0] ?? String(err);
+      return s.length > 120 ? s.slice(0, 120) + "…" : s;
+    }
+
     // g-214：局部化倒计时组件，避免每秒 tick 引起整个看板大面积重绘；
     // g-211：融合 visibilitychange 感知，页面后台时暂停倒计时，切回前台补偿触发
     function RefreshCountdown(props) {
@@ -616,8 +676,7 @@ window.__ModuleLoader__.load({
           h("span", { style: { minWidth: "18px", textAlign: "right", opacity: 0.85, fontSize: 10 } }, `${remaining}s`)));
     }
 
-    // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====
-    // 数据源：sessions.binding(childId).session（uSES 快照 subscribe/getSnapshot），
+    // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // 数据源：sessions.binding(childId).session（uSES 快照 subscribe/getSnapshot），
     // 流式行读 chat.legacy.partial（必须先 session.open()），token/上下文走投影
     // faceOf("tokenUsage"|"contextPressure")（无需 open），模型走 connection.api.sessions.models，
     // 发指令走 session.prompt（continuable 子代理自动路由 api.subagents.prompt，仅文本），
@@ -639,8 +698,10 @@ window.__ModuleLoader__.load({
             const entry = entries.find((e) => e.kind === "child" && e.id === childId);
             if (entry) {
               boundModes.set(childId, entry.mode);
+              // g-217：0.1.2-alpha.2 权威签名 configureSubagent(address, parentAvailable?)——
+              // 按指南单参调用（address 含 parentSessionId/childSessionId/mode），parentAvailable 缺省 undefined
               session.configureSubagent?.(
-                { parentSessionId: parentId, childSessionId: childId, mode: entry.mode }, true);
+                { parentSessionId: parentId, childSessionId: childId, mode: entry.mode });
             }
           } catch (e) {
             console.warn("[dsh-graph-host] 子代理地址配置失败", e);
@@ -665,14 +726,18 @@ window.__ModuleLoader__.load({
       return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     }
 
-    // 解析绑定 childId 的 Session（binding 是文档化的纯解析，渲染期安全）
+    // 解析绑定 childId 的 Session / eventSource（binding 是文档化的纯解析，渲染期安全）
+    // g-217：0.1.2-alpha.2 实时输出新家在 binding.eventSource（不在 session 上）；
+    // binding 解析失败 → session/eventSource 均为 null，LiveStrip 保留'⚠️ 会话未接入'占位。
     function useBoundSession(parentId, childId) {
       const listSnap = useSessionsList();
-      const session = React.useMemo(() => {
+      const binding = React.useMemo(() => {
         if (!sessionsRt || !childId) return null;
-        try { return sessionsRt.binding(childId)?.session ?? null; }
+        try { return sessionsRt.binding(childId) ?? null; }
         catch (e) { console.warn("[dsh-graph-host] binding 解析失败", e); return null; }
       }, [childId, listSnap]);
+      const session = binding?.session ?? null;
+      const eventSource = binding?.eventSource ?? null;
       const [mode, setMode] = React.useState(boundModes.get(childId) ?? null);
       React.useEffect(() => {
         if (!session) return;
@@ -682,7 +747,7 @@ window.__ModuleLoader__.load({
         });
         return () => { alive = false; };
       }, [session, parentId, childId]);
-      return { session, mode };
+      return { session, mode, eventSource };
     }
 
     function useSessionSnapshot(session) {
@@ -817,12 +882,185 @@ window.__ModuleLoader__.load({
       ].filter(Boolean).join(" ｜ ");
     }
 
+    // ===== g-217：0.1.2-alpha.2 实时输出新路径（binding.eventSource）=====
+    // 能力探测：有 binding.eventSource 走新路径；否则回退旧 chat.legacy.partial（C1/C5）。
+    // 归一化形状 {pendingCount, activity, streamText, finalText}，UI 只消费该形状（指南 §5.2）。
+    // 窗口语义（C4）：每次 flush 全量重扫 getSnapshot().entries——append 增量自然含尾部，
+    // replace/prepend 全量重扫，无需按 change.kind 分叉。
+
+    // 工具参数 → 一句话说明/文件名（C8）：优先 description → command → file_path → path → prompt；
+    // 残缺 JSON 解析失败回退原始字符串（渲染与否由调用方 complete 门控决定，避免残缺 JSON 入 UI）。
+    function toolDetail(argsRaw) {
+      if (argsRaw == null || argsRaw === "") return "";
+      let obj = null;
+      try { obj = JSON.parse(argsRaw); } catch (e) { /* 残缺 JSON，保持 null */ }
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+        for (const k of ["description", "command", "file_path", "path", "prompt"]) {
+          const v = obj[k];
+          if (typeof v === "string" && v.trim()) {
+            const t = v.trim();
+            return t.length > 60 ? t.slice(0, 57) + "…" : t;
+          }
+        }
+      }
+      const s = String(argsRaw).trim();
+      return s ? (s.length > 40 ? s.slice(0, 37) + "…" : s) : "";
+    }
+
+    // 事件窗口 → 归一化形状（指南 §5.2 参考实现）。
+    // 按 callId 去重（tool/call 与 tool-call-delta 可能产生同一调用记录）；
+    // 工具详情仅当 complete（block-end / tool/call 提供完整 arguments）才渲染。
+    function deriveLive(entries, running, toolDetailFn) {
+      const tail = (s) => {
+        const lines = String(s || "").split("\n").map((x) => x.trim()).filter(Boolean);
+        return lines.length ? lines.slice(-2).join("\n") : "";
+      };
+      const finalOf = (blocks) => {
+        const list = Array.isArray(blocks) ? blocks : [];
+        for (let i = list.length - 1; i >= 0; i--) {
+          const b = list[i];
+          if (b?.type === "text" || b?.type === "reasoning") {
+            const t = tail(b.text);
+            if (t) return (b.type === "reasoning" ? "💭 " : "") + t;
+          }
+          if (b?.type === "tool-call" && b.name) return "⚙ 调用工具 " + b.name;
+        }
+        return "";
+      };
+      const upsert = (map, arr, id, init) => {
+        let rec = map.get(id);
+        if (!rec) {
+          rec = Object.assign({ complete: false, running: true }, init);
+          map.set(id, rec);
+          arr.push(rec);
+        }
+        return rec;
+      };
+
+      let text = "", reasoning = "", finalText = "", hasStream = false, lastKind = "text";
+      const pending = [], done = [], byCall = new Map();
+
+      for (const entry of entries) {
+        if (!entry || entry.type !== "event") continue;   // chunkrow 压缩历史跳过
+        const e = entry.event;
+        if (!e || typeof e.type !== "string") continue;
+        switch (e.type) {
+          case "assistant/chunk": {
+            const c = e.data?.chunk; if (!c) break;
+            if (c.type === "text-delta") { text += c.text || ""; hasStream = true; lastKind = "text"; }
+            else if (c.type === "reasoning-delta") { reasoning += c.text || ""; hasStream = true; lastKind = "reasoning"; }
+            else if (c.type === "tool-call-delta" && c.id) {
+              const rec = upsert(byCall, pending, c.id, { name: c.name || "工具调用", args: "" });
+              if (c.name) rec.name = c.name;
+              rec.args += c.argumentsDelta || "";        // 累积，勿覆盖（§7.1）
+            } else if (c.type === "block-end" && c.block?.type === "tool-call") {
+              const rec = upsert(byCall, pending, c.block.id, { name: c.block.name || "工具调用", args: "" });
+              if (c.block.name) rec.name = c.block.name;
+              rec.args = c.block.arguments || rec.args;   // 完整参数覆盖增量
+              rec.complete = true;
+            }
+            break;
+          }
+          case "assistant/message": {
+            finalText = finalOf(e.data?.message?.content);
+            text = ""; reasoning = ""; hasStream = false;
+            break;
+          }
+          case "tool/call": {
+            const rec = upsert(byCall, pending, e.data?.callId, { name: e.data?.name || "工具调用", args: "" });
+            if (e.data?.name) rec.name = e.data?.name;
+            if (e.data?.arguments != null) { rec.args = e.data.arguments; rec.complete = true; }
+            rec.running = true;
+            break;
+          }
+          case "tool/result": {
+            const rec = byCall.get(e.data?.message?.source?.callId);
+            const block = e.data?.message?.content?.[0];
+            if (rec) {
+              rec.running = false;
+              done.push({ name: rec.name, args: rec.args, complete: rec.complete, isError: block?.isError });
+            }
+            break;
+          }
+          default: break;
+        }
+      }
+
+      const open = pending.filter((r) => r.running !== false);
+      const fmtAct = (r, icon) =>
+        `${icon} ${r.name || "工具调用"}${r.complete && r.args ? ` · ${toolDetailFn(r.args)}` : ""}`;
+      return {
+        pendingCount: open.length,
+        activity: [
+          ...open.slice(-2).map((r) => fmtAct(r, "▶")),
+          ...done.slice(-2).map((r) => fmtAct(r, r.isError ? "✖" : "✓")),
+        ],
+        streamText: hasStream ? ((lastKind === "reasoning" ? "💭 " : "") + tail(lastKind === "reasoning" ? reasoning : text)) : "",
+        finalText,
+      };
+    }
+
+    // 展示优先级（指南 §5.3）：pending>0 → 活动行；running+流式 → 流式文本；活动行 → 定稿文本
+    function pickLiveLine(live, running) {
+      if (live.pendingCount > 0) return live.activity.join(" ｜ ") || null;
+      if (running && live.streamText) return live.streamText;
+      if (live.activity.length) return live.activity.join(" ｜ ");
+      return live.finalText || null;
+    }
+
+    // g-217：LiveStrip 数据源 hook——事件源新路径（能力探测）+ 旧 chat.legacy 回退（C1/C5）。
+    // 复用 g-195 节流语义（≤5fps / ≥200ms trailing flush，不丢尾包，卸载清理定时器与订阅 C3）。
+    function useLiveStripState(session, eventSource, intervalMs = 200) {
+      // 旧路径状态（chat.legacy.partial）：能力探测缺失时回退，代码原样保留
+      const legacy = useThrottledLiveSession(session, intervalMs);
+      const feed = eventSource ?? null;
+      const [live, setLive] = React.useState(() => {
+        if (!feed || !session) return { pendingCount: 0, activity: [], streamText: null, finalText: null };
+        return deriveLive(feed.getSnapshot()?.entries ?? [], !!session.getSnapshot()?.running, toolDetail);
+      });
+      React.useEffect(() => {
+        if (!feed || !session) return;
+        let timer = null;
+        let lastFlush = 0;
+        let unmounted = false;
+        const flush = () => {
+          if (timer) { clearTimeout(timer); timer = null; }
+          lastFlush = Date.now();
+          if (unmounted) return;
+          const entries = feed.getSnapshot()?.entries ?? [];
+          const running = !!session.getSnapshot()?.running;
+          setLive(deriveLive(entries, running, toolDetail));
+        };
+        const onUpdate = () => {
+          const now = Date.now();
+          const elapsed = now - lastFlush;
+          if (elapsed >= intervalMs) flush();
+          else if (!timer) timer = setTimeout(flush, intervalMs - elapsed);
+        };
+        flush();
+        const unsub = feed.subscribe(onUpdate);
+        return () => {
+          unmounted = true;
+          if (timer) clearTimeout(timer);
+          if (typeof unsub === "function") unsub();
+        };
+      }, [feed, session, intervalMs]);
+
+      if (feed) {
+        // 新路径：running 取会话快照（§7.9 更直接）；line 按展示优先级从归一化形状推导
+        const running = !!(session?.getSnapshot?.().running);
+        return { snap: null, line: pickLiveLine(live, running), running };
+      }
+      return legacy;
+    }
+
     // 卡片内嵌实时条（g-129 负责人 2026-08-22 格式调整）：第一行 = 运行状态 + 流式内容（同行，
     // 流式时有时无不再引起高度变化）；status_line + tok/ctx 放 tooltip（悬浮查看）。
+    // g-217：数据源接入 binding.eventSource 新路径（能力探测），旧 chat.legacy 回退，UI 形状不变。
     function LiveStrip(props) {
-      const { session } = useBoundSession(props.parentId, props.childId);
-      // g-195: 使用 useThrottledLiveSession 限制 peek 流式刷新为 ≤5fps (≥200ms)
-      const { snap, line, running } = useThrottledLiveSession(session, 200);
+      const { session, eventSource } = useBoundSession(props.parentId, props.childId);
+      // g-195: 使用 useLiveStripState 限制 peek 流式刷新为 ≤5fps (≥200ms)；新路径事件源 / 旧路径会话快照
+      const { snap, line, running } = useLiveStripState(session, eventSource, 200);
       const usage = useProjectionValue(session, "tokenUsage");
       const pressure = useProjectionValue(session, "contextPressure");
       if (!props.childId) return null;
@@ -849,7 +1087,7 @@ window.__ModuleLoader__.load({
         return () => clearInterval(t);
       }, [staleStatus]);
       const staleDur = staleStatus && props.statusAt != null ? fmtElapsed(props.statusAt, now) : null;
-            const meter = liveMeter(usage, pressure);
+      const meter = liveMeter(usage, pressure);
       // g-129 负责人 2026-08-22 格式：第一行 = 状态 + 流式内容（同行，流式时有时无不引起高度变化），
       // 右侧有足够宽度时显示 tok/ctx；第二行 = status_line 固定显示。
       const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
@@ -892,7 +1130,6 @@ window.__ModuleLoader__.load({
           : null,
       );
     }
-
     // 看板直达指令：向 continuable 子代理发文本（queue 排队 / steer 插队）。
     // 多模态降级：子代理图片源码级不支持（SUBAGENT_IMAGE_UNSUPPORTED）——明确提示而非静默失败。
     function PromptBox(props) {
@@ -954,19 +1191,29 @@ window.__ModuleLoader__.load({
     function RecentRecords(props) {
       const [state, setState] = React.useState({ loading: true });
       React.useEffect(() => {
-        if (!connectionRt) { setState({ loading: false, error: "connection 服务不可用" }); return; }
         let alive = true;
-        const call = props.parentId
-          ? connectionRt.api.subagents.history({
-              parentSessionId: props.parentId, childSessionId: props.childId,
-              mode: props.mode ?? "continuable", maxMessages: 30,
-            })
-          : connectionRt.api.sessions.history({ sessionId: props.childId, maxMessages: 30 });
-        call
-          .then((r) => alive && setState(r?.result?.ok
-            ? { loading: false, entries: r.result.value.events }
-            : { loading: false, error: r?.result?.error?.message ?? "读取失败" }))
-          .catch((e) => alive && setState({ loading: false, error: String(e?.message ?? e) }));
+        const loadHistory = async () => {
+          try {
+            if (connectionRt?.api?.subagents?.history && props.parentId) {
+              const r = await connectionRt.api.subagents.history({
+                parentSessionId: props.parentId, childSessionId: props.childId,
+                mode: props.mode ?? "continuable", maxMessages: 30,
+              });
+              if (!alive) return;
+              if (r?.result?.ok) { setState({ loading: false, entries: r.result.value.events }); return; }
+            }
+            if (connectionRt?.api?.sessions?.history && props.childId) {
+              const r = await connectionRt.api.sessions.history({ sessionId: props.childId, maxMessages: 30 });
+              if (!alive) return;
+              if (r?.result?.ok) { setState({ loading: false, entries: r.result.value.events }); return; }
+            }
+            if (!alive) return;
+            setState({ loading: false, entries: [] });
+          } catch (e) {
+            if (alive) setState({ loading: false, error: String(e?.message ?? e) });
+          }
+        };
+        loadHistory();
         return () => { alive = false; };
       }, [props.parentId, props.childId]);
 
@@ -1041,19 +1288,26 @@ window.__ModuleLoader__.load({
       const [model, setModel] = React.useState(null); // {provider, model, fromParent}
       const [modelErr, setModelErr] = React.useState(null);
       React.useEffect(() => {
-        if (!sessionId || !connectionRt) return;
+        if (!sessionId) return;
         let alive = true;
         const load = async () => {
           try {
-            const r = await connectionRt.api.sessions.models({ sessionId });
-            if (!alive) return;
-            if (r?.result?.ok) {
-              setModel({ ...(r.result.value.current ?? {}), fromParent: false });
-              setModelErr(null);
-            } else {
-              setModel(null);
-              setModelErr(r?.result?.error?.message ?? "查询失败");
+            if (connectionRt?.api?.sessions?.models) {
+              const r = await connectionRt.api.sessions.models({ sessionId });
+              if (!alive) return;
+              if (r?.result?.ok) {
+                setModel({ ...(r.result.value.current ?? {}), fromParent: false });
+                setModelErr(null);
+                return;
+              } else {
+                setModel(null);
+                setModelErr(r?.result?.error?.message ?? "查询失败");
+                return;
+              }
             }
+            if (!alive) return;
+            setModel(null);
+            setModelErr(null);
           } catch (e) {
             if (alive) { setModel(null); setModelErr(String(e?.message ?? e)); }
           }
@@ -1485,7 +1739,7 @@ window.__ModuleLoader__.load({
             ghost.style.width = rect.width + "px";
             ghost.style.margin = "0";
             ghost.style.pointerEvents = "none";
-            ghost.style.zIndex = "99999";
+            ghost.style.zIndex = "100000";
             document.body.appendChild(ghost);
             e.dataTransfer.setDragImage(ghost, 16, 10);
             setTimeout(() => { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); }, 0);
@@ -1614,6 +1868,8 @@ window.__ModuleLoader__.load({
       const [deleteConfirm, setDeleteConfirm] = React.useState(false);
       const [deleteIdInput, setDeleteIdInput] = React.useState("");
       const [deleteNote, setDeleteNote] = React.useState(null);
+      // g-219：删除请求进行中标记（防双击重复提交）
+      const [deleting, setDeleting] = React.useState(false);
       React.useEffect(() => {
         let alive = true;
         fetch(graphUrl("/api/dsh-graph/goal", { id: props.goalId }))
@@ -1765,18 +2021,12 @@ window.__ModuleLoader__.load({
                   title: "用系统默认编辑器打开卡片文件",
                   onClick: async (e) => {
                     e.stopPropagation();
-                    try {
-                      const conn = connectionRt ?? appCtx?.get?.("connection");
-                      if (conn?.api?.host?.openPath) {
-                        const result = await conn.api.host.openPath({ path: card.cardFile });
-                        if (result?.opened) { showToast("✅ 已打开卡片文件"); return; }
-                      }
-                      await copyText(card.cardFile);
-                      showToast("✅ 路径已复制（打开不可用）");
-                    } catch {
-                      await copyText(card.cardFile);
-                      showToast("✅ 路径已复制");
-                    }
+                    // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
+                    const r = await openHostPath(card.cardFile);
+                    if (r.opened) { showToast("✅ 已打开卡片文件"); return; }
+                    await copyText(card.cardFile);
+                    if (r.error) { showToast("⚠️ 打开失败：" + openErrorText(r.error)); }
+                    else { showToast("✅ 路径已复制（打开不可用）"); }
                   },
                 }, "打开"),
                 h("button", {
@@ -1820,8 +2070,10 @@ window.__ModuleLoader__.load({
                       h("button", {
                         style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
                         className: "dg-btn-danger",
-                        disabled: deleteIdInput.trim() !== card.id,
+                        disabled: deleteIdInput.trim() !== card.id || deleting,
                         onClick: async () => {
+                          if (deleting) return; // g-219：防双击重复提交
+                          setDeleting(true);
                           try {
                             const r = await fetch(graphUrl("/api/dsh-graph/delete-card"), {
                               method: "POST",
@@ -1834,14 +2086,19 @@ window.__ModuleLoader__.load({
                               showToast("✅ 卡片已删除");
                               setDeleteConfirm(false);
                               setDeleteIdInput("");
-                              // 关闭抽屉并刷新
+                              // g-219：事件结果为准——先通知外部局部移除，再关抽屉
+                              if (props.onDeleted) props.onDeleted(card.id);
                               props.onClose?.();
-                              if (props.onDeleted) props.onDeleted();
                             } else {
-                              setDeleteNote("⚠️ 删除失败：" + (data.error || "未知错误"));
+                              // g-219：删除被拒（如 collecting）——明确提示并保留确认态
+                              const msg = (data.error || "未知错误");
+                              setDeleteNote("⚠️ " + msg);
+                              showToast("⚠️ 删除被拒：" + msg);
                             }
                           } catch (e) {
                             setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                          } finally {
+                            setDeleting(false);
                           }
                         },
                       }, "🗑 确认删除"),
@@ -1858,7 +2115,7 @@ window.__ModuleLoader__.load({
                       title: "删除此卡片（需输入卡片 id 确认）",
                       onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
                     }, "🗑 删除卡片")),
-              deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } }, deleteNote) : null),
+              deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11, color: deleteNote.startsWith("⚠️") ? "var(--dsw-alias-state-error-primary, #d66)" : undefined } }, deleteNote) : null),
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集
             card.child_id
@@ -1950,7 +2207,7 @@ window.__ModuleLoader__.load({
     function showToast(text) {
       const host = document.createElement("div");
       host.style.cssText =
-        "position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:99999;" +
+        "position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:100000;" +
         "background:var(--dsw-alias-toast-bg, rgba(30,30,30,.94));color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;" +
         "box-shadow:0 4px 16px rgba(0,0,0,.35);pointer-events:none;opacity:0;transition:opacity .18s ease;max-width:80vw;";
       host.textContent = text;
@@ -2681,6 +2938,21 @@ window.__ModuleLoader__.load({
         return () => { aliveRef.current = false; clearInterval(t); };
       }, [load]);
 
+      // g-219：删除卡片后局部移除（不整体重新 load 弹窗，避免丢未保存状态/闪烁/焦点丢失）。
+      // kanban 侧在 delete-card 返回 ok 后下发 deletedCardSignal，此处按事件结果过滤本地 cards，
+      // 幂等：卡片已不存在则不动；信号带 ts，重复消费同一信号无副作用。
+      React.useEffect(() => {
+        const sig = props.deletedCardSignal;
+        if (!sig || sig.goalId !== props.id) return;
+        setState((s) => {
+          if (!s.data || !Array.isArray(s.data.cards)) return s;
+          const cards = s.data.cards.filter((c) => c.id !== sig.cardId);
+          if (cards.length === (s.data.cards ?? []).length) return s; // 幂等：不存在则不动
+          return { ...s, data: { ...s.data, cards } };
+        });
+        props.onDeletedCardHandled?.();
+      }, [props.deletedCardSignal, props.id]);
+
       // g-181：主 overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
       const backdropGuard = useBackdropClose(props.onClose);
 
@@ -2922,18 +3194,13 @@ window.__ModuleLoader__.load({
                     title: "用系统默认编辑器打开 goal.md",
                     onClick: async (e) => {
                       e.stopPropagation();
-                      try {
-                        const conn = connectionRt ?? appCtx?.get?.("connection");
-                        if (conn?.api?.host?.openPath) {
-                          const result = await conn.api.host.openPath({ path: d.goalFile });
-                          if (result?.opened) { showToast("✅ 已打开 goal.md"); return; }
-                        }
-                        await copyText(d.goalFile);
-                        showToast("✅ 路径已复制（打开不可用）");
-                      } catch {
-                        await copyText(d.goalFile);
-                        showToast("✅ 路径已复制");
-                      }
+                      // g-222：统一走共享 openHostPath（0.1.2+ session.openWorkspacePath 优先），
+                      // 失败透出可理解错误（C3/C4），不再静默回退为"路径已复制"
+                      const r = await openHostPath(d.goalFile);
+                      if (r.opened) { showToast("✅ 已打开 goal.md"); return; }
+                      await copyText(d.goalFile);
+                      if (r.error) { showToast("⚠️ 打开失败：" + openErrorText(r.error)); }
+                      else { showToast("✅ 路径已复制（打开不可用）"); }
                     },
                   }, "打开"),
                   h("button", {
@@ -3641,6 +3908,8 @@ window.__ModuleLoader__.load({
       const forceReplayRef = React.useRef(null); // {goalId, openTs} 待关闭后强制补播
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
+      // g-219：删除卡片信号（事件结果驱动，弹窗局部移除用）——{goalId, cardId, ts}
+      const [deletedCardSignal, setDeletedCardSignal] = React.useState(null);
       const [openReleased, setOpenReleased] = React.useState({});
       // g-125：delivered/blocked 卡片展开完整视图的开关（默认折叠精简）
       const [expandedGoals, setExpandedGoals] = React.useState({});
@@ -4781,10 +5050,15 @@ window.__ModuleLoader__.load({
         modalGoalOpenTsRef.current = modalGoalData.updated_at;
       }
 
+      // g-216: 判定是否有任何弹窗或抽屉处于打开态
+      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings);
+
       return h(
         "div",
         { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
-           onDragLeave: drag ? (e) => {
+          className: hasModal ? "dg-kanban-root dg-modal-open" : "dg-kanban-root",
+          "data-dsh-graph-kanban": "",
+          onDragLeave: drag ? (e) => {
              // 进入子元素不清除；离开整个看板内容（如进入页面顶部/底部边缘、
              // header/composer 等视口触发区）时只清除悬停落点，不结束整个拖拽——
              // g-173：结束 drag 会让 g-157 自动滚动 effect 立即卸载，边缘自动滚动失效；
@@ -4884,12 +5158,33 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }), deletedCardSignal, onDeletedCardHandled: () => setDeletedCardSignal(null) })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             onClose: () => setDrawerCard(null),
-                            onDeleted: () => { setDrawerCard(null); load(); } })
+                            onDeleted: (cardId) => {
+                              // g-219：事件结果为准——删除成功后局部更新弹窗与看板，不整体重新 load
+                              const goalId = drawerCard.goalId;
+                              const cid = cardId ?? drawerCard.cardId;
+                              setDeletedCardSignal({ goalId, cardId: cid, ts: Date.now() });
+                              setState((s) => {
+                                if (!s.data) return s;
+                                const strip = (g) => g.id === goalId
+                                  ? { ...g, cards: (g.cards ?? []).filter((c) => c.id !== cid) }
+                                  : g;
+                                return {
+                                  ...s,
+                                  data: {
+                                    ...s.data,
+                                    versions: s.data.versions.map((v) => ({ ...v, goals: v.goals.map(strip) })),
+                                    standalone: s.data.standalone.map(strip),
+                                    backlog: s.data.backlog.map(strip),
+                                  },
+                                };
+                              });
+                              setDrawerCard(null);
+                            } })
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal
@@ -5395,13 +5690,13 @@ window.__ModuleLoader__.load({
       };
       React.useEffect(() => { load(); }, []);
       // 目录化 select（与 settings.js g-133 同源）：挂载时用同 scope 的 gConnectionApi/loadHostCatalog
-      // 读取当前 Host 的 llm.providers/llm.models 合法目录。RPC 缺失/失败时目录状态置 unavailable，
-      // 降级为「提示 + 保留已存值」，不阻止保存。provider 只列 active 且有模型目录的 provider；
-      // model 按当前 provider 过滤；空项代表继承父会话；未列出的已存旧值保留为固定 option。
+      // 读取当前 Host 的 llm.providers/llm.models 合法目录（g-215 探测链：优先 0.1.2-alpha.2 新版 RPC，回退 0.1.1-rc 旧版）。
+      // RPC 缺失/失败时目录状态置 unavailable，降级为「提示 + 保留已存值」，不阻止保存。
+      // provider 只列 active 且有模型目录的 provider；model 按当前 provider 过滤；
+      // 空项代表继承父会话；未列出的已存旧值保留为固定 option。
       const [catalog, setCatalog] = React.useState({ status: "loading" });
       React.useEffect(() => {
         let alive = true;
-        if (!gConnectionApi?.llm?.providers || !gConnectionApi?.llm?.models) { setCatalog({ status: "unavailable" }); return; }
         loadHostCatalog(gConnectionApi)
           .then((c) => { if (alive) setCatalog(c); })
           .catch(() => { if (alive) setCatalog({ status: "unavailable" }); });
@@ -5594,18 +5889,12 @@ window.__ModuleLoader__.load({
                   title: "用系统默认编辑器打开 project.yaml",
                   onClick: async (e) => {
                     e.stopPropagation();
-                    try {
-                      const conn = connectionRt ?? appCtx?.get?.("connection");
-                      if (conn?.api?.host?.openPath) {
-                        const result = await conn.api.host.openPath({ path: configFile });
-                        if (result?.opened) { showToast("✅ 已打开 project.yaml"); return; }
-                      }
-                      await copyText(configFile);
-                      showToast("✅ 路径已复制（打开不可用）");
-                    } catch {
-                      await copyText(configFile);
-                      showToast("✅ 路径已复制");
-                    }
+                    // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
+                    const r = await openHostPath(configFile);
+                    if (r.opened) { showToast("✅ 已打开 project.yaml"); return; }
+                    await copyText(configFile);
+                    if (r.error) { showToast("⚠️ 打开失败：" + openErrorText(r.error)); }
+                    else { showToast("✅ 路径已复制（打开不可用）"); }
                   },
                 }, "打开"),
                 h("button", {
@@ -5703,8 +5992,16 @@ window.__ModuleLoader__.load({
 
     // 3082 的 settingsScope 在非 loopback 浏览器上下文会是 memory；此时仍可
     // 通过已存在的 profile settings RPC 读写 Host，而不是把配置伪装成 workspace 数据。
-    function createGraphSettingsApiScope(api) {
-      if (!api?.settings?.describe || !api?.settings?.mutate) return null;
+    function createGraphSettingsApiScope(api, ctx = (typeof appCtx !== "undefined" ? appCtx : null)) {
+      const remoteSettings = ctx?.get?.("remote")?.settings ?? ctx?.remote?.settings ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("remote")?.settings ?? appCtx?.remote?.settings) : null);
+      const describeFn = typeof remoteSettings?.describe === "function"
+        ? () => remoteSettings.describe()
+        : (typeof api?.settings?.describe === "function" ? () => api.settings.describe({}) : null);
+      const mutateFn = typeof remoteSettings?.mutate === "function"
+        ? (ns, ops, expectedRevision) => remoteSettings.mutate(ns, ops, expectedRevision)
+        : (typeof api?.settings?.mutate === "function" ? (ns, ops, expectedRevision) => api.settings.mutate({ ns, ops, ...(expectedRevision === undefined ? {} : { expectedRevision }) }) : null);
+
+      if (!describeFn || !mutateFn) return null;
       let snapshot = { status: "loading", value: null, writable: false, revision: undefined };
       const listeners = new Set();
       const notify = () => listeners.forEach((listener) => listener());
@@ -5712,9 +6009,9 @@ window.__ModuleLoader__.load({
         getSnapshot: () => snapshot,
         subscribe: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
         async load() {
-          const response = await api.settings.describe({});
-          if (!response?.result?.ok) throw new Error(response?.result?.error?.message ?? "读取 profile 设置失败");
-          const view = response.result.value;
+          const res = await describeFn();
+          const view = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
+          if (!view) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "读取 profile 设置失败");
           const row = view.namespaces?.find((candidate) => candidate.ns === GRAPH_SETTINGS_NS);
           if (!row) {
             snapshot = { ...snapshot, status: "unavailable", writable: view.writable !== false };
@@ -5724,13 +6021,9 @@ window.__ModuleLoader__.load({
           notify();
         },
         async set(field, value) {
-          const response = await api.settings.mutate({
-            ns: GRAPH_SETTINGS_NS,
-            ops: [{ op: "set", path: [field], value }],
-            ...(snapshot.revision === undefined ? {} : { expectedRevision: snapshot.revision }),
-          });
-          if (!response?.result?.ok) throw new Error(response?.result?.error?.message ?? "保存 profile 设置失败");
-          const row = response.result.value;
+          const res = await mutateFn(GRAPH_SETTINGS_NS, [{ op: "set", path: [field], value }], snapshot.revision);
+          const row = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
+          if (!row) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "保存 profile 设置失败");
           snapshot = { ...snapshot, status: "ready", value: row.value ?? snapshot.value, revision: row.revision };
           notify();
         },
@@ -5748,29 +6041,111 @@ window.__ModuleLoader__.load({
         const bound = ctx?.get?.("settingsScope")?.bind({ namespace: GRAPH_SETTINGS_NS });
         if (bound && bound.getSnapshot?.().mode !== "memory") return (gSettingsScope = bound);
         const connection = ctx?.get?.("connection") ?? ctx?.connection;
-        return (gSettingsScope = createGraphSettingsApiScope(connection?.api));
+        return (gSettingsScope = createGraphSettingsApiScope(connection?.api, ctx));
       } catch {
         gSettingsScope = null;
         return null;
       }
     }
 
-    // g-133：从当前 Host 并行读取合法 provider/model 目录（connection.api.llm RPC）。
+    // g-133 / g-215：从当前 Host 读取合法 provider/model 目录。
     // providers: [{provider, displayName, active,...}]；models: {groups:[{id,name,models:[{id,name,...}]}], failures:[...]}。
-    // 浏览器侧 RPC 结果形如 { result: { ok, value } }；RPC 缺失/失败时返回 {status:"unavailable"}，
-    // 组件降级为「显示提示 + 保留已存值」，不让整个设置页崩溃。
-    async function loadHostCatalog(api) {
-      if (!api?.llm?.providers || !api?.llm?.models) return { status: "unavailable" };
-      const [pRes, mRes] = await Promise.allSettled([api.llm.providers({}), api.llm.models({})]);
-      const pv = pRes.status === "fulfilled" ? pRes.value?.result?.value : null;
-      const mv = mRes.status === "fulfilled" ? mRes.value?.result?.value : null;
-      if (!pv || !mv) return { status: "unavailable" };
-      return {
-        status: "ready",
-        providers: Array.isArray(pv.providers) ? pv.providers : [],
-        groups: Array.isArray(mv.groups) ? mv.groups : [],
-        failures: Array.isArray(mv.failures) ? mv.failures : [],
-      };
+    // 降级探测链：
+    // 1. 优先调用 0.1.2-alpha.2 新版 API 获取 Host 模型与 Provider 目录（Remote RPC session.modelCatalog / modelDirectories / window.__DSH_RUNTIME__）；
+    // 2. 若新版 API 缺失或未返回有效数据，尝试通过 0.1.1-rc 旧版 API 机制主动获取一次（connection.api.llm.providers/models）；
+    // 3. 尝试通过服务端 REST /api/dsh-graph/spawn-options 获取后端枚举好的模型目录；
+    // 4. 仅在所有方式均不可用时才进入最终降级兜底（status: "unavailable"，保留已存配置、支持保存、不报未捕获异常）。
+    async function loadHostCatalog(api, ctx = (typeof appCtx !== "undefined" ? appCtx : null)) {
+      // 1. 优先调用 0.1.2-alpha.2 新版 API
+      try {
+        const remote = ctx?.get?.("remote") ?? ctx?.remote ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("remote") ?? appCtx?.remote) : null) ?? (typeof window !== "undefined" ? window.__DSH_REMOTE__ : null);
+        const modelCatalogFn = remote?.session?.modelCatalog ?? (typeof remote?.["session/modelCatalog"] === "function" ? remote["session/modelCatalog"].bind(remote) : null);
+        if (typeof modelCatalogFn === "function") {
+          const res = await modelCatalogFn();
+          const val = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : res;
+          if (val && Array.isArray(val.groups) && val.groups.length > 0) {
+            const routableSet = new Set(Array.isArray(val.routableProviders) ? val.routableProviders : []);
+            const providers = val.groups.map((g) => ({
+              provider: g.id,
+              displayName: g.name ?? g.id,
+              active: routableSet.size > 0 ? routableSet.has(g.id) : true,
+            }));
+            return {
+              status: "ready",
+              providers,
+              groups: val.groups,
+              failures: Array.isArray(val.failures) ? val.failures : [],
+            };
+          }
+        }
+
+        const modelDirectories = ctx?.get?.("modelDirectories") ?? (typeof appCtx !== "undefined" ? appCtx?.get?.("modelDirectories") : null);
+        if (typeof modelDirectories?.catalog?.load === "function") {
+          const catVal = await modelDirectories.catalog.load();
+          if (catVal && Array.isArray(catVal.groups) && catVal.groups.length > 0) {
+            const routableSet = new Set(Array.isArray(catVal.routableProviders) ? catVal.routableProviders : []);
+            const providers = catVal.groups.map((g) => ({
+              provider: g.id,
+              displayName: g.name ?? g.id,
+              active: routableSet.size > 0 ? routableSet.has(g.id) : true,
+            }));
+            return {
+              status: "ready",
+              providers,
+              groups: catVal.groups,
+              failures: Array.isArray(catVal.failures) ? catVal.failures : [],
+            };
+          }
+        }
+      } catch {
+        // 新版 API 探测失败，继续回退到 0.1.1-rc 旧版 API
+      }
+
+      // 2. 0.1.1-rc 旧版 API 探测（api.llm.providers / api.llm.models）
+      try {
+        const legacyApi = api ?? (ctx?.get?.("connection") ?? ctx?.connection ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("connection") ?? appCtx?.connection) : null))?.api;
+        if (legacyApi?.llm?.providers && legacyApi?.llm?.models) {
+          const [pRes, mRes] = await Promise.allSettled([legacyApi.llm.providers({}), legacyApi.llm.models({})]);
+          const pv = pRes.status === "fulfilled" ? pRes.value?.result?.value : null;
+          const mv = mRes.status === "fulfilled" ? mRes.value?.result?.value : null;
+          if (pv && mv && (Array.isArray(pv.providers) || Array.isArray(mv.groups))) {
+            return {
+              status: "ready",
+              providers: Array.isArray(pv.providers) ? pv.providers : [],
+              groups: Array.isArray(mv.groups) ? mv.groups : [],
+              failures: Array.isArray(mv.failures) ? mv.failures : [],
+            };
+          }
+        }
+      } catch {
+        // 旧版 API 异常，进入服务端 REST 探测
+      }
+
+      // 3. 服务端 REST /api/dsh-graph/spawn-options 兜底获取（后端 ctx.llm 枚举）
+      try {
+        const r = await fetch(graphUrl("/api/dsh-graph/spawn-options"));
+        if (r.ok) {
+          const spawnData = await r.json();
+          if (spawnData && Array.isArray(spawnData.modelGroups) && spawnData.modelGroups.length > 0) {
+            const providers = spawnData.modelGroups.map((g) => ({
+              provider: g.id,
+              displayName: g.name ?? g.id,
+              active: true,
+            }));
+            return {
+              status: "ready",
+              providers,
+              groups: spawnData.modelGroups,
+              failures: [],
+            };
+          }
+        }
+      } catch {
+        // REST 获取失败
+      }
+
+      // 4. 最终降级兜底
+      return { status: "unavailable" };
     }
 
     const GSS = {
@@ -5818,13 +6193,11 @@ window.__ModuleLoader__.load({
         const un = gSettingsScope.subscribe(upd);
         return un;
       }, []);
-      // g-133：挂载时用捕获的 connection.api 并行读取 llm.providers/llm.models（当前 Host 合法目录）。
+      // g-133 / g-215：挂载时读取 llm.providers/llm.models（当前 Host 合法目录）。
       // RPC 缺失/失败时目录状态置 unavailable，页面降级为「提示 + 保留已存值」，不崩溃。
       React.useEffect(() => {
         let alive = true;
-        const api = gConnectionApi;
-        if (!api?.llm?.providers || !api?.llm?.models) { setCatalog({ status: "unavailable" }); return; }
-        loadHostCatalog(api)
+        loadHostCatalog(gConnectionApi, typeof appCtx !== "undefined" ? appCtx : null)
           .then((c) => { if (alive) setCatalog(c); })
           .catch(() => { if (alive) setCatalog({ status: "unavailable" }); });
         return () => { alive = false; };
@@ -6119,7 +6492,7 @@ window.__ModuleLoader__.load({
     }
     return {
       name: "dsh-graph",
-      inject: ["slots", "sessions", "connection"],
+      inject: ["slots", "sessions", "connection", "remote", "modelDirectories"],
       apply(ctx) {
         appCtx = ctx;
         sessionsRt = ctx.sessions ?? null;

@@ -198,15 +198,17 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.match(host, /configFile: join\(meta\.root, "project\.yaml"\)/);
   // att-002：说明区域配置文件操作入口——只消费服务端 configFile，不自行拼接 graphRoot
   assert.match(modal, /setConfigFile\(data\.configFile \?\? null\)/);
-  assert.match(modal, /connectionRt \?\? appCtx\?\.get\?\.\("connection"\)/);
-  assert.match(modal, /conn\.api\.host\.openPath\(\{ path: configFile \}\)/);
+  // g-222：统一走共享 openHostPath（0.1.2+ session.openWorkspacePath 优先），失败透出可理解错误
+  assert.match(modal, /openHostPath\(configFile\)/);
   assert.match(modal, /"✅ 已打开 project\.yaml"/);
-  // open/copy/fallback 行为源契约：openPath 可用且成功才 return；不可用/异常均回退复制绝对路径
-  const openIdx = modal.indexOf("conn.api.host.openPath({ path: configFile })");
+  assert.match(modal, /打开失败/);
+  assert.match(modal, /openErrorText\(r\.error\)/);
+  // open/copy/fallback 行为源契约：openHostPath 成功才 return；失败复制绝对路径并提示
+  const openIdx = modal.indexOf("openHostPath(configFile)");
   const fallbackIdx = modal.indexOf('showToast("✅ 路径已复制（打开不可用）")');
   const copyIdx = modal.indexOf("await copyText(configFile);");
-  assert.ok(openIdx > 0 && fallbackIdx > openIdx && copyIdx > 0, "openPath 应先于 fallback 复制");
-  assert.ok((modal.match(/copyText\(configFile\)/g) || []).length >= 3, "打开回退 + 复制按钮均应复制绝对路径");
+  assert.ok(openIdx > 0 && fallbackIdx > openIdx && copyIdx > 0, "openHostPath 应先于 fallback 复制");
+  assert.ok((modal.match(/copyText\(configFile\)/g) || []).length >= 2, "打开回退 + 复制按钮均应复制绝对路径");
   assert.match(modal, /"📄 project\.yaml"/);
   assert.match(modal, /title: "用系统默认编辑器打开 project\.yaml"/);
   assert.match(modal, /title: "复制 project\.yaml 路径"/);
@@ -455,6 +457,54 @@ test("add-card：建卡 + card.created 事件（事件先行）", async () => {
   // 目标 frontmatter 引用卡片
   const doc = loadGoal(goalFile);
   assert.ok((doc.meta.context_cards ?? []).includes(body.card));
+});
+
+// g-219：delete-card 端点回归——删除后 goal 详情不再含该卡片（弹窗数据源），
+// collecting 卡片删除被拒且带明确提示（事件结果驱动，UI 以 data.ok 为准）。
+test("delete-card：删除后 goal 详情卡片消失 + card.deleted 事件（事件先行）", async () => {
+  const { root, routes, goalId } = setup();
+  const { body } = await post(routes, "/api/dsh-graph/add-card",
+    { goal: goalId, title: "调研 A", kind: "text" });
+  const card = body.card;
+  const goalHandler = routes.get("/api/dsh-graph/goal");
+  const goalDetail = () => {
+    const res = fakeResponse();
+    goalHandler({ method: "GET", url: `/api/dsh-graph/goal?id=${goalId}`, on: () => {} }, res);
+    return res._body;
+  };
+  assert.ok(goalDetail().cards.some((c: any) => c.id === card), "删除前详情含该卡片");
+  const r = await post(routes, "/api/dsh-graph/delete-card", { goal: goalId, card });
+  assert.equal(r.code, 200);
+  assert.equal(r.body.ok, true);
+  assert.ok(!goalDetail().cards.some((c: any) => c.id === card), "删除后详情不再含该卡片");
+  const ev = readEvents(root).filter((e) => e.event === "card.deleted");
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].goal, goalId);
+  assert.equal(ev[0].details.card, card);
+});
+
+test("delete-card：collecting 卡片删除被拒（400 + 明确提示）", async () => {
+  const { root, routes, goalId } = setup();
+  const { body } = await post(routes, "/api/dsh-graph/add-card",
+    { goal: goalId, title: "收集中", kind: "text" });
+  const card = body.card;
+  // 模拟 collecting（绑定子代理）
+  const { bindCardChild } = await import("../ops.ts");
+  await bindCardChild(root, goalId, card, { childId: "child-x", actor: "test" });
+  const r = await post(routes, "/api/dsh-graph/delete-card", { goal: goalId, card });
+  assert.equal(r.code, 400);
+  assert.ok(String(r.body.error).includes("正在收集"), "被拒提示应包含收集原因");
+  // 无 card.deleted 事件
+  const evs = readEvents(root).filter((e) => e.event === "card.deleted");
+  assert.equal(evs.length, 0);
+});
+
+test("delete-card：删除不存在的卡片 → 400 不崩溃（幂等健壮）", async () => {
+  const { routes, goalId } = setup();
+  const r = await post(routes, "/api/dsh-graph/delete-card",
+    { goal: goalId, card: "card-nonexist" });
+  assert.equal(r.code, 400);
+  assert.ok(String(r.body.error).length > 0);
 });
 
 test("start-collection 无 subagents：child_error 上报、卡片不误翻 collecting且不创建 attempt", async () => {
@@ -1741,10 +1791,17 @@ test("g-195 源契约：session-hooks.js 提供 useThrottledLiveSession 并包�
   assert.match(src, /unsub\(\)/);
 });
 
-test("g-195 源契约：LiveStrip 组件使用 useThrottledLiveSession 节流 peek 流式输出", () => {
+test("g-195/g-217 源契约：LiveStrip 使用 useLiveStripState 节流 peek（新路径 eventSource / 旧路径回退）", () => {
   const src = readFileSync(
-    join(import.meta.dirname, "../../dsh-graph-host/lib/client/live-panel.js"), "utf8");
-  assert.match(src, /const \{ snap, line, running \} = useThrottledLiveSession\(session, 200\);/);
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
+  // g-217：LiveStrip 数据源切换为 useLiveStripState（能力探测双路径）
+  assert.match(src, /function LiveStrip\(props\)/);
+  assert.match(src, /const \{ snap, line, running \} = useLiveStripState\(session, eventSource, 200\);/);
+  // g-195 节流语义保留：useLiveStripState 内部以 useThrottledLiveSession 作为旧路径回退
+  assert.match(src, /const legacy = useThrottledLiveSession\(session, intervalMs\);/);
+  // C1/C4：新路径订阅 binding.eventSource 并全量重扫 entries
+  assert.match(src, /feed\.subscribe\(onUpdate\)/);
+  assert.match(src, /feed\.getSnapshot\(\)\?\.entries/);
 });
 
 test("g-195 节流器逻辑模拟：高频更新（>20 chunk/s）硬上限 ≤5fps（≥200ms），尾包与完成态不丢失，卸载后无残留 timer", async () => {
@@ -1961,4 +2018,36 @@ test("g-214 生成 bundle 契约：client.js 包含 g-214 倒计时与刷新间�
   assert.match(bundle, /RefreshCountdown/);
   assert.match(bundle, /dsh-graph\.refresh-interval/);
   assert.match(bundle, /MIN_REFRESH_INTERVAL = 5/);
+});
+
+// ===== g-216：widthHandle 层级与 z-index 防遮挡/防穿透契约 =====
+
+test("g-216 源契约：helpers.js S.wrap、S.overlay、S.drawer、S.modal 合理规划 z-index 与层叠上下文", () => {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  assert.match(helpers, /wrap: \{[\s\S]*?position:\s*"relative",\s*zIndex:\s*1/);
+  assert.match(helpers, /overlay: \{[\s\S]*?zIndex:\s*10000/);
+  assert.match(helpers, /drawer: \{[\s\S]*?zIndex:\s*10001/);
+  assert.match(helpers, /modal: \{[\s\S]*?zIndex:\s*10002/);
+});
+
+test("g-216 源契约：constants.js 包含 widthHandle 蒙层防穿透与防遮挡样式规则", () => {
+  const constants = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
+  assert.match(constants, /\.wSkVaW_root:has\(\.dg-modal-open\)\s*\.wSkVaW_widthHandle/);
+  assert.match(constants, /\.wSkVaW_body:has\(\.dg-modal-open\)\s*\.wSkVaW_widthHandle/);
+  assert.match(constants, /display:\s*none\s*!important/);
+});
+
+test("g-216 源契约：kanban.js 具备 hasModal 状态与 dg-modal-open 动态类绑定", () => {
+  const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+  assert.match(kanban, /const hasModal = !!\(modalGoal \|\| drawerCard \|\| showCreateGoal/);
+  assert.match(kanban, /className:\s*hasModal \? "dg-kanban-root dg-modal-open" : "dg-kanban-root"/);
+});
+
+test("g-216 生成 bundle 契约：client.js 包含 g-216 层级规划与 widthHandle 穿透防护规则", () => {
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(bundle, /dg-modal-open/);
+  assert.match(bundle, /\.wSkVaW_root:has\(\.dg-modal-open\)/);
+  assert.match(bundle, /zIndex:\s*10000/);
+  assert.match(bundle, /zIndex:\s*10001/);
+  assert.match(bundle, /zIndex:\s*10002/);
 });

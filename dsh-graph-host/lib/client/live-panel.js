@@ -1,75 +1,3 @@
-      // g-195: 使用 useThrottledLiveSession 限制 peek 流式刷新为 ≤5fps (≥200ms)
-      const { snap, line, running } = useThrottledLiveSession(session, 200);
-      const usage = useProjectionValue(session, "tokenUsage");
-      const pressure = useProjectionValue(session, "contextPressure");
-      if (!props.childId) return null;
-      if (!session) {
-        return h("div", { style: S.liveStrip, title: props.childId },
-          "⚠️ 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
-      }
-      // g-a92e1406 追加（负责人指示）：新一轮开始（running false→true）时清空上次 status，
-      // 等 supervisor 快速替换成最新——记录 running 翻转时刻，旧于它的状态视为过期清空。
-      const runningSinceRef = React.useRef(null);
-      React.useEffect(() => {
-        if (running && runningSinceRef.current == null) runningSinceRef.current = Date.now();
-        if (!running) runningSinceRef.current = null;
-      }, [running]);
-      const staleStatus =
-        running && props.statusAt != null && runningSinceRef.current != null &&
-        props.statusAt < runningSinceRef.current;
-      // g-124（负责人 2026-08-22）：staleStatus 不再用等待占位文案——
-      // 改为显示当前状态延续时长（statusAt 距今多久，行内 + tooltip）；30s 时钟驱动刷新。
-      const [now, setNow] = React.useState(() => Date.now());
-      React.useEffect(() => {
-        if (!staleStatus) return;
-        const t = setInterval(() => setNow(Date.now()), 30000);
-        return () => clearInterval(t);
-      }, [staleStatus]);
-      const staleDur = staleStatus && props.statusAt != null ? fmtElapsed(props.statusAt, now) : null;
-            const meter = liveMeter(usage, pressure);
-      // g-129 负责人 2026-08-22 格式：第一行 = 状态 + 流式内容（同行，流式时有时无不引起高度变化），
-      // 右侧有足够宽度时显示 tok/ctx；第二行 = status_line 固定显示。
-      const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
-      const statusFull = running ? "运行中" : "空闲";
-      // 第二行 status_line 内容（stale 时也显示全文，tooltip 补延续时长——g-124）
-      const statusRowText = props.statusLine
-        ? (running ? "⏳ " : "✅ ") + props.statusLine
-        : (staleStatus ? "⏳ 状态延续 " + staleDur : null);
-      // g-129: 空闲时 status_line 背景不带动画
-      const statusRowClass = running && props.statusLine ? "dg-running-flow" : "";
-      const lineEl = line
-        ? h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
-                                textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 } },
-            "⏵ " + line)
-        : h("span", { style: { ...S.meta, fontSize: 10, flex: 1, overflow: "hidden",
-                               textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "…");
-      const modelTitle = props.model ? `模型：${props.provider ? props.provider + "/" : ""}${props.model}` : null;
-      return h(
-        "div",
-        { style: S.liveStrip, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
-        // 第一行：状态 + 流式内容（同行）；右侧有空间时显示 tok/ctx（flex 布局自动压缩）
-        h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
-          h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
-            statusLabel),
-          lineEl,
-          props.model
-            ? h("span", { style: { ...S.meta, fontSize: 9, flexShrink: 0, opacity: 0.85, padding: "0 2px" }, title: modelTitle }, props.model)
-            : null,
-          meter
-            ? h("span", { style: { ...S.meta, fontSize: 10, flexShrink: 0, marginLeft: 4 } }, meter)
-            : null),
-        // 第二行：status_line 固定显示（stale 时也显示全文）
-        statusRowText
-          ? h("div", {
-              className: statusRowClass,
-              style: { ...S.liveLine, marginTop: 1, fontSize: 10, overflow: "hidden",
-                       textOverflow: "ellipsis", whiteSpace: "nowrap" },
-              title: props.statusLine ? props.statusLine + (staleDur ? "（状态已延续 " + staleDur + "）" : "") : undefined,
-            }, statusRowText)
-          : null,
-      );
-    }
-
     // 看板直达指令：向 continuable 子代理发文本（queue 排队 / steer 插队）。
     // 多模态降级：子代理图片源码级不支持（SUBAGENT_IMAGE_UNSUPPORTED）——明确提示而非静默失败。
     function PromptBox(props) {
@@ -131,19 +59,29 @@
     function RecentRecords(props) {
       const [state, setState] = React.useState({ loading: true });
       React.useEffect(() => {
-        if (!connectionRt) { setState({ loading: false, error: "connection 服务不可用" }); return; }
         let alive = true;
-        const call = props.parentId
-          ? connectionRt.api.subagents.history({
-              parentSessionId: props.parentId, childSessionId: props.childId,
-              mode: props.mode ?? "continuable", maxMessages: 30,
-            })
-          : connectionRt.api.sessions.history({ sessionId: props.childId, maxMessages: 30 });
-        call
-          .then((r) => alive && setState(r?.result?.ok
-            ? { loading: false, entries: r.result.value.events }
-            : { loading: false, error: r?.result?.error?.message ?? "读取失败" }))
-          .catch((e) => alive && setState({ loading: false, error: String(e?.message ?? e) }));
+        const loadHistory = async () => {
+          try {
+            if (connectionRt?.api?.subagents?.history && props.parentId) {
+              const r = await connectionRt.api.subagents.history({
+                parentSessionId: props.parentId, childSessionId: props.childId,
+                mode: props.mode ?? "continuable", maxMessages: 30,
+              });
+              if (!alive) return;
+              if (r?.result?.ok) { setState({ loading: false, entries: r.result.value.events }); return; }
+            }
+            if (connectionRt?.api?.sessions?.history && props.childId) {
+              const r = await connectionRt.api.sessions.history({ sessionId: props.childId, maxMessages: 30 });
+              if (!alive) return;
+              if (r?.result?.ok) { setState({ loading: false, entries: r.result.value.events }); return; }
+            }
+            if (!alive) return;
+            setState({ loading: false, entries: [] });
+          } catch (e) {
+            if (alive) setState({ loading: false, error: String(e?.message ?? e) });
+          }
+        };
+        loadHistory();
         return () => { alive = false; };
       }, [props.parentId, props.childId]);
 
@@ -218,19 +156,26 @@
       const [model, setModel] = React.useState(null); // {provider, model, fromParent}
       const [modelErr, setModelErr] = React.useState(null);
       React.useEffect(() => {
-        if (!sessionId || !connectionRt) return;
+        if (!sessionId) return;
         let alive = true;
         const load = async () => {
           try {
-            const r = await connectionRt.api.sessions.models({ sessionId });
-            if (!alive) return;
-            if (r?.result?.ok) {
-              setModel({ ...(r.result.value.current ?? {}), fromParent: false });
-              setModelErr(null);
-            } else {
-              setModel(null);
-              setModelErr(r?.result?.error?.message ?? "查询失败");
+            if (connectionRt?.api?.sessions?.models) {
+              const r = await connectionRt.api.sessions.models({ sessionId });
+              if (!alive) return;
+              if (r?.result?.ok) {
+                setModel({ ...(r.result.value.current ?? {}), fromParent: false });
+                setModelErr(null);
+                return;
+              } else {
+                setModel(null);
+                setModelErr(r?.result?.error?.message ?? "查询失败");
+                return;
+              }
             }
+            if (!alive) return;
+            setModel(null);
+            setModelErr(null);
           } catch (e) {
             if (alive) { setModel(null); setModelErr(String(e?.message ?? e)); }
           }

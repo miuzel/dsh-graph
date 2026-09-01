@@ -189,7 +189,7 @@
             ghost.style.width = rect.width + "px";
             ghost.style.margin = "0";
             ghost.style.pointerEvents = "none";
-            ghost.style.zIndex = "99999";
+            ghost.style.zIndex = "100000";
             document.body.appendChild(ghost);
             e.dataTransfer.setDragImage(ghost, 16, 10);
             setTimeout(() => { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); }, 0);

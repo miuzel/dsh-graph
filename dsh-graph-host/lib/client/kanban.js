@@ -12,6 +12,8 @@
       const forceReplayRef = React.useRef(null); // {goalId, openTs} 待关闭后强制补播
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
+      // g-219：删除卡片信号（事件结果驱动，弹窗局部移除用）——{goalId, cardId, ts}
+      const [deletedCardSignal, setDeletedCardSignal] = React.useState(null);
       const [openReleased, setOpenReleased] = React.useState({});
       // g-125：delivered/blocked 卡片展开完整视图的开关（默认折叠精简）
       const [expandedGoals, setExpandedGoals] = React.useState({});
@@ -1152,10 +1154,15 @@
         modalGoalOpenTsRef.current = modalGoalData.updated_at;
       }
 
+      // g-216: 判定是否有任何弹窗或抽屉处于打开态
+      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings);
+
       return h(
         "div",
         { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
-           onDragLeave: drag ? (e) => {
+          className: hasModal ? "dg-kanban-root dg-modal-open" : "dg-kanban-root",
+          "data-dsh-graph-kanban": "",
+          onDragLeave: drag ? (e) => {
              // 进入子元素不清除；离开整个看板内容（如进入页面顶部/底部边缘、
              // header/composer 等视口触发区）时只清除悬停落点，不结束整个拖拽——
              // g-173：结束 drag 会让 g-157 自动滚动 effect 立即卸载，边缘自动滚动失效；
@@ -1255,12 +1262,33 @@
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }), deletedCardSignal, onDeletedCardHandled: () => setDeletedCardSignal(null) })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             onClose: () => setDrawerCard(null),
-                            onDeleted: () => { setDrawerCard(null); load(); } })
+                            onDeleted: (cardId) => {
+                              // g-219：事件结果为准——删除成功后局部更新弹窗与看板，不整体重新 load
+                              const goalId = drawerCard.goalId;
+                              const cid = cardId ?? drawerCard.cardId;
+                              setDeletedCardSignal({ goalId, cardId: cid, ts: Date.now() });
+                              setState((s) => {
+                                if (!s.data) return s;
+                                const strip = (g) => g.id === goalId
+                                  ? { ...g, cards: (g.cards ?? []).filter((c) => c.id !== cid) }
+                                  : g;
+                                return {
+                                  ...s,
+                                  data: {
+                                    ...s.data,
+                                    versions: s.data.versions.map((v) => ({ ...v, goals: v.goals.map(strip) })),
+                                    standalone: s.data.standalone.map(strip),
+                                    backlog: s.data.backlog.map(strip),
+                                  },
+                                };
+                              });
+                              setDrawerCard(null);
+                            } })
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal

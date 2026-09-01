@@ -313,6 +313,21 @@
         return () => { aliveRef.current = false; clearInterval(t); };
       }, [load]);
 
+      // g-219：删除卡片后局部移除（不整体重新 load 弹窗，避免丢未保存状态/闪烁/焦点丢失）。
+      // kanban 侧在 delete-card 返回 ok 后下发 deletedCardSignal，此处按事件结果过滤本地 cards，
+      // 幂等：卡片已不存在则不动；信号带 ts，重复消费同一信号无副作用。
+      React.useEffect(() => {
+        const sig = props.deletedCardSignal;
+        if (!sig || sig.goalId !== props.id) return;
+        setState((s) => {
+          if (!s.data || !Array.isArray(s.data.cards)) return s;
+          const cards = s.data.cards.filter((c) => c.id !== sig.cardId);
+          if (cards.length === (s.data.cards ?? []).length) return s; // 幂等：不存在则不动
+          return { ...s, data: { ...s.data, cards } };
+        });
+        props.onDeletedCardHandled?.();
+      }, [props.deletedCardSignal, props.id]);
+
       // g-181：主 overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
       const backdropGuard = useBackdropClose(props.onClose);
 
@@ -554,18 +569,13 @@
                     title: "用系统默认编辑器打开 goal.md",
                     onClick: async (e) => {
                       e.stopPropagation();
-                      try {
-                        const conn = connectionRt ?? appCtx?.get?.("connection");
-                        if (conn?.api?.host?.openPath) {
-                          const result = await conn.api.host.openPath({ path: d.goalFile });
-                          if (result?.opened) { showToast("✅ 已打开 goal.md"); return; }
-                        }
-                        await copyText(d.goalFile);
-                        showToast("✅ 路径已复制（打开不可用）");
-                      } catch {
-                        await copyText(d.goalFile);
-                        showToast("✅ 路径已复制");
-                      }
+                      // g-222：统一走共享 openHostPath（0.1.2+ session.openWorkspacePath 优先），
+                      // 失败透出可理解错误（C3/C4），不再静默回退为"路径已复制"
+                      const r = await openHostPath(d.goalFile);
+                      if (r.opened) { showToast("✅ 已打开 goal.md"); return; }
+                      await copyText(d.goalFile);
+                      if (r.error) { showToast("⚠️ 打开失败：" + openErrorText(r.error)); }
+                      else { showToast("✅ 路径已复制（打开不可用）"); }
                     },
                   }, "打开"),
                   h("button", {

@@ -1,4 +1,4 @@
-      wrap: { padding: 12, fontSize: 13, color: "inherit", overflowX: "auto" },
+      wrap: { padding: 12, fontSize: 13, color: "inherit", overflowX: "auto", position: "relative", zIndex: 1, minWidth: 0 },
       head: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
       grid: { display: "grid", gridTemplateColumns: "130px repeat(6, minmax(150px, 1fr))", gap: 4 },
       laneLabel: { fontWeight: 600, padding: "8px 6px", borderTop: "1px solid rgba(128,128,128,.35)" },
@@ -27,11 +27,11 @@
       },
       overlay: {
         position: "fixed", inset: 0, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.55))",
-        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000,
       },
       drawer: {
         position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
-        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10000,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10001,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
@@ -41,7 +41,7 @@
       modal: {
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", borderRadius: 10,
         maxWidth: 720, width: "90%", maxHeight: "80vh", overflowY: "auto",
-        padding: "16px 20px", fontSize: 13, lineHeight: 1.6,
+        padding: "16px 20px", fontSize: 13, lineHeight: 1.6, position: "relative", zIndex: 10002,
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
@@ -200,6 +200,48 @@
       } catch {}
       window.dispatchEvent(new CustomEvent("dsh-graph.refresh-interval-changed", { detail: { interval: num } }));
       return num;
+    }
+
+    // g-222：跨版本打开 Host 工作区路径（优先 0.1.2+ session.openWorkspacePath，回退 0.1.1-rc host.openPath）。
+    // 依赖 plugin.inject 声明 "remote.session"：session 命名空间服务由 api-gateway 在兄弟 fiber 提供，
+    // 仅 inject "remote" 时 ctx.remote.session 属性访问走 fiber 向上遍历会在 root fiber 抛
+    // 'cannot get property "remote.session" without inject'（g-222 根因）；inject 后本 fiber store
+    // 才有实现，属性访问与调用均正常。
+    // 返回 { opened: boolean, error?: string }：opened=true 表示已交给系统打开；error 携带可理解失败原因。
+    async function openHostPath(path) {
+      if (!path) return { opened: false, error: "路径为空" };
+      try {
+        // g-222: Access remote.session via ctx.get() for backward compatibility
+        // In 0.1.2+, remote.session is available; in 0.1.1-rc.2 it's not
+        const remoteSession = appCtx?.get?.("remote.session") ?? null;
+        const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
+        const openFn = remoteSession?.openWorkspacePath ?? remote?.session?.openWorkspacePath ?? (typeof remote?.["session/openWorkspacePath"] === "function" ? remote["session/openWorkspacePath"].bind(remote) : null);
+        if (typeof openFn === "function") {
+          const res = await openFn({ path });
+          if (res && ("opened" in res ? res.opened : res.ok === true)) return { opened: true };
+          if (res && res.ok === false && res.error && res.error.message) {
+            return { opened: false, error: String(res.error.message) };
+          }
+        }
+      } catch (e) {
+        return { opened: false, error: String(e?.message ?? e) };
+      }
+      try {
+        const conn = connectionRt ?? appCtx?.get?.("connection");
+        if (typeof conn?.api?.host?.openPath === "function") {
+          const result = await conn.api.host.openPath({ path });
+          if (result?.opened) return { opened: true };
+        }
+      } catch (e) {
+        return { opened: false, error: String(e?.message ?? e) };
+      }
+      return { opened: false };
+    }
+    // g-222：toast 展示用的错误文案（截断过长原始错误，保留首段）
+    function openErrorText(err) {
+      if (!err) return "";
+      const s = String(err).replace(/^path open failed:\s*/i, "").split("\n")[0] ?? String(err);
+      return s.length > 120 ? s.slice(0, 120) + "…" : s;
     }
 
     // g-214：局部化倒计时组件，避免每秒 tick 引起整个看板大面积重绘；

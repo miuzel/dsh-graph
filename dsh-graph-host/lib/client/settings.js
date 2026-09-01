@@ -14,8 +14,16 @@
 
     // 3082 的 settingsScope 在非 loopback 浏览器上下文会是 memory；此时仍可
     // 通过已存在的 profile settings RPC 读写 Host，而不是把配置伪装成 workspace 数据。
-    function createGraphSettingsApiScope(api) {
-      if (!api?.settings?.describe || !api?.settings?.mutate) return null;
+    function createGraphSettingsApiScope(api, ctx = (typeof appCtx !== "undefined" ? appCtx : null)) {
+      const remoteSettings = ctx?.get?.("remote")?.settings ?? ctx?.remote?.settings ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("remote")?.settings ?? appCtx?.remote?.settings) : null);
+      const describeFn = typeof remoteSettings?.describe === "function"
+        ? () => remoteSettings.describe()
+        : (typeof api?.settings?.describe === "function" ? () => api.settings.describe({}) : null);
+      const mutateFn = typeof remoteSettings?.mutate === "function"
+        ? (ns, ops, expectedRevision) => remoteSettings.mutate(ns, ops, expectedRevision)
+        : (typeof api?.settings?.mutate === "function" ? (ns, ops, expectedRevision) => api.settings.mutate({ ns, ops, ...(expectedRevision === undefined ? {} : { expectedRevision }) }) : null);
+
+      if (!describeFn || !mutateFn) return null;
       let snapshot = { status: "loading", value: null, writable: false, revision: undefined };
       const listeners = new Set();
       const notify = () => listeners.forEach((listener) => listener());
@@ -23,9 +31,9 @@
         getSnapshot: () => snapshot,
         subscribe: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
         async load() {
-          const response = await api.settings.describe({});
-          if (!response?.result?.ok) throw new Error(response?.result?.error?.message ?? "读取 profile 设置失败");
-          const view = response.result.value;
+          const res = await describeFn();
+          const view = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
+          if (!view) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "读取 profile 设置失败");
           const row = view.namespaces?.find((candidate) => candidate.ns === GRAPH_SETTINGS_NS);
           if (!row) {
             snapshot = { ...snapshot, status: "unavailable", writable: view.writable !== false };
@@ -35,13 +43,9 @@
           notify();
         },
         async set(field, value) {
-          const response = await api.settings.mutate({
-            ns: GRAPH_SETTINGS_NS,
-            ops: [{ op: "set", path: [field], value }],
-            ...(snapshot.revision === undefined ? {} : { expectedRevision: snapshot.revision }),
-          });
-          if (!response?.result?.ok) throw new Error(response?.result?.error?.message ?? "保存 profile 设置失败");
-          const row = response.result.value;
+          const res = await mutateFn(GRAPH_SETTINGS_NS, [{ op: "set", path: [field], value }], snapshot.revision);
+          const row = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
+          if (!row) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "保存 profile 设置失败");
           snapshot = { ...snapshot, status: "ready", value: row.value ?? snapshot.value, revision: row.revision };
           notify();
         },
@@ -59,29 +63,111 @@
         const bound = ctx?.get?.("settingsScope")?.bind({ namespace: GRAPH_SETTINGS_NS });
         if (bound && bound.getSnapshot?.().mode !== "memory") return (gSettingsScope = bound);
         const connection = ctx?.get?.("connection") ?? ctx?.connection;
-        return (gSettingsScope = createGraphSettingsApiScope(connection?.api));
+        return (gSettingsScope = createGraphSettingsApiScope(connection?.api, ctx));
       } catch {
         gSettingsScope = null;
         return null;
       }
     }
 
-    // g-133：从当前 Host 并行读取合法 provider/model 目录（connection.api.llm RPC）。
+    // g-133 / g-215：从当前 Host 读取合法 provider/model 目录。
     // providers: [{provider, displayName, active,...}]；models: {groups:[{id,name,models:[{id,name,...}]}], failures:[...]}。
-    // 浏览器侧 RPC 结果形如 { result: { ok, value } }；RPC 缺失/失败时返回 {status:"unavailable"}，
-    // 组件降级为「显示提示 + 保留已存值」，不让整个设置页崩溃。
-    async function loadHostCatalog(api) {
-      if (!api?.llm?.providers || !api?.llm?.models) return { status: "unavailable" };
-      const [pRes, mRes] = await Promise.allSettled([api.llm.providers({}), api.llm.models({})]);
-      const pv = pRes.status === "fulfilled" ? pRes.value?.result?.value : null;
-      const mv = mRes.status === "fulfilled" ? mRes.value?.result?.value : null;
-      if (!pv || !mv) return { status: "unavailable" };
-      return {
-        status: "ready",
-        providers: Array.isArray(pv.providers) ? pv.providers : [],
-        groups: Array.isArray(mv.groups) ? mv.groups : [],
-        failures: Array.isArray(mv.failures) ? mv.failures : [],
-      };
+    // 降级探测链：
+    // 1. 优先调用 0.1.2-alpha.2 新版 API 获取 Host 模型与 Provider 目录（Remote RPC session.modelCatalog / modelDirectories / window.__DSH_RUNTIME__）；
+    // 2. 若新版 API 缺失或未返回有效数据，尝试通过 0.1.1-rc 旧版 API 机制主动获取一次（connection.api.llm.providers/models）；
+    // 3. 尝试通过服务端 REST /api/dsh-graph/spawn-options 获取后端枚举好的模型目录；
+    // 4. 仅在所有方式均不可用时才进入最终降级兜底（status: "unavailable"，保留已存配置、支持保存、不报未捕获异常）。
+    async function loadHostCatalog(api, ctx = (typeof appCtx !== "undefined" ? appCtx : null)) {
+      // 1. 优先调用 0.1.2-alpha.2 新版 API
+      try {
+        const remote = ctx?.get?.("remote") ?? ctx?.remote ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("remote") ?? appCtx?.remote) : null) ?? (typeof window !== "undefined" ? window.__DSH_REMOTE__ : null);
+        const modelCatalogFn = remote?.session?.modelCatalog ?? (typeof remote?.["session/modelCatalog"] === "function" ? remote["session/modelCatalog"].bind(remote) : null);
+        if (typeof modelCatalogFn === "function") {
+          const res = await modelCatalogFn();
+          const val = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : res;
+          if (val && Array.isArray(val.groups) && val.groups.length > 0) {
+            const routableSet = new Set(Array.isArray(val.routableProviders) ? val.routableProviders : []);
+            const providers = val.groups.map((g) => ({
+              provider: g.id,
+              displayName: g.name ?? g.id,
+              active: routableSet.size > 0 ? routableSet.has(g.id) : true,
+            }));
+            return {
+              status: "ready",
+              providers,
+              groups: val.groups,
+              failures: Array.isArray(val.failures) ? val.failures : [],
+            };
+          }
+        }
+
+        const modelDirectories = ctx?.get?.("modelDirectories") ?? (typeof appCtx !== "undefined" ? appCtx?.get?.("modelDirectories") : null);
+        if (typeof modelDirectories?.catalog?.load === "function") {
+          const catVal = await modelDirectories.catalog.load();
+          if (catVal && Array.isArray(catVal.groups) && catVal.groups.length > 0) {
+            const routableSet = new Set(Array.isArray(catVal.routableProviders) ? catVal.routableProviders : []);
+            const providers = catVal.groups.map((g) => ({
+              provider: g.id,
+              displayName: g.name ?? g.id,
+              active: routableSet.size > 0 ? routableSet.has(g.id) : true,
+            }));
+            return {
+              status: "ready",
+              providers,
+              groups: catVal.groups,
+              failures: Array.isArray(catVal.failures) ? catVal.failures : [],
+            };
+          }
+        }
+      } catch {
+        // 新版 API 探测失败，继续回退到 0.1.1-rc 旧版 API
+      }
+
+      // 2. 0.1.1-rc 旧版 API 探测（api.llm.providers / api.llm.models）
+      try {
+        const legacyApi = api ?? (ctx?.get?.("connection") ?? ctx?.connection ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("connection") ?? appCtx?.connection) : null))?.api;
+        if (legacyApi?.llm?.providers && legacyApi?.llm?.models) {
+          const [pRes, mRes] = await Promise.allSettled([legacyApi.llm.providers({}), legacyApi.llm.models({})]);
+          const pv = pRes.status === "fulfilled" ? pRes.value?.result?.value : null;
+          const mv = mRes.status === "fulfilled" ? mRes.value?.result?.value : null;
+          if (pv && mv && (Array.isArray(pv.providers) || Array.isArray(mv.groups))) {
+            return {
+              status: "ready",
+              providers: Array.isArray(pv.providers) ? pv.providers : [],
+              groups: Array.isArray(mv.groups) ? mv.groups : [],
+              failures: Array.isArray(mv.failures) ? mv.failures : [],
+            };
+          }
+        }
+      } catch {
+        // 旧版 API 异常，进入服务端 REST 探测
+      }
+
+      // 3. 服务端 REST /api/dsh-graph/spawn-options 兜底获取（后端 ctx.llm 枚举）
+      try {
+        const r = await fetch(graphUrl("/api/dsh-graph/spawn-options"));
+        if (r.ok) {
+          const spawnData = await r.json();
+          if (spawnData && Array.isArray(spawnData.modelGroups) && spawnData.modelGroups.length > 0) {
+            const providers = spawnData.modelGroups.map((g) => ({
+              provider: g.id,
+              displayName: g.name ?? g.id,
+              active: true,
+            }));
+            return {
+              status: "ready",
+              providers,
+              groups: spawnData.modelGroups,
+              failures: [],
+            };
+          }
+        }
+      } catch {
+        // REST 获取失败
+      }
+
+      // 4. 最终降级兜底
+      return { status: "unavailable" };
     }
 
     const GSS = {
@@ -129,13 +215,11 @@
         const un = gSettingsScope.subscribe(upd);
         return un;
       }, []);
-      // g-133：挂载时用捕获的 connection.api 并行读取 llm.providers/llm.models（当前 Host 合法目录）。
+      // g-133 / g-215：挂载时读取 llm.providers/llm.models（当前 Host 合法目录）。
       // RPC 缺失/失败时目录状态置 unavailable，页面降级为「提示 + 保留已存值」，不崩溃。
       React.useEffect(() => {
         let alive = true;
-        const api = gConnectionApi;
-        if (!api?.llm?.providers || !api?.llm?.models) { setCatalog({ status: "unavailable" }); return; }
-        loadHostCatalog(api)
+        loadHostCatalog(gConnectionApi, typeof appCtx !== "undefined" ? appCtx : null)
           .then((c) => { if (alive) setCatalog(c); })
           .catch(() => { if (alive) setCatalog({ status: "unavailable" }); });
         return () => { alive = false; };

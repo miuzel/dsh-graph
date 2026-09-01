@@ -952,12 +952,13 @@ export function apply(ctx, config) {
     try {
       const llm = ctx.get?.("llm");
       if (llm?.listProviders) {
-        const providers = llm.listProviders() ?? [];
+        const providers = (await llm.listProviders()) ?? [];
         modelGroups = await Promise.all(providers.map(async (p) => {
-          const pid = p.id ?? p;
+          const pid = typeof p === "string" ? p : (p?.id ?? p);
+          const pname = typeof p === "string" ? p : (p?.name ?? pid);
           let models = [];
           try { models = (await llm.listModels?.(pid)) ?? []; } catch { models = []; }
-          return { id: pid, name: p.name ?? pid, models: models.map((m) => ({ id: m.id, name: m.name ?? m.id })) };
+          return { id: pid, name: pname, models: models.map((m) => ({ id: typeof m === "string" ? m : m.id, name: typeof m === "string" ? m : (m.name ?? m.id) })) };
         }));
         if (!modelGroups.length) modelGroups = null;
       }
