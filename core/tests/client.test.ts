@@ -457,6 +457,54 @@ test("add-card：建卡 + card.created 事件（事件先行）", async () => {
   assert.ok((doc.meta.context_cards ?? []).includes(body.card));
 });
 
+// g-219：delete-card 端点回归——删除后 goal 详情不再含该卡片（弹窗数据源），
+// collecting 卡片删除被拒且带明确提示（事件结果驱动，UI 以 data.ok 为准）。
+test("delete-card：删除后 goal 详情卡片消失 + card.deleted 事件（事件先行）", async () => {
+  const { root, routes, goalId } = setup();
+  const { body } = await post(routes, "/api/dsh-graph/add-card",
+    { goal: goalId, title: "调研 A", kind: "text" });
+  const card = body.card;
+  const goalHandler = routes.get("/api/dsh-graph/goal");
+  const goalDetail = () => {
+    const res = fakeResponse();
+    goalHandler({ method: "GET", url: `/api/dsh-graph/goal?id=${goalId}`, on: () => {} }, res);
+    return res._body;
+  };
+  assert.ok(goalDetail().cards.some((c: any) => c.id === card), "删除前详情含该卡片");
+  const r = await post(routes, "/api/dsh-graph/delete-card", { goal: goalId, card });
+  assert.equal(r.code, 200);
+  assert.equal(r.body.ok, true);
+  assert.ok(!goalDetail().cards.some((c: any) => c.id === card), "删除后详情不再含该卡片");
+  const ev = readEvents(root).filter((e) => e.event === "card.deleted");
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].goal, goalId);
+  assert.equal(ev[0].details.card, card);
+});
+
+test("delete-card：collecting 卡片删除被拒（400 + 明确提示）", async () => {
+  const { root, routes, goalId } = setup();
+  const { body } = await post(routes, "/api/dsh-graph/add-card",
+    { goal: goalId, title: "收集中", kind: "text" });
+  const card = body.card;
+  // 模拟 collecting（绑定子代理）
+  const { bindCardChild } = await import("../ops.ts");
+  await bindCardChild(root, goalId, card, { childId: "child-x", actor: "test" });
+  const r = await post(routes, "/api/dsh-graph/delete-card", { goal: goalId, card });
+  assert.equal(r.code, 400);
+  assert.ok(String(r.body.error).includes("正在收集"), "被拒提示应包含收集原因");
+  // 无 card.deleted 事件
+  const evs = readEvents(root).filter((e) => e.event === "card.deleted");
+  assert.equal(evs.length, 0);
+});
+
+test("delete-card：删除不存在的卡片 → 400 不崩溃（幂等健壮）", async () => {
+  const { routes, goalId } = setup();
+  const r = await post(routes, "/api/dsh-graph/delete-card",
+    { goal: goalId, card: "card-nonexist" });
+  assert.equal(r.code, 400);
+  assert.ok(String(r.body.error).length > 0);
+});
+
 test("start-collection 无 subagents：child_error 上报、卡片不误翻 collecting且不创建 attempt", async () => {
   const { root, routes, goalId } = setup();
   const goalFile = findGoalFile(root, goalId);

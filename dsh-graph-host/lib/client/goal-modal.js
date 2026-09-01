@@ -313,6 +313,21 @@
         return () => { aliveRef.current = false; clearInterval(t); };
       }, [load]);
 
+      // g-219：删除卡片后局部移除（不整体重新 load 弹窗，避免丢未保存状态/闪烁/焦点丢失）。
+      // kanban 侧在 delete-card 返回 ok 后下发 deletedCardSignal，此处按事件结果过滤本地 cards，
+      // 幂等：卡片已不存在则不动；信号带 ts，重复消费同一信号无副作用。
+      React.useEffect(() => {
+        const sig = props.deletedCardSignal;
+        if (!sig || sig.goalId !== props.id) return;
+        setState((s) => {
+          if (!s.data || !Array.isArray(s.data.cards)) return s;
+          const cards = s.data.cards.filter((c) => c.id !== sig.cardId);
+          if (cards.length === (s.data.cards ?? []).length) return s; // 幂等：不存在则不动
+          return { ...s, data: { ...s.data, cards } };
+        });
+        props.onDeletedCardHandled?.();
+      }, [props.deletedCardSignal, props.id]);
+
       // g-181：主 overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
       const backdropGuard = useBackdropClose(props.onClose);
 

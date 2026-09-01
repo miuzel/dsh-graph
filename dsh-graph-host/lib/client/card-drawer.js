@@ -20,6 +20,8 @@
       const [deleteConfirm, setDeleteConfirm] = React.useState(false);
       const [deleteIdInput, setDeleteIdInput] = React.useState("");
       const [deleteNote, setDeleteNote] = React.useState(null);
+      // g-219：删除请求进行中标记（防双击重复提交）
+      const [deleting, setDeleting] = React.useState(false);
       React.useEffect(() => {
         let alive = true;
         fetch(graphUrl("/api/dsh-graph/goal", { id: props.goalId }))
@@ -231,8 +233,10 @@
                       h("button", {
                         style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
                         className: "dg-btn-danger",
-                        disabled: deleteIdInput.trim() !== card.id,
+                        disabled: deleteIdInput.trim() !== card.id || deleting,
                         onClick: async () => {
+                          if (deleting) return; // g-219：防双击重复提交
+                          setDeleting(true);
                           try {
                             const r = await fetch(graphUrl("/api/dsh-graph/delete-card"), {
                               method: "POST",
@@ -245,14 +249,19 @@
                               showToast("✅ 卡片已删除");
                               setDeleteConfirm(false);
                               setDeleteIdInput("");
-                              // 关闭抽屉并刷新
+                              // g-219：事件结果为准——先通知外部局部移除，再关抽屉
+                              if (props.onDeleted) props.onDeleted(card.id);
                               props.onClose?.();
-                              if (props.onDeleted) props.onDeleted();
                             } else {
-                              setDeleteNote("⚠️ 删除失败：" + (data.error || "未知错误"));
+                              // g-219：删除被拒（如 collecting）——明确提示并保留确认态
+                              const msg = (data.error || "未知错误");
+                              setDeleteNote("⚠️ " + msg);
+                              showToast("⚠️ 删除被拒：" + msg);
                             }
                           } catch (e) {
                             setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                          } finally {
+                            setDeleting(false);
                           }
                         },
                       }, "🗑 确认删除"),
@@ -269,7 +278,7 @@
                       title: "删除此卡片（需输入卡片 id 确认）",
                       onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
                     }, "🗑 删除卡片")),
-              deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } }, deleteNote) : null),
+              deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11, color: deleteNote.startsWith("⚠️") ? "var(--dsw-alias-state-error-primary, #d66)" : undefined } }, deleteNote) : null),
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集
             card.child_id

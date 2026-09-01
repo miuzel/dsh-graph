@@ -12,6 +12,8 @@
       const forceReplayRef = React.useRef(null); // {goalId, openTs} 待关闭后强制补播
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
+      // g-219：删除卡片信号（事件结果驱动，弹窗局部移除用）——{goalId, cardId, ts}
+      const [deletedCardSignal, setDeletedCardSignal] = React.useState(null);
       const [openReleased, setOpenReleased] = React.useState({});
       // g-125：delivered/blocked 卡片展开完整视图的开关（默认折叠精简）
       const [expandedGoals, setExpandedGoals] = React.useState({});
@@ -1260,12 +1262,33 @@
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }), deletedCardSignal, onDeletedCardHandled: () => setDeletedCardSignal(null) })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             onClose: () => setDrawerCard(null),
-                            onDeleted: () => { setDrawerCard(null); load(); } })
+                            onDeleted: (cardId) => {
+                              // g-219：事件结果为准——删除成功后局部更新弹窗与看板，不整体重新 load
+                              const goalId = drawerCard.goalId;
+                              const cid = cardId ?? drawerCard.cardId;
+                              setDeletedCardSignal({ goalId, cardId: cid, ts: Date.now() });
+                              setState((s) => {
+                                if (!s.data) return s;
+                                const strip = (g) => g.id === goalId
+                                  ? { ...g, cards: (g.cards ?? []).filter((c) => c.id !== cid) }
+                                  : g;
+                                return {
+                                  ...s,
+                                  data: {
+                                    ...s.data,
+                                    versions: s.data.versions.map((v) => ({ ...v, goals: v.goals.map(strip) })),
+                                    standalone: s.data.standalone.map(strip),
+                                    backlog: s.data.backlog.map(strip),
+                                  },
+                                };
+                              });
+                              setDrawerCard(null);
+                            } })
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal

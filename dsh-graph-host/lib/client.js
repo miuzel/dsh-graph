@@ -1848,6 +1848,8 @@ window.__ModuleLoader__.load({
       const [deleteConfirm, setDeleteConfirm] = React.useState(false);
       const [deleteIdInput, setDeleteIdInput] = React.useState("");
       const [deleteNote, setDeleteNote] = React.useState(null);
+      // g-219：删除请求进行中标记（防双击重复提交）
+      const [deleting, setDeleting] = React.useState(false);
       React.useEffect(() => {
         let alive = true;
         fetch(graphUrl("/api/dsh-graph/goal", { id: props.goalId }))
@@ -2059,8 +2061,10 @@ window.__ModuleLoader__.load({
                       h("button", {
                         style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
                         className: "dg-btn-danger",
-                        disabled: deleteIdInput.trim() !== card.id,
+                        disabled: deleteIdInput.trim() !== card.id || deleting,
                         onClick: async () => {
+                          if (deleting) return; // g-219：防双击重复提交
+                          setDeleting(true);
                           try {
                             const r = await fetch(graphUrl("/api/dsh-graph/delete-card"), {
                               method: "POST",
@@ -2073,14 +2077,19 @@ window.__ModuleLoader__.load({
                               showToast("✅ 卡片已删除");
                               setDeleteConfirm(false);
                               setDeleteIdInput("");
-                              // 关闭抽屉并刷新
+                              // g-219：事件结果为准——先通知外部局部移除，再关抽屉
+                              if (props.onDeleted) props.onDeleted(card.id);
                               props.onClose?.();
-                              if (props.onDeleted) props.onDeleted();
                             } else {
-                              setDeleteNote("⚠️ 删除失败：" + (data.error || "未知错误"));
+                              // g-219：删除被拒（如 collecting）——明确提示并保留确认态
+                              const msg = (data.error || "未知错误");
+                              setDeleteNote("⚠️ " + msg);
+                              showToast("⚠️ 删除被拒：" + msg);
                             }
                           } catch (e) {
                             setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                          } finally {
+                            setDeleting(false);
                           }
                         },
                       }, "🗑 确认删除"),
@@ -2097,7 +2106,7 @@ window.__ModuleLoader__.load({
                       title: "删除此卡片（需输入卡片 id 确认）",
                       onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
                     }, "🗑 删除卡片")),
-              deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } }, deleteNote) : null),
+              deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11, color: deleteNote.startsWith("⚠️") ? "var(--dsw-alias-state-error-primary, #d66)" : undefined } }, deleteNote) : null),
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集
             card.child_id
@@ -2919,6 +2928,21 @@ window.__ModuleLoader__.load({
         const t = setInterval(load, 20000);
         return () => { aliveRef.current = false; clearInterval(t); };
       }, [load]);
+
+      // g-219：删除卡片后局部移除（不整体重新 load 弹窗，避免丢未保存状态/闪烁/焦点丢失）。
+      // kanban 侧在 delete-card 返回 ok 后下发 deletedCardSignal，此处按事件结果过滤本地 cards，
+      // 幂等：卡片已不存在则不动；信号带 ts，重复消费同一信号无副作用。
+      React.useEffect(() => {
+        const sig = props.deletedCardSignal;
+        if (!sig || sig.goalId !== props.id) return;
+        setState((s) => {
+          if (!s.data || !Array.isArray(s.data.cards)) return s;
+          const cards = s.data.cards.filter((c) => c.id !== sig.cardId);
+          if (cards.length === (s.data.cards ?? []).length) return s; // 幂等：不存在则不动
+          return { ...s, data: { ...s.data, cards } };
+        });
+        props.onDeletedCardHandled?.();
+      }, [props.deletedCardSignal, props.id]);
 
       // g-181：主 overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
       const backdropGuard = useBackdropClose(props.onClose);
@@ -3885,6 +3909,8 @@ window.__ModuleLoader__.load({
       const forceReplayRef = React.useRef(null); // {goalId, openTs} 待关闭后强制补播
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
+      // g-219：删除卡片信号（事件结果驱动，弹窗局部移除用）——{goalId, cardId, ts}
+      const [deletedCardSignal, setDeletedCardSignal] = React.useState(null);
       const [openReleased, setOpenReleased] = React.useState({});
       // g-125：delivered/blocked 卡片展开完整视图的开关（默认折叠精简）
       const [expandedGoals, setExpandedGoals] = React.useState({});
@@ -5133,12 +5159,33 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }), deletedCardSignal, onDeletedCardHandled: () => setDeletedCardSignal(null) })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             onClose: () => setDrawerCard(null),
-                            onDeleted: () => { setDrawerCard(null); load(); } })
+                            onDeleted: (cardId) => {
+                              // g-219：事件结果为准——删除成功后局部更新弹窗与看板，不整体重新 load
+                              const goalId = drawerCard.goalId;
+                              const cid = cardId ?? drawerCard.cardId;
+                              setDeletedCardSignal({ goalId, cardId: cid, ts: Date.now() });
+                              setState((s) => {
+                                if (!s.data) return s;
+                                const strip = (g) => g.id === goalId
+                                  ? { ...g, cards: (g.cards ?? []).filter((c) => c.id !== cid) }
+                                  : g;
+                                return {
+                                  ...s,
+                                  data: {
+                                    ...s.data,
+                                    versions: s.data.versions.map((v) => ({ ...v, goals: v.goals.map(strip) })),
+                                    standalone: s.data.standalone.map(strip),
+                                    backlog: s.data.backlog.map(strip),
+                                  },
+                                };
+                              });
+                              setDrawerCard(null);
+                            } })
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal
