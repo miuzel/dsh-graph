@@ -1741,10 +1741,17 @@ test("g-195 源契约：session-hooks.js 提供 useThrottledLiveSession 并包�
   assert.match(src, /unsub\(\)/);
 });
 
-test("g-195 源契约：LiveStrip 组件使用 useThrottledLiveSession 节流 peek 流式输出", () => {
+test("g-195/g-217 源契约：LiveStrip 使用 useLiveStripState 节流 peek（新路径 eventSource / 旧路径回退）", () => {
   const src = readFileSync(
-    join(import.meta.dirname, "../../dsh-graph-host/lib/client/live-panel.js"), "utf8");
-  assert.match(src, /const \{ snap, line, running \} = useThrottledLiveSession\(session, 200\);/);
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
+  // g-217：LiveStrip 数据源切换为 useLiveStripState（能力探测双路径）
+  assert.match(src, /function LiveStrip\(props\)/);
+  assert.match(src, /const \{ snap, line, running \} = useLiveStripState\(session, eventSource, 200\);/);
+  // g-195 节流语义保留：useLiveStripState 内部以 useThrottledLiveSession 作为旧路径回退
+  assert.match(src, /const legacy = useThrottledLiveSession\(session, intervalMs\);/);
+  // C1/C4：新路径订阅 binding.eventSource 并全量重扫 entries
+  assert.match(src, /feed\.subscribe\(onUpdate\)/);
+  assert.match(src, /feed\.getSnapshot\(\)\?\.entries/);
 });
 
 test("g-195 节流器逻辑模拟：高频更新（>20 chunk/s）硬上限 ≤5fps（≥200ms），尾包与完成态不丢失，卸载后无残留 timer", async () => {
