@@ -107,7 +107,7 @@
     }
     return {
       name: "dsh-graph",
-      inject: ["slots", "sessions", "connection", "remote", "remote.session", "modelDirectories"],
+      inject: ["slots", "sessions", "connection", "remote", "modelDirectories"],
       apply(ctx) {
         appCtx = ctx;
         sessionsRt = ctx.sessions ?? null;

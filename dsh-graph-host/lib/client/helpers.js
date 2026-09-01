@@ -211,8 +211,11 @@
     async function openHostPath(path) {
       if (!path) return { opened: false, error: "路径为空" };
       try {
+        // g-222: Access remote.session via ctx.get() for backward compatibility
+        // In 0.1.2+, remote.session is available; in 0.1.1-rc.2 it's not
+        const remoteSession = appCtx?.get?.("remote.session") ?? null;
         const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
-        const openFn = remote?.session?.openWorkspacePath ?? (typeof remote?.["session/openWorkspacePath"] === "function" ? remote["session/openWorkspacePath"].bind(remote) : null);
+        const openFn = remoteSession?.openWorkspacePath ?? remote?.session?.openWorkspacePath ?? (typeof remote?.["session/openWorkspacePath"] === "function" ? remote["session/openWorkspacePath"].bind(remote) : null);
         if (typeof openFn === "function") {
           const res = await openFn({ path });
           if (res && ("opened" in res ? res.opened : res.ok === true)) return { opened: true };

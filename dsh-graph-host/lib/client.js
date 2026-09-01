@@ -526,8 +526,11 @@ window.__ModuleLoader__.load({
     async function openHostPath(path) {
       if (!path) return { opened: false, error: "路径为空" };
       try {
+        // g-222: Access remote.session via ctx.get() for backward compatibility
+        // In 0.1.2+, remote.session is available; in 0.1.1-rc.2 it's not
+        const remoteSession = appCtx?.get?.("remote.session") ?? null;
         const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
-        const openFn = remote?.session?.openWorkspacePath ?? (typeof remote?.["session/openWorkspacePath"] === "function" ? remote["session/openWorkspacePath"].bind(remote) : null);
+        const openFn = remoteSession?.openWorkspacePath ?? remote?.session?.openWorkspacePath ?? (typeof remote?.["session/openWorkspacePath"] === "function" ? remote["session/openWorkspacePath"].bind(remote) : null);
         if (typeof openFn === "function") {
           const res = await openFn({ path });
           if (res && ("opened" in res ? res.opened : res.ok === true)) return { opened: true };
@@ -673,8 +676,7 @@ window.__ModuleLoader__.load({
           h("span", { style: { minWidth: "18px", textAlign: "right", opacity: 0.85, fontSize: 10 } }, `${remaining}s`)));
     }
 
-    // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====
-    // 数据源：sessions.binding(childId).session（uSES 快照 subscribe/getSnapshot），
+    // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // 数据源：sessions.binding(childId).session（uSES 快照 subscribe/getSnapshot），
     // 流式行读 chat.legacy.partial（必须先 session.open()），token/上下文走投影
     // faceOf("tokenUsage"|"contextPressure")（无需 open），模型走 connection.api.sessions.models，
     // 发指令走 session.prompt（continuable 子代理自动路由 api.subagents.prompt，仅文本），
@@ -6490,7 +6492,7 @@ window.__ModuleLoader__.load({
     }
     return {
       name: "dsh-graph",
-      inject: ["slots", "sessions", "connection", "remote", "remote.session", "modelDirectories"],
+      inject: ["slots", "sessions", "connection", "remote", "modelDirectories"],
       apply(ctx) {
         appCtx = ctx;
         sessionsRt = ctx.sessions ?? null;
