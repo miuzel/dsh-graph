@@ -198,15 +198,17 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.match(host, /configFile: join\(meta\.root, "project\.yaml"\)/);
   // att-002：说明区域配置文件操作入口——只消费服务端 configFile，不自行拼接 graphRoot
   assert.match(modal, /setConfigFile\(data\.configFile \?\? null\)/);
-  assert.match(modal, /connectionRt \?\? appCtx\?\.get\?\.\("connection"\)/);
-  assert.match(modal, /conn\.api\.host\.openPath\(\{ path: configFile \}\)/);
+  // g-222：统一走共享 openHostPath（0.1.2+ session.openWorkspacePath 优先），失败透出可理解错误
+  assert.match(modal, /openHostPath\(configFile\)/);
   assert.match(modal, /"✅ 已打开 project\.yaml"/);
-  // open/copy/fallback 行为源契约：openPath 可用且成功才 return；不可用/异常均回退复制绝对路径
-  const openIdx = modal.indexOf("conn.api.host.openPath({ path: configFile })");
+  assert.match(modal, /打开失败/);
+  assert.match(modal, /openErrorText\(r\.error\)/);
+  // open/copy/fallback 行为源契约：openHostPath 成功才 return；失败复制绝对路径并提示
+  const openIdx = modal.indexOf("openHostPath(configFile)");
   const fallbackIdx = modal.indexOf('showToast("✅ 路径已复制（打开不可用）")');
   const copyIdx = modal.indexOf("await copyText(configFile);");
-  assert.ok(openIdx > 0 && fallbackIdx > openIdx && copyIdx > 0, "openPath 应先于 fallback 复制");
-  assert.ok((modal.match(/copyText\(configFile\)/g) || []).length >= 3, "打开回退 + 复制按钮均应复制绝对路径");
+  assert.ok(openIdx > 0 && fallbackIdx > openIdx && copyIdx > 0, "openHostPath 应先于 fallback 复制");
+  assert.ok((modal.match(/copyText\(configFile\)/g) || []).length >= 2, "打开回退 + 复制按钮均应复制绝对路径");
   assert.match(modal, /"📄 project\.yaml"/);
   assert.match(modal, /title: "用系统默认编辑器打开 project\.yaml"/);
   assert.match(modal, /title: "复制 project\.yaml 路径"/);

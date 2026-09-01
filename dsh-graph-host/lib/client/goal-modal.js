@@ -569,23 +569,13 @@
                     title: "用系统默认编辑器打开 goal.md",
                     onClick: async (e) => {
                       e.stopPropagation();
-                      try {
-                        const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
-                        if (remote?.session?.openWorkspacePath) {
-                          const res = await remote.session.openWorkspacePath({ path: d.goalFile });
-                          if (res?.ok || res?.opened) { showToast("✅ 已打开 goal.md"); return; }
-                        }
-                        const conn = connectionRt ?? appCtx?.get?.("connection");
-                        if (conn?.api?.host?.openPath) {
-                          const result = await conn.api.host.openPath({ path: d.goalFile });
-                          if (result?.opened) { showToast("✅ 已打开 goal.md"); return; }
-                        }
-                        await copyText(d.goalFile);
-                        showToast("✅ 路径已复制（打开不可用）");
-                      } catch {
-                        await copyText(d.goalFile);
-                        showToast("✅ 路径已复制");
-                      }
+                      // g-222：统一走共享 openHostPath（0.1.2+ session.openWorkspacePath 优先），
+                      // 失败透出可理解错误（C3/C4），不再静默回退为"路径已复制"
+                      const r = await openHostPath(d.goalFile);
+                      if (r.opened) { showToast("✅ 已打开 goal.md"); return; }
+                      await copyText(d.goalFile);
+                      if (r.error) { showToast("⚠️ 打开失败：" + openErrorText(r.error)); }
+                      else { showToast("✅ 路径已复制（打开不可用）"); }
                     },
                   }, "打开"),
                   h("button", {

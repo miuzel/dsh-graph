@@ -202,25 +202,43 @@
       return num;
     }
 
-    // g-215：跨版本打开 Host 工作区路径（优先 0.1.2-alpha.2 session.openWorkspacePath，回退 0.1.1-rc host.openPath）
+    // g-222：跨版本打开 Host 工作区路径（优先 0.1.2+ session.openWorkspacePath，回退 0.1.1-rc host.openPath）。
+    // 依赖 plugin.inject 声明 "remote.session"：session 命名空间服务由 api-gateway 在兄弟 fiber 提供，
+    // 仅 inject "remote" 时 ctx.remote.session 属性访问走 fiber 向上遍历会在 root fiber 抛
+    // 'cannot get property "remote.session" without inject'（g-222 根因）；inject 后本 fiber store
+    // 才有实现，属性访问与调用均正常。
+    // 返回 { opened: boolean, error?: string }：opened=true 表示已交给系统打开；error 携带可理解失败原因。
     async function openHostPath(path) {
-      if (!path) return false;
+      if (!path) return { opened: false, error: "路径为空" };
       try {
         const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
         const openFn = remote?.session?.openWorkspacePath ?? (typeof remote?.["session/openWorkspacePath"] === "function" ? remote["session/openWorkspacePath"].bind(remote) : null);
         if (typeof openFn === "function") {
           const res = await openFn({ path });
-          if (res && ("opened" in res ? res.opened : res.ok)) return true;
+          if (res && ("opened" in res ? res.opened : res.ok === true)) return { opened: true };
+          if (res && res.ok === false && res.error && res.error.message) {
+            return { opened: false, error: String(res.error.message) };
+          }
         }
-      } catch {}
+      } catch (e) {
+        return { opened: false, error: String(e?.message ?? e) };
+      }
       try {
         const conn = connectionRt ?? appCtx?.get?.("connection");
         if (typeof conn?.api?.host?.openPath === "function") {
           const result = await conn.api.host.openPath({ path });
-          if (result?.opened) return true;
+          if (result?.opened) return { opened: true };
         }
-      } catch {}
-      return false;
+      } catch (e) {
+        return { opened: false, error: String(e?.message ?? e) };
+      }
+      return { opened: false };
+    }
+    // g-222：toast 展示用的错误文案（截断过长原始错误，保留首段）
+    function openErrorText(err) {
+      if (!err) return "";
+      const s = String(err).replace(/^path open failed:\s*/i, "").split("\n")[0] ?? String(err);
+      return s.length > 120 ? s.slice(0, 120) + "…" : s;
     }
 
     // g-214：局部化倒计时组件，避免每秒 tick 引起整个看板大面积重绘；

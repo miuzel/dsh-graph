@@ -257,23 +257,12 @@
                   title: "用系统默认编辑器打开 project.yaml",
                   onClick: async (e) => {
                     e.stopPropagation();
-                    try {
-                      const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
-                      if (remote?.session?.openWorkspacePath) {
-                        const res = await remote.session.openWorkspacePath({ path: configFile });
-                        if (res?.ok || res?.opened) { showToast("✅ 已打开 project.yaml"); return; }
-                      }
-                      const conn = connectionRt ?? appCtx?.get?.("connection");
-                      if (conn?.api?.host?.openPath) {
-                        const result = await conn.api.host.openPath({ path: configFile });
-                        if (result?.opened) { showToast("✅ 已打开 project.yaml"); return; }
-                      }
-                      await copyText(configFile);
-                      showToast("✅ 路径已复制（打开不可用）");
-                    } catch {
-                      await copyText(configFile);
-                      showToast("✅ 路径已复制");
-                    }
+                    // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
+                    const r = await openHostPath(configFile);
+                    if (r.opened) { showToast("✅ 已打开 project.yaml"); return; }
+                    await copyText(configFile);
+                    if (r.error) { showToast("⚠️ 打开失败：" + openErrorText(r.error)); }
+                    else { showToast("✅ 路径已复制（打开不可用）"); }
                   },
                 }, "打开"),
                 h("button", {
