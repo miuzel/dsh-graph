@@ -69,7 +69,7 @@
     function showToast(text) {
       const host = document.createElement("div");
       host.style.cssText =
-        "position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:99999;" +
+        "position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:100000;" +
         "background:var(--dsw-alias-toast-bg, rgba(30,30,30,.94));color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;" +
         "box-shadow:0 4px 16px rgba(0,0,0,.35);pointer-events:none;opacity:0;transition:opacity .18s ease;max-width:80vw;";
       host.textContent = text;

@@ -1962,3 +1962,35 @@ test("g-214 生成 bundle 契约：client.js 包含 g-214 倒计时与刷新间�
   assert.match(bundle, /dsh-graph\.refresh-interval/);
   assert.match(bundle, /MIN_REFRESH_INTERVAL = 5/);
 });
+
+// ===== g-216：widthHandle 层级与 z-index 防遮挡/防穿透契约 =====
+
+test("g-216 源契约：helpers.js S.wrap、S.overlay、S.drawer、S.modal 合理规划 z-index 与层叠上下文", () => {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  assert.match(helpers, /wrap: \{[\s\S]*?position:\s*"relative",\s*zIndex:\s*1/);
+  assert.match(helpers, /overlay: \{[\s\S]*?zIndex:\s*10000/);
+  assert.match(helpers, /drawer: \{[\s\S]*?zIndex:\s*10001/);
+  assert.match(helpers, /modal: \{[\s\S]*?zIndex:\s*10002/);
+});
+
+test("g-216 源契约：constants.js 包含 widthHandle 蒙层防穿透与防遮挡样式规则", () => {
+  const constants = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
+  assert.match(constants, /\.wSkVaW_root:has\(\.dg-modal-open\)\s*\.wSkVaW_widthHandle/);
+  assert.match(constants, /\.wSkVaW_body:has\(\.dg-modal-open\)\s*\.wSkVaW_widthHandle/);
+  assert.match(constants, /display:\s*none\s*!important/);
+});
+
+test("g-216 源契约：kanban.js 具备 hasModal 状态与 dg-modal-open 动态类绑定", () => {
+  const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+  assert.match(kanban, /const hasModal = !!\(modalGoal \|\| drawerCard \|\| showCreateGoal/);
+  assert.match(kanban, /className:\s*hasModal \? "dg-kanban-root dg-modal-open" : "dg-kanban-root"/);
+});
+
+test("g-216 生成 bundle 契约：client.js 包含 g-216 层级规划与 widthHandle 穿透防护规则", () => {
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(bundle, /dg-modal-open/);
+  assert.match(bundle, /\.wSkVaW_root:has\(\.dg-modal-open\)/);
+  assert.match(bundle, /zIndex:\s*10000/);
+  assert.match(bundle, /zIndex:\s*10001/);
+  assert.match(bundle, /zIndex:\s*10002/);
+});

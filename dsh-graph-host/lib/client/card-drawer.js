@@ -172,6 +172,11 @@
                   onClick: async (e) => {
                     e.stopPropagation();
                     try {
+                      const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
+                      if (remote?.session?.openWorkspacePath) {
+                        const res = await remote.session.openWorkspacePath({ path: card.cardFile });
+                        if (res?.ok || res?.opened) { showToast("✅ 已打开卡片文件"); return; }
+                      }
                       const conn = connectionRt ?? appCtx?.get?.("connection");
                       if (conn?.api?.host?.openPath) {
                         const result = await conn.api.host.openPath({ path: card.cardFile });

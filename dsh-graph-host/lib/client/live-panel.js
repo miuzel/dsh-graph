@@ -131,19 +131,29 @@
     function RecentRecords(props) {
       const [state, setState] = React.useState({ loading: true });
       React.useEffect(() => {
-        if (!connectionRt) { setState({ loading: false, error: "connection 服务不可用" }); return; }
         let alive = true;
-        const call = props.parentId
-          ? connectionRt.api.subagents.history({
-              parentSessionId: props.parentId, childSessionId: props.childId,
-              mode: props.mode ?? "continuable", maxMessages: 30,
-            })
-          : connectionRt.api.sessions.history({ sessionId: props.childId, maxMessages: 30 });
-        call
-          .then((r) => alive && setState(r?.result?.ok
-            ? { loading: false, entries: r.result.value.events }
-            : { loading: false, error: r?.result?.error?.message ?? "读取失败" }))
-          .catch((e) => alive && setState({ loading: false, error: String(e?.message ?? e) }));
+        const loadHistory = async () => {
+          try {
+            if (connectionRt?.api?.subagents?.history && props.parentId) {
+              const r = await connectionRt.api.subagents.history({
+                parentSessionId: props.parentId, childSessionId: props.childId,
+                mode: props.mode ?? "continuable", maxMessages: 30,
+              });
+              if (!alive) return;
+              if (r?.result?.ok) { setState({ loading: false, entries: r.result.value.events }); return; }
+            }
+            if (connectionRt?.api?.sessions?.history && props.childId) {
+              const r = await connectionRt.api.sessions.history({ sessionId: props.childId, maxMessages: 30 });
+              if (!alive) return;
+              if (r?.result?.ok) { setState({ loading: false, entries: r.result.value.events }); return; }
+            }
+            if (!alive) return;
+            setState({ loading: false, entries: [] });
+          } catch (e) {
+            if (alive) setState({ loading: false, error: String(e?.message ?? e) });
+          }
+        };
+        loadHistory();
         return () => { alive = false; };
       }, [props.parentId, props.childId]);
 
@@ -218,19 +228,26 @@
       const [model, setModel] = React.useState(null); // {provider, model, fromParent}
       const [modelErr, setModelErr] = React.useState(null);
       React.useEffect(() => {
-        if (!sessionId || !connectionRt) return;
+        if (!sessionId) return;
         let alive = true;
         const load = async () => {
           try {
-            const r = await connectionRt.api.sessions.models({ sessionId });
-            if (!alive) return;
-            if (r?.result?.ok) {
-              setModel({ ...(r.result.value.current ?? {}), fromParent: false });
-              setModelErr(null);
-            } else {
-              setModel(null);
-              setModelErr(r?.result?.error?.message ?? "查询失败");
+            if (connectionRt?.api?.sessions?.models) {
+              const r = await connectionRt.api.sessions.models({ sessionId });
+              if (!alive) return;
+              if (r?.result?.ok) {
+                setModel({ ...(r.result.value.current ?? {}), fromParent: false });
+                setModelErr(null);
+                return;
+              } else {
+                setModel(null);
+                setModelErr(r?.result?.error?.message ?? "查询失败");
+                return;
+              }
             }
+            if (!alive) return;
+            setModel(null);
+            setModelErr(null);
           } catch (e) {
             if (alive) { setModel(null); setModelErr(String(e?.message ?? e)); }
           }

@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const h = React.createElement;
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
-    const PLUGIN_VERSION = "0.7.3-alpha";
+    const PLUGIN_VERSION = "0.8.1-alpha";
 
     const STAGES = [
       { key: "describe", label: "描述", statuses: ["draft", "planning"] },
@@ -174,7 +174,25 @@ window.__ModuleLoader__.load({
       .dg-chevron:hover { background: rgba(128,128,128,.32); opacity: 1; }
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
-      .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); }
+      .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); background: var(--dsw-alias-bg-base, rgba(30,31,36,.85)); }
+      /* g-216: 看板以低层级保留 composerSeat 输入框；看板打开时禁用并降下宿主 widthHandle，避免其遮挡/抢占看板边缘。 */
+      .wSkVaW_root:has(.dg-kanban-root) .wSkVaW_widthHandle,
+      .wSkVaW_body:has(.dg-kanban-root) .wSkVaW_widthHandle {
+        z-index: 0 !important;
+        pointer-events: none !important;
+      }
+      /* 弹窗与抽屉等蒙层打开时，隐藏原生 widthHandle，防止手柄遮挡/穿透弹层与边缘溢出 */
+      .wSkVaW_root:has(.dg-modal-open) .wSkVaW_widthHandle,
+      .wSkVaW_body:has(.dg-modal-open) .wSkVaW_widthHandle,
+      .wSkVaW_root:has([style*="position: fixed"]) .wSkVaW_widthHandle,
+      .wSkVaW_root:has([style*="position:fixed"]) .wSkVaW_widthHandle,
+      .wSkVaW_body:has([style*="position: fixed"]) .wSkVaW_widthHandle,
+      .wSkVaW_body:has([style*="position:fixed"]) .wSkVaW_widthHandle,
+      body:has(.dg-modal-open) [data-width-handle],
+      body:has([style*="position: fixed"]) [data-width-handle],
+      body:has([style*="position:fixed"]) [data-width-handle] {
+        display: none !important;
+      }
       /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */
       @keyframes dg-flow-bg {
          0% { background-position: 0% 50%; }
@@ -287,7 +305,7 @@ window.__ModuleLoader__.load({
       .dg-drop-before { border-top: 2px solid #4c8dff !important; }
       .dg-drop-after { border-bottom: 2px solid #4c8dff !important; }
       .dg-cell-drop-active { background: rgba(76,141,255,.10); border-radius: 4px; }
-      .dg-drag-ghost { position: fixed; pointer-events: none; z-index: 99999; opacity: 0.85;
+      .dg-drag-ghost { position: fixed; pointer-events: none; z-index: 100000; opacity: 0.85;
         max-width: 260px; padding: 6px 10px; border-radius: 6px;
         background: rgba(30,31,36,.92); border: 1px solid rgba(76,141,255,.55);
         box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; font-weight: 600;
@@ -295,7 +313,7 @@ window.__ModuleLoader__.load({
     `;
 
     const S = {
-      wrap: { padding: 12, fontSize: 13, color: "inherit", overflowX: "auto" },
+      wrap: { padding: 12, fontSize: 13, color: "inherit", overflowX: "auto", position: "relative", zIndex: 1, minWidth: 0 },
       head: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
       grid: { display: "grid", gridTemplateColumns: "130px repeat(6, minmax(150px, 1fr))", gap: 4 },
       laneLabel: { fontWeight: 600, padding: "8px 6px", borderTop: "1px solid rgba(128,128,128,.35)" },
@@ -324,11 +342,11 @@ window.__ModuleLoader__.load({
       },
       overlay: {
         position: "fixed", inset: 0, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.55))",
-        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000,
       },
       drawer: {
         position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
-        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10000,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10001,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
@@ -338,7 +356,7 @@ window.__ModuleLoader__.load({
       modal: {
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", borderRadius: 10,
         maxWidth: 720, width: "90%", maxHeight: "80vh", overflowY: "auto",
-        padding: "16px 20px", fontSize: 13, lineHeight: 1.6,
+        padding: "16px 20px", fontSize: 13, lineHeight: 1.6, position: "relative", zIndex: 10002,
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
@@ -497,6 +515,27 @@ window.__ModuleLoader__.load({
       } catch {}
       window.dispatchEvent(new CustomEvent("dsh-graph.refresh-interval-changed", { detail: { interval: num } }));
       return num;
+    }
+
+    // g-215：跨版本打开 Host 工作区路径（优先 0.1.2-alpha.2 session.openWorkspacePath，回退 0.1.1-rc host.openPath）
+    async function openHostPath(path) {
+      if (!path) return false;
+      try {
+        const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
+        const openFn = remote?.session?.openWorkspacePath ?? (typeof remote?.["session/openWorkspacePath"] === "function" ? remote["session/openWorkspacePath"].bind(remote) : null);
+        if (typeof openFn === "function") {
+          const res = await openFn({ path });
+          if (res && ("opened" in res ? res.opened : res.ok)) return true;
+        }
+      } catch {}
+      try {
+        const conn = connectionRt ?? appCtx?.get?.("connection");
+        if (typeof conn?.api?.host?.openPath === "function") {
+          const result = await conn.api.host.openPath({ path });
+          if (result?.opened) return true;
+        }
+      } catch {}
+      return false;
     }
 
     // g-214：局部化倒计时组件，避免每秒 tick 引起整个看板大面积重绘；
@@ -954,19 +993,29 @@ window.__ModuleLoader__.load({
     function RecentRecords(props) {
       const [state, setState] = React.useState({ loading: true });
       React.useEffect(() => {
-        if (!connectionRt) { setState({ loading: false, error: "connection 服务不可用" }); return; }
         let alive = true;
-        const call = props.parentId
-          ? connectionRt.api.subagents.history({
-              parentSessionId: props.parentId, childSessionId: props.childId,
-              mode: props.mode ?? "continuable", maxMessages: 30,
-            })
-          : connectionRt.api.sessions.history({ sessionId: props.childId, maxMessages: 30 });
-        call
-          .then((r) => alive && setState(r?.result?.ok
-            ? { loading: false, entries: r.result.value.events }
-            : { loading: false, error: r?.result?.error?.message ?? "读取失败" }))
-          .catch((e) => alive && setState({ loading: false, error: String(e?.message ?? e) }));
+        const loadHistory = async () => {
+          try {
+            if (connectionRt?.api?.subagents?.history && props.parentId) {
+              const r = await connectionRt.api.subagents.history({
+                parentSessionId: props.parentId, childSessionId: props.childId,
+                mode: props.mode ?? "continuable", maxMessages: 30,
+              });
+              if (!alive) return;
+              if (r?.result?.ok) { setState({ loading: false, entries: r.result.value.events }); return; }
+            }
+            if (connectionRt?.api?.sessions?.history && props.childId) {
+              const r = await connectionRt.api.sessions.history({ sessionId: props.childId, maxMessages: 30 });
+              if (!alive) return;
+              if (r?.result?.ok) { setState({ loading: false, entries: r.result.value.events }); return; }
+            }
+            if (!alive) return;
+            setState({ loading: false, entries: [] });
+          } catch (e) {
+            if (alive) setState({ loading: false, error: String(e?.message ?? e) });
+          }
+        };
+        loadHistory();
         return () => { alive = false; };
       }, [props.parentId, props.childId]);
 
@@ -1041,19 +1090,26 @@ window.__ModuleLoader__.load({
       const [model, setModel] = React.useState(null); // {provider, model, fromParent}
       const [modelErr, setModelErr] = React.useState(null);
       React.useEffect(() => {
-        if (!sessionId || !connectionRt) return;
+        if (!sessionId) return;
         let alive = true;
         const load = async () => {
           try {
-            const r = await connectionRt.api.sessions.models({ sessionId });
-            if (!alive) return;
-            if (r?.result?.ok) {
-              setModel({ ...(r.result.value.current ?? {}), fromParent: false });
-              setModelErr(null);
-            } else {
-              setModel(null);
-              setModelErr(r?.result?.error?.message ?? "查询失败");
+            if (connectionRt?.api?.sessions?.models) {
+              const r = await connectionRt.api.sessions.models({ sessionId });
+              if (!alive) return;
+              if (r?.result?.ok) {
+                setModel({ ...(r.result.value.current ?? {}), fromParent: false });
+                setModelErr(null);
+                return;
+              } else {
+                setModel(null);
+                setModelErr(r?.result?.error?.message ?? "查询失败");
+                return;
+              }
             }
+            if (!alive) return;
+            setModel(null);
+            setModelErr(null);
           } catch (e) {
             if (alive) { setModel(null); setModelErr(String(e?.message ?? e)); }
           }
@@ -1485,7 +1541,7 @@ window.__ModuleLoader__.load({
             ghost.style.width = rect.width + "px";
             ghost.style.margin = "0";
             ghost.style.pointerEvents = "none";
-            ghost.style.zIndex = "99999";
+            ghost.style.zIndex = "100000";
             document.body.appendChild(ghost);
             e.dataTransfer.setDragImage(ghost, 16, 10);
             setTimeout(() => { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); }, 0);
@@ -1766,6 +1822,11 @@ window.__ModuleLoader__.load({
                   onClick: async (e) => {
                     e.stopPropagation();
                     try {
+                      const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
+                      if (remote?.session?.openWorkspacePath) {
+                        const res = await remote.session.openWorkspacePath({ path: card.cardFile });
+                        if (res?.ok || res?.opened) { showToast("✅ 已打开卡片文件"); return; }
+                      }
                       const conn = connectionRt ?? appCtx?.get?.("connection");
                       if (conn?.api?.host?.openPath) {
                         const result = await conn.api.host.openPath({ path: card.cardFile });
@@ -1950,7 +2011,7 @@ window.__ModuleLoader__.load({
     function showToast(text) {
       const host = document.createElement("div");
       host.style.cssText =
-        "position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:99999;" +
+        "position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:100000;" +
         "background:var(--dsw-alias-toast-bg, rgba(30,30,30,.94));color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;" +
         "box-shadow:0 4px 16px rgba(0,0,0,.35);pointer-events:none;opacity:0;transition:opacity .18s ease;max-width:80vw;";
       host.textContent = text;
@@ -2923,6 +2984,11 @@ window.__ModuleLoader__.load({
                     onClick: async (e) => {
                       e.stopPropagation();
                       try {
+                        const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
+                        if (remote?.session?.openWorkspacePath) {
+                          const res = await remote.session.openWorkspacePath({ path: d.goalFile });
+                          if (res?.ok || res?.opened) { showToast("✅ 已打开 goal.md"); return; }
+                        }
                         const conn = connectionRt ?? appCtx?.get?.("connection");
                         if (conn?.api?.host?.openPath) {
                           const result = await conn.api.host.openPath({ path: d.goalFile });
@@ -4781,10 +4847,15 @@ window.__ModuleLoader__.load({
         modalGoalOpenTsRef.current = modalGoalData.updated_at;
       }
 
+      // g-216: 判定是否有任何弹窗或抽屉处于打开态
+      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings);
+
       return h(
         "div",
         { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
-           onDragLeave: drag ? (e) => {
+          className: hasModal ? "dg-kanban-root dg-modal-open" : "dg-kanban-root",
+          "data-dsh-graph-kanban": "",
+          onDragLeave: drag ? (e) => {
              // 进入子元素不清除；离开整个看板内容（如进入页面顶部/底部边缘、
              // header/composer 等视口触发区）时只清除悬停落点，不结束整个拖拽——
              // g-173：结束 drag 会让 g-157 自动滚动 effect 立即卸载，边缘自动滚动失效；
@@ -5395,13 +5466,13 @@ window.__ModuleLoader__.load({
       };
       React.useEffect(() => { load(); }, []);
       // 目录化 select（与 settings.js g-133 同源）：挂载时用同 scope 的 gConnectionApi/loadHostCatalog
-      // 读取当前 Host 的 llm.providers/llm.models 合法目录。RPC 缺失/失败时目录状态置 unavailable，
-      // 降级为「提示 + 保留已存值」，不阻止保存。provider 只列 active 且有模型目录的 provider；
-      // model 按当前 provider 过滤；空项代表继承父会话；未列出的已存旧值保留为固定 option。
+      // 读取当前 Host 的 llm.providers/llm.models 合法目录（g-215 探测链：优先 0.1.2-alpha.2 新版 RPC，回退 0.1.1-rc 旧版）。
+      // RPC 缺失/失败时目录状态置 unavailable，降级为「提示 + 保留已存值」，不阻止保存。
+      // provider 只列 active 且有模型目录的 provider；model 按当前 provider 过滤；
+      // 空项代表继承父会话；未列出的已存旧值保留为固定 option。
       const [catalog, setCatalog] = React.useState({ status: "loading" });
       React.useEffect(() => {
         let alive = true;
-        if (!gConnectionApi?.llm?.providers || !gConnectionApi?.llm?.models) { setCatalog({ status: "unavailable" }); return; }
         loadHostCatalog(gConnectionApi)
           .then((c) => { if (alive) setCatalog(c); })
           .catch(() => { if (alive) setCatalog({ status: "unavailable" }); });
@@ -5595,6 +5666,11 @@ window.__ModuleLoader__.load({
                   onClick: async (e) => {
                     e.stopPropagation();
                     try {
+                      const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
+                      if (remote?.session?.openWorkspacePath) {
+                        const res = await remote.session.openWorkspacePath({ path: configFile });
+                        if (res?.ok || res?.opened) { showToast("✅ 已打开 project.yaml"); return; }
+                      }
                       const conn = connectionRt ?? appCtx?.get?.("connection");
                       if (conn?.api?.host?.openPath) {
                         const result = await conn.api.host.openPath({ path: configFile });
@@ -5703,8 +5779,16 @@ window.__ModuleLoader__.load({
 
     // 3082 的 settingsScope 在非 loopback 浏览器上下文会是 memory；此时仍可
     // 通过已存在的 profile settings RPC 读写 Host，而不是把配置伪装成 workspace 数据。
-    function createGraphSettingsApiScope(api) {
-      if (!api?.settings?.describe || !api?.settings?.mutate) return null;
+    function createGraphSettingsApiScope(api, ctx = (typeof appCtx !== "undefined" ? appCtx : null)) {
+      const remoteSettings = ctx?.get?.("remote")?.settings ?? ctx?.remote?.settings ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("remote")?.settings ?? appCtx?.remote?.settings) : null);
+      const describeFn = typeof remoteSettings?.describe === "function"
+        ? () => remoteSettings.describe()
+        : (typeof api?.settings?.describe === "function" ? () => api.settings.describe({}) : null);
+      const mutateFn = typeof remoteSettings?.mutate === "function"
+        ? (ns, ops, expectedRevision) => remoteSettings.mutate(ns, ops, expectedRevision)
+        : (typeof api?.settings?.mutate === "function" ? (ns, ops, expectedRevision) => api.settings.mutate({ ns, ops, ...(expectedRevision === undefined ? {} : { expectedRevision }) }) : null);
+
+      if (!describeFn || !mutateFn) return null;
       let snapshot = { status: "loading", value: null, writable: false, revision: undefined };
       const listeners = new Set();
       const notify = () => listeners.forEach((listener) => listener());
@@ -5712,9 +5796,9 @@ window.__ModuleLoader__.load({
         getSnapshot: () => snapshot,
         subscribe: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
         async load() {
-          const response = await api.settings.describe({});
-          if (!response?.result?.ok) throw new Error(response?.result?.error?.message ?? "读取 profile 设置失败");
-          const view = response.result.value;
+          const res = await describeFn();
+          const view = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
+          if (!view) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "读取 profile 设置失败");
           const row = view.namespaces?.find((candidate) => candidate.ns === GRAPH_SETTINGS_NS);
           if (!row) {
             snapshot = { ...snapshot, status: "unavailable", writable: view.writable !== false };
@@ -5724,13 +5808,9 @@ window.__ModuleLoader__.load({
           notify();
         },
         async set(field, value) {
-          const response = await api.settings.mutate({
-            ns: GRAPH_SETTINGS_NS,
-            ops: [{ op: "set", path: [field], value }],
-            ...(snapshot.revision === undefined ? {} : { expectedRevision: snapshot.revision }),
-          });
-          if (!response?.result?.ok) throw new Error(response?.result?.error?.message ?? "保存 profile 设置失败");
-          const row = response.result.value;
+          const res = await mutateFn(GRAPH_SETTINGS_NS, [{ op: "set", path: [field], value }], snapshot.revision);
+          const row = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
+          if (!row) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "保存 profile 设置失败");
           snapshot = { ...snapshot, status: "ready", value: row.value ?? snapshot.value, revision: row.revision };
           notify();
         },
@@ -5748,29 +5828,111 @@ window.__ModuleLoader__.load({
         const bound = ctx?.get?.("settingsScope")?.bind({ namespace: GRAPH_SETTINGS_NS });
         if (bound && bound.getSnapshot?.().mode !== "memory") return (gSettingsScope = bound);
         const connection = ctx?.get?.("connection") ?? ctx?.connection;
-        return (gSettingsScope = createGraphSettingsApiScope(connection?.api));
+        return (gSettingsScope = createGraphSettingsApiScope(connection?.api, ctx));
       } catch {
         gSettingsScope = null;
         return null;
       }
     }
 
-    // g-133：从当前 Host 并行读取合法 provider/model 目录（connection.api.llm RPC）。
+    // g-133 / g-215：从当前 Host 读取合法 provider/model 目录。
     // providers: [{provider, displayName, active,...}]；models: {groups:[{id,name,models:[{id,name,...}]}], failures:[...]}。
-    // 浏览器侧 RPC 结果形如 { result: { ok, value } }；RPC 缺失/失败时返回 {status:"unavailable"}，
-    // 组件降级为「显示提示 + 保留已存值」，不让整个设置页崩溃。
-    async function loadHostCatalog(api) {
-      if (!api?.llm?.providers || !api?.llm?.models) return { status: "unavailable" };
-      const [pRes, mRes] = await Promise.allSettled([api.llm.providers({}), api.llm.models({})]);
-      const pv = pRes.status === "fulfilled" ? pRes.value?.result?.value : null;
-      const mv = mRes.status === "fulfilled" ? mRes.value?.result?.value : null;
-      if (!pv || !mv) return { status: "unavailable" };
-      return {
-        status: "ready",
-        providers: Array.isArray(pv.providers) ? pv.providers : [],
-        groups: Array.isArray(mv.groups) ? mv.groups : [],
-        failures: Array.isArray(mv.failures) ? mv.failures : [],
-      };
+    // 降级探测链：
+    // 1. 优先调用 0.1.2-alpha.2 新版 API 获取 Host 模型与 Provider 目录（Remote RPC session.modelCatalog / modelDirectories / window.__DSH_RUNTIME__）；
+    // 2. 若新版 API 缺失或未返回有效数据，尝试通过 0.1.1-rc 旧版 API 机制主动获取一次（connection.api.llm.providers/models）；
+    // 3. 尝试通过服务端 REST /api/dsh-graph/spawn-options 获取后端枚举好的模型目录；
+    // 4. 仅在所有方式均不可用时才进入最终降级兜底（status: "unavailable"，保留已存配置、支持保存、不报未捕获异常）。
+    async function loadHostCatalog(api, ctx = (typeof appCtx !== "undefined" ? appCtx : null)) {
+      // 1. 优先调用 0.1.2-alpha.2 新版 API
+      try {
+        const remote = ctx?.get?.("remote") ?? ctx?.remote ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("remote") ?? appCtx?.remote) : null) ?? (typeof window !== "undefined" ? window.__DSH_REMOTE__ : null);
+        const modelCatalogFn = remote?.session?.modelCatalog ?? (typeof remote?.["session/modelCatalog"] === "function" ? remote["session/modelCatalog"].bind(remote) : null);
+        if (typeof modelCatalogFn === "function") {
+          const res = await modelCatalogFn();
+          const val = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : res;
+          if (val && Array.isArray(val.groups) && val.groups.length > 0) {
+            const routableSet = new Set(Array.isArray(val.routableProviders) ? val.routableProviders : []);
+            const providers = val.groups.map((g) => ({
+              provider: g.id,
+              displayName: g.name ?? g.id,
+              active: routableSet.size > 0 ? routableSet.has(g.id) : true,
+            }));
+            return {
+              status: "ready",
+              providers,
+              groups: val.groups,
+              failures: Array.isArray(val.failures) ? val.failures : [],
+            };
+          }
+        }
+
+        const modelDirectories = ctx?.get?.("modelDirectories") ?? (typeof appCtx !== "undefined" ? appCtx?.get?.("modelDirectories") : null);
+        if (typeof modelDirectories?.catalog?.load === "function") {
+          const catVal = await modelDirectories.catalog.load();
+          if (catVal && Array.isArray(catVal.groups) && catVal.groups.length > 0) {
+            const routableSet = new Set(Array.isArray(catVal.routableProviders) ? catVal.routableProviders : []);
+            const providers = catVal.groups.map((g) => ({
+              provider: g.id,
+              displayName: g.name ?? g.id,
+              active: routableSet.size > 0 ? routableSet.has(g.id) : true,
+            }));
+            return {
+              status: "ready",
+              providers,
+              groups: catVal.groups,
+              failures: Array.isArray(catVal.failures) ? catVal.failures : [],
+            };
+          }
+        }
+      } catch {
+        // 新版 API 探测失败，继续回退到 0.1.1-rc 旧版 API
+      }
+
+      // 2. 0.1.1-rc 旧版 API 探测（api.llm.providers / api.llm.models）
+      try {
+        const legacyApi = api ?? (ctx?.get?.("connection") ?? ctx?.connection ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("connection") ?? appCtx?.connection) : null))?.api;
+        if (legacyApi?.llm?.providers && legacyApi?.llm?.models) {
+          const [pRes, mRes] = await Promise.allSettled([legacyApi.llm.providers({}), legacyApi.llm.models({})]);
+          const pv = pRes.status === "fulfilled" ? pRes.value?.result?.value : null;
+          const mv = mRes.status === "fulfilled" ? mRes.value?.result?.value : null;
+          if (pv && mv && (Array.isArray(pv.providers) || Array.isArray(mv.groups))) {
+            return {
+              status: "ready",
+              providers: Array.isArray(pv.providers) ? pv.providers : [],
+              groups: Array.isArray(mv.groups) ? mv.groups : [],
+              failures: Array.isArray(mv.failures) ? mv.failures : [],
+            };
+          }
+        }
+      } catch {
+        // 旧版 API 异常，进入服务端 REST 探测
+      }
+
+      // 3. 服务端 REST /api/dsh-graph/spawn-options 兜底获取（后端 ctx.llm 枚举）
+      try {
+        const r = await fetch(graphUrl("/api/dsh-graph/spawn-options"));
+        if (r.ok) {
+          const spawnData = await r.json();
+          if (spawnData && Array.isArray(spawnData.modelGroups) && spawnData.modelGroups.length > 0) {
+            const providers = spawnData.modelGroups.map((g) => ({
+              provider: g.id,
+              displayName: g.name ?? g.id,
+              active: true,
+            }));
+            return {
+              status: "ready",
+              providers,
+              groups: spawnData.modelGroups,
+              failures: [],
+            };
+          }
+        }
+      } catch {
+        // REST 获取失败
+      }
+
+      // 4. 最终降级兜底
+      return { status: "unavailable" };
     }
 
     const GSS = {
@@ -5818,13 +5980,11 @@ window.__ModuleLoader__.load({
         const un = gSettingsScope.subscribe(upd);
         return un;
       }, []);
-      // g-133：挂载时用捕获的 connection.api 并行读取 llm.providers/llm.models（当前 Host 合法目录）。
+      // g-133 / g-215：挂载时读取 llm.providers/llm.models（当前 Host 合法目录）。
       // RPC 缺失/失败时目录状态置 unavailable，页面降级为「提示 + 保留已存值」，不崩溃。
       React.useEffect(() => {
         let alive = true;
-        const api = gConnectionApi;
-        if (!api?.llm?.providers || !api?.llm?.models) { setCatalog({ status: "unavailable" }); return; }
-        loadHostCatalog(api)
+        loadHostCatalog(gConnectionApi, typeof appCtx !== "undefined" ? appCtx : null)
           .then((c) => { if (alive) setCatalog(c); })
           .catch(() => { if (alive) setCatalog({ status: "unavailable" }); });
         return () => { alive = false; };
@@ -6119,7 +6279,7 @@ window.__ModuleLoader__.load({
     }
     return {
       name: "dsh-graph",
-      inject: ["slots", "sessions", "connection"],
+      inject: ["slots", "sessions", "connection", "remote", "modelDirectories"],
       apply(ctx) {
         appCtx = ctx;
         sessionsRt = ctx.sessions ?? null;

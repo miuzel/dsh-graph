@@ -1152,10 +1152,15 @@
         modalGoalOpenTsRef.current = modalGoalData.updated_at;
       }
 
+      // g-216: 判定是否有任何弹窗或抽屉处于打开态
+      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings);
+
       return h(
         "div",
         { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
-           onDragLeave: drag ? (e) => {
+          className: hasModal ? "dg-kanban-root dg-modal-open" : "dg-kanban-root",
+          "data-dsh-graph-kanban": "",
+          onDragLeave: drag ? (e) => {
              // 进入子元素不清除；离开整个看板内容（如进入页面顶部/底部边缘、
              // header/composer 等视口触发区）时只清除悬停落点，不结束整个拖拽——
              // g-173：结束 drag 会让 g-157 自动滚动 effect 立即卸载，边缘自动滚动失效；

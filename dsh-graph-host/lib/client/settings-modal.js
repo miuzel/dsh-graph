@@ -58,13 +58,13 @@
       };
       React.useEffect(() => { load(); }, []);
       // 目录化 select（与 settings.js g-133 同源）：挂载时用同 scope 的 gConnectionApi/loadHostCatalog
-      // 读取当前 Host 的 llm.providers/llm.models 合法目录。RPC 缺失/失败时目录状态置 unavailable，
-      // 降级为「提示 + 保留已存值」，不阻止保存。provider 只列 active 且有模型目录的 provider；
-      // model 按当前 provider 过滤；空项代表继承父会话；未列出的已存旧值保留为固定 option。
+      // 读取当前 Host 的 llm.providers/llm.models 合法目录（g-215 探测链：优先 0.1.2-alpha.2 新版 RPC，回退 0.1.1-rc 旧版）。
+      // RPC 缺失/失败时目录状态置 unavailable，降级为「提示 + 保留已存值」，不阻止保存。
+      // provider 只列 active 且有模型目录的 provider；model 按当前 provider 过滤；
+      // 空项代表继承父会话；未列出的已存旧值保留为固定 option。
       const [catalog, setCatalog] = React.useState({ status: "loading" });
       React.useEffect(() => {
         let alive = true;
-        if (!gConnectionApi?.llm?.providers || !gConnectionApi?.llm?.models) { setCatalog({ status: "unavailable" }); return; }
         loadHostCatalog(gConnectionApi)
           .then((c) => { if (alive) setCatalog(c); })
           .catch(() => { if (alive) setCatalog({ status: "unavailable" }); });
@@ -258,6 +258,11 @@
                   onClick: async (e) => {
                     e.stopPropagation();
                     try {
+                      const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
+                      if (remote?.session?.openWorkspacePath) {
+                        const res = await remote.session.openWorkspacePath({ path: configFile });
+                        if (res?.ok || res?.opened) { showToast("✅ 已打开 project.yaml"); return; }
+                      }
                       const conn = connectionRt ?? appCtx?.get?.("connection");
                       if (conn?.api?.host?.openPath) {
                         const result = await conn.api.host.openPath({ path: configFile });

@@ -555,6 +555,11 @@
                     onClick: async (e) => {
                       e.stopPropagation();
                       try {
+                        const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
+                        if (remote?.session?.openWorkspacePath) {
+                          const res = await remote.session.openWorkspacePath({ path: d.goalFile });
+                          if (res?.ok || res?.opened) { showToast("✅ 已打开 goal.md"); return; }
+                        }
                         const conn = connectionRt ?? appCtx?.get?.("connection");
                         if (conn?.api?.host?.openPath) {
                           const result = await conn.api.host.openPath({ path: d.goalFile });
