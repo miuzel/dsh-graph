@@ -11,10 +11,7 @@
       return h(
         "div",
         { style: S.supervisorBar, className: "dg-supervisor" },
-        h("span", { style: { fontWeight: 600, flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4 }, role: "img", "aria-label": "主管", title: "主管会话" },
-          h("svg", { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, "aria-hidden": "true", focusable: "false" },
-            h("path", { d: "M12 3l2.7 5.5L21 9.4l-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.4l6.3-.9L12 3z" })),
-          "主管"),
+        h("span", { style: { fontWeight: 600, flexShrink: 0 } }, "🧭 主管"),
         h("div", { style: { flex: 1, minWidth: 0 } },
           h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null, statusAt: props.statusAt ?? null })),
         model
