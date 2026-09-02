@@ -299,6 +299,91 @@
       );
     }
 
+
+    // g-190：解绑子代理组件（安全 detach）——确认 + reason + 错误反馈。
+    // 仅目标 owner 界面（goal modal 详情）展示；子代理仍运行（snapshot running）时禁用并提示先受控停止。
+    // 调用 /api/dsh-graph/unbind：goal + attempt（唯一 selector）+ 当前 binding token（CAS）；
+    // 成功回调 onDetached 刷新详情与看板；失败展示服务端 error（409 = token/活跃冲突，400 = 校验/授权）。
+    function UnbindChildBox(props) {
+      const { goalId, attemptId, bindingToken, childId, running, onDetached } = props;
+      const [confirm, setConfirm] = React.useState(false);
+      const [reason, setReason] = React.useState("");
+      const [busy, setBusy] = React.useState(false);
+      const [note, setNote] = React.useState(null);
+      const doUnbind = async () => {
+        setBusy(true);
+        setNote("正在解绑…");
+        try {
+          const body = {
+            goal: goalId,
+            attempt: attemptId,
+            token: bindingToken,
+            reason: reason.trim() || undefined,
+          };
+          const r = await fetch(graphUrl("/api/dsh-graph/unbind"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setNote("✅ 已解绑子代理（绑定已清理，attempt/事件保留可审计）");
+            showToast("✅ 已解绑子代理");
+            setConfirm(false);
+            onDetached?.();
+          } else {
+            setNote("⚠️ 解绑失败：" + (data.error || "未知错误"));
+          }
+        } catch (e) {
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+        setBusy(false);
+      };
+      if (!confirm) {
+        return h(
+          "div",
+          { style: { marginTop: 4, display: "flex", alignItems: "center", gap: 6 } },
+          h("button", {
+            style: { ...S.btnDanger, padding: "2px 8px", fontSize: 11 },
+            className: "dg-btn-danger",
+            onClick: () => { setConfirm(true); setNote(null); },
+            title: "从该目标解绑当前执行子代理（安全 detach：保留 attempt/事件/日志，解绑后可暂缓/转移/重新派发）",
+          }, "🔓 解绑子代理"),
+          note ? h("span", { style: { ...S.meta, fontSize: 11 } }, note) : null,
+        );
+      }
+      return h(
+        "div",
+        { style: { marginTop: 6, padding: "6px 8px", borderRadius: 4, background: "rgba(224,165,58,.08)", border: "1px solid rgba(224,165,58,.3)" } },
+        h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", fontWeight: 600, marginBottom: 4 } },
+          "确认解绑子代理 " + (childId ? String(childId).slice(0, 8) : "") + "？"),
+        h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
+          h("input", {
+            style: { ...S.promptInput, fontSize: 11 },
+            value: reason,
+            placeholder: "解绑原因（可选，记录审计事件）…",
+            onChange: (e) => setReason(e.target.value),
+          }),
+          running
+            ? h("div", { style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } },
+                "⚠️ 子代理仍在运行中——请先受控停止或等待其结束，再解绑")
+            : null,
+          h("div", { style: { display: "flex", gap: 6, marginTop: 2 } },
+            h("button", {
+              style: { ...S.btnDanger, padding: "2px 10px", fontSize: 11 },
+              className: "dg-btn-danger",
+              disabled: busy || running,
+              onClick: doUnbind,
+            }, busy ? "解绑中…" : "确认解绑"),
+            h("button", {
+              style: { ...S.btn, padding: "2px 8px", fontSize: 11 },
+              className: "dg-btn",
+              onClick: () => { setConfirm(false); setNote(null); },
+            }, "取消"))),
+        note ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } }, note) : null,
+      );
+    }
+
     function SessionPanel(props) {
       const collapsible = !!props.collapsible;
       const [open, setOpen] = React.useState(!collapsible);
@@ -358,6 +443,18 @@
             ? h(ReExecBox, { key: "rx", goalId: props.goalId, kind: props.relaunchKind ?? "exec",
                              cardId: props.relaunchCardId, prompt: props.relaunchPrompt,
                              onRelaunched: props.onRelaunched })
+            : null,
+          // g-190：目标执行 attempt 的解绑控件（带 binding token / attemptId / running 状态）
+          props.goalId && props.attemptId && props.bindingToken
+            ? h(UnbindChildBox, {
+                key: "ub",
+                goalId: props.goalId,
+                attemptId: props.attemptId,
+                bindingToken: props.bindingToken,
+                childId: props.childId,
+                running,
+                onDetached: props.onDetached,
+              })
             : null,
           h("div", { key: "r", style: { marginTop: 6 } },
             h("button", {

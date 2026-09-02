@@ -23,6 +23,7 @@ import {
   unarchiveGoal,
   deleteCard,
   postponeGoal,
+  unbindGoalChild,
 } from "./ops.ts";
 
 interface Args {
@@ -195,6 +196,28 @@ function main(): void {
       console.log("ok");
       return;
     }
+    case "unbind-goal-child": {
+      // g-190：CLI 解绑——必须提供当前 binding token 与唯一 selector（attempt | child-id 二选一）；
+      // CLI 无 live registry，pending 绑定默认拒绝（避免遗留假 active），由核心层提示走 GUI/工具。
+      const goal = need(args, "goal");
+      const token = need(args, "token");
+      const attempt = flag(args, "attempt");
+      const childId = flag(args, "child-id");
+      const hasAtt = typeof attempt === "string" && attempt.length > 0;
+      const hasChild = typeof childId === "string" && childId.length > 0;
+      if (hasAtt === hasChild) {
+        throw new GraphError("必须且只能指定 --attempt 或 --child-id 之一");
+      }
+      const result = unbindGoalChild(args.root, goal, {
+        actor,
+        token,
+        attempt: hasAtt ? attempt : null,
+        childId: hasChild ? childId : null,
+        reason: flag(args, "reason") ?? null,
+      });
+      console.log(JSON.stringify(result));
+      return;
+    }
     case "validate": {
       const problems = validate(args.root);
       if (problems.length > 0) {
@@ -216,7 +239,7 @@ function main(): void {
     }
     default:
       throw new GraphError(
-        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|delete-card|start-attempt|report-status|move-goal|amend-goal|archive-goal|unarchive-goal|delete-goal|postpone-goal|validate|rebuild> [flags]",
+        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|delete-card|start-attempt|report-status|move-goal|amend-goal|archive-goal|unarchive-goal|delete-goal|postpone-goal|unbind-goal-child|validate|rebuild> [flags]",
       );
   }
 }

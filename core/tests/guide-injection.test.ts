@@ -139,7 +139,7 @@ test("g-118/g-119：注入不影响 graph_* 工具注册（16 + bind + help + re
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: session-super-1\n");
   const { ctx, registered, sections } = makeMockCtx();
   apply(ctx, { root });
-  assert.equal(registered.length, 28, "g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help + g-141 graph_rename_goal + g-110 archive/unarchive + g-140 delete + g-150 graph_record_attempt_handoff + g-150 范围扩展 graph_set_directive / graph_add_comment + g-128 graph_delete_card + g-158 graph_set_goal_type + g-138 graph_postpone_goal = 28");
+  assert.equal(registered.length, 29, "g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help + g-141 graph_rename_goal + g-110 archive/unarchive + g-140 delete + g-150 graph_record_attempt_handoff + g-150 范围扩展 graph_set_directive / graph_add_comment + g-128 graph_delete_card + g-158 graph_set_goal_type + g-138 graph_postpone_goal + g-190 graph_unbind_goal_child = 29");
   assert.equal(sections.filter((s) => s.name === "dsh-graph-guide-hint").length, 1, "section 只注册一次");
 });
 
