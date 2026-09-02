@@ -2411,7 +2411,7 @@ test("g-223 行为证据：Kanban 版本过滤纯逻辑在 released-only 全隐�
 
 test("g-223 行为契约：hidden-versions-changed 自定义事件非数组/畸形输入安全过滤与降级", () => {
   const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
-  
+
   // 静态契约：onEvent 必须检查 Array.isArray 且过滤非 string
   assert.match(helpers, /const rawHidden = e\?\.detail\?\.hidden;/);
   assert.match(helpers, /if \(Array\.isArray\(rawHidden\)\)/);
@@ -2447,7 +2447,7 @@ test("g-223 行为契约：hidden-versions-changed 自定义事件非数组/畸�
 test("g-223 行为契约：基于 stable version id 绑定与无中间 load 的 delete→same-slug recreate 自动清理", () => {
   const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
   const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
-  
+
   // 静态契约：helpers 提供 parseHiddenVersionEntries 并兼容 string / object 条目
   assert.match(helpers, /function parseHiddenVersionEntries\(raw\)/);
   assert.match(helpers, /idBySlug = new Map/);
@@ -2513,7 +2513,7 @@ test("g-223 行为契约：基于 stable version id 绑定与无中间 load 的 
   }
   const parsedLegacy = testParse(legacyRaw);
   assert.deepEqual(parsedLegacy, [{ slug: "v0.7", id: null }, { slug: "v0.8", id: null }]);
-  
+
   // 步骤 3.1: 首次 load：旧条目无 id（id=null），对账时自动补全当前 version_id（id: v-007, v-008）并触发持久化升级（wasUpdated=true）
   const resLegacy = reconcileHiddenEntries(vList1, parsedLegacy);
   assert.equal(resLegacy.wasUpdated, true, "补全 id 后内容改变，必须触发持久化写回 localStorage");
