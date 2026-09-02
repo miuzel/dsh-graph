@@ -1,55 +1,170 @@
-    // g-129 修复：缓存最近一次成功解析的 workspace——切到子代理会话（不在 workspace 映射、
-    // 无 cwd/parentSessionId 可用）时回退缓存，避免看板读 process.cwd() 空骨架而空白。
-    let lastGoodWorkspace = null;
-    function setLastGoodWorkspace(ws) { if (ws) lastGoodWorkspace = ws; }
-    // g-113 定点 bug 2：workspace 数据源改用 workspaces 服务——sessions 条目 cwd 并非总有
-    // （DSH 源码 dsh-client-runtime/client.js:9233 `...entry.cwd !== void 0 ? { cwd: entry.cwd } : {}`，
-    // aseit-ella 会话条目 cwd 为空），可靠来源是 workspaces 服务：
-    // `workspaces.list.getSnapshot().items` 每条 `{ workspaceId, path, title, sessionIds, ... }`
-    // （host workspaceView：dsh-host-apiproxy lib 793-801；runtime project() 直接透传 items），
-    // path 即该 workspace 目录，`sessionIds.includes(被查看会话)` 即归属映射
-    // （同文件 :9866 `summary.cwd === workspace.path && workspace.sessionIds.includes(summary.id)`）。
-    // 优先级：被查看会话（workspaces）→ 被查看会话（sessions cwd）→ list.current（workspaces）
-    // → list.current（sessions cwd）→ null（裸路径，端点兜底 process.cwd()）。
+    // g-199: workspace identity is security-sensitive. Use only the real
+    // conversation session id and the backend workspace membership mapping.
+    // Never infer it from cwd, title/aria labels, current session, or parent ids.
+    let clientLifecycleCleanup = null;
+    let clientLifecycleGeneration = null;
+    // ===== g-199：左侧会话列表 GRAPH 主管标记 =====
+    // 数据源：/api/dsh-graph/supervisor-session（GET，服务端受保护 workspace 权威）。
+    // 只按真实会话 id 匹配标记（判据 1：普通/子代理/历史/无绑定不误标）；绝不从
+    // cwd/title/aria/current/parent 推断（P0 修复）。标记仅展示，不改变会话行为（判据 2）。
+    // 未知/缺字段隐藏、非敏感降级，不泄露 session token（判据 3）。
+    const SUPERVISOR_BADGE_CLASS = "dg-graph-supervisor-badge";
+    let supervisorSessionId = null;        // 服务端权威 supervisor session id（null = 不标记）
+    let supervisorHasKnown = false;        // 是否拿到过成功响应（首次失败不标记）
+    let supervisorMarkerGeneration = null; // 与 apply 生命周期代绑定
+    let supervisorFetchSeq = 0;            // 防乱序响应覆盖
+    let supervisorObserver = null;
+    let supervisorObserverScheduled = false;
+    let supervisorTimer = null;
+    let supervisorFocusHandler = null;
+    let supervisorVisibilityHandler = null;
+
+    function supervisorBadgeEl() {
+      const span = document.createElement("span");
+      span.className = SUPERVISOR_BADGE_CLASS;
+      span.setAttribute("role", "img");
+      span.setAttribute("aria-label", "GRAPH 主管");
+      span.setAttribute("title", "GRAPH 主管会话（dsh-graph project.yaml supervisor.session）");
+      span.style.cssText = [
+        "display:inline-flex", "align-items:center", "gap:3px",
+        "flex-shrink:0", "font-size:10px", "font-weight:600", "line-height:1",
+        "padding:1px 5px", "border-radius:8px", "margin-right:4px",
+        "color:var(--dsw-alias-state-success-primary,#3aa675)",
+        "background:rgba(58,166,117,0.12)",
+        "border:1px solid rgba(58,166,117,0.35)",
+        "white-space:nowrap", "pointer-events:none", "user-select:none",
+      ].join(";");
+      const svgNS = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(svgNS, "svg");
+      svg.setAttribute("width", "10");
+      svg.setAttribute("height", "10");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "2.2");
+      svg.setAttribute("stroke-linejoin", "round");
+      svg.setAttribute("aria-hidden", "true");
+      svg.setAttribute("focusable", "false");
+      const path = document.createElementNS(svgNS, "path");
+      path.setAttribute("d", "M12 3l2.7 5.5L21 9.4l-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.4l6.3-.9L12 3z");
+      svg.appendChild(path);
+      span.appendChild(svg);
+      const label = document.createElement("span");
+      label.textContent = "GRAPH主管";
+      span.appendChild(label);
+      return span;
+    }
+
+    // 只认真实 id 数据属性（data-session-id / data-sessionid）；无真实 id 的行绝不标记。
+    function supervisorRowId(row) {
+      if (!row || row.nodeType !== 1) return null;
+      const id = row.dataset?.sessionId ?? row.dataset?.sessionid ?? null;
+      return typeof id === "string" && id ? id : null;
+    }
+
+    function applySupervisorMarker() {
+      if (supervisorMarkerGeneration !== clientLifecycleGeneration) return;
+      let rows = [];
+      try {
+        rows = Array.from(document.querySelectorAll("[data-session-id], [data-sessionid]"));
+      } catch { return; }
+      const markId = supervisorHasKnown ? supervisorSessionId : null;
+      for (const row of rows) {
+        const id = supervisorRowId(row);
+        if (!id) continue; // fail-closed：无真实 id 不标记
+        let badge = null;
+        try { badge = row.querySelector("." + SUPERVISOR_BADGE_CLASS); } catch { badge = null; }
+        const should = markId !== null && id === markId;
+        if (should && !badge) {
+          try { row.prepend(supervisorBadgeEl()); } catch { /* 静默 */ }
+        } else if (!should && badge) {
+          try { badge.remove(); } catch { /* 静默 */ }
+        }
+      }
+    }
+
+    // 端点拒绝 workspace/root 查询参数（400），必须裸路径 GET；响应只含 supervisorSession。
+    function fetchSupervisorSession() {
+      const seq = ++supervisorFetchSeq;
+      fetch("/api/dsh-graph/supervisor-session", {
+        method: "GET",
+        headers: { accept: "application/json" },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (seq !== supervisorFetchSeq) return; // 乱序响应丢弃
+          supervisorHasKnown = true;
+          const id = data && typeof data.supervisorSession === "string" && data.supervisorSession
+            ? data.supervisorSession : null;
+          if (id !== supervisorSessionId) {
+            supervisorSessionId = id;
+            applySupervisorMarker();
+          }
+        })
+        .catch(() => {
+          // 网络/解析失败：保留上次已知值（轮询/重连后恢复）；从未成功则不标记。
+        });
+    }
+
+    function startSupervisorMarker() {
+      cleanupSupervisorMarker();
+      supervisorMarkerGeneration = clientLifecycleGeneration;
+      supervisorSessionId = null;
+      supervisorHasKnown = false;
+      fetchSupervisorSession();
+      // 列表挂载/分页/虚拟化：MutationObserver（防抖）+ 周期重应用兜底。
+      try {
+        supervisorObserver = new MutationObserver(() => {
+          if (supervisorObserverScheduled) return;
+          supervisorObserverScheduled = true;
+          setTimeout(() => {
+            supervisorObserverScheduled = false;
+            applySupervisorMarker();
+          }, 120);
+        });
+        supervisorObserver.observe(document.body, { childList: true, subtree: true });
+      } catch { supervisorObserver = null; }
+      supervisorTimer = setInterval(() => {
+        applySupervisorMarker();
+        fetchSupervisorSession();
+      }, 30000);
+      // 网络重连/回前台：重取（连接服务 API 不稳定，用 focus/visibility 兜底 + 轮询）。
+      supervisorFocusHandler = () => fetchSupervisorSession();
+      supervisorVisibilityHandler = () => {
+        if (document.visibilityState === "visible") fetchSupervisorSession();
+      };
+      window.addEventListener("focus", supervisorFocusHandler);
+      document.addEventListener("visibilitychange", supervisorVisibilityHandler);
+    }
+
+    function cleanupSupervisorMarker() {
+      supervisorMarkerGeneration = null;
+      if (supervisorTimer) { clearInterval(supervisorTimer); supervisorTimer = null; }
+      if (supervisorObserver) {
+        try { supervisorObserver.disconnect(); } catch { /* 静默 */ }
+        supervisorObserver = null;
+      }
+      if (supervisorFocusHandler) {
+        try { window.removeEventListener("focus", supervisorFocusHandler); } catch { /* 静默 */ }
+        supervisorFocusHandler = null;
+      }
+      if (supervisorVisibilityHandler) {
+        try { document.removeEventListener("visibilitychange", supervisorVisibilityHandler); } catch { /* 静默 */ }
+        supervisorVisibilityHandler = null;
+      }
+      try {
+        document.querySelectorAll("." + SUPERVISOR_BADGE_CLASS).forEach((b) => b.remove());
+      } catch { /* 静默 */ }
+    }
     function currentWorkspace() {
       try {
         const wsItems = workspacesRt?.list?.getSnapshot?.()?.items
           ?? appCtx?.get?.("workspaces")?.list?.getSnapshot?.()?.items ?? [];
-        const wsOf = (sid) => wsItems.find?.((w) => w.sessionIds.includes(sid));
-        const rt = sessionsRt ?? appCtx?.get?.("sessions");
-        const snap = rt?.list?.getSnapshot?.();
-        const items = snap?.items ?? [];
-        if (viewedSessionId) {
-          const w = wsOf(viewedSessionId);
-          if (w?.path) { setLastGoodWorkspace(w.path); return w.path };
-          const viewed = items.find?.((s) => s.sessionId === viewedSessionId);
-          if (viewed?.cwd) { setLastGoodWorkspace(viewed.cwd); return viewed.cwd };
-          // g-129 修复（负责人 2026-08-22）：子代理会话不在 workspace 映射且无 cwd 时，
-          // 沿 parentSessionId 链回溯父会话的 workspace（子代理继承父会话 workspace）
-          if (viewed?.parentSessionId) {
-            const parent = items.find?.((s) => s.sessionId === viewed.parentSessionId);
-            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd };
-            const pw = wsOf(viewed.parentSessionId);
-            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path };
-          }
-        }
-        const current = snap?.current;
-        if (current) {
-          const w = wsOf(current);
-          if (w?.path) { setLastGoodWorkspace(w.path); return w.path };
-          const item = items.find?.((s) => s.sessionId === current);
-          if (item?.cwd) { setLastGoodWorkspace(item.cwd); return item.cwd };
-          // g-129 修复：current 是子代理时回溯父会话 workspace
-          if (item?.parentSessionId) {
-            const parent = items.find?.((s) => s.sessionId === item.parentSessionId);
-            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd };
-            const pw = wsOf(item.parentSessionId);
-            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path };
-          }
-        }
-        if (lastGoodWorkspace) return lastGoodWorkspace;
-        return null;
-      } catch { if (lastGoodWorkspace) return lastGoodWorkspace; return null; }
+        if (!viewedSessionId || typeof viewedSessionId !== "string") return null;
+        const workspace = wsItems.find?.((w) =>
+          Array.isArray(w?.sessionIds) && w.sessionIds.includes(viewedSessionId));
+        return typeof workspace?.path === "string" && workspace.path ? workspace.path : null;
+      } catch { return null; }
     }
     // 给 /api/dsh-graph* 请求统一追加 ?workspace=（GET/POST 通用；已知则带，未知则裸路径）
     function graphUrl(path, extraParams = {}) {
@@ -107,8 +222,26 @@
     }
     return {
       name: "dsh-graph",
-      inject: ["slots", "sessions", "connection", "remote", "modelDirectories"],
+      inject: ["slots", "sessions", "connection"],
       apply(ctx) {
+        clientLifecycleCleanup?.();
+        const generation = {};
+        clientLifecycleGeneration = generation;
+        clientLifecycleCleanup = () => {
+          if (clientLifecycleGeneration !== generation) return;
+          appCtx = null;
+          sessionsRt = null;
+          workspacesRt = null;
+          connectionRt = null;
+          if (viewedSessionOwner == null) viewedSessionId = null;
+          cleanupSupervisorMarker();
+          clientLifecycleGeneration = null;
+          clientLifecycleCleanup = null;
+        };
+        // Cordis owns the lifecycle; repeated plugin reloads cannot retain the
+        // old runtime references or attach duplicate UI state.
+        const cleanupForGeneration = clientLifecycleCleanup;
+        ctx.effect?.(() => cleanupForGeneration);
         appCtx = ctx;
         sessionsRt = ctx.sessions ?? null;
         connectionRt = ctx.connection ?? null;
@@ -124,6 +257,8 @@
         // g-133：注册「看板设置」settings.section 页（profile 级全局默认配置）。
         // settingsScope 缺失 / slots 未就绪时整页降级，不影响看板与工具。
         try { registerGraphSettingsSection(ctx); } catch { /* 静默 */ }
+        // g-199：启动左侧会话列表主管标记（幂等：重复 apply 先清理旧实例）。
+        startSupervisorMarker();
         console.log("[dsh-graph-host] client apply: kanban view registered");
       },
     };
