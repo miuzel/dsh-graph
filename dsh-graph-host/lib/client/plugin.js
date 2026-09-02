@@ -1,69 +1,60 @@
-    // g-129 修复：缓存最近一次成功解析的 workspace——切到子代理会话（不在 workspace 映射、
-    // 无 cwd/parentSessionId 可用）时回退缓存，避免看板读 process.cwd() 空骨架而空白。
+    // g-223：按 sessionId 解析 workspace；无法验证时必须 fail closed，绝不跨会话复用缓存。
     let lastGoodWorkspace = null;
-    function setLastGoodWorkspace(ws) { if (ws) lastGoodWorkspace = ws; }
-    // g-113 定点 bug 2：workspace 数据源改用 workspaces 服务——sessions 条目 cwd 并非总有
-    // （DSH 源码 dsh-client-runtime/client.js:9233 `...entry.cwd !== void 0 ? { cwd: entry.cwd } : {}`，
-    // aseit-ella 会话条目 cwd 为空），可靠来源是 workspaces 服务：
-    // `workspaces.list.getSnapshot().items` 每条 `{ workspaceId, path, title, sessionIds, ... }`
-    // （host workspaceView：dsh-host-apiproxy lib 793-801；runtime project() 直接透传 items），
-    // path 即该 workspace 目录，`sessionIds.includes(被查看会话)` 即归属映射
-    // （同文件 :9866 `summary.cwd === workspace.path && workspace.sessionIds.includes(summary.id)`）。
-    // g-223：纯函数按 sessionId 解析归属 workspace（供 render/effect 阶段直接调用，避免会话切换时序缺陷）
-    // 优先级：指定 sessionId（workspaces 映射）→ sessionId（sessions cwd）→ sessionId（parent 回溯 cwd/workspaces）
-    // → list.current（workspaces）→ list.current（cwd）→ list.current（parent 回溯）→ lastGoodWorkspace 兜底
+    function setLastGoodWorkspace(ws) { if (typeof ws === "string" && ws) lastGoodWorkspace = ws; }
+    // wsOf(sid) remains the explicit workspace-membership check; viewed?.parentSessionId is walked safely.
     function resolveWorkspaceOfSession(sessionId) {
       try {
-        const wsItems = workspacesRt?.list?.getSnapshot?.()?.items
-          ?? appCtx?.get?.("workspaces")?.list?.getSnapshot?.()?.items ?? [];
-        const wsOf = (sid) => wsItems.find?.((w) => Array.isArray(w?.sessionIds) && w.sessionIds.includes(sid));
+        const rawWsItems = workspacesRt?.list?.getSnapshot?.()?.items
+          ?? appCtx?.get?.("workspaces")?.list?.getSnapshot?.()?.items;
+        const wsItems = Array.isArray(rawWsItems) ? rawWsItems : [];
+        const wsOf = (sid) => wsItems.find((w) => Array.isArray(w?.sessionIds)
+          && w.sessionIds.includes(sid) && typeof w.path === "string" && w.path);
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
-        const snap = rt?.list?.getSnapshot?.();
-        const items = snap?.items ?? [];
+        const snap = rt?.list?.getSnapshot?.() ?? {};
+        const items = Array.isArray(snap.items) ? snap.items : [];
+        const byId = (sid) => items.find((s) => s && s.sessionId === sid);
+        const pathOf = (sid) => {
+          const seen = new Set();
+          let current = sid;
+          while (current && !seen.has(current)) {
+            seen.add(current);
+            const mapped = wsOf(current);
+            if (mapped?.path) return mapped.path;
+            const item = byId(current);
+            if (typeof item?.cwd === "string" && item.cwd) return item.cwd;
+            current = typeof item?.parentSessionId === "string" ? item.parentSessionId : null;
+          }
+          return null;
+        };
         const sid = sessionId ?? viewedSessionId;
+        // Any supplied/viewed session is an isolation boundary: no current/cache fallback.
         if (sid) {
-          const w = wsOf(sid);
-          if (w?.path) { setLastGoodWorkspace(w.path); return w.path; }
-          const viewed = items.find?.((s) => s.sessionId === sid);
-          if (viewed?.cwd) { setLastGoodWorkspace(viewed.cwd); return viewed.cwd; }
-          if (viewed?.parentSessionId) {
-            const parent = items.find?.((s) => s.sessionId === viewed.parentSessionId);
-            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd; }
-            const pw = wsOf(viewed.parentSessionId);
-            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path; }
-          }
+          const resolved = pathOf(sid);
+          if (resolved) { setLastGoodWorkspace(resolved); return resolved; }
+          return null;
         }
-        const current = snap?.current;
-        if (current) {
-          const w = wsOf(current);
-          if (w?.path) { setLastGoodWorkspace(w.path); return w.path; }
-          const item = items.find?.((s) => s.sessionId === current);
-          if (item?.cwd) { setLastGoodWorkspace(item.cwd); return item.cwd; }
-          if (item?.parentSessionId) {
-            const parent = items.find?.((s) => s.sessionId === item.parentSessionId);
-            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd; }
-            const pw = wsOf(item.parentSessionId);
-            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path; }
-          }
-        }
-        if (lastGoodWorkspace) return lastGoodWorkspace;
+        // With no session selected, only the runtime's current session is eligible.
+        const current = typeof snap.current === "string" ? snap.current : null;
+        const resolved = current ? pathOf(current) : null;
+        if (resolved) { setLastGoodWorkspace(resolved); return resolved; }
         return null;
-      } catch { if (lastGoodWorkspace) return lastGoodWorkspace; return null; }
+      } catch { return null; }
     }
 
     function currentWorkspace() {
       return resolveWorkspaceOfSession(viewedSessionId);
     }
 
-    // 给 /api/dsh-graph* 请求统一追加 ?workspace=（GET/POST 通用；已知则带，未知则裸路径；可选显式传入 workspace）
+    // 给 /api/dsh-graph* 请求统一追加 ?workspace=；未知 workspace 时由调用方 fail closed。
     function graphUrl(path, extraParams = {}, explicitWs = null) {
       const p = new URLSearchParams(extraParams);
       const ws = explicitWs ?? currentWorkspace();
-      if (ws) p.set("workspace", ws);
+      if (!ws) return null;
+      p.set("workspace", ws);
       const qs = p.toString();
-      if (!qs) return path;
       return path + (path.includes("?") ? "&" : "?") + qs;
     }
+
     // 跳转后把会话页切回「对话」tab：chat 是 conversation.view 中 order=0 的固定首 tab；
     // tab 选中态存在 ui-conversation 的 per-session chatStore 内、无跨插件 API（源码核实），
     // 故在跳转后点一下首 tab（仅当当前选中不是它）。无 tab 栏（单视图）时不动。
