@@ -1353,40 +1353,20 @@ window.__ModuleLoader__.load({
       return null;
     }
 
-    // 完整实时面板（抽屉/详情用）：实时条 + 模型 + 直达指令 + 最近记录。
+    // 当前模型来自 sessions.binding(sessionId).session 的 modelSelection 投影。
+    // 旧版 api.sessions.models 已从 Host 移除；缺少该 API 时不能保持“查询中”假状态。
     function useSessionModel(sessionId, parentId) {
-      const [model, setModel] = React.useState(null); // {provider, model, fromParent}
-      const [modelErr, setModelErr] = React.useState(null);
-      React.useEffect(() => {
-        if (!sessionId) return;
-        let alive = true;
-        const load = async () => {
-          try {
-            if (connectionRt?.api?.sessions?.models) {
-              const r = await connectionRt.api.sessions.models({ sessionId });
-              if (!alive) return;
-              if (r?.result?.ok) {
-                setModel({ ...(r.result.value.current ?? {}), fromParent: false });
-                setModelErr(null);
-                return;
-              } else {
-                setModel(null);
-                setModelErr(r?.result?.error?.message ?? "查询失败");
-                return;
-              }
-            }
-            if (!alive) return;
-            setModel(null);
-            setModelErr(null);
-          } catch (e) {
-            if (alive) { setModel(null); setModelErr(String(e?.message ?? e)); }
-          }
-        };
-        load();
-        const t = setInterval(load, 30000);
-        return () => { alive = false; clearInterval(t); };
-      }, [sessionId, parentId]);
-      return { model, modelErr };
+      const binding = React.useMemo(() => {
+        if (!sessionsRt || !sessionId) return null;
+        try { return sessionsRt.binding(sessionId) ?? null; }
+        catch { return null; }
+      }, [sessionId]);
+      const selection = useProjectionValue(binding?.session ?? null, "modelSelection");
+      const current = selection?.next ?? selection?.lastUsed ?? null;
+      return {
+        model: current ? { provider: current.provider, model: current.model } : null,
+        modelErr: selection === undefined ? "模型信息不可用" : null,
+      };
     }
 
     // 完整实时面板（抽屉/详情用）：实时条 + 模型 + 直达指令 + 最近记录。
