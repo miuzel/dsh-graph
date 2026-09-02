@@ -243,7 +243,7 @@
       return enabled;
     }
 
-    // ===== g-223：版本显隐过滤（localStorage 持久化存储 hidden_version_slugs 数组）=====
+    // ===== g-223：版本显隐过滤（localStorage 持久化存储 hidden_versions 条目/slug 数组）=====
     const HIDDEN_VERSIONS_KEY_PREFIX = "dsh-graph.hidden-versions.";
 
     function getHiddenVersionsStorageKey(workspace) {
@@ -251,25 +251,76 @@
       return HIDDEN_VERSIONS_KEY_PREFIX + ws;
     }
 
-    function getHiddenVersionSlugs(workspace) {
+    function parseHiddenVersionEntries(raw) {
       try {
-        const raw = localStorage.getItem(getHiddenVersionsStorageKey(workspace));
         if (!raw) return [];
         const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+          .map((item) => {
+            if (typeof item === "string") return { slug: item, id: null };
+            if (item && typeof item === "object" && typeof item.slug === "string") {
+              return { slug: item.slug, id: typeof item.id === "string" ? item.id : null };
+            }
+            return null;
+          })
+          .filter(Boolean);
       } catch {
         return [];
       }
     }
 
-    function setHiddenVersionSlugs(slugs, workspace) {
-      const ws = workspace ?? (currentWorkspace() || "default");
-      const list = Array.isArray(slugs) ? [...new Set(slugs.filter((s) => typeof s === "string"))] : [];
+    function getHiddenVersionEntries(workspace) {
       try {
-        localStorage.setItem(getHiddenVersionsStorageKey(ws), JSON.stringify(list));
+        const raw = localStorage.getItem(getHiddenVersionsStorageKey(workspace));
+        return parseHiddenVersionEntries(raw);
+      } catch {
+        return [];
+      }
+    }
+
+    function getHiddenVersionSlugs(workspace) {
+      try {
+        const entries = getHiddenVersionEntries(workspace);
+        return [...new Set(entries.map((e) => e.slug))];
+      } catch {
+        return [];
+      }
+    }
+
+    function setHiddenVersionSlugs(slugsOrEntries, workspace, versions) {
+      const ws = workspace ?? (currentWorkspace() || "default");
+      let entries = [];
+      if (Array.isArray(slugsOrEntries)) {
+        const vList = Array.isArray(versions) ? versions : [];
+        const idBySlug = new Map(vList.filter((v) => v?.slug && v?.id).map((v) => [v.slug, v.id]));
+        entries = slugsOrEntries
+          .map((item) => {
+            if (typeof item === "string") {
+              return { slug: item, id: idBySlug.get(item) ?? null };
+            }
+            if (item && typeof item === "object" && typeof item.slug === "string") {
+              return { slug: item.slug, id: item.id ?? idBySlug.get(item.slug) ?? null };
+            }
+            return null;
+          })
+          .filter(Boolean);
+      }
+      // 按 slug 去重
+      const seen = new Set();
+      const deduped = [];
+      for (const entry of entries) {
+        if (!seen.has(entry.slug)) {
+          seen.add(entry.slug);
+          deduped.push(entry);
+        }
+      }
+      const slugList = deduped.map((e) => e.slug);
+      try {
+        localStorage.setItem(getHiddenVersionsStorageKey(ws), JSON.stringify(deduped));
       } catch {}
-      window.dispatchEvent(new CustomEvent("dsh-graph.hidden-versions-changed", { detail: { workspace: ws, hidden: list } }));
-      return list;
+      window.dispatchEvent(new CustomEvent("dsh-graph.hidden-versions-changed", { detail: { workspace: ws, hidden: slugList, entries: deduped } }));
+      return slugList;
     }
 
     function useHiddenVersionSlugs(workspace) {
@@ -305,8 +356,8 @@
         };
       }, [currentWs]);
 
-      const setter = React.useCallback((slugs) => {
-        return setHiddenVersionSlugs(slugs, currentWs);
+      const setter = React.useCallback((slugsOrEntries, versions) => {
+        return setHiddenVersionSlugs(slugsOrEntries, currentWs, versions);
       }, [currentWs]);
 
       return [hidden, setter];

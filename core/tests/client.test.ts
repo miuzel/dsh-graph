@@ -2444,47 +2444,77 @@ test("g-223 行为契约：hidden-versions-changed 自定义事件非数组/畸�
   assert.deepEqual(handleHiddenEvent({ workspace: "ws-1", hidden: undefined }, "ws-1", fallback), ["v0.1"]);
 });
 
-test("g-223 行为契约：版本加载与变更时自动清理不存在的 stale hidden slug（确保删除后同 slug 新建默认显示）", () => {
+test("g-223 行为契约：基于 stable version id 绑定与无中间 load 的 delete→same-slug recreate 自动清理", () => {
   const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
   
-  // 静态契约：kanban 加载时从 data.versions 提取 validSlugs 过滤 stale hidden
-  assert.match(kanban, /const validSlugs = new Set\(data\.versions\.map\(\(v\) => v\.slug\)\);/);
-  assert.match(kanban, /const cleaned = currentHidden\.filter\(\(s\) => validSlugs\.has\(s\)\);/);
-  assert.match(kanban, /if \(cleaned\.length !== currentHidden\.length\)/);
-  assert.match(kanban, /setHiddenVersionSlugs\(cleaned\);/);
+  // 静态契约：helpers 提供 parseHiddenVersionEntries 并兼容 string / object 条目
+  assert.match(helpers, /function parseHiddenVersionEntries\(raw\)/);
+  assert.match(helpers, /idBySlug = new Map/);
 
-  // 纯逻辑行为模拟测试
-  function reconcileHiddenSlugs(versions: { slug: string; id?: string }[], storedHidden: string[]): { cleaned: string[]; wasUpdated: boolean } {
-    const validSlugs = new Set(versions.map((v) => v.slug));
-    const cleaned = storedHidden.filter((s) => validSlugs.has(s));
+  // 静态契约：kanban 加载时基于 version.id 与 slug 对账清理
+  assert.match(kanban, /const versionMap = new Map\(data\.versions\.map\(\(v\) => \[v\.slug, v\]\)\);/);
+  assert.match(kanban, /if \(e\.id && ver\.id && e\.id !== ver\.id\) return false;/);
+  assert.match(kanban, /setHiddenVersionSlugs\(cleanedEntries, activeWs, data\.versions\);/);
+
+  // 纯逻辑行为模拟测试：支持 { slug, id } 偏好与 versions 对账
+  type HiddenEntry = { slug: string; id: string | null };
+  type VersionItem = { slug: string; id: string | null };
+
+  function reconcileHiddenEntries(versions: VersionItem[], storedEntries: HiddenEntry[]): { cleaned: HiddenEntry[]; hiddenSlugs: string[]; wasUpdated: boolean } {
+    const versionMap = new Map(versions.map((v) => [v.slug, v]));
+    const cleaned = storedEntries.filter((e) => {
+      const ver = versionMap.get(e.slug);
+      if (!ver) return false; // slug 不存在，清理
+      if (e.id && ver.id && e.id !== ver.id) return false; // 同 slug 但 version_id 变了（delete+recreate），清理
+      return true;
+    }).map((e) => ({ slug: e.slug, id: versionMap.get(e.slug)?.id ?? e.id ?? null }));
+
     return {
       cleaned,
-      wasUpdated: cleaned.length !== storedHidden.length,
+      hiddenSlugs: [...new Set(cleaned.map((e) => e.slug))],
+      wasUpdated: cleaned.length !== storedEntries.length,
     };
   }
 
-  // 场景 1：v0.7 被用户隐藏，随后 v0.7 被删除；看板重新加载时自动将 v0.7 从 hidden 中清理
-  const versionsBefore = [{ slug: "v0.7" }, { slug: "v0.8" }];
-  const storedHidden1 = ["v0.7"]; // 用户隐藏了 v0.7
-  const versionsAfterDelete = [{ slug: "v0.8" }]; // 删除 v0.7 后
-  const step1 = reconcileHiddenSlugs(versionsAfterDelete, storedHidden1);
-  assert.equal(step1.wasUpdated, true, "应触发清理");
-  assert.deepEqual(step1.cleaned, [], "不存在的 v0.7 被清理出 hidden 列表");
+  // 场景 1：普通删除：v0.7 (id: v-007) 被隐藏，删除 v0.7 后 load，自动清理
+  const vList1: VersionItem[] = [{ slug: "v0.7", id: "v-007" }, { slug: "v0.8", id: "v-008" }];
+  const stored1: HiddenEntry[] = [{ slug: "v0.7", id: "v-007" }];
+  const vListAfterDelete: VersionItem[] = [{ slug: "v0.8", id: "v-008" }];
+  const res1 = reconcileHiddenEntries(vListAfterDelete, stored1);
+  assert.equal(res1.wasUpdated, true);
+  assert.deepEqual(res1.cleaned, []);
+  assert.deepEqual(res1.hiddenSlugs, []);
 
-  // 场景 2：删除后重新创建一个相同 slug "v0.7"，由于 hidden 列表已被清理，新建版本默认显示（未在 hidden 中）
-  const versionsAfterRecreate = [{ slug: "v0.7" }, { slug: "v0.8" }];
-  const step2 = reconcileHiddenSlugs(versionsAfterRecreate, step1.cleaned);
-  assert.equal(step2.wasUpdated, false);
-  assert.deepEqual(step2.cleaned, []);
-  const isV07Hidden = step2.cleaned.includes("v0.7");
-  assert.equal(isV07Hidden, false, "重新创建的同名 slug 默认显示（不继承旧隐藏偏好）");
+  // 场景 2：直接 delete→same-slug recreate（无中间 load 对账）！
+  // 旧版本 v0.7 (id: v-007) 被隐藏；用户在外部或直接删了 v-007 并立刻新建了同名 v0.7 (id: v-009)
+  // 首次 load 时，虽然 slug 相同都为 "v0.7"，但 version_id 由 v-007 变为 v-009，旧隐藏必须被清理！
+  const storedOld: HiddenEntry[] = [{ slug: "v0.7", id: "v-007" }];
+  const vListRecreated: VersionItem[] = [{ slug: "v0.7", id: "v-009" }, { slug: "v0.8", id: "v-008" }];
+  const res2 = reconcileHiddenEntries(vListRecreated, storedOld);
+  assert.equal(res2.wasUpdated, true, "version_id 不匹配时必须判定为更新并清理");
+  assert.deepEqual(res2.cleaned, [], "同 slug 但不同 id 的旧隐藏偏好被安全清理");
+  assert.equal(res2.hiddenSlugs.includes("v0.7"), false, "新建的同名版本 v0.7 默认显示！");
 
-  // 场景 3：重命名版本（如 v0.7 重命名为 v0.7.1），旧 slug "v0.7" 自动从 hidden 中清理
-  const storedHidden3 = ["v0.7", "v0.8"];
-  const versionsAfterRename = [{ slug: "v0.7.1" }, { slug: "v0.8" }];
-  const step3 = reconcileHiddenSlugs(versionsAfterRename, storedHidden3);
-  assert.equal(step3.wasUpdated, true);
-  assert.deepEqual(step3.cleaned, ["v0.8"], "仅保留当前依然存在的版本 v0.8，旧 slug v0.7 被清理");
+  // 场景 3：历史旧数据（纯字符串数组无 id）兼容升级
+  const legacyRaw = JSON.stringify(["v0.7", "v0.8"]);
+  const helpersModule = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  // 模拟 parseHiddenVersionEntries 逻辑
+  function testParse(raw: string): HiddenEntry[] {
+    const parsed = JSON.parse(raw);
+    return parsed.map((item: any) => {
+      if (typeof item === "string") return { slug: item, id: null };
+      if (item && typeof item === "object" && typeof item.slug === "string") return { slug: item.slug, id: item.id ?? null };
+      return null;
+    }).filter(Boolean);
+  }
+  const parsedLegacy = testParse(legacyRaw);
+  assert.deepEqual(parsedLegacy, [{ slug: "v0.7", id: null }, { slug: "v0.8", id: null }]);
+  // 当与当前存在 versions 对账时，无 id 的旧条目自动绑定当前 version_id 且不误删
+  const resLegacy = reconcileHiddenEntries(vList1, parsedLegacy);
+  assert.equal(resLegacy.wasUpdated, false, "依然存在的旧版本不被误删");
+  assert.deepEqual(resLegacy.cleaned, [{ slug: "v0.7", id: "v-007" }, { slug: "v0.8", id: "v-008" }], "自动补充绑定当前 version.id");
+  assert.deepEqual(resLegacy.hiddenSlugs, ["v0.7", "v0.8"]);
 });
 
 
