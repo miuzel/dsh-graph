@@ -2255,7 +2255,7 @@ test("g-223 源契约：goal-modal.js 包含隐藏版本友好提示与恢复显
   assert.match(modal, /恢复显示该版本/);
 });
 
-test("g-223 VersionDrawer 组件逻辑与交互契约验证", () => {
+test("g-223 VersionDrawer 组件逻辑与交互及 a11y 可访问性契约验证", () => {
   const vDrawer = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/version-drawer.js"), "utf8");
   assert.match(vDrawer, /function VersionDrawer\(props\)/);
   assert.match(vDrawer, /"显示全部"/);
@@ -2263,6 +2263,14 @@ test("g-223 VersionDrawer 组件逻辑与交互契约验证", () => {
   assert.match(vDrawer, /"隐藏全部"/);
   assert.match(vDrawer, /onToggleVersion/);
   assert.match(vDrawer, /onOpenVersionDetail/);
+
+  // a11y 可访问性验证
+  assert.match(vDrawer, /role:\s*"dialog"/);
+  assert.match(vDrawer, /"aria-modal":\s*"true"/);
+  assert.match(vDrawer, /"aria-labelledby":\s*"dg-version-drawer-title"/);
+  assert.match(vDrawer, /id:\s*"dg-version-drawer-title"/);
+  assert.match(vDrawer, /h\("button",\s*\{[\s\S]*?type:\s*"button"[\s\S]*?"aria-label":\s*"关闭版本管理抽屉"[\s\S]*?onClick:\s*onClose/);
+  assert.match(vDrawer, /"aria-label":\s*"搜索版本名称或 slug"/);
 });
 
 test("g-223 纯函数 resolveWorkspaceOfSession 与动态会话切换行为契约", () => {
@@ -2399,6 +2407,125 @@ test("g-223 行为证据：Kanban 版本过滤纯逻辑在 released-only 全隐�
   const res5 = evaluateVersionFilter(mixed, []);
   assert.equal(res5.visibleVersionsCount, 2);
   assert.equal(res5.shouldShowEmptyState, false, "有可见版本时不显示空态");
+});
+
+test("g-223 行为契约：hidden-versions-changed 自定义事件非数组/畸形输入安全过滤与降级", () => {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+
+  // 静态契约：onEvent 必须检查 Array.isArray 且过滤非 string
+  assert.match(helpers, /const rawHidden = e\?\.detail\?\.hidden;/);
+  assert.match(helpers, /if \(Array\.isArray\(rawHidden\)\)/);
+  assert.match(helpers, /rawHidden\.filter\(\(s\) => typeof s === "string"\)/);
+
+  // 纯逻辑行为测试：模拟各类事件输入
+  function handleHiddenEvent(detail: any, currentWs: string, fallbackGetter: () => string[]) {
+    const evWs = detail?.workspace;
+    if (!evWs || evWs === currentWs) {
+      const rawHidden = detail?.hidden;
+      if (Array.isArray(rawHidden)) {
+        return rawHidden.filter((s) => typeof s === "string");
+      } else {
+        return fallbackGetter();
+      }
+    }
+    return null; // 跨工作区忽略
+  }
+
+  const fallback = () => ["v0.1"];
+
+  // 1. 正常字符串数组
+  assert.deepEqual(handleHiddenEvent({ workspace: "ws-1", hidden: ["v0.2", "v0.3"] }, "ws-1", fallback), ["v0.2", "v0.3"]);
+  // 2. 混合非字符串类型过滤
+  assert.deepEqual(handleHiddenEvent({ workspace: "ws-1", hidden: ["v0.2", 123, null, { slug: "v0.4" }] }, "ws-1", fallback), ["v0.2"]);
+  // 3. 畸形 object / null / undefined / boolean 安全降级到 fallback
+  assert.deepEqual(handleHiddenEvent({ workspace: "ws-1", hidden: { some: "object" } }, "ws-1", fallback), ["v0.1"]);
+  assert.deepEqual(handleHiddenEvent({ workspace: "ws-1", hidden: "invalid-string" }, "ws-1", fallback), ["v0.1"]);
+  assert.deepEqual(handleHiddenEvent({ workspace: "ws-1", hidden: null }, "ws-1", fallback), ["v0.1"]);
+  assert.deepEqual(handleHiddenEvent({ workspace: "ws-1", hidden: undefined }, "ws-1", fallback), ["v0.1"]);
+});
+
+test("g-223 行为契约：基于 stable version id 绑定与无中间 load 的 delete→same-slug recreate 自动清理", () => {
+  const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+
+  // 静态契约：helpers 提供 parseHiddenVersionEntries 并兼容 string / object 条目
+  assert.match(helpers, /function parseHiddenVersionEntries\(raw\)/);
+  assert.match(helpers, /idBySlug = new Map/);
+
+  // 静态契约：kanban 加载时基于 version.id 与 slug 对账清理
+  assert.match(kanban, /const versionMap = new Map\(data\.versions\.map\(\(v\) => \[v\.slug, v\]\)\);/);
+  assert.match(kanban, /if \(e\.id && ver\.id && e\.id !== ver\.id\) return false;/);
+  assert.match(kanban, /const isDifferent = cleanedEntries\.length !== entries\.length \|\|/);
+  assert.match(kanban, /setHiddenVersionSlugs\(cleanedEntries, data\.versions\);/);
+
+  // 纯逻辑行为模拟测试：支持 { slug, id } 偏好与 versions 对账
+  type HiddenEntry = { slug: string; id: string | null };
+  type VersionItem = { slug: string; id: string | null };
+
+  function reconcileHiddenEntries(versions: VersionItem[], storedEntries: HiddenEntry[]): { cleaned: HiddenEntry[]; hiddenSlugs: string[]; wasUpdated: boolean } {
+    const versionMap = new Map(versions.map((v) => [v.slug, v]));
+    const cleaned = storedEntries.filter((e) => {
+      const ver = versionMap.get(e.slug);
+      if (!ver) return false; // slug 不存在，清理
+      if (e.id && ver.id && e.id !== ver.id) return false; // 同 slug 但 version_id 变了（delete+recreate），清理
+      return true;
+    }).map((e) => ({ slug: e.slug, id: versionMap.get(e.slug)?.id ?? e.id ?? null }));
+
+    const isDifferent = cleaned.length !== storedEntries.length ||
+      cleaned.some((ce, i) => ce.slug !== storedEntries[i]?.slug || ce.id !== storedEntries[i]?.id);
+
+    return {
+      cleaned,
+      hiddenSlugs: [...new Set(cleaned.map((e) => e.slug))],
+      wasUpdated: isDifferent,
+    };
+  }
+
+  // 场景 1：普通删除：v0.7 (id: v-007) 被隐藏，删除 v0.7 后 load，自动清理
+  const vList1: VersionItem[] = [{ slug: "v0.7", id: "v-007" }, { slug: "v0.8", id: "v-008" }];
+  const stored1: HiddenEntry[] = [{ slug: "v0.7", id: "v-007" }];
+  const vListAfterDelete: VersionItem[] = [{ slug: "v0.8", id: "v-008" }];
+  const res1 = reconcileHiddenEntries(vListAfterDelete, stored1);
+  assert.equal(res1.wasUpdated, true);
+  assert.deepEqual(res1.cleaned, []);
+  assert.deepEqual(res1.hiddenSlugs, []);
+
+  // 场景 2：直接 delete→same-slug recreate（无中间 load 对账）！
+  // 旧版本 v0.7 (id: v-007) 被隐藏；用户在外部或直接删了 v-007 并立刻新建了同名 v0.7 (id: v-009)
+  // 首次 load 时，虽然 slug 相同都为 "v0.7"，但 version_id 由 v-007 变为 v-009，旧隐藏必须被清理！
+  const storedOld: HiddenEntry[] = [{ slug: "v0.7", id: "v-007" }];
+  const vListRecreated: VersionItem[] = [{ slug: "v0.7", id: "v-009" }, { slug: "v0.8", id: "v-008" }];
+  const res2 = reconcileHiddenEntries(vListRecreated, storedOld);
+  assert.equal(res2.wasUpdated, true, "version_id 不匹配时必须判定为更新并清理");
+  assert.deepEqual(res2.cleaned, [], "同 slug 但不同 id 的旧隐藏偏好被安全清理");
+  assert.equal(res2.hiddenSlugs.includes("v0.7"), false, "新建的同名版本 v0.7 默认显示！");
+
+  // 场景 3：历史旧数据（纯字符串数组无 id）兼容升级与完整序列（legacy -> 首次 load 持久化升级 -> 随后无中间 load 的 delete+recreate）
+  const legacyRaw = JSON.stringify(["v0.7", "v0.8"]);
+  // 模拟 parseHiddenVersionEntries 逻辑
+  function testParse(raw: string): HiddenEntry[] {
+    const parsed = JSON.parse(raw);
+    return parsed.map((item: any) => {
+      if (typeof item === "string") return { slug: item, id: null };
+      if (item && typeof item === "object" && typeof item.slug === "string") return { slug: item.slug, id: item.id ?? null };
+      return null;
+    }).filter(Boolean);
+  }
+  const parsedLegacy = testParse(legacyRaw);
+  assert.deepEqual(parsedLegacy, [{ slug: "v0.7", id: null }, { slug: "v0.8", id: null }]);
+
+  // 步骤 3.1: 首次 load：旧条目无 id（id=null），对账时自动补全当前 version_id（id: v-007, v-008）并触发持久化升级（wasUpdated=true）
+  const resLegacy = reconcileHiddenEntries(vList1, parsedLegacy);
+  assert.equal(resLegacy.wasUpdated, true, "补全 id 后内容改变，必须触发持久化写回 localStorage");
+  assert.deepEqual(resLegacy.cleaned, [{ slug: "v0.7", id: "v-007" }, { slug: "v0.8", id: "v-008" }], "已成功补充当前 version.id");
+  assert.deepEqual(resLegacy.hiddenSlugs, ["v0.7", "v0.8"]);
+
+  // 步骤 3.2: 升级持久化写回后，在无中间 load 情况下，v0.7 (v-007) 被外部直接删除并以同名重建为 v0.7 (v-009)
+  const vListAfterRecreateNoIntermediary: VersionItem[] = [{ slug: "v0.7", id: "v-009" }, { slug: "v0.8", id: "v-008" }];
+  const resRecreated = reconcileHiddenEntries(vListAfterRecreateNoIntermediary, resLegacy.cleaned);
+  assert.equal(resRecreated.wasUpdated, true, "重建后 version_id 不匹配触发清理");
+  assert.deepEqual(resRecreated.cleaned, [{ slug: "v0.8", id: "v-008" }], "旧 v0.7 (v-007) 被清理，仅保留仍然存在的 v0.8");
+  assert.equal(resRecreated.hiddenSlugs.includes("v0.7"), false, "新建的同名版本 v0.7 默认显示！");
 });
 
 

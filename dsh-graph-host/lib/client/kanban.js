@@ -510,7 +510,24 @@
         const params = showArchived ? "?includeArchived=1" : "";
         fetch(graphUrl("/api/dsh-graph" + params, {}, activeWs))
           .then((r) => r.json())
-          .then((data) => { setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data); })
+          .then((data) => {
+            setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data);
+            if (Array.isArray(data?.versions)) {
+              const versionMap = new Map(data.versions.map((v) => [v.slug, v]));
+              const entries = getHiddenVersionEntries(activeWs);
+              const cleanedEntries = entries.filter((e) => {
+                const ver = versionMap.get(e.slug);
+                if (!ver) return false;
+                if (e.id && ver.id && e.id !== ver.id) return false;
+                return true;
+              }).map((e) => ({ slug: e.slug, id: versionMap.get(e.slug)?.id ?? e.id ?? null }));
+              const isDifferent = cleanedEntries.length !== entries.length ||
+                cleanedEntries.some((ce, i) => ce.slug !== entries[i]?.slug || ce.id !== entries[i]?.id);
+              if (isDifferent) {
+                setHiddenVersionSlugs(cleanedEntries, data.versions);
+              }
+            }
+          })
           .catch((e) => setState({ loading: false, error: String(e) }));
       };
       React.useEffect(() => {
@@ -1315,16 +1332,16 @@
               hiddenVersionSlugs,
               onToggleVersion: (slug, visible) => {
                 if (visible) {
-                  setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug));
+                  setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug), b.versions);
                 } else {
-                  setHiddenVersionSlugs([...hiddenVersionSlugs, slug]);
+                  setHiddenVersionSlugs([...hiddenVersionSlugs, slug], b.versions);
                 }
               },
-              onShowAll: () => setHiddenVersionSlugs([]),
-              onHideAll: () => setHiddenVersionSlugs(b.versions.map((v) => v.slug)),
+              onShowAll: () => setHiddenVersionSlugs([], b.versions),
+              onHideAll: () => setHiddenVersionSlugs(b.versions.map((v) => v.slug), b.versions),
               onShowActiveOnly: () => {
                 const releasedSlugs = b.versions.filter((v) => v.status === "released").map((v) => v.slug);
-                setHiddenVersionSlugs(releasedSlugs);
+                setHiddenVersionSlugs(releasedSlugs, b.versions);
               },
               onClose: () => setShowVersionDrawer(false),
               onOpenVersionDetail: (v) => {

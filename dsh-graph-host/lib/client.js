@@ -561,7 +561,7 @@ window.__ModuleLoader__.load({
       return enabled;
     }
 
-    // ===== g-223：版本显隐过滤（localStorage 持久化存储 hidden_version_slugs 数组）=====
+    // ===== g-223：版本显隐过滤（localStorage 持久化存储 hidden_versions 条目/slug 数组）=====
     const HIDDEN_VERSIONS_KEY_PREFIX = "dsh-graph.hidden-versions.";
 
     function getHiddenVersionsStorageKey(workspace) {
@@ -569,25 +569,76 @@ window.__ModuleLoader__.load({
       return HIDDEN_VERSIONS_KEY_PREFIX + ws;
     }
 
-    function getHiddenVersionSlugs(workspace) {
+    function parseHiddenVersionEntries(raw) {
       try {
-        const raw = localStorage.getItem(getHiddenVersionsStorageKey(workspace));
         if (!raw) return [];
         const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+          .map((item) => {
+            if (typeof item === "string") return { slug: item, id: null };
+            if (item && typeof item === "object" && typeof item.slug === "string") {
+              return { slug: item.slug, id: typeof item.id === "string" ? item.id : null };
+            }
+            return null;
+          })
+          .filter(Boolean);
       } catch {
         return [];
       }
     }
 
-    function setHiddenVersionSlugs(slugs, workspace) {
-      const ws = workspace ?? (currentWorkspace() || "default");
-      const list = Array.isArray(slugs) ? [...new Set(slugs.filter((s) => typeof s === "string"))] : [];
+    function getHiddenVersionEntries(workspace) {
       try {
-        localStorage.setItem(getHiddenVersionsStorageKey(ws), JSON.stringify(list));
+        const raw = localStorage.getItem(getHiddenVersionsStorageKey(workspace));
+        return parseHiddenVersionEntries(raw);
+      } catch {
+        return [];
+      }
+    }
+
+    function getHiddenVersionSlugs(workspace) {
+      try {
+        const entries = getHiddenVersionEntries(workspace);
+        return [...new Set(entries.map((e) => e.slug))];
+      } catch {
+        return [];
+      }
+    }
+
+    function setHiddenVersionSlugs(slugsOrEntries, workspace, versions) {
+      const ws = workspace ?? (currentWorkspace() || "default");
+      let entries = [];
+      if (Array.isArray(slugsOrEntries)) {
+        const vList = Array.isArray(versions) ? versions : [];
+        const idBySlug = new Map(vList.filter((v) => v?.slug && v?.id).map((v) => [v.slug, v.id]));
+        entries = slugsOrEntries
+          .map((item) => {
+            if (typeof item === "string") {
+              return { slug: item, id: idBySlug.get(item) ?? null };
+            }
+            if (item && typeof item === "object" && typeof item.slug === "string") {
+              return { slug: item.slug, id: item.id ?? idBySlug.get(item.slug) ?? null };
+            }
+            return null;
+          })
+          .filter(Boolean);
+      }
+      // 按 slug 去重
+      const seen = new Set();
+      const deduped = [];
+      for (const entry of entries) {
+        if (!seen.has(entry.slug)) {
+          seen.add(entry.slug);
+          deduped.push(entry);
+        }
+      }
+      const slugList = deduped.map((e) => e.slug);
+      try {
+        localStorage.setItem(getHiddenVersionsStorageKey(ws), JSON.stringify(deduped));
       } catch {}
-      window.dispatchEvent(new CustomEvent("dsh-graph.hidden-versions-changed", { detail: { workspace: ws, hidden: list } }));
-      return list;
+      window.dispatchEvent(new CustomEvent("dsh-graph.hidden-versions-changed", { detail: { workspace: ws, hidden: slugList, entries: deduped } }));
+      return slugList;
     }
 
     function useHiddenVersionSlugs(workspace) {
@@ -602,7 +653,12 @@ window.__ModuleLoader__.load({
         const onEvent = (e) => {
           const evWs = e?.detail?.workspace;
           if (!evWs || evWs === currentWs) {
-            setHidden(e?.detail?.hidden ?? getHiddenVersionSlugs(currentWs));
+            const rawHidden = e?.detail?.hidden;
+            if (Array.isArray(rawHidden)) {
+              setHidden(rawHidden.filter((s) => typeof s === "string"));
+            } else {
+              setHidden(getHiddenVersionSlugs(currentWs));
+            }
           }
         };
         const onStorage = (e) => {
@@ -618,8 +674,8 @@ window.__ModuleLoader__.load({
         };
       }, [currentWs]);
 
-      const setter = React.useCallback((slugs) => {
-        return setHiddenVersionSlugs(slugs, currentWs);
+      const setter = React.useCallback((slugsOrEntries, versions) => {
+        return setHiddenVersionSlugs(slugsOrEntries, currentWs, versions);
       }, [currentWs]);
 
       return [hidden, setter];
@@ -4180,14 +4236,20 @@ window.__ModuleLoader__.load({
         h("div", {
           style: S.drawerLeft,
           className: "dg-version-drawer",
+          role: "dialog",
+          "aria-modal": "true",
+          "aria-labelledby": "dg-version-drawer-title",
+          "aria-label": "版本管理",
           onClick: (e) => e.stopPropagation(),
         },
-          h("span", {
-            style: S.close,
-            title: "关闭",
+          h("button", {
+            type: "button",
+            style: { ...S.close, background: "none", border: "none", padding: 0, color: "inherit", font: "inherit" },
+            title: "关闭版本管理抽屉",
+            "aria-label": "关闭版本管理抽屉",
             onClick: onClose,
           }, "✕"),
-          h("div", { style: { fontWeight: 700, fontSize: 16, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
+          h("div", { id: "dg-version-drawer-title", style: { fontWeight: 700, fontSize: 16, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
             h("span", null, "🏷️ 版本管理"),
             h("span", { style: { ...S.meta, fontSize: 12, fontWeight: 400 } },
               "（显示 " + visibleCount + "/" + allVersions.length + "）")),
@@ -4221,6 +4283,7 @@ window.__ModuleLoader__.load({
                 h("input", {
                   style: { ...S.promptInput, width: "100%", fontSize: 12, padding: "4px 8px" },
                   placeholder: "搜索版本名称或 slug…",
+                  "aria-label": "搜索版本名称或 slug",
                   value: search,
                   onChange: (e) => setSearch(e.target.value),
                 }))
@@ -4832,7 +4895,24 @@ window.__ModuleLoader__.load({
         const params = showArchived ? "?includeArchived=1" : "";
         fetch(graphUrl("/api/dsh-graph" + params, {}, activeWs))
           .then((r) => r.json())
-          .then((data) => { setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data); })
+          .then((data) => {
+            setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data);
+            if (Array.isArray(data?.versions)) {
+              const versionMap = new Map(data.versions.map((v) => [v.slug, v]));
+              const entries = getHiddenVersionEntries(activeWs);
+              const cleanedEntries = entries.filter((e) => {
+                const ver = versionMap.get(e.slug);
+                if (!ver) return false;
+                if (e.id && ver.id && e.id !== ver.id) return false;
+                return true;
+              }).map((e) => ({ slug: e.slug, id: versionMap.get(e.slug)?.id ?? e.id ?? null }));
+              const isDifferent = cleanedEntries.length !== entries.length ||
+                cleanedEntries.some((ce, i) => ce.slug !== entries[i]?.slug || ce.id !== entries[i]?.id);
+              if (isDifferent) {
+                setHiddenVersionSlugs(cleanedEntries, data.versions);
+              }
+            }
+          })
           .catch((e) => setState({ loading: false, error: String(e) }));
       };
       React.useEffect(() => {
@@ -5637,16 +5717,16 @@ window.__ModuleLoader__.load({
               hiddenVersionSlugs,
               onToggleVersion: (slug, visible) => {
                 if (visible) {
-                  setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug));
+                  setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug), b.versions);
                 } else {
-                  setHiddenVersionSlugs([...hiddenVersionSlugs, slug]);
+                  setHiddenVersionSlugs([...hiddenVersionSlugs, slug], b.versions);
                 }
               },
-              onShowAll: () => setHiddenVersionSlugs([]),
-              onHideAll: () => setHiddenVersionSlugs(b.versions.map((v) => v.slug)),
+              onShowAll: () => setHiddenVersionSlugs([], b.versions),
+              onHideAll: () => setHiddenVersionSlugs(b.versions.map((v) => v.slug), b.versions),
               onShowActiveOnly: () => {
                 const releasedSlugs = b.versions.filter((v) => v.status === "released").map((v) => v.slug);
-                setHiddenVersionSlugs(releasedSlugs);
+                setHiddenVersionSlugs(releasedSlugs, b.versions);
               },
               onClose: () => setShowVersionDrawer(false),
               onOpenVersionDetail: (v) => {
