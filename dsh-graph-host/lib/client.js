@@ -1133,11 +1133,8 @@ window.__ModuleLoader__.load({
       const { snap, line, running } = useLiveStripState(session, eventSource, 200);
       const usage = useProjectionValue(session, "tokenUsage");
       const pressure = useProjectionValue(session, "contextPressure");
-      if (!props.childId) return null;
-      if (!session) {
-        return h("div", { style: S.liveStrip, title: props.childId },
-          "⚠️ 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
-      }
+
+      // React Hook 规则：所有 hook（useRef / useEffect / useState）必须在顶层无条件执行，严禁在 early return 之后
       // g-a92e1406 追加（负责人指示）：新一轮开始（running false→true）时清空上次 status，
       // 等 supervisor 快速替换成最新——记录 running 翻转时刻，旧于它的状态视为过期清空。
       const runningSinceRef = React.useRef(null);
@@ -1156,6 +1153,13 @@ window.__ModuleLoader__.load({
         const t = setInterval(() => setNow(Date.now()), 30000);
         return () => clearInterval(t);
       }, [staleStatus]);
+
+      if (!props.childId) return null;
+      if (!session) {
+        return h("div", { style: S.liveStrip, title: props.childId },
+          "⚠️ 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
+      }
+
       const staleDur = staleStatus && props.statusAt != null ? fmtElapsed(props.statusAt, now) : null;
       const meter = liveMeter(usage, pressure);
       // g-129 负责人 2026-08-22 格式：第一行 = 状态 + 流式内容（同行，流式时有时无不引起高度变化），
