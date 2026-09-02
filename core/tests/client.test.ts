@@ -2171,3 +2171,23 @@ test("g-216 生成 bundle 契约：client.js 包含 g-216 层级规划与 widthH
   assert.match(bundle, /zIndex:\s*10001/);
   assert.match(bundle, /zIndex:\s*10002/);
 });
+test("g-225 卡片 LiveStrip 模型展示契约：LiveStrip 默认不渲染可见 model ID，完整 provider/model 仅在 tooltip (title) 显示", () => {
+  const hooksSrc = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+
+  // 1. LiveStrip 源码构造完整 provider/model 的 modelTitle 用于 tooltip (title)
+  assert.match(hooksSrc, /const modelTitle = props\.model/);
+  assert.match(hooksSrc, /props\.provider \? props\.provider \+ "\/" : ""/);
+  // 2. LiveStrip 外层容器 title 属性包含 modelTitle
+  assert.match(hooksSrc, /modelTitle/);
+  assert.match(hooksSrc, /title:\s*\[statusFull,\s*props\.statusLine\s*\?\s*"状态："\s*\+\s*props\.statusLine\s*:\s*null,\s*modelTitle/);
+  // 3. LiveStrip 内部子节点第一行不再包含可见的 props.model 文本节点
+  assert.doesNotMatch(hooksSrc, /props\.model\s*\?\s*h\("span",\s*\{[^}]*opacity:\s*0\.85[^}]*\},/);
+  // 4. 生成 bundle 与源文件保持一致
+  assert.doesNotMatch(bundle, /props\.model\s*\?\s*h\("span",\s*\{[^}]*opacity:\s*0\.85[^}]*\},/);
+
+  // 5. SupervisorBar 保持独立展示，不受 LiveStrip 内部精简影响
+  const supervisorSrc = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/supervisor-bar.js"), "utf8");
+  assert.match(supervisorSrc, /h\("span", null, model\.provider\)/);
+  assert.match(supervisorSrc, /h\("span", null, model\.model\)/);
+});

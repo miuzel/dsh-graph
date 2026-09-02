@@ -460,6 +460,7 @@
             "⏵ " + line)
         : h("span", { style: { ...S.meta, fontSize: 10, flex: 1, overflow: "hidden",
                                textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "…");
+      // g-225：常态展示精简 model ID，仅在 tooltip (title) 保留完整 provider/model 追溯
       const modelTitle = props.model ? `模型：${props.provider ? props.provider + "/" : ""}${props.model}` : null;
       return h(
         "div",
@@ -469,9 +470,6 @@
           h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
             statusLabel),
           lineEl,
-          props.model
-            ? h("span", { style: { ...S.meta, fontSize: 9, flexShrink: 0, opacity: 0.85, padding: "0 2px" }, title: modelTitle }, props.model)
-            : null,
           meter
             ? h("span", { style: { ...S.meta, fontSize: 10, flexShrink: 0, marginLeft: 4 } }, meter)
             : null),
