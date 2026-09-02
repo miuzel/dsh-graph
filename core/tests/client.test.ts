@@ -2171,7 +2171,7 @@ test("g-216 生成 bundle 契约：client.js 包含 g-216 层级规划与 widthH
   assert.match(bundle, /zIndex:\s*10001/);
   assert.match(bundle, /zIndex:\s*10002/);
 });
-test("g-225 卡片 LiveStrip 模型展示契约：LiveStrip 默认不渲染可见 model ID，完整 provider/model 仅在 tooltip (title) 显示", () => {
+test("g-225 卡片 LiveStrip 模型展示契约：LiveStrip 默认不渲染可见 model ID，完整 provider/model 仅在 tooltip (title) 显示，且 Hooks 顶层无条件调用", () => {
   const hooksSrc = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
   const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
 
@@ -2186,7 +2186,15 @@ test("g-225 卡片 LiveStrip 模型展示契约：LiveStrip 默认不渲染可�
   // 4. 生成 bundle 与源文件保持一致
   assert.doesNotMatch(bundle, /props\.model\s*\?\s*h\("span",\s*\{[^}]*opacity:\s*0\.85[^}]*\},/);
 
-  // 5. SupervisorBar 保持独立展示，不受 LiveStrip 内部精简影响
+  // 5. Hooks 规则契约：LiveStrip 中的 useRef / useState / useEffect 必须在任何 early return（如 if (!props.childId) return null）之前无条件声明
+  const lsStart = hooksSrc.indexOf("function LiveStrip(props)");
+  const lsEarlyChildId = hooksSrc.indexOf("if (!props.childId) return null;", lsStart);
+  const lsUseRef = hooksSrc.indexOf("const runningSinceRef = React.useRef", lsStart);
+  const lsUseStateNow = hooksSrc.indexOf("const [now, setNow] = React.useState", lsStart);
+  assert.ok(lsUseRef > lsStart && lsUseRef < lsEarlyChildId, "useRef 必须在 early return 之前");
+  assert.ok(lsUseStateNow > lsStart && lsUseStateNow < lsEarlyChildId, "useState 必须在 early return 之前");
+
+  // 6. SupervisorBar 保持独立展示，不受 LiveStrip 内部精简影响
   const supervisorSrc = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/supervisor-bar.js"), "utf8");
   assert.match(supervisorSrc, /h\("span", null, model\.provider\)/);
   assert.match(supervisorSrc, /h\("span", null, model\.model\)/);
