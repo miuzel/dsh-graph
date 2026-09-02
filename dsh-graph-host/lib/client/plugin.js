@@ -9,52 +9,56 @@
     // （host workspaceView：dsh-host-apiproxy lib 793-801；runtime project() 直接透传 items），
     // path 即该 workspace 目录，`sessionIds.includes(被查看会话)` 即归属映射
     // （同文件 :9866 `summary.cwd === workspace.path && workspace.sessionIds.includes(summary.id)`）。
-    // 优先级：被查看会话（workspaces）→ 被查看会话（sessions cwd）→ list.current（workspaces）
-    // → list.current（sessions cwd）→ null（裸路径，端点兜底 process.cwd()）。
-    function currentWorkspace() {
+    // g-223：纯函数按 sessionId 解析归属 workspace（供 render/effect 阶段直接调用，避免会话切换时序缺陷）
+    // 优先级：指定 sessionId（workspaces 映射）→ sessionId（sessions cwd）→ sessionId（parent 回溯 cwd/workspaces）
+    // → list.current（workspaces）→ list.current（cwd）→ list.current（parent 回溯）→ lastGoodWorkspace 兜底
+    function resolveWorkspaceOfSession(sessionId) {
       try {
         const wsItems = workspacesRt?.list?.getSnapshot?.()?.items
           ?? appCtx?.get?.("workspaces")?.list?.getSnapshot?.()?.items ?? [];
-        const wsOf = (sid) => wsItems.find?.((w) => w.sessionIds.includes(sid));
+        const wsOf = (sid) => wsItems.find?.((w) => Array.isArray(w?.sessionIds) && w.sessionIds.includes(sid));
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
         const snap = rt?.list?.getSnapshot?.();
         const items = snap?.items ?? [];
-        if (viewedSessionId) {
-          const w = wsOf(viewedSessionId);
-          if (w?.path) { setLastGoodWorkspace(w.path); return w.path };
-          const viewed = items.find?.((s) => s.sessionId === viewedSessionId);
-          if (viewed?.cwd) { setLastGoodWorkspace(viewed.cwd); return viewed.cwd };
-          // g-129 修复（负责人 2026-08-22）：子代理会话不在 workspace 映射且无 cwd 时，
-          // 沿 parentSessionId 链回溯父会话的 workspace（子代理继承父会话 workspace）
+        const sid = sessionId ?? viewedSessionId;
+        if (sid) {
+          const w = wsOf(sid);
+          if (w?.path) { setLastGoodWorkspace(w.path); return w.path; }
+          const viewed = items.find?.((s) => s.sessionId === sid);
+          if (viewed?.cwd) { setLastGoodWorkspace(viewed.cwd); return viewed.cwd; }
           if (viewed?.parentSessionId) {
             const parent = items.find?.((s) => s.sessionId === viewed.parentSessionId);
-            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd };
+            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd; }
             const pw = wsOf(viewed.parentSessionId);
-            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path };
+            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path; }
           }
         }
         const current = snap?.current;
         if (current) {
           const w = wsOf(current);
-          if (w?.path) { setLastGoodWorkspace(w.path); return w.path };
+          if (w?.path) { setLastGoodWorkspace(w.path); return w.path; }
           const item = items.find?.((s) => s.sessionId === current);
-          if (item?.cwd) { setLastGoodWorkspace(item.cwd); return item.cwd };
-          // g-129 修复：current 是子代理时回溯父会话 workspace
+          if (item?.cwd) { setLastGoodWorkspace(item.cwd); return item.cwd; }
           if (item?.parentSessionId) {
             const parent = items.find?.((s) => s.sessionId === item.parentSessionId);
-            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd };
+            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd; }
             const pw = wsOf(item.parentSessionId);
-            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path };
+            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path; }
           }
         }
         if (lastGoodWorkspace) return lastGoodWorkspace;
         return null;
       } catch { if (lastGoodWorkspace) return lastGoodWorkspace; return null; }
     }
-    // 给 /api/dsh-graph* 请求统一追加 ?workspace=（GET/POST 通用；已知则带，未知则裸路径）
-    function graphUrl(path, extraParams = {}) {
+
+    function currentWorkspace() {
+      return resolveWorkspaceOfSession(viewedSessionId);
+    }
+
+    // 给 /api/dsh-graph* 请求统一追加 ?workspace=（GET/POST 通用；已知则带，未知则裸路径；可选显式传入 workspace）
+    function graphUrl(path, extraParams = {}, explicitWs = null) {
       const p = new URLSearchParams(extraParams);
-      const ws = currentWorkspace();
+      const ws = explicitWs ?? currentWorkspace();
       if (ws) p.set("workspace", ws);
       const qs = p.toString();
       if (!qs) return path;
