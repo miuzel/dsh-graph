@@ -148,7 +148,7 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
   // host 半边：28 个 graph_* 工具（g-117 新增 graph_handoff / graph_claim_supervisor；
   // g-119 新增 graph_bind_collect_card；g-118 新增 graph_help；g-141 新增 graph_rename_goal；g-110 新增 archive/unarchive；g-140 新增 delete；g-150 新增 graph_record_attempt_handoff；g-150 范围扩展新增 graph_set_directive / graph_add_comment；g-128 新增 graph_delete_card；g-158 新增 graph_set_goal_type；g-138 新增 graph_postpone_goal）
   const toolNames = registered.map((d) => d.name).filter((n) => n.startsWith("graph_"));
-  assert.equal(toolNames.length, 28, "单包注册 28 个 graph_* 工具");
+  assert.equal(toolNames.length, 29, "单包注册 29 个 graph_* 工具（g-190 新增 graph_unbind_goal_child）");
   // client 半边：/api/dsh-graph* 全部端点（原 client 包 + g-110 archive/unarchive + g-140 delete + g-158 set-goal-type/create-goal type 透传）
   for (const p of ["/api/dsh-graph", "/api/dsh-graph/goal", "/api/dsh-graph/accept",
     "/api/dsh-graph/resolve-accept", "/api/dsh-graph/edit-description",

@@ -412,3 +412,21 @@ export const setCriteriaPostSchema: ObjectSchema = {
   required: ["goal", "items"],
   additionalProperties: false,
 };
+
+/** /api/dsh-graph/unbind POST body schema（g-190）。
+ *  严格白名单：additionalProperties=false；selector 二选一（attempt | child_id）由 handler 校验；
+ *  workspace/root 为 root 解析参数（与其余写端点一致）。 */
+export const unbindPostSchema: ObjectSchema = {
+  type: "object",
+  properties: {
+    goal: goalIdSchema,
+    token: { type: "string", minLength: 1 },
+    attempt: { type: "string", minLength: 1 },
+    child_id: { type: "string", minLength: 1 },
+    reason: { type: "string", nullable: true },
+    workspace: { type: "string", nullable: true },
+    root: { type: "string", nullable: true },
+  },
+  required: ["goal", "token"],
+  additionalProperties: false,
+};

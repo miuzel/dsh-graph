@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, basename, dirname, relative } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
 import {
   parseDoc,
@@ -30,8 +30,8 @@ import {
 } from "./model.ts";
 import { appendEvent, readEvents, replayStatuses, replayVersionLanes, nowIso, nowIsoMs, type GraphEvent } from "./events.ts";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.ts";
-import { withTx, atomicWrite, TxError, type TxContext } from "./transaction.ts";
-import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, type ObjectSchema } from "./schema.ts";
+import { withTx, atomicWrite, TxError, TxCasError, type TxContext } from "./transaction.ts";
+import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, type ObjectSchema } from "./schema.ts";
 
 import {
   createVersion,
@@ -44,7 +44,7 @@ import {
 } from "./version-lane.ts";
 export { GraphError, GraphConflictError };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
-export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema };
+export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema };
 export type { ObjectSchema };
 export { TxError };
 export type { TxContext };
@@ -2305,12 +2305,19 @@ export function bindAttemptChild(
   if (!existsSync(file)) throw new GraphError(`attempt 不存在：${attemptId}（目标 ${goalId}）`);
   const doc = loadGoal(file);
   doc.meta.child_id = childId;
+  // g-190：每次绑定生成新 binding token（CAS 能力）+ 递增 binding_version（审计）；
+  // 解绑后重绑必然换新 token → 旧 token 立即失效（ABA 防护）。重绑 = 重新激活，清除解绑标记。
+  doc.meta.binding_token = randomUUID().replace(/-/g, "");
+  doc.meta.binding_version = (Number(doc.meta.binding_version) || 0) + 1;
+  delete doc.meta.detached;
+  delete doc.meta.detached_at;
+  delete doc.meta.detached_by;
   if (parentSessionId) doc.meta.parent_session_id = parentSessionId;
   if (provider && provider.trim()) doc.meta.provider = provider.trim();
   if (model && model.trim()) doc.meta.model = model.trim();
   if (modelRoute && modelRoute.trim()) doc.meta.model_route = modelRoute.trim();
   saveGoal(file, doc);
-  const details: Record<string, any> = { attempt: attemptId, child_id: childId };
+  const details: Record<string, any> = { attempt: attemptId, child_id: childId, binding_version: doc.meta.binding_version };
   if (doc.meta.provider) details.provider = doc.meta.provider;
   if (doc.meta.model) details.model = doc.meta.model;
   if (doc.meta.model_route) details.model_route = doc.meta.model_route;
@@ -2320,6 +2327,230 @@ export function bindAttemptChild(
     goal: goalId,
     details,
   });
+}
+
+
+// ---- g-190：从目标解绑执行子代理 ----
+
+/** 读取目标当前的有效执行子代理绑定（g-190）。
+ *  取最新一个非收集（executor !== "agent:collect"）、未解绑（detached !== true）且绑定 child_id 的 attempt；
+ *  目录名只用于枚举，归属以 attempt.md meta（id/goal）为准——不靠目录名猜测。
+ *  无绑定返回 null。 */
+export function readGoalBinding(
+  root: string,
+  goalId: string,
+): {
+  goalFile: string;
+  goal: GoalDoc;
+  attempt: string;
+  child_id: string;
+  parent_session_id: string | null;
+  binding_token: string | null;
+  binding_version: number;
+  result: string;
+  status_line: string | null;
+} | null {
+  const goalFile = findGoalFile(root, goalId);
+  if (basename(goalFile) !== "goal.md") return null; // backlog 平铺无 attempt
+  const attDir = join(goalDirOf(goalFile), "attempts");
+  if (!existsSync(attDir)) return null;
+  const atts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort().reverse();
+  for (const a of atts) {
+    const f = join(attDir, a, "attempt.md");
+    if (!existsSync(f)) continue;
+    try {
+      const doc = loadGoal(f);
+      if (doc.meta.id !== a || doc.meta.goal !== goalId) continue; // 归属校验
+      if (doc.meta.detached === true) continue; // 已解绑不算有效绑定
+      if (doc.meta.executor === "agent:collect") continue; // 收集子代理不占 goal 执行绑定
+      const childId = doc.meta.child_id ?? null;
+      if (!childId) continue;
+      // goal 文档单独加载（供 delivered/archived/created_by 等目标级校验，勿与 attempt doc 混淆）
+      const gdoc = loadGoal(goalFile);
+      return {
+        goalFile,
+        goal: gdoc,
+        attempt: a,
+        child_id: String(childId),
+        parent_session_id: doc.meta.parent_session_id ?? null,
+        binding_token: doc.meta.binding_token ?? null,
+        binding_version: Number(doc.meta.binding_version) || 0,
+        result: String(doc.meta.result ?? "pending"),
+        status_line: doc.meta.status_line ?? null,
+      };
+    } catch {
+      /* 坏 attempt 文件跳过 */
+    }
+  }
+  return null;
+}
+
+/** g-190：解绑授权——只允许授权主管或目标 owner。
+ *  授权规则（与 g-150 validateConfirmedBy 同口径的 owner/主管模型）：
+ *  ① 目标创建者（meta.created_by）精确匹配 actor → owner；
+ *  ② human:*（GUI 负责人操作）→ owner（本地单用户，看板即负责人界面）；
+ *  ③ supervisor:<sessionId> 且匹配 project.yaml 的 supervisor.session → 主管；
+ *  ④ 绑定子代理自身（裸 child_id 或 agent:<child_id>）→ 明确拒绝（子代理不能自我解绑）。
+ *  其余 agent:* 或未知身份一律拒绝抛 GraphError。 */
+export function authorizeUnbind(root: string, actor: string, createdBy: unknown, childId: string): void {
+  const a = String(actor ?? "").trim();
+  if (!a) throw new GraphError("actor 不能为空");
+  // 子代理自我解绑：拒绝（避免孤儿活跃 worker / 自我洗脱绑定）
+  if (childId && (a === childId || a === "agent:" + childId)) {
+    throw new GraphError("子代理不能解绑自身——请由目标 owner 或主管执行");
+  }
+  // 创建者 = owner
+  if (createdBy && (a === createdBy || a === "agent:" + createdBy)) return;
+  // human:* = GUI 负责人（owner 口径）
+  if (a.startsWith("human:")) return;
+  // supervisor:<sessionId> 必须匹配 project.yaml 的 supervisor.session
+  if (a.startsWith("supervisor:")) {
+    const sessionId = a.slice("supervisor:".length);
+    const configured = readSupervisorSession(root);
+    if (configured && sessionId === configured) return;
+    throw new GraphError("主管身份 " + a + " 不匹配已配置的 supervisor.session——无权执行解绑");
+  }
+  throw new GraphError("身份 " + a + " 无权解绑——仅限目标 owner（创建者/human）或已配置的主管");
+}
+
+export interface UnbindGoalChildOptions {
+  actor: string;
+  token: string;
+  attempt?: string | null;
+  childId?: string | null;
+  reason?: string | null;
+  /** 子代理活跃度探测（host 注入，权威）：返回 "running" | "idle" | "gone" | "unknown"。 */
+  liveCheck?: (childId: string) => "running" | "idle" | "gone" | "unknown";
+}
+
+export interface UnbindResult {
+  detached: boolean;
+  already?: boolean;
+  attempt?: string;
+  child_id?: string | null;
+}
+
+/** 从目标解绑执行子代理（g-190）：
+ *  - 语义 = 安全 detach（不终止/不删除）：attempt、worktree、事件与日志全部保留并可审计。
+ *  - 定位：goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 精确定位；
+ *    目录名仅用于枚举，归属以 meta 校验（id/goal）为准。
+ *  - 校验：授权（authorizeUnbind）、token CAS（未知/过期/并发冲突 → TxCasError 拒绝且不改数据）、
+ *    活跃状态（running → 拒绝需受控停止；idle/gone → 允许安全 detach；unknown → 拒绝不遗留假 active）、
+ *    delivered/archived → 拒绝。
+ *  - 幂等：重复解绑（已无绑定）为 no-op（不重复记事件）；解绑后重绑换新 token → 旧 token 立即失效（ABA 防护）。
+ *  - 事件先行（R-02）：attempt.unbound 事件（含 token_hash/binding_version/actor/reason 审计）在 attempt.md 落盘前追加；
+ *    若落盘失败，事件已记而绑定仍在（旧 token 仍有效）——重试同一 token 可自愈，不产生半解绑假象。
+ *  - 并发：withTx 锁内重读 + CAS，解绑/解绑、解绑/重绑串行化（有限本地锁，符合单用户本地并发模型）。 */
+export function unbindGoalChild(
+  root: string,
+  goalId: string,
+  opts: UnbindGoalChildOptions,
+): UnbindResult {
+  const actor = String(opts.actor ?? "").trim();
+  const token = String(opts.token ?? "");
+  const attempt = typeof opts.attempt === "string" && opts.attempt.length ? opts.attempt : null;
+  const childIdOpt = typeof opts.childId === "string" && opts.childId.length ? opts.childId : null;
+  if (!actor) throw new GraphError("actor 不能为空");
+  if (!token) throw new GraphError("解绑需要当前绑定 token（binding token）");
+  if ((attempt === null) === (childIdOpt === null)) {
+    throw new GraphError("必须且只能指定一个选择器：attempt 或 child_id");
+  }
+  if (attempt !== null && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(attempt)) {
+    throw new GraphError("非法 attempt id：" + attempt);
+  }
+  if (childIdOpt !== null && !/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(childIdOpt)) {
+    throw new GraphError("非法 child_id：" + childIdOpt);
+  }
+
+  const result = withTx(
+    { root, actor, goal: goalId },
+    { lockName: "unbind-" + goalId },
+    () => {
+      const binding = readGoalBinding(root, goalId);
+      // 无绑定：幂等 no-op（不重复记事件）
+      if (!binding) {
+        return { value: { detached: false, already: true } as UnbindResult, events: [] };
+      }
+      const goalDoc = binding.goal;
+      if (goalDoc.meta.archived === true || isArchivedFile(binding.goalFile)) {
+        throw new GraphError("已归档目标 " + goalId + " 不可解绑子代理");
+      }
+      if (goalDoc.meta.status === "delivered") {
+        throw new GraphError("已交付目标 " + goalId + " 不可解绑子代理");
+      }
+      // 选择器精确匹配当前绑定（不匹配 → 并发/定位冲突，拒绝且不改数据）
+      if (attempt !== null && attempt !== binding.attempt) {
+        throw new TxCasError("选择器 attempt=" + attempt + " 不匹配当前绑定 attempt=" + binding.attempt + "——并发冲突，拒绝解绑");
+      }
+      if (childIdOpt !== null && childIdOpt !== binding.child_id) {
+        throw new TxCasError("选择器 child_id=" + childIdOpt + " 不匹配当前绑定 child_id=" + binding.child_id + "——并发冲突，拒绝解绑");
+      }
+      // token CAS：必须匹配当前 binding token（未知/过期/重绑后旧 token → 拒绝且不改数据）
+      if (token !== binding.binding_token) {
+        throw new TxCasError("绑定 token 不匹配当前绑定（未知/过期/已被重绑）——拒绝解绑且未改动任何数据");
+      }
+      // 授权（在 token CAS 通过后校验身份：先证明「知道当前绑定」，再查授权——双因子）
+      authorizeUnbind(root, actor, goalDoc.meta.created_by, binding.child_id);
+      // 活跃状态门控：不遗留假 active
+      if (opts.liveCheck) {
+        const live = opts.liveCheck(binding.child_id);
+        if (live === "running") {
+          throw new TxCasError("子代理仍在运行中——请先受控停止（或等待其结束）后再解绑");
+        }
+        if (live === "unknown") {
+          throw new GraphError("无法确认子代理状态（live registry 不可用）——拒绝解绑，避免遗留假 active");
+        }
+        // idle / gone → 允许安全 detach
+      } else if (binding.result === "pending") {
+        throw new GraphError("无法确认子代理状态（未提供 live check）——拒绝解绑，避免遗留假 active");
+      }
+
+      const attFile = join(goalDirOf(binding.goalFile), "attempts", binding.attempt, "attempt.md");
+      const doc = loadGoal(attFile);
+      if (doc.meta.id !== binding.attempt || doc.meta.goal !== goalId) {
+        throw new GraphError("attempt 归属校验失败：" + binding.attempt);
+      }
+      const prevVersion = binding.binding_version;
+      const tokenHash = createHash("sha256").update(token).digest("hex");
+      const detachedAt = nowIso();
+      // 事件先行（R-02）：attempt.unbound 含 token_hash/binding_version/actor/reason 审计
+      appendEvent(root, {
+        actor,
+        event: "attempt.unbound",
+        goal: goalId,
+        details: {
+          attempt: binding.attempt,
+          child_id: binding.child_id,
+          parent_session_id: binding.parent_session_id,
+          binding_version: prevVersion,
+          token_hash: tokenHash,
+          reason: opts.reason ?? null,
+          previous_result: binding.result,
+          detached_at: detachedAt,
+          goal_status: String(goalDoc.meta.status ?? "unknown"),
+        },
+      });
+      // 落盘：清理绑定 + 标记 detached（result=detached 使 postpone/delete 活跃检测不再命中）
+      delete doc.meta.child_id;
+      delete doc.meta.parent_session_id;
+      delete doc.meta.binding_token;
+      doc.meta.binding_version = prevVersion + 1;
+      doc.meta.detached = true;
+      doc.meta.detached_at = detachedAt;
+      doc.meta.detached_by = actor;
+      if (doc.meta.result === "pending") doc.meta.result = "detached";
+      saveGoal(attFile, doc);
+      return {
+        value: { detached: true, attempt: binding.attempt, child_id: binding.child_id } as UnbindResult,
+        events: [],
+      };
+    },
+  );
+  if (!result.ok) {
+    if (result.recoverable) throw new GraphConflictError(result.error);
+    throw new GraphError(result.error);
+  }
+  return result.value;
 }
 
 /**
@@ -2561,6 +2792,8 @@ function _hasActiveAttempts_postpone(dir: string): boolean {
     if (!existsSync(attFile)) continue;
     try {
       const att = loadGoal(attFile);
+      // g-190：已解绑 attempt 不再视为活跃（解绑后允许暂缓）
+      if (att.meta.detached === true) continue;
       const sl = String(att.meta.status_line ?? "").trim();
       // 已绑定 child_id 即代表仍有可运行的子代理；不得替用户中断。
       if (att.meta.result === "pending" && att.meta.child_id) return true;
@@ -2671,6 +2904,8 @@ export function deleteGoal(
         if (!existsSync(attFile)) continue;
         try {
           const att = loadGoal(attFile);
+          // g-190：已解绑 attempt 不再视为活跃（解绑后允许删除已归档目标）
+          if (att.meta.detached === true) continue;
           const sl = String(att.meta.status_line ?? "").trim();
           const done = /空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(sl);
           if (att.meta.result === "pending" && sl !== "" && !done) {
@@ -2719,6 +2954,14 @@ export interface BoardGoal {
   attempt_parent_session_id?: string | null;
   attempt_provider?: string | null;
   attempt_model?: string | null;
+  /** g-190：当前有效执行绑定（attempt/child/token/binding_version），供解绑定位与 UI；无绑定为 null */
+  attempt_binding?: {
+    attempt: string;
+    child_id: string;
+    token: string | null;
+    binding_version: number;
+    parent_session_id: string | null;
+  } | null;
   created_at?: string | null;
   attempt_started_at?: string | null;
   /** 被复用派生（g-a92e1406）：子代理被跨目标复用时，旧绑定目标标 reused_by = 新目标 id */
@@ -2795,13 +3038,18 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
           if (!existsSync(f)) continue;
           try {
             const m = loadGoal(f).meta;
+            // g-190：已解绑 attempt 不投影为有效绑定
+            if (m.detached === true) continue;
             if (m.child_id && m.executor !== "agent:collect") {
               attemptChild = {
+                attempt: a,
                 child_id: m.child_id,
                 parent_session_id: m.parent_session_id ?? null,
                 provider: m.provider ?? null,
                 model: m.model ?? null,
                 started_at: m.started_at ?? null,
+                binding_token: m.binding_token ?? null,
+                binding_version: Number(m.binding_version) || 0,
               };
               break;
             }
@@ -2846,6 +3094,16 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
       attempt_parent_session_id: attemptChild.parent_session_id ?? null,
       attempt_provider: attemptChild.provider ?? null,
       attempt_model: attemptChild.model ?? null,
+      // g-190：当前有效执行绑定（含 CAS token 与版本），供解绑定位/UI 展示；无绑定为 null
+      attempt_binding: attemptChild.child_id
+        ? {
+            attempt: String(attemptChild.attempt),
+            child_id: attemptChild.child_id,
+            token: attemptChild.binding_token ?? null,
+            binding_version: attemptChild.binding_version ?? 0,
+            parent_session_id: attemptChild.parent_session_id ?? null,
+          }
+        : null,
       created_at: String(meta.created_at ?? ""),
       attempt_started_at: attemptChild.started_at ?? null,
       reused_by: null,
@@ -3122,6 +3380,12 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
             provider: m.provider ?? null,
             model: m.model ?? null,
             model_route: m.model_route ?? null,
+            // g-190：解绑定位/UI 需要的绑定信息（token 为 CAS 能力，仅下发给 GUI）
+            binding_token: m.binding_token ?? null,
+            binding_version: Number(m.binding_version) || 0,
+            detached: m.detached === true,
+            detached_at: m.detached_at ?? null,
+            detached_by: m.detached_by ?? null,
           });
         } catch { /* 跳过 */ }
       }

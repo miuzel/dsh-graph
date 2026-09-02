@@ -81,6 +81,8 @@ import {
   validateSchema,
   schemaErrorResponse,
   settingsPostSchema,
+  unbindPostSchema,
+  unbindGoalChild,
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 // g-133：接入 DSH profile 级用户设置（dsh-settings）。为避免在 @deepseek-ai/* 不可解析的上下文
@@ -128,7 +130,8 @@ function buildGraphSettingsSchema(z) {
 }
 
 function params(properties, required) {
-  return { type: "object", properties, required };
+  // g-190（review P0）：工具参数严格白名单——拒绝未知/多余字段
+  return { type: "object", properties, required, additionalProperties: false };
 }
 
 const GUIDE = readFileSync(new URL("./supervisor-guide.md", import.meta.url), "utf8");
@@ -306,6 +309,28 @@ export function apply(ctx, config) {
     return canonical;
   };
   const actorOf = (exec) => `agent:${exec?.agent?.id ?? "dsh"}`;
+  // g-190：解绑的权威身份映射——当前会话若是已配置的 supervisor，映射为 supervisor:<sid>
+  // （core authorizeUnbind 以 supervisor.session 匹配放行主管；普通会话保持 agent:<sid> 由 core 校验 owner）。
+  const unbindActorOf = (ex, root) => {
+    const sid = ex?.agent?.session?.id;
+    if (sid && readSupervisorSession(root) === sid) return `supervisor:${sid}`;
+    return actorOf(ex);
+  };
+  // g-190：子代理活跃度探测（live registry 权威）。
+  // 返回 "running"（正运行）/ "idle"（已加载未运行）/ "gone"（不在 live registry）/ "unknown"（registry 不可用）。
+  const childLiveState = (childId) => {
+    const agents = ctx.get?.("agents");
+    if (!agents || typeof agents.get !== "function") return "unknown";
+    try {
+      const a = agents.get(childId);
+      if (!a) return "gone";
+      // 尽力区分 running / idle：Agent 暴露 running 标志时精确判断，否则保守视为仍 live（idle）
+      if (a?.running === true || a?.status === "running") return "running";
+      return "idle";
+    } catch {
+      return "unknown";
+    }
+  };
 
   /** @type {Array<{def: object, run: (args: any, exec: any) => any}>} */
   const tools = [
@@ -811,6 +836,35 @@ export function apply(ctx, config) {
         parameters: params({ goal: str, reason: str }, ["goal"]),
       },
       run: (a, ex) => { postponeGoal(rootFor(ex), a.goal, { actor: actorOf(ex), reason: a.reason }); return { ok: true }; },
+    },
+    {
+      // g-190：从目标解绑执行子代理（安全 detach）——主管/目标 owner 专用，需当前 binding token。
+      // 仅授权主管（project.yaml supervisor.session）或目标 owner 可执行；子代理不能自我解绑。
+      def: {
+        name: "graph_unbind_goal_child",
+        description: "从目标解绑执行子代理（g-190，安全 detach）：按 goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 精确定位；仅授权主管或目标 owner 可执行；子代理不能自我解绑。解绑只清理绑定（attempt/事件/日志保留可审计），解绑后目标可暂缓/转移/重新派发；子代理仍运行（live registry）或状态不可确认时拒绝；token 未知/过期/并发冲突拒绝且不改数据；重复解绑幂等。",
+        parameters: params(
+          { goal: str, attempt: str, child_id: str, token: str, reason: str },
+          ["goal", "token"],
+        ),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        const hasAtt = typeof a.attempt === "string" && a.attempt.length > 0;
+        const hasChild = typeof a.child_id === "string" && a.child_id.length > 0;
+        if (hasAtt === hasChild) {
+          throw new GraphError("必须且只能指定一个选择器：attempt 或 child_id");
+        }
+        const result = unbindGoalChild(r, a.goal, {
+          actor: unbindActorOf(ex, r),
+          token: a.token,
+          attempt: hasAtt ? a.attempt : null,
+          childId: hasChild ? a.child_id : null,
+          reason: typeof a.reason === "string" && a.reason.length ? a.reason : null,
+          liveCheck: childLiveState,
+        });
+        return { ok: true, ...result };
+      },
     },
   ];
 
@@ -1609,6 +1663,47 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-190: 从目标解绑执行子代理端点（GUI 确认 + reason + 错误反馈；严格 schema + 坏 JSON 400）
+    // 授权：GUI 即负责人（human:gui，owner）；能力约束 = 当前 binding token（board/goalDetail 下发，
+    // 未知/过期/并发 CAS 失败一律 409 拒绝且不改数据；子代理仍在运行或状态不可确认时拒绝）。
+    {
+      path: "/api/dsh-graph/unbind",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          let body;
+          try {
+            body = await readBody(req);
+          } catch {
+            return json(res, 400, { error: "请求体不是合法 JSON" });
+          }
+          const v = validateSchema(body, unbindPostSchema);
+          if (!v.valid) {
+            return json(res, 400, schemaErrorResponse(v.errors));
+          }
+          const goal = String(body.goal);
+          const token = String(body.token);
+          const attempt = typeof body.attempt === "string" && body.attempt.length ? body.attempt : null;
+          const childId = typeof body.child_id === "string" && body.child_id.length ? body.child_id : null;
+          if ((attempt === null) === (childId === null)) {
+            return json(res, 400, { error: "必须且只能指定一个选择器：attempt 或 child_id" });
+          }
+          const rRoot = rootForReq(req, body);
+          const result = unbindGoalChild(rRoot, goal, {
+            actor: "human:gui",
+            token,
+            attempt,
+            childId,
+            reason: typeof body.reason === "string" && body.reason.length ? body.reason : null,
+            liveCheck: childLiveState,
+          });
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphConflictError ? 409 : (e instanceof GraphError ? 400 : 500);
           json(res, code, { error: String(e?.message ?? e) });
         }
       },

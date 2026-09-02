@@ -43,6 +43,7 @@
       "goal.type_changed": "变更类型", // g-158
       "goal.directive_set": "设置最近指令", "goal.comment_added": "添加评论",
       "attempt.handoff.confirmed": "确认返工 handoff", "attempt.handoff.superseded": "覆盖旧 handoff",
+      "attempt.unbound": "解绑子代理", // g-190
     };
 
     // 近期动态只保留对人有用的事件：泳道切换、修订与人工补充、判据/评审/交付关键节点
@@ -55,6 +56,7 @@
       "goal.type_changed", // g-158
       "goal.directive_set", "goal.comment_added",
       "attempt.handoff.confirmed", "attempt.handoff.superseded",
+      "attempt.unbound", // g-190
     ]);
 
     // 拆出事件三要素（时间/事件/执行者），供表格列渲染与 humanEvent 复用
@@ -72,6 +74,7 @@
         else if (e.event === "goal.comment_added") what = `评论：${(d.text ?? "").slice(0, 60)}${(d.text ?? "").length > 60 ? "…" : ""}`;
         else if (e.event === "attempt.handoff.confirmed") what = `确认 handoff：${d.handoff ?? ""}`;
         else if (e.event === "attempt.handoff.superseded") what = `覆盖 handoff：${d.old_handoff ?? ""} → ${d.new_handoff ?? ""}`;
+        else if (e.event === "attempt.unbound") what = `解绑子代理：${d.child_id ?? ""}${d.reason ? "（" + d.reason + "）" : ""}`; // g-190
         else what = e.event;
       }
       const who = String(e.actor ?? "")

@@ -383,7 +383,11 @@
                               provider: att.provider, model: att.model, modelRoute: att.model_route,
                               statusLine: lastAtt?.status_line ?? null,
                               goalId: props.id, relaunchKind: "exec",
-                              relaunchRoute, onRelaunched: setRelaunchRoute })
+                              relaunchRoute, onRelaunched: setRelaunchRoute,
+                              // g-190：解绑控件数据（attemptId/bindingToken；成功解绑后刷新详情与看板）
+                              attemptId: att.id,
+                              bindingToken: att.binding_token ?? null,
+                              onDetached: () => { load(); props.onRefresh?.(); } })
           : anyAtt
             ? h("div", { key: "relaunch-fallback", style: { ...S.livePanel, marginTop: 6 } },
                 h("div", { style: { ...S.meta, marginBottom: 2 } }, "⚠️ 最新子代理未启动/不可用，可换 provider/model 重新派发："),
