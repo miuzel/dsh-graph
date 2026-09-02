@@ -12,8 +12,8 @@
  * - 副作用收进 ctx.effect。
  */
 import { writeFileSync } from "node:fs";
-import { readFileSync, openSync, closeSync, fstatSync, lstatSync, realpathSync, constants as fsConstants } from "node:fs";
-import { relative, join, resolve, dirname, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createGoal,
@@ -929,115 +929,6 @@ export function apply(ctx, config) {
       });
       req.on("error", reject);
     });
-    // ===== g-199：supervisor-session 只读端点（受保护 workspace 内读取 project.yaml）=====
-    // 安全模型（owner-trusted 本地 UI，g-206 基线）：端点只读，绝不 init / 绝不写盘 /
-    // 绝不落骨架（REST 测试断言工作区快照不变）；只接受服务端受保护 workspace
-    // （sandboxPolicy.workspaceRoot / fd capability），拒绝客户端 workspace/root 查询
-    // 参数与 body 字段（防跨 workspace 越界，P0）。fd 能力模式：捕获时记录
-    // dev/ino/uid/mode 身份，请求时 fstat 复核（数字 fd 复用 → 400 identity 不匹配）。
-    // 降级模式（无 fd）：逐组件 lstat 禁 nofollow / owner/mode 校验；路径组件符号链接
-    // → 400，project.yaml 符号链接 → null（fail-closed 安全降级）。
-    const PROTECTED_ERR_CODES = new Set([
-      "ENOENT", "EACCES", "EPERM", "EINVAL", "ELOOP", "ENOTDIR",
-      "ENAMETOOLONG", "EBADF", "EMLINK", "ENXIO", "ENOTEMPTY",
-    ]);
-    const isSafeWorkspaceStat = (st, uid) =>
-      !!st && typeof st.isDirectory === "function" && st.isDirectory() &&
-      st.uid === uid && (st.mode & 0o022) === 0;
-    const parseSupervisorSessionText = (text) => {
-      const m = /^supervisor:\s*\n(?:[ \t].*\n)*?[ \t]+session:\s*"?([^\s"#]+)"?/m.exec(text ?? "");
-      return m ? m[1] : null;
-    };
-    const captureProtectedWorkspace = (ctx, config) => {
-      try {
-        const policy = ctx.get?.("sandboxPolicy");
-        const path = typeof policy?.workspaceRoot === "string" && policy.workspaceRoot
-          ? policy.workspaceRoot : null;
-        const fd = typeof policy?.workspaceFd === "number" ? policy.workspaceFd
-          : (typeof policy?.workspaceHandle?.fd === "number" ? policy.workspaceHandle.fd : null);
-        if (typeof fd === "number") {
-          let st = null;
-          try { st = fstatSync(fd); } catch { st = null; }
-          if (st && typeof st.isDirectory === "function" && st.isDirectory()) {
-            return { path, fd, dev: st.dev, ino: st.ino, uid: st.uid, mode: st.mode & 0o7777, hasFd: true };
-          }
-        }
-        if (path) return { path, fd: null, dev: null, ino: null, uid: null, mode: null, hasFd: false };
-        return null;
-      } catch { return null; }
-    };
-    const protectedWorkspace = (capability) => {
-      if (!capability) throw new GraphError("无受保护 workspace（sandboxPolicy 缺失）");
-      if (capability.hasFd && typeof capability.fd === "number") {
-        let st = null;
-        try { st = fstatSync(capability.fd); } catch { st = null; }
-        const ok = st && typeof st.isDirectory === "function" && st.isDirectory() &&
-          st.dev === capability.dev && st.ino === capability.ino &&
-          st.uid === capability.uid && (st.mode & 0o7777) === capability.mode;
-        if (!ok) throw new GraphError("受保护 workspace fd identity 不匹配");
-        return { path: capability.path, fd: capability.fd, hasFd: true };
-      }
-      return { path: capability.path, fd: null, hasFd: false };
-    };
-    const graphRootWithinWorkspace = (workspace, graphRoot) => {
-      if (!workspace || !graphRoot) return false;
-      const rel = relative(workspace, graphRoot);
-      if (!rel) return true;
-      return rel !== ".." && !rel.startsWith(".." + sep);
-    };
-    const readSupervisorSessionSecure = (capability, graphRoot) => {
-      const fds = [];
-      const closeAll = () => { for (const f of fds) { try { closeSync(f); } catch { /* 静默 */ } } };
-      const uid = process.getuid?.() ?? -1;
-      try {
-        if (!capability.path) return null;
-        const segs = relative(capability.path, graphRoot).split(sep).filter(Boolean);
-        if (segs.some((s) => s === ".." || s === ".")) return null;
-        if (capability.hasFd && typeof capability.fd === "number") {
-          let baseFd = null;
-          try {
-            baseFd = openSync(`/proc/self/fd/${capability.fd}`, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY);
-          } catch { return null; }
-          fds.push(baseFd);
-          const baseSt = fstatSync(baseFd);
-          if (!isSafeWorkspaceStat(baseSt, uid)) return null;
-          let current = baseFd;
-          for (const seg of segs) {
-            const next = openSync(`/proc/self/fd/${current}/${seg}`, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
-            fds.push(next);
-            closeSync(current);
-            current = next;
-          }
-          let text = null;
-          try {
-            text = readFileSync(`/proc/self/fd/${current}/project.yaml`, { encoding: "utf8", flag: fsConstants.O_NOFOLLOW });
-          } catch (e) {
-            if (e?.code === "ENOENT") return null;
-            throw e;
-          }
-          return parseSupervisorSessionText(text);
-        }
-        let current = capability.path;
-        for (const seg of segs) {
-          const next = join(current, seg);
-          let lst = null;
-          try { lst = lstatSync(next); } catch (e) { if (e?.code === "ENOENT") return null; throw e; }
-          if (!isSafeWorkspaceStat(lst, uid)) throw new GraphError("受保护 workspace 路径组件不安全（symlink/owner/mode）");
-          current = next;
-        }
-        const projPath = join(current, "project.yaml");
-        let lst = null;
-        try { lst = lstatSync(projPath); } catch (e) { if (e?.code === "ENOENT") return null; throw e; }
-        if (lst.isSymbolicLink()) return null;
-        if (!lst.isFile() || lst.uid !== uid || (lst.mode & 0o022) !== 0) return null;
-        let text = null;
-        try { text = readFileSync(projPath, "utf8"); } catch (e) { if (e?.code === "ENOENT") return null; throw e; }
-        return parseSupervisorSessionText(text);
-      } finally {
-        closeAll();
-      }
-    };
-    const protectedWorkspaceCap = captureProtectedWorkspace(ctx, config);
   // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
   // （parent.options / childSessionMeta / captureDelegatedPolicyOverrides），传 null 必然失败。
   // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。
@@ -1160,49 +1051,6 @@ export function apply(ctx, config) {
         }
       },
     },
-    // g-199：主管会话只读端点——受保护 workspace 内读 project.yaml 的 supervisor.session。
-    // 只 GET；无 sandboxPolicy 时允许服务端受控 ?workspace= 回退，拒绝 ?root= 与空参数；
-    // 纯解析/只读，不 init/写盘；有 sandboxPolicy 时优先受保护 workspace。
-    // 响应仅 {supervisorSession}（非敏感，无 token）。
-    {
-      path: "/api/dsh-graph/supervisor-session",
-      handler: (req, res) => {
-        try {
-          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
-          let sp = null;
-          try { sp = new URL(req?.url ?? "", "http://x").searchParams; } catch { sp = null; }
-          if (sp && sp.has("root")) {
-            return json(res, 400, { error: "supervisor-session 拒绝 root 参数" });
-          }
-          if (protectedWorkspaceCap) {
-            if (sp && sp.has("workspace")) {
-              return json(res, 400, { error: "supervisor-session 在有受保护 workspace 时不接受 workspace 参数" });
-            }
-            const cap = protectedWorkspace(protectedWorkspaceCap);
-            if (!cap.path) return json(res, 200, { supervisorSession: null });
-            const graphRoot = resolveRoot(config, cap.path);
-            if (!graphRootWithinWorkspace(cap.path, graphRoot)) {
-              throw new GraphError("graphRoot 越出受保护 workspace");
-            }
-            const supervisorSession = readSupervisorSessionSecure(cap, graphRoot);
-            return json(res, 200, { supervisorSession });
-          }
-          // 无 sandboxPolicy：服务端受控 ?workspace= 回退（纯解析/只读，绝不 init / 绝不写盘）
-          const ws = sp?.get("workspace");
-          if (!ws || !ws.trim()) {
-            return json(res, 400, { error: "无 sandboxPolicy 时 supervisor-session 需要非空 ?workspace= 参数" });
-          }
-          const canonical = resolveCanonicalRoot(config, ws.trim());
-          const supervisorSession = readSupervisorSession(canonical.root);
-          return json(res, 200, { supervisorSession });
-        } catch (e) {
-          if (PROTECTED_ERR_CODES.has(e?.code)) return json(res, 400, { error: `受保护 workspace 读取失败（${e.code}）` });
-          const code = e instanceof GraphError ? 400 : 500;
-          json(res, code, { error: String(e?.message ?? e) });
-        }
-      },
-    },
-
     {
       path: "/api/dsh-graph/goal",
       handler: (req, res) => {
