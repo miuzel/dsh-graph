@@ -2540,6 +2540,49 @@ export function unbindGoalChild(
       doc.meta.detached_by = actor;
       if (doc.meta.result === "pending") doc.meta.result = "detached";
       saveGoal(attFile, doc);
+      
+      // g-190 fix: 顺带把更旧 attempt 的绑定标记为 superseded（解决多 attempt 目标暂缓被阻塞问题）
+      const attDir = join(goalDirOf(binding.goalFile), "attempts");
+      if (existsSync(attDir)) {
+        const allAtts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort();
+        for (const oldAtt of allAtts) {
+          if (oldAtt === binding.attempt) continue; // 跳过当前已解绑的 attempt
+          const oldFile = join(attDir, oldAtt, "attempt.md");
+          if (!existsSync(oldFile)) continue;
+          try {
+            const oldDoc = loadGoal(oldFile);
+            if (oldDoc.meta.id !== oldAtt || oldDoc.meta.goal !== goalId) continue;
+            // 只处理有绑定且未解绑的旧 attempt
+            if (oldDoc.meta.detached === true) continue;
+            if (!oldDoc.meta.child_id) continue;
+            // 标记为 superseded（被新 attempt 绑定取代）
+            oldDoc.meta.detached = true;
+            oldDoc.meta.detached_at = detachedAt;
+            oldDoc.meta.detached_by = "system:superseded";
+            oldDoc.meta.result = "superseded";
+            delete oldDoc.meta.binding_token;
+            delete oldDoc.meta.child_id;
+            delete oldDoc.meta.parent_session_id;
+            saveGoal(oldFile, oldDoc);
+            // 记录事件
+            appendEvent(root, {
+              actor: "system",
+              event: "attempt.superseded",
+              goal: goalId,
+              details: {
+                attempt: oldAtt,
+                child_id: oldDoc.meta.child_id ?? null,
+                reason: "被新 attempt " + binding.attempt + " 的绑定取代",
+                superseded_at: detachedAt,
+              },
+            });
+          } catch (e) {
+            // 忽略旧 attempt 的读取错误，不影响当前解绑
+            console.warn("[g-190] 标记旧 attempt " + oldAtt + " 为 superseded 失败:", e);
+          }
+        }
+      }
+      
       return {
         value: { detached: true, attempt: binding.attempt, child_id: binding.child_id } as UnbindResult,
         events: [],
