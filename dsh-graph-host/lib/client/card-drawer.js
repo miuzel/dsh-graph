@@ -89,7 +89,7 @@
                   card.parent_session_id
                     ? h("button", {
                         style: S.btn,
-                        className: "dg-btn",
+                        className: "dg-btn dg-session-link",
                         onClick: () => { openChildSession(card.parent_session_id, card.child_id); },
                       }, "↗ 转到对话")
                     : null),

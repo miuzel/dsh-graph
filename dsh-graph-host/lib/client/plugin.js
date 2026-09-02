@@ -104,7 +104,7 @@
       if (!childId) return null;
       return h("button", {
         style: { ...S.btn, fontSize: 11, padding: "0 6px", marginLeft: 6, flexShrink: 0 },
-        className: "dg-btn",
+        className: "dg-btn dg-session-link",
         title: parentSessionId ? "跳转到子代理会话" : "子代理 id（父会话未知，仅展示）",
         onClick: (e) => { e.stopPropagation(); if (parentSessionId) openChildSession(parentSessionId, childId); },
       }, label ?? "↗ 会话");
