@@ -119,6 +119,15 @@ window.__ModuleLoader__.load({
       .dg-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.25)); }
       .dg-btn:active { filter: brightness(0.95); }
       .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
+      /* g-227：仅“转到对话”入口在可悬停指针下轻微放大，不影响布局 */
+      @media (hover: hover) and (pointer: fine) {
+        .dg-session-link { transition: transform .16s ease, background .12s ease, border-color .12s ease, filter .12s ease; }
+        .dg-session-link:hover:not(:disabled) { transform: scale(1.04); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .dg-session-link { transition-duration: 0s !important; }
+        .dg-session-link:hover:not(:disabled) { transform: none; }
+      }
       /* g-162：普通泳道内容底部居中的扁平折叠入口；released 不使用此控件 */
       .dg-lane-collapse {
         position: absolute; left: 50%; right: auto; bottom: 2px; transform: translateX(-50%); width: 32px; height: 9px; padding: 0; border: 1px solid rgba(128,128,128,.42);
@@ -2214,7 +2223,7 @@ window.__ModuleLoader__.load({
                   card.parent_session_id
                     ? h("button", {
                         style: S.btn,
-                        className: "dg-btn",
+                        className: "dg-btn dg-session-link",
                         onClick: () => { openChildSession(card.parent_session_id, card.child_id); },
                       }, "↗ 转到对话")
                     : null),
@@ -7084,7 +7093,7 @@ window.__ModuleLoader__.load({
       if (!childId) return null;
       return h("button", {
         style: { ...S.btn, fontSize: 11, padding: "0 6px", marginLeft: 6, flexShrink: 0 },
-        className: "dg-btn",
+        className: "dg-btn dg-session-link",
         title: parentSessionId ? "跳转到子代理会话" : "子代理 id（父会话未知，仅展示）",
         onClick: (e) => { e.stopPropagation(); if (parentSessionId) openChildSession(parentSessionId, childId); },
       }, label ?? "↗ 会话");
