@@ -284,7 +284,12 @@
         const onEvent = (e) => {
           const evWs = e?.detail?.workspace;
           if (!evWs || evWs === currentWs) {
-            setHidden(e?.detail?.hidden ?? getHiddenVersionSlugs(currentWs));
+            const rawHidden = e?.detail?.hidden;
+            if (Array.isArray(rawHidden)) {
+              setHidden(rawHidden.filter((s) => typeof s === "string"));
+            } else {
+              setHidden(getHiddenVersionSlugs(currentWs));
+            }
           }
         };
         const onStorage = (e) => {

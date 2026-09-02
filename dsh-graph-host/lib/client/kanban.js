@@ -510,7 +510,17 @@
         const params = showArchived ? "?includeArchived=1" : "";
         fetch(graphUrl("/api/dsh-graph" + params, {}, activeWs))
           .then((r) => r.json())
-          .then((data) => { setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data); })
+          .then((data) => {
+            setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data);
+            if (Array.isArray(data?.versions)) {
+              const validSlugs = new Set(data.versions.map((v) => v.slug));
+              const currentHidden = getHiddenVersionSlugs(activeWs);
+              const cleaned = currentHidden.filter((s) => validSlugs.has(s));
+              if (cleaned.length !== currentHidden.length) {
+                setHiddenVersionSlugs(cleaned);
+              }
+            }
+          })
           .catch((e) => setState({ loading: false, error: String(e) }));
       };
       React.useEffect(() => {

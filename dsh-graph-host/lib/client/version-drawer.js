@@ -35,14 +35,20 @@
         h("div", {
           style: S.drawerLeft,
           className: "dg-version-drawer",
+          role: "dialog",
+          "aria-modal": "true",
+          "aria-labelledby": "dg-version-drawer-title",
+          "aria-label": "版本管理",
           onClick: (e) => e.stopPropagation(),
         },
-          h("span", {
-            style: S.close,
-            title: "关闭",
+          h("button", {
+            type: "button",
+            style: { ...S.close, background: "none", border: "none", padding: 0, color: "inherit", font: "inherit" },
+            title: "关闭版本管理抽屉",
+            "aria-label": "关闭版本管理抽屉",
             onClick: onClose,
           }, "✕"),
-          h("div", { style: { fontWeight: 700, fontSize: 16, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
+          h("div", { id: "dg-version-drawer-title", style: { fontWeight: 700, fontSize: 16, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
             h("span", null, "🏷️ 版本管理"),
             h("span", { style: { ...S.meta, fontSize: 12, fontWeight: 400 } },
               "（显示 " + visibleCount + "/" + allVersions.length + "）")),
@@ -76,6 +82,7 @@
                 h("input", {
                   style: { ...S.promptInput, width: "100%", fontSize: 12, padding: "4px 8px" },
                   placeholder: "搜索版本名称或 slug…",
+                  "aria-label": "搜索版本名称或 slug",
                   value: search,
                   onChange: (e) => setSearch(e.target.value),
                 }))
