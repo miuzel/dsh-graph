@@ -23,6 +23,7 @@ PARTS=(
   "goal-modal"
   "criteria-modal"
   "drag-prompts"
+  "version-drawer"
   "kanban"
   "settings-modal"
   "settings"

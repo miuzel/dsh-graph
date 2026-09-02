@@ -352,6 +352,7 @@
         const deps = (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((x) => String(x?.goal ?? x));
         const lastAtt = (d.attempts ?? []).slice(-1)[0];
         const statusLine = lastAtt?.status_line ?? null;
+        const isVersionHidden = meta.version && Array.isArray(props.hiddenVersionSlugs) && props.hiddenVersionSlugs.includes(meta.version);
         const bits = [
           props.id,
           "状态：" + (STATUS_LABEL[status] ?? status),
@@ -363,6 +364,29 @@
         const metDeps = deps.filter((d) => props.goalStatus?.[d] === "delivered");
         headMeta = [
           h("div", { key: "m1", style: S.meta }, bits.join(" ｜ ")),
+          // g-223：归属版本在看板中被隐藏时的友好提示与恢复显示入口
+          isVersionHidden
+            ? h("div", {
+                key: "m-hidden-warn",
+                style: {
+                  ...S.meta,
+                  color: "var(--dsw-alias-state-warn-label, #e0a53a)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginTop: 2,
+                },
+              },
+                `👁️ 该目标归属的版本「${meta.version}」当前在看板中处于隐藏状态`,
+                props.onUnhideVersion
+                  ? h("button", {
+                      style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                      className: "dg-btn",
+                      title: "在看板中恢复显示该版本泳道",
+                      onClick: () => props.onUnhideVersion(meta.version),
+                    }, "恢复显示该版本")
+                  : null)
+            : null,
           pendingDeps.length
             ? h("div", { key: "m2", style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
             : null,

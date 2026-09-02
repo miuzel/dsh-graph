@@ -36,6 +36,14 @@
         padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
       },
+      // g-223：左侧抽屉（版本管理抽屉，从屏幕左侧展开）
+      drawerLeft: {
+        position: "fixed", top: 0, left: 0, height: "100vh", width: 380, maxWidth: "85vw",
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10001,
+        boxShadow: "4px 0 16px rgba(0,0,0,.45)",
+        padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
+        fontFamily: "inherit",
+      },
       drawerSection: { marginTop: 14 },
       drawerH: { fontWeight: 700, fontSize: 13, marginBottom: 6, opacity: 0.9 },
       modal: {
@@ -233,6 +241,70 @@
         };
       }, []);
       return enabled;
+    }
+
+    // ===== g-223：版本显隐过滤（localStorage 持久化存储 hidden_version_slugs 数组）=====
+    const HIDDEN_VERSIONS_KEY_PREFIX = "dsh-graph.hidden-versions.";
+
+    function getHiddenVersionsStorageKey(workspace) {
+      const ws = workspace ?? (currentWorkspace() || "default");
+      return HIDDEN_VERSIONS_KEY_PREFIX + ws;
+    }
+
+    function getHiddenVersionSlugs(workspace) {
+      try {
+        const raw = localStorage.getItem(getHiddenVersionsStorageKey(workspace));
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function setHiddenVersionSlugs(slugs, workspace) {
+      const ws = workspace ?? (currentWorkspace() || "default");
+      const list = Array.isArray(slugs) ? [...new Set(slugs.filter((s) => typeof s === "string"))] : [];
+      try {
+        localStorage.setItem(getHiddenVersionsStorageKey(ws), JSON.stringify(list));
+      } catch {}
+      window.dispatchEvent(new CustomEvent("dsh-graph.hidden-versions-changed", { detail: { workspace: ws, hidden: list } }));
+      return list;
+    }
+
+    function useHiddenVersionSlugs(workspace) {
+      const currentWs = workspace ?? (currentWorkspace() || "default");
+      const [hidden, setHidden] = React.useState(() => getHiddenVersionSlugs(currentWs));
+
+      React.useEffect(() => {
+        setHidden(getHiddenVersionSlugs(currentWs));
+      }, [currentWs]);
+
+      React.useEffect(() => {
+        const onEvent = (e) => {
+          const evWs = e?.detail?.workspace;
+          if (!evWs || evWs === currentWs) {
+            setHidden(e?.detail?.hidden ?? getHiddenVersionSlugs(currentWs));
+          }
+        };
+        const onStorage = (e) => {
+          if (e.key === getHiddenVersionsStorageKey(currentWs)) {
+            setHidden(getHiddenVersionSlugs(currentWs));
+          }
+        };
+        window.addEventListener("dsh-graph.hidden-versions-changed", onEvent);
+        window.addEventListener("storage", onStorage);
+        return () => {
+          window.removeEventListener("dsh-graph.hidden-versions-changed", onEvent);
+          window.removeEventListener("storage", onStorage);
+        };
+      }, [currentWs]);
+
+      const setter = React.useCallback((slugs) => {
+        return setHiddenVersionSlugs(slugs, currentWs);
+      }, [currentWs]);
+
+      return [hidden, setter];
     }
 
     // g-222：跨版本打开 Host 工作区路径（优先 0.1.2+ session.openWorkspacePath，回退 0.1.1-rc host.openPath）。

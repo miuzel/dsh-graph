@@ -30,6 +30,10 @@
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
       const [showArchived, setShowArchived] = React.useState(false);
+      // g-223: 版本管理抽屉与显隐过滤状态（本地存储持久化，按当前解析 workspace 隔离与响应）
+      const [showVersionDrawer, setShowVersionDrawer] = React.useState(false);
+      const activeWs = resolveWorkspaceOfSession(props?.sessionId) || "default";
+      const [hiddenVersionSlugs, setHiddenVersionSlugs] = useHiddenVersionSlugs(activeWs);
       // g-134: 版本泳道管理状态
       const [showCreateVersion, setShowCreateVersion] = React.useState(false);
       const [newVersionSlug, setNewVersionSlug] = React.useState("");
@@ -405,9 +409,7 @@
         return "backlog";
       }
 
-      // g-113 定点 bug：从 slot props 取「被查看会话」id（conversation.view 渲染回调注入的
-      // session 作用域字段，字段名 props.sessionId——renderer 的 standardProps 里
-      // standard["sessionId"] = info.sessionId）。必须先于 load effect 声明，挂载即生效。
+      // g-113 & g-223：同步更新全局 viewedSessionId 供非组件内部/历史调用回退
       React.useEffect(() => {
         viewedSessionId = props?.sessionId ?? null;
         return () => { viewedSessionId = null; };
@@ -506,14 +508,14 @@
 
       const load = () => {
         const params = showArchived ? "?includeArchived=1" : "";
-        fetch(graphUrl("/api/dsh-graph" + params))
+        fetch(graphUrl("/api/dsh-graph" + params, {}, activeWs))
           .then((r) => r.json())
           .then((data) => { setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data); })
           .catch((e) => setState({ loading: false, error: String(e) }));
       };
       React.useEffect(() => {
         load();
-      }, [showArchived]); // showArchived 变化时重新加载
+      }, [showArchived, props?.sessionId, activeWs]); // showArchived/sessionId/activeWs 变化时重新加载
 
       // g-181：5 个父级 overlay 的 backdrop 误关保护——内容起点后释放到 backdrop 的合成 click 吞掉。
       // 必须在任何 early return 之前调用（Rules of Hooks），各 overlay 独立 ref，关闭回调保持原样。
@@ -528,8 +530,11 @@
       const b = state.data;
       if (b.error) return h("div", { style: S.wrap }, "看板数据错误：" + b.error);
 
-      const active = b.versions.filter((v) => v.status !== "released");
-      const released = b.versions.filter((v) => v.status === "released");
+      const allActiveVersions = b.versions.filter((v) => v.status !== "released");
+      const allReleasedVersions = b.versions.filter((v) => v.status === "released");
+      const hiddenVersionSet = new Set(hiddenVersionSlugs ?? []);
+      const active = allActiveVersions.filter((v) => !hiddenVersionSet.has(v.slug));
+      const released = allReleasedVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       // 全量目标 id→status 映射（依赖徽章状态化，发现#23：已交付依赖算「依赖满足」）
       const goalStatus = {};
       for (const v of b.versions) for (const g of v.goals) goalStatus[g.id] = g.status;
@@ -979,6 +984,35 @@
         rows.push(...lane(`🏷️ ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
         laneIndex++;
       }
+      // g-223：如果所有 active 版本都被隐藏且系统存在 active 版本，展示友好空状态提示行
+      if (active.length === 0 && allActiveVersions.length > 0) {
+        rows.push(
+          h("div", {
+            key: "empty-active-versions-label",
+            style: { ...S.laneLabel, background: "rgba(128,128,128,.05)", opacity: 0.8, fontStyle: "italic" },
+          }, "🏷️ 版本（全部隐藏）"),
+          h("div", {
+            key: "empty-active-versions-cell",
+            style: {
+              gridColumn: "2 / -1",
+              ...S.cell,
+              padding: "10px 14px",
+              background: "rgba(128,128,128,.03)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+            },
+          },
+            h("span", { style: { ...S.meta, fontSize: 12 } },
+              `已隐藏全部 ${allActiveVersions.length} 个活跃版本泳道。可通过左上角版本管理抽屉随时恢复显示。`),
+            h("button", {
+              style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+              className: "dg-btn",
+              onClick: () => setHiddenVersionSlugs([]),
+            }, "恢复显示全部版本")),
+        );
+      }
       rows.push(...lane("独立目标", b.standalone, "standalone", null, laneIndex));
       laneIndex++;
       rows.push(...backlogRow("backlog", b.backlog, "backlog"));
@@ -1155,7 +1189,7 @@
       }
 
       // g-216: 判定是否有任何弹窗或抽屉处于打开态
-      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings);
+      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer);
 
       return h(
         "div",
@@ -1207,7 +1241,7 @@
           }, "⚙"),
           // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
-            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅"))),
+            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (activeWs ?? "∅"))),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
@@ -1216,8 +1250,15 @@
         // g-127/g-156/g-164：折叠时对应列窄化为 36px（blocked 和 deliver 独立折叠），
         // 列模板统一由 gridCols 按当前折叠状态动态计算，与 released 泳道网格保持一致
         h("div", { style: { ...S.grid, gridTemplateColumns: gridCols } },
-          // g-174：新建版本入口从标题栏移至看板左上角（原「泳道＼阶段」单元格），复用 g-134 状态与弹窗逻辑
+          // g-174 & g-223：看板左上角单元格放置「版本管理」图标入口与「＋ 新建版本」按钮
           h("div", { style: S.stageHead },
+            h("button", {
+              style: { ...S.btn, fontSize: 12, padding: "2px 6px", marginRight: 4, lineHeight: 1.2 },
+              className: "dg-btn dg-version-manage-btn",
+              title: "版本管理（显隐过滤与版本列表）",
+              "aria-label": "版本管理",
+              onClick: () => setShowVersionDrawer(true),
+            }, "🏷️"),
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "2px 8px" },
               className: "dg-btn",
@@ -1262,7 +1303,36 @@
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }), deletedCardSignal, onDeletedCardHandled: () => setDeletedCardSignal(null) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }), deletedCardSignal, onDeletedCardHandled: () => setDeletedCardSignal(null), hiddenVersionSlugs, onUnhideVersion: (slug) => { setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug)); } })
+          : null,
+        showVersionDrawer
+          ? h(VersionDrawer, {
+              versions: b.versions,
+              hiddenVersionSlugs,
+              onToggleVersion: (slug, visible) => {
+                if (visible) {
+                  setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug));
+                } else {
+                  setHiddenVersionSlugs([...hiddenVersionSlugs, slug]);
+                }
+              },
+              onShowAll: () => setHiddenVersionSlugs([]),
+              onHideAll: () => setHiddenVersionSlugs(b.versions.map((v) => v.slug)),
+              onShowActiveOnly: () => {
+                const releasedSlugs = b.versions.filter((v) => v.status === "released").map((v) => v.slug);
+                setHiddenVersionSlugs(releasedSlugs);
+              },
+              onClose: () => setShowVersionDrawer(false),
+              onOpenVersionDetail: (v) => {
+                setVersionDetailTarget({
+                  slug: v.slug,
+                  name: v.name,
+                  status: v.status,
+                  goals_count: (v.goals ?? []).length,
+                });
+                loadVersionDetail(v.slug);
+              },
+            })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,

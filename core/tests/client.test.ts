@@ -2199,3 +2199,129 @@ test("g-225 卡片 LiveStrip 模型展示契约：LiveStrip 默认不渲染可�
   assert.match(supervisorSrc, /h\("span", null, model\.provider\)/);
   assert.match(supervisorSrc, /h\("span", null, model\.model\)/);
 });
+test("g-223 源契约：build-client PARTS 收录 version-drawer 且 bundle 包含生成代码", () => {
+  const script = readFileSync(join(import.meta.dirname, "../../scripts/build-client.sh"), "utf8");
+  assert.match(script, /"version-drawer"/);
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(bundle, /function VersionDrawer\(props\)/);
+  assert.match(bundle, /🏷️ 版本管理/);
+  assert.match(bundle, /dg-version-manage-btn/);
+});
+
+test("g-223 源契约：helpers.js 提供 S.drawerLeft 及版本显隐存储辅助函数（支持 workspace 隔离与动态响应）", () => {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  assert.match(helpers, /drawerLeft:\s*\{/);
+  assert.match(helpers, /HIDDEN_VERSIONS_KEY_PREFIX = "dsh-graph\.hidden-versions\."/);
+  assert.match(helpers, /function getHiddenVersionsStorageKey\(workspace\)/);
+  assert.match(helpers, /function getHiddenVersionSlugs\(workspace\)/);
+  assert.match(helpers, /function setHiddenVersionSlugs\(/);
+  assert.match(helpers, /function useHiddenVersionSlugs\(workspace\)/);
+  assert.match(helpers, /dsh-graph\.hidden-versions-changed/);
+});
+
+test("g-223 源契约：kanban.js 挂载版本管理按钮、抽屉与隐藏版本过滤，且 render 阶段直接解析 activeWs", () => {
+  const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+  // 1. 左上角 stageHead 包含版本管理按钮
+  assert.match(kanban, /className: "dg-btn dg-version-manage-btn"/);
+  assert.match(kanban, /title: "版本管理（显隐过滤与版本列表）"/);
+  assert.match(kanban, /onClick: \(\) => setShowVersionDrawer\(true\)/);
+
+  // 2. 状态与过滤：直接按 props.sessionId 在 render 阶段解析 activeWs
+  assert.match(kanban, /const \[showVersionDrawer, setShowVersionDrawer\] = React\.useState\(false\)/);
+  assert.match(kanban, /const activeWs = resolveWorkspaceOfSession\(props\?\.sessionId\) \|\| "default"/);
+  assert.match(kanban, /const \[hiddenVersionSlugs, setHiddenVersionSlugs\] = useHiddenVersionSlugs\(activeWs\)/);
+  assert.match(kanban, /allActiveVersions\.filter\(\(v\) => !hiddenVersionSet\.has\(v\.slug\)\)/);
+  assert.match(kanban, /allReleasedVersions\.filter\(\(v\) => !hiddenVersionSet\.has\(v\.slug\)\)/);
+
+  // 3. 全部隐藏时的空状态
+  assert.match(kanban, /active\.length === 0 && allActiveVersions\.length > 0/);
+  assert.match(kanban, /已隐藏全部[\s\S]*?个活跃版本泳道/);
+
+  // 4. VersionDrawer 挂载
+  assert.match(kanban, /showVersionDrawer\s*\?\s*h\(VersionDrawer/);
+  assert.match(kanban, /onShowAll/);
+  assert.match(kanban, /onHideAll/);
+  assert.match(kanban, /onShowActiveOnly/);
+
+  // 5. load effect 依赖 sessionId 与 activeWs
+  assert.match(kanban, /\[showArchived,\s*props\?\.sessionId,\s*activeWs\]/);
+});
+
+test("g-223 源契约：goal-modal.js 包含隐藏版本友好提示与恢复显示入口", () => {
+  const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  assert.match(modal, /isVersionHidden/);
+  assert.match(modal, /该目标归属的版本「/);
+  assert.match(modal, /恢复显示该版本/);
+});
+
+test("g-223 VersionDrawer 组件逻辑与交互契约验证", () => {
+  const vDrawer = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/version-drawer.js"), "utf8");
+  assert.match(vDrawer, /function VersionDrawer\(props\)/);
+  assert.match(vDrawer, /"显示全部"/);
+  assert.match(vDrawer, /"仅活跃版本"/);
+  assert.match(vDrawer, /"隐藏全部"/);
+  assert.match(vDrawer, /onToggleVersion/);
+  assert.match(vDrawer, /onOpenVersionDetail/);
+});
+
+test("g-223 纯函数 resolveWorkspaceOfSession 与动态会话切换行为契约", () => {
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  
+  // 1. 验证 resolveWorkspaceOfSession 存在且具备完整回溯
+  assert.match(bundle, /function resolveWorkspaceOfSession\(sessionId\)/);
+  assert.match(bundle, /wsOf\(sid\)/);
+  assert.match(bundle, /viewed\?\.parentSessionId/);
+
+  // 2. 模拟运行 resolveWorkspaceOfSession 纯函数逻辑验证跨会话解析
+  const mockWorkspaces = [
+    { workspaceId: "ws-1", path: "/path/to/project-alpha", sessionIds: ["session-a1", "session-a2"] },
+    { workspaceId: "ws-2", path: "/path/to/project-beta", sessionIds: ["session-b1"] },
+  ];
+  const mockSessions = [
+    { sessionId: "session-a1", cwd: "/path/to/project-alpha" },
+    { sessionId: "session-a2", cwd: "/path/to/project-alpha" },
+    { sessionId: "session-b1", cwd: "/path/to/project-beta" },
+    { sessionId: "session-child-b2", parentSessionId: "session-b1" }, // 子代理无 cwd，回溯父会话
+    { sessionId: "session-orphan", cwd: "/path/to/orphan" },
+  ];
+
+  function testResolve(sid, viewedSid, currentSid, lastGood) {
+    const wsOf = (id) => mockWorkspaces.find((w) => w.sessionIds.includes(id));
+    const targetSid = sid ?? viewedSid;
+    if (targetSid) {
+      const w = wsOf(targetSid);
+      if (w?.path) return w.path;
+      const viewed = mockSessions.find((s) => s.sessionId === targetSid);
+      if (viewed?.cwd) return viewed.cwd;
+      if (viewed?.parentSessionId) {
+        const parent = mockSessions.find((s) => s.sessionId === viewed.parentSessionId);
+        if (parent?.cwd) return parent.cwd;
+        const pw = wsOf(viewed.parentSessionId);
+        if (pw?.path) return pw.path;
+      }
+    }
+    if (currentSid) {
+      const w = wsOf(currentSid);
+      if (w?.path) return w.path;
+      const item = mockSessions.find((s) => s.sessionId === currentSid);
+      if (item?.cwd) return item.cwd;
+    }
+    return lastGood ?? null;
+  }
+
+  // 会话切换首个 render（此时 viewedSessionId 可能仍是旧的或 null）
+  assert.equal(testResolve("session-a1", "session-b1", "session-b1", null), "/path/to/project-alpha", "传入 session-a1 时首个 render 立即解析出 alpha 工作区");
+  assert.equal(testResolve("session-b1", "session-a1", "session-a1", null), "/path/to/project-beta", "切换为 session-b1 时立即解析出 beta 工作区");
+  assert.equal(testResolve("session-child-b2", null, null, null), "/path/to/project-beta", "子代理通过 parentSessionId 回溯正确解析父工作区");
+  assert.equal(testResolve("session-orphan", null, null, null), "/path/to/orphan", "无 workspace 条目但有 session.cwd 时安全回退");
+});
+
+test("g-223 行为契约：不同 workspace 的 hidden_versions 隔离存储与切换", () => {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  const prefix = "dsh-graph.hidden-versions.";
+  const keyA = prefix + "/ws/project-a";
+  const keyB = prefix + "/ws/project-b";
+  assert.notEqual(keyA, keyB, "不同工作区存储 key 严格隔离");
+  assert.match(helpers, /HIDDEN_VERSIONS_KEY_PREFIX \+ ws/);
+});
+

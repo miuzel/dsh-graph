@@ -354,6 +354,14 @@ window.__ModuleLoader__.load({
         padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
       },
+      // g-223：左侧抽屉（版本管理抽屉，从屏幕左侧展开）
+      drawerLeft: {
+        position: "fixed", top: 0, left: 0, height: "100vh", width: 380, maxWidth: "85vw",
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10001,
+        boxShadow: "4px 0 16px rgba(0,0,0,.45)",
+        padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
+        fontFamily: "inherit",
+      },
       drawerSection: { marginTop: 14 },
       drawerH: { fontWeight: 700, fontSize: 13, marginBottom: 6, opacity: 0.9 },
       modal: {
@@ -551,6 +559,70 @@ window.__ModuleLoader__.load({
         };
       }, []);
       return enabled;
+    }
+
+    // ===== g-223：版本显隐过滤（localStorage 持久化存储 hidden_version_slugs 数组）=====
+    const HIDDEN_VERSIONS_KEY_PREFIX = "dsh-graph.hidden-versions.";
+
+    function getHiddenVersionsStorageKey(workspace) {
+      const ws = workspace ?? (currentWorkspace() || "default");
+      return HIDDEN_VERSIONS_KEY_PREFIX + ws;
+    }
+
+    function getHiddenVersionSlugs(workspace) {
+      try {
+        const raw = localStorage.getItem(getHiddenVersionsStorageKey(workspace));
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function setHiddenVersionSlugs(slugs, workspace) {
+      const ws = workspace ?? (currentWorkspace() || "default");
+      const list = Array.isArray(slugs) ? [...new Set(slugs.filter((s) => typeof s === "string"))] : [];
+      try {
+        localStorage.setItem(getHiddenVersionsStorageKey(ws), JSON.stringify(list));
+      } catch {}
+      window.dispatchEvent(new CustomEvent("dsh-graph.hidden-versions-changed", { detail: { workspace: ws, hidden: list } }));
+      return list;
+    }
+
+    function useHiddenVersionSlugs(workspace) {
+      const currentWs = workspace ?? (currentWorkspace() || "default");
+      const [hidden, setHidden] = React.useState(() => getHiddenVersionSlugs(currentWs));
+
+      React.useEffect(() => {
+        setHidden(getHiddenVersionSlugs(currentWs));
+      }, [currentWs]);
+
+      React.useEffect(() => {
+        const onEvent = (e) => {
+          const evWs = e?.detail?.workspace;
+          if (!evWs || evWs === currentWs) {
+            setHidden(e?.detail?.hidden ?? getHiddenVersionSlugs(currentWs));
+          }
+        };
+        const onStorage = (e) => {
+          if (e.key === getHiddenVersionsStorageKey(currentWs)) {
+            setHidden(getHiddenVersionSlugs(currentWs));
+          }
+        };
+        window.addEventListener("dsh-graph.hidden-versions-changed", onEvent);
+        window.addEventListener("storage", onStorage);
+        return () => {
+          window.removeEventListener("dsh-graph.hidden-versions-changed", onEvent);
+          window.removeEventListener("storage", onStorage);
+        };
+      }, [currentWs]);
+
+      const setter = React.useCallback((slugs) => {
+        return setHiddenVersionSlugs(slugs, currentWs);
+      }, [currentWs]);
+
+      return [hidden, setter];
     }
 
     // g-222：跨版本打开 Host 工作区路径（优先 0.1.2+ session.openWorkspacePath，回退 0.1.1-rc host.openPath）。
@@ -3126,6 +3198,7 @@ window.__ModuleLoader__.load({
         const deps = (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((x) => String(x?.goal ?? x));
         const lastAtt = (d.attempts ?? []).slice(-1)[0];
         const statusLine = lastAtt?.status_line ?? null;
+        const isVersionHidden = meta.version && Array.isArray(props.hiddenVersionSlugs) && props.hiddenVersionSlugs.includes(meta.version);
         const bits = [
           props.id,
           "状态：" + (STATUS_LABEL[status] ?? status),
@@ -3137,6 +3210,29 @@ window.__ModuleLoader__.load({
         const metDeps = deps.filter((d) => props.goalStatus?.[d] === "delivered");
         headMeta = [
           h("div", { key: "m1", style: S.meta }, bits.join(" ｜ ")),
+          // g-223：归属版本在看板中被隐藏时的友好提示与恢复显示入口
+          isVersionHidden
+            ? h("div", {
+                key: "m-hidden-warn",
+                style: {
+                  ...S.meta,
+                  color: "var(--dsw-alias-state-warn-label, #e0a53a)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginTop: 2,
+                },
+              },
+                `👁️ 该目标归属的版本「${meta.version}」当前在看板中处于隐藏状态`,
+                props.onUnhideVersion
+                  ? h("button", {
+                      style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                      className: "dg-btn",
+                      title: "在看板中恢复显示该版本泳道",
+                      onClick: () => props.onUnhideVersion(meta.version),
+                    }, "恢复显示该版本")
+                  : null)
+            : null,
           pendingDeps.length
             ? h("div", { key: "m2", style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
             : null,
@@ -4047,6 +4143,183 @@ window.__ModuleLoader__.load({
 
     function KanbanView(props) {
       const [state, setState] = React.useState({ loading: true });
+    // ===== g-223：版本管理抽屉（左侧展开，版本显隐过滤、全选/取消/仅活跃快捷操作） =====
+    function VersionDrawer(props) {
+      const {
+        versions,
+        hiddenVersionSlugs,
+        onToggleVersion,
+        onShowAll,
+        onHideAll,
+        onShowActiveOnly,
+        onClose,
+        onOpenVersionDetail,
+      } = props;
+
+      const [search, setSearch] = React.useState("");
+      const backdropGuard = useBackdropClose(onClose);
+
+      const allVersions = Array.isArray(versions) ? versions : [];
+      const hiddenSet = new Set(hiddenVersionSlugs ?? []);
+
+      const visibleCount = allVersions.filter((v) => !hiddenSet.has(v.slug)).length;
+
+      const filteredVersions = allVersions.filter((v) => {
+        if (!search.trim()) return true;
+        const q = search.trim().toLowerCase();
+        return String(v.name ?? "").toLowerCase().includes(q) || String(v.slug ?? "").toLowerCase().includes(q);
+      });
+
+      return h(
+        "div",
+        null,
+        h("div", {
+          style: { ...S.overlay, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.35))" },
+          ...backdropGuard,
+        }),
+        h("div", {
+          style: S.drawerLeft,
+          className: "dg-version-drawer",
+          onClick: (e) => e.stopPropagation(),
+        },
+          h("span", {
+            style: S.close,
+            title: "关闭",
+            onClick: onClose,
+          }, "✕"),
+          h("div", { style: { fontWeight: 700, fontSize: 16, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
+            h("span", null, "🏷️ 版本管理"),
+            h("span", { style: { ...S.meta, fontSize: 12, fontWeight: 400 } },
+              "（显示 " + visibleCount + "/" + allVersions.length + "）")),
+          h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.8, marginBottom: 12, lineHeight: 1.4 } },
+            "勾选控制版本在看板中的显隐过滤；设置自动保存在本地，不影响底层版本数据。"),
+
+          // 便捷操作按钮栏
+          h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 } },
+            h("button", {
+              style: { ...S.btn, fontSize: 12, padding: "3px 8px" },
+              className: "dg-btn",
+              title: "显示全部版本",
+              onClick: onShowAll,
+            }, "显示全部"),
+            h("button", {
+              style: { ...S.btn, fontSize: 12, padding: "3px 8px" },
+              className: "dg-btn",
+              title: "仅显示活跃版本（planning / ready / in_progress / review 等未发布版本）",
+              onClick: onShowActiveOnly,
+            }, "仅活跃版本"),
+            h("button", {
+              style: { ...S.btn, fontSize: 12, padding: "3px 8px" },
+              className: "dg-btn",
+              title: "隐藏全部版本泳道",
+              onClick: onHideAll,
+            }, "隐藏全部")),
+
+          // 搜索过滤框（版本很多时快速定位）
+          allVersions.length > 8
+            ? h("div", { style: { marginBottom: 10 } },
+                h("input", {
+                  style: { ...S.promptInput, width: "100%", fontSize: 12, padding: "4px 8px" },
+                  placeholder: "搜索版本名称或 slug…",
+                  value: search,
+                  onChange: (e) => setSearch(e.target.value),
+                }))
+            : null,
+
+          // 版本列表
+          h("div", {
+            style: {
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              marginTop: 4,
+              maxHeight: "calc(100vh - 190px)",
+              overflowY: "auto",
+              paddingRight: 4,
+            },
+          },
+            filteredVersions.length === 0
+              ? h("div", { style: { ...S.meta, textAlign: "center", padding: "20px 0" } },
+                  allVersions.length === 0 ? "暂无版本" : "未找到匹配版本")
+              : filteredVersions.map((v) => {
+                  const isVisible = !hiddenSet.has(v.slug);
+                  const isReleased = v.status === "released";
+                  const isActive = !isReleased;
+                  const goalsCount = (v.goals ?? []).length;
+
+                  return h("div", {
+                    key: v.slug,
+                    style: {
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "8px 10px",
+                      borderRadius: 6,
+                      background: isVisible ? "var(--dsw-alias-bg-layer-2, rgba(128,128,128,.12))" : "rgba(128,128,128,.04)",
+                      border: "1px solid " + (isVisible ? "var(--dsw-alias-border-l2, rgba(128,128,128,.30))" : "rgba(128,128,128,.15)"),
+                      opacity: isVisible ? 1 : 0.65,
+                      transition: "all .12s ease",
+                    },
+                    className: "dg-version-item",
+                  },
+                    h("label", {
+                      style: {
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        cursor: "pointer",
+                        flex: 1,
+                        minWidth: 0,
+                        marginRight: 6,
+                      },
+                    },
+                      h("input", {
+                        type: "checkbox",
+                        checked: isVisible,
+                        style: { cursor: "pointer" },
+                        onChange: (e) => onToggleVersion(v.slug, e.target.checked),
+                      }),
+                      h("div", { style: { display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" } },
+                        h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+                          h("span", {
+                            style: {
+                              fontWeight: 600,
+                              fontSize: 13,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            },
+                            title: v.name,
+                          }, v.name),
+                          h("span", {
+                            style: {
+                              fontSize: 10,
+                              padding: "1px 5px",
+                              borderRadius: 3,
+                              fontWeight: 600,
+                              background: isReleased
+                                ? "var(--dsw-alias-state-success-tertiary, rgba(58,166,117,.2))"
+                                : "var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.2))",
+                              color: isReleased
+                                ? "var(--dsw-alias-state-success-primary, #6ee7a0)"
+                                : "var(--dsw-alias-state-business-primary, #8ab4ff)",
+                            },
+                          }, isReleased ? "已发布" : (v.status === "active" ? "进行中" : (STATUS_LABEL[v.status] ?? v.status ?? "活跃")))),
+                        h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } },
+                          v.slug + " ｜ " + goalsCount + " 个目标"))),
+                    h("button", {
+                      style: { ...S.btn, fontSize: 11, padding: "2px 6px", flexShrink: 0 },
+                      className: "dg-btn",
+                      title: "查看版本详情",
+                      onClick: (e) => {
+                        e.stopPropagation();
+                        onOpenVersionDetail?.(v);
+                      },
+                    }, "详情 ↗"));
+                })),
+        )
+      );
+    }
       const [modalGoal, setModalGoal] = React.useState(null);
       // g-171 回退修复：镜像 modalGoal 供 load 闭包判定（load 被 30s 轮询闭包捕获，
       // 直接读 state 会拿到首次渲染的 null）。详情弹窗打开期间跳过更新强调播放，
@@ -4079,6 +4352,10 @@ window.__ModuleLoader__.load({
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
       const [showArchived, setShowArchived] = React.useState(false);
+      // g-223: 版本管理抽屉与显隐过滤状态（本地存储持久化，按当前解析 workspace 隔离与响应）
+      const [showVersionDrawer, setShowVersionDrawer] = React.useState(false);
+      const activeWs = resolveWorkspaceOfSession(props?.sessionId) || "default";
+      const [hiddenVersionSlugs, setHiddenVersionSlugs] = useHiddenVersionSlugs(activeWs);
       // g-134: 版本泳道管理状态
       const [showCreateVersion, setShowCreateVersion] = React.useState(false);
       const [newVersionSlug, setNewVersionSlug] = React.useState("");
@@ -4454,9 +4731,7 @@ window.__ModuleLoader__.load({
         return "backlog";
       }
 
-      // g-113 定点 bug：从 slot props 取「被查看会话」id（conversation.view 渲染回调注入的
-      // session 作用域字段，字段名 props.sessionId——renderer 的 standardProps 里
-      // standard["sessionId"] = info.sessionId）。必须先于 load effect 声明，挂载即生效。
+      // g-113 & g-223：同步更新全局 viewedSessionId 供非组件内部/历史调用回退
       React.useEffect(() => {
         viewedSessionId = props?.sessionId ?? null;
         return () => { viewedSessionId = null; };
@@ -4555,14 +4830,14 @@ window.__ModuleLoader__.load({
 
       const load = () => {
         const params = showArchived ? "?includeArchived=1" : "";
-        fetch(graphUrl("/api/dsh-graph" + params))
+        fetch(graphUrl("/api/dsh-graph" + params, {}, activeWs))
           .then((r) => r.json())
           .then((data) => { setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data); })
           .catch((e) => setState({ loading: false, error: String(e) }));
       };
       React.useEffect(() => {
         load();
-      }, [showArchived]); // showArchived 变化时重新加载
+      }, [showArchived, props?.sessionId, activeWs]); // showArchived/sessionId/activeWs 变化时重新加载
 
       // g-181：5 个父级 overlay 的 backdrop 误关保护——内容起点后释放到 backdrop 的合成 click 吞掉。
       // 必须在任何 early return 之前调用（Rules of Hooks），各 overlay 独立 ref，关闭回调保持原样。
@@ -4577,8 +4852,11 @@ window.__ModuleLoader__.load({
       const b = state.data;
       if (b.error) return h("div", { style: S.wrap }, "看板数据错误：" + b.error);
 
-      const active = b.versions.filter((v) => v.status !== "released");
-      const released = b.versions.filter((v) => v.status === "released");
+      const allActiveVersions = b.versions.filter((v) => v.status !== "released");
+      const allReleasedVersions = b.versions.filter((v) => v.status === "released");
+      const hiddenVersionSet = new Set(hiddenVersionSlugs ?? []);
+      const active = allActiveVersions.filter((v) => !hiddenVersionSet.has(v.slug));
+      const released = allReleasedVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       // 全量目标 id→status 映射（依赖徽章状态化，发现#23：已交付依赖算「依赖满足」）
       const goalStatus = {};
       for (const v of b.versions) for (const g of v.goals) goalStatus[g.id] = g.status;
@@ -5028,6 +5306,35 @@ window.__ModuleLoader__.load({
         rows.push(...lane(`🏷️ ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
         laneIndex++;
       }
+      // g-223：如果所有 active 版本都被隐藏且系统存在 active 版本，展示友好空状态提示行
+      if (active.length === 0 && allActiveVersions.length > 0) {
+        rows.push(
+          h("div", {
+            key: "empty-active-versions-label",
+            style: { ...S.laneLabel, background: "rgba(128,128,128,.05)", opacity: 0.8, fontStyle: "italic" },
+          }, "🏷️ 版本（全部隐藏）"),
+          h("div", {
+            key: "empty-active-versions-cell",
+            style: {
+              gridColumn: "2 / -1",
+              ...S.cell,
+              padding: "10px 14px",
+              background: "rgba(128,128,128,.03)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+            },
+          },
+            h("span", { style: { ...S.meta, fontSize: 12 } },
+              `已隐藏全部 ${allActiveVersions.length} 个活跃版本泳道。可通过左上角版本管理抽屉随时恢复显示。`),
+            h("button", {
+              style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+              className: "dg-btn",
+              onClick: () => setHiddenVersionSlugs([]),
+            }, "恢复显示全部版本")),
+        );
+      }
       rows.push(...lane("独立目标", b.standalone, "standalone", null, laneIndex));
       laneIndex++;
       rows.push(...backlogRow("backlog", b.backlog, "backlog"));
@@ -5204,7 +5511,7 @@ window.__ModuleLoader__.load({
       }
 
       // g-216: 判定是否有任何弹窗或抽屉处于打开态
-      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings);
+      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer);
 
       return h(
         "div",
@@ -5256,7 +5563,7 @@ window.__ModuleLoader__.load({
           }, "⚙"),
           // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
-            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (currentWorkspace() ?? "∅"))),
+            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (activeWs ?? "∅"))),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
@@ -5265,8 +5572,15 @@ window.__ModuleLoader__.load({
         // g-127/g-156/g-164：折叠时对应列窄化为 36px（blocked 和 deliver 独立折叠），
         // 列模板统一由 gridCols 按当前折叠状态动态计算，与 released 泳道网格保持一致
         h("div", { style: { ...S.grid, gridTemplateColumns: gridCols } },
-          // g-174：新建版本入口从标题栏移至看板左上角（原「泳道＼阶段」单元格），复用 g-134 状态与弹窗逻辑
+          // g-174 & g-223：看板左上角单元格放置「版本管理」图标入口与「＋ 新建版本」按钮
           h("div", { style: S.stageHead },
+            h("button", {
+              style: { ...S.btn, fontSize: 12, padding: "2px 6px", marginRight: 4, lineHeight: 1.2 },
+              className: "dg-btn dg-version-manage-btn",
+              title: "版本管理（显隐过滤与版本列表）",
+              "aria-label": "版本管理",
+              onClick: () => setShowVersionDrawer(true),
+            }, "🏷️"),
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "2px 8px" },
               className: "dg-btn",
@@ -5311,7 +5625,36 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }), deletedCardSignal, onDeletedCardHandled: () => setDeletedCardSignal(null) })
+          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }), deletedCardSignal, onDeletedCardHandled: () => setDeletedCardSignal(null), hiddenVersionSlugs, onUnhideVersion: (slug) => { setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug)); } })
+          : null,
+        showVersionDrawer
+          ? h(VersionDrawer, {
+              versions: b.versions,
+              hiddenVersionSlugs,
+              onToggleVersion: (slug, visible) => {
+                if (visible) {
+                  setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug));
+                } else {
+                  setHiddenVersionSlugs([...hiddenVersionSlugs, slug]);
+                }
+              },
+              onShowAll: () => setHiddenVersionSlugs([]),
+              onHideAll: () => setHiddenVersionSlugs(b.versions.map((v) => v.slug)),
+              onShowActiveOnly: () => {
+                const releasedSlugs = b.versions.filter((v) => v.status === "released").map((v) => v.slug);
+                setHiddenVersionSlugs(releasedSlugs);
+              },
+              onClose: () => setShowVersionDrawer(false),
+              onOpenVersionDetail: (v) => {
+                setVersionDetailTarget({
+                  slug: v.slug,
+                  name: v.name,
+                  status: v.status,
+                  goals_count: (v.goals ?? []).length,
+                });
+                loadVersionDetail(v.slug);
+              },
+            })
           : null,
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
@@ -6562,52 +6905,56 @@ window.__ModuleLoader__.load({
     // （host workspaceView：dsh-host-apiproxy lib 793-801；runtime project() 直接透传 items），
     // path 即该 workspace 目录，`sessionIds.includes(被查看会话)` 即归属映射
     // （同文件 :9866 `summary.cwd === workspace.path && workspace.sessionIds.includes(summary.id)`）。
-    // 优先级：被查看会话（workspaces）→ 被查看会话（sessions cwd）→ list.current（workspaces）
-    // → list.current（sessions cwd）→ null（裸路径，端点兜底 process.cwd()）。
-    function currentWorkspace() {
+    // g-223：纯函数按 sessionId 解析归属 workspace（供 render/effect 阶段直接调用，避免会话切换时序缺陷）
+    // 优先级：指定 sessionId（workspaces 映射）→ sessionId（sessions cwd）→ sessionId（parent 回溯 cwd/workspaces）
+    // → list.current（workspaces）→ list.current（cwd）→ list.current（parent 回溯）→ lastGoodWorkspace 兜底
+    function resolveWorkspaceOfSession(sessionId) {
       try {
         const wsItems = workspacesRt?.list?.getSnapshot?.()?.items
           ?? appCtx?.get?.("workspaces")?.list?.getSnapshot?.()?.items ?? [];
-        const wsOf = (sid) => wsItems.find?.((w) => w.sessionIds.includes(sid));
+        const wsOf = (sid) => wsItems.find?.((w) => Array.isArray(w?.sessionIds) && w.sessionIds.includes(sid));
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
         const snap = rt?.list?.getSnapshot?.();
         const items = snap?.items ?? [];
-        if (viewedSessionId) {
-          const w = wsOf(viewedSessionId);
-          if (w?.path) { setLastGoodWorkspace(w.path); return w.path };
-          const viewed = items.find?.((s) => s.sessionId === viewedSessionId);
-          if (viewed?.cwd) { setLastGoodWorkspace(viewed.cwd); return viewed.cwd };
-          // g-129 修复（负责人 2026-08-22）：子代理会话不在 workspace 映射且无 cwd 时，
-          // 沿 parentSessionId 链回溯父会话的 workspace（子代理继承父会话 workspace）
+        const sid = sessionId ?? viewedSessionId;
+        if (sid) {
+          const w = wsOf(sid);
+          if (w?.path) { setLastGoodWorkspace(w.path); return w.path; }
+          const viewed = items.find?.((s) => s.sessionId === sid);
+          if (viewed?.cwd) { setLastGoodWorkspace(viewed.cwd); return viewed.cwd; }
           if (viewed?.parentSessionId) {
             const parent = items.find?.((s) => s.sessionId === viewed.parentSessionId);
-            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd };
+            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd; }
             const pw = wsOf(viewed.parentSessionId);
-            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path };
+            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path; }
           }
         }
         const current = snap?.current;
         if (current) {
           const w = wsOf(current);
-          if (w?.path) { setLastGoodWorkspace(w.path); return w.path };
+          if (w?.path) { setLastGoodWorkspace(w.path); return w.path; }
           const item = items.find?.((s) => s.sessionId === current);
-          if (item?.cwd) { setLastGoodWorkspace(item.cwd); return item.cwd };
-          // g-129 修复：current 是子代理时回溯父会话 workspace
+          if (item?.cwd) { setLastGoodWorkspace(item.cwd); return item.cwd; }
           if (item?.parentSessionId) {
             const parent = items.find?.((s) => s.sessionId === item.parentSessionId);
-            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd };
+            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd; }
             const pw = wsOf(item.parentSessionId);
-            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path };
+            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path; }
           }
         }
         if (lastGoodWorkspace) return lastGoodWorkspace;
         return null;
       } catch { if (lastGoodWorkspace) return lastGoodWorkspace; return null; }
     }
-    // 给 /api/dsh-graph* 请求统一追加 ?workspace=（GET/POST 通用；已知则带，未知则裸路径）
-    function graphUrl(path, extraParams = {}) {
+
+    function currentWorkspace() {
+      return resolveWorkspaceOfSession(viewedSessionId);
+    }
+
+    // 给 /api/dsh-graph* 请求统一追加 ?workspace=（GET/POST 通用；已知则带，未知则裸路径；可选显式传入 workspace）
+    function graphUrl(path, extraParams = {}, explicitWs = null) {
       const p = new URLSearchParams(extraParams);
-      const ws = currentWorkspace();
+      const ws = explicitWs ?? currentWorkspace();
       if (ws) p.set("workspace", ws);
       const qs = p.toString();
       if (!qs) return path;
