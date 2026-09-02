@@ -409,8 +409,17 @@
       // session 作用域字段，字段名 props.sessionId——renderer 的 standardProps 里
       // standard["sessionId"] = info.sessionId）。必须先于 load effect 声明，挂载即生效。
       React.useEffect(() => {
-        viewedSessionId = props?.sessionId ?? null;
-        return () => { viewedSessionId = null; };
+        // g-199: an old or parallel view must never clear the current owner's
+        // identity during unmount. Ownership is an object token, not a string.
+        const owner = {};
+        viewedSessionOwner = owner;
+        viewedSessionId = typeof props?.sessionId === "string" ? props.sessionId : null;
+        return () => {
+          if (viewedSessionOwner === owner) {
+            viewedSessionOwner = null;
+            viewedSessionId = null;
+          }
+        };
       }, [props?.sessionId]);
       // g-171：更新强调动画——服务端 generated_at - updated_at 判定 10 秒窗口，
       // 按 goalId+updated_at 防当前页重复播放；整页刷新可对窗口内目标补播。
