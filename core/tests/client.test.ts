@@ -1784,7 +1784,8 @@ test("g-198 生成 bundle 契约：client.js 包含 AddCardBox onRefresh 调用�
 test("g-195 源契约：session-hooks.js 提供 useThrottledLiveSession 并包含 trailing-edge 与卸载清理", () => {
   const src = readFileSync(
     join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
-  assert.match(src, /function useThrottledLiveSession\(session, intervalMs = 200\)/);
+  // g-224：第三参 liveEnabled（默认 true）由 useLiveStripState 传入，关闭实时显示时停止旧路径流式行
+  assert.match(src, /function useThrottledLiveSession\(session, intervalMs = 200(?:, liveEnabled = true)?\)/);
   assert.match(src, /const \[liveState, setLiveState\] = React\.useState/);
   assert.match(src, /setTimeout\(flush, intervalMs - elapsed\)/);
   assert.match(src, /clearTimeout\(timer\)/);
@@ -1798,7 +1799,8 @@ test("g-195/g-217 源契约：LiveStrip 使用 useLiveStripState 节流 peek（�
   assert.match(src, /function LiveStrip\(props\)/);
   assert.match(src, /const \{ snap, line, running \} = useLiveStripState\(session, eventSource, 200\);/);
   // g-195 节流语义保留：useLiveStripState 内部以 useThrottledLiveSession 作为旧路径回退
-  assert.match(src, /const legacy = useThrottledLiveSession\(session, intervalMs\);/);
+  // g-224：第三参 liveEnabled 由 useLiveStripState 传入（关闭实时显示时同样停止旧路径流式行）
+  assert.match(src, /const legacy = useThrottledLiveSession\(session, intervalMs(?:, liveEnabled)?\);/);
   // C1/C4：新路径订阅 binding.eventSource 并全量重扫 entries
   assert.match(src, /feed\.subscribe\(onUpdate\)/);
   assert.match(src, /feed\.getSnapshot\(\)\?\.entries/);
@@ -1984,6 +1986,124 @@ test("g-195 并发隔离与异常/空流降级：多 session 实例独立调度�
   assert.equal(emptyResult.line, null);
   assert.equal(emptyResult.running, false);
   assert.equal(emptyResult.snap.running, false);
+});
+
+// ===== g-224：实时代理输出流式显示开关——关闭停止输出流订阅、保留状态数据 =====
+
+test("g-224 源契约：helpers.js 提供实时显示开关存取与广播（LIVE_DISPLAY_KEY/getLiveDisplay/setLiveDisplay/useLiveDisplayEnabled）", () => {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  assert.match(helpers, /LIVE_DISPLAY_KEY = "dsh-graph\.live-display"/);
+  assert.match(helpers, /function getLiveDisplay\(\)/);
+  assert.match(helpers, /function setLiveDisplay\(enabled\)/);
+  assert.match(helpers, /function useLiveDisplayEnabled\(\)/);
+  assert.match(helpers, /dsh-graph\.live-display-changed/);
+});
+
+test("g-224 源契约：session-hooks.js 输出流订阅按实时显示开关门控（open/eventSource/旧路径）", () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
+  // 输出流窗口打开受开关门控：关闭时完全不打开发送窗口
+  assert.match(src, /function openBoundSessionStream\(childId, session\)/);
+  assert.match(src, /if \(!getLiveDisplay\(\)\) return Promise\.resolve\(false\);/);
+  // useBoundSession 依赖实时开关并在切换时重评估 open
+  assert.match(src, /const liveEnabled = useLiveDisplayEnabled\(\);/);
+  assert.match(src, /openBoundSessionStream\(childId, session\);/);
+  // useLiveStripState：关闭时断开事件源（feed 门控）+ 旧路径流式行门控
+  assert.match(src, /const feed = liveEnabled \? \(eventSource \?\? null\) : null;/);
+  assert.match(src, /const legacy = useThrottledLiveSession\(session, intervalMs, liveEnabled\);/);
+  // 关闭分支清空流式状态（无流式文字残留）
+  assert.match(src, /关闭实时显示 → 清空流式状态/);
+});
+
+test("g-224 源契约：settings-modal.js 提供「实时代理输出流式显示」开关（即时生效）", () => {
+  const modal = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  assert.match(modal, /liveDisplayOn = useLiveDisplayEnabled\(\)/);
+  assert.match(modal, /实时代理输出流式显示/);
+  assert.match(modal, /setLiveDisplay\(e\.target\.checked\)/);
+  assert.match(modal, /dg-live-display/);
+});
+
+test("g-224 生成 bundle 契约：client.js 包含实时显示开关与输出流门控逻辑", () => {
+  const bundle = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
+  assert.match(bundle, /LIVE_DISPLAY_KEY = "dsh-graph\.live-display"/);
+  assert.match(bundle, /function openBoundSessionStream\(childId, session\)/);
+  assert.match(bundle, /实时代理输出流式显示/);
+});
+
+test("g-224 行为模拟：关闭实时显示时停止流式行读取（line=null）且保留运行态；重开恢复", async () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
+
+  const renders: any[] = [];
+  let registeredEffect: any = null;
+  let listeners: Array<() => void> = [];
+
+  const mockReact: any = {
+    useState: (initial: any) => {
+      let state = typeof initial === "function" ? initial() : initial;
+      return [state, (updater: any) => {
+        state = typeof updater === "function" ? updater(state) : updater;
+        renders.push(state);
+      }];
+    },
+    useEffect: (fn: any) => { registeredEffect = fn; },
+    useCallback: (fn: any) => fn,
+    useMemo: (fn: any) => fn(),
+  };
+
+  let currentSnapshot: any = {
+    running: true,
+    chat: { legacy: { partial: { blocks: [{ kind: "text", text: "streaming..." }] } } },
+  };
+
+  const mockSession = {
+    getSnapshot: () => currentSnapshot,
+    subscribe: (cb: () => void) => {
+      listeners.push(cb);
+      return () => { listeners = listeners.filter((l) => l !== cb); };
+    },
+  };
+
+  const lastStreamLineStart = src.indexOf("function lastStreamLine(");
+  const lastStreamLineEnd = src.indexOf("function fmtTok(");
+  const hookStart = src.indexOf("function useThrottledLiveSession(");
+  const hookEnd = src.indexOf("function LiveStrip(");
+
+  const scriptCode = `
+    const React = mockReact;
+    ${src.slice(lastStreamLineStart, lastStreamLineEnd)}
+    ${src.slice(hookStart, hookEnd)}
+    globalThis.__useThrottledLiveSession = useThrottledLiveSession;
+  `;
+
+  const ctx: any = { mockReact, setTimeout, clearTimeout, Date, console, globalThis: {} };
+  vm.createContext(ctx);
+  new vm.Script(scriptCode).runInContext(ctx);
+  const hook = ctx.globalThis.__useThrottledLiveSession;
+
+  // 1) 关闭实时显示（liveEnabled=false）：初始即无流式行，运行态保留
+  const offResult = hook(mockSession, 200, false);
+  registeredEffect();
+  assert.equal(offResult.line, null, "关闭实时显示 → line 为 null（不读取流式行）");
+  assert.equal(offResult.running, true, "运行态保留");
+
+  // 事件推送后仍不出现流式行，running 继续更新
+  currentSnapshot = {
+    running: true,
+    chat: { legacy: { partial: { blocks: [{ kind: "text", text: "more" }] } } },
+  };
+  for (const l of listeners) l();
+  const afterEvent = renders[renders.length - 1];
+  assert.equal(afterEvent.line, null, "关闭后事件推送 line 保持 null（无流式文字残留）");
+  assert.equal(afterEvent.running, true, "关闭后 running 仍更新");
+
+  // 2) 重开实时显示（liveEnabled=true）：流式行恢复
+  const onResult = hook(mockSession, 200, true);
+  registeredEffect();
+  assert.equal(onResult.line, "more", "重开 → 流式行恢复");
 });
 
 // ===== g-214：自定义看板刷新间隔与倒计时契约 =====

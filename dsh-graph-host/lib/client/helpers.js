@@ -202,6 +202,39 @@
       return num;
     }
 
+    // ===== g-224：实时代理输出流式显示开关（localStorage + 跨组件/跨标签页广播）=====
+    // 关闭时停止「高频输出流」订阅（binding.eventSource 事件源订阅、session.open() 实时窗口、
+    // 旧路径 chat.legacy 流式行读取），释放网络/内存/CPU；保留「低频状态数据」订阅
+    // （session 生命周期快照 running/openState、tokenUsage/contextPressure 投影、会话列表、status_line）。
+    const LIVE_DISPLAY_KEY = "dsh-graph.live-display";
+
+    function getLiveDisplay() {
+      try { return localStorage.getItem(LIVE_DISPLAY_KEY) !== "0"; } catch { return true; }
+    }
+
+    function setLiveDisplay(enabled) {
+      const on = !!enabled;
+      try { localStorage.setItem(LIVE_DISPLAY_KEY, on ? "1" : "0"); } catch {}
+      window.dispatchEvent(new CustomEvent("dsh-graph.live-display-changed", { detail: { enabled: on } }));
+      return on;
+    }
+
+    // 组件级订阅：本窗口广播事件 + 跨标签页 storage 事件（与刷新间隔同模式）
+    function useLiveDisplayEnabled() {
+      const [enabled, setEnabled] = React.useState(getLiveDisplay);
+      React.useEffect(() => {
+        const onEvent = (e) => setEnabled(e?.detail?.enabled ?? getLiveDisplay());
+        const onStorage = (e) => { if (e.key === LIVE_DISPLAY_KEY) setEnabled(getLiveDisplay()); };
+        window.addEventListener("dsh-graph.live-display-changed", onEvent);
+        window.addEventListener("storage", onStorage);
+        return () => {
+          window.removeEventListener("dsh-graph.live-display-changed", onEvent);
+          window.removeEventListener("storage", onStorage);
+        };
+      }, []);
+      return enabled;
+    }
+
     // g-222：跨版本打开 Host 工作区路径（优先 0.1.2+ session.openWorkspacePath，回退 0.1.1-rc host.openPath）。
     // 依赖 plugin.inject 声明 "remote.session"：session 命名空间服务由 api-gateway 在兄弟 fiber 提供，
     // 仅 inject "remote" 时 ctx.remote.session 属性访问走 fiber 向上遍历会在 root fiber 抛
