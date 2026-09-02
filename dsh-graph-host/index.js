@@ -1161,7 +1161,9 @@ export function apply(ctx, config) {
       },
     },
     // g-199：主管会话只读端点——受保护 workspace 内读 project.yaml 的 supervisor.session。
-    // 只 GET；拒绝 workspace/root 参数；响应仅 {supervisorSession}（非敏感，无 token）。
+    // 只 GET；无 sandboxPolicy 时允许服务端受控 ?workspace= 回退，拒绝 ?root= 与空参数；
+    // 纯解析/只读，不 init/写盘；有 sandboxPolicy 时优先受保护 workspace。
+    // 响应仅 {supervisorSession}（非敏感，无 token）。
     {
       path: "/api/dsh-graph/supervisor-session",
       handler: (req, res) => {
@@ -1169,17 +1171,30 @@ export function apply(ctx, config) {
           if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
           let sp = null;
           try { sp = new URL(req?.url ?? "", "http://x").searchParams; } catch { sp = null; }
-          if (sp && (sp.has("workspace") || sp.has("root"))) {
-            return json(res, 400, { error: "supervisor-session 只读受保护 workspace，不接受 workspace/root 参数" });
+          if (sp && sp.has("root")) {
+            return json(res, 400, { error: "supervisor-session 拒绝 root 参数" });
           }
-          const cap = protectedWorkspace(protectedWorkspaceCap);
-          if (!cap.path) return json(res, 200, { supervisorSession: null });
-          const graphRoot = resolveRoot(config, cap.path);
-          if (!graphRootWithinWorkspace(cap.path, graphRoot)) {
-            throw new GraphError("graphRoot 越出受保护 workspace");
+          if (protectedWorkspaceCap) {
+            if (sp && sp.has("workspace")) {
+              return json(res, 400, { error: "supervisor-session 在有受保护 workspace 时不接受 workspace 参数" });
+            }
+            const cap = protectedWorkspace(protectedWorkspaceCap);
+            if (!cap.path) return json(res, 200, { supervisorSession: null });
+            const graphRoot = resolveRoot(config, cap.path);
+            if (!graphRootWithinWorkspace(cap.path, graphRoot)) {
+              throw new GraphError("graphRoot 越出受保护 workspace");
+            }
+            const supervisorSession = readSupervisorSessionSecure(cap, graphRoot);
+            return json(res, 200, { supervisorSession });
           }
-          const supervisorSession = readSupervisorSessionSecure(cap, graphRoot);
-          json(res, 200, { supervisorSession });
+          // 无 sandboxPolicy：服务端受控 ?workspace= 回退（纯解析/只读，绝不 init / 绝不写盘）
+          const ws = sp?.get("workspace");
+          if (!ws || !ws.trim()) {
+            return json(res, 400, { error: "无 sandboxPolicy 时 supervisor-session 需要非空 ?workspace= 参数" });
+          }
+          const canonical = resolveCanonicalRoot(config, ws.trim());
+          const supervisorSession = readSupervisorSession(canonical.root);
+          return json(res, 200, { supervisorSession });
         } catch (e) {
           if (PROTECTED_ERR_CODES.has(e?.code)) return json(res, 400, { error: `受保护 workspace 读取失败（${e.code}）` });
           const code = e instanceof GraphError ? 400 : 500;

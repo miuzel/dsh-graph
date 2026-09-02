@@ -190,14 +190,14 @@ for (const m of ["POST", "PUT", "DELETE", "PATCH", "OPTIONS"]) {
   });
 }
 
-test("supervisor-session：拒绝 workspace 查询参数（含空值）", async () => {
+test("supervisor-session：有 sandboxPolicy 时拒绝 workspace 查询参数（优先受保护 workspace）", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-sup-q1-"));
   const routes = new Map<string, any>();
   apply(makeCtx(routes, { workspaceRoot: ws }), { root: ".dsh-graph" });
   for (const q of ["?workspace=/etc", "?workspace=", "?workspace=a&root=b"]) {
     const { code, body } = await get(routes, q);
     assert.equal(code, 400, q);
-    assert.ok(body.error.includes("workspace"), q);
+    assert.ok(body.error.includes("workspace") || body.error.includes("root"), q);
   }
 });
 
@@ -222,9 +222,9 @@ test("supervisor-session：无关查询参数忽略 → 200", async () => {
   } finally { try { closeSync(fd); } catch {} }
 });
 
-// ===== 无能力 / 越界 / 降级路径 =====
+// ===== 无 sandboxPolicy / ?workspace= 回退 / 越界 / 降级路径 =====
 
-test("supervisor-session：无 sandboxPolicy → 400", async () => {
+test("supervisor-session：无 sandboxPolicy 且无 ?workspace= → 400", async () => {
   const routes = new Map<string, any>();
   const webServer = makeWebServer(routes);
   const ctx: any = {
@@ -234,8 +234,74 @@ test("supervisor-session：无 sandboxPolicy → 400", async () => {
     tools: { register: () => () => {}, get: () => ({}) },
   };
   apply(ctx, { root: ".dsh-graph" });
-  const { code } = await get(routes);
+  const { code, body } = await get(routes);
   assert.equal(code, 400);
+  assert.ok(body.error.includes("workspace"));
+});
+
+test("supervisor-session：无 sandboxPolicy 且带空 ?workspace= → 400", async () => {
+  const routes = new Map<string, any>();
+  const webServer = makeWebServer(routes);
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  apply(ctx, { root: ".dsh-graph" });
+  const { code, body } = await get(routes, "?workspace=");
+  assert.equal(code, 400);
+  assert.ok(body.error.includes("workspace"));
+});
+
+test("supervisor-session：无 sandboxPolicy 拒绝 ?root= 参数", async () => {
+  const routes = new Map<string, any>();
+  const webServer = makeWebServer(routes);
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  apply(ctx, { root: ".dsh-graph" });
+  const { code, body } = await get(routes, "?root=/tmp");
+  assert.equal(code, 400);
+  assert.ok(body.error.includes("root"));
+});
+
+test("supervisor-session：无 sandboxPolicy 通过受控 ?workspace= 回退正常读取", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-sup-nowsp-"));
+  mkdirSync(join(ws, ".dsh-graph"), { recursive: true });
+  writeFileSync(join(ws, ".dsh-graph", "project.yaml"), PROJECT, "utf8");
+  const routes = new Map<string, any>();
+  const webServer = makeWebServer(routes);
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  apply(ctx, { root: ".dsh-graph" });
+  const { code, body } = await get(routes, "?workspace=" + encodeURIComponent(ws));
+  assert.equal(code, 200);
+  assert.equal(body.supervisorSession, "session-sup-abc");
+});
+
+test("supervisor-session：无 sandboxPolicy ?workspace= 回退且无 project.yaml → 200 null 且绝不 init", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-sup-nowsp-empty-"));
+  const routes = new Map<string, any>();
+  const webServer = makeWebServer(routes);
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  apply(ctx, { root: ".dsh-graph" });
+  const { code, body } = await get(routes, "?workspace=" + encodeURIComponent(ws));
+  assert.equal(code, 200);
+  assert.equal(body.supervisorSession, null);
+  assert.equal(existsSync(join(ws, ".dsh-graph")), false, "绝不创建 .dsh-graph 骨架");
 });
 
 test("supervisor-session：config.root 绝对越界 → 400（containment）", async () => {

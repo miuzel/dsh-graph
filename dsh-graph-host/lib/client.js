@@ -6646,10 +6646,10 @@ window.__ModuleLoader__.load({
       }
     }
 
-    // 端点拒绝 workspace/root 查询参数（400），必须裸路径 GET；响应只含 supervisorSession。
+    // 服务端只读受保护 workspace 或 ?workspace= 回退；响应只含 supervisorSession。
     function fetchSupervisorSession() {
       const seq = ++supervisorFetchSeq;
-      fetch("/api/dsh-graph/supervisor-session", {
+      fetch(graphUrl("/api/dsh-graph/supervisor-session"), {
         method: "GET",
         headers: { accept: "application/json" },
       })
