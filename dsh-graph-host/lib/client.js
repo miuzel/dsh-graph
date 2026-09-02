@@ -5306,8 +5306,13 @@ window.__ModuleLoader__.load({
         rows.push(...lane(`🏷️ ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
         laneIndex++;
       }
-      // g-223：如果所有 active 版本都被隐藏且系统存在 active 版本，展示友好空状态提示行
-      if (active.length === 0 && allActiveVersions.length > 0) {
+      // g-223：如果所有版本都被隐藏（或存在 active 且 active 全部被隐藏），展示友好空状态提示行
+      const totalVersionsCount = (b.versions ?? []).length;
+      const visibleVersionsCount = active.length + released.length;
+      if (totalVersionsCount > 0 && (visibleVersionsCount === 0 || (allActiveVersions.length > 0 && active.length === 0))) {
+        const hintText = visibleVersionsCount === 0
+          ? `已隐藏全部 ${totalVersionsCount} 个版本（包含已发布版本）。可通过左上角版本管理抽屉随时恢复显示。`
+          : `已隐藏全部 ${allActiveVersions.length} 个活跃版本泳道。可通过左上角版本管理抽屉随时恢复显示。`;
         rows.push(
           h("div", {
             key: "empty-active-versions-label",
@@ -5326,8 +5331,7 @@ window.__ModuleLoader__.load({
               gap: 12,
             },
           },
-            h("span", { style: { ...S.meta, fontSize: 12 } },
-              `已隐藏全部 ${allActiveVersions.length} 个活跃版本泳道。可通过左上角版本管理抽屉随时恢复显示。`),
+            h("span", { style: { ...S.meta, fontSize: 12 } }, hintText),
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
               className: "dg-btn",

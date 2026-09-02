@@ -2233,8 +2233,9 @@ test("g-223 源契约：kanban.js 挂载版本管理按钮、抽屉与隐藏版�
   assert.match(kanban, /allActiveVersions\.filter\(\(v\) => !hiddenVersionSet\.has\(v\.slug\)\)/);
   assert.match(kanban, /allReleasedVersions\.filter\(\(v\) => !hiddenVersionSet\.has\(v\.slug\)\)/);
 
-  // 3. 全部隐藏时的空状态
-  assert.match(kanban, /active\.length === 0 && allActiveVersions\.length > 0/);
+  // 3. 全部隐藏时的空状态（覆盖 active 与 released 全隐藏）
+  assert.match(kanban, /totalVersionsCount > 0 && \(visibleVersionsCount === 0 \|\| \(allActiveVersions\.length > 0 && active\.length === 0\)\)/);
+  assert.match(kanban, /已隐藏全部[\s\S]*?个版本（包含已发布版本）/);
   assert.match(kanban, /已隐藏全部[\s\S]*?个活跃版本泳道/);
 
   // 4. VersionDrawer 挂载
@@ -2324,4 +2325,80 @@ test("g-223 行为契约：不同 workspace 的 hidden_versions 隔离存储与�
   assert.notEqual(keyA, keyB, "不同工作区存储 key 严格隔离");
   assert.match(helpers, /HIDDEN_VERSIONS_KEY_PREFIX \+ ws/);
 });
+
+test("g-223 行为证据：Kanban 版本过滤纯逻辑在 released-only 全隐藏、混合全隐藏及部分隐藏时的空态判定与提示", () => {
+  // 提取/模拟 Kanban 内部版本过滤与空状态判定纯函数
+  function evaluateVersionFilter(versions: any[], hiddenSlugs: string[]) {
+    const allActiveVersions = (versions ?? []).filter((v) => v.status !== "released");
+    const allReleasedVersions = (versions ?? []).filter((v) => v.status === "released");
+    const hiddenVersionSet = new Set(hiddenSlugs ?? []);
+    const active = allActiveVersions.filter((v) => !hiddenVersionSet.has(v.slug));
+    const released = allReleasedVersions.filter((v) => !hiddenVersionSet.has(v.slug));
+
+    const totalVersionsCount = (versions ?? []).length;
+    const visibleVersionsCount = active.length + released.length;
+    const shouldShowEmptyState = totalVersionsCount > 0 && (visibleVersionsCount === 0 || (allActiveVersions.length > 0 && active.length === 0));
+
+    let hintText = null;
+    if (shouldShowEmptyState) {
+      hintText = visibleVersionsCount === 0
+        ? `已隐藏全部 ${totalVersionsCount} 个版本（包含已发布版本）。可通过左上角版本管理抽屉随时恢复显示。`
+        : `已隐藏全部 ${allActiveVersions.length} 个活跃版本泳道。可通过左上角版本管理抽屉随时恢复显示。`;
+    }
+
+    return {
+      allActiveVersions,
+      allReleasedVersions,
+      active,
+      released,
+      totalVersionsCount,
+      visibleVersionsCount,
+      shouldShowEmptyState,
+      hintText,
+    };
+  }
+
+  // 场景 1：仅有 released 版本（released-only），全部隐藏
+  const releasedOnly = [
+    { slug: "v0.7", name: "v0.7", status: "released", goals: [{ id: "g-001" }] },
+    { slug: "v0.8", name: "v0.8", status: "released", goals: [{ id: "g-002" }] },
+  ];
+  const res1 = evaluateVersionFilter(releasedOnly, ["v0.7", "v0.8"]);
+  assert.equal(res1.allActiveVersions.length, 0, "无 active 版本");
+  assert.equal(res1.allReleasedVersions.length, 2, "有 2 个 released 版本");
+  assert.equal(res1.active.length, 0, "可见 active 为 0");
+  assert.equal(res1.released.length, 0, "可见 released 为 0");
+  assert.equal(res1.visibleVersionsCount, 0, "可见版本总数为 0");
+  assert.equal(res1.shouldShowEmptyState, true, "released-only 全部隐藏必须触发友好空态");
+  assert.match(res1.hintText!, /已隐藏全部 2 个版本（包含已发布版本）/);
+
+  // 场景 2：active + released 混合，全部隐藏
+  const mixed = [
+    { slug: "v0.8.2", name: "v0.8.2", status: "active", goals: [{ id: "g-101" }] },
+    { slug: "v0.8.1", name: "v0.8.1", status: "released", goals: [{ id: "g-100" }] },
+  ];
+  const res2 = evaluateVersionFilter(mixed, ["v0.8.2", "v0.8.1"]);
+  assert.equal(res2.visibleVersionsCount, 0, "可见版本总数为 0");
+  assert.equal(res2.shouldShowEmptyState, true, "混合全部隐藏必须触发友好空态");
+  assert.match(res2.hintText!, /已隐藏全部 2 个版本（包含已发布版本）/);
+
+  // 场景 3：active + released 混合，仅 active 全部隐藏，released 仍有可见
+  const res3 = evaluateVersionFilter(mixed, ["v0.8.2"]);
+  assert.equal(res3.active.length, 0, "可见 active 为 0");
+  assert.equal(res3.released.length, 1, "可见 released 为 1");
+  assert.equal(res3.visibleVersionsCount, 1, "可见版本数为 1");
+  assert.equal(res3.shouldShowEmptyState, true, "active 全隐藏且 released 有可见时也触发活跃版本隐藏提示行");
+  assert.match(res3.hintText!, /已隐藏全部 1 个活跃版本泳道/);
+
+  // 场景 4：无任何版本（新仓库/空看板）
+  const res4 = evaluateVersionFilter([], []);
+  assert.equal(res4.totalVersionsCount, 0);
+  assert.equal(res4.shouldShowEmptyState, false, "系统无版本时不显示版本隐藏空态");
+
+  // 场景 5：正常显示（无隐藏）
+  const res5 = evaluateVersionFilter(mixed, []);
+  assert.equal(res5.visibleVersionsCount, 2);
+  assert.equal(res5.shouldShowEmptyState, false, "有可见版本时不显示空态");
+});
+
 
