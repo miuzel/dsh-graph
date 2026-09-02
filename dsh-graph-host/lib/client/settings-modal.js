@@ -14,6 +14,8 @@
       // g-214：刷新间隔配置（localStorage 持久化，下限 5s）
       const [refreshIntervalInput, setRefreshIntervalInput] = React.useState(() => String(getRefreshInterval()));
       const [intervalWarn, setIntervalWarn] = React.useState(null);
+      // g-224：实时代理输出流式显示开关（localStorage 持久化，即时生效）
+      const liveDisplayOn = useLiveDisplayEnabled();
 
       const handleIntervalChange = (val) => {
         setRefreshIntervalInput(val);
@@ -287,6 +289,19 @@
             h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } }, "秒"),
             h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, "（下限 5 秒）")),
           intervalWarn ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2 } }, "⚠️ " + intervalWarn) : null,
+
+          // g-224：实时代理输出流式显示开关——关闭后停止高频输出流订阅（释放网络/内存/CPU），
+          // 保留低频状态数据（livestrip 子代理状态、status line、token/ctx 占用）
+          h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0, marginTop: 8 } },
+            h("input", {
+              id: "dg-live-display",
+              type: "checkbox",
+              checked: liveDisplayOn,
+              onChange: (e) => setLiveDisplay(e.target.checked),
+              style: { flexShrink: 0 },
+            }),
+            h("label", { htmlFor: "dg-live-display", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, "实时代理输出流式显示"),
+            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, "（关闭后停止输出流订阅，释放资源；livestrip 状态与 status line 保留）")),
 
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
 

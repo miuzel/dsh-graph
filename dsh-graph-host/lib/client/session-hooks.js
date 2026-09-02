@@ -4,11 +4,12 @@
     // 发指令走 session.prompt（continuable 子代理自动路由 api.subagents.prompt，仅文本），
     // 最近记录走 connection.api.subagents.history。
 
-    const boundSetup = new Map(); // childId -> Promise（open/地址配置只做一次）
+    const boundSetup = new Map(); // childId -> Promise（地址配置只做一次）
     const boundModes = new Map(); // childId -> 'one-shot' | 'continuable'
 
-    // 子代理地址配置（路由 prompt/history 到 subagents.*）+ 打开尾页以接收活事件。
+    // 子代理地址配置（路由 prompt/history 到 subagents.*）。
     // 目录 entry 提供真实 mode；目录未收录时跳过地址配置（指令走 session.prompt 默认路由，错误会明示）。
+    // 实时窗口（session.open()）由 openBoundSessionStream 按 g-224 实时显示开关门控，不在此处打开。
     function setupBoundSession(parentId, childId, session) {
       if (boundSetup.has(childId)) return boundSetup.get(childId);
       const p = (async () => {
@@ -29,11 +30,30 @@
             console.warn("[dsh-graph-host] 子代理地址配置失败", e);
           }
         }
-        try { await session.open(); } catch (e) {
-          console.warn("[dsh-graph-host] session.open() 失败", e);
-        }
       })();
       boundSetup.set(childId, p);
+      return p;
+    }
+
+    // g-224：打开会话实时窗口（输出流数据源）。受实时显示开关门控——
+    // 关闭时完全不打开发送窗口：eventSource 窗口不填充、无实时事件流动（网络/内存/CPU 释放）；
+    // 重开时重新 open（成功后幂等缓存，避免开关切换反复触发；open() 本身幂等安全，指南 §7.6）。
+    const boundOpened = new Map(); // childId -> Promise<boolean>（成功后缓存）
+    function openBoundSessionStream(childId, session) {
+      if (!session) return Promise.resolve(false);
+      if (!getLiveDisplay()) return Promise.resolve(false);
+      const cached = boundOpened.get(childId);
+      if (cached) return cached;
+      const p = (async () => {
+        try {
+          await session.open();
+          boundOpened.set(childId, p);
+          return true;
+        } catch (e) {
+          console.warn("[dsh-graph-host] session.open() 失败", e);
+          return false;
+        }
+      })();
       return p;
     }
 
@@ -61,14 +81,18 @@
       const session = binding?.session ?? null;
       const eventSource = binding?.eventSource ?? null;
       const [mode, setMode] = React.useState(boundModes.get(childId) ?? null);
+      // g-224：实时显示开关——关闭时跳过 session.open()（不激活输出流窗口），重开时恢复
+      const liveEnabled = useLiveDisplayEnabled();
       React.useEffect(() => {
         if (!session) return;
         let alive = true;
         setupBoundSession(parentId, childId, session).then(() => {
           if (alive) setMode(boundModes.get(childId) ?? null);
         });
+        // g-224：输出流窗口打开受开关门控（内部再判断 getLiveDisplay()，切换即触发重评估）
+        openBoundSessionStream(childId, session);
         return () => { alive = false; };
-      }, [session, parentId, childId]);
+      }, [session, parentId, childId, liveEnabled]);
       return { session, mode, eventSource };
     }
 
@@ -83,12 +107,15 @@
     // g-195: 子代理实时流式 peek 节流 hook（≤5fps / ≥200ms 刷新上限）
     // 仅用于 peek 展示（LiveStrip / SessionPanel 折叠态等），普通高频推送合并到 trailing flush；
     // 流结束/错误/运行态翻转等关键边界在下一合法时间槽完成最终呈现，不丢尾包，卸载时清理定时器。
-    function useThrottledLiveSession(session, intervalMs = 200) {
+    function useThrottledLiveSession(session, intervalMs = 200, liveEnabled = true) {
+      // g-224：实时显示开关（由 useLiveStripState 传入）——关闭时不再读取流式行
+      // （旧路径 chat.legacy 流式内容停止消费；新 harness 快照本无 chat，此门控主要作用于
+      // 旧 harness 回退路径），仅保留生命周期状态（running 等）。
       const [liveState, setLiveState] = React.useState(() => {
         const snap = session ? session.getSnapshot() : null;
         return {
           snap,
-          line: snap && snap.chat ? lastStreamLine(snap.chat.legacy.partial) : null,
+          line: liveEnabled && snap && snap.chat ? lastStreamLine(snap.chat.legacy.partial) : null,
           running: !!(snap && snap.running),
         };
       });
@@ -113,7 +140,7 @@
           const s = session.getSnapshot();
           setLiveState({
             snap: s,
-            line: s && s.chat ? lastStreamLine(s.chat.legacy.partial) : null,
+            line: liveEnabled && s && s.chat ? lastStreamLine(s.chat.legacy.partial) : null,
             running: !!(s && s.running),
           });
         };
@@ -139,7 +166,7 @@
           if (timer) clearTimeout(timer);
           if (typeof unsub === "function") unsub();
         };
-      }, [session, intervalMs]);
+      }, [session, intervalMs, liveEnabled]);
 
       return liveState;
     }
@@ -333,15 +360,22 @@
     // g-217：LiveStrip 数据源 hook——事件源新路径（能力探测）+ 旧 chat.legacy 回退（C1/C5）。
     // 复用 g-195 节流语义（≤5fps / ≥200ms trailing flush，不丢尾包，卸载清理定时器与订阅 C3）。
     function useLiveStripState(session, eventSource, intervalMs = 200) {
-      // 旧路径状态（chat.legacy.partial）：能力探测缺失时回退，代码原样保留
-      const legacy = useThrottledLiveSession(session, intervalMs);
-      const feed = eventSource ?? null;
+      // g-224：实时显示开关门控——关闭时断开事件源（输出流订阅完全停止），仅保留状态数据
+      const liveEnabled = useLiveDisplayEnabled();
+      // 旧路径状态（chat.legacy.partial）：能力探测缺失时回退，代码原样保留；
+      // g-224：实时显示关闭时同样停止旧路径流式行读取（liveEnabled=false）
+      const legacy = useThrottledLiveSession(session, intervalMs, liveEnabled);
+      const feed = liveEnabled ? (eventSource ?? null) : null;
       const [live, setLive] = React.useState(() => {
         if (!feed || !session) return { pendingCount: 0, activity: [], streamText: null, finalText: null };
         return deriveLive(feed.getSnapshot()?.entries ?? [], !!session.getSnapshot()?.running, toolDetail);
       });
       React.useEffect(() => {
-        if (!feed || !session) return;
+        if (!feed || !session) {
+          // g-224：关闭实时显示 → 清空流式状态（无流式文字残留）；订阅在 cleanup 中释放
+          setLive({ pendingCount: 0, activity: [], streamText: null, finalText: null });
+          return;
+        }
         let timer = null;
         let lastFlush = 0;
         let unmounted = false;
@@ -366,7 +400,7 @@
           if (timer) clearTimeout(timer);
           if (typeof unsub === "function") unsub();
         };
-      }, [feed, session, intervalMs]);
+      }, [feed, session, intervalMs, liveEnabled]);
 
       if (feed) {
         // 新路径：running 取会话快照（§7.9 更直接）；line 按展示优先级从归一化形状推导
