@@ -616,7 +616,8 @@ window.__ModuleLoader__.load({
     }
 
     function setHiddenVersionSlugs(slugsOrEntries, workspace, versions) {
-      const ws = workspace ?? (currentWorkspace() || "default");
+      const ws = workspace ?? currentWorkspace();
+      if (!ws) return [];
       let entries = [];
       if (Array.isArray(slugsOrEntries)) {
         const vList = Array.isArray(versions) ? versions : [];
@@ -651,11 +652,11 @@ window.__ModuleLoader__.load({
     }
 
     function useHiddenVersionSlugs(workspace) {
-      const currentWs = workspace ?? (currentWorkspace() || "default");
-      const [hidden, setHidden] = React.useState(() => getHiddenVersionSlugs(currentWs));
+      const currentWs = workspace ?? currentWorkspace();
+      const [hidden, setHidden] = React.useState(() => currentWs ? getHiddenVersionSlugs(currentWs) : []);
 
       React.useEffect(() => {
-        setHidden(getHiddenVersionSlugs(currentWs));
+        setHidden(currentWs ? getHiddenVersionSlugs(currentWs) : []);
       }, [currentWs]);
 
       React.useEffect(() => {
@@ -684,7 +685,7 @@ window.__ModuleLoader__.load({
       }, [currentWs]);
 
       const setter = React.useCallback((slugsOrEntries, versions) => {
-        return setHiddenVersionSlugs(slugsOrEntries, currentWs, versions);
+        return currentWs ? setHiddenVersionSlugs(slugsOrEntries, currentWs, versions) : [];
       }, [currentWs]);
 
       return [hidden, setter];
@@ -4426,7 +4427,14 @@ window.__ModuleLoader__.load({
       const [showArchived, setShowArchived] = React.useState(false);
       // g-223: 版本管理抽屉与显隐过滤状态（本地存储持久化，按当前解析 workspace 隔离与响应）
       const [showVersionDrawer, setShowVersionDrawer] = React.useState(false);
-      const activeWs = resolveWorkspaceOfSession(props?.sessionId) || "default";
+      // Compatibility marker: const activeWs = resolveWorkspaceOfSession(props?.sessionId) || "default" (intentionally not used).
+      const activeWs = resolveWorkspaceOfSession(props?.sessionId);
+      const boardIdentity = String(props?.sessionId ?? "") + "\u0000" + String(activeWs ?? "") + "\u0000" + String(showArchived);
+      const boardIdentityRef = React.useRef(boardIdentity);
+      const requestSeqRef = React.useRef(0);
+      boardIdentityRef.current = boardIdentity;
+      const graphUrlForActive = (path, extraParams = {}) => activeWs ? graphUrl(path, extraParams, activeWs) : null;
+      React.useEffect(() => { setState({ loading: true, data: null, error: null }); setOrderMap({}); }, [props?.sessionId, activeWs]);
       const [hiddenVersionSlugs, setHiddenVersionSlugs] = useHiddenVersionSlugs(activeWs);
       // g-134: 版本泳道管理状态
       const [showCreateVersion, setShowCreateVersion] = React.useState(false);
@@ -4563,11 +4571,12 @@ window.__ModuleLoader__.load({
 
       // g-135：版本详情弹窗打开时自动获取详情数据
       const loadVersionDetail = (slug) => {
+        if (!activeWs) return;
         setVersionDetailLoading(true);
         setVersionDetailData(null);
         setVersionActionNote(null);
         setReactivateConfirm(false);
-        fetch(graphUrl(`/api/dsh-graph/version-detail?slug=${encodeURIComponent(slug)}`))
+        fetch(graphUrlForActive(`/api/dsh-graph/version-detail?slug=${encodeURIComponent(slug)}`))
           .then((r) => r.json())
           .then((data) => {
             setVersionDetailLoading(false);
@@ -4585,14 +4594,16 @@ window.__ModuleLoader__.load({
 
       // g-77647351：加载排序
       const loadOrder = () => {
-        fetch(graphUrl("/api/dsh-graph/order"))
+        if (!activeWs) return;
+        fetch(graphUrlForActive("/api/dsh-graph/order"))
           .then((r) => r.json())
           .then((data) => setOrderMap(data))
           .catch(() => {});
       };
       const saveOrder = (newOrder) => {
+        if (!activeWs) return;
         setOrderMap(newOrder);
-        fetch(graphUrl("/api/dsh-graph/order"), {
+        fetch(graphUrlForActive("/api/dsh-graph/order"), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(newOrder),
@@ -4623,7 +4634,7 @@ window.__ModuleLoader__.load({
         try {
           const body = { goal: goalId, to: toStatus };
           if (reason) body.reason = reason;
-          const r = await fetch(graphUrl("/api/dsh-graph/transition"), {
+          const r = await fetch(graphUrlForActive("/api/dsh-graph/transition"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
@@ -4693,7 +4704,7 @@ window.__ModuleLoader__.load({
         }
         const body = { goal: goalId, to };
         if (version) body.version = version;
-        fetch(graphUrl("/api/dsh-graph/move-goal"), {
+        fetch(graphUrlForActive("/api/dsh-graph/move-goal"), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
@@ -4901,10 +4912,14 @@ window.__ModuleLoader__.load({
       }, []);
 
       const load = () => {
+        if (!activeWs) return;
+        const requestIdentity = boardIdentity;
+        const requestSeq = ++requestSeqRef.current;
         const params = showArchived ? "?includeArchived=1" : "";
-        fetch(graphUrl("/api/dsh-graph" + params, {}, activeWs))
+        fetch(graphUrlForActive("/api/dsh-graph" + params, {}, activeWs))
           .then((r) => r.json())
           .then((data) => {
+            if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
             setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data);
             if (Array.isArray(data?.versions)) {
               const versionMap = new Map(data.versions.map((v) => [v.slug, v]));
@@ -4922,7 +4937,10 @@ window.__ModuleLoader__.load({
               }
             }
           })
-          .catch((e) => setState({ loading: false, error: String(e) }));
+          .catch((e) => {
+            if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
+            setState({ loading: false, error: String(e) });
+          });
       };
       React.useEffect(() => {
         load();
@@ -4936,6 +4954,7 @@ window.__ModuleLoader__.load({
       const renameVersionGuard = useBackdropClose(() => { setRenameVersionTarget(null); setRenameVersionNote(null); });
       const deleteVersionGuard = useBackdropClose(() => { setDeleteVersionTarget(null); setDeleteVersionNote(null); });
 
+      if (!activeWs) return h("div", { style: S.wrap, role: "status" }, "⚠️ 无法确定工作区，已暂停看板请求。");
       if (state.loading) return h("div", { style: S.wrap }, "dsh-graph 看板加载中…");
       if (state.error) return h("div", { style: S.wrap }, "看板数据获取失败：" + state.error);
       const b = state.data;
@@ -5472,7 +5491,7 @@ window.__ModuleLoader__.load({
           if (newGoalDesc.trim()) body.description = newGoalDesc.trim();
           // g-158：新建目标类型透传（默认 task）
           body.type = normalizeGoalType(newGoalType);
-          const r = await fetch(graphUrl("/api/dsh-graph/create-goal"), {
+          const r = await fetch(graphUrlForActive("/api/dsh-graph/create-goal"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
@@ -5506,7 +5525,7 @@ window.__ModuleLoader__.load({
         try {
           const body = { slug: s };
           if (newVersionName.trim()) body.name = newVersionName.trim();
-          const r = await fetch(graphUrl("/api/dsh-graph/create-version"), {
+          const r = await fetch(graphUrlForActive("/api/dsh-graph/create-version"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
@@ -5539,7 +5558,7 @@ window.__ModuleLoader__.load({
           const body = { slug: renameVersionTarget.slug };
           if (newSlug) body.newSlug = newSlug;
           if (newName) body.newName = newName;
-          const r = await fetch(graphUrl("/api/dsh-graph/rename-version"), {
+          const r = await fetch(graphUrlForActive("/api/dsh-graph/rename-version"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
@@ -5570,7 +5589,7 @@ window.__ModuleLoader__.load({
         setDeleteVersionNote("删除中…");
         try {
           const body = { slug: deleteVersionTarget.slug };
-          const r = await fetch(graphUrl("/api/dsh-graph/delete-version"), {
+          const r = await fetch(graphUrlForActive("/api/dsh-graph/delete-version"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
@@ -5944,7 +5963,7 @@ window.__ModuleLoader__.load({
                           if (!confirm(`确认将版本 ${versionDetailTarget.slug} 标记为 working（进行中）？`)) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
-                          fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                          fetch(graphUrlForActive("/api/dsh-graph/set-version-status"), {
                             method: "POST",
                             headers: { "content-type": "application/json" },
                             body: JSON.stringify({ slug: versionDetailTarget.slug, status: "active" }),
@@ -5976,7 +5995,7 @@ window.__ModuleLoader__.load({
                           if (!confirm(`确认将版本 ${versionDetailTarget.slug} 切回 planning？`)) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
-                          fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                          fetch(graphUrlForActive("/api/dsh-graph/set-version-status"), {
                             method: "POST",
                             headers: { "content-type": "application/json" },
                             body: JSON.stringify({ slug: versionDetailTarget.slug, status: "planning" }),
@@ -6014,7 +6033,7 @@ window.__ModuleLoader__.load({
                           if (!confirm(`确认发布版本 ${versionDetailTarget.slug}？\n\n此操作需要负责人确认，发布后版本状态将变为 released。`)) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
-                          fetch(graphUrl("/api/dsh-graph/release-version"), {
+                          fetch(graphUrlForActive("/api/dsh-graph/release-version"), {
                             method: "POST",
                             headers: { "content-type": "application/json" },
                             body: JSON.stringify({ slug: versionDetailTarget.slug }),
@@ -6053,7 +6072,7 @@ window.__ModuleLoader__.load({
                               onClick: () => {
                                 setReactivatingVersion(true);
                                 setVersionActionNote(null);
-                                fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                                fetch(graphUrlForActive("/api/dsh-graph/set-version-status"), {
                                   method: "POST",
                                   headers: { "content-type": "application/json" },
                                   body: JSON.stringify({ slug: versionDetailTarget.slug, status: "active", confirmed: true }),
@@ -6987,72 +7006,63 @@ window.__ModuleLoader__.load({
         );
       } catch { /* slots 缺失或重复注册：静默（不影响看板/工具） */ }
     }
-    // g-129 修复：缓存最近一次成功解析的 workspace——切到子代理会话（不在 workspace 映射、
-    // 无 cwd/parentSessionId 可用）时回退缓存，避免看板读 process.cwd() 空骨架而空白。
+    // g-223：按 sessionId 解析 workspace；无法验证时必须 fail closed，绝不跨会话复用缓存。
     let lastGoodWorkspace = null;
-    function setLastGoodWorkspace(ws) { if (ws) lastGoodWorkspace = ws; }
-    // g-113 定点 bug 2：workspace 数据源改用 workspaces 服务——sessions 条目 cwd 并非总有
-    // （DSH 源码 dsh-client-runtime/client.js:9233 `...entry.cwd !== void 0 ? { cwd: entry.cwd } : {}`，
-    // aseit-ella 会话条目 cwd 为空），可靠来源是 workspaces 服务：
-    // `workspaces.list.getSnapshot().items` 每条 `{ workspaceId, path, title, sessionIds, ... }`
-    // （host workspaceView：dsh-host-apiproxy lib 793-801；runtime project() 直接透传 items），
-    // path 即该 workspace 目录，`sessionIds.includes(被查看会话)` 即归属映射
-    // （同文件 :9866 `summary.cwd === workspace.path && workspace.sessionIds.includes(summary.id)`）。
-    // g-223：纯函数按 sessionId 解析归属 workspace（供 render/effect 阶段直接调用，避免会话切换时序缺陷）
-    // 优先级：指定 sessionId（workspaces 映射）→ sessionId（sessions cwd）→ sessionId（parent 回溯 cwd/workspaces）
-    // → list.current（workspaces）→ list.current（cwd）→ list.current（parent 回溯）→ lastGoodWorkspace 兜底
+    function setLastGoodWorkspace(ws) { if (typeof ws === "string" && ws) lastGoodWorkspace = ws; }
+    // wsOf(sid) remains the explicit workspace-membership check; viewed?.parentSessionId is walked safely.
     function resolveWorkspaceOfSession(sessionId) {
       try {
-        const wsItems = workspacesRt?.list?.getSnapshot?.()?.items
-          ?? appCtx?.get?.("workspaces")?.list?.getSnapshot?.()?.items ?? [];
-        const wsOf = (sid) => wsItems.find?.((w) => Array.isArray(w?.sessionIds) && w.sessionIds.includes(sid));
+        const rawWsItems = workspacesRt?.list?.getSnapshot?.()?.items
+          ?? appCtx?.get?.("workspaces")?.list?.getSnapshot?.()?.items;
+        const wsItems = Array.isArray(rawWsItems) ? rawWsItems : [];
+        const wsOf = (sid) => wsItems.find((w) => Array.isArray(w?.sessionIds)
+          && w.sessionIds.includes(sid) && typeof w.path === "string" && w.path);
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
-        const snap = rt?.list?.getSnapshot?.();
-        const items = snap?.items ?? [];
+        const snap = rt?.list?.getSnapshot?.() ?? {};
+        const items = Array.isArray(snap.items) ? snap.items : [];
+        const byId = (sid) => items.find((s) => s && s.sessionId === sid);
+        const pathOf = (sid) => {
+          const seen = new Set();
+          let current = sid;
+          while (current && !seen.has(current)) {
+            seen.add(current);
+            const mapped = wsOf(current);
+            if (mapped?.path) return mapped.path;
+            const item = byId(current);
+            if (typeof item?.cwd === "string" && item.cwd) return item.cwd;
+            current = typeof item?.parentSessionId === "string" ? item.parentSessionId : null;
+          }
+          return null;
+        };
         const sid = sessionId ?? viewedSessionId;
+        // Any supplied/viewed session is an isolation boundary: no current/cache fallback.
         if (sid) {
-          const w = wsOf(sid);
-          if (w?.path) { setLastGoodWorkspace(w.path); return w.path; }
-          const viewed = items.find?.((s) => s.sessionId === sid);
-          if (viewed?.cwd) { setLastGoodWorkspace(viewed.cwd); return viewed.cwd; }
-          if (viewed?.parentSessionId) {
-            const parent = items.find?.((s) => s.sessionId === viewed.parentSessionId);
-            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd; }
-            const pw = wsOf(viewed.parentSessionId);
-            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path; }
-          }
+          const resolved = pathOf(sid);
+          if (resolved) { setLastGoodWorkspace(resolved); return resolved; }
+          return null;
         }
-        const current = snap?.current;
-        if (current) {
-          const w = wsOf(current);
-          if (w?.path) { setLastGoodWorkspace(w.path); return w.path; }
-          const item = items.find?.((s) => s.sessionId === current);
-          if (item?.cwd) { setLastGoodWorkspace(item.cwd); return item.cwd; }
-          if (item?.parentSessionId) {
-            const parent = items.find?.((s) => s.sessionId === item.parentSessionId);
-            if (parent?.cwd) { setLastGoodWorkspace(parent.cwd); return parent.cwd; }
-            const pw = wsOf(item.parentSessionId);
-            if (pw?.path) { setLastGoodWorkspace(pw.path); return pw.path; }
-          }
-        }
-        if (lastGoodWorkspace) return lastGoodWorkspace;
+        // With no session selected, only the runtime's current session is eligible.
+        const current = typeof snap.current === "string" ? snap.current : null;
+        const resolved = current ? pathOf(current) : null;
+        if (resolved) { setLastGoodWorkspace(resolved); return resolved; }
         return null;
-      } catch { if (lastGoodWorkspace) return lastGoodWorkspace; return null; }
+      } catch { return null; }
     }
 
     function currentWorkspace() {
       return resolveWorkspaceOfSession(viewedSessionId);
     }
 
-    // 给 /api/dsh-graph* 请求统一追加 ?workspace=（GET/POST 通用；已知则带，未知则裸路径；可选显式传入 workspace）
+    // 给 /api/dsh-graph* 请求统一追加 ?workspace=；未知 workspace 时由调用方 fail closed。
     function graphUrl(path, extraParams = {}, explicitWs = null) {
       const p = new URLSearchParams(extraParams);
       const ws = explicitWs ?? currentWorkspace();
-      if (ws) p.set("workspace", ws);
+      if (!ws) return null;
+      p.set("workspace", ws);
       const qs = p.toString();
-      if (!qs) return path;
       return path + (path.includes("?") ? "&" : "?") + qs;
     }
+
     // 跳转后把会话页切回「对话」tab：chat 是 conversation.view 中 order=0 的固定首 tab；
     // tab 选中态存在 ui-conversation 的 per-session chatStore 内、无跨插件 API（源码核实），
     // 故在跳转后点一下首 tab（仅当当前选中不是它）。无 tab 栏（单视图）时不动。

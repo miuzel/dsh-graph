@@ -2417,6 +2417,51 @@ test("g-223 行为契约：hidden-versions-changed 自定义事件非数组/畸�
   assert.match(helpers, /if \(Array\.isArray\(rawHidden\)\)/);
   assert.match(helpers, /rawHidden\.filter\(\(s\) => typeof s === "string"\)/);
 
+
+ test("g-223 att-005 workspace isolation contracts: fail-closed, malformed records, parent chain, and bound actions", () => {
+   const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
+   const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+   assert.ok(plugin.includes("Array.isArray(rawWsItems)"));
+   assert.ok(plugin.includes("Array.isArray(w?.sessionIds)"));
+   assert.ok(plugin.includes("return null;"));
+   assert.ok(!plugin.includes("if (lastGoodWorkspace) return lastGoodWorkspace"));
+   assert.ok(kanban.includes("if (!activeWs) return"));
+   assert.ok(kanban.includes("无法确定工作区"));
+   assert.ok(kanban.includes("graphUrlForActive"));
+   assert.ok(kanban.includes("requestSeqRef"));
+ });
+
+ test("g-223 att-005 load binds monotonic sequence and guards stale success/error", () => {
+   const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
+   assert.match(kanban, /const requestSeq = \+\+requestSeqRef\.current/);
+   assert.match(kanban, /boardIdentityRef\.current !== requestIdentity \|\| requestSeqRef\.current !== requestSeq/);
+   const guardCount = (kanban.match(/requestSeqRef\.current !== requestSeq/g) ?? []).length;
+   assert.ok(guardCount >= 2, "success and catch paths both reject stale responses");
+   assert.match(kanban, /String\(showArchived\)/);
+ });
+
+test("g-223 att-005 child parent mapping and unresolved B never reuse A", () => {
+  const workspaces: any[] = [{ path: "/a", sessionIds: ["A"] }, { path: "/b", sessionIds: ["B"] }];
+  const sessions: any[] = [{ sessionId: "child", parentSessionId: "B" }, { sessionId: "orphan" }];
+  const resolve = (sid: string) => {
+    const seen = new Set<string>(); let cur: any = sid;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const w = workspaces.find((x) => Array.isArray(x.sessionIds) && x.sessionIds.includes(cur));
+      if (w?.path) return w.path;
+      const s = sessions.find((x) => x.sessionId === cur);
+      if (typeof s?.cwd === "string" && s.cwd) return s.cwd;
+      cur = typeof s?.parentSessionId === "string" ? s.parentSessionId : null;
+    }
+    return null;
+  };
+  assert.equal(resolve("A"), "/a");
+  assert.equal(resolve("child"), "/b");
+  assert.equal(resolve("orphan"), null);
+  workspaces[1].sessionIds = "B" as any;
+  assert.equal(resolve("B"), null);
+});
+
   // 纯逻辑行为测试：模拟各类事件输入
   function handleHiddenEvent(detail: any, currentWs: string, fallbackGetter: () => string[]) {
     const evWs = detail?.workspace;

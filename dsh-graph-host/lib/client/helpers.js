@@ -289,7 +289,8 @@
     }
 
     function setHiddenVersionSlugs(slugsOrEntries, workspace, versions) {
-      const ws = workspace ?? (currentWorkspace() || "default");
+      const ws = workspace ?? currentWorkspace();
+      if (!ws) return [];
       let entries = [];
       if (Array.isArray(slugsOrEntries)) {
         const vList = Array.isArray(versions) ? versions : [];
@@ -324,11 +325,11 @@
     }
 
     function useHiddenVersionSlugs(workspace) {
-      const currentWs = workspace ?? (currentWorkspace() || "default");
-      const [hidden, setHidden] = React.useState(() => getHiddenVersionSlugs(currentWs));
+      const currentWs = workspace ?? currentWorkspace();
+      const [hidden, setHidden] = React.useState(() => currentWs ? getHiddenVersionSlugs(currentWs) : []);
 
       React.useEffect(() => {
-        setHidden(getHiddenVersionSlugs(currentWs));
+        setHidden(currentWs ? getHiddenVersionSlugs(currentWs) : []);
       }, [currentWs]);
 
       React.useEffect(() => {
@@ -357,7 +358,7 @@
       }, [currentWs]);
 
       const setter = React.useCallback((slugsOrEntries, versions) => {
-        return setHiddenVersionSlugs(slugsOrEntries, currentWs, versions);
+        return currentWs ? setHiddenVersionSlugs(slugsOrEntries, currentWs, versions) : [];
       }, [currentWs]);
 
       return [hidden, setter];

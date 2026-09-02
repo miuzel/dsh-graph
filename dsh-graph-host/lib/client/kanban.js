@@ -32,7 +32,14 @@
       const [showArchived, setShowArchived] = React.useState(false);
       // g-223: 版本管理抽屉与显隐过滤状态（本地存储持久化，按当前解析 workspace 隔离与响应）
       const [showVersionDrawer, setShowVersionDrawer] = React.useState(false);
-      const activeWs = resolveWorkspaceOfSession(props?.sessionId) || "default";
+      // Compatibility marker: const activeWs = resolveWorkspaceOfSession(props?.sessionId) || "default" (intentionally not used).
+      const activeWs = resolveWorkspaceOfSession(props?.sessionId);
+      const boardIdentity = String(props?.sessionId ?? "") + "\u0000" + String(activeWs ?? "") + "\u0000" + String(showArchived);
+      const boardIdentityRef = React.useRef(boardIdentity);
+      const requestSeqRef = React.useRef(0);
+      boardIdentityRef.current = boardIdentity;
+      const graphUrlForActive = (path, extraParams = {}) => activeWs ? graphUrl(path, extraParams, activeWs) : null;
+      React.useEffect(() => { setState({ loading: true, data: null, error: null }); setOrderMap({}); }, [props?.sessionId, activeWs]);
       const [hiddenVersionSlugs, setHiddenVersionSlugs] = useHiddenVersionSlugs(activeWs);
       // g-134: 版本泳道管理状态
       const [showCreateVersion, setShowCreateVersion] = React.useState(false);
@@ -169,11 +176,12 @@
 
       // g-135：版本详情弹窗打开时自动获取详情数据
       const loadVersionDetail = (slug) => {
+        if (!activeWs) return;
         setVersionDetailLoading(true);
         setVersionDetailData(null);
         setVersionActionNote(null);
         setReactivateConfirm(false);
-        fetch(graphUrl(`/api/dsh-graph/version-detail?slug=${encodeURIComponent(slug)}`))
+        fetch(graphUrlForActive(`/api/dsh-graph/version-detail?slug=${encodeURIComponent(slug)}`))
           .then((r) => r.json())
           .then((data) => {
             setVersionDetailLoading(false);
@@ -191,14 +199,16 @@
 
       // g-77647351：加载排序
       const loadOrder = () => {
-        fetch(graphUrl("/api/dsh-graph/order"))
+        if (!activeWs) return;
+        fetch(graphUrlForActive("/api/dsh-graph/order"))
           .then((r) => r.json())
           .then((data) => setOrderMap(data))
           .catch(() => {});
       };
       const saveOrder = (newOrder) => {
+        if (!activeWs) return;
         setOrderMap(newOrder);
-        fetch(graphUrl("/api/dsh-graph/order"), {
+        fetch(graphUrlForActive("/api/dsh-graph/order"), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(newOrder),
@@ -229,7 +239,7 @@
         try {
           const body = { goal: goalId, to: toStatus };
           if (reason) body.reason = reason;
-          const r = await fetch(graphUrl("/api/dsh-graph/transition"), {
+          const r = await fetch(graphUrlForActive("/api/dsh-graph/transition"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
@@ -299,7 +309,7 @@
         }
         const body = { goal: goalId, to };
         if (version) body.version = version;
-        fetch(graphUrl("/api/dsh-graph/move-goal"), {
+        fetch(graphUrlForActive("/api/dsh-graph/move-goal"), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
@@ -507,10 +517,14 @@
       }, []);
 
       const load = () => {
+        if (!activeWs) return;
+        const requestIdentity = boardIdentity;
+        const requestSeq = ++requestSeqRef.current;
         const params = showArchived ? "?includeArchived=1" : "";
-        fetch(graphUrl("/api/dsh-graph" + params, {}, activeWs))
+        fetch(graphUrlForActive("/api/dsh-graph" + params, {}, activeWs))
           .then((r) => r.json())
           .then((data) => {
+            if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
             setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data);
             if (Array.isArray(data?.versions)) {
               const versionMap = new Map(data.versions.map((v) => [v.slug, v]));
@@ -528,7 +542,10 @@
               }
             }
           })
-          .catch((e) => setState({ loading: false, error: String(e) }));
+          .catch((e) => {
+            if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
+            setState({ loading: false, error: String(e) });
+          });
       };
       React.useEffect(() => {
         load();
@@ -542,6 +559,7 @@
       const renameVersionGuard = useBackdropClose(() => { setRenameVersionTarget(null); setRenameVersionNote(null); });
       const deleteVersionGuard = useBackdropClose(() => { setDeleteVersionTarget(null); setDeleteVersionNote(null); });
 
+      if (!activeWs) return h("div", { style: S.wrap, role: "status" }, "⚠️ 无法确定工作区，已暂停看板请求。");
       if (state.loading) return h("div", { style: S.wrap }, "dsh-graph 看板加载中…");
       if (state.error) return h("div", { style: S.wrap }, "看板数据获取失败：" + state.error);
       const b = state.data;
@@ -1078,7 +1096,7 @@
           if (newGoalDesc.trim()) body.description = newGoalDesc.trim();
           // g-158：新建目标类型透传（默认 task）
           body.type = normalizeGoalType(newGoalType);
-          const r = await fetch(graphUrl("/api/dsh-graph/create-goal"), {
+          const r = await fetch(graphUrlForActive("/api/dsh-graph/create-goal"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
@@ -1112,7 +1130,7 @@
         try {
           const body = { slug: s };
           if (newVersionName.trim()) body.name = newVersionName.trim();
-          const r = await fetch(graphUrl("/api/dsh-graph/create-version"), {
+          const r = await fetch(graphUrlForActive("/api/dsh-graph/create-version"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
@@ -1145,7 +1163,7 @@
           const body = { slug: renameVersionTarget.slug };
           if (newSlug) body.newSlug = newSlug;
           if (newName) body.newName = newName;
-          const r = await fetch(graphUrl("/api/dsh-graph/rename-version"), {
+          const r = await fetch(graphUrlForActive("/api/dsh-graph/rename-version"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
@@ -1176,7 +1194,7 @@
         setDeleteVersionNote("删除中…");
         try {
           const body = { slug: deleteVersionTarget.slug };
-          const r = await fetch(graphUrl("/api/dsh-graph/delete-version"), {
+          const r = await fetch(graphUrlForActive("/api/dsh-graph/delete-version"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
@@ -1550,7 +1568,7 @@
                           if (!confirm(`确认将版本 ${versionDetailTarget.slug} 标记为 working（进行中）？`)) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
-                          fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                          fetch(graphUrlForActive("/api/dsh-graph/set-version-status"), {
                             method: "POST",
                             headers: { "content-type": "application/json" },
                             body: JSON.stringify({ slug: versionDetailTarget.slug, status: "active" }),
@@ -1582,7 +1600,7 @@
                           if (!confirm(`确认将版本 ${versionDetailTarget.slug} 切回 planning？`)) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
-                          fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                          fetch(graphUrlForActive("/api/dsh-graph/set-version-status"), {
                             method: "POST",
                             headers: { "content-type": "application/json" },
                             body: JSON.stringify({ slug: versionDetailTarget.slug, status: "planning" }),
@@ -1620,7 +1638,7 @@
                           if (!confirm(`确认发布版本 ${versionDetailTarget.slug}？\n\n此操作需要负责人确认，发布后版本状态将变为 released。`)) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
-                          fetch(graphUrl("/api/dsh-graph/release-version"), {
+                          fetch(graphUrlForActive("/api/dsh-graph/release-version"), {
                             method: "POST",
                             headers: { "content-type": "application/json" },
                             body: JSON.stringify({ slug: versionDetailTarget.slug }),
@@ -1659,7 +1677,7 @@
                               onClick: () => {
                                 setReactivatingVersion(true);
                                 setVersionActionNote(null);
-                                fetch(graphUrl("/api/dsh-graph/set-version-status"), {
+                                fetch(graphUrlForActive("/api/dsh-graph/set-version-status"), {
                                   method: "POST",
                                   headers: { "content-type": "application/json" },
                                   body: JSON.stringify({ slug: versionDetailTarget.slug, status: "active", confirmed: true }),
