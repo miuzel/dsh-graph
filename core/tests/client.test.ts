@@ -2455,7 +2455,8 @@ test("g-223 行为契约：基于 stable version id 绑定与无中间 load 的 
   // 静态契约：kanban 加载时基于 version.id 与 slug 对账清理
   assert.match(kanban, /const versionMap = new Map\(data\.versions\.map\(\(v\) => \[v\.slug, v\]\)\);/);
   assert.match(kanban, /if \(e\.id && ver\.id && e\.id !== ver\.id\) return false;/);
-  assert.match(kanban, /setHiddenVersionSlugs\(cleanedEntries, activeWs, data\.versions\);/);
+  assert.match(kanban, /const isDifferent = cleanedEntries\.length !== entries\.length \|\|/);
+  assert.match(kanban, /setHiddenVersionSlugs\(cleanedEntries, data\.versions\);/);
 
   // 纯逻辑行为模拟测试：支持 { slug, id } 偏好与 versions 对账
   type HiddenEntry = { slug: string; id: string | null };
@@ -2470,10 +2471,13 @@ test("g-223 行为契约：基于 stable version id 绑定与无中间 load 的 
       return true;
     }).map((e) => ({ slug: e.slug, id: versionMap.get(e.slug)?.id ?? e.id ?? null }));
 
+    const isDifferent = cleaned.length !== storedEntries.length ||
+      cleaned.some((ce, i) => ce.slug !== storedEntries[i]?.slug || ce.id !== storedEntries[i]?.id);
+
     return {
       cleaned,
       hiddenSlugs: [...new Set(cleaned.map((e) => e.slug))],
-      wasUpdated: cleaned.length !== storedEntries.length,
+      wasUpdated: isDifferent,
     };
   }
 
@@ -2496,9 +2500,8 @@ test("g-223 行为契约：基于 stable version id 绑定与无中间 load 的 
   assert.deepEqual(res2.cleaned, [], "同 slug 但不同 id 的旧隐藏偏好被安全清理");
   assert.equal(res2.hiddenSlugs.includes("v0.7"), false, "新建的同名版本 v0.7 默认显示！");
 
-  // 场景 3：历史旧数据（纯字符串数组无 id）兼容升级
+  // 场景 3：历史旧数据（纯字符串数组无 id）兼容升级与完整序列（legacy -> 首次 load 持久化升级 -> 随后无中间 load 的 delete+recreate）
   const legacyRaw = JSON.stringify(["v0.7", "v0.8"]);
-  const helpersModule = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
   // 模拟 parseHiddenVersionEntries 逻辑
   function testParse(raw: string): HiddenEntry[] {
     const parsed = JSON.parse(raw);
@@ -2510,11 +2513,19 @@ test("g-223 行为契约：基于 stable version id 绑定与无中间 load 的 
   }
   const parsedLegacy = testParse(legacyRaw);
   assert.deepEqual(parsedLegacy, [{ slug: "v0.7", id: null }, { slug: "v0.8", id: null }]);
-  // 当与当前存在 versions 对账时，无 id 的旧条目自动绑定当前 version_id 且不误删
+  
+  // 步骤 3.1: 首次 load：旧条目无 id（id=null），对账时自动补全当前 version_id（id: v-007, v-008）并触发持久化升级（wasUpdated=true）
   const resLegacy = reconcileHiddenEntries(vList1, parsedLegacy);
-  assert.equal(resLegacy.wasUpdated, false, "依然存在的旧版本不被误删");
-  assert.deepEqual(resLegacy.cleaned, [{ slug: "v0.7", id: "v-007" }, { slug: "v0.8", id: "v-008" }], "自动补充绑定当前 version.id");
+  assert.equal(resLegacy.wasUpdated, true, "补全 id 后内容改变，必须触发持久化写回 localStorage");
+  assert.deepEqual(resLegacy.cleaned, [{ slug: "v0.7", id: "v-007" }, { slug: "v0.8", id: "v-008" }], "已成功补充当前 version.id");
   assert.deepEqual(resLegacy.hiddenSlugs, ["v0.7", "v0.8"]);
+
+  // 步骤 3.2: 升级持久化写回后，在无中间 load 情况下，v0.7 (v-007) 被外部直接删除并以同名重建为 v0.7 (v-009)
+  const vListAfterRecreateNoIntermediary: VersionItem[] = [{ slug: "v0.7", id: "v-009" }, { slug: "v0.8", id: "v-008" }];
+  const resRecreated = reconcileHiddenEntries(vListAfterRecreateNoIntermediary, resLegacy.cleaned);
+  assert.equal(resRecreated.wasUpdated, true, "重建后 version_id 不匹配触发清理");
+  assert.deepEqual(resRecreated.cleaned, [{ slug: "v0.8", id: "v-008" }], "旧 v0.7 (v-007) 被清理，仅保留仍然存在的 v0.8");
+  assert.equal(resRecreated.hiddenSlugs.includes("v0.7"), false, "新建的同名版本 v0.7 默认显示！");
 });
 
 

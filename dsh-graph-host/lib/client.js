@@ -4906,8 +4906,10 @@ window.__ModuleLoader__.load({
                 if (e.id && ver.id && e.id !== ver.id) return false;
                 return true;
               }).map((e) => ({ slug: e.slug, id: versionMap.get(e.slug)?.id ?? e.id ?? null }));
-              if (cleanedEntries.length !== entries.length) {
-                setHiddenVersionSlugs(cleanedEntries, activeWs, data.versions);
+              const isDifferent = cleanedEntries.length !== entries.length ||
+                cleanedEntries.some((ce, i) => ce.slug !== entries[i]?.slug || ce.id !== entries[i]?.id);
+              if (isDifferent) {
+                setHiddenVersionSlugs(cleanedEntries, data.versions);
               }
             }
           })
