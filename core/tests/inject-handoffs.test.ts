@@ -280,7 +280,7 @@ function fakeResponse() {
   return res;
 }
 
-function makeHostCtx(captured: { prompt?: string }, workspace?: string) {
+function makeHostCtx(captured: { prompt?: string }, workspace?: string, graphRoot?: string) {
   const routes = new Map<string, any>();
   const registered: any[] = [];
   const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
@@ -303,7 +303,7 @@ function makeHostCtx(captured: { prompt?: string }, workspace?: string) {
     webServer,
     tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
   };
-  apply(ctx, {});
+  apply(ctx, { root: graphRoot });
   return { routes, registered };
 }
 
@@ -377,7 +377,7 @@ test("g-228：graph_start_attempt 使用 supervisor 独立关键字段，不从 
     init(root);
     const goal = createGoal(root, { title: "structured", version: "v-t", actor: "test" });
     const captured: { prompt?: string } = {};
-    const { registered } = makeHostCtx(captured, ws);
+    const { registered } = makeHostCtx(captured, ws, root);
     const tool = registered.find((d) => d.name === "graph_start_attempt");
     assert.deepEqual(tool.parameters.properties.task_type.enum, ["merge", "rewrite", "fix"]);
     assert.equal(tool.parameters.properties.task_type.type, "string");
@@ -466,7 +466,7 @@ test("g-228：start-execution 端点透传 supervisor 独立关键字段", async
       acceptance_items: ["node --test"],
     };
     const captured: { prompt?: string } = {};
-    const { routes } = makeHostCtx(captured, ws);
+    const { routes } = makeHostCtx(captured, ws, root);
     const handler = routes.get("/api/dsh-graph/start-execution");
     const req = fakeRequest("POST", body);
     req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
@@ -491,7 +491,7 @@ test("g-228：start-execution 端点拒绝自然语言 task_type，要求显式�
     const goal = createGoal(root, { title: "ep-invalid", version: "v-t", actor: "test" });
     const body = { goal, task_type: "合入" };
     const captured: { prompt?: string } = {};
-    const { routes } = makeHostCtx(captured, ws);
+    const { routes } = makeHostCtx(captured, ws, root);
     const handler = routes.get("/api/dsh-graph/start-execution");
     const req = fakeRequest("POST", body);
     req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
