@@ -1,6 +1,6 @@
 {
   "name": "dsh-graph",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "dsh-graph 单包（host+client 合并，g-116）：把 dsh-graph 核心层包装为 DSH cordis 插件，同时提供 graph_* 目标生命周期工具（建卡/判据/迁移/派发/评审/交付）、/api/dsh-graph REST 端点与浏览器二维泳道看板（conversation.view）。包名 = repo 名（负责人定案）；内部 host 插件 id 保留 dsh-graph-host。",
   "license": "MIT",
   "type": "module",
