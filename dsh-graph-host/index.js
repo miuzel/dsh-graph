@@ -12,9 +12,9 @@
  * - 副作用收进 ctx.effect。
  */
 import { writeFileSync } from "node:fs";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { relative, join, resolve, dirname } from "node:path";
+import { relative, join, resolve, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createGoal,
@@ -225,7 +225,7 @@ export function apply(ctx, config) {
   // g-149 修复：不再兜底 process.cwd()——无明确 workspace 时返回 null，
   // 由 rootFor/rootForMeta 抛错，避免在服务进程 cwd 下意外 init .dsh-graph。
   // 绝对 config.root 时跳过 workspace 要求（root 完全由配置决定）。
-  const isAbsoluteConfig = !!(config?.root && resolve(config.root) === config.root);
+  const isAbsoluteConfig = !!(config?.root && isAbsolute(config.root));
   const sessionWorkspace = (ex) => ex?.agent?.session?.header?.cwd ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? null;
   // g-133：注册 dsh-graph settings namespace（profile 级全局默认）。
   // 守卫式动态 import schemastery（@deepseek-ai/*），失败/缺失时优雅降级（plugin 始终可加载）。
@@ -888,31 +888,15 @@ export function apply(ctx, config) {
       return body?.workspace || body?.root || null;
     }
   };
-  // g-212：REST 只能使用 sandboxPolicy.workspaceRoot 作为授权来源；即使 config.root
-  // 是管理员指定的绝对 graph root，也不得绕过策略。请求 workspace/root（如有）只做
-  // realpath exact 一致性校验，绝不成为授权或 fallback 来源。
+  // g-212 att-005：REST 不自建 auth/allowlist；显式 workspace/root 仅作为
+  // 当前请求的 root 输入交给统一 resolver。sandboxPolicy 不参与显式请求判定。
   const requireWorkspaceOf = (req, body) => {
-    const configured = ctx.get?.("sandboxPolicy")?.workspaceRoot;
-    if (typeof configured !== "string" || !configured.trim()) {
-      throw new GraphError("缺少当前请求的 workspace 授权策略");
-    }
-    const configuredResolved = resolve(configured);
-    let authorized;
-    try { authorized = realpathSync(configuredResolved); } catch { throw new GraphError("授权 workspace 不可访问"); }
-    if (authorized !== configuredResolved) throw new GraphError("拒绝授权 workspace symlink 别名");
-
+    if (isAbsoluteConfig) return config.root;
     const ws = workspaceOf(req, body);
-    if (ws) {
-      let canonicalWs;
-      try { canonicalWs = realpathSync(resolve(ws)); } catch { throw new GraphError("workspace 路径不可访问"); }
-      if (canonicalWs !== resolve(ws)) throw new GraphError("拒绝 workspace symlink 别名");
-      if (canonicalWs !== authorized) throw new GraphError("workspace 未获当前请求授权");
-    } else if (!isAbsoluteConfig) {
+    if (typeof ws !== "string" || !ws.trim()) {
       throw new GraphError("REST 端点需要明确的 workspace 参数（?workspace= 或 body.workspace），当前请求无可用 workspace");
     }
-    // Absolute config.root remains an explicit admin target; policy presence and any supplied
-    // workspace check above are mandatory, while the configured root is guarded by root.ts.
-    return isAbsoluteConfig ? config.root : authorized;
+    return resolve(ws);
   };
   // 解析后幂等 init：端点首次触达某个 workspace 时确保其 .dsh-graph 骨架齐全（开箱即用，
   // 与 apply 期 init 同款；board/写端点不会因缺骨架半成品落盘）
@@ -1186,9 +1170,9 @@ export function apply(ctx, config) {
       path: "/api/dsh-graph/order",
       handler: async (req, res) => {
         try {
-          const r = rootForReq(req);
-          const orderFile = join(r, "order.json");
           if (req.method === "GET") {
+            const r = rootForReq(req);
+            const orderFile = join(r, "order.json");
             try {
               const data = JSON.parse(readFileSync(orderFile, "utf8"));
               json(res, 200, data);
@@ -1197,7 +1181,11 @@ export function apply(ctx, config) {
             }
           } else if (req.method === "POST") {
             const body = await readBody(req);
-            writeFileSync(orderFile, JSON.stringify(body, null, 2), "utf8");
+            const r = rootForReq(req, body);
+            const orderFile = join(r, "order.json");
+            // workspace/root are routing metadata, not part of the persisted order map.
+            const { workspace: _workspace, root: _root, ...order } = body;
+            writeFileSync(orderFile, JSON.stringify(order, null, 2), "utf8");
             invalidateBoardCache(r);
             json(res, 200, { ok: true });
           } else {
