@@ -13,11 +13,10 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 node core/main.ts --root "$TMP" init
-ID=$(node core/main.ts --root "$TMP" create-goal --title 冒烟目标)
+ID=$(node core/main.ts --root "$TMP" create-goal --title 冒烟目标 --version v-t)
 echo "created: $ID"
 
-# 合法迁移：draft -> planning -> collecting -> ready
-node core/main.ts --root "$TMP" transition --goal "$ID" --to planning
+# 版本参数已排期为 planning：planning -> collecting -> ready
 node core/main.ts --root "$TMP" transition --goal "$ID" --to collecting
 node core/main.ts --root "$TMP" transition --goal "$ID" --to ready
 
