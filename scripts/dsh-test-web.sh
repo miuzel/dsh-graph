@@ -45,18 +45,28 @@ case "$TEST_ROOT" in *"/../"*|*/..|../*|.. ) die "DSH_TEST_ROOT 禁止包含 .."
 TEST_ROOT=$(realpath -m "$TEST_ROOT") || die "无法 canonicalize DSH_TEST_ROOT：$TEST_ROOT"
 case "$TEST_ROOT" in "$TMP_ROOT"|"$TMP_ROOT"/*) ;; *) die "DSH_TEST_ROOT 必须位于 canonical $TMP_ROOT 下";; esac
 if [ -e "$TEST_ROOT" ] && [ "$(realpath -e "$TEST_ROOT")" != "$TEST_ROOT" ]; then die "DSH_TEST_ROOT 不得通过 symlink 越界：$TEST_ROOT"; fi
-VERSION_ROOT="$TEST_ROOT/$VERSION"
-DSH_HOME="$VERSION_ROOT/home"
+# FULL_VERSION = raw requested dsh version. Workspace/cache/effective-config/pnpm-store and the
+# pnpx/dsh package target stay per FULL_VERSION; only DSH_HOME moves to the shared stable base home.
+FULL_VERSION="$VERSION"
+# STABLE_VERSION: SemVer prerelease v?MAJOR.MINOR.PATCH-suffix maps to v?MAJOR.MINOR.PATCH
+# (v kept iff the input has v, e.g. v0.1.2-alpha.4 -> v0.1.2, 0.1.1-rc.2 -> 0.1.1).
+# Stable / non-prerelease versions stay unchanged.
+STABLE_VERSION="$FULL_VERSION"
+if [[ "$FULL_VERSION" =~ ^(v?[0-9]+\.[0-9]+\.[0-9]+)-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  STABLE_VERSION="${BASH_REMATCH[1]}"
+fi
+VERSION_ROOT="$TEST_ROOT/$FULL_VERSION"
+DSH_HOME="$TEST_ROOT/$STABLE_VERSION/home"
 WORKSPACE="$VERSION_ROOT/workspace"
 CACHE_ROOT="$VERSION_ROOT/cache"
 HOST_DIR="$REPO_ROOT/dsh-graph-host"
 [ -f "$HOST_DIR/package.json" ] || die "本地插件缺失：$HOST_DIR/package.json"
 [ "$(node -e 'console.log(require(process.argv[1]).name)' "$HOST_DIR/package.json")" = "dsh-graph" ] || die "本地插件 package name 必须为 dsh-graph：$HOST_DIR/package.json"
-# The web alias owns the fixed web profile; per-version DSH_HOME is the isolation boundary.
+# The web alias owns the fixed web profile; DSH_HOME (stable base home, shared across a prerelease family) is the profile boundary.
 mkdir -p "$DSH_HOME" "$WORKSPACE" "$CACHE_ROOT/npm" "$CACHE_ROOT/xdg" "$VERSION_ROOT/pnpm-store"
 cd "$WORKSPACE"
 export DSH_HOME npm_config_cache="$CACHE_ROOT/npm" pnpm_config_store_dir="$VERSION_ROOT/pnpm-store" XDG_CACHE_HOME="$CACHE_ROOT/xdg"
-printf '==> DSH %s | root %s | profile web | DSH_HOME %s | workspace %s | port %s\n' "$VERSION" "$TEST_ROOT" "$DSH_HOME" "$WORKSPACE" "$PORT"
+printf '==> DSH %s | root %s | profile web | DSH_HOME %s | workspace %s | port %s\n' "$FULL_VERSION" "$TEST_ROOT" "$DSH_HOME" "$WORKSPACE" "$PORT"
 PROFILE_MANIFEST="$DSH_HOME/profiles/web/package.json"
 HOST_LINK="link:$HOST_DIR"
 needs_install=1
@@ -65,6 +75,7 @@ profile_ready() {
 }
 if [ -f "$PROFILE_MANIFEST" ] && profile_ready; then needs_install=0; fi
 if [ "$needs_install" -eq 1 ]; then
+  install=(pnpx --yes "@deepseek-ai/dsh@$VERSION" plugin --profile web add @deepseek-ai/schemastery)
   install=(pnpx --yes "@deepseek-ai/dsh@$VERSION" plugin --profile web add "$HOST_LINK")
   printf '==> 安装本地 dsh-graph 插件（每版本 profile）\n'
   if [ "$USE_PROXY" -eq 1 ]; then proxychains4 -q "${install[@]}" || die "插件安装失败：DSH $VERSION profile web"; else "${install[@]}" || die "插件安装失败：DSH $VERSION profile web"; fi
@@ -72,12 +83,12 @@ fi
 [ -f "$PROFILE_MANIFEST" ] || die "插件 profile manifest 缺失：$PROFILE_MANIFEST"
 profile_ready || die "插件 profile/link/bundle 未就绪：$PROFILE_MANIFEST"
 EFFECTIVE_CONFIG="$VERSION_ROOT/effective-config.yml"
-dump=(pnpx --yes "@deepseek-ai/dsh@$VERSION" web --dump-config)
+dump=(pnpx --yes "@deepseek-ai/dsh@$FULL_VERSION" web --dump-config)
 if [ "$USE_PROXY" -eq 1 ]; then proxychains4 -q "${dump[@]}" >"$EFFECTIVE_CONFIG" 2>/dev/null || die "无法读取 web effective config：DSH $VERSION"; else "${dump[@]}" >"$EFFECTIVE_CONFIG" 2>/dev/null || die "无法读取 web effective config：DSH $VERSION"; fi
 grep -q "@deepseek-ai/dsh-base" "$EFFECTIVE_CONFIG" || die "web effective config 缺少 dsh-base：DSH $VERSION"
 grep -q "@deepseek-ai/dsh-web-app" "$EFFECTIVE_CONFIG" || die "web effective config 缺少 dsh-web-app：DSH $VERSION"
 grep -q "dsh-graph" "$EFFECTIVE_CONFIG" || die "web effective config 缺少 dsh-graph：DSH $VERSION"
-cmd=(pnpx --yes "@deepseek-ai/dsh@$VERSION" web --no-open --port "$PORT")
+cmd=(pnpx --yes "@deepseek-ai/dsh@$FULL_VERSION" web --no-open --port "$PORT")
 [ -n "$HOST" ] && cmd+=(--host "$HOST")
 printf '==> 加载本地 dsh-graph 插件\n'
 if [ "$USE_PROXY" -eq 1 ]; then exec proxychains4 -q "${cmd[@]}"; else exec "${cmd[@]}"; fi
