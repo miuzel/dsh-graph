@@ -10,9 +10,10 @@ import {
   rmSync,
   rmdirSync,
   statSync,
+  realpathSync,
   writeFileSync,
 } from "node:fs";
-import { join, basename, dirname, relative } from "node:path";
+import { join, basename, dirname, relative, resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
 import {
@@ -47,11 +48,33 @@ export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersion
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema };
 export type { ObjectSchema };
 export { TxError };
-export type { TxContext };
-
+import { invalidateBoardCache, computeGraphRevision, formatETag, matchIfNoneMatch, getCachedBoardPayload as getCachedBoardPayloadCore, _inspectBoardCache, closeWatchers } from "./cache.ts";
+import { invalidate as invalidateGeneration } from "./cache-state.ts";
+export { invalidateBoardCache, computeGraphRevision, formatETag, matchIfNoneMatch, _inspectBoardCache, closeWatchers };
+export function getCachedBoardPayload(root: string, opts?: { includeArchived?: boolean }) {
+  return getCachedBoardPayloadCore(root, opts, boardPayload);
+}
 /** 防止用户输入内容中包含 `## ` 或 `### ` 开头的行，破坏 goal.md section 边界。
  *  将行首 `## ` / `### ` 转义为 `\## ` / `\### `（Markdown 不渲染为标题）。
  *  用于 setGoalDirective 和 appendGoalComment 的输入保护（g-150 返工阻断项 #5）。 */
+function assertNoSymlinkPath(file: string, forWrite = false): void {
+  try {
+    const resolved = resolve(file);
+    const actual = realpathSync(forWrite && !existsSync(resolved) ? dirname(resolved) : resolved);
+    const expected = forWrite && !existsSync(resolved) ? dirname(resolved) : resolved;
+    if (actual !== expected) throw new GraphError("拒绝访问 symlink 路径");
+  } catch (e) { if (e instanceof GraphError) throw e; }
+}
+
+function assertContainedPath(root: string, file: string): void {
+  try {
+    const rr = realpathSync(root);
+    const rf = realpathSync(file);
+    const rel = relative(rr, rf);
+    if (rel === ".." || rel.startsWith(".." + "/") || rel.startsWith("/")) throw new GraphError("拒绝读取 workspace 外 symlink 路径");
+  } catch (e) { if (e instanceof GraphError) throw e; }
+}
+
 function sanitizeHeadingContent(text: string): string {
   // 匹配行首可选空白 + 2-3 个 # + 至少一个空格（标题语法）
   // 替换为 \## 或 \###（Markdown 不渲染为标题）
@@ -133,11 +156,14 @@ export function listGoalFiles(root: string, opts?: { includeArchived?: boolean }
 }
 
 export function loadGoal(file: string): GoalDoc {
+  assertNoSymlinkPath(file);
   return parseDoc(readFileSync(file, "utf8"));
 }
 
 export function saveGoal(file: string, doc: GoalDoc): void {
+  assertNoSymlinkPath(file, true);
   writeFileSync(file, serializeDoc(doc), "utf8");
+  invalidateBoardCache();
 }
 
 export function findGoalFile(root: string, id: string): string {
@@ -359,6 +385,7 @@ export function writeHandoff(root: string, content: string): void {
     copyFileSync(target, join(dir, `HANDOFF-${ts}.md`));
   }
   writeFileSync(target, content, "utf8");
+  invalidateBoardCache();
 }
 
 /** g-121：文件系统安全的时间戳（YYYYMMDD-HHmmss-fff，本地时区），供归档文件名使用。 */
@@ -1470,6 +1497,7 @@ export function rebuild(root: string): string[] {
     }
   }
 
+  invalidateGeneration(root);
   return drift;
 }
 
@@ -3038,6 +3066,7 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
   const includeArchived = opts?.includeArchived ?? false;
   const events = opts?.events ?? readEvents(root);
   const goalItem = (file: string): BoardGoal => {
+    assertContainedPath(root, file);
     const doc = loadGoal(file);
     const meta = doc.meta;
     const archived = meta.archived === true || isArchivedFile(file);

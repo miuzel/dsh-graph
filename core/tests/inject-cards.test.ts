@@ -144,13 +144,14 @@ function fakeResponse() {
 }
 
 /** 构造带 subagents/agents/webServer stub 的 ctx：捕获两处派发实际送入子代理的 prompt。 */
-function makeHostCtx(captured: { prompt?: string }) {
+function makeHostCtx(captured: { prompt?: string }, workspace?: string) {
   const routes = new Map<string, any>();
   const registered: any[] = [];
   const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "sandboxPolicy") return workspace ? { workspaceRoot: workspace } : undefined;
       if (name === "subagents") return {
         list: () => ["spawn"],
         getProvider: () => ({ prepareContinuable: () => {} }),
@@ -194,7 +195,7 @@ test("g-120：graph_start_attempt 工具 prompt 注入卡片成果段 + worktree
   init(root);
   const { goal, c1, c2 } = goalWithCards(root);
   const captured: { prompt?: string } = {};
-  const { registered } = makeHostCtx(captured);
+  const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   assert.ok(tool, "graph_start_attempt 已注册");
   const res = await tool.execute({ goal }, execCtx(ws));
@@ -212,7 +213,7 @@ test("g-120：graph_start_attempt worktree=false 省略 worktree 指令但保留
   init(root);
   const { goal, c1, c2 } = goalWithCards(root);
   const captured: { prompt?: string } = {};
-  const { registered } = makeHostCtx(captured);
+  const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   const res = await tool.execute({ goal, worktree: false }, execCtx(ws));
   assert.deepEqual(res.injected_cards, [c1, c2], "worktree=false 不影响卡片注入（仅省略 worktree 指令）");
@@ -226,7 +227,7 @@ test("g-120：start-execution 端点 prompt 注入卡片成果段 + worktree 指
   const { goal, c1, c2 } = goalWithCards(root);
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
-  const { routes } = makeHostCtx(captured);
+  const { routes } = makeHostCtx(captured, ws);
   const handler = routes.get("/api/dsh-graph/start-execution");
   assert.ok(handler, "start-execution 路由已注册");
   const req = fakeRequest("POST", { goal });
@@ -253,7 +254,7 @@ test("g-120：start-execution 端点 worktree=false 省略 worktree 指令；无
   const { goal, c1 } = goalWithCards(root);
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
-  const { routes } = makeHostCtx(captured);
+  const { routes } = makeHostCtx(captured, ws);
   const handler = routes.get("/api/dsh-graph/start-execution");
   const req = fakeRequest("POST", { goal, worktree: false });
   req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
@@ -272,7 +273,7 @@ test("g-120：start-execution 端点 worktree=false 省略 worktree 指令；无
   addCard(root2, goal2, { title: "x", kind: "text", actor: "test" });
   writeFileSync(join(root2, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured2: { prompt?: string } = {};
-  const { routes: routes2 } = makeHostCtx(captured2);
+  const { routes: routes2 } = makeHostCtx(captured2, ws2);
   const handler2 = routes2.get("/api/dsh-graph/start-execution");
   const req2 = fakeRequest("POST", { goal: goal2 });
   req2.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws2);

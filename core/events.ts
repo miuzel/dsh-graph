@@ -2,6 +2,7 @@
 
 import { appendFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { invalidate as invalidateBoardCache } from "./cache-state.ts";
 import { STATUSES } from "./machine.ts";
 
 export interface GraphEvent {
@@ -52,6 +53,11 @@ export function appendEvent(
     JSON.stringify(rec) + "\n",
     "utf8",
   );
+  try {
+    invalidateBoardCache(root);
+  } catch {
+    /* 忽略缓存失效失败 */
+  }
   return rec;
 }
 

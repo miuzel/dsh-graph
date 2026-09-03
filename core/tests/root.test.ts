@@ -445,7 +445,7 @@ test("g-149 REST GET /api/dsh-graph 有明确 workspace 时正常返回", async 
     },
   };
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: base } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },

@@ -197,6 +197,7 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
   const ctx = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "s1" }) };
       if (name === "subagents") {
         return {

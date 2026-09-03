@@ -1,6 +1,7 @@
 /** 事件流：events.jsonl 是全部状态的唯一真相源（R-02）。 */
 import { appendFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { invalidate as invalidateBoardCache } from "./cache-state.js";
 import { STATUSES } from "./machine.js";
 export function nowIso() {
     // 本地时区 ISO（含偏移），与历史手写事件（+08:00）保持一致
@@ -29,6 +30,12 @@ export function nowIsoMs() {
 export function appendEvent(root, ev) {
     const rec = { ts: ev.ts ?? nowIso(), ...ev };
     appendFileSync(join(root, "events.jsonl"), JSON.stringify(rec) + "\n", "utf8");
+    try {
+        invalidateBoardCache(root);
+    }
+    catch {
+        /* 忽略缓存失效失败 */
+    }
     return rec;
 }
 export function readEvents(root) {

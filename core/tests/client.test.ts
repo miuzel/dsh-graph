@@ -45,7 +45,7 @@ function setup() {
   const routes = new Map<string, any>();
   const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : undefined), // 无 subagents/agents 服务 → 降级分支
+    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined), // 无 subagents/agents 服务 → 降级分支
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
@@ -55,11 +55,11 @@ function setup() {
 }
 
 // g-113：无 config.root 的 apply（完全由请求 workspace 决定 root，与生产默认一致）
-function setupNoConfigRoot() {
+function setupNoConfigRoot(workspace?: string) {
   const routes = new Map<string, any>();
   const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? (workspace ? { workspaceRoot: workspace } : undefined) : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
@@ -551,6 +551,7 @@ test("start-collection 有 subagents：验证使用 formatCollectPrompt 生成�
       if (name === "webServer") return webServer;
       if (name === "subagents") return subagentsService;
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
+      if (name === "sandboxPolicy") return { workspaceRoot: ws };
       return undefined;
     },
     effect: (fn: () => unknown) => fn(),
@@ -610,6 +611,7 @@ test("start-collection 用户 prompt 作为附加要求追加，不可替代强�
       if (name === "webServer") return webServer;
       if (name === "subagents") return subagentsService;
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
+      if (name === "sandboxPolicy") return { workspaceRoot: ws };
       return undefined;
     },
     effect: (fn: () => unknown) => fn(),
@@ -863,6 +865,7 @@ test("g-148 GUI 两步执行链：force ready→in_progress + start-execution �
       if (name === "webServer") return webServer;
       if (name === "subagents") return subagentsService;
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
+      if (name === "sandboxPolicy") return { workspaceRoot: ws };
       return undefined;
     },
     effect: (fn: () => unknown) => fn(),
@@ -935,7 +938,7 @@ test("g-113 board 端点跟随 ?workspace=：读该项目自己的 .dsh-graph，
   const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
   const a = makeProject(base, "proj-a", "A 项目目标");
   const b = makeProject(base, "proj-b", "B 项目目标");
-  const { routes } = setupNoConfigRoot();
+  const { routes } = setupNoConfigRoot(b.ws);
   const handler = routes.get("/api/dsh-graph");
   const res = fakeResponse();
   handler({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(b.ws) }, res);
@@ -943,9 +946,10 @@ test("g-113 board 端点跟随 ?workspace=：读该项目自己的 .dsh-graph，
   const titles = boardGoalTitles(res._body);
   assert.ok(titles.includes(b.title), "board 含 workspace 项目的目标");
   assert.ok(!titles.includes(a.title), "board 不含其他项目目标");
-  // 反向：workspace=a 时读 a 的目标
+  // 反向：workspace=a 使用独立请求上下文授权
+  const handlerA = setupNoConfigRoot(a.ws).routes.get("/api/dsh-graph");
   const res2 = fakeResponse();
-  handler({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(a.ws) }, res2);
+  handlerA({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(a.ws) }, res2);
   const titles2 = boardGoalTitles(res2._body);
   assert.ok(titles2.includes(a.title));
   assert.ok(!titles2.includes(b.title));
@@ -954,7 +958,7 @@ test("g-113 board 端点跟随 ?workspace=：读该项目自己的 .dsh-graph，
 test("g-113 写端点跟随 body.workspace：add-card 写到该项目 .dsh-graph（事件落该项目）", async () => {
   const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
   const b = makeProject(base, "proj-b", "B 项目目标");
-  const { routes } = setupNoConfigRoot();
+  const { routes } = setupNoConfigRoot(b.ws);
   const handler = routes.get("/api/dsh-graph/add-card");
   const req = fakeRequest("POST", { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws });
   const res = fakeResponse();
@@ -972,7 +976,7 @@ test("g-113 写端点跟随 body.workspace：add-card 写到该项目 .dsh-graph
 test("g-113 写端点同时接受 query 参数 workspace（前端 POST 也走 ?workspace=）", async () => {
   const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
   const b = makeProject(base, "proj-b", "B 项目目标");
-  const { routes } = setupNoConfigRoot();
+  const { routes } = setupNoConfigRoot(b.ws);
   const handler = routes.get("/api/dsh-graph/accept");
   const req = fakeRequest("POST", { goal: b.goalId });
   req.url = "/api/dsh-graph/accept?workspace=" + encodeURIComponent(b.ws);
@@ -990,7 +994,7 @@ test("g-113 board 端点接受 ?root= 别名（与 ?workspace= 等价，均指 w
   const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
   const a = makeProject(base, "proj-a", "A 项目目标");
   const b = makeProject(base, "proj-b", "B 项目目标");
-  const { routes } = setupNoConfigRoot();
+  const { routes } = setupNoConfigRoot(b.ws);
   const handler = routes.get("/api/dsh-graph");
   const res = fakeResponse();
   handler({ method: "GET", url: "/api/dsh-graph?root=" + encodeURIComponent(b.ws) }, res);
@@ -1011,7 +1015,7 @@ test("g-113 无 workspace 参数时回退 config.root（现有行为不回归）
 
 test("g-113 端点触达全新 workspace 时自动 init 骨架（开箱即用，不落 profile 骨架）", () => {
   const freshWs = join(mkdtempSync(join(tmpdir(), "dsh-graph-fresh-")), "brand-new-proj");
-  const { routes } = setupNoConfigRoot();
+  const { routes } = setupNoConfigRoot(freshWs);
   const handler = routes.get("/api/dsh-graph");
   const res = fakeResponse();
   handler({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(freshWs) }, res);
@@ -1047,6 +1051,7 @@ test("g-113 start-execution 注入目标相对路径以请求 workspace 为基�
         },
       };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
+      if (name === "sandboxPolicy") return { workspaceRoot: ws };
       return undefined;
     },
     effect: (fn: () => unknown) => fn(),
@@ -1303,8 +1308,8 @@ test("g-160 client 源契约：released 详情入口和二次确认恢复", () =
 
 test("g-171/g-211/g-214 模块源契约：kanban.js 复用现有 load 与 RefreshCountdown 倒计时且接入 visibilitychange", () => {
   const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
-  // 复用现有首次加载/手动刷新/写操作后的 load() 与轮询/倒计时
-  assert.ok(/const load = \(\) => \{[\s\S]*setState\(\{ loading: false, data \}\); loadOrder\(\); applyUpdateEmphasis\(data\)/.test(kanban), "load() 成功路径调用 applyUpdateEmphasis");
+  // 复用现有首次加载/手动刷新/写操作后的 load() 与轮询/倒计时（支持 g-212 If-None-Match / 304）
+  assert.ok(/setState\(\{ loading: false, data \}\);[\s\S]*applyUpdateEmphasis\(data\)/.test(kanban), "成功路径调用 applyUpdateEmphasis");
   assert.ok(/RefreshCountdown/.test(kanban), "由 RefreshCountdown 负责倒计时与自动刷新");
   // 以服务端 generated_at - updated_at 判定 10 秒窗口
   assert.ok(/const gen = Date\.parse\(data\.generated_at\)/.test(kanban), "用服务端 generated_at 判定窗口");
