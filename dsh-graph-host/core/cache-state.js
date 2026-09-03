@@ -3,12 +3,16 @@ import { watch } from "node:fs";
 const generations = new Map();
 const watchers = new Map();
 const unsafe = new Set();
+// Watcher close/reopen is lifecycle-only; content generation remains unchanged.
+const watcherEpochs = new Map();
 const MAX_WATCHERS = 32;
 const IDLE_CLOSE_MS = 500;
 const idleTimers = new Map();
+function bumpWatcherEpoch(key) { watcherEpochs.set(key, (watcherEpochs.get(key) ?? 0) + 1); }
 export function generation(root) { return generations.get(resolve(root)) ?? 0; }
 export function invalidate(root) { if (!root) {
     generations.clear();
+    watcherEpochs.clear();
     return;
 } const key = resolve(root); generations.set(key, generation(key) + 1); }
 function armIdle(key, w) {
@@ -24,8 +28,7 @@ function armIdle(key, w) {
         catch { }
         watchers.delete(key);
         idleTimers.delete(key);
-        invalidate(key);
-        unsafe.add(key);
+        bumpWatcherEpoch(key);
     }, IDLE_CLOSE_MS);
     timer.unref?.();
     idleTimers.set(key, timer);
@@ -51,8 +54,7 @@ export function ensureWatcher(root) {
                 catch { }
                 watchers.delete(oldest);
                 idleTimers.delete(oldest);
-                invalidate(oldest);
-                unsafe.add(oldest);
+                bumpWatcherEpoch(oldest);
             }
         }
         const w = watch(key, { recursive: true }, () => invalidate(key));
@@ -61,6 +63,7 @@ export function ensureWatcher(root) {
             clearTimeout(t); if (watchers.get(key) === w) {
             watchers.delete(key);
             idleTimers.delete(key);
+            bumpWatcherEpoch(key);
         } unsafe.add(key); invalidate(key); try {
             w.close();
         }
@@ -76,7 +79,9 @@ export function ensureWatcher(root) {
     }
 }
 export function watcherSafe(root) { return ensureWatcher(root) && !unsafe.has(resolve(root)); }
-export function closeWatchers() { for (const t of idleTimers.values())
+export function watcherEpoch(root) { return watcherEpochs.get(resolve(root)) ?? 0; }
+export function closeWatchers() { for (const key of watchers.keys())
+    bumpWatcherEpoch(key); for (const t of idleTimers.values())
     clearTimeout(t); idleTimers.clear(); for (const w of watchers.values())
     try {
         w.close();
