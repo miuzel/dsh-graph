@@ -9,7 +9,7 @@ import { apply } from "../../dsh-graph-host/index.js";
 import { ensureWatcher, generation, closeWatchers } from "../../dsh-graph-host/core/cache-state.js";
 import { readFileSync } from "node:fs";
 
-function host(configRoot: string, workspace?: string, policyWorkspace = workspace) {
+function host(configRoot: string, workspace?: string, policyWorkspace: string | null | undefined = workspace) {
   const routes = new Map<string, any>(); let dispose = () => {};
   const webServer = { register: (d: any) => { routes.set(d.path, d.handler); return () => {}; } };
   const ctx: any = { get: (n: string) => n === "webServer" ? webServer : n === "sandboxPolicy" && policyWorkspace ? { workspaceRoot: policyWorkspace } : undefined, effect: (fn: any) => { dispose = fn(); return dispose; }, webServer, tools: { register: () => () => {}, get: () => ({}) } };
@@ -31,44 +31,41 @@ test("g212 absolute config symlink and missing leaf parent are rejected", () => 
   assert.throws(() => resolveRoot({ root: alias }), /symlink/); assert.throws(() => resolveCanonicalRoot({ root: join(alias, "missing", ".dsh-graph") }, holder), /symlink/); assert.throws(() => host(alias, holder), /symlink/); assert.equal(existsSync(join(outside, "missing")), false);
 });
 
-test("g212 absolute config REST still requires sandboxPolicy for GET and POST", async () => {
+test("g212 REST accepts explicit workspace regardless of sandboxPolicy", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "g212-policy-ws-"));
-  const graphRoot = join(workspace, "graph-data");
+  const graphRoot = join(workspace, ".dsh-graph");
   const otherWorkspace = mkdtempSync(join(tmpdir(), "g212-policy-other-"));
   init(graphRoot);
 
-  const missing = host(graphRoot);
-  try {
-    const getMissing = response();
-    await missing.routes.get("/api/dsh-graph")({ method: "GET", url: "/api/dsh-graph" }, getMissing);
-    assert.equal(getMissing.code, 400);
-    const postMissing = response();
-    await missing.routes.get("/api/dsh-graph/order")(validReq("/api/dsh-graph/order?workspace=" + encodeURIComponent(workspace), { "g-001": ["draft"] }), postMissing);
-    assert.equal(postMissing.code, 400);
-    assert.equal(existsSync(join(graphRoot, "order.json")), false, "无策略不得写 absolute graph root");
-  } finally { missing.dispose(); }
+  const cases = [
+    ["matching policy", host(".dsh-graph", workspace, workspace)],
+    ["mismatched policy", host(".dsh-graph", workspace, otherWorkspace)],
+    ["no policy", host(".dsh-graph", workspace, null)],
+  ] as const;
+  for (const [label, fixture] of cases) {
+    try {
+      const getResult = response();
+      await fixture.routes.get("/api/dsh-graph")({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(workspace) }, getResult);
+      assert.equal(getResult.code, 200, `${label}: explicit workspace GET succeeds`);
 
-  const mismatched = host(graphRoot, workspace, otherWorkspace);
-  try {
-    const getMismatched = response();
-    await mismatched.routes.get("/api/dsh-graph")({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(workspace) }, getMismatched);
-    assert.equal(getMismatched.code, 400);
-    const postMismatched = response();
-    await mismatched.routes.get("/api/dsh-graph/order")(validReq("/api/dsh-graph/order?workspace=" + encodeURIComponent(workspace), { "g-001": ["planning"] }), postMismatched);
-    assert.equal(postMismatched.code, 400);
-    assert.equal(existsSync(join(graphRoot, "order.json")), false, "不匹配策略不得写 absolute graph root");
-  } finally { mismatched.dispose(); }
+      const postResult = response();
+      await fixture.routes.get("/api/dsh-graph/order")(validReq("/api/dsh-graph/order", { workspace, "g-001": ["planning"] }), postResult);
+      assert.equal(postResult.code, 200, `${label}: body.workspace POST succeeds`);
+      assert.equal(existsSync(join(graphRoot, "order.json")), true, `${label}: order written in requested workspace`);
+    } finally { fixture.dispose(); }
+  }
 
-  const matching = host(graphRoot, workspace, workspace);
+  const absolute = host(graphRoot);
   try {
-    const getMatching = response();
-    await matching.routes.get("/api/dsh-graph")({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(workspace) }, getMatching);
-    assert.equal(getMatching.code, 200);
-    const postMatching = response();
-    await matching.routes.get("/api/dsh-graph/order")(validReq("/api/dsh-graph/order?workspace=" + encodeURIComponent(workspace), { "g-001": ["planning"] }), postMatching);
-    assert.equal(postMatching.code, 200);
-    assert.equal(existsSync(join(graphRoot, "order.json")), true, "匹配策略允许使用管理员 absolute graph root");
-  } finally { matching.dispose(); }
+    const getAbsolute = response();
+    await absolute.routes.get("/api/dsh-graph")({ method: "GET", url: "/api/dsh-graph" }, getAbsolute);
+    assert.equal(getAbsolute.code, 200, "absolute config.root GET works without policy or workspace");
+
+    const postAbsolute = response();
+    await absolute.routes.get("/api/dsh-graph/order")(validReq("/api/dsh-graph/order", { "g-002": ["draft"] }), postAbsolute);
+    assert.equal(postAbsolute.code, 200, "absolute config.root POST works without policy or workspace");
+    assert.equal(existsSync(join(graphRoot, "order.json")), true, "absolute config.root POST writes configured root");
+  } finally { absolute.dispose(); }
 });
 
 test("g212 watcher recreation invalidates safely and teardown is callable", async () => {
