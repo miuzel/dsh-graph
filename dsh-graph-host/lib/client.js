@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const h = React.createElement;
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
-    const PLUGIN_VERSION = "0.8.1-alpha";
+    const PLUGIN_VERSION = "0.8.2";
 
     const STAGES = [
       { key: "describe", label: "描述", statuses: ["draft", "planning"] },
