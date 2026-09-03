@@ -230,15 +230,23 @@ function protectPromptMarkers(value) {
     .replace(/## 覆盖声明/g, "## 文本中的覆盖声明");
 }
 
-function renderPromptValue(value) {
+function renderPromptValue(value, missingReason) {
   const text = promptText(value);
-  if (!text) return ATTEMPT_PROMPT_MISSING;
+  if (!text) return [ATTEMPT_PROMPT_MISSING, "> 未提供原因：" + missingReason].join("\n");
   return text.split("\n").map((line) => "> " + protectPromptMarkers(line)).join("\n");
 }
 
 function compactPromptFact(value) {
   const text = promptText(value);
   return text ? protectPromptMarkers(text.replace(/\s*\n\s*/g, "；")) : ATTEMPT_PROMPT_MISSING;
+}
+
+function currentFactLine(label, value, missingReason) {
+  const missing = !promptText(value);
+  return [
+    label + compactPromptFact(value),
+    missing ? "  未提供原因：" + missingReason : "",
+  ].filter(Boolean).join("\n");
 }
 
 function currentPromptTexts(attemptBrief, directive) {
@@ -396,8 +404,10 @@ export function formatAttemptPrompt({
     "## 已收集上下文卡片成果（g-120 注入）",
     "",
     ATTEMPT_PROMPT_MISSING,
+    "未提供原因：当前派发没有可注入的 filled/reviewed 卡片成果。",
   ].join("\n");
   const taskType = classifyAttemptTask(brief, currentDirective);
+  const taskTypeLabel = taskType === "未提供" ? "未提供（当前 brief/directive 未声明可识别的合入、重写或修复类型）" : taskType;
   const baseline = extractCurrentBaseline(brief, currentDirective);
   const sourceAttempt = extractCurrentSourceAttempt(brief, currentDirective, attempt);
   const verification = extractCurrentVerification(brief, currentDirective);
@@ -405,7 +415,7 @@ export function formatAttemptPrompt({
   const goalValue = promptText(goal) || ATTEMPT_PROMPT_MISSING;
   const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
   const positioning = [
-    "【本次任务定位】这是一次 " + taskType + " 任务；以下仅『本次 attempt brief/directive』为唯一 action 来源；" + historyNotice + "为约束/背景，仅供理解候选设计与禁项，不产生新任务。",
+    "【本次任务定位】这是一次 " + taskTypeLabel + " 任务；以下仅『本次 attempt brief/directive』为唯一 action 来源；" + historyNotice + "为约束/背景，仅供理解候选设计与禁项，不产生新任务。",
     "你是 dsh-graph 目标 " + goalValue + " 的执行 attempt " + attemptValue + "。",
     "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "——用 read 工具读它，不要自己猜路径。",
   ].join("\n");
@@ -416,10 +426,10 @@ export function formatAttemptPrompt({
     "唯一 action 来源：以下两项当前数据；历史 handoff、卡片和通用纪律均不产生新任务。",
     "",
     "**attempt brief（当前数据）**",
-    renderPromptValue(brief),
+    renderPromptValue(brief, "本次请求未传 attempt_brief，或该值不是非空字符串"),
     "",
     "**directive（当前数据）**",
-    renderPromptValue(currentDirective),
+    renderPromptValue(currentDirective, "当前目标没有最近指令，或该值不是非空字符串"),
   ];
   const context = promptText(targetContext);
   if (context) current.push("", "目标背景（来自当前 goal.md，仅供理解，不产生 action）", protectPromptMarkers(context));
@@ -428,11 +438,11 @@ export function formatAttemptPrompt({
     "## 覆盖声明",
     "",
     "覆盖声明：本段与上文 handoff 不一致处，一律以本段为准（列出覆盖点：基线 commit、前序 attempt 身份、验收项）。",
-    "- 权威基线 commit（当前 attempt 数据）：" + compactPromptFact(baseline === ATTEMPT_PROMPT_MISSING ? "" : baseline),
-    "- 真正前序 attempt 身份（当前 attempt 数据）：" + compactPromptFact(sourceAttempt === ATTEMPT_PROMPT_MISSING ? "" : sourceAttempt),
-    "- 当前验收项（当前 attempt 数据）：" + compactPromptFact(verification === ATTEMPT_PROMPT_MISSING ? "" : verification),
+    currentFactLine("- 权威基线 commit（当前 attempt 数据）：", baseline === ATTEMPT_PROMPT_MISSING ? "" : baseline, "当前 brief/directive 未包含可识别的基线 commit"),
+    currentFactLine("- 真正前序 attempt 身份（当前 attempt 数据）：", sourceAttempt === ATTEMPT_PROMPT_MISSING ? "" : sourceAttempt, "当前 brief/directive 未包含可识别的候选/来源 attempt；当前 attempt 不计为前序来源"),
+    currentFactLine("- 当前验收项（当前 attempt 数据）：", verification === ATTEMPT_PROMPT_MISSING ? "" : verification, "当前 brief/directive 未包含带值的验收项、验收点或验收命令"),
     "以上字段只从本次 attempt brief/directive 读取；未提供时不从 handoff/卡片推断。",
-    "- 历史 handoff：" + (handoff ? "已提供（下方仅作背景）" : "未提供（不注入历史 handoff 区块）"),
+    "- 历史 handoff：" + (handoff ? "已提供（下方仅作背景）" : "未提供（当前目标没有已确认 handoff，故不注入历史 handoff 区块）"),
   ].join("\n");
 
   const history = [];

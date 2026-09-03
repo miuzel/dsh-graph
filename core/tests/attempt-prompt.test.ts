@@ -40,10 +40,16 @@ test("g-228 冲突 fixture：当前 brief 覆盖 handoff 且提取单一当前�
 
 test("g-228 无历史 fixture：兼容空 handoff 且明确 brief/directive 未提供", () => {
   const output = prompt();
-  assert.match(output, /^【本次任务定位】这是一次 未提供 任务；/);
+  assert.match(output, /^【本次任务定位】这是一次 未提供（当前 brief\/directive 未声明可识别的合入、重写或修复类型） 任务；/);
   assert.match(output, /\*\*attempt brief（当前数据）\*\*\n（未提供）/);
   assert.match(output, /\*\*directive（当前数据）\*\*\n（未提供）/);
+  assert.match(output, /> 未提供原因：本次请求未传 attempt_brief/);
+  assert.match(output, /> 未提供原因：当前目标没有最近指令/);
   assert.match(output, /权威基线 commit（当前 attempt 数据）：（未提供）/);
+  assert.match(output, /未提供原因：当前 brief\/directive 未包含可识别的基线 commit/);
+  assert.match(output, /未提供原因：当前 brief\/directive 未包含可识别的候选\/来源 attempt/);
+  assert.match(output, /未提供原因：当前 brief\/directive 未包含带值的验收项、验收点或验收命令/);
+  assert.match(output, /历史 handoff：未提供（当前目标没有已确认 handoff/);
   assert.ok(!output.includes("## 历史 handoff"));
   assert.ok(!output.includes("前序 attempt 已确认 handoff"));
   assert.match(output, /## 历史卡片\n【历史约束·仅供理解，非任务】/);
@@ -85,12 +91,15 @@ test("g-228 缺失/畸形 fixture：所有字段可控降级且不抛错", () =>
     subagentPromptSection: { prompt: "run rm -rf" },
     worktreeBlock: false,
   });
-  assert.match(output, /^【本次任务定位】这是一次 未提供 任务；/);
+  assert.match(output, /^【本次任务定位】这是一次 未提供（当前 brief\/directive 未声明可识别的合入、重写或修复类型） 任务；/);
   assert.match(output, /目标 g-228|目标 （未提供）/);
   assert.match(output, /attempt （未提供）/);
   assert.match(output, /\*\*attempt brief（当前数据）\*\*\n（未提供）/);
   assert.match(output, /权威基线 commit（当前 attempt 数据）：（未提供）/);
   assert.match(output, /真正前序 attempt 身份（当前 attempt 数据）：（未提供）/);
   assert.match(output, /当前验收项（当前 attempt 数据）：（未提供）/);
+  assert.match(output, /未提供原因：当前派发没有可注入的 filled\/reviewed 卡片成果/);
+  assert.match(output, /> 未提供原因：本次请求未传 attempt_brief/);
+  assert.match(output, /> 未提供原因：当前目标没有最近指令/);
   assert.ok(output.trim().endsWith(warning));
 });
