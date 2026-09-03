@@ -263,13 +263,14 @@ function fakeResponse() {
   return res;
 }
 
-function makeHostCtx(captured: { prompt?: string }) {
+function makeHostCtx(captured: { prompt?: string }, workspace?: string) {
   const routes = new Map<string, any>();
   const registered: any[] = [];
   const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "sandboxPolicy") return workspace ? { workspaceRoot: workspace } : undefined;
       if (name === "subagents") return {
         list: () => ["spawn"],
         getProvider: () => ({ prepareContinuable: () => {} }),
@@ -315,7 +316,7 @@ test("g-150：graph_start_attempt 工具 prompt 注入 handoff 段 + 事件记 i
   init(root);
   const { goal, att } = goalWithHandoff(root);
   const captured: { prompt?: string } = {};
-  const { registered } = makeHostCtx(captured);
+  const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   assert.ok(tool, "graph_start_attempt 已注册");
   const res = await tool.execute({ goal }, execCtx(ws));
@@ -342,7 +343,7 @@ test("g-150：graph_start_attempt 带 attempt_brief 时 prompt 注入 brief 段 
   init(root);
   const goal = createGoal(root, { title: "brief目标", version: "v-t", actor: "test" });
   const captured: { prompt?: string } = {};
-  const { registered } = makeHostCtx(captured);
+  const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   const res = await tool.execute({ goal, attempt_brief: "本次是安全整合而非重新实现" }, execCtx(ws));
   assert.equal(res.brief, "本次是安全整合而非重新实现");
@@ -359,7 +360,7 @@ test("g-150：start-execution 端点 prompt 注入 handoff 段 + 事件记 injec
   const { goal, att } = goalWithHandoff(root);
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
-  const { routes } = makeHostCtx(captured);
+  const { routes } = makeHostCtx(captured, ws);
   const handler = routes.get("/api/dsh-graph/start-execution");
   assert.ok(handler, "start-execution 路由已注册");
   const req = fakeRequest("POST", { goal });
@@ -389,7 +390,7 @@ test("g-150：start-execution 端点带 attempt_brief 时 prompt 注入 brief �
   const goal = createGoal(root, { title: "ep-brief", version: "v-t", actor: "test" });
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
-  const { routes } = makeHostCtx(captured);
+  const { routes } = makeHostCtx(captured, ws);
   const handler = routes.get("/api/dsh-graph/start-execution");
   const req = fakeRequest("POST", { goal, attempt_brief: "安全整合任务" });
   req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
@@ -410,7 +411,7 @@ test("g-150：无历史目标 prompt 不含 handoff 段标题，卡片段保持"
   init(root);
   const goal = createGoal(root, { title: "无历史", version: "v-t", actor: "test" });
   const captured: { prompt?: string } = {};
-  const { registered } = makeHostCtx(captured);
+  const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   await tool.execute({ goal }, execCtx(ws));
   assert.ok(!captured.prompt!.includes("前序 attempt 已确认 handoff"), "无历史时不含 handoff 段标题");
@@ -425,7 +426,7 @@ test("g-150：无历史 start-execution 端点 prompt 不含 handoff 段", async
   const goal = createGoal(root, { title: "无历史ep", version: "v-t", actor: "test" });
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
-  const { routes } = makeHostCtx(captured);
+  const { routes } = makeHostCtx(captured, ws);
   const handler = routes.get("/api/dsh-graph/start-execution");
   const req = fakeRequest("POST", { goal });
   req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
@@ -452,7 +453,7 @@ test("g-150：attempt 的 status_line、执行笔记等未复核内容不被注�
   writeFileSync(join(dir, "attempts", att1, "attempt.md"), serializeDoc(attDoc), "utf8");
 
   const captured: { prompt?: string } = {};
-  const { registered } = makeHostCtx(captured);
+  const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   await tool.execute({ goal }, execCtx(ws));
   assert.ok(!captured.prompt!.includes("前序 attempt 已确认 handoff"), "无确认 handoff 时不含段标题");
@@ -487,7 +488,7 @@ test("g-150：新登记覆盖旧内容，prompt 只含最新 handoff", async () 
     actor: "supervisor:s1",
   });
   const captured: { prompt?: string } = {};
-  const { registered } = makeHostCtx(captured);
+  const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   await tool.execute({ goal }, execCtx(ws));
   assert.ok(captured.prompt!.includes("新失败内容"), "prompt 含最新失败");
@@ -538,7 +539,7 @@ test("g-150：handoff 段与 cards 段独立注入，互不干扰", async () => 
     actor: "supervisor:s1",
   });
   const captured: { prompt?: string } = {};
-  const { registered } = makeHostCtx(captured);
+  const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   await tool.execute({ goal }, execCtx(ws));
   assert.ok(captured.prompt!.includes("前序 attempt 已确认 handoff"), "含 handoff 段");
@@ -557,7 +558,7 @@ test("g-150：worktree=false 省略 worktree 指令但保留 handoff 注入", as
   init(root);
   const { goal } = goalWithHandoff(root);
   const captured: { prompt?: string } = {};
-  const { registered } = makeHostCtx(captured);
+  const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   await tool.execute({ goal, worktree: false }, execCtx(ws));
   assert.ok(captured.prompt!.includes("前序 attempt 已确认 handoff"), "worktree=false 不影响 handoff 注入");
@@ -762,7 +763,7 @@ test("g-150 review-4：graph_start_attempt 工具拒绝非 string 类型的 atte
   init(root);
   const goal = createGoal(root, { title: "工具类型", version: "v-t", actor: "test" });
   const captured: { prompt?: string } = {};
-  const { registered } = makeHostCtx(captured);
+  const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   await assert.rejects(
     () => tool.execute({ goal, attempt_brief: 123 }, execCtx(ws)),
@@ -777,7 +778,7 @@ test("g-150 review-4：start-execution 端点拒绝非 string 类型的 attempt_
   const goal = createGoal(root, { title: "ep类型", version: "v-t", actor: "test" });
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
-  const { routes } = makeHostCtx(captured);
+  const { routes } = makeHostCtx(captured, ws);
   const handler = routes.get("/api/dsh-graph/start-execution");
   const req = fakeRequest("POST", { goal, attempt_brief: 42 });
   req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
@@ -809,7 +810,7 @@ test("g-150 review-5：已有 reviewed context card 不回归（cards 注入行�
   fillCard(root, goal, c1, { text: "研究内容", summary: "摘要", by: "human:a", actor: "test" });
   reviewCard(root, goal, c1, { by: "human:a", actor: "test" });
   const captured: { prompt?: string } = {};
-  const { registered } = makeHostCtx(captured);
+  const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   await tool.execute({ goal }, execCtx(ws));
   assert.ok(captured.prompt!.includes("已收集上下文卡片成果"), "含卡片段");

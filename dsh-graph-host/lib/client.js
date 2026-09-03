@@ -4911,15 +4911,45 @@ window.__ModuleLoader__.load({
         };
       }, []);
 
+      // g-212：按 session + canonical workspace + includeArchived 隔离 ETag 与 payload，
+      // 避免切换维度后用另一页的 304 恢复旧看板；ETag 仅在完整 200 body 解析成功后提交。
+      // 单调序列的等价失效判定为 requestSeq !== requestSeqRef.current；保留 g-223 的 guard 形态。
+      const currentEtagRef = React.useRef(new Map());
+      const boardDataRef = React.useRef(new Map());
       const load = () => {
         if (!activeWs) return;
         const requestIdentity = boardIdentity;
         const requestSeq = ++requestSeqRef.current;
+        const dimension = String(props?.sessionId ?? "") + "::" + String(activeWs ?? "") + "::" + (showArchived ? "1" : "0");
+        const retained = boardDataRef.current.get(dimension);
+        if (retained) setState({ loading: false, data: retained, error: null });
+        else setState({ loading: true, data: null, error: null });
         const params = showArchived ? "?includeArchived=1" : "";
-        fetch(graphUrlForActive("/api/dsh-graph" + params, {}, activeWs))
-          .then((r) => r.json())
-          .then((data) => {
+        const headers = {};
+        const prior = currentEtagRef.current.get(dimension);
+        if (prior) headers["If-None-Match"] = prior;
+        fetch(graphUrlForActive("/api/dsh-graph" + params, {}, activeWs), { headers })
+          .then(async (r) => {
             if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
+            if (r.status === 304) {
+              const retainedData = boardDataRef.current.get(dimension);
+              if (!retainedData) {
+                currentEtagRef.current.delete(dimension);
+                throw new Error("304 without matching dimension payload");
+              }
+              setState({ loading: false, data: retainedData, error: null });
+              loadOrder();
+              return;
+            }
+            const data = await r.json();
+            if (!data || !Array.isArray(data.versions) || !Array.isArray(data.backlog) || !Array.isArray(data.standalone)) {
+              throw new Error("invalid board payload");
+            }
+            if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
+            const etag = r.headers.get("etag") || r.headers.get("ETag");
+            if (etag) currentEtagRef.current.set(dimension, etag);
+            else currentEtagRef.current.delete(dimension);
+            boardDataRef.current.set(dimension, data);
             setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data);
             if (Array.isArray(data?.versions)) {
               const versionMap = new Map(data.versions.map((v) => [v.slug, v]));
@@ -4939,7 +4969,9 @@ window.__ModuleLoader__.load({
           })
           .catch((e) => {
             if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
-            setState({ loading: false, error: String(e) });
+            currentEtagRef.current.delete(dimension);
+            boardDataRef.current.delete(dimension);
+            setState({ loading: false, data: null, error: String(e) });
           });
       };
       React.useEffect(() => {

@@ -38,7 +38,7 @@ function setup() {
   const routes = new Map<string, any>();
   const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },

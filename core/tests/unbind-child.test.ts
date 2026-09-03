@@ -38,7 +38,7 @@ function setup(agents?: Record<string, unknown>) {
   init(root);
   const registered: any[] = [];
   const ctx: any = {
-    get: (name: string) => (name === "agents" ? { get: (id: string) => agents?.[id] } : undefined),
+    get: (name: string) => (name === "agents" ? { get: (id: string) => agents?.[id] } : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     tools: {
       register: (def: any) => { registered.push(def); return () => {}; },
@@ -354,7 +354,7 @@ function restSetup() {
   const routes = new Map<string, any>();
   const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : name === "agents" ? { get: () => undefined } : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "agents" ? { get: () => undefined } : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
@@ -416,7 +416,7 @@ test("g-190 ⑭ REST：running live registry → 409；unknown registry → 400"
     const routes = new Map<string, any>();
     const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
     const ctx: any = {
-      get: (name: string) => (name === "webServer" ? webServer : name === "agents" ? { get: () => ({ running: true }) } : undefined),
+      get: (name: string) => (name === "webServer" ? webServer : name === "agents" ? { get: () => ({ running: true }) } : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
       effect: (fn: () => unknown) => fn(),
       webServer,
       tools: { register: () => () => {}, get: () => ({}) },
@@ -436,7 +436,7 @@ test("g-190 ⑭ REST：running live registry → 409；unknown registry → 400"
     const routes = new Map<string, any>();
     const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
     const ctx: any = {
-      get: (name: string) => (name === "webServer" ? webServer : undefined),
+      get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
       effect: (fn: () => unknown) => fn(),
       webServer,
       tools: { register: () => () => {}, get: () => ({}) },

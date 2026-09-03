@@ -12,7 +12,8 @@
  * - 副作用收进 ctx.effect。
  */
 import { writeFileSync } from "node:fs";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { relative, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -83,6 +84,10 @@ import {
   settingsPostSchema,
   unbindPostSchema,
   unbindGoalChild,
+  getCachedBoardPayload,
+  matchIfNoneMatch,
+  invalidateBoardCache,
+  closeWatchers,
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 // g-133：接入 DSH profile 级用户设置（dsh-settings）。为避免在 @deepseek-ai/* 不可解析的上下文
@@ -883,12 +888,31 @@ export function apply(ctx, config) {
       return body?.workspace || body?.root || null;
     }
   };
-  // g-149：REST 路径 workspace 校验——无显式参数且非绝对 config.root 时抛错
+  // g-212：REST 只能使用 sandboxPolicy.workspaceRoot 作为授权来源；即使 config.root
+  // 是管理员指定的绝对 graph root，也不得绕过策略。请求 workspace/root（如有）只做
+  // realpath exact 一致性校验，绝不成为授权或 fallback 来源。
   const requireWorkspaceOf = (req, body) => {
-    if (isAbsoluteConfig) return config.root; // 绝对 root 不需要 workspace
+    const configured = ctx.get?.("sandboxPolicy")?.workspaceRoot;
+    if (typeof configured !== "string" || !configured.trim()) {
+      throw new GraphError("缺少当前请求的 workspace 授权策略");
+    }
+    const configuredResolved = resolve(configured);
+    let authorized;
+    try { authorized = realpathSync(configuredResolved); } catch { throw new GraphError("授权 workspace 不可访问"); }
+    if (authorized !== configuredResolved) throw new GraphError("拒绝授权 workspace symlink 别名");
+
     const ws = workspaceOf(req, body);
-    if (!ws) throw new GraphError("REST 端点需要明确的 workspace 参数（?workspace= 或 body.workspace），当前请求无可用 workspace");
-    return ws;
+    if (ws) {
+      let canonicalWs;
+      try { canonicalWs = realpathSync(resolve(ws)); } catch { throw new GraphError("workspace 路径不可访问"); }
+      if (canonicalWs !== resolve(ws)) throw new GraphError("拒绝 workspace symlink 别名");
+      if (canonicalWs !== authorized) throw new GraphError("workspace 未获当前请求授权");
+    } else if (!isAbsoluteConfig) {
+      throw new GraphError("REST 端点需要明确的 workspace 参数（?workspace= 或 body.workspace），当前请求无可用 workspace");
+    }
+    // Absolute config.root remains an explicit admin target; policy presence and any supplied
+    // workspace check above are mandatory, while the configured root is guarded by root.ts.
+    return isAbsoluteConfig ? config.root : authorized;
   };
   // 解析后幂等 init：端点首次触达某个 workspace 时确保其 .dsh-graph 骨架齐全（开箱即用，
   // 与 apply 期 init 同款；board/写端点不会因缺骨架半成品落盘）
@@ -912,8 +936,8 @@ export function apply(ctx, config) {
     }
     return canonical;
   };
-  const json = (res, code, data) => {
-    res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
+  const json = (res, code, data, headers = {}) => {
+    res.writeHead(code, { "content-type": "application/json; charset=utf-8", ...headers });
     res.end(JSON.stringify(data));
   };
   const readBody = (req) =>
@@ -923,8 +947,8 @@ export function apply(ctx, config) {
       req.on("end", () => {
         try {
           resolve(buf ? JSON.parse(buf) : {});
-        } catch (e) {
-          reject(e);
+        } catch {
+          reject(new GraphError("请求 body JSON 格式无效"));
         }
       });
       req.on("error", reject);
@@ -1034,17 +1058,23 @@ export function apply(ctx, config) {
         try {
           const sp = new URL(_req?.url ?? "", "http://x").searchParams;
           const includeArchived = sp.get("includeArchived") === "1" || sp.get("includeArchived") === "true";
-          // g-149：board 响应附加 graph root 诊断信息
           const meta = rootForReqMeta(_req);
-          const payload = boardPayload(meta.root, { includeArchived });
+          const cached = getCachedBoardPayload(meta.root, { includeArchived });
+          const payload = { ...cached.payload };
           payload._diagnostics = {
-            workspace: meta.workspace,
-            graphRoot: meta.root,
-            rootMode: meta.mode,
+            workspace: meta.workspace, graphRoot: meta.root, rootMode: meta.mode,
             canonicalWorkspace: meta.canonicalWorkspace,
           };
           if (meta.rootWarning) payload._diagnostics.rootWarning = meta.rootWarning;
-          json(res, 200, payload);
+          const payloadJson = JSON.stringify(payload);
+          const etag = 'W/"' + createHash("sha256").update(payloadJson).digest("hex") + '"';
+          const rawIfNoneMatch = _req?.headers?.["if-none-match"] ?? _req?.headers?.["If-None-Match"];
+          const ifNoneMatch = Array.isArray(rawIfNoneMatch) ? rawIfNoneMatch.join(",") : typeof rawIfNoneMatch === "string" ? rawIfNoneMatch : null;
+          if (ifNoneMatch && matchIfNoneMatch(ifNoneMatch, etag)) {
+            res.writeHead(304, { etag, "cache-control": "no-cache" }); res.end(); return;
+          }
+          res.writeHead(200, { "content-type": "application/json; charset=utf-8", etag, "cache-control": "no-cache" });
+          res.end(payloadJson);
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
@@ -1168,6 +1198,7 @@ export function apply(ctx, config) {
           } else if (req.method === "POST") {
             const body = await readBody(req);
             writeFileSync(orderFile, JSON.stringify(body, null, 2), "utf8");
+            invalidateBoardCache(r);
             json(res, 200, { ok: true });
           } else {
             json(res, 405, { error: "method not allowed" });
@@ -1988,6 +2019,8 @@ status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab �
       );
     }
     return () => {
+      closeWatchers();
+      invalidateBoardCache();
       if (routeState.timer) clearTimeout(routeState.timer);
       if (sectionState.timer) clearTimeout(sectionState.timer);
       disposers.forEach((d) => d());

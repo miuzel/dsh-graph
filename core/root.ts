@@ -18,7 +18,7 @@
  */
 import { resolve, isAbsolute } from "node:path";
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
 
 /** Default TTL for canonical root / git worktree cache: 30 seconds. */
 export const DEFAULT_CANONICAL_CACHE_TTL_MS = 30_000;
@@ -65,12 +65,19 @@ function isCacheEntryValid<T>(workspaceKey: string, entry: CacheEntry<T>, ttlMs:
   }
   return true;
 }
-
+function rejectSymlinkRoot(root: string): string {
+  try {
+    let probe = resolve(root);
+    while (!existsSync(probe)) { const parent = resolve(probe, ".."); if (parent === probe) break; probe = parent; }
+    if (realpathSync(probe) !== probe) throw new Error("graph root symlink is not allowed");
+  } catch (e: any) { if (e?.message === "graph root symlink is not allowed") throw e; }
+  return root;
+}
 export function resolveRoot(
   config?: { root?: string } | null,
   workspaceRoot: string = process.cwd(),
 ): string {
-  return resolve(workspaceRoot, config?.root ?? ".dsh-graph");
+  return rejectSymlinkRoot(resolve(workspaceRoot, config?.root ?? ".dsh-graph"));
 }
 
 /** Git discovery metadata returned by `discoverGitWorktree`. */
@@ -213,7 +220,7 @@ export function resolveCanonicalRoot(
   // Case 1: explicit absolute config.root — bypass Git discovery entirely
   if (rawRoot && isAbsolute(rawRoot)) {
     return {
-      root: resolve(rawRoot),
+      root: rejectSymlinkRoot(resolve(rawRoot)),
       workspace,
       canonicalWorkspace: workspace,
       mode: "absolute-config",
@@ -231,7 +238,7 @@ export function resolveCanonicalRoot(
     }
   }
 
-  const localRoot = resolve(workspace, relRoot);
+  const localRoot = rejectSymlinkRoot(resolve(workspace, relRoot));
 
   // Attempt Git discovery
   const gitInfo = discoverGitWorktree(workspace, { ttlMs });
@@ -256,7 +263,7 @@ export function resolveCanonicalRoot(
     };
   } else {
     // Linked worktree — canonicalize to main worktree
-    const canonicalRoot = resolve(gitInfo.mainWorktree, relRoot);
+    const canonicalRoot = rejectSymlinkRoot(resolve(gitInfo.mainWorktree, relRoot));
     let rootWarning: string | undefined;
 
     // Detect legacy worktree-local graph data
