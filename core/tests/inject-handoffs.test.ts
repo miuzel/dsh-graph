@@ -14,9 +14,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   init,
   createGoal,
@@ -38,6 +39,22 @@ function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g150-"));
   init(dir);
   return dir;
+}
+
+const REPO_TMP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "tmp");
+
+function repoTmp(prefix: string): string {
+  mkdirSync(REPO_TMP_ROOT, { recursive: true });
+  return mkdtempSync(join(REPO_TMP_ROOT, prefix));
+}
+
+async function withRepoTmp<T>(prefix: string, fn: (dir: string) => Promise<T> | T): Promise<T> {
+  const dir = repoTmp(prefix);
+  try {
+    return await fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // ---- ① core 读取函数 ----
@@ -263,7 +280,7 @@ function fakeResponse() {
   return res;
 }
 
-function makeHostCtx(captured: { prompt?: string }, workspace?: string) {
+function makeHostCtx(captured: { prompt?: string }, workspace?: string, graphRoot?: string) {
   const routes = new Map<string, any>();
   const registered: any[] = [];
   const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
@@ -286,7 +303,7 @@ function makeHostCtx(captured: { prompt?: string }, workspace?: string) {
     webServer,
     tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
   };
-  apply(ctx, {});
+  apply(ctx, { root: graphRoot });
   return { routes, registered };
 }
 
@@ -353,6 +370,37 @@ test("g-150：graph_start_attempt 带 attempt_brief 时 prompt 注入 brief 段 
   assert.equal(ev!.details.brief, "本次是安全整合而非重新实现");
 });
 
+
+test("g-228：graph_start_attempt 使用 supervisor 独立关键字段，不从 brief 猜测", async () => {
+  await withRepoTmp("dsh-graph-g228-structured-", async (ws) => {
+    const root = join(ws, ".dsh-graph");
+    init(root);
+    const goal = createGoal(root, { title: "structured", version: "v-t", actor: "test" });
+    const captured: { prompt?: string } = {};
+    const { registered } = makeHostCtx(captured, ws, root);
+    const tool = registered.find((d) => d.name === "graph_start_attempt");
+    assert.deepEqual(tool.parameters.properties.task_type.enum, ["merge", "rewrite", "fix"]);
+    assert.equal(tool.parameters.properties.task_type.type, "string");
+    assert.equal(tool.parameters.properties.task_type.nullable, true);
+    assert.equal(tool.parameters.properties.acceptance_items.type, "array");
+    assert.equal(tool.parameters.properties.acceptance_items.nullable, true);
+    const result = await tool.execute({
+      goal,
+      attempt_brief: "brief 中有 rewrite、日语の修正、旧基线 1111111。",
+      task_type: "merge",
+      baseline_commit: "d34db33",
+      source_attempt: "att-002（候选）",
+      acceptance_items: ["node --test"],
+    }, execCtx(ws));
+    assert.equal(result.child_id, "child-g150");
+    assert.match(captured.prompt!, /^【本次任务定位】这是一次 合入 任务；/);
+    assert.match(captured.prompt!, /任务类型（当前 attempt 数据）：merge（合入）/);
+    assert.match(captured.prompt!, /权威基线 commit（当前 attempt 数据）：d34db33/);
+    assert.match(captured.prompt!, /真正前序 attempt 身份（当前 attempt 数据）：att-002（候选）/);
+    assert.match(captured.prompt!, /1\. node --test/);
+  });
+});
+
 test("g-150：start-execution 端点 prompt 注入 handoff 段 + 事件记 injected_handoffs", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-ep-"));
   const root = join(ws, ".dsh-graph");
@@ -401,6 +449,60 @@ test("g-150：start-execution 端点带 attempt_brief 时 prompt 注入 brief �
   assert.equal(res._code, 200);
   assert.ok(captured.prompt!.includes("本次 attempt brief/directive"), "prompt 含 brief 段标题");
   assert.ok(captured.prompt!.includes("安全整合任务"), "prompt 含 brief 正文");
+});
+
+test("g-228：start-execution 端点透传 supervisor 独立关键字段", async () => {
+  await withRepoTmp("dsh-graph-g228-ep-structured-", async (ws) => {
+    const root = join(ws, ".dsh-graph");
+    init(root);
+    const goal = createGoal(root, { title: "ep-structured", version: "v-t", actor: "test" });
+    writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
+    const body = {
+      goal,
+      attempt_brief: "brief 中包含 rewrite、基线 old1111 和日本語の修正。",
+      task_type: "fix",
+      baseline_commit: "d34db33",
+      source_attempt: "att-007（候选）",
+      acceptance_items: ["node --test"],
+    };
+    const captured: { prompt?: string } = {};
+    const { routes } = makeHostCtx(captured, ws, root);
+    const handler = routes.get("/api/dsh-graph/start-execution");
+    const req = fakeRequest("POST", body);
+    req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
+    const res = fakeResponse();
+    const p = handler(req, res);
+    emitBody(req, body);
+    await p;
+    assert.equal(res._code, 200);
+    assert.equal(res._body.ok, true);
+    assert.match(captured.prompt!, /^【本次任务定位】这是一次 修复 任务；/);
+    assert.match(captured.prompt!, /任务类型（当前 attempt 数据）：fix（修复）/);
+    assert.match(captured.prompt!, /权威基线 commit（当前 attempt 数据）：d34db33/);
+    assert.match(captured.prompt!, /真正前序 attempt 身份（当前 attempt 数据）：att-007（候选）/);
+    assert.match(captured.prompt!, /1\. node --test/);
+  });
+});
+
+test("g-228：start-execution 端点拒绝自然语言 task_type，要求显式枚举", async () => {
+  await withRepoTmp("dsh-graph-g228-ep-invalid-", async (ws) => {
+    const root = join(ws, ".dsh-graph");
+    init(root);
+    const goal = createGoal(root, { title: "ep-invalid", version: "v-t", actor: "test" });
+    const body = { goal, task_type: "合入" };
+    const captured: { prompt?: string } = {};
+    const { routes } = makeHostCtx(captured, ws, root);
+    const handler = routes.get("/api/dsh-graph/start-execution");
+    const req = fakeRequest("POST", body);
+    req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
+    const res = fakeResponse();
+    const p = handler(req, res);
+    emitBody(req, body);
+    await p;
+    assert.equal(res._code, 400);
+    assert.match(res._body.error, /task_type 必须是 merge、rewrite 或 fix/);
+    assert.equal(captured.prompt, undefined, "非法 task_type 不启动子代理");
+  });
 });
 
 // ---- ⑥ 无历史目标保持现有 prompt 行为 ----

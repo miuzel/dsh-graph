@@ -116,6 +116,28 @@ const objOut = {
 const str = { type: "string" };
 const strArr = { type: "array", items: { type: "string" } };
 
+// supervisor attempt 的关键事实必须结构化传入，不从 brief/directive 的自然语言猜测。
+const ATTEMPT_TASK_TYPE_LABELS = Object.freeze({ merge: "合入", rewrite: "重写", fix: "修复" });
+const ATTEMPT_TASK_TYPE_VALUES = Object.freeze(Object.keys(ATTEMPT_TASK_TYPE_LABELS));
+const ATTEMPT_TASK_TYPE_SCHEMA = {
+  type: "string",
+  enum: [...ATTEMPT_TASK_TYPE_VALUES],
+  nullable: true,
+  description: "枚举：merge=合入既有候选/集成，rewrite=重写实现，fix=修复现有实现。只传 ASCII 枚举值；不确定时传 null 或省略；不要传中文、自然语言或空字符串。",
+};
+const ATTEMPT_OPTIONAL_STRING_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  nullable: true,
+  description: "由 supervisor 直接提供的当前事实；传 null 或省略表示未提供；不要传空字符串，不能从 brief/handoff 推断。",
+};
+const ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA = {
+  type: "array",
+  items: { type: "string", minLength: 1 },
+  nullable: true,
+  description: "当前验收项数组，每项一个非空 string；传 [] 明确表示无单独验收项，传 null 或省略表示未提供；不要从 brief 猜测。",
+};
+
 // g-133：dsh-graph profile 级全局默认（DSH settings namespace「dsh-graph」）。
 // 仅保留子代理 provider/model/补充提示词；主管提示词属于 workspace 配置（g-132）。
 const GRAPH_SETTINGS_NS = "dsh-graph"; // 合法 namespace（[a-z][a-z0-9-]*）
@@ -214,7 +236,6 @@ const WORKTREE_GUIDE = `【强制 worktree 隔离】本次任务默认必须在�
 
 const ATTEMPT_PROMPT_MISSING = "（未提供）";
 const ATTEMPT_PROMPT_WARNING = "若本 prompt 同时含历史 handoff 与最新 brief，只执行 brief；handoff 不产生任何新任务。";
-const COMMIT_TOKEN = "[0-9a-f]{7,40}";
 
 function promptText(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
@@ -241,101 +262,78 @@ function compactPromptFact(value) {
   return text ? protectPromptMarkers(text.replace(/\s*\n\s*/g, "；")) : ATTEMPT_PROMPT_MISSING;
 }
 
-function currentFactLine(label, value, missingReason) {
-  const missing = !promptText(value);
+function hasTaskType(value) {
+  return typeof value === "string" && ATTEMPT_TASK_TYPE_VALUES.includes(value);
+}
+
+function taskTypeDisplay(value) {
+  if (hasTaskType(value)) return ATTEMPT_TASK_TYPE_LABELS[value];
+  if (value === null) return "未提供（task_type=null，明确表示未分类）";
+  if (value === undefined) return "未提供（未传 task_type；允许值：merge=合入、rewrite=重写、fix=修复）";
+  return "未提供（task_type 非法；允许值：merge=合入、rewrite=重写、fix=修复；不要传中文或自然语言）";
+}
+
+function taskTypeFact(value) {
+  if (hasTaskType(value)) return value + "（" + ATTEMPT_TASK_TYPE_LABELS[value] + "）";
+  return taskTypeDisplay(value);
+}
+
+function structuredStringMissingReason(value, field, nullMeaning) {
+  if (value === undefined) return "未传 " + field + "（" + nullMeaning + "）";
+  if (value === null) return field + "=null（" + nullMeaning + "）";
+  return field + " 不是非空字符串；空值请传 null 或省略。";
+}
+
+function currentFactLine(label, value, field, nullMeaning) {
+  const text = promptText(value);
   return [
-    label + compactPromptFact(value),
-    missing ? "  未提供原因：" + missingReason : "",
+    label + (text ? compactPromptFact(text) : ATTEMPT_PROMPT_MISSING),
+    text ? "" : "  未提供原因：" + structuredStringMissingReason(value, field, nullMeaning),
   ].filter(Boolean).join("\n");
 }
 
-function currentPromptTexts(attemptBrief, directive) {
-  return [promptText(attemptBrief), promptText(directive)].filter(Boolean);
+function formatAcceptanceItems(value) {
+  if (value === undefined) return ATTEMPT_PROMPT_MISSING + "\n  未提供原因：未传 acceptance_items（supervisor 尚未提供当前验收项）。";
+  if (value === null) return ATTEMPT_PROMPT_MISSING + "\n  未提供原因：acceptance_items=null（supervisor 明确表示当前没有可用验收项）。";
+  if (!Array.isArray(value)) return ATTEMPT_PROMPT_MISSING + "\n  未提供原因：acceptance_items 不是 string[]；空值请传 null 或省略。";
+  if (value.length === 0) return "（无）\n  说明：supervisor 明确传 acceptance_items=[]，表示本次无单独验收项。";
+  if (value.some((item) => typeof item !== "string" || !item.trim())) {
+    return ATTEMPT_PROMPT_MISSING + "\n  未提供原因：acceptance_items 含空值或非字符串；每项必须是非空 string。";
+  }
+  return value.map((item, index) => {
+    const itemLines = protectPromptMarkers(item.trim()).split("\n");
+    return "  " + (index + 1) + ". " + itemLines.join("\n     ");
+  }).join("\n");
 }
 
-function classifyAttemptTask(attemptBrief, directive) {
-  const text = currentPromptTexts(attemptBrief, directive).join("\n");
-  if (!text) return "未提供";
-  // “集成而非重写”这类表述必须优先识别为合入，避免被“重写”禁项误判。
-  if (/(合入|集成|整合|合并|并入|merge|integration|integrate|cherry[-\s]?pick)/i.test(text)) return "合入";
-  if (/(重写|重新实现|重构|rewrite|reimplement|from\s+scratch)/i.test(text)) return "重写";
-  if (/(修复|修正|补丁|修补|fix|bugfix|bug|repair|patch)/i.test(text)) return "修复";
-  return "未提供";
+function acceptanceFactLine(value) {
+  const rendered = formatAcceptanceItems(value);
+  const validItems = Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string" && item.trim());
+  if (!validItems) return "- 当前验收项（当前 attempt 数据）：" + rendered;
+  return [
+    "- 当前验收项（当前 attempt 数据）：acceptance_items（supervisor 直接传入）",
+    rendered,
+  ].join("\n");
 }
 
-function extractCurrentBaseline(attemptBrief, directive) {
-  const texts = currentPromptTexts(attemptBrief, directive);
-  const patterns = [
-    new RegExp("(?:权威|当前|最新|本次)[^\\n]{0,24}?(?:基线(?:\\s*(?:commit|提交))?|baseline(?:\\s+commit)?)[^\\n]{0,32}?\\b(" + COMMIT_TOKEN + ")\\b", "i"),
-    new RegExp("(?:基线(?:\\s*(?:commit|提交))?|baseline(?:\\s+commit)?)[^\\n]{0,32}?\\b(" + COMMIT_TOKEN + ")\\b", "i"),
-    new RegExp("(?:commit|提交|sha)[^\\n]{0,16}?\\b(" + COMMIT_TOKEN + ")\\b", "i"),
-  ];
-  for (const text of texts) {
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
-      if (match?.[1]) return match[1];
+function validateAttemptPromptFields({ taskType, baselineCommit, sourceAttempt, acceptanceItems } = {}) {
+  if (taskType !== undefined && taskType !== null && !hasTaskType(taskType)) {
+    return "task_type 必须是 merge、rewrite 或 fix；空值请传 null 或省略";
+  }
+  for (const [field, value] of [["baseline_commit", baselineCommit], ["source_attempt", sourceAttempt]]) {
+    if (value !== undefined && value !== null && (typeof value !== "string" || !value.trim())) {
+      return field + " 必须是非空 string；空值请传 null 或省略";
     }
   }
-  return ATTEMPT_PROMPT_MISSING;
-}
-
-function attemptRefCommit(line, end) {
-  const tail = line.slice(end);
-  const match = tail.match(/^\s*(?:[（(]\s*)?(?:(?:commit|提交)\s*[:：=]?\s*)?[:：=]?\s*([0-9a-f]{7,40})\s*[）)]?/i);
-  return match?.[1] ?? "";
-}
-
-function formatAttemptRef(id, commit) {
-  return commit ? id + "（" + commit + "）" : id;
-}
-
-function extractCurrentSourceAttempt(attemptBrief, directive, currentAttempt) {
-  const texts = currentPromptTexts(attemptBrief, directive);
-  const current = promptText(currentAttempt);
-  const labelledPatterns = [
-    /(?:候选|candidate)[^\n]{0,24}?(?:来自|是|为|from|:|：)\s*(att-\d{1,4})/i,
-    /(?:真正|当前|本次)?\s*(?:前序|来源|previous|source)[^\n]{0,24}?(att-\d{1,4})/i,
-    /(?:成果|变更|实现|补丁)[^\n]{0,24}?(?:来自|from)\s*(att-\d{1,4})/i,
-  ];
-  for (const text of texts) {
-    for (const pattern of labelledPatterns) {
-      const match = pattern.exec(text);
-      if (!match?.[1] || match[1] === current) continue;
-      const id = match[1];
-      const idIndex = match.index + match[0].lastIndexOf(id);
-      return formatAttemptRef(id, attemptRefCommit(text, idIndex + id.length));
+  if (acceptanceItems !== undefined && acceptanceItems !== null) {
+    if (!Array.isArray(acceptanceItems)) return "acceptance_items 必须是 string[]；空值请传 null 或省略";
+    if (acceptanceItems.some((item) => typeof item !== "string" || !item.trim())) {
+      return "acceptance_items 的每项必须是非空 string；没有验收项请传 []，未知请传 null 或省略";
     }
   }
-  // 仅在文本中只有一个非当前 attempt 且没有 worktree/branch 语境时兜底，避免把路径字段臆认为来源。
-  for (const text of texts) {
-    const matches = [...text.matchAll(/\b(att-\d{1,4})\b/gi)].filter((m) => m[1] !== current);
-    if (matches.length === 1 && !/(worktree|工作树|branch|分支)/i.test(text)) {
-      const match = matches[0];
-      return formatAttemptRef(match[1], attemptRefCommit(text, match.index + match[1].length));
-    }
-  }
-  return ATTEMPT_PROMPT_MISSING;
+  return null;
 }
 
-function extractCurrentVerification(attemptBrief, directive) {
-  const values = [];
-  for (const text of currentPromptTexts(attemptBrief, directive)) {
-    const lines = text.split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      const match = lines[i].match(/(?:当前\s*)?(验收点|验收项|验收标准|验收命令|验收|verification|acceptance(?:\s+criteria)?)/i);
-      if (!match) continue;
-      const suffix = lines[i].slice(match.index + match[0].length);
-      const hasDelimiter = /^\s*[:：=]/.test(suffix);
-      const prefix = lines[i].slice(0, match.index).trim();
-      const labelAtStart = !prefix || /^[-*+\d.)\s]+$/.test(prefix);
-      if (!hasDelimiter && !labelAtStart) continue;
-      let value = suffix.replace(/^\s*[:：=]\s*/, "").trim();
-      if (!value && hasDelimiter && lines[i + 1] && lines[i + 1].trim() && !/^#{1,6}\s/.test(lines[i + 1].trim())) value = lines[i + 1].trim();
-      if (value && !values.includes(value)) values.push(value);
-    }
-  }
-  return values.length ? values.join("；") : ATTEMPT_PROMPT_MISSING;
-}
 
 function historicalPromptBlock(title, section) {
   const text = promptText(section);
@@ -391,6 +389,10 @@ export function formatAttemptPrompt({
   goalRel,
   attemptBrief,
   directive,
+  taskType,
+  baselineCommit,
+  sourceAttempt,
+  acceptanceItems,
   handoffSection,
   cardsSection,
   targetContext,
@@ -406,11 +408,7 @@ export function formatAttemptPrompt({
     ATTEMPT_PROMPT_MISSING,
     "未提供原因：当前派发没有可注入的 filled/reviewed 卡片成果。",
   ].join("\n");
-  const taskType = classifyAttemptTask(brief, currentDirective);
-  const taskTypeLabel = taskType === "未提供" ? "未提供（当前 brief/directive 未声明可识别的合入、重写或修复类型）" : taskType;
-  const baseline = extractCurrentBaseline(brief, currentDirective);
-  const sourceAttempt = extractCurrentSourceAttempt(brief, currentDirective, attempt);
-  const verification = extractCurrentVerification(brief, currentDirective);
+  const taskTypeLabel = taskTypeDisplay(taskType);
   const historyNotice = handoff ? "『前序 attempt 已确认 handoff』" : "『历史 handoff』";
   const goalValue = promptText(goal) || ATTEMPT_PROMPT_MISSING;
   const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
@@ -437,11 +435,12 @@ export function formatAttemptPrompt({
   const override = [
     "## 覆盖声明",
     "",
-    "覆盖声明：本段与上文 handoff 不一致处，一律以本段为准（列出覆盖点：基线 commit、前序 attempt 身份、验收项）。",
-    currentFactLine("- 权威基线 commit（当前 attempt 数据）：", baseline === ATTEMPT_PROMPT_MISSING ? "" : baseline, "当前 brief/directive 未包含可识别的基线 commit"),
-    currentFactLine("- 真正前序 attempt 身份（当前 attempt 数据）：", sourceAttempt === ATTEMPT_PROMPT_MISSING ? "" : sourceAttempt, "当前 brief/directive 未包含可识别的候选/来源 attempt；当前 attempt 不计为前序来源"),
-    currentFactLine("- 当前验收项（当前 attempt 数据）：", verification === ATTEMPT_PROMPT_MISSING ? "" : verification, "当前 brief/directive 未包含带值的验收项、验收点或验收命令"),
-    "以上字段只从本次 attempt brief/directive 读取；未提供时不从 handoff/卡片推断。",
+    "覆盖声明：本段与上文 handoff 不一致处，一律以本段为准（列出覆盖点：task_type、baseline_commit、source_attempt、acceptance_items）。",
+    "- 任务类型（当前 attempt 数据）：" + taskTypeFact(taskType),
+    currentFactLine("- 权威基线 commit（当前 attempt 数据）：", baselineCommit, "baseline_commit", "没有可用基线 commit"),
+    currentFactLine("- 真正前序 attempt 身份（当前 attempt 数据）：", sourceAttempt, "source_attempt", "没有可用的候选/来源 attempt；当前 attempt 不计为前序来源"),
+    acceptanceFactLine(acceptanceItems),
+    "以上字段由 supervisor 通过独立参数直接传入；不从 brief/directive、handoff 或卡片截取/推断。",
     "- 历史 handoff：" + (handoff ? "已提供（下方仅作背景）" : "未提供（当前目标没有已确认 handoff，故不注入历史 handoff 区块）"),
   ].join("\n");
 
@@ -854,14 +853,21 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_start_attempt",
-        description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。默认强制注入独立 worktree 隔离提示；仅 supervisor 明确传 worktree=false 并说明理由时才关闭。attempt_brief 是主管为本次 attempt 提供的可审计 brief/directive（g-150），写入 attempt meta 与事件。",
-        parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, worktree: { type: "boolean" }, attempt_brief: str }, ["goal"]),
+        description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。默认强制注入独立 worktree 隔离提示；仅 supervisor 明确传 worktree=false 并说明理由时才关闭。attempt_brief 是当前 action 原文；task_type 必须传 merge（合入）、rewrite（重写）或 fix（修复）之一，baseline_commit/source_attempt 是 supervisor 直接提供的当前事实，acceptance_items 是当前验收项 string[]；这些字段不从 brief/handoff 截取。task_type/baseline_commit/source_attempt 的空值传 null 或省略表示未提供；acceptance_items=[] 表示明确无单独验收项，null 或省略表示未提供；空字符串非法。",
+        parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
       },
       run: async (a, ex) => {
         // 校验 attempt_brief 类型（g-150 review 问题 4）
         if (a.attempt_brief !== undefined && a.attempt_brief !== null && typeof a.attempt_brief !== "string") {
           throw new GraphError("attempt_brief 必须是 string 类型");
         }
+        const structuredFieldError = validateAttemptPromptFields({
+          taskType: a.task_type,
+          baselineCommit: a.baseline_commit,
+          sourceAttempt: a.source_attempt,
+          acceptanceItems: a.acceptance_items,
+        });
+        if (structuredFieldError) throw new GraphError(structuredFieldError);
         const executor = a.executor ?? actorOf(ex);
         const r = rootFor(ex);
         // g-202：传 card 时统一走上下文收集派发，不创建 Goal execution attempt。
@@ -977,6 +983,10 @@ export function apply(ctx, config) {
               goalRel: rel,
               attemptBrief: a.attempt_brief,
               directive: currentDirective,
+              taskType: a.task_type,
+              baselineCommit: a.baseline_commit,
+              sourceAttempt: a.source_attempt,
+              acceptanceItems: a.acceptance_items,
               handoffSection: handoffsSection,
               cardsSection,
               subagentPromptSection,
@@ -1601,12 +1611,19 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, provider, model, worktree, attempt_brief } = body;
+          const { goal, provider, model, worktree, attempt_brief, task_type, baseline_commit, source_attempt, acceptance_items } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
           // 校验 attempt_brief 类型（g-150 review 问题 4）
           if (attempt_brief !== undefined && attempt_brief !== null && typeof attempt_brief !== "string") {
             return json(res, 400, { error: "attempt_brief 必须是 string 类型" });
           }
+          const structuredFieldError = validateAttemptPromptFields({
+            taskType: task_type,
+            baselineCommit: baseline_commit,
+            sourceAttempt: source_attempt,
+            acceptanceItems: acceptance_items,
+          });
+          if (structuredFieldError) return json(res, 400, { error: structuredFieldError });
           const rRoot = rootForReq(req, body);
           const goalFile = findGoalFile(rRoot, goal);
           const doc = loadGoal(goalFile);
@@ -1671,6 +1688,10 @@ export function apply(ctx, config) {
             goalRel: rel,
             attemptBrief: attempt_brief,
             directive: currentDirective,
+            taskType: task_type,
+            baselineCommit: baseline_commit,
+            sourceAttempt: source_attempt,
+            acceptanceItems: acceptance_items,
             handoffSection: handoffsSection,
             cardsSection,
             targetContext,
