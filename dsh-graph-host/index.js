@@ -64,7 +64,6 @@ import {
   setGoalDirective,
   readGoalComments,
   appendGoalComment,
-  formatGoalDirectiveSection,
   GraphError,
   GraphConflictError,
   createVersion,
@@ -211,6 +210,240 @@ const WORKTREE_GUIDE = `【强制 worktree 隔离】本次任务默认必须在�
 【唯一例外】仅当 supervisor 在本次派发的 attempt brief 中明确写出 \`worktree=false\` 与理由时，才允许真正的一两行、唯一文件小修直接 main；文档/长期记忆等小修改由 supervisor 自己处理，子代理不得擅自套用例外。
 【worktree 命名规范】新建 attempt 工作树必须命名为 .worktrees/g-<goal-number>-att-<NN>，分支使用相同后缀（例如 g-125-att-03、g-163-att-03）；不要使用省略 goal id 或未补零的歧义名称。
 数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
+
+
+const ATTEMPT_PROMPT_MISSING = "（未提供）";
+const ATTEMPT_PROMPT_WARNING = "若本 prompt 同时含历史 handoff 与最新 brief，只执行 brief；handoff 不产生任何新任务。";
+const COMMIT_TOKEN = "[0-9a-f]{7,40}";
+
+function promptText(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+/** 防止注入文本中的保留标记伪装成当前 prompt 系统区块。 */
+function protectPromptMarkers(value) {
+  return String(value ?? "")
+    .replace(/【本次任务定位】/g, "【文本中的本次任务定位】")
+    .replace(/【覆盖声明】/g, "【文本中的覆盖声明】")
+    .replace(/【历史约束·仅供理解，非任务】/g, "【文本中的历史约束】")
+    .replace(/## 本次 attempt brief\/directive/g, "## 文本中的 attempt brief\/directive")
+    .replace(/## 覆盖声明/g, "## 文本中的覆盖声明");
+}
+
+function renderPromptValue(value) {
+  const text = promptText(value);
+  if (!text) return ATTEMPT_PROMPT_MISSING;
+  return text.split("\n").map((line) => "> " + protectPromptMarkers(line)).join("\n");
+}
+
+function compactPromptFact(value) {
+  const text = promptText(value);
+  return text ? protectPromptMarkers(text.replace(/\s*\n\s*/g, "；")) : ATTEMPT_PROMPT_MISSING;
+}
+
+function currentPromptTexts(attemptBrief, directive) {
+  return [promptText(attemptBrief), promptText(directive)].filter(Boolean);
+}
+
+function classifyAttemptTask(attemptBrief, directive) {
+  const text = currentPromptTexts(attemptBrief, directive).join("\n");
+  if (!text) return "未提供";
+  // “集成而非重写”这类表述必须优先识别为合入，避免被“重写”禁项误判。
+  if (/(合入|集成|整合|合并|并入|merge|integration|integrate|cherry[-\s]?pick)/i.test(text)) return "合入";
+  if (/(重写|重新实现|重构|rewrite|reimplement|from\s+scratch)/i.test(text)) return "重写";
+  if (/(修复|修正|补丁|修补|fix|bugfix|bug|repair|patch)/i.test(text)) return "修复";
+  return "未提供";
+}
+
+function extractCurrentBaseline(attemptBrief, directive) {
+  const texts = currentPromptTexts(attemptBrief, directive);
+  const patterns = [
+    new RegExp("(?:权威|当前|最新|本次)[^\\n]{0,24}?(?:基线(?:\\s*(?:commit|提交))?|baseline(?:\\s+commit)?)[^\\n]{0,32}?\\b(" + COMMIT_TOKEN + ")\\b", "i"),
+    new RegExp("(?:基线(?:\\s*(?:commit|提交))?|baseline(?:\\s+commit)?)[^\\n]{0,32}?\\b(" + COMMIT_TOKEN + ")\\b", "i"),
+    new RegExp("(?:commit|提交|sha)[^\\n]{0,16}?\\b(" + COMMIT_TOKEN + ")\\b", "i"),
+  ];
+  for (const text of texts) {
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match?.[1]) return match[1];
+    }
+  }
+  return ATTEMPT_PROMPT_MISSING;
+}
+
+function attemptRefCommit(line, end) {
+  const tail = line.slice(end);
+  const match = tail.match(/^\s*(?:[（(]\s*)?(?:(?:commit|提交)\s*[:：=]?\s*)?[:：=]?\s*([0-9a-f]{7,40})\s*[）)]?/i);
+  return match?.[1] ?? "";
+}
+
+function formatAttemptRef(id, commit) {
+  return commit ? id + "（" + commit + "）" : id;
+}
+
+function extractCurrentSourceAttempt(attemptBrief, directive, currentAttempt) {
+  const texts = currentPromptTexts(attemptBrief, directive);
+  const current = promptText(currentAttempt);
+  const labelledPatterns = [
+    /(?:候选|candidate)[^\n]{0,24}?(?:来自|是|为|from|:|：)\s*(att-\d{1,4})/i,
+    /(?:真正|当前|本次)?\s*(?:前序|来源|previous|source)[^\n]{0,24}?(att-\d{1,4})/i,
+    /(?:成果|变更|实现|补丁)[^\n]{0,24}?(?:来自|from)\s*(att-\d{1,4})/i,
+  ];
+  for (const text of texts) {
+    for (const pattern of labelledPatterns) {
+      const match = pattern.exec(text);
+      if (!match?.[1] || match[1] === current) continue;
+      const id = match[1];
+      const idIndex = match.index + match[0].lastIndexOf(id);
+      return formatAttemptRef(id, attemptRefCommit(text, idIndex + id.length));
+    }
+  }
+  // 仅在文本中只有一个非当前 attempt 且没有 worktree/branch 语境时兜底，避免把路径字段臆认为来源。
+  for (const text of texts) {
+    const matches = [...text.matchAll(/\b(att-\d{1,4})\b/gi)].filter((m) => m[1] !== current);
+    if (matches.length === 1 && !/(worktree|工作树|branch|分支)/i.test(text)) {
+      const match = matches[0];
+      return formatAttemptRef(match[1], attemptRefCommit(text, match.index + match[1].length));
+    }
+  }
+  return ATTEMPT_PROMPT_MISSING;
+}
+
+function extractCurrentVerification(attemptBrief, directive) {
+  const values = [];
+  for (const text of currentPromptTexts(attemptBrief, directive)) {
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const match = lines[i].match(/(?:当前\s*)?(验收点|验收项|验收标准|验收命令|验收|verification|acceptance(?:\s+criteria)?)/i);
+      if (!match) continue;
+      const suffix = lines[i].slice(match.index + match[0].length);
+      const hasDelimiter = /^\s*[:：=]/.test(suffix);
+      const prefix = lines[i].slice(0, match.index).trim();
+      const labelAtStart = !prefix || /^[-*+\d.)\s]+$/.test(prefix);
+      if (!hasDelimiter && !labelAtStart) continue;
+      let value = suffix.replace(/^\s*[:：=]\s*/, "").trim();
+      if (!value && hasDelimiter && lines[i + 1] && lines[i + 1].trim() && !/^#{1,6}\s/.test(lines[i + 1].trim())) value = lines[i + 1].trim();
+      if (value && !values.includes(value)) values.push(value);
+    }
+  }
+  return values.length ? values.join("；") : ATTEMPT_PROMPT_MISSING;
+}
+
+function historicalPromptBlock(title, section) {
+  const text = promptText(section);
+  if (!text) return "";
+  return [
+    title,
+    "【历史约束·仅供理解，非任务】",
+    "本段不改变本次任务，仅解释候选为何如此设计。",
+    "",
+    protectPromptMarkers(text),
+  ].join("\n");
+}
+
+function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection }) {
+  const lines = [
+    "## 通用执行纪律",
+    "",
+    "以下内容是通用纪律与环境约束，不产生本次任务 action；本次 action 只来自当前 brief/directive。",
+  ];
+  const extra = promptText(subagentPromptSection);
+  if (extra) {
+    const body = extra.replace(/^## [^\n]*\n?/, "").trim();
+    lines.push("", "【dsh-graph 子代理补充提示词·仅作背景，非任务】", body ? protectPromptMarkers(body) : ATTEMPT_PROMPT_MISSING);
+  }
+  const worktree = promptText(worktreeBlock);
+  if (worktree) lines.push("", protectPromptMarkers(worktree));
+  const goalValue = promptText(goal) || ATTEMPT_PROMPT_MISSING;
+  const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
+  lines.push(
+    "",
+    "【状态汇报——你自己做，supervisor 不会替你更新】看板卡片上的状态摘要（status_line）由你自行维护：",
+    "每做一个动作就及时调用 graph_report_status 更新，参数 goal=\"" + goalValue + "\"、attempt=\"" + attemptValue + "\"、status=<一句话简短描述你此刻在干什么>。",
+    "status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab 样式」「跑验收脚本」），不要攒到结束才写、不要长篇。",
+    "开工、每完成一块、遇到阻塞、转向新任务、临近完成，都要立即更新；这句就是卡片上实时显示的那一行，滞留或失实等于对负责人隐瞒进展。",
+    "",
+    "【结束工作前更新 status】本轮收尾/即将空闲前，再调用一次 graph_report_status 把 status 更新为完成态（如「本轮完成/空闲待命」），避免空闲时 status 仍显示「正在做 X」——看板如实反映空闲/完成状态。",
+    "",
+    "【泳道迁移——你自己做，卡片位置是状态的投影】看板列＝状态的投影，状态滞留＝卡片滞留，必须及时调用 graph_transition：",
+    "开工时（若当前非 in_progress）graph_transition(goal=\"" + goalValue + "\", to=\"in_progress\")；",
+    "完成后 graph_transition(goal=\"" + goalValue + "\", to=\"review\")；",
+    "遇到阻塞 graph_transition(goal=\"" + goalValue + "\", to=\"blocked\", reason=<一句话原因>)；",
+    "【禁区】绝不自行 graph_transition 到 \"delivered\"——delivered 是负责人/supervisor 的 human gate（review→delivered 只有 verdict 通过后由主管执行），你最多到 review 就停。",
+    "迁移要与 graph_report_status 同步进行，别只改 status_line 不动卡片；若迁移被引擎拒绝（如判据未登记、状态不允许），保留 status 汇报并继续工作，不要反复硬试。",
+    "完成后用 graph_report_status 汇报最终状态，声明完成并等待 review。",
+  );
+  return lines.join("\n");
+}
+
+/** 统一组装 supervisor 执行 attempt prompt，避免两处派发顺序漂移。 */
+export function formatAttemptPrompt({
+  goal,
+  attempt,
+  goalRel,
+  attemptBrief,
+  directive,
+  handoffSection,
+  cardsSection,
+  targetContext,
+  subagentPromptSection,
+  worktreeBlock,
+} = {}) {
+  const brief = promptText(attemptBrief);
+  const currentDirective = promptText(directive);
+  const handoff = promptText(handoffSection);
+  const cards = promptText(cardsSection) || [
+    "## 已收集上下文卡片成果（g-120 注入）",
+    "",
+    ATTEMPT_PROMPT_MISSING,
+  ].join("\n");
+  const taskType = classifyAttemptTask(brief, currentDirective);
+  const baseline = extractCurrentBaseline(brief, currentDirective);
+  const sourceAttempt = extractCurrentSourceAttempt(brief, currentDirective, attempt);
+  const verification = extractCurrentVerification(brief, currentDirective);
+  const historyNotice = handoff ? "『前序 attempt 已确认 handoff』" : "『历史 handoff』";
+  const goalValue = promptText(goal) || ATTEMPT_PROMPT_MISSING;
+  const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
+  const positioning = [
+    "【本次任务定位】这是一次 " + taskType + " 任务；以下仅『本次 attempt brief/directive』为唯一 action 来源；" + historyNotice + "为约束/背景，仅供理解候选设计与禁项，不产生新任务。",
+    "你是 dsh-graph 目标 " + goalValue + " 的执行 attempt " + attemptValue + "。",
+    "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "——用 read 工具读它，不要自己猜路径。",
+  ].join("\n");
+
+  const current = [
+    "## 本次 attempt brief/directive",
+    "",
+    "唯一 action 来源：以下两项当前数据；历史 handoff、卡片和通用纪律均不产生新任务。",
+    "",
+    "**attempt brief（当前数据）**",
+    renderPromptValue(brief),
+    "",
+    "**directive（当前数据）**",
+    renderPromptValue(currentDirective),
+  ];
+  const context = promptText(targetContext);
+  if (context) current.push("", "目标背景（来自当前 goal.md，仅供理解，不产生 action）", protectPromptMarkers(context));
+
+  const override = [
+    "## 覆盖声明",
+    "",
+    "覆盖声明：本段与上文 handoff 不一致处，一律以本段为准（列出覆盖点：基线 commit、前序 attempt 身份、验收项）。",
+    "- 权威基线 commit（当前 attempt 数据）：" + compactPromptFact(baseline === ATTEMPT_PROMPT_MISSING ? "" : baseline),
+    "- 真正前序 attempt 身份（当前 attempt 数据）：" + compactPromptFact(sourceAttempt === ATTEMPT_PROMPT_MISSING ? "" : sourceAttempt),
+    "- 当前验收项（当前 attempt 数据）：" + compactPromptFact(verification === ATTEMPT_PROMPT_MISSING ? "" : verification),
+    "以上字段只从本次 attempt brief/directive 读取；未提供时不从 handoff/卡片推断。",
+    "- 历史 handoff：" + (handoff ? "已提供（下方仅作背景）" : "未提供（不注入历史 handoff 区块）"),
+  ].join("\n");
+
+  const history = [];
+  const handoffBlock = historicalPromptBlock("## 历史 handoff", handoff);
+  if (handoffBlock) history.push(handoffBlock);
+  history.push(historicalPromptBlock("## 历史卡片", cards));
+  const discipline = formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection });
+  return [positioning, current.join("\n"), override, ...history, discipline, ATTEMPT_PROMPT_WARNING]
+    .filter((section) => section && section.trim())
+    .join("\n\n");
+}
 
 export function apply(ctx, config) {
   // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
@@ -677,7 +910,7 @@ export function apply(ctx, config) {
         const injectedHandoffRefs = confirmedHandoffs.map((h) => ({ id: h.id, revision: h.revision, source_attempts: h.source_attempts }));
         const handoffsSection = formatReviewedAttemptHandoffsSection(r, a.goal);
         // g-150 范围扩展：读取最近指令（eventually 注入 prompt；空时不影响现有 prompt 行为）
-        const directiveSection = formatGoalDirectiveSection(r, a.goal);
+        const currentDirective = readGoalDirective(r, a.goal);
         const goalFile = findGoalFile(r, a.goal);
         // g-149：sessionWorkspace 可能返回 null（绝对 config.root + 无 session），
         // 此时用 r 的父目录作为相对路径基准
@@ -697,7 +930,7 @@ export function apply(ctx, config) {
           injectedCards,
           injectedHandoffs: injectedHandoffRefs,
           attemptBrief: a.attempt_brief ?? undefined,
-          injectedDirective: readGoalDirective(r, a.goal) ?? undefined,
+          injectedDirective: currentDirective ?? undefined,
           provider: effProvider,
           model: effModel,
           modelRoute: effRoute,
@@ -722,35 +955,23 @@ export function apply(ctx, config) {
             // g-120：已收集卡片成果段（子代理直接使用，无需猜卡片路径）+ worktree 隔离指令（可开关）
             const cardsSection = formatHarvestedCardsSection(r, a.goal);
             const worktreeBlock = a.worktree === false ? null : WORKTREE_GUIDE;
-            // g-150：brief 段（主管为本次 attempt 提供的 directive）
-            const briefSection = a.attempt_brief ? `## 本次 attempt brief/directive\n\n${a.attempt_brief}` : null;
             // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
             const subagentPromptSection = (() => {
               const p = effectivePrompt(readGraphSettings().subagentPrompt, readPromptOverride(r, "subagent_prompt"));
-              return p ? `## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）\n\n${p}` : null;
+              return p ? ["## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join(String.fromCharCode(10)) : null;
             })();
-            const prompt = [
-              `你是 dsh-graph 目标 ${a.goal} 的执行 attempt ${attempt}。`,
-              rel ? `目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。` : null,
-              handoffsSection || null,
-              briefSection,
-              directiveSection || null,
+            // g-228：所有 supervisor 执行 prompt 统一由单一模板入口组装。
+            const prompt = formatAttemptPrompt({
+              goal: a.goal,
+              attempt,
+              goalRel: rel,
+              attemptBrief: a.attempt_brief,
+              directive: currentDirective,
+              handoffSection: handoffsSection,
               cardsSection,
               subagentPromptSection,
               worktreeBlock,
-              `【状态汇报——你自己做，supervisor 不会替你更新】看板卡片上的状态摘要（status_line）由你自行维护：`,
-              `每做一个动作就及时调用 graph_report_status 更新，参数 goal="${a.goal}"、attempt="${attempt}"、status=<一句话简短描述你此刻在干什么>。`,
-              `status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab 样式」「跑验收脚本」），不要攒到结束才写、不要长篇。`,
-              `开工、每完成一块、遇到阻塞、转向新任务、临近完成，都要立即更新；这句就是卡片上实时显示的那一行，滞留或失实等于对负责人隐瞒进展。`,
-              `【结束工作前更新 status】本轮收尾/即将空闲前，再调用一次 graph_report_status 把 status 更新为完成态（如「本轮完成/空闲待命」），避免空闲时 status 仍显示「正在做 X」——看板如实反映空闲/完成状态；`,
-              `【泳道迁移——你自己做，卡片位置是状态的投影】看板列＝状态的投影，状态滞留＝卡片滞留，必须及时调用 graph_transition：`,
-              `开工时（若当前非 in_progress）graph_transition(goal="${a.goal}", to="in_progress")；`,
-              `完成后 graph_transition(goal="${a.goal}", to="review")；`,
-              `遇到阻塞 graph_transition(goal="${a.goal}", to="blocked", reason=<一句话原因>)；`,
-              `【禁区】绝不自行 graph_transition 到 "delivered"——delivered 是负责人/supervisor 的 human gate（review→delivered 只有 verdict 通过后由主管执行），你最多到 review 就停。`,
-              `迁移要与 graph_report_status 同步进行，别只改 status_line 不动卡片；若迁移被引擎拒绝（如判据未登记、状态不允许），保留 status 汇报并继续工作，不要反复硬试。`,
-              `完成后用 graph_report_status 汇报最终状态，声明完成并等待 review。`,
-            ].filter(Boolean).join("\n");
+            });
             const request = { parent: ex.agent, prompt: text(prompt) };
             const agentOptions = {};
             if (effProvider) agentOptions.provider = effProvider;
@@ -758,7 +979,7 @@ export function apply(ctx, config) {
             if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
             const started = await subagents.startContinuable({
               provider,
-              label: `graph:${a.goal}/${attempt}`,
+              label: "graph:" + a.goal + "/" + attempt,
               request,
               signal: ex.signal,
             });
@@ -1393,7 +1614,6 @@ export function apply(ctx, config) {
           const injectedHandoffRefs = confirmedHandoffs.map((h) => ({ id: h.id, revision: h.revision, source_attempts: h.source_attempts }));
           const handoffsSection = formatReviewedAttemptHandoffsSection(rRoot, goal);
           // g-150 范围扩展：读取最近指令（注入 prompt；空时不影响现有 prompt 行为）
-          const directiveSection = formatGoalDirectiveSection(rRoot, goal);
           // Supervisor 默认强制 worktree 隔离；仅明确批准的 body.worktree=false 才关闭（g-202）
           const worktreeBlock = worktree === false ? "" : WORKTREE_GUIDE;
           const currentDirective = readGoalDirective(rRoot, goal);
@@ -1422,47 +1642,31 @@ export function apply(ctx, config) {
           // 此时用 rRoot 的父目录作为相对路径基准
           const ws = workspaceOf(req, body) ?? dirname(rRoot);
           const rel = relative(ws, goalFile);
-          // g-150：brief 段（主管为本次 attempt 提供的 directive）
-          const briefSection = attempt_brief ? `## 本次 attempt brief/directive\n\n${attempt_brief}` : "";
           // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
           const subagentPromptSection = (() => {
             const p = effectivePrompt(readGraphSettings().subagentPrompt, readPromptOverride(rRoot, "subagent_prompt"));
             return p ? `## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）\n\n${p}` : "";
           })();
-          const prompt = `你是 dsh-graph 目标 ${goal} 的执行 attempt ${attempt}。
-目标文件精确路径（工作目录相对）：${rel}——用 read 工具读它，不要自己猜路径。
-
-${handoffsSection}
-
-${briefSection}
-
-${subagentPromptSection}
-
-${directiveSection ? directiveSection + "\n" : ""}## 目标描述
-${desc}
-
-## 质量判据
-${crit}
-
-${cardsSection}
-
-${worktreeBlock}
-
-【状态汇报——你自己做，supervisor 不会替你更新】看板卡片上的状态摘要（status_line）由你自行维护：
-每做一个动作就及时调用 graph_report_status 更新，参数 goal="${goal}"、attempt="${attempt}"、status=<一句话简短描述你此刻在干什么>。
-status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab 样式」「跑验收脚本」），不要攒到结束才写、不要长篇。
-开工、每完成一块、遇到阻塞、转向新任务、临近完成，都要立即更新；这句就是卡片上实时显示的那一行，滞留或失实等于对负责人隐瞒进展。
-
-【结束工作前更新 status】本轮收尾/即将空闲前，再调用一次 graph_report_status 把 status 更新为完成态（如「本轮完成/空闲待命」），避免空闲时 status 仍显示「正在做 X」——看板如实反映空闲/完成状态。
-
-【泳道迁移——你自己做，卡片位置是状态的投影】看板列＝状态的投影，状态滞留＝卡片滞留，必须及时调用 graph_transition：
-开工时（若当前非 in_progress）graph_transition(goal="${goal}", to="in_progress")；
-完成后 graph_transition(goal="${goal}", to="review")；
-遇到阻塞 graph_transition(goal="${goal}", to="blocked", reason=<一句话原因>)；
-【禁区】绝不自行 graph_transition 到 "delivered"——delivered 是负责人/supervisor 的 human gate（review→delivered 只有 verdict 通过后由主管执行），你最多到 review 就停。
-迁移要与 graph_report_status 同步进行，别只改 status_line 不动卡片；若迁移被引擎拒绝（如判据未登记、状态不允许），保留 status 汇报并继续工作，不要反复硬试。
-
-完成后用 graph_report_status 汇报最终状态，声明完成并等待 review。`;
+          const targetContext = [
+            "## 目标描述",
+            desc,
+            "",
+            "## 质量判据",
+            crit,
+          ].join(String.fromCharCode(10));
+          // g-228：所有 supervisor 执行 prompt 统一由单一模板入口组装。
+          const prompt = formatAttemptPrompt({
+            goal,
+            attempt,
+            goalRel: rel,
+            attemptBrief: attempt_brief,
+            directive: currentDirective,
+            handoffSection: handoffsSection,
+            cardsSection,
+            targetContext,
+            subagentPromptSection,
+            worktreeBlock,
+          });
           const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, rRoot, { provider: effProvider, model: effModel });
           if (spawned.error) {
             console.error("[dsh-graph-host] start-execution 子代理启动失败:", spawned.error);
