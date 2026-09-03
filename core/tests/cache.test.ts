@@ -171,6 +171,102 @@ test("g-212 判据 2：内存投影缓存按 canonical graph root 与 includeArc
   }
 });
 
+test("g-212 watcher idle/reopen 保留稳定 ETag，并校验关闭期间的外部变更", async () => {
+  const { root, cleanup } = setupTempGraph();
+  const workspace = join(root, "..");
+  try {
+    const goalId = createGoal(root, { title: "生命周期目标", actor: "test" });
+    const first = getCachedBoardPayload(root);
+    assert.equal(first.fromCache, false);
+
+    // idle close must not bump generation or rebuild an unchanged payload.
+    await new Promise((r) => setTimeout(r, 650));
+    const repeat = getCachedBoardPayload(root);
+    assert.equal(repeat.fromCache, true, "watcher 重开且内容不变应复用缓存");
+    assert.equal(repeat.etag, first.etag);
+    assert.deepEqual(repeat.payload, first.payload);
+
+    const routes = setupHostApp(workspace);
+    const handler = routes.get("/api/dsh-graph");
+    const initial = fakeResponse();
+    handler(
+      {
+        method: "GET",
+        url: "/api/dsh-graph?workspace=" + encodeURIComponent(workspace),
+        headers: {},
+      },
+      initial,
+    );
+    assert.equal(initial._code, 200);
+    const httpEtag = initial._headers["etag"];
+    assert.ok(httpEtag);
+
+    const notModified = fakeResponse();
+    handler(
+      {
+        method: "GET",
+        url: "/api/dsh-graph?workspace=" + encodeURIComponent(workspace),
+        headers: { "if-none-match": httpEtag },
+      },
+      notModified,
+    );
+    assert.equal(notModified._code, 304, "watcher 重开后当前 ETag 仍应返回 304");
+    assert.equal(notModified._rawBody, "");
+
+    // The watcher is closed again while idle; this write must not be hidden
+    // by the retained cache when the next request recreates it.
+    await new Promise((r) => setTimeout(r, 650));
+    writeFileSync(
+      join(root, "backlog", goalId + ".md"),
+      "---\n" + JSON.stringify({ id: goalId, title: "关闭期间外部修改", status: "backlog" }) + "\n---\n\n## 描述\n外部写入\n",
+      "utf8",
+    );
+    const changed = fakeResponse();
+    handler(
+      {
+        method: "GET",
+        url: "/api/dsh-graph?workspace=" + encodeURIComponent(workspace),
+        headers: { "if-none-match": httpEtag },
+      },
+      changed,
+    );
+    assert.equal(changed._code, 200, "关闭期间外部修改必须返回 200");
+    assert.notEqual(changed._headers["etag"], httpEtag);
+    assert.equal(changed._body.backlog[0].title, "关闭期间外部修改");
+  } finally {
+    cleanup();
+  }
+});
+
+test("g-212 watcher epoch 按 includeArchived 维度分别校验重开缓存", async () => {
+  const { root, cleanup } = setupTempGraph();
+  try {
+    const goalId = createGoal(root, { title: "归档生命周期目标", actor: "test" });
+    archiveGoal(root, goalId, { actor: "test" });
+    const active = getCachedBoardPayload(root, { includeArchived: false });
+    const archived = getCachedBoardPayload(root, { includeArchived: true });
+    const archivedFile = join(root, "backlog", "archived", goalId + ".md");
+
+    await new Promise((r) => setTimeout(r, 650));
+    writeFileSync(
+      archivedFile,
+      "---\n" + JSON.stringify({ id: goalId, title: "归档关闭期间修改", status: "draft", archived: true }) + "\n---\n\n## 描述\n外部写入\n",
+      "utf8",
+    );
+
+    // Validating the non-archived dimension must not clear the archived one.
+    const activeAfter = getCachedBoardPayload(root, { includeArchived: false });
+    assert.equal(activeAfter.fromCache, true);
+    assert.equal(activeAfter.etag, active.etag);
+    const archivedAfter = getCachedBoardPayload(root, { includeArchived: true });
+    assert.equal(archivedAfter.fromCache, false);
+    assert.notEqual(archivedAfter.etag, archived.etag);
+    assert.equal(archivedAfter.payload.backlog[0].title, "归档关闭期间修改");
+  } finally {
+    cleanup();
+  }
+});
+
 test("g-212 判据 3：REST/Core 写操作完成后主动失效对应缓存，下一次请求返回 200 和新 ETag", async () => {
   const { ws, root, cleanup } = setupTempGraph();
   try {
@@ -201,6 +297,8 @@ test("g-212 判据 3：REST/Core 写操作完成后主动失效对应缓存，�
     assert.notEqual(etag2, etag1, "写操作后 ETag 必须更新");
 
     // 再次测试 POST /api/dsh-graph/order 写操作端点失效
+    const cachedBeforeOrder = getCachedBoardPayload(root);
+    assert.equal(cachedBeforeOrder.fromCache, true);
     const orderHandler = routes.get("/api/dsh-graph/order");
     const orderReq = {
       method: "POST",
@@ -213,8 +311,13 @@ test("g-212 判据 3：REST/Core 写操作完成后主动失效对应缓存，�
     const orderRes = fakeResponse();
     await orderHandler(orderReq, orderRes);
     assert.equal(orderRes._code, 200);
+    assert.equal(orderRes._headers["etag"], undefined, "order 接口不新增 ETag");
 
-    // 再次请求
+    // order.json 不在 board payload 中；它触发内部缓存失效，但 board
+    // 表示未变化时携带旧 HTTP ETag 仍可合法返回 304。
+    const rebuiltAfterOrder = getCachedBoardPayload(root);
+    assert.equal(rebuiltAfterOrder.fromCache, false, "order 写后内部缓存必须重建");
+    assert.notEqual(rebuiltAfterOrder.etag, cachedBeforeOrder.etag, "order 写后 revision 必须变化");
     const res3 = fakeResponse();
     handler(
       {
@@ -224,9 +327,9 @@ test("g-212 判据 3：REST/Core 写操作完成后主动失效对应缓存，�
       },
       res3,
     );
-    assert.equal(res3._code, 200, "order 更新后旧 ETag 必须失效并返回 200");
-    const etag3 = res3._headers["etag"];
-    assert.notEqual(etag3, etag2);
+    assert.equal(res3._code, 304, "order-only board 表示未变化时旧 HTTP ETag 可返回 304");
+    assert.equal(res3._rawBody, "");
+    assert.equal(res3._headers["etag"], etag2);
   } finally {
     cleanup();
   }

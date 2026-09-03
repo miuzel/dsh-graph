@@ -2,7 +2,7 @@
 import { resolve, join } from "node:path";
 import { statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { ensureWatcher, watcherSafe, generation, invalidate, inspectGenerations, closeWatchers } from "./cache-state.js";
+import { ensureWatcher, watcherSafe, watcherEpoch, generation, invalidate, inspectGenerations, closeWatchers } from "./cache-state.js";
 export { closeWatchers };
 const boardCache = new Map();
 export function invalidateBoardCache(root) {
@@ -47,12 +47,21 @@ export function matchIfNoneMatch(value, current) {
     const c = clean(current);
     return value.split(",").some(x => clean(x) === c);
 }
+function payloadFingerprint(payload) {
+    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+        const stable = { ...payload };
+        delete stable.generated_at;
+        return JSON.stringify(stable) ?? "";
+    }
+    return JSON.stringify(payload) ?? "";
+}
 export function getCachedBoardPayload(root, opts, payloadFactory) {
     const key = resolve(root), archived = opts?.includeArchived ?? false, cacheKey = key + "::" + (archived ? "1" : "0");
-    const safe = watcherSafe(key), old = boardCache.get(cacheKey);
+    const safe = watcherSafe(key), old = boardCache.get(cacheKey), epoch = watcherEpoch(key);
     const before = generation(key);
     const stableRevision = computeGraphRevision(key, archived);
-    if (safe && old?.revision === stableRevision)
+    const rescan = old ? old.watcherEpoch !== epoch : false;
+    if (safe && !rescan && old?.revision === stableRevision)
         return { ...old, fromCache: true };
     if (!payloadFactory)
         throw new Error("board payload factory required");
@@ -62,9 +71,21 @@ export function getCachedBoardPayload(root, opts, payloadFactory) {
         invalidate(key);
         return getCachedBoardPayload(key, opts, payloadFactory);
     }
-    const rev = stableRevision;
-    const payloadJson = JSON.stringify(payload);
-    const entry = { payload, payloadJson, revision: rev, etag: formatETag(rev), cachedAt: Date.now() };
+    const currentFingerprint = payloadFingerprint(payload);
+    // A close/eviction can happen without a content change. Retain the old
+    // payload (including generated_at) so the ETag still names that response.
+    if (safe && rescan && old && old.revision === stableRevision && old.payloadFingerprint === currentFingerprint) {
+        const retained = { ...old, watcherEpoch: epoch };
+        boardCache.set(cacheKey, retained);
+        return { ...retained, fromCache: true };
+    }
+    let revision = stableRevision;
+    if (safe && rescan && old && old.revision === stableRevision) {
+        invalidate(key);
+        revision = computeGraphRevision(key, archived);
+    }
+    const payloadJson = JSON.stringify(payload) ?? "";
+    const entry = { payload, payloadJson, payloadFingerprint: currentFingerprint, watcherEpoch: epoch, revision, etag: formatETag(revision), cachedAt: Date.now() };
     if (safe)
         boardCache.set(cacheKey, entry);
     else

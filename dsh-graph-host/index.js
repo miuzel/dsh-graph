@@ -1051,7 +1051,10 @@ export function apply(ctx, config) {
           };
           if (meta.rootWarning) payload._diagnostics.rootWarning = meta.rootWarning;
           const payloadJson = JSON.stringify(payload);
-          const etag = 'W/"' + createHash("sha256").update(payloadJson).digest("hex") + '"';
+          const etagPayload = { ...payload };
+          delete etagPayload.generated_at;
+          const etagPayloadJson = JSON.stringify(etagPayload);
+          const etag = 'W/"' + createHash("sha256").update(etagPayloadJson).digest("hex") + '"';
           const rawIfNoneMatch = _req?.headers?.["if-none-match"] ?? _req?.headers?.["If-None-Match"];
           const ifNoneMatch = Array.isArray(rawIfNoneMatch) ? rawIfNoneMatch.join(",") : typeof rawIfNoneMatch === "string" ? rawIfNoneMatch : null;
           if (ifNoneMatch && matchIfNoneMatch(ifNoneMatch, etag)) {

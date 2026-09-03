@@ -68,8 +68,8 @@ test("g212 REST accepts explicit workspace regardless of sandboxPolicy", async (
   } finally { absolute.dispose(); }
 });
 
-test("g212 watcher recreation invalidates safely and teardown is callable", async () => {
-  const root = join(mkdtempSync(join(tmpdir(), "g212-watch-")), ".dsh-graph"); init(root); try { const before = generation(root); assert.equal(ensureWatcher(root), true); await new Promise((r) => setTimeout(r, 600)); assert.ok(generation(root) > before); assert.equal(ensureWatcher(root), true); } finally { closeWatchers(); }
+test("g212 watcher recreation preserves content generation and teardown is callable", async () => {
+  const root = join(mkdtempSync(join(tmpdir(), "g212-watch-")), ".dsh-graph"); init(root); try { const before = generation(root); assert.equal(ensureWatcher(root), true); await new Promise((r) => setTimeout(r, 600)); assert.equal(generation(root), before); assert.equal(ensureWatcher(root), true); } finally { closeWatchers(); }
 });
 
 test("g212 client dimension contract guards retained payload and request sequence", () => {
