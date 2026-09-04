@@ -452,7 +452,7 @@ export const SUBAGENT_MODE_SPECS = {
     minimal: {
         id: "minimal",
         name: "极简模式",
-        description: "极简双工具 Agent，仅提供受控 bash 与 str_replace_editor。",
+        description: "受控基础工具 Agent，仅提供受控 bash、edit、read、write、graph_report_status、graph_transition 工具，避免高级工具误导与过度递归。",
         order: 3,
     },
     cordis: {
@@ -463,6 +463,39 @@ export const SUBAGENT_MODE_SPECS = {
     },
 };
 export const DEFAULT_SUBAGENT_MODE = "standard";
+/** g-191：graph-minimal 极简模式下的严格工具白名单过滤器 */
+export const GRAPH_MINIMAL_ALLOWED_TOOLS = [
+    "bash",
+    "edit",
+    "read",
+    "write",
+    "graph_report_status",
+    "graph_transition",
+];
+export function toolFilterForMode(mode) {
+    if (mode === "minimal") {
+        return { allow: GRAPH_MINIMAL_ALLOWED_TOOLS };
+    }
+    return undefined;
+}
+/** g-191：构建 dsh-graph 默认子代理专属 Persona，将通用执行纪律沉淀为系统级 Persona */
+export function buildSubagentDefaultPersona(goalId, attemptId) {
+    const lines = [
+        "You are a professional software engineering subagent executing tasks within the dsh-graph goal framework.",
+        "",
+        "## dsh-graph 子代理通用执行纪律",
+        "",
+        "1. 状态汇报：每做一个动作必须调用 graph_report_status 自行更新 status_line（尽量 20 字内，如「正在改 UI 样式」「跑单元测试」），滞留等于隐瞒进展；",
+        "2. 结束收尾更新：在即将空闲或收尾前，务必调用 graph_report_status 将状态更新为完成态（如「本轮完成/空闲待命」），避免空闲时仍显示正在做；",
+        "3. 泳道流转：开工时若非 in_progress 则调用 graph_transition(to='in_progress')；完成后必须 graph_transition(to='review') 停轮等待复核；遇到阻塞 graph_transition(to='blocked', reason=...)；",
+        "4. 绝不自行 delivered：禁止直接 graph_transition 到 delivered——delivered 属于负责人与主管的 human gate 裁决关口；",
+        "5. 严格遵守环境隔离要求与质量判据核验，未通过判据不可声明完成。",
+    ];
+    if (goalId && attemptId) {
+        lines.push(`\n当前派发目标：${goalId}，执行 attempt：${attemptId}`);
+    }
+    return lines.join("\n");
+}
 /** 校验并规范化子代理模式：仅接受受控枚举；无效值/空安全回退 null（由上层决定默认）。 */
 export function normalizeSubagentMode(mode) {
     if (typeof mode !== "string")

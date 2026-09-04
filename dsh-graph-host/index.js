@@ -84,6 +84,8 @@ import {
   normalizeSubagentMode,
   SUBAGENT_MODE_PROMPTS,
   resolveSubagentMode,
+  toolFilterForMode,
+  buildSubagentDefaultPersona,
   validateSchema,
   schemaErrorResponse,
   settingsPostSchema,
@@ -1017,7 +1019,14 @@ export function apply(ctx, config) {
               modeStrategySection,
               worktreeBlock,
             });
-            const request = { parent: ex.agent, prompt: text(prompt) };
+            const subagentPersona = buildSubagentDefaultPersona(a.goal, attempt);
+            const modeToolFilter = toolFilterForMode(effModeRes.mode);
+            const request = {
+              parent: ex.agent,
+              prompt: text(prompt),
+              persona: subagentPersona,
+              ...(modeToolFilter ? { toolFilter: modeToolFilter } : {}),
+            };
             const agentOptions = {};
             if (effProvider) agentOptions.provider = effProvider;
             if (effModel) agentOptions.model = effModel;
@@ -1255,7 +1264,13 @@ export function apply(ctx, config) {
       if (!provider) {
         return { childId: null, parentSessionId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）` };
       }
-      const request = { parent, prompt: [{ type: "text", text: promptText }] };
+      const modeToolFilter = overrides.mode ? toolFilterForMode(overrides.mode) : undefined;
+      const request = {
+        parent,
+        prompt: [{ type: "text", text: promptText }],
+        persona: overrides.persona ?? buildSubagentDefaultPersona(),
+        ...(modeToolFilter ? { toolFilter: modeToolFilter } : {}),
+      };
       // g-133：模型路由合成（overrides > project.yaml > profile 全局默认 > 继承），核心逻辑在 core/ops.ts
       const eff = resolveModelRoute(
         { provider: overrides.provider, model: overrides.model },
@@ -1848,7 +1863,13 @@ export function apply(ctx, config) {
             modeStrategySection,
             worktreeBlock,
           });
-          const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, rRoot, { provider: effProvider, model: effModel });
+          const subagentPersona = buildSubagentDefaultPersona(goal, attempt);
+          const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, rRoot, {
+            provider: effProvider,
+            model: effModel,
+            mode: effModeRes.mode,
+            persona: subagentPersona,
+          });
           if (spawned.error) {
             console.error("[dsh-graph-host] start-execution 子代理启动失败:", spawned.error);
           } else {
