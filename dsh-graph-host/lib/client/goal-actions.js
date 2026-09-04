@@ -204,11 +204,14 @@
     // 无异议生效，有异议显示在按钮处并转「强制接受」，可选理由记 goal.amended 事件供学习）
     function AcceptFeedback(props) {
       const { goalId, status, events, supervisorSession, onRefresh } = props;
+      const { archived } = props;
       const { attempts } = props;
       const [mode, setMode] = React.useState("idle"); // idle | feedback
       const [fbText, setFbText] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
+      const [requestPending, setRequestPending] = React.useState(false);
+      const requestSubmittedRef = React.useRef(false);
       const [forceMode, setForceMode] = React.useState(false); // 异议后是否展开强制接受理由输入
       const [forceReason, setForceReason] = React.useState("");
       // 反馈预填模板（复制与显示共用，保证一致）
@@ -217,37 +220,58 @@
       // 接受复核状态（与 core readAcceptStatus 同语义的事件流推断）：
       // none（未请求）/ pending（已请求待主管裁决）/ objection（主管异议）/ resolved（已生效）
       const evs = events ?? [];
-      let lastReq = -1, lastObj = -1, lastRes = -1;
-      evs.forEach((e, i) => {
-        if (e.event === "review.requested") lastReq = i;
-        if (e.event === "review.objected") lastObj = i;
-        if (["description.confirmed", "criteria.confirmed", "review.passed"].includes(e.event)) lastRes = i;
-      });
+      // g-186：只把当前阶段的请求及其后续裁决关联起来，避免 ready 阶段历史请求污染 review。
+      const relevantReq = evs.reduce((found, e, i) => {
+        if (e.event !== "review.requested") return found;
+        const targetStage = e.details?.targetStage;
+        // 新事件带 targetStage；旧事件仅对非 review 阶段兼容，review 不猜测历史归属。
+        return (targetStage === status || (targetStage == null && status !== "review")) ? i : found;
+      }, -1);
+      let lastObj = -1, lastRes = -1;
+      if (relevantReq >= 0) {
+        evs.forEach((e, i) => {
+          if (i <= relevantReq) return;
+          if (e.event === "review.objected") lastObj = i;
+          if (["description.confirmed", "criteria.confirmed", "review.passed"].includes(e.event)) lastRes = i;
+        });
+      }
       let acceptState = "none";
-      if (lastReq >= 0) {
-        if (lastObj > lastReq) acceptState = "objection";
-        else if (lastRes > lastReq) acceptState = "resolved";
+      if (relevantReq >= 0) {
+        if (lastObj > relevantReq) acceptState = "objection";
+        else if (lastRes > relevantReq) acceptState = "resolved";
         else acceptState = "pending";
       }
       const objectionText = acceptState === "objection" ? evs[lastObj]?.details?.objection : null;
 
       // 接受：默认经主管 Agent 复核（review.requested → 主管裁决）
       const doAccept = async () => {
-        setLoading(true);
+        // review 入口只允许一次非 force 请求；ref 防止快速连点穿过 React 重渲染窗口。
+        if (loading || requestSubmittedRef.current) return;
+        requestSubmittedRef.current = true;
+        setLoading(true); setNote(null);
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/accept"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ goal: goalId }),
           });
-          const data = await r.json();
-          if (data.pending) setNote("✅ 已请求主管复核接受，等待主管裁决（无异议即生效）");
-          else if (data.ok) setNote("✅ 已接受");
-          else setNote("⚠️ 接受失败：" + (data.error || "未知错误"));
+          let data;
+          try { data = await r.json(); } catch { data = {}; }
+          if (!r.ok || !data.pending) {
+            requestSubmittedRef.current = false;
+            setNote("⚠️ 接受请求未提交：" + (data.error || `端点返回 ${r.status}`));
+            onRefresh?.();
+            return;
+          }
+          setRequestPending(true);
+          setNote("✅ 已请求主管复核接受，等待主管裁决");
+          onRefresh?.();
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          requestSubmittedRef.current = false;
+          setNote("⚠️ 请求失败，未确认提交：" + String(e?.message ?? e));
+        } finally {
+          setLoading(false);
         }
-        setLoading(false);
       };
       // 强制接受：跳过主管复核，可选理由记入 goal.amended 事件
       const doForceAccept = async () => {
@@ -337,6 +361,25 @@
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       // review 及之后阶段、或已有活跃 attempt，不显示执行/反馈按钮
       const allowed = ["draft", "planning", "collecting", "ready"];
+      const reviewEntry = status === "review" && archived !== true;
+      // g-186：确认列详情的唯一接受交付入口。只走非 force requestAcceptReview，绝不显示强制接受。
+      if (reviewEntry) {
+        const waiting = requestPending || acceptState === "pending";
+        const settled = acceptState === "resolved";
+        const objected = acceptState === "objection";
+        return h("div", { style: { marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }, "data-testid": "review-accept-entry" },
+          waiting
+            ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待裁决")
+            : settled
+              ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, "✅ 已接受生效")
+              : objected
+                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, "⚠️ 主管已提出异议")
+                : h("button", {
+                    style: { ...S.btnAccept, padding: "4px 12px", fontSize: 13 }, className: "dg-btn-accept",
+                    disabled: loading, onClick: doAccept, "data-testid": "review-accept-button",
+                  }, "✅ 接受交付"),
+          note ? h("div", { style: { ...S.meta, marginTop: 2 } }, note) : null);
+      }
       if (!allowed.includes(status) || hasActiveAttempt) return null;
 
       return h("div", { style: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6 } },

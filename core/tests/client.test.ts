@@ -2629,4 +2629,34 @@ test("g-188 转到对话入口与 LiveStrip：事件隔离、主题反馈及安�
   assert.match(bundle, /sessionLinkBtn\(card\.parent_session_id, card\.child_id, "↗ 转到对话"\)/);
 });
 
+// g-186：确认列弹窗接受交付入口源契约（可见性、单次非 force、pending/error/刷新）。
+test("g-186 review 接受交付入口：仅 review 可见且非 force 请求可追踪", () => {
+  const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  const constants = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
+  assert.match(modal, /archived: meta\.archived === true/);
+  assert.match(modal, /MEANINGFUL\.has\(e\.event\)/);
+  assert.match(constants, /"review\.requested": null/);
+  assert.match(constants, /"review\.objected": null/);
+  assert.match(constants, /"review\.requested", "review\.objected"/);
+  assert.match(constants, /targetStage/);
+  assert.match(constants, /snapshot/);
+  assert.match(actions, /const reviewEntry = status === "review" && archived !== true/);
+  assert.match(actions, /"data-testid": "review-accept-entry"/);
+  assert.match(actions, /"data-testid": "review-accept-button"/);
+  assert.match(actions, /"✅ 接受交付"/);
+  assert.match(actions, /requestSubmittedRef\.current/);
+  assert.match(actions, /targetStage === status/);
+  assert.match(actions, /status !== "review"/);
+  assert.match(actions, /只把当前阶段的请求/);
+  assert.match(actions, /body: JSON\.stringify\({ goal: goalId }\)/);
+  assert.match(actions, /!r\.ok \|\| !data\.pending/);
+  assert.match(actions, /未确认提交/);
+  assert.match(actions, /onRefresh\?\.\(\)/);
+  const reviewStart = actions.indexOf("if (reviewEntry)");
+  const reviewEnd = actions.indexOf("if (!allowed.includes(status)", reviewStart);
+  assert.ok(reviewStart >= 0 && reviewEnd > reviewStart);
+  assert.doesNotMatch(actions.slice(reviewStart, reviewEnd), /force/);
+});
+
 
