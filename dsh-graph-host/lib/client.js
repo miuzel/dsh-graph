@@ -3240,6 +3240,26 @@ window.__ModuleLoader__.load({
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
+    // g-189：只展示服务端按 canonical workspace 只读发现的 worktree；不自行执行 git。
+    function AttemptWorktrees(props) {
+      const attempts = props.attempts ?? [];
+      const discovery = props.worktrees ?? { status: "unavailable", items: {} };
+      if (!attempts.length) return null;
+      return h("div", { key: "worktrees", style: S.modalSection },
+        h("div", { style: S.modalH }, "🌿 Attempt worktree"),
+        discovery.status !== "ok"
+          ? h("div", { style: { ...S.meta, fontSize: 12 } }, "⚠️ Git worktree 列表不可用，无法发现 worktree")
+          : attempts.map((a) => {
+              const item = discovery.items?.[a.id];
+              return h("div", { key: a.id, style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginTop: 4 } },
+                h("span", { style: { flex: "0 0 auto", fontSize: 12 } }, a.id),
+                item
+                  ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${item.status}`)
+                  : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, "未创建 worktree"),
+                item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: "复制安全相对路径", onClick: async () => { if (await copyText(item.path)) showToast("✅ worktree 路径已复制"); } }, "复制") : null);
+            }));
+    }
+
     function GoalModal(props) {
       const [state, setState] = React.useState({ loading: true });
       const [tab, setTab] = React.useState("detail"); // "detail" | "context" | "activity"
@@ -3255,10 +3275,31 @@ window.__ModuleLoader__.load({
       const [typeNote, setTypeNote] = React.useState(null);
       // g-148：load 提升到组件体，供 AcceptFeedback 通过 onRefresh 回调刷新详情
       const aliveRef = React.useRef(true);
+      const lastWorktreesRef = React.useRef({});
+      const removedWorktreesRef = React.useRef({});
       const load = React.useCallback(() =>
         fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }))
           .then((r) => r.json())
-          .then((data) => aliveRef.current && setState({ loading: false, data }))
+          .then((data) => {
+            if (!aliveRef.current) return;
+            const wt = data.worktrees;
+            if (wt?.status === "ok") {
+              const next = { ...wt, items: { ...wt.items } };
+              for (const [id, old] of Object.entries(lastWorktreesRef.current)) {
+                if (!next.items[id]) {
+                  const removed = { ...old, status: "已移除" };
+                  removedWorktreesRef.current[id] = removed;
+                  next.items[id] = removed;
+                }
+              }
+              for (const [id, removed] of Object.entries(removedWorktreesRef.current)) {
+                if (!next.items[id]) next.items[id] = removed;
+              }
+              lastWorktreesRef.current = Object.fromEntries(Object.entries(next.items).filter(([, v]) => v.status !== "已移除"));
+              data = { ...data, worktrees: next };
+            }
+            setState({ loading: false, data });
+          })
           .catch((e) => aliveRef.current && setState({ loading: false, error: String(e) })),
       [props.id]);
       React.useEffect(() => {
@@ -3401,6 +3442,7 @@ window.__ModuleLoader__.load({
         // 判断是否是 backlog 目标（backlog 目标不能建卡）
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
+          h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
             h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本

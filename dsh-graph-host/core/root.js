@@ -122,10 +122,19 @@ export function discoverGitWorktree(workspaceRoot, options) {
             }
         }
         if (mainPath) {
-            const resolvedWorkspace = workspaceKey;
-            const isLinked = resolvedWorkspace !== resolve(mainPath);
+            let resolvedWorkspace;
+            let resolvedMain;
+            try {
+                resolvedWorkspace = realpathSync(workspaceKey);
+                resolvedMain = realpathSync(resolve(mainPath));
+            }
+            catch {
+                resolvedWorkspace = workspaceKey;
+                resolvedMain = resolve(mainPath);
+            }
+            const isLinked = resolvedWorkspace !== resolvedMain;
             info = {
-                mainWorktree: resolve(mainPath),
+                mainWorktree: resolvedMain,
                 workspace: resolvedWorkspace,
                 isLinkedWorktree: isLinked,
             };

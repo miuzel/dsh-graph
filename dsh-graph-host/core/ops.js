@@ -1,4 +1,5 @@
 /** 核心操作：init / createGoal / setCriteria / transition / validate / rebuild。 */
+import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, realpathSync, writeFileSync, } from "node:fs";
 import { join, basename, dirname, relative, resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
@@ -2066,6 +2067,17 @@ const ATTEMPT_BODY = `
  *  opts.injectedDirective：从 goal.md「最近指令」小节读取并注入 prompt 的内容快照（g-150 范围扩展）；
  *  提供时记入 attempt.started 的 details.injected_directive 与 attempt.md meta。
  *  opts.provider / opts.model / opts.modelRoute：模型路由信息（g-194）。 */
+function attemptWorktreeEvidence(root, goalId, attemptId) {
+    const workspace = resolve(dirname(root));
+    const canonicalRoot = resolve(root);
+    const relativePath = `.worktrees/${goalId}-${attemptId}`;
+    let head = "";
+    try {
+        head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace, encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    }
+    catch { /* non-Git roots retain path/branch evidence and discover degrades safely */ }
+    return { relative_path: relativePath, branch: `refs/heads/${goalId}-${attemptId}`, canonical_root: canonicalRoot, ...(head ? { head } : {}) };
+}
 export function startAttempt(root, goalId, opts) {
     // 校验 attemptBrief 类型（g-150 review 问题 4：必须是 string 或 undefined，不可是其他类型）
     if (opts.attemptBrief !== undefined && typeof opts.attemptBrief !== "string") {
@@ -2092,6 +2104,7 @@ export function startAttempt(root, goalId, opts) {
         status_line: null,
         result: "pending",
         child_id: null,
+        worktree: attemptWorktreeEvidence(root, goalId, attId),
     };
     if (opts.provider && opts.provider.trim()) {
         meta.provider = opts.provider.trim();
@@ -3259,6 +3272,7 @@ export function goalDetail(root, goalId) {
                         detached: m.detached === true,
                         detached_at: m.detached_at ?? null,
                         detached_by: m.detached_by ?? null,
+                        worktree: m.worktree ?? null,
                     });
                 }
                 catch { /* 跳过 */ }

@@ -9,8 +9,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, relative } from "node:path";
+import { execFileSync } from "node:child_process";
 import vm from "node:vm";
-import { init, createGoal, findGoalFile, loadGoal, saveGoal, setCriteria, transition, readProjectConfig } from "../ops.ts";
+import { init, createGoal, findGoalFile, loadGoal, saveGoal, setCriteria, transition, readProjectConfig, startAttempt } from "../ops.ts";
 import { criteriaItems, replaceSection, sectionText } from "../model.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dsh-graph-host/index.js";
@@ -2627,6 +2628,54 @@ test("g-188 转到对话入口与 LiveStrip：事件隔离、主题反馈及安�
   assert.match(bundle, /role: canOpen \? "button" : undefined/);
   assert.match(bundle, /\.dg-live-strip-clickable:focus-visible/);
   assert.match(bundle, /sessionLinkBtn\(card\.parent_session_id, card\.child_id, "↗ 转到对话"\)/);
+});
+
+// g-189：真实 Git fixture 覆盖标准路径、branch/HEAD 证据与 REST 输出。
+test("g-189 REST fixture：标准 attempt worktree 可发现且 foreign 分支不归属", () => {
+  const ws = mkdtempSync(join(tmpdir(), "g189-git-"));
+  execFileSync("git", ["init", "-q", ws]);
+  execFileSync("git", ["-C", ws, "config", "user.email", "test@example.invalid"]);
+  execFileSync("git", ["-C", ws, "config", "user.name", "test"]);
+  init(join(ws, ".dsh-graph"));
+  const goalId = createGoal(join(ws, ".dsh-graph"), { title: "fixture", version: "v-t", actor: "test" });
+  writeFileSync(join(ws, "README"), "fixture");
+  execFileSync("git", ["-C", ws, "add", "."]);
+  execFileSync("git", ["-C", ws, "commit", "-qm", "fixture"]);
+  const attId = startAttempt(join(ws, ".dsh-graph"), goalId, { executor: "test", actor: "test" });
+  const worktree = join(ws, ".worktrees", `${goalId}-att-001`);
+  execFileSync("git", ["-C", ws, "worktree", "add", "-q", "-b", `${goalId}-att-001`, worktree]);
+  const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const ctx: any = { get: (name: string) => name === "webServer" ? webServer : undefined, effect: (fn: any) => fn(), webServer, tools: { register: () => () => {}, get: () => ({}) } };
+  apply(ctx, {});
+  const req: any = fakeRequest("GET", null); req.url = `/api/dsh-graph/goal?id=${goalId}&workspace=${encodeURIComponent(ws)}`;
+  const res = fakeResponse(); routes.get("/api/dsh-graph/goal")(req, res);
+  assert.equal(res._code, 200); assert.equal(res._body.attempts[0].id, attId);
+  assert.equal(res._body.worktrees.items[attId].path, `.worktrees/${goalId}-att-001`);
+});
+
+// g-189：worktree 发现保持只读、canonical workspace 与路径安全边界。
+test("g-189 worktree 发现与弹窗展示源契约", () => {
+  const host = readFileSync(join(dirname(new URL(import.meta.url).pathname), "../../dsh-graph-host/index.js"), "utf8");
+  const modal = readFileSync(join(dirname(new URL(import.meta.url).pathname), "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  assert.match(host, /git.*worktree.*list.*porcelain/);
+  assert.match(host, /canonicalWorkspace/);
+  assert.match(host, /relative\(canonical, actual\)/);
+  assert.match(host, /rel !== `\.worktrees\/\${expected}`/);
+  assert.match(host, /realpathSync/);
+  assert.match(host, /\d{2,3}/);
+  assert.match(host, /expectedBranch/);
+  assert.match(host, /WORKTREE_CACHE_TTL/);
+  assert.match(host, /worktreeCache\.get/);
+  assert.match(host, /WORKTREE_CACHE_CAP/);
+  assert.match(host, /now - entry\.ts/);
+  assert.match(host, /worktreeCache\.keys\(\)\.next/);
+  assert.match(host, /未创建 worktree|worktree 列表不可用/);
+  assert.match(modal, /AttemptWorktrees/);
+  assert.match(modal, /textOverflow: "ellipsis"/);
+  assert.match(modal, /复制安全相对路径/);
+  assert.match(modal, /已移除/);
+  assert.match(modal, /lastWorktreesRef/);
 });
 
 

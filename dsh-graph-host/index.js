@@ -11,10 +11,10 @@
  * - 运行时零 @deepseek-ai/* import（类型只用 import type）；
  * - 副作用收进 ctx.effect。
  */
-import { writeFileSync } from "node:fs";
-import { readFileSync } from "node:fs";
+import { writeFileSync, readFileSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { relative, join, resolve, dirname, isAbsolute } from "node:path";
+import { relative, join, resolve, dirname, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createGoal,
@@ -1275,6 +1275,77 @@ export function apply(ctx, config) {
     };
   };
 
+  // g-189：只读发现当前 canonical workspace 下约定的 attempt worktree。
+  // 结果附加到 goal detail，不写入任何 graph 数据；失败时返回明确降级状态。
+  const worktreeCache = new Map();
+  const WORKTREE_CACHE_TTL = 20_000;
+  const WORKTREE_CACHE_CAP = 64;
+  const discoverAttemptWorktrees = (workspace, goalId, attempts, graphRoot = null) => {
+    let canonicalKey;
+    try { canonicalKey = realpathSync(resolve(workspace)); } catch { canonicalKey = resolve(workspace); }
+    const cacheKey = `${canonicalKey}::${goalId}`;
+    const now = Date.now();
+    // Expired entries are removed on every lookup; Map insertion order supplies LRU.
+    for (const [key, entry] of worktreeCache) {
+      if (now - entry.ts >= WORKTREE_CACHE_TTL) worktreeCache.delete(key);
+    }
+    const cached = worktreeCache.get(cacheKey);
+    if (cached) {
+      worktreeCache.delete(cacheKey);
+      worktreeCache.set(cacheKey, cached);
+      return cached.value;
+    }
+    const result = { status: "ok", items: {} };
+    try {
+      const text = execFileSync("git", ["worktree", "list", "--porcelain"], {
+        cwd: workspace, encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"],
+      });
+      const entries = text.split(/\n\s*\n/).map((block) => {
+        const pathLine = block.split("\n").find((line) => line.startsWith("worktree "));
+        if (!pathLine) return null;
+        const branchLine = block.split("\n").find((line) => line.startsWith("branch "));
+        const headLine = block.split("\n").find((line) => line.startsWith("HEAD "));
+        return { path: resolve(pathLine.slice(9).trim()), branch: branchLine?.slice(7).trim() ?? null, head: headLine?.slice(5).trim() ?? null, locked: /(^|\n)locked(?: |$)/.test(block), prunable: /(^|\n)prunable(?: |$)/.test(block) };
+      }).filter(Boolean);
+      const canonical = realpathSync(resolve(workspace));
+      const prefix = `${goalId}-att-`;
+      const usedPaths = new Set();
+      const seenAttemptIds = new Set();
+      for (const attempt of attempts ?? []) {
+        const id = String(attempt?.id ?? "");
+        if (!id || seenAttemptIds.has(id)) continue;
+        seenAttemptIds.add(id);
+        const suffix = id.match(/^att-(\d{2,3})$/)?.[1];
+        const expected = suffix ? `${prefix}${suffix}` : null;
+        const expectedBranch = expected ? `refs/heads/${expected}` : null;
+        const entry = entries.find((x) => basename(x.path) === expected && x.branch === expectedBranch && !usedPaths.has(x.path));
+        if (!entry || entry.prunable || !entry.head) continue;
+        // Persisted attempt evidence must agree with the live Git record.
+        const evidence = attempt.worktree;
+        if (!evidence || typeof evidence !== "object") continue;
+        if (evidence.relative_path && evidence.relative_path !== `.worktrees/${expected}`) continue;
+        if (evidence.canonical_root && realpathSync(resolve(evidence.canonical_root)) !== (graphRoot ? realpathSync(resolve(graphRoot)) : canonical)) continue;
+        if (evidence.branch && evidence.branch !== expectedBranch && evidence.branch !== expected) continue;
+        if (evidence.head && evidence.head !== entry.head) continue;
+        // Cross-check both Git's live record and the attempt evidence. A same-named
+        // nested/foreign path is never accepted: the relative form must be exact.
+        let actual;
+        try { actual = realpathSync(entry.path); } catch { continue; }
+        const rel = relative(canonical, actual).replaceAll("\\", "/");
+        if (rel !== `.worktrees/${expected}` || rel.startsWith("..") || isAbsolute(rel) || rel.includes("\0")) continue;
+        usedPaths.add(entry.path);
+        result.items[id] = { path: rel, status: entry.locked ? "已锁定" : "正常" };
+      }
+    } catch (error) {
+      result.status = "unavailable";
+      result.error = "Git worktree 列表不可用";
+    }
+    worktreeCache.delete(cacheKey);
+    worktreeCache.set(cacheKey, { ts: now, value: result });
+    while (worktreeCache.size > WORKTREE_CACHE_CAP) worktreeCache.delete(worktreeCache.keys().next().value);
+    return result;
+  };
+
   // webServer 路由定义（惰性：webServer 服务出现后才注册；headless 组合下静默跳过）
   const httpRoutes = () => [
     {
@@ -1315,7 +1386,11 @@ export function apply(ctx, config) {
         try {
           const id = new URL(req.url ?? "", "http://x").searchParams.get("id");
           if (!id) return json(res, 400, { error: "missing id" });
-          json(res, 200, goalDetail(rootForReq(req), id));
+          const meta = rootForReqMeta(req);
+          const detail = goalDetail(meta.root, id);
+          const discoveryWorkspace = meta.mode === "absolute-config" ? dirname(meta.root) : meta.canonicalWorkspace;
+          detail.worktrees = discoverAttemptWorktrees(discoveryWorkspace, id, detail.attempts, meta.root);
+          json(res, 200, detail);
         } catch (e) {
           json(res, 404, { error: String(e?.message ?? e) });
         }
