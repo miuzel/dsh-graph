@@ -441,8 +441,26 @@
       }, [staleStatus]);
 
       if (!props.childId) return null;
+      // g-188：有 childId 且父会话可定位时，整条 LiveStrip 直达子代理；吞掉冒泡避免打开卡片详情。
+      const canOpen = Boolean(props.parentId && props.childId);
+      const activateStrip = (e) => {
+        e.stopPropagation();
+        if (e.type === "keydown") {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+        }
+        void openChildSession(props.parentId, props.childId);
+      };
+      const stripProps = {
+        style: canOpen ? { ...S.liveStrip, cursor: "pointer" } : S.liveStrip,
+        className: canOpen ? "dg-live-strip-clickable" : undefined,
+        tabIndex: canOpen ? 0 : undefined,
+        role: canOpen ? "button" : undefined,
+        onClick: canOpen ? activateStrip : undefined,
+        onKeyDown: canOpen ? activateStrip : undefined,
+      };
       if (!session) {
-        return h("div", { style: S.liveStrip, title: props.childId },
+        return h("div", { ...stripProps, title: props.childId },
           "⚠️ 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
       }
 
@@ -468,7 +486,7 @@
       const modelTitle = props.model ? `模型：${props.provider ? props.provider + "/" : ""}${props.model}` : null;
       return h(
         "div",
-        { style: S.liveStrip, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
+        { ...stripProps, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
         // 第一行：状态 + 流式内容（同行）；右侧有空间时显示 tok/ctx（flex 布局自动压缩）
         h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
           h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },

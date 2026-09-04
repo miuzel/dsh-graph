@@ -121,6 +121,15 @@ window.__ModuleLoader__.load({
       .dg-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.25)); }
       .dg-btn:active { filter: brightness(0.95); }
       .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
+      /* g-188：统一“转到对话”入口的 hover/active/focus 反馈，不改变布局。 */
+      .dg-session-link { border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.55)); }
+      .dg-session-link:hover { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.30)); border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.85)); box-shadow: 0 0 0 2px rgba(76,141,255,.18); }
+      .dg-session-link:active { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.42)); transform: translateY(1px); }
+      .dg-session-link:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #4c8dff); outline-offset: 2px; }
+      .dg-live-strip-clickable { cursor: pointer; transition: transform .14s ease, box-shadow .14s ease, background .14s ease; }
+      .dg-live-strip-clickable:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(76,141,255,.24); background: rgba(76,141,255,.18); }
+      .dg-live-strip-clickable:active { transform: translateY(0); box-shadow: 0 0 0 2px rgba(76,141,255,.28); }
+      .dg-live-strip-clickable:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #4c8dff); outline-offset: 2px; }
       /* g-227：仅“转到对话”入口在可悬停指针下轻微放大，不影响布局 */
       @media (hover: hover) and (pointer: fine) {
         .dg-session-link { transition: transform .16s ease, background .12s ease, border-color .12s ease, filter .12s ease; }
@@ -1295,8 +1304,26 @@ window.__ModuleLoader__.load({
       }, [staleStatus]);
 
       if (!props.childId) return null;
+      // g-188：有 childId 且父会话可定位时，整条 LiveStrip 直达子代理；吞掉冒泡避免打开卡片详情。
+      const canOpen = Boolean(props.parentId && props.childId);
+      const activateStrip = (e) => {
+        e.stopPropagation();
+        if (e.type === "keydown") {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+        }
+        void openChildSession(props.parentId, props.childId);
+      };
+      const stripProps = {
+        style: canOpen ? { ...S.liveStrip, cursor: "pointer" } : S.liveStrip,
+        className: canOpen ? "dg-live-strip-clickable" : undefined,
+        tabIndex: canOpen ? 0 : undefined,
+        role: canOpen ? "button" : undefined,
+        onClick: canOpen ? activateStrip : undefined,
+        onKeyDown: canOpen ? activateStrip : undefined,
+      };
       if (!session) {
-        return h("div", { style: S.liveStrip, title: props.childId },
+        return h("div", { ...stripProps, title: props.childId },
           "⚠️ 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
       }
 
@@ -1322,7 +1349,7 @@ window.__ModuleLoader__.load({
       const modelTitle = props.model ? `模型：${props.provider ? props.provider + "/" : ""}${props.model}` : null;
       return h(
         "div",
-        { style: S.liveStrip, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
+        { ...stripProps, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
         // 第一行：状态 + 流式内容（同行）；右侧有空间时显示 tok/ctx（flex 布局自动压缩）
         h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
           h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
@@ -2223,13 +2250,7 @@ window.__ModuleLoader__.load({
             ? h("div", { style: S.drawerSection, key: "child" },
                 h("div", { style: { ...S.drawerH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
                   "🤖 收集子代理",
-                  card.parent_session_id
-                    ? h("button", {
-                        style: S.btn,
-                        className: "dg-btn dg-session-link",
-                        onClick: () => { openChildSession(card.parent_session_id, card.child_id); },
-                      }, "↗ 转到对话")
-                    : null),
+                  sessionLinkBtn(card.parent_session_id, card.child_id, "↗ 转到对话")),
                 h("div", { style: S.meta }, `id：${card.child_id}`))
             : null;
           // g-109：收集提示词编辑区（空卡片显示）
@@ -7130,7 +7151,12 @@ window.__ModuleLoader__.load({
         } catch { /* 静默 */ }
       }));
     }
+    const openingChildSessions = new Set();
     async function openChildSession(parentSessionId, childId) {
+      if (!parentSessionId || !childId) return;
+      const navigationKey = parentSessionId + "\u0000" + childId;
+      if (openingChildSessions.has(navigationKey)) return;
+      openingChildSessions.add(navigationKey);
       const rt = sessionsRt ?? appCtx?.get?.("sessions");
       try {
         if (!rt) return;
@@ -7151,15 +7177,19 @@ window.__ModuleLoader__.load({
       } catch (e) {
         console.warn("[dsh-graph-host] openSubagent failed", e);
         try { rt?.open?.(parentSessionId); activateChatTab(); } catch { /* 静默 */ }
+      } finally {
+        openingChildSessions.delete(navigationKey);
       }
     }
     function sessionLinkBtn(parentSessionId, childId, label) {
-      if (!childId) return null;
+      // 没有父会话就不渲染假入口：无法定位子会话时保持页面其它内容可用。
+      if (!childId || !parentSessionId) return null;
       return h("button", {
         style: { ...S.btn, fontSize: 11, padding: "0 6px", marginLeft: 6, flexShrink: 0 },
         className: "dg-btn dg-session-link",
-        title: parentSessionId ? "跳转到子代理会话" : "子代理 id（父会话未知，仅展示）",
-        onClick: (e) => { e.stopPropagation(); if (parentSessionId) openChildSession(parentSessionId, childId); },
+        type: "button",
+        title: "跳转到子代理会话",
+        onClick: (e) => { e.stopPropagation(); void openChildSession(parentSessionId, childId); },
       }, label ?? "↗ 会话");
     }
     return {

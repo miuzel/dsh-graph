@@ -86,13 +86,7 @@
             ? h("div", { style: S.drawerSection, key: "child" },
                 h("div", { style: { ...S.drawerH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
                   "🤖 收集子代理",
-                  card.parent_session_id
-                    ? h("button", {
-                        style: S.btn,
-                        className: "dg-btn dg-session-link",
-                        onClick: () => { openChildSession(card.parent_session_id, card.child_id); },
-                      }, "↗ 转到对话")
-                    : null),
+                  sessionLinkBtn(card.parent_session_id, card.child_id, "↗ 转到对话")),
                 h("div", { style: S.meta }, `id：${card.child_id}`))
             : null;
           // g-109：收集提示词编辑区（空卡片显示）

@@ -68,7 +68,12 @@
         } catch { /* 静默 */ }
       }));
     }
+    const openingChildSessions = new Set();
     async function openChildSession(parentSessionId, childId) {
+      if (!parentSessionId || !childId) return;
+      const navigationKey = parentSessionId + "\u0000" + childId;
+      if (openingChildSessions.has(navigationKey)) return;
+      openingChildSessions.add(navigationKey);
       const rt = sessionsRt ?? appCtx?.get?.("sessions");
       try {
         if (!rt) return;
@@ -89,15 +94,19 @@
       } catch (e) {
         console.warn("[dsh-graph-host] openSubagent failed", e);
         try { rt?.open?.(parentSessionId); activateChatTab(); } catch { /* 静默 */ }
+      } finally {
+        openingChildSessions.delete(navigationKey);
       }
     }
     function sessionLinkBtn(parentSessionId, childId, label) {
-      if (!childId) return null;
+      // 没有父会话就不渲染假入口：无法定位子会话时保持页面其它内容可用。
+      if (!childId || !parentSessionId) return null;
       return h("button", {
         style: { ...S.btn, fontSize: 11, padding: "0 6px", marginLeft: 6, flexShrink: 0 },
         className: "dg-btn dg-session-link",
-        title: parentSessionId ? "跳转到子代理会话" : "子代理 id（父会话未知，仅展示）",
-        onClick: (e) => { e.stopPropagation(); if (parentSessionId) openChildSession(parentSessionId, childId); },
+        type: "button",
+        title: "跳转到子代理会话",
+        onClick: (e) => { e.stopPropagation(); void openChildSession(parentSessionId, childId); },
       }, label ?? "↗ 会话");
     }
     return {

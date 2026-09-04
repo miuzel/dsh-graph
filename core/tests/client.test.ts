@@ -2594,4 +2594,39 @@ test("g-223 行为契约：基于 stable version id 绑定与无中间 load 的 
   assert.equal(resRecreated.hiddenSlugs.includes("v0.7"), false, "新建的同名版本 v0.7 默认显示！");
 });
 
+test("g-188 转到对话入口与 LiveStrip：事件隔离、主题反馈及安全降级源契约", () => {
+  const plugin = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/plugin.js"), "utf8");
+  const live = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/session-hooks.js"), "utf8");
+  const css = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/constants.js"), "utf8");
+  const drawer = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/card-drawer.js"), "utf8");
+  const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(plugin, /if \(!childId \|\| !parentSessionId\) return null;/);
+  assert.match(plugin, /const openingChildSessions = new Set\(\)/);
+  assert.match(plugin, /if \(openingChildSessions\.has\(navigationKey\)\) return/);
+  assert.match(plugin, /className: "dg-btn dg-session-link"/);
+  assert.match(plugin, /e\.stopPropagation\(\); void openChildSession\(parentSessionId, childId\)/);
+  assert.match(live, /const canOpen = Boolean\(props\.parentId && props\.childId\)/);
+  assert.match(live, /const activateStrip = \(e\) =>/);
+  assert.match(live, /tabIndex: canOpen \? 0 : undefined/);
+  assert.match(live, /role: canOpen \? "button" : undefined/);
+  assert.match(live, /e\.key !== "Enter" && e\.key !== " "/);
+  assert.match(live, /className: canOpen \? "dg-live-strip-clickable"/);
+  assert.match(live, /e\.stopPropagation\(\);/);
+  assert.match(live, /openChildSession\(props\.parentId, props\.childId\)/);
+  assert.match(live, /return h\("div", \{ \.\.\.stripProps, title: props\.childId \}/);
+  assert.match(css, /\.dg-session-link:hover/);
+  assert.match(css, /\.dg-session-link:active/);
+  assert.match(css, /\.dg-session-link:focus-visible/);
+  assert.match(css, /\.dg-live-strip-clickable:hover/);
+  assert.match(css, /\.dg-live-strip-clickable:focus-visible/);
+  assert.match(css, /translateY\(-1px\)/);
+  assert.match(drawer, /sessionLinkBtn\(card\.parent_session_id, card\.child_id, "↗ 转到对话"\)/);
+  assert.doesNotMatch(drawer, /className: "dg-btn",\s*onClick: \(\) => \{ openChildSession/);
+  assert.match(bundle, /function sessionLinkBtn/);
+  assert.match(bundle, /tabIndex: canOpen \? 0 : undefined/);
+  assert.match(bundle, /role: canOpen \? "button" : undefined/);
+  assert.match(bundle, /\.dg-live-strip-clickable:focus-visible/);
+  assert.match(bundle, /sessionLinkBtn\(card\.parent_session_id, card\.child_id, "↗ 转到对话"\)/);
+});
+
 
