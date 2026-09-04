@@ -2693,9 +2693,11 @@ window.__ModuleLoader__.load({
           if (data.pending) {
             try {
               const rt = sessionsRt ?? appCtx?.get?.("sessions");
-              const session = supervisorSession && rt?.get?.(supervisorSession);
+              const session = supervisorSession && (rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession));
               if (session?.prompt) await session.prompt([{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }], "queue");
-            } catch {}
+            } catch (err) {
+              console.warn("[dsh-graph-host] prompt supervisorSession failed:", err);
+            }
             onRefresh?.();
           } else if (data.ok) {
             onRefresh?.();
