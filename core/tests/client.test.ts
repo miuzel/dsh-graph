@@ -2687,6 +2687,7 @@ test("g-186 review 接受交付入口：单一状态提示、不含‘裁决’�
   const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
   const constants = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
   const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(actions, /lastTransitionToCurrent/);
   assert.match(actions, /isReview && acceptState === "none"/);
   assert.match(actions, /"✅ 接受"/);
   assert.match(actions, /isReview && acceptState === "pending"/);

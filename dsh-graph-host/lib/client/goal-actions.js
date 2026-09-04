@@ -212,12 +212,22 @@
       // 反馈预填模板（复制与显示共用，保证一致）
       const prefillText = fbText.trim() ? `【${goalId} 反馈】\n${fbText.trim()}` : "";
 
-      // 接受复核状态只关联当前泳道，避免历史阶段请求污染当前 review。
+      // 接受复核状态只关联当前生命周期周期：
+      // 以最后一次进入当前阶段（goal.transition to === status）为起点，
+      // 如果目标曾被回退重做（如 review -> in_progress -> review），前一次生命周期的请求自然作废，允许重新发起。
       const evs = events ?? [];
+      let lastTransitionToCurrent = -1;
+      evs.forEach((e, i) => {
+        if (e.event === "goal.transition" && String(e.details?.to) === String(status)) {
+          lastTransitionToCurrent = i;
+        }
+      });
       let lastReq = -1, lastObj = -1, lastRes = -1;
       evs.forEach((e, i) => {
+        // 仅关注当前这次进入该阶段之后的事件
+        if (i < lastTransitionToCurrent) return;
         const targetStage = String(e.details?.targetStage ?? "");
-        if (e.event === "review.requested" && targetStage === String(status)) lastReq = i;
+        if (e.event === "review.requested" && (targetStage === String(status) || !targetStage)) lastReq = i;
         if (e.event === "review.objected" && (targetStage === String(status) || (!targetStage && lastReq >= 0))) lastObj = i;
         if (["description.confirmed", "criteria.confirmed", "review.passed"].includes(e.event)) lastRes = i;
       });
