@@ -99,6 +99,8 @@
       .dg-card:active { transform: translateY(0); box-shadow: 0 0 0 2px rgba(76,141,255,.8); }
       .dg-sub { transition: background .12s ease; }
       .dg-sub:hover { background: rgba(58,166,117,.22); }
+      .dg-criteria-row { transition: background .12s ease; border-radius: 4px; }
+      .dg-criteria-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14)); }
       .dg-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-deliver-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-blocked-collapsed:hover { background: rgba(128,128,128,.14); }

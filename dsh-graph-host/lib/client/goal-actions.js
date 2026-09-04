@@ -46,7 +46,8 @@
           const label = line.replace(/^\d+[.、)]\s*/, "");
           return h("div", { key: i, style: { marginBottom: 3 } },
             h("div", {
-              style: { display: "flex", alignItems: "flex-start", gap: 6, cursor: "pointer" },
+              className: "dg-criteria-row",
+              style: { display: "flex", alignItems: "flex-start", gap: 6, cursor: "pointer", padding: "2px 4px" },
               tabIndex: 0,
               role: "checkbox",
               "aria-label": label,

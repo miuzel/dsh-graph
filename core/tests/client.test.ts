@@ -273,6 +273,7 @@ test("g-163 判据方块按有序 key 渲染并支持即时同步", () => {
 
 test("g-185 判据 checklist 整行切换、子控件隔离与键盘/命中区源契约", () => {
   const actions = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  assert.match(actions, /className: "dg-criteria-row"/);
   assert.match(actions, /tabIndex: 0/);
   assert.match(actions, /role: "checkbox"/);
   assert.match(actions, /"aria-checked": done/);
