@@ -332,13 +332,11 @@
               onChange: (e) => set(["executor", "mode"], e.target.value),
             },
               h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（继承 profile 全局 / 系统默认：标准模式）"),
-              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整编码与工具能力"),
-              h("option", { value: "ptc", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "PTC 模式 (ptc) - Code Mode 程序化工具调用"),
-              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "极简模式 (minimal) - 受控 bash + str_replace 双工具"),
-              h("option", { value: "cordis", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "创造模式 (cordis) - preset 组装与插件扩展指导"))),
+              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整工具能力 + 专属 Persona"),
+              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "极简模式 (minimal) - 受控 6 工具物理过滤 (graph-minimal)"))),
           h("div", { style: { ...S.meta, marginTop: 4 } },
             catReady
-              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；执行模式支持标准/PTC/极简/创造模式。"
+              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；执行模式支持标准模式与极简工具过滤模式。"
               : (catalog.status === "loading" ? "正在读取当前 Host 的合法 provider/model 目录…" : "当前 Host 目录不可用（llm.providers/models 缺失）——已存值保留可选、仍可保存。")),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),

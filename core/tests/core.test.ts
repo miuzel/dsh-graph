@@ -56,18 +56,18 @@ function tmpRoot(): string {
 // ---- g-191 controlled subagent modes, toolFilter and default persona ----
 
 test("g-191 模式枚举与优先级：单次覆盖 > workspace > profile > 系统默认", () => {
-  assert.equal(normalizeSubagentMode(" PTC "), "ptc");
+  assert.equal(normalizeSubagentMode(" MINIMAL "), "minimal");
   assert.equal(normalizeSubagentMode("arbitrary-command"), null);
-  assert.deepEqual(resolveSubagentMode("minimal", "ptc", "cordis"), { mode: "minimal", source: "override", prompt: "【极简模式执行策略】仅使用基础编辑与命令工具完成修改，保持极简上下文与紧凑输出，不展开冗余调研。" });
-  assert.equal(resolveSubagentMode(null, "ptc", "cordis").source, "project");
-  assert.equal(resolveSubagentMode(null, null, "cordis").source, "global");
+  assert.deepEqual(resolveSubagentMode("minimal", "standard", "minimal"), { mode: "minimal", source: "override", prompt: "【极简模式执行策略】仅提供受控 6 项基础工具（bash、edit、read、write、graph_report_status、graph_transition），保持紧凑输出，不展开冗余高级调用。" });
+  assert.equal(resolveSubagentMode(null, "minimal", "standard").source, "project");
+  assert.equal(resolveSubagentMode(null, null, "minimal").source, "global");
   assert.equal(resolveSubagentMode("invalid", "also-invalid", "bad").mode, "standard");
 });
 
 test("g-191 project.yaml 模式只接受受控值，非法值安全回退且写入拒绝", () => {
   const root = tmpRoot();
-  writeFileSync(join(root, "project.yaml"), "executor:\n  mode: PTC\n");
-  assert.equal(readProjectConfig(root).executor.mode, "ptc");
+  writeFileSync(join(root, "project.yaml"), "executor:\n  mode: MINIMAL\n");
+  assert.equal(readProjectConfig(root).executor.mode, "minimal");
   writeFileSync(join(root, "project.yaml"), "executor:\n  mode: arbitrary-command\n");
   assert.equal(readProjectConfig(root).executor.mode, null);
   assert.throws(() => writeProjectConfig(root, { executor: { mode: "arbitrary-command" } }, "human:gui"), GraphError);
@@ -76,8 +76,7 @@ test("g-191 project.yaml 模式只接受受控值，非法值安全回退且写�
 test("g-191: minimal 模式生成受控工具过滤，不影响 standard 模式", () => {
   assert.deepEqual(toolFilterForMode("minimal"), { allow: ["bash", "edit", "read", "write", "graph_report_status", "graph_transition"] });
   assert.equal(toolFilterForMode("standard"), undefined);
-  assert.equal(toolFilterForMode("ptc"), undefined);
-  assert.equal(toolFilterForMode("cordis"), undefined);
+
 });
 
 test("g-191: buildSubagentDefaultPersona 包含纪律与目标参数", () => {

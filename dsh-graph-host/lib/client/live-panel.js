@@ -216,9 +216,7 @@
       const modelChoices = currentGroup?.models ?? [];
       const modeList = opts?.modes ?? [
         { id: "standard", name: "标准模式" },
-        { id: "ptc", name: "PTC 模式" },
-        { id: "minimal", name: "极简模式" },
-        { id: "cordis", name: "创造模式" },
+        { id: "minimal", name: "极简模式 (6工具过滤)" },
       ];
 
       const relaunch = async () => {

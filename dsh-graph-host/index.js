@@ -160,7 +160,7 @@ function buildGraphSettingsSchema(z) {
   return z.object({
     subagentProvider: z.string().default(""),
     subagentModel: z.string().default(""),
-    subagentMode: z.union(["", "standard", "ptc", "minimal", "cordis"]).default(""),
+    subagentMode: z.union(["", "standard", "minimal"]).default(""),
     subagentPrompt: z.string().default(""),
   });
 }

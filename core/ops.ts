@@ -465,33 +465,21 @@ export function readSupervisorStatusAt(rootOrEvents: string | GraphEvent[]): num
 }
 
 // ===== g-191：受控子代理模式枚举与策略定义 =====
-export const SUBAGENT_MODES = ["standard", "ptc", "minimal", "cordis"] as const;
+export const SUBAGENT_MODES = ["standard", "minimal"] as const;
 export type SubagentMode = typeof SUBAGENT_MODES[number];
 
 export const SUBAGENT_MODE_SPECS: Record<SubagentMode, { id: SubagentMode; name: string; description: string; order: number }> = {
   standard: {
     id: "standard",
-    name: "标准模式",
-    description: "功能完整的编码 Agent，支持文件编辑、Shell、检索、Skills、目标与子代理等完整能力。",
+    name: "标准模式 (standard)",
+    description: "功能完整的编码 Agent，支持完整开发工具与能力（继承环境 Persona 覆盖）。",
     order: 1,
-  },
-  ptc: {
-    id: "ptc",
-    name: "PTC 模式",
-    description: "具备标准模式能力，并通过 Code Mode/PTC 程序化工具调用组合多步操作。",
-    order: 2,
   },
   minimal: {
     id: "minimal",
-    name: "极简模式",
-    description: "受控基础工具 Agent，仅提供受控 bash、edit、read、write、graph_report_status、graph_transition 工具，避免高级工具误导与过度递归。",
-    order: 3,
-  },
-  cordis: {
-    id: "cordis",
-    name: "创造模式",
-    description: "用于创建与调试 Agent preset：标准能力加上运行时检查与 preset 创作指导。",
-    order: 4,
+    name: "极简模式 (minimal)",
+    description: "受控轻量工具 Agent，仅提供受控 bash、edit、read、write、graph_report_status、graph_transition 6 项基础工具，物理拦截冗余工具与死循环误导。",
+    order: 2,
   },
 };
 
@@ -547,9 +535,7 @@ export function normalizeSubagentMode(mode: unknown): SubagentMode | null {
 /** 模式策略提示词片段（仅影响执行策略/提示参数，不越过凭据/provider边界，不接受命令注入） */
 export const SUBAGENT_MODE_PROMPTS: Record<SubagentMode, string> = {
   standard: "",
-  ptc: "【PTC 模式执行策略】优先通过代码/脚本化方式（Code Mode / Programmatic Tool Calling）批量组合与执行工具操作，减少单步交互往返。",
-  minimal: "【极简模式执行策略】仅使用基础编辑与命令工具完成修改，保持极简上下文与紧凑输出，不展开冗余调研。",
-  cordis: "【创造模式执行策略】在标准执行基础上，关注 preset 组装与插件扩展契约，必要时输出结构化元数据与调试信息。",
+  minimal: "【极简模式执行策略】仅提供受控 6 项基础工具（bash、edit、read、write、graph_report_status、graph_transition），保持紧凑输出，不展开冗余高级调用。",
 };
 
 /** 读取 project.yaml 的 executor.provider/model/mode。

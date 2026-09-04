@@ -262,13 +262,11 @@
       };
       const setField = (k, v) => setDraft({ ...draftValue, [k]: v });
 
-      // g-191：受控子代理模式枚举
+      // g-191：受控子代理执行模式（当前支持标准模式与带工具物理过滤的极简模式）
       const modeOptions = [
         { id: "", name: "（继承系统默认：标准模式）", desc: "未配置时默认使用标准模式。" },
-        { id: "standard", name: "标准模式 (standard)", desc: "功能完整的编码 Agent，支持文件、Shell、检索与子代理。" },
-        { id: "ptc", name: "PTC 模式 (ptc)", desc: "具备标准能力，优先以 Code Mode / PTC 程序化工具调用组合多步操作。" },
-        { id: "minimal", name: "极简模式 (minimal)", desc: "极简双工具 Agent，仅提供受控 bash 与 str_replace_editor。" },
-        { id: "cordis", name: "创造模式 (cordis)", desc: "用于创建与调试 preset：标准能力加上运行时检查与创作指导。" },
+        { id: "standard", name: "标准模式 (standard) - 完整工具能力 + 专属 Persona 覆盖", desc: "功能完整的编码 Agent，覆盖标准工具池并自动注入 dsh-graph 纪律 Persona。" },
+        { id: "minimal", name: "极简模式 (minimal) - 严格基础 6 工具过滤 (graph-minimal)", desc: "仅允许 bash、edit、read、write、graph_report_status、graph_transition，物理屏蔽高级工具与误导。" },
       ];
       const curMode = draftValue.subagentMode ?? "";
 

@@ -848,19 +848,19 @@ test("spawn-options：无 llm 服务时容错返回（重新执行选择器数�
 test("start-execution 无 subagents：attempt 本地创建、child_error 上报（带 provider/model 参数不炸）", async () => {
   const { root, routes, goalId } = setup();
   const r = await post(routes, "/api/dsh-graph/start-execution",
-    { goal: goalId, provider: "spawn", model: "deepseek-v4-flash", mode: "ptc" });
+    { goal: goalId, provider: "spawn", model: "deepseek-v4-flash", mode: "minimal" });
   assert.equal(r.code, 200);
   assert.equal(r.body.ok, true);
   assert.ok(r.body.attempt.startsWith("att-"));
   assert.equal(r.body.child_id, null);
   assert.ok(typeof r.body.child_error === "string");
-  assert.equal(r.body.mode, "ptc");
+  assert.equal(r.body.mode, "minimal");
   assert.equal(r.body.mode_source, "override");
   const attemptDoc = loadGoal(join(dirname(findGoalFile(root, goalId)), "attempts", r.body.attempt, "attempt.md"));
-  assert.equal(attemptDoc.meta.mode, "ptc");
+  assert.equal(attemptDoc.meta.mode, "minimal");
   assert.equal(attemptDoc.meta.mode_source, "override");
   const events = readEvents(root);
-  assert.ok(events.some((e) => e.event === "attempt.started" && e.goal === goalId && e.details?.mode === "ptc"));
+  assert.ok(events.some((e) => e.event === "attempt.started" && e.goal === goalId && e.details?.mode === "minimal"));
 });
 
 // ===== g-148：GUI ready→in_progress force transition + start-execution 成功链回归 =====

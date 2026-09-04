@@ -1590,9 +1590,7 @@ window.__ModuleLoader__.load({
       const modelChoices = currentGroup?.models ?? [];
       const modeList = opts?.modes ?? [
         { id: "standard", name: "标准模式" },
-        { id: "ptc", name: "PTC 模式" },
-        { id: "minimal", name: "极简模式" },
-        { id: "cordis", name: "创造模式" },
+        { id: "minimal", name: "极简模式 (6工具过滤)" },
       ];
 
       const relaunch = async () => {
@@ -6745,13 +6743,11 @@ window.__ModuleLoader__.load({
               onChange: (e) => set(["executor", "mode"], e.target.value),
             },
               h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（继承 profile 全局 / 系统默认：标准模式）"),
-              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整编码与工具能力"),
-              h("option", { value: "ptc", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "PTC 模式 (ptc) - Code Mode 程序化工具调用"),
-              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "极简模式 (minimal) - 受控 bash + str_replace 双工具"),
-              h("option", { value: "cordis", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "创造模式 (cordis) - preset 组装与插件扩展指导"))),
+              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整工具能力 + 专属 Persona"),
+              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "极简模式 (minimal) - 受控 6 工具物理过滤 (graph-minimal)"))),
           h("div", { style: { ...S.meta, marginTop: 4 } },
             catReady
-              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；执行模式支持标准/PTC/极简/创造模式。"
+              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；执行模式支持标准模式与极简工具过滤模式。"
               : (catalog.status === "loading" ? "正在读取当前 Host 的合法 provider/model 目录…" : "当前 Host 目录不可用（llm.providers/models 缺失）——已存值保留可选、仍可保存。")),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
@@ -7055,13 +7051,11 @@ window.__ModuleLoader__.load({
       };
       const setField = (k, v) => setDraft({ ...draftValue, [k]: v });
 
-      // g-191：受控子代理模式枚举
+      // g-191：受控子代理执行模式（当前支持标准模式与带工具物理过滤的极简模式）
       const modeOptions = [
         { id: "", name: "（继承系统默认：标准模式）", desc: "未配置时默认使用标准模式。" },
-        { id: "standard", name: "标准模式 (standard)", desc: "功能完整的编码 Agent，支持文件、Shell、检索与子代理。" },
-        { id: "ptc", name: "PTC 模式 (ptc)", desc: "具备标准能力，优先以 Code Mode / PTC 程序化工具调用组合多步操作。" },
-        { id: "minimal", name: "极简模式 (minimal)", desc: "极简双工具 Agent，仅提供受控 bash 与 str_replace_editor。" },
-        { id: "cordis", name: "创造模式 (cordis)", desc: "用于创建与调试 preset：标准能力加上运行时检查与创作指导。" },
+        { id: "standard", name: "标准模式 (standard) - 完整工具能力 + 专属 Persona 覆盖", desc: "功能完整的编码 Agent，覆盖标准工具池并自动注入 dsh-graph 纪律 Persona。" },
+        { id: "minimal", name: "极简模式 (minimal) - 严格基础 6 工具过滤 (graph-minimal)", desc: "仅允许 bash、edit、read、write、graph_report_status、graph_transition，物理屏蔽高级工具与误导。" },
       ];
       const curMode = draftValue.subagentMode ?? "";
 
