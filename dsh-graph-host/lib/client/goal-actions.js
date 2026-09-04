@@ -367,30 +367,12 @@
             onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose,
           }) : null,
         ),
-        // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
+        // g-109 判据：主管有异议 → 显示异议说明；确认列绝不开放直接强制接受入口
         isReview && acceptState === "objection"
           ? h("div", { key: "obj", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
               h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
                 "⚠️ 主管已提出异议"),
               objectionText ? h("div", { style: S.meta }, objectionText) : null,
-              false ? [
-                    h("input", {
-                      style: { ...S.promptInput, flex: 1 },
-                      value: forceReason, placeholder: "强制接受理由（可选，将记入事件）…",
-                      onChange: (e) => setForceReason(e.target.value),
-                      onKeyDown: (e) => { if (e.key === "Enter") doForceAccept(); },
-                    }),
-                    h("div", { style: { display: "flex", gap: 6 } },
-                      h("button", {
-                        style: { ...S.btnAccept, fontSize: 12 }, className: "dg-btn-accept",
-                        disabled: loading, onClick: doForceAccept,
-                      }, "确认强制接受"),
-                      h("button", {
-                        style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
-                        disabled: loading, onClick: () => { setForceMode(false); setForceReason(""); },
-                      }, "取消")),
-                  ]
-                : null,
             )
           : null,
         mode === "feedback"

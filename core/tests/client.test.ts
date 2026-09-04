@@ -2678,4 +2678,25 @@ test("g-189 worktree 发现与弹窗展示源契约", () => {
   assert.match(modal, /lastWorktreesRef/);
 });
 
+// g-186：确认列弹窗接受交付入口源契约（可见性、单一状态提示、主管通信闭环）。
+test("g-186 review 接受交付入口：单一状态提示、不含‘裁决’、排队通知主管会话", () => {
+  const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  const constants = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(actions, /isReview && acceptState === "none"/);
+  assert.match(actions, /"✅ 接受"/);
+  assert.match(actions, /isReview && acceptState === "pending"/);
+  assert.match(actions, /"⏳ 已请求主管复核，等待响应"/);
+  assert.doesNotMatch(actions, /等待裁决/);
+  assert.match(actions, /isReview && acceptState === "resolved"/);
+  assert.match(actions, /"✅ 交付已生效"/);
+  assert.match(actions, /session\.prompt/);
+  assert.match(actions, /【负责人交付复核请求】/);
+  assert.match(actions, /"queue"/);
+  assert.match(constants, /"review\.requested": "请求主管复核"/);
+  assert.match(constants, /"review\.objected": "主管提出异议"/);
+  assert.match(bundle, /【负责人交付复核请求】/);
+  assert.doesNotMatch(bundle, /等待主管裁决/);
+});
+
 
