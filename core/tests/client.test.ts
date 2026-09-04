@@ -2694,6 +2694,7 @@ test("g-186 review 接受交付入口：单一状态提示、不含‘裁决’�
   assert.doesNotMatch(actions, /等待裁决/);
   assert.match(actions, /isReview && acceptState === "resolved"/);
   assert.match(actions, /"✅ 交付已生效"/);
+  assert.match(actions, /confirm\(/);
   assert.match(actions, /session\.prompt/);
   assert.match(actions, /【负责人交付复核请求】/);
   assert.match(actions, /"queue"/);

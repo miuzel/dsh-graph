@@ -229,8 +229,9 @@
       }
       const objectionText = acceptState === "objection" ? evs[lastObj]?.details?.objection : null;
 
-      // 接受：默认经主管 Agent 复核（review.requested → 主管裁决）
+      // 接受：默认经主管 Agent 复核（review.requested → 主管复核收口）
       const doAccept = async () => {
+        if (!confirm(`确认接受目标「${goalId}」的交付成果？\n\n此操作将请求主管会话完成最终复核，并执行交付收口。`)) return;
         setLoading(true);
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/accept"), {
