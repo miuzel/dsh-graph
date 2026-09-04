@@ -2705,4 +2705,23 @@ test("g-186 review 接受交付入口：单一状态提示、不含‘裁决’�
   assert.doesNotMatch(bundle, /等待主管裁决/);
 });
 
+// g-192：主管会话标题栏标签源契约与槽位注册测试。
+test("g-192 标题栏主管徽章源契约：conversation.session.header.actions 槽位与徽章组件", () => {
+  const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
+  const bar = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/supervisor-bar.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  assert.match(plugin, /ctx\.slots\.inject\("conversation\.session\.header\.actions"/);
+  assert.match(plugin, /id: "dsh-graph-supervisor-badge"/);
+  assert.match(plugin, /order: -9/);
+  assert.match(bar, /function SupervisorHeaderBadge/);
+  assert.match(bar, /🧭 GRAPH主管/);
+  assert.match(bar, /sessionId !== supervisorSession/);
+  assert.match(bar, /role: "status"/);
+  assert.match(host, /path: "\/api\/dsh-graph\/supervisor-session"/);
+  assert.match(bundle, /function SupervisorHeaderBadge/);
+  assert.match(bundle, /dsh-graph-supervisor-badge/);
+  assert.match(bundle, /🧭 GRAPH主管/);
+});
+
 
