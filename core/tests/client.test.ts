@@ -2642,8 +2642,8 @@ test("g-189 REST fixture：标准 attempt worktree 可发现且 foreign 分支�
   execFileSync("git", ["-C", ws, "add", "."]);
   execFileSync("git", ["-C", ws, "commit", "-qm", "fixture"]);
   const attId = startAttempt(join(ws, ".dsh-graph"), goalId, { executor: "test", actor: "test" });
-  const worktree = join(ws, ".worktrees", `${goalId}-att-001`);
-  execFileSync("git", ["-C", ws, "worktree", "add", "-q", "-b", `${goalId}-att-001`, worktree]);
+  const worktree = join(ws, ".worktrees", `${goalId}-att-01`);
+  execFileSync("git", ["-C", ws, "worktree", "add", "-q", "-b", `${goalId}-att-01`, worktree]);
   const routes = new Map<string, any>();
   const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
   const ctx: any = { get: (name: string) => name === "webServer" ? webServer : undefined, effect: (fn: any) => fn(), webServer, tools: { register: () => () => {}, get: () => ({}) } };
@@ -2651,7 +2651,7 @@ test("g-189 REST fixture：标准 attempt worktree 可发现且 foreign 分支�
   const req: any = fakeRequest("GET", null); req.url = `/api/dsh-graph/goal?id=${goalId}&workspace=${encodeURIComponent(ws)}`;
   const res = fakeResponse(); routes.get("/api/dsh-graph/goal")(req, res);
   assert.equal(res._code, 200); assert.equal(res._body.attempts[0].id, attId);
-  assert.equal(res._body.worktrees.items[attId].path, `.worktrees/${goalId}-att-001`);
+  assert.equal(res._body.worktrees.items[attId].path, `.worktrees/${goalId}-att-01`);
 });
 
 // g-189：worktree 发现保持只读、canonical workspace 与路径安全边界。
@@ -2663,7 +2663,8 @@ test("g-189 worktree 发现与弹窗展示源契约", () => {
   assert.match(host, /relative\(canonical, actual\)/);
   assert.match(host, /rel !== `\.worktrees\/\${expected}`/);
   assert.match(host, /realpathSync/);
-  assert.match(host, /\d{2,3}/);
+  assert.match(host, /padStart\(2, "0"\)/);
+  assert.match(host, /padStart\(3, "0"\)/);
   assert.match(host, /expectedBranch/);
   assert.match(host, /WORKTREE_CACHE_TTL/);
   assert.match(host, /worktreeCache\.get/);
@@ -2672,6 +2673,9 @@ test("g-189 worktree 发现与弹窗展示源契约", () => {
   assert.match(host, /worktreeCache\.keys\(\)\.next/);
   assert.match(host, /未创建 worktree|worktree 列表不可用/);
   assert.match(modal, /AttemptWorktrees/);
+  assert.match(modal, /useState\(false\)/);
+  assert.match(modal, /expanded \? "▲" : "▼"/);
+  assert.match(modal, /未创建 worktree/);
   assert.match(modal, /textOverflow: "ellipsis"/);
   assert.match(modal, /复制安全相对路径/);
   assert.match(modal, /已移除/);

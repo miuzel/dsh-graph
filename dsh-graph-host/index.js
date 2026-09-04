@@ -1315,18 +1315,35 @@ export function apply(ctx, config) {
         const id = String(attempt?.id ?? "");
         if (!id || seenAttemptIds.has(id)) continue;
         seenAttemptIds.add(id);
-        const suffix = id.match(/^att-(\d{2,3})$/)?.[1];
-        const expected = suffix ? `${prefix}${suffix}` : null;
-        const expectedBranch = expected ? `refs/heads/${expected}` : null;
-        const entry = entries.find((x) => basename(x.path) === expected && x.branch === expectedBranch && !usedPaths.has(x.path));
-        if (!entry || entry.prunable || !entry.head) continue;
-        // Persisted attempt evidence must agree with the live Git record.
-        const evidence = attempt.worktree;
-        if (!evidence || typeof evidence !== "object") continue;
-        if (evidence.relative_path && evidence.relative_path !== `.worktrees/${expected}`) continue;
-        if (evidence.canonical_root && realpathSync(resolve(evidence.canonical_root)) !== (graphRoot ? realpathSync(resolve(graphRoot)) : canonical)) continue;
-        if (evidence.branch && evidence.branch !== expectedBranch && evidence.branch !== expected) continue;
-        if (evidence.head && evidence.head !== entry.head) continue;
+        const match = id.match(/^att-(\d+)$/);
+        if (!match) continue;
+        const numeric = Number(match[1]);
+        if (!Number.isSafeInteger(numeric)) continue;
+        const raw = match[1];
+        const names = [...new Set([
+          `${prefix}${String(numeric).padStart(2, "0")}`,
+          `${prefix}${String(numeric).padStart(3, "0")}`,
+          `${prefix}${raw}`,
+        ])];
+        const evidence = attempt.worktree && typeof attempt.worktree === "object" ? attempt.worktree : null;
+        if (evidence?.relative_path) {
+          const evidenceName = basename(String(evidence.relative_path));
+          if (evidenceName) names.push(evidenceName);
+        }
+        const matchEntry = names.map((name) => ({ name, branch: `refs/heads/${name}` }))
+          .map(({ name, branch }) => ({ name, entry: entries.find((x) => basename(x.path) === name && x.branch === branch && !usedPaths.has(x.path)) }))
+          .find(({ entry }) => entry);
+        if (!matchEntry) continue;
+        const expected = matchEntry.name;
+        const expectedBranch = `refs/heads/${expected}`;
+        const entry = matchEntry.entry;
+        if (entry.prunable || !entry.head) continue;
+        // Evidence is optional for historical attempts, but any recorded fields must agree.
+        if (evidence?.branch) {
+          const evidenceBranch = basename(String(evidence.branch).replace(/^refs\/heads\//, ""));
+          if (!names.includes(evidenceBranch)) continue;
+        }
+        if (evidence?.head && evidence.head !== entry.head) continue;
         // Cross-check both Git's live record and the attempt evidence. A same-named
         // nested/foreign path is never accepted: the relative form must be exact.
         let actual;
