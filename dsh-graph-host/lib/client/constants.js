@@ -33,7 +33,7 @@
       "goal.created": "创建目标", "goal.planned": "完成规划", "criteria.confirmed": "确认判据",
       "criteria.updated": "更新判据", // g-170
       "goal.transition": null, "attempt.started": "派发执行", "attempt.status_reported": null,
-      "completion.claimed": "声明完成", "review.requested": null, "review.objected": null, "review.passed": "评审通过", "review.failed": "评审未通过",
+      "completion.claimed": "声明完成", "review.passed": "评审通过", "review.failed": "评审未通过",
       "goal.moved": "排期移动", "card.created": "创建卡片", "card.filled": "填充卡片",
       "card.reviewed": "复核卡片", "evidence.added": "登记证据", "memory.promoted": "沉淀记忆",
       "version.created": "创建版本", "version.released": "发布版本",
@@ -51,7 +51,7 @@
     const MEANINGFUL = new Set([
       "goal.transition", "goal.amended", "scope.note", "criteria.confirmed",
       "criteria.updated", // g-170
-      "completion.claimed", "review.requested", "review.objected", "review.passed", "review.failed", "attempt.started",
+      "completion.claimed", "review.passed", "review.failed", "attempt.started",
       "goal.moved", "goal.created", "attempt.status_reported", "goal.renamed",
       "goal.type_changed", // g-158
       "goal.directive_set", "goal.comment_added",
@@ -65,12 +65,6 @@
       let what = EVENT_LABEL[e.event];
       if (what === null || what === undefined) {
         if (e.event === "goal.transition") what = `状态流转：${STATUS_LABEL[d.from] ?? d.from} → ${STATUS_LABEL[d.to] ?? d.to}`;
-        else if (e.event === "review.requested") {
-          const stage = STATUS_LABEL[d.targetStage] ?? d.targetStage ?? "未知阶段";
-          const snapshot = String(d.snapshot ?? "").trim();
-          what = `请求主管复核（${stage}）${d.what ? ` · ${d.what}` : ""}${snapshot ? `：${snapshot}` : ""}`;
-        }
-        else if (e.event === "review.objected") what = `主管提出异议：${d.objection ?? "（无内容）"}`;
         else if (e.event === "attempt.status_reported") what = `汇报：${d.status ?? ""}`;
         else if (e.event === "goal.amended") what = `修订：${d.note ?? ""}`;
         else if (e.event === "goal.renamed") what = `重命名：${d.old_title ?? ""} → ${d.new_title ?? ""}`;
