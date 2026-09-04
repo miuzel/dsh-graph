@@ -225,17 +225,19 @@ export function readRulesVersion(root: string): string | null {
 }
 
 /** 读取 project.yaml 的 supervisor.session（看板顶部状态栏数据源，g-108）。
- *  零依赖行扫描：supervisor: 块内的 session: 标量，去引号与行尾注释；缺失返回 null。 */
+ *  使用结构化 YAML 解析；格式错误、重复键、类型不符均 fail-closed。 */
 export function readSupervisorSession(root: string): string | null {
   const file = join(root, "project.yaml");
   if (!existsSync(file)) return null;
-  const text = readFileSync(file, "utf8");
-  const m = text.match(/^supervisor:\s*\n(?:[ \t].*\n)*?[ \t]+session:\s*"?([^\s"#]+)"?/m);
-  return m ? m[1] : null;
+  try {
+    const value = parseYaml(readFileSync(file, "utf8"), { strict: true, uniqueKeys: true });
+    const session = value?.supervisor?.session;
+    return typeof session === "string" && session.trim() ? session.trim() : null;
+  } catch {
+    return null;
+  }
 }
-
 /** 写 project.yaml 的 supervisor.session（g-117）：原子写（临时文件 + rename）、事件先行。
- *  零依赖行编辑：无 supervisor 块则新建；有块无 session 键则插入（跟随块内已有缩进）；
  *  有则替换值并保留行尾注释与其他键。事件：supervisor.claimed（actor 为调用者）。
  *  幂等由 claimSupervisor 把关（值未变不重复记事件）；本 op 每次调用都写 + 记事件。
  *  g-207：迁移到事务模板——锁保护下读-改-写，原子文件操作，事件先行。 */

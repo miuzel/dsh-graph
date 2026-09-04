@@ -1366,6 +1366,21 @@ export function apply(ctx, config) {
   // webServer 路由定义（惰性：webServer 服务出现后才注册；headless 组合下静默跳过）
   const httpRoutes = () => [
     {
+      path: "/api/dsh-graph/supervisor-session",
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const workspace = workspaceOf(req);
+          if (typeof workspace !== "string" || !workspace.trim()) return json(res, 400, { error: "missing workspace" });
+          const canonical = resolveCanonicalRoot(config, resolve(workspace));
+          const session = readSupervisorSession(canonical.root);
+          return json(res, 200, { supervisorSession: session });
+        } catch (e) {
+          return json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
       path: "/api/dsh-graph",
       handler: (_req, res) => {
         try {

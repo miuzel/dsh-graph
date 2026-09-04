@@ -119,6 +119,12 @@
         // workspaces 服务经 ctx.get(name) 可选查找即可取到（runner 的 ctx.get 方法不要求 inject 声明，
         // 注入门禁只拦 ctx.workspaces 属性访问；workspaces 由 client-runtime `ctx.reflect.provide` 提供）
         workspacesRt = ctx.get?.("workspaces") ?? null;
+        ctx.slots.inject("conversation.session.header.actions", () =>
+          ctx.slots.register(
+            { name: "conversation.session.header.actions", id: "dsh-graph-supervisor-badge", order: -9 },
+            (props) => h(SupervisorHeaderBadge, props),
+          ),
+        );
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
             { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: "看板" },

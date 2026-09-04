@@ -1827,6 +1827,27 @@ window.__ModuleLoader__.load({
     // 会话 id 来自 board 端点下发的 supervisorSession（project.yaml），不硬编码。
     // g-a92e1406 判据 3① 扩展：statusLine 传 supervisor 自己的 status_line（事件流最新一条），
     // 运行中由 LiveStrip 走 StatusLine 带动画（流动背景 + 图标 pulse）。
+    // g-192：仅当当前查看会话与后端受保护 supervisor.session 相等时显示。
+    function SupervisorHeaderBadge(props) {
+      const [supervisorSession, setSupervisorSession] = React.useState(null);
+      const sessionId = props?.sessionId ?? props?.session?.sessionId ?? props?.id ?? null;
+      const workspace = props?.workspace ?? props?.cwd ?? props?.session?.cwd ?? props?.session?.header?.cwd ?? (typeof resolveWorkspaceOfSession === "function" ? resolveWorkspaceOfSession(sessionId) : null);
+      React.useEffect(() => {
+        let cancelled = false;
+        if (!sessionId || !workspace) { setSupervisorSession(null); return () => { cancelled = true; }; }
+        const url = "/api/dsh-graph/supervisor-session?workspace=" + encodeURIComponent(workspace);
+        fetch(url, { method: "GET", credentials: "same-origin" }).then((res) => res.ok ? res.json() : null)
+          .then((data) => { if (!cancelled) setSupervisorSession(typeof data?.supervisorSession === "string" ? data.supervisorSession : null); })
+          .catch(() => { if (!cancelled) setSupervisorSession(null); });
+        return () => { cancelled = true; };
+      }, [sessionId, workspace]);
+      if (!sessionId || !supervisorSession || sessionId !== supervisorSession) return null;
+      return h("span", {
+        role: "status", title: "当前会话是 dsh-graph 主管会话", "aria-label": "当前会话是 dsh-graph 主管会话",
+        style: { display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", borderRadius: 6, padding: "2px 7px", fontSize: 12, lineHeight: 1.4, flexShrink: 0, background: "var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))", color: "var(--dsw-alias-label-secondary, inherit)" },
+      }, "🧭 GRAPH主管");
+    }
+
     function SupervisorBar(props) {
       const { model, modelErr } = useSessionModel(props.id, null);
       const jump = () => {
@@ -7248,6 +7269,12 @@ window.__ModuleLoader__.load({
         // workspaces 服务经 ctx.get(name) 可选查找即可取到（runner 的 ctx.get 方法不要求 inject 声明，
         // 注入门禁只拦 ctx.workspaces 属性访问；workspaces 由 client-runtime `ctx.reflect.provide` 提供）
         workspacesRt = ctx.get?.("workspaces") ?? null;
+        ctx.slots.inject("conversation.session.header.actions", () =>
+          ctx.slots.register(
+            { name: "conversation.session.header.actions", id: "dsh-graph-supervisor-badge", order: -9 },
+            (props) => h(SupervisorHeaderBadge, props),
+          ),
+        );
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
             { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: "看板" },

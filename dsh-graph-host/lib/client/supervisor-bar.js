@@ -1,3 +1,24 @@
+    // g-192：仅当当前查看会话与后端受保护 supervisor.session 相等时显示。
+    function SupervisorHeaderBadge(props) {
+      const [supervisorSession, setSupervisorSession] = React.useState(null);
+      const sessionId = props?.sessionId ?? props?.session?.sessionId ?? props?.id ?? null;
+      const workspace = props?.workspace ?? props?.cwd ?? props?.session?.cwd ?? props?.session?.header?.cwd ?? (typeof resolveWorkspaceOfSession === "function" ? resolveWorkspaceOfSession(sessionId) : null);
+      React.useEffect(() => {
+        let cancelled = false;
+        if (!sessionId || !workspace) { setSupervisorSession(null); return () => { cancelled = true; }; }
+        const url = "/api/dsh-graph/supervisor-session?workspace=" + encodeURIComponent(workspace);
+        fetch(url, { method: "GET", credentials: "same-origin" }).then((res) => res.ok ? res.json() : null)
+          .then((data) => { if (!cancelled) setSupervisorSession(typeof data?.supervisorSession === "string" ? data.supervisorSession : null); })
+          .catch(() => { if (!cancelled) setSupervisorSession(null); });
+        return () => { cancelled = true; };
+      }, [sessionId, workspace]);
+      if (!sessionId || !supervisorSession || sessionId !== supervisorSession) return null;
+      return h("span", {
+        role: "status", title: "当前会话是 dsh-graph 主管会话", "aria-label": "当前会话是 dsh-graph 主管会话",
+        style: { display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", borderRadius: 6, padding: "2px 7px", fontSize: 12, lineHeight: 1.4, flexShrink: 0, background: "var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))", color: "var(--dsw-alias-label-secondary, inherit)" },
+      }, "🧭 GRAPH主管");
+    }
+
     function SupervisorBar(props) {
       const { model, modelErr } = useSessionModel(props.id, null);
       const jump = () => {
