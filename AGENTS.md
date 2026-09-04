@@ -244,3 +244,21 @@ Review 子代理按本项目 **owner-trusted、单机单用户本地 UI** 威胁
 
 - 共享事务 / 错误处理与 REST schema middleware 优先于各功能重复修复；
 - 新增功能应先复用现有中间件，再考虑局部补丁。
+
+## Subagent Architecture & Communication Guidelines
+
+### 1. 主管主动风险预警原则（First-time Risk Confirmation）
+
+- **禁止被动等待负责人提醒**：主管在分析需求、设计方案或评估实现时，一旦发现设计可能引发潜在副作用（如：配置缺失导致子代理失去控制、环境混淆、无法停轮、状态滞留、无障碍违背等），**必须第一时间主动向负责人预警并提出建议方案进行确认**，严禁知情不报或等到负责人排查出异常时才被动响应。
+
+### 2. Persona 与框架协同纪律双层解耦原则（Persona vs Framework Discipline）
+
+- **职责切分**：
+  - **Persona / Preset（管角色与专业风格）**：定义子代理的专业能力、思维方式与回答风格（如：代码审查专家、测试工程师、极简辅助等），允许用户或主管任意切换与自定义安装。
+  - **Framework Discipline（管看板协同纪律与底线契约）**：定义子代理在 dsh-graph 体系内的动作约束与状态报告机制（如：每动作通过 `graph_report_status` 更新 `status_line`；开工迁 `in_progress`，完工迁 `review`，遇阻迁 `blocked`；绝不自行迁 `delivered`）。
+- **底线铁律**：
+  - **框架协同纪律属于平台底线约束，绝不能仅写在特定 Persona 内**！
+  - 无论子代理切换至何种 Persona、无论是否为极简模式，执行派发的 prompt 模板中**必须无条件内嵌框架协同纪律段**，确保任何子代理都严格遵守看板流程、实时汇报进展、遵守 Human Gate 停轮审核。
+  - **极简模式（minimal / graph-minimal）适配**：
+    - 极简模式通过物理工具白名单过滤（`toolFilter: { allow: ["bash", "edit", "read", "write", "graph_report_status", "graph_transition"] }`）实现轻量受控；
+    - 该 6 项基础工具集完全覆盖了框架协同纪律所需的全部接口，保证极简子代理既不被高级工具误导，又能完整履行看板汇报与状态流转职责。
