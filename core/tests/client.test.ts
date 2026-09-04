@@ -271,6 +271,21 @@ test("g-163 判据方块按有序 key 渲染并支持即时同步", () => {
   assert.match(actions, /与 core\/model\.ts criteriaItems 同源/);
 });
 
+test("g-185 判据 checklist 整行切换、子控件隔离与键盘/命中区源契约", () => {
+  const actions = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  assert.match(actions, /tabIndex: 0/);
+  assert.match(actions, /role: "checkbox"/);
+  assert.match(actions, /"aria-checked": done/);
+  assert.match(actions, /onClick: \(e\) => \{/);
+  assert.match(actions, /e\.target\.closest\?\.\("button,input,textarea,a,select"\)/);
+  assert.match(actions, /onKeyDown: \(e\) => \{/);
+  assert.match(actions, /e\.key !== "Enter" && e\.key !== " "/);
+  assert.match(actions, /onClick: \(e\) => e\.stopPropagation\(\)/);
+  assert.match(actions, /width: 20, height: 20/);
+  assert.match(actions, /onKeyDown: \(e\) => \{ if \(e\.key === "Enter"\)/);
+  assert.match(actions, /localStorage\.setItem\(storeKey, JSON\.stringify\(next\)\)/);
+});
+
 test("g-164 released 泳道与 active/version 泳道共用同一动态列模板源契约", () => {
   const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
   // 顶部表头网格与 released 泳道网格必须共用同一份按折叠状态动态计算的列模板，

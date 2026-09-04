@@ -45,14 +45,33 @@
           const done = checked.includes(line);
           const label = line.replace(/^\d+[.、)]\s*/, "");
           return h("div", { key: i, style: { marginBottom: 3 } },
-            h("div", { style: { display: "flex", alignItems: "flex-start", gap: 6 } },
+            h("div", {
+              style: { display: "flex", alignItems: "flex-start", gap: 6, cursor: "pointer" },
+              tabIndex: 0,
+              role: "checkbox",
+              "aria-label": label,
+              "aria-checked": done,
+              onClick: (e) => {
+                // 子控件各自拥有动作，不应把点击冒泡解释为整行切换。
+                if (e.target.closest?.("button,input,textarea,a,select")) return;
+                toggle(line);
+              },
+              onKeyDown: (e) => {
+                if (e.target.closest?.("button,input,textarea,a,select")) return;
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                toggle(line);
+              },
+            },
               h("input", { type: "checkbox", checked: done, onChange: () => toggle(line),
-                           style: { flexShrink: 0, cursor: "pointer", marginTop: 2 } }),
+                           onClick: (e) => e.stopPropagation(),
+                           onKeyDown: (e) => { if (e.key === "Enter") { e.preventDefault(); toggle(line); } },
+                           style: { flexShrink: 0, cursor: "pointer", marginTop: 2, width: 20, height: 20 } }),
               h("span", { style: { flex: 1, minWidth: 0, opacity: done ? 0.55 : 1,
                                    textDecoration: done ? "line-through" : "none" } }, label),
               h("button", { style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
                             title: "针对此判据向执行会话反馈",
-                            onClick: () => { setFbIdx(fbIdx === i ? -1 : i); setFbNote(null); } },
+                            onClick: (e) => { e.stopPropagation(); setFbIdx(fbIdx === i ? -1 : i); setFbNote(null); } },
                 "💬 反馈")),
             fbIdx === i
               ? h("div", { style: { display: "flex", gap: 4, marginTop: 3, marginLeft: 22 } },
