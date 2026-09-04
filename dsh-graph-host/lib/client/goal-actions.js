@@ -209,18 +209,16 @@
       const [fbText, setFbText] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
-      const [forceMode, setForceMode] = React.useState(false); // 异议后是否展开强制接受理由输入
-      const [forceReason, setForceReason] = React.useState("");
       // 反馈预填模板（复制与显示共用，保证一致）
       const prefillText = fbText.trim() ? `【${goalId} 反馈】\n${fbText.trim()}` : "";
 
-      // 接受复核状态（与 core readAcceptStatus 同语义的事件流推断）：
-      // none（未请求）/ pending（已请求待主管裁决）/ objection（主管异议）/ resolved（已生效）
+      // 接受复核状态只关联当前泳道，避免历史阶段请求污染当前 review。
       const evs = events ?? [];
       let lastReq = -1, lastObj = -1, lastRes = -1;
       evs.forEach((e, i) => {
-        if (e.event === "review.requested") lastReq = i;
-        if (e.event === "review.objected") lastObj = i;
+        const targetStage = String(e.details?.targetStage ?? "");
+        if (e.event === "review.requested" && targetStage === String(status)) lastReq = i;
+        if (e.event === "review.objected" && (targetStage === String(status) || (!targetStage && lastReq >= 0))) lastObj = i;
         if (["description.confirmed", "criteria.confirmed", "review.passed"].includes(e.event)) lastRes = i;
       });
       let acceptState = "none";
@@ -241,9 +239,16 @@
             body: JSON.stringify({ goal: goalId }),
           });
           const data = await r.json();
-          if (data.pending) setNote("✅ 已请求主管复核接受，等待主管裁决（无异议即生效）");
-          else if (data.ok) setNote("✅ 已接受");
-          else setNote("⚠️ 接受失败：" + (data.error || "未知错误"));
+          if (data.pending) {
+            try {
+              const rt = sessionsRt ?? appCtx?.get?.("sessions");
+              const session = supervisorSession && rt?.get?.(supervisorSession);
+              if (session?.prompt) await session.prompt([{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }], "queue");
+            } catch {}
+            onRefresh?.();
+          } else if (data.ok) {
+            onRefresh?.();
+          } else setNote("⚠️ 接受失败：" + (data.error || "未知错误"));
         } catch (e) {
           setNote("⚠️ 请求失败：" + String(e?.message ?? e));
         }
@@ -336,37 +341,39 @@
       // 只认非 collect 的 attempt：凡非收集类（agent:collect）的 attempt 都视为活跃执行。
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       // review 及之后阶段、或已有活跃 attempt，不显示执行/反馈按钮
-      const allowed = ["draft", "planning", "collecting", "ready"];
-      if (!allowed.includes(status) || hasActiveAttempt) return null;
+      const isReview = status === "review";
+      const allowed = ["draft", "planning", "collecting", "ready", "review"];
+      if (!allowed.includes(status) || (hasActiveAttempt && !isReview)) return null;
 
       return h("div", { style: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6 } },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-          acceptState === "none"
+          isReview && acceptState === "none"
             ? h("button", {
                 style: { ...S.btnAccept, padding: "4px 12px", fontSize: 13 }, className: "dg-btn-accept",
                 disabled: loading, onClick: doAccept,
               }, "✅ 接受")
-            : acceptState === "pending"
-              ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待裁决")
-              : acceptState === "resolved"
-                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, "✅ 已接受生效")
+            : isReview && acceptState === "pending"
+              ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待响应")
+              : isReview && acceptState === "resolved"
+                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, "✅ 交付已生效")
                 : null,
-          h("button", {
+          !isReview ? h("button", {
             style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
             disabled: loading,
             onClick: startExecution,
-          }, "🚀 执行"),
-          h(DefinitionPolish, {
+          }, "🚀 执行") : null,
+          !isReview ? h(DefinitionPolish, {
             goalId, goalPath: props.goalPath, supervisorSession, status, events, attempts,
             onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose,
-          })),
+          }) : null,
+        ),
         // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
-        acceptState === "objection"
+        isReview && acceptState === "objection"
           ? h("div", { key: "obj", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
               h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
-                "⚠️ 主管异议：" + (objectionText ?? "（无内容）")),
-              forceMode
-                ? [
+                "⚠️ 主管已提出异议"),
+              objectionText ? h("div", { style: S.meta }, objectionText) : null,
+              false ? [
                     h("input", {
                       style: { ...S.promptInput, flex: 1 },
                       value: forceReason, placeholder: "强制接受理由（可选，将记入事件）…",
@@ -383,10 +390,7 @@
                         disabled: loading, onClick: () => { setForceMode(false); setForceReason(""); },
                       }, "取消")),
                   ]
-                : h("button", {
-                    style: { ...S.btnAccept, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn-accept",
-                    onClick: () => setForceMode(true),
-                  }, "强制接受（跳过复核）"),
+                : null,
             )
           : null,
         mode === "feedback"
