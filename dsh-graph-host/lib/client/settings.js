@@ -11,6 +11,7 @@
     let gSettingsScope = null;
     // g-133：数据源 = ctx.get('connection').api（registerGraphSettingsSection 捕获），挂载时读 llm 目录。
     let gConnectionApi = null;
+    let settingsModeInstanceSeq = 0;
 
     // 3082 的 settingsScope 在非 loopback 浏览器上下文会是 memory；此时仍可
     // 通过已存在的 profile settings RPC 读写 Host，而不是把配置伪装成 workspace 数据。
@@ -202,6 +203,9 @@
 
     // 看板设置页组件：读/写 dsh-graph profile 全局默认。
     function GraphSettingsSection(_props) {
+      const modeIdRef = React.useRef(null);
+      if (modeIdRef.current == null) modeIdRef.current = `dg-global-subagent-mode-${++settingsModeInstanceSeq}`;
+      const modeId = modeIdRef.current;
       const [snap, setSnap] = React.useState(gSettingsScope ? gSettingsScope.getSnapshot() : null);
       const [draft, setDraft] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
@@ -253,9 +257,20 @@
       const draftValue = draft ?? {
         subagentProvider: value?.subagentProvider ?? "",
         subagentModel: value?.subagentModel ?? "",
+        subagentMode: value?.subagentMode ?? "",
         subagentPrompt: value?.subagentPrompt ?? "",
       };
       const setField = (k, v) => setDraft({ ...draftValue, [k]: v });
+
+      // g-191：受控子代理模式枚举
+      const modeOptions = [
+        { id: "", name: "（继承系统默认：标准模式）", desc: "未配置时默认使用标准模式。" },
+        { id: "standard", name: "标准模式 (standard)", desc: "功能完整的编码 Agent，支持文件、Shell、检索与子代理。" },
+        { id: "ptc", name: "PTC 模式 (ptc)", desc: "具备标准能力，优先以 Code Mode / PTC 程序化工具调用组合多步操作。" },
+        { id: "minimal", name: "极简模式 (minimal)", desc: "极简双工具 Agent，仅提供受控 bash 与 str_replace_editor。" },
+        { id: "cordis", name: "创造模式 (cordis)", desc: "用于创建与调试 preset：标准能力加上运行时检查与创作指导。" },
+      ];
+      const curMode = draftValue.subagentMode ?? "";
 
       // g-133：合法目录派生。合法 provider = active 且有非空模型目录；model 合法 = 属于所选 provider 目录
       //（未选 provider 时属于任一目录）；空值 = 继承父会话。目录仅作 advisory 可选列表，不拦截保存。
@@ -338,6 +353,7 @@
           // 一次提交，按字段逐个 set（settings scope 每字段 revision-fenced 写入）。
           await gSettingsScope.set("subagentProvider", draftValue.subagentProvider ?? "");
           await gSettingsScope.set("subagentModel", draftValue.subagentModel ?? "");
+          await gSettingsScope.set("subagentMode", draftValue.subagentMode ?? "");
           await gSettingsScope.set("subagentPrompt", draftValue.subagentPrompt ?? "");
           setSaved("已保存到当前 profile。");
           setDraft(null); // 成功后才归位草稿（快照已更新）
@@ -375,6 +391,13 @@
         catReady && catalog.failures.length > 0
           ? h("span", { style: GSS.hint }, "部分 provider 的模型目录读取失败（" + catalog.failures.map((f) => f.id).join("、") + "），相关 provider 暂不可选。")
           : null,
+        h("div", { style: GSS.field },
+          h("label", { style: GSS.label, htmlFor: modeId }, "子代理默认执行模式"),
+          h("select", { id: modeId, "aria-label": "子代理默认执行模式", style: GSS.select, value: curMode, disabled: !writable,
+            onChange: (e) => setField("subagentMode", e.target.value) },
+            modeOptions.map((m) => h("option", { key: m.id, value: m.id }, m.name))),
+          h("span", { style: GSS.hint },
+            "受控枚举：标准模式、PTC 模式、极简模式、创造模式。单次派发与 workspace project.yaml 更优先；留空使用系统默认（标准模式）。")),
         h("div", { style: GSS.field },
           h("label", { style: GSS.label }, "子代理默认补充提示词"),
           h("textarea", { style: GSS.textarea, value: draftValue.subagentPrompt, disabled: !writable,

@@ -78,6 +78,12 @@ import {
   readPromptOverrideValue,
   readProjectConfig,
   writeProjectConfig,
+  SUBAGENT_MODES,
+  SUBAGENT_MODE_SPECS,
+  DEFAULT_SUBAGENT_MODE,
+  normalizeSubagentMode,
+  SUBAGENT_MODE_PROMPTS,
+  resolveSubagentMode,
   validateSchema,
   schemaErrorResponse,
   settingsPostSchema,
@@ -144,6 +150,7 @@ const GRAPH_SETTINGS_NS = "dsh-graph"; // 合法 namespace（[a-z][a-z0-9-]*）
 const GRAPH_SETTINGS_DEFAULTS = Object.freeze({
   subagentProvider: "",
   subagentModel: "",
+  subagentMode: "",
   subagentPrompt: "",
 });
 // schema 需 schemastery（@deepseek-ai/*），经守卫式动态 import 构建（见 buildGraphSettingsSchema）。
@@ -151,6 +158,7 @@ function buildGraphSettingsSchema(z) {
   return z.object({
     subagentProvider: z.string().default(""),
     subagentModel: z.string().default(""),
+    subagentMode: z.union(["", "standard", "ptc", "minimal", "cordis"]).default(""),
     subagentPrompt: z.string().default(""),
   });
 }
@@ -397,6 +405,7 @@ export function formatAttemptPrompt({
   cardsSection,
   targetContext,
   subagentPromptSection,
+  modeStrategySection,
   worktreeBlock,
 } = {}) {
   const brief = promptText(attemptBrief);
@@ -449,7 +458,7 @@ export function formatAttemptPrompt({
   if (handoffBlock) history.push(handoffBlock);
   history.push(historicalPromptBlock("## 历史卡片", cards));
   const discipline = formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection });
-  return [positioning, current.join("\n"), override, ...history, discipline, ATTEMPT_PROMPT_WARNING]
+  return [positioning, current.join("\n"), modeStrategySection, override, ...history, discipline, ATTEMPT_PROMPT_WARNING]
     .filter((section) => section && section.trim())
     .join("\n\n");
 }
@@ -504,9 +513,12 @@ export function apply(ctx, config) {
     try {
       const v = graphSettingsScope?.get?.() ?? null;
       if (!v) return { ...GRAPH_SETTINGS_DEFAULTS };
+      const rawMode = v.subagentMode ?? "";
+      const safeMode = normalizeSubagentMode(rawMode) ?? "";
       return {
         subagentProvider: v.subagentProvider ?? "",
         subagentModel: v.subagentModel ?? "",
+        subagentMode: safeMode,
         subagentPrompt: v.subagentPrompt ?? "",
       };
     } catch {
@@ -854,7 +866,7 @@ export function apply(ctx, config) {
       def: {
         name: "graph_start_attempt",
         description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。默认强制注入独立 worktree 隔离提示；仅 supervisor 明确传 worktree=false 并说明理由时才关闭。attempt_brief 是当前 action 原文；task_type 必须传 merge（合入）、rewrite（重写）或 fix（修复）之一，baseline_commit/source_attempt 是 supervisor 直接提供的当前事实，acceptance_items 是当前验收项 string[]；这些字段不从 brief/handoff 截取。task_type/baseline_commit/source_attempt 的空值传 null 或省略表示未提供；acceptance_items=[] 表示明确无单独验收项，null 或省略表示未提供；空字符串非法。",
-        parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
+        parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, mode: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
       },
       run: async (a, ex) => {
         // 校验 attempt_brief 类型（g-150 review 问题 4）
@@ -868,6 +880,11 @@ export function apply(ctx, config) {
           acceptanceItems: a.acceptance_items,
         });
         if (structuredFieldError) throw new GraphError(structuredFieldError);
+        if (a.mode !== undefined && a.mode !== null && a.mode !== "") {
+          if (typeof a.mode !== "string" || !normalizeSubagentMode(a.mode)) {
+            throw new GraphError(`mode 只允许 ${SUBAGENT_MODES.join("/")}`);
+          }
+        }
         const executor = a.executor ?? actorOf(ex);
         const r = rootFor(ex);
         // g-202：传 card 时统一走上下文收集派发，不创建 Goal execution attempt。
@@ -932,14 +949,17 @@ export function apply(ctx, config) {
         // 此时用 r 的父目录作为相对路径基准
         const ws = sessionWorkspace(ex) ?? dirname(r);
         const goalRel = goalFile ? relative(ws, goalFile) : null;
+        const projectExec = readExecutorModel(r);
+        const globalSettings = readGraphSettings();
         const eff = resolveModelRoute(
           { provider: a.provider, model: a.model },
-          readExecutorModel(r),
-          readGraphSettings(),
+          projectExec,
+          globalSettings,
         );
         const effProvider = eff.provider;
         const effModel = eff.model;
         const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
+        const effModeRes = resolveSubagentMode(a.mode, projectExec.mode, globalSettings.subagentMode);
         const attempt = startAttempt(r, a.goal, {
           executor,
           actor: actorOf(ex),
@@ -950,9 +970,11 @@ export function apply(ctx, config) {
           provider: effProvider,
           model: effModel,
           modelRoute: effRoute,
+          mode: effModeRes.mode,
+          modeSource: effModeRes.source,
         });
         // 注意：返回值必须是无损 JSON——绝不写入值为 undefined 的字段（registry 会拒绝）
-        const result = { attempt, child_id: null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs };
+        const result = { attempt, child_id: null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs, mode: effModeRes.mode, mode_source: effModeRes.source };
         if (a.attempt_brief) result.brief = a.attempt_brief;
         if (effRoute) result.model_route = effRoute;
         const subagents = ctx.get?.("subagents");
@@ -973,9 +995,11 @@ export function apply(ctx, config) {
             const worktreeBlock = a.worktree === false ? null : WORKTREE_GUIDE;
             // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
             const subagentPromptSection = (() => {
-              const p = effectivePrompt(readGraphSettings().subagentPrompt, readPromptOverride(r, "subagent_prompt"));
+              const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(r, "subagent_prompt"));
               return p ? ["## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join(String.fromCharCode(10)) : null;
             })();
+            // g-191：子代理执行策略/模式说明段
+            const modeStrategySection = effModeRes.prompt ? ["## 子代理执行模式（" + effModeRes.mode + "）", "", effModeRes.prompt].join(String.fromCharCode(10)) : null;
             // g-228：所有 supervisor 执行 prompt 统一由单一模板入口组装。
             const prompt = formatAttemptPrompt({
               goal: a.goal,
@@ -990,6 +1014,7 @@ export function apply(ctx, config) {
               handoffSection: handoffsSection,
               cardsSection,
               subagentPromptSection,
+              modeStrategySection,
               worktreeBlock,
             });
             const request = { parent: ex.agent, prompt: text(prompt) };
@@ -1013,6 +1038,8 @@ export function apply(ctx, config) {
               effProvider,
               effModel,
               effRoute,
+              effModeRes.mode,
+              effModeRes.source,
             );
             // 负责人 2026-08-22：开始执行的目标必须落到执行 lane——派发成功后自动迁 in_progress
             //（若已 in_progress 或门槛未满足则静默，子代理自行汇报）
@@ -1267,11 +1294,14 @@ export function apply(ctx, config) {
       }
     } catch { modelGroups = null; }
     const def = readExecutorModel(rootForReq);
+    const globalSettings = readGraphSettings();
     // g-133：默认路由展示 = project.yaml executor/project（优先）+ profile 全局默认（缺省）
-    const eff = resolveModelRoute(null, def, readGraphSettings());
+    const eff = resolveModelRoute(null, def, globalSettings);
+    const effModeRes = resolveSubagentMode(null, def.mode, globalSettings.subagentMode);
     return {
       modelGroups,
-      default: { provider: eff.provider, model: eff.model },
+      modes: SUBAGENT_MODES.map((id) => SUBAGENT_MODE_SPECS[id]),
+      default: { provider: eff.provider, model: eff.model, mode: effModeRes.mode, mode_source: effModeRes.source },
     };
   };
 
@@ -1718,11 +1748,16 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, provider, model, worktree, attempt_brief, task_type, baseline_commit, source_attempt, acceptance_items } = body;
+          const { goal, provider, model, mode, worktree, attempt_brief, task_type, baseline_commit, source_attempt, acceptance_items } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
           // 校验 attempt_brief 类型（g-150 review 问题 4）
           if (attempt_brief !== undefined && attempt_brief !== null && typeof attempt_brief !== "string") {
             return json(res, 400, { error: "attempt_brief 必须是 string 类型" });
+          }
+          if (mode !== undefined && mode !== null && mode !== "") {
+            if (typeof mode !== "string" || !normalizeSubagentMode(mode)) {
+              return json(res, 400, { error: `mode 只允许 ${SUBAGENT_MODES.join("/")}` });
+            }
           }
           const structuredFieldError = validateAttemptPromptFields({
             taskType: task_type,
@@ -1751,14 +1786,17 @@ export function apply(ctx, config) {
           // Supervisor 默认强制 worktree 隔离；仅明确批准的 body.worktree=false 才关闭（g-202）
           const worktreeBlock = worktree === false ? "" : WORKTREE_GUIDE;
           const currentDirective = readGoalDirective(rRoot, goal);
+          const projectExec = readExecutorModel(rRoot);
+          const globalSettings = readGraphSettings();
           const eff = resolveModelRoute(
             { provider, model },
-            readExecutorModel(rRoot),
-            readGraphSettings(),
+            projectExec,
+            globalSettings,
           );
           const effProvider = eff.provider;
           const effModel = eff.model;
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
+          const effModeRes = resolveSubagentMode(mode, projectExec.mode, globalSettings.subagentMode);
           const attempt = startAttempt(rRoot, goal, {
             executor: "agent:executor",
             actor: "human:gui",
@@ -1769,6 +1807,8 @@ export function apply(ctx, config) {
             provider: effProvider,
             model: effModel,
             modelRoute: effRoute,
+            mode: effModeRes.mode,
+            modeSource: effModeRes.source,
           });
           // g-113 修正：子代理工作目录 = 会话 workspace（继承 session.header.cwd），
           // 相对路径以 workspace 根为基准（.dsh-graph/versions/...），不是服务进程 cwd 或 .dsh-graph 目录
@@ -1778,9 +1818,11 @@ export function apply(ctx, config) {
           const rel = relative(ws, goalFile);
           // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
           const subagentPromptSection = (() => {
-            const p = effectivePrompt(readGraphSettings().subagentPrompt, readPromptOverride(rRoot, "subagent_prompt"));
+            const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(rRoot, "subagent_prompt"));
             return p ? `## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）\n\n${p}` : "";
           })();
+          // g-191：子代理执行策略/模式说明段
+          const modeStrategySection = effModeRes.prompt ? `## 子代理执行模式（${effModeRes.mode}）\n\n${effModeRes.prompt}` : "";
           const targetContext = [
             "## 目标描述",
             desc,
@@ -1803,6 +1845,7 @@ export function apply(ctx, config) {
             cardsSection,
             targetContext,
             subagentPromptSection,
+            modeStrategySection,
             worktreeBlock,
           });
           const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, rRoot, { provider: effProvider, model: effModel });
@@ -1819,6 +1862,8 @@ export function apply(ctx, config) {
               effProvider,
               effModel,
               effRoute,
+              effModeRes.mode,
+              effModeRes.source,
             );
             // 负责人 2026-08-22：执行按钮派发后目标必须落到执行 lane——自动迁 in_progress
             try { transition(rRoot, goal, "in_progress", { reason: "attempt 派发（GUI 执行）", actor: "human:gui" }); } catch { /* 已在 in_progress 或迁移被拒 */ }
@@ -1829,6 +1874,8 @@ export function apply(ctx, config) {
             child_id: spawned.childId,
             child_error: spawned.error,
             model_route: effRoute,
+            mode: effModeRes.mode,
+            mode_source: effModeRes.source,
             injected_cards: injectedCards,
             injected_handoffs: injectedHandoffRefs,
           });

@@ -40,6 +40,8 @@ import {
   readProjectConfig,
   writeProjectConfig,
   readPromptOverride,
+  resolveSubagentMode,
+  normalizeSubagentMode,
   GraphError,
 } from "../ops.ts";
 
@@ -144,7 +146,7 @@ test("backlog 目标（draft）直接进行阶段迁移被拒绝，必须先 mov
 test("readExecutorModel 读取 executor.provider/model，缺失返回 null", async () => {
   const { readExecutorModel } = await import("../ops.ts");
   const root = tmpRoot();
-  assert.deepEqual(readExecutorModel(root), { provider: null, model: null });
+  assert.deepEqual(readExecutorModel(root), { provider: null, model: null, mode: null });
   writeFileSync(
     join(root, "project.yaml"),
     "name: t\nexecutor:\n  provider: kimi-coding   # 注释\n  model: kimi-for-coding\n",
@@ -152,6 +154,7 @@ test("readExecutorModel 读取 executor.provider/model，缺失返回 null", asy
   assert.deepEqual(readExecutorModel(root), {
     provider: "kimi-coding",
     model: "kimi-for-coding",
+    mode: null,
   });
 });
 
@@ -168,11 +171,11 @@ test("readExecutorModel 使用 YAML 语义读取注释/空行，并安全降级�
     "other: wrong",
     "",
   ].join("\n"));
-  assert.deepEqual(readExecutorModel(root), { provider: "openai-codex", model: "gpt-5.6-luna" });
+  assert.deepEqual(readExecutorModel(root), { provider: "openai-codex", model: "gpt-5.6-luna", mode: null });
   writeFileSync(join(root, "project.yaml"), "executor: [unterminated");
-  assert.deepEqual(readExecutorModel(root), { provider: null, model: null });
+  assert.deepEqual(readExecutorModel(root), { provider: null, model: null, mode: null });
   writeFileSync(join(root, "project.yaml"), "executor:\n  provider: 42\n  model: null\n");
-  assert.deepEqual(readExecutorModel(root), { provider: null, model: null });
+  assert.deepEqual(readExecutorModel(root), { provider: null, model: null, mode: null });
 });
 
 test("跳阶段迁移被拒绝", () => {
@@ -612,7 +615,7 @@ test("readProjectConfig：回填 executor/defaults/automation/prompt_overrides�
     SAMPLE_CONFIG + "unknown_block:\n  mystery: keep-me   # 未知键保留\n",
   );
   const cfg = readProjectConfig(root);
-  assert.deepEqual(cfg.executor, { provider: "openai-codex", model: "gpt-5.6-luna" });
+  assert.deepEqual(cfg.executor, { provider: "openai-codex", model: "gpt-5.6-luna", mode: null });
   assert.deepEqual(cfg.defaults.review, { reviewer: "human", prompt: null });
   assert.deepEqual(cfg.defaults.pk, { lanes: 1, sandbox: "directory" });
   assert.deepEqual(cfg.supervisor.automation, {
@@ -691,7 +694,7 @@ test("g-132 回归：块内被 # 注释的字段行不干扰读取/写回（保�
   writeFileSync(join(root, "project.yaml"),
     "executor:\n#  provider: xiaomi-token-plan-cn   # 旧 provider（注释掉）\n#  model: mimo-v2.5-pro\n  provider: openai-codex\n  model: gpt-5.6-luna\n");
   const cfg = readProjectConfig(root);
-  assert.deepEqual(cfg.executor, { provider: "openai-codex", model: "gpt-5.6-luna" });
+  assert.deepEqual(cfg.executor, { provider: "openai-codex", model: "gpt-5.6-luna", mode: null });
   // 写回新值，仍保留被注释掉的旧行
   writeProjectConfig(root, { executor: { provider: "xiaomi" } }, "human:gui");
   const text = readFileSync(join(root, "project.yaml"), "utf8");

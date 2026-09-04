@@ -434,28 +434,80 @@ export function readSupervisorStatusAt(rootOrEvents) {
     }
     return latest;
 }
-/** 读取 project.yaml 的 executor.provider/model。
+// ===== g-191：受控子代理模式枚举与策略定义 =====
+export const SUBAGENT_MODES = ["standard", "ptc", "minimal", "cordis"];
+export const SUBAGENT_MODE_SPECS = {
+    standard: {
+        id: "standard",
+        name: "标准模式",
+        description: "功能完整的编码 Agent，支持文件编辑、Shell、检索、Skills、目标与子代理等完整能力。",
+        order: 1,
+    },
+    ptc: {
+        id: "ptc",
+        name: "PTC 模式",
+        description: "具备标准模式能力，并通过 Code Mode/PTC 程序化工具调用组合多步操作。",
+        order: 2,
+    },
+    minimal: {
+        id: "minimal",
+        name: "极简模式",
+        description: "极简双工具 Agent，仅提供受控 bash 与 str_replace_editor。",
+        order: 3,
+    },
+    cordis: {
+        id: "cordis",
+        name: "创造模式",
+        description: "用于创建与调试 Agent preset：标准能力加上运行时检查与 preset 创作指导。",
+        order: 4,
+    },
+};
+export const DEFAULT_SUBAGENT_MODE = "standard";
+/** 校验并规范化子代理模式：仅接受受控枚举；无效值/空安全回退 null（由上层决定默认）。 */
+export function normalizeSubagentMode(mode) {
+    if (typeof mode !== "string")
+        return null;
+    const m = mode.trim().toLowerCase();
+    if (m === "")
+        return null;
+    if (SUBAGENT_MODES.includes(m)) {
+        return m;
+    }
+    return null;
+}
+/** 模式策略提示词片段（仅影响执行策略/提示参数，不越过凭据/provider边界，不接受命令注入） */
+export const SUBAGENT_MODE_PROMPTS = {
+    standard: "",
+    ptc: "【PTC 模式执行策略】优先通过代码/脚本化方式（Code Mode / Programmatic Tool Calling）批量组合与执行工具操作，减少单步交互往返。",
+    minimal: "【极简模式执行策略】仅使用基础编辑与命令工具完成修改，保持极简上下文与紧凑输出，不展开冗余调研。",
+    cordis: "【创造模式执行策略】在标准执行基础上，关注 preset 组装与插件扩展契约，必要时输出结构化元数据与调试信息。",
+};
+/** 读取 project.yaml 的 executor.provider/model/mode。
  * 使用 YAML 解析器处理注释、空行和合法标量；配置缺失或解析失败时安全降级。 */
 export function readExecutorModel(root) {
     const file = join(root, "project.yaml");
     try {
         if (!existsSync(file))
-            return { provider: null, model: null };
+            return { provider: null, model: null, mode: null };
         const document = parseYaml(readFileSync(file, "utf8"));
         const executor = document && typeof document === "object" && !Array.isArray(document)
             ? document.executor
             : null;
         if (!executor || typeof executor !== "object" || Array.isArray(executor)) {
-            return { provider: null, model: null };
+            return { provider: null, model: null, mode: null };
         }
         const value = (key) => {
             const raw = executor[key];
             return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
         };
-        return { provider: value("provider"), model: value("model") };
+        return {
+            provider: value("provider"),
+            model: value("model"),
+            mode: normalizeSubagentMode(value("mode")),
+        };
     }
     catch {
-        return { provider: null, model: null };
+        return { provider: null, model: null, mode: null };
     }
 }
 const AUTOMATION_KEYS = [
@@ -675,7 +727,7 @@ export function readProjectConfig(root) {
     const file = join(root, "project.yaml");
     if (!existsSync(file)) {
         return {
-            executor: { provider: null, model: null },
+            executor: { provider: null, model: null, mode: null },
             defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
             supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])) },
             prompt_overrides: { subagent: { state: "default", value: null } },
@@ -688,8 +740,13 @@ export function readProjectConfig(root) {
         auto[k] = scal(["supervisor", "automation", k]);
     const lanesRaw = scal(["defaults", "pk", "lanes"]);
     const subagent = readPromptOverrideConfig(lines, "subagent").value ?? { state: "default", value: null };
+    const modeRaw = scal(["executor", "mode"]);
     return {
-        executor: { provider: scal(["executor", "provider"]), model: scal(["executor", "model"]) },
+        executor: {
+            provider: scal(["executor", "provider"]),
+            model: scal(["executor", "model"]),
+            mode: normalizeSubagentMode(modeRaw),
+        },
         defaults: {
             review: { reviewer: scal(["defaults", "review", "reviewer"]), prompt: scal(["defaults", "review", "prompt"]) },
             pk: { lanes: lanesRaw === null ? null : parseInt(lanesRaw, 10), sandbox: scal(["defaults", "pk", "sandbox"]) },
@@ -720,6 +777,11 @@ function validateConfigPatch(patch) {
         const e = patch.executor ?? {};
         needStr(e.provider, "executor.provider", { nullable: true });
         needStr(e.model, "executor.model", { nullable: true });
+        if ("mode" in e && e.mode !== undefined && e.mode !== null && e.mode !== "") {
+            if (typeof e.mode !== "string" || !normalizeSubagentMode(e.mode)) {
+                throw new GraphError(`executor.mode 只允许 ${SUBAGENT_MODES.join("/")}`);
+            }
+        }
     }
     if ("defaults" in patch) {
         needObj(patch.defaults, "defaults");
@@ -793,6 +855,8 @@ export function writeProjectConfig(root, patch, actor) {
             setScalar(["executor", "provider"], patch.executor.provider ?? "");
         if ("model" in patch.executor)
             setScalar(["executor", "model"], patch.executor.model ?? "");
+        if ("mode" in patch.executor)
+            setScalar(["executor", "mode"], patch.executor.mode ?? "");
     }
     if (patch.defaults) {
         const d = patch.defaults ?? {};
@@ -2092,6 +2156,13 @@ export function startAttempt(root, goalId, opts) {
     if (basename(goalFile) !== "goal.md") {
         throw new GraphError(`暂存目标（backlog）不能有执行 attempt，请先排期移入 goals/ 或版本`);
     }
+    if (opts.mode !== undefined && opts.mode !== null && String(opts.mode).trim() !== "" && !normalizeSubagentMode(opts.mode)) {
+        throw new GraphError(`mode 只允许 ${SUBAGENT_MODES.join("/")}`);
+    }
+    if (opts.modeSource !== undefined && opts.modeSource !== null && !["override", "project", "global", "default"].includes(opts.modeSource)) {
+        throw new GraphError("modeSource 只允许 override/project/global/default");
+    }
+    const normalizedMode = normalizeSubagentMode(opts.mode);
     const dir = join(goalDirOf(goalFile), "attempts");
     mkdirSync(dir, { recursive: true });
     const seq = readdirSync(dir).filter((d) => d.startsWith("att-")).length + 1;
@@ -2119,6 +2190,11 @@ export function startAttempt(root, goalId, opts) {
     if (opts.modelRoute && opts.modelRoute.trim()) {
         meta.model_route = opts.modelRoute.trim();
     }
+    if (normalizedMode) {
+        meta.mode = normalizedMode;
+        if (opts.modeSource)
+            meta.mode_source = opts.modeSource;
+    }
     // g-150：写入 injected_handoffs 和 brief 到 attempt meta（审计可追溯）
     // 无 handoff/brief 时保持当前 prompt 兼容（g-150 review 问题 5）
     if (Array.isArray(opts.injectedHandoffs)) {
@@ -2138,6 +2214,8 @@ export function startAttempt(root, goalId, opts) {
         ...(opts.provider && opts.provider.trim() ? { provider: opts.provider.trim() } : {}),
         ...(opts.model && opts.model.trim() ? { model: opts.model.trim() } : {}),
         ...(opts.modelRoute && opts.modelRoute.trim() ? { model_route: opts.modelRoute.trim() } : {}),
+        ...(normalizedMode ? { mode: normalizedMode } : {}),
+        ...(normalizedMode && opts.modeSource ? { mode_source: opts.modeSource } : {}),
         ...(Array.isArray(opts.injectedCards)
             ? { injected_cards: opts.injectedCards }
             : {}),
@@ -2185,7 +2263,7 @@ export function reportStatus(root, goalId, attemptId, line, actor) {
 }
 /** 把 subagent childId 绑定到 attempt（startContinuable 之后调用）。
  *  g-194：支持持久化 provider / model / modelRoute。 */
-export function bindAttemptChild(root, goalId, attemptId, childId, actor, parentSessionId, provider, model, modelRoute) {
+export function bindAttemptChild(root, goalId, attemptId, childId, actor, parentSessionId, provider, model, modelRoute, mode, modeSource) {
     const goalFile = findGoalFile(root, goalId);
     // backlog 目标没有目录结构，无法绑定 attempt child
     if (basename(goalFile) !== "goal.md") {
@@ -2211,6 +2289,12 @@ export function bindAttemptChild(root, goalId, attemptId, childId, actor, parent
         doc.meta.model = model.trim();
     if (modelRoute && modelRoute.trim())
         doc.meta.model_route = modelRoute.trim();
+    const normalizedMode = normalizeSubagentMode(mode);
+    if (normalizedMode) {
+        doc.meta.mode = normalizedMode;
+        if (modeSource)
+            doc.meta.mode_source = modeSource;
+    }
     saveGoal(file, doc);
     const details = { attempt: attemptId, child_id: childId, binding_version: doc.meta.binding_version };
     if (doc.meta.provider)
@@ -2219,6 +2303,10 @@ export function bindAttemptChild(root, goalId, attemptId, childId, actor, parent
         details.model = doc.meta.model;
     if (doc.meta.model_route)
         details.model_route = doc.meta.model_route;
+    if (doc.meta.mode)
+        details.mode = doc.meta.mode;
+    if (doc.meta.mode_source)
+        details.mode_source = doc.meta.mode_source;
     appendEvent(root, {
         actor,
         event: "attempt.bound",
@@ -2912,6 +3000,8 @@ export function boardProjection(root, opts) {
                                 parent_session_id: m.parent_session_id ?? null,
                                 provider: m.provider ?? null,
                                 model: m.model ?? null,
+                                mode: normalizeSubagentMode(m.mode),
+                                mode_source: m.mode_source ?? null,
                                 started_at: m.started_at ?? null,
                                 binding_token: m.binding_token ?? null,
                                 binding_version: Number(m.binding_version) || 0,
@@ -2960,6 +3050,8 @@ export function boardProjection(root, opts) {
             attempt_parent_session_id: attemptChild.parent_session_id ?? null,
             attempt_provider: attemptChild.provider ?? null,
             attempt_model: attemptChild.model ?? null,
+            attempt_mode: attemptChild.mode ?? null,
+            attempt_mode_source: attemptChild.mode_source ?? null,
             // g-190：当前有效执行绑定（含 CAS token 与版本），供解绑定位/UI 展示；无绑定为 null
             attempt_binding: attemptChild.child_id
                 ? {
@@ -3270,6 +3362,8 @@ export function goalDetail(root, goalId) {
                         provider: m.provider ?? null,
                         model: m.model ?? null,
                         model_route: m.model_route ?? null,
+                        mode: normalizeSubagentMode(m.mode),
+                        mode_source: m.mode_source ?? null,
                         // g-190：解绑定位/UI 需要的绑定信息（token 为 CAS 能力，仅下发给 GUI）
                         binding_token: m.binding_token ?? null,
                         binding_version: Number(m.binding_version) || 0,
@@ -3583,4 +3677,18 @@ export function readPromptOverrideValue(projectYamlText, key) {
     if (hash >= 0)
         raw = raw.slice(0, hash).trim();
     return raw;
+}
+/** g-191：子代理模式优先级合成——单次派发 override > workspace project.yaml 明确值 > profile 全局默认 > 系统默认（standard）。
+ * 返回生效模式与决策来源，供 attempt 审计。 */
+export function resolveSubagentMode(overrideMode, projectMode, globalMode) {
+    const ov = normalizeSubagentMode(overrideMode);
+    if (ov)
+        return { mode: ov, source: "override", prompt: SUBAGENT_MODE_PROMPTS[ov] };
+    const pr = normalizeSubagentMode(projectMode);
+    if (pr)
+        return { mode: pr, source: "project", prompt: SUBAGENT_MODE_PROMPTS[pr] };
+    const gl = normalizeSubagentMode(globalMode);
+    if (gl)
+        return { mode: gl, source: "global", prompt: SUBAGENT_MODE_PROMPTS[gl] };
+    return { mode: DEFAULT_SUBAGENT_MODE, source: "default", prompt: SUBAGENT_MODE_PROMPTS[DEFAULT_SUBAGENT_MODE] };
 }

@@ -1372,6 +1372,7 @@ window.__ModuleLoader__.load({
           : null,
       );
     }
+    let reExecModeInstanceSeq = 0;
     // 看板直达指令：向 continuable 子代理发文本（queue 排队 / steer 插队）。
     // 多模态降级：子代理图片源码级不支持（SUBAGENT_IMAGE_UNSUPPORTED）——明确提示而非静默失败。
     function PromptBox(props) {
@@ -1547,10 +1548,14 @@ window.__ModuleLoader__.load({
     // kind="exec" → start-execution（目标执行子代理）；kind="collect" → start-collection（卡片收集子代理，需 cardId+prompt）。
     // 下拉数据源 = spawn-options 的 modelGroups（LLM provider 分组目录）；subagent provider（spawn/fork）不暴露给用户。
     function ReExecBox(props) {
+      const modeIdRef = React.useRef(null);
+      if (modeIdRef.current == null) modeIdRef.current = `dg-reexec-subagent-mode-${++reExecModeInstanceSeq}`;
+      const modeId = modeIdRef.current;
       const { goalId, kind, cardId, prompt } = props;
       const [opts, setOpts] = React.useState(null); // {modelGroups, default}
       const [provider, setProvider] = React.useState("");
       const [model, setModel] = React.useState("");
+      const [mode, setMode] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
 
@@ -1571,8 +1576,10 @@ window.__ModuleLoader__.load({
             const g0 = groups.find((x) => x.id === effProvider);
             const ms = g0?.models ?? [];
             const effModel = ms.some((m) => m.id === defM) ? defM : (ms[0]?.id ?? "");
+            const defMode = d?.default?.mode ?? "";
             setProvider(effProvider);
             setModel(effModel);
+            setMode(defMode);
           })
           .catch(() => alive && setOpts({ modelGroups: null, default: null }));
         return () => { alive = false; };
@@ -1581,13 +1588,24 @@ window.__ModuleLoader__.load({
       const groups = opts?.modelGroups ?? [];
       const currentGroup = groups.find((g) => g.id === provider) ?? null;
       const modelChoices = currentGroup?.models ?? [];
+      const modeList = opts?.modes ?? [
+        { id: "standard", name: "标准模式" },
+        { id: "ptc", name: "PTC 模式" },
+        { id: "minimal", name: "极简模式" },
+        { id: "cordis", name: "创造模式" },
+      ];
 
       const relaunch = async () => {
         setBusy(true);
         setNote("重新派发中…");
         try {
           const url = kind === "collect" ? "/api/dsh-graph/start-collection" : "/api/dsh-graph/start-execution";
-          const body = { goal: goalId, provider: provider || undefined, model: model || undefined };
+          const body = {
+            goal: goalId,
+            provider: provider || undefined,
+            model: model || undefined,
+            mode: mode || undefined,
+          };
           if (kind === "collect") { body.card = cardId; body.prompt = prompt; }
           const r = await fetch(graphUrl(url), {
             method: "POST",
@@ -1598,8 +1616,9 @@ window.__ModuleLoader__.load({
           if (data.ok) {
             if (data.child_id) {
               const route = data.model_route ? `（${data.model_route}）` : "";
-              setNote("✅ 已重新派发子代理，id：" + data.child_id + " " + route);
-              showToast("✅ 已重新派发子代理 " + route);
+              const modeTag = data.mode ? `[${data.mode}]` : "";
+              setNote("✅ 已重新派发子代理 " + modeTag + "，id：" + data.child_id + " " + route);
+              showToast("✅ 已重新派发子代理 " + modeTag + " " + route);
               if (data.model_route) props.onRelaunched?.(data.model_route);
             } else {
               setNote("⚠️ 子代理启动失败：" + (data.child_error || "无 child_id"));
@@ -1644,6 +1663,16 @@ window.__ModuleLoader__.load({
                     ? h("option", { value: defM, style: optStyle }, defM ? `默认 ${defM}` : "model 不可用")
                     : [h("option", { key: "", value: "", style: optStyle }, "默认"),
                        ...modelChoices.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))]),
+                kind !== "collect" ? h("select", {
+                  id: modeId,
+                  "aria-label": "重新执行子代理模式",
+                  style: selStyle, value: mode,
+                  className: "dg-select",
+                  title: "子代理执行模式（缺省 project.yaml executor.mode）",
+                  onChange: (e) => setMode(e.target.value),
+                },
+                  h("option", { key: "", value: "", style: optStyle }, "模式: 默认"),
+                  ...modeList.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))) : null,
               ],
           h("button", {
             style: { ...S.btn, padding: "3px 10px", fontSize: 12 }, className: "dg-btn dg-relaunch",
@@ -1790,7 +1819,8 @@ window.__ModuleLoader__.load({
                          statusLine }),
           h("div", { key: "m", style: { ...S.meta, marginTop: 3 } },
             "模型：" + modelText
-            + (mode ? ` ｜ 模式：${mode === "continuable" ? "可续轮" : "一次性"}` : "")),
+            + (props.subagentMode ? ` ｜ 执行模式：${props.subagentMode}` : "")
+            + (mode ? ` ｜ 会话模式：${mode === "continuable" ? "可续轮" : "一次性"}` : "")),
           h(PromptBox, { key: "p", parentId: props.parentId, childId: props.childId }),
           // g-109 判据反馈：实时会话控件内「重新执行」——子代理出错/无法运行时换 provider/model 重拉
           props.goalId
@@ -3426,6 +3456,7 @@ window.__ModuleLoader__.load({
         livePanel = att
           ? h(SessionPanel, { parentId: att.parent_session_id, childId: att.child_id, collapsible: true,
                               provider: att.provider, model: att.model, modelRoute: att.model_route,
+                              subagentMode: att.mode ?? null,
                               statusLine: lastAtt?.status_line ?? null,
                               goalId: props.id, relaunchKind: "exec",
                               relaunchRoute, onRelaunched: setRelaunchRoute,
@@ -6384,7 +6415,11 @@ window.__ModuleLoader__.load({
     // 字段范围（本期）：executor.provider/model、defaults.review、defaults.pk、supervisor.automation、
     // 子代理补充提示词 workspace 覆盖（三态：default 继承 / 自定义覆盖 / 显式空禁用）。
     // 保存走 PUT/POST /api/dsh-graph/settings（原子写；保留注释/未知键；失败不半写入）。
+    let settingsModalModeInstanceSeq = 0;
     function SettingsModal(props) {
+      const modeIdRef = React.useRef(null);
+      if (modeIdRef.current == null) modeIdRef.current = `dg-workspace-subagent-mode-${++settingsModalModeInstanceSeq}`;
+      const modeId = modeIdRef.current;
       const [loading, setLoading] = React.useState(true);
       const [form, setForm] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
@@ -6478,7 +6513,7 @@ window.__ModuleLoader__.load({
           else cleanAuto[k] = null;
         }
         const patch = {
-          executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "" },
+          executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "", mode: form.executor?.mode ?? "" },
           defaults: {
             review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
             pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
@@ -6687,10 +6722,10 @@ window.__ModuleLoader__.load({
 
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
 
-          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "执行子代理模型路由"),
+          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "执行子代理模型路由与模式"),
           // g-133：两列并排各占一半的可收缩 flex 布局——父容器 minWidth:0、子列 flex:"1 1 0"+minWidth:0、
           // 控件 boxSizing:"border-box"，避免 provider/model 两列在窄容器下重叠/溢出。
-          h("div", { style: { display: "flex", gap: 8, minWidth: 0 } },
+          h("div", { style: { display: "flex", gap: 8, minWidth: 0, marginBottom: 8 } },
             h("div", { style: { flex: "1 1 0", minWidth: 0 } },
               h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "provider"),
               h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curProvider, onChange: (e) => onProviderChange(e.target.value) },
@@ -6699,9 +6734,24 @@ window.__ModuleLoader__.load({
               h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "model"),
               h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curModel, onChange: (e) => set(["executor", "model"], e.target.value) },
                 ...modelOptions))),
+          // g-191：执行模式受控下拉
+          h("div", { style: { minWidth: 0, marginBottom: 6 } },
+            h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "执行模式 (mode)"),
+            h("select", {
+              id: modeId,
+              "aria-label": "workspace 子代理执行模式",
+              style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+              value: form.executor?.mode ?? "",
+              onChange: (e) => set(["executor", "mode"], e.target.value),
+            },
+              h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（继承 profile 全局 / 系统默认：标准模式）"),
+              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整编码与工具能力"),
+              h("option", { value: "ptc", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "PTC 模式 (ptc) - Code Mode 程序化工具调用"),
+              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "极简模式 (minimal) - 受控 bash + str_replace 双工具"),
+              h("option", { value: "cordis", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "创造模式 (cordis) - preset 组装与插件扩展指导"))),
           h("div", { style: { ...S.meta, marginTop: 4 } },
             catReady
-              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；已存但未列出的旧值保留为固定选项、仍可保存。"
+              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；执行模式支持标准/PTC/极简/创造模式。"
               : (catalog.status === "loading" ? "正在读取当前 Host 的合法 provider/model 目录…" : "当前 Host 目录不可用（llm.providers/models 缺失）——已存值保留可选、仍可保存。")),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
@@ -6754,6 +6804,7 @@ window.__ModuleLoader__.load({
     let gSettingsScope = null;
     // g-133：数据源 = ctx.get('connection').api（registerGraphSettingsSection 捕获），挂载时读 llm 目录。
     let gConnectionApi = null;
+    let settingsModeInstanceSeq = 0;
 
     // 3082 的 settingsScope 在非 loopback 浏览器上下文会是 memory；此时仍可
     // 通过已存在的 profile settings RPC 读写 Host，而不是把配置伪装成 workspace 数据。
@@ -6945,6 +6996,9 @@ window.__ModuleLoader__.load({
 
     // 看板设置页组件：读/写 dsh-graph profile 全局默认。
     function GraphSettingsSection(_props) {
+      const modeIdRef = React.useRef(null);
+      if (modeIdRef.current == null) modeIdRef.current = `dg-global-subagent-mode-${++settingsModeInstanceSeq}`;
+      const modeId = modeIdRef.current;
       const [snap, setSnap] = React.useState(gSettingsScope ? gSettingsScope.getSnapshot() : null);
       const [draft, setDraft] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
@@ -6996,9 +7050,20 @@ window.__ModuleLoader__.load({
       const draftValue = draft ?? {
         subagentProvider: value?.subagentProvider ?? "",
         subagentModel: value?.subagentModel ?? "",
+        subagentMode: value?.subagentMode ?? "",
         subagentPrompt: value?.subagentPrompt ?? "",
       };
       const setField = (k, v) => setDraft({ ...draftValue, [k]: v });
+
+      // g-191：受控子代理模式枚举
+      const modeOptions = [
+        { id: "", name: "（继承系统默认：标准模式）", desc: "未配置时默认使用标准模式。" },
+        { id: "standard", name: "标准模式 (standard)", desc: "功能完整的编码 Agent，支持文件、Shell、检索与子代理。" },
+        { id: "ptc", name: "PTC 模式 (ptc)", desc: "具备标准能力，优先以 Code Mode / PTC 程序化工具调用组合多步操作。" },
+        { id: "minimal", name: "极简模式 (minimal)", desc: "极简双工具 Agent，仅提供受控 bash 与 str_replace_editor。" },
+        { id: "cordis", name: "创造模式 (cordis)", desc: "用于创建与调试 preset：标准能力加上运行时检查与创作指导。" },
+      ];
+      const curMode = draftValue.subagentMode ?? "";
 
       // g-133：合法目录派生。合法 provider = active 且有非空模型目录；model 合法 = 属于所选 provider 目录
       //（未选 provider 时属于任一目录）；空值 = 继承父会话。目录仅作 advisory 可选列表，不拦截保存。
@@ -7081,6 +7146,7 @@ window.__ModuleLoader__.load({
           // 一次提交，按字段逐个 set（settings scope 每字段 revision-fenced 写入）。
           await gSettingsScope.set("subagentProvider", draftValue.subagentProvider ?? "");
           await gSettingsScope.set("subagentModel", draftValue.subagentModel ?? "");
+          await gSettingsScope.set("subagentMode", draftValue.subagentMode ?? "");
           await gSettingsScope.set("subagentPrompt", draftValue.subagentPrompt ?? "");
           setSaved("已保存到当前 profile。");
           setDraft(null); // 成功后才归位草稿（快照已更新）
@@ -7118,6 +7184,13 @@ window.__ModuleLoader__.load({
         catReady && catalog.failures.length > 0
           ? h("span", { style: GSS.hint }, "部分 provider 的模型目录读取失败（" + catalog.failures.map((f) => f.id).join("、") + "），相关 provider 暂不可选。")
           : null,
+        h("div", { style: GSS.field },
+          h("label", { style: GSS.label, htmlFor: modeId }, "子代理默认执行模式"),
+          h("select", { id: modeId, "aria-label": "子代理默认执行模式", style: GSS.select, value: curMode, disabled: !writable,
+            onChange: (e) => setField("subagentMode", e.target.value) },
+            modeOptions.map((m) => h("option", { key: m.id, value: m.id }, m.name))),
+          h("span", { style: GSS.hint },
+            "受控枚举：标准模式、PTC 模式、极简模式、创造模式。单次派发与 workspace project.yaml 更优先；留空使用系统默认（标准模式）。")),
         h("div", { style: GSS.field },
           h("label", { style: GSS.label }, "子代理默认补充提示词"),
           h("textarea", { style: GSS.textarea, value: draftValue.subagentPrompt, disabled: !writable,

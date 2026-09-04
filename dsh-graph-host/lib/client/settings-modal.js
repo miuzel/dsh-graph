@@ -2,7 +2,11 @@
     // 字段范围（本期）：executor.provider/model、defaults.review、defaults.pk、supervisor.automation、
     // 子代理补充提示词 workspace 覆盖（三态：default 继承 / 自定义覆盖 / 显式空禁用）。
     // 保存走 PUT/POST /api/dsh-graph/settings（原子写；保留注释/未知键；失败不半写入）。
+    let settingsModalModeInstanceSeq = 0;
     function SettingsModal(props) {
+      const modeIdRef = React.useRef(null);
+      if (modeIdRef.current == null) modeIdRef.current = `dg-workspace-subagent-mode-${++settingsModalModeInstanceSeq}`;
+      const modeId = modeIdRef.current;
       const [loading, setLoading] = React.useState(true);
       const [form, setForm] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
@@ -96,7 +100,7 @@
           else cleanAuto[k] = null;
         }
         const patch = {
-          executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "" },
+          executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "", mode: form.executor?.mode ?? "" },
           defaults: {
             review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
             pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
@@ -305,10 +309,10 @@
 
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
 
-          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "执行子代理模型路由"),
+          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "执行子代理模型路由与模式"),
           // g-133：两列并排各占一半的可收缩 flex 布局——父容器 minWidth:0、子列 flex:"1 1 0"+minWidth:0、
           // 控件 boxSizing:"border-box"，避免 provider/model 两列在窄容器下重叠/溢出。
-          h("div", { style: { display: "flex", gap: 8, minWidth: 0 } },
+          h("div", { style: { display: "flex", gap: 8, minWidth: 0, marginBottom: 8 } },
             h("div", { style: { flex: "1 1 0", minWidth: 0 } },
               h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "provider"),
               h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curProvider, onChange: (e) => onProviderChange(e.target.value) },
@@ -317,9 +321,24 @@
               h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "model"),
               h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curModel, onChange: (e) => set(["executor", "model"], e.target.value) },
                 ...modelOptions))),
+          // g-191：执行模式受控下拉
+          h("div", { style: { minWidth: 0, marginBottom: 6 } },
+            h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "执行模式 (mode)"),
+            h("select", {
+              id: modeId,
+              "aria-label": "workspace 子代理执行模式",
+              style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+              value: form.executor?.mode ?? "",
+              onChange: (e) => set(["executor", "mode"], e.target.value),
+            },
+              h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（继承 profile 全局 / 系统默认：标准模式）"),
+              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整编码与工具能力"),
+              h("option", { value: "ptc", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "PTC 模式 (ptc) - Code Mode 程序化工具调用"),
+              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "极简模式 (minimal) - 受控 bash + str_replace 双工具"),
+              h("option", { value: "cordis", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "创造模式 (cordis) - preset 组装与插件扩展指导"))),
           h("div", { style: { ...S.meta, marginTop: 4 } },
             catReady
-              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；已存但未列出的旧值保留为固定选项、仍可保存。"
+              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；执行模式支持标准/PTC/极简/创造模式。"
               : (catalog.status === "loading" ? "正在读取当前 Host 的合法 provider/model 目录…" : "当前 Host 目录不可用（llm.providers/models 缺失）——已存值保留可选、仍可保存。")),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),

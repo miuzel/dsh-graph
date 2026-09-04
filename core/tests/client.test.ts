@@ -109,7 +109,7 @@ test("g-132 settings 端点：GET 回填当前配置、POST 写回并保留值�
   const { root, routes } = setup();
   const empty = await get(routes, "/api/dsh-graph/settings");
   assert.equal(empty.code, 200);
-  assert.deepEqual(empty.body.executor, { provider: null, model: null });
+  assert.deepEqual(empty.body.executor, { provider: null, model: null, mode: null });
   // att-002：GET 下发当前 canonical workspace 的 project.yaml 绝对路径
   assert.equal(empty.body.configFile, join(root, "project.yaml"));
   const write = await post(routes, "/api/dsh-graph/settings",
@@ -118,7 +118,7 @@ test("g-132 settings 端点：GET 回填当前配置、POST 写回并保留值�
   assert.equal(write.body.ok, true);
   const again = await get(routes, "/api/dsh-graph/settings");
   assert.equal(again.code, 200);
-  assert.deepEqual(again.body.executor, { provider: "openai-codex", model: "gpt-5.6-luna" });
+  assert.deepEqual(again.body.executor, { provider: "openai-codex", model: "gpt-5.6-luna", mode: null });
   assert.deepEqual(again.body.prompt_overrides.subagent, { state: "override", value: "子代理补充" });
   assert.equal(again.body.configFile, join(root, "project.yaml"));
   // 非法值 → 400 且不半写入
@@ -243,7 +243,7 @@ test("g-133 源契约：workspace 弹窗 executor provider/model 目录化 selec
   assert.match(modal, /display: "flex", gap: 8, minWidth: 0/);
   assert.match(modal, /flex: "1 1 0", minWidth: 0/);
   // 保存仍写 form.executor.provider/model 到 workspace project.yaml
-  assert.match(modal, /executor: \{ provider: form\.executor\?\.provider \?\? "", model: form\.executor\?\.model \?\? "" \}/);
+  assert.match(modal, /executor: \{ provider: form\.executor\?\.provider \?\? "", model: form\.executor\?\.model \?\? "", mode: form\.executor\?\.mode \?\? "" \}/);
 });
 
 test("g-163 判据方块按有序 key 渲染并支持即时同步", () => {
@@ -842,20 +842,25 @@ test("spawn-options：无 llm 服务时容错返回（重新执行选择器数�
   assert.equal(res._code, 200);
   // modelGroups 无 llm 服务 → null；default 读 project.yaml（temp root 无 → null）
   assert.equal(res._body.modelGroups, null);
-  assert.deepEqual(res._body.default, { provider: null, model: null });
+  assert.deepEqual(res._body.default, { provider: null, model: null, mode: "standard", mode_source: "default" });
 });
 
 test("start-execution 无 subagents：attempt 本地创建、child_error 上报（带 provider/model 参数不炸）", async () => {
   const { root, routes, goalId } = setup();
   const r = await post(routes, "/api/dsh-graph/start-execution",
-    { goal: goalId, provider: "spawn", model: "deepseek-v4-flash" });
+    { goal: goalId, provider: "spawn", model: "deepseek-v4-flash", mode: "ptc" });
   assert.equal(r.code, 200);
   assert.equal(r.body.ok, true);
   assert.ok(r.body.attempt.startsWith("att-"));
   assert.equal(r.body.child_id, null);
   assert.ok(typeof r.body.child_error === "string");
+  assert.equal(r.body.mode, "ptc");
+  assert.equal(r.body.mode_source, "override");
+  const attemptDoc = loadGoal(join(dirname(findGoalFile(root, goalId)), "attempts", r.body.attempt, "attempt.md"));
+  assert.equal(attemptDoc.meta.mode, "ptc");
+  assert.equal(attemptDoc.meta.mode_source, "override");
   const events = readEvents(root);
-  assert.ok(events.some((e) => e.event === "attempt.started" && e.goal === goalId));
+  assert.ok(events.some((e) => e.event === "attempt.started" && e.goal === goalId && e.details?.mode === "ptc"));
 });
 
 // ===== g-148：GUI ready→in_progress force transition + start-execution 成功链回归 =====
@@ -2722,6 +2727,26 @@ test("g-192 标题栏主管徽章源契约：conversation.session.header.actions
   assert.match(bundle, /function SupervisorHeaderBadge/);
   assert.match(bundle, /dsh-graph-supervisor-badge/);
   assert.match(bundle, /🧭 GRAPH主管/);
+});
+
+test("g-191 client：设置页与重新执行均使用受控模式枚举并显示来源", () => {
+  const settings = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings.js"), "utf8");
+  const panel = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/live-panel.js"), "utf8");
+  const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  assert.match(settings, /subagentMode/);
+  assert.match(settings, /htmlFor: modeId/);
+  assert.match(settings, /id: modeId, "aria-label": "子代理默认执行模式"/);
+  assert.match(settings, /dg-global-subagent-mode-/);
+  assert.match(modal, /htmlFor: modeId/);
+  assert.match(modal, /id: modeId,/);
+  assert.match(modal, /aria-label": "workspace 子代理执行模式"/);
+  assert.match(modal, /dg-workspace-subagent-mode-/);
+  assert.match(panel, /modeList/);
+  assert.match(panel, /mode: mode/);
+  assert.match(panel, /id: modeId,/);
+  assert.match(panel, /aria-label": "重新执行子代理模式"/);
+  assert.match(panel, /dg-reexec-subagent-mode-/);
+  assert.match(panel, /执行模式/);
 });
 
 

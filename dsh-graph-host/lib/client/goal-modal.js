@@ -448,6 +448,7 @@
         livePanel = att
           ? h(SessionPanel, { parentId: att.parent_session_id, childId: att.child_id, collapsible: true,
                               provider: att.provider, model: att.model, modelRoute: att.model_route,
+                              subagentMode: att.mode ?? null,
                               statusLine: lastAtt?.status_line ?? null,
                               goalId: props.id, relaunchKind: "exec",
                               relaunchRoute, onRelaunched: setRelaunchRoute,
