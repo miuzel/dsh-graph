@@ -44,7 +44,9 @@ import {
   validateVersionRelease,
   versionDetail,
 } from "./version-lane.ts";
+import { registerWorktreeCandidates, listWorktrees, cleanWorktree } from "./worktree.ts";
 export { GraphError, GraphConflictError };
+export { registerWorktreeCandidates, listWorktrees, cleanWorktree };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema };
 export type { ObjectSchema };
@@ -3837,6 +3839,7 @@ export function resolveAccept(
     }
     // force 直接走 accept 分支
     applyAcceptMapping(root, id, status, opts.actor);
+    if (status === "review") registerWorktreeCandidates(root, id, opts.actor);
     return { ok: true };
   }
 
@@ -3853,6 +3856,7 @@ export function resolveAccept(
 
   // verdict === "accept"
   applyAcceptMapping(root, id, status, opts.actor);
+  if (status === "review") registerWorktreeCandidates(root, id, opts.actor);
   return { ok: true };
 }
 

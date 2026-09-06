@@ -10,7 +10,9 @@ import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./ma
 import { withTx, atomicWrite, TxError, TxCasError } from "./transaction.js";
 import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema } from "./schema.js";
 import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail, } from "./version-lane.js";
+import { registerWorktreeCandidates, listWorktrees, cleanWorktree } from "./worktree.js";
 export { GraphError, GraphConflictError };
+export { registerWorktreeCandidates, listWorktrees, cleanWorktree };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema };
 export { TxError };
@@ -3597,6 +3599,8 @@ export function resolveAccept(root, id, opts) {
         }
         // force 直接走 accept 分支
         applyAcceptMapping(root, id, status, opts.actor);
+        if (status === "review")
+            registerWorktreeCandidates(root, id, opts.actor);
         return { ok: true };
     }
     if (opts.verdict === "object") {
@@ -3612,6 +3616,8 @@ export function resolveAccept(root, id, opts) {
     }
     // verdict === "accept"
     applyAcceptMapping(root, id, status, opts.actor);
+    if (status === "review")
+        registerWorktreeCandidates(root, id, opts.actor);
     return { ok: true };
 }
 /** 接受生效的阶段映射（内部复用） */

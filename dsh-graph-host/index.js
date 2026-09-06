@@ -78,6 +78,8 @@ import {
   readPromptOverrideValue,
   readProjectConfig,
   writeProjectConfig,
+  listWorktrees,
+  cleanWorktree,
   SUBAGENT_MODES,
   SUBAGENT_MODE_SPECS,
   DEFAULT_SUBAGENT_MODE,
@@ -1087,6 +1089,22 @@ export function apply(ctx, config) {
     },
     {
       def: {
+        name: "graph_list_worktrees",
+        description: "查询 Git worktree 清理候选（只读，不自动删除）。",
+        parameters: params({ goal: str }, []),
+      },
+      run: (a, ex) => ({ worktrees: listWorktrees(rootFor(ex), a.goal) }),
+    },
+    {
+      def: {
+        name: "graph_clean_worktree",
+        description: "用户明确选择后清理已实时验证的 worktree；默认不删除分支。",
+        parameters: params({ id: str, confirm: { type: "boolean" } }, ["id", "confirm"]),
+      },
+      run: (a, ex) => cleanWorktree(rootFor(ex), a.id, actorOf(ex), a.confirm === true),
+    },
+    {
+      def: {
         name: "graph_archive_goal",
         description: "归档目标（仅 draft/planning/delivered 可归档）。移动到对应 archived 目录，记 goal.archived 事件。",
         parameters: params({ goal: str }, ["goal"]),
@@ -1538,6 +1556,28 @@ export function apply(ctx, config) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
         }
+      },
+    },
+    {
+      path: "/api/dsh-graph/worktrees",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const url = new URL(req.url, "http://localhost");
+          json(res, 200, { worktrees: listWorktrees(rootForReq(req), url.searchParams.get("goal") || undefined) });
+        } catch (e) { json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) }); }
+      },
+    },
+    {
+      path: "/api/dsh-graph/worktrees/clean",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          if (!body.id || body.confirm !== true) return json(res, 400, { error: "missing id or confirmation" });
+          const result = cleanWorktree(rootForReq(req, body), String(body.id), "human:gui", true);
+          json(res, result.ok ? 200 : 409, result);
+        } catch (e) { json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) }); }
       },
     },
     // g-77647351：transition 端点（拖放跨列触发状态迁移）

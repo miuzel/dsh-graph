@@ -2729,6 +2729,21 @@ test("g-192 标题栏主管徽章源契约：conversation.session.header.actions
   assert.match(bundle, /🧭 GRAPH主管/);
 });
 
+// g-197：delivered 弹窗 worktree 清理候选源契约。
+test("g-197 client：delivered 目标展示 WorktreeCandidates 清理组件与 API 绑定", () => {
+  const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(modal, /function WorktreeCandidates/);
+  assert.match(modal, /status === "delivered"/);
+  assert.match(modal, /"\/api\/dsh-graph\/worktrees"/);
+  assert.match(modal, /"\/api\/dsh-graph\/worktrees\/clean"/);
+  assert.match(host, /path: "\/api\/dsh-graph\/worktrees"/);
+  assert.match(host, /path: "\/api\/dsh-graph\/worktrees\/clean"/);
+  assert.match(bundle, /function WorktreeCandidates/);
+  assert.match(bundle, /可清理 worktree/);
+});
+
 test("g-191 client：设置页与重新执行均使用受控模式枚举并显示来源", () => {
   const settings = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings.js"), "utf8");
   const panel = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/live-panel.js"), "utf8");

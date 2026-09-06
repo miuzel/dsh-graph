@@ -3291,6 +3291,45 @@ window.__ModuleLoader__.load({
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
+    // g-197：展示 delivered 目标已识别的清理候选与显式清理操作
+    function WorktreeCandidates(props) {
+      const [items, setItems] = React.useState([]);
+      const [note, setNote] = React.useState(null);
+      const load = React.useCallback(() =>
+        fetch(graphUrl("/api/dsh-graph/worktrees", { goal: props.goalId }))
+          .then((r) => r.json())
+          .then((x) => setItems(Array.isArray(x.worktrees) ? x.worktrees : []))
+          .catch((e) => setNote(String(e))),
+      [props.goalId]);
+      React.useEffect(() => { load(); }, [load]);
+      const clean = async (id) => {
+        if (!window.confirm("确认删除该 linked worktree？本地分支不会删除。")) return;
+        setNote(null);
+        const r = await fetch(graphUrl("/api/dsh-graph/worktrees/clean"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id, confirm: true }),
+        });
+        const x = await r.json();
+        if (!r.ok) setNote(x.reason || x.error || "清理被阻断");
+        else { setNote("已清理 worktree"); load(); }
+      };
+      if (!items.length && !note) return null;
+      return h("div", { style: S.modalSection },
+        h("div", { style: S.modalH }, "🧹 可清理 worktree"),
+        items.map((x) =>
+          h("div", { key: x.id, style: { ...S.subCard, marginTop: 4 } },
+            h("div", null, `${x.status === "candidate" ? "✅" : "🔒"} ${x.path}`),
+            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${x.reason || "已验证合入且干净"}`),
+            x.status === "candidate"
+              ? h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => clean(x.id) }, "确认清理")
+              : null,
+          ),
+        ),
+        note ? h("div", { style: S.meta }, note) : null,
+      );
+    }
+
     // g-189：只展示服务端按 canonical workspace 只读发现的 worktree；不自行执行 git。
     function AttemptWorktrees(props) {
       const attempts = props.attempts ?? [];
@@ -3497,6 +3536,7 @@ window.__ModuleLoader__.load({
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
+          status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
             h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
