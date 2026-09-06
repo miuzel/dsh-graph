@@ -1578,7 +1578,7 @@ const G181_MODULES: Record<string, number> = {
   "criteria-modal.js": 3,
   "settings-modal.js": 3,
   "drag-prompts.js": 3,
-  "kanban.js": 5,
+  "kanban.js": 6,
 };
 const G181_TOTAL = Object.values(G181_MODULES).reduce((a, b) => a + b, 0); // 15
 

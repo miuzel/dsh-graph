@@ -4684,6 +4684,8 @@ window.__ModuleLoader__.load({
       const [showArchived, setShowArchived] = React.useState(false);
       // g-187：顶部多选标签筛选；选中多个标签时采用 OR。
       const [tagFilter, setTagFilter] = React.useState([]);
+      const [showTagFilterModal, setShowTagFilterModal] = React.useState(false);
+      const tagFilterGuard = useBackdropClose(() => setShowTagFilterModal(false));
       const tagsFor = (g) => Array.isArray(g?.tags) ? g.tags : [];
       const matchesTag = (g) => !tagFilter.length || tagsFor(g).some((tag) => tagFilter.includes(String(tag)));
       // g-223: 版本管理抽屉与显隐过滤状态（本地存储持久化，按当前解析 workspace 隔离与响应）
@@ -5952,24 +5954,20 @@ window.__ModuleLoader__.load({
             onTriggerRefresh: load,
           }),
           h("button", { style: { ...S.btn, marginLeft: 8 }, className: "dg-btn", onClick: load }, "刷新"),
-          // g-187：顶部多选标签筛选器
-          h("select", {
-            multiple: true,
-            value: tagFilter,
-            onChange: (e) => setTagFilter([...e.target.selectedOptions].map((o) => o.value)),
-            "aria-label": "按标签筛选目标",
-            title: "按标签筛选目标（按住 Ctrl/Cmd 可多选，多选为 OR）",
-            style: { ...S.promptInput, width: 130, height: 26, minHeight: 26, marginLeft: 8, fontSize: 11, padding: "0 4px" },
-          },
-            [...new Set(allGoals.flatMap((g) => tagsFor(g)))].sort().map((tag) =>
-              h("option", { key: tag, value: tag, style: { fontSize: 11 } }, "#" + tag))),
+          // g-187：顶部标签筛选弹层入口
+          h("button", {
+            style: { ...S.btn, marginLeft: 8, fontSize: 12, padding: "2px 8px", display: "inline-flex", alignItems: "center", gap: 4 },
+            className: "dg-btn" + (tagFilter.length > 0 ? " dg-btn-active" : ""),
+            title: "打开标签筛选面板（支持多选点选与一键清除）",
+            onClick: () => setShowTagFilterModal(true),
+          }, tagFilter.length > 0 ? `🔖 标签筛选 (${tagFilter.length})` : "🔖 标签筛选"),
           tagFilter.length > 0
             ? h("button", {
                 className: "dg-btn",
                 style: { ...S.btn, fontSize: 11, padding: "1px 6px", marginLeft: 4 },
-                title: "清除标签筛选",
+                title: "一键清除全部标签筛选",
                 onClick: () => setTagFilter([]),
-              }, "重置筛选(" + tagFilter.length + ")")
+              }, "✕ 取消筛选")
             : null,
           // g-110: 显示已归档目标的 checkbox
           h("label", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 12, cursor: "pointer", fontSize: 12, opacity: 0.8 } },
@@ -6516,6 +6514,46 @@ window.__ModuleLoader__.load({
                     onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); },
                   }, "取消")),
                 renameVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, renameVersionNote) : null))
+          : null,
+        // g-187: 标签多选筛选弹窗/面板
+        showTagFilterModal
+          ? h("div", { style: S.overlay, ...tagFilterGuard },
+              h("div", { style: { ...S.modal, minWidth: 320, maxWidth: 440 }, onClick: (e) => e.stopPropagation() },
+                h("span", { style: S.close, onClick: () => setShowTagFilterModal(false) }, "✕"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
+                  "🔖 标签筛选",
+                  h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "（点击标签多选过滤，支持 OR 联集）")),
+                h("div", { style: { ...S.meta, marginBottom: 10 } }, "选择要查看的标签，看板仅显示包含所选标签的目标："),
+                h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto", padding: "2px 0", marginBottom: 12 } },
+                  (() => {
+                    const allAvailableTags = [...new Set(allGoals.flatMap((g) => tagsFor(g)))].sort();
+                    if (!allAvailableTags.length) return h("span", { style: S.meta }, "（当前看板目标尚无任何可用标签）");
+                    return allAvailableTags.map((tag) => {
+                      const selected = tagFilter.includes(tag);
+                      return h("button", {
+                        key: tag,
+                        className: "dg-btn",
+                        style: {
+                          ...S.btn,
+                          fontSize: 12,
+                          padding: "3px 8px",
+                          borderRadius: 12,
+                          background: selected ? "var(--dsw-alias-button-primary-fill, #4c8dff)" : "rgba(76,141,255,.12)",
+                          color: selected ? "var(--dsw-alias-label-primary-foreground, #fff)" : "var(--dsw-alias-label-primary, inherit)",
+                          borderColor: selected ? "var(--dsw-alias-button-primary-fill, #4c8dff)" : "rgba(76,141,255,.35)",
+                        },
+                        onClick: () => {
+                          if (selected) setTagFilter(tagFilter.filter((t) => t !== tag));
+                          else setTagFilter([...tagFilter, tag]);
+                        },
+                      }, (selected ? "✓ " : "") + "#" + tag);
+                    });
+                  })()),
+                h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid rgba(128,128,128,.2)", paddingTop: 10 } },
+                  h("span", { style: S.meta }, `已选 ${tagFilter.length} 个标签`),
+                  h("div", { style: { display: "flex", gap: 8 } },
+                    tagFilter.length > 0 ? h("button", { className: "dg-btn", style: S.btn, onClick: () => setTagFilter([]) }, "一键清空") : null,
+                    h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => setShowTagFilterModal(false) }, "完成")))))
           : null,
         // g-134: 删除版本泳道确认弹窗
         deleteVersionTarget
