@@ -332,7 +332,7 @@
               onChange: (e) => set(["executor", "mode"], e.target.value),
             },
               h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（继承 profile 全局 / 系统默认：标准模式）"),
-              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整工具 + 自定义/默认 Persona"),
+              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整开发工具能力"),
               h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "极简模式 (minimal) - 受控 6 工具物理过滤 (graph-minimal)"))),
           h("div", { style: { ...S.meta, marginTop: 4 } },
             catReady

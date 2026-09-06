@@ -178,11 +178,10 @@
       if (modeIdRef.current == null) modeIdRef.current = `dg-reexec-subagent-mode-${++reExecModeInstanceSeq}`;
       const modeId = modeIdRef.current;
       const { goalId, kind, cardId, prompt } = props;
-      const [opts, setOpts] = React.useState(null); // {modelGroups, default, personas}
+      const [opts, setOpts] = React.useState(null); // {modelGroups, default}
       const [provider, setProvider] = React.useState("");
       const [model, setModel] = React.useState("");
       const [mode, setMode] = React.useState("");
-      const [persona, setPersona] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
 
@@ -219,7 +218,6 @@
         { id: "standard", name: "标准模式" },
         { id: "minimal", name: "极简模式 (6工具过滤)" },
       ];
-      const personaList = opts?.personas ?? [];
 
       const relaunch = async () => {
         setBusy(true);
@@ -231,7 +229,6 @@
             provider: provider || undefined,
             model: model || undefined,
             mode: mode || undefined,
-            persona: persona || undefined,
           };
           if (kind === "collect") { body.card = cardId; body.prompt = prompt; }
           const r = await fetch(graphUrl(url), {
@@ -300,15 +297,6 @@
                 },
                   h("option", { key: "", value: "", style: optStyle }, "模式: 默认"),
                   ...modeList.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))) : null,
-                kind !== "collect" && personaList.length > 0 ? h("select", {
-                  "aria-label": "重新执行 Persona 预设",
-                  style: selStyle, value: persona,
-                  className: "dg-select",
-                  title: "子代理 Persona 预设（可选已安装的自定义 Persona）",
-                  onChange: (e) => setPersona(e.target.value),
-                },
-                  h("option", { key: "", value: "", style: optStyle }, "Persona: 默认"),
-                  ...personaList.map((p) => h("option", { key: p.id, value: p.id, style: optStyle }, p.name ?? p.id))) : null,
               ],
           h("button", {
             style: { ...S.btn, padding: "3px 10px", fontSize: 12 }, className: "dg-btn dg-relaunch",
