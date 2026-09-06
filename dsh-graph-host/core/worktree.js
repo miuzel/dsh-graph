@@ -81,18 +81,28 @@ function parseAssociation(tree) {
     return { assoc };
 }
 function candidateId(goal, attempt, path) { return `${goal}:${attempt}:${path}`; }
+function resolveCodeWorkspace(root) {
+    const resolved = resolve(root);
+    // g-149 / 独立数据仓库支持：如果 root 名为 .dsh-graph，且其父目录是 Git 仓库，真正的工程代码库是父目录
+    const parent = dirname(resolved);
+    const parentInfo = discoverGitWorktree(parent);
+    if (parentInfo)
+        return parentInfo.mainWorktree;
+    const directInfo = discoverGitWorktree(resolved);
+    return directInfo ? directInfo.mainWorktree : null;
+}
 export function listWorktrees(root, goalId) {
-    const info = discoverGitWorktree(resolve(root));
-    if (!info)
+    const mainWorktree = resolveCodeWorkspace(root);
+    if (!mainWorktree)
         return [];
     let list;
     try {
-        list = trees(info.mainWorktree);
+        list = trees(mainWorktree);
     }
     catch {
         return [];
     }
-    const main = resolve(info.mainWorktree);
+    const main = resolve(mainWorktree);
     const target = list[0]?.branch ?? null;
     const out = [];
     const events = readEvents(root);
@@ -202,10 +212,10 @@ export function cleanWorktree(root, id, actor = "human:gui", confirm = false) {
         return { ok: true, candidate: c, reason: "already_cleaned" };
     if (c.status !== "candidate")
         return block(c.reason ?? "候选受保护");
-    const info = discoverGitWorktree(resolve(root));
-    if (!info)
+    const mainWorktree = resolveCodeWorkspace(root);
+    if (!mainWorktree)
         return block("Git 不可用");
-    const main = resolve(info.mainWorktree);
+    const main = resolve(mainWorktree);
     const rel = relative(main, resolve(c.path));
     if (rel === "" || rel.startsWith(`..${sep}`) || !(rel.startsWith(`.worktrees${sep}`)))
         return block("路径不在 canonical workspace/.worktrees");

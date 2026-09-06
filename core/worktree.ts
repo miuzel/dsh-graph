@@ -61,10 +61,20 @@ function parseAssociation(tree: GitTree): { assoc: { goal: string; attempt: stri
 }
 function candidateId(goal: string, attempt: string, path: string): string { return `${goal}:${attempt}:${path}`; }
 
+function resolveCodeWorkspace(root: string): string | null {
+  const resolved = resolve(root);
+  // g-149 / 独立数据仓库支持：如果 root 名为 .dsh-graph，且其父目录是 Git 仓库，真正的工程代码库是父目录
+  const parent = dirname(resolved);
+  const parentInfo = discoverGitWorktree(parent);
+  if (parentInfo) return parentInfo.mainWorktree;
+  const directInfo = discoverGitWorktree(resolved);
+  return directInfo ? directInfo.mainWorktree : null;
+}
+
 export function listWorktrees(root: string, goalId?: string): WorktreeCandidate[] {
-  const info = discoverGitWorktree(resolve(root)); if (!info) return [];
-  let list: GitTree[]; try { list = trees(info.mainWorktree); } catch { return []; }
-  const main = resolve(info.mainWorktree); const target = list[0]?.branch ?? null; const out: WorktreeCandidate[] = [];
+  const mainWorktree = resolveCodeWorkspace(root); if (!mainWorktree) return [];
+  let list: GitTree[]; try { list = trees(mainWorktree); } catch { return []; }
+  const main = resolve(mainWorktree); const target = list[0]?.branch ?? null; const out: WorktreeCandidate[] = [];
   const events = readEvents(root);
   for (const tree of list) {
     if (resolve(tree.path) === main) continue;
@@ -119,8 +129,8 @@ export function cleanWorktree(root: string, id: string, actor = "human:gui", con
   if (!c) return block("未知候选 id");
   if (c.status === "cleaned" || (c.status === "unknown" && c.reason?.includes("外部删除"))) return { ok: true, candidate: c, reason: "already_cleaned" };
   if (c.status !== "candidate") return block(c.reason ?? "候选受保护");
-  const info = discoverGitWorktree(resolve(root)); if (!info) return block("Git 不可用");
-  const main = resolve(info.mainWorktree); const rel = relative(main, resolve(c.path));
+  const mainWorktree = resolveCodeWorkspace(root); if (!mainWorktree) return block("Git 不可用");
+  const main = resolve(mainWorktree); const rel = relative(main, resolve(c.path));
   if (rel === "" || rel.startsWith(`..${sep}`) || !(rel.startsWith(`.worktrees${sep}`))) return block("路径不在 canonical workspace/.worktrees");
   let live: GitTree | undefined; try { live = trees(main).find(x => resolve(x.path) === resolve(c.path)); } catch { return block("Git worktree 列表不可用"); }
   if (!live || live.head !== c.head || live.branch !== c.branch) return block("worktree 实时记录已漂移");
