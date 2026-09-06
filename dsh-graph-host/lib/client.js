@@ -5952,6 +5952,25 @@ window.__ModuleLoader__.load({
             onTriggerRefresh: load,
           }),
           h("button", { style: { ...S.btn, marginLeft: 8 }, className: "dg-btn", onClick: load }, "刷新"),
+          // g-187：顶部多选标签筛选器
+          h("select", {
+            multiple: true,
+            value: tagFilter,
+            onChange: (e) => setTagFilter([...e.target.selectedOptions].map((o) => o.value)),
+            "aria-label": "按标签筛选目标",
+            title: "按标签筛选目标（按住 Ctrl/Cmd 可多选，多选为 OR）",
+            style: { ...S.promptInput, width: 130, height: 26, minHeight: 26, marginLeft: 8, fontSize: 11, padding: "0 4px" },
+          },
+            [...new Set(allGoals.flatMap((g) => tagsFor(g)))].sort().map((tag) =>
+              h("option", { key: tag, value: tag, style: { fontSize: 11 } }, "#" + tag))),
+          tagFilter.length > 0
+            ? h("button", {
+                className: "dg-btn",
+                style: { ...S.btn, fontSize: 11, padding: "1px 6px", marginLeft: 4 },
+                title: "清除标签筛选",
+                onClick: () => setTagFilter([]),
+              }, "重置筛选(" + tagFilter.length + ")")
+            : null,
           // g-110: 显示已归档目标的 checkbox
           h("label", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 12, cursor: "pointer", fontSize: 12, opacity: 0.8 } },
             h("input", {
