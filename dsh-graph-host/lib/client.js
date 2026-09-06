@@ -3308,6 +3308,7 @@ window.__ModuleLoader__.load({
     // g-187：客户端标签编辑器，所有变更通过 host 持久化到 goal.md。
     function GoalTagsEditor(props) {
       const [tags, setTags] = React.useState(Array.isArray(props.tags) ? props.tags : []);
+      const [showAdd, setShowAdd] = React.useState(false);
       const [text, setText] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
@@ -3325,14 +3326,29 @@ window.__ModuleLoader__.load({
         } catch (e) { setNote(String(e?.message ?? e)); }
         finally { setSaving(false); }
       };
-      const add = () => { const value = text.trim(); if (!value) return; save([...tags, ...value.split(/[,，\s]+/)]); setText(""); };
+      const add = () => {
+        const value = text.trim();
+        if (!value) return;
+        save([...tags, ...value.split(/[,，\s]+/)]);
+        setText("");
+        setShowAdd(false);
+      };
       return h("div", { style: { ...S.modalSection, minWidth: 0, maxWidth: "100%", overflow: "hidden" } },
-        h("div", { style: S.modalH }, "🏷 标签"),
-        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6, minWidth: 0, maxWidth: "100%" } },
-          tags.length ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: "点击移除标签", disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×")) : h("span", { style: S.meta }, "（暂无标签）")),
-        h("div", { style: { display: "flex", gap: 4 } },
-          h("input", { value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: "输入标签，逗号或空格分隔", onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); } }),
-          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? "保存中…" : "添加")),
+        h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
+          h("span", null, "🔖 标签"),
+          h("button", {
+            className: "dg-btn",
+            style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+            title: showAdd ? "收起输入框" : "添加新标签",
+            onClick: () => { setShowAdd(!showAdd); setNote(null); },
+          }, showAdd ? "取消" : "＋ 添加标签")),
+        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, minWidth: 0, maxWidth: "100%" } },
+          tags.length
+            ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: "点击移除标签", disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×"))
+            : (!showAdd ? h("span", { style: S.meta }, "（暂无标签，点击右上角添加）") : null)),
+        showAdd ? h("div", { style: { display: "flex", gap: 4, marginTop: 6 } },
+          h("input", { autoFocus: true, value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: "输入标签名称，逗号或空格分隔…", onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); else if (e.key === "Escape") setShowAdd(false); } }),
+          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? "保存中…" : "保存")) : null,
         note ? h("div", { style: { ...S.meta, color: note === "已保存" ? undefined : "#e57373", marginTop: 4 } }, note) : null);
     }
 
