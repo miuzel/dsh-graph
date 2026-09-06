@@ -76,6 +76,18 @@
       });
     }
 
+    // g-187：标签徽章（标签由看板本地编辑器维护，也兼容服务端 tags 字段）
+    function GoalTags(props) {
+      const tags = Array.isArray(props.tags) ? props.tags : [];
+      if (!tags.length) return null;
+      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" }, "aria-label": "标签" },
+        tags.map((tag) => h("span", {
+          key: tag, style: { fontSize: 10, lineHeight: "16px", padding: "0 5px", borderRadius: 8,
+            background: "rgba(76,141,255,.16)", border: "1px solid rgba(76,141,255,.35)",
+            color: "var(--dsw-alias-label-primary, #b8d1ff)", maxWidth: "100%", minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word" },
+        }, "#" + tag)));
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
@@ -225,6 +237,7 @@
           polishOverlay,
           updateSheen,
            titleRow,
+          h(GoalTags, { tags: g._tags ?? g.tags }),
           h("div", { style: S.meta },
             `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
              h(CriteriaProgress, {
@@ -241,6 +254,7 @@
         polishOverlay,
         updateSheen,
            titleRow,
+        h(GoalTags, { tags: g._tags ?? g.tags }),
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
           h(CriteriaProgress, {

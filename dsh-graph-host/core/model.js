@@ -5,6 +5,32 @@
 // g-158：四种固定类型、默认 task、非法值回退 task
 export const GOAL_TYPES = ["feature", "bug", "task", "improvement"];
 export const DEFAULT_GOAL_TYPE = "task";
+export const MAX_TAG_LEN = 32;
+export const MAX_TAGS = 20;
+/** 规范化并校验目标标签；返回稳定去重后的标签列表。 */
+export function normalizeGoalTags(raw) {
+    if (raw == null)
+        return [];
+    if (!Array.isArray(raw))
+        throw new Error("标签必须是数组");
+    if (raw.length > MAX_TAGS)
+        throw new Error(`标签最多 ${MAX_TAGS} 个`);
+    const out = [];
+    for (const value of raw) {
+        if (typeof value !== "string")
+            throw new Error("标签必须是文本");
+        const tag = value.trim();
+        if (!tag)
+            throw new Error("标签不能为空或仅包含空白");
+        if ([...tag].length > MAX_TAG_LEN)
+            throw new Error(`标签不能超过 ${MAX_TAG_LEN} 个字符`);
+        if (/\p{Cc}/u.test(tag))
+            throw new Error("标签不能包含控制字符");
+        if (!out.includes(tag))
+            out.push(tag);
+    }
+    return out;
+}
 /** 将任意值规范化为合法类型；非法/空值回退 task（不抛错）。 */
 export function normalizeGoalType(raw) {
     const s = String(raw ?? "").trim().toLowerCase();

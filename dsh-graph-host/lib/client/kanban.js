@@ -30,6 +30,10 @@
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
       const [showArchived, setShowArchived] = React.useState(false);
+      // g-187：顶部多选标签筛选；选中多个标签时采用 OR。
+      const [tagFilter, setTagFilter] = React.useState([]);
+      const tagsFor = (g) => Array.isArray(g?.tags) ? g.tags : [];
+      const matchesTag = (g) => !tagFilter.length || tagsFor(g).some((tag) => tagFilter.includes(String(tag)));
       // g-223: 版本管理抽屉与显隐过滤状态（本地存储持久化，按当前解析 workspace 隔离与响应）
       const [showVersionDrawer, setShowVersionDrawer] = React.useState(false);
       // Compatibility marker: const activeWs = resolveWorkspaceOfSession(props?.sessionId) || "default" (intentionally not used).
@@ -631,6 +635,7 @@
       // g-77647351：泳道渲染（带拖放支持，跨 lane 拖放改归属）；g-129 版本 lane 标题「＋」预选版本
       // g-137：laneIndex 用于交替背景色；g-162：阶段列横向交替深浅
       const lane = (label, goals, key, version, laneIndex = 0, collapsible = true) => {
+        goals = goals.filter(matchesTag);
         // g-162: 普通泳道折叠状态；released 仅复用 lane 布局，不增加折叠入口
         const isCollapsed = collapsible && !!collapsedLanes[key];
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
@@ -808,7 +813,7 @@
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -989,7 +994,7 @@
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),

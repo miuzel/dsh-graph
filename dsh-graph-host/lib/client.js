@@ -1994,6 +1994,18 @@ window.__ModuleLoader__.load({
       });
     }
 
+    // g-187：标签徽章（标签由看板本地编辑器维护，也兼容服务端 tags 字段）
+    function GoalTags(props) {
+      const tags = Array.isArray(props.tags) ? props.tags : [];
+      if (!tags.length) return null;
+      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" }, "aria-label": "标签" },
+        tags.map((tag) => h("span", {
+          key: tag, style: { fontSize: 10, lineHeight: "16px", padding: "0 5px", borderRadius: 8,
+            background: "rgba(76,141,255,.16)", border: "1px solid rgba(76,141,255,.35)",
+            color: "var(--dsw-alias-label-primary, #b8d1ff)", maxWidth: "100%", minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word" },
+        }, "#" + tag)));
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
@@ -2143,6 +2155,7 @@ window.__ModuleLoader__.load({
           polishOverlay,
           updateSheen,
            titleRow,
+          h(GoalTags, { tags: g._tags ?? g.tags }),
           h("div", { style: S.meta },
             `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
              h(CriteriaProgress, {
@@ -2159,6 +2172,7 @@ window.__ModuleLoader__.load({
         polishOverlay,
         updateSheen,
            titleRow,
+        h(GoalTags, { tags: g._tags ?? g.tags }),
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
           h(CriteriaProgress, {
@@ -3291,6 +3305,37 @@ window.__ModuleLoader__.load({
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
+    // g-187：客户端标签编辑器，所有变更通过 host 持久化到 goal.md。
+    function GoalTagsEditor(props) {
+      const [tags, setTags] = React.useState(Array.isArray(props.tags) ? props.tags : []);
+      const [text, setText] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [saving, setSaving] = React.useState(false);
+      React.useEffect(() => { setTags(Array.isArray(props.tags) ? props.tags : []); }, [props.tags]);
+      const save = async (next) => {
+        if (saving) return;
+        const clean = [...new Set(next.map((x) => String(x).trim().replace(/^#/, "")))];
+        setSaving(true); setNote(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/set-goal-tags"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: props.goalId, tags: clean, base_tags: tags }) });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error || "标签保存失败");
+          const saved = Array.isArray(data.new_tags) ? data.new_tags : clean;
+          setTags(saved); props.onChange?.(saved); setNote("已保存");
+        } catch (e) { setNote(String(e?.message ?? e)); }
+        finally { setSaving(false); }
+      };
+      const add = () => { const value = text.trim(); if (!value) return; save([...tags, ...value.split(/[,，\s]+/)]); setText(""); };
+      return h("div", { style: { ...S.modalSection, minWidth: 0, maxWidth: "100%", overflow: "hidden" } },
+        h("div", { style: S.modalH }, "🏷 标签"),
+        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6, minWidth: 0, maxWidth: "100%" } },
+          tags.length ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: "点击移除标签", disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×")) : h("span", { style: S.meta }, "（暂无标签）")),
+        h("div", { style: { display: "flex", gap: 4 } },
+          h("input", { value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: "输入标签，逗号或空格分隔", onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); } }),
+          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? "保存中…" : "添加")),
+        note ? h("div", { style: { ...S.meta, color: note === "已保存" ? undefined : "#e57373", marginTop: 4 } }, note) : null);
+    }
+
     // g-197：展示 delivered 目标已识别的清理候选与显式清理操作
     function WorktreeCandidates(props) {
       const [items, setItems] = React.useState([]);
@@ -3537,6 +3582,7 @@ window.__ModuleLoader__.load({
         const detailTab = [
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
+          h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: props.tags, onChange: props.onTagsChanged }),
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
             h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
@@ -4604,6 +4650,10 @@ window.__ModuleLoader__.load({
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
       const [showArchived, setShowArchived] = React.useState(false);
+      // g-187：顶部多选标签筛选；选中多个标签时采用 OR。
+      const [tagFilter, setTagFilter] = React.useState([]);
+      const tagsFor = (g) => Array.isArray(g?.tags) ? g.tags : [];
+      const matchesTag = (g) => !tagFilter.length || tagsFor(g).some((tag) => tagFilter.includes(String(tag)));
       // g-223: 版本管理抽屉与显隐过滤状态（本地存储持久化，按当前解析 workspace 隔离与响应）
       const [showVersionDrawer, setShowVersionDrawer] = React.useState(false);
       // Compatibility marker: const activeWs = resolveWorkspaceOfSession(props?.sessionId) || "default" (intentionally not used).
@@ -5205,6 +5255,7 @@ window.__ModuleLoader__.load({
       // g-77647351：泳道渲染（带拖放支持，跨 lane 拖放改归属）；g-129 版本 lane 标题「＋」预选版本
       // g-137：laneIndex 用于交替背景色；g-162：阶段列横向交替深浅
       const lane = (label, goals, key, version, laneIndex = 0, collapsible = true) => {
+        goals = goals.filter(matchesTag);
         // g-162: 普通泳道折叠状态；released 仅复用 lane 布局，不增加折叠入口
         const isCollapsed = collapsible && !!collapsedLanes[key];
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
@@ -5382,7 +5433,7 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -5563,7 +5614,7 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),

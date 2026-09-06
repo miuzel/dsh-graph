@@ -2,8 +2,15 @@
 
 import { execFileSync } from "node:child_process";
 import {
+  closeSync,
   copyFileSync,
   existsSync,
+  fchmodSync,
+  fstatSync,
+  ftruncateSync,
+  lstatSync,
+  openSync,
+  unlinkSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -13,7 +20,10 @@ import {
   statSync,
   realpathSync,
   writeFileSync,
+  writeSync,
+  readSync,
 } from "node:fs";
+import { O_CREAT, O_EXCL, O_NOFOLLOW, O_WRONLY, O_RDWR, O_RDONLY, O_DIRECTORY } from "node:constants";
 import { join, basename, dirname, relative, resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
@@ -26,6 +36,7 @@ import {
   countCriteria,
   criteriaItems,
   normalizeGoalType,
+  normalizeGoalTags,
   rebuildCriteriaSection,
   type GoalDoc,
   type GoalType,
@@ -3146,6 +3157,8 @@ export interface BoardGoal {
   status: string;
   /** g-158：目标类型 */
   type: GoalType;
+  /** g-187：目标标签（旧目标缺失时为空数组） */
+  tags: string[];
   status_line: string | null;
   reviewer: string | null;
   depends_on: string[];
@@ -3291,6 +3304,7 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
       title: String(meta.title ?? meta.id),
       status: String(meta.status ?? "unknown"),
       type: normalizeGoalType(meta.type),
+      tags: (() => { try { return normalizeGoalTags(meta.tags); } catch { return []; } })(),
       status_line: statusLine,
       reviewer: meta.review?.reviewer ?? null,
       depends_on: (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((d: any) =>
@@ -3747,6 +3761,147 @@ export function renameGoal(
     details: { old_title: oldTitle, new_title: newTitle },
   });
   return { old_title: oldTitle, new_title: newTitle };
+}
+
+function acquireTagsLock(file: string): { lock: string; token: string; lockStat: any; ownerStat: any; lockFd: number; ownerFd: number } {
+  const lock = `${file}.tags.lock`;
+  const validToken = (v: string) => /^\d+:[0-9a-f-]{36}$/.test(v);
+  for (let i = 0; i < 200; i++) {
+    const token = `${process.pid}:${randomUUID()}`;
+    try {
+      const existing = lstatSync(lock);
+      if (!existing.isDirectory()) throw new GraphError("标签锁路径不是目录，拒绝越界操作");
+      if (Date.now() - existing.mtimeMs > 30_000) {
+        const ownerPath = join(lock, "owner");
+        const ownerStat = lstatSync(ownerPath);
+        if (!ownerStat.isFile()) throw new GraphError("标签锁 owner 不是普通文件，拒绝回收");
+        const owner = readFileSync(ownerPath, "utf8");
+        if (!validToken(owner)) throw new GraphError("标签锁 owner 无效，拒绝回收");
+        const pid = Number(owner.split(":", 1)[0]);
+        let alive = true;
+        try { process.kill(pid, 0); }
+        catch (error: any) { if (error?.code === "ESRCH") alive = false; else if (error?.code !== "EPERM") throw error; }
+        if (!alive) {
+          const quarantine = `${lock}.reclaim-${token}`;
+          try { renameSync(lock, quarantine); } catch { /* raced */ }
+          try {
+            const qOwner = join(quarantine, "owner"); const qs = lstatSync(qOwner);
+            if (qs.isFile() && readFileSync(qOwner, "utf8") === owner) { rmSync(qOwner); rmdirSync(quarantine); }
+          } catch { /* unknown/sentinel content remains quarantined safely */ }
+        }
+      }
+    } catch (e) {
+      if (e instanceof GraphError && /不是目录|owner 无效|owner 不是/.test(e.message)) throw e;
+      try {
+        mkdirSync(lock, { mode: 0o700 });
+        try {
+          const lockFd = openSync(lock, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+          const ownerFd = openSync(join(lock, "owner"), O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
+          try { writeSync(ownerFd, token, 0, "utf8"); }
+          catch (writeError) { closeSync(ownerFd); closeSync(lockFd); throw writeError; }
+          const lockStat = lstatSync(lock); const ownerStat = fstatSync(ownerFd);
+          return { lock, token, lockStat, ownerStat, lockFd, ownerFd };
+        } catch (writeError) {
+          try { rmdirSync(lock); } catch { /* retain unknown content safely */ }
+          throw writeError;
+        }
+      } catch (mkdirError) {
+        if (mkdirError instanceof GraphError && /不是目录|owner 无效|owner 不是/.test(mkdirError.message)) throw mkdirError;
+      }
+      const until = Date.now() + 5; while (Date.now() < until) { /* backoff */ }
+    }
+  }
+  throw new GraphError("标签文件正被其他请求锁定，请稍后重试");
+}
+
+function releaseTagsLock(handle: { lock: string; token: string; lockStat: any; ownerStat: any; lockFd: number; ownerFd: number }): void {
+  try {
+    const st = lstatSync(handle.lock);
+    const os = lstatSync(join(handle.lock, "owner"));
+    const nowLock = fstatSync(handle.lockFd); const nowOwner = fstatSync(handle.ownerFd);
+    if (!st.isDirectory() || st.dev !== handle.lockStat.dev || st.ino !== handle.lockStat.ino ||
+      nowLock.dev !== handle.lockStat.dev || nowLock.ino !== handle.lockStat.ino ||
+      !os.isFile() || os.dev !== handle.ownerStat.dev || os.ino !== handle.ownerStat.ino ||
+      nowOwner.dev !== handle.ownerStat.dev || nowOwner.ino !== handle.ownerStat.ino) return;
+    const detached = `${handle.lock}.release-${handle.token}`;
+    try { if (lstatSync(detached)) return; } catch (e: any) { if (e?.code !== "ENOENT") return; }
+    try { renameSync(handle.lock, detached); } catch (e: any) { if (e?.code === "EEXIST") return; throw e; }
+    const detachedStat = lstatSync(detached);
+    if (detachedStat.dev !== handle.lockStat.dev || detachedStat.ino !== handle.lockStat.ino) return;
+    const detachedOwner = join(detached, "owner");
+    const dos = lstatSync(detachedOwner);
+    if (!dos.isFile() || dos.dev !== handle.ownerStat.dev || dos.ino !== handle.ownerStat.ino) return;
+    const ownerBuf = Buffer.alloc(handle.token.length);
+    const readCount = readSync(handle.ownerFd, ownerBuf, 0, ownerBuf.length, 0);
+    if (ownerBuf.subarray(0, readCount).toString("utf8") !== handle.token) return;
+    unlinkSync(detachedOwner);
+    rmdirSync(detached);
+  } catch { /* replaced or unknown content; never recursively delete */ }
+  finally { try { closeSync(handle.ownerFd); } catch { /* already closed */ } try { closeSync(handle.lockFd); } catch { /* already closed */ } }
+}
+
+/** g-187：设置目标标签，使用锁内 CAS 与原子替换。 */
+export function setGoalTags(
+  root: string,
+  id: string,
+  opts: { tags: unknown; actor: string; base_tags?: unknown; force?: boolean },
+): { old_tags: string[]; new_tags: string[] } {
+  if (opts.force !== undefined && typeof opts.force !== "boolean") throw new GraphError("force 必须是布尔值");
+  const newTags = normalizeGoalTags(opts.tags);
+  const file = findGoalFile(root, id);
+  const lockHandle = acquireTagsLock(file);
+  try {
+    const originalText = readFileSync(file, "utf8");
+    const originalStat = statSync(file);
+    const doc = loadGoal(file);
+    const oldTags = normalizeGoalTags(doc.meta.tags);
+    if (opts.force !== true && opts.base_tags !== undefined && opts.base_tags !== null) {
+      const baseTags = normalizeGoalTags(opts.base_tags);
+      if (JSON.stringify(baseTags) !== JSON.stringify(oldTags)) {
+        throw new GraphConflictError("目标标签已被其他人修改，请刷新后重试");
+      }
+    }
+    if (JSON.stringify(oldTags) === JSON.stringify(newTags)) return { old_tags: oldTags, new_tags: newTags };
+    doc.meta.tags = newTags;
+    const temp = `${file}.tags-${process.pid}-${randomUUID()}.tmp`;
+    let writtenFd = -1;
+    let writtenStat: any;
+    try {
+      writtenFd = openSync(temp, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, originalStat.mode);
+      writeSync(writtenFd, serializeDoc(doc), 0, "utf8");
+      fchmodSync(writtenFd, originalStat.mode);
+      writtenStat = fstatSync(writtenFd);
+      if (!writtenStat.isFile()) throw new GraphError("标签临时文件不是普通文件");
+      renameSync(temp, file);
+    } catch (e) {
+      try { if (writtenFd >= 0) closeSync(writtenFd); } catch { /* already closed */ }
+      try { if (existsSync(temp)) rmSync(temp); } catch { /* preserve original */ }
+      throw e;
+    }
+    try {
+      appendEvent(root, {
+        actor: opts.actor,
+        event: "goal.tags_updated",
+        goal: id,
+        details: { old_tags: oldTags, new_tags: newTags },
+      });
+    } catch (eventError) {
+      try {
+        const pathStat = lstatSync(file);
+        if (!pathStat.isFile() || pathStat.dev !== writtenStat.dev || pathStat.ino !== writtenStat.ino) throw new GraphConflictError("目标文件已被外部替换或删除，拒绝回滚");
+        const current = fstatSync(writtenFd);
+        if (current.dev !== writtenStat.dev || current.ino !== writtenStat.ino) throw new GraphConflictError("目标文件 inode 校验失败");
+        ftruncateSync(writtenFd, 0); writeSync(writtenFd, originalText, 0, "utf8"); fchmodSync(writtenFd, originalStat.mode);
+      } catch (rollbackError) {
+        try { closeSync(writtenFd); } catch { /* already closed */ }
+        throw new GraphError(`标签事件写入失败且回滚失败：${String((rollbackError as Error)?.message ?? rollbackError)}`);
+      }
+      try { closeSync(writtenFd); } catch { /* already closed */ }
+      throw eventError;
+    }
+    try { closeSync(writtenFd); } catch { /* already closed */ }
+    return { old_tags: oldTags, new_tags: newTags };
+  } finally { releaseTagsLock(lockHandle); }
 }
 
 /** g-158：设置目标类型并记录 goal.type_changed；相同类型 no-op。 */

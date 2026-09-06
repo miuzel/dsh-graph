@@ -20,6 +20,7 @@ import {
   createGoal,
   setCriteria,
   updateCriteria,
+  setGoalTags,
   transition,
   validate,
   rebuild,
@@ -796,6 +797,22 @@ export function apply(ctx, config) {
       },
       run: (a, ex) => {
         const result = renameGoal(rootFor(ex), a.goal, { title: a.title, actor: actorOf(ex) });
+        return { ok: true, ...result };
+      },
+    },
+    {
+      def: {
+        name: "graph_set_goal_tags",
+        description: "设置目标标签列表（最多20个，每个不超过32字，禁止控制字符）。支持基于 base_tags 的乐观并发，force=true 时强制覆盖。写入前事件先行。",
+        parameters: params({ goal: str, tags: strArr, base_tags: strArr, force: { type: "boolean" } }, ["goal", "tags"]),
+      },
+      run: (a, ex) => {
+        const result = setGoalTags(rootFor(ex), a.goal, {
+          tags: a.tags,
+          base_tags: a.base_tags,
+          force: a.force,
+          actor: actorOf(ex),
+        });
         return { ok: true, ...result };
       },
     },
@@ -1675,6 +1692,23 @@ export function apply(ctx, config) {
           json(res, 200, { ok: true, ...result });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/set-goal-tags",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, tags, base_tags, force } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          if (!Array.isArray(tags)) return json(res, 400, { error: "tags 必须是数组" });
+          const result = setGoalTags(rootForReq(req, body), goal, { tags, base_tags, force, actor: "human:gui" });
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphConflictError ? 409 : (e instanceof GraphError ? 400 : 500);
           json(res, code, { error: String(e?.message ?? e) });
         }
       },

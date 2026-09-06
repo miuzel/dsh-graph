@@ -285,6 +285,37 @@
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
+    // g-187：客户端标签编辑器，所有变更通过 host 持久化到 goal.md。
+    function GoalTagsEditor(props) {
+      const [tags, setTags] = React.useState(Array.isArray(props.tags) ? props.tags : []);
+      const [text, setText] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [saving, setSaving] = React.useState(false);
+      React.useEffect(() => { setTags(Array.isArray(props.tags) ? props.tags : []); }, [props.tags]);
+      const save = async (next) => {
+        if (saving) return;
+        const clean = [...new Set(next.map((x) => String(x).trim().replace(/^#/, "")))];
+        setSaving(true); setNote(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/set-goal-tags"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: props.goalId, tags: clean, base_tags: tags }) });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error || "标签保存失败");
+          const saved = Array.isArray(data.new_tags) ? data.new_tags : clean;
+          setTags(saved); props.onChange?.(saved); setNote("已保存");
+        } catch (e) { setNote(String(e?.message ?? e)); }
+        finally { setSaving(false); }
+      };
+      const add = () => { const value = text.trim(); if (!value) return; save([...tags, ...value.split(/[,，\s]+/)]); setText(""); };
+      return h("div", { style: { ...S.modalSection, minWidth: 0, maxWidth: "100%", overflow: "hidden" } },
+        h("div", { style: S.modalH }, "🏷 标签"),
+        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6, minWidth: 0, maxWidth: "100%" } },
+          tags.length ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: "点击移除标签", disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×")) : h("span", { style: S.meta }, "（暂无标签）")),
+        h("div", { style: { display: "flex", gap: 4 } },
+          h("input", { value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: "输入标签，逗号或空格分隔", onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); } }),
+          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? "保存中…" : "添加")),
+        note ? h("div", { style: { ...S.meta, color: note === "已保存" ? undefined : "#e57373", marginTop: 4 } }, note) : null);
+    }
+
     // g-197：展示 delivered 目标已识别的清理候选与显式清理操作
     function WorktreeCandidates(props) {
       const [items, setItems] = React.useState([]);
@@ -531,6 +562,7 @@
         const detailTab = [
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
+          h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: props.tags, onChange: props.onTagsChanged }),
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
             h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
