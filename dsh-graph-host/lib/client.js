@@ -1552,10 +1552,11 @@ window.__ModuleLoader__.load({
       if (modeIdRef.current == null) modeIdRef.current = `dg-reexec-subagent-mode-${++reExecModeInstanceSeq}`;
       const modeId = modeIdRef.current;
       const { goalId, kind, cardId, prompt } = props;
-      const [opts, setOpts] = React.useState(null); // {modelGroups, default}
+      const [opts, setOpts] = React.useState(null); // {modelGroups, default, personas}
       const [provider, setProvider] = React.useState("");
       const [model, setModel] = React.useState("");
       const [mode, setMode] = React.useState("");
+      const [persona, setPersona] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
 
@@ -1592,6 +1593,7 @@ window.__ModuleLoader__.load({
         { id: "standard", name: "标准模式" },
         { id: "minimal", name: "极简模式 (6工具过滤)" },
       ];
+      const personaList = opts?.personas ?? [];
 
       const relaunch = async () => {
         setBusy(true);
@@ -1603,6 +1605,7 @@ window.__ModuleLoader__.load({
             provider: provider || undefined,
             model: model || undefined,
             mode: mode || undefined,
+            persona: persona || undefined,
           };
           if (kind === "collect") { body.card = cardId; body.prompt = prompt; }
           const r = await fetch(graphUrl(url), {
@@ -1671,6 +1674,15 @@ window.__ModuleLoader__.load({
                 },
                   h("option", { key: "", value: "", style: optStyle }, "模式: 默认"),
                   ...modeList.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))) : null,
+                kind !== "collect" && personaList.length > 0 ? h("select", {
+                  "aria-label": "重新执行 Persona 预设",
+                  style: selStyle, value: persona,
+                  className: "dg-select",
+                  title: "子代理 Persona 预设（可选已安装的自定义 Persona）",
+                  onChange: (e) => setPersona(e.target.value),
+                },
+                  h("option", { key: "", value: "", style: optStyle }, "Persona: 默认"),
+                  ...personaList.map((p) => h("option", { key: p.id, value: p.id, style: optStyle }, p.name ?? p.id))) : null,
               ],
           h("button", {
             style: { ...S.btn, padding: "3px 10px", fontSize: 12 }, className: "dg-btn dg-relaunch",
@@ -6743,7 +6755,7 @@ window.__ModuleLoader__.load({
               onChange: (e) => set(["executor", "mode"], e.target.value),
             },
               h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（继承 profile 全局 / 系统默认：标准模式）"),
-              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整工具能力 + 专属 Persona"),
+              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整工具 + 自定义/默认 Persona"),
               h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "极简模式 (minimal) - 受控 6 工具物理过滤 (graph-minimal)"))),
           h("div", { style: { ...S.meta, marginTop: 4 } },
             catReady

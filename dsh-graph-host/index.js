@@ -1308,6 +1308,29 @@ export function apply(ctx, config) {
         if (!modelGroups.length) modelGroups = null;
       }
     } catch { modelGroups = null; }
+    let personas = [];
+    try {
+      const apService = ctx.get?.("agentPresets");
+      if (apService && typeof apService.list === "function") {
+        const rawPresets = (await apService.list()) ?? [];
+        personas = rawPresets.map((p) => ({
+          id: p.id,
+          name: p.name ?? p.id,
+          description: p.description ?? "",
+          isDefault: p.id === (apService.defaultId ?? "standard"),
+        }));
+      }
+    } catch {
+      personas = [];
+    }
+    // 如果未能通过 RPC 获取，提供基础标准选项
+    if (!personas.length) {
+      personas = [
+        { id: "standard", name: "标准子代理 (standard)", description: "dsh-graph 默认工程执行 Persona", isDefault: true },
+        { id: "code-reviewer", name: "代码审查专家 (code-reviewer)", description: "专注代码质量、架构规范与潜在风险审查", isDefault: false },
+        { id: "test-runner", name: "测试验收专家 (test-runner)", description: "专注测试执行、判据核验与证据收集", isDefault: false },
+      ];
+    }
     const def = readExecutorModel(rootForReq);
     const globalSettings = readGraphSettings();
     // g-133：默认路由展示 = project.yaml executor/project（优先）+ profile 全局默认（缺省）
@@ -1316,6 +1339,7 @@ export function apply(ctx, config) {
     return {
       modelGroups,
       modes: SUBAGENT_MODES.map((id) => SUBAGENT_MODE_SPECS[id]),
+      personas,
       default: { provider: eff.provider, model: eff.model, mode: effModeRes.mode, mode_source: effModeRes.source },
     };
   };
