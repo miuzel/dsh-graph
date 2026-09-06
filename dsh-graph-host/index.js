@@ -40,6 +40,10 @@ import {
   amendGoal,
   renameGoal,
   setGoalType,
+  addMemory,
+  replaceMemory,
+  removeMemory,
+  recallMemory,
   requestAcceptReview,
   resolveAccept,
   archiveGoal,
@@ -573,6 +577,11 @@ export function apply(ctx, config) {
     return canonical;
   };
   const actorOf = (exec) => `agent:${exec?.agent?.id ?? "dsh"}`;
+  const memoryActorOf = (exec) => {
+    const session = exec?.agent?.session?.id;
+    if (!session) throw new GraphError("memory 工具需要可信 ex.agent.session 上下文");
+    return `agent:${session}`;
+  };
   // g-190：解绑的权威身份映射——当前会话若是已配置的 supervisor，映射为 supervisor:<sid>
   // （core authorizeUnbind 以 supervisor.session 匹配放行主管；普通会话保持 agent:<sid> 由 core 校验 owner）。
   const unbindActorOf = (ex, root) => {
@@ -863,11 +872,11 @@ export function apply(ctx, config) {
       def: {
         name: "graph_handoff",
         description: "生成/更新 .dsh-graph/HANDOFF.md 换会话交接文档（g-117）：board 投影 + 长期记忆 + 关键环境事实段自动拼接。产物不依赖会话上下文；返回交接全文。旧会话交接时调用。写盘前若旧 HANDOFF.md 存在且内容不同，先归档到 <root>/handoffs/HANDOFF-<时间戳>.md（g-121，归档目录不入 git）。",
-        parameters: params({}, []),
+        parameters: params({ query: str, memory_limit: { type: "number" } }, []),
       },
       run: (a, ex) => {
         const r = rootFor(ex);
-        const content = generateHandoff(r, { write: true });
+        const content = generateHandoff(r, { write: true, query: a.query, memoryLimit: a.memory_limit, actor: actorOf(ex) });
         return { ok: true, path: join(r, "HANDOFF.md"), handoff: content };
       },
     },
@@ -883,6 +892,92 @@ export function apply(ctx, config) {
         return { supervisor_session: res.supervisor_session, handoff: res.handoff };
       },
     },
+    // ===== g-105：记忆管理工具（add / replace / remove / recall） =====
+    {
+      def: {
+        name: "graph_memory_add",
+        description: "新增一条持久事实/记忆（kind=project/user，importance 可选 1-5，source_goal 可选）。事件先行，落 .dsh-graph/memory/memory.jsonl。",
+        parameters: params({
+          kind: { type: "string", enum: ["project", "user"] },
+          text: str,
+          importance: { type: "number" },
+          source_goal: str,
+        }, ["kind", "text"]),
+      },
+      run: (a, ex) => {
+        const res = addMemory(rootFor(ex), {
+          kind: a.kind,
+          text: a.text,
+          importance: a.importance !== undefined ? Number(a.importance) : undefined,
+          source_goal: a.source_goal,
+          actor: memoryActorOf(ex),
+        });
+        return { ok: true, id: res.id, entry: res.entry };
+      },
+    },
+    {
+      def: {
+        name: "graph_memory_replace",
+        description: "修正或合并已有记忆条目（用短唯一 old 片段定位已有记忆，text 为新内容）。",
+        parameters: params({
+          old: str,
+          text: str,
+          kind: { type: "string", enum: ["project", "user"] },
+          importance: { type: "number" },
+          source_goal: str,
+        }, ["old", "text"]),
+      },
+      run: (a, ex) => {
+        const res = replaceMemory(rootFor(ex), {
+          old: a.old,
+          text: a.text,
+          kind: a.kind,
+          importance: a.importance !== undefined ? Number(a.importance) : undefined,
+          source_goal: a.source_goal,
+          actor: memoryActorOf(ex),
+        });
+        return { ok: true, id: res.id, entry: res.entry };
+      },
+    },
+    {
+      def: {
+        name: "graph_memory_remove",
+        description: "删除记忆条目（仅负责人明确撤回或证实过时后才可删除；用短唯一 old 片段定位）。",
+        parameters: params({
+          old: str,
+          reason: str,
+        }, ["old"]),
+      },
+      run: (a, ex) => {
+        const res = removeMemory(rootFor(ex), {
+          old: a.old,
+          reason: a.reason,
+          actor: memoryActorOf(ex),
+        });
+        return { ok: true, id: res.id, removed: res.removed };
+      },
+    },
+    {
+      def: {
+        name: "graph_memory_recall",
+        description: "按关键词/类型检索返回匹配的持久记忆条目（供 supervisor 及子代理引用）。",
+        parameters: params({
+          query: str,
+          kind: { type: "string", enum: ["project", "user"] },
+          limit: { type: "number" },
+        }, []),
+      },
+      run: (a, ex) => {
+        const res = recallMemory(rootFor(ex), {
+          query: a.query,
+          kind: a.kind,
+          limit: a.limit !== undefined ? Number(a.limit) : undefined,
+          actor: memoryActorOf(ex),
+        });
+        return { ok: true, total: res.total, matches: res.matches };
+      },
+    },
+
     {
       def: {
         name: "graph_start_attempt",

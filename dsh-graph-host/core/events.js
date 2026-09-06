@@ -1,5 +1,5 @@
 /** 事件流：events.jsonl 是全部状态的唯一真相源（R-02）。 */
-import { appendFileSync, readFileSync, existsSync } from "node:fs";
+import { appendFileSync, readFileSync, existsSync, mkdirSync, openSync, writeSync, fsyncSync, closeSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { invalidate as invalidateBoardCache } from "./cache-state.js";
 import { STATUSES } from "./machine.js";
@@ -178,4 +178,173 @@ export function replayStatuses(events) {
         }
     }
     return statuses;
+}
+/** Serialize writers per graph root. mkdir is an atomic lock/CAS; the append is fsync'd. */
+export function withMemoryLock(root, fn) {
+    const memDir = join(root, "memory");
+    mkdirSync(memDir, { recursive: true });
+    const lock = join(memDir, ".memory.lock");
+    let fd = -1;
+    for (let i = 0; i < 600; i++) {
+        try {
+            fd = openSync(lock, "wx");
+            const lease = JSON.stringify({ pid: process.pid, owner: `${process.pid}:${Date.now()}`, expires: Date.now() + 30_000 });
+            writeSync(fd, lease, undefined, "utf8");
+            fsyncSync(fd);
+            break;
+        }
+        catch (e) {
+            if (e?.code !== "EEXIST")
+                throw e;
+            try {
+                const lease = JSON.parse(readFileSync(lock, "utf8"));
+                let alive = true;
+                try {
+                    process.kill(Number(lease.pid), 0);
+                }
+                catch {
+                    alive = false;
+                }
+                if (!alive && Number(lease.expires) < Date.now()) {
+                    unlinkSync(lock);
+                    continue;
+                }
+            }
+            catch { }
+            const wait = new Int32Array(new SharedArrayBuffer(4));
+            Atomics.wait(wait, 0, 0, 5);
+        }
+    }
+    if (fd < 0)
+        throw new Error("memory lock timeout");
+    try {
+        return fn();
+    }
+    finally {
+        closeSync(fd);
+        try {
+            unlinkSync(lock);
+        }
+        catch { }
+    }
+}
+export function appendMemoryEvent(root, ev) {
+    const rec = { ts: ev.ts ?? nowIso(), ...ev };
+    const memDir = join(root, "memory");
+    mkdirSync(memDir, { recursive: true });
+    const fd = openSync(join(memDir, "memory.jsonl"), "a");
+    try {
+        writeSync(fd, JSON.stringify(rec) + "\n", undefined, "utf8");
+        fsyncSync(fd);
+        const dirfd = openSync(memDir, "r");
+        try {
+            fsyncSync(dirfd);
+        }
+        finally {
+            closeSync(dirfd);
+        }
+    }
+    finally {
+        closeSync(fd);
+    }
+    return rec;
+}
+export function readMemoryEvents(root) {
+    const file = join(root, "memory", "memory.jsonl");
+    if (!existsSync(file))
+        return [];
+    const out = [];
+    const lines = readFileSync(file, "utf8").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line)
+            continue;
+        let rec;
+        try {
+            rec = JSON.parse(line);
+        }
+        catch {
+            // 容错损坏行（损坏行不中断整体读取与重放）
+            continue;
+        }
+        if (!rec || typeof rec !== "object" || Array.isArray(rec) || typeof rec.event !== "string" || typeof rec.actor !== "string") {
+            continue;
+        }
+        out.push(rec);
+    }
+    return out;
+}
+export function memoryDiagnostics(root) {
+    const file = join(root, "memory", "memory.jsonl");
+    if (!existsSync(file))
+        return [];
+    const out = [];
+    for (const [i, raw] of readFileSync(file, "utf8").split("\n").entries()) {
+        const line = raw.trim();
+        if (!line)
+            continue;
+        try {
+            const rec = JSON.parse(line);
+            if (!rec || typeof rec !== "object" || Array.isArray(rec) || typeof rec.event !== "string" || typeof rec.actor !== "string")
+                out.push(`memory.jsonl 第 ${i + 1} 行 schema 非法`);
+            else if (!["memory.added", "memory.replaced", "memory.removed"].includes(rec.event))
+                out.push(`memory.jsonl 第 ${i + 1} 行事件类型非法`);
+        }
+        catch {
+            out.push(`memory.jsonl 第 ${i + 1} 行不是合法 JSON`);
+        }
+    }
+    return out;
+}
+export function replayMemory(events) {
+    const entries = new Map();
+    for (const ev of events) {
+        if (ev.event === "memory.added") {
+            const id = ev.details?.id;
+            const text = ev.details?.text;
+            const kind = ev.details?.kind === "user" ? "user" : "project";
+            if (!id || typeof text !== "string")
+                continue;
+            const entry = {
+                id,
+                kind,
+                text,
+                importance: typeof ev.details?.importance === "number" ? ev.details.importance : undefined,
+                source_goal: typeof ev.details?.source_goal === "string" ? ev.details.source_goal : undefined,
+                created_at: ev.details?.created_at ?? ev.ts,
+                updated_at: ev.details?.updated_at ?? ev.ts,
+            };
+            if (kind === "user")
+                Object.defineProperty(entry, "owner", { value: ev.actor, enumerable: false, writable: true });
+            entries.set(id, entry);
+        }
+        else if (ev.event === "memory.replaced") {
+            const id = ev.details?.id;
+            const text = ev.details?.text;
+            if (!id || typeof text !== "string")
+                continue;
+            const existing = entries.get(id);
+            if (existing) {
+                const kind = ev.details?.kind === "user" || ev.details?.kind === "project" ? ev.details.kind : existing.kind;
+                const updated = {
+                    id: existing.id, kind, text,
+                    importance: typeof ev.details?.importance === "number" ? ev.details.importance : existing.importance,
+                    source_goal: typeof ev.details?.source_goal === "string" ? ev.details.source_goal : existing.source_goal,
+                    created_at: existing.created_at,
+                    updated_at: ev.details?.updated_at ?? ev.ts,
+                };
+                const owner = existing.owner ?? (typeof ev.details?.owner === "string" ? ev.details.owner : undefined);
+                if (kind === "user" && owner)
+                    Object.defineProperty(updated, "owner", { value: owner, enumerable: false, writable: true });
+                entries.set(id, updated);
+            }
+        }
+        else if (ev.event === "memory.removed") {
+            const id = ev.details?.id;
+            if (!id)
+                continue;
+            entries.delete(id);
+        }
+    }
+    return Array.from(entries.values());
 }
