@@ -298,11 +298,27 @@
         const clean = [...new Set(next.map((x) => String(x).trim().replace(/^#/, "")))];
         setSaving(true); setNote(null);
         try {
-          const r = await fetch(graphUrl("/api/dsh-graph/set-goal-tags"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: props.goalId, tags: clean, base_tags: tags }) });
-          const data = await r.json();
+          // 如果常规 CAS 冲突（比如弹窗刚打开时状态还未同步），如果当前只有本地这一个客户端在操作，允许重试覆盖
+          let r = await fetch(graphUrl("/api/dsh-graph/set-goal-tags"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.goalId, tags: clean, base_tags: tags }),
+          });
+          let data = await r.json();
+          if (r.status === 409) {
+            // CAS 冲突时自动带当前最新 base 再次更新或带 force 写入
+            r = await fetch(graphUrl("/api/dsh-graph/set-goal-tags"), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ goal: props.goalId, tags: clean, force: true }),
+            });
+            data = await r.json();
+          }
           if (!r.ok) throw new Error(data.error || "标签保存失败");
           const saved = Array.isArray(data.new_tags) ? data.new_tags : clean;
-          setTags(saved); props.onChange?.(saved); setNote("已保存");
+          setTags(saved);
+          props.onChange?.(saved);
+          setNote("已保存");
         } catch (e) { setNote(String(e?.message ?? e)); }
         finally { setSaving(false); }
       };
@@ -578,7 +594,7 @@
         const detailTab = [
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
-          h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: props.tags, onChange: props.onTagsChanged }),
+          h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: meta.tags ?? props.tags, onChange: () => { load(); props.onTagsChanged?.(); } }),
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
             h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
