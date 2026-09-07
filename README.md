@@ -40,7 +40,7 @@ dsh plugin --profile <name> add dsh-graph
 
 | 分组 | 工具 |
 |------|------|
-| 目标生命周期 | `graph_create_goal` · `graph_rename_goal` · `graph_set_goal_type` · `graph_set_goal_tags` · `graph_amend_goal` · `graph_transition` · `graph_postpone_goal` · `graph_archive_goal` · `graph_unarchive_goal` · `graph_delete_goal` · `graph_clean_worktree` |
+| 目标生命周期 | `graph_create_goal` · `graph_rename_goal` · `graph_set_goal_type` · `graph_set_goal_tags` · `graph_amend_goal` · `graph_transition` · `graph_postpone_goal` · `graph_archive_goal` · `graph_unarchive_goal` · `graph_delete_goal` · `graph_clean_worktree` · `graph_list_worktrees` |
 | 质量判据 | `graph_set_criteria` |
 | 上下文卡片 | `graph_add_card` · `graph_fill_card` · `graph_review_card` · `graph_bind_collect_card` · `graph_delete_card` |
 | 附件 | `graph_store_attachment` · `graph_delete_attachment` |

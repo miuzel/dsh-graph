@@ -1,6 +1,6 @@
 # dsh-graph v0.9.1 发布检查清单
 
-> 负责人手动执行并确认；执行代理不执行 `npm publish`、`git tag` 或 `git push`。
+> 负责人手动执行并确认；执行代理不执行 npm publish 与 git push；本地 tag 由 supervisor 合并时按负责人授权创建。
 
 ## 发布准备验证
 
@@ -22,10 +22,13 @@
 ## 负责人发布 gate
 
 - [ ] 复核 v0.9.1 范围与 release notes，确认 npm 包文件列表
-- [ ] 手动执行 `npm publish`（本 attempt 不执行）
-- [ ] publish 成功后手动执行 `git tag v0.9.1` 与 `git push origin main --tags`
+- [ ] supervisor 合并 v0.9.1-test → main 后在 main 创建本地 tag（`git tag -a v0.9.1 -m "dsh-graph v0.9.1"`，不 push）
+- [ ] 负责人手动执行 npm publish
+- [ ] publish 成功后负责人手动 `git push origin main --tags`
 
 ## 验证命令
+
+> ⚠️ 正式发布前若仓库根 `node_modules/.bin/tsc` 失效，先运行 `pnpm install` 修复本地构建链接，再执行 sync-core / prepack。
 
 ```sh
 bash scripts/sync-core.sh
@@ -44,10 +47,7 @@ rm -rf tmp/npm-cache tmp/npm-tmp
 # 1. 切到 dsh-graph-host 目录发布（或等价命令）
 cd dsh-graph-host && pnpm publish --registry=https://registry.npmjs.org --no-git-checks
 
-# 2. 打 tag
-git tag -a v0.9.1 -m "dsh-graph v0.9.1"
-
-# 3. 推送 main 分支与 tag（使用 SSH 配置绕过可能的冲突）
+# 2. 推送 main 分支与 tag（tag 由 supervisor 合并时已在 main 创建）
 GIT_SSH_COMMAND="ssh -F /dev/null" git push origin main --tags
 ```
 

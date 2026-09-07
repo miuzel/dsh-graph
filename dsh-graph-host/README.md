@@ -64,6 +64,7 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 | | `graph_unarchive_goal` | 从归档中恢复目标 |
 | | `graph_delete_goal` | 安全删除已归档的目标 |
 | | `graph_clean_worktree` | 清理已验证的 worktree（用户确认后执行） |
+| | `graph_list_worktrees` | 查询 Git worktree 清理候选（只读，不自动删除） |
 | **质量判据** | `graph_set_criteria` | 登记目标验收判据（严格在执行前设定） |
 | **上下文卡片** | `graph_add_card` | 创建上下文卡片占位（text / file / image / data） |
 | | `graph_bind_collect_card` | 绑定收集子代理，卡片状态转为 collecting |
@@ -172,6 +173,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools:
 | | `graph_unarchive_goal` | Restore goals from archive |
 | | `graph_delete_goal` | Safely delete an archived goal |
 | | `graph_clean_worktree` | Clean up a verified worktree (requires user confirmation) |
+| | `graph_list_worktrees` | Query Git worktree cleanup candidates (read-only, no auto-delete) |
 | **Quality Criteria** | `graph_set_criteria` | Define quality criteria (required prior to execution) |
 | **Context Cards** | `graph_add_card` | Create a context card placeholder (text / file / image / data) |
 | | `graph_bind_collect_card` | Bind collection subagent; marks card status as collecting |
