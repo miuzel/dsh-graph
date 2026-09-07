@@ -262,3 +262,15 @@ Review 子代理按本项目 **owner-trusted、单机单用户本地 UI** 威胁
   - **极简模式（minimal / graph-minimal）适配**：
     - 极简模式通过物理工具白名单过滤（`toolFilter: { allow: ["bash", "edit", "read", "write", "graph_report_status", "graph_transition"] }`）实现轻量受控；
     - 该 6 项基础工具集完全覆盖了框架协同纪律所需的全部接口，保证极简子代理既不被高级工具误导，又能完整履行看板汇报与状态流转职责。
+
+### 3. 记忆分级决策铁律（Memory Scope Classification Discipline）
+
+- **默认按需法则（Default to On-demand）**：
+  - 一切日常工作总结、技术经验、架构决策、Bug 复盘，**100% 默认记入 `scope: "on_demand"`**；
+  - 按需记忆平时不注入系统 Prompt，不消耗 token，仅在主动检索（recall）或用户在 Web 面板查看时调取；
+  - 严禁 Agent 凭感觉或主观认为“很重要”就自发记为常驻记忆。
+- **常驻特权法则（Standing Privileges）**：
+  - **仅当满足以下任一条件时**，才允许使用 `scope: "standing"`：
+    1. **人类明确钦定**：人类负责人明确要求“将此设为常驻记忆/铁律/必须时刻遵守”；
+    2. **最高安全与环境隔离红线**：涉及当前工作区目录限制、物理沙盒隔离范围或绝对不可违背的凭据禁令；
+  - **硬上限契约**：常驻记忆单条字数硬上限严格为 **≤ 200 字符**，超过直接拒绝写入，彻底消除隐式截断失真。

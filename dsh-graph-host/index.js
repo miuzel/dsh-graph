@@ -228,8 +228,9 @@ const SUPERVISOR_DISCIPLINE = [
   "1. **只做规划、派发、把关、复核**——绝不自己实现、写代码、长调研；",
   "2. 自己动手仅限：一句话决策、一行小修、graph_start_attempt 派发执行；",
   "3. **每动作后 graph_report_supervisor_status**——看板实时显示状态；",
-  "4. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；",
-  "5. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。",
+  "4. **记忆管理纪律**：自发总结默认记 on_demand；仅人类钦定或隔离禁令才记 standing（≤200字）；remove 仅限明确撤回/证实过时；",
+  "5. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；",
+  "6. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。",
 ].join("\n");
 
 
@@ -911,7 +912,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_memory_add",
-        description: "新增一条持久事实/记忆（kind=project/user，scope 可选 standing/on_demand，importance 可选 1-5，source_goal 可选）。【字数契约】：常驻记忆(standing)硬上限200字符，超过将直接拒绝；普通记忆单条上限500字符。事件先行。",
+        description: "新增持久事实/记忆。\n【scope 决策铁律】：\n1. 默认法则：一切自发总结、技术经验、方案决策 100% 默认 scope=\"on_demand\"（按需记忆，不占常驻 Prompt）；\n2. 常驻特权法则：仅在「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」时，才允许设 scope=\"standing\"（硬上限 200 字符，超过拒绝；普通记忆上限 500 字符）。事件先行。",
         parameters: params({
           kind: { type: "string", enum: ["project", "user"] },
           scope: { type: "string", enum: ["standing", "on_demand"] },
