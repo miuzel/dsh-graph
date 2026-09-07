@@ -1557,7 +1557,30 @@ export function apply(ctx, config) {
           const pname = typeof p === "string" ? p : (p?.name ?? pid);
           let models = [];
           try { models = (await llm.listModels?.(pid)) ?? []; } catch { models = []; }
-          return { id: pid, name: pname, models: models.map((m) => ({ id: typeof m === "string" ? m : m.id, name: typeof m === "string" ? m : (m.name ?? m.id) })) };
+          // g-231：对每个模型调用 resolveModelInfo 获取 reasoning 元数据（efforts/defaultEffort），
+          // 与 dsh-api-session-controller buildModelCatalog 同源；单个 resolve 失败不拖垮整组。
+          const entries = await Promise.all(models.map(async (m) => {
+            const mid = typeof m === "string" ? m : m.id;
+            const mname = typeof m === "string" ? m : (m.name ?? mid);
+            const base = { id: mid, name: mname };
+            try {
+              if (typeof llm.resolveModelInfo === "function") {
+                const resolved = await llm.resolveModelInfo(pid, mid);
+                if (resolved?.reasoning && Array.isArray(resolved.reasoning.efforts)) {
+                  base.reasoning = {
+                    efforts: resolved.reasoning.efforts.map((e) => ({
+                      id: e.id,
+                      name: e.name,
+                      ...(e.description === undefined ? {} : { description: e.description }),
+                    })),
+                    ...(resolved.reasoning.defaultEffort === undefined ? {} : { defaultEffort: resolved.reasoning.defaultEffort }),
+                  };
+                }
+              }
+            } catch { /* 单模型 resolve 失败，保留 id/name 不含 reasoning */ }
+            return base;
+          }));
+          return { id: pid, name: pname, models: entries };
         }));
         if (!modelGroups.length) modelGroups = null;
       }
