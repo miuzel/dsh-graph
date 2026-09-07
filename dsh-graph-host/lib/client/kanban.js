@@ -1274,6 +1274,20 @@
       // g-216: 判定是否有任何弹窗或抽屉处于打开态
       const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer);
 
+      const tbBtnStyle = {
+        ...S.btn,
+        marginLeft: 8,
+        height: 26,
+        boxSizing: "border-box",
+        fontSize: 12,
+        lineHeight: "22px",
+        padding: "0 8px",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 4,
+        verticalAlign: "middle",
+      };
       return h(
         "div",
         { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
@@ -1306,10 +1320,10 @@
             intervalSec: refreshIntervalSec,
             onTriggerRefresh: load,
           }),
-          h("button", { style: { ...S.btn, marginLeft: 8 }, className: "dg-btn", onClick: load }, "刷新"),
+          h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, "刷新"),
           // g-187：顶部标签筛选弹层入口
           h("button", {
-            style: { ...S.btn, marginLeft: 8, fontSize: 12, padding: "2px 8px", display: "inline-flex", alignItems: "center", gap: 4 },
+            style: { ...tbBtnStyle, ...(tagFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
             className: "dg-btn" + (tagFilter.length > 0 ? " dg-btn-active" : ""),
             title: "打开标签筛选面板（支持多选点选与一键清除）",
             onClick: () => setShowTagFilterModal(true),
@@ -1317,28 +1331,28 @@
           tagFilter.length > 0
             ? h("button", {
                 className: "dg-btn",
-                style: { ...S.btn, fontSize: 11, padding: "1px 6px", marginLeft: 4 },
+                style: { ...tbBtnStyle, marginLeft: 4, padding: "0 6px", fontSize: 11 },
                 title: "一键清除全部标签筛选",
                 onClick: () => setTagFilter([]),
               }, "✕ 取消筛选")
             : null,
           // g-105: 记忆管理按钮（位于设置按钮左侧）
           h("button", {
-            style: { ...S.btn, marginLeft: 8, fontSize: 13, padding: "2px 8px", display: "inline-flex", alignItems: "center", gap: 4 },
+            style: tbBtnStyle,
             className: "dg-btn",
             title: "记忆管理（手工管理常驻记忆与按需记忆，或禁用记忆工具）",
             onClick: () => setShowMemoryModal(true),
           }, "🧠 记忆"),
           // g-183: 共享上下文管理面板入口
           h("button", {
-            style: { ...S.btn, marginLeft: 8, fontSize: 14, lineHeight: 1, padding: "2px 8px" },
+            style: tbBtnStyle,
             className: "dg-btn",
             title: "共享上下文管理面板（创建/查看共享卡、挂到 goal、删除保护）",
             onClick: () => setShowSharedPanel(true),
           }, "🔗 共享卡"),
           // g-132: 右上角齿轮 → 看板设置
           h("button", {
-            style: { ...S.btn, marginLeft: 8, fontSize: 16, lineHeight: 1, padding: "2px 8px" },
+            style: { ...tbBtnStyle, padding: "0 7px", fontSize: 14 },
             className: "dg-btn",
             title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
             onClick: () => setShowSettings(true),
