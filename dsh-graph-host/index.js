@@ -177,6 +177,17 @@ function params(properties, required) {
   return { type: "object", properties, required, additionalProperties: false };
 }
 
+function losslessJson(obj) {
+  if (obj === null || typeof obj !== "object") return obj;
+  const out = Array.isArray(obj) ? [] : {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) {
+      out[k] = typeof v === "object" && v !== null ? losslessJson(v) : v;
+    }
+  }
+  return out;
+}
+
 const GUIDE = readFileSync(new URL("./supervisor-guide.md", import.meta.url), "utf8");
 
 // g-113：普通 agent 的 dsh-graph 使用指引（精简，非主管繁文）
@@ -912,7 +923,7 @@ export function apply(ctx, config) {
           source_goal: a.source_goal,
           actor: memoryActorOf(ex),
         });
-        return { ok: true, id: res.id, entry: res.entry };
+        return losslessJson({ ok: true, id: res.id, entry: res.entry });
       },
     },
     {
@@ -936,7 +947,7 @@ export function apply(ctx, config) {
           source_goal: a.source_goal,
           actor: memoryActorOf(ex),
         });
-        return { ok: true, id: res.id, entry: res.entry };
+        return losslessJson({ ok: true, id: res.id, entry: res.entry });
       },
     },
     {
@@ -954,7 +965,7 @@ export function apply(ctx, config) {
           reason: a.reason,
           actor: memoryActorOf(ex),
         });
-        return { ok: true, id: res.id, removed: res.removed };
+        return losslessJson({ ok: true, id: res.id, removed: res.removed });
       },
     },
     {
@@ -974,7 +985,7 @@ export function apply(ctx, config) {
           limit: a.limit !== undefined ? Number(a.limit) : undefined,
           actor: memoryActorOf(ex),
         });
-        return { ok: true, total: res.total, matches: res.matches };
+        return losslessJson({ ok: true, total: res.total, matches: res.matches });
       },
     },
 
