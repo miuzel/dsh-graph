@@ -7674,7 +7674,12 @@ window.__ModuleLoader__.load({
       // 1. 优先调用 0.1.2-alpha.2 新版 API
       try {
         const remote = ctx?.get?.("remote") ?? ctx?.remote ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("remote") ?? appCtx?.remote) : null) ?? (typeof window !== "undefined" ? window.__DSH_REMOTE__ : null);
-        const modelCatalogFn = remote?.session?.modelCatalog ?? (typeof remote?.["session/modelCatalog"] === "function" ? remote["session/modelCatalog"].bind(remote) : null);
+        // Remote session 方法依赖所属 session proxy 的 this；脱离 receiver 调用会失败并误回退到
+        // 旧 llm.models（旧目录不含 reasoning 元数据），导致有能力的模型显示为空选择器。
+        const session = remote?.session;
+        const modelCatalogFn = typeof session?.modelCatalog === "function"
+          ? session.modelCatalog.bind(session)
+          : (typeof remote?.["session/modelCatalog"] === "function" ? remote["session/modelCatalog"].bind(remote) : null);
         if (typeof modelCatalogFn === "function") {
           const res = await modelCatalogFn();
           const val = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : res;

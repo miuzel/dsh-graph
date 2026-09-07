@@ -44,24 +44,28 @@ test("g-215 探测链阶段 1：0.1.2-alpha.2 新版 API (remote.session.modelCa
 
   const mockRemote = {
     session: {
-      modelCatalog: async () => ({
-        ok: true,
-        value: {
-          default: { provider: "deepseek-official", model: "deepseek-chat" },
-          routableProviders: ["deepseek-official"],
-          groups: [
-            {
-              id: "deepseek-official",
-              name: "DeepSeek Official",
-              models: [
-                { id: "deepseek-chat", name: "DeepSeek Chat" },
-                { id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
-              ],
-            },
-          ],
-          failures: [],
-        },
-      }),
+      receiverBound: true,
+      modelCatalog: async function () {
+        if (!this.receiverBound) throw new Error("modelCatalog lost its session receiver");
+        return {
+          ok: true,
+          value: {
+            default: { provider: "deepseek-official", model: "deepseek-chat" },
+            routableProviders: ["deepseek-official"],
+            groups: [
+              {
+                id: "deepseek-official",
+                name: "DeepSeek Official",
+                models: [
+                  { id: "deepseek-chat", name: "DeepSeek Chat", reasoning: { efforts: [{ id: "high", name: "High" }] } },
+                  { id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
+                ],
+              },
+            ],
+            failures: [],
+          },
+        };
+      },
     },
   };
 
@@ -77,6 +81,7 @@ test("g-215 探测链阶段 1：0.1.2-alpha.2 新版 API (remote.session.modelCa
   assert.equal(result.groups.length, 1);
   assert.equal(result.groups[0].id, "deepseek-official");
   assert.equal(result.groups[0].models.length, 2);
+  assert.deepEqual(result.groups[0].models[0].reasoning.efforts, [{ id: "high", name: "High" }], "新版目录的精确模型 effort 元数据必须原样保留");
   assert.equal(result.providers.length, 1);
   assert.equal(result.providers[0].provider, "deepseek-official");
   assert.equal(result.providers[0].displayName, "DeepSeek Official");
@@ -283,7 +288,8 @@ test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 ses
   const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
 
   // 1. settings.js 包含新版 RPC 与降级链
-  assert.match(settings, /remote\?\.session\?\.modelCatalog/);
+  assert.match(settings, /session\?\.modelCatalog/);
+  assert.match(settings, /session\.modelCatalog\.bind\(session\)/);
   assert.match(settings, /modelDirectories/);
   assert.match(settings, /legacyApi\?\.llm\?\.providers/);
   assert.match(settings, /status:\s*"unavailable"/);
@@ -294,6 +300,7 @@ test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 ses
 
   // 3. 生成物 bundle 包含生成标记与 loadHostCatalog 降级链
   assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
-  assert.match(bundle, /remote\?\.session\?\.modelCatalog/);
+  assert.match(bundle, /session\?\.modelCatalog/);
+  assert.match(bundle, /session\.modelCatalog\.bind\(session\)/);
   assert.match(bundle, /legacyApi\?\.llm\?\.providers/);
 });
