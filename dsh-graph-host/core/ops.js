@@ -3596,6 +3596,10 @@ export function startAttempt(root, goalId, opts) {
     if (opts.modelRoute && opts.modelRoute.trim()) {
         meta.model_route = opts.modelRoute.trim();
     }
+    // g-231：记录实际下发的推理档位到 attempt meta（审计可追溯）；空/继承不写字段
+    if (opts.reasoningEffort && opts.reasoningEffort.trim()) {
+        meta.reasoning_effort = opts.reasoningEffort.trim();
+    }
     if (normalizedMode) {
         meta.mode = normalizedMode;
         if (opts.modeSource)
@@ -3620,6 +3624,8 @@ export function startAttempt(root, goalId, opts) {
         ...(opts.provider && opts.provider.trim() ? { provider: opts.provider.trim() } : {}),
         ...(opts.model && opts.model.trim() ? { model: opts.model.trim() } : {}),
         ...(opts.modelRoute && opts.modelRoute.trim() ? { model_route: opts.modelRoute.trim() } : {}),
+        // g-231：attempt.started 事件记录实际推理档位；空/继承不出现
+        ...(opts.reasoningEffort && opts.reasoningEffort.trim() ? { reasoning_effort: opts.reasoningEffort.trim() } : {}),
         ...(normalizedMode ? { mode: normalizedMode } : {}),
         ...(normalizedMode && opts.modeSource ? { mode_source: opts.modeSource } : {}),
         ...(Array.isArray(opts.injectedCards)

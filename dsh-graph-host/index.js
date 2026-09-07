@@ -1219,6 +1219,7 @@ export function apply(ctx, config) {
           provider: effProvider,
           model: effModel,
           modelRoute: effRoute,
+          reasoningEffort: effReasoningEffort,
           mode: effModeRes.mode,
           modeSource: effModeRes.source,
         });
@@ -2457,6 +2458,7 @@ export function apply(ctx, config) {
             provider: effProvider,
             model: effModel,
             modelRoute: effRoute,
+            reasoningEffort: effReasoningEffort,
             mode: effModeRes.mode,
             modeSource: effModeRes.source,
           });

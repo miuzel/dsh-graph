@@ -302,3 +302,110 @@ test("g-194 ⑥ 前端 formatModelDisplay / formatShortModelDisplay 与 client.j
   // 确保 LiveStrip 与 SessionPanel 接收并渲染 provider / model 属性
   assert.match(clientBundle, /provider: staticProvider, model: staticModel/);
 });
+
+// ===== g-231：reasoning_effort 审计持久化 =====
+
+test("g-231 startAttempt 非空 reasoning_effort 写入 attempt.md meta 与 attempt.started details", () => {
+  const root = tmpRoot();
+  const goalId = createGoal(root, { title: "reasoning effort 持久化", version: "v1.0", actor: "human:gui" });
+  const attId = startAttempt(root, goalId, {
+    executor: "agent:executor",
+    actor: "human:gui",
+    provider: "deepseek",
+    model: "deepseek-chat",
+    modelRoute: "deepseek/deepseek-chat",
+    reasoningEffort: "high",
+  });
+  const goalFile = findGoalFile(root, goalId);
+  const attFile = join(goalFile.replace(/goal\.md$/, ""), "attempts", attId, "attempt.md");
+  const doc = loadGoal(attFile);
+  assert.equal(doc.meta.reasoning_effort, "high", "attempt.md meta 应记录 reasoning_effort");
+  assert.equal(doc.meta.provider, "deepseek");
+  assert.equal(doc.meta.model, "deepseek-chat");
+
+  const ev = readEvents(root).find((e) => e.event === "attempt.started" && e.details.attempt === attId);
+  assert.ok(ev, "attempt.started 事件存在");
+  assert.equal(ev.details.reasoning_effort, "high", "attempt.started details 应记录 reasoning_effort");
+  assert.equal(ev.details.provider, "deepseek");
+  assert.equal(ev.details.model, "deepseek-chat");
+});
+
+test("g-231 startAttempt reasoning_effort 为空/继承时不写字段（不伪造）", () => {
+  const root = tmpRoot();
+  const goalId = createGoal(root, { title: "reasoning effort 继承", version: "v1.0", actor: "human:gui" });
+  // 空字符串 → 不写
+  const att1 = startAttempt(root, goalId, {
+    executor: "agent:executor", actor: "human:gui", reasoningEffort: "",
+  });
+  const goalFile = findGoalFile(root, goalId);
+  const doc1 = loadGoal(join(goalFile.replace(/goal\.md$/, ""), "attempts", att1, "attempt.md"));
+  assert.equal(doc1.meta.reasoning_effort, undefined, "空字符串不写 reasoning_effort");
+
+  const ev1 = readEvents(root).find((e) => e.event === "attempt.started" && e.details.attempt === att1);
+  assert.equal(ev1.details.reasoning_effort, undefined, "空字符串时 details 不含 reasoning_effort");
+
+  // null → 不写
+  const att2 = startAttempt(root, goalId, {
+    executor: "agent:executor", actor: "human:gui", reasoningEffort: null,
+  });
+  const doc2 = loadGoal(join(goalFile.replace(/goal\.md$/, ""), "attempts", att2, "attempt.md"));
+  assert.equal(doc2.meta.reasoning_effort, undefined, "null 不写 reasoning_effort");
+
+  // 省略 → 不写
+  const att3 = startAttempt(root, goalId, {
+    executor: "agent:executor", actor: "human:gui",
+  });
+  const doc3 = loadGoal(join(goalFile.replace(/goal\.md$/, ""), "attempts", att3, "attempt.md"));
+  assert.equal(doc3.meta.reasoning_effort, undefined, "省略 reasoningEffort 不写字段");
+
+  // "  " (纯空白) → 不写
+  const att4 = startAttempt(root, goalId, {
+    executor: "agent:executor", actor: "human:gui", reasoningEffort: "   ",
+  });
+  const doc4 = loadGoal(join(goalFile.replace(/goal\.md$/, ""), "attempts", att4, "attempt.md"));
+  assert.equal(doc4.meta.reasoning_effort, undefined, "纯空白不写 reasoning_effort");
+});
+
+test("g-231 startAttempt reasoning_effort 自动 trim", () => {
+  const root = tmpRoot();
+  const goalId = createGoal(root, { title: "reasoning effort trim", version: "v1.0", actor: "human:gui" });
+  const attId = startAttempt(root, goalId, {
+    executor: "agent:executor", actor: "human:gui", reasoningEffort: "  low  ",
+  });
+  const goalFile = findGoalFile(root, goalId);
+  const doc = loadGoal(join(goalFile.replace(/goal\.md$/, ""), "attempts", attId, "attempt.md"));
+  assert.equal(doc.meta.reasoning_effort, "low", "reasoning_effort 应被 trim");
+
+  const ev = readEvents(root).find((e) => e.event === "attempt.started" && e.details.attempt === attId);
+  assert.equal(ev.details.reasoning_effort, "low", "details 中 reasoning_effort 也应 trim");
+});
+
+test("g-231 startAttempt 既有 provider/model/mode 行为不受 reasoning_effort 影响", () => {
+  const root = tmpRoot();
+  const goalId = createGoal(root, { title: "reasoning effort 兼容", version: "v1.0", actor: "human:gui" });
+  const attId = startAttempt(root, goalId, {
+    executor: "agent:executor",
+    actor: "human:gui",
+    provider: "kimi",
+    model: "moonshot-v1-8k",
+    modelRoute: "kimi/moonshot-v1-8k",
+    reasoningEffort: "max",
+    mode: "minimal",
+    modeSource: "override",
+  });
+  const goalFile = findGoalFile(root, goalId);
+  const doc = loadGoal(join(goalFile.replace(/goal\.md$/, ""), "attempts", attId, "attempt.md"));
+  assert.equal(doc.meta.provider, "kimi");
+  assert.equal(doc.meta.model, "moonshot-v1-8k");
+  assert.equal(doc.meta.model_route, "kimi/moonshot-v1-8k");
+  assert.equal(doc.meta.reasoning_effort, "max");
+  assert.equal(doc.meta.mode, "minimal");
+  assert.equal(doc.meta.mode_source, "override");
+
+  const ev = readEvents(root).find((e) => e.event === "attempt.started" && e.details.attempt === attId);
+  assert.equal(ev.details.provider, "kimi");
+  assert.equal(ev.details.model, "moonshot-v1-8k");
+  assert.equal(ev.details.reasoning_effort, "max");
+  assert.equal(ev.details.mode, "minimal");
+  assert.equal(ev.details.mode_source, "override");
+});
