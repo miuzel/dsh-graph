@@ -298,8 +298,8 @@ const GUIDE_HINT = [
 // token 成本约 80 字，简短精炼。
 const SUPERVISOR_DISCIPLINE = [
   "⚠️ **主管纪律提醒**（每 turn 自动注入）：",
-  "1. **只做规划、派发、把关、复核**——绝不自己实现、写代码、长调研；",
-  "2. 自己动手仅限：一句话决策、一行小修、graph_start_attempt 派发执行；",
+  "1. **只做规划、派发、把关、复核**——绝不自己实现常规功能大任务、一律派发子代理；",
+  "2. **轻量改动自主特权**：一句话决策与低风险微小改动（patch / chore 类目标、一两行修改），主管可直接在当前会话使用 edit/write 执行，无需繁琐派发子代理；",
   "3. **每动作后 graph_report_supervisor_status**——看板实时显示状态；",
   "4. **记忆管理纪律**：自发总结默认记 on_demand；仅人类钦定或隔离禁令才记 standing（≤200字）；remove 仅限明确撤回/证实过时；",
   "5. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；",
@@ -338,6 +338,17 @@ const WORKTREE_GUIDE = `【强制 worktree 隔离】本次任务默认必须在�
 【唯一例外】仅当 supervisor 在本次派发的 attempt brief 中明确写出 \`worktree=false\` 与理由时，才允许真正的一两行、唯一文件小修直接 main；文档/长期记忆等小修改由 supervisor 自己处理，子代理不得擅自套用例外。
 【worktree 命名规范】新建 attempt 工作树必须命名为 .worktrees/g-<goal-number>-att-<NN>，分支使用相同后缀（例如 g-125-att-03、g-163-att-03）；不要使用省略 goal id 或未补零的歧义名称。
 数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
+
+const MINOR_TASK_GUIDE = `【微小改动/轻量任务快速通道】当前目标属于 patch / chore 类型（低风险微改/轻量任务）：
+- 豁免独立 worktree 隔离：允许直接在当前工作区与版本集成分支执行代码或文档修改，无需创建 .worktrees/ 隔离分支；
+- 改动边界：严格限定于声明的微小改动范围，禁止产生无关副作用、禁止私自扩大破坏面；
+- 验证与自报：改动后针对性跑通单测与校验，使用 graph_report_status 汇报并在完成后迁至 review 等待复核。`;
+
+function resolveWorktreeGuide(goalType, explicitWorktree) {
+  if (explicitWorktree === false) return "";
+  if (goalType === "patch" || goalType === "chore") return MINOR_TASK_GUIDE;
+  return WORKTREE_GUIDE;
+}
 
 
 const ATTEMPT_PROMPT_MISSING = "（未提供）";
@@ -1229,7 +1240,9 @@ export function apply(ctx, config) {
             const rel = goalRel;
             // g-120：已收集卡片成果段（子代理直接使用，无需猜卡片路径）+ worktree 隔离指令（可开关）
             const cardsSection = formatHarvestedCardsSection(r, a.goal);
-            const worktreeBlock = a.worktree === false ? null : WORKTREE_GUIDE;
+            let gType = "task";
+            try { gType = normalizeGoalType(loadGoal(findGoalFile(r, a.goal)).meta.type); } catch {}
+            const worktreeBlock = resolveWorktreeGuide(gType, a.worktree);
             // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
             const subagentPromptSection = (() => {
               const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(r, "subagent_prompt"));
@@ -2394,8 +2407,9 @@ export function apply(ctx, config) {
           const injectedHandoffRefs = confirmedHandoffs.map((h) => ({ id: h.id, revision: h.revision, source_attempts: h.source_attempts }));
           const handoffsSection = formatReviewedAttemptHandoffsSection(rRoot, goal);
           // g-150 范围扩展：读取最近指令（注入 prompt；空时不影响现有 prompt 行为）
-          // Supervisor 默认强制 worktree 隔离；仅明确批准的 body.worktree=false 才关闭（g-202）
-          const worktreeBlock = worktree === false ? "" : WORKTREE_GUIDE;
+          let gType = "task";
+          try { gType = normalizeGoalType(loadGoal(findGoalFile(rRoot, goal)).meta.type); } catch {}
+          const worktreeBlock = resolveWorktreeGuide(gType, worktree);
           const currentDirective = readGoalDirective(rRoot, goal);
           const projectExec = readExecutorModel(rRoot);
           const globalSettings = readGraphSettings();
