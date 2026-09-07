@@ -55,24 +55,33 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 |------|----------|----------|
 | **目标生命周期** | `graph_create_goal` | 创建目标（默认放入 Backlog，可指定版本） |
 | | `graph_rename_goal` | 重命名目标标题 |
-| | `graph_set_goal_type` | 设置目标类型（feature / bug / task / improvement） |
+| | `graph_set_goal_type` | 设置目标类型（feature / bug / task / improvement / patch / chore） |
+| | `graph_set_goal_tags` | 设置目标标签列表（最多 20 个，乐观并发） |
 | | `graph_amend_goal` | 记录对目标的修订补充，可自动同步至描述 |
 | | `graph_transition` | 推进目标状态机迁移（进入 blocked 需附原因） |
 | | `graph_postpone_goal` | 暂缓目标，移回 Backlog 并置为 draft |
 | | `graph_archive_goal` | 归档已完成或已废弃的目标 |
 | | `graph_unarchive_goal` | 从归档中恢复目标 |
 | | `graph_delete_goal` | 安全删除已归档的目标 |
+| | `graph_clean_worktree` | 清理已验证的 worktree（用户确认后执行） |
+| | `graph_list_worktrees` | 查询 Git worktree 清理候选（只读，不自动删除） |
 | **质量判据** | `graph_set_criteria` | 登记目标验收判据（严格在执行前设定） |
 | **上下文卡片** | `graph_add_card` | 创建上下文卡片占位（text / file / image / data） |
 | | `graph_bind_collect_card` | 绑定收集子代理，卡片状态转为 collecting |
 | | `graph_fill_card` | 填充卡片内容并生成看板简要摘要 |
 | | `graph_review_card` | 复核卡片内容（filled → reviewed） |
 | | `graph_delete_card` | 删除未在收集中的卡片 |
+| **附件管理** | `graph_store_attachment` | 存储文件附件到目标 |
+| | `graph_delete_attachment` | 删除目标附件 |
 | **排期管理** | `graph_move_goal` | 在 Backlog、独立目标与版本之间移动排期 |
 | **执行派发** | `graph_start_attempt` | 派发执行 Attempt，启动并绑定可续轮子代理 |
 | | `graph_set_directive` | 为下一次 Attempt 注入补充指令与边界要求 |
 | | `graph_record_attempt_handoff`| 记录前序 Attempt 的返工约束与排查基线 |
 | | `graph_unbind_goal_child` | 安全解绑目标执行子代理 |
+| **记忆管理** | `graph_memory_add` | 写入按需/常驻记忆条目 |
+| | `graph_memory_recall` | 按关键词检索记忆 |
+| | `graph_memory_remove` | 删除指定记忆条目 |
+| | `graph_memory_replace` | 替换已有记忆条目内容 |
 | **状态汇报** | `graph_report_status` | 汇报当前 Attempt 进度（看板卡片实时显示） |
 | | `graph_report_supervisor_status` | Supervisor 汇报全局工作状态（顶部状态栏动画） |
 | **评审裁决** | `graph_resolve_accept` | 裁决交付验收（verdict: accept / object） |
@@ -155,24 +164,33 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools:
 |----------|------|-------------|
 | **Goal Lifecycle** | `graph_create_goal` | Create a goal (defaults to Backlog, optional Version) |
 | | `graph_rename_goal` | Rename goal title |
-| | `graph_set_goal_type` | Set goal type (feature / bug / task / improvement) |
+| | `graph_set_goal_type` | Set goal type (feature / bug / task / improvement / patch / chore) |
+| | `graph_set_goal_tags` | Set goal tags (max 20, optimistic concurrency) |
 | | `graph_amend_goal` | Record amendments, optionally appending to description |
 | | `graph_transition` | Advance goal through lifecycle states (reason required for blocked) |
 | | `graph_postpone_goal` | Postpone goal back to Backlog as draft |
 | | `graph_archive_goal` | Archive completed or obsolete goals |
 | | `graph_unarchive_goal` | Restore goals from archive |
 | | `graph_delete_goal` | Safely delete an archived goal |
+| | `graph_clean_worktree` | Clean up a verified worktree (requires user confirmation) |
+| | `graph_list_worktrees` | Query Git worktree cleanup candidates (read-only, no auto-delete) |
 | **Quality Criteria** | `graph_set_criteria` | Define quality criteria (required prior to execution) |
 | **Context Cards** | `graph_add_card` | Create a context card placeholder (text / file / image / data) |
 | | `graph_bind_collect_card` | Bind collection subagent; marks card status as collecting |
 | | `graph_fill_card` | Populate card content with a concise board summary |
 | | `graph_review_card` | Review card content (filled → reviewed) |
 | | `graph_delete_card` | Delete cards not currently collecting |
+| **Attachments** | `graph_store_attachment` | Store file attachments to a goal |
+| | `graph_delete_attachment` | Delete a goal attachment |
 | **Scheduling** | `graph_move_goal` | Move goals between Backlog, Standalone, and Versions |
 | **Execution** | `graph_start_attempt` | Dispatch an execution attempt and spawn a continuable subagent |
 | | `graph_set_directive` | Inject instructions and boundaries for the upcoming attempt |
 | | `graph_record_attempt_handoff`| Record rework constraints, failure notes, and baseline |
 | | `graph_unbind_goal_child` | Safely detach an execution subagent from a goal |
+| **Memory** | `graph_memory_add` | Write on-demand / standing memory entries |
+| | `graph_memory_recall` | Recall memory entries by keyword search |
+| | `graph_memory_remove` | Remove a specific memory entry |
+| | `graph_memory_replace` | Replace an existing memory entry's content |
 | **Status Reporting** | `graph_report_status` | Report progress of current attempt (live card display) |
 | | `graph_report_supervisor_status` | Report supervisor status (top status bar animation) |
 | **Review & Verdict** | `graph_resolve_accept` | Accept or object to delivered attempts |
