@@ -171,6 +171,20 @@ window.__ModuleLoader__.load({
       .dg-btn-accept:hover { background: rgba(58,166,117,.30); border-color: rgba(58,166,117,.55); }
       .dg-btn-accept:active { background: rgba(58,166,117,.42); }
       .dg-btn-accept:disabled { opacity: 0.45; cursor: default; }
+      /* 统一弹窗与抽屉右上角关闭按钮 */
+      .dg-close {
+        transition: opacity .12s ease, background .12s ease, transform .12s ease;
+        line-height: 1 !important;
+        text-align: center;
+      }
+      .dg-close:hover {
+        opacity: 1 !important;
+        background: rgba(128,128,128,.22) !important;
+        transform: scale(1.08);
+      }
+      .dg-close:active {
+        transform: scale(0.95);
+      }
       /* g-153：下拉菜单/选择控件——g-176：改 DSH 主题变量并保留暗色 fallback */
       .dg-select {
         font-size: 12px; padding: 3px 8px; cursor: pointer;
@@ -431,7 +445,22 @@ window.__ModuleLoader__.load({
         border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))", borderRadius: 4,
       },
       selectOption: { background: "var(--dsw-alias-bg-layer-3, #222328)", color: "var(--dsw-alias-label-primary, #e6e6e6)" },
-      close: { float: "right", cursor: "pointer", opacity: 0.7, fontSize: 16 },
+      close: {
+        position: "absolute",
+        top: 14,
+        right: 16,
+        width: 26,
+        height: 26,
+        borderRadius: 4,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+        opacity: 0.7,
+        fontSize: 16,
+        zIndex: 10,
+        userSelect: "none",
+      },
       // g-107 会话内嵌实时区
       liveStrip: {
         marginTop: 4, padding: "3px 6px", borderRadius: 4,
@@ -4253,14 +4282,14 @@ window.__ModuleLoader__.load({
       if (state.loading) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
-            h("span", { style: S.close, onClick: onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
             h("div", { style: { ...S.meta, marginTop: 6 } }, "加载中…")));
       }
       if (state.error) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
-            h("span", { style: S.close, onClick: onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
             h("div", { style: { ...S.meta, marginTop: 6, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "加载失败：" + state.error)));
       }
@@ -4273,7 +4302,7 @@ window.__ModuleLoader__.load({
       }, label);
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onClose }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
           goalTitle ? h("div", { style: { ...S.meta, marginTop: 2 } }, `${goalId} ｜ ${goalTitle}`) : null,
           // D6：进入编辑前明确告知保存后果
@@ -4340,7 +4369,7 @@ window.__ModuleLoader__.load({
       };
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
             `⬅️ 回退到「${STATUS_LABEL[toStatus] ?? toStatus}」`),
           h("div", { style: { ...S.meta, marginBottom: 8 } },
@@ -4456,7 +4485,7 @@ window.__ModuleLoader__.load({
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
             `🚀 执行「${goalData?.title ?? goalId}」`),
           h("div", { style: { ...S.meta, marginBottom: 8 } },
@@ -4514,7 +4543,7 @@ window.__ModuleLoader__.load({
       };
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
             `📦 交付「${goalTitle ?? goalId}」`),
           h("div", { style: { ...S.meta, marginBottom: 8, lineHeight: 1.8 } },
@@ -4666,7 +4695,7 @@ window.__ModuleLoader__.load({
 
       return h("div", { style: S.overlay, ...memoryGuard },
         h("div", { style: { ...S.modal, minWidth: 460, maxWidth: 640, maxHeight: "85vh", display: "flex", flexDirection: "column" }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: props.onClose }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
           h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingRight: 24 } },
             h("div", { style: { fontWeight: 700, fontSize: 16, display: "flex", alignItems: "center", gap: 8 } },
               "🧠 长期记忆管理",
@@ -7218,14 +7247,14 @@ window.__ModuleLoader__.load({
       if (loading) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-            h("span", { style: S.close, onClick: props.onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
             h("div", { style: { ...S.meta, marginTop: 8 } }, "正在读取配置…")));
       }
       if (!form) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-            h("span", { style: S.close, onClick: props.onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
             error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 8 } }, error) : null,
             h("button", { style: { ...S.btn, marginTop: 10 }, className: "dg-btn", onClick: load }, "重试")));
@@ -7339,7 +7368,7 @@ window.__ModuleLoader__.load({
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: props.onClose }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
           h("div", { style: S.modalH }, "看板设置"),
           h("div", { style: S.meta }, "编辑当前 workspace 的 .dsh-graph/project.yaml 安全配置；写回保留未知键与注释。"),
           // att-002：配置文件操作入口——复用 goal-modal 的 Host openPath/copyText/toast/fallback 机制

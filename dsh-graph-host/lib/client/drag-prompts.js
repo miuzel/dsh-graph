@@ -26,7 +26,7 @@
       };
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
             `⬅️ 回退到「${STATUS_LABEL[toStatus] ?? toStatus}」`),
           h("div", { style: { ...S.meta, marginBottom: 8 } },
@@ -142,7 +142,7 @@
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
             `🚀 执行「${goalData?.title ?? goalId}」`),
           h("div", { style: { ...S.meta, marginBottom: 8 } },
@@ -200,7 +200,7 @@
       };
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
             `📦 交付「${goalTitle ?? goalId}」`),
           h("div", { style: { ...S.meta, marginBottom: 8, lineHeight: 1.8 } },
@@ -352,7 +352,7 @@
 
       return h("div", { style: S.overlay, ...memoryGuard },
         h("div", { style: { ...S.modal, minWidth: 460, maxWidth: 640, maxHeight: "85vh", display: "flex", flexDirection: "column" }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: props.onClose }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
           h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingRight: 24 } },
             h("div", { style: { fontWeight: 700, fontSize: 16, display: "flex", alignItems: "center", gap: 8 } },
               "🧠 长期记忆管理",

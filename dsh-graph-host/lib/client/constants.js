@@ -159,6 +159,20 @@
       .dg-btn-accept:hover { background: rgba(58,166,117,.30); border-color: rgba(58,166,117,.55); }
       .dg-btn-accept:active { background: rgba(58,166,117,.42); }
       .dg-btn-accept:disabled { opacity: 0.45; cursor: default; }
+      /* 统一弹窗与抽屉右上角关闭按钮 */
+      .dg-close {
+        transition: opacity .12s ease, background .12s ease, transform .12s ease;
+        line-height: 1 !important;
+        text-align: center;
+      }
+      .dg-close:hover {
+        opacity: 1 !important;
+        background: rgba(128,128,128,.22) !important;
+        transform: scale(1.08);
+      }
+      .dg-close:active {
+        transform: scale(0.95);
+      }
       /* g-153：下拉菜单/选择控件——g-176：改 DSH 主题变量并保留暗色 fallback */
       .dg-select {
         font-size: 12px; padding: 3px 8px; cursor: pointer;

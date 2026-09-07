@@ -90,7 +90,22 @@
         border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))", borderRadius: 4,
       },
       selectOption: { background: "var(--dsw-alias-bg-layer-3, #222328)", color: "var(--dsw-alias-label-primary, #e6e6e6)" },
-      close: { float: "right", cursor: "pointer", opacity: 0.7, fontSize: 16 },
+      close: {
+        position: "absolute",
+        top: 14,
+        right: 16,
+        width: 26,
+        height: 26,
+        borderRadius: 4,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+        opacity: 0.7,
+        fontSize: 16,
+        zIndex: 10,
+        userSelect: "none",
+      },
       // g-107 会话内嵌实时区
       liveStrip: {
         marginTop: 4, padding: "3px 6px", borderRadius: 4,
