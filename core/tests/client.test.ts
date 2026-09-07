@@ -863,6 +863,145 @@ test("spawn-options：无 llm 服务时容错返回（重新执行选择器数�
   assert.deepEqual(res._body.default, { provider: null, model: null, mode: "standard", mode_source: "default" });
 });
 
+test("g-231 spawn-options：resolveModelInfo 补充 per-model reasoning.efforts 且 resolve 失败不拖垮整组", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g231-spawn-"));
+  const root = join(ws, ".dsh-graph");
+  init(root);
+
+  const llmService = {
+    listProviders: async () => [{ id: "deepseek", name: "DeepSeek" }, { id: "kimi", name: "Moonshot" }],
+    listModels: async (pid: string) => {
+      if (pid === "deepseek") return [{ id: "deepseek-chat", name: "DeepSeek Chat" }, { id: "deepseek-reasoner", name: "DeepSeek Reasoner" }];
+      return [{ id: "moonshot-v1-8k", name: "Moonshot v1 8k" }];
+    },
+    resolveModelInfo: async (pid: string, mid: string) => {
+      if (pid === "deepseek" && mid === "deepseek-chat") {
+        return { reasoning: { efforts: [{ id: "off", name: "Off" }, { id: "low", name: "Low" }, { id: "high", name: "High" }], defaultEffort: "low" } };
+      }
+      if (pid === "deepseek" && mid === "deepseek-reasoner") {
+        return { reasoning: { efforts: [{ id: "high", name: "High" }, { id: "max", name: "Max" }] } };
+      }
+      if (pid === "kimi") throw new Error("resolve failed for kimi");
+      return {};
+    },
+  };
+
+  const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const ctx: any = {
+    get: (name: string) => {
+      if (name === "webServer") return webServer;
+      if (name === "llm") return llmService;
+      if (name === "sandboxPolicy") return { workspaceRoot: ws };
+      return undefined;
+    },
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  apply(ctx, {});
+
+  const handler = routes.get("/api/dsh-graph/spawn-options");
+  const res = fakeResponse();
+  await handler({ method: "GET", url: "/api/dsh-graph/spawn-options?workspace=" + encodeURIComponent(ws), on: () => {} }, res);
+  assert.equal(res._code, 200);
+  assert.ok(Array.isArray(res._body.modelGroups), "modelGroups 应为数组");
+  assert.equal(res._body.modelGroups.length, 2);
+
+  // deepseek 组：两个模型都有 reasoning
+  const dsGroup = res._body.modelGroups.find((g: any) => g.id === "deepseek");
+  assert.ok(dsGroup, "deepseek 组存在");
+  assert.equal(dsGroup.models.length, 2);
+  const chatModel = dsGroup.models.find((m: any) => m.id === "deepseek-chat");
+  assert.deepEqual(chatModel.reasoning, {
+    efforts: [{ id: "off", name: "Off" }, { id: "low", name: "Low" }, { id: "high", name: "High" }],
+    defaultEffort: "low",
+  }, "deepseek-chat 应含 reasoning.efforts 与 defaultEffort");
+  const reasonerModel = dsGroup.models.find((m: any) => m.id === "deepseek-reasoner");
+  assert.deepEqual(reasonerModel.reasoning, {
+    efforts: [{ id: "high", name: "High" }, { id: "max", name: "Max" }],
+  }, "deepseek-reasoner 应含 reasoning.efforts（无 defaultEffort）");
+
+  // kimi 组：resolveModelInfo 抛错 → 模型保留 id/name 但无 reasoning（不拖垮整组）
+  const kimiGroup = res._body.modelGroups.find((g: any) => g.id === "kimi");
+  assert.ok(kimiGroup, "kimi 组存在（resolve 失败不拖垮）");
+  assert.equal(kimiGroup.models.length, 1);
+  assert.equal(kimiGroup.models[0].id, "moonshot-v1-8k");
+  assert.equal(kimiGroup.models[0].reasoning, undefined, "resolve 失败的模型无 reasoning 字段");
+});
+
+test("g-231 spawn-options：无 resolveModelInfo 时模型只含 id/name（向后兼容旧版 llm）", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g231-spawn-compat-"));
+  const root = join(ws, ".dsh-graph");
+  init(root);
+
+  const llmService = {
+    listProviders: async () => ["legacy-prov"],
+    listModels: async () => ["legacy-model"],
+    // 无 resolveModelInfo 方法（旧版 llm 服务）
+  };
+
+  const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const ctx: any = {
+    get: (name: string) => {
+      if (name === "webServer") return webServer;
+      if (name === "llm") return llmService;
+      if (name === "sandboxPolicy") return { workspaceRoot: ws };
+      return undefined;
+    },
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  apply(ctx, {});
+
+  const handler = routes.get("/api/dsh-graph/spawn-options");
+  const res = fakeResponse();
+  await handler({ method: "GET", url: "/api/dsh-graph/spawn-options?workspace=" + encodeURIComponent(ws), on: () => {} }, res);
+  assert.equal(res._code, 200);
+  assert.equal(res._body.modelGroups.length, 1);
+  assert.equal(res._body.modelGroups[0].models[0].id, "legacy-model");
+  assert.equal(res._body.modelGroups[0].models[0].reasoning, undefined, "旧版 llm 无 resolveModelInfo 时无 reasoning");
+});
+
+test("g-231 loadHostCatalog REST fallback 保留 spawn-options 中的 reasoning 字段", async () => {
+  // 模拟 spawn-options 返回含 reasoning 的 modelGroups，验证 loadHostCatalog REST 分支不剥离
+  const settingsCode = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings.js"), "utf8");
+  const context = vm.createContext({
+    appCtx: null, gConnectionApi: null, Promise, Array, Set, Error, console,
+    graphUrl: () => "/api/dsh-graph/spawn-options",
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        modelGroups: [
+          {
+            id: "deepseek", name: "DeepSeek",
+            models: [
+              { id: "deepseek-chat", name: "DeepSeek Chat", reasoning: { efforts: [{ id: "low", name: "Low" }, { id: "high", name: "High" }], defaultEffort: "low" } },
+              { id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
+            ],
+          },
+        ],
+      }),
+    }),
+    window: {},
+  });
+  vm.runInContext(`${settingsCode}\nglobalThis.loadHostCatalog = loadHostCatalog;`, context);
+  const loadHostCatalog = context.loadHostCatalog;
+  const result = await loadHostCatalog(null, { get: () => null });
+  assert.equal(result.status, "ready");
+  assert.equal(result.groups.length, 1);
+  assert.equal(result.groups[0].id, "deepseek");
+  const chatModel = result.groups[0].models.find((m: any) => m.id === "deepseek-chat");
+  assert.deepEqual(chatModel.reasoning, {
+    efforts: [{ id: "low", name: "Low" }, { id: "high", name: "High" }],
+    defaultEffort: "low",
+  }, "REST fallback 应保留 reasoning 字段不剥离");
+  const reasonerModel = result.groups[0].models.find((m: any) => m.id === "deepseek-reasoner");
+  assert.equal(reasonerModel.reasoning, undefined, "无 reasoning 的模型保持 undefined");
+});
+
 test("start-execution 无 subagents：attempt 本地创建、child_error 上报（带 provider/model 参数不炸）", async () => {
   const { root, routes, goalId } = setup();
   const r = await post(routes, "/api/dsh-graph/start-execution",

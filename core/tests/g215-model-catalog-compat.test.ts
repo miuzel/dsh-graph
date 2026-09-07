@@ -312,4 +312,9 @@ test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 ses
   assert.match(bundle, /session\?\.modelCatalog/);
   assert.match(bundle, /session\.modelCatalog\.bind\(session\)/);
   assert.match(bundle, /legacyApi\?\.llm\?\.providers/);
+
+  // 4. g-231：服务端 readSpawnOptions 调用 resolveModelInfo 获取 per-model reasoning 元数据
+  const host = readFileSync(join(process.cwd(), "dsh-graph-host/index.js"), "utf8");
+  assert.match(host, /llm\.resolveModelInfo/);
+  assert.match(host, /resolved\.reasoning\.efforts\.map/);
 });
