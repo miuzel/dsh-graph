@@ -17,7 +17,7 @@
 
     // g-158/g-232：目标类型视觉配置——颜色、缩写、完整名
     const GOAL_TYPES = ["feature", "bug", "task", "improvement", "patch", "chore"];
-    const GOAL_TYPE_COLORS = { feature: "#4c8dff", bug: "#d66", task: "#8a8a8a", improvement: "#3aa675", patch: "#607d9b", chore: "#607d9b" };
+    const GOAL_TYPE_COLORS = { feature: "#4c8dff", bug: "#d66", task: "#8a8a8a", improvement: "#3aa675", patch: "#00acc1", chore: "#9c27b0" };
     const GOAL_TYPE_ABBREV = { feature: "F", bug: "B", task: "T", improvement: "I", patch: "P", chore: "C" };
     const GOAL_TYPE_LABELS = { feature: "feature", bug: "bug", task: "task", improvement: "improvement", patch: "patch", chore: "chore" };
     // g-158：规范化类型——非法值安全回退 task
