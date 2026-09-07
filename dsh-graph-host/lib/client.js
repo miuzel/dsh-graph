@@ -6970,7 +6970,7 @@ window.__ModuleLoader__.load({
       const [cards, setCards] = React.useState(Array.isArray(sharedCards) ? sharedCards : []);
       const [title, setTitle] = React.useState("");
       const [note, setNote] = React.useState(null);
-      const [attachGoalId, setAttachGoalId] = React.useState("");
+      const [attachGoalInputs, setAttachGoalInputs] = React.useState({});
       const byId = new Map((goals ?? []).map((g) => [g.id, g]));
 
       const refresh = async () => {
@@ -6995,17 +6995,23 @@ window.__ModuleLoader__.load({
         } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
       };
 
-      const attachToGoal = async (cardId) => {
-        const gid = attachGoalId || (goals && goals[0] && goals[0].id);
-        if (!gid) { setNote("⚠️ 请先选择要挂载的目标"); return; }
+      const attachToGoal = async (cardId, targetGoalId) => {
+        const gid = targetGoalId || (goals && goals[0] && goals[0].id);
+        if (!gid) { setNote("⚠️ 请先选择或输入要挂载的目标"); return; }
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/attach-shared-card"), {
             method: "POST", headers: { "content-type": "application/json" },
             body: JSON.stringify({ goal: gid, card: cardId }),
           });
           const d = await r.json();
-          if (d.ok) { setNote("✅ 已挂到 " + gid); refresh(); onRefresh?.(); }
-          else setNote("⚠️ 挂载失败：" + (d.error || "未知错误"));
+          if (d.ok) {
+            setNote("✅ 已挂到 " + gid);
+            setAttachGoalInputs((prev) => ({ ...prev, [cardId]: "" }));
+            refresh();
+            onRefresh?.();
+          } else {
+            setNote("⚠️ 挂载失败：" + (d.error || "未知错误"));
+          }
         } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
       };
 
@@ -7077,15 +7083,28 @@ window.__ModuleLoader__.load({
             ? h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } },
                 "🔒 收集中：仅解除引用/不可删除；绑定 goal 不可解除（已禁用）")
             : null,
-          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4, alignItems: "center" } },
-            h("select", {
-              value: attachGoalId,
-              onChange: (e) => setAttachGoalId(e.target.value),
-              style: { fontSize: 11, padding: "2px 4px" },
-            },
-              h("option", { value: "" }, "┅ 挂到目标…"),
-              ...(goals ?? []).map((g) => h("option", { key: g.id, value: g.id }, `${g.id} ${g.title}`))),
-            h("button", { style: S.btn, className: "dg-btn", onClick: () => attachToGoal(c.id) }, "⇄ 挂到 goal"),
+          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" } },
+            h("input", {
+              style: { ...S.promptInput, width: 220, fontSize: 11, padding: "2px 6px" },
+              placeholder: "输入 ID 或标题搜索目标…",
+              list: `goal-list-${c.id}`,
+              value: attachGoalInputs[c.id] ?? "",
+              onChange: (e) => setAttachGoalInputs((prev) => ({ ...prev, [c.id]: e.target.value })),
+            }),
+            h("datalist", { id: `goal-list-${c.id}` },
+              (goals ?? []).map((g) =>
+                h("option", { key: g.id, value: g.id }, `${g.id} ${g.title}`))),
+            h("button", {
+              style: S.btnPrimary,
+              className: "dg-btn",
+              disabled: !(attachGoalInputs[c.id] ?? "").trim(),
+              onClick: () => {
+                const raw = (attachGoalInputs[c.id] ?? "").trim();
+                const matched = (goals ?? []).find((g) => g.id === raw || `${g.id} ${g.title}` === raw || g.id === raw.split(" ")[0]);
+                const targetId = matched ? matched.id : raw;
+                attachToGoal(c.id, targetId);
+              },
+            }, "⇄ 挂到目标"),
             ...(c.refCount === 0 && !installing ? [
               h("button", { style: S.btn, className: "dg-btn", onClick: () => removeCard(c.id) }, "🗑 显式删除"),
             ] : []),
