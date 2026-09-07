@@ -74,6 +74,7 @@ import {
 } from "./version-lane.ts";
 import { registerWorktreeCandidates, listWorktrees, cleanWorktree } from "./worktree.ts";
 export { GraphError, GraphConflictError };
+export { normalizeGoalType };
 export { registerWorktreeCandidates, listWorktrees, cleanWorktree };
 export type { MemoryScope };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };

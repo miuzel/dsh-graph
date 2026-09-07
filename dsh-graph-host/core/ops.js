@@ -13,6 +13,7 @@ import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, 
 import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail, } from "./version-lane.js";
 import { registerWorktreeCandidates, listWorktrees, cleanWorktree } from "./worktree.js";
 export { GraphError, GraphConflictError };
+export { normalizeGoalType };
 export { registerWorktreeCandidates, listWorktrees, cleanWorktree };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema };

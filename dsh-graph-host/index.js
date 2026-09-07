@@ -18,6 +18,7 @@ import { relative, join, resolve, dirname, basename, isAbsolute } from "node:pat
 import { fileURLToPath } from "node:url";
 import {
   createGoal,
+  normalizeGoalType,
   setCriteria,
   updateCriteria,
   setGoalTags,
