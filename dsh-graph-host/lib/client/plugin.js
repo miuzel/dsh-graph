@@ -111,11 +111,13 @@
     }
     return {
       name: "dsh-graph",
-      inject: ["slots", "sessions", "connection", "remote", "modelDirectories"],
+      // connection/remote/modelDirectories 是可选 capability：不得把它们列为硬 inject，
+      // 否则旧/部分 profile 未激活其中任一服务时，整个看板 client apply 会被 runner 阻断。
+      inject: ["slots", "sessions"],
       apply(ctx) {
         appCtx = ctx;
         sessionsRt = ctx.sessions ?? null;
-        connectionRt = ctx.connection ?? null;
+        connectionRt = ctx.get?.("connection") ?? null;
         // workspaces 服务经 ctx.get(name) 可选查找即可取到（runner 的 ctx.get 方法不要求 inject 声明，
         // 注入门禁只拦 ctx.workspaces 属性访问；workspaces 由 client-runtime `ctx.reflect.provide` 提供）
         workspacesRt = ctx.get?.("workspaces") ?? null;
@@ -131,9 +133,14 @@
             (props) => h(KanbanView, props),
           ),
         );
-        // g-133：注册「看板设置」settings.section 页（profile 级全局默认配置）。
-        // settingsScope 缺失 / slots 未就绪时整页降级，不影响看板与工具。
-        try { registerGraphSettingsSection(ctx); } catch { /* 静默 */ }
+        // g-231：model catalog 由 active 的 remote service 提供。用可选 ctx.inject 等待实际
+        // provider 激活后再注册设置页，避免只读到 REST/legacy 目录（缺 reasoning metadata）。
+        // remote 缺失时该回调不执行，但看板和 workspace 设置的 REST 降级仍可工作。
+        ctx.inject(["remote"], (scope) => {
+          appCtx = scope;
+          connectionRt = scope.get?.("connection") ?? connectionRt;
+          try { registerGraphSettingsSection(scope); } catch { /* 可选设置页失败不阻断看板 */ }
+        });
         console.log("[dsh-graph-host] client apply: kanban view registered");
       },
     };
