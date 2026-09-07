@@ -3,8 +3,8 @@
  * frontmatter 采用 JSON（YAML 的子集），Node 标准库直接可解析（R-01 零依赖）。
  */
 
-// g-158：四种固定类型、默认 task、非法值回退 task
-export const GOAL_TYPES = ["feature", "bug", "task", "improvement"] as const;
+// g-158/g-232：固定类型、默认 task、非法值回退 task
+export const GOAL_TYPES = ["feature", "bug", "task", "improvement", "patch", "chore"] as const;
 export type GoalType = (typeof GOAL_TYPES)[number];
 export const DEFAULT_GOAL_TYPE: GoalType = "task";
 

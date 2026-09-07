@@ -2,8 +2,8 @@
  * 目标文件的解析与写回：Markdown 正文 + JSON frontmatter。
  * frontmatter 采用 JSON（YAML 的子集），Node 标准库直接可解析（R-01 零依赖）。
  */
-// g-158：四种固定类型、默认 task、非法值回退 task
-export const GOAL_TYPES = ["feature", "bug", "task", "improvement"];
+// g-158/g-232：固定类型、默认 task、非法值回退 task
+export const GOAL_TYPES = ["feature", "bug", "task", "improvement", "patch", "chore"];
 export const DEFAULT_GOAL_TYPE = "task";
 export const MAX_TAG_LEN = 32;
 export const MAX_TAGS = 20;

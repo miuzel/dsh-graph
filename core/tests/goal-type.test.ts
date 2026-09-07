@@ -22,6 +22,8 @@ test("normalizeGoalType：合法类型原样返回", () => {
   assert.equal(normalizeGoalType("bug"), "bug");
   assert.equal(normalizeGoalType("task"), "task");
   assert.equal(normalizeGoalType("improvement"), "improvement");
+  assert.equal(normalizeGoalType("patch"), "patch");
+  assert.equal(normalizeGoalType("CHORE"), "chore");
 });
 
 test("normalizeGoalType：大小写不敏感", () => {
@@ -45,8 +47,8 @@ test("normalizeGoalType：默认值等于 task", () => {
 
 // ---- GOAL_TYPES 常量完整性 ----
 
-test("GOAL_TYPES 包含四种固定类型", () => {
-  assert.deepEqual([...GOAL_TYPES], ["feature", "bug", "task", "improvement"]);
+test("GOAL_TYPES 包含六种固定类型", () => {
+  assert.deepEqual([...GOAL_TYPES], ["feature", "bug", "task", "improvement", "patch", "chore"]);
 });
 
 // ---- createGoal 默认类型 ----
@@ -65,6 +67,14 @@ test("createGoal：指定 type 时持久化", () => {
   const file = findGoalFile(root, id);
   const doc = loadGoal(file);
   assert.equal(doc.meta.type, "feature");
+});
+
+test("createGoal：patch/chore type 持久化", () => {
+  const root = tmpRoot();
+  const patchId = createGoal(root, { title: "Patch", type: "patch", actor: "test" });
+  const choreId = createGoal(root, { title: "Chore", type: "chore", actor: "test" });
+  assert.equal(loadGoal(findGoalFile(root, patchId)).meta.type, "patch");
+  assert.equal(loadGoal(findGoalFile(root, choreId)).meta.type, "chore");
 });
 
 test("createGoal：非法 type 回退 task", () => {
@@ -127,6 +137,14 @@ test("setGoalType：相同类型视为 no-op（不写事件）", () => {
   assert.equal(result.new_type, "task");
   const events = readEvents(root);
   assert.ok(!events.some((e) => e.event === "goal.type_changed"), "相同类型不应记录事件");
+});
+
+test("setGoalType：支持 patch 并记录变更", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "测试目标", type: "task", actor: "test" });
+  const result = setGoalType(root, id, { type: "patch", actor: "test" });
+  assert.equal(result.new_type, "patch");
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.type, "patch");
 });
 
 test("setGoalType：非法类型安全回退 task", () => {

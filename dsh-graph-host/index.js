@@ -697,7 +697,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_create_goal",
-        description: "创建目标（默认进 backlog；带 version 则排期入版本）。可选 type 指定类型（feature/bug/task/improvement，默认 task）。返回目标 id。",
+        description: "创建目标（默认进 backlog；带 version 则排期入版本）。可选 type 指定类型（feature/bug/task/improvement/patch/chore，默认 task；patch/chore 为微小改动快速通道）。返回目标 id。",
         parameters: params({ title: str, version: str, type: str }, ["title"]),
       },
       run: (a, ex) => ({ goal: createGoal(rootFor(ex), { title: a.title, version: a.version, type: a.type, actor: actorOf(ex) }) }),
@@ -935,7 +935,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_set_goal_type",
-        description: "设置目标类型（feature/bug/task/improvement），只更新 meta.type 并记 goal.type_changed 事件（old_type/new_type/actor）；不改 status/version/执行。非法类型安全回退 task；相同类型为 no-op。",
+        description: "设置目标类型（feature/bug/task/improvement/patch/chore；patch/chore 为微小改动快速通道），只更新 meta.type 并记 goal.type_changed 事件（old_type/new_type/actor）；不改 status/version/执行。非法类型安全回退 task；相同类型为 no-op。",
         parameters: params({ goal: str, type: str }, ["goal", "type"]),
       },
       run: (a, ex) => {
@@ -2016,7 +2016,7 @@ export function apply(ctx, config) {
       },
     },
     {
-      // g-158：设置目标类型（feature/bug/task/improvement），记 goal.type_changed 事件
+      // g-158/g-232：设置目标类型（含 patch/chore 微小改动类型），记 goal.type_changed 事件
       path: "/api/dsh-graph/set-goal-type",
       handler: async (req, res) => {
         try {

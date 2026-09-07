@@ -15,11 +15,11 @@
       in_progress: "执行中", review: "评审中", delivered: "已交付", blocked: "阻塞",
     };
 
-    // g-158：目标类型视觉配置——颜色、缩写、完整名（四者共用同一语义色）
-    const GOAL_TYPES = ["feature", "bug", "task", "improvement"];
-    const GOAL_TYPE_COLORS = { feature: "#4c8dff", bug: "#d66", task: "#8a8a8a", improvement: "#3aa675" };
-    const GOAL_TYPE_ABBREV = { feature: "F", bug: "B", task: "T", improvement: "I" };
-    const GOAL_TYPE_LABELS = { feature: "feature", bug: "bug", task: "task", improvement: "improvement" };
+    // g-158/g-232：目标类型视觉配置——颜色、缩写、完整名
+    const GOAL_TYPES = ["feature", "bug", "task", "improvement", "patch", "chore"];
+    const GOAL_TYPE_COLORS = { feature: "#4c8dff", bug: "#d66", task: "#8a8a8a", improvement: "#3aa675", patch: "#607d9b", chore: "#607d9b" };
+    const GOAL_TYPE_ABBREV = { feature: "F", bug: "B", task: "T", improvement: "I", patch: "微改", chore: "微改" };
+    const GOAL_TYPE_LABELS = { feature: "feature", bug: "bug", task: "task", improvement: "improvement", patch: "微改", chore: "微改" };
     // g-158：规范化类型——非法值安全回退 task
     function normalizeGoalType(raw) {
       return GOAL_TYPES.includes(raw) ? raw : "task";
