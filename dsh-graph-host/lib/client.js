@@ -4472,6 +4472,10 @@ window.__ModuleLoader__.load({
       const [loading, setLoading] = React.useState(true);
       const [note, setNote] = React.useState(null);
       const [tab, setTab] = React.useState("standing"); // "standing" | "on_demand"
+      const [searchQuery, setSearchQuery] = React.useState("");
+      const [page, setPage] = React.useState(1);
+      const [totalCount, setTotalCount] = React.useState(0);
+      const [totalPages, setTotalPages] = React.useState(1);
       const [showAdd, setShowAdd] = React.useState(false);
       const [newText, setNewText] = React.useState("");
       const [newScope, setNewScope] = React.useState("standing");
@@ -4480,12 +4484,20 @@ window.__ModuleLoader__.load({
 
       const load = React.useCallback(() => {
         setLoading(true);
-        fetch(graphUrl("/api/dsh-graph/memory/list", {}, props.workspace))
+        const params = {
+          scope: tab,
+          page: String(page),
+          page_size: "15",
+          query: searchQuery.trim(),
+        };
+        fetch(graphUrl("/api/dsh-graph/memory/list", params, props.workspace))
           .then((r) => r.json())
           .then((d) => {
             setLoading(false);
             if (d.ok) {
               setEntries(Array.isArray(d.memory) ? d.memory : []);
+              setTotalCount(d.total ?? 0);
+              setTotalPages(d.total_pages ?? 1);
               setToolsEnabled(d.tools_enabled !== false);
             } else {
               setNote("⚠️ 加载失败：" + (d.error || "未知错误"));
@@ -4495,7 +4507,7 @@ window.__ModuleLoader__.load({
             setLoading(false);
             setNote("⚠️ 网络错误：" + String(e?.message ?? e));
           });
-      }, [props.workspace]);
+      }, [props.workspace, tab, page, searchQuery]);
 
       React.useEffect(() => { load(); }, [load]);
 
@@ -4583,17 +4595,26 @@ window.__ModuleLoader__.load({
               h("input", { type: "checkbox", checked: toolsEnabled, onChange: toggleTools }),
               toolsEnabled ? "允许 Agent 工具调用" : "🔒 纯手工模式(工具已禁用)")),
 
-          h("div", { style: { display: "flex", gap: 8, borderBottom: "1px solid rgba(128,128,128,.2)", marginBottom: 12 } },
-            h("button", {
-              className: "dg-btn",
-              style: { ...S.btn, borderBottom: tab === "standing" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "standing" ? 700 : 400, padding: "6px 12px" },
-              onClick: () => { setTab("standing"); setShowAdd(false); },
-            }, "常驻记忆 (" + standingList.length + ")"),
-            h("button", {
-              className: "dg-btn",
-              style: { ...S.btn, borderBottom: tab === "on_demand" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "on_demand" ? 700 : 400, padding: "6px 12px" },
-              onClick: () => { setTab("on_demand"); setShowAdd(false); },
-            }, "按需记忆 (" + onDemandList.length + ")")),
+          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(128,128,128,.2)", marginBottom: 10 } },
+            h("div", { style: { display: "flex", gap: 8 } },
+              h("button", {
+                className: "dg-btn",
+                style: { ...S.btn, borderBottom: tab === "standing" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "standing" ? 700 : 400, padding: "6px 12px" },
+                onClick: () => { setTab("standing"); setPage(1); setShowAdd(false); },
+              }, "常驻记忆 (固定植入)"),
+              h("button", {
+                className: "dg-btn",
+                style: { ...S.btn, borderBottom: tab === "on_demand" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "on_demand" ? 700 : 400, padding: "6px 12px" },
+                onClick: () => { setTab("on_demand"); setPage(1); setShowAdd(false); },
+              }, "按需记忆 (分页检索)")),
+            h("div", { style: { display: "flex", gap: 4, alignItems: "center" } },
+              h("input", {
+                value: searchQuery,
+                style: { ...S.promptInput, width: 140, height: 26, fontSize: 11, padding: "2px 6px" },
+                placeholder: "搜索记忆内容…",
+                onChange: (e) => { setSearchQuery(e.target.value); setPage(1); },
+              }),
+              searchQuery ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 5px" }, onClick: () => { setSearchQuery(""); setPage(1); } }, "✕") : null)),
 
           h("div", { style: { ...S.meta, marginBottom: 8, fontSize: 11, lineHeight: 1.5 } },
             tab === "standing"
@@ -4601,7 +4622,7 @@ window.__ModuleLoader__.load({
               : "💡【按需记忆】：平时不植入会话、不占 token；仅在检索或手动调用时按需提取，适合技术方案决策与参考事实。"),
 
           h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
-            h("span", { style: { ...S.meta, fontSize: 12 } }, "共 " + currentList.length + " 条记忆"),
+            h("span", { style: { ...S.meta, fontSize: 12 } }, "共 " + totalCount + " 条（第 " + page + " / " + totalPages + " 页）"),
             h("button", {
               className: "dg-btn",
               style: { ...S.btnPrimary, fontSize: 12, padding: "2px 8px" },
@@ -4634,7 +4655,7 @@ window.__ModuleLoader__.load({
           note ? h("div", { style: { ...S.meta, color: "#e74c3c", marginBottom: 8 } }, note) : null,
 
           h("div", { style: { flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, minHeight: 120 } },
-            loading ? h("div", { style: S.meta }, "正在读取记忆…") : (!currentList.length ? h("div", { style: { ...S.meta, textAlign: "center", padding: "20px 0" } }, "（当前分类下暂无记忆条目）") : currentList.map((m) =>
+            loading ? h("div", { style: S.meta }, "正在读取记忆…") : (!entries.length ? h("div", { style: { ...S.meta, textAlign: "center", padding: "20px 0" } }, "（当前分类下暂无记忆条目）") : entries.map((m) =>
               h("div", { key: m.id, style: { ...S.subCard, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4 } },
                 h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
                   h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
@@ -4648,6 +4669,10 @@ window.__ModuleLoader__.load({
                     onClick: () => delMem(m.id),
                   }, "删除")),
                 h("div", { style: { fontSize: 12, lineHeight: 1.5, wordBreak: "break-word" } }, m.text))))),
+          totalPages > 1 ? h("div", { style: { display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 10, borderTop: "1px solid rgba(128,128,128,.15)", paddingTop: 8 } },
+            h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "2px 8px" }, disabled: page <= 1, onClick: () => setPage(page - 1) }, "上一页"),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, page + " / " + totalPages),
+            h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "2px 8px" }, disabled: page >= totalPages, onClick: () => setPage(page + 1) }, "下一页")) : null,
         )
       );
     }

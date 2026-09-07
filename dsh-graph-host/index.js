@@ -1821,9 +1821,41 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
           const r = rootForReq(req);
-          const entries = readMemory(r);
+          const url = new URL(req.url, "http://localhost");
+          const query = url.searchParams.get("query")?.trim() || "";
+          const scope = url.searchParams.get("scope") || undefined;
+          const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
+          const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("page_size") || "20", 10)));
+
+          let entries = readMemory(r);
+          if (scope) {
+            entries = entries.filter((e) => (e.scope ?? "on_demand") === scope);
+          }
+          if (query) {
+            const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+            entries = entries.filter((e) => {
+              const haystack = `${e.text} ${e.id} ${e.source_goal ?? ""}`.toLowerCase();
+              return tokens.every((tok) => haystack.includes(tok));
+            });
+          }
+          // 倒序排列（最新优先）
+          entries.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+
+          const total = entries.length;
+          const totalPages = Math.ceil(total / pageSize) || 1;
+          const offset = (page - 1) * pageSize;
+          const paginated = entries.slice(offset, offset + pageSize);
           const toolsEnabled = isMemoryToolsEnabled(r);
-          json(res, 200, { ok: true, memory: entries, tools_enabled: toolsEnabled });
+
+          json(res, 200, {
+            ok: true,
+            memory: paginated,
+            total,
+            page,
+            page_size: pageSize,
+            total_pages: totalPages,
+            tools_enabled: toolsEnabled,
+          });
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
         }
