@@ -225,6 +225,8 @@ export const projectConfigPatchSchema = {
             properties: {
                 provider: { type: "string", nullable: true },
                 model: { type: "string", nullable: true },
+                mode: { type: "string", nullable: true },
+                reasoning_effort: { type: "string", nullable: true },
             },
             additionalProperties: false,
         },
@@ -306,7 +308,7 @@ export const createGoalPostSchema = {
         title: { type: "string", minLength: 1 },
         version: { type: "string", nullable: true },
         description: { type: "string", nullable: true },
-        type: { type: "string", enum: ["feature", "bug", "task", "improvement"], nullable: true },
+        type: { type: "string", enum: ["feature", "bug", "task", "improvement", "patch", "chore"], nullable: true },
     },
     required: ["title"],
     additionalProperties: false,

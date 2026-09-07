@@ -11,6 +11,7 @@
     let gSettingsScope = null;
     // g-133：数据源 = ctx.get('connection').api（registerGraphSettingsSection 捕获），挂载时读 llm 目录。
     let gConnectionApi = null;
+    let settingsModeInstanceSeq = 0;
 
     // 3082 的 settingsScope 在非 loopback 浏览器上下文会是 memory；此时仍可
     // 通过已存在的 profile settings RPC 读写 Host，而不是把配置伪装成 workspace 数据。
@@ -81,7 +82,12 @@
       // 1. 优先调用 0.1.2-alpha.2 新版 API
       try {
         const remote = ctx?.get?.("remote") ?? ctx?.remote ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("remote") ?? appCtx?.remote) : null) ?? (typeof window !== "undefined" ? window.__DSH_REMOTE__ : null);
-        const modelCatalogFn = remote?.session?.modelCatalog ?? (typeof remote?.["session/modelCatalog"] === "function" ? remote["session/modelCatalog"].bind(remote) : null);
+        // Remote session 方法依赖所属 session proxy 的 this；脱离 receiver 调用会失败并误回退到
+        // 旧 llm.models（旧目录不含 reasoning 元数据），导致有能力的模型显示为空选择器。
+        const session = remote?.session;
+        const modelCatalogFn = typeof session?.modelCatalog === "function"
+          ? session.modelCatalog.bind(session)
+          : (typeof remote?.["session/modelCatalog"] === "function" ? remote["session/modelCatalog"].bind(remote) : null);
         if (typeof modelCatalogFn === "function") {
           const res = await modelCatalogFn();
           const val = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : res;
@@ -202,6 +208,9 @@
 
     // 看板设置页组件：读/写 dsh-graph profile 全局默认。
     function GraphSettingsSection(_props) {
+      const modeIdRef = React.useRef(null);
+      if (modeIdRef.current == null) modeIdRef.current = `dg-global-subagent-mode-${++settingsModeInstanceSeq}`;
+      const modeId = modeIdRef.current;
       const [snap, setSnap] = React.useState(gSettingsScope ? gSettingsScope.getSnapshot() : null);
       const [draft, setDraft] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
@@ -253,9 +262,19 @@
       const draftValue = draft ?? {
         subagentProvider: value?.subagentProvider ?? "",
         subagentModel: value?.subagentModel ?? "",
+        subagentReasoningEffort: value?.subagentReasoningEffort ?? "",
+        subagentMode: value?.subagentMode ?? "",
         subagentPrompt: value?.subagentPrompt ?? "",
       };
       const setField = (k, v) => setDraft({ ...draftValue, [k]: v });
+
+      // g-191：受控子代理执行模式（当前支持标准模式与带工具物理过滤的极简模式）
+      const modeOptions = [
+        { id: "", name: "（继承系统默认：标准模式）", desc: "未配置时默认使用标准模式。" },
+        { id: "standard", name: "标准模式 (standard) - 完整工具能力 + 专属 Persona 覆盖", desc: "功能完整的编码 Agent，覆盖标准工具池并自动注入 dsh-graph 纪律 Persona。" },
+        { id: "minimal", name: "极简模式 (minimal) - 严格基础 6 工具过滤 (graph-minimal)", desc: "仅允许 bash、edit、read、write、graph_report_status、graph_transition，物理屏蔽高级工具与误导。" },
+      ];
+      const curMode = draftValue.subagentMode ?? "";
 
       // g-133：合法目录派生。合法 provider = active 且有非空模型目录；model 合法 = 属于所选 provider 目录
       //（未选 provider 时属于任一目录）；空值 = 继承父会话。目录仅作 advisory 可选列表，不拦截保存。
@@ -329,6 +348,26 @@
         }
         return opts;
       })();
+      // reasoning 元数据由 Host 模型目录声明；不维护客户端固定档位词表。
+      // 未选 provider 时仅在 model id 唯一时推导能力，避免同名模型跨 provider 错配。
+      const selectedModel = (() => {
+        if (!catReady || curModel === "") return null;
+        if (curProvider !== "") return groupById.get(curProvider)?.models.find((m) => m.id === curModel) ?? null;
+        const matches = catalog.groups.flatMap((g) => g.models.filter((m) => m.id === curModel));
+        return matches.length === 1 ? matches[0] : null;
+      })();
+      const effortChoices = Array.isArray(selectedModel?.reasoning?.efforts) ? selectedModel.reasoning.efforts : [];
+      const curEffort = draftValue.subagentReasoningEffort ?? "";
+      const effortListed = effortChoices.some((effort) => effort?.id === curEffort);
+      const effortOptions = [h("option", { key: "__blank-e", value: "" }, "（继承所选模型/父会话）")];
+      if (curEffort !== "" && !effortListed) {
+        effortOptions.push(h("option", { key: "__cur-e", value: curEffort }, curEffort + legacySuffix));
+      }
+      for (const effort of effortChoices) {
+        if (typeof effort?.id === "string" && effort.id !== "") {
+          effortOptions.push(h("option", { key: "effort:" + effort.id, value: effort.id }, effort.name ?? effort.id));
+        }
+      }
 
       const save = async () => {
         if (!gSettingsScope || !writable) return;
@@ -338,6 +377,8 @@
           // 一次提交，按字段逐个 set（settings scope 每字段 revision-fenced 写入）。
           await gSettingsScope.set("subagentProvider", draftValue.subagentProvider ?? "");
           await gSettingsScope.set("subagentModel", draftValue.subagentModel ?? "");
+          await gSettingsScope.set("subagentReasoningEffort", draftValue.subagentReasoningEffort ?? "");
+          await gSettingsScope.set("subagentMode", draftValue.subagentMode ?? "");
           await gSettingsScope.set("subagentPrompt", draftValue.subagentPrompt ?? "");
           setSaved("已保存到当前 profile。");
           setDraft(null); // 成功后才归位草稿（快照已更新）
@@ -375,6 +416,23 @@
         catReady && catalog.failures.length > 0
           ? h("span", { style: GSS.hint }, "部分 provider 的模型目录读取失败（" + catalog.failures.map((f) => f.id).join("、") + "），相关 provider 暂不可选。")
           : null,
+        h("div", { style: GSS.field },
+          h("label", { style: GSS.label }, "子代理默认推理档位"),
+          h("select", { style: GSS.select, value: curEffort, disabled: !writable,
+            onChange: (e) => setField("subagentReasoningEffort", e.target.value) }, ...effortOptions),
+          h("span", { style: GSS.hint },
+            catReady
+              ? (effortChoices.length > 0
+                ? "选项来自所选 provider/model 声明的 reasoning effort 能力；留空使用所选模型或父会话的默认值。"
+                : "所选 provider/model 未声明 reasoning effort 能力；已存旧值会保留，可留空以继承默认值。")
+              : "正在等待 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
+        h("div", { style: GSS.field },
+          h("label", { style: GSS.label, htmlFor: modeId }, "子代理默认执行模式"),
+          h("select", { id: modeId, "aria-label": "子代理默认执行模式", style: GSS.select, value: curMode, disabled: !writable,
+            onChange: (e) => setField("subagentMode", e.target.value) },
+            modeOptions.map((m) => h("option", { key: m.id, value: m.id }, m.name))),
+          h("span", { style: GSS.hint },
+            "受控枚举：标准模式、PTC 模式、极简模式、创造模式。单次派发与 workspace project.yaml 更优先；留空使用系统默认（标准模式）。")),
         h("div", { style: GSS.field },
           h("label", { style: GSS.label }, "子代理默认补充提示词"),
           h("textarea", { style: GSS.textarea, value: draftValue.subagentPrompt, disabled: !writable,

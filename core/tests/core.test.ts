@@ -40,6 +40,10 @@ import {
   readProjectConfig,
   writeProjectConfig,
   readPromptOverride,
+  resolveSubagentMode,
+  normalizeSubagentMode,
+  toolFilterForMode,
+  buildSubagentDefaultPersona,
   GraphError,
 } from "../ops.ts";
 
@@ -48,6 +52,41 @@ function tmpRoot(): string {
   init(dir);
   return dir;
 }
+
+// ---- g-191 controlled subagent modes, toolFilter and default persona ----
+
+test("g-191 模式枚举与优先级：单次覆盖 > workspace > profile > 系统默认", () => {
+  assert.equal(normalizeSubagentMode(" MINIMAL "), "minimal");
+  assert.equal(normalizeSubagentMode("arbitrary-command"), null);
+  assert.deepEqual(resolveSubagentMode("minimal", "standard", "minimal"), { mode: "minimal", source: "override", prompt: "【极简模式执行策略】仅提供受控 6 项基础工具（bash、edit、read、write、graph_report_status、graph_transition），保持紧凑输出，不展开冗余高级调用。" });
+  assert.equal(resolveSubagentMode(null, "minimal", "standard").source, "project");
+  assert.equal(resolveSubagentMode(null, null, "minimal").source, "global");
+  assert.equal(resolveSubagentMode("invalid", "also-invalid", "bad").mode, "standard");
+});
+
+test("g-191 project.yaml 模式只接受受控值，非法值安全回退且写入拒绝", () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, "project.yaml"), "executor:\n  mode: MINIMAL\n");
+  assert.equal(readProjectConfig(root).executor.mode, "minimal");
+  writeFileSync(join(root, "project.yaml"), "executor:\n  mode: arbitrary-command\n");
+  assert.equal(readProjectConfig(root).executor.mode, null);
+  assert.throws(() => writeProjectConfig(root, { executor: { mode: "arbitrary-command" } }, "human:gui"), GraphError);
+});
+
+test("g-191: minimal 模式生成受控工具过滤，不影响 standard 模式", () => {
+  assert.deepEqual(toolFilterForMode("minimal"), { allow: ["bash", "edit", "read", "write", "graph_report_status", "graph_transition"] });
+  assert.equal(toolFilterForMode("standard"), undefined);
+
+});
+
+test("g-191: buildSubagentDefaultPersona 包含纪律与目标参数", () => {
+  const persona = buildSubagentDefaultPersona("g-001", "att-002");
+  assert.match(persona, /dsh-graph 子代理通用执行纪律/);
+  assert.match(persona, /graph_report_status/);
+  assert.match(persona, /graph_transition/);
+  assert.match(persona, /绝不自行 delivered/);
+  assert.match(persona, /当前派发目标：g-001，执行 attempt：att-002/);
+});
 
 // ---- model ----
 
@@ -144,7 +183,7 @@ test("backlog 目标（draft）直接进行阶段迁移被拒绝，必须先 mov
 test("readExecutorModel 读取 executor.provider/model，缺失返回 null", async () => {
   const { readExecutorModel } = await import("../ops.ts");
   const root = tmpRoot();
-  assert.deepEqual(readExecutorModel(root), { provider: null, model: null });
+  assert.deepEqual(readExecutorModel(root), { provider: null, model: null, mode: null });
   writeFileSync(
     join(root, "project.yaml"),
     "name: t\nexecutor:\n  provider: kimi-coding   # 注释\n  model: kimi-for-coding\n",
@@ -152,6 +191,7 @@ test("readExecutorModel 读取 executor.provider/model，缺失返回 null", asy
   assert.deepEqual(readExecutorModel(root), {
     provider: "kimi-coding",
     model: "kimi-for-coding",
+    mode: null,
   });
 });
 
@@ -168,11 +208,11 @@ test("readExecutorModel 使用 YAML 语义读取注释/空行，并安全降级�
     "other: wrong",
     "",
   ].join("\n"));
-  assert.deepEqual(readExecutorModel(root), { provider: "openai-codex", model: "gpt-5.6-luna" });
+  assert.deepEqual(readExecutorModel(root), { provider: "openai-codex", model: "gpt-5.6-luna", mode: null });
   writeFileSync(join(root, "project.yaml"), "executor: [unterminated");
-  assert.deepEqual(readExecutorModel(root), { provider: null, model: null });
+  assert.deepEqual(readExecutorModel(root), { provider: null, model: null, mode: null });
   writeFileSync(join(root, "project.yaml"), "executor:\n  provider: 42\n  model: null\n");
-  assert.deepEqual(readExecutorModel(root), { provider: null, model: null });
+  assert.deepEqual(readExecutorModel(root), { provider: null, model: null, mode: null });
 });
 
 test("跳阶段迁移被拒绝", () => {
@@ -330,7 +370,7 @@ test("move-goal：backlog↔standalone↔version，带附件拒绝回 backlog", 
   assert.equal(doc.meta.version, "v-x");
   assert.deepEqual(validate(root), []);
   // 带上 cards 附件后拒绝回 backlog
-  addCard(root, id, { title: "c", kind: "text", actor: "test" });
+  addCard(root, id, { title: "c", kind: "text", actor: "test", scope: "goal" });
   assert.throws(() => moveGoal(root, id, { to: "backlog", actor: "test" }), /附件/);
   const events = readEvents(root).filter((e) => e.event === "goal.moved");
   assert.equal(events.length, 2);
@@ -433,7 +473,7 @@ test("move-goal：backlog → version 仍变为 planning", () => {
 test("bindCardChild 写 card.collecting 事件并绑定 child_id/status", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  const card = addCard(root, id, { title: "c", kind: "text", actor: "test" });
+  const card = addCard(root, id, { title: "c", kind: "text", actor: "test", scope: "goal" });
   bindCardChild(root, id, card, { childId: "child-abc", parentSessionId: "session-x", actor: "human:gui" });
   // 事件先行：card.collecting 已记
   const ev = readEvents(root).filter((e) => e.event === "card.collecting");
@@ -612,7 +652,7 @@ test("readProjectConfig：回填 executor/defaults/automation/prompt_overrides�
     SAMPLE_CONFIG + "unknown_block:\n  mystery: keep-me   # 未知键保留\n",
   );
   const cfg = readProjectConfig(root);
-  assert.deepEqual(cfg.executor, { provider: "openai-codex", model: "gpt-5.6-luna" });
+  assert.deepEqual(cfg.executor, { provider: "openai-codex", model: "gpt-5.6-luna", mode: null });
   assert.deepEqual(cfg.defaults.review, { reviewer: "human", prompt: null });
   assert.deepEqual(cfg.defaults.pk, { lanes: 1, sandbox: "directory" });
   assert.deepEqual(cfg.supervisor.automation, {
@@ -691,7 +731,7 @@ test("g-132 回归：块内被 # 注释的字段行不干扰读取/写回（保�
   writeFileSync(join(root, "project.yaml"),
     "executor:\n#  provider: xiaomi-token-plan-cn   # 旧 provider（注释掉）\n#  model: mimo-v2.5-pro\n  provider: openai-codex\n  model: gpt-5.6-luna\n");
   const cfg = readProjectConfig(root);
-  assert.deepEqual(cfg.executor, { provider: "openai-codex", model: "gpt-5.6-luna" });
+  assert.deepEqual(cfg.executor, { provider: "openai-codex", model: "gpt-5.6-luna", mode: null });
   // 写回新值，仍保留被注释掉的旧行
   writeProjectConfig(root, { executor: { provider: "xiaomi" } }, "human:gui");
   const text = readFileSync(join(root, "project.yaml"), "utf8");

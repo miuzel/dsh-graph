@@ -44,24 +44,28 @@ test("g-215 探测链阶段 1：0.1.2-alpha.2 新版 API (remote.session.modelCa
 
   const mockRemote = {
     session: {
-      modelCatalog: async () => ({
-        ok: true,
-        value: {
-          default: { provider: "deepseek-official", model: "deepseek-chat" },
-          routableProviders: ["deepseek-official"],
-          groups: [
-            {
-              id: "deepseek-official",
-              name: "DeepSeek Official",
-              models: [
-                { id: "deepseek-chat", name: "DeepSeek Chat" },
-                { id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
-              ],
-            },
-          ],
-          failures: [],
-        },
-      }),
+      receiverBound: true,
+      modelCatalog: async function () {
+        if (!this.receiverBound) throw new Error("modelCatalog lost its session receiver");
+        return {
+          ok: true,
+          value: {
+            default: { provider: "deepseek-official", model: "deepseek-chat" },
+            routableProviders: ["deepseek-official"],
+            groups: [
+              {
+                id: "deepseek-official",
+                name: "DeepSeek Official",
+                models: [
+                  { id: "deepseek-chat", name: "DeepSeek Chat", reasoning: { efforts: [{ id: "high", name: "High" }] } },
+                  { id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
+                ],
+              },
+            ],
+            failures: [],
+          },
+        };
+      },
     },
   };
 
@@ -77,6 +81,7 @@ test("g-215 探测链阶段 1：0.1.2-alpha.2 新版 API (remote.session.modelCa
   assert.equal(result.groups.length, 1);
   assert.equal(result.groups[0].id, "deepseek-official");
   assert.equal(result.groups[0].models.length, 2);
+  assert.deepEqual(result.groups[0].models[0].reasoning.efforts, [{ id: "high", name: "High" }], "新版目录的精确模型 effort 元数据必须原样保留");
   assert.equal(result.providers.length, 1);
   assert.equal(result.providers[0].provider, "deepseek-official");
   assert.equal(result.providers[0].displayName, "DeepSeek Official");
@@ -281,12 +286,22 @@ test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 ses
   const settings = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings.js"), "utf8");
   const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings-modal.js"), "utf8");
   const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  const plugin = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/plugin.js"), "utf8");
 
   // 1. settings.js 包含新版 RPC 与降级链
-  assert.match(settings, /remote\?\.session\?\.modelCatalog/);
+  assert.match(settings, /session\?\.modelCatalog/);
+  assert.match(settings, /session\.modelCatalog\.bind\(session\)/);
   assert.match(settings, /modelDirectories/);
   assert.match(settings, /legacyApi\?\.llm\?\.providers/);
   assert.match(settings, /status:\s*"unavailable"/);
+  // dsh.client.inject 只是预取元数据，不能把 optional service 设为 plugin 的硬 inject；
+  // 设置页必须在 apply 时立即注册（不依赖 remote 激活），remote 可选升级 appCtx。
+  assert.match(plugin, /inject: \["slots", "sessions"\]/);
+  assert.doesNotMatch(plugin, /inject: \[[^\]]*"remote"[^\]]*\]/);
+  // 设置页始终立即注册，不等待 remote
+  assert.match(plugin, /try \{ registerGraphSettingsSection\(ctx\); \} catch/);
+  // remote 可选激活仅升级 appCtx/connectionRt，不重复注册设置页
+  assert.match(plugin, /ctx\.inject\?\.\(\["remote"\], \(scope\) =>/);
 
   // 2. settings-modal.js 挂载时不短路，调用 loadHostCatalog 进行 3 级探测
   assert.match(modal, /loadHostCatalog\(gConnectionApi\)/);
@@ -294,6 +309,12 @@ test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 ses
 
   // 3. 生成物 bundle 包含生成标记与 loadHostCatalog 降级链
   assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
-  assert.match(bundle, /remote\?\.session\?\.modelCatalog/);
+  assert.match(bundle, /session\?\.modelCatalog/);
+  assert.match(bundle, /session\.modelCatalog\.bind\(session\)/);
   assert.match(bundle, /legacyApi\?\.llm\?\.providers/);
+
+  // 4. g-231：服务端 readSpawnOptions 调用 resolveModelInfo 获取 per-model reasoning 元数据
+  const host = readFileSync(join(process.cwd(), "dsh-graph-host/index.js"), "utf8");
+  assert.match(host, /llm\.resolveModelInfo/);
+  assert.match(host, /resolved\.reasoning\.efforts\.map/);
 });

@@ -68,7 +68,12 @@
         } catch { /* 静默 */ }
       }));
     }
+    const openingChildSessions = new Set();
     async function openChildSession(parentSessionId, childId) {
+      if (!parentSessionId || !childId) return;
+      const navigationKey = parentSessionId + "\u0000" + childId;
+      if (openingChildSessions.has(navigationKey)) return;
+      openingChildSessions.add(navigationKey);
       const rt = sessionsRt ?? appCtx?.get?.("sessions");
       try {
         if (!rt) return;
@@ -89,27 +94,39 @@
       } catch (e) {
         console.warn("[dsh-graph-host] openSubagent failed", e);
         try { rt?.open?.(parentSessionId); activateChatTab(); } catch { /* 静默 */ }
+      } finally {
+        openingChildSessions.delete(navigationKey);
       }
     }
     function sessionLinkBtn(parentSessionId, childId, label) {
-      if (!childId) return null;
+      // 没有父会话就不渲染假入口：无法定位子会话时保持页面其它内容可用。
+      if (!childId || !parentSessionId) return null;
       return h("button", {
         style: { ...S.btn, fontSize: 11, padding: "0 6px", marginLeft: 6, flexShrink: 0 },
         className: "dg-btn dg-session-link",
-        title: parentSessionId ? "跳转到子代理会话" : "子代理 id（父会话未知，仅展示）",
-        onClick: (e) => { e.stopPropagation(); if (parentSessionId) openChildSession(parentSessionId, childId); },
+        type: "button",
+        title: "跳转到子代理会话",
+        onClick: (e) => { e.stopPropagation(); void openChildSession(parentSessionId, childId); },
       }, label ?? "↗ 会话");
     }
     return {
       name: "dsh-graph",
-      inject: ["slots", "sessions", "connection", "remote", "modelDirectories"],
+      // connection/remote/modelDirectories 是可选 capability：不得把它们列为硬 inject，
+      // 否则旧/部分 profile 未激活其中任一服务时，整个看板 client apply 会被 runner 阻断。
+      inject: ["slots", "sessions"],
       apply(ctx) {
         appCtx = ctx;
         sessionsRt = ctx.sessions ?? null;
-        connectionRt = ctx.connection ?? null;
+        connectionRt = ctx.get?.("connection") ?? null;
         // workspaces 服务经 ctx.get(name) 可选查找即可取到（runner 的 ctx.get 方法不要求 inject 声明，
         // 注入门禁只拦 ctx.workspaces 属性访问；workspaces 由 client-runtime `ctx.reflect.provide` 提供）
         workspacesRt = ctx.get?.("workspaces") ?? null;
+        ctx.slots.inject("conversation.session.header.actions", () =>
+          ctx.slots.register(
+            { name: "conversation.session.header.actions", id: "dsh-graph-supervisor-badge", order: -9 },
+            (props) => h(SupervisorHeaderBadge, props),
+          ),
+        );
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
             { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: "看板" },
@@ -118,7 +135,17 @@
         );
         // g-133：注册「看板设置」settings.section 页（profile 级全局默认配置）。
         // settingsScope 缺失 / slots 未就绪时整页降级，不影响看板与工具。
+        // 设置页必须在 apply 时立即注册，不能依赖可选 remote 激活——remote 缺失时
+        // REST fallback 仍可正常读写配置；remote 后续激活时再升级 ctx 以获取精确 model catalog。
         try { registerGraphSettingsSection(ctx); } catch { /* 静默 */ }
+        // g-231：remote 可选激活——若 remote service 后续激活，升级 appCtx 和 connectionRt
+        // 使 loadHostCatalog 能从 session.modelCatalog 获取含 reasoning.efforts 的精确目录。
+        // remote 缺失时此回调不执行，设置页仍通过 REST/legacy 降级正常工作。
+        ctx.inject?.(["remote"], (scope) => {
+          appCtx = scope;
+          connectionRt = scope.get?.("connection") ?? connectionRt;
+          // 已注册的 settings section 通过 appCtx 变量读取 catalog，无需重复注册。
+        });
         console.log("[dsh-graph-host] client apply: kanban view registered");
       },
     };

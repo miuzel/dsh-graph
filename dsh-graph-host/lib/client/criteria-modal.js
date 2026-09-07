@@ -78,14 +78,14 @@
       if (state.loading) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
-            h("span", { style: S.close, onClick: onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
             h("div", { style: { ...S.meta, marginTop: 6 } }, "加载中…")));
       }
       if (state.error) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
-            h("span", { style: S.close, onClick: onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
             h("div", { style: { ...S.meta, marginTop: 6, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "加载失败：" + state.error)));
       }
@@ -98,7 +98,7 @@
       }, label);
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onClose }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
           goalTitle ? h("div", { style: { ...S.meta, marginTop: 2 } }, `${goalId} ｜ ${goalTitle}`) : null,
           // D6：进入编辑前明确告知保存后果

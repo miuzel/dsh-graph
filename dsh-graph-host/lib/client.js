@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const h = React.createElement;
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
-    const PLUGIN_VERSION = "0.8.3";
+    const PLUGIN_VERSION = "0.9.1";
 
     const STAGES = [
       { key: "describe", label: "描述", statuses: ["draft", "planning"] },
@@ -27,11 +27,11 @@ window.__ModuleLoader__.load({
       in_progress: "执行中", review: "评审中", delivered: "已交付", blocked: "阻塞",
     };
 
-    // g-158：目标类型视觉配置——颜色、缩写、完整名（四者共用同一语义色）
-    const GOAL_TYPES = ["feature", "bug", "task", "improvement"];
-    const GOAL_TYPE_COLORS = { feature: "#4c8dff", bug: "#d66", task: "#8a8a8a", improvement: "#3aa675" };
-    const GOAL_TYPE_ABBREV = { feature: "F", bug: "B", task: "T", improvement: "I" };
-    const GOAL_TYPE_LABELS = { feature: "feature", bug: "bug", task: "task", improvement: "improvement" };
+    // g-158/g-232：目标类型视觉配置——颜色、缩写、完整名
+    const GOAL_TYPES = ["feature", "bug", "task", "improvement", "patch", "chore"];
+    const GOAL_TYPE_COLORS = { feature: "#4c8dff", bug: "#dd6666", task: "#8a8a8a", improvement: "#3aa675", patch: "#00acc1", chore: "#9c27b0" };
+    const GOAL_TYPE_ABBREV = { feature: "F", bug: "B", task: "T", improvement: "I", patch: "P", chore: "C" };
+    const GOAL_TYPE_LABELS = { feature: "feature", bug: "bug", task: "task", improvement: "improvement", patch: "patch", chore: "chore" };
     // g-158：规范化类型——非法值安全回退 task
     function normalizeGoalType(raw) {
       return GOAL_TYPES.includes(raw) ? raw : "task";
@@ -45,7 +45,8 @@ window.__ModuleLoader__.load({
       "goal.created": "创建目标", "goal.planned": "完成规划", "criteria.confirmed": "确认判据",
       "criteria.updated": "更新判据", // g-170
       "goal.transition": null, "attempt.started": "派发执行", "attempt.status_reported": null,
-      "completion.claimed": "声明完成", "review.passed": "评审通过", "review.failed": "评审未通过",
+      "completion.claimed": "声明完成", "review.requested": "请求主管复核", "review.objected": "主管提出异议",
+      "review.passed": "评审通过", "review.failed": "评审未通过",
       "goal.moved": "排期移动", "card.created": "创建卡片", "card.filled": "填充卡片",
       "card.reviewed": "复核卡片", "evidence.added": "登记证据", "memory.promoted": "沉淀记忆",
       "version.created": "创建版本", "version.released": "发布版本",
@@ -63,7 +64,7 @@ window.__ModuleLoader__.load({
     const MEANINGFUL = new Set([
       "goal.transition", "goal.amended", "scope.note", "criteria.confirmed",
       "criteria.updated", // g-170
-      "completion.claimed", "review.passed", "review.failed", "attempt.started",
+      "completion.claimed", "review.requested", "review.objected", "review.passed", "review.failed", "attempt.started",
       "goal.moved", "goal.created", "attempt.status_reported", "goal.renamed",
       "goal.type_changed", // g-158
       "goal.directive_set", "goal.comment_added",
@@ -77,6 +78,8 @@ window.__ModuleLoader__.load({
       let what = EVENT_LABEL[e.event];
       if (what === null || what === undefined) {
         if (e.event === "goal.transition") what = `状态流转：${STATUS_LABEL[d.from] ?? d.from} → ${STATUS_LABEL[d.to] ?? d.to}`;
+        else if (e.event === "review.requested") what = `请求主管复核：${d.targetStage ?? ""}${d.snapshot ? `（${String(d.snapshot).slice(0, 120)}）` : ""}`;
+        else if (e.event === "review.objected") what = `主管提出异议：${d.objection ?? ""}`;
         else if (e.event === "attempt.status_reported") what = `汇报：${d.status ?? ""}`;
         else if (e.event === "goal.amended") what = `修订：${d.note ?? ""}`;
         else if (e.event === "goal.renamed") what = `重命名：${d.old_title ?? ""} → ${d.new_title ?? ""}`;
@@ -111,6 +114,8 @@ window.__ModuleLoader__.load({
       .dg-card:active { transform: translateY(0); box-shadow: 0 0 0 2px rgba(76,141,255,.8); }
       .dg-sub { transition: background .12s ease; }
       .dg-sub:hover { background: rgba(58,166,117,.22); }
+      .dg-criteria-row { transition: background .12s ease; border-radius: 4px; }
+      .dg-criteria-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14)); }
       .dg-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-deliver-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-blocked-collapsed:hover { background: rgba(128,128,128,.14); }
@@ -119,6 +124,15 @@ window.__ModuleLoader__.load({
       .dg-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.25)); }
       .dg-btn:active { filter: brightness(0.95); }
       .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
+      /* g-188：统一“转到对话”入口的 hover/active/focus 反馈，不改变布局。 */
+      .dg-session-link { border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.55)); }
+      .dg-session-link:hover { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.30)); border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.85)); box-shadow: 0 0 0 2px rgba(76,141,255,.18); }
+      .dg-session-link:active { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.42)); transform: translateY(1px); }
+      .dg-session-link:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #4c8dff); outline-offset: 2px; }
+      .dg-live-strip-clickable { cursor: pointer; transition: transform .14s ease, box-shadow .14s ease, background .14s ease; }
+      .dg-live-strip-clickable:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(76,141,255,.24); background: rgba(76,141,255,.18); }
+      .dg-live-strip-clickable:active { transform: translateY(0); box-shadow: 0 0 0 2px rgba(76,141,255,.28); }
+      .dg-live-strip-clickable:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #4c8dff); outline-offset: 2px; }
       /* g-227：仅“转到对话”入口在可悬停指针下轻微放大，不影响布局 */
       @media (hover: hover) and (pointer: fine) {
         .dg-session-link { transition: transform .16s ease, background .12s ease, border-color .12s ease, filter .12s ease; }
@@ -157,6 +171,20 @@ window.__ModuleLoader__.load({
       .dg-btn-accept:hover { background: rgba(58,166,117,.30); border-color: rgba(58,166,117,.55); }
       .dg-btn-accept:active { background: rgba(58,166,117,.42); }
       .dg-btn-accept:disabled { opacity: 0.45; cursor: default; }
+      /* 统一弹窗与抽屉右上角关闭按钮 */
+      .dg-close {
+        transition: opacity .12s ease, background .12s ease, transform .12s ease;
+        line-height: 1 !important;
+        text-align: center;
+      }
+      .dg-close:hover {
+        opacity: 1 !important;
+        background: rgba(128,128,128,.22) !important;
+        transform: scale(1.08);
+      }
+      .dg-close:active {
+        transform: scale(0.95);
+      }
       /* g-153：下拉菜单/选择控件——g-176：改 DSH 主题变量并保留暗色 fallback */
       .dg-select {
         font-size: 12px; padding: 3px 8px; cursor: pointer;
@@ -204,6 +232,13 @@ window.__ModuleLoader__.load({
       body:has([style*="position: fixed"]) [data-width-handle],
       body:has([style*="position:fixed"]) [data-width-handle] {
         display: none !important;
+      }
+      /* 弹窗与抽屉打开时，降低 composer 对话框层级并禁用点击穿透，彻底防止遮挡抽屉 */
+      .wSkVaW_root:has(.dg-modal-open) .wSkVaW_composerSeat,
+      .wSkVaW_body:has(.dg-modal-open) .wSkVaW_composerSeat,
+      body:has(.dg-modal-open) [class*="composerSeat"] {
+        z-index: 0 !important;
+        pointer-events: none !important;
       }
       /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */
       @keyframes dg-flow-bg {
@@ -354,21 +389,23 @@ window.__ModuleLoader__.load({
       },
       overlay: {
         position: "fixed", inset: 0, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.55))",
-        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000,
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20000,
       },
       drawer: {
         position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
-        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10001,
+        boxSizing: "border-box",
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
-        padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
+        padding: "20px 22px 90px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
       },
       // g-223：左侧抽屉（版本管理抽屉，从屏幕左侧展开）
       drawerLeft: {
         position: "fixed", top: 0, left: 0, height: "100vh", width: 380, maxWidth: "85vw",
-        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10001,
+        boxSizing: "border-box",
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
         boxShadow: "4px 0 16px rgba(0,0,0,.45)",
-        padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
+        padding: "20px 22px 90px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
       },
       drawerSection: { marginTop: 14 },
@@ -376,7 +413,7 @@ window.__ModuleLoader__.load({
       modal: {
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", borderRadius: 10,
         maxWidth: 720, width: "90%", maxHeight: "80vh", overflowY: "auto",
-        padding: "16px 20px", fontSize: 13, lineHeight: 1.6, position: "relative", zIndex: 10002,
+        padding: "16px 20px", fontSize: 13, lineHeight: 1.6, position: "relative", zIndex: 20002,
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
@@ -417,7 +454,22 @@ window.__ModuleLoader__.load({
         border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35))", borderRadius: 4,
       },
       selectOption: { background: "var(--dsw-alias-bg-layer-3, #222328)", color: "var(--dsw-alias-label-primary, #e6e6e6)" },
-      close: { float: "right", cursor: "pointer", opacity: 0.7, fontSize: 16 },
+      close: {
+        position: "absolute",
+        top: 14,
+        right: 16,
+        width: 26,
+        height: 26,
+        borderRadius: 4,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+        opacity: 0.7,
+        fontSize: 16,
+        zIndex: 10,
+        userSelect: "none",
+      },
       // g-107 会话内嵌实时区
       liveStrip: {
         marginTop: 4, padding: "3px 6px", borderRadius: 4,
@@ -1293,8 +1345,26 @@ window.__ModuleLoader__.load({
       }, [staleStatus]);
 
       if (!props.childId) return null;
+      // g-188：有 childId 且父会话可定位时，整条 LiveStrip 直达子代理；吞掉冒泡避免打开卡片详情。
+      const canOpen = Boolean(props.parentId && props.childId);
+      const activateStrip = (e) => {
+        e.stopPropagation();
+        if (e.type === "keydown") {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+        }
+        void openChildSession(props.parentId, props.childId);
+      };
+      const stripProps = {
+        style: canOpen ? { ...S.liveStrip, cursor: "pointer" } : S.liveStrip,
+        className: canOpen ? "dg-live-strip-clickable" : undefined,
+        tabIndex: canOpen ? 0 : undefined,
+        role: canOpen ? "button" : undefined,
+        onClick: canOpen ? activateStrip : undefined,
+        onKeyDown: canOpen ? activateStrip : undefined,
+      };
       if (!session) {
-        return h("div", { style: S.liveStrip, title: props.childId },
+        return h("div", { ...stripProps, title: props.childId },
           "⚠️ 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
       }
 
@@ -1320,7 +1390,7 @@ window.__ModuleLoader__.load({
       const modelTitle = props.model ? `模型：${props.provider ? props.provider + "/" : ""}${props.model}` : null;
       return h(
         "div",
-        { style: S.liveStrip, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
+        { ...stripProps, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
         // 第一行：状态 + 流式内容（同行）；右侧有空间时显示 tok/ctx（flex 布局自动压缩）
         h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
           h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
@@ -1340,6 +1410,7 @@ window.__ModuleLoader__.load({
           : null,
       );
     }
+    let reExecModeInstanceSeq = 0;
     // 看板直达指令：向 continuable 子代理发文本（queue 排队 / steer 插队）。
     // 多模态降级：子代理图片源码级不支持（SUBAGENT_IMAGE_UNSUPPORTED）——明确提示而非静默失败。
     function PromptBox(props) {
@@ -1515,10 +1586,14 @@ window.__ModuleLoader__.load({
     // kind="exec" → start-execution（目标执行子代理）；kind="collect" → start-collection（卡片收集子代理，需 cardId+prompt）。
     // 下拉数据源 = spawn-options 的 modelGroups（LLM provider 分组目录）；subagent provider（spawn/fork）不暴露给用户。
     function ReExecBox(props) {
+      const modeIdRef = React.useRef(null);
+      if (modeIdRef.current == null) modeIdRef.current = `dg-reexec-subagent-mode-${++reExecModeInstanceSeq}`;
+      const modeId = modeIdRef.current;
       const { goalId, kind, cardId, prompt } = props;
       const [opts, setOpts] = React.useState(null); // {modelGroups, default}
       const [provider, setProvider] = React.useState("");
       const [model, setModel] = React.useState("");
+      const [mode, setMode] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
 
@@ -1539,8 +1614,10 @@ window.__ModuleLoader__.load({
             const g0 = groups.find((x) => x.id === effProvider);
             const ms = g0?.models ?? [];
             const effModel = ms.some((m) => m.id === defM) ? defM : (ms[0]?.id ?? "");
+            const defMode = d?.default?.mode ?? "";
             setProvider(effProvider);
             setModel(effModel);
+            setMode(defMode);
           })
           .catch(() => alive && setOpts({ modelGroups: null, default: null }));
         return () => { alive = false; };
@@ -1549,13 +1626,22 @@ window.__ModuleLoader__.load({
       const groups = opts?.modelGroups ?? [];
       const currentGroup = groups.find((g) => g.id === provider) ?? null;
       const modelChoices = currentGroup?.models ?? [];
+      const modeList = opts?.modes ?? [
+        { id: "standard", name: "标准模式" },
+        { id: "minimal", name: "极简模式 (6工具过滤)" },
+      ];
 
       const relaunch = async () => {
         setBusy(true);
         setNote("重新派发中…");
         try {
           const url = kind === "collect" ? "/api/dsh-graph/start-collection" : "/api/dsh-graph/start-execution";
-          const body = { goal: goalId, provider: provider || undefined, model: model || undefined };
+          const body = {
+            goal: goalId,
+            provider: provider || undefined,
+            model: model || undefined,
+            mode: mode || undefined,
+          };
           if (kind === "collect") { body.card = cardId; body.prompt = prompt; }
           const r = await fetch(graphUrl(url), {
             method: "POST",
@@ -1566,8 +1652,9 @@ window.__ModuleLoader__.load({
           if (data.ok) {
             if (data.child_id) {
               const route = data.model_route ? `（${data.model_route}）` : "";
-              setNote("✅ 已重新派发子代理，id：" + data.child_id + " " + route);
-              showToast("✅ 已重新派发子代理 " + route);
+              const modeTag = data.mode ? `[${data.mode}]` : "";
+              setNote("✅ 已重新派发子代理 " + modeTag + "，id：" + data.child_id + " " + route);
+              showToast("✅ 已重新派发子代理 " + modeTag + " " + route);
               if (data.model_route) props.onRelaunched?.(data.model_route);
             } else {
               setNote("⚠️ 子代理启动失败：" + (data.child_error || "无 child_id"));
@@ -1612,6 +1699,16 @@ window.__ModuleLoader__.load({
                     ? h("option", { value: defM, style: optStyle }, defM ? `默认 ${defM}` : "model 不可用")
                     : [h("option", { key: "", value: "", style: optStyle }, "默认"),
                        ...modelChoices.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))]),
+                kind !== "collect" ? h("select", {
+                  id: modeId,
+                  "aria-label": "重新执行子代理模式",
+                  style: selStyle, value: mode,
+                  className: "dg-select",
+                  title: "子代理执行模式（缺省 project.yaml executor.mode）",
+                  onChange: (e) => setMode(e.target.value),
+                },
+                  h("option", { key: "", value: "", style: optStyle }, "模式: 默认"),
+                  ...modeList.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))) : null,
               ],
           h("button", {
             style: { ...S.btn, padding: "3px 10px", fontSize: 12 }, className: "dg-btn dg-relaunch",
@@ -1758,7 +1855,8 @@ window.__ModuleLoader__.load({
                          statusLine }),
           h("div", { key: "m", style: { ...S.meta, marginTop: 3 } },
             "模型：" + modelText
-            + (mode ? ` ｜ 模式：${mode === "continuable" ? "可续轮" : "一次性"}` : "")),
+            + (props.subagentMode ? ` ｜ 执行模式：${props.subagentMode}` : "")
+            + (mode ? ` ｜ 会话模式：${mode === "continuable" ? "可续轮" : "一次性"}` : "")),
           h(PromptBox, { key: "p", parentId: props.parentId, childId: props.childId }),
           // g-109 判据反馈：实时会话控件内「重新执行」——子代理出错/无法运行时换 provider/model 重拉
           props.goalId
@@ -1795,6 +1893,27 @@ window.__ModuleLoader__.load({
     // 会话 id 来自 board 端点下发的 supervisorSession（project.yaml），不硬编码。
     // g-a92e1406 判据 3① 扩展：statusLine 传 supervisor 自己的 status_line（事件流最新一条），
     // 运行中由 LiveStrip 走 StatusLine 带动画（流动背景 + 图标 pulse）。
+    // g-192：仅当当前查看会话与后端受保护 supervisor.session 相等时显示。
+    function SupervisorHeaderBadge(props) {
+      const [supervisorSession, setSupervisorSession] = React.useState(null);
+      const sessionId = props?.sessionId ?? props?.session?.sessionId ?? props?.id ?? null;
+      const workspace = props?.workspace ?? props?.cwd ?? props?.session?.cwd ?? props?.session?.header?.cwd ?? (typeof resolveWorkspaceOfSession === "function" ? resolveWorkspaceOfSession(sessionId) : null);
+      React.useEffect(() => {
+        let cancelled = false;
+        if (!sessionId || !workspace) { setSupervisorSession(null); return () => { cancelled = true; }; }
+        const url = "/api/dsh-graph/supervisor-session?workspace=" + encodeURIComponent(workspace);
+        fetch(url, { method: "GET", credentials: "same-origin" }).then((res) => res.ok ? res.json() : null)
+          .then((data) => { if (!cancelled) setSupervisorSession(typeof data?.supervisorSession === "string" ? data.supervisorSession : null); })
+          .catch(() => { if (!cancelled) setSupervisorSession(null); });
+        return () => { cancelled = true; };
+      }, [sessionId, workspace]);
+      if (!sessionId || !supervisorSession || sessionId !== supervisorSession) return null;
+      return h("span", {
+        role: "status", title: "当前会话是 dsh-graph 主管会话", "aria-label": "当前会话是 dsh-graph 主管会话",
+        style: { display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", borderRadius: 6, padding: "2px 7px", fontSize: 12, lineHeight: 1.4, flexShrink: 0, background: "var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))", color: "var(--dsw-alias-label-secondary, inherit)" },
+      }, "🧭 GRAPH主管");
+    }
+
     function SupervisorBar(props) {
       const { model, modelErr } = useSessionModel(props.id, null);
       const jump = () => {
@@ -1911,6 +2030,18 @@ window.__ModuleLoader__.load({
         const line = String(a?.status_line ?? "").trim();
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
+    }
+
+    // g-187：标签徽章（标签由看板本地编辑器维护，也兼容服务端 tags 字段）
+    function GoalTags(props) {
+      const tags = Array.isArray(props.tags) ? props.tags : [];
+      if (!tags.length) return null;
+      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" }, "aria-label": "标签" },
+        tags.map((tag) => h("span", {
+          key: tag, style: { fontSize: 10, lineHeight: "16px", padding: "0 5px", borderRadius: 8,
+            background: "rgba(76,141,255,.16)", border: "1px solid rgba(76,141,255,.35)",
+            color: "var(--dsw-alias-label-primary, #b8d1ff)", maxWidth: "100%", minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word" },
+        }, "#" + tag)));
     }
 
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
@@ -2062,6 +2193,7 @@ window.__ModuleLoader__.load({
           polishOverlay,
           updateSheen,
            titleRow,
+          h(GoalTags, { tags: g._tags ?? g.tags }),
           h("div", { style: S.meta },
             `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
              h(CriteriaProgress, {
@@ -2078,6 +2210,7 @@ window.__ModuleLoader__.load({
         polishOverlay,
         updateSheen,
            titleRow,
+        h(GoalTags, { tags: g._tags ?? g.tags }),
         h("div", { style: S.meta },
           `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
           h(CriteriaProgress, {
@@ -2119,6 +2252,10 @@ window.__ModuleLoader__.load({
             h("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
               h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
                 `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
+              c.scope === "shared"
+                ? h("span", { style: { flexShrink: 0, fontSize: 10, padding: "0 4px", borderRadius: 3, background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-label, #3aa675)" } },
+                    "🔗共享")
+                : null,
               sessionLinkBtn(c.parent_session_id, c.child_id, "↗")),
             h(CardSummary, { summary: c.summary }),
             c.child_id && c.status !== "filled" && c.status !== "reviewed"
@@ -2173,11 +2310,11 @@ window.__ModuleLoader__.load({
         const card = (state.data.cards ?? []).find((c) => c.id === props.cardId);
         if (!card) inner = "卡片不存在：" + props.cardId;
         else {
-          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区
+          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、canonical 附件根、回填模板和禁区
           const goalTitle = state.data.meta?.title ?? props.goalId;
           const cardTitle = card.title;
-          const cardKind = card.kind ?? "text";
           const root = state.data.root ?? "（仓库根未知）";
+          const attRoot = state.data.attachmentsDir ?? (root !== "（仓库根未知）" ? root + "/attachments" : "（附件根未知）");
 
           // 可编辑的收集信息目标部分
           const editablePart = [
@@ -2190,7 +2327,7 @@ window.__ModuleLoader__.load({
           // 只读的规范约束部分
           const readonlyPart = [
             ``,
-            `**工作目录**：当前分配的 worktree/当前工作目录（不要猜测 .dsh-graph 文件路径）`,
+            `**canonical 附件根（绝对路径）**：\`${attRoot}\``,
             ``,
             `**目标信息**：`,
             `- id: \`${props.goalId}\``,
@@ -2199,21 +2336,23 @@ window.__ModuleLoader__.load({
             `**卡片信息**：`,
             `- id: \`${card.id}\``,
             `- 标题: ${cardTitle}`,
-            `- 类型: ${cardKind}`,
             ``,
             `**回填要求**：`,
-            `1. 全文写进 \`text\` 参数`,
-            `2. \`summary\` 写一句话要点式摘要（≤100 字左右），不要长文`,
-            `3. 完成后必须调用以下精确命令回填结果：`,
+            `1. 把正文全文写进 \`text\` 参数；\`summary\` 写一句话要点式摘要（≤100 字左右），不长文。`,
+            `2. 若收集到文件附件（md/txt、图片、csv/Excel、二进制）用 \`graph_store_attachment\`：文本用 content、二进制/图片用 base64，写入上述 canonical 附件根；返回稳定相对引用名。`,
+            `3. 回调正文或 goal.md 时用 \`@att/<相对引用名>\` 引用附件（可含安全子目录）。`,
+            `4. 完成后调用以下精确命令回填结果：`,
             `\`\`\``,
-            `graph_fill_card(goal="${props.goalId}", card="${card.id}", text=<全文>, summary=<≤100字摘要>)`,
+            `graph_fill_card(goal="${props.goalId}", card="${card.id}", text=<全文可含 @att/<name>>, summary=<≤100字摘要>)`,
             `\`\`\``,
             ``,
+            `**附件安全与边界**：`,
+            `只写入上述 canonical 附件根；拒绝绝对路径、./.. 穿越、反斜杠、NUL；不得访问/引用 \`.dsh-graph\` 之外文件；互联网抓取仅限 http(s)，设超时/大小上限，禁 file://、localhost、内网（SSRF）。`,
+            ``,
             `**禁区（严格遵守）**：`,
-            `1. 不得猜测 \`.dsh-graph\` 文件路径——所有路径已在上方提供`,
-            `2. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${card.id}\``,
-            `3. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
-            `4. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
+            `1. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${card.id}\``,
+            `2. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
+            `3. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
           ].join("\n");
 
           const autoPrompt = editablePart + readonlyPart;
@@ -2221,13 +2360,7 @@ window.__ModuleLoader__.load({
             ? h("div", { style: S.drawerSection, key: "child" },
                 h("div", { style: { ...S.drawerH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
                   "🤖 收集子代理",
-                  card.parent_session_id
-                    ? h("button", {
-                        style: S.btn,
-                        className: "dg-btn dg-session-link",
-                        onClick: () => { openChildSession(card.parent_session_id, card.child_id); },
-                      }, "↗ 转到对话")
-                    : null),
+                  sessionLinkBtn(card.parent_session_id, card.child_id, "↗ 转到对话")),
                 h("div", { style: S.meta }, `id：${card.child_id}`))
             : null;
           // g-109：收集提示词编辑区（空卡片显示）
@@ -2330,11 +2463,24 @@ window.__ModuleLoader__.load({
             h("div", { key: "t", style: { fontWeight: 700, fontSize: 14 } },
               `📇 ${card.title}`),
             h("div", { key: "m", style: S.meta },
-              `${card.id} ｜ ${card.kind} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
+              `${card.id} ｜ ${card.scope === "shared" ? "📇 共享条目" : "🎯 专属条目"} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
             cardFileEntry,
             childLink,
             card.summary ? h("div", { key: "s", style: S.drawerSection },
               h("div", { style: S.drawerH }, "摘要"), card.summary) : null,
+            // 附件引用（安全下载链接，不内联渲染用户 Markdown/HTML/SVG）
+            (Array.isArray(card.attachments) && card.attachments.length)
+              ? h("div", { key: "att", style: S.drawerSection },
+                  h("div", { style: S.drawerH }, "📎 附件引用"),
+                  card.attachments.map((a) =>
+                    h("div", { key: a, style: { ...S.meta, fontSize: 12 } },
+                      h("a", {
+                        href: graphUrl("/api/dsh-graph/attachment?name=" + encodeURIComponent(a)),
+                        target: "_blank", rel: "noopener noreferrer",
+                        style: { color: "var(--dsw-alias-label-link, #4c8dff)", textDecoration: "underline" },
+                      }, `@att/${a}`),
+                      "（下载）")))
+              : null,
             h("div", { key: "body", style: S.drawerSection },
               h("div", { style: S.drawerH }, "全文"),
               h("div", { style: { whiteSpace: "pre-wrap" } }, card.content?.trim() || "（尚未采集内容）")),
@@ -2395,13 +2541,72 @@ window.__ModuleLoader__.load({
                         onClick: () => { setDeleteConfirm(false); setDeleteIdInput(""); setDeleteNote(null); },
                       }, "取消"))
                   )
-                : h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
-                    h("button", {
-                      style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
-                      className: "dg-btn-danger",
-                      title: "删除此卡片（需输入卡片 id 确认）",
-                      onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
-                    }, "🗑 删除卡片")),
+                : h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+                    // g-183：共享/自有转换 + 解除引用（goal 详情方向独立；核心层守卫引用计数与归属）
+                    card.scope === "shared"
+                      ? h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可解除引用" : "移除当前 goal 对这张共享卡的引用（保留共享卡与其他引用；零引用仅可在共享面板显式删除）",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/unreference-shared-card"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("✅ 已解除本 goal 引用"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 解除失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "➖ 解除引用")
+                      : h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可转换" : "转为共享条目（原目标保留引用，条目进入项目知识库供多目标复用）",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-shared"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("📇 已转为共享条目"); (props.onConverted ?? props.onDeleted)?.(); }
+                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "📇 转为共享条目"),
+                    card.scope === "shared"
+                      ? h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可解除引用" : "仅可在引用计数恰为 1 时转回当前目标专属条目（其余引用请先在项目知识库中解除）",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("🎯 已转为专属条目"); (props.onConverted ?? props.onDeleted)?.(); }
+                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "🎯 转为专属条目")
+                      : null,
+                    // 仅 goal 自有卡可删除（共享卡走解除引用/共享面板显式删除，避免必然报错）
+                    card.scope !== "shared"
+                      ? h("button", {
+                          style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn-danger",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中卡片不可删除" : "删除此卡片（需输入卡片 id 确认）",
+                          onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
+                        }, "🗑 删除卡片")
+                      : null),
               deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11, color: deleteNote.startsWith("⚠️") ? "var(--dsw-alias-state-error-primary, #d66)" : undefined } }, deleteNote) : null),
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集
@@ -2470,14 +2675,34 @@ window.__ModuleLoader__.load({
           const done = checked.includes(line);
           const label = line.replace(/^\d+[.、)]\s*/, "");
           return h("div", { key: i, style: { marginBottom: 3 } },
-            h("div", { style: { display: "flex", alignItems: "flex-start", gap: 6 } },
+            h("div", {
+              className: "dg-criteria-row",
+              style: { display: "flex", alignItems: "flex-start", gap: 6, cursor: "pointer", padding: "2px 4px" },
+              tabIndex: 0,
+              role: "checkbox",
+              "aria-label": label,
+              "aria-checked": done,
+              onClick: (e) => {
+                // 子控件各自拥有动作，不应把点击冒泡解释为整行切换。
+                if (e.target.closest?.("button,input,textarea,a,select")) return;
+                toggle(line);
+              },
+              onKeyDown: (e) => {
+                if (e.target.closest?.("button,input,textarea,a,select")) return;
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                toggle(line);
+              },
+            },
               h("input", { type: "checkbox", checked: done, onChange: () => toggle(line),
-                           style: { flexShrink: 0, cursor: "pointer", marginTop: 2 } }),
+                           onClick: (e) => e.stopPropagation(),
+                           onKeyDown: (e) => { if (e.key === "Enter") { e.preventDefault(); toggle(line); } },
+                           style: { flexShrink: 0, cursor: "pointer", marginTop: 2, width: 20, height: 20 } }),
               h("span", { style: { flex: 1, minWidth: 0, opacity: done ? 0.55 : 1,
                                    textDecoration: done ? "line-through" : "none" } }, label),
               h("button", { style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
                             title: "针对此判据向执行会话反馈",
-                            onClick: () => { setFbIdx(fbIdx === i ? -1 : i); setFbNote(null); } },
+                            onClick: (e) => { e.stopPropagation(); setFbIdx(fbIdx === i ? -1 : i); setFbNote(null); } },
                 "💬 反馈")),
             fbIdx === i
               ? h("div", { style: { display: "flex", gap: 4, marginTop: 3, marginLeft: 22 } },
@@ -2614,18 +2839,26 @@ window.__ModuleLoader__.load({
       const [fbText, setFbText] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
-      const [forceMode, setForceMode] = React.useState(false); // 异议后是否展开强制接受理由输入
-      const [forceReason, setForceReason] = React.useState("");
       // 反馈预填模板（复制与显示共用，保证一致）
       const prefillText = fbText.trim() ? `【${goalId} 反馈】\n${fbText.trim()}` : "";
 
-      // 接受复核状态（与 core readAcceptStatus 同语义的事件流推断）：
-      // none（未请求）/ pending（已请求待主管裁决）/ objection（主管异议）/ resolved（已生效）
+      // 接受复核状态只关联当前生命周期周期：
+      // 以最后一次进入当前阶段（goal.transition to === status）为起点，
+      // 如果目标曾被回退重做（如 review -> in_progress -> review），前一次生命周期的请求自然作废，允许重新发起。
       const evs = events ?? [];
+      let lastTransitionToCurrent = -1;
+      evs.forEach((e, i) => {
+        if (e.event === "goal.transition" && String(e.details?.to) === String(status)) {
+          lastTransitionToCurrent = i;
+        }
+      });
       let lastReq = -1, lastObj = -1, lastRes = -1;
       evs.forEach((e, i) => {
-        if (e.event === "review.requested") lastReq = i;
-        if (e.event === "review.objected") lastObj = i;
+        // 仅关注当前这次进入该阶段之后的事件
+        if (i < lastTransitionToCurrent) return;
+        const targetStage = String(e.details?.targetStage ?? "");
+        if (e.event === "review.requested" && (targetStage === String(status) || !targetStage)) lastReq = i;
+        if (e.event === "review.objected" && (targetStage === String(status) || (!targetStage && lastReq >= 0))) lastObj = i;
         if (["description.confirmed", "criteria.confirmed", "review.passed"].includes(e.event)) lastRes = i;
       });
       let acceptState = "none";
@@ -2636,8 +2869,9 @@ window.__ModuleLoader__.load({
       }
       const objectionText = acceptState === "objection" ? evs[lastObj]?.details?.objection : null;
 
-      // 接受：默认经主管 Agent 复核（review.requested → 主管裁决）
+      // 接受：默认经主管 Agent 复核（review.requested → 主管复核收口）
       const doAccept = async () => {
+        if (!confirm(`确认接受目标「${goalId}」的交付成果？\n\n此操作将请求主管会话完成最终复核，并执行交付收口。`)) return;
         setLoading(true);
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/accept"), {
@@ -2646,9 +2880,18 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ goal: goalId }),
           });
           const data = await r.json();
-          if (data.pending) setNote("✅ 已请求主管复核接受，等待主管裁决（无异议即生效）");
-          else if (data.ok) setNote("✅ 已接受");
-          else setNote("⚠️ 接受失败：" + (data.error || "未知错误"));
+          if (data.pending) {
+            try {
+              const rt = sessionsRt ?? appCtx?.get?.("sessions");
+              const session = supervisorSession && (rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession));
+              if (session?.prompt) await session.prompt([{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }], "queue");
+            } catch (err) {
+              console.warn("[dsh-graph-host] prompt supervisorSession failed:", err);
+            }
+            onRefresh?.();
+          } else if (data.ok) {
+            onRefresh?.();
+          } else setNote("⚠️ 接受失败：" + (data.error || "未知错误"));
         } catch (e) {
           setNote("⚠️ 请求失败：" + String(e?.message ?? e));
         }
@@ -2741,57 +2984,38 @@ window.__ModuleLoader__.load({
       // 只认非 collect 的 attempt：凡非收集类（agent:collect）的 attempt 都视为活跃执行。
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       // review 及之后阶段、或已有活跃 attempt，不显示执行/反馈按钮
-      const allowed = ["draft", "planning", "collecting", "ready"];
-      if (!allowed.includes(status) || hasActiveAttempt) return null;
+      const isReview = status === "review";
+      const allowed = ["draft", "planning", "collecting", "ready", "review"];
+      if (!allowed.includes(status) || (hasActiveAttempt && !isReview)) return null;
 
       return h("div", { style: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6 } },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-          acceptState === "none"
+          isReview && acceptState === "none"
             ? h("button", {
                 style: { ...S.btnAccept, padding: "4px 12px", fontSize: 13 }, className: "dg-btn-accept",
                 disabled: loading, onClick: doAccept,
               }, "✅ 接受")
-            : acceptState === "pending"
-              ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待裁决")
-              : acceptState === "resolved"
-                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, "✅ 已接受生效")
+            : isReview && acceptState === "pending"
+              ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待响应")
+              : isReview && acceptState === "resolved"
+                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, "✅ 交付已生效")
                 : null,
-          h("button", {
+          !isReview ? h("button", {
             style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
             disabled: loading,
             onClick: startExecution,
-          }, "🚀 执行"),
-          h(DefinitionPolish, {
+          }, "🚀 执行") : null,
+          !isReview ? h(DefinitionPolish, {
             goalId, goalPath: props.goalPath, supervisorSession, status, events, attempts,
             onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose,
-          })),
-        // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
-        acceptState === "objection"
+          }) : null,
+        ),
+        // g-109 判据：主管有异议 → 显示异议说明；确认列绝不开放直接强制接受入口
+        isReview && acceptState === "objection"
           ? h("div", { key: "obj", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
               h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
-                "⚠️ 主管异议：" + (objectionText ?? "（无内容）")),
-              forceMode
-                ? [
-                    h("input", {
-                      style: { ...S.promptInput, flex: 1 },
-                      value: forceReason, placeholder: "强制接受理由（可选，将记入事件）…",
-                      onChange: (e) => setForceReason(e.target.value),
-                      onKeyDown: (e) => { if (e.key === "Enter") doForceAccept(); },
-                    }),
-                    h("div", { style: { display: "flex", gap: 6 } },
-                      h("button", {
-                        style: { ...S.btnAccept, fontSize: 12 }, className: "dg-btn-accept",
-                        disabled: loading, onClick: doForceAccept,
-                      }, "确认强制接受"),
-                      h("button", {
-                        style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
-                        disabled: loading, onClick: () => { setForceMode(false); setForceReason(""); },
-                      }, "取消")),
-                  ]
-                : h("button", {
-                    style: { ...S.btnAccept, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn-accept",
-                    onClick: () => setForceMode(true),
-                  }, "强制接受（跳过复核）"),
+                "⚠️ 主管已提出异议"),
+              objectionText ? h("div", { style: S.meta }, objectionText) : null,
             )
           : null,
         mode === "feedback"
@@ -2816,14 +3040,12 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // g-109：新增信息收集任务组件（弹窗内信息收集区）
-    // g-128：新增信息收集任务组件（弹窗内信息收集区）——支持标题+kind 选择
-    // g-198：支持 onRefresh 回调，创建成功后立即通知父组件刷新卡片列表
+    // g-109/g-128：新增信息收集任务组件（弹窗内信息收集区）——标题 + 作用域（共享/自有），不设 kind 类型；支持 onRefresh 回调立即刷新卡片列表
     function AddCardBox(props) {
       const { goalId, supervisorSession, onRefresh } = props;
       const [mode, setMode] = React.useState("idle"); // idle | naming | chat
       const [title, setTitle] = React.useState("");
-      const [kind, setKind] = React.useState("text"); // g-128：卡片类型可选
+      const [scope, setScope] = React.useState("shared"); // g-183：新建默认共享卡，可选 goal 自有
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
 
@@ -2835,13 +3057,12 @@ window.__ModuleLoader__.load({
           const r = await fetch(graphUrl("/api/dsh-graph/add-card"), {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, title: t, kind }),
+            body: JSON.stringify({ goal: goalId, title: t, scope }),
           });
           const data = await r.json();
           if (data.ok) {
             setNote("✅ 已创建任务：" + data.card);
             setTitle("");
-            setKind("text");
             setMode("idle");
             onRefresh?.();
           } else {
@@ -2868,9 +3089,6 @@ window.__ModuleLoader__.load({
         }
       };
 
-      // g-128：kind 选项标签
-      const kindLabels = { text: "📝 文本", file: "📄 文件", image: "🖼 图片", data: "📊 数据" };
-
       return h("div", { style: { marginTop: 8 }, className: "dg-card-add" },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
           h("span", { style: { ...S.meta, fontSize: 11 } }, "新增信息收集任务："),
@@ -2885,16 +3103,17 @@ window.__ModuleLoader__.load({
                   onChange: (e) => setTitle(e.target.value),
                   onKeyDown: (e) => { if (e.key === "Enter") addByName(); },
                 }),
-                // g-128：kind 选择下拉框
+                // g-183：卡片作用域——默认共享（多 goal 复用），可选 goal 自有
                 h("select", {
-                  value: kind,
-                  onChange: (e) => setKind(e.target.value),
+                  value: scope,
+                  onChange: (e) => setScope(e.target.value),
                   style: { fontSize: 12, padding: "4px 6px", cursor: "pointer",
                            background: "rgba(128,128,128,.10)", color: "inherit",
                            border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
+                  title: "默认创建共享条目（项目知识库，可多目标复用）；可选创建当前目标专属条目",
                 },
-                  ...Object.entries(kindLabels).map(([k, v]) =>
-                    h("option", { key: k, value: k }, v))),
+                  h("option", { value: "shared" }, "📇 共享条目（项目知识库）"),
+                  h("option", { value: "goal" }, "🎯 目标专属条目")),
                 h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建")))
           : null,
         mode === "chat"
@@ -3197,6 +3416,130 @@ window.__ModuleLoader__.load({
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
+    // g-187：客户端标签编辑器，所有变更通过 host 持久化到 goal.md。
+    function GoalTagsEditor(props) {
+      const [tags, setTags] = React.useState(Array.isArray(props.tags) ? props.tags : []);
+      const [showAdd, setShowAdd] = React.useState(false);
+      const [text, setText] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [saving, setSaving] = React.useState(false);
+      React.useEffect(() => { setTags(Array.isArray(props.tags) ? props.tags : []); }, [props.tags]);
+      const save = async (next) => {
+        if (saving) return;
+        const clean = [...new Set(next.map((x) => String(x).trim().replace(/^#/, "")))];
+        setSaving(true); setNote(null);
+        try {
+          // 如果常规 CAS 冲突（比如弹窗刚打开时状态还未同步），如果当前只有本地这一个客户端在操作，允许重试覆盖
+          let r = await fetch(graphUrl("/api/dsh-graph/set-goal-tags"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.goalId, tags: clean, base_tags: tags }),
+          });
+          let data = await r.json();
+          if (r.status === 409) {
+            // CAS 冲突时自动带当前最新 base 再次更新或带 force 写入
+            r = await fetch(graphUrl("/api/dsh-graph/set-goal-tags"), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ goal: props.goalId, tags: clean, force: true }),
+            });
+            data = await r.json();
+          }
+          if (!r.ok) throw new Error(data.error || "标签保存失败");
+          const saved = Array.isArray(data.new_tags) ? data.new_tags : clean;
+          setTags(saved);
+          props.onChange?.(saved);
+          setNote("已保存");
+        } catch (e) { setNote(String(e?.message ?? e)); }
+        finally { setSaving(false); }
+      };
+      const add = () => {
+        const value = text.trim();
+        if (!value) return;
+        save([...tags, ...value.split(/[,，\s]+/)]);
+        setText("");
+        setShowAdd(false);
+      };
+      return h("div", { style: { ...S.modalSection, minWidth: 0, maxWidth: "100%", overflow: "hidden" } },
+        h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
+          h("span", null, "🔖 标签"),
+          h("button", {
+            className: "dg-btn",
+            style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+            title: showAdd ? "收起输入框" : "添加新标签",
+            onClick: () => { setShowAdd(!showAdd); setNote(null); },
+          }, showAdd ? "取消" : "＋ 添加标签")),
+        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, minWidth: 0, maxWidth: "100%" } },
+          tags.length
+            ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: "点击移除标签", disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×"))
+            : (!showAdd ? h("span", { style: S.meta }, "（暂无标签，点击右上角添加）") : null)),
+        showAdd ? h("div", { style: { display: "flex", gap: 4, marginTop: 6 } },
+          h("input", { autoFocus: true, value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: "输入标签名称，逗号或空格分隔…", onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); else if (e.key === "Escape") setShowAdd(false); } }),
+          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? "保存中…" : "保存")) : null,
+        note ? h("div", { style: { ...S.meta, color: note === "已保存" ? undefined : "#e57373", marginTop: 4 } }, note) : null);
+    }
+
+    // g-197：展示 delivered 目标已识别的清理候选与显式清理操作
+    function WorktreeCandidates(props) {
+      const [items, setItems] = React.useState([]);
+      const [note, setNote] = React.useState(null);
+      const load = React.useCallback(() =>
+        fetch(graphUrl("/api/dsh-graph/worktrees", { goal: props.goalId }))
+          .then((r) => r.json())
+          .then((x) => setItems(Array.isArray(x.worktrees) ? x.worktrees : []))
+          .catch((e) => setNote(String(e))),
+      [props.goalId]);
+      React.useEffect(() => { load(); }, [load]);
+      const clean = async (id) => {
+        if (!window.confirm("确认删除该 linked worktree？本地分支不会删除。")) return;
+        setNote(null);
+        const r = await fetch(graphUrl("/api/dsh-graph/worktrees/clean"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id, confirm: true }),
+        });
+        const x = await r.json();
+        if (!r.ok) setNote(x.reason || x.error || "清理被阻断");
+        else { setNote("已清理 worktree"); load(); }
+      };
+      if (!items.length && !note) return null;
+      return h("div", { style: S.modalSection },
+        h("div", { style: S.modalH }, "🧹 可清理 worktree"),
+        items.map((x) =>
+          h("div", { key: x.id, style: { ...S.subCard, marginTop: 4 } },
+            h("div", null, `${x.status === "candidate" ? "✅" : "🔒"} ${x.path}`),
+            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${x.reason || "已验证合入且干净"}`),
+            x.status === "candidate"
+              ? h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => clean(x.id) }, "确认清理")
+              : null,
+          ),
+        ),
+        note ? h("div", { style: S.meta }, note) : null,
+      );
+    }
+
+    // g-189：只展示服务端按 canonical workspace 只读发现的 worktree；不自行执行 git。
+    function AttemptWorktrees(props) {
+      const attempts = props.attempts ?? [];
+      const discovery = props.worktrees ?? { status: "unavailable", items: {} };
+      const [expanded, setExpanded] = React.useState(false);
+      if (!attempts.length) return null;
+      const latest = [...attempts].reverse().find((a) => discovery.items?.[a.id]);
+      const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: "复制安全相对路径", onClick: async () => { if (await copyText(item.path)) showToast("✅ worktree 路径已复制"); } }, "复制") : null;
+      const row = (a) => {
+        const item = discovery.items?.[a.id];
+        return h("div", { key: a.id, style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginTop: 4 } },
+          h("span", { style: { flex: "0 0 auto", fontSize: 12 } }, a.id),
+          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${item.status}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, "未创建 worktree"),
+          copyButton(item));
+      };
+      return h("div", { key: "worktrees", style: S.modalSection },
+        h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
+          h("span", null, "🌿 Attempt worktree"),
+          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12, padding: "0 5px" }, title: expanded ? "收起 worktree 列表" : "展开 worktree 列表", "aria-label": expanded ? "收起 worktree 列表" : "展开 worktree 列表", onClick: () => setExpanded((v) => !v) }, expanded ? "▲" : "▼")),
+        discovery.status !== "ok" ? h("div", { style: { ...S.meta, fontSize: 12 } }, "⚠️ Git worktree 列表不可用，无法发现 worktree") : expanded ? attempts.map(row) : latest ? row(latest) : h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, "未创建 worktree"));
+    }
+
     function GoalModal(props) {
       const [state, setState] = React.useState({ loading: true });
       const [tab, setTab] = React.useState("detail"); // "detail" | "context" | "activity"
@@ -3212,10 +3555,31 @@ window.__ModuleLoader__.load({
       const [typeNote, setTypeNote] = React.useState(null);
       // g-148：load 提升到组件体，供 AcceptFeedback 通过 onRefresh 回调刷新详情
       const aliveRef = React.useRef(true);
+      const lastWorktreesRef = React.useRef({});
+      const removedWorktreesRef = React.useRef({});
       const load = React.useCallback(() =>
         fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }))
           .then((r) => r.json())
-          .then((data) => aliveRef.current && setState({ loading: false, data }))
+          .then((data) => {
+            if (!aliveRef.current) return;
+            const wt = data.worktrees;
+            if (wt?.status === "ok") {
+              const next = { ...wt, items: { ...wt.items } };
+              for (const [id, old] of Object.entries(lastWorktreesRef.current)) {
+                if (!next.items[id]) {
+                  const removed = { ...old, status: "已移除" };
+                  removedWorktreesRef.current[id] = removed;
+                  next.items[id] = removed;
+                }
+              }
+              for (const [id, removed] of Object.entries(removedWorktreesRef.current)) {
+                if (!next.items[id]) next.items[id] = removed;
+              }
+              lastWorktreesRef.current = Object.fromEntries(Object.entries(next.items).filter(([, v]) => v.status !== "已移除"));
+              data = { ...data, worktrees: next };
+            }
+            setState({ loading: false, data });
+          })
           .catch((e) => aliveRef.current && setState({ loading: false, error: String(e) })),
       [props.id]);
       React.useEffect(() => {
@@ -3317,6 +3681,7 @@ window.__ModuleLoader__.load({
         livePanel = att
           ? h(SessionPanel, { parentId: att.parent_session_id, childId: att.child_id, collapsible: true,
                               provider: att.provider, model: att.model, modelRoute: att.model_route,
+                              subagentMode: att.mode ?? null,
                               statusLine: lastAtt?.status_line ?? null,
                               goalId: props.id, relaunchKind: "exec",
                               relaunchRoute, onRelaunched: setRelaunchRoute,
@@ -3358,6 +3723,9 @@ window.__ModuleLoader__.load({
         // 判断是否是 backlog 目标（backlog 目标不能建卡）
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
+          h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
+          status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
+          h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: meta.tags ?? props.tags, onChange: () => { load(); props.onTagsChanged?.(); } }),
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
             h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
@@ -3386,7 +3754,14 @@ window.__ModuleLoader__.load({
                       props.onOpenCard(props.id, c.id);
                     }
                   },
-                }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
+                },
+                  h("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
+                    h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                      `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
+                    c.scope === "shared"
+                      ? h("span", { style: { flexShrink: 0, fontSize: 10, padding: "0 4px", borderRadius: 3, background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-label, #3aa675)" } },
+                          "🔗共享")
+                      : null))),
                 isBacklog
                   ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
                   : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession, onRefresh: load }))
@@ -3732,22 +4107,54 @@ window.__ModuleLoader__.load({
             }, GOAL_TYPE_ABBREV[currentType]),
             // g-158：类型选择器弹出（点击 badge 展开）
             typeEditing
-              ? h("div", { style: { display: "flex", gap: 3, alignItems: "center" } },
+              ? h("div", { style: { display: "inline-flex", gap: 4, alignItems: "center", verticalAlign: "middle" } },
                   ...GOAL_TYPES.map((t) =>
                     h("button", {
                       key: t,
                       style: {
-                        fontSize: 11, padding: "1px 6px", cursor: "pointer",
-                        border: "1px solid " + (t === currentType ? goalTypeColor(t) : "rgba(128,128,128,.4)"),
-                        borderRadius: 3, background: t === currentType ? goalTypeColor(t) : "rgba(128,128,128,.1)",
-                        color: t === currentType ? "#fff" : "inherit", fontWeight: t === currentType ? 700 : 400,
+                        width: 20,
+                        height: 20,
+                        boxSizing: "border-box",
+                        padding: 0,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        borderRadius: 4,
+                        border: "1px solid " + (t === currentType ? goalTypeColor(t) : goalTypeColor(t) + "66"),
+                        background: t === currentType ? goalTypeColor(t) : goalTypeColor(t) + "18",
+                        color: t === currentType ? "#fff" : goalTypeColor(t),
+                        boxShadow: t !== currentType ? "inset 0 0 4px " + goalTypeColor(t) + "22" : "none",
+                        flexShrink: 0,
                       },
                       className: "dg-btn",
                       title: GOAL_TYPE_LABELS[t],
                       onClick: () => doSetType(t),
                     }, GOAL_TYPE_ABBREV[t])),
                   h("button", {
-                    style: { ...S.btn, fontSize: 10, padding: "0 4px" }, className: "dg-btn",
+                    style: {
+                      width: 20,
+                      height: 20,
+                      boxSizing: "border-box",
+                      padding: 0,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      lineHeight: 1,
+                      borderRadius: 4,
+                      border: "1px solid rgba(128,128,128,.35)",
+                      background: "rgba(128,128,128,.15)",
+                      color: "inherit",
+                      opacity: 0.7,
+                      flexShrink: 0,
+                    },
+                    className: "dg-btn",
+                    title: "关闭选择器",
                     onClick: () => { setTypeEditing(false); setTypeNote(null); },
                   }, "✕"))
               : null,
@@ -3916,14 +4323,14 @@ window.__ModuleLoader__.load({
       if (state.loading) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
-            h("span", { style: S.close, onClick: onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
             h("div", { style: { ...S.meta, marginTop: 6 } }, "加载中…")));
       }
       if (state.error) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
-            h("span", { style: S.close, onClick: onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
             h("div", { style: { ...S.meta, marginTop: 6, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "加载失败：" + state.error)));
       }
@@ -3936,7 +4343,7 @@ window.__ModuleLoader__.load({
       }, label);
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onClose }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
           goalTitle ? h("div", { style: { ...S.meta, marginTop: 2 } }, `${goalId} ｜ ${goalTitle}`) : null,
           // D6：进入编辑前明确告知保存后果
@@ -4003,7 +4410,7 @@ window.__ModuleLoader__.load({
       };
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
             `⬅️ 回退到「${STATUS_LABEL[toStatus] ?? toStatus}」`),
           h("div", { style: { ...S.meta, marginBottom: 8 } },
@@ -4119,7 +4526,7 @@ window.__ModuleLoader__.load({
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
             `🚀 执行「${goalData?.title ?? goalId}」`),
           h("div", { style: { ...S.meta, marginBottom: 8 } },
@@ -4177,7 +4584,7 @@ window.__ModuleLoader__.load({
       };
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: onCancel }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
             `📦 交付「${goalTitle ?? goalId}」`),
           h("div", { style: { ...S.meta, marginBottom: 8, lineHeight: 1.8 } },
@@ -4204,6 +4611,219 @@ window.__ModuleLoader__.load({
               onClick: onCancel,
             }, "取消")),
         ),
+      );
+    }
+
+
+    // g-105：记忆管理面板组件（手工增删改查常驻记忆与按需记忆，支持开关禁用工具）
+    function MemoryManagementModal(props) {
+      const [entries, setEntries] = React.useState([]);
+      const [toolsEnabled, setToolsEnabled] = React.useState(true);
+      const [loading, setLoading] = React.useState(true);
+      const [note, setNote] = React.useState(null);
+      const [tab, setTab] = React.useState("standing"); // "standing" | "on_demand"
+      const [searchQuery, setSearchQuery] = React.useState("");
+      const [page, setPage] = React.useState(1);
+      const [totalCount, setTotalCount] = React.useState(0);
+      const [totalPages, setTotalPages] = React.useState(1);
+      const [showAdd, setShowAdd] = React.useState(false);
+      const [newText, setNewText] = React.useState("");
+      const [newScope, setNewScope] = React.useState("standing");
+      const [saving, setSaving] = React.useState(false);
+      const memoryGuard = useBackdropClose(props.onClose);
+
+      const load = React.useCallback(() => {
+        setLoading(true);
+        const params = {
+          scope: tab,
+          page: String(page),
+          page_size: "15",
+          query: searchQuery.trim(),
+        };
+        fetch(graphUrl("/api/dsh-graph/memory/list", params, props.workspace))
+          .then((r) => r.json())
+          .then((d) => {
+            setLoading(false);
+            if (d.ok) {
+              setEntries(Array.isArray(d.memory) ? d.memory : []);
+              setTotalCount(d.total ?? 0);
+              setTotalPages(d.total_pages ?? 1);
+              setToolsEnabled(d.tools_enabled !== false);
+            } else {
+              setNote("⚠️ 加载失败：" + (d.error || "未知错误"));
+            }
+          })
+          .catch((e) => {
+            setLoading(false);
+            setNote("⚠️ 网络错误：" + String(e?.message ?? e));
+          });
+      }, [props.workspace, tab, page, searchQuery]);
+
+      React.useEffect(() => { load(); }, [load]);
+
+      const toggleTools = async () => {
+        const next = !toolsEnabled;
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/memory/toggle-tools", {}, props.workspace), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ enabled: next }),
+          });
+          const d = await r.json();
+          if (d.ok) {
+            setToolsEnabled(d.tools_enabled);
+            showToast(d.tools_enabled ? "✅ 已启用 Agent 记忆工具" : "🔒 已禁用 Agent 记忆工具（纯手工管理模式）");
+          }
+        } catch (e) {
+          showToast("⚠️ 切换失败：" + String(e?.message ?? e));
+        }
+      };
+
+      const addMem = async () => {
+        const text = newText.trim();
+        if (!text) return;
+        if (newScope === "standing" && [...text].length > 200) {
+          setNote("⚠️ 常驻记忆硬上限为 200 字符，当前已输入 " + [...text].length + " 字");
+          return;
+        }
+        setSaving(true);
+        setNote(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/memory/add", {}, props.workspace), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ kind: "project", scope: newScope, text, importance: 3 }),
+          });
+          const d = await r.json();
+          setSaving(false);
+          if (d.ok) {
+            setNewText("");
+            setShowAdd(false);
+            showToast("✅ 记忆添加成功");
+            load();
+          } else {
+            setNote("⚠️ 添加失败：" + (d.error || "未知错误"));
+          }
+        } catch (e) {
+          setSaving(false);
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+      };
+
+      const delMem = async (id) => {
+        if (!confirm("确认删除该条记忆？")) return;
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/memory/delete", {}, props.workspace), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id, reason: "用户在管理面板手动删除" }),
+          });
+          const d = await r.json();
+          if (d.ok) {
+            showToast("✅ 已删除记忆");
+            load();
+          } else {
+            showToast("⚠️ 删除失败：" + (d.error || "未知错误"));
+          }
+        } catch (e) {
+          showToast("⚠️ 删除失败：" + String(e?.message ?? e));
+        }
+      };
+
+      const standingList = entries.filter((e) => (e.scope ?? "on_demand") === "standing");
+      const onDemandList = entries.filter((e) => (e.scope ?? "on_demand") === "on_demand");
+      const currentList = tab === "standing" ? standingList : onDemandList;
+
+      return h("div", { style: S.overlay, ...memoryGuard },
+        h("div", { style: { ...S.modal, minWidth: 460, maxWidth: 640, maxHeight: "85vh", display: "flex", flexDirection: "column" }, onClick: (e) => e.stopPropagation() },
+          h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
+          h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingRight: 24 } },
+            h("div", { style: { fontWeight: 700, fontSize: 16, display: "flex", alignItems: "center", gap: 8 } },
+              "🧠 长期记忆管理",
+              h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "(memory.jsonl)")),
+            h("label", { style: { display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 12, opacity: 0.9 }, title: "关闭后，所有子代理将无法调用记忆工具，避免意外修改或插件冲突" },
+              h("input", { type: "checkbox", checked: toolsEnabled, onChange: toggleTools }),
+              toolsEnabled ? "允许 Agent 工具调用" : "🔒 纯手工模式(工具已禁用)")),
+
+          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(128,128,128,.2)", marginBottom: 10 } },
+            h("div", { style: { display: "flex", gap: 8 } },
+              h("button", {
+                className: "dg-btn",
+                style: { ...S.btn, borderBottom: tab === "standing" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "standing" ? 700 : 400, padding: "6px 12px" },
+                onClick: () => { setTab("standing"); setPage(1); setShowAdd(false); },
+              }, "常驻记忆 (固定植入)"),
+              h("button", {
+                className: "dg-btn",
+                style: { ...S.btn, borderBottom: tab === "on_demand" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "on_demand" ? 700 : 400, padding: "6px 12px" },
+                onClick: () => { setTab("on_demand"); setPage(1); setShowAdd(false); },
+              }, "按需记忆 (分页检索)")),
+            h("div", { style: { display: "flex", gap: 4, alignItems: "center" } },
+              h("input", {
+                value: searchQuery,
+                style: { ...S.promptInput, width: 140, height: 26, fontSize: 11, padding: "2px 6px" },
+                placeholder: "搜索记忆内容…",
+                onChange: (e) => { setSearchQuery(e.target.value); setPage(1); },
+              }),
+              searchQuery ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 5px" }, onClick: () => { setSearchQuery(""); setPage(1); } }, "✕") : null)),
+
+          h("div", { style: { ...S.meta, marginBottom: 8, fontSize: 11, lineHeight: 1.5 } },
+            tab === "standing"
+              ? "💡【常驻记忆】：作为系统 Prompt 独立章节固定植入每个会话（单条硬上限 ≤ 200 字），适合记录工作区核心硬性约束与安全铁律。"
+              : "💡【按需记忆】：平时不植入会话、不占 token；仅在检索或手动调用时按需提取，适合技术方案决策与参考事实。"),
+
+          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
+            h("span", { style: { ...S.meta, fontSize: 12 } }, "共 " + totalCount + " 条（第 " + page + " / " + totalPages + " 页）"),
+            h("button", {
+              className: "dg-btn",
+              style: { ...S.btnPrimary, fontSize: 12, padding: "2px 8px" },
+              onClick: () => { setShowAdd(!showAdd); setNewScope(tab); setNote(null); },
+            }, showAdd ? "收起输入框" : "＋ 新增记忆")),
+
+          showAdd ? h("div", { style: { ...S.subCard, marginBottom: 12, padding: 10 } },
+            h("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
+              h("span", { style: { fontSize: 12, fontWeight: 600 } }, "类型："),
+              h("label", { style: { fontSize: 12, cursor: "pointer" } },
+                h("input", { type: "radio", name: "mem_scope", checked: newScope === "standing", onChange: () => setNewScope("standing") }), " 常驻记忆(≤200字)"),
+              h("label", { style: { fontSize: 12, cursor: "pointer", marginLeft: 8 } },
+                h("input", { type: "radio", name: "mem_scope", checked: newScope === "on_demand", onChange: () => setNewScope("on_demand") }), " 按需记忆(≤500字)")),
+            h("textarea", {
+              value: newText,
+              style: { ...S.promptInput, width: "100%", height: 60, boxSizing: "border-box", fontSize: 12, resize: "vertical" },
+              placeholder: newScope === "standing" ? "输入要沉淀的常驻约束（硬上限 200 字符）…" : "输入按需参考记忆…",
+              onChange: (e) => setNewText(e.target.value),
+            }),
+            h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 } },
+              h("span", { style: { ...S.meta, fontSize: 11, color: newScope === "standing" && [...newText].length > 200 ? "#e74c3c" : undefined } },
+                [...newText].length + " / " + (newScope === "standing" ? "200" : "500") + " 字"),
+              h("button", {
+                className: "dg-btn",
+                style: { ...S.btnPrimary, fontSize: 12 },
+                disabled: saving || !newText.trim(),
+                onClick: addMem,
+              }, saving ? "保存中…" : "确认保存"))) : null,
+
+          note ? h("div", { style: { ...S.meta, color: "#e74c3c", marginBottom: 8 } }, note) : null,
+
+          h("div", { style: { flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, minHeight: 120 } },
+            loading ? h("div", { style: S.meta }, "正在读取记忆…") : (!entries.length ? h("div", { style: { ...S.meta, textAlign: "center", padding: "20px 0" } }, "（当前分类下暂无记忆条目）") : entries.map((m) =>
+              h("div", { key: m.id, style: { ...S.subCard, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4 } },
+                h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                  h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+                    h("span", { style: { fontSize: 11, fontFamily: "monospace", opacity: 0.7 } }, m.id),
+                    h("span", { style: { fontSize: 10, padding: "0 4px", borderRadius: 4, background: m.scope === "standing" ? "rgba(76,175,80,.15)" : "rgba(33,150,243,.15)", color: m.scope === "standing" ? "#4caf50" : "#2196f3" } }, m.scope === "standing" ? "常驻" : "按需"),
+                    m.source_goal ? h("span", { style: { fontSize: 10, opacity: 0.6 } }, "来自: " + m.source_goal) : null),
+                  h("button", {
+                    className: "dg-btn",
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px", color: "#e74c3c" },
+                    title: "删除该条记忆",
+                    onClick: () => delMem(m.id),
+                  }, "删除")),
+                h("div", { style: { fontSize: 12, lineHeight: 1.5, wordBreak: "break-word" } }, m.text))))),
+          totalPages > 1 ? h("div", { style: { display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 10, borderTop: "1px solid rgba(128,128,128,.15)", paddingTop: 8 } },
+            h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "2px 8px" }, disabled: page <= 1, onClick: () => setPage(page - 1) }, "上一页"),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, page + " / " + totalPages),
+            h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "2px 8px" }, disabled: page >= totalPages, onClick: () => setPage(page + 1) }, "下一页")) : null,
+        )
       );
     }
 
@@ -4425,6 +5045,15 @@ window.__ModuleLoader__.load({
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
       const [showArchived, setShowArchived] = React.useState(false);
+      // g-105: 记忆管理弹窗状态
+      const [showMemoryModal, setShowMemoryModal] = React.useState(false);
+      const memoryModalGuard = useBackdropClose(() => setShowMemoryModal(false));
+      // g-187：顶部多选标签筛选；选中多个标签时采用 OR。
+      const [tagFilter, setTagFilter] = React.useState([]);
+      const [showTagFilterModal, setShowTagFilterModal] = React.useState(false);
+      const tagFilterGuard = useBackdropClose(() => setShowTagFilterModal(false));
+      const tagsFor = (g) => Array.isArray(g?.tags) ? g.tags : [];
+      const matchesTag = (g) => !tagFilter.length || tagsFor(g).some((tag) => tagFilter.includes(String(tag)));
       // g-223: 版本管理抽屉与显隐过滤状态（本地存储持久化，按当前解析 workspace 隔离与响应）
       const [showVersionDrawer, setShowVersionDrawer] = React.useState(false);
       // Compatibility marker: const activeWs = resolveWorkspaceOfSession(props?.sessionId) || "default" (intentionally not used).
@@ -4475,6 +5104,8 @@ window.__ModuleLoader__.load({
       const [transitionNote, setTransitionNote] = React.useState(null);
       // g-132：右上角齿轮 → 看板设置弹窗
       const [showSettings, setShowSettings] = React.useState(false);
+      // g-183：右上角 🔗 → 共享上下文管理面板
+      const [showSharedPanel, setShowSharedPanel] = React.useState(false);
       // g-171：更新强调动画状态——goalId -> { remaining, token }（token = goalId:updated_at）
       const [updateEmphasis, setUpdateEmphasis] = React.useState({});
       const seenUpdateTokens = React.useRef(new Set()); // 当前页内存：防同一 token 重复播放
@@ -5026,6 +5657,7 @@ window.__ModuleLoader__.load({
       // g-77647351：泳道渲染（带拖放支持，跨 lane 拖放改归属）；g-129 版本 lane 标题「＋」预选版本
       // g-137：laneIndex 用于交替背景色；g-162：阶段列横向交替深浅
       const lane = (label, goals, key, version, laneIndex = 0, collapsible = true) => {
+        goals = goals.filter(matchesTag);
         // g-162: 普通泳道折叠状态；released 仅复用 lane 布局，不增加折叠入口
         const isCollapsed = collapsible && !!collapsedLanes[key];
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
@@ -5203,7 +5835,7 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -5384,7 +6016,7 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -5655,8 +6287,22 @@ window.__ModuleLoader__.load({
       }
 
       // g-216: 判定是否有任何弹窗或抽屉处于打开态
-      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer);
+      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer || showSharedPanel || showMemoryModal || showTagFilterModal);
 
+      const tbBtnStyle = {
+        ...S.btn,
+        marginLeft: 8,
+        height: 26,
+        boxSizing: "border-box",
+        fontSize: 12,
+        lineHeight: "22px",
+        padding: "0 8px",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 4,
+        verticalAlign: "middle",
+      };
       return h(
         "div",
         { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
@@ -5689,8 +6335,44 @@ window.__ModuleLoader__.load({
             intervalSec: refreshIntervalSec,
             onTriggerRefresh: load,
           }),
-          h("button", { style: { ...S.btn, marginLeft: 8 }, className: "dg-btn", onClick: load }, "刷新"),
-          // g-110: 显示已归档目标的 checkbox
+          h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, "刷新"),
+          // g-187：顶部标签筛选弹层入口
+          h("button", {
+            style: { ...tbBtnStyle, ...(tagFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
+            className: "dg-btn" + (tagFilter.length > 0 ? " dg-btn-active" : ""),
+            title: "打开标签筛选面板（支持多选点选与一键清除）",
+            onClick: () => setShowTagFilterModal(true),
+          }, tagFilter.length > 0 ? `🔖 标签筛选 (${tagFilter.length})` : "🔖 标签筛选"),
+          tagFilter.length > 0
+            ? h("button", {
+                className: "dg-btn",
+                style: { ...tbBtnStyle, marginLeft: 4, padding: "0 6px", fontSize: 11 },
+                title: "一键清除全部标签筛选",
+                onClick: () => setTagFilter([]),
+              }, "✕ 取消筛选")
+            : null,
+          // g-105: 记忆管理按钮（位于设置按钮左侧）
+          h("button", {
+            style: tbBtnStyle,
+            className: "dg-btn",
+            title: "记忆管理（手工管理常驻记忆与按需记忆，或禁用记忆工具）",
+            onClick: () => setShowMemoryModal(true),
+          }, "🧠 记忆"),
+          // g-183: 项目知识库面板入口
+          h("button", {
+            style: tbBtnStyle,
+            className: "dg-btn",
+            title: "项目知识库（管理共享条目、跨目标引用与删除保护）",
+            onClick: () => setShowSharedPanel(true),
+          }, "📇 项目知识"),
+          // g-132: 右上角齿轮 → 看板设置
+          h("button", {
+            style: { ...tbBtnStyle, padding: "0 7px", fontSize: 14 },
+            className: "dg-btn",
+            title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
+            onClick: () => setShowSettings(true),
+          }, "⚙"),
+          // g-110: 显示已归档目标的 checkbox（移至右侧，DEBUG 信息左侧，布局更规整）
           h("label", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 12, cursor: "pointer", fontSize: 12, opacity: 0.8 } },
             h("input", {
               type: "checkbox",
@@ -5698,13 +6380,6 @@ window.__ModuleLoader__.load({
               onChange: (e) => setShowArchived(e.target.checked),
             }),
             "显示已归档"),
-          // g-132: 右上角齿轮 → 看板设置（负责人 2026-08-25 review：置于 DEBUG 信息之前，即 DEBUG 左侧）
-          h("button", {
-            style: { ...S.btn, marginLeft: 8, fontSize: 16, lineHeight: 1, padding: "2px 8px" },
-            className: "dg-btn",
-            title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
-            onClick: () => setShowSettings(true),
-          }, "⚙"),
           // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
             "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (activeWs ?? "∅"))),
@@ -5803,6 +6478,11 @@ window.__ModuleLoader__.load({
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             onClose: () => setDrawerCard(null),
+                            onConverted: () => {
+                              // g-183：卡片转换成功后，重新 load 全局数据与弹窗数据，绝不误剥离卡片！
+                              load();
+                              setDrawerCard(null);
+                            },
                             onDeleted: (cardId) => {
                               // g-219：事件结果为准——删除成功后局部更新弹窗与看板，不整体重新 load
                               const goalId = drawerCard.goalId;
@@ -5869,10 +6549,11 @@ window.__ModuleLoader__.load({
                         style: {
                           display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11,
                           padding: "3px 8px", cursor: "pointer", borderRadius: 4,
-                          border: "1px solid " + (t === newGoalType ? goalTypeColor(t) : "rgba(128,128,128,.4)"),
-                          background: t === newGoalType ? goalTypeColor(t) : "rgba(128,128,128,.1)",
-                          color: t === newGoalType ? "#fff" : "inherit",
-                          fontWeight: t === newGoalType ? 700 : 400,
+                          border: t === newGoalType ? "1.5px solid " + goalTypeColor(t) : "1.5px solid " + goalTypeColor(t) + "66",
+                          background: t === newGoalType ? goalTypeColor(t) : goalTypeColor(t) + "18",
+                          color: t === newGoalType ? "#fff" : goalTypeColor(t),
+                          boxShadow: t !== newGoalType ? "inset 0 0 6px " + goalTypeColor(t) + "22" : "none",
+                          fontWeight: 700,
                         },
                         className: "dg-btn",
                         title: GOAL_TYPE_LABELS[t],
@@ -6159,6 +6840,19 @@ window.__ModuleLoader__.load({
         showSettings
           ? h(SettingsModal, { onClose: () => setShowSettings(false), onSaved: () => load() })
           : null,
+        // g-183: 共享上下文管理面板（🔗 入口）
+        showSharedPanel
+          ? h(SharedCardsModal, {
+              onClose: () => setShowSharedPanel(false),
+              onRefresh: () => load(),
+              sharedCards: b.sharedCards ?? [],
+              goals: [
+                ...(b.versions ?? []).flatMap((v) => v.goals ?? []),
+                ...(b.standalone ?? []),
+                ...(b.backlog ?? []),
+              ].map((g) => ({ id: g.id, title: g.title })),
+            })
+          : null,
         // g-134: 创建版本泳道弹窗
         showCreateVersion
           ? h("div", { style: S.overlay, ...createVersionGuard },
@@ -6236,6 +6930,53 @@ window.__ModuleLoader__.load({
                   }, "取消")),
                 renameVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, renameVersionNote) : null))
           : null,
+        // g-105: 记忆管理弹窗（手工管理常驻/按需记忆，支持一键禁用工具）
+        showMemoryModal
+          ? h(MemoryManagementModal, {
+              workspace: activeWs,
+              onClose: () => setShowMemoryModal(false),
+            })
+          : null,
+        // g-187: 标签多选筛选弹窗/面板
+        showTagFilterModal
+          ? h("div", { style: S.overlay, ...tagFilterGuard },
+              h("div", { style: { ...S.modal, minWidth: 320, maxWidth: 440 }, onClick: (e) => e.stopPropagation() },
+                h("span", { style: S.close, onClick: () => setShowTagFilterModal(false) }, "✕"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
+                  "🔖 标签筛选",
+                  h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "（点击标签多选过滤，支持 OR 联集）")),
+                h("div", { style: { ...S.meta, marginBottom: 10 } }, "选择要查看的标签，看板仅显示包含所选标签的目标："),
+                h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto", padding: "2px 0", marginBottom: 12 } },
+                  (() => {
+                    const allAvailableTags = [...new Set(allGoals.flatMap((g) => tagsFor(g)))].sort();
+                    if (!allAvailableTags.length) return h("span", { style: S.meta }, "（当前看板目标尚无任何可用标签）");
+                    return allAvailableTags.map((tag) => {
+                      const selected = tagFilter.includes(tag);
+                      return h("button", {
+                        key: tag,
+                        className: "dg-btn",
+                        style: {
+                          ...S.btn,
+                          fontSize: 12,
+                          padding: "3px 8px",
+                          borderRadius: 12,
+                          background: selected ? "var(--dsw-alias-button-primary-fill, #4c8dff)" : "rgba(76,141,255,.12)",
+                          color: selected ? "var(--dsw-alias-label-primary-foreground, #fff)" : "var(--dsw-alias-label-primary, inherit)",
+                          borderColor: selected ? "var(--dsw-alias-button-primary-fill, #4c8dff)" : "rgba(76,141,255,.35)",
+                        },
+                        onClick: () => {
+                          if (selected) setTagFilter(tagFilter.filter((t) => t !== tag));
+                          else setTagFilter([...tagFilter, tag]);
+                        },
+                      }, (selected ? "✓ " : "") + "#" + tag);
+                    });
+                  })()),
+                h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid rgba(128,128,128,.2)", paddingTop: 10 } },
+                  h("span", { style: S.meta }, `已选 ${tagFilter.length} 个标签`),
+                  h("div", { style: { display: "flex", gap: 8 } },
+                    tagFilter.length > 0 ? h("button", { className: "dg-btn", style: S.btn, onClick: () => setTagFilter([]) }, "一键清空") : null,
+                    h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => setShowTagFilterModal(false) }, "完成")))))
+          : null,
         // g-134: 删除版本泳道确认弹窗
         deleteVersionTarget
           ? h("div", { style: S.overlay, ...deleteVersionGuard },
@@ -6270,11 +7011,185 @@ window.__ModuleLoader__.load({
     // props.sessionId），不能用全局聚焦会话 list.current 代替（多窗口/子代理视图时两者可能不同）。
     // KanbanView(props) 挂载时写入，currentWorkspace() 优先按它查 cwd；找不到再回退 list.current。
     let viewedSessionId = null;
+    // g-183：项目知识库管理面板——创建/查看共享条目、挂到目标、解除引用、零引用显式删除。
+    function SharedCardsModal(props) {
+      const { onClose, onRefresh, sharedCards, goals } = props;
+      const [cards, setCards] = React.useState(Array.isArray(sharedCards) ? sharedCards : []);
+      const [title, setTitle] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [attachGoalInputs, setAttachGoalInputs] = React.useState({});
+      const byId = new Map((goals ?? []).map((g) => [g.id, g]));
+
+      const refresh = async () => {
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/shared-cards"));
+          const d = await r.json();
+          if (d && Array.isArray(d.cards)) setCards(d.cards);
+        } catch { /* 静默 */ }
+      };
+
+      const createCard = async () => {
+        const t = title.trim();
+        if (!t) { setNote("请输入标题"); return; }
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/create-shared-card"), {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ title: t }),
+          });
+          const d = await r.json();
+          if (d.ok) { setNote("✅ 已创建共享卡：" + d.card); setTitle(""); refresh(); onRefresh?.(); }
+          else setNote("⚠️ 创建失败：" + (d.error || "未知错误"));
+        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+      };
+
+      const attachToGoal = async (cardId, targetGoalId) => {
+        const gid = targetGoalId || (goals && goals[0] && goals[0].id);
+        if (!gid) { setNote("⚠️ 请先选择或输入要挂载的目标"); return; }
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/attach-shared-card"), {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: gid, card: cardId }),
+          });
+          const d = await r.json();
+          if (d.ok) {
+            setNote("✅ 已挂到 " + gid);
+            setAttachGoalInputs((prev) => ({ ...prev, [cardId]: "" }));
+            refresh();
+            onRefresh?.();
+          } else {
+            setNote("⚠️ 挂载失败：" + (d.error || "未知错误"));
+          }
+        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+      };
+
+      const unreference = async (cardId, gid) => {
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/unreference-shared-card"), {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: gid, card: cardId }),
+          });
+          const d = await r.json();
+          if (d.ok) { setNote("✅ 已解除 " + gid + " 引用"); refresh(); onRefresh?.(); }
+          else setNote("⚠️ 解除失败：" + (d.error || "未知错误"));
+        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+      };
+
+      const removeCard = async (cardId) => {
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/delete-shared-card"), {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ card: cardId }),
+          });
+          const d = await r.json();
+          if (d.ok) { setNote("✅ 已删除共享卡：" + cardId); refresh(); onRefresh?.(); }
+          else setNote("⚠️ 删除失败：" + (d.error || "未知错误"));
+        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+      };
+
+      const backdropGuard = useBackdropClose(onClose);
+      const cardRow = (c) => {
+        const refs = Array.isArray(c.referencingGoals) ? c.referencingGoals : [];
+        const installing = c.status === "collecting";
+        return h("div", { key: c.id, style: { ...S.subCard, marginBottom: 6 } },
+          h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+            h("span", { style: { flex: 1 } }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} 个 goal 引用`)),
+          h("div", { style: { ...S.meta, fontSize: 11 } },
+            `id=${c.id}${c.summary ? " ｜ " + c.summary : ""}`),
+          // 正文引用附件（安全下载链接，不内联渲染）——逐项渲染为节点（勿拼接 React 元素为字符串）
+          (Array.isArray(c.attachments) && c.attachments.length)
+            ? h("div", { style: { ...S.meta, fontSize: 11 } },
+                "📎 附件：",
+                ...c.attachments.map((a) => [
+                  h("a", {
+                    key: a,
+                    href: graphUrl("/api/dsh-graph/attachment?name=" + encodeURIComponent(a)),
+                    target: "_blank", rel: "noopener noreferrer",
+                    style: { color: "var(--dsw-alias-label-link, #4c8dff)", textDecoration: "underline", marginRight: 4 },
+                  }, `@att/${a}`),
+                  "，",
+                ]))
+            : null,
+          // 引用它的 goal 清单：每项一个真实解除引用（只移除该 goal 引用，保留共享卡与其他引用；零引用仅显式删除）
+          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", marginTop: 4 } },
+            h("span", { style: { ...S.meta, fontSize: 11 } }, "🔎 引用 goal："),
+            refs.length === 0
+              ? h("span", { style: { ...S.meta, fontSize: 11 } }, "（无引用 goal）")
+              : refs.map((ref) => {
+                  const label = ref.title ? `${ref.title}${ref.archived ? "（归档）" : ""}` : ref.id;
+                  return h("button", {
+                    key: ref.id,
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                    className: "dg-btn",
+                    disabled: installing,
+                    title: installing ? "收集中不可解除引用" : `移除 ${label} 对这张共享卡的引用（保留共享卡本身）`,
+                    onClick: () => unreference(c.id, ref.id),
+                  }, "➖ " + label);
+                })),
+          installing
+            ? h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } },
+                "🔒 收集中：仅解除引用/不可删除；绑定 goal 不可解除（已禁用）")
+            : null,
+          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" } },
+            h("input", {
+              style: { ...S.promptInput, width: 220, fontSize: 11, padding: "2px 6px" },
+              placeholder: "输入 ID 或标题搜索目标…",
+              list: `goal-list-${c.id}`,
+              value: attachGoalInputs[c.id] ?? "",
+              onChange: (e) => setAttachGoalInputs((prev) => ({ ...prev, [c.id]: e.target.value })),
+            }),
+            h("datalist", { id: `goal-list-${c.id}` },
+              (goals ?? []).map((g) =>
+                h("option", { key: g.id, value: g.id }, `${g.id} ${g.title}`))),
+            h("button", {
+              style: S.btnPrimary,
+              className: "dg-btn",
+              disabled: !(attachGoalInputs[c.id] ?? "").trim(),
+              onClick: () => {
+                const raw = (attachGoalInputs[c.id] ?? "").trim();
+                const matched = (goals ?? []).find((g) => g.id === raw || `${g.id} ${g.title}` === raw || g.id === raw.split(" ")[0]);
+                const targetId = matched ? matched.id : raw;
+                attachToGoal(c.id, targetId);
+              },
+            }, "⇄ 挂到目标"),
+            ...(c.refCount === 0 && !installing ? [
+              h("button", { style: S.btn, className: "dg-btn", onClick: () => removeCard(c.id) }, "🗑 显式删除"),
+            ] : []),
+            installing
+              ? h("span", { style: { ...S.meta, fontSize: 11 } }, "🔒 收集中，仅解除引用/不可删除")
+              : null));
+      };
+
+      return h("div", { style: S.overlay, ...backdropGuard },
+        h("div", { style: { ...S.modal, maxWidth: 640, maxHeight: "80vh", overflowY: "auto" }, onClick: (e) => e.stopPropagation() },
+          h("div", { style: S.modalH }, "📇 项目知识库（共享条目）"),
+          h("div", { style: { ...S.meta, marginBottom: 6 } },
+            "知识条目在项目共享池中保存一份权威内容，可被多个目标同时引用复用；被引用时不可删除，解除全部引用后可显式删除。"),
+          // 新建共享条目
+          h("div", { style: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8 } },
+            h("input", {
+              style: { ...S.promptInput, flex: 1 },
+              value: title, placeholder: "新建知识条目标题…",
+              onChange: (e) => setTitle(e.target.value),
+              onKeyDown: (e) => { if (e.key === "Enter") createCard(); },
+            }),
+            h("button", { style: S.btn, className: "dg-btn", onClick: createCard }, "＋ 新建条目")),
+          note ? h("div", { style: { ...S.meta, marginBottom: 6 } }, note) : null,
+          (cards.length === 0)
+            ? h("div", { style: S.meta }, "（暂无共享卡）")
+            : h("div", { style: { marginTop: 4 } }, cards.map(cardRow)),
+          h("div", { style: { marginTop: 10, display: "flex", justifyContent: "flex-end" } },
+            h("button", { style: S.btn, className: "dg-btn", onClick: onClose }, "关闭"))));
+    }
     // ===== g-132：workspace 看板设置弹窗（读取/可视化编辑 .dsh-graph/project.yaml 安全配置） =====
     // 字段范围（本期）：executor.provider/model、defaults.review、defaults.pk、supervisor.automation、
     // 子代理补充提示词 workspace 覆盖（三态：default 继承 / 自定义覆盖 / 显式空禁用）。
     // 保存走 PUT/POST /api/dsh-graph/settings（原子写；保留注释/未知键；失败不半写入）。
+    let settingsModalModeInstanceSeq = 0;
     function SettingsModal(props) {
+      const modeIdRef = React.useRef(null);
+      if (modeIdRef.current == null) modeIdRef.current = `dg-workspace-subagent-mode-${++settingsModalModeInstanceSeq}`;
+      const modeId = modeIdRef.current;
       const [loading, setLoading] = React.useState(true);
       const [form, setForm] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
@@ -6368,7 +7283,7 @@ window.__ModuleLoader__.load({
           else cleanAuto[k] = null;
         }
         const patch = {
-          executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "" },
+          executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "", reasoning_effort: form.executor?.reasoning_effort ?? "", mode: form.executor?.mode ?? "" },
           defaults: {
             review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
             pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
@@ -6397,14 +7312,14 @@ window.__ModuleLoader__.load({
       if (loading) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-            h("span", { style: S.close, onClick: props.onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
             h("div", { style: { ...S.meta, marginTop: 8 } }, "正在读取配置…")));
       }
       if (!form) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-            h("span", { style: S.close, onClick: props.onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
             error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 8 } }, error) : null,
             h("button", { style: { ...S.btn, marginTop: 10 }, className: "dg-btn", onClick: load }, "重试")));
@@ -6515,10 +7430,27 @@ window.__ModuleLoader__.load({
         }
         return opts;
       })();
+      // reasoning 元数据随目录中的精确 provider/model 下发，选项不使用客户端固定枚举。
+      const selectedModel = (() => {
+        if (!catReady || curModel === "") return null;
+        if (curProvider !== "") return groupById.get(curProvider)?.models.find((m) => m.id === curModel) ?? null;
+        const matches = catalog.groups.flatMap((g) => g.models.filter((m) => m.id === curModel));
+        return matches.length === 1 ? matches[0] : null;
+      })();
+      const effortChoices = Array.isArray(selectedModel?.reasoning?.efforts) ? selectedModel.reasoning.efforts : [];
+      const curEffort = form.executor?.reasoning_effort ?? "";
+      const effortListed = effortChoices.some((effort) => effort?.id === curEffort);
+      const effortOptions = [opt("__blank-e", "", "（继承所选模型/父会话）")];
+      if (curEffort !== "" && !effortListed) {
+        effortOptions.push(opt("__cur-e", curEffort, curEffort + legacySuffix));
+      }
+      for (const effort of effortChoices) {
+        if (typeof effort?.id === "string" && effort.id !== "") effortOptions.push(opt("effort:" + effort.id, effort.id, effort.name ?? effort.id));
+      }
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
-          h("span", { style: S.close, onClick: props.onClose }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
           h("div", { style: S.modalH }, "看板设置"),
           h("div", { style: S.meta }, "编辑当前 workspace 的 .dsh-graph/project.yaml 安全配置；写回保留未知键与注释。"),
           // att-002：配置文件操作入口——复用 goal-modal 的 Host openPath/copyText/toast/fallback 机制
@@ -6577,10 +7509,10 @@ window.__ModuleLoader__.load({
 
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
 
-          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "执行子代理模型路由"),
+          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "执行子代理模型路由与模式"),
           // g-133：两列并排各占一半的可收缩 flex 布局——父容器 minWidth:0、子列 flex:"1 1 0"+minWidth:0、
           // 控件 boxSizing:"border-box"，避免 provider/model 两列在窄容器下重叠/溢出。
-          h("div", { style: { display: "flex", gap: 8, minWidth: 0 } },
+          h("div", { style: { display: "flex", gap: 8, minWidth: 0, marginBottom: 8 } },
             h("div", { style: { flex: "1 1 0", minWidth: 0 } },
               h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "provider"),
               h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curProvider, onChange: (e) => onProviderChange(e.target.value) },
@@ -6589,9 +7521,36 @@ window.__ModuleLoader__.load({
               h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "model"),
               h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curModel, onChange: (e) => set(["executor", "model"], e.target.value) },
                 ...modelOptions))),
+          h("div", { style: { minWidth: 0, marginBottom: 6 } },
+            h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "默认推理档位 (reasoning effort)"),
+            h("select", {
+              "aria-label": "workspace 子代理默认推理档位",
+              style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+              value: curEffort,
+              onChange: (e) => set(["executor", "reasoning_effort"], e.target.value),
+            }, ...effortOptions),
+            h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } },
+              catReady
+                ? (effortChoices.length > 0
+                  ? "选项随所选 provider/model 的 reasoning effort 能力更新；留空继承所选模型或父会话默认值。"
+                  : "所选 provider/model 未声明 reasoning effort；已存旧值保留可选，可留空继承默认值。")
+                : "正在读取 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
+          // g-191：执行模式受控下拉
+          h("div", { style: { minWidth: 0, marginBottom: 6 } },
+            h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "执行模式 (mode)"),
+            h("select", {
+              id: modeId,
+              "aria-label": "workspace 子代理执行模式",
+              style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+              value: form.executor?.mode ?? "",
+              onChange: (e) => set(["executor", "mode"], e.target.value),
+            },
+              h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（继承 profile 全局 / 系统默认：标准模式）"),
+              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整开发工具能力"),
+              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "极简模式 (minimal) - 受控 6 工具物理过滤 (graph-minimal)"))),
           h("div", { style: { ...S.meta, marginTop: 4 } },
             catReady
-              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；已存但未列出的旧值保留为固定选项、仍可保存。"
+              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；执行模式支持标准模式与极简工具过滤模式。"
               : (catalog.status === "loading" ? "正在读取当前 Host 的合法 provider/model 目录…" : "当前 Host 目录不可用（llm.providers/models 缺失）——已存值保留可选、仍可保存。")),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
@@ -6644,6 +7603,7 @@ window.__ModuleLoader__.load({
     let gSettingsScope = null;
     // g-133：数据源 = ctx.get('connection').api（registerGraphSettingsSection 捕获），挂载时读 llm 目录。
     let gConnectionApi = null;
+    let settingsModeInstanceSeq = 0;
 
     // 3082 的 settingsScope 在非 loopback 浏览器上下文会是 memory；此时仍可
     // 通过已存在的 profile settings RPC 读写 Host，而不是把配置伪装成 workspace 数据。
@@ -6714,7 +7674,12 @@ window.__ModuleLoader__.load({
       // 1. 优先调用 0.1.2-alpha.2 新版 API
       try {
         const remote = ctx?.get?.("remote") ?? ctx?.remote ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("remote") ?? appCtx?.remote) : null) ?? (typeof window !== "undefined" ? window.__DSH_REMOTE__ : null);
-        const modelCatalogFn = remote?.session?.modelCatalog ?? (typeof remote?.["session/modelCatalog"] === "function" ? remote["session/modelCatalog"].bind(remote) : null);
+        // Remote session 方法依赖所属 session proxy 的 this；脱离 receiver 调用会失败并误回退到
+        // 旧 llm.models（旧目录不含 reasoning 元数据），导致有能力的模型显示为空选择器。
+        const session = remote?.session;
+        const modelCatalogFn = typeof session?.modelCatalog === "function"
+          ? session.modelCatalog.bind(session)
+          : (typeof remote?.["session/modelCatalog"] === "function" ? remote["session/modelCatalog"].bind(remote) : null);
         if (typeof modelCatalogFn === "function") {
           const res = await modelCatalogFn();
           const val = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : res;
@@ -6835,6 +7800,9 @@ window.__ModuleLoader__.load({
 
     // 看板设置页组件：读/写 dsh-graph profile 全局默认。
     function GraphSettingsSection(_props) {
+      const modeIdRef = React.useRef(null);
+      if (modeIdRef.current == null) modeIdRef.current = `dg-global-subagent-mode-${++settingsModeInstanceSeq}`;
+      const modeId = modeIdRef.current;
       const [snap, setSnap] = React.useState(gSettingsScope ? gSettingsScope.getSnapshot() : null);
       const [draft, setDraft] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
@@ -6886,9 +7854,19 @@ window.__ModuleLoader__.load({
       const draftValue = draft ?? {
         subagentProvider: value?.subagentProvider ?? "",
         subagentModel: value?.subagentModel ?? "",
+        subagentReasoningEffort: value?.subagentReasoningEffort ?? "",
+        subagentMode: value?.subagentMode ?? "",
         subagentPrompt: value?.subagentPrompt ?? "",
       };
       const setField = (k, v) => setDraft({ ...draftValue, [k]: v });
+
+      // g-191：受控子代理执行模式（当前支持标准模式与带工具物理过滤的极简模式）
+      const modeOptions = [
+        { id: "", name: "（继承系统默认：标准模式）", desc: "未配置时默认使用标准模式。" },
+        { id: "standard", name: "标准模式 (standard) - 完整工具能力 + 专属 Persona 覆盖", desc: "功能完整的编码 Agent，覆盖标准工具池并自动注入 dsh-graph 纪律 Persona。" },
+        { id: "minimal", name: "极简模式 (minimal) - 严格基础 6 工具过滤 (graph-minimal)", desc: "仅允许 bash、edit、read、write、graph_report_status、graph_transition，物理屏蔽高级工具与误导。" },
+      ];
+      const curMode = draftValue.subagentMode ?? "";
 
       // g-133：合法目录派生。合法 provider = active 且有非空模型目录；model 合法 = 属于所选 provider 目录
       //（未选 provider 时属于任一目录）；空值 = 继承父会话。目录仅作 advisory 可选列表，不拦截保存。
@@ -6962,6 +7940,26 @@ window.__ModuleLoader__.load({
         }
         return opts;
       })();
+      // reasoning 元数据由 Host 模型目录声明；不维护客户端固定档位词表。
+      // 未选 provider 时仅在 model id 唯一时推导能力，避免同名模型跨 provider 错配。
+      const selectedModel = (() => {
+        if (!catReady || curModel === "") return null;
+        if (curProvider !== "") return groupById.get(curProvider)?.models.find((m) => m.id === curModel) ?? null;
+        const matches = catalog.groups.flatMap((g) => g.models.filter((m) => m.id === curModel));
+        return matches.length === 1 ? matches[0] : null;
+      })();
+      const effortChoices = Array.isArray(selectedModel?.reasoning?.efforts) ? selectedModel.reasoning.efforts : [];
+      const curEffort = draftValue.subagentReasoningEffort ?? "";
+      const effortListed = effortChoices.some((effort) => effort?.id === curEffort);
+      const effortOptions = [h("option", { key: "__blank-e", value: "" }, "（继承所选模型/父会话）")];
+      if (curEffort !== "" && !effortListed) {
+        effortOptions.push(h("option", { key: "__cur-e", value: curEffort }, curEffort + legacySuffix));
+      }
+      for (const effort of effortChoices) {
+        if (typeof effort?.id === "string" && effort.id !== "") {
+          effortOptions.push(h("option", { key: "effort:" + effort.id, value: effort.id }, effort.name ?? effort.id));
+        }
+      }
 
       const save = async () => {
         if (!gSettingsScope || !writable) return;
@@ -6971,6 +7969,8 @@ window.__ModuleLoader__.load({
           // 一次提交，按字段逐个 set（settings scope 每字段 revision-fenced 写入）。
           await gSettingsScope.set("subagentProvider", draftValue.subagentProvider ?? "");
           await gSettingsScope.set("subagentModel", draftValue.subagentModel ?? "");
+          await gSettingsScope.set("subagentReasoningEffort", draftValue.subagentReasoningEffort ?? "");
+          await gSettingsScope.set("subagentMode", draftValue.subagentMode ?? "");
           await gSettingsScope.set("subagentPrompt", draftValue.subagentPrompt ?? "");
           setSaved("已保存到当前 profile。");
           setDraft(null); // 成功后才归位草稿（快照已更新）
@@ -7008,6 +8008,23 @@ window.__ModuleLoader__.load({
         catReady && catalog.failures.length > 0
           ? h("span", { style: GSS.hint }, "部分 provider 的模型目录读取失败（" + catalog.failures.map((f) => f.id).join("、") + "），相关 provider 暂不可选。")
           : null,
+        h("div", { style: GSS.field },
+          h("label", { style: GSS.label }, "子代理默认推理档位"),
+          h("select", { style: GSS.select, value: curEffort, disabled: !writable,
+            onChange: (e) => setField("subagentReasoningEffort", e.target.value) }, ...effortOptions),
+          h("span", { style: GSS.hint },
+            catReady
+              ? (effortChoices.length > 0
+                ? "选项来自所选 provider/model 声明的 reasoning effort 能力；留空使用所选模型或父会话的默认值。"
+                : "所选 provider/model 未声明 reasoning effort 能力；已存旧值会保留，可留空以继承默认值。")
+              : "正在等待 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
+        h("div", { style: GSS.field },
+          h("label", { style: GSS.label, htmlFor: modeId }, "子代理默认执行模式"),
+          h("select", { id: modeId, "aria-label": "子代理默认执行模式", style: GSS.select, value: curMode, disabled: !writable,
+            onChange: (e) => setField("subagentMode", e.target.value) },
+            modeOptions.map((m) => h("option", { key: m.id, value: m.id }, m.name))),
+          h("span", { style: GSS.hint },
+            "受控枚举：标准模式、PTC 模式、极简模式、创造模式。单次派发与 workspace project.yaml 更优先；留空使用系统默认（标准模式）。")),
         h("div", { style: GSS.field },
           h("label", { style: GSS.label }, "子代理默认补充提示词"),
           h("textarea", { style: GSS.textarea, value: draftValue.subagentPrompt, disabled: !writable,
@@ -7108,7 +8125,12 @@ window.__ModuleLoader__.load({
         } catch { /* 静默 */ }
       }));
     }
+    const openingChildSessions = new Set();
     async function openChildSession(parentSessionId, childId) {
+      if (!parentSessionId || !childId) return;
+      const navigationKey = parentSessionId + "\u0000" + childId;
+      if (openingChildSessions.has(navigationKey)) return;
+      openingChildSessions.add(navigationKey);
       const rt = sessionsRt ?? appCtx?.get?.("sessions");
       try {
         if (!rt) return;
@@ -7129,27 +8151,39 @@ window.__ModuleLoader__.load({
       } catch (e) {
         console.warn("[dsh-graph-host] openSubagent failed", e);
         try { rt?.open?.(parentSessionId); activateChatTab(); } catch { /* 静默 */ }
+      } finally {
+        openingChildSessions.delete(navigationKey);
       }
     }
     function sessionLinkBtn(parentSessionId, childId, label) {
-      if (!childId) return null;
+      // 没有父会话就不渲染假入口：无法定位子会话时保持页面其它内容可用。
+      if (!childId || !parentSessionId) return null;
       return h("button", {
         style: { ...S.btn, fontSize: 11, padding: "0 6px", marginLeft: 6, flexShrink: 0 },
         className: "dg-btn dg-session-link",
-        title: parentSessionId ? "跳转到子代理会话" : "子代理 id（父会话未知，仅展示）",
-        onClick: (e) => { e.stopPropagation(); if (parentSessionId) openChildSession(parentSessionId, childId); },
+        type: "button",
+        title: "跳转到子代理会话",
+        onClick: (e) => { e.stopPropagation(); void openChildSession(parentSessionId, childId); },
       }, label ?? "↗ 会话");
     }
     return {
       name: "dsh-graph",
-      inject: ["slots", "sessions", "connection", "remote", "modelDirectories"],
+      // connection/remote/modelDirectories 是可选 capability：不得把它们列为硬 inject，
+      // 否则旧/部分 profile 未激活其中任一服务时，整个看板 client apply 会被 runner 阻断。
+      inject: ["slots", "sessions"],
       apply(ctx) {
         appCtx = ctx;
         sessionsRt = ctx.sessions ?? null;
-        connectionRt = ctx.connection ?? null;
+        connectionRt = ctx.get?.("connection") ?? null;
         // workspaces 服务经 ctx.get(name) 可选查找即可取到（runner 的 ctx.get 方法不要求 inject 声明，
         // 注入门禁只拦 ctx.workspaces 属性访问；workspaces 由 client-runtime `ctx.reflect.provide` 提供）
         workspacesRt = ctx.get?.("workspaces") ?? null;
+        ctx.slots.inject("conversation.session.header.actions", () =>
+          ctx.slots.register(
+            { name: "conversation.session.header.actions", id: "dsh-graph-supervisor-badge", order: -9 },
+            (props) => h(SupervisorHeaderBadge, props),
+          ),
+        );
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
             { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: "看板" },
@@ -7158,7 +8192,17 @@ window.__ModuleLoader__.load({
         );
         // g-133：注册「看板设置」settings.section 页（profile 级全局默认配置）。
         // settingsScope 缺失 / slots 未就绪时整页降级，不影响看板与工具。
+        // 设置页必须在 apply 时立即注册，不能依赖可选 remote 激活——remote 缺失时
+        // REST fallback 仍可正常读写配置；remote 后续激活时再升级 ctx 以获取精确 model catalog。
         try { registerGraphSettingsSection(ctx); } catch { /* 静默 */ }
+        // g-231：remote 可选激活——若 remote service 后续激活，升级 appCtx 和 connectionRt
+        // 使 loadHostCatalog 能从 session.modelCatalog 获取含 reasoning.efforts 的精确目录。
+        // remote 缺失时此回调不执行，设置页仍通过 REST/legacy 降级正常工作。
+        ctx.inject?.(["remote"], (scope) => {
+          appCtx = scope;
+          connectionRt = scope.get?.("connection") ?? connectionRt;
+          // 已注册的 settings section 通过 appCtx 变量读取 catalog，无需重复注册。
+        });
         console.log("[dsh-graph-host] client apply: kanban view registered");
       },
     };

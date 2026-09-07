@@ -1,5 +1,5 @@
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
-    const PLUGIN_VERSION = "0.8.3";
+    const PLUGIN_VERSION = "0.9.1";
 
     const STAGES = [
       { key: "describe", label: "描述", statuses: ["draft", "planning"] },
@@ -15,11 +15,11 @@
       in_progress: "执行中", review: "评审中", delivered: "已交付", blocked: "阻塞",
     };
 
-    // g-158：目标类型视觉配置——颜色、缩写、完整名（四者共用同一语义色）
-    const GOAL_TYPES = ["feature", "bug", "task", "improvement"];
-    const GOAL_TYPE_COLORS = { feature: "#4c8dff", bug: "#d66", task: "#8a8a8a", improvement: "#3aa675" };
-    const GOAL_TYPE_ABBREV = { feature: "F", bug: "B", task: "T", improvement: "I" };
-    const GOAL_TYPE_LABELS = { feature: "feature", bug: "bug", task: "task", improvement: "improvement" };
+    // g-158/g-232：目标类型视觉配置——颜色、缩写、完整名
+    const GOAL_TYPES = ["feature", "bug", "task", "improvement", "patch", "chore"];
+    const GOAL_TYPE_COLORS = { feature: "#4c8dff", bug: "#dd6666", task: "#8a8a8a", improvement: "#3aa675", patch: "#00acc1", chore: "#9c27b0" };
+    const GOAL_TYPE_ABBREV = { feature: "F", bug: "B", task: "T", improvement: "I", patch: "P", chore: "C" };
+    const GOAL_TYPE_LABELS = { feature: "feature", bug: "bug", task: "task", improvement: "improvement", patch: "patch", chore: "chore" };
     // g-158：规范化类型——非法值安全回退 task
     function normalizeGoalType(raw) {
       return GOAL_TYPES.includes(raw) ? raw : "task";
@@ -33,7 +33,8 @@
       "goal.created": "创建目标", "goal.planned": "完成规划", "criteria.confirmed": "确认判据",
       "criteria.updated": "更新判据", // g-170
       "goal.transition": null, "attempt.started": "派发执行", "attempt.status_reported": null,
-      "completion.claimed": "声明完成", "review.passed": "评审通过", "review.failed": "评审未通过",
+      "completion.claimed": "声明完成", "review.requested": "请求主管复核", "review.objected": "主管提出异议",
+      "review.passed": "评审通过", "review.failed": "评审未通过",
       "goal.moved": "排期移动", "card.created": "创建卡片", "card.filled": "填充卡片",
       "card.reviewed": "复核卡片", "evidence.added": "登记证据", "memory.promoted": "沉淀记忆",
       "version.created": "创建版本", "version.released": "发布版本",
@@ -51,7 +52,7 @@
     const MEANINGFUL = new Set([
       "goal.transition", "goal.amended", "scope.note", "criteria.confirmed",
       "criteria.updated", // g-170
-      "completion.claimed", "review.passed", "review.failed", "attempt.started",
+      "completion.claimed", "review.requested", "review.objected", "review.passed", "review.failed", "attempt.started",
       "goal.moved", "goal.created", "attempt.status_reported", "goal.renamed",
       "goal.type_changed", // g-158
       "goal.directive_set", "goal.comment_added",
@@ -65,6 +66,8 @@
       let what = EVENT_LABEL[e.event];
       if (what === null || what === undefined) {
         if (e.event === "goal.transition") what = `状态流转：${STATUS_LABEL[d.from] ?? d.from} → ${STATUS_LABEL[d.to] ?? d.to}`;
+        else if (e.event === "review.requested") what = `请求主管复核：${d.targetStage ?? ""}${d.snapshot ? `（${String(d.snapshot).slice(0, 120)}）` : ""}`;
+        else if (e.event === "review.objected") what = `主管提出异议：${d.objection ?? ""}`;
         else if (e.event === "attempt.status_reported") what = `汇报：${d.status ?? ""}`;
         else if (e.event === "goal.amended") what = `修订：${d.note ?? ""}`;
         else if (e.event === "goal.renamed") what = `重命名：${d.old_title ?? ""} → ${d.new_title ?? ""}`;
@@ -99,6 +102,8 @@
       .dg-card:active { transform: translateY(0); box-shadow: 0 0 0 2px rgba(76,141,255,.8); }
       .dg-sub { transition: background .12s ease; }
       .dg-sub:hover { background: rgba(58,166,117,.22); }
+      .dg-criteria-row { transition: background .12s ease; border-radius: 4px; }
+      .dg-criteria-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14)); }
       .dg-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-deliver-collapsed:hover { background: rgba(128,128,128,.14); }
       .dg-blocked-collapsed:hover { background: rgba(128,128,128,.14); }
@@ -107,6 +112,15 @@
       .dg-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.25)); }
       .dg-btn:active { filter: brightness(0.95); }
       .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
+      /* g-188：统一“转到对话”入口的 hover/active/focus 反馈，不改变布局。 */
+      .dg-session-link { border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.55)); }
+      .dg-session-link:hover { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.30)); border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.85)); box-shadow: 0 0 0 2px rgba(76,141,255,.18); }
+      .dg-session-link:active { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.42)); transform: translateY(1px); }
+      .dg-session-link:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #4c8dff); outline-offset: 2px; }
+      .dg-live-strip-clickable { cursor: pointer; transition: transform .14s ease, box-shadow .14s ease, background .14s ease; }
+      .dg-live-strip-clickable:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(76,141,255,.24); background: rgba(76,141,255,.18); }
+      .dg-live-strip-clickable:active { transform: translateY(0); box-shadow: 0 0 0 2px rgba(76,141,255,.28); }
+      .dg-live-strip-clickable:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #4c8dff); outline-offset: 2px; }
       /* g-227：仅“转到对话”入口在可悬停指针下轻微放大，不影响布局 */
       @media (hover: hover) and (pointer: fine) {
         .dg-session-link { transition: transform .16s ease, background .12s ease, border-color .12s ease, filter .12s ease; }
@@ -145,6 +159,20 @@
       .dg-btn-accept:hover { background: rgba(58,166,117,.30); border-color: rgba(58,166,117,.55); }
       .dg-btn-accept:active { background: rgba(58,166,117,.42); }
       .dg-btn-accept:disabled { opacity: 0.45; cursor: default; }
+      /* 统一弹窗与抽屉右上角关闭按钮 */
+      .dg-close {
+        transition: opacity .12s ease, background .12s ease, transform .12s ease;
+        line-height: 1 !important;
+        text-align: center;
+      }
+      .dg-close:hover {
+        opacity: 1 !important;
+        background: rgba(128,128,128,.22) !important;
+        transform: scale(1.08);
+      }
+      .dg-close:active {
+        transform: scale(0.95);
+      }
       /* g-153：下拉菜单/选择控件——g-176：改 DSH 主题变量并保留暗色 fallback */
       .dg-select {
         font-size: 12px; padding: 3px 8px; cursor: pointer;
@@ -192,6 +220,13 @@
       body:has([style*="position: fixed"]) [data-width-handle],
       body:has([style*="position:fixed"]) [data-width-handle] {
         display: none !important;
+      }
+      /* 弹窗与抽屉打开时，降低 composer 对话框层级并禁用点击穿透，彻底防止遮挡抽屉 */
+      .wSkVaW_root:has(.dg-modal-open) .wSkVaW_composerSeat,
+      .wSkVaW_body:has(.dg-modal-open) .wSkVaW_composerSeat,
+      body:has(.dg-modal-open) [class*="composerSeat"] {
+        z-index: 0 !important;
+        pointer-events: none !important;
       }
       /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */
       @keyframes dg-flow-bg {

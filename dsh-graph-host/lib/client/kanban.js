@@ -30,6 +30,15 @@
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
       const [showArchived, setShowArchived] = React.useState(false);
+      // g-105: 记忆管理弹窗状态
+      const [showMemoryModal, setShowMemoryModal] = React.useState(false);
+      const memoryModalGuard = useBackdropClose(() => setShowMemoryModal(false));
+      // g-187：顶部多选标签筛选；选中多个标签时采用 OR。
+      const [tagFilter, setTagFilter] = React.useState([]);
+      const [showTagFilterModal, setShowTagFilterModal] = React.useState(false);
+      const tagFilterGuard = useBackdropClose(() => setShowTagFilterModal(false));
+      const tagsFor = (g) => Array.isArray(g?.tags) ? g.tags : [];
+      const matchesTag = (g) => !tagFilter.length || tagsFor(g).some((tag) => tagFilter.includes(String(tag)));
       // g-223: 版本管理抽屉与显隐过滤状态（本地存储持久化，按当前解析 workspace 隔离与响应）
       const [showVersionDrawer, setShowVersionDrawer] = React.useState(false);
       // Compatibility marker: const activeWs = resolveWorkspaceOfSession(props?.sessionId) || "default" (intentionally not used).
@@ -80,6 +89,8 @@
       const [transitionNote, setTransitionNote] = React.useState(null);
       // g-132：右上角齿轮 → 看板设置弹窗
       const [showSettings, setShowSettings] = React.useState(false);
+      // g-183：右上角 🔗 → 共享上下文管理面板
+      const [showSharedPanel, setShowSharedPanel] = React.useState(false);
       // g-171：更新强调动画状态——goalId -> { remaining, token }（token = goalId:updated_at）
       const [updateEmphasis, setUpdateEmphasis] = React.useState({});
       const seenUpdateTokens = React.useRef(new Set()); // 当前页内存：防同一 token 重复播放
@@ -631,6 +642,7 @@
       // g-77647351：泳道渲染（带拖放支持，跨 lane 拖放改归属）；g-129 版本 lane 标题「＋」预选版本
       // g-137：laneIndex 用于交替背景色；g-162：阶段列横向交替深浅
       const lane = (label, goals, key, version, laneIndex = 0, collapsible = true) => {
+        goals = goals.filter(matchesTag);
         // g-162: 普通泳道折叠状态；released 仅复用 lane 布局，不增加折叠入口
         const isCollapsed = collapsible && !!collapsedLanes[key];
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
@@ -808,7 +820,7 @@
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -989,7 +1001,7 @@
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
-              return Card({ ...g, _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -1260,8 +1272,22 @@
       }
 
       // g-216: 判定是否有任何弹窗或抽屉处于打开态
-      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer);
+      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer || showSharedPanel || showMemoryModal || showTagFilterModal);
 
+      const tbBtnStyle = {
+        ...S.btn,
+        marginLeft: 8,
+        height: 26,
+        boxSizing: "border-box",
+        fontSize: 12,
+        lineHeight: "22px",
+        padding: "0 8px",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 4,
+        verticalAlign: "middle",
+      };
       return h(
         "div",
         { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
@@ -1294,8 +1320,44 @@
             intervalSec: refreshIntervalSec,
             onTriggerRefresh: load,
           }),
-          h("button", { style: { ...S.btn, marginLeft: 8 }, className: "dg-btn", onClick: load }, "刷新"),
-          // g-110: 显示已归档目标的 checkbox
+          h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, "刷新"),
+          // g-187：顶部标签筛选弹层入口
+          h("button", {
+            style: { ...tbBtnStyle, ...(tagFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
+            className: "dg-btn" + (tagFilter.length > 0 ? " dg-btn-active" : ""),
+            title: "打开标签筛选面板（支持多选点选与一键清除）",
+            onClick: () => setShowTagFilterModal(true),
+          }, tagFilter.length > 0 ? `🔖 标签筛选 (${tagFilter.length})` : "🔖 标签筛选"),
+          tagFilter.length > 0
+            ? h("button", {
+                className: "dg-btn",
+                style: { ...tbBtnStyle, marginLeft: 4, padding: "0 6px", fontSize: 11 },
+                title: "一键清除全部标签筛选",
+                onClick: () => setTagFilter([]),
+              }, "✕ 取消筛选")
+            : null,
+          // g-105: 记忆管理按钮（位于设置按钮左侧）
+          h("button", {
+            style: tbBtnStyle,
+            className: "dg-btn",
+            title: "记忆管理（手工管理常驻记忆与按需记忆，或禁用记忆工具）",
+            onClick: () => setShowMemoryModal(true),
+          }, "🧠 记忆"),
+          // g-183: 项目知识库面板入口
+          h("button", {
+            style: tbBtnStyle,
+            className: "dg-btn",
+            title: "项目知识库（管理共享条目、跨目标引用与删除保护）",
+            onClick: () => setShowSharedPanel(true),
+          }, "📇 项目知识"),
+          // g-132: 右上角齿轮 → 看板设置
+          h("button", {
+            style: { ...tbBtnStyle, padding: "0 7px", fontSize: 14 },
+            className: "dg-btn",
+            title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
+            onClick: () => setShowSettings(true),
+          }, "⚙"),
+          // g-110: 显示已归档目标的 checkbox（移至右侧，DEBUG 信息左侧，布局更规整）
           h("label", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 12, cursor: "pointer", fontSize: 12, opacity: 0.8 } },
             h("input", {
               type: "checkbox",
@@ -1303,13 +1365,6 @@
               onChange: (e) => setShowArchived(e.target.checked),
             }),
             "显示已归档"),
-          // g-132: 右上角齿轮 → 看板设置（负责人 2026-08-25 review：置于 DEBUG 信息之前，即 DEBUG 左侧）
-          h("button", {
-            style: { ...S.btn, marginLeft: 8, fontSize: 16, lineHeight: 1, padding: "2px 8px" },
-            className: "dg-btn",
-            title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
-            onClick: () => setShowSettings(true),
-          }, "⚙"),
           // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
             "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (activeWs ?? "∅"))),
@@ -1408,6 +1463,11 @@
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             onClose: () => setDrawerCard(null),
+                            onConverted: () => {
+                              // g-183：卡片转换成功后，重新 load 全局数据与弹窗数据，绝不误剥离卡片！
+                              load();
+                              setDrawerCard(null);
+                            },
                             onDeleted: (cardId) => {
                               // g-219：事件结果为准——删除成功后局部更新弹窗与看板，不整体重新 load
                               const goalId = drawerCard.goalId;
@@ -1474,10 +1534,11 @@
                         style: {
                           display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11,
                           padding: "3px 8px", cursor: "pointer", borderRadius: 4,
-                          border: "1px solid " + (t === newGoalType ? goalTypeColor(t) : "rgba(128,128,128,.4)"),
-                          background: t === newGoalType ? goalTypeColor(t) : "rgba(128,128,128,.1)",
-                          color: t === newGoalType ? "#fff" : "inherit",
-                          fontWeight: t === newGoalType ? 700 : 400,
+                          border: t === newGoalType ? "1.5px solid " + goalTypeColor(t) : "1.5px solid " + goalTypeColor(t) + "66",
+                          background: t === newGoalType ? goalTypeColor(t) : goalTypeColor(t) + "18",
+                          color: t === newGoalType ? "#fff" : goalTypeColor(t),
+                          boxShadow: t !== newGoalType ? "inset 0 0 6px " + goalTypeColor(t) + "22" : "none",
+                          fontWeight: 700,
                         },
                         className: "dg-btn",
                         title: GOAL_TYPE_LABELS[t],
@@ -1764,6 +1825,19 @@
         showSettings
           ? h(SettingsModal, { onClose: () => setShowSettings(false), onSaved: () => load() })
           : null,
+        // g-183: 共享上下文管理面板（🔗 入口）
+        showSharedPanel
+          ? h(SharedCardsModal, {
+              onClose: () => setShowSharedPanel(false),
+              onRefresh: () => load(),
+              sharedCards: b.sharedCards ?? [],
+              goals: [
+                ...(b.versions ?? []).flatMap((v) => v.goals ?? []),
+                ...(b.standalone ?? []),
+                ...(b.backlog ?? []),
+              ].map((g) => ({ id: g.id, title: g.title })),
+            })
+          : null,
         // g-134: 创建版本泳道弹窗
         showCreateVersion
           ? h("div", { style: S.overlay, ...createVersionGuard },
@@ -1840,6 +1914,53 @@
                     onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); },
                   }, "取消")),
                 renameVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, renameVersionNote) : null))
+          : null,
+        // g-105: 记忆管理弹窗（手工管理常驻/按需记忆，支持一键禁用工具）
+        showMemoryModal
+          ? h(MemoryManagementModal, {
+              workspace: activeWs,
+              onClose: () => setShowMemoryModal(false),
+            })
+          : null,
+        // g-187: 标签多选筛选弹窗/面板
+        showTagFilterModal
+          ? h("div", { style: S.overlay, ...tagFilterGuard },
+              h("div", { style: { ...S.modal, minWidth: 320, maxWidth: 440 }, onClick: (e) => e.stopPropagation() },
+                h("span", { style: S.close, onClick: () => setShowTagFilterModal(false) }, "✕"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
+                  "🔖 标签筛选",
+                  h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "（点击标签多选过滤，支持 OR 联集）")),
+                h("div", { style: { ...S.meta, marginBottom: 10 } }, "选择要查看的标签，看板仅显示包含所选标签的目标："),
+                h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto", padding: "2px 0", marginBottom: 12 } },
+                  (() => {
+                    const allAvailableTags = [...new Set(allGoals.flatMap((g) => tagsFor(g)))].sort();
+                    if (!allAvailableTags.length) return h("span", { style: S.meta }, "（当前看板目标尚无任何可用标签）");
+                    return allAvailableTags.map((tag) => {
+                      const selected = tagFilter.includes(tag);
+                      return h("button", {
+                        key: tag,
+                        className: "dg-btn",
+                        style: {
+                          ...S.btn,
+                          fontSize: 12,
+                          padding: "3px 8px",
+                          borderRadius: 12,
+                          background: selected ? "var(--dsw-alias-button-primary-fill, #4c8dff)" : "rgba(76,141,255,.12)",
+                          color: selected ? "var(--dsw-alias-label-primary-foreground, #fff)" : "var(--dsw-alias-label-primary, inherit)",
+                          borderColor: selected ? "var(--dsw-alias-button-primary-fill, #4c8dff)" : "rgba(76,141,255,.35)",
+                        },
+                        onClick: () => {
+                          if (selected) setTagFilter(tagFilter.filter((t) => t !== tag));
+                          else setTagFilter([...tagFilter, tag]);
+                        },
+                      }, (selected ? "✓ " : "") + "#" + tag);
+                    });
+                  })()),
+                h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid rgba(128,128,128,.2)", paddingTop: 10 } },
+                  h("span", { style: S.meta }, `已选 ${tagFilter.length} 个标签`),
+                  h("div", { style: { display: "flex", gap: 8 } },
+                    tagFilter.length > 0 ? h("button", { className: "dg-btn", style: S.btn, onClick: () => setTagFilter([]) }, "一键清空") : null,
+                    h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => setShowTagFilterModal(false) }, "完成")))))
           : null,
         // g-134: 删除版本泳道确认弹窗
         deleteVersionTarget

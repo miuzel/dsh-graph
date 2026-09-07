@@ -285,6 +285,130 @@
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
+    // g-187：客户端标签编辑器，所有变更通过 host 持久化到 goal.md。
+    function GoalTagsEditor(props) {
+      const [tags, setTags] = React.useState(Array.isArray(props.tags) ? props.tags : []);
+      const [showAdd, setShowAdd] = React.useState(false);
+      const [text, setText] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [saving, setSaving] = React.useState(false);
+      React.useEffect(() => { setTags(Array.isArray(props.tags) ? props.tags : []); }, [props.tags]);
+      const save = async (next) => {
+        if (saving) return;
+        const clean = [...new Set(next.map((x) => String(x).trim().replace(/^#/, "")))];
+        setSaving(true); setNote(null);
+        try {
+          // 如果常规 CAS 冲突（比如弹窗刚打开时状态还未同步），如果当前只有本地这一个客户端在操作，允许重试覆盖
+          let r = await fetch(graphUrl("/api/dsh-graph/set-goal-tags"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.goalId, tags: clean, base_tags: tags }),
+          });
+          let data = await r.json();
+          if (r.status === 409) {
+            // CAS 冲突时自动带当前最新 base 再次更新或带 force 写入
+            r = await fetch(graphUrl("/api/dsh-graph/set-goal-tags"), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ goal: props.goalId, tags: clean, force: true }),
+            });
+            data = await r.json();
+          }
+          if (!r.ok) throw new Error(data.error || "标签保存失败");
+          const saved = Array.isArray(data.new_tags) ? data.new_tags : clean;
+          setTags(saved);
+          props.onChange?.(saved);
+          setNote("已保存");
+        } catch (e) { setNote(String(e?.message ?? e)); }
+        finally { setSaving(false); }
+      };
+      const add = () => {
+        const value = text.trim();
+        if (!value) return;
+        save([...tags, ...value.split(/[,，\s]+/)]);
+        setText("");
+        setShowAdd(false);
+      };
+      return h("div", { style: { ...S.modalSection, minWidth: 0, maxWidth: "100%", overflow: "hidden" } },
+        h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
+          h("span", null, "🔖 标签"),
+          h("button", {
+            className: "dg-btn",
+            style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+            title: showAdd ? "收起输入框" : "添加新标签",
+            onClick: () => { setShowAdd(!showAdd); setNote(null); },
+          }, showAdd ? "取消" : "＋ 添加标签")),
+        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, minWidth: 0, maxWidth: "100%" } },
+          tags.length
+            ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: "点击移除标签", disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×"))
+            : (!showAdd ? h("span", { style: S.meta }, "（暂无标签，点击右上角添加）") : null)),
+        showAdd ? h("div", { style: { display: "flex", gap: 4, marginTop: 6 } },
+          h("input", { autoFocus: true, value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: "输入标签名称，逗号或空格分隔…", onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); else if (e.key === "Escape") setShowAdd(false); } }),
+          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? "保存中…" : "保存")) : null,
+        note ? h("div", { style: { ...S.meta, color: note === "已保存" ? undefined : "#e57373", marginTop: 4 } }, note) : null);
+    }
+
+    // g-197：展示 delivered 目标已识别的清理候选与显式清理操作
+    function WorktreeCandidates(props) {
+      const [items, setItems] = React.useState([]);
+      const [note, setNote] = React.useState(null);
+      const load = React.useCallback(() =>
+        fetch(graphUrl("/api/dsh-graph/worktrees", { goal: props.goalId }))
+          .then((r) => r.json())
+          .then((x) => setItems(Array.isArray(x.worktrees) ? x.worktrees : []))
+          .catch((e) => setNote(String(e))),
+      [props.goalId]);
+      React.useEffect(() => { load(); }, [load]);
+      const clean = async (id) => {
+        if (!window.confirm("确认删除该 linked worktree？本地分支不会删除。")) return;
+        setNote(null);
+        const r = await fetch(graphUrl("/api/dsh-graph/worktrees/clean"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id, confirm: true }),
+        });
+        const x = await r.json();
+        if (!r.ok) setNote(x.reason || x.error || "清理被阻断");
+        else { setNote("已清理 worktree"); load(); }
+      };
+      if (!items.length && !note) return null;
+      return h("div", { style: S.modalSection },
+        h("div", { style: S.modalH }, "🧹 可清理 worktree"),
+        items.map((x) =>
+          h("div", { key: x.id, style: { ...S.subCard, marginTop: 4 } },
+            h("div", null, `${x.status === "candidate" ? "✅" : "🔒"} ${x.path}`),
+            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${x.reason || "已验证合入且干净"}`),
+            x.status === "candidate"
+              ? h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => clean(x.id) }, "确认清理")
+              : null,
+          ),
+        ),
+        note ? h("div", { style: S.meta }, note) : null,
+      );
+    }
+
+    // g-189：只展示服务端按 canonical workspace 只读发现的 worktree；不自行执行 git。
+    function AttemptWorktrees(props) {
+      const attempts = props.attempts ?? [];
+      const discovery = props.worktrees ?? { status: "unavailable", items: {} };
+      const [expanded, setExpanded] = React.useState(false);
+      if (!attempts.length) return null;
+      const latest = [...attempts].reverse().find((a) => discovery.items?.[a.id]);
+      const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: "复制安全相对路径", onClick: async () => { if (await copyText(item.path)) showToast("✅ worktree 路径已复制"); } }, "复制") : null;
+      const row = (a) => {
+        const item = discovery.items?.[a.id];
+        return h("div", { key: a.id, style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginTop: 4 } },
+          h("span", { style: { flex: "0 0 auto", fontSize: 12 } }, a.id),
+          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${item.status}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, "未创建 worktree"),
+          copyButton(item));
+      };
+      return h("div", { key: "worktrees", style: S.modalSection },
+        h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
+          h("span", null, "🌿 Attempt worktree"),
+          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12, padding: "0 5px" }, title: expanded ? "收起 worktree 列表" : "展开 worktree 列表", "aria-label": expanded ? "收起 worktree 列表" : "展开 worktree 列表", onClick: () => setExpanded((v) => !v) }, expanded ? "▲" : "▼")),
+        discovery.status !== "ok" ? h("div", { style: { ...S.meta, fontSize: 12 } }, "⚠️ Git worktree 列表不可用，无法发现 worktree") : expanded ? attempts.map(row) : latest ? row(latest) : h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, "未创建 worktree"));
+    }
+
     function GoalModal(props) {
       const [state, setState] = React.useState({ loading: true });
       const [tab, setTab] = React.useState("detail"); // "detail" | "context" | "activity"
@@ -300,10 +424,31 @@
       const [typeNote, setTypeNote] = React.useState(null);
       // g-148：load 提升到组件体，供 AcceptFeedback 通过 onRefresh 回调刷新详情
       const aliveRef = React.useRef(true);
+      const lastWorktreesRef = React.useRef({});
+      const removedWorktreesRef = React.useRef({});
       const load = React.useCallback(() =>
         fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }))
           .then((r) => r.json())
-          .then((data) => aliveRef.current && setState({ loading: false, data }))
+          .then((data) => {
+            if (!aliveRef.current) return;
+            const wt = data.worktrees;
+            if (wt?.status === "ok") {
+              const next = { ...wt, items: { ...wt.items } };
+              for (const [id, old] of Object.entries(lastWorktreesRef.current)) {
+                if (!next.items[id]) {
+                  const removed = { ...old, status: "已移除" };
+                  removedWorktreesRef.current[id] = removed;
+                  next.items[id] = removed;
+                }
+              }
+              for (const [id, removed] of Object.entries(removedWorktreesRef.current)) {
+                if (!next.items[id]) next.items[id] = removed;
+              }
+              lastWorktreesRef.current = Object.fromEntries(Object.entries(next.items).filter(([, v]) => v.status !== "已移除"));
+              data = { ...data, worktrees: next };
+            }
+            setState({ loading: false, data });
+          })
           .catch((e) => aliveRef.current && setState({ loading: false, error: String(e) })),
       [props.id]);
       React.useEffect(() => {
@@ -405,6 +550,7 @@
         livePanel = att
           ? h(SessionPanel, { parentId: att.parent_session_id, childId: att.child_id, collapsible: true,
                               provider: att.provider, model: att.model, modelRoute: att.model_route,
+                              subagentMode: att.mode ?? null,
                               statusLine: lastAtt?.status_line ?? null,
                               goalId: props.id, relaunchKind: "exec",
                               relaunchRoute, onRelaunched: setRelaunchRoute,
@@ -446,6 +592,9 @@
         // 判断是否是 backlog 目标（backlog 目标不能建卡）
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
+          h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
+          status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
+          h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: meta.tags ?? props.tags, onChange: () => { load(); props.onTagsChanged?.(); } }),
           desc != null ? sectionBlock("d", "📋 目标描述", desc,
             h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
@@ -474,7 +623,14 @@
                       props.onOpenCard(props.id, c.id);
                     }
                   },
-                }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}（${c.kind}）`)),
+                },
+                  h("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
+                    h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                      `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
+                    c.scope === "shared"
+                      ? h("span", { style: { flexShrink: 0, fontSize: 10, padding: "0 4px", borderRadius: 3, background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-label, #3aa675)" } },
+                          "🔗共享")
+                      : null))),
                 isBacklog
                   ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
                   : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession, onRefresh: load }))
@@ -820,22 +976,54 @@
             }, GOAL_TYPE_ABBREV[currentType]),
             // g-158：类型选择器弹出（点击 badge 展开）
             typeEditing
-              ? h("div", { style: { display: "flex", gap: 3, alignItems: "center" } },
+              ? h("div", { style: { display: "inline-flex", gap: 4, alignItems: "center", verticalAlign: "middle" } },
                   ...GOAL_TYPES.map((t) =>
                     h("button", {
                       key: t,
                       style: {
-                        fontSize: 11, padding: "1px 6px", cursor: "pointer",
-                        border: "1px solid " + (t === currentType ? goalTypeColor(t) : "rgba(128,128,128,.4)"),
-                        borderRadius: 3, background: t === currentType ? goalTypeColor(t) : "rgba(128,128,128,.1)",
-                        color: t === currentType ? "#fff" : "inherit", fontWeight: t === currentType ? 700 : 400,
+                        width: 20,
+                        height: 20,
+                        boxSizing: "border-box",
+                        padding: 0,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        borderRadius: 4,
+                        border: "1px solid " + (t === currentType ? goalTypeColor(t) : goalTypeColor(t) + "66"),
+                        background: t === currentType ? goalTypeColor(t) : goalTypeColor(t) + "18",
+                        color: t === currentType ? "#fff" : goalTypeColor(t),
+                        boxShadow: t !== currentType ? "inset 0 0 4px " + goalTypeColor(t) + "22" : "none",
+                        flexShrink: 0,
                       },
                       className: "dg-btn",
                       title: GOAL_TYPE_LABELS[t],
                       onClick: () => doSetType(t),
                     }, GOAL_TYPE_ABBREV[t])),
                   h("button", {
-                    style: { ...S.btn, fontSize: 10, padding: "0 4px" }, className: "dg-btn",
+                    style: {
+                      width: 20,
+                      height: 20,
+                      boxSizing: "border-box",
+                      padding: 0,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      lineHeight: 1,
+                      borderRadius: 4,
+                      border: "1px solid rgba(128,128,128,.35)",
+                      background: "rgba(128,128,128,.15)",
+                      color: "inherit",
+                      opacity: 0.7,
+                      flexShrink: 0,
+                    },
+                    className: "dg-btn",
+                    title: "关闭选择器",
                     onClick: () => { setTypeEditing(false); setTypeNote(null); },
                   }, "✕"))
               : null,

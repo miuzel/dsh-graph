@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, dirname } from "node:path";
-import { init, findGoalFile, loadGoal, createGoal, setCriteria, transition, readSupervisorSession } from "../ops.ts";
+import { init, findGoalFile, loadGoal, loadCard, createGoal, setCriteria, transition, readSupervisorSession } from "../ops.ts";
 import { resolveRoot } from "../root.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dsh-graph-host/index.js";
@@ -30,7 +30,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 29); // g-116 16 + g-119 graph_bind_collect_card + g-118 graph_help + g-141 graph_rename_goal + g-110 archive/unarchive + g-140 delete + g-150 graph_record_attempt_handoff + g-150 范围扩展 graph_set_directive / graph_add_comment + g-128 graph_delete_card + g-158 graph_set_goal_type + g-138 graph_postpone_goal + g-190 graph_unbind_goal_child
+  assert.equal(registered.length, 38); // 全量 38 个 graph_* 工具
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
@@ -43,7 +43,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
   const { goal } = await call("graph_create_goal", { title: "t", version: "v-t" });
   await call("graph_set_criteria", { goal, criteria: ["通过"] });
   // g-137：带 version 的目标初始状态已是 planning，无需再迁移
-  const { card } = await call("graph_add_card", { goal, title: "c", kind: "text" });
+  const { card } = await call("graph_add_card", { goal, title: "c", kind: "text", scope: "goal" });
   // g-119：graph_bind_collect_card 绑定收集子代理（无会话上下文 → parent_session_id 缺省 null）
   await call("graph_bind_collect_card", { goal, card, child_id: "child-t" });
   await call("graph_fill_card", { goal, card, text: "内容" });
@@ -205,7 +205,7 @@ test("g-202 graph_start_attempt：合法 card 用标准 prompt 派发并绑定�
   assert.match(request.request.prompt[0].text, new RegExp(`graph_fill_card\\(goal=\\"${goal}\\", card=\\"${card}`));
   assert.ok(request.request.prompt[0].text.includes(brief), "card 收集 prompt 应保留 attempt_brief");
   assert.equal(loadGoal(findGoalFile(root, goal)).meta.status, "planning");
-  const cardFile = join(dirname(findGoalFile(root, goal)), "cards", `${card}.md`);
+  const cardFile = loadCard(root, goal, card).file;
   assert.equal(loadGoal(cardFile).meta.status, "collecting");
   const events = readEvents(root);
   assert.ok(events.some((e) => e.event === "card.collecting"));
@@ -226,7 +226,7 @@ test("g-202 graph_start_attempt：无 subagents/非法 goal-card 返回明确错
   const exec = { agent: { session: { id: "super" } }, signal: new AbortController().signal };
   const out = await byName.get("graph_start_attempt")!.execute({ goal, card }, exec);
   assert.equal(out.card, card); assert.equal(out.child_id, null); assert.match(out.child_error, /subagents/);
-  assert.equal(loadGoal(join(dirname(findGoalFile(root, goal)), "cards", `${card}.md`)).meta.status, "empty");
+  assert.equal(loadGoal(loadCard(root, goal, card).file).meta.status, "empty");
   await assert.rejects(() => byName.get("graph_start_attempt")!.execute({ goal: "g-999", card }, exec), /目标不存在/);
   await assert.rejects(() => byName.get("graph_start_attempt")!.execute({ goal, card: "card-nope" }, exec), /卡片不存在/);
 });

@@ -1,3 +1,4 @@
+    let reExecModeInstanceSeq = 0;
     // 看板直达指令：向 continuable 子代理发文本（queue 排队 / steer 插队）。
     // 多模态降级：子代理图片源码级不支持（SUBAGENT_IMAGE_UNSUPPORTED）——明确提示而非静默失败。
     function PromptBox(props) {
@@ -173,10 +174,14 @@
     // kind="exec" → start-execution（目标执行子代理）；kind="collect" → start-collection（卡片收集子代理，需 cardId+prompt）。
     // 下拉数据源 = spawn-options 的 modelGroups（LLM provider 分组目录）；subagent provider（spawn/fork）不暴露给用户。
     function ReExecBox(props) {
+      const modeIdRef = React.useRef(null);
+      if (modeIdRef.current == null) modeIdRef.current = `dg-reexec-subagent-mode-${++reExecModeInstanceSeq}`;
+      const modeId = modeIdRef.current;
       const { goalId, kind, cardId, prompt } = props;
       const [opts, setOpts] = React.useState(null); // {modelGroups, default}
       const [provider, setProvider] = React.useState("");
       const [model, setModel] = React.useState("");
+      const [mode, setMode] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
 
@@ -197,8 +202,10 @@
             const g0 = groups.find((x) => x.id === effProvider);
             const ms = g0?.models ?? [];
             const effModel = ms.some((m) => m.id === defM) ? defM : (ms[0]?.id ?? "");
+            const defMode = d?.default?.mode ?? "";
             setProvider(effProvider);
             setModel(effModel);
+            setMode(defMode);
           })
           .catch(() => alive && setOpts({ modelGroups: null, default: null }));
         return () => { alive = false; };
@@ -207,13 +214,22 @@
       const groups = opts?.modelGroups ?? [];
       const currentGroup = groups.find((g) => g.id === provider) ?? null;
       const modelChoices = currentGroup?.models ?? [];
+      const modeList = opts?.modes ?? [
+        { id: "standard", name: "标准模式" },
+        { id: "minimal", name: "极简模式 (6工具过滤)" },
+      ];
 
       const relaunch = async () => {
         setBusy(true);
         setNote("重新派发中…");
         try {
           const url = kind === "collect" ? "/api/dsh-graph/start-collection" : "/api/dsh-graph/start-execution";
-          const body = { goal: goalId, provider: provider || undefined, model: model || undefined };
+          const body = {
+            goal: goalId,
+            provider: provider || undefined,
+            model: model || undefined,
+            mode: mode || undefined,
+          };
           if (kind === "collect") { body.card = cardId; body.prompt = prompt; }
           const r = await fetch(graphUrl(url), {
             method: "POST",
@@ -224,8 +240,9 @@
           if (data.ok) {
             if (data.child_id) {
               const route = data.model_route ? `（${data.model_route}）` : "";
-              setNote("✅ 已重新派发子代理，id：" + data.child_id + " " + route);
-              showToast("✅ 已重新派发子代理 " + route);
+              const modeTag = data.mode ? `[${data.mode}]` : "";
+              setNote("✅ 已重新派发子代理 " + modeTag + "，id：" + data.child_id + " " + route);
+              showToast("✅ 已重新派发子代理 " + modeTag + " " + route);
               if (data.model_route) props.onRelaunched?.(data.model_route);
             } else {
               setNote("⚠️ 子代理启动失败：" + (data.child_error || "无 child_id"));
@@ -270,6 +287,16 @@
                     ? h("option", { value: defM, style: optStyle }, defM ? `默认 ${defM}` : "model 不可用")
                     : [h("option", { key: "", value: "", style: optStyle }, "默认"),
                        ...modelChoices.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))]),
+                kind !== "collect" ? h("select", {
+                  id: modeId,
+                  "aria-label": "重新执行子代理模式",
+                  style: selStyle, value: mode,
+                  className: "dg-select",
+                  title: "子代理执行模式（缺省 project.yaml executor.mode）",
+                  onChange: (e) => setMode(e.target.value),
+                },
+                  h("option", { key: "", value: "", style: optStyle }, "模式: 默认"),
+                  ...modeList.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))) : null,
               ],
           h("button", {
             style: { ...S.btn, padding: "3px 10px", fontSize: 12 }, className: "dg-btn dg-relaunch",
@@ -416,7 +443,8 @@
                          statusLine }),
           h("div", { key: "m", style: { ...S.meta, marginTop: 3 } },
             "模型：" + modelText
-            + (mode ? ` ｜ 模式：${mode === "continuable" ? "可续轮" : "一次性"}` : "")),
+            + (props.subagentMode ? ` ｜ 执行模式：${props.subagentMode}` : "")
+            + (mode ? ` ｜ 会话模式：${mode === "continuable" ? "可续轮" : "一次性"}` : "")),
           h(PromptBox, { key: "p", parentId: props.parentId, childId: props.childId }),
           // g-109 判据反馈：实时会话控件内「重新执行」——子代理出错/无法运行时换 provider/model 重拉
           props.goalId

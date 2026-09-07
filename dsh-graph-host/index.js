@@ -11,15 +11,17 @@
  * - 运行时零 @deepseek-ai/* import（类型只用 import type）；
  * - 副作用收进 ctx.effect。
  */
-import { writeFileSync } from "node:fs";
-import { readFileSync } from "node:fs";
+import { writeFileSync, readFileSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { relative, join, resolve, dirname, isAbsolute } from "node:path";
+import { relative, join, resolve, dirname, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createGoal,
+  normalizeGoalType,
   setCriteria,
   updateCriteria,
+  setGoalTags,
   transition,
   validate,
   rebuild,
@@ -39,6 +41,14 @@ import {
   amendGoal,
   renameGoal,
   setGoalType,
+  addMemory,
+  replaceMemory,
+  removeMemory,
+  readMemory,
+  recallMemory,
+  isMemoryToolsEnabled,
+  setMemoryToolsEnabled,
+  formatStandingMemorySection,
   requestAcceptReview,
   resolveAccept,
   archiveGoal,
@@ -57,6 +67,26 @@ import {
   harvestedCards,
   formatHarvestedCardsSection,
   formatCollectPrompt,
+  createSharedCard,
+  addSharedCardRef,
+  deleteSharedCard,
+  removeSharedCardRef,
+  convertOwnedToShared,
+  convertSharedToOwned,
+  sharedCards,
+  referenceCount,
+  referencingGoals,
+  storeAttachment,
+  listAttachments,
+  deleteAttachment,
+  parseAttachmentRefs,
+  attachmentInfo,
+  readAttachment,
+  attachmentContentType,
+  MAX_ATTACHMENT_BYTES,
+  attachmentsDir,
+  sanitizeAttachmentPath,
+  formatAttachmentRef,
   recordAttemptHandoff,
   harvestReviewedAttemptHandoffs,
   formatReviewedAttemptHandoffsSection,
@@ -78,6 +108,16 @@ import {
   readPromptOverrideValue,
   readProjectConfig,
   writeProjectConfig,
+  listWorktrees,
+  cleanWorktree,
+  SUBAGENT_MODES,
+  SUBAGENT_MODE_SPECS,
+  DEFAULT_SUBAGENT_MODE,
+  normalizeSubagentMode,
+  SUBAGENT_MODE_PROMPTS,
+  resolveSubagentMode,
+  toolFilterForMode,
+  buildSubagentDefaultPersona,
   validateSchema,
   schemaErrorResponse,
   settingsPostSchema,
@@ -102,6 +142,57 @@ export { resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 // g-111 B7：boardPayload 已移入 core（消除 client→host 跨包依赖），此处 re-export 保持兼容。
 // board 载荷含 supervisorSession 字段（project.yaml 的 supervisor.session，g-108），由 host 端点 /api/dsh-graph 下发。
 export { boardPayload } from "./core/ops.js";
+
+// g-183 返工 v4：流式上限（防无 header/伪造 Content-Length/chunked 的超大请求先进内存被拒）。
+// JSON/base64 envelope 上限需容纳 50MB 二进制 base64 编码开销（~4/3）+ JSON 键，但拒绝更大。
+export const MAX_ATTACHMENT_JSON_BYTES = Math.ceil(MAX_ATTACHMENT_BYTES * 5 / 3) + 1024 * 1024;
+// 普通 JSON REST（add-card/start-collection/unreference/转换/delete 等）统一 body 上限（1MB 足够管理类 payload）。
+export const MAX_JSON_BODY_BYTES = 1024 * 1024;
+
+/** 超限时停止累积（pause/unpipe），但**不销毁 socket**——让 handler 能写出可读的 4xx 响应。
+ *  真实 HTTP 下若不 pause 而 destroy，客户端会收到 ECONNRESET 而读不到响应（v6 复现）。 */
+function stopOversized(req) {
+  try { req.pause?.(); } catch { /* 忽略 */ }
+  try { req.unpipe?.(); } catch { /* 忽略 */ }
+}
+
+/** 流式读取原始二进制 body，累计超过 maxBytes 立即停止累积并 reject（handler 回 4xx；不留半状态）。 */
+export function readRawBodyCapped(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (c) => {
+      const b = Buffer.isBuffer(c) ? c : Buffer.from(c);
+      total += b.length;
+      if (total > maxBytes) { stopOversized(req); reject(new GraphError(`请求体超过 ${maxBytes} 字节上限`)); return; }
+      chunks.push(b);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+/** 流式读取 JSON body，累计超过 maxBytes 立即停止累积并 reject（handler 回 4xx）。
+ *  按 Buffer 累积、最后一次性 toString 解码，避免跨 chunk 的 UTF-8 多字节字符被逐 chunk 解码损坏。 */
+export function readBodyCapped(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (c) => {
+      const b = Buffer.isBuffer(c) ? c : Buffer.from(String(c), "utf8");
+      total += b.length;
+      if (total > maxBytes) { stopOversized(req); reject(new GraphError(`请求体超过 ${maxBytes} 字节上限`)); return; }
+      chunks.push(b);
+    });
+    req.on("end", () => {
+      try {
+        const text = chunks.length ? Buffer.concat(chunks).toString("utf8") : "";
+        resolve(text ? JSON.parse(text) : {});
+      } catch (e) { reject(new GraphError("请求 body JSON 格式无效")); }
+    });
+    req.on("error", reject);
+  });
+}
 
 export const name = "dsh-graph-host";
 // 只硬依赖 tools：webServer 由 web-app 行提供且可能在 apply 之后才激活，经 ctx.get 轮询注册
@@ -144,6 +235,8 @@ const GRAPH_SETTINGS_NS = "dsh-graph"; // 合法 namespace（[a-z][a-z0-9-]*）
 const GRAPH_SETTINGS_DEFAULTS = Object.freeze({
   subagentProvider: "",
   subagentModel: "",
+  subagentMode: "",
+  subagentReasoningEffort: "",
   subagentPrompt: "",
 });
 // schema 需 schemastery（@deepseek-ai/*），经守卫式动态 import 构建（见 buildGraphSettingsSchema）。
@@ -151,6 +244,8 @@ function buildGraphSettingsSchema(z) {
   return z.object({
     subagentProvider: z.string().default(""),
     subagentModel: z.string().default(""),
+    subagentMode: z.union(["", "standard", "minimal"]).default(""),
+    subagentReasoningEffort: z.string().default(""),
     subagentPrompt: z.string().default(""),
   });
 }
@@ -158,6 +253,17 @@ function buildGraphSettingsSchema(z) {
 function params(properties, required) {
   // g-190（review P0）：工具参数严格白名单——拒绝未知/多余字段
   return { type: "object", properties, required, additionalProperties: false };
+}
+
+function losslessJson(obj) {
+  if (obj === null || typeof obj !== "object") return obj;
+  const out = Array.isArray(obj) ? [] : {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) {
+      out[k] = typeof v === "object" && v !== null ? losslessJson(v) : v;
+    }
+  }
+  return out;
 }
 
 const GUIDE = readFileSync(new URL("./supervisor-guide.md", import.meta.url), "utf8");
@@ -193,11 +299,12 @@ const GUIDE_HINT = [
 // token 成本约 80 字，简短精炼。
 const SUPERVISOR_DISCIPLINE = [
   "⚠️ **主管纪律提醒**（每 turn 自动注入）：",
-  "1. **只做规划、派发、把关、复核**——绝不自己实现、写代码、长调研；",
-  "2. 自己动手仅限：一句话决策、一行小修、graph_start_attempt 派发执行；",
+  "1. **只做规划、派发、把关、复核**——绝不自己实现常规功能大任务、一律派发子代理；",
+  "2. **轻量改动自主特权**：一句话决策与低风险微小改动（patch / chore 类目标、一两行修改），主管可直接在当前会话使用 edit/write 执行，无需繁琐派发子代理；",
   "3. **每动作后 graph_report_supervisor_status**——看板实时显示状态；",
-  "4. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；",
-  "5. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。",
+  "4. **记忆管理纪律**：自发总结默认记 on_demand；仅人类钦定或隔离禁令才记 standing（≤200字）；remove 仅限明确撤回/证实过时；",
+  "5. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；",
+  "6. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。",
 ].join("\n");
 
 
@@ -232,6 +339,17 @@ const WORKTREE_GUIDE = `【强制 worktree 隔离】本次任务默认必须在�
 【唯一例外】仅当 supervisor 在本次派发的 attempt brief 中明确写出 \`worktree=false\` 与理由时，才允许真正的一两行、唯一文件小修直接 main；文档/长期记忆等小修改由 supervisor 自己处理，子代理不得擅自套用例外。
 【worktree 命名规范】新建 attempt 工作树必须命名为 .worktrees/g-<goal-number>-att-<NN>，分支使用相同后缀（例如 g-125-att-03、g-163-att-03）；不要使用省略 goal id 或未补零的歧义名称。
 数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
+
+const MINOR_TASK_GUIDE = `【微小改动/轻量任务快速通道】当前目标属于 patch / chore 类型（低风险微改/轻量任务）：
+- 豁免独立 worktree 隔离：允许直接在当前工作区与版本集成分支执行代码或文档修改，无需创建 .worktrees/ 隔离分支；
+- 改动边界：严格限定于声明的微小改动范围，禁止产生无关副作用、禁止私自扩大破坏面；
+- 验证与自报：改动后针对性跑通单测与校验，使用 graph_report_status 汇报并在完成后迁至 review 等待复核。`;
+
+function resolveWorktreeGuide(goalType, explicitWorktree) {
+  if (explicitWorktree === false) return "";
+  if (goalType === "patch" || goalType === "chore") return MINOR_TASK_GUIDE;
+  return WORKTREE_GUIDE;
+}
 
 
 const ATTEMPT_PROMPT_MISSING = "（未提供）";
@@ -397,6 +515,7 @@ export function formatAttemptPrompt({
   cardsSection,
   targetContext,
   subagentPromptSection,
+  modeStrategySection,
   worktreeBlock,
 } = {}) {
   const brief = promptText(attemptBrief);
@@ -449,7 +568,7 @@ export function formatAttemptPrompt({
   if (handoffBlock) history.push(handoffBlock);
   history.push(historicalPromptBlock("## 历史卡片", cards));
   const discipline = formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection });
-  return [positioning, current.join("\n"), override, ...history, discipline, ATTEMPT_PROMPT_WARNING]
+  return [positioning, current.join("\n"), modeStrategySection, override, ...history, discipline, ATTEMPT_PROMPT_WARNING]
     .filter((section) => section && section.trim())
     .join("\n\n");
 }
@@ -504,9 +623,13 @@ export function apply(ctx, config) {
     try {
       const v = graphSettingsScope?.get?.() ?? null;
       if (!v) return { ...GRAPH_SETTINGS_DEFAULTS };
+      const rawMode = v.subagentMode ?? "";
+      const safeMode = normalizeSubagentMode(rawMode) ?? "";
       return {
         subagentProvider: v.subagentProvider ?? "",
         subagentModel: v.subagentModel ?? "",
+        subagentReasoningEffort: v.subagentReasoningEffort ?? "",
+        subagentMode: safeMode,
         subagentPrompt: v.subagentPrompt ?? "",
       };
     } catch {
@@ -556,6 +679,11 @@ export function apply(ctx, config) {
     return canonical;
   };
   const actorOf = (exec) => `agent:${exec?.agent?.id ?? "dsh"}`;
+  const memoryActorOf = (exec) => {
+    const session = exec?.agent?.session?.id;
+    if (!session) throw new GraphError("memory 工具需要可信 ex.agent.session 上下文");
+    return `agent:${session}`;
+  };
   // g-190：解绑的权威身份映射——当前会话若是已配置的 supervisor，映射为 supervisor:<sid>
   // （core authorizeUnbind 以 supervisor.session 匹配放行主管；普通会话保持 agent:<sid> 由 core 校验 owner）。
   const unbindActorOf = (ex, root) => {
@@ -584,7 +712,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_create_goal",
-        description: "创建目标（默认进 backlog；带 version 则排期入版本）。可选 type 指定类型（feature/bug/task/improvement，默认 task）。返回目标 id。",
+        description: "创建目标（默认进 backlog；带 version 则排期入版本）。可选 type 指定类型（feature/bug/task/improvement/patch/chore，默认 task；patch/chore 为微小改动快速通道）。返回目标 id。",
         parameters: params({ title: str, version: str, type: str }, ["title"]),
       },
       run: (a, ex) => ({ goal: createGoal(rootFor(ex), { title: a.title, version: a.version, type: a.type, actor: actorOf(ex) }) }),
@@ -608,18 +736,38 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_add_card",
-        description: "为目标创建上下文卡片（empty 占位）。返回卡片 id。",
+        description: "为目标创建上下文卡片（empty 占位）。返回卡片 id。默认创建共享卡（scope=shared，落共享池并挂到该 goal）；goal 自有卡必须显式传 scope=\"goal\"。卡片统一为正文 + 可选附件引用（@att/<name>），kind 仅为兼容读取字段、可不传、不限定类型。",
         parameters: params(
-          { goal: str, title: str, kind: { type: "string", enum: ["text", "file", "image", "data"] } },
-          ["goal", "title", "kind"],
+          { goal: str, title: str, kind: str, scope: { type: "string", enum: ["goal", "shared"] } },
+          ["goal", "title"],
         ),
       },
-      run: (a, ex) => ({ card: addCard(rootFor(ex), a.goal, { title: a.title, kind: a.kind, actor: actorOf(ex) }) }),
+      run: (a, ex) => ({ card: addCard(rootFor(ex), a.goal, { title: a.title, kind: a.kind, scope: a.scope, actor: actorOf(ex) }) }),
+    },
+    {
+      def: {
+        name: "graph_store_attachment",
+        description: "存储一个上下文附件到项目根 .dsh-graph/attachments/（可含安全子目录），返回稳定引用名（用 @att/<相对引用名> 在卡片正文/goal.md 引用）。文本用 content；二进制/图片/Excel 用 base64。name 拒绝绝对路径、./.. 穿越、反斜杠、NUL；目标已存在且内容不同会生成唯一名（不覆盖）；异常不留半文件。",
+        parameters: params({ name: str, content: str, base64: str }, ["name"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        const name = storeAttachment(r, { name: a.name, content: a.content, base64: a.base64, actor: actorOf(ex) });
+        return { name, ref: formatAttachmentRef(name), digest: attachmentInfo(r, name).digest ?? null };
+      },
+    },
+    {
+      def: {
+        name: "graph_delete_attachment",
+        description: "显式删除附件；仍被任何卡片/目标正文引用的附件禁止删除（解除/删除卡片不误删仍被引用的附件）。",
+        parameters: params({ name: str }, ["name"]),
+      },
+      run: (a, ex) => { deleteAttachment(rootFor(ex), a.name, { actor: actorOf(ex) }); return { ok: true }; },
     },
     {
       def: {
         name: "graph_fill_card",
-        description: "填充上下文卡片内容（text 或 content_ref），状态变为 filled。summary 是看板子卡片上显示的一句话摘要，必须简短：一句话要点式、≤100 字左右（看板默认折叠显示 2 行，长摘要会被截断）——细节写进 text 全文，不要把长文塞进 summary。",
+        description: "填充上下文卡片（正文 + 可选附件引用）。text 写卡片正文全文；正文与 goal.md 里用 @att/<相对引用名> 引用附件。summary 是一句话要点式摘要（≤100 字左右），细节写进 text。content_ref 仅为兼容读取字段。",
         parameters: params({ goal: str, card: str, text: str, content_ref: str, summary: str }, ["goal", "card"]),
       },
       run: (a, ex) => { fillCard(rootFor(ex), a.goal, a.card, { text: a.text, contentRef: a.content_ref, summary: a.summary, by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
@@ -785,8 +933,24 @@ export function apply(ctx, config) {
     },
     {
       def: {
+        name: "graph_set_goal_tags",
+        description: "设置目标标签列表（最多20个，每个不超过32字，禁止控制字符）。支持基于 base_tags 的乐观并发，force=true 时强制覆盖。写入前事件先行。",
+        parameters: params({ goal: str, tags: strArr, base_tags: strArr, force: { type: "boolean" } }, ["goal", "tags"]),
+      },
+      run: (a, ex) => {
+        const result = setGoalTags(rootFor(ex), a.goal, {
+          tags: a.tags,
+          base_tags: a.base_tags,
+          force: a.force,
+          actor: actorOf(ex),
+        });
+        return { ok: true, ...result };
+      },
+    },
+    {
+      def: {
         name: "graph_set_goal_type",
-        description: "设置目标类型（feature/bug/task/improvement），只更新 meta.type 并记 goal.type_changed 事件（old_type/new_type/actor）；不改 status/version/执行。非法类型安全回退 task；相同类型为 no-op。",
+        description: "设置目标类型（feature/bug/task/improvement/patch/chore；patch/chore 为微小改动快速通道），只更新 meta.type 并记 goal.type_changed 事件（old_type/new_type/actor）；不改 status/version/执行。非法类型安全回退 task；相同类型为 no-op。",
         parameters: params({ goal: str, type: str }, ["goal", "type"]),
       },
       run: (a, ex) => {
@@ -830,11 +994,11 @@ export function apply(ctx, config) {
       def: {
         name: "graph_handoff",
         description: "生成/更新 .dsh-graph/HANDOFF.md 换会话交接文档（g-117）：board 投影 + 长期记忆 + 关键环境事实段自动拼接。产物不依赖会话上下文；返回交接全文。旧会话交接时调用。写盘前若旧 HANDOFF.md 存在且内容不同，先归档到 <root>/handoffs/HANDOFF-<时间戳>.md（g-121，归档目录不入 git）。",
-        parameters: params({}, []),
+        parameters: params({ query: str, memory_limit: { type: "number" } }, []),
       },
       run: (a, ex) => {
         const r = rootFor(ex);
-        const content = generateHandoff(r, { write: true });
+        const content = generateHandoff(r, { write: true, query: a.query, memoryLimit: a.memory_limit, actor: actorOf(ex) });
         return { ok: true, path: join(r, "HANDOFF.md"), handoff: content };
       },
     },
@@ -850,11 +1014,105 @@ export function apply(ctx, config) {
         return { supervisor_session: res.supervisor_session, handoff: res.handoff };
       },
     },
+    // ===== g-105：记忆管理工具（add / replace / remove / recall） =====
+    {
+      def: {
+        name: "graph_memory_add",
+        description: "新增持久事实/记忆。\n【scope 决策铁律】：\n1. 默认法则：一切自发总结、技术经验、方案决策 100% 默认 scope=\"on_demand\"（按需记忆，不占常驻 Prompt）；\n2. 常驻特权法则：仅在「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」时，才允许设 scope=\"standing\"（硬上限 200 字符，超过拒绝；普通记忆上限 500 字符）。事件先行。",
+        parameters: params({
+          kind: { type: "string", enum: ["project", "user"] },
+          scope: { type: "string", enum: ["standing", "on_demand"] },
+          text: str,
+          importance: { type: "number" },
+          source_goal: str,
+        }, ["kind", "text"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        if (!isMemoryToolsEnabled(r)) throw new GraphError("记忆工具已被用户禁用，当前为纯手工管理模式，无法通过工具修改记忆");
+        const res = addMemory(r, {
+          scope: a.scope,
+          kind: a.kind,
+          text: a.text,
+          importance: a.importance !== undefined ? Number(a.importance) : undefined,
+          source_goal: a.source_goal,
+          actor: memoryActorOf(ex),
+        });
+        return losslessJson({ ok: true, id: res.id, entry: res.entry });
+      },
+    },
+    {
+      def: {
+        name: "graph_memory_replace",
+        description: "修正或合并已有记忆条目（用短唯一 old 片段定位已有记忆，text 为新内容）。",
+        parameters: params({
+          old: str,
+          text: str,
+          kind: { type: "string", enum: ["project", "user"] },
+          importance: { type: "number" },
+          source_goal: str,
+        }, ["old", "text"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        if (!isMemoryToolsEnabled(r)) throw new GraphError("记忆工具已被用户禁用，当前为纯手工管理模式，无法通过工具修改记忆");
+        const res = replaceMemory(r, {
+          old: a.old,
+          text: a.text,
+          kind: a.kind,
+          importance: a.importance !== undefined ? Number(a.importance) : undefined,
+          source_goal: a.source_goal,
+          actor: memoryActorOf(ex),
+        });
+        return losslessJson({ ok: true, id: res.id, entry: res.entry });
+      },
+    },
+    {
+      def: {
+        name: "graph_memory_remove",
+        description: "删除记忆条目（仅负责人明确撤回或证实过时后才可删除；用短唯一 old 片段定位）。",
+        parameters: params({
+          old: str,
+          reason: str,
+        }, ["old"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        if (!isMemoryToolsEnabled(r)) throw new GraphError("记忆工具已被用户禁用，当前为纯手工管理模式，无法通过工具修改记忆");
+        const res = removeMemory(r, {
+          old: a.old,
+          reason: a.reason,
+          actor: memoryActorOf(ex),
+        });
+        return losslessJson({ ok: true, id: res.id, removed: res.removed });
+      },
+    },
+    {
+      def: {
+        name: "graph_memory_recall",
+        description: "按关键词/类型检索返回匹配的持久记忆条目（供 supervisor 及子代理引用）。",
+        parameters: params({
+          query: str,
+          kind: { type: "string", enum: ["project", "user"] },
+          limit: { type: "number" },
+        }, []),
+      },
+      run: (a, ex) => {
+        const res = recallMemory(rootFor(ex), {
+          query: a.query,
+          kind: a.kind,
+          limit: a.limit !== undefined ? Number(a.limit) : undefined,
+          actor: memoryActorOf(ex),
+        });
+        return losslessJson({ ok: true, total: res.total, matches: res.matches });
+      },
+    },
+
     {
       def: {
         name: "graph_start_attempt",
         description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。默认强制注入独立 worktree 隔离提示；仅 supervisor 明确传 worktree=false 并说明理由时才关闭。attempt_brief 是当前 action 原文；task_type 必须传 merge（合入）、rewrite（重写）或 fix（修复）之一，baseline_commit/source_attempt 是 supervisor 直接提供的当前事实，acceptance_items 是当前验收项 string[]；这些字段不从 brief/handoff 截取。task_type/baseline_commit/source_attempt 的空值传 null 或省略表示未提供；acceptance_items=[] 表示明确无单独验收项，null 或省略表示未提供；空字符串非法。",
-        parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
+        parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, reasoning_effort: str, mode: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
       },
       run: async (a, ex) => {
         // 校验 attempt_brief 类型（g-150 review 问题 4）
@@ -868,6 +1126,11 @@ export function apply(ctx, config) {
           acceptanceItems: a.acceptance_items,
         });
         if (structuredFieldError) throw new GraphError(structuredFieldError);
+        if (a.mode !== undefined && a.mode !== null && a.mode !== "") {
+          if (typeof a.mode !== "string" || !normalizeSubagentMode(a.mode)) {
+            throw new GraphError(`mode 只允许 ${SUBAGENT_MODES.join("/")}`);
+          }
+        }
         const executor = a.executor ?? actorOf(ex);
         const r = rootFor(ex);
         // g-202：传 card 时统一走上下文收集派发，不创建 Goal execution attempt。
@@ -875,12 +1138,13 @@ export function apply(ctx, config) {
         if (a.card !== undefined && a.card !== null) {
           const fullPrompt = formatCollectPrompt(r, a.goal, a.card, a.attempt_brief);
           const eff = resolveModelRoute(
-            { provider: a.provider, model: a.model },
+            { provider: a.provider, model: a.model, reasoning_effort: a.reasoning_effort },
             readExecutorModel(r),
             readGraphSettings(),
           );
           const effProvider = eff.provider;
           const effModel = eff.model;
+           const effReasoningEffort = eff.reasoning_effort;
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
           const result = { card: a.card, child_id: null, child_error: null };
           const subagents = ctx.get?.("subagents");
@@ -897,6 +1161,7 @@ export function apply(ctx, config) {
             const agentOptions = {};
             if (effProvider) agentOptions.provider = effProvider;
             if (effModel) agentOptions.model = effModel;
+             if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
             if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
             const started = await subagents.startContinuable({
               provider,
@@ -932,14 +1197,18 @@ export function apply(ctx, config) {
         // 此时用 r 的父目录作为相对路径基准
         const ws = sessionWorkspace(ex) ?? dirname(r);
         const goalRel = goalFile ? relative(ws, goalFile) : null;
+        const projectExec = readExecutorModel(r);
+        const globalSettings = readGraphSettings();
         const eff = resolveModelRoute(
-          { provider: a.provider, model: a.model },
-          readExecutorModel(r),
-          readGraphSettings(),
+          { provider: a.provider, model: a.model, reasoning_effort: a.reasoning_effort },
+          projectExec,
+          globalSettings,
         );
         const effProvider = eff.provider;
         const effModel = eff.model;
+           const effReasoningEffort = eff.reasoning_effort;
         const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
+        const effModeRes = resolveSubagentMode(a.mode, projectExec.mode, globalSettings.subagentMode);
         const attempt = startAttempt(r, a.goal, {
           executor,
           actor: actorOf(ex),
@@ -950,9 +1219,12 @@ export function apply(ctx, config) {
           provider: effProvider,
           model: effModel,
           modelRoute: effRoute,
+          reasoningEffort: effReasoningEffort,
+          mode: effModeRes.mode,
+          modeSource: effModeRes.source,
         });
         // 注意：返回值必须是无损 JSON——绝不写入值为 undefined 的字段（registry 会拒绝）
-        const result = { attempt, child_id: null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs };
+        const result = { attempt, child_id: null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs, mode: effModeRes.mode, mode_source: effModeRes.source };
         if (a.attempt_brief) result.brief = a.attempt_brief;
         if (effRoute) result.model_route = effRoute;
         const subagents = ctx.get?.("subagents");
@@ -970,12 +1242,16 @@ export function apply(ctx, config) {
             const rel = goalRel;
             // g-120：已收集卡片成果段（子代理直接使用，无需猜卡片路径）+ worktree 隔离指令（可开关）
             const cardsSection = formatHarvestedCardsSection(r, a.goal);
-            const worktreeBlock = a.worktree === false ? null : WORKTREE_GUIDE;
+            let gType = "task";
+            try { gType = normalizeGoalType(loadGoal(findGoalFile(r, a.goal)).meta.type); } catch {}
+            const worktreeBlock = resolveWorktreeGuide(gType, a.worktree);
             // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
             const subagentPromptSection = (() => {
-              const p = effectivePrompt(readGraphSettings().subagentPrompt, readPromptOverride(r, "subagent_prompt"));
+              const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(r, "subagent_prompt"));
               return p ? ["## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join(String.fromCharCode(10)) : null;
             })();
+            // g-191：子代理执行策略/模式说明段
+            const modeStrategySection = effModeRes.prompt ? ["## 子代理执行模式（" + effModeRes.mode + "）", "", effModeRes.prompt].join(String.fromCharCode(10)) : null;
             // g-228：所有 supervisor 执行 prompt 统一由单一模板入口组装。
             const prompt = formatAttemptPrompt({
               goal: a.goal,
@@ -990,12 +1266,19 @@ export function apply(ctx, config) {
               handoffSection: handoffsSection,
               cardsSection,
               subagentPromptSection,
+              modeStrategySection,
               worktreeBlock,
             });
-            const request = { parent: ex.agent, prompt: text(prompt) };
+            const modeToolFilter = toolFilterForMode(effModeRes.mode);
+            const request = {
+              parent: ex.agent,
+              prompt: text(prompt),
+              ...(modeToolFilter ? { toolFilter: modeToolFilter } : {}),
+            };
             const agentOptions = {};
             if (effProvider) agentOptions.provider = effProvider;
             if (effModel) agentOptions.model = effModel;
+             if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
             if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
             const started = await subagents.startContinuable({
               provider,
@@ -1013,6 +1296,8 @@ export function apply(ctx, config) {
               effProvider,
               effModel,
               effRoute,
+              effModeRes.mode,
+              effModeRes.source,
             );
             // 负责人 2026-08-22：开始执行的目标必须落到执行 lane——派发成功后自动迁 in_progress
             //（若已 in_progress 或门槛未满足则静默，子代理自行汇报）
@@ -1050,6 +1335,22 @@ export function apply(ctx, config) {
         });
         return { ok: true };
       },
+    },
+    {
+      def: {
+        name: "graph_list_worktrees",
+        description: "查询 Git worktree 清理候选（只读，不自动删除）。",
+        parameters: params({ goal: str }, []),
+      },
+      run: (a, ex) => ({ worktrees: listWorktrees(rootFor(ex), a.goal) }),
+    },
+    {
+      def: {
+        name: "graph_clean_worktree",
+        description: "用户明确选择后清理已实时验证的 worktree；默认不删除分支。",
+        parameters: params({ id: str, confirm: { type: "boolean" } }, ["id", "confirm"]),
+      },
+      run: (a, ex) => cleanWorktree(rootFor(ex), a.id, actorOf(ex), a.confirm === true),
     },
     {
       def: {
@@ -1165,19 +1466,8 @@ export function apply(ctx, config) {
     res.writeHead(code, { "content-type": "application/json; charset=utf-8", ...headers });
     res.end(JSON.stringify(data));
   };
-  const readBody = (req) =>
-    new Promise((resolve, reject) => {
-      let buf = "";
-      req.on("data", (c) => (buf += c));
-      req.on("end", () => {
-        try {
-          resolve(buf ? JSON.parse(buf) : {});
-        } catch {
-          reject(new GraphError("请求 body JSON 格式无效"));
-        }
-      });
-      req.on("error", reject);
-    });
+  // 所有普通 JSON REST 统一走 capped reader（防超大 JSON OOM；附件 endpoint 用更大的 MAX_ATTACHMENT_JSON_BYTES）
+  const readBody = (req) => readBodyCapped(req, MAX_JSON_BODY_BYTES);
   // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
   // （parent.options / childSessionMeta / captureDelegatedPolicyOverrides），传 null 必然失败。
   // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。
@@ -1228,18 +1518,25 @@ export function apply(ctx, config) {
       if (!provider) {
         return { childId: null, parentSessionId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）` };
       }
-      const request = { parent, prompt: [{ type: "text", text: promptText }] };
+      const modeToolFilter = overrides.mode ? toolFilterForMode(overrides.mode) : undefined;
+      const request = {
+        parent,
+        prompt: [{ type: "text", text: promptText }],
+        ...(modeToolFilter ? { toolFilter: modeToolFilter } : {}),
+      };
       // g-133：模型路由合成（overrides > project.yaml > profile 全局默认 > 继承），核心逻辑在 core/ops.ts
       const eff = resolveModelRoute(
-        { provider: overrides.provider, model: overrides.model },
+        { provider: overrides.provider, model: overrides.model, reasoning_effort: overrides.reasoning_effort },
         readExecutorModel(rootForReq),
         readGraphSettings(),
       );
       const agentOptions = {};
       const effProvider = eff.provider;
       const effModel = eff.model;
+           const effReasoningEffort = eff.reasoning_effort;
       if (effProvider) agentOptions.provider = effProvider;
       if (effModel) agentOptions.model = effModel;
+             if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
       if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
       const started = await subagents.startContinuable({ provider, label, request, signal: ac.signal });
       return { childId: started.childId, parentSessionId: supervisorId, error: null, model_route: `${effProvider ?? "继承"}/${effModel ?? "继承"}` };
@@ -1261,22 +1558,151 @@ export function apply(ctx, config) {
           const pname = typeof p === "string" ? p : (p?.name ?? pid);
           let models = [];
           try { models = (await llm.listModels?.(pid)) ?? []; } catch { models = []; }
-          return { id: pid, name: pname, models: models.map((m) => ({ id: typeof m === "string" ? m : m.id, name: typeof m === "string" ? m : (m.name ?? m.id) })) };
+          // g-231：对每个模型调用 resolveModelInfo 获取 reasoning 元数据（efforts/defaultEffort），
+          // 与 dsh-api-session-controller buildModelCatalog 同源；单个 resolve 失败不拖垮整组。
+          const entries = await Promise.all(models.map(async (m) => {
+            const mid = typeof m === "string" ? m : m.id;
+            const mname = typeof m === "string" ? m : (m.name ?? mid);
+            const base = { id: mid, name: mname };
+            try {
+              if (typeof llm.resolveModelInfo === "function") {
+                const resolved = await llm.resolveModelInfo(pid, mid);
+                if (resolved?.reasoning && Array.isArray(resolved.reasoning.efforts)) {
+                  base.reasoning = {
+                    efforts: resolved.reasoning.efforts.map((e) => ({
+                      id: e.id,
+                      name: e.name,
+                      ...(e.description === undefined ? {} : { description: e.description }),
+                    })),
+                    ...(resolved.reasoning.defaultEffort === undefined ? {} : { defaultEffort: resolved.reasoning.defaultEffort }),
+                  };
+                }
+              }
+            } catch { /* 单模型 resolve 失败，保留 id/name 不含 reasoning */ }
+            return base;
+          }));
+          return { id: pid, name: pname, models: entries };
         }));
         if (!modelGroups.length) modelGroups = null;
       }
     } catch { modelGroups = null; }
     const def = readExecutorModel(rootForReq);
+    const globalSettings = readGraphSettings();
     // g-133：默认路由展示 = project.yaml executor/project（优先）+ profile 全局默认（缺省）
-    const eff = resolveModelRoute(null, def, readGraphSettings());
+    const eff = resolveModelRoute(null, def, globalSettings);
+    const effModeRes = resolveSubagentMode(null, def.mode, globalSettings.subagentMode);
     return {
       modelGroups,
-      default: { provider: eff.provider, model: eff.model },
+      modes: SUBAGENT_MODES.map((id) => SUBAGENT_MODE_SPECS[id]),
+      default: { provider: eff.provider, model: eff.model, mode: effModeRes.mode, mode_source: effModeRes.source },
     };
+  };
+
+  // g-189：只读发现当前 canonical workspace 下约定的 attempt worktree。
+  // 结果附加到 goal detail，不写入任何 graph 数据；失败时返回明确降级状态。
+  const worktreeCache = new Map();
+  const WORKTREE_CACHE_TTL = 20_000;
+  const WORKTREE_CACHE_CAP = 64;
+  const discoverAttemptWorktrees = (workspace, goalId, attempts, graphRoot = null) => {
+    let canonicalKey;
+    try { canonicalKey = realpathSync(resolve(workspace)); } catch { canonicalKey = resolve(workspace); }
+    const cacheKey = `${canonicalKey}::${goalId}`;
+    const now = Date.now();
+    // Expired entries are removed on every lookup; Map insertion order supplies LRU.
+    for (const [key, entry] of worktreeCache) {
+      if (now - entry.ts >= WORKTREE_CACHE_TTL) worktreeCache.delete(key);
+    }
+    const cached = worktreeCache.get(cacheKey);
+    if (cached) {
+      worktreeCache.delete(cacheKey);
+      worktreeCache.set(cacheKey, cached);
+      return cached.value;
+    }
+    const result = { status: "ok", items: {} };
+    try {
+      const text = execFileSync("git", ["worktree", "list", "--porcelain"], {
+        cwd: workspace, encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"],
+      });
+      const entries = text.split(/\n\s*\n/).map((block) => {
+        const pathLine = block.split("\n").find((line) => line.startsWith("worktree "));
+        if (!pathLine) return null;
+        const branchLine = block.split("\n").find((line) => line.startsWith("branch "));
+        const headLine = block.split("\n").find((line) => line.startsWith("HEAD "));
+        return { path: resolve(pathLine.slice(9).trim()), branch: branchLine?.slice(7).trim() ?? null, head: headLine?.slice(5).trim() ?? null, locked: /(^|\n)locked(?: |$)/.test(block), prunable: /(^|\n)prunable(?: |$)/.test(block) };
+      }).filter(Boolean);
+      const canonical = realpathSync(resolve(workspace));
+      const prefix = `${goalId}-att-`;
+      const usedPaths = new Set();
+      const seenAttemptIds = new Set();
+      for (const attempt of attempts ?? []) {
+        const id = String(attempt?.id ?? "");
+        if (!id || seenAttemptIds.has(id)) continue;
+        seenAttemptIds.add(id);
+        const match = id.match(/^att-(\d+)$/);
+        if (!match) continue;
+        const numeric = Number(match[1]);
+        if (!Number.isSafeInteger(numeric)) continue;
+        const raw = match[1];
+        const names = [...new Set([
+          `${prefix}${String(numeric).padStart(2, "0")}`,
+          `${prefix}${String(numeric).padStart(3, "0")}`,
+          `${prefix}${raw}`,
+        ])];
+        const evidence = attempt.worktree && typeof attempt.worktree === "object" ? attempt.worktree : null;
+        if (evidence?.relative_path) {
+          const evidenceName = basename(String(evidence.relative_path));
+          if (evidenceName) names.push(evidenceName);
+        }
+        const matchEntry = names.map((name) => ({ name, branch: `refs/heads/${name}` }))
+          .map(({ name, branch }) => ({ name, entry: entries.find((x) => basename(x.path) === name && x.branch === branch && !usedPaths.has(x.path)) }))
+          .find(({ entry }) => entry);
+        if (!matchEntry) continue;
+        const expected = matchEntry.name;
+        const expectedBranch = `refs/heads/${expected}`;
+        const entry = matchEntry.entry;
+        if (entry.prunable || !entry.head) continue;
+        // Evidence is optional for historical attempts, but any recorded fields must agree.
+        if (evidence?.branch) {
+          const evidenceBranch = basename(String(evidence.branch).replace(/^refs\/heads\//, ""));
+          if (!names.includes(evidenceBranch)) continue;
+        }
+        if (evidence?.head && evidence.head !== entry.head) continue;
+        // Cross-check both Git's live record and the attempt evidence. A same-named
+        // nested/foreign path is never accepted: the relative form must be exact.
+        let actual;
+        try { actual = realpathSync(entry.path); } catch { continue; }
+        const rel = relative(canonical, actual).replaceAll("\\", "/");
+        if (rel !== `.worktrees/${expected}` || rel.startsWith("..") || isAbsolute(rel) || rel.includes("\0")) continue;
+        usedPaths.add(entry.path);
+        result.items[id] = { path: rel, status: entry.locked ? "已锁定" : "正常" };
+      }
+    } catch (error) {
+      result.status = "unavailable";
+      result.error = "Git worktree 列表不可用";
+    }
+    worktreeCache.delete(cacheKey);
+    worktreeCache.set(cacheKey, { ts: now, value: result });
+    while (worktreeCache.size > WORKTREE_CACHE_CAP) worktreeCache.delete(worktreeCache.keys().next().value);
+    return result;
   };
 
   // webServer 路由定义（惰性：webServer 服务出现后才注册；headless 组合下静默跳过）
   const httpRoutes = () => [
+    {
+      path: "/api/dsh-graph/supervisor-session",
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const workspace = workspaceOf(req);
+          if (typeof workspace !== "string" || !workspace.trim()) return json(res, 400, { error: "missing workspace" });
+          const canonical = resolveCanonicalRoot(config, resolve(workspace));
+          const session = readSupervisorSession(canonical.root);
+          return json(res, 200, { supervisorSession: session });
+        } catch (e) {
+          return json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
     {
       path: "/api/dsh-graph",
       handler: (_req, res) => {
@@ -1315,7 +1741,11 @@ export function apply(ctx, config) {
         try {
           const id = new URL(req.url ?? "", "http://x").searchParams.get("id");
           if (!id) return json(res, 400, { error: "missing id" });
-          json(res, 200, goalDetail(rootForReq(req), id));
+          const meta = rootForReqMeta(req);
+          const detail = goalDetail(meta.root, id);
+          const discoveryWorkspace = meta.mode === "absolute-config" ? dirname(meta.root) : meta.canonicalWorkspace;
+          detail.worktrees = discoverAttemptWorktrees(discoveryWorkspace, id, detail.attempts, meta.root);
+          json(res, 200, detail);
         } catch (e) {
           json(res, 404, { error: String(e?.message ?? e) });
         }
@@ -1389,6 +1819,28 @@ export function apply(ctx, config) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
         }
+      },
+    },
+    {
+      path: "/api/dsh-graph/worktrees",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const url = new URL(req.url, "http://localhost");
+          json(res, 200, { worktrees: listWorktrees(rootForReq(req), url.searchParams.get("goal") || undefined) });
+        } catch (e) { json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) }); }
+      },
+    },
+    {
+      path: "/api/dsh-graph/worktrees/clean",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          if (!body.id || body.confirm !== true) return json(res, 400, { error: "missing id or confirmation" });
+          const result = cleanWorktree(rootForReq(req, body), String(body.id), "human:gui", true);
+          json(res, result.ok ? 200 : 409, result);
+        } catch (e) { json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) }); }
       },
     },
     // g-77647351：transition 端点（拖放跨列触发状态迁移）
@@ -1490,8 +1942,128 @@ export function apply(ctx, config) {
         }
       },
     },
+    // ===== g-105：记忆管理 REST 端点（供 Web 记忆管理页面手工管理） =====
     {
-      // g-158：设置目标类型（feature/bug/task/improvement），记 goal.type_changed 事件
+      path: "/api/dsh-graph/memory/list",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const r = rootForReq(req);
+          const url = new URL(req.url, "http://localhost");
+          const query = url.searchParams.get("query")?.trim() || "";
+          const scope = url.searchParams.get("scope") || undefined;
+          const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
+          const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("page_size") || "20", 10)));
+
+          let entries = readMemory(r);
+          if (scope) {
+            entries = entries.filter((e) => (e.scope ?? "on_demand") === scope);
+          }
+          if (query) {
+            const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+            entries = entries.filter((e) => {
+              const haystack = `${e.text} ${e.id} ${e.source_goal ?? ""}`.toLowerCase();
+              return tokens.every((tok) => haystack.includes(tok));
+            });
+          }
+          // 倒序排列（最新优先）
+          entries.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+
+          const total = entries.length;
+          const totalPages = Math.ceil(total / pageSize) || 1;
+          const offset = (page - 1) * pageSize;
+          const paginated = entries.slice(offset, offset + pageSize);
+          const toolsEnabled = isMemoryToolsEnabled(r);
+
+          json(res, 200, {
+            ok: true,
+            memory: paginated,
+            total,
+            page,
+            page_size: pageSize,
+            total_pages: totalPages,
+            tools_enabled: toolsEnabled,
+          });
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/memory/add",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const r = rootForReq(req, body);
+          const resEntry = addMemory(r, {
+            kind: body.kind ?? "project",
+            scope: body.scope ?? "on_demand",
+            text: body.text,
+            importance: body.importance !== undefined ? Number(body.importance) : undefined,
+            source_goal: body.source_goal,
+            actor: "human:gui",
+          });
+          json(res, 200, { ok: true, id: resEntry.id, entry: resEntry.entry });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/memory/delete",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const r = rootForReq(req, body);
+          const resRem = removeMemory(r, {
+            old: body.id || body.old,
+            reason: body.reason ?? "用户在管理界面手工删除",
+            actor: "human:gui",
+          });
+          json(res, 200, { ok: true, id: resRem.id });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/memory/toggle-tools",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const r = rootForReq(req, body);
+          const enabled = body.enabled === true;
+          setMemoryToolsEnabled(r, enabled, "human:gui");
+          json(res, 200, { ok: true, tools_enabled: enabled });
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/set-goal-tags",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, tags, base_tags, force } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          if (!Array.isArray(tags)) return json(res, 400, { error: "tags 必须是数组" });
+          const result = setGoalTags(rootForReq(req, body), goal, { tags, base_tags, force, actor: "human:gui" });
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphConflictError ? 409 : (e instanceof GraphError ? 400 : 500);
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      // g-158/g-232：设置目标类型（含 patch/chore 微小改动类型），记 goal.type_changed 事件
       path: "/api/dsh-graph/set-goal-type",
       handler: async (req, res) => {
         try {
@@ -1513,10 +2085,121 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, title, kind } = body;
-          if (!goal || !title || !kind) return json(res, 400, { error: "missing goal/title/kind" });
-          const card = addCard(rootForReq(req, body), goal, { title, kind, actor: "human:gui" });
+          const { goal, title, kind, scope } = body;
+          // g-183 返工 #1：kind 真正可选（goal-actions 不再发送 kind）；仅 goal/title 必填
+          if (!goal || !title || typeof title !== "string") return json(res, 400, { error: "missing goal/title" });
+          if (kind !== undefined && kind !== null && typeof kind !== "string") return json(res, 400, { error: "kind 必须是字符串" });
+          const card = addCard(rootForReq(req, body), goal, { title, kind, scope, actor: "human:gui" });
           json(res, 200, { ok: true, card });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-183: 共享卡管理端点（面板 CRUD / 引用 / 转换）
+    {
+      path: "/api/dsh-graph/shared-cards",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          json(res, 200, { cards: sharedCards(rootForReq(req)) });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/create-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { title, kind } = body;
+          if (!title) return json(res, 400, { error: "missing title" });
+          const card = createSharedCard(rootForReq(req, body), { title, kind, actor: "human:gui" });
+          json(res, 200, { ok: true, card });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/attach-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          addSharedCardRef(rootForReq(req, body), goal, card, "human:gui");
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/unreference-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          removeSharedCardRef(rootForReq(req, body), goal, card, "human:gui");
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/delete-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { card } = body;
+          if (!card) return json(res, 400, { error: "missing card" });
+          deleteSharedCard(rootForReq(req, body), card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/convert-card-to-shared",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          convertOwnedToShared(rootForReq(req, body), goal, card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/convert-card-to-owned",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          convertSharedToOwned(rootForReq(req, body), goal, card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
@@ -1540,40 +2223,143 @@ export function apply(ctx, config) {
         }
       },
     },
+    // g-183：附件管理端点（列出/读取下载/存储/删除；路径安全与引用守卫由 core 层强制）
+    {
+      path: "/api/dsh-graph/attachments",
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const root = rootForReq(req);
+          const names = listAttachments(root);
+          json(res, 200, { attachments: names, infos: names.map((n) => attachmentInfo(root, n)) });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-183 返工 #2：安全读取/下载附件（canonical containment + content-type；HTML/Markdown/SVG 强制下载不内联）
+    {
+      path: "/api/dsh-graph/attachment",
+      handler: (req, res) => {
+        try {
+          const sp = new URL(req.url ?? "", "http://x").searchParams;
+          const name = sp.get("name");
+          if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
+          const info = readAttachment(rootForReq(req), name);
+          const disp = info.inline ? "inline" : "attachment";
+          res.writeHead(200, {
+            "content-type": info.contentType,
+            "content-length": String(info.size),
+            "content-disposition": `${disp}; filename*=UTF-8''${encodeURIComponent(basename(name))}`,
+            "cache-control": "no-store",
+          });
+          res.end(info.buffer);
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/store-attachment",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const ct = String(req.headers?.["content-type"] ?? "");
+          const isRaw = ct.includes("application/octet-stream") || ct.includes("application/x-www-form-urlencoded");
+          const maxBody = isRaw ? MAX_ATTACHMENT_BYTES : MAX_ATTACHMENT_JSON_BYTES;
+          // content-length 仅作快速失败；真正防护是流式累计上限（防无 header/伪造/ chunked）
+          const cl = Number(req.headers?.["content-length"] || 0);
+          if (cl > maxBody) return json(res, 400, { error: "content-length 超过大小上限" });
+          let stored;
+          let rRoot;
+          // 原始二进制上传：body 即文件字节，文件名走 query/header `x-attachment-name`
+          if (isRaw) {
+            const sp = new URL(req.url ?? "", "http://x").searchParams;
+            const name = sp.get("name") ?? req.headers?.["x-attachment-name"];
+            if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
+            rRoot = rootForReq(req);
+            const raw = await readRawBodyCapped(req, MAX_ATTACHMENT_BYTES);
+            stored = storeAttachment(rRoot, { name, bytes: raw, actor: "human:gui" });
+          } else {
+            const body = await readBodyCapped(req, MAX_ATTACHMENT_JSON_BYTES);
+            const { name, content, base64 } = body;
+            if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
+            rRoot = rootForReq(req, body);
+            if (typeof base64 === "string") {
+              // base64 大小预检（避免解码后超限）
+              const approx = Math.floor(base64.length * 3 / 4);
+              if (approx > MAX_ATTACHMENT_BYTES) return json(res, 400, { error: "base64 大小超过上限" });
+              stored = storeAttachment(rRoot, { name, base64, actor: "human:gui" });
+            } else if (typeof content === "string") {
+              stored = storeAttachment(rRoot, { name, content, actor: "human:gui" });
+            } else {
+              return json(res, 400, { error: "需要 content 或 base64（或原始二进制上传）" });
+            }
+          }
+          const digest = attachmentInfo(rRoot, stored).digest;
+          json(res, 200, { ok: true, name: stored, ref: formatAttachmentRef(stored), digest });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/delete-attachment",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { name } = body;
+          if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
+          deleteAttachment(rootForReq(req, body), name, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
     {
       path: "/api/dsh-graph/start-collection",
       handler: async (req, res) => {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, card, prompt, provider, model } = body;
+          const { goal, card, prompt, provider, model, reasoning_effort } = body;
           if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
           const rRoot = rootForReq(req, body);
           const eff = resolveModelRoute(
-            { provider, model },
+            { provider, model, reasoning_effort },
             readExecutorModel(rRoot),
             readGraphSettings(),
           );
           const effProvider = eff.provider;
           const effModel = eff.model;
+           const effReasoningEffort = eff.reasoning_effort;
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
-          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区。
-          // 收集派发不是 Goal execution attempt，不创建 attempt 记录。
+          // g-183 返工 F：先完整校验（resolveCard 成员关系/backlog/卡状态权限）生成提示词，
+          //  再创建 attempt/子代理——校验失败不得留下 attempt/事件副作用。
           const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt);
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
             fullPrompt,
             req,
             rRoot,
-            { provider: effProvider, model: effModel },
+            { provider: effProvider, model: effModel, reasoning_effort: effReasoningEffort },
           );
+          let attempt = null;
           if (spawned.error) {
             console.error("[dsh-graph-host] start-collection 子代理启动失败:", spawned.error);
           } else {
+            attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
+            bindAttemptChild(rRoot, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
             // 事件先行：card.collecting（bindCardChild 写 child_id/parent_session_id）。
             bindCardChild(rRoot, goal, card, { childId: spawned.childId, parentSessionId: spawned.parentSessionId, actor: "human:gui", provider: effProvider, model: effModel });
           }
-          json(res, 200, { ok: true, card, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
+          json(res, 200, { ok: true, card, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
@@ -1611,11 +2397,16 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, provider, model, worktree, attempt_brief, task_type, baseline_commit, source_attempt, acceptance_items } = body;
+          const { goal, provider, model, reasoning_effort, mode, worktree, attempt_brief, task_type, baseline_commit, source_attempt, acceptance_items } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
           // 校验 attempt_brief 类型（g-150 review 问题 4）
           if (attempt_brief !== undefined && attempt_brief !== null && typeof attempt_brief !== "string") {
             return json(res, 400, { error: "attempt_brief 必须是 string 类型" });
+          }
+          if (mode !== undefined && mode !== null && mode !== "") {
+            if (typeof mode !== "string" || !normalizeSubagentMode(mode)) {
+              return json(res, 400, { error: `mode 只允许 ${SUBAGENT_MODES.join("/")}` });
+            }
           }
           const structuredFieldError = validateAttemptPromptFields({
             taskType: task_type,
@@ -1641,17 +2432,22 @@ export function apply(ctx, config) {
           const injectedHandoffRefs = confirmedHandoffs.map((h) => ({ id: h.id, revision: h.revision, source_attempts: h.source_attempts }));
           const handoffsSection = formatReviewedAttemptHandoffsSection(rRoot, goal);
           // g-150 范围扩展：读取最近指令（注入 prompt；空时不影响现有 prompt 行为）
-          // Supervisor 默认强制 worktree 隔离；仅明确批准的 body.worktree=false 才关闭（g-202）
-          const worktreeBlock = worktree === false ? "" : WORKTREE_GUIDE;
+          let gType = "task";
+          try { gType = normalizeGoalType(loadGoal(findGoalFile(rRoot, goal)).meta.type); } catch {}
+          const worktreeBlock = resolveWorktreeGuide(gType, worktree);
           const currentDirective = readGoalDirective(rRoot, goal);
+          const projectExec = readExecutorModel(rRoot);
+          const globalSettings = readGraphSettings();
           const eff = resolveModelRoute(
-            { provider, model },
-            readExecutorModel(rRoot),
-            readGraphSettings(),
+            { provider, model, reasoning_effort },
+            projectExec,
+            globalSettings,
           );
           const effProvider = eff.provider;
           const effModel = eff.model;
+           const effReasoningEffort = eff.reasoning_effort;
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
+          const effModeRes = resolveSubagentMode(mode, projectExec.mode, globalSettings.subagentMode);
           const attempt = startAttempt(rRoot, goal, {
             executor: "agent:executor",
             actor: "human:gui",
@@ -1662,6 +2458,9 @@ export function apply(ctx, config) {
             provider: effProvider,
             model: effModel,
             modelRoute: effRoute,
+            reasoningEffort: effReasoningEffort,
+            mode: effModeRes.mode,
+            modeSource: effModeRes.source,
           });
           // g-113 修正：子代理工作目录 = 会话 workspace（继承 session.header.cwd），
           // 相对路径以 workspace 根为基准（.dsh-graph/versions/...），不是服务进程 cwd 或 .dsh-graph 目录
@@ -1671,9 +2470,11 @@ export function apply(ctx, config) {
           const rel = relative(ws, goalFile);
           // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
           const subagentPromptSection = (() => {
-            const p = effectivePrompt(readGraphSettings().subagentPrompt, readPromptOverride(rRoot, "subagent_prompt"));
+            const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(rRoot, "subagent_prompt"));
             return p ? `## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）\n\n${p}` : "";
           })();
+          // g-191：子代理执行策略/模式说明段
+          const modeStrategySection = effModeRes.prompt ? `## 子代理执行模式（${effModeRes.mode}）\n\n${effModeRes.prompt}` : "";
           const targetContext = [
             "## 目标描述",
             desc,
@@ -1696,9 +2497,15 @@ export function apply(ctx, config) {
             cardsSection,
             targetContext,
             subagentPromptSection,
+            modeStrategySection,
             worktreeBlock,
           });
-          const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, rRoot, { provider: effProvider, model: effModel });
+          const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, rRoot, {
+            provider: effProvider,
+            model: effModel,
+            reasoning_effort: effReasoningEffort,
+            mode: effModeRes.mode,
+          });
           if (spawned.error) {
             console.error("[dsh-graph-host] start-execution 子代理启动失败:", spawned.error);
           } else {
@@ -1712,6 +2519,8 @@ export function apply(ctx, config) {
               effProvider,
               effModel,
               effRoute,
+              effModeRes.mode,
+              effModeRes.source,
             );
             // 负责人 2026-08-22：执行按钮派发后目标必须落到执行 lane——自动迁 in_progress
             try { transition(rRoot, goal, "in_progress", { reason: "attempt 派发（GUI 执行）", actor: "human:gui" }); } catch { /* 已在 in_progress 或迁移被拒 */ }
@@ -1722,6 +2531,8 @@ export function apply(ctx, config) {
             child_id: spawned.childId,
             child_error: spawned.error,
             model_route: effRoute,
+            mode: effModeRes.mode,
+            mode_source: effModeRes.source,
             injected_cards: injectedCards,
             injected_handoffs: injectedHandoffRefs,
           });
@@ -2170,6 +2981,21 @@ export function apply(ctx, config) {
               const supervisorId = readSupervisorSession(canonical.root);
               if (!supervisorId || supervisorId !== sessionId) return "";
               return "\n" + SUPERVISOR_DISCIPLINE;
+            } catch {
+              return "";
+            }
+          },
+        }));
+        // g-105：常驻记忆（standing）作为独立章节固定植入所有会话系统 Prompt
+        ctx.effect(() => sp.section({
+          name: "dsh-graph-standing-memory",
+          order: 92,
+          text: (context) => {
+            try {
+              const cwd = context?.agent?.session?.header?.cwd;
+              if (!cwd) return "";
+              const canonical = resolveCanonicalRoot(config, cwd);
+              return formatStandingMemorySection(canonical.root) ?? "";
             } catch {
               return "";
             }

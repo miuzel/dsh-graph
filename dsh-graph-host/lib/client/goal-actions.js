@@ -45,14 +45,34 @@
           const done = checked.includes(line);
           const label = line.replace(/^\d+[.、)]\s*/, "");
           return h("div", { key: i, style: { marginBottom: 3 } },
-            h("div", { style: { display: "flex", alignItems: "flex-start", gap: 6 } },
+            h("div", {
+              className: "dg-criteria-row",
+              style: { display: "flex", alignItems: "flex-start", gap: 6, cursor: "pointer", padding: "2px 4px" },
+              tabIndex: 0,
+              role: "checkbox",
+              "aria-label": label,
+              "aria-checked": done,
+              onClick: (e) => {
+                // 子控件各自拥有动作，不应把点击冒泡解释为整行切换。
+                if (e.target.closest?.("button,input,textarea,a,select")) return;
+                toggle(line);
+              },
+              onKeyDown: (e) => {
+                if (e.target.closest?.("button,input,textarea,a,select")) return;
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                toggle(line);
+              },
+            },
               h("input", { type: "checkbox", checked: done, onChange: () => toggle(line),
-                           style: { flexShrink: 0, cursor: "pointer", marginTop: 2 } }),
+                           onClick: (e) => e.stopPropagation(),
+                           onKeyDown: (e) => { if (e.key === "Enter") { e.preventDefault(); toggle(line); } },
+                           style: { flexShrink: 0, cursor: "pointer", marginTop: 2, width: 20, height: 20 } }),
               h("span", { style: { flex: 1, minWidth: 0, opacity: done ? 0.55 : 1,
                                    textDecoration: done ? "line-through" : "none" } }, label),
               h("button", { style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
                             title: "针对此判据向执行会话反馈",
-                            onClick: () => { setFbIdx(fbIdx === i ? -1 : i); setFbNote(null); } },
+                            onClick: (e) => { e.stopPropagation(); setFbIdx(fbIdx === i ? -1 : i); setFbNote(null); } },
                 "💬 反馈")),
             fbIdx === i
               ? h("div", { style: { display: "flex", gap: 4, marginTop: 3, marginLeft: 22 } },
@@ -189,18 +209,26 @@
       const [fbText, setFbText] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
-      const [forceMode, setForceMode] = React.useState(false); // 异议后是否展开强制接受理由输入
-      const [forceReason, setForceReason] = React.useState("");
       // 反馈预填模板（复制与显示共用，保证一致）
       const prefillText = fbText.trim() ? `【${goalId} 反馈】\n${fbText.trim()}` : "";
 
-      // 接受复核状态（与 core readAcceptStatus 同语义的事件流推断）：
-      // none（未请求）/ pending（已请求待主管裁决）/ objection（主管异议）/ resolved（已生效）
+      // 接受复核状态只关联当前生命周期周期：
+      // 以最后一次进入当前阶段（goal.transition to === status）为起点，
+      // 如果目标曾被回退重做（如 review -> in_progress -> review），前一次生命周期的请求自然作废，允许重新发起。
       const evs = events ?? [];
+      let lastTransitionToCurrent = -1;
+      evs.forEach((e, i) => {
+        if (e.event === "goal.transition" && String(e.details?.to) === String(status)) {
+          lastTransitionToCurrent = i;
+        }
+      });
       let lastReq = -1, lastObj = -1, lastRes = -1;
       evs.forEach((e, i) => {
-        if (e.event === "review.requested") lastReq = i;
-        if (e.event === "review.objected") lastObj = i;
+        // 仅关注当前这次进入该阶段之后的事件
+        if (i < lastTransitionToCurrent) return;
+        const targetStage = String(e.details?.targetStage ?? "");
+        if (e.event === "review.requested" && (targetStage === String(status) || !targetStage)) lastReq = i;
+        if (e.event === "review.objected" && (targetStage === String(status) || (!targetStage && lastReq >= 0))) lastObj = i;
         if (["description.confirmed", "criteria.confirmed", "review.passed"].includes(e.event)) lastRes = i;
       });
       let acceptState = "none";
@@ -211,8 +239,9 @@
       }
       const objectionText = acceptState === "objection" ? evs[lastObj]?.details?.objection : null;
 
-      // 接受：默认经主管 Agent 复核（review.requested → 主管裁决）
+      // 接受：默认经主管 Agent 复核（review.requested → 主管复核收口）
       const doAccept = async () => {
+        if (!confirm(`确认接受目标「${goalId}」的交付成果？\n\n此操作将请求主管会话完成最终复核，并执行交付收口。`)) return;
         setLoading(true);
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/accept"), {
@@ -221,9 +250,18 @@
             body: JSON.stringify({ goal: goalId }),
           });
           const data = await r.json();
-          if (data.pending) setNote("✅ 已请求主管复核接受，等待主管裁决（无异议即生效）");
-          else if (data.ok) setNote("✅ 已接受");
-          else setNote("⚠️ 接受失败：" + (data.error || "未知错误"));
+          if (data.pending) {
+            try {
+              const rt = sessionsRt ?? appCtx?.get?.("sessions");
+              const session = supervisorSession && (rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession));
+              if (session?.prompt) await session.prompt([{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }], "queue");
+            } catch (err) {
+              console.warn("[dsh-graph-host] prompt supervisorSession failed:", err);
+            }
+            onRefresh?.();
+          } else if (data.ok) {
+            onRefresh?.();
+          } else setNote("⚠️ 接受失败：" + (data.error || "未知错误"));
         } catch (e) {
           setNote("⚠️ 请求失败：" + String(e?.message ?? e));
         }
@@ -316,57 +354,38 @@
       // 只认非 collect 的 attempt：凡非收集类（agent:collect）的 attempt 都视为活跃执行。
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       // review 及之后阶段、或已有活跃 attempt，不显示执行/反馈按钮
-      const allowed = ["draft", "planning", "collecting", "ready"];
-      if (!allowed.includes(status) || hasActiveAttempt) return null;
+      const isReview = status === "review";
+      const allowed = ["draft", "planning", "collecting", "ready", "review"];
+      if (!allowed.includes(status) || (hasActiveAttempt && !isReview)) return null;
 
       return h("div", { style: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6 } },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-          acceptState === "none"
+          isReview && acceptState === "none"
             ? h("button", {
                 style: { ...S.btnAccept, padding: "4px 12px", fontSize: 13 }, className: "dg-btn-accept",
                 disabled: loading, onClick: doAccept,
               }, "✅ 接受")
-            : acceptState === "pending"
-              ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待裁决")
-              : acceptState === "resolved"
-                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, "✅ 已接受生效")
+            : isReview && acceptState === "pending"
+              ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待响应")
+              : isReview && acceptState === "resolved"
+                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, "✅ 交付已生效")
                 : null,
-          h("button", {
+          !isReview ? h("button", {
             style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
             disabled: loading,
             onClick: startExecution,
-          }, "🚀 执行"),
-          h(DefinitionPolish, {
+          }, "🚀 执行") : null,
+          !isReview ? h(DefinitionPolish, {
             goalId, goalPath: props.goalPath, supervisorSession, status, events, attempts,
             onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose,
-          })),
-        // g-109 判据：主管有异议 → 显示在按钮处，可转「强制接受」（可选理由记事件供学习）
-        acceptState === "objection"
+          }) : null,
+        ),
+        // g-109 判据：主管有异议 → 显示异议说明；确认列绝不开放直接强制接受入口
+        isReview && acceptState === "objection"
           ? h("div", { key: "obj", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
               h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
-                "⚠️ 主管异议：" + (objectionText ?? "（无内容）")),
-              forceMode
-                ? [
-                    h("input", {
-                      style: { ...S.promptInput, flex: 1 },
-                      value: forceReason, placeholder: "强制接受理由（可选，将记入事件）…",
-                      onChange: (e) => setForceReason(e.target.value),
-                      onKeyDown: (e) => { if (e.key === "Enter") doForceAccept(); },
-                    }),
-                    h("div", { style: { display: "flex", gap: 6 } },
-                      h("button", {
-                        style: { ...S.btnAccept, fontSize: 12 }, className: "dg-btn-accept",
-                        disabled: loading, onClick: doForceAccept,
-                      }, "确认强制接受"),
-                      h("button", {
-                        style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
-                        disabled: loading, onClick: () => { setForceMode(false); setForceReason(""); },
-                      }, "取消")),
-                  ]
-                : h("button", {
-                    style: { ...S.btnAccept, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn-accept",
-                    onClick: () => setForceMode(true),
-                  }, "强制接受（跳过复核）"),
+                "⚠️ 主管已提出异议"),
+              objectionText ? h("div", { style: S.meta }, objectionText) : null,
             )
           : null,
         mode === "feedback"
@@ -391,14 +410,12 @@
       );
     }
 
-    // g-109：新增信息收集任务组件（弹窗内信息收集区）
-    // g-128：新增信息收集任务组件（弹窗内信息收集区）——支持标题+kind 选择
-    // g-198：支持 onRefresh 回调，创建成功后立即通知父组件刷新卡片列表
+    // g-109/g-128：新增信息收集任务组件（弹窗内信息收集区）——标题 + 作用域（共享/自有），不设 kind 类型；支持 onRefresh 回调立即刷新卡片列表
     function AddCardBox(props) {
       const { goalId, supervisorSession, onRefresh } = props;
       const [mode, setMode] = React.useState("idle"); // idle | naming | chat
       const [title, setTitle] = React.useState("");
-      const [kind, setKind] = React.useState("text"); // g-128：卡片类型可选
+      const [scope, setScope] = React.useState("shared"); // g-183：新建默认共享卡，可选 goal 自有
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
 
@@ -410,13 +427,12 @@
           const r = await fetch(graphUrl("/api/dsh-graph/add-card"), {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, title: t, kind }),
+            body: JSON.stringify({ goal: goalId, title: t, scope }),
           });
           const data = await r.json();
           if (data.ok) {
             setNote("✅ 已创建任务：" + data.card);
             setTitle("");
-            setKind("text");
             setMode("idle");
             onRefresh?.();
           } else {
@@ -443,9 +459,6 @@
         }
       };
 
-      // g-128：kind 选项标签
-      const kindLabels = { text: "📝 文本", file: "📄 文件", image: "🖼 图片", data: "📊 数据" };
-
       return h("div", { style: { marginTop: 8 }, className: "dg-card-add" },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
           h("span", { style: { ...S.meta, fontSize: 11 } }, "新增信息收集任务："),
@@ -460,16 +473,17 @@
                   onChange: (e) => setTitle(e.target.value),
                   onKeyDown: (e) => { if (e.key === "Enter") addByName(); },
                 }),
-                // g-128：kind 选择下拉框
+                // g-183：卡片作用域——默认共享（多 goal 复用），可选 goal 自有
                 h("select", {
-                  value: kind,
-                  onChange: (e) => setKind(e.target.value),
+                  value: scope,
+                  onChange: (e) => setScope(e.target.value),
                   style: { fontSize: 12, padding: "4px 6px", cursor: "pointer",
                            background: "rgba(128,128,128,.10)", color: "inherit",
                            border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
+                  title: "默认创建共享条目（项目知识库，可多目标复用）；可选创建当前目标专属条目",
                 },
-                  ...Object.entries(kindLabels).map(([k, v]) =>
-                    h("option", { key: k, value: k }, v))),
+                  h("option", { value: "shared" }, "📇 共享条目（项目知识库）"),
+                  h("option", { value: "goal" }, "🎯 目标专属条目")),
                 h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建")))
           : null,
         mode === "chat"

@@ -9,11 +9,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, relative } from "node:path";
+import { execFileSync } from "node:child_process";
 import vm from "node:vm";
-import { init, createGoal, findGoalFile, loadGoal, saveGoal, setCriteria, transition, readProjectConfig } from "../ops.ts";
+import http from "node:http";
+import { init, createGoal, findGoalFile, loadGoal, saveGoal, setCriteria, transition, readProjectConfig, startAttempt } from "../ops.ts";
 import { criteriaItems, replaceSection, sectionText } from "../model.ts";
 import { readEvents } from "../events.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply, readRawBodyCapped, readBodyCapped, MAX_ATTACHMENT_JSON_BYTES } from "../../dsh-graph-host/index.js";
 
 function fakeRequest(method: string, body: unknown) {
   const req: any = {
@@ -108,7 +110,7 @@ test("g-132 settings 端点：GET 回填当前配置、POST 写回并保留值�
   const { root, routes } = setup();
   const empty = await get(routes, "/api/dsh-graph/settings");
   assert.equal(empty.code, 200);
-  assert.deepEqual(empty.body.executor, { provider: null, model: null });
+  assert.deepEqual(empty.body.executor, { provider: null, model: null, mode: null });
   // att-002：GET 下发当前 canonical workspace 的 project.yaml 绝对路径
   assert.equal(empty.body.configFile, join(root, "project.yaml"));
   const write = await post(routes, "/api/dsh-graph/settings",
@@ -117,7 +119,7 @@ test("g-132 settings 端点：GET 回填当前配置、POST 写回并保留值�
   assert.equal(write.body.ok, true);
   const again = await get(routes, "/api/dsh-graph/settings");
   assert.equal(again.code, 200);
-  assert.deepEqual(again.body.executor, { provider: "openai-codex", model: "gpt-5.6-luna" });
+  assert.deepEqual(again.body.executor, { provider: "openai-codex", model: "gpt-5.6-luna", mode: null });
   assert.deepEqual(again.body.prompt_overrides.subagent, { state: "override", value: "子代理补充" });
   assert.equal(again.body.configFile, join(root, "project.yaml"));
   // 非法值 → 400 且不半写入
@@ -242,7 +244,24 @@ test("g-133 源契约：workspace 弹窗 executor provider/model 目录化 selec
   assert.match(modal, /display: "flex", gap: 8, minWidth: 0/);
   assert.match(modal, /flex: "1 1 0", minWidth: 0/);
   // 保存仍写 form.executor.provider/model 到 workspace project.yaml
-  assert.match(modal, /executor: \{ provider: form\.executor\?\.provider \?\? "", model: form\.executor\?\.model \?\? "" \}/);
+  assert.match(modal, /executor: \{ provider: form\.executor\?\.provider \?\? "", model: form\.executor\?\.model \?\? "", reasoning_effort: form\.executor\?\.reasoning_effort \?\? "", mode: form\.executor\?\.mode \?\? "" \}/);
+});
+
+test("g-231 默认 reasoning effort 控件随精确模型能力目录变化且保留旧配置", () => {
+  const settings = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings.js"), "utf8");
+  const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  for (const source of [settings, modal]) {
+    assert.match(source, /selectedModel/);
+    assert.match(source, /selectedModel\?\.reasoning\?\.efforts/);
+    assert.match(source, /effortChoices/);
+    assert.match(source, /effortOptions/);
+    assert.match(source, /已存值/);
+    assert.doesNotMatch(source, /\["low", "medium", "high"\]/);
+  }
+  assert.match(settings, /subagentReasoningEffort/);
+  assert.match(settings, /gSettingsScope\.set\("subagentReasoningEffort"/);
+  assert.match(modal, /reasoning_effort: form\.executor\?\.reasoning_effort/);
+  assert.match(modal, /set\(\["executor", "reasoning_effort"\]/);
 });
 
 test("g-163 判据方块按有序 key 渲染并支持即时同步", () => {
@@ -269,6 +288,22 @@ test("g-163 判据方块按有序 key 渲染并支持即时同步", () => {
   assert.match(card, /window\.addEventListener\("storage", refresh\)/);
   assert.match(card, /if \(!keys\.length\) return null/);
   assert.match(actions, /与 core\/model\.ts criteriaItems 同源/);
+});
+
+test("g-185 判据 checklist 整行切换、子控件隔离与键盘/命中区源契约", () => {
+  const actions = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  assert.match(actions, /className: "dg-criteria-row"/);
+  assert.match(actions, /tabIndex: 0/);
+  assert.match(actions, /role: "checkbox"/);
+  assert.match(actions, /"aria-checked": done/);
+  assert.match(actions, /onClick: \(e\) => \{/);
+  assert.match(actions, /e\.target\.closest\?\.\("button,input,textarea,a,select"\)/);
+  assert.match(actions, /onKeyDown: \(e\) => \{/);
+  assert.match(actions, /e\.key !== "Enter" && e\.key !== " "/);
+  assert.match(actions, /onClick: \(e\) => e\.stopPropagation\(\)/);
+  assert.match(actions, /width: 20, height: 20/);
+  assert.match(actions, /onKeyDown: \(e\) => \{ if \(e\.key === "Enter"\)/);
+  assert.match(actions, /localStorage\.setItem\(storeKey, JSON\.stringify\(next\)\)/);
 });
 
 test("g-164 released 泳道与 active/version 泳道共用同一动态列模板源契约", () => {
@@ -447,7 +482,7 @@ test("add-card：建卡 + card.created 事件（事件先行）", async () => {
   const { root, routes, goalId } = setup();
   const goalFile = findGoalFile(root, goalId);
   const { code, body } = await post(routes, "/api/dsh-graph/add-card",
-    { goal: goalId, title: "调研 A", kind: "text" });
+    { goal: goalId, title: "调研 A", kind: "text", scope: "goal" });
   assert.equal(code, 200);
   assert.equal(body.ok, true);
   assert.ok(typeof body.card === "string");
@@ -464,7 +499,7 @@ test("add-card：建卡 + card.created 事件（事件先行）", async () => {
 test("delete-card：删除后 goal 详情卡片消失 + card.deleted 事件（事件先行）", async () => {
   const { root, routes, goalId } = setup();
   const { body } = await post(routes, "/api/dsh-graph/add-card",
-    { goal: goalId, title: "调研 A", kind: "text" });
+    { goal: goalId, title: "调研 A", kind: "text", scope: "goal" });
   const card = body.card;
   const goalHandler = routes.get("/api/dsh-graph/goal");
   const goalDetail = () => {
@@ -511,7 +546,7 @@ test("start-collection 无 subagents：child_error 上报、卡片不误翻 coll
   const { root, routes, goalId } = setup();
   const goalFile = findGoalFile(root, goalId);
   const { body } = await post(routes, "/api/dsh-graph/add-card",
-    { goal: goalId, title: "c", kind: "text" });
+    { goal: goalId, title: "c", kind: "text", scope: "goal" });
   const card = body.card;
   const r = await post(routes, "/api/dsh-graph/start-collection", { goal: goalId, card });
   assert.equal(r.code, 200);
@@ -562,7 +597,7 @@ test("start-collection 有 subagents：验证使用 formatCollectPrompt 生成�
 
   // add-card 必须带 workspace，否则卡片建到 process.cwd()
   const addRes = await post(routes, "/api/dsh-graph/add-card",
-    { goal: goalId, title: "测试卡片", kind: "text", workspace: ws });
+    { goal: goalId, title: "测试卡片", kind: "text", workspace: ws, scope: "goal" });
   assert.equal(addRes.code, 200);
   const card = addRes.body.card;
 
@@ -582,8 +617,8 @@ test("start-collection 有 subagents：验证使用 formatCollectPrompt 生成�
   assert.ok(capturedPrompt.includes(`- 标题: 测试目标`), "应包含 goal 标题");
   assert.ok(capturedPrompt.includes(`- id: \`${card}\``), "应包含 card id");
   assert.ok(capturedPrompt.includes(`- 标题: 测试卡片`), "应包含 card 标题");
-  assert.ok(capturedPrompt.includes(`- 类型: text`), "应包含 card 类型");
-  assert.ok(capturedPrompt.includes(`graph_fill_card(goal="${goalId}", card="${card}", text=<全文>, summary=<≤100字摘要>)`), "应包含精确回填模板");
+  assert.ok(capturedPrompt.includes("**canonical 附件根（绝对路径，非 worktree 相对路径）**"), "应包含 canonical 附件根");
+  assert.ok(capturedPrompt.includes(`graph_fill_card(goal="${goalId}", card="${card}", text=<全文可含 @att/<name>>, summary=<≤100字摘要>)`), "应包含精确回填模板");
   assert.ok(capturedPrompt.includes("**禁区（严格遵守）**"), "应包含禁区说明");
 });
 
@@ -621,7 +656,7 @@ test("start-collection 用户 prompt 作为附加要求追加，不可替代强�
   apply(ctx, {});
 
   const addRes = await post(routes, "/api/dsh-graph/add-card",
-    { goal: goalId, title: "用户提示卡", kind: "text", workspace: ws });
+    { goal: goalId, title: "用户提示卡", kind: "text", workspace: ws, scope: "goal" });
   assert.equal(addRes.code, 200);
   const card = addRes.body.card;
 
@@ -825,20 +860,164 @@ test("spawn-options：无 llm 服务时容错返回（重新执行选择器数�
   assert.equal(res._code, 200);
   // modelGroups 无 llm 服务 → null；default 读 project.yaml（temp root 无 → null）
   assert.equal(res._body.modelGroups, null);
-  assert.deepEqual(res._body.default, { provider: null, model: null });
+  assert.deepEqual(res._body.default, { provider: null, model: null, mode: "standard", mode_source: "default" });
+});
+
+test("g-231 spawn-options：resolveModelInfo 补充 per-model reasoning.efforts 且 resolve 失败不拖垮整组", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g231-spawn-"));
+  const root = join(ws, ".dsh-graph");
+  init(root);
+
+  const llmService = {
+    listProviders: async () => [{ id: "deepseek", name: "DeepSeek" }, { id: "kimi", name: "Moonshot" }],
+    listModels: async (pid: string) => {
+      if (pid === "deepseek") return [{ id: "deepseek-chat", name: "DeepSeek Chat" }, { id: "deepseek-reasoner", name: "DeepSeek Reasoner" }];
+      return [{ id: "moonshot-v1-8k", name: "Moonshot v1 8k" }];
+    },
+    resolveModelInfo: async (pid: string, mid: string) => {
+      if (pid === "deepseek" && mid === "deepseek-chat") {
+        return { reasoning: { efforts: [{ id: "off", name: "Off" }, { id: "low", name: "Low" }, { id: "high", name: "High" }], defaultEffort: "low" } };
+      }
+      if (pid === "deepseek" && mid === "deepseek-reasoner") {
+        return { reasoning: { efforts: [{ id: "high", name: "High" }, { id: "max", name: "Max" }] } };
+      }
+      if (pid === "kimi") throw new Error("resolve failed for kimi");
+      return {};
+    },
+  };
+
+  const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const ctx: any = {
+    get: (name: string) => {
+      if (name === "webServer") return webServer;
+      if (name === "llm") return llmService;
+      if (name === "sandboxPolicy") return { workspaceRoot: ws };
+      return undefined;
+    },
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  apply(ctx, {});
+
+  const handler = routes.get("/api/dsh-graph/spawn-options");
+  const res = fakeResponse();
+  await handler({ method: "GET", url: "/api/dsh-graph/spawn-options?workspace=" + encodeURIComponent(ws), on: () => {} }, res);
+  assert.equal(res._code, 200);
+  assert.ok(Array.isArray(res._body.modelGroups), "modelGroups 应为数组");
+  assert.equal(res._body.modelGroups.length, 2);
+
+  // deepseek 组：两个模型都有 reasoning
+  const dsGroup = res._body.modelGroups.find((g: any) => g.id === "deepseek");
+  assert.ok(dsGroup, "deepseek 组存在");
+  assert.equal(dsGroup.models.length, 2);
+  const chatModel = dsGroup.models.find((m: any) => m.id === "deepseek-chat");
+  assert.deepEqual(chatModel.reasoning, {
+    efforts: [{ id: "off", name: "Off" }, { id: "low", name: "Low" }, { id: "high", name: "High" }],
+    defaultEffort: "low",
+  }, "deepseek-chat 应含 reasoning.efforts 与 defaultEffort");
+  const reasonerModel = dsGroup.models.find((m: any) => m.id === "deepseek-reasoner");
+  assert.deepEqual(reasonerModel.reasoning, {
+    efforts: [{ id: "high", name: "High" }, { id: "max", name: "Max" }],
+  }, "deepseek-reasoner 应含 reasoning.efforts（无 defaultEffort）");
+
+  // kimi 组：resolveModelInfo 抛错 → 模型保留 id/name 但无 reasoning（不拖垮整组）
+  const kimiGroup = res._body.modelGroups.find((g: any) => g.id === "kimi");
+  assert.ok(kimiGroup, "kimi 组存在（resolve 失败不拖垮）");
+  assert.equal(kimiGroup.models.length, 1);
+  assert.equal(kimiGroup.models[0].id, "moonshot-v1-8k");
+  assert.equal(kimiGroup.models[0].reasoning, undefined, "resolve 失败的模型无 reasoning 字段");
+});
+
+test("g-231 spawn-options：无 resolveModelInfo 时模型只含 id/name（向后兼容旧版 llm）", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g231-spawn-compat-"));
+  const root = join(ws, ".dsh-graph");
+  init(root);
+
+  const llmService = {
+    listProviders: async () => ["legacy-prov"],
+    listModels: async () => ["legacy-model"],
+    // 无 resolveModelInfo 方法（旧版 llm 服务）
+  };
+
+  const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const ctx: any = {
+    get: (name: string) => {
+      if (name === "webServer") return webServer;
+      if (name === "llm") return llmService;
+      if (name === "sandboxPolicy") return { workspaceRoot: ws };
+      return undefined;
+    },
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: () => () => {}, get: () => ({}) },
+  };
+  apply(ctx, {});
+
+  const handler = routes.get("/api/dsh-graph/spawn-options");
+  const res = fakeResponse();
+  await handler({ method: "GET", url: "/api/dsh-graph/spawn-options?workspace=" + encodeURIComponent(ws), on: () => {} }, res);
+  assert.equal(res._code, 200);
+  assert.equal(res._body.modelGroups.length, 1);
+  assert.equal(res._body.modelGroups[0].models[0].id, "legacy-model");
+  assert.equal(res._body.modelGroups[0].models[0].reasoning, undefined, "旧版 llm 无 resolveModelInfo 时无 reasoning");
+});
+
+test("g-231 loadHostCatalog REST fallback 保留 spawn-options 中的 reasoning 字段", async () => {
+  // 模拟 spawn-options 返回含 reasoning 的 modelGroups，验证 loadHostCatalog REST 分支不剥离
+  const settingsCode = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings.js"), "utf8");
+  const context = vm.createContext({
+    appCtx: null, gConnectionApi: null, Promise, Array, Set, Error, console,
+    graphUrl: () => "/api/dsh-graph/spawn-options",
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        modelGroups: [
+          {
+            id: "deepseek", name: "DeepSeek",
+            models: [
+              { id: "deepseek-chat", name: "DeepSeek Chat", reasoning: { efforts: [{ id: "low", name: "Low" }, { id: "high", name: "High" }], defaultEffort: "low" } },
+              { id: "deepseek-reasoner", name: "DeepSeek Reasoner" },
+            ],
+          },
+        ],
+      }),
+    }),
+    window: {},
+  });
+  vm.runInContext(`${settingsCode}\nglobalThis.loadHostCatalog = loadHostCatalog;`, context);
+  const loadHostCatalog = context.loadHostCatalog;
+  const result = await loadHostCatalog(null, { get: () => null });
+  assert.equal(result.status, "ready");
+  assert.equal(result.groups.length, 1);
+  assert.equal(result.groups[0].id, "deepseek");
+  const chatModel = result.groups[0].models.find((m: any) => m.id === "deepseek-chat");
+  assert.deepEqual(chatModel.reasoning, {
+    efforts: [{ id: "low", name: "Low" }, { id: "high", name: "High" }],
+    defaultEffort: "low",
+  }, "REST fallback 应保留 reasoning 字段不剥离");
+  const reasonerModel = result.groups[0].models.find((m: any) => m.id === "deepseek-reasoner");
+  assert.equal(reasonerModel.reasoning, undefined, "无 reasoning 的模型保持 undefined");
 });
 
 test("start-execution 无 subagents：attempt 本地创建、child_error 上报（带 provider/model 参数不炸）", async () => {
   const { root, routes, goalId } = setup();
   const r = await post(routes, "/api/dsh-graph/start-execution",
-    { goal: goalId, provider: "spawn", model: "deepseek-v4-flash" });
+    { goal: goalId, provider: "spawn", model: "deepseek-v4-flash", mode: "minimal" });
   assert.equal(r.code, 200);
   assert.equal(r.body.ok, true);
   assert.ok(r.body.attempt.startsWith("att-"));
   assert.equal(r.body.child_id, null);
   assert.ok(typeof r.body.child_error === "string");
+  assert.equal(r.body.mode, "minimal");
+  assert.equal(r.body.mode_source, "override");
+  const attemptDoc = loadGoal(join(dirname(findGoalFile(root, goalId)), "attempts", r.body.attempt, "attempt.md"));
+  assert.equal(attemptDoc.meta.mode, "minimal");
+  assert.equal(attemptDoc.meta.mode_source, "override");
   const events = readEvents(root);
-  assert.ok(events.some((e) => e.event === "attempt.started" && e.goal === goalId));
+  assert.ok(events.some((e) => e.event === "attempt.started" && e.goal === goalId && e.details?.mode === "minimal"));
 });
 
 // ===== g-148：GUI ready→in_progress force transition + start-execution 成功链回归 =====
@@ -963,7 +1142,7 @@ test("g-113 写端点跟随 body.workspace：add-card 写到该项目 .dsh-graph
   const req = fakeRequest("POST", { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws });
   const res = fakeResponse();
   const p = handler(req, res);
-  emitBody(req, { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws });
+  emitBody(req, { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws, scope: "goal" });
   await p;
   assert.equal(res._code, 200);
   assert.equal(res._body.ok, true);
@@ -1549,16 +1728,17 @@ test("g-179 生成 bundle 契约：client.js 标题同步为 🔎 信息收集�
 
 // ===== g-181：父级 overlay backdrop 误关保护（内容起点文本选择/拖拽到弹窗外松开不误关）=====
 
-// 五个受影响模块的 guard 接入预期（每处 style: S.overlay 都必须走 useBackdropClose guard，
-// 禁止裸 style: S.overlay, onClick:；panel stopPropagation 保留）。
+// 五个受影响模块 + g-183 共享面板（shared-panel.js）的 guard 接入预期（每处 style: S.overlay 都必须走
+// useBackdropClose guard，禁止裸 style: S.overlay, onClick:；panel stopPropagation 保留）。
 const G181_MODULES: Record<string, number> = {
   "goal-modal.js": 1,
   "criteria-modal.js": 3,
   "settings-modal.js": 3,
-  "drag-prompts.js": 3,
-  "kanban.js": 5,
+  "drag-prompts.js": 4,
+  "kanban.js": 6,
+  "shared-panel.js": 1,
 };
-const G181_TOTAL = Object.values(G181_MODULES).reduce((a, b) => a + b, 0); // 15
+const G181_TOTAL = Object.values(G181_MODULES).reduce((a, b) => a + b, 0); // 16
 
 test("g-181 源契约：helpers.js 提供共享 useBackdropClose（useRef 起点 + pointerdown + onClick 吞合成 click）", () => {
   const helpers = readFileSync(
@@ -1573,7 +1753,7 @@ test("g-181 源契约：helpers.js 提供共享 useBackdropClose（useRef 起点
   assert.match(helpers, /onClose\?\.\(\);/);
 });
 
-test("g-181 源契约：五个模块全部 style: S.overlay 均接 guard（共 15 处），无裸 overlay onClick，panel stopPropagation 保留", () => {
+test("g-181 源契约：各模块全部 style: S.overlay 均接 guard（共 16 处），无裸 overlay onClick，panel stopPropagation 保留", () => {
   for (const [file, expected] of Object.entries(G181_MODULES)) {
     const src = readFileSync(
       join(import.meta.dirname, "../../dsh-graph-host/lib/client", file), "utf8");
@@ -1587,14 +1767,14 @@ test("g-181 源契约：五个模块全部 style: S.overlay 均接 guard（共 1
     const stopProp = src.match(/onClick: \(e\) => e\.stopPropagation\(\)/g) ?? [];
     assert.ok(stopProp.length >= expected, `${file}: panel stopPropagation 保留（>= ${expected}，实际 ${stopProp.length}）`);
   }
-  // 全量约束 15 个父级 overlay 入口
+  // 全量约束 16 个父级 overlay 入口
   let total = 0;
   for (const file of Object.keys(G181_MODULES)) {
     const src = readFileSync(
       join(import.meta.dirname, "../../dsh-graph-host/lib/client", file), "utf8");
     total += (src.match(/style: S\.overlay, \.\.\.\w+Guard/g) ?? []).length;
   }
-  assert.equal(total, G181_TOTAL, `五个模块共 ${G181_TOTAL} 个父级 overlay 全部接 guard`);
+  assert.equal(total, G181_TOTAL, `各模块共 ${G181_TOTAL} 个父级 overlay 全部接 guard`);
 });
 
 test("g-181 源契约：card-drawer.js sibling overlay/drawer 结构不改（保留自身 onClick: props.onClose）", () => {
@@ -1639,7 +1819,7 @@ test("g-181 hook 逻辑模拟：内容起点→backdrop 不关；backdrop→back
   assert.equal(closed, 2, "吞掉合成 click 后 ref 清零，下一次 backdrop 点击仍关闭");
 });
 
-test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、15 个 guard overlay、保留 GENERATED header", () => {
+test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、16 个 guard overlay、保留 GENERATED header", () => {
   const bundle = readFileSync(
     join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
@@ -1650,7 +1830,7 @@ test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、15 个 guard
   assert.equal(guarded.length, G181_TOTAL, `生成 bundle: ${G181_TOTAL} 个父级 overlay 全部接 guard`);
   const bare = bundle.match(/style: S\.overlay, onClick:/g) ?? [];
   assert.equal(bare.length, 0, "生成 bundle: 无裸 style: S.overlay, onClick:");
-  // panel stopPropagation 保留（>= 15 处 overlay panel；允许额外按钮内 stopPropagation）
+  // panel stopPropagation 保留（>= 16 处 overlay panel；允许额外按钮内 stopPropagation）
   const stopProp = bundle.match(/onClick: \(e\) => e\.stopPropagation\(\)/g) ?? [];
   assert.ok(stopProp.length >= G181_TOTAL, `生成 bundle: panel stopPropagation 保留（>= ${G181_TOTAL}，实际 ${stopProp.length}）`);
 });
@@ -2150,9 +2330,9 @@ test("g-214 生成 bundle 契约：client.js 包含 g-214 倒计时与刷新间�
 test("g-216 源契约：helpers.js S.wrap、S.overlay、S.drawer、S.modal 合理规划 z-index 与层叠上下文", () => {
   const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
   assert.match(helpers, /wrap: \{[\s\S]*?position:\s*"relative",\s*zIndex:\s*1/);
-  assert.match(helpers, /overlay: \{[\s\S]*?zIndex:\s*10000/);
-  assert.match(helpers, /drawer: \{[\s\S]*?zIndex:\s*10001/);
-  assert.match(helpers, /modal: \{[\s\S]*?zIndex:\s*10002/);
+  assert.match(helpers, /overlay: \{[\s\S]*?zIndex:\s*20000/);
+  assert.match(helpers, /drawer: \{[\s\S]*?zIndex:\s*20001/);
+  assert.match(helpers, /modal: \{[\s\S]*?zIndex:\s*20002/);
 });
 
 test("g-216 源契约：constants.js 包含 widthHandle 蒙层防穿透与防遮挡样式规则", () => {
@@ -2172,9 +2352,9 @@ test("g-216 生成 bundle 契约：client.js 包含 g-216 层级规划与 widthH
   const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
   assert.match(bundle, /dg-modal-open/);
   assert.match(bundle, /\.wSkVaW_root:has\(\.dg-modal-open\)/);
-  assert.match(bundle, /zIndex:\s*10000/);
-  assert.match(bundle, /zIndex:\s*10001/);
-  assert.match(bundle, /zIndex:\s*10002/);
+  assert.match(bundle, /zIndex:\s*20000/);
+  assert.match(bundle, /zIndex:\s*20001/);
+  assert.match(bundle, /zIndex:\s*20002/);
 });
 test("g-225 卡片 LiveStrip 模型展示契约：LiveStrip 默认不渲染可见 model ID，完整 provider/model 仅在 tooltip (title) 显示，且 Hooks 顶层无条件调用", () => {
   const hooksSrc = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
@@ -2578,4 +2758,493 @@ test("g-223 行为契约：基于 stable version id 绑定与无中间 load 的 
   assert.equal(resRecreated.hiddenSlugs.includes("v0.7"), false, "新建的同名版本 v0.7 默认显示！");
 });
 
+test("g-188 转到对话入口与 LiveStrip：事件隔离、主题反馈及安全降级源契约", () => {
+  const plugin = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/plugin.js"), "utf8");
+  const live = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/session-hooks.js"), "utf8");
+  const css = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/constants.js"), "utf8");
+  const drawer = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/card-drawer.js"), "utf8");
+  const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(plugin, /if \(!childId \|\| !parentSessionId\) return null;/);
+  assert.match(plugin, /const openingChildSessions = new Set\(\)/);
+  assert.match(plugin, /if \(openingChildSessions\.has\(navigationKey\)\) return/);
+  assert.match(plugin, /className: "dg-btn dg-session-link"/);
+  assert.match(plugin, /e\.stopPropagation\(\); void openChildSession\(parentSessionId, childId\)/);
+  assert.match(live, /const canOpen = Boolean\(props\.parentId && props\.childId\)/);
+  assert.match(live, /const activateStrip = \(e\) =>/);
+  assert.match(live, /tabIndex: canOpen \? 0 : undefined/);
+  assert.match(live, /role: canOpen \? "button" : undefined/);
+  assert.match(live, /e\.key !== "Enter" && e\.key !== " "/);
+  assert.match(live, /className: canOpen \? "dg-live-strip-clickable"/);
+  assert.match(live, /e\.stopPropagation\(\);/);
+  assert.match(live, /openChildSession\(props\.parentId, props\.childId\)/);
+  assert.match(live, /return h\("div", \{ \.\.\.stripProps, title: props\.childId \}/);
+  assert.match(css, /\.dg-session-link:hover/);
+  assert.match(css, /\.dg-session-link:active/);
+  assert.match(css, /\.dg-session-link:focus-visible/);
+  assert.match(css, /\.dg-live-strip-clickable:hover/);
+  assert.match(css, /\.dg-live-strip-clickable:focus-visible/);
+  assert.match(css, /translateY\(-1px\)/);
+  assert.match(drawer, /sessionLinkBtn\(card\.parent_session_id, card\.child_id, "↗ 转到对话"\)/);
+  assert.doesNotMatch(drawer, /className: "dg-btn",\s*onClick: \(\) => \{ openChildSession/);
+  assert.match(bundle, /function sessionLinkBtn/);
+  assert.match(bundle, /tabIndex: canOpen \? 0 : undefined/);
+  assert.match(bundle, /role: canOpen \? "button" : undefined/);
+  assert.match(bundle, /\.dg-live-strip-clickable:focus-visible/);
+  assert.match(bundle, /sessionLinkBtn\(card\.parent_session_id, card\.child_id, "↗ 转到对话"\)/);
+});
 
+// g-189：真实 Git fixture 覆盖标准路径、branch/HEAD 证据与 REST 输出。
+test("g-189 REST fixture：标准 attempt worktree 可发现且 foreign 分支不归属", () => {
+  const ws = mkdtempSync(join(tmpdir(), "g189-git-"));
+  execFileSync("git", ["init", "-q", ws]);
+  execFileSync("git", ["-C", ws, "config", "user.email", "test@example.invalid"]);
+  execFileSync("git", ["-C", ws, "config", "user.name", "test"]);
+  init(join(ws, ".dsh-graph"));
+  const goalId = createGoal(join(ws, ".dsh-graph"), { title: "fixture", version: "v-t", actor: "test" });
+  writeFileSync(join(ws, "README"), "fixture");
+  execFileSync("git", ["-C", ws, "add", "."]);
+  execFileSync("git", ["-C", ws, "commit", "-qm", "fixture"]);
+  const attId = startAttempt(join(ws, ".dsh-graph"), goalId, { executor: "test", actor: "test" });
+  const worktree = join(ws, ".worktrees", `${goalId}-att-01`);
+  execFileSync("git", ["-C", ws, "worktree", "add", "-q", "-b", `${goalId}-att-01`, worktree]);
+  const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const ctx: any = { get: (name: string) => name === "webServer" ? webServer : undefined, effect: (fn: any) => fn(), webServer, tools: { register: () => () => {}, get: () => ({}) } };
+  apply(ctx, {});
+  const req: any = fakeRequest("GET", null); req.url = `/api/dsh-graph/goal?id=${goalId}&workspace=${encodeURIComponent(ws)}`;
+  const res = fakeResponse(); routes.get("/api/dsh-graph/goal")(req, res);
+  assert.equal(res._code, 200); assert.equal(res._body.attempts[0].id, attId);
+  assert.equal(res._body.worktrees.items[attId].path, `.worktrees/${goalId}-att-01`);
+});
+
+// g-189：worktree 发现保持只读、canonical workspace 与路径安全边界。
+test("g-189 worktree 发现与弹窗展示源契约", () => {
+  const host = readFileSync(join(dirname(new URL(import.meta.url).pathname), "../../dsh-graph-host/index.js"), "utf8");
+  const modal = readFileSync(join(dirname(new URL(import.meta.url).pathname), "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  assert.match(host, /git.*worktree.*list.*porcelain/);
+  assert.match(host, /canonicalWorkspace/);
+  assert.match(host, /relative\(canonical, actual\)/);
+  assert.match(host, /rel !== `\.worktrees\/\${expected}`/);
+  assert.match(host, /realpathSync/);
+  assert.match(host, /padStart\(2, "0"\)/);
+  assert.match(host, /padStart\(3, "0"\)/);
+  assert.match(host, /expectedBranch/);
+  assert.match(host, /WORKTREE_CACHE_TTL/);
+  assert.match(host, /worktreeCache\.get/);
+  assert.match(host, /WORKTREE_CACHE_CAP/);
+  assert.match(host, /now - entry\.ts/);
+  assert.match(host, /worktreeCache\.keys\(\)\.next/);
+  assert.match(host, /未创建 worktree|worktree 列表不可用/);
+  assert.match(modal, /AttemptWorktrees/);
+  assert.match(modal, /useState\(false\)/);
+  assert.match(modal, /expanded \? "▲" : "▼"/);
+  assert.match(modal, /未创建 worktree/);
+  assert.match(modal, /textOverflow: "ellipsis"/);
+  assert.match(modal, /复制安全相对路径/);
+  assert.match(modal, /已移除/);
+  assert.match(modal, /lastWorktreesRef/);
+});
+
+// g-186：确认列弹窗接受交付入口源契约（可见性、单一状态提示、主管通信闭环）。
+test("g-186 review 接受交付入口：单一状态提示、不含‘裁决’、排队通知主管会话", () => {
+  const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  const constants = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(actions, /lastTransitionToCurrent/);
+  assert.match(actions, /isReview && acceptState === "none"/);
+  assert.match(actions, /"✅ 接受"/);
+  assert.match(actions, /isReview && acceptState === "pending"/);
+  assert.match(actions, /"⏳ 已请求主管复核，等待响应"/);
+  assert.doesNotMatch(actions, /等待裁决/);
+  assert.match(actions, /isReview && acceptState === "resolved"/);
+  assert.match(actions, /"✅ 交付已生效"/);
+  assert.match(actions, /confirm\(/);
+  assert.match(actions, /session\.prompt/);
+  assert.match(actions, /【负责人交付复核请求】/);
+  assert.match(actions, /"queue"/);
+  assert.match(constants, /"review\.requested": "请求主管复核"/);
+  assert.match(constants, /"review\.objected": "主管提出异议"/);
+  assert.match(bundle, /【负责人交付复核请求】/);
+  assert.doesNotMatch(bundle, /等待主管裁决/);
+});
+
+// g-192：主管会话标题栏标签源契约与槽位注册测试。
+test("g-192 标题栏主管徽章源契约：conversation.session.header.actions 槽位与徽章组件", () => {
+  const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
+  const bar = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/supervisor-bar.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  assert.match(plugin, /ctx\.slots\.inject\("conversation\.session\.header\.actions"/);
+  assert.match(plugin, /id: "dsh-graph-supervisor-badge"/);
+  assert.match(plugin, /order: -9/);
+  assert.match(bar, /function SupervisorHeaderBadge/);
+  assert.match(bar, /🧭 GRAPH主管/);
+  assert.match(bar, /sessionId !== supervisorSession/);
+  assert.match(bar, /role: "status"/);
+  assert.match(host, /path: "\/api\/dsh-graph\/supervisor-session"/);
+  assert.match(bundle, /function SupervisorHeaderBadge/);
+  assert.match(bundle, /dsh-graph-supervisor-badge/);
+  assert.match(bundle, /🧭 GRAPH主管/);
+});
+
+// g-197：delivered 弹窗 worktree 清理候选源契约。
+test("g-197 client：delivered 目标展示 WorktreeCandidates 清理组件与 API 绑定", () => {
+  const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
+  const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(modal, /function WorktreeCandidates/);
+  assert.match(modal, /status === "delivered"/);
+  assert.match(modal, /"\/api\/dsh-graph\/worktrees"/);
+  assert.match(modal, /"\/api\/dsh-graph\/worktrees\/clean"/);
+  assert.match(host, /path: "\/api\/dsh-graph\/worktrees"/);
+  assert.match(host, /path: "\/api\/dsh-graph\/worktrees\/clean"/);
+  assert.match(bundle, /function WorktreeCandidates/);
+  assert.match(bundle, /可清理 worktree/);
+});
+
+test("g-191 client：设置页与重新执行均使用受控模式枚举并显示来源", () => {
+  const settings = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings.js"), "utf8");
+  const panel = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/live-panel.js"), "utf8");
+  const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  assert.match(settings, /subagentMode/);
+  assert.match(settings, /htmlFor: modeId/);
+  assert.match(settings, /id: modeId, "aria-label": "子代理默认执行模式"/);
+  assert.match(settings, /dg-global-subagent-mode-/);
+  assert.match(modal, /htmlFor: modeId/);
+  assert.match(modal, /id: modeId,/);
+  assert.match(modal, /aria-label": "workspace 子代理执行模式"/);
+  assert.match(modal, /dg-workspace-subagent-mode-/);
+  assert.match(panel, /modeList/);
+  assert.match(panel, /mode: mode/);
+  assert.match(panel, /id: modeId,/);
+  assert.match(panel, /aria-label": "重新执行子代理模式"/);
+  assert.match(panel, /dg-reexec-subagent-mode-/);
+  assert.match(panel, /执行模式/);
+});
+
+// ---- g-183：共享卡 REST 端点契约 ----
+
+test("g-183 shared-card REST：创建→挂 goal→列表→解引用→删除 全链路", async () => {
+  const { root, routes, goalId } = setup();
+  // 创建共享卡
+  const create = await post(routes, "/api/dsh-graph/create-shared-card", { title: "REST 共享", kind: "text" });
+  assert.equal(create.code, 200);
+  const sid = create.body.card;
+  assert.ok(sid.startsWith("shared-"), "REST 创建共享卡应带 shared- 前缀");
+  // 挂到 goal
+  const attach = await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  assert.equal(attach.code, 200);
+  // 列表含 refCount=1
+  const list = await get(routes, "/api/dsh-graph/shared-cards");
+  assert.equal(list.code, 200);
+  assert.equal(list.body.cards.length, 1);
+  assert.equal(list.body.cards[0].id, sid);
+  assert.equal(list.body.cards[0].refCount, 1);
+  // boardPayload 顶层也下发 sharedCards
+  const board = await get(routes, "/api/dsh-graph");
+  assert.equal(board.code, 200);
+  assert.equal(board.body.sharedCards.length, 1);
+  // 解引用 → refCount 0
+  const unref = await post(routes, "/api/dsh-graph/unreference-shared-card", { goal: goalId, card: sid });
+  assert.equal(unref.code, 200);
+  const list2 = await get(routes, "/api/dsh-graph/shared-cards");
+  assert.equal(list2.body.cards[0].refCount, 0);
+  // 删除零引用共享卡
+  const del = await post(routes, "/api/dsh-graph/delete-shared-card", { card: sid });
+  assert.equal(del.code, 200);
+  const list3 = await get(routes, "/api/dsh-graph/shared-cards");
+  assert.equal(list3.body.cards.length, 0);
+});
+
+test("g-183 shared-card REST：被引用删除被拒；转换端点 200", async () => {
+  const { root, routes, goalId } = setup();
+  const create = await post(routes, "/api/dsh-graph/create-shared-card", { title: "REST 保护", kind: "text" });
+  const sid = create.body.card;
+  await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  // 被引用删除 → 400
+  const del = await post(routes, "/api/dsh-graph/delete-shared-card", { card: sid });
+  assert.equal(del.code, 400);
+  assert.ok(String(del.body.error).includes("引用"), "被引用删除应提示引用");
+  // 共享→自有转换：引用计数 1 → 成功
+  const toOwned = await post(routes, "/api/dsh-graph/convert-card-to-owned", { goal: goalId, card: sid });
+  assert.equal(toOwned.code, 200);
+  // 转换后该卡已非共享卡
+  const list = await get(routes, "/api/dsh-graph/shared-cards");
+  assert.equal(list.body.cards.length, 0);
+  // 自有→共享转换：goal 自有卡转换为共享（默认 add-card 为 shared；此处显式建自有卡）
+  const addOwned = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "自有转共享", kind: "text", scope: "goal" });
+  assert.equal(addOwned.code, 200);
+  const ocId = addOwned.body.card;
+  assert.ok(ocId.startsWith("card-"), "显式 scope=goal 的 add-card 应为 goal 自有");
+  const toShared = await post(routes, "/api/dsh-graph/convert-card-to-shared", { goal: goalId, card: ocId });
+  assert.equal(toShared.code, 200);
+  const oldOwnedFile = join(dirname(findGoalFile(root, goalId)), "cards", `${ocId}.md`);
+  assert.ok(!existsSync(oldOwnedFile), "转换后旧自有副本应删除（不留双副本）");
+  const list2 = await get(routes, "/api/dsh-graph/shared-cards");
+  assert.equal(list2.body.cards.length, 1, "转换后共享池恰 1 张");
+  assert.ok(list2.body.cards[0].id.startsWith("shared-"), "转换后应以 shared-* 新 id 落入共享池");
+});
+
+test("g-183 attachment REST：存储/路径安全/删除引用守卫", async () => {
+  const { root, routes, goalId } = setup();
+  // 正常存储
+  const store = await post(routes, "/api/dsh-graph/store-attachment", { name: "note.md", content: "正文\n引用 @att/note.md" });
+  assert.equal(store.code, 200);
+  assert.equal(store.body.name, "note.md");
+  assert.equal(store.body.ref, "@att/note.md");
+  assert.ok(typeof store.body.digest === "string" && store.body.digest.length === 16, "应返回 16 位审计摘要");
+  assert.ok(existsSync(join(root, "attachments", "note.md")));
+  const list = await get(routes, "/api/dsh-graph/attachments");
+  assert.ok(list.body.attachments.includes("note.md"));
+  assert.ok(list.body.infos.some((i: any) => i.name === "note.md" && i.exists && i.size > 0), "列表应含附件存在性信息");
+  // 路径安全：穿越/绝对路径/反斜杠/子目录越界 → 400
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "../../etc/passwd", content: "x" })).code, 400);
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "/abs/x", content: "x" })).code, 400);
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "a\\b", content: "x" })).code, 400);
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "a/../b", content: "x" })).code, 400);
+  // 安全子目录允许
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "sub/docs.md", content: "子目录" })).code, 200);
+  // 引用守卫：把引用写进一个 goal 正文，再尝试删除被引用附件 → 400
+  const goalFile = findGoalFile(root, goalId);
+  const goalDoc = loadGoal(goalFile);
+  goalDoc.body += "\n附件见 @att/note.md\n";
+  saveGoal(goalFile, goalDoc);
+  const delRef = await post(routes, "/api/dsh-graph/delete-attachment", { name: "note.md" });
+  assert.equal(delRef.code, 400, "仍被引用的附件禁止删除");
+  // 移除引用后可删除
+  const doc2 = loadGoal(goalFile);
+  doc2.body = doc2.body.replace(/附件见 @att\/note\.md/, "");
+  saveGoal(goalFile, doc2);
+  const delOk = await post(routes, "/api/dsh-graph/delete-attachment", { name: "note.md" });
+  assert.equal(delOk.code, 200);
+  assert.ok(!existsSync(join(root, "attachments", "note.md")));
+});
+
+test("g-183 attachment REST：base64 二进制上传（图片/Excel）与稳定引用", async () => {
+  const { root, routes, goalId } = setup();
+  const b64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64");
+  const store = await post(routes, "/api/dsh-graph/store-attachment", { name: "chart.png", base64: b64 });
+  assert.equal(store.code, 200);
+  assert.equal(store.body.name, "chart.png");
+  assert.equal(store.body.ref, "@att/chart.png");
+  const bytes = readFileSync(join(root, "attachments", "chart.png"));
+  assert.deepEqual(Array.from(bytes), [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], "应按二进制落盘");
+  // 缺 content/base64 → 400
+  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "x.md" })).code, 400);
+});
+
+test("g-183 membership REST：未引用共享卡的 goal 无法 start-collection（400）", async () => {
+  const { root, routes, goalId } = setup();
+  const sid = (await post(routes, "/api/dsh-graph/create-shared-card", { title: "守卫 REST", kind: "text" })).body.card;
+  // 挂到一个 goal（setup 的 goalId）
+  await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  // 建第二个 goal，未引用该共享卡
+  const other = createGoal(root, { title: "其他", version: "v-t", actor: "test" });
+  // 未引用 goal 对共享卡 start-collection → 400（resolveCard 成员校验拒绝）
+  const r = await post(routes, "/api/dsh-graph/start-collection", { goal: other, card: sid });
+  assert.equal(r.code, 400);
+  assert.ok(String(r.body.error).includes("未被目标"), "未引用 goal 应被拒绝: " + r.body.error);
+  // 已引用 goal 正常（无 subagents → child_error 字符串）
+  const ok = await post(routes, "/api/dsh-graph/start-collection", { goal: goalId, card: sid });
+  assert.equal(ok.code, 200);
+  assert.ok(typeof ok.body.child_error === "string");
+});
+
+test("add-card REST：kind 可选（goal-actions 已不发 kind），omission 建卡成功", async () => {
+  const { root, routes, goalId } = setup();
+  // 不传 kind
+  const r = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "无 kind 任务" });
+  assert.equal(r.code, 200, "kind omission 应成功: " + r.body.error);
+  assert.ok(typeof r.body.card === "string");
+  // 显式传 kind 也能建
+  const r2 = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "带 kind", kind: "text" });
+  assert.equal(r2.code, 200);
+  // 无效 kind 类型 → 400
+  const r3 = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "x", kind: 123 });
+  assert.equal(r3.code, 400);
+  // 缺失 goal → 400
+  const r4 = await post(routes, "/api/dsh-graph/add-card", { title: "x" });
+  assert.equal(r4.code, 400);
+  // 非法 scope（enum 校验）→ 400（不再静默建自有卡）
+  const r5 = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "x", scope: "bogus" });
+  assert.equal(r5.code, 400, "非法 scope 应被拒: " + r5.body.error);
+  assert.ok(String(r5.body.error).includes("非法卡片 scope"), "应提示非法 scope");
+});
+
+test("g-183 attachment REST：安全下载端点（canonical读、content-type、拒绝越界 name）", async () => {
+  const { root, routes } = setup();
+  await post(routes, "/api/dsh-graph/store-attachment", { name: "doc.md", content: "hello 附件" });
+  const handler = routes.get("/api/dsh-graph/attachment");
+  // 正常读取
+  const res = { _code: 0, _headers: null, _body: null, writeHead(c: number, h: any) { this._code = c; this._headers = h; }, end(s: any) { this._body = s; } };
+  const req = fakeRequest("GET", null); req.url = "/api/dsh-graph/attachment?name=doc.md";
+  await handler(req, res);
+  assert.equal(res._code, 200, "应能下载附件");
+  assert.equal(res._headers["content-type"], "text/plain");
+  assert.equal(res._body.toString(), "hello 附件");
+  // Markdown 也强制 attachment（不内联）
+  assert.ok(String(res._headers["content-disposition"]).startsWith("attachment"), "Markdown 应强制下载");
+  // HTML/Markdown 等强制 attachment 不 inline
+  await post(routes, "/api/dsh-graph/store-attachment", { name: "bad.html", content: "<script>alert(1)</script>" });
+  const res2 = { _code: 0, _headers: null, _body: null, writeHead(c: number, h: any) { this._code = c; this._headers = h; }, end(s: any) { this._body = s; } };
+  const req2 = fakeRequest("GET", null); req2.url = "/api/dsh-graph/attachment?name=bad.html";
+  await handler(req2, res2);
+  assert.equal(res2._code, 200);
+  assert.ok(String(res2._headers["content-disposition"]).startsWith("attachment"), "危险类型应强制下载");
+  // 越界 name → 400
+  const res3 = { _code: 0, _headers: null, _body: null, writeHead(c: number, h: any) { this._code = c; this._headers = h; }, end(s: any) { this._body = s; } };
+  const req3 = fakeRequest("GET", null); req3.url = "/api/dsh-graph/attachment?name=../x";
+  await handler(req3, res3);
+  assert.equal(res3._code, 400, "越界 name 应拒绝");
+});
+
+test("g-183 collecting：unreference-shared-card 对 collected 共享卡返回 400（API 守卫）", async () => {
+  const { root, routes, goalId } = setup();
+  const sid = (await post(routes, "/api/dsh-graph/create-shared-card", { title: "REST 收集守卫" })).body.card;
+  await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  // 模拟收集绑定：直接 bindCardChild 核心层（无 subagents 时 start-collection 不会绑定）
+  const { bindCardChild } = await import("../ops.ts");
+  bindCardChild(root, goalId, sid, { childId: "child-c", actor: "test" });
+  const unref = await post(routes, "/api/dsh-graph/unreference-shared-card", { goal: goalId, card: sid });
+  assert.equal(unref.code, 400);
+  assert.ok(String(unref.body.error).includes("正在收集中"), "collecting 共享卡解除引用应被拒");
+});
+
+// 流式上限辅助：构造可触发 data/end/error/destroy 的假请求
+function mkStreamReq(opts: { contentType?: string; url?: string } = {}) {
+  const listeners: Record<string, (v?: any) => void> = {};
+  const req: any = {
+    method: "POST",
+    headers: { "content-type": opts.contentType ?? "application/json" },
+    url: opts.url ?? "/api/dsh-graph/store-attachment",
+    destroyed: false,
+    paused: false,
+    on(ev: string, cb: (v?: any) => void) { listeners[ev] = cb; },
+    destroy() { this.destroyed = true; },
+    pause() { this.paused = true; },
+    unpipe() { this.paused = true; },
+  };
+  return { req, emit: (ev: string, v?: any) => listeners[ev]?.(v) };
+}
+
+test("流式读取累计超过上限立即拒绝并暂停（不销毁 socket，raw/JSON）", async () => {
+  // raw reader：小上限，超限即拒绝 + pause（不 destroy）
+  const a = mkStreamReq();
+  const p1 = readRawBodyCapped(a.req, 100);
+  a.emit("data", Buffer.alloc(200, 0x41));
+  await assert.rejects(p1, /超过 100 字节上限/);
+  assert.equal(a.req.paused, true, "超限应暂停流（不销毁 socket）");
+  assert.equal(a.req.destroyed, false, "不应销毁 socket");
+  // JSON reader：小上限，超限即拒绝 + pause
+  const b = mkStreamReq();
+  const p2 = readBodyCapped(b.req, 20);
+  b.emit("data", "{\"name\":\"x\",\"content\":\"");
+  b.emit("data", "一长串内容超过上限");
+  await assert.rejects(p2, /超过 20 字节上限/);
+  assert.equal(b.req.paused, true, "超限应暂停流（不销毁 socket）");
+  assert.equal(b.req.destroyed, false, "不应销毁 socket");
+  // raw 正常：chunked 多 chunk 累计在限内 → 成功
+  const c = mkStreamReq();
+  const p3 = readRawBodyCapped(c.req, 100);
+  c.emit("data", Buffer.from("hel"));
+  c.emit("data", Buffer.from("lo"));
+  c.emit("end");
+  assert.deepEqual(await p3, Buffer.from("hello"));
+});
+
+test("store-attachment 原始上传：无 content-length + 超过上限 → 400 且无文件/事件", async () => {
+  const { root, routes } = setup();
+  const handler = routes.get("/api/dsh-graph/store-attachment");
+  // 无 content-length（模拟 chunked），超大 raw body
+  const s = mkStreamReq({ contentType: "application/octet-stream", url: "/api/dsh-graph/store-attachment?name=big.bin" });
+  const res = fakeResponse();
+  const p = handler(s.req, res);
+  s.emit("data", Buffer.alloc(51 * 1024 * 1024, 0x41)); // ≈51MB > MAX_ATTACHMENT_BYTES(50MB)
+  s.emit("end");
+  await p;
+  assert.equal(res._code, 400, "超限应拒绝");
+  assert.ok(!existsSync(join(root, "attachments", "big.bin")), "超限不得写文件");
+  const evs = readEvents(root).filter((e) => e.event === "attachment.stored");
+  assert.equal(evs.length, 0, "超限不得记 attachment.stored 事件");
+});
+
+test("store-attachment JSON：无 content-length + chunked 在限内 → 成功（流式解析）", async () => {
+  const { root, routes } = setup();
+  const handler = routes.get("/api/dsh-graph/store-attachment");
+  const s = mkStreamReq({ contentType: "application/json", url: "/api/dsh-graph/store-attachment" });
+  const res = fakeResponse();
+  const p = handler(s.req, res);
+  s.emit("data", JSON.stringify({ name: "chunked.md", content: "流式内容" }).slice(0, 20));
+  s.emit("data", JSON.stringify({ name: "chunked.md", content: "流式内容" }).slice(20));
+  s.emit("end");
+  await p;
+  assert.equal(res._code, 200, "chunked 在限内应成功: " + (res._body?.error ?? ""));
+  assert.ok(existsSync(join(root, "attachments", "chunked.md")));
+  assert.ok(typeof res._body.ref === "string");
+  // JSON envelope 上限应允许 50MB base64 开销（粗略验证常量足够大）
+  assert.ok(MAX_ATTACHMENT_JSON_BYTES > 50 * 1024 * 1024 * 4 / 3, "JSON envelope 应容纳 50MB base64 开销");
+});
+
+test("source-contract：shared-panel 附件逐项渲染为节点；card-drawer own→shared/解除/转自有收集中禁用", () => {
+  const panel = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/shared-panel.js"), "utf8");
+  // 不应把 React/Preact 元素用字符串拼接（会变成 [object Object]）
+  assert.ok(!panel.includes("+ c.attachments.map("), "shared-panel 不应拼接 React 元素为字符串");
+  assert.ok(!panel.includes(".join(\"，\")"), "shared-panel 附件不应 join 字符串");
+  assert.ok(panel.includes('"📎 附件："'), "should still label attachments");
+  const drawer = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/card-drawer.js"), "utf8");
+  // own→shared / 解除引用 / 转自有卡 三个按钮均应对 collecting 禁用
+  const count = (drawer.match(/disabled: card\.status === "collecting"/g) ?? []).length;
+  assert.ok(count >= 3, `card-drawer 应有 3 处 collecting 禁用（实际 ${count}）`);
+});
+
+test("普通 JSON endpoint：超大 chunked（无 content-length）→ 400 且无副作用", async () => {
+  const { root, routes, goalId } = setup();
+  // 所有普通 JSON REST 走 capped readBody（MAX_JSON_BODY_BYTES=1MB）
+  const handler = routes.get("/api/dsh-graph/add-card");
+  const s = mkStreamReq({ contentType: "application/json", url: "/api/dsh-graph/add-card" });
+  const res = fakeResponse();
+  const p = handler(s.req, res);
+  s.emit("data", Buffer.alloc(1024 * 1024 + 1024, 0x41)); // >1MB
+  s.emit("end");
+  await p;
+  assert.equal(res._code, 400, "普通 JSON endpoint 超限应拒绝");
+  const doc = loadGoal(findGoalFile(root, goalId));
+  assert.equal((doc.meta.context_cards ?? []).length, 0, "超限不应创建卡片");
+  assert.equal(readEvents(root).filter((e) => e.event === "card.created").length, 0, "超限不应记 card.created 事件");
+});
+
+test("readBodyCapped 跨 chunk UTF-8 多字节字符不损坏（Buffer 累积后一次解码）", async () => {
+  const a = mkStreamReq();
+  const p = readBodyCapped(a.req, 4096);
+  const json = JSON.stringify({ name: "测试内容" });
+  const buf = Buffer.from(json, "utf8");
+  const mid = buf.indexOf("测"); // UTF-8 多字节起点
+  assert.ok(mid > 0);
+  a.emit("data", buf.slice(0, mid + 1)); // 覆盖 "测" 的第一个字节，把多字节字符劈开
+  a.emit("data", buf.slice(mid + 1));
+  a.emit("end");
+  const parsed = await p;
+  assert.equal(parsed.name, "测试内容", "跨 buffer chunk 的 UTF-8 字符应正确还原");
+});
+
+test("真实 HTTP：readBodyCapped 超限返回可读 400（无 ECONNRESET）且不落盘", async () => {
+  const server = http.createServer((req, res) => {
+    readBodyCapped(req, 100)
+      .then(() => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true })); })
+      .catch((e) => { res.writeHead(400, { "content-type": "application/json; charset=utf-8" }); res.end(JSON.stringify({ error: String(e.message) })); });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as any).port;
+  const status = await new Promise<number>((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port, method: "POST", headers: { "transfer-encoding": "chunked", "content-type": "application/json" } }, (res) => {
+      let body = "";
+      res.on("data", (d) => { body += d; });
+      res.on("end", () => resolve(res.statusCode ?? 0));
+    });
+    req.on("error", (e) => reject(new Error("client error: " + String((e as any).code ?? e))));
+    req.write('{"x":"' + "A".repeat(500) + '"}'); // >100 上限
+    req.end();
+  });
+  server.close();
+  assert.equal(status, 400, "真实 HTTP 客户端应读到 400（而非 ECONNRESET）");
+});

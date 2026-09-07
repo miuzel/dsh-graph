@@ -25,6 +25,7 @@ PARTS=(
   "drag-prompts"
   "version-drawer"
   "kanban"
+  "shared-panel"
   "settings-modal"
   "settings"
   "plugin"
