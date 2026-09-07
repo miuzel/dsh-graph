@@ -864,3 +864,242 @@ test("step-2 / step-3 失败不误记 *_converted（双向）", () => {
   let evs4 = readEvents(root4).map((e) => e.event);
   assert.ok(!evs4.includes("card.owned_converted"), "shared→own step-3 失败不得误记 owned_converted");
 });
+
+test("parseAttachmentRefs 剥离句末/中文标点/括号/链接（不扩大任意路径/URL）", () => {
+  assert.deepEqual(parseAttachmentRefs("see @att/docs/a.md, and @att/x.png)."), ["docs/a.md", "x.png"]);
+  assert.deepEqual(parseAttachmentRefs("see (@att/docs/a.md), and @att/x.png."), ["docs/a.md", "x.png"]);
+  assert.deepEqual(parseAttachmentRefs("[see](@att/docs/a.md) and @att/x.png)"), ["x.png"], "Markdown 链接目标不计（destination 视为 URL 语境）");
+  assert.deepEqual(parseAttachmentRefs("见 @att/x.png。 和 @att/a.md，"), ["x.png", "a.md"]);
+  assert.deepEqual(parseAttachmentRefs("见 @att/x.png 与 @att/a.md"), ["x.png", "a.md"]);
+  assert.deepEqual(parseAttachmentRefs("@att/report.md 与 @att/chart.png"), ["report.md", "chart.png"]);
+  assert.deepEqual(parseAttachmentRefs("x @att/../secret"), []);
+});
+
+test("attachmentReferenceCount / delete guard 对带尾部标点的引用不绕过", () => {
+  const root = tmpRoot();
+  storeAttachment(root, { name: "x.png", content: "数据", actor: "test" });
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const oc = addCard(root, a, { title: "c", scope: "goal", actor: "test" });
+  fillCard(root, a, oc, { text: "见 @att/x.png. 使用", by: "human:x", actor: "test" });
+  assert.equal(attachmentReferenceCount(root, "x.png"), 1);
+  assert.throws(() => deleteAttachment(root, "x.png", { actor: "test" }), /仍被 1 处引用/);
+  deleteCard(root, a, oc, { actor: "test" });
+  assert.equal(attachmentReferenceCount(root, "x.png"), 0);
+  deleteAttachment(root, "x.png", { actor: "test" });
+  assert.ok(!existsSync(join(attachmentsDir(root), "x.png")));
+});
+
+test("validate 对带尾部标点引用：缺失存在报告、越界报告不安全（同一解析语义）", async () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const gf = findGoalFile(root, a);
+  const doc = loadGoal(gf);
+  doc.body += "\n见 @att/nope.md。 与 @att/../evil\n";
+  const { serializeDoc } = await import("../model.ts");
+  writeFileSync(gf, serializeDoc(doc), "utf8");
+  const problems = validate(root);
+  assert.ok(problems.some((p) => /附件引用不存在 @att\/nope\.md/.test(p)), "应报告缺失: " + problems.join("|"));
+  assert.ok(problems.some((p) => /附件引用不安全/.test(p)), "应报告不安全: " + problems.join("|"));
+});
+
+test("禁止以点号结尾的附件文件名：存储/路径校验一致拒绝；@att/a. 解析为 a 且 delete guard 不绕过", () => {
+  const root = tmpRoot();
+  assert.throws(() => storeAttachment(root, { name: "a.", content: "x", actor: "test" }), /不能以点号结尾/);
+  assert.throws(() => storeAttachment(root, { name: "sub/a.", content: "x", actor: "test" }), /不能以点号结尾/);
+  assert.throws(() => readAttachment(root, "a."), /不能以点号结尾|不存在/);
+  assert.throws(() => attachmentInfo(root, "a."), /不能以点号结尾/);
+  assert.deepEqual(parseAttachmentRefs("见 @att/a. 使用"), ["a"]);
+  // 全链路：存储 a，正文 @att/a. 引用 a → 计数+删除守卫不绕过
+  storeAttachment(root, { name: "a", content: "数据", actor: "test" });
+  const goal = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const oc = addCard(root, goal, { title: "c", scope: "goal", actor: "test" });
+  fillCard(root, goal, oc, { text: "见 @att/a. 使用", by: "human:x", actor: "test" });
+  assert.equal(attachmentReferenceCount(root, "a"), 1, "@att/a. 应计数为 a");
+  assert.throws(() => deleteAttachment(root, "a", { actor: "test" }), /仍被 1 处引用/, "delete guard 不绕过");
+  deleteCard(root, goal, oc, { actor: "test" });
+  assert.equal(attachmentReferenceCount(root, "a"), 0);
+  deleteAttachment(root, "a", { actor: "test" });
+  assert.ok(!existsSync(join(attachmentsDir(root), "a")));
+});
+
+test("URL 语境中的 @att/ 不作为附件引用（scheme://、protocol-relative、Markdown 目标含嵌套括号/userinfo；普通正文保留）", () => {
+  // scheme:// URL
+  assert.deepEqual(parseAttachmentRefs("https://x/@att/a.md"), []);
+  assert.deepEqual(parseAttachmentRefs("[x](https://x/@att/a.md)"), []);
+  // protocol-relative URL（域样 host：//host.tld）
+  assert.deepEqual(parseAttachmentRefs("//x.com/@att/a.md"), []);
+  assert.deepEqual(parseAttachmentRefs("see //x.com/@att/a.md"), []);
+  assert.deepEqual(parseAttachmentRefs("[x](//x.com/@att/a.md)"), []);
+  // protocol-relative userinfo（//user[:pass]@host.tld）
+  assert.deepEqual(parseAttachmentRefs("//user:pass@x.com/@att/a"), [], "userinfo 协议相对 URL 不应计");
+  assert.deepEqual(parseAttachmentRefs("//user@x.com/@att/a"), [], "userinfo 协议相对 URL 不应计");
+  // protocol-relative：真实主机（IPv4/IPv6 bracket/localhost，支持 port / userinfo）
+  assert.deepEqual(parseAttachmentRefs("//[::1]/@att/x"), [], "IPv6 URL 不应计");
+  assert.deepEqual(parseAttachmentRefs("//localhost/@att/x"), [], "localhost URL 不应计");
+  assert.deepEqual(parseAttachmentRefs("//127.0.0.1:8080/@att/x"), [], "IPv4:port URL 不应计");
+  assert.deepEqual(parseAttachmentRefs("//[2001:db8::1]:443/@att/x"), [], "IPv6:port URL 不应计");
+  assert.deepEqual(parseAttachmentRefs("//user:pass@[2001:db8::1]/@att/x"), [], "IPv6+userinfo URL 不应计");
+  assert.deepEqual(parseAttachmentRefs("//user:pass@127.0.0.1:8080/@att/x"), [], "IPv4+userinfo+port URL 不应计");
+  // Markdown 绝对/相对 URL 目标（含嵌套/转义括号）
+  assert.deepEqual(parseAttachmentRefs("[x](/docs/@att/a.md)"), [], "相对 Markdown URL 目标不应计");
+  assert.deepEqual(parseAttachmentRefs("[x](../@att/a.md)"), [], "相对 Markdown URL 目标不应计");
+  assert.deepEqual(parseAttachmentRefs("[x](foo (bar)/@att/a)"), [], "Markdown 嵌套括号目标不应计");
+  assert.deepEqual(parseAttachmentRefs("见 [x](//[::1]/@att/x) 使用"), [], "Markdown 内 IPv6 URL 目标不应计");
+  // 普通正文（有效引用保留）——true URL/注释语境与普通路径区分
+  assert.deepEqual(parseAttachmentRefs("见 https://x/@att/a.md and @att/b.md"), ["b.md"], "URL 后的正常正文引用仍保留");
+  assert.deepEqual(parseAttachmentRefs("//x.com/@att/a.md 与 @att/real.md"), ["real.md"]);
+  assert.deepEqual(parseAttachmentRefs("a/b/@att/x"), ["x"], "普通相对路径 a/b/@att/x 应保留");
+  assert.deepEqual(parseAttachmentRefs("foo//bar/@att/x"), ["x"], "foo//bar/@att/x 普通正文应保留");
+  assert.deepEqual(parseAttachmentRefs("comment //path/@att/x"), ["x"], "comment //path/@att/x 注释语境应保留");
+  assert.deepEqual(parseAttachmentRefs("见 //path/@att/x 使用"), ["x"], "//path 非域样 host 应保留");
+  // count 不因 URL 中的 @att/ 阻止删除：存储 a.md，正文仅含 URL（scheme 与 protocol-relative）
+  const root = tmpRoot();
+  storeAttachment(root, { name: "a.md", content: "数据", actor: "test" });
+  const goal = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const oc = addCard(root, goal, { title: "c", scope: "goal", actor: "test" });
+  fillCard(root, goal, oc, { text: "见 https://x/@att/a.md 与 //y.com/@att/a.md 链接", by: "human:x", actor: "test" });
+  assert.equal(attachmentReferenceCount(root, "a.md"), 0, "URL 中的 @att/a.md 不应计数");
+  // delete guard 不误阻止（不因 URL 误认为被引用）
+  deleteAttachment(root, "a.md", { actor: "test" });
+  assert.ok(!existsSync(join(attachmentsDir(root), "a.md")));
+  // count 不因 IPv6/localhost/IPv4 URL 误阻止删除（真实 URL 主机）
+  const rootIp = tmpRoot();
+  storeAttachment(rootIp, { name: "x", content: "数据", actor: "test" });
+  const gIp = createGoal(rootIp, { title: "IP", version: "v-t", actor: "test" });
+  const ocIp = addCard(rootIp, gIp, { title: "c", scope: "goal", actor: "test" });
+  fillCard(rootIp, gIp, ocIp, { text: "见 //[::1]/@att/x 与 //localhost/@att/x 与 //127.0.0.1:8080/@att/x", by: "human:x", actor: "test" });
+  assert.equal(attachmentReferenceCount(rootIp, "x"), 0, "IPv6/localhost/IPv4 URL 中的 @att/x 不应计数");
+  deleteAttachment(rootIp, "x", { actor: "test" });
+  assert.ok(!existsSync(join(attachmentsDir(rootIp), "x")));
+  // 普通正文中的 @att/x 应计数（delete guard 正确阻止）
+  const root2 = tmpRoot();
+  storeAttachment(root2, { name: "x", content: "数据", actor: "test" });
+  const g2 = createGoal(root2, { title: "B", version: "v-t", actor: "test" });
+  const oc2 = addCard(root2, g2, { title: "c2", scope: "goal", actor: "test" });
+  fillCard(root2, g2, oc2, { text: "见 a/b/@att/x 使用", by: "human:x", actor: "test" });
+  assert.equal(attachmentReferenceCount(root2, "x"), 1, "普通正文 a/b/@att/x 应计数为 x");
+  assert.throws(() => deleteAttachment(root2, "x", { actor: "test" }), /仍被 1 处引用/);
+});
+
+test("validate 对 URL 语境 @att/ 不报告假缺失/不安全，保留正文引用", async () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const gf = findGoalFile(root, a);
+  const doc = loadGoal(gf);
+  doc.body += "\n访问 https://x/@att/nope.md 与 [链接](https://x/@att/missing.md) 与 [x](/docs/@att/abs.md) 与 [y](../@att/rel.md)，引用 @att/real.md 与 comment //path/@att/real2.md。\n";
+  doc.body += "\n另见 //[::1]/@att/ip6.md、//localhost/@att/lh.md、//127.0.0.1:8080/@att/ip4.md、//user:pass@[2001:db8::1]/@att/ip6ui.md 不报缺失。\n";
+  const { serializeDoc } = await import("../model.ts");
+  writeFileSync(gf, serializeDoc(doc), "utf8");
+  const problems = validate(root);
+  // URL 语境（scheme:// 、Markdown 目标含绝对/相对 URL、IPv6/localhost/IPv4/带 userinfo 的协议相对 URL）不报假缺失
+  assert.ok(!problems.some((p) => /\/nope\.md/.test(p)), "scheme URL 不应报缺失: " + problems.join("|"));
+  assert.ok(!problems.some((p) => /\/missing\.md/.test(p)), "Markdown 目标不应报缺失: " + problems.join("|"));
+  assert.ok(!problems.some((p) => /\/abs\.md/.test(p)), "绝对 URL 目标不应报缺失: " + problems.join("|"));
+  assert.ok(!problems.some((p) => /\/rel\.md/.test(p)), "相对 URL 目标不应报缺失: " + problems.join("|"));
+  assert.ok(!problems.some((p) => /\/ip6\.md/.test(p)), "IPv6 URL 目标不应报缺失: " + problems.join("|"));
+  assert.ok(!problems.some((p) => /\/lh\.md/.test(p)), "localhost URL 目标不应报缺失: " + problems.join("|"));
+  assert.ok(!problems.some((p) => /\/ip4\.md/.test(p)), "IPv4:port URL 目标不应报缺失: " + problems.join("|"));
+  assert.ok(!problems.some((p) => /\/ip6ui\.md/.test(p)), "IPv6+userinfo URL 目标不应报缺失: " + problems.join("|"));
+  // 正常正文引用（含注释语境 //path/）缺失 → 报缺失
+  assert.ok(problems.some((p) => /附件引用不存在 @att\/real\.md/.test(p)), "正常正文引用应报缺失: " + problems.join("|"));
+  assert.ok(problems.some((p) => /附件引用不存在 @att\/real2\.md/.test(p)), "注释语境 //path/@att/real2.md 应报缺失: " + problems.join("|"));
+});
+
+test("attachmentProblems 消费统一 token 列表并按 ref 去重（重复 @att/nope.md 只报一条）", async () => {
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const gf = findGoalFile(root, a);
+  const doc = loadGoal(gf);
+  doc.body += "\n见 @att/nope.md 与 @att/nope.md 及 @att/nope.md。\n";
+  const { serializeDoc } = await import("../model.ts");
+  writeFileSync(gf, serializeDoc(doc), "utf8");
+  const problems = validate(root);
+  const missingCount = problems.filter((p) => /附件引用不存在 @att\/nope\.md/.test(p)).length;
+  assert.equal(missingCount, 1, "重复同 ref 只应报一条: " + problems.join("|"));
+});
+
+test("Markdown destination 起点屏蔽目标内 token 且不吞后文（无闭/跨行）", async () => {
+  // [x](url) 跨行：行内 destination 起点（含 URL / 无 scheme）均屏蔽，换行后正文 @att/v 应保留
+  assert.deepEqual(parseAttachmentRefs("[x](https://x/@att/u\n后续正文 @att/v)"), ["v"], "URL destination 跨行后正文 @att/v 应保留");
+  assert.deepEqual(parseAttachmentRefs("[x](@att/u\n后续正文 @att/v)"), ["v"], "无 scheme 跨行 destination：行内 @att/u 被屏蔽，正文 @att/v 保留");
+  // 无闭 destination（无换行/到本行末）：destination 起点内的 @att 被屏蔽
+  assert.deepEqual(parseAttachmentRefs("[x](@att/a\n正文)"), [], "无闭跨行 destination 起点屏蔽 @att/a");
+  assert.deepEqual(parseAttachmentRefs("[x](foo/@att/a"), [], "无闭 destination 屏蔽 @att/a");
+  // validate：跨行 destination 起点 token 不报缺失；换行后正文与后续行正文报缺失
+  const root = tmpRoot();
+  const a = createGoal(root, { title: "A", version: "v-t", actor: "test" });
+  const gf = findGoalFile(root, a);
+  const doc = loadGoal(gf);
+  doc.body += "\n见 [x](https://x/@att/u.md\n后续正文 @att/v.md) 与 [y](@att/w.md\n正文 @att/z.md)。再 `[x](@att/p.md` 无闭。\n";
+  const { serializeDoc } = await import("../model.ts");
+  writeFileSync(gf, serializeDoc(doc), "utf8");
+  const problems = validate(root);
+  // destination 起点（u/w/p）不报缺失（被屏蔽），换行后正文（v/z）报缺失
+  assert.ok(!problems.some((p) => /\/u\.md/.test(p)), "destination 起点 URL @att/u.md 不应报缺失: " + problems.join("|"));
+  assert.ok(!problems.some((p) => /\/w\.md/.test(p)), "destination 起点无 scheme @att/w.md 不应报缺失: " + problems.join("|"));
+  assert.ok(!problems.some((p) => /\/p\.md/.test(p)), "无闭 destination 起点的 @att/p.md 不应报缺失: " + problems.join("|"));
+  assert.ok(problems.some((p) => /附件引用不存在 @att\/v\.md/.test(p)), "换行后正文 @att/v.md 应报缺失: " + problems.join("|"));
+  assert.ok(problems.some((p) => /附件引用不存在 @att\/z\.md/.test(p)), "第二行正文 @att/z.md 应报缺失: " + problems.join("|"));
+});
+
+test("deleteAttachment 先删文件后记事件：rm 失败不宣称已删除（事件/磁盘一致）", () => {
+  const root = tmpRoot();
+  storeAttachment(root, { name: "del.md", content: "数据", actor: "test" });
+  const attDir = attachmentsDir(root);
+  const evsBefore = readEvents(root).filter((e) => e.event === "attachment.deleted").length;
+  chmodSync(attDir, 0o555); // 使 rmSync 失败（EACCES）
+  let err: any = null;
+  try { deleteAttachment(root, "del.md", { actor: "test" }); } catch (e) { err = e; }
+  chmodSync(attDir, 0o755);
+  assert.ok(err, "rm 失败应抛出");
+  assert.ok(existsSync(join(attDir, "del.md")), "rm 失败文件仍在");
+  const evsAfter = readEvents(root).filter((e) => e.event === "attachment.deleted").length;
+  assert.equal(evsAfter, evsBefore, "rm 失败不得记 attachment.deleted 事件");
+  // rm 成功路径：正常删除且记事件
+  deleteAttachment(root, "del.md", { actor: "test" });
+  assert.ok(!existsSync(join(attDir, "del.md")));
+  assert.equal(readEvents(root).filter((e) => e.event === "attachment.deleted").length, evsBefore + 1, "成功删除才记事件");
+});
+
+test("deleteAttachment 事件记录失败：文件恢复原状、不漂移（rename/trash+回滚）", () => {
+  const root = tmpRoot();
+  storeAttachment(root, { name: "del.md", content: "数据", actor: "test" });
+  const del = join(attachmentsDir(root), "del.md");
+  const evFile = join(root, "events.jsonl");
+  const evSnapshot = readFileSync(evFile, "utf8");
+  // 把 events.jsonl 换成目录 → appendEvent 失败（EISDIR）
+  rmSync(evFile, { force: true });
+  mkdirSync(evFile, { recursive: true });
+  let err: any = null;
+  try { deleteAttachment(root, "del.md", { actor: "test" }); } catch (e) { err = e; }
+  // 恢复事件文件
+  rmSync(evFile, { recursive: true, force: true });
+  writeFileSync(evFile, evSnapshot, "utf8");
+  assert.ok(err, "事件记录失败应抛出");
+  assert.ok(existsSync(del), "事件失败后文件已恢复原状（未删除）");
+  assert.equal(readEvents(root).filter((e) => e.event === "attachment.deleted").length, 0, "事件失败不应记 deleted 事件");
+  // 恢复正常删除
+  deleteAttachment(root, "del.md", { actor: "test" });
+  assert.ok(!existsSync(del));
+  assert.equal(readEvents(root).filter((e) => e.event === "attachment.deleted").length, 1, "成功删除才记事件");
+  // 残留 .trash-* 不列为附件（listAttachments 过滤隐藏文件）
+  assert.ok(!listAttachments(root).some((n) => n.startsWith(".trash-") || n.startsWith(".tmp-") || n.startsWith(".")));
+});
+
+test("父目录被替换为指向外部的 symlink：read/delete/store 拒绝且不越界（TOCTOU 重验）", () => {
+  const root = tmpRoot();
+  const outside = join(root, "..", "out-dir-" + Date.now());
+  mkdirSync(outside, { recursive: true });
+  storeAttachment(root, { name: "sub/f.txt", content: "数据", actor: "test" });
+  assert.ok(existsSync(join(attachmentsDir(root), "sub", "f.txt")));
+  // 把 sub 目录替换为 symlink → 指向外部
+  const subDir = join(attachmentsDir(root), "sub");
+  rmSync(subDir, { recursive: true, force: true });
+  symlinkSync(outside, subDir);
+  // read / delete / store 均拒绝（父目录为 symlink；resolve 与 reassert 均拦截）
+  assert.throws(() => readAttachment(root, "sub/f.txt"), /symlink|越界|不可达/);
+  assert.throws(() => deleteAttachment(root, "sub/f.txt", { actor: "test" }), /symlink|不存在|越界/);
+  assert.throws(() => storeAttachment(root, { name: "sub/g.txt", content: "x", actor: "test" }), /symlink|越界/);
+  assert.ok(!existsSync(join(outside, "f.txt")), "不得在外部读取/删除");
+  assert.ok(!existsSync(join(outside, "g.txt")), "不得在外部写入");
+});

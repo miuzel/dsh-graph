@@ -2105,6 +2105,10 @@ export function sanitizeAttachmentPath(name) {
     if (segs.some((seg) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(seg))) {
         throw new GraphError(`附件路径片段含非法字符：${s}`);
     }
+    // g-183 v12 终审：文件名不能以点号结尾（a. 与句末 . 歧义；禁止存储以免 parse/计数/删除守卫绕过）
+    if (segs.some((seg) => seg.endsWith("."))) {
+        throw new GraphError(`附件路径片段不能以点号结尾：${s}`);
+    }
     return s;
 }
 /** 安全判断：给定相对路径是否可通过 @att/<relativeName> 合法引用（不抛错）。 */
@@ -2117,25 +2121,160 @@ export function isValidAttachmentPath(name) {
         return false;
     }
 }
-/** 从正文/文本中解析出所有附件引用（@att/<relativeName>），返回去重、仅含安全路径的稳定顺序列表。
- *  越界/恶意引用（../ 、.、绝对路径）被丢弃，不进入结果。 */
-export function parseAttachmentRefs(text) {
-    const out = [];
-    const seen = new Set();
-    if (typeof text !== "string")
-        return out;
-    const re = /@att\/([^\s]+)/g;
+/** 句末/分隔/关闭括号等会被捕获的尾部标点（中英文），@att 引用名尾部应剥掉这些不会被安全路径使用。
+ *  注：以点号结尾的附件文件名已被 sanitizeAttachmentPath 禁止（a. 与句末 . 歧义），因此这里剥尾点不丢真实文件。 */
+const ATT_REF_TRAILING_PUNCT = new Set([
+    ",", ";", ":", ".", "!", "?", ")", "]", "}", "\"", "'", "<", ">", "*",
+    "，", "。", "！", "？", "；", "：", "）", "】", "〉", "》", "」", "』", "”", "’", "“", "‘", "、", "…", "〕", "］",
+]);
+/** 把正则捕获到的 @att token 规整为稳定引用名：仅从尾部剥掉上述句末/分隔标点（含点号），
+ *  然后校验为安全附件路径；无法合法返回 null（越界/恶意/残留非路径字符）。不扩大任意路径/URL。 */
+function normalizeAttachmentRefToken(raw) {
+    let cur = raw;
+    let guard = 0;
+    while (cur.length > 0 && guard < 64 && ATT_REF_TRAILING_PUNCT.has(cur[cur.length - 1])) {
+        cur = cur.slice(0, -1);
+        guard++;
+    }
+    return isValidAttachmentPath(cur) ? cur : null;
+}
+/** @att token 边界：空白 + 强分隔符 + 中英文关闭/括号等（用于判断 @att 所在 token 的起止）。 */
+const ATT_URL_TOKEN_BOUNDARY = /[\s()\[\]{}"'\x60<>\u3000\u3001\u3002\uFF08\uFF09\u3010\u3011\u300A\u300B\u300C\u300D\u201C\u201D\u2018\u2019]/;
+/** URL 专用 token boundary：与上面相同但**不含** '[' ']'（保留 IPv6 bracket URL 的连续 token，如 `//[::1]/@att/x`）。 */
+const ATT_URL_TOKEN_BOUNDARY_URL = /[\s()\{\}"'\x60<>\u3000\u3001\u3002\uFF08\uFF09\u3010\u3011\u300A\u300B\u300C\u300D\u201C\u201D\u2018\u2019]/;
+/** 从 openIdx 处的 `(` 出发，找到与之配对的 `)`（处理嵌套括号、`\(`/`\)` 转义）；无配对返回 -1。 */
+function findMatchingParen(text, openIdx) {
+    let depth = 0;
+    for (let i = openIdx; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === "\n" || ch === "\r")
+            return -1; // Markdown destination 不能跨行/后续正文，遇换行即非法
+        if (ch === "\\") {
+            i++;
+            continue;
+        } // 跳过转义
+        if (ch === "(")
+            depth++;
+        else if (ch === ")") {
+            depth--;
+            if (depth === 0)
+                return i;
+        }
+    }
+    return -1;
+}
+/** 判断 protocol-relative URL 的 authority（`//` 之后到下一个 URL 分隔符）是否为真实 URL 主机（域样/IPv4/IPv6 bracket/localhost），
+ *  并支持 userinfo（user[:pass]@host）与 port、query/fragment。`//path/...` 这类裸词 host 视为普通正文/注释。 */
+function isProtocolRelativeUrl(token) {
+    if (!token.startsWith("//"))
+        return false;
+    const rest = token.slice(2);
+    // authority 分隔符：/ 空白 ) } , ; ? #（不含 [ ]，保留 IPv6 bracket）
+    const end = rest.search(/[\/\s\)\}\},;?#]/);
+    const authority = end === -1 ? rest : rest.slice(0, end);
+    const atIdx = authority.lastIndexOf("@");
+    const hostPort = atIdx === -1 ? authority : authority.slice(atIdx + 1); // strip userinfo
+    let host = hostPort;
+    if (hostPort.startsWith("[")) {
+        // IPv6 bracket: [addr] 或 [addr]:port
+        const close = hostPort.indexOf("]");
+        host = close === -1 ? hostPort : hostPort.slice(0, close + 1);
+    }
+    else {
+        const colon = hostPort.indexOf(":");
+        if (colon !== -1)
+            host = hostPort.slice(0, colon); // strip port
+    }
+    if (host.startsWith("[") && host.endsWith("]"))
+        return true; // IPv6
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host))
+        return true; // IPv4
+    if (host === "localhost")
+        return true; // localhost
+    if (/[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(host))
+        return true; // 域样
+    return false;
+}
+/** 判断 @att/ 是否位于 URL/目的地语境（scheme://、protocol-relative `//host`（域名样 host，含 userinfo）、或 Markdown 链接目标 `[x](DEST)`）——
+ *  这类不应视为附件引用。采用 token 级识别，区分普通正文路径（`a/b/@att/x`、`foo//bar/@att/x`、`comment //path/@att/x`）。 */
+function isAttachmentRefInURL(text, attIndex) {
+    // 1) Markdown 链接目标 [x](DEST) 里的 @att —— destination 起点即屏蔽目标内 token，且不吞后文。
+    //    若同行闭合（findMatchingParen 找到 `)`），destination 为其区间；若未闭合/跨行（返回值 -1），
+    //    destination 直到本行行末——后续正文（换行后）不受屏蔽。
+    const before = text.slice(0, attIndex);
+    const mdLink = before.lastIndexOf("](");
+    if (mdLink >= 0) {
+        const openBracket = before.lastIndexOf("[", mdLink);
+        if (openBracket >= 0 && openBracket < mdLink) {
+            const closeLink = findMatchingParen(text, mdLink + 1);
+            let destEnd;
+            if (closeLink !== -1)
+                destEnd = closeLink; // 同行闭合
+            else {
+                // 未闭合/跨行：destination 到本行行末（不吞换行后的后续正文）
+                const nl = text.indexOf("\n", mdLink + 2);
+                destEnd = nl === -1 ? text.length : nl;
+            }
+            if (attIndex >= mdLink + 2 && attIndex < destEnd)
+                return true;
+        }
+    }
+    // 2) 定位 @att 所在的非分隔 token——为正确捕获 IPv6 bracket URL，URL 专用 boundary 不含 '[' ']'
+    let tkStart = attIndex;
+    while (tkStart > 0 && !ATT_URL_TOKEN_BOUNDARY_URL.test(text[tkStart - 1]))
+        tkStart--;
+    let tkEnd = attIndex;
+    while (tkEnd < text.length && !ATT_URL_TOKEN_BOUNDARY_URL.test(text[tkEnd]))
+        tkEnd++;
+    const token = text.slice(tkStart, tkEnd);
+    // scheme:// URL（如 https://）
+    if (/[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(token))
+        return true;
+    // protocol-relative URL：真实主机（域样/IPv4/IPv6 bracket/localhost，含 userinfo/port）；`//path/...` 视为普通正文/注释
+    if (isProtocolRelativeUrl(token))
+        return true;
+    return false;
+}
+/** 统一 token 化：遍历文本中所有 `@att/<name>`，跳过 URL 语境，去重返回 { valid, unsafe }。
+ *  valid = 可归一化的稳定引用名；unsafe = 无法归一为合法安全路径的原始片段（越界/恶意/残留非路径字符）。 */
+function collectAttachmentRefTokens(text) {
+    const valid = [];
+    const unsafe = [];
+    const seenValid = new Set();
+    const seenUnsafe = new Set();
+    // 仅捕获路径安全字符（[A-Za-z0-9._-] 与子目录分隔 /），让标点/中文词/括号等自然终止引用名，
+    // 避免把句末/后续中文词并进引用名（如 @att/z.md。再 只捕获 z.md）。
+    const re = /@att\/([A-Za-z0-9._\-\/]+)/g;
     let m;
     while ((m = re.exec(text)) !== null) {
+        if (isAttachmentRefInURL(text, m.index))
+            continue; // URL 语境不作为引用
         const raw = m[1];
-        if (!isValidAttachmentPath(raw))
-            continue; // 过滤 ../ . 绝对路径越界
-        if (seen.has(raw))
-            continue;
-        seen.add(raw);
-        out.push(raw);
+        const name = normalizeAttachmentRefToken(raw);
+        if (name) {
+            if (!seenValid.has(name)) {
+                seenValid.add(name);
+                valid.push(name);
+            }
+        }
+        else {
+            if (!seenUnsafe.has(raw)) {
+                seenUnsafe.add(raw);
+                unsafe.push(raw);
+            }
+        }
     }
-    return out;
+    return { valid, unsafe };
+}
+/** 从正文/文本中解析出所有附件引用（@att/<relativeName>），返回去重、仅含安全路径的稳定顺序列表。
+ *  尾部句末/分隔/中文/关闭括号标点会被剥离（如 `@att/x.png.` → `x.png`、`@att/a.md,` → `a.md`）；
+ *  越界/恶意引用（../ 、.、绝对路径、残留非路径字符）被丢弃，不进入结果；
+ *  URL 语境中的 `@att/`（如 `https://x/@att/a.md`、`[x](https://x/@att/a.md)`）不作为附件引用。
+ *  所有消费方（count/展示/注入/validate）共用本解析语义。 */
+export function parseAttachmentRefs(text) {
+    if (typeof text !== "string")
+        return [];
+    return collectAttachmentRefTokens(text).valid;
 }
 /** 尝试 lstat；不存在/出错返回 null。 */
 function tryLstat(p) {
@@ -2201,6 +2340,24 @@ function resolveAttachmentPath(root, relPath, createDirs = false) {
     }
     return { realRoot, segs, file: join(dirReal, base) };
 }
+/** 在真正执行 fs 操作前重验父目录仍安全（防 TOCTOU：解析后被替换为指向外部的 symlink）：
+ *  父目录不得为 symlink，且其 realpath 须在 canonical attachments 根内。 */
+function reassertContainedParent(attRootReal, file) {
+    const parent = dirname(file);
+    const st = tryLstat(parent);
+    if (st?.isSymbolicLink())
+        throw new GraphError("附件父目录被替换为 symlink，拒绝操作");
+    let parentReal;
+    try {
+        parentReal = realpathSync(parent);
+    }
+    catch {
+        throw new GraphError("附件父目录不可达，拒绝操作");
+    }
+    if (!(parentReal === attRootReal || parentReal.startsWith(attRootReal + sep))) {
+        throw new GraphError("附件路径越界（父目录 realpath 不在 attachments 根内）");
+    }
+}
 /** 根据扩展名推断 Content-Type；标记安全内联与否（HTML/Markdown/SVG 等强制下载）。 */
 export function attachmentContentType(name) {
     const ext = (basename(name).split(".").pop() ?? "").toLowerCase();
@@ -2224,6 +2381,7 @@ export function readAttachment(root, name) {
     const st = tryLstat(r.file);
     if (!st || !st.isFile() || st.isSymbolicLink())
         throw new GraphError(`附件不存在或非普通文件：${name}`);
+    reassertContainedParent(r.realRoot, r.file); // 读前重验父目录（防 TOCTOU 父目录替换 symlink 越界读）
     const buffer = readFileSync(r.file);
     const digest = createHash("sha1").update(buffer).digest("hex").slice(0, 16);
     const ct = attachmentContentType(name);
@@ -2328,6 +2486,7 @@ export function storeAttachment(root, opts) {
         if (tryLstat(target))
             throw new GraphError(`唯一名目标已存在：${finalRel}`);
     }
+    reassertContainedParent(attRootReal, target); // 写前重验父目录（防 TOCTOU 父目录替换 symlink 越界写）
     atomicWrite(target, data);
     appendEvent(root, {
         actor: opts.actor,
@@ -2352,7 +2511,8 @@ export function listAttachments(root) {
         const abs = join(dir, rel);
         const ents = readdirSync(abs, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
         for (const e of ents) {
-            if (e.name === ".gitkeep")
+            // 隐藏文件/.gitkeep/.tmp-*/.trash-* 均跳过（残留内部 temp/trash 不视为附件）
+            if (e.name.startsWith("."))
                 continue;
             const r = rel ? `${rel}/${e.name}` : e.name;
             if (e.isDirectory())
@@ -2430,34 +2590,63 @@ export function deleteAttachment(root, name, opts) {
     if (refs > 0) {
         throw new GraphError(`附件 ${safeName} 仍被 ${refs} 处引用，不能删除——请先解除引用`);
     }
-    appendEvent(root, { actor: opts.actor, event: "attachment.deleted", details: { name: safeName } });
-    rmSync(r.file, { force: true });
+    // 原子删除：先 rename 到同目录 trash（原子、内容保留），再记事件；事件失败则 rename 回滚；最后删 trash。
+    // 覆盖 rm 失败（rename 抛错，文件仍在）与事件失败（文件恢复原状，事件缺失不漂移）。
+    reassertContainedParent(r.realRoot, r.file);
+    const trash = join(dirname(r.file), `.trash-${basename(r.file)}-${randomUUID()}`);
+    try {
+        renameSync(r.file, trash);
+    }
+    catch (e) {
+        throw new GraphError(`附件删除失败，文件仍在：${safeName}（${String(e.message)}）`);
+    }
+    let eventErr = null;
+    try {
+        appendEvent(root, { actor: opts.actor, event: "attachment.deleted", details: { name: safeName } });
+    }
+    catch (e) {
+        eventErr = e;
+    }
+    if (eventErr) {
+        // 补偿恢复：把 trash 还原回 file（原子 rename），避免“文件已删、事件缺失”
+        try {
+            renameSync(trash, r.file);
+        }
+        catch (re) {
+            throw new GraphError(`附件 ${safeName} 已删除但事件记录失败且恢复失败，需人工核对（${String(re.message)}）`);
+        }
+        throw new GraphError(`附件 ${safeName} 已删除但事件记录失败，已恢复原状（${String(eventErr.message)}）`);
+    }
+    // 事件成功：清理 trash（best-effort；残留的 .trash-* 为隐藏文件，listAttachments 过滤，不视为附件）
+    try {
+        rmSync(trash, { force: true });
+    }
+    catch { /* 残留 .trash-* 过滤 */ }
 }
 /** 校验所有 goal 正文与卡片正文中 @att 引用：越界/不安全 ref 报错、引用缺失文件报错（g-183 返工 #7）。 */
 export function attachmentProblems(root) {
     const problems = [];
     const checkBody = (where, body) => {
-        const re = /@att\/([^\s]+)/g;
-        let m;
-        while ((m = re.exec(body)) !== null) {
-            const raw = m[1];
-            if (!isValidAttachmentPath(raw)) {
-                problems.push(`${where}: 附件引用不安全 @att/${raw}`);
-                continue;
-            }
+        // 消费统一 token 化（与 parseAttachmentRefs 同一语义），按 ref 去重，避免重复问题
+        const { valid, unsafe } = collectAttachmentRefTokens(body);
+        for (const raw of unsafe) {
+            // 无法成为合法安全路径 → 不安全引用（越界/恶意/残留非路径字符）
+            problems.push(`${where}: 附件引用不安全 @att/${raw}`);
+        }
+        for (const name of valid) {
             // 存在性：需能被安全解析且文件存在（只读解析，不创建目录）
             try {
-                const r = resolveAttachmentPath(root, raw);
+                const r = resolveAttachmentPath(root, name);
                 if (!r) {
-                    problems.push(`${where}: 附件引用不存在 @att/${raw}`);
+                    problems.push(`${where}: 附件引用不存在 @att/${name}`);
                     continue;
                 }
                 const st = tryLstat(r.file);
                 if (!st || !st.isFile() || st.isSymbolicLink())
-                    problems.push(`${where}: 附件引用不存在 @att/${raw}`);
+                    problems.push(`${where}: 附件引用不存在 @att/${name}`);
             }
             catch (e) {
-                problems.push(`${where}: 附件引用无法解析 @att/${raw}：${e.message}`);
+                problems.push(`${where}: 附件引用无法解析 @att/${name}：${e.message}`);
             }
         }
     };
