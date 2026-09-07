@@ -596,29 +596,31 @@ export const SUBAGENT_MODE_PROMPTS: Record<SubagentMode, string> = {
 
 /** 读取 project.yaml 的 executor.provider/model/mode。
  * 使用 YAML 解析器处理注释、空行和合法标量；配置缺失或解析失败时安全降级。 */
-export function readExecutorModel(root: string): { provider: string | null; model: string | null; mode: SubagentMode | null; reasoning_effort: string | null } {
+export function readExecutorModel(root: string): { provider: string | null; model: string | null; mode: SubagentMode | null; reasoning_effort?: string | null } {
   const file = join(root, "project.yaml");
   try {
-    if (!existsSync(file)) return { provider: null, model: null, mode: null, reasoning_effort: null };
+    if (!existsSync(file)) return { provider: null, model: null, mode: null };
     const document = parseYaml(readFileSync(file, "utf8"));
     const executor = document && typeof document === "object" && !Array.isArray(document)
       ? (document as Record<string, unknown>).executor
       : null;
     if (!executor || typeof executor !== "object" || Array.isArray(executor)) {
-      return { provider: null, model: null, mode: null, reasoning_effort: null };
+      return { provider: null, model: null, mode: null };
     }
     const value = (key: string): string | null => {
       const raw = (executor as Record<string, unknown>)[key];
       return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
     };
-    return {
+    const effort = value("reasoning_effort");
+    const result: { provider: string | null; model: string | null; mode: SubagentMode | null; reasoning_effort?: string | null } = {
       provider: value("provider"),
       model: value("model"),
       mode: normalizeSubagentMode(value("mode")),
-      reasoning_effort: value("reasoning_effort"),
     };
+    if (effort) result.reasoning_effort = effort;
+    return result;
   } catch {
-    return { provider: null, model: null, mode: null, reasoning_effort: null };
+    return { provider: null, model: null, mode: null };
   }
 }
 
@@ -634,7 +636,7 @@ export interface PromptOverride {
 }
 
 export interface ProjectConfig {
-  executor: { provider: string | null; model: string | null; mode: SubagentMode | null; reasoning_effort: string | null };
+  executor: { provider: string | null; model: string | null; mode: SubagentMode | null; reasoning_effort?: string | null };
   defaults: {
     review: { reviewer: string | null; prompt: string | null };
     pk: { lanes: number | null; sandbox: string | null };
@@ -813,7 +815,7 @@ export function readProjectConfig(root: string): ProjectConfig {
   const file = join(root, "project.yaml");
   if (!existsSync(file)) {
     return {
-      executor: { provider: null, model: null, mode: null, reasoning_effort: null },
+      executor: { provider: null, model: null, mode: null },
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
       supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])) },
       prompt_overrides: { subagent: { state: "default", value: null } },
@@ -827,12 +829,16 @@ export function readProjectConfig(root: string): ProjectConfig {
   const subagent = readPromptOverrideConfig(lines, "subagent").value ?? { state: "default", value: null };
   const modeRaw = scal(["executor", "mode"]);
   return {
-    executor: {
-      provider: scal(["executor", "provider"]),
-      model: scal(["executor", "model"]),
-      mode: normalizeSubagentMode(modeRaw),
-      reasoning_effort: scal(["executor", "reasoning_effort"]),
-    },
+    executor: (() => {
+      const effort = scal(["executor", "reasoning_effort"]);
+      const obj: any = {
+        provider: scal(["executor", "provider"]),
+        model: scal(["executor", "model"]),
+        mode: normalizeSubagentMode(modeRaw),
+      };
+      if (effort) obj.reasoning_effort = effort;
+      return obj;
+    })(),
     defaults: {
       review: { reviewer: scal(["defaults", "review", "reviewer"]), prompt: scal(["defaults", "review", "prompt"]) },
       pk: { lanes: lanesRaw === null ? null : parseInt(lanesRaw, 10), sandbox: scal(["defaults", "pk", "sandbox"]) },
@@ -5626,11 +5632,14 @@ export function resolveModelRoute(
   overrides: { provider?: string | null; model?: string | null; reasoning_effort?: string | null } | null,
   projectCfg: { provider: string | null; model: string | null; reasoning_effort?: string | null },
   globalCfg: { subagentProvider: string; subagentModel: string; subagentReasoningEffort?: string },
-): { provider: string | null; model: string | null; reasoning_effort: string | null } {
+): { provider: string | null; model: string | null; reasoning_effort?: string | null } {
   const provider = overrides?.provider ?? projectCfg.provider ?? globalCfg.subagentProvider ?? null;
   const model = overrides?.model ?? projectCfg.model ?? globalCfg.subagentModel ?? null;
   const reasoning_effort = overrides?.reasoning_effort ?? projectCfg.reasoning_effort ?? globalCfg.subagentReasoningEffort ?? null;
-  const result: { provider: string | null; model: string | null; reasoning_effort?: string } = { provider: provider || null, model: model || null };
+  const result: { provider: string | null; model: string | null; reasoning_effort?: string | null } = {
+    provider: provider || null,
+    model: model || null,
+  };
   if (reasoning_effort) result.reasoning_effort = reasoning_effort;
   return result;
 }

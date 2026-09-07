@@ -545,11 +545,15 @@ export function readExecutorModel(root) {
             const raw = executor[key];
             return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
         };
-        return {
+        const effort = value("reasoning_effort");
+        const result = {
             provider: value("provider"),
             model: value("model"),
             mode: normalizeSubagentMode(value("mode")),
         };
+        if (effort)
+            result.reasoning_effort = effort;
+        return result;
     }
     catch {
         return { provider: null, model: null, mode: null };
@@ -787,11 +791,17 @@ export function readProjectConfig(root) {
     const subagent = readPromptOverrideConfig(lines, "subagent").value ?? { state: "default", value: null };
     const modeRaw = scal(["executor", "mode"]);
     return {
-        executor: {
-            provider: scal(["executor", "provider"]),
-            model: scal(["executor", "model"]),
-            mode: normalizeSubagentMode(modeRaw),
-        },
+        executor: (() => {
+            const effort = scal(["executor", "reasoning_effort"]);
+            const obj = {
+                provider: scal(["executor", "provider"]),
+                model: scal(["executor", "model"]),
+                mode: normalizeSubagentMode(modeRaw),
+            };
+            if (effort)
+                obj.reasoning_effort = effort;
+            return obj;
+        })(),
         defaults: {
             review: { reviewer: scal(["defaults", "review", "reviewer"]), prompt: scal(["defaults", "review", "prompt"]) },
             pk: { lanes: lanesRaw === null ? null : parseInt(lanesRaw, 10), sandbox: scal(["defaults", "pk", "sandbox"]) },
@@ -871,6 +881,9 @@ function validateConfigPatch(patch) {
         const e = patch.executor ?? {};
         needStr(e.provider, "executor.provider", { nullable: true });
         needStr(e.model, "executor.model", { nullable: true });
+        needStr(e.reasoning_effort, "executor.reasoning_effort", { nullable: true });
+        if ("reasoning_effort" in e && e.reasoning_effort !== undefined && e.reasoning_effort !== null && typeof e.reasoning_effort !== "string")
+            throw new GraphError("executor.reasoning_effort 必须是字符串");
         if ("mode" in e && e.mode !== undefined && e.mode !== null && e.mode !== "") {
             if (typeof e.mode !== "string" || !normalizeSubagentMode(e.mode)) {
                 throw new GraphError(`executor.mode 只允许 ${SUBAGENT_MODES.join("/")}`);
@@ -951,6 +964,8 @@ export function writeProjectConfig(root, patch, actor) {
             setScalar(["executor", "model"], patch.executor.model ?? "");
         if ("mode" in patch.executor)
             setScalar(["executor", "mode"], patch.executor.mode ?? "");
+        if ("reasoning_effort" in patch.executor)
+            setScalar(["executor", "reasoning_effort"], patch.executor.reasoning_effort ?? "");
     }
     if (patch.defaults) {
         const d = patch.defaults ?? {};
@@ -5491,7 +5506,14 @@ export function readAcceptStatus(root, id) {
 export function resolveModelRoute(overrides, projectCfg, globalCfg) {
     const provider = overrides?.provider ?? projectCfg.provider ?? globalCfg.subagentProvider ?? null;
     const model = overrides?.model ?? projectCfg.model ?? globalCfg.subagentModel ?? null;
-    return { provider: provider || null, model: model || null };
+    const reasoning_effort = overrides?.reasoning_effort ?? projectCfg.reasoning_effort ?? globalCfg.subagentReasoningEffort ?? null;
+    const result = {
+        provider: provider || null,
+        model: model || null,
+    };
+    if (reasoning_effort)
+        result.reasoning_effort = reasoning_effort;
+    return result;
 }
 /** g-133：补充提示词三态合成。 */
 export function resolvePromptOverride(globalPrompt, overrideValue) {

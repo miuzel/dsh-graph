@@ -226,6 +226,7 @@ export const projectConfigPatchSchema = {
                 provider: { type: "string", nullable: true },
                 model: { type: "string", nullable: true },
                 mode: { type: "string", nullable: true },
+                reasoning_effort: { type: "string", nullable: true },
             },
             additionalProperties: false,
         },
