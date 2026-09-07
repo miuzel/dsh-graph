@@ -7283,7 +7283,7 @@ window.__ModuleLoader__.load({
           else cleanAuto[k] = null;
         }
         const patch = {
-          executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "", mode: form.executor?.mode ?? "" },
+          executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "", reasoning_effort: form.executor?.reasoning_effort ?? "", mode: form.executor?.mode ?? "" },
           defaults: {
             review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
             pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
@@ -7430,6 +7430,23 @@ window.__ModuleLoader__.load({
         }
         return opts;
       })();
+      // reasoning 元数据随目录中的精确 provider/model 下发，选项不使用客户端固定枚举。
+      const selectedModel = (() => {
+        if (!catReady || curModel === "") return null;
+        if (curProvider !== "") return groupById.get(curProvider)?.models.find((m) => m.id === curModel) ?? null;
+        const matches = catalog.groups.flatMap((g) => g.models.filter((m) => m.id === curModel));
+        return matches.length === 1 ? matches[0] : null;
+      })();
+      const effortChoices = Array.isArray(selectedModel?.reasoning?.efforts) ? selectedModel.reasoning.efforts : [];
+      const curEffort = form.executor?.reasoning_effort ?? "";
+      const effortListed = effortChoices.some((effort) => effort?.id === curEffort);
+      const effortOptions = [opt("__blank-e", "", "（继承所选模型/父会话）")];
+      if (curEffort !== "" && !effortListed) {
+        effortOptions.push(opt("__cur-e", curEffort, curEffort + legacySuffix));
+      }
+      for (const effort of effortChoices) {
+        if (typeof effort?.id === "string" && effort.id !== "") effortOptions.push(opt("effort:" + effort.id, effort.id, effort.name ?? effort.id));
+      }
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
@@ -7504,6 +7521,20 @@ window.__ModuleLoader__.load({
               h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "model"),
               h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curModel, onChange: (e) => set(["executor", "model"], e.target.value) },
                 ...modelOptions))),
+          h("div", { style: { minWidth: 0, marginBottom: 6 } },
+            h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "默认推理档位 (reasoning effort)"),
+            h("select", {
+              "aria-label": "workspace 子代理默认推理档位",
+              style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+              value: curEffort,
+              onChange: (e) => set(["executor", "reasoning_effort"], e.target.value),
+            }, ...effortOptions),
+            h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } },
+              catReady
+                ? (effortChoices.length > 0
+                  ? "选项随所选 provider/model 的 reasoning effort 能力更新；留空继承所选模型或父会话默认值。"
+                  : "所选 provider/model 未声明 reasoning effort；已存旧值保留可选，可留空继承默认值。")
+                : "正在读取 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
           // g-191：执行模式受控下拉
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
             h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "执行模式 (mode)"),
@@ -7818,6 +7849,7 @@ window.__ModuleLoader__.load({
       const draftValue = draft ?? {
         subagentProvider: value?.subagentProvider ?? "",
         subagentModel: value?.subagentModel ?? "",
+        subagentReasoningEffort: value?.subagentReasoningEffort ?? "",
         subagentMode: value?.subagentMode ?? "",
         subagentPrompt: value?.subagentPrompt ?? "",
       };
@@ -7903,6 +7935,26 @@ window.__ModuleLoader__.load({
         }
         return opts;
       })();
+      // reasoning 元数据由 Host 模型目录声明；不维护客户端固定档位词表。
+      // 未选 provider 时仅在 model id 唯一时推导能力，避免同名模型跨 provider 错配。
+      const selectedModel = (() => {
+        if (!catReady || curModel === "") return null;
+        if (curProvider !== "") return groupById.get(curProvider)?.models.find((m) => m.id === curModel) ?? null;
+        const matches = catalog.groups.flatMap((g) => g.models.filter((m) => m.id === curModel));
+        return matches.length === 1 ? matches[0] : null;
+      })();
+      const effortChoices = Array.isArray(selectedModel?.reasoning?.efforts) ? selectedModel.reasoning.efforts : [];
+      const curEffort = draftValue.subagentReasoningEffort ?? "";
+      const effortListed = effortChoices.some((effort) => effort?.id === curEffort);
+      const effortOptions = [h("option", { key: "__blank-e", value: "" }, "（继承所选模型/父会话）")];
+      if (curEffort !== "" && !effortListed) {
+        effortOptions.push(h("option", { key: "__cur-e", value: curEffort }, curEffort + legacySuffix));
+      }
+      for (const effort of effortChoices) {
+        if (typeof effort?.id === "string" && effort.id !== "") {
+          effortOptions.push(h("option", { key: "effort:" + effort.id, value: effort.id }, effort.name ?? effort.id));
+        }
+      }
 
       const save = async () => {
         if (!gSettingsScope || !writable) return;
@@ -7912,6 +7964,7 @@ window.__ModuleLoader__.load({
           // 一次提交，按字段逐个 set（settings scope 每字段 revision-fenced 写入）。
           await gSettingsScope.set("subagentProvider", draftValue.subagentProvider ?? "");
           await gSettingsScope.set("subagentModel", draftValue.subagentModel ?? "");
+          await gSettingsScope.set("subagentReasoningEffort", draftValue.subagentReasoningEffort ?? "");
           await gSettingsScope.set("subagentMode", draftValue.subagentMode ?? "");
           await gSettingsScope.set("subagentPrompt", draftValue.subagentPrompt ?? "");
           setSaved("已保存到当前 profile。");
@@ -7950,6 +8003,16 @@ window.__ModuleLoader__.load({
         catReady && catalog.failures.length > 0
           ? h("span", { style: GSS.hint }, "部分 provider 的模型目录读取失败（" + catalog.failures.map((f) => f.id).join("、") + "），相关 provider 暂不可选。")
           : null,
+        h("div", { style: GSS.field },
+          h("label", { style: GSS.label }, "子代理默认推理档位"),
+          h("select", { style: GSS.select, value: curEffort, disabled: !writable,
+            onChange: (e) => setField("subagentReasoningEffort", e.target.value) }, ...effortOptions),
+          h("span", { style: GSS.hint },
+            catReady
+              ? (effortChoices.length > 0
+                ? "选项来自所选 provider/model 声明的 reasoning effort 能力；留空使用所选模型或父会话的默认值。"
+                : "所选 provider/model 未声明 reasoning effort 能力；已存旧值会保留，可留空以继承默认值。")
+              : "正在等待 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
         h("div", { style: GSS.field },
           h("label", { style: GSS.label, htmlFor: modeId }, "子代理默认执行模式"),
           h("select", { id: modeId, "aria-label": "子代理默认执行模式", style: GSS.select, value: curMode, disabled: !writable,

@@ -244,7 +244,24 @@ test("g-133 源契约：workspace 弹窗 executor provider/model 目录化 selec
   assert.match(modal, /display: "flex", gap: 8, minWidth: 0/);
   assert.match(modal, /flex: "1 1 0", minWidth: 0/);
   // 保存仍写 form.executor.provider/model 到 workspace project.yaml
-  assert.match(modal, /executor: \{ provider: form\.executor\?\.provider \?\? "", model: form\.executor\?\.model \?\? "", mode: form\.executor\?\.mode \?\? "" \}/);
+  assert.match(modal, /executor: \{ provider: form\.executor\?\.provider \?\? "", model: form\.executor\?\.model \?\? "", reasoning_effort: form\.executor\?\.reasoning_effort \?\? "", mode: form\.executor\?\.mode \?\? "" \}/);
+});
+
+test("g-231 默认 reasoning effort 控件随精确模型能力目录变化且保留旧配置", () => {
+  const settings = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings.js"), "utf8");
+  const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  for (const source of [settings, modal]) {
+    assert.match(source, /selectedModel/);
+    assert.match(source, /selectedModel\?\.reasoning\?\.efforts/);
+    assert.match(source, /effortChoices/);
+    assert.match(source, /effortOptions/);
+    assert.match(source, /已存值/);
+    assert.doesNotMatch(source, /\["low", "medium", "high"\]/);
+  }
+  assert.match(settings, /subagentReasoningEffort/);
+  assert.match(settings, /gSettingsScope\.set\("subagentReasoningEffort"/);
+  assert.match(modal, /reasoning_effort: form\.executor\?\.reasoning_effort/);
+  assert.match(modal, /set\(\["executor", "reasoning_effort"\]/);
 });
 
 test("g-163 判据方块按有序 key 渲染并支持即时同步", () => {
