@@ -221,6 +221,13 @@
       body:has([style*="position:fixed"]) [data-width-handle] {
         display: none !important;
       }
+      /* 弹窗与抽屉打开时，降低 composer 对话框层级并禁用点击穿透，彻底防止遮挡抽屉 */
+      .wSkVaW_root:has(.dg-modal-open) .wSkVaW_composerSeat,
+      .wSkVaW_body:has(.dg-modal-open) .wSkVaW_composerSeat,
+      body:has(.dg-modal-open) [class*="composerSeat"] {
+        z-index: 0 !important;
+        pointer-events: none !important;
+      }
       /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */
       @keyframes dg-flow-bg {
          0% { background-position: 0% 50%; }

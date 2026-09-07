@@ -233,6 +233,13 @@ window.__ModuleLoader__.load({
       body:has([style*="position:fixed"]) [data-width-handle] {
         display: none !important;
       }
+      /* 弹窗与抽屉打开时，降低 composer 对话框层级并禁用点击穿透，彻底防止遮挡抽屉 */
+      .wSkVaW_root:has(.dg-modal-open) .wSkVaW_composerSeat,
+      .wSkVaW_body:has(.dg-modal-open) .wSkVaW_composerSeat,
+      body:has(.dg-modal-open) [class*="composerSeat"] {
+        z-index: 0 !important;
+        pointer-events: none !important;
+      }
       /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */
       @keyframes dg-flow-bg {
          0% { background-position: 0% 50%; }
@@ -382,11 +389,11 @@ window.__ModuleLoader__.load({
       },
       overlay: {
         position: "fixed", inset: 0, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.55))",
-        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000,
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20000,
       },
       drawer: {
         position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
-        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10001,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
@@ -394,7 +401,7 @@ window.__ModuleLoader__.load({
       // g-223：左侧抽屉（版本管理抽屉，从屏幕左侧展开）
       drawerLeft: {
         position: "fixed", top: 0, left: 0, height: "100vh", width: 380, maxWidth: "85vw",
-        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 10001,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
         boxShadow: "4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
@@ -404,7 +411,7 @@ window.__ModuleLoader__.load({
       modal: {
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", borderRadius: 10,
         maxWidth: 720, width: "90%", maxHeight: "80vh", overflowY: "auto",
-        padding: "16px 20px", fontSize: 13, lineHeight: 1.6, position: "relative", zIndex: 10002,
+        padding: "16px 20px", fontSize: 13, lineHeight: 1.6, position: "relative", zIndex: 20002,
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
@@ -6246,7 +6253,7 @@ window.__ModuleLoader__.load({
       }
 
       // g-216: 判定是否有任何弹窗或抽屉处于打开态
-      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer);
+      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer || showSharedPanel || showMemoryModal || showTagFilterModal);
 
       const tbBtnStyle = {
         ...S.btn,

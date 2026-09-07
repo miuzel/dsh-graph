@@ -1272,7 +1272,7 @@
       }
 
       // g-216: 判定是否有任何弹窗或抽屉处于打开态
-      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer);
+      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer || showSharedPanel || showMemoryModal || showTagFilterModal);
 
       const tbBtnStyle = {
         ...S.btn,
