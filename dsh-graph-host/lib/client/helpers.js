@@ -31,17 +31,19 @@
       },
       drawer: {
         position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
+        boxSizing: "border-box",
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
-        padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
+        padding: "20px 22px 90px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
       },
       // g-223：左侧抽屉（版本管理抽屉，从屏幕左侧展开）
       drawerLeft: {
         position: "fixed", top: 0, left: 0, height: "100vh", width: 380, maxWidth: "85vw",
+        boxSizing: "border-box",
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
         boxShadow: "4px 0 16px rgba(0,0,0,.45)",
-        padding: "20px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
+        padding: "20px 22px 90px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
       },
       drawerSection: { marginTop: 14 },
