@@ -1320,14 +1320,6 @@
                 onClick: () => setTagFilter([]),
               }, "✕ 取消筛选")
             : null,
-          // g-110: 显示已归档目标的 checkbox
-          h("label", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 12, cursor: "pointer", fontSize: 12, opacity: 0.8 } },
-            h("input", {
-              type: "checkbox",
-              checked: showArchived,
-              onChange: (e) => setShowArchived(e.target.checked),
-            }),
-            "显示已归档"),
           // g-105: 记忆管理按钮（位于设置按钮左侧）
           h("button", {
             style: { ...S.btn, marginLeft: 8, fontSize: 13, padding: "2px 8px", display: "inline-flex", alignItems: "center", gap: 4 },
@@ -1335,13 +1327,21 @@
             title: "记忆管理（手工管理常驻记忆与按需记忆，或禁用记忆工具）",
             onClick: () => setShowMemoryModal(true),
           }, "🧠 记忆"),
-          // g-132: 右上角齿轮 → 看板设置（负责人 2026-08-25 review：置于 DEBUG 信息之前，即 DEBUG 左侧）
+          // g-132: 右上角齿轮 → 看板设置
           h("button", {
             style: { ...S.btn, marginLeft: 8, fontSize: 16, lineHeight: 1, padding: "2px 8px" },
             className: "dg-btn",
             title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
             onClick: () => setShowSettings(true),
           }, "⚙"),
+          // g-110: 显示已归档目标的 checkbox（移至右侧，DEBUG 信息左侧，布局更规整）
+          h("label", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 12, cursor: "pointer", fontSize: 12, opacity: 0.8 } },
+            h("input", {
+              type: "checkbox",
+              checked: showArchived,
+              onChange: (e) => setShowArchived(e.target.checked),
+            }),
+            "显示已归档"),
           // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
             "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (activeWs ?? "∅"))),
