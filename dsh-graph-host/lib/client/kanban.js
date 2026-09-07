@@ -30,6 +30,9 @@
       const [creating, setCreating] = React.useState(false);
       // g-110: 显示已归档目标的开关
       const [showArchived, setShowArchived] = React.useState(false);
+      // g-105: 记忆管理弹窗状态
+      const [showMemoryModal, setShowMemoryModal] = React.useState(false);
+      const memoryModalGuard = useBackdropClose(() => setShowMemoryModal(false));
       // g-187：顶部多选标签筛选；选中多个标签时采用 OR。
       const [tagFilter, setTagFilter] = React.useState([]);
       const [showTagFilterModal, setShowTagFilterModal] = React.useState(false);
@@ -1325,6 +1328,13 @@
               onChange: (e) => setShowArchived(e.target.checked),
             }),
             "显示已归档"),
+          // g-105: 记忆管理按钮（位于设置按钮左侧）
+          h("button", {
+            style: { ...S.btn, marginLeft: 8, fontSize: 13, padding: "2px 8px", display: "inline-flex", alignItems: "center", gap: 4 },
+            className: "dg-btn",
+            title: "记忆管理（手工管理常驻记忆与按需记忆，或禁用记忆工具）",
+            onClick: () => setShowMemoryModal(true),
+          }, "🧠 记忆"),
           // g-132: 右上角齿轮 → 看板设置（负责人 2026-08-25 review：置于 DEBUG 信息之前，即 DEBUG 左侧）
           h("button", {
             style: { ...S.btn, marginLeft: 8, fontSize: 16, lineHeight: 1, padding: "2px 8px" },
@@ -1862,6 +1872,13 @@
                     onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); },
                   }, "取消")),
                 renameVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, renameVersionNote) : null))
+          : null,
+        // g-105: 记忆管理弹窗（手工管理常驻/按需记忆，支持一键禁用工具）
+        showMemoryModal
+          ? h(MemoryManagementModal, {
+              workspace: activeWs,
+              onClose: () => setShowMemoryModal(false),
+            })
           : null,
         // g-187: 标签多选筛选弹窗/面板
         showTagFilterModal

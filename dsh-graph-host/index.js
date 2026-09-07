@@ -44,6 +44,9 @@ import {
   replaceMemory,
   removeMemory,
   recallMemory,
+  isMemoryToolsEnabled,
+  setMemoryToolsEnabled,
+  formatStandingMemorySection,
   requestAcceptReview,
   resolveAccept,
   archiveGoal,
@@ -907,16 +910,20 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_memory_add",
-        description: "新增一条持久事实/记忆（kind=project/user，importance 可选 1-5，source_goal 可选）。事件先行，落 .dsh-graph/memory/memory.jsonl。",
+        description: "新增一条持久事实/记忆（kind=project/user，scope 可选 standing/on_demand，importance 可选 1-5，source_goal 可选）。【字数契约】：常驻记忆(standing)硬上限200字符，超过将直接拒绝；普通记忆单条上限500字符。事件先行。",
         parameters: params({
           kind: { type: "string", enum: ["project", "user"] },
+          scope: { type: "string", enum: ["standing", "on_demand"] },
           text: str,
           importance: { type: "number" },
           source_goal: str,
         }, ["kind", "text"]),
       },
       run: (a, ex) => {
-        const res = addMemory(rootFor(ex), {
+        const r = rootFor(ex);
+        if (!isMemoryToolsEnabled(r)) throw new GraphError("记忆工具已被用户禁用，当前为纯手工管理模式，无法通过工具修改记忆");
+        const res = addMemory(r, {
+          scope: a.scope,
           kind: a.kind,
           text: a.text,
           importance: a.importance !== undefined ? Number(a.importance) : undefined,
@@ -939,7 +946,9 @@ export function apply(ctx, config) {
         }, ["old", "text"]),
       },
       run: (a, ex) => {
-        const res = replaceMemory(rootFor(ex), {
+        const r = rootFor(ex);
+        if (!isMemoryToolsEnabled(r)) throw new GraphError("记忆工具已被用户禁用，当前为纯手工管理模式，无法通过工具修改记忆");
+        const res = replaceMemory(r, {
           old: a.old,
           text: a.text,
           kind: a.kind,
@@ -960,7 +969,9 @@ export function apply(ctx, config) {
         }, ["old"]),
       },
       run: (a, ex) => {
-        const res = removeMemory(rootFor(ex), {
+        const r = rootFor(ex);
+        if (!isMemoryToolsEnabled(r)) throw new GraphError("记忆工具已被用户禁用，当前为纯手工管理模式，无法通过工具修改记忆");
+        const res = removeMemory(r, {
           old: a.old,
           reason: a.reason,
           actor: memoryActorOf(ex),
@@ -1802,6 +1813,77 @@ export function apply(ctx, config) {
         }
       },
     },
+    // ===== g-105：记忆管理 REST 端点（供 Web 记忆管理页面手工管理） =====
+    {
+      path: "/api/dsh-graph/memory/list",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const r = rootForReq(req);
+          const entries = readMemory(r);
+          const toolsEnabled = isMemoryToolsEnabled(r);
+          json(res, 200, { ok: true, memory: entries, tools_enabled: toolsEnabled });
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/memory/add",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const r = rootForReq(req, body);
+          const resEntry = addMemory(r, {
+            kind: body.kind ?? "project",
+            scope: body.scope ?? "on_demand",
+            text: body.text,
+            importance: body.importance !== undefined ? Number(body.importance) : undefined,
+            source_goal: body.source_goal,
+            actor: "human:gui",
+          });
+          json(res, 200, { ok: true, id: resEntry.id, entry: resEntry.entry });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/memory/delete",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const r = rootForReq(req, body);
+          const resRem = removeMemory(r, {
+            old: body.id || body.old,
+            reason: body.reason ?? "用户在管理界面手工删除",
+            actor: "human:gui",
+          });
+          json(res, 200, { ok: true, id: resRem.id });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/memory/toggle-tools",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const r = rootForReq(req, body);
+          const enabled = body.enabled === true;
+          setMemoryToolsEnabled(r, enabled, "human:gui");
+          json(res, 200, { ok: true, tools_enabled: enabled });
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
     {
       path: "/api/dsh-graph/set-goal-tags",
       handler: async (req, res) => {
@@ -2520,6 +2602,21 @@ export function apply(ctx, config) {
               const supervisorId = readSupervisorSession(canonical.root);
               if (!supervisorId || supervisorId !== sessionId) return "";
               return "\n" + SUPERVISOR_DISCIPLINE;
+            } catch {
+              return "";
+            }
+          },
+        }));
+        // g-105：常驻记忆（standing）作为独立章节固定植入所有会话系统 Prompt
+        ctx.effect(() => sp.section({
+          name: "dsh-graph-standing-memory",
+          order: 92,
+          text: (context) => {
+            try {
+              const cwd = context?.agent?.session?.header?.cwd;
+              if (!cwd) return "";
+              const canonical = resolveCanonicalRoot(config, cwd);
+              return formatStandingMemorySection(canonical.root) ?? "";
             } catch {
               return "";
             }

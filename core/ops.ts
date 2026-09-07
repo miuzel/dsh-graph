@@ -56,6 +56,7 @@ import {
   type GraphEvent,
   type MemoryEntry,
   type MemoryKind,
+  type MemoryScope,
 } from "./events.ts";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.ts";
 import { withTx, atomicWrite, TxError, TxCasError, type TxContext } from "./transaction.ts";
@@ -73,7 +74,7 @@ import {
 import { registerWorktreeCandidates, listWorktrees, cleanWorktree } from "./worktree.ts";
 export { GraphError, GraphConflictError };
 export { registerWorktreeCandidates, listWorktrees, cleanWorktree };
-export type { MemoryEntry, MemoryKind };
+export type { MemoryScope };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema };
 export type { ObjectSchema };
@@ -836,6 +837,51 @@ export function readProjectConfig(root: string): ProjectConfig {
     prompt_overrides: { subagent },
   };
 }
+export function isMemoryToolsEnabled(root: string): boolean {
+  const file = join(root, "project.yaml");
+  if (!existsSync(file)) return true;
+  try {
+    const lines = readFileSync(file, "utf8").split("\n");
+    const val = readScalarByPath(lines, ["memory", "tools_enabled"]);
+    if (val === "false") return false;
+  } catch {}
+  return true;
+}
+
+export function setMemoryToolsEnabled(root: string, enabled: boolean, actor = "human:gui"): void {
+  const file = join(root, "project.yaml");
+  let content = existsSync(file) ? readFileSync(file, "utf8") : "";
+  // 简易 YAML 写入 memory.tools_enabled
+  if (!content.includes("memory:")) {
+    content += `\nmemory:\n  tools_enabled: ${enabled}\n`;
+  } else if (/tools_enabled:\s*(true|false)/.test(content)) {
+    content = content.replace(/tools_enabled:\s*(true|false)/, `tools_enabled: ${enabled}`);
+  } else {
+    content = content.replace(/memory:/, `memory:\n  tools_enabled: ${enabled}`);
+  }
+  writeFileSync(file, content, "utf8");
+}
+
+/** 格式化常驻记忆：供所有会话作为独立 section 固定植入 */
+export function formatStandingMemorySection(root: string): string | null {
+  try {
+    const memories = recallMemory(root, { scope: "standing" }).matches;
+    if (!memories.length) return null;
+    const lines = [
+      "## dsh-graph 常驻记忆（环境硬性约束与重要事实）",
+      "",
+      "以下内容由用户在当前项目中作为常驻记忆沉淀，所有会话与 Agent 均须严格遵守：",
+      "",
+    ];
+    for (const m of memories) {
+      lines.push(`- **[${m.id}]** ${m.text}`);
+    }
+    return lines.join("\n");
+  } catch {
+    return null;
+  }
+}
+
 
 /** 校验配置 patch（字段类型与允许值）。不合法抛 GraphError。 */
 function validateConfigPatch(patch: any): void {
@@ -3958,14 +4004,22 @@ function validateMemoryText(value: unknown, field: string): string {
 
 function validateMemoryInput(opts: any, replace = false): void {
   if (opts.kind !== "project" && opts.kind !== "user" && (!replace || opts.kind !== undefined)) throw new GraphError("kind 必须为 project 或 user");
+  if (opts.scope !== undefined && opts.scope !== "standing" && opts.scope !== "on_demand") throw new GraphError("scope 必须为 standing 或 on_demand");
   if (opts.actor !== undefined && (typeof opts.actor !== "string" || !opts.actor.trim())) throw new GraphError("actor 必须是可信非空身份");
   if (opts.importance !== undefined && (typeof opts.importance !== "number" || !Number.isFinite(opts.importance) || opts.importance < 1 || opts.importance > 5)) throw new GraphError("importance 必须为 1-5 数字");
   if (opts.source_goal !== undefined) { validateMemoryText(opts.source_goal, "source_goal"); }
-  validateMemoryText(opts.text, "text");
+  const text = validateMemoryText(opts.text, "text");
+  // 铁律：常驻记忆单条硬上限 ≤ 200 字；普通记忆单条 ≤ 500 字
+  if (opts.scope === "standing" && [...text].length > 200) {
+    throw new GraphError(`常驻记忆 (standing) 每条文字硬上限为 200 字符（当前 ${[...text].length} 字），请精炼后写入`);
+  } else if ([...text].length > 500) {
+    throw new GraphError(`记忆内容每条上限 500 字符（当前 ${[...text].length} 字）`);
+  }
 }
 
 export interface AddMemoryOptions {
   kind: "project" | "user";
+  scope?: "standing" | "on_demand";
   text: string;
   importance?: number;
   source_goal?: string;
@@ -3976,6 +4030,7 @@ export interface ReplaceMemoryOptions {
   old: string;
   text: string;
   kind?: "project" | "user";
+  scope?: "standing" | "on_demand";
   importance?: number;
   source_goal?: string;
   actor?: string;
@@ -3990,6 +4045,7 @@ export interface RemoveMemoryOptions {
 export interface RecallMemoryOptions {
   query?: string;
   kind?: "project" | "user";
+  scope?: "standing" | "on_demand";
   limit?: number;
   actor?: string;
 }
@@ -4030,9 +4086,11 @@ export function addMemory(
   const id = `mem-${randomUUID().slice(0, 8)}`;
   const ts = nowIso();
 
+  const scope = opts.scope === "standing" ? "standing" : "on_demand";
   const entry: MemoryEntry = {
     id,
     kind,
+    scope,
     text,
     importance: typeof opts.importance === "number" ? opts.importance : undefined,
     source_goal: typeof opts.source_goal === "string" && opts.source_goal.trim() ? opts.source_goal.trim() : undefined,
@@ -4047,6 +4105,7 @@ export function addMemory(
     details: {
       id: entry.id,
       kind: entry.kind,
+      scope: entry.scope,
       text: entry.text,
       importance: entry.importance,
       source_goal: entry.source_goal,
@@ -4085,9 +4144,11 @@ function replaceMemoryUnlocked(
       : target.source_goal;
   if (source_goal !== undefined) findGoalFile(root, source_goal);
 
+  const scope = opts.scope !== undefined ? opts.scope : (target.scope ?? "on_demand");
   const updatedEntry: MemoryEntry = {
     id: target.id,
     kind,
+    scope,
     text,
     importance,
     source_goal,
@@ -4103,6 +4164,7 @@ function replaceMemoryUnlocked(
       id: target.id,
       old_snippet: oldSnippet,
       kind: updatedEntry.kind,
+      scope: updatedEntry.scope,
       text: updatedEntry.text,
       importance: updatedEntry.importance,
       source_goal: updatedEntry.source_goal,
@@ -4168,6 +4230,9 @@ export function recallMemory(
 
   if (opts?.kind) {
     filtered = filtered.filter((e) => e.kind === opts.kind);
+  }
+  if (opts?.scope) {
+    filtered = filtered.filter((e) => (e.scope ?? "on_demand") === opts.scope);
   }
 
   const query = (opts?.query ?? "").trim().toLowerCase();

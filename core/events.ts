@@ -194,10 +194,12 @@ export function replayStatuses(events: GraphEvent[]): Map<string, string> {
 }
 
 export type MemoryKind = "project" | "user";
+export type MemoryScope = "standing" | "on_demand";
 
 export interface MemoryEntry {
   id: string;
   kind: MemoryKind;
+  scope?: MemoryScope; // default: "on_demand"
   /** Internal ACL owner; non-enumerable in returned JSON. */
   owner?: string;
   text: string;
@@ -292,10 +294,12 @@ export function replayMemory(events: GraphEvent[]): MemoryEntry[] {
       const id = ev.details?.id;
       const text = ev.details?.text;
       const kind = ev.details?.kind === "user" ? "user" : "project";
+      const scope: MemoryScope = ev.details?.scope === "standing" ? "standing" : "on_demand";
       if (!id || typeof text !== "string") continue;
       const entry: MemoryEntry = {
         id,
         kind,
+        scope,
         text,
         importance: typeof ev.details?.importance === "number" ? ev.details.importance : undefined,
         source_goal: typeof ev.details?.source_goal === "string" ? ev.details.source_goal : undefined,
@@ -311,8 +315,9 @@ export function replayMemory(events: GraphEvent[]): MemoryEntry[] {
       const existing = entries.get(id);
       if (existing) {
         const kind = ev.details?.kind === "user" || ev.details?.kind === "project" ? ev.details.kind : existing.kind;
+        const scope = ev.details?.scope === "standing" || ev.details?.scope === "on_demand" ? ev.details.scope : (existing.scope ?? "on_demand");
         const updated: MemoryEntry = {
-          id: existing.id, kind, text,
+          id: existing.id, kind, scope, text,
           importance: typeof ev.details?.importance === "number" ? ev.details.importance : existing.importance,
           source_goal: typeof ev.details?.source_goal === "string" ? ev.details.source_goal : existing.source_goal,
           created_at: existing.created_at,

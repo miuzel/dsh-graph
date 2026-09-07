@@ -799,6 +799,55 @@ export function readProjectConfig(root) {
         prompt_overrides: { subagent },
     };
 }
+export function isMemoryToolsEnabled(root) {
+    const file = join(root, "project.yaml");
+    if (!existsSync(file))
+        return true;
+    try {
+        const lines = readFileSync(file, "utf8").split("\n");
+        const val = readScalarByPath(lines, ["memory", "tools_enabled"]);
+        if (val === "false")
+            return false;
+    }
+    catch { }
+    return true;
+}
+export function setMemoryToolsEnabled(root, enabled, actor = "human:gui") {
+    const file = join(root, "project.yaml");
+    let content = existsSync(file) ? readFileSync(file, "utf8") : "";
+    // 简易 YAML 写入 memory.tools_enabled
+    if (!content.includes("memory:")) {
+        content += `\nmemory:\n  tools_enabled: ${enabled}\n`;
+    }
+    else if (/tools_enabled:\s*(true|false)/.test(content)) {
+        content = content.replace(/tools_enabled:\s*(true|false)/, `tools_enabled: ${enabled}`);
+    }
+    else {
+        content = content.replace(/memory:/, `memory:\n  tools_enabled: ${enabled}`);
+    }
+    writeFileSync(file, content, "utf8");
+}
+/** 格式化常驻记忆：供所有会话作为独立 section 固定植入 */
+export function formatStandingMemorySection(root) {
+    try {
+        const memories = recallMemory(root, { scope: "standing" }).matches;
+        if (!memories.length)
+            return null;
+        const lines = [
+            "## dsh-graph 常驻记忆（环境硬性约束与重要事实）",
+            "",
+            "以下内容由用户在当前项目中作为常驻记忆沉淀，所有会话与 Agent 均须严格遵守：",
+            "",
+        ];
+        for (const m of memories) {
+            lines.push(`- **[${m.id}]** ${m.text}`);
+        }
+        return lines.join("\n");
+    }
+    catch {
+        return null;
+    }
+}
 /** 校验配置 patch（字段类型与允许值）。不合法抛 GraphError。 */
 function validateConfigPatch(patch) {
     if (patch === null || typeof patch !== "object")
@@ -3799,6 +3848,8 @@ function validateMemoryText(value, field) {
 function validateMemoryInput(opts, replace = false) {
     if (opts.kind !== "project" && opts.kind !== "user" && (!replace || opts.kind !== undefined))
         throw new GraphError("kind 必须为 project 或 user");
+    if (opts.scope !== undefined && opts.scope !== "standing" && opts.scope !== "on_demand")
+        throw new GraphError("scope 必须为 standing 或 on_demand");
     if (opts.actor !== undefined && (typeof opts.actor !== "string" || !opts.actor.trim()))
         throw new GraphError("actor 必须是可信非空身份");
     if (opts.importance !== undefined && (typeof opts.importance !== "number" || !Number.isFinite(opts.importance) || opts.importance < 1 || opts.importance > 5))
@@ -3806,7 +3857,14 @@ function validateMemoryInput(opts, replace = false) {
     if (opts.source_goal !== undefined) {
         validateMemoryText(opts.source_goal, "source_goal");
     }
-    validateMemoryText(opts.text, "text");
+    const text = validateMemoryText(opts.text, "text");
+    // 铁律：常驻记忆单条硬上限 ≤ 200 字；普通记忆单条 ≤ 500 字
+    if (opts.scope === "standing" && [...text].length > 200) {
+        throw new GraphError(`常驻记忆 (standing) 每条文字硬上限为 200 字符（当前 ${[...text].length} 字），请精炼后写入`);
+    }
+    else if ([...text].length > 500) {
+        throw new GraphError(`记忆内容每条上限 500 字符（当前 ${[...text].length} 字）`);
+    }
 }
 /** 查找匹配 target 片段的唯一条目。匹配多条或 0 条时抛 GraphError。 */
 function findUniqueMemoryEntry(entries, target) {
@@ -3839,9 +3897,11 @@ export function addMemory(root, opts) {
         throw new GraphError("user memory 必须由可信 actor 创建");
     const id = `mem-${randomUUID().slice(0, 8)}`;
     const ts = nowIso();
+    const scope = opts.scope === "standing" ? "standing" : "on_demand";
     const entry = {
         id,
         kind,
+        scope,
         text,
         importance: typeof opts.importance === "number" ? opts.importance : undefined,
         source_goal: typeof opts.source_goal === "string" && opts.source_goal.trim() ? opts.source_goal.trim() : undefined,
@@ -3856,6 +3916,7 @@ export function addMemory(root, opts) {
         details: {
             id: entry.id,
             kind: entry.kind,
+            scope: entry.scope,
             text: entry.text,
             importance: entry.importance,
             source_goal: entry.source_goal,
@@ -3890,9 +3951,11 @@ function replaceMemoryUnlocked(root, opts) {
         : target.source_goal;
     if (source_goal !== undefined)
         findGoalFile(root, source_goal);
+    const scope = opts.scope !== undefined ? opts.scope : (target.scope ?? "on_demand");
     const updatedEntry = {
         id: target.id,
         kind,
+        scope,
         text,
         importance,
         source_goal,
@@ -3908,6 +3971,7 @@ function replaceMemoryUnlocked(root, opts) {
             id: target.id,
             old_snippet: oldSnippet,
             kind: updatedEntry.kind,
+            scope: updatedEntry.scope,
             text: updatedEntry.text,
             importance: updatedEntry.importance,
             source_goal: updatedEntry.source_goal,
@@ -3958,6 +4022,9 @@ export function recallMemory(root, opts) {
     let filtered = entries.filter((e) => e.kind === "project" || (e.kind === "user" && !!opts?.actor && e.owner === opts.actor));
     if (opts?.kind) {
         filtered = filtered.filter((e) => e.kind === opts.kind);
+    }
+    if (opts?.scope) {
+        filtered = filtered.filter((e) => (e.scope ?? "on_demand") === opts.scope);
     }
     const query = (opts?.query ?? "").trim().toLowerCase();
     if (query) {

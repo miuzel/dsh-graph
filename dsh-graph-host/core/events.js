@@ -303,11 +303,13 @@ export function replayMemory(events) {
             const id = ev.details?.id;
             const text = ev.details?.text;
             const kind = ev.details?.kind === "user" ? "user" : "project";
+            const scope = ev.details?.scope === "standing" ? "standing" : "on_demand";
             if (!id || typeof text !== "string")
                 continue;
             const entry = {
                 id,
                 kind,
+                scope,
                 text,
                 importance: typeof ev.details?.importance === "number" ? ev.details.importance : undefined,
                 source_goal: typeof ev.details?.source_goal === "string" ? ev.details.source_goal : undefined,
@@ -326,8 +328,9 @@ export function replayMemory(events) {
             const existing = entries.get(id);
             if (existing) {
                 const kind = ev.details?.kind === "user" || ev.details?.kind === "project" ? ev.details.kind : existing.kind;
+                const scope = ev.details?.scope === "standing" || ev.details?.scope === "on_demand" ? ev.details.scope : (existing.scope ?? "on_demand");
                 const updated = {
-                    id: existing.id, kind, text,
+                    id: existing.id, kind, scope, text,
                     importance: typeof ev.details?.importance === "number" ? ev.details.importance : existing.importance,
                     source_goal: typeof ev.details?.source_goal === "string" ? ev.details.source_goal : existing.source_goal,
                     created_at: existing.created_at,

@@ -230,5 +230,193 @@
       );
     }
 
+
+    // g-105：记忆管理面板组件（手工增删改查常驻记忆与按需记忆，支持开关禁用工具）
+    function MemoryManagementModal(props) {
+      const [entries, setEntries] = React.useState([]);
+      const [toolsEnabled, setToolsEnabled] = React.useState(true);
+      const [loading, setLoading] = React.useState(true);
+      const [note, setNote] = React.useState(null);
+      const [tab, setTab] = React.useState("standing"); // "standing" | "on_demand"
+      const [showAdd, setShowAdd] = React.useState(false);
+      const [newText, setNewText] = React.useState("");
+      const [newScope, setNewScope] = React.useState("standing");
+      const [saving, setSaving] = React.useState(false);
+      const memoryGuard = useBackdropClose(props.onClose);
+
+      const load = React.useCallback(() => {
+        setLoading(true);
+        fetch(graphUrl("/api/dsh-graph/memory/list", {}, props.workspace))
+          .then((r) => r.json())
+          .then((d) => {
+            setLoading(false);
+            if (d.ok) {
+              setEntries(Array.isArray(d.memory) ? d.memory : []);
+              setToolsEnabled(d.tools_enabled !== false);
+            } else {
+              setNote("⚠️ 加载失败：" + (d.error || "未知错误"));
+            }
+          })
+          .catch((e) => {
+            setLoading(false);
+            setNote("⚠️ 网络错误：" + String(e?.message ?? e));
+          });
+      }, [props.workspace]);
+
+      React.useEffect(() => { load(); }, [load]);
+
+      const toggleTools = async () => {
+        const next = !toolsEnabled;
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/memory/toggle-tools", {}, props.workspace), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ enabled: next }),
+          });
+          const d = await r.json();
+          if (d.ok) {
+            setToolsEnabled(d.tools_enabled);
+            showToast(d.tools_enabled ? "✅ 已启用 Agent 记忆工具" : "🔒 已禁用 Agent 记忆工具（纯手工管理模式）");
+          }
+        } catch (e) {
+          showToast("⚠️ 切换失败：" + String(e?.message ?? e));
+        }
+      };
+
+      const addMem = async () => {
+        const text = newText.trim();
+        if (!text) return;
+        if (newScope === "standing" && [...text].length > 200) {
+          setNote("⚠️ 常驻记忆硬上限为 200 字符，当前已输入 " + [...text].length + " 字");
+          return;
+        }
+        setSaving(true);
+        setNote(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/memory/add", {}, props.workspace), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ kind: "project", scope: newScope, text, importance: 3 }),
+          });
+          const d = await r.json();
+          setSaving(false);
+          if (d.ok) {
+            setNewText("");
+            setShowAdd(false);
+            showToast("✅ 记忆添加成功");
+            load();
+          } else {
+            setNote("⚠️ 添加失败：" + (d.error || "未知错误"));
+          }
+        } catch (e) {
+          setSaving(false);
+          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+        }
+      };
+
+      const delMem = async (id) => {
+        if (!confirm("确认删除该条记忆？")) return;
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/memory/delete", {}, props.workspace), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id, reason: "用户在管理面板手动删除" }),
+          });
+          const d = await r.json();
+          if (d.ok) {
+            showToast("✅ 已删除记忆");
+            load();
+          } else {
+            showToast("⚠️ 删除失败：" + (d.error || "未知错误"));
+          }
+        } catch (e) {
+          showToast("⚠️ 删除失败：" + String(e?.message ?? e));
+        }
+      };
+
+      const standingList = entries.filter((e) => (e.scope ?? "on_demand") === "standing");
+      const onDemandList = entries.filter((e) => (e.scope ?? "on_demand") === "on_demand");
+      const currentList = tab === "standing" ? standingList : onDemandList;
+
+      return h("div", { style: S.overlay, ...memoryGuard },
+        h("div", { style: { ...S.modal, minWidth: 460, maxWidth: 640, maxHeight: "85vh", display: "flex", flexDirection: "column" }, onClick: (e) => e.stopPropagation() },
+          h("span", { style: S.close, onClick: props.onClose }, "✕"),
+          h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingRight: 24 } },
+            h("div", { style: { fontWeight: 700, fontSize: 16, display: "flex", alignItems: "center", gap: 8 } },
+              "🧠 长期记忆管理",
+              h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "(memory.jsonl)")),
+            h("label", { style: { display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 12, opacity: 0.9 }, title: "关闭后，所有子代理将无法调用记忆工具，避免意外修改或插件冲突" },
+              h("input", { type: "checkbox", checked: toolsEnabled, onChange: toggleTools }),
+              toolsEnabled ? "允许 Agent 工具调用" : "🔒 纯手工模式(工具已禁用)")),
+
+          h("div", { style: { display: "flex", gap: 8, borderBottom: "1px solid rgba(128,128,128,.2)", marginBottom: 12 } },
+            h("button", {
+              className: "dg-btn",
+              style: { ...S.btn, borderBottom: tab === "standing" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "standing" ? 700 : 400, padding: "6px 12px" },
+              onClick: () => { setTab("standing"); setShowAdd(false); },
+            }, "常驻记忆 (" + standingList.length + ")"),
+            h("button", {
+              className: "dg-btn",
+              style: { ...S.btn, borderBottom: tab === "on_demand" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "on_demand" ? 700 : 400, padding: "6px 12px" },
+              onClick: () => { setTab("on_demand"); setShowAdd(false); },
+            }, "按需记忆 (" + onDemandList.length + ")")),
+
+          h("div", { style: { ...S.meta, marginBottom: 8, fontSize: 11, lineHeight: 1.5 } },
+            tab === "standing"
+              ? "💡【常驻记忆】：作为系统 Prompt 独立章节固定植入每个会话（单条硬上限 ≤ 200 字），适合记录工作区核心硬性约束与安全铁律。"
+              : "💡【按需记忆】：平时不植入会话、不占 token；仅在检索或手动调用时按需提取，适合技术方案决策与参考事实。"),
+
+          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
+            h("span", { style: { ...S.meta, fontSize: 12 } }, "共 " + currentList.length + " 条记忆"),
+            h("button", {
+              className: "dg-btn",
+              style: { ...S.btnPrimary, fontSize: 12, padding: "2px 8px" },
+              onClick: () => { setShowAdd(!showAdd); setNewScope(tab); setNote(null); },
+            }, showAdd ? "收起输入框" : "＋ 新增记忆")),
+
+          showAdd ? h("div", { style: { ...S.subCard, marginBottom: 12, padding: 10 } },
+            h("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
+              h("span", { style: { fontSize: 12, fontWeight: 600 } }, "类型："),
+              h("label", { style: { fontSize: 12, cursor: "pointer" } },
+                h("input", { type: "radio", name: "mem_scope", checked: newScope === "standing", onChange: () => setNewScope("standing") }), " 常驻记忆(≤200字)"),
+              h("label", { style: { fontSize: 12, cursor: "pointer", marginLeft: 8 } },
+                h("input", { type: "radio", name: "mem_scope", checked: newScope === "on_demand", onChange: () => setNewScope("on_demand") }), " 按需记忆(≤500字)")),
+            h("textarea", {
+              value: newText,
+              style: { ...S.promptInput, width: "100%", height: 60, boxSizing: "border-box", fontSize: 12, resize: "vertical" },
+              placeholder: newScope === "standing" ? "输入要沉淀的常驻约束（硬上限 200 字符）…" : "输入按需参考记忆…",
+              onChange: (e) => setNewText(e.target.value),
+            }),
+            h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 } },
+              h("span", { style: { ...S.meta, fontSize: 11, color: newScope === "standing" && [...newText].length > 200 ? "#e74c3c" : undefined } },
+                [...newText].length + " / " + (newScope === "standing" ? "200" : "500") + " 字"),
+              h("button", {
+                className: "dg-btn",
+                style: { ...S.btnPrimary, fontSize: 12 },
+                disabled: saving || !newText.trim(),
+                onClick: addMem,
+              }, saving ? "保存中…" : "确认保存"))) : null,
+
+          note ? h("div", { style: { ...S.meta, color: "#e74c3c", marginBottom: 8 } }, note) : null,
+
+          h("div", { style: { flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, minHeight: 120 } },
+            loading ? h("div", { style: S.meta }, "正在读取记忆…") : (!currentList.length ? h("div", { style: { ...S.meta, textAlign: "center", padding: "20px 0" } }, "（当前分类下暂无记忆条目）") : currentList.map((m) =>
+              h("div", { key: m.id, style: { ...S.subCard, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4 } },
+                h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                  h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+                    h("span", { style: { fontSize: 11, fontFamily: "monospace", opacity: 0.7 } }, m.id),
+                    h("span", { style: { fontSize: 10, padding: "0 4px", borderRadius: 4, background: m.scope === "standing" ? "rgba(76,175,80,.15)" : "rgba(33,150,243,.15)", color: m.scope === "standing" ? "#4caf50" : "#2196f3" } }, m.scope === "standing" ? "常驻" : "按需"),
+                    m.source_goal ? h("span", { style: { fontSize: 10, opacity: 0.6 } }, "来自: " + m.source_goal) : null),
+                  h("button", {
+                    className: "dg-btn",
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px", color: "#e74c3c" },
+                    title: "删除该条记忆",
+                    onClick: () => delMem(m.id),
+                  }, "删除")),
+                h("div", { style: { fontSize: 12, lineHeight: 1.5, wordBreak: "break-word" } }, m.text))))),
+        )
+      );
+    }
+
     function KanbanView(props) {
       const [state, setState] = React.useState({ loading: true });
