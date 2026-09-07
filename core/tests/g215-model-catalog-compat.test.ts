@@ -286,7 +286,7 @@ test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 ses
   const settings = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings.js"), "utf8");
   const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings-modal.js"), "utf8");
   const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
-  const manifest = JSON.parse(readFileSync(join(process.cwd(), "dsh-graph-host/package.json"), "utf8"));
+  const plugin = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/plugin.js"), "utf8");
 
   // 1. settings.js 包含新版 RPC 与降级链
   assert.match(settings, /session\?\.modelCatalog/);
@@ -294,12 +294,12 @@ test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 ses
   assert.match(settings, /modelDirectories/);
   assert.match(settings, /legacyApi\?\.llm\?\.providers/);
   assert.match(settings, /status:\s*"unavailable"/);
-  // dsh.client manifest 必须实际注入 remote 与共享目录 provider；否则源码探测链不可达，
-  // 会退回 REST/旧模型目录并丢失 reasoning 元数据。
-  const inject = manifest.dsh.client.inject;
-  for (const id of ["@deepseek-ai/dsh-api-remotes", "@deepseek-ai/dsh-client-connection", "@deepseek-ai/dsh-client-ui-model-selection"]) {
-    assert.ok(inject.includes(id), `manifest 必须注入 ${id}`);
-  }
+  // dsh.client.inject 只是预取元数据，不能把 optional service 设为 plugin 的硬 inject；
+  // 真实 activation 后以 ctx.inject(["remote"], ...) 绑定 catalog 服务，服务缺失不阻断看板 apply。
+  assert.match(plugin, /inject: \["slots", "sessions"\]/);
+  assert.doesNotMatch(plugin, /inject: \[[^\]]*"remote"[^\]]*\]/);
+  assert.match(plugin, /ctx\.inject\(\["remote"\], \(scope\) =>/);
+  assert.match(plugin, /registerGraphSettingsSection\(scope\)/);
 
   // 2. settings-modal.js 挂载时不短路，调用 loadHostCatalog 进行 3 级探测
   assert.match(modal, /loadHostCatalog\(gConnectionApi\)/);
