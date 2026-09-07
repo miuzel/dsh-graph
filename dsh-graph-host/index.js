@@ -43,6 +43,7 @@ import {
   addMemory,
   replaceMemory,
   removeMemory,
+  readMemory,
   recallMemory,
   isMemoryToolsEnabled,
   setMemoryToolsEnabled,
