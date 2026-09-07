@@ -2,9 +2,9 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
-单包发布：npm 包名 `dsh-graph`（当前版本 v0.8.3）。一个包同时提供：
+单包发布：npm 包名 `dsh-graph`（当前版本 v0.9.1）。一个包同时提供：
 
-- 面向 agent 的 28 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
+- 面向 agent 的 38 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
 - 浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
 
 数据以文件 + 事件流形式落在工作区 `.dsh-graph` 目录，git 友好、可审计。
@@ -36,15 +36,17 @@ dsh plugin --profile <name> add dsh-graph
 
 ## 提供的工具
 
-28 个 `graph_*` 工具，按功能分组：
+38 个 `graph_*` 工具，按功能分组：
 
 | 分组 | 工具 |
 |------|------|
-| 目标生命周期 | `graph_create_goal` · `graph_rename_goal` · `graph_amend_goal` · `graph_set_goal_type` · `graph_transition` · `graph_archive_goal` · `graph_unarchive_goal` · `graph_delete_goal` · `graph_postpone_goal` |
+| 目标生命周期 | `graph_create_goal` · `graph_rename_goal` · `graph_set_goal_type` · `graph_set_goal_tags` · `graph_amend_goal` · `graph_transition` · `graph_postpone_goal` · `graph_archive_goal` · `graph_unarchive_goal` · `graph_delete_goal` · `graph_clean_worktree` |
 | 质量判据 | `graph_set_criteria` |
 | 上下文卡片 | `graph_add_card` · `graph_fill_card` · `graph_review_card` · `graph_bind_collect_card` · `graph_delete_card` |
+| 附件 | `graph_store_attachment` · `graph_delete_attachment` |
 | 排期 | `graph_move_goal` |
-| 执行派发 | `graph_start_attempt` · `graph_set_directive` · `graph_record_attempt_handoff` |
+| 执行派发 | `graph_start_attempt` · `graph_set_directive` · `graph_record_attempt_handoff` · `graph_unbind_goal_child` |
+| 记忆 | `graph_memory_add` · `graph_memory_recall` · `graph_memory_remove` · `graph_memory_replace` |
 | 校验 / 对账 | `graph_validate` · `graph_rebuild` |
 | 状态汇报 | `graph_report_status` · `graph_report_supervisor_status` |
 | 评审裁决 | `graph_resolve_accept` |
