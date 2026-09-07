@@ -22,7 +22,7 @@ import {
 test("g-133/g-191 profile settings 契约：受控字段并保留 Host API fallback", () => {
   const host = readFileSync(new URL("../../dsh-graph-host/index.js", import.meta.url), "utf8");
   const client = readFileSync(new URL("../../dsh-graph-host/lib/client/settings.js", import.meta.url), "utf8");
-  for (const field of ["subagentProvider", "subagentModel", "subagentMode", "subagentPrompt"]) assert.match(host, new RegExp(field));
+  for (const field of ["subagentProvider", "subagentModel", "subagentReasoningEffort", "subagentMode", "subagentPrompt"]) assert.match(host, new RegExp(field));
   assert.match(host, /subagentMode: z\.union\(\["", "standard", "minimal"\]\)/);
   assert.doesNotMatch(host, /supervisorPrompt/);
   assert.doesNotMatch(client, /supervisorPrompt/);
