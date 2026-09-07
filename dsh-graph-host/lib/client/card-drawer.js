@@ -301,7 +301,7 @@
                                 body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
                               });
                               const data = await r.json();
-                              if (data.ok) { showToast("📇 已转为共享条目"); props.onDeleted?.(); }
+                              if (data.ok) { showToast("📇 已转为共享条目"); (props.onConverted ?? props.onDeleted)?.(); }
                               else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
                             } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
                           },
@@ -319,7 +319,7 @@
                                 body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
                               });
                               const data = await r.json();
-                              if (data.ok) { showToast("🎯 已转为专属条目"); props.onDeleted?.(); }
+                              if (data.ok) { showToast("🎯 已转为专属条目"); (props.onConverted ?? props.onDeleted)?.(); }
                               else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
                             } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
                           },

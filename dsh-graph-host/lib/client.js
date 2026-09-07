@@ -2573,7 +2573,7 @@ window.__ModuleLoader__.load({
                                 body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
                               });
                               const data = await r.json();
-                              if (data.ok) { showToast("📇 已转为共享条目"); props.onDeleted?.(); }
+                              if (data.ok) { showToast("📇 已转为共享条目"); (props.onConverted ?? props.onDeleted)?.(); }
                               else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
                             } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
                           },
@@ -2591,7 +2591,7 @@ window.__ModuleLoader__.load({
                                 body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
                               });
                               const data = await r.json();
-                              if (data.ok) { showToast("🎯 已转为专属条目"); props.onDeleted?.(); }
+                              if (data.ok) { showToast("🎯 已转为专属条目"); (props.onConverted ?? props.onDeleted)?.(); }
                               else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
                             } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
                           },
@@ -6446,6 +6446,11 @@ window.__ModuleLoader__.load({
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             onClose: () => setDrawerCard(null),
+                            onConverted: () => {
+                              // g-183：卡片转换成功后，重新 load 全局数据与弹窗数据，绝不误剥离卡片！
+                              load();
+                              setDrawerCard(null);
+                            },
                             onDeleted: (cardId) => {
                               // g-219：事件结果为准——删除成功后局部更新弹窗与看板，不整体重新 load
                               const goalId = drawerCard.goalId;

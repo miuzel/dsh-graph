@@ -1463,6 +1463,11 @@
         drawerCard
           ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             onClose: () => setDrawerCard(null),
+                            onConverted: () => {
+                              // g-183：卡片转换成功后，重新 load 全局数据与弹窗数据，绝不误剥离卡片！
+                              load();
+                              setDrawerCard(null);
+                            },
                             onDeleted: (cardId) => {
                               // g-219：事件结果为准——删除成功后局部更新弹窗与看板，不整体重新 load
                               const goalId = drawerCard.goalId;
