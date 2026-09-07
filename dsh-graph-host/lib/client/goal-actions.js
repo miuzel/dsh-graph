@@ -480,10 +480,10 @@
                   style: { fontSize: 12, padding: "4px 6px", cursor: "pointer",
                            background: "rgba(128,128,128,.10)", color: "inherit",
                            border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
-                  title: "默认创建共享卡（多 goal 复用）；可选直接在 goal 内创建自有卡",
+                  title: "默认创建共享条目（项目知识库，可多目标复用）；可选创建当前目标专属条目",
                 },
-                  h("option", { value: "shared" }, "🔗 共享卡（默认）"),
-                  h("option", { value: "goal" }, "📁 本 goal 自有卡")),
+                  h("option", { value: "shared" }, "📇 共享条目（项目知识库）"),
+                  h("option", { value: "goal" }, "🎯 目标专属条目")),
                 h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建")))
           : null,
         mode === "chat"

@@ -1343,13 +1343,13 @@
             title: "记忆管理（手工管理常驻记忆与按需记忆，或禁用记忆工具）",
             onClick: () => setShowMemoryModal(true),
           }, "🧠 记忆"),
-          // g-183: 共享上下文管理面板入口
+          // g-183: 项目知识库面板入口
           h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
-            title: "共享上下文管理面板（创建/查看共享卡、挂到 goal、删除保护）",
+            title: "项目知识库（管理共享条目、跨目标引用与删除保护）",
             onClick: () => setShowSharedPanel(true),
-          }, "🔗 共享卡"),
+          }, "📇 项目知识"),
           // g-132: 右上角齿轮 → 看板设置
           h("button", {
             style: { ...tbBtnStyle, padding: "0 7px", fontSize: 14 },

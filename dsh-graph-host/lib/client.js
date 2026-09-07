@@ -2454,7 +2454,7 @@ window.__ModuleLoader__.load({
             h("div", { key: "t", style: { fontWeight: 700, fontSize: 14 } },
               `📇 ${card.title}`),
             h("div", { key: "m", style: S.meta },
-              `${card.id} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
+              `${card.id} ｜ ${card.scope === "shared" ? "📇 共享条目" : "🎯 专属条目"} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
             cardFileEntry,
             childLink,
             card.summary ? h("div", { key: "s", style: S.drawerSection },
@@ -2556,7 +2556,7 @@ window.__ModuleLoader__.load({
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
                           disabled: card.status === "collecting",
-                          title: card.status === "collecting" ? "收集中不可转换" : "转为共享卡（原 goal 保留引用，内容进入共享池供多 goal 复用）",
+                          title: card.status === "collecting" ? "收集中不可转换" : "转为共享条目（原目标保留引用，条目进入项目知识库供多目标复用）",
                           onClick: async () => {
                             try {
                               const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-shared"), {
@@ -2564,17 +2564,17 @@ window.__ModuleLoader__.load({
                                 body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
                               });
                               const data = await r.json();
-                              if (data.ok) { showToast("🔗 已转为共享卡"); props.onDeleted?.(); }
+                              if (data.ok) { showToast("📇 已转为共享条目"); props.onDeleted?.(); }
                               else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
                             } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
                           },
-                        }, "🔗 转为共享卡"),
+                        }, "📇 转为共享条目"),
                     card.scope === "shared"
                       ? h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
                           disabled: card.status === "collecting",
-                          title: card.status === "collecting" ? "收集中不可解除引用" : "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡（其余引用请先在共享面板解除）",
+                          title: card.status === "collecting" ? "收集中不可解除引用" : "仅可在引用计数恰为 1 时转回当前目标专属条目（其余引用请先在项目知识库中解除）",
                           onClick: async () => {
                             try {
                               const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
@@ -2582,11 +2582,11 @@ window.__ModuleLoader__.load({
                                 body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
                               });
                               const data = await r.json();
-                              if (data.ok) { showToast("✅ 已转回本 goal 自有卡"); props.onDeleted?.(); }
+                              if (data.ok) { showToast("🎯 已转为专属条目"); props.onDeleted?.(); }
                               else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
                             } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
                           },
-                        }, "📁 转回自有卡")
+                        }, "🎯 转为专属条目")
                       : null,
                     // 仅 goal 自有卡可删除（共享卡走解除引用/共享面板显式删除，避免必然报错）
                     card.scope !== "shared"
@@ -3101,10 +3101,10 @@ window.__ModuleLoader__.load({
                   style: { fontSize: 12, padding: "4px 6px", cursor: "pointer",
                            background: "rgba(128,128,128,.10)", color: "inherit",
                            border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
-                  title: "默认创建共享卡（多 goal 复用）；可选直接在 goal 内创建自有卡",
+                  title: "默认创建共享条目（项目知识库，可多目标复用）；可选创建当前目标专属条目",
                 },
-                  h("option", { value: "shared" }, "🔗 共享卡（默认）"),
-                  h("option", { value: "goal" }, "📁 本 goal 自有卡")),
+                  h("option", { value: "shared" }, "📇 共享条目（项目知识库）"),
+                  h("option", { value: "goal" }, "🎯 目标专属条目")),
                 h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建")))
           : null,
         mode === "chat"
@@ -6317,13 +6317,13 @@ window.__ModuleLoader__.load({
             title: "记忆管理（手工管理常驻记忆与按需记忆，或禁用记忆工具）",
             onClick: () => setShowMemoryModal(true),
           }, "🧠 记忆"),
-          // g-183: 共享上下文管理面板入口
+          // g-183: 项目知识库面板入口
           h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
-            title: "共享上下文管理面板（创建/查看共享卡、挂到 goal、删除保护）",
+            title: "项目知识库（管理共享条目、跨目标引用与删除保护）",
             onClick: () => setShowSharedPanel(true),
-          }, "🔗 共享卡"),
+          }, "📇 项目知识"),
           // g-132: 右上角齿轮 → 看板设置
           h("button", {
             style: { ...tbBtnStyle, padding: "0 7px", fontSize: 14 },
@@ -6964,8 +6964,7 @@ window.__ModuleLoader__.load({
     // props.sessionId），不能用全局聚焦会话 list.current 代替（多窗口/子代理视图时两者可能不同）。
     // KanbanView(props) 挂载时写入，currentWorkspace() 优先按它查 cwd；找不到再回退 list.current。
     let viewedSessionId = null;
-    // g-183：共享上下文卡管理面板——创建/查看共享卡、挂到 goal、解除引用、零引用显式删除。
-    // 单个共享权威内容可被多个 goal 引用，避免每个 goal 复制、内容分叉。
+    // g-183：项目知识库管理面板——创建/查看共享条目、挂到目标、解除引用、零引用显式删除。
     function SharedCardsModal(props) {
       const { onClose, onRefresh, sharedCards, goals } = props;
       const [cards, setCards] = React.useState(Array.isArray(sharedCards) ? sharedCards : []);
@@ -7097,18 +7096,18 @@ window.__ModuleLoader__.load({
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640, maxHeight: "80vh", overflowY: "auto" }, onClick: (e) => e.stopPropagation() },
-          h("div", { style: S.modalH }, "🔗 共享上下文管理面板"),
+          h("div", { style: S.modalH }, "📇 项目知识库（共享条目）"),
           h("div", { style: { ...S.meta, marginBottom: 6 } },
-            "共享卡只保存一份权威内容，可被多个 goal 引用；被引用时不可删除，解除全部引用后仅可显式删除。"),
-          // 新建共享卡（正文 + 可选附件引用，不设 kind 类型）
+            "知识条目在项目共享池中保存一份权威内容，可被多个目标同时引用复用；被引用时不可删除，解除全部引用后可显式删除。"),
+          // 新建共享条目
           h("div", { style: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8 } },
             h("input", {
               style: { ...S.promptInput, flex: 1 },
-              value: title, placeholder: "新建共享卡标题…",
+              value: title, placeholder: "新建知识条目标题…",
               onChange: (e) => setTitle(e.target.value),
               onKeyDown: (e) => { if (e.key === "Enter") createCard(); },
             }),
-            h("button", { style: S.btn, className: "dg-btn", onClick: createCard }, "＋ 新建共享卡")),
+            h("button", { style: S.btn, className: "dg-btn", onClick: createCard }, "＋ 新建条目")),
           note ? h("div", { style: { ...S.meta, marginBottom: 6 } }, note) : null,
           (cards.length === 0)
             ? h("div", { style: S.meta }, "（暂无共享卡）")

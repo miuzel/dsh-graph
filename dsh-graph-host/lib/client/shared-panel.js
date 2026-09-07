@@ -1,5 +1,4 @@
-    // g-183：共享上下文卡管理面板——创建/查看共享卡、挂到 goal、解除引用、零引用显式删除。
-    // 单个共享权威内容可被多个 goal 引用，避免每个 goal 复制、内容分叉。
+    // g-183：项目知识库管理面板——创建/查看共享条目、挂到目标、解除引用、零引用显式删除。
     function SharedCardsModal(props) {
       const { onClose, onRefresh, sharedCards, goals } = props;
       const [cards, setCards] = React.useState(Array.isArray(sharedCards) ? sharedCards : []);
@@ -131,18 +130,18 @@
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640, maxHeight: "80vh", overflowY: "auto" }, onClick: (e) => e.stopPropagation() },
-          h("div", { style: S.modalH }, "🔗 共享上下文管理面板"),
+          h("div", { style: S.modalH }, "📇 项目知识库（共享条目）"),
           h("div", { style: { ...S.meta, marginBottom: 6 } },
-            "共享卡只保存一份权威内容，可被多个 goal 引用；被引用时不可删除，解除全部引用后仅可显式删除。"),
-          // 新建共享卡（正文 + 可选附件引用，不设 kind 类型）
+            "知识条目在项目共享池中保存一份权威内容，可被多个目标同时引用复用；被引用时不可删除，解除全部引用后可显式删除。"),
+          // 新建共享条目
           h("div", { style: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8 } },
             h("input", {
               style: { ...S.promptInput, flex: 1 },
-              value: title, placeholder: "新建共享卡标题…",
+              value: title, placeholder: "新建知识条目标题…",
               onChange: (e) => setTitle(e.target.value),
               onKeyDown: (e) => { if (e.key === "Enter") createCard(); },
             }),
-            h("button", { style: S.btn, className: "dg-btn", onClick: createCard }, "＋ 新建共享卡")),
+            h("button", { style: S.btn, className: "dg-btn", onClick: createCard }, "＋ 新建条目")),
           note ? h("div", { style: { ...S.meta, marginBottom: 6 } }, note) : null,
           (cards.length === 0)
             ? h("div", { style: S.meta }, "（暂无共享卡）")
