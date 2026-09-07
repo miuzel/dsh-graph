@@ -235,6 +235,7 @@ const GRAPH_SETTINGS_DEFAULTS = Object.freeze({
   subagentProvider: "",
   subagentModel: "",
   subagentMode: "",
+  subagentReasoningEffort: "",
   subagentPrompt: "",
 });
 // schema 需 schemastery（@deepseek-ai/*），经守卫式动态 import 构建（见 buildGraphSettingsSchema）。
@@ -243,6 +244,7 @@ function buildGraphSettingsSchema(z) {
     subagentProvider: z.string().default(""),
     subagentModel: z.string().default(""),
     subagentMode: z.union(["", "standard", "minimal"]).default(""),
+    subagentReasoningEffort: z.string().default(""),
     subagentPrompt: z.string().default(""),
   });
 }
@@ -614,6 +616,7 @@ export function apply(ctx, config) {
       return {
         subagentProvider: v.subagentProvider ?? "",
         subagentModel: v.subagentModel ?? "",
+        subagentReasoningEffort: v.subagentReasoningEffort ?? "",
         subagentMode: safeMode,
         subagentPrompt: v.subagentPrompt ?? "",
       };
@@ -1097,7 +1100,7 @@ export function apply(ctx, config) {
       def: {
         name: "graph_start_attempt",
         description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。默认强制注入独立 worktree 隔离提示；仅 supervisor 明确传 worktree=false 并说明理由时才关闭。attempt_brief 是当前 action 原文；task_type 必须传 merge（合入）、rewrite（重写）或 fix（修复）之一，baseline_commit/source_attempt 是 supervisor 直接提供的当前事实，acceptance_items 是当前验收项 string[]；这些字段不从 brief/handoff 截取。task_type/baseline_commit/source_attempt 的空值传 null 或省略表示未提供；acceptance_items=[] 表示明确无单独验收项，null 或省略表示未提供；空字符串非法。",
-        parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, mode: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
+        parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, reasoning_effort: str, mode: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
       },
       run: async (a, ex) => {
         // 校验 attempt_brief 类型（g-150 review 问题 4）
@@ -1123,12 +1126,13 @@ export function apply(ctx, config) {
         if (a.card !== undefined && a.card !== null) {
           const fullPrompt = formatCollectPrompt(r, a.goal, a.card, a.attempt_brief);
           const eff = resolveModelRoute(
-            { provider: a.provider, model: a.model },
+            { provider: a.provider, model: a.model, reasoning_effort: a.reasoning_effort },
             readExecutorModel(r),
             readGraphSettings(),
           );
           const effProvider = eff.provider;
           const effModel = eff.model;
+           const effReasoningEffort = eff.reasoning_effort;
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
           const result = { card: a.card, child_id: null, child_error: null };
           const subagents = ctx.get?.("subagents");
@@ -1145,6 +1149,7 @@ export function apply(ctx, config) {
             const agentOptions = {};
             if (effProvider) agentOptions.provider = effProvider;
             if (effModel) agentOptions.model = effModel;
+             if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
             if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
             const started = await subagents.startContinuable({
               provider,
@@ -1183,12 +1188,13 @@ export function apply(ctx, config) {
         const projectExec = readExecutorModel(r);
         const globalSettings = readGraphSettings();
         const eff = resolveModelRoute(
-          { provider: a.provider, model: a.model },
+          { provider: a.provider, model: a.model, reasoning_effort: a.reasoning_effort },
           projectExec,
           globalSettings,
         );
         const effProvider = eff.provider;
         const effModel = eff.model;
+           const effReasoningEffort = eff.reasoning_effort;
         const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
         const effModeRes = resolveSubagentMode(a.mode, projectExec.mode, globalSettings.subagentMode);
         const attempt = startAttempt(r, a.goal, {
@@ -1257,6 +1263,7 @@ export function apply(ctx, config) {
             const agentOptions = {};
             if (effProvider) agentOptions.provider = effProvider;
             if (effModel) agentOptions.model = effModel;
+             if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
             if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
             const started = await subagents.startContinuable({
               provider,
@@ -1504,15 +1511,17 @@ export function apply(ctx, config) {
       };
       // g-133：模型路由合成（overrides > project.yaml > profile 全局默认 > 继承），核心逻辑在 core/ops.ts
       const eff = resolveModelRoute(
-        { provider: overrides.provider, model: overrides.model },
+        { provider: overrides.provider, model: overrides.model, reasoning_effort: overrides.reasoning_effort },
         readExecutorModel(rootForReq),
         readGraphSettings(),
       );
       const agentOptions = {};
       const effProvider = eff.provider;
       const effModel = eff.model;
+           const effReasoningEffort = eff.reasoning_effort;
       if (effProvider) agentOptions.provider = effProvider;
       if (effModel) agentOptions.model = effModel;
+             if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
       if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
       const started = await subagents.startContinuable({ provider, label, request, signal: ac.signal });
       return { childId: started.childId, parentSessionId: supervisorId, error: null, model_route: `${effProvider ?? "继承"}/${effModel ?? "继承"}` };
@@ -2281,16 +2290,17 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, card, prompt, provider, model } = body;
+          const { goal, card, prompt, provider, model, reasoning_effort } = body;
           if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
           const rRoot = rootForReq(req, body);
           const eff = resolveModelRoute(
-            { provider, model },
+            { provider, model, reasoning_effort },
             readExecutorModel(rRoot),
             readGraphSettings(),
           );
           const effProvider = eff.provider;
           const effModel = eff.model;
+           const effReasoningEffort = eff.reasoning_effort;
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
           // g-183 返工 F：先完整校验（resolveCard 成员关系/backlog/卡状态权限）生成提示词，
           //  再创建 attempt/子代理——校验失败不得留下 attempt/事件副作用。
@@ -2300,7 +2310,7 @@ export function apply(ctx, config) {
             fullPrompt,
             req,
             rRoot,
-            { provider: effProvider, model: effModel },
+            { provider: effProvider, model: effModel, reasoning_effort: effReasoningEffort },
           );
           let attempt = null;
           if (spawned.error) {
@@ -2349,7 +2359,7 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, provider, model, mode, worktree, attempt_brief, task_type, baseline_commit, source_attempt, acceptance_items } = body;
+          const { goal, provider, model, reasoning_effort, mode, worktree, attempt_brief, task_type, baseline_commit, source_attempt, acceptance_items } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
           // 校验 attempt_brief 类型（g-150 review 问题 4）
           if (attempt_brief !== undefined && attempt_brief !== null && typeof attempt_brief !== "string") {
@@ -2390,12 +2400,13 @@ export function apply(ctx, config) {
           const projectExec = readExecutorModel(rRoot);
           const globalSettings = readGraphSettings();
           const eff = resolveModelRoute(
-            { provider, model },
+            { provider, model, reasoning_effort },
             projectExec,
             globalSettings,
           );
           const effProvider = eff.provider;
           const effModel = eff.model;
+           const effReasoningEffort = eff.reasoning_effort;
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
           const effModeRes = resolveSubagentMode(mode, projectExec.mode, globalSettings.subagentMode);
           const attempt = startAttempt(rRoot, goal, {
@@ -2452,6 +2463,7 @@ export function apply(ctx, config) {
           const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, rRoot, {
             provider: effProvider,
             model: effModel,
+            reasoning_effort: effReasoningEffort,
             mode: effModeRes.mode,
           });
           if (spawned.error) {

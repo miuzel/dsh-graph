@@ -596,16 +596,16 @@ export const SUBAGENT_MODE_PROMPTS: Record<SubagentMode, string> = {
 
 /** 读取 project.yaml 的 executor.provider/model/mode。
  * 使用 YAML 解析器处理注释、空行和合法标量；配置缺失或解析失败时安全降级。 */
-export function readExecutorModel(root: string): { provider: string | null; model: string | null; mode: SubagentMode | null } {
+export function readExecutorModel(root: string): { provider: string | null; model: string | null; mode: SubagentMode | null; reasoning_effort: string | null } {
   const file = join(root, "project.yaml");
   try {
-    if (!existsSync(file)) return { provider: null, model: null, mode: null };
+    if (!existsSync(file)) return { provider: null, model: null, mode: null, reasoning_effort: null };
     const document = parseYaml(readFileSync(file, "utf8"));
     const executor = document && typeof document === "object" && !Array.isArray(document)
       ? (document as Record<string, unknown>).executor
       : null;
     if (!executor || typeof executor !== "object" || Array.isArray(executor)) {
-      return { provider: null, model: null, mode: null };
+      return { provider: null, model: null, mode: null, reasoning_effort: null };
     }
     const value = (key: string): string | null => {
       const raw = (executor as Record<string, unknown>)[key];
@@ -615,9 +615,10 @@ export function readExecutorModel(root: string): { provider: string | null; mode
       provider: value("provider"),
       model: value("model"),
       mode: normalizeSubagentMode(value("mode")),
+      reasoning_effort: value("reasoning_effort"),
     };
   } catch {
-    return { provider: null, model: null, mode: null };
+    return { provider: null, model: null, mode: null, reasoning_effort: null };
   }
 }
 
@@ -633,7 +634,7 @@ export interface PromptOverride {
 }
 
 export interface ProjectConfig {
-  executor: { provider: string | null; model: string | null; mode: SubagentMode | null };
+  executor: { provider: string | null; model: string | null; mode: SubagentMode | null; reasoning_effort: string | null };
   defaults: {
     review: { reviewer: string | null; prompt: string | null };
     pk: { lanes: number | null; sandbox: string | null };
@@ -812,7 +813,7 @@ export function readProjectConfig(root: string): ProjectConfig {
   const file = join(root, "project.yaml");
   if (!existsSync(file)) {
     return {
-      executor: { provider: null, model: null, mode: null },
+      executor: { provider: null, model: null, mode: null, reasoning_effort: null },
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
       supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])) },
       prompt_overrides: { subagent: { state: "default", value: null } },
@@ -830,6 +831,7 @@ export function readProjectConfig(root: string): ProjectConfig {
       provider: scal(["executor", "provider"]),
       model: scal(["executor", "model"]),
       mode: normalizeSubagentMode(modeRaw),
+      reasoning_effort: scal(["executor", "reasoning_effort"]),
     },
     defaults: {
       review: { reviewer: scal(["defaults", "review", "reviewer"]), prompt: scal(["defaults", "review", "prompt"]) },
@@ -899,6 +901,8 @@ function validateConfigPatch(patch: any): void {
     const e = patch.executor ?? {};
     needStr(e.provider, "executor.provider", { nullable: true });
     needStr(e.model, "executor.model", { nullable: true });
+    needStr(e.reasoning_effort, "executor.reasoning_effort", { nullable: true });
+    if ("reasoning_effort" in e && e.reasoning_effort !== undefined && e.reasoning_effort !== null && typeof e.reasoning_effort !== "string") throw new GraphError("executor.reasoning_effort 必须是字符串");
     if ("mode" in e && e.mode !== undefined && e.mode !== null && e.mode !== "") {
       if (typeof e.mode !== "string" || !normalizeSubagentMode(e.mode)) {
         throw new GraphError(`executor.mode 只允许 ${SUBAGENT_MODES.join("/")}`);
@@ -975,6 +979,7 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
     if ("provider" in patch.executor) setScalar(["executor", "provider"], patch.executor.provider ?? "");
     if ("model" in patch.executor) setScalar(["executor", "model"], patch.executor.model ?? "");
     if ("mode" in patch.executor) setScalar(["executor", "mode"], patch.executor.mode ?? "");
+    if ("reasoning_effort" in patch.executor) setScalar(["executor", "reasoning_effort"], patch.executor.reasoning_effort ?? "");
   }
   if (patch.defaults) {
     const d = patch.defaults ?? {};
@@ -5618,13 +5623,16 @@ export function readAcceptStatus(
 
 /** g-133：模型路由优先级合成——单次派发 override > workspace project.yaml 明确值 > profile 全局默认 > 继承。 */
 export function resolveModelRoute(
-  overrides: { provider?: string | null; model?: string | null } | null,
-  projectCfg: { provider: string | null; model: string | null },
-  globalCfg: { subagentProvider: string; subagentModel: string },
-): { provider: string | null; model: string | null } {
+  overrides: { provider?: string | null; model?: string | null; reasoning_effort?: string | null } | null,
+  projectCfg: { provider: string | null; model: string | null; reasoning_effort?: string | null },
+  globalCfg: { subagentProvider: string; subagentModel: string; subagentReasoningEffort?: string },
+): { provider: string | null; model: string | null; reasoning_effort: string | null } {
   const provider = overrides?.provider ?? projectCfg.provider ?? globalCfg.subagentProvider ?? null;
   const model = overrides?.model ?? projectCfg.model ?? globalCfg.subagentModel ?? null;
-  return { provider: provider || null, model: model || null };
+  const reasoning_effort = overrides?.reasoning_effort ?? projectCfg.reasoning_effort ?? globalCfg.subagentReasoningEffort ?? null;
+  const result: { provider: string | null; model: string | null; reasoning_effort?: string } = { provider: provider || null, model: model || null };
+  if (reasoning_effort) result.reasoning_effort = reasoning_effort;
+  return result;
 }
 
 /** g-133：补充提示词三态合成。 */
