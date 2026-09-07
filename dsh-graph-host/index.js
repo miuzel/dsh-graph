@@ -187,7 +187,7 @@ export function readBodyCapped(req, maxBytes) {
       try {
         const text = chunks.length ? Buffer.concat(chunks).toString("utf8") : "";
         resolve(text ? JSON.parse(text) : {});
-      } catch (e) { reject(e); }
+      } catch (e) { reject(new GraphError("请求 body JSON 格式无效")); }
     });
     req.on("error", reject);
   });
@@ -2295,7 +2295,6 @@ export function apply(ctx, config) {
           // g-183 返工 F：先完整校验（resolveCard 成员关系/backlog/卡状态权限）生成提示词，
           //  再创建 attempt/子代理——校验失败不得留下 attempt/事件副作用。
           const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt);
-          const attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
             fullPrompt,
@@ -2303,13 +2302,16 @@ export function apply(ctx, config) {
             rRoot,
             { provider: effProvider, model: effModel },
           );
+          let attempt = null;
           if (spawned.error) {
             console.error("[dsh-graph-host] start-collection 子代理启动失败:", spawned.error);
           } else {
+            attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
+            bindAttemptChild(rRoot, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
             // 事件先行：card.collecting（bindCardChild 写 child_id/parent_session_id）。
             bindCardChild(rRoot, goal, card, { childId: spawned.childId, parentSessionId: spawned.parentSessionId, actor: "human:gui", provider: effProvider, model: effModel });
           }
-          json(res, 200, { ok: true, card, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
+          json(res, 200, { ok: true, card, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });

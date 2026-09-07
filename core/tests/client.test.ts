@@ -482,7 +482,7 @@ test("add-card：建卡 + card.created 事件（事件先行）", async () => {
 test("delete-card：删除后 goal 详情卡片消失 + card.deleted 事件（事件先行）", async () => {
   const { root, routes, goalId } = setup();
   const { body } = await post(routes, "/api/dsh-graph/add-card",
-    { goal: goalId, title: "调研 A", kind: "text" });
+    { goal: goalId, title: "调研 A", kind: "text", scope: "goal" });
   const card = body.card;
   const goalHandler = routes.get("/api/dsh-graph/goal");
   const goalDetail = () => {

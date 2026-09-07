@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, dirname } from "node:path";
-import { init, findGoalFile, loadGoal, createGoal, setCriteria, transition, readSupervisorSession } from "../ops.ts";
+import { init, findGoalFile, loadGoal, loadCard, createGoal, setCriteria, transition, readSupervisorSession } from "../ops.ts";
 import { resolveRoot } from "../root.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dsh-graph-host/index.js";
@@ -205,7 +205,7 @@ test("g-202 graph_start_attempt：合法 card 用标准 prompt 派发并绑定�
   assert.match(request.request.prompt[0].text, new RegExp(`graph_fill_card\\(goal=\\"${goal}\\", card=\\"${card}`));
   assert.ok(request.request.prompt[0].text.includes(brief), "card 收集 prompt 应保留 attempt_brief");
   assert.equal(loadGoal(findGoalFile(root, goal)).meta.status, "planning");
-  const cardFile = join(dirname(findGoalFile(root, goal)), "cards", `${card}.md`);
+  const cardFile = loadCard(root, goal, card).file;
   assert.equal(loadGoal(cardFile).meta.status, "collecting");
   const events = readEvents(root);
   assert.ok(events.some((e) => e.event === "card.collecting"));
@@ -226,7 +226,7 @@ test("g-202 graph_start_attempt：无 subagents/非法 goal-card 返回明确错
   const exec = { agent: { session: { id: "super" } }, signal: new AbortController().signal };
   const out = await byName.get("graph_start_attempt")!.execute({ goal, card }, exec);
   assert.equal(out.card, card); assert.equal(out.child_id, null); assert.match(out.child_error, /subagents/);
-  assert.equal(loadGoal(join(dirname(findGoalFile(root, goal)), "cards", `${card}.md`)).meta.status, "empty");
+  assert.equal(loadGoal(loadCard(root, goal, card).file).meta.status, "empty");
   await assert.rejects(() => byName.get("graph_start_attempt")!.execute({ goal: "g-999", card }, exec), /目标不存在/);
   await assert.rejects(() => byName.get("graph_start_attempt")!.execute({ goal, card: "card-nope" }, exec), /卡片不存在/);
 });

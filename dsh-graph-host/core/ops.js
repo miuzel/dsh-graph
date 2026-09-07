@@ -1728,6 +1728,8 @@ function cardSummaryFields(meta, cardFilePath, scope) {
         summary: meta.summary ?? null,
         child_id: meta.child_id ?? null,
         parent_session_id: meta.parent_session_id ?? null,
+        provider: meta.provider ?? null,
+        model: meta.model ?? null,
         scope,
         cardFile: cardFilePath, // g-154: 暴露卡片文件绝对路径
         // g-183：正文中引用的附件相对路径（@att/<name>），稳定、可审计
@@ -1840,7 +1842,7 @@ export function resolveCard(root, goalId, cardId) {
     }
     throw new GraphError(`卡片不存在：${cardIdSafe}（目标 ${goalIdSafe}）`);
 }
-function loadCard(root, goalId, cardId) {
+export function loadCard(root, goalId, cardId) {
     return resolveCard(root, goalId, cardId);
 }
 // ---- 共享卡操作（g-183） ----
@@ -2981,12 +2983,12 @@ export function reviewCard(root, goalId, cardId, opts) {
  *  g-183：被引用/任何共享卡不可经 deleteCard 删除——共享卡走 deleteSharedCard（零引用显式删除）。 */
 export function deleteCard(root, goalId, cardId, opts) {
     const { file, doc, scope } = loadCard(root, goalId, cardId);
-    if (scope === "shared") {
-        throw new GraphError(`共享卡 ${cardId} 被 goal 引用，不能删除——请在共享管理面板先解除引用（零引用后再显式删除）`);
-    }
-    // 前置校验：正在收集中的卡片不可删除
+    // 前置校验：正在收集中的卡片不可删除（无论共享卡还是自有卡均不可在收集中删除）
     if (doc.meta.status === "collecting") {
         throw new GraphError(`卡片 ${cardId} 正在收集子代理中，不能删除——请先停止子代理或等其完成`);
+    }
+    if (scope === "shared") {
+        throw new GraphError(`共享卡 ${cardId} 被 goal 引用，不能删除——请在共享管理面板先解除引用（零引用后再显式删除）`);
     }
     // 事件先行（R-02）
     appendEvent(root, {

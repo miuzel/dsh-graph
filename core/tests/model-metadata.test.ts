@@ -15,6 +15,7 @@ import {
   startAttempt,
   bindAttemptChild,
   bindCardChild,
+  loadCard,
   loadGoal,
   findGoalFile,
   goalDetail,
@@ -91,8 +92,7 @@ test("g-194 ② bindCardChild 持久化 provider 与 model 到 card.md 及事件
     model: "moonshot-v1-auto",
   });
 
-  const goalFile = findGoalFile(root, goalId);
-  const cardFile = join(goalFile.replace(/goal\.md$/, ""), "cards", `${cardId}.md`);
+  const cardFile = loadCard(root, goalId, cardId).file;
   const cardDoc = loadGoal(cardFile);
   assert.equal(cardDoc.meta.child_id, "child-card-1");
   assert.equal(cardDoc.meta.parent_session_id, "parent-card-1");
