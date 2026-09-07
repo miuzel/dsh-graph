@@ -295,11 +295,13 @@ test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 ses
   assert.match(settings, /legacyApi\?\.llm\?\.providers/);
   assert.match(settings, /status:\s*"unavailable"/);
   // dsh.client.inject 只是预取元数据，不能把 optional service 设为 plugin 的硬 inject；
-  // 真实 activation 后以 ctx.inject(["remote"], ...) 绑定 catalog 服务，服务缺失不阻断看板 apply。
+  // 设置页必须在 apply 时立即注册（不依赖 remote 激活），remote 可选升级 appCtx。
   assert.match(plugin, /inject: \["slots", "sessions"\]/);
   assert.doesNotMatch(plugin, /inject: \[[^\]]*"remote"[^\]]*\]/);
-  assert.match(plugin, /ctx\.inject\(\["remote"\], \(scope\) =>/);
-  assert.match(plugin, /registerGraphSettingsSection\(scope\)/);
+  // 设置页始终立即注册，不等待 remote
+  assert.match(plugin, /try \{ registerGraphSettingsSection\(ctx\); \} catch/);
+  // remote 可选激活仅升级 appCtx/connectionRt，不重复注册设置页
+  assert.match(plugin, /ctx\.inject\?\.\(\["remote"\], \(scope\) =>/);
 
   // 2. settings-modal.js 挂载时不短路，调用 loadHostCatalog 进行 3 级探测
   assert.match(modal, /loadHostCatalog\(gConnectionApi\)/);

@@ -8190,13 +8190,18 @@ window.__ModuleLoader__.load({
             (props) => h(KanbanView, props),
           ),
         );
-        // g-231：model catalog 由 active 的 remote service 提供。用可选 ctx.inject 等待实际
-        // provider 激活后再注册设置页，避免只读到 REST/legacy 目录（缺 reasoning metadata）。
-        // remote 缺失时该回调不执行，但看板和 workspace 设置的 REST 降级仍可工作。
-        ctx.inject(["remote"], (scope) => {
+        // g-133：注册「看板设置」settings.section 页（profile 级全局默认配置）。
+        // settingsScope 缺失 / slots 未就绪时整页降级，不影响看板与工具。
+        // 设置页必须在 apply 时立即注册，不能依赖可选 remote 激活——remote 缺失时
+        // REST fallback 仍可正常读写配置；remote 后续激活时再升级 ctx 以获取精确 model catalog。
+        try { registerGraphSettingsSection(ctx); } catch { /* 静默 */ }
+        // g-231：remote 可选激活——若 remote service 后续激活，升级 appCtx 和 connectionRt
+        // 使 loadHostCatalog 能从 session.modelCatalog 获取含 reasoning.efforts 的精确目录。
+        // remote 缺失时此回调不执行，设置页仍通过 REST/legacy 降级正常工作。
+        ctx.inject?.(["remote"], (scope) => {
           appCtx = scope;
           connectionRt = scope.get?.("connection") ?? connectionRt;
-          try { registerGraphSettingsSection(scope); } catch { /* 可选设置页失败不阻断看板 */ }
+          // 已注册的 settings section 通过 appCtx 变量读取 catalog，无需重复注册。
         });
         console.log("[dsh-graph-host] client apply: kanban view registered");
       },
