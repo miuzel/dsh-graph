@@ -628,7 +628,7 @@ test("g-150：handoff 段与 cards 段独立注入，互不干扰", async () => 
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "共存", version: "v-t", actor: "test" });
-  const c1 = addCard(root, goal, { title: "研究卡", kind: "text", actor: "test" });
+  const c1 = addCard(root, goal, { title: "研究卡", kind: "text", actor: "test", scope: "goal" });
   fillCard(root, goal, c1, { text: "研究内容", summary: "摘要", by: "human:a", actor: "test" });
   const att1 = startAttempt(root, goal, { executor: "agent:t", actor: "test" });
   recordAttemptHandoff(root, goal, {
@@ -908,7 +908,7 @@ test("g-150 review-5：已有 reviewed context card 不回归（cards 注入行�
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "card兼容", version: "v-t", actor: "test" });
-  const c1 = addCard(root, goal, { title: "复核卡", kind: "text", actor: "test" });
+  const c1 = addCard(root, goal, { title: "复核卡", kind: "text", actor: "test", scope: "goal" });
   fillCard(root, goal, c1, { text: "研究内容", summary: "摘要", by: "human:a", actor: "test" });
   reviewCard(root, goal, c1, { by: "human:a", actor: "test" });
   const captured: { prompt?: string } = {};

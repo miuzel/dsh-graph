@@ -38,11 +38,11 @@
         const card = (state.data.cards ?? []).find((c) => c.id === props.cardId);
         if (!card) inner = "卡片不存在：" + props.cardId;
         else {
-          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区
+          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、canonical 附件根、回填模板和禁区
           const goalTitle = state.data.meta?.title ?? props.goalId;
           const cardTitle = card.title;
-          const cardKind = card.kind ?? "text";
           const root = state.data.root ?? "（仓库根未知）";
+          const attRoot = state.data.attachmentsDir ?? (root !== "（仓库根未知）" ? root + "/attachments" : "（附件根未知）");
 
           // 可编辑的收集信息目标部分
           const editablePart = [
@@ -55,7 +55,7 @@
           // 只读的规范约束部分
           const readonlyPart = [
             ``,
-            `**工作目录**：当前分配的 worktree/当前工作目录（不要猜测 .dsh-graph 文件路径）`,
+            `**canonical 附件根（绝对路径）**：\`${attRoot}\``,
             ``,
             `**目标信息**：`,
             `- id: \`${props.goalId}\``,
@@ -64,21 +64,23 @@
             `**卡片信息**：`,
             `- id: \`${card.id}\``,
             `- 标题: ${cardTitle}`,
-            `- 类型: ${cardKind}`,
             ``,
             `**回填要求**：`,
-            `1. 全文写进 \`text\` 参数`,
-            `2. \`summary\` 写一句话要点式摘要（≤100 字左右），不要长文`,
-            `3. 完成后必须调用以下精确命令回填结果：`,
+            `1. 把正文全文写进 \`text\` 参数；\`summary\` 写一句话要点式摘要（≤100 字左右），不长文。`,
+            `2. 若收集到文件附件（md/txt、图片、csv/Excel、二进制）用 \`graph_store_attachment\`：文本用 content、二进制/图片用 base64，写入上述 canonical 附件根；返回稳定相对引用名。`,
+            `3. 回调正文或 goal.md 时用 \`@att/<相对引用名>\` 引用附件（可含安全子目录）。`,
+            `4. 完成后调用以下精确命令回填结果：`,
             `\`\`\``,
-            `graph_fill_card(goal="${props.goalId}", card="${card.id}", text=<全文>, summary=<≤100字摘要>)`,
+            `graph_fill_card(goal="${props.goalId}", card="${card.id}", text=<全文可含 @att/<name>>, summary=<≤100字摘要>)`,
             `\`\`\``,
             ``,
+            `**附件安全与边界**：`,
+            `只写入上述 canonical 附件根；拒绝绝对路径、./.. 穿越、反斜杠、NUL；不得访问/引用 \`.dsh-graph\` 之外文件；互联网抓取仅限 http(s)，设超时/大小上限，禁 file://、localhost、内网（SSRF）。`,
+            ``,
             `**禁区（严格遵守）**：`,
-            `1. 不得猜测 \`.dsh-graph\` 文件路径——所有路径已在上方提供`,
-            `2. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${card.id}\``,
-            `3. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
-            `4. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
+            `1. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${card.id}\``,
+            `2. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
+            `3. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
           ].join("\n");
 
           const autoPrompt = editablePart + readonlyPart;
@@ -189,11 +191,24 @@
             h("div", { key: "t", style: { fontWeight: 700, fontSize: 14 } },
               `📇 ${card.title}`),
             h("div", { key: "m", style: S.meta },
-              `${card.id} ｜ ${card.kind} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
+              `${card.id} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
             cardFileEntry,
             childLink,
             card.summary ? h("div", { key: "s", style: S.drawerSection },
               h("div", { style: S.drawerH }, "摘要"), card.summary) : null,
+            // 附件引用（安全下载链接，不内联渲染用户 Markdown/HTML/SVG）
+            (Array.isArray(card.attachments) && card.attachments.length)
+              ? h("div", { key: "att", style: S.drawerSection },
+                  h("div", { style: S.drawerH }, "📎 附件引用"),
+                  card.attachments.map((a) =>
+                    h("div", { key: a, style: { ...S.meta, fontSize: 12 } },
+                      h("a", {
+                        href: graphUrl("/api/dsh-graph/attachment?name=" + encodeURIComponent(a)),
+                        target: "_blank", rel: "noopener noreferrer",
+                        style: { color: "var(--dsw-alias-label-link, #4c8dff)", textDecoration: "underline" },
+                      }, `@att/${a}`),
+                      "（下载）")))
+              : null,
             h("div", { key: "body", style: S.drawerSection },
               h("div", { style: S.drawerH }, "全文"),
               h("div", { style: { whiteSpace: "pre-wrap" } }, card.content?.trim() || "（尚未采集内容）")),
@@ -254,13 +269,72 @@
                         onClick: () => { setDeleteConfirm(false); setDeleteIdInput(""); setDeleteNote(null); },
                       }, "取消"))
                   )
-                : h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
-                    h("button", {
-                      style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
-                      className: "dg-btn-danger",
-                      title: "删除此卡片（需输入卡片 id 确认）",
-                      onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
-                    }, "🗑 删除卡片")),
+                : h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+                    // g-183：共享/自有转换 + 解除引用（goal 详情方向独立；核心层守卫引用计数与归属）
+                    card.scope === "shared"
+                      ? h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可解除引用" : "移除当前 goal 对这张共享卡的引用（保留共享卡与其他引用；零引用仅可在共享面板显式删除）",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/unreference-shared-card"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("✅ 已解除本 goal 引用"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 解除失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "➖ 解除引用")
+                      : h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可转换" : "转为共享卡（原 goal 保留引用，内容进入共享池供多 goal 复用）",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-shared"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("🔗 已转为共享卡"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "🔗 转为共享卡"),
+                    card.scope === "shared"
+                      ? h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中不可解除引用" : "共享卡仅可在引用计数恰为 1 时转回本 goal 自有卡（其余引用请先在共享面板解除）",
+                          onClick: async () => {
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
+                                method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) { showToast("✅ 已转回本 goal 自有卡"); props.onDeleted?.(); }
+                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
+                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                          },
+                        }, "📁 转回自有卡")
+                      : null,
+                    // 仅 goal 自有卡可删除（共享卡走解除引用/共享面板显式删除，避免必然报错）
+                    card.scope !== "shared"
+                      ? h("button", {
+                          style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn-danger",
+                          disabled: card.status === "collecting",
+                          title: card.status === "collecting" ? "收集中卡片不可删除" : "删除此卡片（需输入卡片 id 确认）",
+                          onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
+                        }, "🗑 删除卡片")
+                      : null),
               deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11, color: deleteNote.startsWith("⚠️") ? "var(--dsw-alias-state-error-primary, #d66)" : undefined } }, deleteNote) : null),
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集

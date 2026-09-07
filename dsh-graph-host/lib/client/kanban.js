@@ -89,6 +89,8 @@
       const [transitionNote, setTransitionNote] = React.useState(null);
       // g-132：右上角齿轮 → 看板设置弹窗
       const [showSettings, setShowSettings] = React.useState(false);
+      // g-183：右上角 🔗 → 共享上下文管理面板
+      const [showSharedPanel, setShowSharedPanel] = React.useState(false);
       // g-171：更新强调动画状态——goalId -> { remaining, token }（token = goalId:updated_at）
       const [updateEmphasis, setUpdateEmphasis] = React.useState({});
       const seenUpdateTokens = React.useRef(new Set()); // 当前页内存：防同一 token 重复播放
@@ -1327,6 +1329,13 @@
             title: "记忆管理（手工管理常驻记忆与按需记忆，或禁用记忆工具）",
             onClick: () => setShowMemoryModal(true),
           }, "🧠 记忆"),
+          // g-183: 共享上下文管理面板入口
+          h("button", {
+            style: { ...S.btn, marginLeft: 8, fontSize: 14, lineHeight: 1, padding: "2px 8px" },
+            className: "dg-btn",
+            title: "共享上下文管理面板（创建/查看共享卡、挂到 goal、删除保护）",
+            onClick: () => setShowSharedPanel(true),
+          }, "🔗 共享卡"),
           // g-132: 右上角齿轮 → 看板设置
           h("button", {
             style: { ...S.btn, marginLeft: 8, fontSize: 16, lineHeight: 1, padding: "2px 8px" },
@@ -1795,6 +1804,19 @@
         // g-132: 看板设置弹窗（gear 入口）
         showSettings
           ? h(SettingsModal, { onClose: () => setShowSettings(false), onSaved: () => load() })
+          : null,
+        // g-183: 共享上下文管理面板（🔗 入口）
+        showSharedPanel
+          ? h(SharedCardsModal, {
+              onClose: () => setShowSharedPanel(false),
+              onRefresh: () => load(),
+              sharedCards: b.sharedCards ?? [],
+              goals: [
+                ...(b.versions ?? []).flatMap((v) => v.goals ?? []),
+                ...(b.standalone ?? []),
+                ...(b.backlog ?? []),
+              ].map((g) => ({ id: g.id, title: g.title })),
+            })
           : null,
         // g-134: 创建版本泳道弹窗
         showCreateVersion

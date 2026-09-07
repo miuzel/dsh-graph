@@ -58,7 +58,7 @@ test("g-119 ② 执行成功：写 child_id/parent_session_id/status=collecting�
   const { root, byName } = setup();
   const ex = exec("session-gui");
   const goal = (await byName.get("graph_create_goal").execute({ title: "t", version: "v-t" }, ex)).goal;
-  const card = (await byName.get("graph_add_card").execute({ goal, title: "c", kind: "text" }, ex)).card;
+  const card = (await byName.get("graph_add_card").execute({ goal, title: "c", kind: "text", scope: "goal" }, ex)).card;
 
   const out = await byName.get("graph_bind_collect_card").execute(
     { goal, card, child_id: "child-1", parent_session_id: "session-par" },
@@ -81,7 +81,7 @@ test("g-119 ③ 幂等：同参重复绑定不重复记事件；换 child（重�
   const { root, byName } = setup();
   const ex = exec("session-gui");
   const goal = (await byName.get("graph_create_goal").execute({ title: "t", version: "v-t" }, ex)).goal;
-  const card = (await byName.get("graph_add_card").execute({ goal, title: "c", kind: "text" }, ex)).card;
+  const card = (await byName.get("graph_add_card").execute({ goal, title: "c", kind: "text", scope: "goal" }, ex)).card;
   const bind = (child_id: string) =>
     byName.get("graph_bind_collect_card").execute({ goal, card, child_id, parent_session_id: "session-par" }, ex);
 
@@ -100,7 +100,7 @@ test("g-119 ④ 缺参报错：缺 child_id / 缺 card / 缺 goal 抛错；卡�
   const { root, byName } = setup();
   const ex = exec();
   const goal = (await byName.get("graph_create_goal").execute({ title: "t", version: "v-t" }, ex)).goal;
-  const card = (await byName.get("graph_add_card").execute({ goal, title: "c", kind: "text" }, ex)).card;
+  const card = (await byName.get("graph_add_card").execute({ goal, title: "c", kind: "text", scope: "goal" }, ex)).card;
   const bindTool = byName.get("graph_bind_collect_card");
 
   assert.throws(() => bindTool.execute({ goal, card }, ex), /缺参/); // 缺 child_id
@@ -117,7 +117,7 @@ test("g-119 ⑤ parent_session_id 缺省取当前会话 id；显式传入优先"
   const { root, byName } = setup();
   const ex = exec("session-me");
   const goal = (await byName.get("graph_create_goal").execute({ title: "t", version: "v-t" }, ex)).goal;
-  const card = (await byName.get("graph_add_card").execute({ goal, title: "c", kind: "text" }, ex)).card;
+  const card = (await byName.get("graph_add_card").execute({ goal, title: "c", kind: "text", scope: "goal" }, ex)).card;
 
   // 缺省：当前会话 id
   await byName.get("graph_bind_collect_card").execute({ goal, card, child_id: "child-d" }, ex);
@@ -135,7 +135,7 @@ test("g-119 ⑥ core bindCardChild 幂等（直调核心层）", () => {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-bind-core-"));
   init(root);
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  const card = addCard(root, id, { title: "c", kind: "text", actor: "test" });
+  const card = addCard(root, id, { title: "c", kind: "text", actor: "test", scope: "goal" });
   bindCardChild(root, id, card, { childId: "child-a", parentSessionId: "session-p", actor: "test" });
   bindCardChild(root, id, card, { childId: "child-a", parentSessionId: "session-p", actor: "test" }); // no-op
   assert.equal(collectEvents(root, id).length, 1, "同参重复绑定只记 1 条事件");

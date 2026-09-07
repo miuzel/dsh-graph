@@ -66,6 +66,26 @@ import {
   harvestedCards,
   formatHarvestedCardsSection,
   formatCollectPrompt,
+  createSharedCard,
+  addSharedCardRef,
+  deleteSharedCard,
+  removeSharedCardRef,
+  convertOwnedToShared,
+  convertSharedToOwned,
+  sharedCards,
+  referenceCount,
+  referencingGoals,
+  storeAttachment,
+  listAttachments,
+  deleteAttachment,
+  parseAttachmentRefs,
+  attachmentInfo,
+  readAttachment,
+  attachmentContentType,
+  MAX_ATTACHMENT_BYTES,
+  attachmentsDir,
+  sanitizeAttachmentPath,
+  formatAttachmentRef,
   recordAttemptHandoff,
   harvestReviewedAttemptHandoffs,
   formatReviewedAttemptHandoffsSection,
@@ -121,6 +141,57 @@ export { resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 // g-111 B7：boardPayload 已移入 core（消除 client→host 跨包依赖），此处 re-export 保持兼容。
 // board 载荷含 supervisorSession 字段（project.yaml 的 supervisor.session，g-108），由 host 端点 /api/dsh-graph 下发。
 export { boardPayload } from "./core/ops.js";
+
+// g-183 返工 v4：流式上限（防无 header/伪造 Content-Length/chunked 的超大请求先进内存被拒）。
+// JSON/base64 envelope 上限需容纳 50MB 二进制 base64 编码开销（~4/3）+ JSON 键，但拒绝更大。
+export const MAX_ATTACHMENT_JSON_BYTES = Math.ceil(MAX_ATTACHMENT_BYTES * 5 / 3) + 1024 * 1024;
+// 普通 JSON REST（add-card/start-collection/unreference/转换/delete 等）统一 body 上限（1MB 足够管理类 payload）。
+export const MAX_JSON_BODY_BYTES = 1024 * 1024;
+
+/** 超限时停止累积（pause/unpipe），但**不销毁 socket**——让 handler 能写出可读的 4xx 响应。
+ *  真实 HTTP 下若不 pause 而 destroy，客户端会收到 ECONNRESET 而读不到响应（v6 复现）。 */
+function stopOversized(req) {
+  try { req.pause?.(); } catch { /* 忽略 */ }
+  try { req.unpipe?.(); } catch { /* 忽略 */ }
+}
+
+/** 流式读取原始二进制 body，累计超过 maxBytes 立即停止累积并 reject（handler 回 4xx；不留半状态）。 */
+export function readRawBodyCapped(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (c) => {
+      const b = Buffer.isBuffer(c) ? c : Buffer.from(c);
+      total += b.length;
+      if (total > maxBytes) { stopOversized(req); reject(new GraphError(`请求体超过 ${maxBytes} 字节上限`)); return; }
+      chunks.push(b);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+/** 流式读取 JSON body，累计超过 maxBytes 立即停止累积并 reject（handler 回 4xx）。
+ *  按 Buffer 累积、最后一次性 toString 解码，避免跨 chunk 的 UTF-8 多字节字符被逐 chunk 解码损坏。 */
+export function readBodyCapped(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (c) => {
+      const b = Buffer.isBuffer(c) ? c : Buffer.from(String(c), "utf8");
+      total += b.length;
+      if (total > maxBytes) { stopOversized(req); reject(new GraphError(`请求体超过 ${maxBytes} 字节上限`)); return; }
+      chunks.push(b);
+    });
+    req.on("end", () => {
+      try {
+        const text = chunks.length ? Buffer.concat(chunks).toString("utf8") : "";
+        resolve(text ? JSON.parse(text) : {});
+      } catch (e) { reject(e); }
+    });
+    req.on("error", reject);
+  });
+}
 
 export const name = "dsh-graph-host";
 // 只硬依赖 tools：webServer 由 web-app 行提供且可能在 apply 之后才激活，经 ctx.get 轮询注册
@@ -650,18 +721,38 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_add_card",
-        description: "为目标创建上下文卡片（empty 占位）。返回卡片 id。",
+        description: "为目标创建上下文卡片（empty 占位）。返回卡片 id。默认创建共享卡（scope=shared，落共享池并挂到该 goal）；goal 自有卡必须显式传 scope=\"goal\"。卡片统一为正文 + 可选附件引用（@att/<name>），kind 仅为兼容读取字段、可不传、不限定类型。",
         parameters: params(
-          { goal: str, title: str, kind: { type: "string", enum: ["text", "file", "image", "data"] } },
-          ["goal", "title", "kind"],
+          { goal: str, title: str, kind: str, scope: { type: "string", enum: ["goal", "shared"] } },
+          ["goal", "title"],
         ),
       },
-      run: (a, ex) => ({ card: addCard(rootFor(ex), a.goal, { title: a.title, kind: a.kind, actor: actorOf(ex) }) }),
+      run: (a, ex) => ({ card: addCard(rootFor(ex), a.goal, { title: a.title, kind: a.kind, scope: a.scope, actor: actorOf(ex) }) }),
+    },
+    {
+      def: {
+        name: "graph_store_attachment",
+        description: "存储一个上下文附件到项目根 .dsh-graph/attachments/（可含安全子目录），返回稳定引用名（用 @att/<相对引用名> 在卡片正文/goal.md 引用）。文本用 content；二进制/图片/Excel 用 base64。name 拒绝绝对路径、./.. 穿越、反斜杠、NUL；目标已存在且内容不同会生成唯一名（不覆盖）；异常不留半文件。",
+        parameters: params({ name: str, content: str, base64: str }, ["name"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        const name = storeAttachment(r, { name: a.name, content: a.content, base64: a.base64, actor: actorOf(ex) });
+        return { name, ref: formatAttachmentRef(name), digest: attachmentInfo(r, name).digest ?? null };
+      },
+    },
+    {
+      def: {
+        name: "graph_delete_attachment",
+        description: "显式删除附件；仍被任何卡片/目标正文引用的附件禁止删除（解除/删除卡片不误删仍被引用的附件）。",
+        parameters: params({ name: str }, ["name"]),
+      },
+      run: (a, ex) => { deleteAttachment(rootFor(ex), a.name, { actor: actorOf(ex) }); return { ok: true }; },
     },
     {
       def: {
         name: "graph_fill_card",
-        description: "填充上下文卡片内容（text 或 content_ref），状态变为 filled。summary 是看板子卡片上显示的一句话摘要，必须简短：一句话要点式、≤100 字左右（看板默认折叠显示 2 行，长摘要会被截断）——细节写进 text 全文，不要把长文塞进 summary。",
+        description: "填充上下文卡片（正文 + 可选附件引用）。text 写卡片正文全文；正文与 goal.md 里用 @att/<相对引用名> 引用附件。summary 是一句话要点式摘要（≤100 字左右），细节写进 text。content_ref 仅为兼容读取字段。",
         parameters: params({ goal: str, card: str, text: str, content_ref: str, summary: str }, ["goal", "card"]),
       },
       run: (a, ex) => { fillCard(rootFor(ex), a.goal, a.card, { text: a.text, contentRef: a.content_ref, summary: a.summary, by: actorOf(ex), actor: actorOf(ex) }); return { ok: true }; },
@@ -1353,19 +1444,8 @@ export function apply(ctx, config) {
     res.writeHead(code, { "content-type": "application/json; charset=utf-8", ...headers });
     res.end(JSON.stringify(data));
   };
-  const readBody = (req) =>
-    new Promise((resolve, reject) => {
-      let buf = "";
-      req.on("data", (c) => (buf += c));
-      req.on("end", () => {
-        try {
-          resolve(buf ? JSON.parse(buf) : {});
-        } catch {
-          reject(new GraphError("请求 body JSON 格式无效"));
-        }
-      });
-      req.on("error", reject);
-    });
+  // 所有普通 JSON REST 统一走 capped reader（防超大 JSON OOM；附件 endpoint 用更大的 MAX_ATTACHMENT_JSON_BYTES）
+  const readBody = (req) => readBodyCapped(req, MAX_JSON_BODY_BYTES);
   // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
   // （parent.options / childSessionMeta / captureDelegatedPolicyOverrides），传 null 必然失败。
   // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。
@@ -1958,10 +2038,121 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, title, kind } = body;
-          if (!goal || !title || !kind) return json(res, 400, { error: "missing goal/title/kind" });
-          const card = addCard(rootForReq(req, body), goal, { title, kind, actor: "human:gui" });
+          const { goal, title, kind, scope } = body;
+          // g-183 返工 #1：kind 真正可选（goal-actions 不再发送 kind）；仅 goal/title 必填
+          if (!goal || !title || typeof title !== "string") return json(res, 400, { error: "missing goal/title" });
+          if (kind !== undefined && kind !== null && typeof kind !== "string") return json(res, 400, { error: "kind 必须是字符串" });
+          const card = addCard(rootForReq(req, body), goal, { title, kind, scope, actor: "human:gui" });
           json(res, 200, { ok: true, card });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-183: 共享卡管理端点（面板 CRUD / 引用 / 转换）
+    {
+      path: "/api/dsh-graph/shared-cards",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          json(res, 200, { cards: sharedCards(rootForReq(req)) });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/create-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { title, kind } = body;
+          if (!title) return json(res, 400, { error: "missing title" });
+          const card = createSharedCard(rootForReq(req, body), { title, kind, actor: "human:gui" });
+          json(res, 200, { ok: true, card });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/attach-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          addSharedCardRef(rootForReq(req, body), goal, card, "human:gui");
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/unreference-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          removeSharedCardRef(rootForReq(req, body), goal, card, "human:gui");
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/delete-shared-card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { card } = body;
+          if (!card) return json(res, 400, { error: "missing card" });
+          deleteSharedCard(rootForReq(req, body), card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/convert-card-to-shared",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          convertOwnedToShared(rootForReq(req, body), goal, card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/convert-card-to-owned",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, card } = body;
+          if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
+          convertSharedToOwned(rootForReq(req, body), goal, card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
@@ -1978,6 +2169,105 @@ export function apply(ctx, config) {
           const { goal, card } = body;
           if (!goal || !card) return json(res, 400, { error: "missing goal or card" });
           deleteCard(rootForReq(req, body), goal, card, { actor: "human:gui" });
+          json(res, 200, { ok: true });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-183：附件管理端点（列出/读取下载/存储/删除；路径安全与引用守卫由 core 层强制）
+    {
+      path: "/api/dsh-graph/attachments",
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const root = rootForReq(req);
+          const names = listAttachments(root);
+          json(res, 200, { attachments: names, infos: names.map((n) => attachmentInfo(root, n)) });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-183 返工 #2：安全读取/下载附件（canonical containment + content-type；HTML/Markdown/SVG 强制下载不内联）
+    {
+      path: "/api/dsh-graph/attachment",
+      handler: (req, res) => {
+        try {
+          const sp = new URL(req.url ?? "", "http://x").searchParams;
+          const name = sp.get("name");
+          if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
+          const info = readAttachment(rootForReq(req), name);
+          const disp = info.inline ? "inline" : "attachment";
+          res.writeHead(200, {
+            "content-type": info.contentType,
+            "content-length": String(info.size),
+            "content-disposition": `${disp}; filename*=UTF-8''${encodeURIComponent(basename(name))}`,
+            "cache-control": "no-store",
+          });
+          res.end(info.buffer);
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/store-attachment",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const ct = String(req.headers?.["content-type"] ?? "");
+          const isRaw = ct.includes("application/octet-stream") || ct.includes("application/x-www-form-urlencoded");
+          const maxBody = isRaw ? MAX_ATTACHMENT_BYTES : MAX_ATTACHMENT_JSON_BYTES;
+          // content-length 仅作快速失败；真正防护是流式累计上限（防无 header/伪造/ chunked）
+          const cl = Number(req.headers?.["content-length"] || 0);
+          if (cl > maxBody) return json(res, 400, { error: "content-length 超过大小上限" });
+          let stored;
+          let rRoot;
+          // 原始二进制上传：body 即文件字节，文件名走 query/header `x-attachment-name`
+          if (isRaw) {
+            const sp = new URL(req.url ?? "", "http://x").searchParams;
+            const name = sp.get("name") ?? req.headers?.["x-attachment-name"];
+            if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
+            rRoot = rootForReq(req);
+            const raw = await readRawBodyCapped(req, MAX_ATTACHMENT_BYTES);
+            stored = storeAttachment(rRoot, { name, bytes: raw, actor: "human:gui" });
+          } else {
+            const body = await readBodyCapped(req, MAX_ATTACHMENT_JSON_BYTES);
+            const { name, content, base64 } = body;
+            if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
+            rRoot = rootForReq(req, body);
+            if (typeof base64 === "string") {
+              // base64 大小预检（避免解码后超限）
+              const approx = Math.floor(base64.length * 3 / 4);
+              if (approx > MAX_ATTACHMENT_BYTES) return json(res, 400, { error: "base64 大小超过上限" });
+              stored = storeAttachment(rRoot, { name, base64, actor: "human:gui" });
+            } else if (typeof content === "string") {
+              stored = storeAttachment(rRoot, { name, content, actor: "human:gui" });
+            } else {
+              return json(res, 400, { error: "需要 content 或 base64（或原始二进制上传）" });
+            }
+          }
+          const digest = attachmentInfo(rRoot, stored).digest;
+          json(res, 200, { ok: true, name: stored, ref: formatAttachmentRef(stored), digest });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      path: "/api/dsh-graph/delete-attachment",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { name } = body;
+          if (!name || typeof name !== "string" || name.length > 512 || name.trim() === "") return json(res, 400, { error: "missing/invalid name" });
+          deleteAttachment(rootForReq(req, body), name, { actor: "human:gui" });
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
@@ -2002,9 +2292,10 @@ export function apply(ctx, config) {
           const effProvider = eff.provider;
           const effModel = eff.model;
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
-          // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、回填模板和禁区。
-          // 收集派发不是 Goal execution attempt，不创建 attempt 记录。
+          // g-183 返工 F：先完整校验（resolveCard 成员关系/backlog/卡状态权限）生成提示词，
+          //  再创建 attempt/子代理——校验失败不得留下 attempt/事件副作用。
           const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt);
+          const attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
             fullPrompt,

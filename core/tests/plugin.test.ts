@@ -30,7 +30,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 36); // g-187 32 + g-105 4 memory tools = 36
+  assert.equal(registered.length, 38); // 全量 38 个 graph_* 工具
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
@@ -43,7 +43,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
   const { goal } = await call("graph_create_goal", { title: "t", version: "v-t" });
   await call("graph_set_criteria", { goal, criteria: ["通过"] });
   // g-137：带 version 的目标初始状态已是 planning，无需再迁移
-  const { card } = await call("graph_add_card", { goal, title: "c", kind: "text" });
+  const { card } = await call("graph_add_card", { goal, title: "c", kind: "text", scope: "goal" });
   // g-119：graph_bind_collect_card 绑定收集子代理（无会话上下文 → parent_session_id 缺省 null）
   await call("graph_bind_collect_card", { goal, card, child_id: "child-t" });
   await call("graph_fill_card", { goal, card, text: "内容" });

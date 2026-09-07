@@ -410,14 +410,12 @@
       );
     }
 
-    // g-109：新增信息收集任务组件（弹窗内信息收集区）
-    // g-128：新增信息收集任务组件（弹窗内信息收集区）——支持标题+kind 选择
-    // g-198：支持 onRefresh 回调，创建成功后立即通知父组件刷新卡片列表
+    // g-109/g-128：新增信息收集任务组件（弹窗内信息收集区）——标题 + 作用域（共享/自有），不设 kind 类型；支持 onRefresh 回调立即刷新卡片列表
     function AddCardBox(props) {
       const { goalId, supervisorSession, onRefresh } = props;
       const [mode, setMode] = React.useState("idle"); // idle | naming | chat
       const [title, setTitle] = React.useState("");
-      const [kind, setKind] = React.useState("text"); // g-128：卡片类型可选
+      const [scope, setScope] = React.useState("shared"); // g-183：新建默认共享卡，可选 goal 自有
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
 
@@ -429,13 +427,12 @@
           const r = await fetch(graphUrl("/api/dsh-graph/add-card"), {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, title: t, kind }),
+            body: JSON.stringify({ goal: goalId, title: t, scope }),
           });
           const data = await r.json();
           if (data.ok) {
             setNote("✅ 已创建任务：" + data.card);
             setTitle("");
-            setKind("text");
             setMode("idle");
             onRefresh?.();
           } else {
@@ -462,9 +459,6 @@
         }
       };
 
-      // g-128：kind 选项标签
-      const kindLabels = { text: "📝 文本", file: "📄 文件", image: "🖼 图片", data: "📊 数据" };
-
       return h("div", { style: { marginTop: 8 }, className: "dg-card-add" },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
           h("span", { style: { ...S.meta, fontSize: 11 } }, "新增信息收集任务："),
@@ -479,16 +473,17 @@
                   onChange: (e) => setTitle(e.target.value),
                   onKeyDown: (e) => { if (e.key === "Enter") addByName(); },
                 }),
-                // g-128：kind 选择下拉框
+                // g-183：卡片作用域——默认共享（多 goal 复用），可选 goal 自有
                 h("select", {
-                  value: kind,
-                  onChange: (e) => setKind(e.target.value),
+                  value: scope,
+                  onChange: (e) => setScope(e.target.value),
                   style: { fontSize: 12, padding: "4px 6px", cursor: "pointer",
                            background: "rgba(128,128,128,.10)", color: "inherit",
                            border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
+                  title: "默认创建共享卡（多 goal 复用）；可选直接在 goal 内创建自有卡",
                 },
-                  ...Object.entries(kindLabels).map(([k, v]) =>
-                    h("option", { key: k, value: k }, v))),
+                  h("option", { value: "shared" }, "🔗 共享卡（默认）"),
+                  h("option", { value: "goal" }, "📁 本 goal 自有卡")),
                 h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建")))
           : null,
         mode === "chat"

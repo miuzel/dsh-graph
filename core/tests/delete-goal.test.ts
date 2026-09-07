@@ -153,7 +153,7 @@ test("deleteGoal：含卡片的目标删除时卡片目录一并删除", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "含卡片", version: "v-t", actor: "test" });
   // 添加卡片
-  addCard(root, id, { title: "测试卡片", kind: "text", actor: "test" });
+  addCard(root, id, { title: "测试卡片", kind: "text", actor: "test", scope: "goal" });
   // 归档
   archiveGoal(root, id, { actor: "test" });
   // 验证卡片存在
