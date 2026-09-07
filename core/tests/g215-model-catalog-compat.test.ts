@@ -286,6 +286,7 @@ test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 ses
   const settings = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings.js"), "utf8");
   const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings-modal.js"), "utf8");
   const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  const manifest = JSON.parse(readFileSync(join(process.cwd(), "dsh-graph-host/package.json"), "utf8"));
 
   // 1. settings.js 包含新版 RPC 与降级链
   assert.match(settings, /session\?\.modelCatalog/);
@@ -293,6 +294,12 @@ test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 ses
   assert.match(settings, /modelDirectories/);
   assert.match(settings, /legacyApi\?\.llm\?\.providers/);
   assert.match(settings, /status:\s*"unavailable"/);
+  // dsh.client manifest 必须实际注入 remote 与共享目录 provider；否则源码探测链不可达，
+  // 会退回 REST/旧模型目录并丢失 reasoning 元数据。
+  const inject = manifest.dsh.client.inject;
+  for (const id of ["@deepseek-ai/dsh-api-remotes", "@deepseek-ai/dsh-client-connection", "@deepseek-ai/dsh-client-ui-model-selection"]) {
+    assert.ok(inject.includes(id), `manifest 必须注入 ${id}`);
+  }
 
   // 2. settings-modal.js 挂载时不短路，调用 loadHostCatalog 进行 3 级探测
   assert.match(modal, /loadHostCatalog\(gConnectionApi\)/);
