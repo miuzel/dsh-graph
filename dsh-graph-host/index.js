@@ -293,7 +293,7 @@ const GUIDE_HINT = [
 ].join("\n");
 
 // g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
-// 提醒内容强调主管铁律：只做规划/派发/把关/复核、实现交子代理、每动作后
+// 提醒内容强调主管铁律：只做规划/派发/把关/复核、实现交子代理、阶段变化与关键节点
 // graph_report_supervisor_status、review→delivered 必须等负责人 verdict。
 // token 成本约 80 字，简短精炼。
 const SUPERVISOR_DISCIPLINE = [
