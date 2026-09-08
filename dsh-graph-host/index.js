@@ -49,6 +49,7 @@ import {
   isMemoryToolsEnabled,
   setMemoryToolsEnabled,
   formatStandingMemorySection,
+  formatTargetContext,
   requestAcceptReview,
   resolveAccept,
   archiveGoal,
@@ -531,10 +532,13 @@ export function formatAttemptPrompt({
   const historyNotice = handoff ? "『前序 attempt 已确认 handoff』" : "『历史 handoff』";
   const goalValue = promptText(goal) || ATTEMPT_PROMPT_MISSING;
   const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
+  const context = promptText(targetContext);
   const positioning = [
     "【本次任务定位】这是一次 " + taskTypeLabel + " 任务；以下仅『本次 attempt brief/directive』为唯一 action 来源；" + historyNotice + "为约束/背景，仅供理解候选设计与禁项，不产生新任务。",
     "你是 dsh-graph 目标 " + goalValue + " 的执行 attempt " + attemptValue + "。",
-    "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "——用 read 工具读它，不要自己猜路径。",
+    context
+      ? "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "（目标描述与质量判据已在下方基于当前快照内联，请直接依据执行；如需历史评论/台账可按需查阅，无需无条件重读全文）。"
+      : "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "——用 read 工具读它，不要自己猜路径。",
   ].join("\n");
 
   const current = [
@@ -548,7 +552,6 @@ export function formatAttemptPrompt({
     "**directive（当前数据）**",
     renderPromptValue(currentDirective, "当前目标没有最近指令，或该值不是非空字符串"),
   ];
-  const context = promptText(targetContext);
   if (context) current.push("", "目标背景（来自当前 goal.md，仅供理解，不产生 action）", protectPromptMarkers(context));
 
   const override = [
@@ -1242,8 +1245,11 @@ export function apply(ctx, config) {
             const rel = goalRel;
             // g-120：已收集卡片成果段（子代理直接使用，无需猜卡片路径）+ worktree 隔离指令（可开关）
             const cardsSection = formatHarvestedCardsSection(r, a.goal);
+            const goalFile = findGoalFile(r, a.goal);
+            const goalDoc = loadGoal(goalFile);
             let gType = "task";
-            try { gType = normalizeGoalType(loadGoal(findGoalFile(r, a.goal)).meta.type); } catch {}
+            try { gType = normalizeGoalType(goalDoc.meta.type); } catch {}
+            const targetContext = formatTargetContext(goalDoc, { goalRel: rel });
             const worktreeBlock = resolveWorktreeGuide(gType, a.worktree);
             // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
             const subagentPromptSection = (() => {
@@ -1265,6 +1271,7 @@ export function apply(ctx, config) {
               acceptanceItems: a.acceptance_items,
               handoffSection: handoffsSection,
               cardsSection,
+              targetContext,
               subagentPromptSection,
               modeStrategySection,
               worktreeBlock,
@@ -2418,10 +2425,6 @@ export function apply(ctx, config) {
           const rRoot = rootForReq(req, body);
           const goalFile = findGoalFile(rRoot, goal);
           const doc = loadGoal(goalFile);
-          const descMatch = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
-          const critMatch = doc.body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
-          const desc = descMatch ? descMatch[1].trim() : "（无描述）";
-          const crit = critMatch ? critMatch[1].trim() : "（无判据）";
           // g-120：按 context_cards 顺序收集 filled/reviewed 卡片成果——注入清单先于
           // startAttempt 算出（事件先行，记入 attempt.started 的 details.injected_cards），
           // 成果段注入 spawn prompt（子代理直接使用，无需猜卡片路径）
@@ -2433,7 +2436,7 @@ export function apply(ctx, config) {
           const handoffsSection = formatReviewedAttemptHandoffsSection(rRoot, goal);
           // g-150 范围扩展：读取最近指令（注入 prompt；空时不影响现有 prompt 行为）
           let gType = "task";
-          try { gType = normalizeGoalType(loadGoal(findGoalFile(rRoot, goal)).meta.type); } catch {}
+          try { gType = normalizeGoalType(doc.meta.type); } catch {}
           const worktreeBlock = resolveWorktreeGuide(gType, worktree);
           const currentDirective = readGoalDirective(rRoot, goal);
           const projectExec = readExecutorModel(rRoot);
@@ -2475,13 +2478,7 @@ export function apply(ctx, config) {
           })();
           // g-191：子代理执行策略/模式说明段
           const modeStrategySection = effModeRes.prompt ? `## 子代理执行模式（${effModeRes.mode}）\n\n${effModeRes.prompt}` : "";
-          const targetContext = [
-            "## 目标描述",
-            desc,
-            "",
-            "## 质量判据",
-            crit,
-          ].join(String.fromCharCode(10));
+          const targetContext = formatTargetContext(doc, { goalRel: rel });
           // g-228：所有 supervisor 执行 prompt 统一由单一模板入口组装。
           const prompt = formatAttemptPrompt({
             goal,

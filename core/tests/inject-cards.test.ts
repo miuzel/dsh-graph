@@ -286,3 +286,49 @@ test("g-120：start-execution 端点 worktree=false 省略 worktree 指令；无
   assert.ok(captured2.prompt!.includes("已收集上下文卡片成果"), "prompt 仍含成果段标题");
   assert.ok(captured2.prompt!.includes("（无"), "prompt 说明无成果可复用");
 });
+
+test("g-240: 超长单卡注入预算截断，保留摘要、精确路径与 digest 供按需展开", () => {
+  const root = tmpRoot();
+  const goal = createGoal(root, { title: "超长卡目标", version: "v-t", actor: "test" });
+  const c1 = addCard(root, goal, { title: "长文本卡片", kind: "text", actor: "test", scope: "goal" });
+  // 构造 3000 字超长正文
+  const longText = "这是一段非常长的分析报告内容。".repeat(200);
+  fillCard(root, goal, c1, { text: longText, summary: "长文本摘要分析", by: "human:tester", actor: "test" });
+
+  const sec = formatHarvestedCardsSection(root, goal, { maxCardChars: 500 });
+  assert.ok(sec.includes("长文本卡片"));
+  assert.ok(sec.includes("摘要：长文本摘要分析"));
+  assert.ok(sec.includes("⚠️ 正文已超出单卡预算 500 字已截断"), "正文超出单卡预算时被截断");
+  assert.ok(sec.includes(`cards/${c1}.md`), "包含精确卡片路径以供按需查阅");
+  assert.match(sec, /digest=[a-f0-9]{16}/, "包含卡片内容审计摘要");
+  // 确保输出长度受控（远小于 3000 字符）
+  assert.ok(sec.length < 1500, "单卡超出预算后注入段长度严格受控");
+});
+
+test("g-240: 多卡注入总预算控制与折叠机制，保留附件引用且溢出明确可见可定位", () => {
+  const root = tmpRoot();
+  const goal = createGoal(root, { title: "多卡目标", version: "v-t", actor: "test" });
+
+  // 创建 10 张卡片，每张正文 300 字符，并附带 @att/ 附件引用
+  for (let i = 1; i <= 10; i++) {
+    const cardId = addCard(root, goal, { title: `卡片 ${i}`, kind: "text", actor: "test", scope: "goal" });
+    fillCard(root, goal, cardId, {
+      text: `这是卡片 ${i} 的详细内容。` + "详细正文数据。".repeat(30) + ` 参见附件 @att/doc-${i}.pdf`,
+      summary: `卡片 ${i} 的简明摘要`,
+      by: "human:tester",
+      actor: "test",
+    });
+  }
+
+  // 限制 maxTotalChars=1000, maxFullCards=2
+  const sec = formatHarvestedCardsSection(root, goal, { maxTotalChars: 1000, maxFullCards: 2 });
+  assert.ok(sec.includes("卡片 1"));
+  assert.ok(sec.includes("卡片 2"));
+  // 前面卡片完整展开，后续卡片折叠
+  assert.ok(sec.includes("⚠️ 已超出卡片总预算折叠正文"), "超出预算卡片应标注折叠");
+  assert.ok(sec.includes("卡片 10"), "第 10 张卡片依然列出，不静默丢失");
+  assert.ok(sec.includes("摘要：卡片 10 的简明摘要"), "折叠卡片依然提供摘要");
+  assert.ok(sec.includes(`cards/`), "折叠卡片依然提供精确路径以供按需查阅");
+  assert.ok(sec.includes("@att/doc-10.pdf"), "折叠卡片依然保留附件引用");
+  assert.ok(sec.includes("⚠️ 卡片总预算限制：已完整展开"), "底部输出明确可见的总预算统计说明");
+});

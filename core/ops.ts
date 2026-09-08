@@ -873,20 +873,102 @@ export function setMemoryToolsEnabled(root: string, enabled: boolean, actor = "h
   writeFileSync(file, content, "utf8");
 }
 
-/** 格式化常驻记忆：供所有会话作为独立 section 固定植入 */
-export function formatStandingMemorySection(root: string): string | null {
+export interface FormatStandingMemoryOptions {
+  actor?: string;
+  maxItems?: number;
+  maxChars?: number;
+}
+
+export function isHumanActor(actor?: string): boolean {
+  if (!actor) return false;
+  return actor.startsWith("human:") || actor === "user" || actor === "human";
+}
+
+/** 格式化常驻记忆：供所有会话作为独立 section 固定植入。
+ *  - 严格统一预算与条数上限（默认 10 条、2000 字符），防止无限制膨胀；
+ *  - 重要约束优先：安全/隔离禁令及高重要度条目优先排入，不静默丢弃；
+ *  - 明确来源权威区分：人类授权沉淀 vs Agent 自发总结，避免提升背景材料权威；
+ *  - 溢出项显式列出 id 及摘要/digest，明确可见且可通过 recallMemory 按需检索；
+ *  - 隐私 user 记忆隔离：未提供匹配 actor 时不跨 actor 暴露。
+ */
+export function formatStandingMemorySection(
+  root: string,
+  opts?: FormatStandingMemoryOptions,
+): string | null {
   try {
-    const memories = recallMemory(root, { scope: "standing" }).matches;
+    const memories = recallMemory(root, { scope: "standing", actor: opts?.actor }).matches;
     if (!memories.length) return null;
+
+    const maxItems = typeof opts?.maxItems === "number" && opts.maxItems > 0 ? opts.maxItems : 10;
+    const maxChars = typeof opts?.maxChars === "number" && opts.maxChars > 0 ? opts.maxChars : 2000;
+
+    const isConstraint = (m: MemoryEntry) =>
+      (m.importance !== undefined && m.importance >= 5) ||
+      /隔离|安全|禁令|禁止|红线|凭据|沙盒|worktree/i.test(m.text);
+
+    // 优先级排序：
+    // 1. 安全/隔离禁令与最高重要度优先（保证不丢弃隔离禁令）
+    // 2. 人类授权优先于 Agent 自述（避免错误提升来源权威）
+    // 3. 重要度（importance）降序
+    // 4. 更新时间（updated_at）倒序
+    const sorted = [...memories].sort((a, b) => {
+      const ca = isConstraint(a) ? 1 : 0;
+      const cb = isConstraint(b) ? 1 : 0;
+      if (ca !== cb) return cb - ca;
+
+      const ha = isHumanActor(a.created_by) ? 1 : 0;
+      const hb = isHumanActor(b.created_by) ? 1 : 0;
+      if (ha !== hb) return hb - ha;
+
+      const ia = a.importance ?? 0;
+      const ib = b.importance ?? 0;
+      if (ia !== ib) return ib - ia;
+
+      return b.updated_at.localeCompare(a.updated_at);
+    });
+
+    const included: MemoryEntry[] = [];
+    const overflow: MemoryEntry[] = [];
+    let accumulatedChars = 0;
+
+    for (const m of sorted) {
+      const itemLen = m.text.length;
+      if (isConstraint(m) || (included.length < maxItems && accumulatedChars + itemLen <= maxChars)) {
+        included.push(m);
+        accumulatedChars += itemLen;
+      } else {
+        overflow.push(m);
+      }
+    }
+
+    if (!included.length) return null;
+
     const lines = [
       "## dsh-graph 常驻记忆（环境硬性约束与重要事实）",
       "",
-      "以下内容由用户在当前项目中作为常驻记忆沉淀，所有会话与 Agent 均须严格遵守：",
+      "以下常驻记忆包含项目约束与硬性事实（已按来源标明权威，所有会话与 Agent 均须严格遵守人类授权与环境隔离约束，参考 Agent 总结）：",
       "",
     ];
-    for (const m of memories) {
-      lines.push(`- **[${m.id}]** ${m.text}`);
+
+    for (const m of included) {
+      const auth = isHumanActor(m.created_by)
+        ? `人类授权${m.created_by ? `:${m.created_by}` : ""}`
+        : `Agent自述${m.created_by ? `:${m.created_by}` : ""}，参考`;
+      const goalPart = m.source_goal ? `，目标:${m.source_goal}` : "";
+      lines.push(`- **[${m.id}]**（${auth}${goalPart}）${m.text}`);
     }
+
+    if (overflow.length > 0) {
+      const overflowList = overflow.map((m) => {
+        const auth = isHumanActor(m.created_by) ? "人类授权" : "Agent自述";
+        return `[${m.id}](${auth}, ${m.text.slice(0, 10)}...)`;
+      }).join("，");
+      lines.push(
+        "",
+        `> ⚠️ 常驻记忆预算超限：已注入前 ${included.length} 条高优先级条目（核心安全约束始终保留），其余 ${overflow.length} 条条目已折叠（可通过 recallMemory 按需检索）：${overflowList}`,
+      );
+    }
+
     return lines.join("\n");
   } catch {
     return null;
@@ -3072,6 +3154,8 @@ export interface HarvestedCard {
   attachments: string[];
   /** g-183：卡片的唯一审计摘要（sha1 前 16 位，供注入段可审计）。 */
   digest: string | null;
+  /** 卡片文件的相对路径（用于预算超限时精确按需查阅）。 */
+  path?: string;
 }
 
 /** 读取卡片正文中引用的附件相对路径（安全过滤）。 */
@@ -3108,6 +3192,7 @@ export function harvestedCards(root: string, goalId: string): HarvestedCard[] {
     const id = String(ref);
     let cardFile: string | null = null;
     let scope: CardScope = "goal";
+    let relPath: string | null = null;
     try {
       assertSafeId(id, "卡片 id");
     } catch {
@@ -3118,6 +3203,7 @@ export function harvestedCards(root: string, goalId: string): HarvestedCard[] {
       if (existsSync(ownFile)) {
         cardFile = ownFile;
         scope = "goal";
+        relPath = relative(root, ownFile);
       }
     }
     if (!cardFile) {
@@ -3125,6 +3211,7 @@ export function harvestedCards(root: string, goalId: string): HarvestedCard[] {
       if (!existsSync(sharedFile)) continue; // 悬空引用（validate 管）
       cardFile = sharedFile;
       scope = "shared";
+      relPath = relative(root, sharedFile);
     }
     try {
       const card = loadGoal(cardFile);
@@ -3140,6 +3227,7 @@ export function harvestedCards(root: string, goalId: string): HarvestedCard[] {
         content: card.body.trim(),
         attachments: cardAttachmentNames(card),
         digest: atomicCardDigest(cardFile) ?? null,
+        path: relPath ?? undefined,
       });
     } catch {
       /* 坏卡片跳过（validate 管） */
@@ -3153,11 +3241,24 @@ function atomicCardDigest(cardFile: string): string | null {
   try { return createHash("sha1").update(readFileSync(cardFile)).digest("hex").slice(0, 16); } catch { return null; }
 }
 
+export interface CardBudgetOptions {
+  maxCardChars?: number;     // 单卡正文预算（默认 1200）
+  maxTotalChars?: number;    // 总卡片正文预算（默认 4000）
+  maxFullCards?: number;     // 完整展开卡片数量上限（默认 8）
+}
+
 /** 生成「已收集上下文卡片成果」注入段（g-120，供执行派发 prompt）：按 context_cards 顺序
- *  列出每张卡的 title/summary/正文全文，子代理直接使用、无需猜卡片路径。
+ *  列出每张卡的 title/summary/正文，子代理直接使用、无需猜卡片路径。
  *  g-183：显式注入卡片正文引用的附件 refs（@att/<name>，含审计摘要），不带旧 kind。
- *  无 filled/reviewed 卡片时返回带「（无）」说明的短段（恒非 null，调用方总能注入）。 */
-export function formatHarvestedCardsSection(root: string, goalId: string): string {
+ *  g-240：统一预算与裁剪策略：
+ *  - 超长单卡按单卡预算截断正文并给出精确路径与 digest；
+ *  - 多卡超出总预算或条数上限时折叠为摘要+精确路径+digest 按需展开；
+ *  - 溢出项明确可见且可定位，不静默丢弃；无 filled/reviewed 卡片时返回带「（无）」说明的短段。 */
+export function formatHarvestedCardsSection(
+  root: string,
+  goalId: string,
+  opts?: CardBudgetOptions,
+): string {
   const cards = harvestedCards(root, goalId);
   if (cards.length === 0) {
     return [
@@ -3166,7 +3267,18 @@ export function formatHarvestedCardsSection(root: string, goalId: string): strin
       `（无：context_cards 为空或没有 filled/reviewed 卡片，无需复用，直接按目标描述/判据执行）`,
     ].join("\n");
   }
-  const items = cards.map((c) => {
+
+  const maxCardChars = typeof opts?.maxCardChars === "number" && opts.maxCardChars > 0 ? opts.maxCardChars : 1200;
+  const maxTotalChars = typeof opts?.maxTotalChars === "number" && opts.maxTotalChars > 0 ? opts.maxTotalChars : 4000;
+  const maxFullCards = typeof opts?.maxFullCards === "number" && opts.maxFullCards > 0 ? opts.maxFullCards : 8;
+
+  let accumulatedChars = 0;
+  let inlinedCount = 0;
+  let collapsedCount = 0;
+
+  const items: string[] = [];
+  for (let i = 0; i < cards.length; i++) {
+    const c = cards[i];
     const meta = [
       `id=${c.id}`,
       `status=${c.status}`,
@@ -3174,19 +3286,43 @@ export function formatHarvestedCardsSection(root: string, goalId: string): strin
       c.summary ? `摘要：${c.summary}` : null,
       c.digest ? `digest=${c.digest}` : null,
     ].filter(Boolean).join("，");
-    const body = c.content
-      ? c.content.split("\n").map((l) => `  ${l}`).join("\n")
-      : "  （正文为空）";
+
+    const exactPath = c.path ? c.path : (c.scope === "shared" ? `.dsh-graph/shared/cards/${c.id}.md` : `cards/${c.id}.md`);
     const atts = c.attachments.length
       ? `\n  附件引用：` + c.attachments.map((a) => `@att/${a}`).join("，")
       : "";
-    return `- **${c.title}**（${meta}）\n${body}${atts}`;
-  });
-  return [
-    `## 已收集上下文卡片成果（g-120 注入：按 context_cards 顺序，子代理直接使用，无需猜卡片路径）`,
-    ``,
-    items.join("\n\n"),
-  ].join("\n");
+
+    const willExceedTotal = accumulatedChars + c.content.length > maxTotalChars;
+    const willExceedCount = inlinedCount >= maxFullCards;
+
+    if (willExceedTotal || willExceedCount) {
+      collapsedCount++;
+      items.push(
+        `- **${c.title}**（${meta}，⚠️ 已超出卡片总预算折叠正文）\n` +
+        `  摘要：${c.summary || "（无摘要）"}\n` +
+        `  精确路径：${exactPath}（按需查阅全文，digest=${c.digest}）${atts}`
+      );
+    } else {
+      inlinedCount++;
+      let bodyText = c.content;
+      if (bodyText.length > maxCardChars) {
+        bodyText = bodyText.slice(0, maxCardChars) +
+          `\n  ...（⚠️ 正文已超出单卡预算 ${maxCardChars} 字已截断；完整内容请读取 ${exactPath}，digest=${c.digest}）`;
+      }
+      accumulatedChars += bodyText.length;
+      const body = bodyText
+        ? bodyText.split("\n").map((l) => `  ${l}`).join("\n")
+        : "  （正文为空）";
+      items.push(`- **${c.title}**（${meta}）\n${body}${atts}`);
+    }
+  }
+
+  const header = `## 已收集上下文卡片成果（g-120 注入：按 context_cards 顺序，子代理直接使用，无需猜卡片路径）`;
+  const footer = collapsedCount > 0
+    ? `\n\n> ⚠️ 卡片总预算限制：已完整展开 ${inlinedCount} 张卡片，${collapsedCount} 张卡片超出总预算折叠为摘要+精确路径（按需读取，digest 可校验）。`
+    : "";
+
+  return [header, "", items.join("\n\n")].join("\n") + footer;
 }
 
 // ---- Attempt Handoff（g-150，单文件简化） ----
@@ -3437,13 +3573,29 @@ export function harvestReviewedAttemptHandoffs(root: string, goalId: string): At
   return [all[all.length - 1]];
 }
 
+export interface HandoffBudgetOptions {
+  maxFailuresChars?: number; // 已核实失败预算（默认 1200）
+}
+
 /** 格式化已确认 handoff 注入段（g-150，供执行派发 prompt）。
+ *  g-240：统一预算与裁剪：对超长 failures 截断，但返工约束（禁止项）、基线和验收命令始终完整保留（不丢弃隔离禁令与验收）。
  *  无有效 handoff 时返回空字符串（调用方条件拼接，不影响无历史 prompt）。 */
-export function formatReviewedAttemptHandoffsSection(root: string, goalId: string): string {
+export function formatReviewedAttemptHandoffsSection(
+  root: string,
+  goalId: string,
+  opts?: HandoffBudgetOptions,
+): string {
   const handoffs = harvestReviewedAttemptHandoffs(root, goalId);
   if (handoffs.length === 0) return "";
 
   const h = handoffs[0]; // 单文件简化：最多一个
+  const maxFailures = typeof opts?.maxFailuresChars === "number" && opts.maxFailuresChars > 0 ? opts.maxFailuresChars : 1200;
+  let failures = h.failures;
+  if (failures.length > maxFailures) {
+    failures = failures.slice(0, maxFailures) +
+      "\n...（⚠️ 已核实失败超出预算已截断；返工约束与验收命令保持完整）";
+  }
+
   const meta = [
     `来源 attempt：${h.source_attempts.join(", ")}`,
     `确认人：${h.confirmed_by}`,
@@ -3457,7 +3609,7 @@ export function formatReviewedAttemptHandoffsSection(root: string, goalId: strin
     `（${meta}）`,
     ``,
     `**已核实失败/风险：**`,
-    ...h.failures.split("\n").map((l) => `${l}`),
+    ...failures.split("\n").map((l) => `${l}`),
     ``,
     `**返工约束（禁止项）：**`,
     ...h.constraints.split("\n").map((l) => `${l}`),
@@ -3469,6 +3621,38 @@ export function formatReviewedAttemptHandoffsSection(root: string, goalId: strin
     ...h.verification.split("\n").map((l) => `${l}`),
   ];
   return sections.join("\n");
+}
+
+export interface TargetContextBudgetOptions {
+  maxDescChars?: number;     // 目标描述预算（默认 1500）
+  goalRel?: string;
+}
+
+/** 格式化目标背景（描述 + 质量判据）：严格保证质量判据（验收核心）完整不被丢弃，对超长目标描述按预算裁剪为摘要+截断提示。 */
+export function formatTargetContext(
+  docOrBody: GoalDoc | string,
+  opts?: TargetContextBudgetOptions,
+): string {
+  const body = typeof docOrBody === "string" ? docOrBody : docOrBody.body;
+  const descMatch = body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
+  const critMatch = body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
+  let desc = descMatch ? descMatch[1].trim() : "（无描述）";
+  const crit = critMatch ? critMatch[1].trim() : "（无判据）";
+
+  const maxDescChars = typeof opts?.maxDescChars === "number" && opts.maxDescChars > 0 ? opts.maxDescChars : 1500;
+  if (desc.length > maxDescChars) {
+    const goalPath = opts?.goalRel || "goal.md";
+    desc = desc.slice(0, maxDescChars) +
+      `\n...（⚠️ 目标描述超出预算已截断，完整背景位于 ${goalPath}，请按需查阅）`;
+  }
+
+  return [
+    "## 目标描述",
+    desc,
+    "",
+    "## 质量判据",
+    crit,
+  ].join("\n");
 }
 
 /** 生成收集子代理的完整提示词（g-145）：注入仓库根、goal/card 元数据、收集范围、
@@ -5303,6 +5487,7 @@ export function addMemory(
     id,
     kind,
     scope,
+    created_by: actor,
     text,
     importance: typeof opts.importance === "number" ? opts.importance : undefined,
     source_goal: typeof opts.source_goal === "string" && opts.source_goal.trim() ? opts.source_goal.trim() : undefined,
@@ -5318,6 +5503,7 @@ export function addMemory(
       id: entry.id,
       kind: entry.kind,
       scope: entry.scope,
+      created_by: actor,
       text: entry.text,
       importance: entry.importance,
       source_goal: entry.source_goal,
@@ -5361,6 +5547,7 @@ function replaceMemoryUnlocked(
     id: target.id,
     kind,
     scope,
+    created_by: target.created_by ?? actor,
     text,
     importance,
     source_goal,
@@ -5377,6 +5564,7 @@ function replaceMemoryUnlocked(
       old_snippet: oldSnippet,
       kind: updatedEntry.kind,
       scope: updatedEntry.scope,
+      created_by: updatedEntry.created_by,
       text: updatedEntry.text,
       importance: updatedEntry.importance,
       source_goal: updatedEntry.source_goal,
