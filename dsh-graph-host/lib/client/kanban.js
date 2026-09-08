@@ -381,11 +381,22 @@
           return;
         }
         // 跨列 → transition
+        // g-245：blocked 目标按 blocked_from 解析落点，且只做状态迁移——
+        // 不走 deliver/backward/in_progress 弹窗，避免复用派发逻辑自动启动或续跑子代理。
+        if (fromStatus === "blocked") {
+          const blockedGoal = allGoals.find((g) => g.id === goalId);
+          const resolved = resolveBlockedDropTarget(blockedGoal?.blocked_from, overStageKey);
+          if (!resolved.ok) {
+            showToast(resolved.message);
+            return;
+          }
+          commitCrossColumnDrag(goalId, resolved.toStatus);
+          return;
+        }
         // 判据 3：planning→collect 二义默认 collecting
         let toStatus = resolveTargetStatus(fromStatus, overStageKey);
         if (!toStatus) {
-          // blocked 只能回 blocked_from，前端无法预判，提示用户
-          showToast("⚠️ blocked 状态只能解除回原状态（由服务端校验）");
+          showToast("⚠️ 无法解析该拖放落点的目标状态（服务端将校验）");
           return;
         }
         // 判据 3：delivered 终态 → 弹窗告知主管需做交付工作
