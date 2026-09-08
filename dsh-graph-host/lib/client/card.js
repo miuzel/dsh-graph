@@ -310,7 +310,22 @@
       );
     }
 
-    // g-a92e1406：状态摘要行——运行中带流动背景+图标动画，阻塞行静态
+    // g-a92e1406：状态摘要行——g-239 区分运行/空闲生命周期投影与人工可读 status，
+    // 阻塞/错误/完成/空闲态不显示失实流动动画
     function StatusLine(props) {
       const { text, blocked, running } = props;
       if (!text) return null;
+      const formatted = formatStatusWithLifecycle(text, running, blocked);
+      if (formatted.isBlocked) {
+        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + formatted.text);
+      }
+      if (formatted.isError) {
+        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "❌ " + formatted.text);
+      }
+      const animClass = formatted.isRunning ? "dg-running-flow" : "";
+      return h(
+        "div", { className: animClass, style: { ...S.statusLine, marginTop: 3 } },
+        h("span", { className: formatted.isRunning ? "dg-icon-pulse" : "" }, formatted.icon),
+        formatted.text,
+      );
+    }

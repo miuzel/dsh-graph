@@ -1,14 +1,3 @@
-      if (blocked) {
-        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + text);
-      }
-      const animClass = running ? "dg-running-flow" : "";
-      return h(
-        "div", { className: animClass, style: { ...S.statusLine, marginTop: 3 } },
-        h("span", { className: running ? "dg-icon-pulse" : "" }, "⏳ "),
-        text,
-      );
-    }
-
     // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑 + g-128 删除按钮
     function CardDrawer(props) {
       const [state, setState] = React.useState({ loading: true });

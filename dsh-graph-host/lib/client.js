@@ -902,6 +902,46 @@ window.__ModuleLoader__.load({
           h("span", { style: { minWidth: "18px", textAlign: "right", opacity: 0.85, fontSize: 10 } }, `${remaining}s`)));
     }
 
+    // ===== g-239：运行/空闲生命周期投影与人工可读 status 区分 =====
+    // 区分会话/任务真实生命周期（running / idle / blocked / error / done）与人工汇报 status_line，
+    // 彻底解决结束、阻塞、失败、长任务场景长期显示失实运行态（如流动背景、虚假 ⏳/✅）的问题。
+    function formatStatusWithLifecycle(statusLine, running, blocked) {
+      if (!statusLine) {
+        return {
+          icon: "",
+          text: "",
+          fullText: null,
+          isRunning: false,
+          isBlocked: false,
+          isError: false,
+          isDone: false,
+        };
+      }
+      const raw = String(statusLine).trim();
+      const isBlocked = !!blocked || /阻塞|blocked/i.test(raw);
+      const isError = !isBlocked && /失败|错误|报错|failed|error/i.test(raw);
+      const isDone = !isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw);
+      
+      let icon = "⏳ ";
+      if (isBlocked) icon = "⛔ ";
+      else if (isError) icon = "❌ ";
+      else if (isDone) icon = "✅ ";
+      else if (!running) icon = "⏸ ";
+      else icon = "⏳ ";
+
+      // 仅当生命周期处于运行态且非阻塞/非错误/非完成终态时，才维持运行中流动指示
+      const isRunning = !isBlocked && !isError && !isDone && !!running;
+      return {
+        icon,
+        text: raw,
+        fullText: icon + raw,
+        isRunning,
+        isBlocked,
+        isError,
+        isDone,
+      };
+    }
+
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // 数据源：sessions.binding(childId).session（uSES 快照 subscribe/getSnapshot），
     // 流式行读 chat.legacy.partial（必须先 session.open()），token/上下文走投影
     // faceOf("tokenUsage"|"contextPressure")（无需 open），模型走 connection.api.sessions.models，
@@ -1375,11 +1415,13 @@ window.__ModuleLoader__.load({
       const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
       const statusFull = running ? "运行中" : "空闲";
       // 第二行 status_line 内容（stale 时也显示全文，tooltip 补延续时长——g-124）
+      // g-239：区分真实生命周期运行态与人工汇报文本，避免空闲时谎报 ✅ 或失实展示运行态
+      const formattedStatus = formatStatusWithLifecycle(props.statusLine, running, false);
       const statusRowText = props.statusLine
-        ? (running ? "⏳ " : "✅ ") + props.statusLine
+        ? formattedStatus.fullText
         : (staleStatus ? "⏳ 状态延续 " + staleDur : null);
-      // g-129: 空闲时 status_line 背景不带动画
-      const statusRowClass = running && props.statusLine ? "dg-running-flow" : "";
+      // g-129 & g-239: 仅当真正 running 且无终态/阻塞/失败时带动画
+      const statusRowClass = formattedStatus.isRunning ? "dg-running-flow" : "";
       const lineEl = line
         ? h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
                                 textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 } },
@@ -1826,9 +1868,10 @@ window.__ModuleLoader__.load({
       const modelText = formatModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr);
       const shortModel = formatShortModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute);
       // 折叠态标题行的内联摘要：状态 + statusLine + token/ctx + 模型短名
+      // g-239: 使用 formatStatusWithLifecycle 正确推导前缀图标
       const collapsedBits = [
         statusLabel,
-        statusLine ? (running ? "⏳ " : "✅ ") + statusLine : null,
+        statusLine ? formatStatusWithLifecycle(statusLine, running, false).fullText : null,
         meter || null,
         shortModel,
       ].filter(Boolean).join(" ｜ ");
@@ -2266,21 +2309,25 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // g-a92e1406：状态摘要行——运行中带流动背景+图标动画，阻塞行静态
+    // g-a92e1406：状态摘要行——g-239 区分运行/空闲生命周期投影与人工可读 status，
+    // 阻塞/错误/完成/空闲态不显示失实流动动画
     function StatusLine(props) {
       const { text, blocked, running } = props;
       if (!text) return null;
-      if (blocked) {
-        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + text);
+      const formatted = formatStatusWithLifecycle(text, running, blocked);
+      if (formatted.isBlocked) {
+        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + formatted.text);
       }
-      const animClass = running ? "dg-running-flow" : "";
+      if (formatted.isError) {
+        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "❌ " + formatted.text);
+      }
+      const animClass = formatted.isRunning ? "dg-running-flow" : "";
       return h(
         "div", { className: animClass, style: { ...S.statusLine, marginTop: 3 } },
-        h("span", { className: running ? "dg-icon-pulse" : "" }, "⏳ "),
-        text,
+        h("span", { className: formatted.isRunning ? "dg-icon-pulse" : "" }, formatted.icon),
+        formatted.text,
       );
     }
-
     // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑 + g-128 删除按钮
     function CardDrawer(props) {
       const [state, setState] = React.useState({ loading: true });

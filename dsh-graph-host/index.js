@@ -119,7 +119,6 @@ import {
   SUBAGENT_MODE_PROMPTS,
   resolveSubagentMode,
   toolFilterForMode,
-  buildSubagentDefaultPersona,
   validateSchema,
   schemaErrorResponse,
   settingsPostSchema,
@@ -281,7 +280,7 @@ const USAGE = [
   "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff；",
   "- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；",
   "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账。",
-  "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
+  "原则：状态不是证据、产出物才是；关键阶段主动迁移卡片、自报状态；长任务节流心跳；不确定先问。",
 ].join("\n");
 
 // g-118（负责人 2026-08-22 设计转向）：注入**简短引导提示词**（非完整守则）——
@@ -296,14 +295,14 @@ const GUIDE_HINT = [
 ].join("\n");
 
 // g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
-// 提醒内容强调主管铁律：只做规划/派发/把关/复核、实现交子代理、每动作后
+// 提醒内容强调主管铁律：只做规划/派发/把关/复核、实现交子代理、阶段变化与关键节点
 // graph_report_supervisor_status、review→delivered 必须等负责人 verdict。
 // token 成本约 80 字，简短精炼。
 const SUPERVISOR_DISCIPLINE = [
   "⚠️ **主管纪律提醒**（每 turn 自动注入）：",
   "1. **只做规划、派发、把关、复核**——绝不自己实现常规功能大任务、一律派发子代理；",
   "2. **轻量改动自主特权**：一句话决策与低风险微小改动（patch / chore 类目标、一两行修改），主管可直接在当前会话使用 edit/write 执行，无需繁琐派发子代理；",
-  "3. **每动作后 graph_report_supervisor_status**——看板实时显示状态；",
+  "3. **阶段变化与关键节点自报进展**：调用 graph_report_supervisor_status（看板实时显示状态，常规细微动作无需机械汇报）；",
   "4. **记忆管理纪律**：自发总结默认记 on_demand；仅人类钦定或隔离禁令才记 standing（≤200字）；remove 仅限明确撤回/证实过时；",
   "5. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；",
   "6. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。",
@@ -332,7 +331,7 @@ const HELP_TEXT = [
   "2. 新会话：graph_claim_supervisor() —— 把 project.yaml 的 supervisor.session 更新为当前会话 id，记 supervisor.claimed 事件（幂等），并返回 HANDOFF 全文。",
   "",
   "完整 supervisor 工作守则（阶段推进/信息收集/执行规范/环境事实等）见 skill dsh-graph-supervisor，显式调用加载。",
-  "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
+  "原则：状态不是证据、产出物才是；关键阶段主动迁移卡片、自报状态；长任务节流心跳；不确定先问。",
 ].join("\n");
 
 // g-120：worktree 隔离指令（Supervisor 强制默认）——与 supervisor-guide.md 执行规范保持一致。
@@ -502,20 +501,16 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
   const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
   lines.push(
     "",
-    "【状态汇报——你自己做，supervisor 不会替你更新】看板卡片上的状态摘要（status_line）由你自行维护：",
-    "每做一个动作就及时调用 graph_report_status 更新，参数 goal=\"" + goalValue + "\"、attempt=\"" + attemptValue + "\"、status=<一句话简短描述你此刻在干什么>。",
-    "status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab 样式」「跑验收脚本」），不要攒到结束才写、不要长篇。",
-    "开工、每完成一块、遇到阻塞、转向新任务、临近完成，都要立即更新；这句就是卡片上实时显示的那一行，滞留或失实等于对负责人隐瞒进展。",
-    "",
-    "【结束工作前更新 status】本轮收尾/即将空闲前，再调用一次 graph_report_status 把 status 更新为完成态（如「本轮完成/空闲待命」），避免空闲时 status 仍显示「正在做 X」——看板如实反映空闲/完成状态。",
-    "",
-    "【泳道迁移——你自己做，卡片位置是状态的投影】看板列＝状态的投影，状态滞留＝卡片滞留，必须及时调用 graph_transition：",
-    "开工时（若当前非 in_progress）graph_transition(goal=\"" + goalValue + "\", to=\"in_progress\")；",
-    "完成后 graph_transition(goal=\"" + goalValue + "\", to=\"review\")；",
-    "遇到阻塞 graph_transition(goal=\"" + goalValue + "\", to=\"blocked\", reason=<一句话原因>)；",
-    "【禁区】绝不自行 graph_transition 到 \"delivered\"——delivered 是负责人/supervisor 的 human gate（review→delivered 只有 verdict 通过后由主管执行），你最多到 review 就停。",
-    "迁移要与 graph_report_status 同步进行，别只改 status_line 不动卡片；若迁移被引擎拒绝（如判据未登记、状态不允许），保留 status 汇报并继续工作，不要反复硬试。",
-    "完成后用 graph_report_status 汇报最终状态，声明完成并等待 review。",
+    "【看板协同与状态流转】看板列与状态摘要（status_line）由你维护，反映真实执行进展：",
+    "1. 泳道迁移（Human Gate 约束）：",
+    "   - 开工时（若当前非 in_progress）：调用 graph_transition(goal=\"" + goalValue + "\", to=\"in_progress\")；",
+    "   - 遇到阻塞：调用 graph_transition(goal=\"" + goalValue + "\", to=\"blocked\", reason=<一句话原因>)；",
+    "   - 本轮完成：调用 graph_transition(goal=\"" + goalValue + "\", to=\"review\") 停轮等待裁决；",
+    "   - 【禁区】绝不自行 graph_transition 到 \"delivered\"——delivered 是负责人/supervisor 的 human gate，最多到 review 就停。",
+    "2. 状态汇报（有限阶段触发，严禁每动作机械追加）：",
+    "   - 汇报触发点：仅在【开始开工】、【阶段转变/转向新任务】、【遇到阻塞】、【本轮完成待命】4类有限关键节点调用 graph_report_status(goal=\"" + goalValue + "\", attempt=\"" + attemptValue + "\", status=<一句话简短人话，≤20字>)；",
+    "   - 长任务节流心跳：长耗时任务（如大型构建、多步批量排查）适度按心跳汇报进展，普通轻量读取/单步调试切忌每步机械追加汇报；不再要求每个 read/bash 动作机械调用状态；",
+    "   - 迁移与状态同步：泳道迁移时同步更新 status_line；若迁移被引擎拒绝，保留 status 汇报并继续工作。",
   );
   return lines.join("\n");
 }
@@ -1702,23 +1697,6 @@ export function apply(ctx, config) {
   };
   // 所有普通 JSON REST 统一走 capped reader（防超大 JSON OOM；附件 endpoint 用更大的 MAX_ATTACHMENT_JSON_BYTES）
   const readBody = (req) => readBodyCapped(req, MAX_JSON_BODY_BYTES);
-  // g-132：读取 workspace 的子代理补充提示词覆盖，生成注入段。
-  // 三态：default 继承 profile 全局值（不注入）；override 注入自定义文本；disable 注入「已禁用」声明。
-  const promptOverrideSection = (rootResolve, key) => {
-    let ov;
-    try { ov = readPromptOverride(rootResolve(), key); } catch { return ""; }
-    if (!ov) return "";
-    const label = "子代理";
-    if (ov.state === "override" && ov.value) {
-      return `## 补充提示词（${label}，workspace 覆盖）\n\n${ov.value}`;
-    }
-    if (ov.state === "disable") {
-      return `## 补充提示词（${label}，workspace 覆盖）\n\n（本 workspace 已显式禁用全局 ${label} 补充提示词）`;
-    }
-    return "";
-  };
-  // 派发一个可续轮子代理（模型路由：overrides 优先，其次 project.yaml executor.provider/model，与 graph_start_attempt 一致）。
-  // overrides: {provider?, model?} —— 由「重新执行」的 provider/model 选择器显式指定。
   // 返回 {childId, parentSessionId, error}；error 非空表示未派发成功。
   const spawnChild = async (label, promptText, req, rootForReq, overrides = {}) => {
     const subagents = ctx.get?.("subagents");
