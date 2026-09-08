@@ -5271,14 +5271,33 @@ window.__ModuleLoader__.load({
       const [searchCurrentIndex, setSearchCurrentIndex] = React.useState(0);
       const [searchFeedback, setSearchFeedback] = React.useState(null);
       const searchInputRef = React.useRef(null);
-      // 临时状态记录栈：记录因搜索自动展开或 unhide 的项，退出搜索时精准恢复原状
+      // g-233 P1: 纯内存覆盖层——临时 unhide 的版本 slug 集合，不写持久底账
+      const [searchUnhiddenSlugs, setSearchUnhiddenSlugs] = React.useState(() => new Set());
+      // g-233 P2/P4: 临时状态记录栈——工作区绑定，记录因搜索自动展开的泳道与列，退出搜索时精准恢复
       const tempExpandedRef = React.useRef({
-        unhiddenSlugs: new Set(),
+        ws: activeWs,
         expandedLanes: new Set(),
         openReleasedSlugs: new Set(),
         deliverExpanded: false,
         blockedExpanded: false,
       });
+
+      // g-233 P2: 工作区切换时彻底重置搜索词、匹配结果与全部临时状态，防止跨工作区污染
+      React.useEffect(() => {
+        setSearchQuery("");
+        setSearchActiveQuery("");
+        setSearchMatches([]);
+        setSearchCurrentIndex(0);
+        setSearchFeedback(null);
+        setSearchUnhiddenSlugs(new Set());
+        tempExpandedRef.current = {
+          ws: activeWs,
+          expandedLanes: new Set(),
+          openReleasedSlugs: new Set(),
+          deliverExpanded: false,
+          blockedExpanded: false,
+        };
+      }, [activeWs, props?.sessionId]);
 
       // g-233：全局 Ctrl+F / Cmd+F 聚焦看板搜索框
       React.useEffect(() => {
@@ -5829,7 +5848,8 @@ window.__ModuleLoader__.load({
 
       const allActiveVersions = b.versions.filter((v) => v.status !== "released");
       const allReleasedVersions = b.versions.filter((v) => v.status === "released");
-      const hiddenVersionSet = new Set(hiddenVersionSlugs ?? []);
+      // g-233 P1: 纯内存覆盖层——临时可见版本从 hiddenVersionSet 排除，不写持久隐藏偏好
+      const hiddenVersionSet = new Set((hiddenVersionSlugs ?? []).filter((slug) => !searchUnhiddenSlugs.has(slug)));
       const active = allActiveVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       const released = allReleasedVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       // 全量目标 id→status 映射（依赖徽章状态化，发现#23：已交付依赖算「依赖满足」）
@@ -5847,13 +5867,41 @@ window.__ModuleLoader__.load({
       ];
 
       // ===== g-233: 目标搜索与导航核心函数 =====
+      // g-233 P4: 用户显式操作泳道折叠状态，从临时恢复列表中移除（用户意图优先）
+      const toggleLaneCollapse = (key, collapse) => {
+        tempExpandedRef.current.expandedLanes.delete(key);
+        setCollapsedLanes((prev) => ({ ...prev, [key]: collapse }));
+      };
+
+      // g-233 P4: 用户显式操作已发布版本展开/折叠，从临时恢复列表中移除
+      const toggleReleasedOpen = (slug, openState) => {
+        tempExpandedRef.current.openReleasedSlugs.delete(slug);
+        setOpenReleased((prev) => ({ ...prev, [slug]: openState }));
+      };
+
       const exitSearch = () => {
-        const { unhiddenSlugs, expandedLanes, openReleasedSlugs, deliverExpanded, blockedExpanded } = tempExpandedRef.current;
-        if (unhiddenSlugs && unhiddenSlugs.size > 0) {
-          const currentHidden = getHiddenVersionSlugs(activeWs);
-          const restored = [...new Set([...currentHidden, ...unhiddenSlugs])];
-          setHiddenVersionSlugs(restored);
+        // P2: 检查工作区一致性，跨工作区时直接丢弃不触碰
+        if (tempExpandedRef.current.ws && tempExpandedRef.current.ws !== activeWs) {
+          tempExpandedRef.current = {
+            ws: activeWs,
+            expandedLanes: new Set(),
+            openReleasedSlugs: new Set(),
+            deliverExpanded: false,
+            blockedExpanded: false,
+          };
+          setSearchActiveQuery("");
+          setSearchMatches([]);
+          setSearchCurrentIndex(0);
+          setSearchFeedback(null);
+          setSearchUnhiddenSlugs(new Set());
+          return;
         }
+
+        const { expandedLanes, openReleasedSlugs, deliverExpanded, blockedExpanded } = tempExpandedRef.current;
+        // P1: 临时 unhide 纯内存清空，绝不触碰持久存储，持久隐藏偏好零污染
+        setSearchUnhiddenSlugs(new Set());
+
+        // P4: 恢复仅针对用户未主动操作过的条目（用户显式操作已在 toggle 时从 Set 中移出）
         if (expandedLanes && expandedLanes.size > 0) {
           setCollapsedLanes((prev) => {
             const next = { ...prev };
@@ -5870,8 +5918,9 @@ window.__ModuleLoader__.load({
         }
         if (deliverExpanded) setDeliverColumnCollapsed(true);
         if (blockedExpanded) setBlockedColumnCollapsed(true);
+
         tempExpandedRef.current = {
-          unhiddenSlugs: new Set(),
+          ws: activeWs,
           expandedLanes: new Set(),
           openReleasedSlugs: new Set(),
           deliverExpanded: false,
@@ -5891,12 +5940,10 @@ window.__ModuleLoader__.load({
         const target = matches[targetIdx];
         if (!target) return;
 
-        // 1. 若在隐藏版本内，临时 unhide
+        // 1. 若在隐藏版本内，临时 unhide（P1: 纯内存覆盖层，不写持久底账）
         if (target.versionSlug) {
-          const currentHidden = getHiddenVersionSlugs(activeWs);
-          if (currentHidden.includes(target.versionSlug)) {
-            tempExpandedRef.current.unhiddenSlugs.add(target.versionSlug);
-            setHiddenVersionSlugs(currentHidden.filter((s) => s !== target.versionSlug));
+          if ((hiddenVersionSlugs ?? []).includes(target.versionSlug)) {
+            setSearchUnhiddenSlugs((prev) => new Set([...prev, target.versionSlug]));
           }
         }
 
@@ -6092,7 +6139,7 @@ window.__ModuleLoader__.load({
               title: "点击展开泳道",
               onClick: (e) => {
                 e.stopPropagation();
-                setCollapsedLanes((prev) => ({ ...prev, [key]: false }));
+                toggleLaneCollapse(key, false);
               },
             },
               h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
@@ -6109,7 +6156,7 @@ window.__ModuleLoader__.load({
               key: key + "-collapsed-summary",
               style: { gridColumn: "2 / -1", ...S.cell, background: baseBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: "点击展开泳道",
-              onClick: () => setCollapsedLanes((prev) => ({ ...prev, [key]: false })),
+              onClick: () => toggleLaneCollapse(key, false),
             }, `▸ ${goals.length} 目标 · 点击展开`),
           ];
         }
@@ -6166,7 +6213,11 @@ window.__ModuleLoader__.load({
                 overflow: "hidden",
               },
               className: "dg-blocked-collapsed" + (isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? " dg-cell-drop-active" : ""),
-              onClick: (e) => { e.stopPropagation(); setBlockedColumnCollapsed(false); },
+              onClick: (e) => {
+                e.stopPropagation();
+                tempExpandedRef.current.blockedExpanded = false;
+                setBlockedColumnCollapsed(false);
+              },
               title: `点击展开阻塞列（${orderedGoals.length} 项）`,
               // g-127：折叠态仍支持拖放（拖入阻塞列）
               onDragOver: anyDrag ? (e) => {
@@ -6205,7 +6256,11 @@ window.__ModuleLoader__.load({
                 overflow: "hidden",
               },
               className: "dg-deliver-collapsed" + (isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? " dg-cell-drop-active" : ""),
-              onClick: (e) => { e.stopPropagation(); setDeliverColumnCollapsed(false); },
+              onClick: (e) => {
+                e.stopPropagation();
+                tempExpandedRef.current.deliverExpanded = false;
+                setDeliverColumnCollapsed(false);
+              },
               title: `点击展开交付列（${count} 项）`,
               onDragOver: anyDrag ? (e) => {
                 e.preventDefault();
@@ -6350,7 +6405,7 @@ window.__ModuleLoader__.load({
              "aria-label": "折叠泳道",
              onClick: (e) => {
                e.stopPropagation();
-               setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
+               toggleLaneCollapse(key, true);
              },
            }, h("span", { className: "dg-lane-collapse-triangle" })) : null);
         return [labelEl, ...cells];
@@ -6370,7 +6425,7 @@ window.__ModuleLoader__.load({
               title: "点击展开泳道",
               onClick: (e) => {
                 e.stopPropagation();
-                setCollapsedLanes((prev) => ({ ...prev, [key]: false }));
+                toggleLaneCollapse(key, false);
               },
             },
               h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
@@ -6387,7 +6442,7 @@ window.__ModuleLoader__.load({
               key: key + "-collapsed-summary",
               style: { gridColumn: "2 / -1", ...S.cell, background: backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: "点击展开泳道",
-              onClick: () => setCollapsedLanes((prev) => ({ ...prev, [key]: false })),
+              onClick: () => toggleLaneCollapse(key, false),
             }, `▸ ${goals.length} 目标 · 点击展开`),
           ];
         }
@@ -6403,7 +6458,7 @@ window.__ModuleLoader__.load({
             "aria-label": "折叠泳道",
             onClick: (e) => {
               e.stopPropagation();
-              setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
+              toggleLaneCollapse(key, true);
             },
           }, h("span", { className: "dg-lane-collapse-triangle" })),
           h("button", {
@@ -6541,7 +6596,10 @@ window.__ModuleLoader__.load({
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
               className: "dg-btn",
-              onClick: () => setHiddenVersionSlugs([]),
+              onClick: () => {
+                setSearchUnhiddenSlugs(new Set());
+                setHiddenVersionSlugs([]);
+              },
             }, "恢复显示全部版本")),
         );
       }
@@ -6555,11 +6613,11 @@ window.__ModuleLoader__.load({
           h("div", {
             key: "rel-" + v.slug, style: { ...S.collapsed, cursor: "pointer" }, className: "dg-collapsed",
             title: "点击展开/收起；点击版本名称打开详情",
-            onClick: () => { setOpenReleased({ ...openReleased, [v.slug]: !open }); },
+            onClick: () => { toggleReleasedOpen(v.slug, !open); },
           },
             h("span", {
               style: { cursor: "pointer" },
-              onClick: (e) => { e.stopPropagation(); setOpenReleased({ ...openReleased, [v.slug]: !open }); },
+              onClick: (e) => { e.stopPropagation(); toggleReleasedOpen(v.slug, !open); },
             }, `${open ? "▾" : "▸"}`),
             " ",
             h("span", {
@@ -6965,7 +7023,10 @@ window.__ModuleLoader__.load({
                 style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
                   ...(blockedColumnCollapsed ? { minWidth: 0, padding: "4px 0", overflow: "hidden", fontSize: 14, boxSizing: "border-box", textAlign: "center" } : {}),
                 },
-                onClick: () => setBlockedColumnCollapsed((p) => !p),
+                onClick: () => {
+                  tempExpandedRef.current.blockedExpanded = false;
+                  setBlockedColumnCollapsed((p) => !p);
+                },
                 title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
               }, blockedColumnCollapsed
                 ? "▸"
@@ -6978,7 +7039,10 @@ window.__ModuleLoader__.load({
                 style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
                   ...(deliverColumnCollapsed ? { minWidth: 0, padding: "4px 0", overflow: "hidden", fontSize: 14, boxSizing: "border-box", textAlign: "center" } : {}),
                 },
-                onClick: () => setDeliverColumnCollapsed((p) => !p),
+                onClick: () => {
+                  tempExpandedRef.current.deliverExpanded = false;
+                  setDeliverColumnCollapsed((p) => !p);
+                },
                 title: deliverColumnCollapsed ? "点击展开交付列" : "点击收起交付列",
               }, deliverColumnCollapsed
                 ? "▸"
@@ -6989,22 +7053,62 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }), deletedCardSignal, onDeletedCardHandled: () => setDeletedCardSignal(null), hiddenVersionSlugs, onUnhideVersion: (slug) => { setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug)); } })
+          ? h(GoalModal, {
+              id: modalGoal,
+              title: modalGoalData?.title,
+              onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); },
+              onPmStarted: setPolishGoal,
+              onPmFinished: () => setPolishGoal(null),
+              goalStatus,
+              supervisorSession: b.supervisorSession ?? null,
+              onRenamed: () => load(),
+              onArchived: () => load(),
+              onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              deletedCardSignal,
+              onDeletedCardHandled: () => setDeletedCardSignal(null),
+              hiddenVersionSlugs,
+              onUnhideVersion: (slug) => {
+                setSearchUnhiddenSlugs((prev) => {
+                  if (prev.has(slug)) {
+                    const next = new Set(prev);
+                    next.delete(slug);
+                    return next;
+                  }
+                  return prev;
+                });
+                setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug));
+              },
+            })
           : null,
         showVersionDrawer
           ? h(VersionDrawer, {
               versions: b.versions,
               hiddenVersionSlugs,
               onToggleVersion: (slug, visible) => {
+                setSearchUnhiddenSlugs((prev) => {
+                  if (prev.has(slug)) {
+                    const next = new Set(prev);
+                    next.delete(slug);
+                    return next;
+                  }
+                  return prev;
+                });
                 if (visible) {
                   setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug), b.versions);
                 } else {
                   setHiddenVersionSlugs([...hiddenVersionSlugs, slug], b.versions);
                 }
               },
-              onShowAll: () => setHiddenVersionSlugs([], b.versions),
-              onHideAll: () => setHiddenVersionSlugs(b.versions.map((v) => v.slug), b.versions),
+              onShowAll: () => {
+                setSearchUnhiddenSlugs(new Set());
+                setHiddenVersionSlugs([], b.versions);
+              },
+              onHideAll: () => {
+                setSearchUnhiddenSlugs(new Set());
+                setHiddenVersionSlugs(b.versions.map((v) => v.slug), b.versions);
+              },
               onShowActiveOnly: () => {
+                setSearchUnhiddenSlugs(new Set());
                 const releasedSlugs = b.versions.filter((v) => v.status === "released").map((v) => v.slug);
                 setHiddenVersionSlugs(releasedSlugs, b.versions);
               },
