@@ -21,6 +21,7 @@ import {
   bindCardChild,
   harvestedCards,
   formatHarvestedCardsSection,
+  setCriteria,
   startAttempt,
   findGoalFile,
   loadGoal,
@@ -38,6 +39,7 @@ function tmpRoot(): string {
 /** 造一个带 4 张卡的目标：c1=filled、c2=filled+reviewed、c3=empty、c4=collecting。 */
 function goalWithCards(root: string): { goal: string; c1: string; c2: string; c3: string; c4: string } {
   const goal = createGoal(root, { title: "g120 目标", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["质量判据一"], "test");
   const c1 = addCard(root, goal, { title: "甲", kind: "text", actor: "test", scope: "goal" });
   const c2 = addCard(root, goal, { title: "乙", kind: "data", actor: "test", scope: "goal" });
   const c3 = addCard(root, goal, { title: "丙", kind: "text", actor: "test", scope: "goal" });
@@ -270,6 +272,7 @@ test("g-120：start-execution 端点 worktree=false 省略 worktree 指令；无
   const root2 = join(ws2, ".dsh-graph");
   init(root2);
   const goal2 = createGoal(root2, { title: "empty-only", version: "v-t", actor: "test" });
+  setCriteria(root2, goal2, ["质量判据一"], "test");
   addCard(root2, goal2, { title: "x", kind: "text", actor: "test", scope: "goal" });
   writeFileSync(join(root2, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured2: { prompt?: string } = {};
