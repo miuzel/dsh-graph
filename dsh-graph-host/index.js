@@ -31,6 +31,7 @@ import {
   reviewCard,
   startAttempt,
   assertExecutionAdmission,
+  ensureExecutionInProgress,
   reportStatus,
   reportSupervisorStatus,
   readSupervisorStatus,
@@ -516,7 +517,7 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
     "2. 状态汇报（有限阶段触发，严禁每动作机械追加）：",
     "   - 汇报触发点：仅在【开始开工】、【阶段转变/转向新任务】、【遇到阻塞】、【本轮完成待命】4类有限关键节点调用 graph_report_status(goal=\"" + goalValue + "\", attempt=\"" + attemptValue + "\", status=<一句话简短人话，≤20字>)；",
     "   - 长任务节流心跳：长耗时任务（如大型构建、多步批量排查）适度按心跳汇报进展，普通轻量读取/单步调试切忌每步机械追加汇报；不再要求每个 read/bash 动作机械调用状态；",
-    "   - 迁移与状态同步：泳道迁移时同步更新 status_line；若迁移被引擎拒绝，保留 status 汇报并继续工作。",
+    "   - 迁移与状态同步：同步更新 status_line；迁移被引擎拒绝（如判据未登记）时不得继续实现，立即上报停止；",
   );
   return lines.join("\n");
 }
@@ -789,8 +790,10 @@ export function apply(ctx, config) {
       }
     }
 
-    // 2. 执行准入门禁校验（g-237/g-241 协同）
-    const { goalFile, doc } = assertExecutionAdmission(root, goal, { force });
+    // 2. 执行准入门禁校验（g-237/g-241 协同）：启动 child 之前完成状态/判据/授权准入。
+    //    拒绝时零副作用（不建 attempt、不启动子代理、不迁移），绝不允许先启动再吞掉迁移失败。
+    const admission = assertExecutionAdmission(root, goal, { force });
+    const { goalFile, doc } = admission;
 
     // 3. 一次性上下文快照（保证注入清单与注入内容一致，零二次读取漂移）
     const descMatch = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
@@ -897,7 +900,19 @@ export function apply(ctx, config) {
     });
     const promptHash = createHash("sha256").update(prompt).digest("hex").slice(0, 16);
 
-    // 8. 创建并持久化 attempt 记录与 attempt.started 事件
+    // 8. g-237：真实迁移先于 attempt 与 child——准入已在第 2 步用同一套不变式预演通过。
+    //    迁移失败直接抛出（工具报错 / HTTP 400）：此时尚未创建 attempt、未启动 child，
+    //    零副作用可安全重试；绝不先启动子代理再把迁移失败吞掉。
+    //    ensureExecutionInProgress 只对“并发下已 in_progress”做幂等放行，其它拒绝原样抛出。
+    if (admission.needsTransition) {
+      ensureExecutionInProgress(root, goal, {
+        reason: `attempt 派发（${entrypoint === "tool" ? "graph_start_attempt" : "GUI 执行"}）`,
+        actor,
+        force,
+      });
+    }
+
+    // 9. 创建并持久化 attempt 记录与 attempt.started 事件
     const attempt = startAttempt(root, goal, {
       executor: executor ?? (entrypoint === "http" ? "agent:executor" : actor),
       actor,
@@ -961,27 +976,38 @@ export function apply(ctx, config) {
           signal,
         });
 
-        bindAttemptChild(
-          root,
-          goal,
-          attempt,
-          started.childId,
-          actor,
-          parentSessionId ?? started.parentSessionId ?? null,
-          effProvider,
-          effModel,
-          effRoute,
-          effModeRes.mode,
-          effModeRes.source,
-        );
-
         try {
-          transition(root, goal, "in_progress", {
-            reason: `attempt 派发（${entrypoint === "tool" ? "graph_start_attempt" : "GUI 执行"}）`,
+          bindAttemptChild(
+            root,
+            goal,
+            attempt,
+            started.childId,
             actor,
-          });
-        } catch {
-          /* 已在 in_progress */
+            parentSessionId ?? started.parentSessionId ?? null,
+            effProvider,
+            effModel,
+            effRoute,
+            effModeRes.mode,
+            effModeRes.source,
+          );
+        } catch (bindErr) {
+          // g-237：绑定失败必须收敛——先请求中断刚启动的 child，避免留下无主运行 child，
+          // 再抛出携带 child_id 的可追溯错误（外层 catch 会上报 child_error）。
+          let interruptNote = "";
+          try {
+            const parentSessionIdForInterrupt = parentAgent?.session?.id ?? parentSessionId ?? started.parentSessionId ?? null;
+            if (parentSessionIdForInterrupt && typeof subagents.interruptByParent === "function") {
+              subagents.interruptByParent(started.childId, parentSessionIdForInterrupt, "continuable");
+              interruptNote = "，已请求中断该 child";
+            } else {
+              interruptNote = "，无法中断该 child（缺少 parent session 或服务能力）";
+            }
+          } catch (interruptErr) {
+            interruptNote = `，中断该 child 失败：${interruptErr?.message ?? interruptErr}`;
+          }
+          throw new GraphError(
+            `attempt 绑定失败（child ${started.childId} 已启动${interruptNote}）：${bindErr?.message ?? bindErr}`,
+          );
         }
 
         return {
@@ -1438,7 +1464,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_start_attempt",
-        description: "为目标派发一个 attempt：创建 attempt 目录与记录；若 subagent 服务可用则同时启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。默认强制注入独立 worktree 隔离提示；仅 supervisor 明确传 worktree=false 并说明理由时才关闭。attempt_brief 是当前 action 原文；task_type 必须传 merge（合入）、rewrite（重写）或 fix（修复）之一，baseline_commit/source_attempt 是 supervisor 直接提供的当前事实，acceptance_items 是当前验收项 string[]；这些字段不从 brief/handoff 截取。task_type/baseline_commit/source_attempt 的空值传 null 或省略表示未提供；acceptance_items=[] 表示明确无单独验收项，null 或省略表示未提供；空字符串非法。",
+        description: "为目标派发一个 attempt：派发前先执行准入门禁（backlog/draft/blocked/delivered 及无判据/未确认判据/状态不允许的目标直接拒绝，零副作用：不建 attempt、不启动子代理）；准入通过后先落地 in_progress 迁移，再创建 attempt 目录与记录并启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。默认强制注入独立 worktree 隔离提示；仅 supervisor 明确传 worktree=false 并说明理由时才关闭。attempt_brief 是当前 action 原文；task_type 必须传 merge（合入）、rewrite（重写）或 fix（修复）之一，baseline_commit/source_attempt 是 supervisor 直接提供的当前事实，acceptance_items 是当前验收项 string[]；这些字段不从 brief/handoff 截取。task_type/baseline_commit/source_attempt 的空值传 null 或省略表示未提供；acceptance_items=[] 表示明确无单独验收项，null 或省略表示未提供；空字符串非法。",
         parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, reasoning_effort: str, mode: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
       },
       run: async (a, ex) => {

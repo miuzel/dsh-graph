@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import {
   init,
   createGoal,
+  setCriteria,
   addCard,
   fillCard,
   reviewCard,
@@ -311,9 +312,11 @@ function execCtx(ws: string) {
   return { agent: { session: { id: "sess-exec", header: { cwd: ws } } }, signal: new AbortController().signal };
 }
 
-/** 创建带一个已确认 handoff 的目标（用于 host 测试）。 */
+/** 创建带一个已确认 handoff 的目标（用于 host 测试）。
+ *  g-237：派发前有执行准入门禁，fixture 需先登记判据（否则 planning 无判据会被拒绝）。 */
 function goalWithHandoff(root: string): { goal: string; att: string } {
   const goal = createGoal(root, { title: "handoff目标", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据：handoff 注入行为正确"], "test");
   const att = startAttempt(root, goal, { executor: "agent:t", actor: "test" });
   recordAttemptHandoff(root, goal, {
     source_attempts: [att],
@@ -359,6 +362,7 @@ test("g-150：graph_start_attempt 带 attempt_brief 时 prompt 注入 brief 段 
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "brief目标", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据：brief 段注入正确"], "test");
   const captured: { prompt?: string } = {};
   const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
@@ -376,6 +380,7 @@ test("g-228：graph_start_attempt 使用 supervisor 独立关键字段，不从 
     const root = join(ws, ".dsh-graph");
     init(root);
     const goal = createGoal(root, { title: "structured", version: "v-t", actor: "test" });
+    setCriteria(root, goal, ["判据：结构化字段透传正确"], "test");
     const captured: { prompt?: string } = {};
     const { registered } = makeHostCtx(captured, ws, root);
     const tool = registered.find((d) => d.name === "graph_start_attempt");
@@ -436,6 +441,7 @@ test("g-150：start-execution 端点带 attempt_brief 时 prompt 注入 brief �
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "ep-brief", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据：HTTP brief 段注入正确"], "test");
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
   const { routes } = makeHostCtx(captured, ws);
@@ -456,6 +462,7 @@ test("g-228：start-execution 端点透传 supervisor 独立关键字段", async
     const root = join(ws, ".dsh-graph");
     init(root);
     const goal = createGoal(root, { title: "ep-structured", version: "v-t", actor: "test" });
+    setCriteria(root, goal, ["判据：HTTP 结构化字段透传正确"], "test");
     writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
     const body = {
       goal,
@@ -512,6 +519,7 @@ test("g-150：无历史目标 prompt 不含 handoff 段标题，卡片段保持"
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "无历史", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据：无历史 prompt 行为正确"], "test");
   const captured: { prompt?: string } = {};
   const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
@@ -526,6 +534,7 @@ test("g-150：无历史 start-execution 端点 prompt 不含 handoff 段", async
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "无历史ep", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据：HTTP 无历史 prompt 行为正确"], "test");
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
   const { routes } = makeHostCtx(captured, ws);
@@ -547,6 +556,7 @@ test("g-150：attempt 的 status_line、执行笔记等未复核内容不被注�
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "未复核", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据：未复核内容不注入"], "test");
   const att1 = startAttempt(root, goal, { executor: "agent:t", actor: "test" });
   const goalFile = findGoalFile(root, goal);
   const dir = goalFile.replace(/goal\.md$/, "");
@@ -569,6 +579,7 @@ test("g-150：新登记覆盖旧内容，prompt 只含最新 handoff", async () 
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "覆盖prompt", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据：覆盖语义正确"], "test");
   const att1 = startAttempt(root, goal, { executor: "agent:t", actor: "test" });
   recordAttemptHandoff(root, goal, {
     source_attempts: [att1],
@@ -628,6 +639,7 @@ test("g-150：handoff 段与 cards 段独立注入，互不干扰", async () => 
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "共存", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据：handoff 与 cards 段独立注入"], "test");
   const c1 = addCard(root, goal, { title: "研究卡", kind: "text", actor: "test", scope: "goal" });
   fillCard(root, goal, c1, { text: "研究内容", summary: "摘要", by: "human:a", actor: "test" });
   const att1 = startAttempt(root, goal, { executor: "agent:t", actor: "test" });
@@ -908,6 +920,7 @@ test("g-150 review-5：已有 reviewed context card 不回归（cards 注入行�
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "card兼容", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据：cards 注入行为不变"], "test");
   const c1 = addCard(root, goal, { title: "复核卡", kind: "text", actor: "test", scope: "goal" });
   fillCard(root, goal, c1, { text: "研究内容", summary: "摘要", by: "human:a", actor: "test" });
   reviewCard(root, goal, c1, { by: "human:a", actor: "test" });

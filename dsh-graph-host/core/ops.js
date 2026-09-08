@@ -3844,7 +3844,16 @@ function attemptWorktreeEvidence(root, goalId, attemptId) {
     catch { /* non-Git roots retain path/branch evidence and discover degrades safely */ }
     return { relative_path: relativePath, branch: `refs/heads/${goalId}-${attemptId}`, canonical_root: canonicalRoot, ...(head ? { head } : {}) };
 }
-/** g-237/g-241：执行准入门禁校验。在派发/启动子代理前完成状态与准入核验。 */
+/**
+ * g-237/g-241：执行准入门禁校验（工具/HTTP 共享，零副作用）。
+ * 在派发 attempt / 启动子代理之前完成完整准入核验：
+ * - 位置与状态：backlog/draft/blocked/delivered 直接拒绝；
+ * - 已在 in_progress：幂等放行（needsTransition=false，不再触发“状态未变化”）；
+ * - 其余合法状态：必须能用状态机同一套不变式合法进入 in_progress
+ *   （rules_snapshot / 判据非空 / criteria.confirmed 事件 / 迁移边合法），
+ *   否则在启动 child 之前即拒绝——绝不先启动子代理再吞掉迁移失败。
+ * 返回 status/needsTransition 供调用方决定是否落地真实迁移。
+ */
 export function assertExecutionAdmission(root, goalId, opts) {
     const goalFile = findGoalFile(root, goalId);
     if (basename(goalFile) !== "goal.md") {
@@ -3861,7 +3870,54 @@ export function assertExecutionAdmission(root, goalId, opts) {
     if (status === "delivered") {
         throw new GraphError(`已交付目标不允许直接派发执行，如需修改请先退回 review`);
     }
-    return { goalFile, doc };
+    // 已在执行：幂等放行，无需再次迁移
+    if (status === "in_progress") {
+        return { goalFile, doc, status, needsTransition: false };
+    }
+    // g-237：启动 child 前的完整准入——用状态机不变式预演 in_progress 迁移（不写盘、不启动子代理）
+    const criteriaConfirmed = readEvents(root).some((e) => e.goal === goalId && e.event === "criteria.confirmed");
+    try {
+        assertTransition(doc.meta, "in_progress", {
+            body: doc.body,
+            criteriaConfirmed,
+            force: opts?.force,
+        });
+    }
+    catch (e) {
+        const reason = String(e?.message ?? e);
+        if (/非法迁移/.test(reason)) {
+            throw new GraphError(`目标当前状态（${status}）不允许派发执行：${reason}`);
+        }
+        throw new GraphError(`执行准入拒绝（未创建 attempt、未启动子代理）：${reason}`);
+    }
+    return { goalFile, doc, status, needsTransition: true };
+}
+/**
+ * g-237：派发前落地 in_progress 迁移（先于 attempt/child 启动）。
+ * 幂等语义：目标已是 in_progress（含并发派发已被另一进程迁移）时不再抛“状态未变化”，
+ * 直接返回 changed=false；其它迁移拒绝（状态非法、判据/规则缺失、blocked 等）原样抛出，
+ * 绝不吞真实拒绝。返回 changed 便于调用方审计“本次是否真的发生迁移”。
+ */
+export function ensureExecutionInProgress(root, goalId, opts) {
+    const goalFile = findGoalFile(root, goalId);
+    try {
+        transition(root, goalId, "in_progress", {
+            actor: opts.actor,
+            reason: opts.reason,
+            force: opts.force,
+        });
+        return { changed: true, status: "in_progress" };
+    }
+    catch (e) {
+        const message = String(e?.message ?? e);
+        // 并发幂等：另一路已把目标迁入 in_progress → 状态未变化，读回确认后放行
+        if (/状态未变化/.test(message)) {
+            const current = String(loadGoal(goalFile).meta.status ?? "");
+            if (current === "in_progress")
+                return { changed: false, status: current };
+        }
+        throw e;
+    }
 }
 export function startAttempt(root, goalId, opts) {
     // 校验 attemptBrief 类型（g-150 review 问题 4：必须是 string 或 undefined，不可是其他类型）
