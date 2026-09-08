@@ -471,11 +471,13 @@
       const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
       const statusFull = running ? "运行中" : "空闲";
       // 第二行 status_line 内容（stale 时也显示全文，tooltip 补延续时长——g-124）
+      // g-239：区分真实生命周期运行态与人工汇报文本，避免空闲时谎报 ✅ 或失实展示运行态
+      const formattedStatus = formatStatusWithLifecycle(props.statusLine, running, false);
       const statusRowText = props.statusLine
-        ? (running ? "⏳ " : "✅ ") + props.statusLine
+        ? formattedStatus.fullText
         : (staleStatus ? "⏳ 状态延续 " + staleDur : null);
-      // g-129: 空闲时 status_line 背景不带动画
-      const statusRowClass = running && props.statusLine ? "dg-running-flow" : "";
+      // g-129 & g-239: 仅当真正 running 且无终态/阻塞/失败时带动画
+      const statusRowClass = formattedStatus.isRunning ? "dg-running-flow" : "";
       const lineEl = line
         ? h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
                                 textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 } },

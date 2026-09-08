@@ -493,6 +493,128 @@ export function toolFilterForMode(mode) {
     }
     return undefined;
 }
+// ===== g-242：子代理角色枚举与能力 Profile 契约 =====
+export const SUBAGENT_ROLES = ["supervisor", "executor", "collector", "reviewer", "pm"];
+export function normalizeSubagentRole(role) {
+    if (typeof role !== "string")
+        return null;
+    const r = role.trim().toLowerCase();
+    if (SUBAGENT_ROLES.includes(r)) {
+        return r;
+    }
+    return null;
+}
+export const ROLE_PROFILES = {
+    supervisor: {
+        id: "supervisor",
+        name: "主管 (Supervisor)",
+        description: "全局规划、排期、派发、复核、记忆沉淀与生命周期裁决的主管角色。",
+        readOnly: false,
+        disciplineTitle: "主管工作纪律与底线契约",
+        disciplineLines: [
+            "1. 只做规划、派发、把关、复核——常规实现一律派发子代理；",
+            "2. 轻量改动特权：低风险一句话决策或微小修改可直接在当前会话执行；",
+            "3. 每次动作后调用 graph_report_supervisor_status 自报状态；",
+            "4. 人工裁决关口：review→delivered 必须经负责人 verdict 裁决，绝不自行 delivered。",
+        ],
+        requiredTools: ["graph_report_supervisor_status", "graph_start_attempt", "graph_resolve_accept"],
+        allowedTools: {
+            standard: undefined,
+            minimal: ["read", "graph_report_supervisor_status", "graph_start_attempt", "graph_transition", "graph_resolve_accept"],
+        },
+    },
+    executor: {
+        id: "executor",
+        name: "执行者 (Executor)",
+        description: "专注目标实现、代码编写、验证测试、自报状态与泳道流转的执行子代理。",
+        readOnly: false,
+        disciplineTitle: "dsh-graph 执行子代理通用执行纪律",
+        disciplineLines: [
+            "1. 状态汇报：每做一个动作必须调用 graph_report_status 自行更新 status_line（尽量 20 字内），滞留等于隐瞒进展；",
+            "2. 结束收尾更新：在即将空闲或收尾前，务必调用 graph_report_status 将状态更新为完成态（如「本轮完成/空闲待命」）；",
+            "3. 泳道流转：开工时若非 in_progress 则调用 graph_transition(to='in_progress')；完成后必须 graph_transition(to='review') 停轮等待复核；遇到阻塞 graph_transition(to='blocked', reason=...)；",
+            "4. 绝不自行 delivered：禁止直接 graph_transition 到 delivered——delivered 属于负责人与主管的 human gate 裁决关口；",
+            "5. 严格遵守环境隔离要求与质量判据核验，未通过判据不可声明完成。",
+        ],
+        requiredTools: ["graph_report_status", "graph_transition", "read", "write", "edit", "bash"],
+        allowedTools: {
+            standard: undefined,
+            minimal: GRAPH_MINIMAL_ALLOWED_TOOLS,
+        },
+        bashPermissionNote: "bash 具备当前环境真实执行权限，受当前工作区与沙盒策略约束。",
+    },
+    collector: {
+        id: "collector",
+        name: "收集者 (Collector)",
+        description: "专注上下文信息收集、附件安全存储与卡片回填的子代理；依托卡片生命周期协作，不创建虚假 attempt 报状态。",
+        readOnly: false,
+        disciplineTitle: "dsh-graph 收集子代理通用协作纪律",
+        disciplineLines: [
+            "1. 卡片生命周期状态契约：收集进度依托卡片生命周期（empty → collecting → filled → reviewed）与平台生命周期，不创建虚假 attempt，绝不调用 graph_report_status；",
+            "2. 规范回填：收集完成后调用 graph_fill_card 回填内容（text 写全文，summary ≤100 字摘要），卡片自动置为 filled 状态；",
+            "3. 附件安全：若有附件统一调用 graph_store_attachment 安全落盘，正文使用 @att/<name> 引用，禁止越界路径；",
+            "4. 绝不自行复核：禁止调用 graph_review_card，卡片回填后等待主管/负责人复核；",
+            "5. 严格限定范围：只收集并回填指定绑定的卡片，不得修改其他 goal 或 card，不进行目标状态流转或派发执行。",
+        ],
+        requiredTools: ["graph_fill_card", "graph_store_attachment", "read"],
+        allowedTools: {
+            standard: ["read", "glob", "grep", "bash", "web_search", "web_fetch", "graph_fill_card", "graph_store_attachment", "graph_memory_recall"],
+            minimal: ["read", "bash", "web_search", "web_fetch", "graph_fill_card", "graph_store_attachment"],
+        },
+        bashPermissionNote: "bash 具备当前环境执行权限（供信息收集、代码检索与本地命令调研）；白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。",
+    },
+    reviewer: {
+        id: "reviewer",
+        name: "复核者 (Reviewer)",
+        description: "只读审查代码变更、运行只读测试与验证判据、输出 review 意见的审查子代理；不默认暴露无关管理写工具与代码修改工具。",
+        readOnly: true,
+        disciplineTitle: "dsh-graph 复核子代理只读审查纪律",
+        disciplineLines: [
+            "1. 只读审查职责：专注代码审阅、测试验证与质量判据核对，仅输出客观评审报告与建议；",
+            "2. 不篡改代码与管理状态：不暴露且不调用 edit/write 修改代码，不调用任何 graph_* 管理写工具（如 graph_create_goal, graph_start_attempt, graph_transition, graph_resolve_accept 等）；",
+            "3. 裁决归属 Human Gate：评审通过与否由主管/负责人根据审查报告进行 verdict 裁决，reviewer 绝不越权自行通过或关闭目标；",
+            "4. bash 权限说明：如保留 bash，仅用于运行只读测试（如单元测试、静态检查、git diff 等），其实际拥有当前工作区的本地执行权限；工具过滤非强安全沙箱，遵循单用户 owner-trusted 安全基线。",
+        ],
+        requiredTools: ["read", "bash"],
+        allowedTools: {
+            standard: ["read", "glob", "grep", "bash", "graph_memory_recall", "web_search", "web_fetch"],
+            minimal: ["read", "bash"],
+        },
+        bashPermissionNote: "bash 具备当前环境真实执行权限（用于运行单元测试、类型检查与 git diff 等只读验证）；工具白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。",
+    },
+    pm: {
+        id: "pm",
+        name: "产品经理 (PM)",
+        description: "只读分析目标定义、背景价值与质量判据并提供润色建议的 Agent；不暴露任何管理写工具与代码修改工具。",
+        readOnly: true,
+        disciplineTitle: "dsh-graph 产品经理只读定义与润色纪律",
+        disciplineLines: [
+            "1. 只读建议职责：只向主管 Agent 返回“目标定义/润色建议”，不直接修改目标文件；",
+            "2. 物理拦截管理写工具：不暴露且不调用任何 graph_* 管理写工具，不改变状态、版本、判据或执行语义；",
+            "3. 不暴露代码修改与执行工具：不暴露 edit、write 与 bash，物理防止篡改源码或产生非预期执行副作用；",
+            "4. 保留原意：围绕价值、背景、范围、可验证判据与风险给出简洁润色，供人工或主管决策采纳。",
+        ],
+        requiredTools: ["read"],
+        allowedTools: {
+            standard: ["read", "glob", "grep", "graph_memory_recall", "web_search", "web_fetch"],
+            minimal: ["read"],
+        },
+    },
+};
+export function getRoleProfile(role) {
+    return ROLE_PROFILES[role] ?? ROLE_PROFILES.executor;
+}
+export function toolFilterForRole(role, mode) {
+    const profile = getRoleProfile(role);
+    const normalizedMode = mode ? normalizeSubagentMode(mode) : "standard";
+    if (normalizedMode === "minimal") {
+        return { allow: profile.allowedTools.minimal };
+    }
+    if (profile.allowedTools.standard === undefined) {
+        return undefined;
+    }
+    return { allow: profile.allowedTools.standard };
+}
 /** g-191：构建 dsh-graph 默认子代理专属 Persona，将通用执行纪律沉淀为系统级 Persona */
 export function buildSubagentDefaultPersona(goalId, attemptId) {
     const lines = [
@@ -500,8 +622,8 @@ export function buildSubagentDefaultPersona(goalId, attemptId) {
         "",
         "## dsh-graph 子代理通用执行纪律",
         "",
-        "1. 状态汇报：每做一个动作必须调用 graph_report_status 自行更新 status_line（尽量 20 字内，如「正在改 UI 样式」「跑单元测试」），滞留等于隐瞒进展；",
-        "2. 结束收尾更新：在即将空闲或收尾前，务必调用 graph_report_status 将状态更新为完成态（如「本轮完成/空闲待命」），避免空闲时仍显示正在做；",
+        "1. 状态汇报：仅在开始开工、阶段转变、遇到阻塞、本轮完成4类有限关键节点调用 graph_report_status 自行更新 status_line（尽量 20 字内），长任务适度节流心跳，严禁每个动作机械追加汇报；",
+        "2. 结束收尾更新：在即将空闲或收尾前，务必调用 graph_report_status 将状态更新为完成态（如「本轮完成/空闲待命」）；",
         "3. 泳道流转：开工时若非 in_progress 则调用 graph_transition(to='in_progress')；完成后必须 graph_transition(to='review') 停轮等待复核；遇到阻塞 graph_transition(to='blocked', reason=...)；",
         "4. 绝不自行 delivered：禁止直接 graph_transition 到 delivered——delivered 属于负责人与主管的 human gate 裁决关口；",
         "5. 严格遵守环境隔离要求与质量判据核验，未通过判据不可声明完成。",
@@ -839,20 +961,81 @@ export function setMemoryToolsEnabled(root, enabled, actor = "human:gui") {
     }
     writeFileSync(file, content, "utf8");
 }
-/** 格式化常驻记忆：供所有会话作为独立 section 固定植入 */
-export function formatStandingMemorySection(root) {
+export function isHumanActor(actor) {
+    if (!actor)
+        return false;
+    return actor.startsWith("human:") || actor === "user" || actor === "human";
+}
+/** 格式化常驻记忆：供所有会话作为独立 section 固定植入。
+ *  - 严格统一预算与条数上限（默认 10 条、2000 字符），防止无限制膨胀；
+ *  - 重要约束优先：安全/隔离禁令及高重要度条目优先排入，不静默丢弃；
+ *  - 明确来源权威区分：人类授权沉淀 vs Agent 自发总结，避免提升背景材料权威；
+ *  - 溢出项显式列出 id 及摘要/digest，明确可见且可通过 recallMemory 按需检索；
+ *  - 隐私 user 记忆隔离：未提供匹配 actor 时不跨 actor 暴露。
+ */
+export function formatStandingMemorySection(root, opts) {
     try {
-        const memories = recallMemory(root, { scope: "standing" }).matches;
+        const memories = recallMemory(root, { scope: "standing", actor: opts?.actor }).matches;
         if (!memories.length)
+            return null;
+        const maxItems = typeof opts?.maxItems === "number" && opts.maxItems > 0 ? opts.maxItems : 10;
+        const maxChars = typeof opts?.maxChars === "number" && opts.maxChars > 0 ? opts.maxChars : 2000;
+        const isConstraint = (m) => (m.importance !== undefined && m.importance >= 5) ||
+            /隔离|安全|禁令|禁止|红线|凭据|沙盒|worktree/i.test(m.text);
+        // 优先级排序：
+        // 1. 安全/隔离禁令与最高重要度优先（保证不丢弃隔离禁令）
+        // 2. 人类授权优先于 Agent 自述（避免错误提升来源权威）
+        // 3. 重要度（importance）降序
+        // 4. 更新时间（updated_at）倒序
+        const sorted = [...memories].sort((a, b) => {
+            const ca = isConstraint(a) ? 1 : 0;
+            const cb = isConstraint(b) ? 1 : 0;
+            if (ca !== cb)
+                return cb - ca;
+            const ha = isHumanActor(a.created_by) ? 1 : 0;
+            const hb = isHumanActor(b.created_by) ? 1 : 0;
+            if (ha !== hb)
+                return hb - ha;
+            const ia = a.importance ?? 0;
+            const ib = b.importance ?? 0;
+            if (ia !== ib)
+                return ib - ia;
+            return b.updated_at.localeCompare(a.updated_at);
+        });
+        const included = [];
+        const overflow = [];
+        let accumulatedChars = 0;
+        for (const m of sorted) {
+            const itemLen = m.text.length;
+            if (isConstraint(m) || (included.length < maxItems && accumulatedChars + itemLen <= maxChars)) {
+                included.push(m);
+                accumulatedChars += itemLen;
+            }
+            else {
+                overflow.push(m);
+            }
+        }
+        if (!included.length)
             return null;
         const lines = [
             "## dsh-graph 常驻记忆（环境硬性约束与重要事实）",
             "",
-            "以下内容由用户在当前项目中作为常驻记忆沉淀，所有会话与 Agent 均须严格遵守：",
+            "以下常驻记忆包含项目约束与硬性事实（已按来源标明权威，所有会话与 Agent 均须严格遵守人类授权与环境隔离约束，参考 Agent 总结）：",
             "",
         ];
-        for (const m of memories) {
-            lines.push(`- **[${m.id}]** ${m.text}`);
+        for (const m of included) {
+            const auth = isHumanActor(m.created_by)
+                ? `人类授权${m.created_by ? `:${m.created_by}` : ""}`
+                : `Agent自述${m.created_by ? `:${m.created_by}` : ""}，参考`;
+            const goalPart = m.source_goal ? `，目标:${m.source_goal}` : "";
+            lines.push(`- **[${m.id}]**（${auth}${goalPart}）${m.text}`);
+        }
+        if (overflow.length > 0) {
+            const overflowList = overflow.map((m) => {
+                const auth = isHumanActor(m.created_by) ? "人类授权" : "Agent自述";
+                return `[${m.id}](${auth}, ${m.text.slice(0, 10)}...)`;
+            }).join("，");
+            lines.push("", `> ⚠️ 常驻记忆预算超限：已注入前 ${included.length} 条高优先级条目（核心安全约束始终保留），其余 ${overflow.length} 条条目已折叠（可通过 recallMemory 按需检索）：${overflowList}`);
         }
         return lines.join("\n");
     }
@@ -1108,14 +1291,14 @@ const GOAL_BODY = `
 
 （暂无）
 `;
-/** 连号 id：扫描所有目标的 frontmatter meta.id 取最大数字编号 +1（g-001…g-9999）。
+/** 连号 id：扫描所有目标（含已归档，g-234）的 frontmatter meta.id 取最大数字编号 +1（g-001…g-9999）。
  *  注意必须读 frontmatter 而非路径——真实仓库目录/文件名是 slug（如 goals/session-embed/），
  *  g-id 只存在于 meta.id（发现#24：按路径推导曾误生成 g-001 撞号）。
  *  历史上的随机 8 位 id（如 g-a92e1406、g-77647351）不匹配 \d{1,4}，自然跳过；
  *  既有 id 永不改写（事件流引用它们，R-02）。 */
-function nextGoalSeq(root) {
+export function nextGoalSeq(root) {
     let max = 0;
-    for (const f of listGoalFiles(root)) {
+    for (const f of listGoalFiles(root, { includeArchived: true })) {
         let id = "";
         try {
             id = String(loadGoal(f).meta.id ?? "");
@@ -3095,6 +3278,14 @@ export function attachmentDigest(root, name) {
  *  悬空引用与坏卡片跳过（由 validate 报告），不在此抛错。
  *  g-183：共享引用解析到共享池权威内容（各 goal 引用读同一份）；
  *  引用 id 经 assertSafeId 安全解析，恶意/越界 ref 被跳过（统一安全解析）。 */
+/** 将 graph 内部卡片路径转换为相对工作区根的精确路径（以 .dsh-graph/ 开头，供执行者按需读取）。 */
+export function toWorkspaceCardPath(root, cardFile) {
+    if (basename(root) === ".dsh-graph") {
+        return relative(dirname(root), cardFile);
+    }
+    const rel = relative(root, cardFile);
+    return rel.startsWith(".dsh-graph/") ? rel : join(".dsh-graph", rel);
+}
 export function harvestedCards(root, goalId) {
     const file = findGoalFile(root, goalId);
     const dir = basename(file) === "goal.md" ? dirname(file) : null;
@@ -3105,6 +3296,7 @@ export function harvestedCards(root, goalId) {
         const id = String(ref);
         let cardFile = null;
         let scope = "goal";
+        let relPath = null;
         try {
             assertSafeId(id, "卡片 id");
         }
@@ -3116,6 +3308,7 @@ export function harvestedCards(root, goalId) {
             if (existsSync(ownFile)) {
                 cardFile = ownFile;
                 scope = "goal";
+                relPath = toWorkspaceCardPath(root, ownFile);
             }
         }
         if (!cardFile) {
@@ -3124,6 +3317,7 @@ export function harvestedCards(root, goalId) {
                 continue; // 悬空引用（validate 管）
             cardFile = sharedFile;
             scope = "shared";
+            relPath = toWorkspaceCardPath(root, sharedFile);
         }
         try {
             const card = loadGoal(cardFile);
@@ -3140,6 +3334,7 @@ export function harvestedCards(root, goalId) {
                 content: card.body.trim(),
                 attachments: cardAttachmentNames(card),
                 digest: atomicCardDigest(cardFile) ?? null,
+                path: relPath ?? undefined,
             });
         }
         catch {
@@ -3158,11 +3353,15 @@ function atomicCardDigest(cardFile) {
     }
 }
 /** 生成「已收集上下文卡片成果」注入段（g-120，供执行派发 prompt）：按 context_cards 顺序
- *  列出每张卡的 title/summary/正文全文，子代理直接使用、无需猜卡片路径。
+ *  列出每张卡的 title/summary/正文，子代理直接使用、无需猜卡片路径。
  *  g-183：显式注入卡片正文引用的附件 refs（@att/<name>，含审计摘要），不带旧 kind。
- *  无 filled/reviewed 卡片时返回带「（无）」说明的短段（恒非 null，调用方总能注入）。 */
-export function formatHarvestedCardsSection(root, goalId) {
-    const cards = harvestedCards(root, goalId);
+ *  g-240：统一预算与裁剪策略：
+ *  - 超长单卡按单卡预算截断正文并给出精确路径与 digest；
+ *  - 多卡超出总预算或条数上限时折叠为摘要+精确路径+digest 按需展开；
+ *  - 溢出项明确可见且可定位，不静默丢弃；无 filled/reviewed 卡片时返回带「（无）」说明的短段。
+ *  g-241 集成：preHarvestedCards 支持单次快照复用（第 4 参，可选）。 */
+export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCards) {
+    const cards = preHarvestedCards ?? harvestedCards(root, goalId);
     if (cards.length === 0) {
         return [
             `## 已收集上下文卡片成果（g-120 注入）`,
@@ -3170,7 +3369,15 @@ export function formatHarvestedCardsSection(root, goalId) {
             `（无：context_cards 为空或没有 filled/reviewed 卡片，无需复用，直接按目标描述/判据执行）`,
         ].join("\n");
     }
-    const items = cards.map((c) => {
+    const maxCardChars = typeof opts?.maxCardChars === "number" && opts.maxCardChars > 0 ? opts.maxCardChars : 1200;
+    const maxTotalChars = typeof opts?.maxTotalChars === "number" && opts.maxTotalChars > 0 ? opts.maxTotalChars : 4000;
+    const maxFullCards = typeof opts?.maxFullCards === "number" && opts.maxFullCards > 0 ? opts.maxFullCards : 8;
+    let accumulatedChars = 0;
+    let inlinedCount = 0;
+    let collapsedCount = 0;
+    const items = [];
+    for (let i = 0; i < cards.length; i++) {
+        const c = cards[i];
         const meta = [
             `id=${c.id}`,
             `status=${c.status}`,
@@ -3178,19 +3385,37 @@ export function formatHarvestedCardsSection(root, goalId) {
             c.summary ? `摘要：${c.summary}` : null,
             c.digest ? `digest=${c.digest}` : null,
         ].filter(Boolean).join("，");
-        const body = c.content
-            ? c.content.split("\n").map((l) => `  ${l}`).join("\n")
-            : "  （正文为空）";
+        const exactPath = c.path ? c.path : (c.scope === "shared" ? `.dsh-graph/shared-cards/${c.id}.md` : `.dsh-graph/cards/${c.id}.md`);
         const atts = c.attachments.length
             ? `\n  附件引用：` + c.attachments.map((a) => `@att/${a}`).join("，")
             : "";
-        return `- **${c.title}**（${meta}）\n${body}${atts}`;
-    });
-    return [
-        `## 已收集上下文卡片成果（g-120 注入：按 context_cards 顺序，子代理直接使用，无需猜卡片路径）`,
-        ``,
-        items.join("\n\n"),
-    ].join("\n");
+        const willExceedTotal = accumulatedChars + c.content.length > maxTotalChars;
+        const willExceedCount = inlinedCount >= maxFullCards;
+        if (willExceedTotal || willExceedCount) {
+            collapsedCount++;
+            items.push(`- **${c.title}**（${meta}，⚠️ 已超出卡片总预算折叠正文）\n` +
+                `  摘要：${c.summary || "（无摘要）"}\n` +
+                `  精确路径：${exactPath}（按需查阅全文，digest=${c.digest}）${atts}`);
+        }
+        else {
+            inlinedCount++;
+            let bodyText = c.content;
+            if (bodyText.length > maxCardChars) {
+                bodyText = bodyText.slice(0, maxCardChars) +
+                    `\n  ...（⚠️ 正文已超出单卡预算 ${maxCardChars} 字已截断；完整内容请读取 ${exactPath}，digest=${c.digest}）`;
+            }
+            accumulatedChars += bodyText.length;
+            const body = bodyText
+                ? bodyText.split("\n").map((l) => `  ${l}`).join("\n")
+                : "  （正文为空）";
+            items.push(`- **${c.title}**（${meta}）\n${body}${atts}`);
+        }
+    }
+    const header = `## 已收集上下文卡片成果（g-120 注入：按 context_cards 顺序，子代理直接使用，无需猜卡片路径）`;
+    const footer = collapsedCount > 0
+        ? `\n\n> ⚠️ 卡片总预算限制：已完整展开 ${inlinedCount} 张卡片，${collapsedCount} 张卡片超出总预算折叠为摘要+精确路径（按需读取，digest 可校验）。`
+        : "";
+    return [header, "", items.join("\n\n")].join("\n") + footer;
 }
 /** handoff 文件的正文模板（结构化可读指令，供新执行者阅读）。 */
 function handoffBody(h) {
@@ -3411,12 +3636,19 @@ export function harvestReviewedAttemptHandoffs(root, goalId) {
     return [all[all.length - 1]];
 }
 /** 格式化已确认 handoff 注入段（g-150，供执行派发 prompt）。
+ *  g-240：统一预算与裁剪：对超长 failures 截断，但返工约束（禁止项）、基线和验收命令始终完整保留（不丢弃隔离禁令与验收）。
  *  无有效 handoff 时返回空字符串（调用方条件拼接，不影响无历史 prompt）。 */
-export function formatReviewedAttemptHandoffsSection(root, goalId) {
-    const handoffs = harvestReviewedAttemptHandoffs(root, goalId);
+export function formatReviewedAttemptHandoffsSection(root, goalId, opts, preHarvestedHandoffs) {
+    const handoffs = preHarvestedHandoffs ?? harvestReviewedAttemptHandoffs(root, goalId);
     if (handoffs.length === 0)
         return "";
     const h = handoffs[0]; // 单文件简化：最多一个
+    const maxFailures = typeof opts?.maxFailuresChars === "number" && opts.maxFailuresChars > 0 ? opts.maxFailuresChars : 1200;
+    let failures = h.failures;
+    if (failures.length > maxFailures) {
+        failures = failures.slice(0, maxFailures) +
+            "\n...（⚠️ 已核实失败超出预算已截断；返工约束与验收命令保持完整）";
+    }
     const meta = [
         `来源 attempt：${h.source_attempts.join(", ")}`,
         `确认人：${h.confirmed_by}`,
@@ -3429,7 +3661,7 @@ export function formatReviewedAttemptHandoffsSection(root, goalId) {
         `（${meta}）`,
         ``,
         `**已核实失败/风险：**`,
-        ...h.failures.split("\n").map((l) => `${l}`),
+        ...failures.split("\n").map((l) => `${l}`),
         ``,
         `**返工约束（禁止项）：**`,
         ...h.constraints.split("\n").map((l) => `${l}`),
@@ -3441,6 +3673,27 @@ export function formatReviewedAttemptHandoffsSection(root, goalId) {
         ...h.verification.split("\n").map((l) => `${l}`),
     ];
     return sections.join("\n");
+}
+/** 格式化目标背景（描述 + 质量判据）：严格保证质量判据（验收核心）完整不被丢弃，对超长目标描述按预算裁剪为摘要+截断提示。 */
+export function formatTargetContext(docOrBody, opts) {
+    const body = typeof docOrBody === "string" ? docOrBody : docOrBody.body;
+    const descMatch = body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
+    const critMatch = body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
+    let desc = descMatch ? descMatch[1].trim() : "（无描述）";
+    const crit = critMatch ? critMatch[1].trim() : "（无判据）";
+    const maxDescChars = typeof opts?.maxDescChars === "number" && opts.maxDescChars > 0 ? opts.maxDescChars : 1500;
+    if (desc.length > maxDescChars) {
+        const goalPath = opts?.goalRel || "goal.md";
+        desc = desc.slice(0, maxDescChars) +
+            `\n...（⚠️ 目标描述超出预算已截断，完整背景位于 ${goalPath}，请按需查阅）`;
+    }
+    return [
+        "## 目标描述",
+        desc,
+        "",
+        "## 质量判据",
+        crit,
+    ].join("\n");
 }
 /** 生成收集子代理的完整提示词（g-145）：注入仓库根、goal/card 元数据、收集范围、
  *  精确回填模板和禁区。用户提供的 prompt 作为附加要求追加在末尾。 */
@@ -3499,6 +3752,7 @@ export function formatCollectPrompt(root, goalId, cardId, userPrompt) {
         `1. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${cardId}\``,
         `2. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
         `3. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
+        `4. 进度协作依托卡片生命周期（empty → collecting → filled → reviewed），不创建虚假 attempt，绝不调用 graph_report_status`,
     ];
     // 如果有用户提供的附加要求，追加在末尾
     if (userPrompt && userPrompt.trim()) {
@@ -3520,6 +3774,44 @@ export function getCardMeta(root, goalId, cardId) {
     const cardTitle = cardDoc.meta.title ?? cardId;
     const cardKind = cardDoc.meta.kind ?? "text";
     return { title: cardTitle, kind: cardKind, goalTitle };
+}
+/** 生成只读产品经理 (PM) 润色与定义提示词（g-242） */
+export function formatPmPrompt(opts) {
+    const lines = [
+        `你是固定的产品经理 Agent。请只向主管 Agent 返回“目标定义/润色建议”，不要调用任何 graph_* 工具，不要修改目标、不改变状态、版本或执行语义。`,
+        ``,
+        `目标 ID：${opts.goalId}`,
+        `goal.md 工作区相对路径：${opts.goalRel}`,
+        `人工指导意见：${String(opts.guidance ?? "").trim() || "（无）"}`,
+        ``,
+        `请先用 read 工具读取上述 goal.md，再围绕目标价值、背景、范围、可验证判据、边界/错误路径、风险和人工核验给出简洁、可执行的润色建议；保留原意，不直接替换或写入目标。`,
+        ``,
+        `## 只读约束与纪律`,
+        `- 物理工具拦截：不提供任何管理写工具、代码修改工具与命令执行工具，仅提供只读分析能力；`,
+        `- 保留原意：仅输出分析与建议，不擅自修改任何项目数据。`,
+    ];
+    return lines.join("\n");
+}
+/** 生成只读复核子代理 (Reviewer) 提示词（g-242） */
+export function formatReviewPrompt(opts) {
+    const lines = [
+        `你是专业的代码与目标复核 Agent（Reviewer）。请对目标 ${opts.goalId} 的执行 attempt ${opts.attemptId} 进行只读审查。`,
+        ``,
+        `目标 ID：${opts.goalId}`,
+        `执行 Attempt：${opts.attemptId}`,
+        `goal.md 工作区相对路径：${opts.goalRel}`,
+    ];
+    if (opts.criteria && opts.criteria.length > 0) {
+        lines.push(``, `**验收判据**：`);
+        for (let i = 0; i < opts.criteria.length; i++) {
+            lines.push(`${i + 1}. ${opts.criteria[i]}`);
+        }
+    }
+    if (opts.guidance && opts.guidance.trim()) {
+        lines.push(``, `**复核指导**：${opts.guidance.trim()}`);
+    }
+    lines.push(``, `## 审查纪律与工具权限`, `- 纯只读审查：仅使用 read、glob、grep 审查代码与变更，不暴露且不调用 edit/write 修改代码；`, `- 绝不调用管理写工具：不暴露任何 graph_* 管理写工具（如 graph_create_goal, graph_start_attempt, graph_transition, graph_resolve_accept 等）；`, `- 裁决归属主管/人工 Gate：仅输出审查报告与建议（PASS / FAIL 及具体证据），最终 verdict 裁决由主管/负责人通过 graph_resolve_accept 执行，reviewer 绝不自行通过；`, `- bash 权限说明：如保留 bash，仅用于运行只读测试（如单元测试 node --test、静态检查、git diff 等），其实际具备当前工作区的本地运行权限；白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。`);
+    return lines.join("\n");
 }
 // ---- Attempt（SCHEMA §3） ----
 const ATTEMPT_BODY = `
@@ -3552,10 +3844,47 @@ function attemptWorktreeEvidence(root, goalId, attemptId) {
     catch { /* non-Git roots retain path/branch evidence and discover degrades safely */ }
     return { relative_path: relativePath, branch: `refs/heads/${goalId}-${attemptId}`, canonical_root: canonicalRoot, ...(head ? { head } : {}) };
 }
+/** g-237/g-241：执行准入门禁校验。在派发/启动子代理前完成状态与准入核验。 */
+export function assertExecutionAdmission(root, goalId, opts) {
+    const goalFile = findGoalFile(root, goalId);
+    if (basename(goalFile) !== "goal.md") {
+        throw new GraphError(`暂存目标（backlog）不能有执行 attempt，请先排期移入 goals/ 或版本`);
+    }
+    const doc = loadGoal(goalFile);
+    const status = String(doc.meta.status ?? "");
+    if (status === "draft") {
+        throw new GraphError(`草稿目标未规划，不允许直接执行，请先排期进入版本或规划目标`);
+    }
+    if (status === "blocked") {
+        throw new GraphError(`目标当前处于阻塞状态（${doc.meta.blocked_reason || "未提供原因"}），不允许直接执行`);
+    }
+    if (status === "delivered") {
+        throw new GraphError(`已交付目标不允许直接派发执行，如需修改请先退回 review`);
+    }
+    return { goalFile, doc };
+}
 export function startAttempt(root, goalId, opts) {
     // 校验 attemptBrief 类型（g-150 review 问题 4：必须是 string 或 undefined，不可是其他类型）
     if (opts.attemptBrief !== undefined && typeof opts.attemptBrief !== "string") {
         throw new GraphError("attemptBrief 必须是 string 类型");
+    }
+    // g-241：校验结构化任务字段
+    if (opts.taskType !== undefined && opts.taskType !== null && !["merge", "rewrite", "fix"].includes(opts.taskType)) {
+        throw new GraphError("task_type 必须是 merge、rewrite 或 fix；空值请传 null 或省略");
+    }
+    if (opts.baselineCommit !== undefined && opts.baselineCommit !== null && (typeof opts.baselineCommit !== "string" || !opts.baselineCommit.trim())) {
+        throw new GraphError("baseline_commit 必须是非空 string；空值请传 null 或省略");
+    }
+    if (opts.sourceAttempt !== undefined && opts.sourceAttempt !== null && (typeof opts.sourceAttempt !== "string" || !opts.sourceAttempt.trim())) {
+        throw new GraphError("source_attempt 必须是非空 string；空值请传 null 或省略");
+    }
+    if (opts.acceptanceItems !== undefined && opts.acceptanceItems !== null) {
+        if (!Array.isArray(opts.acceptanceItems)) {
+            throw new GraphError("acceptance_items 必须是 string[]；空值请传 null 或省略");
+        }
+        if (opts.acceptanceItems.some((it) => typeof it !== "string" || !it.trim())) {
+            throw new GraphError("acceptance_items 的每项必须是非空 string；没有验收项请传 []，未知请传 null 或省略");
+        }
     }
     const goalFile = findGoalFile(root, goalId);
     // backlog 目标没有目录结构，无法创建 attempt
@@ -3605,6 +3934,32 @@ export function startAttempt(root, goalId, opts) {
         if (opts.modeSource)
             meta.mode_source = opts.modeSource;
     }
+    // g-241：持久化 task_type、baseline_commit、source_attempt、acceptance_items（保留 null/省略/[] 契约）
+    if (opts.taskType !== undefined) {
+        meta.task_type = opts.taskType;
+    }
+    if (opts.baselineCommit !== undefined) {
+        meta.baseline_commit = opts.baselineCommit !== null ? opts.baselineCommit.trim() : null;
+    }
+    if (opts.sourceAttempt !== undefined) {
+        meta.source_attempt = opts.sourceAttempt !== null ? opts.sourceAttempt.trim() : null;
+    }
+    if (opts.acceptanceItems !== undefined) {
+        meta.acceptance_items = opts.acceptanceItems !== null ? opts.acceptanceItems.map((it) => it.trim()) : null;
+    }
+    // g-241：持久化模板版本、prompt hash、上下文快照 digest 及上下文版本
+    if (opts.templateVersion && opts.templateVersion.trim()) {
+        meta.template_version = opts.templateVersion.trim();
+    }
+    if (opts.promptHash && opts.promptHash.trim()) {
+        meta.prompt_hash = opts.promptHash.trim();
+    }
+    if (opts.contextDigest && opts.contextDigest.trim()) {
+        meta.context_digest = opts.contextDigest.trim();
+    }
+    if (opts.contextVersion && opts.contextVersion.trim()) {
+        meta.context_version = opts.contextVersion.trim();
+    }
     // g-150：写入 injected_handoffs 和 brief 到 attempt meta（审计可追溯）
     // 无 handoff/brief 时保持当前 prompt 兼容（g-150 review 问题 5）
     if (Array.isArray(opts.injectedHandoffs)) {
@@ -3628,6 +3983,14 @@ export function startAttempt(root, goalId, opts) {
         ...(opts.reasoningEffort && opts.reasoningEffort.trim() ? { reasoning_effort: opts.reasoningEffort.trim() } : {}),
         ...(normalizedMode ? { mode: normalizedMode } : {}),
         ...(normalizedMode && opts.modeSource ? { mode_source: opts.modeSource } : {}),
+        ...(opts.taskType !== undefined ? { task_type: opts.taskType } : {}),
+        ...(opts.baselineCommit !== undefined ? { baseline_commit: opts.baselineCommit !== null ? opts.baselineCommit.trim() : null } : {}),
+        ...(opts.sourceAttempt !== undefined ? { source_attempt: opts.sourceAttempt !== null ? opts.sourceAttempt.trim() : null } : {}),
+        ...(opts.acceptanceItems !== undefined ? { acceptance_items: opts.acceptanceItems !== null ? opts.acceptanceItems.map((it) => it.trim()) : null } : {}),
+        ...(opts.templateVersion && opts.templateVersion.trim() ? { template_version: opts.templateVersion.trim() } : {}),
+        ...(opts.promptHash && opts.promptHash.trim() ? { prompt_hash: opts.promptHash.trim() } : {}),
+        ...(opts.contextDigest && opts.contextDigest.trim() ? { context_digest: opts.contextDigest.trim() } : {}),
+        ...(opts.contextVersion && opts.contextVersion.trim() ? { context_version: opts.contextVersion.trim() } : {}),
         ...(Array.isArray(opts.injectedCards)
             ? { injected_cards: opts.injectedCards }
             : {}),
@@ -4781,6 +5144,7 @@ export function goalDetail(root, goalId) {
                         provider: m.provider ?? null,
                         model: m.model ?? null,
                         model_route: m.model_route ?? null,
+                        reasoning_effort: m.reasoning_effort ?? null,
                         mode: normalizeSubagentMode(m.mode),
                         mode_source: m.mode_source ?? null,
                         // g-190：解绑定位/UI 需要的绑定信息（token 为 CAS 能力，仅下发给 GUI）
@@ -4790,6 +5154,15 @@ export function goalDetail(root, goalId) {
                         detached_at: m.detached_at ?? null,
                         detached_by: m.detached_by ?? null,
                         worktree: m.worktree ?? null,
+                        // g-241：结构化任务事实与快照审计
+                        task_type: m.task_type ?? null,
+                        baseline_commit: m.baseline_commit ?? null,
+                        source_attempt: m.source_attempt ?? null,
+                        acceptance_items: Array.isArray(m.acceptance_items) ? m.acceptance_items : (m.acceptance_items === null ? null : null),
+                        template_version: m.template_version ?? null,
+                        prompt_hash: m.prompt_hash ?? null,
+                        context_digest: m.context_digest ?? null,
+                        context_version: m.context_version ?? null,
                     });
                 }
                 catch { /* 跳过 */ }
@@ -5225,6 +5598,7 @@ export function addMemory(root, opts) {
         id,
         kind,
         scope,
+        created_by: actor,
         text,
         importance: typeof opts.importance === "number" ? opts.importance : undefined,
         source_goal: typeof opts.source_goal === "string" && opts.source_goal.trim() ? opts.source_goal.trim() : undefined,
@@ -5240,6 +5614,7 @@ export function addMemory(root, opts) {
             id: entry.id,
             kind: entry.kind,
             scope: entry.scope,
+            created_by: actor,
             text: entry.text,
             importance: entry.importance,
             source_goal: entry.source_goal,
@@ -5279,6 +5654,7 @@ function replaceMemoryUnlocked(root, opts) {
         id: target.id,
         kind,
         scope,
+        created_by: target.created_by ?? actor,
         text,
         importance,
         source_goal,
@@ -5295,6 +5671,7 @@ function replaceMemoryUnlocked(root, opts) {
             old_snippet: oldSnippet,
             kind: updatedEntry.kind,
             scope: updatedEntry.scope,
+            created_by: updatedEntry.created_by,
             text: updatedEntry.text,
             importance: updatedEntry.importance,
             source_goal: updatedEntry.source_goal,

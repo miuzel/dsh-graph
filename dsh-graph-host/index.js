@@ -11,7 +11,7 @@
  * - 运行时零 @deepseek-ai/* import（类型只用 import type）；
  * - 副作用收进 ctx.effect。
  */
-import { writeFileSync, readFileSync, realpathSync } from "node:fs";
+import { writeFileSync, readFileSync, realpathSync, mkdirSync, readdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { relative, join, resolve, dirname, basename, isAbsolute } from "node:path";
@@ -30,6 +30,7 @@ import {
   fillCard,
   reviewCard,
   startAttempt,
+  assertExecutionAdmission,
   reportStatus,
   reportSupervisorStatus,
   readSupervisorStatus,
@@ -49,6 +50,7 @@ import {
   isMemoryToolsEnabled,
   setMemoryToolsEnabled,
   formatStandingMemorySection,
+  formatTargetContext,
   requestAcceptReview,
   resolveAccept,
   archiveGoal,
@@ -117,7 +119,12 @@ import {
   SUBAGENT_MODE_PROMPTS,
   resolveSubagentMode,
   toolFilterForMode,
-  buildSubagentDefaultPersona,
+  SUBAGENT_ROLES,
+  normalizeSubagentRole,
+  toolFilterForRole,
+  getRoleProfile,
+  formatPmPrompt,
+  formatReviewPrompt,
   validateSchema,
   schemaErrorResponse,
   settingsPostSchema,
@@ -279,7 +286,7 @@ const USAGE = [
   "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff；",
   "- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；",
   "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账。",
-  "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
+  "原则：状态不是证据、产出物才是；关键阶段主动迁移卡片、自报状态；长任务节流心跳；不确定先问。",
 ].join("\n");
 
 // g-118（负责人 2026-08-22 设计转向）：注入**简短引导提示词**（非完整守则）——
@@ -294,14 +301,14 @@ const GUIDE_HINT = [
 ].join("\n");
 
 // g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
-// 提醒内容强调主管铁律：只做规划/派发/把关/复核、实现交子代理、每动作后
+// 提醒内容强调主管铁律：只做规划/派发/把关/复核、实现交子代理、阶段变化与关键节点
 // graph_report_supervisor_status、review→delivered 必须等负责人 verdict。
 // token 成本约 80 字，简短精炼。
 const SUPERVISOR_DISCIPLINE = [
   "⚠️ **主管纪律提醒**（每 turn 自动注入）：",
   "1. **只做规划、派发、把关、复核**——绝不自己实现常规功能大任务、一律派发子代理；",
   "2. **轻量改动自主特权**：一句话决策与低风险微小改动（patch / chore 类目标、一两行修改），主管可直接在当前会话使用 edit/write 执行，无需繁琐派发子代理；",
-  "3. **每动作后 graph_report_supervisor_status**——看板实时显示状态；",
+  "3. **阶段变化与关键节点自报进展**：调用 graph_report_supervisor_status（看板实时显示状态，常规细微动作无需机械汇报）；",
   "4. **记忆管理纪律**：自发总结默认记 on_demand；仅人类钦定或隔离禁令才记 standing（≤200字）；remove 仅限明确撤回/证实过时；",
   "5. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；",
   "6. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。",
@@ -330,14 +337,14 @@ const HELP_TEXT = [
   "2. 新会话：graph_claim_supervisor() —— 把 project.yaml 的 supervisor.session 更新为当前会话 id，记 supervisor.claimed 事件（幂等），并返回 HANDOFF 全文。",
   "",
   "完整 supervisor 工作守则（阶段推进/信息收集/执行规范/环境事实等）见 skill dsh-graph-supervisor，显式调用加载。",
-  "原则：状态不是证据、产出物才是；每做一步主动迁移卡片、自报状态；不确定先问。",
+  "原则：状态不是证据、产出物才是；关键阶段主动迁移卡片、自报状态；长任务节流心跳；不确定先问。",
 ].join("\n");
 
 // g-120：worktree 隔离指令（Supervisor 强制默认）——与 supervisor-guide.md 执行规范保持一致。
 // graph_start_attempt / start-execution 默认注入本段；只有 supervisor 明确 override 才能跳过。
-const WORKTREE_GUIDE = `【强制 worktree 隔离】本次任务默认必须在独立 worktree 中完成：先确认当前仓库根与目标分支，再执行 \`git worktree add .worktrees/g-<goal-number>-att-<NN> -b g-<goal-number>-att-<NN>\`，之后所有代码/测试/生成文件改动只能发生在该 worktree；**禁止直接修改 main 或其他目标分支，也禁止自行以「简单改动」为理由绕过隔离**。完成后在 worktree 提交，等待 supervisor 复核；当前版本由 supervisor 合并 main，未来版本合并对应版本集成/测试分支（如 v0.8-test）。
-【唯一例外】仅当 supervisor 在本次派发的 attempt brief 中明确写出 \`worktree=false\` 与理由时，才允许真正的一两行、唯一文件小修直接 main；文档/长期记忆等小修改由 supervisor 自己处理，子代理不得擅自套用例外。
-【worktree 命名规范】新建 attempt 工作树必须命名为 .worktrees/g-<goal-number>-att-<NN>，分支使用相同后缀（例如 g-125-att-03、g-163-att-03）；不要使用省略 goal id 或未补零的歧义名称。
+const WORKTREE_GUIDE = `【强制 worktree 隔离】本次任务默认必须在独立 worktree 中完成：专属 worktree 由 supervisor 预创建并登记（命名约定为 .worktrees/g-<goal-number>-att-<NN>，分支同名，基于当前版本集成分支）；子代理直接在给定工作树内工作，**绝不自行拉树、建分支、切分支、改分支**；未给定预登记树时按 brief 说明在当前指定工作区执行，不得自行补建。代码改动、测试及生成文件只能发生在该 worktree；**main 为只读已发布分支，禁止直接修改 main 或其他目标分支，也禁止自行以「简单改动」为理由绕过隔离**。完成后在 worktree 提交，等待 supervisor 复核；由 supervisor 合并到当前版本集成分支（如 <version>-test）。
+【唯一例外】仅当 supervisor 在本次派发的 attempt brief 中明确写出 \`worktree=false\` 与理由时，才允许豁免独立 worktree；文档/长期记忆等小修改由 supervisor 自己处理，子代理不得擅自套用例外。即便 worktree=false，main 分支仍绝对只读，禁止直接修改 main。
+【worktree 命名约定】supervisor 预创建并登记的 attempt 工作树统一遵循 .worktrees/g-<goal-number>-att-<NN> 规范，分支使用相同后缀（例如 g-125-att-03、g-163-att-03），消除歧义与分支冲突。
 数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
 
 const MINOR_TASK_GUIDE = `【微小改动/轻量任务快速通道】当前目标属于 patch / chore 类型（低风险微改/轻量任务）：
@@ -345,8 +352,9 @@ const MINOR_TASK_GUIDE = `【微小改动/轻量任务快速通道】当前目�
 - 改动边界：严格限定于声明的微小改动范围，禁止产生无关副作用、禁止私自扩大破坏面；
 - 验证与自报：改动后针对性跑通单测与校验，使用 graph_report_status 汇报并在完成后迁至 review 等待复核。`;
 
-function resolveWorktreeGuide(goalType, explicitWorktree) {
+export function resolveWorktreeGuide(goalType, explicitWorktree) {
   if (explicitWorktree === false) return "";
+  if (explicitWorktree === true) return WORKTREE_GUIDE;
   if (goalType === "patch" || goalType === "chore") return MINOR_TASK_GUIDE;
   return WORKTREE_GUIDE;
 }
@@ -452,6 +460,23 @@ function validateAttemptPromptFields({ taskType, baselineCommit, sourceAttempt, 
   return null;
 }
 
+// g-236：当 attempt_brief 和 directive 均为空时，从目标描述生成默认 action，
+// 防止静默启动空任务。brief 优先于 directive（brief 是当前任务，directive 是背景指令）。
+function resolveEffectiveBrief(attemptBrief, directive, goalDesc) {
+  const b = promptText(attemptBrief);
+  if (b) return { brief: b, source: "brief" };
+  const d = promptText(directive);
+  if (d) return { brief: d, source: "directive" };
+  // 两者均空：从目标描述生成默认 action
+  const desc = promptText(goalDesc);
+  if (desc) {
+    // 截取目标描述前 200 字符作为默认 action，避免过长
+    const truncated = desc.length > 200 ? desc.slice(0, 200) + "…" : desc;
+    return { brief: `执行目标描述中的任务：${truncated}`, source: "auto_from_desc" };
+  }
+  // 目标描述也为空：最终兜底
+  return { brief: "执行目标描述和质量判据中的任务", source: "fallback" };
+}
 
 function historicalPromptBlock(title, section) {
   const text = promptText(section);
@@ -482,20 +507,16 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
   const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
   lines.push(
     "",
-    "【状态汇报——你自己做，supervisor 不会替你更新】看板卡片上的状态摘要（status_line）由你自行维护：",
-    "每做一个动作就及时调用 graph_report_status 更新，参数 goal=\"" + goalValue + "\"、attempt=\"" + attemptValue + "\"、status=<一句话简短描述你此刻在干什么>。",
-    "status 要简短（一句人话，尽量 20 字内，如「正在改 modal tab 样式」「跑验收脚本」），不要攒到结束才写、不要长篇。",
-    "开工、每完成一块、遇到阻塞、转向新任务、临近完成，都要立即更新；这句就是卡片上实时显示的那一行，滞留或失实等于对负责人隐瞒进展。",
-    "",
-    "【结束工作前更新 status】本轮收尾/即将空闲前，再调用一次 graph_report_status 把 status 更新为完成态（如「本轮完成/空闲待命」），避免空闲时 status 仍显示「正在做 X」——看板如实反映空闲/完成状态。",
-    "",
-    "【泳道迁移——你自己做，卡片位置是状态的投影】看板列＝状态的投影，状态滞留＝卡片滞留，必须及时调用 graph_transition：",
-    "开工时（若当前非 in_progress）graph_transition(goal=\"" + goalValue + "\", to=\"in_progress\")；",
-    "完成后 graph_transition(goal=\"" + goalValue + "\", to=\"review\")；",
-    "遇到阻塞 graph_transition(goal=\"" + goalValue + "\", to=\"blocked\", reason=<一句话原因>)；",
-    "【禁区】绝不自行 graph_transition 到 \"delivered\"——delivered 是负责人/supervisor 的 human gate（review→delivered 只有 verdict 通过后由主管执行），你最多到 review 就停。",
-    "迁移要与 graph_report_status 同步进行，别只改 status_line 不动卡片；若迁移被引擎拒绝（如判据未登记、状态不允许），保留 status 汇报并继续工作，不要反复硬试。",
-    "完成后用 graph_report_status 汇报最终状态，声明完成并等待 review。",
+    "【看板协同与状态流转】看板列与状态摘要（status_line）由你维护，反映真实执行进展：",
+    "1. 泳道迁移（Human Gate 约束）：",
+    "   - 开工时（若当前非 in_progress）：调用 graph_transition(goal=\"" + goalValue + "\", to=\"in_progress\")；",
+    "   - 遇到阻塞：调用 graph_transition(goal=\"" + goalValue + "\", to=\"blocked\", reason=<一句话原因>)；",
+    "   - 本轮完成：调用 graph_transition(goal=\"" + goalValue + "\", to=\"review\") 停轮等待裁决；",
+    "   - 【禁区】绝不自行 graph_transition 到 \"delivered\"——delivered 是负责人/supervisor 的 human gate，最多到 review 就停。",
+    "2. 状态汇报（有限阶段触发，严禁每动作机械追加）：",
+    "   - 汇报触发点：仅在【开始开工】、【阶段转变/转向新任务】、【遇到阻塞】、【本轮完成待命】4类有限关键节点调用 graph_report_status(goal=\"" + goalValue + "\", attempt=\"" + attemptValue + "\", status=<一句话简短人话，≤20字>)；",
+    "   - 长任务节流心跳：长耗时任务（如大型构建、多步批量排查）适度按心跳汇报进展，普通轻量读取/单步调试切忌每步机械追加汇报；不再要求每个 read/bash 动作机械调用状态；",
+    "   - 迁移与状态同步：泳道迁移时同步更新 status_line；若迁移被引擎拒绝，保留 status 汇报并继续工作。",
   );
   return lines.join("\n");
 }
@@ -531,16 +552,20 @@ export function formatAttemptPrompt({
   const historyNotice = handoff ? "『前序 attempt 已确认 handoff』" : "『历史 handoff』";
   const goalValue = promptText(goal) || ATTEMPT_PROMPT_MISSING;
   const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
+  const context = promptText(targetContext);
   const positioning = [
     "【本次任务定位】这是一次 " + taskTypeLabel + " 任务；以下仅『本次 attempt brief/directive』为唯一 action 来源；" + historyNotice + "为约束/背景，仅供理解候选设计与禁项，不产生新任务。",
     "你是 dsh-graph 目标 " + goalValue + " 的执行 attempt " + attemptValue + "。",
-    "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "——用 read 工具读它，不要自己猜路径。",
+    context
+      ? "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "（目标描述与质量判据已在下方基于当前快照内联，请直接依据执行；如需历史评论/台账可按需查阅，无需无条件重读全文）。"
+      : "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "——用 read 工具读它，不要自己猜路径。",
   ].join("\n");
 
   const current = [
     "## 本次 attempt brief/directive",
     "",
     "唯一 action 来源：以下两项当前数据；历史 handoff、卡片和通用纪律均不产生新任务。",
+    "brief 优先于 directive：brief 是当前任务的直接描述，directive 是目标文件中的背景指令；两者冲突以 brief 为准。",
     "",
     "**attempt brief（当前数据）**",
     renderPromptValue(brief, "本次请求未传 attempt_brief，或该值不是非空字符串"),
@@ -548,7 +573,6 @@ export function formatAttemptPrompt({
     "**directive（当前数据）**",
     renderPromptValue(currentDirective, "当前目标没有最近指令，或该值不是非空字符串"),
   ];
-  const context = promptText(targetContext);
   if (context) current.push("", "目标背景（来自当前 goal.md，仅供理解，不产生 action）", protectPromptMarkers(context));
 
   const override = [
@@ -704,6 +728,309 @@ export function apply(ctx, config) {
       return "idle";
     } catch {
       return "unknown";
+    }
+  };
+
+  // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
+  // （parent.options / childSessionMeta / captureDelegatedPolicyOverrides），传 null 必然失败。
+  // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。
+  const resolveSpawnParent = (rootForReq) => {
+    try {
+      const supervisorId = readSupervisorSession(rootForReq);
+      if (!supervisorId) return { supervisorId: null, parent: null, error: "未配置 supervisor.session（project.yaml）——请先在该 workspace 运行 graph_claim_supervisor() 完成主管会话接管，再派发执行" };
+      const agents = ctx.get?.("agents");
+      const parent = agents?.get?.(supervisorId) ?? null;
+      if (!parent) return { supervisorId, parent: null, error: `主管会话 ${supervisorId} 无 live Agent（可能未在运行）——请确认该主管会话已开启/在运行，或重新 graph_claim_supervisor()` };
+      return { supervisorId, parent, error: null };
+    } catch (e) {
+      return { supervisorId: null, parent: null, error: String(e?.message ?? e) };
+    }
+  };
+
+  // g-241：统一执行派发服务（工具与 HTTP 共享核心契约、准入、快照、路由与绑定）
+  const dispatchExecutionAttempt = async ({
+    root,
+    workspace,
+    goal,
+    entrypoint, // "tool" | "http"
+    actor,
+    executor,
+    parentAgent,
+    parentSessionId,
+    signal,
+    attempt_brief,
+    directive,
+    task_type,
+    baseline_commit,
+    source_attempt,
+    acceptance_items,
+    provider,
+    model,
+    reasoning_effort,
+    mode,
+    worktree,
+    force = false,
+  }) => {
+    if (!goal) throw new GraphError("missing goal");
+    // 1. 契约规范化与校验
+    if (attempt_brief !== undefined && attempt_brief !== null && typeof attempt_brief !== "string") {
+      throw new GraphError("attempt_brief 必须是 string 类型");
+    }
+    const structuredFieldError = validateAttemptPromptFields({
+      taskType: task_type,
+      baselineCommit: baseline_commit,
+      sourceAttempt: source_attempt,
+      acceptanceItems: acceptance_items,
+    });
+    if (structuredFieldError) throw new GraphError(structuredFieldError);
+    if (mode !== undefined && mode !== null && mode !== "") {
+      if (typeof mode !== "string" || !normalizeSubagentMode(mode)) {
+        throw new GraphError(`mode 只允许 ${SUBAGENT_MODES.join("/")}`);
+      }
+    }
+
+    // 2. 执行准入门禁校验（g-237/g-241 协同）
+    const { goalFile, doc } = assertExecutionAdmission(root, goal, { force });
+
+    // 3. 一次性上下文快照（保证注入清单与注入内容一致，零二次读取漂移）
+    const descMatch = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
+    const critMatch = doc.body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
+    const desc = descMatch ? descMatch[1].trim() : "";
+    const crit = critMatch ? critMatch[1].trim() : "（无判据）";
+    const targetContext = [
+      "## 目标描述",
+      desc || "（无描述）",
+      "",
+      "## 质量判据",
+      crit,
+    ].join("\n");
+
+    // 4. 任务动作规范化（g-236/g-241 协同：brief 优先于 directive，三级回退，禁止静默空 action）
+    const currentDirective = directive ?? readGoalDirective(root, goal);
+    const resolvedBrief = resolveEffectiveBrief(attempt_brief, currentDirective, desc);
+
+    const cards = harvestedCards(root, goal);
+    const injectedCards = cards.map((c) => c.id);
+    const cardsSection = formatHarvestedCardsSection(root, goal, undefined, cards);
+
+    const confirmedHandoffs = harvestReviewedAttemptHandoffs(root, goal);
+    const injectedHandoffRefs = confirmedHandoffs.map((h) => ({
+      id: h.id,
+      revision: h.revision,
+      source_attempts: h.source_attempts,
+    }));
+    const handoffsSection = formatReviewedAttemptHandoffsSection(root, goal, undefined, confirmedHandoffs);
+
+    const contextPayload = JSON.stringify({
+      goal,
+      title: doc.meta.title,
+      desc,
+      crit,
+      cards: cards.map((c) => ({ id: c.id, digest: c.digest })),
+      handoffs: injectedHandoffRefs,
+      directive: currentDirective ?? null,
+    });
+    const contextDigest = createHash("sha256").update(contextPayload).digest("hex").slice(0, 16);
+    const templateVersion = "v1";
+    const contextVersion = doc.meta.rules_snapshot ?? doc.meta.version ?? "v1";
+
+    // 5. 模型路由与模式解析（优先级：单次调用 > project.yaml > profile 全局 > 继承）
+    const projectExec = readExecutorModel(root);
+    const globalSettings = readGraphSettings();
+    const eff = resolveModelRoute(
+      { provider, model, reasoning_effort },
+      projectExec,
+      globalSettings,
+    );
+    const effProvider = eff.provider;
+    const effModel = eff.model;
+    const effReasoningEffort = eff.reasoning_effort;
+    const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
+    const effModeRes = resolveSubagentMode(mode, projectExec.mode, globalSettings.subagentMode);
+
+    // 6. 统一校验 subagent prepareContinuable 能力（g-241 判据 4：禁止回退虚构 spawn）
+    const subagents = ctx.get?.("subagents");
+    let availableProvider = null;
+    let providerError = null;
+    if (subagents) {
+      availableProvider = (subagents.list?.() ?? []).find((n) => {
+        try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
+      });
+      if (!availableProvider) {
+        providerError = `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`;
+      }
+    }
+
+    // 7. Prompt 组装与 Prompt Hash
+    const goalRel = goalFile ? relative(workspace, goalFile) : null;
+    let gType = "task";
+    try { gType = normalizeGoalType(doc.meta.type); } catch {}
+    const worktreeBlock = resolveWorktreeGuide(gType, worktree);
+    const subagentPromptSection = (() => {
+      const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(root, "subagent_prompt"));
+      return p ? ["## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join("\n") : null;
+    })();
+    const modeStrategySection = effModeRes.prompt ? ["## 子代理执行模式（" + effModeRes.mode + "）", "", effModeRes.prompt].join("\n") : null;
+
+    // 预测下一 attempt ID（用于 prompt 中精准渲染 attempt 编号）
+    const attemptsDir = join(dirname(goalFile), "attempts");
+    mkdirSync(attemptsDir, { recursive: true });
+    const seq = readdirSync(attemptsDir).filter((d) => d.startsWith("att-")).length + 1;
+    const nextAttId = `att-${String(seq).padStart(3, "0")}`;
+
+    const prompt = formatAttemptPrompt({
+      goal,
+      attempt: nextAttId,
+      goalRel,
+      attemptBrief: resolvedBrief.brief,
+      directive: currentDirective,
+      taskType: task_type,
+      baselineCommit: baseline_commit,
+      sourceAttempt: source_attempt,
+      acceptanceItems: acceptance_items,
+      handoffSection: handoffsSection,
+      cardsSection,
+      targetContext,
+      subagentPromptSection,
+      modeStrategySection,
+      worktreeBlock,
+    });
+    const promptHash = createHash("sha256").update(prompt).digest("hex").slice(0, 16);
+
+    // 8. 创建并持久化 attempt 记录与 attempt.started 事件
+    const attempt = startAttempt(root, goal, {
+      executor: executor ?? (entrypoint === "http" ? "agent:executor" : actor),
+      actor,
+      injectedCards,
+      injectedHandoffs: injectedHandoffRefs,
+      attemptBrief: resolvedBrief.brief ?? undefined,
+      injectedDirective: currentDirective ?? undefined,
+      provider: effProvider,
+      model: effModel,
+      modelRoute: effRoute,
+      reasoningEffort: effReasoningEffort,
+      mode: effModeRes.mode,
+      modeSource: effModeRes.source,
+      taskType: task_type,
+      baselineCommit: baseline_commit,
+      sourceAttempt: source_attempt,
+      acceptanceItems: acceptance_items,
+      templateVersion,
+      promptHash,
+      contextDigest,
+      contextVersion,
+    });
+
+    // 9. 启动与绑定子代理
+    if (providerError) {
+      return {
+        ok: true,
+        attempt,
+        child_id: null,
+        child_error: providerError,
+        note: `subagent 派发失败（attempt 已本地创建）：${providerError}`,
+        model_route: effRoute,
+        mode: effModeRes.mode,
+        mode_source: effModeRes.source,
+        injected_cards: injectedCards,
+        injected_handoffs: injectedHandoffRefs,
+        brief: resolvedBrief.brief,
+        brief_source: resolvedBrief.source,
+        prompt,
+      };
+    }
+
+    if (subagents && parentAgent && availableProvider) {
+      try {
+        const modeToolFilter = toolFilterForMode(effModeRes.mode);
+        const request = {
+          parent: parentAgent,
+          prompt: text(prompt),
+          ...(modeToolFilter ? { toolFilter: modeToolFilter } : {}),
+        };
+        const agentOptions = {};
+        if (effProvider) agentOptions.provider = effProvider;
+        if (effModel) agentOptions.model = effModel;
+        if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
+        if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
+
+        const started = await subagents.startContinuable({
+          provider: availableProvider,
+          label: `graph:${goal}/${attempt}`,
+          request,
+          signal,
+        });
+
+        bindAttemptChild(
+          root,
+          goal,
+          attempt,
+          started.childId,
+          actor,
+          parentSessionId ?? started.parentSessionId ?? null,
+          effProvider,
+          effModel,
+          effRoute,
+          effModeRes.mode,
+          effModeRes.source,
+        );
+
+        try {
+          transition(root, goal, "in_progress", {
+            reason: `attempt 派发（${entrypoint === "tool" ? "graph_start_attempt" : "GUI 执行"}）`,
+            actor,
+          });
+        } catch {
+          /* 已在 in_progress */
+        }
+
+        return {
+          ok: true,
+          attempt,
+          child_id: started.childId,
+          child_error: null,
+          model_route: effRoute,
+          mode: effModeRes.mode,
+          mode_source: effModeRes.source,
+          injected_cards: injectedCards,
+          injected_handoffs: injectedHandoffRefs,
+          brief: resolvedBrief.brief,
+          brief_source: resolvedBrief.source,
+          prompt,
+        };
+      } catch (e) {
+        return {
+          ok: true,
+          attempt,
+          child_id: null,
+          child_error: String(e?.message ?? e),
+          note: `subagent 派发失败（attempt 已本地创建）：${e?.message ?? e}`,
+          model_route: effRoute,
+          mode: effModeRes.mode,
+          mode_source: effModeRes.source,
+          injected_cards: injectedCards,
+          injected_handoffs: injectedHandoffRefs,
+          brief: resolvedBrief.brief,
+          brief_source: resolvedBrief.source,
+          prompt,
+        };
+      }
+    } else {
+      return {
+        ok: true,
+        attempt,
+        child_id: null,
+        child_error: null,
+        note: "subagents 服务不可用或无调用 agent，attempt 仅本地创建",
+        model_route: effRoute,
+        mode: effModeRes.mode,
+        mode_source: effModeRes.source,
+        injected_cards: injectedCards,
+        injected_handoffs: injectedHandoffRefs,
+        brief: resolvedBrief.brief,
+        brief_source: resolvedBrief.source,
+        prompt,
+      };
     }
   };
 
@@ -1157,7 +1484,12 @@ export function apply(ctx, config) {
               try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
             });
             if (!provider) throw new Error(`无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`);
-            const request = { parent: ex.agent, prompt: text(fullPrompt) };
+            const collectToolFilter = toolFilterForRole("collector", a.mode);
+            const request = {
+              parent: ex.agent,
+              prompt: text(fullPrompt),
+              ...(collectToolFilter ? { toolFilter: collectToolFilter } : {}),
+            };
             const agentOptions = {};
             if (effProvider) agentOptions.provider = effProvider;
             if (effModel) agentOptions.model = effModel;
@@ -1183,133 +1515,41 @@ export function apply(ctx, config) {
           }
           return result;
         }
-        // g-120：按 context_cards 顺序收集 filled/reviewed 卡片成果，注入清单记入 attempt.started 的
-        // details.injected_cards（事件先行：必须在 startAttempt 之前算好，与 prompt 注入内容一致）
-        const injectedCards = harvestedCards(r, a.goal).map((c) => c.id);
-        // g-150：读取已确认且未被覆盖的 attempt handoff（事件先行：必须在 startAttempt 之前算好）
-        const confirmedHandoffs = harvestReviewedAttemptHandoffs(r, a.goal);
-        const injectedHandoffRefs = confirmedHandoffs.map((h) => ({ id: h.id, revision: h.revision, source_attempts: h.source_attempts }));
-        const handoffsSection = formatReviewedAttemptHandoffsSection(r, a.goal);
-        // g-150 范围扩展：读取最近指令（eventually 注入 prompt；空时不影响现有 prompt 行为）
-        const currentDirective = readGoalDirective(r, a.goal);
-        const goalFile = findGoalFile(r, a.goal);
-        // g-149：sessionWorkspace 可能返回 null（绝对 config.root + 无 session），
-        // 此时用 r 的父目录作为相对路径基准
         const ws = sessionWorkspace(ex) ?? dirname(r);
-        const goalRel = goalFile ? relative(ws, goalFile) : null;
-        const projectExec = readExecutorModel(r);
-        const globalSettings = readGraphSettings();
-        const eff = resolveModelRoute(
-          { provider: a.provider, model: a.model, reasoning_effort: a.reasoning_effort },
-          projectExec,
-          globalSettings,
-        );
-        const effProvider = eff.provider;
-        const effModel = eff.model;
-           const effReasoningEffort = eff.reasoning_effort;
-        const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
-        const effModeRes = resolveSubagentMode(a.mode, projectExec.mode, globalSettings.subagentMode);
-        const attempt = startAttempt(r, a.goal, {
-          executor,
+        const execRes = await dispatchExecutionAttempt({
+          root: r,
+          workspace: ws,
+          goal: a.goal,
+          entrypoint: "tool",
           actor: actorOf(ex),
-          injectedCards,
-          injectedHandoffs: injectedHandoffRefs,
-          attemptBrief: a.attempt_brief ?? undefined,
-          injectedDirective: currentDirective ?? undefined,
-          provider: effProvider,
-          model: effModel,
-          modelRoute: effRoute,
-          reasoningEffort: effReasoningEffort,
-          mode: effModeRes.mode,
-          modeSource: effModeRes.source,
+          executor,
+          parentAgent: ex.agent,
+          parentSessionId: ex.agent?.session?.id ?? null,
+          signal: ex.signal,
+          attempt_brief: a.attempt_brief,
+          task_type: a.task_type,
+          baseline_commit: a.baseline_commit,
+          source_attempt: a.source_attempt,
+          acceptance_items: a.acceptance_items,
+          provider: a.provider,
+          model: a.model,
+          reasoning_effort: a.reasoning_effort,
+          mode: a.mode,
+          worktree: a.worktree,
         });
-        // 注意：返回值必须是无损 JSON——绝不写入值为 undefined 的字段（registry 会拒绝）
-        const result = { attempt, child_id: null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs, mode: effModeRes.mode, mode_source: effModeRes.source };
-        if (a.attempt_brief) result.brief = a.attempt_brief;
-        if (effRoute) result.model_route = effRoute;
-        const subagents = ctx.get?.("subagents");
-        if (subagents && ex?.agent) {
-          try {
-            // 挑选具备可续轮能力的提供方（prepareContinuable 存在即能力）
-            const provider =
-              subagents.list().find((n) => {
-                const p = subagents.getProvider(n);
-                return typeof p?.prepareContinuable === "function";
-              }) ?? "spawn";
-            // 模型路由：工具参数 > project.yaml executor.provider/model > 继承父会话
-            // g-113 修正：子代理工作目录 = 父会话 workspace（startContinuable 继承 session.header.cwd），
-            // 目标文件相对路径必须相对 workspace 根（如 .dsh-graph/versions/...），不是相对 .dsh-graph 目录本身
-            const rel = goalRel;
-            // g-120：已收集卡片成果段（子代理直接使用，无需猜卡片路径）+ worktree 隔离指令（可开关）
-            const cardsSection = formatHarvestedCardsSection(r, a.goal);
-            let gType = "task";
-            try { gType = normalizeGoalType(loadGoal(findGoalFile(r, a.goal)).meta.type); } catch {}
-            const worktreeBlock = resolveWorktreeGuide(gType, a.worktree);
-            // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
-            const subagentPromptSection = (() => {
-              const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(r, "subagent_prompt"));
-              return p ? ["## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join(String.fromCharCode(10)) : null;
-            })();
-            // g-191：子代理执行策略/模式说明段
-            const modeStrategySection = effModeRes.prompt ? ["## 子代理执行模式（" + effModeRes.mode + "）", "", effModeRes.prompt].join(String.fromCharCode(10)) : null;
-            // g-228：所有 supervisor 执行 prompt 统一由单一模板入口组装。
-            const prompt = formatAttemptPrompt({
-              goal: a.goal,
-              attempt,
-              goalRel: rel,
-              attemptBrief: a.attempt_brief,
-              directive: currentDirective,
-              taskType: a.task_type,
-              baselineCommit: a.baseline_commit,
-              sourceAttempt: a.source_attempt,
-              acceptanceItems: a.acceptance_items,
-              handoffSection: handoffsSection,
-              cardsSection,
-              subagentPromptSection,
-              modeStrategySection,
-              worktreeBlock,
-            });
-            const modeToolFilter = toolFilterForMode(effModeRes.mode);
-            const request = {
-              parent: ex.agent,
-              prompt: text(prompt),
-              ...(modeToolFilter ? { toolFilter: modeToolFilter } : {}),
-            };
-            const agentOptions = {};
-            if (effProvider) agentOptions.provider = effProvider;
-            if (effModel) agentOptions.model = effModel;
-             if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
-            if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
-            const started = await subagents.startContinuable({
-              provider,
-              label: "graph:" + a.goal + "/" + attempt,
-              request,
-              signal: ex.signal,
-            });
-            bindAttemptChild(
-              rootFor(ex),
-              a.goal,
-              attempt,
-              started.childId,
-              actorOf(ex),
-              ex.agent?.session?.id,
-              effProvider,
-              effModel,
-              effRoute,
-              effModeRes.mode,
-              effModeRes.source,
-            );
-            // 负责人 2026-08-22：开始执行的目标必须落到执行 lane——派发成功后自动迁 in_progress
-            //（若已 in_progress 或门槛未满足则静默，子代理自行汇报）
-            try { transition(rootFor(ex), a.goal, "in_progress", { reason: "attempt 派发（graph_start_attempt）", actor: actorOf(ex) }); } catch { /* 已在 in_progress 或迁移被拒 */ }
-            result.child_id = started.childId;
-            if (effRoute) result.model_route = effRoute;
-          } catch (e) {
-            result.note = `subagent 派发失败（attempt 已本地创建）：${e?.message ?? e}`;
-          }
-        } else {
-          result.note = "subagents 服务不可用或无调用 agent，attempt 仅本地创建";
-        }
+        const result = {
+          attempt: execRes.attempt,
+          child_id: execRes.child_id,
+          injected_cards: execRes.injected_cards,
+          injected_handoffs: execRes.injected_handoffs,
+          mode: execRes.mode,
+          mode_source: execRes.mode_source,
+        };
+        if (execRes.child_error) result.child_error = execRes.child_error;
+        if (execRes.note) result.note = execRes.note;
+        if (execRes.brief) result.brief = execRes.brief;
+        if (execRes.brief_source && execRes.brief_source !== "brief") result.brief_source = execRes.brief_source;
+        if (execRes.model_route) result.model_route = execRes.model_route;
         return result;
       },
     },
@@ -1468,38 +1708,6 @@ export function apply(ctx, config) {
   };
   // 所有普通 JSON REST 统一走 capped reader（防超大 JSON OOM；附件 endpoint 用更大的 MAX_ATTACHMENT_JSON_BYTES）
   const readBody = (req) => readBodyCapped(req, MAX_JSON_BODY_BYTES);
-  // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
-  // （parent.options / childSessionMeta / captureDelegatedPolicyOverrides），传 null 必然失败。
-  // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。
-  const resolveSpawnParent = (rootForReq) => {
-    try {
-      const supervisorId = readSupervisorSession(rootForReq);
-      if (!supervisorId) return { supervisorId: null, parent: null, error: "未配置 supervisor.session（project.yaml）——请先在该 workspace 运行 graph_claim_supervisor() 完成主管会话接管，再派发执行" };
-      const agents = ctx.get?.("agents");
-      const parent = agents?.get?.(supervisorId) ?? null;
-      if (!parent) return { supervisorId, parent: null, error: `主管会话 ${supervisorId} 无 live Agent（可能未在运行）——请确认该主管会话已开启/在运行，或重新 graph_claim_supervisor()` };
-      return { supervisorId, parent, error: null };
-    } catch (e) {
-      return { supervisorId: null, parent: null, error: String(e?.message ?? e) };
-    }
-  };
-  // g-132：读取 workspace 的子代理补充提示词覆盖，生成注入段。
-  // 三态：default 继承 profile 全局值（不注入）；override 注入自定义文本；disable 注入「已禁用」声明。
-  const promptOverrideSection = (rootResolve, key) => {
-    let ov;
-    try { ov = readPromptOverride(rootResolve(), key); } catch { return ""; }
-    if (!ov) return "";
-    const label = "子代理";
-    if (ov.state === "override" && ov.value) {
-      return `## 补充提示词（${label}，workspace 覆盖）\n\n${ov.value}`;
-    }
-    if (ov.state === "disable") {
-      return `## 补充提示词（${label}，workspace 覆盖）\n\n（本 workspace 已显式禁用全局 ${label} 补充提示词）`;
-    }
-    return "";
-  };
-  // 派发一个可续轮子代理（模型路由：overrides 优先，其次 project.yaml executor.provider/model，与 graph_start_attempt 一致）。
-  // overrides: {provider?, model?} —— 由「重新执行」的 provider/model 选择器显式指定。
   // 返回 {childId, parentSessionId, error}；error 非空表示未派发成功。
   const spawnChild = async (label, promptText, req, rootForReq, overrides = {}) => {
     const subagents = ctx.get?.("subagents");
@@ -1518,11 +1726,12 @@ export function apply(ctx, config) {
       if (!provider) {
         return { childId: null, parentSessionId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）` };
       }
-      const modeToolFilter = overrides.mode ? toolFilterForMode(overrides.mode) : undefined;
+      const effRole = overrides.role ? normalizeSubagentRole(overrides.role) ?? "executor" : "executor";
+      const roleToolFilter = toolFilterForRole(effRole, overrides.mode);
       const request = {
         parent,
         prompt: [{ type: "text", text: promptText }],
-        ...(modeToolFilter ? { toolFilter: modeToolFilter } : {}),
+        ...(roleToolFilter ? { toolFilter: roleToolFilter } : {}),
       };
       // g-133：模型路由合成（overrides > project.yaml > profile 全局默认 > 继承），核心逻辑在 core/ops.ts
       const eff = resolveModelRoute(
@@ -2348,18 +2557,16 @@ export function apply(ctx, config) {
             fullPrompt,
             req,
             rRoot,
-            { provider: effProvider, model: effModel, reasoning_effort: effReasoningEffort },
+            { provider: effProvider, model: effModel, reasoning_effort: effReasoningEffort, role: "collector" },
           );
-          let attempt = null;
           if (spawned.error) {
             console.error("[dsh-graph-host] start-collection 子代理启动失败:", spawned.error);
           } else {
-            attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
-            bindAttemptChild(rRoot, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
             // 事件先行：card.collecting（bindCardChild 写 child_id/parent_session_id）。
+            // g-242：collector 依托卡片生命周期协作，不创建虚假 attempt
             bindCardChild(rRoot, goal, card, { childId: spawned.childId, parentSessionId: spawned.parentSessionId, actor: "human:gui", provider: effProvider, model: effModel });
           }
-          json(res, 200, { ok: true, card, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
+          json(res, 200, { ok: true, card, attempt: null, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
@@ -2380,8 +2587,12 @@ export function apply(ctx, config) {
           const ws = workspaceOf(req, body) ?? dirname(rRoot);
           const goalRel = relative(ws, goalFile);
           const cfg = readExecutorModel(rRoot);
-          const prompt = `你是固定的产品经理 Agent。请只向主管 Agent 返回“目标定义/润色建议”，不要调用任何 graph_* 工具，不要修改目标、不改变状态、版本或执行语义。\n\n目标 ID：${goal}\ngoal.md 工作区相对路径：${goalRel}\n人工指导意见：${String(guidance ?? "").trim() || "（无）"}\n\n请先用 read 工具读取上述 goal.md，再围绕目标价值、背景、范围、可验证判据、边界/错误路径、风险和人工核验给出简洁、可执行的润色建议；保留原意，不直接替换或写入目标。`;
-          const spawned = await spawnChild(`graph:define-polish/${goal}`, prompt, req, rRoot, cfg);
+          // g-168/g-242 PM 提示词契约：包含 goal.md 工作区相对路径，要求先用 read 工具读取上述 goal.md 并附带指导意见
+          const prompt = formatPmPrompt({ goalId: goal, goalRel, guidance });
+          const spawned = await spawnChild(`graph:define-polish/${goal}`, prompt, req, rRoot, {
+            ...cfg,
+            role: "pm",
+          });
           if (spawned.error) return json(res, 200, { ok: false, child_error: spawned.error });
           json(res, 200, { ok: true, child_id: spawned.childId, model_route: spawned.model_route ?? null });
         } catch (e) {
@@ -2390,7 +2601,7 @@ export function apply(ctx, config) {
         }
       },
     },
-    // g-109：start-execution 端点——点击「执行」直接创建执行子代理
+    // g-109 / g-241：start-execution 端点——通过共享执行服务派发执行子代理
     {
       path: "/api/dsh-graph/start-execution",
       handler: async (req, res) => {
@@ -2399,142 +2610,45 @@ export function apply(ctx, config) {
           const body = await readBody(req);
           const { goal, provider, model, reasoning_effort, mode, worktree, attempt_brief, task_type, baseline_commit, source_attempt, acceptance_items } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
-          // 校验 attempt_brief 类型（g-150 review 问题 4）
-          if (attempt_brief !== undefined && attempt_brief !== null && typeof attempt_brief !== "string") {
-            return json(res, 400, { error: "attempt_brief 必须是 string 类型" });
-          }
-          if (mode !== undefined && mode !== null && mode !== "") {
-            if (typeof mode !== "string" || !normalizeSubagentMode(mode)) {
-              return json(res, 400, { error: `mode 只允许 ${SUBAGENT_MODES.join("/")}` });
-            }
-          }
-          const structuredFieldError = validateAttemptPromptFields({
-            taskType: task_type,
-            baselineCommit: baseline_commit,
-            sourceAttempt: source_attempt,
-            acceptanceItems: acceptance_items,
-          });
-          if (structuredFieldError) return json(res, 400, { error: structuredFieldError });
           const rRoot = rootForReq(req, body);
-          const goalFile = findGoalFile(rRoot, goal);
-          const doc = loadGoal(goalFile);
-          const descMatch = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
-          const critMatch = doc.body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
-          const desc = descMatch ? descMatch[1].trim() : "（无描述）";
-          const crit = critMatch ? critMatch[1].trim() : "（无判据）";
-          // g-120：按 context_cards 顺序收集 filled/reviewed 卡片成果——注入清单先于
-          // startAttempt 算出（事件先行，记入 attempt.started 的 details.injected_cards），
-          // 成果段注入 spawn prompt（子代理直接使用，无需猜卡片路径）
-          const injectedCards = harvestedCards(rRoot, goal).map((c) => c.id);
-          const cardsSection = formatHarvestedCardsSection(rRoot, goal);
-          // g-150：读取已确认且未被覆盖的 attempt handoff（事件先行）
-          const confirmedHandoffs = harvestReviewedAttemptHandoffs(rRoot, goal);
-          const injectedHandoffRefs = confirmedHandoffs.map((h) => ({ id: h.id, revision: h.revision, source_attempts: h.source_attempts }));
-          const handoffsSection = formatReviewedAttemptHandoffsSection(rRoot, goal);
-          // g-150 范围扩展：读取最近指令（注入 prompt；空时不影响现有 prompt 行为）
-          let gType = "task";
-          try { gType = normalizeGoalType(loadGoal(findGoalFile(rRoot, goal)).meta.type); } catch {}
-          const worktreeBlock = resolveWorktreeGuide(gType, worktree);
-          const currentDirective = readGoalDirective(rRoot, goal);
-          const projectExec = readExecutorModel(rRoot);
-          const globalSettings = readGraphSettings();
-          const eff = resolveModelRoute(
-            { provider, model, reasoning_effort },
-            projectExec,
-            globalSettings,
-          );
-          const effProvider = eff.provider;
-          const effModel = eff.model;
-           const effReasoningEffort = eff.reasoning_effort;
-          const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
-          const effModeRes = resolveSubagentMode(mode, projectExec.mode, globalSettings.subagentMode);
-          const attempt = startAttempt(rRoot, goal, {
-            executor: "agent:executor",
-            actor: "human:gui",
-            injectedCards,
-            injectedHandoffs: injectedHandoffRefs,
-            attemptBrief: attempt_brief ?? undefined,
-            injectedDirective: currentDirective ?? undefined,
-            provider: effProvider,
-            model: effModel,
-            modelRoute: effRoute,
-            reasoningEffort: effReasoningEffort,
-            mode: effModeRes.mode,
-            modeSource: effModeRes.source,
-          });
-          // g-113 修正：子代理工作目录 = 会话 workspace（继承 session.header.cwd），
-          // 相对路径以 workspace 根为基准（.dsh-graph/versions/...），不是服务进程 cwd 或 .dsh-graph 目录
-          // g-149：workspaceOf 可能返回 null（无显式 workspace 但有绝对 config.root），
-          // 此时用 rRoot 的父目录作为相对路径基准
           const ws = workspaceOf(req, body) ?? dirname(rRoot);
-          const rel = relative(ws, goalFile);
-          // g-133：子代理默认补充提示词（profile 全局默认，workspace 覆盖三态合成后注入）
-          const subagentPromptSection = (() => {
-            const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(rRoot, "subagent_prompt"));
-            return p ? `## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）\n\n${p}` : "";
-          })();
-          // g-191：子代理执行策略/模式说明段
-          const modeStrategySection = effModeRes.prompt ? `## 子代理执行模式（${effModeRes.mode}）\n\n${effModeRes.prompt}` : "";
-          const targetContext = [
-            "## 目标描述",
-            desc,
-            "",
-            "## 质量判据",
-            crit,
-          ].join(String.fromCharCode(10));
-          // g-228：所有 supervisor 执行 prompt 统一由单一模板入口组装。
-          const prompt = formatAttemptPrompt({
+          const { supervisorId, parent, error: parentError } = resolveSpawnParent(rRoot);
+          const ac = new AbortController();
+          req.on("close", () => ac.abort());
+          const execRes = await dispatchExecutionAttempt({
+            root: rRoot,
+            workspace: ws,
             goal,
-            attempt,
-            goalRel: rel,
-            attemptBrief: attempt_brief,
-            directive: currentDirective,
-            taskType: task_type,
-            baselineCommit: baseline_commit,
-            sourceAttempt: source_attempt,
-            acceptanceItems: acceptance_items,
-            handoffSection: handoffsSection,
-            cardsSection,
-            targetContext,
-            subagentPromptSection,
-            modeStrategySection,
-            worktreeBlock,
+            entrypoint: "http",
+            actor: "human:gui",
+            executor: "agent:executor",
+            parentAgent: parent,
+            parentSessionId: supervisorId,
+            signal: ac.signal,
+            attempt_brief,
+            task_type,
+            baseline_commit,
+            source_attempt,
+            acceptance_items,
+            provider,
+            model,
+            reasoning_effort,
+            mode,
+            worktree,
+            force: body.force === true,
           });
-          const spawned = await spawnChild(`graph:exec/${goal}/${attempt}`, prompt, req, rRoot, {
-            provider: effProvider,
-            model: effModel,
-            reasoning_effort: effReasoningEffort,
-            mode: effModeRes.mode,
-          });
-          if (spawned.error) {
-            console.error("[dsh-graph-host] start-execution 子代理启动失败:", spawned.error);
-          } else {
-            bindAttemptChild(
-              rRoot,
-              goal,
-              attempt,
-              spawned.childId,
-              "human:gui",
-              spawned.parentSessionId,
-              effProvider,
-              effModel,
-              effRoute,
-              effModeRes.mode,
-              effModeRes.source,
-            );
-            // 负责人 2026-08-22：执行按钮派发后目标必须落到执行 lane——自动迁 in_progress
-            try { transition(rRoot, goal, "in_progress", { reason: "attempt 派发（GUI 执行）", actor: "human:gui" }); } catch { /* 已在 in_progress 或迁移被拒 */ }
-          }
           json(res, 200, {
             ok: true,
-            attempt,
-            child_id: spawned.childId,
-            child_error: spawned.error,
-            model_route: effRoute,
-            mode: effModeRes.mode,
-            mode_source: effModeRes.source,
-            injected_cards: injectedCards,
-            injected_handoffs: injectedHandoffRefs,
+            attempt: execRes.attempt,
+            child_id: execRes.child_id,
+            child_error: execRes.child_error ?? (parent ? null : parentError),
+            brief: execRes.brief,
+            brief_source: execRes.brief_source,
+            model_route: execRes.model_route,
+            mode: execRes.mode,
+            mode_source: execRes.mode_source,
+            injected_cards: execRes.injected_cards,
+            injected_handoffs: execRes.injected_handoffs,
           });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;

@@ -977,6 +977,45 @@ window.__ModuleLoader__.load({
       if (end < s.length) snippet = snippet + "…";
       return snippet;
     }
+    // ===== g-239：运行/空闲生命周期投影与人工可读 status 区分 =====
+    // 区分会话/任务真实生命周期（running / idle / blocked / error / done）与人工汇报 status_line，
+    // 彻底解决结束、阻塞、失败、长任务场景长期显示失实运行态（如流动背景、虚假 ⏳/✅）的问题。
+    function formatStatusWithLifecycle(statusLine, running, blocked) {
+      if (!statusLine) {
+        return {
+          icon: "",
+          text: "",
+          fullText: null,
+          isRunning: false,
+          isBlocked: false,
+          isError: false,
+          isDone: false,
+        };
+      }
+      const raw = String(statusLine).trim();
+      const isBlocked = !!blocked || /阻塞|blocked/i.test(raw);
+      const isError = !isBlocked && /失败|错误|报错|failed|error/i.test(raw);
+      const isDone = !isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw);
+      
+      let icon = "⏳ ";
+      if (isBlocked) icon = "⛔ ";
+      else if (isError) icon = "❌ ";
+      else if (isDone) icon = "✅ ";
+      else if (!running) icon = "⏸ ";
+      else icon = "⏳ ";
+
+      // 仅当生命周期处于运行态且非阻塞/非错误/非完成终态时，才维持运行中流动指示
+      const isRunning = !isBlocked && !isError && !isDone && !!running;
+      return {
+        icon,
+        text: raw,
+        fullText: icon + raw,
+        isRunning,
+        isBlocked,
+        isError,
+        isDone,
+      };
+    }
 
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // 数据源：sessions.binding(childId).session（uSES 快照 subscribe/getSnapshot），
     // 流式行读 chat.legacy.partial（必须先 session.open()），token/上下文走投影
@@ -1451,11 +1490,13 @@ window.__ModuleLoader__.load({
       const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
       const statusFull = running ? "运行中" : "空闲";
       // 第二行 status_line 内容（stale 时也显示全文，tooltip 补延续时长——g-124）
+      // g-239：区分真实生命周期运行态与人工汇报文本，避免空闲时谎报 ✅ 或失实展示运行态
+      const formattedStatus = formatStatusWithLifecycle(props.statusLine, running, false);
       const statusRowText = props.statusLine
-        ? (running ? "⏳ " : "✅ ") + props.statusLine
+        ? formattedStatus.fullText
         : (staleStatus ? "⏳ 状态延续 " + staleDur : null);
-      // g-129: 空闲时 status_line 背景不带动画
-      const statusRowClass = running && props.statusLine ? "dg-running-flow" : "";
+      // g-129 & g-239: 仅当真正 running 且无终态/阻塞/失败时带动画
+      const statusRowClass = formattedStatus.isRunning ? "dg-running-flow" : "";
       const lineEl = line
         ? h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
                                 textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 } },
@@ -1902,9 +1943,10 @@ window.__ModuleLoader__.load({
       const modelText = formatModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr);
       const shortModel = formatShortModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute);
       // 折叠态标题行的内联摘要：状态 + statusLine + token/ctx + 模型短名
+      // g-239: 使用 formatStatusWithLifecycle 正确推导前缀图标
       const collapsedBits = [
         statusLabel,
-        statusLine ? (running ? "⏳ " : "✅ ") + statusLine : null,
+        statusLine ? formatStatusWithLifecycle(statusLine, running, false).fullText : null,
         meter || null,
         shortModel,
       ].filter(Boolean).join(" ｜ ");
@@ -2372,21 +2414,25 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // g-a92e1406：状态摘要行——运行中带流动背景+图标动画，阻塞行静态
+    // g-a92e1406：状态摘要行——g-239 区分运行/空闲生命周期投影与人工可读 status，
+    // 阻塞/错误/完成/空闲态不显示失实流动动画
     function StatusLine(props) {
       const { text, blocked, running } = props;
       if (!text) return null;
-      if (blocked) {
-        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + text);
+      const formatted = formatStatusWithLifecycle(text, running, blocked);
+      if (formatted.isBlocked) {
+        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + formatted.text);
       }
-      const animClass = running ? "dg-running-flow" : "";
+      if (formatted.isError) {
+        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "❌ " + formatted.text);
+      }
+      const animClass = formatted.isRunning ? "dg-running-flow" : "";
       return h(
         "div", { className: animClass, style: { ...S.statusLine, marginTop: 3 } },
-        h("span", { className: running ? "dg-icon-pulse" : "" }, "⏳ "),
-        text,
+        h("span", { className: formatted.isRunning ? "dg-icon-pulse" : "" }, formatted.icon),
+        formatted.text,
       );
     }
-
     // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑 + g-128 删除按钮
     function CardDrawer(props) {
       const [state, setState] = React.useState({ loading: true });
@@ -4551,6 +4597,7 @@ window.__ModuleLoader__.load({
       const { goalId, goalData, supervisorSession, onConfirm, onCancel } = props;
       const [loading, setLoading] = React.useState(false);
       const [note, setNote] = React.useState(null);
+      const [brief, setBrief] = React.useState(""); // g-236：可选执行 brief
       const hasChild = !!(goalData?.attempt_child_id);
       const hasCriteria = !!(goalData?.criteria_count);
       const oldChildId = goalData?.attempt_child_id ?? null;
@@ -4604,16 +4651,21 @@ window.__ModuleLoader__.load({
           } else {
             // 无子代理 → 派发新执行子代理
             setNote("派发子代理…");
+            const body = { goal: goalId };
+            // g-236：传递用户提供的 brief（可选，服务端会自动从目标描述生成默认值）
+            if (brief.trim()) body.attempt_brief = brief.trim();
             const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ goal: goalId }),
+              body: JSON.stringify(body),
             });
             const data = await r.json();
             if (data.ok) {
               if (data.child_id) {
-                setNote("✅ 已派发执行子代理，id：" + data.child_id);
-                showToast("✅ 已派发执行子代理");
+                // g-236：显示 brief 来源（用户输入 vs 自动生成）
+                const sourceHint = data.brief_source === "auto_from_desc" ? "（已从目标描述自动生成 brief）" : "";
+                setNote("✅ 已派发执行子代理，id：" + data.child_id + sourceHint);
+                showToast("✅ 已派发执行子代理" + sourceHint);
               } else if (data.child_error) {
                 setNote("⚠️ 子代理启动失败：" + data.child_error);
               } else {
@@ -4655,6 +4707,17 @@ window.__ModuleLoader__.load({
             ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginBottom: 4 } },
                 "⚠️ 质量判据尚未登记——将以授权模式强制迁移到执行列。")
             : null,
+          // g-236：可选执行 brief 输入（无 brief 时服务端自动从目标描述生成默认 action）
+          !hasChild ? h("div", { style: { marginBottom: 8 } },
+            h("div", { style: { fontSize: 12, marginBottom: 4, opacity: 0.8 } },
+              "📝 执行 brief（可选，留空则自动从目标描述生成）："),
+            h("textarea", {
+              style: { ...S.promptInput, width: "100%", minHeight: 48, resize: "vertical", fontSize: 12, boxSizing: "border-box" },
+              value: brief,
+              placeholder: "例如：修复登录页面的样式问题…",
+              onChange: (e) => setBrief(e.target.value),
+            }),
+          ) : null,
           h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
             h("button", {
               style: { ...S.btnPrimary, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-primary",

@@ -590,5 +590,44 @@
       if (end < s.length) snippet = snippet + "…";
       return snippet;
     }
+    // ===== g-239：运行/空闲生命周期投影与人工可读 status 区分 =====
+    // 区分会话/任务真实生命周期（running / idle / blocked / error / done）与人工汇报 status_line，
+    // 彻底解决结束、阻塞、失败、长任务场景长期显示失实运行态（如流动背景、虚假 ⏳/✅）的问题。
+    function formatStatusWithLifecycle(statusLine, running, blocked) {
+      if (!statusLine) {
+        return {
+          icon: "",
+          text: "",
+          fullText: null,
+          isRunning: false,
+          isBlocked: false,
+          isError: false,
+          isDone: false,
+        };
+      }
+      const raw = String(statusLine).trim();
+      const isBlocked = !!blocked || /阻塞|blocked/i.test(raw);
+      const isError = !isBlocked && /失败|错误|报错|failed|error/i.test(raw);
+      const isDone = !isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw);
+      
+      let icon = "⏳ ";
+      if (isBlocked) icon = "⛔ ";
+      else if (isError) icon = "❌ ";
+      else if (isDone) icon = "✅ ";
+      else if (!running) icon = "⏸ ";
+      else icon = "⏳ ";
+
+      // 仅当生命周期处于运行态且非阻塞/非错误/非完成终态时，才维持运行中流动指示
+      const isRunning = !isBlocked && !isError && !isDone && !!running;
+      return {
+        icon,
+        text: raw,
+        fullText: icon + raw,
+        isRunning,
+        isBlocked,
+        isError,
+        isDone,
+      };
+    }
 
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====
