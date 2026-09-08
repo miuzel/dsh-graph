@@ -414,9 +414,10 @@
       const modelText = formatModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr);
       const shortModel = formatShortModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute);
       // 折叠态标题行的内联摘要：状态 + statusLine + token/ctx + 模型短名
+      // g-239: 使用 formatStatusWithLifecycle 正确推导前缀图标
       const collapsedBits = [
         statusLabel,
-        statusLine ? (running ? "⏳ " : "✅ ") + statusLine : null,
+        statusLine ? formatStatusWithLifecycle(statusLine, running, false).fullText : null,
         meter || null,
         shortModel,
       ].filter(Boolean).join(" ｜ ");
