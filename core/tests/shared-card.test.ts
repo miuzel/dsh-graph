@@ -1118,6 +1118,6 @@ test("g-240: 共享卡在预算控制下保留 scope=共享、精确路径与 di
   assert.ok(sec.includes("scope=共享"), "保留共享标记");
   assert.ok(sec.includes("摘要：架构约束摘要"), "保留摘要");
   assert.ok(sec.includes("⚠️ 正文已超出单卡预算 400 字已截断"), "超出单卡预算截断");
-  assert.ok(sec.includes(`shared-cards/${sid}.md`), "给出共享卡的精确文件路径");
+  assert.ok(sec.includes(`.dsh-graph/shared-cards/${sid}.md`), "给出共享卡的精确文件路径（以 .dsh-graph/ 开头）");
   assert.match(sec, /digest=[a-f0-9]{16}/, "包含审计摘要");
 });

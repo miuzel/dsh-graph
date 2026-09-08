@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -331,4 +331,27 @@ test("g-240: 多卡注入总预算控制与折叠机制，保留附件引用且�
   assert.ok(sec.includes(`cards/`), "折叠卡片依然提供精确路径以供按需查阅");
   assert.ok(sec.includes("@att/doc-10.pdf"), "折叠卡片依然保留附件引用");
   assert.ok(sec.includes("⚠️ 卡片总预算限制：已完整展开"), "底部输出明确可见的总预算统计说明");
+});
+
+test("g-240: 卡片精确路径以 .dsh-graph/ 开头且在工作区根相对路径真实可读", () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-ws-path-"));
+  const root = join(ws, ".dsh-graph");
+  init(root);
+  const goal = createGoal(root, { title: "路径测试目标", version: "v-t", actor: "test" });
+  const c1 = addCard(root, goal, { title: "卡片1", kind: "text", actor: "test", scope: "goal" });
+  const longText = "测试内容数据。".repeat(200);
+  fillCard(root, goal, c1, { text: longText, summary: "摘要说明", by: "human:tester", actor: "test" });
+
+  const sec = formatHarvestedCardsSection(root, goal, { maxCardChars: 100 });
+  // 提取截断提示中的精确路径
+  const match = sec.match(/完整内容请读取 ([\S]+)，digest=/);
+  assert.ok(match, "应包含精确卡片路径");
+  const cardRelPath = match[1];
+  assert.ok(cardRelPath.startsWith(".dsh-graph/"), `卡片路径必须以 .dsh-graph/ 开头，当前为: ${cardRelPath}`);
+
+  // 验证在工作区根拼接后真实存在且可读取
+  const fullPath = join(ws, cardRelPath);
+  assert.ok(existsSync(fullPath), `拼接工作区路径后文件必须存在: ${fullPath}`);
+  const content = readFileSync(fullPath, "utf8");
+  assert.ok(content.includes("测试内容数据。"), "从该精确路径可读取到卡片原始内容");
 });

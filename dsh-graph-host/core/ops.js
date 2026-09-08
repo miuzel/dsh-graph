@@ -3156,6 +3156,14 @@ export function attachmentDigest(root, name) {
  *  悬空引用与坏卡片跳过（由 validate 报告），不在此抛错。
  *  g-183：共享引用解析到共享池权威内容（各 goal 引用读同一份）；
  *  引用 id 经 assertSafeId 安全解析，恶意/越界 ref 被跳过（统一安全解析）。 */
+/** 将 graph 内部卡片路径转换为相对工作区根的精确路径（以 .dsh-graph/ 开头，供执行者按需读取）。 */
+export function toWorkspaceCardPath(root, cardFile) {
+    if (basename(root) === ".dsh-graph") {
+        return relative(dirname(root), cardFile);
+    }
+    const rel = relative(root, cardFile);
+    return rel.startsWith(".dsh-graph/") ? rel : join(".dsh-graph", rel);
+}
 export function harvestedCards(root, goalId) {
     const file = findGoalFile(root, goalId);
     const dir = basename(file) === "goal.md" ? dirname(file) : null;
@@ -3178,7 +3186,7 @@ export function harvestedCards(root, goalId) {
             if (existsSync(ownFile)) {
                 cardFile = ownFile;
                 scope = "goal";
-                relPath = relative(root, ownFile);
+                relPath = toWorkspaceCardPath(root, ownFile);
             }
         }
         if (!cardFile) {
@@ -3187,7 +3195,7 @@ export function harvestedCards(root, goalId) {
                 continue; // 悬空引用（validate 管）
             cardFile = sharedFile;
             scope = "shared";
-            relPath = relative(root, sharedFile);
+            relPath = toWorkspaceCardPath(root, sharedFile);
         }
         try {
             const card = loadGoal(cardFile);
@@ -3254,7 +3262,7 @@ export function formatHarvestedCardsSection(root, goalId, opts) {
             c.summary ? `摘要：${c.summary}` : null,
             c.digest ? `digest=${c.digest}` : null,
         ].filter(Boolean).join("，");
-        const exactPath = c.path ? c.path : (c.scope === "shared" ? `.dsh-graph/shared/cards/${c.id}.md` : `cards/${c.id}.md`);
+        const exactPath = c.path ? c.path : (c.scope === "shared" ? `.dsh-graph/shared-cards/${c.id}.md` : `.dsh-graph/cards/${c.id}.md`);
         const atts = c.attachments.length
             ? `\n  附件引用：` + c.attachments.map((a) => `@att/${a}`).join("，")
             : "";
