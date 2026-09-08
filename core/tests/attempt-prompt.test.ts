@@ -1,6 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatAttemptPrompt } from "../../dsh-graph-host/index.js";
+import {
+  init,
+  createGoal,
+  startAttempt,
+  recordAttemptHandoff,
+  formatTargetContext,
+  formatReviewedAttemptHandoffsSection,
+} from "../ops.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const warning = "若本 prompt 同时含历史 handoff 与最新 brief，只执行 brief；handoff 不产生任何新任务。";
 
@@ -120,4 +131,67 @@ test("g-228 畸形结构化字段：组装不抛错且明确标记非法值", ()
   assert.match(output, /当前验收项（当前 attempt 数据）：（未提供）/);
   assert.match(output, /未提供原因：acceptance_items 含空值或非字符串/);
   assert.ok(output.trim().endsWith(warning));
+});
+
+test("g-240: 目标背景预算裁剪，质量判据（核心验收）完整保留，描述超长显式截断", () => {
+  const ultraLongDesc = "这是很长的背景描述段落，用于介绍历史成因与设计动机。".repeat(100);
+  const criteriaText = "1. 必须保证测试通过\n2. 严禁越界修改 main\n3. 必须包含完整证据";
+  const body = `## 目标描述\n${ultraLongDesc}\n\n## 质量判据\n${criteriaText}\n`;
+
+  const targetContext = formatTargetContext(body, { maxDescChars: 300, goalRel: ".dsh-graph/goals/g-test/goal.md" });
+
+  // 1. 质量判据必须 100% 完整保留
+  assert.ok(targetContext.includes(criteriaText), "质量判据属于核心验收判据，必须完整保留");
+  // 2. 超长目标描述必须被预算截断并给出截断提示与精确路径
+  assert.ok(targetContext.includes("⚠️ 目标描述超出预算已截断"), "超长描述超出预算时截断提示");
+  assert.ok(targetContext.includes(".dsh-graph/goals/g-test/goal.md"), "截断提示提供精确目标路径");
+  assert.ok(targetContext.length < ultraLongDesc.length / 2, "背景体积大幅削减");
+});
+
+test("g-240: 消除无条件重读全文：targetContext 内联时提示无需重读，缺失时提示用 read 工具", () => {
+  // 1. targetContext 已内联时
+  const promptWithContext = prompt({
+    targetContext: "## 目标描述\n简单描述\n\n## 质量判据\n1. 判据一",
+  });
+  assert.ok(
+    promptWithContext.includes("目标描述与质量判据已在下方基于当前快照内联，请直接依据执行；如需历史评论/台账可按需查阅，无需无条件重读全文"),
+    "内联背景时明确指导无需重复读取 goal.md",
+  );
+  assert.ok(!promptWithContext.includes("——用 read 工具读它，不要自己猜路径。"), "内联时消除无条件重读指令");
+
+  // 2. targetContext 未内联时（回退指令）
+  const promptWithoutContext = prompt({ targetContext: null });
+  assert.ok(
+    promptWithoutContext.includes("——用 read 工具读它，不要自己猜路径。"),
+    "无内联背景时保留回退读取指令",
+  );
+});
+
+test("g-240: Handoff 预算控制：超长 failures 截断，返工约束与验收命令始终完整保留", () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-hf-budget-"));
+  init(root);
+  const goal = createGoal(root, { title: "返工目标", version: "v-t", actor: "test" });
+  const attId = startAttempt(root, goal, { executor: "agent:executor", actor: "test" });
+
+  const ultraLongFailures = "已核实失败详尽堆栈追踪分析...".repeat(150);
+  const constraints = "1. 禁止修改 main 分支\n2. 必须隔离在独立 worktree";
+  const baseline = "commit 9362c30";
+  const verification = "node --test core/tests/*.test.ts";
+
+  recordAttemptHandoff(root, goal, {
+    actor: "human:gui",
+    confirmed_by: "human:gui",
+    source_attempts: [attId],
+    failures: ultraLongFailures,
+    constraints,
+    baseline,
+    verification,
+  });
+
+  const hfSection = formatReviewedAttemptHandoffsSection(root, goal, { maxFailuresChars: 400 });
+  assert.ok(hfSection.includes("⚠️ 已核实失败超出预算已截断；返工约束与验收命令保持完整"), "超长失败截断提示");
+  // 验证关键约束与验收命令保持完整
+  assert.ok(hfSection.includes(constraints), "返工约束 100% 完整保留");
+  assert.ok(hfSection.includes(baseline), "推荐基线 100% 完整保留");
+  assert.ok(hfSection.includes(verification), "验收命令 100% 完整保留");
 });

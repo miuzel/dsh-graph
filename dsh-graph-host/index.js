@@ -50,6 +50,7 @@ import {
   isMemoryToolsEnabled,
   setMemoryToolsEnabled,
   formatStandingMemorySection,
+  formatTargetContext,
   requestAcceptReview,
   resolveAccept,
   archiveGoal,
@@ -550,10 +551,13 @@ export function formatAttemptPrompt({
   const historyNotice = handoff ? "『前序 attempt 已确认 handoff』" : "『历史 handoff』";
   const goalValue = promptText(goal) || ATTEMPT_PROMPT_MISSING;
   const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
+  const context = promptText(targetContext);
   const positioning = [
     "【本次任务定位】这是一次 " + taskTypeLabel + " 任务；以下仅『本次 attempt brief/directive』为唯一 action 来源；" + historyNotice + "为约束/背景，仅供理解候选设计与禁项，不产生新任务。",
     "你是 dsh-graph 目标 " + goalValue + " 的执行 attempt " + attemptValue + "。",
-    "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "——用 read 工具读它，不要自己猜路径。",
+    context
+      ? "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "（目标描述与质量判据已在下方基于当前快照内联，请直接依据执行；如需历史评论/台账可按需查阅，无需无条件重读全文）。"
+      : "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "——用 read 工具读它，不要自己猜路径。",
   ].join("\n");
 
   const current = [
@@ -568,7 +572,6 @@ export function formatAttemptPrompt({
     "**directive（当前数据）**",
     renderPromptValue(currentDirective, "当前目标没有最近指令，或该值不是非空字符串"),
   ];
-  const context = promptText(targetContext);
   if (context) current.push("", "目标背景（来自当前 goal.md，仅供理解，不产生 action）", protectPromptMarkers(context));
 
   const override = [
@@ -807,7 +810,7 @@ export function apply(ctx, config) {
 
     const cards = harvestedCards(root, goal);
     const injectedCards = cards.map((c) => c.id);
-    const cardsSection = formatHarvestedCardsSection(root, goal, cards);
+    const cardsSection = formatHarvestedCardsSection(root, goal, undefined, cards);
 
     const confirmedHandoffs = harvestReviewedAttemptHandoffs(root, goal);
     const injectedHandoffRefs = confirmedHandoffs.map((h) => ({
@@ -815,7 +818,7 @@ export function apply(ctx, config) {
       revision: h.revision,
       source_attempts: h.source_attempts,
     }));
-    const handoffsSection = formatReviewedAttemptHandoffsSection(root, goal, confirmedHandoffs);
+    const handoffsSection = formatReviewedAttemptHandoffsSection(root, goal, undefined, confirmedHandoffs);
 
     const contextPayload = JSON.stringify({
       goal,

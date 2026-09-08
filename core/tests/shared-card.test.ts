@@ -1103,3 +1103,21 @@ test("父目录被替换为指向外部的 symlink：read/delete/store 拒绝且
   assert.ok(!existsSync(join(outside, "f.txt")), "不得在外部读取/删除");
   assert.ok(!existsSync(join(outside, "g.txt")), "不得在外部写入");
 });
+
+test("g-240: 共享卡在预算控制下保留 scope=共享、精确路径与 digest 审计", () => {
+  const root = tmpRoot();
+  const sid = createSharedCard(root, { title: "共享架构设计", kind: "text", actor: "test" });
+  const goal = createGoal(root, { title: "共享卡预算测试", version: "v-t", actor: "test" });
+  addSharedCardRef(root, goal, sid, "test");
+  const longContent = "这是共享卡的详细架构约束。".repeat(150);
+  fillCard(root, goal, sid, { text: longContent, summary: "架构约束摘要", by: "human:arch", actor: "test" });
+  reviewCard(root, goal, sid, { by: "human:lead", actor: "test" });
+
+  const sec = formatHarvestedCardsSection(root, goal, { maxCardChars: 400 });
+  assert.ok(sec.includes("共享架构设计"));
+  assert.ok(sec.includes("scope=共享"), "保留共享标记");
+  assert.ok(sec.includes("摘要：架构约束摘要"), "保留摘要");
+  assert.ok(sec.includes("⚠️ 正文已超出单卡预算 400 字已截断"), "超出单卡预算截断");
+  assert.ok(sec.includes(`.dsh-graph/shared-cards/${sid}.md`), "给出共享卡的精确文件路径（以 .dsh-graph/ 开头）");
+  assert.match(sec, /digest=[a-f0-9]{16}/, "包含审计摘要");
+});

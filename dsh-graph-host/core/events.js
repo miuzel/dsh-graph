@@ -304,12 +304,14 @@ export function replayMemory(events) {
             const text = ev.details?.text;
             const kind = ev.details?.kind === "user" ? "user" : "project";
             const scope = ev.details?.scope === "standing" ? "standing" : "on_demand";
+            const created_by = typeof ev.details?.created_by === "string" ? ev.details.created_by : (ev.actor || undefined);
             if (!id || typeof text !== "string")
                 continue;
             const entry = {
                 id,
                 kind,
                 scope,
+                created_by,
                 text,
                 importance: typeof ev.details?.importance === "number" ? ev.details.importance : undefined,
                 source_goal: typeof ev.details?.source_goal === "string" ? ev.details.source_goal : undefined,
@@ -329,8 +331,9 @@ export function replayMemory(events) {
             if (existing) {
                 const kind = ev.details?.kind === "user" || ev.details?.kind === "project" ? ev.details.kind : existing.kind;
                 const scope = ev.details?.scope === "standing" || ev.details?.scope === "on_demand" ? ev.details.scope : (existing.scope ?? "on_demand");
+                const created_by = existing.created_by ?? (typeof ev.details?.created_by === "string" ? ev.details.created_by : ev.actor);
                 const updated = {
-                    id: existing.id, kind, scope, text,
+                    id: existing.id, kind, scope, created_by, text,
                     importance: typeof ev.details?.importance === "number" ? ev.details.importance : existing.importance,
                     source_goal: typeof ev.details?.source_goal === "string" ? ev.details.source_goal : existing.source_goal,
                     created_at: existing.created_at,

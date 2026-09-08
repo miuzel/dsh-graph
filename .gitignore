@@ -23,3 +23,4 @@ handoffs/
 
 # g-142：worktree 目录不入 git——避免误提交 .worktrees/** 污染
 .worktrees/
+.pnpm-store/
