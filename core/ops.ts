@@ -4936,6 +4936,12 @@ export function deleteGoal(
   });
 }
 
+/** g-233：提取目标描述小节正文 */
+export function extractGoalDescription(body: string): string {
+  const m = (body ?? "").match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
+  return m ? m[1].trim() : "";
+}
+
 // ---- 看板数据投影（供 host 端点与文字版看板共用） ----
 
 export interface BoardGoal {
@@ -4979,6 +4985,8 @@ export interface BoardGoal {
   /** g-171：goal.md 的最后修改时间（statSync mtimeMs），供客户端「更新强调动画」10 秒窗口判定；
    *  仅下发毫秒时间戳，不暴露文件路径；缺失/不可读时为 null（旧 payload 兼容）。 */
   updated_at?: number | null;
+  /** g-233：目标正文描述（供看板全文搜索） */
+  description?: string;
 }
 
 export interface BoardVersion {
@@ -5103,6 +5111,7 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
       criteria_items: criteriaItems(doc.body),
       rules_snapshot: meta.rules_snapshot ?? null,
       updated_at: updatedAt,
+      description: extractGoalDescription(doc.body),
     };
   };
   const versions: BoardVersion[] = [];

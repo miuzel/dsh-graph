@@ -214,6 +214,31 @@ window.__ModuleLoader__.load({
       .dg-chevron:hover { background: rgba(128,128,128,.32); opacity: 1; }
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
+      /* g-233：搜索匹配与当前选中视觉反馈 */
+      .dg-card-matched { box-shadow: 0 0 0 1.5px rgba(255,193,7,.55) !important; }
+      .dg-card-search-current {
+        box-shadow: 0 0 0 2.5px #ff9800, 0 2px 14px rgba(255,152,0,.55) !important;
+        background: rgba(255,152,0,.14) !important;
+        animation: dg-search-pulse 2s infinite ease-in-out;
+      }
+      @keyframes dg-search-pulse {
+        0%, 100% { box-shadow: 0 0 0 2.5px #ff9800, 0 2px 14px rgba(255,152,0,.55); }
+        50% { box-shadow: 0 0 0 3.5px #ffb74d, 0 4px 18px rgba(255,152,0,.8); }
+      }
+      .dg-search-highlight {
+        background: rgba(255,235,59,.45);
+        color: inherit;
+        padding: 0 1px;
+        border-radius: 2px;
+        font-weight: 600;
+      }
+      .dg-search-highlight-current {
+        background: #ffd54f;
+        color: #111;
+        padding: 0 2px;
+        border-radius: 2px;
+        font-weight: 700;
+      }
       .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); background: var(--dsw-alias-bg-base, rgba(30,31,36,.85)); }
       /* g-216: 看板以低层级保留 composerSeat 输入框；看板打开时禁用并降下宿主 widthHandle，避免其遮挡/抢占看板边缘。 */
       .wSkVaW_root:has(.dg-kanban-root) .wSkVaW_widthHandle,
@@ -902,6 +927,56 @@ window.__ModuleLoader__.load({
           h("span", { style: { minWidth: "18px", textAlign: "right", opacity: 0.85, fontSize: 10 } }, `${remaining}s`)));
     }
 
+    // ===== g-233：搜索匹配与文字高亮辅助函数 =====
+    function escapeRegExp(str) {
+      return String(str ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    /**
+     * 将一段文本按照关键字高亮分割渲染为 React 元素数组
+     * @param {string} text - 待高亮正文
+     * @param {string} query - 搜索关键字
+     * @param {boolean} isCurrent - 是否为当前选中的匹配项
+     */
+    function renderHighlight(text, query, isCurrent = false) {
+      const s = String(text ?? "");
+      const q = String(query ?? "").trim();
+      if (!q || !s) return s;
+      const escaped = escapeRegExp(q);
+      const re = new RegExp(`(${escaped})`, "gi");
+      const parts = s.split(re);
+      if (parts.length <= 1) return s;
+      return parts.map((part, idx) => {
+        if (part.toLowerCase() === q.toLowerCase()) {
+          return h(
+            "mark",
+            {
+              key: "hl-" + idx,
+              className: isCurrent ? "dg-search-highlight-current" : "dg-search-highlight",
+            },
+            part,
+          );
+        }
+        return part;
+      });
+    }
+
+    /**
+     * 从目标正文描述中提取包含关键字的简短上下文片段（周围各约 25 字符）
+     */
+    function extractMatchSnippet(text, query) {
+      const s = String(text ?? "").replace(/\s+/g, " ");
+      const q = String(query ?? "").trim();
+      if (!s || !q) return "";
+      const idx = s.toLowerCase().indexOf(q.toLowerCase());
+      if (idx === -1) return "";
+      const start = Math.max(0, idx - 15);
+      const end = Math.min(s.length, idx + q.length + 25);
+      let snippet = s.slice(start, end);
+      if (start > 0) snippet = "…" + snippet;
+      if (end < s.length) snippet = snippet + "…";
+      return snippet;
+    }
     // ===== g-239：运行/空闲生命周期投影与人工可读 status 区分 =====
     // 区分会话/任务真实生命周期（running / idle / blocked / error / done）与人工汇报 status_line，
     // 彻底解决结束、阻塞、失败、长任务场景长期显示失实运行态（如流动背景、虚假 ⏳/✅）的问题。
@@ -2097,6 +2172,7 @@ window.__ModuleLoader__.load({
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
     function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag) {
+      const highlight = typeof renderHighlight === "function" ? renderHighlight : (text) => text;
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -2170,11 +2246,12 @@ window.__ModuleLoader__.load({
       const titleRow = h("div", { style: { lineHeight: 1.5 } },
         chevron,
         tBadge,
-        h("span", { style: { ...S.title, display: "inline", verticalAlign: "middle" } }, g.title));
+        h("span", { style: { ...S.title, display: "inline", verticalAlign: "middle" } }, highlight(g.title, g._searchQuery, g._isSearchCurrent)));
       // g-77647351：拖放 class 合并
       const dragClass = [
         "dg-card",
         activeGoal ? " dg-card-active" : "",
+        g._isSearchCurrent ? " dg-card-search-current" : (g._isSearchMatched ? " dg-card-matched" : ""),
         drag?.active ? " dg-dragging" : "",
         drag?.marker === "before" ? " dg-drop-before" : "",
         drag?.marker === "after" ? " dg-drop-after" : "",
@@ -2231,37 +2308,65 @@ window.__ModuleLoader__.load({
         // g-125 折叠态：仅核心——标题（≤2 行）+ 状态一行；不显示状态摘要、依赖、livestrip、执行按钮、上下文卡片
         return h(
           "div",
-          { key: g.id, style: cardStyle, className: dragClass,
+          { key: g.id, id: "goal-" + g.id, "data-goal-id": g.id, style: cardStyle, className: dragClass,
             title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
           polishOverlay,
           updateSheen,
-           titleRow,
+          titleRow,
           h(GoalTags, { tags: g._tags ?? g.tags }),
           h("div", { style: S.meta },
-            `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
-             h(CriteriaProgress, {
-               goalId: g.id,
-               items: g.criteria_items ?? g.criteriaItems,
-               count: g.criteria_count ?? g.criteriaCount,
-             })),
+            highlight(g.id, g._searchQuery, g._isSearchCurrent),
+            ` ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
+            h(CriteriaProgress, {
+              goalId: g.id,
+              items: g.criteria_items ?? g.criteriaItems,
+              count: g.criteria_count ?? g.criteriaCount,
+            })),
+          g._snippet ? h("div", {
+            style: {
+              fontSize: 11,
+              opacity: 0.85,
+              marginTop: 2,
+              fontStyle: "italic",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              maxWidth: "100%",
+            },
+            title: "正文匹配内容",
+          }, "📝 ", highlight(g._snippet, g._searchQuery, g._isSearchCurrent)) : null,
         );
       }
       return h(
         "div",
-        { key: g.id, style: cardStyle, className: dragClass,
+        { key: g.id, id: "goal-" + g.id, "data-goal-id": g.id, style: cardStyle, className: dragClass,
           title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
         polishOverlay,
         updateSheen,
-           titleRow,
+        titleRow,
         h(GoalTags, { tags: g._tags ?? g.tags }),
         h("div", { style: S.meta },
-          `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
+          highlight(g.id, g._searchQuery, g._isSearchCurrent),
+          ` ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
           h(CriteriaProgress, {
             goalId: g.id,
             items: g.criteria_items ?? g.criteriaItems,
             count: g.criteria_count ?? g.criteriaCount,
           }),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
+        g._snippet ? h("div", {
+          style: {
+            fontSize: 11,
+            opacity: 0.85,
+            marginTop: 2,
+            fontStyle: "italic",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            maxWidth: "100%",
+          },
+          title: "正文匹配内容",
+        }, "📝 ", highlight(g._snippet, g._searchQuery, g._isSearchCurrent)) : null,
         hasDep
           ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
           : null,
@@ -5158,6 +5263,60 @@ window.__ModuleLoader__.load({
       const [deliverColumnCollapsed, setDeliverColumnCollapsed] = React.useState(false);
       // g-162: 泳道折叠状态（active 版本泳道、独立目标泳道、backlog 泳道独立折叠，默认展开；只在当前页面生效）
       const [collapsedLanes, setCollapsedLanes] = React.useState({});
+      // g-233：目标搜索与导航状态
+      const [searchQuery, setSearchQuery] = React.useState("");
+      const [searchActiveQuery, setSearchActiveQuery] = React.useState("");
+      const [searchFullText, setSearchFullText] = React.useState(false);
+      const [searchMatches, setSearchMatches] = React.useState([]);
+      const [searchCurrentIndex, setSearchCurrentIndex] = React.useState(0);
+      const [searchFeedback, setSearchFeedback] = React.useState(null);
+      const searchInputRef = React.useRef(null);
+      // g-233 P1: 纯内存覆盖层——临时 unhide 的版本 slug 集合，不写持久底账
+      const [searchUnhiddenSlugs, setSearchUnhiddenSlugs] = React.useState(() => new Set());
+      // g-233 P2/P4: 临时状态记录栈——工作区绑定，记录因搜索自动展开的泳道与列，退出搜索时精准恢复
+      const tempExpandedRef = React.useRef({
+        ws: activeWs,
+        expandedLanes: new Set(),
+        openReleasedSlugs: new Set(),
+        deliverExpanded: false,
+        blockedExpanded: false,
+      });
+
+      // g-233 P2: 工作区切换时彻底重置搜索词、匹配结果与全部临时状态，防止跨工作区污染
+      React.useEffect(() => {
+        setSearchQuery("");
+        setSearchActiveQuery("");
+        setSearchMatches([]);
+        setSearchCurrentIndex(0);
+        setSearchFeedback(null);
+        setSearchUnhiddenSlugs(new Set());
+        tempExpandedRef.current = {
+          ws: activeWs,
+          expandedLanes: new Set(),
+          openReleasedSlugs: new Set(),
+          deliverExpanded: false,
+          blockedExpanded: false,
+        };
+      }, [activeWs, props?.sessionId]);
+
+      // g-233：全局 Ctrl+F / Cmd+F 聚焦看板搜索框
+      React.useEffect(() => {
+        const handleKeyDown = (e) => {
+          if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+            const activeEl = document.activeElement;
+            const isInput = activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.isContentEditable);
+            if (!isInput || activeEl === searchInputRef.current) {
+              e.preventDefault();
+              if (searchInputRef.current) {
+                searchInputRef.current.focus();
+                searchInputRef.current.select();
+              }
+            }
+          }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+      }, []);
       // g-77647351：拖拽状态机
       const [drag, setDrag] = React.useState(null); // {goalId, fromStatus, overGoalId, overStageKey, overHalf, laneKey}
       const dropCommitted = React.useRef(false);
@@ -5689,7 +5848,8 @@ window.__ModuleLoader__.load({
 
       const allActiveVersions = b.versions.filter((v) => v.status !== "released");
       const allReleasedVersions = b.versions.filter((v) => v.status === "released");
-      const hiddenVersionSet = new Set(hiddenVersionSlugs ?? []);
+      // g-233 P1: 纯内存覆盖层——临时可见版本从 hiddenVersionSet 排除，不写持久隐藏偏好
+      const hiddenVersionSet = new Set((hiddenVersionSlugs ?? []).filter((slug) => !searchUnhiddenSlugs.has(slug)));
       const active = allActiveVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       const released = allReleasedVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       // 全量目标 id→status 映射（依赖徽章状态化，发现#23：已交付依赖算「依赖满足」）
@@ -5705,6 +5865,243 @@ window.__ModuleLoader__.load({
         ...b.standalone,
         ...b.backlog,
       ];
+
+      // ===== g-233: 目标搜索与导航核心函数 =====
+      // g-233 P4: 用户显式操作泳道折叠状态，从临时恢复列表中移除（用户意图优先）
+      const toggleLaneCollapse = (key, collapse) => {
+        tempExpandedRef.current.expandedLanes.delete(key);
+        setCollapsedLanes((prev) => ({ ...prev, [key]: collapse }));
+      };
+
+      // g-233 P4: 用户显式操作已发布版本展开/折叠，从临时恢复列表中移除
+      const toggleReleasedOpen = (slug, openState) => {
+        tempExpandedRef.current.openReleasedSlugs.delete(slug);
+        setOpenReleased((prev) => ({ ...prev, [slug]: openState }));
+      };
+
+      const exitSearch = () => {
+        // P2: 检查工作区一致性，跨工作区时直接丢弃不触碰
+        if (tempExpandedRef.current.ws && tempExpandedRef.current.ws !== activeWs) {
+          tempExpandedRef.current = {
+            ws: activeWs,
+            expandedLanes: new Set(),
+            openReleasedSlugs: new Set(),
+            deliverExpanded: false,
+            blockedExpanded: false,
+          };
+          setSearchActiveQuery("");
+          setSearchMatches([]);
+          setSearchCurrentIndex(0);
+          setSearchFeedback(null);
+          setSearchUnhiddenSlugs(new Set());
+          return;
+        }
+
+        const { expandedLanes, openReleasedSlugs, deliverExpanded, blockedExpanded } = tempExpandedRef.current;
+        // P1: 临时 unhide 纯内存清空，绝不触碰持久存储，持久隐藏偏好零污染
+        setSearchUnhiddenSlugs(new Set());
+
+        // P4: 恢复仅针对用户未主动操作过的条目（用户显式操作已在 toggle 时从 Set 中移出）
+        if (expandedLanes && expandedLanes.size > 0) {
+          setCollapsedLanes((prev) => {
+            const next = { ...prev };
+            for (const key of expandedLanes) next[key] = true;
+            return next;
+          });
+        }
+        if (openReleasedSlugs && openReleasedSlugs.size > 0) {
+          setOpenReleased((prev) => {
+            const next = { ...prev };
+            for (const slug of openReleasedSlugs) delete next[slug];
+            return next;
+          });
+        }
+        if (deliverExpanded) setDeliverColumnCollapsed(true);
+        if (blockedExpanded) setBlockedColumnCollapsed(true);
+
+        tempExpandedRef.current = {
+          ws: activeWs,
+          expandedLanes: new Set(),
+          openReleasedSlugs: new Set(),
+          deliverExpanded: false,
+          blockedExpanded: false,
+        };
+        setSearchActiveQuery("");
+        setSearchMatches([]);
+        setSearchCurrentIndex(0);
+        setSearchFeedback(null);
+      };
+
+      const navigateToMatch = (idx, matchesList) => {
+        const matches = matchesList ?? searchMatches;
+        if (!matches.length) return;
+        const targetIdx = ((idx % matches.length) + matches.length) % matches.length;
+        setSearchCurrentIndex(targetIdx);
+        const target = matches[targetIdx];
+        if (!target) return;
+
+        // 1. 若在隐藏版本内，临时 unhide（P1: 纯内存覆盖层，不写持久底账）
+        if (target.versionSlug) {
+          if ((hiddenVersionSlugs ?? []).includes(target.versionSlug)) {
+            setSearchUnhiddenSlugs((prev) => new Set([...prev, target.versionSlug]));
+          }
+        }
+
+        // 2. 若在折叠版本内，自动展开
+        if (target.isReleased && target.versionSlug) {
+          setOpenReleased((prev) => {
+            if (!prev[target.versionSlug]) {
+              tempExpandedRef.current.openReleasedSlugs.add(target.versionSlug);
+              return { ...prev, [target.versionSlug]: true };
+            }
+            return prev;
+          });
+        } else if (target.laneKey) {
+          setCollapsedLanes((prev) => {
+            if (prev[target.laneKey]) {
+              tempExpandedRef.current.expandedLanes.add(target.laneKey);
+              return { ...prev, [target.laneKey]: false };
+            }
+            return prev;
+          });
+        }
+
+        // 3. 若在折叠的交付/阻塞列，自动展开
+        const stage = stageOf(target.status);
+        if (stage === "deliver") {
+          setDeliverColumnCollapsed((prev) => {
+            if (prev) {
+              tempExpandedRef.current.deliverExpanded = true;
+              return false;
+            }
+            return prev;
+          });
+        } else if (stage === "blocked") {
+          setBlockedColumnCollapsed((prev) => {
+            if (prev) {
+              tempExpandedRef.current.blockedExpanded = true;
+              return false;
+            }
+            return prev;
+          });
+        }
+
+        // 4. 定位并平滑滚动到卡片
+        setTimeout(() => {
+          const el = document.getElementById("goal-" + target.id) || document.querySelector(`[data-goal-id="${target.id}"]`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+          }
+        }, 80);
+      };
+
+      const executeSearch = (queryText, isFullText = searchFullText) => {
+        const q = String(queryText ?? "").trim();
+        if (!q) {
+          setSearchFeedback("请输入搜索关键字");
+          setTimeout(() => setSearchFeedback((fb) => fb === "请输入搜索关键字" ? null : fb), 2500);
+          return;
+        }
+        setSearchFeedback(null);
+        const lowerQ = q.toLowerCase();
+
+        // 遍历所有目标候选（包含所有版本，含当前处于隐藏状态的版本）
+        const candidates = [];
+        for (const v of (b?.versions ?? [])) {
+          const isRel = v.status === "released";
+          for (const g of (v.goals ?? [])) {
+            candidates.push({
+              ...g,
+              versionSlug: v.slug,
+              versionName: v.name,
+              isReleased: isRel,
+              laneKey: isRel ? "rellane-" + v.slug : "v-" + v.slug,
+            });
+          }
+        }
+        for (const g of (b?.standalone ?? [])) {
+          candidates.push({
+            ...g,
+            versionSlug: null,
+            isReleased: false,
+            laneKey: "standalone",
+          });
+        }
+        for (const g of (b?.backlog ?? [])) {
+          candidates.push({
+            ...g,
+            versionSlug: null,
+            isReleased: false,
+            laneKey: "backlog",
+          });
+        }
+
+        const matches = [];
+        for (const c of candidates) {
+          const titleHit = String(c.title ?? "").toLowerCase().includes(lowerQ);
+          const idHit = String(c.id ?? "").toLowerCase().includes(lowerQ);
+          let descHit = false;
+          let snippet = "";
+          if (isFullText && c.description) {
+            descHit = String(c.description).toLowerCase().includes(lowerQ);
+            if (descHit) {
+              snippet = extractMatchSnippet(c.description, q);
+            }
+          }
+          if (titleHit || idHit || descHit) {
+            matches.push({
+              id: c.id,
+              title: c.title,
+              status: c.status,
+              versionSlug: c.versionSlug,
+              isReleased: c.isReleased,
+              laneKey: c.laneKey,
+              snippet: snippet || (descHit ? extractMatchSnippet(c.description, q) : ""),
+            });
+          }
+        }
+
+        setSearchActiveQuery(q);
+        setSearchMatches(matches);
+        if (matches.length === 0) {
+          setSearchFeedback("未找到匹配");
+        } else {
+          navigateToMatch(0, matches);
+        }
+      };
+
+      const handleSearchInputKeyDown = (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (e.shiftKey) {
+            if (searchMatches.length > 0) navigateToMatch(searchCurrentIndex - 1);
+          } else {
+            if (searchActiveQuery && searchActiveQuery === searchQuery.trim() && searchMatches.length > 0) {
+              navigateToMatch(searchCurrentIndex + 1);
+            } else {
+              executeSearch(searchQuery, searchFullText);
+            }
+          }
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          exitSearch();
+          if (searchInputRef.current) searchInputRef.current.blur();
+        } else if (e.key === "ArrowDown") {
+          if (searchActiveQuery && searchMatches.length > 0) {
+            e.preventDefault();
+            navigateToMatch(searchCurrentIndex + 1);
+          }
+        } else if (e.key === "ArrowUp") {
+          if (searchActiveQuery && searchMatches.length > 0) {
+            e.preventDefault();
+            navigateToMatch(searchCurrentIndex - 1);
+          }
+        }
+      };
+
+      const matchedGoalMap = new Map();
+      for (const m of searchMatches) matchedGoalMap.set(m.id, m);
+      const currentMatchedGoalId = searchMatches[searchCurrentIndex]?.id ?? null;
       // g-129/g-159: 打开新建目标弹窗；普通入口预选最新 active，泳道入口固定预选目标版本
       const openCreateGoal = (version) => {
         const entryVersion = version ?? null;
@@ -5742,7 +6139,7 @@ window.__ModuleLoader__.load({
               title: "点击展开泳道",
               onClick: (e) => {
                 e.stopPropagation();
-                setCollapsedLanes((prev) => ({ ...prev, [key]: false }));
+                toggleLaneCollapse(key, false);
               },
             },
               h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
@@ -5759,7 +6156,7 @@ window.__ModuleLoader__.load({
               key: key + "-collapsed-summary",
               style: { gridColumn: "2 / -1", ...S.cell, background: baseBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: "点击展开泳道",
-              onClick: () => setCollapsedLanes((prev) => ({ ...prev, [key]: false })),
+              onClick: () => toggleLaneCollapse(key, false),
             }, `▸ ${goals.length} 目标 · 点击展开`),
           ];
         }
@@ -5816,7 +6213,11 @@ window.__ModuleLoader__.load({
                 overflow: "hidden",
               },
               className: "dg-blocked-collapsed" + (isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? " dg-cell-drop-active" : ""),
-              onClick: (e) => { e.stopPropagation(); setBlockedColumnCollapsed(false); },
+              onClick: (e) => {
+                e.stopPropagation();
+                tempExpandedRef.current.blockedExpanded = false;
+                setBlockedColumnCollapsed(false);
+              },
               title: `点击展开阻塞列（${orderedGoals.length} 项）`,
               // g-127：折叠态仍支持拖放（拖入阻塞列）
               onDragOver: anyDrag ? (e) => {
@@ -5855,7 +6256,11 @@ window.__ModuleLoader__.load({
                 overflow: "hidden",
               },
               className: "dg-deliver-collapsed" + (isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? " dg-cell-drop-active" : ""),
-              onClick: (e) => { e.stopPropagation(); setDeliverColumnCollapsed(false); },
+              onClick: (e) => {
+                e.stopPropagation();
+                tempExpandedRef.current.deliverExpanded = false;
+                setDeliverColumnCollapsed(false);
+              },
               title: `点击展开交付列（${count} 项）`,
               onDragOver: anyDrag ? (e) => {
                 e.preventDefault();
@@ -5899,7 +6304,17 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag.overGoalId === g.id;
-              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              const mInfo = matchedGoalMap.get(g.id);
+              return Card({
+                ...g,
+                _tags: tagsFor(g),
+                _polishActive: polishGoal === g.id,
+                _updateEmphasis: updateEmphasis[g.id] ?? null,
+                _searchQuery: searchActiveQuery,
+                _isSearchMatched: !!mInfo,
+                _isSearchCurrent: currentMatchedGoalId === g.id,
+                _snippet: mInfo?.snippet ?? "",
+              }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -5990,7 +6405,7 @@ window.__ModuleLoader__.load({
              "aria-label": "折叠泳道",
              onClick: (e) => {
                e.stopPropagation();
-               setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
+               toggleLaneCollapse(key, true);
              },
            }, h("span", { className: "dg-lane-collapse-triangle" })) : null);
         return [labelEl, ...cells];
@@ -6010,7 +6425,7 @@ window.__ModuleLoader__.load({
               title: "点击展开泳道",
               onClick: (e) => {
                 e.stopPropagation();
-                setCollapsedLanes((prev) => ({ ...prev, [key]: false }));
+                toggleLaneCollapse(key, false);
               },
             },
               h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
@@ -6027,7 +6442,7 @@ window.__ModuleLoader__.load({
               key: key + "-collapsed-summary",
               style: { gridColumn: "2 / -1", ...S.cell, background: backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: "点击展开泳道",
-              onClick: () => setCollapsedLanes((prev) => ({ ...prev, [key]: false })),
+              onClick: () => toggleLaneCollapse(key, false),
             }, `▸ ${goals.length} 目标 · 点击展开`),
           ];
         }
@@ -6043,7 +6458,7 @@ window.__ModuleLoader__.load({
             "aria-label": "折叠泳道",
             onClick: (e) => {
               e.stopPropagation();
-              setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
+              toggleLaneCollapse(key, true);
             },
           }, h("span", { className: "dg-lane-collapse-triangle" })),
           h("button", {
@@ -6080,7 +6495,17 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
-              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              const mInfo = matchedGoalMap.get(g.id);
+              return Card({
+                ...g,
+                _tags: tagsFor(g),
+                _polishActive: polishGoal === g.id,
+                _updateEmphasis: updateEmphasis[g.id] ?? null,
+                _searchQuery: searchActiveQuery,
+                _isSearchMatched: !!mInfo,
+                _isSearchCurrent: currentMatchedGoalId === g.id,
+                _snippet: mInfo?.snippet ?? "",
+              }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -6171,7 +6596,10 @@ window.__ModuleLoader__.load({
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
               className: "dg-btn",
-              onClick: () => setHiddenVersionSlugs([]),
+              onClick: () => {
+                setSearchUnhiddenSlugs(new Set());
+                setHiddenVersionSlugs([]);
+              },
             }, "恢复显示全部版本")),
         );
       }
@@ -6185,11 +6613,11 @@ window.__ModuleLoader__.load({
           h("div", {
             key: "rel-" + v.slug, style: { ...S.collapsed, cursor: "pointer" }, className: "dg-collapsed",
             title: "点击展开/收起；点击版本名称打开详情",
-            onClick: () => { setOpenReleased({ ...openReleased, [v.slug]: !open }); },
+            onClick: () => { toggleReleasedOpen(v.slug, !open); },
           },
             h("span", {
               style: { cursor: "pointer" },
-              onClick: (e) => { e.stopPropagation(); setOpenReleased({ ...openReleased, [v.slug]: !open }); },
+              onClick: (e) => { e.stopPropagation(); toggleReleasedOpen(v.slug, !open); },
             }, `${open ? "▾" : "▸"}`),
             " ",
             h("span", {
@@ -6446,7 +6874,118 @@ window.__ModuleLoader__.load({
             "显示已归档"),
           // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
-            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (activeWs ?? "∅"))),
+            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (activeWs ?? "∅")),
+          // g-233：标题行最右侧增加搜索框
+          h("div", {
+            style: {
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              marginLeft: "auto",
+              flexShrink: 0,
+            },
+            className: "dg-search-bar",
+          },
+            h("div", { style: { position: "relative", display: "flex", alignItems: "center" } },
+              h("input", {
+                ref: searchInputRef,
+                type: "text",
+                className: "dg-search-input",
+                style: {
+                  width: searchActiveQuery ? 150 : 130,
+                  padding: "3px 22px 3px 8px",
+                  fontSize: 12,
+                  borderRadius: 4,
+                  border: "1px solid " + (searchActiveQuery ? "var(--dsw-alias-state-business-primary, #4c8dff)" : "var(--dsw-alias-border-l2, rgba(128,128,128,.35))"),
+                  background: "var(--dsw-alias-bg-layer-2, rgba(30,31,36,.92))",
+                  color: "var(--dsw-alias-label-primary, #e6e6e6)",
+                  outline: "none",
+                  boxSizing: "border-box",
+                  height: 24,
+                },
+                placeholder: "查找 goal (Ctrl+F)...",
+                value: searchQuery,
+                onChange: (e) => setSearchQuery(e.target.value),
+                onKeyDown: handleSearchInputKeyDown,
+              }),
+              searchQuery ? h("span", {
+                style: {
+                  position: "absolute",
+                  right: 6,
+                  cursor: "pointer",
+                  opacity: 0.6,
+                  fontSize: 12,
+                  lineHeight: 1,
+                  userSelect: "none",
+                },
+                title: "清空",
+                onClick: () => {
+                  setSearchQuery("");
+                  if (searchActiveQuery) exitSearch();
+                },
+              }, "✕") : null,
+            ),
+            h("label", {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                gap: 3,
+                fontSize: 12,
+                cursor: "pointer",
+                userSelect: "none",
+                opacity: 0.85,
+                whiteSpace: "nowrap",
+              },
+              title: "勾选后同时搜索目标正文描述",
+            },
+              h("input", {
+                type: "checkbox",
+                checked: searchFullText,
+                onChange: (e) => {
+                  const checked = e.target.checked;
+                  setSearchFullText(checked);
+                  if (searchActiveQuery) executeSearch(searchQuery, checked);
+                },
+              }),
+              "全文"),
+            searchActiveQuery && searchMatches.length > 0 ? h(React.Fragment, null,
+              h("span", {
+                style: {
+                  fontSize: 12,
+                  opacity: 0.9,
+                  fontWeight: 600,
+                  minWidth: 28,
+                  textAlign: "center",
+                  whiteSpace: "nowrap",
+                },
+              }, `${searchCurrentIndex + 1}/${searchMatches.length}`),
+              h("button", {
+                style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 13, lineHeight: 1.2, height: 24 },
+                className: "dg-btn",
+                title: "上一个 (Shift+Enter / ↑)",
+                onClick: () => navigateToMatch(searchCurrentIndex - 1),
+              }, "‹"),
+              h("button", {
+                style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 13, lineHeight: 1.2, height: 24 },
+                className: "dg-btn",
+                title: "下一个 (Enter / ↓)",
+                onClick: () => navigateToMatch(searchCurrentIndex + 1),
+              }, "›"),
+              h("button", {
+                style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 11, lineHeight: 1.2, height: 24 },
+                className: "dg-btn",
+                title: "退出查找 (Esc)",
+                onClick: exitSearch,
+              }, "✕"),
+            ) : null,
+            searchFeedback ? h("span", {
+              style: {
+                fontSize: 12,
+                color: searchFeedback === "未找到匹配" ? "var(--dsw-alias-state-error-primary, #ff6b6b)" : "var(--dsw-alias-label-secondary, #aaa)",
+                whiteSpace: "nowrap",
+              },
+            }, searchFeedback) : null,
+          )),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
@@ -6484,7 +7023,10 @@ window.__ModuleLoader__.load({
                 style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
                   ...(blockedColumnCollapsed ? { minWidth: 0, padding: "4px 0", overflow: "hidden", fontSize: 14, boxSizing: "border-box", textAlign: "center" } : {}),
                 },
-                onClick: () => setBlockedColumnCollapsed((p) => !p),
+                onClick: () => {
+                  tempExpandedRef.current.blockedExpanded = false;
+                  setBlockedColumnCollapsed((p) => !p);
+                },
                 title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
               }, blockedColumnCollapsed
                 ? "▸"
@@ -6497,7 +7039,10 @@ window.__ModuleLoader__.load({
                 style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
                   ...(deliverColumnCollapsed ? { minWidth: 0, padding: "4px 0", overflow: "hidden", fontSize: 14, boxSizing: "border-box", textAlign: "center" } : {}),
                 },
-                onClick: () => setDeliverColumnCollapsed((p) => !p),
+                onClick: () => {
+                  tempExpandedRef.current.deliverExpanded = false;
+                  setDeliverColumnCollapsed((p) => !p);
+                },
                 title: deliverColumnCollapsed ? "点击展开交付列" : "点击收起交付列",
               }, deliverColumnCollapsed
                 ? "▸"
@@ -6508,22 +7053,62 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }), deletedCardSignal, onDeletedCardHandled: () => setDeletedCardSignal(null), hiddenVersionSlugs, onUnhideVersion: (slug) => { setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug)); } })
+          ? h(GoalModal, {
+              id: modalGoal,
+              title: modalGoalData?.title,
+              onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); },
+              onPmStarted: setPolishGoal,
+              onPmFinished: () => setPolishGoal(null),
+              goalStatus,
+              supervisorSession: b.supervisorSession ?? null,
+              onRenamed: () => load(),
+              onArchived: () => load(),
+              onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              deletedCardSignal,
+              onDeletedCardHandled: () => setDeletedCardSignal(null),
+              hiddenVersionSlugs,
+              onUnhideVersion: (slug) => {
+                setSearchUnhiddenSlugs((prev) => {
+                  if (prev.has(slug)) {
+                    const next = new Set(prev);
+                    next.delete(slug);
+                    return next;
+                  }
+                  return prev;
+                });
+                setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug));
+              },
+            })
           : null,
         showVersionDrawer
           ? h(VersionDrawer, {
               versions: b.versions,
               hiddenVersionSlugs,
               onToggleVersion: (slug, visible) => {
+                setSearchUnhiddenSlugs((prev) => {
+                  if (prev.has(slug)) {
+                    const next = new Set(prev);
+                    next.delete(slug);
+                    return next;
+                  }
+                  return prev;
+                });
                 if (visible) {
                   setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug), b.versions);
                 } else {
                   setHiddenVersionSlugs([...hiddenVersionSlugs, slug], b.versions);
                 }
               },
-              onShowAll: () => setHiddenVersionSlugs([], b.versions),
-              onHideAll: () => setHiddenVersionSlugs(b.versions.map((v) => v.slug), b.versions),
+              onShowAll: () => {
+                setSearchUnhiddenSlugs(new Set());
+                setHiddenVersionSlugs([], b.versions);
+              },
+              onHideAll: () => {
+                setSearchUnhiddenSlugs(new Set());
+                setHiddenVersionSlugs(b.versions.map((v) => v.slug), b.versions);
+              },
               onShowActiveOnly: () => {
+                setSearchUnhiddenSlugs(new Set());
                 const releasedSlugs = b.versions.filter((v) => v.status === "released").map((v) => v.slug);
                 setHiddenVersionSlugs(releasedSlugs, b.versions);
               },

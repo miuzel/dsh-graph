@@ -540,6 +540,56 @@
           h("span", { style: { minWidth: "18px", textAlign: "right", opacity: 0.85, fontSize: 10 } }, `${remaining}s`)));
     }
 
+    // ===== g-233：搜索匹配与文字高亮辅助函数 =====
+    function escapeRegExp(str) {
+      return String(str ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    /**
+     * 将一段文本按照关键字高亮分割渲染为 React 元素数组
+     * @param {string} text - 待高亮正文
+     * @param {string} query - 搜索关键字
+     * @param {boolean} isCurrent - 是否为当前选中的匹配项
+     */
+    function renderHighlight(text, query, isCurrent = false) {
+      const s = String(text ?? "");
+      const q = String(query ?? "").trim();
+      if (!q || !s) return s;
+      const escaped = escapeRegExp(q);
+      const re = new RegExp(`(${escaped})`, "gi");
+      const parts = s.split(re);
+      if (parts.length <= 1) return s;
+      return parts.map((part, idx) => {
+        if (part.toLowerCase() === q.toLowerCase()) {
+          return h(
+            "mark",
+            {
+              key: "hl-" + idx,
+              className: isCurrent ? "dg-search-highlight-current" : "dg-search-highlight",
+            },
+            part,
+          );
+        }
+        return part;
+      });
+    }
+
+    /**
+     * 从目标正文描述中提取包含关键字的简短上下文片段（周围各约 25 字符）
+     */
+    function extractMatchSnippet(text, query) {
+      const s = String(text ?? "").replace(/\s+/g, " ");
+      const q = String(query ?? "").trim();
+      if (!s || !q) return "";
+      const idx = s.toLowerCase().indexOf(q.toLowerCase());
+      if (idx === -1) return "";
+      const start = Math.max(0, idx - 15);
+      const end = Math.min(s.length, idx + q.length + 25);
+      let snippet = s.slice(start, end);
+      if (start > 0) snippet = "…" + snippet;
+      if (end < s.length) snippet = snippet + "…";
+      return snippet;
+    }
     // ===== g-239：运行/空闲生命周期投影与人工可读 status 区分 =====
     // 区分会话/任务真实生命周期（running / idle / blocked / error / done）与人工汇报 status_line，
     // 彻底解决结束、阻塞、失败、长任务场景长期显示失实运行态（如流动背景、虚假 ⏳/✅）的问题。

@@ -98,6 +98,7 @@
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
     function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag) {
+      const highlight = typeof renderHighlight === "function" ? renderHighlight : (text) => text;
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -171,11 +172,12 @@
       const titleRow = h("div", { style: { lineHeight: 1.5 } },
         chevron,
         tBadge,
-        h("span", { style: { ...S.title, display: "inline", verticalAlign: "middle" } }, g.title));
+        h("span", { style: { ...S.title, display: "inline", verticalAlign: "middle" } }, highlight(g.title, g._searchQuery, g._isSearchCurrent)));
       // g-77647351：拖放 class 合并
       const dragClass = [
         "dg-card",
         activeGoal ? " dg-card-active" : "",
+        g._isSearchCurrent ? " dg-card-search-current" : (g._isSearchMatched ? " dg-card-matched" : ""),
         drag?.active ? " dg-dragging" : "",
         drag?.marker === "before" ? " dg-drop-before" : "",
         drag?.marker === "after" ? " dg-drop-after" : "",
@@ -232,37 +234,65 @@
         // g-125 折叠态：仅核心——标题（≤2 行）+ 状态一行；不显示状态摘要、依赖、livestrip、执行按钮、上下文卡片
         return h(
           "div",
-          { key: g.id, style: cardStyle, className: dragClass,
+          { key: g.id, id: "goal-" + g.id, "data-goal-id": g.id, style: cardStyle, className: dragClass,
             title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
           polishOverlay,
           updateSheen,
-           titleRow,
+          titleRow,
           h(GoalTags, { tags: g._tags ?? g.tags }),
           h("div", { style: S.meta },
-            `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
-             h(CriteriaProgress, {
-               goalId: g.id,
-               items: g.criteria_items ?? g.criteriaItems,
-               count: g.criteria_count ?? g.criteriaCount,
-             })),
+            highlight(g.id, g._searchQuery, g._isSearchCurrent),
+            ` ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
+            h(CriteriaProgress, {
+              goalId: g.id,
+              items: g.criteria_items ?? g.criteriaItems,
+              count: g.criteria_count ?? g.criteriaCount,
+            })),
+          g._snippet ? h("div", {
+            style: {
+              fontSize: 11,
+              opacity: 0.85,
+              marginTop: 2,
+              fontStyle: "italic",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              maxWidth: "100%",
+            },
+            title: "正文匹配内容",
+          }, "📝 ", highlight(g._snippet, g._searchQuery, g._isSearchCurrent)) : null,
         );
       }
       return h(
         "div",
-        { key: g.id, style: cardStyle, className: dragClass,
+        { key: g.id, id: "goal-" + g.id, "data-goal-id": g.id, style: cardStyle, className: dragClass,
           title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
         polishOverlay,
         updateSheen,
-           titleRow,
+        titleRow,
         h(GoalTags, { tags: g._tags ?? g.tags }),
         h("div", { style: S.meta },
-          `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
+          highlight(g.id, g._searchQuery, g._isSearchCurrent),
+          ` ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
           h(CriteriaProgress, {
             goalId: g.id,
             items: g.criteria_items ?? g.criteriaItems,
             count: g.criteria_count ?? g.criteriaCount,
           }),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
+        g._snippet ? h("div", {
+          style: {
+            fontSize: 11,
+            opacity: 0.85,
+            marginTop: 2,
+            fontStyle: "italic",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            maxWidth: "100%",
+          },
+          title: "正文匹配内容",
+        }, "📝 ", highlight(g._snippet, g._searchQuery, g._isSearchCurrent)) : null,
         hasDep
           ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
           : null,
