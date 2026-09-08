@@ -546,12 +546,33 @@ window.__ModuleLoader__.load({
     }
     /** 跨列拖动时解析目标状态：from+toStageKey → 具体 to 状态 */
     function resolveTargetStatus(fromStatus, toStageKey) {
-      // blocked 只能回 blocked_from（由服务端强制，前端预判提示）
-      if (fromStatus === "blocked") return null; // 前端不预设，服务端校验
+      // blocked 只能回 blocked_from（g-245：由 resolveBlockedDropTarget 按 blocked_from 解析，
+      // 此处保持不猜测——无 blocked_from 信息时返回 null，服务端仍会校验）
+      if (fromStatus === "blocked") return null;
       // planning→collect 二义默认 collecting
       if (toStageKey === "collect") return "collecting";
       if (toStageKey === "describe") return "planning";
       return stageDefaultStatus(toStageKey);
+    }
+    /** g-245：blocked 目标拖放落点解析——只允许回到 blocked_from 所在列，且返回精确原状态。
+     *  返回 { ok: true, toStatus } 或 { ok: false, message }；blocked_from 缺失/非法一律不猜测。
+     *  纯函数（不触发任何请求/派发），便于行为测试。 */
+    function resolveBlockedDropTarget(blockedFrom, toStageKey) {
+      const raw = typeof blockedFrom === "string" ? blockedFrom.trim() : "";
+      if (!raw) {
+        return { ok: false, message: "⚠️ 该目标缺少 blocked_from 记录，无法自动解除阻塞；请由主管确认原状态后手动处理" };
+      }
+      const stage = STAGES.find((s) => s.statuses.includes(raw));
+      if (!stage) {
+        return { ok: false, message: `⚠️ blocked_from 值非法（${raw}），无法解析落点；请由主管修正后重试` };
+      }
+      if (stage.key !== toStageKey) {
+        return {
+          ok: false,
+          message: `⚠️ blocked 目标只能解除回原状态「${STATUS_LABEL[raw] ?? raw}」，请拖到「${stage.label}」列`,
+        };
+      }
+      return { ok: true, toStatus: raw };
     }
     /** 判断是否为回退方向（后→前，如 delivered→execute） */
     const STAGE_ORDER = STAGES.map((s) => s.key);
@@ -5619,11 +5640,22 @@ window.__ModuleLoader__.load({
           return;
         }
         // 跨列 → transition
+        // g-245：blocked 目标按 blocked_from 解析落点，且只做状态迁移——
+        // 不走 deliver/backward/in_progress 弹窗，避免复用派发逻辑自动启动或续跑子代理。
+        if (fromStatus === "blocked") {
+          const blockedGoal = allGoals.find((g) => g.id === goalId);
+          const resolved = resolveBlockedDropTarget(blockedGoal?.blocked_from, overStageKey);
+          if (!resolved.ok) {
+            showToast(resolved.message);
+            return;
+          }
+          commitCrossColumnDrag(goalId, resolved.toStatus);
+          return;
+        }
         // 判据 3：planning→collect 二义默认 collecting
         let toStatus = resolveTargetStatus(fromStatus, overStageKey);
         if (!toStatus) {
-          // blocked 只能回 blocked_from，前端无法预判，提示用户
-          showToast("⚠️ blocked 状态只能解除回原状态（由服务端校验）");
+          showToast("⚠️ 无法解析该拖放落点的目标状态（服务端将校验）");
           return;
         }
         // 判据 3：delivered 终态 → 弹窗告知主管需做交付工作

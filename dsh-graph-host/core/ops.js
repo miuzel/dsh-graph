@@ -4830,6 +4830,8 @@ export function boardProjection(root, opts) {
             reused_by: null,
             pk_lanes: meta.pk?.lanes ?? 1,
             blocked_reason: meta.blocked_reason ?? null,
+            // g-245：解除阻塞需要知道回到哪个状态，投影下发给客户端拖放落点解析
+            blocked_from: typeof meta.blocked_from === "string" && meta.blocked_from ? meta.blocked_from : null,
             archived,
             cards,
             criteria_count: countCriteria(doc.body),

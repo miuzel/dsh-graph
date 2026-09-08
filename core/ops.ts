@@ -4957,6 +4957,8 @@ export interface BoardGoal {
   depends_on: string[];
   pk_lanes: number;
   blocked_reason: string | null;
+  /** g-245：进入 blocked 前的状态（解除阻塞唯一合法目标）；未阻塞/旧目标缺失时为 null */
+  blocked_from?: string | null;
   attempt_child_id?: string | null;
   attempt_parent_session_id?: string | null;
   attempt_provider?: string | null;
@@ -5105,6 +5107,8 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
       reused_by: null,
       pk_lanes: meta.pk?.lanes ?? 1,
       blocked_reason: meta.blocked_reason ?? null,
+      // g-245：解除阻塞需要知道回到哪个状态，投影下发给客户端拖放落点解析
+      blocked_from: typeof meta.blocked_from === "string" && meta.blocked_from ? meta.blocked_from : null,
       archived,
       cards,
       criteria_count: countCriteria(doc.body),
