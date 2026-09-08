@@ -493,6 +493,128 @@ export function toolFilterForMode(mode) {
     }
     return undefined;
 }
+// ===== g-242：子代理角色枚举与能力 Profile 契约 =====
+export const SUBAGENT_ROLES = ["supervisor", "executor", "collector", "reviewer", "pm"];
+export function normalizeSubagentRole(role) {
+    if (typeof role !== "string")
+        return null;
+    const r = role.trim().toLowerCase();
+    if (SUBAGENT_ROLES.includes(r)) {
+        return r;
+    }
+    return null;
+}
+export const ROLE_PROFILES = {
+    supervisor: {
+        id: "supervisor",
+        name: "主管 (Supervisor)",
+        description: "全局规划、排期、派发、复核、记忆沉淀与生命周期裁决的主管角色。",
+        readOnly: false,
+        disciplineTitle: "主管工作纪律与底线契约",
+        disciplineLines: [
+            "1. 只做规划、派发、把关、复核——常规实现一律派发子代理；",
+            "2. 轻量改动特权：低风险一句话决策或微小修改可直接在当前会话执行；",
+            "3. 每次动作后调用 graph_report_supervisor_status 自报状态；",
+            "4. 人工裁决关口：review→delivered 必须经负责人 verdict 裁决，绝不自行 delivered。",
+        ],
+        requiredTools: ["graph_report_supervisor_status", "graph_start_attempt", "graph_resolve_accept"],
+        allowedTools: {
+            standard: undefined,
+            minimal: ["read", "graph_report_supervisor_status", "graph_start_attempt", "graph_transition", "graph_resolve_accept"],
+        },
+    },
+    executor: {
+        id: "executor",
+        name: "执行者 (Executor)",
+        description: "专注目标实现、代码编写、验证测试、自报状态与泳道流转的执行子代理。",
+        readOnly: false,
+        disciplineTitle: "dsh-graph 执行子代理通用执行纪律",
+        disciplineLines: [
+            "1. 状态汇报：每做一个动作必须调用 graph_report_status 自行更新 status_line（尽量 20 字内），滞留等于隐瞒进展；",
+            "2. 结束收尾更新：在即将空闲或收尾前，务必调用 graph_report_status 将状态更新为完成态（如「本轮完成/空闲待命」）；",
+            "3. 泳道流转：开工时若非 in_progress 则调用 graph_transition(to='in_progress')；完成后必须 graph_transition(to='review') 停轮等待复核；遇到阻塞 graph_transition(to='blocked', reason=...)；",
+            "4. 绝不自行 delivered：禁止直接 graph_transition 到 delivered——delivered 属于负责人与主管的 human gate 裁决关口；",
+            "5. 严格遵守环境隔离要求与质量判据核验，未通过判据不可声明完成。",
+        ],
+        requiredTools: ["graph_report_status", "graph_transition", "read", "write", "edit", "bash"],
+        allowedTools: {
+            standard: undefined,
+            minimal: GRAPH_MINIMAL_ALLOWED_TOOLS,
+        },
+        bashPermissionNote: "bash 具备当前环境真实执行权限，受当前工作区与沙盒策略约束。",
+    },
+    collector: {
+        id: "collector",
+        name: "收集者 (Collector)",
+        description: "专注上下文信息收集、附件安全存储与卡片回填的子代理；依托卡片生命周期协作，不创建虚假 attempt 报状态。",
+        readOnly: false,
+        disciplineTitle: "dsh-graph 收集子代理通用协作纪律",
+        disciplineLines: [
+            "1. 卡片生命周期状态契约：收集进度依托卡片生命周期（empty → collecting → filled → reviewed）与平台生命周期，不创建虚假 attempt，绝不调用 graph_report_status；",
+            "2. 规范回填：收集完成后调用 graph_fill_card 回填内容（text 写全文，summary ≤100 字摘要），卡片自动置为 filled 状态；",
+            "3. 附件安全：若有附件统一调用 graph_store_attachment 安全落盘，正文使用 @att/<name> 引用，禁止越界路径；",
+            "4. 绝不自行复核：禁止调用 graph_review_card，卡片回填后等待主管/负责人复核；",
+            "5. 严格限定范围：只收集并回填指定绑定的卡片，不得修改其他 goal 或 card，不进行目标状态流转或派发执行。",
+        ],
+        requiredTools: ["graph_fill_card", "graph_store_attachment", "read"],
+        allowedTools: {
+            standard: ["read", "glob", "grep", "bash", "web_search", "web_fetch", "graph_fill_card", "graph_store_attachment", "graph_memory_recall"],
+            minimal: ["read", "bash", "web_search", "web_fetch", "graph_fill_card", "graph_store_attachment"],
+        },
+        bashPermissionNote: "bash 具备当前环境执行权限（供信息收集、代码检索与本地命令调研）；白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。",
+    },
+    reviewer: {
+        id: "reviewer",
+        name: "复核者 (Reviewer)",
+        description: "只读审查代码变更、运行只读测试与验证判据、输出 review 意见的审查子代理；不默认暴露无关管理写工具与代码修改工具。",
+        readOnly: true,
+        disciplineTitle: "dsh-graph 复核子代理只读审查纪律",
+        disciplineLines: [
+            "1. 只读审查职责：专注代码审阅、测试验证与质量判据核对，仅输出客观评审报告与建议；",
+            "2. 不篡改代码与管理状态：不暴露且不调用 edit/write 修改代码，不调用任何 graph_* 管理写工具（如 graph_create_goal, graph_start_attempt, graph_transition, graph_resolve_accept 等）；",
+            "3. 裁决归属 Human Gate：评审通过与否由主管/负责人根据审查报告进行 verdict 裁决，reviewer 绝不越权自行通过或关闭目标；",
+            "4. bash 权限说明：如保留 bash，仅用于运行只读测试（如单元测试、静态检查、git diff 等），其实际拥有当前工作区的本地执行权限；工具过滤非强安全沙箱，遵循单用户 owner-trusted 安全基线。",
+        ],
+        requiredTools: ["read", "bash"],
+        allowedTools: {
+            standard: ["read", "glob", "grep", "bash", "graph_memory_recall", "web_search", "web_fetch"],
+            minimal: ["read", "bash"],
+        },
+        bashPermissionNote: "bash 具备当前环境真实执行权限（用于运行单元测试、类型检查与 git diff 等只读验证）；工具白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。",
+    },
+    pm: {
+        id: "pm",
+        name: "产品经理 (PM)",
+        description: "只读分析目标定义、背景价值与质量判据并提供润色建议的 Agent；不暴露任何管理写工具与代码修改工具。",
+        readOnly: true,
+        disciplineTitle: "dsh-graph 产品经理只读定义与润色纪律",
+        disciplineLines: [
+            "1. 只读建议职责：只向主管 Agent 返回“目标定义/润色建议”，不直接修改目标文件；",
+            "2. 物理拦截管理写工具：不暴露且不调用任何 graph_* 管理写工具，不改变状态、版本、判据或执行语义；",
+            "3. 不暴露代码修改与执行工具：不暴露 edit、write 与 bash，物理防止篡改源码或产生非预期执行副作用；",
+            "4. 保留原意：围绕价值、背景、范围、可验证判据与风险给出简洁润色，供人工或主管决策采纳。",
+        ],
+        requiredTools: ["read"],
+        allowedTools: {
+            standard: ["read", "glob", "grep", "graph_memory_recall", "web_search", "web_fetch"],
+            minimal: ["read"],
+        },
+    },
+};
+export function getRoleProfile(role) {
+    return ROLE_PROFILES[role] ?? ROLE_PROFILES.executor;
+}
+export function toolFilterForRole(role, mode) {
+    const profile = getRoleProfile(role);
+    const normalizedMode = mode ? normalizeSubagentMode(mode) : "standard";
+    if (normalizedMode === "minimal") {
+        return { allow: profile.allowedTools.minimal };
+    }
+    if (profile.allowedTools.standard === undefined) {
+        return undefined;
+    }
+    return { allow: profile.allowedTools.standard };
+}
 /** g-191：构建 dsh-graph 默认子代理专属 Persona，将通用执行纪律沉淀为系统级 Persona */
 export function buildSubagentDefaultPersona(goalId, attemptId) {
     const lines = [
@@ -3630,6 +3752,7 @@ export function formatCollectPrompt(root, goalId, cardId, userPrompt) {
         `1. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${cardId}\``,
         `2. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
         `3. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
+        `4. 进度协作依托卡片生命周期（empty → collecting → filled → reviewed），不创建虚假 attempt，绝不调用 graph_report_status`,
     ];
     // 如果有用户提供的附加要求，追加在末尾
     if (userPrompt && userPrompt.trim()) {
@@ -3651,6 +3774,44 @@ export function getCardMeta(root, goalId, cardId) {
     const cardTitle = cardDoc.meta.title ?? cardId;
     const cardKind = cardDoc.meta.kind ?? "text";
     return { title: cardTitle, kind: cardKind, goalTitle };
+}
+/** 生成只读产品经理 (PM) 润色与定义提示词（g-242） */
+export function formatPmPrompt(opts) {
+    const lines = [
+        `你是固定的产品经理 Agent。请只向主管 Agent 返回“目标定义/润色建议”，不要调用任何 graph_* 工具，不要修改目标、不改变状态、版本或执行语义。`,
+        ``,
+        `目标 ID：${opts.goalId}`,
+        `goal.md 工作区相对路径：${opts.goalRel}`,
+        `人工指导意见：${String(opts.guidance ?? "").trim() || "（无）"}`,
+        ``,
+        `请先用 read 工具读取上述 goal.md，再围绕目标价值、背景、范围、可验证判据、边界/错误路径、风险和人工核验给出简洁、可执行的润色建议；保留原意，不直接替换或写入目标。`,
+        ``,
+        `## 只读约束与纪律`,
+        `- 物理工具拦截：不提供任何管理写工具、代码修改工具与命令执行工具，仅提供只读分析能力；`,
+        `- 保留原意：仅输出分析与建议，不擅自修改任何项目数据。`,
+    ];
+    return lines.join("\n");
+}
+/** 生成只读复核子代理 (Reviewer) 提示词（g-242） */
+export function formatReviewPrompt(opts) {
+    const lines = [
+        `你是专业的代码与目标复核 Agent（Reviewer）。请对目标 ${opts.goalId} 的执行 attempt ${opts.attemptId} 进行只读审查。`,
+        ``,
+        `目标 ID：${opts.goalId}`,
+        `执行 Attempt：${opts.attemptId}`,
+        `goal.md 工作区相对路径：${opts.goalRel}`,
+    ];
+    if (opts.criteria && opts.criteria.length > 0) {
+        lines.push(``, `**验收判据**：`);
+        for (let i = 0; i < opts.criteria.length; i++) {
+            lines.push(`${i + 1}. ${opts.criteria[i]}`);
+        }
+    }
+    if (opts.guidance && opts.guidance.trim()) {
+        lines.push(``, `**复核指导**：${opts.guidance.trim()}`);
+    }
+    lines.push(``, `## 审查纪律与工具权限`, `- 纯只读审查：仅使用 read、glob、grep 审查代码与变更，不暴露且不调用 edit/write 修改代码；`, `- 绝不调用管理写工具：不暴露任何 graph_* 管理写工具（如 graph_create_goal, graph_start_attempt, graph_transition, graph_resolve_accept 等）；`, `- 裁决归属主管/人工 Gate：仅输出审查报告与建议（PASS / FAIL 及具体证据），最终 verdict 裁决由主管/负责人通过 graph_resolve_accept 执行，reviewer 绝不自行通过；`, `- bash 权限说明：如保留 bash，仅用于运行只读测试（如单元测试 node --test、静态检查、git diff 等），其实际具备当前工作区的本地运行权限；白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。`);
+    return lines.join("\n");
 }
 // ---- Attempt（SCHEMA §3） ----
 const ATTEMPT_BODY = `
