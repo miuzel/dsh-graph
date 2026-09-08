@@ -453,6 +453,24 @@ function validateAttemptPromptFields({ taskType, baselineCommit, sourceAttempt, 
 }
 
 
+// g-236：当 attempt_brief 和 directive 均为空时，从目标描述生成默认 action，
+// 防止静默启动空任务。brief 优先于 directive（brief 是当前任务，directive 是背景指令）。
+function resolveEffectiveBrief(attemptBrief, directive, goalDesc) {
+  const b = promptText(attemptBrief);
+  if (b) return { brief: b, source: "brief" };
+  const d = promptText(directive);
+  if (d) return { brief: d, source: "directive" };
+  // 两者均空：从目标描述生成默认 action
+  const desc = promptText(goalDesc);
+  if (desc) {
+    // 截取目标描述前 200 字符作为默认 action，避免过长
+    const truncated = desc.length > 200 ? desc.slice(0, 200) + "…" : desc;
+    return { brief: `执行目标描述中的任务：${truncated}`, source: "auto_from_desc" };
+  }
+  // 目标描述也为空：最终兜底
+  return { brief: "执行目标描述和质量判据中的任务", source: "fallback" };
+}
+
 function historicalPromptBlock(title, section) {
   const text = promptText(section);
   if (!text) return "";
@@ -541,6 +559,7 @@ export function formatAttemptPrompt({
     "## 本次 attempt brief/directive",
     "",
     "唯一 action 来源：以下两项当前数据；历史 handoff、卡片和通用纪律均不产生新任务。",
+    "brief 优先于 directive：brief 是当前任务的直接描述，directive 是目标文件中的背景指令；两者冲突以 brief 为准。",
     "",
     "**attempt brief（当前数据）**",
     renderPromptValue(brief, "本次请求未传 attempt_brief，或该值不是非空字符串"),
@@ -1193,6 +1212,11 @@ export function apply(ctx, config) {
         // g-150 范围扩展：读取最近指令（eventually 注入 prompt；空时不影响现有 prompt 行为）
         const currentDirective = readGoalDirective(r, a.goal);
         const goalFile = findGoalFile(r, a.goal);
+        // g-236：解析目标描述，用于在 brief/directive 均空时生成默认 action
+        const goalDoc = loadGoal(goalFile);
+        const goalDescMatch = goalDoc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
+        const goalDesc = goalDescMatch ? goalDescMatch[1].trim() : "";
+        const resolvedBrief = resolveEffectiveBrief(a.attempt_brief, currentDirective, goalDesc);
         // g-149：sessionWorkspace 可能返回 null（绝对 config.root + 无 session），
         // 此时用 r 的父目录作为相对路径基准
         const ws = sessionWorkspace(ex) ?? dirname(r);
@@ -1214,7 +1238,7 @@ export function apply(ctx, config) {
           actor: actorOf(ex),
           injectedCards,
           injectedHandoffs: injectedHandoffRefs,
-          attemptBrief: a.attempt_brief ?? undefined,
+          attemptBrief: resolvedBrief.brief,
           injectedDirective: currentDirective ?? undefined,
           provider: effProvider,
           model: effModel,
@@ -1225,7 +1249,8 @@ export function apply(ctx, config) {
         });
         // 注意：返回值必须是无损 JSON——绝不写入值为 undefined 的字段（registry 会拒绝）
         const result = { attempt, child_id: null, injected_cards: injectedCards, injected_handoffs: injectedHandoffRefs, mode: effModeRes.mode, mode_source: effModeRes.source };
-        if (a.attempt_brief) result.brief = a.attempt_brief;
+        if (resolvedBrief.brief) result.brief = resolvedBrief.brief;
+        if (resolvedBrief.source !== "brief") result.brief_source = resolvedBrief.source;
         if (effRoute) result.model_route = effRoute;
         const subagents = ctx.get?.("subagents");
         if (subagents && ex?.agent) {
@@ -1253,11 +1278,12 @@ export function apply(ctx, config) {
             // g-191：子代理执行策略/模式说明段
             const modeStrategySection = effModeRes.prompt ? ["## 子代理执行模式（" + effModeRes.mode + "）", "", effModeRes.prompt].join(String.fromCharCode(10)) : null;
             // g-228：所有 supervisor 执行 prompt 统一由单一模板入口组装。
+            // g-236：使用 resolvedBrief 确保 brief/directive 均空时有默认 action
             const prompt = formatAttemptPrompt({
               goal: a.goal,
               attempt,
               goalRel: rel,
-              attemptBrief: a.attempt_brief,
+              attemptBrief: resolvedBrief.brief,
               directive: currentDirective,
               taskType: a.task_type,
               baselineCommit: a.baseline_commit,
@@ -2436,6 +2462,8 @@ export function apply(ctx, config) {
           try { gType = normalizeGoalType(loadGoal(findGoalFile(rRoot, goal)).meta.type); } catch {}
           const worktreeBlock = resolveWorktreeGuide(gType, worktree);
           const currentDirective = readGoalDirective(rRoot, goal);
+          // g-236：当 brief 和 directive 均空时，从目标描述生成默认 action
+          const resolvedBrief = resolveEffectiveBrief(attempt_brief, currentDirective, desc);
           const projectExec = readExecutorModel(rRoot);
           const globalSettings = readGraphSettings();
           const eff = resolveModelRoute(
@@ -2453,7 +2481,7 @@ export function apply(ctx, config) {
             actor: "human:gui",
             injectedCards,
             injectedHandoffs: injectedHandoffRefs,
-            attemptBrief: attempt_brief ?? undefined,
+            attemptBrief: resolvedBrief.brief,
             injectedDirective: currentDirective ?? undefined,
             provider: effProvider,
             model: effModel,
@@ -2483,11 +2511,12 @@ export function apply(ctx, config) {
             crit,
           ].join(String.fromCharCode(10));
           // g-228：所有 supervisor 执行 prompt 统一由单一模板入口组装。
+          // g-236：使用 resolvedBrief 确保 brief/directive 均空时有默认 action
           const prompt = formatAttemptPrompt({
             goal,
             attempt,
             goalRel: rel,
-            attemptBrief: attempt_brief,
+            attemptBrief: resolvedBrief.brief,
             directive: currentDirective,
             taskType: task_type,
             baselineCommit: baseline_commit,
@@ -2530,6 +2559,8 @@ export function apply(ctx, config) {
             attempt,
             child_id: spawned.childId,
             child_error: spawned.error,
+            brief: resolvedBrief.brief,
+            brief_source: resolvedBrief.source,
             model_route: effRoute,
             mode: effModeRes.mode,
             mode_source: effModeRes.source,
