@@ -61,6 +61,7 @@
       const { goalId, goalData, supervisorSession, onConfirm, onCancel } = props;
       const [loading, setLoading] = React.useState(false);
       const [note, setNote] = React.useState(null);
+      const [brief, setBrief] = React.useState(""); // g-236：可选执行 brief
       const hasChild = !!(goalData?.attempt_child_id);
       const hasCriteria = !!(goalData?.criteria_count);
       const oldChildId = goalData?.attempt_child_id ?? null;
@@ -114,16 +115,21 @@
           } else {
             // 无子代理 → 派发新执行子代理
             setNote("派发子代理…");
+            const body = { goal: goalId };
+            // g-236：传递用户提供的 brief（可选，服务端会自动从目标描述生成默认值）
+            if (brief.trim()) body.attempt_brief = brief.trim();
             const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ goal: goalId }),
+              body: JSON.stringify(body),
             });
             const data = await r.json();
             if (data.ok) {
               if (data.child_id) {
-                setNote("✅ 已派发执行子代理，id：" + data.child_id);
-                showToast("✅ 已派发执行子代理");
+                // g-236：显示 brief 来源（用户输入 vs 自动生成）
+                const sourceHint = data.brief_source === "auto_from_desc" ? "（已从目标描述自动生成 brief）" : "";
+                setNote("✅ 已派发执行子代理，id：" + data.child_id + sourceHint);
+                showToast("✅ 已派发执行子代理" + sourceHint);
               } else if (data.child_error) {
                 setNote("⚠️ 子代理启动失败：" + data.child_error);
               } else {
@@ -165,6 +171,17 @@
             ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginBottom: 4 } },
                 "⚠️ 质量判据尚未登记——将以授权模式强制迁移到执行列。")
             : null,
+          // g-236：可选执行 brief 输入（无 brief 时服务端自动从目标描述生成默认 action）
+          !hasChild ? h("div", { style: { marginBottom: 8 } },
+            h("div", { style: { fontSize: 12, marginBottom: 4, opacity: 0.8 } },
+              "📝 执行 brief（可选，留空则自动从目标描述生成）："),
+            h("textarea", {
+              style: { ...S.promptInput, width: "100%", minHeight: 48, resize: "vertical", fontSize: 12, boxSizing: "border-box" },
+              value: brief,
+              placeholder: "例如：修复登录页面的样式问题…",
+              onChange: (e) => setBrief(e.target.value),
+            }),
+          ) : null,
           h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
             h("button", {
               style: { ...S.btnPrimary, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-primary",

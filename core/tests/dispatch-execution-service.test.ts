@@ -436,23 +436,23 @@ executor:
 // 质量判据 5：协同回归（空 action 规范化、准入门禁失败、显式隔离优先级、绑定与派发失败收敛）
 // ============================================================================
 
-test("g-241 判据 5：空 action 协同回归——缺失 brief 与 directive 时自动规范化为明确 action，禁止纯空白 brief", async () => {
+test("g-241 判据 5：空 action 协同回归（g-236 语义）——缺失 brief 与 directive 时自动规范化为默认 action，纯空白 brief 按空回退", async () => {
   const { ws, root, toolsByName, execContext, capturedRequests } = createHarness();
   const goalId = createGoal(root, { title: "自动补全Action目标", version: "v1.0", actor: "human:gui" });
   setCriteria(root, goalId, ["判据"], "human:gui");
 
-  // 未传 brief 且无 directive 时，生成基于目标意图的有效 action
-  const res = await toolsByName.get("graph_start_attempt")!.execute({ goal: goalId }, execContext);
-  assert.ok(res.brief?.includes("自动补全Action目标"));
-  const prompt = capturedRequests[0].request.prompt[0].text;
-  assert.ok(prompt.includes("自动补全Action目标"));
-  assert.ok(!prompt.includes("（未提供）\n> 未提供原因：本次请求未传 attempt_brief"));
+  // 1. 未传 brief 且无 directive 时，生成基于目标意图的默认 action（fallback）
+  const res1 = await toolsByName.get("graph_start_attempt")!.execute({ goal: goalId }, execContext);
+  assert.equal(res1.brief, "执行目标描述和质量判据中的任务");
+  assert.equal(res1.brief_source, "fallback");
+  const prompt1 = capturedRequests[0].request.prompt[0].text;
+  assert.ok(prompt1.includes("执行目标描述和质量判据中的任务"));
+  assert.ok(!prompt1.includes("（未提供）\n> 未提供原因：本次请求未传 attempt_brief"));
 
-  // 显式传纯空白 brief 时拒绝
-  await assert.rejects(
-    () => toolsByName.get("graph_start_attempt")!.execute({ goal: goalId, attempt_brief: "   " }, execContext),
-    /attempt_brief 不能为空白字符串/,
-  );
+  // 2. 显式传纯空白 brief 时，按 g-236 语义视为空并走回退（不抛错）
+  const res2 = await toolsByName.get("graph_start_attempt")!.execute({ goal: goalId, attempt_brief: "   " }, execContext);
+  assert.equal(res2.brief, "执行目标描述和质量判据中的任务");
+  assert.equal(res2.brief_source, "fallback");
 });
 
 test("g-241 判据 5：准入门禁失败协同回归——未规划/阻塞/已交付/暂存目标拒绝执行，不创建 attempt 且不启动子代理", async () => {

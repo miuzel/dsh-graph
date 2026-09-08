@@ -454,6 +454,23 @@ function validateAttemptPromptFields({ taskType, baselineCommit, sourceAttempt, 
   return null;
 }
 
+// g-236：当 attempt_brief 和 directive 均为空时，从目标描述生成默认 action，
+// 防止静默启动空任务。brief 优先于 directive（brief 是当前任务，directive 是背景指令）。
+function resolveEffectiveBrief(attemptBrief, directive, goalDesc) {
+  const b = promptText(attemptBrief);
+  if (b) return { brief: b, source: "brief" };
+  const d = promptText(directive);
+  if (d) return { brief: d, source: "directive" };
+  // 两者均空：从目标描述生成默认 action
+  const desc = promptText(goalDesc);
+  if (desc) {
+    // 截取目标描述前 200 字符作为默认 action，避免过长
+    const truncated = desc.length > 200 ? desc.slice(0, 200) + "…" : desc;
+    return { brief: `执行目标描述中的任务：${truncated}`, source: "auto_from_desc" };
+  }
+  // 目标描述也为空：最终兜底
+  return { brief: "执行目标描述和质量判据中的任务", source: "fallback" };
+}
 
 function historicalPromptBlock(title, section) {
   const text = promptText(section);
@@ -543,6 +560,7 @@ export function formatAttemptPrompt({
     "## 本次 attempt brief/directive",
     "",
     "唯一 action 来源：以下两项当前数据；历史 handoff、卡片和通用纪律均不产生新任务。",
+    "brief 优先于 directive：brief 是当前任务的直接描述，directive 是目标文件中的背景指令；两者冲突以 brief 为准。",
     "",
     "**attempt brief（当前数据）**",
     renderPromptValue(brief, "本次请求未传 attempt_brief，或该值不是非空字符串"),
@@ -754,9 +772,6 @@ export function apply(ctx, config) {
     if (attempt_brief !== undefined && attempt_brief !== null && typeof attempt_brief !== "string") {
       throw new GraphError("attempt_brief 必须是 string 类型");
     }
-    if (typeof attempt_brief === "string" && !attempt_brief.trim()) {
-      throw new GraphError("attempt_brief 不能为空白字符串");
-    }
     const structuredFieldError = validateAttemptPromptFields({
       taskType: task_type,
       baselineCommit: baseline_commit,
@@ -773,25 +788,22 @@ export function apply(ctx, config) {
     // 2. 执行准入门禁校验（g-237/g-241 协同）
     const { goalFile, doc } = assertExecutionAdmission(root, goal, { force });
 
-    // 3. 任务动作规范化（g-236/g-241 协同：禁止静默空 action）
-    const currentDirective = directive ?? readGoalDirective(root, goal);
-    let effectiveBrief = attempt_brief?.trim() || null;
-    if (!effectiveBrief && !currentDirective) {
-      effectiveBrief = `推进目标「${doc.meta.title || goal}」的实现并满足质量判据`;
-    }
-
-    // 4. 一次性上下文快照（保证注入清单与注入内容一致，零二次读取漂移）
+    // 3. 一次性上下文快照（保证注入清单与注入内容一致，零二次读取漂移）
     const descMatch = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
     const critMatch = doc.body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
-    const desc = descMatch ? descMatch[1].trim() : "（无描述）";
+    const desc = descMatch ? descMatch[1].trim() : "";
     const crit = critMatch ? critMatch[1].trim() : "（无判据）";
     const targetContext = [
       "## 目标描述",
-      desc,
+      desc || "（无描述）",
       "",
       "## 质量判据",
       crit,
     ].join("\n");
+
+    // 4. 任务动作规范化（g-236/g-241 协同：brief 优先于 directive，三级回退，禁止静默空 action）
+    const currentDirective = directive ?? readGoalDirective(root, goal);
+    const resolvedBrief = resolveEffectiveBrief(attempt_brief, currentDirective, desc);
 
     const cards = harvestedCards(root, goal);
     const injectedCards = cards.map((c) => c.id);
@@ -866,7 +878,7 @@ export function apply(ctx, config) {
       goal,
       attempt: nextAttId,
       goalRel,
-      attemptBrief: effectiveBrief,
+      attemptBrief: resolvedBrief.brief,
       directive: currentDirective,
       taskType: task_type,
       baselineCommit: baseline_commit,
@@ -887,7 +899,7 @@ export function apply(ctx, config) {
       actor,
       injectedCards,
       injectedHandoffs: injectedHandoffRefs,
-      attemptBrief: effectiveBrief ?? undefined,
+      attemptBrief: resolvedBrief.brief ?? undefined,
       injectedDirective: currentDirective ?? undefined,
       provider: effProvider,
       model: effModel,
@@ -918,7 +930,8 @@ export function apply(ctx, config) {
         mode_source: effModeRes.source,
         injected_cards: injectedCards,
         injected_handoffs: injectedHandoffRefs,
-        brief: effectiveBrief,
+        brief: resolvedBrief.brief,
+        brief_source: resolvedBrief.source,
         prompt,
       };
     }
@@ -977,7 +990,8 @@ export function apply(ctx, config) {
           mode_source: effModeRes.source,
           injected_cards: injectedCards,
           injected_handoffs: injectedHandoffRefs,
-          brief: effectiveBrief,
+          brief: resolvedBrief.brief,
+          brief_source: resolvedBrief.source,
           prompt,
         };
       } catch (e) {
@@ -992,7 +1006,8 @@ export function apply(ctx, config) {
           mode_source: effModeRes.source,
           injected_cards: injectedCards,
           injected_handoffs: injectedHandoffRefs,
-          brief: effectiveBrief,
+          brief: resolvedBrief.brief,
+          brief_source: resolvedBrief.source,
           prompt,
         };
       }
@@ -1008,7 +1023,8 @@ export function apply(ctx, config) {
         mode_source: effModeRes.source,
         injected_cards: injectedCards,
         injected_handoffs: injectedHandoffRefs,
-        brief: effectiveBrief,
+        brief: resolvedBrief.brief,
+        brief_source: resolvedBrief.source,
         prompt,
       };
     }
@@ -1523,6 +1539,7 @@ export function apply(ctx, config) {
         if (execRes.child_error) result.child_error = execRes.child_error;
         if (execRes.note) result.note = execRes.note;
         if (execRes.brief) result.brief = execRes.brief;
+        if (execRes.brief_source && execRes.brief_source !== "brief") result.brief_source = execRes.brief_source;
         if (execRes.model_route) result.model_route = execRes.model_route;
         return result;
       },
@@ -2630,6 +2647,8 @@ export function apply(ctx, config) {
             attempt: execRes.attempt,
             child_id: execRes.child_id,
             child_error: execRes.child_error ?? (parent ? null : parentError),
+            brief: execRes.brief,
+            brief_source: execRes.brief_source,
             model_route: execRes.model_route,
             mode: execRes.mode,
             mode_source: execRes.mode_source,
