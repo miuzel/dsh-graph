@@ -3248,3 +3248,186 @@ test("真实 HTTP：readBodyCapped 超限返回可读 400（无 ECONNRESET）且
   server.close();
   assert.equal(status, 400, "真实 HTTP 客户端应读到 400（而非 ECONNRESET）");
 });
+
+// ===== g-244：子代理会话谱系回溯（真实源片段执行，非重写副本）=====
+/**
+ * 从 plugin.js 源模块中按花括号配平提取真实的 resolveWorkspaceOfSession 片段，
+ * 在 vm 上下文中执行，避免测试再写一份「看起来一样」的模拟实现。
+ */
+function loadRealWorkspaceResolver() {
+  const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
+  const start = plugin.indexOf("let lastGoodWorkspace = null;");
+  const fnStart = plugin.indexOf("function resolveWorkspaceOfSession(sessionId) {", start);
+  assert.ok(start > 0 && fnStart > start, "plugin.js 必须包含 resolveWorkspaceOfSession 源片段");
+  let depth = 0;
+  let end = -1;
+  for (let i = plugin.indexOf("{", fnStart); i < plugin.length; i++) {
+    const ch = plugin[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") { depth--; if (depth === 0) { end = i + 1; break; } }
+  }
+  assert.ok(end > 0, "resolveWorkspaceOfSession 花括号必须配平");
+  const src = plugin.slice(start, end);
+  const ctx: any = {};
+  vm.createContext(ctx);
+  new vm.Script(`${src}\nglobalThis.__resolveWs = resolveWorkspaceOfSession;`).runInContext(ctx);
+  return (sessionId: any, opts: any = {}) => {
+    ctx.workspacesRt = opts.workspacesRt ?? null;
+    ctx.sessionsRt = opts.sessionsRt ?? null;
+    ctx.appCtx = opts.appCtx ?? null;
+    ctx.viewedSessionId = opts.viewedSessionId ?? null;
+    return ctx.__resolveWs(sessionId);
+  };
+}
+
+const wsSnap = (items: any) => ({ list: { getSnapshot: () => ({ items }) } });
+const sessSnap = (state: any) => ({ list: { getSnapshot: () => state } });
+
+test("g-244 子代理会话解析：parentId/items 双形状、subagentsByParent 反查、currentAddress 与多层回溯", () => {
+  const resolve = loadRealWorkspaceResolver();
+  const workspacesRt = wsSnap([
+    { path: "/repo-alpha", sessionIds: ["s-a"] },
+    { path: "/repo-beta", sessionIds: ["s-b"] },
+  ]);
+
+  // 1. 主会话：workspace 成员直接命中
+  assert.equal(resolve("s-a", { workspacesRt }), "/repo-alpha");
+  assert.equal(resolve("s-b", { workspacesRt }), "/repo-beta");
+
+  // 2. 运行时真实快照形状：byId 记录 + parentId（子代理无 cwd）
+  const byIdRt = sessSnap({ byId: { "child-1": { id: "child-1", parentId: "s-b", origin: "subagent" } } });
+  assert.equal(resolve("child-1", { workspacesRt, sessionsRt: byIdRt }), "/repo-beta", "byId+parentId 回溯到父工作区");
+
+  // 3. 子会话只在 subagentsByParent 目录里（byId 缺失）也能反查父会话
+  const catalogRt = sessSnap({
+    byId: {},
+    subagentsByParent: { "s-b": { entries: [{ kind: "child", id: "child-2", mode: "continuable", label: "x" }] } },
+  });
+  assert.equal(resolve("child-2", { workspacesRt, sessionsRt: catalogRt }), "/repo-beta", "subagentsByParent 反查父会话");
+
+  // 4. 多层嵌套：孙会话 → 子会话 → 父会话
+  const nestedRt = sessSnap({
+    byId: {},
+    subagentsByParent: {
+      "s-b": { entries: [{ kind: "child", id: "child-3" }] },
+      "child-3": { entries: [{ kind: "child", id: "grand-3" }] },
+    },
+  });
+  assert.equal(resolve("grand-3", { workspacesRt, sessionsRt: nestedRt }), "/repo-beta", "多层谱系回溯");
+
+  // 5. 只有 currentAddress 导航地址时也能定位直接父
+  const addrRt = sessSnap({ byId: {}, currentAddress: { parentSessionId: "s-a", childSessionId: "child-4", mode: "one-shot" } });
+  assert.equal(resolve("child-4", { workspacesRt, sessionsRt: addrRt }), "/repo-alpha", "currentAddress 补齐直接父");
+  assert.equal(resolve(null, { workspacesRt, sessionsRt: addrRt }), "/repo-alpha", "无入参时 currentAddress 子会话仍可解析");
+
+  // 6. 旧/降级形状：items 数组 + parentSessionId 仍兼容
+  const legacyRt = sessSnap({ items: [{ sessionId: "c-legacy", parentSessionId: "s-a" }] });
+  assert.equal(resolve("c-legacy", { workspacesRt, sessionsRt: legacyRt }), "/repo-alpha", "items+parentSessionId 兼容");
+
+  // 7. appCtx 降级路径（workspacesRt/sessionsRt 缺失时）
+  const appCtx = { get: (name: string) => (name === "workspaces" ? wsSnap([{ path: "/repo-alpha", sessionIds: ["s-a"] }]) : sessSnap({ byId: {} })) };
+  assert.equal(resolve("s-a", { appCtx }), "/repo-alpha", "appCtx.get 降级路径可用");
+});
+
+test("g-244 worktree 与嵌套子目录归一到父工程根", () => {
+  const resolve = loadRealWorkspaceResolver();
+  const workspacesRt = wsSnap([
+    { path: "/repo-alpha", sessionIds: ["s-a"] },
+    { path: "/repo-beta", sessionIds: ["s-b"] },
+    { path: "/repo-beta/sub", sessionIds: ["s-sub"] },
+  ]);
+
+  // 1. 子代理 cwd 在 worktree 子目录 → 归一到父工程根（criterion 2）
+  const worktreeRt = sessSnap({
+    byId: { "child-w": { id: "child-w", parentId: "s-a", cwd: "/repo-alpha/.worktrees/g-244-att-002" } },
+  });
+  assert.equal(resolve("child-w", { workspacesRt, sessionsRt: worktreeRt }), "/repo-alpha", "worktree cwd 归一父工作区根");
+
+  // 2. 无谱系信息、但 cwd 带 .worktrees 标记时同样归一
+  const markerRt = sessSnap({ byId: { "child-w2": { id: "child-w2", cwd: "/repo-alpha/.worktrees/g-1-att-01" } } });
+  assert.equal(resolve("child-w2", { workspacesRt, sessionsRt: markerRt }), "/repo-alpha", ".worktrees 标记触发归一");
+
+  // 3. 多层嵌套 + worktree 子目录
+  const deepRt = sessSnap({
+    byId: { gc: { id: "gc", cwd: "/repo-beta/.worktrees/g-244-att-002/packages/app" } },
+    subagentsByParent: { "s-b": { entries: [{ kind: "child", id: "child-x" }] }, "child-x": { entries: [{ kind: "child", id: "gc" }] } },
+  });
+  assert.equal(resolve("gc", { workspacesRt, sessionsRt: deepRt }), "/repo-beta", "多层嵌套 worktree 归一父根");
+
+  // 4. 嵌套 workspace 取最长前缀（/repo-beta/sub 优先于 /repo-beta）
+  const nestedWsRt = sessSnap({ byId: { "child-n": { id: "child-n", parentId: "s-sub", cwd: "/repo-beta/sub/packages/app" } } });
+  assert.equal(resolve("child-n", { workspacesRt, sessionsRt: nestedWsRt }), "/repo-beta/sub", "最长前缀匹配");
+
+  // 5. 非谱系会话保持 g-223 既有语义：自己的绝对 cwd 原样返回
+  const orphanCwdRt = sessSnap({ byId: { "orphan-cwd": { id: "orphan-cwd", cwd: "/tmp/orphan" } } });
+  assert.equal(resolve("orphan-cwd", { workspacesRt, sessionsRt: orphanCwdRt }), "/tmp/orphan", "无血缘会话 cwd 原样");
+
+  // 6. 相对 cwd 不参与解析，继续回溯父会话
+  const relRt = sessSnap({ byId: { "c-rel": { id: "c-rel", parentId: "s-a", cwd: "relative/dir" } } });
+  assert.equal(resolve("c-rel", { workspacesRt, sessionsRt: relRt }), "/repo-alpha", "相对 cwd 跳过并回溯父会话");
+});
+
+test("g-244 Fail-Closed 不退化：孤儿/环/畸形输入返回 null 且不抛异常，绝不回退 lastGoodWorkspace", () => {
+  const resolve = loadRealWorkspaceResolver();
+  const workspacesRt = wsSnap([{ path: "/repo-alpha", sessionIds: ["s-a"] }, { path: "/repo-beta", sessionIds: ["s-b"] }]);
+
+  // 1. 先成功解析一次，写入模块级 lastGoodWorkspace，再解析未知会话
+  assert.equal(resolve("s-a", { workspacesRt }), "/repo-alpha");
+  assert.equal(resolve("unknown-session", { workspacesRt }), null, "未知会话必须 fail closed，不得回退 lastGoodWorkspace");
+
+  // 2. 孤儿子会话：父会话已不在快照中
+  const orphanRt = sessSnap({ byId: { orphan: { id: "orphan", parentId: "gone" } } });
+  assert.equal(resolve("orphan", { workspacesRt, sessionsRt: orphanRt }), null, "父会话缺失时不猜测工作区");
+
+  // 3. 循环谱系：不得死循环
+  const cycleRt = sessSnap({ byId: { A: { id: "A", parentId: "B" }, B: { id: "B", parentId: "A" } } });
+  assert.equal(resolve("A", { workspacesRt, sessionsRt: cycleRt }), null, "循环谱系安全返回 null");
+
+  // 4. 畸形输入：类型全错也不抛
+  const badRt = sessSnap({ byId: "oops", items: 42, subagentsByParent: { p: { entries: "no" } }, currentAddress: 5, current: 7 });
+  assert.equal(resolve("s-a", { workspacesRt, sessionsRt: badRt }), "/repo-alpha", "畸形会话快照不影响 workspace 成员解析");
+  assert.equal(resolve("nobody", { workspacesRt, sessionsRt: badRt }), null);
+
+  // 5. workspace 快照畸形：sessionIds 非数组 / path 非字符串
+  const badWsRt = wsSnap([{ path: "/x", sessionIds: "s-a" }, { path: 5, sessionIds: ["s-a"] }, null, { sessionIds: ["s-a"] }]);
+  assert.equal(resolve("s-a", { workspacesRt: badWsRt }), null, "畸形 workspace 记录不得被采信");
+
+  // 6. 快照 getSnapshot 抛异常 → 整体 fail closed
+  const throwRt = { list: { getSnapshot: () => { throw new Error("boom"); } } };
+  assert.equal(resolve("s-a", { workspacesRt: throwRt, sessionsRt: throwRt }), null, "getSnapshot 抛异常时返回 null");
+
+  // 7. 多工程隔离：B 的子代理只能解析到 B，未知会话不回退到任何已见工作区
+  const isoRt = sessSnap({ byId: { "child-b": { id: "child-b", parentId: "s-b" } } });
+  assert.equal(resolve("child-b", { workspacesRt, sessionsRt: isoRt }), "/repo-beta");
+  assert.equal(resolve("child-of-nowhere", { workspacesRt, sessionsRt: isoRt }), null);
+});
+
+test("g-244 生成物一致：client.js 含真实 resolver 且与源模块同源", () => {
+  const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
+
+  // 源模块与生成物中的 resolver 片段必须逐字一致（build-client.sh 未过期）
+  const start = plugin.indexOf("let lastGoodWorkspace = null;");
+  const fnStart = plugin.indexOf("function resolveWorkspaceOfSession(sessionId) {", start);
+  let depth = 0;
+  let end = -1;
+  for (let i = plugin.indexOf("{", fnStart); i < plugin.length; i++) {
+    const ch = plugin[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") { depth--; if (depth === 0) { end = i + 1; break; } }
+  }
+  const resolverSrc = plugin.slice(start, end);
+  assert.ok(resolverSrc.length > 0, "必须能提取 resolver 源片段");
+  assert.ok(bundle.includes(resolverSrc), "client.js 必须包含与 plugin.js 同源的 resolver 片段（需重跑 build-client.sh）");
+
+  // 关键能力契约（g-244 三项 In-Scope）
+  assert.match(bundle, /const itemList = Array\.isArray\(snap\.items\)/);
+  assert.match(bundle, /Object\.prototype\.hasOwnProperty\.call\(rec, sid\)/);
+  assert.match(bundle, /item\?\.parentId === "string"/);
+  assert.match(bundle, /item\?\.parentSessionId === "string"/);
+  assert.match(bundle, /snap\.subagentsByParent/);
+  assert.match(bundle, /snap\.currentAddress/);
+  assert.match(bundle, /\\\/\\\.worktrees\\\//);
+  assert.doesNotMatch(bundle, /if \(lastGoodWorkspace\) return lastGoodWorkspace/);
+});
