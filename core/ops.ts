@@ -3157,8 +3157,8 @@ function atomicCardDigest(cardFile: string): string | null {
  *  列出每张卡的 title/summary/正文全文，子代理直接使用、无需猜卡片路径。
  *  g-183：显式注入卡片正文引用的附件 refs（@att/<name>，含审计摘要），不带旧 kind。
  *  无 filled/reviewed 卡片时返回带「（无）」说明的短段（恒非 null，调用方总能注入）。 */
-export function formatHarvestedCardsSection(root: string, goalId: string): string {
-  const cards = harvestedCards(root, goalId);
+export function formatHarvestedCardsSection(root: string, goalId: string, preHarvestedCards?: HarvestedCard[]): string {
+  const cards = preHarvestedCards ?? harvestedCards(root, goalId);
   if (cards.length === 0) {
     return [
       `## 已收集上下文卡片成果（g-120 注入）`,
@@ -3439,8 +3439,8 @@ export function harvestReviewedAttemptHandoffs(root: string, goalId: string): At
 
 /** 格式化已确认 handoff 注入段（g-150，供执行派发 prompt）。
  *  无有效 handoff 时返回空字符串（调用方条件拼接，不影响无历史 prompt）。 */
-export function formatReviewedAttemptHandoffsSection(root: string, goalId: string): string {
-  const handoffs = harvestReviewedAttemptHandoffs(root, goalId);
+export function formatReviewedAttemptHandoffsSection(root: string, goalId: string, preHarvestedHandoffs?: AttemptHandoff[]): string {
+  const handoffs = preHarvestedHandoffs ?? harvestReviewedAttemptHandoffs(root, goalId);
   if (handoffs.length === 0) return "";
 
   const h = handoffs[0]; // 单文件简化：最多一个
@@ -3604,6 +3604,30 @@ function attemptWorktreeEvidence(root: string, goalId: string, attemptId: string
   return { relative_path: relativePath, branch: `refs/heads/${goalId}-${attemptId}`, canonical_root: canonicalRoot, ...(head ? { head } : {}) };
 }
 
+/** g-237/g-241：执行准入门禁校验。在派发/启动子代理前完成状态与准入核验。 */
+export function assertExecutionAdmission(
+  root: string,
+  goalId: string,
+  opts?: { force?: boolean },
+): { goalFile: string; doc: GoalDoc } {
+  const goalFile = findGoalFile(root, goalId);
+  if (basename(goalFile) !== "goal.md") {
+    throw new GraphError(`暂存目标（backlog）不能有执行 attempt，请先排期移入 goals/ 或版本`);
+  }
+  const doc = loadGoal(goalFile);
+  const status = String(doc.meta.status ?? "");
+  if (status === "draft") {
+    throw new GraphError(`草稿目标未规划，不允许直接执行，请先排期进入版本或规划目标`);
+  }
+  if (status === "blocked") {
+    throw new GraphError(`目标当前处于阻塞状态（${doc.meta.blocked_reason || "未提供原因"}），不允许直接执行`);
+  }
+  if (status === "delivered") {
+    throw new GraphError(`已交付目标不允许直接派发执行，如需修改请先退回 review`);
+  }
+  return { goalFile, doc };
+}
+
 export function startAttempt(
   root: string,
   goalId: string,
@@ -3620,11 +3644,37 @@ export function startAttempt(
     reasoningEffort?: string | null;
     mode?: string | null;
     modeSource?: "override" | "project" | "global" | "default" | null;
+    taskType?: "merge" | "rewrite" | "fix" | null;
+    baselineCommit?: string | null;
+    sourceAttempt?: string | null;
+    acceptanceItems?: string[] | null;
+    templateVersion?: string | null;
+    promptHash?: string | null;
+    contextDigest?: string | null;
+    contextVersion?: string | null;
   },
 ): string {
   // 校验 attemptBrief 类型（g-150 review 问题 4：必须是 string 或 undefined，不可是其他类型）
   if (opts.attemptBrief !== undefined && typeof opts.attemptBrief !== "string") {
     throw new GraphError("attemptBrief 必须是 string 类型");
+  }
+  // g-241：校验结构化任务字段
+  if (opts.taskType !== undefined && opts.taskType !== null && !["merge", "rewrite", "fix"].includes(opts.taskType)) {
+    throw new GraphError("task_type 必须是 merge、rewrite 或 fix；空值请传 null 或省略");
+  }
+  if (opts.baselineCommit !== undefined && opts.baselineCommit !== null && (typeof opts.baselineCommit !== "string" || !opts.baselineCommit.trim())) {
+    throw new GraphError("baseline_commit 必须是非空 string；空值请传 null 或省略");
+  }
+  if (opts.sourceAttempt !== undefined && opts.sourceAttempt !== null && (typeof opts.sourceAttempt !== "string" || !opts.sourceAttempt.trim())) {
+    throw new GraphError("source_attempt 必须是非空 string；空值请传 null 或省略");
+  }
+  if (opts.acceptanceItems !== undefined && opts.acceptanceItems !== null) {
+    if (!Array.isArray(opts.acceptanceItems)) {
+      throw new GraphError("acceptance_items 必须是 string[]；空值请传 null 或省略");
+    }
+    if (opts.acceptanceItems.some((it) => typeof it !== "string" || !it.trim())) {
+      throw new GraphError("acceptance_items 的每项必须是非空 string；没有验收项请传 []，未知请传 null 或省略");
+    }
   }
   const goalFile = findGoalFile(root, goalId);
   // backlog 目标没有目录结构，无法创建 attempt
@@ -3673,6 +3723,32 @@ export function startAttempt(
     meta.mode = normalizedMode;
     if (opts.modeSource) meta.mode_source = opts.modeSource;
   }
+  // g-241：持久化 task_type、baseline_commit、source_attempt、acceptance_items（保留 null/省略/[] 契约）
+  if (opts.taskType !== undefined) {
+    meta.task_type = opts.taskType;
+  }
+  if (opts.baselineCommit !== undefined) {
+    meta.baseline_commit = opts.baselineCommit !== null ? opts.baselineCommit.trim() : null;
+  }
+  if (opts.sourceAttempt !== undefined) {
+    meta.source_attempt = opts.sourceAttempt !== null ? opts.sourceAttempt.trim() : null;
+  }
+  if (opts.acceptanceItems !== undefined) {
+    meta.acceptance_items = opts.acceptanceItems !== null ? opts.acceptanceItems.map((it) => it.trim()) : null;
+  }
+  // g-241：持久化模板版本、prompt hash、上下文快照 digest 及上下文版本
+  if (opts.templateVersion && opts.templateVersion.trim()) {
+    meta.template_version = opts.templateVersion.trim();
+  }
+  if (opts.promptHash && opts.promptHash.trim()) {
+    meta.prompt_hash = opts.promptHash.trim();
+  }
+  if (opts.contextDigest && opts.contextDigest.trim()) {
+    meta.context_digest = opts.contextDigest.trim();
+  }
+  if (opts.contextVersion && opts.contextVersion.trim()) {
+    meta.context_version = opts.contextVersion.trim();
+  }
   // g-150：写入 injected_handoffs 和 brief 到 attempt meta（审计可追溯）
   // 无 handoff/brief 时保持当前 prompt 兼容（g-150 review 问题 5）
   if (Array.isArray(opts.injectedHandoffs)) {
@@ -3696,6 +3772,14 @@ export function startAttempt(
     ...(opts.reasoningEffort && opts.reasoningEffort.trim() ? { reasoning_effort: opts.reasoningEffort.trim() } : {}),
     ...(normalizedMode ? { mode: normalizedMode } : {}),
     ...(normalizedMode && opts.modeSource ? { mode_source: opts.modeSource } : {}),
+    ...(opts.taskType !== undefined ? { task_type: opts.taskType } : {}),
+    ...(opts.baselineCommit !== undefined ? { baseline_commit: opts.baselineCommit !== null ? opts.baselineCommit.trim() : null } : {}),
+    ...(opts.sourceAttempt !== undefined ? { source_attempt: opts.sourceAttempt !== null ? opts.sourceAttempt.trim() : null } : {}),
+    ...(opts.acceptanceItems !== undefined ? { acceptance_items: opts.acceptanceItems !== null ? opts.acceptanceItems.map((it) => it.trim()) : null } : {}),
+    ...(opts.templateVersion && opts.templateVersion.trim() ? { template_version: opts.templateVersion.trim() } : {}),
+    ...(opts.promptHash && opts.promptHash.trim() ? { prompt_hash: opts.promptHash.trim() } : {}),
+    ...(opts.contextDigest && opts.contextDigest.trim() ? { context_digest: opts.contextDigest.trim() } : {}),
+    ...(opts.contextVersion && opts.contextVersion.trim() ? { context_version: opts.contextVersion.trim() } : {}),
     ...(Array.isArray(opts.injectedCards)
       ? { injected_cards: opts.injectedCards }
       : {}),
@@ -4897,6 +4981,7 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
             provider: m.provider ?? null,
             model: m.model ?? null,
             model_route: m.model_route ?? null,
+            reasoning_effort: m.reasoning_effort ?? null,
             mode: normalizeSubagentMode(m.mode),
             mode_source: m.mode_source ?? null,
             // g-190：解绑定位/UI 需要的绑定信息（token 为 CAS 能力，仅下发给 GUI）
@@ -4906,6 +4991,15 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
             detached_at: m.detached_at ?? null,
             detached_by: m.detached_by ?? null,
             worktree: m.worktree ?? null,
+            // g-241：结构化任务事实与快照审计
+            task_type: m.task_type ?? null,
+            baseline_commit: m.baseline_commit ?? null,
+            source_attempt: m.source_attempt ?? null,
+            acceptance_items: Array.isArray(m.acceptance_items) ? m.acceptance_items : (m.acceptance_items === null ? null : null),
+            template_version: m.template_version ?? null,
+            prompt_hash: m.prompt_hash ?? null,
+            context_digest: m.context_digest ?? null,
+            context_version: m.context_version ?? null,
           });
         } catch { /* 跳过 */ }
       }

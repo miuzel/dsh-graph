@@ -126,6 +126,7 @@ test("g-113 graph_start_attempt 注入目标相对路径以 workspace 根为基�
   const ws = join(base, "proj");
   init(join(ws, ".dsh-graph"));
   const goalId = createGoal(join(ws, ".dsh-graph"), { title: "rel 目标", version: "v-t", actor: "test" });
+  setCriteria(join(ws, ".dsh-graph"), goalId, ["判据一"], "test");
   let capturedPrompt = "";
   const registered: any[] = [];
   const ctx = {
