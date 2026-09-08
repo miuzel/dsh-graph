@@ -183,7 +183,8 @@ function assertPromptInjected(prompt: string, cards: string[], wantWorktree: boo
   for (const c of cards) assert.ok(prompt.includes(c), `prompt 含卡片 ${c} 的 id`);
   if (wantWorktree) {
     assert.ok(prompt.includes("worktree 隔离"), "prompt 默认附带 worktree 指令");
-    assert.ok(prompt.includes("git worktree add"), "worktree 指令含 add 用法");
+    assert.ok(prompt.includes("预创建并登记"), "worktree 指令含 supervisor 预创建登记约定");
+    assert.ok(!prompt.includes("git worktree add"), "worktree 指令不再要求子代理自行 add");
     assert.ok(prompt.includes(".dsh-graph/"), "worktree 指令含 .dsh-graph 数据分工");
     assert.ok(prompt.includes("主工作树写"), "worktree 指令明确看板数据仍在主工作树写");
   } else {

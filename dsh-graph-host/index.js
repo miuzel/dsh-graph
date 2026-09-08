@@ -336,9 +336,9 @@ const HELP_TEXT = [
 
 // g-120：worktree 隔离指令（Supervisor 强制默认）——与 supervisor-guide.md 执行规范保持一致。
 // graph_start_attempt / start-execution 默认注入本段；只有 supervisor 明确 override 才能跳过。
-const WORKTREE_GUIDE = `【强制 worktree 隔离】本次任务默认必须在独立 worktree 中完成：先确认当前仓库根与目标分支，再执行 \`git worktree add .worktrees/g-<goal-number>-att-<NN> -b g-<goal-number>-att-<NN>\`，之后所有代码/测试/生成文件改动只能发生在该 worktree；**禁止直接修改 main 或其他目标分支，也禁止自行以「简单改动」为理由绕过隔离**。完成后在 worktree 提交，等待 supervisor 复核；当前版本由 supervisor 合并 main，未来版本合并对应版本集成/测试分支（如 v0.8-test）。
-【唯一例外】仅当 supervisor 在本次派发的 attempt brief 中明确写出 \`worktree=false\` 与理由时，才允许真正的一两行、唯一文件小修直接 main；文档/长期记忆等小修改由 supervisor 自己处理，子代理不得擅自套用例外。
-【worktree 命名规范】新建 attempt 工作树必须命名为 .worktrees/g-<goal-number>-att-<NN>，分支使用相同后缀（例如 g-125-att-03、g-163-att-03）；不要使用省略 goal id 或未补零的歧义名称。
+const WORKTREE_GUIDE = `【强制 worktree 隔离】本次任务默认必须在独立 worktree 中完成：专属 worktree 由 supervisor 预创建并登记（命名约定为 .worktrees/g-<goal-number>-att-<NN>，分支同名，基于当前版本集成分支）；子代理直接在给定工作树内工作，**绝不自行拉树、建分支、切分支、改分支**；未给定预登记树时按 brief 说明在当前指定工作区执行，不得自行补建。代码改动、测试及生成文件只能发生在该 worktree；**main 为只读已发布分支，禁止直接修改 main 或其他目标分支，也禁止自行以「简单改动」为理由绕过隔离**。完成后在 worktree 提交，等待 supervisor 复核；由 supervisor 合并到当前版本集成分支（如 <version>-test）。
+【唯一例外】仅当 supervisor 在本次派发的 attempt brief 中明确写出 \`worktree=false\` 与理由时，才允许豁免独立 worktree；文档/长期记忆等小修改由 supervisor 自己处理，子代理不得擅自套用例外。即便 worktree=false，main 分支仍绝对只读，禁止直接修改 main。
+【worktree 命名约定】supervisor 预创建并登记的 attempt 工作树统一遵循 .worktrees/g-<goal-number>-att-<NN> 规范，分支使用相同后缀（例如 g-125-att-03、g-163-att-03），消除歧义与分支冲突。
 数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
 
 const MINOR_TASK_GUIDE = `【微小改动/轻量任务快速通道】当前目标属于 patch / chore 类型（低风险微改/轻量任务）：
@@ -346,7 +346,7 @@ const MINOR_TASK_GUIDE = `【微小改动/轻量任务快速通道】当前目�
 - 改动边界：严格限定于声明的微小改动范围，禁止产生无关副作用、禁止私自扩大破坏面；
 - 验证与自报：改动后针对性跑通单测与校验，使用 graph_report_status 汇报并在完成后迁至 review 等待复核。`;
 
-function resolveWorktreeGuide(goalType, explicitWorktree) {
+export function resolveWorktreeGuide(goalType, explicitWorktree) {
   if (explicitWorktree === false) return "";
   if (explicitWorktree === true) return WORKTREE_GUIDE;
   if (goalType === "patch" || goalType === "chore") return MINOR_TASK_GUIDE;
