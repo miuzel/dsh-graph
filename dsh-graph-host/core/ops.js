@@ -4350,6 +4350,11 @@ export function deleteGoal(root, id, opts) {
         details: { id },
     });
 }
+/** g-233：提取目标描述小节正文 */
+export function extractGoalDescription(body) {
+    const m = (body ?? "").match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
+    return m ? m[1].trim() : "";
+}
 export function boardProjection(root, opts) {
     const includeArchived = opts?.includeArchived ?? false;
     const events = opts?.events ?? readEvents(root);
@@ -4468,6 +4473,7 @@ export function boardProjection(root, opts) {
             criteria_items: criteriaItems(doc.body),
             rules_snapshot: meta.rules_snapshot ?? null,
             updated_at: updatedAt,
+            description: extractGoalDescription(doc.body),
         };
     };
     const versions = [];

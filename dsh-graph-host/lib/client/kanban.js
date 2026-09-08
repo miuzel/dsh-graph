@@ -79,6 +79,41 @@
       const [deliverColumnCollapsed, setDeliverColumnCollapsed] = React.useState(false);
       // g-162: 泳道折叠状态（active 版本泳道、独立目标泳道、backlog 泳道独立折叠，默认展开；只在当前页面生效）
       const [collapsedLanes, setCollapsedLanes] = React.useState({});
+      // g-233：目标搜索与导航状态
+      const [searchQuery, setSearchQuery] = React.useState("");
+      const [searchActiveQuery, setSearchActiveQuery] = React.useState("");
+      const [searchFullText, setSearchFullText] = React.useState(false);
+      const [searchMatches, setSearchMatches] = React.useState([]);
+      const [searchCurrentIndex, setSearchCurrentIndex] = React.useState(0);
+      const [searchFeedback, setSearchFeedback] = React.useState(null);
+      const searchInputRef = React.useRef(null);
+      // 临时状态记录栈：记录因搜索自动展开或 unhide 的项，退出搜索时精准恢复原状
+      const tempExpandedRef = React.useRef({
+        unhiddenSlugs: new Set(),
+        expandedLanes: new Set(),
+        openReleasedSlugs: new Set(),
+        deliverExpanded: false,
+        blockedExpanded: false,
+      });
+
+      // g-233：全局 Ctrl+F / Cmd+F 聚焦看板搜索框
+      React.useEffect(() => {
+        const handleKeyDown = (e) => {
+          if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+            const activeEl = document.activeElement;
+            const isInput = activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.isContentEditable);
+            if (!isInput || activeEl === searchInputRef.current) {
+              e.preventDefault();
+              if (searchInputRef.current) {
+                searchInputRef.current.focus();
+                searchInputRef.current.select();
+              }
+            }
+          }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+      }, []);
       // g-77647351：拖拽状态机
       const [drag, setDrag] = React.useState(null); // {goalId, fromStatus, overGoalId, overStageKey, overHalf, laneKey}
       const dropCommitted = React.useRef(false);
@@ -626,6 +661,216 @@
         ...b.standalone,
         ...b.backlog,
       ];
+
+      // ===== g-233: 目标搜索与导航核心函数 =====
+      const exitSearch = () => {
+        const { unhiddenSlugs, expandedLanes, openReleasedSlugs, deliverExpanded, blockedExpanded } = tempExpandedRef.current;
+        if (unhiddenSlugs && unhiddenSlugs.size > 0) {
+          const currentHidden = getHiddenVersionSlugs(activeWs);
+          const restored = [...new Set([...currentHidden, ...unhiddenSlugs])];
+          setHiddenVersionSlugs(restored);
+        }
+        if (expandedLanes && expandedLanes.size > 0) {
+          setCollapsedLanes((prev) => {
+            const next = { ...prev };
+            for (const key of expandedLanes) next[key] = true;
+            return next;
+          });
+        }
+        if (openReleasedSlugs && openReleasedSlugs.size > 0) {
+          setOpenReleased((prev) => {
+            const next = { ...prev };
+            for (const slug of openReleasedSlugs) delete next[slug];
+            return next;
+          });
+        }
+        if (deliverExpanded) setDeliverColumnCollapsed(true);
+        if (blockedExpanded) setBlockedColumnCollapsed(true);
+        tempExpandedRef.current = {
+          unhiddenSlugs: new Set(),
+          expandedLanes: new Set(),
+          openReleasedSlugs: new Set(),
+          deliverExpanded: false,
+          blockedExpanded: false,
+        };
+        setSearchActiveQuery("");
+        setSearchMatches([]);
+        setSearchCurrentIndex(0);
+        setSearchFeedback(null);
+      };
+
+      const navigateToMatch = (idx, matchesList) => {
+        const matches = matchesList ?? searchMatches;
+        if (!matches.length) return;
+        const targetIdx = ((idx % matches.length) + matches.length) % matches.length;
+        setSearchCurrentIndex(targetIdx);
+        const target = matches[targetIdx];
+        if (!target) return;
+
+        // 1. 若在隐藏版本内，临时 unhide
+        if (target.versionSlug) {
+          const currentHidden = getHiddenVersionSlugs(activeWs);
+          if (currentHidden.includes(target.versionSlug)) {
+            tempExpandedRef.current.unhiddenSlugs.add(target.versionSlug);
+            setHiddenVersionSlugs(currentHidden.filter((s) => s !== target.versionSlug));
+          }
+        }
+
+        // 2. 若在折叠版本内，自动展开
+        if (target.isReleased && target.versionSlug) {
+          setOpenReleased((prev) => {
+            if (!prev[target.versionSlug]) {
+              tempExpandedRef.current.openReleasedSlugs.add(target.versionSlug);
+              return { ...prev, [target.versionSlug]: true };
+            }
+            return prev;
+          });
+        } else if (target.laneKey) {
+          setCollapsedLanes((prev) => {
+            if (prev[target.laneKey]) {
+              tempExpandedRef.current.expandedLanes.add(target.laneKey);
+              return { ...prev, [target.laneKey]: false };
+            }
+            return prev;
+          });
+        }
+
+        // 3. 若在折叠的交付/阻塞列，自动展开
+        const stage = stageOf(target.status);
+        if (stage === "deliver") {
+          setDeliverColumnCollapsed((prev) => {
+            if (prev) {
+              tempExpandedRef.current.deliverExpanded = true;
+              return false;
+            }
+            return prev;
+          });
+        } else if (stage === "blocked") {
+          setBlockedColumnCollapsed((prev) => {
+            if (prev) {
+              tempExpandedRef.current.blockedExpanded = true;
+              return false;
+            }
+            return prev;
+          });
+        }
+
+        // 4. 定位并平滑滚动到卡片
+        setTimeout(() => {
+          const el = document.getElementById("goal-" + target.id) || document.querySelector(`[data-goal-id="${target.id}"]`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+          }
+        }, 80);
+      };
+
+      const executeSearch = (queryText, isFullText = searchFullText) => {
+        const q = String(queryText ?? "").trim();
+        if (!q) {
+          setSearchFeedback("请输入搜索关键字");
+          setTimeout(() => setSearchFeedback((fb) => fb === "请输入搜索关键字" ? null : fb), 2500);
+          return;
+        }
+        setSearchFeedback(null);
+        const lowerQ = q.toLowerCase();
+
+        // 遍历所有目标候选（包含所有版本，含当前处于隐藏状态的版本）
+        const candidates = [];
+        for (const v of (b?.versions ?? [])) {
+          const isRel = v.status === "released";
+          for (const g of (v.goals ?? [])) {
+            candidates.push({
+              ...g,
+              versionSlug: v.slug,
+              versionName: v.name,
+              isReleased: isRel,
+              laneKey: isRel ? "rellane-" + v.slug : "v-" + v.slug,
+            });
+          }
+        }
+        for (const g of (b?.standalone ?? [])) {
+          candidates.push({
+            ...g,
+            versionSlug: null,
+            isReleased: false,
+            laneKey: "standalone",
+          });
+        }
+        for (const g of (b?.backlog ?? [])) {
+          candidates.push({
+            ...g,
+            versionSlug: null,
+            isReleased: false,
+            laneKey: "backlog",
+          });
+        }
+
+        const matches = [];
+        for (const c of candidates) {
+          const titleHit = String(c.title ?? "").toLowerCase().includes(lowerQ);
+          const idHit = String(c.id ?? "").toLowerCase().includes(lowerQ);
+          let descHit = false;
+          let snippet = "";
+          if (isFullText && c.description) {
+            descHit = String(c.description).toLowerCase().includes(lowerQ);
+            if (descHit) {
+              snippet = extractMatchSnippet(c.description, q);
+            }
+          }
+          if (titleHit || idHit || descHit) {
+            matches.push({
+              id: c.id,
+              title: c.title,
+              status: c.status,
+              versionSlug: c.versionSlug,
+              isReleased: c.isReleased,
+              laneKey: c.laneKey,
+              snippet: snippet || (descHit ? extractMatchSnippet(c.description, q) : ""),
+            });
+          }
+        }
+
+        setSearchActiveQuery(q);
+        setSearchMatches(matches);
+        if (matches.length === 0) {
+          setSearchFeedback("未找到匹配");
+        } else {
+          navigateToMatch(0, matches);
+        }
+      };
+
+      const handleSearchInputKeyDown = (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (e.shiftKey) {
+            if (searchMatches.length > 0) navigateToMatch(searchCurrentIndex - 1);
+          } else {
+            if (searchActiveQuery && searchActiveQuery === searchQuery.trim() && searchMatches.length > 0) {
+              navigateToMatch(searchCurrentIndex + 1);
+            } else {
+              executeSearch(searchQuery, searchFullText);
+            }
+          }
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          exitSearch();
+          if (searchInputRef.current) searchInputRef.current.blur();
+        } else if (e.key === "ArrowDown") {
+          if (searchActiveQuery && searchMatches.length > 0) {
+            e.preventDefault();
+            navigateToMatch(searchCurrentIndex + 1);
+          }
+        } else if (e.key === "ArrowUp") {
+          if (searchActiveQuery && searchMatches.length > 0) {
+            e.preventDefault();
+            navigateToMatch(searchCurrentIndex - 1);
+          }
+        }
+      };
+
+      const matchedGoalMap = new Map();
+      for (const m of searchMatches) matchedGoalMap.set(m.id, m);
+      const currentMatchedGoalId = searchMatches[searchCurrentIndex]?.id ?? null;
       // g-129/g-159: 打开新建目标弹窗；普通入口预选最新 active，泳道入口固定预选目标版本
       const openCreateGoal = (version) => {
         const entryVersion = version ?? null;
@@ -820,7 +1065,17 @@
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag.overGoalId === g.id;
-              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              const mInfo = matchedGoalMap.get(g.id);
+              return Card({
+                ...g,
+                _tags: tagsFor(g),
+                _polishActive: polishGoal === g.id,
+                _updateEmphasis: updateEmphasis[g.id] ?? null,
+                _searchQuery: searchActiveQuery,
+                _isSearchMatched: !!mInfo,
+                _isSearchCurrent: currentMatchedGoalId === g.id,
+                _snippet: mInfo?.snippet ?? "",
+              }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -1001,7 +1256,17 @@
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
-              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              const mInfo = matchedGoalMap.get(g.id);
+              return Card({
+                ...g,
+                _tags: tagsFor(g),
+                _polishActive: polishGoal === g.id,
+                _updateEmphasis: updateEmphasis[g.id] ?? null,
+                _searchQuery: searchActiveQuery,
+                _isSearchMatched: !!mInfo,
+                _isSearchCurrent: currentMatchedGoalId === g.id,
+                _snippet: mInfo?.snippet ?? "",
+              }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -1367,7 +1632,118 @@
             "显示已归档"),
           // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
           h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
-            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (activeWs ?? "∅"))),
+            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (activeWs ?? "∅")),
+          // g-233：标题行最右侧增加搜索框
+          h("div", {
+            style: {
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              marginLeft: "auto",
+              flexShrink: 0,
+            },
+            className: "dg-search-bar",
+          },
+            h("div", { style: { position: "relative", display: "flex", alignItems: "center" } },
+              h("input", {
+                ref: searchInputRef,
+                type: "text",
+                className: "dg-search-input",
+                style: {
+                  width: searchActiveQuery ? 150 : 130,
+                  padding: "3px 22px 3px 8px",
+                  fontSize: 12,
+                  borderRadius: 4,
+                  border: "1px solid " + (searchActiveQuery ? "var(--dsw-alias-state-business-primary, #4c8dff)" : "var(--dsw-alias-border-l2, rgba(128,128,128,.35))"),
+                  background: "var(--dsw-alias-bg-layer-2, rgba(30,31,36,.92))",
+                  color: "var(--dsw-alias-label-primary, #e6e6e6)",
+                  outline: "none",
+                  boxSizing: "border-box",
+                  height: 24,
+                },
+                placeholder: "查找 goal (Ctrl+F)...",
+                value: searchQuery,
+                onChange: (e) => setSearchQuery(e.target.value),
+                onKeyDown: handleSearchInputKeyDown,
+              }),
+              searchQuery ? h("span", {
+                style: {
+                  position: "absolute",
+                  right: 6,
+                  cursor: "pointer",
+                  opacity: 0.6,
+                  fontSize: 12,
+                  lineHeight: 1,
+                  userSelect: "none",
+                },
+                title: "清空",
+                onClick: () => {
+                  setSearchQuery("");
+                  if (searchActiveQuery) exitSearch();
+                },
+              }, "✕") : null,
+            ),
+            h("label", {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                gap: 3,
+                fontSize: 12,
+                cursor: "pointer",
+                userSelect: "none",
+                opacity: 0.85,
+                whiteSpace: "nowrap",
+              },
+              title: "勾选后同时搜索目标正文描述",
+            },
+              h("input", {
+                type: "checkbox",
+                checked: searchFullText,
+                onChange: (e) => {
+                  const checked = e.target.checked;
+                  setSearchFullText(checked);
+                  if (searchActiveQuery) executeSearch(searchQuery, checked);
+                },
+              }),
+              "全文"),
+            searchActiveQuery && searchMatches.length > 0 ? h(React.Fragment, null,
+              h("span", {
+                style: {
+                  fontSize: 12,
+                  opacity: 0.9,
+                  fontWeight: 600,
+                  minWidth: 28,
+                  textAlign: "center",
+                  whiteSpace: "nowrap",
+                },
+              }, `${searchCurrentIndex + 1}/${searchMatches.length}`),
+              h("button", {
+                style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 13, lineHeight: 1.2, height: 24 },
+                className: "dg-btn",
+                title: "上一个 (Shift+Enter / ↑)",
+                onClick: () => navigateToMatch(searchCurrentIndex - 1),
+              }, "‹"),
+              h("button", {
+                style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 13, lineHeight: 1.2, height: 24 },
+                className: "dg-btn",
+                title: "下一个 (Enter / ↓)",
+                onClick: () => navigateToMatch(searchCurrentIndex + 1),
+              }, "›"),
+              h("button", {
+                style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 11, lineHeight: 1.2, height: 24 },
+                className: "dg-btn",
+                title: "退出查找 (Esc)",
+                onClick: exitSearch,
+              }, "✕"),
+            ) : null,
+            searchFeedback ? h("span", {
+              style: {
+                fontSize: 12,
+                color: searchFeedback === "未找到匹配" ? "var(--dsw-alias-state-error-primary, #ff6b6b)" : "var(--dsw-alias-label-secondary, #aaa)",
+                whiteSpace: "nowrap",
+              },
+            }, searchFeedback) : null,
+          )),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession

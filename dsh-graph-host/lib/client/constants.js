@@ -202,6 +202,31 @@
       .dg-chevron:hover { background: rgba(128,128,128,.32); opacity: 1; }
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
+      /* g-233：搜索匹配与当前选中视觉反馈 */
+      .dg-card-matched { box-shadow: 0 0 0 1.5px rgba(255,193,7,.55) !important; }
+      .dg-card-search-current {
+        box-shadow: 0 0 0 2.5px #ff9800, 0 2px 14px rgba(255,152,0,.55) !important;
+        background: rgba(255,152,0,.14) !important;
+        animation: dg-search-pulse 2s infinite ease-in-out;
+      }
+      @keyframes dg-search-pulse {
+        0%, 100% { box-shadow: 0 0 0 2.5px #ff9800, 0 2px 14px rgba(255,152,0,.55); }
+        50% { box-shadow: 0 0 0 3.5px #ffb74d, 0 4px 18px rgba(255,152,0,.8); }
+      }
+      .dg-search-highlight {
+        background: rgba(255,235,59,.45);
+        color: inherit;
+        padding: 0 1px;
+        border-radius: 2px;
+        font-weight: 600;
+      }
+      .dg-search-highlight-current {
+        background: #ffd54f;
+        color: #111;
+        padding: 0 2px;
+        border-radius: 2px;
+        font-weight: 700;
+      }
       .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); background: var(--dsw-alias-bg-base, rgba(30,31,36,.85)); }
       /* g-216: 看板以低层级保留 composerSeat 输入框；看板打开时禁用并降下宿主 widthHandle，避免其遮挡/抢占看板边缘。 */
       .wSkVaW_root:has(.dg-kanban-root) .wSkVaW_widthHandle,
