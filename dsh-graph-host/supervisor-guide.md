@@ -197,10 +197,8 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   等人工输入的空窗期也要报「正在等 X」，让负责人知道你没卡死；
 - **每轮收尾更新为完成态**：结束工作前最后一步把 status 更新为「空闲待命 / 本轮完成 /
   等待输入」等完成态——看板如实反映空闲/完成状态；
-- `graph_start_attempt` 派发执行；传入可选 `card` 参数时统一派发卡片收集（自动生成完整收集提示词并绑定卡片）；**status_line 由执行/收集子代理自己更新**
-  （`graph_report_status`），**supervisor 绝不替子代理汇报**——卡片上那句话是子代理的
-  自述，代劳即伪造进展。要求子代理**及时**更新：每做一个动作就写一句，**简短
-  （一句人话，尽量 20 字内）**，不攒到结束、不写长篇；
+- `graph_start_attempt` 派发执行；传入可选 `card` 参数时统一派发卡片收集（自动生成完整收集提示词并绑定卡片）；**status_line 仅由执行子代理更新**
+  （`graph_report_status`，绑定 attempt），**supervisor 绝不替子代理汇报**。**收集子代理不创建 attempt，绝不伪造 attempt 调用 `graph_report_status`**；收集进度依托卡片生命周期状态（`empty → collecting → filled → reviewed`）与平台 subagent 生命周期协作；收集完成调用 `graph_fill_card` 回填内容并等待主管复核；要求执行子代理**及时**更新：每做一个动作就写一句，**简短（一句人话，尽量 20 字内）**，不攒到结束、不写长篇；
 - **attempt 关键事实必须用独立字段传入，不从 `attempt_brief`/历史文本猜测**：`task_type` 只允许 `merge`（合入既有候选/集成）、`rewrite`（重写实现）、`fix`（修复现有实现）；`baseline_commit` 传当前权威基线 commit；`source_attempt` 传入真正前序 attempt 的完整身份；`acceptance_items` 传当前验收项的 string 数组。字符串字段无值统一传 `null` 或省略（禁止空字符串）；`task_type` 无法分类传 `null`；`acceptance_items=[]` 表示明确没有单独验收项，`null`/省略表示未提供。`attempt_brief` 只写 action 原文。
 - **子代理等待与中断纪律**：派发子代理后，supervisor **不要长时间 think/poll 等待**，
   更不能**仅因等待就中断子代理**。要给子代理足够工作时间时，可启动**受管定时/后台任务

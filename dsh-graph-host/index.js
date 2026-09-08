@@ -118,6 +118,12 @@ import {
   resolveSubagentMode,
   toolFilterForMode,
   buildSubagentDefaultPersona,
+  SUBAGENT_ROLES,
+  normalizeSubagentRole,
+  toolFilterForRole,
+  getRoleProfile,
+  formatPmPrompt,
+  formatReviewPrompt,
   validateSchema,
   schemaErrorResponse,
   settingsPostSchema,
@@ -1157,7 +1163,12 @@ export function apply(ctx, config) {
               try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
             });
             if (!provider) throw new Error(`无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`);
-            const request = { parent: ex.agent, prompt: text(fullPrompt) };
+            const collectToolFilter = toolFilterForRole("collector", a.mode);
+            const request = {
+              parent: ex.agent,
+              prompt: text(fullPrompt),
+              ...(collectToolFilter ? { toolFilter: collectToolFilter } : {}),
+            };
             const agentOptions = {};
             if (effProvider) agentOptions.provider = effProvider;
             if (effModel) agentOptions.model = effModel;
@@ -1518,11 +1529,12 @@ export function apply(ctx, config) {
       if (!provider) {
         return { childId: null, parentSessionId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）` };
       }
-      const modeToolFilter = overrides.mode ? toolFilterForMode(overrides.mode) : undefined;
+      const effRole = overrides.role ? normalizeSubagentRole(overrides.role) ?? "executor" : "executor";
+      const roleToolFilter = toolFilterForRole(effRole, overrides.mode);
       const request = {
         parent,
         prompt: [{ type: "text", text: promptText }],
-        ...(modeToolFilter ? { toolFilter: modeToolFilter } : {}),
+        ...(roleToolFilter ? { toolFilter: roleToolFilter } : {}),
       };
       // g-133：模型路由合成（overrides > project.yaml > profile 全局默认 > 继承），核心逻辑在 core/ops.ts
       const eff = resolveModelRoute(
@@ -2348,18 +2360,16 @@ export function apply(ctx, config) {
             fullPrompt,
             req,
             rRoot,
-            { provider: effProvider, model: effModel, reasoning_effort: effReasoningEffort },
+            { provider: effProvider, model: effModel, reasoning_effort: effReasoningEffort, role: "collector" },
           );
-          let attempt = null;
           if (spawned.error) {
             console.error("[dsh-graph-host] start-collection 子代理启动失败:", spawned.error);
           } else {
-            attempt = startAttempt(rRoot, goal, { executor: "agent:collect", actor: "human:gui" });
-            bindAttemptChild(rRoot, goal, attempt, spawned.childId, "human:gui", spawned.parentSessionId);
             // 事件先行：card.collecting（bindCardChild 写 child_id/parent_session_id）。
+            // g-242：collector 依托卡片生命周期协作，不创建虚假 attempt
             bindCardChild(rRoot, goal, card, { childId: spawned.childId, parentSessionId: spawned.parentSessionId, actor: "human:gui", provider: effProvider, model: effModel });
           }
-          json(res, 200, { ok: true, card, attempt, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
+          json(res, 200, { ok: true, card, attempt: null, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
@@ -2380,8 +2390,12 @@ export function apply(ctx, config) {
           const ws = workspaceOf(req, body) ?? dirname(rRoot);
           const goalRel = relative(ws, goalFile);
           const cfg = readExecutorModel(rRoot);
-          const prompt = `你是固定的产品经理 Agent。请只向主管 Agent 返回“目标定义/润色建议”，不要调用任何 graph_* 工具，不要修改目标、不改变状态、版本或执行语义。\n\n目标 ID：${goal}\ngoal.md 工作区相对路径：${goalRel}\n人工指导意见：${String(guidance ?? "").trim() || "（无）"}\n\n请先用 read 工具读取上述 goal.md，再围绕目标价值、背景、范围、可验证判据、边界/错误路径、风险和人工核验给出简洁、可执行的润色建议；保留原意，不直接替换或写入目标。`;
-          const spawned = await spawnChild(`graph:define-polish/${goal}`, prompt, req, rRoot, cfg);
+          // g-168/g-242 PM 提示词契约：包含 goal.md 工作区相对路径，要求先用 read 工具读取上述 goal.md 并附带指导意见
+          const prompt = formatPmPrompt({ goalId: goal, goalRel, guidance });
+          const spawned = await spawnChild(`graph:define-polish/${goal}`, prompt, req, rRoot, {
+            ...cfg,
+            role: "pm",
+          });
           if (spawned.error) return json(res, 200, { ok: false, child_error: spawned.error });
           json(res, 200, { ok: true, child_id: spawned.childId, model_route: spawned.model_route ?? null });
         } catch (e) {
