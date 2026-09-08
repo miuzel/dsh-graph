@@ -1433,6 +1433,13 @@
           : null,
         showVersionDrawer
           ? h(VersionDrawer, {
+              // g-243：显式稳定 key。本看板根节点的 children 列表里混有带 key 的元素
+              // （...releasedRows 的 rel-<slug> 行）与嵌套数组；已发布版本泳道增删会改变
+              // 这些兄弟的数量，未带 key 的尾部兄弟（本抽屉）会因按位置/索引匹配失败被
+              // 卸载重建，抽屉 DOM 子树（含版本清单滚动容器的 scrollTop）随之丢弃——
+              // 表现为勾选/取消已发布版本的 checkbox 后清单跳回第一行。加 key 后 React
+              // 按 key 复用同一 fiber，滚动位置得以保留。
+              key: "dg-version-drawer",
               versions: b.versions,
               hiddenVersionSlugs,
               onToggleVersion: (slug, visible) => {

@@ -845,6 +845,34 @@ test("g-170 build-client PARTS 收录 criteria-modal 且 bundle 含生成标记�
   assert.match(bundle, /"✏️ 判据"/);
 });
 
+test("g-243 VersionDrawer 必须在 KanbanView 函数体之外声明（否则每次渲染重建抽屉、版本清单滚动位置归零）", () => {
+  const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  const kanbanStart = bundle.indexOf("function KanbanView(props) {");
+  assert.ok(kanbanStart > 0, "bundle 含 KanbanView");
+  // 配平花括号求 KanbanView 函数体范围
+  let depth = 0;
+  let end = -1;
+  for (let i = bundle.indexOf("{", kanbanStart); i < bundle.length; i++) {
+    if (bundle[i] === "{") depth++;
+    else if (bundle[i] === "}") {
+      depth--;
+      if (depth === 0) { end = i; break; }
+    }
+  }
+  assert.ok(end > kanbanStart, "KanbanView 函数体可配平");
+  const vd = bundle.indexOf("function VersionDrawer(props)");
+  assert.ok(vd > 0, "bundle 含 VersionDrawer");
+  // 嵌套在 KanbanView 内部时每次渲染都会产生新函数身份 → React 因 elementType 变化卸载重建
+  assert.ok(vd < kanbanStart || vd > end, "VersionDrawer 必须在 KanbanView 之外（工厂作用域）");
+  // build 顺序保证：version-drawer 排在 drag-prompts 之前（drag-prompts 打开 KanbanView、kanban 收尾）
+  const script = readFileSync(join(process.cwd(), "scripts/build-client.sh"), "utf8");
+  const vdIdx = script.indexOf('"version-drawer"');
+  const dpIdx = script.indexOf('"drag-prompts"');
+  assert.ok(vdIdx > 0 && dpIdx > 0 && vdIdx < dpIdx, "PARTS 中 version-drawer 必须早于 drag-prompts");
+  // 已发布版本泳道增删会改变尾部兄弟数量：抽屉需稳定 key 才能被 React 按 key 复用
+  assert.match(bundle, /key: "dg-version-drawer"/);
+});
+
 test("g-170 constants：criteria.updated 事件有标签并计入近期动态", () => {
   const src = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/constants.js"), "utf8");
   assert.match(src, /"criteria\.updated": "更新判据"/);

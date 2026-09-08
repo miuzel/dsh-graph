@@ -22,8 +22,13 @@ PARTS=(
   "goal-actions"
   "goal-modal"
   "criteria-modal"
-  "drag-prompts"
+  # g-243：version-drawer 必须排在 drag-prompts 之前（工厂作用域），不能夹在
+  # drag-prompts 与 kanban 之间——drag-prompts 打开 KanbanView 函数体、kanban 收尾，
+  # 夹在中间会让 VersionDrawer 变成 KanbanView 内部的嵌套函数：每次 KanbanView 渲染
+  # 都会产生新的函数身份，React 因 elementType 变化卸载重建抽屉子树，版本清单
+  # scrollTop 随之归零（勾选/取消 checkbox 或看板刷新后跳回第一行）。
   "version-drawer"
+  "drag-prompts"
   "kanban"
   "shared-panel"
   "settings-modal"
