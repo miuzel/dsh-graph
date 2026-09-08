@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import {
   init,
   createGoal,
+  setCriteria,
   addCard,
   startAttempt,
   bindAttemptChild,
@@ -189,6 +190,8 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
   init(root);
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: s1\nexecutor:\n  provider: proj-p\n  model: proj-m\n");
   const goalId = createGoal(root, { title: "测试三条派发路径", version: "v1.0", actor: "human:gui" });
+  // g-237：派发前有执行准入门禁，fixture 需先登记判据
+  setCriteria(root, goalId, ["测试判据"], "human:gui");
   const cardId = addCard(root, goalId, { title: "派发卡片", kind: "text", actor: "human:gui" });
 
   let registeredTools: any[] = [];

@@ -1004,6 +1004,8 @@ test("g-231 loadHostCatalog REST fallback 保留 spawn-options 中的 reasoning 
 
 test("start-execution 无 subagents：attempt 本地创建、child_error 上报（带 provider/model 参数不炸）", async () => {
   const { root, routes, goalId } = setup();
+  // g-237：派发前有执行准入门禁，fixture 需先登记判据
+  setCriteria(root, goalId, ["测试判据"], "test");
   const r = await post(routes, "/api/dsh-graph/start-execution",
     { goal: goalId, provider: "spawn", model: "deepseek-v4-flash", mode: "minimal" });
   assert.equal(r.code, 200);
@@ -1214,6 +1216,8 @@ test("g-113 start-execution 注入目标相对路径以请求 workspace 为基�
   const ws = join(base, "proj");
   init(join(ws, ".dsh-graph"));
   const goalId = createGoal(join(ws, ".dsh-graph"), { title: "rel 目标", version: "v-t", actor: "test" });
+  // g-237：派发前有执行准入门禁，fixture 需先登记判据
+  setCriteria(join(ws, ".dsh-graph"), goalId, ["测试判据"], "test");
   writeFileSync(join(ws, ".dsh-graph", "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   let capturedPrompt = "";
   const routes = new Map<string, any>();
