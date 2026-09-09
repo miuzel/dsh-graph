@@ -871,6 +871,14 @@ test("g-243 VersionDrawer 必须在 KanbanView 函数体之外声明（否则每
   assert.ok(vdIdx > 0 && dpIdx > 0 && vdIdx < dpIdx, "PARTS 中 version-drawer 必须早于 drag-prompts");
   // 已发布版本泳道增删会改变尾部兄弟数量：抽屉需稳定 key 才能被 React 按 key 复用
   assert.match(bundle, /key: "dg-version-drawer"/);
+  // g-256：同类隐患的 5 个尾部弹窗（GoalModal/CardDrawer/SettingsModal/SharedCardsModal/
+  // MemoryManagementModal）也必须带稳定 key——releasedRows 兄弟增删时无 key 会被按索引
+  // 匹配重建，丢失弹窗内部 state/滚动/焦点（与 g-243 同机制）。源码与生成物双断言。
+  const kanbanSrc = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
+  for (const k of ["dg-goal-modal", "dg-card-drawer", "dg-settings-modal", "dg-shared-cards-modal", "dg-memory-modal"]) {
+    assert.match(kanbanSrc, new RegExp(`key: "${k}"`), `kanban.js 源码含 key ${k}`);
+    assert.match(bundle, new RegExp(`key: "${k}"`), `client.js 生成物含 key ${k}`);
+  }
 });
 
 test("g-170 constants：criteria.updated 事件有标签并计入近期动态", () => {
