@@ -384,11 +384,11 @@
 
           h("div", { style: { ...S.meta, marginBottom: 8, fontSize: 11, lineHeight: 1.5 } },
             tab === "standing"
-              ? "💡【常驻记忆】：作为系统 Prompt 独立章节固定植入每个会话（单条硬上限 ≤ 200 字），适合记录工作区核心硬性约束与安全铁律。"
-              : "💡【按需记忆】：平时不植入会话、不占 token；仅在检索或手动调用时按需提取，适合技术方案决策与参考事实。"),
+              ? dgT("memory.standingHint")
+              : dgT("memory.onDemandHint")),
 
           h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
-            h("span", { style: { ...S.meta, fontSize: 12 } }, "共 " + totalCount + " 条（第 " + page + " / " + totalPages + " 页）"),
+            h("span", { style: { ...S.meta, fontSize: 12 } }, dgT("memory.total", { count: totalCount, page, totalPages })),
             h("button", {
               className: "dg-btn",
               style: { ...S.btnPrimary, fontSize: 12, padding: "2px 8px" },

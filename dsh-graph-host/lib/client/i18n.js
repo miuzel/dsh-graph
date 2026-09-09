@@ -1329,7 +1329,7 @@
       'versionDrawer.detailTooltip': 'View version details',
 
       // === Settings modal ===
-      'settings.title': 'Board Settings',
+      'settings.title': 'Kanban Settings',
       'settings.human': 'Human',
       'settings.ai': 'Automatic',
       'settings.overridePlaceholder': 'Enter override text (spaces, quotes, #, and multiple lines supported)…',
@@ -1381,7 +1381,7 @@
       'settings.modeInherit': '(Inherit from profile global / system default: standard mode)',
       'settings.modeStandard': 'Standard mode - Full development tool capabilities',
       'settings.modeMinimal': 'Minimal mode - Controlled 6-tool physical filtering (graph-minimal)',
-      'settings.catalogReady': 'Catalog from current Host (llm.providers/models, advisory only): providers list only active items with model groups; models filtered by selected provider; empty inherits from parent session.',
+      'settings.catalogReady': 'Catalog from current Host (llm.providers/models, advisory only): providers list only active items with model groups; models filtered by selected provider; empty inherits from parent session; execution mode supports standard and minimal tool-filter modes.',
       'settings.catalogLoadingMsg': 'Loading Host provider/model catalog…',
       'settings.catalogUnavailableMsg': 'Host catalog unavailable (llm.providers/models missing) — saved values preserved, still saveable.',
       'settings.advancedTitle': 'Advanced / storage-only fields',

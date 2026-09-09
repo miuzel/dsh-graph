@@ -1344,7 +1344,7 @@ window.__ModuleLoader__.load({
       'versionDrawer.detailTooltip': 'View version details',
 
       // === Settings modal ===
-      'settings.title': 'Board Settings',
+      'settings.title': 'Kanban Settings',
       'settings.human': 'Human',
       'settings.ai': 'Automatic',
       'settings.overridePlaceholder': 'Enter override text (spaces, quotes, #, and multiple lines supported)…',
@@ -1396,7 +1396,7 @@ window.__ModuleLoader__.load({
       'settings.modeInherit': '(Inherit from profile global / system default: standard mode)',
       'settings.modeStandard': 'Standard mode - Full development tool capabilities',
       'settings.modeMinimal': 'Minimal mode - Controlled 6-tool physical filtering (graph-minimal)',
-      'settings.catalogReady': 'Catalog from current Host (llm.providers/models, advisory only): providers list only active items with model groups; models filtered by selected provider; empty inherits from parent session.',
+      'settings.catalogReady': 'Catalog from current Host (llm.providers/models, advisory only): providers list only active items with model groups; models filtered by selected provider; empty inherits from parent session; execution mode supports standard and minimal tool-filter modes.',
       'settings.catalogLoadingMsg': 'Loading Host provider/model catalog…',
       'settings.catalogUnavailableMsg': 'Host catalog unavailable (llm.providers/models missing) — saved values preserved, still saveable.',
       'settings.advancedTitle': 'Advanced / storage-only fields',
@@ -7303,11 +7303,11 @@ function resetSearchState(activeWs) {
 
           h("div", { style: { ...S.meta, marginBottom: 8, fontSize: 11, lineHeight: 1.5 } },
             tab === "standing"
-              ? "💡【常驻记忆】：作为系统 Prompt 独立章节固定植入每个会话（单条硬上限 ≤ 200 字），适合记录工作区核心硬性约束与安全铁律。"
-              : "💡【按需记忆】：平时不植入会话、不占 token；仅在检索或手动调用时按需提取，适合技术方案决策与参考事实。"),
+              ? dgT("memory.standingHint")
+              : dgT("memory.onDemandHint")),
 
           h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
-            h("span", { style: { ...S.meta, fontSize: 12 } }, "共 " + totalCount + " 条（第 " + page + " / " + totalPages + " 页）"),
+            h("span", { style: { ...S.meta, fontSize: 12 } }, dgT("memory.total", { count: totalCount, page, totalPages })),
             h("button", {
               className: "dg-btn",
               style: { ...S.btnPrimary, fontSize: 12, padding: "2px 8px" },
@@ -10460,8 +10460,8 @@ function resetSearchState(activeWs) {
               h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeMinimal")))),
           h("div", { style: { ...S.meta, marginTop: 4 } },
             catReady
-              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；执行模式支持标准模式与极简工具过滤模式。"
-              : (catalog.status === "loading" ? "正在读取当前 Host 的合法 provider/model 目录…" : "当前 Host 目录不可用（llm.providers/models 缺失）——已存值保留可选、仍可保存。")),
+              ? dgT("settings.catalogReady")
+              : (catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg"))),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
           h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),
