@@ -5837,16 +5837,28 @@ window.__ModuleLoader__.load({
             : null;
 
         // g-a92e1406：tab 内容（占位文案视觉降级：trim 后以「（待」开头 → 小字灰色放标题右侧）
-        // 识别逻辑：trim 后以「（待」开头 → 占位；若占位后仍有正文，剥离占位行只显示正文
+        // 识别逻辑：trim 后以「（待」开头或与国际化占位符匹配 → 占位；若占位后仍有正文，剥离占位行只显示正文
         function isPlaceholder(text) {
           const t = String(text ?? "").trim();
-          return t.startsWith("（待");
+          return t.startsWith("（待") || t === dgT('criteria.pending') || t === dgT('criteria.pendingDetail') || t === dgT('criteria.toBeFilled');
         }
         function parsePlaceholder(text) {
           const t = String(text ?? "").trim();
+          if (t === "（待登记；进入 in_progress 前必须非空且已确认）" || t === dgT('criteria.pendingDetail')) {
+            return { isPh: true, marker: dgT('criteria.pendingDetail'), body: "" };
+          }
+          if (t === "（待登记）" || t === dgT('criteria.pending')) {
+            return { isPh: true, marker: dgT('criteria.pending'), body: "" };
+          }
+          if (t === "（待填写）" || t === dgT('criteria.toBeFilled')) {
+            return { isPh: true, marker: dgT('criteria.toBeFilled'), body: "" };
+          }
           if (!t.startsWith("（待")) return { isPh: false, marker: null, body: t };
           const m = t.match(/^（待[^）]*）/);
-          const marker = m ? m[0] : "（待填写）";
+          let marker = m ? m[0] : dgT('criteria.toBeFilled');
+          if (marker.includes("必须非空且已确认")) marker = dgT('criteria.pendingDetail');
+          else if (marker.includes("登记")) marker = dgT('criteria.pending');
+          else if (marker.includes("填写")) marker = dgT('criteria.toBeFilled');
           const rest = t.replace(/^（待[^）]*）\s*/, "").trim();
           return { isPh: true, marker, body: rest };
         }
