@@ -1915,6 +1915,10 @@
         ...releasedRows,
         modalGoal
           ? h(GoalModal, {
+              // g-256：显式稳定 key（同 g-243 dg-version-drawer 机制）——已发布版本泳道
+              // 勾选增删 releasedRows 尾部兄弟时，无 key 的弹窗会被按索引匹配重建，
+              // 丢失内部 state/滚动/焦点；加 key 后 React 按 key 复用同一 fiber。
+              key: "dg-goal-modal",
               id: modalGoal,
               title: modalGoalData?.title,
               onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); },
@@ -1993,7 +1997,9 @@
             })
           : null,
         drawerCard
-          ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
+          ? h(CardDrawer, { // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建（同 g-243）
+                            key: "dg-card-drawer",
+                            goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             onClose: () => setDrawerCard(null),
                             onConverted: () => {
                               // g-183：卡片转换成功后，重新 load 全局数据与弹窗数据，绝不误剥离卡片！
@@ -2355,11 +2361,12 @@
           : null,
         // g-132: 看板设置弹窗（gear 入口）
         showSettings
-          ? h(SettingsModal, { onClose: () => setShowSettings(false), onSaved: () => load() })
+          ? h(SettingsModal, { key: "dg-settings-modal", onClose: () => setShowSettings(false), onSaved: () => load() })
           : null,
         // g-183: 共享上下文管理面板（🔗 入口）
         showSharedPanel
           ? h(SharedCardsModal, {
+              key: "dg-shared-cards-modal", // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建
               onClose: () => setShowSharedPanel(false),
               onRefresh: () => load(),
               sharedCards: b.sharedCards ?? [],
@@ -2450,6 +2457,7 @@
         // g-105: 记忆管理弹窗（手工管理常驻/按需记忆，支持一键禁用工具）
         showMemoryModal
           ? h(MemoryManagementModal, {
+              key: "dg-memory-modal", // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建
               workspace: activeWs,
               onClose: () => setShowMemoryModal(false),
             })
