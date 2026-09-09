@@ -1,1 +1,2 @@
-dsh-graph 是目标看板插件。本会话可用 graph_* 工具管理目标、判据、卡片与执行。默认普通会话，不要自动接管 supervisor；需要时调用 graph_help，并显式加载 dsh-graph-supervisor skill。
+dsh-graph 是目标看板插件。本会话可用 graph_* 工具管理目标、判据、卡片与执行。默认普通会话，不要自动接管 supervisor；只在负责人明确要求时接管。需要时调用 graph_help，并显式加载 dsh-graph-supervisor skill。完整守则不自动注入。
+接管步骤：调用 graph_handoff() 生成交接，再调用 graph_claim_supervisor()。

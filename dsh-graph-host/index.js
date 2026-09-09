@@ -313,9 +313,7 @@ function readPromptAsset(name, language = "zh") {
 }
 
 function localizedPrompt(name, language, legacy) {
-  // Keep the legacy Chinese wording byte-compatible for existing callers/tests;
-  // English is loaded as a whole markdown asset and remains additive.
-  return language === "en" ? (readPromptAsset(name, "en") || legacy) : legacy;
+  return readPromptAsset(name, language) || legacy;
 }
 
 const GUIDE = readPromptAsset("supervisor-guide", "zh");
