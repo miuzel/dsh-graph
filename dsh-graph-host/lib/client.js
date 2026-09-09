@@ -5302,18 +5302,18 @@ window.__ModuleLoader__.load({
                   placeholder: "att-001, att-002",
                 })),
               ...[
-                ["failures", "已核实失败/风险"],
-                ["constraints", "返工约束（禁止项）"],
-                ["baseline", "推荐基线/必须保留项"],
-                ["verification", "验收命令"],
-              ].map(([key, label]) =>
+                ["failures", "handoff.failures"],
+                ["constraints", "handoff.constraints"],
+                ["baseline", "handoff.baseline"],
+                ["verification", "handoff.verification"],
+              ].map(([key, tkey]) =>
                 h("div", { key },
-                  h("label", { style: { fontSize: 11, opacity: 0.8 } }, label),
+                  h("label", { style: { fontSize: 11, opacity: 0.8 } }, dgT(tkey)),
                   h("textarea", {
                     style: { ...S.promptInput, flex: "0 0 auto", minHeight: 36, maxHeight: 240, resize: "vertical", fontFamily: "inherit", fontSize: 12, marginTop: 2, width: "100%", boxSizing: "border-box" },
                     value: form[key],
                     onChange: (e) => setForm({ ...form, [key]: e.target.value }),
-                    placeholder: label,
+                    placeholder: dgT(tkey),
                   }))),
               h("button", {
                 style: { ...S.btn, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn",
