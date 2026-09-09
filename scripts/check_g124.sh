@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 C=dsh-graph-host/lib/client.js
-G=dsh-graph-host/supervisor-guide.md
+G=dsh-graph-host/supervisor-guide.zh.md
 H=dsh-graph-host/index.js
 
 echo "== 0. 语法 =="

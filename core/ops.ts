@@ -354,7 +354,7 @@ export function generateHandoff(
   const parts: string[] = [];
   parts.push("# HANDOFF（换会话交接）", "");
   parts.push(`> 由 graph_handoff 自动生成于 ${nowIso()}（g-117）。图根：\`${root}\`。`);
-  parts.push("> 你的职责指南：dsh-graph-host/supervisor-guide.md（注册为 skill `dsh-graph-supervisor`）。", "");
+  parts.push("> 你的职责指南：dsh-graph-host/supervisor-guide.zh.md（注册为 skill `dsh-graph-supervisor`）。", "");
   parts.push("## 目标看板", "");
   for (const v of board.versions) {
     parts.push(`### 版本 ${v.slug}（${v.status}）`, "");

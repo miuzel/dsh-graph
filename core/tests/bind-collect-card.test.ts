@@ -146,7 +146,7 @@ test("g-119 ⑥ core bindCardChild 幂等（直调核心层）", () => {
 
 test("g-119 ⑦ supervisor-guide.md 信息收集规范含绑定硬约束文本", () => {
   const guide = readFileSync(
-    new URL("../../dsh-graph-host/supervisor-guide.md", import.meta.url),
+    new URL("../../dsh-graph-host/supervisor-guide.zh.md", import.meta.url),
     "utf8",
   );
   assert.ok(guide.includes("graph_bind_collect_card"), "guide 应引用 graph_bind_collect_card 工具");

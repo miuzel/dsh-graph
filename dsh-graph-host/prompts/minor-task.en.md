@@ -1,1 +1,4 @@
-【Minor task fast path】Only low-risk patch/chore tasks may skip a dedicated worktree. Keep the scope strict, verify the change, and move the goal to review.
+【Minor change/lightweight task fast path】The current goal is of patch / chore type (low-risk minor change/lightweight task):
+- Exempt from independent worktree isolation: code or documentation changes may be made directly in the current workspace and version integration branch, without creating a .worktrees/ isolated branch;
+- Change boundaries: strictly limit changes to the declared minor-change scope; unrelated side effects are forbidden, and privately expanding the blast radius is forbidden;
+- Verification and reporting: after the change, run the targeted unit tests and checks successfully, use graph_report_status to report, and upon completion move to review and wait for review.

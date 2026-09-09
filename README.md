@@ -71,7 +71,7 @@ dsh plugin --profile <name> add dsh-graph
 ## 仓库结构（monorepo）
 
 - `core/`——核心层源码（唯一事实源），经 `scripts/sync-core.sh` 编译成 `dsh-graph-host/core/*.js` 进发布包。可基于core开发各类UI / CLI / REST / agent 工具，核心层不依赖 DSH。
-- `dsh-graph-host/`——单包发布物：`index.js`（工具 + REST 端点）、`lib/client.js`（看板）、`cordis.patch.yml`（`dsh.bundle`）、`supervisor-guide.md`、`README.md`、`LICENSE`。
+- `dsh-graph-host/`——单包发布物：`index.js`（工具 + REST 端点）、`lib/client.js`（看板）、`cordis.patch.yml`（`dsh.bundle`）、`supervisor-guide.zh.md`、`supervisor-guide.en.md`、`README.md`、`LICENSE`。
 - `schema/`、`docs/`、`scripts/`——数据 / 设计文档 / 构建脚本。
 
 ## 开发
