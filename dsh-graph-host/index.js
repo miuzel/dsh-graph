@@ -11,7 +11,7 @@
  * - 运行时零 @deepseek-ai/* import（类型只用 import type）；
  * - 副作用收进 ctx.effect。
  */
-import { writeFileSync, readFileSync, realpathSync, mkdirSync, readdirSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, realpathSync, mkdirSync, readdirSync, existsSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { relative, join, resolve, dirname, basename, isAbsolute } from "node:path";
@@ -3099,6 +3099,30 @@ export function apply(ctx, config) {
           order: 10,
           text: () => GUIDE_HINT,
         }));
+        // g-238：system prompt 渲染纯读化——section.text 渲染路径绝不 init（不创建目录/文件、
+        // 不追加事件、不改变 supervisor 绑定）；初始化仅保留在显式 apply/写操作路径。
+        // 同时引入按文件 mtime+size 失效的轻量缓存：文件指纹未变时复用上次渲染结果，
+        // 避免每次渲染全量无效读 I/O；指纹变化（含记忆新增/替换/撤回、project.yaml 变更）
+        // 立即重算，绝不缓存错 workspace（缓存键含 canonical.root）。
+        const sectionRenderCache = new Map();
+        const fileStamp = (file) => {
+          try {
+            const s = statSync(file);
+            return `${s.mtimeMs}:${s.size}`;
+          } catch {
+            return null; // 文件缺失/不可读：按无数据处理
+          }
+        };
+        // render 为纯读函数；deps 为该渲染依赖的文件列表（相对 canonical.root）
+        const cachedRender = (cacheKey, canonicalRoot, deps, render) => {
+          const stamp = deps.map((d) => fileStamp(join(canonicalRoot, d))).join("|");
+          const hit = sectionRenderCache.get(cacheKey);
+          if (hit && hit.stamp === stamp) return hit.value;
+          const value = render();
+          sectionRenderCache.set(cacheKey, { stamp, value });
+          return value;
+        };
+        disposers.push(() => sectionRenderCache.clear());
         // g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
         // g-149：使用 resolveCanonicalRoot 确保 worktree 会话也能正确读到主树 project.yaml
         // text(context) 里取 sessionId=context?.agent?.session?.id；
@@ -3117,8 +3141,9 @@ export function apply(ctx, config) {
               const cwd = context?.agent?.session?.header?.cwd;
               if (!cwd) return ""; // cwd 缺失则不注入（避免误注入）
               const canonical = resolveCanonicalRoot(config, cwd);
-              init(canonical.root);
-              const supervisorId = readSupervisorSession(canonical.root);
+              // g-238：纯读——不 init；.dsh-graph/project.yaml 不存在时 readSupervisorSession 返回 null
+              const supervisorId = cachedRender(`sup:${canonical.root}`, canonical.root, ["project.yaml"],
+                () => readSupervisorSession(canonical.root));
               if (!supervisorId || supervisorId !== sessionId) return "";
               return "\n" + SUPERVISOR_DISCIPLINE;
             } catch {
@@ -3127,6 +3152,7 @@ export function apply(ctx, config) {
           },
         }));
         // g-105：常驻记忆（standing）作为独立章节固定植入所有会话系统 Prompt
+        // g-238：纯读 + 按 memory/memory.jsonl 指纹失效缓存（撤回/新增/替换立即生效）
         ctx.effect(() => sp.section({
           name: "dsh-graph-standing-memory",
           order: 92,
@@ -3135,7 +3161,8 @@ export function apply(ctx, config) {
               const cwd = context?.agent?.session?.header?.cwd;
               if (!cwd) return "";
               const canonical = resolveCanonicalRoot(config, cwd);
-              return formatStandingMemorySection(canonical.root) ?? "";
+              return cachedRender(`mem:${canonical.root}`, canonical.root, ["memory/memory.jsonl"],
+                () => formatStandingMemorySection(canonical.root) ?? "");
             } catch {
               return "";
             }
