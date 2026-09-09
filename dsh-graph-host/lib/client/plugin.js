@@ -211,7 +211,8 @@
               name: "conversation.view",
               id: "dsh-graph-kanban",
               order: 80,
-              get label() { return dgT("board.title"); },
+              // g-230：locale-following thunk——resolveSlotLabel 对 function 求值，切语言时重算
+              label: () => dgT("board.title"),
             },
             (props) => h(KanbanView, props),
           ),

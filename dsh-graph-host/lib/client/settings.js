@@ -459,7 +459,8 @@
               name: "settings.section",
               id: "dsh-graph-settings",
               order: 60,
-              get label() { return dgT("settings.title"); },
+              // g-230：locale-following thunk——resolveSlotLabel 对 function 求值，切语言时重算
+              label: () => dgT("settings.title"),
             },
             (props) => h(GraphSettingsSection, props),
           ),
