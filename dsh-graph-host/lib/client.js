@@ -899,6 +899,11 @@ window.__ModuleLoader__.load({
       'profileSettings.effortHintWaiting': '正在等待 Host 模型目录；已存推理档位保留可选，留空继承默认值。',
       'profileSettings.modeLabel': '子代理默认执行模式',
       'profileSettings.modeHint': '受控枚举：标准模式、PTC 模式、极简模式、创造模式。单次派发与 workspace project.yaml 更优先；留空使用系统默认（标准模式）。',
+      'profileSettings.promptLanguageLabel': '提示词语言',
+      'profileSettings.promptLanguageFollow': '跟随 DSH 界面语言（检测失败回退中文）',
+      'profileSettings.promptLanguageZh': '中文',
+      'profileSettings.promptLanguageEn': 'English',
+      'profileSettings.promptLanguageHint': '控制 supervisor/subagent 提示词语言；显式覆盖优先于 DSH locale。',
       'profileSettings.promptLabel': '子代理默认补充提示词',
       'profileSettings.promptPlaceholder': '可选：注入到每个执行子代理 prompt 的补充内容（默认空）',
       'profileSettings.promptHint': '默认为空；workspace 覆盖字段 default 继承此项，自定义文本覆盖，显式空值禁用该项全局提示词。',
@@ -1788,6 +1793,11 @@ window.__ModuleLoader__.load({
       'profileSettings.effortHintWaiting': 'Waiting for Host model catalog; existing reasoning effort retained, leave blank to inherit default.',
       'profileSettings.modeLabel': 'Subagent default execution mode',
       'profileSettings.modeHint': 'Controlled enum: standard mode, PTC mode, minimal mode, creative mode. Single invocation and project.yaml take precedence; leave blank for system default.',
+      'profileSettings.promptLanguageLabel': 'Prompt language',
+      'profileSettings.promptLanguageFollow': 'Follow DSH UI language (fallback to Chinese)',
+      'profileSettings.promptLanguageZh': '中文',
+      'profileSettings.promptLanguageEn': 'English',
+      'profileSettings.promptLanguageHint': 'Controls supervisor/subagent prompt language; explicit override takes precedence over DSH locale.',
       'profileSettings.promptLabel': 'Subagent default supplementary prompt',
       'profileSettings.promptPlaceholder': 'Optional: Supplementary prompt injected into each execution subagent (default empty)',
       'profileSettings.promptHint': 'Default empty; workspace field default inherits this, custom text overrides, explicit empty disables global prompt.',
@@ -2878,7 +2888,7 @@ window.__ModuleLoader__.load({
     // ===== g-239：运行/空闲生命周期投影与人工可读 status 区分 =====
     // 区分会话/任务真实生命周期（running / idle / blocked / error / done）与人工汇报 status_line，
     // 彻底解决结束、阻塞、失败、长任务场景长期显示失实运行态（如流动背景、虚假 ⏳/✅）的问题。
-    function formatStatusWithLifecycle(statusLine, running, blocked) {
+    function formatStatusWithLifecycle(statusLine, running, blocked, statusState) {
       if (!statusLine) {
         return {
           icon: "",
@@ -2891,9 +2901,11 @@ window.__ModuleLoader__.load({
         };
       }
       const raw = String(statusLine).trim();
-      const isBlocked = !!blocked || /阻塞|blocked/i.test(raw);
-      const isError = !isBlocked && /失败|错误|报错|failed|error/i.test(raw);
-      const isDone = !isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw);
+      // g-247：结构化状态优先；只有缺失/未知时才解析自由文本，避免中英文及否定句误判。
+      const structured = ["working", "blocked", "done", "error"].includes(statusState) ? statusState : null;
+      const isBlocked = structured ? structured === "blocked" : (!!blocked || /阻塞|blocked/i.test(raw));
+      const isError = structured ? structured === "error" : (!isBlocked && /失败|错误|报错|failed|error/i.test(raw));
+      const isDone = structured ? structured === "done" : (!isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw));
       
       let icon = "⏳ ";
       if (isBlocked) icon = "⛔ ";
@@ -3390,7 +3402,7 @@ window.__ModuleLoader__.load({
       const statusFull = running ? dgT("status.running") : dgT("status.idle");
       // 第二行 status_line 内容（stale 时也显示全文，tooltip 补延续时长——g-124）
       // g-239：区分真实生命周期运行态与人工汇报文本，避免空闲时谎报 ✅ 或失实展示运行态
-      const formattedStatus = formatStatusWithLifecycle(props.statusLine, running, false);
+      const formattedStatus = formatStatusWithLifecycle(props.statusLine, running, false, props.statusState);
       const statusRowText = props.statusLine
         ? formattedStatus.fullText
         : (staleStatus ? "⏳ " + dgT("status.stale", { duration: staleDur }) : null);
@@ -3846,7 +3858,7 @@ window.__ModuleLoader__.load({
       // 折叠态标题行的内联摘要：状态 + statusLine + token/ctx + 模型短名
       const collapsedBits = [
         statusLabel,
-        statusLine ? formatStatusWithLifecycle(statusLine, running, false).fullText : null,
+        statusLine ? formatStatusWithLifecycle(statusLine, running, false, props.statusState).fullText : null,
         meter || null,
         shortModel,
       ].filter(Boolean).join(" ｜ ");
@@ -4053,6 +4065,8 @@ window.__ModuleLoader__.load({
     function hasActiveGoalExecutionAttempt(attempts) {
       return (attempts ?? []).some((a) => {
         if (a?.executor === "agent:collect" || a?.result !== "pending") return false;
+        const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
+        if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
@@ -4275,9 +4289,9 @@ window.__ModuleLoader__.load({
           ? h("div", { key: "live" },
               h(LiveStrip, { parentId: g.attempt_parent_session_id, childId: g.attempt_child_id,
                              provider: g.attempt_provider, model: g.attempt_model,
-                             statusLine: g.status_line }))
+                             statusLine: g.status_line, statusState: g.status_state }))
           : g.status_line
-            ? h(StatusLine, { text: g.status_line, blocked: g.status === "blocked", running: g.status === "in_progress" })
+            ? h(StatusLine, { text: g.status_line, statusState: g.status_state, blocked: g.status === "blocked", running: g.status === "in_progress" })
             : null,
         reusedBy ? h(ReusedBadge, { childId: g.attempt_child_id, reusedBy }) : null,
         (g.cards ?? []).map((c) =>
@@ -4308,9 +4322,9 @@ window.__ModuleLoader__.load({
     // g-a92e1406：状态摘要行——运行中带流动背景+图标动画，阻塞行静态
     // g-239：使用 formatStatusWithLifecycle 区分真实生命周期状态
     function StatusLine(props) {
-      const { text, blocked, running } = props;
+      const { text, statusState, blocked, running } = props;
       if (!text) return null;
-      const formatted = formatStatusWithLifecycle(text, running, blocked);
+      const formatted = formatStatusWithLifecycle(text, running, blocked, statusState);
       if (formatted.isBlocked) {
         return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + formatted.text);
       }
@@ -4808,6 +4822,8 @@ window.__ModuleLoader__.load({
     function hasActiveExecutionAttempt(attempts) {
       return (attempts ?? []).some((a) => {
         if (a?.executor === "agent:collect" || a?.result !== "pending") return false;
+        const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
+        if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
@@ -10758,6 +10774,7 @@ function resetSearchState(activeWs) {
         subagentReasoningEffort: value?.subagentReasoningEffort ?? "",
         subagentMode: value?.subagentMode ?? "",
         subagentPrompt: value?.subagentPrompt ?? "",
+        promptLanguage: value?.promptLanguage ?? "follow",
       };
       const setField = (k, v) => setDraft({ ...draftValue, [k]: v });
 
@@ -10873,6 +10890,7 @@ function resetSearchState(activeWs) {
           await gSettingsScope.set("subagentReasoningEffort", draftValue.subagentReasoningEffort ?? "");
           await gSettingsScope.set("subagentMode", draftValue.subagentMode ?? "");
           await gSettingsScope.set("subagentPrompt", draftValue.subagentPrompt ?? "");
+           await gSettingsScope.set("promptLanguage", draftValue.promptLanguage ?? "follow");
           setSaved(dgT("profileSettings.saved"));
           setDraft(null); // 成功后才归位草稿（快照已更新）
         } catch (e) {
@@ -10923,7 +10941,15 @@ function resetSearchState(activeWs) {
             modeOptions.map((m) => h("option", { key: m.id, value: m.id }, m.name))),
           h("span", { style: GSS.hint }, dgT("profileSettings.modeHint"))),
         h("div", { style: GSS.field },
-          h("label", { style: GSS.label }, dgT("profileSettings.promptLabel")),
+          h("label", { style: GSS.label }, dgT("profileSettings.promptLanguageLabel")),
+           h("select", { style: GSS.select, value: draftValue.promptLanguage ?? "follow", disabled: !writable,
+             onChange: (e) => setField("promptLanguage", e.target.value) },
+             h("option", { value: "follow" }, dgT("profileSettings.promptLanguageFollow")),
+             h("option", { value: "zh" }, dgT("profileSettings.promptLanguageZh")),
+             h("option", { value: "en" }, dgT("profileSettings.promptLanguageEn"))),
+           h("span", { style: GSS.hint }, dgT("profileSettings.promptLanguageHint"))),
+         h("div", { style: GSS.field },
+           h("label", { style: GSS.label }, dgT("profileSettings.promptLabel")),
           h("textarea", { style: GSS.textarea, value: draftValue.subagentPrompt, disabled: !writable,
             placeholder: dgT("profileSettings.promptPlaceholder"),
             onChange: (e) => setField("subagentPrompt", e.target.value) }),

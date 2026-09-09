@@ -47,6 +47,9 @@ function isActive(root, goal, attempt) {
             return true;
         if (result !== "pending")
             return false;
+        // g-247: structured state is authoritative; legacy text parsing is fallback only.
+        if (["working", "blocked", "done", "error"].includes(meta.status_state))
+            return meta.status_state === "working";
         const line = String(meta.status_line ?? "").trim().toLowerCase();
         const terminal = /(完成|完毕|空闲|等待\s*review|待命|已提交|结束|completed|idle|done|waiting\s*review)/i.test(line);
         // pending 且非明确终态一律保守视为活跃，包括 child 启动失败/本地执行。

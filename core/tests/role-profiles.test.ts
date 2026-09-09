@@ -160,7 +160,7 @@ test("判据 2 - collector 契约：无 graph_report_status，依托卡片生命
 });
 
 test("判据 2 - supervisor-guide 修正：明确收集子代理不创建 attempt 与不调用 graph_report_status", () => {
-  const guidePath = join(import.meta.dirname, "../../dsh-graph-host/supervisor-guide.md");
+  const guidePath = join(import.meta.dirname, "../../dsh-graph-host/supervisor-guide.zh.md");
   const guide = readFileSync(guidePath, "utf8");
 
   assert.ok(

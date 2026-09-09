@@ -74,6 +74,8 @@
     function hasActiveGoalExecutionAttempt(attempts) {
       return (attempts ?? []).some((a) => {
         if (a?.executor === "agent:collect" || a?.result !== "pending") return false;
+        const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
+        if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
@@ -296,9 +298,9 @@
           ? h("div", { key: "live" },
               h(LiveStrip, { parentId: g.attempt_parent_session_id, childId: g.attempt_child_id,
                              provider: g.attempt_provider, model: g.attempt_model,
-                             statusLine: g.status_line }))
+                             statusLine: g.status_line, statusState: g.status_state }))
           : g.status_line
-            ? h(StatusLine, { text: g.status_line, blocked: g.status === "blocked", running: g.status === "in_progress" })
+            ? h(StatusLine, { text: g.status_line, statusState: g.status_state, blocked: g.status === "blocked", running: g.status === "in_progress" })
             : null,
         reusedBy ? h(ReusedBadge, { childId: g.attempt_child_id, reusedBy }) : null,
         (g.cards ?? []).map((c) =>
@@ -329,9 +331,9 @@
     // g-a92e1406：状态摘要行——运行中带流动背景+图标动画，阻塞行静态
     // g-239：使用 formatStatusWithLifecycle 区分真实生命周期状态
     function StatusLine(props) {
-      const { text, blocked, running } = props;
+      const { text, statusState, blocked, running } = props;
       if (!text) return null;
-      const formatted = formatStatusWithLifecycle(text, running, blocked);
+      const formatted = formatStatusWithLifecycle(text, running, blocked, statusState);
       if (formatted.isBlocked) {
         return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + formatted.text);
       }

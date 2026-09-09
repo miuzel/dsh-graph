@@ -138,6 +138,7 @@ import {
   closeWatchers,
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
+import { sT } from "./lib/server-i18n.js";
 // g-133：接入 DSH profile 级用户设置（dsh-settings）。为避免在 @deepseek-ai/* 不可解析的上下文
 // （工作树 link、仅 headless、无 settings 供应商的组合）导致整个插件加载失败、拖垮 GUI，
 // 这里不静态 import @deepseek-ai/*；改为在 apply() 内**守卫式动态 import** schemastery（仅 schema），
@@ -237,6 +238,12 @@ const ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA = {
   nullable: true,
   description: "当前验收项数组，每项一个非空 string；传 [] 明确表示无单独验收项，传 null 或省略表示未提供；不要从 brief 猜测。",
 };
+const ATTEMPT_STATUS_STATE_SCHEMA = {
+  type: "string",
+  enum: ["working", "blocked", "done", "error"],
+  nullable: true,
+  description: "结构化状态枚举：working=进行中、blocked=阻塞、done=完成、error=错误；与 status 一起传入。旧调用可省略。",
+};
 
 // g-133：dsh-graph profile 级全局默认（DSH settings namespace「dsh-graph」）。
 // 仅保留子代理 provider/model/补充提示词；主管提示词属于 workspace 配置（g-132）。
@@ -247,6 +254,7 @@ const GRAPH_SETTINGS_DEFAULTS = Object.freeze({
   subagentMode: "",
   subagentReasoningEffort: "",
   subagentPrompt: "",
+  promptLanguage: "follow",
 });
 // schema 需 schemastery（@deepseek-ai/*），经守卫式动态 import 构建（见 buildGraphSettingsSchema）。
 function buildGraphSettingsSchema(z) {
@@ -256,6 +264,7 @@ function buildGraphSettingsSchema(z) {
     subagentMode: z.union(["", "standard", "minimal"]).default(""),
     subagentReasoningEffort: z.string().default(""),
     subagentPrompt: z.string().default(""),
+    promptLanguage: z.union(["follow", "zh", "en"]).default("follow"),
   });
 }
 
@@ -275,90 +284,62 @@ function losslessJson(obj) {
   return out;
 }
 
-const GUIDE = readFileSync(new URL("./supervisor-guide.md", import.meta.url), "utf8");
+function normalizePromptLanguage(value) {
+  return value === "en" || value === "zh" ? value : "zh";
+}
 
-// g-113：普通 agent 的 dsh-graph 使用指引（精简，非主管繁文）
-const USAGE = [
-  "dsh-graph 是把工作组织成「目标看板」的插件。你有 graph_* 工具可用：",
-  "- graph_create_goal(title[, version]) 建目标（进 backlog，带 version 则排期）；",
-  "- graph_set_criteria(goal, criteria[]) 先登记质量判据（判据先于执行，硬规则）；",
-  "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
-  "- graph_add_card / graph_fill_card / graph_review_card / graph_delete_card 管理目标下的上下文卡片（信息收集）；",
-  "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展（看板卡片显示这句）；",
-  "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff；",
-  "- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；",
-  "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账。",
-  "原则：状态不是证据、产出物才是；关键阶段主动迁移卡片、自报状态；长任务节流心跳；不确定先问。",
-].join("\n");
+/** Resolve prompt language without making locale a hard dependency. */
+export function resolvePromptLanguage(override = "follow", ctx = null) {
+  if (override === "zh" || override === "en") return override;
+  try {
+    const locale = ctx?.locale ?? ctx?.get?.("locale");
+    const snapshot = locale?.getLocale?.() ?? locale?.snapshot?.() ?? locale;
+    const active = snapshot?.active ?? snapshot?.locale ?? snapshot?.id ?? locale?.active;
+    if (typeof active === "string") {
+      const base = active.toLowerCase().split(/[-_]/)[0];
+      if (base === "en") return "en";
+      if (base === "zh") return "zh";
+    }
+  } catch { /* locale service is optional */ }
+  return "zh";
+}
 
-// g-118（负责人 2026-08-22 设计转向）：注入**简短引导提示词**（非完整守则）——
-// 完整 supervisor 守则（supervisor-guide.md）不自动注入，仍走显式 skill 调用
-// （dsh-graph-supervisor），避免临时会话被注入主管角色而争抢 supervisor。
-// 注入内容只告知「如何」接管：claim 新 supervisor 的用法 + dsh-graph help 命令存在。
-const GUIDE_HINT = [
-  "dsh-graph 是把工作组织成「目标看板」的插件。本会话可用 graph_* 工具管理目标/判据/卡片/执行。",
-  "【重要】本会话默认是普通会话，**不要自动接管 supervisor**（graph_claim_supervisor 只在负责人明确要求你接管时调用——自动接管会让临时会话争抢主管角色）。",
-  "查看 dsh-graph 使用说明与 claim 指引：调用 graph_help。",
-  "（完整 supervisor 工作守则不自动注入；如需，显式调用 skill dsh-graph-supervisor 加载。）",
-].join("\n");
+function readPromptAsset(name, language = "zh") {
+  const lang = normalizePromptLanguage(language);
+  for (const candidate of [`./prompts/${name}.${lang}.md`, `./${name}.${lang}.md`]) {
+    try { return readFileSync(new URL(candidate, import.meta.url), "utf8"); } catch { /* fallback */ }
+  }
+  return "";
+}
 
-// g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
-// 提醒内容强调主管铁律：只做规划/派发/把关/复核、实现交子代理、阶段变化与关键节点
-// graph_report_supervisor_status、review→delivered 必须等负责人 verdict。
-// token 成本约 80 字，简短精炼。
-const SUPERVISOR_DISCIPLINE = [
-  "⚠️ **主管纪律提醒**（每 turn 自动注入）：",
-  "1. **只做规划、派发、把关、复核**——绝不自己实现常规功能大任务、一律派发子代理；",
-  "2. **轻量改动自主特权**：一句话决策与低风险微小改动（patch / chore 类目标、一两行修改），主管可直接在当前会话使用 edit/write 执行，无需繁琐派发子代理；",
-  "3. **阶段变化与关键节点自报进展**：调用 graph_report_supervisor_status（看板实时显示状态，常规细微动作无需机械汇报）；",
-  "4. **记忆管理纪律**：自发总结默认记 on_demand；仅人类钦定或隔离禁令才记 standing（≤200字）；remove 仅限明确撤回/证实过时；",
-  "5. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；",
-  "6. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。",
-].join("\n");
+function requirePromptAsset(name, language = "zh") {
+  const content = readPromptAsset(name, language);
+  if (!content) throw new Error(`dsh-graph prompt asset missing or unreadable: ${name}.${normalizePromptLanguage(language)}.md`);
+  return content;
+}
+
+function localizedPrompt(name, language) {
+  return requirePromptAsset(name, language);
+}
+
+const GUIDE = requirePromptAsset("supervisor-guide", "zh");
+
+// g-113：普通 agent 的 dsh-graph 使用指引（按 locale 整体加载 prompts/*.md）
+
+// g-118：简短引导提示词按 locale 整体加载 prompts/guide-hint.*.md
+
+// g-131：主管纪律提醒按 locale 整体加载 prompts/discipline.*.md
 
 
-// g-118：dsh-graph help 命令内容源（graph_help 工具输出 + 引导提示词指向它）。
-// 使用说明 + claim 指引；不含主管守则（完整守则仍在 supervisor-guide.md / skill）。
-const HELP_TEXT = [
-  "dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具：",
-  "- graph_create_goal(title[, version]) 建目标（进 backlog，带 version 则排期）；",
-  "- graph_set_criteria(goal, criteria[]) 先登记质量判据（判据先于执行，硬规则）；",
-  "- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；",
-  "- graph_add_card / graph_fill_card / graph_review_card / graph_delete_card 管理目标下的上下文卡片（信息收集）；",
-  "- graph_bind_collect_card(goal, card, child_id) 把收集子代理绑定到卡片；",
-  "- graph_start_attempt(goal) 派发执行子代理；graph_report_status(goal, attempt, status) 用一句 ≤20 字的话自报进展；",
-  "- graph_record_attempt_handoff(goal, source_attempts, failures, constraints, baseline, verification) 主管登记返工 handoff；",
-  "- graph_amend_goal(goal, note) 记录修订/人工反馈；graph_validate / graph_rebuild 校验与对账；",
-  "- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；",
-  "- graph_report_supervisor_status(status) 主管自报状态（看板顶部状态栏）；graph_resolve_accept 评审裁决；",
-  "- graph_handoff() / graph_claim_supervisor() 换会话交接。",
-  "",
-  "## 接管 supervisor",
-  "**仅在负责人明确要求你接管 supervisor 时执行**——默认任何会话都不得自动 claim（避免临时会话争抢主管角色）：",
-  "1. 旧会话：graph_handoff() —— 生成/更新 .dsh-graph/HANDOFF.md（board 投影 + 长期记忆 + 环境事实）；",
-  "2. 新会话：graph_claim_supervisor() —— 把 project.yaml 的 supervisor.session 更新为当前会话 id，记 supervisor.claimed 事件（幂等），并返回 HANDOFF 全文。",
-  "",
-  "完整 supervisor 工作守则（阶段推进/信息收集/执行规范/环境事实等）见 skill dsh-graph-supervisor，显式调用加载。",
-  "原则：状态不是证据、产出物才是；关键阶段主动迁移卡片、自报状态；长任务节流心跳；不确定先问。",
-].join("\n");
+// g-118：dsh-graph help 内容按 locale 整体加载 prompts/help.*.md
 
-// g-120：worktree 隔离指令（Supervisor 强制默认）——与 supervisor-guide.md 执行规范保持一致。
-// graph_start_attempt / start-execution 默认注入本段；只有 supervisor 明确 override 才能跳过。
-const WORKTREE_GUIDE = `【强制 worktree 隔离】本次任务默认必须在独立 worktree 中完成：专属 worktree 由 supervisor 预创建并登记（命名约定为 .worktrees/g-<goal-number>-att-<NN>，分支同名，基于当前版本集成分支）；子代理直接在给定工作树内工作，**绝不自行拉树、建分支、切分支、改分支**；未给定预登记树时按 brief 说明在当前指定工作区执行，不得自行补建。代码改动、测试及生成文件只能发生在该 worktree；**main 为只读已发布分支，禁止直接修改 main 或其他目标分支，也禁止自行以「简单改动」为理由绕过隔离**。完成后在 worktree 提交，等待 supervisor 复核；由 supervisor 合并到当前版本集成分支（如 <version>-test）。
-【唯一例外】仅当 supervisor 在本次派发的 attempt brief 中明确写出 \`worktree=false\` 与理由时，才允许豁免独立 worktree；文档/长期记忆等小修改由 supervisor 自己处理，子代理不得擅自套用例外。即便 worktree=false，main 分支仍绝对只读，禁止直接修改 main。
-【worktree 命名约定】supervisor 预创建并登记的 attempt 工作树统一遵循 .worktrees/g-<goal-number>-att-<NN> 规范，分支使用相同后缀（例如 g-125-att-03、g-163-att-03），消除歧义与分支冲突。
-数据分工：代码改动在 worktree；看板数据 .dsh-graph/ 仍在主工作树写（graph_* 工具写的是主工作树的看板/事件流，不被 worktree 分支隔离，避免状态漂移）。`;
+// g-120：worktree 与 minor-task 指令按 locale 整体加载 prompts/*.md
 
-const MINOR_TASK_GUIDE = `【微小改动/轻量任务快速通道】当前目标属于 patch / chore 类型（低风险微改/轻量任务）：
-- 豁免独立 worktree 隔离：允许直接在当前工作区与版本集成分支执行代码或文档修改，无需创建 .worktrees/ 隔离分支；
-- 改动边界：严格限定于声明的微小改动范围，禁止产生无关副作用、禁止私自扩大破坏面；
-- 验证与自报：改动后针对性跑通单测与校验，使用 graph_report_status 汇报并在完成后迁至 review 等待复核。`;
-
-export function resolveWorktreeGuide(goalType, explicitWorktree) {
+export function resolveWorktreeGuide(goalType, explicitWorktree, language = "zh") {
   if (explicitWorktree === false) return "";
-  if (explicitWorktree === true) return WORKTREE_GUIDE;
-  if (goalType === "patch" || goalType === "chore") return MINOR_TASK_GUIDE;
-  return WORKTREE_GUIDE;
+  if (explicitWorktree === true) return requirePromptAsset("worktree", language);
+  if (goalType === "patch" || goalType === "chore") return requirePromptAsset("minor-task", language);
+  return requirePromptAsset("worktree", language);
 }
 
 
@@ -523,6 +504,55 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
   return lines.join("\n");
 }
 
+/** English counterpart of the execution prompt. User-provided brief/context remains verbatim. */
+function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, directive, taskType, baselineCommit, sourceAttempt, acceptanceItems, handoffSection, cardsSection, targetContext, subagentPromptSection, modeStrategySection, worktreeBlock } = {}) {
+  const missing = "(not provided)";
+  const value = (v, reason) => {
+    const text = promptText(v);
+    return text ? text.split("\n").map((line) => "> " + protectPromptMarkers(line)).join("\n") : missing + "\n> Reason: " + reason;
+  };
+  const compact = (v) => promptText(v) ? protectPromptMarkers(promptText(v).replace(/\s*\n\s*/g, "; ")) : missing;
+  const task = hasTaskType(taskType) ? taskType : taskType === null ? "not provided (task_type=null)" : "not provided (task_type missing or invalid; allowed: merge, rewrite, fix)";
+  const items = Array.isArray(acceptanceItems) && acceptanceItems.length
+    ? acceptanceItems.map((item, i) => `  ${i + 1}. ${protectPromptMarkers(String(item).trim())}`).join("\n")
+    : acceptanceItems === null ? "(none; supervisor explicitly passed null)" : acceptanceItems === undefined ? missing : "(none)";
+  const history = [];
+  if (promptText(handoffSection)) history.push(["## Historical handoff", "[Background only; not an action source]", protectPromptMarkers(handoffSection)].join("\n"));
+  history.push(["## Historical cards", "[Background only; not an action source]", promptText(cardsSection) ? protectPromptMarkers(cardsSection) : missing].join("\n"));
+  const contextPath = promptText(goalRel) || missing;
+  const position = [
+    `## Task positioning\nThis is a ${task} task. Only the current attempt brief/directive below is an action source; history is background only.`,
+    `You are execution attempt ${promptText(attempt) || missing} for goal ${promptText(goal) || missing}.`,
+    `Goal file (workspace-relative): ${contextPath}`,
+  ].join("\n");
+  const current = [
+    "## Current attempt brief/directive",
+    "",
+    "**Attempt brief (current data)**",
+    value(attemptBrief, "attempt_brief was not supplied"),
+    "",
+    "**Directive (current data)**",
+    value(directive, "no current directive was supplied"),
+  ].join("\n");
+  const override = [
+    "## Override declaration",
+    "The supervisor-provided structured fields below override any historical context; never infer them from natural language.",
+    `- Task type: ${task}`,
+    `- Baseline commit: ${compact(baselineCommit)}`,
+    `- Source attempt: ${compact(sourceAttempt)}`,
+    "- Acceptance items:", items,
+  ].join("\n");
+  const discipline = [
+    "## Execution discipline",
+    "Use the assigned worktree only; main is read-only. Report state with graph_report_status using state=working, blocked, done, or error.",
+    `At start migrate ${promptText(goal) || missing} to in_progress; on a blocker use blocked with a reason; when done migrate to review and stop. Never migrate to delivered.`,
+    promptText(subagentPromptSection) ? protectPromptMarkers(subagentPromptSection) : "",
+    promptText(modeStrategySection) ? protectPromptMarkers(modeStrategySection) : "",
+    promptText(worktreeBlock) ? protectPromptMarkers(worktreeBlock) : "",
+  ].filter(Boolean).join("\n");
+  return [position, current, targetContext ? "## Goal context\n" + protectPromptMarkers(targetContext) : "", override, ...history, discipline, "If a prompt contains a historical handoff and a current brief, execute only the current brief."].filter(Boolean).join("\n\n");
+}
+
 /** 统一组装 supervisor 执行 attempt prompt，避免两处派发顺序漂移。 */
 export function formatAttemptPrompt({
   goal,
@@ -540,7 +570,11 @@ export function formatAttemptPrompt({
   subagentPromptSection,
   modeStrategySection,
   worktreeBlock,
+  promptLanguage = "zh",
 } = {}) {
+  if (normalizePromptLanguage(promptLanguage) === "en") {
+    return formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, directive, taskType, baselineCommit, sourceAttempt, acceptanceItems, handoffSection, cardsSection, targetContext, subagentPromptSection, modeStrategySection, worktreeBlock });
+  }
   const brief = promptText(attemptBrief);
   const currentDirective = promptText(directive);
   const handoff = promptText(handoffSection);
@@ -594,7 +628,8 @@ export function formatAttemptPrompt({
   if (handoffBlock) history.push(handoffBlock);
   history.push(historicalPromptBlock("## 历史卡片", cards));
   const discipline = formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection });
-  return [positioning, current.join("\n"), modeStrategySection, override, ...history, discipline, ATTEMPT_PROMPT_WARNING]
+  const structuredStateInstruction = "【结构化状态字段】每次调用 graph_report_status 除 status 外必须传 state，且只能是 working、blocked、done、error；看板状态判定优先读取该字段，status 文本仅供展示。";
+  return [positioning, current.join("\n"), modeStrategySection, override, ...history, structuredStateInstruction, discipline, ATTEMPT_PROMPT_WARNING]
     .filter((section) => section && section.trim())
     .join("\n\n");
 }
@@ -657,6 +692,7 @@ export function apply(ctx, config) {
         subagentReasoningEffort: v.subagentReasoningEffort ?? "",
         subagentMode: safeMode,
         subagentPrompt: v.subagentPrompt ?? "",
+        promptLanguage: ["follow", "zh", "en"].includes(v.promptLanguage) ? v.promptLanguage : "follow",
       };
     } catch {
       return { ...GRAPH_SETTINGS_DEFAULTS };
@@ -869,7 +905,8 @@ export function apply(ctx, config) {
     const goalRel = goalFile ? relative(workspace, goalFile) : null;
     let gType = "task";
     try { gType = normalizeGoalType(doc.meta.type); } catch {}
-    const worktreeBlock = resolveWorktreeGuide(gType, worktree);
+    const promptLanguage = resolvePromptLanguage(globalSettings.promptLanguage, ctx);
+    const worktreeBlock = resolveWorktreeGuide(gType, worktree, promptLanguage);
     const subagentPromptSection = (() => {
       const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(root, "subagent_prompt"));
       return p ? ["## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join("\n") : null;
@@ -898,6 +935,7 @@ export function apply(ctx, config) {
       subagentPromptSection,
       modeStrategySection,
       worktreeBlock,
+      promptLanguage,
     });
     const promptHash = createHash("sha256").update(prompt).digest("hex").slice(0, 16);
 
@@ -1267,7 +1305,7 @@ export function apply(ctx, config) {
         description: "输出 dsh-graph 使用说明与 supervisor 接管（claim）指引：graph_* 工具清单、graph_handoff/graph_claim_supervisor 换会话步骤。",
         parameters: params({}, []),
       },
-      run: () => ({ help: HELP_TEXT }),
+      run: () => ({ help: localizedPrompt("help", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)) }),
     },
     {
       def: {
@@ -1345,10 +1383,10 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_report_status",
-        description: "汇报当前 attempt 的一句最新工作状态（会显示在看板卡片上）。执行过程中应周期性调用。",
-        parameters: params({ goal: str, attempt: str, status: str }, ["goal", "attempt", "status"]),
+        description: sT("reportStatus"),
+        parameters: params({ goal: str, attempt: str, status: str, state: ATTEMPT_STATUS_STATE_SCHEMA }, ["goal", "attempt", "status"]),
       },
-      run: (a, ex) => { reportStatus(rootFor(ex), a.goal, a.attempt, a.status, actorOf(ex)); return { ok: true }; },
+      run: (a, ex) => { reportStatus(rootFor(ex), a.goal, a.attempt, a.status, actorOf(ex), a.state); return { ok: true }; },
     },
     {
       def: {
@@ -1504,7 +1542,7 @@ export function apply(ctx, config) {
         // g-202：传 card 时统一走上下文收集派发，不创建 Goal execution attempt。
         // 先生成 prompt（同时校验 goal/card），再尝试启动；只有成功启动后才绑定卡片。
         if (a.card !== undefined && a.card !== null) {
-          const fullPrompt = formatCollectPrompt(r, a.goal, a.card, a.attempt_brief);
+          const fullPrompt = formatCollectPrompt(r, a.goal, a.card, a.attempt_brief, resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
           const eff = resolveModelRoute(
             { provider: a.provider, model: a.model, reasoning_effort: a.reasoning_effort },
             readExecutorModel(r),
@@ -2592,7 +2630,7 @@ export function apply(ctx, config) {
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
           // g-183 返工 F：先完整校验（resolveCard 成员关系/backlog/卡状态权限）生成提示词，
           //  再创建 attempt/子代理——校验失败不得留下 attempt/事件副作用。
-          const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt);
+          const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt, resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
             fullPrompt,
@@ -2629,7 +2667,7 @@ export function apply(ctx, config) {
           const goalRel = relative(ws, goalFile);
           const cfg = readExecutorModel(rRoot);
           // g-168/g-242 PM 提示词契约：包含 goal.md 工作区相对路径，要求先用 read 工具读取上述 goal.md 并附带指导意见
-          const prompt = formatPmPrompt({ goalId: goal, goalRel, guidance });
+          const prompt = formatPmPrompt({ goalId: goal, goalRel, guidance, language: resolvePromptLanguage(readGraphSettings().promptLanguage, ctx) });
           const spawned = await spawnChild(`graph:define-polish/${goal}`, prompt, req, rRoot, {
             ...cfg,
             role: "pm",
@@ -3106,12 +3144,18 @@ export function apply(ctx, config) {
     // 等工具/REST 端点有 session/request workspace 时再 init。
     // 注册 supervisor 工作指南为运行时技能（可选服务，缺失时静默）
     const skills = ctx.get?.('skills');
-    if (skills) { try { skills.register({ name: 'dsh-graph-supervisor', description: 'dsh-graph 主管 Agent 工作指南', source: 'dsh-graph-host', content: GUIDE }); } catch { /* 静默 */ } }
+    if (skills) { try { skills.register({ name: 'dsh-graph-supervisor', description: 'dsh-graph 主管 Agent 工作指南', source: 'dsh-graph-host', content: localizedPrompt("supervisor-guide", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)) }); } catch { /* 静默 */ } }
     // g-113：普通 agent 的 dsh-graph 使用指引（新会话开箱即用）
-    if (skills) { try { skills.register({ name: 'dsh-graph', description: 'dsh-graph 目标看板：用 graph_* 工具管理目标/判据/卡片/执行', source: 'dsh-graph-host', content: USAGE }); } catch { /* 静默 */ } }
+    if (skills) { try { skills.register({ name: 'dsh-graph', description: 'dsh-graph 目标看板：用 graph_* 工具管理目标/判据/卡片/执行', source: 'dsh-graph-host', content: localizedPrompt("usage", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)) }); } catch { /* 静默 */ } }
 
+    const toolLanguage = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
     const disposers = tools.map((t) =>
-      ctx.tools.register({ ...t.def, output: objOut, execute: (args, exec) => t.run(args, exec) }),
+      ctx.tools.register({
+        ...t.def,
+        description: sT(`tool.${t.def.name}`, toolLanguage),
+        output: objOut,
+        execute: (args, exec) => t.run(args, exec),
+      }),
     );
 
     // g-118：supervisor 守则自动注入（不依赖显式 skill 调用）——
@@ -3132,7 +3176,7 @@ export function apply(ctx, config) {
         disposers.push(sp.section({
           name: "dsh-graph-guide-hint",
           order: 10,
-          text: () => GUIDE_HINT,
+          text: () => localizedPrompt("guide-hint", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)),
         }));
         // g-238：system prompt 渲染纯读化——section.text 渲染路径绝不 init（不创建目录/文件、
         // 不追加事件、不改变 supervisor 绑定）；初始化仅保留在显式 apply/写操作路径。
@@ -3180,7 +3224,7 @@ export function apply(ctx, config) {
               const supervisorId = cachedRender(`sup:${canonical.root}`, canonical.root, ["project.yaml"],
                 () => readSupervisorSession(canonical.root));
               if (!supervisorId || supervisorId !== sessionId) return "";
-              return "\n" + SUPERVISOR_DISCIPLINE;
+              return "\n" + (localizedPrompt("discipline", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)));
             } catch {
               return "";
             }

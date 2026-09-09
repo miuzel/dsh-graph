@@ -6,6 +6,12 @@ import { join, basename, dirname, relative, resolve, isAbsolute, sep } from "nod
 import { randomUUID, createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
 import { parseDoc, serializeDoc, replaceSection, sectionText, criteriaPresent, countCriteria, criteriaItems, normalizeGoalType, normalizeGoalTags, rebuildCriteriaSection, } from "./model.js";
+export const ATTEMPT_STATUS_STATES = ["working", "blocked", "done", "error"];
+export function normalizeAttemptStatusState(value) {
+    return typeof value === "string" && ATTEMPT_STATUS_STATES.includes(value)
+        ? value
+        : null;
+}
 import { appendEvent, readEvents, replayStatuses, replayVersionLanes, appendMemoryEvent, readMemoryEvents, replayMemory, withMemoryLock, memoryDiagnostics, nowIso, nowIsoMs, } from "./events.js";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.js";
 import { withTx, TxError, TxCasError } from "./transaction.js";
@@ -297,7 +303,7 @@ export function generateHandoff(root, opts = {}) {
     const parts = [];
     parts.push("# HANDOFF（换会话交接）", "");
     parts.push(`> 由 graph_handoff 自动生成于 ${nowIso()}（g-117）。图根：\`${root}\`。`);
-    parts.push("> 你的职责指南：dsh-graph-host/supervisor-guide.md（注册为 skill `dsh-graph-supervisor`）。", "");
+    parts.push("> 你的职责指南：dsh-graph-host/supervisor-guide.zh.md（注册为 skill `dsh-graph-supervisor`）。", "");
     parts.push("## 目标看板", "");
     for (const v of board.versions) {
         parts.push(`### 版本 ${v.slug}（${v.status}）`, "");
@@ -3727,7 +3733,7 @@ export function formatTargetContext(docOrBody, opts) {
 }
 /** 生成收集子代理的完整提示词（g-145）：注入仓库根、goal/card 元数据、收集范围、
  *  精确回填模板和禁区。用户提供的 prompt 作为附加要求追加在末尾。 */
-export function formatCollectPrompt(root, goalId, cardId, userPrompt) {
+export function formatCollectPrompt(root, goalId, cardId, userPrompt, language = "zh") {
     // 加载 goal 和 card 元数据
     const goalFile = findGoalFile(root, goalId);
     // backlog 目标没有目录结构，无法格式化收集提示词
@@ -3742,6 +3748,44 @@ export function formatCollectPrompt(root, goalId, cardId, userPrompt) {
     const cardTitle = cardDoc.meta.title ?? cardId;
     // g-183 返工 #6/#8：canonical attachments 根必须经 symlink 拒绝、且只读不创建目录（避免泄漏外部路径/改变树）
     const attRoot = attachmentsCanonicalPath(root);
+    if (language === "en") {
+        const sections = [
+            "## Collection task context",
+            "",
+            "**Working directory**: the assigned worktree/current working directory.",
+            `**Canonical attachment root**: \`${attRoot}\``,
+            `**Data root (.dsh-graph)**: \`${resolve(root)}\``,
+            "",
+            "**Goal information**:",
+            `- id: \`${goalId}\``,
+            `- title: ${goalTitle}`,
+            "",
+            "**Card information**:",
+            `- id: \`${cardId}\``,
+            `- title: ${cardTitle}`,
+            "",
+            "**Collection scope**:",
+            `Collect detailed context related to card \"${cardTitle}\" for this card.`,
+            "",
+            "**Fill requirements**:",
+            "1. Put the full body in `text`; write a concise key-point `summary` (about 100 characters).",
+            "2. Store discovered attachments with `graph_store_attachment` under the canonical attachment root.",
+            "3. Reference attachments with `@att/<relative-name>` in the card body or goal.md.",
+            "4. Fill the result with exactly:",
+            "```",
+            `graph_fill_card(goal=\"${goalId}\", card=\"${cardId}\", text=<full body>, summary=<short summary>)`,
+            "```",
+            "",
+            "**Strict boundaries**:",
+            `1. Modify only the bound card \`${cardId}\`; do not modify other goals or cards.`,
+            "2. Do not call graph_review_card; the supervisor reviews the result.",
+            "3. Run graph tools in the assigned worktree/current working directory.",
+            "4. Use card lifecycle only; do not create a fake attempt or call graph_report_status.",
+        ];
+        if (userPrompt && userPrompt.trim())
+            sections.push("", "**User addendum**:", userPrompt.trim());
+        return sections.join("\\n");
+    }
     // 构建结构化提示词
     const sections = [
         `## 收集任务上下文`,
@@ -3807,6 +3851,20 @@ export function getCardMeta(root, goalId, cardId) {
 }
 /** 生成只读产品经理 (PM) 润色与定义提示词（g-242） */
 export function formatPmPrompt(opts) {
+    if (opts.language === "en")
+        return [
+            "You are a dedicated product manager Agent. Return only goal-definition or polishing advice to the supervisor; do not call graph_* tools, modify the goal, or change lifecycle semantics.",
+            "",
+            `Goal ID: ${opts.goalId}`,
+            `Workspace-relative goal.md path: ${opts.goalRel}`,
+            `Human guidance: ${String(opts.guidance ?? "").trim() || "(none)"}`,
+            "",
+            "Read the goal.md with read first. Give concise, actionable advice on value, context, scope, verifiable criteria, boundaries, error paths, risks, and human verification. Preserve intent and do not write files.",
+            "",
+            "## Read-only constraints",
+            "- Only read-only analysis is available; do not use management, code-editing, or command-execution tools.",
+            "- Return analysis and suggestions only; do not modify project data.",
+        ].join("\\n");
     const lines = [
         `你是固定的产品经理 Agent。请只向主管 Agent 返回“目标定义/润色建议”，不要调用任何 graph_* 工具，不要修改目标、不改变状态、版本或执行语义。`,
         ``,
@@ -3824,6 +3882,21 @@ export function formatPmPrompt(opts) {
 }
 /** 生成只读复核子代理 (Reviewer) 提示词（g-242） */
 export function formatReviewPrompt(opts) {
+    if (opts.language === "en") {
+        const lines = [
+            `You are a professional code and goal review Agent. Perform a read-only review of goal ${opts.goalId}, execution attempt ${opts.attemptId}.`,
+            "",
+            `Goal ID: ${opts.goalId}`,
+            `Attempt: ${opts.attemptId}`,
+            `Workspace-relative goal.md path: ${opts.goalRel}`,
+        ];
+        if (opts.criteria?.length)
+            lines.push("", "**Acceptance criteria**:", ...opts.criteria.map((item, i) => `${i + 1}. ${item}`));
+        if (opts.guidance?.trim())
+            lines.push("", `**Review guidance**: ${opts.guidance.trim()}`);
+        lines.push("", "## Review discipline and permissions", "- Read-only review: use read, glob, grep, and read-only tests only; do not edit or write code.", "- Do not call graph_* management write tools.", "- Return PASS or FAIL with concrete evidence; the supervisor/owner performs the final verdict.", "- bash, when available, is limited to local read-only tests and static checks.");
+        return lines.join("\\n");
+    }
     const lines = [
         `你是专业的代码与目标复核 Agent（Reviewer）。请对目标 ${opts.goalId} 的执行 attempt ${opts.attemptId} 进行只读审查。`,
         ``,
@@ -3998,6 +4071,7 @@ export function startAttempt(root, goalId, opts) {
         started_at: nowIso(),
         claimed_at: null,
         status_line: null,
+        status_state: null,
         result: "pending",
         child_id: null,
         worktree: attemptWorktreeEvidence(root, goalId, attId),
@@ -4101,9 +4175,12 @@ export function startAttempt(root, goalId, opts) {
     return attId;
 }
 /** 更新 attempt 的一句最新状态，追加 attempt.status_reported 事件。 */
-export function reportStatus(root, goalId, attemptId, line, actor) {
+export function reportStatus(root, goalId, attemptId, line, actor, state) {
     if (!line.trim())
         throw new GraphError("status 不能为空");
+    if (state !== undefined && state !== null && !normalizeAttemptStatusState(state)) {
+        throw new GraphError("state 只允许 working、blocked、done 或 error");
+    }
     const goalFile = findGoalFile(root, goalId);
     // backlog 目标没有目录结构，无法更新 attempt 状态
     if (basename(goalFile) !== "goal.md") {
@@ -4114,12 +4191,15 @@ export function reportStatus(root, goalId, attemptId, line, actor) {
         throw new GraphError(`attempt 不存在：${attemptId}（目标 ${goalId}）`);
     const doc = loadGoal(file);
     doc.meta.status_line = line;
+    if (state !== undefined) {
+        doc.meta.status_state = state;
+    }
     saveGoal(file, doc);
     appendEvent(root, {
         actor,
         event: "attempt.status_reported",
         goal: goalId,
-        details: { attempt: attemptId, status: line },
+        details: { attempt: attemptId, status: line, ...(state !== undefined ? { status_state: state } : {}) },
     });
 }
 /** 把 subagent childId 绑定到 attempt（startContinuable 之后调用）。
@@ -4215,6 +4295,7 @@ export function readGoalBinding(root, goalId) {
                 binding_version: Number(doc.meta.binding_version) || 0,
                 result: String(doc.meta.result ?? "pending"),
                 status_line: doc.meta.status_line ?? null,
+                status_state: normalizeAttemptStatusState(doc.meta.status_state),
             };
         }
         catch {
@@ -4650,8 +4731,20 @@ function isBacklogFile(file, root) {
     const rel = file.slice(root.length + 1);
     return rel.startsWith("backlog/") || rel.startsWith("backlog\\");
 }
-/** 判断是否有进行中的执行子代理（基于 attempt status_line 的启发式检测）。
- *  与 deleteGoal 使用同一判定口径：result=pending 且 status_line 未表明空闲/完成等结束态。 */
+/** g-247：结构化状态优先；只有旧记录缺失 status_state 时才解析 status_line。 */
+function attemptIsActive(meta) {
+    if (meta.detached === true || meta.result !== "pending")
+        return false;
+    const structured = normalizeAttemptStatusState(meta.status_state);
+    if (structured)
+        return structured === "working";
+    const sl = String(meta.status_line ?? "").trim();
+    if (meta.child_id && sl === "")
+        return true;
+    const done = /空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(sl);
+    return sl !== "" && !done;
+}
+/** 判断是否有进行中的执行子代理；旧记录回退 status_line 启发式检测。 */
 function _hasActiveAttempts_postpone(dir) {
     const attDir = join(dir, "attempts");
     if (!existsSync(attDir))
@@ -4664,15 +4757,7 @@ function _hasActiveAttempts_postpone(dir) {
             continue;
         try {
             const att = loadGoal(attFile);
-            // g-190：已解绑 attempt 不再视为活跃（解绑后允许暂缓）
-            if (att.meta.detached === true)
-                continue;
-            const sl = String(att.meta.status_line ?? "").trim();
-            // 已绑定 child_id 即代表仍有可运行的子代理；不得替用户中断。
-            if (att.meta.result === "pending" && att.meta.child_id)
-                return true;
-            const done = /空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(sl);
-            if (att.meta.result === "pending" && sl !== "" && !done)
+            if (attemptIsActive(att.meta))
                 return true;
         }
         catch {
@@ -4765,13 +4850,10 @@ export function deleteGoal(root, id, opts) {
                     continue;
                 try {
                     const att = loadGoal(attFile);
-                    // g-190：已解绑 attempt 不再视为活跃（解绑后允许删除已归档目标）
-                    if (att.meta.detached === true)
-                        continue;
-                    const sl = String(att.meta.status_line ?? "").trim();
-                    const done = /空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(sl);
-                    if (att.meta.result === "pending" && sl !== "" && !done) {
-                        throw new GraphError(`目标 ${id} 有进行中的子代理 ${d}（status_line="${sl}"），不能删除——请先停止或等其结束`);
+                    if (attemptIsActive(att.meta)) {
+                        const sl = String(att.meta.status_line ?? "").trim();
+                        const state = normalizeAttemptStatusState(att.meta.status_state);
+                        throw new GraphError(`目标 ${id} 有进行中的子代理 ${d}（${state ? `status_state="${state}"` : `status_line="${sl}"`}），不能删除——请先停止或等其结束`);
                     }
                 }
                 catch (e) {
@@ -4822,6 +4904,7 @@ export function boardProjection(root, opts) {
         }
         // 取最新一个带 status_line 的 attempt
         let statusLine = null;
+        let statusState = null;
         const dir = basename(file) === "goal.md" ? dirname(file) : null;
         if (dir) {
             const attDir = join(dir, "attempts");
@@ -4833,8 +4916,9 @@ export function boardProjection(root, opts) {
                         continue;
                     try {
                         const m = loadGoal(f).meta;
-                        if (m.status_line) {
-                            statusLine = m.status_line;
+                        if (m.status_line || m.status_state) {
+                            statusLine = m.status_line ?? null;
+                            statusState = normalizeAttemptStatusState(m.status_state);
                             break;
                         }
                     }
@@ -4893,6 +4977,7 @@ export function boardProjection(root, opts) {
                 return [];
             } })(),
             status_line: statusLine,
+            status_state: statusState,
             reviewer: meta.review?.reviewer ?? null,
             depends_on: (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((d) => String(d?.goal ?? d)),
             attempt_child_id: attemptChild.child_id ?? null,
@@ -5227,6 +5312,7 @@ export function goalDetail(root, goalId) {
                     attempts.push({
                         id: m.id, executor: m.executor, result: m.result,
                         status_line: m.status_line ?? null,
+                        status_state: normalizeAttemptStatusState(m.status_state),
                         child_id: m.child_id ?? null,
                         parent_session_id: m.parent_session_id ?? null,
                         provider: m.provider ?? null,

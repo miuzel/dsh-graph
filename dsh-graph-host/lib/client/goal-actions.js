@@ -130,6 +130,8 @@
     function hasActiveExecutionAttempt(attempts) {
       return (attempts ?? []).some((a) => {
         if (a?.executor === "agent:collect" || a?.result !== "pending") return false;
+        const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
+        if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });

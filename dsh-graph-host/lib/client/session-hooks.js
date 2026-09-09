@@ -472,7 +472,7 @@
       const statusFull = running ? dgT("status.running") : dgT("status.idle");
       // 第二行 status_line 内容（stale 时也显示全文，tooltip 补延续时长——g-124）
       // g-239：区分真实生命周期运行态与人工汇报文本，避免空闲时谎报 ✅ 或失实展示运行态
-      const formattedStatus = formatStatusWithLifecycle(props.statusLine, running, false);
+      const formattedStatus = formatStatusWithLifecycle(props.statusLine, running, false, props.statusState);
       const statusRowText = props.statusLine
         ? formattedStatus.fullText
         : (staleStatus ? "⏳ " + dgT("status.stale", { duration: staleDur }) : null);

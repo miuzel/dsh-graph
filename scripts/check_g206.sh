@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 A=AGENTS.md
-S=dsh-graph-host/supervisor-guide.md
+S=dsh-graph-host/supervisor-guide.zh.md
 
 ERR=0
 fail() { echo "FAIL: $1"; ERR=1; }

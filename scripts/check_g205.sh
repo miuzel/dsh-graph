@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GUIDE="${SCRIPT_DIR}/../dsh-graph-host/supervisor-guide.md"
+GUIDE="${SCRIPT_DIR}/../dsh-graph-host/supervisor-guide.zh.md"
 
 if [[ ! -f "$GUIDE" ]]; then
     echo "FAIL: guide not found at $GUIDE" >&2

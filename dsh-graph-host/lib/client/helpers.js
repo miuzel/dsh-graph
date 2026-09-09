@@ -621,7 +621,7 @@
     // ===== g-239：运行/空闲生命周期投影与人工可读 status 区分 =====
     // 区分会话/任务真实生命周期（running / idle / blocked / error / done）与人工汇报 status_line，
     // 彻底解决结束、阻塞、失败、长任务场景长期显示失实运行态（如流动背景、虚假 ⏳/✅）的问题。
-    function formatStatusWithLifecycle(statusLine, running, blocked) {
+    function formatStatusWithLifecycle(statusLine, running, blocked, statusState) {
       if (!statusLine) {
         return {
           icon: "",
@@ -634,9 +634,11 @@
         };
       }
       const raw = String(statusLine).trim();
-      const isBlocked = !!blocked || /阻塞|blocked/i.test(raw);
-      const isError = !isBlocked && /失败|错误|报错|failed|error/i.test(raw);
-      const isDone = !isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw);
+      // g-247：结构化状态优先；只有缺失/未知时才解析自由文本，避免中英文及否定句误判。
+      const structured = ["working", "blocked", "done", "error"].includes(statusState) ? statusState : null;
+      const isBlocked = structured ? structured === "blocked" : (!!blocked || /阻塞|blocked/i.test(raw));
+      const isError = structured ? structured === "error" : (!isBlocked && /失败|错误|报错|failed|error/i.test(raw));
+      const isDone = structured ? structured === "done" : (!isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw));
       
       let icon = "⏳ ";
       if (isBlocked) icon = "⛔ ";

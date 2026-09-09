@@ -71,7 +71,7 @@ test("g-239 判据 1 & 4：通用执行纪律提示词统一为有限状态汇�
   assert.match(personaText, /长任务适度节流心跳/);
 
   // 8. supervisor-guide.md 也同步更新为有限关键节点与节流，不残留旧口径
-  const guideText = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/supervisor-guide.md"), "utf8");
+  const guideText = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/supervisor-guide.zh.md"), "utf8");
   assert.doesNotMatch(guideText, /每做一个动作就写一句/);
   assert.match(guideText, /有限关键节点自报/);
   assert.match(guideText, /长任务适度节流心跳/);

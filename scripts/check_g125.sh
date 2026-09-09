@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 C=dsh-graph-host/lib/client.js
 H=dsh-graph-host/index.js
-G=dsh-graph-host/supervisor-guide.md
+G=dsh-graph-host/supervisor-guide.zh.md
 
 echo "== 0. 语法 =="
 node --check "$C"
