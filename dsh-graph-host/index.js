@@ -291,15 +291,23 @@ function normalizePromptLanguage(value) {
 /** Resolve prompt language without making locale a hard dependency. */
 export function resolvePromptLanguage(override = "follow", ctx = null) {
   if (override === "zh" || override === "en") return override;
+  const pick = (value) => {
+    if (typeof value !== "string") return null;
+    const base = value.toLowerCase().split(/[-_]/)[0];
+    return base === "en" || base === "zh" ? base : null;
+  };
   try {
+    // 首选：DSH settings 服务的 locale.preference（服务端可读的界面语言，
+    // 由 dsh-client-locale 注册命名空间 "locale"、字段 "preference"）。
+    const viaSettings = pick(ctx?.get?.("settings")?.get?.("locale")?.preference ?? ctx?.settings?.get?.("locale")?.preference);
+    if (viaSettings) return viaSettings;
+  } catch { /* settings 服务可选 */ }
+  try {
+    // 次选：直接暴露的 locale 服务（部分宿主组合）。
     const locale = ctx?.locale ?? ctx?.get?.("locale");
     const snapshot = locale?.getLocale?.() ?? locale?.snapshot?.() ?? locale;
-    const active = snapshot?.active ?? snapshot?.locale ?? snapshot?.id ?? locale?.active;
-    if (typeof active === "string") {
-      const base = active.toLowerCase().split(/[-_]/)[0];
-      if (base === "en") return "en";
-      if (base === "zh") return "zh";
-    }
+    const active = pick(snapshot?.active ?? snapshot?.locale ?? snapshot?.id ?? locale?.active);
+    if (active) return active;
   } catch { /* locale service is optional */ }
   return "zh";
 }

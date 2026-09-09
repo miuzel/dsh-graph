@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { SERVER_I18N, assertServerI18nParity } from "../../dsh-graph-host/lib/server-i18n.js";
+import { resolvePromptLanguage } from "../../dsh-graph-host/index.js";
 
 const root = join(import.meta.dirname, "../../dsh-graph-host");
 const prompts = join(root, "prompts");
@@ -53,4 +54,24 @@ test("server i18n has one symmetric key for every graph tool", () => {
   const expected = toolNames.map((name) => `tool.${name}`).sort();
   assert.deepEqual(Object.keys(SERVER_I18N.zh).filter((key) => key.startsWith("tool.")).sort(), expected);
   assert.deepEqual(Object.keys(SERVER_I18N.en).filter((key) => key.startsWith("tool.")).sort(), expected);
+});
+
+test("resolvePromptLanguage: override wins, locale.preference via settings, legacy locale probe, zh fallback", () => {
+  // 显式覆盖优先
+  assert.equal(resolvePromptLanguage("en"), "en");
+  assert.equal(resolvePromptLanguage("zh"), "zh");
+  // follow：首选 DSH settings 服务的 locale.preference（dsh-client-locale 注册的命名空间）
+  const viaSettings = (preference?: string) => ({
+    get: (name: string) => (name === "settings" ? { get: (ns: string) => (ns === "locale" ? { preference } : undefined) } : undefined),
+  });
+  assert.equal(resolvePromptLanguage("follow", viaSettings("en")), "en");
+  assert.equal(resolvePromptLanguage("follow", viaSettings("zh-CN")), "zh");
+  // preference 缺失（跟随浏览器）时走次选 locale 服务探测
+  assert.equal(resolvePromptLanguage("follow", { locale: { getLocale: () => ({ active: "en-US" }) } }), "en");
+  assert.equal(resolvePromptLanguage("follow", { get: (name: string) => (name === "locale" ? { snapshot: () => ({ active: "zh" }) } : undefined) }), "zh");
+  // settings/locale 均不可用或异常 → 回退 zh
+  assert.equal(resolvePromptLanguage("follow", null), "zh");
+  assert.equal(resolvePromptLanguage("follow", { get: () => { throw new Error("no service"); } }), "zh");
+  assert.equal(resolvePromptLanguage("follow", viaSettings(undefined)), "zh");
+  assert.equal(resolvePromptLanguage(undefined, null), "zh");
 });
