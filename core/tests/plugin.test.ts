@@ -30,7 +30,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 38); // 全量 38 个 graph_* 工具
+  assert.equal(registered.length, 39); // 全量 39 个 graph_* 工具（g-260 新增 graph_set_description）
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
@@ -126,6 +126,7 @@ test("g-113 graph_start_attempt 注入目标相对路径以 workspace 根为基�
   const ws = join(base, "proj");
   init(join(ws, ".dsh-graph"));
   const goalId = createGoal(join(ws, ".dsh-graph"), { title: "rel 目标", version: "v-t", actor: "test" });
+  setCriteria(join(ws, ".dsh-graph"), goalId, ["判据一"], "test");
   let capturedPrompt = "";
   const registered: any[] = [];
   const ctx = {

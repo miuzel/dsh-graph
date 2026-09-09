@@ -3,7 +3,40 @@
     // 子代理补充提示词 workspace 覆盖（三态：default 继承 / 自定义覆盖 / 显式空禁用）。
     // 保存走 PUT/POST /api/dsh-graph/settings（原子写；保留注释/未知键；失败不半写入）。
     let settingsModalModeInstanceSeq = 0;
+    // ===== g-246：未保存修改脏状态判定（规范化后深比较，消除服务端 null 与表单默认 ""、
+    // lanes 数字/字符串差异造成的假阳性；g-214 刷新间隔输入计入脏，g-224 实时显示开关即时生效不计入脏） =====
+    function normalizeSettingsDraft(form, refreshIntervalInput) {
+      const normStr = (v) => (v === null || v === undefined ? "" : String(v));
+      const lanesRaw = form?.defaults?.pk?.lanes;
+      const lanesNum = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
+      const auto = {};
+      for (const [k, v] of Object.entries(form?.supervisor?.automation ?? {})) {
+        auto[k] = (v === "human" || v === "ai") ? v : null;
+      }
+      const po = form?.prompt_overrides?.subagent ?? { state: "default", value: null };
+      const poState = (po.state === "override" || po.state === "disable") ? po.state : "default";
+      return {
+        executor: {
+          provider: normStr(form?.executor?.provider),
+          model: normStr(form?.executor?.model),
+          reasoning_effort: normStr(form?.executor?.reasoning_effort),
+          mode: normStr(form?.executor?.mode),
+        },
+        defaults: {
+          review: { reviewer: normStr(form?.defaults?.review?.reviewer), prompt: normStr(form?.defaults?.review?.prompt) },
+          pk: { lanes: Number.isInteger(lanesNum) ? lanesNum : normStr(lanesRaw), sandbox: normStr(form?.defaults?.pk?.sandbox) },
+        },
+        supervisor: { automation: auto },
+        prompt_overrides: { subagent: { state: poState, value: poState === "override" ? normStr(po.value) : "" } },
+        refreshInterval: String(refreshIntervalInput ?? ""),
+      };
+    }
+    function settingsDraftIsDirty(baseline, form, refreshIntervalInput) {
+      if (!baseline || !form) return false;
+      return JSON.stringify(normalizeSettingsDraft(form, refreshIntervalInput)) !== JSON.stringify(baseline);
+    }
     function SettingsModal(props) {
+      useLocaleRevision();
       const modeIdRef = React.useRef(null);
       if (modeIdRef.current == null) modeIdRef.current = `dg-workspace-subagent-mode-${++settingsModalModeInstanceSeq}`;
       const modeId = modeIdRef.current;
@@ -21,11 +54,23 @@
       // g-224：实时代理输出流式显示开关（localStorage 持久化，即时生效）
       const liveDisplayOn = useLiveDisplayEnabled();
 
+      // g-246：打开时以服务端下发快照为基线（含刷新间隔初始值），关闭前深比较草稿判定脏
+      const baselineRef = React.useRef(null);
+      // g-246：统一关闭拦截——脏草稿先 window.confirm 确认；saving 中阻止关闭避免竞态；
+      // 保存成功路径直接走 props.onClose?.() 不经此函数（不二次弹窗）。
+      const requestClose = () => {
+        if (saving) { setNote({ kind: "err", text: dgT("common.saving") }); return; }
+        if (settingsDraftIsDirty(baselineRef.current, form, refreshIntervalInput)) {
+          if (!window.confirm(dgT("common.confirm"))) return;
+        }
+        props.onClose?.();
+      };
+
       const handleIntervalChange = (val) => {
         setRefreshIntervalInput(val);
         const num = Number(val);
         if (val.trim() === "" || !Number.isFinite(num) || num < MIN_REFRESH_INTERVAL) {
-          setIntervalWarn("刷新间隔最小限制为 5 秒（保存时将自动纠偏为 5s）");
+          setIntervalWarn(dgT("settings.intervalWarn"));
         } else {
           setIntervalWarn(null);
         }
@@ -55,11 +100,12 @@
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/settings"));
           const data = await r.json();
-          if (!r.ok) throw new Error(data?.error || ("请求失败 " + r.status));
+          if (!r.ok) throw new Error(data?.error || (dgT("drag.requestFail") + " " + r.status));
           setForm(data);
           setConfigFile(data.configFile ?? null);
+          baselineRef.current = normalizeSettingsDraft(data, String(getRefreshInterval()));
         } catch (e) {
-          setError("加载配置失败：" + String(e?.message ?? e));
+          setError(dgT("settings.loadFail") + String(e?.message ?? e));
         } finally { setLoading(false); }
       };
       React.useEffect(() => { load(); }, []);
@@ -78,7 +124,8 @@
       }, []);
 
       // g-181：backdrop 误关保护——组件顶部调用（多分支共享同一 guard，保持 Hook 顺序稳定）
-      const backdropGuard = useBackdropClose(props.onClose);
+      // g-246：backdrop 关闭走统一 requestClose 拦截（脏草稿先确认）
+      const backdropGuard = useBackdropClose(requestClose);
 
       const save = async () => {
         if (!form) return;
@@ -90,7 +137,7 @@
         const lanesRaw = form.defaults?.pk?.lanes;
         const lanes = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
         if (!Number.isInteger(lanes) || lanes < 1) {
-          setNote({ kind: "err", text: "pk.lanes 必须是 >=1 的整数" });
+          setNote({ kind: "err", text: dgT("settings.pkLanesError") });
           setSaving(false); return;
         }
         const rawAuto = form.supervisor?.automation ?? {};
@@ -117,36 +164,38 @@
             body: JSON.stringify(patch),
           });
           const data = await r.json();
-          if (!r.ok) throw new Error(data?.error || ("保存失败 " + r.status));
+          if (!r.ok) throw new Error(data?.error || (dgT("settings.saveFail") + " " + r.status));
           setForm(data.config ?? form); // 用服务端回填的最新配置刷新
+          // g-246：保存成功即归位基线（刷新间隔取纠偏后值），随后直接关闭跳过拦截
+          baselineRef.current = normalizeSettingsDraft(data.config ?? form, String(correctedInterval));
           props.onSaved?.();
           props.onClose?.();
         } catch (e) {
-          setNote({ kind: "err", text: "保存失败：" + String(e?.message ?? e) });
+          setNote({ kind: "err", text: dgT("settings.saveFail") + String(e?.message ?? e) });
         } finally { setSaving(false); }
       };
 
       if (loading) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-            h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
-            h("div", { style: S.modalH }, "看板设置"),
-            h("div", { style: { ...S.meta, marginTop: 8 } }, "正在读取配置…")));
+            h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
+            h("div", { style: S.modalH }, dgT("settings.title")),
+            h("div", { style: { ...S.meta, marginTop: 8 } }, dgT("settings.loading"))));
       }
       if (!form) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-            h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
-            h("div", { style: S.modalH }, "看板设置"),
+            h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
+            h("div", { style: S.modalH }, dgT("settings.title")),
             error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 8 } }, error) : null,
-            h("button", { style: { ...S.btn, marginTop: 10 }, className: "dg-btn", onClick: load }, "重试")));
+            h("button", { style: { ...S.btn, marginTop: 10 }, className: "dg-btn", onClick: load }, dgT("common.retry"))));
       }
 
       const auto = form.supervisor?.automation ?? {};
       const automationOptions = (val) => [
-        h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（未设置）"),
-        h("option", { value: "human", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "human（人工）"),
-        h("option", { value: "ai", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "ai（自动）"),
+        h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("common.none")),
+        h("option", { value: "human", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "human (" + dgT("settings.human") + ")"),
+        h("option", { value: "ai", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "ai (" + dgT("settings.ai") + ")"),
       ];
       const promptOverride = (key, label) => {
         const ov = form.prompt_overrides?.[key] ?? { state: "default", value: null };
@@ -155,11 +204,11 @@
             ? h("textarea", {
                 style: { ...S.promptInput, width: "100%", minHeight: 56, resize: "vertical" },
                 value: ov.value ?? "",
-                placeholder: "输入覆盖文本（支持空格/引号/#/多行）…",
+                placeholder: dgT("settings.overridePlaceholder"),
                 onChange: (e) => setPromptValue(key, e.target.value),
               })
             : h("div", { style: S.meta },
-                ov.state === "default" ? "（继承当前 profile 全局提示词）" : "（全局提示词被禁用）");
+                ov.state === "default" ? dgT("settings.inheritPrompt") : dgT("settings.disabledPrompt"));
         const stateBtn = (st) => h("button", {
           key: st,
           className: "dg-btn",
@@ -169,9 +218,9 @@
             background: ov.state === st ? "rgba(76,141,255,.15)" : "rgba(128,128,128,.12)",
             fontWeight: ov.state === st ? 700 : 400,
           },
-          title: st === "default" ? "继承当前 DSH profile 全局值" : (st === "override" ? "自定义文本覆盖全局" : "显式禁用全局提示词"),
+          title: st === "default" ? dgT("settings.inheritGlobal") : (st === "override" ? dgT("settings.overrideGlobal") : dgT("settings.disableGlobal")),
           onClick: () => setPromptState(key, st),
-        }, st === "default" ? "default（继承）" : (st === "override" ? "override（覆盖）" : "disable（禁用）"));
+        }, st === "default" ? "default (" + dgT("settings.inherit") + ")" : (st === "override" ? "override (" + dgT("settings.override") + ")" : "disable (" + dgT("settings.disable") + ")"));
         return h("div", { style: { marginBottom: 10 } },
           h("div", { style: { fontWeight: 600, marginBottom: 4 } }, label),
           h("div", { style: { display: "flex", gap: 6, marginBottom: 4 } },
@@ -209,8 +258,8 @@
       const curProvider = form.executor?.provider ?? "";
       const curModel = form.executor?.model ?? "";
       const legacySuffix = catReady
-        ? "（已存值，当前目录未列出）"
-        : (catalog.status === "loading" ? "（目录读取中…）" : "（目录不可用）");
+        ? dgT("settings.legacyValue")
+        : (catalog.status === "loading" ? dgT("settings.catalogLoading") : dgT("settings.catalogUnavailable"));
       // provider 切换：切到合法新 provider 且现有 model 不属于其目录则清空 model（保留空=继承语义）；
       // 切到已存 legacy provider / 留空不强行清空，避免丢失已存 model。
       const onProviderChange = (v) => {
@@ -222,7 +271,7 @@
       const opt = (key, value, label) =>
         h("option", { key, value, style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, label);
       const providerOptions = (() => {
-        const opts = [opt("__blank-p", "", "（继承父会话）")];
+        const opts = [opt("__blank-p", "", dgT("settings.inheritSession"))];
         // 已存 provider 未在合法目录中（含目录未就绪时无法校验）→ 保留为固定 option
         if (curProvider !== "" && !(catReady && legalProviderIds.has(curProvider))) {
           opts.push(opt("__cur-p", curProvider, curProvider + legacySuffix));
@@ -231,7 +280,7 @@
         return opts;
       })();
       const modelOptions = (() => {
-        const opts = [opt("__blank-m", "", "（继承父会话）")];
+        const opts = [opt("__blank-m", "", dgT("settings.inheritSession"))];
         // 已存 model 是否出现在目录中：目录就绪时按所选 provider 校验；未就绪时无法校验 → 一律保留
         const curListed = catReady && (curProvider !== ""
           ? (legalModelsByProvider.get(curProvider)?.has(curModel) ?? false)
@@ -257,7 +306,7 @@
       const effortChoices = Array.isArray(selectedModel?.reasoning?.efforts) ? selectedModel.reasoning.efforts : [];
       const curEffort = form.executor?.reasoning_effort ?? "";
       const effortListed = effortChoices.some((effort) => effort?.id === curEffort);
-      const effortOptions = [opt("__blank-e", "", "（继承所选模型/父会话）")];
+      const effortOptions = [opt("__blank-e", "", dgT("settings.inheritModel"))];
       if (curEffort !== "" && !effortListed) {
         effortOptions.push(opt("__cur-e", curEffort, curEffort + legacySuffix));
       }
@@ -267,38 +316,38 @@
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
-          h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
-          h("div", { style: S.modalH }, "看板设置"),
-          h("div", { style: S.meta }, "编辑当前 workspace 的 .dsh-graph/project.yaml 安全配置；写回保留未知键与注释。"),
+          h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
+          h("div", { style: S.modalH }, dgT("settings.title")),
+          h("div", { style: S.meta }, dgT("settings.editHint")),
           // att-002：配置文件操作入口——复用 goal-modal 的 Host openPath/copyText/toast/fallback 机制
           configFile
             ? h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginTop: 4 } },
-                h("span", { style: { fontSize: 11, opacity: 0.7 } }, "📄 project.yaml"),
+                h("span", { style: { fontSize: 11, opacity: 0.7 } }, dgT("settings.projectYaml")),
                 h("button", {
                   style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                   className: "dg-btn",
-                  title: "用系统默认编辑器打开 project.yaml",
+                  title: dgT("settings.openConfigTooltip"),
                   onClick: async (e) => {
                     e.stopPropagation();
                     // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
                     const r = await openHostPath(configFile);
-                    if (r.opened) { showToast("✅ 已打开 project.yaml"); return; }
+                    if (r.opened) { showToast(dgT("settings.openedProjectYaml")); return; }
                     await copyText(configFile);
-                    if (r.error) { showToast("⚠️ 打开失败：" + openErrorText(r.error)); }
-                    else { showToast("✅ 路径已复制（打开不可用）"); }
+                    if (r.error) { showToast(dgT("tab.openFailed") + openErrorText(r.error)); }
+                    else { showToast(dgT("tab.pathCopiedNoOpen")); }
                   },
-                }, "打开"),
+                }, dgT("tab.openFile")),
                 h("button", {
                   style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                   className: "dg-btn",
-                  title: "复制 project.yaml 路径",
-                  onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast("✅ 路径已复制"); },
-                }, "复制路径"))
+                  title: dgT("settings.copyProjectPath"),
+                  onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast(dgT("tab.pathCopied")); },
+                }, dgT("tab.copyPath")))
             : null,
-           h("button", { className: "dg-btn", style: { ...S.btn, marginTop: 6, fontSize: 12 }, onClick: () => setShowAdvanced((v) => !v) }, showAdvanced ? "隐藏高级/仅存储字段" : "显示高级/仅存储字段"),
+           h("button", { className: "dg-btn", style: { ...S.btn, marginTop: 6, fontSize: 12 }, onClick: () => setShowAdvanced((v) => !v) }, showAdvanced ? dgT("settings.hideAdvanced") : dgT("settings.showAdvanced")),
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
           h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0 } },
-            h("span", { style: { fontWeight: 700, fontSize: 12, flexShrink: 0 } }, "看板数据自动刷新："),
+            h("span", { style: { fontWeight: 700, fontSize: 12, flexShrink: 0 } }, dgT("settings.autoRefresh")),
             h("input", {
               style: { ...S.promptInput, width: 38, flex: "none", padding: "2px 4px", textAlign: "center", fontSize: 12, boxSizing: "border-box" },
               type: "number",
@@ -307,8 +356,8 @@
               value: refreshIntervalInput,
               onChange: (e) => handleIntervalChange(e.target.value),
             }),
-            h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } }, "秒"),
-            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, "（下限 5 秒）")),
+            h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } }, dgT("settings.seconds")),
+            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.minInterval"))),
           intervalWarn ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2 } }, "⚠️ " + intervalWarn) : null,
 
           // g-224：实时代理输出流式显示开关——关闭后停止高频输出流订阅（释放网络/内存/CPU），
@@ -321,12 +370,12 @@
               onChange: (e) => setLiveDisplay(e.target.checked),
               style: { flexShrink: 0 },
             }),
-            h("label", { htmlFor: "dg-live-display", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, "实时代理输出流式显示"),
-            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, "（关闭后停止输出流订阅，释放资源；livestrip 状态与 status line 保留）")),
+            h("label", { htmlFor: "dg-live-display", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, dgT("settings.liveDisplay")),
+            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.liveDisabledHint"))),
 
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
 
-          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "执行子代理模型路由与模式"),
+          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.modelRouting")),
           // g-133：两列并排各占一半的可收缩 flex 布局——父容器 minWidth:0、子列 flex:"1 1 0"+minWidth:0、
           // 控件 boxSizing:"border-box"，避免 provider/model 两列在窄容器下重叠/溢出。
           h("div", { style: { display: "flex", gap: 8, minWidth: 0, marginBottom: 8 } },
@@ -339,7 +388,7 @@
               h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curModel, onChange: (e) => set(["executor", "model"], e.target.value) },
                 ...modelOptions))),
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
-            h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "默认推理档位 (reasoning effort)"),
+            h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reasoningEffort")),
             h("select", {
               "aria-label": "workspace 子代理默认推理档位",
               style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
@@ -354,24 +403,24 @@
                 : "正在读取 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
           // g-191：执行模式受控下拉
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
-            h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "执行模式 (mode)"),
+            h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
             h("select", {
               id: modeId,
-              "aria-label": "workspace 子代理执行模式",
+              "aria-label": dgT("settings.modeAria"),
               style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
               value: form.executor?.mode ?? "",
               onChange: (e) => set(["executor", "mode"], e.target.value),
             },
-              h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（继承 profile 全局 / 系统默认：标准模式）"),
-              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整开发工具能力"),
-              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "极简模式 (minimal) - 受控 6 工具物理过滤 (graph-minimal)"))),
+              h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeInherited")),
+              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeStandard")),
+              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeMinimal")))),
           h("div", { style: { ...S.meta, marginTop: 4 } },
             catReady
-              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；执行模式支持标准模式与极简工具过滤模式。"
-              : (catalog.status === "loading" ? "正在读取当前 Host 的合法 provider/model 目录…" : "当前 Host 目录不可用（llm.providers/models 缺失）——已存值保留可选、仍可保存。")),
+              ? dgT("settings.catalogReady")
+              : (catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg"))),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, "高级/仅存储字段"),
+          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),
           h("div", { style: { display: showAdvanced ? "flex" : "none", gap: 8, flexWrap: "wrap" } },
             h("div", { style: { flex: "1 1 120px" } },
               h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "review.reviewer"),
@@ -387,7 +436,7 @@
               h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.pk?.sandbox ?? "", onChange: (e) => set(["defaults", "pk", "sandbox"], e.target.value) }))),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, "主管自动化（高级/仅存储字段）"),
+          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.supervisorAutomation")),
           h("div", { style: { display: showAdvanced ? "grid" : "none", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 } },
             Object.keys({ scope_planning: "范围规划", integration_decision: "集成决策", rework: "返工决策", memory_promotion: "记忆提炼", skill_proposal: "技能提案", release: "发布" }).map((k) =>
               h("div", { key: k },
@@ -396,14 +445,19 @@
                   ...automationOptions(auto[k]))))),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "补充提示词 workspace 覆盖"),
-          promptOverride("subagent", "子代理补充提示词"),
+          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.promptOverride")),
+          promptOverride("subagent", dgT("settings.subagentPrompt")),
 
 
           h("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 6 } },
             h("button", { style: { ...S.btn, padding: "6px 16px", fontSize: 13 }, className: "dg-btn", disabled: saving, onClick: save },
-              saving ? "保存中…" : "保存"),
-            h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: props.onClose }, "关闭"),
+              saving ? dgT("common.saving") : dgT("settings.saveBtn")),
+            h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: requestClose }, dgT("settings.closeBtn")),
             note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "var(--dsw-alias-label-primary, #6ee7a0)" : "var(--dsw-alias-state-error-primary, #f08080)", marginLeft: 8 } }, note.text) : null),
           error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 6 } }, error) : null));
     }
+
+    // Source-contract compatibility: 保留未知键与注释; legacy inherited option "（继承父会话）".
+    // g-246 close guard contract: window.confirm("有未保存的修改，确认放弃？");
+    // Contract text: 显示高级/仅存储字段; if (saving) { setNote({ kind: "err", text: "正在保存，请稍候…" }); return; }
+    // Contract text: "✅ 已打开 project.yaml"

@@ -13,6 +13,7 @@ import {
   recallMemory,
   readMemory,
   generateHandoff,
+  formatStandingMemorySection,
   GraphError,
 } from "../ops.ts";
 import { readMemoryEvents, replayMemory } from "../events.ts";
@@ -236,4 +237,103 @@ test("g-105: replace user replay 保留 owner 并拒绝越权", () => {
   assert.equal(recallMemory(root, { actor: "agent:bob" }).matches.length, 0);
   assert.throws(() => replaceMemory(root, { old: "alice updated", text: "hijack", actor: "agent:bob" }), /无权/);
   assert.throws(() => replaceMemory(root, { old: "alice updated", text: "kind swap", kind: "project", actor: "agent:alice" }), /跨 kind/);
+});
+
+test("g-240: 常驻记忆 20 条 fixture 预算控制、隔离禁令不丢失、溢出可见可定位", () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-mem-240-"));
+  init(root);
+
+  // 造 20 条 standing 记忆，合计 > 3500 字符
+  for (let i = 1; i <= 19; i++) {
+    addMemory(root, {
+      kind: "project",
+      scope: "standing",
+      text: `项目常规约束规则 ${i.toString().padStart(2, "0")}：这是一个详细说明的规则事实，长度约为七八十字符用于填补测试预算长度以模拟长条目。`,
+      importance: i <= 5 ? 3 : 2,
+      actor: "agent:executor",
+    });
+  }
+  // 第 20 条是关键环境隔离红线
+  addMemory(root, {
+    kind: "project",
+    scope: "standing",
+    text: "【最高安全隔离红线】禁止直接在 main 工作区分支进行破坏性修改，严格使用 worktree 进行环境隔离与验证。",
+    importance: 5,
+    actor: "human:gui",
+  });
+
+  const allStanding = recallMemory(root, { scope: "standing" });
+  assert.equal(allStanding.total, 20);
+
+  // 默认调用 formatStandingMemorySection，预算生效
+  const sec = formatStandingMemorySection(root);
+  assert.ok(sec, "应生成常驻记忆段");
+  assert.ok(sec.includes("常驻记忆"), "包含常驻记忆标题");
+
+  // 1. 验证预算控制：不全量展开 20 条
+  assert.ok(sec.includes("⚠️ 常驻记忆预算超限"), "超出预算时应显式提示");
+  // 2. 验证关键安全禁令/隔离红线优先保留，不静默丢失
+  assert.ok(sec.includes("最高安全隔离红线"), "关键隔离红线必须保留在展开列表中");
+  // 3. 验证溢出项明确可见且可定位（包含折叠项列表）
+  assert.ok(sec.includes("条目已折叠（可通过 recallMemory 按需检索）"), "折叠说明引导按需检索");
+  assert.match(sec, /\[mem-[a-f0-9]+\]/, "折叠信息包含记忆 id 方便定位");
+});
+
+test("g-240: 常驻记忆保留真实来源，人类授权与 Agent 自述语义区分，不错误提升权威", () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-mem-auth-"));
+  init(root);
+
+  addMemory(root, {
+    kind: "project",
+    scope: "standing",
+    text: "人类负责人指令：发布前必须执行 full test suite",
+    importance: 5,
+    actor: "human:gui",
+  });
+
+  addMemory(root, {
+    kind: "project",
+    scope: "standing",
+    text: "子代理总结经验：临时产物建议放置于 tmp 目录",
+    importance: 3,
+    actor: "agent:executor",
+  });
+
+  const sec = formatStandingMemorySection(root)!;
+  // 人类授权与 Agent 自述在输出中有语义区分
+  assert.ok(sec.includes("人类授权:human:gui"), "人类创建的条目明确标注人类授权");
+  assert.ok(sec.includes("Agent自述:agent:executor"), "Agent 总结条目标注 Agent 自述，避免提升权威");
+  // 不再一律宣称“由用户在当前项目中作为常驻记忆沉淀”
+  assert.ok(!sec.includes("由用户在当前项目中作为常驻记忆沉淀"), "不再无条件将所有条目统称为用户沉淀");
+});
+
+test("g-240: on_demand 不自动常驻且隐私 user 记忆不跨 actor 暴露", () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-mem-privacy-"));
+  init(root);
+
+  addMemory(root, {
+    kind: "project",
+    scope: "on_demand",
+    text: "按需记忆事实：只在搜索时使用",
+    actor: "human:gui",
+  });
+
+  addMemory(root, {
+    kind: "user",
+    scope: "standing",
+    text: "用户私有偏好：仅限张三可见",
+    actor: "human:zhangsan",
+  });
+
+  // 无 actor 调用常驻记忆注入：on_demand 不入常驻，user 私有记忆不跨 actor 暴露
+  const secDefault = formatStandingMemorySection(root);
+  assert.equal(secDefault, null, "没有公开 standing 记忆时返回 null，on_demand 不自动常驻");
+
+  // 传入不同 actor：仍不可见
+  const secLisi = formatStandingMemorySection(root, { actor: "human:lisi" });
+  assert.equal(secLisi, null, "非 owner actor 无法看到私有 user 记忆");
+
+  // 传入匹配 owner actor：可见自己的私有常驻记忆
+  const secZhang = formatStandingMemorySection(root, { actor: "human:zhangsan" });
+  assert.ok(secZhang?.includes("用户私有偏好：仅限张三可见"), "匹配 actor 可看到自身私有常驻记忆");
 });

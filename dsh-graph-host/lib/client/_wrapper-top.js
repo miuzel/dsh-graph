@@ -6,3 +6,6 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require("react");
     const h = React.createElement;
+    // g-230：全局翻译函数——在 plugin apply 阶段由 registerI18n + createTranslator 初始化。
+    // 所有组件通过 dgT('key', params) 获取当前语言翻译。
+    let dgT = (key) => key;

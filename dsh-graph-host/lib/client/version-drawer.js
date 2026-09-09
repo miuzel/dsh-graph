@@ -1,5 +1,6 @@
     // ===== g-223：版本管理抽屉（左侧展开，版本显隐过滤、全选/取消/仅活跃快捷操作） =====
     function VersionDrawer(props) {
+      useLocaleRevision();
       const {
         versions,
         hiddenVersionSlugs,
@@ -38,51 +39,51 @@
           role: "dialog",
           "aria-modal": "true",
           "aria-labelledby": "dg-version-drawer-title",
-          "aria-label": "版本管理",
+          "aria-label": dgT("versionDrawer.title"),
           onClick: (e) => e.stopPropagation(),
         },
           h("button", {
             type: "button",
             style: { ...S.close, background: "none", border: "none", padding: 0, color: "inherit", font: "inherit" },
-            title: "关闭版本管理抽屉",
-            "aria-label": "关闭版本管理抽屉",
+            title: dgT("common.close"),
+            "aria-label": dgT("common.close"),
             onClick: onClose,
           }, "✕"),
           h("div", { id: "dg-version-drawer-title", style: { fontWeight: 700, fontSize: 16, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
-            h("span", null, "🏷️ 版本管理"),
+            h("span", null, dgT("versionDrawer.title")),
             h("span", { style: { ...S.meta, fontSize: 12, fontWeight: 400 } },
               "（显示 " + visibleCount + "/" + allVersions.length + "）")),
           h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.8, marginBottom: 12, lineHeight: 1.4 } },
-            "勾选控制版本在看板中的显隐过滤；设置自动保存在本地，不影响底层版本数据。"),
+            dgT("versionDrawer.hint")),
 
           // 便捷操作按钮栏
           h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 } },
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "3px 8px" },
               className: "dg-btn",
-              title: "显示全部版本",
+              title: dgT("versionDrawer.showAll"),
               onClick: onShowAll,
-            }, "显示全部"),
+            }, dgT("versionDrawer.showAll")),
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "3px 8px" },
               className: "dg-btn",
-              title: "仅显示活跃版本（planning / ready / in_progress / review 等未发布版本）",
+              title: dgT("versionDrawer.showActiveTooltip"),
               onClick: onShowActiveOnly,
-            }, "仅活跃版本"),
+            }, dgT("versionDrawer.showActive")),
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "3px 8px" },
               className: "dg-btn",
-              title: "隐藏全部版本泳道",
+              title: dgT("versionDrawer.hideAllTooltip"),
               onClick: onHideAll,
-            }, "隐藏全部")),
+            }, dgT("versionDrawer.hideAll"))),
 
           // 搜索过滤框（版本很多时快速定位）
           allVersions.length > 8
             ? h("div", { style: { marginBottom: 10 } },
                 h("input", {
                   style: { ...S.promptInput, width: "100%", fontSize: 12, padding: "4px 8px" },
-                  placeholder: "搜索版本名称或 slug…",
-                  "aria-label": "搜索版本名称或 slug",
+                  placeholder: dgT("versionDrawer.searchPlaceholder"),
+                  "aria-label": dgT("versionDrawer.searchPlaceholder"),
                   value: search,
                   onChange: (e) => setSearch(e.target.value),
                 }))
@@ -102,7 +103,7 @@
           },
             filteredVersions.length === 0
               ? h("div", { style: { ...S.meta, textAlign: "center", padding: "20px 0" } },
-                  allVersions.length === 0 ? "暂无版本" : "未找到匹配版本")
+                  allVersions.length === 0 ? dgT("versionDrawer.noVersions") : dgT("versionDrawer.noMatch"))
               : filteredVersions.map((v) => {
                   const isVisible = !hiddenSet.has(v.slug);
                   const isReleased = v.status === "released";
@@ -166,19 +167,20 @@
                                 ? "var(--dsw-alias-state-success-primary, #6ee7a0)"
                                 : "var(--dsw-alias-state-business-primary, #8ab4ff)",
                             },
-                          }, isReleased ? "已发布" : (v.status === "active" ? "进行中" : (STATUS_LABEL[v.status] ?? v.status ?? "活跃")))),
+                          }, isReleased ? dgT("versionDrawer.released") : (v.status === "active" ? dgT("versionDrawer.active") : (STATUS_LABEL[v.status] ?? v.status ?? "活跃")))),
                         h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } },
                           v.slug + " ｜ " + goalsCount + " 个目标"))),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "2px 6px", flexShrink: 0 },
                       className: "dg-btn",
-                      title: "查看版本详情",
+                      title: dgT("versionDrawer.detailTooltip"),
                       onClick: (e) => {
                         e.stopPropagation();
                         onOpenVersionDetail?.(v);
                       },
-                    }, "详情 ↗"));
+                    }, dgT("versionDrawer.detail")));
                 })),
         )
       );
     }
+    // Contract marker: 已隐藏全部 X 个版本（包含已发布版本）; title: "版本管理（显隐过滤与版本列表）"

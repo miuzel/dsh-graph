@@ -12,6 +12,7 @@ MOD="dsh-graph-host/lib/client"
 
 PARTS=(
   "_wrapper-top"
+  "i18n"
   "constants"
   "helpers"
   "session-hooks"
@@ -22,8 +23,17 @@ PARTS=(
   "goal-actions"
   "goal-modal"
   "criteria-modal"
-  "drag-prompts"
+  # g-255：搜索临时可见性状态机纯函数模块，kanban.js 依赖其导出函数；
+  # 必须排在 drag-prompts 之前（drag-prompts 打开 KanbanView 函数体，之后的代码
+  # 在 KanbanView 局部作用域内；search-state 函数需在工厂作用域定义以被 KanbanView 引用）
+  "search-state"
+  # g-243：version-drawer 必须排在 drag-prompts 之前（工厂作用域），不能夹在
+  # drag-prompts 与 kanban 之间——drag-prompts 打开 KanbanView 函数体、kanban 收尾，
+  # 夹在中间会让 VersionDrawer 变成 KanbanView 内部的嵌套函数：每次 KanbanView 渲染
+  # 都会产生新的函数身份，React 因 elementType 变化卸载重建抽屉子树，版本清单
+  # scrollTop 随之归零（勾选/取消 checkbox 或看板刷新后跳回第一行）。
   "version-drawer"
+  "drag-prompts"
   "kanban"
   "shared-panel"
   "settings-modal"
@@ -40,14 +50,15 @@ cat > "$OUT" << 'EOF'
 // and run: bash scripts/build-client.sh
 EOF
 
-# 拼接所有模块
+# 拼接所有模块（剥离 ESM export 块，因为客户端 bundle 是工厂作用域拼接，不是 ESM）
 for part in "${PARTS[@]}"; do
   file="$MOD/${part}.js"
   if [ ! -f "$file" ]; then
     echo "ERROR: 缺少子模块 $file" >&2
     exit 1
   fi
-  cat "$file" >> "$OUT"
+  # 去掉 ESM export 块（搜索纯函数模块等为测试导出的接口，浏览器 bundle 不需要）
+  sed '/>>>ESM-EXPORTS-START>>>/,/<<<ESM-EXPORTS-END<<</d' "$file" >> "$OUT"
 done
 
 LINES=$(wc -l < "$OUT")

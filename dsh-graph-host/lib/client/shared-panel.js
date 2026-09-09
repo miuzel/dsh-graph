@@ -1,5 +1,6 @@
     // g-183：项目知识库管理面板——创建/查看共享条目、挂到目标、解除引用、零引用显式删除。
     function SharedCardsModal(props) {
+      useLocaleRevision();
       const { onClose, onRefresh, sharedCards, goals } = props;
       const [cards, setCards] = React.useState(Array.isArray(sharedCards) ? sharedCards : []);
       const [title, setTitle] = React.useState("");
@@ -17,21 +18,21 @@
 
       const createCard = async () => {
         const t = title.trim();
-        if (!t) { setNote("请输入标题"); return; }
+        if (!t) { setNote(dgT("shared.titleRequired")); return; }
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/create-shared-card"), {
             method: "POST", headers: { "content-type": "application/json" },
             body: JSON.stringify({ title: t }),
           });
           const d = await r.json();
-          if (d.ok) { setNote("✅ 已创建共享卡：" + d.card); setTitle(""); refresh(); onRefresh?.(); }
-          else setNote("⚠️ 创建失败：" + (d.error || "未知错误"));
-        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+          if (d.ok) { setNote(dgT("shared.created") + d.card); setTitle(""); refresh(); onRefresh?.(); }
+          else setNote(dgT("shared.createFail") + (d.error || dgT("drag.unknownError")));
+        } catch (e) { setNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
       };
 
       const attachToGoal = async (cardId, targetGoalId) => {
         const gid = targetGoalId || (goals && goals[0] && goals[0].id);
-        if (!gid) { setNote("⚠️ 请先选择或输入要挂载的目标"); return; }
+        if (!gid) { setNote(dgT("shared.attachGoalRequired")); return; }
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/attach-shared-card"), {
             method: "POST", headers: { "content-type": "application/json" },
@@ -39,14 +40,14 @@
           });
           const d = await r.json();
           if (d.ok) {
-            setNote("✅ 已挂到 " + gid);
+            setNote(dgT("shared.attached") + gid);
             setAttachGoalInputs((prev) => ({ ...prev, [cardId]: "" }));
             refresh();
             onRefresh?.();
           } else {
-            setNote("⚠️ 挂载失败：" + (d.error || "未知错误"));
+            setNote(dgT("shared.attachFail") + (d.error || dgT("drag.unknownError")));
           }
-        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+        } catch (e) { setNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
       };
 
       const unreference = async (cardId, gid) => {
@@ -56,9 +57,9 @@
             body: JSON.stringify({ goal: gid, card: cardId }),
           });
           const d = await r.json();
-          if (d.ok) { setNote("✅ 已解除 " + gid + " 引用"); refresh(); onRefresh?.(); }
-          else setNote("⚠️ 解除失败：" + (d.error || "未知错误"));
-        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+          if (d.ok) { setNote(dgT("shared.unreferenced", { goalId: gid }) + gid + " 引用"); refresh(); onRefresh?.(); }
+          else setNote(dgT("shared.unrefFail") + (d.error || dgT("drag.unknownError")));
+        } catch (e) { setNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
       };
 
       const removeCard = async (cardId) => {
@@ -68,9 +69,9 @@
             body: JSON.stringify({ card: cardId }),
           });
           const d = await r.json();
-          if (d.ok) { setNote("✅ 已删除共享卡：" + cardId); refresh(); onRefresh?.(); }
-          else setNote("⚠️ 删除失败：" + (d.error || "未知错误"));
-        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+          if (d.ok) { setNote(dgT("shared.deleted") + cardId); refresh(); onRefresh?.(); }
+          else setNote(dgT("shared.deleteFail") + (d.error || dgT("drag.unknownError")));
+        } catch (e) { setNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
       };
 
       const backdropGuard = useBackdropClose(onClose);
@@ -86,7 +87,7 @@
           // 正文引用附件（安全下载链接，不内联渲染）——逐项渲染为节点（勿拼接 React 元素为字符串）
           (Array.isArray(c.attachments) && c.attachments.length)
             ? h("div", { style: { ...S.meta, fontSize: 11 } },
-                "📎 附件：",
+                dgT("shared.attachments"),
                 ...c.attachments.map((a) => [
                   h("a", {
                     key: a,
@@ -99,28 +100,28 @@
             : null,
           // 引用它的 goal 清单：每项一个真实解除引用（只移除该 goal 引用，保留共享卡与其他引用；零引用仅显式删除）
           h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", marginTop: 4 } },
-            h("span", { style: { ...S.meta, fontSize: 11 } }, "🔎 引用 goal："),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("shared.refGoals")),
             refs.length === 0
-              ? h("span", { style: { ...S.meta, fontSize: 11 } }, "（无引用 goal）")
+              ? h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("shared.noRefGoals"))
               : refs.map((ref) => {
-                  const label = ref.title ? `${ref.title}${ref.archived ? "（归档）" : ""}` : ref.id;
+                  const label = ref.title ? `${ref.title}${ref.archived ? " (" + dgT("card.archived") + ")" : ""}` : ref.id;
                   return h("button", {
                     key: ref.id,
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                     className: "dg-btn",
                     disabled: installing,
-                    title: installing ? "收集中不可解除引用" : `移除 ${label} 对这张共享卡的引用（保留共享卡本身）`,
+                    title: installing ? dgT("drawer.unrefCollecting") : `移除 ${label} 对这张共享卡的引用（保留共享卡本身）`,
                     onClick: () => unreference(c.id, ref.id),
                   }, "➖ " + label);
                 })),
           installing
             ? h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } },
-                "🔒 收集中：仅解除引用/不可删除；绑定 goal 不可解除（已禁用）")
+                dgT("shared.collecting"))
             : null,
           h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" } },
             h("input", {
               style: { ...S.promptInput, width: 220, fontSize: 11, padding: "2px 6px" },
-              placeholder: "输入 ID 或标题搜索目标…",
+              placeholder: dgT("shared.searchGoalPlaceholder"),
               list: `goal-list-${c.id}`,
               value: attachGoalInputs[c.id] ?? "",
               onChange: (e) => setAttachGoalInputs((prev) => ({ ...prev, [c.id]: e.target.value })),
@@ -138,33 +139,33 @@
                 const targetId = matched ? matched.id : raw;
                 attachToGoal(c.id, targetId);
               },
-            }, "⇄ 挂到目标"),
+            }, dgT("shared.attachBtn")),
             ...(c.refCount === 0 && !installing ? [
-              h("button", { style: S.btn, className: "dg-btn", onClick: () => removeCard(c.id) }, "🗑 显式删除"),
+              h("button", { style: S.btn, className: "dg-btn", onClick: () => removeCard(c.id) }, dgT("shared.deleteBtn")),
             ] : []),
             installing
-              ? h("span", { style: { ...S.meta, fontSize: 11 } }, "🔒 收集中，仅解除引用/不可删除")
+              ? h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("shared.collecting"))
               : null));
       };
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640, maxHeight: "80vh", overflowY: "auto" }, onClick: (e) => e.stopPropagation() },
-          h("div", { style: S.modalH }, "📇 项目知识库（共享条目）"),
+          h("div", { style: S.modalH }, dgT("shared.title")),
           h("div", { style: { ...S.meta, marginBottom: 6 } },
-            "知识条目在项目共享池中保存一份权威内容，可被多个目标同时引用复用；被引用时不可删除，解除全部引用后可显式删除。"),
+            dgT("shared.desc")),
           // 新建共享条目
           h("div", { style: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8 } },
             h("input", {
               style: { ...S.promptInput, flex: 1 },
-              value: title, placeholder: "新建知识条目标题…",
+              value: title, placeholder: dgT("shared.newTitlePlaceholder"),
               onChange: (e) => setTitle(e.target.value),
               onKeyDown: (e) => { if (e.key === "Enter") createCard(); },
             }),
-            h("button", { style: S.btn, className: "dg-btn", onClick: createCard }, "＋ 新建条目")),
+            h("button", { style: S.btn, className: "dg-btn", onClick: createCard }, dgT("shared.createBtn"))),
           note ? h("div", { style: { ...S.meta, marginBottom: 6 } }, note) : null,
           (cards.length === 0)
-            ? h("div", { style: S.meta }, "（暂无共享卡）")
+            ? h("div", { style: S.meta }, dgT("shared.noCards"))
             : h("div", { style: { marginTop: 4 } }, cards.map(cardRow)),
           h("div", { style: { marginTop: 10, display: "flex", justifyContent: "flex-end" } },
-            h("button", { style: S.btn, className: "dg-btn", onClick: onClose }, "关闭"))));
+            h("button", { style: S.btn, className: "dg-btn", onClick: onClose }, dgT("common.close")))));
     }

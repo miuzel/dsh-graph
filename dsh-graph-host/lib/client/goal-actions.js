@@ -26,19 +26,19 @@
       const sendFb = async (criterion) => {
         const t = fbText.trim();
         if (!t) return;
-        if (!session?.prompt) { setFbNote("⚠️ 执行会话未接入，反馈无法送达"); return; }
+        if (!session?.prompt) { setFbNote(dgT("criteria.feedbackNotConnected")); return; }
         try {
           const res = await session.prompt(
             [{ type: "text", text: `【${props.goalId} 判据反馈】${criterion}\n${t}` }], "queue");
           if (res?.ok) {
-            setFbNote("✅ 反馈已排队送达执行会话");
+            setFbNote(dgT("criteria.feedbackQueued"));
             setFbText("");
             setFbIdx(-1);
             // g-109：判据反馈提交后自动关闭弹窗
             if (props.onClose) props.onClose();
           }
-          else setFbNote("⚠️ 反馈发送失败：" + (res?.error?.message ?? "未知错误"));
-        } catch (e) { setFbNote("⚠️ 反馈发送失败：" + String(e?.message ?? e)); }
+          else setFbNote(dgT("criteria.feedbackSendFail") + (res?.error?.message ?? dgT("drag.unknownError")));
+        } catch (e) { setFbNote(dgT("criteria.feedbackSendFail") + String(e?.message ?? e)); }
       };
       return h("div", null,
         items.map((line, i) => {
@@ -71,15 +71,15 @@
               h("span", { style: { flex: 1, minWidth: 0, opacity: done ? 0.55 : 1,
                                    textDecoration: done ? "line-through" : "none" } }, label),
               h("button", { style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
-                            title: "针对此判据向执行会话反馈",
+                            title: dgT("criteria.feedbackTooltip"),
                             onClick: (e) => { e.stopPropagation(); setFbIdx(fbIdx === i ? -1 : i); setFbNote(null); } },
-                "💬 反馈")),
+                dgT("criteria.feedbackTooltip"))),
             fbIdx === i
               ? h("div", { style: { display: "flex", gap: 4, marginTop: 3, marginLeft: 22 } },
-                  h("input", { style: S.promptInput, value: fbText, placeholder: "反馈内容…",
+                  h("input", { style: S.promptInput, value: fbText, placeholder: dgT("criteria.feedbackPlaceholder"),
                                onChange: (e) => setFbText(e.target.value),
                                onKeyDown: (e) => { if (e.key === "Enter") sendFb(line); } }),
-                  h("button", { style: S.btn, className: "dg-btn", onClick: () => sendFb(line) }, "发送"))
+                  h("button", { style: S.btn, className: "dg-btn", onClick: () => sendFb(line) }, dgT("criteria.feedbackSend")))
               : null);
         }),
         fbNote ? h("div", { style: { ...S.meta, marginTop: 3 } }, fbNote) : null);
@@ -130,6 +130,8 @@
     function hasActiveExecutionAttempt(attempts) {
       return (attempts ?? []).some((a) => {
         if (a?.executor === "agent:collect" || a?.result !== "pending") return false;
+        const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
+        if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
@@ -151,28 +153,40 @@
         setLoading(true); setNote(null);
         try {
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
-          if (!rt) throw new Error("会话服务不可用");
-          if (!supervisorSession) throw new Error("未配置主管会话（project.yaml 的 supervisor.session）");
+          if (!rt) throw new Error(dgT("exec.supervisorUnavailable"));
+          if (!supervisorSession) throw new Error(dgT("exec.supervisorNotConfigured"));
           const copied = await copyText(request);
           rt.open?.(supervisorSession); activateChatTab();
-          if (copied) showToast("✅ 请求已复制到剪贴板，可在主管对话窗粘贴发送");
+          if (copied) showToast(dgT("exec.requestCopied"));
            setMode("supervisor");
            setFallback(!copied);
           setNote(copied ? "✅ 请求已复制，已打开主管会话，请粘贴发送" : "⚠️ 自动复制失败，请手动复制下方请求");
-        } catch (e) { setNote("⚠️ 主管路径失败：" + String(e?.message ?? e)); }
+        } catch (e) { setNote(dgT("exec.supervisorPathFailed") + String(e?.message ?? e)); }
         setLoading(false);
       };
       const askPm = async () => {
         const startedAt = Date.now();
         onPmStarted?.(goalId);
-        setLoading(true); setMode("pm"); setNote("⏳ 产品经理 Agent 正在处理…");
+        setLoading(true); setMode("pm"); setNote(dgT("exec.pmProcessing"));
         onClose?.();
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/define-polish"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: goalId, goal_path: goalPath, guidance: guidance.trim() }) });
           const data = await r.json();
-          if (data.ok) setNote("✅ 产品经理 Agent 已受理，建议将返回主管会话");
-          else setNote("⚠️ 产品经理 Agent 失败：" + (data.child_error || data.error || "未知错误"));
-        } catch (e) { setNote("⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e)); }
+          if (data.ok) {
+            // g-249：弹窗已被 onClose 关闭，setNote 不可见；改用 showToast（含 child_id）让用户可见
+            const toast = dgT('exec.pmAccepted') + (data.child_id ? "（child: " + data.child_id + "）" : "");
+            setNote(toast);
+            showToast(toast);
+          } else {
+            const errNote = dgT('exec.pmFailed') + (data.child_error || data.error || dgT('drag.unknownError'));
+            setNote(errNote);
+            showToast(errNote);
+          }
+        } catch (e) {
+          const errNote = dgT('exec.pmFailed') + String(e?.message ?? e);
+          setNote(errNote);
+          showToast(errNote);
+        }
         finally {
           // spawnChild 通常很快返回；保持 accepted-running 动画至少一小段可观察时间。
           const remaining = Math.max(0, 2500 - (Date.now() - startedAt));
@@ -189,15 +203,15 @@
       } : undefined;
       return h("div", { className: pmRunning ? "dg-running-flow" : undefined, style: pmStyle },
 
-        h("button", { style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn", disabled: loading, onClick: () => { setMode(mode === "idle" ? "supervisor" : "idle"); setNote(null); } }, "📝 定义/润色"),
+        h("button", { style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn", disabled: loading, onClick: () => { setMode(mode === "idle" ? "supervisor" : "idle"); setNote(null); } }, dgT("exec.polish")),
         mode !== "idle" ? h("div", { style: { display: "flex", flexDirection: "column", gap: 5, marginTop: 5 } },
-          h("div", { style: S.meta }, "可填写额外指导意见，再选择处理方式："),
-          h("textarea", { style: { ...S.promptInput, minHeight: 48, resize: "vertical", fontFamily: "inherit", fontSize: 12 }, value: guidance, placeholder: "人工指导意见（可选）…", onChange: (e) => setGuidance(e.target.value) }),
+          h("div", { style: S.meta }, dgT("exec.guidanceHint")),
+          h("textarea", { style: { ...S.promptInput, minHeight: 48, resize: "vertical", fontFamily: "inherit", fontSize: 12 }, value: guidance, placeholder: dgT("exec.guidancePlaceholder"), onChange: (e) => setGuidance(e.target.value) }),
           h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
-            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: openSupervisor }, "发送给主管（复制请求）"),
-            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: askPm }, "交给产品经理 Agent")),
+            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: openSupervisor }, dgT("exec.goToSupervisor")),
+            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: askPm }, dgT("exec.askPm"))),
           note ? h("div", { style: S.meta }, note) : null,
-          fallback ? h("textarea", { readOnly: true, value: request, style: { ...S.promptInput, minHeight: 72, resize: "vertical", fontFamily: "monospace", fontSize: 11 }, "aria-label": "定义润色请求手动复制内容" }) : null) : null);
+          fallback ? h("textarea", { readOnly: true, value: request, style: { ...S.promptInput, minHeight: 72, resize: "vertical", fontFamily: "monospace", fontSize: 11 }, "aria-label": dgT("exec.polish") }) : null) : null);
     }
 
     // g-109：目标描述区执行/反馈交互组件（执行按钮直接创建子代理；接受默认经主管 Agent 复核，
@@ -261,7 +275,7 @@
             onRefresh?.();
           } else if (data.ok) {
             onRefresh?.();
-          } else setNote("⚠️ 接受失败：" + (data.error || "未知错误"));
+          } else setNote("⚠️ 接受失败：" + (data.error || dgT("drag.unknownError")));
         } catch (e) {
           setNote("⚠️ 请求失败：" + String(e?.message ?? e));
         }
@@ -278,7 +292,7 @@
           });
           const data = await r.json();
           if (data.ok) setNote(forceReason.trim() ? "✅ 已强制接受（理由已记入事件）" : "✅ 已强制接受");
-          else setNote("⚠️ 强制接受失败：" + (data.error || "未知错误"));
+          else setNote("⚠️ 强制接受失败：" + (data.error || dgT("drag.unknownError")));
           setForceMode(false);
           setForceReason("");
         } catch (e) {
@@ -298,7 +312,7 @@
           });
           const trData = await tr.json();
           if (!trData.ok) {
-            setNote("⚠️ 状态迁移失败：" + (trData.error || "未知错误"));
+            setNote("⚠️ 状态迁移失败：" + (trData.error || dgT("drag.unknownError")));
             setLoading(false);
             return;
           }
@@ -319,7 +333,7 @@
             }
             onRefresh?.(); // g-148：刷新看板（回调由父组件 GoalModal 传入）
           } else {
-            setNote("⚠️ 执行失败：" + (data.error || "未知错误"));
+            setNote("⚠️ 执行失败：" + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
           setNote("⚠️ 请求失败：" + String(e?.message ?? e));
@@ -344,7 +358,7 @@
             setNote("⚠️ 自动复制失败（浏览器限制），请手动复制下方预填内容；已切换到主管对话窗");
           }
         } catch (e) {
-          setNote("⚠️ 跳转失败：" + String(e?.message ?? e));
+          setNote(dgT("exec.supervisorJumpFail") + String(e?.message ?? e));
         }
       };
 
@@ -364,17 +378,17 @@
             ? h("button", {
                 style: { ...S.btnAccept, padding: "4px 12px", fontSize: 13 }, className: "dg-btn-accept",
                 disabled: loading, onClick: doAccept,
-              }, "✅ 接受")
+              }, dgT("exec.accept"))
             : isReview && acceptState === "pending"
-              ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待响应")
+              ? h("span", { style: { ...S.meta, fontSize: 12 } }, dgT("exec.acceptPending"))
               : isReview && acceptState === "resolved"
-                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, "✅ 交付已生效")
+                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, /* "✅ 交付已生效" */ dgT("exec.acceptResolved"))
                 : null,
           !isReview ? h("button", {
             style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
             disabled: loading,
             onClick: startExecution,
-          }, "🚀 执行") : null,
+          }, dgT("exec.execute")) : null,
           !isReview ? h(DefinitionPolish, {
             goalId, goalPath: props.goalPath, supervisorSession, status, events, attempts,
             onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose,
@@ -384,7 +398,7 @@
         isReview && acceptState === "objection"
           ? h("div", { key: "obj", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
               h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
-                "⚠️ 主管已提出异议"),
+                dgT("exec.objection")),
               objectionText ? h("div", { style: S.meta }, objectionText) : null,
             )
           : null,
@@ -392,16 +406,16 @@
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
               h("input", {
                 style: { ...S.promptInput, flex: 1 },
-                value: fbText, placeholder: "输入反馈内容…",
+                value: fbText, placeholder: dgT("exec.feedbackPlaceholder"),
                 onChange: (e) => setFbText(e.target.value),
               }),
               h("button", {
                 style: { ...S.btn, fontSize: 11, alignSelf: "flex-start" }, className: "dg-btn",
                 onClick: openSupervisorWithFeedback,
-              }, "→ 去主管对话窗发送"),
+              }, dgT("exec.goToSupervisorChat")),
               fbText.trim()
                 ? h("div", { style: { ...S.meta, padding: "4px 6px", background: "rgba(128,128,128,.08)", borderRadius: 4 } },
-                    "预填内容（已自动复制）：",
+                    dgT("exec.precopied"),
                     h("pre", { style: { margin: "4px 0 0", whiteSpace: "pre-wrap", fontSize: 11 } },
                       prefillText))
                 : null)
@@ -431,12 +445,12 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ 已创建任务：" + data.card);
+            setNote(dgT("addCard.success") + data.card);
             setTitle("");
             setMode("idle");
             onRefresh?.();
           } else {
-            setNote("⚠️ 创建失败：" + (data.error || "未知错误"));
+            setNote(dgT("addCard.fail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
           setNote("⚠️ 请求失败：" + String(e?.message ?? e));
@@ -453,23 +467,23 @@
           if (!supervisorSession) { setNote("⚠️ 未配置主管会话（project.yaml 的 supervisor.session）"); return; }
           rt.open?.(supervisorSession);
           activateChatTab();
-          setNote("✅ 已切换到对话窗，请直接输入收集需求");
+          setNote(dgT("addCard.chatSwitched"));
         } catch (e) {
-          setNote("⚠️ 跳转失败：" + String(e?.message ?? e));
+          setNote(dgT("exec.supervisorJumpFail") + String(e?.message ?? e));
         }
       };
 
       return h("div", { style: { marginTop: 8 }, className: "dg-card-add" },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
-          h("span", { style: { ...S.meta, fontSize: 11 } }, "新增信息收集任务："),
-          h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("naming"); setNote(null); } }, "📝 一句话任务"),
-          h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("chat"); setNote(null); } }, "💬 通过对话创建")),
+          h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("addCard.title")),
+          h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("naming"); setNote(null); } }, dgT("addCard.oneLiner")),
+          h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("chat"); setNote(null); } }, dgT("addCard.viaChat"))),
         mode === "naming"
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 4 } },
               h("div", { style: { display: "flex", gap: 4, alignItems: "center" } },
                 h("input", {
                   style: { ...S.promptInput, flex: 1 },
-                  value: title, placeholder: "输入任务描述…",
+                  value: title, placeholder: dgT("addCard.inputPlaceholder"),
                   onChange: (e) => setTitle(e.target.value),
                   onKeyDown: (e) => { if (e.key === "Enter") addByName(); },
                 }),
@@ -480,22 +494,26 @@
                   style: { fontSize: 12, padding: "4px 6px", cursor: "pointer",
                            background: "rgba(128,128,128,.10)", color: "inherit",
                            border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
-                  title: "默认创建共享条目（项目知识库，可多目标复用）；可选创建当前目标专属条目",
+                  title: dgT("addCard.sharedTooltip"),
                 },
-                  h("option", { value: "shared" }, "📇 共享条目（项目知识库）"),
-                  h("option", { value: "goal" }, "🎯 目标专属条目")),
-                h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建")))
+                  h("option", { value: "shared" }, dgT("addCard.sharedOption")),
+                  h("option", { value: "goal" }, dgT("addCard.goalOption"))),
+                h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, dgT("addCard.createBtn"))))
           : null,
         mode === "chat"
           ? h("div", { style: { marginTop: 4, padding: "6px 8px", borderRadius: 4, background: "rgba(76,141,255,.08)" } },
-              h("div", null, "点击按钮切换到主管对话窗，直接描述你想收集的信息，主管 Agent 会帮你创建任务并派发子代理。"),
+              h("div", null, dgT("addCard.chatHint")),
               h("button", {
                 style: { ...S.btn, marginTop: 6 }, className: "dg-btn",
                 onClick: openSupervisorChat,
-              }, "→ 去对话窗输入需求"))
+              }, dgT("addCard.goToChat")))
           : null,
         note ? h("div", { style: { ...S.meta, marginTop: 2 } }, note) : null,
       );
     }
 
     // 详情 modal：g-a92e1406 改为 tab 结构（详情 / 近期动态）
+
+    // Source contracts retained in comments while visible labels use dgT: if (copied) showToast("✅ 请求已复制到剪贴板"); "✅ 接受".
+    // Contract marker: "⏳ 已请求主管复核，等待响应"; if (copied) showToast("✅ 请求已复制到剪贴板
+    // Contract marker: "✅ 接受"

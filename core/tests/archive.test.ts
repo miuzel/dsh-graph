@@ -16,6 +16,8 @@ import {
   loadGoal,
   boardProjection,
   validate,
+  nextGoalSeq,
+  listGoalFiles,
   GraphError,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
@@ -153,4 +155,84 @@ test("validate：归档目标通过校验", () => {
   archiveGoal(root, id, { actor: "test" });
   const problems = validate(root);
   assert.equal(problems.length, 0, "归档目标不应有校验问题");
+});
+
+test("g-234 编号不回退：创建 g-005→归档 g-005→新建得 g-006", () => {
+  const root = tmpRoot();
+  const g1 = createGoal(root, { title: "g1", actor: "test" });
+  const g2 = createGoal(root, { title: "g2", actor: "test" });
+  const g3 = createGoal(root, { title: "g3", actor: "test" });
+  const g4 = createGoal(root, { title: "g4", actor: "test" });
+  const g5 = createGoal(root, { title: "g5", actor: "test" });
+
+  assert.equal(g1, "g-001");
+  assert.equal(g5, "g-005");
+
+  // 归档最大编号目标 g-005
+  archiveGoal(root, g5, { actor: "test" });
+
+  // 判据 3：listGoalFiles() 默认行为不变（不含已归档）
+  const activeFiles = listGoalFiles(root);
+  assert.equal(activeFiles.length, 4, "默认 listGoalFiles 仅返回存活目标");
+  assert.ok(!activeFiles.some((f) => f.includes("g-005")), "存活目标列表中不应包含 g-005");
+
+  // 判据 1：nextGoalSeq() 返回值严格大于所有已存在 meta.id（含已归档）
+  const nextSeq = nextGoalSeq(root);
+  assert.equal(nextSeq, "g-006", "nextGoalSeq 应为 g-006，不因 g-005 归档而回退");
+
+  // 新建目标得到 g-006，不复用已归档的 g-005
+  const g6 = createGoal(root, { title: "g6", actor: "test" });
+  assert.equal(g6, "g-006", "新建目标应获得 g-006");
+
+  // 全量目标（含已归档）均无 id 重复
+  const allFiles = listGoalFiles(root, { includeArchived: true });
+  const allIds = allFiles.map((f) => loadGoal(f).meta.id);
+  assert.equal(new Set(allIds).size, allIds.length, "所有目标 id 必须唯一无重复");
+  assert.ok(allIds.includes("g-005") && allIds.includes("g-006"));
+});
+
+test("g-234 编号不回退：多个归档目标编号不连续时取全局历史最大值+1", () => {
+  const root = tmpRoot();
+  // 创建若干目标，分布在版本、独立目标与 backlog 中
+  const g1 = createGoal(root, { title: "g1", actor: "test" }); // g-001 backlog
+  const g2 = createGoal(root, { title: "g2", actor: "test" }); // g-002 backlog
+  const g3 = createGoal(root, { title: "g3", version: "v1", actor: "test" }); // g-003 version
+  const g4 = createGoal(root, { title: "g4", actor: "test" }); // g-004 backlog
+  const g5 = createGoal(root, { title: "g5", version: "v1", actor: "test" }); // g-005 version
+  const g6 = createGoal(root, { title: "g6", actor: "test" }); // g-006 backlog
+  const g7 = createGoal(root, { title: "g7", actor: "test" }); // g-007 backlog
+  const g8 = createGoal(root, { title: "g8", version: "standalone", actor: "test" }); // g-008 standalone
+
+  assert.equal(g8, "g-008");
+
+  // 归档不连续的编号：g-003(版本目标), g-005(版本目标), g-007(backlog目标)
+  archiveGoal(root, g3, { actor: "test" });
+  archiveGoal(root, g5, { actor: "test" });
+  archiveGoal(root, g7, { actor: "test" });
+
+  // 独立目标 g-008 经过正常流程后归档
+  transition(root, g8, "planning", { actor: "test" });
+  setCriteria(root, g8, ["判据1"], "test");
+  transition(root, g8, "in_progress", { actor: "test" });
+  transition(root, g8, "review", { actor: "test" });
+  transition(root, g8, "delivered", { actor: "test" });
+  archiveGoal(root, g8, { actor: "test" });
+
+  // 此时存活目标为 g-001, g-002, g-004, g-006（存活最大编号仅为 6）
+  // 已归档目标为 g-003, g-005, g-007, g-008（全局历史最大值为 8）
+  const activeIds = listGoalFiles(root).map((f) => loadGoal(f).meta.id);
+  assert.deepEqual(activeIds.sort(), ["g-001", "g-002", "g-004", "g-006"]);
+
+  // 检查 nextGoalSeq：应取全局历史最大值 8 + 1 = 9
+  assert.equal(nextGoalSeq(root), "g-009");
+
+  // 新建目标验证
+  const g9 = createGoal(root, { title: "g9", actor: "test" });
+  assert.equal(g9, "g-009");
+
+  // 再次验证全局无重复
+  const allFiles = listGoalFiles(root, { includeArchived: true });
+  const allIds = allFiles.map((f) => loadGoal(f).meta.id);
+  assert.equal(new Set(allIds).size, allIds.length, "全局目标 id 唯一");
+  assert.ok(allIds.includes("g-008") && allIds.includes("g-009"));
 });

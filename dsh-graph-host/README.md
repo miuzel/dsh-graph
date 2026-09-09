@@ -55,6 +55,7 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 |------|----------|----------|
 | **目标生命周期** | `graph_create_goal` | 创建目标（默认放入 Backlog，可指定版本） |
 | | `graph_rename_goal` | 重命名目标标题 |
+| | `graph_set_description` | 设置/更新目标描述正文（Markdown） |
 | | `graph_set_goal_type` | 设置目标类型（feature / bug / task / improvement / patch / chore） |
 | | `graph_set_goal_tags` | 设置目标标签列表（最多 20 个，乐观并发） |
 | | `graph_amend_goal` | 记录对目标的修订补充，可自动同步至描述 |
@@ -164,6 +165,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools:
 |----------|------|-------------|
 | **Goal Lifecycle** | `graph_create_goal` | Create a goal (defaults to Backlog, optional Version) |
 | | `graph_rename_goal` | Rename goal title |
+| | `graph_set_description` | Set/update goal description body (Markdown) |
 | | `graph_set_goal_type` | Set goal type (feature / bug / task / improvement / patch / chore) |
 | | `graph_set_goal_tags` | Set goal tags (max 20, optimistic concurrency) |
 | | `graph_amend_goal` | Record amendments, optionally appending to description |

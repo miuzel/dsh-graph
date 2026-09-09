@@ -1,4 +1,6 @@
     // g-223：按 sessionId 解析 workspace；无法验证时必须 fail closed，绝不跨会话复用缓存。
+    // g-244：谱系回溯补全——快照兼容 byId/items 两种形状，父链兼容 parentId/parentSessionId，
+    //        并用 subagentsByParent 目录反查与 currentAddress 导航地址补齐「目录型子会话」的直接父。
     let lastGoodWorkspace = null;
     function setLastGoodWorkspace(ws) { if (typeof ws === "string" && ws) lastGoodWorkspace = ws; }
     // wsOf(sid) remains the explicit workspace-membership check; viewed?.parentSessionId is walked safely.
@@ -9,10 +11,56 @@
         const wsItems = Array.isArray(rawWsItems) ? rawWsItems : [];
         const wsOf = (sid) => wsItems.find((w) => Array.isArray(w?.sessionIds)
           && w.sessionIds.includes(sid) && typeof w.path === "string" && w.path);
+        // g-244：路径归一（去掉尾斜杠）。仅接受绝对路径，相对 cwd 会让服务端按进程 cwd 解析。
+        const normPath = (p) => (typeof p === "string" && p ? (p.replace(/\/+$/, "") || "/") : null);
+        // g-244：cwd 落在某个已知 workspace 根之下（含 worktree 子目录）时，归一到最长的那个根。
+        const wsRootOfPath = (p) => {
+          const abs = normPath(p);
+          if (!abs || abs[0] !== "/") return null;
+          let best = null;
+          for (const w of wsItems) {
+            const root = normPath(w?.path);
+            if (!root || root[0] !== "/") continue;
+            const hit = abs === root || abs.startsWith(root === "/" ? "/" : root + "/");
+            if (hit && (best === null || root.length > best.length)) best = root;
+          }
+          return best;
+        };
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
         const snap = rt?.list?.getSnapshot?.() ?? {};
-        const items = Array.isArray(snap.items) ? snap.items : [];
-        const byId = (sid) => items.find((s) => s && s.sessionId === sid);
+        // g-244：运行时列表快照是 byId 记录；仅旧/降级形状是 items 数组，两种都读。
+        const itemList = Array.isArray(snap.items) ? snap.items : null;
+        const byId = (sid) => {
+          const rec = snap.byId;
+          if (rec && typeof rec === "object" && Object.prototype.hasOwnProperty.call(rec, sid)) return rec[sid];
+          return itemList ? itemList.find((s) => s && (s.sessionId === sid || s.id === sid)) : undefined;
+        };
+        // g-244：子 → 直接父 反查表（subagentsByParent 目录 + currentAddress 导航地址）。
+        const parentIndex = new Map();
+        const catalogs = snap.subagentsByParent;
+        if (catalogs && typeof catalogs === "object") {
+          for (const pid of Object.keys(catalogs)) {
+            const entries = catalogs[pid]?.entries;
+            if (!Array.isArray(entries)) continue;
+            for (const e of entries) {
+              if (e && e.kind === "child" && typeof e.id === "string" && e.id && !parentIndex.has(e.id)) {
+                parentIndex.set(e.id, pid);
+              }
+            }
+          }
+        }
+        const addr = snap.currentAddress;
+        if (addr && typeof addr.childSessionId === "string" && typeof addr.parentSessionId === "string"
+          && !parentIndex.has(addr.childSessionId)) {
+          parentIndex.set(addr.childSessionId, addr.parentSessionId);
+        }
+        const parentOf = (sid) => {
+          const item = byId(sid);
+          if (typeof item?.parentId === "string" && item.parentId) return item.parentId;
+          if (typeof item?.parentSessionId === "string" && item.parentSessionId) return item.parentSessionId;
+          const indexed = parentIndex.get(sid);
+          return typeof indexed === "string" && indexed ? indexed : null;
+        };
         const pathOf = (sid) => {
           const seen = new Set();
           let current = sid;
@@ -21,8 +69,18 @@
             const mapped = wsOf(current);
             if (mapped?.path) return mapped.path;
             const item = byId(current);
-            if (typeof item?.cwd === "string" && item.cwd) return item.cwd;
-            current = typeof item?.parentSessionId === "string" ? item.parentSessionId : null;
+            const cwd = normPath(item?.cwd);
+            if (cwd && cwd[0] === "/") {
+              // g-244：谱系子会话（或 worktree 目录）的 cwd 归一到父工程根；
+              // 无血缘的普通会话仍按自己的 cwd 解析，不改变 g-223 既有语义。
+              const lineageParent = parentOf(current);
+              if (lineageParent || /\/\.worktrees\//.test(cwd)) {
+                const root = wsRootOfPath(cwd);
+                if (root) return root;
+              }
+              return cwd;
+            }
+            current = parentOf(current);
           }
           return null;
         };
@@ -34,7 +92,9 @@
           return null;
         }
         // With no session selected, only the runtime's current session is eligible.
-        const current = typeof snap.current === "string" ? snap.current : null;
+        const current = typeof snap.current === "string" && snap.current
+          ? snap.current
+          : (typeof snap.currentAddress?.childSessionId === "string" ? snap.currentAddress.childSessionId : null);
         const resolved = current ? pathOf(current) : null;
         if (resolved) { setLastGoodWorkspace(resolved); return resolved; }
         return null;
@@ -105,9 +165,9 @@
         style: { ...S.btn, fontSize: 11, padding: "0 6px", marginLeft: 6, flexShrink: 0 },
         className: "dg-btn dg-session-link",
         type: "button",
-        title: "跳转到子代理会话",
+        title: dgT('card.goToSession'),
         onClick: (e) => { e.stopPropagation(); void openChildSession(parentSessionId, childId); },
-      }, label ?? "↗ 会话");
+      }, label ?? dgT("card.goToSession"));
     }
     return {
       name: "dsh-graph",
@@ -121,6 +181,24 @@
         // workspaces 服务经 ctx.get(name) 可选查找即可取到（runner 的 ctx.get 方法不要求 inject 声明，
         // 注入门禁只拦 ctx.workspaces 属性访问；workspaces 由 client-runtime `ctx.reflect.provide` 提供）
         workspacesRt = ctx.get?.("workspaces") ?? null;
+        // g-230：注册 i18n 命名空间并创建全局翻译函数 t。
+        // locale 服务通过 ctx.get 可选获取（核心内置服务但不列为硬 inject 以免阻断旧 profile）。
+        const localeService = ctx.get?.("locale") ?? ctx.locale ?? null;
+        const localeBind = registerI18n({ locale: localeService });
+        dgT = createTranslator(localeBind);
+        // g-230：监听语言切换——locale/change 事件触发时重建翻译函数（locale.bind 返回稳定引用，
+        // 但字典注册不触发 locale/change；仅活跃语言切换时需要响应）。
+        if (localeService && typeof ctx.on === "function") {
+          ctx.on('locale/change', () => {
+            // bind 返回稳定引用（已注册的命名空间），翻译函数自动读取当前活跃语言；
+            // 此处仅在语言切换时强制刷新 React 渲染（通过状态广播机制）。
+            try {
+              dgT = createTranslator(localeBind || registerI18n({ locale: localeService }));
+              // 通知看板组件重新渲染以响应语言切换
+              window.dispatchEvent(new CustomEvent('dsh-graph:locale-changed'));
+            } catch { /* 静默 */ }
+          });
+        }
         ctx.slots.inject("conversation.session.header.actions", () =>
           ctx.slots.register(
             { name: "conversation.session.header.actions", id: "dsh-graph-supervisor-badge", order: -9 },
@@ -129,7 +207,13 @@
         );
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
-            { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: "看板" },
+            {
+              name: "conversation.view",
+              id: "dsh-graph-kanban",
+              order: 80,
+              // g-230：locale-following thunk——resolveSlotLabel 对 function 求值，切语言时重算
+              label: () => dgT("board.title"),
+            },
             (props) => h(KanbanView, props),
           ),
         );
@@ -146,7 +230,7 @@
           connectionRt = scope.get?.("connection") ?? connectionRt;
           // 已注册的 settings section 通过 appCtx 变量读取 catalog，无需重复注册。
         });
-        console.log("[dsh-graph-host] client apply: kanban view registered");
+        console.log("[dsh-graph-host] client apply: kanban view registered (i18n enabled)");
       },
     };
   },

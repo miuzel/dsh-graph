@@ -159,12 +159,34 @@
     }
     /** 跨列拖动时解析目标状态：from+toStageKey → 具体 to 状态 */
     function resolveTargetStatus(fromStatus, toStageKey) {
-      // blocked 只能回 blocked_from（由服务端强制，前端预判提示）
-      if (fromStatus === "blocked") return null; // 前端不预设，服务端校验
+      // blocked 只能回 blocked_from（g-245：由 resolveBlockedDropTarget 按 blocked_from 解析，
+      // 此处保持不猜测——无 blocked_from 信息时返回 null，服务端仍会校验）
+      if (fromStatus === "blocked") return null;
       // planning→collect 二义默认 collecting
       if (toStageKey === "collect") return "collecting";
       if (toStageKey === "describe") return "planning";
       return stageDefaultStatus(toStageKey);
+    }
+    /** g-245：blocked 目标拖放落点解析——只允许回到 blocked_from 所在列，且返回精确原状态。
+     *  返回 { ok: true, toStatus } 或 { ok: false, message }；blocked_from 缺失/非法一律不猜测。
+     *  纯函数（不触发任何请求/派发），便于行为测试。 */
+    function resolveBlockedDropTarget(blockedFrom, toStageKey) {
+      const raw = typeof blockedFrom === "string" ? blockedFrom.trim() : "";
+      const tr = (key, params, fallback) => typeof dgT === "function" ? dgT(key, params) : fallback;
+      if (!raw) {
+        return { ok: false, message: tr('drag.blockedNoFrom', null, "⚠️ 该目标缺少 blocked_from 记录，无法自动解除阻塞；请由主管确认原状态后手动处理") };
+      }
+      const stage = STAGES.find((s) => s.statuses.includes(raw));
+      if (!stage) {
+        return { ok: false, message: tr('drag.blockedInvalidFrom', { raw }, `⚠️ blocked_from 值非法（${raw}），无法解析落点；请由主管修正后重试`) };
+      }
+      if (stage.key !== toStageKey) {
+        return {
+          ok: false,
+          message: tr('drag.blockedOnlyOriginal', { status: STATUS_LABEL[raw] ?? raw, stage: typeof dgT === "function" ? stage.label : raw }, `⚠️ blocked 目标只能解除回原状态「${STATUS_LABEL[raw] ?? raw}」，请拖到「${raw}」列`),
+        };
+      }
+      return { ok: true, toStatus: raw };
     }
     /** 判断是否为回退方向（后→前，如 delivered→execute） */
     const STAGE_ORDER = STAGES.map((s) => s.key);
@@ -176,7 +198,13 @@
       return STAGE_ORDER.indexOf(toStage) < STAGE_ORDER.indexOf(fromStage);
     }
 
-    const CARD_STATUS_ICON = { empty: "○ 待收集", collecting: "◌ 收集中", filled: "● 已填充", reviewed: "✔ 已复核" };
+    // g-230：卡片状态图标——动态翻译
+    const CARD_STATUS_ICON = {
+      get empty() { return dgT('cardStatus.empty'); },
+      get collecting() { return dgT('cardStatus.collecting'); },
+      get filled() { return dgT('cardStatus.filled'); },
+      get reviewed() { return dgT('cardStatus.reviewed'); },
+    };
 
     // g-181：父级 overlay backdrop 误关保护。根因：pointerdown 在内容、mouseup 在 backdrop 时，
     // 浏览器把 click 派发到 overlay 自身（事件路径不经过 panel），panel 的 stopPropagation 拦不住。
@@ -388,7 +416,7 @@
     // 才有实现，属性访问与调用均正常。
     // 返回 { opened: boolean, error?: string }：opened=true 表示已交给系统打开；error 携带可理解失败原因。
     async function openHostPath(path) {
-      if (!path) return { opened: false, error: "路径为空" };
+      if (!path) return { opened: false, error: dgT("common.pathEmpty") };
       try {
         // g-222: Access remote.session via ctx.get() for backward compatibility
         // In 0.1.2+, remote.session is available; in 0.1.1-rc.2 it's not
@@ -509,9 +537,9 @@
       const progress = intervalSec > 0 ? remaining / intervalSec : 0;
       return h("span", {
         style: { ...S.meta, display: "inline-flex", alignItems: "center", gap: 5, userSelect: "none" },
-        title: `已配置自动刷新周期：${intervalSec}s（距离下次自动刷新约 ${remaining}s）`,
+        title: dgT('kanban.autoRefreshTip', { interval: intervalSec, remaining }),
       },
-        `更新于 ${timeStr}`,
+        dgT('kanban.updatedAt') + timeStr,
         h("span", {
           style: {
             display: "inline-flex",
@@ -540,4 +568,96 @@
           h("span", { style: { minWidth: "18px", textAlign: "right", opacity: 0.85, fontSize: 10 } }, `${remaining}s`)));
     }
 
-    // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====
+    // ===== g-233：搜索匹配与文字高亮辅助函数 =====
+    function escapeRegExp(str) {
+      return String(str ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    /**
+     * 将一段文本按照关键字高亮分割渲染为 React 元素数组
+     * @param {string} text - 待高亮正文
+     * @param {string} query - 搜索关键字
+     * @param {boolean} isCurrent - 是否为当前选中的匹配项
+     */
+    function renderHighlight(text, query, isCurrent = false) {
+      const s = String(text ?? "");
+      const q = String(query ?? "").trim();
+      if (!q || !s) return s;
+      const escaped = escapeRegExp(q);
+      const re = new RegExp(`(${escaped})`, "gi");
+      const parts = s.split(re);
+      if (parts.length <= 1) return s;
+      return parts.map((part, idx) => {
+        if (part.toLowerCase() === q.toLowerCase()) {
+          return h(
+            "mark",
+            {
+              key: "hl-" + idx,
+              className: isCurrent ? "dg-search-highlight-current" : "dg-search-highlight",
+            },
+            part,
+          );
+        }
+        return part;
+      });
+    }
+
+    /**
+     * 从目标正文描述中提取包含关键字的简短上下文片段（周围各约 25 字符）
+     */
+    function extractMatchSnippet(text, query) {
+      const s = String(text ?? "").replace(/\s+/g, " ");
+      const q = String(query ?? "").trim();
+      if (!s || !q) return "";
+      const idx = s.toLowerCase().indexOf(q.toLowerCase());
+      if (idx === -1) return "";
+      const start = Math.max(0, idx - 15);
+      const end = Math.min(s.length, idx + q.length + 25);
+      let snippet = s.slice(start, end);
+      if (start > 0) snippet = "…" + snippet;
+      if (end < s.length) snippet = snippet + "…";
+      return snippet;
+    }
+    // ===== g-239：运行/空闲生命周期投影与人工可读 status 区分 =====
+    // 区分会话/任务真实生命周期（running / idle / blocked / error / done）与人工汇报 status_line，
+    // 彻底解决结束、阻塞、失败、长任务场景长期显示失实运行态（如流动背景、虚假 ⏳/✅）的问题。
+    function formatStatusWithLifecycle(statusLine, running, blocked, statusState) {
+      if (!statusLine) {
+        return {
+          icon: "",
+          text: "",
+          fullText: null,
+          isRunning: false,
+          isBlocked: false,
+          isError: false,
+          isDone: false,
+        };
+      }
+      const raw = String(statusLine).trim();
+      // g-247：结构化状态优先；只有缺失/未知时才解析自由文本，避免中英文及否定句误判。
+      const structured = ["working", "blocked", "done", "error"].includes(statusState) ? statusState : null;
+      const isBlocked = structured ? structured === "blocked" : (!!blocked || /阻塞|blocked/i.test(raw));
+      const isError = structured ? structured === "error" : (!isBlocked && /失败|错误|报错|failed|error/i.test(raw));
+      const isDone = structured ? structured === "done" : (!isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw));
+      
+      let icon = "⏳ ";
+      if (isBlocked) icon = "⛔ ";
+      else if (isError) icon = "❌ ";
+      else if (isDone) icon = "✅ ";
+      else if (!running) icon = "⏸ ";
+      else icon = "⏳ ";
+
+      // 仅当生命周期处于运行态且非阻塞/非错误/非完成终态时，才维持运行中流动指示
+      const isRunning = !isBlocked && !isError && !isDone && !!running;
+      return {
+        icon,
+        text: raw,
+        fullText: icon + raw,
+        isRunning,
+        isBlocked,
+        isError,
+        isDone,
+      };
+    }
+
+    // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // Contract marker: 看板数据自动刷新

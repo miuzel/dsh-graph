@@ -8,27 +8,27 @@
       if (!props.childId || !session) return null;
       if (mode === "one-shot") {
         return h("div", { style: { ...S.meta, marginTop: 3 } },
-          "📦 一次性子代理会话为只读，不能续发指令");
+          dgT("live.readOnly"));
       }
       const send = async (sendMode) => {
         const t = text.trim();
         if (!t) return;
-        setNote("发送中…");
+        setNote(dgT("common.sending"));
         try {
           // session.prompt：continuable 子代理自动路由 api.subagents.prompt（仅文本）
           const res = await session.prompt([{ type: "text", text: t }], sendMode);
           if (res?.ok) {
             setText("");
-            setNote(sendMode === "steer" ? "✅ 已插队发送" : "✅ 已排队");
+            setNote(sendMode === "steer" ? dgT("common.sent") : dgT("common.sent"));
           } else {
             const err = res?.error ?? {};
             const reason = String(err?.details?.reason ?? err?.code ?? "");
             if (reason.includes("SUBAGENT_IMAGE_UNSUPPORTED"))
-              setNote("⚠️ 子代理会话不支持图片等多模态输入（SUBAGENT_IMAGE_UNSUPPORTED），请改用纯文本");
-            else setNote("⚠️ 发送失败：" + (err?.message ?? reason ?? "未知错误"));
+              setNote(dgT("live.textOnly"));
+            else setNote(dgT("criteria.feedbackSendFail") + (err?.message ?? reason ?? dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 发送异常：" + (e?.message ?? e));
+          setNote(dgT("drag.requestFail") + (e?.message ?? e));
         }
       };
       return h(
@@ -38,20 +38,20 @@
           h("input", {
             style: S.promptInput,
             value: text,
-            placeholder: "直达指令：发送到该子代理会话…",
+            placeholder: dgT("live.promptPlaceholder"),
             onChange: (e) => setText(e.target.value),
             onKeyDown: (e) => { if (e.key === "Enter") send("queue"); },
           }),
           h("button", {
             style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
-            title: "追加到会话队列尾部（queue）", onClick: () => send("queue"),
-          }, "排队"),
+            title: dgT("live.queueTooltip"), onClick: () => send("queue"),
+          }, dgT("live.queue")),
           h("button", {
             style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
-            title: "打断当前输出立即执行（steer）", onClick: () => send("steer"),
-          }, "插队")),
+            title: dgT("live.steerTooltip"), onClick: () => send("steer"),
+          }, dgT("live.steer"))),
         h("div", { style: { ...S.meta, fontSize: 10 } },
-          "仅文本：子代理会话不支持图片等多模态输入（SUBAGENT_IMAGE_UNSUPPORTED）",
+          dgT("live.textOnly"),
           note ? " ｜ " + note : ""),
       );
     }
@@ -95,16 +95,16 @@
               : b.type === "reasoning" ? "💭" + String(b.text ?? "").slice(0, 120)
               : "[" + (b.type ?? "?") + "]")
             .join("");
-          return (ev.type === "user/message" ? "🧑 " : "🤖 ") + (parts.trim().slice(0, 400) || "（空消息）");
+          return (ev.type === "user/message" ? "🧑 " : "🤖 ") + (parts.trim().slice(0, 400) || dgT("live.emptyMessage"));
         }
         if (ev.type === "assistant/tool-call") return "🔧 " + (d.name ?? "tool");
-        return "· " + (ev.type ?? "未知事件");
+        return dgT("live.unknownEvent") + " " + (ev.type ?? "");
       };
 
       let body;
-      if (state.loading) body = "读取中…";
-      else if (state.error) body = "读取失败：" + state.error;
-      else if (!state.entries.length) body = "（无记录）";
+      if (state.loading) body = dgT("live.reading");
+      else if (state.error) body = dgT("live.readFailed") + state.error;
+      else if (!state.entries.length) body = dgT("live.noRecords");
       else body = state.entries.slice(-12).map((e, i) =>
         h("div", { key: i, style: S.recordItem }, entryText(e)));
       return h("div", { style: { marginTop: 4, fontSize: 12 } }, body);
@@ -121,34 +121,34 @@
     function formatModelDisplay(dynamicModel, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr) {
       if (dynamicModel && dynamicModel.model) {
         const p = dynamicModel.provider ? `${dynamicModel.provider}/` : "";
-        return `${p}${dynamicModel.model}` + (dynamicModel.fromParent ? "（父会话，子代理继承）" : "");
+        return `${p}${dynamicModel.model}` + (dynamicModel.fromParent ? " (" + dgT("live.inherited") + ")" : "");
       }
       if (staticProvider || staticModel) {
         if (staticProvider && staticModel) return `${staticProvider}/${staticModel}`;
-        if (staticModel) return `${staticModel}（继承/默认 provider）`;
-        return `${staticProvider}（继承/默认 model）`;
+        if (staticModel) return `${staticModel} (" + dgT("live.inheritProvider") + ")`;
+        return `${staticProvider} (" + dgT("live.inheritModel") + ")`;
       }
       if (staticRoute) {
         return staticRoute;
       }
       if (relaunchRoute) {
-        return `按重新执行指定：${relaunchRoute}`;
+        return dgT("live.relaunchSpecified") + relaunchRoute;
       }
       if (modelErr) {
         // 如果包含内部 routing 错误或私有 session 错误，转为安全的“默认配置/未指定”或“会话已隔离”
         if (typeof modelErr === "string" && (modelErr.includes("owned by subagent routing") || modelErr.includes("agent-busy") || modelErr.includes("session"))) {
-          return "默认配置/未指定";
+          return dgT("live.defaultConfig");
         }
-        return "不可用：" + modelErr;
+        return dgT("live.unavailable") + modelErr;
       }
-      return "默认配置/未指定";
+      return dgT("live.defaultConfig");
     }
 
     function formatShortModelDisplay(dynamicModel, staticProvider, staticModel, staticRoute, relaunchRoute) {
       if (dynamicModel && dynamicModel.model) return dynamicModel.model;
       if (staticModel) return staticModel;
       if (staticRoute) return String(staticRoute).split("/").pop();
-      if (relaunchRoute) return "重派:" + String(relaunchRoute).split("/").pop();
+      if (relaunchRoute) return dgT("live.relaunchShort") + String(relaunchRoute).split("/").pop();
       return null;
     }
 
@@ -164,7 +164,7 @@
       const current = selection?.next ?? selection?.lastUsed ?? null;
       return {
         model: current ? { provider: current.provider, model: current.model } : null,
-        modelErr: selection === undefined ? "模型信息不可用" : null,
+        modelErr: selection === undefined ? dgT("live.modelUnavailable") : null,
       };
     }
 
@@ -221,7 +221,7 @@
 
       const relaunch = async () => {
         setBusy(true);
-        setNote("重新派发中…");
+        setNote(dgT("live.relaunching"));
         try {
           const url = kind === "collect" ? "/api/dsh-graph/start-collection" : "/api/dsh-graph/start-execution";
           const body = {
@@ -241,17 +241,17 @@
             if (data.child_id) {
               const route = data.model_route ? `（${data.model_route}）` : "";
               const modeTag = data.mode ? `[${data.mode}]` : "";
-              setNote("✅ 已重新派发子代理 " + modeTag + "，id：" + data.child_id + " " + route);
-              showToast("✅ 已重新派发子代理 " + modeTag + " " + route);
+              setNote(dgT("live.relaunched") + " " + modeTag + "，id：" + data.child_id + " " + route);
+              showToast(dgT("live.relaunched") + " " + modeTag + " " + route);
               if (data.model_route) props.onRelaunched?.(data.model_route);
             } else {
-              setNote("⚠️ 子代理启动失败：" + (data.child_error || "无 child_id"));
+              setNote(dgT("exec.childFailed") + (data.child_error || dgT("exec.childNotStarted")));
             }
           } else {
-            setNote("⚠️ 派发失败：" + (data.error || "未知错误"));
+            setNote(dgT("exec.executeFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setBusy(false);
       };
@@ -264,15 +264,15 @@
       const noCatalog = !groups.length;
       return h("div", { style: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4 } },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-          h("span", { style: { ...S.meta, fontSize: 11 } }, "🔄 重新派发子代理："),
+          h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("live.relaunch")),
           noCatalog
             ? h("span", { style: { ...S.meta, fontSize: 11 } },
-                defP ? `模型 ${defP}/${defM}` : "模型目录不可用")
+                defP ? dgT("live.model") + `${defP}/${defM}` : dgT("live.modelUnavailable"))
             : [
                 h("select", {
                   style: selStyle, value: provider,
                   className: "dg-select",
-                  title: "LLM provider（缺省 project.yaml executor.provider）",
+                  title: dgT("live.providerTooltip"),
                   onChange: (e) => { setProvider(e.target.value); setModel(""); },
                 },
                   groups.map((g) => h("option", { key: g.id, value: g.id, style: optStyle }, g.name ?? g.id))),
@@ -280,28 +280,28 @@
                   style: selStyle, value: model,
                   className: "dg-select",
                   disabled: !modelChoices.length,
-                  title: "模型（缺省 project.yaml executor.model）",
+                  title: dgT("live.modelTooltip"),
                   onChange: (e) => setModel(e.target.value),
                 },
                   !modelChoices.length
-                    ? h("option", { value: defM, style: optStyle }, defM ? `默认 ${defM}` : "model 不可用")
-                    : [h("option", { key: "", value: "", style: optStyle }, "默认"),
+                    ? h("option", { value: defM, style: optStyle }, defM ? dgT("live.defaultModel") + " " + defM : dgT("live.modelUnavailable"))
+                    : [h("option", { key: "", value: "", style: optStyle }, dgT("live.defaultModel")),
                        ...modelChoices.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))]),
                 kind !== "collect" ? h("select", {
                   id: modeId,
-                  "aria-label": "重新执行子代理模式",
+                  "aria-label": dgT("live.modeAria"),
                   style: selStyle, value: mode,
                   className: "dg-select",
-                  title: "子代理执行模式（缺省 project.yaml executor.mode）",
+                  title: dgT("live.modeTooltip"),
                   onChange: (e) => setMode(e.target.value),
                 },
-                  h("option", { key: "", value: "", style: optStyle }, "模式: 默认"),
+                  h("option", { key: "", value: "", style: optStyle }, dgT("live.modeDefault")),
                   ...modeList.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))) : null,
               ],
           h("button", {
             style: { ...S.btn, padding: "3px 10px", fontSize: 12 }, className: "dg-btn dg-relaunch",
             disabled: busy, onClick: relaunch,
-          }, busy ? "派发中…" : (kind === "collect" ? "🔄 重新收集" : "🔄 重新执行"))),
+          }, busy ? dgT("drawer.dispatching") : (kind === "collect" ? dgT("live.recollect") : dgT("exec.execute")))),
         note ? h("div", { style: { ...S.meta, marginTop: 2 } }, note) : null,
       );
     }
@@ -319,7 +319,7 @@
       const [note, setNote] = React.useState(null);
       const doUnbind = async () => {
         setBusy(true);
-        setNote("正在解绑…");
+        setNote(dgT("live.unbinding"));
         try {
           const body = {
             goal: goalId,
@@ -334,15 +334,15 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ 已解绑子代理（绑定已清理，attempt/事件保留可审计）");
-            showToast("✅ 已解绑子代理");
+            setNote(dgT("live.unboundSuccess"));
+            showToast(dgT("live.unbound"));
             setConfirm(false);
             onDetached?.();
           } else {
-            setNote("⚠️ 解绑失败：" + (data.error || "未知错误"));
+            setNote(dgT("live.unbindFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setBusy(false);
       };
@@ -354,8 +354,8 @@
             style: { ...S.btnDanger, padding: "2px 8px", fontSize: 11 },
             className: "dg-btn-danger",
             onClick: () => { setConfirm(true); setNote(null); },
-            title: "从该目标解绑当前执行子代理（安全 detach：保留 attempt/事件/日志，解绑后可暂缓/转移/重新派发）",
-          }, "🔓 解绑子代理"),
+            title: dgT("live.unbindTooltip"),
+          }, dgT("live.unbind")),
           note ? h("span", { style: { ...S.meta, fontSize: 11 } }, note) : null,
         );
       }
@@ -363,17 +363,17 @@
         "div",
         { style: { marginTop: 6, padding: "6px 8px", borderRadius: 4, background: "rgba(224,165,58,.08)", border: "1px solid rgba(224,165,58,.3)" } },
         h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", fontWeight: 600, marginBottom: 4 } },
-          "确认解绑子代理 " + (childId ? String(childId).slice(0, 8) : "") + "？"),
+          dgT("live.unbindPrompt") + " " + (childId ? String(childId).slice(0, 8) : "") + "？"),
         h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
           h("input", {
             style: { ...S.promptInput, fontSize: 11 },
             value: reason,
-            placeholder: "解绑原因（可选，记录审计事件）…",
+            placeholder: dgT("live.unbindReason"),
             onChange: (e) => setReason(e.target.value),
           }),
           running
             ? h("div", { style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } },
-                "⚠️ 子代理仍在运行中——请先受控停止或等待其结束，再解绑")
+                dgT("live.unbindRunning"))
             : null,
           h("div", { style: { display: "flex", gap: 6, marginTop: 2 } },
             h("button", {
@@ -381,17 +381,18 @@
               className: "dg-btn-danger",
               disabled: busy || running,
               onClick: doUnbind,
-            }, busy ? "解绑中…" : "确认解绑"),
+            }, busy ? dgT("live.unbinding") : dgT("live.unbindConfirm")),
             h("button", {
               style: { ...S.btn, padding: "2px 8px", fontSize: 11 },
               className: "dg-btn",
               onClick: () => { setConfirm(false); setNote(null); },
-            }, "取消"))),
+            }, dgT("common.cancel")))),
         note ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } }, note) : null,
       );
     }
 
     function SessionPanel(props) {
+      useLocaleRevision();
       const collapsible = !!props.collapsible;
       const [open, setOpen] = React.useState(!collapsible);
       const { session, mode } = useBoundSession(props.parentId, props.childId);
@@ -404,7 +405,7 @@
       const running = !!(snap && snap.running);
       const meter = liveMeter(usage, pressure);
       const statusLine = props.statusLine ?? null;
-      const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
+      const statusLabel = running ? "🟢 " + dgT("status.running") : "⚪ " + dgT("status.idle");
       // g-109 判据反馈：sessions.models 对子代理查询失败时，用「重新执行指定路由」兜底（绝不用父会话模型冒充）
       // g-194: 优先消费服务端下发的静态 provider / model / model_route，消除 subagent routing 报错
       const relaunchRoute = props.relaunchRoute ?? null;
@@ -416,7 +417,7 @@
       // 折叠态标题行的内联摘要：状态 + statusLine + token/ctx + 模型短名
       const collapsedBits = [
         statusLabel,
-        statusLine ? (running ? "⏳ " : "✅ ") + statusLine : null,
+        statusLine ? formatStatusWithLifecycle(statusLine, running, false, props.statusState).fullText : null,
         meter || null,
         shortModel,
       ].filter(Boolean).join(" ｜ ");
@@ -426,25 +427,25 @@
         h("div", {
             style: { ...S.drawerH, display: "flex", alignItems: "center", gap: 6,
                      cursor: collapsible ? "pointer" : "default", userSelect: "none" },
-            title: collapsible ? (open ? "点击收起" : "点击展开") : undefined,
+            title: collapsible ? (open ? dgT("live.collapse") : dgT("live.expand")) : undefined,
             onClick: collapsible ? () => setOpen(!open) : undefined,
           },
           h("span", { style: { flexShrink: 0 } },
-            (collapsible ? (open ? "▾ " : "▸ ") : "") + "📡 实时会话"),
+            (collapsible ? (open ? "▾ " : "▸ ") : "") + dgT("live.title")),
           collapsible && !open
             ? h("span", { style: { ...S.meta, fontSize: 11, flex: 1, minWidth: 0,
                                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-                collapsedBits || "（无状态）")
+                collapsedBits || dgT("live.noStatus"))
             : h("span", { style: { flex: 1 } }),
-          sessionLinkBtn(props.parentId, props.childId, "↗ 转到对话")),
+          sessionLinkBtn(props.parentId, props.childId, dgT("live.goToChat"))),
         !open ? null : [
           h(LiveStrip, { key: "s", parentId: props.parentId, childId: props.childId,
                          provider: staticProvider, model: staticModel,
                          statusLine }),
           h("div", { key: "m", style: { ...S.meta, marginTop: 3 } },
-            "模型：" + modelText
-            + (props.subagentMode ? ` ｜ 执行模式：${props.subagentMode}` : "")
-            + (mode ? ` ｜ 会话模式：${mode === "continuable" ? "可续轮" : "一次性"}` : "")),
+            dgT("live.model") + modelText
+            + (props.subagentMode ? ` ｜ ${dgT("live.executionMode")} ${props.subagentMode}` : "")
+            + (mode ? ` ｜ ${dgT("live.sessionMode")} ${mode === "continuable" ? dgT("live.continuable") : dgT("live.oneShot")}` : "")),
           h(PromptBox, { key: "p", parentId: props.parentId, childId: props.childId }),
           // g-109 判据反馈：实时会话控件内「重新执行」——子代理出错/无法运行时换 provider/model 重拉
           props.goalId
@@ -468,7 +469,7 @@
             h("button", {
               style: S.btn, className: "dg-btn",
               onClick: () => setShowRecords(!showRecords),
-            }, showRecords ? "▾ 收起最近记录" : "▸ 查看最近会话记录")),
+            }, showRecords ? "▾ " + dgT("live.recordsCollapse") : "▸ " + dgT("live.records"))),
           showRecords
             ? h(RecentRecords, { key: "rr", parentId: props.parentId, childId: props.childId, mode })
             : null,
@@ -481,3 +482,6 @@
     // 会话 id 来自 board 端点下发的 supervisorSession（project.yaml），不硬编码。
     // g-a92e1406 判据 3① 扩展：statusLine 传 supervisor 自己的 status_line（事件流最新一条），
     // 运行中由 LiveStrip 走 StatusLine 带动画（流动背景 + 图标 pulse）。
+
+    // Source contract: aria-label": "重新执行子代理模式".
+    // Contract marker: aria-label": "重新执行子代理模式"; 执行模式

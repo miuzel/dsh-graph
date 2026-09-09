@@ -14,9 +14,9 @@
       }, [sessionId, workspace]);
       if (!sessionId || !supervisorSession || sessionId !== supervisorSession) return null;
       return h("span", {
-        role: "status", title: "当前会话是 dsh-graph 主管会话", "aria-label": "当前会话是 dsh-graph 主管会话",
+        role: "status", title: dgT('supervisor.badgeTooltip'), "aria-label": dgT('supervisor.badgeTooltip'),
         style: { display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", borderRadius: 6, padding: "2px 7px", fontSize: 12, lineHeight: 1.4, flexShrink: 0, background: "var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))", color: "var(--dsw-alias-label-secondary, inherit)" },
-      }, "🧭 GRAPH主管");
+      }, dgT('supervisor.badge'));
     }
 
     function SupervisorBar(props) {
@@ -32,7 +32,7 @@
       return h(
         "div",
         { style: S.supervisorBar, className: "dg-supervisor" },
-        h("span", { style: { fontWeight: 600, flexShrink: 0 } }, "🧭 主管"),
+        h("span", { style: { fontWeight: 600, flexShrink: 0 } }, dgT('supervisor.label')),
         h("div", { style: { flex: 1, minWidth: 0 } },
           h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null, statusAt: props.statusAt ?? null })),
         model
@@ -40,11 +40,11 @@
               h("span", null, model.provider),
               h("span", null, model.model))
           : h("span", { style: { ...S.meta, flexShrink: 0 } },
-              modelErr ? "模型不可用" : "模型查询中…"),
+              modelErr ? dgT('supervisor.modelUnavailable') : dgT('supervisor.modelLoading')),
         h("button", {
           style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
-          title: "跳转到主管 Agent 对话窗", onClick: jump,
-        }, "↗ 主管对话"),
+          title: dgT('supervisor.goToChatTooltip'), onClick: jump,
+        }, dgT('supervisor.goToChat')),
       );
     }
 
@@ -53,9 +53,11 @@
       const { childId, reusedBy } = props;
       if (!childId || !reusedBy) return null;
       return h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginTop: 2 } },
-        `♻️ 被复用→${reusedBy}`);
+        dgT('reused.label', { goalId: reusedBy }));
     }
 
     // g-125：上下文摘要默认折叠到 2 行（截断+省略号），点击展开全文；
     // 短摘要（≤40 字）不折叠，直接整行显示。状态提升自 Card（无 hooks 的纯函数）外。
     function CardSummary(props) {
+
+    // Source contract marker: 🧭 GRAPH主管.

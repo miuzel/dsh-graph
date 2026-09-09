@@ -191,7 +191,7 @@
           const lines = b.text.split("\n").map((s) => s.trim()).filter(Boolean);
           if (lines.length) return (b.kind === "reasoning" ? "💭 " : "") + lines[lines.length - 1];
         } else if (b.kind === "tool-call" && b.name) {
-          return "🔧 调用工具 " + b.name;
+          return dgT("live.toolCall", { name: b.name });
         }
       }
       return null;
@@ -206,15 +206,15 @@
     // 状态延续时长（statusAt 距今多久）——g-124 staleStatus 分支显示用（负责人 2026-08-22）
     function fmtElapsed(ts, now) {
       const ms = now - ts;
-      if (!(ms > 0)) return "刚刚";
+      if (!(ms > 0)) return dgT("live.justNow");
       const s = Math.floor(ms / 1000);
-      if (s < 60) return s + " 秒";
+      if (s < 60) return s + dgT("live.seconds");
       const m = Math.floor(s / 60);
-      if (m < 60) return m + " 分钟";
+      if (m < 60) return m + dgT("live.minutes");
       const h = Math.floor(m / 60);
-      if (h < 24) return h + " 小时" + (m % 60 ? " " + (m % 60) + " 分" : "");
+      if (h < 24) return h + dgT("live.hours") + (m % 60 ? " " + (m % 60) + dgT("live.minutesShort") : "");
       const d = Math.floor(h / 24);
-      return d + " 天" + (h % 24 ? " " + (h % 24) + " 小时" : "");
+      return d + dgT("live.days") + (h % 24 ? " " + (h % 24) + dgT("live.hours") : "");
     }
 
     // token/上下文占用的紧凑文本（LiveStrip 与 SessionPanel 折叠态共用）
@@ -272,7 +272,7 @@
             const t = tail(b.text);
             if (t) return (b.type === "reasoning" ? "💭 " : "") + t;
           }
-          if (b?.type === "tool-call" && b.name) return "⚙ 调用工具 " + b.name;
+          if (b?.type === "tool-call" && b.name) return dgT("live.toolCall", { name: b.name });
         }
         return "";
       };
@@ -299,11 +299,11 @@
             if (c.type === "text-delta") { text += c.text || ""; hasStream = true; lastKind = "text"; }
             else if (c.type === "reasoning-delta") { reasoning += c.text || ""; hasStream = true; lastKind = "reasoning"; }
             else if (c.type === "tool-call-delta" && c.id) {
-              const rec = upsert(byCall, pending, c.id, { name: c.name || "工具调用", args: "" });
+              const rec = upsert(byCall, pending, c.id, { name: c.name || dgT("live.toolCall", { name: "" }), args: "" });
               if (c.name) rec.name = c.name;
               rec.args += c.argumentsDelta || "";        // 累积，勿覆盖（§7.1）
             } else if (c.type === "block-end" && c.block?.type === "tool-call") {
-              const rec = upsert(byCall, pending, c.block.id, { name: c.block.name || "工具调用", args: "" });
+              const rec = upsert(byCall, pending, c.block.id, { name: c.block.name || dgT("live.toolCall", { name: "" }), args: "" });
               if (c.block.name) rec.name = c.block.name;
               rec.args = c.block.arguments || rec.args;   // 完整参数覆盖增量
               rec.complete = true;
@@ -316,7 +316,7 @@
             break;
           }
           case "tool/call": {
-            const rec = upsert(byCall, pending, e.data?.callId, { name: e.data?.name || "工具调用", args: "" });
+            const rec = upsert(byCall, pending, e.data?.callId, { name: e.data?.name || dgT("live.toolCall", { name: "" }), args: "" });
             if (e.data?.name) rec.name = e.data?.name;
             if (e.data?.arguments != null) { rec.args = e.data.arguments; rec.complete = true; }
             rec.running = true;
@@ -337,7 +337,7 @@
 
       const open = pending.filter((r) => r.running !== false);
       const fmtAct = (r, icon) =>
-        `${icon} ${r.name || "工具调用"}${r.complete && r.args ? ` · ${toolDetailFn(r.args)}` : ""}`;
+        `${icon} ${r.name || dgT("live.toolCall", { name: "" })}${r.complete && r.args ? ` · ${toolDetailFn(r.args)}` : ""}`;
       return {
         pendingCount: open.length,
         activity: [
@@ -461,21 +461,23 @@
       };
       if (!session) {
         return h("div", { ...stripProps, title: props.childId },
-          "⚠️ 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
+          dgT("live.unconnected") + props.childId.slice(0, 8));
       }
 
       const staleDur = staleStatus && props.statusAt != null ? fmtElapsed(props.statusAt, now) : null;
       const meter = liveMeter(usage, pressure);
       // g-129 负责人 2026-08-22 格式：第一行 = 状态 + 流式内容（同行，流式时有时无不引起高度变化），
       // 右侧有足够宽度时显示 tok/ctx；第二行 = status_line 固定显示。
-      const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
-      const statusFull = running ? "运行中" : "空闲";
+      const statusLabel = running ? "🟢 " + dgT("status.running") : "⚪ " + dgT("status.idle");
+      const statusFull = running ? dgT("status.running") : dgT("status.idle");
       // 第二行 status_line 内容（stale 时也显示全文，tooltip 补延续时长——g-124）
+      // g-239：区分真实生命周期运行态与人工汇报文本，避免空闲时谎报 ✅ 或失实展示运行态
+      const formattedStatus = formatStatusWithLifecycle(props.statusLine, running, false, props.statusState);
       const statusRowText = props.statusLine
-        ? (running ? "⏳ " : "✅ ") + props.statusLine
-        : (staleStatus ? "⏳ 状态延续 " + staleDur : null);
-      // g-129: 空闲时 status_line 背景不带动画
-      const statusRowClass = running && props.statusLine ? "dg-running-flow" : "";
+        ? formattedStatus.fullText
+        : (staleStatus ? "⏳ " + dgT("status.stale", { duration: staleDur }) : null);
+      // g-129 & g-239: 仅当真正 running 且无终态/阻塞/失败时带动画
+      const statusRowClass = formattedStatus.isRunning ? "dg-running-flow" : "";
       const lineEl = line
         ? h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
                                 textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 } },
@@ -483,10 +485,10 @@
         : h("span", { style: { ...S.meta, fontSize: 10, flex: 1, overflow: "hidden",
                                textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "…");
       // g-225：常态展示精简 model ID，仅在 tooltip (title) 保留完整 provider/model 追溯
-      const modelTitle = props.model ? `模型：${props.provider ? props.provider + "/" : ""}${props.model}` : null;
+      const modelTitle = props.model ? dgT("live.model") + `${props.provider ? props.provider + "/" : ""}${props.model}` : null;
       return h(
         "div",
-        { ...stripProps, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
+        { ...stripProps, title: [statusFull, props.statusLine ? dgT("live.status") + props.statusLine : null, modelTitle, meter ? dgT("live.resource") + meter : null, line ? dgT("live.stream") + line : null].filter(Boolean).join("\n") },
         // 第一行：状态 + 流式内容（同行）；右侧有空间时显示 tok/ctx（flex 布局自动压缩）
         h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
           h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
@@ -501,8 +503,9 @@
               className: statusRowClass,
               style: { ...S.liveLine, marginTop: 1, fontSize: 10, overflow: "hidden",
                        textOverflow: "ellipsis", whiteSpace: "nowrap" },
-              title: props.statusLine ? props.statusLine + (staleDur ? "（状态已延续 " + staleDur + "）" : "") : undefined,
+              title: props.statusLine ? props.statusLine + (staleDur ? " (" + dgT("live.statusOngoing", { duration: staleDur }) + ")" : "") : undefined,
             }, statusRowText)
           : null,
       );
     }
+    // Contract title shape: title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle

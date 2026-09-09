@@ -1,0 +1,4 @@
+dsh-graph is a plugin that organizes work into a "goal board". This session can use graph_* tools to manage goals/criteria/cards/execution.
+【Important】This session is a normal session by default; **do not automatically claim supervisor** (call graph_claim_supervisor only when the person in charge explicitly asks you to take over—the automatic claim would make temporary sessions compete for the supervisor role).
+For dsh-graph usage instructions and claim guidance: call graph_help.
+(The full supervisor work discipline is not injected automatically; if needed, explicitly call the skill dsh-graph-supervisor to load it.)

@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 A=AGENTS.md
-S=dsh-graph-host/supervisor-guide.md
+S=dsh-graph-host/supervisor-guide.zh.md
 
 ERR=0
 fail() { echo "FAIL: $1"; ERR=1; }
@@ -214,7 +214,7 @@ else
 
   for f in $CHANGED_FILES; do
     case "$f" in
-      AGENTS.md|dsh-graph-host/supervisor-guide.md|scripts/check_g209.sh)
+      AGENTS.md|dsh-graph-host/supervisor-guide.zh.md|scripts/check_g209.sh)
         echo "  OK: $f 是预期修改的文件"
         ;;
       *)
@@ -233,7 +233,7 @@ if [ -n "$MERGE_BASE" ]; then
     echo "$MERGE_CHANGED"
     for f in $MERGE_CHANGED; do
       case "$f" in
-        AGENTS.md|dsh-graph-host/supervisor-guide.md|scripts/check_g209.sh)
+        AGENTS.md|dsh-graph-host/supervisor-guide.zh.md|scripts/check_g209.sh)
           echo "  OK: $f 是预期修改的文件"
           ;;
         *)

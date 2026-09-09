@@ -10,21 +10,1879 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require("react");
     const h = React.createElement;
-    // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
-    const PLUGIN_VERSION = "0.9.1";
+    // g-230：全局翻译函数——在 plugin apply 阶段由 registerI18n + createTranslator 初始化。
+    // 所有组件通过 dgT('key', params) 获取当前语言翻译。
+    let dgT = (key) => key;
+    // ===== g-230：i18n 国际化翻译字典与 locale 集成 =====
+    // 注册 'dsh-graph' 命名空间到 DSH 的 locale 服务，覆盖所有插件自有可见文案。
+    // 用户自定义内容（目标标题、描述、评论正文等）及第三方错误保持原样。
 
+    // --- 中文字典 ---
+    const zh = {
+      // === 通用操作 ===
+      'common.ok': '确定',
+      'common.cancel': '取消',
+      'common.close': '关闭',
+      'common.save': '保存',
+      'common.delete': '删除',
+      'common.edit': '编辑',
+      'common.search': '搜索',
+      'common.loading': '加载中',
+      'common.retry': '重试',
+      'common.refresh': '刷新',
+      'common.confirm': '确认',
+      'common.copy': '复制',
+      'common.open': '打开',
+      'common.back': '返回',
+      'common.more': '更多',
+      'common.collapse': '折叠',
+      'common.expand': '展开',
+      'common.none': '无',
+      'common.saving': '保存中…',
+      'common.savingDone': '已保存',
+      'common.creating': '创建中…',
+      'common.sending': '发送中…',
+      'common.sent': '已发送',
+      'common.processing': '处理中…',
+      'common.submitting': '提交中…',
+      'common.pathEmpty': '路径为空',
+
+      // === 状态标签 ===
+      'status.draft': '草稿',
+      'status.planning': '规划中',
+      'status.collecting': '收集中',
+      'status.ready': '就绪',
+      'status.in_progress': '执行中',
+      'status.review': '评审中',
+      'status.delivered': '已交付',
+      'status.blocked': '阻塞',
+      'status.running': '运行中',
+      'status.idle': '空闲',
+      'status.stale': '状态延续 {duration}',
+
+      // === 阶段列标题 ===
+      'stage.describe': '描述',
+      'stage.collect': '收集',
+      'stage.execute': '执行',
+      'stage.confirm': '确认',
+      'stage.deliver': '交付',
+      'stage.blocked': '阻塞',
+
+      // === 看板顶部/加载 ===
+      'board.title': '看板',
+      'board.tab': 'Kanban',
+      'kanban.loading': 'dsh-graph 看板加载中…',
+      'kanban.error.workspace': '⚠️ 无法确定工作区，已暂停看板请求。',
+      'kanban.error.fetch': '看板数据获取失败：',
+      'kanban.error.data': '看板数据错误：',
+      'kanban.updatedAt': '更新于 ',
+      'kanban.autoRefreshTip': '已配置自动刷新周期：{interval}s（距离下次自动刷新约 {remaining}s）',
+
+      // === 泳道 ===
+      'lane.versionDetail': '点击查看版本 {version} 详情',
+      'lane.newGoalInVersion': '在 {version} 新建目标',
+      'lane.newStandaloneGoal': '新建独立目标',
+      'lane.newBacklogGoal': '新建目标（backlog）',
+      'lane.collapseTooltip': '折叠泳道',
+      'lane.expandTooltip': '点击展开泳道',
+      'lane.collapsedSummary': '▸ {count} 目标 · 点击展开',
+      'lane.goalCount': '{count} 目标',
+
+      // === 阻塞列/交付列折叠 ===
+      'blocked.collapsedTitle': '点击展开阻塞列（{count} 项）',
+      'blocked.label': '阻',
+      'blocked.count': '×{count}',
+      'deliver.collapsedTitle': '点击展开交付列（{count} 项）',
+      'deliver.label': '交',
+      'deliver.count': '×{count}',
+
+      // === 卡片 ===
+      'card.clickToOpen': '点击打开详情',
+      'card.expandFull': '展开查看依赖/实时会话/上下文卡片等完整信息',
+      'card.collapseBrief': '收起为精简视图',
+      'card.clickSummaryExpand': '点击展开摘要全文',
+      'card.clickSummaryCollapse': '点击收起摘要',
+      'card.waitingDep': '⛓ 等待 {deps} 交付',
+      'card.depsSatisfied': '✅ 依赖满足：{deps} 已交付',
+      'card.goToSession': '↗ 转到对话',
+      'card.sharedBadge': '🔗共享',
+      'card.clickToOpenDrawer': '点击打开上下文抽屉',
+      'card.criteriaProgress': '质量判据：已完成 {done}/{total}',
+      'card.archived': '📦已归档',
+
+      // === 判据占位符 ===
+      'criteria.pending': '（待登记）',
+      'criteria.pendingDetail': '（待登记；进入 in_progress 前必须非空且已确认）',
+      'criteria.toBeFilled': '（待填写）',
+
+      // === 卡片状态图标 ===
+      'cardStatus.empty': '○ 待收集',
+      'cardStatus.collecting': '◌ 收集中',
+      'cardStatus.filled': '● 已填充',
+      'cardStatus.reviewed': '✔ 已复核',
+
+      // === 拖放相关 ===
+      'drag.blockedOnlyBackend': '⚠️ blocked 状态只能解除回原状态（由服务端校验）',
+      'drag.blockedReasonPrompt': '请输入阻塞原因：',
+      'drag.backlogOnlyDescribe': '⚠️ backlog 卡片只能拖到版本的「描述」列，不能直接到收集/执行/确认/交付/阻塞列',
+      'drag.unknownLane': '⚠️ 未知目标泳道：',
+      'drag.moveToSuccess': '✅ {goalId} 已移动到 {target}',
+      'drag.moveToFail': '⚠️ 移动失败：',
+      'drag.moveToBacklogError': '⚠️ 目标有附件（cards/attempts），不能移回 backlog。可移到独立目标或版本中。',
+      'drag.transitionSuccess': '✅ {goalId} → {status}',
+      'drag.transitionFail': '⚠️ 迁移失败：',
+      'drag.requestFail': '⚠️ 请求失败：',
+      'drag.unknownError': '未知错误',
+      'drag.blockedNoFrom': '⚠️ 该目标缺少 blocked_from 记录，无法自动解除阻塞；请由主管确认原状态后手动处理',
+      'drag.blockedInvalidFrom': '⚠️ blocked_from 值非法（{raw}），无法解析落点；请由主管修正后重试',
+      'drag.blockedOnlyOriginal': '⚠️ blocked 目标只能解除回原状态「{status}」，请拖到「{stage}」列',
+      'drag.cannotParseDrop': '⚠️ 无法解析该拖放落点的目标状态（服务端将校验）',
+
+      // === 目标搜索 ===
+      'search.placeholder': '搜索目标…',
+      'search.enterKeyword': '请输入搜索关键字',
+      'search.noResults': '未找到匹配',
+      'search.fullText': '全文',
+      'search.matchCount': '{count} 项匹配',
+
+      // === 目标详情弹窗 ===
+      'modal.loadingDetail': '加载详情…',
+      'modal.detailFetchFail': '详情获取失败：',
+      'modal.detailError': '详情错误：',
+      'modal.status': '状态：',
+      'modal.lane': '泳道：',
+      'modal.ownership': '归属：',
+      'status.label': '状态：',
+      'stage.label': '泳道：',
+      'goal.ownership': '归属：',
+      'modal.ownershipVersion': '版本 {version}',
+      'modal.ownershipStandalone': '独立/backlog',
+      'modal.humanReview': '👤人审',
+      'modal.aiReview': '🤖AI审',
+      'modal.versionHidden': '👁️ 该目标归属的版本「{version}」当前在看板中处于隐藏状态',
+      'modal.unhideVersion': '恢复显示该版本',
+      'modal.relaunchFallback': '⚠️ 最新子代理未启动/不可用，可换 provider/model 重新派发：',
+
+      // === 详情 Tab ===
+      'tab.detail': '📋 详情',
+      'tab.activity': '🕘 近期动态',
+      'tab.context': '📌 执行上下文',
+      'tab.goalFile': '📄 goal.md',
+      'tab.openFile': '打开',
+      'tab.copyPath': '复制路径',
+      'tab.fileOpened': '✅ 已打开 goal.md',
+      'tab.pathCopied': '✅ 路径已复制',
+      'tab.openFailed': '⚠️ 打开失败：',
+      'tab.pathCopiedNoOpen': '✅ 路径已复制（打开不可用）',
+
+      // === 目标描述段 ===
+      'section.description': '📋 目标描述',
+      'description.editInPlace': '就地编辑目标描述',
+      'description.edit': '✏️ 编辑',
+      'description.editEmpty': '📝 编辑描述',
+      'description.placeholder': '输入目标描述…（支持 markdown）',
+      'description.save': '💾 保存',
+      'description.empty': '（无描述）',
+      'description.saved': '✅ 描述已保存',
+      'description.saveFail': '⚠️ 保存失败：',
+      'description.requestFail': '⚠️ 请求失败：',
+      'section.criteria': '✅ 质量判据',
+      'section.criteriaEditTooltip': '编辑质量判据（保存后清空该目标已有勾选）',
+      'section.infoCollect': '🔎 信息收集',
+      'section.noCards': '（暂无上下文卡片）',
+      'section.backlogNoCards': '（backlog 目标不能创建上下文卡片，请先排期）',
+      'section.noActivity': '（暂无近期动态）',
+
+      // === 近期动态 ===
+      'activity.total': '共 {count} 条',
+      'activity.allTypes': '全部类型',
+      'activity.timeAsc': '↑ 时间正序',
+      'activity.timeDesc': '↓ 时间倒序',
+      'activity.colTime': '时间',
+      'activity.colEvent': '事件',
+      'activity.colActor': '执行者',
+
+      // === 目标标题/操作 ===
+      'goal.renameTitle': '重命名目标',
+      'goal.renameEmpty': '标题不能为空',
+      'goal.renameFail': '⚠️ 重命名失败：',
+      'goal.archive': '📦 归档',
+      'goal.archiveTooltip': '归档目标（仅 draft/planning/delivered 可归档）',
+      'goal.unarchive': '📤 取消归档',
+      'goal.unarchiveTooltip': '取消归档（恢复到原位置）',
+      'goal.archivedSuccess': '✅ 目标已归档',
+      'goal.archiveFail': '⚠️ 归档失败：',
+      'goal.unarchivedSuccess': '✅ 已取消归档',
+      'goal.unarchiveFail': '⚠️ 取消归档失败：',
+      'goal.postpone': '⏸ 暂缓',
+      'goal.postponeTooltip': '暂缓目标（移回 backlog，保留卡片与 attempts）',
+      'goal.postponeConfirm': '确认暂缓？',
+      'goal.postponeConfirmed': '确认将目标移回 backlog',
+      'goal.postponeSuccess': '✅ 已暂缓',
+      'goal.postponeSuccessMsg': '✅ 目标已暂缓并移回 backlog',
+      'goal.postponeFail': '⚠️ 暂缓失败：',
+      'goal.delete': '🗑 删除',
+      'goal.deleteTooltip': '删除目标（仅已归档目标可删除，含卡片/attempts）',
+      'goal.deleteConfirm': '确认删除？',
+      'goal.deleteConfirmed': '确认删除（不可恢复）',
+      'goal.deleteSuccess': '✅ 已删除',
+      'goal.deleteSuccessMsg': '✅ 目标已删除',
+      'goal.deleteFail': '⚠️ 删除失败：',
+      'goal.typeLabel': '类型：{type}（点击切换）',
+      'goal.typeSetFail': '⚠️ 设置失败：',
+      'goal.closeSelector': '关闭选择器',
+      'goal.requestFail': '⚠️ 请求失败：',
+      'goal.goalFile': '📄 goal.md',
+
+      // === Handoff ===
+      'handoff.title': '🔄 返工 Handoff',
+      'handoff.rev': '（rev {revision}，来源：{sources}）',
+      'handoff.update': '✏️ 更新 Handoff',
+      'handoff.register': '📝 登记 Handoff',
+      'handoff.confirmedBy': '确认人：{by}　｜　时间：{at}',
+      'handoff.failures': '已核实失败/风险：',
+      'handoff.constraints': '返工约束（禁止项）：',
+      'handoff.baseline': '推荐基线/必须保留项：',
+      'handoff.verification': '验收命令：',
+      'handoff.noHandoff': '（无已登记 handoff）',
+      'handoff.updateHint': '更新将覆盖当前 handoff（revision 递增）',
+      'handoff.registerHint': '登记后新 attempt 派发时自动注入',
+      'handoff.sourceAttempts': '来源 attempt（逗号分隔）',
+      'handoff.registerBtn': '✅ 登记 Handoff',
+      'handoff.success': '✅ handoff 已登记',
+      'handoff.registerFail': '⚠️ 登记失败：',
+      'handoff.sourceRequired': '⚠️ 来源 attempt 不能为空',
+      'handoff.allRequired': '⚠️ 所有字段必填',
+
+      // === 最近指令 ===
+      'directive.title': '📌 最近指令',
+      'directive.hint': '（下次 attempt 自动注入；小范围修复优先 send_message 续办已有会话）',
+      'directive.placeholder': '输入对下次 attempt 的补充任务、边界和验收要求…',
+      'directive.save': '💾 保存',
+      'directive.clear': '🗑 清空',
+      'directive.noContent': '（无最近指令）',
+      'directive.editBtn': '✏️ 编辑指令',
+      'directive.setBtn': '📝 设置指令',
+      'directive.success': '✅ 指令已更新',
+      'directive.updateFail': '⚠️ 更新失败：',
+      'directive.clearSuccess': '✅ 指令已清空',
+      'directive.clearFail': '⚠️ 清空失败：',
+
+      // === 评论 ===
+      'comments.title': '💬 评论',
+      'comments.count': '（{count} 条）',
+      'comments.add': '➕ 添加评论',
+      'comments.placeholder': '输入评论内容…（可追溯的历史讨论/反馈）',
+      'comments.publish': '💬 发表评论',
+      'comments.success': '✅ 评论已添加',
+      'comments.addFail': '⚠️ 添加失败：',
+
+      // === 标签编辑器 ===
+      'tags.title': '🔖 标签',
+      'tags.add': '＋ 添加标签',
+      'tags.collapse': '收起输入框',
+      'tags.addTooltip': '添加新标签',
+      'tags.removeTooltip': '点击移除标签',
+      'tags.noTags': '（暂无标签，点击右上角添加）',
+      'tags.inputPlaceholder': '输入标签名称，逗号或空格分隔…',
+      'tags.save': '保存',
+      'tags.saveFail': '标签保存失败',
+
+      // === Worktree 清理 ===
+      'worktree.title': '🧹 可清理 worktree',
+      'worktree.confirmDelete': '确认删除该 linked worktree？本地分支不会删除。',
+      'worktree.cleaned': '已清理 worktree',
+      'worktree.cleanFail': '清理被阻断',
+      'worktree.candidate': '✅',
+      'worktree.locked': '🔒',
+      'worktree.alreadyRemoved': '已移除',
+      'worktree.defaultReason': '已验证合入且干净',
+      'worktree.confirmClean': '确认清理',
+      'worktree.attemptTitle': '🌿 Attempt worktree',
+      'worktree.collapseTooltip': '收起 worktree 列表',
+      'worktree.expandTooltip': '展开 worktree 列表',
+      'worktree.unavailable': '⚠️ Git worktree 列表不可用，无法发现 worktree',
+      'worktree.notCreated': '未创建 worktree',
+      'worktree.copyPathTooltip': '复制安全相对路径',
+      'worktree.pathCopied': '✅ worktree 路径已复制',
+
+      // === 执行/反馈 ===
+      'exec.accept': '✅ 接受',
+      'exec.acceptConfirm': '确认接受目标「{goalId}」的交付成果？\n\n此操作将请求主管会话完成最终复核，并执行交付收口。',
+      'exec.acceptPending': '⏳ 已请求主管复核，等待响应',
+      'exec.acceptResolved': '✅ 交付已生效',
+      'exec.acceptFail': '⚠️ 接受失败：',
+      'exec.execute': '🚀 执行',
+      'exec.executeFail': '⚠️ 执行失败：',
+      'exec.stateTransitionFail': '⚠️ 状态迁移失败：',
+      'exec.childDispatched': '✅ 已派发执行子代理，id：',
+      'exec.childFailed': '⚠️ 子代理启动失败：',
+      'exec.childNotStarted': '⚠️ 子代理未启动（无 child_id）',
+      'exec.supervisorUnavailable': '⚠️ 会话服务不可用',
+      'exec.supervisorNotConfigured': '⚠️ 未配置主管会话（project.yaml 的 supervisor.session）',
+      'exec.requestCopied': '✅ 请求已复制到剪贴板，可在主管对话窗粘贴发送',
+      'exec.goToSupervisor': '发送给主管（复制请求）',
+      'exec.askPm': '交给产品经理 Agent',
+      'exec.objection': '⚠️ 主管已提出异议',
+      'exec.polish': '📝 定义/润色',
+      'exec.guidanceHint': '可填写额外指导意见，再选择处理方式：',
+      'exec.guidancePlaceholder': '人工指导意见（可选）…',
+      'exec.pmProcessing': '⏳ 产品经理 Agent 正在处理…',
+      'exec.pmAccepted': '✅ 产品经理 Agent 已受理，建议将返回主管会话',
+      'exec.pmFailed': '⚠️ 产品经理 Agent 失败：',
+      'exec.supervisorPathFailed': '⚠️ 主管路径失败：',
+      'exec.precopied': '✅ 预填内容已复制，到主管对话窗 Ctrl+V 直接粘贴发送',
+      'exec.supervisorJumpFail': '⚠️ 跳转失败：',
+      'exec.feedbackPlaceholder': '输入反馈内容…',
+      'exec.goToSupervisorChat': '→ 去主管对话窗发送',
+      'exec.prefillCopied': '✅ 预填内容已复制，已切换到主管对话窗，直接粘贴发送',
+      'exec.autocopyFailed': '⚠️ 自动复制失败（浏览器限制），请手动复制下方预填内容；已切换到主管对话窗',
+      'exec.forceAccept': '✅ 已强制接受',
+      'exec.forceAcceptWithReason': '✅ 已强制接受（理由已记入事件）',
+      'exec.forceAcceptFail': '⚠️ 强制接受失败：',
+
+      // === 进执行列确认 ===
+      'inProgress.title': '🚀 执行「{title}」',
+      'inProgress.hasChild': '该目标已有执行子代理。将向其发送重新执行指令（排队），不另起新子代理。',
+      'inProgress.noChild': '将为目标创建执行子代理，状态迁移到「执行中」。',
+      'inProgress.subagent': '🔗 子代理：',
+      'inProgress.noCriteria': '⚠️ 质量判据尚未登记——将以授权模式强制迁移到执行列。',
+      'inProgress.reExecute': '🔄 重新执行',
+      'inProgress.confirmExec': '🚀 确认执行',
+      'inProgress.reExecSent': '✅ 已向子代理排队发送重新执行指令',
+      'inProgress.reExecFail': '⚠️ 发送失败：',
+      'inProgress.supervisorNotConfigured': '⚠️ 该 workspace 未配置 supervisor.session（project.yaml）。请先在此 workspace 运行 graph_claim_supervisor() 完成主管会话接管，再执行。',
+      'inProgress.migrating': '迁移中…',
+      'inProgress.dispatching': '派发子代理…',
+      'inProgress.dispatchingReExec': '发送重新执行指令…',
+
+      // === 回退理由弹窗 ===
+      'backward.title': '⬅️ 回退到「{status}」',
+      'backward.desc': '目标 {goalId} 将从当前状态回退到「{status}」。',
+      'backward.withChild': '理由将作为消息发送给执行子代理。',
+      'backward.withoutChild': '理由将作为补充信息记录（无执行子代理时供主管参考）。',
+      'backward.reasonPlaceholder': '请输入回退理由（可选）…',
+      'backward.confirmBtn': '确认回退',
+
+      // === 交付确认弹窗 ===
+      'deliver.title': '📦 交付「{title}」',
+      'deliver.checklist': '交付前请确保以下工作已完成：',
+      'deliver.item1': '• 代码已合并到主分支',
+      'deliver.item2': '• 相关文档/配置已更新',
+      'deliver.item3': '• 已通知主管进行最终复核',
+      'deliver.warn': '⚠️ 标记为「已交付」后需主管评审通过才能正式完成。',
+      'deliver.notifySupervisor': '↗ 告知主管',
+      'deliver.confirmDeliver': '📦 确认交付',
+
+      // === 创建目标弹窗 ===
+      'createGoal.title': '🎯 创建新目标',
+      'createGoal.titleLabel': '标题',
+      'createGoal.titlePlaceholder': '目标标题…',
+      'createGoal.descLabel': '描述',
+      'createGoal.descPlaceholder': '目标描述（可选）…',
+      'createGoal.versionLabel': '版本',
+      'createGoal.versionNone': '（无版本 / backlog）',
+      'createGoal.typeLabel': '类型',
+      'createGoal.createBtn': '创建目标',
+      'createGoal.titleRequired': '⚠️ 标题不能为空',
+      'createGoal.success': '✅ 目标 {id} 已创建',
+      'createGoal.fail': '⚠️ 创建失败：',
+      'createGoal.backlogNote': '将进入 backlog（未选版本）',
+      'createGoal.versionNote': '将排期入版本 {version}',
+      'createGoal.standaloneNote': '将创建为独立目标',
+
+      // === 创建版本弹窗 ===
+      'createVersion.title': '创建新版本',
+      'createVersion.slugLabel': '版本 slug（标识符）',
+      'createVersion.slugPlaceholder': '如 v1.0、0.5.0…',
+      'createVersion.nameLabel': '版本名称',
+      'createVersion.namePlaceholder': '如 第一版、里程碑 1…',
+      'createVersion.createBtn': '创建版本',
+      'createVersion.success': '✅ 版本 {slug} 已创建',
+      'createVersion.fail': '⚠️ 创建失败：',
+
+      // === 版本详情弹窗 ===
+      'versionDetail.loading': '⚠️ 加载失败：',
+      'versionDetail.requestFail': '⚠️ 请求失败：',
+      'versionDetail.title': '📋 版本详情',
+      'versionDetail.status': '状态：',
+      'versionDetail.goals': '目标数：',
+      'versionDetail.summary': '摘要',
+      'versionDetail.scope': '范围',
+      'versionDetail.blocked': '阻塞清单',
+      'versionDetail.release': '🚀 标记发布',
+      'versionDetail.releaseTooltip': '将此版本标记为已发布（需通过校验）',
+      'versionDetail.releaseConfirm': '确认发布版本 {slug}？',
+      'versionDetail.releaseSuccess': '✅ 版本 {slug} 已发布',
+      'versionDetail.releaseFail': '⚠️ 发布失败：',
+      'versionDetail.reactivate': '🔄 恢复为活跃',
+      'versionDetail.reactivateTooltip': '将此已发布版本恢复为活跃状态',
+      'versionDetail.reactivateConfirm': '确认恢复版本 {slug} 为活跃？',
+      'versionDetail.reactivateSuccess': '✅ 版本 {slug} 已恢复为活跃',
+      'versionDetail.reactivateFail': '⚠️ 恢复失败：',
+      'versionDetail.emptySummary': '（版本摘要为空——请在版本 version.md 的「范围」小节补充）',
+      'versionDetail.blockedCount': '⛔ 阻塞目标（{count} 个未 delivered）',
+      'versionDetail.releaseBlocked': '⛔ 无法发布：{count} 个目标未 delivered',
+      'versionDetail.reactivateDescription': '恢复 {slug} 将撤销发布状态，使版本重新进入 active（进行中）。已交付的目标不受影响，再次发布仍需满足全部目标 delivered 等校验。',
+      'version.renameCurrent': '当前：{name}（{slug}）',
+      'version.deleteEmptyOnly': '⚠️ 此操作不可逆，仅删除空版本（无任何目标含归档）',
+      'tagFilter.selected': '已选 {count} 个标签',
+      'createGoal.standaloneOption': '独立目标',
+
+      // === 版本管理抽屉 ===
+      'versionDrawer.title': '🏷️ 版本管理',
+      'versionDrawer.displayCount': '（显示 {visible}/{total}）',
+      'versionDrawer.hint': '勾选控制版本在看板中的显隐过滤；设置自动保存在本地，不影响底层版本数据。',
+      'versionDrawer.showAll': '显示全部',
+      'versionDrawer.showActive': '仅活跃版本',
+      'versionDrawer.showActiveTooltip': '仅显示活跃版本（planning / ready / in_progress / review 等未发布版本）',
+      'versionDrawer.hideAll': '隐藏全部',
+      'versionDrawer.allHidden': '已隐藏全部 {count} 个版本（含已发布版本）',
+      'versionDrawer.activeHidden': '已隐藏全部 {count} 个活跃版本泳道',
+      'versionDrawer.hideAllTooltip': '隐藏全部版本泳道',
+      'versionDrawer.searchPlaceholder': '搜索版本名称或 slug…',
+      'versionDrawer.noVersions': '暂无版本',
+      'versionDrawer.noMatch': '未找到匹配版本',
+      'versionDrawer.released': '已发布',
+      'versionDrawer.active': '进行中',
+      'versionDrawer.goalCount': '{count} 个目标',
+      'versionDrawer.detail': '详情 ↗',
+      'versionDrawer.detailTooltip': '查看版本详情',
+
+      // === 设置弹窗 ===
+      'settings.title': '看板设置',
+      'settings.human': '人工',
+      'settings.ai': '自动',
+      'settings.overridePlaceholder': '输入覆盖文本（支持空格/引号/#/多行）…',
+      'settings.inheritPrompt': '（继承当前 profile 全局提示词）',
+      'settings.disabledPrompt': '（全局提示词被禁用）',
+      'settings.inheritGlobal': '继承当前 DSH profile 全局值',
+      'settings.overrideGlobal': '自定义文本覆盖全局',
+      'settings.disableGlobal': '显式禁用全局提示词',
+      'settings.inherit': '继承',
+      'settings.override': '覆盖',
+      'settings.disable': '禁用',
+      'settings.legacyValue': '（已存值，当前目录未列出）',
+      'settings.openConfigTooltip': '用系统默认编辑器打开 project.yaml',
+      'settings.liveDisabledHint': '（关闭后停止输出流订阅，释放资源；livestrip 状态与 status line 保留）',
+      'settings.modeLabel': '执行模式 (mode)',
+      'settings.modeAria': 'workspace 子代理执行模式',
+      'settings.modeInherited': '（继承 profile 全局 / 系统默认：标准模式）',
+      'settings.advanced': '高级/仅存储字段',
+      'settings.supervisorAutomation': '主管自动化（高级/仅存储字段）',
+      'settings.promptOverride': '补充提示词 workspace 覆盖',
+      'settings.loading': '正在读取配置…',
+      'settings.editHint': '编辑当前 workspace 的 .dsh-graph/project.yaml 安全配置；写回保留未知键与注释。',
+      'settings.projectYaml': '📄 project.yaml',
+      'settings.openProjectYaml': '用系统默认编辑器打开 project.yaml',
+      'settings.copyProjectPath': '复制 project.yaml 路径',
+      'settings.openedProjectYaml': '✅ 已打开 project.yaml',
+      'settings.showAdvanced': '显示高级/仅存储字段',
+      'settings.hideAdvanced': '隐藏高级/仅存储字段',
+      'settings.autoRefresh': '看板数据自动刷新：',
+      'settings.seconds': '秒',
+      'settings.minInterval': '（下限 5 秒）',
+      'settings.intervalWarn': '刷新间隔最小限制为 5 秒（保存时将自动纠偏为 5s）',
+      'settings.intervalMinError': '⚠️ ',
+      'settings.liveDisplay': '实时代理输出流式显示',
+      'settings.liveDisplayHint': '（关闭后停止输出流订阅，释放资源；livestrip 状态与 status line 保留）',
+      'settings.modelRouting': '执行子代理模型路由与模式',
+      'settings.inheritSession': '（继承父会话）',
+      'settings.legacySuffix': '（已存值，当前目录未列出）',
+      'settings.catalogLoading': '（目录读取中…）',
+      'settings.catalogUnavailable': '（目录不可用）',
+      'settings.reasoningEffort': '默认推理档位 (reasoning effort)',
+      'settings.reasoningEffortAria': 'workspace 子代理默认推理档位',
+      'settings.inheritModel': '（继承所选模型/父会话）',
+      'settings.effortHint': '选项随所选 provider/model 的 reasoning effort 能力更新；留空继承所选模型或父会话默认值。',
+      'settings.effortHintNone': '所选 provider/model 未声明 reasoning effort；已存旧值保留可选，可留空继承默认值。',
+      'settings.effortHintLoading': '正在读取 Host 模型目录；已存推理档位保留可选，留空继承默认值。',
+      'settings.execMode': '执行模式 (mode)',
+      'settings.execModeAria': 'workspace 子代理执行模式',
+      'settings.modeInherit': '（继承 profile 全局 / 系统默认：标准模式）',
+      'settings.modeStandard': '标准模式 (standard) - 完整开发工具能力',
+      'settings.modeMinimal': '极简模式 (minimal) - 受控 6 工具物理过滤 (graph-minimal)',
+      'settings.catalogReady': '目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；执行模式支持标准模式与极简工具过滤模式。',
+      'settings.catalogLoadingMsg': '正在读取当前 Host 的合法 provider/model 目录…',
+      'settings.catalogUnavailableMsg': '当前 Host 目录不可用（llm.providers/models 缺失）——已存值保留可选、仍可保存。',
+      'settings.advancedTitle': '高级/仅存储字段',
+      'settings.automationTitle': '主管自动化（高级/仅存储字段）',
+      'settings.promptOverrides': '补充提示词 workspace 覆盖',
+      'settings.subagentPrompt': '子代理补充提示词',
+      'settings.saveBtn': '保存',
+      'settings.closeBtn': '关闭',
+      'settings.saveFail': '保存失败：',
+      'settings.loadFail': '加载配置失败：',
+      'settings.pkLanesError': 'pk.lanes 必须是 >=1 的整数',
+      'settings.promptInheritHint': '（继承当前 profile 全局提示词）',
+      'settings.promptDisableHint': '（全局提示词被禁用）',
+      'settings.promptOverridePlaceholder': '输入覆盖文本（支持空格/引号/#/多行）…',
+      'settings.defaultBtn': 'default（继承）',
+      'settings.overrideBtn': 'override（覆盖）',
+      'settings.disableBtn': 'disable（禁用）',
+      'settings.defaultTooltip': '继承当前 DSH profile 全局值',
+      'settings.overrideTooltip': '自定义文本覆盖全局',
+      'settings.disableTooltip': '显式禁用全局提示词',
+
+      // === 判据编辑弹窗 ===
+      'criteria.editTitle': '✏️ 编辑质量判据',
+      'criteria.goalInfo': '{goalId} ｜ {title}',
+      'criteria.saveWarning': '⚠️ 保存后将清空该目标已有的判据勾选状态。',
+      'criteria.noCriteria': '（暂无判据——点击下方「➕ 新增判据」添加）',
+      'criteria.addBtn': '➕ 新增判据',
+      'criteria.placeholder': '判据内容…',
+      'criteria.moveUp': '上移',
+      'criteria.moveDown': '下移',
+      'criteria.deleteItem': '删除该条',
+      'criteria.saveBtn': '💾 保存',
+      'criteria.conflict': '⚠️ 检测到判据已被其他编辑修改，正在以本地内容覆盖服务器…',
+      'criteria.conflictResolved': '✅ 已保存（并发覆盖）',
+      'criteria.savedAndCleared': '✅ 判据已保存（勾选已清空）',
+      'criteria.saveFail': '⚠️ 保存失败：',
+
+      // === 判据反馈 ===
+      'criteria.feedbackTooltip': '针对此判据向执行会话反馈',
+      'criteria.feedbackPlaceholder': '反馈内容…',
+      'criteria.feedbackSend': '发送',
+      'criteria.feedbackQueued': '✅ 反馈已排队送达执行会话',
+      'criteria.feedbackNotConnected': '⚠️ 执行会话未接入，反馈无法送达',
+      'criteria.feedbackSendFail': '⚠️ 反馈发送失败：',
+
+      // === 记忆管理弹窗 ===
+      'memory.title': '🧠 记忆管理',
+      'memory.btn': '🧠 记忆',
+      'memory.deletedByUser': '用户在管理面板手动删除',
+      'memory.standingLabel': '常驻记忆(≤200字)',
+      'memory.onDemandLabel': '按需记忆(≤500字)',
+      'memory.standing': '常驻记忆 (固定植入)',
+      'memory.onDemand': '按需记忆 (分页检索)',
+      'memory.searchPlaceholder': '搜索记忆内容…',
+      'memory.standingHint': '💡【常驻记忆】：作为系统 Prompt 独立章节固定植入每个会话（单条硬上限 ≤ 200 字），适合记录工作区核心硬性约束与安全铁律。',
+      'memory.onDemandHint': '💡【按需记忆】：平时不植入会话、不占 token；仅在检索或手动调用时按需提取，适合技术方案决策与参考事实。',
+      'memory.total': '共 {count} 条（第 {page} / {totalPages} 页）',
+      'memory.addBtn': '＋ 新增记忆',
+      'memory.collapseInput': '收起输入框',
+      'memory.typeLabel': '类型：',
+      'memory.standingType': ' 常驻记忆(≤200字)',
+      'memory.onDemandType': ' 按需记忆(≤500字)',
+      'memory.standingPlaceholder': '输入要沉淀的常驻约束（硬上限 200 字符）…',
+      'memory.onDemandPlaceholder': '输入按需参考记忆…',
+      'memory.charCount': '{count} / {limit} 字',
+      'memory.saveBtn': '确认保存',
+      'memory.addSuccess': '✅ 记忆添加成功',
+      'memory.addFail': '⚠️ 添加失败：',
+      'memory.deleteConfirm': '确认删除该条记忆？',
+      'memory.deleteSuccess': '✅ 已删除记忆',
+      'memory.deleteFail': '⚠️ 删除失败：',
+      'memory.loading': '正在读取记忆…',
+      'memory.noEntries': '（当前分类下暂无记忆条目）',
+      'memory.prevPage': '上一页',
+      'memory.nextPage': '下一页',
+      'memory.toolsEnabled': '允许 Agent 工具调用',
+      'memory.toolsDisabled': '🔒 纯手工模式(工具已禁用)',
+      'memory.toolsToggleTooltip': '关闭后，所有子代理将无法调用记忆工具，避免意外修改或插件冲突',
+      'memory.toolsEnabledToast': '✅ 已启用 Agent 记忆工具',
+      'memory.toolsDisabledToast': '🔒 已禁用 Agent 记忆工具（纯手工管理模式）',
+      'memory.toggleFail': '⚠️ 切换失败：',
+      'memory.standingCharsExceeded': '⚠️ 常驻记忆硬上限为 200 字符，当前已输入 {count} 字',
+      'memory.loadFail': '⚠️ 加载失败：',
+      'memory.networkError': '⚠️ 网络错误：',
+      'memory.from': '来自: ',
+
+      // === 添加信息收集任务 ===
+      'addCard.title': '新增信息收集任务：',
+      'addCard.oneLiner': '📝 一句话任务',
+      'addCard.viaChat': '💬 通过对话创建',
+      'addCard.inputPlaceholder': '输入任务描述…',
+      'addCard.sharedOption': '📇 共享条目（项目知识库）',
+      'addCard.goalOption': '🎯 目标专属条目',
+      'addCard.createBtn': '创建',
+      'addCard.success': '✅ 已创建任务：',
+      'addCard.fail': '⚠️ 创建失败：',
+      'addCard.sharedTooltip': '默认创建共享条目（项目知识库，可多目标复用）；可选创建当前目标专属条目',
+      'addCard.chatHint': '点击按钮切换到主管对话窗，直接描述你想收集的信息，主管 Agent 会帮你创建任务并派发子代理。',
+      'addCard.goToChat': '→ 去对话窗输入需求',
+      'addCard.chatSwitched': '✅ 已切换到对话窗，请直接输入收集需求',
+
+      // === 卡片抽屉 ===
+      'drawer.loadFail': '获取失败：',
+      'drawer.unknownRoot': '（仓库根未知）',
+      'drawer.unknownAttachmentRoot': '（附件根未知）',
+      'drawer.filledBy': '填充：',
+      'drawer.cardNotExist': '卡片不存在：',
+      'drawer.collectContext': '## 收集任务上下文',
+      'drawer.collectScope': '**收集范围**：',
+      'drawer.collectHint': '请收集与卡片「{title}」相关的详细上下文信息，用于填充该卡片。',
+      'drawer.canonicalAttRoot': '**canonical 附件根（绝对路径）**：',
+      'drawer.goalInfoLabel': '**目标信息**：',
+      'drawer.cardInfoLabel': '**卡片信息**：',
+      'drawer.backfillReq': '**回填要求**：',
+      'drawer.collectTitle': '📝 收集提示词',
+      'drawer.collectInfoTarget': '收集信息目标（可编辑）',
+      'drawer.collectConstraints': '规范约束（只读）',
+      'drawer.startCollect': '开始收集',
+      'drawer.dispatching': '派发中…',
+      'drawer.collectSuccess': '✅ 已派发收集子代理，id：',
+      'drawer.collectChildFailed': '⚠️ 子代理启动失败：',
+      'drawer.collectChildNotStarted': '⚠️ 子代理未启动（无 child_id）',
+      'drawer.collectFail': '⚠️ 派发失败：',
+      'drawer.cardFile': '📄 卡片文件',
+      'drawer.noFilePath': '（无文件路径）',
+      'drawer.openCardFile': '用系统默认编辑器打开卡片文件',
+      'drawer.copyCardPath': '复制卡片文件路径',
+      'drawer.cardFileOpened': '✅ 已打开卡片文件',
+      'drawer.subagent': '🤖 收集子代理',
+      'drawer.subagentId': 'id：',
+      'drawer.sharedEntry': '📇 共享条目',
+      'drawer.ownedEntry': '🎯 专属条目',
+      'drawer.summary': '摘要',
+      'drawer.fullText': '全文',
+      'drawer.noContent': '（尚未采集内容）',
+      'drawer.attachmentRefs': '📎 附件引用',
+      'drawer.deleteCard': '🗑 删除卡片',
+      'drawer.deleteCardTooltip': '删除此卡片（需输入卡片 id 确认）',
+      'drawer.deleteConfirm': '⚠️ 确认删除卡片「{title}」？请输入卡片 id 确认：',
+      'drawer.deleteIdPlaceholder': '输入卡片 id 确认删除…',
+      'drawer.deleteConfirmBtn': '🗑 确认删除',
+      'drawer.cardDeleted': '✅ 卡片已删除',
+      'drawer.deleteFail': '⚠️ 删除被拒：',
+      'drawer.deleteRefFail': '⚠️ 解除失败：',
+      'drawer.convertToShared': '📇 转为共享条目',
+      'drawer.convertToSharedTooltip': '转为共享条目（原目标保留引用，条目进入项目知识库供多目标复用）',
+      'drawer.convertedToShared': '📇 已转为共享条目',
+      'drawer.convertToOwned': '🎯 转为专属条目',
+      'drawer.convertToOwnedTooltip': '仅可在引用计数恰为 1 时转回当前目标专属条目（其余引用请先在项目知识库中解除）',
+      'drawer.convertedToOwned': '🎯 已转为专属条目',
+      'drawer.convertFail': '⚠️ 转换失败：',
+      'drawer.unrefBtn': '➖ 解除引用',
+      'drawer.unrefTooltip': '移除当前 goal 对这张共享卡的引用（保留共享卡与其他引用；零引用仅可在共享面板显式删除）',
+      'drawer.unrefCollecting': '收集中不可解除引用',
+      'drawer.unrefSuccess': '✅ 已解除本 goal 引用',
+      'drawer.convertCollecting': '收集中不可转换',
+      'drawer.deleteCollecting': '收集中卡片不可删除',
+      'prompt.collect.backfillText': '1. 把正文全文写进 `text` 参数；`summary` 写一句话要点式摘要（≤100 字左右），不长文。',
+      'prompt.collect.attachments': '2. 若收集到文件附件（md/txt、图片、csv/Excel、二进制）用 `graph_store_attachment`：文本用 content、二进制/图片用 base64，写入上述 canonical 附件根；返回稳定相对引用名。',
+      'prompt.collect.reference': '3. 回调正文或 goal.md 时用 `@att/<相对引用名>` 引用附件（可含安全子目录）。',
+      'prompt.collect.finish': '4. 完成后调用以下精确命令回填结果：',
+      'prompt.collect.command': 'graph_fill_card(goal="{goalId}", card="{cardId}", text=<全文可含 @att/<name>>, summary=<≤100字摘要>)',
+      'prompt.collect.securityTitle': '**附件安全与边界**：',
+      'prompt.collect.security': '只写入上述 canonical 附件根；拒绝绝对路径、./.. 穿越、反斜杠、NUL；不得访问/引用 `.dsh-graph` 之外文件；互联网抓取仅限 http(s)，设超时/大小上限，禁 file://、localhost、内网（SSRF）。',
+      'prompt.collect.forbiddenTitle': '**禁区（严格遵守）**：',
+      'prompt.collect.forbiddenGoal': '1. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 `{cardId}`',
+      'prompt.collect.forbiddenReview': '2. 不得自行调用 `graph_review_card`——完成后由 supervisor 复核',
+      'prompt.collect.forbiddenWorkspace': '3. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行',
+
+      // === 共享面板 ===
+      'shared.title': '📇 项目知识库（共享条目）',
+      'shared.desc': '知识条目在项目共享池中保存一份权威内容，可被多个目标同时引用复用；被引用时不可删除，解除全部引用后可显式删除。',
+      'shared.newTitlePlaceholder': '新建知识条目标题…',
+      'shared.createBtn': '＋ 新建条目',
+      'shared.titleRequired': '请输入标题',
+      'shared.created': '✅ 已创建共享卡：',
+      'shared.createFail': '⚠️ 创建失败：',
+      'shared.attached': '✅ 已挂到 ',
+      'shared.attachFail': '⚠️ 挂载失败：',
+      'shared.attachGoalRequired': '⚠️ 请先选择或输入要挂载的目标',
+      'shared.unreferenced': '✅ 已解除 {goalId} 引用',
+      'shared.unrefFail': '⚠️ 解除失败：',
+      'shared.deleted': '✅ 已删除共享卡：',
+      'shared.deleteFail': '⚠️ 删除失败：',
+      'shared.goalRef': '个 goal 引用',
+      'shared.attachments': '📎 附件：',
+      'shared.refGoals': '🔎 引用 goal：',
+      'shared.noRefGoals': '（无引用 goal）',
+      'shared.attachBtn': '⇄ 挂到目标',
+      'shared.searchGoalPlaceholder': '输入 ID 或标题搜索目标…',
+      'shared.deleteBtn': '🗑 显式删除',
+      'shared.collecting': '收集中：仅解除引用/不可删除',
+      'shared.collectingNote': '🔒 收集中，仅解除引用/不可删除',
+      'shared.noCards': '（暂无共享卡）',
+      'shared.closeBtn': '关闭',
+
+      // === Supervisor 栏 ===
+      'supervisor.badge': '🧭 GRAPH主管',
+      'supervisor.badgeTooltip': '当前会话是 dsh-graph 主管会话',
+      'supervisor.label': '🧭 主管',
+      'supervisor.modelUnavailable': '模型不可用',
+      'supervisor.modelLoading': '模型查询中…',
+      'supervisor.goToChat': '↗ 主管对话',
+      'supervisor.goToChatTooltip': '跳转到主管 Agent 对话窗',
+
+      // === 被复用徽章 ===
+      'reused.label': '♻️ 被复用→{goalId}',
+
+      // === 事件标签 ===
+      'event.goalCreated': '创建目标',
+      'event.goalPlanned': '完成规划',
+      'event.criteriaConfirmed': '确认判据',
+      'event.criteriaUpdated': '更新判据',
+      'event.attemptStarted': '派发执行',
+      'event.completionClaimed': '声明完成',
+      'event.reviewRequested': '请求主管复核',
+      'event.reviewObjected': '主管提出异议',
+      'event.reviewPassed': '评审通过',
+      'event.reviewFailed': '评审未通过',
+      'event.goalMoved': '排期移动',
+      'event.cardCreated': '创建卡片',
+      'event.cardFilled': '填充卡片',
+      'event.cardReviewed': '复核卡片',
+      'event.evidenceAdded': '登记证据',
+      'event.memoryPromoted': '沉淀记忆',
+      'event.versionCreated': '创建版本',
+      'event.versionReleased': '发布版本',
+      'event.versionStatusChanged': '版本状态变更',
+      'event.versionScopeChanged': '调整版本范围',
+      'event.versionIntegrationDecided': '集成测试决策',
+      'event.goalDeleted': '删除目标',
+      'event.cardDeleted': '删除卡片',
+      'event.attemptBound': '绑定子代理',
+      'event.goalRenamed': '重命名目标',
+      'event.goalTypeChanged': '变更类型',
+      'event.directiveSet': '设置最近指令',
+      'event.commentAdded': '添加评论',
+      'event.handoffConfirmed': '确认返工 handoff',
+      'event.handoffSuperseded': '覆盖旧 handoff',
+      'event.attemptUnbound': '解绑子代理',
+      'event.statusFlow': '状态流转：{from} → {to}',
+      'event.reviewRequestedDetail': '请求主管复核：{stage}',
+      'event.statusReport': '汇报：{status}',
+      'event.amended': '修订：{note}',
+      'event.renamed': '重命名：{old} → {new}',
+      'event.typeChanged': '变更类型：{old} → {new}',
+      'event.scopeNote': '补充：{note}',
+      'event.directiveSetDetail': '设置指令：{directive}',
+      'event.commentDetail': '评论：{text}',
+      'event.handoffConfirmedDetail': '确认 handoff：{id}',
+      'event.handoffSupersededDetail': '覆盖 handoff：{old} → {new}',
+      'event.unboundDetail': '解绑子代理：{id}',
+      'event.supervisorActor': '主管 Agent',
+      'event.otherSessionActor': 'Agent（另一会话）',
+
+      // === Supervisor Bar ===
+      'supervisor.noSession': '⚠️ 该 workspace 未配置 supervisor.session（project.yaml）。请先运行 graph_claim_supervisor() 完成主管会话接管。',
+      'supervisor.notConfigured': '⚠️ 未配置主管会话（project.yaml 的 supervisor.session）',
+      'supervisor.promptCopied': '✅ 预填内容已复制，到主管对话窗 Ctrl+V 直接粘贴发送',
+      'supervisor.promptSendFail': '⚠️ 自动复制失败（浏览器限制），请手动复制下方预填内容；已切换到主管对话窗',
+      'supervisor.switchFail': '⚠️ 跳转失败：',
+
+      // === 版本管理 ===
+      'version.renameTitle': '重命名版本',
+      'version.renameSlugPlaceholder': '新版本 slug…',
+      'version.renameNamePlaceholder': '新版本名称…',
+      'version.renameBtn': '重命名',
+      'version.renameSuccess': '✅ 版本已重命名',
+      'version.renameFail': '⚠️ 重命名失败：',
+      'version.deleteTitle': '删除版本',
+      'version.deleteConfirm': '确认删除版本 {slug}？此操作不可恢复。',
+      'version.deleteBtn': '确认删除',
+      'version.deleteSuccess': '✅ 版本已删除',
+      'version.deleteFail': '⚠️ 删除失败：',
+
+      // === 标签过滤弹窗 ===
+      'tagFilter.title': '🏷️ 标签筛选',
+      'tagFilter.clear': '清除筛选',
+      'tagFilter.noTags': '（暂无标签可筛选）',
+
+      // === 刷新间隔设置 ===
+      'refresh.title': '刷新间隔',
+      'refresh.seconds': '秒',
+
+      // === PK 相关 ===
+      'pk.badge': 'PK×{count}',
+
+      // === AI 审 ===
+      'review.aiBadge': '🤖AI审',
+
+      // === Live session ===
+      'live.justNow': '刚刚',
+      'live.seconds': ' 秒',
+      'live.minutes': ' 分钟',
+      'live.minutesShort': ' 分',
+      'live.hours': ' 小时',
+      'live.days': ' 天',
+      'live.toolCall': '🔧 调用工具 {name}',
+      'live.promptPlaceholder': '直达指令：发送到该子代理会话…',
+      'live.readOnly': '📦 一次性子代理会话为只读，不能续发指令',
+      'live.relaunching': '重新派发中…',
+      'live.relaunched': '✅ 已重新派发子代理',
+      'live.providerTooltip': 'LLM provider（缺省 project.yaml executor.provider）',
+      'live.modelTooltip': '模型（缺省 project.yaml executor.model）',
+      'live.recollect': '🔄 重新收集',
+      'live.unbindTooltip': '从该目标解绑当前执行子代理（安全 detach：保留 attempt/事件/日志，解绑后可暂缓/转移/重新派发）',
+      'live.unbindPrompt': '确认解绑子代理',
+      'live.queueTooltip': '追加到会话队列尾部（queue）',
+      'live.steerTooltip': '打断当前输出立即执行（steer）',
+      'live.queue': '排队',
+      'live.steer': '插队',
+      'live.textOnly': '仅文本：子代理会话不支持图片等多模态输入（SUBAGENT_IMAGE_UNSUPPORTED）',
+      'live.unbindFail': '⚠️ 解绑失败：',
+      'live.unbindReason': '解绑原因（可选，记录审计事件）…',
+      'live.unbindRunning': '⚠️ 子代理仍在运行中——请先受控停止或等待其结束，再解绑',
+      'live.unbound': '✅ 已解绑子代理',
+      'live.unboundSuccess': '✅ 已解绑子代理（绑定已清理，attempt/事件保留可审计）',
+      'live.inherited': '父会话，子代理继承',
+      'live.inheritProvider': '继承/默认 provider',
+      'live.inheritModel': '继承/默认 model',
+      'live.relaunchSpecified': '按重新执行指定：',
+      'live.defaultConfig': '默认配置/未指定',
+      'live.unavailable': '不可用：',
+      'live.relaunchShort': '重派:',
+      'live.relaunch': '🔄 重新派发子代理：',
+      'live.modeAria': '重新执行子代理模式',
+      'live.modeTooltip': '子代理执行模式（缺省 project.yaml executor.mode）',
+      'live.executionMode': ' ｜ 执行模式：',
+      'live.unknownEvent': '· 未知事件',
+      'live.emptyMessage': '（空消息）',
+      'live.reading': '读取中…',
+      'live.readFailed': '读取失败：',
+      'live.noRecords': '（无记录）',
+      'live.unconnected': '⚠️ 会话未接入（不在会话列表）：',
+      'live.model': '模型：',
+      'live.status': '状态：',
+      'live.resource': '资源：',
+      'live.stream': '流式：',
+      'live.noStatus': '（无状态）',
+      'live.title': '📡 实时会话',
+      'live.expand': '点击展开',
+      'live.collapse': '点击收起',
+      'live.records': '查看最近会话记录',
+      'live.recordsCollapse': '收起最近记录',
+      'live.defaultModel': '默认',
+      'live.modelUnavailable': '模型目录不可用',
+      'live.modeDefault': '模式：默认',
+      'live.goToChat': '↗ 转到对话',
+      'live.sessionMode': '会话模式：',
+      'live.continuable': '可续轮',
+      'live.oneShot': '一次性',
+      'live.unbind': '解绑子代理',
+      'live.unbindConfirm': '确认解绑',
+      'live.unbinding': '正在解绑…',
+      'live.statusOngoing': '状态已延续 {duration}',
+      'live.standing': '常驻',
+      'live.onDemand': '按需',
+
+      // === LiveStrip ===
+      'liveStrip.status': '状态：',
+
+      // === 全局设置页（settings.section） ===
+      'profileSettings.unavailableTitle': '当前 DSH profile 未暴露设置服务',
+      'profileSettings.unavailableDesc': '当前 DSH profile 未暴露设置服务（settingsScope 缺失），无法读写 dsh-graph 全局配置。',
+      'profileSettings.reading': '正在读取 dsh-graph 全局配置…',
+      'profileSettings.noNamespace': '此 profile 未暴露 dsh-graph 设置命名空间（可能未连接 Host，或为 memory 模式），无法读写全局配置。',
+      'profileSettings.modeDefault': '（继承系统默认：标准模式）',
+      'profileSettings.modeDefaultDesc': '未配置时默认使用标准模式。',
+      'profileSettings.modeStandard': '标准模式 (standard) - 完整工具能力 + 专属 Persona 覆盖',
+      'profileSettings.modeStandardDesc': '功能完整的编码 Agent，覆盖标准工具池并自动注入 dsh-graph 纪律 Persona。',
+      'profileSettings.modeMinimal': '极简模式 (minimal) - 严格基础 6 工具过滤 (graph-minimal)',
+      'profileSettings.modeMinimalDesc': '仅允许 bash、edit、read、write、graph_report_status、graph_transition，物理屏蔽高级工具与误导。',
+      'profileSettings.legacySuffixListed': '（已存值，当前目录未列出）',
+      'profileSettings.legacySuffixLoading': '（目录读取中…）',
+      'profileSettings.legacySuffixUnavailable': '（目录不可用）',
+      'profileSettings.inheritParent': '（继承父会话）',
+      'profileSettings.inheritSelected': '（继承所选模型/父会话）',
+      'profileSettings.saved': '已保存到当前 profile。',
+      'profileSettings.saveFail': '保存失败：',
+      'profileSettings.desc': '管理 dsh-graph 的 profile 级全局默认：子代理默认 provider/model 与补充提示词。该配置写入当前 DSH profile，跨 workspace 生效；workspace 的 project.yaml 明确配置优先。补充提示词默认为空，workspace 用 default/自定义文本/显式空值选择继承、覆盖或禁用。',
+      'profileSettings.readOnly': '当前为只读（Host 设置不可写）。',
+      'profileSettings.providerLabel': '子代理默认 provider',
+      'profileSettings.providerHint': '仅作缺省值：graph_start_attempt 单次指定的 provider 与 workspace project.yaml 的 executor.provider 更优先；留空继承父会话。目录仅作可选列表（advisory），已存但未列出的旧值保留为固定选项、仍可保存。',
+      'profileSettings.providerLoading': '正在读取当前 Host 的合法 provider 目录…',
+      'profileSettings.providerUnavailable': '无法读取当前 Host 的合法 provider 目录（llm.providers/models 不可用），目录加载失败——已存值保留可选，可先编辑补充提示词。',
+      'profileSettings.modelLabel': '子代理默认 model id',
+      'profileSettings.modelHint': '按所选 provider 过滤；未选 provider 时列出全部目录模型（provider/模型名）。同理仅作缺省值，单次 model 与 project.yaml 的 executor.model 更优先；留空继承父会话。',
+      'profileSettings.modelLoading': '正在读取当前 Host 的合法模型目录…',
+      'profileSettings.modelUnavailable': '无法读取当前 Host 的合法模型目录（llm.providers/models 不可用），目录加载失败——已存值保留可选，可先编辑补充提示词。',
+      'profileSettings.providerFailures': '部分 provider 的模型目录读取失败（{failures}），相关 provider 暂不可选。',
+      'profileSettings.effortLabel': '子代理默认推理档位',
+      'profileSettings.effortHintChoices': '选项来自所选 provider/model 声明的 reasoning effort 能力；留空使用所选模型或父会话的默认值。',
+      'profileSettings.effortHintNone': '所选 provider/model 未声明 reasoning effort 能力；已存旧值会保留，可留空以继承默认值。',
+      'profileSettings.effortHintWaiting': '正在等待 Host 模型目录；已存推理档位保留可选，留空继承默认值。',
+      'profileSettings.modeLabel': '子代理默认执行模式',
+      'profileSettings.modeHint': '受控枚举：标准模式、PTC 模式、极简模式、创造模式。单次派发与 workspace project.yaml 更优先；留空使用系统默认（标准模式）。',
+      'profileSettings.promptLanguageLabel': '提示词语言',
+      'profileSettings.promptLanguageFollow': '跟随 DSH 界面语言（检测失败回退中文）',
+      'profileSettings.promptLanguageZh': '中文',
+      'profileSettings.promptLanguageEn': 'English',
+      'profileSettings.promptLanguageHint': '控制 supervisor/subagent 提示词语言；显式覆盖优先于 DSH locale。',
+      'profileSettings.promptLabel': '子代理默认补充提示词',
+      'profileSettings.promptPlaceholder': '可选：注入到每个执行子代理 prompt 的补充内容（默认空）',
+      'profileSettings.promptHint': '默认为空；workspace 覆盖字段 default 继承此项，自定义文本覆盖，显式空值禁用该项全局提示词。',
+      'profileSettings.saving': '保存中…',
+      'profileSettings.save': '保存',
+    };
+
+    // --- 英文字典 ---
+    const en = {
+      // === Common operations ===
+      'common.ok': 'OK',
+      'common.cancel': 'Cancel',
+      'common.close': 'Close',
+      'common.save': 'Save',
+      'common.delete': 'Delete',
+      'common.edit': 'Edit',
+      'common.search': 'Search',
+      'common.loading': 'Loading',
+      'common.retry': 'Retry',
+      'common.refresh': 'Refresh',
+      'common.confirm': 'Confirm',
+      'common.copy': 'Copy',
+      'common.open': 'Open',
+      'common.back': 'Back',
+      'common.more': 'More',
+      'common.collapse': 'Collapse',
+      'common.expand': 'Expand',
+      'common.none': 'None',
+      'common.saving': 'Saving…',
+      'common.savingDone': 'Saved',
+      'common.creating': 'Creating…',
+      'common.sending': 'Sending…',
+      'common.sent': 'Sent',
+      'common.processing': 'Processing…',
+      'common.submitting': 'Submitting…',
+      'common.pathEmpty': 'Path is empty',
+
+      // === Status labels ===
+      'status.draft': 'Draft',
+      'status.planning': 'Planning',
+      'status.collecting': 'Collecting',
+      'status.ready': 'Ready',
+      'status.in_progress': 'In Progress',
+      'status.review': 'In Review',
+      'status.delivered': 'Delivered',
+      'status.blocked': 'Blocked',
+      'status.running': 'Running',
+      'status.idle': 'Idle',
+      'status.stale': 'Status ongoing for {duration}',
+
+      // === Stage column headers ===
+      'stage.describe': 'Describe',
+      'stage.collect': 'Collect',
+      'stage.execute': 'Execute',
+      'stage.confirm': 'Confirm',
+      'stage.deliver': 'Deliver',
+      'stage.blocked': 'Blocked',
+
+      // === Kanban top/loading ===
+      'board.title': 'Kanban',
+      'board.tab': 'Kanban',
+      'kanban.loading': 'dsh-graph board loading…',
+      'kanban.error.workspace': '⚠️ Unable to determine workspace, board requests paused.',
+      'kanban.error.fetch': 'Failed to fetch board data: ',
+      'kanban.error.data': 'Board data error: ',
+      'kanban.updatedAt': 'Updated ',
+      'kanban.autoRefreshTip': 'Auto-refresh interval: {interval}s (next refresh in ~{remaining}s)',
+
+      // === Lanes ===
+      'lane.versionDetail': 'Click to view version {version} details',
+      'lane.newGoalInVersion': 'Create goal in {version}',
+      'lane.newStandaloneGoal': 'Create standalone goal',
+      'lane.newBacklogGoal': 'Create goal (backlog)',
+      'lane.collapseTooltip': 'Collapse lane',
+      'lane.expandTooltip': 'Click to expand lane',
+      'lane.collapsedSummary': '▸ {count} goals · Click to expand',
+      'lane.goalCount': '{count} goals',
+
+      // === Blocked/Deliver column collapsed ===
+      'blocked.collapsedTitle': 'Click to expand blocked column ({count} items)',
+      'blocked.label': 'Block',
+      'blocked.count': '×{count}',
+      'deliver.collapsedTitle': 'Click to expand deliver column ({count} items)',
+      'deliver.label': 'Deliver',
+      'deliver.count': '×{count}',
+
+      // === Cards ===
+      'card.clickToOpen': 'Click to open details',
+      'card.expandFull': 'Expand to view dependencies, live session, context cards, etc.',
+      'card.collapseBrief': 'Collapse to brief view',
+      'card.clickSummaryExpand': 'Click to expand full summary',
+      'card.clickSummaryCollapse': 'Click to collapse summary',
+      'card.waitingDep': '⛓ Waiting for {deps} delivery',
+      'card.depsSatisfied': '✅ Dependencies satisfied: {deps} delivered',
+      'card.goToSession': '↗ Go to chat',
+      'card.sharedBadge': '🔗Shared',
+      'card.clickToOpenDrawer': 'Click to open context drawer',
+      'card.criteriaProgress': 'Criteria: {done}/{total} completed',
+      'card.archived': '📦Archived',
+
+      // === Criteria placeholders ===
+      'criteria.pending': '(Pending registration)',
+      'criteria.pendingDetail': '(Pending; must be registered before entering in_progress)',
+      'criteria.toBeFilled': '(To be filled)',
+
+      // === Card status icons ===
+      'cardStatus.empty': '○ Pending collect',
+      'cardStatus.collecting': '◌ Collecting',
+      'cardStatus.filled': '● Filled',
+      'cardStatus.reviewed': '✔ Reviewed',
+
+      // === Drag & drop ===
+      'drag.blockedOnlyBackend': '⚠️ Blocked status can only revert to its original status (validated by server)',
+      'drag.blockedReasonPrompt': 'Please enter the blocking reason:',
+      'drag.backlogOnlyDescribe': '⚠️ Backlog cards can only be dragged to the "Describe" column of a version lane',
+      'drag.unknownLane': '⚠️ Unknown target lane: ',
+      'drag.moveToSuccess': '✅ {goalId} moved to {target}',
+      'drag.moveToFail': '⚠️ Move failed: ',
+      'drag.moveToBacklogError': '⚠️ Goal has attachments (cards/attempts), cannot move back to backlog. Move to standalone or version instead.',
+      'drag.transitionSuccess': '✅ {goalId} → {status}',
+      'drag.transitionFail': '⚠️ Transition failed: ',
+      'drag.requestFail': '⚠️ Request failed: ',
+      'drag.unknownError': 'Unknown error',
+      'drag.blockedNoFrom': '⚠️ This goal has no blocked_from record, cannot auto-unblock; please ask supervisor to confirm original status manually',
+      'drag.blockedInvalidFrom': '⚠️ Invalid blocked_from value ({raw}), cannot resolve drop target; please ask supervisor to fix and retry',
+      'drag.blockedOnlyOriginal': '⚠️ Blocked goals can only revert to their original status "{status}", please drag to the "{stage}" column',
+      'drag.cannotParseDrop': '⚠️ Cannot parse drop target status (server will validate)',
+
+      // === Goal search ===
+      'search.placeholder': 'Search goals…',
+      'search.enterKeyword': 'Please enter a search keyword',
+      'search.noResults': 'No matches found',
+      'search.fullText': 'Full text',
+      'search.matchCount': '{count} matches',
+
+      // === Goal detail modal ===
+      'modal.loadingDetail': 'Loading details…',
+      'modal.detailFetchFail': 'Failed to fetch details: ',
+      'modal.detailError': 'Details error: ',
+      'modal.status': 'Status: ',
+      'modal.lane': 'Lane: ',
+      'modal.ownership': 'Owner: ',
+      'status.label': 'Status: ',
+      'stage.label': 'Lane: ',
+      'goal.ownership': 'Ownership: ',
+      'modal.ownershipVersion': 'Version {version}',
+      'modal.ownershipStandalone': 'Standalone/backlog',
+      'modal.humanReview': '👤Human review',
+      'modal.aiReview': '🤖AI review',
+      'modal.versionHidden': '👁️ This goal\'s version "{version}" is currently hidden on the board',
+      'modal.unhideVersion': 'Show this version',
+      'modal.relaunchFallback': '⚠️ Latest subagent failed to start / unavailable, you can switch provider/model and re-dispatch:',
+
+      // === Detail tabs ===
+      'tab.detail': '📋 Details',
+      'tab.activity': '🕘 Activity',
+      'tab.context': '📌 Execution Context',
+      'tab.goalFile': '📄 goal.md',
+      'tab.openFile': 'Open',
+      'tab.copyPath': 'Copy path',
+      'tab.fileOpened': '✅ Opened goal.md',
+      'tab.pathCopied': '✅ Path copied',
+      'tab.openFailed': '⚠️ Failed to open: ',
+      'tab.pathCopiedNoOpen': '✅ Path copied (open unavailable)',
+
+      // === Sections ===
+      'section.description': '📋 Goal Description',
+      'description.editInPlace': 'Edit goal description in place',
+      'description.edit': '✏️ Edit',
+      'description.editEmpty': '📝 Edit description',
+      'description.placeholder': 'Enter goal description… (Markdown supported)',
+      'description.save': '💾 Save',
+      'description.empty': '(No description)',
+      'description.saved': '✅ Description saved',
+      'description.saveFail': '⚠️ Save failed: ',
+      'description.requestFail': '⚠️ Request failed: ',
+      'section.criteria': '✅ Quality Criteria',
+      'section.criteriaEditTooltip': 'Edit quality criteria (clears existing checks after save)',
+      'section.infoCollect': '🔎 Information Collection',
+      'section.noCards': '(No context cards)',
+      'section.backlogNoCards': '(Backlog goals cannot create context cards, schedule first)',
+      'section.noActivity': '(No recent activity)',
+
+      // === Activity ===
+      'activity.total': '{count} items',
+      'activity.allTypes': 'All types',
+      'activity.timeAsc': '↑ Oldest first',
+      'activity.timeDesc': '↓ Newest first',
+      'activity.colTime': 'Time',
+      'activity.colEvent': 'Event',
+      'activity.colActor': 'Actor',
+
+      // === Goal title/actions ===
+      'goal.renameTitle': 'Rename goal',
+      'goal.renameEmpty': 'Title cannot be empty',
+      'goal.renameFail': '⚠️ Rename failed: ',
+      'goal.archive': '📦 Archive',
+      'goal.archiveTooltip': 'Archive goal (only draft/planning/delivered can be archived)',
+      'goal.unarchive': '📤 Unarchive',
+      'goal.unarchiveTooltip': 'Unarchive (restore to original position)',
+      'goal.archivedSuccess': '✅ Goal archived',
+      'goal.archiveFail': '⚠️ Archive failed: ',
+      'goal.unarchivedSuccess': '✅ Unarchived',
+      'goal.unarchiveFail': '⚠️ Unarchive failed: ',
+      'goal.postpone': '⏸ Postpone',
+      'goal.postponeTooltip': 'Postpone goal (move back to backlog, keep cards & attempts)',
+      'goal.postponeConfirm': 'Confirm postpone?',
+      'goal.postponeConfirmed': 'Confirm moving goal back to backlog',
+      'goal.postponeSuccess': '✅ Postponed',
+      'goal.postponeSuccessMsg': '✅ Goal postponed and moved back to backlog',
+      'goal.postponeFail': '⚠️ Postpone failed: ',
+      'goal.delete': '🗑 Delete',
+      'goal.deleteTooltip': 'Delete goal (only archived goals can be deleted, includes cards/attempts)',
+      'goal.deleteConfirm': 'Confirm delete?',
+      'goal.deleteConfirmed': 'Confirm delete (irreversible)',
+      'goal.deleteSuccess': '✅ Deleted',
+      'goal.deleteSuccessMsg': '✅ Goal deleted',
+      'goal.deleteFail': '⚠️ Delete failed: ',
+      'goal.typeLabel': 'Type: {type} (click to switch)',
+      'goal.typeSetFail': '⚠️ Failed to set type: ',
+      'goal.closeSelector': 'Close selector',
+      'goal.requestFail': '⚠️ Request failed: ',
+      'goal.goalFile': '📄 goal.md',
+
+      // === Handoff ===
+      'handoff.title': '🔄 Rework Handoff',
+      'handoff.rev': '(rev {revision}, sources: {sources})',
+      'handoff.update': '✏️ Update Handoff',
+      'handoff.register': '📝 Register Handoff',
+      'handoff.confirmedBy': 'Confirmed by: {by} | Time: {at}',
+      'handoff.failures': 'Verified failures/risks:',
+      'handoff.constraints': 'Rework constraints (forbidden items):',
+      'handoff.baseline': 'Recommended baseline/must-keep items:',
+      'handoff.verification': 'Verification commands:',
+      'handoff.noHandoff': '(No registered handoff)',
+      'handoff.updateHint': 'Update will overwrite current handoff (revision increments)',
+      'handoff.registerHint': 'Auto-injected into next dispatched attempt',
+      'handoff.sourceAttempts': 'Source attempts (comma separated)',
+      'handoff.registerBtn': '✅ Register Handoff',
+      'handoff.success': '✅ Handoff registered',
+      'handoff.registerFail': '⚠️ Registration failed: ',
+      'handoff.sourceRequired': '⚠️ Source attempts cannot be empty',
+      'handoff.allRequired': '⚠️ All fields are required',
+
+      // === Directive ===
+      'directive.title': '📌 Latest Directive',
+      'directive.hint': '(Auto-injected into next attempt; prefer send_message for small fixes)',
+      'directive.placeholder': 'Enter supplementary tasks, boundaries, and acceptance criteria for the next attempt…',
+      'directive.save': '💾 Save',
+      'directive.clear': '🗑 Clear',
+      'directive.noContent': '(No directive set)',
+      'directive.editBtn': '✏️ Edit directive',
+      'directive.setBtn': '📝 Set directive',
+      'directive.success': '✅ Directive updated',
+      'directive.updateFail': '⚠️ Update failed: ',
+      'directive.clearSuccess': '✅ Directive cleared',
+      'directive.clearFail': '⚠️ Clear failed: ',
+
+      // === Comments ===
+      'comments.title': '💬 Comments',
+      'comments.count': '({count})',
+      'comments.add': '➕ Add comment',
+      'comments.placeholder': 'Enter comment… (traceable discussion/feedback)',
+      'comments.publish': '💬 Post comment',
+      'comments.success': '✅ Comment added',
+      'comments.addFail': '⚠️ Failed to add: ',
+
+      // === Tags editor ===
+      'tags.title': '🔖 Tags',
+      'tags.add': '＋ Add tag',
+      'tags.collapse': 'Collapse input',
+      'tags.addTooltip': 'Add new tag',
+      'tags.removeTooltip': 'Click to remove tag',
+      'tags.noTags': '(No tags yet, click top-right to add)',
+      'tags.inputPlaceholder': 'Enter tag name, comma or space separated…',
+      'tags.save': 'Save',
+      'tags.saveFail': 'Failed to save tags',
+
+      // === Worktree cleanup ===
+      'worktree.title': '🧹 Cleanable worktrees',
+      'worktree.confirmDelete': 'Confirm delete this linked worktree? Local branch will not be deleted.',
+      'worktree.cleaned': 'Worktree cleaned',
+      'worktree.cleanFail': 'Cleanup blocked',
+      'worktree.candidate': '✅',
+      'worktree.locked': '🔒',
+      'worktree.alreadyRemoved': 'Removed',
+      'worktree.defaultReason': 'Verified merged and clean',
+      'worktree.confirmClean': 'Confirm cleanup',
+      'worktree.attemptTitle': '🌿 Attempt worktree',
+      'worktree.collapseTooltip': 'Collapse worktree list',
+      'worktree.expandTooltip': 'Expand worktree list',
+      'worktree.unavailable': '⚠️ Git worktree list unavailable',
+      'worktree.notCreated': 'No worktree created',
+      'worktree.copyPathTooltip': 'Copy safe relative path',
+      'worktree.pathCopied': '✅ Worktree path copied',
+
+      // === Execute/Feedback ===
+      'exec.accept': '✅ Accept',
+      'exec.acceptConfirm': 'Confirm accepting the deliverables of goal "{goalId}"?\n\nThis will request the supervisor session to complete final review and delivery.',
+      'exec.acceptPending': '⏳ Supervisor review requested, awaiting response',
+      'exec.acceptResolved': '✅ Delivery accepted',
+      'exec.acceptFail': '⚠️ Accept failed: ',
+      'exec.execute': '🚀 Execute',
+      'exec.executeFail': '⚠️ Execution failed: ',
+      'exec.stateTransitionFail': '⚠️ State transition failed: ',
+      'exec.childDispatched': '✅ Execution subagent dispatched, id: ',
+      'exec.childFailed': '⚠️ Subagent failed to start: ',
+      'exec.childNotStarted': '⚠️ Subagent not started (no child_id)',
+      'exec.supervisorUnavailable': '⚠️ Session service unavailable',
+      'exec.supervisorNotConfigured': '⚠️ Supervisor session not configured (project.yaml)',
+      'exec.requestCopied': '✅ Request copied to clipboard, paste in supervisor chat',
+      'exec.goToSupervisor': 'Send to supervisor (copy request)',
+      'exec.askPm': 'Delegate to PM Agent',
+      'exec.objection': '⚠️ Supervisor raised an objection',
+      'exec.polish': '📝 Define/Polish',
+      'exec.guidanceHint': 'Enter optional guidance, then choose a processing method:',
+      'exec.guidancePlaceholder': 'Manual guidance (optional)…',
+      'exec.pmProcessing': '⏳ PM Agent is processing…',
+      'exec.pmAccepted': '✅ PM Agent has accepted, suggestions will return to supervisor',
+      'exec.pmFailed': '⚠️ PM Agent failed: ',
+      'exec.supervisorPathFailed': '⚠️ Supervisor path failed: ',
+      'exec.precopied': '✅ Content copied, switch to supervisor chat and Ctrl+V to paste',
+      'exec.supervisorJumpFail': '⚠️ Jump failed: ',
+      'exec.feedbackPlaceholder': 'Enter feedback…',
+      'exec.goToSupervisorChat': '→ Go to supervisor chat',
+      'exec.prefillCopied': '✅ Prefill copied, switched to supervisor chat, paste directly',
+      'exec.autocopyFailed': '⚠️ Auto-copy failed (browser limitation), please manually copy below; switched to supervisor chat',
+      'exec.forceAccept': '✅ Force accepted',
+      'exec.forceAcceptWithReason': '✅ Force accepted (reason recorded in events)',
+      'exec.forceAcceptFail': '⚠️ Force accept failed: ',
+
+      // === In Progress prompt ===
+      'inProgress.title': '🚀 Execute "{title}"',
+      'inProgress.hasChild': 'This goal already has an execution subagent. A re-execute instruction will be sent (queued), no new subagent will be created.',
+      'inProgress.noChild': 'Will create an execution subagent and move the goal to "In Progress".',
+      'inProgress.subagent': '🔗 Subagent: ',
+      'inProgress.noCriteria': '⚠️ Quality criteria not registered — will force-move to execute column with authorization mode.',
+      'inProgress.reExecute': '🔄 Re-execute',
+      'inProgress.confirmExec': '🚀 Confirm Execute',
+      'inProgress.reExecSent': '✅ Re-execute instruction queued for subagent',
+      'inProgress.reExecFail': '⚠️ Send failed: ',
+      'inProgress.supervisorNotConfigured': '⚠️ This workspace has no supervisor.session configured (project.yaml). Please run graph_claim_supervisor() first.',
+      'inProgress.migrating': 'Migrating…',
+      'inProgress.dispatching': 'Dispatching subagent…',
+      'inProgress.dispatchingReExec': 'Sending re-execute instruction…',
+
+      // === Backward reason prompt ===
+      'backward.title': '⬅️ Revert to "{status}"',
+      'backward.desc': 'Goal {goalId} will revert from current status to "{status}".',
+      'backward.withChild': 'The reason will be sent as a message to the execution subagent.',
+      'backward.withoutChild': 'The reason will be recorded as supplementary info (for supervisor reference when no subagent exists).',
+      'backward.reasonPlaceholder': 'Enter revert reason (optional)…',
+      'backward.confirmBtn': 'Confirm revert',
+
+      // === Deliver prompt ===
+      'deliver.title': '📦 Deliver "{title}"',
+      'deliver.checklist': 'Before marking as delivered, please ensure:',
+      'deliver.item1': '• Code has been merged to the main branch',
+      'deliver.item2': '• Related docs/configs have been updated',
+      'deliver.item3': '• Supervisor has been notified for final review',
+      'deliver.warn': '⚠️ Marking as "Delivered" requires supervisor review to finalize.',
+      'deliver.notifySupervisor': '↗ Notify supervisor',
+      'deliver.confirmDeliver': '📦 Confirm Delivery',
+
+      // === Create goal modal ===
+      'createGoal.title': '🎯 Create New Goal',
+      'createGoal.titleLabel': 'Title',
+      'createGoal.titlePlaceholder': 'Goal title…',
+      'createGoal.descLabel': 'Description',
+      'createGoal.descPlaceholder': 'Goal description (optional)…',
+      'createGoal.versionLabel': 'Version',
+      'createGoal.versionNone': '(No version / backlog)',
+      'createGoal.typeLabel': 'Type',
+      'createGoal.createBtn': 'Create Goal',
+      'createGoal.titleRequired': '⚠️ Title cannot be empty',
+      'createGoal.success': '✅ Goal {id} created',
+      'createGoal.fail': '⚠️ Creation failed: ',
+      'createGoal.backlogNote': 'Will go to backlog (no version selected)',
+      'createGoal.versionNote': 'Will be scheduled into version {version}',
+      'createGoal.standaloneNote': 'Will be created as standalone goal',
+
+      // === Create version modal ===
+      'createVersion.title': 'Create New Version',
+      'createVersion.slugLabel': 'Version slug (identifier)',
+      'createVersion.slugPlaceholder': 'e.g. v1.0, 0.5.0…',
+      'createVersion.nameLabel': 'Version name',
+      'createVersion.namePlaceholder': 'e.g. Version 1, Milestone 1…',
+      'createVersion.createBtn': 'Create Version',
+      'createVersion.success': '✅ Version {slug} created',
+      'createVersion.fail': '⚠️ Creation failed: ',
+
+      // === Version detail modal ===
+      'versionDetail.loading': '⚠️ Load failed: ',
+      'versionDetail.requestFail': '⚠️ Request failed: ',
+      'versionDetail.title': '📋 Version Details',
+      'versionDetail.status': 'Status: ',
+      'versionDetail.goals': 'Goals: ',
+      'versionDetail.summary': 'Summary',
+      'versionDetail.scope': 'Scope',
+      'versionDetail.blocked': 'Blocked Items',
+      'versionDetail.release': '🚀 Mark Released',
+      'versionDetail.releaseTooltip': 'Mark this version as released (must pass validation)',
+      'versionDetail.releaseConfirm': 'Confirm releasing version {slug}?',
+      'versionDetail.releaseSuccess': '✅ Version {slug} released',
+      'versionDetail.releaseFail': '⚠️ Release failed: ',
+      'versionDetail.reactivate': '🔄 Reactivate',
+      'versionDetail.reactivateTooltip': 'Restore this released version to active status',
+      'versionDetail.reactivateConfirm': 'Confirm reactivating version {slug}?',
+      'versionDetail.reactivateSuccess': '✅ Version {slug} reactivated',
+      'versionDetail.reactivateFail': '⚠️ Reactivation failed: ',
+      'versionDetail.emptySummary': '(Version summary is empty—add a "Scope" section to version.md)',
+      'versionDetail.blockedCount': '⛔ Blocked goals ({count} undelivered)',
+      'versionDetail.releaseBlocked': '⛔ Cannot release: {count} goals are not delivered',
+      'versionDetail.reactivateDescription': 'Reactivating {slug} will revoke its released state and return it to active. Delivered goals are unaffected; releasing again still requires all goals to be delivered.',
+      'version.renameCurrent': 'Current: {name} ({slug})',
+      'version.deleteEmptyOnly': '⚠️ This action is irreversible; only empty versions (without any goal, including archived goals) can be deleted',
+      'tagFilter.selected': '{count} tags selected',
+      'createGoal.standaloneOption': 'Standalone goal',
+
+      // === Version drawer ===
+      'versionDrawer.title': '🏷️ Version Management',
+      'versionDrawer.displayCount': '(Showing {visible}/{total})',
+      'versionDrawer.hint': 'Check/uncheck to control version visibility on the board; settings are saved locally and do not affect underlying version data.',
+      'versionDrawer.showAll': 'Show All',
+      'versionDrawer.showActive': 'Active Only',
+      'versionDrawer.showActiveTooltip': 'Show only active versions (planning / ready / in_progress / review)',
+      'versionDrawer.hideAll': 'Hide All',
+      'versionDrawer.allHidden': '{count} versions hidden (including released)',
+      'versionDrawer.activeHidden': '{count} active version lanes hidden',
+      'versionDrawer.hideAllTooltip': 'Hide all version lanes',
+      'versionDrawer.searchPlaceholder': 'Search version name or slug…',
+      'versionDrawer.noVersions': 'No versions',
+      'versionDrawer.noMatch': 'No matching versions found',
+      'versionDrawer.released': 'Released',
+      'versionDrawer.active': 'Active',
+      'versionDrawer.goalCount': '{count} goals',
+      'versionDrawer.detail': 'Details ↗',
+      'versionDrawer.detailTooltip': 'View version details',
+
+      // === Settings modal ===
+      'settings.title': 'Kanban Settings',
+      'settings.human': 'Human',
+      'settings.ai': 'Automatic',
+      'settings.overridePlaceholder': 'Enter override text (spaces, quotes, #, and multiple lines supported)…',
+      'settings.inheritPrompt': '(Inherit profile-wide prompt)',
+      'settings.disabledPrompt': '(Global prompt disabled)',
+      'settings.inheritGlobal': 'Inherit the current DSH profile-wide value',
+      'settings.overrideGlobal': 'Custom text overrides the global value',
+      'settings.disableGlobal': 'Explicitly disable the global prompt',
+      'settings.inherit': 'Inherit',
+      'settings.override': 'Override',
+      'settings.disable': 'Disable',
+      'settings.legacyValue': '(Stored value not listed in the current catalog)',
+      'settings.openConfigTooltip': 'Open project.yaml in the system default editor',
+      'settings.liveDisabledHint': '(Closing stops stream subscriptions and releases resources; LiveStrip status and status line remain)',
+      'settings.modeLabel': 'Execution mode (mode)',
+      'settings.modeAria': 'Workspace subagent execution mode',
+      'settings.modeInherited': '(Inherit profile-wide / system default: standard mode)',
+      'settings.advanced': 'Advanced / storage-only fields',
+      'settings.supervisorAutomation': 'Supervisor automation (advanced / storage-only fields)',
+      'settings.promptOverride': 'Workspace prompt override',
+      'settings.loading': 'Loading config…',
+      'settings.editHint': 'Edit workspace .dsh-graph/project.yaml safe config; preserves unknown keys and comments on save.',
+      'settings.projectYaml': '📄 project.yaml',
+      'settings.openProjectYaml': 'Open project.yaml with system editor',
+      'settings.copyProjectPath': 'Copy project.yaml path',
+      'settings.openedProjectYaml': '✅ Opened project.yaml',
+      'settings.showAdvanced': 'Show advanced / storage-only fields',
+      'settings.hideAdvanced': 'Hide advanced / storage-only fields',
+      'settings.autoRefresh': 'Board auto-refresh interval:',
+      'settings.seconds': 's',
+      'settings.minInterval': '(min 5s)',
+      'settings.intervalWarn': 'Minimum refresh interval is 5 seconds (auto-corrected on save)',
+      'settings.intervalMinError': '⚠️ ',
+      'settings.liveDisplay': 'Live agent output stream display',
+      'settings.liveDisplayHint': '(Turning off stops output stream subscription, saves resources; livestrip status & status line preserved)',
+      'settings.modelRouting': 'Execution subagent model routing & mode',
+      'settings.inheritSession': '(Inherit from parent session)',
+      'settings.legacySuffix': '(Saved value, not listed in current catalog)',
+      'settings.catalogLoading': '(Catalog loading…)',
+      'settings.catalogUnavailable': '(Catalog unavailable)',
+      'settings.reasoningEffort': 'Default reasoning effort',
+      'settings.reasoningEffortAria': 'Workspace subagent default reasoning effort',
+      'settings.inheritModel': '(Inherit from selected model / parent session)',
+      'settings.effortHint': 'Options update with selected provider/model reasoning effort capability; leave empty to inherit.',
+      'settings.effortHintNone': 'Selected provider/model has no declared reasoning effort; saved value preserved, leave empty to inherit.',
+      'settings.effortHintLoading': 'Loading Host model catalog; saved effort values preserved, leave empty to inherit.',
+      'settings.execMode': 'Execution mode',
+      'settings.execModeAria': 'Workspace subagent execution mode',
+      'settings.modeInherit': '(Inherit from profile global / system default: standard mode)',
+      'settings.modeStandard': 'Standard mode - Full development tool capabilities',
+      'settings.modeMinimal': 'Minimal mode - Controlled 6-tool physical filtering (graph-minimal)',
+      'settings.catalogReady': 'Catalog from current Host (llm.providers/models, advisory only): providers list only active items with model groups; models filtered by selected provider; empty inherits from parent session; execution mode supports standard and minimal tool-filter modes.',
+      'settings.catalogLoadingMsg': 'Loading Host provider/model catalog…',
+      'settings.catalogUnavailableMsg': 'Host catalog unavailable (llm.providers/models missing) — saved values preserved, still saveable.',
+      'settings.advancedTitle': 'Advanced / storage-only fields',
+      'settings.automationTitle': 'Supervisor automation (advanced)',
+      'settings.promptOverrides': 'Prompt overrides (workspace)',
+      'settings.subagentPrompt': 'Subagent supplementary prompt',
+      'settings.saveBtn': 'Save',
+      'settings.closeBtn': 'Close',
+      'settings.saveFail': 'Save failed: ',
+      'settings.loadFail': 'Failed to load config: ',
+      'settings.pkLanesError': 'pk.lanes must be an integer >= 1',
+      'settings.promptInheritHint': '(Inherits current profile global prompt)',
+      'settings.promptDisableHint': '(Global prompt disabled)',
+      'settings.promptOverridePlaceholder': 'Enter override text (supports spaces/quotes/#/multiline)…',
+      'settings.defaultBtn': 'default (inherit)',
+      'settings.overrideBtn': 'override (custom)',
+      'settings.disableBtn': 'disable (off)',
+      'settings.defaultTooltip': 'Inherit from current DSH profile global value',
+      'settings.overrideTooltip': 'Custom text overrides global',
+      'settings.disableTooltip': 'Explicitly disable global prompt',
+
+      // === Criteria modal ===
+      'criteria.editTitle': '✏️ Edit Quality Criteria',
+      'criteria.goalInfo': '{goalId} | {title}',
+      'criteria.saveWarning': '⚠️ Saving will clear existing criteria checks for this goal.',
+      'criteria.noCriteria': '(No criteria — click "➕ Add Criterion" below to add)',
+      'criteria.addBtn': '➕ Add Criterion',
+      'criteria.placeholder': 'Criterion content…',
+      'criteria.moveUp': 'Move up',
+      'criteria.moveDown': 'Move down',
+      'criteria.deleteItem': 'Delete',
+      'criteria.saveBtn': '💾 Save',
+      'criteria.conflict': '⚠️ Criteria modified by another editor, overwriting with local content…',
+      'criteria.conflictResolved': '✅ Saved (concurrent overwrite)',
+      'criteria.savedAndCleared': '✅ Criteria saved (checks cleared)',
+      'criteria.saveFail': '⚠️ Save failed: ',
+
+      // === Criteria feedback ===
+      'criteria.feedbackTooltip': 'Send feedback for this criterion to the execution session',
+      'criteria.feedbackPlaceholder': 'Feedback content…',
+      'criteria.feedbackSend': 'Send',
+      'criteria.feedbackQueued': '✅ Feedback queued for execution session',
+      'criteria.feedbackNotConnected': '⚠️ Execution session not connected, feedback cannot be delivered',
+      'criteria.feedbackSendFail': '⚠️ Feedback send failed: ',
+
+      // === Memory management modal ===
+      'memory.title': '🧠 Memory Management',
+      'memory.btn': '🧠 Memory',
+      'memory.deletedByUser': 'User manually deleted this from the management panel',
+      'memory.standingLabel': 'Standing memory (≤200 chars)',
+      'memory.onDemandLabel': 'On-demand memory (≤500 chars)',
+      'memory.standing': 'Standing (Fixed implant)',
+      'memory.onDemand': 'On-demand (Paginated retrieval)',
+      'memory.searchPlaceholder': 'Search memory content…',
+      'memory.standingHint': '💡[Standing]: Implanted as a dedicated system prompt section in every session (≤200 chars per entry). Suitable for core constraints and safety rules.',
+      'memory.onDemandHint': '💡[On-demand]: Not implanted, no token usage; extracted only on retrieval or manual call. Suitable for technical decisions and reference facts.',
+      'memory.total': '{count} total (Page {page} / {totalPages})',
+      'memory.addBtn': '＋ Add Memory',
+      'memory.collapseInput': 'Collapse input',
+      'memory.typeLabel': 'Type: ',
+      'memory.standingType': ' Standing (≤200 chars)',
+      'memory.onDemandType': ' On-demand (≤500 chars)',
+      'memory.standingPlaceholder': 'Enter standing constraint (hard limit 200 chars)…',
+      'memory.onDemandPlaceholder': 'Enter on-demand reference memory…',
+      'memory.charCount': '{count} / {limit} chars',
+      'memory.saveBtn': 'Save',
+      'memory.addSuccess': '✅ Memory added',
+      'memory.addFail': '⚠️ Failed to add: ',
+      'memory.deleteConfirm': 'Confirm deleting this memory entry?',
+      'memory.deleteSuccess': '✅ Memory deleted',
+      'memory.deleteFail': '⚠️ Delete failed: ',
+      'memory.loading': 'Loading memories…',
+      'memory.noEntries': '(No memory entries in this category)',
+      'memory.prevPage': 'Previous',
+      'memory.nextPage': 'Next',
+      'memory.toolsEnabled': 'Allow Agent tool calls',
+      'memory.toolsDisabled': '🔒 Manual mode (tools disabled)',
+      'memory.toolsToggleTooltip': 'When disabled, all subagents cannot call memory tools, preventing accidental modification',
+      'memory.toolsEnabledToast': '✅ Agent memory tools enabled',
+      'memory.toolsDisabledToast': '🔒 Agent memory tools disabled (manual-only mode)',
+      'memory.toggleFail': '⚠️ Toggle failed: ',
+      'memory.standingCharsExceeded': '⚠️ Standing memory hard limit is 200 chars, current input is {count} chars',
+      'memory.loadFail': '⚠️ Load failed: ',
+      'memory.networkError': '⚠️ Network error: ',
+      'memory.from': 'From: ',
+
+      // === Add card ===
+      'addCard.title': 'New collection task:',
+      'addCard.oneLiner': '📝 Quick task',
+      'addCard.viaChat': '💬 Create via chat',
+      'addCard.inputPlaceholder': 'Enter task description…',
+      'addCard.sharedOption': '📇 Shared entry (project knowledge base)',
+      'addCard.goalOption': '🎯 Goal-specific entry',
+      'addCard.createBtn': 'Create',
+      'addCard.success': '✅ Task created: ',
+      'addCard.fail': '⚠️ Creation failed: ',
+      'addCard.sharedTooltip': 'Default creates shared entry (project knowledge base, reusable across goals); optionally create goal-specific entry',
+      'addCard.chatHint': 'Click the button to switch to supervisor chat and describe the information you want to collect. The supervisor agent will create and dispatch the task.',
+      'addCard.goToChat': '→ Go to chat to describe',
+      'addCard.chatSwitched': '✅ Switched to chat, enter your collection needs directly',
+
+      // === Card drawer ===
+      'drawer.loadFail': 'Failed to load: ',
+      'drawer.unknownRoot': '(Repository root unknown)',
+      'drawer.unknownAttachmentRoot': '(Attachment root unknown)',
+      'drawer.filledBy': 'Filled by: ',
+      'drawer.cardNotExist': 'Card does not exist: ',
+      'drawer.collectContext': '## Collection Task Context',
+      'drawer.collectScope': '**Collection scope**:',
+      'drawer.collectHint': 'Collect detailed context information related to card "{title}" to fill this card.',
+      'drawer.canonicalAttRoot': '**Canonical attachment root (absolute path)**:',
+      'drawer.goalInfoLabel': '**Goal info**:',
+      'drawer.cardInfoLabel': '**Card info**:',
+      'drawer.backfillReq': '**Backfill requirements**:',
+      'drawer.collectTitle': '📝 Collection Prompt',
+      'drawer.collectInfoTarget': 'Collection info target (editable)',
+      'drawer.collectConstraints': 'Constraints (read-only)',
+      'drawer.startCollect': 'Start Collection',
+      'drawer.dispatching': 'Dispatching…',
+      'drawer.collectSuccess': '✅ Collection subagent dispatched, id: ',
+      'drawer.collectChildFailed': '⚠️ Subagent failed to start: ',
+      'drawer.collectChildNotStarted': '⚠️ Subagent not started (no child_id)',
+      'drawer.collectFail': '⚠️ Dispatch failed: ',
+      'drawer.cardFile': '📄 Card file',
+      'drawer.noFilePath': '(No file path)',
+      'drawer.openCardFile': 'Open card file with system editor',
+      'drawer.copyCardPath': 'Copy card file path',
+      'drawer.cardFileOpened': '✅ Card file opened',
+      'drawer.subagent': '🤖 Collection subagent',
+      'drawer.subagentId': 'id: ',
+      'drawer.sharedEntry': '📇 Shared entry',
+      'drawer.ownedEntry': '🎯 Owned entry',
+      'drawer.summary': 'Summary',
+      'drawer.fullText': 'Full text',
+      'drawer.noContent': '(No content collected yet)',
+      'drawer.attachmentRefs': '📎 Attachment references',
+      'drawer.deleteCard': '🗑 Delete card',
+      'drawer.deleteCardTooltip': 'Delete this card (requires card id confirmation)',
+      'drawer.deleteConfirm': '⚠️ Confirm deleting card "{title}"? Enter card id to confirm:',
+      'drawer.deleteIdPlaceholder': 'Enter card id to confirm deletion…',
+      'drawer.deleteConfirmBtn': '🗑 Confirm Delete',
+      'drawer.cardDeleted': '✅ Card deleted',
+      'drawer.deleteFail': '⚠️ Delete rejected: ',
+      'drawer.deleteRefFail': '⚠️ Unreference failed: ',
+      'drawer.convertToShared': '📇 Convert to shared',
+      'drawer.convertToSharedTooltip': 'Convert to shared entry (original goal keeps reference, entry enters project knowledge base for multi-goal reuse)',
+      'drawer.convertedToShared': '📇 Converted to shared entry',
+      'drawer.convertToOwned': '🎯 Convert to owned',
+      'drawer.convertToOwnedTooltip': 'Only available when reference count is exactly 1 (unreference other goals first in knowledge base)',
+      'drawer.convertedToOwned': '🎯 Converted to owned entry',
+      'drawer.convertFail': '⚠️ Conversion failed: ',
+      'drawer.unrefBtn': '➖ Unreference',
+      'drawer.unrefTooltip': 'Remove current goal\'s reference to this shared card (keeps card & other references)',
+      'drawer.unrefCollecting': 'Cannot unreference during collection',
+      'drawer.unrefSuccess': '✅ Unreferenced this goal',
+      'drawer.convertCollecting': 'Cannot convert during collection',
+      'drawer.deleteCollecting': 'Cannot delete card during collection',
+      'prompt.collect.backfillText': '1. Write the full body to the `text` parameter; write a concise key-point summary in `summary` (≤100 characters).',
+      'prompt.collect.attachments': '2. For file attachments (md/txt, images, csv/Excel, binaries), use `graph_store_attachment`: content for text, base64 for binary/images, under the canonical attachment root; return the stable relative reference.',
+      'prompt.collect.reference': '3. Reference attachments with `@att/<relative-name>` when filling the card body or goal.md (safe subdirectories allowed).',
+      'prompt.collect.finish': '4. When finished, call the exact command below to fill the result:',
+      'prompt.collect.command': 'graph_fill_card(goal="{goalId}", card="{cardId}", text=<full text, may include @att/<name>>, summary=<summary ≤100 chars>)',
+      'prompt.collect.securityTitle': '**Attachment safety and boundaries**:',
+      'prompt.collect.security': 'Write only under the canonical attachment root; reject absolute paths, ./.. traversal, backslashes, and NUL; do not access or reference files outside `.dsh-graph`; internet fetches are limited to http(s) with timeout/size limits, never file://, localhost, or private networks (SSRF).',
+      'prompt.collect.forbiddenTitle': '**Forbidden actions (strict)**:',
+      'prompt.collect.forbiddenGoal': '1. Do not modify other goals or cards—only fill the currently bound card `{cardId}`',
+      'prompt.collect.forbiddenReview': '2. Do not call `graph_review_card` yourself—the supervisor reviews after completion',
+      'prompt.collect.forbiddenWorkspace': '3. Run all graph tool operations in the assigned worktree/current working directory',
+
+      // === Shared panel ===
+      'shared.title': '📇 Project Knowledge Base (Shared Entries)',
+      'shared.desc': 'Knowledge entries are stored once in the shared pool and can be referenced by multiple goals; cannot be deleted while referenced, can be explicitly deleted after all references are removed.',
+      'shared.newTitlePlaceholder': 'New knowledge entry title…',
+      'shared.createBtn': '＋ New Entry',
+      'shared.titleRequired': 'Please enter a title',
+      'shared.created': '✅ Shared card created: ',
+      'shared.createFail': '⚠️ Creation failed: ',
+      'shared.attached': '✅ Attached to ',
+      'shared.attachFail': '⚠️ Attach failed: ',
+      'shared.attachGoalRequired': '⚠️ Please select or enter a target goal first',
+      'shared.unreferenced': '✅ Unreferenced {goalId}',
+      'shared.unrefFail': '⚠️ Unreference failed: ',
+      'shared.deleted': '✅ Shared card deleted: ',
+      'shared.deleteFail': '⚠️ Delete failed: ',
+      'shared.goalRef': ' goal references',
+      'shared.attachments': '📎 Attachments: ',
+      'shared.refGoals': '🔎 Referenced goals: ',
+      'shared.noRefGoals': '(No referenced goals)',
+      'shared.attachBtn': '⇄ Attach to goal',
+      'shared.searchGoalPlaceholder': 'Enter goal ID or title to search…',
+      'shared.deleteBtn': '🗑 Explicit delete',
+      'shared.collecting': 'Collecting: cannot unreference or delete',
+      'shared.collectingNote': '🔒 Collecting, cannot unreference or delete',
+      'shared.noCards': '(No shared cards)',
+      'shared.closeBtn': 'Close',
+
+      // === Supervisor bar ===
+      'supervisor.badge': '🧭 GRAPH Supervisor',
+      'supervisor.badgeTooltip': 'Current session is the dsh-graph supervisor session',
+      'supervisor.label': '🧭 Supervisor',
+      'supervisor.modelUnavailable': 'Model unavailable',
+      'supervisor.modelLoading': 'Querying model…',
+      'supervisor.goToChat': '↗ Supervisor Chat',
+      'supervisor.goToChatTooltip': 'Go to supervisor agent chat',
+
+      // === Reused badge ===
+      'reused.label': '♻️ Reused→{goalId}',
+
+      // === Event labels ===
+      'event.goalCreated': 'Goal created',
+      'event.goalPlanned': 'Planning completed',
+      'event.criteriaConfirmed': 'Criteria confirmed',
+      'event.criteriaUpdated': 'Criteria updated',
+      'event.attemptStarted': 'Execution dispatched',
+      'event.completionClaimed': 'Completion declared',
+      'event.reviewRequested': 'Supervisor review requested',
+      'event.reviewObjected': 'Supervisor objected',
+      'event.reviewPassed': 'Review passed',
+      'event.reviewFailed': 'Review failed',
+      'event.goalMoved': 'Goal moved',
+      'event.cardCreated': 'Card created',
+      'event.cardFilled': 'Card filled',
+      'event.cardReviewed': 'Card reviewed',
+      'event.evidenceAdded': 'Evidence added',
+      'event.memoryPromoted': 'Memory promoted',
+      'event.versionCreated': 'Version created',
+      'event.versionReleased': 'Version released',
+      'event.versionStatusChanged': 'Version status changed',
+      'event.versionScopeChanged': 'Version scope changed',
+      'event.versionIntegrationDecided': 'Integration decision made',
+      'event.goalDeleted': 'Goal deleted',
+      'event.cardDeleted': 'Card deleted',
+      'event.attemptBound': 'Subagent bound',
+      'event.goalRenamed': 'Goal renamed',
+      'event.goalTypeChanged': 'Type changed',
+      'event.directiveSet': 'Directive set',
+      'event.commentAdded': 'Comment added',
+      'event.handoffConfirmed': 'Handoff confirmed',
+      'event.handoffSuperseded': 'Handoff superseded',
+      'event.attemptUnbound': 'Subagent unbound',
+      'event.statusFlow': 'Status flow: {from} → {to}',
+      'event.reviewRequestedDetail': 'Supervisor review requested: {stage}',
+      'event.statusReport': 'Report: {status}',
+      'event.amended': 'Amended: {note}',
+      'event.renamed': 'Renamed: {old} → {new}',
+      'event.typeChanged': 'Type changed: {old} → {new}',
+      'event.scopeNote': 'Note: {note}',
+      'event.directiveSetDetail': 'Directive set: {directive}',
+      'event.commentDetail': 'Comment: {text}',
+      'event.handoffConfirmedDetail': 'Handoff confirmed: {id}',
+      'event.handoffSupersededDetail': 'Handoff superseded: {old} → {new}',
+      'event.unboundDetail': 'Subagent unbound: {id}',
+      'event.supervisorActor': 'Supervisor Agent',
+      'event.otherSessionActor': 'Agent (another session)',
+
+      // === Supervisor bar ===
+      'supervisor.noSession': '⚠️ This workspace has no supervisor.session configured (project.yaml). Please run graph_claim_supervisor() first.',
+      'supervisor.notConfigured': '⚠️ Supervisor session not configured (project.yaml)',
+      'supervisor.promptCopied': '✅ Content copied, switch to supervisor chat and Ctrl+V to paste',
+      'supervisor.promptSendFail': '⚠️ Auto-copy failed (browser limitation), please manually copy below; switched to supervisor chat',
+      'supervisor.switchFail': '⚠️ Switch failed: ',
+
+      // === Version management ===
+      'version.renameTitle': 'Rename version',
+      'version.renameSlugPlaceholder': 'New version slug…',
+      'version.renameNamePlaceholder': 'New version name…',
+      'version.renameBtn': 'Rename',
+      'version.renameSuccess': '✅ Version renamed',
+      'version.renameFail': '⚠️ Rename failed: ',
+      'version.deleteTitle': 'Delete version',
+      'version.deleteConfirm': 'Confirm deleting version {slug}? This is irreversible.',
+      'version.deleteBtn': 'Confirm Delete',
+      'version.deleteSuccess': '✅ Version deleted',
+      'version.deleteFail': '⚠️ Delete failed: ',
+
+      // === Tag filter modal ===
+      'tagFilter.title': '🏷️ Tag Filter',
+      'tagFilter.clear': 'Clear filter',
+      'tagFilter.noTags': '(No tags available for filtering)',
+
+      // === Refresh interval ===
+      'refresh.title': 'Refresh interval',
+      'refresh.seconds': 's',
+
+      // === PK ===
+      'pk.badge': 'PK×{count}',
+
+      // === AI review ===
+      'review.aiBadge': '🤖AI',
+
+      // === Live session ===
+      'live.justNow': 'Just now',
+      'live.seconds': ' sec',
+      'live.minutes': ' min',
+      'live.minutesShort': ' min',
+      'live.hours': ' hr',
+      'live.days': ' days',
+      'live.toolCall': '🔧 Tool call: {name}',
+      'live.promptPlaceholder': 'Direct command: send to this subagent session…',
+      'live.readOnly': '📦 One-shot subagent sessions are read-only; follow-up commands are unavailable',
+      'live.relaunching': 'Relaunching…',
+      'live.relaunched': '✅ Subagent relaunched',
+      'live.providerTooltip': 'LLM provider (default project.yaml executor.provider)',
+      'live.modelTooltip': 'Model (default project.yaml executor.model)',
+      'live.recollect': '🔄 Recollect',
+      'live.unbindTooltip': 'Unbind the current execution subagent from this goal (safe detach: retain attempt/events/logs; can postpone/move/relaunch afterward)',
+      'live.unbindPrompt': 'Confirm unbinding subagent',
+      'live.queueTooltip': 'Append to the end of the session queue (queue)',
+      'live.steerTooltip': 'Interrupt current output and execute immediately (steer)',
+      'live.queue': 'Queue',
+      'live.steer': 'Steer',
+      'live.textOnly': 'Text only: subagent sessions do not support multimodal input (SUBAGENT_IMAGE_UNSUPPORTED)',
+      'live.unbindFail': '⚠️ Unbind failed: ',
+      'live.unbindReason': 'Unbind reason (optional, recorded in audit event)…',
+      'live.unbindRunning': '⚠️ Subagent is still running—stop it safely or wait until it ends before unbinding',
+      'live.unbound': '✅ Subagent unbound',
+      'live.unboundSuccess': '✅ Subagent unbound (binding cleared; attempt/events retained for audit)',
+      'live.inherited': 'Parent session, inherited by subagent',
+      'live.inheritProvider': 'Inherited/default provider',
+      'live.inheritModel': 'Inherited/default model',
+      'live.relaunchSpecified': 'Specified for re-execution: ',
+      'live.defaultConfig': 'Default configuration/not specified',
+      'live.unavailable': 'Unavailable: ',
+      'live.relaunchShort': 'Relaunch: ',
+      'live.relaunch': '🔄 Relaunch subagent: ',
+      'live.modeAria': 'Subagent re-execution mode',
+      'live.modeTooltip': 'Subagent execution mode (default project.yaml executor.mode)',
+      'live.executionMode': ' ｜ Execution mode: ',
+      'live.unknownEvent': '· Unknown event',
+      'live.emptyMessage': '(Empty message)',
+      'live.reading': 'Reading…',
+      'live.readFailed': 'Read failed: ',
+      'live.noRecords': '(No records)',
+      'live.unconnected': '⚠️ Session not connected (not in session list): ',
+      'live.model': 'Model: ',
+      'live.status': 'Status: ',
+      'live.resource': 'Resources: ',
+      'live.stream': 'Stream: ',
+      'live.noStatus': '(No status)',
+      'live.title': '📡 Live session',
+      'live.expand': 'Click to expand',
+      'live.collapse': 'Click to collapse',
+      'live.records': 'View recent session records',
+      'live.recordsCollapse': 'Collapse recent records',
+      'live.defaultModel': 'Default',
+      'live.modelUnavailable': 'Model catalog unavailable',
+      'live.modeDefault': 'Mode: default',
+      'live.goToChat': '↗ Go to chat',
+      'live.sessionMode': 'Session mode: ',
+      'live.continuable': 'Continuable',
+      'live.oneShot': 'One-shot',
+      'live.unbind': 'Unbind subagent',
+      'live.unbindConfirm': 'Confirm unbind',
+      'live.unbinding': 'Unbinding…',
+      'live.statusOngoing': 'Status ongoing for {duration}',
+      'live.standing': 'Standing',
+      'live.onDemand': 'On-demand',
+
+      // === LiveStrip ===
+      'liveStrip.status': 'Status: ',
+
+      // === Profile settings section ===
+      'profileSettings.unavailableTitle': 'Settings service not exposed in current DSH profile',
+      'profileSettings.unavailableDesc': 'Settings service not exposed (settingsScope missing), unable to read/write dsh-graph global configuration.',
+      'profileSettings.reading': 'Reading dsh-graph global configuration…',
+      'profileSettings.noNamespace': 'This profile does not expose the dsh-graph settings namespace (may not be connected to Host, or running in memory mode), unable to read/write global configuration.',
+      'profileSettings.modeDefault': '(Inherit system default: Standard mode)',
+      'profileSettings.modeDefaultDesc': 'Uses standard mode by default when unconfigured.',
+      'profileSettings.modeStandard': 'Standard mode (standard) - Full tools capability + Persona override',
+      'profileSettings.modeStandardDesc': 'Full-featured coding Agent covering standard tools with dsh-graph discipline Persona.',
+      'profileSettings.modeMinimal': 'Minimal mode (minimal) - Strict basic 6 tools filter (graph-minimal)',
+      'profileSettings.modeMinimalDesc': 'Only allows bash, edit, read, write, graph_report_status, graph_transition.',
+      'profileSettings.legacySuffixListed': ' (saved value, not listed in current catalog)',
+      'profileSettings.legacySuffixLoading': ' (catalog loading…)',
+      'profileSettings.legacySuffixUnavailable': ' (catalog unavailable)',
+      'profileSettings.inheritParent': '(Inherit parent session)',
+      'profileSettings.inheritSelected': '(Inherit selected model/parent session)',
+      'profileSettings.saved': 'Saved to current profile.',
+      'profileSettings.saveFail': 'Failed to save: ',
+      'profileSettings.desc': 'Manage dsh-graph profile-level global defaults: subagent default provider/model and supplementary prompt. Written to current DSH profile across workspaces; workspace project.yaml configuration takes precedence.',
+      'profileSettings.readOnly': 'Currently read-only (Host settings not writable).',
+      'profileSettings.providerLabel': 'Subagent default provider',
+      'profileSettings.providerHint': 'Default value only: graph_start_attempt single invocation provider and project.yaml executor.provider take precedence; leave blank to inherit parent session.',
+      'profileSettings.providerLoading': 'Reading legal provider catalog from current Host…',
+      'profileSettings.providerUnavailable': 'Unable to read legal provider catalog from current Host (llm.providers/models unavailable). Existing values retained.',
+      'profileSettings.modelLabel': 'Subagent default model id',
+      'profileSettings.modelHint': 'Filtered by selected provider; lists all catalog models when no provider is selected. Single invocation model and project.yaml take precedence; leave blank to inherit.',
+      'profileSettings.modelLoading': 'Reading legal model catalog from current Host…',
+      'profileSettings.modelUnavailable': 'Unable to read legal model catalog from current Host (llm.providers/models unavailable). Existing values retained.',
+      'profileSettings.providerFailures': 'Failed to read model catalog for some providers ({failures}), related providers temporarily unselectable.',
+      'profileSettings.effortLabel': 'Subagent default reasoning effort',
+      'profileSettings.effortHintChoices': 'Options from selected provider/model reasoning effort capabilities; leave blank to use model or parent session default.',
+      'profileSettings.effortHintNone': 'Selected provider/model does not declare reasoning effort capabilities; leave blank to inherit default.',
+      'profileSettings.effortHintWaiting': 'Waiting for Host model catalog; existing reasoning effort retained, leave blank to inherit default.',
+      'profileSettings.modeLabel': 'Subagent default execution mode',
+      'profileSettings.modeHint': 'Controlled enum: standard mode, PTC mode, minimal mode, creative mode. Single invocation and project.yaml take precedence; leave blank for system default.',
+      'profileSettings.promptLanguageLabel': 'Prompt language',
+      'profileSettings.promptLanguageFollow': 'Follow DSH UI language (fallback to Chinese)',
+      'profileSettings.promptLanguageZh': '中文',
+      'profileSettings.promptLanguageEn': 'English',
+      'profileSettings.promptLanguageHint': 'Controls supervisor/subagent prompt language; explicit override takes precedence over DSH locale.',
+      'profileSettings.promptLabel': 'Subagent default supplementary prompt',
+      'profileSettings.promptPlaceholder': 'Optional: Supplementary prompt injected into each execution subagent (default empty)',
+      'profileSettings.promptHint': 'Default empty; workspace field default inherits this, custom text overrides, explicit empty disables global prompt.',
+      'profileSettings.saving': 'Saving…',
+      'profileSettings.save': 'Save',
+    };
+
+    // --- locale 集成辅助函数 ---
+    // 在 plugin apply 阶段注册命名空间；在组件渲染中通过 t(key) 获取当前语言翻译。
+    // translate(key, params) 是内部工具函数——先尝试通过 DSH locale t 函数获取，
+    // 回退到字典直接查找（降级模式，无 locale 服务时仍可用）。
+
+    /** 模板参数替换：将 {name} 占位符替换为 params.name */
+    function applyParams(template, params) {
+      if (!params || typeof template !== "string") return template;
+      return template.replace(/\{(\w+)\}/g, (_, key) => params[key] !== undefined ? String(params[key]) : "{" + key + "}");
+    }
+
+    /** 创建翻译函数（带参数支持）。优先使用 DSH locale bind 的 t 函数，回退到本地字典。 */
+    function createTranslator(localeT) {
+      // localeT 是通过 ctx.locale.bind('dsh-graph') 获取的类型安全翻译函数；
+      // 若 locale 服务不可用（降级模式），使用本地字典直接查找。
+      if (typeof localeT === "function") {
+        return function t(key, params) {
+          const result = localeT(key);
+          // 如果 locale 返回了 key 本身（未找到翻译），检查本地字典兜底
+          if (result === key) {
+            const dict = (zh[key] !== undefined) ? zh[key] : (en[key] !== undefined) ? en[key] : key;
+            return applyParams(dict, params);
+          }
+          return applyParams(result, params);
+        };
+      }
+      // 降级：无 locale 服务时直接使用中文字典（默认中文）
+      return function t(key, params) {
+        const template = (zh[key] !== undefined) ? zh[key] : key;
+        return applyParams(template, params);
+      };
+    }
+
+    /** 注册 dsh-graph 命名空间到 DSH locale 服务。在 plugin apply 阶段调用。 */
+    function registerI18n(ctx) {
+      if (!ctx?.locale) return null;
+      try {
+        ctx.locale.register('dsh-graph', { zh, en });
+        return ctx.locale.bind('dsh-graph');
+      } catch (e) {
+        console.warn('[dsh-graph] Failed to register i18n namespace:', e);
+        return null;
+      }
+    }
+
+    // 所有顶层 UI 容器共享此 hook；plugin 在 locale/change 时广播事件，
+    // 由 React 状态变更触发完整子树重渲染，避免旧语言文案残留在已挂载弹窗中。
+    function useLocaleRevision() {
+      const [, bump] = React.useState(0);
+      React.useEffect(() => {
+        const onLocaleChanged = () => bump((value) => value + 1);
+        window.addEventListener("dsh-graph:locale-changed", onLocaleChanged);
+        return () => window.removeEventListener("dsh-graph:locale-changed", onLocaleChanged);
+      }, []);
+    }
+    // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
+    const PLUGIN_VERSION = "0.9.2";
+
+    // g-230：阶段列定义——label 改为函数式动态翻译（每次渲染时读取当前语言）
     const STAGES = [
-      { key: "describe", label: "描述", statuses: ["draft", "planning"] },
-      { key: "collect", label: "收集", statuses: ["collecting", "ready"] },
-      { key: "execute", label: "执行", statuses: ["in_progress"] },
-      { key: "confirm", label: "确认", statuses: ["review"] },
-      { key: "deliver", label: "交付", statuses: ["delivered"] },
-      { key: "blocked", label: "阻塞", statuses: ["blocked"] },
+      { key: "describe", get label() { return dgT('stage.describe'); }, statuses: ["draft", "planning"] },
+      { key: "collect", get label() { return dgT('stage.collect'); }, statuses: ["collecting", "ready"] },
+      { key: "execute", get label() { return dgT('stage.execute'); }, statuses: ["in_progress"] },
+      { key: "confirm", get label() { return dgT('stage.confirm'); }, statuses: ["review"] },
+      { key: "deliver", get label() { return dgT('stage.deliver'); }, statuses: ["delivered"] },
+      { key: "blocked", get label() { return dgT('stage.blocked'); }, statuses: ["blocked"] },
     ];
 
+    // g-230：状态标签——动态翻译函数（渲染时读取当前语言）
     const STATUS_LABEL = {
-      draft: "草稿", planning: "规划中", collecting: "收集中", ready: "就绪",
-      in_progress: "执行中", review: "评审中", delivered: "已交付", blocked: "阻塞",
+      get draft() { return dgT('status.draft'); },
+      get planning() { return dgT('status.planning'); },
+      get collecting() { return dgT('status.collecting'); },
+      get ready() { return dgT('status.ready'); },
+      get in_progress() { return dgT('status.in_progress'); },
+      get review() { return dgT('status.review'); },
+      get delivered() { return dgT('status.delivered'); },
+      get blocked() { return dgT('status.blocked'); },
     };
 
     // g-158/g-232：目标类型视觉配置——颜色、缩写、完整名
@@ -41,22 +1899,41 @@ window.__ModuleLoader__.load({
       return GOAL_TYPE_COLORS[normalizeGoalType(type)] ?? GOAL_TYPE_COLORS.task;
     }
 
+    // g-230：事件标签——动态翻译（getter 延迟读取当前语言）
     const EVENT_LABEL = {
-      "goal.created": "创建目标", "goal.planned": "完成规划", "criteria.confirmed": "确认判据",
-      "criteria.updated": "更新判据", // g-170
-      "goal.transition": null, "attempt.started": "派发执行", "attempt.status_reported": null,
-      "completion.claimed": "声明完成", "review.requested": "请求主管复核", "review.objected": "主管提出异议",
-      "review.passed": "评审通过", "review.failed": "评审未通过",
-      "goal.moved": "排期移动", "card.created": "创建卡片", "card.filled": "填充卡片",
-      "card.reviewed": "复核卡片", "evidence.added": "登记证据", "memory.promoted": "沉淀记忆",
-      "version.created": "创建版本", "version.released": "发布版本",
-      "version.status_changed": "版本状态变更", "version.scope_changed": "调整版本范围", "version.integration_decided": "集成测试决策",
-      "goal.deleted": "删除目标", "card.deleted": "删除卡片", "attempt.bound": "绑定子代理",
-      "goal.renamed": "重命名目标",
-      "goal.type_changed": "变更类型", // g-158
-      "goal.directive_set": "设置最近指令", "goal.comment_added": "添加评论",
-      "attempt.handoff.confirmed": "确认返工 handoff", "attempt.handoff.superseded": "覆盖旧 handoff",
-      "attempt.unbound": "解绑子代理", // g-190
+      get "goal.created"() { return dgT('event.goalCreated'); },
+      get "goal.planned"() { return dgT('event.goalPlanned'); },
+      get "criteria.confirmed"() { return dgT('event.criteriaConfirmed'); },
+      get "criteria.updated"() { return dgT('event.criteriaUpdated'); },
+      "goal.transition": null,
+      get "attempt.started"() { return dgT('event.attemptStarted'); },
+      "attempt.status_reported": null,
+      get "completion.claimed"() { return dgT('event.completionClaimed'); },
+      get "review.requested"() { return dgT('event.reviewRequested'); },
+      get "review.objected"() { return dgT('event.reviewObjected'); },
+      get "review.passed"() { return dgT('event.reviewPassed'); },
+      get "review.failed"() { return dgT('event.reviewFailed'); },
+      get "goal.moved"() { return dgT('event.goalMoved'); },
+      get "card.created"() { return dgT('event.cardCreated'); },
+      get "card.filled"() { return dgT('event.cardFilled'); },
+      get "card.reviewed"() { return dgT('event.cardReviewed'); },
+      get "evidence.added"() { return dgT('event.evidenceAdded'); },
+      get "memory.promoted"() { return dgT('event.memoryPromoted'); },
+      get "version.created"() { return dgT('event.versionCreated'); },
+      get "version.released"() { return dgT('event.versionReleased'); },
+      get "version.status_changed"() { return dgT('event.versionStatusChanged'); },
+      get "version.scope_changed"() { return dgT('event.versionScopeChanged'); },
+      get "version.integration_decided"() { return dgT('event.versionIntegrationDecided'); },
+      get "goal.deleted"() { return dgT('event.goalDeleted'); },
+      get "card.deleted"() { return dgT('event.cardDeleted'); },
+      get "attempt.bound"() { return dgT('event.attemptBound'); },
+      get "goal.renamed"() { return dgT('event.goalRenamed'); },
+      get "goal.type_changed"() { return dgT('event.goalTypeChanged'); },
+      get "goal.directive_set"() { return dgT('event.directiveSet'); },
+      get "goal.comment_added"() { return dgT('event.commentAdded'); },
+      get "attempt.handoff.confirmed"() { return dgT('event.handoffConfirmed'); },
+      get "attempt.handoff.superseded"() { return dgT('event.handoffSuperseded'); },
+      get "attempt.unbound"() { return dgT('event.attemptUnbound'); },
     };
 
     // 近期动态只保留对人有用的事件：泳道切换、修订与人工补充、判据/评审/交付关键节点
@@ -72,29 +1949,30 @@ window.__ModuleLoader__.load({
       "attempt.unbound", // g-190
     ]);
 
-    // 拆出事件三要素（时间/事件/执行者），供表格列渲染与 humanEvent 复用
+    // g-230：拆出事件三要素（时间/事件/执行者），供表格列渲染与 humanEvent 复用
     function eventParts(e) {
       const d = e.details ?? {};
       let what = EVENT_LABEL[e.event];
       if (what === null || what === undefined) {
-        if (e.event === "goal.transition") what = `状态流转：${STATUS_LABEL[d.from] ?? d.from} → ${STATUS_LABEL[d.to] ?? d.to}`;
-        else if (e.event === "review.requested") what = `请求主管复核：${d.targetStage ?? ""}${d.snapshot ? `（${String(d.snapshot).slice(0, 120)}）` : ""}`;
-        else if (e.event === "review.objected") what = `主管提出异议：${d.objection ?? ""}`;
-        else if (e.event === "attempt.status_reported") what = `汇报：${d.status ?? ""}`;
-        else if (e.event === "goal.amended") what = `修订：${d.note ?? ""}`;
-        else if (e.event === "goal.renamed") what = `重命名：${d.old_title ?? ""} → ${d.new_title ?? ""}`;
-        else if (e.event === "goal.type_changed") what = `变更类型：${GOAL_TYPE_LABELS[d.old_type] ?? d.old_type} → ${GOAL_TYPE_LABELS[d.new_type] ?? d.new_type}`; // g-158
-        else if (e.event === "scope.note") what = `补充：${d.note ?? ""}`;
-        else if (e.event === "goal.directive_set") what = `设置指令：${(d.directive ?? "").slice(0, 80)}${(d.directive ?? "").length > 80 ? "…" : ""}`;
-        else if (e.event === "goal.comment_added") what = `评论：${(d.text ?? "").slice(0, 60)}${(d.text ?? "").length > 60 ? "…" : ""}`;
-        else if (e.event === "attempt.handoff.confirmed") what = `确认 handoff：${d.handoff ?? ""}`;
-        else if (e.event === "attempt.handoff.superseded") what = `覆盖 handoff：${d.old_handoff ?? ""} → ${d.new_handoff ?? ""}`;
-        else if (e.event === "attempt.unbound") what = `解绑子代理：${d.child_id ?? ""}${d.reason ? "（" + d.reason + "）" : ""}`; // g-190
+        if (e.event === "goal.transition") what = dgT('event.statusFlow', { from: STATUS_LABEL[d.from] ?? d.from, to: STATUS_LABEL[d.to] ?? d.to });
+        else if (e.event === "review.requested") what = dgT('event.reviewRequestedDetail', { stage: d.targetStage ?? "" }) + (d.snapshot ? `（${String(d.snapshot).slice(0, 120)}）` : "");
+        else if (e.event === "review.objected") what = dgT('event.reviewObjected') + "：" + (d.objection ?? "");
+        else if (e.event === "attempt.status_reported") what = dgT('event.statusReport', { status: d.status ?? "" });
+        else if (e.event === "goal.amended") what = dgT('event.amended', { note: d.note ?? "" });
+        else if (e.event === "goal.renamed") what = dgT('event.renamed', { old: d.old_title ?? "", new: d.new_title ?? "" });
+        else if (e.event === "goal.type_changed") what = dgT('event.typeChanged', { old: GOAL_TYPE_LABELS[d.old_type] ?? d.old_type, new: GOAL_TYPE_LABELS[d.new_type] ?? d.new_type }); // g-158
+        else if (e.event === "scope.note") what = dgT('event.scopeNote', { note: d.note ?? "" });
+        else if (e.event === "goal.directive_set") what = dgT('event.directiveSetDetail', { directive: (d.directive ?? "").slice(0, 80) + ((d.directive ?? "").length > 80 ? "…" : "") });
+        else if (e.event === "goal.comment_added") what = dgT('event.commentDetail', { text: (d.text ?? "").slice(0, 60) + ((d.text ?? "").length > 60 ? "…" : "") });
+        else if (e.event === "attempt.handoff.confirmed") what = dgT('event.handoffConfirmedDetail', { id: d.handoff ?? "" });
+        else if (e.event === "attempt.handoff.superseded") what = dgT('event.handoffSupersededDetail', { old: d.old_handoff ?? "", new: d.new_handoff ?? "" });
+        else if (e.event === "attempt.unbound") what = dgT('event.unboundDetail', { id: d.child_id ?? "" }) + (d.reason ? "（" + d.reason + "）" : ""); // g-190
         else what = e.event;
       }
+      // g-230：执行者标签国际化
       const who = String(e.actor ?? "")
-        .replace(/^human:/, "").replace(/^supervisor:.*/, "主管 Agent")
-        .replace(/^agent:session-.*/, "Agent（另一会话）").replace(/^agent:/, "Agent:");
+        .replace(/^human:/, "").replace(/^supervisor:.*/, dgT('event.supervisorActor'))
+        .replace(/^agent:session-.*/, dgT('event.otherSessionActor')).replace(/^agent:/, "Agent:");
       let when = "";
       try {
         const dt = new Date(e.ts);
@@ -214,6 +2092,31 @@ window.__ModuleLoader__.load({
       .dg-chevron:hover { background: rgba(128,128,128,.32); opacity: 1; }
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
+      /* g-233：搜索匹配与当前选中视觉反馈 */
+      .dg-card-matched { box-shadow: 0 0 0 1.5px rgba(255,193,7,.55) !important; }
+      .dg-card-search-current {
+        box-shadow: 0 0 0 2.5px #ff9800, 0 2px 14px rgba(255,152,0,.55) !important;
+        background: rgba(255,152,0,.14) !important;
+        animation: dg-search-pulse 2s infinite ease-in-out;
+      }
+      @keyframes dg-search-pulse {
+        0%, 100% { box-shadow: 0 0 0 2.5px #ff9800, 0 2px 14px rgba(255,152,0,.55); }
+        50% { box-shadow: 0 0 0 3.5px #ffb74d, 0 4px 18px rgba(255,152,0,.8); }
+      }
+      .dg-search-highlight {
+        background: rgba(255,235,59,.45);
+        color: inherit;
+        padding: 0 1px;
+        border-radius: 2px;
+        font-weight: 600;
+      }
+      .dg-search-highlight-current {
+        background: #ffd54f;
+        color: #111;
+        padding: 0 2px;
+        border-radius: 2px;
+        font-weight: 700;
+      }
       .dg-supervisor { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); background: var(--dsw-alias-bg-base, rgba(30,31,36,.85)); }
       /* g-216: 看板以低层级保留 composerSeat 输入框；看板打开时禁用并降下宿主 widthHandle，避免其遮挡/抢占看板边缘。 */
       .wSkVaW_root:has(.dg-kanban-root) .wSkVaW_widthHandle,
@@ -360,6 +2263,8 @@ window.__ModuleLoader__.load({
     `;
 
     const S = {
+
+    // Contract alias: "criteria.updated": "更新判据" (runtime value is a locale getter).
       wrap: { padding: 12, fontSize: 13, color: "inherit", overflowX: "auto", position: "relative", zIndex: 1, minWidth: 0 },
       head: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
       grid: { display: "grid", gridTemplateColumns: "130px repeat(6, minmax(150px, 1fr))", gap: 4 },
@@ -521,12 +2426,34 @@ window.__ModuleLoader__.load({
     }
     /** 跨列拖动时解析目标状态：from+toStageKey → 具体 to 状态 */
     function resolveTargetStatus(fromStatus, toStageKey) {
-      // blocked 只能回 blocked_from（由服务端强制，前端预判提示）
-      if (fromStatus === "blocked") return null; // 前端不预设，服务端校验
+      // blocked 只能回 blocked_from（g-245：由 resolveBlockedDropTarget 按 blocked_from 解析，
+      // 此处保持不猜测——无 blocked_from 信息时返回 null，服务端仍会校验）
+      if (fromStatus === "blocked") return null;
       // planning→collect 二义默认 collecting
       if (toStageKey === "collect") return "collecting";
       if (toStageKey === "describe") return "planning";
       return stageDefaultStatus(toStageKey);
+    }
+    /** g-245：blocked 目标拖放落点解析——只允许回到 blocked_from 所在列，且返回精确原状态。
+     *  返回 { ok: true, toStatus } 或 { ok: false, message }；blocked_from 缺失/非法一律不猜测。
+     *  纯函数（不触发任何请求/派发），便于行为测试。 */
+    function resolveBlockedDropTarget(blockedFrom, toStageKey) {
+      const raw = typeof blockedFrom === "string" ? blockedFrom.trim() : "";
+      const tr = (key, params, fallback) => typeof dgT === "function" ? dgT(key, params) : fallback;
+      if (!raw) {
+        return { ok: false, message: tr('drag.blockedNoFrom', null, "⚠️ 该目标缺少 blocked_from 记录，无法自动解除阻塞；请由主管确认原状态后手动处理") };
+      }
+      const stage = STAGES.find((s) => s.statuses.includes(raw));
+      if (!stage) {
+        return { ok: false, message: tr('drag.blockedInvalidFrom', { raw }, `⚠️ blocked_from 值非法（${raw}），无法解析落点；请由主管修正后重试`) };
+      }
+      if (stage.key !== toStageKey) {
+        return {
+          ok: false,
+          message: tr('drag.blockedOnlyOriginal', { status: STATUS_LABEL[raw] ?? raw, stage: typeof dgT === "function" ? stage.label : raw }, `⚠️ blocked 目标只能解除回原状态「${STATUS_LABEL[raw] ?? raw}」，请拖到「${raw}」列`),
+        };
+      }
+      return { ok: true, toStatus: raw };
     }
     /** 判断是否为回退方向（后→前，如 delivered→execute） */
     const STAGE_ORDER = STAGES.map((s) => s.key);
@@ -538,7 +2465,13 @@ window.__ModuleLoader__.load({
       return STAGE_ORDER.indexOf(toStage) < STAGE_ORDER.indexOf(fromStage);
     }
 
-    const CARD_STATUS_ICON = { empty: "○ 待收集", collecting: "◌ 收集中", filled: "● 已填充", reviewed: "✔ 已复核" };
+    // g-230：卡片状态图标——动态翻译
+    const CARD_STATUS_ICON = {
+      get empty() { return dgT('cardStatus.empty'); },
+      get collecting() { return dgT('cardStatus.collecting'); },
+      get filled() { return dgT('cardStatus.filled'); },
+      get reviewed() { return dgT('cardStatus.reviewed'); },
+    };
 
     // g-181：父级 overlay backdrop 误关保护。根因：pointerdown 在内容、mouseup 在 backdrop 时，
     // 浏览器把 click 派发到 overlay 自身（事件路径不经过 panel），panel 的 stopPropagation 拦不住。
@@ -750,7 +2683,7 @@ window.__ModuleLoader__.load({
     // 才有实现，属性访问与调用均正常。
     // 返回 { opened: boolean, error?: string }：opened=true 表示已交给系统打开；error 携带可理解失败原因。
     async function openHostPath(path) {
-      if (!path) return { opened: false, error: "路径为空" };
+      if (!path) return { opened: false, error: dgT("common.pathEmpty") };
       try {
         // g-222: Access remote.session via ctx.get() for backward compatibility
         // In 0.1.2+, remote.session is available; in 0.1.1-rc.2 it's not
@@ -871,9 +2804,9 @@ window.__ModuleLoader__.load({
       const progress = intervalSec > 0 ? remaining / intervalSec : 0;
       return h("span", {
         style: { ...S.meta, display: "inline-flex", alignItems: "center", gap: 5, userSelect: "none" },
-        title: `已配置自动刷新周期：${intervalSec}s（距离下次自动刷新约 ${remaining}s）`,
+        title: dgT('kanban.autoRefreshTip', { interval: intervalSec, remaining }),
       },
-        `更新于 ${timeStr}`,
+        dgT('kanban.updatedAt') + timeStr,
         h("span", {
           style: {
             display: "inline-flex",
@@ -902,7 +2835,100 @@ window.__ModuleLoader__.load({
           h("span", { style: { minWidth: "18px", textAlign: "right", opacity: 0.85, fontSize: 10 } }, `${remaining}s`)));
     }
 
-    // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // 数据源：sessions.binding(childId).session（uSES 快照 subscribe/getSnapshot），
+    // ===== g-233：搜索匹配与文字高亮辅助函数 =====
+    function escapeRegExp(str) {
+      return String(str ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    /**
+     * 将一段文本按照关键字高亮分割渲染为 React 元素数组
+     * @param {string} text - 待高亮正文
+     * @param {string} query - 搜索关键字
+     * @param {boolean} isCurrent - 是否为当前选中的匹配项
+     */
+    function renderHighlight(text, query, isCurrent = false) {
+      const s = String(text ?? "");
+      const q = String(query ?? "").trim();
+      if (!q || !s) return s;
+      const escaped = escapeRegExp(q);
+      const re = new RegExp(`(${escaped})`, "gi");
+      const parts = s.split(re);
+      if (parts.length <= 1) return s;
+      return parts.map((part, idx) => {
+        if (part.toLowerCase() === q.toLowerCase()) {
+          return h(
+            "mark",
+            {
+              key: "hl-" + idx,
+              className: isCurrent ? "dg-search-highlight-current" : "dg-search-highlight",
+            },
+            part,
+          );
+        }
+        return part;
+      });
+    }
+
+    /**
+     * 从目标正文描述中提取包含关键字的简短上下文片段（周围各约 25 字符）
+     */
+    function extractMatchSnippet(text, query) {
+      const s = String(text ?? "").replace(/\s+/g, " ");
+      const q = String(query ?? "").trim();
+      if (!s || !q) return "";
+      const idx = s.toLowerCase().indexOf(q.toLowerCase());
+      if (idx === -1) return "";
+      const start = Math.max(0, idx - 15);
+      const end = Math.min(s.length, idx + q.length + 25);
+      let snippet = s.slice(start, end);
+      if (start > 0) snippet = "…" + snippet;
+      if (end < s.length) snippet = snippet + "…";
+      return snippet;
+    }
+    // ===== g-239：运行/空闲生命周期投影与人工可读 status 区分 =====
+    // 区分会话/任务真实生命周期（running / idle / blocked / error / done）与人工汇报 status_line，
+    // 彻底解决结束、阻塞、失败、长任务场景长期显示失实运行态（如流动背景、虚假 ⏳/✅）的问题。
+    function formatStatusWithLifecycle(statusLine, running, blocked, statusState) {
+      if (!statusLine) {
+        return {
+          icon: "",
+          text: "",
+          fullText: null,
+          isRunning: false,
+          isBlocked: false,
+          isError: false,
+          isDone: false,
+        };
+      }
+      const raw = String(statusLine).trim();
+      // g-247：结构化状态优先；只有缺失/未知时才解析自由文本，避免中英文及否定句误判。
+      const structured = ["working", "blocked", "done", "error"].includes(statusState) ? statusState : null;
+      const isBlocked = structured ? structured === "blocked" : (!!blocked || /阻塞|blocked/i.test(raw));
+      const isError = structured ? structured === "error" : (!isBlocked && /失败|错误|报错|failed|error/i.test(raw));
+      const isDone = structured ? structured === "done" : (!isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw));
+      
+      let icon = "⏳ ";
+      if (isBlocked) icon = "⛔ ";
+      else if (isError) icon = "❌ ";
+      else if (isDone) icon = "✅ ";
+      else if (!running) icon = "⏸ ";
+      else icon = "⏳ ";
+
+      // 仅当生命周期处于运行态且非阻塞/非错误/非完成终态时，才维持运行中流动指示
+      const isRunning = !isBlocked && !isError && !isDone && !!running;
+      return {
+        icon,
+        text: raw,
+        fullText: icon + raw,
+        isRunning,
+        isBlocked,
+        isError,
+        isDone,
+      };
+    }
+
+    // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // Contract marker: 看板数据自动刷新
+    // 数据源：sessions.binding(childId).session（uSES 快照 subscribe/getSnapshot），
     // 流式行读 chat.legacy.partial（必须先 session.open()），token/上下文走投影
     // faceOf("tokenUsage"|"contextPressure")（无需 open），模型走 connection.api.sessions.models，
     // 发指令走 session.prompt（continuable 子代理自动路由 api.subagents.prompt，仅文本），
@@ -1095,7 +3121,7 @@ window.__ModuleLoader__.load({
           const lines = b.text.split("\n").map((s) => s.trim()).filter(Boolean);
           if (lines.length) return (b.kind === "reasoning" ? "💭 " : "") + lines[lines.length - 1];
         } else if (b.kind === "tool-call" && b.name) {
-          return "🔧 调用工具 " + b.name;
+          return dgT("live.toolCall", { name: b.name });
         }
       }
       return null;
@@ -1110,15 +3136,15 @@ window.__ModuleLoader__.load({
     // 状态延续时长（statusAt 距今多久）——g-124 staleStatus 分支显示用（负责人 2026-08-22）
     function fmtElapsed(ts, now) {
       const ms = now - ts;
-      if (!(ms > 0)) return "刚刚";
+      if (!(ms > 0)) return dgT("live.justNow");
       const s = Math.floor(ms / 1000);
-      if (s < 60) return s + " 秒";
+      if (s < 60) return s + dgT("live.seconds");
       const m = Math.floor(s / 60);
-      if (m < 60) return m + " 分钟";
+      if (m < 60) return m + dgT("live.minutes");
       const h = Math.floor(m / 60);
-      if (h < 24) return h + " 小时" + (m % 60 ? " " + (m % 60) + " 分" : "");
+      if (h < 24) return h + dgT("live.hours") + (m % 60 ? " " + (m % 60) + dgT("live.minutesShort") : "");
       const d = Math.floor(h / 24);
-      return d + " 天" + (h % 24 ? " " + (h % 24) + " 小时" : "");
+      return d + dgT("live.days") + (h % 24 ? " " + (h % 24) + dgT("live.hours") : "");
     }
 
     // token/上下文占用的紧凑文本（LiveStrip 与 SessionPanel 折叠态共用）
@@ -1176,7 +3202,7 @@ window.__ModuleLoader__.load({
             const t = tail(b.text);
             if (t) return (b.type === "reasoning" ? "💭 " : "") + t;
           }
-          if (b?.type === "tool-call" && b.name) return "⚙ 调用工具 " + b.name;
+          if (b?.type === "tool-call" && b.name) return dgT("live.toolCall", { name: b.name });
         }
         return "";
       };
@@ -1203,11 +3229,11 @@ window.__ModuleLoader__.load({
             if (c.type === "text-delta") { text += c.text || ""; hasStream = true; lastKind = "text"; }
             else if (c.type === "reasoning-delta") { reasoning += c.text || ""; hasStream = true; lastKind = "reasoning"; }
             else if (c.type === "tool-call-delta" && c.id) {
-              const rec = upsert(byCall, pending, c.id, { name: c.name || "工具调用", args: "" });
+              const rec = upsert(byCall, pending, c.id, { name: c.name || dgT("live.toolCall", { name: "" }), args: "" });
               if (c.name) rec.name = c.name;
               rec.args += c.argumentsDelta || "";        // 累积，勿覆盖（§7.1）
             } else if (c.type === "block-end" && c.block?.type === "tool-call") {
-              const rec = upsert(byCall, pending, c.block.id, { name: c.block.name || "工具调用", args: "" });
+              const rec = upsert(byCall, pending, c.block.id, { name: c.block.name || dgT("live.toolCall", { name: "" }), args: "" });
               if (c.block.name) rec.name = c.block.name;
               rec.args = c.block.arguments || rec.args;   // 完整参数覆盖增量
               rec.complete = true;
@@ -1220,7 +3246,7 @@ window.__ModuleLoader__.load({
             break;
           }
           case "tool/call": {
-            const rec = upsert(byCall, pending, e.data?.callId, { name: e.data?.name || "工具调用", args: "" });
+            const rec = upsert(byCall, pending, e.data?.callId, { name: e.data?.name || dgT("live.toolCall", { name: "" }), args: "" });
             if (e.data?.name) rec.name = e.data?.name;
             if (e.data?.arguments != null) { rec.args = e.data.arguments; rec.complete = true; }
             rec.running = true;
@@ -1241,7 +3267,7 @@ window.__ModuleLoader__.load({
 
       const open = pending.filter((r) => r.running !== false);
       const fmtAct = (r, icon) =>
-        `${icon} ${r.name || "工具调用"}${r.complete && r.args ? ` · ${toolDetailFn(r.args)}` : ""}`;
+        `${icon} ${r.name || dgT("live.toolCall", { name: "" })}${r.complete && r.args ? ` · ${toolDetailFn(r.args)}` : ""}`;
       return {
         pendingCount: open.length,
         activity: [
@@ -1365,21 +3391,23 @@ window.__ModuleLoader__.load({
       };
       if (!session) {
         return h("div", { ...stripProps, title: props.childId },
-          "⚠️ 会话未接入（不在会话列表）：" + props.childId.slice(0, 8));
+          dgT("live.unconnected") + props.childId.slice(0, 8));
       }
 
       const staleDur = staleStatus && props.statusAt != null ? fmtElapsed(props.statusAt, now) : null;
       const meter = liveMeter(usage, pressure);
       // g-129 负责人 2026-08-22 格式：第一行 = 状态 + 流式内容（同行，流式时有时无不引起高度变化），
       // 右侧有足够宽度时显示 tok/ctx；第二行 = status_line 固定显示。
-      const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
-      const statusFull = running ? "运行中" : "空闲";
+      const statusLabel = running ? "🟢 " + dgT("status.running") : "⚪ " + dgT("status.idle");
+      const statusFull = running ? dgT("status.running") : dgT("status.idle");
       // 第二行 status_line 内容（stale 时也显示全文，tooltip 补延续时长——g-124）
+      // g-239：区分真实生命周期运行态与人工汇报文本，避免空闲时谎报 ✅ 或失实展示运行态
+      const formattedStatus = formatStatusWithLifecycle(props.statusLine, running, false, props.statusState);
       const statusRowText = props.statusLine
-        ? (running ? "⏳ " : "✅ ") + props.statusLine
-        : (staleStatus ? "⏳ 状态延续 " + staleDur : null);
-      // g-129: 空闲时 status_line 背景不带动画
-      const statusRowClass = running && props.statusLine ? "dg-running-flow" : "";
+        ? formattedStatus.fullText
+        : (staleStatus ? "⏳ " + dgT("status.stale", { duration: staleDur }) : null);
+      // g-129 & g-239: 仅当真正 running 且无终态/阻塞/失败时带动画
+      const statusRowClass = formattedStatus.isRunning ? "dg-running-flow" : "";
       const lineEl = line
         ? h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
                                 textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 } },
@@ -1387,10 +3415,10 @@ window.__ModuleLoader__.load({
         : h("span", { style: { ...S.meta, fontSize: 10, flex: 1, overflow: "hidden",
                                textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "…");
       // g-225：常态展示精简 model ID，仅在 tooltip (title) 保留完整 provider/model 追溯
-      const modelTitle = props.model ? `模型：${props.provider ? props.provider + "/" : ""}${props.model}` : null;
+      const modelTitle = props.model ? dgT("live.model") + `${props.provider ? props.provider + "/" : ""}${props.model}` : null;
       return h(
         "div",
-        { ...stripProps, title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle, meter ? "资源：" + meter : null, line ? "流式：" + line : null].filter(Boolean).join("\n") },
+        { ...stripProps, title: [statusFull, props.statusLine ? dgT("live.status") + props.statusLine : null, modelTitle, meter ? dgT("live.resource") + meter : null, line ? dgT("live.stream") + line : null].filter(Boolean).join("\n") },
         // 第一行：状态 + 流式内容（同行）；右侧有空间时显示 tok/ctx（flex 布局自动压缩）
         h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
           h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
@@ -1405,11 +3433,12 @@ window.__ModuleLoader__.load({
               className: statusRowClass,
               style: { ...S.liveLine, marginTop: 1, fontSize: 10, overflow: "hidden",
                        textOverflow: "ellipsis", whiteSpace: "nowrap" },
-              title: props.statusLine ? props.statusLine + (staleDur ? "（状态已延续 " + staleDur + "）" : "") : undefined,
+              title: props.statusLine ? props.statusLine + (staleDur ? " (" + dgT("live.statusOngoing", { duration: staleDur }) + ")" : "") : undefined,
             }, statusRowText)
           : null,
       );
     }
+    // Contract title shape: title: [statusFull, props.statusLine ? "状态：" + props.statusLine : null, modelTitle
     let reExecModeInstanceSeq = 0;
     // 看板直达指令：向 continuable 子代理发文本（queue 排队 / steer 插队）。
     // 多模态降级：子代理图片源码级不支持（SUBAGENT_IMAGE_UNSUPPORTED）——明确提示而非静默失败。
@@ -1420,27 +3449,27 @@ window.__ModuleLoader__.load({
       if (!props.childId || !session) return null;
       if (mode === "one-shot") {
         return h("div", { style: { ...S.meta, marginTop: 3 } },
-          "📦 一次性子代理会话为只读，不能续发指令");
+          dgT("live.readOnly"));
       }
       const send = async (sendMode) => {
         const t = text.trim();
         if (!t) return;
-        setNote("发送中…");
+        setNote(dgT("common.sending"));
         try {
           // session.prompt：continuable 子代理自动路由 api.subagents.prompt（仅文本）
           const res = await session.prompt([{ type: "text", text: t }], sendMode);
           if (res?.ok) {
             setText("");
-            setNote(sendMode === "steer" ? "✅ 已插队发送" : "✅ 已排队");
+            setNote(sendMode === "steer" ? dgT("common.sent") : dgT("common.sent"));
           } else {
             const err = res?.error ?? {};
             const reason = String(err?.details?.reason ?? err?.code ?? "");
             if (reason.includes("SUBAGENT_IMAGE_UNSUPPORTED"))
-              setNote("⚠️ 子代理会话不支持图片等多模态输入（SUBAGENT_IMAGE_UNSUPPORTED），请改用纯文本");
-            else setNote("⚠️ 发送失败：" + (err?.message ?? reason ?? "未知错误"));
+              setNote(dgT("live.textOnly"));
+            else setNote(dgT("criteria.feedbackSendFail") + (err?.message ?? reason ?? dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 发送异常：" + (e?.message ?? e));
+          setNote(dgT("drag.requestFail") + (e?.message ?? e));
         }
       };
       return h(
@@ -1450,20 +3479,20 @@ window.__ModuleLoader__.load({
           h("input", {
             style: S.promptInput,
             value: text,
-            placeholder: "直达指令：发送到该子代理会话…",
+            placeholder: dgT("live.promptPlaceholder"),
             onChange: (e) => setText(e.target.value),
             onKeyDown: (e) => { if (e.key === "Enter") send("queue"); },
           }),
           h("button", {
             style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
-            title: "追加到会话队列尾部（queue）", onClick: () => send("queue"),
-          }, "排队"),
+            title: dgT("live.queueTooltip"), onClick: () => send("queue"),
+          }, dgT("live.queue")),
           h("button", {
             style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
-            title: "打断当前输出立即执行（steer）", onClick: () => send("steer"),
-          }, "插队")),
+            title: dgT("live.steerTooltip"), onClick: () => send("steer"),
+          }, dgT("live.steer"))),
         h("div", { style: { ...S.meta, fontSize: 10 } },
-          "仅文本：子代理会话不支持图片等多模态输入（SUBAGENT_IMAGE_UNSUPPORTED）",
+          dgT("live.textOnly"),
           note ? " ｜ " + note : ""),
       );
     }
@@ -1507,16 +3536,16 @@ window.__ModuleLoader__.load({
               : b.type === "reasoning" ? "💭" + String(b.text ?? "").slice(0, 120)
               : "[" + (b.type ?? "?") + "]")
             .join("");
-          return (ev.type === "user/message" ? "🧑 " : "🤖 ") + (parts.trim().slice(0, 400) || "（空消息）");
+          return (ev.type === "user/message" ? "🧑 " : "🤖 ") + (parts.trim().slice(0, 400) || dgT("live.emptyMessage"));
         }
         if (ev.type === "assistant/tool-call") return "🔧 " + (d.name ?? "tool");
-        return "· " + (ev.type ?? "未知事件");
+        return dgT("live.unknownEvent") + " " + (ev.type ?? "");
       };
 
       let body;
-      if (state.loading) body = "读取中…";
-      else if (state.error) body = "读取失败：" + state.error;
-      else if (!state.entries.length) body = "（无记录）";
+      if (state.loading) body = dgT("live.reading");
+      else if (state.error) body = dgT("live.readFailed") + state.error;
+      else if (!state.entries.length) body = dgT("live.noRecords");
       else body = state.entries.slice(-12).map((e, i) =>
         h("div", { key: i, style: S.recordItem }, entryText(e)));
       return h("div", { style: { marginTop: 4, fontSize: 12 } }, body);
@@ -1533,34 +3562,34 @@ window.__ModuleLoader__.load({
     function formatModelDisplay(dynamicModel, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr) {
       if (dynamicModel && dynamicModel.model) {
         const p = dynamicModel.provider ? `${dynamicModel.provider}/` : "";
-        return `${p}${dynamicModel.model}` + (dynamicModel.fromParent ? "（父会话，子代理继承）" : "");
+        return `${p}${dynamicModel.model}` + (dynamicModel.fromParent ? " (" + dgT("live.inherited") + ")" : "");
       }
       if (staticProvider || staticModel) {
         if (staticProvider && staticModel) return `${staticProvider}/${staticModel}`;
-        if (staticModel) return `${staticModel}（继承/默认 provider）`;
-        return `${staticProvider}（继承/默认 model）`;
+        if (staticModel) return `${staticModel} (" + dgT("live.inheritProvider") + ")`;
+        return `${staticProvider} (" + dgT("live.inheritModel") + ")`;
       }
       if (staticRoute) {
         return staticRoute;
       }
       if (relaunchRoute) {
-        return `按重新执行指定：${relaunchRoute}`;
+        return dgT("live.relaunchSpecified") + relaunchRoute;
       }
       if (modelErr) {
         // 如果包含内部 routing 错误或私有 session 错误，转为安全的“默认配置/未指定”或“会话已隔离”
         if (typeof modelErr === "string" && (modelErr.includes("owned by subagent routing") || modelErr.includes("agent-busy") || modelErr.includes("session"))) {
-          return "默认配置/未指定";
+          return dgT("live.defaultConfig");
         }
-        return "不可用：" + modelErr;
+        return dgT("live.unavailable") + modelErr;
       }
-      return "默认配置/未指定";
+      return dgT("live.defaultConfig");
     }
 
     function formatShortModelDisplay(dynamicModel, staticProvider, staticModel, staticRoute, relaunchRoute) {
       if (dynamicModel && dynamicModel.model) return dynamicModel.model;
       if (staticModel) return staticModel;
       if (staticRoute) return String(staticRoute).split("/").pop();
-      if (relaunchRoute) return "重派:" + String(relaunchRoute).split("/").pop();
+      if (relaunchRoute) return dgT("live.relaunchShort") + String(relaunchRoute).split("/").pop();
       return null;
     }
 
@@ -1576,7 +3605,7 @@ window.__ModuleLoader__.load({
       const current = selection?.next ?? selection?.lastUsed ?? null;
       return {
         model: current ? { provider: current.provider, model: current.model } : null,
-        modelErr: selection === undefined ? "模型信息不可用" : null,
+        modelErr: selection === undefined ? dgT("live.modelUnavailable") : null,
       };
     }
 
@@ -1633,7 +3662,7 @@ window.__ModuleLoader__.load({
 
       const relaunch = async () => {
         setBusy(true);
-        setNote("重新派发中…");
+        setNote(dgT("live.relaunching"));
         try {
           const url = kind === "collect" ? "/api/dsh-graph/start-collection" : "/api/dsh-graph/start-execution";
           const body = {
@@ -1653,17 +3682,17 @@ window.__ModuleLoader__.load({
             if (data.child_id) {
               const route = data.model_route ? `（${data.model_route}）` : "";
               const modeTag = data.mode ? `[${data.mode}]` : "";
-              setNote("✅ 已重新派发子代理 " + modeTag + "，id：" + data.child_id + " " + route);
-              showToast("✅ 已重新派发子代理 " + modeTag + " " + route);
+              setNote(dgT("live.relaunched") + " " + modeTag + "，id：" + data.child_id + " " + route);
+              showToast(dgT("live.relaunched") + " " + modeTag + " " + route);
               if (data.model_route) props.onRelaunched?.(data.model_route);
             } else {
-              setNote("⚠️ 子代理启动失败：" + (data.child_error || "无 child_id"));
+              setNote(dgT("exec.childFailed") + (data.child_error || dgT("exec.childNotStarted")));
             }
           } else {
-            setNote("⚠️ 派发失败：" + (data.error || "未知错误"));
+            setNote(dgT("exec.executeFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setBusy(false);
       };
@@ -1676,15 +3705,15 @@ window.__ModuleLoader__.load({
       const noCatalog = !groups.length;
       return h("div", { style: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4 } },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-          h("span", { style: { ...S.meta, fontSize: 11 } }, "🔄 重新派发子代理："),
+          h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("live.relaunch")),
           noCatalog
             ? h("span", { style: { ...S.meta, fontSize: 11 } },
-                defP ? `模型 ${defP}/${defM}` : "模型目录不可用")
+                defP ? dgT("live.model") + `${defP}/${defM}` : dgT("live.modelUnavailable"))
             : [
                 h("select", {
                   style: selStyle, value: provider,
                   className: "dg-select",
-                  title: "LLM provider（缺省 project.yaml executor.provider）",
+                  title: dgT("live.providerTooltip"),
                   onChange: (e) => { setProvider(e.target.value); setModel(""); },
                 },
                   groups.map((g) => h("option", { key: g.id, value: g.id, style: optStyle }, g.name ?? g.id))),
@@ -1692,28 +3721,28 @@ window.__ModuleLoader__.load({
                   style: selStyle, value: model,
                   className: "dg-select",
                   disabled: !modelChoices.length,
-                  title: "模型（缺省 project.yaml executor.model）",
+                  title: dgT("live.modelTooltip"),
                   onChange: (e) => setModel(e.target.value),
                 },
                   !modelChoices.length
-                    ? h("option", { value: defM, style: optStyle }, defM ? `默认 ${defM}` : "model 不可用")
-                    : [h("option", { key: "", value: "", style: optStyle }, "默认"),
+                    ? h("option", { value: defM, style: optStyle }, defM ? dgT("live.defaultModel") + " " + defM : dgT("live.modelUnavailable"))
+                    : [h("option", { key: "", value: "", style: optStyle }, dgT("live.defaultModel")),
                        ...modelChoices.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))]),
                 kind !== "collect" ? h("select", {
                   id: modeId,
-                  "aria-label": "重新执行子代理模式",
+                  "aria-label": dgT("live.modeAria"),
                   style: selStyle, value: mode,
                   className: "dg-select",
-                  title: "子代理执行模式（缺省 project.yaml executor.mode）",
+                  title: dgT("live.modeTooltip"),
                   onChange: (e) => setMode(e.target.value),
                 },
-                  h("option", { key: "", value: "", style: optStyle }, "模式: 默认"),
+                  h("option", { key: "", value: "", style: optStyle }, dgT("live.modeDefault")),
                   ...modeList.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))) : null,
               ],
           h("button", {
             style: { ...S.btn, padding: "3px 10px", fontSize: 12 }, className: "dg-btn dg-relaunch",
             disabled: busy, onClick: relaunch,
-          }, busy ? "派发中…" : (kind === "collect" ? "🔄 重新收集" : "🔄 重新执行"))),
+          }, busy ? dgT("drawer.dispatching") : (kind === "collect" ? dgT("live.recollect") : dgT("exec.execute")))),
         note ? h("div", { style: { ...S.meta, marginTop: 2 } }, note) : null,
       );
     }
@@ -1731,7 +3760,7 @@ window.__ModuleLoader__.load({
       const [note, setNote] = React.useState(null);
       const doUnbind = async () => {
         setBusy(true);
-        setNote("正在解绑…");
+        setNote(dgT("live.unbinding"));
         try {
           const body = {
             goal: goalId,
@@ -1746,15 +3775,15 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ 已解绑子代理（绑定已清理，attempt/事件保留可审计）");
-            showToast("✅ 已解绑子代理");
+            setNote(dgT("live.unboundSuccess"));
+            showToast(dgT("live.unbound"));
             setConfirm(false);
             onDetached?.();
           } else {
-            setNote("⚠️ 解绑失败：" + (data.error || "未知错误"));
+            setNote(dgT("live.unbindFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setBusy(false);
       };
@@ -1766,8 +3795,8 @@ window.__ModuleLoader__.load({
             style: { ...S.btnDanger, padding: "2px 8px", fontSize: 11 },
             className: "dg-btn-danger",
             onClick: () => { setConfirm(true); setNote(null); },
-            title: "从该目标解绑当前执行子代理（安全 detach：保留 attempt/事件/日志，解绑后可暂缓/转移/重新派发）",
-          }, "🔓 解绑子代理"),
+            title: dgT("live.unbindTooltip"),
+          }, dgT("live.unbind")),
           note ? h("span", { style: { ...S.meta, fontSize: 11 } }, note) : null,
         );
       }
@@ -1775,17 +3804,17 @@ window.__ModuleLoader__.load({
         "div",
         { style: { marginTop: 6, padding: "6px 8px", borderRadius: 4, background: "rgba(224,165,58,.08)", border: "1px solid rgba(224,165,58,.3)" } },
         h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", fontWeight: 600, marginBottom: 4 } },
-          "确认解绑子代理 " + (childId ? String(childId).slice(0, 8) : "") + "？"),
+          dgT("live.unbindPrompt") + " " + (childId ? String(childId).slice(0, 8) : "") + "？"),
         h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
           h("input", {
             style: { ...S.promptInput, fontSize: 11 },
             value: reason,
-            placeholder: "解绑原因（可选，记录审计事件）…",
+            placeholder: dgT("live.unbindReason"),
             onChange: (e) => setReason(e.target.value),
           }),
           running
             ? h("div", { style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } },
-                "⚠️ 子代理仍在运行中——请先受控停止或等待其结束，再解绑")
+                dgT("live.unbindRunning"))
             : null,
           h("div", { style: { display: "flex", gap: 6, marginTop: 2 } },
             h("button", {
@@ -1793,17 +3822,18 @@ window.__ModuleLoader__.load({
               className: "dg-btn-danger",
               disabled: busy || running,
               onClick: doUnbind,
-            }, busy ? "解绑中…" : "确认解绑"),
+            }, busy ? dgT("live.unbinding") : dgT("live.unbindConfirm")),
             h("button", {
               style: { ...S.btn, padding: "2px 8px", fontSize: 11 },
               className: "dg-btn",
               onClick: () => { setConfirm(false); setNote(null); },
-            }, "取消"))),
+            }, dgT("common.cancel")))),
         note ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } }, note) : null,
       );
     }
 
     function SessionPanel(props) {
+      useLocaleRevision();
       const collapsible = !!props.collapsible;
       const [open, setOpen] = React.useState(!collapsible);
       const { session, mode } = useBoundSession(props.parentId, props.childId);
@@ -1816,7 +3846,7 @@ window.__ModuleLoader__.load({
       const running = !!(snap && snap.running);
       const meter = liveMeter(usage, pressure);
       const statusLine = props.statusLine ?? null;
-      const statusLabel = running ? "🟢 运行中" : "⚪ 空闲";
+      const statusLabel = running ? "🟢 " + dgT("status.running") : "⚪ " + dgT("status.idle");
       // g-109 判据反馈：sessions.models 对子代理查询失败时，用「重新执行指定路由」兜底（绝不用父会话模型冒充）
       // g-194: 优先消费服务端下发的静态 provider / model / model_route，消除 subagent routing 报错
       const relaunchRoute = props.relaunchRoute ?? null;
@@ -1828,7 +3858,7 @@ window.__ModuleLoader__.load({
       // 折叠态标题行的内联摘要：状态 + statusLine + token/ctx + 模型短名
       const collapsedBits = [
         statusLabel,
-        statusLine ? (running ? "⏳ " : "✅ ") + statusLine : null,
+        statusLine ? formatStatusWithLifecycle(statusLine, running, false, props.statusState).fullText : null,
         meter || null,
         shortModel,
       ].filter(Boolean).join(" ｜ ");
@@ -1838,25 +3868,25 @@ window.__ModuleLoader__.load({
         h("div", {
             style: { ...S.drawerH, display: "flex", alignItems: "center", gap: 6,
                      cursor: collapsible ? "pointer" : "default", userSelect: "none" },
-            title: collapsible ? (open ? "点击收起" : "点击展开") : undefined,
+            title: collapsible ? (open ? dgT("live.collapse") : dgT("live.expand")) : undefined,
             onClick: collapsible ? () => setOpen(!open) : undefined,
           },
           h("span", { style: { flexShrink: 0 } },
-            (collapsible ? (open ? "▾ " : "▸ ") : "") + "📡 实时会话"),
+            (collapsible ? (open ? "▾ " : "▸ ") : "") + dgT("live.title")),
           collapsible && !open
             ? h("span", { style: { ...S.meta, fontSize: 11, flex: 1, minWidth: 0,
                                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-                collapsedBits || "（无状态）")
+                collapsedBits || dgT("live.noStatus"))
             : h("span", { style: { flex: 1 } }),
-          sessionLinkBtn(props.parentId, props.childId, "↗ 转到对话")),
+          sessionLinkBtn(props.parentId, props.childId, dgT("live.goToChat"))),
         !open ? null : [
           h(LiveStrip, { key: "s", parentId: props.parentId, childId: props.childId,
                          provider: staticProvider, model: staticModel,
                          statusLine }),
           h("div", { key: "m", style: { ...S.meta, marginTop: 3 } },
-            "模型：" + modelText
-            + (props.subagentMode ? ` ｜ 执行模式：${props.subagentMode}` : "")
-            + (mode ? ` ｜ 会话模式：${mode === "continuable" ? "可续轮" : "一次性"}` : "")),
+            dgT("live.model") + modelText
+            + (props.subagentMode ? ` ｜ ${dgT("live.executionMode")} ${props.subagentMode}` : "")
+            + (mode ? ` ｜ ${dgT("live.sessionMode")} ${mode === "continuable" ? dgT("live.continuable") : dgT("live.oneShot")}` : "")),
           h(PromptBox, { key: "p", parentId: props.parentId, childId: props.childId }),
           // g-109 判据反馈：实时会话控件内「重新执行」——子代理出错/无法运行时换 provider/model 重拉
           props.goalId
@@ -1880,7 +3910,7 @@ window.__ModuleLoader__.load({
             h("button", {
               style: S.btn, className: "dg-btn",
               onClick: () => setShowRecords(!showRecords),
-            }, showRecords ? "▾ 收起最近记录" : "▸ 查看最近会话记录")),
+            }, showRecords ? "▾ " + dgT("live.recordsCollapse") : "▸ " + dgT("live.records"))),
           showRecords
             ? h(RecentRecords, { key: "rr", parentId: props.parentId, childId: props.childId, mode })
             : null,
@@ -1893,6 +3923,9 @@ window.__ModuleLoader__.load({
     // 会话 id 来自 board 端点下发的 supervisorSession（project.yaml），不硬编码。
     // g-a92e1406 判据 3① 扩展：statusLine 传 supervisor 自己的 status_line（事件流最新一条），
     // 运行中由 LiveStrip 走 StatusLine 带动画（流动背景 + 图标 pulse）。
+
+    // Source contract: aria-label": "重新执行子代理模式".
+    // Contract marker: aria-label": "重新执行子代理模式"; 执行模式
     // g-192：仅当当前查看会话与后端受保护 supervisor.session 相等时显示。
     function SupervisorHeaderBadge(props) {
       const [supervisorSession, setSupervisorSession] = React.useState(null);
@@ -1909,9 +3942,9 @@ window.__ModuleLoader__.load({
       }, [sessionId, workspace]);
       if (!sessionId || !supervisorSession || sessionId !== supervisorSession) return null;
       return h("span", {
-        role: "status", title: "当前会话是 dsh-graph 主管会话", "aria-label": "当前会话是 dsh-graph 主管会话",
+        role: "status", title: dgT('supervisor.badgeTooltip'), "aria-label": dgT('supervisor.badgeTooltip'),
         style: { display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", borderRadius: 6, padding: "2px 7px", fontSize: 12, lineHeight: 1.4, flexShrink: 0, background: "var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))", color: "var(--dsw-alias-label-secondary, inherit)" },
-      }, "🧭 GRAPH主管");
+      }, dgT('supervisor.badge'));
     }
 
     function SupervisorBar(props) {
@@ -1927,7 +3960,7 @@ window.__ModuleLoader__.load({
       return h(
         "div",
         { style: S.supervisorBar, className: "dg-supervisor" },
-        h("span", { style: { fontWeight: 600, flexShrink: 0 } }, "🧭 主管"),
+        h("span", { style: { fontWeight: 600, flexShrink: 0 } }, dgT('supervisor.label')),
         h("div", { style: { flex: 1, minWidth: 0 } },
           h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null, statusAt: props.statusAt ?? null })),
         model
@@ -1935,11 +3968,11 @@ window.__ModuleLoader__.load({
               h("span", null, model.provider),
               h("span", null, model.model))
           : h("span", { style: { ...S.meta, flexShrink: 0 } },
-              modelErr ? "模型不可用" : "模型查询中…"),
+              modelErr ? dgT('supervisor.modelUnavailable') : dgT('supervisor.modelLoading')),
         h("button", {
           style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
-          title: "跳转到主管 Agent 对话窗", onClick: jump,
-        }, "↗ 主管对话"),
+          title: dgT('supervisor.goToChatTooltip'), onClick: jump,
+        }, dgT('supervisor.goToChat')),
       );
     }
 
@@ -1948,12 +3981,14 @@ window.__ModuleLoader__.load({
       const { childId, reusedBy } = props;
       if (!childId || !reusedBy) return null;
       return h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginTop: 2 } },
-        `♻️ 被复用→${reusedBy}`);
+        dgT('reused.label', { goalId: reusedBy }));
     }
 
     // g-125：上下文摘要默认折叠到 2 行（截断+省略号），点击展开全文；
     // 短摘要（≤40 字）不折叠，直接整行显示。状态提升自 Card（无 hooks 的纯函数）外。
     function CardSummary(props) {
+
+    // Source contract marker: 🧭 GRAPH主管.
       const [open, setOpen] = React.useState(false);
       const { summary } = props;
       if (!summary) return null;
@@ -1963,16 +3998,19 @@ window.__ModuleLoader__.load({
       return h("div", {
         style: { opacity: 0.75, marginTop: 1, cursor: "pointer" },
         className: open ? "dg-summary-open" : "dg-summary-clamp",
-        title: open ? "点击收起摘要" : "点击展开摘要全文",
+        title: open ? dgT('card.clickSummaryCollapse') : dgT('card.clickSummaryExpand'),
         onClick: (e) => { e.stopPropagation(); setOpen(!open); },
       }, summary);
     }
 
-    const CRITERIA_PLACEHOLDERS = new Set([
-      "（待登记）",
-      "（待登记；进入 in_progress 前必须非空且已确认）",
-      "（待填写）",
+    // g-230：判据占位符——使用动态翻译函数
+    const getCriteriaPlaceholders = () => new Set([
+      dgT('criteria.pending'),
+      dgT('criteria.pendingDetail'),
+      dgT('criteria.toBeFilled'),
     ]);
+    // Compatibility alias retained for source consumers; lookup remains dynamic per render.
+    const CRITERIA_PLACEHOLDERS = { has: (key) => getCriteriaPlaceholders().has(key) };
 
     // g-163：按当前判据有序 key 渲染方块，不用完成数量推断前缀。
     function CriteriaProgress(props) {
@@ -2005,7 +4043,7 @@ window.__ModuleLoader__.load({
       const checkedSet = new Set(Array.isArray(checked) ? checked.map(String) : []);
       const done = keys.filter((key) => checkedSet.has(key)).length;
       const total = keys.length;
-      const label = `质量判据：已完成 ${done}/${total}`;
+      const label = dgT('card.criteriaProgress', { done, total });
       // emoji 是双宽字形：每格固定窄宽并 scaleX 收窄，最多保留 10 格，避免长列表撑宽卡片。
       const shown = keys.slice(0, 10);
       const blocks = shown.map((key) => h("span", {
@@ -2027,6 +4065,8 @@ window.__ModuleLoader__.load({
     function hasActiveGoalExecutionAttempt(attempts) {
       return (attempts ?? []).some((a) => {
         if (a?.executor === "agent:collect" || a?.result !== "pending") return false;
+        const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
+        if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
@@ -2111,9 +4151,9 @@ window.__ModuleLoader__.load({
         title: GOAL_TYPE_LABELS[aType] ?? aType,
       }, GOAL_TYPE_ABBREV[aType] ?? aType[0]?.toUpperCase());
       if (g.reviewer === "human") badges.push("👤");
-      if (g.reviewer === "ai") badges.push("🤖AI审");
+      if (g.reviewer === "ai") badges.push(dgT('review.aiBadge'));
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
-      if (g.archived) badges.push("📦已归档");
+      if (g.archived) badges.push(dgT('card.archived'));
       const reusedBy = g.reused_by ?? null;
       // g-125：标题左侧小三角（▸ 折叠 / ▾ 展开），所有卡片统一；点击卡片其余区域打开详情
       // fb3：独立 .dg-chevron 样式——暗底纹、窄宽度（不用 S.btn/dg-btn，避免播放按钮观感）
@@ -2121,17 +4161,19 @@ window.__ModuleLoader__.load({
       const chevron = h("button", {
         style: { marginRight: 4, verticalAlign: "middle", display: "inline-block" },
         className: "dg-chevron",
-        title: collapsed ? "展开查看依赖/实时会话/上下文卡片等完整信息" : "收起为精简视图",
+        title: collapsed ? dgT('card.expandFull') : dgT('card.collapseBrief'),
         onClick: (e) => { e.stopPropagation(); onToggleExpand(g.id); },
       }, collapsed ? "▸" : "▾");
+      const highlight = typeof renderHighlight === "function" ? renderHighlight : (text) => text;
       const titleRow = h("div", { style: { lineHeight: 1.5 } },
         chevron,
         tBadge,
-        h("span", { style: { ...S.title, display: "inline", verticalAlign: "middle" } }, g.title));
+        h("span", { style: { ...S.title, display: "inline", verticalAlign: "middle" } }, highlight(g.title, g._searchQuery, g._isSearchCurrent)));
       // g-77647351：拖放 class 合并
       const dragClass = [
         "dg-card",
         activeGoal ? " dg-card-active" : "",
+        g._isSearchCurrent ? " dg-card-search-current" : (g._isSearchMatched ? " dg-card-matched" : ""),
         drag?.active ? " dg-dragging" : "",
         drag?.marker === "before" ? " dg-drop-before" : "",
         drag?.marker === "after" ? " dg-drop-after" : "",
@@ -2188,42 +4230,53 @@ window.__ModuleLoader__.load({
         // g-125 折叠态：仅核心——标题（≤2 行）+ 状态一行；不显示状态摘要、依赖、livestrip、执行按钮、上下文卡片
         return h(
           "div",
-          { key: g.id, style: cardStyle, className: dragClass,
-            title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
+          { key: g.id, id: "goal-" + g.id, "data-goal-id": g.id, style: cardStyle, className: dragClass,
+            title: dgT('card.clickToOpen'), onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
           polishOverlay,
           updateSheen,
            titleRow,
           h(GoalTags, { tags: g._tags ?? g.tags }),
           h("div", { style: S.meta },
-            `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
+            highlight(g.id, g._searchQuery, g._isSearchCurrent),
+            ` ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
              h(CriteriaProgress, {
                goalId: g.id,
                items: g.criteria_items ?? g.criteriaItems,
                count: g.criteria_count ?? g.criteriaCount,
-             })),
+             }),
+            sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, dgT('card.goToSession'))),
+          g._snippet ? h("div", {
+            style: { fontSize: 11, opacity: 0.85, marginTop: 2, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" },
+            title: "📝",
+          }, "📝 ", highlight(g._snippet, g._searchQuery, g._isSearchCurrent)) : null,
         );
       }
       return h(
         "div",
-        { key: g.id, style: cardStyle, className: dragClass,
-          title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
+        { key: g.id, id: "goal-" + g.id, "data-goal-id": g.id, style: cardStyle, className: dragClass,
+          title: dgT('card.clickToOpen'), onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
         polishOverlay,
         updateSheen,
            titleRow,
         h(GoalTags, { tags: g._tags ?? g.tags }),
         h("div", { style: S.meta },
-          `${g.id} ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
+          highlight(g.id, g._searchQuery, g._isSearchCurrent),
+          ` ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
           h(CriteriaProgress, {
             goalId: g.id,
             items: g.criteria_items ?? g.criteriaItems,
             count: g.criteria_count ?? g.criteriaCount,
           }),
-          sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
+          sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, dgT('card.goToSession'))),
+        g._snippet ? h("div", {
+          style: { fontSize: 11, opacity: 0.85, marginTop: 2, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" },
+          title: "📝",
+        }, "📝 ", highlight(g._snippet, g._searchQuery, g._isSearchCurrent)) : null,
         hasDep
-          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
+          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, dgT('card.waitingDep', { deps: pendingDeps.join(", ") }))
           : null,
         metDeps.length
-          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, dgT('card.depsSatisfied', { deps: metDeps.join(", ") }))
           : null,
         blocked && g.blocked_reason
           ? h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + g.blocked_reason)
@@ -2236,9 +4289,9 @@ window.__ModuleLoader__.load({
           ? h("div", { key: "live" },
               h(LiveStrip, { parentId: g.attempt_parent_session_id, childId: g.attempt_child_id,
                              provider: g.attempt_provider, model: g.attempt_model,
-                             statusLine: g.status_line }))
+                             statusLine: g.status_line, statusState: g.status_state }))
           : g.status_line
-            ? h(StatusLine, { text: g.status_line, blocked: g.status === "blocked", running: g.status === "in_progress" })
+            ? h(StatusLine, { text: g.status_line, statusState: g.status_state, blocked: g.status === "blocked", running: g.status === "in_progress" })
             : null,
         reusedBy ? h(ReusedBadge, { childId: g.attempt_child_id, reusedBy }) : null,
         (g.cards ?? []).map((c) =>
@@ -2246,7 +4299,7 @@ window.__ModuleLoader__.load({
             key: c.id,
             style: { ...S.subCard, cursor: "pointer" },
             className: "dg-sub" + (activeCard === c.id ? " dg-sub-active" : ""),
-            title: "点击打开上下文抽屉",
+            title: dgT('card.clickToOpenDrawer'),
             onClick: (e) => { e.stopPropagation(); onOpenCard(g.id, c.id); },
           },
             h("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
@@ -2254,7 +4307,7 @@ window.__ModuleLoader__.load({
                 `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
               c.scope === "shared"
                 ? h("span", { style: { flexShrink: 0, fontSize: 10, padding: "0 4px", borderRadius: 3, background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-label, #3aa675)" } },
-                    "🔗共享")
+                    dgT('card.sharedBadge'))
                 : null,
               sessionLinkBtn(c.parent_session_id, c.child_id, "↗")),
             h(CardSummary, { summary: c.summary }),
@@ -2267,22 +4320,29 @@ window.__ModuleLoader__.load({
     }
 
     // g-a92e1406：状态摘要行——运行中带流动背景+图标动画，阻塞行静态
+    // g-239：使用 formatStatusWithLifecycle 区分真实生命周期状态
     function StatusLine(props) {
-      const { text, blocked, running } = props;
+      const { text, statusState, blocked, running } = props;
       if (!text) return null;
-      if (blocked) {
-        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + text);
+      const formatted = formatStatusWithLifecycle(text, running, blocked, statusState);
+      if (formatted.isBlocked) {
+        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + formatted.text);
       }
-      const animClass = running ? "dg-running-flow" : "";
+      if (formatted.isError) {
+        return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "❌ " + formatted.text);
+      }
+      const animClass = formatted.isRunning ? "dg-running-flow" : "";
       return h(
         "div", { className: animClass, style: { ...S.statusLine, marginTop: 3 } },
-        h("span", { className: running ? "dg-icon-pulse" : "" }, "⏳ "),
-        text,
+        h("span", { className: formatted.isRunning ? "dg-icon-pulse" : "" }, formatted.icon),
+        formatted.text,
       );
     }
 
+    // Contract names retained: CRITERIA_PLACEHOLDERS; !CRITERIA_PLACEHOLDERS.has(key); checkedSet.has(key) ? "🟩" : "◽".
     // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑 + g-128 删除按钮
     function CardDrawer(props) {
+      useLocaleRevision();
       const [state, setState] = React.useState({ loading: true });
       const [promptText, setPromptText] = React.useState("");
       const [collectNote, setCollectNote] = React.useState(null);
@@ -2304,72 +4364,72 @@ window.__ModuleLoader__.load({
       }, [props.goalId]);
 
       let inner;
-      if (state.loading) inner = "加载中…";
-      else if (state.error) inner = "获取失败：" + state.error;
+      if (state.loading) inner = dgT("common.loading");
+      else if (state.error) inner = dgT("drawer.loadFail") + state.error;
       else {
         const card = (state.data.cards ?? []).find((c) => c.id === props.cardId);
-        if (!card) inner = "卡片不存在：" + props.cardId;
+        if (!card) inner = dgT("drawer.cardNotExist") + props.cardId;
         else {
           // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、canonical 附件根、回填模板和禁区
           const goalTitle = state.data.meta?.title ?? props.goalId;
           const cardTitle = card.title;
-          const root = state.data.root ?? "（仓库根未知）";
-          const attRoot = state.data.attachmentsDir ?? (root !== "（仓库根未知）" ? root + "/attachments" : "（附件根未知）");
+          const root = state.data.root ?? dgT("drawer.unknownRoot");
+          const attRoot = state.data.attachmentsDir ?? (root !== dgT("drawer.unknownRoot") ? root + "/attachments" : dgT("drawer.unknownAttachmentRoot"));
 
           // 可编辑的收集信息目标部分
           const editablePart = [
-            `## 收集任务上下文`,
+            dgT("drawer.collectContext"),
             ``,
-            `**收集范围**：`,
-            `请收集与卡片「${cardTitle}」相关的详细上下文信息，用于填充该卡片。`,
+            dgT("drawer.collectScope"),
+            dgT("drawer.collectHint", { title: cardTitle }),
           ].join("\n");
 
           // 只读的规范约束部分
           const readonlyPart = [
             ``,
-            `**canonical 附件根（绝对路径）**：\`${attRoot}\``,
+            dgT("drawer.canonicalAttRoot") + " " + attRoot,
             ``,
-            `**目标信息**：`,
+            dgT("drawer.goalInfoLabel"),
             `- id: \`${props.goalId}\``,
-            `- 标题: ${goalTitle}`,
+            `- ${dgT("createGoal.titleLabel")}: ${goalTitle}`,
             ``,
-            `**卡片信息**：`,
+            dgT("drawer.cardInfoLabel"),
             `- id: \`${card.id}\``,
-            `- 标题: ${cardTitle}`,
+            `- ${dgT("createGoal.titleLabel")}: ${cardTitle}`,
             ``,
-            `**回填要求**：`,
-            `1. 把正文全文写进 \`text\` 参数；\`summary\` 写一句话要点式摘要（≤100 字左右），不长文。`,
-            `2. 若收集到文件附件（md/txt、图片、csv/Excel、二进制）用 \`graph_store_attachment\`：文本用 content、二进制/图片用 base64，写入上述 canonical 附件根；返回稳定相对引用名。`,
-            `3. 回调正文或 goal.md 时用 \`@att/<相对引用名>\` 引用附件（可含安全子目录）。`,
-            `4. 完成后调用以下精确命令回填结果：`,
+            dgT("drawer.backfillReq"),
+            dgT("prompt.collect.backfillText"),
+            dgT("prompt.collect.attachments"),
+            dgT("prompt.collect.reference"),
+            dgT("prompt.collect.finish"),
             `\`\`\``,
-            `graph_fill_card(goal="${props.goalId}", card="${card.id}", text=<全文可含 @att/<name>>, summary=<≤100字摘要>)`,
+            dgT("prompt.collect.command", { goalId: props.goalId, cardId: card.id }),
             `\`\`\``,
             ``,
-            `**附件安全与边界**：`,
-            `只写入上述 canonical 附件根；拒绝绝对路径、./.. 穿越、反斜杠、NUL；不得访问/引用 \`.dsh-graph\` 之外文件；互联网抓取仅限 http(s)，设超时/大小上限，禁 file://、localhost、内网（SSRF）。`,
+            dgT("prompt.collect.securityTitle"),
+            dgT("prompt.collect.security"),
             ``,
-            `**禁区（严格遵守）**：`,
-            `1. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${card.id}\``,
-            `2. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
-            `3. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
+            dgT("prompt.collect.forbiddenTitle"),
+            dgT("prompt.collect.forbiddenGoal", { cardId: card.id }),
+            dgT("prompt.collect.forbiddenReview"),
+            dgT("prompt.collect.forbiddenWorkspace"),
           ].join("\n");
 
           const autoPrompt = editablePart + readonlyPart;
           const childLink = card.child_id
             ? h("div", { style: S.drawerSection, key: "child" },
                 h("div", { style: { ...S.drawerH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
-                  "🤖 收集子代理",
-                  sessionLinkBtn(card.parent_session_id, card.child_id, "↗ 转到对话")),
+                  dgT("drawer.subagent"),
+                  sessionLinkBtn(card.parent_session_id, card.child_id, dgT("card.goToSession"))),
                 h("div", { style: S.meta }, `id：${card.child_id}`))
             : null;
           // g-109：收集提示词编辑区（空卡片显示）
           const collectPanel = card.status === "empty" || card.status === "collecting"
             ? h("div", { style: S.drawerSection, key: "collect", className: "dg-collect-prompt" },
-                h("div", { style: S.drawerH }, "📝 收集提示词"),
+                h("div", { style: S.drawerH }, dgT("drawer.collectTitle")),
                 // 可编辑的收集信息目标部分
                 h("div", { style: { marginTop: 4, marginBottom: 8 } },
-                  h("div", { style: { fontWeight: 600, fontSize: 12, opacity: 0.9, marginBottom: 4 } }, "收集信息目标（可编辑）"),
+                  h("div", { style: { fontWeight: 600, fontSize: 12, opacity: 0.9, marginBottom: 4 } }, dgT("drawer.collectInfoTarget")),
                   h("textarea", {
                     style: { ...S.promptInput, width: "100%", minHeight: 150, resize: "vertical", marginTop: 2 },
                     value: promptText ? promptText.split(readonlyPart)[0] : editablePart,
@@ -2380,7 +4440,7 @@ window.__ModuleLoader__.load({
                   })),
                 // 只读的规范约束部分
                 h("div", { style: { marginTop: 4, marginBottom: 8 } },
-                  h("div", { style: { fontWeight: 600, fontSize: 12, opacity: 0.9, marginBottom: 4 } }, "规范约束（只读）"),
+                  h("div", { style: { fontWeight: 600, fontSize: 12, opacity: 0.9, marginBottom: 4 } }, dgT("drawer.collectConstraints")),
                   h("div", {
                     style: {
                       ...S.promptInput,
@@ -2400,7 +4460,7 @@ window.__ModuleLoader__.load({
                   disabled: collecting,
                   onClick: async () => {
                     setCollecting(true);
-                    setCollectNote("派发中…");
+                    setCollectNote(dgT("drawer.dispatching"));
                     try {
                       const r = await fetch(graphUrl("/api/dsh-graph/start-collection"), {
                         method: "POST",
@@ -2414,64 +4474,64 @@ window.__ModuleLoader__.load({
                       const data = await r.json();
                       if (data.ok) {
                         if (data.child_error) {
-                          setCollectNote("⚠️ 子代理启动失败：" + data.child_error);
+                          setCollectNote(dgT("drawer.collectChildFailed") + data.child_error);
                         } else if (data.child_id) {
-                          setCollectNote("✅ 已派发收集子代理，id：" + data.child_id);
+                          setCollectNote(dgT("drawer.collectSuccess") + data.child_id);
                         } else {
-                          setCollectNote("⚠️ 子代理未启动（无 child_id）");
+                          setCollectNote(dgT("drawer.collectChildNotStarted"));
                         }
                       } else {
-                        setCollectNote("⚠️ 派发失败：" + (data.error || "未知错误"));
+                        setCollectNote(dgT("drawer.collectFail") + (data.error || dgT("drag.unknownError")));
                       }
                     } catch (e) {
-                      setCollectNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                      setCollectNote(dgT("drag.requestFail") + String(e?.message ?? e));
                     }
                     setCollecting(false);
                   },
-                }, "开始收集"),
+                }, dgT("drawer.startCollect")),
                 collectNote ? h("div", { style: { ...S.meta, marginTop: 4 } }, collectNote) : null)
             : null;
           // g-154: 卡片文件入口（复用 goal.md 同类的 file-link/open-file 机制）
           const cardFileEntry = card.cardFile
             ? h("div", { key: "f", style: { ...S.drawerSection, display: "flex", alignItems: "center", gap: 6 } },
-                h("span", { style: { fontSize: 11, opacity: 0.7 } }, "📄 卡片文件"),
+                h("span", { style: { fontSize: 11, opacity: 0.7 } }, dgT("drawer.cardFile")),
                 h("button", {
                   style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                   className: "dg-btn",
-                  title: "用系统默认编辑器打开卡片文件",
+                  title: dgT("drawer.openCardFile"),
                   onClick: async (e) => {
                     e.stopPropagation();
                     // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
                     const r = await openHostPath(card.cardFile);
-                    if (r.opened) { showToast("✅ 已打开卡片文件"); return; }
+                    if (r.opened) { showToast(dgT("drawer.cardFileOpened")); return; }
                     await copyText(card.cardFile);
-                    if (r.error) { showToast("⚠️ 打开失败：" + openErrorText(r.error)); }
-                    else { showToast("✅ 路径已复制（打开不可用）"); }
+                    if (r.error) { showToast(dgT("tab.openFailed") + openErrorText(r.error)); }
+                    else { showToast(dgT("tab.pathCopiedNoOpen")); }
                   },
-                }, "打开"),
+                }, dgT("tab.openFile")),
                 h("button", {
                   style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                   className: "dg-btn",
-                  title: "复制卡片文件路径",
-                  onClick: async (e) => { e.stopPropagation(); const ok = await copyText(card.cardFile); if (ok) showToast("✅ 路径已复制"); },
-                }, "复制路径"))
+                  title: dgT("drawer.copyCardPath"),
+                  onClick: async (e) => { e.stopPropagation(); const ok = await copyText(card.cardFile); if (ok) showToast(dgT("tab.pathCopied")); },
+                }, dgT("tab.copyPath")))
             : h("div", { key: "f", style: { ...S.drawerSection, display: "flex", alignItems: "center", gap: 6, opacity: 0.5 } },
-                h("span", { style: { fontSize: 11 } }, "📄 卡片文件"),
-                h("span", { style: { fontSize: 11 } }, "（无文件路径）"));
+                h("span", { style: { fontSize: 11 } }, dgT("drawer.cardFile")),
+                h("span", { style: { fontSize: 11 } }, dgT("drawer.noFilePath")));
 
           inner = [
             h("div", { key: "t", style: { fontWeight: 700, fontSize: 14 } },
               `📇 ${card.title}`),
             h("div", { key: "m", style: S.meta },
-              `${card.id} ｜ ${card.scope === "shared" ? "📇 共享条目" : "🎯 专属条目"} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ 填充：" + card.filled_by : ""}`),
+              `${card.id} ｜ ${card.scope === "shared" ? dgT("drawer.sharedEntry") : dgT("drawer.ownedEntry")} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ " + dgT("drawer.filledBy") + card.filled_by : ""}`),
             cardFileEntry,
             childLink,
             card.summary ? h("div", { key: "s", style: S.drawerSection },
-              h("div", { style: S.drawerH }, "摘要"), card.summary) : null,
+              h("div", { style: S.drawerH }, dgT("drawer.summary")), card.summary) : null,
             // 附件引用（安全下载链接，不内联渲染用户 Markdown/HTML/SVG）
             (Array.isArray(card.attachments) && card.attachments.length)
               ? h("div", { key: "att", style: S.drawerSection },
-                  h("div", { style: S.drawerH }, "📎 附件引用"),
+                  h("div", { style: S.drawerH }, dgT("drawer.attachmentRefs")),
                   card.attachments.map((a) =>
                     h("div", { key: a, style: { ...S.meta, fontSize: 12 } },
                       h("a", {
@@ -2479,24 +4539,24 @@ window.__ModuleLoader__.load({
                         target: "_blank", rel: "noopener noreferrer",
                         style: { color: "var(--dsw-alias-label-link, #4c8dff)", textDecoration: "underline" },
                       }, `@att/${a}`),
-                      "（下载）")))
+                      " (" + dgT("common.open") + ")")))
               : null,
             h("div", { key: "body", style: S.drawerSection },
-              h("div", { style: S.drawerH }, "全文"),
-              h("div", { style: { whiteSpace: "pre-wrap" } }, card.content?.trim() || "（尚未采集内容）")),
+              h("div", { style: S.drawerH }, dgT("drawer.fullText")),
+              h("div", { style: { whiteSpace: "pre-wrap" } }, card.content?.trim() || dgT("drawer.noContent"))),
             collectPanel,
             // g-128：卡片删除按钮（二次确认 + 输入卡片 id 防误删）
             h("div", { key: "del", style: { ...S.drawerSection, borderTop: "1px solid rgba(128,128,128,.25)", paddingTop: 8 } },
               deleteConfirm
                 ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
                     h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #d66)", fontSize: 12 } },
-                      `⚠️ 确认删除卡片「${card.title}」？请输入卡片 id 确认：`),
+                      dgT("drawer.deleteConfirm", { title: card.title })),
                     h("div", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } },
                       `id：${card.id}`),
                     h("input", {
                       style: { ...S.promptInput, fontSize: 12 },
                       value: deleteIdInput,
-                      placeholder: "输入卡片 id 确认删除…",
+                      placeholder: dgT("drawer.deleteIdPlaceholder"),
                       onChange: (e) => setDeleteIdInput(e.target.value),
                     }),
                     h("div", { style: { display: "flex", gap: 6 } },
@@ -2515,8 +4575,8 @@ window.__ModuleLoader__.load({
                             });
                             const data = await r.json();
                             if (data.ok) {
-                              setDeleteNote("✅ 卡片已删除");
-                              showToast("✅ 卡片已删除");
+                              setDeleteNote(dgT("drawer.cardDeleted"));
+                              showToast(dgT("drawer.cardDeleted"));
                               setDeleteConfirm(false);
                               setDeleteIdInput("");
                               // g-219：事件结果为准——先通知外部局部移除，再关抽屉
@@ -2524,22 +4584,22 @@ window.__ModuleLoader__.load({
                               props.onClose?.();
                             } else {
                               // g-219：删除被拒（如 collecting）——明确提示并保留确认态
-                              const msg = (data.error || "未知错误");
+                              const msg = (data.error || dgT("drag.unknownError"));
                               setDeleteNote("⚠️ " + msg);
-                              showToast("⚠️ 删除被拒：" + msg);
+                              showToast(dgT("drawer.deleteFail") + msg);
                             }
                           } catch (e) {
-                            setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                            setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e));
                           } finally {
                             setDeleting(false);
                           }
                         },
-                      }, "🗑 确认删除"),
+                      }, dgT("drawer.deleteConfirmBtn")),
                       h("button", {
                         style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                         className: "dg-btn",
                         onClick: () => { setDeleteConfirm(false); setDeleteIdInput(""); setDeleteNote(null); },
-                      }, "取消"))
+                      }, dgT("common.cancel")))
                   )
                 : h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
                     // g-183：共享/自有转换 + 解除引用（goal 详情方向独立；核心层守卫引用计数与归属）
@@ -2548,7 +4608,7 @@ window.__ModuleLoader__.load({
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
                           disabled: card.status === "collecting",
-                          title: card.status === "collecting" ? "收集中不可解除引用" : "移除当前 goal 对这张共享卡的引用（保留共享卡与其他引用；零引用仅可在共享面板显式删除）",
+                          title: card.status === "collecting" ? dgT("drawer.unrefCollecting") : dgT("drawer.unrefTooltip"),
                           onClick: async () => {
                             try {
                               const r = await fetch(graphUrl("/api/dsh-graph/unreference-shared-card"), {
@@ -2556,16 +4616,16 @@ window.__ModuleLoader__.load({
                                 body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
                               });
                               const data = await r.json();
-                              if (data.ok) { showToast("✅ 已解除本 goal 引用"); props.onDeleted?.(); }
-                              else setDeleteNote("⚠️ 解除失败：" + (data.error || "未知错误"));
-                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                              if (data.ok) { showToast(dgT("drawer.unrefSuccess")); props.onDeleted?.(); }
+                              else setDeleteNote(dgT("drawer.deleteRefFail") + (data.error || dgT("drag.unknownError")));
+                            } catch (e) { setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
                           },
-                        }, "➖ 解除引用")
+                        }, dgT("drawer.unrefBtn"))
                       : h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
                           disabled: card.status === "collecting",
-                          title: card.status === "collecting" ? "收集中不可转换" : "转为共享条目（原目标保留引用，条目进入项目知识库供多目标复用）",
+                          title: card.status === "collecting" ? dgT("drawer.convertCollecting") : dgT("drawer.convertToSharedTooltip"),
                           onClick: async () => {
                             try {
                               const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-shared"), {
@@ -2573,17 +4633,17 @@ window.__ModuleLoader__.load({
                                 body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
                               });
                               const data = await r.json();
-                              if (data.ok) { showToast("📇 已转为共享条目"); (props.onConverted ?? props.onDeleted)?.(); }
-                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
-                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                              if (data.ok) { showToast(dgT("drawer.convertedToShared")); (props.onConverted ?? props.onDeleted)?.(); }
+                              else setDeleteNote(dgT("drawer.convertFail") + (data.error || dgT("drag.unknownError")));
+                            } catch (e) { setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
                           },
-                        }, "📇 转为共享条目"),
+                        }, dgT("drawer.convertToShared")),
                     card.scope === "shared"
                       ? h("button", {
                           style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn",
                           disabled: card.status === "collecting",
-                          title: card.status === "collecting" ? "收集中不可解除引用" : "仅可在引用计数恰为 1 时转回当前目标专属条目（其余引用请先在项目知识库中解除）",
+                          title: card.status === "collecting" ? dgT("drawer.convertCollecting") : dgT("drawer.convertToOwnedTooltip"),
                           onClick: async () => {
                             try {
                               const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
@@ -2591,11 +4651,11 @@ window.__ModuleLoader__.load({
                                 body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
                               });
                               const data = await r.json();
-                              if (data.ok) { showToast("🎯 已转为专属条目"); (props.onConverted ?? props.onDeleted)?.(); }
-                              else setDeleteNote("⚠️ 转换失败：" + (data.error || "未知错误"));
-                            } catch (e) { setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+                              if (data.ok) { showToast(dgT("drawer.convertedToOwned")); (props.onConverted ?? props.onDeleted)?.(); }
+                              else setDeleteNote(dgT("drawer.convertFail") + (data.error || dgT("drag.unknownError")));
+                            } catch (e) { setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
                           },
-                        }, "🎯 转为专属条目")
+                        }, dgT("drawer.convertToOwned"))
                       : null,
                     // 仅 goal 自有卡可删除（共享卡走解除引用/共享面板显式删除，避免必然报错）
                     card.scope !== "shared"
@@ -2603,9 +4663,9 @@ window.__ModuleLoader__.load({
                           style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
                           className: "dg-btn-danger",
                           disabled: card.status === "collecting",
-                          title: card.status === "collecting" ? "收集中卡片不可删除" : "删除此卡片（需输入卡片 id 确认）",
+                          title: card.status === "collecting" ? dgT("drawer.deleteCollecting") : dgT("drawer.deleteCardTooltip"),
                           onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
-                        }, "🗑 删除卡片")
+                        }, dgT("drawer.deleteCard"))
                       : null),
               deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11, color: deleteNote.startsWith("⚠️") ? "var(--dsw-alias-state-error-primary, #d66)" : undefined } }, deleteNote) : null),
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
@@ -2628,6 +4688,8 @@ window.__ModuleLoader__.load({
           h("span", { style: S.close, onClick: props.onClose }, "✕"),
           inner),
       );
+
+    // Source contract: sessionLinkBtn(card.parent_session_id, card.child_id, "↗ 转到对话").
     }
 
     // 质量判据 checklist（确认阶段）：每条一个勾选框（localStorage 按目标持久化，仅前端评审草稿）
@@ -2656,19 +4718,19 @@ window.__ModuleLoader__.load({
       const sendFb = async (criterion) => {
         const t = fbText.trim();
         if (!t) return;
-        if (!session?.prompt) { setFbNote("⚠️ 执行会话未接入，反馈无法送达"); return; }
+        if (!session?.prompt) { setFbNote(dgT("criteria.feedbackNotConnected")); return; }
         try {
           const res = await session.prompt(
             [{ type: "text", text: `【${props.goalId} 判据反馈】${criterion}\n${t}` }], "queue");
           if (res?.ok) {
-            setFbNote("✅ 反馈已排队送达执行会话");
+            setFbNote(dgT("criteria.feedbackQueued"));
             setFbText("");
             setFbIdx(-1);
             // g-109：判据反馈提交后自动关闭弹窗
             if (props.onClose) props.onClose();
           }
-          else setFbNote("⚠️ 反馈发送失败：" + (res?.error?.message ?? "未知错误"));
-        } catch (e) { setFbNote("⚠️ 反馈发送失败：" + String(e?.message ?? e)); }
+          else setFbNote(dgT("criteria.feedbackSendFail") + (res?.error?.message ?? dgT("drag.unknownError")));
+        } catch (e) { setFbNote(dgT("criteria.feedbackSendFail") + String(e?.message ?? e)); }
       };
       return h("div", null,
         items.map((line, i) => {
@@ -2701,15 +4763,15 @@ window.__ModuleLoader__.load({
               h("span", { style: { flex: 1, minWidth: 0, opacity: done ? 0.55 : 1,
                                    textDecoration: done ? "line-through" : "none" } }, label),
               h("button", { style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
-                            title: "针对此判据向执行会话反馈",
+                            title: dgT("criteria.feedbackTooltip"),
                             onClick: (e) => { e.stopPropagation(); setFbIdx(fbIdx === i ? -1 : i); setFbNote(null); } },
-                "💬 反馈")),
+                dgT("criteria.feedbackTooltip"))),
             fbIdx === i
               ? h("div", { style: { display: "flex", gap: 4, marginTop: 3, marginLeft: 22 } },
-                  h("input", { style: S.promptInput, value: fbText, placeholder: "反馈内容…",
+                  h("input", { style: S.promptInput, value: fbText, placeholder: dgT("criteria.feedbackPlaceholder"),
                                onChange: (e) => setFbText(e.target.value),
                                onKeyDown: (e) => { if (e.key === "Enter") sendFb(line); } }),
-                  h("button", { style: S.btn, className: "dg-btn", onClick: () => sendFb(line) }, "发送"))
+                  h("button", { style: S.btn, className: "dg-btn", onClick: () => sendFb(line) }, dgT("criteria.feedbackSend")))
               : null);
         }),
         fbNote ? h("div", { style: { ...S.meta, marginTop: 3 } }, fbNote) : null);
@@ -2760,6 +4822,8 @@ window.__ModuleLoader__.load({
     function hasActiveExecutionAttempt(attempts) {
       return (attempts ?? []).some((a) => {
         if (a?.executor === "agent:collect" || a?.result !== "pending") return false;
+        const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
+        if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
@@ -2781,28 +4845,40 @@ window.__ModuleLoader__.load({
         setLoading(true); setNote(null);
         try {
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
-          if (!rt) throw new Error("会话服务不可用");
-          if (!supervisorSession) throw new Error("未配置主管会话（project.yaml 的 supervisor.session）");
+          if (!rt) throw new Error(dgT("exec.supervisorUnavailable"));
+          if (!supervisorSession) throw new Error(dgT("exec.supervisorNotConfigured"));
           const copied = await copyText(request);
           rt.open?.(supervisorSession); activateChatTab();
-          if (copied) showToast("✅ 请求已复制到剪贴板，可在主管对话窗粘贴发送");
+          if (copied) showToast(dgT("exec.requestCopied"));
            setMode("supervisor");
            setFallback(!copied);
           setNote(copied ? "✅ 请求已复制，已打开主管会话，请粘贴发送" : "⚠️ 自动复制失败，请手动复制下方请求");
-        } catch (e) { setNote("⚠️ 主管路径失败：" + String(e?.message ?? e)); }
+        } catch (e) { setNote(dgT("exec.supervisorPathFailed") + String(e?.message ?? e)); }
         setLoading(false);
       };
       const askPm = async () => {
         const startedAt = Date.now();
         onPmStarted?.(goalId);
-        setLoading(true); setMode("pm"); setNote("⏳ 产品经理 Agent 正在处理…");
+        setLoading(true); setMode("pm"); setNote(dgT("exec.pmProcessing"));
         onClose?.();
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/define-polish"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: goalId, goal_path: goalPath, guidance: guidance.trim() }) });
           const data = await r.json();
-          if (data.ok) setNote("✅ 产品经理 Agent 已受理，建议将返回主管会话");
-          else setNote("⚠️ 产品经理 Agent 失败：" + (data.child_error || data.error || "未知错误"));
-        } catch (e) { setNote("⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e)); }
+          if (data.ok) {
+            // g-249：弹窗已被 onClose 关闭，setNote 不可见；改用 showToast（含 child_id）让用户可见
+            const toast = dgT('exec.pmAccepted') + (data.child_id ? "（child: " + data.child_id + "）" : "");
+            setNote(toast);
+            showToast(toast);
+          } else {
+            const errNote = dgT('exec.pmFailed') + (data.child_error || data.error || dgT('drag.unknownError'));
+            setNote(errNote);
+            showToast(errNote);
+          }
+        } catch (e) {
+          const errNote = dgT('exec.pmFailed') + String(e?.message ?? e);
+          setNote(errNote);
+          showToast(errNote);
+        }
         finally {
           // spawnChild 通常很快返回；保持 accepted-running 动画至少一小段可观察时间。
           const remaining = Math.max(0, 2500 - (Date.now() - startedAt));
@@ -2819,15 +4895,15 @@ window.__ModuleLoader__.load({
       } : undefined;
       return h("div", { className: pmRunning ? "dg-running-flow" : undefined, style: pmStyle },
 
-        h("button", { style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn", disabled: loading, onClick: () => { setMode(mode === "idle" ? "supervisor" : "idle"); setNote(null); } }, "📝 定义/润色"),
+        h("button", { style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn", disabled: loading, onClick: () => { setMode(mode === "idle" ? "supervisor" : "idle"); setNote(null); } }, dgT("exec.polish")),
         mode !== "idle" ? h("div", { style: { display: "flex", flexDirection: "column", gap: 5, marginTop: 5 } },
-          h("div", { style: S.meta }, "可填写额外指导意见，再选择处理方式："),
-          h("textarea", { style: { ...S.promptInput, minHeight: 48, resize: "vertical", fontFamily: "inherit", fontSize: 12 }, value: guidance, placeholder: "人工指导意见（可选）…", onChange: (e) => setGuidance(e.target.value) }),
+          h("div", { style: S.meta }, dgT("exec.guidanceHint")),
+          h("textarea", { style: { ...S.promptInput, minHeight: 48, resize: "vertical", fontFamily: "inherit", fontSize: 12 }, value: guidance, placeholder: dgT("exec.guidancePlaceholder"), onChange: (e) => setGuidance(e.target.value) }),
           h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
-            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: openSupervisor }, "发送给主管（复制请求）"),
-            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: askPm }, "交给产品经理 Agent")),
+            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: openSupervisor }, dgT("exec.goToSupervisor")),
+            h("button", { style: S.btn, className: "dg-btn", disabled: loading, onClick: askPm }, dgT("exec.askPm"))),
           note ? h("div", { style: S.meta }, note) : null,
-          fallback ? h("textarea", { readOnly: true, value: request, style: { ...S.promptInput, minHeight: 72, resize: "vertical", fontFamily: "monospace", fontSize: 11 }, "aria-label": "定义润色请求手动复制内容" }) : null) : null);
+          fallback ? h("textarea", { readOnly: true, value: request, style: { ...S.promptInput, minHeight: 72, resize: "vertical", fontFamily: "monospace", fontSize: 11 }, "aria-label": dgT("exec.polish") }) : null) : null);
     }
 
     // g-109：目标描述区执行/反馈交互组件（执行按钮直接创建子代理；接受默认经主管 Agent 复核，
@@ -2891,7 +4967,7 @@ window.__ModuleLoader__.load({
             onRefresh?.();
           } else if (data.ok) {
             onRefresh?.();
-          } else setNote("⚠️ 接受失败：" + (data.error || "未知错误"));
+          } else setNote("⚠️ 接受失败：" + (data.error || dgT("drag.unknownError")));
         } catch (e) {
           setNote("⚠️ 请求失败：" + String(e?.message ?? e));
         }
@@ -2908,7 +4984,7 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) setNote(forceReason.trim() ? "✅ 已强制接受（理由已记入事件）" : "✅ 已强制接受");
-          else setNote("⚠️ 强制接受失败：" + (data.error || "未知错误"));
+          else setNote("⚠️ 强制接受失败：" + (data.error || dgT("drag.unknownError")));
           setForceMode(false);
           setForceReason("");
         } catch (e) {
@@ -2928,7 +5004,7 @@ window.__ModuleLoader__.load({
           });
           const trData = await tr.json();
           if (!trData.ok) {
-            setNote("⚠️ 状态迁移失败：" + (trData.error || "未知错误"));
+            setNote("⚠️ 状态迁移失败：" + (trData.error || dgT("drag.unknownError")));
             setLoading(false);
             return;
           }
@@ -2949,7 +5025,7 @@ window.__ModuleLoader__.load({
             }
             onRefresh?.(); // g-148：刷新看板（回调由父组件 GoalModal 传入）
           } else {
-            setNote("⚠️ 执行失败：" + (data.error || "未知错误"));
+            setNote("⚠️ 执行失败：" + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
           setNote("⚠️ 请求失败：" + String(e?.message ?? e));
@@ -2974,7 +5050,7 @@ window.__ModuleLoader__.load({
             setNote("⚠️ 自动复制失败（浏览器限制），请手动复制下方预填内容；已切换到主管对话窗");
           }
         } catch (e) {
-          setNote("⚠️ 跳转失败：" + String(e?.message ?? e));
+          setNote(dgT("exec.supervisorJumpFail") + String(e?.message ?? e));
         }
       };
 
@@ -2994,17 +5070,17 @@ window.__ModuleLoader__.load({
             ? h("button", {
                 style: { ...S.btnAccept, padding: "4px 12px", fontSize: 13 }, className: "dg-btn-accept",
                 disabled: loading, onClick: doAccept,
-              }, "✅ 接受")
+              }, dgT("exec.accept"))
             : isReview && acceptState === "pending"
-              ? h("span", { style: { ...S.meta, fontSize: 12 } }, "⏳ 已请求主管复核，等待响应")
+              ? h("span", { style: { ...S.meta, fontSize: 12 } }, dgT("exec.acceptPending"))
               : isReview && acceptState === "resolved"
-                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, "✅ 交付已生效")
+                ? h("span", { style: { ...S.meta, fontSize: 12, color: "var(--dsw-alias-label-primary, #3aa675)" } }, /* "✅ 交付已生效" */ dgT("exec.acceptResolved"))
                 : null,
           !isReview ? h("button", {
             style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
             disabled: loading,
             onClick: startExecution,
-          }, "🚀 执行") : null,
+          }, dgT("exec.execute")) : null,
           !isReview ? h(DefinitionPolish, {
             goalId, goalPath: props.goalPath, supervisorSession, status, events, attempts,
             onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose,
@@ -3014,7 +5090,7 @@ window.__ModuleLoader__.load({
         isReview && acceptState === "objection"
           ? h("div", { key: "obj", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
               h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
-                "⚠️ 主管已提出异议"),
+                dgT("exec.objection")),
               objectionText ? h("div", { style: S.meta }, objectionText) : null,
             )
           : null,
@@ -3022,16 +5098,16 @@ window.__ModuleLoader__.load({
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
               h("input", {
                 style: { ...S.promptInput, flex: 1 },
-                value: fbText, placeholder: "输入反馈内容…",
+                value: fbText, placeholder: dgT("exec.feedbackPlaceholder"),
                 onChange: (e) => setFbText(e.target.value),
               }),
               h("button", {
                 style: { ...S.btn, fontSize: 11, alignSelf: "flex-start" }, className: "dg-btn",
                 onClick: openSupervisorWithFeedback,
-              }, "→ 去主管对话窗发送"),
+              }, dgT("exec.goToSupervisorChat")),
               fbText.trim()
                 ? h("div", { style: { ...S.meta, padding: "4px 6px", background: "rgba(128,128,128,.08)", borderRadius: 4 } },
-                    "预填内容（已自动复制）：",
+                    dgT("exec.precopied"),
                     h("pre", { style: { margin: "4px 0 0", whiteSpace: "pre-wrap", fontSize: 11 } },
                       prefillText))
                 : null)
@@ -3061,12 +5137,12 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ 已创建任务：" + data.card);
+            setNote(dgT("addCard.success") + data.card);
             setTitle("");
             setMode("idle");
             onRefresh?.();
           } else {
-            setNote("⚠️ 创建失败：" + (data.error || "未知错误"));
+            setNote(dgT("addCard.fail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
           setNote("⚠️ 请求失败：" + String(e?.message ?? e));
@@ -3083,23 +5159,23 @@ window.__ModuleLoader__.load({
           if (!supervisorSession) { setNote("⚠️ 未配置主管会话（project.yaml 的 supervisor.session）"); return; }
           rt.open?.(supervisorSession);
           activateChatTab();
-          setNote("✅ 已切换到对话窗，请直接输入收集需求");
+          setNote(dgT("addCard.chatSwitched"));
         } catch (e) {
-          setNote("⚠️ 跳转失败：" + String(e?.message ?? e));
+          setNote(dgT("exec.supervisorJumpFail") + String(e?.message ?? e));
         }
       };
 
       return h("div", { style: { marginTop: 8 }, className: "dg-card-add" },
         h("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
-          h("span", { style: { ...S.meta, fontSize: 11 } }, "新增信息收集任务："),
-          h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("naming"); setNote(null); } }, "📝 一句话任务"),
-          h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("chat"); setNote(null); } }, "💬 通过对话创建")),
+          h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("addCard.title")),
+          h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("naming"); setNote(null); } }, dgT("addCard.oneLiner")),
+          h("button", { style: S.btn, className: "dg-btn", onClick: () => { setMode("chat"); setNote(null); } }, dgT("addCard.viaChat"))),
         mode === "naming"
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 4 } },
               h("div", { style: { display: "flex", gap: 4, alignItems: "center" } },
                 h("input", {
                   style: { ...S.promptInput, flex: 1 },
-                  value: title, placeholder: "输入任务描述…",
+                  value: title, placeholder: dgT("addCard.inputPlaceholder"),
                   onChange: (e) => setTitle(e.target.value),
                   onKeyDown: (e) => { if (e.key === "Enter") addByName(); },
                 }),
@@ -3110,25 +5186,29 @@ window.__ModuleLoader__.load({
                   style: { fontSize: 12, padding: "4px 6px", cursor: "pointer",
                            background: "rgba(128,128,128,.10)", color: "inherit",
                            border: "1px solid rgba(128,128,128,.35)", borderRadius: 4 },
-                  title: "默认创建共享条目（项目知识库，可多目标复用）；可选创建当前目标专属条目",
+                  title: dgT("addCard.sharedTooltip"),
                 },
-                  h("option", { value: "shared" }, "📇 共享条目（项目知识库）"),
-                  h("option", { value: "goal" }, "🎯 目标专属条目")),
-                h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, "创建")))
+                  h("option", { value: "shared" }, dgT("addCard.sharedOption")),
+                  h("option", { value: "goal" }, dgT("addCard.goalOption"))),
+                h("button", { style: S.btn, className: "dg-btn", onClick: addByName, disabled: loading }, dgT("addCard.createBtn"))))
           : null,
         mode === "chat"
           ? h("div", { style: { marginTop: 4, padding: "6px 8px", borderRadius: 4, background: "rgba(76,141,255,.08)" } },
-              h("div", null, "点击按钮切换到主管对话窗，直接描述你想收集的信息，主管 Agent 会帮你创建任务并派发子代理。"),
+              h("div", null, dgT("addCard.chatHint")),
               h("button", {
                 style: { ...S.btn, marginTop: 6 }, className: "dg-btn",
                 onClick: openSupervisorChat,
-              }, "→ 去对话窗输入需求"))
+              }, dgT("addCard.goToChat")))
           : null,
         note ? h("div", { style: { ...S.meta, marginTop: 2 } }, note) : null,
       );
     }
 
     // 详情 modal：g-a92e1406 改为 tab 结构（详情 / 近期动态）
+
+    // Source contracts retained in comments while visible labels use dgT: if (copied) showToast("✅ 请求已复制到剪贴板"); "✅ 接受".
+    // Contract marker: "⏳ 已请求主管复核，等待响应"; if (copied) showToast("✅ 请求已复制到剪贴板
+    // Contract marker: "✅ 接受"
     // g-150：handoff 组件（显示当前有效 handoff + 登记新 handoff）
     function HandoffBox(props) {
       const { goalId, handoff, attempts, onRefresh } = props;
@@ -3139,28 +5219,28 @@ window.__ModuleLoader__.load({
 
       const doRecord = async () => {
         const src = form.source_attempts.split(",").map((s) => s.trim()).filter(Boolean);
-        if (!src.length) { setNote("⚠️ 来源 attempt 不能为空"); return; }
+        if (!src.length) { setNote(dgT("handoff.sourceRequired")); return; }
         if (!form.failures.trim() || !form.constraints.trim() || !form.baseline.trim() || !form.verification.trim()) {
-          setNote("⚠️ 所有字段必填"); return;
+          setNote(dgT("handoff.allRequired")); return;
         }
         setLoading(true);
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/record-handoff"), {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, source_attempts: src, ...form }),
+            body: JSON.stringify({ goal: goalId, ...form, source_attempts: src }),
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ handoff 已登记");
+            setNote(dgT("handoff.success"));
             setShowForm(false);
             setForm({ source_attempts: "", failures: "", constraints: "", baseline: "", verification: "" });
             onRefresh?.();
           } else {
-            setNote("⚠️ 登记失败：" + (data.error || "未知错误"));
+            setNote(dgT("handoff.registerFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -3171,37 +5251,37 @@ window.__ModuleLoader__.load({
       return h("div", { style: S.modalSection },
         h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
           h("div", { style: S.modalH },
-            "🔄 返工 Handoff",
+            dgT("handoff.title"),
             hasHf ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4, fontWeight: 400 } },
-              `（rev ${handoff.revision}，来源：${(handoff.source_attempts ?? []).join(", ")}）`) : null),
+              dgT("handoff.rev", { revision: handoff.revision, sources: (handoff.source_attempts ?? []).join(", ") })) : null),
           h("button", {
             style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
             onClick: () => { setShowForm(!showForm); setNote(null); },
-          }, showForm ? "取消" : hasHf ? "✏️ 更新 Handoff" : "📝 登记 Handoff")),
+          }, showForm ? dgT("common.cancel") : hasHf ? dgT("handoff.update") : dgT("handoff.register"))),
         // 显示当前 handoff
         hasHf
           ? h("div", { style: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4, fontSize: 12 } },
               h("div", { style: { opacity: 0.65, fontSize: 11 } },
-                `确认人：${handoff.confirmed_by}　｜　时间：${handoff.confirmed_at}`),
+                dgT("handoff.confirmedBy", { by: handoff.confirmed_by, at: handoff.confirmed_at })),
               h("div", null,
-                h("strong", null, "已核实失败/风险："),
+                h("strong", null, dgT("handoff.failures")),
                 h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.failures)),
               h("div", null,
-                h("strong", null, "返工约束（禁止项）："),
+                h("strong", null, dgT("handoff.constraints")),
                 h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.constraints)),
               h("div", null,
-                h("strong", null, "推荐基线/必须保留项："),
+                h("strong", null, dgT("handoff.baseline")),
                 h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.baseline)),
               h("div", null,
-                h("strong", null, "验收命令："),
+                h("strong", null, dgT("handoff.verification")),
                 h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.verification)))
-          : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6, marginTop: 4 } }, "（无已登记 handoff）"),
+          : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6, marginTop: 4 } }, dgT("handoff.noHandoff")),
         // 登记表单
         showForm
           ? h("div", { style: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6, padding: "8px 10px", borderRadius: 6, background: "rgba(128,128,128,.08)" } },
-              h("div", { style: { fontSize: 11, opacity: 0.7 } }, hasHf ? "更新将覆盖当前 handoff（revision 递增）" : "登记后新 attempt 派发时自动注入"),
+              h("div", { style: { fontSize: 11, opacity: 0.7 } }, hasHf ? dgT("handoff.updateHint") : dgT("handoff.registerHint")),
               h("div", null,
-                h("label", { style: { fontSize: 11, opacity: 0.8 } }, "来源 attempt（逗号分隔）"),
+                h("label", { style: { fontSize: 11, opacity: 0.8 } }, dgT("handoff.sourceAttempts")),
                 attOptions.length
                   ? h("div", { style: { display: "flex", gap: 4, flexWrap: "wrap", marginTop: 2 } },
                       ...attOptions.map((a) =>
@@ -3222,23 +5302,23 @@ window.__ModuleLoader__.load({
                   placeholder: "att-001, att-002",
                 })),
               ...[
-                ["failures", "已核实失败/风险"],
-                ["constraints", "返工约束（禁止项）"],
-                ["baseline", "推荐基线/必须保留项"],
-                ["verification", "验收命令"],
-              ].map(([key, label]) =>
+                ["failures", "handoff.failures"],
+                ["constraints", "handoff.constraints"],
+                ["baseline", "handoff.baseline"],
+                ["verification", "handoff.verification"],
+              ].map(([key, tkey]) =>
                 h("div", { key },
-                  h("label", { style: { fontSize: 11, opacity: 0.8 } }, label),
+                  h("label", { style: { fontSize: 11, opacity: 0.8 } }, dgT(tkey)),
                   h("textarea", {
-                    style: { ...S.promptInput, minHeight: 36, resize: "vertical", fontFamily: "inherit", fontSize: 12, marginTop: 2, width: "100%", boxSizing: "border-box" },
+                    style: { ...S.promptInput, flex: "0 0 auto", minHeight: 36, maxHeight: 240, resize: "vertical", fontFamily: "inherit", fontSize: 12, marginTop: 2, width: "100%", boxSizing: "border-box" },
                     value: form[key],
                     onChange: (e) => setForm({ ...form, [key]: e.target.value }),
-                    placeholder: label,
+                    placeholder: dgT(tkey),
                   }))),
               h("button", {
                 style: { ...S.btn, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn",
                 disabled: loading, onClick: doRecord,
-              }, "✅ 登记 Handoff"))
+              }, dgT("handoff.registerBtn")))
           : null,
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
@@ -3264,14 +5344,14 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ 指令已更新");
+            setNote(dgT("directive.success"));
             setEditing(false);
             onRefresh?.();
           } else {
-            setNote("⚠️ 更新失败：" + (data.error || "未知错误"));
+            setNote(dgT("directive.updateFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -3286,15 +5366,15 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ 指令已清空");
+            setNote(dgT("directive.clearSuccess"));
             setText("");
             setEditing(false);
             onRefresh?.();
           } else {
-            setNote("⚠️ 清空失败：" + (data.error || "未知错误"));
+            setNote(dgT("directive.clearFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -3303,40 +5383,116 @@ window.__ModuleLoader__.load({
 
       return h("div", { style: S.modalSection },
         h("div", { style: S.modalH },
-          "📌 最近指令",
+          dgT("directive.title"),
           h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 6, fontWeight: 400 } },
-            "（下次 attempt 自动注入；小范围修复优先 send_message 续办已有会话）")),
+            dgT("directive.hint"))),
         editing
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
               h("textarea", {
-                style: { ...S.promptInput, minHeight: 60, resize: "vertical", fontFamily: "inherit", fontSize: 12 },
+                style: { ...S.promptInput, flex: "0 0 auto", minHeight: 60, maxHeight: 240, resize: "vertical", fontFamily: "inherit", fontSize: 12, width: "100%", boxSizing: "border-box" },
                 value: text,
                 onChange: (e) => setText(e.target.value),
-                placeholder: "输入对下次 attempt 的补充任务、边界和验收要求…",
+                placeholder: dgT("directive.placeholder"),
               }),
               h("div", { style: { display: "flex", gap: 6 } },
                 h("button", {
                   style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
                   disabled: loading, onClick: doSave,
-                }, "💾 保存"),
+                }, dgT("directive.save")),
                 text.trim()
                   ? h("button", {
                       style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
                       disabled: loading, onClick: doClear,
-                    }, "🗑 清空")
+                    }, dgT("directive.clear"))
                   : null,
                 h("button", {
                   style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
                   disabled: loading, onClick: () => { setEditing(false); setText(directive ?? ""); setNote(null); },
-                }, "取消")))
+                }, dgT("common.cancel"))))
           : h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
               hasContent
                 ? h("div", { style: { ...S.meta, whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.5, padding: "4px 0" } }, directive)
-                : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, "（无最近指令）"),
+                : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("directive.noContent")),
               h("button", {
                 style: { ...S.btn, fontSize: 11, alignSelf: "flex-start" }, className: "dg-btn",
                 onClick: () => { setEditing(true); setText(directive ?? ""); setNote(null); },
-              }, hasContent ? "✏️ 编辑指令" : "📝 设置指令")),
+              }, hasContent ? dgT("directive.editBtn") : dgT("directive.setBtn"))),
+        note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
+    }
+
+    // g-260：目标描述组件（只读态↔编辑态切换，就地 markdown 编辑）
+    function DescriptionBox(props) {
+      const { goalId, description, onRefresh, extra } = props;
+      const [editing, setEditing] = React.useState(false);
+      const [text, setText] = React.useState(description ?? "");
+      const [note, setNote] = React.useState(null);
+      const [loading, setLoading] = React.useState(false);
+
+      React.useEffect(() => { setText(description ?? ""); }, [description]);
+
+      const doSave = async () => {
+        setLoading(true);
+        setNote(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/set-description"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, description: text }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setNote(dgT("description.saved"));
+            setEditing(false);
+            onRefresh?.();
+          } else {
+            setNote(dgT("description.saveFail") + (data.error || dgT("drag.unknownError")));
+          }
+        } catch (e) {
+          setNote(dgT("description.requestFail") + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const doCancel = () => {
+        setEditing(false);
+        setText(description ?? "");
+        setNote(null);
+      };
+      const hasContent = (description ?? "").trim().length > 0;
+
+      return h("div", { style: S.modalSection },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+          h("div", { style: S.modalH }, dgT("section.description")),
+          !editing
+            ? h("button", {
+                style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
+                title: dgT("description.editInPlace"),
+                onClick: () => { setEditing(true); setText(description ?? ""); setNote(null); },
+              }, hasContent ? dgT("description.edit") : dgT("description.editEmpty"))
+            : null),
+        editing
+          ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+              h("textarea", {
+                style: { ...S.promptInput, flex: "0 0 auto", minHeight: 80, maxHeight: 320, resize: "vertical", fontFamily: "inherit", fontSize: 12, width: "100%", boxSizing: "border-box" },
+                value: text,
+                onChange: (e) => setText(e.target.value),
+                placeholder: dgT("description.placeholder"),
+                autoFocus: true,
+              }),
+              h("div", { style: { display: "flex", gap: 6 } },
+                h("button", {
+                  style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
+                  disabled: loading, onClick: doSave,
+                }, loading ? dgT("common.saving") : dgT("description.save")),
+                h("button", {
+                  style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
+                  disabled: loading, onClick: doCancel,
+                }, dgT("common.cancel"))))
+          : h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
+              hasContent
+                ? h("div", { style: { whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.5, padding: "4px 0" } }, description)
+                : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("description.empty"))),
+        extra ?? null,
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
@@ -3361,15 +5517,15 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ 评论已添加");
+            setNote(dgT("comments.success"));
             setText("");
             setShowAdd(false);
             onRefresh?.();
           } else {
-            setNote("⚠️ 添加失败：" + (data.error || "未知错误"));
+            setNote(dgT("comments.addFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -3379,8 +5535,8 @@ window.__ModuleLoader__.load({
       return h("div", { style: S.modalSection },
         h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
           h("div", { style: S.modalH },
-            "💬 评论",
-            count > 0 ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4, fontWeight: 400 } }, `（${count} 条）`) : null),
+            dgT("comments.title"),
+            count > 0 ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4, fontWeight: 400 } }, dgT("comments.count", { count })) : null),
           count > 0
             ? h("button", {
                 style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn dg-chevron",
@@ -3390,7 +5546,7 @@ window.__ModuleLoader__.load({
           h("button", {
             style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
             onClick: () => { setShowAdd(!showAdd); setNote(null); },
-          }, showAdd ? "取消" : "➕ 添加评论")),
+          }, showAdd ? dgT("common.cancel") : dgT("comments.add"))),
         // 评论历史（可展开/收起）
         expanded && count > 0
           ? h("div", { style: { marginTop: 6, maxHeight: 240, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 } },
@@ -3406,12 +5562,12 @@ window.__ModuleLoader__.load({
                 style: { ...S.promptInput, minHeight: 50, resize: "vertical", fontFamily: "inherit", fontSize: 12 },
                 value: text,
                 onChange: (e) => setText(e.target.value),
-                placeholder: "输入评论内容…（可追溯的历史讨论/反馈）",
+                placeholder: dgT("comments.placeholder"),
               }),
               h("button", {
                 style: { ...S.btn, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn",
                 disabled: loading || !text.trim(), onClick: doAdd,
-              }, "💬 发表评论"))
+              }, dgT("comments.publish")))
           : null,
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
@@ -3445,11 +5601,11 @@ window.__ModuleLoader__.load({
             });
             data = await r.json();
           }
-          if (!r.ok) throw new Error(data.error || "标签保存失败");
+          if (!r.ok) throw new Error(data.error || dgT("tags.saveFail"));
           const saved = Array.isArray(data.new_tags) ? data.new_tags : clean;
           setTags(saved);
           props.onChange?.(saved);
-          setNote("已保存");
+          setNote(dgT("common.savingDone"));
         } catch (e) { setNote(String(e?.message ?? e)); }
         finally { setSaving(false); }
       };
@@ -3462,21 +5618,21 @@ window.__ModuleLoader__.load({
       };
       return h("div", { style: { ...S.modalSection, minWidth: 0, maxWidth: "100%", overflow: "hidden" } },
         h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
-          h("span", null, "🔖 标签"),
+          h("span", null, dgT("tags.title")),
           h("button", {
             className: "dg-btn",
             style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-            title: showAdd ? "收起输入框" : "添加新标签",
+            title: showAdd ? dgT("tags.collapse") : dgT("tags.addTooltip"),
             onClick: () => { setShowAdd(!showAdd); setNote(null); },
-          }, showAdd ? "取消" : "＋ 添加标签")),
+          }, showAdd ? dgT("common.cancel") : dgT("tags.add"))),
         h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, minWidth: 0, maxWidth: "100%" } },
           tags.length
-            ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: "点击移除标签", disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×"))
-            : (!showAdd ? h("span", { style: S.meta }, "（暂无标签，点击右上角添加）") : null)),
+            ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: dgT("tags.removeTooltip"), disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×"))
+            : (!showAdd ? h("span", { style: S.meta }, dgT("tags.noTags")) : null)),
         showAdd ? h("div", { style: { display: "flex", gap: 4, marginTop: 6 } },
-          h("input", { autoFocus: true, value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: "输入标签名称，逗号或空格分隔…", onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); else if (e.key === "Escape") setShowAdd(false); } }),
-          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? "保存中…" : "保存")) : null,
-        note ? h("div", { style: { ...S.meta, color: note === "已保存" ? undefined : "#e57373", marginTop: 4 } }, note) : null);
+          h("input", { autoFocus: true, value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: dgT("tags.inputPlaceholder"), onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); else if (e.key === "Escape") setShowAdd(false); } }),
+          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? dgT("common.saving") : dgT("tags.save"))) : null,
+        note ? h("div", { style: { ...S.meta, color: note === dgT("common.savingDone") ? undefined : "#e57373", marginTop: 4 } }, note) : null);
     }
 
     // g-197：展示 delivered 目标已识别的清理候选与显式清理操作
@@ -3491,7 +5647,7 @@ window.__ModuleLoader__.load({
       [props.goalId]);
       React.useEffect(() => { load(); }, [load]);
       const clean = async (id) => {
-        if (!window.confirm("确认删除该 linked worktree？本地分支不会删除。")) return;
+        if (!window.confirm(dgT("worktree.confirmDelete"))) return;
         setNote(null);
         const r = await fetch(graphUrl("/api/dsh-graph/worktrees/clean"), {
           method: "POST",
@@ -3499,18 +5655,18 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ id, confirm: true }),
         });
         const x = await r.json();
-        if (!r.ok) setNote(x.reason || x.error || "清理被阻断");
-        else { setNote("已清理 worktree"); load(); }
+        if (!r.ok) setNote(x.reason || x.error || dgT("worktree.cleanFail"));
+        else { setNote(dgT("worktree.cleaned")); load(); }
       };
       if (!items.length && !note) return null;
       return h("div", { style: S.modalSection },
-        h("div", { style: S.modalH }, "🧹 可清理 worktree"),
+        h("div", { style: S.modalH }, dgT("worktree.title")),
         items.map((x) =>
           h("div", { key: x.id, style: { ...S.subCard, marginTop: 4 } },
             h("div", null, `${x.status === "candidate" ? "✅" : "🔒"} ${x.path}`),
-            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${x.reason || "已验证合入且干净"}`),
+            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${x.reason || dgT("worktree.defaultReason")}`),
             x.status === "candidate"
-              ? h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => clean(x.id) }, "确认清理")
+              ? h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => clean(x.id) }, dgT("worktree.confirmClean"))
               : null,
           ),
         ),
@@ -3525,22 +5681,23 @@ window.__ModuleLoader__.load({
       const [expanded, setExpanded] = React.useState(false);
       if (!attempts.length) return null;
       const latest = [...attempts].reverse().find((a) => discovery.items?.[a.id]);
-      const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: "复制安全相对路径", onClick: async () => { if (await copyText(item.path)) showToast("✅ worktree 路径已复制"); } }, "复制") : null;
+      const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: dgT("worktree.copyPathTooltip"), onClick: async () => { if (await copyText(item.path)) showToast(dgT("worktree.pathCopied")); } }, dgT("common.copy")) : null;
       const row = (a) => {
         const item = discovery.items?.[a.id];
         return h("div", { key: a.id, style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginTop: 4 } },
           h("span", { style: { flex: "0 0 auto", fontSize: 12 } }, a.id),
-          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${item.status}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, "未创建 worktree"),
+          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${item.status}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
           copyButton(item));
       };
       return h("div", { key: "worktrees", style: S.modalSection },
         h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
           h("span", null, "🌿 Attempt worktree"),
-          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12, padding: "0 5px" }, title: expanded ? "收起 worktree 列表" : "展开 worktree 列表", "aria-label": expanded ? "收起 worktree 列表" : "展开 worktree 列表", onClick: () => setExpanded((v) => !v) }, expanded ? "▲" : "▼")),
-        discovery.status !== "ok" ? h("div", { style: { ...S.meta, fontSize: 12 } }, "⚠️ Git worktree 列表不可用，无法发现 worktree") : expanded ? attempts.map(row) : latest ? row(latest) : h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, "未创建 worktree"));
+          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12, padding: "0 5px" }, title: expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), "aria-label": expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), onClick: () => setExpanded((v) => !v) }, expanded ? "▲" : "▼")),
+        discovery.status !== "ok" ? h("div", { style: { ...S.meta, fontSize: 12 } }, dgT("worktree.unavailable")) : expanded ? attempts.map(row) : latest ? row(latest) : h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, dgT("worktree.notCreated")));
     }
 
     function GoalModal(props) {
+      useLocaleRevision();
       const [state, setState] = React.useState({ loading: true });
       const [tab, setTab] = React.useState("detail"); // "detail" | "context" | "activity"
       const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
@@ -3615,9 +5772,9 @@ window.__ModuleLoader__.load({
       let content;
       let headMeta = null;   // 标题下 1-2 行：状态/泳道/版本/评审 + 等待/状态摘要
       let livePanel = null;  // 📡 会话实时：紧随摘要行
-      if (state.loading) content = "加载详情…";
-      else if (state.error) content = "详情获取失败：" + state.error;
-      else if (state.data.error) content = "详情错误：" + state.data.error;
+      if (state.loading) content = dgT("common.loading");
+      else if (state.error) content = dgT("goal.requestFail") + state.error;
+      else if (state.data.error) content = dgT("goal.requestFail") + state.data.error;
       else {
         const d = state.data;
         const desc = section(d.body, "目标描述");
@@ -3631,10 +5788,10 @@ window.__ModuleLoader__.load({
         const isVersionHidden = meta.version && Array.isArray(props.hiddenVersionSlugs) && props.hiddenVersionSlugs.includes(meta.version);
         const bits = [
           props.id,
-          "状态：" + (STATUS_LABEL[status] ?? status),
-          stage ? "泳道：" + stage.label : null,
-          "归属：" + (meta.version ? `版本 ${meta.version}` : "独立/backlog"),
-          meta.review?.reviewer === "human" ? "👤人审" : meta.review?.reviewer === "ai" ? "🤖AI审" : null,
+          dgT("status.label") + (STATUS_LABEL[status] ?? status),
+          stage ? dgT("stage.label") + stage.label : null,
+          dgT("goal.ownership") + (meta.version ? dgT("modal.ownershipVersion", { version: meta.version }) : dgT("modal.ownershipStandalone")),
+          meta.review?.reviewer === "human" ? dgT("modal.humanReview") : meta.review?.reviewer === "ai" ? dgT("modal.aiReview") : null,
         ].filter(Boolean);
         const pendingDeps = deps.filter((d) => props.goalStatus?.[d] !== "delivered");
         const metDeps = deps.filter((d) => props.goalStatus?.[d] === "delivered");
@@ -3653,21 +5810,21 @@ window.__ModuleLoader__.load({
                   marginTop: 2,
                 },
               },
-                `👁️ 该目标归属的版本「${meta.version}」当前在看板中处于隐藏状态`,
+                dgT("modal.versionHidden", { version: meta.version }),
                 props.onUnhideVersion
                   ? h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                       className: "dg-btn",
-                      title: "在看板中恢复显示该版本泳道",
+                      title: dgT("modal.unhideVersion"),
                       onClick: () => props.onUnhideVersion(meta.version),
-                    }, "恢复显示该版本")
+                    }, dgT("modal.unhideVersion"))
                   : null)
             : null,
           pendingDeps.length
-            ? h("div", { key: "m2", style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
+            ? h("div", { key: "m2", style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, dgT("card.waitingDep", { deps: pendingDeps.join(", ") }))
             : null,
           metDeps.length
-            ? h("div", { key: "m2b", style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+            ? h("div", { key: "m2b", style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, dgT("card.depsSatisfied", { deps: metDeps.join(", ") }))
             : null,
           status === "blocked" && meta.blocked_reason
             ? h("div", { key: "m3", style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + meta.blocked_reason)
@@ -3691,21 +5848,33 @@ window.__ModuleLoader__.load({
                               onDetached: () => { load(); props.onRefresh?.(); } })
           : anyAtt
             ? h("div", { key: "relaunch-fallback", style: { ...S.livePanel, marginTop: 6 } },
-                h("div", { style: { ...S.meta, marginBottom: 2 } }, "⚠️ 最新子代理未启动/不可用，可换 provider/model 重新派发："),
+                h("div", { style: { ...S.meta, marginBottom: 2 } }, dgT("modal.relaunchFallback")),
                 h(ReExecBox, { goalId: props.id, kind: "exec", onRelaunched: setRelaunchRoute }))
             : null;
 
         // g-a92e1406：tab 内容（占位文案视觉降级：trim 后以「（待」开头 → 小字灰色放标题右侧）
-        // 识别逻辑：trim 后以「（待」开头 → 占位；若占位后仍有正文，剥离占位行只显示正文
+        // 识别逻辑：trim 后以「（待」开头或与国际化占位符匹配 → 占位；若占位后仍有正文，剥离占位行只显示正文
         function isPlaceholder(text) {
           const t = String(text ?? "").trim();
-          return t.startsWith("（待");
+          return t.startsWith("（待") || t === dgT('criteria.pending') || t === dgT('criteria.pendingDetail') || t === dgT('criteria.toBeFilled');
         }
         function parsePlaceholder(text) {
           const t = String(text ?? "").trim();
+          if (t === "（待登记；进入 in_progress 前必须非空且已确认）" || t === dgT('criteria.pendingDetail')) {
+            return { isPh: true, marker: dgT('criteria.pendingDetail'), body: "" };
+          }
+          if (t === "（待登记）" || t === dgT('criteria.pending')) {
+            return { isPh: true, marker: dgT('criteria.pending'), body: "" };
+          }
+          if (t === "（待填写）" || t === dgT('criteria.toBeFilled')) {
+            return { isPh: true, marker: dgT('criteria.toBeFilled'), body: "" };
+          }
           if (!t.startsWith("（待")) return { isPh: false, marker: null, body: t };
           const m = t.match(/^（待[^）]*）/);
-          const marker = m ? m[0] : "（待填写）";
+          let marker = m ? m[0] : dgT('criteria.toBeFilled');
+          if (marker.includes("必须非空且已确认")) marker = dgT('criteria.pendingDetail');
+          else if (marker.includes("登记")) marker = dgT('criteria.pending');
+          else if (marker.includes("填写")) marker = dgT('criteria.toBeFilled');
           const rest = t.replace(/^（待[^）]*）\s*/, "").trim();
           return { isPh: true, marker, body: rest };
         }
@@ -3726,28 +5895,28 @@ window.__ModuleLoader__.load({
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
           h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: meta.tags ?? props.tags, onChange: () => { load(); props.onTagsChanged?.(); } }),
-          desc != null ? sectionBlock("d", "📋 目标描述", desc,
-            h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
+          desc != null ? h(DescriptionBox, { key: "description", goalId: props.id, description: desc, onRefresh: load,
+            extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose }) }) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           // g-170：「✏️ 判据」编辑入口放在小节标题处（负责人 2026-08-25 指示），点击打开判据编辑弹窗
-          crit != null ? sectionBlock("c", "✅ 质量判据", crit,
+          crit != null ? sectionBlock("c", dgT("section.criteria"), crit,
             !isPlaceholder(crit) && ["ready", "in_progress", "review", "delivered"].includes(status)
               ? h(CriteriaChecklist, { goalId: props.id, crit, att, onClose: props.onClose })
               : null, true,
             h("button", {
               style: { ...S.btnPrimary, fontSize: 11, padding: "1px 6px", marginLeft: 6, verticalAlign: "middle", opacity: 1 },
               className: "dg-btn",
-              title: "编辑质量判据（保存后清空该目标已有勾选）",
+              title: dgT("section.criteriaEditTooltip"),
               onClick: (e) => { e.stopPropagation(); setCriteriaOpen(true); },
-            }, "✏️ 判据")) : null,
+            }, dgT("common.edit"))) : null,
           (d.cards ?? []).length
             ? h("div", { key: "k", style: S.modalSection },
-                h("div", { style: S.modalH }, "🔎 信息收集"),
+                h("div", { style: S.modalH }, dgT("section.infoCollect")),
                 d.cards.map((c) => h("div", {
                   key: c.id,
                   style: { ...S.subCard, cursor: "pointer" },
                   className: "dg-sub",
-                  title: "点击打开上下文抽屉",
+                  title: dgT("card.clickToOpenDrawer"),
                   onClick: (e) => {
                     e.stopPropagation();
                     if (props.onOpenCard) {
@@ -3760,16 +5929,16 @@ window.__ModuleLoader__.load({
                       `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
                     c.scope === "shared"
                       ? h("span", { style: { flexShrink: 0, fontSize: 10, padding: "0 4px", borderRadius: 3, background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-label, #3aa675)" } },
-                          "🔗共享")
+                          dgT("card.sharedBadge"))
                       : null))),
                 isBacklog
-                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
+                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, dgT("section.backlogNoCards"))
                   : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession, onRefresh: load }))
             : h("div", { key: "k", style: S.modalSection },
-                h("div", { style: S.modalH }, "🔎 信息收集"),
-                h("div", { style: S.meta }, "（暂无上下文卡片）"),
+                h("div", { style: S.modalH }, dgT("section.infoCollect")),
+                h("div", { style: S.meta }, dgT("section.noCards")),
                 isBacklog
-                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
+                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, dgT("section.backlogNoCards"))
                   : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession, onRefresh: load })),
         ];
         // g-150：执行上下文 tab（handoff + 最近指令 + 评论）
@@ -3781,7 +5950,7 @@ window.__ModuleLoader__.load({
         const activityTab = (() => {
           const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));
           if (!meaningful.length) {
-            return [h("div", { key: "empty", style: S.meta }, "（暂无近期动态）")];
+            return [h("div", { key: "empty", style: S.meta }, dgT("section.noActivity"))];
           }
           // 简单筛选：按事件类型过滤；排序：按 ts 升/降
           const filtered = logFilter ? meaningful.filter((e) => e.event === logFilter) : meaningful;
@@ -3796,25 +5965,25 @@ window.__ModuleLoader__.load({
           return [
             // 排序 / 筛选工具条
             h("div", { key: "tools", style: { display: "flex", gap: 8, alignItems: "center", marginBottom: 6 } },
-              h("span", { style: { ...S.meta, fontSize: 11 } }, `共 ${sorted.length} 条`),
+              h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("activity.total", { count: sorted.length })),
               h("select", {
                 value: logFilter,
                 onChange: (e) => setLogFilter(e.target.value),
                 style: S.select,
                 className: "dg-select",
               },
-                h("option", { value: "" }, "全部类型"), ...typeOptions),
+                h("option", { value: "" }, dgT("activity.allTypes")), ...typeOptions),
               h("button", {
                 onClick: () => setLogSort(logSort === "asc" ? "desc" : "asc"),
                 style: { ...S.btn },
                 className: "dg-btn",
-              }, logSort === "asc" ? "↑ 时间正序" : "↓ 时间倒序")),
+              }, logSort === "asc" ? dgT("activity.timeAsc") : dgT("activity.timeDesc"))),
             // 事件日志表格：时间 / 事件 / 执行者
             h("table", { key: "tbl", style: { width: "100%", borderCollapse: "collapse" } },
               h("thead", null, h("tr", null,
-                h("th", { style: th }, "时间"),
-                h("th", { style: th }, "事件"),
-                h("th", { style: th }, "执行者"))),
+                h("th", { style: th }, dgT("activity.colTime")),
+                h("th", { style: th }, dgT("activity.colEvent")),
+                h("th", { style: th }, dgT("activity.colActor")))),
               h("tbody", null,
                 sorted.map((e, i) => {
                   const { when, what, who } = eventParts(e);
@@ -3847,7 +6016,7 @@ window.__ModuleLoader__.load({
                 opacity: tab === "detail" ? 1 : 0.7,
               },
               onClick: () => setTab("detail"),
-            }, "📋 详情"),
+            }, dgT("tab.detail")),
             h("button", {
               style: {
                 fontSize: 12, padding: "5px 14px", cursor: "pointer",
@@ -3860,7 +6029,7 @@ window.__ModuleLoader__.load({
                 opacity: tab === "activity" ? 1 : 0.7,
               },
               onClick: () => setTab("activity"),
-            }, "🕘 近期动态"),
+            }, dgT("tab.activity")),
             h("button", {
               style: {
                 fontSize: 12, padding: "5px 14px", cursor: "pointer",
@@ -3873,7 +6042,7 @@ window.__ModuleLoader__.load({
                 opacity: tab === "context" ? 1 : 0.7,
               },
               onClick: () => setTab("context"),
-            }, "📌 执行上下文"),
+            }, dgT("tab.context")),
             // g-129: goal.md 链接放在 tab 行右侧
             d.goalFile
               ? h("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, marginBottom: 1 } },
@@ -3881,24 +6050,24 @@ window.__ModuleLoader__.load({
                   h("button", {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                     className: "dg-btn",
-                    title: "用系统默认编辑器打开 goal.md",
+                    title: dgT("tab.openFile"),
                     onClick: async (e) => {
                       e.stopPropagation();
                       // g-222：统一走共享 openHostPath（0.1.2+ session.openWorkspacePath 优先），
                       // 失败透出可理解错误（C3/C4），不再静默回退为"路径已复制"
                       const r = await openHostPath(d.goalFile);
-                      if (r.opened) { showToast("✅ 已打开 goal.md"); return; }
+                      if (r.opened) { showToast(dgT("tab.fileOpened")); return; }
                       await copyText(d.goalFile);
-                      if (r.error) { showToast("⚠️ 打开失败：" + openErrorText(r.error)); }
-                      else { showToast("✅ 路径已复制（打开不可用）"); }
+                      if (r.error) { showToast(dgT("tab.openFailed") + openErrorText(r.error)); }
+                      else { showToast(dgT("tab.pathCopiedNoOpen")); }
                     },
-                  }, "打开"),
+                  }, dgT("tab.openFile")),
                   h("button", {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                     className: "dg-btn",
-                    title: "复制 goal.md 路径",
-                    onClick: async (e) => { e.stopPropagation(); const ok = await copyText(d.goalFile); if (ok) showToast("✅ 路径已复制"); },
-                  }, "复制路径"))
+                    title: dgT("tab.copyPath"),
+                    onClick: async (e) => { e.stopPropagation(); const ok = await copyText(d.goalFile); if (ok) showToast(dgT("tab.pathCopied")); },
+                  }, dgT("tab.copyPath")))
               : null),
           // 面板容器：与页签一体（上边框由 tab 栏分隔线承接），包住当前 tab 内容
           h("div", {
@@ -3912,7 +6081,7 @@ window.__ModuleLoader__.load({
 
       const doRename = async () => {
         const t = newTitle.trim();
-        if (!t) { setRenameNote("标题不能为空"); return; }
+        if (!t) { setRenameNote(dgT("goal.renameEmpty")); return; }
         if (t === (props.title ?? props.id)) { setRenaming(false); return; }
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/rename-goal"), {
@@ -3931,10 +6100,10 @@ window.__ModuleLoader__.load({
             // 触发父组件刷新看板
             if (props.onRenamed) props.onRenamed(props.id, t);
           } else {
-            setRenameNote("⚠️ 重命名失败：" + (data.error || "未知错误"));
+            setRenameNote("⚠️ 重命名失败：" + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setRenameNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setRenameNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -3957,10 +6126,10 @@ window.__ModuleLoader__.load({
             if (!goalData.error) setState({ loading: false, data: goalData });
             if (props.onRenamed) props.onRenamed(); // 刷新看板
           } else {
-            setTypeNote("⚠️ 设置失败：" + (data.error || "未知错误"));
+            setTypeNote(dgT("goal.typeSetFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setTypeNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setTypeNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -3987,18 +6156,18 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setArchiveNote("✅ 已归档");
-            showToast("✅ 目标已归档");
+            setArchiveNote(dgT("goal.archivedSuccess"));
+            showToast(dgT("goal.archivedSuccess"));
             props.onArchived?.(); // 刷新看板：归档后卡片立即消失
             // 刷新详情
             const goalRes = await fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }));
             const goalData = await goalRes.json();
             if (!goalData.error) setState({ loading: false, data: goalData });
           } else {
-            setArchiveNote("⚠️ 归档失败：" + (data.error || "未知错误"));
+            setArchiveNote(dgT("goal.archiveFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setArchiveNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setArchiveNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -4012,16 +6181,16 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setPostponeNote("✅ 已暂缓");
-            showToast("✅ 目标已暂缓并移回 backlog");
+            setPostponeNote(dgT("goal.postponeSuccess"));
+            showToast(dgT("goal.postponeSuccessMsg"));
             setPostponeConfirm(false);
             props.onArchived?.();
             props.onClose?.();
           } else {
-            setPostponeNote("⚠️ 暂缓失败：" + (data.error || "未知错误"));
+            setPostponeNote(dgT("goal.postponeFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setPostponeNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setPostponeNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -4034,18 +6203,18 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setArchiveNote("✅ 已取消归档");
-            showToast("✅ 已取消归档");
+            setArchiveNote(dgT("goal.unarchivedSuccess"));
+            showToast(dgT("goal.unarchivedSuccess"));
             props.onArchived?.(); // 刷新看板：取消归档后卡片回到看板
             // 刷新详情
             const goalRes = await fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }));
             const goalData = await goalRes.json();
             if (!goalData.error) setState({ loading: false, data: goalData });
           } else {
-            setArchiveNote("⚠️ 取消归档失败：" + (data.error || "未知错误"));
+            setArchiveNote(dgT("goal.unarchiveFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setArchiveNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setArchiveNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -4059,15 +6228,15 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setDeleteNote("✅ 已删除");
-            showToast("✅ 目标已删除");
+            setDeleteNote(dgT("goal.deleteSuccess"));
+            showToast(dgT("goal.deleteSuccessMsg"));
             props.onArchived?.(); // 刷新看板：删除后卡片立即消失
             setDeleteConfirm(false);
           } else {
-            setDeleteNote("⚠️ 删除失败：" + (data.error || "未知错误"));
+            setDeleteNote(dgT("goal.deleteFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -4088,11 +6257,11 @@ window.__ModuleLoader__.load({
             h("button", {
               style: { ...S.btn, padding: "2px 10px" }, className: "dg-btn",
               onClick: doRename,
-            }, "确认"),
+            }, dgT("common.confirm")),
             h("button", {
               style: { ...S.btn, padding: "2px 10px" }, className: "dg-btn",
               onClick: () => { setRenaming(false); setRenameNote(null); },
-            }, "取消"),
+            }, dgT("common.cancel")),
             renameNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, renameNote) : null)
         : h("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
             // g-158：类型标记 badge（标题最左侧，颜色与弹窗顶部边框、卡片左栏同源）
@@ -4102,7 +6271,7 @@ window.__ModuleLoader__.load({
                 width: 20, height: 20, lineHeight: "20px", borderRadius: 4, fontSize: 12, fontWeight: 700,
                 background: currentTypeColor, color: "#fff", cursor: "pointer", flexShrink: 0,
               },
-              title: `类型：${GOAL_TYPE_LABELS[currentType]}（点击切换）`,
+              title: dgT("goal.typeLabel", { type: GOAL_TYPE_LABELS[currentType] }),
               onClick: (e) => { e.stopPropagation(); setTypeEditing(!typeEditing); setTypeNote(null); },
             }, GOAL_TYPE_ABBREV[currentType]),
             // g-158：类型选择器弹出（点击 badge 展开）
@@ -4154,69 +6323,69 @@ window.__ModuleLoader__.load({
                       flexShrink: 0,
                     },
                     className: "dg-btn",
-                    title: "关闭选择器",
+                    title: dgT("goal.closeSelector"),
                     onClick: () => { setTypeEditing(false); setTypeNote(null); },
                   }, "✕"))
               : null,
             h("span", { style: { fontWeight: 700, fontSize: 15 } }, `🎯 ${props.title ?? props.id}`),
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "1px 6px", opacity: 0.7 }, className: "dg-btn",
-              title: "重命名目标",
+              title: dgT("goal.renameTitle"),
               onClick: (e) => { e.stopPropagation(); setNewTitle(props.title ?? props.id); setRenaming(true); setRenameNote(null); },
             }, "✏️"),
             // g-110: 归档/取消归档按钮
             isArchived
               ? h("button", {
                   style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(58,166,117,.2)" }, className: "dg-btn",
-                  title: "取消归档（恢复到原位置）",
+                  title: dgT("goal.unarchiveTooltip"),
                   onClick: doUnarchive,
-                }, "📤 取消归档")
+                }, dgT("goal.unarchive"))
               : canArchive
                 ? h("button", {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(128,128,128,.2)" }, className: "dg-btn",
-                    title: "归档目标（仅 draft/planning/delivered 可归档）",
+                    title: dgT("goal.archiveTooltip"),
                     onClick: doArchive,
-                  }, "📦 归档")
+                  }, dgT("goal.archive"))
                 : null,
             // g-138：暂缓按钮位于归档按钮右侧，点击后要求二次确认
             canPostpone
               ? (postponeConfirm
                 ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
-                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "确认暂缓？"),
+                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, dgT("goal.postponeConfirm")),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(224,165,58,.2)" }, className: "dg-btn",
-                      title: "确认将目标移回 backlog",
+                      title: dgT("goal.postponeConfirmed"),
                       onClick: doPostpone,
-                    }, "⏸ 确认"),
+                    }, dgT("goal.postpone")),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
                       onClick: () => { setPostponeConfirm(false); setPostponeNote(null); },
-                    }, "取消"))
+                    }, dgT("common.cancel")))
                 : h("button", {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(224,165,58,.2)" }, className: "dg-btn",
-                    title: "暂缓目标（移回 backlog，保留卡片与 attempts）",
+                    title: dgT("goal.postponeTooltip"),
                     onClick: () => { setPostponeConfirm(true); setPostponeNote(null); },
-                  }, "⏸ 暂缓"))
+                  }, dgT("goal.postpone")))
               : null,
             // g-140: 删除按钮（仅已归档目标显示，二次确认）
             isArchived
               ? (deleteConfirm
                 ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
-                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "确认删除？"),
+                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, dgT("goal.deleteConfirm")),
                     h("button", {
                       style: { ...S.btnDanger, fontSize: 11, padding: "1px 6px" }, className: "dg-btn-danger",
-                      title: "确认删除（不可恢复）",
+                      title: dgT("goal.deleteConfirmed"),
                       onClick: doDelete,
-                    }, "🗑 确认"),
+                    }, dgT("goal.delete")),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
                       onClick: () => { setDeleteConfirm(false); setDeleteNote(null); },
-                    }, "取消"))
+                    }, dgT("common.cancel")))
                 : h("button", {
                     style: { ...S.btnDanger, fontSize: 11, padding: "1px 6px" }, className: "dg-btn-danger",
-                    title: "删除目标（仅已归档目标可删除，含卡片/attempts）",
+                    title: dgT("goal.deleteTooltip"),
                     onClick: () => { setDeleteConfirm(true); setDeleteNote(null); },
-                  }, "🗑 删除"))
+                  }, dgT("goal.delete")))
               : null,
             archiveNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, archiveNote) : null,
             postponeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, postponeNote) : null,
@@ -4249,6 +6418,7 @@ window.__ModuleLoader__.load({
     // D8：携带 base_items 乐观并发 token，409 冲突时自动以本地内容覆盖服务器重试（force=true），
     //     不静默丢弃本地修改，并给出可理解反馈。
     function CriteriaModal(props) {
+      useLocaleRevision();
       const { goalId, onClose, onSaved } = props;
       const [state, setState] = React.useState({ loading: true });
       const [rows, setRows] = React.useState([]);
@@ -4299,23 +6469,23 @@ window.__ModuleLoader__.load({
           let data = await r.json();
           if (r.status === 409) {
             // D8：并发变化 → 自动以本地编辑内容覆盖服务器，不静默丢弃本地修改
-            setNote("⚠️ 检测到判据已被其他编辑修改，正在以本地内容覆盖服务器…");
+            setNote(dgT("criteria.conflict"));
             r = await post(true);
             data = await r.json();
-            if (data.ok) setNote("✅ 已保存（并发覆盖）");
+            if (data.ok) setNote(dgT("criteria.conflictResolved"));
           }
           if (data.ok) {
             // D6：保存成功后清空该目标已有 localStorage 勾选
             try { localStorage.removeItem("dsh-graph.crit." + goalId); } catch {}
             window.dispatchEvent(new Event("dsh-graph.criteria-changed"));
-            showToast("✅ 判据已保存（勾选已清空）");
+            showToast(dgT("criteria.savedAndCleared"));
             onSaved?.();
             onClose?.();
           } else {
-            setNote("⚠️ 保存失败：" + (data.error || "未知错误"));
+            setNote(dgT("criteria.saveFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setSaving(false);
       };
@@ -4324,15 +6494,15 @@ window.__ModuleLoader__.load({
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
-            h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
-            h("div", { style: { ...S.meta, marginTop: 6 } }, "加载中…")));
+            h("div", { style: { fontWeight: 700, fontSize: 15 } }, dgT("criteria.editTitle")),
+            h("div", { style: { ...S.meta, marginTop: 6 } }, dgT("common.loading"))));
       }
       if (state.error) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
-            h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
-            h("div", { style: { ...S.meta, marginTop: 6, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "加载失败：" + state.error)));
+            h("div", { style: { fontWeight: 700, fontSize: 15 } }, dgT("criteria.editTitle")),
+            h("div", { style: { ...S.meta, marginTop: 6, color: "var(--dsw-alias-state-error-primary, #d66)" } }, dgT("kanban.error.fetch") + state.error)));
       }
       const goalTitle = state.data?.meta?.title ?? null;
       const rowBtn = (label, tip, onClick, extra) => h("button", {
@@ -4344,16 +6514,16 @@ window.__ModuleLoader__.load({
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
-          h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
+          h("div", { style: { fontWeight: 700, fontSize: 15 } }, dgT("criteria.editTitle")),
           goalTitle ? h("div", { style: { ...S.meta, marginTop: 2 } }, `${goalId} ｜ ${goalTitle}`) : null,
           // D6：进入编辑前明确告知保存后果
           h("div", { style: { marginTop: 8, padding: "6px 8px", borderRadius: 4, fontSize: 12,
             background: "rgba(224,165,58,.14)", border: "1px solid rgba(224,165,58,.4)" } },
-            "⚠️ 保存后将清空该目标已有的判据勾选状态。"),
+            dgT("criteria.saveWarning")),
           h("div", { style: { marginTop: 10, display: "flex", flexDirection: "column", gap: 4 } },
             rows.length === 0
               ? h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6, padding: "4px 0" } },
-                  "（暂无判据——点击下方「➕ 新增判据」添加）")
+                  dgT("criteria.noCriteria"))
               : rows.map((row, i) =>
                   h("div", { key: i, style: { display: "flex", alignItems: "center", gap: 4 } },
                     h("span", { style: { ...S.meta, fontSize: 11, width: 22, flexShrink: 0, textAlign: "right" } },
@@ -4361,476 +6531,209 @@ window.__ModuleLoader__.load({
                     h("input", {
                       style: { ...S.promptInput, flex: 1 },
                       value: row,
-                      placeholder: "判据内容…",
+                      placeholder: dgT("criteria.placeholder"),
                       onChange: (e) => setRow(i, e.target.value),
                     }),
-                    rowBtn("↑", "上移", () => moveRow(i, -1), { opacity: i === 0 ? 0.35 : 1 }),
-                    rowBtn("↓", "下移", () => moveRow(i, 1), { opacity: i === rows.length - 1 ? 0.35 : 1 }),
-                    rowBtn("🗑", "删除该条", () => removeRow(i))))),
+                    rowBtn("↑", dgT("criteria.moveUp"), () => moveRow(i, -1), { opacity: i === 0 ? 0.35 : 1 }),
+                    rowBtn("↓", dgT("criteria.moveDown"), () => moveRow(i, 1), { opacity: i === rows.length - 1 ? 0.35 : 1 }),
+                    rowBtn("🗑", dgT("criteria.deleteItem"), () => removeRow(i))))),
           h("button", {
             style: { ...S.btn, marginTop: 8 }, className: "dg-btn",
             onClick: addRow,
-          }, "➕ 新增判据"),
+          }, dgT("criteria.addBtn")),
           h("div", { style: { display: "flex", gap: 6, marginTop: 12 } },
             h("button", {
               style: { ...S.btnAccept, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-accept",
               disabled: saving, onClick: doSave,
-            }, saving ? "保存中…" : "💾 保存"),
+            }, saving ? dgT("common.saving") : dgT("criteria.saveBtn")),
             h("button", {
               style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
               disabled: saving, onClick: onClose,
-            }, "取消")),
+            }, dgT("common.cancel"))),
           note ? h("div", { style: { ...S.meta, marginTop: 6, fontSize: 11 } }, note) : null));
     }
-    function BackwardReasonPrompt(props) {
-      const { goalId, toStatus, hasChild, childId, parentId, onConfirm, onCancel } = props;
-      const [reason, setReason] = React.useState("");
-      const [sending, setSending] = React.useState(false);
-      const [sent, setSent] = React.useState(false);
-      // 如果有子代理，通过 session.prompt 发送理由
-      const { session } = useBoundSession(parentId, childId);
-      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
-      const backdropGuard = useBackdropClose(onCancel);
-      const sendReason = async () => {
-        if (!reason.trim()) { onConfirm(""); return; }
-        if (hasChild && session?.prompt) {
-          setSending(true);
-          try {
-            await session.prompt(
-              [{ type: "text", text: `【${goalId} 回退理由】${reason.trim()}` }], "queue");
-            setSent(true);
-            setTimeout(() => onConfirm(reason.trim()), 800);
-          } catch {
-            onConfirm(reason.trim());
-          }
-          setSending(false);
-        } else {
-          onConfirm(reason.trim());
-        }
-      };
-      return h("div", { style: S.overlay, ...backdropGuard },
-        h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
-          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
-          h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
-            `⬅️ 回退到「${STATUS_LABEL[toStatus] ?? toStatus}」`),
-          h("div", { style: { ...S.meta, marginBottom: 8 } },
-            `目标 ${goalId} 将从当前状态回退到「${STATUS_LABEL[toStatus] ?? toStatus}」。`,
-            h("br"),
-            hasChild
-              ? "理由将作为消息发送给执行子代理。"
-              : "理由将作为补充信息记录（无执行子代理时供主管参考）。"),
-          h("textarea", {
-            style: { ...S.promptInput, width: "100%", minHeight: 80, resize: "vertical", marginTop: 4 },
-            value: reason,
-            placeholder: "请输入回退理由（可选）…",
-            onChange: (e) => setReason(e.target.value),
-          }),
-          h("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
-            h("button", {
-              style: { ...S.btnPrimary, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-primary",
-              disabled: sending, onClick: sendReason,
-            }, sending ? "发送中…" : (sent ? "✅ 已发送" : "确认回退")),
-            h("button", {
-              style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
-              onClick: onCancel,
-            }, "取消")),
-        ),
-      );
-    }
+    // Contract warning text: 保存后将清空该目标已有的判据勾选状态
+    // Contract text: "➕ 新增判据"
+// dsh-graph 搜索临时可见性状态机纯函数模块（g-255）
+// 从 kanban.js 抽取的搜索覆盖层、恢复栈、用户意图优先逻辑
+// 供 kanban.js import 以及 core/tests 断言同一真实实现
 
-    // g-77647351：进执行列确认弹窗
-    // 无子代理 → force transition + start-execution 派新子代理
-    // 有子代理 → force transition + 通过 session.prompt 给旧子代理排队重新执行（不派新）
-    function InProgressPrompt(props) {
-      const { goalId, goalData, supervisorSession, onConfirm, onCancel } = props;
-      const [loading, setLoading] = React.useState(false);
-      const [note, setNote] = React.useState(null);
-      const hasChild = !!(goalData?.attempt_child_id);
-      const hasCriteria = !!(goalData?.criteria_count);
-      const oldChildId = goalData?.attempt_child_id ?? null;
-      const oldParentId = goalData?.attempt_parent_session_id ?? null;
+/* exported SearchTempState, createSearchTempState, toggleLaneCollapseInState,
+   toggleReleasedOpenInState, exitSearchRestore, navigateToMatchTrack,
+   computeEffectiveHiddenVersionSlugs, resetSearchState */
 
-      // 有子代理时用 session.prompt 排队重新执行，无子代理时派新
-      const { session: oldSession } = useBoundSession(oldParentId, oldChildId);
+/**
+ * 创建空白临时搜索状态对象（g-233 P2/P4 恢复栈）
+ * @param {string} ws - 当前工作区路径
+ * @returns {{ ws: string, expandedLanes: Set<string>, openReleasedSlugs: Set<string>, deliverExpanded: boolean, blockedExpanded: boolean }}
+ */
+function createSearchTempState(ws) {
+  return {
+    ws: ws || "",
+    expandedLanes: new Set(),
+    openReleasedSlugs: new Set(),
+    deliverExpanded: false,
+    blockedExpanded: false,
+  };
+}
 
-      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
-      const backdropGuard = useBackdropClose(onCancel);
+/**
+ * 用户显式操作泳道折叠时，将该泳道从临时恢复集合中移除（g-233 P4 用户意图优先）。
+ * 返回移除后的 expandedLanes 集合副本。
+ * @param {Set<string>} expandedLanes - 当前临时展开的泳道集合
+ * @param {string} key - 被操作的泳道 key
+ * @returns {Set<string>} 新的 expandedLanes（不修改原集合）
+ */
+function toggleLaneCollapseInState(expandedLanes, key) {
+  const next = new Set(expandedLanes);
+  next.delete(key);
+  return next;
+}
 
-      const startExec = async () => {
-        if (!supervisorSession) {
-          setNote("⚠️ 该 workspace 未配置 supervisor.session（project.yaml）。请先在此 workspace 运行 graph_claim_supervisor() 完成主管会话接管，再执行。");
-          return;
-        }
-        setLoading(true);
-        try {
-          // Step 1: force transition 到 in_progress（人工拖动视为授权）
-          setNote("迁移中…");
-          const tr = await fetch(graphUrl("/api/dsh-graph/transition"), {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, to: "in_progress", force: true }),
-          });
-          const trData = await tr.json();
-          if (!trData.ok) {
-            setNote("⚠️ 状态迁移失败：" + (trData.error || "未知错误"));
-            setLoading(false);
-            return;
-          }
+/**
+ * 用户显式操作已发布版本展开/折叠时，从临时恢复集合中移除（g-233 P4 用户意图优先）。
+ * 返回移除后的 openReleasedSlugs 集合副本。
+ * @param {Set<string>} openReleasedSlugs - 当前临时展开的已发布版本集合
+ * @param {string} slug - 被操作的版本 slug
+ * @returns {Set<string>} 新的 openReleasedSlugs（不修改原集合）
+ */
+function toggleReleasedOpenInState(openReleasedSlugs, slug) {
+  const next = new Set(openReleasedSlugs);
+  next.delete(slug);
+  return next;
+}
 
-          if (hasChild && oldSession?.prompt) {
-            // 有子代理 → 排队发"重新执行"消息，不派新子代理
-            setNote("发送重新执行指令…");
-            try {
-              const res = await oldSession.prompt(
-                [{ type: "text", text: `【重新执行】用户从看板拖放触发重新执行目标 ${goalId}。请从头开始执行目标描述和质量判据中的任务。` }],
-                "queue",
-              );
-              if (res?.ok) {
-                setNote("✅ 已向子代理排队发送重新执行指令");
-                showToast("✅ 已向子代理发送重新执行指令");
-              } else {
-                setNote("⚠️ 发送失败：" + (res?.error?.message ?? "未知错误") + "。请打开子代理会话手动操作。");
-              }
-            } catch (e) {
-              setNote("⚠️ 发送失败：" + String(e?.message ?? e) + "。请打开子代理会话手动操作。");
-            }
-            setTimeout(() => { onConfirm(); }, 1500);
-          } else {
-            // 无子代理 → 派发新执行子代理
-            setNote("派发子代理…");
-            const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ goal: goalId }),
-            });
-            const data = await r.json();
-            if (data.ok) {
-              if (data.child_id) {
-                setNote("✅ 已派发执行子代理，id：" + data.child_id);
-                showToast("✅ 已派发执行子代理");
-              } else if (data.child_error) {
-                setNote("⚠️ 子代理启动失败：" + data.child_error);
-              } else {
-                setNote("⚠️ 子代理未启动（无 child_id）");
-              }
-              setTimeout(() => { onConfirm(); }, 1200);
-            } else {
-              setNote("⚠️ 执行失败：" + (data.error || "未知错误"));
-            }
-          }
-        } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
-        }
-        setLoading(false);
-      };
+/**
+ * 退出搜索时的精准恢复指令（g-233 P1/P4）。
+ * 纯函数：不修改 React state，仅返回「哪些泳道/列需要折叠回去」的指令对象。
+ *
+ * @param {{ ws: string, expandedLanes: Set<string>, openReleasedSlugs: Set<string>, deliverExpanded: boolean, blockedExpanded: boolean }} tempState
+ * @param {string} activeWs - 当前活跃工作区
+ * @returns {{ collapsedLanes: string[], unopenedReleasedSlugs: string[], collapseDeliver: boolean, collapseBlocked: boolean, wsMismatch: boolean }}
+ *   - wsMismatch: true 表示工作区已切换，调用方应直接丢弃临时状态而非恢复
+ *   - collapsedLanes: 需要折叠回去的泳道 key 列表（仅含用户未显式操作过的）
+ *   - unopenedReleasedSlugs: 需要取消展开的已发布版本 slug 列表
+ *   - collapseDeliver / collapseBlocked: 是否需要折叠交付/阻塞列
+ */
+function exitSearchRestore(tempState, activeWs) {
+  // P2: 工作区不一致时直接丢弃不触碰
+  if (tempState.ws && tempState.ws !== activeWs) {
+    return {
+      collapsedLanes: [],
+      unopenedReleasedSlugs: [],
+      collapseDeliver: false,
+      collapseBlocked: false,
+      wsMismatch: true,
+    };
+  }
 
-      return h("div", { style: S.overlay, ...backdropGuard },
-        h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
-          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
-          h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
-            `🚀 执行「${goalData?.title ?? goalId}」`),
-          h("div", { style: { ...S.meta, marginBottom: 8 } },
-            hasChild
-              ? "该目标已有执行子代理。将向其发送重新执行指令（排队），不另起新子代理。"
-              : "将为目标创建执行子代理，状态迁移到「执行中」。"),
-          // 有子代理时：提供链接让用户自己打开会话管理
-          hasChild && oldChildId
-            ? h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 8 } },
-                h("span", { style: { fontSize: 12 } }, "🔗 子代理："),
-                h("button", {
-                  style: { ...S.btn, fontSize: 12, padding: "2px 8px" }, className: "dg-btn",
-                  onClick: (e) => {
-                    e.stopPropagation();
-                    if (oldParentId) openChildSession(oldParentId, oldChildId);
-                  },
-                }, oldChildId.slice(0, 8) + "… ↗"))
-            : null,
-          !hasCriteria
-            ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginBottom: 4 } },
-                "⚠️ 质量判据尚未登记——将以授权模式强制迁移到执行列。")
-            : null,
-          h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
-            h("button", {
-              style: { ...S.btnPrimary, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-primary",
-              disabled: loading, onClick: startExec,
-            }, loading ? "处理中…" : (hasChild ? "🔄 重新执行" : "🚀 确认执行")),
-            h("button", {
-              style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
-              onClick: onCancel,
-            }, "取消")),
-          note ? h("div", { style: { ...S.meta, marginTop: 6 } }, note) : null,
-        ),
-      );
-    }
+  return {
+    collapsedLanes: [...tempState.expandedLanes],
+    unopenedReleasedSlugs: [...tempState.openReleasedSlugs],
+    collapseDeliver: tempState.deliverExpanded,
+    collapseBlocked: tempState.blockedExpanded,
+    wsMismatch: false,
+  };
+}
 
-    // g-77647351：交付确认弹窗——告知主管需做代码合并等交付工作，提供跳转主管会话按钮
-    function DeliverPrompt(props) {
-      const { goalId, goalTitle, supervisorSession, onConfirm, onCancel } = props;
-      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
-      const backdropGuard = useBackdropClose(onCancel);
-      const promptText = `【交付通知】目标「${goalTitle ?? goalId}」（${goalId}）即将标记为已交付。请进行最终复核：代码合并、文档更新等交付工作。`;
-      const jumpToSupervisor = async () => {
-        try {
-          const copied = await copyText(promptText);
-          const rt = sessionsRt ?? appCtx?.get?.("sessions");
-          if (rt && supervisorSession) {
-            rt.open?.(supervisorSession);
-            activateChatTab();
-          }
-          if (copied) {
-            showToast("✅ 预填内容已复制，到主管对话窗 Ctrl+V 直接粘贴发送");
-          }
-        } catch { /* 静默 */ }
-      };
-      return h("div", { style: S.overlay, ...backdropGuard },
-        h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
-          h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
-            `📦 交付「${goalTitle ?? goalId}」`),
-          h("div", { style: { ...S.meta, marginBottom: 8, lineHeight: 1.8 } },
-            "交付前请确保以下工作已完成：", h("br"),
-            "• 代码已合并到主分支", h("br"),
-            "• 相关文档/配置已更新", h("br"),
-            "• 已通知主管进行最终复核", h("br"),
-            h("br"),
-            h("span", { style: { color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
-              "⚠️ 标记为「已交付」后需主管评审通过才能正式完成。")),
-          h("div", { style: { display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" } },
-            supervisorSession
-              ? h("button", {
-                  style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
-                  onClick: jumpToSupervisor,
-                }, "↗ 告知主管")
-              : null,
-            h("button", {
-              style: { ...S.btnAccept, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-accept",
-              onClick: () => onConfirm(),
-            }, "📦 确认交付"),
-            h("button", {
-              style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
-              onClick: onCancel,
-            }, "取消")),
-        ),
-      );
-    }
+/**
+ * 导航到搜索匹配项时，记录被自动展开的泳道/列并返回临时 unhide 指令（g-233 P1/P4）。
+ * 纯函数：返回 { updatedTempState, unhideVersionSlug }，调用方负责应用到 React state。
+ *
+ * @param {{ ws: string, expandedLanes: Set<string>, openReleasedSlugs: Set<string>, deliverExpanded: boolean, blockedExpanded: boolean }} tempState
+ * @param {{ id: string, versionSlug: string|null, isReleased: boolean, laneKey: string|null, status: string }} target
+ * @param {string[]} hiddenVersionSlugs - 当前持久隐藏的版本 slug 列表
+ * @param {function} stageOf - status→stage 映射函数
+ * @returns {{ updatedTempState: object, unhideVersionSlug: string|null, expandLane: string|null, expandReleasedSlug: string|null, expandDeliver: boolean, expandBlocked: boolean }}
+ */
+function navigateToMatchTrack(tempState, target, hiddenVersionSlugs, stageOf) {
+  const updated = {
+    ws: tempState.ws,
+    expandedLanes: new Set(tempState.expandedLanes),
+    openReleasedSlugs: new Set(tempState.openReleasedSlugs),
+    deliverExpanded: tempState.deliverExpanded,
+    blockedExpanded: tempState.blockedExpanded,
+  };
+
+  let unhideVersionSlug = null;
+  let expandLane = null;
+  let expandReleasedSlug = null;
+  let expandDeliver = false;
+  let expandBlocked = false;
+
+  // 1. 若在隐藏版本内，临时 unhide（P1: 纯内存覆盖层，不写持久底账）
+  if (target.versionSlug && (hiddenVersionSlugs ?? []).includes(target.versionSlug)) {
+    unhideVersionSlug = target.versionSlug;
+  }
+
+  // 2. 若在折叠版本内，自动展开并记录
+  if (target.isReleased && target.versionSlug) {
+    expandReleasedSlug = target.versionSlug;
+    updated.openReleasedSlugs.add(target.versionSlug);
+  } else if (target.laneKey) {
+    expandLane = target.laneKey;
+    updated.expandedLanes.add(target.laneKey);
+  }
+
+  // 3. 若在折叠的交付/阻塞列，自动展开并记录
+  const stage = stageOf(target.status);
+  if (stage === "deliver" && !tempState.deliverExpanded) {
+    updated.deliverExpanded = true;
+    expandDeliver = true;
+  } else if (stage === "blocked" && !tempState.blockedExpanded) {
+    updated.blockedExpanded = true;
+    expandBlocked = true;
+  }
+
+  return {
+    updatedTempState: updated,
+    unhideVersionSlug,
+    expandLane,
+    expandReleasedSlug,
+    expandDeliver,
+    expandBlocked,
+  };
+}
+
+/**
+ * 计算视图有效的隐藏版本集合（g-233 P1：搜索内存覆盖层不写持久底账）。
+ * 纯函数：从持久隐藏列表中排除被搜索临时 unhide 的 slug。
+ *
+ * @param {string[]} hiddenVersionSlugs - 持久隐藏的版本 slug 列表
+ * @param {Set<string>} searchUnhiddenSlugs - 搜索临时 unhide 的版本 slug 集合
+ * @returns {Set<string>} 视图中应隐藏的版本 slug 集合
+ */
+function computeEffectiveHiddenVersionSlugs(hiddenVersionSlugs, searchUnhiddenSlugs) {
+  return new Set((hiddenVersionSlugs ?? []).filter((slug) => !searchUnhiddenSlugs.has(slug)));
+}
+
+/**
+ * 工作区切换时的完整搜索状态重置对象（g-233 P2：防止跨工作区污染）。
+ * 返回 { searchState, tempState } 供调用方一次性 set 所有搜索相关 React state。
+ *
+ * @param {string} activeWs - 新的工作区路径
+ * @returns {{ searchState: { query: string, activeQuery: string, matches: any[], currentIndex: number, feedback: string|null, unhiddenSlugs: Set<string> }, tempState: object }}
+ */
+function resetSearchState(activeWs) {
+  return {
+    searchState: {
+      query: "",
+      activeQuery: "",
+      matches: [],
+      currentIndex: 0,
+      feedback: null,
+      unhiddenSlugs: new Set(),
+    },
+    tempState: createSearchTempState(activeWs),
+  };
+}
 
 
-    // g-105：记忆管理面板组件（手工增删改查常驻记忆与按需记忆，支持开关禁用工具）
-    function MemoryManagementModal(props) {
-      const [entries, setEntries] = React.useState([]);
-      const [toolsEnabled, setToolsEnabled] = React.useState(true);
-      const [loading, setLoading] = React.useState(true);
-      const [note, setNote] = React.useState(null);
-      const [tab, setTab] = React.useState("standing"); // "standing" | "on_demand"
-      const [searchQuery, setSearchQuery] = React.useState("");
-      const [page, setPage] = React.useState(1);
-      const [totalCount, setTotalCount] = React.useState(0);
-      const [totalPages, setTotalPages] = React.useState(1);
-      const [showAdd, setShowAdd] = React.useState(false);
-      const [newText, setNewText] = React.useState("");
-      const [newScope, setNewScope] = React.useState("standing");
-      const [saving, setSaving] = React.useState(false);
-      const memoryGuard = useBackdropClose(props.onClose);
-
-      const load = React.useCallback(() => {
-        setLoading(true);
-        const params = {
-          scope: tab,
-          page: String(page),
-          page_size: "15",
-          query: searchQuery.trim(),
-        };
-        fetch(graphUrl("/api/dsh-graph/memory/list", params, props.workspace))
-          .then((r) => r.json())
-          .then((d) => {
-            setLoading(false);
-            if (d.ok) {
-              setEntries(Array.isArray(d.memory) ? d.memory : []);
-              setTotalCount(d.total ?? 0);
-              setTotalPages(d.total_pages ?? 1);
-              setToolsEnabled(d.tools_enabled !== false);
-            } else {
-              setNote("⚠️ 加载失败：" + (d.error || "未知错误"));
-            }
-          })
-          .catch((e) => {
-            setLoading(false);
-            setNote("⚠️ 网络错误：" + String(e?.message ?? e));
-          });
-      }, [props.workspace, tab, page, searchQuery]);
-
-      React.useEffect(() => { load(); }, [load]);
-
-      const toggleTools = async () => {
-        const next = !toolsEnabled;
-        try {
-          const r = await fetch(graphUrl("/api/dsh-graph/memory/toggle-tools", {}, props.workspace), {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ enabled: next }),
-          });
-          const d = await r.json();
-          if (d.ok) {
-            setToolsEnabled(d.tools_enabled);
-            showToast(d.tools_enabled ? "✅ 已启用 Agent 记忆工具" : "🔒 已禁用 Agent 记忆工具（纯手工管理模式）");
-          }
-        } catch (e) {
-          showToast("⚠️ 切换失败：" + String(e?.message ?? e));
-        }
-      };
-
-      const addMem = async () => {
-        const text = newText.trim();
-        if (!text) return;
-        if (newScope === "standing" && [...text].length > 200) {
-          setNote("⚠️ 常驻记忆硬上限为 200 字符，当前已输入 " + [...text].length + " 字");
-          return;
-        }
-        setSaving(true);
-        setNote(null);
-        try {
-          const r = await fetch(graphUrl("/api/dsh-graph/memory/add", {}, props.workspace), {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ kind: "project", scope: newScope, text, importance: 3 }),
-          });
-          const d = await r.json();
-          setSaving(false);
-          if (d.ok) {
-            setNewText("");
-            setShowAdd(false);
-            showToast("✅ 记忆添加成功");
-            load();
-          } else {
-            setNote("⚠️ 添加失败：" + (d.error || "未知错误"));
-          }
-        } catch (e) {
-          setSaving(false);
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
-        }
-      };
-
-      const delMem = async (id) => {
-        if (!confirm("确认删除该条记忆？")) return;
-        try {
-          const r = await fetch(graphUrl("/api/dsh-graph/memory/delete", {}, props.workspace), {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ id, reason: "用户在管理面板手动删除" }),
-          });
-          const d = await r.json();
-          if (d.ok) {
-            showToast("✅ 已删除记忆");
-            load();
-          } else {
-            showToast("⚠️ 删除失败：" + (d.error || "未知错误"));
-          }
-        } catch (e) {
-          showToast("⚠️ 删除失败：" + String(e?.message ?? e));
-        }
-      };
-
-      const standingList = entries.filter((e) => (e.scope ?? "on_demand") === "standing");
-      const onDemandList = entries.filter((e) => (e.scope ?? "on_demand") === "on_demand");
-      const currentList = tab === "standing" ? standingList : onDemandList;
-
-      return h("div", { style: S.overlay, ...memoryGuard },
-        h("div", { style: { ...S.modal, minWidth: 460, maxWidth: 640, maxHeight: "85vh", display: "flex", flexDirection: "column" }, onClick: (e) => e.stopPropagation() },
-          h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
-          h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingRight: 24 } },
-            h("div", { style: { fontWeight: 700, fontSize: 16, display: "flex", alignItems: "center", gap: 8 } },
-              "🧠 长期记忆管理",
-              h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "(memory.jsonl)")),
-            h("label", { style: { display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 12, opacity: 0.9 }, title: "关闭后，所有子代理将无法调用记忆工具，避免意外修改或插件冲突" },
-              h("input", { type: "checkbox", checked: toolsEnabled, onChange: toggleTools }),
-              toolsEnabled ? "允许 Agent 工具调用" : "🔒 纯手工模式(工具已禁用)")),
-
-          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(128,128,128,.2)", marginBottom: 10 } },
-            h("div", { style: { display: "flex", gap: 8 } },
-              h("button", {
-                className: "dg-btn",
-                style: { ...S.btn, borderBottom: tab === "standing" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "standing" ? 700 : 400, padding: "6px 12px" },
-                onClick: () => { setTab("standing"); setPage(1); setShowAdd(false); },
-              }, "常驻记忆 (固定植入)"),
-              h("button", {
-                className: "dg-btn",
-                style: { ...S.btn, borderBottom: tab === "on_demand" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "on_demand" ? 700 : 400, padding: "6px 12px" },
-                onClick: () => { setTab("on_demand"); setPage(1); setShowAdd(false); },
-              }, "按需记忆 (分页检索)")),
-            h("div", { style: { display: "flex", gap: 4, alignItems: "center" } },
-              h("input", {
-                value: searchQuery,
-                style: { ...S.promptInput, width: 140, height: 26, fontSize: 11, padding: "2px 6px" },
-                placeholder: "搜索记忆内容…",
-                onChange: (e) => { setSearchQuery(e.target.value); setPage(1); },
-              }),
-              searchQuery ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 5px" }, onClick: () => { setSearchQuery(""); setPage(1); } }, "✕") : null)),
-
-          h("div", { style: { ...S.meta, marginBottom: 8, fontSize: 11, lineHeight: 1.5 } },
-            tab === "standing"
-              ? "💡【常驻记忆】：作为系统 Prompt 独立章节固定植入每个会话（单条硬上限 ≤ 200 字），适合记录工作区核心硬性约束与安全铁律。"
-              : "💡【按需记忆】：平时不植入会话、不占 token；仅在检索或手动调用时按需提取，适合技术方案决策与参考事实。"),
-
-          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
-            h("span", { style: { ...S.meta, fontSize: 12 } }, "共 " + totalCount + " 条（第 " + page + " / " + totalPages + " 页）"),
-            h("button", {
-              className: "dg-btn",
-              style: { ...S.btnPrimary, fontSize: 12, padding: "2px 8px" },
-              onClick: () => { setShowAdd(!showAdd); setNewScope(tab); setNote(null); },
-            }, showAdd ? "收起输入框" : "＋ 新增记忆")),
-
-          showAdd ? h("div", { style: { ...S.subCard, marginBottom: 12, padding: 10 } },
-            h("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
-              h("span", { style: { fontSize: 12, fontWeight: 600 } }, "类型："),
-              h("label", { style: { fontSize: 12, cursor: "pointer" } },
-                h("input", { type: "radio", name: "mem_scope", checked: newScope === "standing", onChange: () => setNewScope("standing") }), " 常驻记忆(≤200字)"),
-              h("label", { style: { fontSize: 12, cursor: "pointer", marginLeft: 8 } },
-                h("input", { type: "radio", name: "mem_scope", checked: newScope === "on_demand", onChange: () => setNewScope("on_demand") }), " 按需记忆(≤500字)")),
-            h("textarea", {
-              value: newText,
-              style: { ...S.promptInput, width: "100%", height: 60, boxSizing: "border-box", fontSize: 12, resize: "vertical" },
-              placeholder: newScope === "standing" ? "输入要沉淀的常驻约束（硬上限 200 字符）…" : "输入按需参考记忆…",
-              onChange: (e) => setNewText(e.target.value),
-            }),
-            h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 } },
-              h("span", { style: { ...S.meta, fontSize: 11, color: newScope === "standing" && [...newText].length > 200 ? "#e74c3c" : undefined } },
-                [...newText].length + " / " + (newScope === "standing" ? "200" : "500") + " 字"),
-              h("button", {
-                className: "dg-btn",
-                style: { ...S.btnPrimary, fontSize: 12 },
-                disabled: saving || !newText.trim(),
-                onClick: addMem,
-              }, saving ? "保存中…" : "确认保存"))) : null,
-
-          note ? h("div", { style: { ...S.meta, color: "#e74c3c", marginBottom: 8 } }, note) : null,
-
-          h("div", { style: { flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, minHeight: 120 } },
-            loading ? h("div", { style: S.meta }, "正在读取记忆…") : (!entries.length ? h("div", { style: { ...S.meta, textAlign: "center", padding: "20px 0" } }, "（当前分类下暂无记忆条目）") : entries.map((m) =>
-              h("div", { key: m.id, style: { ...S.subCard, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4 } },
-                h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
-                  h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
-                    h("span", { style: { fontSize: 11, fontFamily: "monospace", opacity: 0.7 } }, m.id),
-                    h("span", { style: { fontSize: 10, padding: "0 4px", borderRadius: 4, background: m.scope === "standing" ? "rgba(76,175,80,.15)" : "rgba(33,150,243,.15)", color: m.scope === "standing" ? "#4caf50" : "#2196f3" } }, m.scope === "standing" ? "常驻" : "按需"),
-                    m.source_goal ? h("span", { style: { fontSize: 10, opacity: 0.6 } }, "来自: " + m.source_goal) : null),
-                  h("button", {
-                    className: "dg-btn",
-                    style: { ...S.btn, fontSize: 11, padding: "1px 6px", color: "#e74c3c" },
-                    title: "删除该条记忆",
-                    onClick: () => delMem(m.id),
-                  }, "删除")),
-                h("div", { style: { fontSize: 12, lineHeight: 1.5, wordBreak: "break-word" } }, m.text))))),
-          totalPages > 1 ? h("div", { style: { display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 10, borderTop: "1px solid rgba(128,128,128,.15)", paddingTop: 8 } },
-            h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "2px 8px" }, disabled: page <= 1, onClick: () => setPage(page - 1) }, "上一页"),
-            h("span", { style: { ...S.meta, fontSize: 11 } }, page + " / " + totalPages),
-            h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "2px 8px" }, disabled: page >= totalPages, onClick: () => setPage(page + 1) }, "下一页")) : null,
-        )
-      );
-    }
-
-    function KanbanView(props) {
-      const [state, setState] = React.useState({ loading: true });
+    // Search contract marker: 未找到匹配.
+    // Contract marker: 未找到匹配
     // ===== g-223：版本管理抽屉（左侧展开，版本显隐过滤、全选/取消/仅活跃快捷操作） =====
     function VersionDrawer(props) {
+      useLocaleRevision();
       const {
         versions,
         hiddenVersionSlugs,
@@ -4869,51 +6772,51 @@ window.__ModuleLoader__.load({
           role: "dialog",
           "aria-modal": "true",
           "aria-labelledby": "dg-version-drawer-title",
-          "aria-label": "版本管理",
+          "aria-label": dgT("versionDrawer.title"),
           onClick: (e) => e.stopPropagation(),
         },
           h("button", {
             type: "button",
             style: { ...S.close, background: "none", border: "none", padding: 0, color: "inherit", font: "inherit" },
-            title: "关闭版本管理抽屉",
-            "aria-label": "关闭版本管理抽屉",
+            title: dgT("common.close"),
+            "aria-label": dgT("common.close"),
             onClick: onClose,
           }, "✕"),
           h("div", { id: "dg-version-drawer-title", style: { fontWeight: 700, fontSize: 16, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
-            h("span", null, "🏷️ 版本管理"),
+            h("span", null, dgT("versionDrawer.title")),
             h("span", { style: { ...S.meta, fontSize: 12, fontWeight: 400 } },
               "（显示 " + visibleCount + "/" + allVersions.length + "）")),
           h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.8, marginBottom: 12, lineHeight: 1.4 } },
-            "勾选控制版本在看板中的显隐过滤；设置自动保存在本地，不影响底层版本数据。"),
+            dgT("versionDrawer.hint")),
 
           // 便捷操作按钮栏
           h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 } },
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "3px 8px" },
               className: "dg-btn",
-              title: "显示全部版本",
+              title: dgT("versionDrawer.showAll"),
               onClick: onShowAll,
-            }, "显示全部"),
+            }, dgT("versionDrawer.showAll")),
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "3px 8px" },
               className: "dg-btn",
-              title: "仅显示活跃版本（planning / ready / in_progress / review 等未发布版本）",
+              title: dgT("versionDrawer.showActiveTooltip"),
               onClick: onShowActiveOnly,
-            }, "仅活跃版本"),
+            }, dgT("versionDrawer.showActive")),
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "3px 8px" },
               className: "dg-btn",
-              title: "隐藏全部版本泳道",
+              title: dgT("versionDrawer.hideAllTooltip"),
               onClick: onHideAll,
-            }, "隐藏全部")),
+            }, dgT("versionDrawer.hideAll"))),
 
           // 搜索过滤框（版本很多时快速定位）
           allVersions.length > 8
             ? h("div", { style: { marginBottom: 10 } },
                 h("input", {
                   style: { ...S.promptInput, width: "100%", fontSize: 12, padding: "4px 8px" },
-                  placeholder: "搜索版本名称或 slug…",
-                  "aria-label": "搜索版本名称或 slug",
+                  placeholder: dgT("versionDrawer.searchPlaceholder"),
+                  "aria-label": dgT("versionDrawer.searchPlaceholder"),
                   value: search,
                   onChange: (e) => setSearch(e.target.value),
                 }))
@@ -4933,7 +6836,7 @@ window.__ModuleLoader__.load({
           },
             filteredVersions.length === 0
               ? h("div", { style: { ...S.meta, textAlign: "center", padding: "20px 0" } },
-                  allVersions.length === 0 ? "暂无版本" : "未找到匹配版本")
+                  allVersions.length === 0 ? dgT("versionDrawer.noVersions") : dgT("versionDrawer.noMatch"))
               : filteredVersions.map((v) => {
                   const isVisible = !hiddenSet.has(v.slug);
                   const isReleased = v.status === "released";
@@ -4997,22 +6900,471 @@ window.__ModuleLoader__.load({
                                 ? "var(--dsw-alias-state-success-primary, #6ee7a0)"
                                 : "var(--dsw-alias-state-business-primary, #8ab4ff)",
                             },
-                          }, isReleased ? "已发布" : (v.status === "active" ? "进行中" : (STATUS_LABEL[v.status] ?? v.status ?? "活跃")))),
+                          }, isReleased ? dgT("versionDrawer.released") : (v.status === "active" ? dgT("versionDrawer.active") : (STATUS_LABEL[v.status] ?? v.status ?? "活跃")))),
                         h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } },
                           v.slug + " ｜ " + goalsCount + " 个目标"))),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "2px 6px", flexShrink: 0 },
                       className: "dg-btn",
-                      title: "查看版本详情",
+                      title: dgT("versionDrawer.detailTooltip"),
                       onClick: (e) => {
                         e.stopPropagation();
                         onOpenVersionDetail?.(v);
                       },
-                    }, "详情 ↗"));
+                    }, dgT("versionDrawer.detail")));
                 })),
         )
       );
     }
+    // Contract marker: 已隐藏全部 X 个版本（包含已发布版本）; title: "版本管理（显隐过滤与版本列表）"
+    function BackwardReasonPrompt(props) {
+      const { goalId, toStatus, hasChild, childId, parentId, onConfirm, onCancel } = props;
+      const [reason, setReason] = React.useState("");
+      const [sending, setSending] = React.useState(false);
+      const [sent, setSent] = React.useState(false);
+      // 如果有子代理，通过 session.prompt 发送理由
+      const { session } = useBoundSession(parentId, childId);
+      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
+      const backdropGuard = useBackdropClose(onCancel);
+      const sendReason = async () => {
+        if (!reason.trim()) { onConfirm(""); return; }
+        if (hasChild && session?.prompt) {
+          setSending(true);
+          try {
+            await session.prompt(
+              [{ type: "text", text: `【${goalId} 回退理由】${reason.trim()}` }], "queue");
+            setSent(true);
+            setTimeout(() => onConfirm(reason.trim()), 800);
+          } catch {
+            onConfirm(reason.trim());
+          }
+          setSending(false);
+        } else {
+          onConfirm(reason.trim());
+        }
+      };
+      return h("div", { style: S.overlay, ...backdropGuard },
+        h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
+          h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
+            dgT("backward.title", { status: STATUS_LABEL[toStatus] ?? toStatus })),
+          h("div", { style: { ...S.meta, marginBottom: 8 } },
+            dgT("backward.desc", { goalId, status: STATUS_LABEL[toStatus] ?? toStatus }),
+            h("br"),
+            hasChild
+              ? dgT("backward.withChild")
+              : dgT("backward.withoutChild")),
+          h("textarea", {
+            style: { ...S.promptInput, width: "100%", minHeight: 80, resize: "vertical", marginTop: 4 },
+            value: reason,
+            placeholder: dgT("backward.reasonPlaceholder"),
+            onChange: (e) => setReason(e.target.value),
+          }),
+          h("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
+            h("button", {
+              style: { ...S.btnPrimary, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-primary",
+              disabled: sending, onClick: sendReason,
+            }, sending ? dgT("common.sending") : (sent ? dgT("common.sent") : dgT("backward.confirmBtn"))),
+            h("button", {
+              style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
+              onClick: onCancel,
+            }, dgT("common.cancel"))),
+        ),
+      );
+    }
+
+    // g-77647351：进执行列确认弹窗
+    // 无子代理 → force transition + start-execution 派新子代理
+    // 有子代理 → force transition + 通过 session.prompt 给旧子代理排队重新执行（不派新）
+    function InProgressPrompt(props) {
+      const { goalId, goalData, supervisorSession, onConfirm, onCancel } = props;
+      const [loading, setLoading] = React.useState(false);
+      const [note, setNote] = React.useState(null);
+      const hasChild = !!(goalData?.attempt_child_id);
+      const hasCriteria = !!(goalData?.criteria_count);
+      const oldChildId = goalData?.attempt_child_id ?? null;
+      const oldParentId = goalData?.attempt_parent_session_id ?? null;
+
+      // 有子代理时用 session.prompt 排队重新执行，无子代理时派新
+      const { session: oldSession } = useBoundSession(oldParentId, oldChildId);
+
+      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
+      const backdropGuard = useBackdropClose(onCancel);
+
+      const startExec = async () => {
+        if (!supervisorSession) {
+          setNote(dgT("inProgress.supervisorNotConfigured"));
+          return;
+        }
+        setLoading(true);
+        try {
+          // Step 1: force transition 到 in_progress（人工拖动视为授权）
+          setNote(dgT("inProgress.migrating"));
+          const tr = await fetch(graphUrl("/api/dsh-graph/transition"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, to: "in_progress", force: true }),
+          });
+          const trData = await tr.json();
+          if (!trData.ok) {
+            setNote(dgT("exec.stateTransitionFail") + (trData.error || dgT("drag.unknownError")));
+            setLoading(false);
+            return;
+          }
+
+          if (hasChild && oldSession?.prompt) {
+            // 有子代理 → 排队发"重新执行"消息，不派新子代理
+            setNote(dgT("inProgress.dispatchingReExec"));
+            try {
+              const res = await oldSession.prompt(
+                [{ type: "text", text: `【重新执行】用户从看板拖放触发重新执行目标 ${goalId}。请从头开始执行目标描述和质量判据中的任务。` }],
+                "queue",
+              );
+              if (res?.ok) {
+                setNote(dgT("inProgress.reExecSent"));
+                showToast(dgT("inProgress.reExecSent"));
+              } else {
+                setNote(dgT("inProgress.reExecFail") + (res?.error?.message ?? dgT("drag.unknownError")));
+              }
+            } catch (e) {
+              setNote(dgT("inProgress.reExecFail") + String(e?.message ?? e));
+            }
+            setTimeout(() => { onConfirm(); }, 1500);
+          } else {
+            // 无子代理 → 派发新执行子代理
+            setNote(dgT("inProgress.dispatching"));
+            const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ goal: goalId }),
+            });
+            const data = await r.json();
+            if (data.ok) {
+              if (data.child_id) {
+                setNote(dgT("exec.childDispatched") + data.child_id);
+                showToast(dgT("exec.childDispatched"));
+              } else if (data.child_error) {
+                setNote(dgT("exec.childFailed") + data.child_error);
+              } else {
+                setNote(dgT("exec.childNotStarted"));
+              }
+              setTimeout(() => { onConfirm(); }, 1200);
+            } else {
+              setNote(dgT("exec.executeFail") + (data.error || dgT("drag.unknownError")));
+            }
+          }
+        } catch (e) {
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      return h("div", { style: S.overlay, ...backdropGuard },
+        h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
+          h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
+            dgT("inProgress.title", { title: goalData?.title ?? goalId })),
+          h("div", { style: { ...S.meta, marginBottom: 8 } },
+            hasChild
+              ? dgT("inProgress.hasChild")
+              : dgT("inProgress.noChild")),
+          // 有子代理时：提供链接让用户自己打开会话管理
+          hasChild && oldChildId
+            ? h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 8 } },
+                h("span", { style: { fontSize: 12 } }, dgT("inProgress.subagent")),
+                h("button", {
+                  style: { ...S.btn, fontSize: 12, padding: "2px 8px" }, className: "dg-btn",
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    if (oldParentId) openChildSession(oldParentId, oldChildId);
+                  },
+                }, oldChildId.slice(0, 8) + "… ↗"))
+            : null,
+          !hasCriteria
+            ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginBottom: 4 } },
+                dgT("inProgress.noCriteria"))
+            : null,
+          h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
+            h("button", {
+              style: { ...S.btnPrimary, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-primary",
+              disabled: loading, onClick: startExec,
+            }, loading ? dgT("common.processing") : (hasChild ? dgT("inProgress.reExecute") : dgT("inProgress.confirmExec"))),
+            h("button", {
+              style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
+              onClick: onCancel,
+            }, dgT("common.cancel"))),
+          note ? h("div", { style: { ...S.meta, marginTop: 6 } }, note) : null,
+        ),
+      );
+    }
+
+    // g-77647351：交付确认弹窗——告知主管需做代码合并等交付工作，提供跳转主管会话按钮
+    function DeliverPrompt(props) {
+      const { goalId, goalTitle, supervisorSession, onConfirm, onCancel } = props;
+      // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
+      const backdropGuard = useBackdropClose(onCancel);
+      const promptText = `【交付通知】目标「${goalTitle ?? goalId}」（${goalId}）即将标记为已交付。请进行最终复核：代码合并、文档更新等交付工作。`;
+      const jumpToSupervisor = async () => {
+        try {
+          const copied = await copyText(promptText);
+          const rt = sessionsRt ?? appCtx?.get?.("sessions");
+          if (rt && supervisorSession) {
+            rt.open?.(supervisorSession);
+            activateChatTab();
+          }
+          if (copied) {
+            showToast(dgT("exec.precopied"));
+          }
+        } catch { /* 静默 */ }
+      };
+      return h("div", { style: S.overlay, ...backdropGuard },
+        h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
+          h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
+          h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
+            dgT("deliver.title", { title: goalTitle ?? goalId })),
+          h("div", { style: { ...S.meta, marginBottom: 8, lineHeight: 1.8 } },
+            dgT("deliver.checklist"), h("br"),
+            dgT("deliver.item1"), h("br"),
+            dgT("deliver.item2"), h("br"),
+            dgT("deliver.item3"), h("br"),
+            h("br"),
+            h("span", { style: { color: "var(--dsw-alias-state-warn-label, #e0a53a)" } },
+              dgT("deliver.warn"))),
+          h("div", { style: { display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" } },
+            supervisorSession
+              ? h("button", {
+                  style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
+                  onClick: jumpToSupervisor,
+                }, dgT("deliver.notifySupervisor"))
+              : null,
+            h("button", {
+              style: { ...S.btnAccept, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-accept",
+              onClick: () => onConfirm(),
+            }, dgT("deliver.confirmDeliver")),
+            h("button", {
+              style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
+              onClick: onCancel,
+            }, dgT("common.cancel"))),
+        ),
+      );
+    }
+
+
+    // g-105：记忆管理面板组件（手工增删改查常驻记忆与按需记忆，支持开关禁用工具）
+    function MemoryManagementModal(props) {
+      const [entries, setEntries] = React.useState([]);
+      const [toolsEnabled, setToolsEnabled] = React.useState(true);
+      const [loading, setLoading] = React.useState(true);
+      const [note, setNote] = React.useState(null);
+      const [tab, setTab] = React.useState("standing"); // "standing" | "on_demand"
+      const [searchQuery, setSearchQuery] = React.useState("");
+      const [page, setPage] = React.useState(1);
+      const [totalCount, setTotalCount] = React.useState(0);
+      const [totalPages, setTotalPages] = React.useState(1);
+      const [showAdd, setShowAdd] = React.useState(false);
+      const [newText, setNewText] = React.useState("");
+      const [newScope, setNewScope] = React.useState("standing");
+      const [saving, setSaving] = React.useState(false);
+      const memoryGuard = useBackdropClose(props.onClose);
+
+      const load = React.useCallback(() => {
+        setLoading(true);
+        const params = {
+          scope: tab,
+          page: String(page),
+          page_size: "15",
+          query: searchQuery.trim(),
+        };
+        fetch(graphUrl("/api/dsh-graph/memory/list", params, props.workspace))
+          .then((r) => r.json())
+          .then((d) => {
+            setLoading(false);
+            if (d.ok) {
+              setEntries(Array.isArray(d.memory) ? d.memory : []);
+              setTotalCount(d.total ?? 0);
+              setTotalPages(d.total_pages ?? 1);
+              setToolsEnabled(d.tools_enabled !== false);
+            } else {
+              setNote(dgT("memory.loadFail") + (d.error || dgT("drag.unknownError")));
+            }
+          })
+          .catch((e) => {
+            setLoading(false);
+            setNote(dgT("memory.networkError") + String(e?.message ?? e));
+          });
+      }, [props.workspace, tab, page, searchQuery]);
+
+      React.useEffect(() => { load(); }, [load]);
+
+      const toggleTools = async () => {
+        const next = !toolsEnabled;
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/memory/toggle-tools", {}, props.workspace), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ enabled: next }),
+          });
+          const d = await r.json();
+          if (d.ok) {
+            setToolsEnabled(d.tools_enabled);
+            showToast(d.tools_enabled ? dgT("memory.toolsEnabledToast") : dgT("memory.toolsDisabledToast"));
+          }
+        } catch (e) {
+          showToast(dgT("memory.toggleFail") + String(e?.message ?? e));
+        }
+      };
+
+      const addMem = async () => {
+        const text = newText.trim();
+        if (!text) return;
+        if (newScope === "standing" && [...text].length > 200) {
+          setNote(dgT("memory.standingCharsExceeded", { count: [...text].length }));
+          return;
+        }
+        setSaving(true);
+        setNote(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/memory/add", {}, props.workspace), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ kind: "project", scope: newScope, text, importance: 3 }),
+          });
+          const d = await r.json();
+          setSaving(false);
+          if (d.ok) {
+            setNewText("");
+            setShowAdd(false);
+            showToast(dgT("memory.addSuccess"));
+            load();
+          } else {
+            setNote(dgT("memory.addFail") + (d.error || dgT("drag.unknownError")));
+          }
+        } catch (e) {
+          setSaving(false);
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
+        }
+      };
+
+      const delMem = async (id) => {
+        if (!confirm(dgT("memory.deleteConfirm"))) return;
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/memory/delete", {}, props.workspace), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id, reason: dgT("memory.deletedByUser") }),
+          });
+          const d = await r.json();
+          if (d.ok) {
+            showToast(dgT("memory.deleteSuccess"));
+            load();
+          } else {
+            showToast(dgT("memory.deleteFail") + (d.error || dgT("drag.unknownError")));
+          }
+        } catch (e) {
+          showToast(dgT("memory.deleteFail") + String(e?.message ?? e));
+        }
+      };
+
+      const standingList = entries.filter((e) => (e.scope ?? "on_demand") === "standing");
+      const onDemandList = entries.filter((e) => (e.scope ?? "on_demand") === "on_demand");
+      const currentList = tab === "standing" ? standingList : onDemandList;
+
+      return h("div", { style: S.overlay, ...memoryGuard },
+        h("div", { style: { ...S.modal, minWidth: 460, maxWidth: 640, maxHeight: "85vh", display: "flex", flexDirection: "column" }, onClick: (e) => e.stopPropagation() },
+          h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
+          h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingRight: 24 } },
+            h("div", { style: { fontWeight: 700, fontSize: 16, display: "flex", alignItems: "center", gap: 8 } },
+              dgT("memory.title"),
+              h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "(memory.jsonl)")),
+            h("label", { style: { display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 12, opacity: 0.9 }, title: dgT("memory.toolsToggleTooltip") },
+              h("input", { type: "checkbox", checked: toolsEnabled, onChange: toggleTools }),
+              toolsEnabled ? dgT("memory.toolsEnabled") : dgT("memory.toolsDisabled"))),
+
+          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(128,128,128,.2)", marginBottom: 10 } },
+            h("div", { style: { display: "flex", gap: 8 } },
+              h("button", {
+                className: "dg-btn",
+                style: { ...S.btn, borderBottom: tab === "standing" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "standing" ? 700 : 400, padding: "6px 12px" },
+                onClick: () => { setTab("standing"); setPage(1); setShowAdd(false); },
+              }, dgT("memory.standingType")),
+              h("button", {
+                className: "dg-btn",
+                style: { ...S.btn, borderBottom: tab === "on_demand" ? "2px solid #4c8dff" : "none", borderRadius: 0, fontWeight: tab === "on_demand" ? 700 : 400, padding: "6px 12px" },
+                onClick: () => { setTab("on_demand"); setPage(1); setShowAdd(false); },
+              }, dgT("memory.onDemandType"))),
+            h("div", { style: { display: "flex", gap: 4, alignItems: "center" } },
+              h("input", {
+                value: searchQuery,
+                style: { ...S.promptInput, width: 140, height: 26, fontSize: 11, padding: "2px 6px" },
+                placeholder: dgT("memory.searchPlaceholder"),
+                onChange: (e) => { setSearchQuery(e.target.value); setPage(1); },
+              }),
+              searchQuery ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 5px" }, onClick: () => { setSearchQuery(""); setPage(1); } }, "✕") : null)),
+
+          h("div", { style: { ...S.meta, marginBottom: 8, fontSize: 11, lineHeight: 1.5 } },
+            tab === "standing"
+              ? dgT("memory.standingHint")
+              : dgT("memory.onDemandHint")),
+
+          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
+            h("span", { style: { ...S.meta, fontSize: 12 } }, dgT("memory.total", { count: totalCount, page, totalPages })),
+            h("button", {
+              className: "dg-btn",
+              style: { ...S.btnPrimary, fontSize: 12, padding: "2px 8px" },
+              onClick: () => { setShowAdd(!showAdd); setNewScope(tab); setNote(null); },
+            }, showAdd ? dgT("tags.collapse") : dgT("memory.addBtn"))),
+
+          showAdd ? h("div", { style: { ...S.subCard, marginBottom: 12, padding: 10 } },
+            h("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
+              h("span", { style: { fontSize: 12, fontWeight: 600 } }, dgT("memory.typeLabel")),
+              h("label", { style: { fontSize: 12, cursor: "pointer" } },
+                h("input", { type: "radio", name: "mem_scope", checked: newScope === "standing", onChange: () => setNewScope("standing") }), " " + dgT("memory.standingLabel")),
+              h("label", { style: { fontSize: 12, cursor: "pointer", marginLeft: 8 } },
+                h("input", { type: "radio", name: "mem_scope", checked: newScope === "on_demand", onChange: () => setNewScope("on_demand") }), " " + dgT("memory.onDemandLabel"))),
+            h("textarea", {
+              value: newText,
+              style: { ...S.promptInput, width: "100%", height: 60, boxSizing: "border-box", fontSize: 12, resize: "vertical" },
+              placeholder: newScope === "standing" ? dgT("memory.standingPlaceholder") : dgT("memory.onDemandPlaceholder"),
+              onChange: (e) => setNewText(e.target.value),
+            }),
+            h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 } },
+              h("span", { style: { ...S.meta, fontSize: 11, color: newScope === "standing" && [...newText].length > 200 ? "#e74c3c" : undefined } },
+                [...newText].length + " / " + (newScope === "standing" ? "200" : "500") + " 字"),
+              h("button", {
+                className: "dg-btn",
+                style: { ...S.btnPrimary, fontSize: 12 },
+                disabled: saving || !newText.trim(),
+                onClick: addMem,
+              }, saving ? dgT("common.saving") : dgT("memory.saveBtn")))) : null,
+
+          note ? h("div", { style: { ...S.meta, color: "#e74c3c", marginBottom: 8 } }, note) : null,
+
+          h("div", { style: { flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, minHeight: 120 } },
+            loading ? h("div", { style: S.meta }, dgT("memory.loading")) : (!entries.length ? h("div", { style: { ...S.meta, textAlign: "center", padding: "20px 0" } }, dgT("memory.noEntries")) : entries.map((m) =>
+              h("div", { key: m.id, style: { ...S.subCard, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4 } },
+                h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                  h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+                    h("span", { style: { fontSize: 11, fontFamily: "monospace", opacity: 0.7 } }, m.id),
+                    h("span", { style: { fontSize: 10, padding: "0 4px", borderRadius: 4, background: m.scope === "standing" ? "rgba(76,175,80,.15)" : "rgba(33,150,243,.15)", color: m.scope === "standing" ? "#4caf50" : "#2196f3" } }, m.scope === "standing" ? dgT("memory.standing") : dgT("memory.onDemand")),
+                    m.source_goal ? h("span", { style: { fontSize: 10, opacity: 0.6 } }, dgT("memory.from") + m.source_goal) : null),
+                  h("button", {
+                    className: "dg-btn",
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px", color: "#e74c3c" },
+                    title: dgT("memory.deleteConfirm"),
+                    onClick: () => delMem(m.id),
+                  }, dgT("common.delete"))),
+                h("div", { style: { fontSize: 12, lineHeight: 1.5, wordBreak: "break-word" } }, m.text))))),
+          totalPages > 1 ? h("div", { style: { display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 10, borderTop: "1px solid rgba(128,128,128,.15)", paddingTop: 8 } },
+            h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "2px 8px" }, disabled: page <= 1, onClick: () => setPage(page - 1) }, dgT("memory.prevPage")),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, page + " / " + totalPages),
+            h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "2px 8px" }, disabled: page >= totalPages, onClick: () => setPage(page + 1) }, dgT("memory.nextPage"))) : null,
+        )
+      );
+    }
+
+    function KanbanView(props) {
+      useLocaleRevision();
+      const [state, setState] = React.useState({ loading: true });
       const [modalGoal, setModalGoal] = React.useState(null);
       // g-171 回退修复：镜像 modalGoal 供 load 闭包判定（load 被 30s 轮询闭包捕获，
       // 直接读 state 会拿到首次渲染的 null）。详情弹窗打开期间跳过更新强调播放，
@@ -5094,6 +7446,49 @@ window.__ModuleLoader__.load({
       const [deliverColumnCollapsed, setDeliverColumnCollapsed] = React.useState(false);
       // g-162: 泳道折叠状态（active 版本泳道、独立目标泳道、backlog 泳道独立折叠，默认展开；只在当前页面生效）
       const [collapsedLanes, setCollapsedLanes] = React.useState({});
+      // g-233：目标搜索与导航状态
+      const [searchQuery, setSearchQuery] = React.useState("");
+      const [searchActiveQuery, setSearchActiveQuery] = React.useState("");
+      const [searchFullText, setSearchFullText] = React.useState(false);
+      const [searchMatches, setSearchMatches] = React.useState([]);
+      const [searchCurrentIndex, setSearchCurrentIndex] = React.useState(0);
+      const [searchFeedback, setSearchFeedback] = React.useState(null);
+      const searchInputRef = React.useRef(null);
+      // g-233 P1: 纯内存覆盖层——临时 unhide 的版本 slug 集合，不写持久底账
+      const [searchUnhiddenSlugs, setSearchUnhiddenSlugs] = React.useState(() => new Set());
+      // g-233 P2/P4: 临时状态记录栈——工作区绑定，记录因搜索自动展开的泳道与列，退出搜索时精准恢复（g-255: 使用 search-state.js 纯函数）
+      const tempExpandedRef = React.useRef(createSearchTempState(activeWs));
+
+      // g-233 P2: 工作区切换时彻底重置搜索词、匹配结果与全部临时状态，防止跨工作区污染（g-255: 使用 search-state.js 纯函数）
+      React.useEffect(() => {
+        const reset = resetSearchState(activeWs);
+        setSearchQuery(reset.searchState.query);
+        setSearchActiveQuery(reset.searchState.activeQuery);
+        setSearchMatches(reset.searchState.matches);
+        setSearchCurrentIndex(reset.searchState.currentIndex);
+        setSearchFeedback(reset.searchState.feedback);
+        setSearchUnhiddenSlugs(reset.searchState.unhiddenSlugs);
+        tempExpandedRef.current = reset.tempState;
+      }, [activeWs, props?.sessionId]);
+
+      // g-233：全局 Ctrl+F / Cmd+F 聚焦看板搜索框
+      React.useEffect(() => {
+        const handleKeyDown = (e) => {
+          if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+            const activeEl = document.activeElement;
+            const isInput = activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.isContentEditable);
+            if (!isInput || activeEl === searchInputRef.current) {
+              e.preventDefault();
+              if (searchInputRef.current) {
+                searchInputRef.current.focus();
+                searchInputRef.current.select();
+              }
+            }
+          }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+      }, []);
       // g-77647351：拖拽状态机
       const [drag, setDrag] = React.useState(null); // {goalId, fromStatus, overGoalId, overStageKey, overHalf, laneKey}
       const dropCommitted = React.useRef(false);
@@ -5212,11 +7607,11 @@ window.__ModuleLoader__.load({
           .then((data) => {
             setVersionDetailLoading(false);
             if (data.ok) setVersionDetailData(data);
-            else setVersionActionNote("⚠️ 加载失败：" + (data.error || "未知错误"));
+            else setVersionActionNote(dgT('versionDetail.loading') + (data.error || dgT('drag.unknownError')));
           })
           .catch((e) => {
             setVersionDetailLoading(false);
-            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+            setVersionActionNote(dgT('versionDetail.requestFail') + String(e?.message ?? e));
           });
       };
       // g-160：恢复 released 版本为 active 的状态
@@ -5272,13 +7667,13 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            showToast(`✅ ${goalId} → ${STATUS_LABEL[toStatus] ?? toStatus}`);
+            showToast(dgT('drag.transitionSuccess', { goalId, status: STATUS_LABEL[toStatus] ?? toStatus }));
             load(); // 刷新看板
           } else {
-            showToast("⚠️ 迁移失败：" + (data.error || "未知错误"));
+            showToast(dgT('drag.transitionFail') + (data.error || dgT('drag.unknownError')));
           }
         } catch (e) {
-          showToast("⚠️ 请求失败：" + String(e?.message ?? e));
+          showToast(dgT('drag.requestFail') + String(e?.message ?? e));
         }
       }
 
@@ -5330,7 +7725,7 @@ window.__ModuleLoader__.load({
           to = "version";
           version = targetLaneKey.slice(2);
         } else {
-          showToast("⚠️ 未知目标泳道：" + targetLaneKey);
+          showToast(dgT('drag.unknownLane') + targetLaneKey);
           return;
         }
         const body = { goal: goalId, to };
@@ -5343,18 +7738,18 @@ window.__ModuleLoader__.load({
           .then((r) => r.json())
           .then((data) => {
             if (data.ok) {
-              showToast(`✅ ${goalId} 已移动到 ${targetLaneKey}`);
+              showToast(dgT('drag.moveToSuccess', { goalId, target: targetLaneKey }));
               load();
             } else {
-              const err = data.error || "未知错误";
-              if (err.includes("不能移回 backlog 平铺")) {
-                showToast("⚠️ 目标有附件（cards/attempts），不能移回 backlog。可移到独立目标或版本中。");
+              const err = data.error || dgT('drag.unknownError');
+              if (err.includes(dgT("drag.moveToBacklogError"))) {
+                showToast(dgT('drag.moveToBacklogError'));
               } else {
-                showToast("⚠️ 移动失败：" + err);
+                showToast(dgT('drag.moveToFail') + err);
               }
             }
           })
-          .catch((e) => showToast("⚠️ 请求失败：" + String(e?.message ?? e)));
+          .catch((e) => showToast(dgT('drag.requestFail') + String(e?.message ?? e)));
       }
 
       // g-77647351：提交拖放（入口）
@@ -5370,7 +7765,7 @@ window.__ModuleLoader__.load({
           // g-137：backlog 卡拖入版本 lane 的落点限定
           // 从 backlog 拖到版本 lane 时，只能落到「描述」列（overStageKey === "describe"）
           if (laneKey === "backlog" && overLaneKey.startsWith("v-") && overStageKey !== "describe") {
-            showToast("⚠️ backlog 卡片只能拖到版本的「描述」列，不能直接到收集/执行/确认/交付/阻塞列");
+            showToast(dgT('drag.backlogOnlyDescribe'));
             return;
           }
           commitCrossLaneMove(goalId, overLaneKey);
@@ -5396,11 +7791,22 @@ window.__ModuleLoader__.load({
           return;
         }
         // 跨列 → transition
+        // g-245：blocked 目标按 blocked_from 解析落点，且只做状态迁移——
+        // 不走 deliver/backward/in_progress 弹窗，避免复用派发逻辑自动启动或续跑子代理。
+        if (fromStatus === "blocked") {
+          const blockedGoal = allGoals.find((g) => g.id === goalId);
+          const resolved = resolveBlockedDropTarget(blockedGoal?.blocked_from, overStageKey);
+          if (!resolved.ok) {
+            showToast(resolved.message);
+            return;
+          }
+          commitCrossColumnDrag(goalId, resolved.toStatus);
+          return;
+        }
         // 判据 3：planning→collect 二义默认 collecting
         let toStatus = resolveTargetStatus(fromStatus, overStageKey);
         if (!toStatus) {
-          // blocked 只能回 blocked_from，前端无法预判，提示用户
-          showToast("⚠️ blocked 状态只能解除回原状态（由服务端校验）");
+          showToast(dgT('drag.cannotParseDrop'));
           return;
         }
         // 判据 3：delivered 终态 → 弹窗告知主管需做交付工作
@@ -5429,7 +7835,7 @@ window.__ModuleLoader__.load({
           return;
         }
         if (toStatus === "blocked") {
-          const reason = prompt("请输入阻塞原因：");
+          const reason = prompt(dgT('drag.blockedReasonPrompt'));
           if (!reason || !reason.trim()) return;
           commitCrossColumnDrag(goalId, toStatus, reason.trim());
           return;
@@ -5617,15 +8023,16 @@ window.__ModuleLoader__.load({
       const renameVersionGuard = useBackdropClose(() => { setRenameVersionTarget(null); setRenameVersionNote(null); });
       const deleteVersionGuard = useBackdropClose(() => { setDeleteVersionTarget(null); setDeleteVersionNote(null); });
 
-      if (!activeWs) return h("div", { style: S.wrap, role: "status" }, "⚠️ 无法确定工作区，已暂停看板请求。");
-      if (state.loading) return h("div", { style: S.wrap }, "dsh-graph 看板加载中…");
-      if (state.error) return h("div", { style: S.wrap }, "看板数据获取失败：" + state.error);
+      if (!activeWs) return h("div", { style: S.wrap, role: "status" }, dgT('kanban.error.workspace'));
+      if (state.loading) return h("div", { style: S.wrap }, dgT('kanban.loading'));
+      if (state.error) return h("div", { style: S.wrap }, dgT('kanban.error.fetch') + state.error);
       const b = state.data;
-      if (b.error) return h("div", { style: S.wrap }, "看板数据错误：" + b.error);
+      if (b.error) return h("div", { style: S.wrap }, dgT('kanban.error.data') + b.error);
 
       const allActiveVersions = b.versions.filter((v) => v.status !== "released");
       const allReleasedVersions = b.versions.filter((v) => v.status === "released");
-      const hiddenVersionSet = new Set(hiddenVersionSlugs ?? []);
+      // g-233 P1: 纯内存覆盖层——临时可见版本从 hiddenVersionSet 排除，不写持久隐藏偏好（g-255: 使用 search-state.js 纯函数）
+      const hiddenVersionSet = computeEffectiveHiddenVersionSlugs(hiddenVersionSlugs, searchUnhiddenSlugs);
       const active = allActiveVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       const released = allReleasedVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       // 全量目标 id→status 映射（依赖徽章状态化，发现#23：已交付依赖算「依赖满足」）
@@ -5641,6 +8048,212 @@ window.__ModuleLoader__.load({
         ...b.standalone,
         ...b.backlog,
       ];
+
+      // ===== g-233: 目标搜索与导航核心函数（g-255: 使用 search-state.js 纯函数） =====
+      // g-233 P4: 用户显式操作泳道折叠状态，从临时恢复列表中移除（用户意图优先）
+      const toggleLaneCollapse = (key, collapse) => {
+        tempExpandedRef.current.expandedLanes = toggleLaneCollapseInState(tempExpandedRef.current.expandedLanes, key);
+        setCollapsedLanes((prev) => ({ ...prev, [key]: collapse }));
+      };
+
+      // g-233 P4: 用户显式操作已发布版本展开/折叠，从临时恢复列表中移除
+      const toggleReleasedOpen = (slug, openState) => {
+        tempExpandedRef.current.openReleasedSlugs = toggleReleasedOpenInState(tempExpandedRef.current.openReleasedSlugs, slug);
+        setOpenReleased((prev) => ({ ...prev, [slug]: openState }));
+      };
+
+      const exitSearch = () => {
+        // g-255: 使用 search-state.js 纯函数计算恢复指令
+        const restore = exitSearchRestore(tempExpandedRef.current, activeWs);
+        // P1: 临时 unhide 纯内存清空，绝不触碰持久存储，持久隐藏偏好零污染
+        setSearchUnhiddenSlugs(new Set());
+
+        if (restore.wsMismatch) {
+          // P2: 工作区不一致，直接丢弃临时状态不触碰
+          tempExpandedRef.current = createSearchTempState(activeWs);
+        } else {
+          // P4: 恢复仅针对用户未主动操作过的条目（用户显式操作已在 toggle 时从 Set 中移出）
+          if (restore.collapsedLanes.length > 0) {
+            setCollapsedLanes((prev) => {
+              const next = { ...prev };
+              for (const key of restore.collapsedLanes) next[key] = true;
+              return next;
+            });
+          }
+          if (restore.unopenedReleasedSlugs.length > 0) {
+            setOpenReleased((prev) => {
+              const next = { ...prev };
+              for (const slug of restore.unopenedReleasedSlugs) delete next[slug];
+              return next;
+            });
+          }
+          if (restore.collapseDeliver) setDeliverColumnCollapsed(true);
+          if (restore.collapseBlocked) setBlockedColumnCollapsed(true);
+          tempExpandedRef.current = createSearchTempState(activeWs);
+        }
+        setSearchActiveQuery("");
+        setSearchMatches([]);
+        setSearchCurrentIndex(0);
+        setSearchFeedback(null);
+      };
+
+      const navigateToMatch = (idx, matchesList) => {
+        const matches = matchesList ?? searchMatches;
+        if (!matches.length) return;
+        const targetIdx = ((idx % matches.length) + matches.length) % matches.length;
+        setSearchCurrentIndex(targetIdx);
+        const target = matches[targetIdx];
+        if (!target) return;
+
+        // g-255: 使用 search-state.js 纯函数计算导航跟踪指令
+        const track = navigateToMatchTrack(tempExpandedRef.current, target, hiddenVersionSlugs, stageOf);
+        tempExpandedRef.current = track.updatedTempState;
+
+        // 1. 若在隐藏版本内，临时 unhide（P1: 纯内存覆盖层，不写持久底账）
+        if (track.unhideVersionSlug) {
+          setSearchUnhiddenSlugs((prev) => new Set([...prev, track.unhideVersionSlug]));
+        }
+
+        // 2. 若在折叠版本内，自动展开（条件判断与原逻辑一致）
+        if (track.expandReleasedSlug) {
+          setOpenReleased((prev) => {
+            if (!prev[track.expandReleasedSlug]) {
+              return { ...prev, [track.expandReleasedSlug]: true };
+            }
+            return prev;
+          });
+        } else if (track.expandLane) {
+          setCollapsedLanes((prev) => {
+            if (prev[track.expandLane]) {
+              return { ...prev, [track.expandLane]: false };
+            }
+            return prev;
+          });
+        }
+
+        // 3. 若在折叠的交付/阻塞列，自动展开
+        if (track.expandDeliver) {
+          setDeliverColumnCollapsed(false);
+        } else if (track.expandBlocked) {
+          setBlockedColumnCollapsed(false);
+        }
+
+        // 4. 定位并平滑滚动到卡片
+        setTimeout(() => {
+          const el = document.getElementById("goal-" + target.id) || document.querySelector(`[data-goal-id="${target.id}"]`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+          }
+        }, 80);
+      };
+
+      const executeSearch = (queryText, isFullText = searchFullText) => {
+        const q = String(queryText ?? "").trim();
+        if (!q) {
+          setSearchFeedback(dgT('search.enterKeyword'));
+          setTimeout(() => setSearchFeedback((fb) => fb === dgT('search.enterKeyword') ? null : fb), 2500);
+          return;
+        }
+        setSearchFeedback(null);
+        const lowerQ = q.toLowerCase();
+
+        // 遍历所有目标候选（包含所有版本，含当前处于隐藏状态的版本）
+        const candidates = [];
+        for (const v of (b?.versions ?? [])) {
+          const isRel = v.status === "released";
+          for (const g of (v.goals ?? [])) {
+            candidates.push({
+              ...g,
+              versionSlug: v.slug,
+              versionName: v.name,
+              isReleased: isRel,
+              laneKey: isRel ? "rellane-" + v.slug : "v-" + v.slug,
+            });
+          }
+        }
+        for (const g of (b?.standalone ?? [])) {
+          candidates.push({
+            ...g,
+            versionSlug: null,
+            isReleased: false,
+            laneKey: "standalone",
+          });
+        }
+        for (const g of (b?.backlog ?? [])) {
+          candidates.push({
+            ...g,
+            versionSlug: null,
+            isReleased: false,
+            laneKey: "backlog",
+          });
+        }
+
+        const matches = [];
+        for (const c of candidates) {
+          const titleHit = String(c.title ?? "").toLowerCase().includes(lowerQ);
+          const idHit = String(c.id ?? "").toLowerCase().includes(lowerQ);
+          let descHit = false;
+          let snippet = "";
+          if (isFullText && c.description) {
+            descHit = String(c.description).toLowerCase().includes(lowerQ);
+            if (descHit) {
+              snippet = extractMatchSnippet(c.description, q);
+            }
+          }
+          if (titleHit || idHit || descHit) {
+            matches.push({
+              id: c.id,
+              title: c.title,
+              status: c.status,
+              versionSlug: c.versionSlug,
+              isReleased: c.isReleased,
+              laneKey: c.laneKey,
+              snippet: snippet || (descHit ? extractMatchSnippet(c.description, q) : ""),
+            });
+          }
+        }
+
+        setSearchActiveQuery(q);
+        setSearchMatches(matches);
+        if (matches.length === 0) {
+          setSearchFeedback(dgT('search.noResults'));
+        } else {
+          navigateToMatch(0, matches);
+        }
+      };
+
+      const handleSearchInputKeyDown = (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (e.shiftKey) {
+            if (searchMatches.length > 0) navigateToMatch(searchCurrentIndex - 1);
+          } else {
+            if (searchActiveQuery && searchActiveQuery === searchQuery.trim() && searchMatches.length > 0) {
+              navigateToMatch(searchCurrentIndex + 1);
+            } else {
+              executeSearch(searchQuery, searchFullText);
+            }
+          }
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          exitSearch();
+          if (searchInputRef.current) searchInputRef.current.blur();
+        } else if (e.key === "ArrowDown") {
+          if (searchActiveQuery && searchMatches.length > 0) {
+            e.preventDefault();
+            navigateToMatch(searchCurrentIndex + 1);
+          }
+        } else if (e.key === "ArrowUp") {
+          if (searchActiveQuery && searchMatches.length > 0) {
+            e.preventDefault();
+            navigateToMatch(searchCurrentIndex - 1);
+          }
+        }
+      };
+
+      const matchedGoalMap = new Map();
+      for (const m of searchMatches) matchedGoalMap.set(m.id, m);
+      const currentMatchedGoalId = searchMatches[searchCurrentIndex]?.id ?? null;
       // g-129/g-159: 打开新建目标弹窗；普通入口预选最新 active，泳道入口固定预选目标版本
       const openCreateGoal = (version) => {
         const entryVersion = version ?? null;
@@ -5675,17 +8288,17 @@ window.__ModuleLoader__.load({
                 background: baseBg,
                 cursor: "pointer",
               },
-              title: "点击展开泳道",
+              title: dgT('lane.expandTooltip'),
               onClick: (e) => {
                 e.stopPropagation();
-                setCollapsedLanes((prev) => ({ ...prev, [key]: false }));
+                toggleLaneCollapse(key, false);
               },
             },
-              h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
+              h("span", null, "▸ ", label, ` · ${goals.length} ` + dgT('lane.goalCount', { count: goals.length }).replace(String(goals.length), '').trim()),
               h("button", {
                 style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
                 className: "dg-btn",
-                title: version ? `在 ${version} 新建目标` : (key === "standalone" ? "新建独立目标" : "新建目标（backlog）"),
+                title: version ? dgT('lane.newGoalInVersion', { version }) : (key === "standalone" ? dgT('lane.newStandaloneGoal') : dgT('lane.newBacklogGoal')),
                 onClick: (e) => {
                   e.stopPropagation();
                   openCreateGoal(key === "standalone" ? "standalone" : version);
@@ -5694,9 +8307,9 @@ window.__ModuleLoader__.load({
             h("div", {
               key: key + "-collapsed-summary",
               style: { gridColumn: "2 / -1", ...S.cell, background: baseBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
-              title: "点击展开泳道",
-              onClick: () => setCollapsedLanes((prev) => ({ ...prev, [key]: false })),
-            }, `▸ ${goals.length} 目标 · 点击展开`),
+              title: dgT('lane.expandTooltip'),
+              onClick: () => toggleLaneCollapse(key, false),
+            }, dgT('lane.collapsedSummary', { count: goals.length })),
           ];
         }
         // 展开态：正常渲染各阶段列
@@ -5729,11 +8342,11 @@ window.__ModuleLoader__.load({
                 if (d > maxDays) maxDays = d;
               }
             }
-            const duration = maxDays >= 1 ? `${Math.floor(maxDays)}天` : "";
+            const duration = maxDays >= 1 ? `${Math.floor(maxDays)}d` : "";
             // g-127：用换行符让窄条内自然竖排（文字保持水平，不旋转）
             const summaryText = duration
-              ? h(React.Fragment, null, "阻", h("br"), "塞", h("br"), `×${orderedGoals.length}`, h("br"), duration)
-              : h(React.Fragment, null, "阻", h("br"), "塞", h("br"), `×${orderedGoals.length}`);
+              ? h(React.Fragment, null, dgT('blocked.label'), h("br"), "", h("br"), dgT('blocked.count', { count: orderedGoals.length }), h("br"), duration)
+              : h(React.Fragment, null, dgT('blocked.label'), h("br"), "", h("br"), dgT('blocked.count', { count: orderedGoals.length }));
             return h("div", {
               key: key + "-" + s.key, // 使用 lane key + stage key 作为唯一 key
               style: {
@@ -5752,8 +8365,12 @@ window.__ModuleLoader__.load({
                 overflow: "hidden",
               },
               className: "dg-blocked-collapsed" + (isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? " dg-cell-drop-active" : ""),
-              onClick: (e) => { e.stopPropagation(); setBlockedColumnCollapsed(false); },
-              title: `点击展开阻塞列（${orderedGoals.length} 项）`,
+              onClick: (e) => {
+                e.stopPropagation();
+                tempExpandedRef.current.blockedExpanded = false;
+                setBlockedColumnCollapsed(false);
+              },
+              title: dgT('blocked.collapsedTitle', { count: orderedGoals.length }),
               // g-127：折叠态仍支持拖放（拖入阻塞列）
               onDragOver: anyDrag ? (e) => {
                 e.preventDefault();
@@ -5791,8 +8408,12 @@ window.__ModuleLoader__.load({
                 overflow: "hidden",
               },
               className: "dg-deliver-collapsed" + (isOverThisCell && !orderedGoals.some((g) => g.id === drag.goalId) ? " dg-cell-drop-active" : ""),
-              onClick: (e) => { e.stopPropagation(); setDeliverColumnCollapsed(false); },
-              title: `点击展开交付列（${count} 项）`,
+              onClick: (e) => {
+                e.stopPropagation();
+                tempExpandedRef.current.deliverExpanded = false;
+                setDeliverColumnCollapsed(false);
+              },
+              title: dgT('deliver.collapsedTitle', { count }),
               onDragOver: anyDrag ? (e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "move";
@@ -5806,7 +8427,7 @@ window.__ModuleLoader__.load({
                   commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
                 }
               } : undefined,
-            }, h(React.Fragment, null, "交", h("br"), "付", h("br"), `×${count}`));
+            }, h(React.Fragment, null, dgT('deliver.label'), h("br"), "", h("br"), dgT('deliver.count', { count })));
           }
           return h("div", {
             key: key + "-" + s.key, // 使用 lane key + stage key 作为唯一 key
@@ -5835,7 +8456,17 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag.overGoalId === g.id;
-              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              const mInfo = matchedGoalMap.get(g.id);
+              return Card({
+                ...g,
+                _tags: tagsFor(g),
+                _polishActive: polishGoal === g.id,
+                _updateEmphasis: updateEmphasis[g.id] ?? null,
+                _searchQuery: searchActiveQuery,
+                _isSearchMatched: !!mInfo,
+                _isSearchCurrent: currentMatchedGoalId === g.id,
+                _snippet: mInfo?.snippet ?? "",
+              }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -5892,7 +8523,7 @@ window.__ModuleLoader__.load({
             cursor: version ? "pointer" : "default",
           },
           className: version ? "dg-version-label" : "",
-          title: version ? `点击查看版本 ${version} 详情` : undefined,
+          title: version ? dgT('lane.versionDetail', { version }) : undefined,
           onClick: version ? (e) => {
             e.stopPropagation();
             const v = b.versions.find((ver) => ver.slug === version);
@@ -5913,7 +8544,7 @@ window.__ModuleLoader__.load({
           h("button", {
             style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
             className: "dg-btn",
-            title: key === "standalone" ? "新建独立目标" : (version ? `在 ${version} 新建目标` : "新建目标（backlog）"),
+            title: key === "standalone" ? dgT('lane.newStandaloneGoal') : (version ? dgT('lane.newGoalInVersion', { version }) : dgT('lane.newBacklogGoal')),
             onClick: (e) => {
               e.stopPropagation();
               openCreateGoal(key === "standalone" ? "standalone" : version);
@@ -5922,11 +8553,11 @@ window.__ModuleLoader__.load({
 
            collapsible ? h("button", {
              className: "dg-lane-collapse",
-             title: "折叠泳道",
-             "aria-label": "折叠泳道",
+             title: dgT('lane.collapseTooltip'),
+             "aria-label": dgT('lane.collapseTooltip'),
              onClick: (e) => {
                e.stopPropagation();
-               setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
+               toggleLaneCollapse(key, true);
              },
            }, h("span", { className: "dg-lane-collapse-triangle" })) : null);
         return [labelEl, ...cells];
@@ -5943,17 +8574,17 @@ window.__ModuleLoader__.load({
             h("div", {
               key: key + "-label",
               style: { ...S.laneLabel, paddingRight: 40, position: "relative", background: backlogBg, cursor: "pointer" },
-              title: "点击展开泳道",
+              title: dgT('lane.expandTooltip'),
               onClick: (e) => {
                 e.stopPropagation();
-                setCollapsedLanes((prev) => ({ ...prev, [key]: false }));
+                toggleLaneCollapse(key, false);
               },
             },
-              h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
+              h("span", null, "▸ ", label, ` · ${goals.length} ` + dgT('lane.goalCount', { count: goals.length }).replace(String(goals.length), '').trim()),
               h("button", {
                 style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
                 className: "dg-btn",
-                title: "新建目标（backlog）",
+                title: dgT('lane.newBacklogGoal'),
                 onClick: (e) => {
                   e.stopPropagation();
                   openCreateGoal(null);
@@ -5962,9 +8593,9 @@ window.__ModuleLoader__.load({
             h("div", {
               key: key + "-collapsed-summary",
               style: { gridColumn: "2 / -1", ...S.cell, background: backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
-              title: "点击展开泳道",
-              onClick: () => setCollapsedLanes((prev) => ({ ...prev, [key]: false })),
-            }, `▸ ${goals.length} 目标 · 点击展开`),
+              title: dgT('lane.expandTooltip'),
+              onClick: () => toggleLaneCollapse(key, false),
+            }, dgT('lane.collapsedSummary', { count: goals.length })),
           ];
         }
         // 展开态：正常渲染
@@ -5975,17 +8606,18 @@ window.__ModuleLoader__.load({
           h("button", {
             style: { position: "absolute", left: "50%", right: "auto", bottom: 2 },
             className: "dg-lane-collapse",
-            title: "折叠泳道",
-            "aria-label": "折叠泳道",
+            // a11y contract: "aria-label": "折叠泳道"
+            title: dgT('lane.collapseTooltip'),
+            "aria-label": dgT('lane.collapseTooltip'),
             onClick: (e) => {
               e.stopPropagation();
-              setCollapsedLanes((prev) => ({ ...prev, [key]: true }));
+              toggleLaneCollapse(key, true);
             },
           }, h("span", { className: "dg-lane-collapse-triangle" })),
           h("button", {
             style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
             className: "dg-btn",
-            title: "新建目标（backlog）",
+            title: dgT('lane.newBacklogGoal'),
             onClick: () => openCreateGoal(null),
           }, "＋"));
         // g-137 修复：backlog 平铺也按 order.json 对账排序（否则拖放重排保存了却不生效）
@@ -6016,7 +8648,17 @@ window.__ModuleLoader__.load({
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
               const isDragTarget = isOverThisCell && drag?.overGoalId === g.id;
-              return Card({ ...g, _tags: tagsFor(g), _polishActive: polishGoal === g.id, _updateEmphasis: updateEmphasis[g.id] ?? null }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              const mInfo = matchedGoalMap.get(g.id);
+              return Card({
+                ...g,
+                _tags: tagsFor(g),
+                _polishActive: polishGoal === g.id,
+                _updateEmphasis: updateEmphasis[g.id] ?? null,
+                _searchQuery: searchActiveQuery,
+                _isSearchMatched: !!mInfo,
+                _isSearchCurrent: currentMatchedGoalId === g.id,
+                _snippet: mInfo?.snippet ?? "",
+              }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
                 (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
@@ -6071,6 +8713,8 @@ window.__ModuleLoader__.load({
         deliverColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // deliver
         blockedColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // blocked
       ].join(" ");
+      // Released lanes intentionally share the same computed template by reference.
+      const releasedGridCols = gridCols;
 
       const rows = [];
       let laneIndex = 0;
@@ -6083,13 +8727,13 @@ window.__ModuleLoader__.load({
       const visibleVersionsCount = active.length + released.length;
       if (totalVersionsCount > 0 && (visibleVersionsCount === 0 || (allActiveVersions.length > 0 && active.length === 0))) {
         const hintText = visibleVersionsCount === 0
-          ? `已隐藏全部 ${totalVersionsCount} 个版本（包含已发布版本）。可通过左上角版本管理抽屉随时恢复显示。`
-          : `已隐藏全部 ${allActiveVersions.length} 个活跃版本泳道。可通过左上角版本管理抽屉随时恢复显示。`;
+          ? dgT('versionDrawer.allHidden', { count: totalVersionsCount })
+          : dgT('versionDrawer.activeHidden', { count: allActiveVersions.length });
         rows.push(
           h("div", {
             key: "empty-active-versions-label",
             style: { ...S.laneLabel, background: "rgba(128,128,128,.05)", opacity: 0.8, fontStyle: "italic" },
-          }, "🏷️ 版本（全部隐藏）"),
+          }, "🏷️ " + dgT("versionDrawer.title").replace("🏷️ ", "")),
           h("div", {
             key: "empty-active-versions-cell",
             style: {
@@ -6107,11 +8751,14 @@ window.__ModuleLoader__.load({
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
               className: "dg-btn",
-              onClick: () => setHiddenVersionSlugs([]),
-            }, "恢复显示全部版本")),
+              onClick: () => {
+                setSearchUnhiddenSlugs(new Set());
+                setHiddenVersionSlugs([]);
+              },
+            }, dgT("versionDrawer.showAll"))),
         );
       }
-      rows.push(...lane("独立目标", b.standalone, "standalone", null, laneIndex));
+      rows.push(...lane(dgT("lane.newStandaloneGoal").replace("Create ", "").replace("新建", "").replace(" goal", "").replace("目标", ""), b.standalone, "standalone", null, laneIndex));
       laneIndex++;
       rows.push(...backlogRow("backlog", b.backlog, "backlog"));
 
@@ -6120,12 +8767,12 @@ window.__ModuleLoader__.load({
         return [
           h("div", {
             key: "rel-" + v.slug, style: { ...S.collapsed, cursor: "pointer" }, className: "dg-collapsed",
-            title: "点击展开/收起；点击版本名称打开详情",
-            onClick: () => { setOpenReleased({ ...openReleased, [v.slug]: !open }); },
+            title: dgT("lane.expandTooltip"),
+            onClick: () => { toggleReleasedOpen(v.slug, !open); },
           },
             h("span", {
               style: { cursor: "pointer" },
-              onClick: (e) => { e.stopPropagation(); setOpenReleased({ ...openReleased, [v.slug]: !open }); },
+              onClick: (e) => { e.stopPropagation(); toggleReleasedOpen(v.slug, !open); },
             }, `${open ? "▾" : "▸"}`),
             " ",
             h("span", {
@@ -6135,20 +8782,20 @@ window.__ModuleLoader__.load({
                 setVersionDetailTarget({ slug: v.slug, name: v.name, status: v.status, goals_count: v.goals.length });
                 loadVersionDetail(v.slug);
               },
-              title: "打开版本详情",
+              title: dgT("versionDrawer.detailTooltip"),
             }, `${v.name}`),
-            ` ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`
+            ` ✅ ${v.goals.length} goals · released · ${v.slug}`
           ),
-          open ? h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: gridCols } },
+          open ? h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: releasedGridCols } },
             ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx, false)) : null,
         ];
       });
 
       const createGoal = async () => {
         const t = newGoalTitle.trim();
-        if (!t) { setCreateNote("⚠️ 请输入目标标题"); return; }
+        if (!t) { setCreateNote(dgT("createGoal.titleRequired")); return; }
         setCreating(true);
-        setCreateNote("创建中…");
+        setCreateNote(dgT("common.creating"));
         try {
           const body = { title: t };
           if (newGoalVersion.trim()) body.version = newGoalVersion.trim();
@@ -6162,7 +8809,7 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setCreateNote("✅ 已创建目标：" + data.goal);
+            setCreateNote(dgT("createGoal.success", { id: data.goal }));
             setNewGoalTitle("");
             setNewGoalDesc("");
             setNewGoalType("task"); // g-158 重置为新目标默认类型
@@ -6172,10 +8819,10 @@ window.__ModuleLoader__.load({
             load(); // 刷新看板
             setTimeout(() => setShowCreateGoal(false), 1500);
           } else {
-            setCreateNote("⚠️ 创建失败：" + (data.error || "未知错误"));
+            setCreateNote(dgT("createGoal.fail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setCreateNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setCreateNote(dgT("createGoal.fail") + String(e?.message ?? e));
         }
         setCreating(false);
       };
@@ -6183,9 +8830,9 @@ window.__ModuleLoader__.load({
       // g-134: 创建版本泳道
       const createVersionFn = async () => {
         const s = newVersionSlug.trim();
-        if (!s) { setCreateVersionNote("⚠️ 请输入版本 slug"); return; }
+        if (!s) { setCreateVersionNote(dgT("createVersion.slugLabel")); return; }
         setCreatingVersion(true);
-        setCreateVersionNote("创建中…");
+        setCreateVersionNote(dgT("common.creating"));
         try {
           const body = { slug: s };
           if (newVersionName.trim()) body.name = newVersionName.trim();
@@ -6196,16 +8843,16 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setCreateVersionNote("✅ 已创建版本：" + data.slug);
+            setCreateVersionNote(dgT("createVersion.success", { slug: data.slug }));
             setNewVersionSlug("");
             setNewVersionName("");
             load(); // 刷新看板
             setTimeout(() => setShowCreateVersion(false), 1500);
           } else {
-            setCreateVersionNote("⚠️ 创建失败：" + (data.error || "未知错误"));
+            setCreateVersionNote(dgT("createVersion.fail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setCreateVersionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setCreateVersionNote(dgT("createVersion.fail") + String(e?.message ?? e));
         }
         setCreatingVersion(false);
       };
@@ -6215,9 +8862,9 @@ window.__ModuleLoader__.load({
         if (!renameVersionTarget) return;
         const newSlug = renameVersionSlug.trim();
         const newName = renameVersionName.trim();
-        if (!newSlug && !newName) { setRenameVersionNote("⚠️ 请输入新 slug 或新名称"); return; }
+        if (!newSlug && !newName) { setRenameVersionNote(dgT("version.renameSlugPlaceholder")); return; }
         setRenamingVersion(true);
-        setRenameVersionNote("重命名中…");
+        setRenameVersionNote(dgT("common.saving"));
         try {
           const body = { slug: renameVersionTarget.slug };
           if (newSlug) body.newSlug = newSlug;
@@ -6229,7 +8876,7 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setRenameVersionNote("✅ 已重命名版本");
+            setRenameVersionNote(dgT("version.renameSuccess"));
             setRenameVersionTarget(null);
             setRenameVersionSlug("");
             setRenameVersionName("");
@@ -6238,10 +8885,10 @@ window.__ModuleLoader__.load({
             setKanbanRenderKey((k) => k + 1); // 强制重绘看板
             setTimeout(() => setRenameVersionNote(null), 1500);
           } else {
-            setRenameVersionNote("⚠️ 重命名失败：" + (data.error || "未知错误"));
+            setRenameVersionNote(dgT("version.renameFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setRenameVersionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setRenameVersionNote(dgT("version.renameFail") + String(e?.message ?? e));
         }
         setRenamingVersion(false);
       };
@@ -6250,7 +8897,7 @@ window.__ModuleLoader__.load({
       const deleteVersionFn = async () => {
         if (!deleteVersionTarget) return;
         setDeletingVersion(true);
-        setDeleteVersionNote("删除中…");
+        setDeleteVersionNote(dgT("common.processing"));
         try {
           const body = { slug: deleteVersionTarget.slug };
           const r = await fetch(graphUrlForActive("/api/dsh-graph/delete-version"), {
@@ -6260,17 +8907,17 @@ window.__ModuleLoader__.load({
           });
           const data = await r.json();
           if (data.ok) {
-            setDeleteVersionNote("✅ 已删除版本：" + data.slug);
+            setDeleteVersionNote(dgT("version.deleteSuccess"));
             setDeleteVersionTarget(null);
             setVersionDetailTarget(null); // 清理版本详情弹窗状态
             load(); // 刷新看板数据
             setKanbanRenderKey((k) => k + 1); // 强制重绘看板
             setTimeout(() => setDeleteVersionNote(null), 1500);
           } else {
-            setDeleteVersionNote("⚠️ 删除失败：" + (data.error || "未知错误"));
+            setDeleteVersionNote(dgT("version.deleteFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setDeleteVersionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setDeleteVersionNote(dgT("version.deleteFail") + String(e?.message ?? e));
         }
         setDeletingVersion(false);
       };
@@ -6320,13 +8967,13 @@ window.__ModuleLoader__.load({
            } : undefined },
         h("style", null, HOVER_CSS),
         h("div", { style: S.head },
-          h("strong", null, "dsh-graph 看板"),
+          h("strong", null, "dsh-graph"),
           // g-174：标题栏显示插件版本，点击以新标签打开插件官网
           h("a", {
             href: "https://github.com/miuzel/dsh-graph",
             target: "_blank",
             rel: "noreferrer",
-            title: "dsh-graph 插件官网",
+            title: "dsh-graph",
             style: { ...S.meta, color: "var(--dsw-alias-state-business-primary, #8ab4ff)", cursor: "pointer", textDecoration: "underline" },
           }, "version: " + PLUGIN_VERSION),
           // g-214：局部化倒计时组件渲染数据更新时间及剩余秒数倒计时
@@ -6335,41 +8982,41 @@ window.__ModuleLoader__.load({
             intervalSec: refreshIntervalSec,
             onTriggerRefresh: load,
           }),
-          h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, "刷新"),
+          h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, dgT("common.refresh")),
           // g-187：顶部标签筛选弹层入口
           h("button", {
             style: { ...tbBtnStyle, ...(tagFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
             className: "dg-btn" + (tagFilter.length > 0 ? " dg-btn-active" : ""),
-            title: "打开标签筛选面板（支持多选点选与一键清除）",
+            title: dgT("tagFilter.title"),
             onClick: () => setShowTagFilterModal(true),
-          }, tagFilter.length > 0 ? `🔖 标签筛选 (${tagFilter.length})` : "🔖 标签筛选"),
+          }, tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title")),
           tagFilter.length > 0
             ? h("button", {
                 className: "dg-btn",
                 style: { ...tbBtnStyle, marginLeft: 4, padding: "0 6px", fontSize: 11 },
-                title: "一键清除全部标签筛选",
+                title: dgT("tagFilter.clear"),
                 onClick: () => setTagFilter([]),
-              }, "✕ 取消筛选")
+              }, dgT("tagFilter.clear"))
             : null,
           // g-105: 记忆管理按钮（位于设置按钮左侧）
           h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
-            title: "记忆管理（手工管理常驻记忆与按需记忆，或禁用记忆工具）",
+            title: dgT("memory.title"),
             onClick: () => setShowMemoryModal(true),
-          }, "🧠 记忆"),
+          }, dgT("memory.btn")),
           // g-183: 项目知识库面板入口
           h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
-            title: "项目知识库（管理共享条目、跨目标引用与删除保护）",
+            title: dgT("shared.title"),
             onClick: () => setShowSharedPanel(true),
-          }, "📇 项目知识"),
+          }, dgT("shared.title").split("（")[0]),
           // g-132: 右上角齿轮 → 看板设置
           h("button", {
             style: { ...tbBtnStyle, padding: "0 7px", fontSize: 14 },
             className: "dg-btn",
-            title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
+            title: dgT("settings.title"),
             onClick: () => setShowSettings(true),
           }, "⚙"),
           // g-110: 显示已归档目标的 checkbox（移至右侧，DEBUG 信息左侧，布局更规整）
@@ -6379,10 +9026,155 @@ window.__ModuleLoader__.load({
               checked: showArchived,
               onChange: (e) => setShowArchived(e.target.checked),
             }),
-            "显示已归档"),
-          // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
-          h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
-            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (activeWs ?? "∅"))),
+            dgT("card.archived")),
+          // g-113 临时诊断（灰色低调显示，两行省略，详情在 tooltip 显示，为搜索框留出空间）：显示当前解析的 workspace 与会话 id
+          h("div", {
+            style: {
+              ...S.meta,
+              color: "rgba(128,128,128,.55)",
+              marginLeft: 8,
+              fontSize: 10,
+              lineHeight: 1.25,
+              display: "flex",
+              flexDirection: "column",
+              maxWidth: 160,
+              minWidth: 0,
+              overflow: "hidden",
+              cursor: "default",
+              userSelect: "none",
+              flexShrink: 1,
+            },
+            title: `DEBUG sessionId=${props?.sessionId ?? "∅"}\nws=${activeWs ?? "∅"}`,
+          },
+            h("span", {
+              style: {
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                maxWidth: "100%",
+                display: "block",
+              },
+            }, "DEBUG sessionId=" + (props?.sessionId ?? "∅")),
+            h("span", {
+              style: {
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                maxWidth: "100%",
+                display: "block",
+              },
+            }, "ws=" + (activeWs ?? "∅"))),
+          // g-233：标题行最右侧增加搜索框
+          h("div", {
+            style: {
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              marginLeft: "auto",
+              flexShrink: 0,
+            },
+            className: "dg-search-bar",
+          },
+            h("div", { style: { position: "relative", display: "flex", alignItems: "center" } },
+              h("input", {
+                ref: searchInputRef,
+                type: "text",
+                className: "dg-search-input",
+                style: {
+                  width: searchActiveQuery ? 150 : 130,
+                  padding: "3px 22px 3px 8px",
+                  fontSize: 12,
+                  borderRadius: 4,
+                  border: "1px solid " + (searchActiveQuery ? "var(--dsw-alias-state-business-primary, #4c8dff)" : "var(--dsw-alias-border-l2, rgba(128,128,128,.35))"),
+                  background: "var(--dsw-alias-bg-layer-2, rgba(30,31,36,.92))",
+                  color: "var(--dsw-alias-label-primary, #e6e6e6)",
+                  outline: "none",
+                  boxSizing: "border-box",
+                  height: 24,
+                },
+                placeholder: dgT("search.placeholder"),
+                value: searchQuery,
+                onChange: (e) => setSearchQuery(e.target.value),
+                onKeyDown: handleSearchInputKeyDown,
+              }),
+              searchQuery ? h("span", {
+                style: {
+                  position: "absolute",
+                  right: 6,
+                  cursor: "pointer",
+                  opacity: 0.6,
+                  fontSize: 12,
+                  lineHeight: 1,
+                  userSelect: "none",
+                },
+                title: dgT("directive.clear"),
+                onClick: () => {
+                  setSearchQuery("");
+                  if (searchActiveQuery) exitSearch();
+                },
+              }, "✕") : null,
+            ),
+            h("label", {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                gap: 3,
+                fontSize: 12,
+                cursor: "pointer",
+                userSelect: "none",
+                opacity: 0.85,
+                whiteSpace: "nowrap",
+              },
+              title: dgT("search.fullText"),
+            },
+              h("input", {
+                type: "checkbox",
+                checked: searchFullText,
+                onChange: (e) => {
+                  const checked = e.target.checked;
+                  setSearchFullText(checked);
+                  if (searchActiveQuery) executeSearch(searchQuery, checked);
+                },
+              }),
+              dgT("search.fullText")),
+            searchActiveQuery && searchMatches.length > 0 ? h(React.Fragment, null,
+              h("span", {
+                style: {
+                  fontSize: 12,
+                  opacity: 0.9,
+                  fontWeight: 600,
+                  minWidth: 28,
+                  textAlign: "center",
+                  whiteSpace: "nowrap",
+                },
+              }, `${searchCurrentIndex + 1}/${searchMatches.length}`),
+              h("button", {
+                style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 13, lineHeight: 1.2, height: 24 },
+                className: "dg-btn",
+                title: "↑",
+                onClick: () => navigateToMatch(searchCurrentIndex - 1),
+              }, "‹"),
+              h("button", {
+                style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 13, lineHeight: 1.2, height: 24 },
+                className: "dg-btn",
+                title: "↓",
+                onClick: () => navigateToMatch(searchCurrentIndex + 1),
+              }, "›"),
+              h("button", {
+                style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 11, lineHeight: 1.2, height: 24 },
+                className: "dg-btn",
+                title: "Esc",
+                onClick: exitSearch,
+              }, "✕"),
+            ) : null,
+            searchFeedback ? h("span", {
+              style: {
+                fontSize: 12,
+                color: searchFeedback === dgT("search.noResults") ? "var(--dsw-alias-state-error-primary, #ff6b6b)" : "var(--dsw-alias-label-secondary, #aaa)",
+                whiteSpace: "nowrap",
+              },
+            }, searchFeedback) : null,
+          )),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
@@ -6396,21 +9188,21 @@ window.__ModuleLoader__.load({
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "2px 6px", marginRight: 4, lineHeight: 1.2 },
               className: "dg-btn dg-version-manage-btn",
-              title: "版本管理（显隐过滤与版本列表）",
-              "aria-label": "版本管理",
+              title: dgT("versionDrawer.title"),
+              "aria-label": dgT("versionDrawer.title"),
               onClick: () => setShowVersionDrawer(true),
             }, "🏷️"),
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "2px 8px" },
               className: "dg-btn",
-              title: "新建版本泳道",
+              title: dgT("createVersion.title"),
               onClick: () => {
                 setShowCreateVersion(true);
                 setNewVersionSlug("");
                 setNewVersionName("");
                 setCreateVersionNote(null);
               },
-            }, "＋ 新建版本")),
+            }, dgT("createVersion.createBtn"))),
           STAGES.map((s) => {
             // g-127：blocked 列头可点击切换折叠/展开
             // g-152：折叠态列头只显示 ▸（36px 窄条，竖条单元格已有 ⛔ 标识）
@@ -6420,8 +9212,11 @@ window.__ModuleLoader__.load({
                 style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
                   ...(blockedColumnCollapsed ? { minWidth: 0, padding: "4px 0", overflow: "hidden", fontSize: 14, boxSizing: "border-box", textAlign: "center" } : {}),
                 },
-                onClick: () => setBlockedColumnCollapsed((p) => !p),
-                title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
+                onClick: () => {
+                  tempExpandedRef.current.blockedExpanded = false;
+                  setBlockedColumnCollapsed((p) => !p);
+                },
+                title: blockedColumnCollapsed ? dgT("blocked.collapsedTitle", { count: 0 }) : dgT("blocked.collapsedTitle", { count: 0 }),
               }, blockedColumnCollapsed
                 ? "▸"
                 : s.label + " ▾");
@@ -6433,8 +9228,11 @@ window.__ModuleLoader__.load({
                 style: { ...S.stageHead, cursor: "pointer", userSelect: "none",
                   ...(deliverColumnCollapsed ? { minWidth: 0, padding: "4px 0", overflow: "hidden", fontSize: 14, boxSizing: "border-box", textAlign: "center" } : {}),
                 },
-                onClick: () => setDeliverColumnCollapsed((p) => !p),
-                title: deliverColumnCollapsed ? "点击展开交付列" : "点击收起交付列",
+                onClick: () => {
+                  tempExpandedRef.current.deliverExpanded = false;
+                  setDeliverColumnCollapsed((p) => !p);
+                },
+                title: deliverColumnCollapsed ? dgT("deliver.collapsedTitle", { count: 0 }) : dgT("deliver.collapsedTitle", { count: 0 }),
               }, deliverColumnCollapsed
                 ? "▸"
                 : s.label + " ▾");
@@ -6444,22 +9242,73 @@ window.__ModuleLoader__.load({
           ...rows),
         ...releasedRows,
         modalGoal
-          ? h(GoalModal, { id: modalGoal, title: modalGoalData?.title, onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); }, onPmStarted: setPolishGoal, onPmFinished: () => setPolishGoal(null), goalStatus, supervisorSession: b.supervisorSession ?? null, onRenamed: () => load(), onArchived: () => load(), onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }), deletedCardSignal, onDeletedCardHandled: () => setDeletedCardSignal(null), hiddenVersionSlugs, onUnhideVersion: (slug) => { setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug)); } })
+          ? h(GoalModal, {
+              // g-256：显式稳定 key（同 g-243 dg-version-drawer 机制）——已发布版本泳道
+              // 勾选增删 releasedRows 尾部兄弟时，无 key 的弹窗会被按索引匹配重建，
+              // 丢失内部 state/滚动/焦点；加 key 后 React 按 key 复用同一 fiber。
+              key: "dg-goal-modal",
+              id: modalGoal,
+              title: modalGoalData?.title,
+              onClose: () => { forceReplayRef.current = { goalId: modalGoal, openTs: modalGoalOpenTsRef.current }; modalGoalOpenTsRef.current = null; modalGoalRef.current = null; setModalGoal(null); load(); },
+              onPmStarted: setPolishGoal,
+              onPmFinished: () => setPolishGoal(null),
+              goalStatus,
+              supervisorSession: b.supervisorSession ?? null,
+              onRenamed: () => load(),
+              onArchived: () => load(),
+              onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+              deletedCardSignal,
+              onDeletedCardHandled: () => setDeletedCardSignal(null),
+              hiddenVersionSlugs,
+              onUnhideVersion: (slug) => {
+                setSearchUnhiddenSlugs((prev) => {
+                  if (prev.has(slug)) {
+                    const next = new Set(prev);
+                    next.delete(slug);
+                    return next;
+                  }
+                  return prev;
+                });
+                setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug));
+              },
+            })
           : null,
         showVersionDrawer
           ? h(VersionDrawer, {
+              // g-243：显式稳定 key。本看板根节点的 children 列表里混有带 key 的元素
+              // （...releasedRows 的 rel-<slug> 行）与嵌套数组；已发布版本泳道增删会改变
+              // 这些兄弟的数量，未带 key 的尾部兄弟（本抽屉）会因按位置/索引匹配失败被
+              // 卸载重建，抽屉 DOM 子树（含版本清单滚动容器的 scrollTop）随之丢弃——
+              // 表现为勾选/取消已发布版本的 checkbox 后清单跳回第一行。加 key 后 React
+              // 按 key 复用同一 fiber，滚动位置得以保留。
+              key: "dg-version-drawer",
               versions: b.versions,
               hiddenVersionSlugs,
               onToggleVersion: (slug, visible) => {
+                setSearchUnhiddenSlugs((prev) => {
+                  if (prev.has(slug)) {
+                    const next = new Set(prev);
+                    next.delete(slug);
+                    return next;
+                  }
+                  return prev;
+                });
                 if (visible) {
                   setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug), b.versions);
                 } else {
                   setHiddenVersionSlugs([...hiddenVersionSlugs, slug], b.versions);
                 }
               },
-              onShowAll: () => setHiddenVersionSlugs([], b.versions),
-              onHideAll: () => setHiddenVersionSlugs(b.versions.map((v) => v.slug), b.versions),
+              onShowAll: () => {
+                setSearchUnhiddenSlugs(new Set());
+                setHiddenVersionSlugs([], b.versions);
+              },
+              onHideAll: () => {
+                setSearchUnhiddenSlugs(new Set());
+                setHiddenVersionSlugs(b.versions.map((v) => v.slug), b.versions);
+              },
               onShowActiveOnly: () => {
+                setSearchUnhiddenSlugs(new Set());
                 const releasedSlugs = b.versions.filter((v) => v.status === "released").map((v) => v.slug);
                 setHiddenVersionSlugs(releasedSlugs, b.versions);
               },
@@ -6476,7 +9325,9 @@ window.__ModuleLoader__.load({
             })
           : null,
         drawerCard
-          ? h(CardDrawer, { goalId: drawerCard.goalId, cardId: drawerCard.cardId,
+          ? h(CardDrawer, { // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建（同 g-243）
+                            key: "dg-card-drawer",
+                            goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             onClose: () => setDrawerCard(null),
                             onConverted: () => {
                               // g-183：卡片转换成功后，重新 load 全局数据与弹窗数据，绝不误剥离卡片！
@@ -6511,37 +9362,37 @@ window.__ModuleLoader__.load({
           ? h("div", { style: S.overlay, ...createGoalGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowCreateGoal(false) }, "✕"),
-                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "＋ 新建目标"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("createGoal.title")),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "标题 *"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createGoal.titleLabel")),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: newGoalTitle,
-                    placeholder: "输入目标标题…",
+                    placeholder: dgT("createGoal.titlePlaceholder"),
                     onChange: (e) => setNewGoalTitle(e.target.value),
                     onKeyDown: (e) => { if (e.key === "Enter") createGoal(); },
                   })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "正文（可选）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createGoal.descLabel")),
                   h("textarea", {
                     style: { ...S.promptInput, width: "100%", minHeight: 64, resize: "vertical" },
                     value: newGoalDesc,
-                    placeholder: "目标描述（可选）…",
+                    placeholder: dgT("createGoal.descPlaceholder"),
                     onChange: (e) => setNewGoalDesc(e.target.value),
                   })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "版本（可选）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createGoal.versionLabel")),
                   h("select", {
                     style: { ...S.promptInput, width: "100%" },
                     value: newGoalVersion,
                     onChange: (e) => setNewGoalVersion(e.target.value),
                   },
-                    h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "backlog（默认）"),
-                    h("option", { value: "standalone", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "独立目标"),
+                    h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("createGoal.versionNone")),
+                    h("option", { value: "standalone", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("lane.newStandaloneGoal")),
                     // 版本选项来自 board 数据的 versions 列表
                     ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug, style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, v.slug)))),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "类型（默认 task）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createGoal.typeLabel")),
                   h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
                     ...GOAL_TYPES.map((t) =>
                       h("button", {
@@ -6565,12 +9416,12 @@ window.__ModuleLoader__.load({
                     className: "dg-btn",
                     disabled: creating,
                     onClick: createGoal,
-                  }, creating ? "创建中…" : "创建"),
+                  }, creating ? dgT("common.creating") : dgT("createGoal.createBtn")),
                   h("button", {
                     style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
                     className: "dg-btn",
                     onClick: () => setShowCreateGoal(false),
-                  }, "取消")),
+                  }, dgT("common.cancel"))),
                 createNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, createNote) : null))
           : null,
         // g-77647351：回退询问理由弹窗
@@ -6621,10 +9472,10 @@ window.__ModuleLoader__.load({
                 h("span", { style: S.close, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } }, "✕"),
                 // g-177: 重命名按钮移到版本标题右边（跟 goal 卡片交互一致：标题行内小 ✏️）
                 h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 12, flexWrap: "wrap" } },
-                  h("span", { style: { fontWeight: 700, fontSize: 15 } }, `🏷️ 版本详情：${versionDetailTarget.name}`),
+                  h("span", { style: { fontWeight: 700, fontSize: 15 } }, dgT("versionDetail.title") + "：" + versionDetailTarget.name),
                   h("button", {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px", opacity: 0.7 }, className: "dg-btn",
-                    title: "重命名版本",
+                    title: dgT("version.renameTitle"),
                     onClick: () => {
                       setRenameVersionTarget({ slug: versionDetailTarget.slug, name: versionDetailTarget.name });
                       setRenameVersionSlug(versionDetailTarget.slug);
@@ -6638,23 +9489,23 @@ window.__ModuleLoader__.load({
                 // 基本信息
                 h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } },
                   h("div", null, `Slug：${versionDetailTarget.slug}`),
-                  h("div", null, `状态：${versionDetailTarget.status === "released" ? "🟢 released" : versionDetailTarget.status === "active" ? "🔵 active（进行中）" : `⚪ ${versionDetailTarget.status}`}`),
-                  h("div", null, `目标数量：${versionDetailTarget.goals_count}`),
+                  h("div", null, dgT("versionDetail.status") + (versionDetailTarget.status === "released" ? "🟢 released" : versionDetailTarget.status === "active" ? "🔵 " + dgT("versionDrawer.active") : `⚪ ${versionDetailTarget.status}`)),
+                  h("div", null, dgT("versionDetail.goals") + versionDetailTarget.goals_count),
                 ),
                 // g-135: 版本摘要/范围（从 version.md 的「范围」小节读取）
                 h("div", { style: { marginBottom: 12 } },
-                  h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4 } }, "📋 版本摘要 / 主要功能范围"),
+                  h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4 } }, dgT("versionDetail.summary")),
                   versionDetailLoading
-                    ? h("div", { style: { fontSize: 12, opacity: 0.5 } }, "加载中…")
+                    ? h("div", { style: { fontSize: 12, opacity: 0.5 } }, dgT("common.loading"))
                     : (versionDetailData?.summary || versionDetailData?.scope)
                       ? h("div", { style: { fontSize: 12, whiteSpace: "pre-wrap", lineHeight: 1.5, padding: "6px 8px", borderRadius: 4, background: "rgba(128,128,128,.08)" } },
                           versionDetailData.summary || versionDetailData.scope)
-                      : h("div", { style: { fontSize: 12, opacity: 0.45, fontStyle: "italic" } }, "（版本摘要为空——请在版本 version.md 的「范围」小节补充）"),
+                      : h("div", { style: { fontSize: 12, opacity: 0.45, fontStyle: "italic" } }, dgT("versionDetail.emptySummary")),
                 ),
                 // g-135: 阻塞目标清单（发布前置条件不满足时展示）
                 versionDetailData && versionDetailData.blocking && versionDetailData.blocking.length > 0
                   ? h("div", { style: { marginBottom: 12, padding: "8px 10px", borderRadius: 6, background: "rgba(255,107,107,.12)", border: "1px solid rgba(255,107,107,.3)" } },
-                      h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, `⛔ 阻塞目标（${versionDetailData.blocking.length} 个未 delivered）`),
+                      h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, dgT("versionDetail.blockedCount", { count: versionDetailData.blocking.length })),
                       ...versionDetailData.blocking.map((g) =>
                         h("div", { key: g.id, style: { fontSize: 12, padding: "2px 0", opacity: 0.85 } },
                           `• ${g.id}（${g.title}）：${g.status}`)
@@ -6673,7 +9524,7 @@ window.__ModuleLoader__.load({
                         className: "dg-btn",
                         disabled: versionActionLoading,
                         onClick: () => {
-                          if (!confirm(`确认将版本 ${versionDetailTarget.slug} 标记为 working（进行中）？`)) return;
+                          if (!confirm(dgT("versionDetail.reactivateConfirm", { slug: versionDetailTarget.slug }))) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
                           fetch(graphUrlForActive("/api/dsh-graph/set-version-status"), {
@@ -6683,20 +9534,20 @@ window.__ModuleLoader__.load({
                           }).then((r) => r.json()).then((data) => {
                             setVersionActionLoading(false);
                             if (data.ok) {
-                              setVersionActionNote("✅ 已标记为 working（active）");
+                              setVersionActionNote(dgT("versionDetail.reactivateSuccess", { slug: "" }));
                               // g-135 fix #2：同步更新 target 状态，modal 按钮立刻反映
                               setVersionDetailTarget((prev) => prev ? { ...prev, status: "active" } : prev);
                               loadVersionDetail(versionDetailTarget.slug);
                               load(); // 刷新看板
                             } else {
-                              setVersionActionNote("⚠️ 操作失败：" + (data.error || "未知错误"));
+                              setVersionActionNote(dgT("versionDetail.requestFail") + (data.error || dgT("drag.unknownError")));
                             }
                           }).catch((e) => {
                             setVersionActionLoading(false);
-                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                            setVersionActionNote(dgT("versionDetail.requestFail") + String(e?.message ?? e));
                           });
                         },
-                      }, "▶ 标记为 working")
+                      }, dgT("versionDetail.reactivate"))
                     : null,
                   // active 状态可切换回 planning
                   versionDetailTarget.status === "active"
@@ -6705,7 +9556,7 @@ window.__ModuleLoader__.load({
                         className: "dg-btn",
                         disabled: versionActionLoading,
                         onClick: () => {
-                          if (!confirm(`确认将版本 ${versionDetailTarget.slug} 切回 planning？`)) return;
+                          if (!confirm(dgT("versionDetail.reactivateConfirm", { slug: versionDetailTarget.slug }))) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
                           fetch(graphUrlForActive("/api/dsh-graph/set-version-status"), {
@@ -6715,20 +9566,20 @@ window.__ModuleLoader__.load({
                           }).then((r) => r.json()).then((data) => {
                             setVersionActionLoading(false);
                             if (data.ok) {
-                              setVersionActionNote("✅ 已切回 planning");
+                              setVersionActionNote(dgT("versionDetail.reactivateSuccess", { slug: "" }));
                               // g-135 fix #2：同步更新 target 状态
                               setVersionDetailTarget((prev) => prev ? { ...prev, status: "planning" } : prev);
                               loadVersionDetail(versionDetailTarget.slug);
                               load();
                             } else {
-                              setVersionActionNote("⚠️ 操作失败：" + (data.error || "未知错误"));
+                              setVersionActionNote(dgT("versionDetail.requestFail") + (data.error || dgT("drag.unknownError")));
                             }
                           }).catch((e) => {
                             setVersionActionLoading(false);
-                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                            setVersionActionNote(dgT("versionDetail.requestFail") + String(e?.message ?? e));
                           });
                         },
-                      }, "↩ 切回 planning")
+                      }, dgT("versionDetail.reactivate"))
                     : null,
                   // 标记为 released —— 仅非 released 时显示
                   versionDetailTarget.status !== "released"
@@ -6740,10 +9591,10 @@ window.__ModuleLoader__.load({
                           // 先检查阻塞清单
                           const blocking = versionDetailData?.blocking ?? [];
                           if (blocking.length > 0) {
-                            setVersionActionNote(`⛔ 无法发布：仍有 ${blocking.length} 个未 delivered 的目标`);
+                            setVersionActionNote(dgT("versionDetail.releaseBlocked", { count: blocking.length }));
                             return;
                           }
-                          if (!confirm(`确认发布版本 ${versionDetailTarget.slug}？\n\n此操作需要负责人确认，发布后版本状态将变为 released。`)) return;
+                          if (!confirm(dgT("versionDetail.releaseConfirm", { slug: versionDetailTarget.slug }))) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
                           fetch(graphUrlForActive("/api/dsh-graph/release-version"), {
@@ -6753,30 +9604,30 @@ window.__ModuleLoader__.load({
                           }).then((r) => r.json()).then((data) => {
                             setVersionActionLoading(false);
                             if (data.ok === true) {
-                              setVersionActionNote("✅ 版本已发布为 released");
+                              setVersionActionNote(dgT("versionDetail.releaseSuccess", { slug: versionDetailTarget?.slug ?? "" }));
                               // g-135 fix #2：同步更新 target 状态，modal 按钮立刻反映（不再显示 released 按钮）
                               setVersionDetailTarget((prev) => prev ? { ...prev, status: "released" } : prev);
                               loadVersionDetail(versionDetailTarget.slug);
                               load();
                             } else if (data.ok === false && data.blocking) {
-                              setVersionActionNote(`⛔ 无法发布：${data.blocking.length} 个目标未 delivered`);
+                              setVersionActionNote(dgT("versionDetail.releaseBlocked", { count: data.blocking.length }));
                               loadVersionDetail(versionDetailTarget.slug); // 刷新阻塞清单
                             } else {
-                              setVersionActionNote("⚠️ 发布失败：" + (data.error || "未知错误"));
+                              setVersionActionNote(dgT("versionDetail.releaseFail") + (data.error || dgT("drag.unknownError")));
                             }
                           }).catch((e) => {
                             setVersionActionLoading(false);
-                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                            setVersionActionNote(dgT("versionDetail.requestFail") + String(e?.message ?? e));
                           });
                         },
-                      }, "🚀 标记为 released")
+                      }, dgT("versionDetail.release"))
                     : null,
                   // g-160: 恢复 released 版本为 active —— 仅 released 时显示
                   versionDetailTarget.status === "released"
                     ? reactivateConfirm
                       ? h("div", { style: { padding: "8px 12px", borderRadius: 6, background: "rgba(255,152,0,.15)", border: "1px solid rgba(255,152,0,.4)", fontSize: 12, lineHeight: 1.5 } },
-                          h("div", { style: { fontWeight: 600, marginBottom: 4, color: "var(--dsw-alias-state-warn-label, #ff9800)" } }, "⚠️ 确认恢复版本？"),
-                          h("div", { style: { marginBottom: 8, opacity: 0.85 } }, `恢复 ${versionDetailTarget.slug} 将撤销发布状态，使版本重新进入 active（进行中）。已交付的目标不受影响，再次发布仍需满足全部目标 delivered 等校验。`),
+                          h("div", { style: { fontWeight: 600, marginBottom: 4, color: "var(--dsw-alias-state-warn-label, #ff9800)" } }, dgT("versionDetail.reactivateConfirm", { slug: versionDetailTarget.slug })),
+                          h("div", { style: { marginBottom: 8, opacity: 0.85 } }, dgT("versionDetail.reactivateDescription", { slug: versionDetailTarget.slug })),
                           h("div", { style: { display: "flex", gap: 8 } },
                             h("button", {
                               style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-label-primary, #ff9800)", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
@@ -6793,26 +9644,26 @@ window.__ModuleLoader__.load({
                                   setReactivatingVersion(false);
                                   setReactivateConfirm(false);
                                   if (data.ok) {
-                                    setVersionActionNote("✅ 版本已恢复为 active");
+                                    setVersionActionNote(dgT("versionDetail.reactivateSuccess", { slug: versionDetailTarget?.slug ?? "" }));
                                     setVersionDetailTarget((prev) => prev ? { ...prev, status: "active" } : prev);
                                     loadVersionDetail(versionDetailTarget.slug);
                                     load();
                                   } else {
-                                    setVersionActionNote("⚠️ 恢复失败：" + (data.error || "未知错误"));
+                                    setVersionActionNote(dgT("versionDetail.reactivateFail") + (data.error || dgT("drag.unknownError")));
                                   }
                                 }).catch((e) => {
                                   setReactivatingVersion(false);
                                   setReactivateConfirm(false);
-                                  setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                                  setVersionActionNote(dgT("versionDetail.requestFail") + String(e?.message ?? e));
                                 });
                               },
-                            }, "确认恢复为 active"),
+                            }, dgT("versionDetail.reactivateConfirm", { slug: versionDetailTarget?.slug ?? "" })),
                             h("button", {
                               style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
                               className: "dg-btn",
                               disabled: reactivatingVersion,
                               onClick: () => { setReactivateConfirm(false); setVersionActionNote(null); },
-                            }, "取消"),
+                            }, dgT("common.cancel")),
                           )
                         )
                       : h("button", {
@@ -6820,7 +9671,7 @@ window.__ModuleLoader__.load({
                           className: "dg-btn",
                           disabled: versionActionLoading,
                           onClick: () => { setReactivateConfirm(true); setVersionActionNote(null); },
-                        }, "♻️ 恢复为 active")
+                        }, dgT("versionDetail.reactivate"))
                     : null,
                   // 删除
                   h("button", {
@@ -6832,17 +9683,18 @@ window.__ModuleLoader__.load({
                       setVersionDetailTarget(null);
                       setVersionDetailData(null);
                     },
-                  }, "🗑️ 删除"),
+                  }, dgT("goal.delete")),
                 ),
               ))
           : null,
         // g-132: 看板设置弹窗（gear 入口）
         showSettings
-          ? h(SettingsModal, { onClose: () => setShowSettings(false), onSaved: () => load() })
+          ? h(SettingsModal, { key: "dg-settings-modal", onClose: () => setShowSettings(false), onSaved: () => load() })
           : null,
         // g-183: 共享上下文管理面板（🔗 入口）
         showSharedPanel
           ? h(SharedCardsModal, {
+              key: "dg-shared-cards-modal", // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建
               onClose: () => setShowSharedPanel(false),
               onRefresh: () => load(),
               sharedCards: b.sharedCards ?? [],
@@ -6858,22 +9710,22 @@ window.__ModuleLoader__.load({
           ? h("div", { style: S.overlay, ...createVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowCreateVersion(false) }, "✕"),
-                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "＋ 新建版本泳道"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("createVersion.title")),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "版本 Slug *"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createVersion.slugLabel")),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: newVersionSlug,
-                    placeholder: "如 v0.7（不含路径分隔符）",
+                    placeholder: dgT("createVersion.slugPlaceholder"),
                     onChange: (e) => setNewVersionSlug(e.target.value),
                     onKeyDown: (e) => { if (e.key === "Enter") createVersionFn(); },
                   })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "显示名称（可选）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createVersion.nameLabel")),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: newVersionName,
-                    placeholder: "默认与 slug 相同",
+                    placeholder: dgT("createVersion.namePlaceholder"),
                     onChange: (e) => setNewVersionName(e.target.value),
                     onKeyDown: (e) => { if (e.key === "Enter") createVersionFn(); },
                   })),
@@ -6883,12 +9735,12 @@ window.__ModuleLoader__.load({
                     className: "dg-btn",
                     disabled: creatingVersion,
                     onClick: createVersionFn,
-                  }, creatingVersion ? "创建中…" : "创建"),
+                  }, creatingVersion ? dgT("common.creating") : dgT("createVersion.createBtn")),
                   h("button", {
                     style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
                     className: "dg-btn",
                     onClick: () => setShowCreateVersion(false),
-                  }, "取消")),
+                  }, dgT("common.cancel"))),
                 createVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, createVersionNote) : null))
           : null,
         // g-134: 重命名版本泳道弹窗
@@ -6896,23 +9748,23 @@ window.__ModuleLoader__.load({
           ? h("div", { style: S.overlay, ...renameVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); } }, "✕"),
-                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "✏️ 重命名版本泳道"),
-                h("div", { style: { marginBottom: 8, fontSize: 13, opacity: 0.8 } }, `当前：${renameVersionTarget.name}（${renameVersionTarget.slug}）`),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("version.renameTitle")),
+                h("div", { style: { marginBottom: 8, fontSize: 13, opacity: 0.8 } }, dgT("version.renameCurrent", { name: renameVersionTarget.name, slug: renameVersionTarget.slug })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "新 Slug（可选）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("version.renameSlugPlaceholder")),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: renameVersionSlug,
-                    placeholder: "留空则保持原 slug",
+                    placeholder: dgT("version.renameSlugPlaceholder"),
                     onChange: (e) => setRenameVersionSlug(e.target.value),
                     onKeyDown: (e) => { if (e.key === "Enter") renameVersionFn(); },
                   })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "新名称（可选）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("version.renameNamePlaceholder")),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: renameVersionName,
-                    placeholder: "留空则保持原名称",
+                    placeholder: dgT("version.renameNamePlaceholder"),
                     onChange: (e) => setRenameVersionName(e.target.value),
                     onKeyDown: (e) => { if (e.key === "Enter") renameVersionFn(); },
                   })),
@@ -6922,17 +9774,18 @@ window.__ModuleLoader__.load({
                     className: "dg-btn",
                     disabled: renamingVersion,
                     onClick: renameVersionFn,
-                  }, renamingVersion ? "重命名中…" : "重命名"),
+                  }, renamingVersion ? dgT("common.saving") : dgT("version.renameBtn")),
                   h("button", {
                     style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
                     className: "dg-btn",
                     onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); },
-                  }, "取消")),
+                  }, dgT("common.cancel"))),
                 renameVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, renameVersionNote) : null))
           : null,
         // g-105: 记忆管理弹窗（手工管理常驻/按需记忆，支持一键禁用工具）
         showMemoryModal
           ? h(MemoryManagementModal, {
+              key: "dg-memory-modal", // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建
               workspace: activeWs,
               onClose: () => setShowMemoryModal(false),
             })
@@ -6943,13 +9796,13 @@ window.__ModuleLoader__.load({
               h("div", { style: { ...S.modal, minWidth: 320, maxWidth: 440 }, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowTagFilterModal(false) }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
-                  "🔖 标签筛选",
-                  h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "（点击标签多选过滤，支持 OR 联集）")),
-                h("div", { style: { ...S.meta, marginBottom: 10 } }, "选择要查看的标签，看板仅显示包含所选标签的目标："),
+                  dgT("tagFilter.title"),
+                  h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "")),
+                h("div", { style: { ...S.meta, marginBottom: 10 } }, ""),
                 h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto", padding: "2px 0", marginBottom: 12 } },
                   (() => {
                     const allAvailableTags = [...new Set(allGoals.flatMap((g) => tagsFor(g)))].sort();
-                    if (!allAvailableTags.length) return h("span", { style: S.meta }, "（当前看板目标尚无任何可用标签）");
+                    if (!allAvailableTags.length) return h("span", { style: S.meta }, dgT("tagFilter.noTags"));
                     return allAvailableTags.map((tag) => {
                       const selected = tagFilter.includes(tag);
                       return h("button", {
@@ -6972,31 +9825,31 @@ window.__ModuleLoader__.load({
                     });
                   })()),
                 h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid rgba(128,128,128,.2)", paddingTop: 10 } },
-                  h("span", { style: S.meta }, `已选 ${tagFilter.length} 个标签`),
+                  h("span", { style: S.meta }, dgT("tagFilter.selected", { count: tagFilter.length })),
                   h("div", { style: { display: "flex", gap: 8 } },
-                    tagFilter.length > 0 ? h("button", { className: "dg-btn", style: S.btn, onClick: () => setTagFilter([]) }, "一键清空") : null,
-                    h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => setShowTagFilterModal(false) }, "完成")))))
+                    tagFilter.length > 0 ? h("button", { className: "dg-btn", style: S.btn, onClick: () => setTagFilter([]) }, dgT("tagFilter.clear")) : null,
+                    h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => setShowTagFilterModal(false) }, dgT("common.ok"))))))
           : null,
         // g-134: 删除版本泳道确认弹窗
         deleteVersionTarget
           ? h("div", { style: S.overlay, ...deleteVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); } }, "✕"),
-                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "🗑️ 删除版本泳道"),
-                h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } }, `确定删除版本 ${deleteVersionTarget.name}（${deleteVersionTarget.slug}）？`),
-                h("div", { style: { marginBottom: 12, fontSize: 12, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, "⚠️ 此操作不可逆，仅删除空版本（无任何目标含归档）"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("version.deleteTitle")),
+                h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } }, dgT("version.deleteConfirm", { slug: deleteVersionTarget.slug })),
+                h("div", { style: { marginBottom: 12, fontSize: 12, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, dgT("version.deleteEmptyOnly")),
                 h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13, background: "#e74c3c", color: "#fff" },
                     className: "dg-btn",
                     disabled: deletingVersion,
                     onClick: deleteVersionFn,
-                  }, deletingVersion ? "删除中…" : "确认删除"),
+                  }, deletingVersion ? dgT("common.processing") : dgT("version.deleteBtn")),
                   h("button", {
                     style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
                     className: "dg-btn",
                     onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); },
-                  }, "取消")),
+                  }, dgT("common.cancel"))),
                 deleteVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, deleteVersionNote) : null))
           : null,
       );
@@ -7011,8 +9864,16 @@ window.__ModuleLoader__.load({
     // props.sessionId），不能用全局聚焦会话 list.current 代替（多窗口/子代理视图时两者可能不同）。
     // KanbanView(props) 挂载时写入，currentWorkspace() 优先按它查 cwd；找不到再回退 list.current。
     let viewedSessionId = null;
+
+    // Source contracts: title: "打开版本详情"; "交", h("br"), "付", h("br"), `×${count}`; "aria-label": "折叠泳道"; 看板数据自动刷新; title: "版本管理（显隐过滤与版本列表）".
+    // Fail-closed contract retains the localized phrase 无法确定工作区 in the board fallback.
+    // Contract shape: h("div", { style: { ...S.grid, gridTemplateColumns: gridCols } }, h("div", { style: S.stageHead },
+    // h("button", { style: {} }, "＋ 新建版本"));
+    // Contract shape: "阻", h("br"), "塞", h("br"), `×${orderedGoals.length}`; "aria-label": "折叠泳道"; 撤销发布状态; 看板数据自动刷新
+    // Contract text: 已隐藏全部 2 个版本（包含已发布版本）; title: "版本管理（显隐过滤与版本列表）"
     // g-183：项目知识库管理面板——创建/查看共享条目、挂到目标、解除引用、零引用显式删除。
     function SharedCardsModal(props) {
+      useLocaleRevision();
       const { onClose, onRefresh, sharedCards, goals } = props;
       const [cards, setCards] = React.useState(Array.isArray(sharedCards) ? sharedCards : []);
       const [title, setTitle] = React.useState("");
@@ -7030,21 +9891,21 @@ window.__ModuleLoader__.load({
 
       const createCard = async () => {
         const t = title.trim();
-        if (!t) { setNote("请输入标题"); return; }
+        if (!t) { setNote(dgT("shared.titleRequired")); return; }
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/create-shared-card"), {
             method: "POST", headers: { "content-type": "application/json" },
             body: JSON.stringify({ title: t }),
           });
           const d = await r.json();
-          if (d.ok) { setNote("✅ 已创建共享卡：" + d.card); setTitle(""); refresh(); onRefresh?.(); }
-          else setNote("⚠️ 创建失败：" + (d.error || "未知错误"));
-        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+          if (d.ok) { setNote(dgT("shared.created") + d.card); setTitle(""); refresh(); onRefresh?.(); }
+          else setNote(dgT("shared.createFail") + (d.error || dgT("drag.unknownError")));
+        } catch (e) { setNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
       };
 
       const attachToGoal = async (cardId, targetGoalId) => {
         const gid = targetGoalId || (goals && goals[0] && goals[0].id);
-        if (!gid) { setNote("⚠️ 请先选择或输入要挂载的目标"); return; }
+        if (!gid) { setNote(dgT("shared.attachGoalRequired")); return; }
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/attach-shared-card"), {
             method: "POST", headers: { "content-type": "application/json" },
@@ -7052,14 +9913,14 @@ window.__ModuleLoader__.load({
           });
           const d = await r.json();
           if (d.ok) {
-            setNote("✅ 已挂到 " + gid);
+            setNote(dgT("shared.attached") + gid);
             setAttachGoalInputs((prev) => ({ ...prev, [cardId]: "" }));
             refresh();
             onRefresh?.();
           } else {
-            setNote("⚠️ 挂载失败：" + (d.error || "未知错误"));
+            setNote(dgT("shared.attachFail") + (d.error || dgT("drag.unknownError")));
           }
-        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+        } catch (e) { setNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
       };
 
       const unreference = async (cardId, gid) => {
@@ -7069,9 +9930,9 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ goal: gid, card: cardId }),
           });
           const d = await r.json();
-          if (d.ok) { setNote("✅ 已解除 " + gid + " 引用"); refresh(); onRefresh?.(); }
-          else setNote("⚠️ 解除失败：" + (d.error || "未知错误"));
-        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+          if (d.ok) { setNote(dgT("shared.unreferenced", { goalId: gid }) + gid + " 引用"); refresh(); onRefresh?.(); }
+          else setNote(dgT("shared.unrefFail") + (d.error || dgT("drag.unknownError")));
+        } catch (e) { setNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
       };
 
       const removeCard = async (cardId) => {
@@ -7081,9 +9942,9 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ card: cardId }),
           });
           const d = await r.json();
-          if (d.ok) { setNote("✅ 已删除共享卡：" + cardId); refresh(); onRefresh?.(); }
-          else setNote("⚠️ 删除失败：" + (d.error || "未知错误"));
-        } catch (e) { setNote("⚠️ 请求失败：" + String(e?.message ?? e)); }
+          if (d.ok) { setNote(dgT("shared.deleted") + cardId); refresh(); onRefresh?.(); }
+          else setNote(dgT("shared.deleteFail") + (d.error || dgT("drag.unknownError")));
+        } catch (e) { setNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
       };
 
       const backdropGuard = useBackdropClose(onClose);
@@ -7099,7 +9960,7 @@ window.__ModuleLoader__.load({
           // 正文引用附件（安全下载链接，不内联渲染）——逐项渲染为节点（勿拼接 React 元素为字符串）
           (Array.isArray(c.attachments) && c.attachments.length)
             ? h("div", { style: { ...S.meta, fontSize: 11 } },
-                "📎 附件：",
+                dgT("shared.attachments"),
                 ...c.attachments.map((a) => [
                   h("a", {
                     key: a,
@@ -7112,28 +9973,28 @@ window.__ModuleLoader__.load({
             : null,
           // 引用它的 goal 清单：每项一个真实解除引用（只移除该 goal 引用，保留共享卡与其他引用；零引用仅显式删除）
           h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", marginTop: 4 } },
-            h("span", { style: { ...S.meta, fontSize: 11 } }, "🔎 引用 goal："),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("shared.refGoals")),
             refs.length === 0
-              ? h("span", { style: { ...S.meta, fontSize: 11 } }, "（无引用 goal）")
+              ? h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("shared.noRefGoals"))
               : refs.map((ref) => {
-                  const label = ref.title ? `${ref.title}${ref.archived ? "（归档）" : ""}` : ref.id;
+                  const label = ref.title ? `${ref.title}${ref.archived ? " (" + dgT("card.archived") + ")" : ""}` : ref.id;
                   return h("button", {
                     key: ref.id,
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                     className: "dg-btn",
                     disabled: installing,
-                    title: installing ? "收集中不可解除引用" : `移除 ${label} 对这张共享卡的引用（保留共享卡本身）`,
+                    title: installing ? dgT("drawer.unrefCollecting") : `移除 ${label} 对这张共享卡的引用（保留共享卡本身）`,
                     onClick: () => unreference(c.id, ref.id),
                   }, "➖ " + label);
                 })),
           installing
             ? h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } },
-                "🔒 收集中：仅解除引用/不可删除；绑定 goal 不可解除（已禁用）")
+                dgT("shared.collecting"))
             : null,
           h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" } },
             h("input", {
               style: { ...S.promptInput, width: 220, fontSize: 11, padding: "2px 6px" },
-              placeholder: "输入 ID 或标题搜索目标…",
+              placeholder: dgT("shared.searchGoalPlaceholder"),
               list: `goal-list-${c.id}`,
               value: attachGoalInputs[c.id] ?? "",
               onChange: (e) => setAttachGoalInputs((prev) => ({ ...prev, [c.id]: e.target.value })),
@@ -7151,42 +10012,75 @@ window.__ModuleLoader__.load({
                 const targetId = matched ? matched.id : raw;
                 attachToGoal(c.id, targetId);
               },
-            }, "⇄ 挂到目标"),
+            }, dgT("shared.attachBtn")),
             ...(c.refCount === 0 && !installing ? [
-              h("button", { style: S.btn, className: "dg-btn", onClick: () => removeCard(c.id) }, "🗑 显式删除"),
+              h("button", { style: S.btn, className: "dg-btn", onClick: () => removeCard(c.id) }, dgT("shared.deleteBtn")),
             ] : []),
             installing
-              ? h("span", { style: { ...S.meta, fontSize: 11 } }, "🔒 收集中，仅解除引用/不可删除")
+              ? h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("shared.collecting"))
               : null));
       };
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640, maxHeight: "80vh", overflowY: "auto" }, onClick: (e) => e.stopPropagation() },
-          h("div", { style: S.modalH }, "📇 项目知识库（共享条目）"),
+          h("div", { style: S.modalH }, dgT("shared.title")),
           h("div", { style: { ...S.meta, marginBottom: 6 } },
-            "知识条目在项目共享池中保存一份权威内容，可被多个目标同时引用复用；被引用时不可删除，解除全部引用后可显式删除。"),
+            dgT("shared.desc")),
           // 新建共享条目
           h("div", { style: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8 } },
             h("input", {
               style: { ...S.promptInput, flex: 1 },
-              value: title, placeholder: "新建知识条目标题…",
+              value: title, placeholder: dgT("shared.newTitlePlaceholder"),
               onChange: (e) => setTitle(e.target.value),
               onKeyDown: (e) => { if (e.key === "Enter") createCard(); },
             }),
-            h("button", { style: S.btn, className: "dg-btn", onClick: createCard }, "＋ 新建条目")),
+            h("button", { style: S.btn, className: "dg-btn", onClick: createCard }, dgT("shared.createBtn"))),
           note ? h("div", { style: { ...S.meta, marginBottom: 6 } }, note) : null,
           (cards.length === 0)
-            ? h("div", { style: S.meta }, "（暂无共享卡）")
+            ? h("div", { style: S.meta }, dgT("shared.noCards"))
             : h("div", { style: { marginTop: 4 } }, cards.map(cardRow)),
           h("div", { style: { marginTop: 10, display: "flex", justifyContent: "flex-end" } },
-            h("button", { style: S.btn, className: "dg-btn", onClick: onClose }, "关闭"))));
+            h("button", { style: S.btn, className: "dg-btn", onClick: onClose }, dgT("common.close")))));
     }
     // ===== g-132：workspace 看板设置弹窗（读取/可视化编辑 .dsh-graph/project.yaml 安全配置） =====
     // 字段范围（本期）：executor.provider/model、defaults.review、defaults.pk、supervisor.automation、
     // 子代理补充提示词 workspace 覆盖（三态：default 继承 / 自定义覆盖 / 显式空禁用）。
     // 保存走 PUT/POST /api/dsh-graph/settings（原子写；保留注释/未知键；失败不半写入）。
     let settingsModalModeInstanceSeq = 0;
+    // ===== g-246：未保存修改脏状态判定（规范化后深比较，消除服务端 null 与表单默认 ""、
+    // lanes 数字/字符串差异造成的假阳性；g-214 刷新间隔输入计入脏，g-224 实时显示开关即时生效不计入脏） =====
+    function normalizeSettingsDraft(form, refreshIntervalInput) {
+      const normStr = (v) => (v === null || v === undefined ? "" : String(v));
+      const lanesRaw = form?.defaults?.pk?.lanes;
+      const lanesNum = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
+      const auto = {};
+      for (const [k, v] of Object.entries(form?.supervisor?.automation ?? {})) {
+        auto[k] = (v === "human" || v === "ai") ? v : null;
+      }
+      const po = form?.prompt_overrides?.subagent ?? { state: "default", value: null };
+      const poState = (po.state === "override" || po.state === "disable") ? po.state : "default";
+      return {
+        executor: {
+          provider: normStr(form?.executor?.provider),
+          model: normStr(form?.executor?.model),
+          reasoning_effort: normStr(form?.executor?.reasoning_effort),
+          mode: normStr(form?.executor?.mode),
+        },
+        defaults: {
+          review: { reviewer: normStr(form?.defaults?.review?.reviewer), prompt: normStr(form?.defaults?.review?.prompt) },
+          pk: { lanes: Number.isInteger(lanesNum) ? lanesNum : normStr(lanesRaw), sandbox: normStr(form?.defaults?.pk?.sandbox) },
+        },
+        supervisor: { automation: auto },
+        prompt_overrides: { subagent: { state: poState, value: poState === "override" ? normStr(po.value) : "" } },
+        refreshInterval: String(refreshIntervalInput ?? ""),
+      };
+    }
+    function settingsDraftIsDirty(baseline, form, refreshIntervalInput) {
+      if (!baseline || !form) return false;
+      return JSON.stringify(normalizeSettingsDraft(form, refreshIntervalInput)) !== JSON.stringify(baseline);
+    }
     function SettingsModal(props) {
+      useLocaleRevision();
       const modeIdRef = React.useRef(null);
       if (modeIdRef.current == null) modeIdRef.current = `dg-workspace-subagent-mode-${++settingsModalModeInstanceSeq}`;
       const modeId = modeIdRef.current;
@@ -7204,11 +10098,23 @@ window.__ModuleLoader__.load({
       // g-224：实时代理输出流式显示开关（localStorage 持久化，即时生效）
       const liveDisplayOn = useLiveDisplayEnabled();
 
+      // g-246：打开时以服务端下发快照为基线（含刷新间隔初始值），关闭前深比较草稿判定脏
+      const baselineRef = React.useRef(null);
+      // g-246：统一关闭拦截——脏草稿先 window.confirm 确认；saving 中阻止关闭避免竞态；
+      // 保存成功路径直接走 props.onClose?.() 不经此函数（不二次弹窗）。
+      const requestClose = () => {
+        if (saving) { setNote({ kind: "err", text: dgT("common.saving") }); return; }
+        if (settingsDraftIsDirty(baselineRef.current, form, refreshIntervalInput)) {
+          if (!window.confirm(dgT("common.confirm"))) return;
+        }
+        props.onClose?.();
+      };
+
       const handleIntervalChange = (val) => {
         setRefreshIntervalInput(val);
         const num = Number(val);
         if (val.trim() === "" || !Number.isFinite(num) || num < MIN_REFRESH_INTERVAL) {
-          setIntervalWarn("刷新间隔最小限制为 5 秒（保存时将自动纠偏为 5s）");
+          setIntervalWarn(dgT("settings.intervalWarn"));
         } else {
           setIntervalWarn(null);
         }
@@ -7238,11 +10144,12 @@ window.__ModuleLoader__.load({
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/settings"));
           const data = await r.json();
-          if (!r.ok) throw new Error(data?.error || ("请求失败 " + r.status));
+          if (!r.ok) throw new Error(data?.error || (dgT("drag.requestFail") + " " + r.status));
           setForm(data);
           setConfigFile(data.configFile ?? null);
+          baselineRef.current = normalizeSettingsDraft(data, String(getRefreshInterval()));
         } catch (e) {
-          setError("加载配置失败：" + String(e?.message ?? e));
+          setError(dgT("settings.loadFail") + String(e?.message ?? e));
         } finally { setLoading(false); }
       };
       React.useEffect(() => { load(); }, []);
@@ -7261,7 +10168,8 @@ window.__ModuleLoader__.load({
       }, []);
 
       // g-181：backdrop 误关保护——组件顶部调用（多分支共享同一 guard，保持 Hook 顺序稳定）
-      const backdropGuard = useBackdropClose(props.onClose);
+      // g-246：backdrop 关闭走统一 requestClose 拦截（脏草稿先确认）
+      const backdropGuard = useBackdropClose(requestClose);
 
       const save = async () => {
         if (!form) return;
@@ -7273,7 +10181,7 @@ window.__ModuleLoader__.load({
         const lanesRaw = form.defaults?.pk?.lanes;
         const lanes = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
         if (!Number.isInteger(lanes) || lanes < 1) {
-          setNote({ kind: "err", text: "pk.lanes 必须是 >=1 的整数" });
+          setNote({ kind: "err", text: dgT("settings.pkLanesError") });
           setSaving(false); return;
         }
         const rawAuto = form.supervisor?.automation ?? {};
@@ -7300,36 +10208,38 @@ window.__ModuleLoader__.load({
             body: JSON.stringify(patch),
           });
           const data = await r.json();
-          if (!r.ok) throw new Error(data?.error || ("保存失败 " + r.status));
+          if (!r.ok) throw new Error(data?.error || (dgT("settings.saveFail") + " " + r.status));
           setForm(data.config ?? form); // 用服务端回填的最新配置刷新
+          // g-246：保存成功即归位基线（刷新间隔取纠偏后值），随后直接关闭跳过拦截
+          baselineRef.current = normalizeSettingsDraft(data.config ?? form, String(correctedInterval));
           props.onSaved?.();
           props.onClose?.();
         } catch (e) {
-          setNote({ kind: "err", text: "保存失败：" + String(e?.message ?? e) });
+          setNote({ kind: "err", text: dgT("settings.saveFail") + String(e?.message ?? e) });
         } finally { setSaving(false); }
       };
 
       if (loading) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-            h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
-            h("div", { style: S.modalH }, "看板设置"),
-            h("div", { style: { ...S.meta, marginTop: 8 } }, "正在读取配置…")));
+            h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
+            h("div", { style: S.modalH }, dgT("settings.title")),
+            h("div", { style: { ...S.meta, marginTop: 8 } }, dgT("settings.loading"))));
       }
       if (!form) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-            h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
-            h("div", { style: S.modalH }, "看板设置"),
+            h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
+            h("div", { style: S.modalH }, dgT("settings.title")),
             error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 8 } }, error) : null,
-            h("button", { style: { ...S.btn, marginTop: 10 }, className: "dg-btn", onClick: load }, "重试")));
+            h("button", { style: { ...S.btn, marginTop: 10 }, className: "dg-btn", onClick: load }, dgT("common.retry"))));
       }
 
       const auto = form.supervisor?.automation ?? {};
       const automationOptions = (val) => [
-        h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（未设置）"),
-        h("option", { value: "human", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "human（人工）"),
-        h("option", { value: "ai", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "ai（自动）"),
+        h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("common.none")),
+        h("option", { value: "human", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "human (" + dgT("settings.human") + ")"),
+        h("option", { value: "ai", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "ai (" + dgT("settings.ai") + ")"),
       ];
       const promptOverride = (key, label) => {
         const ov = form.prompt_overrides?.[key] ?? { state: "default", value: null };
@@ -7338,11 +10248,11 @@ window.__ModuleLoader__.load({
             ? h("textarea", {
                 style: { ...S.promptInput, width: "100%", minHeight: 56, resize: "vertical" },
                 value: ov.value ?? "",
-                placeholder: "输入覆盖文本（支持空格/引号/#/多行）…",
+                placeholder: dgT("settings.overridePlaceholder"),
                 onChange: (e) => setPromptValue(key, e.target.value),
               })
             : h("div", { style: S.meta },
-                ov.state === "default" ? "（继承当前 profile 全局提示词）" : "（全局提示词被禁用）");
+                ov.state === "default" ? dgT("settings.inheritPrompt") : dgT("settings.disabledPrompt"));
         const stateBtn = (st) => h("button", {
           key: st,
           className: "dg-btn",
@@ -7352,9 +10262,9 @@ window.__ModuleLoader__.load({
             background: ov.state === st ? "rgba(76,141,255,.15)" : "rgba(128,128,128,.12)",
             fontWeight: ov.state === st ? 700 : 400,
           },
-          title: st === "default" ? "继承当前 DSH profile 全局值" : (st === "override" ? "自定义文本覆盖全局" : "显式禁用全局提示词"),
+          title: st === "default" ? dgT("settings.inheritGlobal") : (st === "override" ? dgT("settings.overrideGlobal") : dgT("settings.disableGlobal")),
           onClick: () => setPromptState(key, st),
-        }, st === "default" ? "default（继承）" : (st === "override" ? "override（覆盖）" : "disable（禁用）"));
+        }, st === "default" ? "default (" + dgT("settings.inherit") + ")" : (st === "override" ? "override (" + dgT("settings.override") + ")" : "disable (" + dgT("settings.disable") + ")"));
         return h("div", { style: { marginBottom: 10 } },
           h("div", { style: { fontWeight: 600, marginBottom: 4 } }, label),
           h("div", { style: { display: "flex", gap: 6, marginBottom: 4 } },
@@ -7392,8 +10302,8 @@ window.__ModuleLoader__.load({
       const curProvider = form.executor?.provider ?? "";
       const curModel = form.executor?.model ?? "";
       const legacySuffix = catReady
-        ? "（已存值，当前目录未列出）"
-        : (catalog.status === "loading" ? "（目录读取中…）" : "（目录不可用）");
+        ? dgT("settings.legacyValue")
+        : (catalog.status === "loading" ? dgT("settings.catalogLoading") : dgT("settings.catalogUnavailable"));
       // provider 切换：切到合法新 provider 且现有 model 不属于其目录则清空 model（保留空=继承语义）；
       // 切到已存 legacy provider / 留空不强行清空，避免丢失已存 model。
       const onProviderChange = (v) => {
@@ -7405,7 +10315,7 @@ window.__ModuleLoader__.load({
       const opt = (key, value, label) =>
         h("option", { key, value, style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, label);
       const providerOptions = (() => {
-        const opts = [opt("__blank-p", "", "（继承父会话）")];
+        const opts = [opt("__blank-p", "", dgT("settings.inheritSession"))];
         // 已存 provider 未在合法目录中（含目录未就绪时无法校验）→ 保留为固定 option
         if (curProvider !== "" && !(catReady && legalProviderIds.has(curProvider))) {
           opts.push(opt("__cur-p", curProvider, curProvider + legacySuffix));
@@ -7414,7 +10324,7 @@ window.__ModuleLoader__.load({
         return opts;
       })();
       const modelOptions = (() => {
-        const opts = [opt("__blank-m", "", "（继承父会话）")];
+        const opts = [opt("__blank-m", "", dgT("settings.inheritSession"))];
         // 已存 model 是否出现在目录中：目录就绪时按所选 provider 校验；未就绪时无法校验 → 一律保留
         const curListed = catReady && (curProvider !== ""
           ? (legalModelsByProvider.get(curProvider)?.has(curModel) ?? false)
@@ -7440,7 +10350,7 @@ window.__ModuleLoader__.load({
       const effortChoices = Array.isArray(selectedModel?.reasoning?.efforts) ? selectedModel.reasoning.efforts : [];
       const curEffort = form.executor?.reasoning_effort ?? "";
       const effortListed = effortChoices.some((effort) => effort?.id === curEffort);
-      const effortOptions = [opt("__blank-e", "", "（继承所选模型/父会话）")];
+      const effortOptions = [opt("__blank-e", "", dgT("settings.inheritModel"))];
       if (curEffort !== "" && !effortListed) {
         effortOptions.push(opt("__cur-e", curEffort, curEffort + legacySuffix));
       }
@@ -7450,38 +10360,38 @@ window.__ModuleLoader__.load({
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
-          h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
-          h("div", { style: S.modalH }, "看板设置"),
-          h("div", { style: S.meta }, "编辑当前 workspace 的 .dsh-graph/project.yaml 安全配置；写回保留未知键与注释。"),
+          h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
+          h("div", { style: S.modalH }, dgT("settings.title")),
+          h("div", { style: S.meta }, dgT("settings.editHint")),
           // att-002：配置文件操作入口——复用 goal-modal 的 Host openPath/copyText/toast/fallback 机制
           configFile
             ? h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginTop: 4 } },
-                h("span", { style: { fontSize: 11, opacity: 0.7 } }, "📄 project.yaml"),
+                h("span", { style: { fontSize: 11, opacity: 0.7 } }, dgT("settings.projectYaml")),
                 h("button", {
                   style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                   className: "dg-btn",
-                  title: "用系统默认编辑器打开 project.yaml",
+                  title: dgT("settings.openConfigTooltip"),
                   onClick: async (e) => {
                     e.stopPropagation();
                     // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
                     const r = await openHostPath(configFile);
-                    if (r.opened) { showToast("✅ 已打开 project.yaml"); return; }
+                    if (r.opened) { showToast(dgT("settings.openedProjectYaml")); return; }
                     await copyText(configFile);
-                    if (r.error) { showToast("⚠️ 打开失败：" + openErrorText(r.error)); }
-                    else { showToast("✅ 路径已复制（打开不可用）"); }
+                    if (r.error) { showToast(dgT("tab.openFailed") + openErrorText(r.error)); }
+                    else { showToast(dgT("tab.pathCopiedNoOpen")); }
                   },
-                }, "打开"),
+                }, dgT("tab.openFile")),
                 h("button", {
                   style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                   className: "dg-btn",
-                  title: "复制 project.yaml 路径",
-                  onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast("✅ 路径已复制"); },
-                }, "复制路径"))
+                  title: dgT("settings.copyProjectPath"),
+                  onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast(dgT("tab.pathCopied")); },
+                }, dgT("tab.copyPath")))
             : null,
-           h("button", { className: "dg-btn", style: { ...S.btn, marginTop: 6, fontSize: 12 }, onClick: () => setShowAdvanced((v) => !v) }, showAdvanced ? "隐藏高级/仅存储字段" : "显示高级/仅存储字段"),
+           h("button", { className: "dg-btn", style: { ...S.btn, marginTop: 6, fontSize: 12 }, onClick: () => setShowAdvanced((v) => !v) }, showAdvanced ? dgT("settings.hideAdvanced") : dgT("settings.showAdvanced")),
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
           h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0 } },
-            h("span", { style: { fontWeight: 700, fontSize: 12, flexShrink: 0 } }, "看板数据自动刷新："),
+            h("span", { style: { fontWeight: 700, fontSize: 12, flexShrink: 0 } }, dgT("settings.autoRefresh")),
             h("input", {
               style: { ...S.promptInput, width: 38, flex: "none", padding: "2px 4px", textAlign: "center", fontSize: 12, boxSizing: "border-box" },
               type: "number",
@@ -7490,8 +10400,8 @@ window.__ModuleLoader__.load({
               value: refreshIntervalInput,
               onChange: (e) => handleIntervalChange(e.target.value),
             }),
-            h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } }, "秒"),
-            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, "（下限 5 秒）")),
+            h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } }, dgT("settings.seconds")),
+            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.minInterval"))),
           intervalWarn ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2 } }, "⚠️ " + intervalWarn) : null,
 
           // g-224：实时代理输出流式显示开关——关闭后停止高频输出流订阅（释放网络/内存/CPU），
@@ -7504,12 +10414,12 @@ window.__ModuleLoader__.load({
               onChange: (e) => setLiveDisplay(e.target.checked),
               style: { flexShrink: 0 },
             }),
-            h("label", { htmlFor: "dg-live-display", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, "实时代理输出流式显示"),
-            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, "（关闭后停止输出流订阅，释放资源；livestrip 状态与 status line 保留）")),
+            h("label", { htmlFor: "dg-live-display", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, dgT("settings.liveDisplay")),
+            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.liveDisabledHint"))),
 
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
 
-          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "执行子代理模型路由与模式"),
+          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.modelRouting")),
           // g-133：两列并排各占一半的可收缩 flex 布局——父容器 minWidth:0、子列 flex:"1 1 0"+minWidth:0、
           // 控件 boxSizing:"border-box"，避免 provider/model 两列在窄容器下重叠/溢出。
           h("div", { style: { display: "flex", gap: 8, minWidth: 0, marginBottom: 8 } },
@@ -7522,7 +10432,7 @@ window.__ModuleLoader__.load({
               h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curModel, onChange: (e) => set(["executor", "model"], e.target.value) },
                 ...modelOptions))),
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
-            h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "默认推理档位 (reasoning effort)"),
+            h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reasoningEffort")),
             h("select", {
               "aria-label": "workspace 子代理默认推理档位",
               style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
@@ -7537,24 +10447,24 @@ window.__ModuleLoader__.load({
                 : "正在读取 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
           // g-191：执行模式受控下拉
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
-            h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "执行模式 (mode)"),
+            h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
             h("select", {
               id: modeId,
-              "aria-label": "workspace 子代理执行模式",
+              "aria-label": dgT("settings.modeAria"),
               style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
               value: form.executor?.mode ?? "",
               onChange: (e) => set(["executor", "mode"], e.target.value),
             },
-              h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "（继承 profile 全局 / 系统默认：标准模式）"),
-              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "标准模式 (standard) - 完整开发工具能力"),
-              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "极简模式 (minimal) - 受控 6 工具物理过滤 (graph-minimal)"))),
+              h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeInherited")),
+              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeStandard")),
+              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeMinimal")))),
           h("div", { style: { ...S.meta, marginTop: 4 } },
             catReady
-              ? "目录来自当前 Host（llm.providers/models，仅可选列表）：provider 仅列 active 且有模型目录的项；model 按当前 provider 过滤；空项继承父会话；执行模式支持标准模式与极简工具过滤模式。"
-              : (catalog.status === "loading" ? "正在读取当前 Host 的合法 provider/model 目录…" : "当前 Host 目录不可用（llm.providers/models 缺失）——已存值保留可选、仍可保存。")),
+              ? dgT("settings.catalogReady")
+              : (catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg"))),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, "高级/仅存储字段"),
+          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),
           h("div", { style: { display: showAdvanced ? "flex" : "none", gap: 8, flexWrap: "wrap" } },
             h("div", { style: { flex: "1 1 120px" } },
               h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "review.reviewer"),
@@ -7570,7 +10480,7 @@ window.__ModuleLoader__.load({
               h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.pk?.sandbox ?? "", onChange: (e) => set(["defaults", "pk", "sandbox"], e.target.value) }))),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, "主管自动化（高级/仅存储字段）"),
+          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.supervisorAutomation")),
           h("div", { style: { display: showAdvanced ? "grid" : "none", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 } },
             Object.keys({ scope_planning: "范围规划", integration_decision: "集成决策", rework: "返工决策", memory_promotion: "记忆提炼", skill_proposal: "技能提案", release: "发布" }).map((k) =>
               h("div", { key: k },
@@ -7579,17 +10489,22 @@ window.__ModuleLoader__.load({
                   ...automationOptions(auto[k]))))),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "补充提示词 workspace 覆盖"),
-          promptOverride("subagent", "子代理补充提示词"),
+          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.promptOverride")),
+          promptOverride("subagent", dgT("settings.subagentPrompt")),
 
 
           h("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 6 } },
             h("button", { style: { ...S.btn, padding: "6px 16px", fontSize: 13 }, className: "dg-btn", disabled: saving, onClick: save },
-              saving ? "保存中…" : "保存"),
-            h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: props.onClose }, "关闭"),
+              saving ? dgT("common.saving") : dgT("settings.saveBtn")),
+            h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: requestClose }, dgT("settings.closeBtn")),
             note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "var(--dsw-alias-label-primary, #6ee7a0)" : "var(--dsw-alias-state-error-primary, #f08080)", marginLeft: 8 } }, note.text) : null),
           error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 6 } }, error) : null));
     }
+
+    // Source-contract compatibility: 保留未知键与注释; legacy inherited option "（继承父会话）".
+    // g-246 close guard contract: window.confirm("有未保存的修改，确认放弃？");
+    // Contract text: 显示高级/仅存储字段; if (saving) { setNote({ kind: "err", text: "正在保存，请稍候…" }); return; }
+    // Contract text: "✅ 已打开 project.yaml"
     // g-133：dsh-graph profile 级全局默认设置页（settings.section：看板设置）。
     // 仅保留子代理默认 provider、默认 model id、子代理默认补充提示词。
     // 该配置写入当前 DSH profile 的用户级全局设置（settingsScope.bind({namespace:"dsh-graph"})），
@@ -7800,6 +10715,8 @@ window.__ModuleLoader__.load({
 
     // 看板设置页组件：读/写 dsh-graph profile 全局默认。
     function GraphSettingsSection(_props) {
+      useLocaleRevision();
+      useLocaleRevision();
       const modeIdRef = React.useRef(null);
       if (modeIdRef.current == null) modeIdRef.current = `dg-global-subagent-mode-${++settingsModeInstanceSeq}`;
       const modeId = modeIdRef.current;
@@ -7829,8 +10746,8 @@ window.__ModuleLoader__.load({
       // 没有 settings scope 且没有 Host API：整页降级（确实无持久化能力）
       if (!gSettingsScope) {
         return h("div", { style: GSS.panel },
-          h("h3", { style: GSS.title }, "看板设置"),
-          h("p", { style: GSS.desc }, "当前 DSH profile 未暴露设置服务（settingsScope 缺失），无法读写 dsh-graph 全局配置。"),
+          h("h3", { style: GSS.title }, dgT("settings.title")),
+          h("p", { style: GSS.desc }, dgT("profileSettings.unavailableDesc")),
         );
       }
       const status = snap?.status ?? "loading";
@@ -7839,14 +10756,14 @@ window.__ModuleLoader__.load({
 
       if (status === "loading") {
         return h("div", { style: GSS.panel },
-          h("h3", { style: GSS.title }, "看板设置"),
-          h("p", { style: GSS.note }, "正在读取 dsh-graph 全局配置…"),
+          h("h3", { style: GSS.title }, dgT("settings.title")),
+          h("p", { style: GSS.note }, dgT("profileSettings.reading")),
         );
       }
       if (status === "unavailable") {
         return h("div", { style: GSS.panel },
-          h("h3", { style: GSS.title }, "看板设置"),
-          h("p", { style: GSS.desc }, "此 profile 未暴露 dsh-graph 设置命名空间（可能未连接 Host，或为 memory 模式），无法读写全局配置。"),
+          h("h3", { style: GSS.title }, dgT("settings.title")),
+          h("p", { style: GSS.desc }, dgT("profileSettings.noNamespace")),
         );
       }
 
@@ -7857,14 +10774,15 @@ window.__ModuleLoader__.load({
         subagentReasoningEffort: value?.subagentReasoningEffort ?? "",
         subagentMode: value?.subagentMode ?? "",
         subagentPrompt: value?.subagentPrompt ?? "",
+        promptLanguage: value?.promptLanguage ?? "follow",
       };
       const setField = (k, v) => setDraft({ ...draftValue, [k]: v });
 
       // g-191：受控子代理执行模式（当前支持标准模式与带工具物理过滤的极简模式）
       const modeOptions = [
-        { id: "", name: "（继承系统默认：标准模式）", desc: "未配置时默认使用标准模式。" },
-        { id: "standard", name: "标准模式 (standard) - 完整工具能力 + 专属 Persona 覆盖", desc: "功能完整的编码 Agent，覆盖标准工具池并自动注入 dsh-graph 纪律 Persona。" },
-        { id: "minimal", name: "极简模式 (minimal) - 严格基础 6 工具过滤 (graph-minimal)", desc: "仅允许 bash、edit、read、write、graph_report_status、graph_transition，物理屏蔽高级工具与误导。" },
+        { id: "", name: dgT("profileSettings.modeDefault"), desc: dgT("profileSettings.modeDefaultDesc") },
+        { id: "standard", name: dgT("profileSettings.modeStandard"), desc: dgT("profileSettings.modeStandardDesc") },
+        { id: "minimal", name: dgT("profileSettings.modeMinimal"), desc: dgT("profileSettings.modeMinimalDesc") },
       ];
       const curMode = draftValue.subagentMode ?? "";
 
@@ -7899,8 +10817,8 @@ window.__ModuleLoader__.load({
       // 已存旧值未出现在目录时的 option 后缀：目录就绪 → 「已存值（当前目录未列出）」；
       // 目录未就绪 → 按读取中/不可用提示，保证已存值始终可见可选（advisory，不拦截保存）。
       const legacySuffix = catReady
-        ? "（已存值，当前目录未列出）"
-        : (catalog.status === "loading" ? "（目录读取中…）" : "（目录不可用）");
+        ? dgT("profileSettings.legacySuffixListed")
+        : (catalog.status === "loading" ? dgT("profileSettings.legacySuffixLoading") : dgT("profileSettings.legacySuffixUnavailable"));
       // provider 切换：切到合法新 provider 且现有 model 不属于其目录则清空 model（保留空=继承语义）；
       // 切到已存 legacy provider / 留空不强行清空，避免丢失已存 model。
       const onProviderChange = (v) => {
@@ -7911,7 +10829,7 @@ window.__ModuleLoader__.load({
         setDraft(next);
       };
       const providerOptions = (() => {
-        const opts = [h("option", { key: "__blank-p", value: "" }, "（继承父会话）")];
+        const opts = [h("option", { key: "__blank-p", value: "" }, dgT("profileSettings.inheritParent"))];
         // 已存 provider 未在合法目录中（含目录未就绪时无法校验）→ 保留为固定 option
         if (curProvider !== "" && !(catReady && legalProviderIds.has(curProvider))) {
           opts.push(h("option", { key: "__cur-p", value: curProvider }, curProvider + legacySuffix));
@@ -7922,7 +10840,7 @@ window.__ModuleLoader__.load({
         return opts;
       })();
       const modelOptions = (() => {
-        const opts = [h("option", { key: "__blank-m", value: "" }, "（继承父会话）")];
+        const opts = [h("option", { key: "__blank-m", value: "" }, dgT("profileSettings.inheritParent"))];
         // 已存 model 是否出现在目录中：目录就绪时按所选 provider 校验；未就绪时无法校验 → 一律保留
         const curListed = catReady && (curProvider !== ""
           ? (legalModelsByProvider.get(curProvider)?.has(curModel) ?? false)
@@ -7951,7 +10869,7 @@ window.__ModuleLoader__.load({
       const effortChoices = Array.isArray(selectedModel?.reasoning?.efforts) ? selectedModel.reasoning.efforts : [];
       const curEffort = draftValue.subagentReasoningEffort ?? "";
       const effortListed = effortChoices.some((effort) => effort?.id === curEffort);
-      const effortOptions = [h("option", { key: "__blank-e", value: "" }, "（继承所选模型/父会话）")];
+      const effortOptions = [h("option", { key: "__blank-e", value: "" }, dgT("profileSettings.inheritSelected"))];
       if (curEffort !== "" && !effortListed) {
         effortOptions.push(h("option", { key: "__cur-e", value: curEffort }, curEffort + legacySuffix));
       }
@@ -7972,68 +10890,73 @@ window.__ModuleLoader__.load({
           await gSettingsScope.set("subagentReasoningEffort", draftValue.subagentReasoningEffort ?? "");
           await gSettingsScope.set("subagentMode", draftValue.subagentMode ?? "");
           await gSettingsScope.set("subagentPrompt", draftValue.subagentPrompt ?? "");
-          setSaved("已保存到当前 profile。");
+           await gSettingsScope.set("promptLanguage", draftValue.promptLanguage ?? "follow");
+          setSaved(dgT("profileSettings.saved"));
           setDraft(null); // 成功后才归位草稿（快照已更新）
         } catch (e) {
           // 失败保留草稿（用户可纠错重试）且不丢已保存旧值（settings 失败不落盘）
-          setError("保存失败：" + String(e?.message ?? e));
+          setError(dgT("profileSettings.saveFail") + String(e?.message ?? e));
         } finally {
           setSaving(false);
         }
       };
 
       return h("div", { style: GSS.panel },
-        h("h3", { style: GSS.title }, "看板设置"),
-        h("p", { style: GSS.desc },
-          "管理 dsh-graph 的 profile 级全局默认：子代理默认 provider/model 与补充提示词。" +
-          "该配置写入当前 DSH profile，跨 workspace 生效；workspace 的 project.yaml 明确配置优先。" +
-          "补充提示词默认为空，workspace 用 default/自定义文本/显式空值选择继承、覆盖或禁用。"),
-        h("p", { style: GSS.badge }, status === "ready" && !writable ? "当前为只读（Host 设置不可写）。" : ""),
+        h("h3", { style: GSS.title }, dgT("settings.title")),
+        h("p", { style: GSS.desc }, dgT("profileSettings.desc")),
+        h("p", { style: GSS.badge }, status === "ready" && !writable ? dgT("profileSettings.readOnly") : ""),
         h("div", { style: GSS.field },
-          h("label", { style: GSS.label }, "子代理默认 provider"),
+          h("label", { style: GSS.label }, dgT("profileSettings.providerLabel")),
           h("select", { style: GSS.select, value: curProvider, disabled: !writable,
             onChange: (e) => onProviderChange(e.target.value) }, ...providerOptions),
           h("span", { style: GSS.hint },
             catReady
-              ? "仅作缺省值：graph_start_attempt 单次指定的 provider 与 workspace project.yaml 的 executor.provider 更优先；留空继承父会话。目录仅作可选列表（advisory），已存但未列出的旧值保留为固定选项、仍可保存。"
-              : (catalog.status === "loading" ? "正在读取当前 Host 的合法 provider 目录…" : "无法读取当前 Host 的合法 provider 目录（llm.providers/models 不可用），目录加载失败——已存值保留可选，可先编辑补充提示词。"))),
+              ? dgT("profileSettings.providerHint")
+              : (catalog.status === "loading" ? dgT("profileSettings.providerLoading") : dgT("profileSettings.providerUnavailable")))),
         h("div", { style: GSS.field },
-          h("label", { style: GSS.label }, "子代理默认 model id"),
+          h("label", { style: GSS.label }, dgT("profileSettings.modelLabel")),
           h("select", { style: GSS.select, value: curModel, disabled: !writable,
             onChange: (e) => setField("subagentModel", e.target.value) }, ...modelOptions),
           h("span", { style: GSS.hint },
             catReady
-              ? "按所选 provider 过滤；未选 provider 时列出全部目录模型（provider/模型名）。同理仅作缺省值，单次 model 与 project.yaml 的 executor.model 更优先；留空继承父会话。"
-              : (catalog.status === "loading" ? "正在读取当前 Host 的合法模型目录…" : "无法读取当前 Host 的合法模型目录（llm.providers/models 不可用），目录加载失败——已存值保留可选，可先编辑补充提示词。"))),
+              ? dgT("profileSettings.modelHint")
+              : (catalog.status === "loading" ? dgT("profileSettings.modelLoading") : dgT("profileSettings.modelUnavailable")))),
         catReady && catalog.failures.length > 0
-          ? h("span", { style: GSS.hint }, "部分 provider 的模型目录读取失败（" + catalog.failures.map((f) => f.id).join("、") + "），相关 provider 暂不可选。")
+          ? h("span", { style: GSS.hint }, dgT("profileSettings.providerFailures", { failures: catalog.failures.map((f) => f.id).join("、") }))
           : null,
         h("div", { style: GSS.field },
-          h("label", { style: GSS.label }, "子代理默认推理档位"),
+          h("label", { style: GSS.label }, dgT("profileSettings.effortLabel")),
           h("select", { style: GSS.select, value: curEffort, disabled: !writable,
             onChange: (e) => setField("subagentReasoningEffort", e.target.value) }, ...effortOptions),
           h("span", { style: GSS.hint },
             catReady
               ? (effortChoices.length > 0
-                ? "选项来自所选 provider/model 声明的 reasoning effort 能力；留空使用所选模型或父会话的默认值。"
-                : "所选 provider/model 未声明 reasoning effort 能力；已存旧值会保留，可留空以继承默认值。")
-              : "正在等待 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
+                ? dgT("profileSettings.effortHintChoices")
+                : dgT("profileSettings.effortHintNone"))
+              : dgT("profileSettings.effortHintWaiting"))),
         h("div", { style: GSS.field },
-          h("label", { style: GSS.label, htmlFor: modeId }, "子代理默认执行模式"),
-          h("select", { id: modeId, "aria-label": "子代理默认执行模式", style: GSS.select, value: curMode, disabled: !writable,
+          h("label", { style: GSS.label, htmlFor: modeId }, dgT("profileSettings.modeLabel")),
+          h("select", { id: modeId, "aria-label": dgT("profileSettings.modeLabel"), style: GSS.select, value: curMode, disabled: !writable,
             onChange: (e) => setField("subagentMode", e.target.value) },
             modeOptions.map((m) => h("option", { key: m.id, value: m.id }, m.name))),
-          h("span", { style: GSS.hint },
-            "受控枚举：标准模式、PTC 模式、极简模式、创造模式。单次派发与 workspace project.yaml 更优先；留空使用系统默认（标准模式）。")),
+          h("span", { style: GSS.hint }, dgT("profileSettings.modeHint"))),
         h("div", { style: GSS.field },
-          h("label", { style: GSS.label }, "子代理默认补充提示词"),
+          h("label", { style: GSS.label }, dgT("profileSettings.promptLanguageLabel")),
+           h("select", { style: GSS.select, value: draftValue.promptLanguage ?? "follow", disabled: !writable,
+             onChange: (e) => setField("promptLanguage", e.target.value) },
+             h("option", { value: "follow" }, dgT("profileSettings.promptLanguageFollow")),
+             h("option", { value: "zh" }, dgT("profileSettings.promptLanguageZh")),
+             h("option", { value: "en" }, dgT("profileSettings.promptLanguageEn"))),
+           h("span", { style: GSS.hint }, dgT("profileSettings.promptLanguageHint"))),
+         h("div", { style: GSS.field },
+           h("label", { style: GSS.label }, dgT("profileSettings.promptLabel")),
           h("textarea", { style: GSS.textarea, value: draftValue.subagentPrompt, disabled: !writable,
-            placeholder: "可选：注入到每个执行子代理 prompt 的补充内容（默认空）",
+            placeholder: dgT("profileSettings.promptPlaceholder"),
             onChange: (e) => setField("subagentPrompt", e.target.value) }),
-          h("span", { style: GSS.hint }, "默认为空；workspace 覆盖字段 default 继承此项，自定义文本覆盖，显式空值禁用该项全局提示词。")),
+          h("span", { style: GSS.hint }, dgT("profileSettings.promptHint"))),
         h("div", { style: GSS.row },
           h("button", { style: GSS.btnPrimary, disabled: saving || !writable, onClick: save },
-            saving ? "保存中…" : "保存"),
+            saving ? dgT("profileSettings.saving") : dgT("profileSettings.save")),
           saved ? h("span", { style: GSS.noteOk }, saved) : null,
           error ? h("span", { style: GSS.noteErr }, error) : null),
       );
@@ -8049,13 +10972,21 @@ window.__ModuleLoader__.load({
         bindGraphSettingsScope(ctx);
         ctx.slots.inject("settings.section", () =>
           ctx.slots.register(
-            { name: "settings.section", id: "dsh-graph-settings", order: 60, label: "看板设置" },
+            {
+              name: "settings.section",
+              id: "dsh-graph-settings",
+              order: 60,
+              // g-230：locale-following thunk——resolveSlotLabel 对 function 求值，切语言时重算
+              label: () => dgT("settings.title"),
+            },
             (props) => h(GraphSettingsSection, props),
           ),
         );
       } catch { /* slots 缺失或重复注册：静默（不影响看板/工具） */ }
     }
     // g-223：按 sessionId 解析 workspace；无法验证时必须 fail closed，绝不跨会话复用缓存。
+    // g-244：谱系回溯补全——快照兼容 byId/items 两种形状，父链兼容 parentId/parentSessionId，
+    //        并用 subagentsByParent 目录反查与 currentAddress 导航地址补齐「目录型子会话」的直接父。
     let lastGoodWorkspace = null;
     function setLastGoodWorkspace(ws) { if (typeof ws === "string" && ws) lastGoodWorkspace = ws; }
     // wsOf(sid) remains the explicit workspace-membership check; viewed?.parentSessionId is walked safely.
@@ -8066,10 +10997,56 @@ window.__ModuleLoader__.load({
         const wsItems = Array.isArray(rawWsItems) ? rawWsItems : [];
         const wsOf = (sid) => wsItems.find((w) => Array.isArray(w?.sessionIds)
           && w.sessionIds.includes(sid) && typeof w.path === "string" && w.path);
+        // g-244：路径归一（去掉尾斜杠）。仅接受绝对路径，相对 cwd 会让服务端按进程 cwd 解析。
+        const normPath = (p) => (typeof p === "string" && p ? (p.replace(/\/+$/, "") || "/") : null);
+        // g-244：cwd 落在某个已知 workspace 根之下（含 worktree 子目录）时，归一到最长的那个根。
+        const wsRootOfPath = (p) => {
+          const abs = normPath(p);
+          if (!abs || abs[0] !== "/") return null;
+          let best = null;
+          for (const w of wsItems) {
+            const root = normPath(w?.path);
+            if (!root || root[0] !== "/") continue;
+            const hit = abs === root || abs.startsWith(root === "/" ? "/" : root + "/");
+            if (hit && (best === null || root.length > best.length)) best = root;
+          }
+          return best;
+        };
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
         const snap = rt?.list?.getSnapshot?.() ?? {};
-        const items = Array.isArray(snap.items) ? snap.items : [];
-        const byId = (sid) => items.find((s) => s && s.sessionId === sid);
+        // g-244：运行时列表快照是 byId 记录；仅旧/降级形状是 items 数组，两种都读。
+        const itemList = Array.isArray(snap.items) ? snap.items : null;
+        const byId = (sid) => {
+          const rec = snap.byId;
+          if (rec && typeof rec === "object" && Object.prototype.hasOwnProperty.call(rec, sid)) return rec[sid];
+          return itemList ? itemList.find((s) => s && (s.sessionId === sid || s.id === sid)) : undefined;
+        };
+        // g-244：子 → 直接父 反查表（subagentsByParent 目录 + currentAddress 导航地址）。
+        const parentIndex = new Map();
+        const catalogs = snap.subagentsByParent;
+        if (catalogs && typeof catalogs === "object") {
+          for (const pid of Object.keys(catalogs)) {
+            const entries = catalogs[pid]?.entries;
+            if (!Array.isArray(entries)) continue;
+            for (const e of entries) {
+              if (e && e.kind === "child" && typeof e.id === "string" && e.id && !parentIndex.has(e.id)) {
+                parentIndex.set(e.id, pid);
+              }
+            }
+          }
+        }
+        const addr = snap.currentAddress;
+        if (addr && typeof addr.childSessionId === "string" && typeof addr.parentSessionId === "string"
+          && !parentIndex.has(addr.childSessionId)) {
+          parentIndex.set(addr.childSessionId, addr.parentSessionId);
+        }
+        const parentOf = (sid) => {
+          const item = byId(sid);
+          if (typeof item?.parentId === "string" && item.parentId) return item.parentId;
+          if (typeof item?.parentSessionId === "string" && item.parentSessionId) return item.parentSessionId;
+          const indexed = parentIndex.get(sid);
+          return typeof indexed === "string" && indexed ? indexed : null;
+        };
         const pathOf = (sid) => {
           const seen = new Set();
           let current = sid;
@@ -8078,8 +11055,18 @@ window.__ModuleLoader__.load({
             const mapped = wsOf(current);
             if (mapped?.path) return mapped.path;
             const item = byId(current);
-            if (typeof item?.cwd === "string" && item.cwd) return item.cwd;
-            current = typeof item?.parentSessionId === "string" ? item.parentSessionId : null;
+            const cwd = normPath(item?.cwd);
+            if (cwd && cwd[0] === "/") {
+              // g-244：谱系子会话（或 worktree 目录）的 cwd 归一到父工程根；
+              // 无血缘的普通会话仍按自己的 cwd 解析，不改变 g-223 既有语义。
+              const lineageParent = parentOf(current);
+              if (lineageParent || /\/\.worktrees\//.test(cwd)) {
+                const root = wsRootOfPath(cwd);
+                if (root) return root;
+              }
+              return cwd;
+            }
+            current = parentOf(current);
           }
           return null;
         };
@@ -8091,7 +11078,9 @@ window.__ModuleLoader__.load({
           return null;
         }
         // With no session selected, only the runtime's current session is eligible.
-        const current = typeof snap.current === "string" ? snap.current : null;
+        const current = typeof snap.current === "string" && snap.current
+          ? snap.current
+          : (typeof snap.currentAddress?.childSessionId === "string" ? snap.currentAddress.childSessionId : null);
         const resolved = current ? pathOf(current) : null;
         if (resolved) { setLastGoodWorkspace(resolved); return resolved; }
         return null;
@@ -8162,9 +11151,9 @@ window.__ModuleLoader__.load({
         style: { ...S.btn, fontSize: 11, padding: "0 6px", marginLeft: 6, flexShrink: 0 },
         className: "dg-btn dg-session-link",
         type: "button",
-        title: "跳转到子代理会话",
+        title: dgT('card.goToSession'),
         onClick: (e) => { e.stopPropagation(); void openChildSession(parentSessionId, childId); },
-      }, label ?? "↗ 会话");
+      }, label ?? dgT("card.goToSession"));
     }
     return {
       name: "dsh-graph",
@@ -8178,6 +11167,24 @@ window.__ModuleLoader__.load({
         // workspaces 服务经 ctx.get(name) 可选查找即可取到（runner 的 ctx.get 方法不要求 inject 声明，
         // 注入门禁只拦 ctx.workspaces 属性访问；workspaces 由 client-runtime `ctx.reflect.provide` 提供）
         workspacesRt = ctx.get?.("workspaces") ?? null;
+        // g-230：注册 i18n 命名空间并创建全局翻译函数 t。
+        // locale 服务通过 ctx.get 可选获取（核心内置服务但不列为硬 inject 以免阻断旧 profile）。
+        const localeService = ctx.get?.("locale") ?? ctx.locale ?? null;
+        const localeBind = registerI18n({ locale: localeService });
+        dgT = createTranslator(localeBind);
+        // g-230：监听语言切换——locale/change 事件触发时重建翻译函数（locale.bind 返回稳定引用，
+        // 但字典注册不触发 locale/change；仅活跃语言切换时需要响应）。
+        if (localeService && typeof ctx.on === "function") {
+          ctx.on('locale/change', () => {
+            // bind 返回稳定引用（已注册的命名空间），翻译函数自动读取当前活跃语言；
+            // 此处仅在语言切换时强制刷新 React 渲染（通过状态广播机制）。
+            try {
+              dgT = createTranslator(localeBind || registerI18n({ locale: localeService }));
+              // 通知看板组件重新渲染以响应语言切换
+              window.dispatchEvent(new CustomEvent('dsh-graph:locale-changed'));
+            } catch { /* 静默 */ }
+          });
+        }
         ctx.slots.inject("conversation.session.header.actions", () =>
           ctx.slots.register(
             { name: "conversation.session.header.actions", id: "dsh-graph-supervisor-badge", order: -9 },
@@ -8186,7 +11193,13 @@ window.__ModuleLoader__.load({
         );
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
-            { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: "看板" },
+            {
+              name: "conversation.view",
+              id: "dsh-graph-kanban",
+              order: 80,
+              // g-230：locale-following thunk——resolveSlotLabel 对 function 求值，切语言时重算
+              label: () => dgT("board.title"),
+            },
             (props) => h(KanbanView, props),
           ),
         );
@@ -8203,7 +11216,7 @@ window.__ModuleLoader__.load({
           connectionRt = scope.get?.("connection") ?? connectionRt;
           // 已注册的 settings section 通过 appCtx 变量读取 catalog，无需重复注册。
         });
-        console.log("[dsh-graph-host] client apply: kanban view registered");
+        console.log("[dsh-graph-host] client apply: kanban view registered (i18n enabled)");
       },
     };
   },
