@@ -841,15 +841,18 @@ export function apply(ctx, config) {
     const { goalFile, doc } = admission;
 
     // 3. 一次性上下文快照（保证注入清单与注入内容一致，零二次读取漂移）
+    //    小节标签按提示词语言本地化（仅影响 prompt 展示，goal.md 解析仍用中文小节名）。
+    const promptLanguage = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
+    const isEnPrompt = promptLanguage === "en";
     const descMatch = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
     const critMatch = doc.body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
     const desc = descMatch ? descMatch[1].trim() : "";
-    const crit = critMatch ? critMatch[1].trim() : "（无判据）";
+    const crit = critMatch ? critMatch[1].trim() : (isEnPrompt ? "(no criteria)" : "（无判据）");
     const targetContext = [
-      "## 目标描述",
-      desc || "（无描述）",
+      isEnPrompt ? "## Goal description" : "## 目标描述",
+      desc || (isEnPrompt ? "(no description)" : "（无描述）"),
       "",
-      "## 质量判据",
+      isEnPrompt ? "## Quality criteria" : "## 质量判据",
       crit,
     ].join("\n");
 
@@ -913,7 +916,6 @@ export function apply(ctx, config) {
     const goalRel = goalFile ? relative(workspace, goalFile) : null;
     let gType = "task";
     try { gType = normalizeGoalType(doc.meta.type); } catch {}
-    const promptLanguage = resolvePromptLanguage(globalSettings.promptLanguage, ctx);
     const worktreeBlock = resolveWorktreeGuide(gType, worktree, promptLanguage);
     const subagentPromptSection = (() => {
       const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(root, "subagent_prompt"));
