@@ -1,0 +1,1 @@
+【Mandatory worktree isolation】Modify source, tests, and generated files only in the supervisor-created .worktrees/g-<goal>-att-<NN>. main is read-only. Commit the work and stop at review for supervisor integration.

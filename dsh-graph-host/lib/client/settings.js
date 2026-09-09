@@ -267,6 +267,7 @@
         subagentReasoningEffort: value?.subagentReasoningEffort ?? "",
         subagentMode: value?.subagentMode ?? "",
         subagentPrompt: value?.subagentPrompt ?? "",
+        promptLanguage: value?.promptLanguage ?? "follow",
       };
       const setField = (k, v) => setDraft({ ...draftValue, [k]: v });
 
@@ -382,6 +383,7 @@
           await gSettingsScope.set("subagentReasoningEffort", draftValue.subagentReasoningEffort ?? "");
           await gSettingsScope.set("subagentMode", draftValue.subagentMode ?? "");
           await gSettingsScope.set("subagentPrompt", draftValue.subagentPrompt ?? "");
+           await gSettingsScope.set("promptLanguage", draftValue.promptLanguage ?? "follow");
           setSaved(dgT("profileSettings.saved"));
           setDraft(null); // 成功后才归位草稿（快照已更新）
         } catch (e) {
@@ -432,7 +434,15 @@
             modeOptions.map((m) => h("option", { key: m.id, value: m.id }, m.name))),
           h("span", { style: GSS.hint }, dgT("profileSettings.modeHint"))),
         h("div", { style: GSS.field },
-          h("label", { style: GSS.label }, dgT("profileSettings.promptLabel")),
+          h("label", { style: GSS.label }, dgT("profileSettings.promptLanguageLabel")),
+           h("select", { style: GSS.select, value: draftValue.promptLanguage ?? "follow", disabled: !writable,
+             onChange: (e) => setField("promptLanguage", e.target.value) },
+             h("option", { value: "follow" }, dgT("profileSettings.promptLanguageFollow")),
+             h("option", { value: "zh" }, dgT("profileSettings.promptLanguageZh")),
+             h("option", { value: "en" }, dgT("profileSettings.promptLanguageEn"))),
+           h("span", { style: GSS.hint }, dgT("profileSettings.promptLanguageHint"))),
+         h("div", { style: GSS.field },
+           h("label", { style: GSS.label }, dgT("profileSettings.promptLabel")),
           h("textarea", { style: GSS.textarea, value: draftValue.subagentPrompt, disabled: !writable,
             placeholder: dgT("profileSettings.promptPlaceholder"),
             onChange: (e) => setField("subagentPrompt", e.target.value) }),

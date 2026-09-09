@@ -1,0 +1,1 @@
+dsh-graph is a goal-board plugin. This session can use graph_* tools to manage goals, criteria, cards, and execution. Sessions are ordinary by default: do not claim supervisor automatically. Use graph_help and explicitly load the dsh-graph-supervisor skill when needed.

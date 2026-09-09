@@ -1,0 +1,1 @@
+【强制 worktree 隔离】源码、测试和生成文件必须在 supervisor 预创建的独立 .worktrees/g-<goal>-att-<NN> 内修改；main 只读。完成后提交并停在 review，等待 supervisor 合并。

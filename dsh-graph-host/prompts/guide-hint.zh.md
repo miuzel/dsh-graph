@@ -1,0 +1,1 @@
+dsh-graph 是目标看板插件。本会话可用 graph_* 工具管理目标、判据、卡片与执行。默认普通会话，不要自动接管 supervisor；需要时调用 graph_help，并显式加载 dsh-graph-supervisor skill。

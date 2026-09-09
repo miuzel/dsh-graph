@@ -1,0 +1,1 @@
+dsh-graph organizes work as a goal board. graph_* tools create goals, record criteria, manage cards, dispatch execution, validate data, and hand off sessions. Status is not evidence; artifacts are. review → delivered always requires the owner's verdict.

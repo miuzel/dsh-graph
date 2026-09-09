@@ -1,0 +1,1 @@
+【Minor task fast path】Only low-risk patch/chore tasks may skip a dedicated worktree. Keep the scope strict, verify the change, and move the goal to review.

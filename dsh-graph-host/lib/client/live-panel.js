@@ -417,7 +417,7 @@
       // 折叠态标题行的内联摘要：状态 + statusLine + token/ctx + 模型短名
       const collapsedBits = [
         statusLabel,
-        statusLine ? formatStatusWithLifecycle(statusLine, running, false).fullText : null,
+        statusLine ? formatStatusWithLifecycle(statusLine, running, false, props.statusState).fullText : null,
         meter || null,
         shortModel,
       ].filter(Boolean).join(" ｜ ");

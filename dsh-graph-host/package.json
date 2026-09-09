@@ -17,6 +17,9 @@
     "lib",
     "cordis.patch.yml",
     "supervisor-guide.md",
+    "supervisor-guide.zh.md",
+    "supervisor-guide.en.md",
+    "prompts",
     "README.md",
     "LICENSE"
   ],
