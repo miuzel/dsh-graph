@@ -5228,7 +5228,7 @@ window.__ModuleLoader__.load({
           const r = await fetch(graphUrl("/api/dsh-graph/record-handoff"), {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, source_attempts: src, ...form }),
+            body: JSON.stringify({ goal: goalId, ...form, source_attempts: src }),
           });
           const data = await r.json();
           if (data.ok) {
