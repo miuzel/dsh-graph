@@ -115,6 +115,12 @@ test("g-233 源码契约：模块与 Bundle 包含搜索框、高亮样式、导
   assert.match(kanban, /openReleasedSlugs/);
   assert.match(bundle, /searchUnhiddenSlugs/);
   assert.match(bundle, /tempExpandedRef/);
+
+  // 6. DEBUG 信息两行紧凑展示、最长省略与 tooltip 契约（为搜索框留出空间，判据 1 优化）
+  assert.match(kanban, /DEBUG sessionId=[\s\S]*?ws=/);
+  assert.match(kanban, /textOverflow: "ellipsis"/);
+  assert.match(kanban, /maxWidth: 160/);
+  assert.match(bundle, /DEBUG sessionId=[\s\S]*?ws=/);
 });
 
 // ===== g-233 review 返工：P1/P2/P4 真实行为测试 =====

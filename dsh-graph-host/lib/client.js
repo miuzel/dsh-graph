@@ -6904,9 +6904,43 @@ window.__ModuleLoader__.load({
               onChange: (e) => setShowArchived(e.target.checked),
             }),
             "显示已归档"),
-          // g-113 临时诊断（灰色低调显示，负责人 2026-08-22 保留）：显示当前解析的 workspace 与会话 id
-          h("span", { style: { ...S.meta, color: "rgba(128,128,128,.55)", marginLeft: 8, fontSize: 11 } },
-            "DEBUG sessionId=" + (props?.sessionId ?? "∅") + " ws=" + (activeWs ?? "∅")),
+          // g-113 临时诊断（灰色低调显示，两行省略，详情在 tooltip 显示，为搜索框留出空间）：显示当前解析的 workspace 与会话 id
+          h("div", {
+            style: {
+              ...S.meta,
+              color: "rgba(128,128,128,.55)",
+              marginLeft: 8,
+              fontSize: 10,
+              lineHeight: 1.25,
+              display: "flex",
+              flexDirection: "column",
+              maxWidth: 160,
+              minWidth: 0,
+              overflow: "hidden",
+              cursor: "default",
+              userSelect: "none",
+              flexShrink: 1,
+            },
+            title: `DEBUG sessionId=${props?.sessionId ?? "∅"}\nws=${activeWs ?? "∅"}`,
+          },
+            h("span", {
+              style: {
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                maxWidth: "100%",
+                display: "block",
+              },
+            }, "DEBUG sessionId=" + (props?.sessionId ?? "∅")),
+            h("span", {
+              style: {
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                maxWidth: "100%",
+                display: "block",
+              },
+            }, "ws=" + (activeWs ?? "∅"))),
           // g-233：标题行最右侧增加搜索框
           h("div", {
             style: {
