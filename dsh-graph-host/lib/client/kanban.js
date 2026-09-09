@@ -89,30 +89,19 @@
       const searchInputRef = React.useRef(null);
       // g-233 P1: 纯内存覆盖层——临时 unhide 的版本 slug 集合，不写持久底账
       const [searchUnhiddenSlugs, setSearchUnhiddenSlugs] = React.useState(() => new Set());
-      // g-233 P2/P4: 临时状态记录栈——工作区绑定，记录因搜索自动展开的泳道与列，退出搜索时精准恢复
-      const tempExpandedRef = React.useRef({
-        ws: activeWs,
-        expandedLanes: new Set(),
-        openReleasedSlugs: new Set(),
-        deliverExpanded: false,
-        blockedExpanded: false,
-      });
+      // g-233 P2/P4: 临时状态记录栈——工作区绑定，记录因搜索自动展开的泳道与列，退出搜索时精准恢复（g-255: 使用 search-state.js 纯函数）
+      const tempExpandedRef = React.useRef(createSearchTempState(activeWs));
 
-      // g-233 P2: 工作区切换时彻底重置搜索词、匹配结果与全部临时状态，防止跨工作区污染
+      // g-233 P2: 工作区切换时彻底重置搜索词、匹配结果与全部临时状态，防止跨工作区污染（g-255: 使用 search-state.js 纯函数）
       React.useEffect(() => {
-        setSearchQuery("");
-        setSearchActiveQuery("");
-        setSearchMatches([]);
-        setSearchCurrentIndex(0);
-        setSearchFeedback(null);
-        setSearchUnhiddenSlugs(new Set());
-        tempExpandedRef.current = {
-          ws: activeWs,
-          expandedLanes: new Set(),
-          openReleasedSlugs: new Set(),
-          deliverExpanded: false,
-          blockedExpanded: false,
-        };
+        const reset = resetSearchState(activeWs);
+        setSearchQuery(reset.searchState.query);
+        setSearchActiveQuery(reset.searchState.activeQuery);
+        setSearchMatches(reset.searchState.matches);
+        setSearchCurrentIndex(reset.searchState.currentIndex);
+        setSearchFeedback(reset.searchState.feedback);
+        setSearchUnhiddenSlugs(reset.searchState.unhiddenSlugs);
+        tempExpandedRef.current = reset.tempState;
       }, [activeWs, props?.sessionId]);
 
       // g-233：全局 Ctrl+F / Cmd+F 聚焦看板搜索框
@@ -675,8 +664,8 @@
 
       const allActiveVersions = b.versions.filter((v) => v.status !== "released");
       const allReleasedVersions = b.versions.filter((v) => v.status === "released");
-      // g-233 P1: 纯内存覆盖层——临时可见版本从 hiddenVersionSet 排除，不写持久隐藏偏好
-      const hiddenVersionSet = new Set((hiddenVersionSlugs ?? []).filter((slug) => !searchUnhiddenSlugs.has(slug)));
+      // g-233 P1: 纯内存覆盖层——临时可见版本从 hiddenVersionSet 排除，不写持久隐藏偏好（g-255: 使用 search-state.js 纯函数）
+      const hiddenVersionSet = computeEffectiveHiddenVersionSlugs(hiddenVersionSlugs, searchUnhiddenSlugs);
       const active = allActiveVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       const released = allReleasedVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       // 全量目标 id→status 映射（依赖徽章状态化，发现#23：已交付依赖算「依赖满足」）
@@ -693,66 +682,48 @@
         ...b.backlog,
       ];
 
-      // ===== g-233: 目标搜索与导航核心函数 =====
+      // ===== g-233: 目标搜索与导航核心函数（g-255: 使用 search-state.js 纯函数） =====
       // g-233 P4: 用户显式操作泳道折叠状态，从临时恢复列表中移除（用户意图优先）
       const toggleLaneCollapse = (key, collapse) => {
-        tempExpandedRef.current.expandedLanes.delete(key);
+        tempExpandedRef.current.expandedLanes = toggleLaneCollapseInState(tempExpandedRef.current.expandedLanes, key);
         setCollapsedLanes((prev) => ({ ...prev, [key]: collapse }));
       };
 
       // g-233 P4: 用户显式操作已发布版本展开/折叠，从临时恢复列表中移除
       const toggleReleasedOpen = (slug, openState) => {
-        tempExpandedRef.current.openReleasedSlugs.delete(slug);
+        tempExpandedRef.current.openReleasedSlugs = toggleReleasedOpenInState(tempExpandedRef.current.openReleasedSlugs, slug);
         setOpenReleased((prev) => ({ ...prev, [slug]: openState }));
       };
 
       const exitSearch = () => {
-        // P2: 检查工作区一致性，跨工作区时直接丢弃不触碰
-        if (tempExpandedRef.current.ws && tempExpandedRef.current.ws !== activeWs) {
-          tempExpandedRef.current = {
-            ws: activeWs,
-            expandedLanes: new Set(),
-            openReleasedSlugs: new Set(),
-            deliverExpanded: false,
-            blockedExpanded: false,
-          };
-          setSearchActiveQuery("");
-          setSearchMatches([]);
-          setSearchCurrentIndex(0);
-          setSearchFeedback(null);
-          setSearchUnhiddenSlugs(new Set());
-          return;
-        }
-
-        const { expandedLanes, openReleasedSlugs, deliverExpanded, blockedExpanded } = tempExpandedRef.current;
+        // g-255: 使用 search-state.js 纯函数计算恢复指令
+        const restore = exitSearchRestore(tempExpandedRef.current, activeWs);
         // P1: 临时 unhide 纯内存清空，绝不触碰持久存储，持久隐藏偏好零污染
         setSearchUnhiddenSlugs(new Set());
 
-        // P4: 恢复仅针对用户未主动操作过的条目（用户显式操作已在 toggle 时从 Set 中移出）
-        if (expandedLanes && expandedLanes.size > 0) {
-          setCollapsedLanes((prev) => {
-            const next = { ...prev };
-            for (const key of expandedLanes) next[key] = true;
-            return next;
-          });
+        if (restore.wsMismatch) {
+          // P2: 工作区不一致，直接丢弃临时状态不触碰
+          tempExpandedRef.current = createSearchTempState(activeWs);
+        } else {
+          // P4: 恢复仅针对用户未主动操作过的条目（用户显式操作已在 toggle 时从 Set 中移出）
+          if (restore.collapsedLanes.length > 0) {
+            setCollapsedLanes((prev) => {
+              const next = { ...prev };
+              for (const key of restore.collapsedLanes) next[key] = true;
+              return next;
+            });
+          }
+          if (restore.unopenedReleasedSlugs.length > 0) {
+            setOpenReleased((prev) => {
+              const next = { ...prev };
+              for (const slug of restore.unopenedReleasedSlugs) delete next[slug];
+              return next;
+            });
+          }
+          if (restore.collapseDeliver) setDeliverColumnCollapsed(true);
+          if (restore.collapseBlocked) setBlockedColumnCollapsed(true);
+          tempExpandedRef.current = createSearchTempState(activeWs);
         }
-        if (openReleasedSlugs && openReleasedSlugs.size > 0) {
-          setOpenReleased((prev) => {
-            const next = { ...prev };
-            for (const slug of openReleasedSlugs) delete next[slug];
-            return next;
-          });
-        }
-        if (deliverExpanded) setDeliverColumnCollapsed(true);
-        if (blockedExpanded) setBlockedColumnCollapsed(true);
-
-        tempExpandedRef.current = {
-          ws: activeWs,
-          expandedLanes: new Set(),
-          openReleasedSlugs: new Set(),
-          deliverExpanded: false,
-          blockedExpanded: false,
-        };
         setSearchActiveQuery("");
         setSearchMatches([]);
         setSearchCurrentIndex(0);
@@ -767,50 +738,37 @@
         const target = matches[targetIdx];
         if (!target) return;
 
+        // g-255: 使用 search-state.js 纯函数计算导航跟踪指令
+        const track = navigateToMatchTrack(tempExpandedRef.current, target, hiddenVersionSlugs, stageOf);
+        tempExpandedRef.current = track.updatedTempState;
+
         // 1. 若在隐藏版本内，临时 unhide（P1: 纯内存覆盖层，不写持久底账）
-        if (target.versionSlug) {
-          if ((hiddenVersionSlugs ?? []).includes(target.versionSlug)) {
-            setSearchUnhiddenSlugs((prev) => new Set([...prev, target.versionSlug]));
-          }
+        if (track.unhideVersionSlug) {
+          setSearchUnhiddenSlugs((prev) => new Set([...prev, track.unhideVersionSlug]));
         }
 
-        // 2. 若在折叠版本内，自动展开
-        if (target.isReleased && target.versionSlug) {
+        // 2. 若在折叠版本内，自动展开（条件判断与原逻辑一致）
+        if (track.expandReleasedSlug) {
           setOpenReleased((prev) => {
-            if (!prev[target.versionSlug]) {
-              tempExpandedRef.current.openReleasedSlugs.add(target.versionSlug);
-              return { ...prev, [target.versionSlug]: true };
+            if (!prev[track.expandReleasedSlug]) {
+              return { ...prev, [track.expandReleasedSlug]: true };
             }
             return prev;
           });
-        } else if (target.laneKey) {
+        } else if (track.expandLane) {
           setCollapsedLanes((prev) => {
-            if (prev[target.laneKey]) {
-              tempExpandedRef.current.expandedLanes.add(target.laneKey);
-              return { ...prev, [target.laneKey]: false };
+            if (prev[track.expandLane]) {
+              return { ...prev, [track.expandLane]: false };
             }
             return prev;
           });
         }
 
         // 3. 若在折叠的交付/阻塞列，自动展开
-        const stage = stageOf(target.status);
-        if (stage === "deliver") {
-          setDeliverColumnCollapsed((prev) => {
-            if (prev) {
-              tempExpandedRef.current.deliverExpanded = true;
-              return false;
-            }
-            return prev;
-          });
-        } else if (stage === "blocked") {
-          setBlockedColumnCollapsed((prev) => {
-            if (prev) {
-              tempExpandedRef.current.blockedExpanded = true;
-              return false;
-            }
-            return prev;
-          });
+        if (track.expandDeliver) {
+          setDeliverColumnCollapsed(false);
+        } else if (track.expandBlocked) {
+          setBlockedColumnCollapsed(false);
         }
 
         // 4. 定位并平滑滚动到卡片
