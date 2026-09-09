@@ -2973,9 +2973,21 @@ window.__ModuleLoader__.load({
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/define-polish"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: goalId, goal_path: goalPath, guidance: guidance.trim() }) });
           const data = await r.json();
-          if (data.ok) setNote("✅ 产品经理 Agent 已受理，建议将返回主管会话");
-          else setNote("⚠️ 产品经理 Agent 失败：" + (data.child_error || data.error || "未知错误"));
-        } catch (e) { setNote("⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e)); }
+          if (data.ok) {
+            // g-249：弹窗已被 onClose 关闭，setNote 不可见；改用 showToast（含 child_id）让用户可见
+            const toast = "✅ 产品经理 Agent 已受理" + (data.child_id ? "（child: " + data.child_id + "）" : "") + "，建议将返回主管会话";
+            setNote(toast);
+            showToast(toast);
+          } else {
+            const errNote = "⚠️ 产品经理 Agent 失败：" + (data.child_error || data.error || "未知错误");
+            setNote(errNote);
+            showToast(errNote);
+          }
+        } catch (e) {
+          const errNote = "⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e);
+          setNote(errNote);
+          showToast(errNote);
+        }
         finally {
           // spawnChild 通常很快返回；保持 accepted-running 动画至少一小段可观察时间。
           const remaining = Math.max(0, 2500 - (Date.now() - startedAt));
@@ -5185,7 +5197,11 @@ window.__ModuleLoader__.load({
                   h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
                     h("span", { style: { fontSize: 11, fontFamily: "monospace", opacity: 0.7 } }, m.id),
                     h("span", { style: { fontSize: 10, padding: "0 4px", borderRadius: 4, background: m.scope === "standing" ? "rgba(76,175,80,.15)" : "rgba(33,150,243,.15)", color: m.scope === "standing" ? "#4caf50" : "#2196f3" } }, m.scope === "standing" ? "常驻" : "按需"),
-                    m.source_goal ? h("span", { style: { fontSize: 10, opacity: 0.6 } }, "来自: " + m.source_goal) : null),
+                    m.source_goal ? h("span", { style: { fontSize: 10, opacity: 0.6 } }, "来自: " + m.source_goal) : null,
+                    m.created_by ? h("span", {
+                      style: { fontSize: 10, opacity: 0.75, padding: "0 4px", borderRadius: 4, background: String(m.created_by).startsWith("human") ? "rgba(255,152,0,.15)" : "rgba(156,39,176,.15)", color: String(m.created_by).startsWith("human") ? "#ff9800" : "#ab47bc" },
+                      title: "创建来源: " + m.created_by,
+                    }, (String(m.created_by).startsWith("human") ? "👤 " : String(m.created_by).startsWith("agent") ? "🤖 " : "") + m.created_by) : null),
                   h("button", {
                     className: "dg-btn",
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px", color: "#e74c3c" },

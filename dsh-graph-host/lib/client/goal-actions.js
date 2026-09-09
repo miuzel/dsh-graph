@@ -170,9 +170,21 @@
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/define-polish"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ goal: goalId, goal_path: goalPath, guidance: guidance.trim() }) });
           const data = await r.json();
-          if (data.ok) setNote("✅ 产品经理 Agent 已受理，建议将返回主管会话");
-          else setNote("⚠️ 产品经理 Agent 失败：" + (data.child_error || data.error || "未知错误"));
-        } catch (e) { setNote("⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e)); }
+          if (data.ok) {
+            // g-249：弹窗已被 onClose 关闭，setNote 不可见；改用 showToast（含 child_id）让用户可见
+            const toast = "✅ 产品经理 Agent 已受理" + (data.child_id ? "（child: " + data.child_id + "）" : "") + "，建议将返回主管会话";
+            setNote(toast);
+            showToast(toast);
+          } else {
+            const errNote = "⚠️ 产品经理 Agent 失败：" + (data.child_error || data.error || "未知错误");
+            setNote(errNote);
+            showToast(errNote);
+          }
+        } catch (e) {
+          const errNote = "⚠️ 产品经理 Agent 失败：" + String(e?.message ?? e);
+          setNote(errNote);
+          showToast(errNote);
+        }
         finally {
           // spawnChild 通常很快返回；保持 accepted-running 动画至少一小段可观察时间。
           const remaining = Math.max(0, 2500 - (Date.now() - startedAt));
