@@ -2,9 +2,9 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
-单包发布：npm 包名 `dsh-graph`（当前版本 v0.9.1）。一个包同时提供：
+单包发布：npm 包名 `dsh-graph`（当前版本 v0.9.2）。一个包同时提供：
 
-- 面向 agent 的 38 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
+- 面向 agent 的 39 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
 - 浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
 
 数据以文件 + 事件流形式落在工作区 `.dsh-graph` 目录，git 友好、可审计。
@@ -20,6 +20,9 @@
 
 ## 当前功能状态
 
+- **全链路 i18n（v0.9.2）**：看板 UI、工具描述与全部 LLM 提示词中英双语；整篇提示词文档按语言后缀文件区分（`supervisor-guide.zh.md` / `.en.md`），跟随 DSH 界面语言（`locale.preference`）或可在看板设置中显式指定。
+- **结构化执行状态（v0.9.2）**：`graph_report_status` 支持 `state` 枚举（working/blocked/done/error），看板活跃判断以结构化状态优先、关键词匹配仅作遗留回退。
+- **目标描述就地编辑（v0.9.2）**：目标弹窗中描述可直接进入 Markdown 编辑态保存（`graph_set_description`）。
 - **更新强调**：目标被外部编辑后，看板卡片播放更新强调动画；弹窗打开期间的变化在关闭弹窗时补播；系统开启 reduced-motion 时降级为静态高光。
 - **浅色主题**：看板、弹窗与抽屉完整适配浅色 / 深色两套主题（跟随 DSH 主题变量）。
 - **信息收集**：目标详情弹窗的上下文卡片区显示「🔎 信息收集」。
@@ -36,11 +39,11 @@ dsh plugin --profile <name> add dsh-graph
 
 ## 提供的工具
 
-38 个 `graph_*` 工具，按功能分组：
+39 个 `graph_*` 工具，按功能分组：
 
 | 分组 | 工具 |
 |------|------|
-| 目标生命周期 | `graph_create_goal` · `graph_rename_goal` · `graph_set_goal_type` · `graph_set_goal_tags` · `graph_amend_goal` · `graph_transition` · `graph_postpone_goal` · `graph_archive_goal` · `graph_unarchive_goal` · `graph_delete_goal` · `graph_clean_worktree` · `graph_list_worktrees` |
+| 目标生命周期 | `graph_create_goal` · `graph_rename_goal` · `graph_set_description` · `graph_set_goal_type` · `graph_set_goal_tags` · `graph_amend_goal` · `graph_transition` · `graph_postpone_goal` · `graph_archive_goal` · `graph_unarchive_goal` · `graph_delete_goal` · `graph_clean_worktree` · `graph_list_worktrees` |
 | 质量判据 | `graph_set_criteria` |
 | 上下文卡片 | `graph_add_card` · `graph_fill_card` · `graph_review_card` · `graph_bind_collect_card` · `graph_delete_card` |
 | 附件 | `graph_store_attachment` · `graph_delete_attachment` |

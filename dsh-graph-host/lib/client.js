@@ -1861,7 +1861,7 @@ window.__ModuleLoader__.load({
       }, []);
     }
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
-    const PLUGIN_VERSION = "0.9.1";
+    const PLUGIN_VERSION = "0.9.2";
 
     // g-230：阶段列定义——label 改为函数式动态翻译（每次渲染时读取当前语言）
     const STAGES = [
