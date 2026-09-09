@@ -105,6 +105,30 @@ test("g-120：formatHarvestedCardsSection 按序含 title/summary/正文全文",
   assert.ok(sec.includes(c1) && sec.includes(c2), "含卡片 id（子代理无需猜路径）");
 });
 
+test("g-262：卡片注入段 zh parity、en 标签翻译与非法语言回退", () => {
+  const root = tmpRoot();
+  const { goal } = goalWithCards(root);
+  const zh = formatHarvestedCardsSection(root, goal);
+  const en = formatHarvestedCardsSection(root, goal, undefined, undefined, "en");
+  const invalid = formatHarvestedCardsSection(root, goal, undefined, undefined, "fr" as "zh");
+
+  // zh 输出保持既有标签与动态用户内容；非法语言等同默认 zh。
+  assert.ok(zh.includes("## 已收集上下文卡片成果（g-120 注入"));
+  assert.ok(zh.includes("摘要：甲摘要"));
+  assert.ok(!zh.includes("Attachment references:"));
+  assert.equal(invalid, zh);
+  // en 只翻译插件固定标签，卡片用户内容原样保留。
+  assert.ok(en.includes("## Harvested context card results"));
+  assert.ok(en.includes("Summary: 甲摘要") && en.includes("甲正文"));
+  assert.ok(!en.includes("g-120 注入"));
+  assert.ok(!en.includes("摘要：") && !en.includes("正文为空") && !en.includes("精确路径："));
+
+  const emptyZh = formatHarvestedCardsSection(root, createGoal(root, { title: "empty", version: "v-t", actor: "test" }));
+  const emptyEn = formatHarvestedCardsSection(root, createGoal(root, { title: "empty-en", version: "v-t", actor: "test" }), undefined, undefined, "en");
+  assert.ok(emptyZh.includes("（无：context_cards"));
+  assert.ok(emptyEn.includes("(none: context_cards"));
+});
+
 test("g-120：startAttempt 带 injectedCards 时事件 details 记 injected_cards（含空数组）", () => {
   const root = tmpRoot();
   const goal = createGoal(root, { title: "t", version: "v-t", actor: "test" });
@@ -307,6 +331,10 @@ test("g-240: 超长单卡注入预算截断，保留摘要、精确路径与 dig
   assert.match(sec, /digest=[a-f0-9]{16}/, "包含卡片内容审计摘要");
   // 确保输出长度受控（远小于 3000 字符）
   assert.ok(sec.length < 1500, "单卡超出预算后注入段长度严格受控");
+  const secEn = formatHarvestedCardsSection(root, goal, { maxCardChars: 500 }, undefined, "en");
+  assert.ok(secEn.includes("Summary: 长文本摘要分析"));
+  assert.ok(secEn.includes("body truncated after exceeding the per-card budget"));
+  assert.ok(!secEn.includes("正文已超出单卡预算"));
 });
 
 test("g-240: 多卡注入总预算控制与折叠机制，保留附件引用且溢出明确可见可定位", () => {
@@ -335,6 +363,12 @@ test("g-240: 多卡注入总预算控制与折叠机制，保留附件引用且�
   assert.ok(sec.includes(`cards/`), "折叠卡片依然提供精确路径以供按需查阅");
   assert.ok(sec.includes("@att/doc-10.pdf"), "折叠卡片依然保留附件引用");
   assert.ok(sec.includes("⚠️ 卡片总预算限制：已完整展开"), "底部输出明确可见的总预算统计说明");
+
+  const secEn = formatHarvestedCardsSection(root, goal, { maxTotalChars: 1000, maxFullCards: 2 }, undefined, "en");
+  assert.ok(secEn.includes("Attachment references: @att/doc-10.pdf"));
+  assert.ok(secEn.includes("body collapsed after exceeding the total card budget"));
+  assert.ok(secEn.includes("Card budget limit:"));
+  assert.ok(!secEn.includes("附件引用：") && !secEn.includes("卡片总预算限制"));
 });
 
 test("g-240: 卡片精确路径以 .dsh-graph/ 开头且在工作区根相对路径真实可读", () => {
