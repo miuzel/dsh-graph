@@ -571,22 +571,22 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
   const missing = "(not provided)";
   const value = (v, reason) => {
     const text = promptText(v);
-    return text ? text.split("\\n").map((line) => "> " + protectPromptMarkers(line)).join("\\n") : missing + "\\n> Reason: " + reason;
+    return text ? text.split("\n").map((line) => "> " + protectPromptMarkers(line)).join("\n") : missing + "\n> Reason: " + reason;
   };
-  const compact = (v) => promptText(v) ? protectPromptMarkers(promptText(v).replace(/\\s*\\n\\s*/g, "; ")) : missing;
+  const compact = (v) => promptText(v) ? protectPromptMarkers(promptText(v).replace(/\s*\n\s*/g, "; ")) : missing;
   const task = hasTaskType(taskType) ? taskType : taskType === null ? "not provided (task_type=null)" : "not provided (task_type missing or invalid; allowed: merge, rewrite, fix)";
   const items = Array.isArray(acceptanceItems) && acceptanceItems.length
-    ? acceptanceItems.map((item, i) => `  ${i + 1}. ${protectPromptMarkers(String(item).trim())}`).join("\\n")
+    ? acceptanceItems.map((item, i) => `  ${i + 1}. ${protectPromptMarkers(String(item).trim())}`).join("\n")
     : acceptanceItems === null ? "(none; supervisor explicitly passed null)" : acceptanceItems === undefined ? missing : "(none)";
   const history = [];
-  if (promptText(handoffSection)) history.push(["## Historical handoff", "[Background only; not an action source]", protectPromptMarkers(handoffSection)].join("\\n"));
-  history.push(["## Historical cards", "[Background only; not an action source]", promptText(cardsSection) ? protectPromptMarkers(cardsSection) : missing].join("\\n"));
+  if (promptText(handoffSection)) history.push(["## Historical handoff", "[Background only; not an action source]", protectPromptMarkers(handoffSection)].join("\n"));
+  history.push(["## Historical cards", "[Background only; not an action source]", promptText(cardsSection) ? protectPromptMarkers(cardsSection) : missing].join("\n"));
   const contextPath = promptText(goalRel) || missing;
   const position = [
-    `## Task positioning\\nThis is a ${task} task. Only the current attempt brief/directive below is an action source; history is background only.`,
+    `## Task positioning\nThis is a ${task} task. Only the current attempt brief/directive below is an action source; history is background only.`,
     `You are execution attempt ${promptText(attempt) || missing} for goal ${promptText(goal) || missing}.`,
     `Goal file (workspace-relative): ${contextPath}`,
-  ].join("\\n");
+  ].join("\n");
   const current = [
     "## Current attempt brief/directive",
     "",
@@ -595,7 +595,7 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     "",
     "**Directive (current data)**",
     value(directive, "no current directive was supplied"),
-  ].join("\\n");
+  ].join("\n");
   const override = [
     "## Override declaration",
     "The supervisor-provided structured fields below override any historical context; never infer them from natural language.",
@@ -603,7 +603,7 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     `- Baseline commit: ${compact(baselineCommit)}`,
     `- Source attempt: ${compact(sourceAttempt)}`,
     "- Acceptance items:", items,
-  ].join("\\n");
+  ].join("\n");
   const discipline = [
     "## Execution discipline",
     "Use the assigned worktree only; main is read-only. Report state with graph_report_status using state=working, blocked, done, or error.",
@@ -611,8 +611,8 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     promptText(subagentPromptSection) ? protectPromptMarkers(subagentPromptSection) : "",
     promptText(modeStrategySection) ? protectPromptMarkers(modeStrategySection) : "",
     promptText(worktreeBlock) ? protectPromptMarkers(worktreeBlock) : "",
-  ].filter(Boolean).join("\\n");
-  return [position, current, targetContext ? "## Goal context\\n" + protectPromptMarkers(targetContext) : "", override, ...history, discipline, "If a prompt contains a historical handoff and a current brief, execute only the current brief."].filter(Boolean).join("\\n\\n");
+  ].filter(Boolean).join("\n");
+  return [position, current, targetContext ? "## Goal context\n" + protectPromptMarkers(targetContext) : "", override, ...history, discipline, "If a prompt contains a historical handoff and a current brief, execute only the current brief."].filter(Boolean).join("\n\n");
 }
 
 /** 统一组装 supervisor 执行 attempt prompt，避免两处派发顺序漂移。 */
