@@ -3396,13 +3396,16 @@ function atomicCardDigest(cardFile) {
  *  - 多卡超出总预算或条数上限时折叠为摘要+精确路径+digest 按需展开；
  *  - 溢出项明确可见且可定位，不静默丢弃；无 filled/reviewed 卡片时返回带「（无）」说明的短段。
  *  g-241 集成：preHarvestedCards 支持单次快照复用（第 4 参，可选）。 */
-export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCards) {
+export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCards, language = "zh") {
     const cards = preHarvestedCards ?? harvestedCards(root, goalId);
+    const isEn = language === "en";
     if (cards.length === 0) {
         return [
-            `## 已收集上下文卡片成果（g-120 注入）`,
+            isEn ? `## Harvested context card results` : `## 已收集上下文卡片成果（g-120 注入）`,
             ``,
-            `（无：context_cards 为空或没有 filled/reviewed 卡片，无需复用，直接按目标描述/判据执行）`,
+            isEn
+                ? `(none: context_cards is empty or has no filled/reviewed cards; no context to reuse—execute directly from the goal description and criteria)`
+                : `（无：context_cards 为空或没有 filled/reviewed 卡片，无需复用，直接按目标描述/判据执行）`,
         ].join("\n");
     }
     const maxCardChars = typeof opts?.maxCardChars === "number" && opts.maxCardChars > 0 ? opts.maxCardChars : 1200;
@@ -3417,39 +3420,51 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
         const meta = [
             `id=${c.id}`,
             `status=${c.status}`,
-            c.scope === "shared" ? `scope=共享` : null,
-            c.summary ? `摘要：${c.summary}` : null,
+            c.scope === "shared" ? `scope=${isEn ? "shared" : "共享"}` : null,
+            c.summary ? `${isEn ? "Summary: " : "摘要："}${c.summary}` : null,
             c.digest ? `digest=${c.digest}` : null,
-        ].filter(Boolean).join("，");
+        ].filter(Boolean).join(isEn ? ", " : "，");
         const exactPath = c.path ? c.path : (c.scope === "shared" ? `.dsh-graph/shared-cards/${c.id}.md` : `.dsh-graph/cards/${c.id}.md`);
         const atts = c.attachments.length
-            ? `\n  附件引用：` + c.attachments.map((a) => `@att/${a}`).join("，")
+            ? `\n  ${isEn ? "Attachment references: " : "附件引用："}` + c.attachments.map((a) => `@att/${a}`).join(isEn ? ", " : "，")
             : "";
         const willExceedTotal = accumulatedChars + c.content.length > maxTotalChars;
         const willExceedCount = inlinedCount >= maxFullCards;
         if (willExceedTotal || willExceedCount) {
             collapsedCount++;
-            items.push(`- **${c.title}**（${meta}，⚠️ 已超出卡片总预算折叠正文）\n` +
-                `  摘要：${c.summary || "（无摘要）"}\n` +
-                `  精确路径：${exactPath}（按需查阅全文，digest=${c.digest}）${atts}`);
+            items.push(isEn
+                ? `- **${c.title}** (${meta}, ⚠️ body collapsed after exceeding the total card budget)\n` +
+                    `  Summary: ${c.summary || "(no summary)"}\n` +
+                    `  Exact path: ${exactPath} (read full content on demand, digest=${c.digest})${atts}`
+                : `- **${c.title}**（${meta}，⚠️ 已超出卡片总预算折叠正文）\n` +
+                    `  摘要：${c.summary || "（无摘要）"}\n` +
+                    `  精确路径：${exactPath}（按需查阅全文，digest=${c.digest}）${atts}`);
         }
         else {
             inlinedCount++;
             let bodyText = c.content;
             if (bodyText.length > maxCardChars) {
                 bodyText = bodyText.slice(0, maxCardChars) +
-                    `\n  ...（⚠️ 正文已超出单卡预算 ${maxCardChars} 字已截断；完整内容请读取 ${exactPath}，digest=${c.digest}）`;
+                    (isEn
+                        ? `\n  ... (⚠️ body truncated after exceeding the per-card budget of ${maxCardChars} characters; read the full content at ${exactPath}, digest=${c.digest})`
+                        : `\n  ...（⚠️ 正文已超出单卡预算 ${maxCardChars} 字已截断；完整内容请读取 ${exactPath}，digest=${c.digest}）`);
             }
             accumulatedChars += bodyText.length;
             const body = bodyText
                 ? bodyText.split("\n").map((l) => `  ${l}`).join("\n")
-                : "  （正文为空）";
-            items.push(`- **${c.title}**（${meta}）\n${body}${atts}`);
+                : isEn ? "  (empty body)" : "  （正文为空）";
+            items.push(isEn
+                ? `- **${c.title}** (${meta})\n${body}${atts}`
+                : `- **${c.title}**（${meta}）\n${body}${atts}`);
         }
     }
-    const header = `## 已收集上下文卡片成果（g-120 注入：按 context_cards 顺序，子代理直接使用，无需猜卡片路径）`;
+    const header = isEn
+        ? `## Harvested context card results (ordered by context_cards; directly usable by subagents without guessing card paths)`
+        : `## 已收集上下文卡片成果（g-120 注入：按 context_cards 顺序，子代理直接使用，无需猜卡片路径）`;
     const footer = collapsedCount > 0
-        ? `\n\n> ⚠️ 卡片总预算限制：已完整展开 ${inlinedCount} 张卡片，${collapsedCount} 张卡片超出总预算折叠为摘要+精确路径（按需读取，digest 可校验）。`
+        ? isEn
+            ? `\n\n> ⚠️ Card budget limit: ${inlinedCount} cards fully expanded; ${collapsedCount} cards exceeding the total budget collapsed to summary + exact path (read on demand; digest can be verified).`
+            : `\n\n> ⚠️ 卡片总预算限制：已完整展开 ${inlinedCount} 张卡片，${collapsedCount} 张卡片超出总预算折叠为摘要+精确路径（按需读取，digest 可校验）。`
         : "";
     return [header, "", items.join("\n\n")].join("\n") + footer;
 }
@@ -3674,38 +3689,43 @@ export function harvestReviewedAttemptHandoffs(root, goalId) {
 /** 格式化已确认 handoff 注入段（g-150，供执行派发 prompt）。
  *  g-240：统一预算与裁剪：对超长 failures 截断，但返工约束（禁止项）、基线和验收命令始终完整保留（不丢弃隔离禁令与验收）。
  *  无有效 handoff 时返回空字符串（调用方条件拼接，不影响无历史 prompt）。 */
-export function formatReviewedAttemptHandoffsSection(root, goalId, opts, preHarvestedHandoffs) {
+export function formatReviewedAttemptHandoffsSection(root, goalId, opts, preHarvestedHandoffs, language = "zh") {
     const handoffs = preHarvestedHandoffs ?? harvestReviewedAttemptHandoffs(root, goalId);
     if (handoffs.length === 0)
         return "";
+    const isEn = language === "en";
     const h = handoffs[0]; // 单文件简化：最多一个
     const maxFailures = typeof opts?.maxFailuresChars === "number" && opts.maxFailuresChars > 0 ? opts.maxFailuresChars : 1200;
     let failures = h.failures;
     if (failures.length > maxFailures) {
         failures = failures.slice(0, maxFailures) +
-            "\n...（⚠️ 已核实失败超出预算已截断；返工约束与验收命令保持完整）";
+            (isEn
+                ? "\n... (⚠️ verified failures truncated after exceeding the budget; rework constraints and verification command remain complete)"
+                : "\n...（⚠️ 已核实失败超出预算已截断；返工约束与验收命令保持完整）");
     }
     const meta = [
-        `来源 attempt：${h.source_attempts.join(", ")}`,
-        `确认人：${h.confirmed_by}`,
-        `确认时间：${h.confirmed_at}`,
-        `revision：${h.revision}`,
-    ].filter(Boolean).join("；");
+        `${isEn ? "Source attempt: " : "来源 attempt："}${h.source_attempts.join(", ")}`,
+        `${isEn ? "Confirmed by: " : "确认人："}${h.confirmed_by}`,
+        `${isEn ? "Confirmed at: " : "确认时间："}${h.confirmed_at}`,
+        `${isEn ? "revision: " : "revision："}${h.revision}`,
+    ].filter(Boolean).join(isEn ? "; " : "；");
     const sections = [
-        `## 前序 attempt 已确认 handoff（g-150 注入：仅主管/负责人确认的返工约束，非 agent 自述）`,
+        isEn
+            ? `## Confirmed handoff from previous attempts (rework constraints confirmed by the supervisor/owner, not an agent's self-report)`
+            : `## 前序 attempt 已确认 handoff（g-150 注入：仅主管/负责人确认的返工约束，非 agent 自述）`,
         ``,
-        `（${meta}）`,
+        isEn ? `(${meta})` : `（${meta}）`,
         ``,
-        `**已核实失败/风险：**`,
+        isEn ? `**Verified failures/risks:**` : `**已核实失败/风险：**`,
         ...failures.split("\n").map((l) => `${l}`),
         ``,
-        `**返工约束（禁止项）：**`,
+        isEn ? `**Rework constraints (prohibited items):**` : `**返工约束（禁止项）：**`,
         ...h.constraints.split("\n").map((l) => `${l}`),
         ``,
-        `**推荐基线/必须保留项：**`,
+        isEn ? `**Recommended baseline/items to preserve:**` : `**推荐基线/必须保留项：**`,
         ...h.baseline.split("\n").map((l) => `${l}`),
         ``,
-        `**验收命令：**`,
+        isEn ? `**Verification command:**` : `**验收命令：**`,
         ...h.verification.split("\n").map((l) => `${l}`),
     ];
     return sections.join("\n");

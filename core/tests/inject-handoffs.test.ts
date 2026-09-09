@@ -151,6 +151,41 @@ test("g-150：formatReviewedAttemptHandoffsSection 含已确认 handoff 时返�
 
 // ---- ② recordAttemptHandoff 事件 ----
 
+test("g-262：handoff 注入段 zh parity、en 标签翻译与截断提示", () => {
+  const root = tmpRoot();
+  const goal = createGoal(root, { title: "有 handoff", version: "v-t", actor: "test" });
+  const att = startAttempt(root, goal, { executor: "agent:t", actor: "test" });
+  const constraints = "不要重写模块 Y";
+  const baseline = "保留 Z 函数";
+  const verification = "npm test && npm run lint";
+  recordAttemptHandoff(root, goal, {
+    source_attempts: [att],
+    failures: "模块 X 崩溃；".repeat(100),
+    constraints,
+    baseline,
+    verification,
+    confirmed_by: "supervisor:s1",
+    actor: "supervisor:s1",
+  });
+
+  const zh = formatReviewedAttemptHandoffsSection(root, goal, { maxFailuresChars: 40 });
+  const en = formatReviewedAttemptHandoffsSection(root, goal, { maxFailuresChars: 40 }, undefined, "en");
+  const invalid = formatReviewedAttemptHandoffsSection(root, goal, { maxFailuresChars: 40 }, undefined, "fr" as "zh");
+  assert.equal(invalid, zh);
+  assert.ok(zh.includes("## 前序 attempt 已确认 handoff（g-150 注入"));
+  assert.ok(zh.includes("**已核实失败/风险：**") && zh.includes("**验收命令：**"));
+  assert.ok(zh.includes("revision：1"), "zh revision label keeps the original full-width punctuation");
+  assert.ok(en.includes("## Confirmed handoff from previous attempts"));
+  assert.ok(en.includes("Source attempt:") && en.includes("Confirmed by:") && en.includes("Confirmed at:"));
+  assert.ok(en.includes("**Verified failures/risks:**"));
+  assert.ok(en.includes("**Rework constraints (prohibited items):**"));
+  assert.ok(en.includes("**Recommended baseline/items to preserve:**"));
+  assert.ok(en.includes("**Verification command:**"));
+  assert.ok(en.includes("verified failures truncated after exceeding the budget"));
+  assert.ok(en.includes(constraints) && en.includes(baseline) && en.includes(verification));
+  assert.ok(!en.includes("g-150 注入") && !en.includes("已核实失败/风险") && !en.includes("返工约束（禁止项）"));
+});
+
 test("g-150：recordAttemptHandoff 写 handoff 文件 + attempt.handoff.confirmed 事件", () => {
   const root = tmpRoot();
   const goal = createGoal(root, { title: "事件", version: "v-t", actor: "test" });

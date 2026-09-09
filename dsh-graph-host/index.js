@@ -862,7 +862,7 @@ export function apply(ctx, config) {
 
     const cards = harvestedCards(root, goal);
     const injectedCards = cards.map((c) => c.id);
-    const cardsSection = formatHarvestedCardsSection(root, goal, undefined, cards);
+    const cardsSection = formatHarvestedCardsSection(root, goal, undefined, cards, promptLanguage);
 
     const confirmedHandoffs = harvestReviewedAttemptHandoffs(root, goal);
     const injectedHandoffRefs = confirmedHandoffs.map((h) => ({
@@ -870,7 +870,7 @@ export function apply(ctx, config) {
       revision: h.revision,
       source_attempts: h.source_attempts,
     }));
-    const handoffsSection = formatReviewedAttemptHandoffsSection(root, goal, undefined, confirmedHandoffs);
+    const handoffsSection = formatReviewedAttemptHandoffsSection(root, goal, undefined, confirmedHandoffs, promptLanguage);
 
     const contextPayload = JSON.stringify({
       goal,
