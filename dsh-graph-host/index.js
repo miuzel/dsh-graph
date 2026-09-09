@@ -95,6 +95,7 @@ import {
   formatReviewedAttemptHandoffsSection,
   readGoalDirective,
   setGoalDirective,
+  setGoalDescription,
   readGoalComments,
   appendGoalComment,
   GraphError,
@@ -1200,6 +1201,20 @@ export function apply(ctx, config) {
       run: (a, ex) => {
         const r = rootFor(ex);
         setGoalDirective(r, a.goal, a.directive, actorOf(ex));
+        return { ok: true, goal: a.goal };
+      },
+    },
+    {
+      // g-260：设置/替换目标的「目标描述」——就地编辑描述内容。
+      // 写入 goal.md 的 `## 目标描述` 小节 + 追加 goal.description_set 事件（事件先行）。
+      def: {
+        name: "graph_set_description",
+        description: "设置/替换目标的「目标描述」（g-260）：就地编辑目标描述内容。写入 goal.md 的「目标描述」小节并追加事件；仅改描述小节正文，frontmatter 与其他小节字节级不变。description 为空字符串时清空描述。",
+        parameters: params({ goal: str, description: str }, ["goal", "description"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        setGoalDescription(r, a.goal, a.description, actorOf(ex));
         return { ok: true, goal: a.goal };
       },
     },
@@ -2758,6 +2773,26 @@ export function apply(ctx, config) {
           if (typeof directive !== "string") return json(res, 400, { error: "directive 必须是 string 类型" });
           const rRoot = rootForReq(req, body);
           setGoalDirective(rRoot, goal, directive, "human:gui");
+          json(res, 200, { ok: true, goal });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-260: 设置/替换目标的描述（就地编辑）
+    {
+      path: "/api/dsh-graph/set-description",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, description } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          if (description === undefined || description === null) return json(res, 400, { error: "missing description" });
+          if (typeof description !== "string") return json(res, 400, { error: "description 必须是 string 类型" });
+          const rRoot = rootForReq(req, body);
+          setGoalDescription(rRoot, goal, description, "human:gui");
           json(res, 200, { ok: true, goal });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;

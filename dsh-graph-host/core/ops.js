@@ -1554,6 +1554,36 @@ export function setGoalDirective(root, goalId, directive, actor) {
     });
     saveGoal(file, doc);
 }
+/** 设置/替换目标的「目标描述」——覆盖 `## 目标描述` 小节内容（g-260）。
+ *  事件先行：先追加 goal.description_set 事件，再写文件。
+ *  仅改 goal.md 的「目标描述」小节正文，frontmatter 与其他小节字节级不变。
+ *  description 为空字符串时清空小节（保留空行）。 */
+export function setGoalDescription(root, goalId, description, actor) {
+    if (typeof description !== "string")
+        throw new GraphError("description 必须是 string 类型");
+    const file = findGoalFile(root, goalId);
+    const doc = loadGoal(file);
+    const trimmed = description.trim();
+    // 防止 description 内容包含 ## 标题破坏 section 边界（与 setGoalDirective 同源防护）
+    const safe = sanitizeHeadingContent(trimmed);
+    // 构造小节内容：以空行开头、换行结尾（与 sectionText 解析对齐）
+    const sectionContent = `\n${safe}\n\n`;
+    try {
+        doc.body = replaceSection(doc.body, "目标描述", sectionContent);
+    }
+    catch {
+        // 小节不存在（异常情况）：追加到 body 最前面（目标描述通常是第一个小节）
+        doc.body = `\n## 目标描述\n${sectionContent}\n` + doc.body.replace(/^\n+/, "");
+    }
+    // 事件先行
+    appendEvent(root, {
+        actor,
+        event: "goal.description_set",
+        goal: goalId,
+        details: { description: trimmed || null },
+    });
+    saveGoal(file, doc);
+}
 /** 读取目标的「评论」历史：从 goal.md body 的 `## 评论` 小节解析结构化评论列表。
  *  评论以 `### <时间> | <作者>` 开头分隔，正文到下一个 ### 或小节末尾。
  *  无评论或小节不存在返回空数组。 */
