@@ -148,7 +148,7 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
   // host 半边：28 个 graph_* 工具（g-117 新增 graph_handoff / graph_claim_supervisor；
   // g-119 新增 graph_bind_collect_card；g-118 新增 graph_help；g-141 新增 graph_rename_goal；g-110 新增 archive/unarchive；g-140 新增 delete；g-150 新增 graph_record_attempt_handoff；g-150 范围扩展新增 graph_set_directive / graph_add_comment；g-128 新增 graph_delete_card；g-158 新增 graph_set_goal_type；g-138 新增 graph_postpone_goal；g-183 新增 graph_store_attachment / graph_delete_attachment）
   const toolNames = registered.map((d) => d.name).filter((n) => n.startsWith("graph_"));
-  assert.equal(toolNames.length, 38, "单包注册 38 个 graph_* 工具");
+  assert.equal(toolNames.length, 39, "单包注册 39 个 graph_* 工具（g-260 新增 graph_set_description）");
   // client 半边：/api/dsh-graph* 全部端点（原 client 包 + g-110 archive/unarchive + g-140 delete + g-158 set-goal-type/create-goal type 透传）
   for (const p of ["/api/dsh-graph", "/api/dsh-graph/goal", "/api/dsh-graph/accept",
     "/api/dsh-graph/resolve-accept", "/api/dsh-graph/edit-description",
@@ -156,7 +156,7 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
     "/api/dsh-graph/start-execution", "/api/dsh-graph/spawn-options",
     "/api/dsh-graph/rename-goal", "/api/dsh-graph/set-goal-type", "/api/dsh-graph/create-goal",
     "/api/dsh-graph/archive", "/api/dsh-graph/unarchive",
-    "/api/dsh-graph/delete"]) {
+    "/api/dsh-graph/delete", "/api/dsh-graph/set-description"]) {
     assert.ok(routes.has(p), `路由 ${p} 已注册`);
   }
 });
