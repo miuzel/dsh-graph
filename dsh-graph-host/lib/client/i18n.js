@@ -14,6 +14,7 @@
       'common.search': '搜索',
       'common.loading': '加载中',
       'common.retry': '重试',
+      'common.refresh': '刷新',
       'common.confirm': '确认',
       'common.copy': '复制',
       'common.open': '打开',
@@ -54,6 +55,7 @@
 
       // === 看板顶部/加载 ===
       'board.title': '看板',
+      'board.tab': 'Kanban',
       'kanban.loading': 'dsh-graph 看板加载中…',
       'kanban.error.workspace': '⚠️ 无法确定工作区，已暂停看板请求。',
       'kanban.error.fetch': '看板数据获取失败：',
@@ -532,7 +534,8 @@
       'criteria.feedbackSendFail': '⚠️ 反馈发送失败：',
 
       // === 记忆管理弹窗 ===
-      'memory.title': '🧠 长期记忆管理',
+      'memory.title': '🧠 记忆管理',
+      'memory.btn': '🧠 记忆',
       'memory.deletedByUser': '用户在管理面板手动删除',
       'memory.standingLabel': '常驻记忆(≤200字)',
       'memory.onDemandLabel': '按需记忆(≤500字)',
@@ -845,6 +848,47 @@
 
       // === LiveStrip ===
       'liveStrip.status': '状态：',
+
+      // === 全局设置页（settings.section） ===
+      'profileSettings.unavailableTitle': '当前 DSH profile 未暴露设置服务',
+      'profileSettings.unavailableDesc': '当前 DSH profile 未暴露设置服务（settingsScope 缺失），无法读写 dsh-graph 全局配置。',
+      'profileSettings.reading': '正在读取 dsh-graph 全局配置…',
+      'profileSettings.noNamespace': '此 profile 未暴露 dsh-graph 设置命名空间（可能未连接 Host，或为 memory 模式），无法读写全局配置。',
+      'profileSettings.modeDefault': '（继承系统默认：标准模式）',
+      'profileSettings.modeDefaultDesc': '未配置时默认使用标准模式。',
+      'profileSettings.modeStandard': '标准模式 (standard) - 完整工具能力 + 专属 Persona 覆盖',
+      'profileSettings.modeStandardDesc': '功能完整的编码 Agent，覆盖标准工具池并自动注入 dsh-graph 纪律 Persona。',
+      'profileSettings.modeMinimal': '极简模式 (minimal) - 严格基础 6 工具过滤 (graph-minimal)',
+      'profileSettings.modeMinimalDesc': '仅允许 bash、edit、read、write、graph_report_status、graph_transition，物理屏蔽高级工具与误导。',
+      'profileSettings.legacySuffixListed': '（已存值，当前目录未列出）',
+      'profileSettings.legacySuffixLoading': '（目录读取中…）',
+      'profileSettings.legacySuffixUnavailable': '（目录不可用）',
+      'profileSettings.inheritParent': '（继承父会话）',
+      'profileSettings.inheritSelected': '（继承所选模型/父会话）',
+      'profileSettings.saved': '已保存到当前 profile。',
+      'profileSettings.saveFail': '保存失败：',
+      'profileSettings.desc': '管理 dsh-graph 的 profile 级全局默认：子代理默认 provider/model 与补充提示词。该配置写入当前 DSH profile，跨 workspace 生效；workspace 的 project.yaml 明确配置优先。补充提示词默认为空，workspace 用 default/自定义文本/显式空值选择继承、覆盖或禁用。',
+      'profileSettings.readOnly': '当前为只读（Host 设置不可写）。',
+      'profileSettings.providerLabel': '子代理默认 provider',
+      'profileSettings.providerHint': '仅作缺省值：graph_start_attempt 单次指定的 provider 与 workspace project.yaml 的 executor.provider 更优先；留空继承父会话。目录仅作可选列表（advisory），已存但未列出的旧值保留为固定选项、仍可保存。',
+      'profileSettings.providerLoading': '正在读取当前 Host 的合法 provider 目录…',
+      'profileSettings.providerUnavailable': '无法读取当前 Host 的合法 provider 目录（llm.providers/models 不可用），目录加载失败——已存值保留可选，可先编辑补充提示词。',
+      'profileSettings.modelLabel': '子代理默认 model id',
+      'profileSettings.modelHint': '按所选 provider 过滤；未选 provider 时列出全部目录模型（provider/模型名）。同理仅作缺省值，单次 model 与 project.yaml 的 executor.model 更优先；留空继承父会话。',
+      'profileSettings.modelLoading': '正在读取当前 Host 的合法模型目录…',
+      'profileSettings.modelUnavailable': '无法读取当前 Host 的合法模型目录（llm.providers/models 不可用），目录加载失败——已存值保留可选，可先编辑补充提示词。',
+      'profileSettings.providerFailures': '部分 provider 的模型目录读取失败（{failures}），相关 provider 暂不可选。',
+      'profileSettings.effortLabel': '子代理默认推理档位',
+      'profileSettings.effortHintChoices': '选项来自所选 provider/model 声明的 reasoning effort 能力；留空使用所选模型或父会话的默认值。',
+      'profileSettings.effortHintNone': '所选 provider/model 未声明 reasoning effort 能力；已存旧值会保留，可留空以继承默认值。',
+      'profileSettings.effortHintWaiting': '正在等待 Host 模型目录；已存推理档位保留可选，留空继承默认值。',
+      'profileSettings.modeLabel': '子代理默认执行模式',
+      'profileSettings.modeHint': '受控枚举：标准模式、PTC 模式、极简模式、创造模式。单次派发与 workspace project.yaml 更优先；留空使用系统默认（标准模式）。',
+      'profileSettings.promptLabel': '子代理默认补充提示词',
+      'profileSettings.promptPlaceholder': '可选：注入到每个执行子代理 prompt 的补充内容（默认空）',
+      'profileSettings.promptHint': '默认为空；workspace 覆盖字段 default 继承此项，自定义文本覆盖，显式空值禁用该项全局提示词。',
+      'profileSettings.saving': '保存中…',
+      'profileSettings.save': '保存',
     };
 
     // --- 英文字典 ---
@@ -859,6 +903,7 @@
       'common.search': 'Search',
       'common.loading': 'Loading',
       'common.retry': 'Retry',
+      'common.refresh': 'Refresh',
       'common.confirm': 'Confirm',
       'common.copy': 'Copy',
       'common.open': 'Open',
@@ -898,7 +943,8 @@
       'stage.blocked': 'Blocked',
 
       // === Kanban top/loading ===
-      'board.title': 'Board',
+      'board.title': 'Kanban',
+      'board.tab': 'Kanban',
       'kanban.loading': 'dsh-graph board loading…',
       'kanban.error.workspace': '⚠️ Unable to determine workspace, board requests paused.',
       'kanban.error.fetch': 'Failed to fetch board data: ',
@@ -1377,7 +1423,8 @@
       'criteria.feedbackSendFail': '⚠️ Feedback send failed: ',
 
       // === Memory management modal ===
-      'memory.title': '🧠 Long-term Memory Management',
+      'memory.title': '🧠 Memory Management',
+      'memory.btn': '🧠 Memory',
       'memory.deletedByUser': 'User manually deleted this from the management panel',
       'memory.standingLabel': 'Standing memory (≤200 chars)',
       'memory.onDemandLabel': 'On-demand memory (≤500 chars)',
@@ -1690,6 +1737,47 @@
 
       // === LiveStrip ===
       'liveStrip.status': 'Status: ',
+
+      // === Profile settings section ===
+      'profileSettings.unavailableTitle': 'Settings service not exposed in current DSH profile',
+      'profileSettings.unavailableDesc': 'Settings service not exposed (settingsScope missing), unable to read/write dsh-graph global configuration.',
+      'profileSettings.reading': 'Reading dsh-graph global configuration…',
+      'profileSettings.noNamespace': 'This profile does not expose the dsh-graph settings namespace (may not be connected to Host, or running in memory mode), unable to read/write global configuration.',
+      'profileSettings.modeDefault': '(Inherit system default: Standard mode)',
+      'profileSettings.modeDefaultDesc': 'Uses standard mode by default when unconfigured.',
+      'profileSettings.modeStandard': 'Standard mode (standard) - Full tools capability + Persona override',
+      'profileSettings.modeStandardDesc': 'Full-featured coding Agent covering standard tools with dsh-graph discipline Persona.',
+      'profileSettings.modeMinimal': 'Minimal mode (minimal) - Strict basic 6 tools filter (graph-minimal)',
+      'profileSettings.modeMinimalDesc': 'Only allows bash, edit, read, write, graph_report_status, graph_transition.',
+      'profileSettings.legacySuffixListed': ' (saved value, not listed in current catalog)',
+      'profileSettings.legacySuffixLoading': ' (catalog loading…)',
+      'profileSettings.legacySuffixUnavailable': ' (catalog unavailable)',
+      'profileSettings.inheritParent': '(Inherit parent session)',
+      'profileSettings.inheritSelected': '(Inherit selected model/parent session)',
+      'profileSettings.saved': 'Saved to current profile.',
+      'profileSettings.saveFail': 'Failed to save: ',
+      'profileSettings.desc': 'Manage dsh-graph profile-level global defaults: subagent default provider/model and supplementary prompt. Written to current DSH profile across workspaces; workspace project.yaml configuration takes precedence.',
+      'profileSettings.readOnly': 'Currently read-only (Host settings not writable).',
+      'profileSettings.providerLabel': 'Subagent default provider',
+      'profileSettings.providerHint': 'Default value only: graph_start_attempt single invocation provider and project.yaml executor.provider take precedence; leave blank to inherit parent session.',
+      'profileSettings.providerLoading': 'Reading legal provider catalog from current Host…',
+      'profileSettings.providerUnavailable': 'Unable to read legal provider catalog from current Host (llm.providers/models unavailable). Existing values retained.',
+      'profileSettings.modelLabel': 'Subagent default model id',
+      'profileSettings.modelHint': 'Filtered by selected provider; lists all catalog models when no provider is selected. Single invocation model and project.yaml take precedence; leave blank to inherit.',
+      'profileSettings.modelLoading': 'Reading legal model catalog from current Host…',
+      'profileSettings.modelUnavailable': 'Unable to read legal model catalog from current Host (llm.providers/models unavailable). Existing values retained.',
+      'profileSettings.providerFailures': 'Failed to read model catalog for some providers ({failures}), related providers temporarily unselectable.',
+      'profileSettings.effortLabel': 'Subagent default reasoning effort',
+      'profileSettings.effortHintChoices': 'Options from selected provider/model reasoning effort capabilities; leave blank to use model or parent session default.',
+      'profileSettings.effortHintNone': 'Selected provider/model does not declare reasoning effort capabilities; leave blank to inherit default.',
+      'profileSettings.effortHintWaiting': 'Waiting for Host model catalog; existing reasoning effort retained, leave blank to inherit default.',
+      'profileSettings.modeLabel': 'Subagent default execution mode',
+      'profileSettings.modeHint': 'Controlled enum: standard mode, PTC mode, minimal mode, creative mode. Single invocation and project.yaml take precedence; leave blank for system default.',
+      'profileSettings.promptLabel': 'Subagent default supplementary prompt',
+      'profileSettings.promptPlaceholder': 'Optional: Supplementary prompt injected into each execution subagent (default empty)',
+      'profileSettings.promptHint': 'Default empty; workspace field default inherits this, custom text overrides, explicit empty disables global prompt.',
+      'profileSettings.saving': 'Saving…',
+      'profileSettings.save': 'Save',
     };
 
     // --- locale 集成辅助函数 ---

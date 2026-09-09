@@ -1615,7 +1615,7 @@
             intervalSec: refreshIntervalSec,
             onTriggerRefresh: load,
           }),
-          h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, dgT("common.retry")),
+          h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, dgT("common.refresh")),
           // g-187：顶部标签筛选弹层入口
           h("button", {
             style: { ...tbBtnStyle, ...(tagFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
@@ -1637,7 +1637,7 @@
             className: "dg-btn",
             title: dgT("memory.title"),
             onClick: () => setShowMemoryModal(true),
-          }, dgT("memory.title").split(" ").pop()),
+          }, dgT("memory.btn")),
           // g-183: 项目知识库面板入口
           h("button", {
             style: tbBtnStyle,

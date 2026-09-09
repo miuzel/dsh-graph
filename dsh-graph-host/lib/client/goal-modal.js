@@ -413,7 +413,7 @@
             style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
             title: showAdd ? dgT("tags.collapse") : dgT("tags.addTooltip"),
             onClick: () => { setShowAdd(!showAdd); setNote(null); },
-          }, showAdd ? dgT("common.cancel") : "＋ 添加标签")),
+          }, showAdd ? dgT("common.cancel") : dgT("tags.add"))),
         h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, minWidth: 0, maxWidth: "100%" } },
           tags.length
             ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: dgT("tags.removeTooltip"), disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×"))

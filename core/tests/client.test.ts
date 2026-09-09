@@ -3005,7 +3005,7 @@ test("g-191 client：设置页与重新执行均使用受控模式枚举并显�
   const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings-modal.js"), "utf8");
   assert.match(settings, /subagentMode/);
   assert.match(settings, /htmlFor: modeId/);
-  assert.match(settings, /id: modeId, "aria-label": "子代理默认执行模式"/);
+  assert.match(settings, /id: modeId, "aria-label": (dgT\("profileSettings\.modeLabel"\)|"子代理默认执行模式")/);
   assert.match(settings, /dg-global-subagent-mode-/);
   assert.match(modal, /htmlFor: modeId/);
   assert.match(modal, /id: modeId,/);

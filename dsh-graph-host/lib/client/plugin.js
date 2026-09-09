@@ -207,7 +207,12 @@
         );
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
-            { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: dgT("board.title") },
+            {
+              name: "conversation.view",
+              id: "dsh-graph-kanban",
+              order: 80,
+              get label() { return dgT("board.title"); },
+            },
             (props) => h(KanbanView, props),
           ),
         );
