@@ -209,6 +209,82 @@
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
+    // g-260：目标描述组件（只读态↔编辑态切换，就地 markdown 编辑）
+    function DescriptionBox(props) {
+      const { goalId, description, onRefresh, extra } = props;
+      const [editing, setEditing] = React.useState(false);
+      const [text, setText] = React.useState(description ?? "");
+      const [note, setNote] = React.useState(null);
+      const [loading, setLoading] = React.useState(false);
+
+      React.useEffect(() => { setText(description ?? ""); }, [description]);
+
+      const doSave = async () => {
+        setLoading(true);
+        setNote(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/set-description"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, description: text }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setNote(dgT("description.saved"));
+            setEditing(false);
+            onRefresh?.();
+          } else {
+            setNote(dgT("description.saveFail") + (data.error || dgT("drag.unknownError")));
+          }
+        } catch (e) {
+          setNote(dgT("description.requestFail") + String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const doCancel = () => {
+        setEditing(false);
+        setText(description ?? "");
+        setNote(null);
+      };
+      const hasContent = (description ?? "").trim().length > 0;
+
+      return h("div", { style: S.modalSection },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+          h("div", { style: S.modalH }, dgT("section.description")),
+          !editing
+            ? h("button", {
+                style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
+                title: dgT("description.editInPlace"),
+                onClick: () => { setEditing(true); setText(description ?? ""); setNote(null); },
+              }, hasContent ? dgT("description.edit") : dgT("description.editEmpty"))
+            : null),
+        editing
+          ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+              h("textarea", {
+                style: { ...S.promptInput, minHeight: 80, resize: "vertical", fontFamily: "inherit", fontSize: 12 },
+                value: text,
+                onChange: (e) => setText(e.target.value),
+                placeholder: dgT("description.placeholder"),
+                autoFocus: true,
+              }),
+              h("div", { style: { display: "flex", gap: 6 } },
+                h("button", {
+                  style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
+                  disabled: loading, onClick: doSave,
+                }, loading ? dgT("common.saving") : dgT("description.save")),
+                h("button", {
+                  style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
+                  disabled: loading, onClick: doCancel,
+                }, dgT("common.cancel"))))
+          : h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
+              hasContent
+                ? h("div", { style: { whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.5, padding: "4px 0" } }, description)
+                : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("description.empty"))),
+        extra ?? null,
+        note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
+    }
+
     // g-150：评论组件（历史查看 + 追加）
     function CommentsBox(props) {
       const { goalId, comments, onRefresh } = props;
@@ -596,8 +672,8 @@
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
           h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: meta.tags ?? props.tags, onChange: () => { load(); props.onTagsChanged?.(); } }),
-          desc != null ? sectionBlock("d", dgT("section.description"), desc,
-            h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose })) : null,
+          desc != null ? h(DescriptionBox, { key: "description", goalId: props.id, description: desc, onRefresh: load,
+            extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose }) }) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           // g-170：「✏️ 判据」编辑入口放在小节标题处（负责人 2026-08-25 指示），点击打开判据编辑弹窗
           crit != null ? sectionBlock("c", dgT("section.criteria"), crit,

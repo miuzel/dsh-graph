@@ -160,6 +160,15 @@
 
       // === 目标描述段 ===
       'section.description': '📋 目标描述',
+      'description.editInPlace': '就地编辑目标描述',
+      'description.edit': '✏️ 编辑',
+      'description.editEmpty': '📝 编辑描述',
+      'description.placeholder': '输入目标描述…（支持 markdown）',
+      'description.save': '💾 保存',
+      'description.empty': '（无描述）',
+      'description.saved': '✅ 描述已保存',
+      'description.saveFail': '⚠️ 保存失败：',
+      'description.requestFail': '⚠️ 请求失败：',
       'section.criteria': '✅ 质量判据',
       'section.criteriaEditTooltip': '编辑质量判据（保存后清空该目标已有勾选）',
       'section.infoCollect': '🔎 信息收集',
@@ -996,6 +1005,15 @@
 
       // === Sections ===
       'section.description': '📋 Goal Description',
+      'description.editInPlace': 'Edit goal description in place',
+      'description.edit': '✏️ Edit',
+      'description.editEmpty': '📝 Edit description',
+      'description.placeholder': 'Enter goal description… (Markdown supported)',
+      'description.save': '💾 Save',
+      'description.empty': '(No description)',
+      'description.saved': '✅ Description saved',
+      'description.saveFail': '⚠️ Save failed: ',
+      'description.requestFail': '⚠️ Request failed: ',
       'section.criteria': '✅ Quality Criteria',
       'section.criteriaEditTooltip': 'Edit quality criteria (clears existing checks after save)',
       'section.infoCollect': '🔎 Information Collection',
