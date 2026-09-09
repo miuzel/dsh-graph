@@ -1485,6 +1485,29 @@ test("g-168 活跃 attempt 回归：历史 completed/空闲不隐藏入口", () 
   assert.equal(isActive([{ executor: "agent:executor", result: "pending", status_line: "正在执行定义润色" }]), true);
 });
 
+test("g-247 客户端 formatStatusWithLifecycle：结构化状态优先，缺失时回退 legacy 文本", () => {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  const match = /function formatStatusWithLifecycle\(statusLine, running, blocked, statusState\)\s*\{[\s\S]*?\n    \}/.exec(helpers);
+  assert.ok(match, "找到支持 statusState 的生命周期格式化函数");
+  const format = new Function(`return (${match[0]})`)();
+
+  const structuredDone = format("没有完成关键词", true, false, "done");
+  assert.equal(structuredDone.isDone, true);
+  assert.equal(structuredDone.isRunning, false);
+  const structuredWorking = format("已完成，等待复核", true, false, "working");
+  assert.equal(structuredWorking.isDone, false);
+  assert.equal(structuredWorking.isRunning, true);
+  const negatedWorking = format("尚未完成", true, false, "working");
+  assert.equal(negatedWorking.isDone, false);
+  const englishWorking = format("fixed the failing test", true, false, "working");
+  assert.equal(englishWorking.isError, false);
+
+  // 不传结构化字段时保留旧关键词启发式行为。
+  assert.equal(format("已完成", true, false).isDone, true);
+  assert.equal(format("阻塞：等待依赖", true, false).isBlocked, true);
+  assert.equal(format("构建失败", true, false).isError, true);
+});
+
 test("g-168 复制失败 fallback：初始隐藏且只在失败后显示可复制请求", () => {
   const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
   assert.ok(/const \[fallback, setFallback\] = React\.useState\(false\)/.test(actions));
