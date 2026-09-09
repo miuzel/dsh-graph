@@ -3463,3 +3463,94 @@ test("g-244 生成物一致：client.js 含真实 resolver 且与源模块同源
   assert.match(bundle, /\\\/\\\.worktrees\\\//);
   assert.doesNotMatch(bundle, /if \(lastGoodWorkspace\) return lastGoodWorkspace/);
 });
+
+// ===== g-246：看板设置弹窗未保存修改脏状态——关闭前三条路径统一拦截确认 =====
+
+test("g-246 源契约：settings-modal.js 提供规范化脏判定函数且所有关闭路径统一走 requestClose 拦截", () => {
+  const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  // 脏判定函数存在（规范化消除假阳性 + 深比较）
+  assert.match(modal, /function normalizeSettingsDraft\(/);
+  assert.match(modal, /function settingsDraftIsDirty\(baseline, form, refreshIntervalInput\)/);
+  // 统一拦截函数存在，确认文案明确
+  assert.match(modal, /const requestClose = \(\) => \{/);
+  assert.match(modal, /window\.confirm\("有未保存的修改，确认放弃？"\)/);
+  // saving 中阻止关闭（避免保存与关闭确认竞态）
+  assert.match(modal, /if \(saving\) \{ setNote\(\{ kind: "err", text: "正在保存，请稍候…" \}\); return; \}/);
+  // ✕（loading/失败/主表单 3 处）+ 底部「关闭」按钮全部走同一 requestClose
+  const intercepted = modal.match(/onClick: requestClose/g) ?? [];
+  assert.equal(intercepted.length, 4, "✕×3 + 关闭按钮共 4 处全部走 requestClose");
+  // backdrop 关闭路径也走 requestClose（经 useBackdropClose guard）
+  assert.match(modal, /useBackdropClose\(requestClose\)/);
+  // 不再有任何裸 onClick: props.onClose 关闭路径
+  const bare = modal.match(/onClick: props\.onClose/g) ?? [];
+  assert.equal(bare.length, 0, "无裸 onClick: props.onClose 关闭路径");
+  // 打开时以服务端快照归位基线
+  assert.match(modal, /baselineRef\.current = normalizeSettingsDraft\(data, String\(getRefreshInterval\(\)\)\);/);
+  // 保存成功路径归位基线（取纠偏后刷新间隔）并直接 onClose 跳过拦截
+  assert.match(modal, /baselineRef\.current = normalizeSettingsDraft\(data\.config \?\? form, String\(correctedInterval\)\);/);
+  assert.match(modal, /props\.onSaved\?\.\(\);\s*\n\s*props\.onClose\?\.\(\);/);
+});
+
+test("g-246 行为模拟：规范化深比较消除假阳性（null↔\"\"、lanes 数字↔字符串、三态缺省）且检出真实修改", () => {
+  const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  const fnStart = modal.indexOf("function normalizeSettingsDraft(");
+  const fnEnd = modal.indexOf("function SettingsModal(", fnStart);
+  assert.ok(fnStart > 0 && fnEnd > fnStart, "settings-modal.js 含完整脏判定函数段");
+  const ctx: any = {};
+  new vm.Script(`(function () {\n${modal.slice(fnStart, fnEnd)}\nglobalThis.__norm = normalizeSettingsDraft;\nglobalThis.__dirty = settingsDraftIsDirty;\n})()`).runInNewContext(ctx);
+  const norm = ctx.__norm as any;
+  const dirty = ctx.__dirty as any;
+
+  // 服务端快照（null 缺省 + lanes 数字）作为基线
+  const server = {
+    executor: { provider: "", model: "", reasoning_effort: "", mode: "" },
+    defaults: { review: { reviewer: "", prompt: null }, pk: { lanes: 1, sandbox: "" } },
+    supervisor: { automation: { scope_planning: null, release: "human" } },
+    prompt_overrides: { subagent: { state: "default", value: null } },
+  };
+  const baseline = norm(server, "15");
+
+  // 判据 7：仅打开未编辑——表单形态（lanes 数字、null prompt）与服务端一致 → 不脏
+  assert.equal(dirty(baseline, server, "15"), false, "未编辑不脏");
+  // lanes 数字 1（服务端）与表单字符串 "1"（number input onChange 写入字符串）→ 规范化后不脏
+  const lanesStr = JSON.parse(JSON.stringify(server));
+  lanesStr.defaults.pk.lanes = "1";
+  assert.equal(dirty(baseline, lanesStr, "15"), false, "lanes 数字↔字符串规范化后不脏（无假阳性）");
+  // review.prompt 服务端 null 与表单 "" → 不脏
+  const promptEmpty = JSON.parse(JSON.stringify(server));
+  promptEmpty.defaults.review.prompt = "";
+  assert.equal(dirty(baseline, promptEmpty, "15"), false, "null↔空串规范化后不脏（无假阳性）");
+
+  // 判据 2：任一字段真实修改 → 脏
+  const m1 = JSON.parse(JSON.stringify(server)); m1.executor.model = "m-x";
+  assert.equal(dirty(baseline, m1, "15"), true, "修改 model → 脏");
+  const m2 = JSON.parse(JSON.stringify(server)); m2.defaults.pk.lanes = "3";
+  assert.equal(dirty(baseline, m2, "15"), true, "修改 lanes → 脏");
+  const m3 = JSON.parse(JSON.stringify(server)); m3.defaults.review.prompt = "复核提示";
+  assert.equal(dirty(baseline, m3, "15"), true, "填写 review.prompt → 脏");
+  const m4 = JSON.parse(JSON.stringify(server)); m4.supervisor.automation.release = "ai";
+  assert.equal(dirty(baseline, m4, "15"), true, "修改 automation → 脏");
+  const m5 = JSON.parse(JSON.stringify(server)); m5.prompt_overrides.subagent = { state: "override", value: "自定义文本" };
+  assert.equal(dirty(baseline, m5, "15"), true, "三态切 override + textarea 文本 → 脏");
+  const m6 = JSON.parse(JSON.stringify(server)); m6.prompt_overrides.subagent = { state: "disable", value: null };
+  assert.equal(dirty(baseline, m6, "15"), true, "三态切 disable → 脏");
+  // g-214：刷新间隔输入（点保存才持久化）计入脏
+  assert.equal(dirty(baseline, server, "30"), true, "修改刷新间隔输入 → 脏");
+
+  // 判据 8：loading/失败分支（无表单）不脏
+  assert.equal(dirty(baseline, null, "15"), false, "无表单不脏");
+  assert.equal(dirty(null, server, "15"), false, "无基线不脏");
+  // override 态 value null 与 "" 规范化一致（不脏回弹）
+  const ovNull = JSON.parse(JSON.stringify(server)); ovNull.prompt_overrides.subagent = { state: "override", value: null };
+  const ovEmpty = JSON.parse(JSON.stringify(server)); ovEmpty.prompt_overrides.subagent = { state: "override", value: "" };
+  assert.equal(JSON.stringify(norm(ovNull, "15")), JSON.stringify(norm(ovEmpty, "15")), "override null↔空串规范化一致");
+});
+
+test("g-246 生成 bundle 契约：client.js 同步含脏判定与统一拦截", () => {
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
+  assert.match(bundle, /function normalizeSettingsDraft\(/);
+  assert.match(bundle, /function settingsDraftIsDirty\(/);
+  assert.match(bundle, /window\.confirm\("有未保存的修改，确认放弃？"\)/);
+  assert.match(bundle, /useBackdropClose\(requestClose\)/);
+});

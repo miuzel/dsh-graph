@@ -7908,6 +7908,38 @@ window.__ModuleLoader__.load({
     // 子代理补充提示词 workspace 覆盖（三态：default 继承 / 自定义覆盖 / 显式空禁用）。
     // 保存走 PUT/POST /api/dsh-graph/settings（原子写；保留注释/未知键；失败不半写入）。
     let settingsModalModeInstanceSeq = 0;
+    // ===== g-246：未保存修改脏状态判定（规范化后深比较，消除服务端 null 与表单默认 ""、
+    // lanes 数字/字符串差异造成的假阳性；g-214 刷新间隔输入计入脏，g-224 实时显示开关即时生效不计入脏） =====
+    function normalizeSettingsDraft(form, refreshIntervalInput) {
+      const normStr = (v) => (v === null || v === undefined ? "" : String(v));
+      const lanesRaw = form?.defaults?.pk?.lanes;
+      const lanesNum = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
+      const auto = {};
+      for (const [k, v] of Object.entries(form?.supervisor?.automation ?? {})) {
+        auto[k] = (v === "human" || v === "ai") ? v : null;
+      }
+      const po = form?.prompt_overrides?.subagent ?? { state: "default", value: null };
+      const poState = (po.state === "override" || po.state === "disable") ? po.state : "default";
+      return {
+        executor: {
+          provider: normStr(form?.executor?.provider),
+          model: normStr(form?.executor?.model),
+          reasoning_effort: normStr(form?.executor?.reasoning_effort),
+          mode: normStr(form?.executor?.mode),
+        },
+        defaults: {
+          review: { reviewer: normStr(form?.defaults?.review?.reviewer), prompt: normStr(form?.defaults?.review?.prompt) },
+          pk: { lanes: Number.isInteger(lanesNum) ? lanesNum : normStr(lanesRaw), sandbox: normStr(form?.defaults?.pk?.sandbox) },
+        },
+        supervisor: { automation: auto },
+        prompt_overrides: { subagent: { state: poState, value: poState === "override" ? normStr(po.value) : "" } },
+        refreshInterval: String(refreshIntervalInput ?? ""),
+      };
+    }
+    function settingsDraftIsDirty(baseline, form, refreshIntervalInput) {
+      if (!baseline || !form) return false;
+      return JSON.stringify(normalizeSettingsDraft(form, refreshIntervalInput)) !== JSON.stringify(baseline);
+    }
     function SettingsModal(props) {
       const modeIdRef = React.useRef(null);
       if (modeIdRef.current == null) modeIdRef.current = `dg-workspace-subagent-mode-${++settingsModalModeInstanceSeq}`;
@@ -7925,6 +7957,18 @@ window.__ModuleLoader__.load({
       const [intervalWarn, setIntervalWarn] = React.useState(null);
       // g-224：实时代理输出流式显示开关（localStorage 持久化，即时生效）
       const liveDisplayOn = useLiveDisplayEnabled();
+
+      // g-246：打开时以服务端下发快照为基线（含刷新间隔初始值），关闭前深比较草稿判定脏
+      const baselineRef = React.useRef(null);
+      // g-246：统一关闭拦截——脏草稿先 window.confirm 确认；saving 中阻止关闭避免竞态；
+      // 保存成功路径直接走 props.onClose?.() 不经此函数（不二次弹窗）。
+      const requestClose = () => {
+        if (saving) { setNote({ kind: "err", text: "正在保存，请稍候…" }); return; }
+        if (settingsDraftIsDirty(baselineRef.current, form, refreshIntervalInput)) {
+          if (!window.confirm("有未保存的修改，确认放弃？")) return;
+        }
+        props.onClose?.();
+      };
 
       const handleIntervalChange = (val) => {
         setRefreshIntervalInput(val);
@@ -7963,6 +8007,7 @@ window.__ModuleLoader__.load({
           if (!r.ok) throw new Error(data?.error || ("请求失败 " + r.status));
           setForm(data);
           setConfigFile(data.configFile ?? null);
+          baselineRef.current = normalizeSettingsDraft(data, String(getRefreshInterval()));
         } catch (e) {
           setError("加载配置失败：" + String(e?.message ?? e));
         } finally { setLoading(false); }
@@ -7983,7 +8028,8 @@ window.__ModuleLoader__.load({
       }, []);
 
       // g-181：backdrop 误关保护——组件顶部调用（多分支共享同一 guard，保持 Hook 顺序稳定）
-      const backdropGuard = useBackdropClose(props.onClose);
+      // g-246：backdrop 关闭走统一 requestClose 拦截（脏草稿先确认）
+      const backdropGuard = useBackdropClose(requestClose);
 
       const save = async () => {
         if (!form) return;
@@ -8024,6 +8070,8 @@ window.__ModuleLoader__.load({
           const data = await r.json();
           if (!r.ok) throw new Error(data?.error || ("保存失败 " + r.status));
           setForm(data.config ?? form); // 用服务端回填的最新配置刷新
+          // g-246：保存成功即归位基线（刷新间隔取纠偏后值），随后直接关闭跳过拦截
+          baselineRef.current = normalizeSettingsDraft(data.config ?? form, String(correctedInterval));
           props.onSaved?.();
           props.onClose?.();
         } catch (e) {
@@ -8034,14 +8082,14 @@ window.__ModuleLoader__.load({
       if (loading) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-            h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
             h("div", { style: { ...S.meta, marginTop: 8 } }, "正在读取配置…")));
       }
       if (!form) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
-            h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
+            h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
             h("div", { style: S.modalH }, "看板设置"),
             error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 8 } }, error) : null,
             h("button", { style: { ...S.btn, marginTop: 10 }, className: "dg-btn", onClick: load }, "重试")));
@@ -8172,7 +8220,7 @@ window.__ModuleLoader__.load({
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
-          h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
+          h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
           h("div", { style: S.modalH }, "看板设置"),
           h("div", { style: S.meta }, "编辑当前 workspace 的 .dsh-graph/project.yaml 安全配置；写回保留未知键与注释。"),
           // att-002：配置文件操作入口——复用 goal-modal 的 Host openPath/copyText/toast/fallback 机制
@@ -8308,7 +8356,7 @@ window.__ModuleLoader__.load({
           h("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 6 } },
             h("button", { style: { ...S.btn, padding: "6px 16px", fontSize: 13 }, className: "dg-btn", disabled: saving, onClick: save },
               saving ? "保存中…" : "保存"),
-            h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: props.onClose }, "关闭"),
+            h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: requestClose }, "关闭"),
             note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "var(--dsw-alias-label-primary, #6ee7a0)" : "var(--dsw-alias-state-error-primary, #f08080)", marginLeft: 8 } }, note.text) : null),
           error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 6 } }, error) : null));
     }
