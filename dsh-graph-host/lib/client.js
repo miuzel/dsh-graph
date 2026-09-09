@@ -5310,7 +5310,7 @@ window.__ModuleLoader__.load({
                 h("div", { key },
                   h("label", { style: { fontSize: 11, opacity: 0.8 } }, label),
                   h("textarea", {
-                    style: { ...S.promptInput, minHeight: 36, resize: "vertical", fontFamily: "inherit", fontSize: 12, marginTop: 2, width: "100%", boxSizing: "border-box" },
+                    style: { ...S.promptInput, flex: "0 0 auto", minHeight: 36, maxHeight: 240, resize: "vertical", fontFamily: "inherit", fontSize: 12, marginTop: 2, width: "100%", boxSizing: "border-box" },
                     value: form[key],
                     onChange: (e) => setForm({ ...form, [key]: e.target.value }),
                     placeholder: label,
@@ -5389,7 +5389,7 @@ window.__ModuleLoader__.load({
         editing
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
               h("textarea", {
-                style: { ...S.promptInput, minHeight: 60, resize: "vertical", fontFamily: "inherit", fontSize: 12 },
+                style: { ...S.promptInput, flex: "0 0 auto", minHeight: 60, maxHeight: 240, resize: "vertical", fontFamily: "inherit", fontSize: 12, width: "100%", boxSizing: "border-box" },
                 value: text,
                 onChange: (e) => setText(e.target.value),
                 placeholder: dgT("directive.placeholder"),
@@ -5473,7 +5473,7 @@ window.__ModuleLoader__.load({
         editing
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
               h("textarea", {
-                style: { ...S.promptInput, minHeight: 80, resize: "vertical", fontFamily: "inherit", fontSize: 12 },
+                style: { ...S.promptInput, flex: "0 0 auto", minHeight: 80, maxHeight: 320, resize: "vertical", fontFamily: "inherit", fontSize: 12, width: "100%", boxSizing: "border-box" },
                 value: text,
                 onChange: (e) => setText(e.target.value),
                 placeholder: dgT("description.placeholder"),
