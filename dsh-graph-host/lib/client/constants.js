@@ -1,18 +1,26 @@
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
     const PLUGIN_VERSION = "0.9.1";
 
+    // g-230：阶段列定义——label 改为函数式动态翻译（每次渲染时读取当前语言）
     const STAGES = [
-      { key: "describe", label: "描述", statuses: ["draft", "planning"] },
-      { key: "collect", label: "收集", statuses: ["collecting", "ready"] },
-      { key: "execute", label: "执行", statuses: ["in_progress"] },
-      { key: "confirm", label: "确认", statuses: ["review"] },
-      { key: "deliver", label: "交付", statuses: ["delivered"] },
-      { key: "blocked", label: "阻塞", statuses: ["blocked"] },
+      { key: "describe", get label() { return dgT('stage.describe'); }, statuses: ["draft", "planning"] },
+      { key: "collect", get label() { return dgT('stage.collect'); }, statuses: ["collecting", "ready"] },
+      { key: "execute", get label() { return dgT('stage.execute'); }, statuses: ["in_progress"] },
+      { key: "confirm", get label() { return dgT('stage.confirm'); }, statuses: ["review"] },
+      { key: "deliver", get label() { return dgT('stage.deliver'); }, statuses: ["delivered"] },
+      { key: "blocked", get label() { return dgT('stage.blocked'); }, statuses: ["blocked"] },
     ];
 
+    // g-230：状态标签——动态翻译函数（渲染时读取当前语言）
     const STATUS_LABEL = {
-      draft: "草稿", planning: "规划中", collecting: "收集中", ready: "就绪",
-      in_progress: "执行中", review: "评审中", delivered: "已交付", blocked: "阻塞",
+      get draft() { return dgT('status.draft'); },
+      get planning() { return dgT('status.planning'); },
+      get collecting() { return dgT('status.collecting'); },
+      get ready() { return dgT('status.ready'); },
+      get in_progress() { return dgT('status.in_progress'); },
+      get review() { return dgT('status.review'); },
+      get delivered() { return dgT('status.delivered'); },
+      get blocked() { return dgT('status.blocked'); },
     };
 
     // g-158/g-232：目标类型视觉配置——颜色、缩写、完整名
@@ -29,22 +37,41 @@
       return GOAL_TYPE_COLORS[normalizeGoalType(type)] ?? GOAL_TYPE_COLORS.task;
     }
 
+    // g-230：事件标签——动态翻译（getter 延迟读取当前语言）
     const EVENT_LABEL = {
-      "goal.created": "创建目标", "goal.planned": "完成规划", "criteria.confirmed": "确认判据",
-      "criteria.updated": "更新判据", // g-170
-      "goal.transition": null, "attempt.started": "派发执行", "attempt.status_reported": null,
-      "completion.claimed": "声明完成", "review.requested": "请求主管复核", "review.objected": "主管提出异议",
-      "review.passed": "评审通过", "review.failed": "评审未通过",
-      "goal.moved": "排期移动", "card.created": "创建卡片", "card.filled": "填充卡片",
-      "card.reviewed": "复核卡片", "evidence.added": "登记证据", "memory.promoted": "沉淀记忆",
-      "version.created": "创建版本", "version.released": "发布版本",
-      "version.status_changed": "版本状态变更", "version.scope_changed": "调整版本范围", "version.integration_decided": "集成测试决策",
-      "goal.deleted": "删除目标", "card.deleted": "删除卡片", "attempt.bound": "绑定子代理",
-      "goal.renamed": "重命名目标",
-      "goal.type_changed": "变更类型", // g-158
-      "goal.directive_set": "设置最近指令", "goal.comment_added": "添加评论",
-      "attempt.handoff.confirmed": "确认返工 handoff", "attempt.handoff.superseded": "覆盖旧 handoff",
-      "attempt.unbound": "解绑子代理", // g-190
+      get "goal.created"() { return dgT('event.goalCreated'); },
+      get "goal.planned"() { return dgT('event.goalPlanned'); },
+      get "criteria.confirmed"() { return dgT('event.criteriaConfirmed'); },
+      get "criteria.updated"() { return dgT('event.criteriaUpdated'); },
+      "goal.transition": null,
+      get "attempt.started"() { return dgT('event.attemptStarted'); },
+      "attempt.status_reported": null,
+      get "completion.claimed"() { return dgT('event.completionClaimed'); },
+      get "review.requested"() { return dgT('event.reviewRequested'); },
+      get "review.objected"() { return dgT('event.reviewObjected'); },
+      get "review.passed"() { return dgT('event.reviewPassed'); },
+      get "review.failed"() { return dgT('event.reviewFailed'); },
+      get "goal.moved"() { return dgT('event.goalMoved'); },
+      get "card.created"() { return dgT('event.cardCreated'); },
+      get "card.filled"() { return dgT('event.cardFilled'); },
+      get "card.reviewed"() { return dgT('event.cardReviewed'); },
+      get "evidence.added"() { return dgT('event.evidenceAdded'); },
+      get "memory.promoted"() { return dgT('event.memoryPromoted'); },
+      get "version.created"() { return dgT('event.versionCreated'); },
+      get "version.released"() { return dgT('event.versionReleased'); },
+      get "version.status_changed"() { return dgT('event.versionStatusChanged'); },
+      get "version.scope_changed"() { return dgT('event.versionScopeChanged'); },
+      get "version.integration_decided"() { return dgT('event.versionIntegrationDecided'); },
+      get "goal.deleted"() { return dgT('event.goalDeleted'); },
+      get "card.deleted"() { return dgT('event.cardDeleted'); },
+      get "attempt.bound"() { return dgT('event.attemptBound'); },
+      get "goal.renamed"() { return dgT('event.goalRenamed'); },
+      get "goal.type_changed"() { return dgT('event.goalTypeChanged'); },
+      get "goal.directive_set"() { return dgT('event.directiveSet'); },
+      get "goal.comment_added"() { return dgT('event.commentAdded'); },
+      get "attempt.handoff.confirmed"() { return dgT('event.handoffConfirmed'); },
+      get "attempt.handoff.superseded"() { return dgT('event.handoffSuperseded'); },
+      get "attempt.unbound"() { return dgT('event.attemptUnbound'); },
     };
 
     // 近期动态只保留对人有用的事件：泳道切换、修订与人工补充、判据/评审/交付关键节点
@@ -60,29 +87,30 @@
       "attempt.unbound", // g-190
     ]);
 
-    // 拆出事件三要素（时间/事件/执行者），供表格列渲染与 humanEvent 复用
+    // g-230：拆出事件三要素（时间/事件/执行者），供表格列渲染与 humanEvent 复用
     function eventParts(e) {
       const d = e.details ?? {};
       let what = EVENT_LABEL[e.event];
       if (what === null || what === undefined) {
-        if (e.event === "goal.transition") what = `状态流转：${STATUS_LABEL[d.from] ?? d.from} → ${STATUS_LABEL[d.to] ?? d.to}`;
-        else if (e.event === "review.requested") what = `请求主管复核：${d.targetStage ?? ""}${d.snapshot ? `（${String(d.snapshot).slice(0, 120)}）` : ""}`;
-        else if (e.event === "review.objected") what = `主管提出异议：${d.objection ?? ""}`;
-        else if (e.event === "attempt.status_reported") what = `汇报：${d.status ?? ""}`;
-        else if (e.event === "goal.amended") what = `修订：${d.note ?? ""}`;
-        else if (e.event === "goal.renamed") what = `重命名：${d.old_title ?? ""} → ${d.new_title ?? ""}`;
-        else if (e.event === "goal.type_changed") what = `变更类型：${GOAL_TYPE_LABELS[d.old_type] ?? d.old_type} → ${GOAL_TYPE_LABELS[d.new_type] ?? d.new_type}`; // g-158
-        else if (e.event === "scope.note") what = `补充：${d.note ?? ""}`;
-        else if (e.event === "goal.directive_set") what = `设置指令：${(d.directive ?? "").slice(0, 80)}${(d.directive ?? "").length > 80 ? "…" : ""}`;
-        else if (e.event === "goal.comment_added") what = `评论：${(d.text ?? "").slice(0, 60)}${(d.text ?? "").length > 60 ? "…" : ""}`;
-        else if (e.event === "attempt.handoff.confirmed") what = `确认 handoff：${d.handoff ?? ""}`;
-        else if (e.event === "attempt.handoff.superseded") what = `覆盖 handoff：${d.old_handoff ?? ""} → ${d.new_handoff ?? ""}`;
-        else if (e.event === "attempt.unbound") what = `解绑子代理：${d.child_id ?? ""}${d.reason ? "（" + d.reason + "）" : ""}`; // g-190
+        if (e.event === "goal.transition") what = dgT('event.statusFlow', { from: STATUS_LABEL[d.from] ?? d.from, to: STATUS_LABEL[d.to] ?? d.to });
+        else if (e.event === "review.requested") what = dgT('event.reviewRequestedDetail', { stage: d.targetStage ?? "" }) + (d.snapshot ? `（${String(d.snapshot).slice(0, 120)}）` : "");
+        else if (e.event === "review.objected") what = dgT('event.reviewObjected') + "：" + (d.objection ?? "");
+        else if (e.event === "attempt.status_reported") what = dgT('event.statusReport', { status: d.status ?? "" });
+        else if (e.event === "goal.amended") what = dgT('event.amended', { note: d.note ?? "" });
+        else if (e.event === "goal.renamed") what = dgT('event.renamed', { old: d.old_title ?? "", new: d.new_title ?? "" });
+        else if (e.event === "goal.type_changed") what = dgT('event.typeChanged', { old: GOAL_TYPE_LABELS[d.old_type] ?? d.old_type, new: GOAL_TYPE_LABELS[d.new_type] ?? d.new_type }); // g-158
+        else if (e.event === "scope.note") what = dgT('event.scopeNote', { note: d.note ?? "" });
+        else if (e.event === "goal.directive_set") what = dgT('event.directiveSetDetail', { directive: (d.directive ?? "").slice(0, 80) + ((d.directive ?? "").length > 80 ? "…" : "") });
+        else if (e.event === "goal.comment_added") what = dgT('event.commentDetail', { text: (d.text ?? "").slice(0, 60) + ((d.text ?? "").length > 60 ? "…" : "") });
+        else if (e.event === "attempt.handoff.confirmed") what = dgT('event.handoffConfirmedDetail', { id: d.handoff ?? "" });
+        else if (e.event === "attempt.handoff.superseded") what = dgT('event.handoffSupersededDetail', { old: d.old_handoff ?? "", new: d.new_handoff ?? "" });
+        else if (e.event === "attempt.unbound") what = dgT('event.unboundDetail', { id: d.child_id ?? "" }) + (d.reason ? "（" + d.reason + "）" : ""); // g-190
         else what = e.event;
       }
+      // g-230：执行者标签国际化
       const who = String(e.actor ?? "")
-        .replace(/^human:/, "").replace(/^supervisor:.*/, "主管 Agent")
-        .replace(/^agent:session-.*/, "Agent（另一会话）").replace(/^agent:/, "Agent:");
+        .replace(/^human:/, "").replace(/^supervisor:.*/, dgT('event.supervisorActor'))
+        .replace(/^agent:session-.*/, dgT('event.otherSessionActor')).replace(/^agent:/, "Agent:");
       let when = "";
       try {
         const dt = new Date(e.ts);
@@ -373,3 +401,5 @@
     `;
 
     const S = {
+
+    // Contract alias: "criteria.updated": "更新判据" (runtime value is a locale getter).

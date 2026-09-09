@@ -165,9 +165,9 @@
         style: { ...S.btn, fontSize: 11, padding: "0 6px", marginLeft: 6, flexShrink: 0 },
         className: "dg-btn dg-session-link",
         type: "button",
-        title: "跳转到子代理会话",
+        title: dgT('card.goToSession'),
         onClick: (e) => { e.stopPropagation(); void openChildSession(parentSessionId, childId); },
-      }, label ?? "↗ 会话");
+      }, label ?? dgT("card.goToSession"));
     }
     return {
       name: "dsh-graph",
@@ -181,6 +181,24 @@
         // workspaces 服务经 ctx.get(name) 可选查找即可取到（runner 的 ctx.get 方法不要求 inject 声明，
         // 注入门禁只拦 ctx.workspaces 属性访问；workspaces 由 client-runtime `ctx.reflect.provide` 提供）
         workspacesRt = ctx.get?.("workspaces") ?? null;
+        // g-230：注册 i18n 命名空间并创建全局翻译函数 t。
+        // locale 服务通过 ctx.get 可选获取（核心内置服务但不列为硬 inject 以免阻断旧 profile）。
+        const localeService = ctx.get?.("locale") ?? ctx.locale ?? null;
+        const localeBind = registerI18n({ locale: localeService });
+        dgT = createTranslator(localeBind);
+        // g-230：监听语言切换——locale/change 事件触发时重建翻译函数（locale.bind 返回稳定引用，
+        // 但字典注册不触发 locale/change；仅活跃语言切换时需要响应）。
+        if (localeService && typeof ctx.on === "function") {
+          ctx.on('locale/change', () => {
+            // bind 返回稳定引用（已注册的命名空间），翻译函数自动读取当前活跃语言；
+            // 此处仅在语言切换时强制刷新 React 渲染（通过状态广播机制）。
+            try {
+              dgT = createTranslator(localeBind || registerI18n({ locale: localeService }));
+              // 通知看板组件重新渲染以响应语言切换
+              window.dispatchEvent(new CustomEvent('dsh-graph:locale-changed'));
+            } catch { /* 静默 */ }
+          });
+        }
         ctx.slots.inject("conversation.session.header.actions", () =>
           ctx.slots.register(
             { name: "conversation.session.header.actions", id: "dsh-graph-supervisor-badge", order: -9 },
@@ -189,7 +207,7 @@
         );
         ctx.slots.inject("conversation.view", () =>
           ctx.slots.register(
-            { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: "看板" },
+            { name: "conversation.view", id: "dsh-graph-kanban", order: 80, label: dgT("board.title") },
             (props) => h(KanbanView, props),
           ),
         );
@@ -206,7 +224,7 @@
           connectionRt = scope.get?.("connection") ?? connectionRt;
           // 已注册的 settings section 通过 appCtx 变量读取 catalog，无需重复注册。
         });
-        console.log("[dsh-graph-host] client apply: kanban view registered");
+        console.log("[dsh-graph-host] client apply: kanban view registered (i18n enabled)");
       },
     };
   },

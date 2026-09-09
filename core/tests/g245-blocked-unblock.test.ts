@@ -88,6 +88,21 @@ function makeDragHarness(goals: any[]) {
     })();
   `;
   const ctx: any = { globalThis: {} };
+  // g-230：提供 dgT 翻译函数（测试环境默认中文）
+  ctx.dgT = (key: string, params?: Record<string, any>) => {
+    const dict: Record<string, string> = {
+      'drag.blockedNoFrom': '⚠️ 该目标缺少 blocked_from 记录，无法自动解除阻塞；请由主管确认原状态后手动处理',
+      'drag.blockedInvalidFrom': '⚠️ blocked_from 值非法（{raw}），无法解析落点；请由主管修正后重试',
+      'drag.blockedOnlyOriginal': '⚠️ blocked 目标只能解除回原状态「{status}」，请拖到「{stage}」列',
+    };
+    let text = dict[key] ?? key;
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        text = text.replace(`{${k}}`, String(v));
+      }
+    }
+    return text;
+  };
   vm.createContext(ctx);
   new vm.Script(script).runInContext(ctx);
 

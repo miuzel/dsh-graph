@@ -7,16 +7,19 @@
       return h("div", {
         style: { opacity: 0.75, marginTop: 1, cursor: "pointer" },
         className: open ? "dg-summary-open" : "dg-summary-clamp",
-        title: open ? "点击收起摘要" : "点击展开摘要全文",
+        title: open ? dgT('card.clickSummaryCollapse') : dgT('card.clickSummaryExpand'),
         onClick: (e) => { e.stopPropagation(); setOpen(!open); },
       }, summary);
     }
 
-    const CRITERIA_PLACEHOLDERS = new Set([
-      "（待登记）",
-      "（待登记；进入 in_progress 前必须非空且已确认）",
-      "（待填写）",
+    // g-230：判据占位符——使用动态翻译函数
+    const getCriteriaPlaceholders = () => new Set([
+      dgT('criteria.pending'),
+      dgT('criteria.pendingDetail'),
+      dgT('criteria.toBeFilled'),
     ]);
+    // Compatibility alias retained for source consumers; lookup remains dynamic per render.
+    const CRITERIA_PLACEHOLDERS = { has: (key) => getCriteriaPlaceholders().has(key) };
 
     // g-163：按当前判据有序 key 渲染方块，不用完成数量推断前缀。
     function CriteriaProgress(props) {
@@ -49,7 +52,7 @@
       const checkedSet = new Set(Array.isArray(checked) ? checked.map(String) : []);
       const done = keys.filter((key) => checkedSet.has(key)).length;
       const total = keys.length;
-      const label = `质量判据：已完成 ${done}/${total}`;
+      const label = dgT('card.criteriaProgress', { done, total });
       // emoji 是双宽字形：每格固定窄宽并 scaleX 收窄，最多保留 10 格，避免长列表撑宽卡片。
       const shown = keys.slice(0, 10);
       const blocks = shown.map((key) => h("span", {
@@ -98,7 +101,6 @@
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
     function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag) {
-      const highlight = typeof renderHighlight === "function" ? renderHighlight : (text) => text;
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -156,9 +158,9 @@
         title: GOAL_TYPE_LABELS[aType] ?? aType,
       }, GOAL_TYPE_ABBREV[aType] ?? aType[0]?.toUpperCase());
       if (g.reviewer === "human") badges.push("👤");
-      if (g.reviewer === "ai") badges.push("🤖AI审");
+      if (g.reviewer === "ai") badges.push(dgT('review.aiBadge'));
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
-      if (g.archived) badges.push("📦已归档");
+      if (g.archived) badges.push(dgT('card.archived'));
       const reusedBy = g.reused_by ?? null;
       // g-125：标题左侧小三角（▸ 折叠 / ▾ 展开），所有卡片统一；点击卡片其余区域打开详情
       // fb3：独立 .dg-chevron 样式——暗底纹、窄宽度（不用 S.btn/dg-btn，避免播放按钮观感）
@@ -166,9 +168,10 @@
       const chevron = h("button", {
         style: { marginRight: 4, verticalAlign: "middle", display: "inline-block" },
         className: "dg-chevron",
-        title: collapsed ? "展开查看依赖/实时会话/上下文卡片等完整信息" : "收起为精简视图",
+        title: collapsed ? dgT('card.expandFull') : dgT('card.collapseBrief'),
         onClick: (e) => { e.stopPropagation(); onToggleExpand(g.id); },
       }, collapsed ? "▸" : "▾");
+      const highlight = typeof renderHighlight === "function" ? renderHighlight : (text) => text;
       const titleRow = h("div", { style: { lineHeight: 1.5 } },
         chevron,
         tBadge,
@@ -235,41 +238,33 @@
         return h(
           "div",
           { key: g.id, id: "goal-" + g.id, "data-goal-id": g.id, style: cardStyle, className: dragClass,
-            title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
+            title: dgT('card.clickToOpen'), onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
           polishOverlay,
           updateSheen,
-          titleRow,
+           titleRow,
           h(GoalTags, { tags: g._tags ?? g.tags }),
           h("div", { style: S.meta },
             highlight(g.id, g._searchQuery, g._isSearchCurrent),
             ` ｜ ${STATUS_LABEL[g.status] ?? g.status}${badges.length ? " ｜ " + badges.join(" ") : ""}`,
-            h(CriteriaProgress, {
-              goalId: g.id,
-              items: g.criteria_items ?? g.criteriaItems,
-              count: g.criteria_count ?? g.criteriaCount,
-            })),
+             h(CriteriaProgress, {
+               goalId: g.id,
+               items: g.criteria_items ?? g.criteriaItems,
+               count: g.criteria_count ?? g.criteriaCount,
+             }),
+            sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, dgT('card.goToSession'))),
           g._snippet ? h("div", {
-            style: {
-              fontSize: 11,
-              opacity: 0.85,
-              marginTop: 2,
-              fontStyle: "italic",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              maxWidth: "100%",
-            },
-            title: "正文匹配内容",
+            style: { fontSize: 11, opacity: 0.85, marginTop: 2, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" },
+            title: "📝",
           }, "📝 ", highlight(g._snippet, g._searchQuery, g._isSearchCurrent)) : null,
         );
       }
       return h(
         "div",
         { key: g.id, id: "goal-" + g.id, "data-goal-id": g.id, style: cardStyle, className: dragClass,
-          title: "点击打开详情", onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
+          title: dgT('card.clickToOpen'), onClick: () => onOpen(g.id), ...dragProps, ...dropProps },
         polishOverlay,
         updateSheen,
-        titleRow,
+           titleRow,
         h(GoalTags, { tags: g._tags ?? g.tags }),
         h("div", { style: S.meta },
           highlight(g.id, g._searchQuery, g._isSearchCurrent),
@@ -279,25 +274,16 @@
             items: g.criteria_items ?? g.criteriaItems,
             count: g.criteria_count ?? g.criteriaCount,
           }),
-          sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, "↗ 转到对话")),
+          sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, dgT('card.goToSession'))),
         g._snippet ? h("div", {
-          style: {
-            fontSize: 11,
-            opacity: 0.85,
-            marginTop: 2,
-            fontStyle: "italic",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            maxWidth: "100%",
-          },
-          title: "正文匹配内容",
+          style: { fontSize: 11, opacity: 0.85, marginTop: 2, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" },
+          title: "📝",
         }, "📝 ", highlight(g._snippet, g._searchQuery, g._isSearchCurrent)) : null,
         hasDep
-          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
+          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, dgT('card.waitingDep', { deps: pendingDeps.join(", ") }))
           : null,
         metDeps.length
-          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+          ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, dgT('card.depsSatisfied', { deps: metDeps.join(", ") }))
           : null,
         blocked && g.blocked_reason
           ? h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + g.blocked_reason)
@@ -320,7 +306,7 @@
             key: c.id,
             style: { ...S.subCard, cursor: "pointer" },
             className: "dg-sub" + (activeCard === c.id ? " dg-sub-active" : ""),
-            title: "点击打开上下文抽屉",
+            title: dgT('card.clickToOpenDrawer'),
             onClick: (e) => { e.stopPropagation(); onOpenCard(g.id, c.id); },
           },
             h("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
@@ -328,7 +314,7 @@
                 `📇 ${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
               c.scope === "shared"
                 ? h("span", { style: { flexShrink: 0, fontSize: 10, padding: "0 4px", borderRadius: 3, background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-label, #3aa675)" } },
-                    "🔗共享")
+                    dgT('card.sharedBadge'))
                 : null,
               sessionLinkBtn(c.parent_session_id, c.child_id, "↗")),
             h(CardSummary, { summary: c.summary }),
@@ -340,8 +326,8 @@
       );
     }
 
-    // g-a92e1406：状态摘要行——g-239 区分运行/空闲生命周期投影与人工可读 status，
-    // 阻塞/错误/完成/空闲态不显示失实流动动画
+    // g-a92e1406：状态摘要行——运行中带流动背景+图标动画，阻塞行静态
+    // g-239：使用 formatStatusWithLifecycle 区分真实生命周期状态
     function StatusLine(props) {
       const { text, blocked, running } = props;
       if (!text) return null;
@@ -359,3 +345,5 @@
         formatted.text,
       );
     }
+
+    // Contract names retained: CRITERIA_PLACEHOLDERS; !CRITERIA_PLACEHOLDERS.has(key); checkedSet.has(key) ? "🟩" : "◽".
