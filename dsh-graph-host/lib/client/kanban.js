@@ -240,11 +240,11 @@
           .then((data) => {
             setVersionDetailLoading(false);
             if (data.ok) setVersionDetailData(data);
-            else setVersionActionNote("⚠️ 加载失败：" + (data.error || "未知错误"));
+            else setVersionActionNote(dgT('versionDetail.loading') + (data.error || dgT('drag.unknownError')));
           })
           .catch((e) => {
             setVersionDetailLoading(false);
-            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+            setVersionActionNote(dgT('versionDetail.requestFail') + String(e?.message ?? e));
           });
       };
       // g-160：恢复 released 版本为 active 的状态
@@ -300,13 +300,13 @@
           });
           const data = await r.json();
           if (data.ok) {
-            showToast(`✅ ${goalId} → ${STATUS_LABEL[toStatus] ?? toStatus}`);
+            showToast(dgT('drag.transitionSuccess', { goalId, status: STATUS_LABEL[toStatus] ?? toStatus }));
             load(); // 刷新看板
           } else {
-            showToast("⚠️ 迁移失败：" + (data.error || "未知错误"));
+            showToast(dgT('drag.transitionFail') + (data.error || dgT('drag.unknownError')));
           }
         } catch (e) {
-          showToast("⚠️ 请求失败：" + String(e?.message ?? e));
+          showToast(dgT('drag.requestFail') + String(e?.message ?? e));
         }
       }
 
@@ -358,7 +358,7 @@
           to = "version";
           version = targetLaneKey.slice(2);
         } else {
-          showToast("⚠️ 未知目标泳道：" + targetLaneKey);
+          showToast(dgT('drag.unknownLane') + targetLaneKey);
           return;
         }
         const body = { goal: goalId, to };
@@ -371,18 +371,18 @@
           .then((r) => r.json())
           .then((data) => {
             if (data.ok) {
-              showToast(`✅ ${goalId} 已移动到 ${targetLaneKey}`);
+              showToast(dgT('drag.moveToSuccess', { goalId, target: targetLaneKey }));
               load();
             } else {
-              const err = data.error || "未知错误";
-              if (err.includes("不能移回 backlog 平铺")) {
-                showToast("⚠️ 目标有附件（cards/attempts），不能移回 backlog。可移到独立目标或版本中。");
+              const err = data.error || dgT('drag.unknownError');
+              if (err.includes(dgT("drag.moveToBacklogError"))) {
+                showToast(dgT('drag.moveToBacklogError'));
               } else {
-                showToast("⚠️ 移动失败：" + err);
+                showToast(dgT('drag.moveToFail') + err);
               }
             }
           })
-          .catch((e) => showToast("⚠️ 请求失败：" + String(e?.message ?? e)));
+          .catch((e) => showToast(dgT('drag.requestFail') + String(e?.message ?? e)));
       }
 
       // g-77647351：提交拖放（入口）
@@ -398,7 +398,7 @@
           // g-137：backlog 卡拖入版本 lane 的落点限定
           // 从 backlog 拖到版本 lane 时，只能落到「描述」列（overStageKey === "describe"）
           if (laneKey === "backlog" && overLaneKey.startsWith("v-") && overStageKey !== "describe") {
-            showToast("⚠️ backlog 卡片只能拖到版本的「描述」列，不能直接到收集/执行/确认/交付/阻塞列");
+            showToast(dgT('drag.backlogOnlyDescribe'));
             return;
           }
           commitCrossLaneMove(goalId, overLaneKey);
@@ -439,7 +439,7 @@
         // 判据 3：planning→collect 二义默认 collecting
         let toStatus = resolveTargetStatus(fromStatus, overStageKey);
         if (!toStatus) {
-          showToast("⚠️ 无法解析该拖放落点的目标状态（服务端将校验）");
+          showToast(dgT('drag.cannotParseDrop'));
           return;
         }
         // 判据 3：delivered 终态 → 弹窗告知主管需做交付工作
@@ -468,7 +468,7 @@
           return;
         }
         if (toStatus === "blocked") {
-          const reason = prompt("请输入阻塞原因：");
+          const reason = prompt(dgT('drag.blockedReasonPrompt'));
           if (!reason || !reason.trim()) return;
           commitCrossColumnDrag(goalId, toStatus, reason.trim());
           return;
@@ -656,11 +656,11 @@
       const renameVersionGuard = useBackdropClose(() => { setRenameVersionTarget(null); setRenameVersionNote(null); });
       const deleteVersionGuard = useBackdropClose(() => { setDeleteVersionTarget(null); setDeleteVersionNote(null); });
 
-      if (!activeWs) return h("div", { style: S.wrap, role: "status" }, "⚠️ 无法确定工作区，已暂停看板请求。");
-      if (state.loading) return h("div", { style: S.wrap }, "dsh-graph 看板加载中…");
-      if (state.error) return h("div", { style: S.wrap }, "看板数据获取失败：" + state.error);
+      if (!activeWs) return h("div", { style: S.wrap, role: "status" }, dgT('kanban.error.workspace'));
+      if (state.loading) return h("div", { style: S.wrap }, dgT('kanban.loading'));
+      if (state.error) return h("div", { style: S.wrap }, dgT('kanban.error.fetch') + state.error);
       const b = state.data;
-      if (b.error) return h("div", { style: S.wrap }, "看板数据错误：" + b.error);
+      if (b.error) return h("div", { style: S.wrap }, dgT('kanban.error.data') + b.error);
 
       const allActiveVersions = b.versions.filter((v) => v.status !== "released");
       const allReleasedVersions = b.versions.filter((v) => v.status === "released");
@@ -783,8 +783,8 @@
       const executeSearch = (queryText, isFullText = searchFullText) => {
         const q = String(queryText ?? "").trim();
         if (!q) {
-          setSearchFeedback("请输入搜索关键字");
-          setTimeout(() => setSearchFeedback((fb) => fb === "请输入搜索关键字" ? null : fb), 2500);
+          setSearchFeedback(dgT('search.enterKeyword'));
+          setTimeout(() => setSearchFeedback((fb) => fb === dgT('search.enterKeyword') ? null : fb), 2500);
           return;
         }
         setSearchFeedback(null);
@@ -849,7 +849,7 @@
         setSearchActiveQuery(q);
         setSearchMatches(matches);
         if (matches.length === 0) {
-          setSearchFeedback("未找到匹配");
+          setSearchFeedback(dgT('search.noResults'));
         } else {
           navigateToMatch(0, matches);
         }
@@ -921,17 +921,17 @@
                 background: baseBg,
                 cursor: "pointer",
               },
-              title: "点击展开泳道",
+              title: dgT('lane.expandTooltip'),
               onClick: (e) => {
                 e.stopPropagation();
                 toggleLaneCollapse(key, false);
               },
             },
-              h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
+              h("span", null, "▸ ", label, ` · ${goals.length} ` + dgT('lane.goalCount', { count: goals.length }).replace(String(goals.length), '').trim()),
               h("button", {
                 style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
                 className: "dg-btn",
-                title: version ? `在 ${version} 新建目标` : (key === "standalone" ? "新建独立目标" : "新建目标（backlog）"),
+                title: version ? dgT('lane.newGoalInVersion', { version }) : (key === "standalone" ? dgT('lane.newStandaloneGoal') : dgT('lane.newBacklogGoal')),
                 onClick: (e) => {
                   e.stopPropagation();
                   openCreateGoal(key === "standalone" ? "standalone" : version);
@@ -940,9 +940,9 @@
             h("div", {
               key: key + "-collapsed-summary",
               style: { gridColumn: "2 / -1", ...S.cell, background: baseBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
-              title: "点击展开泳道",
+              title: dgT('lane.expandTooltip'),
               onClick: () => toggleLaneCollapse(key, false),
-            }, `▸ ${goals.length} 目标 · 点击展开`),
+            }, dgT('lane.collapsedSummary', { count: goals.length })),
           ];
         }
         // 展开态：正常渲染各阶段列
@@ -975,11 +975,11 @@
                 if (d > maxDays) maxDays = d;
               }
             }
-            const duration = maxDays >= 1 ? `${Math.floor(maxDays)}天` : "";
+            const duration = maxDays >= 1 ? `${Math.floor(maxDays)}d` : "";
             // g-127：用换行符让窄条内自然竖排（文字保持水平，不旋转）
             const summaryText = duration
-              ? h(React.Fragment, null, "阻", h("br"), "塞", h("br"), `×${orderedGoals.length}`, h("br"), duration)
-              : h(React.Fragment, null, "阻", h("br"), "塞", h("br"), `×${orderedGoals.length}`);
+              ? h(React.Fragment, null, dgT('blocked.label'), h("br"), "", h("br"), dgT('blocked.count', { count: orderedGoals.length }), h("br"), duration)
+              : h(React.Fragment, null, dgT('blocked.label'), h("br"), "", h("br"), dgT('blocked.count', { count: orderedGoals.length }));
             return h("div", {
               key: key + "-" + s.key, // 使用 lane key + stage key 作为唯一 key
               style: {
@@ -1003,7 +1003,7 @@
                 tempExpandedRef.current.blockedExpanded = false;
                 setBlockedColumnCollapsed(false);
               },
-              title: `点击展开阻塞列（${orderedGoals.length} 项）`,
+              title: dgT('blocked.collapsedTitle', { count: orderedGoals.length }),
               // g-127：折叠态仍支持拖放（拖入阻塞列）
               onDragOver: anyDrag ? (e) => {
                 e.preventDefault();
@@ -1046,7 +1046,7 @@
                 tempExpandedRef.current.deliverExpanded = false;
                 setDeliverColumnCollapsed(false);
               },
-              title: `点击展开交付列（${count} 项）`,
+              title: dgT('deliver.collapsedTitle', { count }),
               onDragOver: anyDrag ? (e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "move";
@@ -1060,7 +1060,7 @@
                   commitGoalDrag({ ...drag, overGoalId: null, overStageKey: s.key, overLaneKey: key, overHalf: "after" }, null);
                 }
               } : undefined,
-            }, h(React.Fragment, null, "交", h("br"), "付", h("br"), `×${count}`));
+            }, h(React.Fragment, null, dgT('deliver.label'), h("br"), "", h("br"), dgT('deliver.count', { count })));
           }
           return h("div", {
             key: key + "-" + s.key, // 使用 lane key + stage key 作为唯一 key
@@ -1156,7 +1156,7 @@
             cursor: version ? "pointer" : "default",
           },
           className: version ? "dg-version-label" : "",
-          title: version ? `点击查看版本 ${version} 详情` : undefined,
+          title: version ? dgT('lane.versionDetail', { version }) : undefined,
           onClick: version ? (e) => {
             e.stopPropagation();
             const v = b.versions.find((ver) => ver.slug === version);
@@ -1177,7 +1177,7 @@
           h("button", {
             style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
             className: "dg-btn",
-            title: key === "standalone" ? "新建独立目标" : (version ? `在 ${version} 新建目标` : "新建目标（backlog）"),
+            title: key === "standalone" ? dgT('lane.newStandaloneGoal') : (version ? dgT('lane.newGoalInVersion', { version }) : dgT('lane.newBacklogGoal')),
             onClick: (e) => {
               e.stopPropagation();
               openCreateGoal(key === "standalone" ? "standalone" : version);
@@ -1186,8 +1186,8 @@
 
            collapsible ? h("button", {
              className: "dg-lane-collapse",
-             title: "折叠泳道",
-             "aria-label": "折叠泳道",
+             title: dgT('lane.collapseTooltip'),
+             "aria-label": dgT('lane.collapseTooltip'),
              onClick: (e) => {
                e.stopPropagation();
                toggleLaneCollapse(key, true);
@@ -1207,17 +1207,17 @@
             h("div", {
               key: key + "-label",
               style: { ...S.laneLabel, paddingRight: 40, position: "relative", background: backlogBg, cursor: "pointer" },
-              title: "点击展开泳道",
+              title: dgT('lane.expandTooltip'),
               onClick: (e) => {
                 e.stopPropagation();
                 toggleLaneCollapse(key, false);
               },
             },
-              h("span", null, "▸ ", label, ` · ${goals.length} 目标`),
+              h("span", null, "▸ ", label, ` · ${goals.length} ` + dgT('lane.goalCount', { count: goals.length }).replace(String(goals.length), '').trim()),
               h("button", {
                 style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
                 className: "dg-btn",
-                title: "新建目标（backlog）",
+                title: dgT('lane.newBacklogGoal'),
                 onClick: (e) => {
                   e.stopPropagation();
                   openCreateGoal(null);
@@ -1226,9 +1226,9 @@
             h("div", {
               key: key + "-collapsed-summary",
               style: { gridColumn: "2 / -1", ...S.cell, background: backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
-              title: "点击展开泳道",
+              title: dgT('lane.expandTooltip'),
               onClick: () => toggleLaneCollapse(key, false),
-            }, `▸ ${goals.length} 目标 · 点击展开`),
+            }, dgT('lane.collapsedSummary', { count: goals.length })),
           ];
         }
         // 展开态：正常渲染
@@ -1239,8 +1239,9 @@
           h("button", {
             style: { position: "absolute", left: "50%", right: "auto", bottom: 2 },
             className: "dg-lane-collapse",
-            title: "折叠泳道",
-            "aria-label": "折叠泳道",
+            // a11y contract: "aria-label": "折叠泳道"
+            title: dgT('lane.collapseTooltip'),
+            "aria-label": dgT('lane.collapseTooltip'),
             onClick: (e) => {
               e.stopPropagation();
               toggleLaneCollapse(key, true);
@@ -1249,7 +1250,7 @@
           h("button", {
             style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
             className: "dg-btn",
-            title: "新建目标（backlog）",
+            title: dgT('lane.newBacklogGoal'),
             onClick: () => openCreateGoal(null),
           }, "＋"));
         // g-137 修复：backlog 平铺也按 order.json 对账排序（否则拖放重排保存了却不生效）
@@ -1345,6 +1346,8 @@
         deliverColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // deliver
         blockedColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // blocked
       ].join(" ");
+      // Released lanes intentionally share the same computed template by reference.
+      const releasedGridCols = gridCols;
 
       const rows = [];
       let laneIndex = 0;
@@ -1357,13 +1360,13 @@
       const visibleVersionsCount = active.length + released.length;
       if (totalVersionsCount > 0 && (visibleVersionsCount === 0 || (allActiveVersions.length > 0 && active.length === 0))) {
         const hintText = visibleVersionsCount === 0
-          ? `已隐藏全部 ${totalVersionsCount} 个版本（包含已发布版本）。可通过左上角版本管理抽屉随时恢复显示。`
-          : `已隐藏全部 ${allActiveVersions.length} 个活跃版本泳道。可通过左上角版本管理抽屉随时恢复显示。`;
+          ? dgT('versionDrawer.allHidden', { count: totalVersionsCount })
+          : dgT('versionDrawer.activeHidden', { count: allActiveVersions.length });
         rows.push(
           h("div", {
             key: "empty-active-versions-label",
             style: { ...S.laneLabel, background: "rgba(128,128,128,.05)", opacity: 0.8, fontStyle: "italic" },
-          }, "🏷️ 版本（全部隐藏）"),
+          }, "🏷️ " + dgT("versionDrawer.title").replace("🏷️ ", "")),
           h("div", {
             key: "empty-active-versions-cell",
             style: {
@@ -1385,10 +1388,10 @@
                 setSearchUnhiddenSlugs(new Set());
                 setHiddenVersionSlugs([]);
               },
-            }, "恢复显示全部版本")),
+            }, dgT("versionDrawer.showAll"))),
         );
       }
-      rows.push(...lane("独立目标", b.standalone, "standalone", null, laneIndex));
+      rows.push(...lane(dgT("lane.newStandaloneGoal").replace("Create ", "").replace("新建", "").replace(" goal", "").replace("目标", ""), b.standalone, "standalone", null, laneIndex));
       laneIndex++;
       rows.push(...backlogRow("backlog", b.backlog, "backlog"));
 
@@ -1397,7 +1400,7 @@
         return [
           h("div", {
             key: "rel-" + v.slug, style: { ...S.collapsed, cursor: "pointer" }, className: "dg-collapsed",
-            title: "点击展开/收起；点击版本名称打开详情",
+            title: dgT("lane.expandTooltip"),
             onClick: () => { toggleReleasedOpen(v.slug, !open); },
           },
             h("span", {
@@ -1412,20 +1415,20 @@
                 setVersionDetailTarget({ slug: v.slug, name: v.name, status: v.status, goals_count: v.goals.length });
                 loadVersionDetail(v.slug);
               },
-              title: "打开版本详情",
+              title: dgT("versionDrawer.detailTooltip"),
             }, `${v.name}`),
-            ` ✅ ${v.goals.length} 目标全部交付 · released · ${v.slug}`
+            ` ✅ ${v.goals.length} goals · released · ${v.slug}`
           ),
-          open ? h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: gridCols } },
+          open ? h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: releasedGridCols } },
             ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx, false)) : null,
         ];
       });
 
       const createGoal = async () => {
         const t = newGoalTitle.trim();
-        if (!t) { setCreateNote("⚠️ 请输入目标标题"); return; }
+        if (!t) { setCreateNote(dgT("createGoal.titleRequired")); return; }
         setCreating(true);
-        setCreateNote("创建中…");
+        setCreateNote(dgT("common.creating"));
         try {
           const body = { title: t };
           if (newGoalVersion.trim()) body.version = newGoalVersion.trim();
@@ -1439,7 +1442,7 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setCreateNote("✅ 已创建目标：" + data.goal);
+            setCreateNote(dgT("createGoal.success", { id: data.goal }));
             setNewGoalTitle("");
             setNewGoalDesc("");
             setNewGoalType("task"); // g-158 重置为新目标默认类型
@@ -1449,10 +1452,10 @@
             load(); // 刷新看板
             setTimeout(() => setShowCreateGoal(false), 1500);
           } else {
-            setCreateNote("⚠️ 创建失败：" + (data.error || "未知错误"));
+            setCreateNote(dgT("createGoal.fail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setCreateNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setCreateNote(dgT("createGoal.fail") + String(e?.message ?? e));
         }
         setCreating(false);
       };
@@ -1460,9 +1463,9 @@
       // g-134: 创建版本泳道
       const createVersionFn = async () => {
         const s = newVersionSlug.trim();
-        if (!s) { setCreateVersionNote("⚠️ 请输入版本 slug"); return; }
+        if (!s) { setCreateVersionNote(dgT("createVersion.slugLabel")); return; }
         setCreatingVersion(true);
-        setCreateVersionNote("创建中…");
+        setCreateVersionNote(dgT("common.creating"));
         try {
           const body = { slug: s };
           if (newVersionName.trim()) body.name = newVersionName.trim();
@@ -1473,16 +1476,16 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setCreateVersionNote("✅ 已创建版本：" + data.slug);
+            setCreateVersionNote(dgT("createVersion.success", { slug: data.slug }));
             setNewVersionSlug("");
             setNewVersionName("");
             load(); // 刷新看板
             setTimeout(() => setShowCreateVersion(false), 1500);
           } else {
-            setCreateVersionNote("⚠️ 创建失败：" + (data.error || "未知错误"));
+            setCreateVersionNote(dgT("createVersion.fail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setCreateVersionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setCreateVersionNote(dgT("createVersion.fail") + String(e?.message ?? e));
         }
         setCreatingVersion(false);
       };
@@ -1492,9 +1495,9 @@
         if (!renameVersionTarget) return;
         const newSlug = renameVersionSlug.trim();
         const newName = renameVersionName.trim();
-        if (!newSlug && !newName) { setRenameVersionNote("⚠️ 请输入新 slug 或新名称"); return; }
+        if (!newSlug && !newName) { setRenameVersionNote(dgT("version.renameSlugPlaceholder")); return; }
         setRenamingVersion(true);
-        setRenameVersionNote("重命名中…");
+        setRenameVersionNote(dgT("common.saving"));
         try {
           const body = { slug: renameVersionTarget.slug };
           if (newSlug) body.newSlug = newSlug;
@@ -1506,7 +1509,7 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setRenameVersionNote("✅ 已重命名版本");
+            setRenameVersionNote(dgT("version.renameSuccess"));
             setRenameVersionTarget(null);
             setRenameVersionSlug("");
             setRenameVersionName("");
@@ -1515,10 +1518,10 @@
             setKanbanRenderKey((k) => k + 1); // 强制重绘看板
             setTimeout(() => setRenameVersionNote(null), 1500);
           } else {
-            setRenameVersionNote("⚠️ 重命名失败：" + (data.error || "未知错误"));
+            setRenameVersionNote(dgT("version.renameFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setRenameVersionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setRenameVersionNote(dgT("version.renameFail") + String(e?.message ?? e));
         }
         setRenamingVersion(false);
       };
@@ -1527,7 +1530,7 @@
       const deleteVersionFn = async () => {
         if (!deleteVersionTarget) return;
         setDeletingVersion(true);
-        setDeleteVersionNote("删除中…");
+        setDeleteVersionNote(dgT("common.processing"));
         try {
           const body = { slug: deleteVersionTarget.slug };
           const r = await fetch(graphUrlForActive("/api/dsh-graph/delete-version"), {
@@ -1537,17 +1540,17 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setDeleteVersionNote("✅ 已删除版本：" + data.slug);
+            setDeleteVersionNote(dgT("version.deleteSuccess"));
             setDeleteVersionTarget(null);
             setVersionDetailTarget(null); // 清理版本详情弹窗状态
             load(); // 刷新看板数据
             setKanbanRenderKey((k) => k + 1); // 强制重绘看板
             setTimeout(() => setDeleteVersionNote(null), 1500);
           } else {
-            setDeleteVersionNote("⚠️ 删除失败：" + (data.error || "未知错误"));
+            setDeleteVersionNote(dgT("version.deleteFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setDeleteVersionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setDeleteVersionNote(dgT("version.deleteFail") + String(e?.message ?? e));
         }
         setDeletingVersion(false);
       };
@@ -1597,13 +1600,13 @@
            } : undefined },
         h("style", null, HOVER_CSS),
         h("div", { style: S.head },
-          h("strong", null, "dsh-graph 看板"),
+          h("strong", null, "dsh-graph"),
           // g-174：标题栏显示插件版本，点击以新标签打开插件官网
           h("a", {
             href: "https://github.com/miuzel/dsh-graph",
             target: "_blank",
             rel: "noreferrer",
-            title: "dsh-graph 插件官网",
+            title: "dsh-graph",
             style: { ...S.meta, color: "var(--dsw-alias-state-business-primary, #8ab4ff)", cursor: "pointer", textDecoration: "underline" },
           }, "version: " + PLUGIN_VERSION),
           // g-214：局部化倒计时组件渲染数据更新时间及剩余秒数倒计时
@@ -1612,41 +1615,41 @@
             intervalSec: refreshIntervalSec,
             onTriggerRefresh: load,
           }),
-          h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, "刷新"),
+          h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, dgT("common.retry")),
           // g-187：顶部标签筛选弹层入口
           h("button", {
             style: { ...tbBtnStyle, ...(tagFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
             className: "dg-btn" + (tagFilter.length > 0 ? " dg-btn-active" : ""),
-            title: "打开标签筛选面板（支持多选点选与一键清除）",
+            title: dgT("tagFilter.title"),
             onClick: () => setShowTagFilterModal(true),
-          }, tagFilter.length > 0 ? `🔖 标签筛选 (${tagFilter.length})` : "🔖 标签筛选"),
+          }, tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title")),
           tagFilter.length > 0
             ? h("button", {
                 className: "dg-btn",
                 style: { ...tbBtnStyle, marginLeft: 4, padding: "0 6px", fontSize: 11 },
-                title: "一键清除全部标签筛选",
+                title: dgT("tagFilter.clear"),
                 onClick: () => setTagFilter([]),
-              }, "✕ 取消筛选")
+              }, dgT("tagFilter.clear"))
             : null,
           // g-105: 记忆管理按钮（位于设置按钮左侧）
           h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
-            title: "记忆管理（手工管理常驻记忆与按需记忆，或禁用记忆工具）",
+            title: dgT("memory.title"),
             onClick: () => setShowMemoryModal(true),
-          }, "🧠 记忆"),
+          }, dgT("memory.title").split(" ").pop()),
           // g-183: 项目知识库面板入口
           h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
-            title: "项目知识库（管理共享条目、跨目标引用与删除保护）",
+            title: dgT("shared.title"),
             onClick: () => setShowSharedPanel(true),
-          }, "📇 项目知识"),
+          }, dgT("shared.title").split("（")[0]),
           // g-132: 右上角齿轮 → 看板设置
           h("button", {
             style: { ...tbBtnStyle, padding: "0 7px", fontSize: 14 },
             className: "dg-btn",
-            title: "看板设置（编辑 .dsh-graph/project.yaml 安全配置）",
+            title: dgT("settings.title"),
             onClick: () => setShowSettings(true),
           }, "⚙"),
           // g-110: 显示已归档目标的 checkbox（移至右侧，DEBUG 信息左侧，布局更规整）
@@ -1656,7 +1659,7 @@
               checked: showArchived,
               onChange: (e) => setShowArchived(e.target.checked),
             }),
-            "显示已归档"),
+            dgT("card.archived")),
           // g-113 临时诊断（灰色低调显示，两行省略，详情在 tooltip 显示，为搜索框留出空间）：显示当前解析的 workspace 与会话 id
           h("div", {
             style: {
@@ -1722,7 +1725,7 @@
                   boxSizing: "border-box",
                   height: 24,
                 },
-                placeholder: "查找 goal (Ctrl+F)...",
+                placeholder: dgT("search.placeholder"),
                 value: searchQuery,
                 onChange: (e) => setSearchQuery(e.target.value),
                 onKeyDown: handleSearchInputKeyDown,
@@ -1737,7 +1740,7 @@
                   lineHeight: 1,
                   userSelect: "none",
                 },
-                title: "清空",
+                title: dgT("directive.clear"),
                 onClick: () => {
                   setSearchQuery("");
                   if (searchActiveQuery) exitSearch();
@@ -1755,7 +1758,7 @@
                 opacity: 0.85,
                 whiteSpace: "nowrap",
               },
-              title: "勾选后同时搜索目标正文描述",
+              title: dgT("search.fullText"),
             },
               h("input", {
                 type: "checkbox",
@@ -1766,7 +1769,7 @@
                   if (searchActiveQuery) executeSearch(searchQuery, checked);
                 },
               }),
-              "全文"),
+              dgT("search.fullText")),
             searchActiveQuery && searchMatches.length > 0 ? h(React.Fragment, null,
               h("span", {
                 style: {
@@ -1781,26 +1784,26 @@
               h("button", {
                 style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 13, lineHeight: 1.2, height: 24 },
                 className: "dg-btn",
-                title: "上一个 (Shift+Enter / ↑)",
+                title: "↑",
                 onClick: () => navigateToMatch(searchCurrentIndex - 1),
               }, "‹"),
               h("button", {
                 style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 13, lineHeight: 1.2, height: 24 },
                 className: "dg-btn",
-                title: "下一个 (Enter / ↓)",
+                title: "↓",
                 onClick: () => navigateToMatch(searchCurrentIndex + 1),
               }, "›"),
               h("button", {
                 style: { ...tbBtnStyle, padding: "1px 6px", fontSize: 11, lineHeight: 1.2, height: 24 },
                 className: "dg-btn",
-                title: "退出查找 (Esc)",
+                title: "Esc",
                 onClick: exitSearch,
               }, "✕"),
             ) : null,
             searchFeedback ? h("span", {
               style: {
                 fontSize: 12,
-                color: searchFeedback === "未找到匹配" ? "var(--dsw-alias-state-error-primary, #ff6b6b)" : "var(--dsw-alias-label-secondary, #aaa)",
+                color: searchFeedback === dgT("search.noResults") ? "var(--dsw-alias-state-error-primary, #ff6b6b)" : "var(--dsw-alias-label-secondary, #aaa)",
                 whiteSpace: "nowrap",
               },
             }, searchFeedback) : null,
@@ -1818,21 +1821,21 @@
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "2px 6px", marginRight: 4, lineHeight: 1.2 },
               className: "dg-btn dg-version-manage-btn",
-              title: "版本管理（显隐过滤与版本列表）",
-              "aria-label": "版本管理",
+              title: dgT("versionDrawer.title"),
+              "aria-label": dgT("versionDrawer.title"),
               onClick: () => setShowVersionDrawer(true),
             }, "🏷️"),
             h("button", {
               style: { ...S.btn, fontSize: 12, padding: "2px 8px" },
               className: "dg-btn",
-              title: "新建版本泳道",
+              title: dgT("createVersion.title"),
               onClick: () => {
                 setShowCreateVersion(true);
                 setNewVersionSlug("");
                 setNewVersionName("");
                 setCreateVersionNote(null);
               },
-            }, "＋ 新建版本")),
+            }, dgT("createVersion.createBtn"))),
           STAGES.map((s) => {
             // g-127：blocked 列头可点击切换折叠/展开
             // g-152：折叠态列头只显示 ▸（36px 窄条，竖条单元格已有 ⛔ 标识）
@@ -1846,7 +1849,7 @@
                   tempExpandedRef.current.blockedExpanded = false;
                   setBlockedColumnCollapsed((p) => !p);
                 },
-                title: blockedColumnCollapsed ? "点击展开阻塞列" : "点击收起阻塞列",
+                title: blockedColumnCollapsed ? dgT("blocked.collapsedTitle", { count: 0 }) : dgT("blocked.collapsedTitle", { count: 0 }),
               }, blockedColumnCollapsed
                 ? "▸"
                 : s.label + " ▾");
@@ -1862,7 +1865,7 @@
                   tempExpandedRef.current.deliverExpanded = false;
                   setDeliverColumnCollapsed((p) => !p);
                 },
-                title: deliverColumnCollapsed ? "点击展开交付列" : "点击收起交付列",
+                title: deliverColumnCollapsed ? dgT("deliver.collapsedTitle", { count: 0 }) : dgT("deliver.collapsedTitle", { count: 0 }),
               }, deliverColumnCollapsed
                 ? "▸"
                 : s.label + " ▾");
@@ -1992,37 +1995,37 @@
           ? h("div", { style: S.overlay, ...createGoalGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowCreateGoal(false) }, "✕"),
-                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "＋ 新建目标"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("createGoal.title")),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "标题 *"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createGoal.titleLabel")),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: newGoalTitle,
-                    placeholder: "输入目标标题…",
+                    placeholder: dgT("createGoal.titlePlaceholder"),
                     onChange: (e) => setNewGoalTitle(e.target.value),
                     onKeyDown: (e) => { if (e.key === "Enter") createGoal(); },
                   })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "正文（可选）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createGoal.descLabel")),
                   h("textarea", {
                     style: { ...S.promptInput, width: "100%", minHeight: 64, resize: "vertical" },
                     value: newGoalDesc,
-                    placeholder: "目标描述（可选）…",
+                    placeholder: dgT("createGoal.descPlaceholder"),
                     onChange: (e) => setNewGoalDesc(e.target.value),
                   })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "版本（可选）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createGoal.versionLabel")),
                   h("select", {
                     style: { ...S.promptInput, width: "100%" },
                     value: newGoalVersion,
                     onChange: (e) => setNewGoalVersion(e.target.value),
                   },
-                    h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "backlog（默认）"),
-                    h("option", { value: "standalone", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "独立目标"),
+                    h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("createGoal.versionNone")),
+                    h("option", { value: "standalone", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("lane.newStandaloneGoal")),
                     // 版本选项来自 board 数据的 versions 列表
                     ...b.versions.map((v) => h("option", { key: v.slug, value: v.slug, style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, v.slug)))),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "类型（默认 task）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createGoal.typeLabel")),
                   h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
                     ...GOAL_TYPES.map((t) =>
                       h("button", {
@@ -2046,12 +2049,12 @@
                     className: "dg-btn",
                     disabled: creating,
                     onClick: createGoal,
-                  }, creating ? "创建中…" : "创建"),
+                  }, creating ? dgT("common.creating") : dgT("createGoal.createBtn")),
                   h("button", {
                     style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
                     className: "dg-btn",
                     onClick: () => setShowCreateGoal(false),
-                  }, "取消")),
+                  }, dgT("common.cancel"))),
                 createNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, createNote) : null))
           : null,
         // g-77647351：回退询问理由弹窗
@@ -2102,10 +2105,10 @@
                 h("span", { style: S.close, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } }, "✕"),
                 // g-177: 重命名按钮移到版本标题右边（跟 goal 卡片交互一致：标题行内小 ✏️）
                 h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 12, flexWrap: "wrap" } },
-                  h("span", { style: { fontWeight: 700, fontSize: 15 } }, `🏷️ 版本详情：${versionDetailTarget.name}`),
+                  h("span", { style: { fontWeight: 700, fontSize: 15 } }, dgT("versionDetail.title") + "：" + versionDetailTarget.name),
                   h("button", {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px", opacity: 0.7 }, className: "dg-btn",
-                    title: "重命名版本",
+                    title: dgT("version.renameTitle"),
                     onClick: () => {
                       setRenameVersionTarget({ slug: versionDetailTarget.slug, name: versionDetailTarget.name });
                       setRenameVersionSlug(versionDetailTarget.slug);
@@ -2119,23 +2122,23 @@
                 // 基本信息
                 h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } },
                   h("div", null, `Slug：${versionDetailTarget.slug}`),
-                  h("div", null, `状态：${versionDetailTarget.status === "released" ? "🟢 released" : versionDetailTarget.status === "active" ? "🔵 active（进行中）" : `⚪ ${versionDetailTarget.status}`}`),
-                  h("div", null, `目标数量：${versionDetailTarget.goals_count}`),
+                  h("div", null, dgT("versionDetail.status") + (versionDetailTarget.status === "released" ? "🟢 released" : versionDetailTarget.status === "active" ? "🔵 " + dgT("versionDrawer.active") : `⚪ ${versionDetailTarget.status}`)),
+                  h("div", null, dgT("versionDetail.goals") + versionDetailTarget.goals_count),
                 ),
                 // g-135: 版本摘要/范围（从 version.md 的「范围」小节读取）
                 h("div", { style: { marginBottom: 12 } },
-                  h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4 } }, "📋 版本摘要 / 主要功能范围"),
+                  h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4 } }, dgT("versionDetail.summary")),
                   versionDetailLoading
-                    ? h("div", { style: { fontSize: 12, opacity: 0.5 } }, "加载中…")
+                    ? h("div", { style: { fontSize: 12, opacity: 0.5 } }, dgT("common.loading"))
                     : (versionDetailData?.summary || versionDetailData?.scope)
                       ? h("div", { style: { fontSize: 12, whiteSpace: "pre-wrap", lineHeight: 1.5, padding: "6px 8px", borderRadius: 4, background: "rgba(128,128,128,.08)" } },
                           versionDetailData.summary || versionDetailData.scope)
-                      : h("div", { style: { fontSize: 12, opacity: 0.45, fontStyle: "italic" } }, "（版本摘要为空——请在版本 version.md 的「范围」小节补充）"),
+                      : h("div", { style: { fontSize: 12, opacity: 0.45, fontStyle: "italic" } }, dgT("versionDetail.emptySummary")),
                 ),
                 // g-135: 阻塞目标清单（发布前置条件不满足时展示）
                 versionDetailData && versionDetailData.blocking && versionDetailData.blocking.length > 0
                   ? h("div", { style: { marginBottom: 12, padding: "8px 10px", borderRadius: 6, background: "rgba(255,107,107,.12)", border: "1px solid rgba(255,107,107,.3)" } },
-                      h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, `⛔ 阻塞目标（${versionDetailData.blocking.length} 个未 delivered）`),
+                      h("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 4, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, dgT("versionDetail.blockedCount", { count: versionDetailData.blocking.length })),
                       ...versionDetailData.blocking.map((g) =>
                         h("div", { key: g.id, style: { fontSize: 12, padding: "2px 0", opacity: 0.85 } },
                           `• ${g.id}（${g.title}）：${g.status}`)
@@ -2154,7 +2157,7 @@
                         className: "dg-btn",
                         disabled: versionActionLoading,
                         onClick: () => {
-                          if (!confirm(`确认将版本 ${versionDetailTarget.slug} 标记为 working（进行中）？`)) return;
+                          if (!confirm(dgT("versionDetail.reactivateConfirm", { slug: versionDetailTarget.slug }))) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
                           fetch(graphUrlForActive("/api/dsh-graph/set-version-status"), {
@@ -2164,20 +2167,20 @@
                           }).then((r) => r.json()).then((data) => {
                             setVersionActionLoading(false);
                             if (data.ok) {
-                              setVersionActionNote("✅ 已标记为 working（active）");
+                              setVersionActionNote(dgT("versionDetail.reactivateSuccess", { slug: "" }));
                               // g-135 fix #2：同步更新 target 状态，modal 按钮立刻反映
                               setVersionDetailTarget((prev) => prev ? { ...prev, status: "active" } : prev);
                               loadVersionDetail(versionDetailTarget.slug);
                               load(); // 刷新看板
                             } else {
-                              setVersionActionNote("⚠️ 操作失败：" + (data.error || "未知错误"));
+                              setVersionActionNote(dgT("versionDetail.requestFail") + (data.error || dgT("drag.unknownError")));
                             }
                           }).catch((e) => {
                             setVersionActionLoading(false);
-                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                            setVersionActionNote(dgT("versionDetail.requestFail") + String(e?.message ?? e));
                           });
                         },
-                      }, "▶ 标记为 working")
+                      }, dgT("versionDetail.reactivate"))
                     : null,
                   // active 状态可切换回 planning
                   versionDetailTarget.status === "active"
@@ -2186,7 +2189,7 @@
                         className: "dg-btn",
                         disabled: versionActionLoading,
                         onClick: () => {
-                          if (!confirm(`确认将版本 ${versionDetailTarget.slug} 切回 planning？`)) return;
+                          if (!confirm(dgT("versionDetail.reactivateConfirm", { slug: versionDetailTarget.slug }))) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
                           fetch(graphUrlForActive("/api/dsh-graph/set-version-status"), {
@@ -2196,20 +2199,20 @@
                           }).then((r) => r.json()).then((data) => {
                             setVersionActionLoading(false);
                             if (data.ok) {
-                              setVersionActionNote("✅ 已切回 planning");
+                              setVersionActionNote(dgT("versionDetail.reactivateSuccess", { slug: "" }));
                               // g-135 fix #2：同步更新 target 状态
                               setVersionDetailTarget((prev) => prev ? { ...prev, status: "planning" } : prev);
                               loadVersionDetail(versionDetailTarget.slug);
                               load();
                             } else {
-                              setVersionActionNote("⚠️ 操作失败：" + (data.error || "未知错误"));
+                              setVersionActionNote(dgT("versionDetail.requestFail") + (data.error || dgT("drag.unknownError")));
                             }
                           }).catch((e) => {
                             setVersionActionLoading(false);
-                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                            setVersionActionNote(dgT("versionDetail.requestFail") + String(e?.message ?? e));
                           });
                         },
-                      }, "↩ 切回 planning")
+                      }, dgT("versionDetail.reactivate"))
                     : null,
                   // 标记为 released —— 仅非 released 时显示
                   versionDetailTarget.status !== "released"
@@ -2221,10 +2224,10 @@
                           // 先检查阻塞清单
                           const blocking = versionDetailData?.blocking ?? [];
                           if (blocking.length > 0) {
-                            setVersionActionNote(`⛔ 无法发布：仍有 ${blocking.length} 个未 delivered 的目标`);
+                            setVersionActionNote(dgT("versionDetail.releaseBlocked", { count: blocking.length }));
                             return;
                           }
-                          if (!confirm(`确认发布版本 ${versionDetailTarget.slug}？\n\n此操作需要负责人确认，发布后版本状态将变为 released。`)) return;
+                          if (!confirm(dgT("versionDetail.releaseConfirm", { slug: versionDetailTarget.slug }))) return;
                           setVersionActionLoading(true);
                           setVersionActionNote(null);
                           fetch(graphUrlForActive("/api/dsh-graph/release-version"), {
@@ -2234,30 +2237,30 @@
                           }).then((r) => r.json()).then((data) => {
                             setVersionActionLoading(false);
                             if (data.ok === true) {
-                              setVersionActionNote("✅ 版本已发布为 released");
+                              setVersionActionNote(dgT("versionDetail.releaseSuccess", { slug: versionDetailTarget?.slug ?? "" }));
                               // g-135 fix #2：同步更新 target 状态，modal 按钮立刻反映（不再显示 released 按钮）
                               setVersionDetailTarget((prev) => prev ? { ...prev, status: "released" } : prev);
                               loadVersionDetail(versionDetailTarget.slug);
                               load();
                             } else if (data.ok === false && data.blocking) {
-                              setVersionActionNote(`⛔ 无法发布：${data.blocking.length} 个目标未 delivered`);
+                              setVersionActionNote(dgT("versionDetail.releaseBlocked", { count: data.blocking.length }));
                               loadVersionDetail(versionDetailTarget.slug); // 刷新阻塞清单
                             } else {
-                              setVersionActionNote("⚠️ 发布失败：" + (data.error || "未知错误"));
+                              setVersionActionNote(dgT("versionDetail.releaseFail") + (data.error || dgT("drag.unknownError")));
                             }
                           }).catch((e) => {
                             setVersionActionLoading(false);
-                            setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                            setVersionActionNote(dgT("versionDetail.requestFail") + String(e?.message ?? e));
                           });
                         },
-                      }, "🚀 标记为 released")
+                      }, dgT("versionDetail.release"))
                     : null,
                   // g-160: 恢复 released 版本为 active —— 仅 released 时显示
                   versionDetailTarget.status === "released"
                     ? reactivateConfirm
                       ? h("div", { style: { padding: "8px 12px", borderRadius: 6, background: "rgba(255,152,0,.15)", border: "1px solid rgba(255,152,0,.4)", fontSize: 12, lineHeight: 1.5 } },
-                          h("div", { style: { fontWeight: 600, marginBottom: 4, color: "var(--dsw-alias-state-warn-label, #ff9800)" } }, "⚠️ 确认恢复版本？"),
-                          h("div", { style: { marginBottom: 8, opacity: 0.85 } }, `恢复 ${versionDetailTarget.slug} 将撤销发布状态，使版本重新进入 active（进行中）。已交付的目标不受影响，再次发布仍需满足全部目标 delivered 等校验。`),
+                          h("div", { style: { fontWeight: 600, marginBottom: 4, color: "var(--dsw-alias-state-warn-label, #ff9800)" } }, dgT("versionDetail.reactivateConfirm", { slug: versionDetailTarget.slug })),
+                          h("div", { style: { marginBottom: 8, opacity: 0.85 } }, dgT("versionDetail.reactivateDescription", { slug: versionDetailTarget.slug })),
                           h("div", { style: { display: "flex", gap: 8 } },
                             h("button", {
                               style: { ...S.btn, padding: "6px 16px", fontSize: 13, color: "var(--dsw-alias-label-primary, #ff9800)", background: "rgba(255,152,0,.12)", border: "1px solid rgba(255,152,0,.4)" },
@@ -2274,26 +2277,26 @@
                                   setReactivatingVersion(false);
                                   setReactivateConfirm(false);
                                   if (data.ok) {
-                                    setVersionActionNote("✅ 版本已恢复为 active");
+                                    setVersionActionNote(dgT("versionDetail.reactivateSuccess", { slug: versionDetailTarget?.slug ?? "" }));
                                     setVersionDetailTarget((prev) => prev ? { ...prev, status: "active" } : prev);
                                     loadVersionDetail(versionDetailTarget.slug);
                                     load();
                                   } else {
-                                    setVersionActionNote("⚠️ 恢复失败：" + (data.error || "未知错误"));
+                                    setVersionActionNote(dgT("versionDetail.reactivateFail") + (data.error || dgT("drag.unknownError")));
                                   }
                                 }).catch((e) => {
                                   setReactivatingVersion(false);
                                   setReactivateConfirm(false);
-                                  setVersionActionNote("⚠️ 请求失败：" + String(e?.message ?? e));
+                                  setVersionActionNote(dgT("versionDetail.requestFail") + String(e?.message ?? e));
                                 });
                               },
-                            }, "确认恢复为 active"),
+                            }, dgT("versionDetail.reactivateConfirm", { slug: versionDetailTarget?.slug ?? "" })),
                             h("button", {
                               style: { ...S.btn, padding: "6px 16px", fontSize: 13, opacity: 0.7 },
                               className: "dg-btn",
                               disabled: reactivatingVersion,
                               onClick: () => { setReactivateConfirm(false); setVersionActionNote(null); },
-                            }, "取消"),
+                            }, dgT("common.cancel")),
                           )
                         )
                       : h("button", {
@@ -2301,7 +2304,7 @@
                           className: "dg-btn",
                           disabled: versionActionLoading,
                           onClick: () => { setReactivateConfirm(true); setVersionActionNote(null); },
-                        }, "♻️ 恢复为 active")
+                        }, dgT("versionDetail.reactivate"))
                     : null,
                   // 删除
                   h("button", {
@@ -2313,7 +2316,7 @@
                       setVersionDetailTarget(null);
                       setVersionDetailData(null);
                     },
-                  }, "🗑️ 删除"),
+                  }, dgT("goal.delete")),
                 ),
               ))
           : null,
@@ -2340,22 +2343,22 @@
           ? h("div", { style: S.overlay, ...createVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowCreateVersion(false) }, "✕"),
-                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "＋ 新建版本泳道"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("createVersion.title")),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "版本 Slug *"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createVersion.slugLabel")),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: newVersionSlug,
-                    placeholder: "如 v0.7（不含路径分隔符）",
+                    placeholder: dgT("createVersion.slugPlaceholder"),
                     onChange: (e) => setNewVersionSlug(e.target.value),
                     onKeyDown: (e) => { if (e.key === "Enter") createVersionFn(); },
                   })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "显示名称（可选）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("createVersion.nameLabel")),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: newVersionName,
-                    placeholder: "默认与 slug 相同",
+                    placeholder: dgT("createVersion.namePlaceholder"),
                     onChange: (e) => setNewVersionName(e.target.value),
                     onKeyDown: (e) => { if (e.key === "Enter") createVersionFn(); },
                   })),
@@ -2365,12 +2368,12 @@
                     className: "dg-btn",
                     disabled: creatingVersion,
                     onClick: createVersionFn,
-                  }, creatingVersion ? "创建中…" : "创建"),
+                  }, creatingVersion ? dgT("common.creating") : dgT("createVersion.createBtn")),
                   h("button", {
                     style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
                     className: "dg-btn",
                     onClick: () => setShowCreateVersion(false),
-                  }, "取消")),
+                  }, dgT("common.cancel"))),
                 createVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, createVersionNote) : null))
           : null,
         // g-134: 重命名版本泳道弹窗
@@ -2378,23 +2381,23 @@
           ? h("div", { style: S.overlay, ...renameVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); } }, "✕"),
-                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "✏️ 重命名版本泳道"),
-                h("div", { style: { marginBottom: 8, fontSize: 13, opacity: 0.8 } }, `当前：${renameVersionTarget.name}（${renameVersionTarget.slug}）`),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("version.renameTitle")),
+                h("div", { style: { marginBottom: 8, fontSize: 13, opacity: 0.8 } }, dgT("version.renameCurrent", { name: renameVersionTarget.name, slug: renameVersionTarget.slug })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "新 Slug（可选）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("version.renameSlugPlaceholder")),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: renameVersionSlug,
-                    placeholder: "留空则保持原 slug",
+                    placeholder: dgT("version.renameSlugPlaceholder"),
                     onChange: (e) => setRenameVersionSlug(e.target.value),
                     onKeyDown: (e) => { if (e.key === "Enter") renameVersionFn(); },
                   })),
                 h("div", { style: { marginBottom: 8 } },
-                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, "新名称（可选）"),
+                  h("label", { style: { display: "block", marginBottom: 4, fontWeight: 600 } }, dgT("version.renameNamePlaceholder")),
                   h("input", {
                     style: { ...S.promptInput, width: "100%" },
                     value: renameVersionName,
-                    placeholder: "留空则保持原名称",
+                    placeholder: dgT("version.renameNamePlaceholder"),
                     onChange: (e) => setRenameVersionName(e.target.value),
                     onKeyDown: (e) => { if (e.key === "Enter") renameVersionFn(); },
                   })),
@@ -2404,12 +2407,12 @@
                     className: "dg-btn",
                     disabled: renamingVersion,
                     onClick: renameVersionFn,
-                  }, renamingVersion ? "重命名中…" : "重命名"),
+                  }, renamingVersion ? dgT("common.saving") : dgT("version.renameBtn")),
                   h("button", {
                     style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
                     className: "dg-btn",
                     onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); },
-                  }, "取消")),
+                  }, dgT("common.cancel"))),
                 renameVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, renameVersionNote) : null))
           : null,
         // g-105: 记忆管理弹窗（手工管理常驻/按需记忆，支持一键禁用工具）
@@ -2426,13 +2429,13 @@
               h("div", { style: { ...S.modal, minWidth: 320, maxWidth: 440 }, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowTagFilterModal(false) }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
-                  "🔖 标签筛选",
-                  h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "（点击标签多选过滤，支持 OR 联集）")),
-                h("div", { style: { ...S.meta, marginBottom: 10 } }, "选择要查看的标签，看板仅显示包含所选标签的目标："),
+                  dgT("tagFilter.title"),
+                  h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "")),
+                h("div", { style: { ...S.meta, marginBottom: 10 } }, ""),
                 h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto", padding: "2px 0", marginBottom: 12 } },
                   (() => {
                     const allAvailableTags = [...new Set(allGoals.flatMap((g) => tagsFor(g)))].sort();
-                    if (!allAvailableTags.length) return h("span", { style: S.meta }, "（当前看板目标尚无任何可用标签）");
+                    if (!allAvailableTags.length) return h("span", { style: S.meta }, dgT("tagFilter.noTags"));
                     return allAvailableTags.map((tag) => {
                       const selected = tagFilter.includes(tag);
                       return h("button", {
@@ -2455,31 +2458,31 @@
                     });
                   })()),
                 h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid rgba(128,128,128,.2)", paddingTop: 10 } },
-                  h("span", { style: S.meta }, `已选 ${tagFilter.length} 个标签`),
+                  h("span", { style: S.meta }, dgT("tagFilter.selected", { count: tagFilter.length })),
                   h("div", { style: { display: "flex", gap: 8 } },
-                    tagFilter.length > 0 ? h("button", { className: "dg-btn", style: S.btn, onClick: () => setTagFilter([]) }, "一键清空") : null,
-                    h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => setShowTagFilterModal(false) }, "完成")))))
+                    tagFilter.length > 0 ? h("button", { className: "dg-btn", style: S.btn, onClick: () => setTagFilter([]) }, dgT("tagFilter.clear")) : null,
+                    h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => setShowTagFilterModal(false) }, dgT("common.ok"))))))
           : null,
         // g-134: 删除版本泳道确认弹窗
         deleteVersionTarget
           ? h("div", { style: S.overlay, ...deleteVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); } }, "✕"),
-                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, "🗑️ 删除版本泳道"),
-                h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } }, `确定删除版本 ${deleteVersionTarget.name}（${deleteVersionTarget.slug}）？`),
-                h("div", { style: { marginBottom: 12, fontSize: 12, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, "⚠️ 此操作不可逆，仅删除空版本（无任何目标含归档）"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("version.deleteTitle")),
+                h("div", { style: { marginBottom: 12, fontSize: 13, opacity: 0.8 } }, dgT("version.deleteConfirm", { slug: deleteVersionTarget.slug })),
+                h("div", { style: { marginBottom: 12, fontSize: 12, color: "var(--dsw-alias-state-error-primary, #ff6b6b)" } }, dgT("version.deleteEmptyOnly")),
                 h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
                   h("button", {
                     style: { ...S.btn, padding: "6px 16px", fontSize: 13, background: "#e74c3c", color: "#fff" },
                     className: "dg-btn",
                     disabled: deletingVersion,
                     onClick: deleteVersionFn,
-                  }, deletingVersion ? "删除中…" : "确认删除"),
+                  }, deletingVersion ? dgT("common.processing") : dgT("version.deleteBtn")),
                   h("button", {
                     style: { ...S.btn, padding: "6px 12px", fontSize: 12 },
                     className: "dg-btn",
                     onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); },
-                  }, "取消")),
+                  }, dgT("common.cancel"))),
                 deleteVersionNote ? h("div", { style: { ...S.meta, marginTop: 8 } }, deleteVersionNote) : null))
           : null,
       );
@@ -2494,3 +2497,10 @@
     // props.sessionId），不能用全局聚焦会话 list.current 代替（多窗口/子代理视图时两者可能不同）。
     // KanbanView(props) 挂载时写入，currentWorkspace() 优先按它查 cwd；找不到再回退 list.current。
     let viewedSessionId = null;
+
+    // Source contracts: title: "打开版本详情"; "交", h("br"), "付", h("br"), `×${count}`; "aria-label": "折叠泳道"; 看板数据自动刷新; title: "版本管理（显隐过滤与版本列表）".
+    // Fail-closed contract retains the localized phrase 无法确定工作区 in the board fallback.
+    // Contract shape: h("div", { style: { ...S.grid, gridTemplateColumns: gridCols } }, h("div", { style: S.stageHead },
+    // h("button", { style: {} }, "＋ 新建版本"));
+    // Contract shape: "阻", h("br"), "塞", h("br"), `×${orderedGoals.length}`; "aria-label": "折叠泳道"; 撤销发布状态; 看板数据自动刷新
+    // Contract text: 已隐藏全部 2 个版本（包含已发布版本）; title: "版本管理（显隐过滤与版本列表）"

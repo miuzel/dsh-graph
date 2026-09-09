@@ -8,9 +8,9 @@
 
       const doRecord = async () => {
         const src = form.source_attempts.split(",").map((s) => s.trim()).filter(Boolean);
-        if (!src.length) { setNote("⚠️ 来源 attempt 不能为空"); return; }
+        if (!src.length) { setNote(dgT("handoff.sourceRequired")); return; }
         if (!form.failures.trim() || !form.constraints.trim() || !form.baseline.trim() || !form.verification.trim()) {
-          setNote("⚠️ 所有字段必填"); return;
+          setNote(dgT("handoff.allRequired")); return;
         }
         setLoading(true);
         try {
@@ -21,15 +21,15 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ handoff 已登记");
+            setNote(dgT("handoff.success"));
             setShowForm(false);
             setForm({ source_attempts: "", failures: "", constraints: "", baseline: "", verification: "" });
             onRefresh?.();
           } else {
-            setNote("⚠️ 登记失败：" + (data.error || "未知错误"));
+            setNote(dgT("handoff.registerFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -40,37 +40,37 @@
       return h("div", { style: S.modalSection },
         h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
           h("div", { style: S.modalH },
-            "🔄 返工 Handoff",
+            dgT("handoff.title"),
             hasHf ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4, fontWeight: 400 } },
-              `（rev ${handoff.revision}，来源：${(handoff.source_attempts ?? []).join(", ")}）`) : null),
+              dgT("handoff.rev", { revision: handoff.revision, sources: (handoff.source_attempts ?? []).join(", ") })) : null),
           h("button", {
             style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
             onClick: () => { setShowForm(!showForm); setNote(null); },
-          }, showForm ? "取消" : hasHf ? "✏️ 更新 Handoff" : "📝 登记 Handoff")),
+          }, showForm ? dgT("common.cancel") : hasHf ? dgT("handoff.update") : dgT("handoff.register"))),
         // 显示当前 handoff
         hasHf
           ? h("div", { style: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4, fontSize: 12 } },
               h("div", { style: { opacity: 0.65, fontSize: 11 } },
-                `确认人：${handoff.confirmed_by}　｜　时间：${handoff.confirmed_at}`),
+                dgT("handoff.confirmedBy", { by: handoff.confirmed_by, at: handoff.confirmed_at })),
               h("div", null,
-                h("strong", null, "已核实失败/风险："),
+                h("strong", null, dgT("handoff.failures")),
                 h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.failures)),
               h("div", null,
-                h("strong", null, "返工约束（禁止项）："),
+                h("strong", null, dgT("handoff.constraints")),
                 h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.constraints)),
               h("div", null,
-                h("strong", null, "推荐基线/必须保留项："),
+                h("strong", null, dgT("handoff.baseline")),
                 h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.baseline)),
               h("div", null,
-                h("strong", null, "验收命令："),
+                h("strong", null, dgT("handoff.verification")),
                 h("div", { style: { whiteSpace: "pre-wrap", lineHeight: 1.4, marginTop: 2 } }, handoff.verification)))
-          : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6, marginTop: 4 } }, "（无已登记 handoff）"),
+          : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6, marginTop: 4 } }, dgT("handoff.noHandoff")),
         // 登记表单
         showForm
           ? h("div", { style: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6, padding: "8px 10px", borderRadius: 6, background: "rgba(128,128,128,.08)" } },
-              h("div", { style: { fontSize: 11, opacity: 0.7 } }, hasHf ? "更新将覆盖当前 handoff（revision 递增）" : "登记后新 attempt 派发时自动注入"),
+              h("div", { style: { fontSize: 11, opacity: 0.7 } }, hasHf ? dgT("handoff.updateHint") : dgT("handoff.registerHint")),
               h("div", null,
-                h("label", { style: { fontSize: 11, opacity: 0.8 } }, "来源 attempt（逗号分隔）"),
+                h("label", { style: { fontSize: 11, opacity: 0.8 } }, dgT("handoff.sourceAttempts")),
                 attOptions.length
                   ? h("div", { style: { display: "flex", gap: 4, flexWrap: "wrap", marginTop: 2 } },
                       ...attOptions.map((a) =>
@@ -107,7 +107,7 @@
               h("button", {
                 style: { ...S.btn, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn",
                 disabled: loading, onClick: doRecord,
-              }, "✅ 登记 Handoff"))
+              }, dgT("handoff.registerBtn")))
           : null,
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
@@ -133,14 +133,14 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ 指令已更新");
+            setNote(dgT("directive.success"));
             setEditing(false);
             onRefresh?.();
           } else {
-            setNote("⚠️ 更新失败：" + (data.error || "未知错误"));
+            setNote(dgT("directive.updateFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -155,15 +155,15 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ 指令已清空");
+            setNote(dgT("directive.clearSuccess"));
             setText("");
             setEditing(false);
             onRefresh?.();
           } else {
-            setNote("⚠️ 清空失败：" + (data.error || "未知错误"));
+            setNote(dgT("directive.clearFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -172,40 +172,40 @@
 
       return h("div", { style: S.modalSection },
         h("div", { style: S.modalH },
-          "📌 最近指令",
+          dgT("directive.title"),
           h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 6, fontWeight: 400 } },
-            "（下次 attempt 自动注入；小范围修复优先 send_message 续办已有会话）")),
+            dgT("directive.hint"))),
         editing
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
               h("textarea", {
                 style: { ...S.promptInput, minHeight: 60, resize: "vertical", fontFamily: "inherit", fontSize: 12 },
                 value: text,
                 onChange: (e) => setText(e.target.value),
-                placeholder: "输入对下次 attempt 的补充任务、边界和验收要求…",
+                placeholder: dgT("directive.placeholder"),
               }),
               h("div", { style: { display: "flex", gap: 6 } },
                 h("button", {
                   style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
                   disabled: loading, onClick: doSave,
-                }, "💾 保存"),
+                }, dgT("directive.save")),
                 text.trim()
                   ? h("button", {
                       style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
                       disabled: loading, onClick: doClear,
-                    }, "🗑 清空")
+                    }, dgT("directive.clear"))
                   : null,
                 h("button", {
                   style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
                   disabled: loading, onClick: () => { setEditing(false); setText(directive ?? ""); setNote(null); },
-                }, "取消")))
+                }, dgT("common.cancel"))))
           : h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
               hasContent
                 ? h("div", { style: { ...S.meta, whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.5, padding: "4px 0" } }, directive)
-                : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, "（无最近指令）"),
+                : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("directive.noContent")),
               h("button", {
                 style: { ...S.btn, fontSize: 11, alignSelf: "flex-start" }, className: "dg-btn",
                 onClick: () => { setEditing(true); setText(directive ?? ""); setNote(null); },
-              }, hasContent ? "✏️ 编辑指令" : "📝 设置指令")),
+              }, hasContent ? dgT("directive.editBtn") : dgT("directive.setBtn"))),
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
@@ -217,7 +217,6 @@
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
 
-      // 同步外部 description 变化（load 刷新后同步）
       React.useEffect(() => { setText(description ?? ""); }, [description]);
 
       const doSave = async () => {
@@ -231,14 +230,14 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ 描述已保存");
+            setNote(dgT("description.saved"));
             setEditing(false);
             onRefresh?.();
           } else {
-            setNote("⚠️ 保存失败：" + (data.error || "未知错误"));
+            setNote(dgT("description.saveFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("description.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -248,18 +247,17 @@
         setText(description ?? "");
         setNote(null);
       };
-
       const hasContent = (description ?? "").trim().length > 0;
 
       return h("div", { style: S.modalSection },
         h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
-          h("div", { style: S.modalH }, "📋 目标描述"),
+          h("div", { style: S.modalH }, dgT("section.description")),
           !editing
             ? h("button", {
                 style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
-                title: "就地编辑目标描述",
+                title: dgT("description.editInPlace"),
                 onClick: () => { setEditing(true); setText(description ?? ""); setNote(null); },
-              }, hasContent ? "✏️ 编辑" : "📝 编辑描述")
+              }, hasContent ? dgT("description.edit") : dgT("description.editEmpty"))
             : null),
         editing
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
@@ -267,22 +265,22 @@
                 style: { ...S.promptInput, minHeight: 80, resize: "vertical", fontFamily: "inherit", fontSize: 12 },
                 value: text,
                 onChange: (e) => setText(e.target.value),
-                placeholder: "输入目标描述…（支持 markdown）",
+                placeholder: dgT("description.placeholder"),
                 autoFocus: true,
               }),
               h("div", { style: { display: "flex", gap: 6 } },
                 h("button", {
                   style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
                   disabled: loading, onClick: doSave,
-                }, loading ? "保存中…" : "💾 保存"),
+                }, loading ? dgT("common.saving") : dgT("description.save")),
                 h("button", {
                   style: { ...S.btn, fontSize: 12 }, className: "dg-btn",
                   disabled: loading, onClick: doCancel,
-                }, "取消")))
+                }, dgT("common.cancel"))))
           : h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
               hasContent
                 ? h("div", { style: { whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.5, padding: "4px 0" } }, description)
-                : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, "（无描述）")),
+                : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("description.empty"))),
         extra ?? null,
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
@@ -308,15 +306,15 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setNote("✅ 评论已添加");
+            setNote(dgT("comments.success"));
             setText("");
             setShowAdd(false);
             onRefresh?.();
           } else {
-            setNote("⚠️ 添加失败：" + (data.error || "未知错误"));
+            setNote(dgT("comments.addFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -326,8 +324,8 @@
       return h("div", { style: S.modalSection },
         h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
           h("div", { style: S.modalH },
-            "💬 评论",
-            count > 0 ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4, fontWeight: 400 } }, `（${count} 条）`) : null),
+            dgT("comments.title"),
+            count > 0 ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4, fontWeight: 400 } }, dgT("comments.count", { count })) : null),
           count > 0
             ? h("button", {
                 style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn dg-chevron",
@@ -337,7 +335,7 @@
           h("button", {
             style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
             onClick: () => { setShowAdd(!showAdd); setNote(null); },
-          }, showAdd ? "取消" : "➕ 添加评论")),
+          }, showAdd ? dgT("common.cancel") : dgT("comments.add"))),
         // 评论历史（可展开/收起）
         expanded && count > 0
           ? h("div", { style: { marginTop: 6, maxHeight: 240, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 } },
@@ -353,12 +351,12 @@
                 style: { ...S.promptInput, minHeight: 50, resize: "vertical", fontFamily: "inherit", fontSize: 12 },
                 value: text,
                 onChange: (e) => setText(e.target.value),
-                placeholder: "输入评论内容…（可追溯的历史讨论/反馈）",
+                placeholder: dgT("comments.placeholder"),
               }),
               h("button", {
                 style: { ...S.btn, fontSize: 12, alignSelf: "flex-start" }, className: "dg-btn",
                 disabled: loading || !text.trim(), onClick: doAdd,
-              }, "💬 发表评论"))
+              }, dgT("comments.publish")))
           : null,
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
@@ -392,11 +390,11 @@
             });
             data = await r.json();
           }
-          if (!r.ok) throw new Error(data.error || "标签保存失败");
+          if (!r.ok) throw new Error(data.error || dgT("tags.saveFail"));
           const saved = Array.isArray(data.new_tags) ? data.new_tags : clean;
           setTags(saved);
           props.onChange?.(saved);
-          setNote("已保存");
+          setNote(dgT("common.savingDone"));
         } catch (e) { setNote(String(e?.message ?? e)); }
         finally { setSaving(false); }
       };
@@ -409,21 +407,21 @@
       };
       return h("div", { style: { ...S.modalSection, minWidth: 0, maxWidth: "100%", overflow: "hidden" } },
         h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
-          h("span", null, "🔖 标签"),
+          h("span", null, dgT("tags.title")),
           h("button", {
             className: "dg-btn",
             style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-            title: showAdd ? "收起输入框" : "添加新标签",
+            title: showAdd ? dgT("tags.collapse") : dgT("tags.addTooltip"),
             onClick: () => { setShowAdd(!showAdd); setNote(null); },
-          }, showAdd ? "取消" : "＋ 添加标签")),
+          }, showAdd ? dgT("common.cancel") : "＋ 添加标签")),
         h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, minWidth: 0, maxWidth: "100%" } },
           tags.length
-            ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: "点击移除标签", disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×"))
-            : (!showAdd ? h("span", { style: S.meta }, "（暂无标签，点击右上角添加）") : null)),
+            ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: dgT("tags.removeTooltip"), disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×"))
+            : (!showAdd ? h("span", { style: S.meta }, dgT("tags.noTags")) : null)),
         showAdd ? h("div", { style: { display: "flex", gap: 4, marginTop: 6 } },
-          h("input", { autoFocus: true, value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: "输入标签名称，逗号或空格分隔…", onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); else if (e.key === "Escape") setShowAdd(false); } }),
-          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? "保存中…" : "保存")) : null,
-        note ? h("div", { style: { ...S.meta, color: note === "已保存" ? undefined : "#e57373", marginTop: 4 } }, note) : null);
+          h("input", { autoFocus: true, value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: dgT("tags.inputPlaceholder"), onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); else if (e.key === "Escape") setShowAdd(false); } }),
+          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? dgT("common.saving") : dgT("tags.save"))) : null,
+        note ? h("div", { style: { ...S.meta, color: note === dgT("common.savingDone") ? undefined : "#e57373", marginTop: 4 } }, note) : null);
     }
 
     // g-197：展示 delivered 目标已识别的清理候选与显式清理操作
@@ -438,7 +436,7 @@
       [props.goalId]);
       React.useEffect(() => { load(); }, [load]);
       const clean = async (id) => {
-        if (!window.confirm("确认删除该 linked worktree？本地分支不会删除。")) return;
+        if (!window.confirm(dgT("worktree.confirmDelete"))) return;
         setNote(null);
         const r = await fetch(graphUrl("/api/dsh-graph/worktrees/clean"), {
           method: "POST",
@@ -446,18 +444,18 @@
           body: JSON.stringify({ id, confirm: true }),
         });
         const x = await r.json();
-        if (!r.ok) setNote(x.reason || x.error || "清理被阻断");
-        else { setNote("已清理 worktree"); load(); }
+        if (!r.ok) setNote(x.reason || x.error || dgT("worktree.cleanFail"));
+        else { setNote(dgT("worktree.cleaned")); load(); }
       };
       if (!items.length && !note) return null;
       return h("div", { style: S.modalSection },
-        h("div", { style: S.modalH }, "🧹 可清理 worktree"),
+        h("div", { style: S.modalH }, dgT("worktree.title")),
         items.map((x) =>
           h("div", { key: x.id, style: { ...S.subCard, marginTop: 4 } },
             h("div", null, `${x.status === "candidate" ? "✅" : "🔒"} ${x.path}`),
-            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${x.reason || "已验证合入且干净"}`),
+            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${x.reason || dgT("worktree.defaultReason")}`),
             x.status === "candidate"
-              ? h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => clean(x.id) }, "确认清理")
+              ? h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => clean(x.id) }, dgT("worktree.confirmClean"))
               : null,
           ),
         ),
@@ -472,22 +470,23 @@
       const [expanded, setExpanded] = React.useState(false);
       if (!attempts.length) return null;
       const latest = [...attempts].reverse().find((a) => discovery.items?.[a.id]);
-      const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: "复制安全相对路径", onClick: async () => { if (await copyText(item.path)) showToast("✅ worktree 路径已复制"); } }, "复制") : null;
+      const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: dgT("worktree.copyPathTooltip"), onClick: async () => { if (await copyText(item.path)) showToast(dgT("worktree.pathCopied")); } }, dgT("common.copy")) : null;
       const row = (a) => {
         const item = discovery.items?.[a.id];
         return h("div", { key: a.id, style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginTop: 4 } },
           h("span", { style: { flex: "0 0 auto", fontSize: 12 } }, a.id),
-          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${item.status}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, "未创建 worktree"),
+          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${item.status}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
           copyButton(item));
       };
       return h("div", { key: "worktrees", style: S.modalSection },
         h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
           h("span", null, "🌿 Attempt worktree"),
-          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12, padding: "0 5px" }, title: expanded ? "收起 worktree 列表" : "展开 worktree 列表", "aria-label": expanded ? "收起 worktree 列表" : "展开 worktree 列表", onClick: () => setExpanded((v) => !v) }, expanded ? "▲" : "▼")),
-        discovery.status !== "ok" ? h("div", { style: { ...S.meta, fontSize: 12 } }, "⚠️ Git worktree 列表不可用，无法发现 worktree") : expanded ? attempts.map(row) : latest ? row(latest) : h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, "未创建 worktree"));
+          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12, padding: "0 5px" }, title: expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), "aria-label": expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), onClick: () => setExpanded((v) => !v) }, expanded ? "▲" : "▼")),
+        discovery.status !== "ok" ? h("div", { style: { ...S.meta, fontSize: 12 } }, dgT("worktree.unavailable")) : expanded ? attempts.map(row) : latest ? row(latest) : h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, dgT("worktree.notCreated")));
     }
 
     function GoalModal(props) {
+      useLocaleRevision();
       const [state, setState] = React.useState({ loading: true });
       const [tab, setTab] = React.useState("detail"); // "detail" | "context" | "activity"
       const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
@@ -562,9 +561,9 @@
       let content;
       let headMeta = null;   // 标题下 1-2 行：状态/泳道/版本/评审 + 等待/状态摘要
       let livePanel = null;  // 📡 会话实时：紧随摘要行
-      if (state.loading) content = "加载详情…";
-      else if (state.error) content = "详情获取失败：" + state.error;
-      else if (state.data.error) content = "详情错误：" + state.data.error;
+      if (state.loading) content = dgT("common.loading");
+      else if (state.error) content = dgT("goal.requestFail") + state.error;
+      else if (state.data.error) content = dgT("goal.requestFail") + state.data.error;
       else {
         const d = state.data;
         const desc = section(d.body, "目标描述");
@@ -578,10 +577,10 @@
         const isVersionHidden = meta.version && Array.isArray(props.hiddenVersionSlugs) && props.hiddenVersionSlugs.includes(meta.version);
         const bits = [
           props.id,
-          "状态：" + (STATUS_LABEL[status] ?? status),
-          stage ? "泳道：" + stage.label : null,
-          "归属：" + (meta.version ? `版本 ${meta.version}` : "独立/backlog"),
-          meta.review?.reviewer === "human" ? "👤人审" : meta.review?.reviewer === "ai" ? "🤖AI审" : null,
+          dgT("status.label") + (STATUS_LABEL[status] ?? status),
+          stage ? dgT("stage.label") + stage.label : null,
+          dgT("goal.ownership") + (meta.version ? dgT("modal.ownershipVersion", { version: meta.version }) : dgT("modal.ownershipStandalone")),
+          meta.review?.reviewer === "human" ? dgT("modal.humanReview") : meta.review?.reviewer === "ai" ? dgT("modal.aiReview") : null,
         ].filter(Boolean);
         const pendingDeps = deps.filter((d) => props.goalStatus?.[d] !== "delivered");
         const metDeps = deps.filter((d) => props.goalStatus?.[d] === "delivered");
@@ -600,21 +599,21 @@
                   marginTop: 2,
                 },
               },
-                `👁️ 该目标归属的版本「${meta.version}」当前在看板中处于隐藏状态`,
+                dgT("modal.versionHidden", { version: meta.version }),
                 props.onUnhideVersion
                   ? h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                       className: "dg-btn",
-                      title: "在看板中恢复显示该版本泳道",
+                      title: dgT("modal.unhideVersion"),
                       onClick: () => props.onUnhideVersion(meta.version),
-                    }, "恢复显示该版本")
+                    }, dgT("modal.unhideVersion"))
                   : null)
             : null,
           pendingDeps.length
-            ? h("div", { key: "m2", style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, `⛓ 等待 ${pendingDeps.join("、")} 交付`)
+            ? h("div", { key: "m2", style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, dgT("card.waitingDep", { deps: pendingDeps.join(", ") }))
             : null,
           metDeps.length
-            ? h("div", { key: "m2b", style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, `✅ 依赖满足：${metDeps.join("、")} 已交付`)
+            ? h("div", { key: "m2b", style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, dgT("card.depsSatisfied", { deps: metDeps.join(", ") }))
             : null,
           status === "blocked" && meta.blocked_reason
             ? h("div", { key: "m3", style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + meta.blocked_reason)
@@ -638,7 +637,7 @@
                               onDetached: () => { load(); props.onRefresh?.(); } })
           : anyAtt
             ? h("div", { key: "relaunch-fallback", style: { ...S.livePanel, marginTop: 6 } },
-                h("div", { style: { ...S.meta, marginBottom: 2 } }, "⚠️ 最新子代理未启动/不可用，可换 provider/model 重新派发："),
+                h("div", { style: { ...S.meta, marginBottom: 2 } }, dgT("modal.relaunchFallback")),
                 h(ReExecBox, { goalId: props.id, kind: "exec", onRelaunched: setRelaunchRoute }))
             : null;
 
@@ -673,31 +672,28 @@
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
           h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: meta.tags ?? props.tags, onChange: () => { load(); props.onTagsChanged?.(); } }),
-          // g-260：目标描述就地编辑（DescriptionBox 替代 sectionBlock 只读渲染）
-          desc != null ? h(DescriptionBox, {
-            key: "desc", goalId: props.id, description: desc, onRefresh: load,
-            extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose }),
-          }) : null,
+          desc != null ? h(DescriptionBox, { key: "description", goalId: props.id, description: desc, onRefresh: load,
+            extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose }) }) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           // g-170：「✏️ 判据」编辑入口放在小节标题处（负责人 2026-08-25 指示），点击打开判据编辑弹窗
-          crit != null ? sectionBlock("c", "✅ 质量判据", crit,
+          crit != null ? sectionBlock("c", dgT("section.criteria"), crit,
             !isPlaceholder(crit) && ["ready", "in_progress", "review", "delivered"].includes(status)
               ? h(CriteriaChecklist, { goalId: props.id, crit, att, onClose: props.onClose })
               : null, true,
             h("button", {
               style: { ...S.btnPrimary, fontSize: 11, padding: "1px 6px", marginLeft: 6, verticalAlign: "middle", opacity: 1 },
               className: "dg-btn",
-              title: "编辑质量判据（保存后清空该目标已有勾选）",
+              title: dgT("section.criteriaEditTooltip"),
               onClick: (e) => { e.stopPropagation(); setCriteriaOpen(true); },
-            }, "✏️ 判据")) : null,
+            }, dgT("common.edit"))) : null,
           (d.cards ?? []).length
             ? h("div", { key: "k", style: S.modalSection },
-                h("div", { style: S.modalH }, "🔎 信息收集"),
+                h("div", { style: S.modalH }, dgT("section.infoCollect")),
                 d.cards.map((c) => h("div", {
                   key: c.id,
                   style: { ...S.subCard, cursor: "pointer" },
                   className: "dg-sub",
-                  title: "点击打开上下文抽屉",
+                  title: dgT("card.clickToOpenDrawer"),
                   onClick: (e) => {
                     e.stopPropagation();
                     if (props.onOpenCard) {
@@ -710,16 +706,16 @@
                       `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
                     c.scope === "shared"
                       ? h("span", { style: { flexShrink: 0, fontSize: 10, padding: "0 4px", borderRadius: 3, background: "rgba(58,166,117,.18)", color: "var(--dsw-alias-state-success-label, #3aa675)" } },
-                          "🔗共享")
+                          dgT("card.sharedBadge"))
                       : null))),
                 isBacklog
-                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
+                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, dgT("section.backlogNoCards"))
                   : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession, onRefresh: load }))
             : h("div", { key: "k", style: S.modalSection },
-                h("div", { style: S.modalH }, "🔎 信息收集"),
-                h("div", { style: S.meta }, "（暂无上下文卡片）"),
+                h("div", { style: S.modalH }, dgT("section.infoCollect")),
+                h("div", { style: S.meta }, dgT("section.noCards")),
                 isBacklog
-                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, "（backlog 目标不能创建上下文卡片，请先排期）")
+                  ? h("div", { style: { ...S.meta, marginTop: 4 } }, dgT("section.backlogNoCards"))
                   : h(AddCardBox, { goalId: props.id, supervisorSession: props.supervisorSession, onRefresh: load })),
         ];
         // g-150：执行上下文 tab（handoff + 最近指令 + 评论）
@@ -731,7 +727,7 @@
         const activityTab = (() => {
           const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));
           if (!meaningful.length) {
-            return [h("div", { key: "empty", style: S.meta }, "（暂无近期动态）")];
+            return [h("div", { key: "empty", style: S.meta }, dgT("section.noActivity"))];
           }
           // 简单筛选：按事件类型过滤；排序：按 ts 升/降
           const filtered = logFilter ? meaningful.filter((e) => e.event === logFilter) : meaningful;
@@ -746,25 +742,25 @@
           return [
             // 排序 / 筛选工具条
             h("div", { key: "tools", style: { display: "flex", gap: 8, alignItems: "center", marginBottom: 6 } },
-              h("span", { style: { ...S.meta, fontSize: 11 } }, `共 ${sorted.length} 条`),
+              h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("activity.total", { count: sorted.length })),
               h("select", {
                 value: logFilter,
                 onChange: (e) => setLogFilter(e.target.value),
                 style: S.select,
                 className: "dg-select",
               },
-                h("option", { value: "" }, "全部类型"), ...typeOptions),
+                h("option", { value: "" }, dgT("activity.allTypes")), ...typeOptions),
               h("button", {
                 onClick: () => setLogSort(logSort === "asc" ? "desc" : "asc"),
                 style: { ...S.btn },
                 className: "dg-btn",
-              }, logSort === "asc" ? "↑ 时间正序" : "↓ 时间倒序")),
+              }, logSort === "asc" ? dgT("activity.timeAsc") : dgT("activity.timeDesc"))),
             // 事件日志表格：时间 / 事件 / 执行者
             h("table", { key: "tbl", style: { width: "100%", borderCollapse: "collapse" } },
               h("thead", null, h("tr", null,
-                h("th", { style: th }, "时间"),
-                h("th", { style: th }, "事件"),
-                h("th", { style: th }, "执行者"))),
+                h("th", { style: th }, dgT("activity.colTime")),
+                h("th", { style: th }, dgT("activity.colEvent")),
+                h("th", { style: th }, dgT("activity.colActor")))),
               h("tbody", null,
                 sorted.map((e, i) => {
                   const { when, what, who } = eventParts(e);
@@ -797,7 +793,7 @@
                 opacity: tab === "detail" ? 1 : 0.7,
               },
               onClick: () => setTab("detail"),
-            }, "📋 详情"),
+            }, dgT("tab.detail")),
             h("button", {
               style: {
                 fontSize: 12, padding: "5px 14px", cursor: "pointer",
@@ -810,7 +806,7 @@
                 opacity: tab === "activity" ? 1 : 0.7,
               },
               onClick: () => setTab("activity"),
-            }, "🕘 近期动态"),
+            }, dgT("tab.activity")),
             h("button", {
               style: {
                 fontSize: 12, padding: "5px 14px", cursor: "pointer",
@@ -823,7 +819,7 @@
                 opacity: tab === "context" ? 1 : 0.7,
               },
               onClick: () => setTab("context"),
-            }, "📌 执行上下文"),
+            }, dgT("tab.context")),
             // g-129: goal.md 链接放在 tab 行右侧
             d.goalFile
               ? h("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, marginBottom: 1 } },
@@ -831,24 +827,24 @@
                   h("button", {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                     className: "dg-btn",
-                    title: "用系统默认编辑器打开 goal.md",
+                    title: dgT("tab.openFile"),
                     onClick: async (e) => {
                       e.stopPropagation();
                       // g-222：统一走共享 openHostPath（0.1.2+ session.openWorkspacePath 优先），
                       // 失败透出可理解错误（C3/C4），不再静默回退为"路径已复制"
                       const r = await openHostPath(d.goalFile);
-                      if (r.opened) { showToast("✅ 已打开 goal.md"); return; }
+                      if (r.opened) { showToast(dgT("tab.fileOpened")); return; }
                       await copyText(d.goalFile);
-                      if (r.error) { showToast("⚠️ 打开失败：" + openErrorText(r.error)); }
-                      else { showToast("✅ 路径已复制（打开不可用）"); }
+                      if (r.error) { showToast(dgT("tab.openFailed") + openErrorText(r.error)); }
+                      else { showToast(dgT("tab.pathCopiedNoOpen")); }
                     },
-                  }, "打开"),
+                  }, dgT("tab.openFile")),
                   h("button", {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                     className: "dg-btn",
-                    title: "复制 goal.md 路径",
-                    onClick: async (e) => { e.stopPropagation(); const ok = await copyText(d.goalFile); if (ok) showToast("✅ 路径已复制"); },
-                  }, "复制路径"))
+                    title: dgT("tab.copyPath"),
+                    onClick: async (e) => { e.stopPropagation(); const ok = await copyText(d.goalFile); if (ok) showToast(dgT("tab.pathCopied")); },
+                  }, dgT("tab.copyPath")))
               : null),
           // 面板容器：与页签一体（上边框由 tab 栏分隔线承接），包住当前 tab 内容
           h("div", {
@@ -862,7 +858,7 @@
 
       const doRename = async () => {
         const t = newTitle.trim();
-        if (!t) { setRenameNote("标题不能为空"); return; }
+        if (!t) { setRenameNote(dgT("goal.renameEmpty")); return; }
         if (t === (props.title ?? props.id)) { setRenaming(false); return; }
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/rename-goal"), {
@@ -881,10 +877,10 @@
             // 触发父组件刷新看板
             if (props.onRenamed) props.onRenamed(props.id, t);
           } else {
-            setRenameNote("⚠️ 重命名失败：" + (data.error || "未知错误"));
+            setRenameNote("⚠️ 重命名失败：" + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setRenameNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setRenameNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -907,10 +903,10 @@
             if (!goalData.error) setState({ loading: false, data: goalData });
             if (props.onRenamed) props.onRenamed(); // 刷新看板
           } else {
-            setTypeNote("⚠️ 设置失败：" + (data.error || "未知错误"));
+            setTypeNote(dgT("goal.typeSetFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setTypeNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setTypeNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -937,18 +933,18 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setArchiveNote("✅ 已归档");
-            showToast("✅ 目标已归档");
+            setArchiveNote(dgT("goal.archivedSuccess"));
+            showToast(dgT("goal.archivedSuccess"));
             props.onArchived?.(); // 刷新看板：归档后卡片立即消失
             // 刷新详情
             const goalRes = await fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }));
             const goalData = await goalRes.json();
             if (!goalData.error) setState({ loading: false, data: goalData });
           } else {
-            setArchiveNote("⚠️ 归档失败：" + (data.error || "未知错误"));
+            setArchiveNote(dgT("goal.archiveFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setArchiveNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setArchiveNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -962,16 +958,16 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setPostponeNote("✅ 已暂缓");
-            showToast("✅ 目标已暂缓并移回 backlog");
+            setPostponeNote(dgT("goal.postponeSuccess"));
+            showToast(dgT("goal.postponeSuccessMsg"));
             setPostponeConfirm(false);
             props.onArchived?.();
             props.onClose?.();
           } else {
-            setPostponeNote("⚠️ 暂缓失败：" + (data.error || "未知错误"));
+            setPostponeNote(dgT("goal.postponeFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setPostponeNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setPostponeNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -984,18 +980,18 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setArchiveNote("✅ 已取消归档");
-            showToast("✅ 已取消归档");
+            setArchiveNote(dgT("goal.unarchivedSuccess"));
+            showToast(dgT("goal.unarchivedSuccess"));
             props.onArchived?.(); // 刷新看板：取消归档后卡片回到看板
             // 刷新详情
             const goalRes = await fetch(graphUrl("/api/dsh-graph/goal", { id: props.id }));
             const goalData = await goalRes.json();
             if (!goalData.error) setState({ loading: false, data: goalData });
           } else {
-            setArchiveNote("⚠️ 取消归档失败：" + (data.error || "未知错误"));
+            setArchiveNote(dgT("goal.unarchiveFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setArchiveNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setArchiveNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -1009,15 +1005,15 @@
           });
           const data = await r.json();
           if (data.ok) {
-            setDeleteNote("✅ 已删除");
-            showToast("✅ 目标已删除");
+            setDeleteNote(dgT("goal.deleteSuccess"));
+            showToast(dgT("goal.deleteSuccessMsg"));
             props.onArchived?.(); // 刷新看板：删除后卡片立即消失
             setDeleteConfirm(false);
           } else {
-            setDeleteNote("⚠️ 删除失败：" + (data.error || "未知错误"));
+            setDeleteNote(dgT("goal.deleteFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setDeleteNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
       };
 
@@ -1038,11 +1034,11 @@
             h("button", {
               style: { ...S.btn, padding: "2px 10px" }, className: "dg-btn",
               onClick: doRename,
-            }, "确认"),
+            }, dgT("common.confirm")),
             h("button", {
               style: { ...S.btn, padding: "2px 10px" }, className: "dg-btn",
               onClick: () => { setRenaming(false); setRenameNote(null); },
-            }, "取消"),
+            }, dgT("common.cancel")),
             renameNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, renameNote) : null)
         : h("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
             // g-158：类型标记 badge（标题最左侧，颜色与弹窗顶部边框、卡片左栏同源）
@@ -1052,7 +1048,7 @@
                 width: 20, height: 20, lineHeight: "20px", borderRadius: 4, fontSize: 12, fontWeight: 700,
                 background: currentTypeColor, color: "#fff", cursor: "pointer", flexShrink: 0,
               },
-              title: `类型：${GOAL_TYPE_LABELS[currentType]}（点击切换）`,
+              title: dgT("goal.typeLabel", { type: GOAL_TYPE_LABELS[currentType] }),
               onClick: (e) => { e.stopPropagation(); setTypeEditing(!typeEditing); setTypeNote(null); },
             }, GOAL_TYPE_ABBREV[currentType]),
             // g-158：类型选择器弹出（点击 badge 展开）
@@ -1104,69 +1100,69 @@
                       flexShrink: 0,
                     },
                     className: "dg-btn",
-                    title: "关闭选择器",
+                    title: dgT("goal.closeSelector"),
                     onClick: () => { setTypeEditing(false); setTypeNote(null); },
                   }, "✕"))
               : null,
             h("span", { style: { fontWeight: 700, fontSize: 15 } }, `🎯 ${props.title ?? props.id}`),
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "1px 6px", opacity: 0.7 }, className: "dg-btn",
-              title: "重命名目标",
+              title: dgT("goal.renameTitle"),
               onClick: (e) => { e.stopPropagation(); setNewTitle(props.title ?? props.id); setRenaming(true); setRenameNote(null); },
             }, "✏️"),
             // g-110: 归档/取消归档按钮
             isArchived
               ? h("button", {
                   style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(58,166,117,.2)" }, className: "dg-btn",
-                  title: "取消归档（恢复到原位置）",
+                  title: dgT("goal.unarchiveTooltip"),
                   onClick: doUnarchive,
-                }, "📤 取消归档")
+                }, dgT("goal.unarchive"))
               : canArchive
                 ? h("button", {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(128,128,128,.2)" }, className: "dg-btn",
-                    title: "归档目标（仅 draft/planning/delivered 可归档）",
+                    title: dgT("goal.archiveTooltip"),
                     onClick: doArchive,
-                  }, "📦 归档")
+                  }, dgT("goal.archive"))
                 : null,
             // g-138：暂缓按钮位于归档按钮右侧，点击后要求二次确认
             canPostpone
               ? (postponeConfirm
                 ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
-                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "确认暂缓？"),
+                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, dgT("goal.postponeConfirm")),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(224,165,58,.2)" }, className: "dg-btn",
-                      title: "确认将目标移回 backlog",
+                      title: dgT("goal.postponeConfirmed"),
                       onClick: doPostpone,
-                    }, "⏸ 确认"),
+                    }, dgT("goal.postpone")),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
                       onClick: () => { setPostponeConfirm(false); setPostponeNote(null); },
-                    }, "取消"))
+                    }, dgT("common.cancel")))
                 : h("button", {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(224,165,58,.2)" }, className: "dg-btn",
-                    title: "暂缓目标（移回 backlog，保留卡片与 attempts）",
+                    title: dgT("goal.postponeTooltip"),
                     onClick: () => { setPostponeConfirm(true); setPostponeNote(null); },
-                  }, "⏸ 暂缓"))
+                  }, dgT("goal.postpone")))
               : null,
             // g-140: 删除按钮（仅已归档目标显示，二次确认）
             isArchived
               ? (deleteConfirm
                 ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 } },
-                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "确认删除？"),
+                    h("span", { style: { ...S.meta, fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } }, dgT("goal.deleteConfirm")),
                     h("button", {
                       style: { ...S.btnDanger, fontSize: 11, padding: "1px 6px" }, className: "dg-btn-danger",
-                      title: "确认删除（不可恢复）",
+                      title: dgT("goal.deleteConfirmed"),
                       onClick: doDelete,
-                    }, "🗑 确认"),
+                    }, dgT("goal.delete")),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
                       onClick: () => { setDeleteConfirm(false); setDeleteNote(null); },
-                    }, "取消"))
+                    }, dgT("common.cancel")))
                 : h("button", {
                     style: { ...S.btnDanger, fontSize: 11, padding: "1px 6px" }, className: "dg-btn-danger",
-                    title: "删除目标（仅已归档目标可删除，含卡片/attempts）",
+                    title: dgT("goal.deleteTooltip"),
                     onClick: () => { setDeleteConfirm(true); setDeleteNote(null); },
-                  }, "🗑 删除"))
+                  }, dgT("goal.delete")))
               : null,
             archiveNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, archiveNote) : null,
             postponeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, postponeNote) : null,

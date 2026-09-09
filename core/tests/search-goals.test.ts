@@ -110,13 +110,13 @@ test("g-233 源码契约：模块与 Bundle 包含搜索框、高亮样式、导
   assert.match(kanban, /dg-search-bar/);
   assert.match(kanban, /dg-search-input/);
   assert.match(kanban, /searchFullText/);
-  assert.match(kanban, /未找到匹配/);
-  assert.match(kanban, /请输入搜索关键字/);
+  assert.match(kanban, /dgT\(['"]search\.noResults['"]\)/);
+  assert.match(kanban, /dgT\(['"]search\.enterKeyword['"]\)/);
   assert.match(kanban, /exitSearch/);
   assert.match(kanban, /navigateToMatch/);
   assert.match(kanban, /executeSearch/);
   assert.match(bundle, /dg-search-bar/);
-  assert.match(bundle, /未找到匹配/);
+  assert.match(bundle, /dgT\(['"]search\.noResults['"]\)/);
 
   // 5. 临时状态栈记录与精准恢复契约（判据 5, 6, 7）
   assert.match(kanban, /tempExpandedRef/);

@@ -185,8 +185,8 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.match(modal, /fetch\(graphUrl\("\/api\/dsh-graph\/settings"\)\)/);
   assert.match(modal, /method: "POST"/);
   assert.match(modal, /"default", "override", "disable"/);
-  assert.match(modal, /保留未知键与注释/);
-  assert.match(modal, /显示高级\/仅存储字段/);
+  assert.match(modal, /dgT\("settings\.editHint"\)/);
+  assert.match(modal, /dgT\("settings\.showAdvanced"\)/);
   assert.match(modal, /display: showAdvanced \? "flex" : "none"/);
   assert.match(modal, /display: showAdvanced \? "grid" : "none"/);
   assert.match(modal, /h\("hr", \{ style: \{ display: showAdvanced \? "block" : "none"/);
@@ -202,20 +202,20 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.match(modal, /setConfigFile\(data\.configFile \?\? null\)/);
   // g-222：统一走共享 openHostPath（0.1.2+ session.openWorkspacePath 优先），失败透出可理解错误
   assert.match(modal, /openHostPath\(configFile\)/);
-  assert.match(modal, /"✅ 已打开 project\.yaml"/);
-  assert.match(modal, /打开失败/);
+  assert.match(modal, /dgT\("settings\.openedProjectYaml"\)/);
+  assert.match(modal, /dgT\(["']tab\.openFailed["']\)/);
   assert.match(modal, /openErrorText\(r\.error\)/);
   // open/copy/fallback 行为源契约：openHostPath 成功才 return；失败复制绝对路径并提示
   const openIdx = modal.indexOf("openHostPath(configFile)");
-  const fallbackIdx = modal.indexOf('showToast("✅ 路径已复制（打开不可用）")');
+  const fallbackIdx = modal.indexOf('dgT("tab.pathCopiedNoOpen")');
   const copyIdx = modal.indexOf("await copyText(configFile);");
   assert.ok(openIdx > 0 && fallbackIdx > openIdx && copyIdx > 0, "openHostPath 应先于 fallback 复制");
   assert.ok((modal.match(/copyText\(configFile\)/g) || []).length >= 2, "打开回退 + 复制按钮均应复制绝对路径");
-  assert.match(modal, /"📄 project\.yaml"/);
-  assert.match(modal, /title: "用系统默认编辑器打开 project\.yaml"/);
-  assert.match(modal, /title: "复制 project\.yaml 路径"/);
-  assert.match(modal, /\}, "打开"\)/);
-  assert.match(modal, /\}, "复制路径"\)/);
+  assert.match(modal, /dgT\("settings\.projectYaml"\)/);
+  assert.match(modal, /title: dgT\("settings\.openConfigTooltip"\)/);
+  assert.match(modal, /title: dgT\("settings\.copyProjectPath"\)/);
+  assert.match(modal, /\}, dgT\("tab\.openFile"\)\)/);
+  assert.match(modal, /\}, dgT\("tab\.copyPath"\)\)/);
   const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
   assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
   assert.match(bundle, /function SettingsModal/);
@@ -234,8 +234,8 @@ test("g-133 源契约：workspace 弹窗 executor provider/model 目录化 selec
   assert.match(modal, /catalog\.providers\.filter\(\(p\) => p\.active && \(groupById\.get\(p\.provider\)\?\.models\.length \?\? 0\) > 0\)/);
   assert.match(modal, /legalModelsByProvider\.get\(curProvider\)/);
   // 空项代表继承父会话；未列出的已存旧值保留为固定 option（advisory，不拦截保存）
-  assert.match(modal, /"（继承父会话）"/);
-  assert.match(modal, /"（已存值，当前目录未列出）"/);
+  assert.match(modal, /dgT\("settings\.inheritSession"\)/);
+  assert.match(modal, /dgT\("settings\.legacyValue"\)/);
   assert.match(modal, /legacySuffix/);
   // provider/model 控件由 input 改为 select（boxSizing:"border-box"）
   assert.match(modal, /h\("select", \{ style: \{ \.\.\.S\.promptInput, width: "100%", boxSizing: "border-box" \}, value: curProvider/);
@@ -269,7 +269,7 @@ test("g-163 判据方块按有序 key 渲染并支持即时同步", () => {
   const actions = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/goal-actions.js"), "utf8");
   assert.match(card, /function CriteriaProgress\(props\)/);
   assert.match(card, /props\.items/);
-  assert.match(card, /CRITERIA_PLACEHOLDERS/);
+  assert.match(card, /getCriteriaPlaceholders/);
   assert.match(card, /!CRITERIA_PLACEHOLDERS\.has\(key\)/);
   assert.match(card, /checkedSet\.has\(key\) \? "🟩" : "◽"/);
   assert.match(card, /role: "img"/);
@@ -315,9 +315,9 @@ test("g-164 released 泳道与 active/version 泳道共用同一动态列模板�
   assert.match(source, /blockedColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ blocked/);
   // 顶部表头网格：(1) 处使用 gridCols；首个单元格为左上角 stageHead 锚点
   //（g-174 起承载「＋ 新建版本」入口，替换原「泳道＼阶段」文字）。
-  assert.match(source, /h\("div", \{ style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \} \},[\s\S]*?h\("div", \{ style: S\.stageHead \},\s*\n\s*h\("button", \{[\s\S]*?\}, "＋ 新建版本"\)\)/);
+  assert.match(source, /h\("div", \{ style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \} \},[\s\S]*?h\("div", \{ style: S\.stageHead \},\s*\n\s*h\("button", \{[\s\S]*?\}, dgT\("createVersion\.createBtn"\)\)\)/);
   // released 泳道网格：(1) 处使用 gridCols（relx- 容器），保证与上方泳道列宽/顺序一致。
-  assert.match(source, /relx-" \+ v\.slug, style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \}/);
+  assert.match(source, /relx-" \+ v\.slug, style: \{ \.\.\.S\.grid, gridTemplateColumns: releasedGridCols \}/);
   // 全文件恰好两处（顶部表头 + released 泳道）引用该共享模板，不存在各排各的静态模板。
   assert.equal((source.match(/gridTemplateColumns: gridCols/g) || []).length, 2);
 });
@@ -349,8 +349,8 @@ test("g-156/g-175 交付/阻塞折叠列源契约：会话态、窄栏标题与�
   assert.match(source, /deliverColumnCollapsed[\s\S]*?: s\.label \+ " ▾"\)/);
   assert.match(source, /blockedColumnCollapsed[\s\S]*?: s\.label \+ " ▾"\)/);
   // 列内窄条单元格仍显示「交/付」「阻/塞」+ 数量，保证折叠态可识别。
-  assert.match(source, /"交", h\("br"\), "付", h\("br"\), `×\$\{count\}`/);
-  assert.match(source, /"阻", h\("br"\), "塞", h\("br"\), `×\$\{orderedGoals\.length\}`/);
+  assert.match(source, /dgT\(['"]deliver\.label['"]\), h\("br"\), "", h\("br"\), dgT\(['"]deliver\.count/);
+  assert.match(source, /dgT\(['"]blocked\.label['"]\), h\("br"\), "", h\("br"\), dgT\(['"]blocked\.count/);
   // 两列折叠后固定窄宽度，避免横向布局溢出。
   assert.match(source, /deliverColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)"/);
   assert.match(source, /blockedColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)"/);
@@ -364,13 +364,13 @@ test("g-162 普通泳道折叠入口位于内容底部且 released 不重复添�
   assert.match(source, /gridColumn: "2 \/ -1"/);
   assert.match(source, /collapsible = true/);
   assert.match(source, /lane\(v\.name, v\.goals, "rellane-" \+ v\.slug, null, laneIndex \+ idx, false\)/);
-  assert.doesNotMatch(source, /title: "折叠泳道"[\s\S]{0,180}lane\(v\.name, v\.goals, "rellane-/);
+  assert.doesNotMatch(source, /title: dgT\('lane\.collapseTooltip'\)[\s\S]{0,180}lane\(v\.name, v\.goals, "rellane-/);
   assert.doesNotMatch(source, /localStorage|sessionStorage/);
   const backlogControl = source.slice(source.indexOf("// g-162: 泳道折叠按钮"), source.indexOf("// g-137 修复"));
   assert.match(backlogControl, /className: "dg-lane-collapse"/);
   assert.match(backlogControl, /className: "dg-lane-collapse-triangle"/);
-  assert.match(backlogControl, /"aria-label": "折叠泳道"/);
-  assert.doesNotMatch(backlogControl, /className: "dg-btn",\s*title: "折叠泳道"|\}, "▾"\)/);
+  assert.match(backlogControl, /"aria-label": dgT\('lane\.collapseTooltip'\)/);
+  assert.doesNotMatch(backlogControl, /className: "dg-btn",\s*title: dgT\('lane\.collapseTooltip'\)|\}, "▾"\)/);
   const laneCreate = source.slice(source.indexOf("// g-129: 每个 lane 标题右下角"), source.indexOf("return [labelEl, ...cells]"));
   assert.match(laneCreate, /position: "absolute", right: 6, top: 8, bottom: "auto"/);
   assert.equal((source.match(/paddingRight: 40/g) || []).length, 4, "active/version 与 backlog 的展开/折叠标题均预留 + 空间");
@@ -398,6 +398,33 @@ test("g-163 Card 真实调用链转发 camelCase criteriaItems", () => {
       useEffect: () => {},
     },
     h,
+    dgT: (key: string, params?: Record<string, any>) => {
+      const dict: Record<string, string> = {
+        'card.criteriaProgress': '质量判据：已完成 {done}/{total}',
+        'card.expandFull': '展开查看依赖/实时会话/上下文卡片等完整信息',
+        'card.collapseBrief': '收起为精简视图',
+        'card.clickToOpen': '点击打开详情',
+        'card.clickToOpenDrawer': '点击打开上下文抽屉',
+        'card.goToSession': '↗ 转到对话',
+        'card.sharedBadge': '🔗共享',
+        'card.archived': '📦已归档',
+        'card.waitingDep': '⛓ 等待 {deps} 交付',
+        'card.depsSatisfied': '✅ 依赖满足：{deps} 已交付',
+        'review.aiBadge': '🤖AI审',
+        'criteria.pending': '（待登记）',
+        'criteria.pendingDetail': '（待登记；进入 in_progress 前必须非空且已确认）',
+        'criteria.toBeFilled': '（待填写）',
+        'card.clickSummaryExpand': '点击展开摘要全文',
+        'card.clickSummaryCollapse': '点击收起摘要',
+      };
+      let text = dict[key] ?? key;
+      if (params) {
+        for (const [k, v] of Object.entries(params)) {
+          text = text.replace(`{${k}}`, String(v));
+        }
+      }
+      return text;
+    },
     S: new Proxy({}, { get: () => ({}) }),
     STATUS_LABEL: { in_progress: "进行中" },
     CARD_STATUS_ICON: {},
@@ -406,10 +433,13 @@ test("g-163 Card 真实调用链转发 camelCase criteriaItems", () => {
     goalTypeColor: () => "#000",
     normalizeGoalType: () => "feature",
     rowHalf: () => "after",
+    sessionLinkBtn: () => null,
+    renderHighlight: (text: any) => text,
+    GoalTags: () => null,
     localStorage: { getItem: () => JSON.stringify(["第一"]) },
     window: { addEventListener: () => {}, removeEventListener: () => {} },
   };
-  const progressStart = source.indexOf("const CRITERIA_PLACEHOLDERS");
+  const progressStart = source.indexOf("const getCriteriaPlaceholders");
   const cardStart = source.indexOf("function Card(");
   const cardEnd = source.indexOf("\n    // g-a92e1406：状态摘要行", cardStart);
   assert.ok(progressStart > 0 && cardStart > progressStart && cardEnd > cardStart);
@@ -797,8 +827,8 @@ test("g-170 判据编辑入口位于详情弹窗「质量判据」标题处（�
   const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/goal-modal.js"), "utf8");
   // 标题处入口：sectionBlock 支持 titleExtra，质量判据小节标题右侧挂「✏️ 判据」按钮
   assert.match(modal, /function sectionBlock\(key, title, body, extra, hideBodyWhenExtra, titleExtra\)/);
-  assert.match(modal, /"✅ 质量判据"/);
-  assert.match(modal, /"✏️ 判据"/);
+  assert.match(modal, /dgT\("section\.criteria"\)/);
+  assert.match(modal, /dgT\("common\.edit"\)/);
   assert.match(modal, /onClick: \(e\) => \{ e\.stopPropagation\(\); setCriteriaOpen\(true\);/);
   assert.match(modal, /criteriaOpen, setCriteriaOpen\] = React\.useState\(false\)/);
   // 打开 CriteriaModal 并传 onSaved 刷新详情
@@ -813,20 +843,20 @@ test("g-170 判据编辑弹窗源契约：D6 清勾选告知/清空、D8 base_it
   const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/criteria-modal.js"), "utf8");
   assert.match(modal, /function CriteriaModal\(props\)/);
   // D6：进入编辑前明确告知 + 保存后清空 localStorage 勾选
-  assert.match(modal, /保存后将清空该目标已有的判据勾选状态/);
+  assert.match(modal, /dgT\("criteria\.saveWarning"\)/);
   assert.match(modal, /localStorage\.removeItem\("dsh-graph\.crit\." \+ goalId\)/);
   assert.match(modal, /dsh-graph\.criteria-changed/);
   // D8：base_items token + 409 自动以本地内容覆盖重试（force=true）
   assert.match(modal, /base_items: baseItems \?\? \[\]/);
   assert.match(modal, /r\.status === 409/);
-  assert.match(modal, /以本地内容覆盖服务器/);
+  assert.match(modal, /dgT\("criteria\.conflictResolved"\)/);
   assert.match(modal, /force: !!force/);
   assert.match(modal, /post\(true\)/);
   // 逐行编辑能力
-  assert.match(modal, /"➕ 新增判据"/);
-  assert.match(modal, /"上移"/);
-  assert.match(modal, /"下移"/);
-  assert.match(modal, /"删除该条"/);
+  assert.match(modal, /dgT\("criteria\.addBtn"\)/);
+  assert.match(modal, /dgT\("criteria\.moveUp"\)/);
+  assert.match(modal, /dgT\("criteria\.moveDown"\)/);
+  assert.match(modal, /dgT\("criteria\.deleteItem"\)/);
 });
 
 test("g-170 kanban 不再承载判据编辑入口（已移到详情弹窗）", () => {
@@ -842,7 +872,7 @@ test("g-170 build-client PARTS 收录 criteria-modal 且 bundle 含生成标记�
   const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
   assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
   assert.match(bundle, /function CriteriaModal\(props\)/);
-  assert.match(bundle, /"✏️ 判据"/);
+  assert.match(bundle, /dgT\("common\.edit"\)/);
 });
 
 test("g-243 VersionDrawer 必须在 KanbanView 函数体之外声明（否则每次渲染重建抽屉、版本清单滚动位置归零）", () => {
@@ -883,8 +913,8 @@ test("g-243 VersionDrawer 必须在 KanbanView 函数体之外声明（否则每
 
 test("g-170 constants：criteria.updated 事件有标签并计入近期动态", () => {
   const src = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/constants.js"), "utf8");
-  assert.match(src, /"criteria\.updated": "更新判据"/);
-  assert.match(src, /"criteria\.updated", \/\/ g-170/);
+  assert.match(src, /get "criteria\.updated"\(\) \{ return dgT\('event\.criteriaUpdated'\); \}/);
+  assert.match(src, /"criteria\.updated",/);
 });
 
 test("spawn-options：无 llm 服务时容错返回（重新执行选择器数据源）", async () => {
@@ -1515,7 +1545,7 @@ test("g-168 host prompt 契约：PM 读取 goal.md 并附带指导意见", () =>
 test("g-160 client 源契约：released 详情入口和二次确认恢复", () => {
   const source = readFileSync(
     join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
-  assert.match(source, /title:\s*"打开版本详情"/);
+  assert.match(source, /title:\s*dgT\(['"]versionDrawer\.detailTooltip['"]\)/);
   assert.match(source, /versionDetailTarget\.status === "released"/);
   assert.match(source, /撤销发布状态/);
   assert.match(source, /status:\s*"active",\s*confirmed:\s*true/);
@@ -1752,8 +1782,8 @@ test("g-179 模块源契约：goal-modal.js 信息收集标题统一为 🔎 信
   const src = readFileSync(
     join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
   // 实际显示的标题两处（有卡/无卡分支）均为新 emoji
-  const matches = src.match(/h\("div", \{ style: S\.modalH \}, "🔎 信息收集"\)/g) ?? [];
-  assert.equal(matches.length, 2, "goal-modal.js 两处信息收集标题均为 🔎 信息收集");
+  const matches = src.match(/dgT\("section\.infoCollect"\)/g) ?? [];
+  assert.equal(matches.length, 2, "goal-modal.js 两处信息收集标题均由 i18n 提供");
   assert.ok(!src.includes("🗂"), "goal-modal.js 不残留旧 emoji 🗂");
 });
 
@@ -1761,8 +1791,8 @@ test("g-179 生成 bundle 契约：client.js 标题同步为 🔎 信息收集�
   const bundle = readFileSync(
     join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
-  const matches = bundle.match(/h\("div", \{ style: S\.modalH \}, "🔎 信息收集"\)/g) ?? [];
-  assert.equal(matches.length, 2, "生成 bundle: 两处信息收集标题均为 🔎 信息收集");
+  const matches = bundle.match(/dgT\("section\.infoCollect"\)/g) ?? [];
+  assert.equal(matches.length, 2, "生成 bundle: 两处信息收集标题均由 i18n 提供");
   assert.ok(!bundle.includes("🗂"), "生成 bundle: 不残留旧 emoji 🗂");
 });
 
@@ -1899,6 +1929,33 @@ test("g-200 LiveStrip 隔离契约：Card 仅在 Goal 处于执行态或有活�
       useSyncExternalStore: () => null,
     },
     h,
+    dgT: (key: string, params?: Record<string, any>) => {
+      const dict: Record<string, string> = {
+        'card.criteriaProgress': '质量判据：已完成 {done}/{total}',
+        'card.expandFull': '展开查看依赖/实时会话/上下文卡片等完整信息',
+        'card.collapseBrief': '收起为精简视图',
+        'card.clickToOpen': '点击打开详情',
+        'card.clickToOpenDrawer': '点击打开上下文抽屉',
+        'card.goToSession': '↗ 转到对话',
+        'card.sharedBadge': '🔗共享',
+        'card.archived': '📦已归档',
+        'card.waitingDep': '⛓ 等待 {deps} 交付',
+        'card.depsSatisfied': '✅ 依赖满足：{deps} 已交付',
+        'review.aiBadge': '🤖AI审',
+        'criteria.pending': '（待登记）',
+        'criteria.pendingDetail': '（待登记；进入 in_progress 前必须非空且已确认）',
+        'criteria.toBeFilled': '（待填写）',
+        'card.clickSummaryExpand': '点击展开摘要全文',
+        'card.clickSummaryCollapse': '点击收起摘要',
+      };
+      let text = dict[key] ?? key;
+      if (params) {
+        for (const [k, v] of Object.entries(params)) {
+          text = text.replace(`{${k}}`, String(v));
+        }
+      }
+      return text;
+    },
     S: {
       goalCard: {}, depCard: {}, blockedCard: {}, subCard: {}, title: {}, meta: {}, statusLine: {},
     },
@@ -2348,8 +2405,8 @@ test("g-214 源契约：settings-modal.js 包含刷新间隔配置输入与 <5s 
   assert.match(modal, /refreshIntervalInput/);
   assert.match(modal, /handleIntervalChange/);
   assert.match(modal, /setRefreshInterval\(refreshIntervalInput\)/);
-  assert.match(modal, /看板数据自动刷新/);
-  assert.match(modal, /刷新间隔最小限制为 5 秒/);
+  assert.match(modal, /dgT\("settings\.autoRefresh"\)/);
+  assert.match(modal, /dgT\("settings\.intervalWarn"\)/);
 });
 
 test("g-214 源契约：kanban.js 挂载 RefreshCountdown 与刷新间隔监听", () => {
@@ -2448,7 +2505,7 @@ test("g-223 源契约：kanban.js 挂载版本管理按钮、抽屉与隐藏版�
   const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
   // 1. 左上角 stageHead 包含版本管理按钮
   assert.match(kanban, /className: "dg-btn dg-version-manage-btn"/);
-  assert.match(kanban, /title: "版本管理（显隐过滤与版本列表）"/);
+  assert.match(kanban, /title: dgT\("versionDrawer\.title"\)/);
   assert.match(kanban, /onClick: \(\) => setShowVersionDrawer\(true\)/);
 
   // 2. 状态与过滤：直接按 props.sessionId 在 render 阶段解析 activeWs
@@ -2460,8 +2517,8 @@ test("g-223 源契约：kanban.js 挂载版本管理按钮、抽屉与隐藏版�
 
   // 3. 全部隐藏时的空状态（覆盖 active 与 released 全隐藏）
   assert.match(kanban, /totalVersionsCount > 0 && \(visibleVersionsCount === 0 \|\| \(allActiveVersions\.length > 0 && active\.length === 0\)\)/);
-  assert.match(kanban, /已隐藏全部[\s\S]*?个版本（包含已发布版本）/);
-  assert.match(kanban, /已隐藏全部[\s\S]*?个活跃版本泳道/);
+  assert.match(kanban, /dgT\(['"]versionDrawer\.allHidden['"]/);
+  assert.match(kanban, /dgT\(['"]versionDrawer\.activeHidden['"]/);
 
   // 4. VersionDrawer 挂载
   assert.match(kanban, /showVersionDrawer\s*\?\s*h\(VersionDrawer/);
@@ -2476,16 +2533,16 @@ test("g-223 源契约：kanban.js 挂载版本管理按钮、抽屉与隐藏版�
 test("g-223 源契约：goal-modal.js 包含隐藏版本友好提示与恢复显示入口", () => {
   const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
   assert.match(modal, /isVersionHidden/);
-  assert.match(modal, /该目标归属的版本「/);
-  assert.match(modal, /恢复显示该版本/);
+  assert.match(modal, /dgT\("modal\.versionHidden"/);
+  assert.match(modal, /dgT\("modal\.unhideVersion"\)/);
 });
 
 test("g-223 VersionDrawer 组件逻辑与交互及 a11y 可访问性契约验证", () => {
   const vDrawer = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/version-drawer.js"), "utf8");
   assert.match(vDrawer, /function VersionDrawer\(props\)/);
-  assert.match(vDrawer, /"显示全部"/);
-  assert.match(vDrawer, /"仅活跃版本"/);
-  assert.match(vDrawer, /"隐藏全部"/);
+  assert.match(vDrawer, /dgT\("versionDrawer\.showAll"\)/);
+  assert.match(vDrawer, /dgT\("versionDrawer\.showActive"\)/);
+  assert.match(vDrawer, /dgT\("versionDrawer\.hideAll"\)/);
   assert.match(vDrawer, /onToggleVersion/);
   assert.match(vDrawer, /onOpenVersionDetail/);
 
@@ -2494,8 +2551,8 @@ test("g-223 VersionDrawer 组件逻辑与交互及 a11y 可访问性契约验证
   assert.match(vDrawer, /"aria-modal":\s*"true"/);
   assert.match(vDrawer, /"aria-labelledby":\s*"dg-version-drawer-title"/);
   assert.match(vDrawer, /id:\s*"dg-version-drawer-title"/);
-  assert.match(vDrawer, /h\("button",\s*\{[\s\S]*?type:\s*"button"[\s\S]*?"aria-label":\s*"关闭版本管理抽屉"[\s\S]*?onClick:\s*onClose/);
-  assert.match(vDrawer, /"aria-label":\s*"搜索版本名称或 slug"/);
+  assert.match(vDrawer, /h\("button",\s*\{[\s\S]*?type:\s*"button"[\s\S]*?"aria-label":\s*dgT\("common\.close"\)[\s\S]*?onClick:\s*onClose/);
+  assert.match(vDrawer, /"aria-label":\s*dgT\("versionDrawer\.searchPlaceholder"\)/);
 });
 
 test("g-223 纯函数 resolveWorkspaceOfSession 与动态会话切换行为契约", () => {
@@ -2651,7 +2708,7 @@ test("g-223 行为契约：hidden-versions-changed 自定义事件非数组/畸�
    assert.ok(plugin.includes("return null;"));
    assert.ok(!plugin.includes("if (lastGoodWorkspace) return lastGoodWorkspace"));
    assert.ok(kanban.includes("if (!activeWs) return"));
-   assert.ok(kanban.includes("无法确定工作区"));
+   assert.ok(kanban.includes("kanban.error.workspace"));
    assert.ok(kanban.includes("graphUrlForActive"));
    assert.ok(kanban.includes("requestSeqRef"));
  });
@@ -2878,9 +2935,9 @@ test("g-189 worktree 发现与弹窗展示源契约", () => {
   assert.match(modal, /AttemptWorktrees/);
   assert.match(modal, /useState\(false\)/);
   assert.match(modal, /expanded \? "▲" : "▼"/);
-  assert.match(modal, /未创建 worktree/);
+  assert.match(modal, /dgT\("worktree\.notCreated"\)/);
   assert.match(modal, /textOverflow: "ellipsis"/);
-  assert.match(modal, /复制安全相对路径/);
+  assert.match(modal, /dgT\("worktree\.copyPathTooltip"\)/);
   assert.match(modal, /已移除/);
   assert.match(modal, /lastWorktreesRef/);
 });
@@ -2902,8 +2959,8 @@ test("g-186 review 接受交付入口：单一状态提示、不含‘裁决’�
   assert.match(actions, /session\.prompt/);
   assert.match(actions, /【负责人交付复核请求】/);
   assert.match(actions, /"queue"/);
-  assert.match(constants, /"review\.requested": "请求主管复核"/);
-  assert.match(constants, /"review\.objected": "主管提出异议"/);
+  assert.match(constants, /get "review\.requested"\(\) \{ return dgT\('event\.reviewRequested'\); \}/);
+  assert.match(constants, /get "review\.objected"\(\) \{ return dgT\('event\.reviewObjected'\); \}/);
   assert.match(bundle, /【负责人交付复核请求】/);
   assert.doesNotMatch(bundle, /等待主管裁决/);
 });
@@ -2918,13 +2975,13 @@ test("g-192 标题栏主管徽章源契约：conversation.session.header.actions
   assert.match(plugin, /id: "dsh-graph-supervisor-badge"/);
   assert.match(plugin, /order: -9/);
   assert.match(bar, /function SupervisorHeaderBadge/);
-  assert.match(bar, /🧭 GRAPH主管/);
+  assert.match(bar, /dgT\('supervisor\.badge'\)/);
   assert.match(bar, /sessionId !== supervisorSession/);
   assert.match(bar, /role: "status"/);
   assert.match(host, /path: "\/api\/dsh-graph\/supervisor-session"/);
   assert.match(bundle, /function SupervisorHeaderBadge/);
   assert.match(bundle, /dsh-graph-supervisor-badge/);
-  assert.match(bundle, /🧭 GRAPH主管/);
+  assert.match(bundle, /dgT\('supervisor\.badge'\)/);
 });
 
 // g-197：delivered 弹窗 worktree 清理候选源契约。
@@ -2952,7 +3009,7 @@ test("g-191 client：设置页与重新执行均使用受控模式枚举并显�
   assert.match(settings, /dg-global-subagent-mode-/);
   assert.match(modal, /htmlFor: modeId/);
   assert.match(modal, /id: modeId,/);
-  assert.match(modal, /aria-label": "workspace 子代理执行模式"/);
+  assert.match(modal, /aria-label": dgT\("settings\.modeAria"\)/);
   assert.match(modal, /dg-workspace-subagent-mode-/);
   assert.match(panel, /modeList/);
   assert.match(panel, /mode: mode/);
@@ -3230,7 +3287,7 @@ test("source-contract：shared-panel 附件逐项渲染为节点；card-drawer o
   // 不应把 React/Preact 元素用字符串拼接（会变成 [object Object]）
   assert.ok(!panel.includes("+ c.attachments.map("), "shared-panel 不应拼接 React 元素为字符串");
   assert.ok(!panel.includes(".join(\"，\")"), "shared-panel 附件不应 join 字符串");
-  assert.ok(panel.includes('"📎 附件："'), "should still label attachments");
+  assert.ok(panel.includes('dgT("shared.attachments")'), "should still label attachments via i18n");
   const drawer = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/card-drawer.js"), "utf8");
   // own→shared / 解除引用 / 转自有卡 三个按钮均应对 collecting 禁用
   const count = (drawer.match(/disabled: card\.status === "collecting"/g) ?? []).length;
@@ -3481,9 +3538,9 @@ test("g-246 源契约：settings-modal.js 提供规范化脏判定函数且所�
   assert.match(modal, /function settingsDraftIsDirty\(baseline, form, refreshIntervalInput\)/);
   // 统一拦截函数存在，确认文案明确
   assert.match(modal, /const requestClose = \(\) => \{/);
-  assert.match(modal, /window\.confirm\("有未保存的修改，确认放弃？"\)/);
+  assert.match(modal, /window\.confirm\(dgT\("common\.confirm"\)\)/);
   // saving 中阻止关闭（避免保存与关闭确认竞态）
-  assert.match(modal, /if \(saving\) \{ setNote\(\{ kind: "err", text: "正在保存，请稍候…" \}\); return; \}/);
+  assert.match(modal, /if \(saving\) \{ setNote\(\{ kind: "err", text: dgT\("common\.saving"\) \}\); return; \}/);
   // ✕（loading/失败/主表单 3 处）+ 底部「关闭」按钮全部走同一 requestClose
   const intercepted = modal.match(/onClick: requestClose/g) ?? [];
   assert.equal(intercepted.length, 4, "✕×3 + 关闭按钮共 4 处全部走 requestClose");
@@ -3559,6 +3616,6 @@ test("g-246 生成 bundle 契约：client.js 同步含脏判定与统一拦截",
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
   assert.match(bundle, /function normalizeSettingsDraft\(/);
   assert.match(bundle, /function settingsDraftIsDirty\(/);
-  assert.match(bundle, /window\.confirm\("有未保存的修改，确认放弃？"\)/);
+  assert.match(bundle, /window\.confirm\(dgT\("common\.confirm"\)\)/);
   assert.match(bundle, /useBackdropClose\(requestClose\)/);
 });

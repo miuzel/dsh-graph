@@ -12,6 +12,7 @@ MOD="dsh-graph-host/lib/client"
 
 PARTS=(
   "_wrapper-top"
+  "i18n"
   "constants"
   "helpers"
   "session-hooks"

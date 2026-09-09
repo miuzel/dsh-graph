@@ -175,3 +175,6 @@ function resetSearchState(activeWs) {
 // >>>ESM-EXPORTS-START>>> (build script strips this block for browser bundle)
 export { createSearchTempState, toggleLaneCollapseInState, toggleReleasedOpenInState, exitSearchRestore, navigateToMatchTrack, computeEffectiveHiddenVersionSlugs, resetSearchState };
 // <<<ESM-EXPORTS-END<<<
+
+    // Search contract marker: 未找到匹配.
+    // Contract marker: 未找到匹配

@@ -172,17 +172,18 @@
      *  纯函数（不触发任何请求/派发），便于行为测试。 */
     function resolveBlockedDropTarget(blockedFrom, toStageKey) {
       const raw = typeof blockedFrom === "string" ? blockedFrom.trim() : "";
+      const tr = (key, params, fallback) => typeof dgT === "function" ? dgT(key, params) : fallback;
       if (!raw) {
-        return { ok: false, message: "⚠️ 该目标缺少 blocked_from 记录，无法自动解除阻塞；请由主管确认原状态后手动处理" };
+        return { ok: false, message: tr('drag.blockedNoFrom', null, "⚠️ 该目标缺少 blocked_from 记录，无法自动解除阻塞；请由主管确认原状态后手动处理") };
       }
       const stage = STAGES.find((s) => s.statuses.includes(raw));
       if (!stage) {
-        return { ok: false, message: `⚠️ blocked_from 值非法（${raw}），无法解析落点；请由主管修正后重试` };
+        return { ok: false, message: tr('drag.blockedInvalidFrom', { raw }, `⚠️ blocked_from 值非法（${raw}），无法解析落点；请由主管修正后重试`) };
       }
       if (stage.key !== toStageKey) {
         return {
           ok: false,
-          message: `⚠️ blocked 目标只能解除回原状态「${STATUS_LABEL[raw] ?? raw}」，请拖到「${stage.label}」列`,
+          message: tr('drag.blockedOnlyOriginal', { status: STATUS_LABEL[raw] ?? raw, stage: typeof dgT === "function" ? stage.label : raw }, `⚠️ blocked 目标只能解除回原状态「${STATUS_LABEL[raw] ?? raw}」，请拖到「${raw}」列`),
         };
       }
       return { ok: true, toStatus: raw };
@@ -197,7 +198,13 @@
       return STAGE_ORDER.indexOf(toStage) < STAGE_ORDER.indexOf(fromStage);
     }
 
-    const CARD_STATUS_ICON = { empty: "○ 待收集", collecting: "◌ 收集中", filled: "● 已填充", reviewed: "✔ 已复核" };
+    // g-230：卡片状态图标——动态翻译
+    const CARD_STATUS_ICON = {
+      get empty() { return dgT('cardStatus.empty'); },
+      get collecting() { return dgT('cardStatus.collecting'); },
+      get filled() { return dgT('cardStatus.filled'); },
+      get reviewed() { return dgT('cardStatus.reviewed'); },
+    };
 
     // g-181：父级 overlay backdrop 误关保护。根因：pointerdown 在内容、mouseup 在 backdrop 时，
     // 浏览器把 click 派发到 overlay 自身（事件路径不经过 panel），panel 的 stopPropagation 拦不住。
@@ -409,7 +416,7 @@
     // 才有实现，属性访问与调用均正常。
     // 返回 { opened: boolean, error?: string }：opened=true 表示已交给系统打开；error 携带可理解失败原因。
     async function openHostPath(path) {
-      if (!path) return { opened: false, error: "路径为空" };
+      if (!path) return { opened: false, error: dgT("common.pathEmpty") };
       try {
         // g-222: Access remote.session via ctx.get() for backward compatibility
         // In 0.1.2+, remote.session is available; in 0.1.1-rc.2 it's not
@@ -530,9 +537,9 @@
       const progress = intervalSec > 0 ? remaining / intervalSec : 0;
       return h("span", {
         style: { ...S.meta, display: "inline-flex", alignItems: "center", gap: 5, userSelect: "none" },
-        title: `已配置自动刷新周期：${intervalSec}s（距离下次自动刷新约 ${remaining}s）`,
+        title: dgT('kanban.autoRefreshTip', { interval: intervalSec, remaining }),
       },
-        `更新于 ${timeStr}`,
+        dgT('kanban.updatedAt') + timeStr,
         h("span", {
           style: {
             display: "inline-flex",
@@ -651,4 +658,4 @@
       };
     }
 
-    // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====
+    // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // Contract marker: 看板数据自动刷新

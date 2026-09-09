@@ -208,6 +208,7 @@
 
     // 看板设置页组件：读/写 dsh-graph profile 全局默认。
     function GraphSettingsSection(_props) {
+      useLocaleRevision();
       const modeIdRef = React.useRef(null);
       if (modeIdRef.current == null) modeIdRef.current = `dg-global-subagent-mode-${++settingsModeInstanceSeq}`;
       const modeId = modeIdRef.current;

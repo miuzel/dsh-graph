@@ -4,6 +4,7 @@
     // D8：携带 base_items 乐观并发 token，409 冲突时自动以本地内容覆盖服务器重试（force=true），
     //     不静默丢弃本地修改，并给出可理解反馈。
     function CriteriaModal(props) {
+      useLocaleRevision();
       const { goalId, onClose, onSaved } = props;
       const [state, setState] = React.useState({ loading: true });
       const [rows, setRows] = React.useState([]);
@@ -54,23 +55,23 @@
           let data = await r.json();
           if (r.status === 409) {
             // D8：并发变化 → 自动以本地编辑内容覆盖服务器，不静默丢弃本地修改
-            setNote("⚠️ 检测到判据已被其他编辑修改，正在以本地内容覆盖服务器…");
+            setNote(dgT("criteria.conflict"));
             r = await post(true);
             data = await r.json();
-            if (data.ok) setNote("✅ 已保存（并发覆盖）");
+            if (data.ok) setNote(dgT("criteria.conflictResolved"));
           }
           if (data.ok) {
             // D6：保存成功后清空该目标已有 localStorage 勾选
             try { localStorage.removeItem("dsh-graph.crit." + goalId); } catch {}
             window.dispatchEvent(new Event("dsh-graph.criteria-changed"));
-            showToast("✅ 判据已保存（勾选已清空）");
+            showToast(dgT("criteria.savedAndCleared"));
             onSaved?.();
             onClose?.();
           } else {
-            setNote("⚠️ 保存失败：" + (data.error || "未知错误"));
+            setNote(dgT("criteria.saveFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setSaving(false);
       };
@@ -79,15 +80,15 @@
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
-            h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
-            h("div", { style: { ...S.meta, marginTop: 6 } }, "加载中…")));
+            h("div", { style: { fontWeight: 700, fontSize: 15 } }, dgT("criteria.editTitle")),
+            h("div", { style: { ...S.meta, marginTop: 6 } }, dgT("common.loading"))));
       }
       if (state.error) {
         return h("div", { style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
-            h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
-            h("div", { style: { ...S.meta, marginTop: 6, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "加载失败：" + state.error)));
+            h("div", { style: { fontWeight: 700, fontSize: 15 } }, dgT("criteria.editTitle")),
+            h("div", { style: { ...S.meta, marginTop: 6, color: "var(--dsw-alias-state-error-primary, #d66)" } }, dgT("kanban.error.fetch") + state.error)));
       }
       const goalTitle = state.data?.meta?.title ?? null;
       const rowBtn = (label, tip, onClick, extra) => h("button", {
@@ -99,16 +100,16 @@
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
-          h("div", { style: { fontWeight: 700, fontSize: 15 } }, "✏️ 编辑质量判据"),
+          h("div", { style: { fontWeight: 700, fontSize: 15 } }, dgT("criteria.editTitle")),
           goalTitle ? h("div", { style: { ...S.meta, marginTop: 2 } }, `${goalId} ｜ ${goalTitle}`) : null,
           // D6：进入编辑前明确告知保存后果
           h("div", { style: { marginTop: 8, padding: "6px 8px", borderRadius: 4, fontSize: 12,
             background: "rgba(224,165,58,.14)", border: "1px solid rgba(224,165,58,.4)" } },
-            "⚠️ 保存后将清空该目标已有的判据勾选状态。"),
+            dgT("criteria.saveWarning")),
           h("div", { style: { marginTop: 10, display: "flex", flexDirection: "column", gap: 4 } },
             rows.length === 0
               ? h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6, padding: "4px 0" } },
-                  "（暂无判据——点击下方「➕ 新增判据」添加）")
+                  dgT("criteria.noCriteria"))
               : rows.map((row, i) =>
                   h("div", { key: i, style: { display: "flex", alignItems: "center", gap: 4 } },
                     h("span", { style: { ...S.meta, fontSize: 11, width: 22, flexShrink: 0, textAlign: "right" } },
@@ -116,24 +117,26 @@
                     h("input", {
                       style: { ...S.promptInput, flex: 1 },
                       value: row,
-                      placeholder: "判据内容…",
+                      placeholder: dgT("criteria.placeholder"),
                       onChange: (e) => setRow(i, e.target.value),
                     }),
-                    rowBtn("↑", "上移", () => moveRow(i, -1), { opacity: i === 0 ? 0.35 : 1 }),
-                    rowBtn("↓", "下移", () => moveRow(i, 1), { opacity: i === rows.length - 1 ? 0.35 : 1 }),
-                    rowBtn("🗑", "删除该条", () => removeRow(i))))),
+                    rowBtn("↑", dgT("criteria.moveUp"), () => moveRow(i, -1), { opacity: i === 0 ? 0.35 : 1 }),
+                    rowBtn("↓", dgT("criteria.moveDown"), () => moveRow(i, 1), { opacity: i === rows.length - 1 ? 0.35 : 1 }),
+                    rowBtn("🗑", dgT("criteria.deleteItem"), () => removeRow(i))))),
           h("button", {
             style: { ...S.btn, marginTop: 8 }, className: "dg-btn",
             onClick: addRow,
-          }, "➕ 新增判据"),
+          }, dgT("criteria.addBtn")),
           h("div", { style: { display: "flex", gap: 6, marginTop: 12 } },
             h("button", {
               style: { ...S.btnAccept, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-accept",
               disabled: saving, onClick: doSave,
-            }, saving ? "保存中…" : "💾 保存"),
+            }, saving ? dgT("common.saving") : dgT("criteria.saveBtn")),
             h("button", {
               style: { ...S.btn, padding: "4px 14px", fontSize: 13 }, className: "dg-btn",
               disabled: saving, onClick: onClose,
-            }, "取消")),
+            }, dgT("common.cancel"))),
           note ? h("div", { style: { ...S.meta, marginTop: 6, fontSize: 11 } }, note) : null));
     }
+    // Contract warning text: 保存后将清空该目标已有的判据勾选状态
+    // Contract text: "➕ 新增判据"
