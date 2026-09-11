@@ -156,7 +156,8 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
     "/api/dsh-graph/start-execution", "/api/dsh-graph/spawn-options",
     "/api/dsh-graph/rename-goal", "/api/dsh-graph/set-goal-type", "/api/dsh-graph/create-goal",
     "/api/dsh-graph/archive", "/api/dsh-graph/unarchive",
-    "/api/dsh-graph/delete", "/api/dsh-graph/set-description"]) {
+    "/api/dsh-graph/delete", "/api/dsh-graph/set-description",
+    "/api/dsh-graph/version-goals", "/api/dsh-graph/backlog-goals"]) {
     assert.ok(routes.has(p), `路由 ${p} 已注册`);
   }
 });

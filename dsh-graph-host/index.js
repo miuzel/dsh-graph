@@ -133,6 +133,8 @@ import {
   unbindPostSchema,
   unbindGoalChild,
   getCachedBoardPayload,
+  versionGoals,
+  backlogGoals,
   matchIfNoneMatch,
   invalidateBoardCache,
   closeWatchers,
@@ -151,7 +153,7 @@ export { resolveRoot } from "./core/root.js";
 export { resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 // g-111 B7：boardPayload 已移入 core（消除 client→host 跨包依赖），此处 re-export 保持兼容。
 // board 载荷含 supervisorSession 字段（project.yaml 的 supervisor.session，g-108），由 host 端点 /api/dsh-graph 下发。
-export { boardPayload } from "./core/ops.js";
+export { boardPayload, versionGoals, backlogGoals } from "./core/ops.js";
 
 // g-183 返工 v4：流式上限（防无 header/伪造 Content-Length/chunked 的超大请求先进内存被拒）。
 // JSON/base64 envelope 上限需容纳 50MB 二进制 base64 编码开销（~4/3）+ JSON 键，但拒绝更大。
@@ -2007,8 +2009,9 @@ export function apply(ctx, config) {
         try {
           const sp = new URL(_req?.url ?? "", "http://x").searchParams;
           const includeArchived = sp.get("includeArchived") === "1" || sp.get("includeArchived") === "true";
+          const lazy = sp.get("lazy") === "1" || sp.get("lazy") === "true";
           const meta = rootForReqMeta(_req);
-          const cached = getCachedBoardPayload(meta.root, { includeArchived });
+          const cached = getCachedBoardPayload(meta.root, { includeArchived, lazy });
           const payload = { ...cached.payload };
           payload._diagnostics = {
             workspace: meta.workspace, graphRoot: meta.root, rootMode: meta.mode,
@@ -3084,6 +3087,44 @@ export function apply(ctx, config) {
           const r = rootForReq(req);
           const result = versionDetail(r, slug.trim());
           json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-258: 版本目标明细端点（首屏懒加载按需拉取）
+    {
+      path: "/api/dsh-graph/version-goals",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const url = new URL(req.url, "http://localhost");
+          const slug = url.searchParams.get("slug");
+          if (!slug || !slug.trim()) {
+            return json(res, 400, { error: "missing slug" });
+          }
+          const includeArchived = url.searchParams.get("includeArchived") === "1" || url.searchParams.get("includeArchived") === "true";
+          const r = rootForReq(req);
+          const goals = versionGoals(r, slug.trim(), { includeArchived });
+          json(res, 200, { ok: true, slug: slug.trim(), goals });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-258: backlog 目标明细端点（首屏懒加载按需拉取）
+    {
+      path: "/api/dsh-graph/backlog-goals",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const url = new URL(req.url, "http://localhost");
+          const includeArchived = url.searchParams.get("includeArchived") === "1" || url.searchParams.get("includeArchived") === "true";
+          const r = rootForReq(req);
+          const goals = backlogGoals(r, { includeArchived });
+          json(res, 200, { ok: true, goals });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });

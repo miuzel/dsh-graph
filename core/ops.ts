@@ -93,7 +93,7 @@ export { TxError };
 import { invalidateBoardCache, computeGraphRevision, formatETag, matchIfNoneMatch, getCachedBoardPayload as getCachedBoardPayloadCore, _inspectBoardCache, closeWatchers } from "./cache.ts";
 import { invalidate as invalidateGeneration } from "./cache-state.ts";
 export { invalidateBoardCache, computeGraphRevision, formatETag, matchIfNoneMatch, _inspectBoardCache, closeWatchers };
-export function getCachedBoardPayload(root: string, opts?: { includeArchived?: boolean }) {
+export function getCachedBoardPayload(root: string, opts?: { includeArchived?: boolean; lazy?: boolean }) {
   return getCachedBoardPayloadCore(root, opts, boardPayload);
 }
 /** 防止用户输入内容中包含 `## ` 或 `### ` 开头的行，破坏 goal.md section 边界。
@@ -5205,130 +5205,257 @@ export interface BoardVersion {
   name: string;
   status: string;
   goals: BoardGoal[];
+  goals_count?: number;
+  lazy?: boolean;
 }
 
-export function boardProjection(root: string, opts?: { includeArchived?: boolean; events?: GraphEvent[] }): {
+function buildBoardGoalItem(root: string, file: string): BoardGoal {
+  assertContainedPath(root, file);
+  const doc = loadGoal(file);
+  const meta = doc.meta;
+  const archived = meta.archived === true || isArchivedFile(file);
+  // g-171：goal.md 的 mtime（毫秒）——更新强调动画触发源；不可读/缺失时 null（旧 payload 兼容）
+  let updatedAt: number | null = null;
+  try {
+    updatedAt = statSync(file).mtimeMs;
+  } catch {
+    /* 文件缺失/不可读 → null，不阻塞看板 */
+  }
+  // 取最新一个带 status_line 的 attempt
+  let statusLine: string | null = null;
+  let statusState: AttemptStatusState | null = null;
+  const dir = basename(file) === "goal.md" ? dirname(file) : null;
+  if (dir) {
+    const attDir = join(dir, "attempts");
+    if (existsSync(attDir)) {
+      const atts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort();
+      for (let i = atts.length - 1; i >= 0; i--) {
+        const f = join(attDir, atts[i], "attempt.md");
+        if (!existsSync(f)) continue;
+        try {
+          const m = loadGoal(f).meta;
+          if (m.status_line || m.status_state) {
+            statusLine = m.status_line ?? null;
+            statusState = normalizeAttemptStatusState(m.status_state);
+            break;
+          }
+        } catch {
+          /* 坏的 attempt 文件跳过 */
+        }
+      }
+    }
+  }
+  // 最新一个绑定了子代理的执行 attempt（排除 agent:collect 收集子代理，卡片会话链接用）
+  let attemptChild: Record<string, any> = {};
+  if (dir) {
+    const attDir = join(dir, "attempts");
+    if (existsSync(attDir)) {
+      const atts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort().reverse();
+      for (const a of atts) {
+        const f = join(attDir, a, "attempt.md");
+        if (!existsSync(f)) continue;
+        try {
+          const m = loadGoal(f).meta;
+          // g-190：已解绑 attempt 不投影为有效绑定
+          if (m.detached === true) continue;
+          if (m.child_id && m.executor !== "agent:collect") {
+            attemptChild = {
+              attempt: a,
+              child_id: m.child_id,
+              parent_session_id: m.parent_session_id ?? null,
+              provider: m.provider ?? null,
+              model: m.model ?? null,
+              mode: normalizeSubagentMode(m.mode),
+              mode_source: m.mode_source ?? null,
+              started_at: m.started_at ?? null,
+              binding_token: m.binding_token ?? null,
+              binding_version: Number(m.binding_version) || 0,
+            };
+            break;
+          }
+        } catch { /* 跳过 */ }
+      }
+    }
+  }
+  // 上下文卡片摘要（自有卡 + 该 goal 引用的共享卡；g-183 scope 区分）
+  const cards = goalCards(root, String(meta.id));
+  return {
+    id: String(meta.id),
+    title: String(meta.title ?? meta.id),
+    status: String(meta.status ?? "unknown"),
+    type: normalizeGoalType(meta.type),
+    tags: (() => { try { return normalizeGoalTags(meta.tags); } catch { return []; } })(),
+    status_line: statusLine,
+    status_state: statusState,
+    reviewer: meta.review?.reviewer ?? null,
+    depends_on: (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((d: any) =>
+      String(d?.goal ?? d),
+    ),
+    attempt_child_id: attemptChild.child_id ?? null,
+    attempt_parent_session_id: attemptChild.parent_session_id ?? null,
+    attempt_provider: attemptChild.provider ?? null,
+    attempt_model: attemptChild.model ?? null,
+    attempt_mode: attemptChild.mode ?? null,
+    attempt_mode_source: attemptChild.mode_source ?? null,
+    // g-190：当前有效执行绑定（含 CAS token 与版本），供解绑定位/UI 展示；无绑定为 null
+    attempt_binding: attemptChild.child_id
+      ? {
+          attempt: String(attemptChild.attempt),
+          child_id: attemptChild.child_id,
+          token: attemptChild.binding_token ?? null,
+          binding_version: attemptChild.binding_version ?? 0,
+          parent_session_id: attemptChild.parent_session_id ?? null,
+        }
+      : null,
+    created_at: String(meta.created_at ?? ""),
+    attempt_started_at: attemptChild.started_at ?? null,
+    reused_by: null,
+    pk_lanes: meta.pk?.lanes ?? 1,
+    blocked_reason: meta.blocked_reason ?? null,
+    // g-245：解除阻塞需要知道回到哪个状态，投影下发给客户端拖放落点解析
+    blocked_from: typeof meta.blocked_from === "string" && meta.blocked_from ? meta.blocked_from : null,
+    archived,
+    cards,
+    criteria_count: countCriteria(doc.body),
+    criteria_items: criteriaItems(doc.body),
+    rules_snapshot: meta.rules_snapshot ?? null,
+    updated_at: updatedAt,
+    description: extractGoalDescription(doc.body),
+  };
+}
+
+function countVersionGoals(root: string, slug: string, includeArchived = false): number {
+  const vdir = join(root, "versions", slug);
+  let count = 0;
+  const gdir = join(vdir, "goals");
+  if (existsSync(gdir)) {
+    for (const g of readdirSync(gdir)) {
+      if (existsSync(join(gdir, g, "goal.md"))) count++;
+    }
+  }
+  if (includeArchived) {
+    const archivedDir = join(vdir, "archived");
+    if (existsSync(archivedDir)) {
+      for (const g of readdirSync(archivedDir)) {
+        if (existsSync(join(archivedDir, g, "goal.md"))) count++;
+      }
+    }
+  }
+  return count;
+}
+
+function countBacklogGoals(root: string, includeArchived = false): number {
+  const bdir = join(root, "backlog");
+  let count = 0;
+  if (existsSync(bdir)) {
+    for (const f of readdirSync(bdir)) {
+      if (f === "archived") {
+        if (includeArchived) {
+          const archivedDir = join(bdir, "archived");
+          if (existsSync(archivedDir)) {
+            for (const af of readdirSync(archivedDir)) {
+              if (af.endsWith(".md") || existsSync(join(archivedDir, af, "goal.md"))) count++;
+            }
+          }
+        }
+        continue;
+      }
+      if (f.endsWith(".md") || existsSync(join(bdir, f, "goal.md"))) count++;
+    }
+  }
+  return count;
+}
+
+/** 获取指定版本的目标明细列表（g-258 首屏懒加载按需展开）。 */
+export function versionGoals(root: string, slug: string, opts?: { includeArchived?: boolean }): BoardGoal[] {
+  assertSafeId(slug, "版本 slug");
+  const includeArchived = opts?.includeArchived ?? false;
+  const vdir = join(root, "versions", slug);
+  if (!existsSync(vdir)) throw new GraphError(`版本 ${slug} 不存在`);
+  const goals: BoardGoal[] = [];
+  const gdir = join(vdir, "goals");
+  if (existsSync(gdir)) {
+    for (const g of readdirSync(gdir).sort()) {
+      const gf = join(gdir, g, "goal.md");
+      if (!existsSync(gf)) continue;
+      try {
+        goals.push(buildBoardGoalItem(root, gf));
+      } catch {
+        /* 坏目标文件跳过 */
+      }
+    }
+  }
+  if (includeArchived) {
+    const archivedDir = join(vdir, "archived");
+    if (existsSync(archivedDir)) {
+      for (const g of readdirSync(archivedDir).sort()) {
+        const gf = join(archivedDir, g, "goal.md");
+        if (!existsSync(gf)) continue;
+        try {
+          goals.push(buildBoardGoalItem(root, gf));
+        } catch {
+          /* 坏目标文件跳过 */
+        }
+      }
+    }
+  }
+  return goals;
+}
+
+/** 获取 backlog 的目标明细列表（g-258 首屏懒加载按需展开）。 */
+export function backlogGoals(root: string, opts?: { includeArchived?: boolean }): BoardGoal[] {
+  const includeArchived = opts?.includeArchived ?? false;
+  const backlog: BoardGoal[] = [];
+  const bdir = join(root, "backlog");
+  if (existsSync(bdir)) {
+    for (const f of readdirSync(bdir).sort()) {
+      if (f === "archived") {
+        if (includeArchived) {
+          const archivedDir = join(bdir, "archived");
+          for (const af of readdirSync(archivedDir).sort()) {
+            if (af.endsWith(".md")) {
+              try {
+                backlog.push(buildBoardGoalItem(root, join(archivedDir, af)));
+              } catch {}
+              continue;
+            }
+            const nested = join(archivedDir, af, "goal.md");
+            if (!existsSync(nested)) continue;
+            try {
+              backlog.push(buildBoardGoalItem(root, nested));
+            } catch {}
+          }
+        }
+        continue;
+      }
+      if (f.endsWith(".md")) {
+        try {
+          backlog.push(buildBoardGoalItem(root, join(bdir, f)));
+        } catch {}
+        continue;
+      }
+      const nested = join(bdir, f, "goal.md");
+      if (!existsSync(nested)) continue;
+      try {
+        backlog.push(buildBoardGoalItem(root, nested));
+      } catch {}
+    }
+  }
+  return backlog;
+}
+
+export function boardProjection(root: string, opts?: { includeArchived?: boolean; events?: GraphEvent[]; lazy?: boolean }): {
   generated_at: string;
   versions: BoardVersion[];
   standalone: BoardGoal[];
   backlog: BoardGoal[];
+  backlog_count?: number;
+  lazy?: boolean;
 } {
   const includeArchived = opts?.includeArchived ?? false;
+  const lazy = opts?.lazy ?? false;
   const events = opts?.events ?? readEvents(root);
-  const goalItem = (file: string): BoardGoal => {
-    assertContainedPath(root, file);
-    const doc = loadGoal(file);
-    const meta = doc.meta;
-    const archived = meta.archived === true || isArchivedFile(file);
-    // g-171：goal.md 的 mtime（毫秒）——更新强调动画触发源；不可读/缺失时 null（旧 payload 兼容）
-    let updatedAt: number | null = null;
-    try {
-      updatedAt = statSync(file).mtimeMs;
-    } catch {
-      /* 文件缺失/不可读 → null，不阻塞看板 */
-    }
-    // 取最新一个带 status_line 的 attempt
-    let statusLine: string | null = null;
-    let statusState: AttemptStatusState | null = null;
-    const dir = basename(file) === "goal.md" ? dirname(file) : null;
-    if (dir) {
-      const attDir = join(dir, "attempts");
-      if (existsSync(attDir)) {
-        const atts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort();
-        for (let i = atts.length - 1; i >= 0; i--) {
-          const f = join(attDir, atts[i], "attempt.md");
-          if (!existsSync(f)) continue;
-          try {
-            const m = loadGoal(f).meta;
-            if (m.status_line || m.status_state) {
-              statusLine = m.status_line ?? null;
-              statusState = normalizeAttemptStatusState(m.status_state);
-              break;
-            }
-          } catch {
-            /* 坏的 attempt 文件跳过 */
-          }
-        }
-      }
-    }
-    // 最新一个绑定了子代理的执行 attempt（排除 agent:collect 收集子代理，卡片会话链接用）
-    let attemptChild: Record<string, any> = {};
-    if (dir) {
-      const attDir = join(dir, "attempts");
-      if (existsSync(attDir)) {
-        const atts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort().reverse();
-        for (const a of atts) {
-          const f = join(attDir, a, "attempt.md");
-          if (!existsSync(f)) continue;
-          try {
-            const m = loadGoal(f).meta;
-            // g-190：已解绑 attempt 不投影为有效绑定
-            if (m.detached === true) continue;
-            if (m.child_id && m.executor !== "agent:collect") {
-              attemptChild = {
-                attempt: a,
-                child_id: m.child_id,
-                parent_session_id: m.parent_session_id ?? null,
-                provider: m.provider ?? null,
-                model: m.model ?? null,
-                mode: normalizeSubagentMode(m.mode),
-                mode_source: m.mode_source ?? null,
-                started_at: m.started_at ?? null,
-                binding_token: m.binding_token ?? null,
-                binding_version: Number(m.binding_version) || 0,
-              };
-              break;
-            }
-          } catch { /* 跳过 */ }
-        }
-      }
-    }
-    // 上下文卡片摘要（自有卡 + 该 goal 引用的共享卡；g-183 scope 区分）
-    const cards = goalCards(root, String(meta.id));
-    return {
-      id: String(meta.id),
-      title: String(meta.title ?? meta.id),
-      status: String(meta.status ?? "unknown"),
-      type: normalizeGoalType(meta.type),
-      tags: (() => { try { return normalizeGoalTags(meta.tags); } catch { return []; } })(),
-      status_line: statusLine,
-      status_state: statusState,
-      reviewer: meta.review?.reviewer ?? null,
-      depends_on: (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((d: any) =>
-        String(d?.goal ?? d),
-      ),
-      attempt_child_id: attemptChild.child_id ?? null,
-      attempt_parent_session_id: attemptChild.parent_session_id ?? null,
-      attempt_provider: attemptChild.provider ?? null,
-      attempt_model: attemptChild.model ?? null,
-      attempt_mode: attemptChild.mode ?? null,
-      attempt_mode_source: attemptChild.mode_source ?? null,
-      // g-190：当前有效执行绑定（含 CAS token 与版本），供解绑定位/UI 展示；无绑定为 null
-      attempt_binding: attemptChild.child_id
-        ? {
-            attempt: String(attemptChild.attempt),
-            child_id: attemptChild.child_id,
-            token: attemptChild.binding_token ?? null,
-            binding_version: attemptChild.binding_version ?? 0,
-            parent_session_id: attemptChild.parent_session_id ?? null,
-          }
-        : null,
-      created_at: String(meta.created_at ?? ""),
-      attempt_started_at: attemptChild.started_at ?? null,
-      reused_by: null,
-      pk_lanes: meta.pk?.lanes ?? 1,
-      blocked_reason: meta.blocked_reason ?? null,
-      // g-245：解除阻塞需要知道回到哪个状态，投影下发给客户端拖放落点解析
-      blocked_from: typeof meta.blocked_from === "string" && meta.blocked_from ? meta.blocked_from : null,
-      archived,
-      cards,
-      criteria_count: countCriteria(doc.body),
-      criteria_items: criteriaItems(doc.body),
-      rules_snapshot: meta.rules_snapshot ?? null,
-      updated_at: updatedAt,
-      description: extractGoalDescription(doc.body),
-    };
-  };
+  const goalItem = (file: string): BoardGoal => buildBoardGoalItem(root, file);
   const versions: BoardVersion[] = [];
   const vdir = join(root, "versions");
   if (existsSync(vdir)) {
@@ -5340,6 +5467,19 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
         vmeta = loadGoal(vfile).meta;
       } catch {
         /* 坏版本文件按未知处理 */
+      }
+      if (lazy && vmeta.status === "released") {
+        const goalsCount = countVersionGoals(root, v, includeArchived);
+        versions.push({
+          slug: v,
+          id: vmeta.id ?? null,
+          name: String(vmeta.name ?? v),
+          status: String(vmeta.status ?? "unknown"),
+          goals: [],
+          goals_count: goalsCount,
+          lazy: true,
+        });
+        continue;
       }
       const goals: BoardGoal[] = [];
       const gdir = join(vdir, v, "goals");
@@ -5375,6 +5515,7 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
         name: String(vmeta.name ?? v),
         status: String(vmeta.status ?? "unknown"),
         goals,
+        goals_count: goals.length,
       });
     }
   }
@@ -5408,53 +5549,59 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
     }
   }
   const backlog: BoardGoal[] = [];
-  const bdir = join(root, "backlog");
-  if (existsSync(bdir)) {
-    for (const f of readdirSync(bdir).sort()) {
-      if (f === "archived") {
-        // g-110：backlog 归档目标（backlog/archived/）
-        if (includeArchived) {
-          const archivedDir = join(bdir, "archived");
-          for (const af of readdirSync(archivedDir).sort()) {
-            // 扁平 backlog/archived/<id>.md
-            if (af.endsWith(".md")) {
+  let backlogCount = 0;
+  if (lazy) {
+    backlogCount = countBacklogGoals(root, includeArchived);
+  } else {
+    const bdir = join(root, "backlog");
+    if (existsSync(bdir)) {
+      for (const f of readdirSync(bdir).sort()) {
+        if (f === "archived") {
+          // g-110：backlog 归档目标（backlog/archived/）
+          if (includeArchived) {
+            const archivedDir = join(bdir, "archived");
+            for (const af of readdirSync(archivedDir).sort()) {
+              // 扁平 backlog/archived/<id>.md
+              if (af.endsWith(".md")) {
+                try {
+                  backlog.push(goalItem(join(archivedDir, af)));
+                } catch {
+                  /* 跳过 */
+                }
+                continue;
+              }
+              // 目录形态 backlog/archived/<id>/goal.md（暂缓后归档）
+              const nested = join(archivedDir, af, "goal.md");
+              if (!existsSync(nested)) continue;
               try {
-                backlog.push(goalItem(join(archivedDir, af)));
+                backlog.push(goalItem(nested));
               } catch {
                 /* 跳过 */
               }
-              continue;
-            }
-            // 目录形态 backlog/archived/<id>/goal.md（暂缓后归档）
-            const nested = join(archivedDir, af, "goal.md");
-            if (!existsSync(nested)) continue;
-            try {
-              backlog.push(goalItem(nested));
-            } catch {
-              /* 跳过 */
             }
           }
+          continue;
         }
-        continue;
-      }
-      // 扁平 backlog/<id>.md
-      if (f.endsWith(".md")) {
+        // 扁平 backlog/<id>.md
+        if (f.endsWith(".md")) {
+          try {
+            backlog.push(goalItem(join(bdir, f)));
+          } catch {
+            /* 跳过 */
+          }
+          continue;
+        }
+        // 目录形态 backlog/<id>/goal.md（暂缓落点）
+        const nested = join(bdir, f, "goal.md");
+        if (!existsSync(nested)) continue;
         try {
-          backlog.push(goalItem(join(bdir, f)));
+          backlog.push(goalItem(nested));
         } catch {
           /* 跳过 */
         }
-        continue;
-      }
-      // 目录形态 backlog/<id>/goal.md（暂缓落点）
-      const nested = join(bdir, f, "goal.md");
-      if (!existsSync(nested)) continue;
-      try {
-        backlog.push(goalItem(nested));
-      } catch {
-        /* 跳过 */
       }
     }
+    backlogCount = backlog.length;
   }
   // 被复用派生（g-a92e1406）：同一 child_id 跨目标绑定时，旧绑定加 reused 标记。
   // 数据双源：① attempt.reused 事件（权威方向：goal=旧绑定, details.reused_by="新目标/att-N"）
@@ -5498,15 +5645,23 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
     if (oldG.id !== newG.id) reusedBy.set(oldG.id, newG.id);
   }
   for (const g of allGoals) g.reused_by = reusedBy.get(g.id) ?? null;
-  return { generated_at: nowIsoMs(), versions, standalone, backlog };
+  return {
+    generated_at: nowIsoMs(),
+    versions,
+    standalone,
+    backlog,
+    backlog_count: backlogCount,
+    ...(lazy ? { lazy: true } : {}),
+  };
 }
 
 /** 看板端点载荷：board 投影 + supervisorSession（g-108）。
  *  由 dsh-graph-host 的 client 半边（/api/dsh-graph）消费，会话 id 不在任何代码里硬编码。
  *  g-111 B7：从 dsh-graph-host/index.js 移入 core，消除跨包依赖（g-116 合并后单包内复用）。
  *  g-110：opts.includeArchived 控制是否包含已归档目标。
- *  g-211：合并 readEvents 为单次文件读取与解析，复用内存事件数组给 supervisor 状态与 boardProjection。 */
-export function boardPayload(root: string, opts?: { includeArchived?: boolean }) {
+ *  g-211：合并 readEvents 为单次文件读取与解析，复用内存事件数组给 supervisor 状态与 boardProjection。
+ *  g-258：opts.lazy 控制是否首屏懒加载（活跃全量，折叠仅计数）。 */
+export function boardPayload(root: string, opts?: { includeArchived?: boolean; lazy?: boolean }) {
   let events: GraphEvent[] = [];
   try {
     events = readEvents(root);
@@ -5514,7 +5669,7 @@ export function boardPayload(root: string, opts?: { includeArchived?: boolean })
     /* 事件流异常时保留空数组，降级处理 */
   }
   return {
-    ...boardProjection(root, { includeArchived: opts?.includeArchived, events }),
+    ...boardProjection(root, { includeArchived: opts?.includeArchived, events, lazy: opts?.lazy }),
     supervisorSession: readSupervisorSession(root),
     // g-a92e1406 判据 3① 扩展：supervisor 状态栏显示 supervisor 自己的 status_line（事件流最新一条）
     supervisorStatus: readSupervisorStatus(events),
