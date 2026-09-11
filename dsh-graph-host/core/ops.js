@@ -520,7 +520,7 @@ export const ROLE_PROFILES = {
         disciplineLines: [
             "1. 只做规划、派发、把关、复核——常规实现一律派发子代理；",
             "2. 轻量改动特权：低风险一句话决策或微小修改可直接在当前会话执行；",
-            "3. 每次动作后调用 graph_report_supervisor_status 自报状态；",
+            "3. 阶段变化与关键节点自报进展：调用 graph_report_supervisor_status 自报状态（常规细微动作无需机械汇报）；",
             "4. 人工裁决关口：review→delivered 必须经负责人 verdict 裁决，绝不自行 delivered。",
         ],
         requiredTools: ["graph_report_supervisor_status", "graph_start_attempt", "graph_resolve_accept"],
@@ -536,7 +536,7 @@ export const ROLE_PROFILES = {
         readOnly: false,
         disciplineTitle: "dsh-graph 执行子代理通用执行纪律",
         disciplineLines: [
-            "1. 状态汇报：每做一个动作必须调用 graph_report_status 自行更新 status_line（尽量 20 字内），滞留等于隐瞒进展；",
+            "1. 状态汇报：仅在开始开工、阶段转变、遇到阻塞、本轮完成4类有限关键节点调用 graph_report_status 自行更新 status_line（尽量 20 字内），长任务适度节流心跳，严禁每个动作机械追加汇报；",
             "2. 结束收尾更新：在即将空闲或收尾前，务必调用 graph_report_status 将状态更新为完成态（如「本轮完成/空闲待命」）；",
             "3. 泳道流转：开工时若非 in_progress 则调用 graph_transition(to='in_progress')；完成后必须 graph_transition(to='review') 停轮等待复核；遇到阻塞 graph_transition(to='blocked', reason=...)；",
             "4. 绝不自行 delivered：禁止直接 graph_transition 到 delivered——delivered 属于负责人与主管的 human gate 裁决关口；",
@@ -621,18 +621,14 @@ export function toolFilterForRole(role, mode) {
     }
     return { allow: profile.allowedTools.standard };
 }
-/** g-191：构建 dsh-graph 默认子代理专属 Persona，将通用执行纪律沉淀为系统级 Persona */
+/** g-191：构建 dsh-graph 默认子代理专属 Persona，将通用执行纪律沉淀为系统级 Persona（单一真源来自 ROLE_PROFILES.executor.disciplineLines） */
 export function buildSubagentDefaultPersona(goalId, attemptId) {
     const lines = [
         "You are a professional software engineering subagent executing tasks within the dsh-graph goal framework.",
         "",
         "## dsh-graph 子代理通用执行纪律",
         "",
-        "1. 状态汇报：仅在开始开工、阶段转变、遇到阻塞、本轮完成4类有限关键节点调用 graph_report_status 自行更新 status_line（尽量 20 字内），长任务适度节流心跳，严禁每个动作机械追加汇报；",
-        "2. 结束收尾更新：在即将空闲或收尾前，务必调用 graph_report_status 将状态更新为完成态（如「本轮完成/空闲待命」）；",
-        "3. 泳道流转：开工时若非 in_progress 则调用 graph_transition(to='in_progress')；完成后必须 graph_transition(to='review') 停轮等待复核；遇到阻塞 graph_transition(to='blocked', reason=...)；",
-        "4. 绝不自行 delivered：禁止直接 graph_transition 到 delivered——delivered 属于负责人与主管的 human gate 裁决关口；",
-        "5. 严格遵守环境隔离要求与质量判据核验，未通过判据不可声明完成。",
+        ...ROLE_PROFILES.executor.disciplineLines,
     ];
     if (goalId && attemptId) {
         lines.push(`\n当前派发目标：${goalId}，执行 attempt：${attemptId}`);
@@ -5160,6 +5156,89 @@ export function backlogGoals(root, opts) {
     }
     return backlog;
 }
+/**
+ * 版本比较函数：按 `.` 拆段从前到后逐段比较，含数值的分段按数值从大到小排列（最新版本在最前）。
+ *
+ * 契约规则：
+ * 1. 数值分段倒序：纯数字段按数值降序（如 v0.10.0 排在 v0.9.2 之前、v1.2.0 排在 v1.1.9 之前）；
+ * 2. 前缀归一化：剥离首部 'v' / 'V'（若后跟数字），前缀不影响比较结果；
+ * 3. 分段深度差异稳定：共同前缀相同时分段更深者排前（如 v0.1.1 排在 v0.1.0 之前，v0.1.0 排在 v0.1 之前）；
+ * 4. 异构/预发布标识优雅降级：含 -rc.1/-beta 或非数字片段时按字典序降序兜底，slug 稳定 tie-break，绝不抛异常；
+ *    无法解析首段数值者（如 nightly）排在语义版本之后。
+ */
+export function compareVersions(a = "", b = "") {
+    if (a === b)
+        return 0;
+    if (!a && !b)
+        return 0;
+    if (!a)
+        return 1;
+    if (!b)
+        return -1;
+    // 1. 前缀归一化：剥离首部 v/V（仅当紧跟数字时剥离，保留形如 v-t 的非数值名称）
+    const normA = a.replace(/^[vV](?=\d)/, "");
+    const normB = b.replace(/^[vV](?=\d)/, "");
+    const partsA = normA.split(".");
+    const partsB = normB.split(".");
+    // 2. 检查首段是否含有数字：无法解析首段数值者（如 nightly）排在语义版本之后
+    const hasNumA = partsA.length > 0 && /^\d+/.test(partsA[0]);
+    const hasNumB = partsB.length > 0 && /^\d+/.test(partsB[0]);
+    if (hasNumA && !hasNumB)
+        return -1;
+    if (!hasNumA && hasNumB)
+        return 1;
+    if (!hasNumA && !hasNumB) {
+        // 双方均非语义版本，按字符串降序兜底，同序用 slug 稳定 tie-break
+        const cmp = normB.localeCompare(normA);
+        return cmp !== 0 ? cmp : (a < b ? -1 : a > b ? 1 : 0);
+    }
+    // 3. 逐段比较
+    const minLen = Math.min(partsA.length, partsB.length);
+    for (let i = 0; i < minLen; i++) {
+        const segA = partsA[i];
+        const segB = partsB[i];
+        if (segA === segB)
+            continue;
+        const matchA = segA.match(/^(\d+)(.*)$/);
+        const matchB = segB.match(/^(\d+)(.*)$/);
+        if (matchA && matchB) {
+            const numA = BigInt(matchA[1]);
+            const numB = BigInt(matchB[1]);
+            if (numA !== numB) {
+                return numA > numB ? -1 : 1;
+            }
+            const restA = matchA[2];
+            const restB = matchB[2];
+            // 同一数值前缀下，无后缀（正式发布版）排在有后缀（预发布版如 -rc.1/-beta）之前
+            if (restA === "" && restB !== "")
+                return -1;
+            if (restA !== "" && restB === "")
+                return 1;
+            // 双方均有后缀，按字符串降序兜底（如 -rc > -beta）
+            const cmp = restB.localeCompare(restA);
+            if (cmp !== 0)
+                return cmp;
+        }
+        else if (matchA && !matchB) {
+            return -1;
+        }
+        else if (!matchA && matchB) {
+            return 1;
+        }
+        else {
+            // 双方均无数字前缀，按字符串降序兜底
+            const cmp = segB.localeCompare(segA);
+            if (cmp !== 0)
+                return cmp;
+        }
+    }
+    // 4. 共同前缀相同时，分段更深者排在前面（如 v0.1.1 > v0.1.0 > v0.1）
+    if (partsA.length !== partsB.length) {
+        return partsA.length > partsB.length ? -1 : 1;
+    }
+    // 5. 稳定 tie-break（如 v0.1 与 0.1、或大小写前缀）
+    return a < b ? -1 : a > b ? 1 : 0;
+}
 export function boardProjection(root, opts) {
     const includeArchived = opts?.includeArchived ?? false;
     const lazy = opts?.lazy ?? false;
@@ -5168,7 +5247,7 @@ export function boardProjection(root, opts) {
     const versions = [];
     const vdir = join(root, "versions");
     if (existsSync(vdir)) {
-        for (const v of readdirSync(vdir).sort()) {
+        for (const v of readdirSync(vdir).sort(compareVersions)) {
             const vfile = join(vdir, v, "version.md");
             if (!existsSync(vfile))
                 continue;

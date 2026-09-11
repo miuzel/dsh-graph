@@ -51,7 +51,6 @@ import {
   isMemoryToolsEnabled,
   setMemoryToolsEnabled,
   formatStandingMemorySection,
-  formatTargetContext,
   requestAcceptReview,
   resolveAccept,
   archiveGoal,
@@ -59,6 +58,7 @@ import {
   deleteGoal,
   postponeGoal,
   boardProjection,
+  compareVersions,
   readSupervisorSession,
   readExecutorModel,
   findGoalFile,
@@ -120,13 +120,9 @@ import {
   normalizeSubagentMode,
   SUBAGENT_MODE_PROMPTS,
   resolveSubagentMode,
-  toolFilterForMode,
-  SUBAGENT_ROLES,
   normalizeSubagentRole,
   toolFilterForRole,
-  getRoleProfile,
   formatPmPrompt,
-  formatReviewPrompt,
   validateSchema,
   schemaErrorResponse,
   settingsPostSchema,
@@ -153,7 +149,7 @@ export { resolveRoot } from "./core/root.js";
 export { resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 // g-111 B7：boardPayload 已移入 core（消除 client→host 跨包依赖），此处 re-export 保持兼容。
 // board 载荷含 supervisorSession 字段（project.yaml 的 supervisor.session，g-108），由 host 端点 /api/dsh-graph 下发。
-export { boardPayload, versionGoals, backlogGoals } from "./core/ops.js";
+export { boardPayload, versionGoals, backlogGoals, compareVersions } from "./core/ops.js";
 
 // g-183 返工 v4：流式上限（防无 header/伪造 Content-Length/chunked 的超大请求先进内存被拒）。
 // JSON/base64 envelope 上限需容纳 50MB 二进制 base64 编码开销（~4/3）+ JSON 键，但拒绝更大。
@@ -1008,11 +1004,11 @@ export function apply(ctx, config) {
 
     if (subagents && parentAgent && availableProvider) {
       try {
-        const modeToolFilter = toolFilterForMode(effModeRes.mode);
+        const roleToolFilter = toolFilterForRole("executor", effModeRes.mode);
         const request = {
           parent: parentAgent,
           prompt: text(prompt),
-          ...(modeToolFilter ? { toolFilter: modeToolFilter } : {}),
+          ...(roleToolFilter ? { toolFilter: roleToolFilter } : {}),
         };
         const agentOptions = {};
         if (effProvider) agentOptions.provider = effProvider;

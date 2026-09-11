@@ -1051,7 +1051,7 @@
         const entryVersion = version ?? null;
         // 关闭后重开仍保留未提交草稿；只有成功创建后才开始新一轮初始化。
         if (!createGoalInitialized) {
-          const latestActive = [...b.versions].filter((v) => v.status === "active").at(-1)?.slug ?? "";
+          const latestActive = b.versions.find((v) => v.status === "active")?.slug ?? "";
           setCreateGoalEntryVersion(entryVersion);
           setNewGoalVersion(entryVersion ?? latestActive);
           setCreateGoalInitialized(true);
@@ -1650,7 +1650,7 @@
             setNewGoalTitle("");
             setNewGoalDesc("");
             setNewGoalType("task"); // g-158 重置为新目标默认类型
-            const latestActive = [...b.versions].filter((v) => v.status === "active").at(-1)?.slug ?? "";
+            const latestActive = b.versions.find((v) => v.status === "active")?.slug ?? "";
             setNewGoalVersion(createGoalEntryVersion ?? latestActive);
             setCreateGoalInitialized(false);
             load(); // 刷新看板

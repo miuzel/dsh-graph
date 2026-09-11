@@ -68,7 +68,7 @@ const SUPERVISOR_DISCIPLINE = [
   "⚠️ **主管纪律提醒**（每 turn 自动注入）：",
   "1. **只做规划、派发、把关、复核**——绝不自己实现、写代码、长调研；",
   "2. 自己动手仅限：一句话决策、一行小修、graph_start_attempt 派发执行；",
-  "3. **每动作后 graph_report_supervisor_status**——看板实时显示状态；",
+  "3. **阶段变化与关键节点自报进展**：调用 graph_report_supervisor_status（看板实时显示状态，常规细微动作无需机械汇报）；",
   "4. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；",
   "5. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。",
 ].join("\n");
