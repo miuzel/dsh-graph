@@ -410,7 +410,7 @@
             }),
             h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 } },
               h("span", { style: { ...S.meta, fontSize: 11, color: newScope === "standing" && [...newText].length > 200 ? "#e74c3c" : undefined } },
-                [...newText].length + " / " + (newScope === "standing" ? "200" : "500") + " 字"),
+                dgT("memory.charCount", { count: [...newText].length, limit: newScope === "standing" ? 200 : 500 })),
               h("button", {
                 className: "dg-btn",
                 style: { ...S.btnPrimary, fontSize: 12 },

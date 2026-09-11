@@ -82,6 +82,7 @@ window.__ModuleLoader__.load({
       'lane.versionDetail': '点击查看版本 {version} 详情',
       'lane.newGoalInVersion': '在 {version} 新建目标',
       'lane.newStandaloneGoal': '新建独立目标',
+      'lane.standalone': '独立目标',
       'lane.newBacklogGoal': '新建目标（backlog）',
       'lane.collapseTooltip': '折叠泳道',
       'lane.expandTooltip': '点击展开泳道',
@@ -295,6 +296,9 @@ window.__ModuleLoader__.load({
       'worktree.cleanFail': '清理被阻断',
       'worktree.candidate': '✅',
       'worktree.locked': '🔒',
+      'worktree.normal': '正常',
+      'worktree.statusNormal': '正常',
+      'worktree.statusLocked': '已锁定',
       'worktree.alreadyRemoved': '已移除',
       'worktree.defaultReason': '已验证合入且干净',
       'worktree.confirmClean': '确认清理',
@@ -684,6 +688,7 @@ window.__ModuleLoader__.load({
       'shared.attachFail': '⚠️ 挂载失败：',
       'shared.attachGoalRequired': '⚠️ 请先选择或输入要挂载的目标',
       'shared.unreferenced': '✅ 已解除 {goalId} 引用',
+      'shared.unrefGoalTooltip': '移除 {label} 对这张共享卡的引用（保留共享卡本身）',
       'shared.unrefFail': '⚠️ 解除失败：',
       'shared.deleted': '✅ 已删除共享卡：',
       'shared.deleteFail': '⚠️ 删除失败：',
@@ -850,6 +855,8 @@ window.__ModuleLoader__.load({
       'live.defaultModel': '默认',
       'live.modelUnavailable': '模型目录不可用',
       'live.modeDefault': '模式：默认',
+      'live.modeStandard': '标准模式',
+      'live.modeMinimal': '极简模式 (6工具过滤)',
       'live.goToChat': '↗ 转到对话',
       'live.sessionMode': '会话模式：',
       'live.continuable': '可续轮',
@@ -976,6 +983,7 @@ window.__ModuleLoader__.load({
       'lane.versionDetail': 'Click to view version {version} details',
       'lane.newGoalInVersion': 'Create goal in {version}',
       'lane.newStandaloneGoal': 'Create standalone goal',
+      'lane.standalone': 'Standalone',
       'lane.newBacklogGoal': 'Create goal (backlog)',
       'lane.collapseTooltip': 'Collapse lane',
       'lane.expandTooltip': 'Click to expand lane',
@@ -1189,6 +1197,9 @@ window.__ModuleLoader__.load({
       'worktree.cleanFail': 'Cleanup blocked',
       'worktree.candidate': '✅',
       'worktree.locked': '🔒',
+      'worktree.normal': 'OK',
+      'worktree.statusNormal': 'OK',
+      'worktree.statusLocked': 'Locked',
       'worktree.alreadyRemoved': 'Removed',
       'worktree.defaultReason': 'Verified merged and clean',
       'worktree.confirmClean': 'Confirm cleanup',
@@ -1578,6 +1589,7 @@ window.__ModuleLoader__.load({
       'shared.attachFail': '⚠️ Attach failed: ',
       'shared.attachGoalRequired': '⚠️ Please select or enter a target goal first',
       'shared.unreferenced': '✅ Unreferenced {goalId}',
+      'shared.unrefGoalTooltip': 'Remove {label}\'s reference to this shared card (keeps shared card itself)',
       'shared.unrefFail': '⚠️ Unreference failed: ',
       'shared.deleted': '✅ Shared card deleted: ',
       'shared.deleteFail': '⚠️ Delete failed: ',
@@ -1744,6 +1756,8 @@ window.__ModuleLoader__.load({
       'live.defaultModel': 'Default',
       'live.modelUnavailable': 'Model catalog unavailable',
       'live.modeDefault': 'Mode: default',
+      'live.modeStandard': 'Standard',
+      'live.modeMinimal': 'Minimal (6-tool filter)',
       'live.goToChat': '↗ Go to chat',
       'live.sessionMode': 'Session mode: ',
       'live.continuable': 'Continuable',
@@ -3656,8 +3670,8 @@ window.__ModuleLoader__.load({
       const currentGroup = groups.find((g) => g.id === provider) ?? null;
       const modelChoices = currentGroup?.models ?? [];
       const modeList = opts?.modes ?? [
-        { id: "standard", name: "标准模式" },
-        { id: "minimal", name: "极简模式 (6工具过滤)" },
+        { id: "standard", name: dgT("live.modeStandard") },
+        { id: "minimal", name: dgT("live.modeMinimal") },
       ];
 
       const relaunch = async () => {
@@ -4076,7 +4090,7 @@ window.__ModuleLoader__.load({
     function GoalTags(props) {
       const tags = Array.isArray(props.tags) ? props.tags : [];
       if (!tags.length) return null;
-      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" }, "aria-label": "标签" },
+      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" }, "aria-label": dgT("tags.title") },
         tags.map((tag) => h("span", {
           key: tag, style: { fontSize: 10, lineHeight: "16px", padding: "0 5px", borderRadius: 8,
             background: "rgba(76,141,255,.16)", border: "1px solid rgba(76,141,255,.35)",
@@ -5682,16 +5696,22 @@ window.__ModuleLoader__.load({
       if (!attempts.length) return null;
       const latest = [...attempts].reverse().find((a) => discovery.items?.[a.id]);
       const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: dgT("worktree.copyPathTooltip"), onClick: async () => { if (await copyText(item.path)) showToast(dgT("worktree.pathCopied")); } }, dgT("common.copy")) : null;
+      const formatWorktreeStatus = (status) => {
+        if (status === "正常" || status === "ok" || status === "normal") return dgT("worktree.normal");
+        if (status === "已锁定" || status === "locked") return dgT("worktree.statusLocked");
+        if (status === "已移除" || status === "removed") return dgT("worktree.alreadyRemoved");
+        return status;
+      };
       const row = (a) => {
         const item = discovery.items?.[a.id];
         return h("div", { key: a.id, style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginTop: 4 } },
           h("span", { style: { flex: "0 0 auto", fontSize: 12 } }, a.id),
-          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${item.status}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
+          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${formatWorktreeStatus(item.status)}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
           copyButton(item));
       };
       return h("div", { key: "worktrees", style: S.modalSection },
         h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
-          h("span", null, "🌿 Attempt worktree"),
+          h("span", null, dgT("worktree.attemptTitle")),
           h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12, padding: "0 5px" }, title: expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), "aria-label": expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), onClick: () => setExpanded((v) => !v) }, expanded ? "▲" : "▼")),
         discovery.status !== "ok" ? h("div", { style: { ...S.meta, fontSize: 12 } }, dgT("worktree.unavailable")) : expanded ? attempts.map(row) : latest ? row(latest) : h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, dgT("worktree.notCreated")));
     }
@@ -6785,7 +6805,7 @@ function resetSearchState(activeWs) {
           h("div", { id: "dg-version-drawer-title", style: { fontWeight: 700, fontSize: 16, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
             h("span", null, dgT("versionDrawer.title")),
             h("span", { style: { ...S.meta, fontSize: 12, fontWeight: 400 } },
-              "（显示 " + visibleCount + "/" + allVersions.length + "）")),
+              dgT("versionDrawer.displayCount", { visible: visibleCount, total: allVersions.length }))),
           h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.8, marginBottom: 12, lineHeight: 1.4 } },
             dgT("versionDrawer.hint")),
 
@@ -6900,9 +6920,9 @@ function resetSearchState(activeWs) {
                                 ? "var(--dsw-alias-state-success-primary, #6ee7a0)"
                                 : "var(--dsw-alias-state-business-primary, #8ab4ff)",
                             },
-                          }, isReleased ? dgT("versionDrawer.released") : (v.status === "active" ? dgT("versionDrawer.active") : (STATUS_LABEL[v.status] ?? v.status ?? "活跃")))),
+                          }, isReleased ? dgT("versionDrawer.released") : (v.status === "active" ? dgT("versionDrawer.active") : (STATUS_LABEL[v.status] ?? v.status ?? dgT("versionDrawer.active"))))),
                         h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } },
-                          v.slug + " ｜ " + goalsCount + " 个目标"))),
+                          v.slug + " ｜ " + dgT("versionDrawer.goalCount", { count: goalsCount })))),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "2px 6px", flexShrink: 0 },
                       className: "dg-btn",
@@ -7329,7 +7349,7 @@ function resetSearchState(activeWs) {
             }),
             h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 } },
               h("span", { style: { ...S.meta, fontSize: 11, color: newScope === "standing" && [...newText].length > 200 ? "#e74c3c" : undefined } },
-                [...newText].length + " / " + (newScope === "standing" ? "200" : "500") + " 字"),
+                dgT("memory.charCount", { count: [...newText].length, limit: newScope === "standing" ? 200 : 500 })),
               h("button", {
                 className: "dg-btn",
                 style: { ...S.btnPrimary, fontSize: 12 },
@@ -8938,7 +8958,7 @@ function resetSearchState(activeWs) {
             }, dgT("versionDrawer.showAll"))),
         );
       }
-      rows.push(...lane(dgT("lane.newStandaloneGoal").replace("Create ", "").replace("新建", "").replace(" goal", "").replace("目标", ""), b.standalone, "standalone", null, laneIndex));
+      rows.push(...lane(dgT("lane.standalone"), b.standalone, "standalone", null, laneIndex));
       laneIndex++;
       rows.push(...backlogRow("backlog", b.backlog, "backlog"));
 
@@ -10134,7 +10154,7 @@ function resetSearchState(activeWs) {
             body: JSON.stringify({ goal: gid, card: cardId }),
           });
           const d = await r.json();
-          if (d.ok) { setNote(dgT("shared.unreferenced", { goalId: gid }) + gid + " 引用"); refresh(); onRefresh?.(); }
+          if (d.ok) { setNote(dgT("shared.unreferenced", { goalId: gid })); refresh(); onRefresh?.(); }
           else setNote(dgT("shared.unrefFail") + (d.error || dgT("drag.unknownError")));
         } catch (e) { setNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
       };
@@ -10158,7 +10178,7 @@ function resetSearchState(activeWs) {
         return h("div", { key: c.id, style: { ...S.subCard, marginBottom: 6 } },
           h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
             h("span", { style: { flex: 1 } }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
-            h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} 个 goal 引用`)),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} ${dgT("shared.goalRef")}`)),
           h("div", { style: { ...S.meta, fontSize: 11 } },
             `id=${c.id}${c.summary ? " ｜ " + c.summary : ""}`),
           // 正文引用附件（安全下载链接，不内联渲染）——逐项渲染为节点（勿拼接 React 元素为字符串）
@@ -10187,7 +10207,7 @@ function resetSearchState(activeWs) {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                     className: "dg-btn",
                     disabled: installing,
-                    title: installing ? dgT("drawer.unrefCollecting") : `移除 ${label} 对这张共享卡的引用（保留共享卡本身）`,
+                    title: installing ? dgT("drawer.unrefCollecting") : dgT("shared.unrefGoalTooltip", { label }),
                     onClick: () => unreference(c.id, ref.id),
                   }, "➖ " + label);
                 })),
@@ -10639,7 +10659,7 @@ function resetSearchState(activeWs) {
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
             h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reasoningEffort")),
             h("select", {
-              "aria-label": "workspace 子代理默认推理档位",
+              "aria-label": dgT("settings.reasoningEffortAria"),
               style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
               value: curEffort,
               onChange: (e) => set(["executor", "reasoning_effort"], e.target.value),
@@ -10647,9 +10667,9 @@ function resetSearchState(activeWs) {
             h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } },
               catReady
                 ? (effortChoices.length > 0
-                  ? "选项随所选 provider/model 的 reasoning effort 能力更新；留空继承所选模型或父会话默认值。"
-                  : "所选 provider/model 未声明 reasoning effort；已存旧值保留可选，可留空继承默认值。")
-                : "正在读取 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
+                  ? dgT("settings.effortHint")
+                  : dgT("settings.effortHintNone"))
+                : dgT("profileSettings.effortHintWaiting"))),
           // g-191：执行模式受控下拉
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
             h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),

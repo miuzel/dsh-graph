@@ -85,7 +85,7 @@
     function GoalTags(props) {
       const tags = Array.isArray(props.tags) ? props.tags : [];
       if (!tags.length) return null;
-      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" }, "aria-label": "标签" },
+      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" }, "aria-label": dgT("tags.title") },
         tags.map((tag) => h("span", {
           key: tag, style: { fontSize: 10, lineHeight: "16px", padding: "0 5px", borderRadius: 8,
             background: "rgba(76,141,255,.16)", border: "1px solid rgba(76,141,255,.35)",

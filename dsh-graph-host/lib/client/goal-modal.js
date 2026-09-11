@@ -471,16 +471,22 @@
       if (!attempts.length) return null;
       const latest = [...attempts].reverse().find((a) => discovery.items?.[a.id]);
       const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: dgT("worktree.copyPathTooltip"), onClick: async () => { if (await copyText(item.path)) showToast(dgT("worktree.pathCopied")); } }, dgT("common.copy")) : null;
+      const formatWorktreeStatus = (status) => {
+        if (status === "正常" || status === "ok" || status === "normal") return dgT("worktree.normal");
+        if (status === "已锁定" || status === "locked") return dgT("worktree.statusLocked");
+        if (status === "已移除" || status === "removed") return dgT("worktree.alreadyRemoved");
+        return status;
+      };
       const row = (a) => {
         const item = discovery.items?.[a.id];
         return h("div", { key: a.id, style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginTop: 4 } },
           h("span", { style: { flex: "0 0 auto", fontSize: 12 } }, a.id),
-          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${item.status}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
+          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${formatWorktreeStatus(item.status)}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
           copyButton(item));
       };
       return h("div", { key: "worktrees", style: S.modalSection },
         h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
-          h("span", null, "🌿 Attempt worktree"),
+          h("span", null, dgT("worktree.attemptTitle")),
           h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12, padding: "0 5px" }, title: expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), "aria-label": expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), onClick: () => setExpanded((v) => !v) }, expanded ? "▲" : "▼")),
         discovery.status !== "ok" ? h("div", { style: { ...S.meta, fontSize: 12 } }, dgT("worktree.unavailable")) : expanded ? attempts.map(row) : latest ? row(latest) : h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, dgT("worktree.notCreated")));
     }

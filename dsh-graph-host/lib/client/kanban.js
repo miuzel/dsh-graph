@@ -1571,7 +1571,7 @@
             }, dgT("versionDrawer.showAll"))),
         );
       }
-      rows.push(...lane(dgT("lane.newStandaloneGoal").replace("Create ", "").replace("新建", "").replace(" goal", "").replace("目标", ""), b.standalone, "standalone", null, laneIndex));
+      rows.push(...lane(dgT("lane.standalone"), b.standalone, "standalone", null, laneIndex));
       laneIndex++;
       rows.push(...backlogRow("backlog", b.backlog, "backlog"));
 

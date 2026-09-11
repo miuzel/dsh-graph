@@ -391,7 +391,7 @@
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
             h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reasoningEffort")),
             h("select", {
-              "aria-label": "workspace 子代理默认推理档位",
+              "aria-label": dgT("settings.reasoningEffortAria"),
               style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
               value: curEffort,
               onChange: (e) => set(["executor", "reasoning_effort"], e.target.value),
@@ -399,9 +399,9 @@
             h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } },
               catReady
                 ? (effortChoices.length > 0
-                  ? "选项随所选 provider/model 的 reasoning effort 能力更新；留空继承所选模型或父会话默认值。"
-                  : "所选 provider/model 未声明 reasoning effort；已存旧值保留可选，可留空继承默认值。")
-                : "正在读取 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
+                  ? dgT("settings.effortHint")
+                  : dgT("settings.effortHintNone"))
+                : dgT("profileSettings.effortHintWaiting"))),
           // g-191：执行模式受控下拉
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
             h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
