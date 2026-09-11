@@ -10378,10 +10378,6 @@ function resetSearchState(activeWs) {
       const save = async () => {
         if (!form) return;
         setSaving(true); setNote(null); setError(null);
-        // g-214: 保存并持久化刷新间隔到 localStorage（非法值或 <5s 自动纠偏为 5s）
-        const correctedInterval = setRefreshInterval(refreshIntervalInput);
-        setRefreshIntervalInput(String(correctedInterval));
-        setIntervalWarn(null);
         const lanesRaw = form.defaults?.pk?.lanes;
         const lanes = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
         if (!Number.isInteger(lanes) || lanes < 1) {
@@ -10413,6 +10409,11 @@ function resetSearchState(activeWs) {
           });
           const data = await r.json();
           if (!r.ok) throw new Error(data?.error || (dgT("settings.saveFail") + " " + r.status));
+          // g-259：刷新间隔后置生效——仅在 POST 成功 (r.ok) 后持久化到 localStorage 并广播事件
+          // （非法值或 <5s 自动纠偏为 5s，前置校验失败或 POST 异常时绝不改写本地配置与广播）
+          const correctedInterval = setRefreshInterval(refreshIntervalInput);
+          setRefreshIntervalInput(String(correctedInterval));
+          setIntervalWarn(null);
           setForm(data.config ?? form); // 用服务端回填的最新配置刷新
           // g-246：保存成功即归位基线（刷新间隔取纠偏后值），随后直接关闭跳过拦截
           baselineRef.current = normalizeSettingsDraft(data.config ?? form, String(correctedInterval));

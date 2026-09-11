@@ -3642,3 +3642,267 @@ test("g-246 生成 bundle 契约：client.js 同步含脏判定与统一拦截",
   assert.match(bundle, /window\.confirm\(dgT\("common\.confirm"\)\)/);
   assert.match(bundle, /useBackdropClose\(requestClose\)/);
 });
+
+// ===== g-259：设置弹窗保存失败时刷新间隔零本地副作用（后置生效）契约与行为测试 =====
+
+test("g-259 源契约：settings-modal.js 与 client.js 将 setRefreshInterval 置于 POST 成功判定 (r.ok) 之后", () => {
+  const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+
+  // settings-modal.js 源文件契约：
+  const saveStart = modal.indexOf("const save = async () => {");
+  assert.ok(saveStart > 0, "settings-modal.js 存在 save 函数");
+  const saveEnd = modal.indexOf("if (loading)", saveStart);
+  assert.ok(saveEnd > saveStart, "找到 save 函数结束边界");
+  const saveCode = modal.slice(saveStart, saveEnd);
+
+  // setRefreshInterval 只能出现在 r.ok 检查之后
+  const postIndex = saveCode.indexOf('fetch(graphUrl("/api/dsh-graph/settings")');
+  const okIndex = saveCode.indexOf("if (!r.ok)");
+  const setRefreshIndex = saveCode.indexOf("setRefreshInterval(refreshIntervalInput)");
+  assert.ok(postIndex > 0, "save 内存在 POST /api/dsh-graph/settings");
+  assert.ok(okIndex > postIndex, "save 内存在 if (!r.ok) 校验");
+  assert.ok(setRefreshIndex > okIndex, "setRefreshInterval 必须在 if (!r.ok) 成功分支内调用（后置生效）");
+
+  // 前置校验（lanes 检查）必须在 fetch 之前且在此之前不得调用 setRefreshInterval
+  const precheckIndex = saveCode.indexOf("settings.pkLanesError");
+  assert.ok(precheckIndex > 0 && precheckIndex < postIndex, "前置校验位于 fetch 之前");
+  assert.ok(setRefreshIndex > precheckIndex, "setRefreshInterval 必须位于前置校验之后");
+
+  // 确保在 fetch 之前的代码段内没有任何 setRefreshInterval 调用
+  const preFetchCode = saveCode.slice(0, postIndex);
+  assert.equal(preFetchCode.includes("setRefreshInterval"), false, "fetch 发起前绝不调用 setRefreshInterval");
+
+  // client.js 生成 bundle 契约：
+  const bSaveStart = bundle.indexOf("const save = async () => {");
+  assert.ok(bSaveStart > 0, "bundle 存在 save 函数");
+  const bSaveEnd = bundle.indexOf("if (loading)", bSaveStart);
+  const bSaveCode = bundle.slice(bSaveStart, bSaveEnd);
+  const bOkIndex = bSaveCode.indexOf("if (!r.ok)");
+  const bSetRefreshIndex = bSaveCode.indexOf("setRefreshInterval(refreshIntervalInput)");
+  assert.ok(bSetRefreshIndex > bOkIndex, "bundle 中 setRefreshInterval 同样位于 r.ok 之后");
+  const bPreFetchCode = bSaveCode.slice(0, bSaveCode.indexOf('fetch(graphUrl("/api/dsh-graph/settings")'));
+  assert.equal(bPreFetchCode.includes("setRefreshInterval"), false, "bundle 中 fetch 发起前绝不调用 setRefreshInterval");
+});
+
+test("g-259 行为模拟：判据 1~4 全覆盖（成功生效、校验失败零副作用、POST 失败/网络异常零副作用、脏拦截与改错重试）", async () => {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  const helperSrc = helpers.slice(helpers.indexOf("const REFRESH_INTERVAL_KEY"), helpers.indexOf("const LIVE_DISPLAY_KEY"));
+
+  const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/settings-modal.js"), "utf8");
+  const normSrc = modal.slice(modal.indexOf("function normalizeSettingsDraft("), modal.indexOf("function SettingsModal("));
+  const saveSrc = modal.slice(modal.indexOf("const save = async () => {"), modal.indexOf("if (loading)"));
+  const reqCloseSrc = modal.slice(modal.indexOf("const requestClose = () => {"), modal.indexOf("const handleIntervalChange"));
+
+  function createHarness(options: any = {}) {
+    const store = new Map<string, string>();
+    if (options.initialInterval) store.set("dsh-graph.refresh-interval", String(options.initialInterval));
+
+    const events: any[] = [];
+    const calls = {
+      setNote: [] as any[],
+      setError: [] as any[],
+      setSaving: [] as any[],
+      setRefreshIntervalInput: [] as any[],
+      setIntervalWarn: [] as any[],
+      setForm: [] as any[],
+      onSaved: 0,
+      onClose: 0,
+      confirm: [] as any[],
+      fetch: [] as any[],
+    };
+
+    let form = options.form || {
+      executor: { provider: "test-p", model: "test-m" },
+      defaults: { review: { reviewer: "human", prompt: null }, pk: { lanes: 1, sandbox: "" } },
+      supervisor: { automation: {} },
+      prompt_overrides: { subagent: { state: "default", value: null } },
+    };
+    let saving = false;
+    let refreshIntervalInput = options.refreshIntervalInput ?? "30";
+
+    const context: any = {
+      console,
+      CustomEvent: class {
+        type: string;
+        detail: any;
+        constructor(type: string, init: any) { this.type = type; this.detail = init?.detail; }
+      },
+      window: {
+        dispatchEvent: (e: any) => { events.push(e); },
+        confirm: (msg: string) => {
+          calls.confirm.push(msg);
+          return options.confirmResult !== undefined ? options.confirmResult : true;
+        },
+      },
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: any) => { store.set(k, String(v)); },
+        removeItem: (k: string) => { store.delete(k); },
+      },
+      dgT: (k: string) => k,
+      graphUrl: (u: string) => u,
+      fetch: async (url: string, opts: any) => {
+        calls.fetch.push({ url, opts });
+        if (options.fetchError) throw options.fetchError;
+        if (options.fetchResponse) return options.fetchResponse;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ config: JSON.parse(opts.body) }),
+        };
+      },
+      props: {
+        onSaved: () => { calls.onSaved++; },
+        onClose: () => { calls.onClose++; },
+      },
+      setSaving: (v: any) => { saving = v; calls.setSaving.push(v); },
+      setNote: (v: any) => { calls.setNote.push(v); },
+      setError: (v: any) => { calls.setError.push(v); },
+      setRefreshIntervalInput: (v: any) => { refreshIntervalInput = v; calls.setRefreshIntervalInput.push(v); },
+      setIntervalWarn: (v: any) => { calls.setIntervalWarn.push(v); },
+      setForm: (v: any) => { form = v; calls.setForm.push(v); },
+    };
+
+    const script = `
+      ${helperSrc}
+      ${normSrc}
+      let form = ${JSON.stringify(form)};
+      let saving = false;
+      let refreshIntervalInput = ${JSON.stringify(refreshIntervalInput)};
+      let baselineRef = { current: normalizeSettingsDraft(form, String(getRefreshInterval())) };
+
+      ${reqCloseSrc}
+      ${saveSrc}
+
+      globalThis.__harness = {
+        save,
+        requestClose,
+        getStore: () => store,
+        getBaseline: () => baselineRef.current,
+        getForm: () => form,
+        getRefreshIntervalInput: () => refreshIntervalInput,
+      };
+    `;
+
+    const vmCtx = vm.createContext(context);
+    new vm.Script(script).runInContext(vmCtx);
+    return {
+      harness: (vmCtx as any).__harness,
+      store,
+      events,
+      calls,
+      context,
+    };
+  }
+
+  // 判据 1：保存成功路径一致——表单合法 + POST 2xx，刷新间隔写入 localStorage、广播事件、基线更新、弹窗关闭
+  {
+    const h = createHarness({ initialInterval: 10, refreshIntervalInput: "25" });
+    await h.harness.save();
+    assert.equal(h.store.get("dsh-graph.refresh-interval"), "25", "localStorage 成功持久化 25");
+    assert.equal(h.events.length, 1, "广播了 1 次 refresh-interval-changed 事件");
+    assert.equal(h.events[0].type, "dsh-graph.refresh-interval-changed");
+    assert.equal(h.events[0].detail?.interval, 25);
+    assert.equal(h.calls.onSaved, 1, "调用了 props.onSaved");
+    assert.equal(h.calls.onClose, 1, "保存成功直接调用 props.onClose");
+    assert.equal(h.harness.getBaseline().refreshInterval, "25", "baselineRef 归位为最新值");
+  }
+
+  // 判据 1 补充：刷新间隔纠偏——输入 <5s（如 "2"）保存成功自动纠偏为 5s
+  {
+    const h = createHarness({ initialInterval: 15, refreshIntervalInput: "2" });
+    await h.harness.save();
+    assert.equal(h.store.get("dsh-graph.refresh-interval"), "5", "非法/小于 5s 自动纠偏为 5s");
+    assert.equal(h.events[0].detail?.interval, 5);
+    assert.equal(h.harness.getBaseline().refreshInterval, "5");
+  }
+
+  // 判据 3：前置校验拦截时零副作用——pk lanes 等非法值被拦截并提示错误、不发起 POST，localStorage 与广播事件均未触发
+  {
+    const h = createHarness({
+      initialInterval: 10,
+      refreshIntervalInput: "30",
+      form: { defaults: { pk: { lanes: -1 } } },
+    });
+    await h.harness.save();
+    assert.equal(h.calls.fetch.length, 0, "前置校验失败未发起 fetch");
+    assert.equal(h.store.get("dsh-graph.refresh-interval"), "10", "localStorage 保持原值 10 完全不变");
+    assert.equal(h.events.length, 0, "未触发任何广播事件");
+    assert.equal(h.calls.onClose, 0, "弹窗未关闭");
+    assert.ok(h.calls.setNote.some((n: any) => n?.kind === "err" && n?.text === "settings.pkLanesError"), "提示 pkLanesError");
+  }
+
+  // 判据 2：POST 非 2xx (如 500) 时零副作用——弹窗提示保存失败且不关闭，localStorage 保持原值完全不变，不广播事件
+  {
+    const h = createHarness({
+      initialInterval: 10,
+      refreshIntervalInput: "30",
+      fetchResponse: { ok: false, status: 500, json: async () => ({ error: "Server DB Error" }) },
+    });
+    await h.harness.save();
+    assert.equal(h.calls.fetch.length, 1, "发起了 POST fetch");
+    assert.equal(h.store.get("dsh-graph.refresh-interval"), "10", "localStorage 保持原值 10 完全不变");
+    assert.equal(h.events.length, 0, "未触发任何广播事件");
+    assert.equal(h.calls.onClose, 0, "弹窗未关闭");
+    assert.ok(h.calls.setNote.some((n: any) => n?.kind === "err" && String(n?.text).includes("Server DB Error")), "提示保存失败原因");
+  }
+
+  // 判据 2：网络异常 (fetch reject) 时零副作用
+  {
+    const h = createHarness({
+      initialInterval: 10,
+      refreshIntervalInput: "30",
+      fetchError: new Error("Network offline"),
+    });
+    await h.harness.save();
+    assert.equal(h.store.get("dsh-graph.refresh-interval"), "10", "网络异常时 localStorage 仍为 10");
+    assert.equal(h.events.length, 0, "网络异常未触发任何广播事件");
+    assert.equal(h.calls.onClose, 0, "弹窗未关闭");
+    assert.ok(h.calls.setNote.some((n: any) => n?.kind === "err" && String(n?.text).includes("Network offline")), "提示网络异常错误");
+  }
+
+  // 判据 4：边界——保存失败后直接关窗应提示存在未保存改动，确认丢弃后间隔严格保持原值；失败后不刷新页面改错重试成功，最新间隔正常持久化
+  {
+    const h = createHarness({
+      initialInterval: 10,
+      refreshIntervalInput: "30",
+      fetchResponse: { ok: false, status: 500, json: async () => ({ error: "Simulated 500" }) },
+    });
+    // 步骤 A：首次保存失败
+    await h.harness.save();
+    assert.equal(h.store.get("dsh-graph.refresh-interval"), "10", "保存失败未改写 localStorage");
+    assert.equal(h.calls.onClose, 0);
+
+    // 步骤 B：保存失败后用户尝试关窗 → 拦截提示存在未保存修改
+    h.calls.confirm = [];
+    h.harness.requestClose();
+    assert.equal(h.calls.confirm.length, 1, "关窗被拦截，弹出 confirm 提示");
+    assert.equal(h.calls.confirm[0], "common.confirm");
+    // 用户确认丢弃并关闭，localStorage 严格保持原值 10，无脏数据泄露
+    assert.equal(h.store.get("dsh-graph.refresh-interval"), "10", "确认丢弃后原值 10 严格保持");
+
+    // 步骤 C：若用户不关闭、不刷新页面，改错/网络恢复后重试保存
+    const hRetry = createHarness({
+      initialInterval: 10,
+      refreshIntervalInput: "30",
+      fetchResponse: { ok: false, status: 500, json: async () => ({ error: "Simulated 500" }) },
+    });
+    await hRetry.harness.save();
+    assert.equal(hRetry.store.get("dsh-graph.refresh-interval"), "10", "首次失败无副作用");
+
+    // 服务端恢复正常
+    hRetry.context.fetch = async (url: string, opts: any) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ config: JSON.parse(opts.body) }),
+    });
+    // 用户再次点击保存
+    await hRetry.harness.save();
+    assert.equal(hRetry.store.get("dsh-graph.refresh-interval"), "30", "重试成功后最新刷新间隔 30 正常持久化");
+    assert.equal(hRetry.events.length, 1, "重试成功后收到刷新间隔更新事件");
+    assert.equal(hRetry.calls.onClose, 1, "重试成功弹窗正常关闭");
+    assert.equal(hRetry.harness.getBaseline().refreshInterval, "30", "基线成功更新为 30");
+  }
+});
+
