@@ -7,6 +7,8 @@ import {
   batchAcceptButtonState,
   batchAcceptToggleId,
   batchAcceptGroupByVersion,
+  batchAcceptGroupState,
+  batchAcceptToggleGroup,
   runBatchAccept,
   batchAcceptSupervisorMessage,
   notifySupervisorBatchAccept,
@@ -54,6 +56,15 @@ test("g-273: i18n batchAccept.* keys exist, zh/en symmetric, en has no CJK", () 
   assert.match(en["batchAccept.groupHeader"], /\{count\}/);
   assert.equal(zh["batchAccept.button"], "批量接受");
   assert.equal(en["batchAccept.button"], "Batch Accept");
+  // att-003：组级全选/取消全选 aria-label 词条 —— zh/en 对称、含 {label} 占位、en 零 CJK
+  assert.match(zh["batchAccept.selectGroup"], /\{label\}/);
+  assert.match(zh["batchAccept.unselectGroup"], /\{label\}/);
+  assert.match(en["batchAccept.selectGroup"], /\{label\}/);
+  assert.match(en["batchAccept.unselectGroup"], /\{label\}/);
+  assert.equal(zh["batchAccept.selectGroup"], "全选 {label}");
+  assert.equal(zh["batchAccept.unselectGroup"], "取消全选 {label}");
+  assert.equal(dgEn("batchAccept.selectGroup", { label: "v1" }), "Select all in v1");
+  assert.equal(dgEn("batchAccept.unselectGroup", { label: "v1" }), "Deselect all in v1");
 });
 
 // ===== 2. 源契约：非 force、单条聚合、模块注册、看板集成 =====
@@ -81,6 +92,13 @@ test("g-273: source contracts — non-force accept body, single aggregated notif
   // 生成物纪律：bundle 已包含新模块且 ESM export 块被剥离
   assert.match(bundleSource, /function BatchAcceptModal\(props\)/);
   assert.match(bundleSource, /function batchAcceptGroupByVersion\(items, standaloneLabel\)/);
+  // att-003：组级三态纯函数与 indeterminate ref 赋值已进 bundle；组级词条被模块引用
+  assert.match(bundleSource, /function batchAcceptGroupState\(selected, ids\)/);
+  assert.match(bundleSource, /function batchAcceptToggleGroup\(selected, ids\)/);
+  assert.match(moduleSource, /el\.indeterminate = gState\.some/);
+  assert.match(moduleSource, /el\.indeterminate = globalSome/);
+  assert.match(moduleSource, /batchAccept\.selectGroup/);
+  assert.match(moduleSource, /batchAccept\.unselectGroup/);
   assert.match(bundleSource, /function runBatchAccept\(goalIds, opts = \{\}\)/);
   assert.ok(bundleSource.includes("【负责人批量交付复核请求】"));
   assert.doesNotMatch(bundleSource, /export \{ batchAcceptButtonState/);
@@ -161,6 +179,38 @@ test("g-273 att-002: batchAcceptGroupByVersion — only non-empty groups, robust
   assert.equal(withNull.length, 1);
   assert.equal(withNull[0].label, "独立目标");
   assert.deepEqual(withNull[0].items.map((it: any) => it.id), ["g-1"]);
+});
+
+// ===== 4c. att-003：组级三态与组级切换纯函数 =====
+test("g-273 att-003: batchAcceptGroupState — all/some/none tri-state", () => {
+  const ids = ["a", "b", "c"];
+  assert.deepEqual(batchAcceptGroupState(["a", "b", "c"], ids), { all: true, some: false, none: false });
+  assert.deepEqual(batchAcceptGroupState(["a", "b"], ids), { all: false, some: true, none: false });
+  assert.deepEqual(batchAcceptGroupState(["a"], ids), { all: false, some: true, none: false });
+  assert.deepEqual(batchAcceptGroupState([], ids), { all: false, some: false, none: true });
+  assert.deepEqual(batchAcceptGroupState(["x", "y"], ids), { all: false, some: false, none: true });
+  // 空组 ids → none（弹窗本就零渲染空组，语义安全回退）
+  assert.deepEqual(batchAcceptGroupState(["a"], []), { all: false, some: false, none: true });
+  // 非数组输入安全回退
+  assert.deepEqual(batchAcceptGroupState(null as any, ids), { all: false, some: false, none: true });
+  assert.deepEqual(batchAcceptGroupState(["a"], null as any), { all: false, some: false, none: true });
+});
+
+test("g-273 att-003: batchAcceptToggleGroup — selects/clears only its own group, preserves order", () => {
+  const groupA = ["a1", "a2"];
+  const groupB = ["b1", "b2"];
+  // 组未全选 → 选中该组全部；其他组选中态原样保留
+  assert.deepEqual(batchAcceptToggleGroup(["b1"], groupA), ["b1", "a1", "a2"]);
+  // 部分选中 → 补齐缺失项（保持既有顺序，新项按组内 ids 顺序追加）
+  assert.deepEqual(batchAcceptToggleGroup(["a2", "b1"], groupA), ["a2", "b1", "a1"]);
+  // 组已全选 → 只取消该组，其他组不受影响
+  assert.deepEqual(batchAcceptToggleGroup(["a1", "b1", "a2"], groupA), ["b1"]);
+  // 跨组隔离：操作 A 组绝不触碰 B 组项
+  assert.deepEqual(batchAcceptToggleGroup(["b1", "b2"], groupB), [], "clearing B removes only B");
+  assert.deepEqual(batchAcceptToggleGroup([], groupB), ["b1", "b2"]);
+  // 空组 / 非法输入安全回退
+  assert.deepEqual(batchAcceptToggleGroup(["x"], []), ["x"]);
+  assert.deepEqual(batchAcceptToggleGroup(null as any, groupA), ["a1", "a2"]);
 });
 
 // ===== 5. runBatchAccept：非 force 请求体、部分失败继续、并发受限 =====
@@ -440,6 +490,133 @@ test("g-273 att-002: modal cross-group select-all and per-item toggle stay globa
   confirmBtn = findAll(vnode, (n) => n.type === "button" && String(n.props.className ?? "").includes("dg-btn-accept"))[0];
   confirmBtn.props.onClick();
   assert.deepEqual(confirmed[1], ["g-001", "g-002", "g-003"]);
+});
+
+test("g-273 att-003: modal per-group tri-state select/deselect, cross-group isolation, global sync", () => {
+  const { render } = makeModalSandbox("zh");
+  const confirmed: string[][] = [];
+  const props = { items: ITEMS, loading: false, failures: null, onConfirm: (ids: string[]) => confirmed.push(Array.from(ids)), onCancel: () => {} };
+  const findGroupCb = (vnode: any, label: string) =>
+    findAll(vnode, (n) => n.type === "input" && typeof n.props["aria-label"] === "string"
+      && (n.props["aria-label"] === `全选 ${label}` || n.props["aria-label"] === `取消全选 ${label}`))[0];
+  const findGlobalCb = (vnode: any) =>
+    findAll(vnode, (n) => n.type === "input" && n.props["aria-label"] === "全选")[0];
+  const indOf = (node: any) => { const el: any = {}; node.props.ref(el); return el.indeterminate; };
+
+  // 初始全选：组 A 开关 = checked（取消全选 aria）、非 indeterminate；全局 = checked、非 indeterminate
+  let vnode = render(props);
+  let cbA = findGroupCb(vnode, "v0.10.0");
+  let cbS = findGroupCb(vnode, "独立目标");
+  assert.ok(cbA && cbS, "each non-empty group must render a group-level switch");
+  assert.equal(cbA.props["aria-label"], "取消全选 v0.10.0");
+  assert.equal(cbA.props.checked, true);
+  assert.equal(indOf(cbA), false, "fully-selected group must not be indeterminate");
+  assert.equal(cbS.props["aria-label"], "取消全选 独立目标");
+  assert.equal(indOf(findGlobalCb(vnode)), false, "fully-selected global must not be indeterminate");
+  assert.equal(findGlobalCb(vnode).props.checked, true);
+
+  // 组已全选 → 点击取消该组全部：已选 1/3（仅剩独立目标组 g-003）——跨组隔离
+  cbA.props.onChange();
+  vnode = render(props);
+  assert.ok(allText(vnode).includes("已选 1/3"), "deselecting group A must keep group B untouched");
+  cbA = findGroupCb(vnode, "v0.10.0");
+  cbS = findGroupCb(vnode, "独立目标");
+  assert.equal(cbA.props["aria-label"], "全选 v0.10.0", "cleared group switches aria to select-all");
+  assert.equal(cbA.props.checked, false);
+  assert.equal(indOf(cbA), false, "empty-selection group must be unchecked, not indeterminate");
+  assert.equal(cbS.props.checked, true, "group B selection must be unaffected (cross-group isolation)");
+  assert.equal(indOf(cbS), false);
+  // 全局三态联动：部分选中 → 全局 indeterminate、未 checked
+  const g1 = findGlobalCb(vnode);
+  assert.equal(g1.props.checked, false);
+  assert.equal(indOf(g1), true, "partial global selection must render indeterminate");
+
+  // 单项勾选 g-001 → 组 A 部分选中：组开关 indeterminate、checked=false；全局仍 indeterminate
+  const item1 = findAll(vnode, (n) => n.type === "input" && n.props["aria-label"] === "g-001")[0];
+  item1.props.onChange();
+  vnode = render(props);
+  assert.ok(allText(vnode).includes("已选 2/3"));
+  cbA = findGroupCb(vnode, "v0.10.0");
+  assert.equal(cbA.props["aria-label"], "全选 v0.10.0", "partially-selected group still offers select-all");
+  assert.equal(cbA.props.checked, false);
+  assert.equal(indOf(cbA), true, "partially-selected group must render indeterminate");
+  assert.equal(indOf(findGlobalCb(vnode)), true);
+
+  // 组未全选 → 点击选中该组全部：已选 3/3，组 A 回到全选态，全局回到 checked 非 indeterminate
+  cbA.props.onChange();
+  vnode = render(props);
+  assert.ok(allText(vnode).includes("已选 3/3"));
+  cbA = findGroupCb(vnode, "v0.10.0");
+  assert.equal(cbA.props["aria-label"], "取消全选 v0.10.0");
+  assert.equal(cbA.props.checked, true);
+  assert.equal(indOf(cbA), false);
+  const g2 = findGlobalCb(vnode);
+  assert.equal(g2.props.checked, true);
+  assert.equal(indOf(g2), false);
+  // 组级开关也可用组头文字点击触发（与全选行一致的交互），且提交跨组全集
+  const headerSpan = findAll(vnode, (n) => n.type === "span" && (n.children ?? []).includes("v0.10.0 · 2"))[0];
+  assert.ok(headerSpan, "group header label must exist");
+  headerSpan.props.onClick();
+  vnode = render(props);
+  assert.ok(allText(vnode).includes("已选 1/3"), "clicking group header label toggles the group");
+  findGroupCb(vnode, "v0.10.0").props.onChange();
+  vnode = render(props);
+  const confirmBtn = findAll(vnode, (n) => n.type === "button" && String(n.props.className ?? "").includes("dg-btn-accept"))[0];
+  confirmBtn.props.onClick();
+  // 取消后重选采用追加语义：顺序为 [独立目标组, 重选的组 A]，成员仍为跨组全集
+  assert.deepEqual([...confirmed[0]].sort(), ["g-001", "g-002", "g-003"], "confirm submits cross-group selection");
+});
+
+test("g-273 att-003: modal group switch locked while loading; cancel paths stay zero-side-effect", () => {
+  const { render, keydownHandlers } = makeModalSandbox("zh");
+  let cancelled = 0;
+  const vnode = render({ items: ITEMS, loading: true, failures: null, onConfirm: () => { throw new Error("must not confirm"); }, onCancel: () => { cancelled++; } });
+  const groupCbs = findAll(vnode, (n) => n.type === "input" && typeof n.props["aria-label"] === "string"
+    && /^(全选|取消全选) /.test(n.props["aria-label"]));
+  assert.equal(groupCbs.length, 2, "one group switch per rendered group");
+  for (const cb of groupCbs) {
+    assert.equal(cb.props.disabled, true, "group switch must be disabled while loading");
+    cb.props.onChange(); // 即便触发也不应改变任何选中态（守卫）
+  }
+  // 行勾选同样锁定
+  const rowCb = findAll(vnode, (n) => n.type === "input" && n.props["aria-label"] === "g-001")[0];
+  assert.equal(rowCb.props.disabled, true);
+  // 组头文字点击同样被守卫
+  const headerSpan = findAll(vnode, (n) => n.type === "span" && (n.children ?? []).includes("v0.10.0 · 2"))[0];
+  headerSpan.props.onClick();
+  // 取消路径仍零副作用
+  const x = findAll(vnode, (n) => n.type === "span" && (n.children ?? []).includes("✕"))[0];
+  x.props.onClick();
+  keydownHandlers[0]({ key: "Escape", stopPropagation: () => {} });
+  assert.equal(cancelled, 0, "loading must lock every close path");
+});
+
+test("g-273 att-003: modal group switches absent when no groups (empty items render zero group nodes)", () => {
+  const { render } = makeModalSandbox("zh");
+  const vnode = render({ items: [], loading: false, failures: null, onConfirm: () => {}, onCancel: () => {} });
+  const groupCbs = findAll(vnode, (n) => n.type === "input" && typeof n.props["aria-label"] === "string"
+    && /^(全选|取消全选) /.test(n.props["aria-label"]));
+  assert.equal(groupCbs.length, 0, "no group switch may render without groups");
+  assert.ok(!allText(vnode).some((t) => / · \d+$/.test(t)), "no group header may render");
+});
+
+test("g-273 att-003: modal group switch aria-labels are localized (zh/en, en zero CJK)", () => {
+  const { render: renderEn } = makeModalSandbox("en");
+  const enItems = [
+    { id: "g-001", title: "Alpha goal", versionLabel: "v0.10.0" },
+    { id: "g-002", title: "Beta goal", versionLabel: "Standalone" },
+  ];
+  let vnode = renderEn({ items: enItems, loading: false, failures: null, onConfirm: () => {}, onCancel: () => {} });
+  const findGroupCb = (vn: any, label: string) =>
+    findAll(vn, (n) => n.type === "input" && typeof n.props["aria-label"] === "string" && n.props["aria-label"].includes(label))[0];
+  let cb = findGroupCb(vnode, "v0.10.0");
+  assert.equal(cb.props["aria-label"], "Deselect all in v0.10.0");
+  assert.doesNotMatch(cb.props["aria-label"], /[㐀-鿿]/);
+  cb.props.onChange();
+  vnode = renderEn({ items: enItems, loading: false, failures: null, onConfirm: () => {}, onCancel: () => {} });
+  cb = findGroupCb(vnode, "v0.10.0");
+  assert.equal(cb.props["aria-label"], "Select all in v0.10.0");
+  assert.doesNotMatch(cb.props["aria-label"], /[㐀-鿿]/);
 });
 
 test("g-273: modal select-all and per-item toggle drive selection", () => {

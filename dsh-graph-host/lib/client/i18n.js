@@ -97,6 +97,8 @@
       'batchAccept.failedListTitle': '以下目标接受失败（其余已正常提交）：',
       'batchAccept.requestFail': '⚠️ 批量接受请求失败：',
       'batchAccept.groupHeader': '{label} · {count}',
+      'batchAccept.selectGroup': '全选 {label}',
+      'batchAccept.unselectGroup': '取消全选 {label}',
 
       // === 卡片 ===
       'card.clickToOpen': '点击打开详情',
@@ -1042,6 +1044,8 @@
       'batchAccept.failedListTitle': 'These goals failed to accept (the rest were submitted):',
       'batchAccept.requestFail': '⚠️ Batch accept request failed: ',
       'batchAccept.groupHeader': '{label} · {count}',
+      'batchAccept.selectGroup': 'Select all in {label}',
+      'batchAccept.unselectGroup': 'Deselect all in {label}',
 
       // === Cards ===
       'card.clickToOpen': 'Click to open details',
