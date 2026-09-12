@@ -34,7 +34,7 @@
         async load() {
           const res = await describeFn();
           const view = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
-          if (!view) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "读取 profile 设置失败");
+          if (!view) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? dgT("settings.readProfileFail"));
           const row = view.namespaces?.find((candidate) => candidate.ns === GRAPH_SETTINGS_NS);
           if (!row) {
             snapshot = { ...snapshot, status: "unavailable", writable: view.writable !== false };
@@ -46,7 +46,7 @@
         async set(field, value) {
           const res = await mutateFn(GRAPH_SETTINGS_NS, [{ op: "set", path: [field], value }], snapshot.revision);
           const row = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
-          if (!row) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "保存 profile 设置失败");
+          if (!row) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? dgT("settings.saveProfileFail"));
           snapshot = { ...snapshot, status: "ready", value: row.value ?? snapshot.value, revision: row.revision };
           notify();
         },

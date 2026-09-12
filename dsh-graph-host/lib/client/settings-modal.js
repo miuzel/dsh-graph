@@ -130,10 +130,6 @@
       const save = async () => {
         if (!form) return;
         setSaving(true); setNote(null); setError(null);
-        // g-214: 保存并持久化刷新间隔到 localStorage（非法值或 <5s 自动纠偏为 5s）
-        const correctedInterval = setRefreshInterval(refreshIntervalInput);
-        setRefreshIntervalInput(String(correctedInterval));
-        setIntervalWarn(null);
         const lanesRaw = form.defaults?.pk?.lanes;
         const lanes = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
         if (!Number.isInteger(lanes) || lanes < 1) {
@@ -165,6 +161,11 @@
           });
           const data = await r.json();
           if (!r.ok) throw new Error(data?.error || (dgT("settings.saveFail") + " " + r.status));
+          // g-259：刷新间隔后置生效——仅在 POST 成功 (r.ok) 后持久化到 localStorage 并广播事件
+          // （非法值或 <5s 自动纠偏为 5s，前置校验失败或 POST 异常时绝不改写本地配置与广播）
+          const correctedInterval = setRefreshInterval(refreshIntervalInput);
+          setRefreshIntervalInput(String(correctedInterval));
+          setIntervalWarn(null);
           setForm(data.config ?? form); // 用服务端回填的最新配置刷新
           // g-246：保存成功即归位基线（刷新间隔取纠偏后值），随后直接关闭跳过拦截
           baselineRef.current = normalizeSettingsDraft(data.config ?? form, String(correctedInterval));
@@ -390,7 +391,7 @@
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
             h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reasoningEffort")),
             h("select", {
-              "aria-label": "workspace 子代理默认推理档位",
+              "aria-label": dgT("settings.reasoningEffortAria"),
               style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
               value: curEffort,
               onChange: (e) => set(["executor", "reasoning_effort"], e.target.value),
@@ -398,9 +399,9 @@
             h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } },
               catReady
                 ? (effortChoices.length > 0
-                  ? "选项随所选 provider/model 的 reasoning effort 能力更新；留空继承所选模型或父会话默认值。"
-                  : "所选 provider/model 未声明 reasoning effort；已存旧值保留可选，可留空继承默认值。")
-                : "正在读取 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
+                  ? dgT("settings.effortHint")
+                  : dgT("settings.effortHintNone"))
+                : dgT("profileSettings.effortHintWaiting"))),
           // g-191：执行模式受控下拉
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
             h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
@@ -438,7 +439,8 @@
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
           h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.supervisorAutomation")),
           h("div", { style: { display: showAdvanced ? "grid" : "none", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 } },
-            Object.keys({ scope_planning: "范围规划", integration_decision: "集成决策", rework: "返工决策", memory_promotion: "记忆提炼", skill_proposal: "技能提案", release: "发布" }).map((k) =>
+            // g-272 att-002：原 Object.keys({...中文标签}) 的中文值从未被渲染（label 直接用 key），改为纯 key 数组消除死代码中文残留。
+            ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"].map((k) =>
               h("div", { key: k },
                 h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, k),
                 h("select", { style: { ...S.promptInput, width: "100%" }, value: auto[k] ?? "", onChange: (e) => set(["supervisor", "automation", k], e.target.value === "" ? null : e.target.value) },

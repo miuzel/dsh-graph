@@ -33,6 +33,10 @@ PARTS=(
   # 都会产生新的函数身份，React 因 elementType 变化卸载重建抽屉子树，版本清单
   # scrollTop 随之归零（勾选/取消 checkbox 或看板刷新后跳回第一行）。
   "version-drawer"
+  # g-273：批量接受模块（纯函数 + BatchAcceptModal 组件）必须在 drag-prompts 之前
+  # （工厂作用域），与 version-drawer 同理——夹在 drag-prompts 与 kanban 之间会变成
+  # KanbanView 内部嵌套函数，每次渲染产生新组件身份导致 React 卸载重建弹窗子树。
+  "batch-accept"
   "drag-prompts"
   "kanban"
   "shared-panel"

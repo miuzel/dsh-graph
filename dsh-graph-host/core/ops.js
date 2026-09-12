@@ -520,7 +520,7 @@ export const ROLE_PROFILES = {
         disciplineLines: [
             "1. 只做规划、派发、把关、复核——常规实现一律派发子代理；",
             "2. 轻量改动特权：低风险一句话决策或微小修改可直接在当前会话执行；",
-            "3. 每次动作后调用 graph_report_supervisor_status 自报状态；",
+            "3. 阶段变化与关键节点自报进展：调用 graph_report_supervisor_status 自报状态（常规细微动作无需机械汇报）；",
             "4. 人工裁决关口：review→delivered 必须经负责人 verdict 裁决，绝不自行 delivered。",
         ],
         requiredTools: ["graph_report_supervisor_status", "graph_start_attempt", "graph_resolve_accept"],
@@ -536,7 +536,7 @@ export const ROLE_PROFILES = {
         readOnly: false,
         disciplineTitle: "dsh-graph 执行子代理通用执行纪律",
         disciplineLines: [
-            "1. 状态汇报：每做一个动作必须调用 graph_report_status 自行更新 status_line（尽量 20 字内），滞留等于隐瞒进展；",
+            "1. 状态汇报：仅在开始开工、阶段转变、遇到阻塞、本轮完成4类有限关键节点调用 graph_report_status 自行更新 status_line（尽量 20 字内），长任务适度节流心跳，严禁每个动作机械追加汇报；",
             "2. 结束收尾更新：在即将空闲或收尾前，务必调用 graph_report_status 将状态更新为完成态（如「本轮完成/空闲待命」）；",
             "3. 泳道流转：开工时若非 in_progress 则调用 graph_transition(to='in_progress')；完成后必须 graph_transition(to='review') 停轮等待复核；遇到阻塞 graph_transition(to='blocked', reason=...)；",
             "4. 绝不自行 delivered：禁止直接 graph_transition 到 delivered——delivered 属于负责人与主管的 human gate 裁决关口；",
@@ -621,18 +621,14 @@ export function toolFilterForRole(role, mode) {
     }
     return { allow: profile.allowedTools.standard };
 }
-/** g-191：构建 dsh-graph 默认子代理专属 Persona，将通用执行纪律沉淀为系统级 Persona */
+/** g-191：构建 dsh-graph 默认子代理专属 Persona，将通用执行纪律沉淀为系统级 Persona（单一真源来自 ROLE_PROFILES.executor.disciplineLines） */
 export function buildSubagentDefaultPersona(goalId, attemptId) {
     const lines = [
         "You are a professional software engineering subagent executing tasks within the dsh-graph goal framework.",
         "",
         "## dsh-graph 子代理通用执行纪律",
         "",
-        "1. 状态汇报：仅在开始开工、阶段转变、遇到阻塞、本轮完成4类有限关键节点调用 graph_report_status 自行更新 status_line（尽量 20 字内），长任务适度节流心跳，严禁每个动作机械追加汇报；",
-        "2. 结束收尾更新：在即将空闲或收尾前，务必调用 graph_report_status 将状态更新为完成态（如「本轮完成/空闲待命」）；",
-        "3. 泳道流转：开工时若非 in_progress 则调用 graph_transition(to='in_progress')；完成后必须 graph_transition(to='review') 停轮等待复核；遇到阻塞 graph_transition(to='blocked', reason=...)；",
-        "4. 绝不自行 delivered：禁止直接 graph_transition 到 delivered——delivered 属于负责人与主管的 human gate 裁决关口；",
-        "5. 严格遵守环境隔离要求与质量判据核验，未通过判据不可声明完成。",
+        ...ROLE_PROFILES.executor.disciplineLines,
     ];
     if (goalId && attemptId) {
         lines.push(`\n当前派发目标：${goalId}，执行 attempt：${attemptId}`);
@@ -4906,136 +4902,352 @@ export function extractGoalDescription(body) {
     const m = (body ?? "").match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
     return m ? m[1].trim() : "";
 }
-export function boardProjection(root, opts) {
-    const includeArchived = opts?.includeArchived ?? false;
-    const events = opts?.events ?? readEvents(root);
-    const goalItem = (file) => {
-        assertContainedPath(root, file);
-        const doc = loadGoal(file);
-        const meta = doc.meta;
-        const archived = meta.archived === true || isArchivedFile(file);
-        // g-171：goal.md 的 mtime（毫秒）——更新强调动画触发源；不可读/缺失时 null（旧 payload 兼容）
-        let updatedAt = null;
-        try {
-            updatedAt = statSync(file).mtimeMs;
+function buildBoardGoalItem(root, file) {
+    assertContainedPath(root, file);
+    const doc = loadGoal(file);
+    const meta = doc.meta;
+    const archived = meta.archived === true || isArchivedFile(file);
+    // g-171：goal.md 的 mtime（毫秒）——更新强调动画触发源；不可读/缺失时 null（旧 payload 兼容）
+    let updatedAt = null;
+    try {
+        updatedAt = statSync(file).mtimeMs;
+    }
+    catch {
+        /* 文件缺失/不可读 → null，不阻塞看板 */
+    }
+    // 取最新一个带 status_line 的 attempt
+    let statusLine = null;
+    let statusState = null;
+    const dir = basename(file) === "goal.md" ? dirname(file) : null;
+    if (dir) {
+        const attDir = join(dir, "attempts");
+        if (existsSync(attDir)) {
+            const atts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort();
+            for (let i = atts.length - 1; i >= 0; i--) {
+                const f = join(attDir, atts[i], "attempt.md");
+                if (!existsSync(f))
+                    continue;
+                try {
+                    const m = loadGoal(f).meta;
+                    if (m.status_line || m.status_state) {
+                        statusLine = m.status_line ?? null;
+                        statusState = normalizeAttemptStatusState(m.status_state);
+                        break;
+                    }
+                }
+                catch {
+                    /* 坏的 attempt 文件跳过 */
+                }
+            }
+        }
+    }
+    // 最新一个绑定了子代理的执行 attempt（排除 agent:collect 收集子代理，卡片会话链接用）
+    let attemptChild = {};
+    if (dir) {
+        const attDir = join(dir, "attempts");
+        if (existsSync(attDir)) {
+            const atts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort().reverse();
+            for (const a of atts) {
+                const f = join(attDir, a, "attempt.md");
+                if (!existsSync(f))
+                    continue;
+                try {
+                    const m = loadGoal(f).meta;
+                    // g-190：已解绑 attempt 不投影为有效绑定
+                    if (m.detached === true)
+                        continue;
+                    if (m.child_id && m.executor !== "agent:collect") {
+                        attemptChild = {
+                            attempt: a,
+                            child_id: m.child_id,
+                            parent_session_id: m.parent_session_id ?? null,
+                            provider: m.provider ?? null,
+                            model: m.model ?? null,
+                            mode: normalizeSubagentMode(m.mode),
+                            mode_source: m.mode_source ?? null,
+                            started_at: m.started_at ?? null,
+                            binding_token: m.binding_token ?? null,
+                            binding_version: Number(m.binding_version) || 0,
+                        };
+                        break;
+                    }
+                }
+                catch { /* 跳过 */ }
+            }
+        }
+    }
+    // 上下文卡片摘要（自有卡 + 该 goal 引用的共享卡；g-183 scope 区分）
+    const cards = goalCards(root, String(meta.id));
+    return {
+        id: String(meta.id),
+        title: String(meta.title ?? meta.id),
+        status: String(meta.status ?? "unknown"),
+        type: normalizeGoalType(meta.type),
+        tags: (() => { try {
+            return normalizeGoalTags(meta.tags);
         }
         catch {
-            /* 文件缺失/不可读 → null，不阻塞看板 */
+            return [];
+        } })(),
+        status_line: statusLine,
+        status_state: statusState,
+        reviewer: meta.review?.reviewer ?? null,
+        depends_on: (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((d) => String(d?.goal ?? d)),
+        attempt_child_id: attemptChild.child_id ?? null,
+        attempt_parent_session_id: attemptChild.parent_session_id ?? null,
+        attempt_provider: attemptChild.provider ?? null,
+        attempt_model: attemptChild.model ?? null,
+        attempt_mode: attemptChild.mode ?? null,
+        attempt_mode_source: attemptChild.mode_source ?? null,
+        // g-190：当前有效执行绑定（含 CAS token 与版本），供解绑定位/UI 展示；无绑定为 null
+        attempt_binding: attemptChild.child_id
+            ? {
+                attempt: String(attemptChild.attempt),
+                child_id: attemptChild.child_id,
+                token: attemptChild.binding_token ?? null,
+                binding_version: attemptChild.binding_version ?? 0,
+                parent_session_id: attemptChild.parent_session_id ?? null,
+            }
+            : null,
+        created_at: String(meta.created_at ?? ""),
+        attempt_started_at: attemptChild.started_at ?? null,
+        reused_by: null,
+        pk_lanes: meta.pk?.lanes ?? 1,
+        blocked_reason: meta.blocked_reason ?? null,
+        // g-245：解除阻塞需要知道回到哪个状态，投影下发给客户端拖放落点解析
+        blocked_from: typeof meta.blocked_from === "string" && meta.blocked_from ? meta.blocked_from : null,
+        archived,
+        cards,
+        criteria_count: countCriteria(doc.body),
+        criteria_items: criteriaItems(doc.body),
+        rules_snapshot: meta.rules_snapshot ?? null,
+        updated_at: updatedAt,
+        description: extractGoalDescription(doc.body),
+    };
+}
+function countVersionGoals(root, slug, includeArchived = false) {
+    const vdir = join(root, "versions", slug);
+    let count = 0;
+    const gdir = join(vdir, "goals");
+    if (existsSync(gdir)) {
+        for (const g of readdirSync(gdir)) {
+            if (existsSync(join(gdir, g, "goal.md")))
+                count++;
         }
-        // 取最新一个带 status_line 的 attempt
-        let statusLine = null;
-        let statusState = null;
-        const dir = basename(file) === "goal.md" ? dirname(file) : null;
-        if (dir) {
-            const attDir = join(dir, "attempts");
-            if (existsSync(attDir)) {
-                const atts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort();
-                for (let i = atts.length - 1; i >= 0; i--) {
-                    const f = join(attDir, atts[i], "attempt.md");
-                    if (!existsSync(f))
-                        continue;
-                    try {
-                        const m = loadGoal(f).meta;
-                        if (m.status_line || m.status_state) {
-                            statusLine = m.status_line ?? null;
-                            statusState = normalizeAttemptStatusState(m.status_state);
-                            break;
-                        }
-                    }
-                    catch {
-                        /* 坏的 attempt 文件跳过 */
-                    }
-                }
+    }
+    if (includeArchived) {
+        const archivedDir = join(vdir, "archived");
+        if (existsSync(archivedDir)) {
+            for (const g of readdirSync(archivedDir)) {
+                if (existsSync(join(archivedDir, g, "goal.md")))
+                    count++;
             }
         }
-        // 最新一个绑定了子代理的执行 attempt（排除 agent:collect 收集子代理，卡片会话链接用）
-        let attemptChild = {};
-        if (dir) {
-            const attDir = join(dir, "attempts");
-            if (existsSync(attDir)) {
-                const atts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort().reverse();
-                for (const a of atts) {
-                    const f = join(attDir, a, "attempt.md");
-                    if (!existsSync(f))
-                        continue;
-                    try {
-                        const m = loadGoal(f).meta;
-                        // g-190：已解绑 attempt 不投影为有效绑定
-                        if (m.detached === true)
-                            continue;
-                        if (m.child_id && m.executor !== "agent:collect") {
-                            attemptChild = {
-                                attempt: a,
-                                child_id: m.child_id,
-                                parent_session_id: m.parent_session_id ?? null,
-                                provider: m.provider ?? null,
-                                model: m.model ?? null,
-                                mode: normalizeSubagentMode(m.mode),
-                                mode_source: m.mode_source ?? null,
-                                started_at: m.started_at ?? null,
-                                binding_token: m.binding_token ?? null,
-                                binding_version: Number(m.binding_version) || 0,
-                            };
-                            break;
+    }
+    return count;
+}
+function countBacklogGoals(root, includeArchived = false) {
+    const bdir = join(root, "backlog");
+    let count = 0;
+    if (existsSync(bdir)) {
+        for (const f of readdirSync(bdir)) {
+            if (f === "archived") {
+                if (includeArchived) {
+                    const archivedDir = join(bdir, "archived");
+                    if (existsSync(archivedDir)) {
+                        for (const af of readdirSync(archivedDir)) {
+                            if (af.endsWith(".md") || existsSync(join(archivedDir, af, "goal.md")))
+                                count++;
                         }
                     }
-                    catch { /* 跳过 */ }
                 }
+                continue;
             }
+            if (f.endsWith(".md") || existsSync(join(bdir, f, "goal.md")))
+                count++;
         }
-        // 上下文卡片摘要（自有卡 + 该 goal 引用的共享卡；g-183 scope 区分）
-        const cards = goalCards(root, String(meta.id));
-        return {
-            id: String(meta.id),
-            title: String(meta.title ?? meta.id),
-            status: String(meta.status ?? "unknown"),
-            type: normalizeGoalType(meta.type),
-            tags: (() => { try {
-                return normalizeGoalTags(meta.tags);
+    }
+    return count;
+}
+/** 获取指定版本的目标明细列表（g-258 首屏懒加载按需展开）。 */
+export function versionGoals(root, slug, opts) {
+    assertSafeId(slug, "版本 slug");
+    const includeArchived = opts?.includeArchived ?? false;
+    const vdir = join(root, "versions", slug);
+    if (!existsSync(vdir))
+        throw new GraphError(`版本 ${slug} 不存在`);
+    const goals = [];
+    const gdir = join(vdir, "goals");
+    if (existsSync(gdir)) {
+        for (const g of readdirSync(gdir).sort()) {
+            const gf = join(gdir, g, "goal.md");
+            if (!existsSync(gf))
+                continue;
+            try {
+                goals.push(buildBoardGoalItem(root, gf));
             }
             catch {
-                return [];
-            } })(),
-            status_line: statusLine,
-            status_state: statusState,
-            reviewer: meta.review?.reviewer ?? null,
-            depends_on: (Array.isArray(meta.depends_on) ? meta.depends_on : []).map((d) => String(d?.goal ?? d)),
-            attempt_child_id: attemptChild.child_id ?? null,
-            attempt_parent_session_id: attemptChild.parent_session_id ?? null,
-            attempt_provider: attemptChild.provider ?? null,
-            attempt_model: attemptChild.model ?? null,
-            attempt_mode: attemptChild.mode ?? null,
-            attempt_mode_source: attemptChild.mode_source ?? null,
-            // g-190：当前有效执行绑定（含 CAS token 与版本），供解绑定位/UI 展示；无绑定为 null
-            attempt_binding: attemptChild.child_id
-                ? {
-                    attempt: String(attemptChild.attempt),
-                    child_id: attemptChild.child_id,
-                    token: attemptChild.binding_token ?? null,
-                    binding_version: attemptChild.binding_version ?? 0,
-                    parent_session_id: attemptChild.parent_session_id ?? null,
+                /* 坏目标文件跳过 */
+            }
+        }
+    }
+    if (includeArchived) {
+        const archivedDir = join(vdir, "archived");
+        if (existsSync(archivedDir)) {
+            for (const g of readdirSync(archivedDir).sort()) {
+                const gf = join(archivedDir, g, "goal.md");
+                if (!existsSync(gf))
+                    continue;
+                try {
+                    goals.push(buildBoardGoalItem(root, gf));
                 }
-                : null,
-            created_at: String(meta.created_at ?? ""),
-            attempt_started_at: attemptChild.started_at ?? null,
-            reused_by: null,
-            pk_lanes: meta.pk?.lanes ?? 1,
-            blocked_reason: meta.blocked_reason ?? null,
-            // g-245：解除阻塞需要知道回到哪个状态，投影下发给客户端拖放落点解析
-            blocked_from: typeof meta.blocked_from === "string" && meta.blocked_from ? meta.blocked_from : null,
-            archived,
-            cards,
-            criteria_count: countCriteria(doc.body),
-            criteria_items: criteriaItems(doc.body),
-            rules_snapshot: meta.rules_snapshot ?? null,
-            updated_at: updatedAt,
-            description: extractGoalDescription(doc.body),
-        };
-    };
+                catch {
+                    /* 坏目标文件跳过 */
+                }
+            }
+        }
+    }
+    return goals;
+}
+/** 获取 backlog 的目标明细列表（g-258 首屏懒加载按需展开）。 */
+export function backlogGoals(root, opts) {
+    const includeArchived = opts?.includeArchived ?? false;
+    const backlog = [];
+    const bdir = join(root, "backlog");
+    if (existsSync(bdir)) {
+        for (const f of readdirSync(bdir).sort()) {
+            if (f === "archived") {
+                if (includeArchived) {
+                    const archivedDir = join(bdir, "archived");
+                    for (const af of readdirSync(archivedDir).sort()) {
+                        if (af.endsWith(".md")) {
+                            try {
+                                backlog.push(buildBoardGoalItem(root, join(archivedDir, af)));
+                            }
+                            catch { }
+                            continue;
+                        }
+                        const nested = join(archivedDir, af, "goal.md");
+                        if (!existsSync(nested))
+                            continue;
+                        try {
+                            backlog.push(buildBoardGoalItem(root, nested));
+                        }
+                        catch { }
+                    }
+                }
+                continue;
+            }
+            if (f.endsWith(".md")) {
+                try {
+                    backlog.push(buildBoardGoalItem(root, join(bdir, f)));
+                }
+                catch { }
+                continue;
+            }
+            const nested = join(bdir, f, "goal.md");
+            if (!existsSync(nested))
+                continue;
+            try {
+                backlog.push(buildBoardGoalItem(root, nested));
+            }
+            catch { }
+        }
+    }
+    return backlog;
+}
+/**
+ * 版本比较函数：按 `.` 拆段从前到后逐段比较，含数值的分段按数值从大到小排列（最新版本在最前）。
+ *
+ * 契约规则：
+ * 1. 数值分段倒序：纯数字段按数值降序（如 v0.10.0 排在 v0.9.2 之前、v1.2.0 排在 v1.1.9 之前）；
+ * 2. 前缀归一化：剥离首部 'v' / 'V'（若后跟数字），前缀不影响比较结果；
+ * 3. 分段深度差异稳定：共同前缀相同时分段更深者排前（如 v0.1.1 排在 v0.1.0 之前，v0.1.0 排在 v0.1 之前）；
+ * 4. 异构/预发布标识优雅降级：含 -rc.1/-beta 或非数字片段时按字典序降序兜底，slug 稳定 tie-break，绝不抛异常；
+ *    无法解析首段数值者（如 nightly）排在语义版本之后。
+ */
+export function compareVersions(a = "", b = "") {
+    if (a === b)
+        return 0;
+    if (!a && !b)
+        return 0;
+    if (!a)
+        return 1;
+    if (!b)
+        return -1;
+    // 1. 前缀归一化：剥离首部 v/V（仅当紧跟数字时剥离，保留形如 v-t 的非数值名称）
+    const normA = a.replace(/^[vV](?=\d)/, "");
+    const normB = b.replace(/^[vV](?=\d)/, "");
+    const partsA = normA.split(".");
+    const partsB = normB.split(".");
+    // 2. 检查首段是否含有数字：无法解析首段数值者（如 nightly）排在语义版本之后
+    const hasNumA = partsA.length > 0 && /^\d+/.test(partsA[0]);
+    const hasNumB = partsB.length > 0 && /^\d+/.test(partsB[0]);
+    if (hasNumA && !hasNumB)
+        return -1;
+    if (!hasNumA && hasNumB)
+        return 1;
+    if (!hasNumA && !hasNumB) {
+        // 双方均非语义版本，按字符串降序兜底，同序用 slug 稳定 tie-break
+        const cmp = normB.localeCompare(normA);
+        return cmp !== 0 ? cmp : (a < b ? -1 : a > b ? 1 : 0);
+    }
+    // 3. 逐段比较
+    const minLen = Math.min(partsA.length, partsB.length);
+    for (let i = 0; i < minLen; i++) {
+        const segA = partsA[i];
+        const segB = partsB[i];
+        if (segA === segB)
+            continue;
+        const matchA = segA.match(/^(\d+)(.*)$/);
+        const matchB = segB.match(/^(\d+)(.*)$/);
+        if (matchA && matchB) {
+            const numA = BigInt(matchA[1]);
+            const numB = BigInt(matchB[1]);
+            if (numA !== numB) {
+                return numA > numB ? -1 : 1;
+            }
+            const restA = matchA[2];
+            const restB = matchB[2];
+            // 同一数值前缀下，无后缀（正式发布版）排在有后缀（预发布版如 -rc.1/-beta）之前
+            if (restA === "" && restB !== "")
+                return -1;
+            if (restA !== "" && restB === "")
+                return 1;
+            // 双方均有后缀，按字符串降序兜底（如 -rc > -beta）
+            const cmp = restB.localeCompare(restA);
+            if (cmp !== 0)
+                return cmp;
+        }
+        else if (matchA && !matchB) {
+            return -1;
+        }
+        else if (!matchA && matchB) {
+            return 1;
+        }
+        else {
+            // 双方均无数字前缀，按字符串降序兜底
+            const cmp = segB.localeCompare(segA);
+            if (cmp !== 0)
+                return cmp;
+        }
+    }
+    // 4. 共同前缀相同时，分段更深者排在前面（如 v0.1.1 > v0.1.0 > v0.1）
+    if (partsA.length !== partsB.length) {
+        return partsA.length > partsB.length ? -1 : 1;
+    }
+    // 5. 稳定 tie-break（如 v0.1 与 0.1、或大小写前缀）
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+export function boardProjection(root, opts) {
+    const includeArchived = opts?.includeArchived ?? false;
+    const lazy = opts?.lazy ?? false;
+    const events = opts?.events ?? readEvents(root);
+    const goalItem = (file) => buildBoardGoalItem(root, file);
     const versions = [];
     const vdir = join(root, "versions");
     if (existsSync(vdir)) {
-        for (const v of readdirSync(vdir).sort()) {
+        for (const v of readdirSync(vdir).sort(compareVersions)) {
             const vfile = join(vdir, v, "version.md");
             if (!existsSync(vfile))
                 continue;
@@ -5045,6 +5257,19 @@ export function boardProjection(root, opts) {
             }
             catch {
                 /* 坏版本文件按未知处理 */
+            }
+            if (lazy && vmeta.status === "released") {
+                const goalsCount = countVersionGoals(root, v, includeArchived);
+                versions.push({
+                    slug: v,
+                    id: vmeta.id ?? null,
+                    name: String(vmeta.name ?? v),
+                    status: String(vmeta.status ?? "unknown"),
+                    goals: [],
+                    goals_count: goalsCount,
+                    lazy: true,
+                });
+                continue;
             }
             const goals = [];
             const gdir = join(vdir, v, "goals");
@@ -5084,6 +5309,7 @@ export function boardProjection(root, opts) {
                 name: String(vmeta.name ?? v),
                 status: String(vmeta.status ?? "unknown"),
                 goals,
+                goals_count: goals.length,
             });
         }
     }
@@ -5121,59 +5347,66 @@ export function boardProjection(root, opts) {
         }
     }
     const backlog = [];
-    const bdir = join(root, "backlog");
-    if (existsSync(bdir)) {
-        for (const f of readdirSync(bdir).sort()) {
-            if (f === "archived") {
-                // g-110：backlog 归档目标（backlog/archived/）
-                if (includeArchived) {
-                    const archivedDir = join(bdir, "archived");
-                    for (const af of readdirSync(archivedDir).sort()) {
-                        // 扁平 backlog/archived/<id>.md
-                        if (af.endsWith(".md")) {
+    let backlogCount = 0;
+    if (lazy) {
+        backlogCount = countBacklogGoals(root, includeArchived);
+    }
+    else {
+        const bdir = join(root, "backlog");
+        if (existsSync(bdir)) {
+            for (const f of readdirSync(bdir).sort()) {
+                if (f === "archived") {
+                    // g-110：backlog 归档目标（backlog/archived/）
+                    if (includeArchived) {
+                        const archivedDir = join(bdir, "archived");
+                        for (const af of readdirSync(archivedDir).sort()) {
+                            // 扁平 backlog/archived/<id>.md
+                            if (af.endsWith(".md")) {
+                                try {
+                                    backlog.push(goalItem(join(archivedDir, af)));
+                                }
+                                catch {
+                                    /* 跳过 */
+                                }
+                                continue;
+                            }
+                            // 目录形态 backlog/archived/<id>/goal.md（暂缓后归档）
+                            const nested = join(archivedDir, af, "goal.md");
+                            if (!existsSync(nested))
+                                continue;
                             try {
-                                backlog.push(goalItem(join(archivedDir, af)));
+                                backlog.push(goalItem(nested));
                             }
                             catch {
                                 /* 跳过 */
                             }
-                            continue;
-                        }
-                        // 目录形态 backlog/archived/<id>/goal.md（暂缓后归档）
-                        const nested = join(archivedDir, af, "goal.md");
-                        if (!existsSync(nested))
-                            continue;
-                        try {
-                            backlog.push(goalItem(nested));
-                        }
-                        catch {
-                            /* 跳过 */
                         }
                     }
+                    continue;
                 }
-                continue;
-            }
-            // 扁平 backlog/<id>.md
-            if (f.endsWith(".md")) {
+                // 扁平 backlog/<id>.md
+                if (f.endsWith(".md")) {
+                    try {
+                        backlog.push(goalItem(join(bdir, f)));
+                    }
+                    catch {
+                        /* 跳过 */
+                    }
+                    continue;
+                }
+                // 目录形态 backlog/<id>/goal.md（暂缓落点）
+                const nested = join(bdir, f, "goal.md");
+                if (!existsSync(nested))
+                    continue;
                 try {
-                    backlog.push(goalItem(join(bdir, f)));
+                    backlog.push(goalItem(nested));
                 }
                 catch {
                     /* 跳过 */
                 }
-                continue;
-            }
-            // 目录形态 backlog/<id>/goal.md（暂缓落点）
-            const nested = join(bdir, f, "goal.md");
-            if (!existsSync(nested))
-                continue;
-            try {
-                backlog.push(goalItem(nested));
-            }
-            catch {
-                /* 跳过 */
             }
         }
+        backlogCount = backlog.length;
     }
     // 被复用派生（g-a92e1406）：同一 child_id 跨目标绑定时，旧绑定加 reused 标记。
     // 数据双源：① attempt.reused 事件（权威方向：goal=旧绑定, details.reused_by="新目标/att-N"）
@@ -5221,13 +5454,21 @@ export function boardProjection(root, opts) {
     }
     for (const g of allGoals)
         g.reused_by = reusedBy.get(g.id) ?? null;
-    return { generated_at: nowIsoMs(), versions, standalone, backlog };
+    return {
+        generated_at: nowIsoMs(),
+        versions,
+        standalone,
+        backlog,
+        backlog_count: backlogCount,
+        ...(lazy ? { lazy: true } : {}),
+    };
 }
 /** 看板端点载荷：board 投影 + supervisorSession（g-108）。
  *  由 dsh-graph-host 的 client 半边（/api/dsh-graph）消费，会话 id 不在任何代码里硬编码。
  *  g-111 B7：从 dsh-graph-host/index.js 移入 core，消除跨包依赖（g-116 合并后单包内复用）。
  *  g-110：opts.includeArchived 控制是否包含已归档目标。
- *  g-211：合并 readEvents 为单次文件读取与解析，复用内存事件数组给 supervisor 状态与 boardProjection。 */
+ *  g-211：合并 readEvents 为单次文件读取与解析，复用内存事件数组给 supervisor 状态与 boardProjection。
+ *  g-258：opts.lazy 控制是否首屏懒加载（活跃全量，折叠仅计数）。 */
 export function boardPayload(root, opts) {
     let events = [];
     try {
@@ -5237,7 +5478,7 @@ export function boardPayload(root, opts) {
         /* 事件流异常时保留空数组，降级处理 */
     }
     return {
-        ...boardProjection(root, { includeArchived: opts?.includeArchived, events }),
+        ...boardProjection(root, { includeArchived: opts?.includeArchived, events, lazy: opts?.lazy }),
         supervisorSession: readSupervisorSession(root),
         // g-a92e1406 判据 3① 扩展：supervisor 状态栏显示 supervisor 自己的 status_line（事件流最新一条）
         supervisorStatus: readSupervisorStatus(events),

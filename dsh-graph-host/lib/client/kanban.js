@@ -79,6 +79,10 @@
       const [deliverColumnCollapsed, setDeliverColumnCollapsed] = React.useState(false);
       // g-162: 泳道折叠状态（active 版本泳道、独立目标泳道、backlog 泳道独立折叠，默认展开；只在当前页面生效）
       const [collapsedLanes, setCollapsedLanes] = React.useState({});
+      // g-258: 折叠区（已发布版本/backlog）按需拉取加载与错误状态
+      const [sectionLoading, setSectionLoading] = React.useState({});
+      const [sectionError, setSectionError] = React.useState({});
+      const sectionPromisesRef = React.useRef(new Map());
       // g-233：目标搜索与导航状态
       const [searchQuery, setSearchQuery] = React.useState("");
       const [searchActiveQuery, setSearchActiveQuery] = React.useState("");
@@ -316,6 +320,11 @@
       const [inProgressPrompt, setInProgressPrompt] = React.useState(null); // {goalId}
       // g-77647351：交付确认弹窗状态
       const [deliverPrompt, setDeliverPrompt] = React.useState(null); // {goalId, goalTitle, toStatus}
+      // g-273：确认列「批量接受」弹窗开关与提交中状态（loading 期间按钮与全部关闭路径锁定，防重复点击）
+      const [batchAcceptOpen, setBatchAcceptOpen] = React.useState(false);
+      const [batchAcceptLoading, setBatchAcceptLoading] = React.useState(false);
+      // g-273：部分失败清单（null=无；非空 → 弹窗持久展示失败目标与原因，勾选重置为失败项便于重试）
+      const [batchAcceptFailures, setBatchAcceptFailures] = React.useState(null);
 
       // g-77647351：同列重排提交（照抄 commitSessionDrag）
       function commitSameColumnDrag(activeDrag, over) {
@@ -594,7 +603,7 @@
         const retained = boardDataRef.current.get(dimension);
         if (retained) setState({ loading: false, data: retained, error: null });
         else setState({ loading: true, data: null, error: null });
-        const params = showArchived ? "?includeArchived=1" : "";
+        const params = "?lazy=1" + (showArchived ? "&includeArchived=1" : "");
         const headers = {};
         const prior = currentEtagRef.current.get(dimension);
         if (prior) headers["If-None-Match"] = prior;
@@ -616,6 +625,28 @@
               throw new Error("invalid board payload");
             }
             if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
+            // g-258: 刷新后状态保持——若之前已展开并拉取过明细的目标/版本，在刷新后保持已加载明细
+            if (retained) {
+              if (retained.backlog && retained.backlog.length > 0 && !collapsedLanes['backlog']) {
+                data.backlog = retained.backlog;
+                data.backlog_count = retained.backlog.length;
+                data.backlog_loaded = true;
+              }
+              if (Array.isArray(retained.versions)) {
+                const retainedVersionMap = new Map(retained.versions.map((v) => [v.slug, v]));
+                for (const ver of data.versions) {
+                  if (ver.status === "released" && openReleased[ver.slug]) {
+                    const prevVer = retainedVersionMap.get(ver.slug);
+                    if (prevVer && prevVer.goals && prevVer.goals.length > 0) {
+                      ver.goals = prevVer.goals;
+                      ver.goals_count = prevVer.goals.length;
+                      ver.loaded = true;
+                      ver.lazy = false;
+                    }
+                  }
+                }
+              }
+            }
             const etag = r.headers.get("etag") || r.headers.get("ETag");
             if (etag) currentEtagRef.current.set(dimension, etag);
             else currentEtagRef.current.delete(dimension);
@@ -647,6 +678,115 @@
       React.useEffect(() => {
         load();
       }, [showArchived, props?.sessionId, activeWs]); // showArchived/sessionId/activeWs 变化时重新加载
+
+      // g-258: 按需拉取指定版本的具体数据（去重防竞争）
+      const loadVersionGoals = (slug) => {
+        if (!slug || !activeWs) return;
+        const key = "v:" + slug;
+        if (sectionPromisesRef.current.has(key)) {
+          return sectionPromisesRef.current.get(key);
+        }
+        setSectionLoading((prev) => ({ ...prev, [slug]: true }));
+        setSectionError((prev) => ({ ...prev, [slug]: null }));
+        const p = (async () => {
+          try {
+            const url = graphUrlForActive("/api/dsh-graph/version-goals?slug=" + encodeURIComponent(slug) + (showArchived ? "&includeArchived=1" : ""), {}, activeWs);
+            const r = await fetch(url);
+            if (!r.ok) {
+              const err = await r.json().catch(() => ({}));
+              throw new Error(err.error || ("HTTP " + r.status));
+            }
+            const json = await r.json();
+            if (!json || !Array.isArray(json.goals)) throw new Error("invalid version goals response");
+            setState((prev) => {
+              if (!prev?.data?.versions) return prev;
+              const nextVersions = prev.data.versions.map((v) => {
+                if (v.slug === slug) {
+                  return {
+                    ...v,
+                    goals: json.goals,
+                    goals_count: json.goals.length,
+                    loaded: true,
+                    lazy: false,
+                  };
+                }
+                return v;
+              });
+              const nextData = { ...prev.data, versions: nextVersions };
+              const dimension = String(props?.sessionId ?? "") + "::" + String(activeWs ?? "") + "::" + (showArchived ? "1" : "0");
+              boardDataRef.current.set(dimension, nextData);
+              return { ...prev, data: nextData };
+            });
+            setSectionLoading((prev) => ({ ...prev, [slug]: false }));
+            setSectionError((prev) => ({ ...prev, [slug]: null }));
+          } catch (e) {
+            setSectionLoading((prev) => ({ ...prev, [slug]: false }));
+            setSectionError((prev) => ({ ...prev, [slug]: String(e?.message || e) }));
+          } finally {
+            sectionPromisesRef.current.delete(key);
+          }
+        })();
+        sectionPromisesRef.current.set(key, p);
+        return p;
+      };
+
+      // g-258: 按需拉取 backlog 的具体数据（去重防竞争）
+      const loadBacklogGoals = () => {
+        if (!activeWs) return;
+        const key = "backlog";
+        if (sectionPromisesRef.current.has(key)) {
+          return sectionPromisesRef.current.get(key);
+        }
+        setSectionLoading((prev) => ({ ...prev, backlog: true }));
+        setSectionError((prev) => ({ ...prev, backlog: null }));
+        const p = (async () => {
+          try {
+            const url = graphUrlForActive("/api/dsh-graph/backlog-goals" + (showArchived ? "?includeArchived=1" : ""), {}, activeWs);
+            const r = await fetch(url);
+            if (!r.ok) {
+              const err = await r.json().catch(() => ({}));
+              throw new Error(err.error || ("HTTP " + r.status));
+            }
+            const json = await r.json();
+            if (!json || !Array.isArray(json.goals)) throw new Error("invalid backlog goals response");
+            setState((prev) => {
+              if (!prev?.data) return prev;
+              const nextData = {
+                ...prev.data,
+                backlog: json.goals,
+                backlog_count: json.goals.length,
+                backlog_loaded: true,
+              };
+              const dimension = String(props?.sessionId ?? "") + "::" + String(activeWs ?? "") + "::" + (showArchived ? "1" : "0");
+              boardDataRef.current.set(dimension, nextData);
+              return { ...prev, data: nextData };
+            });
+            setSectionLoading((prev) => ({ ...prev, backlog: false }));
+            setSectionError((prev) => ({ ...prev, backlog: null }));
+          } catch (e) {
+            setSectionLoading((prev) => ({ ...prev, backlog: false }));
+            setSectionError((prev) => ({ ...prev, backlog: String(e?.message || e) }));
+          } finally {
+            sectionPromisesRef.current.delete(key);
+          }
+        })();
+        sectionPromisesRef.current.set(key, p);
+        return p;
+      };
+
+      // g-258: 首屏完全渲染后，空闲时静默预加载折叠区数据（不抢占首屏，去重防竞态）
+      React.useEffect(() => {
+        if (!state.data || state.loading) return;
+        const timer = setTimeout(() => {
+          const unrenderedReleased = (state.data.versions || []).filter((v) => v.status === "released" && v.lazy && !v.loaded && v.goals_count > 0);
+          if (unrenderedReleased.length > 0) {
+            loadVersionGoals(unrenderedReleased[0].slug);
+          } else if (state.data.lazy && !state.data.backlog_loaded && state.data.backlog_count > 0) {
+            loadBacklogGoals();
+          }
+        }, 1500);
+        return () => clearTimeout(timer);
+      }, [state.data, state.loading]);
 
       // g-181：5 个父级 overlay 的 backdrop 误关保护——内容起点后释放到 backdrop 的合成 click 吞掉。
       // 必须在任何 early return 之前调用（Rules of Hooks），各 overlay 独立 ref，关闭回调保持原样。
@@ -682,17 +822,69 @@
         ...b.backlog,
       ];
 
+      // ===== g-273：确认列「批量接受」 =====
+      // 当前视图内 status=review 的目标（候选集）。allGoals 已按当前视图过滤：
+      // 隐藏版本被 active/released 过滤排除；懒加载未展开的 released 泳道 goals 为空天然排除；
+      // 已归档目标（showArchived 时混入）不参与批量接受。
+      const reviewGoals = allGoals.filter((g) => g.status === "review" && !g.archived);
+      // 目标 id → 所属版本显示名（泳道名；独立目标/backlog 用泳道标签，与看板渲染一致）
+      const goalVersionLabel = {};
+      for (const v of [...active, ...released]) for (const g of (v.goals ?? [])) goalVersionLabel[g.id] = v.name;
+      for (const g of b.standalone) goalVersionLabel[g.id] = dgT("lane.standalone");
+      for (const g of b.backlog) goalVersionLabel[g.id] = "backlog";
+      // 批量提交：逐个走非 force accept（语义与逐卡「接受」逐字一致，详见 batch-accept.js），
+      // 限流并发 + 部分失败容错 + 整批一条聚合主管通知 + 完成刷板（被接受目标离开确认列）。
+      async function submitBatchAccept(goalIds) {
+        if (batchAcceptLoading || !Array.isArray(goalIds) || goalIds.length === 0) return;
+        setBatchAcceptLoading(true);
+        try {
+          const { ok, failed } = await runBatchAccept(goalIds, { urlOf: (p) => graphUrlForActive(p) });
+          // 聚合主管通知：仅在有成功项时整批发一条；无 supervisorSession 静默跳过，不影响接受流程
+          if (ok.length) {
+            await notifySupervisorBatchAccept(b.supervisorSession ?? null, ok.map((x) => x.goal));
+          }
+          if (failed.length === 0) {
+            setBatchAcceptFailures(null);
+            setBatchAcceptOpen(false);
+            showToast(dgT("batchAccept.allOk", { count: ok.length }));
+          } else {
+            // 部分失败：不整体崩溃——弹窗保持打开并持久列出失败目标与原因，勾选重置为失败项
+            setBatchAcceptFailures(failed);
+            showToast(dgT("batchAccept.partialResult", { ok: ok.length, fail: failed.length }));
+          }
+          load(); // 刷新看板：被接受目标（已写 review.requested）按当前视图重算
+        } catch (e) {
+          showToast(dgT("batchAccept.requestFail") + String(e?.message ?? e));
+        } finally {
+          setBatchAcceptLoading(false);
+        }
+      }
+
       // ===== g-233: 目标搜索与导航核心函数（g-255: 使用 search-state.js 纯函数） =====
       // g-233 P4: 用户显式操作泳道折叠状态，从临时恢复列表中移除（用户意图优先）
       const toggleLaneCollapse = (key, collapse) => {
         tempExpandedRef.current.expandedLanes = toggleLaneCollapseInState(tempExpandedRef.current.expandedLanes, key);
         setCollapsedLanes((prev) => ({ ...prev, [key]: collapse }));
+        // g-258: 展开 backlog 时按需拉取具体数据
+        if (key === "backlog" && !collapse) {
+          const bd = state?.data;
+          if (bd && bd.lazy && !bd.backlog_loaded && (!bd.backlog || bd.backlog.length === 0) && bd.backlog_count !== 0) {
+            loadBacklogGoals();
+          }
+        }
       };
 
       // g-233 P4: 用户显式操作已发布版本展开/折叠，从临时恢复列表中移除
       const toggleReleasedOpen = (slug, openState) => {
         tempExpandedRef.current.openReleasedSlugs = toggleReleasedOpenInState(tempExpandedRef.current.openReleasedSlugs, slug);
         setOpenReleased((prev) => ({ ...prev, [slug]: openState }));
+        // g-258: 展开已发布版本时按需拉取具体数据
+        if (openState) {
+          const ver = state?.data?.versions?.find((v) => v.slug === slug);
+          if (ver && ver.lazy && !ver.loaded && (!ver.goals || ver.goals.length === 0) && ver.goals_count !== 0) {
+            loadVersionGoals(slug);
+          }
+        }
       };
 
       const exitSearch = () => {
@@ -755,6 +947,10 @@
             }
             return prev;
           });
+          const ver = state?.data?.versions?.find((v) => v.slug === track.expandReleasedSlug);
+          if (ver && ver.lazy && !ver.loaded && (!ver.goals || ver.goals.length === 0) && ver.goals_count !== 0) {
+            loadVersionGoals(track.expandReleasedSlug);
+          }
         } else if (track.expandLane) {
           setCollapsedLanes((prev) => {
             if (prev[track.expandLane]) {
@@ -762,6 +958,12 @@
             }
             return prev;
           });
+          if (track.expandLane === "backlog") {
+            const bd = state?.data;
+            if (bd && bd.lazy && !bd.backlog_loaded && (!bd.backlog || bd.backlog.length === 0) && bd.backlog_count !== 0) {
+              loadBacklogGoals();
+            }
+          }
         }
 
         // 3. 若在折叠的交付/阻塞列，自动展开
@@ -892,7 +1094,7 @@
         const entryVersion = version ?? null;
         // 关闭后重开仍保留未提交草稿；只有成功创建后才开始新一轮初始化。
         if (!createGoalInitialized) {
-          const latestActive = [...b.versions].filter((v) => v.status === "active").at(-1)?.slug ?? "";
+          const latestActive = b.versions.find((v) => v.status === "active")?.slug ?? "";
           setCreateGoalEntryVersion(entryVersion);
           setNewGoalVersion(entryVersion ?? latestActive);
           setCreateGoalInitialized(true);
@@ -1198,9 +1400,11 @@
 
       // g-137：backlog 行平铺展示函数；g-162: 支持独立折叠
       const backlogRow = (label, goals, key) => {
-        // g-162: backlog 泳道折叠状态
-        const isCollapsed = !!collapsedLanes[key];
+        // g-162: backlog 泳道折叠状态（g-258: 默认折叠，显式展开为 false）
+        const isCollapsed = collapsedLanes[key] !== false;
         const backlogBg = "rgba(0,0,0,.12)";
+        // g-258: 优先使用实际已加载条数，未展开懒加载时回退 backlog_count 计数
+        const count = (goals && goals.length > 0) ? goals.length : (b?.backlog_count ?? 0);
         // g-162: 折叠态——显示摘要行
         if (isCollapsed) {
           return [
@@ -1213,7 +1417,7 @@
                 toggleLaneCollapse(key, false);
               },
             },
-              h("span", null, "▸ ", label, ` · ${goals.length} ` + dgT('lane.goalCount', { count: goals.length }).replace(String(goals.length), '').trim()),
+              h("span", null, "▸ ", label, ` · ${count} ` + dgT('lane.goalCount', { count }).replace(String(count), '').trim()),
               h("button", {
                 style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
                 className: "dg-btn",
@@ -1228,7 +1432,7 @@
               style: { gridColumn: "2 / -1", ...S.cell, background: backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: dgT('lane.expandTooltip'),
               onClick: () => toggleLaneCollapse(key, false),
-            }, dgT('lane.collapsedSummary', { count: goals.length })),
+            }, dgT('lane.collapsedSummary', { count })),
           ];
         }
         // 展开态：正常渲染
@@ -1331,7 +1535,27 @@
             }),
           ),
         );
-        return [labelEl, flatCell];
+        let contentEl = flatCell;
+        if (sectionLoading['backlog']) {
+          contentEl = h("div", {
+            key: key + "-loading",
+            style: { gridColumn: "2 / -1", minHeight: 40, padding: "12px 16px", color: "var(--dsw-alias-label-secondary, #999)", fontSize: 13, borderTop: "1px solid rgba(128,128,128,.35)" }
+          }, dgT('kanban.loading'));
+        } else if (sectionError['backlog']) {
+          contentEl = h("div", {
+            key: key + "-error",
+            style: { gridColumn: "2 / -1", minHeight: 40, padding: "12px 16px", color: "var(--dsw-alias-danger, #dd6666)", fontSize: 13, borderTop: "1px solid rgba(128,128,128,.35)" }
+          },
+            dgT('kanban.error.fetch') + " ",
+            h("button", {
+              className: "dg-btn",
+              style: { ...S.btn, padding: "2px 8px", fontSize: 12, marginLeft: 8 },
+              onClick: () => loadBacklogGoals()
+              // i18n-keep(category-a)：「重试」仅为 dgT 异常返回空时的兜底字面量，正常路径走 i18n 词条。
+            }, dgT('common.retry') || "重试")
+          );
+        }
+        return [labelEl, contentEl];
       };
 
       // g-164：动态列模板——按当前交付/阻塞折叠状态计算列宽，供顶部表头网格与 released 泳道网格共用。
@@ -1391,12 +1615,38 @@
             }, dgT("versionDrawer.showAll"))),
         );
       }
-      rows.push(...lane(dgT("lane.newStandaloneGoal").replace("Create ", "").replace("新建", "").replace(" goal", "").replace("目标", ""), b.standalone, "standalone", null, laneIndex));
+      rows.push(...lane(dgT("lane.standalone"), b.standalone, "standalone", null, laneIndex));
       laneIndex++;
       rows.push(...backlogRow("backlog", b.backlog, "backlog"));
 
       const releasedRows = released.map((v, idx) => {
         const open = !!openReleased[v.slug];
+        const count = (v.goals && v.goals.length > 0) ? v.goals.length : (v.goals_count ?? 0);
+        let openContent = null;
+        if (open) {
+          if (sectionLoading[v.slug]) {
+            openContent = h("div", {
+              key: "relx-" + v.slug,
+              style: { padding: "12px 16px", color: "var(--dsw-alias-label-secondary, #999)", fontSize: 13, background: "rgba(0,0,0,.08)" }
+            }, dgT("kanban.loading"));
+          } else if (sectionError[v.slug]) {
+            openContent = h("div", {
+              key: "relx-" + v.slug,
+              style: { padding: "12px 16px", color: "var(--dsw-alias-danger, #dd6666)", fontSize: 13, background: "rgba(0,0,0,.08)" }
+            },
+              dgT("kanban.error.fetch") + " ",
+              h("button", {
+                className: "dg-btn",
+                style: { ...S.btn, padding: "2px 8px", fontSize: 12, marginLeft: 8 },
+                onClick: () => loadVersionGoals(v.slug)
+                // i18n-keep(category-a)：「重试」仅为 dgT 异常返回空时的兜底字面量，正常路径走 i18n 词条。
+              }, dgT("common.retry") || "重试")
+            );
+          } else {
+            openContent = h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: releasedGridCols } },
+              ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx, false));
+          }
+        }
         return [
           h("div", {
             key: "rel-" + v.slug, style: { ...S.collapsed, cursor: "pointer" }, className: "dg-collapsed",
@@ -1412,15 +1662,14 @@
               style: { cursor: "pointer", textDecoration: "underline dotted" },
               onClick: (e) => {
                 e.stopPropagation();
-                setVersionDetailTarget({ slug: v.slug, name: v.name, status: v.status, goals_count: v.goals.length });
+                setVersionDetailTarget({ slug: v.slug, name: v.name, status: v.status, goals_count: count });
                 loadVersionDetail(v.slug);
               },
               title: dgT("versionDrawer.detailTooltip"),
             }, `${v.name}`),
-            ` ✅ ${v.goals.length} goals · released · ${v.slug}`
+            ` ✅ ${count} goals · released · ${v.slug}`
           ),
-          open ? h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: releasedGridCols } },
-            ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx, false)) : null,
+          openContent,
         ];
       });
 
@@ -1446,7 +1695,7 @@
             setNewGoalTitle("");
             setNewGoalDesc("");
             setNewGoalType("task"); // g-158 重置为新目标默认类型
-            const latestActive = [...b.versions].filter((v) => v.status === "active").at(-1)?.slug ?? "";
+            const latestActive = b.versions.find((v) => v.status === "active")?.slug ?? "";
             setNewGoalVersion(createGoalEntryVersion ?? latestActive);
             setCreateGoalInitialized(false);
             load(); // 刷新看板
@@ -1870,6 +2119,32 @@
                 ? "▸"
                 : s.label + " ▾");
             }
+            // g-273：确认列列头「批量接受」入口——0 个待确认 → disabled + 悬停说明；
+            // ≥1 → 可用并显示数量。flex 行内布局：whiteSpace nowrap（继承 stageHead）+
+            // overflow hidden + 按钮 flexShrink 0，150px 最小列宽与相邻列折叠/展开时不换行不重叠。
+            if (s.key === "confirm") {
+              const ba = batchAcceptButtonState(reviewGoals.length);
+              return h("div", {
+                key: s.key,
+                style: { ...S.stageHead, display: "flex", alignItems: "center", justifyContent: "center",
+                         gap: 6, overflow: "hidden" },
+              },
+                h("span", { style: { flexShrink: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" } }, s.label),
+                h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "1px 8px", lineHeight: 1.4,
+                           whiteSpace: "nowrap", flexShrink: 0, opacity: ba.disabled ? 0.5 : 1 },
+                  className: "dg-btn dg-batch-accept-btn",
+                  disabled: ba.disabled || batchAcceptLoading,
+                  title: ba.title,
+                  "aria-label": ba.label,
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    if (ba.disabled || batchAcceptLoading) return;
+                    setBatchAcceptFailures(null);
+                    setBatchAcceptOpen(true);
+                  },
+                }, batchAcceptLoading ? dgT("common.submitting") : ba.label));
+            }
             return h("div", { key: s.key, style: S.stageHead }, s.label);
           }),
           ...rows),
@@ -2096,6 +2371,22 @@
                 commitCrossColumnDrag(deliverPrompt.goalId, deliverPrompt.toStatus);
               },
               onCancel: () => setDeliverPrompt(null),
+            })
+          : null,
+        // g-273：确认列「批量接受」二次确认弹窗（Human Gate）——
+        // 取消/✕/Esc/遮罩关闭零网络请求零状态变化；确认后逐个非 force accept + 整批一条聚合主管通知
+        batchAcceptOpen
+          ? h(BatchAcceptModal, {
+              key: "batch-accept-modal",
+              items: reviewGoals.map((g) => ({
+                id: g.id,
+                title: g.title ?? g.id,
+                versionLabel: goalVersionLabel[g.id] ?? "",
+              })),
+              loading: batchAcceptLoading,
+              failures: batchAcceptFailures,
+              onConfirm: (ids) => { void submitBatchAccept(ids); },
+              onCancel: () => { if (!batchAcceptLoading) { setBatchAcceptOpen(false); setBatchAcceptFailures(null); } },
             })
           : null,
         // g-134/g-135: 版本详情弹窗（含摘要/范围/working/released 操作）

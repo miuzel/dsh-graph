@@ -52,7 +52,7 @@
           h("div", { id: "dg-version-drawer-title", style: { fontWeight: 700, fontSize: 16, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
             h("span", null, dgT("versionDrawer.title")),
             h("span", { style: { ...S.meta, fontSize: 12, fontWeight: 400 } },
-              "（显示 " + visibleCount + "/" + allVersions.length + "）")),
+              dgT("versionDrawer.displayCount", { visible: visibleCount, total: allVersions.length }))),
           h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.8, marginBottom: 12, lineHeight: 1.4 } },
             dgT("versionDrawer.hint")),
 
@@ -167,9 +167,9 @@
                                 ? "var(--dsw-alias-state-success-primary, #6ee7a0)"
                                 : "var(--dsw-alias-state-business-primary, #8ab4ff)",
                             },
-                          }, isReleased ? dgT("versionDrawer.released") : (v.status === "active" ? dgT("versionDrawer.active") : (STATUS_LABEL[v.status] ?? v.status ?? "活跃")))),
+                          }, isReleased ? dgT("versionDrawer.released") : (v.status === "active" ? dgT("versionDrawer.active") : (STATUS_LABEL[v.status] ?? v.status ?? dgT("versionDrawer.active"))))),
                         h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } },
-                          v.slug + " ｜ " + goalsCount + " 个目标"))),
+                          v.slug + " ｜ " + dgT("versionDrawer.goalCount", { count: goalsCount })))),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "2px 6px", flexShrink: 0 },
                       className: "dg-btn",

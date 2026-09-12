@@ -12,6 +12,7 @@
         if (hasChild && session?.prompt) {
           setSending(true);
           try {
+            // i18n-keep(category-b)：发往子代理会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
             await session.prompt(
               [{ type: "text", text: `【${goalId} 回退理由】${reason.trim()}` }], "queue");
             setSent(true);
@@ -97,6 +98,7 @@
             // 有子代理 → 排队发"重新执行"消息，不派新子代理
             setNote(dgT("inProgress.dispatchingReExec"));
             try {
+              // i18n-keep(category-b)：发往子代理会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
               const res = await oldSession.prompt(
                 [{ type: "text", text: `【重新执行】用户从看板拖放触发重新执行目标 ${goalId}。请从头开始执行目标描述和质量判据中的任务。` }],
                 "queue",
@@ -184,6 +186,7 @@
       const { goalId, goalTitle, supervisorSession, onConfirm, onCancel } = props;
       // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
       const backdropGuard = useBackdropClose(onCancel);
+      // i18n-keep(category-b)：复制到剪贴板并粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
       const promptText = `【交付通知】目标「${goalTitle ?? goalId}」（${goalId}）即将标记为已交付。请进行最终复核：代码合并、文档更新等交付工作。`;
       const jumpToSupervisor = async () => {
         try {
@@ -410,7 +413,7 @@
             }),
             h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 } },
               h("span", { style: { ...S.meta, fontSize: 11, color: newScope === "standing" && [...newText].length > 200 ? "#e74c3c" : undefined } },
-                [...newText].length + " / " + (newScope === "standing" ? "200" : "500") + " 字"),
+                dgT("memory.charCount", { count: [...newText].length, limit: newScope === "standing" ? 200 : 500 })),
               h("button", {
                 className: "dg-btn",
                 style: { ...S.btnPrimary, fontSize: 12 },

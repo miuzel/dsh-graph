@@ -11,9 +11,9 @@ export function invalidateBoardCache(root?:string):void {
   const key=resolve(root); invalidate(key);
   for (const k of boardCache.keys()) if (k.startsWith(key+"::")) boardCache.delete(k);
 }
-export function computeGraphRevision(root:string, includeArchived=false):string {
+export function computeGraphRevision(root:string, includeArchived=false, lazy=false):string {
   const key=resolve(root); ensureWatcher(key);
-  const h=createHash("sha256"); h.update(key); h.update("\0"); h.update(includeArchived?"1":"0"); h.update("\0"); h.update(String(generation(key)));
+  const h=createHash("sha256"); h.update(key); h.update("\0"); h.update(includeArchived?"1":"0"); h.update("\0"); h.update(lazy?"1":"0"); h.update("\0"); h.update(String(generation(key)));
   for (const name of ["events.jsonl", "project.yaml", "order.json", "rules.md"]) { try { const s=statSync(join(key,name)); h.update(name+":"+s.mtimeMs+":"+s.size); } catch { h.update(name+":missing"); } }
   return h.digest("hex");
 }
@@ -27,14 +27,14 @@ function payloadFingerprint(payload:any):string {
   if (payload && typeof payload === "object" && !Array.isArray(payload)) { const stable={...payload}; delete stable.generated_at; return JSON.stringify(stable)??""; }
   return JSON.stringify(payload)??"";
 }
-export function getCachedBoardPayload(root:string,opts?:{includeArchived?:boolean}, payloadFactory?: (root:string, opts:{includeArchived:boolean}) => any) {
-  const key=resolve(root), archived=opts?.includeArchived??false, cacheKey=key+"::"+(archived?"1":"0");
+export function getCachedBoardPayload(root:string,opts?:{includeArchived?:boolean; lazy?:boolean}, payloadFactory?: (root:string, opts:{includeArchived:boolean; lazy:boolean}) => any) {
+  const key=resolve(root), archived=opts?.includeArchived??false, lazy=opts?.lazy??false, cacheKey=key+"::"+(archived?"1":"0")+"::"+(lazy?"1":"0");
   const safe=watcherSafe(key), old=boardCache.get(cacheKey), epoch=watcherEpoch(key);
-  const before=generation(key); const stableRevision=computeGraphRevision(key,archived);
+  const before=generation(key); const stableRevision=computeGraphRevision(key,archived,lazy);
   const rescan=old ? old.watcherEpoch!==epoch : false;
   if (safe && !rescan && old?.revision===stableRevision) return {...old,fromCache:true};
   if (!payloadFactory) throw new Error("board payload factory required");
-  const payload=payloadFactory(key,{includeArchived:archived}); const after=generation(key);
+  const payload=payloadFactory(key,{includeArchived:archived,lazy}); const after=generation(key);
   if (before!==after) { invalidate(key); return getCachedBoardPayload(key,opts,payloadFactory); }
   const currentFingerprint=payloadFingerprint(payload);
   // A close/eviction can happen without a content change. Retain the old
@@ -43,7 +43,7 @@ export function getCachedBoardPayload(root:string,opts?:{includeArchived?:boolea
     const retained={...old,watcherEpoch:epoch}; boardCache.set(cacheKey,retained); return {...retained,fromCache:true};
   }
   let revision=stableRevision;
-  if (safe && rescan && old && old.revision===stableRevision) { invalidate(key); revision=computeGraphRevision(key,archived); }
+  if (safe && rescan && old && old.revision===stableRevision) { invalidate(key); revision=computeGraphRevision(key,archived,lazy); }
   const payloadJson=JSON.stringify(payload)??"";
   const entry={payload,payloadJson,payloadFingerprint:currentFingerprint,watcherEpoch:epoch,revision,etag:formatETag(revision),cachedAt:Date.now()};
   if (safe) boardCache.set(cacheKey,entry); else boardCache.delete(cacheKey);

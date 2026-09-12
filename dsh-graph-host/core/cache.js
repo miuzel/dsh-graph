@@ -17,13 +17,15 @@ export function invalidateBoardCache(root) {
         if (k.startsWith(key + "::"))
             boardCache.delete(k);
 }
-export function computeGraphRevision(root, includeArchived = false) {
+export function computeGraphRevision(root, includeArchived = false, lazy = false) {
     const key = resolve(root);
     ensureWatcher(key);
     const h = createHash("sha256");
     h.update(key);
     h.update("\0");
     h.update(includeArchived ? "1" : "0");
+    h.update("\0");
+    h.update(lazy ? "1" : "0");
     h.update("\0");
     h.update(String(generation(key)));
     for (const name of ["events.jsonl", "project.yaml", "order.json", "rules.md"]) {
@@ -56,16 +58,16 @@ function payloadFingerprint(payload) {
     return JSON.stringify(payload) ?? "";
 }
 export function getCachedBoardPayload(root, opts, payloadFactory) {
-    const key = resolve(root), archived = opts?.includeArchived ?? false, cacheKey = key + "::" + (archived ? "1" : "0");
+    const key = resolve(root), archived = opts?.includeArchived ?? false, lazy = opts?.lazy ?? false, cacheKey = key + "::" + (archived ? "1" : "0") + "::" + (lazy ? "1" : "0");
     const safe = watcherSafe(key), old = boardCache.get(cacheKey), epoch = watcherEpoch(key);
     const before = generation(key);
-    const stableRevision = computeGraphRevision(key, archived);
+    const stableRevision = computeGraphRevision(key, archived, lazy);
     const rescan = old ? old.watcherEpoch !== epoch : false;
     if (safe && !rescan && old?.revision === stableRevision)
         return { ...old, fromCache: true };
     if (!payloadFactory)
         throw new Error("board payload factory required");
-    const payload = payloadFactory(key, { includeArchived: archived });
+    const payload = payloadFactory(key, { includeArchived: archived, lazy });
     const after = generation(key);
     if (before !== after) {
         invalidate(key);
@@ -82,7 +84,7 @@ export function getCachedBoardPayload(root, opts, payloadFactory) {
     let revision = stableRevision;
     if (safe && rescan && old && old.revision === stableRevision) {
         invalidate(key);
-        revision = computeGraphRevision(key, archived);
+        revision = computeGraphRevision(key, archived, lazy);
     }
     const payloadJson = JSON.stringify(payload) ?? "";
     const entry = { payload, payloadJson, payloadFingerprint: currentFingerprint, watcherEpoch: epoch, revision, etag: formatETag(revision), cachedAt: Date.now() };

@@ -215,8 +215,8 @@
       const currentGroup = groups.find((g) => g.id === provider) ?? null;
       const modelChoices = currentGroup?.models ?? [];
       const modeList = opts?.modes ?? [
-        { id: "standard", name: "标准模式" },
-        { id: "minimal", name: "极简模式 (6工具过滤)" },
+        { id: "standard", name: dgT("live.modeStandard") },
+        { id: "minimal", name: dgT("live.modeMinimal") },
       ];
 
       const relaunch = async () => {

@@ -26,7 +26,11 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-> **环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。已发布版本支持通过 npm 与 dsh-market 生态分发。
+> **环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。
+>
+> **DSH 版本兼容性**：本版本（v0.10.0）**已完整验证并支持 DeepSeek Harness `v0.1.5-rc.2`**——发布前的隔离实例（Web GUI + 看板 + 工具 + REST）与中英双语演示录制均在 `v0.1.5-rc.2` 上实测通过；`0.1.5-rc.2` 也是 v0.10.0 的**推荐宿主版本**。同时兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上版本（提示词/工具契约向后兼容）。
+>
+> 已发布版本支持通过 npm 与 dsh-market 生态分发。
 
 ---
 
@@ -136,7 +140,11 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-> **Requirements**: Node.js ≥ 22 (includes precompiled core runtime). Official releases are distributed via npm and the dsh-market ecosystem.
+> **Requirements**: Node.js ≥ 22 (includes precompiled core runtime).
+>
+> **DSH version compatibility**: This release (v0.10.0) is **fully verified against and supports DeepSeek Harness `v0.1.5-rc.2`** — the pre-release isolated instance (Web GUI + kanban + tools + REST) and the bilingual demo recordings were all exercised on `v0.1.5-rc.2`, which is the **recommended host version** for v0.10.0. It also works on the `0.1.5` series and on `0.1.2-alpha.x` and later (prompt/tool contracts are backward compatible).
+>
+> Official releases are distributed via npm and the dsh-market ecosystem.
 
 ---
 

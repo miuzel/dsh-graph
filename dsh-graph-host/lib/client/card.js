@@ -77,6 +77,7 @@
         const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
         if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
+        // i18n-keep(category-a)：匹配用户/子代理手写的遗留中文 status_line 终态词，非 UI 文案，必须保留中文模式。
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
     }
@@ -85,7 +86,7 @@
     function GoalTags(props) {
       const tags = Array.isArray(props.tags) ? props.tags : [];
       if (!tags.length) return null;
-      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" }, "aria-label": "标签" },
+      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" }, "aria-label": dgT("tags.title") },
         tags.map((tag) => h("span", {
           key: tag, style: { fontSize: 10, lineHeight: "16px", padding: "0 5px", borderRadius: 8,
             background: "rgba(76,141,255,.16)", border: "1px solid rgba(76,141,255,.35)",

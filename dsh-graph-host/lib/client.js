@@ -82,6 +82,7 @@ window.__ModuleLoader__.load({
       'lane.versionDetail': '点击查看版本 {version} 详情',
       'lane.newGoalInVersion': '在 {version} 新建目标',
       'lane.newStandaloneGoal': '新建独立目标',
+      'lane.standalone': '独立目标',
       'lane.newBacklogGoal': '新建目标（backlog）',
       'lane.collapseTooltip': '折叠泳道',
       'lane.expandTooltip': '点击展开泳道',
@@ -95,6 +96,24 @@ window.__ModuleLoader__.load({
       'deliver.collapsedTitle': '点击展开交付列（{count} 项）',
       'deliver.label': '交',
       'deliver.count': '×{count}',
+
+      // === 批量接受（g-273 确认列列头入口与弹窗）===
+      'batchAccept.button': '批量接受',
+      'batchAccept.buttonWithCount': '批量接受 ({count})',
+      'batchAccept.disabledTip': '当前没有待确认的目标',
+      'batchAccept.enabledTip': '批量发起 {count} 个目标的交付复核请求',
+      'batchAccept.title': '批量接受 — 交付复核请求',
+      'batchAccept.desc': '将对勾选目标逐个发起与单卡「接受」完全等价的复核请求（写入 review.requested，由主管复核收口），不会直接交付。',
+      'batchAccept.selectAll': '全选',
+      'batchAccept.selectedCount': '已选 {selected}/{total}',
+      'batchAccept.confirmBtn': '确认接受 ({count})',
+      'batchAccept.allOk': '✅ 已对 {count} 个目标发起交付复核请求',
+      'batchAccept.partialResult': '⚠️ {ok} 个成功、{fail} 个失败',
+      'batchAccept.failedListTitle': '以下目标接受失败（其余已正常提交）：',
+      'batchAccept.requestFail': '⚠️ 批量接受请求失败：',
+      'batchAccept.groupHeader': '{label} · {count}',
+      'batchAccept.selectGroup': '全选 {label}',
+      'batchAccept.unselectGroup': '取消全选 {label}',
 
       // === 卡片 ===
       'card.clickToOpen': '点击打开详情',
@@ -295,6 +314,9 @@ window.__ModuleLoader__.load({
       'worktree.cleanFail': '清理被阻断',
       'worktree.candidate': '✅',
       'worktree.locked': '🔒',
+      'worktree.normal': '正常',
+      'worktree.statusNormal': '正常',
+      'worktree.statusLocked': '已锁定',
       'worktree.alreadyRemoved': '已移除',
       'worktree.defaultReason': '已验证合入且干净',
       'worktree.confirmClean': '确认清理',
@@ -305,6 +327,29 @@ window.__ModuleLoader__.load({
       'worktree.notCreated': '未创建 worktree',
       'worktree.copyPathTooltip': '复制安全相对路径',
       'worktree.pathCopied': '✅ worktree 路径已复制',
+      // g-272 att-002：服务端 worktree 候选/清理 reason 稳定枚举 → 中文映射（key 后缀即枚举值原文）
+      'worktree.reason.path_not_canonical_name': 'worktree 路径不是规范 goal-attempt 名称',
+      'worktree.reason.branch_not_canonical_name': 'worktree 分支不是规范 goal-attempt 名称',
+      'worktree.reason.path_branch_mismatch': '路径与分支的 goal/attempt 不一致',
+      'worktree.reason.outside_canonical_worktrees': '路径不在 canonical workspace/.worktrees',
+      'worktree.reason.reuse_suspected': '路径/attempt 已有清理历史，疑似复用',
+      'worktree.reason.snapshot_drift': '登记后的 path/branch/HEAD 已漂移',
+      'worktree.reason.missing_attempt_evidence': '缺少匹配的 attempt.md 证据',
+      'worktree.reason.not_delivered': '目标未交付',
+      'worktree.reason.attempt_active': 'attempt 活跃',
+      'worktree.reason.worktree_dirty': '工作树有未提交改动',
+      'worktree.reason.not_merged': 'HEAD 未由目标分支祖先链证明合入',
+      'worktree.reason.externally_removed': 'worktree 已从 Git 实时列表消失（外部删除）',
+      'worktree.reason.user_cleaned': '已由用户清理',
+      'worktree.reason.confirm_required': '需要用户明确确认',
+      'worktree.reason.unknown_candidate': '未知候选 id',
+      'worktree.reason.protected': '候选受保护',
+      'worktree.reason.git_unavailable': 'Git 不可用',
+      'worktree.reason.git_worktree_list_unavailable': 'Git worktree 列表不可用',
+      'worktree.reason.live_record_drift': 'worktree 实时记录已漂移',
+      'worktree.reason.realpath_unavailable': 'worktree realpath 不可用',
+      'worktree.reason.realpath_escape': 'worktree realpath 越界或为符号链接',
+      'worktree.reason.state_changed': '目标或 attempt 状态已变化',
 
       // === 执行/反馈 ===
       'exec.accept': '✅ 接受',
@@ -340,6 +385,9 @@ window.__ModuleLoader__.load({
       'exec.forceAccept': '✅ 已强制接受',
       'exec.forceAcceptWithReason': '✅ 已强制接受（理由已记入事件）',
       'exec.forceAcceptFail': '⚠️ 强制接受失败：',
+      // g-272 att-002：定义/润色「发送给主管」路径的复制结果提示
+      'exec.requestCopiedOpened': '✅ 请求已复制，已打开主管会话，请粘贴发送',
+      'exec.autocopyFailedRequest': '⚠️ 自动复制失败，请手动复制下方请求',
 
       // === 进执行列确认 ===
       'inProgress.title': '🚀 执行「{title}」',
@@ -495,6 +543,8 @@ window.__ModuleLoader__.load({
       'settings.reasoningEffortAria': 'workspace 子代理默认推理档位',
       'settings.inheritModel': '（继承所选模型/父会话）',
       'settings.effortHint': '选项随所选 provider/model 的 reasoning effort 能力更新；留空继承所选模型或父会话默认值。',
+      'settings.readProfileFail': '读取 profile 设置失败',
+      'settings.saveProfileFail': '保存 profile 设置失败',
       'settings.effortHintNone': '所选 provider/model 未声明 reasoning effort；已存旧值保留可选，可留空继承默认值。',
       'settings.effortHintLoading': '正在读取 Host 模型目录；已存推理档位保留可选，留空继承默认值。',
       'settings.execMode': '执行模式 (mode)',
@@ -684,6 +734,7 @@ window.__ModuleLoader__.load({
       'shared.attachFail': '⚠️ 挂载失败：',
       'shared.attachGoalRequired': '⚠️ 请先选择或输入要挂载的目标',
       'shared.unreferenced': '✅ 已解除 {goalId} 引用',
+      'shared.unrefGoalTooltip': '移除 {label} 对这张共享卡的引用（保留共享卡本身）',
       'shared.unrefFail': '⚠️ 解除失败：',
       'shared.deleted': '✅ 已删除共享卡：',
       'shared.deleteFail': '⚠️ 删除失败：',
@@ -850,6 +901,8 @@ window.__ModuleLoader__.load({
       'live.defaultModel': '默认',
       'live.modelUnavailable': '模型目录不可用',
       'live.modeDefault': '模式：默认',
+      'live.modeStandard': '标准模式',
+      'live.modeMinimal': '极简模式 (6工具过滤)',
       'live.goToChat': '↗ 转到对话',
       'live.sessionMode': '会话模式：',
       'live.continuable': '可续轮',
@@ -976,6 +1029,7 @@ window.__ModuleLoader__.load({
       'lane.versionDetail': 'Click to view version {version} details',
       'lane.newGoalInVersion': 'Create goal in {version}',
       'lane.newStandaloneGoal': 'Create standalone goal',
+      'lane.standalone': 'Standalone',
       'lane.newBacklogGoal': 'Create goal (backlog)',
       'lane.collapseTooltip': 'Collapse lane',
       'lane.expandTooltip': 'Click to expand lane',
@@ -989,6 +1043,24 @@ window.__ModuleLoader__.load({
       'deliver.collapsedTitle': 'Click to expand deliver column ({count} items)',
       'deliver.label': 'Deliver',
       'deliver.count': '×{count}',
+
+      // === Batch accept (g-273 confirm column head entry & modal) ===
+      'batchAccept.button': 'Batch Accept',
+      'batchAccept.buttonWithCount': 'Batch Accept ({count})',
+      'batchAccept.disabledTip': 'No goals awaiting confirmation',
+      'batchAccept.enabledTip': 'Request delivery review for {count} goals',
+      'batchAccept.title': 'Batch Accept — Delivery Review Request',
+      'batchAccept.desc': 'Each checked goal gets the exact same review request as the per-card Accept action (writes review.requested; the supervisor reviews and closes delivery). Nothing is delivered directly.',
+      'batchAccept.selectAll': 'Select all',
+      'batchAccept.selectedCount': 'Selected {selected}/{total}',
+      'batchAccept.confirmBtn': 'Confirm Accept ({count})',
+      'batchAccept.allOk': '✅ Delivery review requested for {count} goal(s)',
+      'batchAccept.partialResult': '⚠️ {ok} succeeded, {fail} failed',
+      'batchAccept.failedListTitle': 'These goals failed to accept (the rest were submitted):',
+      'batchAccept.requestFail': '⚠️ Batch accept request failed: ',
+      'batchAccept.groupHeader': '{label} · {count}',
+      'batchAccept.selectGroup': 'Select all in {label}',
+      'batchAccept.unselectGroup': 'Deselect all in {label}',
 
       // === Cards ===
       'card.clickToOpen': 'Click to open details',
@@ -1189,6 +1261,9 @@ window.__ModuleLoader__.load({
       'worktree.cleanFail': 'Cleanup blocked',
       'worktree.candidate': '✅',
       'worktree.locked': '🔒',
+      'worktree.normal': 'OK',
+      'worktree.statusNormal': 'OK',
+      'worktree.statusLocked': 'Locked',
       'worktree.alreadyRemoved': 'Removed',
       'worktree.defaultReason': 'Verified merged and clean',
       'worktree.confirmClean': 'Confirm cleanup',
@@ -1199,6 +1274,29 @@ window.__ModuleLoader__.load({
       'worktree.notCreated': 'No worktree created',
       'worktree.copyPathTooltip': 'Copy safe relative path',
       'worktree.pathCopied': '✅ Worktree path copied',
+      // g-272 att-002: server worktree candidate/cleanup reason enums → English mapping (key suffix = enum verbatim)
+      'worktree.reason.path_not_canonical_name': 'Worktree path is not a canonical goal-attempt name',
+      'worktree.reason.branch_not_canonical_name': 'Worktree branch is not a canonical goal-attempt name',
+      'worktree.reason.path_branch_mismatch': 'Path and branch goal/attempt mismatch',
+      'worktree.reason.outside_canonical_worktrees': 'Path not under canonical workspace/.worktrees',
+      'worktree.reason.reuse_suspected': 'Path/attempt has cleanup history, suspected reuse',
+      'worktree.reason.snapshot_drift': 'Registered path/branch/HEAD has drifted',
+      'worktree.reason.missing_attempt_evidence': 'Missing matching attempt.md evidence',
+      'worktree.reason.not_delivered': 'Goal not delivered',
+      'worktree.reason.attempt_active': 'Attempt is active',
+      'worktree.reason.worktree_dirty': 'Worktree has uncommitted changes',
+      'worktree.reason.not_merged': 'HEAD not proven merged into target branch',
+      'worktree.reason.externally_removed': 'Worktree disappeared from live Git list (externally removed)',
+      'worktree.reason.user_cleaned': 'Cleaned by user',
+      'worktree.reason.confirm_required': 'Explicit user confirmation required',
+      'worktree.reason.unknown_candidate': 'Unknown candidate id',
+      'worktree.reason.protected': 'Candidate is protected',
+      'worktree.reason.git_unavailable': 'Git unavailable',
+      'worktree.reason.git_worktree_list_unavailable': 'Git worktree list unavailable',
+      'worktree.reason.live_record_drift': 'Live worktree record has drifted',
+      'worktree.reason.realpath_unavailable': 'Worktree realpath unavailable',
+      'worktree.reason.realpath_escape': 'Worktree realpath escapes bounds or is a symlink',
+      'worktree.reason.state_changed': 'Goal or attempt state has changed',
 
       // === Execute/Feedback ===
       'exec.accept': '✅ Accept',
@@ -1234,6 +1332,9 @@ window.__ModuleLoader__.load({
       'exec.forceAccept': '✅ Force accepted',
       'exec.forceAcceptWithReason': '✅ Force accepted (reason recorded in events)',
       'exec.forceAcceptFail': '⚠️ Force accept failed: ',
+      // g-272 att-002: copy-result hints for the define/polish "send to supervisor" path
+      'exec.requestCopiedOpened': '✅ Request copied, supervisor session opened — paste to send',
+      'exec.autocopyFailedRequest': '⚠️ Auto-copy failed, please copy the request below manually',
 
       // === In Progress prompt ===
       'inProgress.title': '🚀 Execute "{title}"',
@@ -1389,6 +1490,8 @@ window.__ModuleLoader__.load({
       'settings.reasoningEffortAria': 'Workspace subagent default reasoning effort',
       'settings.inheritModel': '(Inherit from selected model / parent session)',
       'settings.effortHint': 'Options update with selected provider/model reasoning effort capability; leave empty to inherit.',
+      'settings.readProfileFail': 'Failed to read profile settings',
+      'settings.saveProfileFail': 'Failed to save profile settings',
       'settings.effortHintNone': 'Selected provider/model has no declared reasoning effort; saved value preserved, leave empty to inherit.',
       'settings.effortHintLoading': 'Loading Host model catalog; saved effort values preserved, leave empty to inherit.',
       'settings.execMode': 'Execution mode',
@@ -1578,6 +1681,7 @@ window.__ModuleLoader__.load({
       'shared.attachFail': '⚠️ Attach failed: ',
       'shared.attachGoalRequired': '⚠️ Please select or enter a target goal first',
       'shared.unreferenced': '✅ Unreferenced {goalId}',
+      'shared.unrefGoalTooltip': 'Remove {label}\'s reference to this shared card (keeps shared card itself)',
       'shared.unrefFail': '⚠️ Unreference failed: ',
       'shared.deleted': '✅ Shared card deleted: ',
       'shared.deleteFail': '⚠️ Delete failed: ',
@@ -1744,6 +1848,8 @@ window.__ModuleLoader__.load({
       'live.defaultModel': 'Default',
       'live.modelUnavailable': 'Model catalog unavailable',
       'live.modeDefault': 'Mode: default',
+      'live.modeStandard': 'Standard',
+      'live.modeMinimal': 'Minimal (6-tool filter)',
       'live.goToChat': '↗ Go to chat',
       'live.sessionMode': 'Session mode: ',
       'live.continuable': 'Continuable',
@@ -1861,7 +1967,7 @@ window.__ModuleLoader__.load({
       }, []);
     }
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
-    const PLUGIN_VERSION = "0.9.2";
+    const PLUGIN_VERSION = "0.10.0";
 
     // g-230：阶段列定义——label 改为函数式动态翻译（每次渲染时读取当前语言）
     const STAGES = [
@@ -2439,6 +2545,7 @@ window.__ModuleLoader__.load({
      *  纯函数（不触发任何请求/派发），便于行为测试。 */
     function resolveBlockedDropTarget(blockedFrom, toStageKey) {
       const raw = typeof blockedFrom === "string" ? blockedFrom.trim() : "";
+      // i18n-keep(category-a)：tr 的 fallback 中文仅在 dgT 未初始化（i18n 注册前）时兜底，正常路径一律走 dgT 词条。
       const tr = (key, params, fallback) => typeof dgT === "function" ? dgT(key, params) : fallback;
       if (!raw) {
         return { ok: false, message: tr('drag.blockedNoFrom', null, "⚠️ 该目标缺少 blocked_from 记录，无法自动解除阻塞；请由主管确认原状态后手动处理") };
@@ -2903,6 +3010,7 @@ window.__ModuleLoader__.load({
       const raw = String(statusLine).trim();
       // g-247：结构化状态优先；只有缺失/未知时才解析自由文本，避免中英文及否定句误判。
       const structured = ["working", "blocked", "done", "error"].includes(statusState) ? statusState : null;
+      // i18n-keep(category-a)：以下正则匹配用户手写的遗留中文 status_line 自由文本（g-247 兜底路径），非 UI 文案。
       const isBlocked = structured ? structured === "blocked" : (!!blocked || /阻塞|blocked/i.test(raw));
       const isError = structured ? structured === "error" : (!isBlocked && /失败|错误|报错|failed|error/i.test(raw));
       const isDone = structured ? structured === "done" : (!isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw));
@@ -2957,6 +3065,7 @@ window.__ModuleLoader__.load({
                 { parentSessionId: parentId, childSessionId: childId, mode: entry.mode });
             }
           } catch (e) {
+            // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
             console.warn("[dsh-graph-host] 子代理地址配置失败", e);
           }
         }
@@ -2980,6 +3089,7 @@ window.__ModuleLoader__.load({
           boundOpened.set(childId, p);
           return true;
         } catch (e) {
+          // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
           console.warn("[dsh-graph-host] session.open() 失败", e);
           return false;
         }
@@ -3006,6 +3116,7 @@ window.__ModuleLoader__.load({
       const binding = React.useMemo(() => {
         if (!sessionsRt || !childId) return null;
         try { return sessionsRt.binding(childId) ?? null; }
+        // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
         catch (e) { console.warn("[dsh-graph-host] binding 解析失败", e); return null; }
       }, [childId, listSnap]);
       const session = binding?.session ?? null;
@@ -3656,8 +3767,8 @@ window.__ModuleLoader__.load({
       const currentGroup = groups.find((g) => g.id === provider) ?? null;
       const modelChoices = currentGroup?.models ?? [];
       const modeList = opts?.modes ?? [
-        { id: "standard", name: "标准模式" },
-        { id: "minimal", name: "极简模式 (6工具过滤)" },
+        { id: "standard", name: dgT("live.modeStandard") },
+        { id: "minimal", name: dgT("live.modeMinimal") },
       ];
 
       const relaunch = async () => {
@@ -3954,6 +4065,7 @@ window.__ModuleLoader__.load({
           sessionsRt?.open?.(props.id); // supervisor 是顶层会话，直接 open
           activateChatTab();            // 已在该会话看板 tab 时切回「对话」
         } catch (e) {
+          // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
           console.warn("[dsh-graph-host] 跳转主管会话失败", e);
         }
       };
@@ -4068,6 +4180,7 @@ window.__ModuleLoader__.load({
         const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
         if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
+        // i18n-keep(category-a)：匹配用户/子代理手写的遗留中文 status_line 终态词，非 UI 文案，必须保留中文模式。
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
     }
@@ -4076,7 +4189,7 @@ window.__ModuleLoader__.load({
     function GoalTags(props) {
       const tags = Array.isArray(props.tags) ? props.tags : [];
       if (!tags.length) return null;
-      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" }, "aria-label": "标签" },
+      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" }, "aria-label": dgT("tags.title") },
         tags.map((tag) => h("span", {
           key: tag, style: { fontSize: 10, lineHeight: "16px", padding: "0 5px", borderRadius: 8,
             background: "rgba(76,141,255,.16)", border: "1px solid rgba(76,141,255,.35)",
@@ -4720,6 +4833,7 @@ window.__ModuleLoader__.load({
         if (!t) return;
         if (!session?.prompt) { setFbNote(dgT("criteria.feedbackNotConnected")); return; }
         try {
+          // i18n-keep(category-b)：发往目标执行会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
           const res = await session.prompt(
             [{ type: "text", text: `【${props.goalId} 判据反馈】${criterion}\n${t}` }], "queue");
           if (res?.ok) {
@@ -4825,6 +4939,7 @@ window.__ModuleLoader__.load({
         const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
         if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
+        // i18n-keep(category-a)：匹配用户/子代理手写的遗留中文 status_line 终态词，非 UI 文案，必须保留中文模式。
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
     }
@@ -4840,6 +4955,7 @@ window.__ModuleLoader__.load({
       const allowed = ["draft", "planning", "collecting", "ready"];
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       if (!allowed.includes(status) || hasActiveAttempt) return null;
+      // i18n-keep(category-b)：复制到剪贴板并粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
       const request = `【${goalId} 定义/润色请求】\n目标 ID：${goalId}\ngoal.md 工作区相对路径：${String(goalPath ?? "（路径未知）")}\n人工指导意见：${guidance.trim() || "（无）"}`;
       const openSupervisor = async () => {
         setLoading(true); setNote(null);
@@ -4852,7 +4968,7 @@ window.__ModuleLoader__.load({
           if (copied) showToast(dgT("exec.requestCopied"));
            setMode("supervisor");
            setFallback(!copied);
-          setNote(copied ? "✅ 请求已复制，已打开主管会话，请粘贴发送" : "⚠️ 自动复制失败，请手动复制下方请求");
+          setNote(copied ? dgT("exec.requestCopiedOpened") : dgT("exec.autocopyFailedRequest"));
         } catch (e) { setNote(dgT("exec.supervisorPathFailed") + String(e?.message ?? e)); }
         setLoading(false);
       };
@@ -4916,6 +5032,7 @@ window.__ModuleLoader__.load({
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
       // 反馈预填模板（复制与显示共用，保证一致）
+      // i18n-keep(category-b)：粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
       const prefillText = fbText.trim() ? `【${goalId} 反馈】\n${fbText.trim()}` : "";
 
       // 接受复核状态只关联当前生命周期周期：
@@ -4947,7 +5064,7 @@ window.__ModuleLoader__.load({
 
       // 接受：默认经主管 Agent 复核（review.requested → 主管复核收口）
       const doAccept = async () => {
-        if (!confirm(`确认接受目标「${goalId}」的交付成果？\n\n此操作将请求主管会话完成最终复核，并执行交付收口。`)) return;
+        if (!confirm(dgT("exec.acceptConfirm", { goalId }))) return;
         setLoading(true);
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/accept"), {
@@ -4960,6 +5077,7 @@ window.__ModuleLoader__.load({
             try {
               const rt = sessionsRt ?? appCtx?.get?.("sessions");
               const session = supervisorSession && (rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession));
+              // i18n-keep(category-b)：发往主管会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
               if (session?.prompt) await session.prompt([{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }], "queue");
             } catch (err) {
               console.warn("[dsh-graph-host] prompt supervisorSession failed:", err);
@@ -4967,9 +5085,9 @@ window.__ModuleLoader__.load({
             onRefresh?.();
           } else if (data.ok) {
             onRefresh?.();
-          } else setNote("⚠️ 接受失败：" + (data.error || dgT("drag.unknownError")));
+          } else setNote(dgT("exec.acceptFail") + (data.error || dgT("drag.unknownError")));
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -4983,12 +5101,12 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ goal: goalId, force: true, reason: forceReason.trim() || undefined }),
           });
           const data = await r.json();
-          if (data.ok) setNote(forceReason.trim() ? "✅ 已强制接受（理由已记入事件）" : "✅ 已强制接受");
-          else setNote("⚠️ 强制接受失败：" + (data.error || dgT("drag.unknownError")));
+          if (data.ok) setNote(forceReason.trim() ? dgT("exec.forceAcceptWithReason") : dgT("exec.forceAccept"));
+          else setNote(dgT("exec.forceAcceptFail") + (data.error || dgT("drag.unknownError")));
           setForceMode(false);
           setForceReason("");
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -5004,7 +5122,7 @@ window.__ModuleLoader__.load({
           });
           const trData = await tr.json();
           if (!trData.ok) {
-            setNote("⚠️ 状态迁移失败：" + (trData.error || dgT("drag.unknownError")));
+            setNote(dgT("exec.stateTransitionFail") + (trData.error || dgT("drag.unknownError")));
             setLoading(false);
             return;
           }
@@ -5017,18 +5135,18 @@ window.__ModuleLoader__.load({
           const data = await r.json();
           if (data.ok) {
             if (data.child_id) {
-              setNote("✅ 已派发执行子代理，id：" + data.child_id);
+              setNote(dgT("exec.childDispatched") + data.child_id);
             } else if (data.child_error) {
-              setNote("⚠️ 子代理启动失败：" + data.child_error);
+              setNote(dgT("exec.childFailed") + data.child_error);
             } else {
-              setNote("⚠️ 子代理未启动（无 child_id）");
+              setNote(dgT("exec.childNotStarted"));
             }
             onRefresh?.(); // g-148：刷新看板（回调由父组件 GoalModal 传入）
           } else {
-            setNote("⚠️ 执行失败：" + (data.error || dgT("drag.unknownError")));
+            setNote(dgT("exec.executeFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -5036,18 +5154,18 @@ window.__ModuleLoader__.load({
       const openSupervisorWithFeedback = async () => {
         try {
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
-          if (!rt) { setNote("⚠️ 会话服务不可用"); return; }
+          if (!rt) { setNote(dgT("exec.supervisorUnavailable")); return; }
           // 打开主管会话（id 由 board 端点下发 project.yaml supervisor.session，g-108）
-          if (!supervisorSession) { setNote("⚠️ 未配置主管会话（project.yaml 的 supervisor.session）"); return; }
+          if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
           // 自动复制预填内容（负责人指示），再切到主管对话窗直接粘贴发送
           const copied = prefillText ? await copyText(prefillText) : false;
           rt.open?.(supervisorSession);
           activateChatTab();
           if (copied) {
-            showToast("✅ 预填内容已复制，到主管对话窗 Ctrl+V 直接粘贴发送");
-            setNote("✅ 预填内容已复制，已切换到主管对话窗，直接粘贴发送");
+            showToast(dgT("exec.precopied"));
+            setNote(dgT("exec.prefillCopied"));
           } else {
-            setNote("⚠️ 自动复制失败（浏览器限制），请手动复制下方预填内容；已切换到主管对话窗");
+            setNote(dgT("exec.autocopyFailed"));
           }
         } catch (e) {
           setNote(dgT("exec.supervisorJumpFail") + String(e?.message ?? e));
@@ -5145,7 +5263,7 @@ window.__ModuleLoader__.load({
             setNote(dgT("addCard.fail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -5154,9 +5272,9 @@ window.__ModuleLoader__.load({
       const openSupervisorChat = () => {
         try {
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
-          if (!rt) { setNote("⚠️ 会话服务不可用"); return; }
+          if (!rt) { setNote(dgT("exec.supervisorUnavailable")); return; }
           // 主管会话 id 由 board 端点下发（project.yaml supervisor.session，g-108）
-          if (!supervisorSession) { setNote("⚠️ 未配置主管会话（project.yaml 的 supervisor.session）"); return; }
+          if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
           rt.open?.(supervisorSession);
           activateChatTab();
           setNote(dgT("addCard.chatSwitched"));
@@ -5635,6 +5753,19 @@ window.__ModuleLoader__.load({
         note ? h("div", { style: { ...S.meta, color: note === dgT("common.savingDone") ? undefined : "#e57373", marginTop: 4 } }, note) : null);
     }
 
+    // g-272 att-002：服务端 worktree reason 为稳定枚举（core/worktree.ts），客户端按枚举 dgT 双语映射；
+    // 非枚举值（如 git 原始错误、旧版服务端中文残留）原样透传兜底。
+    const WORKTREE_REASON_ENUMS = ["path_not_canonical_name", "branch_not_canonical_name", "path_branch_mismatch",
+      "outside_canonical_worktrees", "reuse_suspected", "snapshot_drift", "missing_attempt_evidence",
+      "not_delivered", "attempt_active", "worktree_dirty", "not_merged", "externally_removed", "user_cleaned",
+      "confirm_required", "unknown_candidate", "protected", "git_unavailable", "git_worktree_list_unavailable",
+      "live_record_drift", "realpath_unavailable", "realpath_escape", "state_changed"];
+    function formatWorktreeReason(reason) {
+      if (!reason) return dgT("worktree.defaultReason");
+      if (WORKTREE_REASON_ENUMS.includes(reason)) return dgT("worktree.reason." + reason);
+      return reason;
+    }
+
     // g-197：展示 delivered 目标已识别的清理候选与显式清理操作
     function WorktreeCandidates(props) {
       const [items, setItems] = React.useState([]);
@@ -5655,7 +5786,7 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ id, confirm: true }),
         });
         const x = await r.json();
-        if (!r.ok) setNote(x.reason || x.error || dgT("worktree.cleanFail"));
+        if (!r.ok) setNote(x.reason ? formatWorktreeReason(x.reason) : (x.error || dgT("worktree.cleanFail")));
         else { setNote(dgT("worktree.cleaned")); load(); }
       };
       if (!items.length && !note) return null;
@@ -5664,7 +5795,7 @@ window.__ModuleLoader__.load({
         items.map((x) =>
           h("div", { key: x.id, style: { ...S.subCard, marginTop: 4 } },
             h("div", null, `${x.status === "candidate" ? "✅" : "🔒"} ${x.path}`),
-            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${x.reason || dgT("worktree.defaultReason")}`),
+            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${formatWorktreeReason(x.reason)}`),
             x.status === "candidate"
               ? h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => clean(x.id) }, dgT("worktree.confirmClean"))
               : null,
@@ -5682,16 +5813,23 @@ window.__ModuleLoader__.load({
       if (!attempts.length) return null;
       const latest = [...attempts].reverse().find((a) => discovery.items?.[a.id]);
       const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: dgT("worktree.copyPathTooltip"), onClick: async () => { if (await copyText(item.path)) showToast(dgT("worktree.pathCopied")); } }, dgT("common.copy")) : null;
+      // i18n-keep(category-a)：匹配服务端 index.js 下发的遗留中文状态值（"正常"/"已锁定"）与本地合成哨兵（"已移除"），非 UI 文案源。
+      const formatWorktreeStatus = (status) => {
+        if (status === "正常" || status === "ok" || status === "normal") return dgT("worktree.normal");
+        if (status === "已锁定" || status === "locked") return dgT("worktree.statusLocked");
+        if (status === "已移除" || status === "removed") return dgT("worktree.alreadyRemoved");
+        return status;
+      };
       const row = (a) => {
         const item = discovery.items?.[a.id];
         return h("div", { key: a.id, style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginTop: 4 } },
           h("span", { style: { flex: "0 0 auto", fontSize: 12 } }, a.id),
-          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${item.status}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
+          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${formatWorktreeStatus(item.status)}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
           copyButton(item));
       };
       return h("div", { key: "worktrees", style: S.modalSection },
         h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
-          h("span", null, "🌿 Attempt worktree"),
+          h("span", null, dgT("worktree.attemptTitle")),
           h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12, padding: "0 5px" }, title: expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), "aria-label": expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), onClick: () => setExpanded((v) => !v) }, expanded ? "▲" : "▼")),
         discovery.status !== "ok" ? h("div", { style: { ...S.meta, fontSize: 12 } }, dgT("worktree.unavailable")) : expanded ? attempts.map(row) : latest ? row(latest) : h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, dgT("worktree.notCreated")));
     }
@@ -5724,6 +5862,7 @@ window.__ModuleLoader__.load({
               const next = { ...wt, items: { ...wt.items } };
               for (const [id, old] of Object.entries(lastWorktreesRef.current)) {
                 if (!next.items[id]) {
+                  // i18n-keep(category-a)：本地合成「已移除」哨兵值，仅供 formatWorktreeStatus 匹配映射为 dgT 词条，不直接渲染。
                   const removed = { ...old, status: "已移除" };
                   removedWorktreesRef.current[id] = removed;
                   next.items[id] = removed;
@@ -5732,6 +5871,7 @@ window.__ModuleLoader__.load({
               for (const [id, removed] of Object.entries(removedWorktreesRef.current)) {
                 if (!next.items[id]) next.items[id] = removed;
               }
+              // i18n-keep(category-a)：过滤本地合成「已移除」哨兵（见上），非 UI 文案。
               lastWorktreesRef.current = Object.fromEntries(Object.entries(next.items).filter(([, v]) => v.status !== "已移除"));
               data = { ...data, worktrees: next };
             }
@@ -5777,6 +5917,7 @@ window.__ModuleLoader__.load({
       else if (state.data.error) content = dgT("goal.requestFail") + state.data.error;
       else {
         const d = state.data;
+        // i18n-keep(category-a)：goal.md 正文的固定中文区段名（「目标描述」「质量判据」为数据格式契约，非 UI 文案）。
         const desc = section(d.body, "目标描述");
         const crit = section(d.body, "质量判据");
         const meta = d.meta ?? {};
@@ -5854,6 +5995,7 @@ window.__ModuleLoader__.load({
 
         // g-a92e1406：tab 内容（占位文案视觉降级：trim 后以「（待」开头 → 小字灰色放标题右侧）
         // 识别逻辑：trim 后以「（待」开头或与国际化占位符匹配 → 占位；若占位后仍有正文，剥离占位行只显示正文
+        // i18n-keep(category-a)：以下「（待…」中文字面量用于匹配 goal.md 数据中的遗留中文占位符，非 UI 文案源。
         function isPlaceholder(text) {
           const t = String(text ?? "").trim();
           return t.startsWith("（待") || t === dgT('criteria.pending') || t === dgT('criteria.pendingDetail') || t === dgT('criteria.toBeFilled');
@@ -5866,10 +6008,12 @@ window.__ModuleLoader__.load({
           if (t === "（待登记）" || t === dgT('criteria.pending')) {
             return { isPh: true, marker: dgT('criteria.pending'), body: "" };
           }
+          // i18n-keep(category-a)：匹配 goal.md 数据中的遗留中文占位符，非 UI 文案源。
           if (t === "（待填写）" || t === dgT('criteria.toBeFilled')) {
             return { isPh: true, marker: dgT('criteria.toBeFilled'), body: "" };
           }
           if (!t.startsWith("（待")) return { isPh: false, marker: null, body: t };
+          // i18n-keep(category-a)：匹配 goal.md 数据中的遗留中文占位符前缀（「（待…）」），非 UI 文案源。
           const m = t.match(/^（待[^）]*）/);
           let marker = m ? m[0] : dgT('criteria.toBeFilled');
           if (marker.includes("必须非空且已确认")) marker = dgT('criteria.pendingDetail');
@@ -6100,7 +6244,7 @@ window.__ModuleLoader__.load({
             // 触发父组件刷新看板
             if (props.onRenamed) props.onRenamed(props.id, t);
           } else {
-            setRenameNote("⚠️ 重命名失败：" + (data.error || dgT("drag.unknownError")));
+            setRenameNote(dgT("goal.renameFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
           setRenameNote(dgT("drag.requestFail") + String(e?.message ?? e));
@@ -6785,7 +6929,7 @@ function resetSearchState(activeWs) {
           h("div", { id: "dg-version-drawer-title", style: { fontWeight: 700, fontSize: 16, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
             h("span", null, dgT("versionDrawer.title")),
             h("span", { style: { ...S.meta, fontSize: 12, fontWeight: 400 } },
-              "（显示 " + visibleCount + "/" + allVersions.length + "）")),
+              dgT("versionDrawer.displayCount", { visible: visibleCount, total: allVersions.length }))),
           h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.8, marginBottom: 12, lineHeight: 1.4 } },
             dgT("versionDrawer.hint")),
 
@@ -6900,9 +7044,9 @@ function resetSearchState(activeWs) {
                                 ? "var(--dsw-alias-state-success-primary, #6ee7a0)"
                                 : "var(--dsw-alias-state-business-primary, #8ab4ff)",
                             },
-                          }, isReleased ? dgT("versionDrawer.released") : (v.status === "active" ? dgT("versionDrawer.active") : (STATUS_LABEL[v.status] ?? v.status ?? "活跃")))),
+                          }, isReleased ? dgT("versionDrawer.released") : (v.status === "active" ? dgT("versionDrawer.active") : (STATUS_LABEL[v.status] ?? v.status ?? dgT("versionDrawer.active"))))),
                         h("div", { style: { ...S.meta, fontSize: 11, marginTop: 2 } },
-                          v.slug + " ｜ " + goalsCount + " 个目标"))),
+                          v.slug + " ｜ " + dgT("versionDrawer.goalCount", { count: goalsCount })))),
                     h("button", {
                       style: { ...S.btn, fontSize: 11, padding: "2px 6px", flexShrink: 0 },
                       className: "dg-btn",
@@ -6917,6 +7061,266 @@ function resetSearchState(activeWs) {
       );
     }
     // Contract marker: 已隐藏全部 X 个版本（包含已发布版本）; title: "版本管理（显隐过滤与版本列表）"
+    // ===== g-273：确认列「批量接受」——列头入口 + 勾选式二次确认弹窗 + 限流批量提交 + 单条聚合主管通知 =====
+    // 硬约束（Human Gate 与逐卡「接受」语义逐字一致，见 goal-actions.js AcceptFeedback.doAccept）：
+    // - 逐个调用 POST /api/dsh-graph/accept 的**非 force** 路径（body 仅 {goal}），每目标写 review.requested；
+    // - 绝不传 force、绝不直接写 delivered；不新增后端端点；不改状态机契约；
+    // - 主管通知由客户端整批聚合为**一条**（服务端不去重）；无 supervisorSession 时静默跳过，不影响接受流程。
+
+    // 纯函数：列头「批量接受」按钮状态（禁用态 + 计数 + 悬停说明）。
+    // reviewCount = 当前视图内 status=review 的目标数（由 kanban.js 按当前视图过滤后传入）。
+    function batchAcceptButtonState(reviewCount) {
+      const count = Number.isFinite(reviewCount) ? Math.max(0, Math.floor(reviewCount)) : 0;
+      return {
+        disabled: count === 0,
+        count,
+        label: count > 0 ? dgT("batchAccept.buttonWithCount", { count }) : dgT("batchAccept.button"),
+        title: count === 0 ? dgT("batchAccept.disabledTip") : dgT("batchAccept.enabledTip", { count }),
+      };
+    }
+
+    // 纯函数：单项勾选/取消切换。
+    function batchAcceptToggleId(selected, id) {
+      return selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id];
+    }
+
+    // 纯函数（g-273 att-002）：按所属版本（versionLabel）分组，保持 items 首现顺序
+    //（= 看板泳道顺序，版本语义降序，与 g-264 一致），组内保持 items 原序。
+    // 无 versionLabel / 空串 / 非字符串的目标归入 standaloneLabel 兜底组
+    //（调用方传 dgT("lane.standalone")，函数本身不依赖 i18n 全局）；
+    // 任何其他无版本情形（undefined/null/数字等）同样落入该兜底组。
+    // 分组仅由 items 派生：只产出至少含 1 个目标的组，绝不产出空组占位。
+    function batchAcceptGroupByVersion(items, standaloneLabel) {
+      const fallback = typeof standaloneLabel === "string" ? standaloneLabel : "";
+      const groups = [];
+      const byLabel = new Map();
+      for (const it of Array.isArray(items) ? items : []) {
+        if (!it) continue;
+        const raw = typeof it.versionLabel === "string" ? it.versionLabel.trim() : "";
+        const label = raw || fallback;
+        let g = byLabel.get(label);
+        if (!g) { g = { label, items: [] }; byLabel.set(label, g); groups.push(g); }
+        g.items.push(it);
+      }
+      return groups;
+    }
+
+    // 纯函数（g-273 att-003）：组级三态 —— 由该组 ids 的选中情况派生。
+    // 返回 { all, some, none }：all=组内全部选中（checked）、some=部分选中（indeterminate）、
+    // none=全未选（unchecked）。空组 ids → 全未选（组级开关语义对空组无意义，弹窗本就零渲染空组）。
+    function batchAcceptGroupState(selected, ids) {
+      const sel = new Set(Array.isArray(selected) ? selected : []);
+      const list = Array.isArray(ids) ? ids.filter((x) => typeof x === "string" && x) : [];
+      const on = list.filter((id) => sel.has(id)).length;
+      const all = list.length > 0 && on === list.length;
+      return { all, some: on > 0 && !all, none: on === 0 };
+    }
+
+    // 纯函数（g-273 att-003）：组级全选/取消全选切换 —— 只影响该组 ids，其他组选中态原样保留。
+    // 组未全选 → 追加该组缺失项（保持既有 selected 顺序，组内新项按 ids 顺序追加）；
+    // 组已全选 → 移除该组全部项。
+    function batchAcceptToggleGroup(selected, ids) {
+      const prev = Array.isArray(selected) ? selected : [];
+      const list = Array.isArray(ids) ? ids.filter((x) => typeof x === "string" && x) : [];
+      const all = list.length > 0 && list.every((id) => prev.includes(id));
+      if (all) {
+        const drop = new Set(list);
+        return prev.filter((id) => !drop.has(id));
+      }
+      const have = new Set(prev);
+      return [...prev, ...list.filter((id) => !have.has(id))];
+    }
+
+    // 核心提交：限流分批 Promise.allSettled（默认并发 4，防瞬时连接爆炸）。
+    // 单目标失败（状态冲突/网络错误）不中断其余目标；返回 { ok, failed } 结构化结果。
+    // opts: { concurrency, fetchImpl, urlOf } —— fetchImpl/urlOf 可注入（测试与 kanban 的 graphUrlForActive）。
+    async function runBatchAccept(goalIds, opts = {}) {
+      const ids = Array.isArray(goalIds) ? goalIds.filter((x) => typeof x === "string" && x) : [];
+      const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 4));
+      const fetchImpl = opts.fetchImpl ?? fetch;
+      const urlOf = opts.urlOf ?? ((p) => graphUrl(p));
+      const ok = [];
+      const failed = [];
+      for (let i = 0; i < ids.length; i += concurrency) {
+        const chunk = ids.slice(i, i + concurrency);
+        const results = await Promise.allSettled(chunk.map(async (goalId) => {
+          const r = await fetchImpl(urlOf("/api/dsh-graph/accept"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            // 非 force 路径契约：body 仅 {goal}——服务端走 requestAcceptReview 写 review.requested。
+            body: JSON.stringify({ goal: goalId }),
+          });
+          const data = await r.json();
+          if (data && (data.pending || data.ok)) return { goal: goalId, data };
+          const err = new Error((data && data.error) || "unknown error");
+          err.status = r.status;
+          throw err;
+        }));
+        for (let j = 0; j < results.length; j++) {
+          const res = results[j];
+          if (res.status === "fulfilled") ok.push(res.value);
+          else failed.push({ goal: chunk[j], error: String(res.reason?.message ?? res.reason), status: res.reason?.status });
+        }
+      }
+      return { ok, failed };
+    }
+
+    // 聚合主管通知文案：整批一条（含目标清单与总数），与单卡【负责人交付复核请求】同系列话术。
+    function batchAcceptSupervisorMessage(goalIds) {
+      // i18n-keep(category-b)：发往主管会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
+      return `【负责人批量交付复核请求】负责人已对目标 ${goalIds.join(", ")}（共 ${goalIds.length} 个）确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。`;
+    }
+
+    // 发送聚合主管通知：整批**一条** queue 消息；无 supervisorSession / 会话不可用 → 静默跳过（返回 false），
+    // 绝不影响接受流程本身；不得产生 N 条刷屏。
+    async function notifySupervisorBatchAccept(supervisorSession, goalIds) {
+      if (!supervisorSession || !Array.isArray(goalIds) || goalIds.length === 0) return false;
+      try {
+        const rt = sessionsRt ?? appCtx?.get?.("sessions");
+        const session = rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession);
+        if (!session?.prompt) return false;
+        await session.prompt([{ type: "text", text: batchAcceptSupervisorMessage(goalIds) }], "queue");
+        return true;
+      } catch (err) {
+        console.warn("[dsh-graph-host] batch accept: prompt supervisorSession failed:", err);
+        return false;
+      }
+    }
+
+    // 勾选式二次确认弹窗（Human Gate）。
+    // props: { items: [{id, title, versionLabel}], loading, failures: null|[{goal,error}], onConfirm(ids), onCancel() }
+    // 清单按 versionLabel 分组渲染（组头含版本标签与该组目标数；无版本归入独立目标兜底组；空组不渲染）；
+    // 取消、✕、Esc、点击遮罩关闭均为零副作用（零网络请求、零状态变化，仅触发 onCancel）；
+    // loading（提交中）期间所有关闭路径与按钮一并锁定，防重复点击。
+    function BatchAcceptModal(props) {
+      const items = Array.isArray(props.items) ? props.items : [];
+      const allIds = items.map((it) => it.id);
+      const [selected, setSelected] = React.useState(() => allIds.slice());
+      // 部分失败后由父级回填 failures：勾选重置为仅失败项，便于直接重试
+      const failKey = JSON.stringify((props.failures ?? []).map((f) => f.goal));
+      React.useEffect(() => {
+        if (props.failures && props.failures.length) setSelected(props.failures.map((f) => f.goal));
+      }, [failKey]);
+      // Esc 关闭（loading 期间锁定）；纯取消路径，零副作用
+      const loadingRef = React.useRef(false);
+      loadingRef.current = !!props.loading;
+      React.useEffect(() => {
+        const onKey = (e) => {
+          if (e.key !== "Escape") return;
+          if (loadingRef.current) return;
+          e.stopPropagation();
+          props.onCancel?.();
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, []);
+      const loading = !!props.loading;
+      const closeIfIdle = () => { if (!loading) props.onCancel?.(); };
+      const backdropGuard = useBackdropClose(closeIfIdle);
+      const allChecked = allIds.length > 0 && selected.length === allIds.length;
+      // 全局三态（g-273 att-003）：部分选中 → indeterminate（DOM 属性，须经 ref 赋值，React 不托管）
+      const globalSome = !allChecked && selected.length > 0;
+      const globalCbRef = (el) => { if (el) el.indeterminate = globalSome; };
+      const toggleAll = () => setSelected(allChecked ? [] : allIds.slice());
+      const toggleOne = (id) => setSelected((prev) => batchAcceptToggleId(prev, id));
+      const confirm = () => { if (!loading && selected.length > 0) props.onConfirm?.(selected.slice()); };
+      // g-273 att-002：按所属版本分组（组顺序 = items 首现顺序 = 看板泳道顺序）；
+      // 无版本目标归入 dgT("lane.standalone") 独立目标兜底组；空版本组绝不渲染（分组仅由 items 派生）。
+      const groups = batchAcceptGroupByVersion(items, dgT("lane.standalone"));
+
+      const cbStyle = { flexShrink: 0, cursor: "pointer", width: 16, height: 16, margin: 0 };
+      return h("div", { style: S.overlay, ...backdropGuard },
+        h("div", { style: { ...S.modal, maxWidth: 560 }, onClick: (e) => e.stopPropagation() },
+          h("span", { className: "dg-close", style: { ...S.close, ...(loading ? { opacity: 0.4, pointerEvents: "none" } : {}) }, onClick: closeIfIdle }, "✕"),
+          h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 6 } }, dgT("batchAccept.title")),
+          h("div", { style: { ...S.meta, marginBottom: 8 } }, dgT("batchAccept.desc")),
+          // 全选行 + 选中计数
+          h("div", {
+            style: { display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", marginBottom: 4,
+                     borderBottom: "1px solid rgba(128,128,128,.25)", fontSize: 12, fontWeight: 600 },
+          },
+            h("input", {
+              type: "checkbox", style: cbStyle, checked: allChecked, disabled: loading,
+              ref: globalCbRef,
+              "aria-label": dgT("batchAccept.selectAll"),
+              onChange: toggleAll, onClick: (e) => e.stopPropagation(),
+            }),
+            h("span", { style: { cursor: loading ? "default" : "pointer" }, onClick: () => { if (!loading) toggleAll(); } },
+              dgT("batchAccept.selectAll")),
+            h("span", { style: { ...S.meta, marginLeft: "auto" } },
+              dgT("batchAccept.selectedCount", { selected: selected.length, total: allIds.length }))),
+          // 目标清单：按版本分组渲染（组头 = 组级三态开关 + 版本标签 + 该组待接受目标数），可滚动；
+          // 组内行 = 复选框 + id + 标题（不再重复显示版本列）；全选/已选计数仍为跨组全局。
+          // 组级三态（g-273 att-003）：组内全选中=checked、部分选中=indeterminate（ref 赋值 DOM 属性）、
+          // 全未选=unchecked；点击只影响该组（未全选→全选本组、已全选→取消本组），loading 期间锁定。
+          h("div", { style: { maxHeight: 260, overflowY: "auto", marginBottom: 8 } },
+            groups.flatMap((g) => {
+              const groupIds = g.items.map((it) => it.id);
+              const gState = batchAcceptGroupState(selected, groupIds);
+              const toggleGroup = () => setSelected((prev) => batchAcceptToggleGroup(prev, groupIds));
+              const groupAria = dgT(gState.all ? "batchAccept.unselectGroup" : "batchAccept.selectGroup", { label: g.label });
+              return [
+              h("div", {
+                key: "vh-" + g.label,
+                style: { ...S.meta, display: "flex", alignItems: "center", gap: 8,
+                         padding: "5px 6px 2px", fontSize: 11, fontWeight: 700,
+                         borderTop: "1px solid rgba(128,128,128,.18)" },
+              },
+                h("input", {
+                  type: "checkbox", style: cbStyle, checked: gState.all, disabled: loading,
+                  ref: (el) => { if (el) el.indeterminate = gState.some; },
+                  "aria-label": groupAria, title: groupAria,
+                  onChange: () => { if (!loading) toggleGroup(); }, onClick: (e) => e.stopPropagation(),
+                }),
+                h("span", { style: { cursor: loading ? "default" : "pointer" }, title: groupAria,
+                            onClick: () => { if (!loading) toggleGroup(); } },
+                  dgT("batchAccept.groupHeader", { label: g.label, count: g.items.length }))),
+              ...g.items.map((it) => {
+                const on = selected.includes(it.id);
+                // g-273 att-004 层级缩进契约：目标行 paddingLeft=22px，比组头（6px）大 16px，
+                // 与组头形成一眼可辨的「组头 → 组内目标」层级，不再左对齐并列；
+                // 纯样式差异，行为零变更（g273 测试含源契约断言，防重构退回并列）。
+                return h("div", {
+                  key: it.id,
+                  style: { display: "flex", alignItems: "center", gap: 8, padding: "3px 6px 3px 22px", fontSize: 12,
+                           cursor: loading ? "default" : "pointer", borderRadius: 4,
+                           background: on ? "rgba(58,166,117,.08)" : "transparent" },
+                  onClick: () => { if (!loading) toggleOne(it.id); },
+                },
+                  h("input", {
+                    type: "checkbox", style: cbStyle, checked: on, disabled: loading,
+                    "aria-label": it.id,
+                    onChange: () => toggleOne(it.id), onClick: (e) => e.stopPropagation(),
+                  }),
+                  h("span", { style: { fontFamily: "monospace", flexShrink: 0 } }, it.id),
+                  h("span", { style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+                              title: it.title }, it.title ?? it.id));
+              }),
+              ];
+            })),
+          // 部分失败清单（持久展示，不整体崩溃；其余目标已正常提交）
+          props.failures && props.failures.length
+            ? h("div", { style: { marginBottom: 8, padding: "6px 8px", borderRadius: 4, fontSize: 12,
+                                  background: "rgba(214,102,102,.12)", border: "1px solid rgba(214,102,102,.35)" } },
+                h("div", { style: { fontWeight: 600, marginBottom: 3, color: "var(--dsw-alias-state-error-primary, #f08080)" } },
+                  dgT("batchAccept.failedListTitle")),
+                props.failures.map((f) => h("div", { key: f.goal, style: { padding: "1px 0", wordBreak: "break-all" } },
+                  `• ${f.goal}: ${f.error}`)))
+            : null,
+          // 动作行：确认接受 / 取消（loading 期间双锁，防重复提交）
+          h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+            h("button", {
+              style: { ...S.btnAccept, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-accept",
+              disabled: loading || selected.length === 0,
+              onClick: confirm,
+            }, loading ? dgT("common.submitting") : dgT("batchAccept.confirmBtn", { count: selected.length })),
+            h("button", {
+              style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
+              disabled: loading,
+              onClick: closeIfIdle,
+            }, dgT("common.cancel")))));
+    }
+
     function BackwardReasonPrompt(props) {
       const { goalId, toStatus, hasChild, childId, parentId, onConfirm, onCancel } = props;
       const [reason, setReason] = React.useState("");
@@ -6931,6 +7335,7 @@ function resetSearchState(activeWs) {
         if (hasChild && session?.prompt) {
           setSending(true);
           try {
+            // i18n-keep(category-b)：发往子代理会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
             await session.prompt(
               [{ type: "text", text: `【${goalId} 回退理由】${reason.trim()}` }], "queue");
             setSent(true);
@@ -7016,6 +7421,7 @@ function resetSearchState(activeWs) {
             // 有子代理 → 排队发"重新执行"消息，不派新子代理
             setNote(dgT("inProgress.dispatchingReExec"));
             try {
+              // i18n-keep(category-b)：发往子代理会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
               const res = await oldSession.prompt(
                 [{ type: "text", text: `【重新执行】用户从看板拖放触发重新执行目标 ${goalId}。请从头开始执行目标描述和质量判据中的任务。` }],
                 "queue",
@@ -7103,6 +7509,7 @@ function resetSearchState(activeWs) {
       const { goalId, goalTitle, supervisorSession, onConfirm, onCancel } = props;
       // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
       const backdropGuard = useBackdropClose(onCancel);
+      // i18n-keep(category-b)：复制到剪贴板并粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
       const promptText = `【交付通知】目标「${goalTitle ?? goalId}」（${goalId}）即将标记为已交付。请进行最终复核：代码合并、文档更新等交付工作。`;
       const jumpToSupervisor = async () => {
         try {
@@ -7329,7 +7736,7 @@ function resetSearchState(activeWs) {
             }),
             h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 } },
               h("span", { style: { ...S.meta, fontSize: 11, color: newScope === "standing" && [...newText].length > 200 ? "#e74c3c" : undefined } },
-                [...newText].length + " / " + (newScope === "standing" ? "200" : "500") + " 字"),
+                dgT("memory.charCount", { count: [...newText].length, limit: newScope === "standing" ? 200 : 500 })),
               h("button", {
                 className: "dg-btn",
                 style: { ...S.btnPrimary, fontSize: 12 },
@@ -7446,6 +7853,10 @@ function resetSearchState(activeWs) {
       const [deliverColumnCollapsed, setDeliverColumnCollapsed] = React.useState(false);
       // g-162: 泳道折叠状态（active 版本泳道、独立目标泳道、backlog 泳道独立折叠，默认展开；只在当前页面生效）
       const [collapsedLanes, setCollapsedLanes] = React.useState({});
+      // g-258: 折叠区（已发布版本/backlog）按需拉取加载与错误状态
+      const [sectionLoading, setSectionLoading] = React.useState({});
+      const [sectionError, setSectionError] = React.useState({});
+      const sectionPromisesRef = React.useRef(new Map());
       // g-233：目标搜索与导航状态
       const [searchQuery, setSearchQuery] = React.useState("");
       const [searchActiveQuery, setSearchActiveQuery] = React.useState("");
@@ -7683,6 +8094,11 @@ function resetSearchState(activeWs) {
       const [inProgressPrompt, setInProgressPrompt] = React.useState(null); // {goalId}
       // g-77647351：交付确认弹窗状态
       const [deliverPrompt, setDeliverPrompt] = React.useState(null); // {goalId, goalTitle, toStatus}
+      // g-273：确认列「批量接受」弹窗开关与提交中状态（loading 期间按钮与全部关闭路径锁定，防重复点击）
+      const [batchAcceptOpen, setBatchAcceptOpen] = React.useState(false);
+      const [batchAcceptLoading, setBatchAcceptLoading] = React.useState(false);
+      // g-273：部分失败清单（null=无；非空 → 弹窗持久展示失败目标与原因，勾选重置为失败项便于重试）
+      const [batchAcceptFailures, setBatchAcceptFailures] = React.useState(null);
 
       // g-77647351：同列重排提交（照抄 commitSessionDrag）
       function commitSameColumnDrag(activeDrag, over) {
@@ -7961,7 +8377,7 @@ function resetSearchState(activeWs) {
         const retained = boardDataRef.current.get(dimension);
         if (retained) setState({ loading: false, data: retained, error: null });
         else setState({ loading: true, data: null, error: null });
-        const params = showArchived ? "?includeArchived=1" : "";
+        const params = "?lazy=1" + (showArchived ? "&includeArchived=1" : "");
         const headers = {};
         const prior = currentEtagRef.current.get(dimension);
         if (prior) headers["If-None-Match"] = prior;
@@ -7983,6 +8399,28 @@ function resetSearchState(activeWs) {
               throw new Error("invalid board payload");
             }
             if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
+            // g-258: 刷新后状态保持——若之前已展开并拉取过明细的目标/版本，在刷新后保持已加载明细
+            if (retained) {
+              if (retained.backlog && retained.backlog.length > 0 && !collapsedLanes['backlog']) {
+                data.backlog = retained.backlog;
+                data.backlog_count = retained.backlog.length;
+                data.backlog_loaded = true;
+              }
+              if (Array.isArray(retained.versions)) {
+                const retainedVersionMap = new Map(retained.versions.map((v) => [v.slug, v]));
+                for (const ver of data.versions) {
+                  if (ver.status === "released" && openReleased[ver.slug]) {
+                    const prevVer = retainedVersionMap.get(ver.slug);
+                    if (prevVer && prevVer.goals && prevVer.goals.length > 0) {
+                      ver.goals = prevVer.goals;
+                      ver.goals_count = prevVer.goals.length;
+                      ver.loaded = true;
+                      ver.lazy = false;
+                    }
+                  }
+                }
+              }
+            }
             const etag = r.headers.get("etag") || r.headers.get("ETag");
             if (etag) currentEtagRef.current.set(dimension, etag);
             else currentEtagRef.current.delete(dimension);
@@ -8014,6 +8452,115 @@ function resetSearchState(activeWs) {
       React.useEffect(() => {
         load();
       }, [showArchived, props?.sessionId, activeWs]); // showArchived/sessionId/activeWs 变化时重新加载
+
+      // g-258: 按需拉取指定版本的具体数据（去重防竞争）
+      const loadVersionGoals = (slug) => {
+        if (!slug || !activeWs) return;
+        const key = "v:" + slug;
+        if (sectionPromisesRef.current.has(key)) {
+          return sectionPromisesRef.current.get(key);
+        }
+        setSectionLoading((prev) => ({ ...prev, [slug]: true }));
+        setSectionError((prev) => ({ ...prev, [slug]: null }));
+        const p = (async () => {
+          try {
+            const url = graphUrlForActive("/api/dsh-graph/version-goals?slug=" + encodeURIComponent(slug) + (showArchived ? "&includeArchived=1" : ""), {}, activeWs);
+            const r = await fetch(url);
+            if (!r.ok) {
+              const err = await r.json().catch(() => ({}));
+              throw new Error(err.error || ("HTTP " + r.status));
+            }
+            const json = await r.json();
+            if (!json || !Array.isArray(json.goals)) throw new Error("invalid version goals response");
+            setState((prev) => {
+              if (!prev?.data?.versions) return prev;
+              const nextVersions = prev.data.versions.map((v) => {
+                if (v.slug === slug) {
+                  return {
+                    ...v,
+                    goals: json.goals,
+                    goals_count: json.goals.length,
+                    loaded: true,
+                    lazy: false,
+                  };
+                }
+                return v;
+              });
+              const nextData = { ...prev.data, versions: nextVersions };
+              const dimension = String(props?.sessionId ?? "") + "::" + String(activeWs ?? "") + "::" + (showArchived ? "1" : "0");
+              boardDataRef.current.set(dimension, nextData);
+              return { ...prev, data: nextData };
+            });
+            setSectionLoading((prev) => ({ ...prev, [slug]: false }));
+            setSectionError((prev) => ({ ...prev, [slug]: null }));
+          } catch (e) {
+            setSectionLoading((prev) => ({ ...prev, [slug]: false }));
+            setSectionError((prev) => ({ ...prev, [slug]: String(e?.message || e) }));
+          } finally {
+            sectionPromisesRef.current.delete(key);
+          }
+        })();
+        sectionPromisesRef.current.set(key, p);
+        return p;
+      };
+
+      // g-258: 按需拉取 backlog 的具体数据（去重防竞争）
+      const loadBacklogGoals = () => {
+        if (!activeWs) return;
+        const key = "backlog";
+        if (sectionPromisesRef.current.has(key)) {
+          return sectionPromisesRef.current.get(key);
+        }
+        setSectionLoading((prev) => ({ ...prev, backlog: true }));
+        setSectionError((prev) => ({ ...prev, backlog: null }));
+        const p = (async () => {
+          try {
+            const url = graphUrlForActive("/api/dsh-graph/backlog-goals" + (showArchived ? "?includeArchived=1" : ""), {}, activeWs);
+            const r = await fetch(url);
+            if (!r.ok) {
+              const err = await r.json().catch(() => ({}));
+              throw new Error(err.error || ("HTTP " + r.status));
+            }
+            const json = await r.json();
+            if (!json || !Array.isArray(json.goals)) throw new Error("invalid backlog goals response");
+            setState((prev) => {
+              if (!prev?.data) return prev;
+              const nextData = {
+                ...prev.data,
+                backlog: json.goals,
+                backlog_count: json.goals.length,
+                backlog_loaded: true,
+              };
+              const dimension = String(props?.sessionId ?? "") + "::" + String(activeWs ?? "") + "::" + (showArchived ? "1" : "0");
+              boardDataRef.current.set(dimension, nextData);
+              return { ...prev, data: nextData };
+            });
+            setSectionLoading((prev) => ({ ...prev, backlog: false }));
+            setSectionError((prev) => ({ ...prev, backlog: null }));
+          } catch (e) {
+            setSectionLoading((prev) => ({ ...prev, backlog: false }));
+            setSectionError((prev) => ({ ...prev, backlog: String(e?.message || e) }));
+          } finally {
+            sectionPromisesRef.current.delete(key);
+          }
+        })();
+        sectionPromisesRef.current.set(key, p);
+        return p;
+      };
+
+      // g-258: 首屏完全渲染后，空闲时静默预加载折叠区数据（不抢占首屏，去重防竞态）
+      React.useEffect(() => {
+        if (!state.data || state.loading) return;
+        const timer = setTimeout(() => {
+          const unrenderedReleased = (state.data.versions || []).filter((v) => v.status === "released" && v.lazy && !v.loaded && v.goals_count > 0);
+          if (unrenderedReleased.length > 0) {
+            loadVersionGoals(unrenderedReleased[0].slug);
+          } else if (state.data.lazy && !state.data.backlog_loaded && state.data.backlog_count > 0) {
+            loadBacklogGoals();
+          }
+        }, 1500);
+        return () => clearTimeout(timer);
+      }, [state.data, state.loading]);
 
       // g-181：5 个父级 overlay 的 backdrop 误关保护——内容起点后释放到 backdrop 的合成 click 吞掉。
       // 必须在任何 early return 之前调用（Rules of Hooks），各 overlay 独立 ref，关闭回调保持原样。
@@ -8049,17 +8596,69 @@ function resetSearchState(activeWs) {
         ...b.backlog,
       ];
 
+      // ===== g-273：确认列「批量接受」 =====
+      // 当前视图内 status=review 的目标（候选集）。allGoals 已按当前视图过滤：
+      // 隐藏版本被 active/released 过滤排除；懒加载未展开的 released 泳道 goals 为空天然排除；
+      // 已归档目标（showArchived 时混入）不参与批量接受。
+      const reviewGoals = allGoals.filter((g) => g.status === "review" && !g.archived);
+      // 目标 id → 所属版本显示名（泳道名；独立目标/backlog 用泳道标签，与看板渲染一致）
+      const goalVersionLabel = {};
+      for (const v of [...active, ...released]) for (const g of (v.goals ?? [])) goalVersionLabel[g.id] = v.name;
+      for (const g of b.standalone) goalVersionLabel[g.id] = dgT("lane.standalone");
+      for (const g of b.backlog) goalVersionLabel[g.id] = "backlog";
+      // 批量提交：逐个走非 force accept（语义与逐卡「接受」逐字一致，详见 batch-accept.js），
+      // 限流并发 + 部分失败容错 + 整批一条聚合主管通知 + 完成刷板（被接受目标离开确认列）。
+      async function submitBatchAccept(goalIds) {
+        if (batchAcceptLoading || !Array.isArray(goalIds) || goalIds.length === 0) return;
+        setBatchAcceptLoading(true);
+        try {
+          const { ok, failed } = await runBatchAccept(goalIds, { urlOf: (p) => graphUrlForActive(p) });
+          // 聚合主管通知：仅在有成功项时整批发一条；无 supervisorSession 静默跳过，不影响接受流程
+          if (ok.length) {
+            await notifySupervisorBatchAccept(b.supervisorSession ?? null, ok.map((x) => x.goal));
+          }
+          if (failed.length === 0) {
+            setBatchAcceptFailures(null);
+            setBatchAcceptOpen(false);
+            showToast(dgT("batchAccept.allOk", { count: ok.length }));
+          } else {
+            // 部分失败：不整体崩溃——弹窗保持打开并持久列出失败目标与原因，勾选重置为失败项
+            setBatchAcceptFailures(failed);
+            showToast(dgT("batchAccept.partialResult", { ok: ok.length, fail: failed.length }));
+          }
+          load(); // 刷新看板：被接受目标（已写 review.requested）按当前视图重算
+        } catch (e) {
+          showToast(dgT("batchAccept.requestFail") + String(e?.message ?? e));
+        } finally {
+          setBatchAcceptLoading(false);
+        }
+      }
+
       // ===== g-233: 目标搜索与导航核心函数（g-255: 使用 search-state.js 纯函数） =====
       // g-233 P4: 用户显式操作泳道折叠状态，从临时恢复列表中移除（用户意图优先）
       const toggleLaneCollapse = (key, collapse) => {
         tempExpandedRef.current.expandedLanes = toggleLaneCollapseInState(tempExpandedRef.current.expandedLanes, key);
         setCollapsedLanes((prev) => ({ ...prev, [key]: collapse }));
+        // g-258: 展开 backlog 时按需拉取具体数据
+        if (key === "backlog" && !collapse) {
+          const bd = state?.data;
+          if (bd && bd.lazy && !bd.backlog_loaded && (!bd.backlog || bd.backlog.length === 0) && bd.backlog_count !== 0) {
+            loadBacklogGoals();
+          }
+        }
       };
 
       // g-233 P4: 用户显式操作已发布版本展开/折叠，从临时恢复列表中移除
       const toggleReleasedOpen = (slug, openState) => {
         tempExpandedRef.current.openReleasedSlugs = toggleReleasedOpenInState(tempExpandedRef.current.openReleasedSlugs, slug);
         setOpenReleased((prev) => ({ ...prev, [slug]: openState }));
+        // g-258: 展开已发布版本时按需拉取具体数据
+        if (openState) {
+          const ver = state?.data?.versions?.find((v) => v.slug === slug);
+          if (ver && ver.lazy && !ver.loaded && (!ver.goals || ver.goals.length === 0) && ver.goals_count !== 0) {
+            loadVersionGoals(slug);
+          }
+        }
       };
 
       const exitSearch = () => {
@@ -8122,6 +8721,10 @@ function resetSearchState(activeWs) {
             }
             return prev;
           });
+          const ver = state?.data?.versions?.find((v) => v.slug === track.expandReleasedSlug);
+          if (ver && ver.lazy && !ver.loaded && (!ver.goals || ver.goals.length === 0) && ver.goals_count !== 0) {
+            loadVersionGoals(track.expandReleasedSlug);
+          }
         } else if (track.expandLane) {
           setCollapsedLanes((prev) => {
             if (prev[track.expandLane]) {
@@ -8129,6 +8732,12 @@ function resetSearchState(activeWs) {
             }
             return prev;
           });
+          if (track.expandLane === "backlog") {
+            const bd = state?.data;
+            if (bd && bd.lazy && !bd.backlog_loaded && (!bd.backlog || bd.backlog.length === 0) && bd.backlog_count !== 0) {
+              loadBacklogGoals();
+            }
+          }
         }
 
         // 3. 若在折叠的交付/阻塞列，自动展开
@@ -8259,7 +8868,7 @@ function resetSearchState(activeWs) {
         const entryVersion = version ?? null;
         // 关闭后重开仍保留未提交草稿；只有成功创建后才开始新一轮初始化。
         if (!createGoalInitialized) {
-          const latestActive = [...b.versions].filter((v) => v.status === "active").at(-1)?.slug ?? "";
+          const latestActive = b.versions.find((v) => v.status === "active")?.slug ?? "";
           setCreateGoalEntryVersion(entryVersion);
           setNewGoalVersion(entryVersion ?? latestActive);
           setCreateGoalInitialized(true);
@@ -8565,9 +9174,11 @@ function resetSearchState(activeWs) {
 
       // g-137：backlog 行平铺展示函数；g-162: 支持独立折叠
       const backlogRow = (label, goals, key) => {
-        // g-162: backlog 泳道折叠状态
-        const isCollapsed = !!collapsedLanes[key];
+        // g-162: backlog 泳道折叠状态（g-258: 默认折叠，显式展开为 false）
+        const isCollapsed = collapsedLanes[key] !== false;
         const backlogBg = "rgba(0,0,0,.12)";
+        // g-258: 优先使用实际已加载条数，未展开懒加载时回退 backlog_count 计数
+        const count = (goals && goals.length > 0) ? goals.length : (b?.backlog_count ?? 0);
         // g-162: 折叠态——显示摘要行
         if (isCollapsed) {
           return [
@@ -8580,7 +9191,7 @@ function resetSearchState(activeWs) {
                 toggleLaneCollapse(key, false);
               },
             },
-              h("span", null, "▸ ", label, ` · ${goals.length} ` + dgT('lane.goalCount', { count: goals.length }).replace(String(goals.length), '').trim()),
+              h("span", null, "▸ ", label, ` · ${count} ` + dgT('lane.goalCount', { count }).replace(String(count), '').trim()),
               h("button", {
                 style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
                 className: "dg-btn",
@@ -8595,7 +9206,7 @@ function resetSearchState(activeWs) {
               style: { gridColumn: "2 / -1", ...S.cell, background: backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: dgT('lane.expandTooltip'),
               onClick: () => toggleLaneCollapse(key, false),
-            }, dgT('lane.collapsedSummary', { count: goals.length })),
+            }, dgT('lane.collapsedSummary', { count })),
           ];
         }
         // 展开态：正常渲染
@@ -8698,7 +9309,27 @@ function resetSearchState(activeWs) {
             }),
           ),
         );
-        return [labelEl, flatCell];
+        let contentEl = flatCell;
+        if (sectionLoading['backlog']) {
+          contentEl = h("div", {
+            key: key + "-loading",
+            style: { gridColumn: "2 / -1", minHeight: 40, padding: "12px 16px", color: "var(--dsw-alias-label-secondary, #999)", fontSize: 13, borderTop: "1px solid rgba(128,128,128,.35)" }
+          }, dgT('kanban.loading'));
+        } else if (sectionError['backlog']) {
+          contentEl = h("div", {
+            key: key + "-error",
+            style: { gridColumn: "2 / -1", minHeight: 40, padding: "12px 16px", color: "var(--dsw-alias-danger, #dd6666)", fontSize: 13, borderTop: "1px solid rgba(128,128,128,.35)" }
+          },
+            dgT('kanban.error.fetch') + " ",
+            h("button", {
+              className: "dg-btn",
+              style: { ...S.btn, padding: "2px 8px", fontSize: 12, marginLeft: 8 },
+              onClick: () => loadBacklogGoals()
+              // i18n-keep(category-a)：「重试」仅为 dgT 异常返回空时的兜底字面量，正常路径走 i18n 词条。
+            }, dgT('common.retry') || "重试")
+          );
+        }
+        return [labelEl, contentEl];
       };
 
       // g-164：动态列模板——按当前交付/阻塞折叠状态计算列宽，供顶部表头网格与 released 泳道网格共用。
@@ -8758,12 +9389,38 @@ function resetSearchState(activeWs) {
             }, dgT("versionDrawer.showAll"))),
         );
       }
-      rows.push(...lane(dgT("lane.newStandaloneGoal").replace("Create ", "").replace("新建", "").replace(" goal", "").replace("目标", ""), b.standalone, "standalone", null, laneIndex));
+      rows.push(...lane(dgT("lane.standalone"), b.standalone, "standalone", null, laneIndex));
       laneIndex++;
       rows.push(...backlogRow("backlog", b.backlog, "backlog"));
 
       const releasedRows = released.map((v, idx) => {
         const open = !!openReleased[v.slug];
+        const count = (v.goals && v.goals.length > 0) ? v.goals.length : (v.goals_count ?? 0);
+        let openContent = null;
+        if (open) {
+          if (sectionLoading[v.slug]) {
+            openContent = h("div", {
+              key: "relx-" + v.slug,
+              style: { padding: "12px 16px", color: "var(--dsw-alias-label-secondary, #999)", fontSize: 13, background: "rgba(0,0,0,.08)" }
+            }, dgT("kanban.loading"));
+          } else if (sectionError[v.slug]) {
+            openContent = h("div", {
+              key: "relx-" + v.slug,
+              style: { padding: "12px 16px", color: "var(--dsw-alias-danger, #dd6666)", fontSize: 13, background: "rgba(0,0,0,.08)" }
+            },
+              dgT("kanban.error.fetch") + " ",
+              h("button", {
+                className: "dg-btn",
+                style: { ...S.btn, padding: "2px 8px", fontSize: 12, marginLeft: 8 },
+                onClick: () => loadVersionGoals(v.slug)
+                // i18n-keep(category-a)：「重试」仅为 dgT 异常返回空时的兜底字面量，正常路径走 i18n 词条。
+              }, dgT("common.retry") || "重试")
+            );
+          } else {
+            openContent = h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: releasedGridCols } },
+              ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx, false));
+          }
+        }
         return [
           h("div", {
             key: "rel-" + v.slug, style: { ...S.collapsed, cursor: "pointer" }, className: "dg-collapsed",
@@ -8779,15 +9436,14 @@ function resetSearchState(activeWs) {
               style: { cursor: "pointer", textDecoration: "underline dotted" },
               onClick: (e) => {
                 e.stopPropagation();
-                setVersionDetailTarget({ slug: v.slug, name: v.name, status: v.status, goals_count: v.goals.length });
+                setVersionDetailTarget({ slug: v.slug, name: v.name, status: v.status, goals_count: count });
                 loadVersionDetail(v.slug);
               },
               title: dgT("versionDrawer.detailTooltip"),
             }, `${v.name}`),
-            ` ✅ ${v.goals.length} goals · released · ${v.slug}`
+            ` ✅ ${count} goals · released · ${v.slug}`
           ),
-          open ? h("div", { key: "relx-" + v.slug, style: { ...S.grid, gridTemplateColumns: releasedGridCols } },
-            ...lane(v.name, v.goals, "rellane-" + v.slug, null, laneIndex + idx, false)) : null,
+          openContent,
         ];
       });
 
@@ -8813,7 +9469,7 @@ function resetSearchState(activeWs) {
             setNewGoalTitle("");
             setNewGoalDesc("");
             setNewGoalType("task"); // g-158 重置为新目标默认类型
-            const latestActive = [...b.versions].filter((v) => v.status === "active").at(-1)?.slug ?? "";
+            const latestActive = b.versions.find((v) => v.status === "active")?.slug ?? "";
             setNewGoalVersion(createGoalEntryVersion ?? latestActive);
             setCreateGoalInitialized(false);
             load(); // 刷新看板
@@ -9237,6 +9893,32 @@ function resetSearchState(activeWs) {
                 ? "▸"
                 : s.label + " ▾");
             }
+            // g-273：确认列列头「批量接受」入口——0 个待确认 → disabled + 悬停说明；
+            // ≥1 → 可用并显示数量。flex 行内布局：whiteSpace nowrap（继承 stageHead）+
+            // overflow hidden + 按钮 flexShrink 0，150px 最小列宽与相邻列折叠/展开时不换行不重叠。
+            if (s.key === "confirm") {
+              const ba = batchAcceptButtonState(reviewGoals.length);
+              return h("div", {
+                key: s.key,
+                style: { ...S.stageHead, display: "flex", alignItems: "center", justifyContent: "center",
+                         gap: 6, overflow: "hidden" },
+              },
+                h("span", { style: { flexShrink: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" } }, s.label),
+                h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "1px 8px", lineHeight: 1.4,
+                           whiteSpace: "nowrap", flexShrink: 0, opacity: ba.disabled ? 0.5 : 1 },
+                  className: "dg-btn dg-batch-accept-btn",
+                  disabled: ba.disabled || batchAcceptLoading,
+                  title: ba.title,
+                  "aria-label": ba.label,
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    if (ba.disabled || batchAcceptLoading) return;
+                    setBatchAcceptFailures(null);
+                    setBatchAcceptOpen(true);
+                  },
+                }, batchAcceptLoading ? dgT("common.submitting") : ba.label));
+            }
             return h("div", { key: s.key, style: S.stageHead }, s.label);
           }),
           ...rows),
@@ -9463,6 +10145,22 @@ function resetSearchState(activeWs) {
                 commitCrossColumnDrag(deliverPrompt.goalId, deliverPrompt.toStatus);
               },
               onCancel: () => setDeliverPrompt(null),
+            })
+          : null,
+        // g-273：确认列「批量接受」二次确认弹窗（Human Gate）——
+        // 取消/✕/Esc/遮罩关闭零网络请求零状态变化；确认后逐个非 force accept + 整批一条聚合主管通知
+        batchAcceptOpen
+          ? h(BatchAcceptModal, {
+              key: "batch-accept-modal",
+              items: reviewGoals.map((g) => ({
+                id: g.id,
+                title: g.title ?? g.id,
+                versionLabel: goalVersionLabel[g.id] ?? "",
+              })),
+              loading: batchAcceptLoading,
+              failures: batchAcceptFailures,
+              onConfirm: (ids) => { void submitBatchAccept(ids); },
+              onCancel: () => { if (!batchAcceptLoading) { setBatchAcceptOpen(false); setBatchAcceptFailures(null); } },
             })
           : null,
         // g-134/g-135: 版本详情弹窗（含摘要/范围/working/released 操作）
@@ -9930,7 +10628,7 @@ function resetSearchState(activeWs) {
             body: JSON.stringify({ goal: gid, card: cardId }),
           });
           const d = await r.json();
-          if (d.ok) { setNote(dgT("shared.unreferenced", { goalId: gid }) + gid + " 引用"); refresh(); onRefresh?.(); }
+          if (d.ok) { setNote(dgT("shared.unreferenced", { goalId: gid })); refresh(); onRefresh?.(); }
           else setNote(dgT("shared.unrefFail") + (d.error || dgT("drag.unknownError")));
         } catch (e) { setNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
       };
@@ -9954,7 +10652,7 @@ function resetSearchState(activeWs) {
         return h("div", { key: c.id, style: { ...S.subCard, marginBottom: 6 } },
           h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
             h("span", { style: { flex: 1 } }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
-            h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} 个 goal 引用`)),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} ${dgT("shared.goalRef")}`)),
           h("div", { style: { ...S.meta, fontSize: 11 } },
             `id=${c.id}${c.summary ? " ｜ " + c.summary : ""}`),
           // 正文引用附件（安全下载链接，不内联渲染）——逐项渲染为节点（勿拼接 React 元素为字符串）
@@ -9983,7 +10681,7 @@ function resetSearchState(activeWs) {
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                     className: "dg-btn",
                     disabled: installing,
-                    title: installing ? dgT("drawer.unrefCollecting") : `移除 ${label} 对这张共享卡的引用（保留共享卡本身）`,
+                    title: installing ? dgT("drawer.unrefCollecting") : dgT("shared.unrefGoalTooltip", { label }),
                     onClick: () => unreference(c.id, ref.id),
                   }, "➖ " + label);
                 })),
@@ -10174,10 +10872,6 @@ function resetSearchState(activeWs) {
       const save = async () => {
         if (!form) return;
         setSaving(true); setNote(null); setError(null);
-        // g-214: 保存并持久化刷新间隔到 localStorage（非法值或 <5s 自动纠偏为 5s）
-        const correctedInterval = setRefreshInterval(refreshIntervalInput);
-        setRefreshIntervalInput(String(correctedInterval));
-        setIntervalWarn(null);
         const lanesRaw = form.defaults?.pk?.lanes;
         const lanes = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
         if (!Number.isInteger(lanes) || lanes < 1) {
@@ -10209,6 +10903,11 @@ function resetSearchState(activeWs) {
           });
           const data = await r.json();
           if (!r.ok) throw new Error(data?.error || (dgT("settings.saveFail") + " " + r.status));
+          // g-259：刷新间隔后置生效——仅在 POST 成功 (r.ok) 后持久化到 localStorage 并广播事件
+          // （非法值或 <5s 自动纠偏为 5s，前置校验失败或 POST 异常时绝不改写本地配置与广播）
+          const correctedInterval = setRefreshInterval(refreshIntervalInput);
+          setRefreshIntervalInput(String(correctedInterval));
+          setIntervalWarn(null);
           setForm(data.config ?? form); // 用服务端回填的最新配置刷新
           // g-246：保存成功即归位基线（刷新间隔取纠偏后值），随后直接关闭跳过拦截
           baselineRef.current = normalizeSettingsDraft(data.config ?? form, String(correctedInterval));
@@ -10434,7 +11133,7 @@ function resetSearchState(activeWs) {
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
             h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reasoningEffort")),
             h("select", {
-              "aria-label": "workspace 子代理默认推理档位",
+              "aria-label": dgT("settings.reasoningEffortAria"),
               style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
               value: curEffort,
               onChange: (e) => set(["executor", "reasoning_effort"], e.target.value),
@@ -10442,9 +11141,9 @@ function resetSearchState(activeWs) {
             h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } },
               catReady
                 ? (effortChoices.length > 0
-                  ? "选项随所选 provider/model 的 reasoning effort 能力更新；留空继承所选模型或父会话默认值。"
-                  : "所选 provider/model 未声明 reasoning effort；已存旧值保留可选，可留空继承默认值。")
-                : "正在读取 Host 模型目录；已存推理档位保留可选，留空继承默认值。")),
+                  ? dgT("settings.effortHint")
+                  : dgT("settings.effortHintNone"))
+                : dgT("profileSettings.effortHintWaiting"))),
           // g-191：执行模式受控下拉
           h("div", { style: { minWidth: 0, marginBottom: 6 } },
             h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
@@ -10482,7 +11181,8 @@ function resetSearchState(activeWs) {
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
           h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.supervisorAutomation")),
           h("div", { style: { display: showAdvanced ? "grid" : "none", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 } },
-            Object.keys({ scope_planning: "范围规划", integration_decision: "集成决策", rework: "返工决策", memory_promotion: "记忆提炼", skill_proposal: "技能提案", release: "发布" }).map((k) =>
+            // g-272 att-002：原 Object.keys({...中文标签}) 的中文值从未被渲染（label 直接用 key），改为纯 key 数组消除死代码中文残留。
+            ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"].map((k) =>
               h("div", { key: k },
                 h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, k),
                 h("select", { style: { ...S.promptInput, width: "100%" }, value: auto[k] ?? "", onChange: (e) => set(["supervisor", "automation", k], e.target.value === "" ? null : e.target.value) },
@@ -10541,7 +11241,7 @@ function resetSearchState(activeWs) {
         async load() {
           const res = await describeFn();
           const view = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
-          if (!view) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "读取 profile 设置失败");
+          if (!view) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? dgT("settings.readProfileFail"));
           const row = view.namespaces?.find((candidate) => candidate.ns === GRAPH_SETTINGS_NS);
           if (!row) {
             snapshot = { ...snapshot, status: "unavailable", writable: view.writable !== false };
@@ -10553,7 +11253,7 @@ function resetSearchState(activeWs) {
         async set(field, value) {
           const res = await mutateFn(GRAPH_SETTINGS_NS, [{ op: "set", path: [field], value }], snapshot.revision);
           const row = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
-          if (!row) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "保存 profile 设置失败");
+          if (!row) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? dgT("settings.saveProfileFail"));
           snapshot = { ...snapshot, status: "ready", value: row.value ?? snapshot.value, revision: row.revision };
           notify();
         },

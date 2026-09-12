@@ -57,7 +57,7 @@
             body: JSON.stringify({ goal: gid, card: cardId }),
           });
           const d = await r.json();
-          if (d.ok) { setNote(dgT("shared.unreferenced", { goalId: gid }) + gid + " 引用"); refresh(); onRefresh?.(); }
+          if (d.ok) { setNote(dgT("shared.unreferenced", { goalId: gid })); refresh(); onRefresh?.(); }
           else setNote(dgT("shared.unrefFail") + (d.error || dgT("drag.unknownError")));
         } catch (e) { setNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
       };
@@ -81,7 +81,7 @@
         return h("div", { key: c.id, style: { ...S.subCard, marginBottom: 6 } },
           h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
             h("span", { style: { flex: 1 } }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
-            h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} 个 goal 引用`)),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} ${dgT("shared.goalRef")}`)),
           h("div", { style: { ...S.meta, fontSize: 11 } },
             `id=${c.id}${c.summary ? " ｜ " + c.summary : ""}`),
           // 正文引用附件（安全下载链接，不内联渲染）——逐项渲染为节点（勿拼接 React 元素为字符串）
@@ -110,7 +110,7 @@
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
                     className: "dg-btn",
                     disabled: installing,
-                    title: installing ? dgT("drawer.unrefCollecting") : `移除 ${label} 对这张共享卡的引用（保留共享卡本身）`,
+                    title: installing ? dgT("drawer.unrefCollecting") : dgT("shared.unrefGoalTooltip", { label }),
                     onClick: () => unreference(c.id, ref.id),
                   }, "➖ " + label);
                 })),
