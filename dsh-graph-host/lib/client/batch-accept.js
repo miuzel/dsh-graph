@@ -57,6 +57,7 @@
 
     // 聚合主管通知文案：整批一条（含目标清单与总数），与单卡【负责人交付复核请求】同系列话术。
     function batchAcceptSupervisorMessage(goalIds) {
+      // i18n-keep(category-b)：发往主管会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
       return `【负责人批量交付复核请求】负责人已对目标 ${goalIds.join(", ")}（共 ${goalIds.length} 个）确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。`;
     }
 
