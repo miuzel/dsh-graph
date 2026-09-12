@@ -6,6 +6,7 @@ import vm from "node:vm";
 import {
   batchAcceptButtonState,
   batchAcceptToggleId,
+  batchAcceptGroupByVersion,
   runBatchAccept,
   batchAcceptSupervisorMessage,
   notifySupervisorBatchAccept,
@@ -46,6 +47,11 @@ test("g-273: i18n batchAccept.* keys exist, zh/en symmetric, en has no CJK", () 
   assert.match(en["batchAccept.buttonWithCount"], /\{count\}/);
   assert.match(zh["batchAccept.selectedCount"], /\{selected\}/);
   assert.match(zh["batchAccept.selectedCount"], /\{total\}/);
+  // att-002：组头模板（版本标签 + 该组目标数）参数占位 zh/en 一致
+  assert.match(zh["batchAccept.groupHeader"], /\{label\}/);
+  assert.match(zh["batchAccept.groupHeader"], /\{count\}/);
+  assert.match(en["batchAccept.groupHeader"], /\{label\}/);
+  assert.match(en["batchAccept.groupHeader"], /\{count\}/);
   assert.equal(zh["batchAccept.button"], "批量接受");
   assert.equal(en["batchAccept.button"], "Batch Accept");
 });
@@ -74,6 +80,7 @@ test("g-273: source contracts — non-force accept body, single aggregated notif
   assert.ok(batchIdx > 0 && dragIdx > 0 && batchIdx < dragIdx, "batch-accept must be registered before drag-prompts");
   // 生成物纪律：bundle 已包含新模块且 ESM export 块被剥离
   assert.match(bundleSource, /function BatchAcceptModal\(props\)/);
+  assert.match(bundleSource, /function batchAcceptGroupByVersion\(items, standaloneLabel\)/);
   assert.match(bundleSource, /function runBatchAccept\(goalIds, opts = \{\}\)/);
   assert.ok(bundleSource.includes("【负责人批量交付复核请求】"));
   assert.doesNotMatch(bundleSource, /export \{ batchAcceptButtonState/);
@@ -115,6 +122,45 @@ test("g-273: batchAcceptToggleId — add/remove", () => {
   assert.deepEqual(batchAcceptToggleId(["a", "b"], "c"), ["a", "b", "c"]);
   assert.deepEqual(batchAcceptToggleId(["a", "b"], "a"), ["b"]);
   assert.deepEqual(batchAcceptToggleId([], "x"), ["x"]);
+});
+
+// ===== 4b. att-002：版本分组纯函数 =====
+test("g-273 att-002: batchAcceptGroupByVersion — multi-version grouping, first-seen order, counts", () => {
+  const items = [
+    { id: "g-1", title: "A", versionLabel: "v0.10.0" },
+    { id: "g-2", title: "B", versionLabel: "v0.9.0" },
+    { id: "g-3", title: "C", versionLabel: "v0.10.0" },
+    { id: "g-4", title: "D", versionLabel: "" },
+    { id: "g-5", title: "E" }, // 无 versionLabel 字段
+    { id: "g-6", title: "F", versionLabel: "  " }, // 纯空白 → 同样归兜底组
+  ];
+  const groups = batchAcceptGroupByVersion(items, "独立目标");
+  // 组顺序 = items 首现顺序（看板泳道顺序），组内保持 items 原序
+  assert.deepEqual(groups.map((g: any) => g.label), ["v0.10.0", "v0.9.0", "独立目标"]);
+  assert.deepEqual(groups[0].items.map((it: any) => it.id), ["g-1", "g-3"]);
+  assert.deepEqual(groups[1].items.map((it: any) => it.id), ["g-2"]);
+  // 空串 / 缺失 / 纯空白 versionLabel 一律归入独立目标兜底组
+  assert.deepEqual(groups[2].items.map((it: any) => it.id), ["g-4", "g-5", "g-6"]);
+});
+
+test("g-273 att-002: batchAcceptGroupByVersion — only non-empty groups, robust to bad input", () => {
+  // 只含单版本：只产出一个组，绝不产出空组占位
+  const one = batchAcceptGroupByVersion(
+    [{ id: "g-1", versionLabel: "v1" }, { id: "g-2", versionLabel: "v1" }],
+    "独立目标",
+  );
+  assert.equal(one.length, 1);
+  assert.equal(one[0].label, "v1");
+  assert.equal(one[0].items.length, 2);
+  // 空 items → 零组（弹窗零目标时不渲染任何组头）
+  assert.deepEqual(batchAcceptGroupByVersion([], "独立目标"), []);
+  // 非数组 / 含 null 元素 → 安全回退，不抛错
+  assert.deepEqual(batchAcceptGroupByVersion(null as any, "独立目标"), []);
+  assert.deepEqual(batchAcceptGroupByVersion(undefined as any, "独立目标"), []);
+  const withNull = batchAcceptGroupByVersion([null, { id: "g-1" }] as any, "独立目标");
+  assert.equal(withNull.length, 1);
+  assert.equal(withNull[0].label, "独立目标");
+  assert.deepEqual(withNull[0].items.map((it: any) => it.id), ["g-1"]);
 });
 
 // ===== 5. runBatchAccept：非 force 请求体、部分失败继续、并发受限 =====
@@ -303,25 +349,97 @@ const ITEMS = [
   { id: "g-003", title: "Gamma goal", versionLabel: "独立目标" },
 ];
 
-test("g-273: modal lists id/title/version, default all checked, confirm submits selection", () => {
+test("g-273: modal lists id/title grouped by version, default all checked, confirm submits selection", () => {
   const { render } = makeModalSandbox("zh");
   const confirmed: string[][] = [];
   const vnode = render({ items: ITEMS, loading: false, failures: null, onConfirm: (ids: string[]) => confirmed.push(Array.from(ids)), onCancel: () => {} });
-  // 清单包含 id / 标题 / 所属版本
+  // 清单包含 id / 标题；版本以组头形式出现（标签 + 该组目标数），组内行不重复版本列
   const texts = allText(vnode);
   for (const it of ITEMS) {
     assert.ok(texts.includes(it.id), `modal must list ${it.id}`);
     assert.ok(texts.includes(it.title), `modal must list title ${it.title}`);
-    assert.ok(texts.includes(it.versionLabel), `modal must list version ${it.versionLabel}`);
   }
+  assert.ok(texts.includes("v0.10.0 · 2"), "group header must show version label + group count");
+  assert.ok(texts.includes("独立目标 · 1"), "standalone group header must show label + count");
+  // 版本标签只在组头出现一次（行内不再有版本列）
+  assert.equal(texts.filter((t) => t.includes("v0.10.0")).length, 1, "version label must appear exactly once (group header only)");
+  assert.equal(texts.filter((t) => t.includes("独立目标")).length, 1, "standalone label must appear exactly once");
   assert.ok(texts.includes("批量接受 — 交付复核请求"));
   assert.ok(texts.includes("已选 3/3"), "default all checked");
-  // 确认按钮（dg-btn-accept）默认可用，点击提交全部 id
+  // 确认按钮（dg-btn-accept）默认可用，点击提交全部 id（跨组全局）
   const confirmBtn = findAll(vnode, (n) => n.type === "button" && String(n.props.className ?? "").includes("dg-btn-accept"))[0];
   assert.ok(confirmBtn, "confirm button must exist");
   assert.equal(confirmBtn.props.disabled, false);
   confirmBtn.props.onClick();
   assert.deepEqual(confirmed, [["g-001", "g-002", "g-003"]]);
+});
+
+test("g-273 att-002: modal group headers follow items first-seen order; absent versions render zero group nodes", () => {
+  const { render } = makeModalSandbox("zh");
+  const items = [
+    { id: "g-a", title: "A", versionLabel: "v0.10.0" },
+    { id: "g-b", title: "B", versionLabel: "v0.9.0" },
+    { id: "g-c", title: "C", versionLabel: "v0.10.0" },
+    { id: "g-d", title: "D" }, // 无版本 → 独立目标兜底组
+  ];
+  const vnode = render({ items, loading: false, failures: null, onConfirm: () => {}, onCancel: () => {} });
+  const texts = allText(vnode);
+  // 组头计数正确（多版本分组 + 兜底组）
+  assert.ok(texts.includes("v0.10.0 · 2"));
+  assert.ok(texts.includes("v0.9.0 · 1"));
+  assert.ok(texts.includes("独立目标 · 1"));
+  // 组顺序 = items 首现顺序（看板泳道顺序）
+  const headerOrder = texts.filter((t) => / · \d+$/.test(t));
+  assert.deepEqual(headerOrder, ["v0.10.0 · 2", "v0.9.0 · 1", "独立目标 · 1"]);
+  // 空版本组零渲染：items 中没有的版本绝不出现组头（无空组占位、无「0 个」组）
+  assert.ok(!texts.some((t) => t.includes("v0.8.0")), "absent version must not render a group header");
+  assert.ok(!texts.some((t) => /· 0$/.test(t)), "no zero-count group may be rendered");
+  // 组内行保持 items 原序：g-a 在 g-c 之前，且同组行连续（g-b 组头在 g-c 行之后出现）
+  const flat: string[] = [];
+  walk(vnode, () => {});
+  (function collect(n: any) {
+    if (typeof n === "string") { flat.push(n); return; }
+    if (!n || typeof n !== "object") return;
+    if (Array.isArray(n)) { n.forEach(collect); return; }
+    if (Array.isArray(n.children)) n.children.forEach(collect);
+  })(vnode);
+  const idxOf = (s: string) => flat.findIndex((t) => t === s);
+  assert.ok(idxOf("v0.10.0 · 2") < idxOf("g-a") && idxOf("g-a") < idxOf("g-c"), "group header precedes its rows, in-group order preserved");
+  assert.ok(idxOf("g-c") < idxOf("v0.9.0 · 1"), "v0.9.0 group header comes after v0.10.0 rows (first-seen order)");
+  assert.ok(idxOf("v0.9.0 · 1") < idxOf("g-b") && idxOf("g-b") < idxOf("独立目标 · 1"), "standalone group comes last (first-seen order)");
+  assert.ok(idxOf("独立目标 · 1") < idxOf("g-d"), "standalone header precedes its row");
+});
+
+test("g-273 att-002: modal cross-group select-all and per-item toggle stay global", () => {
+  const { render } = makeModalSandbox("zh");
+  const confirmed: string[][] = [];
+  const props = { items: ITEMS, loading: false, failures: null, onConfirm: (ids: string[]) => confirmed.push(Array.from(ids)), onCancel: () => {} };
+  let vnode = render(props);
+  // 跨组单项勾选：取消 v0.10.0 组的 g-002 → 已选 2/3（跨组计数）
+  const item2 = findAll(vnode, (n) => n.type === "input" && n.props["aria-label"] === "g-002")[0];
+  item2.props.onChange();
+  vnode = render(props);
+  assert.ok(allText(vnode).includes("已选 2/3"), "selected count is global across groups");
+  // 提交跨组剩余项：g-001（v0.10.0 组）+ g-003（独立目标组）
+  let confirmBtn = findAll(vnode, (n) => n.type === "button" && String(n.props.className ?? "").includes("dg-btn-accept"))[0];
+  confirmBtn.props.onClick();
+  assert.deepEqual(confirmed, [["g-001", "g-003"]], "confirm must submit cross-group selection");
+  // 全选跨组生效：部分勾选态（2/3）点全选 → 3/3；再点 → 0/3；再点 → 3/3
+  const selectAll = findAll(vnode, (n) => n.type === "input" && n.props["aria-label"] === "全选")[0];
+  selectAll.props.onChange();
+  vnode = render(props);
+  assert.ok(allText(vnode).includes("已选 3/3"), "select-all from partial state must check all groups");
+  const selectAll2 = findAll(vnode, (n) => n.type === "input" && n.props["aria-label"] === "全选")[0];
+  selectAll2.props.onChange();
+  vnode = render(props);
+  assert.ok(allText(vnode).includes("已选 0/3"), "select-all toggle must clear across all groups");
+  const selectAll3 = findAll(vnode, (n) => n.type === "input" && n.props["aria-label"] === "全选")[0];
+  selectAll3.props.onChange();
+  vnode = render(props);
+  assert.ok(allText(vnode).includes("已选 3/3"));
+  confirmBtn = findAll(vnode, (n) => n.type === "button" && String(n.props.className ?? "").includes("dg-btn-accept"))[0];
+  confirmBtn.props.onClick();
+  assert.deepEqual(confirmed[1], ["g-001", "g-002", "g-003"]);
 });
 
 test("g-273: modal select-all and per-item toggle drive selection", () => {
@@ -438,6 +556,9 @@ test("g-273: modal en locale renders with zero CJK", () => {
   assert.ok(texts.includes("Batch Accept — Delivery Review Request"));
   assert.ok(texts.includes("Select all"));
   assert.ok(texts.includes("Selected 2/2"));
+  // att-002：组头按版本分组渲染（en 模板同样含 label + count）
+  assert.ok(texts.includes("v0.10.0 · 1"));
+  assert.ok(texts.includes("Standalone · 1"));
   for (const t of texts) {
     assert.doesNotMatch(t, /[㐀-鿿]/, `en modal text "${t}" must have no CJK`);
   }

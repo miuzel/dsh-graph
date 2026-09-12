@@ -96,6 +96,7 @@
       'batchAccept.partialResult': '⚠️ {ok} 个成功、{fail} 个失败',
       'batchAccept.failedListTitle': '以下目标接受失败（其余已正常提交）：',
       'batchAccept.requestFail': '⚠️ 批量接受请求失败：',
+      'batchAccept.groupHeader': '{label} · {count}',
 
       // === 卡片 ===
       'card.clickToOpen': '点击打开详情',
@@ -1040,6 +1041,7 @@
       'batchAccept.partialResult': '⚠️ {ok} succeeded, {fail} failed',
       'batchAccept.failedListTitle': 'These goals failed to accept (the rest were submitted):',
       'batchAccept.requestFail': '⚠️ Batch accept request failed: ',
+      'batchAccept.groupHeader': '{label} · {count}',
 
       // === Cards ===
       'card.clickToOpen': 'Click to open details',
