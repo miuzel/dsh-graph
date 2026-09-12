@@ -21,6 +21,27 @@
       return selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id];
     }
 
+    // 纯函数（g-273 att-002）：按所属版本（versionLabel）分组，保持 items 首现顺序
+    //（= 看板泳道顺序，版本语义降序，与 g-264 一致），组内保持 items 原序。
+    // 无 versionLabel / 空串 / 非字符串的目标归入 standaloneLabel 兜底组
+    //（调用方传 dgT("lane.standalone")，函数本身不依赖 i18n 全局）；
+    // 任何其他无版本情形（undefined/null/数字等）同样落入该兜底组。
+    // 分组仅由 items 派生：只产出至少含 1 个目标的组，绝不产出空组占位。
+    function batchAcceptGroupByVersion(items, standaloneLabel) {
+      const fallback = typeof standaloneLabel === "string" ? standaloneLabel : "";
+      const groups = [];
+      const byLabel = new Map();
+      for (const it of Array.isArray(items) ? items : []) {
+        if (!it) continue;
+        const raw = typeof it.versionLabel === "string" ? it.versionLabel.trim() : "";
+        const label = raw || fallback;
+        let g = byLabel.get(label);
+        if (!g) { g = { label, items: [] }; byLabel.set(label, g); groups.push(g); }
+        g.items.push(it);
+      }
+      return groups;
+    }
+
     // 核心提交：限流分批 Promise.allSettled（默认并发 4，防瞬时连接爆炸）。
     // 单目标失败（状态冲突/网络错误）不中断其余目标；返回 { ok, failed } 结构化结果。
     // opts: { concurrency, fetchImpl, urlOf } —— fetchImpl/urlOf 可注入（测试与 kanban 的 graphUrlForActive）。
@@ -79,6 +100,7 @@
 
     // 勾选式二次确认弹窗（Human Gate）。
     // props: { items: [{id, title, versionLabel}], loading, failures: null|[{goal,error}], onConfirm(ids), onCancel() }
+    // 清单按 versionLabel 分组渲染（组头含版本标签与该组目标数；无版本归入独立目标兜底组；空组不渲染）；
     // 取消、✕、Esc、点击遮罩关闭均为零副作用（零网络请求、零状态变化，仅触发 onCancel）；
     // loading（提交中）期间所有关闭路径与按钮一并锁定，防重复点击。
     function BatchAcceptModal(props) {
@@ -110,6 +132,9 @@
       const toggleAll = () => setSelected(allChecked ? [] : allIds.slice());
       const toggleOne = (id) => setSelected((prev) => batchAcceptToggleId(prev, id));
       const confirm = () => { if (!loading && selected.length > 0) props.onConfirm?.(selected.slice()); };
+      // g-273 att-002：按所属版本分组（组顺序 = items 首现顺序 = 看板泳道顺序）；
+      // 无版本目标归入 dgT("lane.standalone") 独立目标兜底组；空版本组绝不渲染（分组仅由 items 派生）。
+      const groups = batchAcceptGroupByVersion(items, dgT("lane.standalone"));
 
       const cbStyle = { flexShrink: 0, cursor: "pointer", width: 16, height: 16, margin: 0 };
       return h("div", { style: S.overlay, ...backdropGuard },
@@ -131,27 +156,34 @@
               dgT("batchAccept.selectAll")),
             h("span", { style: { ...S.meta, marginLeft: "auto" } },
               dgT("batchAccept.selectedCount", { selected: selected.length, total: allIds.length }))),
-          // 目标清单（id / 标题 / 所属版本），可滚动
+          // 目标清单：按版本分组渲染（组头 = 版本标签 + 该组待接受目标数），可滚动；
+          // 组内行 = 复选框 + id + 标题（不再重复显示版本列）；全选/已选计数仍为跨组全局。
           h("div", { style: { maxHeight: 260, overflowY: "auto", marginBottom: 8 } },
-            items.map((it) => {
-              const on = selected.includes(it.id);
-              return h("div", {
-                key: it.id,
-                style: { display: "flex", alignItems: "center", gap: 8, padding: "3px 6px", fontSize: 12,
-                         cursor: loading ? "default" : "pointer", borderRadius: 4,
-                         background: on ? "rgba(58,166,117,.08)" : "transparent" },
-                onClick: () => { if (!loading) toggleOne(it.id); },
-              },
-                h("input", {
-                  type: "checkbox", style: cbStyle, checked: on, disabled: loading,
-                  "aria-label": it.id,
-                  onChange: () => toggleOne(it.id), onClick: (e) => e.stopPropagation(),
-                }),
-                h("span", { style: { fontFamily: "monospace", flexShrink: 0 } }, it.id),
-                h("span", { style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-                            title: it.title }, it.title ?? it.id),
-                h("span", { style: { ...S.meta, flexShrink: 0, fontSize: 11 } }, it.versionLabel ?? ""));
-            })),
+            groups.flatMap((g) => [
+              h("div", {
+                key: "vh-" + g.label,
+                style: { ...S.meta, padding: "5px 6px 2px", fontSize: 11, fontWeight: 700,
+                         borderTop: "1px solid rgba(128,128,128,.18)" },
+              }, dgT("batchAccept.groupHeader", { label: g.label, count: g.items.length })),
+              ...g.items.map((it) => {
+                const on = selected.includes(it.id);
+                return h("div", {
+                  key: it.id,
+                  style: { display: "flex", alignItems: "center", gap: 8, padding: "3px 6px", fontSize: 12,
+                           cursor: loading ? "default" : "pointer", borderRadius: 4,
+                           background: on ? "rgba(58,166,117,.08)" : "transparent" },
+                  onClick: () => { if (!loading) toggleOne(it.id); },
+                },
+                  h("input", {
+                    type: "checkbox", style: cbStyle, checked: on, disabled: loading,
+                    "aria-label": it.id,
+                    onChange: () => toggleOne(it.id), onClick: (e) => e.stopPropagation(),
+                  }),
+                  h("span", { style: { fontFamily: "monospace", flexShrink: 0 } }, it.id),
+                  h("span", { style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+                              title: it.title }, it.title ?? it.id));
+              }),
+            ])),
           // 部分失败清单（持久展示，不整体崩溃；其余目标已正常提交）
           props.failures && props.failures.length
             ? h("div", { style: { marginBottom: 8, padding: "6px 8px", borderRadius: 4, fontSize: 12,
@@ -176,5 +208,5 @@
     }
 
 // >>>ESM-EXPORTS-START>>> (build script strips this block for browser bundle)
-export { batchAcceptButtonState, batchAcceptToggleId, runBatchAccept, batchAcceptSupervisorMessage, notifySupervisorBatchAccept, BatchAcceptModal };
+export { batchAcceptButtonState, batchAcceptToggleId, batchAcceptGroupByVersion, runBatchAccept, batchAcceptSupervisorMessage, notifySupervisorBatchAccept, BatchAcceptModal };
 // <<<ESM-EXPORTS-END<<<
