@@ -2,7 +2,9 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
-单包发布：npm 包名 `dsh-graph`（当前版本 v0.9.2）。一个包同时提供：
+> **✅ 支持 DeepSeek Harness `v0.1.5-rc.2`**：本版本（v0.10.0）在该宿主版本上完整验证（隔离 Web 实例、看板交互、全部 `graph_*` 工具与 REST 端点、中英双语界面），并以此为推荐配套版本；兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上。
+
+单包发布：npm 包名 `dsh-graph`（当前版本 v0.10.0）。一个包同时提供：
 
 - 面向 agent 的 39 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
 - 浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
@@ -36,6 +38,8 @@ dsh plugin --profile <name> add dsh-graph
 ```
 
 > 需要 Node ≥ 22（包内 core 为编译后 `.js`）。已发布版本经 npm 与 dsh-market 生态（[dsh-market](https://github.com/dsh-market/dsh-market) / DshMarketPlace / DSH Get，见 `docs/release-handbook.md`）分发。
+>
+> **✅ DSH 版本兼容性（重点）**：v0.10.0 **已完整验证并支持 DeepSeek Harness [`v0.1.5-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)**——开发期的隔离测试实例（Web GUI + 二维泳道看板 + `graph_*` 工具 + REST 端点）与中英双语功能演示视频（见 [dsh-graph-videos](https://github.com/miuzel/dsh-graph-videos)）全部在 `v0.1.5-rc.2` 上实测通过，**推荐与该版本配套使用**。同时兼容 `0.1.5` 系列及 `0.1.2-alpha.x` 及以上版本（工具与提示词契约向后兼容）。
 
 ## 提供的工具
 
