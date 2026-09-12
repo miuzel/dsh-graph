@@ -309,6 +309,29 @@ window.__ModuleLoader__.load({
       'worktree.notCreated': '未创建 worktree',
       'worktree.copyPathTooltip': '复制安全相对路径',
       'worktree.pathCopied': '✅ worktree 路径已复制',
+      // g-272 att-002：服务端 worktree 候选/清理 reason 稳定枚举 → 中文映射（key 后缀即枚举值原文）
+      'worktree.reason.path_not_canonical_name': 'worktree 路径不是规范 goal-attempt 名称',
+      'worktree.reason.branch_not_canonical_name': 'worktree 分支不是规范 goal-attempt 名称',
+      'worktree.reason.path_branch_mismatch': '路径与分支的 goal/attempt 不一致',
+      'worktree.reason.outside_canonical_worktrees': '路径不在 canonical workspace/.worktrees',
+      'worktree.reason.reuse_suspected': '路径/attempt 已有清理历史，疑似复用',
+      'worktree.reason.snapshot_drift': '登记后的 path/branch/HEAD 已漂移',
+      'worktree.reason.missing_attempt_evidence': '缺少匹配的 attempt.md 证据',
+      'worktree.reason.not_delivered': '目标未交付',
+      'worktree.reason.attempt_active': 'attempt 活跃',
+      'worktree.reason.worktree_dirty': '工作树有未提交改动',
+      'worktree.reason.not_merged': 'HEAD 未由目标分支祖先链证明合入',
+      'worktree.reason.externally_removed': 'worktree 已从 Git 实时列表消失（外部删除）',
+      'worktree.reason.user_cleaned': '已由用户清理',
+      'worktree.reason.confirm_required': '需要用户明确确认',
+      'worktree.reason.unknown_candidate': '未知候选 id',
+      'worktree.reason.protected': '候选受保护',
+      'worktree.reason.git_unavailable': 'Git 不可用',
+      'worktree.reason.git_worktree_list_unavailable': 'Git worktree 列表不可用',
+      'worktree.reason.live_record_drift': 'worktree 实时记录已漂移',
+      'worktree.reason.realpath_unavailable': 'worktree realpath 不可用',
+      'worktree.reason.realpath_escape': 'worktree realpath 越界或为符号链接',
+      'worktree.reason.state_changed': '目标或 attempt 状态已变化',
 
       // === 执行/反馈 ===
       'exec.accept': '✅ 接受',
@@ -344,6 +367,9 @@ window.__ModuleLoader__.load({
       'exec.forceAccept': '✅ 已强制接受',
       'exec.forceAcceptWithReason': '✅ 已强制接受（理由已记入事件）',
       'exec.forceAcceptFail': '⚠️ 强制接受失败：',
+      // g-272 att-002：定义/润色「发送给主管」路径的复制结果提示
+      'exec.requestCopiedOpened': '✅ 请求已复制，已打开主管会话，请粘贴发送',
+      'exec.autocopyFailedRequest': '⚠️ 自动复制失败，请手动复制下方请求',
 
       // === 进执行列确认 ===
       'inProgress.title': '🚀 执行「{title}」',
@@ -499,6 +525,8 @@ window.__ModuleLoader__.load({
       'settings.reasoningEffortAria': 'workspace 子代理默认推理档位',
       'settings.inheritModel': '（继承所选模型/父会话）',
       'settings.effortHint': '选项随所选 provider/model 的 reasoning effort 能力更新；留空继承所选模型或父会话默认值。',
+      'settings.readProfileFail': '读取 profile 设置失败',
+      'settings.saveProfileFail': '保存 profile 设置失败',
       'settings.effortHintNone': '所选 provider/model 未声明 reasoning effort；已存旧值保留可选，可留空继承默认值。',
       'settings.effortHintLoading': '正在读取 Host 模型目录；已存推理档位保留可选，留空继承默认值。',
       'settings.execMode': '执行模式 (mode)',
@@ -1210,6 +1238,29 @@ window.__ModuleLoader__.load({
       'worktree.notCreated': 'No worktree created',
       'worktree.copyPathTooltip': 'Copy safe relative path',
       'worktree.pathCopied': '✅ Worktree path copied',
+      // g-272 att-002: server worktree candidate/cleanup reason enums → English mapping (key suffix = enum verbatim)
+      'worktree.reason.path_not_canonical_name': 'Worktree path is not a canonical goal-attempt name',
+      'worktree.reason.branch_not_canonical_name': 'Worktree branch is not a canonical goal-attempt name',
+      'worktree.reason.path_branch_mismatch': 'Path and branch goal/attempt mismatch',
+      'worktree.reason.outside_canonical_worktrees': 'Path not under canonical workspace/.worktrees',
+      'worktree.reason.reuse_suspected': 'Path/attempt has cleanup history, suspected reuse',
+      'worktree.reason.snapshot_drift': 'Registered path/branch/HEAD has drifted',
+      'worktree.reason.missing_attempt_evidence': 'Missing matching attempt.md evidence',
+      'worktree.reason.not_delivered': 'Goal not delivered',
+      'worktree.reason.attempt_active': 'Attempt is active',
+      'worktree.reason.worktree_dirty': 'Worktree has uncommitted changes',
+      'worktree.reason.not_merged': 'HEAD not proven merged into target branch',
+      'worktree.reason.externally_removed': 'Worktree disappeared from live Git list (externally removed)',
+      'worktree.reason.user_cleaned': 'Cleaned by user',
+      'worktree.reason.confirm_required': 'Explicit user confirmation required',
+      'worktree.reason.unknown_candidate': 'Unknown candidate id',
+      'worktree.reason.protected': 'Candidate is protected',
+      'worktree.reason.git_unavailable': 'Git unavailable',
+      'worktree.reason.git_worktree_list_unavailable': 'Git worktree list unavailable',
+      'worktree.reason.live_record_drift': 'Live worktree record has drifted',
+      'worktree.reason.realpath_unavailable': 'Worktree realpath unavailable',
+      'worktree.reason.realpath_escape': 'Worktree realpath escapes bounds or is a symlink',
+      'worktree.reason.state_changed': 'Goal or attempt state has changed',
 
       // === Execute/Feedback ===
       'exec.accept': '✅ Accept',
@@ -1245,6 +1296,9 @@ window.__ModuleLoader__.load({
       'exec.forceAccept': '✅ Force accepted',
       'exec.forceAcceptWithReason': '✅ Force accepted (reason recorded in events)',
       'exec.forceAcceptFail': '⚠️ Force accept failed: ',
+      // g-272 att-002: copy-result hints for the define/polish "send to supervisor" path
+      'exec.requestCopiedOpened': '✅ Request copied, supervisor session opened — paste to send',
+      'exec.autocopyFailedRequest': '⚠️ Auto-copy failed, please copy the request below manually',
 
       // === In Progress prompt ===
       'inProgress.title': '🚀 Execute "{title}"',
@@ -1400,6 +1454,8 @@ window.__ModuleLoader__.load({
       'settings.reasoningEffortAria': 'Workspace subagent default reasoning effort',
       'settings.inheritModel': '(Inherit from selected model / parent session)',
       'settings.effortHint': 'Options update with selected provider/model reasoning effort capability; leave empty to inherit.',
+      'settings.readProfileFail': 'Failed to read profile settings',
+      'settings.saveProfileFail': 'Failed to save profile settings',
       'settings.effortHintNone': 'Selected provider/model has no declared reasoning effort; saved value preserved, leave empty to inherit.',
       'settings.effortHintLoading': 'Loading Host model catalog; saved effort values preserved, leave empty to inherit.',
       'settings.execMode': 'Execution mode',
@@ -2453,6 +2509,7 @@ window.__ModuleLoader__.load({
      *  纯函数（不触发任何请求/派发），便于行为测试。 */
     function resolveBlockedDropTarget(blockedFrom, toStageKey) {
       const raw = typeof blockedFrom === "string" ? blockedFrom.trim() : "";
+      // i18n-keep(category-a)：tr 的 fallback 中文仅在 dgT 未初始化（i18n 注册前）时兜底，正常路径一律走 dgT 词条。
       const tr = (key, params, fallback) => typeof dgT === "function" ? dgT(key, params) : fallback;
       if (!raw) {
         return { ok: false, message: tr('drag.blockedNoFrom', null, "⚠️ 该目标缺少 blocked_from 记录，无法自动解除阻塞；请由主管确认原状态后手动处理") };
@@ -2917,6 +2974,7 @@ window.__ModuleLoader__.load({
       const raw = String(statusLine).trim();
       // g-247：结构化状态优先；只有缺失/未知时才解析自由文本，避免中英文及否定句误判。
       const structured = ["working", "blocked", "done", "error"].includes(statusState) ? statusState : null;
+      // i18n-keep(category-a)：以下正则匹配用户手写的遗留中文 status_line 自由文本（g-247 兜底路径），非 UI 文案。
       const isBlocked = structured ? structured === "blocked" : (!!blocked || /阻塞|blocked/i.test(raw));
       const isError = structured ? structured === "error" : (!isBlocked && /失败|错误|报错|failed|error/i.test(raw));
       const isDone = structured ? structured === "done" : (!isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw));
@@ -2971,6 +3029,7 @@ window.__ModuleLoader__.load({
                 { parentSessionId: parentId, childSessionId: childId, mode: entry.mode });
             }
           } catch (e) {
+            // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
             console.warn("[dsh-graph-host] 子代理地址配置失败", e);
           }
         }
@@ -2994,6 +3053,7 @@ window.__ModuleLoader__.load({
           boundOpened.set(childId, p);
           return true;
         } catch (e) {
+          // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
           console.warn("[dsh-graph-host] session.open() 失败", e);
           return false;
         }
@@ -3020,6 +3080,7 @@ window.__ModuleLoader__.load({
       const binding = React.useMemo(() => {
         if (!sessionsRt || !childId) return null;
         try { return sessionsRt.binding(childId) ?? null; }
+        // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
         catch (e) { console.warn("[dsh-graph-host] binding 解析失败", e); return null; }
       }, [childId, listSnap]);
       const session = binding?.session ?? null;
@@ -3968,6 +4029,7 @@ window.__ModuleLoader__.load({
           sessionsRt?.open?.(props.id); // supervisor 是顶层会话，直接 open
           activateChatTab();            // 已在该会话看板 tab 时切回「对话」
         } catch (e) {
+          // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
           console.warn("[dsh-graph-host] 跳转主管会话失败", e);
         }
       };
@@ -4082,6 +4144,7 @@ window.__ModuleLoader__.load({
         const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
         if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
+        // i18n-keep(category-a)：匹配用户/子代理手写的遗留中文 status_line 终态词，非 UI 文案，必须保留中文模式。
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
     }
@@ -4734,6 +4797,7 @@ window.__ModuleLoader__.load({
         if (!t) return;
         if (!session?.prompt) { setFbNote(dgT("criteria.feedbackNotConnected")); return; }
         try {
+          // i18n-keep(category-b)：发往目标执行会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
           const res = await session.prompt(
             [{ type: "text", text: `【${props.goalId} 判据反馈】${criterion}\n${t}` }], "queue");
           if (res?.ok) {
@@ -4839,6 +4903,7 @@ window.__ModuleLoader__.load({
         const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
         if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
+        // i18n-keep(category-a)：匹配用户/子代理手写的遗留中文 status_line 终态词，非 UI 文案，必须保留中文模式。
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
     }
@@ -4854,6 +4919,7 @@ window.__ModuleLoader__.load({
       const allowed = ["draft", "planning", "collecting", "ready"];
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       if (!allowed.includes(status) || hasActiveAttempt) return null;
+      // i18n-keep(category-b)：复制到剪贴板并粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
       const request = `【${goalId} 定义/润色请求】\n目标 ID：${goalId}\ngoal.md 工作区相对路径：${String(goalPath ?? "（路径未知）")}\n人工指导意见：${guidance.trim() || "（无）"}`;
       const openSupervisor = async () => {
         setLoading(true); setNote(null);
@@ -4866,7 +4932,7 @@ window.__ModuleLoader__.load({
           if (copied) showToast(dgT("exec.requestCopied"));
            setMode("supervisor");
            setFallback(!copied);
-          setNote(copied ? "✅ 请求已复制，已打开主管会话，请粘贴发送" : "⚠️ 自动复制失败，请手动复制下方请求");
+          setNote(copied ? dgT("exec.requestCopiedOpened") : dgT("exec.autocopyFailedRequest"));
         } catch (e) { setNote(dgT("exec.supervisorPathFailed") + String(e?.message ?? e)); }
         setLoading(false);
       };
@@ -4930,6 +4996,7 @@ window.__ModuleLoader__.load({
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
       // 反馈预填模板（复制与显示共用，保证一致）
+      // i18n-keep(category-b)：粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
       const prefillText = fbText.trim() ? `【${goalId} 反馈】\n${fbText.trim()}` : "";
 
       // 接受复核状态只关联当前生命周期周期：
@@ -4961,7 +5028,7 @@ window.__ModuleLoader__.load({
 
       // 接受：默认经主管 Agent 复核（review.requested → 主管复核收口）
       const doAccept = async () => {
-        if (!confirm(`确认接受目标「${goalId}」的交付成果？\n\n此操作将请求主管会话完成最终复核，并执行交付收口。`)) return;
+        if (!confirm(dgT("exec.acceptConfirm", { goalId }))) return;
         setLoading(true);
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/accept"), {
@@ -4974,6 +5041,7 @@ window.__ModuleLoader__.load({
             try {
               const rt = sessionsRt ?? appCtx?.get?.("sessions");
               const session = supervisorSession && (rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession));
+              // i18n-keep(category-b)：发往主管会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
               if (session?.prompt) await session.prompt([{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }], "queue");
             } catch (err) {
               console.warn("[dsh-graph-host] prompt supervisorSession failed:", err);
@@ -4981,9 +5049,9 @@ window.__ModuleLoader__.load({
             onRefresh?.();
           } else if (data.ok) {
             onRefresh?.();
-          } else setNote("⚠️ 接受失败：" + (data.error || dgT("drag.unknownError")));
+          } else setNote(dgT("exec.acceptFail") + (data.error || dgT("drag.unknownError")));
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -4997,12 +5065,12 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ goal: goalId, force: true, reason: forceReason.trim() || undefined }),
           });
           const data = await r.json();
-          if (data.ok) setNote(forceReason.trim() ? "✅ 已强制接受（理由已记入事件）" : "✅ 已强制接受");
-          else setNote("⚠️ 强制接受失败：" + (data.error || dgT("drag.unknownError")));
+          if (data.ok) setNote(forceReason.trim() ? dgT("exec.forceAcceptWithReason") : dgT("exec.forceAccept"));
+          else setNote(dgT("exec.forceAcceptFail") + (data.error || dgT("drag.unknownError")));
           setForceMode(false);
           setForceReason("");
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -5018,7 +5086,7 @@ window.__ModuleLoader__.load({
           });
           const trData = await tr.json();
           if (!trData.ok) {
-            setNote("⚠️ 状态迁移失败：" + (trData.error || dgT("drag.unknownError")));
+            setNote(dgT("exec.stateTransitionFail") + (trData.error || dgT("drag.unknownError")));
             setLoading(false);
             return;
           }
@@ -5031,18 +5099,18 @@ window.__ModuleLoader__.load({
           const data = await r.json();
           if (data.ok) {
             if (data.child_id) {
-              setNote("✅ 已派发执行子代理，id：" + data.child_id);
+              setNote(dgT("exec.childDispatched") + data.child_id);
             } else if (data.child_error) {
-              setNote("⚠️ 子代理启动失败：" + data.child_error);
+              setNote(dgT("exec.childFailed") + data.child_error);
             } else {
-              setNote("⚠️ 子代理未启动（无 child_id）");
+              setNote(dgT("exec.childNotStarted"));
             }
             onRefresh?.(); // g-148：刷新看板（回调由父组件 GoalModal 传入）
           } else {
-            setNote("⚠️ 执行失败：" + (data.error || dgT("drag.unknownError")));
+            setNote(dgT("exec.executeFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -5050,18 +5118,18 @@ window.__ModuleLoader__.load({
       const openSupervisorWithFeedback = async () => {
         try {
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
-          if (!rt) { setNote("⚠️ 会话服务不可用"); return; }
+          if (!rt) { setNote(dgT("exec.supervisorUnavailable")); return; }
           // 打开主管会话（id 由 board 端点下发 project.yaml supervisor.session，g-108）
-          if (!supervisorSession) { setNote("⚠️ 未配置主管会话（project.yaml 的 supervisor.session）"); return; }
+          if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
           // 自动复制预填内容（负责人指示），再切到主管对话窗直接粘贴发送
           const copied = prefillText ? await copyText(prefillText) : false;
           rt.open?.(supervisorSession);
           activateChatTab();
           if (copied) {
-            showToast("✅ 预填内容已复制，到主管对话窗 Ctrl+V 直接粘贴发送");
-            setNote("✅ 预填内容已复制，已切换到主管对话窗，直接粘贴发送");
+            showToast(dgT("exec.precopied"));
+            setNote(dgT("exec.prefillCopied"));
           } else {
-            setNote("⚠️ 自动复制失败（浏览器限制），请手动复制下方预填内容；已切换到主管对话窗");
+            setNote(dgT("exec.autocopyFailed"));
           }
         } catch (e) {
           setNote(dgT("exec.supervisorJumpFail") + String(e?.message ?? e));
@@ -5159,7 +5227,7 @@ window.__ModuleLoader__.load({
             setNote(dgT("addCard.fail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -5168,9 +5236,9 @@ window.__ModuleLoader__.load({
       const openSupervisorChat = () => {
         try {
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
-          if (!rt) { setNote("⚠️ 会话服务不可用"); return; }
+          if (!rt) { setNote(dgT("exec.supervisorUnavailable")); return; }
           // 主管会话 id 由 board 端点下发（project.yaml supervisor.session，g-108）
-          if (!supervisorSession) { setNote("⚠️ 未配置主管会话（project.yaml 的 supervisor.session）"); return; }
+          if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
           rt.open?.(supervisorSession);
           activateChatTab();
           setNote(dgT("addCard.chatSwitched"));
@@ -5649,6 +5717,19 @@ window.__ModuleLoader__.load({
         note ? h("div", { style: { ...S.meta, color: note === dgT("common.savingDone") ? undefined : "#e57373", marginTop: 4 } }, note) : null);
     }
 
+    // g-272 att-002：服务端 worktree reason 为稳定枚举（core/worktree.ts），客户端按枚举 dgT 双语映射；
+    // 非枚举值（如 git 原始错误、旧版服务端中文残留）原样透传兜底。
+    const WORKTREE_REASON_ENUMS = ["path_not_canonical_name", "branch_not_canonical_name", "path_branch_mismatch",
+      "outside_canonical_worktrees", "reuse_suspected", "snapshot_drift", "missing_attempt_evidence",
+      "not_delivered", "attempt_active", "worktree_dirty", "not_merged", "externally_removed", "user_cleaned",
+      "confirm_required", "unknown_candidate", "protected", "git_unavailable", "git_worktree_list_unavailable",
+      "live_record_drift", "realpath_unavailable", "realpath_escape", "state_changed"];
+    function formatWorktreeReason(reason) {
+      if (!reason) return dgT("worktree.defaultReason");
+      if (WORKTREE_REASON_ENUMS.includes(reason)) return dgT("worktree.reason." + reason);
+      return reason;
+    }
+
     // g-197：展示 delivered 目标已识别的清理候选与显式清理操作
     function WorktreeCandidates(props) {
       const [items, setItems] = React.useState([]);
@@ -5669,7 +5750,7 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ id, confirm: true }),
         });
         const x = await r.json();
-        if (!r.ok) setNote(x.reason || x.error || dgT("worktree.cleanFail"));
+        if (!r.ok) setNote(x.reason ? formatWorktreeReason(x.reason) : (x.error || dgT("worktree.cleanFail")));
         else { setNote(dgT("worktree.cleaned")); load(); }
       };
       if (!items.length && !note) return null;
@@ -5678,7 +5759,7 @@ window.__ModuleLoader__.load({
         items.map((x) =>
           h("div", { key: x.id, style: { ...S.subCard, marginTop: 4 } },
             h("div", null, `${x.status === "candidate" ? "✅" : "🔒"} ${x.path}`),
-            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${x.reason || dgT("worktree.defaultReason")}`),
+            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${formatWorktreeReason(x.reason)}`),
             x.status === "candidate"
               ? h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => clean(x.id) }, dgT("worktree.confirmClean"))
               : null,
@@ -5696,6 +5777,7 @@ window.__ModuleLoader__.load({
       if (!attempts.length) return null;
       const latest = [...attempts].reverse().find((a) => discovery.items?.[a.id]);
       const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: dgT("worktree.copyPathTooltip"), onClick: async () => { if (await copyText(item.path)) showToast(dgT("worktree.pathCopied")); } }, dgT("common.copy")) : null;
+      // i18n-keep(category-a)：匹配服务端 index.js 下发的遗留中文状态值（"正常"/"已锁定"）与本地合成哨兵（"已移除"），非 UI 文案源。
       const formatWorktreeStatus = (status) => {
         if (status === "正常" || status === "ok" || status === "normal") return dgT("worktree.normal");
         if (status === "已锁定" || status === "locked") return dgT("worktree.statusLocked");
@@ -5744,6 +5826,7 @@ window.__ModuleLoader__.load({
               const next = { ...wt, items: { ...wt.items } };
               for (const [id, old] of Object.entries(lastWorktreesRef.current)) {
                 if (!next.items[id]) {
+                  // i18n-keep(category-a)：本地合成「已移除」哨兵值，仅供 formatWorktreeStatus 匹配映射为 dgT 词条，不直接渲染。
                   const removed = { ...old, status: "已移除" };
                   removedWorktreesRef.current[id] = removed;
                   next.items[id] = removed;
@@ -5752,6 +5835,7 @@ window.__ModuleLoader__.load({
               for (const [id, removed] of Object.entries(removedWorktreesRef.current)) {
                 if (!next.items[id]) next.items[id] = removed;
               }
+              // i18n-keep(category-a)：过滤本地合成「已移除」哨兵（见上），非 UI 文案。
               lastWorktreesRef.current = Object.fromEntries(Object.entries(next.items).filter(([, v]) => v.status !== "已移除"));
               data = { ...data, worktrees: next };
             }
@@ -5797,6 +5881,7 @@ window.__ModuleLoader__.load({
       else if (state.data.error) content = dgT("goal.requestFail") + state.data.error;
       else {
         const d = state.data;
+        // i18n-keep(category-a)：goal.md 正文的固定中文区段名（「目标描述」「质量判据」为数据格式契约，非 UI 文案）。
         const desc = section(d.body, "目标描述");
         const crit = section(d.body, "质量判据");
         const meta = d.meta ?? {};
@@ -5874,6 +5959,7 @@ window.__ModuleLoader__.load({
 
         // g-a92e1406：tab 内容（占位文案视觉降级：trim 后以「（待」开头 → 小字灰色放标题右侧）
         // 识别逻辑：trim 后以「（待」开头或与国际化占位符匹配 → 占位；若占位后仍有正文，剥离占位行只显示正文
+        // i18n-keep(category-a)：以下「（待…」中文字面量用于匹配 goal.md 数据中的遗留中文占位符，非 UI 文案源。
         function isPlaceholder(text) {
           const t = String(text ?? "").trim();
           return t.startsWith("（待") || t === dgT('criteria.pending') || t === dgT('criteria.pendingDetail') || t === dgT('criteria.toBeFilled');
@@ -5886,10 +5972,12 @@ window.__ModuleLoader__.load({
           if (t === "（待登记）" || t === dgT('criteria.pending')) {
             return { isPh: true, marker: dgT('criteria.pending'), body: "" };
           }
+          // i18n-keep(category-a)：匹配 goal.md 数据中的遗留中文占位符，非 UI 文案源。
           if (t === "（待填写）" || t === dgT('criteria.toBeFilled')) {
             return { isPh: true, marker: dgT('criteria.toBeFilled'), body: "" };
           }
           if (!t.startsWith("（待")) return { isPh: false, marker: null, body: t };
+          // i18n-keep(category-a)：匹配 goal.md 数据中的遗留中文占位符前缀（「（待…）」），非 UI 文案源。
           const m = t.match(/^（待[^）]*）/);
           let marker = m ? m[0] : dgT('criteria.toBeFilled');
           if (marker.includes("必须非空且已确认")) marker = dgT('criteria.pendingDetail');
@@ -6120,7 +6208,7 @@ window.__ModuleLoader__.load({
             // 触发父组件刷新看板
             if (props.onRenamed) props.onRenamed(props.id, t);
           } else {
-            setRenameNote("⚠️ 重命名失败：" + (data.error || dgT("drag.unknownError")));
+            setRenameNote(dgT("goal.renameFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
           setRenameNote(dgT("drag.requestFail") + String(e?.message ?? e));
@@ -6951,6 +7039,7 @@ function resetSearchState(activeWs) {
         if (hasChild && session?.prompt) {
           setSending(true);
           try {
+            // i18n-keep(category-b)：发往子代理会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
             await session.prompt(
               [{ type: "text", text: `【${goalId} 回退理由】${reason.trim()}` }], "queue");
             setSent(true);
@@ -7036,6 +7125,7 @@ function resetSearchState(activeWs) {
             // 有子代理 → 排队发"重新执行"消息，不派新子代理
             setNote(dgT("inProgress.dispatchingReExec"));
             try {
+              // i18n-keep(category-b)：发往子代理会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
               const res = await oldSession.prompt(
                 [{ type: "text", text: `【重新执行】用户从看板拖放触发重新执行目标 ${goalId}。请从头开始执行目标描述和质量判据中的任务。` }],
                 "queue",
@@ -7123,6 +7213,7 @@ function resetSearchState(activeWs) {
       const { goalId, goalTitle, supervisorSession, onConfirm, onCancel } = props;
       // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
       const backdropGuard = useBackdropClose(onCancel);
+      // i18n-keep(category-b)：复制到剪贴板并粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
       const promptText = `【交付通知】目标「${goalTitle ?? goalId}」（${goalId}）即将标记为已交付。请进行最终复核：代码合并、文档更新等交付工作。`;
       const jumpToSupervisor = async () => {
         try {
@@ -8895,6 +8986,7 @@ function resetSearchState(activeWs) {
               className: "dg-btn",
               style: { ...S.btn, padding: "2px 8px", fontSize: 12, marginLeft: 8 },
               onClick: () => loadBacklogGoals()
+              // i18n-keep(category-a)：「重试」仅为 dgT 异常返回空时的兜底字面量，正常路径走 i18n 词条。
             }, dgT('common.retry') || "重试")
           );
         }
@@ -8982,6 +9074,7 @@ function resetSearchState(activeWs) {
                 className: "dg-btn",
                 style: { ...S.btn, padding: "2px 8px", fontSize: 12, marginLeft: 8 },
                 onClick: () => loadVersionGoals(v.slug)
+                // i18n-keep(category-a)：「重试」仅为 dgT 异常返回空时的兜底字面量，正常路径走 i18n 词条。
               }, dgT("common.retry") || "重试")
             );
           } else {
@@ -10707,7 +10800,8 @@ function resetSearchState(activeWs) {
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
           h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.supervisorAutomation")),
           h("div", { style: { display: showAdvanced ? "grid" : "none", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 } },
-            Object.keys({ scope_planning: "范围规划", integration_decision: "集成决策", rework: "返工决策", memory_promotion: "记忆提炼", skill_proposal: "技能提案", release: "发布" }).map((k) =>
+            // g-272 att-002：原 Object.keys({...中文标签}) 的中文值从未被渲染（label 直接用 key），改为纯 key 数组消除死代码中文残留。
+            ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"].map((k) =>
               h("div", { key: k },
                 h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, k),
                 h("select", { style: { ...S.promptInput, width: "100%" }, value: auto[k] ?? "", onChange: (e) => set(["supervisor", "automation", k], e.target.value === "" ? null : e.target.value) },
@@ -10766,7 +10860,7 @@ function resetSearchState(activeWs) {
         async load() {
           const res = await describeFn();
           const view = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
-          if (!view) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "读取 profile 设置失败");
+          if (!view) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? dgT("settings.readProfileFail"));
           const row = view.namespaces?.find((candidate) => candidate.ns === GRAPH_SETTINGS_NS);
           if (!row) {
             snapshot = { ...snapshot, status: "unavailable", writable: view.writable !== false };
@@ -10778,7 +10872,7 @@ function resetSearchState(activeWs) {
         async set(field, value) {
           const res = await mutateFn(GRAPH_SETTINGS_NS, [{ op: "set", path: [field], value }], snapshot.revision);
           const row = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
-          if (!row) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? "保存 profile 设置失败");
+          if (!row) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? dgT("settings.saveProfileFail"));
           snapshot = { ...snapshot, status: "ready", value: row.value ?? snapshot.value, revision: row.revision };
           notify();
         },

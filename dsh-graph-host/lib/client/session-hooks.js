@@ -27,6 +27,7 @@
                 { parentSessionId: parentId, childSessionId: childId, mode: entry.mode });
             }
           } catch (e) {
+            // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
             console.warn("[dsh-graph-host] 子代理地址配置失败", e);
           }
         }
@@ -50,6 +51,7 @@
           boundOpened.set(childId, p);
           return true;
         } catch (e) {
+          // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
           console.warn("[dsh-graph-host] session.open() 失败", e);
           return false;
         }
@@ -76,6 +78,7 @@
       const binding = React.useMemo(() => {
         if (!sessionsRt || !childId) return null;
         try { return sessionsRt.binding(childId) ?? null; }
+        // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
         catch (e) { console.warn("[dsh-graph-host] binding 解析失败", e); return null; }
       }, [childId, listSnap]);
       const session = binding?.session ?? null;

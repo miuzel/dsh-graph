@@ -91,7 +91,7 @@ test("登记后 HEAD 漂移会被阻断", () => {
   const gf = findGoalFile(root, goal); writeFileSync(gf, readFileSync(gf, "utf8").replace('"status": "planning"', '"status": "review"'));
   resolveAccept(root, goal, { actor: "supervisor:test", verdict: "accept" }); const first = listWorktrees(root, goal)[0]; assert.equal(first.status, "candidate");
   writeFileSync(join(path, "changed"), "drift"); execFileSync("git", ["add", "."], { cwd: path }); execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "drift"], { cwd: path });
-  const changed = listWorktrees(root, goal)[0]; assert.equal(changed.status, "unknown"); assert.match(changed.reason ?? "", /漂移/); assert.equal(cleanWorktree(root, changed.id, "human:test", true).ok, false);
+  const changed = listWorktrees(root, goal)[0]; assert.equal(changed.status, "unknown"); assert.equal(changed.reason, "snapshot_drift"); assert.equal(cleanWorktree(root, changed.id, "human:test", true).ok, false);
 });
 
 test("缺 result 的旧 attempt 运行态保守保护", () => {
@@ -111,7 +111,7 @@ test("缺 attempt 证据与路径/分支错配不会成为 candidate", () => {
   const rows = listWorktrees(join(dir, ".dsh-graph"));
   assert.equal(rows.length, 1);
   assert.notEqual(rows[0].status, "candidate");
-  assert.match(rows[0].reason ?? "", /一致|attempt/);
+  assert.match(rows[0].reason ?? "", /^(path_branch_mismatch|missing_attempt_evidence)$/);
 });
 
 test("真实候选外部删除后记录 external_removed，重复 clean 稳定 no-op，未知 id 失败", () => {
@@ -126,8 +126,8 @@ test("真实候选外部删除后记录 external_removed，重复 clean 稳定 n
   resolveAccept(root, goal, { actor: "supervisor:test", verdict: "accept" });
   const candidate = listWorktrees(root, goal)[0]; assert.equal(candidate.status, "candidate");
   execFileSync("git", ["worktree", "remove", path], { cwd: dir });
-  const external = listWorktrees(root, goal)[0]; assert.match(external.reason ?? "", /外部删除/);
+  const external = listWorktrees(root, goal)[0]; assert.equal(external.reason, "externally_removed");
   assert.equal(cleanWorktree(root, external.id, "human:test", true).reason, "already_cleaned");
   assert.equal(cleanWorktree(root, external.id, "human:test", true).reason, "already_cleaned");
-  const unknown = cleanWorktree(root, "random-id", "human:test", true); assert.equal(unknown.ok, false); assert.match(unknown.reason ?? "", /未知/);
+  const unknown = cleanWorktree(root, "random-id", "human:test", true); assert.equal(unknown.ok, false); assert.equal(unknown.reason, "unknown_candidate");
 });

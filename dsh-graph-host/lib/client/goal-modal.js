@@ -424,6 +424,19 @@
         note ? h("div", { style: { ...S.meta, color: note === dgT("common.savingDone") ? undefined : "#e57373", marginTop: 4 } }, note) : null);
     }
 
+    // g-272 att-002：服务端 worktree reason 为稳定枚举（core/worktree.ts），客户端按枚举 dgT 双语映射；
+    // 非枚举值（如 git 原始错误、旧版服务端中文残留）原样透传兜底。
+    const WORKTREE_REASON_ENUMS = ["path_not_canonical_name", "branch_not_canonical_name", "path_branch_mismatch",
+      "outside_canonical_worktrees", "reuse_suspected", "snapshot_drift", "missing_attempt_evidence",
+      "not_delivered", "attempt_active", "worktree_dirty", "not_merged", "externally_removed", "user_cleaned",
+      "confirm_required", "unknown_candidate", "protected", "git_unavailable", "git_worktree_list_unavailable",
+      "live_record_drift", "realpath_unavailable", "realpath_escape", "state_changed"];
+    function formatWorktreeReason(reason) {
+      if (!reason) return dgT("worktree.defaultReason");
+      if (WORKTREE_REASON_ENUMS.includes(reason)) return dgT("worktree.reason." + reason);
+      return reason;
+    }
+
     // g-197：展示 delivered 目标已识别的清理候选与显式清理操作
     function WorktreeCandidates(props) {
       const [items, setItems] = React.useState([]);
@@ -444,7 +457,7 @@
           body: JSON.stringify({ id, confirm: true }),
         });
         const x = await r.json();
-        if (!r.ok) setNote(x.reason || x.error || dgT("worktree.cleanFail"));
+        if (!r.ok) setNote(x.reason ? formatWorktreeReason(x.reason) : (x.error || dgT("worktree.cleanFail")));
         else { setNote(dgT("worktree.cleaned")); load(); }
       };
       if (!items.length && !note) return null;
@@ -453,7 +466,7 @@
         items.map((x) =>
           h("div", { key: x.id, style: { ...S.subCard, marginTop: 4 } },
             h("div", null, `${x.status === "candidate" ? "✅" : "🔒"} ${x.path}`),
-            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${x.reason || dgT("worktree.defaultReason")}`),
+            h("div", { style: S.meta }, `${x.branch || "(detached)"} · ${x.head || "unknown"} · ${formatWorktreeReason(x.reason)}`),
             x.status === "candidate"
               ? h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => clean(x.id) }, dgT("worktree.confirmClean"))
               : null,
@@ -471,6 +484,7 @@
       if (!attempts.length) return null;
       const latest = [...attempts].reverse().find((a) => discovery.items?.[a.id]);
       const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: dgT("worktree.copyPathTooltip"), onClick: async () => { if (await copyText(item.path)) showToast(dgT("worktree.pathCopied")); } }, dgT("common.copy")) : null;
+      // i18n-keep(category-a)：匹配服务端 index.js 下发的遗留中文状态值（"正常"/"已锁定"）与本地合成哨兵（"已移除"），非 UI 文案源。
       const formatWorktreeStatus = (status) => {
         if (status === "正常" || status === "ok" || status === "normal") return dgT("worktree.normal");
         if (status === "已锁定" || status === "locked") return dgT("worktree.statusLocked");
@@ -519,6 +533,7 @@
               const next = { ...wt, items: { ...wt.items } };
               for (const [id, old] of Object.entries(lastWorktreesRef.current)) {
                 if (!next.items[id]) {
+                  // i18n-keep(category-a)：本地合成「已移除」哨兵值，仅供 formatWorktreeStatus 匹配映射为 dgT 词条，不直接渲染。
                   const removed = { ...old, status: "已移除" };
                   removedWorktreesRef.current[id] = removed;
                   next.items[id] = removed;
@@ -527,6 +542,7 @@
               for (const [id, removed] of Object.entries(removedWorktreesRef.current)) {
                 if (!next.items[id]) next.items[id] = removed;
               }
+              // i18n-keep(category-a)：过滤本地合成「已移除」哨兵（见上），非 UI 文案。
               lastWorktreesRef.current = Object.fromEntries(Object.entries(next.items).filter(([, v]) => v.status !== "已移除"));
               data = { ...data, worktrees: next };
             }
@@ -572,6 +588,7 @@
       else if (state.data.error) content = dgT("goal.requestFail") + state.data.error;
       else {
         const d = state.data;
+        // i18n-keep(category-a)：goal.md 正文的固定中文区段名（「目标描述」「质量判据」为数据格式契约，非 UI 文案）。
         const desc = section(d.body, "目标描述");
         const crit = section(d.body, "质量判据");
         const meta = d.meta ?? {};
@@ -649,6 +666,7 @@
 
         // g-a92e1406：tab 内容（占位文案视觉降级：trim 后以「（待」开头 → 小字灰色放标题右侧）
         // 识别逻辑：trim 后以「（待」开头或与国际化占位符匹配 → 占位；若占位后仍有正文，剥离占位行只显示正文
+        // i18n-keep(category-a)：以下「（待…」中文字面量用于匹配 goal.md 数据中的遗留中文占位符，非 UI 文案源。
         function isPlaceholder(text) {
           const t = String(text ?? "").trim();
           return t.startsWith("（待") || t === dgT('criteria.pending') || t === dgT('criteria.pendingDetail') || t === dgT('criteria.toBeFilled');
@@ -661,10 +679,12 @@
           if (t === "（待登记）" || t === dgT('criteria.pending')) {
             return { isPh: true, marker: dgT('criteria.pending'), body: "" };
           }
+          // i18n-keep(category-a)：匹配 goal.md 数据中的遗留中文占位符，非 UI 文案源。
           if (t === "（待填写）" || t === dgT('criteria.toBeFilled')) {
             return { isPh: true, marker: dgT('criteria.toBeFilled'), body: "" };
           }
           if (!t.startsWith("（待")) return { isPh: false, marker: null, body: t };
+          // i18n-keep(category-a)：匹配 goal.md 数据中的遗留中文占位符前缀（「（待…）」），非 UI 文案源。
           const m = t.match(/^（待[^）]*）/);
           let marker = m ? m[0] : dgT('criteria.toBeFilled');
           if (marker.includes("必须非空且已确认")) marker = dgT('criteria.pendingDetail');
@@ -895,7 +915,7 @@
             // 触发父组件刷新看板
             if (props.onRenamed) props.onRenamed(props.id, t);
           } else {
-            setRenameNote("⚠️ 重命名失败：" + (data.error || dgT("drag.unknownError")));
+            setRenameNote(dgT("goal.renameFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
           setRenameNote(dgT("drag.requestFail") + String(e?.message ?? e));

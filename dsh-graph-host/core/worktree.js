@@ -74,13 +74,14 @@ function parseAssociation(tree) {
     const pathName = tree.path.split(/[\\/]/).pop() ?? "";
     const pathMatch = pathName.match(/^g-(\d+)-att-(\d{2,3})$/);
     const branchMatch = tree.branch?.match(/^g-(\d+)-att-(\d{2,3})$/) ?? null;
+    // g-272 att-002：reason 一律为稳定枚举（客户端按枚举做 i18n 双语映射），不再下发中文句子。
     if (!pathMatch)
-        return { assoc: null, reason: "worktree 路径不是规范 goal-attempt 名称" };
+        return { assoc: null, reason: "path_not_canonical_name" };
     const assoc = { goal: `g-${pathMatch[1]}`, attempt: `att-${String(Number(pathMatch[2])).padStart(3, "0")}` };
     if (tree.branch && !branchMatch)
-        return { assoc, reason: "worktree 分支不是规范 goal-attempt 名称" };
+        return { assoc, reason: "branch_not_canonical_name" };
     if (branchMatch && (branchMatch[1] !== pathMatch[1] || branchMatch[2] !== pathMatch[2]))
-        return { assoc, reason: "路径与分支的 goal/attempt 不一致" };
+        return { assoc, reason: "path_branch_mismatch" };
     return { assoc };
 }
 function candidateId(goal, attempt, path) { return `${goal}:${attempt}:${path}`; }
@@ -151,15 +152,15 @@ export function listWorktrees(root, goalId) {
         let reason = null;
         if (!inside) {
             status = "unknown";
-            reason = "路径不在 canonical workspace/.worktrees";
+            reason = "outside_canonical_worktrees";
         }
         else if (reused) {
             status = "unknown";
-            reason = "路径/attempt 已有清理历史，疑似复用";
+            reason = "reuse_suspected";
         }
         else if (snapshotDrift) {
             status = "unknown";
-            reason = "登记后的 path/branch/HEAD 已漂移";
+            reason = "snapshot_drift";
         }
         else if (parsed.reason) {
             status = "unknown";
@@ -167,17 +168,17 @@ export function listWorktrees(root, goalId) {
         }
         else if (!attemptMeta || String(attemptMeta.goal ?? "") !== assoc.goal || String(attemptMeta.id ?? "") !== assoc.attempt) {
             status = "unknown";
-            reason = "缺少匹配的 attempt.md 证据";
+            reason = "missing_attempt_evidence";
         }
         else if (!delivered)
-            reason = "目标未交付";
+            reason = "not_delivered";
         else if (active)
-            reason = "attempt 活跃";
+            reason = "attempt_active";
         else if (!clean)
-            reason = "工作树有未提交改动";
+            reason = "worktree_dirty";
         else if (!merged) {
             status = "unknown";
-            reason = "HEAD 未由目标分支祖先链证明合入";
+            reason = "not_merged";
         }
         else
             status = "candidate";
@@ -190,7 +191,7 @@ export function listWorktrees(root, goalId) {
             continue;
         const external = events.some(x => x.event === "worktree.external_removed" && x.details?.id === d.id);
         const cleaned = events.some(x => x.event === "worktree.cleaned" && x.details?.id === d.id);
-        out.push({ ...d, status: cleaned ? "cleaned" : "unknown", reason: cleaned ? "已由用户清理" : "worktree 已从 Git 实时列表消失（外部删除）" });
+        out.push({ ...d, status: cleaned ? "cleaned" : "unknown", reason: cleaned ? "user_cleaned" : "externally_removed" });
         if (!external && !cleaned)
             appendEvent(root, { actor: "core", event: "worktree.external_removed", goal: e.goal, details: { id: d.id, path: d.path, removed_at: nowIso() } });
     }
@@ -207,42 +208,43 @@ export function registerWorktreeCandidates(root, goal, actor = "core") {
 export function cleanWorktree(root, id, actor = "human:gui", confirm = false) {
     const c = listWorktrees(root).find(x => x.id === id);
     if (!confirm)
-        return { ok: false, ...(c ? { candidate: c } : {}), reason: "需要用户明确确认" };
+        return { ok: false, ...(c ? { candidate: c } : {}), reason: "confirm_required" };
     const block = (reason) => { appendEvent(root, { actor, event: "worktree.clean_blocked", goal: c?.goal, details: { id, reason, candidate: c ?? null } }); return { ok: false, ...(c ? { candidate: c } : {}), reason }; };
     if (!c)
-        return block("未知候选 id");
-    if (c.status === "cleaned" || (c.status === "unknown" && c.reason?.includes("外部删除")))
+        return block("unknown_candidate");
+    // g-272 att-002：枚举等值判断（原为对中文 reason 的字符串包含判断），语义不变。
+    if (c.status === "cleaned" || (c.status === "unknown" && c.reason === "externally_removed"))
         return { ok: true, candidate: c, reason: "already_cleaned" };
     if (c.status !== "candidate")
-        return block(c.reason ?? "候选受保护");
+        return block(c.reason ?? "protected");
     const mainWorktree = resolveCodeWorkspace(root);
     if (!mainWorktree)
-        return block("Git 不可用");
+        return block("git_unavailable");
     const main = resolve(mainWorktree);
     const rel = relative(main, resolve(c.path));
     if (rel === "" || rel.startsWith(`..${sep}`) || !(rel.startsWith(`.worktrees${sep}`)))
-        return block("路径不在 canonical workspace/.worktrees");
+        return block("outside_canonical_worktrees");
     let live;
     try {
         live = trees(main).find(x => resolve(x.path) === resolve(c.path));
     }
     catch {
-        return block("Git worktree 列表不可用");
+        return block("git_worktree_list_unavailable");
     }
     if (!live || live.head !== c.head || live.branch !== c.branch)
-        return block("worktree 实时记录已漂移");
+        return block("live_record_drift");
     let realPath;
     try {
         realPath = realpathSync(live.path);
     }
     catch {
-        return block("worktree realpath 不可用");
+        return block("realpath_unavailable");
     }
     const realRel = relative(main, realPath);
     if (!realRel.startsWith(`.worktrees${sep}`) || realRel === ".worktrees" || realRel.startsWith(`..${sep}`))
-        return block("worktree realpath 越界或为符号链接");
+        return block("realpath_escape");
     if (goalStatus(root, c.goal) !== "delivered" || isActive(root, c.goal, c.attempt))
-        return block("目标或 attempt 状态已变化");
+        return block("state_changed");
     try {
         git(main, ["worktree", "remove", c.path]);
         appendEvent(root, { actor, event: "worktree.cleaned", goal: c.goal, details: { ...c, cleaned_at: nowIso() } });
