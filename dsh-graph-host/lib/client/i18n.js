@@ -82,6 +82,21 @@
       'deliver.label': '交',
       'deliver.count': '×{count}',
 
+      // === 批量接受（g-273 确认列列头入口与弹窗）===
+      'batchAccept.button': '批量接受',
+      'batchAccept.buttonWithCount': '批量接受 ({count})',
+      'batchAccept.disabledTip': '当前没有待确认的目标',
+      'batchAccept.enabledTip': '批量发起 {count} 个目标的交付复核请求',
+      'batchAccept.title': '批量接受 — 交付复核请求',
+      'batchAccept.desc': '将对勾选目标逐个发起与单卡「接受」完全等价的复核请求（写入 review.requested，由主管复核收口），不会直接交付。',
+      'batchAccept.selectAll': '全选',
+      'batchAccept.selectedCount': '已选 {selected}/{total}',
+      'batchAccept.confirmBtn': '确认接受 ({count})',
+      'batchAccept.allOk': '✅ 已对 {count} 个目标发起交付复核请求',
+      'batchAccept.partialResult': '⚠️ {ok} 个成功、{fail} 个失败',
+      'batchAccept.failedListTitle': '以下目标接受失败（其余已正常提交）：',
+      'batchAccept.requestFail': '⚠️ 批量接受请求失败：',
+
       // === 卡片 ===
       'card.clickToOpen': '点击打开详情',
       'card.expandFull': '展开查看依赖/实时会话/上下文卡片等完整信息',
@@ -982,6 +997,21 @@
       'deliver.collapsedTitle': 'Click to expand deliver column ({count} items)',
       'deliver.label': 'Deliver',
       'deliver.count': '×{count}',
+
+      // === Batch accept (g-273 confirm column head entry & modal) ===
+      'batchAccept.button': 'Batch Accept',
+      'batchAccept.buttonWithCount': 'Batch Accept ({count})',
+      'batchAccept.disabledTip': 'No goals awaiting confirmation',
+      'batchAccept.enabledTip': 'Request delivery review for {count} goals',
+      'batchAccept.title': 'Batch Accept — Delivery Review Request',
+      'batchAccept.desc': 'Each checked goal gets the exact same review request as the per-card Accept action (writes review.requested; the supervisor reviews and closes delivery). Nothing is delivered directly.',
+      'batchAccept.selectAll': 'Select all',
+      'batchAccept.selectedCount': 'Selected {selected}/{total}',
+      'batchAccept.confirmBtn': 'Confirm Accept ({count})',
+      'batchAccept.allOk': '✅ Delivery review requested for {count} goal(s)',
+      'batchAccept.partialResult': '⚠️ {ok} succeeded, {fail} failed',
+      'batchAccept.failedListTitle': 'These goals failed to accept (the rest were submitted):',
+      'batchAccept.requestFail': '⚠️ Batch accept request failed: ',
 
       // === Cards ===
       'card.clickToOpen': 'Click to open details',
