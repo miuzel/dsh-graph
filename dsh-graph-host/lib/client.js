@@ -7277,9 +7277,12 @@ function resetSearchState(activeWs) {
                   dgT("batchAccept.groupHeader", { label: g.label, count: g.items.length }))),
               ...g.items.map((it) => {
                 const on = selected.includes(it.id);
+                // g-273 att-004 层级缩进契约：目标行 paddingLeft=22px，比组头（6px）大 16px，
+                // 与组头形成一眼可辨的「组头 → 组内目标」层级，不再左对齐并列；
+                // 纯样式差异，行为零变更（g273 测试含源契约断言，防重构退回并列）。
                 return h("div", {
                   key: it.id,
-                  style: { display: "flex", alignItems: "center", gap: 8, padding: "3px 6px", fontSize: 12,
+                  style: { display: "flex", alignItems: "center", gap: 8, padding: "3px 6px 3px 22px", fontSize: 12,
                            cursor: loading ? "default" : "pointer", borderRadius: 4,
                            background: on ? "rgba(58,166,117,.08)" : "transparent" },
                   onClick: () => { if (!loading) toggleOne(it.id); },
