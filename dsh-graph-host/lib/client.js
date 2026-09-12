@@ -97,6 +97,21 @@ window.__ModuleLoader__.load({
       'deliver.label': '交',
       'deliver.count': '×{count}',
 
+      // === 批量接受（g-273 确认列列头入口与弹窗）===
+      'batchAccept.button': '批量接受',
+      'batchAccept.buttonWithCount': '批量接受 ({count})',
+      'batchAccept.disabledTip': '当前没有待确认的目标',
+      'batchAccept.enabledTip': '批量发起 {count} 个目标的交付复核请求',
+      'batchAccept.title': '批量接受 — 交付复核请求',
+      'batchAccept.desc': '将对勾选目标逐个发起与单卡「接受」完全等价的复核请求（写入 review.requested，由主管复核收口），不会直接交付。',
+      'batchAccept.selectAll': '全选',
+      'batchAccept.selectedCount': '已选 {selected}/{total}',
+      'batchAccept.confirmBtn': '确认接受 ({count})',
+      'batchAccept.allOk': '✅ 已对 {count} 个目标发起交付复核请求',
+      'batchAccept.partialResult': '⚠️ {ok} 个成功、{fail} 个失败',
+      'batchAccept.failedListTitle': '以下目标接受失败（其余已正常提交）：',
+      'batchAccept.requestFail': '⚠️ 批量接受请求失败：',
+
       // === 卡片 ===
       'card.clickToOpen': '点击打开详情',
       'card.expandFull': '展开查看依赖/实时会话/上下文卡片等完整信息',
@@ -1025,6 +1040,21 @@ window.__ModuleLoader__.load({
       'deliver.collapsedTitle': 'Click to expand deliver column ({count} items)',
       'deliver.label': 'Deliver',
       'deliver.count': '×{count}',
+
+      // === Batch accept (g-273 confirm column head entry & modal) ===
+      'batchAccept.button': 'Batch Accept',
+      'batchAccept.buttonWithCount': 'Batch Accept ({count})',
+      'batchAccept.disabledTip': 'No goals awaiting confirmation',
+      'batchAccept.enabledTip': 'Request delivery review for {count} goals',
+      'batchAccept.title': 'Batch Accept — Delivery Review Request',
+      'batchAccept.desc': 'Each checked goal gets the exact same review request as the per-card Accept action (writes review.requested; the supervisor reviews and closes delivery). Nothing is delivered directly.',
+      'batchAccept.selectAll': 'Select all',
+      'batchAccept.selectedCount': 'Selected {selected}/{total}',
+      'batchAccept.confirmBtn': 'Confirm Accept ({count})',
+      'batchAccept.allOk': '✅ Delivery review requested for {count} goal(s)',
+      'batchAccept.partialResult': '⚠️ {ok} succeeded, {fail} failed',
+      'batchAccept.failedListTitle': 'These goals failed to accept (the rest were submitted):',
+      'batchAccept.requestFail': '⚠️ Batch accept request failed: ',
 
       // === Cards ===
       'card.clickToOpen': 'Click to open details',
@@ -7025,6 +7055,182 @@ function resetSearchState(activeWs) {
       );
     }
     // Contract marker: 已隐藏全部 X 个版本（包含已发布版本）; title: "版本管理（显隐过滤与版本列表）"
+    // ===== g-273：确认列「批量接受」——列头入口 + 勾选式二次确认弹窗 + 限流批量提交 + 单条聚合主管通知 =====
+    // 硬约束（Human Gate 与逐卡「接受」语义逐字一致，见 goal-actions.js AcceptFeedback.doAccept）：
+    // - 逐个调用 POST /api/dsh-graph/accept 的**非 force** 路径（body 仅 {goal}），每目标写 review.requested；
+    // - 绝不传 force、绝不直接写 delivered；不新增后端端点；不改状态机契约；
+    // - 主管通知由客户端整批聚合为**一条**（服务端不去重）；无 supervisorSession 时静默跳过，不影响接受流程。
+
+    // 纯函数：列头「批量接受」按钮状态（禁用态 + 计数 + 悬停说明）。
+    // reviewCount = 当前视图内 status=review 的目标数（由 kanban.js 按当前视图过滤后传入）。
+    function batchAcceptButtonState(reviewCount) {
+      const count = Number.isFinite(reviewCount) ? Math.max(0, Math.floor(reviewCount)) : 0;
+      return {
+        disabled: count === 0,
+        count,
+        label: count > 0 ? dgT("batchAccept.buttonWithCount", { count }) : dgT("batchAccept.button"),
+        title: count === 0 ? dgT("batchAccept.disabledTip") : dgT("batchAccept.enabledTip", { count }),
+      };
+    }
+
+    // 纯函数：单项勾选/取消切换。
+    function batchAcceptToggleId(selected, id) {
+      return selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id];
+    }
+
+    // 核心提交：限流分批 Promise.allSettled（默认并发 4，防瞬时连接爆炸）。
+    // 单目标失败（状态冲突/网络错误）不中断其余目标；返回 { ok, failed } 结构化结果。
+    // opts: { concurrency, fetchImpl, urlOf } —— fetchImpl/urlOf 可注入（测试与 kanban 的 graphUrlForActive）。
+    async function runBatchAccept(goalIds, opts = {}) {
+      const ids = Array.isArray(goalIds) ? goalIds.filter((x) => typeof x === "string" && x) : [];
+      const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 4));
+      const fetchImpl = opts.fetchImpl ?? fetch;
+      const urlOf = opts.urlOf ?? ((p) => graphUrl(p));
+      const ok = [];
+      const failed = [];
+      for (let i = 0; i < ids.length; i += concurrency) {
+        const chunk = ids.slice(i, i + concurrency);
+        const results = await Promise.allSettled(chunk.map(async (goalId) => {
+          const r = await fetchImpl(urlOf("/api/dsh-graph/accept"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            // 非 force 路径契约：body 仅 {goal}——服务端走 requestAcceptReview 写 review.requested。
+            body: JSON.stringify({ goal: goalId }),
+          });
+          const data = await r.json();
+          if (data && (data.pending || data.ok)) return { goal: goalId, data };
+          const err = new Error((data && data.error) || "unknown error");
+          err.status = r.status;
+          throw err;
+        }));
+        for (let j = 0; j < results.length; j++) {
+          const res = results[j];
+          if (res.status === "fulfilled") ok.push(res.value);
+          else failed.push({ goal: chunk[j], error: String(res.reason?.message ?? res.reason), status: res.reason?.status });
+        }
+      }
+      return { ok, failed };
+    }
+
+    // 聚合主管通知文案：整批一条（含目标清单与总数），与单卡【负责人交付复核请求】同系列话术。
+    function batchAcceptSupervisorMessage(goalIds) {
+      return `【负责人批量交付复核请求】负责人已对目标 ${goalIds.join(", ")}（共 ${goalIds.length} 个）确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。`;
+    }
+
+    // 发送聚合主管通知：整批**一条** queue 消息；无 supervisorSession / 会话不可用 → 静默跳过（返回 false），
+    // 绝不影响接受流程本身；不得产生 N 条刷屏。
+    async function notifySupervisorBatchAccept(supervisorSession, goalIds) {
+      if (!supervisorSession || !Array.isArray(goalIds) || goalIds.length === 0) return false;
+      try {
+        const rt = sessionsRt ?? appCtx?.get?.("sessions");
+        const session = rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession);
+        if (!session?.prompt) return false;
+        await session.prompt([{ type: "text", text: batchAcceptSupervisorMessage(goalIds) }], "queue");
+        return true;
+      } catch (err) {
+        console.warn("[dsh-graph-host] batch accept: prompt supervisorSession failed:", err);
+        return false;
+      }
+    }
+
+    // 勾选式二次确认弹窗（Human Gate）。
+    // props: { items: [{id, title, versionLabel}], loading, failures: null|[{goal,error}], onConfirm(ids), onCancel() }
+    // 取消、✕、Esc、点击遮罩关闭均为零副作用（零网络请求、零状态变化，仅触发 onCancel）；
+    // loading（提交中）期间所有关闭路径与按钮一并锁定，防重复点击。
+    function BatchAcceptModal(props) {
+      const items = Array.isArray(props.items) ? props.items : [];
+      const allIds = items.map((it) => it.id);
+      const [selected, setSelected] = React.useState(() => allIds.slice());
+      // 部分失败后由父级回填 failures：勾选重置为仅失败项，便于直接重试
+      const failKey = JSON.stringify((props.failures ?? []).map((f) => f.goal));
+      React.useEffect(() => {
+        if (props.failures && props.failures.length) setSelected(props.failures.map((f) => f.goal));
+      }, [failKey]);
+      // Esc 关闭（loading 期间锁定）；纯取消路径，零副作用
+      const loadingRef = React.useRef(false);
+      loadingRef.current = !!props.loading;
+      React.useEffect(() => {
+        const onKey = (e) => {
+          if (e.key !== "Escape") return;
+          if (loadingRef.current) return;
+          e.stopPropagation();
+          props.onCancel?.();
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, []);
+      const loading = !!props.loading;
+      const closeIfIdle = () => { if (!loading) props.onCancel?.(); };
+      const backdropGuard = useBackdropClose(closeIfIdle);
+      const allChecked = allIds.length > 0 && selected.length === allIds.length;
+      const toggleAll = () => setSelected(allChecked ? [] : allIds.slice());
+      const toggleOne = (id) => setSelected((prev) => batchAcceptToggleId(prev, id));
+      const confirm = () => { if (!loading && selected.length > 0) props.onConfirm?.(selected.slice()); };
+
+      const cbStyle = { flexShrink: 0, cursor: "pointer", width: 16, height: 16, margin: 0 };
+      return h("div", { style: S.overlay, ...backdropGuard },
+        h("div", { style: { ...S.modal, maxWidth: 560 }, onClick: (e) => e.stopPropagation() },
+          h("span", { className: "dg-close", style: { ...S.close, ...(loading ? { opacity: 0.4, pointerEvents: "none" } : {}) }, onClick: closeIfIdle }, "✕"),
+          h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 6 } }, dgT("batchAccept.title")),
+          h("div", { style: { ...S.meta, marginBottom: 8 } }, dgT("batchAccept.desc")),
+          // 全选行 + 选中计数
+          h("div", {
+            style: { display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", marginBottom: 4,
+                     borderBottom: "1px solid rgba(128,128,128,.25)", fontSize: 12, fontWeight: 600 },
+          },
+            h("input", {
+              type: "checkbox", style: cbStyle, checked: allChecked, disabled: loading,
+              "aria-label": dgT("batchAccept.selectAll"),
+              onChange: toggleAll, onClick: (e) => e.stopPropagation(),
+            }),
+            h("span", { style: { cursor: loading ? "default" : "pointer" }, onClick: () => { if (!loading) toggleAll(); } },
+              dgT("batchAccept.selectAll")),
+            h("span", { style: { ...S.meta, marginLeft: "auto" } },
+              dgT("batchAccept.selectedCount", { selected: selected.length, total: allIds.length }))),
+          // 目标清单（id / 标题 / 所属版本），可滚动
+          h("div", { style: { maxHeight: 260, overflowY: "auto", marginBottom: 8 } },
+            items.map((it) => {
+              const on = selected.includes(it.id);
+              return h("div", {
+                key: it.id,
+                style: { display: "flex", alignItems: "center", gap: 8, padding: "3px 6px", fontSize: 12,
+                         cursor: loading ? "default" : "pointer", borderRadius: 4,
+                         background: on ? "rgba(58,166,117,.08)" : "transparent" },
+                onClick: () => { if (!loading) toggleOne(it.id); },
+              },
+                h("input", {
+                  type: "checkbox", style: cbStyle, checked: on, disabled: loading,
+                  "aria-label": it.id,
+                  onChange: () => toggleOne(it.id), onClick: (e) => e.stopPropagation(),
+                }),
+                h("span", { style: { fontFamily: "monospace", flexShrink: 0 } }, it.id),
+                h("span", { style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+                            title: it.title }, it.title ?? it.id),
+                h("span", { style: { ...S.meta, flexShrink: 0, fontSize: 11 } }, it.versionLabel ?? ""));
+            })),
+          // 部分失败清单（持久展示，不整体崩溃；其余目标已正常提交）
+          props.failures && props.failures.length
+            ? h("div", { style: { marginBottom: 8, padding: "6px 8px", borderRadius: 4, fontSize: 12,
+                                  background: "rgba(214,102,102,.12)", border: "1px solid rgba(214,102,102,.35)" } },
+                h("div", { style: { fontWeight: 600, marginBottom: 3, color: "var(--dsw-alias-state-error-primary, #f08080)" } },
+                  dgT("batchAccept.failedListTitle")),
+                props.failures.map((f) => h("div", { key: f.goal, style: { padding: "1px 0", wordBreak: "break-all" } },
+                  `• ${f.goal}: ${f.error}`)))
+            : null,
+          // 动作行：确认接受 / 取消（loading 期间双锁，防重复提交）
+          h("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+            h("button", {
+              style: { ...S.btnAccept, padding: "4px 14px", fontSize: 13 }, className: "dg-btn-accept",
+              disabled: loading || selected.length === 0,
+              onClick: confirm,
+            }, loading ? dgT("common.submitting") : dgT("batchAccept.confirmBtn", { count: selected.length })),
+            h("button", {
+              style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
+              disabled: loading,
+              onClick: closeIfIdle,
+            }, dgT("common.cancel")))));
+    }
+
     function BackwardReasonPrompt(props) {
       const { goalId, toStatus, hasChild, childId, parentId, onConfirm, onCancel } = props;
       const [reason, setReason] = React.useState("");
@@ -7798,6 +8004,11 @@ function resetSearchState(activeWs) {
       const [inProgressPrompt, setInProgressPrompt] = React.useState(null); // {goalId}
       // g-77647351：交付确认弹窗状态
       const [deliverPrompt, setDeliverPrompt] = React.useState(null); // {goalId, goalTitle, toStatus}
+      // g-273：确认列「批量接受」弹窗开关与提交中状态（loading 期间按钮与全部关闭路径锁定，防重复点击）
+      const [batchAcceptOpen, setBatchAcceptOpen] = React.useState(false);
+      const [batchAcceptLoading, setBatchAcceptLoading] = React.useState(false);
+      // g-273：部分失败清单（null=无；非空 → 弹窗持久展示失败目标与原因，勾选重置为失败项便于重试）
+      const [batchAcceptFailures, setBatchAcceptFailures] = React.useState(null);
 
       // g-77647351：同列重排提交（照抄 commitSessionDrag）
       function commitSameColumnDrag(activeDrag, over) {
@@ -8294,6 +8505,44 @@ function resetSearchState(activeWs) {
         ...b.standalone,
         ...b.backlog,
       ];
+
+      // ===== g-273：确认列「批量接受」 =====
+      // 当前视图内 status=review 的目标（候选集）。allGoals 已按当前视图过滤：
+      // 隐藏版本被 active/released 过滤排除；懒加载未展开的 released 泳道 goals 为空天然排除；
+      // 已归档目标（showArchived 时混入）不参与批量接受。
+      const reviewGoals = allGoals.filter((g) => g.status === "review" && !g.archived);
+      // 目标 id → 所属版本显示名（泳道名；独立目标/backlog 用泳道标签，与看板渲染一致）
+      const goalVersionLabel = {};
+      for (const v of [...active, ...released]) for (const g of (v.goals ?? [])) goalVersionLabel[g.id] = v.name;
+      for (const g of b.standalone) goalVersionLabel[g.id] = dgT("lane.standalone");
+      for (const g of b.backlog) goalVersionLabel[g.id] = "backlog";
+      // 批量提交：逐个走非 force accept（语义与逐卡「接受」逐字一致，详见 batch-accept.js），
+      // 限流并发 + 部分失败容错 + 整批一条聚合主管通知 + 完成刷板（被接受目标离开确认列）。
+      async function submitBatchAccept(goalIds) {
+        if (batchAcceptLoading || !Array.isArray(goalIds) || goalIds.length === 0) return;
+        setBatchAcceptLoading(true);
+        try {
+          const { ok, failed } = await runBatchAccept(goalIds, { urlOf: (p) => graphUrlForActive(p) });
+          // 聚合主管通知：仅在有成功项时整批发一条；无 supervisorSession 静默跳过，不影响接受流程
+          if (ok.length) {
+            await notifySupervisorBatchAccept(b.supervisorSession ?? null, ok.map((x) => x.goal));
+          }
+          if (failed.length === 0) {
+            setBatchAcceptFailures(null);
+            setBatchAcceptOpen(false);
+            showToast(dgT("batchAccept.allOk", { count: ok.length }));
+          } else {
+            // 部分失败：不整体崩溃——弹窗保持打开并持久列出失败目标与原因，勾选重置为失败项
+            setBatchAcceptFailures(failed);
+            showToast(dgT("batchAccept.partialResult", { ok: ok.length, fail: failed.length }));
+          }
+          load(); // 刷新看板：被接受目标（已写 review.requested）按当前视图重算
+        } catch (e) {
+          showToast(dgT("batchAccept.requestFail") + String(e?.message ?? e));
+        } finally {
+          setBatchAcceptLoading(false);
+        }
+      }
 
       // ===== g-233: 目标搜索与导航核心函数（g-255: 使用 search-state.js 纯函数） =====
       // g-233 P4: 用户显式操作泳道折叠状态，从临时恢复列表中移除（用户意图优先）
@@ -9554,6 +9803,32 @@ function resetSearchState(activeWs) {
                 ? "▸"
                 : s.label + " ▾");
             }
+            // g-273：确认列列头「批量接受」入口——0 个待确认 → disabled + 悬停说明；
+            // ≥1 → 可用并显示数量。flex 行内布局：whiteSpace nowrap（继承 stageHead）+
+            // overflow hidden + 按钮 flexShrink 0，150px 最小列宽与相邻列折叠/展开时不换行不重叠。
+            if (s.key === "confirm") {
+              const ba = batchAcceptButtonState(reviewGoals.length);
+              return h("div", {
+                key: s.key,
+                style: { ...S.stageHead, display: "flex", alignItems: "center", justifyContent: "center",
+                         gap: 6, overflow: "hidden" },
+              },
+                h("span", { style: { flexShrink: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" } }, s.label),
+                h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "1px 8px", lineHeight: 1.4,
+                           whiteSpace: "nowrap", flexShrink: 0, opacity: ba.disabled ? 0.5 : 1 },
+                  className: "dg-btn dg-batch-accept-btn",
+                  disabled: ba.disabled || batchAcceptLoading,
+                  title: ba.title,
+                  "aria-label": ba.label,
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    if (ba.disabled || batchAcceptLoading) return;
+                    setBatchAcceptFailures(null);
+                    setBatchAcceptOpen(true);
+                  },
+                }, batchAcceptLoading ? dgT("common.submitting") : ba.label));
+            }
             return h("div", { key: s.key, style: S.stageHead }, s.label);
           }),
           ...rows),
@@ -9780,6 +10055,22 @@ function resetSearchState(activeWs) {
                 commitCrossColumnDrag(deliverPrompt.goalId, deliverPrompt.toStatus);
               },
               onCancel: () => setDeliverPrompt(null),
+            })
+          : null,
+        // g-273：确认列「批量接受」二次确认弹窗（Human Gate）——
+        // 取消/✕/Esc/遮罩关闭零网络请求零状态变化；确认后逐个非 force accept + 整批一条聚合主管通知
+        batchAcceptOpen
+          ? h(BatchAcceptModal, {
+              key: "batch-accept-modal",
+              items: reviewGoals.map((g) => ({
+                id: g.id,
+                title: g.title ?? g.id,
+                versionLabel: goalVersionLabel[g.id] ?? "",
+              })),
+              loading: batchAcceptLoading,
+              failures: batchAcceptFailures,
+              onConfirm: (ids) => { void submitBatchAccept(ids); },
+              onCancel: () => { if (!batchAcceptLoading) { setBatchAcceptOpen(false); setBatchAcceptFailures(null); } },
             })
           : null,
         // g-134/g-135: 版本详情弹窗（含摘要/范围/working/released 操作）

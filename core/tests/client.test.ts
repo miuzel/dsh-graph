@@ -1823,8 +1823,8 @@ test("g-179 生成 bundle 契约：client.js 标题同步为 🔎 信息收集�
 
 // ===== g-181：父级 overlay backdrop 误关保护（内容起点文本选择/拖拽到弹窗外松开不误关）=====
 
-// 五个受影响模块 + g-183 共享面板（shared-panel.js）的 guard 接入预期（每处 style: S.overlay 都必须走
-// useBackdropClose guard，禁止裸 style: S.overlay, onClick:；panel stopPropagation 保留）。
+// 五个受影响模块 + g-183 共享面板（shared-panel.js）+ g-273 批量接受弹窗（batch-accept.js）的 guard 接入预期
+// （每处 style: S.overlay 都必须走 useBackdropClose guard，禁止裸 style: S.overlay, onClick:；panel stopPropagation 保留）。
 const G181_MODULES: Record<string, number> = {
   "goal-modal.js": 1,
   "criteria-modal.js": 3,
@@ -1832,8 +1832,9 @@ const G181_MODULES: Record<string, number> = {
   "drag-prompts.js": 4,
   "kanban.js": 6,
   "shared-panel.js": 1,
+  "batch-accept.js": 1,
 };
-const G181_TOTAL = Object.values(G181_MODULES).reduce((a, b) => a + b, 0); // 16
+const G181_TOTAL = Object.values(G181_MODULES).reduce((a, b) => a + b, 0); // 19
 
 test("g-181 源契约：helpers.js 提供共享 useBackdropClose（useRef 起点 + pointerdown + onClick 吞合成 click）", () => {
   const helpers = readFileSync(
@@ -1848,7 +1849,7 @@ test("g-181 源契约：helpers.js 提供共享 useBackdropClose（useRef 起点
   assert.match(helpers, /onClose\?\.\(\);/);
 });
 
-test("g-181 源契约：各模块全部 style: S.overlay 均接 guard（共 16 处），无裸 overlay onClick，panel stopPropagation 保留", () => {
+test("g-181 源契约：各模块全部 style: S.overlay 均接 guard（共 19 处），无裸 overlay onClick，panel stopPropagation 保留", () => {
   for (const [file, expected] of Object.entries(G181_MODULES)) {
     const src = readFileSync(
       join(import.meta.dirname, "../../dsh-graph-host/lib/client", file), "utf8");
@@ -1862,7 +1863,7 @@ test("g-181 源契约：各模块全部 style: S.overlay 均接 guard（共 16 �
     const stopProp = src.match(/onClick: \(e\) => e\.stopPropagation\(\)/g) ?? [];
     assert.ok(stopProp.length >= expected, `${file}: panel stopPropagation 保留（>= ${expected}，实际 ${stopProp.length}）`);
   }
-  // 全量约束 16 个父级 overlay 入口
+  // 全量约束 19 个父级 overlay 入口
   let total = 0;
   for (const file of Object.keys(G181_MODULES)) {
     const src = readFileSync(
@@ -1914,7 +1915,7 @@ test("g-181 hook 逻辑模拟：内容起点→backdrop 不关；backdrop→back
   assert.equal(closed, 2, "吞掉合成 click 后 ref 清零，下一次 backdrop 点击仍关闭");
 });
 
-test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、16 个 guard overlay、保留 GENERATED header", () => {
+test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、19 个 guard overlay、保留 GENERATED header", () => {
   const bundle = readFileSync(
     join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
@@ -1925,7 +1926,7 @@ test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、16 个 guard
   assert.equal(guarded.length, G181_TOTAL, `生成 bundle: ${G181_TOTAL} 个父级 overlay 全部接 guard`);
   const bare = bundle.match(/style: S\.overlay, onClick:/g) ?? [];
   assert.equal(bare.length, 0, "生成 bundle: 无裸 style: S.overlay, onClick:");
-  // panel stopPropagation 保留（>= 16 处 overlay panel；允许额外按钮内 stopPropagation）
+  // panel stopPropagation 保留（>= 19 处 overlay panel；允许额外按钮内 stopPropagation）
   const stopProp = bundle.match(/onClick: \(e\) => e\.stopPropagation\(\)/g) ?? [];
   assert.ok(stopProp.length >= G181_TOTAL, `生成 bundle: panel stopPropagation 保留（>= ${G181_TOTAL}，实际 ${stopProp.length}）`);
 });
