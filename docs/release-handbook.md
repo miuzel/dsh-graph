@@ -65,6 +65,27 @@ gh repo edit miuzel/dsh-graph --add-topic dsh-plugin --add-topic dsh --add-topic
 
 ## 4. pnpm publish 单包（B6 解除后）
 
+> **v0.10.0 复盘（2026-09-12）：发布必须在「发布 tag 的独立 worktree」里执行，不要在 `<version>-test` 集成分支上跑。**
+> 集成分支在发布合并之后随时可能继续提交，从那里 publish 会让「发布物 ≠ tag 内容」的隐患成立（v0.10.0 当时两者恰好逐字节一致，属侥幸）。
+>
+> ```sh
+> # 0. 先把待发布内容并到 main 并打 tag（supervisor 执行）
+> git checkout main && git merge --no-ff vX.Y.Z-test && git tag -a vX.Y.Z -m "dsh-graph vX.Y.Z"
+> GIT_SSH_COMMAND="ssh -F /dev/null" git push origin main && GIT_SSH_COMMAND="ssh -F /dev/null" git push origin vX.Y.Z
+>
+> # 1. 为 tag 建独立发布树（不打扰集成分支/开发实例），并让 prepack 的 tsc 可用
+> git worktree add --detach .worktrees/release-vX.Y.Z vX.Y.Z
+> ln -sfn "$PWD/node_modules" .worktrees/release-vX.Y.Z/node_modules
+> git -C .worktrees/release-vX.Y.Z describe --tags   # 必须输出 vX.Y.Z
+> (cd .worktrees/release-vX.Y.Z/dsh-graph-host && bash ../scripts/sync-core.sh)  # 预演 prepack：应零 diff
+>
+> # 2. 在发布树里发布（发布前确认 package.json version == tag）
+> (cd .worktrees/release-vX.Y.Z/dsh-graph-host && pnpm publish --registry=https://registry.npmjs.org --no-git-checks)
+>
+> # 3. 收尾：核验后清理发布树
+> git worktree remove .worktrees/release-vX.Y.Z
+> ```
+
 ```sh
 # 前置：npm 官方登录（人工 gate，需负责人凭据）
 npm login --registry=https://registry.npmjs.org   # 或 NODE_AUTH_TOKEN + .npmrc
@@ -79,6 +100,10 @@ npm view dsh-graph version
 > 注意：本机 `~/.npmrc` 指向 npmmirror 镜像且未登录——发布前必须切官方 registry 并登录；
 > 沙箱内 pnpm 的 supply-chain policy 会对本地 tgz 误报（minimum-release-age），真实发布到官方
 > registry 后无此问题（该 policy 只查官方 registry 的发布时间）。
+>
+> 另：本机 `/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf` 权限损坏会导致所有 ssh 推送失败
+> （`Bad owner or permissions on ...`），git push 一律加 `GIT_SSH_COMMAND="ssh -F /dev/null"`（v0.9.2、
+> v0.10.0 均以此绕行成功）。
 
 ## 5. 本地验收（发布后）
 
