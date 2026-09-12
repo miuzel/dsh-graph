@@ -105,6 +105,38 @@ test("g-273: source contracts — non-force accept body, single aggregated notif
   assert.match(bundleSource, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
 });
 
+// ===== 2b. 层级缩进源契约（att-004）：组内目标行 paddingLeft ≥ 组头 + 16px =====
+// 从模块源码解析组头行与目标行的 padding 声明，断言语义关系（差值 ≥16px）而非死值，
+// 防后续重构悄悄退回「goal 与版本组头左对齐并列」；生成物 bundle 同步校验。
+function cssPaddingLeft(pad: string): number {
+  // CSS padding 简写：1 值→四边；2 值→[纵,横]；3 值→[上,横,下]；4 值→[上,右,下,左]
+  const parts = pad.trim().split(/\s+/).map((p) => Number.parseFloat(p));
+  assert.ok(parts.every((n) => Number.isFinite(n)), `padding "${pad}" must be plain px numbers`);
+  if (parts.length === 1) return parts[0];
+  if (parts.length <= 3) return parts[1];
+  return parts[3];
+}
+
+test("g-273 att-004: goal rows indented vs group headers (paddingLeft diff >= 16px, real visible)", () => {
+  const extract = (src: string, name: string) => {
+    // 组头行（key "vh-"）与组内目标行（key it.id）各自的 padding 声明
+    const header = src.match(/key: "vh-"[\s\S]{0,400}?padding: "([^"]+)"/);
+    const row = src.match(/key: it\.id,[\s\S]{0,400}?padding: "([^"]+)"/);
+    assert.ok(header, `${name}: group header padding declaration must exist`);
+    assert.ok(row, `${name}: goal row padding declaration must exist`);
+    return { headerLeft: cssPaddingLeft(header![1]), rowLeft: cssPaddingLeft(row![1]) };
+  };
+  for (const [src, name] of [[moduleSource, "module"], [bundleSource, "bundle"]] as const) {
+    const { headerLeft, rowLeft } = extract(src, name);
+    assert.ok(
+      rowLeft - headerLeft >= 16,
+      `${name}: goal row paddingLeft (${rowLeft}px) must be >= group header paddingLeft (${headerLeft}px) + 16px`,
+    );
+  }
+  // 防不可见 hack：缩进必须落在目标行自身的 padding 上（真实可见），而非 0 宽/透明手段
+  assert.doesNotMatch(moduleSource, /key: it\.id,[\s\S]{0,400}?padding: "[^"]*0px 0px/);
+});
+
 // ===== 3. 按钮状态纯函数：禁用态与计数 =====
 test("g-273: batchAcceptButtonState — disabled at 0 with tip, count label at >=1", () => {
   (globalThis as any).dgT = dgZh;
