@@ -42,6 +42,32 @@
       return groups;
     }
 
+    // 纯函数（g-273 att-003）：组级三态 —— 由该组 ids 的选中情况派生。
+    // 返回 { all, some, none }：all=组内全部选中（checked）、some=部分选中（indeterminate）、
+    // none=全未选（unchecked）。空组 ids → 全未选（组级开关语义对空组无意义，弹窗本就零渲染空组）。
+    function batchAcceptGroupState(selected, ids) {
+      const sel = new Set(Array.isArray(selected) ? selected : []);
+      const list = Array.isArray(ids) ? ids.filter((x) => typeof x === "string" && x) : [];
+      const on = list.filter((id) => sel.has(id)).length;
+      const all = list.length > 0 && on === list.length;
+      return { all, some: on > 0 && !all, none: on === 0 };
+    }
+
+    // 纯函数（g-273 att-003）：组级全选/取消全选切换 —— 只影响该组 ids，其他组选中态原样保留。
+    // 组未全选 → 追加该组缺失项（保持既有 selected 顺序，组内新项按 ids 顺序追加）；
+    // 组已全选 → 移除该组全部项。
+    function batchAcceptToggleGroup(selected, ids) {
+      const prev = Array.isArray(selected) ? selected : [];
+      const list = Array.isArray(ids) ? ids.filter((x) => typeof x === "string" && x) : [];
+      const all = list.length > 0 && list.every((id) => prev.includes(id));
+      if (all) {
+        const drop = new Set(list);
+        return prev.filter((id) => !drop.has(id));
+      }
+      const have = new Set(prev);
+      return [...prev, ...list.filter((id) => !have.has(id))];
+    }
+
     // 核心提交：限流分批 Promise.allSettled（默认并发 4，防瞬时连接爆炸）。
     // 单目标失败（状态冲突/网络错误）不中断其余目标；返回 { ok, failed } 结构化结果。
     // opts: { concurrency, fetchImpl, urlOf } —— fetchImpl/urlOf 可注入（测试与 kanban 的 graphUrlForActive）。
@@ -129,6 +155,9 @@
       const closeIfIdle = () => { if (!loading) props.onCancel?.(); };
       const backdropGuard = useBackdropClose(closeIfIdle);
       const allChecked = allIds.length > 0 && selected.length === allIds.length;
+      // 全局三态（g-273 att-003）：部分选中 → indeterminate（DOM 属性，须经 ref 赋值，React 不托管）
+      const globalSome = !allChecked && selected.length > 0;
+      const globalCbRef = (el) => { if (el) el.indeterminate = globalSome; };
       const toggleAll = () => setSelected(allChecked ? [] : allIds.slice());
       const toggleOne = (id) => setSelected((prev) => batchAcceptToggleId(prev, id));
       const confirm = () => { if (!loading && selected.length > 0) props.onConfirm?.(selected.slice()); };
@@ -149,6 +178,7 @@
           },
             h("input", {
               type: "checkbox", style: cbStyle, checked: allChecked, disabled: loading,
+              ref: globalCbRef,
               "aria-label": dgT("batchAccept.selectAll"),
               onChange: toggleAll, onClick: (e) => e.stopPropagation(),
             }),
@@ -156,15 +186,32 @@
               dgT("batchAccept.selectAll")),
             h("span", { style: { ...S.meta, marginLeft: "auto" } },
               dgT("batchAccept.selectedCount", { selected: selected.length, total: allIds.length }))),
-          // 目标清单：按版本分组渲染（组头 = 版本标签 + 该组待接受目标数），可滚动；
+          // 目标清单：按版本分组渲染（组头 = 组级三态开关 + 版本标签 + 该组待接受目标数），可滚动；
           // 组内行 = 复选框 + id + 标题（不再重复显示版本列）；全选/已选计数仍为跨组全局。
+          // 组级三态（g-273 att-003）：组内全选中=checked、部分选中=indeterminate（ref 赋值 DOM 属性）、
+          // 全未选=unchecked；点击只影响该组（未全选→全选本组、已全选→取消本组），loading 期间锁定。
           h("div", { style: { maxHeight: 260, overflowY: "auto", marginBottom: 8 } },
-            groups.flatMap((g) => [
+            groups.flatMap((g) => {
+              const groupIds = g.items.map((it) => it.id);
+              const gState = batchAcceptGroupState(selected, groupIds);
+              const toggleGroup = () => setSelected((prev) => batchAcceptToggleGroup(prev, groupIds));
+              const groupAria = dgT(gState.all ? "batchAccept.unselectGroup" : "batchAccept.selectGroup", { label: g.label });
+              return [
               h("div", {
                 key: "vh-" + g.label,
-                style: { ...S.meta, padding: "5px 6px 2px", fontSize: 11, fontWeight: 700,
+                style: { ...S.meta, display: "flex", alignItems: "center", gap: 8,
+                         padding: "5px 6px 2px", fontSize: 11, fontWeight: 700,
                          borderTop: "1px solid rgba(128,128,128,.18)" },
-              }, dgT("batchAccept.groupHeader", { label: g.label, count: g.items.length })),
+              },
+                h("input", {
+                  type: "checkbox", style: cbStyle, checked: gState.all, disabled: loading,
+                  ref: (el) => { if (el) el.indeterminate = gState.some; },
+                  "aria-label": groupAria, title: groupAria,
+                  onChange: () => { if (!loading) toggleGroup(); }, onClick: (e) => e.stopPropagation(),
+                }),
+                h("span", { style: { cursor: loading ? "default" : "pointer" }, title: groupAria,
+                            onClick: () => { if (!loading) toggleGroup(); } },
+                  dgT("batchAccept.groupHeader", { label: g.label, count: g.items.length }))),
               ...g.items.map((it) => {
                 const on = selected.includes(it.id);
                 return h("div", {
@@ -183,7 +230,8 @@
                   h("span", { style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
                               title: it.title }, it.title ?? it.id));
               }),
-            ])),
+              ];
+            })),
           // 部分失败清单（持久展示，不整体崩溃；其余目标已正常提交）
           props.failures && props.failures.length
             ? h("div", { style: { marginBottom: 8, padding: "6px 8px", borderRadius: 4, fontSize: 12,
@@ -208,5 +256,5 @@
     }
 
 // >>>ESM-EXPORTS-START>>> (build script strips this block for browser bundle)
-export { batchAcceptButtonState, batchAcceptToggleId, batchAcceptGroupByVersion, runBatchAccept, batchAcceptSupervisorMessage, notifySupervisorBatchAccept, BatchAcceptModal };
+export { batchAcceptButtonState, batchAcceptToggleId, batchAcceptGroupByVersion, batchAcceptGroupState, batchAcceptToggleGroup, runBatchAccept, batchAcceptSupervisorMessage, notifySupervisorBatchAccept, BatchAcceptModal };
 // <<<ESM-EXPORTS-END<<<
