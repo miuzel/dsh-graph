@@ -1508,6 +1508,7 @@
               className: "dg-btn",
               style: { ...S.btn, padding: "2px 8px", fontSize: 12, marginLeft: 8 },
               onClick: () => loadBacklogGoals()
+              // i18n-keep(category-a)：「重试」仅为 dgT 异常返回空时的兜底字面量，正常路径走 i18n 词条。
             }, dgT('common.retry') || "重试")
           );
         }
@@ -1595,6 +1596,7 @@
                 className: "dg-btn",
                 style: { ...S.btn, padding: "2px 8px", fontSize: 12, marginLeft: 8 },
                 onClick: () => loadVersionGoals(v.slug)
+                // i18n-keep(category-a)：「重试」仅为 dgT 异常返回空时的兜底字面量，正常路径走 i18n 词条。
               }, dgT("common.retry") || "重试")
             );
           } else {

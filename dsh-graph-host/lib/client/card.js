@@ -77,6 +77,7 @@
         const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
         if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
+        // i18n-keep(category-a)：匹配用户/子代理手写的遗留中文 status_line 终态词，非 UI 文案，必须保留中文模式。
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
     }

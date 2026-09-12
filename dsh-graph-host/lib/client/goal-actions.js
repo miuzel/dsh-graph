@@ -28,6 +28,7 @@
         if (!t) return;
         if (!session?.prompt) { setFbNote(dgT("criteria.feedbackNotConnected")); return; }
         try {
+          // i18n-keep(category-b)：发往目标执行会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
           const res = await session.prompt(
             [{ type: "text", text: `【${props.goalId} 判据反馈】${criterion}\n${t}` }], "queue");
           if (res?.ok) {
@@ -133,6 +134,7 @@
         const structured = ["working", "blocked", "done", "error"].includes(a?.status_state) ? a.status_state : null;
         if (structured) return structured === "working";
         const line = String(a?.status_line ?? "").trim();
+        // i18n-keep(category-a)：匹配用户/子代理手写的遗留中文 status_line 终态词，非 UI 文案，必须保留中文模式。
         return line !== "" && !/空闲|完成|待命|已交付|结束|等待|finished|done|idle|completed/i.test(line);
       });
     }
@@ -148,6 +150,7 @@
       const allowed = ["draft", "planning", "collecting", "ready"];
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       if (!allowed.includes(status) || hasActiveAttempt) return null;
+      // i18n-keep(category-b)：复制到剪贴板并粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
       const request = `【${goalId} 定义/润色请求】\n目标 ID：${goalId}\ngoal.md 工作区相对路径：${String(goalPath ?? "（路径未知）")}\n人工指导意见：${guidance.trim() || "（无）"}`;
       const openSupervisor = async () => {
         setLoading(true); setNote(null);
@@ -160,7 +163,7 @@
           if (copied) showToast(dgT("exec.requestCopied"));
            setMode("supervisor");
            setFallback(!copied);
-          setNote(copied ? "✅ 请求已复制，已打开主管会话，请粘贴发送" : "⚠️ 自动复制失败，请手动复制下方请求");
+          setNote(copied ? dgT("exec.requestCopiedOpened") : dgT("exec.autocopyFailedRequest"));
         } catch (e) { setNote(dgT("exec.supervisorPathFailed") + String(e?.message ?? e)); }
         setLoading(false);
       };
@@ -224,6 +227,7 @@
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
       // 反馈预填模板（复制与显示共用，保证一致）
+      // i18n-keep(category-b)：粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
       const prefillText = fbText.trim() ? `【${goalId} 反馈】\n${fbText.trim()}` : "";
 
       // 接受复核状态只关联当前生命周期周期：
@@ -255,7 +259,7 @@
 
       // 接受：默认经主管 Agent 复核（review.requested → 主管复核收口）
       const doAccept = async () => {
-        if (!confirm(`确认接受目标「${goalId}」的交付成果？\n\n此操作将请求主管会话完成最终复核，并执行交付收口。`)) return;
+        if (!confirm(dgT("exec.acceptConfirm", { goalId }))) return;
         setLoading(true);
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/accept"), {
@@ -268,6 +272,7 @@
             try {
               const rt = sessionsRt ?? appCtx?.get?.("sessions");
               const session = supervisorSession && (rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession));
+              // i18n-keep(category-b)：发往主管会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
               if (session?.prompt) await session.prompt([{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }], "queue");
             } catch (err) {
               console.warn("[dsh-graph-host] prompt supervisorSession failed:", err);
@@ -275,9 +280,9 @@
             onRefresh?.();
           } else if (data.ok) {
             onRefresh?.();
-          } else setNote("⚠️ 接受失败：" + (data.error || dgT("drag.unknownError")));
+          } else setNote(dgT("exec.acceptFail") + (data.error || dgT("drag.unknownError")));
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -291,12 +296,12 @@
             body: JSON.stringify({ goal: goalId, force: true, reason: forceReason.trim() || undefined }),
           });
           const data = await r.json();
-          if (data.ok) setNote(forceReason.trim() ? "✅ 已强制接受（理由已记入事件）" : "✅ 已强制接受");
-          else setNote("⚠️ 强制接受失败：" + (data.error || dgT("drag.unknownError")));
+          if (data.ok) setNote(forceReason.trim() ? dgT("exec.forceAcceptWithReason") : dgT("exec.forceAccept"));
+          else setNote(dgT("exec.forceAcceptFail") + (data.error || dgT("drag.unknownError")));
           setForceMode(false);
           setForceReason("");
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -312,7 +317,7 @@
           });
           const trData = await tr.json();
           if (!trData.ok) {
-            setNote("⚠️ 状态迁移失败：" + (trData.error || dgT("drag.unknownError")));
+            setNote(dgT("exec.stateTransitionFail") + (trData.error || dgT("drag.unknownError")));
             setLoading(false);
             return;
           }
@@ -325,18 +330,18 @@
           const data = await r.json();
           if (data.ok) {
             if (data.child_id) {
-              setNote("✅ 已派发执行子代理，id：" + data.child_id);
+              setNote(dgT("exec.childDispatched") + data.child_id);
             } else if (data.child_error) {
-              setNote("⚠️ 子代理启动失败：" + data.child_error);
+              setNote(dgT("exec.childFailed") + data.child_error);
             } else {
-              setNote("⚠️ 子代理未启动（无 child_id）");
+              setNote(dgT("exec.childNotStarted"));
             }
             onRefresh?.(); // g-148：刷新看板（回调由父组件 GoalModal 传入）
           } else {
-            setNote("⚠️ 执行失败：" + (data.error || dgT("drag.unknownError")));
+            setNote(dgT("exec.executeFail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -344,18 +349,18 @@
       const openSupervisorWithFeedback = async () => {
         try {
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
-          if (!rt) { setNote("⚠️ 会话服务不可用"); return; }
+          if (!rt) { setNote(dgT("exec.supervisorUnavailable")); return; }
           // 打开主管会话（id 由 board 端点下发 project.yaml supervisor.session，g-108）
-          if (!supervisorSession) { setNote("⚠️ 未配置主管会话（project.yaml 的 supervisor.session）"); return; }
+          if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
           // 自动复制预填内容（负责人指示），再切到主管对话窗直接粘贴发送
           const copied = prefillText ? await copyText(prefillText) : false;
           rt.open?.(supervisorSession);
           activateChatTab();
           if (copied) {
-            showToast("✅ 预填内容已复制，到主管对话窗 Ctrl+V 直接粘贴发送");
-            setNote("✅ 预填内容已复制，已切换到主管对话窗，直接粘贴发送");
+            showToast(dgT("exec.precopied"));
+            setNote(dgT("exec.prefillCopied"));
           } else {
-            setNote("⚠️ 自动复制失败（浏览器限制），请手动复制下方预填内容；已切换到主管对话窗");
+            setNote(dgT("exec.autocopyFailed"));
           }
         } catch (e) {
           setNote(dgT("exec.supervisorJumpFail") + String(e?.message ?? e));
@@ -453,7 +458,7 @@
             setNote(dgT("addCard.fail") + (data.error || dgT("drag.unknownError")));
           }
         } catch (e) {
-          setNote("⚠️ 请求失败：" + String(e?.message ?? e));
+          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
         setLoading(false);
       };
@@ -462,9 +467,9 @@
       const openSupervisorChat = () => {
         try {
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
-          if (!rt) { setNote("⚠️ 会话服务不可用"); return; }
+          if (!rt) { setNote(dgT("exec.supervisorUnavailable")); return; }
           // 主管会话 id 由 board 端点下发（project.yaml supervisor.session，g-108）
-          if (!supervisorSession) { setNote("⚠️ 未配置主管会话（project.yaml 的 supervisor.session）"); return; }
+          if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
           rt.open?.(supervisorSession);
           activateChatTab();
           setNote(dgT("addCard.chatSwitched"));

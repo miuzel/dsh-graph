@@ -172,6 +172,7 @@
      *  纯函数（不触发任何请求/派发），便于行为测试。 */
     function resolveBlockedDropTarget(blockedFrom, toStageKey) {
       const raw = typeof blockedFrom === "string" ? blockedFrom.trim() : "";
+      // i18n-keep(category-a)：tr 的 fallback 中文仅在 dgT 未初始化（i18n 注册前）时兜底，正常路径一律走 dgT 词条。
       const tr = (key, params, fallback) => typeof dgT === "function" ? dgT(key, params) : fallback;
       if (!raw) {
         return { ok: false, message: tr('drag.blockedNoFrom', null, "⚠️ 该目标缺少 blocked_from 记录，无法自动解除阻塞；请由主管确认原状态后手动处理") };
@@ -636,6 +637,7 @@
       const raw = String(statusLine).trim();
       // g-247：结构化状态优先；只有缺失/未知时才解析自由文本，避免中英文及否定句误判。
       const structured = ["working", "blocked", "done", "error"].includes(statusState) ? statusState : null;
+      // i18n-keep(category-a)：以下正则匹配用户手写的遗留中文 status_line 自由文本（g-247 兜底路径），非 UI 文案。
       const isBlocked = structured ? structured === "blocked" : (!!blocked || /阻塞|blocked/i.test(raw));
       const isError = structured ? structured === "error" : (!isBlocked && /失败|错误|报错|failed|error/i.test(raw));
       const isDone = structured ? structured === "done" : (!isBlocked && !isError && /完成|已完成|空闲|待命|已交付|等待\s*review|等待复核|finished|done|idle|completed/i.test(raw));

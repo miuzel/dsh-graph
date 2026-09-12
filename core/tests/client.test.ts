@@ -1468,7 +1468,8 @@ test("g-168 定义/润色源契约：按钮同排且请求仅含路径与指导�
   const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
   assert.ok(/function DefinitionPolish\(props\)/.test(actions));
   assert.ok(/goalPath/.test(actions) && /guidance/.test(actions));
-  assert.ok(!/h\("pre"[\s\S]*request/.test(actions), "不渲染完整请求预览");
+  // g-272 att-002：原 [\s\S]* 贪心正则会越过 h("pre" 命中后文无关的 request 字面量（如 dgT("drag.requestFail")），收紧为限长窗口，语义不变。
+  assert.ok(!/h\("pre"[\s\S]{0,500}request/.test(actions), "不渲染完整请求预览");
   assert.ok(/display: \"flex\", gap: 6, alignItems: \"center\"/.test(actions), "入口位于 AcceptFeedback flex 行");
   assert.ok(/goalPath:[\s\S]*d\.goalFile/.test(modal), "GoalModal 传递 goal.md 路径");
   assert.ok(/goal_path:\s*goalPath/.test(actions), "PM 请求传递路径而非正文");
@@ -1514,7 +1515,8 @@ test("g-168 复制失败 fallback：初始隐藏且只在失败后显示可复�
   assert.ok(/setFallback\(!copied\)/.test(actions));
   assert.ok(/fallback \? h\("textarea"/.test(actions));
   assert.ok(/readOnly:\s*true[\s\S]*value:\s*request/.test(actions));
-  assert.ok(!/h\("pre"[\s\S]*request/.test(actions), "初始界面不展示大段 prefill");
+  // g-272 att-002：同上，收紧贪心正则窗口。
+  assert.ok(!/h\("pre"[\s\S]{0,500}request/.test(actions), "初始界面不展示大段 prefill");
 });
 
 test("g-168 交互反馈：主管复制成功 toast 与 PM 润色动画", () => {
