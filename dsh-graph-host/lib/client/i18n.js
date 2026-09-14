@@ -291,11 +291,14 @@
       // === 标签编辑器 ===
       'tags.title': '🔖 标签',
       'tags.add': '＋ 添加标签',
+      'tags.addCompact': '+标签',
       'tags.collapse': '收起输入框',
       'tags.addTooltip': '添加新标签',
       'tags.removeTooltip': '点击移除标签',
+      'tags.removeTagNamed': '移除标签 #{tag}',
       'tags.noTags': '（暂无标签，点击右上角添加）',
       'tags.inputPlaceholder': '输入标签名称，逗号或空格分隔…',
+      'tags.inputPlaceholderCompact': '标签名，回车保存…',
       'tags.save': '保存',
       'tags.saveFail': '标签保存失败',
 
@@ -1245,11 +1248,14 @@
       // === Tags editor ===
       'tags.title': '🔖 Tags',
       'tags.add': '＋ Add tag',
+      'tags.addCompact': '+Tag',
       'tags.collapse': 'Collapse input',
       'tags.addTooltip': 'Add new tag',
       'tags.removeTooltip': 'Click to remove tag',
+      'tags.removeTagNamed': 'Remove tag #{tag}',
       'tags.noTags': '(No tags yet, click top-right to add)',
       'tags.inputPlaceholder': 'Enter tag name, comma or space separated…',
+      'tags.inputPlaceholderCompact': 'Tag name, Enter to save…',
       'tags.save': 'Save',
       'tags.saveFail': 'Failed to save tags',
 

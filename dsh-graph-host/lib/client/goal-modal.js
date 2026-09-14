@@ -675,7 +675,7 @@
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
-    // g-187：客户端标签编辑器，所有变更通过 host 持久化到 goal.md。
+    // g-187 & g-277：目标弹窗副标题行紧凑标签编辑器，所有变更通过 host 持久化到 goal.md。
     function GoalTagsEditor(props) {
       const [tags, setTags] = React.useState(Array.isArray(props.tags) ? props.tags : []);
       const [showAdd, setShowAdd] = React.useState(false);
@@ -685,7 +685,7 @@
       React.useEffect(() => { setTags(Array.isArray(props.tags) ? props.tags : []); }, [props.tags]);
       const save = async (next) => {
         if (saving) return;
-        const clean = [...new Set(next.map((x) => String(x).trim().replace(/^#/, "")))];
+        const clean = [...new Set(next.map((x) => String(x).trim().replace(/^#/, "")))].filter(Boolean);
         setSaving(true); setNote(null);
         try {
           // 如果常规 CAS 冲突（比如弹窗刚打开时状态还未同步），如果当前只有本地这一个客户端在操作，允许重试覆盖
@@ -708,34 +708,94 @@
           const saved = Array.isArray(data.new_tags) ? data.new_tags : clean;
           setTags(saved);
           props.onChange?.(saved);
-          setNote(dgT("common.savingDone"));
-        } catch (e) { setNote(String(e?.message ?? e)); }
+        } catch (e) {
+          const errMsg = String(e?.message ?? e);
+          setNote(errMsg);
+          if (typeof showToast === "function") showToast(dgT("tags.saveFail") + ": " + errMsg);
+        }
         finally { setSaving(false); }
       };
       const add = () => {
         const value = text.trim();
-        if (!value) return;
-        save([...tags, ...value.split(/[,，\s]+/)]);
+        if (!value) {
+          setShowAdd(false);
+          return;
+        }
+        const newItems = value.split(/[,，\s]+/).map((x) => x.replace(/^#/, "").trim()).filter(Boolean);
+        if (newItems.length) {
+          save([...tags, ...newItems]);
+        }
         setText("");
         setShowAdd(false);
       };
-      return h("div", { style: { ...S.modalSection, minWidth: 0, maxWidth: "100%", overflow: "hidden" } },
-        h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
-          h("span", null, dgT("tags.title")),
-          h("button", {
-            className: "dg-btn",
-            style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-            title: showAdd ? dgT("tags.collapse") : dgT("tags.addTooltip"),
-            onClick: () => { setShowAdd(!showAdd); setNote(null); },
-          }, showAdd ? dgT("common.cancel") : dgT("tags.add"))),
-        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, minWidth: 0, maxWidth: "100%" } },
-          tags.length
-            ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: dgT("tags.removeTooltip"), disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×"))
-            : (!showAdd ? h("span", { style: S.meta }, dgT("tags.noTags")) : null)),
-        showAdd ? h("div", { style: { display: "flex", gap: 4, marginTop: 6 } },
-          h("input", { autoFocus: true, value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: dgT("tags.inputPlaceholder"), onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); else if (e.key === "Escape") setShowAdd(false); } }),
-          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? dgT("common.saving") : dgT("tags.save"))) : null,
-        note ? h("div", { style: { ...S.meta, color: note === dgT("common.savingDone") ? undefined : "#e57373", marginTop: 4 } }, note) : null);
+      const removeTag = (tagToRemove) => {
+        if (saving) return;
+        save(tags.filter((x) => x !== tagToRemove));
+      };
+
+      return h("span", { className: "dg-tag-chips-wrap" },
+        tags.map((tag) =>
+          h("span", {
+            key: tag,
+            className: "dg-tag-chip",
+            tabIndex: 0,
+            title: "#" + tag,
+            onKeyDown: (e) => {
+              if (e.key === "Delete" || e.key === "Backspace") {
+                e.preventDefault();
+                removeTag(tag);
+              }
+            },
+          },
+            h("span", { className: "dg-tag-text" }, "#" + tag),
+            h("button", {
+              className: "dg-tag-del",
+              title: dgT("tags.removeTooltip"),
+              "aria-label": dgT("tags.removeTagNamed", { tag }),
+              disabled: saving,
+              onClick: (e) => {
+                e.stopPropagation();
+                removeTag(tag);
+              },
+            }, "×")
+          )
+        ),
+        showAdd
+          ? h("input", {
+              className: "dg-tag-input",
+              autoFocus: true,
+              value: text,
+              placeholder: dgT("tags.inputPlaceholderCompact"),
+              onChange: (e) => setText(e.target.value),
+              onKeyDown: (e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  add();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setShowAdd(false);
+                  setText("");
+                }
+              },
+              onBlur: () => {
+                if (text.trim()) {
+                  add();
+                } else {
+                  setShowAdd(false);
+                }
+              },
+            })
+          : h("button", {
+              className: "dg-tag-add-btn",
+              title: dgT("tags.addTooltip"),
+              onClick: (e) => {
+                e.stopPropagation();
+                setShowAdd(true);
+                setNote(null);
+              },
+            }, dgT("tags.addCompact")),
+        note ? h("span", { style: { color: "var(--dsw-alias-state-error-primary, #e57373)", fontSize: 11, marginLeft: 2 }, title: note }, "⚠️") : null
+      );
     }
 
     // g-272 att-002：服务端 worktree reason 为稳定枚举（core/worktree.ts），客户端按枚举 dgT 双语映射；
@@ -953,7 +1013,27 @@
         const pendingDeps = deps.filter((d) => props.goalStatus?.[d] !== "delivered");
         const metDeps = deps.filter((d) => props.goalStatus?.[d] === "delivered");
         headMeta = [
-          h("div", { key: "m1", style: S.meta }, bits.join(" ｜ ")),
+          h("div", {
+            key: "m1",
+            style: {
+              ...S.meta,
+              display: "flex",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: "4px 6px",
+              marginTop: 4,
+              minWidth: 0,
+              maxWidth: "100%",
+            },
+          },
+            h("span", null, bits.join(" ｜ ")),
+            h("span", { style: { opacity: 0.5, userSelect: "none" } }, "｜"),
+            h(GoalTagsEditor, {
+              goalId: props.id,
+              tags: meta.tags ?? props.tags,
+              onChange: () => { load(); props.onTagsChanged?.(); },
+            })
+          ),
           // g-223：归属版本在看板中被隐藏时的友好提示与恢复显示入口
           isVersionHidden
             ? h("div", {
@@ -1054,7 +1134,6 @@
         const detailTab = [
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
-          h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: meta.tags ?? props.tags, onChange: () => { load(); props.onTagsChanged?.(); } }),
           desc != null ? h(DescriptionBox, { key: "description", goalId: props.id, description: desc, onRefresh: load,
             extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose }) }) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本

@@ -2164,6 +2164,7 @@
               supervisorSession: b.supervisorSession ?? null,
               onRenamed: () => load(),
               onArchived: () => load(),
+              onTagsChanged: () => load(),
               onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),
               deletedCardSignal,
               onDeletedCardHandled: () => setDeletedCardSignal(null),

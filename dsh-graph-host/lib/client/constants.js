@@ -228,6 +228,110 @@
         transition: background .12s ease, opacity .12s ease;
       }
       .dg-chevron:hover { background: rgba(128,128,128,.32); opacity: 1; }
+      /* g-277: compact tag chips in subtitle row with hover delete */
+      .dg-tag-chips-wrap {
+        display: inline-flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 4px;
+        min-width: 0;
+        max-width: 100%;
+        vertical-align: middle;
+      }
+      .dg-tag-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        font-size: 11px;
+        line-height: 1.3;
+        padding: 1px 6px;
+        border-radius: 4px;
+        border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));
+        background: var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));
+        color: var(--dsw-alias-label-primary, #e6e6e6);
+        box-sizing: border-box;
+        max-width: 160px;
+        outline: none;
+        cursor: default;
+        transition: background .12s ease, border-color .12s ease;
+      }
+      .dg-tag-chip:hover {
+        background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.25));
+        border-color: var(--dsw-alias-border-l1, rgba(128,128,128,.45));
+      }
+      .dg-tag-chip:focus-within,
+      .dg-tag-chip:focus {
+        border-color: var(--dsw-alias-state-business-primary, #4c8dff);
+        box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary, #4c8dff);
+      }
+      .dg-tag-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .dg-tag-chip .dg-tag-del {
+        visibility: hidden;
+        border: none;
+        background: transparent;
+        color: var(--dsw-alias-label-secondary, rgba(220,220,220,.75));
+        cursor: pointer;
+        padding: 0 2px;
+        margin-left: 2px;
+        font-size: 12px;
+        line-height: 1;
+        border-radius: 2px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: color .12s ease, background .12s ease;
+      }
+      .dg-tag-chip:hover .dg-tag-del,
+      .dg-tag-chip:focus-within .dg-tag-del,
+      .dg-tag-del:focus,
+      .dg-tag-del:focus-visible {
+        visibility: visible;
+      }
+      .dg-tag-chip .dg-tag-del:hover {
+        color: var(--dsw-alias-state-error-primary, #d66);
+        background: rgba(214,102,102,.22);
+      }
+      .dg-tag-chip .dg-tag-del:focus-visible {
+        outline: 1px solid var(--dsw-alias-state-error-primary, #d66);
+      }
+      .dg-tag-add-btn {
+        display: inline-flex;
+        align-items: center;
+        font-size: 11px;
+        line-height: 1.3;
+        padding: 1px 6px;
+        border-radius: 4px;
+        border: 1px dashed var(--dsw-alias-border-l2, rgba(128,128,128,.35));
+        background: transparent;
+        color: var(--dsw-alias-label-secondary, rgba(220,220,220,.75));
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background .12s ease, border-color .12s ease, color .12s ease;
+      }
+      .dg-tag-add-btn:hover {
+        background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.20));
+        color: var(--dsw-alias-label-primary, #e6e6e6);
+        border-color: var(--dsw-alias-state-business-primary, #4c8dff);
+      }
+      .dg-tag-input {
+        width: 100px;
+        font-size: 11px;
+        line-height: 1.3;
+        padding: 1px 6px;
+        border-radius: 4px;
+        border: 1px solid var(--dsw-alias-state-business-primary, #4c8dff);
+        background: var(--dsw-alias-bg-layer-2, rgba(30,31,36,.92));
+        color: var(--dsw-alias-label-primary, #e6e6e6);
+        outline: none;
+        box-sizing: border-box;
+        flex-shrink: 0;
+      }
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
       /* g-233：搜索匹配与当前选中视觉反馈 */

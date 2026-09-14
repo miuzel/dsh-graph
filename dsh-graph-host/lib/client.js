@@ -312,11 +312,14 @@ window.__ModuleLoader__.load({
       // === 标签编辑器 ===
       'tags.title': '🔖 标签',
       'tags.add': '＋ 添加标签',
+      'tags.addCompact': '+标签',
       'tags.collapse': '收起输入框',
       'tags.addTooltip': '添加新标签',
       'tags.removeTooltip': '点击移除标签',
+      'tags.removeTagNamed': '移除标签 #{tag}',
       'tags.noTags': '（暂无标签，点击右上角添加）',
       'tags.inputPlaceholder': '输入标签名称，逗号或空格分隔…',
+      'tags.inputPlaceholderCompact': '标签名，回车保存…',
       'tags.save': '保存',
       'tags.saveFail': '标签保存失败',
 
@@ -1266,11 +1269,14 @@ window.__ModuleLoader__.load({
       // === Tags editor ===
       'tags.title': '🔖 Tags',
       'tags.add': '＋ Add tag',
+      'tags.addCompact': '+Tag',
       'tags.collapse': 'Collapse input',
       'tags.addTooltip': 'Add new tag',
       'tags.removeTooltip': 'Click to remove tag',
+      'tags.removeTagNamed': 'Remove tag #{tag}',
       'tags.noTags': '(No tags yet, click top-right to add)',
       'tags.inputPlaceholder': 'Enter tag name, comma or space separated…',
+      'tags.inputPlaceholderCompact': 'Tag name, Enter to save…',
       'tags.save': 'Save',
       'tags.saveFail': 'Failed to save tags',
 
@@ -2216,6 +2222,110 @@ window.__ModuleLoader__.load({
         transition: background .12s ease, opacity .12s ease;
       }
       .dg-chevron:hover { background: rgba(128,128,128,.32); opacity: 1; }
+      /* g-277: compact tag chips in subtitle row with hover delete */
+      .dg-tag-chips-wrap {
+        display: inline-flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 4px;
+        min-width: 0;
+        max-width: 100%;
+        vertical-align: middle;
+      }
+      .dg-tag-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        font-size: 11px;
+        line-height: 1.3;
+        padding: 1px 6px;
+        border-radius: 4px;
+        border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));
+        background: var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));
+        color: var(--dsw-alias-label-primary, #e6e6e6);
+        box-sizing: border-box;
+        max-width: 160px;
+        outline: none;
+        cursor: default;
+        transition: background .12s ease, border-color .12s ease;
+      }
+      .dg-tag-chip:hover {
+        background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.25));
+        border-color: var(--dsw-alias-border-l1, rgba(128,128,128,.45));
+      }
+      .dg-tag-chip:focus-within,
+      .dg-tag-chip:focus {
+        border-color: var(--dsw-alias-state-business-primary, #4c8dff);
+        box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary, #4c8dff);
+      }
+      .dg-tag-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .dg-tag-chip .dg-tag-del {
+        visibility: hidden;
+        border: none;
+        background: transparent;
+        color: var(--dsw-alias-label-secondary, rgba(220,220,220,.75));
+        cursor: pointer;
+        padding: 0 2px;
+        margin-left: 2px;
+        font-size: 12px;
+        line-height: 1;
+        border-radius: 2px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: color .12s ease, background .12s ease;
+      }
+      .dg-tag-chip:hover .dg-tag-del,
+      .dg-tag-chip:focus-within .dg-tag-del,
+      .dg-tag-del:focus,
+      .dg-tag-del:focus-visible {
+        visibility: visible;
+      }
+      .dg-tag-chip .dg-tag-del:hover {
+        color: var(--dsw-alias-state-error-primary, #d66);
+        background: rgba(214,102,102,.22);
+      }
+      .dg-tag-chip .dg-tag-del:focus-visible {
+        outline: 1px solid var(--dsw-alias-state-error-primary, #d66);
+      }
+      .dg-tag-add-btn {
+        display: inline-flex;
+        align-items: center;
+        font-size: 11px;
+        line-height: 1.3;
+        padding: 1px 6px;
+        border-radius: 4px;
+        border: 1px dashed var(--dsw-alias-border-l2, rgba(128,128,128,.35));
+        background: transparent;
+        color: var(--dsw-alias-label-secondary, rgba(220,220,220,.75));
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background .12s ease, border-color .12s ease, color .12s ease;
+      }
+      .dg-tag-add-btn:hover {
+        background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.20));
+        color: var(--dsw-alias-label-primary, #e6e6e6);
+        border-color: var(--dsw-alias-state-business-primary, #4c8dff);
+      }
+      .dg-tag-input {
+        width: 100px;
+        font-size: 11px;
+        line-height: 1.3;
+        padding: 1px 6px;
+        border-radius: 4px;
+        border: 1px solid var(--dsw-alias-state-business-primary, #4c8dff);
+        background: var(--dsw-alias-bg-layer-2, rgba(30,31,36,.92));
+        color: var(--dsw-alias-label-primary, #e6e6e6);
+        outline: none;
+        box-sizing: border-box;
+        flex-shrink: 0;
+      }
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
       /* g-233：搜索匹配与当前选中视觉反馈 */
@@ -6072,7 +6182,7 @@ window.__ModuleLoader__.load({
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
-    // g-187：客户端标签编辑器，所有变更通过 host 持久化到 goal.md。
+    // g-187 & g-277：目标弹窗副标题行紧凑标签编辑器，所有变更通过 host 持久化到 goal.md。
     function GoalTagsEditor(props) {
       const [tags, setTags] = React.useState(Array.isArray(props.tags) ? props.tags : []);
       const [showAdd, setShowAdd] = React.useState(false);
@@ -6082,7 +6192,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => { setTags(Array.isArray(props.tags) ? props.tags : []); }, [props.tags]);
       const save = async (next) => {
         if (saving) return;
-        const clean = [...new Set(next.map((x) => String(x).trim().replace(/^#/, "")))];
+        const clean = [...new Set(next.map((x) => String(x).trim().replace(/^#/, "")))].filter(Boolean);
         setSaving(true); setNote(null);
         try {
           // 如果常规 CAS 冲突（比如弹窗刚打开时状态还未同步），如果当前只有本地这一个客户端在操作，允许重试覆盖
@@ -6105,34 +6215,94 @@ window.__ModuleLoader__.load({
           const saved = Array.isArray(data.new_tags) ? data.new_tags : clean;
           setTags(saved);
           props.onChange?.(saved);
-          setNote(dgT("common.savingDone"));
-        } catch (e) { setNote(String(e?.message ?? e)); }
+        } catch (e) {
+          const errMsg = String(e?.message ?? e);
+          setNote(errMsg);
+          if (typeof showToast === "function") showToast(dgT("tags.saveFail") + ": " + errMsg);
+        }
         finally { setSaving(false); }
       };
       const add = () => {
         const value = text.trim();
-        if (!value) return;
-        save([...tags, ...value.split(/[,，\s]+/)]);
+        if (!value) {
+          setShowAdd(false);
+          return;
+        }
+        const newItems = value.split(/[,，\s]+/).map((x) => x.replace(/^#/, "").trim()).filter(Boolean);
+        if (newItems.length) {
+          save([...tags, ...newItems]);
+        }
         setText("");
         setShowAdd(false);
       };
-      return h("div", { style: { ...S.modalSection, minWidth: 0, maxWidth: "100%", overflow: "hidden" } },
-        h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
-          h("span", null, dgT("tags.title")),
-          h("button", {
-            className: "dg-btn",
-            style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-            title: showAdd ? dgT("tags.collapse") : dgT("tags.addTooltip"),
-            onClick: () => { setShowAdd(!showAdd); setNote(null); },
-          }, showAdd ? dgT("common.cancel") : dgT("tags.add"))),
-        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, minWidth: 0, maxWidth: "100%" } },
-          tags.length
-            ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: dgT("tags.removeTooltip"), disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×"))
-            : (!showAdd ? h("span", { style: S.meta }, dgT("tags.noTags")) : null)),
-        showAdd ? h("div", { style: { display: "flex", gap: 4, marginTop: 6 } },
-          h("input", { autoFocus: true, value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: dgT("tags.inputPlaceholder"), onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); else if (e.key === "Escape") setShowAdd(false); } }),
-          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? dgT("common.saving") : dgT("tags.save"))) : null,
-        note ? h("div", { style: { ...S.meta, color: note === dgT("common.savingDone") ? undefined : "#e57373", marginTop: 4 } }, note) : null);
+      const removeTag = (tagToRemove) => {
+        if (saving) return;
+        save(tags.filter((x) => x !== tagToRemove));
+      };
+
+      return h("span", { className: "dg-tag-chips-wrap" },
+        tags.map((tag) =>
+          h("span", {
+            key: tag,
+            className: "dg-tag-chip",
+            tabIndex: 0,
+            title: "#" + tag,
+            onKeyDown: (e) => {
+              if (e.key === "Delete" || e.key === "Backspace") {
+                e.preventDefault();
+                removeTag(tag);
+              }
+            },
+          },
+            h("span", { className: "dg-tag-text" }, "#" + tag),
+            h("button", {
+              className: "dg-tag-del",
+              title: dgT("tags.removeTooltip"),
+              "aria-label": dgT("tags.removeTagNamed", { tag }),
+              disabled: saving,
+              onClick: (e) => {
+                e.stopPropagation();
+                removeTag(tag);
+              },
+            }, "×")
+          )
+        ),
+        showAdd
+          ? h("input", {
+              className: "dg-tag-input",
+              autoFocus: true,
+              value: text,
+              placeholder: dgT("tags.inputPlaceholderCompact"),
+              onChange: (e) => setText(e.target.value),
+              onKeyDown: (e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  add();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setShowAdd(false);
+                  setText("");
+                }
+              },
+              onBlur: () => {
+                if (text.trim()) {
+                  add();
+                } else {
+                  setShowAdd(false);
+                }
+              },
+            })
+          : h("button", {
+              className: "dg-tag-add-btn",
+              title: dgT("tags.addTooltip"),
+              onClick: (e) => {
+                e.stopPropagation();
+                setShowAdd(true);
+                setNote(null);
+              },
+            }, dgT("tags.addCompact")),
+        note ? h("span", { style: { color: "var(--dsw-alias-state-error-primary, #e57373)", fontSize: 11, marginLeft: 2 }, title: note }, "⚠️") : null
+      );
     }
 
     // g-272 att-002：服务端 worktree reason 为稳定枚举（core/worktree.ts），客户端按枚举 dgT 双语映射；
@@ -6350,7 +6520,27 @@ window.__ModuleLoader__.load({
         const pendingDeps = deps.filter((d) => props.goalStatus?.[d] !== "delivered");
         const metDeps = deps.filter((d) => props.goalStatus?.[d] === "delivered");
         headMeta = [
-          h("div", { key: "m1", style: S.meta }, bits.join(" ｜ ")),
+          h("div", {
+            key: "m1",
+            style: {
+              ...S.meta,
+              display: "flex",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: "4px 6px",
+              marginTop: 4,
+              minWidth: 0,
+              maxWidth: "100%",
+            },
+          },
+            h("span", null, bits.join(" ｜ ")),
+            h("span", { style: { opacity: 0.5, userSelect: "none" } }, "｜"),
+            h(GoalTagsEditor, {
+              goalId: props.id,
+              tags: meta.tags ?? props.tags,
+              onChange: () => { load(); props.onTagsChanged?.(); },
+            })
+          ),
           // g-223：归属版本在看板中被隐藏时的友好提示与恢复显示入口
           isVersionHidden
             ? h("div", {
@@ -6451,7 +6641,6 @@ window.__ModuleLoader__.load({
         const detailTab = [
           h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
           status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
-          h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: meta.tags ?? props.tags, onChange: () => { load(); props.onTagsChanged?.(); } }),
           desc != null ? h(DescriptionBox, { key: "description", goalId: props.id, description: desc, onRefresh: load,
             extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose }) }) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
@@ -10351,6 +10540,7 @@ function resetSearchState(activeWs) {
               supervisorSession: b.supervisorSession ?? null,
               onRenamed: () => load(),
               onArchived: () => load(),
+              onTagsChanged: () => load(),
               onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),
               deletedCardSignal,
               onDeletedCardHandled: () => setDeletedCardSignal(null),
