@@ -6,6 +6,12 @@
  *   `core/ops.js` 的 POSIX 常量具名导入（`node:constants` 在 Windows 无 O_DIRECTORY），
  *   插件在 Windows 上「完全无法加载」。本脚本把那次事故拆成可复跑的检查项。
  *
+ * 适用平台：Windows（主要目标）/ Linux / macOS —— 纯 Node 实现、无第三方依赖、单文件可拷贝。
+ *   macOS 注意：脚本会把隔离 DSH_HOME 做 realpath，因为插件的 resolveRoot 会硬拒绝路径中含软链的
+ *   root（core/root.ts「graph root symlink is not allowed」），而 macOS 的 /tmp、/var 都是软链
+ *   （/tmp→/private/tmp、/var→/private/var）——不做 realpath 会在 macOS 上假失败。
+ *   macOS 另有「APFS 默认大小写不敏感」（goal id / version slug 别名）属未验证类。
+ *
  * 用法（Windows 上任意目录；本脚本是单文件、无第三方依赖，可单独拷到 Windows 运行）：
  *   node win-smoke-test.mjs --tarball D:\path\dsh-graph-0.11.0-alpha.tgz   # 直接验一个现成 tarball（推荐）
  *   node win-smoke-test.mjs --spec dsh-graph@0.11.0    # 从 npm registry 安装并验证
@@ -36,7 +42,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+  existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -645,14 +651,20 @@ async function main() {
     console.log("      **不能替代** Windows 真机结论（发布门禁要求原生 Windows 跑一遍）。");
   }
 
-  const home = opt.dshHome ?? join(tmpdir(), `dsh-graph-win-smoke-${Date.now()}`);
+  const homeRaw = opt.dshHome ?? join(tmpdir(), `dsh-graph-win-smoke-${Date.now()}`);
   const profile = opt.profile;
+  mkdirSync(join(homeRaw, "profiles"), { recursive: true });
+  // 必须 realpath：插件的 resolveRoot 会**硬拒绝**路径中含软链的 root
+  // （core/root.ts「graph root symlink is not allowed」）。macOS 上 os.tmpdir() 是
+  // /var/folders/…，而 /var → /private/var、/tmp → /private/tmp 都是软链 ——
+  // 不 realpath 的话本脚本会在 macOS 上因「工作区路径含软链」而假失败。
+  let home = homeRaw;
+  try { home = realpathSync(homeRaw); } catch { /* 保持原路径 */ }
   const smokeDir = join(home, "_smoke");
   const workspace = join(home, "workspace");
-  mkdirSync(join(home, "profiles"), { recursive: true });
   mkdirSync(smokeDir, { recursive: true });
   mkdirSync(workspace, { recursive: true });
-  console.log(`隔离 DSH_HOME：${home}`);
+  console.log(`隔离 DSH_HOME：${home}${home !== homeRaw ? `（realpath of ${homeRaw}）` : ""}`);
   console.log(`隔离 profile：${profile}    工作区：${workspace}`);
 
   const [dshCmd, ...dshPrefix] = splitCmd(opt.dshCmd);
