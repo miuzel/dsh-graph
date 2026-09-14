@@ -1109,6 +1109,14 @@
       const goalFile = String(state.data?.goalFile ?? "");
       const isBacklogGoal = goalFile.includes("/backlog/") || goalFile.includes("\\\\backlog\\\\");
       const canPostpone = !isArchived && !isBacklogGoal && Boolean(state.data?.meta?.status);
+      // g-287：历史遗留的「非 backlog draft」转入规划入口。
+      // 该状态在 g-287 之后不再由自然路径产生（独立/版本目标创建即 planning），此入口纯为
+      // 兼容旧看板数据（旧版本创建的独立目标 status=draft）。复用既有 transition（状态机
+      // draft→planning 本就允许，无需改核心）。backlog 下的 draft 绝不显示该入口——否则会出现
+      // 「状态 planning 却位于 backlog/」的不自洽状态；backlog 卡片的正确路径是「排期」。
+      const [planEntryNote, setPlanEntryNote] = React.useState(null);
+      const [planEntryBusy, setPlanEntryBusy] = React.useState(false);
+      const canEnterPlanning = !isArchived && !isBacklogGoal && state.data?.meta?.status === "draft";
       // g-140: 删除操作（仅已归档目标可删除，二次确认）
       const [deleteConfirm, setDeleteConfirm] = React.useState(false);
       const [deleteNote, setDeleteNote] = React.useState(null);
@@ -1135,6 +1143,33 @@
         } catch (e) {
           setArchiveNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
+      };
+
+      // g-287：把历史遗留的非 backlog 草稿目标转入规划（复用既有 transition 端点）。
+      // 成功后刷新详情与看板卡片，使卡片即时显示「规划中」且可派发执行。
+      const doEnterPlanning = async () => {
+        if (planEntryBusy) return;
+        setPlanEntryBusy(true);
+        setPlanEntryNote(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/transition"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.id, to: "planning", reason: dgT("goal.planEntryReason") }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setPlanEntryNote(dgT("goal.planEntrySuccess"));
+            showToast(dgT("goal.planEntrySuccess"));
+            await load();
+            props.onArchived?.();
+          } else {
+            setPlanEntryNote(dgT("goal.planEntryFail") + (data.error || dgT("drag.unknownError")));
+          }
+        } catch (e) {
+          setPlanEntryNote(dgT("drag.requestFail") + String(e?.message ?? e));
+        }
+        setPlanEntryBusy(false);
       };
 
       // g-138：二次确认后调用单向暂缓接口，成功后关闭详情并刷新看板
@@ -1299,6 +1334,15 @@
               title: dgT("goal.renameTitle"),
               onClick: (e) => { e.stopPropagation(); setNewTitle(props.title ?? props.id); setRenaming(true); setRenameNote(null); },
             }, "✏️"),
+            // g-287：历史遗留「非 backlog 草稿」→「转入规划」入口（backlog 卡不显示）
+            canEnterPlanning
+              ? h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(76,141,255,.22)" }, className: "dg-btn",
+                  title: dgT("goal.planEntryTooltip"),
+                  disabled: planEntryBusy,
+                  onClick: (e) => { e.stopPropagation(); doEnterPlanning(); },
+                }, dgT("goal.planEntry"))
+              : null,
             // g-110: 归档/取消归档按钮
             isArchived
               ? h("button", {
@@ -1356,7 +1400,8 @@
             archiveNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, archiveNote) : null,
             postponeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, postponeNote) : null,
             deleteNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, deleteNote) : null,
-            typeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, typeNote) : null);
+            typeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, typeNote) : null,
+            planEntryNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, planEntryNote) : null);
 
       return h(React.Fragment, null,
         h("div",

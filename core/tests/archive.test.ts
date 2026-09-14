@@ -63,7 +63,8 @@ test("archiveGoal：planning 状态可归档（版本目标）", () => {
 test("archiveGoal：delivered 状态可归档（独立目标）", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "独立目标", version: "standalone", actor: "test" });
-  transition(root, id, "planning", { actor: "test" });
+  // g-287：独立目标创建即 planning（不再落 draft），无需再补一次 planning 迁移
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "planning");
   setCriteria(root, id, ["测试判据"], "test");
   transition(root, id, "in_progress", { actor: "test" });
   transition(root, id, "review", { actor: "test" });
@@ -210,8 +211,7 @@ test("g-234 编号不回退：多个归档目标编号不连续时取全局历�
   archiveGoal(root, g5, { actor: "test" });
   archiveGoal(root, g7, { actor: "test" });
 
-  // 独立目标 g-008 经过正常流程后归档
-  transition(root, g8, "planning", { actor: "test" });
+  // 独立目标 g-008 经过正常流程后归档（g-287：创建即 planning，无需补 planning 迁移）
   setCriteria(root, g8, ["判据1"], "test");
   transition(root, g8, "in_progress", { actor: "test" });
   transition(root, g8, "review", { actor: "test" });
