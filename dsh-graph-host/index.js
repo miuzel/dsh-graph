@@ -129,6 +129,8 @@ import {
   settingsPostSchema,
   unbindPostSchema,
   unbindGoalChild,
+  abandonAttemptPostSchema,
+  abandonAttempt,
   getCachedBoardPayload,
   versionGoals,
   backlogGoals,
@@ -1921,14 +1923,15 @@ export function apply(ctx, config) {
       run: (a, ex) => { postponeGoal(rootFor(ex), a.goal, { actor: actorOf(ex), reason: a.reason }); return { ok: true }; },
     },
     {
-      // g-190：从目标解绑执行子代理（安全 detach）——主管/目标 owner 专用，需当前 binding token。
+      // g-190/g-282：从目标解绑执行子代理（安全 detach）——主管/目标 owner 专用。
       // 仅授权主管（project.yaml supervisor.session）或目标 owner 可执行；子代理不能自我解绑。
+      // 遗留绑定缺失 binding_token 时支持显式声明 legacy: true 并给出 reason 进行受控解绑。
       def: {
         name: "graph_unbind_goal_child",
-        description: "从目标解绑执行子代理（g-190，安全 detach）：按 goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 精确定位；仅授权主管或目标 owner 可执行；子代理不能自我解绑。解绑只清理绑定（attempt/事件/日志保留可审计），解绑后目标可暂缓/转移/重新派发；子代理仍运行（live registry）或状态不可确认时拒绝；token 未知/过期/并发冲突拒绝且不改数据；重复解绑幂等。",
+        description: "从目标解绑执行子代理（g-190/g-282，安全 detach）：按 goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 精确定位；仅授权主管或目标 owner 可执行；子代理不能自我解绑。解绑只清理绑定（attempt/事件/日志保留可审计），解绑后目标可暂缓/转移/重新派发；子代理仍运行（live registry）或状态不可确认时拒绝；token 未知/过期/并发冲突拒绝且不改数据；重复解绑幂等。对早期缺失 binding_token 的遗留绑定，支持显式声明 legacy: true 并给出 reason 进行受控解绑（写 attempt.detached 事件；若存在 token 则禁止用 legacy 绕过）。",
         parameters: params(
-          { goal: str, attempt: str, child_id: str, token: str, reason: str },
-          ["goal", "token"],
+          { goal: str, attempt: str, child_id: str, token: str, reason: str, legacy: { type: "boolean" } },
+          ["goal"],
         ),
       },
       run: (a, ex) => {
@@ -1940,10 +1943,32 @@ export function apply(ctx, config) {
         }
         const result = unbindGoalChild(r, a.goal, {
           actor: unbindActorOf(ex, r),
-          token: a.token,
+          token: typeof a.token === "string" ? a.token : null,
+          legacy: a.legacy === true || a.legacy === "true",
           attempt: hasAtt ? a.attempt : null,
           childId: hasChild ? a.child_id : null,
           reason: typeof a.reason === "string" && a.reason.length ? a.reason : null,
+          liveCheck: childLiveState,
+        });
+        return { ok: true, ...result };
+      },
+    },
+    {
+      // g-282：放弃陈旧/失联 attempt（标记 result=cancelled、detached=true）——主管/目标 owner 专用。
+      def: {
+        name: "graph_abandon_attempt",
+        description: "放弃陈旧/失联 attempt（g-282）：把指定 attempt 标记为已放弃（result=cancelled、detached=true），清除绑定；仅授权主管或目标 owner 可执行；子代理仍运行（live registry）或状态不可确认时拒绝；事件先行（attempt.abandoned 含 reason/actor）。放弃后该 attempt 不再被判为活跃，目标可正常暂缓/归档/删除。",
+        parameters: params(
+          { goal: str, attempt: str, reason: str },
+          ["goal", "attempt", "reason"],
+        ),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        const result = abandonAttempt(r, a.goal, {
+          actor: unbindActorOf(ex, r),
+          attempt: a.attempt,
+          reason: a.reason,
           liveCheck: childLiveState,
         });
         return { ok: true, ...result };
@@ -3109,6 +3134,7 @@ export function apply(ctx, config) {
     // g-190: 从目标解绑执行子代理端点（GUI 确认 + reason + 错误反馈；严格 schema + 坏 JSON 400）
     // 授权：GUI 即负责人（human:gui，owner）；能力约束 = 当前 binding token（board/goalDetail 下发，
     // 未知/过期/并发 CAS 失败一律 409 拒绝且不改数据；子代理仍在运行或状态不可确认时拒绝）。
+    // g-282：遗留绑定缺失 binding_token 时支持显式声明 legacy: true 并必填 reason。
     {
       path: "/api/dsh-graph/unbind",
       handler: async (req, res) => {
@@ -3124,8 +3150,15 @@ export function apply(ctx, config) {
           if (!v.valid) {
             return json(res, 400, schemaErrorResponse(v.errors));
           }
+          const isLegacy = body.legacy === true;
+          const token = typeof body.token === "string" ? body.token : "";
+          if (!isLegacy && !token) {
+            return json(res, 400, { error: "缺少 token（非 legacy 解绑必须提供 token）" });
+          }
+          if (isLegacy && (!body.reason || typeof body.reason !== "string" || !body.reason.trim())) {
+            return json(res, 400, { error: "遗留解绑必须提供 reason 说明原因" });
+          }
           const goal = String(body.goal);
-          const token = String(body.token);
           const attempt = typeof body.attempt === "string" && body.attempt.length ? body.attempt : null;
           const childId = typeof body.child_id === "string" && body.child_id.length ? body.child_id : null;
           if ((attempt === null) === (childId === null)) {
@@ -3134,10 +3167,44 @@ export function apply(ctx, config) {
           const rRoot = rootForReq(req, body);
           const result = unbindGoalChild(rRoot, goal, {
             actor: "human:gui",
-            token,
+            token: token || null,
+            legacy: isLegacy,
             attempt,
             childId,
             reason: typeof body.reason === "string" && body.reason.length ? body.reason : null,
+            liveCheck: childLiveState,
+          });
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphConflictError ? 409 : (e instanceof GraphError ? 400 : 500);
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-282: 放弃 attempt 端点
+    {
+      path: "/api/dsh-graph/abandon-attempt",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          let body;
+          try {
+            body = await readBody(req);
+          } catch {
+            return json(res, 400, { error: "请求体不是合法 JSON" });
+          }
+          const v = validateSchema(body, abandonAttemptPostSchema);
+          if (!v.valid) {
+            return json(res, 400, schemaErrorResponse(v.errors));
+          }
+          const goal = String(body.goal);
+          const attempt = String(body.attempt);
+          const reason = String(body.reason);
+          const rRoot = rootForReq(req, body);
+          const result = abandonAttempt(rRoot, goal, {
+            actor: "human:gui",
+            attempt,
+            reason,
             liveCheck: childLiveState,
           });
           json(res, 200, { ok: true, ...result });

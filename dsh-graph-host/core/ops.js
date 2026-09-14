@@ -16,14 +16,14 @@ export function normalizeAttemptStatusState(value) {
 import { appendEvent, readEvents, replayStatuses, replayVersionLanes, appendMemoryEvent, readMemoryEvents, replayMemory, withMemoryLock, memoryDiagnostics, nowIso, nowIsoMs, } from "./events.js";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.js";
 import { withTx, TxError, TxCasError } from "./transaction.js";
-import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema } from "./schema.js";
+import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema } from "./schema.js";
 import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail, } from "./version-lane.js";
 import { registerWorktreeCandidates, listWorktrees, cleanWorktree } from "./worktree.js";
 export { GraphError, GraphConflictError };
 export { normalizeGoalType };
 export { registerWorktreeCandidates, listWorktrees, cleanWorktree };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
-export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema };
+export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
 export { TxError };
 import { invalidateBoardCache, computeGraphRevision, formatETag, matchIfNoneMatch, getCachedBoardPayload as getCachedBoardPayloadCore, _inspectBoardCache, closeWatchers } from "./cache.js";
 import { invalidate as invalidateGeneration } from "./cache-state.js";
@@ -4379,26 +4379,33 @@ export function authorizeUnbind(root, actor, createdBy, childId) {
     }
     throw new GraphError("身份 " + a + " 无权解绑——仅限目标 owner（创建者/human）或已配置的主管");
 }
-/** 从目标解绑执行子代理（g-190）：
+/** 从目标解绑执行子代理（g-190/g-282）：
  *  - 语义 = 安全 detach（不终止/不删除）：attempt、worktree、事件与日志全部保留并可审计。
  *  - 定位：goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 精确定位；
  *    目录名仅用于枚举，归属以 meta 校验（id/goal）为准。
  *  - 校验：授权（authorizeUnbind）、token CAS（未知/过期/并发冲突 → TxCasError 拒绝且不改数据）、
  *    活跃状态（running → 拒绝需受控停止；idle/gone → 允许安全 detach；unknown → 拒绝不遗留假 active）、
  *    delivered/archived → 拒绝。
+ *  - g-282 遗留无 token 绑定受控释放：当 binding_token 缺失时，允许授权主管/owner 在显式声明 legacy: true
+ *    并给出 reason 的情况下受控解绑，记 attempt.detached 事件（details 标注 legacy/reason/actor）；
+ *    若绑定存在 binding_token 则严禁使用 legacy 绕过 CAS。
  *  - 幂等：重复解绑（已无绑定）为 no-op（不重复记事件）；解绑后重绑换新 token → 旧 token 立即失效（ABA 防护）。
- *  - 事件先行（R-02）：attempt.unbound 事件（含 token_hash/binding_version/actor/reason 审计）在 attempt.md 落盘前追加；
- *    若落盘失败，事件已记而绑定仍在（旧 token 仍有效）——重试同一 token 可自愈，不产生半解绑假象。
+ *  - 事件先行（R-02）：attempt.unbound / attempt.detached 事件在 attempt.md 落盘前追加；
+ *    若落盘失败，事件已记而绑定仍在——重试可自愈，不产生半解绑假象。
  *  - 并发：withTx 锁内重读 + CAS，解绑/解绑、解绑/重绑串行化（有限本地锁，符合单用户本地并发模型）。 */
 export function unbindGoalChild(root, goalId, opts) {
     const actor = String(opts.actor ?? "").trim();
-    const token = String(opts.token ?? "");
+    const legacy = opts.legacy === true;
+    const token = typeof opts.token === "string" ? opts.token : "";
+    const reason = typeof opts.reason === "string" && opts.reason.trim().length > 0 ? opts.reason.trim() : null;
     const attempt = typeof opts.attempt === "string" && opts.attempt.length ? opts.attempt : null;
     const childIdOpt = typeof opts.childId === "string" && opts.childId.length ? opts.childId : null;
     if (!actor)
         throw new GraphError("actor 不能为空");
-    if (!token)
+    if (!legacy && !token)
         throw new GraphError("解绑需要当前绑定 token（binding token）");
+    if (legacy && !reason)
+        throw new GraphError("遗留解绑必须提供 reason 说明原因");
     if ((attempt === null) === (childIdOpt === null)) {
         throw new GraphError("必须且只能指定一个选择器：attempt 或 child_id");
     }
@@ -4428,11 +4435,21 @@ export function unbindGoalChild(root, goalId, opts) {
         if (childIdOpt !== null && childIdOpt !== binding.child_id) {
             throw new TxCasError("选择器 child_id=" + childIdOpt + " 不匹配当前绑定 child_id=" + binding.child_id + "——并发冲突，拒绝解绑");
         }
-        // token CAS：必须匹配当前 binding token（未知/过期/重绑后旧 token → 拒绝且不改数据）
-        if (token !== binding.binding_token) {
-            throw new TxCasError("绑定 token 不匹配当前绑定（未知/过期/已被重绑）——拒绝解绑且未改动任何数据");
+        // token CAS 与 legacy 校验
+        if (binding.binding_token) {
+            if (legacy) {
+                throw new TxCasError("绑定存在 binding_token，禁止使用 legacy 解绑通道（必须提供有效 token 校验）");
+            }
+            if (token !== binding.binding_token) {
+                throw new TxCasError("绑定 token 不匹配当前绑定（未知/过期/已被重绑）——拒绝解绑且未改动任何数据");
+            }
         }
-        // 授权（在 token CAS 通过后校验身份：先证明「知道当前绑定」，再查授权——双因子）
+        else {
+            if (!legacy) {
+                throw new TxCasError("绑定为遗留绑定且缺失 binding_token——必须显式声明 legacy 并在授权下提供 reason 进行受控解绑");
+            }
+        }
+        // 授权（在 token CAS / legacy 预检通过后校验身份）
         authorizeUnbind(root, actor, goalDoc.meta.created_by, binding.child_id);
         // 活跃状态门控：不遗留假 active
         if (opts.liveCheck) {
@@ -4454,25 +4471,45 @@ export function unbindGoalChild(root, goalId, opts) {
             throw new GraphError("attempt 归属校验失败：" + binding.attempt);
         }
         const prevVersion = binding.binding_version;
-        const tokenHash = createHash("sha256").update(token).digest("hex");
         const detachedAt = nowIso();
-        // 事件先行（R-02）：attempt.unbound 含 token_hash/binding_version/actor/reason 审计
-        appendEvent(root, {
-            actor,
-            event: "attempt.unbound",
-            goal: goalId,
-            details: {
-                attempt: binding.attempt,
-                child_id: binding.child_id,
-                parent_session_id: binding.parent_session_id,
-                binding_version: prevVersion,
-                token_hash: tokenHash,
-                reason: opts.reason ?? null,
-                previous_result: binding.result,
-                detached_at: detachedAt,
-                goal_status: String(goalDoc.meta.status ?? "unknown"),
-            },
-        });
+        // 事件先行（R-02）：legacy 写 attempt.detached，正常解绑写 attempt.unbound
+        if (legacy) {
+            appendEvent(root, {
+                actor,
+                event: "attempt.detached",
+                goal: goalId,
+                details: {
+                    attempt: binding.attempt,
+                    child_id: binding.child_id,
+                    parent_session_id: binding.parent_session_id,
+                    legacy: true,
+                    reason,
+                    actor,
+                    previous_result: binding.result,
+                    detached_at: detachedAt,
+                    goal_status: String(goalDoc.meta.status ?? "unknown"),
+                },
+            });
+        }
+        else {
+            const tokenHash = createHash("sha256").update(token).digest("hex");
+            appendEvent(root, {
+                actor,
+                event: "attempt.unbound",
+                goal: goalId,
+                details: {
+                    attempt: binding.attempt,
+                    child_id: binding.child_id,
+                    parent_session_id: binding.parent_session_id,
+                    binding_version: prevVersion,
+                    token_hash: tokenHash,
+                    reason: opts.reason ?? null,
+                    previous_result: binding.result,
+                    detached_at: detachedAt,
+                    goal_status: String(goalDoc.meta.status ?? "unknown"),
+                },
+            });
+        }
         // 落盘：清理绑定 + 标记 detached（result=detached 使 postpone/delete 活跃检测不再命中）
         delete doc.meta.child_id;
         delete doc.meta.parent_session_id;
@@ -4533,6 +4570,100 @@ export function unbindGoalChild(root, goalId, opts) {
         }
         return {
             value: { detached: true, attempt: binding.attempt, child_id: binding.child_id },
+            events: [],
+        };
+    });
+    if (!result.ok) {
+        if (result.recoverable)
+            throw new GraphConflictError(result.error);
+        throw new GraphError(result.error);
+    }
+    return result.value;
+}
+/** 放弃陈旧/失联 attempt（g-282）：
+ *  - 标记 result="cancelled"、detached=true、清除绑定；
+ *  - 仅允许授权主管或目标 owner；
+ *  - live registry 运行中禁止放弃；
+ *  - delivered/archived 目标禁止放弃；
+ *  - 事件先行（attempt.abandoned 含 reason/actor 审计）；
+ *  - 放弃后不再被 attemptIsActive 判为活跃，目标可正常暂缓。 */
+export function abandonAttempt(root, goalId, opts) {
+    const actor = String(opts.actor ?? "").trim();
+    const attempt = String(opts.attempt ?? "").trim();
+    const reason = typeof opts.reason === "string" && opts.reason.trim().length > 0 ? opts.reason.trim() : null;
+    if (!actor)
+        throw new GraphError("actor 不能为空");
+    if (!attempt)
+        throw new GraphError("attempt 不能为空");
+    if (!reason)
+        throw new GraphError("放弃 attempt 必须提供 reason 说明原因");
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(attempt)) {
+        throw new GraphError("非法 attempt id：" + attempt);
+    }
+    const result = withTx({ root, actor, goal: goalId }, { lockName: "unbind-" + goalId }, () => {
+        const goalFile = findGoalFile(root, goalId);
+        const goalDoc = loadGoal(goalFile);
+        if (goalDoc.meta.archived === true || isArchivedFile(goalFile)) {
+            throw new GraphError("已归档目标 " + goalId + " 不可放弃 attempt");
+        }
+        if (goalDoc.meta.status === "delivered") {
+            throw new GraphError("已交付目标 " + goalId + " 不可放弃 attempt");
+        }
+        const attFile = join(goalDirOf(goalFile), "attempts", attempt, "attempt.md");
+        if (!existsSync(attFile)) {
+            throw new GraphError("attempt 不存在：" + attempt);
+        }
+        const doc = loadGoal(attFile);
+        if (doc.meta.id !== attempt || doc.meta.goal !== goalId) {
+            throw new GraphError("attempt 归属校验失败：" + attempt);
+        }
+        if (doc.meta.detached === true && doc.meta.result === "cancelled") {
+            return { value: { abandoned: false, already: true, attempt }, events: [] };
+        }
+        // 授权：主管或目标 owner
+        authorizeUnbind(root, actor, goalDoc.meta.created_by, doc.meta.child_id);
+        // 活跃状态门控：live running 时禁止放弃
+        if (doc.meta.child_id) {
+            if (opts.liveCheck) {
+                const live = opts.liveCheck(doc.meta.child_id);
+                if (live === "running") {
+                    throw new TxCasError("子代理仍在运行中——请先受控停止（或等待其结束）后再放弃 attempt");
+                }
+                if (live === "unknown") {
+                    throw new GraphError("无法确认子代理状态（live registry 不可用）——拒绝放弃 attempt");
+                }
+            }
+            else if (doc.meta.result === "pending") {
+                throw new GraphError("无法确认子代理状态（未提供 live check）——拒绝放弃 attempt");
+            }
+        }
+        const abandonedAt = nowIso();
+        // 事件先行：attempt.abandoned
+        appendEvent(root, {
+            actor,
+            event: "attempt.abandoned",
+            goal: goalId,
+            details: {
+                attempt,
+                child_id: doc.meta.child_id ?? null,
+                reason,
+                actor,
+                previous_result: doc.meta.result ?? "pending",
+                abandoned_at: abandonedAt,
+                goal_status: String(goalDoc.meta.status ?? "unknown"),
+            },
+        });
+        // 落盘
+        doc.meta.result = "cancelled";
+        doc.meta.detached = true;
+        doc.meta.detached_at = abandonedAt;
+        doc.meta.detached_by = actor;
+        delete doc.meta.binding_token;
+        delete doc.meta.child_id;
+        delete doc.meta.parent_session_id;
+        saveGoal(attFile, doc);
+        return {
+            value: { abandoned: true, already: false, attempt },
             events: [],
         };
     });

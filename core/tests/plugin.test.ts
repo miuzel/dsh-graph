@@ -30,7 +30,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 39); // 全量 39 个 graph_* 工具（g-260 新增 graph_set_description）
+  assert.equal(registered.length, 40); // 全量 40 个 graph_* 工具（g-282 新增 graph_abandon_attempt）
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
@@ -62,6 +62,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
   });
   assert.ok(hf.handoff, "返回 handoff id");
   await call("graph_report_status", { goal, attempt: att.attempt, status: "测试中" });
+  await call("graph_abandon_attempt", { goal, attempt: att.attempt, reason: "放弃测试" });
   await call("graph_report_supervisor_status", { status: "主管调度中" });
   const { readSupervisorStatus, readSupervisorStatusAt } = await import("../ops.ts");
   assert.equal(readSupervisorStatus(root), "主管调度中");

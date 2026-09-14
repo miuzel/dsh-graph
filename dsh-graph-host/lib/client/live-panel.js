@@ -318,13 +318,19 @@
       const [busy, setBusy] = React.useState(false);
       const [note, setNote] = React.useState(null);
       const doUnbind = async () => {
+        const isLegacy = !bindingToken;
+        if (isLegacy && !reason.trim()) {
+          setNote(dgT("live.unbindReasonLegacyRequired"));
+          return;
+        }
         setBusy(true);
         setNote(dgT("live.unbinding"));
         try {
           const body = {
             goal: goalId,
             attempt: attemptId,
-            token: bindingToken,
+            token: bindingToken || undefined,
+            legacy: isLegacy ? true : undefined,
             reason: reason.trim() || undefined,
           };
           const r = await fetch(graphUrl("/api/dsh-graph/unbind"), {

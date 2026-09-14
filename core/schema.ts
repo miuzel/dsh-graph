@@ -415,20 +415,36 @@ export const setCriteriaPostSchema: ObjectSchema = {
   additionalProperties: false,
 };
 
-/** /api/dsh-graph/unbind POST body schema（g-190）。
+/** /api/dsh-graph/unbind POST body schema（g-190/g-282）。
  *  严格白名单：additionalProperties=false；selector 二选一（attempt | child_id）由 handler 校验；
- *  workspace/root 为 root 解析参数（与其余写端点一致）。 */
+ *  遗留绑定支持 legacy: true；workspace/root 为 root 解析参数（与其余写端点一致）。 */
 export const unbindPostSchema: ObjectSchema = {
   type: "object",
   properties: {
     goal: goalIdSchema,
-    token: { type: "string", minLength: 1 },
+    token: { type: "string", minLength: 1, nullable: true },
+    legacy: { type: "boolean", nullable: true },
     attempt: { type: "string", minLength: 1 },
     child_id: { type: "string", minLength: 1 },
     reason: { type: "string", nullable: true },
     workspace: { type: "string", nullable: true },
     root: { type: "string", nullable: true },
   },
-  required: ["goal", "token"],
+  required: ["goal"],
+  additionalProperties: false,
+};
+
+/** /api/dsh-graph/abandon-attempt POST body schema（g-282）。
+ *  严格白名单：additionalProperties=false；goal + attempt + reason 为必填参数。 */
+export const abandonAttemptPostSchema: ObjectSchema = {
+  type: "object",
+  properties: {
+    goal: goalIdSchema,
+    attempt: { type: "string", minLength: 1 },
+    reason: { type: "string", minLength: 1 },
+    workspace: { type: "string", nullable: true },
+    root: { type: "string", nullable: true },
+  },
+  required: ["goal", "attempt", "reason"],
   additionalProperties: false,
 };
