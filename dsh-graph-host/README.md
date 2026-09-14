@@ -30,9 +30,11 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
-> **DSH 版本兼容性**：本版本（v0.10.0）**已完整验证并支持 DeepSeek Harness `v0.1.5-rc.2`**——发布前的隔离实例（Web GUI + 看板 + 工具 + REST）与中英双语演示录制均在 `v0.1.5-rc.2` 上实测通过；`0.1.5-rc.2` 也是 v0.10.0 的**推荐宿主版本**。同时兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上版本（提示词/工具契约向后兼容）。
+> **DSH 版本兼容性**：本版本（v0.11.0）**已完整验证并支持 DeepSeek Harness `v0.1.5-rc.2`**——隔离实例（Web GUI + 看板 + 工具 + REST）与中英双语演示录制均在 `v0.1.5-rc.2` 上实测通过；`0.1.5-rc.2` 也是 v0.11.0 的**推荐宿主版本**。同时兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上版本（提示词/工具契约向后兼容）。
 >
-> **⚠️ 平台范围**：以上验证在 **Linux（WSL2）** 完成，**不含 Windows 原生环境**。Windows 下已知两类独立问题：① `core/ops.ts` 使用 POSIX 专用文件锁常量（目录作为 fd、`O_DIRECTORY`、`O_NOFOLLOW`）；② 宿主提供的核心包同时出现在 `dependencies` 与 `peerDependencies`，触发 DSH profile 核心包隔离检查。修复跟踪：看板目标 g-284 / g-285；修复并通过 Windows 真机复验前请勿在 Windows 原生环境部署（WSL2 不受影响）。
+> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证。** 此前 Windows 不可用的两类问题（① 平台代码使用 POSIX 专用文件锁常量：目录作为 fd、`O_DIRECTORY`、`O_NOFOLLOW`；② 宿主核心包同时出现在 `dependencies` 与 `peerDependencies`）已在 g-284 / g-285 修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过（同一安装包，三平台指纹一致）。
+>
+> **已知限制**：macOS 上工作区路径若含**符号链接**（如位于 `/tmp`、`/var` 之下——这两者在 macOS 上本身是软链），会被拒绝并报 `graph root symlink is not allowed`，请使用真实路径。跟踪目标 g-286。
 >
 > 已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -148,9 +150,11 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **Dependency Note**: Core packages provided by the DSH host (`@deepseek-ai/cordis` ^4.0.2, `@deepseek-ai/schemastery` ^3.18.2, `@deepseek-ai/dsh-settings` ^0.1.5-rc.2) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention), provided directly by the host runtime without peer dependency warnings during installation; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 >
-> **DSH version compatibility**: This release (v0.10.0) is **fully verified against and supports DeepSeek Harness `v0.1.5-rc.2`** — the pre-release isolated instance (Web GUI + kanban + tools + REST) and the bilingual demo recordings were all exercised on `v0.1.5-rc.2`, which is the **recommended host version** for v0.10.0. It also works on the `0.1.5` series and on `0.1.2-alpha.x` and later (prompt/tool contracts are backward compatible).
+> **DSH version compatibility**: This release (v0.11.0) is **fully verified against and supports DeepSeek Harness `v0.1.5-rc.2`** — the isolated instance (Web GUI + kanban + tools + REST) and the bilingual demo recordings were all exercised on `v0.1.5-rc.2`, which is the **recommended host version** for v0.11.0. It also works on the `0.1.5` series and on `0.1.2-alpha.x` and later (prompt/tool contracts are backward compatible).
 >
-> **⚠️ Platform scope**: the verification above was done on **Linux (WSL2)** and does **not** cover native Windows. Two known independent problems on Windows: (1) `core/ops.ts` uses POSIX-only file-lock constants (directory-as-fd, `O_DIRECTORY`, `O_NOFOLLOW`); (2) host-provided core packages are declared in both `dependencies` and `peerDependencies`, tripping the DSH profile core-package isolation check. Tracked as board goals g-284 / g-285; do not deploy on native Windows until they are fixed and re-verified there (WSL2 is unaffected).
+> **Platform scope**: **verified on Linux (WSL2), native Windows, and macOS.** The two problems that previously made Windows unusable — (1) POSIX-only file-lock constants (directory-as-fd, `O_DIRECTORY`, `O_NOFOLLOW`); (2) host core packages declared in both `dependencies` and `peerDependencies` — were fixed in g-284 / g-285 and re-verified on real Windows (win32/x64) and macOS (darwin/arm64) machines, all three platforms using the same artifact (identical sha256).
+>
+> **Known limitation**: on macOS a workspace path containing a **symlink** (e.g. under `/tmp` or `/var`, which are themselves symlinks on macOS) is rejected with `graph root symlink is not allowed` — use the real path. Tracked as goal g-286.
 >
 > Official releases are distributed via npm and the dsh-market ecosystem.
 
