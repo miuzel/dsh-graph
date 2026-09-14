@@ -11,10 +11,11 @@
  * - 基本安全：越界/凭据/明显 symlink 安全检查保留。
  */
 
-import { readFileSync, existsSync, writeFileSync, renameSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, rmSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 import { appendEvent, nowIso, type GraphEvent } from "./events.ts";
 import { GraphError } from "./machine.ts";
+import { replaceFileAtomic, isProcessAlive } from "./platform.ts";
 
 /** 事务阶段：用于诊断和日志。 */
 export type TxPhase =
@@ -88,9 +89,13 @@ function acquireLock(lockPath: string, timeoutMs: number = 5000): void {
           const holder = readFileSync(lockPath, "utf8").trim();
           const holderPid = parseInt(holder, 10);
           if (!Number.isNaN(holderPid) && holderPid !== pid) {
+            let alive = true;
             try {
-              process.kill(holderPid, 0); // 探测进程是否存活
+              alive = isProcessAlive(holderPid);
             } catch {
+              alive = true; // 保守判存活，避免在 Windows 权限异常时误抢锁
+            }
+            if (!alive) {
               // 进程已死：抢占锁
               try {
                 writeFileSync(lockPath, String(pid), { flag: "w" });
@@ -165,17 +170,21 @@ export function atomicWrite(file: string, content: string): void {
   const resolved = file; // 调用方应提供绝对路径
   // 基本 symlink 安全检查
   try {
-    const { lstatSync } = require("node:fs");
     if (existsSync(resolved) && lstatSync(resolved).isSymbolicLink()) {
       throw new TxError(`拒绝写入符号链接：${resolved}`, "persist", false);
     }
   } catch (e) {
-    const err = e as Error;
+    if (e instanceof TxError) throw e;
     // lstatSync 不可用（极少见）时跳过 symlink 检查
   }
   const tmp = `${resolved}.tmp.${process.pid}`;
-  writeFileSync(tmp, content, "utf8");
-  renameSync(tmp, resolved);
+  try {
+    writeFileSync(tmp, content, "utf8");
+    replaceFileAtomic(tmp, resolved);
+  } catch (e) {
+    try { if (existsSync(tmp)) rmSync(tmp, { force: true }); } catch { /* 忽略清理失败 */ }
+    throw e;
+  }
 }
 
 /** CAS 文件写：在锁保护下读取文件、校验预期内容、原子写入。
