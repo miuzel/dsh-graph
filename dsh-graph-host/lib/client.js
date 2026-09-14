@@ -611,7 +611,8 @@ window.__ModuleLoader__.load({
       'criteria.saveFail': '⚠️ 保存失败：',
 
       // === 判据反馈 ===
-      'criteria.feedbackTooltip': '针对此判据向执行会话反馈',
+      'criteria.feedbackBtn': '反馈',
+      'criteria.feedbackTooltip': '向执行会话反馈此判据',
       'criteria.feedbackPlaceholder': '反馈内容…',
       'criteria.feedbackSend': '发送',
       'criteria.feedbackQueued': '✅ 反馈已排队送达执行会话',
@@ -675,6 +676,7 @@ window.__ModuleLoader__.load({
       'addCard.chatSwitched': '✅ 已切换到对话窗，请直接输入收集需求',
 
       // === 卡片抽屉 ===
+      'drawer.resizeTip': '拖拽调整宽度（双击恢复默认）',
       'drawer.loadFail': '获取失败：',
       'drawer.unknownRoot': '（仓库根未知）',
       'drawer.unknownAttachmentRoot': '（附件根未知）',
@@ -1574,7 +1576,8 @@ window.__ModuleLoader__.load({
       'criteria.saveFail': '⚠️ Save failed: ',
 
       // === Criteria feedback ===
-      'criteria.feedbackTooltip': 'Send feedback for this criterion to the execution session',
+      'criteria.feedbackBtn': 'Feedback',
+      'criteria.feedbackTooltip': 'Send this criterion to the execution session',
       'criteria.feedbackPlaceholder': 'Feedback content…',
       'criteria.feedbackSend': 'Send',
       'criteria.feedbackQueued': '✅ Feedback queued for execution session',
@@ -1638,6 +1641,7 @@ window.__ModuleLoader__.load({
       'addCard.chatSwitched': '✅ Switched to chat, enter your collection needs directly',
 
       // === Card drawer ===
+      'drawer.resizeTip': 'Drag to resize (double-click to reset)',
       'drawer.loadFail': 'Failed to load: ',
       'drawer.unknownRoot': '(Repository root unknown)',
       'drawer.unknownAttachmentRoot': '(Attachment root unknown)',
@@ -4971,9 +4975,152 @@ window.__ModuleLoader__.load({
 
     const MarkdownViewer = GoalMarkdown;
 
+    // ===== g-280：上下文卡片抽屉拖拽调宽纯函数与常量 =====
+    const DEFAULT_CARD_DRAWER_WIDTH = 400;
+    const MIN_CARD_DRAWER_WIDTH = 380;
+    const MAX_CARD_DRAWER_WIDTH = 1200;
+    const CARD_DRAWER_STORAGE_KEY = "dg-card-drawer-width";
+
+    /**
+     * 钳位卡片抽屉宽度（g-280 纯函数）
+     * 约束：
+     * - 最小 380px、最大 min(1200, window.innerWidth * 0.9)
+     * - 视口缩小时自适应不溢出
+     * - 非法值（NaN/非数值）安全回退默认 400px 并钳位
+     *
+     * @param {number|string} rawWidth - 待钳位宽度
+     * @param {number} [windowWidth] - 可选视口宽度（默认读 window.innerWidth，Node/无 window 则默认 1920）
+     * @returns {number} 钳位后的有效像素宽度
+     */
+    function clampDrawerWidth(rawWidth, windowWidth) {
+      const winW = typeof windowWidth === "number" && !isNaN(windowWidth) && windowWidth > 0
+        ? windowWidth
+        : (typeof window !== "undefined" && typeof window.innerWidth === "number" && window.innerWidth > 0
+          ? window.innerWidth
+          : 1920);
+
+      const max = Math.min(MAX_CARD_DRAWER_WIDTH, winW * 0.9);
+      const min = Math.min(MIN_CARD_DRAWER_WIDTH, max);
+
+      const parsed = typeof rawWidth === "number" ? rawWidth : parseFloat(rawWidth);
+      const num = !isNaN(parsed) ? parsed : DEFAULT_CARD_DRAWER_WIDTH;
+
+      return Math.min(max, Math.max(min, Math.round(num)));
+    }
+
+    /**
+     * 从 localStorage 读取持久化抽屉宽度并安全钳位（g-280 纯函数）
+     *
+     * @param {Storage|null} [storage] - 可选 storage 实例（默认 window.localStorage）
+     * @param {number} [windowWidth] - 可选视口宽度
+     * @returns {number} 安全钳位后的宽度
+     */
+    function readDrawerWidth(storage, windowWidth) {
+      const s = storage !== undefined ? storage : (typeof window !== "undefined" ? window.localStorage : null);
+      if (!s) return clampDrawerWidth(DEFAULT_CARD_DRAWER_WIDTH, windowWidth);
+      try {
+        const raw = s.getItem(CARD_DRAWER_STORAGE_KEY);
+        if (raw === null || raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+          return clampDrawerWidth(DEFAULT_CARD_DRAWER_WIDTH, windowWidth);
+        }
+        const val = Number(raw);
+        if (isNaN(val) || val <= 0) {
+          return clampDrawerWidth(DEFAULT_CARD_DRAWER_WIDTH, windowWidth);
+        }
+        return clampDrawerWidth(val, windowWidth);
+      } catch (_e) {
+        return clampDrawerWidth(DEFAULT_CARD_DRAWER_WIDTH, windowWidth);
+      }
+    }
+
+    /**
+     * 将抽屉宽度持久化至 localStorage（g-280 纯函数）
+     *
+     * @param {number} width - 待保存宽度
+     * @param {Storage|null} [storage] - 可选 storage 实例（默认 window.localStorage）
+     * @param {number} [windowWidth] - 可选视口宽度
+     * @returns {number} 实际保存的钳位宽度
+     */
+    function writeDrawerWidth(width, storage, windowWidth) {
+      const clamped = clampDrawerWidth(width, windowWidth);
+      const s = storage !== undefined ? storage : (typeof window !== "undefined" ? window.localStorage : null);
+      if (s) {
+        try {
+          s.setItem(CARD_DRAWER_STORAGE_KEY, String(clamped));
+        } catch (_e) {
+          // 容错：localStorage 禁用或超限时不阻断 UI
+        }
+      }
+      return clamped;
+    }
+
     // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑 + g-128 删除按钮 + g-275 共享卡支持
     function CardDrawer(props) {
       useLocaleRevision();
+      const [width, setWidth] = React.useState(() => readDrawerWidth());
+      const [isDragging, setIsDragging] = React.useState(false);
+      const [isHovered, setIsHovered] = React.useState(false);
+
+      // g-280：视口缩小时自适应，防止抽屉宽度溢出视口 90%
+      React.useEffect(() => {
+        function handleResize() {
+          setWidth((prev) => {
+            const clamped = clampDrawerWidth(prev, window.innerWidth);
+            return clamped !== prev ? clamped : prev;
+          });
+        }
+        window.addEventListener("resize", handleResize);
+        return () => {
+          window.removeEventListener("resize", handleResize);
+        };
+      }, []);
+
+      // g-280：拖拽宽度监听：mousemove/mouseup 必须挂在 window 上（快速甩出仍可追踪），
+      // 释放后平滑结束；组件卸载时必须解绑（无幽灵拖拽、无泄漏）
+      React.useEffect(() => {
+        if (!isDragging) return;
+
+        function handleMouseMove(e) {
+          const nextWidth = clampDrawerWidth(window.innerWidth - e.clientX, window.innerWidth);
+          setWidth(nextWidth);
+        }
+
+        function handleMouseUp(e) {
+          const finalWidth = clampDrawerWidth(window.innerWidth - e.clientX, window.innerWidth);
+          setWidth(finalWidth);
+          writeDrawerWidth(finalWidth);
+          setIsDragging(false);
+        }
+
+        const prevUserSelect = document.body.style.userSelect;
+        const prevCursor = document.body.style.cursor;
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "col-resize";
+
+        window.addEventListener("mousemove", handleMouseMove);
+        window.addEventListener("mouseup", handleMouseUp);
+
+        return () => {
+          window.removeEventListener("mousemove", handleMouseMove);
+          window.removeEventListener("mouseup", handleMouseUp);
+          document.body.style.userSelect = prevUserSelect;
+          document.body.style.cursor = prevCursor;
+        };
+      }, [isDragging]);
+
+      const handleResizeMouseDown = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(true);
+      };
+
+      const handleResizeDoubleClick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const resetW = clampDrawerWidth(DEFAULT_CARD_DRAWER_WIDTH, window.innerWidth);
+        setWidth(resetW);
+        writeDrawerWidth(resetW);
+      };
       const [state, setState] = React.useState({
         loading: props.goalId ? true : !props.cardData,
         card: props.cardData ?? null,
@@ -5393,17 +5540,49 @@ window.__ModuleLoader__.load({
           ];
         }
       }
+      const resizeHandle = h("div", {
+        className: "dg-card-drawer-resize-handle",
+        "data-testid": "card-drawer-resize-handle",
+        title: dgT("drawer.resizeTip"),
+        style: {
+          position: "absolute",
+          top: 0,
+          bottom: 0,
+          left: 0,
+          width: 6,
+          cursor: "col-resize",
+          zIndex: 20,
+          userSelect: "none",
+          background: (isHovered || isDragging)
+            ? "var(--dsw-alias-state-business-primary, rgba(76,141,255,0.35))"
+            : "transparent",
+          boxShadow: (isHovered || isDragging)
+            ? "inset 2px 0 0 0 var(--dsw-alias-state-business-primary, #4c8dff)"
+            : "none",
+          transition: "background 0.15s ease, box-shadow 0.15s ease",
+        },
+        onMouseEnter: () => setIsHovered(true),
+        onMouseLeave: () => setIsHovered(false),
+        onMouseDown: handleResizeMouseDown,
+        onDoubleClick: handleResizeDoubleClick,
+        onClick: (e) => e.stopPropagation(),
+      });
+
       return h(
         "div",
         null,
         h("div", { style: { ...S.overlay, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.35))" }, onClick: props.onClose }),
-        h("div", { style: S.drawer, onClick: (e) => e.stopPropagation() },
+        h("div", {
+            style: { ...S.drawer, width },
+            onClick: (e) => e.stopPropagation(),
+          },
+          resizeHandle,
           h("span", { style: S.close, onClick: props.onClose }, "✕"),
           inner),
       );
+    }
 
     // Source contract: sessionLinkBtn(card.parent_session_id, card.child_id, "↗ 转到对话").
-    }
 
     // 质量判据 checklist（确认阶段）：每条一个勾选框（localStorage 按目标持久化，仅前端评审草稿）
     // + 「💬 反馈」按钮——展开输入框，经 session.prompt 排队送达该目标的执行会话（复用 g-107 通路）。
@@ -5476,10 +5655,10 @@ window.__ModuleLoader__.load({
                            style: { flexShrink: 0, cursor: "pointer", marginTop: 2, width: 20, height: 20 } }),
               h("span", { style: { flex: 1, minWidth: 0, opacity: done ? 0.55 : 1,
                                    textDecoration: done ? "line-through" : "none" } }, label),
-              h("button", { style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
+              h("button", { style: { ...S.btn, flexShrink: 0, whiteSpace: "nowrap" }, className: "dg-btn",
                             title: dgT("criteria.feedbackTooltip"),
                             onClick: (e) => { e.stopPropagation(); setFbIdx(fbIdx === i ? -1 : i); setFbNote(null); } },
-                dgT("criteria.feedbackTooltip"))),
+                dgT("criteria.feedbackBtn"))),
             fbIdx === i
               ? h("div", { style: { display: "flex", gap: 4, marginTop: 3, marginLeft: 22 } },
                   h("input", { style: S.promptInput, value: fbText, placeholder: dgT("criteria.feedbackPlaceholder"),

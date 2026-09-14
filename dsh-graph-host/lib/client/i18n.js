@@ -590,7 +590,8 @@
       'criteria.saveFail': '⚠️ 保存失败：',
 
       // === 判据反馈 ===
-      'criteria.feedbackTooltip': '针对此判据向执行会话反馈',
+      'criteria.feedbackBtn': '反馈',
+      'criteria.feedbackTooltip': '向执行会话反馈此判据',
       'criteria.feedbackPlaceholder': '反馈内容…',
       'criteria.feedbackSend': '发送',
       'criteria.feedbackQueued': '✅ 反馈已排队送达执行会话',
@@ -654,6 +655,7 @@
       'addCard.chatSwitched': '✅ 已切换到对话窗，请直接输入收集需求',
 
       // === 卡片抽屉 ===
+      'drawer.resizeTip': '拖拽调整宽度（双击恢复默认）',
       'drawer.loadFail': '获取失败：',
       'drawer.unknownRoot': '（仓库根未知）',
       'drawer.unknownAttachmentRoot': '（附件根未知）',
@@ -1553,7 +1555,8 @@
       'criteria.saveFail': '⚠️ Save failed: ',
 
       // === Criteria feedback ===
-      'criteria.feedbackTooltip': 'Send feedback for this criterion to the execution session',
+      'criteria.feedbackBtn': 'Feedback',
+      'criteria.feedbackTooltip': 'Send this criterion to the execution session',
       'criteria.feedbackPlaceholder': 'Feedback content…',
       'criteria.feedbackSend': 'Send',
       'criteria.feedbackQueued': '✅ Feedback queued for execution session',
@@ -1617,6 +1620,7 @@
       'addCard.chatSwitched': '✅ Switched to chat, enter your collection needs directly',
 
       // === Card drawer ===
+      'drawer.resizeTip': 'Drag to resize (double-click to reset)',
       'drawer.loadFail': 'Failed to load: ',
       'drawer.unknownRoot': '(Repository root unknown)',
       'drawer.unknownAttachmentRoot': '(Attachment root unknown)',

@@ -1,5 +1,3 @@
-    }
-
     // 质量判据 checklist（确认阶段）：每条一个勾选框（localStorage 按目标持久化，仅前端评审草稿）
     // + 「💬 反馈」按钮——展开输入框，经 session.prompt 排队送达该目标的执行会话（复用 g-107 通路）。
     function CriteriaChecklist(props) {
@@ -71,10 +69,10 @@
                            style: { flexShrink: 0, cursor: "pointer", marginTop: 2, width: 20, height: 20 } }),
               h("span", { style: { flex: 1, minWidth: 0, opacity: done ? 0.55 : 1,
                                    textDecoration: done ? "line-through" : "none" } }, label),
-              h("button", { style: { ...S.btn, flexShrink: 0 }, className: "dg-btn",
+              h("button", { style: { ...S.btn, flexShrink: 0, whiteSpace: "nowrap" }, className: "dg-btn",
                             title: dgT("criteria.feedbackTooltip"),
                             onClick: (e) => { e.stopPropagation(); setFbIdx(fbIdx === i ? -1 : i); setFbNote(null); } },
-                dgT("criteria.feedbackTooltip"))),
+                dgT("criteria.feedbackBtn"))),
             fbIdx === i
               ? h("div", { style: { display: "flex", gap: 4, marginTop: 3, marginLeft: 22 } },
                   h("input", { style: S.promptInput, value: fbText, placeholder: dgT("criteria.feedbackPlaceholder"),
