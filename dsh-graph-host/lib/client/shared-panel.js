@@ -1,7 +1,7 @@
     // g-183：项目知识库管理面板——创建/查看共享条目、挂到目标、解除引用、零引用显式删除。
     function SharedCardsModal(props) {
       useLocaleRevision();
-      const { onClose, onRefresh, sharedCards, goals } = props;
+      const { onClose, onRefresh, sharedCards, goals, onOpenCard } = props;
       const [cards, setCards] = React.useState(Array.isArray(sharedCards) ? sharedCards : []);
       const [title, setTitle] = React.useState("");
       const [note, setNote] = React.useState(null);
@@ -78,7 +78,18 @@
       const cardRow = (c) => {
         const refs = Array.isArray(c.referencingGoals) ? c.referencingGoals : [];
         const installing = c.status === "collecting";
-        return h("div", { key: c.id, style: { ...S.subCard, marginBottom: 6 } },
+        return h("div", {
+          key: c.id,
+          style: {
+            ...S.subCard,
+            marginBottom: 6,
+            cursor: onOpenCard ? "pointer" : "default",
+          },
+          title: dgT("card.clickToOpenDrawer"),
+          onClick: () => {
+            if (onOpenCard) onOpenCard(null, c.id, c);
+          },
+        },
           h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
             h("span", { style: { flex: 1 } }, `${CARD_STATUS_ICON[c.status] ?? c.status} ｜ ${c.title}`),
             h("span", { style: { ...S.meta, fontSize: 11 } }, `${c.refCount} ${dgT("shared.goalRef")}`)),
@@ -94,6 +105,7 @@
                     href: graphUrl("/api/dsh-graph/attachment?name=" + encodeURIComponent(a)),
                     target: "_blank", rel: "noopener noreferrer",
                     style: { color: "var(--dsw-alias-label-link, #4c8dff)", textDecoration: "underline", marginRight: 4 },
+                    onClick: (e) => e.stopPropagation(),
                   }, `@att/${a}`),
                   "，",
                 ]))
@@ -111,7 +123,10 @@
                     className: "dg-btn",
                     disabled: installing,
                     title: installing ? dgT("drawer.unrefCollecting") : dgT("shared.unrefGoalTooltip", { label }),
-                    onClick: () => unreference(c.id, ref.id),
+                    onClick: (e) => {
+                      e.stopPropagation();
+                      unreference(c.id, ref.id);
+                    },
                   }, "➖ " + label);
                 })),
           installing
@@ -124,6 +139,7 @@
               placeholder: dgT("shared.searchGoalPlaceholder"),
               list: `goal-list-${c.id}`,
               value: attachGoalInputs[c.id] ?? "",
+              onClick: (e) => e.stopPropagation(),
               onChange: (e) => setAttachGoalInputs((prev) => ({ ...prev, [c.id]: e.target.value })),
             }),
             h("datalist", { id: `goal-list-${c.id}` },
@@ -133,7 +149,8 @@
               style: S.btnPrimary,
               className: "dg-btn",
               disabled: !(attachGoalInputs[c.id] ?? "").trim(),
-              onClick: () => {
+              onClick: (e) => {
+                e.stopPropagation();
                 const raw = (attachGoalInputs[c.id] ?? "").trim();
                 const matched = (goals ?? []).find((g) => g.id === raw || `${g.id} ${g.title}` === raw || g.id === raw.split(" ")[0]);
                 const targetId = matched ? matched.id : raw;
@@ -141,7 +158,14 @@
               },
             }, dgT("shared.attachBtn")),
             ...(c.refCount === 0 && !installing ? [
-              h("button", { style: S.btn, className: "dg-btn", onClick: () => removeCard(c.id) }, dgT("shared.deleteBtn")),
+              h("button", {
+                style: S.btn,
+                className: "dg-btn",
+                onClick: (e) => {
+                  e.stopPropagation();
+                  removeCard(c.id);
+                },
+              }, dgT("shared.deleteBtn")),
             ] : []),
             installing
               ? h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("shared.collecting"))

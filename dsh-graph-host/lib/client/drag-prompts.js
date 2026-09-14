@@ -66,6 +66,7 @@
       const hasCriteria = !!(goalData?.criteria_count);
       const oldChildId = goalData?.attempt_child_id ?? null;
       const oldParentId = goalData?.attempt_parent_session_id ?? null;
+      const [isolateWorktree, setIsolateWorktree] = React.useState(() => defaultWorktreeForGoalType(goalData?.type));
 
       // 有子代理时用 session.prompt 排队重新执行，无子代理时派新
       const { session: oldSession } = useBoundSession(oldParentId, oldChildId);
@@ -119,7 +120,7 @@
             const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ goal: goalId }),
+              body: JSON.stringify({ goal: goalId, worktree: isolateWorktree }),
             });
             const data = await r.json();
             if (data.ok) {
@@ -166,6 +167,20 @@
           !hasCriteria
             ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginBottom: 4 } },
                 dgT("inProgress.noCriteria"))
+            : null,
+          // g-283：在工作树中隔离执行复选框（无活跃子代理准备派发新执行时展示）
+          !hasChild
+            ? h("label", {
+                style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: 4, marginBottom: 8, cursor: "pointer", userSelect: "none" },
+              },
+                h("input", {
+                  type: "checkbox",
+                  checked: isolateWorktree,
+                  onChange: (e) => setIsolateWorktree(e.target.checked),
+                  style: { cursor: "pointer" },
+                }),
+                h("span", null, dgT("exec.isolateWorktree")),
+              )
             : null,
           h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
             h("button", {

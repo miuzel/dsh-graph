@@ -1,5 +1,5 @@
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
-    const PLUGIN_VERSION = "0.10.0";
+    const PLUGIN_VERSION = "0.11.0";
 
     // g-230：阶段列定义——label 改为函数式动态翻译（每次渲染时读取当前语言）
     const STAGES = [
@@ -72,6 +72,8 @@
       get "attempt.handoff.confirmed"() { return dgT('event.handoffConfirmed'); },
       get "attempt.handoff.superseded"() { return dgT('event.handoffSuperseded'); },
       get "attempt.unbound"() { return dgT('event.attemptUnbound'); },
+      get "attempt.detached"() { return dgT('event.attemptDetached'); },
+      get "attempt.abandoned"() { return dgT('event.attemptAbandoned'); },
     };
 
     // 近期动态只保留对人有用的事件：泳道切换、修订与人工补充、判据/评审/交付关键节点
@@ -85,6 +87,7 @@
       "goal.directive_set", "goal.comment_added",
       "attempt.handoff.confirmed", "attempt.handoff.superseded",
       "attempt.unbound", // g-190
+      "attempt.detached", "attempt.abandoned", // g-282
     ]);
 
     // g-230：拆出事件三要素（时间/事件/执行者），供表格列渲染与 humanEvent 复用
@@ -105,6 +108,8 @@
         else if (e.event === "attempt.handoff.confirmed") what = dgT('event.handoffConfirmedDetail', { id: d.handoff ?? "" });
         else if (e.event === "attempt.handoff.superseded") what = dgT('event.handoffSupersededDetail', { old: d.old_handoff ?? "", new: d.new_handoff ?? "" });
         else if (e.event === "attempt.unbound") what = dgT('event.unboundDetail', { id: d.child_id ?? "" }) + (d.reason ? "（" + d.reason + "）" : ""); // g-190
+        else if (e.event === "attempt.detached") what = dgT('event.detachedDetail', { id: d.child_id ?? d.attempt ?? "" }) + (d.reason ? "（" + d.reason + "）" : ""); // g-282
+        else if (e.event === "attempt.abandoned") what = dgT('event.abandonedDetail', { id: d.attempt ?? "" }) + (d.reason ? "（" + d.reason + "）" : ""); // g-282
         else what = e.event;
       }
       // g-230：执行者标签国际化
@@ -141,6 +146,8 @@
       .dg-btn:active { filter: brightness(0.95); }
       .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
       /* g-188：统一“转到对话”入口的 hover/active/focus 反馈，不改变布局。 */
+      .dg-card-drawer-resize-handle { transition: background .12s ease, box-shadow .12s ease; }
+      .dg-card-drawer-resize-handle:hover, .dg-card-drawer-resize-handle:active, .dg-card-drawer-resize-handle.dg-dragging { background: var(--dsw-alias-state-business-primary, rgba(76,141,255,.35)) !important; box-shadow: inset 2px 0 0 0 var(--dsw-alias-state-business-primary, #4c8dff) !important; }
       .dg-session-link { border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.55)); }
       .dg-session-link:hover { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.30)); border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.85)); box-shadow: 0 0 0 2px rgba(76,141,255,.18); }
       .dg-session-link:active { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.42)); transform: translateY(1px); }
@@ -228,6 +235,110 @@
         transition: background .12s ease, opacity .12s ease;
       }
       .dg-chevron:hover { background: rgba(128,128,128,.32); opacity: 1; }
+      /* g-277: compact tag chips in subtitle row with hover delete */
+      .dg-tag-chips-wrap {
+        display: inline-flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 4px;
+        min-width: 0;
+        max-width: 100%;
+        vertical-align: middle;
+      }
+      .dg-tag-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        font-size: 11px;
+        line-height: 1.3;
+        padding: 1px 6px;
+        border-radius: 4px;
+        border: 1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));
+        background: var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));
+        color: var(--dsw-alias-label-primary, #e6e6e6);
+        box-sizing: border-box;
+        max-width: 160px;
+        outline: none;
+        cursor: default;
+        transition: background .12s ease, border-color .12s ease;
+      }
+      .dg-tag-chip:hover {
+        background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.25));
+        border-color: var(--dsw-alias-border-l1, rgba(128,128,128,.45));
+      }
+      .dg-tag-chip:focus-within,
+      .dg-tag-chip:focus {
+        border-color: var(--dsw-alias-state-business-primary, #4c8dff);
+        box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary, #4c8dff);
+      }
+      .dg-tag-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .dg-tag-chip .dg-tag-del {
+        visibility: hidden;
+        border: none;
+        background: transparent;
+        color: var(--dsw-alias-label-secondary, rgba(220,220,220,.75));
+        cursor: pointer;
+        padding: 0 2px;
+        margin-left: 2px;
+        font-size: 12px;
+        line-height: 1;
+        border-radius: 2px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: color .12s ease, background .12s ease;
+      }
+      .dg-tag-chip:hover .dg-tag-del,
+      .dg-tag-chip:focus-within .dg-tag-del,
+      .dg-tag-del:focus,
+      .dg-tag-del:focus-visible {
+        visibility: visible;
+      }
+      .dg-tag-chip .dg-tag-del:hover {
+        color: var(--dsw-alias-state-error-primary, #d66);
+        background: rgba(214,102,102,.22);
+      }
+      .dg-tag-chip .dg-tag-del:focus-visible {
+        outline: 1px solid var(--dsw-alias-state-error-primary, #d66);
+      }
+      .dg-tag-add-btn {
+        display: inline-flex;
+        align-items: center;
+        font-size: 11px;
+        line-height: 1.3;
+        padding: 1px 6px;
+        border-radius: 4px;
+        border: 1px dashed var(--dsw-alias-border-l2, rgba(128,128,128,.35));
+        background: transparent;
+        color: var(--dsw-alias-label-secondary, rgba(220,220,220,.75));
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background .12s ease, border-color .12s ease, color .12s ease;
+      }
+      .dg-tag-add-btn:hover {
+        background: var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.20));
+        color: var(--dsw-alias-label-primary, #e6e6e6);
+        border-color: var(--dsw-alias-state-business-primary, #4c8dff);
+      }
+      .dg-tag-input {
+        width: 100px;
+        font-size: 11px;
+        line-height: 1.3;
+        padding: 1px 6px;
+        border-radius: 4px;
+        border: 1px solid var(--dsw-alias-state-business-primary, #4c8dff);
+        background: var(--dsw-alias-bg-layer-2, rgba(30,31,36,.92));
+        color: var(--dsw-alias-label-primary, #e6e6e6);
+        outline: none;
+        box-sizing: border-box;
+        flex-shrink: 0;
+      }
       .dg-card-active { box-shadow: 0 0 0 2px rgba(76,141,255,.85) !important; background: rgba(76,141,255,.12) !important; }
       .dg-sub-active { background: rgba(58,166,117,.30) !important; box-shadow: 0 0 0 1px #3aa675 !important; }
       /* g-233：搜索匹配与当前选中视觉反馈 */
@@ -398,6 +509,54 @@
         background: rgba(30,31,36,.92); border: 1px solid rgba(76,141,255,.55);
         box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; font-weight: 600;
         color: #e6e6e6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      /* g-270：目标描述只读态半透明暗色底纹面板（圆角 + 内边距），视觉圈出正文区域，分层栏目标题，深浅主题自适应 */
+      .dg-description-preview {
+        background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.025));
+        border: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.08));
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin-top: 4px;
+        box-sizing: border-box;
+      }
+      /* g-270 修正（负责人反馈）：浅色下正文底纹调淡；代码块/行内代码需比正文底纹略"深"，
+         覆盖 DSH MarkdownText 默认的近白底（实测 #f9fafb / #fafafa），避免"块比正文更浅"的观感。
+         代码块只让最外层 .md-code-block 承载一次底纹，内部（复制条/pre/code 等）一律透明，
+         否则 pre 与其内层 code 会各叠一层、文字区域出现重复底纹（负责人反馈） */
+      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block {
+        background: rgba(0, 0, 0, 0.06);
+      }
+      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block *:not(button) {
+        background: transparent;
+      }
+      /* 标题 banner（复制条）恢复与代码区的边界：更浅的底 + 细分隔线（负责人反馈"缺少原本的边界"） */
+      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block > div:first-child {
+        background: #ffffff;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+      }
+      body:not([data-ds-dark-theme]) .dg-description-preview code {
+        background: rgba(0, 0, 0, 0.06);
+      }
+      body[data-ds-dark-theme] .dg-description-preview {
+        background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.25));
+        border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
+      }
+      /* 深色：DSH 原语代码块实测仍写死近白底（不随主题变化）→ 改为微亮抬升面，避免暗色里的刺眼白块。
+         注意：深色判定只用 DSH 自身解析出的 body[data-ds-dark-theme]，
+         不得使用 @media (prefers-color-scheme: dark)——应用内浅色 + 系统深色时会把深色值泄漏到浅色 UI
+         （负责人真机复现：app 浅色 + OS 深色 → 底纹变 rgba(0,0,0,.25)） */
+      body[data-ds-dark-theme] .dg-description-preview .md-code-block {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      body[data-ds-dark-theme] .dg-description-preview .md-code-block *:not(button) {
+        background: transparent;
+      }
+      body[data-ds-dark-theme] .dg-description-preview .md-code-block > div:first-child {
+        background: rgba(255, 255, 255, 0.05);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      body[data-ds-dark-theme] .dg-description-preview code {
+        background: rgba(255, 255, 255, 0.06);
+      }
     `;
 
     const S = {

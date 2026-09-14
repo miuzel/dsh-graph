@@ -6,6 +6,12 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require("react");
     const h = React.createElement;
+    // g-270：安全获取 DSH 官方 MarkdownText 组件（若缺失则优雅降级为内置解析器）
+    let MarkdownText = null;
+    try {
+      const prim = require("@deepseek-ai/dsh-client-ui-primitives");
+      if (prim && prim.MarkdownText) MarkdownText = prim.MarkdownText;
+    } catch { /* 降级到内置纯函数解析器 */ }
     // g-230：全局翻译函数——在 plugin apply 阶段由 registerI18n + createTranslator 初始化。
     // 所有组件通过 dgT('key', params) 获取当前语言翻译。
     let dgT = (key) => key;

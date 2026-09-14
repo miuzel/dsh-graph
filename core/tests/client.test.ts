@@ -98,9 +98,11 @@ const post = async (routes: Map<string, any>, path: string, body: unknown) => {
 };
 
 const get = async (routes: Map<string, any>, path: string) => {
-  const handler = routes.get(path);
-  assert.ok(handler, `路由 ${path} 已注册`);
-  const req = fakeRequest("GET", null);
+  const purePath = path.split("?")[0];
+  const handler = routes.get(purePath);
+  assert.ok(handler, `路由 ${purePath} 已注册`);
+  const req: any = fakeRequest("GET", null);
+  req.url = path;
   const res = fakeResponse();
   await handler(req, res);
   return { code: res._code, body: res._body };
@@ -2959,8 +2961,8 @@ test("g-189 worktree 发现与弹窗展示源契约", () => {
   assert.match(host, /worktreeCache\.keys\(\)\.next/);
   assert.match(host, /未创建 worktree|worktree 列表不可用/);
   assert.match(modal, /AttemptWorktrees/);
-  assert.match(modal, /useState\(false\)/);
-  assert.match(modal, /expanded \? "▲" : "▼"/);
+  assert.match(modal, /tab === "worktree"/);
+  assert.match(modal, /dgT\("tab\.worktree"\)/);
   assert.match(modal, /dgT\("worktree\.notCreated"\)/);
   assert.match(modal, /textOverflow: "ellipsis"/);
   assert.match(modal, /dgT\("worktree\.copyPathTooltip"\)/);
@@ -3106,6 +3108,56 @@ test("g-183 shared-card REST：被引用删除被拒；转换端点 200", async 
   const list2 = await get(routes, "/api/dsh-graph/shared-cards");
   assert.equal(list2.body.cards.length, 1, "转换后共享池恰 1 张");
   assert.ok(list2.body.cards[0].id.startsWith("shared-"), "转换后应以 shared-* 新 id 落入共享池");
+});
+
+test("g-275 card REST：单卡读取端点 /api/dsh-graph/card 支持共享卡与自有卡查询", async () => {
+  const { root, routes, goalId } = setup();
+  // 1. 创建共享卡并挂到 goal
+  const create = await post(routes, "/api/dsh-graph/create-shared-card", { title: "共享卡只读测试", kind: "text" });
+  assert.equal(create.code, 200);
+  const sid = create.body.card;
+  await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+
+  // 2. GET /api/dsh-graph/card?id=<sid> 读共享卡（无 goal）
+  const getShared = await get(routes, `/api/dsh-graph/card?id=${sid}`);
+  assert.equal(getShared.code, 200);
+  assert.equal(getShared.body.ok, true);
+  assert.equal(getShared.body.card.id, sid);
+  assert.equal(getShared.body.card.title, "共享卡只读测试");
+  assert.equal(getShared.body.card.scope, "shared");
+  assert.equal(getShared.body.card.refCount, 1);
+  assert.ok(Array.isArray(getShared.body.card.referencingGoals));
+  assert.equal(getShared.body.card.referencingGoals.length, 1);
+  assert.equal(getShared.body.card.referencingGoals[0].id, goalId);
+
+  // 3. GET /api/dsh-graph/card?id=<cid>&goal=<goalId> 读目标自有卡
+  const addOwned = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "自有卡测试", kind: "text", scope: "goal" });
+  assert.equal(addOwned.code, 200);
+  const cid = addOwned.body.card;
+  const getOwned = await get(routes, `/api/dsh-graph/card?id=${cid}&goal=${goalId}`);
+  assert.equal(getOwned.code, 200);
+  assert.equal(getOwned.body.ok, true);
+  assert.equal(getOwned.body.card.id, cid);
+  assert.equal(getOwned.body.card.scope, "goal");
+  assert.equal(getOwned.body.goal.id, goalId);
+
+  // 4. 卡片不存在时返回 404
+  const notFound = await get(routes, "/api/dsh-graph/card?id=non-existent-card");
+  assert.equal(notFound.code, 404);
+  assert.ok(String(notFound.body.error).includes("不存在"));
+
+  // 5. 目标下不存在的卡片返回 404
+  const notFoundInGoal = await get(routes, `/api/dsh-graph/card?id=non-existent-card&goal=${goalId}`);
+  assert.equal(notFoundInGoal.code, 404);
+  assert.ok(String(notFoundInGoal.body.error).includes("不存在"));
+
+  // 6. 缺失 id 返回 400
+  const missingId = await get(routes, "/api/dsh-graph/card");
+  assert.equal(missingId.code, 400);
+
+  // 7. 非 GET 方法返回 405
+  const notAllowed = await post(routes, "/api/dsh-graph/card", { id: sid });
+  assert.equal(notAllowed.code, 405);
 });
 
 test("g-183 attachment REST：存储/路径安全/删除引用守卫", async () => {

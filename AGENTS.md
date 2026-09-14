@@ -150,7 +150,7 @@ dsh, so an in-progress plugin can never break the production GUI.
 ```sh
 bash scripts/dev-dsh-instance.sh run [--port N] [--host H] [--open]  # setup + start test instance (default 3082)
 bash scripts/dev-dsh-instance.sh setup            # create/install profile only, don't start
-bash scripts/dev-dsh-instance.sh main-published   # point main profile at published dsh-graph (^0.9.2) + reinstall
+bash scripts/dev-dsh-instance.sh main-published   # point main profile at published dsh-graph (^0.11.0) + reinstall
 bash scripts/dev-dsh-instance.sh main-dev         # point main profile back at local link: dev host
 bash scripts/dev-dsh-instance.sh status           # show both profiles' dsh-graph dep + port usage
 ```
@@ -176,6 +176,79 @@ node --test core/tests/*.test.ts
 - **Main profile:** only switched via `main-published` / `main-dev`. After switching, the
   main GUI (3080) must be restarted/refreshed to load the new version. Always verify in the
   test instance first, then switch the main profile.
+
+## 发布门禁（Release Gate）
+
+### Windows 兼容性：发布前统一验证，不逐功能验证
+
+来源：负责人决定（2026-09-14，g-284/g-285）。
+
+- Windows 原生兼容性是**平台层属性**，与单个功能无关 → **不作为每个功能的逐个验收项**；
+- 但**每个版本发布前必须做一次 Windows 兼容性测试**，作为发布门禁的一部分；
+- 依据：本项目长期只在 Linux/WSL2 上开发与验证，Windows 路径从未实测（首次 Windows 用户
+  反馈即撞上 `core/ops.js` 的 POSIX 常量具名导入，插件在 Windows 上**完全无法加载**）。
+
+**发布前 Windows 最小复验清单**（在原生 Windows 上执行，非 WSL2）：
+
+1. 全新 profile 安装：`npx @deepseek-ai/dsh plugin --profile <p> add <包/路径>`；
+2. 启动隔离实例：`npx @deepseek-ai/dsh web --port <非 3080 端口>`，确认插件 apply 无报错
+   （尤其不得出现 `node:constants` / `O_DIRECTORY` 类模块加载错误）；
+3. 最小功能用例：写目标 → 加标签 → 派发 attempt → 看板渲染正常、`graph_validate` 正常。
+
+**执行件（已自动化）**：`scripts/win-smoke-test.mjs`（配 `win-smoke-test.cmd` 双击入口）。
+它把上述清单拆成分层检查并在**临时 DSH_HOME** 内完成，不动用户真实环境：
+
+- **T1 静态门禁**（跨平台）：发布包内不得对 POSIX 专有常量做 ESM 具名导入 ——
+  可直接预测「Windows 上插件完全无法加载」，无需 Windows 机器即可在发布前拦住；
+- **T2 安装**：全新隔离 profile 安装插件成功；
+- **T3 核心运行时**：直接调用安装后的 `core/ops.js` 跑 建目标/判据/标签锁/原子写/跨进程并发 CAS/validate；
+- **T4 实例启动**：`dsh --profile <p> --no-open --port <n>` 启动，插件树加载无平台错误；
+- **T5 REST 冒烟**：dsh-graph 路由已注册、看板载荷可读（证明插件真的 apply）。
+
+```sh
+# Windows 侧（没有仓库、没有分支）：把脚本与产出的 tarball 一起拷过去即可
+node win-smoke-test.mjs --tarball D:\path\dsh-graph-<版本>.tgz   # 推荐：直接验现成安装包
+
+# 开发机（有仓库/分支）
+node scripts/win-smoke-test.mjs --path <dsh-graph-host 目录>      # 从本地源码打包后验证
+node scripts/win-smoke-test.mjs --spec dsh-graph@<版本>           # 从 registry 验证
+node scripts/win-smoke-test.mjs --static-only .                   # 秒级静态门禁（跨平台）
+node scripts/win-smoke-test.mjs --self-test                       # 离线自检脚本自身判定逻辑
+```
+
+**产物传递纪律**：Windows 机器上通常**没有本仓库、也没有开发分支**（负责人明确：暂不把 dev 分支推 GitHub）。
+因此跨机器传递的**唯一渠道是安装包（tarball）**，验证也应以 tarball 为一等输入：
+
+1. 开发机产出：`cd dsh-graph-host && npm pack --ignore-scripts --pack-destination <目录>`
+   （`--ignore-scripts` 同时绕过依赖 `bash` 的 `prepack`，后者在原生 Windows 不可用）；
+2. 记录 `sha256sum <tarball>` 一并交付，Windows 侧报告里的 `产物指纹=sha256:…` 用于对账
+   （确认两边验的是同一个产物）；
+3. Windows 侧：`plugin --profile <p> add <tarball>` 安装 → `dsh --profile <p> --port <非 3080>`
+   启动（`dsh web` 是固定 `web` profile 的别名；命名 profile 用 `dsh --profile <p> [应用参数]`）；
+4. 跑 `node win-smoke-test.mjs --tarball <tarball>` 取 T1–T5 完整结论并回传报告段。
+
+> 注意：`plugin add <目录>` 会被 pnpm 处理成 `link:`，**不会安装该包的 dependencies**，
+> 且依赖解析会命中包上层目录的 `node_modules` —— 在开发仓库内「看起来通过」，
+> 到用户机器上才 `ERR_MODULE_NOT_FOUND`。本脚本的 `--path` 一律先打包成 tarball 再用真实安装语义验证。
+
+在 Linux/WSL2 上运行只对 T1/T2 结论有效；**T3–T5 的 PASS 不能替代 Windows 真机结论**（脚本会自行提示）。
+
+**纪律**：Linux/WSL2 全绿**不能**替代本项；Windows 验证缺失时，README 的兼容声明必须
+如实标注「Windows 未验证」，不得宣称支持。
+
+### 版本号一致性：发布前统一检查（不塞进功能目标）
+
+来源：负责人 2026-09-14 明确——版本常量属**发布前检查项**，不并入任何功能目标。
+
+发布前必须逐项核对下列位置的版本表述**一致**（改完需重建生成物并提交）：
+
+1. `dsh-graph-host/package.json` 的 `version`（发布源）；
+2. `dsh-graph-host/lib/client/constants.js` 的 `PLUGIN_VERSION`（g-174 硬编码，标题栏显示用；
+   改后必须 `bash scripts/build-client.sh` 重建 `lib/client.js` 并一起提交）；
+3. `README.md` 与 `dsh-graph-host/README.md`（中英）中出现的版本号与平台验证声明。
+
+> 教训：0.11.0 发布前 `package.json` 已 bump 至 `0.11.0`，但 `PLUGIN_VERSION` 仍为 `0.11.0-alpha`
+> ——该常量不参与构建校验，**只有人工核对才能发现**，故固化为清单项。
 
 ## Important Notes
 

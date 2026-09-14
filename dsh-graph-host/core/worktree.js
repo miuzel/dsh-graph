@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, mkdirSync } from "node:fs";
 import { resolve, relative, join, sep, dirname } from "node:path";
 import { appendEvent, readEvents, nowIso } from "./events.js";
 import { discoverGitWorktree } from "./root.js";
 import { findGoalFile, loadGoal } from "./ops.js";
+import { GraphError } from "./machine.js";
 function git(cwd, args) {
     return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
@@ -253,4 +254,170 @@ export function cleanWorktree(root, id, actor = "human:gui", confirm = false) {
     catch (error) {
         return block(String(error instanceof Error ? error.message : error));
     }
+}
+/**
+ * g-283：根据目标类型计算是否默认隔离 worktree 的纯函数：
+ * patch / chore / task 默认不勾选（false）；
+ * 其余（feature / bug / improvement 等）默认勾选（true）。
+ * 空值/非法类型按默认类型 task 处理（false）。
+ */
+export function defaultWorktreeForGoalType(rawType) {
+    if (rawType === null || rawType === undefined || rawType === "") {
+        return false;
+    }
+    const t = String(rawType).trim().toLowerCase();
+    if (t === "patch" || t === "chore" || t === "task") {
+        return false;
+    }
+    return true;
+}
+/**
+ * g-283：派发前准备工作树（真实创建 / 幂等复用 / 失败即停）。
+ * - enabled=false：不创建，返回 worktree=false 与原因；
+ * - enabled=true：
+ *   - 目标路径与分支已存在且匹配 → 复用（reused=true），不报错；
+ *   - 路径被占用但归属/分支不匹配、非 git 仓库、git 不可用、创建失败 → 抛出 GraphError 拒绝派发；
+ *   - 绝不静默降级为主树执行。
+ */
+export function prepareAttemptWorktree(root, goalId, attemptId, opts) {
+    if (!opts.enabled) {
+        return {
+            enabled: false,
+            worktree: false,
+            reason: opts.reason || "user_choice",
+            created: false,
+            reused: false,
+        };
+    }
+    const mainWorktree = resolveCodeWorkspace(root);
+    if (!mainWorktree) {
+        throw new GraphError("当前工作区不是 Git 仓库或 git 不可用，无法创建隔离工作树（拒绝派发）");
+    }
+    try {
+        git(mainWorktree, ["rev-parse", "--git-dir"]);
+    }
+    catch (e) {
+        throw new GraphError(`Git 不可用或仓库无效（${e?.message ?? e}），无法创建隔离工作树（拒绝派发）`);
+    }
+    let baseline = "";
+    if (opts.baselineCommit && opts.baselineCommit.trim()) {
+        try {
+            baseline = git(mainWorktree, ["rev-parse", "--verify", `${opts.baselineCommit.trim()}^{commit}`]);
+        }
+        catch {
+            throw new GraphError(`基线 commit 无效或不存在（${opts.baselineCommit}），无法创建隔离工作树（拒绝派发）`);
+        }
+    }
+    else {
+        try {
+            baseline = git(mainWorktree, ["rev-parse", "HEAD"]);
+        }
+        catch {
+            throw new GraphError("仓库当前无有效提交（HEAD 不存在），无法创建隔离工作树（拒绝派发）");
+        }
+    }
+    const seqMatch = attemptId.match(/^att-(\d+)$/);
+    const seqNum = seqMatch ? Number(seqMatch[1]) : 1;
+    const name2 = `${goalId}-att-${String(seqNum).padStart(2, "0")}`;
+    const name3 = `${goalId}-att-${String(seqNum).padStart(3, "0")}`;
+    const targetPath2 = resolve(mainWorktree, ".worktrees", name2);
+    const targetPath3 = resolve(mainWorktree, ".worktrees", name3);
+    let liveTrees = [];
+    try {
+        liveTrees = trees(mainWorktree);
+    }
+    catch (e) {
+        throw new GraphError(`无法读取 Git worktree 列表：${e?.message ?? e}`);
+    }
+    // 1. 检查是否存在已登记的匹配 worktree（支持两位或三位数字后缀）
+    const existing2 = liveTrees.find((t) => resolve(t.path) === targetPath2);
+    const existing3 = liveTrees.find((t) => resolve(t.path) === targetPath3);
+    const matchedTree = existing2 || existing3;
+    if (matchedTree) {
+        const expectedBranch = matchedTree === existing2 ? name2 : name3;
+        const actualBranch = matchedTree.branch?.replace(/^refs\/heads\//, "");
+        const assoc = parseAssociation(matchedTree);
+        if (actualBranch === expectedBranch && assoc.assoc?.goal === goalId && assoc.assoc?.attempt === attemptId) {
+            let head = "";
+            try {
+                head = git(matchedTree.path, ["rev-parse", "HEAD"]);
+            }
+            catch {
+                head = matchedTree.head ?? baseline;
+            }
+            return {
+                enabled: true,
+                created: false,
+                reused: true,
+                worktree: {
+                    path: matchedTree.path,
+                    relative_path: relative(mainWorktree, matchedTree.path),
+                    branch: `refs/heads/${expectedBranch}`,
+                    canonical_root: resolve(root),
+                    head,
+                },
+            };
+        }
+        else {
+            throw new GraphError(`工作树路径已存在但归属/分支不匹配（路径: ${matchedTree.path}, 分支: ${actualBranch ?? "无"}, 目标: ${goalId}, attempt: ${attemptId}），拒绝派发`);
+        }
+    }
+    // 2. 检查候选路径是否被文件系统占用（非有效 worktree 目录或残留）
+    if (existsSync(targetPath2)) {
+        throw new GraphError(`工作树路径已被文件系统占用且非有效工作树（路径: ${targetPath2}），拒绝派发`);
+    }
+    if (existsSync(targetPath3)) {
+        throw new GraphError(`工作树路径已被文件系统占用且非有效工作树（路径: ${targetPath3}），拒绝派发`);
+    }
+    // 3. 检查分支是否已被其他 worktree 检出
+    const checkedOut2 = liveTrees.find((t) => t.branch === name2 || t.branch === `refs/heads/${name2}`);
+    if (checkedOut2) {
+        throw new GraphError(`分支 ${name2} 已在其他工作树（${checkedOut2.path}）检出，无法创建工作树（拒绝派发）`);
+    }
+    const checkedOut3 = liveTrees.find((t) => t.branch === name3 || t.branch === `refs/heads/${name3}`);
+    if (checkedOut3) {
+        throw new GraphError(`分支 ${name3} 已在其他工作树（${checkedOut3.path}）检出，无法创建工作树（拒绝派发）`);
+    }
+    // 4. 真实创建 worktree（优先规范的 2 位序号后缀）
+    const chosenName = name2;
+    const chosenPath = targetPath2;
+    let branchExists = false;
+    try {
+        git(mainWorktree, ["rev-parse", "--verify", `refs/heads/${chosenName}`]);
+        branchExists = true;
+    }
+    catch {
+        branchExists = false;
+    }
+    try {
+        mkdirSync(resolve(mainWorktree, ".worktrees"), { recursive: true });
+        if (branchExists) {
+            git(mainWorktree, ["worktree", "add", chosenPath, chosenName]);
+        }
+        else {
+            git(mainWorktree, ["worktree", "add", "-b", chosenName, chosenPath, baseline]);
+        }
+    }
+    catch (e) {
+        throw new GraphError(`创建隔离工作树失败（路径: ${chosenPath}, 分支: ${chosenName}, 基线: ${baseline}）：${e?.message ?? e}`);
+    }
+    let head = "";
+    try {
+        head = git(chosenPath, ["rev-parse", "HEAD"]);
+    }
+    catch {
+        head = baseline;
+    }
+    return {
+        enabled: true,
+        created: true,
+        reused: false,
+        worktree: {
+            path: chosenPath,
+            relative_path: relative(mainWorktree, chosenPath),
+            branch: `refs/heads/${chosenName}`,
+            canonical_root: resolve(root),
+            head,
+        },
+    };
 }

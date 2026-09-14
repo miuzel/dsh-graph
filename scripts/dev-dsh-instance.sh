@@ -39,7 +39,7 @@
 #   HOST_DIR=…$REPO/dsh-graph-host  本地 host 插件目录
 #   pnpm_config_store_dir=…      pnpm store（优先级高于 PNPM_STORE_DIR）
 #   PNPM_STORE_DIR=…             pnpm store（未设置时使用仓库 tmp/test-review/.pnpm-store）
-#   PUBLISHED_VER=^0.7.2         已发布版本 spec
+#   PUBLISHED_VER=^0.11.0       已发布版本 spec
 #   MAIN_PROFILE=web             主 profile 名
 #
 # pnpm store 会在安装前创建并以 pnpm_config_store_dir 导出，确保 pnpm install
@@ -60,7 +60,7 @@ TEST_HOME="${TEST_HOME:-$REPO_ROOT/tmp/test-review}"
 PROFILE="${PROFILE:-dsh-graph-test}"
 PORT="${PORT:-3082}"
 HOST_DIR="${HOST_DIR:-$REPO_ROOT/dsh-graph-host}"
-PUBLISHED_VER="${PUBLISHED_VER:-^0.9.2}"
+PUBLISHED_VER="${PUBLISHED_VER:-^0.11.0}"
 MAIN_PROFILE="${MAIN_PROFILE:-web}"
 # 测试实例的工作目录决定 .dsh-graph 数据落点；setup 会写入绝对
 # .dsh-graph config.root，避免 linked worktree 的 g-149 canonicalization 合并。

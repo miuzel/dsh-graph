@@ -625,28 +625,16 @@
               throw new Error("invalid board payload");
             }
             if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
-            // g-258: 刷新后状态保持——若之前已展开并拉取过明细的目标/版本，在刷新后保持已加载明细
-            if (retained) {
-              if (retained.backlog && retained.backlog.length > 0 && !collapsedLanes['backlog']) {
-                data.backlog = retained.backlog;
-                data.backlog_count = retained.backlog.length;
-                data.backlog_loaded = true;
-              }
-              if (Array.isArray(retained.versions)) {
-                const retainedVersionMap = new Map(retained.versions.map((v) => [v.slug, v]));
-                for (const ver of data.versions) {
-                  if (ver.status === "released" && openReleased[ver.slug]) {
-                    const prevVer = retainedVersionMap.get(ver.slug);
-                    if (prevVer && prevVer.goals && prevVer.goals.length > 0) {
-                      ver.goals = prevVer.goals;
-                      ver.goals_count = prevVer.goals.length;
-                      ver.loaded = true;
-                      ver.lazy = false;
-                    }
-                  }
-                }
-              }
-            }
+            // g-258: 刷新后状态保持——若之前已展开并拉取过明细的目标/版本，在刷新后保持已加载明细。
+            // g-290: 改由共享纯函数对账——计数以服务端为准；仅当载荷确为 lazy 且计数与 retained
+            // 明细长度一致时才沿用明细（保住「展开态刷新不闪空」），计数不一致一律丢弃旧明细并
+            // 复位已加载标记，立即交由既有懒加载路径补拉（绝不残留幽灵卡片）。
+            const retainResult = reconcileRetainedBoardState(data, retained, {
+              collapsedLanes: collapsedLanes,
+              openReleased: openReleased,
+            });
+            if (retainResult.refetchBacklog) loadBacklogGoals();
+            for (const retainSlug of retainResult.refetchVersions) loadVersionGoals(retainSlug);
             const etag = r.headers.get("etag") || r.headers.get("ETag");
             if (etag) currentEtagRef.current.set(dimension, etag);
             else currentEtagRef.current.delete(dimension);
@@ -2164,6 +2152,7 @@
               supervisorSession: b.supervisorSession ?? null,
               onRenamed: () => load(),
               onArchived: () => load(),
+              onTagsChanged: () => load(),
               onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),
               deletedCardSignal,
               onDeletedCardHandled: () => setDeletedCardSignal(null),
@@ -2236,6 +2225,7 @@
           ? h(CardDrawer, { // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建（同 g-243）
                             key: "dg-card-drawer",
                             goalId: drawerCard.goalId, cardId: drawerCard.cardId,
+                            cardData: drawerCard.cardData,
                             onClose: () => setDrawerCard(null),
                             onConverted: () => {
                               // g-183：卡片转换成功后，重新 load 全局数据与弹窗数据，绝不误剥离卡片！
@@ -2246,22 +2236,26 @@
                               // g-219：事件结果为准——删除成功后局部更新弹窗与看板，不整体重新 load
                               const goalId = drawerCard.goalId;
                               const cid = cardId ?? drawerCard.cardId;
-                              setDeletedCardSignal({ goalId, cardId: cid, ts: Date.now() });
-                              setState((s) => {
-                                if (!s.data) return s;
-                                const strip = (g) => g.id === goalId
-                                  ? { ...g, cards: (g.cards ?? []).filter((c) => c.id !== cid) }
-                                  : g;
-                                return {
-                                  ...s,
-                                  data: {
-                                    ...s.data,
-                                    versions: s.data.versions.map((v) => ({ ...v, goals: v.goals.map(strip) })),
-                                    standalone: s.data.standalone.map(strip),
-                                    backlog: s.data.backlog.map(strip),
-                                  },
-                                };
-                              });
+                              if (goalId) {
+                                setDeletedCardSignal({ goalId, cardId: cid, ts: Date.now() });
+                                setState((s) => {
+                                  if (!s.data) return s;
+                                  const strip = (g) => g.id === goalId
+                                    ? { ...g, cards: (g.cards ?? []).filter((c) => c.id !== cid) }
+                                    : g;
+                                  return {
+                                    ...s,
+                                    data: {
+                                      ...s.data,
+                                      versions: s.data.versions.map((v) => ({ ...v, goals: v.goals.map(strip) })),
+                                      standalone: s.data.standalone.map(strip),
+                                      backlog: s.data.backlog.map(strip),
+                                    },
+                                  };
+                                });
+                              } else {
+                                load();
+                              }
                               setDrawerCard(null);
                             } })
           : null,
@@ -2621,6 +2615,7 @@
               key: "dg-shared-cards-modal", // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建
               onClose: () => setShowSharedPanel(false),
               onRefresh: () => load(),
+              onOpenCard: (goalId, cardId, cardData) => setDrawerCard({ goalId, cardId, cardData }),
               sharedCards: b.sharedCards ?? [],
               goals: [
                 ...(b.versions ?? []).flatMap((v) => v.goals ?? []),

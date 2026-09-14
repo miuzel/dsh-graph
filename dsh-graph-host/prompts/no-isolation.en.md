@@ -1,0 +1,1 @@
+【Worktree isolation not enabled】This dispatch did not enable independent worktree isolation: code changes, tests, and generated files are made directly in the current workspace, without creating a .worktrees/ isolated tree. main is the read-only published branch; directly modifying main or another target branch is forbidden.

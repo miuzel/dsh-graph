@@ -561,7 +561,7 @@ test("g-150：无历史目标 prompt 不含 handoff 段标题，卡片段保持"
   await tool.execute({ goal }, execCtx(ws));
   assert.ok(!captured.prompt!.includes("前序 attempt 已确认 handoff"), "无历史时不含 handoff 段标题");
   assert.ok(captured.prompt!.includes("已收集上下文卡片成果"), "卡片段保持");
-  assert.ok(captured.prompt!.includes("worktree 隔离"), "worktree 指令保持");
+  assert.ok(captured.prompt!.includes("本次未启用 worktree 隔离"), "task 目标默认不隔离：隔离声明保持");
 });
 
 test("g-150：无历史 start-execution 端点 prompt 不含 handoff 段", async () => {
@@ -701,7 +701,7 @@ test("g-150：handoff 段与 cards 段独立注入，互不干扰", async () => 
 
 // ---- ⑩ worktree=false 与 handoff 兼容 ----
 
-test("g-150：worktree=false 省略 worktree 指令但保留 handoff 注入", async () => {
+test("g-150：worktree=false 声明未启用隔离但保留 handoff 注入", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-wt-"));
   const root = join(ws, ".dsh-graph");
   init(root);
@@ -711,7 +711,8 @@ test("g-150：worktree=false 省略 worktree 指令但保留 handoff 注入", as
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   await tool.execute({ goal, worktree: false }, execCtx(ws));
   assert.ok(captured.prompt!.includes("前序 attempt 已确认 handoff"), "worktree=false 不影响 handoff 注入");
-  assert.ok(!captured.prompt!.includes("worktree 隔离"), "worktree=false 省略 worktree 指令");
+  assert.ok(!captured.prompt!.includes("【强制 worktree 隔离】"), "worktree=false 不含强制隔离指令");
+  assert.ok(captured.prompt!.includes("本次未启用 worktree 隔离"), "worktree=false → 声明未启用 worktree 隔离");
 });
 
 // ---- review 问题 1：确认权限 ----

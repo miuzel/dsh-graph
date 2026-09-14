@@ -28,7 +28,19 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 > **环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。
 >
-> **DSH 版本兼容性**：本版本（v0.10.0）**已完整验证并支持 DeepSeek Harness `v0.1.5-rc.2`**——发布前的隔离实例（Web GUI + 看板 + 工具 + REST）与中英双语演示录制均在 `v0.1.5-rc.2` 上实测通过；`0.1.5-rc.2` 也是 v0.10.0 的**推荐宿主版本**。同时兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上版本（提示词/工具契约向后兼容）。
+> **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+>
+> ### 🚀 v0.11.0 重要变化：Windows 原生由「不可用」变为「已支持」
+>
+> - **Windows 原生（此前完全不可用 → 现已支持）**：v0.10.0 及更早在 Windows 上会**模块加载即崩溃**（`core/ops.js` 具名导入 `node:constants` 的 `O_DIRECTORY`，Windows 无此导出），且安装时必报 peer 依赖告警。v0.11.0 已修复并在**原生 Windows（win32/x64）真机复验通过**。
+> - **macOS 新纳入验证矩阵**：与 Windows / Linux 使用**同一安装包（sha256 一致）**真机通过。
+> - **升级建议**：Windows 与 macOS 用户请升级到 v0.11.0。
+>
+> **DSH 版本兼容性**：本版本（v0.11.0）**已完整验证并支持 DeepSeek Harness `v0.1.5-rc.2`**——隔离实例（Web GUI + 看板 + 工具 + REST）与中英双语演示录制均在 `v0.1.5-rc.2` 上实测通过；`0.1.5-rc.2` 也是 v0.11.0 的**推荐宿主版本**。同时兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上版本（提示词/工具契约向后兼容）。
+>
+> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证。** 此前 Windows 不可用的两类问题（① 平台代码使用 POSIX 专用文件锁常量：目录作为 fd、`O_DIRECTORY`、`O_NOFOLLOW`；② 宿主核心包同时出现在 `dependencies` 与 `peerDependencies`）已在**本版本**修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过（同一安装包，三平台指纹一致）。
+>
+> **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下——这两者在 macOS 上本身是软链），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
 >
 > 已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -142,7 +154,19 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 > **Requirements**: Node.js ≥ 22 (includes precompiled core runtime).
 >
-> **DSH version compatibility**: This release (v0.10.0) is **fully verified against and supports DeepSeek Harness `v0.1.5-rc.2`** — the pre-release isolated instance (Web GUI + kanban + tools + REST) and the bilingual demo recordings were all exercised on `v0.1.5-rc.2`, which is the **recommended host version** for v0.10.0. It also works on the `0.1.5` series and on `0.1.2-alpha.x` and later (prompt/tool contracts are backward compatible).
+> **Dependency Note**: Core packages provided by the DSH host (`@deepseek-ai/cordis` ^4.0.2, `@deepseek-ai/schemastery` ^3.18.2, `@deepseek-ai/dsh-settings` ^0.1.5-rc.2) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention), provided directly by the host runtime without peer dependency warnings during installation; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+>
+> ### 🚀 What's changed in v0.11.0: native Windows went from "unusable" to "supported"
+>
+> - **Native Windows (previously unusable → now supported)**: v0.10.0 and earlier **crashed at module load** on Windows (`core/ops.js` used a named import of `node:constants`' `O_DIRECTORY`, which Windows does not export) and always reported missing peer dependencies at install time. Fixed in v0.11.0 and re-verified on a **real Windows (win32/x64) machine**.
+> - **macOS added to the verification matrix**: same artifact as Windows / Linux (identical sha256), verified on a real Mac.
+> - **Upgrade advice**: Windows and macOS users should upgrade to v0.11.0.
+>
+> **DSH version compatibility**: This release (v0.11.0) is **fully verified against and supports DeepSeek Harness `v0.1.5-rc.2`** — the isolated instance (Web GUI + kanban + tools + REST) and the bilingual demo recordings were all exercised on `v0.1.5-rc.2`, which is the **recommended host version** for v0.11.0. It also works on the `0.1.5` series and on `0.1.2-alpha.x` and later (prompt/tool contracts are backward compatible).
+>
+> **Platform scope**: **verified on Linux (WSL2), native Windows, and macOS.** The two problems that previously made Windows unusable — (1) POSIX-only file-lock constants (directory-as-fd, `O_DIRECTORY`, `O_NOFOLLOW`); (2) host core packages declared in both `dependencies` and `peerDependencies` — were fixed in this release and re-verified on real Windows (win32/x64) and macOS (darwin/arm64) machines, all three platforms using the same artifact (identical sha256).
+>
+> **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`, which are symlinks on macOS) is rejected with `graph root symlink is not allowed`. Paths derived from `process.cwd()` are unaffected (Node returns the physical path), but using a real path is recommended either way (tracked for a follow-up release).
 >
 > Official releases are distributed via npm and the dsh-market ecosystem.
 

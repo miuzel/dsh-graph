@@ -216,6 +216,8 @@
       const [text, setText] = React.useState(description ?? "");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
+      // g-270：只读态展示模式——markdown 渲染 / 原文
+      const [viewMode, setViewMode] = React.useState("markdown");
 
       React.useEffect(() => { setText(description ?? ""); }, [description]);
 
@@ -258,6 +260,10 @@
                 title: dgT("description.editInPlace"),
                 onClick: () => { setEditing(true); setText(description ?? ""); setNote(null); },
               }, hasContent ? dgT("description.edit") : dgT("description.editEmpty"))
+            : null,
+          h("div", { style: { flex: 1 } }),
+          !editing && hasContent
+            ? h(MarkdownViewToggle, { viewMode, onChange: setViewMode })
             : null),
         editing
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
@@ -279,7 +285,7 @@
                 }, dgT("common.cancel"))))
           : h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
               hasContent
-                ? h("div", { style: { whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.5, padding: "4px 0" } }, description)
+                ? h(GoalMarkdown, { text: description, viewMode })
                 : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("description.empty"))),
         extra ?? null,
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
@@ -361,7 +367,7 @@
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
-    // g-187：客户端标签编辑器，所有变更通过 host 持久化到 goal.md。
+    // g-187 & g-277：目标弹窗副标题行紧凑标签编辑器，所有变更通过 host 持久化到 goal.md。
     function GoalTagsEditor(props) {
       const [tags, setTags] = React.useState(Array.isArray(props.tags) ? props.tags : []);
       const [showAdd, setShowAdd] = React.useState(false);
@@ -371,7 +377,7 @@
       React.useEffect(() => { setTags(Array.isArray(props.tags) ? props.tags : []); }, [props.tags]);
       const save = async (next) => {
         if (saving) return;
-        const clean = [...new Set(next.map((x) => String(x).trim().replace(/^#/, "")))];
+        const clean = [...new Set(next.map((x) => String(x).trim().replace(/^#/, "")))].filter(Boolean);
         setSaving(true); setNote(null);
         try {
           // 如果常规 CAS 冲突（比如弹窗刚打开时状态还未同步），如果当前只有本地这一个客户端在操作，允许重试覆盖
@@ -394,34 +400,94 @@
           const saved = Array.isArray(data.new_tags) ? data.new_tags : clean;
           setTags(saved);
           props.onChange?.(saved);
-          setNote(dgT("common.savingDone"));
-        } catch (e) { setNote(String(e?.message ?? e)); }
+        } catch (e) {
+          const errMsg = String(e?.message ?? e);
+          setNote(errMsg);
+          if (typeof showToast === "function") showToast(dgT("tags.saveFail") + ": " + errMsg);
+        }
         finally { setSaving(false); }
       };
       const add = () => {
         const value = text.trim();
-        if (!value) return;
-        save([...tags, ...value.split(/[,，\s]+/)]);
+        if (!value) {
+          setShowAdd(false);
+          return;
+        }
+        const newItems = value.split(/[,，\s]+/).map((x) => x.replace(/^#/, "").trim()).filter(Boolean);
+        if (newItems.length) {
+          save([...tags, ...newItems]);
+        }
         setText("");
         setShowAdd(false);
       };
-      return h("div", { style: { ...S.modalSection, minWidth: 0, maxWidth: "100%", overflow: "hidden" } },
-        h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
-          h("span", null, dgT("tags.title")),
-          h("button", {
-            className: "dg-btn",
-            style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-            title: showAdd ? dgT("tags.collapse") : dgT("tags.addTooltip"),
-            onClick: () => { setShowAdd(!showAdd); setNote(null); },
-          }, showAdd ? dgT("common.cancel") : dgT("tags.add"))),
-        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4, minWidth: 0, maxWidth: "100%" } },
-          tags.length
-            ? tags.map((tag) => h("button", { key: tag, className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }, title: dgT("tags.removeTooltip"), disabled: saving, onClick: () => save(tags.filter((x) => x !== tag)) }, "#" + tag + " ×"))
-            : (!showAdd ? h("span", { style: S.meta }, dgT("tags.noTags")) : null)),
-        showAdd ? h("div", { style: { display: "flex", gap: 4, marginTop: 6 } },
-          h("input", { autoFocus: true, value: text, style: { ...S.promptInput, flex: 1, fontSize: 12 }, placeholder: dgT("tags.inputPlaceholder"), onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); else if (e.key === "Escape") setShowAdd(false); } }),
-          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12 }, disabled: saving || !text.trim(), onClick: add }, saving ? dgT("common.saving") : dgT("tags.save"))) : null,
-        note ? h("div", { style: { ...S.meta, color: note === dgT("common.savingDone") ? undefined : "#e57373", marginTop: 4 } }, note) : null);
+      const removeTag = (tagToRemove) => {
+        if (saving) return;
+        save(tags.filter((x) => x !== tagToRemove));
+      };
+
+      return h("span", { className: "dg-tag-chips-wrap" },
+        tags.map((tag) =>
+          h("span", {
+            key: tag,
+            className: "dg-tag-chip",
+            tabIndex: 0,
+            title: "#" + tag,
+            onKeyDown: (e) => {
+              if (e.key === "Delete" || e.key === "Backspace") {
+                e.preventDefault();
+                removeTag(tag);
+              }
+            },
+          },
+            h("span", { className: "dg-tag-text" }, "#" + tag),
+            h("button", {
+              className: "dg-tag-del",
+              title: dgT("tags.removeTooltip"),
+              "aria-label": dgT("tags.removeTagNamed", { tag }),
+              disabled: saving,
+              onClick: (e) => {
+                e.stopPropagation();
+                removeTag(tag);
+              },
+            }, "×")
+          )
+        ),
+        showAdd
+          ? h("input", {
+              className: "dg-tag-input",
+              autoFocus: true,
+              value: text,
+              placeholder: dgT("tags.inputPlaceholderCompact"),
+              onChange: (e) => setText(e.target.value),
+              onKeyDown: (e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  add();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setShowAdd(false);
+                  setText("");
+                }
+              },
+              onBlur: () => {
+                if (text.trim()) {
+                  add();
+                } else {
+                  setShowAdd(false);
+                }
+              },
+            })
+          : h("button", {
+              className: "dg-tag-add-btn",
+              title: dgT("tags.addTooltip"),
+              onClick: (e) => {
+                e.stopPropagation();
+                setShowAdd(true);
+                setNote(null);
+              },
+            }, dgT("tags.addCompact")),
+        note ? h("span", { style: { color: "var(--dsw-alias-state-error-primary, #e57373)", fontSize: 11, marginLeft: 2 }, title: note }, "⚠️") : null
+      );
     }
 
     // g-272 att-002：服务端 worktree reason 为稳定枚举（core/worktree.ts），客户端按枚举 dgT 双语映射；
@@ -477,38 +543,57 @@
     }
 
     // g-189：只展示服务端按 canonical workspace 只读发现的 worktree；不自行执行 git。
+    // g-276：作为独立 tab 展示，默认全量展开，无需折叠按钮。
     function AttemptWorktrees(props) {
       const attempts = props.attempts ?? [];
       const discovery = props.worktrees ?? { status: "unavailable", items: {} };
-      const [expanded, setExpanded] = React.useState(false);
-      if (!attempts.length) return null;
-      const latest = [...attempts].reverse().find((a) => discovery.items?.[a.id]);
+      if (!attempts.length) {
+        return h("div", { key: "worktrees", style: S.modalSection },
+          h("div", { style: S.modalH }, dgT("worktree.attemptTitle")),
+          h("div", { style: { ...S.meta, fontSize: 12, marginTop: 4 } }, dgT("worktree.noAttempts")));
+      }
       const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: dgT("worktree.copyPathTooltip"), onClick: async () => { if (await copyText(item.path)) showToast(dgT("worktree.pathCopied")); } }, dgT("common.copy")) : null;
-      // i18n-keep(category-a)：匹配服务端 index.js 下发的遗留中文状态值（"正常"/"已锁定"）与本地合成哨兵（"已移除"），非 UI 文案源。
+      // i18n-keep(category-a)：匹配服务端 index.js 下发的遗留中文状态值（"正常"/"已锁定"）与本地合成哨兵（"已移除"/"已清理"），非 UI 文案源。
       const formatWorktreeStatus = (status) => {
         if (status === "正常" || status === "ok" || status === "normal") return dgT("worktree.normal");
         if (status === "已锁定" || status === "locked") return dgT("worktree.statusLocked");
-        if (status === "已移除" || status === "removed") return dgT("worktree.alreadyRemoved");
+        if (status === "已移除" || status === "removed" || status === "externally_removed") return dgT("worktree.alreadyRemoved");
+        if (status === "已清理" || status === "cleaned" || status === "user_cleaned") return dgT("worktree.statusCleaned");
+        if (status === "可修剪" || status === "prunable") return dgT("worktree.statusPrunable");
         return status;
       };
       const row = (a) => {
         const item = discovery.items?.[a.id];
+        let label = "";
+        if (item) {
+          const parts = [item.path];
+          if (item.branch) parts.push(item.branch);
+          if (item.head) {
+            if (item.head_advanced && item.baseline_head) {
+              parts.push(`baseline ${item.baseline_head} → HEAD ${item.head}`);
+            } else {
+              parts.push(`HEAD ${item.head}`);
+            }
+          }
+          if (item.status) parts.push(formatWorktreeStatus(item.status));
+          label = parts.join(" ｜ ");
+        }
         return h("div", { key: a.id, style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginTop: 4 } },
           h("span", { style: { flex: "0 0 auto", fontSize: 12 } }, a.id),
-          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${formatWorktreeStatus(item.status)}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
+          item ? h("span", { title: label, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, label) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
           copyButton(item));
       };
       return h("div", { key: "worktrees", style: S.modalSection },
-        h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
-          h("span", null, dgT("worktree.attemptTitle")),
-          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12, padding: "0 5px" }, title: expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), "aria-label": expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), onClick: () => setExpanded((v) => !v) }, expanded ? "▲" : "▼")),
-        discovery.status !== "ok" ? h("div", { style: { ...S.meta, fontSize: 12 } }, dgT("worktree.unavailable")) : expanded ? attempts.map(row) : latest ? row(latest) : h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, dgT("worktree.notCreated")));
+        h("div", { style: S.modalH }, dgT("worktree.attemptTitle")),
+        ...(discovery.status !== "ok"
+          ? [h("div", { style: { ...S.meta, fontSize: 12, marginTop: 4 } }, dgT("worktree.unavailable"))]
+          : attempts.map(row)));
     }
 
     function GoalModal(props) {
       useLocaleRevision();
       const [state, setState] = React.useState({ loading: true });
-      const [tab, setTab] = React.useState("detail"); // "detail" | "context" | "activity"
+      const [tab, setTab] = React.useState("detail"); // "detail" | "worktree" | "context" | "activity"
       const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
       const [logFilter, setLogFilter] = React.useState(""); // "" 全部 / 事件名
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新执行的模型路由（显示兜底）
@@ -575,9 +660,40 @@
       // g-181：主 overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
       const backdropGuard = useBackdropClose(props.onClose);
 
+      // g-270：代码围栏感知的小节提取函数，围栏内的 ## 标题不被误判为分隔符
       const section = (body, name) => {
-        const m = new RegExp(`## ${name}\\n([\\s\\S]*?)(?=\\n## |$)`).exec(body ?? "");
-        return m ? m[1].trim() : null;
+        if (!body) return null;
+        const lines = body.split("\n");
+        const head = `## ${name}`;
+        let start = -1;
+        let inFence = false;
+        const fencePattern = /^(`{3,}|~{3,})/;
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (fencePattern.test(line.trimStart())) {
+            inFence = !inFence;
+            continue;
+          }
+          if (!inFence && line.trim() === head) {
+            start = i;
+            break;
+          }
+        }
+        if (start < 0) return null;
+        let end = lines.length;
+        inFence = false;
+        for (let i = start + 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (fencePattern.test(line.trimStart())) {
+            inFence = !inFence;
+            continue;
+          }
+          if (!inFence && line.startsWith("## ")) {
+            end = i;
+            break;
+          }
+        }
+        return lines.slice(start + 1, end).join("\n").trim();
       };
 
       let content;
@@ -589,7 +705,7 @@
       else {
         const d = state.data;
         // i18n-keep(category-a)：goal.md 正文的固定中文区段名（「目标描述」「质量判据」为数据格式契约，非 UI 文案）。
-        const desc = section(d.body, "目标描述");
+        const desc = d.description ?? section(d.body, "目标描述");
         const crit = section(d.body, "质量判据");
         const meta = d.meta ?? {};
         const status = String(meta.status ?? "unknown");
@@ -608,7 +724,27 @@
         const pendingDeps = deps.filter((d) => props.goalStatus?.[d] !== "delivered");
         const metDeps = deps.filter((d) => props.goalStatus?.[d] === "delivered");
         headMeta = [
-          h("div", { key: "m1", style: S.meta }, bits.join(" ｜ ")),
+          h("div", {
+            key: "m1",
+            style: {
+              ...S.meta,
+              display: "flex",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: "4px 6px",
+              marginTop: 4,
+              minWidth: 0,
+              maxWidth: "100%",
+            },
+          },
+            h("span", null, bits.join(" ｜ ")),
+            h("span", { style: { opacity: 0.5, userSelect: "none" } }, "｜"),
+            h(GoalTagsEditor, {
+              goalId: props.id,
+              tags: meta.tags ?? props.tags,
+              onChange: () => { load(); props.onTagsChanged?.(); },
+            })
+          ),
           // g-223：归属版本在看板中被隐藏时的友好提示与恢复显示入口
           isVersionHidden
             ? h("div", {
@@ -661,7 +797,7 @@
           : anyAtt
             ? h("div", { key: "relaunch-fallback", style: { ...S.livePanel, marginTop: 6 } },
                 h("div", { style: { ...S.meta, marginBottom: 2 } }, dgT("modal.relaunchFallback")),
-                h(ReExecBox, { goalId: props.id, kind: "exec", onRelaunched: setRelaunchRoute }))
+                h(ReExecBox, { goalId: props.id, kind: "exec", goalType: d?.meta?.type, onRelaunched: setRelaunchRoute }))
             : null;
 
         // g-a92e1406：tab 内容（占位文案视觉降级：trim 后以「（待」开头 → 小字灰色放标题右侧）
@@ -707,11 +843,8 @@
         // 判断是否是 backlog 目标（backlog 目标不能建卡）
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
-          h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
-          status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
-          h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: meta.tags ?? props.tags, onChange: () => { load(); props.onTagsChanged?.(); } }),
           desc != null ? h(DescriptionBox, { key: "description", goalId: props.id, description: desc, onRefresh: load,
-            extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose }) }) : null,
+            extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose, goalType: d.meta.type }) }) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           // g-170：「✏️ 判据」编辑入口放在小节标题处（负责人 2026-08-25 指示），点击打开判据编辑弹窗
           crit != null ? sectionBlock("c", dgT("section.criteria"), crit,
@@ -761,6 +894,11 @@
           h(HandoffBox, { key: "hf", goalId: props.id, handoff: d.handoff, attempts: d.attempts, onRefresh: load }),
           h(DirectiveBox, { key: "dir", goalId: props.id, directive: d.directive, onRefresh: load }),
           h(CommentsBox, { key: "cmt", goalId: props.id, comments: d.comments ?? [], onRefresh: load }),
+        ];
+        // g-276：独立 worktree tab（默认全量展开，无折叠开关；delivered 时展示清理候选）
+        const worktreeTab = [
+          h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
+          status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
         ];
         const activityTab = (() => {
           const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));
@@ -836,6 +974,19 @@
               style: {
                 fontSize: 12, padding: "5px 14px", cursor: "pointer",
                 marginBottom: -1, borderRadius: "6px 6px 0 0",
+                border: "1px solid " + (tab === "worktree" ? "rgba(128,128,128,.35)" : "transparent"),
+                borderBottom: "none",
+                background: tab === "worktree" ? "rgba(128,128,128,.10)" : "transparent",
+                fontWeight: tab === "worktree" ? 700 : 400,
+                color: tab === "worktree" ? "var(--dsw-alias-label-primary, #8ab4ff)" : "inherit",
+                opacity: tab === "worktree" ? 1 : 0.7,
+              },
+              onClick: () => setTab("worktree"),
+            }, dgT("tab.worktree")),
+            h("button", {
+              style: {
+                fontSize: 12, padding: "5px 14px", cursor: "pointer",
+                marginBottom: -1, borderRadius: "6px 6px 0 0",
                 border: "1px solid " + (tab === "activity" ? "rgba(128,128,128,.35)" : "transparent"),
                 borderBottom: "none",
                 background: tab === "activity" ? "rgba(128,128,128,.10)" : "transparent",
@@ -890,7 +1041,7 @@
             style: { border: "1px solid rgba(128,128,128,.35)", borderTop: "none",
                      borderRadius: "0 6px 6px 6px", padding: "10px 12px",
                      background: "rgba(128,128,128,.06)" },
-          }, tab === "detail" ? detailTab : tab === "context" ? contextTab : activityTab),
+          }, tab === "detail" ? detailTab : tab === "worktree" ? worktreeTab : tab === "context" ? contextTab : activityTab),
         ];
       }
 
@@ -958,6 +1109,14 @@
       const goalFile = String(state.data?.goalFile ?? "");
       const isBacklogGoal = goalFile.includes("/backlog/") || goalFile.includes("\\\\backlog\\\\");
       const canPostpone = !isArchived && !isBacklogGoal && Boolean(state.data?.meta?.status);
+      // g-287：历史遗留的「非 backlog draft」转入规划入口。
+      // 该状态在 g-287 之后不再由自然路径产生（独立/版本目标创建即 planning），此入口纯为
+      // 兼容旧看板数据（旧版本创建的独立目标 status=draft）。复用既有 transition（状态机
+      // draft→planning 本就允许，无需改核心）。backlog 下的 draft 绝不显示该入口——否则会出现
+      // 「状态 planning 却位于 backlog/」的不自洽状态；backlog 卡片的正确路径是「排期」。
+      const [planEntryNote, setPlanEntryNote] = React.useState(null);
+      const [planEntryBusy, setPlanEntryBusy] = React.useState(false);
+      const canEnterPlanning = !isArchived && !isBacklogGoal && state.data?.meta?.status === "draft";
       // g-140: 删除操作（仅已归档目标可删除，二次确认）
       const [deleteConfirm, setDeleteConfirm] = React.useState(false);
       const [deleteNote, setDeleteNote] = React.useState(null);
@@ -984,6 +1143,33 @@
         } catch (e) {
           setArchiveNote(dgT("drag.requestFail") + String(e?.message ?? e));
         }
+      };
+
+      // g-287：把历史遗留的非 backlog 草稿目标转入规划（复用既有 transition 端点）。
+      // 成功后刷新详情与看板卡片，使卡片即时显示「规划中」且可派发执行。
+      const doEnterPlanning = async () => {
+        if (planEntryBusy) return;
+        setPlanEntryBusy(true);
+        setPlanEntryNote(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/transition"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.id, to: "planning", reason: dgT("goal.planEntryReason") }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setPlanEntryNote(dgT("goal.planEntrySuccess"));
+            showToast(dgT("goal.planEntrySuccess"));
+            await load();
+            props.onArchived?.();
+          } else {
+            setPlanEntryNote(dgT("goal.planEntryFail") + (data.error || dgT("drag.unknownError")));
+          }
+        } catch (e) {
+          setPlanEntryNote(dgT("drag.requestFail") + String(e?.message ?? e));
+        }
+        setPlanEntryBusy(false);
       };
 
       // g-138：二次确认后调用单向暂缓接口，成功后关闭详情并刷新看板
@@ -1148,6 +1334,15 @@
               title: dgT("goal.renameTitle"),
               onClick: (e) => { e.stopPropagation(); setNewTitle(props.title ?? props.id); setRenaming(true); setRenameNote(null); },
             }, "✏️"),
+            // g-287：历史遗留「非 backlog 草稿」→「转入规划」入口（backlog 卡不显示）
+            canEnterPlanning
+              ? h("button", {
+                  style: { ...S.btn, fontSize: 11, padding: "1px 6px", background: "rgba(76,141,255,.22)" }, className: "dg-btn",
+                  title: dgT("goal.planEntryTooltip"),
+                  disabled: planEntryBusy,
+                  onClick: (e) => { e.stopPropagation(); doEnterPlanning(); },
+                }, dgT("goal.planEntry"))
+              : null,
             // g-110: 归档/取消归档按钮
             isArchived
               ? h("button", {
@@ -1205,7 +1400,8 @@
             archiveNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, archiveNote) : null,
             postponeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, postponeNote) : null,
             deleteNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, deleteNote) : null,
-            typeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, typeNote) : null);
+            typeNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, typeNote) : null,
+            planEntryNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, planEntryNote) : null);
 
       return h(React.Fragment, null,
         h("div",

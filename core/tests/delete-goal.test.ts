@@ -77,7 +77,7 @@ test("deleteGoal：未归档目标拒绝删除", () => {
 test("deleteGoal：已归档独立目标可删除", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "独立目标", version: "standalone", actor: "test" });
-  transition(root, id, "planning", { actor: "test" });
+  // g-287：独立目标创建即 planning，无需补 planning 迁移
   setCriteria(root, id, ["测试判据"], "test");
   transition(root, id, "in_progress", { actor: "test" });
   transition(root, id, "review", { actor: "test" });

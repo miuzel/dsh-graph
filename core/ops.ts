@@ -24,7 +24,21 @@ import {
   readSync,
   fsyncSync,
 } from "node:fs";
-import { O_CREAT, O_EXCL, O_NOFOLLOW, O_WRONLY, O_RDWR, O_RDONLY, O_DIRECTORY } from "node:constants";
+import {
+  isWindows,
+  FS_CONSTANTS,
+  replaceFileAtomic,
+  syncDirectorySafely,
+  applyModeSafely,
+  isProcessAlive,
+  takeFileIdentity,
+  verifyFileIdentity,
+  areSameStat,
+  setPlatformForTesting,
+  withPlatformForTesting,
+  type FileIdentitySnapshot,
+} from "./platform.ts";
+export { isWindows, setPlatformForTesting, withPlatformForTesting };
 import { join, basename, dirname, relative, resolve, isAbsolute, sep } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
@@ -33,6 +47,8 @@ import {
   serializeDoc,
   replaceSection,
   sectionText,
+  findSectionBounds,
+  computeClosedFenceMask,
   criteriaPresent,
   countCriteria,
   criteriaItems,
@@ -42,6 +58,12 @@ import {
   type GoalDoc,
   type GoalType,
 } from "./model.ts";
+export {
+  sectionText,
+  replaceSection,
+  findSectionBounds,
+  computeClosedFenceMask,
+};
 export const ATTEMPT_STATUS_STATES = ["working", "blocked", "done", "error"] as const;
 export type AttemptStatusState = (typeof ATTEMPT_STATUS_STATES)[number];
 
@@ -70,7 +92,7 @@ import {
 } from "./events.ts";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.ts";
 import { withTx, TxError, TxCasError, type TxContext } from "./transaction.ts";
-import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, type ObjectSchema } from "./schema.ts";
+import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema, type ObjectSchema } from "./schema.ts";
 
 import {
   createVersion,
@@ -81,13 +103,13 @@ import {
   validateVersionRelease,
   versionDetail,
 } from "./version-lane.ts";
-import { registerWorktreeCandidates, listWorktrees, cleanWorktree } from "./worktree.ts";
+import { registerWorktreeCandidates, listWorktrees, cleanWorktree, defaultWorktreeForGoalType, prepareAttemptWorktree } from "./worktree.ts";
 export { GraphError, GraphConflictError };
 export { normalizeGoalType };
-export { registerWorktreeCandidates, listWorktrees, cleanWorktree };
+export { registerWorktreeCandidates, listWorktrees, cleanWorktree, defaultWorktreeForGoalType, prepareAttemptWorktree };
 export type { MemoryScope };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
-export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema };
+export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
 export type { ObjectSchema };
 export { TxError };
 import { invalidateBoardCache, computeGraphRevision, formatETag, matchIfNoneMatch, getCachedBoardPayload as getCachedBoardPayloadCore, _inspectBoardCache, closeWatchers } from "./cache.ts";
@@ -121,6 +143,32 @@ function sanitizeHeadingContent(text: string): string {
   // 匹配行首可选空白 + 2-3 个 # + 至少一个空格（标题语法）
   // 替换为 \## 或 \###（Markdown 不渲染为标题）
   return text.replace(/^([ \t]{0,3})(###[ \t]+|##[ \t]+)/gm, "$1\\$2");
+}
+
+/**
+ * 规范化目标描述正文中的 Markdown 标题语法（g-270）：
+ * 1. 代码围栏（``` 或 ~~~）内的内容逐字保留，不作任何改动；
+ * 2. 围栏外的 h1（#）与 h2（##）自动降级为 h3（###），既保留用户的标题语义与层级，
+ *    又防止 ## 标题与 goal.md 顶层小节分隔符冲突；
+ * 3. 围栏外的 h3 及更深层标题（###、#### 等）完全保留，不加字面反斜杠转义（无 \###）。
+ */
+export function normalizeDescriptionHeadings(text: string): string {
+  const lines = text.split("\n");
+  let inFence = false;
+  const fencePattern = /^(`{3,}|~{3,})/;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (fencePattern.test(line.trimStart())) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence) {
+      if (/^[ \t]{0,3}#{1,2}[ \t]+/.test(line) && !/^[ \t]{0,3}#{3,}/.test(line)) {
+        lines[i] = line.replace(/^([ \t]{0,3})#{1,2}([ \t]+)/, "$1###$2");
+      }
+    }
+  }
+  return lines.join("\n");
 }
 
 /** 扫描图根下全部目标文件：backlog/*.md、backlog/<id>/goal.md、
@@ -1254,7 +1302,7 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
     return;
   }
   writeFileSync(`${file}.tmp`, updated, "utf8");
-  renameSync(`${file}.tmp`, file);
+  replaceFileAtomic(`${file}.tmp`, file);
   const changed: string[] = [];
   for (const k of Object.keys(patch ?? {})) changed.push(k);
   appendEvent(root, {
@@ -1378,9 +1426,11 @@ export function createGoal(
   opts: { title: string; version?: string; description?: string; type?: string; actor: string },
 ): string {
   const id = nextGoalSeq(root);
-  // g-137：带 version（非 standalone）→ planning；backlog/standalone → draft
+  // g-287：带 version（含 standalone）→ planning；无 version（进 backlog）→ draft。
+  // 由此 `draft` 精确等价于「位于 backlog、尚未排期」，与 backlog 的迁移/建卡/派发禁令一致；
+  // 独立目标不再创建即落 draft（原 g-137 行为会留下「非 backlog 的 draft」死角：既不可派发、界面也无入口转 planning）。
   const isStandalone = opts.version === "standalone";
-  const initialStatus = (opts.version && !isStandalone) ? "planning" : "draft";
+  const initialStatus = opts.version ? "planning" : "draft";
   const meta: Record<string, any> = {
     id,
     title: opts.title,
@@ -1658,8 +1708,8 @@ export function setGoalDescription(
   const file = findGoalFile(root, goalId);
   const doc = loadGoal(file);
   const trimmed = description.trim();
-  // 防止 description 内容包含 ## 标题破坏 section 边界（与 setGoalDirective 同源防护）
-  const safe = sanitizeHeadingContent(trimmed);
+  // 规范化描述标题：h1/h2 降级为 h3，保护 goal.md ## 小节结构；不加 \### 静默转义（g-270）
+  const safe = normalizeDescriptionHeadings(trimmed);
   // 构造小节内容：以空行开头、换行结尾（与 sectionText 解析对齐）
   const sectionContent = `\n${safe}\n\n`;
   try {
@@ -1878,9 +1928,11 @@ export function validate(root: string): string[] {
     ) {
       problems.push(`${id}: ${meta.status} 状态但质量判据为空`);
     }
-    // 目标描述小节重复检查（g-130）：行首锚定的独立小节标题，正文内引用不计
-    const descMatches = doc.body.match(/^## 目标描述$/gm);
-    if (descMatches && descMatches.length > 1) {
+    // 目标描述小节重复检查（g-130）：行首锚定的独立小节标题，正文内引用与闭合围栏内不计
+    const bodyLines = doc.body.split("\n");
+    const fenceMask = computeClosedFenceMask(bodyLines);
+    const descCount = bodyLines.filter((l, i) => !fenceMask[i] && l.trim() === "## 目标描述").length;
+    if (descCount > 1) {
       problems.push(`${id}: 目标描述小节重复`);
     }
     problems.push(...locationProblems(root, file, meta));
@@ -2934,12 +2986,12 @@ function atomicWrite(target: string, data: Buffer | string): void {
     throw e;
   }
   try {
-    renameSync(tmp, target);
+    replaceFileAtomic(tmp, target);
   } catch (e) {
     try { rmSync(tmp, { force: true }); } catch { /* 忽略 */ }
     throw e;
   }
-  try { const dfd = openSync(dir, "r"); fsyncSync(dfd); closeSync(dfd); } catch { /* 目录 fsync 失败不致命 */ }
+  syncDirectorySafely(dir);
 }
 
 /** 附件存储：把真实字节写入 .dsh-graph/attachments/<safeRelPath>（g-183）。
@@ -3854,10 +3906,10 @@ export function formatTargetContext(
   opts?: TargetContextBudgetOptions,
 ): string {
   const body = typeof docOrBody === "string" ? docOrBody : docOrBody.body;
-  const descMatch = body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
-  const critMatch = body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
-  let desc = descMatch ? descMatch[1].trim() : "（无描述）";
-  const crit = critMatch ? critMatch[1].trim() : "（无判据）";
+  const descRaw = sectionText(body, "目标描述");
+  const critRaw = sectionText(body, "质量判据");
+  let desc = descRaw !== null && descRaw.trim() !== "" ? descRaw.trim() : "（无描述）";
+  const crit = critRaw !== null && critRaw.trim() !== "" ? critRaw.trim() : "（无判据）";
 
   const maxDescChars = typeof opts?.maxDescChars === "number" && opts.maxDescChars > 0 ? opts.maxDescChars : 1500;
   if (desc.length > maxDescChars) {
@@ -4241,6 +4293,8 @@ export function startAttempt(
     promptHash?: string | null;
     contextDigest?: string | null;
     contextVersion?: string | null;
+    worktree?: boolean | Record<string, string>;
+    worktreeReason?: string | null;
   },
 ): string {
   // 校验 attemptBrief 类型（g-150 review 问题 4：必须是 string 或 undefined，不可是其他类型）
@@ -4294,7 +4348,8 @@ export function startAttempt(
     status_state: null,
     result: "pending",
     child_id: null,
-    worktree: attemptWorktreeEvidence(root, goalId, attId),
+    worktree: opts.worktree !== undefined ? opts.worktree : attemptWorktreeEvidence(root, goalId, attId),
+    ...(opts.worktree === false && opts.worktreeReason ? { worktree_reason: opts.worktreeReason } : {}),
   };
   if (opts.provider && opts.provider.trim()) {
     meta.provider = opts.provider.trim();
@@ -4355,6 +4410,8 @@ export function startAttempt(
   const details: Record<string, any> = {
     attempt: attId,
     executor: opts.executor,
+    ...(opts.worktree !== undefined ? { worktree: opts.worktree } : {}),
+    ...(opts.worktree === false && opts.worktreeReason ? { worktree_reason: opts.worktreeReason } : {}),
     ...(opts.provider && opts.provider.trim() ? { provider: opts.provider.trim() } : {}),
     ...(opts.model && opts.model.trim() ? { model: opts.model.trim() } : {}),
     ...(opts.modelRoute && opts.modelRoute.trim() ? { model_route: opts.modelRoute.trim() } : {}),
@@ -4571,7 +4628,8 @@ export function authorizeUnbind(root: string, actor: string, createdBy: unknown,
 
 export interface UnbindGoalChildOptions {
   actor: string;
-  token: string;
+  token?: string | null;
+  legacy?: boolean | null;
   attempt?: string | null;
   childId?: string | null;
   reason?: string | null;
@@ -4586,16 +4644,19 @@ export interface UnbindResult {
   child_id?: string | null;
 }
 
-/** 从目标解绑执行子代理（g-190）：
+/** 从目标解绑执行子代理（g-190/g-282）：
  *  - 语义 = 安全 detach（不终止/不删除）：attempt、worktree、事件与日志全部保留并可审计。
  *  - 定位：goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 精确定位；
  *    目录名仅用于枚举，归属以 meta 校验（id/goal）为准。
  *  - 校验：授权（authorizeUnbind）、token CAS（未知/过期/并发冲突 → TxCasError 拒绝且不改数据）、
  *    活跃状态（running → 拒绝需受控停止；idle/gone → 允许安全 detach；unknown → 拒绝不遗留假 active）、
  *    delivered/archived → 拒绝。
+ *  - g-282 遗留无 token 绑定受控释放：当 binding_token 缺失时，允许授权主管/owner 在显式声明 legacy: true
+ *    并给出 reason 的情况下受控解绑，记 attempt.detached 事件（details 标注 legacy/reason/actor）；
+ *    若绑定存在 binding_token 则严禁使用 legacy 绕过 CAS。
  *  - 幂等：重复解绑（已无绑定）为 no-op（不重复记事件）；解绑后重绑换新 token → 旧 token 立即失效（ABA 防护）。
- *  - 事件先行（R-02）：attempt.unbound 事件（含 token_hash/binding_version/actor/reason 审计）在 attempt.md 落盘前追加；
- *    若落盘失败，事件已记而绑定仍在（旧 token 仍有效）——重试同一 token 可自愈，不产生半解绑假象。
+ *  - 事件先行（R-02）：attempt.unbound / attempt.detached 事件在 attempt.md 落盘前追加；
+ *    若落盘失败，事件已记而绑定仍在——重试可自愈，不产生半解绑假象。
  *  - 并发：withTx 锁内重读 + CAS，解绑/解绑、解绑/重绑串行化（有限本地锁，符合单用户本地并发模型）。 */
 export function unbindGoalChild(
   root: string,
@@ -4603,11 +4664,14 @@ export function unbindGoalChild(
   opts: UnbindGoalChildOptions,
 ): UnbindResult {
   const actor = String(opts.actor ?? "").trim();
-  const token = String(opts.token ?? "");
+  const legacy = opts.legacy === true;
+  const token = typeof opts.token === "string" ? opts.token : "";
+  const reason = typeof opts.reason === "string" && opts.reason.trim().length > 0 ? opts.reason.trim() : null;
   const attempt = typeof opts.attempt === "string" && opts.attempt.length ? opts.attempt : null;
   const childIdOpt = typeof opts.childId === "string" && opts.childId.length ? opts.childId : null;
   if (!actor) throw new GraphError("actor 不能为空");
-  if (!token) throw new GraphError("解绑需要当前绑定 token（binding token）");
+  if (!legacy && !token) throw new GraphError("解绑需要当前绑定 token（binding token）");
+  if (legacy && !reason) throw new GraphError("遗留解绑必须提供 reason 说明原因");
   if ((attempt === null) === (childIdOpt === null)) {
     throw new GraphError("必须且只能指定一个选择器：attempt 或 child_id");
   }
@@ -4641,11 +4705,20 @@ export function unbindGoalChild(
       if (childIdOpt !== null && childIdOpt !== binding.child_id) {
         throw new TxCasError("选择器 child_id=" + childIdOpt + " 不匹配当前绑定 child_id=" + binding.child_id + "——并发冲突，拒绝解绑");
       }
-      // token CAS：必须匹配当前 binding token（未知/过期/重绑后旧 token → 拒绝且不改数据）
-      if (token !== binding.binding_token) {
-        throw new TxCasError("绑定 token 不匹配当前绑定（未知/过期/已被重绑）——拒绝解绑且未改动任何数据");
+      // token CAS 与 legacy 校验
+      if (binding.binding_token) {
+        if (legacy) {
+          throw new TxCasError("绑定存在 binding_token，禁止使用 legacy 解绑通道（必须提供有效 token 校验）");
+        }
+        if (token !== binding.binding_token) {
+          throw new TxCasError("绑定 token 不匹配当前绑定（未知/过期/已被重绑）——拒绝解绑且未改动任何数据");
+        }
+      } else {
+        if (!legacy) {
+          throw new TxCasError("绑定为遗留绑定且缺失 binding_token——必须显式声明 legacy 并在授权下提供 reason 进行受控解绑");
+        }
       }
-      // 授权（在 token CAS 通过后校验身份：先证明「知道当前绑定」，再查授权——双因子）
+      // 授权（在 token CAS / legacy 预检通过后校验身份）
       authorizeUnbind(root, actor, goalDoc.meta.created_by, binding.child_id);
       // 活跃状态门控：不遗留假 active
       if (opts.liveCheck) {
@@ -4667,25 +4740,44 @@ export function unbindGoalChild(
         throw new GraphError("attempt 归属校验失败：" + binding.attempt);
       }
       const prevVersion = binding.binding_version;
-      const tokenHash = createHash("sha256").update(token).digest("hex");
       const detachedAt = nowIso();
-      // 事件先行（R-02）：attempt.unbound 含 token_hash/binding_version/actor/reason 审计
-      appendEvent(root, {
-        actor,
-        event: "attempt.unbound",
-        goal: goalId,
-        details: {
-          attempt: binding.attempt,
-          child_id: binding.child_id,
-          parent_session_id: binding.parent_session_id,
-          binding_version: prevVersion,
-          token_hash: tokenHash,
-          reason: opts.reason ?? null,
-          previous_result: binding.result,
-          detached_at: detachedAt,
-          goal_status: String(goalDoc.meta.status ?? "unknown"),
-        },
-      });
+      // 事件先行（R-02）：legacy 写 attempt.detached，正常解绑写 attempt.unbound
+      if (legacy) {
+        appendEvent(root, {
+          actor,
+          event: "attempt.detached",
+          goal: goalId,
+          details: {
+            attempt: binding.attempt,
+            child_id: binding.child_id,
+            parent_session_id: binding.parent_session_id,
+            legacy: true,
+            reason,
+            actor,
+            previous_result: binding.result,
+            detached_at: detachedAt,
+            goal_status: String(goalDoc.meta.status ?? "unknown"),
+          },
+        });
+      } else {
+        const tokenHash = createHash("sha256").update(token).digest("hex");
+        appendEvent(root, {
+          actor,
+          event: "attempt.unbound",
+          goal: goalId,
+          details: {
+            attempt: binding.attempt,
+            child_id: binding.child_id,
+            parent_session_id: binding.parent_session_id,
+            binding_version: prevVersion,
+            token_hash: tokenHash,
+            reason: opts.reason ?? null,
+            previous_result: binding.result,
+            detached_at: detachedAt,
+            goal_status: String(goalDoc.meta.status ?? "unknown"),
+          },
+        });
+      }
       // 落盘：清理绑定 + 标记 detached（result=detached 使 postpone/delete 活跃检测不再命中）
       delete doc.meta.child_id;
       delete doc.meta.parent_session_id;
@@ -4741,6 +4833,124 @@ export function unbindGoalChild(
       
       return {
         value: { detached: true, attempt: binding.attempt, child_id: binding.child_id } as UnbindResult,
+        events: [],
+      };
+    },
+  );
+  if (!result.ok) {
+    if (result.recoverable) throw new GraphConflictError(result.error);
+    throw new GraphError(result.error);
+  }
+  return result.value;
+}
+
+export interface AbandonAttemptOptions {
+  actor: string;
+  attempt: string;
+  reason: string;
+  liveCheck?: (childId: string) => "running" | "idle" | "gone" | "unknown";
+}
+
+export interface AbandonAttemptResult {
+  abandoned: boolean;
+  already?: boolean;
+  attempt: string;
+}
+
+/** 放弃陈旧/失联 attempt（g-282）：
+ *  - 标记 result="cancelled"、detached=true、清除绑定；
+ *  - 仅允许授权主管或目标 owner；
+ *  - live registry 运行中禁止放弃；
+ *  - delivered/archived 目标禁止放弃；
+ *  - 事件先行（attempt.abandoned 含 reason/actor 审计）；
+ *  - 放弃后不再被 attemptIsActive 判为活跃，目标可正常暂缓。 */
+export function abandonAttempt(
+  root: string,
+  goalId: string,
+  opts: AbandonAttemptOptions,
+): AbandonAttemptResult {
+  const actor = String(opts.actor ?? "").trim();
+  const attempt = String(opts.attempt ?? "").trim();
+  const reason = typeof opts.reason === "string" && opts.reason.trim().length > 0 ? opts.reason.trim() : null;
+  if (!actor) throw new GraphError("actor 不能为空");
+  if (!attempt) throw new GraphError("attempt 不能为空");
+  if (!reason) throw new GraphError("放弃 attempt 必须提供 reason 说明原因");
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(attempt)) {
+    throw new GraphError("非法 attempt id：" + attempt);
+  }
+
+  const result = withTx(
+    { root, actor, goal: goalId },
+    { lockName: "unbind-" + goalId },
+    () => {
+      const goalFile = findGoalFile(root, goalId);
+      const goalDoc = loadGoal(goalFile);
+      if (goalDoc.meta.archived === true || isArchivedFile(goalFile)) {
+        throw new GraphError("已归档目标 " + goalId + " 不可放弃 attempt");
+      }
+      if (goalDoc.meta.status === "delivered") {
+        throw new GraphError("已交付目标 " + goalId + " 不可放弃 attempt");
+      }
+
+      const attFile = join(goalDirOf(goalFile), "attempts", attempt, "attempt.md");
+      if (!existsSync(attFile)) {
+        throw new GraphError("attempt 不存在：" + attempt);
+      }
+      const doc = loadGoal(attFile);
+      if (doc.meta.id !== attempt || doc.meta.goal !== goalId) {
+        throw new GraphError("attempt 归属校验失败：" + attempt);
+      }
+      if (doc.meta.detached === true && doc.meta.result === "cancelled") {
+        return { value: { abandoned: false, already: true, attempt } as AbandonAttemptResult, events: [] };
+      }
+
+      // 授权：主管或目标 owner
+      authorizeUnbind(root, actor, goalDoc.meta.created_by, doc.meta.child_id);
+
+      // 活跃状态门控：live running 时禁止放弃
+      if (doc.meta.child_id) {
+        if (opts.liveCheck) {
+          const live = opts.liveCheck(doc.meta.child_id);
+          if (live === "running") {
+            throw new TxCasError("子代理仍在运行中——请先受控停止（或等待其结束）后再放弃 attempt");
+          }
+          if (live === "unknown") {
+            throw new GraphError("无法确认子代理状态（live registry 不可用）——拒绝放弃 attempt");
+          }
+        } else if (doc.meta.result === "pending") {
+          throw new GraphError("无法确认子代理状态（未提供 live check）——拒绝放弃 attempt");
+        }
+      }
+
+      const abandonedAt = nowIso();
+      // 事件先行：attempt.abandoned
+      appendEvent(root, {
+        actor,
+        event: "attempt.abandoned",
+        goal: goalId,
+        details: {
+          attempt,
+          child_id: doc.meta.child_id ?? null,
+          reason,
+          actor,
+          previous_result: doc.meta.result ?? "pending",
+          abandoned_at: abandonedAt,
+          goal_status: String(goalDoc.meta.status ?? "unknown"),
+        },
+      });
+
+      // 落盘
+      doc.meta.result = "cancelled";
+      doc.meta.detached = true;
+      doc.meta.detached_at = abandonedAt;
+      doc.meta.detached_by = actor;
+      delete doc.meta.binding_token;
+      delete doc.meta.child_id;
+      delete doc.meta.parent_session_id;
+      saveGoal(attFile, doc);
+
+      return {
+        value: { abandoned: true, already: false, attempt } as AbandonAttemptResult,
         events: [],
       };
     },
@@ -5138,10 +5348,10 @@ export function deleteGoal(
   });
 }
 
-/** g-233：提取目标描述小节正文 */
+/** g-233/g-270：提取目标描述小节正文（使用 fence-aware 的 sectionText 解析） */
 export function extractGoalDescription(body: string): string {
-  const m = (body ?? "").match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
-  return m ? m[1].trim() : "";
+  const s = sectionText(body ?? "", "目标描述");
+  return s ? s.trim() : "";
 }
 
 // ---- 看板数据投影（供 host 端点与文字版看板共用） ----
@@ -5868,6 +6078,7 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
   return {
     meta: doc.meta,
     body: doc.body,
+    description: extractGoalDescription(doc.body),
     // g-170：判据编辑弹窗数据源（与看板 criteria_items 同构，供 base_items 乐观并发 token）
     criteria_items: criteriaItems(doc.body),
     criteria_count: countCriteria(doc.body),
@@ -5962,12 +6173,11 @@ export function amendGoal(
     } else {
       const { text, normalized } = normalizeAppend(opts.appendDescription);
       appendNormalized = normalized;
-      const desc = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
-      if (desc) {
-        doc.body = doc.body.replace(
-          /## 目标描述\n([\s\S]*?)(?=\n## |$)/,
-          `## 目标描述\n${desc[1].replace(/\n*$/, "")}\n\n${text}\n\n`,
-        );
+      const existingDesc = sectionText(doc.body, "目标描述");
+      if (existingDesc !== null) {
+        const trimmedExisting = existingDesc.trim();
+        const combined = trimmedExisting ? `${trimmedExisting}\n\n${text}` : text;
+        doc.body = replaceSection(doc.body, "目标描述", `\n${combined}\n\n`);
       } else {
         doc.body = doc.body.replace(/\n*$/, "") + "\n\n## 目标描述\n\n" + text + "\n";
       }
@@ -6009,7 +6219,36 @@ export function renameGoal(
   return { old_title: oldTitle, new_title: newTitle };
 }
 
-function acquireTagsLock(file: string): { lock: string; token: string; lockStat: any; ownerStat: any; lockFd: number; ownerFd: number } {
+export interface TagsLockHandle {
+  lock: string;
+  token: string;
+  lockStat?: any;
+  ownerStat?: any;
+  lockFd?: number;
+  ownerFd?: number;
+  isWindows: boolean;
+}
+
+export function safePathTag(token: string): string {
+  return token.replace(/:/g, "-");
+}
+
+export function getTagsLockPaths(file: string, token: string = `${process.pid}:${randomUUID()}`): {
+  lock: string;
+  quarantine: string;
+  detached: string;
+  token: string;
+  pathTag: string;
+} {
+  const lock = `${file}.tags.lock`;
+  const pathTag = safePathTag(token);
+  const quarantine = `${lock}.reclaim-${pathTag}`;
+  const detached = `${lock}.release-${pathTag}`;
+  return { lock, quarantine, detached, token, pathTag };
+}
+
+export function acquireTagsLock(file: string): TagsLockHandle {
+  const win = isWindows();
   const lock = `${file}.tags.lock`;
   const validToken = (v: string) => /^\d+:[0-9a-f-]{36}$/.test(v);
   for (let i = 0; i < 200; i++) {
@@ -6025,31 +6264,69 @@ function acquireTagsLock(file: string): { lock: string; token: string; lockStat:
         if (!validToken(owner)) throw new GraphError("标签锁 owner 无效，拒绝回收");
         const pid = Number(owner.split(":", 1)[0]);
         let alive = true;
-        try { process.kill(pid, 0); }
-        catch (error: any) { if (error?.code === "ESRCH") alive = false; else if (error?.code !== "EPERM") throw error; }
+        try {
+          alive = isProcessAlive(pid);
+        } catch {
+          alive = true; // 出错保守判存活，避免在权限受限时误抢锁
+        }
         if (!alive) {
-          const quarantine = `${lock}.reclaim-${token}`;
-          try { renameSync(lock, quarantine); } catch { /* raced */ }
+          const pathTag = safePathTag(token);
+          const quarantine = `${lock}.reclaim-${pathTag}`;
+          let renamed = false;
           try {
-            const qOwner = join(quarantine, "owner"); const qs = lstatSync(qOwner);
-            if (qs.isFile() && readFileSync(qOwner, "utf8") === owner) { rmSync(qOwner); rmdirSync(quarantine); }
-          } catch { /* unknown/sentinel content remains quarantined safely */ }
+            renameSync(lock, quarantine);
+            renamed = true;
+          } catch (raced: any) {
+            if (raced?.code !== "ENOENT") {
+              console.error(`[dsh-graph] 陈旧标签锁回收重命名失败 (lock=${lock}, quarantine=${quarantine}):`, raced);
+            }
+          }
+          if (renamed) {
+            try {
+              const qOwner = join(quarantine, "owner");
+              const qs = lstatSync(qOwner);
+              if (qs.isFile() && readFileSync(qOwner, "utf8") === owner) {
+                rmSync(qOwner);
+                rmdirSync(quarantine);
+              }
+            } catch (cleanErr) {
+              console.error(`[dsh-graph] 清理已隔离陈旧锁失败 (quarantine=${quarantine}):`, cleanErr);
+            }
+          }
         }
       }
+      const until = Date.now() + 5; while (Date.now() < until) { /* backoff */ }
+      continue;
     } catch (e) {
       if (e instanceof GraphError && /不是目录|owner 无效|owner 不是/.test(e.message)) throw e;
       try {
         mkdirSync(lock, { mode: 0o700 });
-        try {
-          const lockFd = openSync(lock, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-          const ownerFd = openSync(join(lock, "owner"), O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
-          try { writeSync(ownerFd, token, 0, "utf8"); }
-          catch (writeError) { closeSync(ownerFd); closeSync(lockFd); throw writeError; }
-          const lockStat = lstatSync(lock); const ownerStat = fstatSync(ownerFd);
-          return { lock, token, lockStat, ownerStat, lockFd, ownerFd };
-        } catch (writeError) {
-          try { rmdirSync(lock); } catch { /* retain unknown content safely */ }
-          throw writeError;
+        if (win) {
+          // Windows 路径：不把目录作为 fd 打开，不用 O_DIRECTORY/O_NOFOLLOW，
+          // 用 writeFileSync { flag: "wx" } 表达 O_EXCL 原子排他语义
+          const ownerPath = join(lock, "owner");
+          try {
+            writeFileSync(ownerPath, token, { flag: "wx" });
+            const lockStat = lstatSync(lock);
+            const ownerStat = lstatSync(ownerPath);
+            return { lock, token, lockStat, ownerStat, isWindows: true };
+          } catch (writeError) {
+            try { rmdirSync(lock); } catch { /* retain unknown content safely */ }
+            throw writeError;
+          }
+        } else {
+          // POSIX 路径：保留原有目录 fd 与专有常量行为
+          try {
+            const lockFd = openSync(lock, FS_CONSTANTS.O_RDONLY | FS_CONSTANTS.O_DIRECTORY | FS_CONSTANTS.O_NOFOLLOW);
+            const ownerFd = openSync(join(lock, "owner"), FS_CONSTANTS.O_RDWR | FS_CONSTANTS.O_CREAT | FS_CONSTANTS.O_EXCL | FS_CONSTANTS.O_NOFOLLOW, 0o600);
+            try { writeSync(ownerFd, token, 0, "utf8"); }
+            catch (writeError) { closeSync(ownerFd); closeSync(lockFd); throw writeError; }
+            const lockStat = lstatSync(lock); const ownerStat = fstatSync(ownerFd);
+            return { lock, token, lockStat, ownerStat, lockFd, ownerFd, isWindows: false };
+          } catch (writeError) {
+            try { rmdirSync(lock); } catch { /* retain unknown content safely */ }
+            throw writeError;
+          }
         }
       } catch (mkdirError) {
         if (mkdirError instanceof GraphError && /不是目录|owner 无效|owner 不是/.test(mkdirError.message)) throw mkdirError;
@@ -6060,30 +6337,113 @@ function acquireTagsLock(file: string): { lock: string; token: string; lockStat:
   throw new GraphError("标签文件正被其他请求锁定，请稍后重试");
 }
 
-function releaseTagsLock(handle: { lock: string; token: string; lockStat: any; ownerStat: any; lockFd: number; ownerFd: number }): void {
+export function releaseTagsLock(handle: TagsLockHandle): void {
+  const pathTag = safePathTag(handle.token);
+  if (handle.isWindows) {
+    try {
+      if (!existsSync(handle.lock)) return;
+      const st = lstatSync(handle.lock);
+      if (!st.isDirectory()) return;
+      const ownerPath = join(handle.lock, "owner");
+      if (!existsSync(ownerPath)) return;
+      const os = lstatSync(ownerPath);
+      if (!os.isFile()) return;
+      let ownerContent = "";
+      try {
+        ownerContent = readFileSync(ownerPath, "utf8");
+      } catch (readErr) {
+        console.error(`[dsh-graph] 释放标签锁读取 owner 失败 (path=${ownerPath}):`, readErr);
+        return;
+      }
+      if (ownerContent !== handle.token) return;
+
+      const detached = `${handle.lock}.release-${pathTag}`;
+      try {
+        if (existsSync(detached)) {
+          console.error(`[dsh-graph] 释放标签锁检测到残留 detached 路径已存在 (detached=${detached})`);
+          return;
+        }
+      } catch (checkErr) {
+        console.error(`[dsh-graph] 释放标签锁检查 detached 路径失败 (detached=${detached}):`, checkErr);
+        return;
+      }
+      try {
+        renameSync(handle.lock, detached);
+      } catch (renameErr) {
+        console.error(`[dsh-graph] 释放标签锁重命名失败 (lock=${handle.lock}, detached=${detached}):`, renameErr);
+        return;
+      }
+      const detachedOwner = join(detached, "owner");
+      try {
+        if (existsSync(detachedOwner) && readFileSync(detachedOwner, "utf8") === handle.token) {
+          unlinkSync(detachedOwner);
+          rmdirSync(detached);
+        }
+      } catch (cleanErr) {
+        console.error(`[dsh-graph] 清理 detached 锁目录失败 (detached=${detached}):`, cleanErr);
+      }
+    } catch (err) {
+      /* replaced or unknown content; never recursively delete */
+      console.error(`[dsh-graph] 释放标签锁异常 (lock=${handle.lock}):`, err);
+    }
+    return;
+  }
+
+  // POSIX 路径：保留原有 dev/ino 与 fd 严格校验
   try {
     const st = lstatSync(handle.lock);
     const os = lstatSync(join(handle.lock, "owner"));
-    const nowLock = fstatSync(handle.lockFd); const nowOwner = fstatSync(handle.ownerFd);
-    if (!st.isDirectory() || st.dev !== handle.lockStat.dev || st.ino !== handle.lockStat.ino ||
-      nowLock.dev !== handle.lockStat.dev || nowLock.ino !== handle.lockStat.ino ||
-      !os.isFile() || os.dev !== handle.ownerStat.dev || os.ino !== handle.ownerStat.ino ||
-      nowOwner.dev !== handle.ownerStat.dev || nowOwner.ino !== handle.ownerStat.ino) return;
-    const detached = `${handle.lock}.release-${handle.token}`;
-    try { if (lstatSync(detached)) return; } catch (e: any) { if (e?.code !== "ENOENT") return; }
-    try { renameSync(handle.lock, detached); } catch (e: any) { if (e?.code === "EEXIST") return; throw e; }
+    const nowLock = handle.lockFd !== undefined ? fstatSync(handle.lockFd) : null;
+    const nowOwner = handle.ownerFd !== undefined ? fstatSync(handle.ownerFd) : null;
+    if (!st.isDirectory() || st.dev !== handle.lockStat?.dev || st.ino !== handle.lockStat?.ino ||
+      !nowLock || nowLock.dev !== handle.lockStat?.dev || nowLock.ino !== handle.lockStat?.ino ||
+      !os.isFile() || os.dev !== handle.ownerStat?.dev || os.ino !== handle.ownerStat?.ino ||
+      !nowOwner || nowOwner.dev !== handle.ownerStat?.dev || nowOwner.ino !== handle.ownerStat?.ino) return;
+    const detached = `${handle.lock}.release-${pathTag}`;
+    try {
+      if (lstatSync(detached)) {
+        console.error(`[dsh-graph] 释放标签锁检测到残留 detached 路径 (POSIX, detached=${detached})`);
+        return;
+      }
+    } catch (e: any) {
+      if (e?.code !== "ENOENT") {
+        console.error(`[dsh-graph] 释放标签锁检查 detached 路径失败 (POSIX, detached=${detached}):`, e);
+        return;
+      }
+    }
+    try {
+      renameSync(handle.lock, detached);
+    } catch (e: any) {
+      if (e?.code === "EEXIST") {
+        console.error(`[dsh-graph] 释放标签锁重命名目标已存在 (POSIX, detached=${detached})`);
+        return;
+      }
+      console.error(`[dsh-graph] 释放标签锁重命名失败 (POSIX, lock=${handle.lock}, detached=${detached}):`, e);
+      throw e;
+    }
     const detachedStat = lstatSync(detached);
-    if (detachedStat.dev !== handle.lockStat.dev || detachedStat.ino !== handle.lockStat.ino) return;
+    if (detachedStat.dev !== handle.lockStat?.dev || detachedStat.ino !== handle.lockStat?.ino) return;
     const detachedOwner = join(detached, "owner");
     const dos = lstatSync(detachedOwner);
-    if (!dos.isFile() || dos.dev !== handle.ownerStat.dev || dos.ino !== handle.ownerStat.ino) return;
+    if (!dos.isFile() || dos.dev !== handle.ownerStat?.dev || dos.ino !== handle.ownerStat?.ino) return;
     const ownerBuf = Buffer.alloc(handle.token.length);
+    if (handle.ownerFd === undefined) return;
     const readCount = readSync(handle.ownerFd, ownerBuf, 0, ownerBuf.length, 0);
     if (ownerBuf.subarray(0, readCount).toString("utf8") !== handle.token) return;
     unlinkSync(detachedOwner);
     rmdirSync(detached);
-  } catch { /* replaced or unknown content; never recursively delete */ }
-  finally { try { closeSync(handle.ownerFd); } catch { /* already closed */ } try { closeSync(handle.lockFd); } catch { /* already closed */ } }
+  } catch (err) {
+    /* replaced or unknown content; never recursively delete */
+    console.error(`[dsh-graph] 释放标签锁异常 (POSIX, lock=${handle.lock}):`, err);
+  }
+  finally {
+    if (handle.ownerFd !== undefined && handle.ownerFd >= 0) {
+      try { closeSync(handle.ownerFd); } catch { /* already closed */ }
+    }
+    if (handle.lockFd !== undefined && handle.lockFd >= 0) {
+      try { closeSync(handle.lockFd); } catch { /* already closed */ }
+    }
+  }
 }
 
 /** g-187：设置目标标签，使用锁内 CAS 与原子替换。 */
@@ -6110,20 +6470,40 @@ export function setGoalTags(
     if (JSON.stringify(oldTags) === JSON.stringify(newTags)) return { old_tags: oldTags, new_tags: newTags };
     doc.meta.tags = newTags;
     const temp = `${file}.tags-${process.pid}-${randomUUID()}.tmp`;
+    const win = isWindows();
+    const newContent = serializeDoc(doc);
     let writtenFd = -1;
     let writtenStat: any;
-    try {
-      writtenFd = openSync(temp, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, originalStat.mode);
-      writeSync(writtenFd, serializeDoc(doc), 0, "utf8");
-      fchmodSync(writtenFd, originalStat.mode);
-      writtenStat = fstatSync(writtenFd);
-      if (!writtenStat.isFile()) throw new GraphError("标签临时文件不是普通文件");
-      renameSync(temp, file);
-    } catch (e) {
-      try { if (writtenFd >= 0) closeSync(writtenFd); } catch { /* already closed */ }
-      try { if (existsSync(temp)) rmSync(temp); } catch { /* preserve original */ }
-      throw e;
+    let expectedIdentity: FileIdentitySnapshot | undefined;
+
+    if (win) {
+      // Windows 路径：wx 语义创建 + replaceFileAtomic，跳过 fchmod
+      try {
+        writeFileSync(temp, newContent, { flag: "wx" });
+        writtenStat = statSync(temp);
+        if (!writtenStat.isFile()) throw new GraphError("标签临时文件不是普通文件");
+        replaceFileAtomic(temp, file);
+        expectedIdentity = takeFileIdentity(file, newContent);
+      } catch (e) {
+        try { if (existsSync(temp)) rmSync(temp); } catch { /* 忽略清理失败 */ }
+        throw e;
+      }
+    } else {
+      // POSIX 路径：保留原有 openSync + mode + fchmodSync
+      try {
+        writtenFd = openSync(temp, FS_CONSTANTS.O_RDWR | FS_CONSTANTS.O_CREAT | FS_CONSTANTS.O_EXCL | FS_CONSTANTS.O_NOFOLLOW, originalStat.mode);
+        writeSync(writtenFd, newContent, 0, "utf8");
+        fchmodSync(writtenFd, originalStat.mode);
+        writtenStat = fstatSync(writtenFd);
+        if (!writtenStat.isFile()) throw new GraphError("标签临时文件不是普通文件");
+        renameSync(temp, file);
+      } catch (e) {
+        try { if (writtenFd >= 0) closeSync(writtenFd); } catch { /* already closed */ }
+        try { if (existsSync(temp)) rmSync(temp); } catch { /* preserve original */ }
+        throw e;
+      }
     }
+
     try {
       appendEvent(root, {
         actor: opts.actor,
@@ -6133,19 +6513,30 @@ export function setGoalTags(
       });
     } catch (eventError) {
       try {
-        const pathStat = lstatSync(file);
-        if (!pathStat.isFile() || pathStat.dev !== writtenStat.dev || pathStat.ino !== writtenStat.ino) throw new GraphConflictError("目标文件已被外部替换或删除，拒绝回滚");
-        const current = fstatSync(writtenFd);
-        if (current.dev !== writtenStat.dev || current.ino !== writtenStat.ino) throw new GraphConflictError("目标文件 inode 校验失败");
-        ftruncateSync(writtenFd, 0); writeSync(writtenFd, originalText, 0, "utf8"); fchmodSync(writtenFd, originalStat.mode);
+        if (win) {
+          // Windows 回滚：同一性校验（内容哈希 + size + 普通文件属性，不依赖 dev/ino）
+          if (!expectedIdentity) throw new GraphConflictError("目标文件已被外部替换或删除，拒绝回滚");
+          const verify = verifyFileIdentity(file, expectedIdentity);
+          if (!verify.valid) {
+            throw new GraphConflictError(verify.reason ?? "目标文件已被外部替换或删除，拒绝回滚");
+          }
+          writeFileSync(file, originalText, "utf8");
+        } else {
+          // POSIX 回滚：严格比对 dev 与 ino
+          const pathStat = lstatSync(file);
+          if (!pathStat.isFile() || pathStat.dev !== writtenStat.dev || pathStat.ino !== writtenStat.ino) throw new GraphConflictError("目标文件已被外部替换或删除，拒绝回滚");
+          const current = fstatSync(writtenFd);
+          if (current.dev !== writtenStat.dev || current.ino !== writtenStat.ino) throw new GraphConflictError("目标文件 inode 校验失败");
+          ftruncateSync(writtenFd, 0); writeSync(writtenFd, originalText, 0, "utf8"); fchmodSync(writtenFd, originalStat.mode);
+        }
       } catch (rollbackError) {
-        try { closeSync(writtenFd); } catch { /* already closed */ }
+        try { if (writtenFd >= 0) closeSync(writtenFd); } catch { /* already closed */ }
         throw new GraphError(`标签事件写入失败且回滚失败：${String((rollbackError as Error)?.message ?? rollbackError)}`);
       }
-      try { closeSync(writtenFd); } catch { /* already closed */ }
+      try { if (writtenFd >= 0) closeSync(writtenFd); } catch { /* already closed */ }
       throw eventError;
     }
-    try { closeSync(writtenFd); } catch { /* already closed */ }
+    try { if (writtenFd >= 0) closeSync(writtenFd); } catch { /* already closed */ }
     return { old_tags: oldTags, new_tags: newTags };
   } finally { releaseTagsLock(lockHandle); }
 }
@@ -6481,7 +6872,7 @@ export function requestAcceptReview(
       : status === "collecting" || status === "ready"
         ? "判据"
         : "review";
-  const snapshot = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/)?.[1]?.trim()?.slice(0, 200) ?? "";
+  const snapshot = (sectionText(doc.body, "目标描述") ?? "").trim().slice(0, 200);
   appendEvent(root, {
     actor,
     event: "review.requested",

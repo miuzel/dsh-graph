@@ -4,7 +4,7 @@
  *  ② 两处执行派发（graph_start_attempt 工具 + /api/dsh-graph/start-execution 端点）的
  *  spawn prompt 注入「已收集上下文卡片成果」段（按序列出 title/summary/正文）；
  *  ③ attempt.started 事件 details 记 injected_cards（注入顺序与成果段一致）；
- *  ④ spawn 提示词附带 worktree 隔离指令（默认注入、worktree=false 省略、含数据分工）。
+ *  ④ spawn 提示词附带隔离声明（g-283：task 目标默认不建树 → 声明「本次未启用 worktree 隔离」，绝不强制隔离/预创建）。
  */
 
 import { test } from "node:test";
@@ -201,22 +201,17 @@ function execCtx(ws: string) {
   return { agent: { session: { id: "sess-exec", header: { cwd: ws } } }, signal: new AbortController().signal };
 }
 
-/** 断言 prompt 含卡片成果段 + worktree 指令（或按 wantWorktree 断言省略），并返回注入清单。 */
-function assertPromptInjected(prompt: string, cards: string[], wantWorktree: boolean) {
+/** 断言 prompt 含卡片成果段 + 隔离声明（g-283：task 目标默认不建树 → 「本次未启用 worktree 隔离」，无强制隔离/预建树）。 */
+function assertPromptInjected(prompt: string, cards: string[]) {
   assert.ok(prompt.includes("已收集上下文卡片成果"), "prompt 含卡片成果段");
   for (const c of cards) assert.ok(prompt.includes(c), `prompt 含卡片 ${c} 的 id`);
-  if (wantWorktree) {
-    assert.ok(prompt.includes("worktree 隔离"), "prompt 默认附带 worktree 指令");
-    assert.ok(prompt.includes("预创建并登记"), "worktree 指令含 supervisor 预创建登记约定");
-    assert.ok(!prompt.includes("git worktree add"), "worktree 指令不再要求子代理自行 add");
-    assert.ok(prompt.includes(".dsh-graph/"), "worktree 指令含 .dsh-graph 数据分工");
-    assert.ok(prompt.includes("主工作树写"), "worktree 指令明确看板数据仍在主工作树写");
-  } else {
-    assert.ok(!prompt.includes("worktree 隔离"), "worktree=false 时 prompt 省略 worktree 指令");
-  }
+  assert.ok(prompt.includes("本次未启用 worktree 隔离"), "task 目标默认不隔离：prompt 声明本次未启用 worktree 隔离");
+  assert.ok(!prompt.includes("【强制 worktree 隔离】"), "task 目标默认不隔离：不得出现强制隔离声明");
+  assert.ok(!prompt.includes("预建"), "task 目标默认不隔离：不得出现预建树声明");
+  assert.ok(!prompt.includes("git worktree add"), "不再要求子代理自行 add");
 }
 
-test("g-120：graph_start_attempt 工具 prompt 注入卡片成果段 + worktree 指令，事件记 injected_cards", async () => {
+test("g-120：graph_start_attempt 工具 prompt 注入卡片成果段 + 隔离声明，事件记 injected_cards", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g120-host-"));
   const root = join(ws, ".dsh-graph");
   init(root);
@@ -228,13 +223,13 @@ test("g-120：graph_start_attempt 工具 prompt 注入卡片成果段 + worktree
   const res = await tool.execute({ goal }, execCtx(ws));
   assert.equal(res.child_id, "child-g120");
   assert.deepEqual(res.injected_cards, [c1, c2], "工具返回注入清单");
-  assertPromptInjected(captured.prompt!, [c1, c2], true);
+  assertPromptInjected(captured.prompt!, [c1, c2]);
   const ev = readEvents(root).filter((e) => e.event === "attempt.started" && e.goal === goal);
   assert.equal(ev.length, 1);
   assert.deepEqual(ev[0].details.injected_cards, [c1, c2], "attempt.started 记 injected_cards（按注入顺序）");
 });
 
-test("g-120：graph_start_attempt worktree=false 省略 worktree 指令但保留卡片注入", async () => {
+test("g-120：graph_start_attempt worktree=false 声明未启用隔离但保留卡片注入", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g120-host-"));
   const root = join(ws, ".dsh-graph");
   init(root);
@@ -243,11 +238,11 @@ test("g-120：graph_start_attempt worktree=false 省略 worktree 指令但保留
   const { registered } = makeHostCtx(captured, ws);
   const tool = registered.find((d) => d.name === "graph_start_attempt");
   const res = await tool.execute({ goal, worktree: false }, execCtx(ws));
-  assert.deepEqual(res.injected_cards, [c1, c2], "worktree=false 不影响卡片注入（仅省略 worktree 指令）");
-  assertPromptInjected(captured.prompt!, [c1, c2], false);
+  assert.deepEqual(res.injected_cards, [c1, c2], "worktree=false 不影响卡片注入（仅声明未启用隔离）");
+  assertPromptInjected(captured.prompt!, [c1, c2]);
 });
 
-test("g-120：start-execution 端点 prompt 注入卡片成果段 + worktree 指令，事件记 injected_cards", async () => {
+test("g-120：start-execution 端点 prompt 注入卡片成果段 + 隔离声明，事件记 injected_cards", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g120-ep-"));
   const root = join(ws, ".dsh-graph");
   init(root);
@@ -266,7 +261,7 @@ test("g-120：start-execution 端点 prompt 注入卡片成果段 + worktree 指
   assert.equal(res._code, 200);
   assert.equal(res._body.ok, true);
   assert.deepEqual(res._body.injected_cards, [c1, c2], "端点响应带注入清单");
-  assertPromptInjected(captured.prompt!, [c1, c2], true);
+  assertPromptInjected(captured.prompt!, [c1, c2]);
   assert.ok(captured.prompt!.includes("## 目标描述"), "原有目标描述段保留");
   assert.ok(captured.prompt!.includes("## 质量判据"), "原有判据段保留");
   const ev = readEvents(root).filter((e) => e.event === "attempt.started" && e.goal === goal);
@@ -274,7 +269,7 @@ test("g-120：start-execution 端点 prompt 注入卡片成果段 + worktree 指
   assert.deepEqual(ev[0].details.injected_cards, [c1, c2]);
 });
 
-test("g-120：start-execution 端点 worktree=false 省略 worktree 指令；无成果卡时注入空清单", async () => {
+test("g-120：start-execution 端点 worktree=false 声明未启用隔离；无成果卡时注入空清单", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g120-ep-"));
   const root = join(ws, ".dsh-graph");
   init(root);
@@ -290,7 +285,7 @@ test("g-120：start-execution 端点 worktree=false 省略 worktree 指令；无
   emitBody(req, { goal, worktree: false });
   await p;
   assert.equal(res._code, 200);
-  assertPromptInjected(captured.prompt!, [c1], false);
+  assertPromptInjected(captured.prompt!, [c1]);
 
   // 无成果卡（只有 empty 卡）：注入清单为空、段标题仍在
   const ws2 = mkdtempSync(join(tmpdir(), "dsh-graph-g120-ep2-"));

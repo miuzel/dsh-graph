@@ -299,13 +299,13 @@ test("g-190 ⑩ authorizeUnbind 纯函数：未知前缀拒绝 / human 放行 / 
 
 // ---- host 工具 ----
 
-test("g-190 ⑪ 工具注册：graph_unbind_goal_child required=[goal,token]，additionalProperties=false", () => {
+test("g-190/g-282 ⑪ 工具注册：graph_unbind_goal_child required=[goal]，additionalProperties=false", () => {
   const { byName } = setup();
   const t = byName.get("graph_unbind_goal_child");
   assert.ok(t, "应注册 graph_unbind_goal_child");
-  assert.deepEqual(t.parameters.required, ["goal", "token"]);
+  assert.deepEqual(t.parameters.required, ["goal"]);
   assert.equal(t.parameters.additionalProperties, false);
-  for (const k of ["goal", "token", "attempt", "child_id", "reason"]) assert.ok(t.parameters.properties[k], "参数 " + k);
+  for (const k of ["goal", "token", "attempt", "child_id", "reason", "legacy"]) assert.ok(t.parameters.properties[k], "参数 " + k);
 });
 
 test("g-190 ⑫ 工具执行：supervisor 会话成功；agent 非 owner 拒绝；child 自解绑拒绝；双 selector 拒绝", async () => {

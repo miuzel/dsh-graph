@@ -2,11 +2,21 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
-> **✅ 支持 DeepSeek Harness `v0.1.5-rc.2`**：本版本（v0.10.0）在该宿主版本上完整验证（隔离 Web 实例、看板交互、全部 `graph_*` 工具与 REST 端点、中英双语界面），并以此为推荐配套版本；兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上。
+> ### 🚀 v0.11.0 重要变化：Windows 原生由「不可用」变为「已支持」
+>
+> - **Windows 原生（此前完全不可用 → 现已支持）**：v0.10.0 及更早在 Windows 上会**模块加载即崩溃**（`core/ops.js` 具名导入 `node:constants` 的 `O_DIRECTORY`，Windows 无此导出），且安装时必报 peer 依赖告警。v0.11.0 已修复并在**原生 Windows（win32/x64）真机复验通过**：安装零告警、插件正常加载、标签锁与跨进程并发 CAS 实测通过。
+> - **macOS 新纳入验证矩阵**：与 Windows / Linux 使用**同一安装包（sha256 一致）**真机通过。
+> - **升级建议**：Windows 与 macOS 用户请升级到 v0.11.0；Linux/WSL2 用户升级可获得依赖告警消除，以及排期/派发体验修复（派发可真实创建隔离工作树、独立目标创建即「规划中」、backlog 卡片移出即时生效）。
+>
+> **✅ 支持 DeepSeek Harness `v0.1.5-rc.2`（Linux/WSL2、Windows、macOS 均已验证）**：本版本（v0.11.0）在该宿主版本上完整验证（隔离 Web 实例、看板交互、全部 `graph_*` 工具与 REST 端点、中英双语界面）；兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上。
+>
+> **✅ 跨平台（v0.11.0 起）**：此前 Windows 原生不可用的两类问题——① 平台代码使用 POSIX 专用文件锁常量（目录当 fd 打开 / `O_DIRECTORY` / `O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在**本版本**修复，并**在原生 Windows（win32/x64，pnpm v10）与 macOS（darwin/arm64）真机复验通过**：安装零 peer 告警、插件正常 apply、标签锁与跨进程并发 CAS 实测通过（三平台使用同一安装包，指纹一致）。
+>
+> **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（例如位于 `/tmp`、`/var` 之下——这两者在 macOS 上本身是软链），会被拒绝并报 `graph root symlink is not allowed`；**由 `process.cwd()` 推导的路径不受影响**（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
 
-单包发布：npm 包名 `dsh-graph`（当前版本 v0.10.0）。一个包同时提供：
+单包发布：npm 包名 `dsh-graph`（当前版本 v0.11.0）。一个包同时提供：
 
-- 面向 agent 的 39 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
+- 面向 agent 的 40 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
 - 浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
 
 数据以文件 + 事件流形式落在工作区 `.dsh-graph` 目录，git 友好、可审计。
@@ -39,11 +49,15 @@ dsh plugin --profile <name> add dsh-graph
 
 > 需要 Node ≥ 22（包内 core 为编译后 `.js`）。已发布版本经 npm 与 dsh-market 生态（[dsh-market](https://github.com/dsh-market/dsh-market) / DshMarketPlace / DSH Get，见 `docs/release-handbook.md`）分发。
 >
-> **✅ DSH 版本兼容性（重点）**：v0.10.0 **已完整验证并支持 DeepSeek Harness [`v0.1.5-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)**——开发期的隔离测试实例（Web GUI + 二维泳道看板 + `graph_*` 工具 + REST 端点）与中英双语功能演示视频（见 [dsh-graph-videos](https://github.com/miuzel/dsh-graph-videos)）全部在 `v0.1.5-rc.2` 上实测通过，**推荐与该版本配套使用**。同时兼容 `0.1.5` 系列及 `0.1.2-alpha.x` 及以上版本（工具与提示词契约向后兼容）。
+> **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+>
+> **✅ DSH 版本兼容性（重点）**：v0.11.0 **已完整验证并支持 DeepSeek Harness [`v0.1.5-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)**——隔离测试实例（Web GUI + 二维泳道看板 + `graph_*` 工具 + REST 端点）与中英双语功能演示视频（见 [dsh-graph-videos](https://github.com/miuzel/dsh-graph-videos)）均在 `v0.1.5-rc.2` 上实测通过，**推荐与该版本配套使用**。同时兼容 `0.1.5` 系列及 `0.1.2-alpha.x` 及以上版本（工具与提示词契约向后兼容）。
+>
+> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证**（三平台使用同一安装包，产物 sha256 指纹一致）。此前 Windows 不可用的两类问题——① `core/ops.ts` 使用 POSIX 专用文件锁常量（目录当 fd 打开、`O_DIRECTORY`、`O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在**本版本**修复，并在原生 Windows 与 macOS 真机复验通过。**已知限制**：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
 
 ## 提供的工具
 
-39 个 `graph_*` 工具，按功能分组：
+40 个 `graph_*` 工具，按功能分组：
 
 | 分组 | 工具 |
 |------|------|
@@ -91,7 +105,7 @@ node --test core/tests/*.test.ts   # 全量测试
 node scripts/dsh-graph-mock-seed.mjs --validate               # 生成 nebula-notes mock 数据
 CWD=/tmp/dsh-graph-mock-demo bash scripts/dev-dsh-instance.sh run --port 3082  # 测试实例（开「看板」tab）
 # 截图：同一次 seed、同一实例、固定视口——看板全景 → screenshot/screenshot-1.png；
-# 点击 g-006 卡片打开目标详情弹窗 → screenshot/screenshot-2.png
+# 点击看板上的目标卡片打开详情弹窗 → screenshot/screenshot-2.png
 ```
 
 ## License
