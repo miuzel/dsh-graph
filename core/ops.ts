@@ -24,7 +24,21 @@ import {
   readSync,
   fsyncSync,
 } from "node:fs";
-import { O_CREAT, O_EXCL, O_NOFOLLOW, O_WRONLY, O_RDWR, O_RDONLY, O_DIRECTORY } from "node:constants";
+import {
+  isWindows,
+  FS_CONSTANTS,
+  replaceFileAtomic,
+  syncDirectorySafely,
+  applyModeSafely,
+  isProcessAlive,
+  takeFileIdentity,
+  verifyFileIdentity,
+  areSameStat,
+  setPlatformForTesting,
+  withPlatformForTesting,
+  type FileIdentitySnapshot,
+} from "./platform.ts";
+export { isWindows, setPlatformForTesting, withPlatformForTesting };
 import { join, basename, dirname, relative, resolve, isAbsolute, sep } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
@@ -1288,7 +1302,7 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
     return;
   }
   writeFileSync(`${file}.tmp`, updated, "utf8");
-  renameSync(`${file}.tmp`, file);
+  replaceFileAtomic(`${file}.tmp`, file);
   const changed: string[] = [];
   for (const k of Object.keys(patch ?? {})) changed.push(k);
   appendEvent(root, {
@@ -2970,12 +2984,12 @@ function atomicWrite(target: string, data: Buffer | string): void {
     throw e;
   }
   try {
-    renameSync(tmp, target);
+    replaceFileAtomic(tmp, target);
   } catch (e) {
     try { rmSync(tmp, { force: true }); } catch { /* 忽略 */ }
     throw e;
   }
-  try { const dfd = openSync(dir, "r"); fsyncSync(dfd); closeSync(dfd); } catch { /* 目录 fsync 失败不致命 */ }
+  syncDirectorySafely(dir);
 }
 
 /** 附件存储：把真实字节写入 .dsh-graph/attachments/<safeRelPath>（g-183）。
@@ -6198,7 +6212,36 @@ export function renameGoal(
   return { old_title: oldTitle, new_title: newTitle };
 }
 
-function acquireTagsLock(file: string): { lock: string; token: string; lockStat: any; ownerStat: any; lockFd: number; ownerFd: number } {
+export interface TagsLockHandle {
+  lock: string;
+  token: string;
+  lockStat?: any;
+  ownerStat?: any;
+  lockFd?: number;
+  ownerFd?: number;
+  isWindows: boolean;
+}
+
+export function safePathTag(token: string): string {
+  return token.replace(/:/g, "-");
+}
+
+export function getTagsLockPaths(file: string, token: string = `${process.pid}:${randomUUID()}`): {
+  lock: string;
+  quarantine: string;
+  detached: string;
+  token: string;
+  pathTag: string;
+} {
+  const lock = `${file}.tags.lock`;
+  const pathTag = safePathTag(token);
+  const quarantine = `${lock}.reclaim-${pathTag}`;
+  const detached = `${lock}.release-${pathTag}`;
+  return { lock, quarantine, detached, token, pathTag };
+}
+
+export function acquireTagsLock(file: string): TagsLockHandle {
+  const win = isWindows();
   const lock = `${file}.tags.lock`;
   const validToken = (v: string) => /^\d+:[0-9a-f-]{36}$/.test(v);
   for (let i = 0; i < 200; i++) {
@@ -6214,31 +6257,69 @@ function acquireTagsLock(file: string): { lock: string; token: string; lockStat:
         if (!validToken(owner)) throw new GraphError("标签锁 owner 无效，拒绝回收");
         const pid = Number(owner.split(":", 1)[0]);
         let alive = true;
-        try { process.kill(pid, 0); }
-        catch (error: any) { if (error?.code === "ESRCH") alive = false; else if (error?.code !== "EPERM") throw error; }
+        try {
+          alive = isProcessAlive(pid);
+        } catch {
+          alive = true; // 出错保守判存活，避免在权限受限时误抢锁
+        }
         if (!alive) {
-          const quarantine = `${lock}.reclaim-${token}`;
-          try { renameSync(lock, quarantine); } catch { /* raced */ }
+          const pathTag = safePathTag(token);
+          const quarantine = `${lock}.reclaim-${pathTag}`;
+          let renamed = false;
           try {
-            const qOwner = join(quarantine, "owner"); const qs = lstatSync(qOwner);
-            if (qs.isFile() && readFileSync(qOwner, "utf8") === owner) { rmSync(qOwner); rmdirSync(quarantine); }
-          } catch { /* unknown/sentinel content remains quarantined safely */ }
+            renameSync(lock, quarantine);
+            renamed = true;
+          } catch (raced: any) {
+            if (raced?.code !== "ENOENT") {
+              console.error(`[dsh-graph] 陈旧标签锁回收重命名失败 (lock=${lock}, quarantine=${quarantine}):`, raced);
+            }
+          }
+          if (renamed) {
+            try {
+              const qOwner = join(quarantine, "owner");
+              const qs = lstatSync(qOwner);
+              if (qs.isFile() && readFileSync(qOwner, "utf8") === owner) {
+                rmSync(qOwner);
+                rmdirSync(quarantine);
+              }
+            } catch (cleanErr) {
+              console.error(`[dsh-graph] 清理已隔离陈旧锁失败 (quarantine=${quarantine}):`, cleanErr);
+            }
+          }
         }
       }
+      const until = Date.now() + 5; while (Date.now() < until) { /* backoff */ }
+      continue;
     } catch (e) {
       if (e instanceof GraphError && /不是目录|owner 无效|owner 不是/.test(e.message)) throw e;
       try {
         mkdirSync(lock, { mode: 0o700 });
-        try {
-          const lockFd = openSync(lock, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-          const ownerFd = openSync(join(lock, "owner"), O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
-          try { writeSync(ownerFd, token, 0, "utf8"); }
-          catch (writeError) { closeSync(ownerFd); closeSync(lockFd); throw writeError; }
-          const lockStat = lstatSync(lock); const ownerStat = fstatSync(ownerFd);
-          return { lock, token, lockStat, ownerStat, lockFd, ownerFd };
-        } catch (writeError) {
-          try { rmdirSync(lock); } catch { /* retain unknown content safely */ }
-          throw writeError;
+        if (win) {
+          // Windows 路径：不把目录作为 fd 打开，不用 O_DIRECTORY/O_NOFOLLOW，
+          // 用 writeFileSync { flag: "wx" } 表达 O_EXCL 原子排他语义
+          const ownerPath = join(lock, "owner");
+          try {
+            writeFileSync(ownerPath, token, { flag: "wx" });
+            const lockStat = lstatSync(lock);
+            const ownerStat = lstatSync(ownerPath);
+            return { lock, token, lockStat, ownerStat, isWindows: true };
+          } catch (writeError) {
+            try { rmdirSync(lock); } catch { /* retain unknown content safely */ }
+            throw writeError;
+          }
+        } else {
+          // POSIX 路径：保留原有目录 fd 与专有常量行为
+          try {
+            const lockFd = openSync(lock, FS_CONSTANTS.O_RDONLY | FS_CONSTANTS.O_DIRECTORY | FS_CONSTANTS.O_NOFOLLOW);
+            const ownerFd = openSync(join(lock, "owner"), FS_CONSTANTS.O_RDWR | FS_CONSTANTS.O_CREAT | FS_CONSTANTS.O_EXCL | FS_CONSTANTS.O_NOFOLLOW, 0o600);
+            try { writeSync(ownerFd, token, 0, "utf8"); }
+            catch (writeError) { closeSync(ownerFd); closeSync(lockFd); throw writeError; }
+            const lockStat = lstatSync(lock); const ownerStat = fstatSync(ownerFd);
+            return { lock, token, lockStat, ownerStat, lockFd, ownerFd, isWindows: false };
+          } catch (writeError) {
+            try { rmdirSync(lock); } catch { /* retain unknown content safely */ }
+            throw writeError;
+          }
         }
       } catch (mkdirError) {
         if (mkdirError instanceof GraphError && /不是目录|owner 无效|owner 不是/.test(mkdirError.message)) throw mkdirError;
@@ -6249,30 +6330,113 @@ function acquireTagsLock(file: string): { lock: string; token: string; lockStat:
   throw new GraphError("标签文件正被其他请求锁定，请稍后重试");
 }
 
-function releaseTagsLock(handle: { lock: string; token: string; lockStat: any; ownerStat: any; lockFd: number; ownerFd: number }): void {
+export function releaseTagsLock(handle: TagsLockHandle): void {
+  const pathTag = safePathTag(handle.token);
+  if (handle.isWindows) {
+    try {
+      if (!existsSync(handle.lock)) return;
+      const st = lstatSync(handle.lock);
+      if (!st.isDirectory()) return;
+      const ownerPath = join(handle.lock, "owner");
+      if (!existsSync(ownerPath)) return;
+      const os = lstatSync(ownerPath);
+      if (!os.isFile()) return;
+      let ownerContent = "";
+      try {
+        ownerContent = readFileSync(ownerPath, "utf8");
+      } catch (readErr) {
+        console.error(`[dsh-graph] 释放标签锁读取 owner 失败 (path=${ownerPath}):`, readErr);
+        return;
+      }
+      if (ownerContent !== handle.token) return;
+
+      const detached = `${handle.lock}.release-${pathTag}`;
+      try {
+        if (existsSync(detached)) {
+          console.error(`[dsh-graph] 释放标签锁检测到残留 detached 路径已存在 (detached=${detached})`);
+          return;
+        }
+      } catch (checkErr) {
+        console.error(`[dsh-graph] 释放标签锁检查 detached 路径失败 (detached=${detached}):`, checkErr);
+        return;
+      }
+      try {
+        renameSync(handle.lock, detached);
+      } catch (renameErr) {
+        console.error(`[dsh-graph] 释放标签锁重命名失败 (lock=${handle.lock}, detached=${detached}):`, renameErr);
+        return;
+      }
+      const detachedOwner = join(detached, "owner");
+      try {
+        if (existsSync(detachedOwner) && readFileSync(detachedOwner, "utf8") === handle.token) {
+          unlinkSync(detachedOwner);
+          rmdirSync(detached);
+        }
+      } catch (cleanErr) {
+        console.error(`[dsh-graph] 清理 detached 锁目录失败 (detached=${detached}):`, cleanErr);
+      }
+    } catch (err) {
+      /* replaced or unknown content; never recursively delete */
+      console.error(`[dsh-graph] 释放标签锁异常 (lock=${handle.lock}):`, err);
+    }
+    return;
+  }
+
+  // POSIX 路径：保留原有 dev/ino 与 fd 严格校验
   try {
     const st = lstatSync(handle.lock);
     const os = lstatSync(join(handle.lock, "owner"));
-    const nowLock = fstatSync(handle.lockFd); const nowOwner = fstatSync(handle.ownerFd);
-    if (!st.isDirectory() || st.dev !== handle.lockStat.dev || st.ino !== handle.lockStat.ino ||
-      nowLock.dev !== handle.lockStat.dev || nowLock.ino !== handle.lockStat.ino ||
-      !os.isFile() || os.dev !== handle.ownerStat.dev || os.ino !== handle.ownerStat.ino ||
-      nowOwner.dev !== handle.ownerStat.dev || nowOwner.ino !== handle.ownerStat.ino) return;
-    const detached = `${handle.lock}.release-${handle.token}`;
-    try { if (lstatSync(detached)) return; } catch (e: any) { if (e?.code !== "ENOENT") return; }
-    try { renameSync(handle.lock, detached); } catch (e: any) { if (e?.code === "EEXIST") return; throw e; }
+    const nowLock = handle.lockFd !== undefined ? fstatSync(handle.lockFd) : null;
+    const nowOwner = handle.ownerFd !== undefined ? fstatSync(handle.ownerFd) : null;
+    if (!st.isDirectory() || st.dev !== handle.lockStat?.dev || st.ino !== handle.lockStat?.ino ||
+      !nowLock || nowLock.dev !== handle.lockStat?.dev || nowLock.ino !== handle.lockStat?.ino ||
+      !os.isFile() || os.dev !== handle.ownerStat?.dev || os.ino !== handle.ownerStat?.ino ||
+      !nowOwner || nowOwner.dev !== handle.ownerStat?.dev || nowOwner.ino !== handle.ownerStat?.ino) return;
+    const detached = `${handle.lock}.release-${pathTag}`;
+    try {
+      if (lstatSync(detached)) {
+        console.error(`[dsh-graph] 释放标签锁检测到残留 detached 路径 (POSIX, detached=${detached})`);
+        return;
+      }
+    } catch (e: any) {
+      if (e?.code !== "ENOENT") {
+        console.error(`[dsh-graph] 释放标签锁检查 detached 路径失败 (POSIX, detached=${detached}):`, e);
+        return;
+      }
+    }
+    try {
+      renameSync(handle.lock, detached);
+    } catch (e: any) {
+      if (e?.code === "EEXIST") {
+        console.error(`[dsh-graph] 释放标签锁重命名目标已存在 (POSIX, detached=${detached})`);
+        return;
+      }
+      console.error(`[dsh-graph] 释放标签锁重命名失败 (POSIX, lock=${handle.lock}, detached=${detached}):`, e);
+      throw e;
+    }
     const detachedStat = lstatSync(detached);
-    if (detachedStat.dev !== handle.lockStat.dev || detachedStat.ino !== handle.lockStat.ino) return;
+    if (detachedStat.dev !== handle.lockStat?.dev || detachedStat.ino !== handle.lockStat?.ino) return;
     const detachedOwner = join(detached, "owner");
     const dos = lstatSync(detachedOwner);
-    if (!dos.isFile() || dos.dev !== handle.ownerStat.dev || dos.ino !== handle.ownerStat.ino) return;
+    if (!dos.isFile() || dos.dev !== handle.ownerStat?.dev || dos.ino !== handle.ownerStat?.ino) return;
     const ownerBuf = Buffer.alloc(handle.token.length);
+    if (handle.ownerFd === undefined) return;
     const readCount = readSync(handle.ownerFd, ownerBuf, 0, ownerBuf.length, 0);
     if (ownerBuf.subarray(0, readCount).toString("utf8") !== handle.token) return;
     unlinkSync(detachedOwner);
     rmdirSync(detached);
-  } catch { /* replaced or unknown content; never recursively delete */ }
-  finally { try { closeSync(handle.ownerFd); } catch { /* already closed */ } try { closeSync(handle.lockFd); } catch { /* already closed */ } }
+  } catch (err) {
+    /* replaced or unknown content; never recursively delete */
+    console.error(`[dsh-graph] 释放标签锁异常 (POSIX, lock=${handle.lock}):`, err);
+  }
+  finally {
+    if (handle.ownerFd !== undefined && handle.ownerFd >= 0) {
+      try { closeSync(handle.ownerFd); } catch { /* already closed */ }
+    }
+    if (handle.lockFd !== undefined && handle.lockFd >= 0) {
+      try { closeSync(handle.lockFd); } catch { /* already closed */ }
+    }
+  }
 }
 
 /** g-187：设置目标标签，使用锁内 CAS 与原子替换。 */
@@ -6299,20 +6463,40 @@ export function setGoalTags(
     if (JSON.stringify(oldTags) === JSON.stringify(newTags)) return { old_tags: oldTags, new_tags: newTags };
     doc.meta.tags = newTags;
     const temp = `${file}.tags-${process.pid}-${randomUUID()}.tmp`;
+    const win = isWindows();
+    const newContent = serializeDoc(doc);
     let writtenFd = -1;
     let writtenStat: any;
-    try {
-      writtenFd = openSync(temp, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, originalStat.mode);
-      writeSync(writtenFd, serializeDoc(doc), 0, "utf8");
-      fchmodSync(writtenFd, originalStat.mode);
-      writtenStat = fstatSync(writtenFd);
-      if (!writtenStat.isFile()) throw new GraphError("标签临时文件不是普通文件");
-      renameSync(temp, file);
-    } catch (e) {
-      try { if (writtenFd >= 0) closeSync(writtenFd); } catch { /* already closed */ }
-      try { if (existsSync(temp)) rmSync(temp); } catch { /* preserve original */ }
-      throw e;
+    let expectedIdentity: FileIdentitySnapshot | undefined;
+
+    if (win) {
+      // Windows 路径：wx 语义创建 + replaceFileAtomic，跳过 fchmod
+      try {
+        writeFileSync(temp, newContent, { flag: "wx" });
+        writtenStat = statSync(temp);
+        if (!writtenStat.isFile()) throw new GraphError("标签临时文件不是普通文件");
+        replaceFileAtomic(temp, file);
+        expectedIdentity = takeFileIdentity(file, newContent);
+      } catch (e) {
+        try { if (existsSync(temp)) rmSync(temp); } catch { /* 忽略清理失败 */ }
+        throw e;
+      }
+    } else {
+      // POSIX 路径：保留原有 openSync + mode + fchmodSync
+      try {
+        writtenFd = openSync(temp, FS_CONSTANTS.O_RDWR | FS_CONSTANTS.O_CREAT | FS_CONSTANTS.O_EXCL | FS_CONSTANTS.O_NOFOLLOW, originalStat.mode);
+        writeSync(writtenFd, newContent, 0, "utf8");
+        fchmodSync(writtenFd, originalStat.mode);
+        writtenStat = fstatSync(writtenFd);
+        if (!writtenStat.isFile()) throw new GraphError("标签临时文件不是普通文件");
+        renameSync(temp, file);
+      } catch (e) {
+        try { if (writtenFd >= 0) closeSync(writtenFd); } catch { /* already closed */ }
+        try { if (existsSync(temp)) rmSync(temp); } catch { /* preserve original */ }
+        throw e;
+      }
     }
+
     try {
       appendEvent(root, {
         actor: opts.actor,
@@ -6322,19 +6506,30 @@ export function setGoalTags(
       });
     } catch (eventError) {
       try {
-        const pathStat = lstatSync(file);
-        if (!pathStat.isFile() || pathStat.dev !== writtenStat.dev || pathStat.ino !== writtenStat.ino) throw new GraphConflictError("目标文件已被外部替换或删除，拒绝回滚");
-        const current = fstatSync(writtenFd);
-        if (current.dev !== writtenStat.dev || current.ino !== writtenStat.ino) throw new GraphConflictError("目标文件 inode 校验失败");
-        ftruncateSync(writtenFd, 0); writeSync(writtenFd, originalText, 0, "utf8"); fchmodSync(writtenFd, originalStat.mode);
+        if (win) {
+          // Windows 回滚：同一性校验（内容哈希 + size + 普通文件属性，不依赖 dev/ino）
+          if (!expectedIdentity) throw new GraphConflictError("目标文件已被外部替换或删除，拒绝回滚");
+          const verify = verifyFileIdentity(file, expectedIdentity);
+          if (!verify.valid) {
+            throw new GraphConflictError(verify.reason ?? "目标文件已被外部替换或删除，拒绝回滚");
+          }
+          writeFileSync(file, originalText, "utf8");
+        } else {
+          // POSIX 回滚：严格比对 dev 与 ino
+          const pathStat = lstatSync(file);
+          if (!pathStat.isFile() || pathStat.dev !== writtenStat.dev || pathStat.ino !== writtenStat.ino) throw new GraphConflictError("目标文件已被外部替换或删除，拒绝回滚");
+          const current = fstatSync(writtenFd);
+          if (current.dev !== writtenStat.dev || current.ino !== writtenStat.ino) throw new GraphConflictError("目标文件 inode 校验失败");
+          ftruncateSync(writtenFd, 0); writeSync(writtenFd, originalText, 0, "utf8"); fchmodSync(writtenFd, originalStat.mode);
+        }
       } catch (rollbackError) {
-        try { closeSync(writtenFd); } catch { /* already closed */ }
+        try { if (writtenFd >= 0) closeSync(writtenFd); } catch { /* already closed */ }
         throw new GraphError(`标签事件写入失败且回滚失败：${String((rollbackError as Error)?.message ?? rollbackError)}`);
       }
-      try { closeSync(writtenFd); } catch { /* already closed */ }
+      try { if (writtenFd >= 0) closeSync(writtenFd); } catch { /* already closed */ }
       throw eventError;
     }
-    try { closeSync(writtenFd); } catch { /* already closed */ }
+    try { if (writtenFd >= 0) closeSync(writtenFd); } catch { /* already closed */ }
     return { old_tags: oldTags, new_tags: newTags };
   } finally { releaseTagsLock(lockHandle); }
 }

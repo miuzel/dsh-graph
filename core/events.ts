@@ -4,6 +4,7 @@ import { appendFileSync, readFileSync, existsSync, mkdirSync, openSync, writeSyn
 import { join } from "node:path";
 import { invalidate as invalidateBoardCache } from "./cache-state.ts";
 import { STATUSES } from "./machine.ts";
+import { isProcessAlive, syncDirectorySafely } from "./platform.ts";
 
 export interface GraphEvent {
   ts: string;
@@ -226,7 +227,12 @@ export function withMemoryLock<T>(root: string, fn: () => T): T {
       if (e?.code !== "EEXIST") throw e;
       try {
         const lease = JSON.parse(readFileSync(lock, "utf8"));
-        let alive = true; try { process.kill(Number(lease.pid), 0); } catch { alive = false; }
+        let alive = true;
+        try {
+          alive = isProcessAlive(Number(lease.pid));
+        } catch {
+          alive = true; // 出错保守判存活，避免在 Windows 权限异常时误抢锁
+        }
         if (!alive && Number(lease.expires) < Date.now()) { unlinkSync(lock); continue; }
       } catch {}
       const wait = new Int32Array(new SharedArrayBuffer(4));
@@ -247,7 +253,7 @@ export function appendMemoryEvent(
   const fd = openSync(join(memDir, "memory.jsonl"), "a");
   try {
     writeSync(fd, JSON.stringify(rec) + "\n", undefined, "utf8"); fsyncSync(fd);
-    const dirfd = openSync(memDir, "r"); try { fsyncSync(dirfd); } finally { closeSync(dirfd); }
+    syncDirectorySafely(memDir);
   } finally { closeSync(fd); }
   return rec;
 }

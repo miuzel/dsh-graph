@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync, existsSync, mkdirSync, openSync, writeSyn
 import { join } from "node:path";
 import { invalidate as invalidateBoardCache } from "./cache-state.js";
 import { STATUSES } from "./machine.js";
+import { isProcessAlive, syncDirectorySafely } from "./platform.js";
 export function nowIso() {
     // 本地时区 ISO（含偏移），与历史手写事件（+08:00）保持一致
     const d = new Date();
@@ -200,10 +201,10 @@ export function withMemoryLock(root, fn) {
                 const lease = JSON.parse(readFileSync(lock, "utf8"));
                 let alive = true;
                 try {
-                    process.kill(Number(lease.pid), 0);
+                    alive = isProcessAlive(Number(lease.pid));
                 }
                 catch {
-                    alive = false;
+                    alive = true; // 出错保守判存活，避免在 Windows 权限异常时误抢锁
                 }
                 if (!alive && Number(lease.expires) < Date.now()) {
                     unlinkSync(lock);
@@ -236,13 +237,7 @@ export function appendMemoryEvent(root, ev) {
     try {
         writeSync(fd, JSON.stringify(rec) + "\n", undefined, "utf8");
         fsyncSync(fd);
-        const dirfd = openSync(memDir, "r");
-        try {
-            fsyncSync(dirfd);
-        }
-        finally {
-            closeSync(dirfd);
-        }
+        syncDirectorySafely(memDir);
     }
     finally {
         closeSync(fd);
