@@ -165,7 +165,7 @@ test("g-253 判据 4：角色纪律在 persona 切换与 standard/minimal 下不
     goal: "g-253",
     attempt: "att-001",
     goalRel: ".dsh-graph/versions/v0.10.0/goals/g-253/goal.md",
-    worktreeBlock: resolveWorktreeGuide("task"),
+    worktreeBlock: resolveWorktreeGuide("task", true),
   });
   assert.match(prompt, /【强制 worktree 隔离】/);
   assert.match(prompt, /【禁区】绝不自行 graph_transition 到 "delivered"/);

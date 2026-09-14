@@ -347,11 +347,11 @@ const GUIDE = requirePromptAsset("supervisor-guide", "zh");
 
 // g-120：worktree 与 minor-task 指令按 locale 整体加载 prompts/*.md
 
-export function resolveWorktreeGuide(goalType, explicitWorktree, language = "zh") {
-  if (explicitWorktree === false) return "";
-  if (explicitWorktree === true) return requirePromptAsset("worktree", language);
+export function resolveWorktreeGuide(goalType, isolate, language = "zh") {
+  // g-283：契约改为「已解析的 isolate: boolean」，提示词隔离声明必须与「本次是否真的建树」严格一致。
+  if (isolate === true) return requirePromptAsset("worktree", language);
   if (goalType === "patch" || goalType === "chore") return requirePromptAsset("minor-task", language);
-  return requirePromptAsset("worktree", language);
+  return requirePromptAsset("no-isolation", language);
 }
 
 
@@ -1123,7 +1123,9 @@ export function apply(ctx, config) {
     const goalRel = goalFile ? relative(workspace, goalFile) : null;
     let gType = "task";
     try { gType = normalizeGoalType(doc.meta.type); } catch {}
-    const worktreeBlock = resolveWorktreeGuide(gType, worktree, promptLanguage);
+    // g-283：先解析「本次是否真的建树」，再据此决定提示词隔离声明，二者严格一致、零例外。
+    const isWorktree = worktree !== undefined ? Boolean(worktree) : defaultWorktreeForGoalType(gType);
+    const worktreeBlock = resolveWorktreeGuide(gType, isWorktree, promptLanguage);
     const subagentPromptSection = (() => {
       const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(root, "subagent_prompt"));
       return p ? ["## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join("\n") : null;
@@ -1135,9 +1137,6 @@ export function apply(ctx, config) {
     mkdirSync(attemptsDir, { recursive: true });
     const seq = readdirSync(attemptsDir).filter((d) => d.startsWith("att-")).length + 1;
     const nextAttId = `att-${String(seq).padStart(3, "0")}`;
-
-    // g-283：确定是否隔离到独立 worktree（GUI 显式参数 / 工具调用 / 目标类型默认）
-    const isWorktree = worktree !== undefined ? Boolean(worktree) : defaultWorktreeForGoalType(gType);
 
     // 真实创建 / 幂等复用 / 失败即停（在状态迁移与创建 attempt 之前执行，失败即停零副作用）
     const wtResult = prepareAttemptWorktree(root, goal, nextAttId, {

@@ -535,14 +535,14 @@ test("g-241 判据 5：显式隔离优先级协同回归（g-218 规则）——
   assert.ok(prompt2.includes("【微小改动/轻量任务快速通道】"));
   assert.ok(prompt2.includes("豁免独立 worktree 隔离"));
 
-  // 3. patch 目标显式 worktree=false → 完全省略隔离指令
+  // 3. patch 目标显式 worktree=false → 仍走 minor-task 豁免指引（不强制隔离）
   await toolsByName.get("graph_start_attempt")!.execute(
     { goal: patchGoal, worktree: false, attempt_brief: "完全豁免" },
     execContext,
   );
   const prompt3 = capturedRequests[2].request.prompt[0].text;
   assert.ok(!prompt3.includes("【强制 worktree 隔离】"));
-  assert.ok(!prompt3.includes("【微小改动/轻量任务快速通道】"));
+  assert.ok(prompt3.includes("【微小改动/轻量任务快速通道】"), "patch 显式 worktree=false → minor-task 豁免指引");
 });
 
 test("g-241 判据 5：绑定与派发失败收敛——子代理启动异常时 attempt 成功审计，child_error 明确上报，无无主运行 child", async () => {
