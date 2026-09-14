@@ -388,3 +388,53 @@ test("g-270: amendGoal(appendDescription) 遇到描述中围栏内 ## 追加在�
   assert.ok(fenceEndIdx >= 0 && appendIdx > fenceEndIdx, "追加内容必须位于代码块闭合标记之后，绝不可插进代码块内部");
   assert.equal(sectionText(updatedDoc.body, "质量判据")?.trim(), "1. 判据一", "后续质量判据保持完好");
 });
+
+// ---- ⑦ g-275: Markdown 共享模块抽取与卡片抽屉复用测试 ----
+
+test("g-275: Markdown 共享模块抽取——build-client.sh 纳入 markdown.js，goal-modal 与 card-drawer 共享不重复定义", () => {
+  const buildScript = readFileSync("scripts/build-client.sh", "utf8");
+  assert.ok(buildScript.includes('"markdown"'), "build-client.sh 的 PARTS 列表必须包含 markdown 模块");
+  assert.ok(
+    buildScript.indexOf('"markdown"') < buildScript.indexOf('"card-drawer"') &&
+    buildScript.indexOf('"markdown"') < buildScript.indexOf('"goal-modal"'),
+    "markdown 必须排在 card-drawer 与 goal-modal 之前以供两者复用",
+  );
+
+  const markdownModule = readFileSync("dsh-graph-host/lib/client/markdown.js", "utf8");
+  assert.ok(markdownModule.includes("function parseInlineMarkdown("), "markdown.js 必须定义 parseInlineMarkdown");
+  assert.ok(markdownModule.includes("function renderSimpleMarkdown("), "markdown.js 必须定义 renderSimpleMarkdown");
+  assert.ok(markdownModule.includes("class MarkdownErrorBoundary"), "markdown.js 必须定义 MarkdownErrorBoundary");
+  assert.ok(markdownModule.includes("function markdownSegStyle("), "markdown.js 必须定义 markdownSegStyle");
+  assert.ok(markdownModule.includes("function MarkdownViewToggle("), "markdown.js 必须定义 MarkdownViewToggle");
+  assert.ok(markdownModule.includes("function GoalMarkdown("), "markdown.js 必须定义 GoalMarkdown");
+
+  const goalModal = readFileSync("dsh-graph-host/lib/client/goal-modal.js", "utf8");
+  assert.ok(!goalModal.includes("function parseInlineMarkdown("), "goal-modal.js 不应再重复定义 parseInlineMarkdown");
+  assert.ok(!goalModal.includes("function renderSimpleMarkdown("), "goal-modal.js 不应再重复定义 renderSimpleMarkdown");
+  assert.ok(!goalModal.includes("function GoalMarkdown("), "goal-modal.js 不应再重复定义 GoalMarkdown");
+  assert.ok(!goalModal.includes("class MarkdownErrorBoundary"), "goal-modal.js 不应再重复定义 MarkdownErrorBoundary");
+  assert.ok(goalModal.includes("MarkdownViewToggle"), "goal-modal.js 必须复用 MarkdownViewToggle");
+  assert.ok(goalModal.includes("GoalMarkdown"), "goal-modal.js 必须复用 GoalMarkdown");
+
+  const cardDrawer = readFileSync("dsh-graph-host/lib/client/card-drawer.js", "utf8");
+  assert.ok(!cardDrawer.includes("function parseInlineMarkdown("), "card-drawer.js 不应重复定义 parseInlineMarkdown");
+  assert.ok(!cardDrawer.includes("function renderSimpleMarkdown("), "card-drawer.js 不应重复定义 renderSimpleMarkdown");
+  assert.ok(!cardDrawer.includes("function GoalMarkdown("), "card-drawer.js 不应重复定义 GoalMarkdown");
+  assert.ok(cardDrawer.includes("MarkdownViewToggle"), "card-drawer.js 必须复用 MarkdownViewToggle");
+  assert.ok(cardDrawer.includes("GoalMarkdown"), "card-drawer.js 必须复用 GoalMarkdown");
+  assert.ok(cardDrawer.includes("viewMode"), "card-drawer.js 必须包含 viewMode 状态");
+
+  const clientBundle = readFileSync("dsh-graph-host/lib/client.js", "utf8");
+  assert.ok(clientBundle.includes("function MarkdownViewToggle("), "Bundle 必须包含 MarkdownViewToggle");
+  assert.ok(clientBundle.includes("function markdownSegStyle("), "Bundle 必须包含 markdownSegStyle");
+});
+
+test("g-275: i18n 字典完整性——卡片抽屉 Markdown 切换提示词中英齐备", () => {
+  const i18n = readFileSync("dsh-graph-host/lib/client/i18n.js", "utf8");
+  assert.ok(i18n.includes("'drawer.viewMarkdownTip': '阅读模式：以 Markdown 渲染展示卡片正文'"), "zh 应包含 drawer.viewMarkdownTip");
+  assert.ok(i18n.includes("'drawer.viewRawTip': 'Markdown原文：显示卡片正文的原始 Markdown 文本'"), "zh 应包含 drawer.viewRawTip");
+  assert.ok(i18n.includes("'drawer.viewMarkdownTip': 'Reading mode: render the card text as Markdown'"), "en 应包含 drawer.viewMarkdownTip");
+  assert.ok(i18n.includes("'drawer.viewRawTip': 'Markdown source: show the raw Markdown text of the card'"), "en 应包含 drawer.viewRawTip");
+  assert.ok(i18n.includes("'description.viewMarkdown'"), "i18n 必须包含 description.viewMarkdown");
+  assert.ok(i18n.includes("'description.viewRaw'"), "i18n 必须包含 description.viewRaw");
+});
