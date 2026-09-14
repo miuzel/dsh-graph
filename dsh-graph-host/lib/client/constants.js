@@ -417,6 +417,11 @@
       body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block *:not(button) {
         background: transparent;
       }
+      /* 标题 banner（复制条）恢复与代码区的边界：更浅的底 + 细分隔线（负责人反馈"缺少原本的边界"） */
+      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block > div:first-child {
+        background: #ffffff;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+      }
       body:not([data-ds-dark-theme]) .dg-description-preview code {
         background: rgba(0, 0, 0, 0.06);
       }
@@ -433,6 +438,10 @@
       }
       body[data-ds-dark-theme] .dg-description-preview .md-code-block *:not(button) {
         background: transparent;
+      }
+      body[data-ds-dark-theme] .dg-description-preview .md-code-block > div:first-child {
+        background: rgba(255, 255, 255, 0.05);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
       }
       body[data-ds-dark-theme] .dg-description-preview code {
         background: rgba(255, 255, 255, 0.06);
