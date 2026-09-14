@@ -192,6 +192,7 @@ window.__ModuleLoader__.load({
       'tab.detail': '📋 详情',
       'tab.activity': '🕘 近期动态',
       'tab.context': '📌 执行上下文',
+      'tab.worktree': '🌿 Worktree',
       'tab.goalFile': '📄 goal.md',
       'tab.openFile': '打开',
       'tab.copyPath': '复制路径',
@@ -338,6 +339,7 @@ window.__ModuleLoader__.load({
       'worktree.expandTooltip': '展开 worktree 列表',
       'worktree.unavailable': '⚠️ Git worktree 列表不可用，无法发现 worktree',
       'worktree.notCreated': '未创建 worktree',
+      'worktree.noAttempts': '暂无 attempt 执行记录与 worktree',
       'worktree.copyPathTooltip': '复制安全相对路径',
       'worktree.pathCopied': '✅ worktree 路径已复制',
       // g-272 att-002：服务端 worktree 候选/清理 reason 稳定枚举 → 中文映射（key 后缀即枚举值原文）
@@ -1146,6 +1148,7 @@ window.__ModuleLoader__.load({
       'tab.detail': '📋 Details',
       'tab.activity': '🕘 Activity',
       'tab.context': '📌 Execution Context',
+      'tab.worktree': '🌿 Worktree',
       'tab.goalFile': '📄 goal.md',
       'tab.openFile': 'Open',
       'tab.copyPath': 'Copy path',
@@ -1292,6 +1295,7 @@ window.__ModuleLoader__.load({
       'worktree.expandTooltip': 'Expand worktree list',
       'worktree.unavailable': '⚠️ Git worktree list unavailable',
       'worktree.notCreated': 'No worktree created',
+      'worktree.noAttempts': 'No attempts or worktrees yet',
       'worktree.copyPathTooltip': 'Copy safe relative path',
       'worktree.pathCopied': '✅ Worktree path copied',
       // g-272 att-002: server worktree candidate/cleanup reason enums → English mapping (key suffix = enum verbatim)
@@ -6188,12 +6192,15 @@ window.__ModuleLoader__.load({
     }
 
     // g-189：只展示服务端按 canonical workspace 只读发现的 worktree；不自行执行 git。
+    // g-276：作为独立 tab 展示，默认全量展开，无需折叠按钮。
     function AttemptWorktrees(props) {
       const attempts = props.attempts ?? [];
       const discovery = props.worktrees ?? { status: "unavailable", items: {} };
-      const [expanded, setExpanded] = React.useState(false);
-      if (!attempts.length) return null;
-      const latest = [...attempts].reverse().find((a) => discovery.items?.[a.id]);
+      if (!attempts.length) {
+        return h("div", { key: "worktrees", style: S.modalSection },
+          h("div", { style: S.modalH }, dgT("worktree.attemptTitle")),
+          h("div", { style: { ...S.meta, fontSize: 12, marginTop: 4 } }, dgT("worktree.noAttempts")));
+      }
       const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: dgT("worktree.copyPathTooltip"), onClick: async () => { if (await copyText(item.path)) showToast(dgT("worktree.pathCopied")); } }, dgT("common.copy")) : null;
       // i18n-keep(category-a)：匹配服务端 index.js 下发的遗留中文状态值（"正常"/"已锁定"）与本地合成哨兵（"已移除"），非 UI 文案源。
       const formatWorktreeStatus = (status) => {
@@ -6210,16 +6217,16 @@ window.__ModuleLoader__.load({
           copyButton(item));
       };
       return h("div", { key: "worktrees", style: S.modalSection },
-        h("div", { style: { ...S.modalH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
-          h("span", null, dgT("worktree.attemptTitle")),
-          h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 12, padding: "0 5px" }, title: expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), "aria-label": expanded ? dgT("worktree.collapseTooltip") : dgT("worktree.expandTooltip"), onClick: () => setExpanded((v) => !v) }, expanded ? "▲" : "▼")),
-        discovery.status !== "ok" ? h("div", { style: { ...S.meta, fontSize: 12 } }, dgT("worktree.unavailable")) : expanded ? attempts.map(row) : latest ? row(latest) : h("div", { style: { ...S.meta, fontSize: 11, marginTop: 4 } }, dgT("worktree.notCreated")));
+        h("div", { style: S.modalH }, dgT("worktree.attemptTitle")),
+        ...(discovery.status !== "ok"
+          ? [h("div", { style: { ...S.meta, fontSize: 12, marginTop: 4 } }, dgT("worktree.unavailable"))]
+          : attempts.map(row)));
     }
 
     function GoalModal(props) {
       useLocaleRevision();
       const [state, setState] = React.useState({ loading: true });
-      const [tab, setTab] = React.useState("detail"); // "detail" | "context" | "activity"
+      const [tab, setTab] = React.useState("detail"); // "detail" | "worktree" | "context" | "activity"
       const [logSort, setLogSort] = React.useState("desc"); // "desc" | "asc"
       const [logFilter, setLogFilter] = React.useState(""); // "" 全部 / 事件名
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新执行的模型路由（显示兜底）
@@ -6449,8 +6456,6 @@ window.__ModuleLoader__.load({
         // 判断是否是 backlog 目标（backlog 目标不能建卡）
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
-          h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
-          status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
           h(GoalTagsEditor, { key: "tags", goalId: props.id, tags: meta.tags ?? props.tags, onChange: () => { load(); props.onTagsChanged?.(); } }),
           desc != null ? h(DescriptionBox, { key: "description", goalId: props.id, description: desc, onRefresh: load,
             extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose }) }) : null,
@@ -6503,6 +6508,11 @@ window.__ModuleLoader__.load({
           h(HandoffBox, { key: "hf", goalId: props.id, handoff: d.handoff, attempts: d.attempts, onRefresh: load }),
           h(DirectiveBox, { key: "dir", goalId: props.id, directive: d.directive, onRefresh: load }),
           h(CommentsBox, { key: "cmt", goalId: props.id, comments: d.comments ?? [], onRefresh: load }),
+        ];
+        // g-276：独立 worktree tab（默认全量展开，无折叠开关；delivered 时展示清理候选）
+        const worktreeTab = [
+          h(AttemptWorktrees, { key: "worktrees", attempts: d.attempts, worktrees: d.worktrees }),
+          status === "delivered" ? h(WorktreeCandidates, { key: "wt-candidates", goalId: props.id }) : null,
         ];
         const activityTab = (() => {
           const meaningful = (d.events ?? []).filter((e) => MEANINGFUL.has(e.event));
@@ -6578,6 +6588,19 @@ window.__ModuleLoader__.load({
               style: {
                 fontSize: 12, padding: "5px 14px", cursor: "pointer",
                 marginBottom: -1, borderRadius: "6px 6px 0 0",
+                border: "1px solid " + (tab === "worktree" ? "rgba(128,128,128,.35)" : "transparent"),
+                borderBottom: "none",
+                background: tab === "worktree" ? "rgba(128,128,128,.10)" : "transparent",
+                fontWeight: tab === "worktree" ? 700 : 400,
+                color: tab === "worktree" ? "var(--dsw-alias-label-primary, #8ab4ff)" : "inherit",
+                opacity: tab === "worktree" ? 1 : 0.7,
+              },
+              onClick: () => setTab("worktree"),
+            }, dgT("tab.worktree")),
+            h("button", {
+              style: {
+                fontSize: 12, padding: "5px 14px", cursor: "pointer",
+                marginBottom: -1, borderRadius: "6px 6px 0 0",
                 border: "1px solid " + (tab === "activity" ? "rgba(128,128,128,.35)" : "transparent"),
                 borderBottom: "none",
                 background: tab === "activity" ? "rgba(128,128,128,.10)" : "transparent",
@@ -6632,7 +6655,7 @@ window.__ModuleLoader__.load({
             style: { border: "1px solid rgba(128,128,128,.35)", borderTop: "none",
                      borderRadius: "0 6px 6px 6px", padding: "10px 12px",
                      background: "rgba(128,128,128,.06)" },
-          }, tab === "detail" ? detailTab : tab === "context" ? contextTab : activityTab),
+          }, tab === "detail" ? detailTab : tab === "worktree" ? worktreeTab : tab === "context" ? contextTab : activityTab),
         ];
       }
 
