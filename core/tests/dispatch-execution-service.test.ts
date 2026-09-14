@@ -470,7 +470,14 @@ test("g-241 判据 5：准入门禁失败协同回归——未规划/阻塞/已�
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
 
   // 1. draft 目标（草稿未排期）
+  // g-287：自然路径已不再产生「非 backlog 的 draft」（独立/版本目标创建即 planning，
+  // draft 精确等价于「在 backlog」），故此处直接构造非 backlog 的 draft frontmatter，
+  // 保住 assertExecutionAdmission 中 `status === "draft"` 这条防御性拒绝分支的覆盖。
   const draftGoal = createGoal(root, { title: "草稿目标", version: "standalone", actor: "test" });
+  const draftFile = findGoalFile(root, draftGoal);
+  const draftDoc = loadGoal(draftFile);
+  draftDoc.meta.status = "draft";
+  saveGoal(draftFile, draftDoc);
   await assert.rejects(
     () => toolsByName.get("graph_start_attempt")!.execute({ goal: draftGoal }, execContext),
     /草稿目标未规划，不允许直接执行/,

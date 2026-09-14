@@ -273,7 +273,8 @@ test("非 backlog 目标 goalDetail 返回正常且可建卡", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "standalone", version: "standalone", actor: "test" });
   const d = goalDetail(root, id);
-  assert.equal(d.meta.status, "draft");
+  // g-287：独立目标创建即为 planning（draft 现在精确等价于「在 backlog」）
+  assert.equal(d.meta.status, "planning");
   assert.ok(d.goalFile.endsWith("/goal.md"), "standalone 文件名应为 goal.md");
   const c = addCard(root, id, { title: "card1", kind: "text", actor: "test", scope: "goal" });
   assert.ok(c.startsWith("card-"));
