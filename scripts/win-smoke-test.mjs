@@ -6,12 +6,19 @@
  *   `core/ops.js` 的 POSIX 常量具名导入（`node:constants` 在 Windows 无 O_DIRECTORY），
  *   插件在 Windows 上「完全无法加载」。本脚本把那次事故拆成可复跑的检查项。
  *
- * 用法（Windows 上任意目录）：
- *   node win-smoke-test.mjs                                  # 从 npm 装 dsh-graph 最新版并全量验收
- *   node win-smoke-test.mjs --spec dsh-graph@0.11.0          # 指定版本
- *   node win-smoke-test.mjs --path C:\src\dsh-graph\dsh-graph-host   # 发布前验证本地构建
+ * 用法（Windows 上任意目录；本脚本是单文件、无第三方依赖，可单独拷到 Windows 运行）：
+ *   node win-smoke-test.mjs --tarball D:\path\dsh-graph-0.11.0-alpha.tgz   # 直接验一个现成 tarball（推荐）
+ *   node win-smoke-test.mjs --spec dsh-graph@0.11.0    # 从 npm registry 安装并验证
+ *   node win-smoke-test.mjs --path C:\src\dsh-graph\dsh-graph-host   # 从本地源码目录打包后验证
  *   node win-smoke-test.mjs --static-only C:\src\dsh-graph   # 只跑静态门禁（秒级，跨平台，无需网络）
  *   node win-smoke-test.mjs --self-test                      # 离线自检本脚本自身的判定逻辑
+ *
+ * 三种安装来源的区别（重要）：
+ *   --tarball / --spec 都是「真实安装」语义：pnpm 会把包解开并**安装它的 dependencies**，
+ *   与用户从 registry 安装完全一致，不受包所在磁盘位置影响。
+ *   --path 会先 `npm pack --ignore-scripts` 打包再安装（同样是真实安装语义），
+ *   因为直接 `plugin add <目录>` 会被 pnpm 处理成 link:，**不会安装该包的依赖**，
+ *   而且解析会顺着包上层目录命中开发仓库的 node_modules —— 造成「本地通过、用户机器崩溃」的假通过。
  *
  * 检查分层（T1/T2 的平台敏感性最低，T4/T5 才是 Windows 真正要跑的）：
  *   T1 静态门禁   跨平台：发布包内不得对 POSIX 专有常量做 ESM 具名导入（可直接预测 Windows 崩溃）
@@ -27,6 +34,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
@@ -91,8 +99,9 @@ function usage(msg) {
   if (msg) console.error(`\n参数错误：${msg}`);
   console.error(
     "\n用法：node win-smoke-test.mjs [选项]\n\n" +
-    "  --spec <spec>        从 npm 安装的包（默认 dsh-graph，可写 dsh-graph@0.11.0）\n" +
-    "  --path <dir>         改为安装本地目录（发布前验证本地构建；指向 dsh-graph-host 或其父目录）\n" +
+    "  --tarball <file>     直接验证一个现成的 .tgz 安装包（推荐：无需仓库/分支，拷一个文件即可）\n" +
+    "  --spec <spec>        从 npm registry 安装（默认 dsh-graph，可写 dsh-graph@0.11.0）\n" +
+    "  --path <dir>         从本地源码目录验证（先 npm pack 成 tarball 再安装，指向 dsh-graph-host 或其父目录）\n" +
     "  --port <n>           web 实例端口（默认 3088；被占用时自动顺延）\n" +
     "  --profile <name>     隔离 profile 名（默认 win-smoke）\n" +
     "  --dsh-home <dir>     隔离 DSH_HOME（默认 <%TEMP%>\\dsh-graph-win-smoke-<时间戳>）\n" +
@@ -112,6 +121,7 @@ function parseCli() {
     parsed = parseArgs({
       options: {
         spec: { type: "string" },
+        tarball: { type: "string" },
         path: { type: "string" },
         port: { type: "string" },
         profile: { type: "string" },
@@ -131,9 +141,17 @@ function parseCli() {
   }
   const v = parsed.values;
   if (v.help) usage();
-  if (v.path && v.spec) usage("--path 与 --spec 互斥，只能选一个安装来源");
+  const sources = [v.path && "--path", v.tarball && "--tarball", v.spec && "--spec"].filter(Boolean);
+  if (sources.length > 1) usage(`${sources.join(" 与 ")} 互斥，只能选一个安装来源`);
+  if (v.tarball) {
+    const t = resolve(v.tarball);
+    if (!/\.tgz$|\.tar\.gz$/i.test(t)) usage(`--tarball 需要 .tgz 文件：${t}`);
+    if (!existsSync(t)) usage(`--tarball 指定的文件不存在：${t}`);
+    if (!statSync(t).isFile()) usage(`--tarball 不是文件：${t}`);
+  }
   return {
     spec: v.spec ?? "dsh-graph",
+    tarball: v.tarball ? resolve(v.tarball) : null,
     path: v.path ? resolve(v.path) : null,
     port: v.port ? Number(v.port) : 3088,
     profile: v.profile ?? "win-smoke",
@@ -152,8 +170,22 @@ function splitCmd(cmd) {
   return cmd.trim().split(/\s+/);
 }
 
+/**
+ * Windows 上走 shell（cmd.exe）执行 .cmd 时，Node 不会自动为参数加引号；
+ * 含空格/中文的路径（例如放在「我的文档」下的 tarball）会被截断 —— 这里显式加引号。
+ */
+/** 纯函数形式（便于在非 Windows 上做离线自检）。 */
+function quoteForCmd(args) {
+  return args.map((a) =>
+    typeof a === "string" && /[\s"&^|<>]/.test(a) && !/^".*"$/.test(a) ? `"${a}"` : a);
+}
+
+function shellSafeArgs(args) {
+  return isWin ? quoteForCmd(args) : args;
+}
+
 function runSync(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, {
+  const r = spawnSync(cmd, shellSafeArgs(args), {
     encoding: "utf8",
     shell: isWin,               // Windows 上 .cmd 需要 shell
     maxBuffer: 32 * 1024 * 1024,
@@ -189,6 +221,10 @@ function sleep(ms) {
 // ---------------------------------------------------------------------------
 // T1 静态门禁：发布包内不得具名导入 POSIX 专有常量
 // ---------------------------------------------------------------------------
+
+function sha256File(file) {
+  return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
 
 /** 接受「包目录」或「仓库根」；返回包目录。 */
 function resolvePackageDir(dir) {
@@ -426,7 +462,7 @@ async function tier45Boot(ctx) {
   const [cmd, ...prefix] = splitCmd(ctx.dshCmd);
   // 命名 profile 的启动形式是 `dsh --profile <p> [web 应用参数…]`（见 scripts/dev-dsh-instance.sh）；
   // `dsh web` 是固定 web profile 的别名，不接受 --profile。
-  const child = spawn(cmd, [...prefix, "--profile", ctx.profile, "--no-open", "--port", String(ctx.port)], {
+  const child = spawn(cmd, shellSafeArgs([...prefix, "--profile", ctx.profile, "--no-open", "--port", String(ctx.port)]), {
     cwd: ctx.workspace,
     env: { ...process.env, DSH_HOME: ctx.dshHome },
     shell: isWin,
@@ -566,6 +602,11 @@ function selfTest() {
   check("就绪行可被解析",
     READY_RE.exec("dsh web: http://127.0.0.1:3088/?token=T")?.[1] === "http://127.0.0.1:3088/?token=T");
   check("命令行拆分正确", splitCmd("npx -y @deepseek-ai/dsh").join("|") === "npx|-y|@deepseek-ai/dsh");
+  check("--tarball 路径含空格时按 cmd 规则加引号",
+    quoteForCmd(["plugin", "add", "D:\\my docs\\dsh-graph-0.11.0-alpha.tgz"]).join("|") ===
+    'plugin|add|"D:\\my docs\\dsh-graph-0.11.0-alpha.tgz"');
+  check("无空格路径不被加引号",
+    quoteForCmd(["add", ".\\dsh-graph-0.11.0-alpha.tgz"]).join("|") === "add|.\\dsh-graph-0.11.0-alpha.tgz");
   check("包目录解析：仓库根 → dsh-graph-host",
     resolvePackageDir(process.cwd()) === process.cwd() ||
     basename(resolvePackageDir(process.cwd())) === "dsh-graph-host");
@@ -629,7 +670,8 @@ async function main() {
   // 而依赖解析会顺着包所在目录的上层 node_modules 命中依赖，于是在开发仓库内
   // 「看起来通过」，到了仓库外（或用户机器上拷贝的目录里）就 ERR_MODULE_NOT_FOUND。
   // 用 tarball 安装与 registry 安装一致，杜绝这种假通过。
-  let spec = opt.spec;
+  let spec = opt.tarball ?? opt.spec;
+  let sourceKind = opt.tarball ? "tarball" : "registry";
   if (opt.path) {
     const localPkgDir = resolvePackageDir(opt.path);
     const packed = packLocalPackage(localPkgDir, join(home, "_pack"));
@@ -638,14 +680,26 @@ async function main() {
       return finish(opt, home, { pkgDir: localPkgDir, logPath: null });
     }
     spec = packed.file;
+    sourceKind = "tarball";
     record("T2", "本地目录已打包为 tarball", "PASS",
       `${basename(packed.file)}（与 registry 安装同语义：会真正安装 dependencies）`);
+  }
+
+  // 记录被测产物指纹：跨机器/跨渠道传 tarball 时，哈希是唯一可靠的对账依据
+  let artifactSha = "";
+  let artifactBytes = 0;
+  if (sourceKind === "tarball" && existsSync(spec)) {
+    artifactSha = sha256File(spec);
+    artifactBytes = statSync(spec).size;
+    record("T2", "被测产物指纹", "INFO", `${basename(spec)}  ${artifactBytes} B  sha256=${artifactSha}`);
   }
 
   const install = runSync(dshCmd, [...dshPrefix, "plugin", "--profile", profile, "add", spec],
     { env: { ...process.env, DSH_HOME: home }, timeout: 900_000 });
   const installOut = install.out + install.err;
-  const installLabel = opt.path ? `本地构建 ${basename(spec)}` : `安装 ${spec}`;
+  const installLabel = opt.path ? `本地构建 ${basename(spec)}`
+    : opt.tarball ? `安装 tarball ${basename(spec)}`
+    : `安装 ${spec}`;
   if (install.code === 0) {
     record("T2", installLabel, "PASS");
   } else {
@@ -698,7 +752,11 @@ async function main() {
   await sleep(300);
   killTree(boot.child);
 
-  return finish(opt, home, { pkgDir, logPath: boot.logPath, pkgVersion, tarball: opt.path ? spec : null });
+  return finish(opt, home, {
+    pkgDir, logPath: boot.logPath, pkgVersion,
+    tarball: sourceKind === "tarball" ? spec : null,
+    artifactSha, artifactBytes,
+  });
 }
 
 function finish(opt, home, extra) {
@@ -736,7 +794,13 @@ function summarize(opt, extra) {
 
   console.log("\n----- 可复制回传的报告 -----");
   console.log(`dsh-graph Windows 冒烟 | 平台=${process.platform}/${process.arch} node=${process.version}`);
-  console.log(`安装来源=${opt.path ? `本地构建 ${basename(extra?.tarball ?? opt.path)}` : opt.spec}${extra?.pkgVersion ? ` (实际版本 ${extra.pkgVersion})` : ""}`);
+  const sourceLabel = extra?.tarball
+    ? `${basename(extra.tarball)}${opt.path ? "（由本地目录打包）" : ""}`
+    : opt.spec;
+  console.log(`安装来源=${sourceLabel}${extra?.pkgVersion ? ` (实际版本 ${extra.pkgVersion})` : ""}`);
+  if (extra?.artifactSha) {
+    console.log(`产物指纹=sha256:${extra.artifactSha}  ${extra.artifactBytes} B`);
+  }
   console.log(`结果=${pass ? "PASS" : "FAIL"} 通过${passes.length}/失败${fails.length}/告警${warns.length}`);
   for (const r of results.filter((x) => x.level === "FAIL" || x.level === "WARN")) {
     console.log(`  ${r.level} ${r.tier} ${r.name}${r.detail ? " :: " + r.detail.slice(0, 300) : ""}`);

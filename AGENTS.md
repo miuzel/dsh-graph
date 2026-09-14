@@ -206,11 +206,30 @@ node --test core/tests/*.test.ts
 - **T5 REST 冒烟**：dsh-graph 路由已注册、看板载荷可读（证明插件真的 apply）。
 
 ```sh
-node scripts/win-smoke-test.mjs                              # 从 npm 安装 dsh-graph 并全量验收
-node scripts/win-smoke-test.mjs --path <dsh-graph-host 目录>  # 发布前验证本地构建
-node scripts/win-smoke-test.mjs --static-only .              # 秒级静态门禁（跨平台）
-node scripts/win-smoke-test.mjs --self-test                  # 离线自检脚本自身判定逻辑
+# Windows 侧（没有仓库、没有分支）：把脚本与产出的 tarball 一起拷过去即可
+node win-smoke-test.mjs --tarball D:\path\dsh-graph-<版本>.tgz   # 推荐：直接验现成安装包
+
+# 开发机（有仓库/分支）
+node scripts/win-smoke-test.mjs --path <dsh-graph-host 目录>      # 从本地源码打包后验证
+node scripts/win-smoke-test.mjs --spec dsh-graph@<版本>           # 从 registry 验证
+node scripts/win-smoke-test.mjs --static-only .                   # 秒级静态门禁（跨平台）
+node scripts/win-smoke-test.mjs --self-test                       # 离线自检脚本自身判定逻辑
 ```
+
+**产物传递纪律**：Windows 机器上通常**没有本仓库、也没有开发分支**（负责人明确：暂不把 dev 分支推 GitHub）。
+因此跨机器传递的**唯一渠道是安装包（tarball）**，验证也应以 tarball 为一等输入：
+
+1. 开发机产出：`cd dsh-graph-host && npm pack --ignore-scripts --pack-destination <目录>`
+   （`--ignore-scripts` 同时绕过依赖 `bash` 的 `prepack`，后者在原生 Windows 不可用）；
+2. 记录 `sha256sum <tarball>` 一并交付，Windows 侧报告里的 `产物指纹=sha256:…` 用于对账
+   （确认两边验的是同一个产物）；
+3. Windows 侧：`plugin --profile <p> add <tarball>` 安装 → `dsh --profile <p> --port <非 3080>`
+   启动（`dsh web` 是固定 `web` profile 的别名；命名 profile 用 `dsh --profile <p> [应用参数]`）；
+4. 跑 `node win-smoke-test.mjs --tarball <tarball>` 取 T1–T5 完整结论并回传报告段。
+
+> 注意：`plugin add <目录>` 会被 pnpm 处理成 `link:`，**不会安装该包的 dependencies**，
+> 且依赖解析会命中包上层目录的 `node_modules` —— 在开发仓库内「看起来通过」，
+> 到用户机器上才 `ERR_MODULE_NOT_FOUND`。本脚本的 `--path` 一律先打包成 tarball 再用真实安装语义验证。
 
 在 Linux/WSL2 上运行只对 T1/T2 结论有效；**T3–T5 的 PASS 不能替代 Windows 真机结论**（脚本会自行提示）。
 
