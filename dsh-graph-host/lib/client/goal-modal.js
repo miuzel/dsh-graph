@@ -493,6 +493,8 @@
       const [text, setText] = React.useState(description ?? "");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
+      // g-270：只读态展示模式——markdown 渲染 / 原文
+      const [viewMode, setViewMode] = React.useState("markdown");
 
       React.useEffect(() => { setText(description ?? ""); }, [description]);
 
@@ -525,6 +527,13 @@
         setNote(null);
       };
       const hasContent = (description ?? "").trim().length > 0;
+      // g-270：标题行最右侧的「渲染 / 原文」切换（仅只读态且有内容时出现）
+      const segStyle = (active) => ({
+        ...S.btn, fontSize: 11, padding: "1px 6px",
+        opacity: active ? 1 : 0.5,
+        fontWeight: active ? 600 : 400,
+        borderColor: active ? "var(--dsw-alias-border-l1, rgba(76,141,255,.55))" : undefined,
+      });
 
       return h("div", { style: S.modalSection },
         h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
@@ -535,6 +544,20 @@
                 title: dgT("description.editInPlace"),
                 onClick: () => { setEditing(true); setText(description ?? ""); setNote(null); },
               }, hasContent ? dgT("description.edit") : dgT("description.editEmpty"))
+            : null,
+          h("div", { style: { flex: 1 } }),
+          !editing && hasContent
+            ? h("div", { className: "dg-desc-view-toggle", style: { display: "inline-flex", gap: 4 } },
+                h("button", {
+                  className: "dg-btn", style: segStyle(viewMode === "markdown"),
+                  title: dgT("description.viewMarkdownTip"),
+                  onClick: () => setViewMode("markdown"),
+                }, dgT("description.viewMarkdown")),
+                h("button", {
+                  className: "dg-btn", style: segStyle(viewMode === "raw"),
+                  title: dgT("description.viewRawTip"),
+                  onClick: () => setViewMode("raw"),
+                }, dgT("description.viewRaw")))
             : null),
         editing
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
@@ -556,7 +579,19 @@
                 }, dgT("common.cancel"))))
           : h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
               hasContent
-                ? h(GoalMarkdown, { text: description })
+                ? (viewMode === "raw"
+                    ? h("div", {
+                        className: "dg-markdown-body dg-description-preview",
+                        style: {
+                          whiteSpace: "pre-wrap",
+                          fontSize: 12,
+                          lineHeight: 1.6,
+                          overflowWrap: "anywhere",
+                          wordBreak: "break-word",
+                          color: "var(--dsw-alias-label-primary, inherit)",
+                        }
+                      }, description)
+                    : h(GoalMarkdown, { text: description }))
                 : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("description.empty"))),
         extra ?? null,
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);

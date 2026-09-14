@@ -205,6 +205,10 @@ window.__ModuleLoader__.load({
       'description.editInPlace': '就地编辑目标描述',
       'description.edit': '✏️ 编辑',
       'description.editEmpty': '📝 编辑描述',
+      'description.viewMarkdown': '阅读模式',
+      'description.viewRaw': 'Markdown原文',
+      'description.viewMarkdownTip': '阅读模式：以 Markdown 渲染展示描述',
+      'description.viewRawTip': 'Markdown原文：显示描述的原始 Markdown 文本',
       'description.placeholder': '输入目标描述…（支持 markdown）',
       'description.save': '💾 保存',
       'description.empty': '（无描述）',
@@ -1155,6 +1159,10 @@ window.__ModuleLoader__.load({
       'description.editInPlace': 'Edit goal description in place',
       'description.edit': '✏️ Edit',
       'description.editEmpty': '📝 Edit description',
+      'description.viewMarkdown': 'Reading mode',
+      'description.viewRaw': 'Markdown source',
+      'description.viewMarkdownTip': 'Reading mode: render the description as Markdown',
+      'description.viewRawTip': 'Markdown source: show the raw Markdown text of the description',
       'description.placeholder': 'Enter goal description… (Markdown supported)',
       'description.save': '💾 Save',
       'description.empty': '(No description)',
@@ -5882,6 +5890,8 @@ window.__ModuleLoader__.load({
       const [text, setText] = React.useState(description ?? "");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
+      // g-270：只读态展示模式——markdown 渲染 / 原文
+      const [viewMode, setViewMode] = React.useState("markdown");
 
       React.useEffect(() => { setText(description ?? ""); }, [description]);
 
@@ -5914,6 +5924,13 @@ window.__ModuleLoader__.load({
         setNote(null);
       };
       const hasContent = (description ?? "").trim().length > 0;
+      // g-270：标题行最右侧的「渲染 / 原文」切换（仅只读态且有内容时出现）
+      const segStyle = (active) => ({
+        ...S.btn, fontSize: 11, padding: "1px 6px",
+        opacity: active ? 1 : 0.5,
+        fontWeight: active ? 600 : 400,
+        borderColor: active ? "var(--dsw-alias-border-l1, rgba(76,141,255,.55))" : undefined,
+      });
 
       return h("div", { style: S.modalSection },
         h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
@@ -5924,6 +5941,20 @@ window.__ModuleLoader__.load({
                 title: dgT("description.editInPlace"),
                 onClick: () => { setEditing(true); setText(description ?? ""); setNote(null); },
               }, hasContent ? dgT("description.edit") : dgT("description.editEmpty"))
+            : null,
+          h("div", { style: { flex: 1 } }),
+          !editing && hasContent
+            ? h("div", { className: "dg-desc-view-toggle", style: { display: "inline-flex", gap: 4 } },
+                h("button", {
+                  className: "dg-btn", style: segStyle(viewMode === "markdown"),
+                  title: dgT("description.viewMarkdownTip"),
+                  onClick: () => setViewMode("markdown"),
+                }, dgT("description.viewMarkdown")),
+                h("button", {
+                  className: "dg-btn", style: segStyle(viewMode === "raw"),
+                  title: dgT("description.viewRawTip"),
+                  onClick: () => setViewMode("raw"),
+                }, dgT("description.viewRaw")))
             : null),
         editing
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
@@ -5945,7 +5976,19 @@ window.__ModuleLoader__.load({
                 }, dgT("common.cancel"))))
           : h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
               hasContent
-                ? h(GoalMarkdown, { text: description })
+                ? (viewMode === "raw"
+                    ? h("div", {
+                        className: "dg-markdown-body dg-description-preview",
+                        style: {
+                          whiteSpace: "pre-wrap",
+                          fontSize: 12,
+                          lineHeight: 1.6,
+                          overflowWrap: "anywhere",
+                          wordBreak: "break-word",
+                          color: "var(--dsw-alias-label-primary, inherit)",
+                        }
+                      }, description)
+                    : h(GoalMarkdown, { text: description }))
                 : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("description.empty"))),
         extra ?? null,
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
