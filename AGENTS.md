@@ -177,6 +177,27 @@ node --test core/tests/*.test.ts
   main GUI (3080) must be restarted/refreshed to load the new version. Always verify in the
   test instance first, then switch the main profile.
 
+## 发布门禁（Release Gate）
+
+### Windows 兼容性：发布前统一验证，不逐功能验证
+
+来源：负责人决定（2026-09-14，g-284/g-285）。
+
+- Windows 原生兼容性是**平台层属性**，与单个功能无关 → **不作为每个功能的逐个验收项**；
+- 但**每个版本发布前必须做一次 Windows 兼容性测试**，作为发布门禁的一部分；
+- 依据：本项目长期只在 Linux/WSL2 上开发与验证，Windows 路径从未实测（首次 Windows 用户
+  反馈即撞上 `core/ops.js` 的 POSIX 常量具名导入，插件在 Windows 上**完全无法加载**）。
+
+**发布前 Windows 最小复验清单**（在原生 Windows 上执行，非 WSL2）：
+
+1. 全新 profile 安装：`npx @deepseek-ai/dsh plugin --profile <p> add <包/路径>`；
+2. 启动隔离实例：`npx @deepseek-ai/dsh web --port <非 3080 端口>`，确认插件 apply 无报错
+   （尤其不得出现 `node:constants` / `O_DIRECTORY` 类模块加载错误）；
+3. 最小功能用例：写目标 → 加标签 → 派发 attempt → 看板渲染正常、`graph_validate` 正常。
+
+**纪律**：Linux/WSL2 全绿**不能**替代本项；Windows 验证缺失时，README 的兼容声明必须
+如实标注「Windows 未验证」，不得宣称支持。
+
 ## Important Notes
 
 - The generated file maintains the `window.__ModuleLoader__.load` contract required by the dsh client
