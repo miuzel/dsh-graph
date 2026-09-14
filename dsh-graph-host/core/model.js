@@ -78,20 +78,59 @@ export function serializeDoc(doc) {
         doc.body);
 }
 const FENCE_PATTERN = /^(`{3,}|~{3,})/;
-/** 提取 `## <name>` 小节到下一 `## ` 之间的原文（不含标题行）；不存在返回 null。
- *  代码围栏（``` 或 ~~~）内的 `## ` 标题不被误作为小节分隔符。 */
-export function sectionText(body, name) {
+/**
+ * 计算文档中所有处于「有效闭合代码围栏」内的行。
+ * 未闭合代码围栏（扫到 EOF 仍未遇到匹配闭合标记，或中途遇到新开围栏）不参与判定，
+ * 退化为普通文本行，保证后续 ## 小节标题不被吞掉。
+ */
+export function computeClosedFenceMask(lines) {
+    const mask = new Array(lines.length).fill(false);
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i];
+        const match = line.trimStart().match(FENCE_PATTERN);
+        if (match) {
+            const fenceChar = match[1][0];
+            const fenceLen = match[1].length;
+            let closeIdx = -1;
+            for (let j = i + 1; j < lines.length; j++) {
+                const nextMatch = lines[j].trimStart().match(FENCE_PATTERN);
+                if (nextMatch && nextMatch[1][0] === fenceChar && nextMatch[1].length >= fenceLen) {
+                    const rest = lines[j].trimStart().slice(nextMatch[1].length).trim();
+                    if (rest === "") {
+                        closeIdx = j;
+                        break;
+                    }
+                    else {
+                        // 同字符同级别或更长的新开围栏（带 info string），说明前序围栏未闭合
+                        break;
+                    }
+                }
+            }
+            if (closeIdx !== -1) {
+                for (let k = i; k <= closeIdx; k++) {
+                    mask[k] = true;
+                }
+                i = closeIdx + 1;
+                continue;
+            }
+        }
+        i++;
+    }
+    return mask;
+}
+/**
+ * 定位 `## <name>` 小节的起止行区间。
+ * 处于有效闭合围栏内的 `## ` 不被视作小节标题；未闭合围栏安全降级不影响小节切分。
+ * 若小节不存在返回 null。
+ */
+export function findSectionBounds(body, name) {
     const lines = body.split("\n");
     const head = `## ${name}`;
+    const mask = computeClosedFenceMask(lines);
     let start = -1;
-    let inFence = false;
     for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (FENCE_PATTERN.test(line.trimStart())) {
-            inFence = !inFence;
-            continue;
-        }
-        if (!inFence && line.trim() === head) {
+        if (!mask[i] && lines[i].trim() === head) {
             start = i;
             break;
         }
@@ -99,54 +138,30 @@ export function sectionText(body, name) {
     if (start < 0)
         return null;
     let end = lines.length;
-    inFence = false;
     for (let i = start + 1; i < lines.length; i++) {
-        const line = lines[i];
-        if (FENCE_PATTERN.test(line.trimStart())) {
-            inFence = !inFence;
-            continue;
-        }
-        if (!inFence && line.startsWith("## ")) {
+        if (!mask[i] && lines[i].startsWith("## ")) {
             end = i;
             break;
         }
     }
-    return lines.slice(start + 1, end).join("\n");
+    return { start, end, lines };
+}
+/** 提取 `## <name>` 小节到下一 `## ` 之间的原文（不含标题行）；不存在返回 null。
+ *  代码围栏（``` 或 ~~~）内的 `## ` 标题不被误作为小节分隔符；未闭合围栏安全降级。 */
+export function sectionText(body, name) {
+    const bounds = findSectionBounds(body, name);
+    if (!bounds)
+        return null;
+    return bounds.lines.slice(bounds.start + 1, bounds.end).join("\n");
 }
 /** 替换 `## <name>` 小节内容（保留标题行与其余小节）。
- *  代码围栏（``` 或 ~~~）内的 `## ` 标题不被误作为小节分隔符。 */
+ *  代码围栏（``` 或 ~~~）内的 `## ` 标题不被误作为小节分隔符；未闭合围栏安全降级。 */
 export function replaceSection(body, name, content) {
-    const lines = body.split("\n");
+    const bounds = findSectionBounds(body, name);
     const head = `## ${name}`;
-    let start = -1;
-    let inFence = false;
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (FENCE_PATTERN.test(line.trimStart())) {
-            inFence = !inFence;
-            continue;
-        }
-        if (!inFence && line.trim() === head) {
-            start = i;
-            break;
-        }
-    }
-    if (start < 0)
+    if (!bounds)
         throw new Error(`小节不存在：${head}`);
-    let end = lines.length;
-    inFence = false;
-    for (let i = start + 1; i < lines.length; i++) {
-        const line = lines[i];
-        if (FENCE_PATTERN.test(line.trimStart())) {
-            inFence = !inFence;
-            continue;
-        }
-        if (!inFence && line.startsWith("## ")) {
-            end = i;
-            break;
-        }
-    }
-    const next = [...lines.slice(0, start + 1), content, ...lines.slice(end)];
+    const next = [...bounds.lines.slice(0, bounds.start + 1), content, ...bounds.lines.slice(bounds.end)];
     return next.join("\n");
 }
 const CRITERIA_PLACEHOLDERS = new Set([

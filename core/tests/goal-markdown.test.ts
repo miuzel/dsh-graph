@@ -34,6 +34,9 @@ import {
   goalDetail,
   findGoalFile,
   loadGoal,
+  saveGoal,
+  amendGoal,
+  formatTargetContext,
   normalizeDescriptionHeadings,
 } from "../ops.ts";
 import { sectionText, replaceSection } from "../model.ts";
@@ -185,17 +188,203 @@ test("g-270: setGoalDescription 写入后 goalDetail.description 与 extractGoal
 
 // ---- ④ 客户端源码契约测试 ----
 
-test("g-270: 客户端 Bundle 契约——包含 Markdown 组件与 DSH 原语引用", () => {
+test("g-270: 客户端 Bundle 契约——包含 Markdown 组件、DSH 原语引用、错误边界与样式", () => {
   const clientBundle = readFileSync("dsh-graph-host/lib/client.js", "utf8");
   assert.ok(clientBundle.includes("function GoalMarkdown("), "Bundle 应包含 GoalMarkdown 组件");
   assert.ok(clientBundle.includes("function renderSimpleMarkdown("), "Bundle 应包含 renderSimpleMarkdown 解析器");
   assert.ok(clientBundle.includes("function parseInlineMarkdown("), "Bundle 应包含 parseInlineMarkdown 解析器");
   assert.ok(clientBundle.includes("MarkdownText"), "Bundle 应包含 MarkdownText 原语引用");
   assert.ok(clientBundle.includes("dg-markdown-body"), "Bundle 应包含 dg-markdown-body 样式类");
+  assert.ok(clientBundle.includes("dg-description-preview"), "Bundle 应包含 dg-description-preview 样式类");
+  assert.ok(clientBundle.includes("class MarkdownErrorBoundary"), "Bundle 应包含 MarkdownErrorBoundary 错误边界组件");
+  assert.ok(clientBundle.includes("copyLabel:"), "Bundle 必须传递 copyLabel prop");
+  assert.ok(clientBundle.includes("copiedLabel:"), "Bundle 必须传递 copiedLabel prop");
+  assert.ok(clientBundle.includes("streaming: false"), "Bundle 必须传递 streaming: false");
+  assert.ok(clientBundle.includes("--dsw-alias-fill-tsp-secondary"), "样式必须优先使用 DSH 主题变量 --dsw-alias-fill-tsp-secondary");
+  assert.ok(clientBundle.includes("data-ds-dark-theme"), "样式必须自适应暗色主题选择器 data-ds-dark-theme");
 
   const pkg = JSON.parse(readFileSync("dsh-graph-host/package.json", "utf8"));
   assert.ok(
     pkg.dsh?.client?.inject?.includes("@deepseek-ai/dsh-client-ui-primitives"),
     "package.json 的 client.inject 应声明 @deepseek-ai/dsh-client-ui-primitives",
   );
+});
+
+// ---- ⑤ 未闭合代码围栏防护测试（>=3条）----
+
+test("g-270: 未闭合 ``` 围栏安全降级，不吞噬后续 ## 小节（指令/评论/证据台账）", () => {
+  const body = [
+    "## 目标描述",
+    "",
+    "这是未闭合代码段前的正文",
+    "```typescript",
+    "console.log('unclosed code block');",
+    "",
+    "## 最近指令",
+    "",
+    "这是最近指令内容",
+    "",
+    "## 评论",
+    "",
+    "### 2026-03-31T00:00:00Z | user",
+    "这是评论内容",
+    "",
+    "## 证据台账",
+    "",
+    "证据项内容",
+  ].join("\n");
+
+  // 1. sectionText 读取未闭合围栏后的各小节，必须非 null 且内容完整
+  assert.equal(sectionText(body, "最近指令")?.trim(), "这是最近指令内容", "未闭合围栏后最近指令必须存在");
+  assert.ok(sectionText(body, "评论")?.includes("这是评论内容"), "未闭合围栏后评论必须存在");
+  assert.equal(sectionText(body, "证据台账")?.trim(), "证据项内容", "未闭合围栏后证据台账必须存在");
+
+  // 2. replaceSection 替换目标描述时，后续小节必须结构存活，不得并入描述正文
+  const replaced = replaceSection(body, "目标描述", "\n更新后的描述\n");
+  assert.equal(sectionText(replaced, "目标描述")?.trim(), "更新后的描述", "描述小节应被更新");
+  assert.equal(sectionText(replaced, "最近指令")?.trim(), "这是最近指令内容", "最近指令必须存活");
+  assert.ok(sectionText(replaced, "评论")?.includes("这是评论内容"), "评论小节必须存活");
+  assert.equal(sectionText(replaced, "证据台账")?.trim(), "证据项内容", "证据台账必须存活");
+});
+
+test("g-270: 未闭合 ~~~ 围栏安全降级，不吞噬后续 ## 小节", () => {
+  const body = [
+    "## 目标描述",
+    "",
+    "正文段落",
+    "~~~python",
+    "def foo():",
+    "    return 42",
+    "",
+    "## 最近指令",
+    "",
+    "指令执行步骤",
+    "",
+    "## 质量判据",
+    "",
+    "1. 判据一",
+  ].join("\n");
+
+  assert.equal(sectionText(body, "最近指令")?.trim(), "指令执行步骤", "未闭合波浪号围栏后指令必须存在");
+  assert.equal(sectionText(body, "质量判据")?.trim(), "1. 判据一", "未闭合波浪号围栏后判据必须存在");
+
+  const replaced = replaceSection(body, "目标描述", "\n替换正文\n");
+  assert.equal(sectionText(replaced, "目标描述")?.trim(), "替换正文");
+  assert.equal(sectionText(replaced, "最近指令")?.trim(), "指令执行步骤");
+  assert.equal(sectionText(replaced, "质量判据")?.trim(), "1. 判据一");
+});
+
+test("g-270: 已闭合围栏内 ## 标题合法保留，不被误作为小节切分点且后续小节完整", () => {
+  const body = [
+    "## 目标描述",
+    "",
+    "```bash",
+    "## 这是一个 bash 注释伪标题",
+    "echo 'hello'",
+    "```",
+    "",
+    "## 最近指令",
+    "",
+    "合法的最近指令",
+  ].join("\n");
+
+  const desc = sectionText(body, "目标描述");
+  assert.ok(desc, "目标描述必须存在");
+  assert.ok(desc.includes("## 这是一个 bash 注释伪标题"), "闭合围栏内的 ## 标题必须完整保留在描述中");
+  assert.ok(!desc.includes("合法的最近指令"), "描述不应越界包含最近指令");
+
+  const directive = sectionText(body, "最近指令");
+  assert.equal(directive?.trim(), "合法的最近指令", "最近指令小节必须被正确识别与提取");
+});
+
+test("g-270: UI setGoalDescription 端到端写路径遇未闭合围栏不吞噬后续小节", () => {
+  const root = tmpRoot();
+  const goal = createGoal(root, { title: "未闭合围栏保存测试", actor: "human:gui" });
+  const file = findGoalFile(root, goal);
+  const doc = loadGoal(file);
+
+  doc.body = [
+    "## 目标描述",
+    "",
+    "初始描述",
+    "",
+    "## 最近指令",
+    "",
+    "这是重要指令",
+    "",
+    "## 评论",
+    "",
+    "### 2026-03-31T00:00:00Z | human:gui",
+    "这是历史评论",
+  ].join("\n");
+  saveGoal(file, doc);
+
+  // 模拟 UI 保存一段含有未闭合 ``` 围栏的描述
+  const unclosedDesc = "这是一段编辑态保存的内容：\n```ts\nconst unclosed = true;\n// 忘记写闭合围栏了";
+  setGoalDescription(root, goal, unclosedDesc, "human:gui");
+
+  const updatedDoc = loadGoal(file);
+  assert.equal(sectionText(updatedDoc.body, "最近指令")?.trim(), "这是重要指令", "setGoalDescription 后最近指令必须存活");
+  assert.ok(sectionText(updatedDoc.body, "评论")?.includes("这是历史评论"), "setGoalDescription 后评论必须存活");
+  assert.ok(sectionText(updatedDoc.body, "目标描述")?.includes("const unclosed = true;"), "目标描述内容必须完整保存");
+});
+
+// ---- ⑥ 多处读取路径 fence-aware 一致性测试 ----
+
+test("g-270: formatTargetContext 遇到描述中闭合围栏内 ## 不截断，判据完整", () => {
+  const body = [
+    "## 目标描述",
+    "",
+    "目标背景前言",
+    "```markdown",
+    "## 伪标题 1",
+    "## 伪标题 2",
+    "```",
+    "目标背景后记",
+    "",
+    "## 质量判据",
+    "",
+    "1. 验收判据必须完整保留",
+  ].join("\n");
+
+  const context = formatTargetContext(body);
+  assert.ok(context.includes("目标背景前言"), "应包含前言");
+  assert.ok(context.includes("## 伪标题 1"), "应完整包含围栏内标题");
+  assert.ok(context.includes("目标背景后记"), "描述不应在围栏内 ## 处被截断");
+  assert.ok(context.includes("1. 验收判据必须完整保留"), "质量判据必须完整");
+});
+
+test("g-270: amendGoal(appendDescription) 遇到描述中围栏内 ## 追加在正文末尾，绝不插进代码块内部", () => {
+  const root = tmpRoot();
+  const goal = createGoal(root, { title: "amend 追加测试", actor: "human:gui" });
+  const file = findGoalFile(root, goal);
+  const doc = loadGoal(file);
+  doc.body = [
+    "## 目标描述",
+    "",
+    "这是原描述",
+    "```typescript",
+    "## 围栏内标题",
+    "const foo = 'bar';",
+    "```",
+    "",
+    "## 质量判据",
+    "",
+    "1. 判据一",
+  ].join("\n");
+  saveGoal(file, doc);
+
+  amendGoal(root, goal, {
+    note: "追加补充说明",
+    appendDescription: "这是追加的补充文本",
+    actor: "human:gui",
+  });
+
+  const updatedDoc = loadGoal(file);
+  const desc = sectionText(updatedDoc.body, "目标描述");
+  assert.ok(desc, "目标描述应存在");
+  const fenceEndIdx = desc.lastIndexOf("```");
+  const appendIdx = desc.indexOf("这是追加的补充文本");
+  assert.ok(fenceEndIdx >= 0 && appendIdx > fenceEndIdx, "追加内容必须位于代码块闭合标记之后，绝不可插进代码块内部");
+  assert.equal(sectionText(updatedDoc.body, "质量判据")?.trim(), "1. 判据一", "后续质量判据保持完好");
 });

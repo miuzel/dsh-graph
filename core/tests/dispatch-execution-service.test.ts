@@ -575,3 +575,30 @@ test("g-241 判据 5：绑定与派发失败收敛——子代理启动异常时
   assert.equal(detail.attempts[0].child_id, null);
   assert.equal(detail.attempts[1].child_id, null);
 });
+
+test("g-270: 目标描述含闭合围栏内 ## 伪标题时，prompt 目标描述不截断且质量判据完整", async () => {
+  const { root, toolsByName, execContext, capturedRequests } = createHarness();
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
+
+  const goalId = createGoal(root, {
+    title: "围栏内包含标题的目标",
+    version: "v1.0",
+    description: "正文前言\n```typescript\n## 围栏内伪小节标题\nconst x = 1;\n```\n正文后记，确保不被截断",
+    actor: "human:gui",
+  });
+  setCriteria(root, goalId, ["判据 1：测试必须通过", "判据 2：不得越界"], "human:gui");
+
+  const toolRes = await toolsByName.get("graph_start_attempt")!.execute(
+    { goal: goalId, attempt_brief: "验证 prompt 目标背景完整性" },
+    execContext,
+  );
+  assert.ok(toolRes.attempt.startsWith("att-"));
+
+  const promptText = capturedRequests[0].request.prompt[0].text;
+  assert.ok(promptText.includes("正文前言"), "prompt 必须包含正文前言");
+  assert.ok(promptText.includes("## 围栏内伪小节标题"), "prompt 必须完整保留代码围栏内的 ## 标题");
+  assert.ok(promptText.includes("正文后记，确保不被截断"), "prompt 目标描述不应在围栏内 ## 处截断");
+  assert.ok(promptText.includes("## 质量判据"), "prompt 必须包含质量判据");
+  assert.ok(promptText.includes("判据 1：测试必须通过"), "判据项 1 必须完整");
+  assert.ok(promptText.includes("判据 2：不得越界"), "判据项 2 必须完整");
+});
