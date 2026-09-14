@@ -19,6 +19,7 @@ PARTS=(
   "live-panel"
   "supervisor-bar"
   "card"
+  "markdown"
   "card-drawer"
   "goal-actions"
   "goal-modal"

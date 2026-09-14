@@ -12,6 +12,11 @@
       const [deleteNote, setDeleteNote] = React.useState(null);
       // g-219：删除请求进行中标记（防双击重复提交）
       const [deleting, setDeleting] = React.useState(false);
+      // g-275：卡片正文展示模式——markdown 渲染（默认） / 原文
+      const [viewMode, setViewMode] = React.useState("markdown");
+      React.useEffect(() => {
+        setViewMode("markdown");
+      }, [props.cardId]);
       React.useEffect(() => {
         let alive = true;
         fetch(graphUrl("/api/dsh-graph/goal", { id: props.goalId }))
@@ -177,6 +182,9 @@
                 h("span", { style: { fontSize: 11 } }, dgT("drawer.cardFile")),
                 h("span", { style: { fontSize: 11 } }, dgT("drawer.noFilePath")));
 
+          const rawContent = card.content?.trim() || "";
+          const hasCardContent = rawContent.length > 0;
+
           inner = [
             h("div", { key: "t", style: { fontWeight: 700, fontSize: 14 } },
               `📇 ${card.title}`),
@@ -200,8 +208,20 @@
                       " (" + dgT("common.open") + ")")))
               : null,
             h("div", { key: "body", style: S.drawerSection },
-              h("div", { style: S.drawerH }, dgT("drawer.fullText")),
-              h("div", { style: { whiteSpace: "pre-wrap" } }, card.content?.trim() || dgT("drawer.noContent"))),
+              h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 6 } },
+                h("div", { style: { ...S.drawerH, marginBottom: 0 } }, dgT("drawer.fullText")),
+                h("div", { style: { flex: 1 } }),
+                hasCardContent
+                  ? h(MarkdownViewToggle, {
+                      viewMode,
+                      onChange: setViewMode,
+                      tipMarkdown: dgT("drawer.viewMarkdownTip"),
+                      tipRaw: dgT("drawer.viewRawTip"),
+                    })
+                  : null),
+              hasCardContent
+                ? h(GoalMarkdown, { text: card.content, viewMode })
+                : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("drawer.noContent"))),
             collectPanel,
             // g-128：卡片删除按钮（二次确认 + 输入卡片 id 防误删）
             h("div", { key: "del", style: { ...S.drawerSection, borderTop: "1px solid rgba(128,128,128,.25)", paddingTop: 8 } },
