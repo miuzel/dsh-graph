@@ -44,6 +44,17 @@
     "@deepseek-ai/schemastery": "^3.18.2",
     "@deepseek-ai/dsh-settings": "^0.1.5-rc.2"
   },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-settings": {
+      "optional": true
+    }
+  },
   "dependencies": {
     "yaml": "^2.9.0"
   },

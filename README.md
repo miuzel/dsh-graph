@@ -41,7 +41,7 @@ dsh plugin --profile <name> add dsh-graph
 
 > 需要 Node ≥ 22（包内 core 为编译后 `.js`）。已发布版本经 npm 与 dsh-market 生态（[dsh-market](https://github.com/dsh-market/dsh-market) / DshMarketPlace / DSH Get，见 `docs/release-handbook.md`）分发。
 >
-> **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）作为 `peerDependencies` 由 DSH 宿主环境提供，插件自有依赖（`yaml`）打包在 `dependencies` 中，避免产生重复的核心包实例。首次安装时出现的 peer 提示属于宿主 profile 配置（`autoInstallPeers: false`）的固有产物，由宿主环境统一注入提供。
+> **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
 > **✅ DSH 版本兼容性（重点）**：v0.10.0 **已在 Linux（WSL2）上完整验证并支持 DeepSeek Harness [`v0.1.5-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)**——开发期的隔离测试实例（Web GUI + 二维泳道看板 + `graph_*` 工具 + REST 端点）与中英双语功能演示视频（见 [dsh-graph-videos](https://github.com/miuzel/dsh-graph-videos)）全部在 `v0.1.5-rc.2` 上实测通过，**推荐与该版本配套使用**。同时兼容 `0.1.5` 系列及 `0.1.2-alpha.x` 及以上版本（工具与提示词契约向后兼容）。
 >
