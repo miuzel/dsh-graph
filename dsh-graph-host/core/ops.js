@@ -19,10 +19,10 @@ import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./ma
 import { withTx, TxError, TxCasError } from "./transaction.js";
 import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema } from "./schema.js";
 import { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail, } from "./version-lane.js";
-import { registerWorktreeCandidates, listWorktrees, cleanWorktree } from "./worktree.js";
+import { registerWorktreeCandidates, listWorktrees, cleanWorktree, defaultWorktreeForGoalType, prepareAttemptWorktree } from "./worktree.js";
 export { GraphError, GraphConflictError };
 export { normalizeGoalType };
-export { registerWorktreeCandidates, listWorktrees, cleanWorktree };
+export { registerWorktreeCandidates, listWorktrees, cleanWorktree, defaultWorktreeForGoalType, prepareAttemptWorktree };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
 export { TxError };
@@ -4114,7 +4114,8 @@ export function startAttempt(root, goalId, opts) {
         status_state: null,
         result: "pending",
         child_id: null,
-        worktree: attemptWorktreeEvidence(root, goalId, attId),
+        worktree: opts.worktree !== undefined ? opts.worktree : attemptWorktreeEvidence(root, goalId, attId),
+        ...(opts.worktree === false && opts.worktreeReason ? { worktree_reason: opts.worktreeReason } : {}),
     };
     if (opts.provider && opts.provider.trim()) {
         meta.provider = opts.provider.trim();
@@ -4176,6 +4177,8 @@ export function startAttempt(root, goalId, opts) {
     const details = {
         attempt: attId,
         executor: opts.executor,
+        ...(opts.worktree !== undefined ? { worktree: opts.worktree } : {}),
+        ...(opts.worktree === false && opts.worktreeReason ? { worktree_reason: opts.worktreeReason } : {}),
         ...(opts.provider && opts.provider.trim() ? { provider: opts.provider.trim() } : {}),
         ...(opts.model && opts.model.trim() ? { model: opts.model.trim() } : {}),
         ...(opts.modelRoute && opts.modelRoute.trim() ? { model_route: opts.modelRoute.trim() } : {}),

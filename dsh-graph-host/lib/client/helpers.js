@@ -662,4 +662,16 @@
       };
     }
 
+    // g-283：根据目标类型计算是否默认隔离 worktree 的纯函数（可单测）
+    function defaultWorktreeForGoalType(rawType) {
+      if (rawType === null || rawType === undefined || rawType === "") {
+        return false;
+      }
+      const t = String(rawType).trim().toLowerCase();
+      if (t === "patch" || t === "chore" || t === "task") {
+        return false;
+      }
+      return true;
+    }
+
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // Contract marker: 看板数据自动刷新

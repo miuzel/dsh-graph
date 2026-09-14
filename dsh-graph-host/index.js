@@ -32,6 +32,8 @@ import {
   startAttempt,
   assertExecutionAdmission,
   ensureExecutionInProgress,
+  defaultWorktreeForGoalType,
+  prepareAttemptWorktree,
   reportStatus,
   reportSupervisorStatus,
   readSupervisorStatus,
@@ -1134,6 +1136,16 @@ export function apply(ctx, config) {
     const seq = readdirSync(attemptsDir).filter((d) => d.startsWith("att-")).length + 1;
     const nextAttId = `att-${String(seq).padStart(3, "0")}`;
 
+    // g-283：确定是否隔离到独立 worktree（GUI 显式参数 / 工具调用 / 目标类型默认）
+    const isWorktree = worktree !== undefined ? Boolean(worktree) : defaultWorktreeForGoalType(gType);
+
+    // 真实创建 / 幂等复用 / 失败即停（在状态迁移与创建 attempt 之前执行，失败即停零副作用）
+    const wtResult = prepareAttemptWorktree(root, goal, nextAttId, {
+      enabled: isWorktree,
+      baselineCommit: baseline_commit,
+      reason: "user_choice",
+    });
+
     const prompt = formatAttemptPrompt({
       goal,
       attempt: nextAttId,
@@ -1188,6 +1200,8 @@ export function apply(ctx, config) {
       promptHash,
       contextDigest,
       contextVersion,
+      worktree: wtResult.worktree,
+      worktreeReason: wtResult.reason,
     });
 
     // 9. 启动与绑定子代理
@@ -1203,6 +1217,7 @@ export function apply(ctx, config) {
         mode_source: effModeRes.source,
         injected_cards: injectedCards,
         injected_handoffs: injectedHandoffRefs,
+        worktree: wtResult.worktree,
         brief: resolvedBrief.brief,
         brief_source: resolvedBrief.source,
         prompt,
@@ -1274,6 +1289,7 @@ export function apply(ctx, config) {
           mode_source: effModeRes.source,
           injected_cards: injectedCards,
           injected_handoffs: injectedHandoffRefs,
+          worktree: wtResult.worktree,
           brief: resolvedBrief.brief,
           brief_source: resolvedBrief.source,
           prompt,
@@ -1290,6 +1306,7 @@ export function apply(ctx, config) {
           mode_source: effModeRes.source,
           injected_cards: injectedCards,
           injected_handoffs: injectedHandoffRefs,
+          worktree: wtResult.worktree,
           brief: resolvedBrief.brief,
           brief_source: resolvedBrief.source,
           prompt,
@@ -1307,6 +1324,7 @@ export function apply(ctx, config) {
         mode_source: effModeRes.source,
         injected_cards: injectedCards,
         injected_handoffs: injectedHandoffRefs,
+        worktree: wtResult.worktree,
         brief: resolvedBrief.brief,
         brief_source: resolvedBrief.source,
         prompt,
@@ -1838,6 +1856,7 @@ export function apply(ctx, config) {
           injected_handoffs: execRes.injected_handoffs,
           mode: execRes.mode,
           mode_source: execRes.mode_source,
+          worktree: execRes.worktree,
         };
         if (execRes.child_error) result.child_error = execRes.child_error;
         if (execRes.note) result.note = execRes.note;
@@ -2911,6 +2930,7 @@ export function apply(ctx, config) {
             mode_source: execRes.mode_source,
             injected_cards: execRes.injected_cards,
             injected_handoffs: execRes.injected_handoffs,
+            worktree: execRes.worktree,
           });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
