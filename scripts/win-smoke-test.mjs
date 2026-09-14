@@ -187,7 +187,7 @@ function shellSafeArgs(args) {
 function runSync(cmd, args, opts = {}) {
   const r = spawnSync(cmd, shellSafeArgs(args), {
     encoding: "utf8",
-    shell: isWin,               // Windows 上 .cmd 需要 shell
+    shell: opts.shell ?? isWin,  // Windows 上 .cmd 需要 shell；内部 node 调用显式传 shell:false 避免 DEP0190
     maxBuffer: 32 * 1024 * 1024,
     timeout: opts.timeout ?? 600_000,
     cwd: opts.cwd,
@@ -338,6 +338,7 @@ try {
   ops.init(root);
   const id = step("init+createGoal", () =>
     ops.createGoal(root, { title: "windows smoke", version: "v-win-smoke", actor }));
+  out.goal = id;   // 立即记录：任一步失败也要能定位到目标，避免下游出现「目标不存在：undefined」的误导
   step("setCriteria", () => ops.setCriteria(root, id, ["冒烟判据 A", "冒烟判据 B"], actor));
   step("setGoalTags 写入", () => ops.setGoalTags(root, id, { tags: ["alpha", "中文标签"], actor }));
   step("setGoalTags CAS 覆盖", () =>
@@ -349,7 +350,6 @@ try {
   });
   step("setGoalTags 清空(force)", () => ops.setGoalTags(root, id, { tags: [], force: true, actor }));
   const problems = ops.validate(root);
-  out.goal = id;
   out.validate = Array.isArray(problems) ? problems : ["validate 未返回数组"];
   out.ok = out.validate.length === 0;
   if (!out.ok) out.err = "graph_validate 返回非空：" + JSON.stringify(out.validate);
@@ -388,7 +388,7 @@ async function tier3Core(smokeDir, opsPath, workspace) {
   writeFileSync(script, CORE_SMOKE_SRC, "utf8");
   writeFileSync(worker, TAG_WORKER_SRC, "utf8");
 
-  const r = runSync(process.execPath, [script, opsPath, workspace], { timeout: 120_000 });
+  const r = runSync(process.execPath, [script, opsPath, workspace], { timeout: 120_000, shell: false });
   const parsed = parseSmokeJson(r.out);
   if (!parsed) {
     const stderr = (r.err || "").trim();
@@ -413,6 +413,12 @@ async function tier3Core(smokeDir, opsPath, workspace) {
   }
 
   // 并发 CAS：4 个独立进程以同一 base_tags 抢写，必须恰好 1 成功
+  // 主写路径若已失败，这里只能得到级联噪声（如「目标不存在：undefined」），故跳过并说明
+  if (!parsed.goal) {
+    record("T3", "跨进程并发 CAS（4 抢 1）", "SKIP",
+      "目标未创建成功（主写路径已失败），跳过并发子测试以免产生级联误报");
+    return parsed;
+  }
   const procs = [];
   for (let i = 0; i < 4; i++) {
     procs.push(new Promise((res) => {
