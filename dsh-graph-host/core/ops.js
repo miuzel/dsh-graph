@@ -5896,6 +5896,16 @@ export function renameGoal(root, id, opts) {
     });
     return { old_title: oldTitle, new_title: newTitle };
 }
+export function safePathTag(token) {
+    return token.replace(/:/g, "-");
+}
+export function getTagsLockPaths(file, token = `${process.pid}:${randomUUID()}`) {
+    const lock = `${file}.tags.lock`;
+    const pathTag = safePathTag(token);
+    const quarantine = `${lock}.reclaim-${pathTag}`;
+    const detached = `${lock}.release-${pathTag}`;
+    return { lock, quarantine, detached, token, pathTag };
+}
 export function acquireTagsLock(file) {
     const win = isWindows();
     const lock = `${file}.tags.lock`;
@@ -5923,20 +5933,31 @@ export function acquireTagsLock(file) {
                     alive = true; // 出错保守判存活，避免在权限受限时误抢锁
                 }
                 if (!alive) {
-                    const quarantine = `${lock}.reclaim-${token}`;
+                    const pathTag = safePathTag(token);
+                    const quarantine = `${lock}.reclaim-${pathTag}`;
+                    let renamed = false;
                     try {
                         renameSync(lock, quarantine);
+                        renamed = true;
                     }
-                    catch { /* raced */ }
-                    try {
-                        const qOwner = join(quarantine, "owner");
-                        const qs = lstatSync(qOwner);
-                        if (qs.isFile() && readFileSync(qOwner, "utf8") === owner) {
-                            rmSync(qOwner);
-                            rmdirSync(quarantine);
+                    catch (raced) {
+                        if (raced?.code !== "ENOENT") {
+                            console.error(`[dsh-graph] 陈旧标签锁回收重命名失败 (lock=${lock}, quarantine=${quarantine}):`, raced);
                         }
                     }
-                    catch { /* unknown/sentinel content remains quarantined safely */ }
+                    if (renamed) {
+                        try {
+                            const qOwner = join(quarantine, "owner");
+                            const qs = lstatSync(qOwner);
+                            if (qs.isFile() && readFileSync(qOwner, "utf8") === owner) {
+                                rmSync(qOwner);
+                                rmdirSync(quarantine);
+                            }
+                        }
+                        catch (cleanErr) {
+                            console.error(`[dsh-graph] 清理已隔离陈旧锁失败 (quarantine=${quarantine}):`, cleanErr);
+                        }
+                    }
                 }
             }
             const until = Date.now() + 5;
@@ -6003,6 +6024,7 @@ export function acquireTagsLock(file) {
     throw new GraphError("标签文件正被其他请求锁定，请稍后重试");
 }
 export function releaseTagsLock(handle) {
+    const pathTag = safePathTag(handle.token);
     if (handle.isWindows) {
         try {
             if (!existsSync(handle.lock))
@@ -6020,23 +6042,28 @@ export function releaseTagsLock(handle) {
             try {
                 ownerContent = readFileSync(ownerPath, "utf8");
             }
-            catch {
+            catch (readErr) {
+                console.error(`[dsh-graph] 释放标签锁读取 owner 失败 (path=${ownerPath}):`, readErr);
                 return;
             }
             if (ownerContent !== handle.token)
                 return;
-            const detached = `${handle.lock}.release-${handle.token}`;
+            const detached = `${handle.lock}.release-${pathTag}`;
             try {
-                if (existsSync(detached))
+                if (existsSync(detached)) {
+                    console.error(`[dsh-graph] 释放标签锁检测到残留 detached 路径已存在 (detached=${detached})`);
                     return;
+                }
             }
-            catch {
+            catch (checkErr) {
+                console.error(`[dsh-graph] 释放标签锁检查 detached 路径失败 (detached=${detached}):`, checkErr);
                 return;
             }
             try {
                 renameSync(handle.lock, detached);
             }
-            catch {
+            catch (renameErr) {
+                console.error(`[dsh-graph] 释放标签锁重命名失败 (lock=${handle.lock}, detached=${detached}):`, renameErr);
                 return;
             }
             const detachedOwner = join(detached, "owner");
@@ -6046,10 +6073,13 @@ export function releaseTagsLock(handle) {
                     rmdirSync(detached);
                 }
             }
-            catch { }
+            catch (cleanErr) {
+                console.error(`[dsh-graph] 清理 detached 锁目录失败 (detached=${detached}):`, cleanErr);
+            }
         }
-        catch {
+        catch (err) {
             /* replaced or unknown content; never recursively delete */
+            console.error(`[dsh-graph] 释放标签锁异常 (lock=${handle.lock}):`, err);
         }
         return;
     }
@@ -6064,21 +6094,28 @@ export function releaseTagsLock(handle) {
             !os.isFile() || os.dev !== handle.ownerStat?.dev || os.ino !== handle.ownerStat?.ino ||
             !nowOwner || nowOwner.dev !== handle.ownerStat?.dev || nowOwner.ino !== handle.ownerStat?.ino)
             return;
-        const detached = `${handle.lock}.release-${handle.token}`;
+        const detached = `${handle.lock}.release-${pathTag}`;
         try {
-            if (lstatSync(detached))
+            if (lstatSync(detached)) {
+                console.error(`[dsh-graph] 释放标签锁检测到残留 detached 路径 (POSIX, detached=${detached})`);
                 return;
+            }
         }
         catch (e) {
-            if (e?.code !== "ENOENT")
+            if (e?.code !== "ENOENT") {
+                console.error(`[dsh-graph] 释放标签锁检查 detached 路径失败 (POSIX, detached=${detached}):`, e);
                 return;
+            }
         }
         try {
             renameSync(handle.lock, detached);
         }
         catch (e) {
-            if (e?.code === "EEXIST")
+            if (e?.code === "EEXIST") {
+                console.error(`[dsh-graph] 释放标签锁重命名目标已存在 (POSIX, detached=${detached})`);
                 return;
+            }
+            console.error(`[dsh-graph] 释放标签锁重命名失败 (POSIX, lock=${handle.lock}, detached=${detached}):`, e);
             throw e;
         }
         const detachedStat = lstatSync(detached);
@@ -6097,7 +6134,10 @@ export function releaseTagsLock(handle) {
         unlinkSync(detachedOwner);
         rmdirSync(detached);
     }
-    catch { /* replaced or unknown content; never recursively delete */ }
+    catch (err) {
+        /* replaced or unknown content; never recursively delete */
+        console.error(`[dsh-graph] 释放标签锁异常 (POSIX, lock=${handle.lock}):`, err);
+    }
     finally {
         if (handle.ownerFd !== undefined && handle.ownerFd >= 0) {
             try {

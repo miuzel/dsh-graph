@@ -12,8 +12,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, lstatSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, lstatSync, utimesSync } from "node:fs";
+import { join, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -41,6 +41,8 @@ import {
   setGoalTags,
   acquireTagsLock,
   releaseTagsLock,
+  safePathTag,
+  getTagsLockPaths,
   boardProjection,
   GraphError,
   GraphConflictError,
@@ -415,5 +417,174 @@ test("g-284 主管清单 B: withMemoryLock 与 withTx 在 win32 模拟分支下�
     if (txRes.ok) {
       assert.equal(txRes.value, "tx-ok");
     }
+  });
+});
+
+// ============================================================================
+// 9. g-284 返工（att-002）：路径名字守卫与 Windows 锁释放/回收缺陷防御
+// ============================================================================
+
+test("g-284 验收项 1 & 2: 名字守卫测试——锁路径、回收路径、释放路径的每一段都不含 Windows 非法字符，且能抓住 ':' 等非法字符", () => {
+  const { root, id } = fixture();
+  const file = findGoalFile(root, id);
+
+  // Windows 非法文件名字符集（除作为路径分隔符的 / 和 \ 之外）
+  // 包括: < > : " | ? * 以及控制字符 0-31
+  const WIN_ILLEGAL_CHARS = /[<>:"|?*\x00-\x1F]/;
+
+  function assertWindowsPathSegmentsSafe(fullPath: string, label: string) {
+    const segments = fullPath.split(/[/\\]+/).filter(Boolean);
+    assert.ok(segments.length > 0, `${label} 路径不能为空`);
+    for (const seg of segments) {
+      assert.doesNotMatch(
+        seg,
+        WIN_ILLEGAL_CHARS,
+        `[${label}] 路径段 "${seg}" 包含 Windows 非法字符（完整路径: ${fullPath}）`,
+      );
+    }
+  }
+
+  // 1. 验证正常生成的路径
+  const testToken = `${process.pid}:0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d`;
+  const paths = getTagsLockPaths(file, testToken);
+
+  assert.equal(paths.token, testToken);
+  assert.equal(paths.pathTag, `${process.pid}-0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d`);
+
+  // 校验锁目录、回收隔离目录、释放隔离目录的所有路径分段
+  assertWindowsPathSegmentsSafe(paths.lock, "锁路径");
+  assertWindowsPathSegmentsSafe(paths.quarantine, "回收隔离路径");
+  assertWindowsPathSegmentsSafe(paths.detached, "释放隔离路径");
+
+  // 校验 basename
+  assert.doesNotMatch(basename(paths.lock), WIN_ILLEGAL_CHARS);
+  assert.doesNotMatch(basename(paths.quarantine), WIN_ILLEGAL_CHARS);
+  assert.doesNotMatch(basename(paths.detached), WIN_ILLEGAL_CHARS);
+
+  // 2. 逆向验证（反例证明）：断言此守卫规则在 Linux 上能 100% 抓住旧版含 ':' 的缺陷路径
+  const badOldDetached = `${file}.tags.lock.release-${testToken}`;
+  const badOldQuarantine = `${file}.tags.lock.reclaim-${testToken}`;
+
+  assert.throws(
+    () => assertWindowsPathSegmentsSafe(badOldDetached, "旧版释放路径"),
+    (err: any) => err instanceof assert.AssertionError && err.message.includes("包含 Windows 非法字符"),
+    "名字守卫必须能精准拦截旧版含 ':' 的释放路径",
+  );
+  assert.throws(
+    () => assertWindowsPathSegmentsSafe(badOldQuarantine, "旧版回收路径"),
+    (err: any) => err instanceof assert.AssertionError && err.message.includes("包含 Windows 非法字符"),
+    "名字守卫必须能精准拦截旧版含 ':' 的回收路径",
+  );
+
+  // 3. 源码静态守卫：ops.ts 中的 release/reclaim 拼接绝不可直接拼未替换的 token
+  const opsSrc = readFileSync(join(REPO_ROOT, "core/ops.ts"), "utf8");
+  assert.doesNotMatch(opsSrc, /\.release-\$\{handle\.token\}/, "ops.ts 不得将未经安全转换的 handle.token 拼入 release 路径");
+  assert.doesNotMatch(opsSrc, /\.reclaim-\$\{token\}/, "ops.ts 不得将未经安全转换的 token 拼入 reclaim 路径");
+});
+
+test("g-284 验收项 3: 行为测试 a——同一目标连续两次 setGoalTags（第二次在 30s 陈旧窗口内）均成功", () => {
+  const { root, id } = fixture();
+  const file = findGoalFile(root, id);
+
+  withPlatformForTesting("win32", () => {
+    // 首次写标签
+    const res1 = setGoalTags(root, id, {
+      tags: ["tag-first", "tag-common"],
+      actor: "win32-tester",
+    });
+    assert.deepEqual(res1.new_tags, ["tag-first", "tag-common"]);
+
+    // 立即执行第二次写标签（第二次落在 30s 陈旧窗口内，模拟 Windows 用户连续修改标签）
+    // 若首次释放因 ':' 失败导致锁残留，此处必因锁占用而抛错
+    const res2 = setGoalTags(root, id, {
+      tags: ["tag-second", "tag-common"],
+      base_tags: ["tag-first", "tag-common"],
+      actor: "win32-tester",
+    });
+    assert.deepEqual(res2.new_tags, ["tag-second", "tag-common"]);
+
+    // 释放后锁目录应已彻底清理
+    assert.equal(existsSync(`${file}.tags.lock`), false);
+  });
+});
+
+test("g-284 验收项 3: 行为测试 b——win32 模拟下陈旧锁（构造已死 PID）回收必须真正清理锁目录且重新获取锁", () => {
+  const { root, id } = fixture();
+  const file = findGoalFile(root, id);
+  const lock = `${file}.tags.lock`;
+
+  withPlatformForTesting("win32", () => {
+    // 构造一个陈旧锁目录：已死 PID，且修改时间大于 30 秒前
+    mkdirSync(lock, { recursive: true });
+    const deadPid = 9999999;
+    assert.equal(isProcessAlive(deadPid), false);
+    const deadToken = `${deadPid}:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee`;
+    const ownerPath = join(lock, "owner");
+    writeFileSync(ownerPath, deadToken, "utf8");
+
+    // 修改 mtime 为 35 秒前（> 30 秒）
+    const staleTime = (Date.now() - 35_000) / 1000;
+    utimesSync(lock, staleTime, staleTime);
+    utimesSync(ownerPath, staleTime, staleTime);
+
+    assert.equal(existsSync(lock), true);
+
+    // 调用 acquireTagsLock：应当成功回收陈旧锁并获取到新锁
+    const handle = acquireTagsLock(file);
+    try {
+      assert.equal(handle.isWindows, true);
+      assert.equal(existsSync(handle.lock), true);
+
+      // 新锁的 owner 应当为当前进程新生成的 token
+      const newOwner = readFileSync(join(handle.lock, "owner"), "utf8");
+      assert.equal(newOwner, handle.token);
+      assert.notEqual(newOwner, deadToken);
+
+      // 验证陈旧隔离目录没有残留
+      const pathTag = safePathTag(deadToken);
+      const staleQuarantine = `${lock}.reclaim-${pathTag}`;
+      assert.equal(existsSync(staleQuarantine), false);
+    } finally {
+      releaseTagsLock(handle);
+    }
+
+    // 释放后锁目录彻底清理
+    assert.equal(existsSync(lock), false);
+  });
+});
+
+test("g-284 验收项 4: 释放/回收失败不得静默吞掉，向 stderr 输出可见告警", () => {
+  const { root, id } = fixture();
+  const file = findGoalFile(root, id);
+
+  withPlatformForTesting("win32", () => {
+    const handle = acquireTagsLock(file);
+    const paths = getTagsLockPaths(file, handle.token);
+
+    // 制造 release 失败场景：提前在 detached 路径创建占位文件，使 renameSync 遇到异常或冲突
+    writeFileSync(paths.detached, "existing-conflict", "utf8");
+
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (...args: any[]) => {
+      errors.push(args.map(String).join(" "));
+    };
+
+    try {
+      releaseTagsLock(handle);
+    } finally {
+      console.error = origError;
+      try { rmSync(paths.detached, { force: true }); } catch {}
+      try { rmSync(handle.lock, { recursive: true, force: true }); } catch {}
+    }
+
+    // 断言有可见错误输出，且明确包含锁或 detached 路径
+    assert.ok(errors.length > 0, "释放失败时必须向 stderr 输出告警");
+    const combined = errors.join("\n");
+    assert.match(combined, /\[dsh-graph\]/);
+    assert.ok(
+      combined.includes(handle.lock) || combined.includes(paths.detached),
+      `告警信息中必须包含锁路径或目标路径: ${combined}`,
+    );
   });
 });
