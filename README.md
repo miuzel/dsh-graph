@@ -41,6 +41,8 @@ dsh plugin --profile <name> add dsh-graph
 
 > 需要 Node ≥ 22（包内 core 为编译后 `.js`）。已发布版本经 npm 与 dsh-market 生态（[dsh-market](https://github.com/dsh-market/dsh-market) / DshMarketPlace / DSH Get，见 `docs/release-handbook.md`）分发。
 >
+> **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2）作为 `peerDependencies` 由 DSH 宿主环境提供，插件自有依赖（`yaml`）打包在 `dependencies` 中，避免产生重复的核心包实例与未满足的 peer 告警。
+>
 > **✅ DSH 版本兼容性（重点）**：v0.10.0 **已在 Linux（WSL2）上完整验证并支持 DeepSeek Harness [`v0.1.5-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)**——开发期的隔离测试实例（Web GUI + 二维泳道看板 + `graph_*` 工具 + REST 端点）与中英双语功能演示视频（见 [dsh-graph-videos](https://github.com/miuzel/dsh-graph-videos)）全部在 `v0.1.5-rc.2` 上实测通过，**推荐与该版本配套使用**。同时兼容 `0.1.5` 系列及 `0.1.2-alpha.x` 及以上版本（工具与提示词契约向后兼容）。
 >
 > **⚠️ 平台范围（重要）**：上述验证**不包含 Windows 原生环境**。Windows 下已知两类独立问题：① `core/ops.ts` 使用 POSIX 专用文件锁常量（把目录当 fd 打开、`O_DIRECTORY`、`O_NOFOLLOW`），在 Windows 上无法获取锁；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`，触发 DSH profile 核心包隔离检查。修复跟踪：看板目标 **g-284**（Windows 平台兼容）与 **g-285**（依赖隔离）。在两者修复并通过 Windows 真机复验前，**请勿在 Windows 原生环境部署**（WSL2 内使用不受影响）。

@@ -28,6 +28,8 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 > **环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。
 >
+> **依赖说明**：由 DSH 宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2）声明为 `peerDependencies`，插件自有依赖（`yaml`）作为 `dependencies` 安装，避免产生重复的核心包实例与未满足的 peer 告警。
+>
 > **DSH 版本兼容性**：本版本（v0.10.0）**已完整验证并支持 DeepSeek Harness `v0.1.5-rc.2`**——发布前的隔离实例（Web GUI + 看板 + 工具 + REST）与中英双语演示录制均在 `v0.1.5-rc.2` 上实测通过；`0.1.5-rc.2` 也是 v0.10.0 的**推荐宿主版本**。同时兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上版本（提示词/工具契约向后兼容）。
 >
 > **⚠️ 平台范围**：以上验证在 **Linux（WSL2）** 完成，**不含 Windows 原生环境**。Windows 下已知两类独立问题：① `core/ops.ts` 使用 POSIX 专用文件锁常量（目录作为 fd、`O_DIRECTORY`、`O_NOFOLLOW`）；② 宿主提供的核心包同时出现在 `dependencies` 与 `peerDependencies`，触发 DSH profile 核心包隔离检查。修复跟踪：看板目标 g-284 / g-285；修复并通过 Windows 真机复验前请勿在 Windows 原生环境部署（WSL2 不受影响）。
@@ -143,6 +145,8 @@ dsh plugin --profile <profile-name> add dsh-graph
 ```
 
 > **Requirements**: Node.js ≥ 22 (includes precompiled core runtime).
+>
+> **Dependency Note**: Core packages provided by the DSH host (`@deepseek-ai/cordis` ^4.0.2, `@deepseek-ai/schemastery` ^3.18.2) are declared under `peerDependencies`. Plugin-specific dependencies (`yaml`) are retained in `dependencies`. This avoids missing peer warnings and prevents duplicate core package instances.
 >
 > **DSH version compatibility**: This release (v0.10.0) is **fully verified against and supports DeepSeek Harness `v0.1.5-rc.2`** — the pre-release isolated instance (Web GUI + kanban + tools + REST) and the bilingual demo recordings were all exercised on `v0.1.5-rc.2`, which is the **recommended host version** for v0.10.0. It also works on the `0.1.5` series and on `0.1.2-alpha.x` and later (prompt/tool contracts are backward compatible).
 >
