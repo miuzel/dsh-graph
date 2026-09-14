@@ -400,21 +400,42 @@
         color: #e6e6e6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       /* g-270：目标描述只读态半透明暗色底纹面板（圆角 + 内边距），视觉圈出正文区域，分层栏目标题，深浅主题自适应 */
       .dg-description-preview {
-        background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.05));
+        background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.025));
         border: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.08));
         border-radius: 8px;
         padding: 10px 14px;
         margin-top: 4px;
         box-sizing: border-box;
       }
+      /* g-270 修正（负责人反馈）：浅色下正文底纹调淡；代码块/行内代码需比正文底纹略"深"，
+         覆盖 DSH MarkdownText 默认的近白底（实测 #f9fafb / #fafafa），避免"块比正文更浅"的观感 */
+      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block,
+      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block > div,
+      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block pre,
+      body:not([data-ds-dark-theme]) .dg-description-preview code {
+        background: rgba(0, 0, 0, 0.06);
+      }
       body[data-ds-dark-theme] .dg-description-preview {
         background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.25));
         border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
+      }
+      /* 深色：DSH 原语代码块实测仍写死近白底（不随主题变化）→ 改为微亮抬升面，避免暗色里的刺眼白块 */
+      body[data-ds-dark-theme] .dg-description-preview .md-code-block,
+      body[data-ds-dark-theme] .dg-description-preview .md-code-block > div,
+      body[data-ds-dark-theme] .dg-description-preview .md-code-block pre,
+      body[data-ds-dark-theme] .dg-description-preview code {
+        background: rgba(255, 255, 255, 0.06);
       }
       @media (prefers-color-scheme: dark) {
         body:not([data-ds-theme="light"]) .dg-description-preview {
           background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.25));
           border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
+        }
+        body:not([data-ds-theme="light"]) .dg-description-preview .md-code-block,
+        body:not([data-ds-theme="light"]) .dg-description-preview .md-code-block > div,
+        body:not([data-ds-theme="light"]) .dg-description-preview .md-code-block pre,
+        body:not([data-ds-theme="light"]) .dg-description-preview code {
+          background: rgba(255, 255, 255, 0.06);
         }
       }
     `;
