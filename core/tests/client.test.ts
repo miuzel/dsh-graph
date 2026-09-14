@@ -2959,8 +2959,8 @@ test("g-189 worktree 发现与弹窗展示源契约", () => {
   assert.match(host, /worktreeCache\.keys\(\)\.next/);
   assert.match(host, /未创建 worktree|worktree 列表不可用/);
   assert.match(modal, /AttemptWorktrees/);
-  assert.match(modal, /useState\(false\)/);
-  assert.match(modal, /expanded \? "▲" : "▼"/);
+  assert.match(modal, /tab === "worktree"/);
+  assert.match(modal, /dgT\("tab\.worktree"\)/);
   assert.match(modal, /dgT\("worktree\.notCreated"\)/);
   assert.match(modal, /textOverflow: "ellipsis"/);
   assert.match(modal, /dgT\("worktree\.copyPathTooltip"\)/);

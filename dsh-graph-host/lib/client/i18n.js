@@ -171,6 +171,7 @@
       'tab.detail': '📋 详情',
       'tab.activity': '🕘 近期动态',
       'tab.context': '📌 执行上下文',
+      'tab.worktree': '🌿 Worktree',
       'tab.goalFile': '📄 goal.md',
       'tab.openFile': '打开',
       'tab.copyPath': '复制路径',
@@ -317,6 +318,7 @@
       'worktree.expandTooltip': '展开 worktree 列表',
       'worktree.unavailable': '⚠️ Git worktree 列表不可用，无法发现 worktree',
       'worktree.notCreated': '未创建 worktree',
+      'worktree.noAttempts': '暂无 attempt 执行记录与 worktree',
       'worktree.copyPathTooltip': '复制安全相对路径',
       'worktree.pathCopied': '✅ worktree 路径已复制',
       // g-272 att-002：服务端 worktree 候选/清理 reason 稳定枚举 → 中文映射（key 后缀即枚举值原文）
@@ -1127,6 +1129,7 @@
       'tab.detail': '📋 Details',
       'tab.activity': '🕘 Activity',
       'tab.context': '📌 Execution Context',
+      'tab.worktree': '🌿 Worktree',
       'tab.goalFile': '📄 goal.md',
       'tab.openFile': 'Open',
       'tab.copyPath': 'Copy path',
@@ -1273,6 +1276,7 @@
       'worktree.expandTooltip': 'Expand worktree list',
       'worktree.unavailable': '⚠️ Git worktree list unavailable',
       'worktree.notCreated': 'No worktree created',
+      'worktree.noAttempts': 'No attempts or worktrees yet',
       'worktree.copyPathTooltip': 'Copy safe relative path',
       'worktree.pathCopied': '✅ Worktree path copied',
       // g-272 att-002: server worktree candidate/cleanup reason enums → English mapping (key suffix = enum verbatim)
