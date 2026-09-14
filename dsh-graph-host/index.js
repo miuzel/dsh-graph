@@ -2516,6 +2516,33 @@ export function apply(ctx, config) {
         }
       },
     },
+    // g-275: 按卡片 id 读取单张卡片详情（支持共享卡及目标自有卡，供上下文抽屉在无 goalId 时读取共享卡）
+    {
+      path: "/api/dsh-graph/card",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const url = new URL(req.url ?? "", "http://x");
+          const cardId = url.searchParams.get("id");
+          const goalId = url.searchParams.get("goal");
+          if (!cardId) return json(res, 400, { error: "missing id" });
+          const root = rootForReq(req);
+          if (goalId) {
+            const detail = goalDetail(root, goalId);
+            const card = (detail.cards ?? []).find((c) => c.id === cardId);
+            if (!card) return json(res, 404, { error: `卡片不存在：${cardId}（目标 ${goalId}）` });
+            return json(res, 200, { ok: true, card, goal: { id: detail.meta?.id ?? goalId, title: detail.meta?.title } });
+          }
+          const list = sharedCards(root);
+          const card = list.find((c) => c.id === cardId);
+          if (!card) return json(res, 404, { error: `共享卡不存在：${cardId}` });
+          return json(res, 200, { ok: true, card });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
     // g-183: 共享卡管理端点（面板 CRUD / 引用 / 转换）
     {
       path: "/api/dsh-graph/shared-cards",

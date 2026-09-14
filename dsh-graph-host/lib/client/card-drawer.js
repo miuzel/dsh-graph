@@ -1,7 +1,10 @@
-    // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑 + g-128 删除按钮
+    // 上下文抽屉：摘要 + 全文 + 子代理 id/链接 + g-109 收集提示词编辑 + g-128 删除按钮 + g-275 共享卡支持
     function CardDrawer(props) {
       useLocaleRevision();
-      const [state, setState] = React.useState({ loading: true });
+      const [state, setState] = React.useState({
+        loading: props.goalId ? true : !props.cardData,
+        card: props.cardData ?? null,
+      });
       const [promptText, setPromptText] = React.useState("");
       const [collectNote, setCollectNote] = React.useState(null);
       const [collecting, setCollecting] = React.useState(false);
@@ -19,18 +22,46 @@
       }, [props.cardId]);
       React.useEffect(() => {
         let alive = true;
-        fetch(graphUrl("/api/dsh-graph/goal", { id: props.goalId }))
-          .then((r) => r.json())
-          .then((data) => alive && setState({ loading: false, data }))
-          .catch((e) => alive && setState({ loading: false, error: String(e) }));
+        if (props.goalId) {
+          setState((s) => ({ ...s, loading: true }));
+          fetch(graphUrl("/api/dsh-graph/goal", { id: props.goalId }))
+            .then((r) => r.json())
+            .then((data) => alive && setState({ loading: false, data, card: null }))
+            .catch((e) => alive && setState({ loading: false, error: String(e) }));
+        } else if (props.cardId) {
+          // 共享卡无 goalId 场景
+          if (!props.cardData || props.cardData.id !== props.cardId) {
+            setState({ loading: true, card: null });
+          }
+          fetch(graphUrl("/api/dsh-graph/card", { id: props.cardId }))
+            .then((r) => r.json())
+            .then((data) => {
+              if (!alive) return;
+              if (data.ok && data.card) {
+                setState({ loading: false, card: data.card });
+              } else {
+                setState((prev) => {
+                  if (prev.card) return { ...prev, loading: false };
+                  return { loading: false, error: data?.error || dgT("drawer.cardNotExist") + props.cardId };
+                });
+              }
+            })
+            .catch((e) => {
+              if (!alive) return;
+              setState((prev) => {
+                if (prev.card) return { ...prev, loading: false };
+                return { loading: false, error: String(e) };
+              });
+            });
+        }
         return () => { alive = false; };
-      }, [props.goalId]);
+      }, [props.goalId, props.cardId]);
 
       let inner;
       if (state.loading) inner = dgT("common.loading");
       else if (state.error) inner = dgT("drawer.loadFail") + state.error;
       else {
-        const card = (state.data.cards ?? []).find((c) => c.id === props.cardId);
+        const card = state.card ?? (state.data?.cards ?? []).find((c) => c.id === props.cardId);
         if (!card) inner = dgT("drawer.cardNotExist") + props.cardId;
         else {
           // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、canonical 附件根、回填模板和禁区
@@ -86,8 +117,8 @@
                   sessionLinkBtn(card.parent_session_id, card.child_id, dgT("card.goToSession"))),
                 h("div", { style: S.meta }, `id：${card.child_id}`))
             : null;
-          // g-109：收集提示词编辑区（空卡片显示）
-          const collectPanel = card.status === "empty" || card.status === "collecting"
+          // g-109：收集提示词编辑区（空卡片显示；共享卡无 goal 属主时隐藏 goal 专属收集操作）
+          const collectPanel = (props.goalId && (card.status === "empty" || card.status === "collecting"))
             ? h("div", { style: S.drawerSection, key: "collect", className: "dg-collect-prompt" },
                 h("div", { style: S.drawerH }, dgT("drawer.collectTitle")),
                 // 可编辑的收集信息目标部分
@@ -185,6 +216,156 @@
           const rawContent = card.content?.trim() || "";
           const hasCardContent = rawContent.length > 0;
 
+          // g-275: 共享卡展示被引用目标清单（若数据可得）
+          const refs = Array.isArray(card.referencingGoals) ? card.referencingGoals : [];
+          const referencingGoalsList = card.scope === "shared" || refs.length > 0
+            ? h("div", { key: "refs", style: S.drawerSection },
+                h("div", { style: S.drawerH }, dgT("shared.refGoals")),
+                refs.length === 0
+                  ? h("div", { style: { ...S.meta, fontSize: 11 } }, dgT("shared.noRefGoals"))
+                  : h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" } },
+                      refs.map((ref) => {
+                        const label = ref.title ? `${ref.title}${ref.archived ? " (" + dgT("card.archived") + ")" : ""}` : ref.id;
+                        return h("span", {
+                          key: ref.id,
+                          style: {
+                            ...S.meta,
+                            fontSize: 11,
+                            padding: "2px 6px",
+                            borderRadius: 4,
+                            background: "var(--dsw-alias-bg-hover, rgba(128,128,128,0.15))",
+                            border: "1px solid var(--dsw-alias-border-subtle, rgba(128,128,128,0.2))",
+                          },
+                        }, label);
+                      })))
+            : null;
+
+          // g-128：卡片删除/转换操作区（仅属于特定目标时可用；共享卡无 goal 属主时隐藏）
+          const goalActionsPanel = !props.goalId
+            ? null
+            : h("div", { key: "del", style: { ...S.drawerSection, borderTop: "1px solid rgba(128,128,128,.25)", paddingTop: 8 } },
+                deleteConfirm
+                  ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+                      h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #d66)", fontSize: 12 } },
+                        dgT("drawer.deleteConfirm", { title: card.title })),
+                      h("div", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } },
+                        `id：${card.id}`),
+                      h("input", {
+                        style: { ...S.promptInput, fontSize: 12 },
+                        value: deleteIdInput,
+                        placeholder: dgT("drawer.deleteIdPlaceholder"),
+                        onChange: (e) => setDeleteIdInput(e.target.value),
+                      }),
+                      h("div", { style: { display: "flex", gap: 6 } },
+                        h("button", {
+                          style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn-danger",
+                          disabled: deleteIdInput.trim() !== card.id || deleting,
+                          onClick: async () => {
+                            if (deleting) return; // g-219：防双击重复提交
+                            setDeleting(true);
+                            try {
+                              const r = await fetch(graphUrl("/api/dsh-graph/delete-card"), {
+                                method: "POST",
+                                headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                              });
+                              const data = await r.json();
+                              if (data.ok) {
+                                setDeleteNote(dgT("drawer.cardDeleted"));
+                                showToast(dgT("drawer.cardDeleted"));
+                                setDeleteConfirm(false);
+                                setDeleteIdInput("");
+                                // g-219：事件结果为准——先通知外部局部移除，再关抽屉
+                                if (props.onDeleted) props.onDeleted(card.id);
+                                props.onClose?.();
+                              } else {
+                                // g-219：删除被拒（如 collecting）——明确提示并保留确认态
+                                const msg = (data.error || dgT("drag.unknownError"));
+                                setDeleteNote("⚠️ " + msg);
+                                showToast(dgT("drawer.deleteFail") + msg);
+                              }
+                            } catch (e) {
+                              setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e));
+                            } finally {
+                              setDeleting(false);
+                            }
+                          },
+                        }, dgT("drawer.deleteConfirmBtn")),
+                        h("button", {
+                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                          className: "dg-btn",
+                          onClick: () => { setDeleteConfirm(false); setDeleteIdInput(""); setDeleteNote(null); },
+                        }, dgT("common.cancel")))
+                    )
+                  : h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+                      // g-183：共享/自有转换 + 解除引用（goal 详情方向独立；核心层守卫引用计数与归属）
+                      card.scope === "shared"
+                        ? h("button", {
+                            style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                            className: "dg-btn",
+                            disabled: card.status === "collecting",
+                            title: card.status === "collecting" ? dgT("drawer.unrefCollecting") : dgT("drawer.unrefTooltip"),
+                            onClick: async () => {
+                              try {
+                                const r = await fetch(graphUrl("/api/dsh-graph/unreference-shared-card"), {
+                                  method: "POST", headers: { "content-type": "application/json" },
+                                  body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                                });
+                                const data = await r.json();
+                                if (data.ok) { showToast(dgT("drawer.unrefSuccess")); props.onDeleted?.(); }
+                                else setDeleteNote(dgT("drawer.deleteRefFail") + (data.error || dgT("drag.unknownError")));
+                              } catch (e) { setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
+                            },
+                          }, dgT("drawer.unrefBtn"))
+                        : h("button", {
+                            style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                            className: "dg-btn",
+                            disabled: card.status === "collecting",
+                            title: card.status === "collecting" ? dgT("drawer.convertCollecting") : dgT("drawer.convertToSharedTooltip"),
+                            onClick: async () => {
+                              try {
+                                const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-shared"), {
+                                  method: "POST", headers: { "content-type": "application/json" },
+                                  body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                                });
+                                const data = await r.json();
+                                if (data.ok) { showToast(dgT("drawer.convertedToShared")); (props.onConverted ?? props.onDeleted)?.(); }
+                                else setDeleteNote(dgT("drawer.convertFail") + (data.error || dgT("drag.unknownError")));
+                              } catch (e) { setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
+                            },
+                          }, dgT("drawer.convertToShared")),
+                      card.scope === "shared"
+                        ? h("button", {
+                            style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
+                            className: "dg-btn",
+                            disabled: card.status === "collecting",
+                            title: card.status === "collecting" ? dgT("drawer.convertCollecting") : dgT("drawer.convertToOwnedTooltip"),
+                            onClick: async () => {
+                              try {
+                                const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
+                                  method: "POST", headers: { "content-type": "application/json" },
+                                  body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
+                                });
+                                const data = await r.json();
+                                if (data.ok) { showToast(dgT("drawer.convertedToOwned")); (props.onConverted ?? props.onDeleted)?.(); }
+                                else setDeleteNote(dgT("drawer.convertFail") + (data.error || dgT("drag.unknownError")));
+                              } catch (e) { setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
+                            },
+                          }, dgT("drawer.convertToOwned"))
+                        : null,
+                      // 仅 goal 自有卡可删除（共享卡走解除引用/共享面板显式删除，避免必然报错）
+                      card.scope !== "shared"
+                        ? h("button", {
+                            style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
+                            className: "dg-btn-danger",
+                            disabled: card.status === "collecting",
+                            title: card.status === "collecting" ? dgT("drawer.deleteCollecting") : dgT("drawer.deleteCardTooltip"),
+                            onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
+                          }, dgT("drawer.deleteCard"))
+                        : null),
+                deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11, color: deleteNote.startsWith("⚠️") ? "var(--dsw-alias-state-error-primary, #d66)" : undefined } }, deleteNote) : null);
+
           inner = [
             h("div", { key: "t", style: { fontWeight: 700, fontSize: 14 } },
               `📇 ${card.title}`),
@@ -192,6 +373,7 @@
               `${card.id} ｜ ${card.scope === "shared" ? dgT("drawer.sharedEntry") : dgT("drawer.ownedEntry")} ｜ ${CARD_STATUS_ICON[card.status] ?? card.status}${card.filled_by ? " ｜ " + dgT("drawer.filledBy") + card.filled_by : ""}`),
             cardFileEntry,
             childLink,
+            referencingGoalsList,
             card.summary ? h("div", { key: "s", style: S.drawerSection },
               h("div", { style: S.drawerH }, dgT("drawer.summary")), card.summary) : null,
             // 附件引用（安全下载链接，不内联渲染用户 Markdown/HTML/SVG）
@@ -223,129 +405,7 @@
                 ? h(GoalMarkdown, { text: card.content, viewMode })
                 : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("drawer.noContent"))),
             collectPanel,
-            // g-128：卡片删除按钮（二次确认 + 输入卡片 id 防误删）
-            h("div", { key: "del", style: { ...S.drawerSection, borderTop: "1px solid rgba(128,128,128,.25)", paddingTop: 8 } },
-              deleteConfirm
-                ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
-                    h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #d66)", fontSize: 12 } },
-                      dgT("drawer.deleteConfirm", { title: card.title })),
-                    h("div", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } },
-                      `id：${card.id}`),
-                    h("input", {
-                      style: { ...S.promptInput, fontSize: 12 },
-                      value: deleteIdInput,
-                      placeholder: dgT("drawer.deleteIdPlaceholder"),
-                      onChange: (e) => setDeleteIdInput(e.target.value),
-                    }),
-                    h("div", { style: { display: "flex", gap: 6 } },
-                      h("button", {
-                        style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
-                        className: "dg-btn-danger",
-                        disabled: deleteIdInput.trim() !== card.id || deleting,
-                        onClick: async () => {
-                          if (deleting) return; // g-219：防双击重复提交
-                          setDeleting(true);
-                          try {
-                            const r = await fetch(graphUrl("/api/dsh-graph/delete-card"), {
-                              method: "POST",
-                              headers: { "content-type": "application/json" },
-                              body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
-                            });
-                            const data = await r.json();
-                            if (data.ok) {
-                              setDeleteNote(dgT("drawer.cardDeleted"));
-                              showToast(dgT("drawer.cardDeleted"));
-                              setDeleteConfirm(false);
-                              setDeleteIdInput("");
-                              // g-219：事件结果为准——先通知外部局部移除，再关抽屉
-                              if (props.onDeleted) props.onDeleted(card.id);
-                              props.onClose?.();
-                            } else {
-                              // g-219：删除被拒（如 collecting）——明确提示并保留确认态
-                              const msg = (data.error || dgT("drag.unknownError"));
-                              setDeleteNote("⚠️ " + msg);
-                              showToast(dgT("drawer.deleteFail") + msg);
-                            }
-                          } catch (e) {
-                            setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e));
-                          } finally {
-                            setDeleting(false);
-                          }
-                        },
-                      }, dgT("drawer.deleteConfirmBtn")),
-                      h("button", {
-                        style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
-                        className: "dg-btn",
-                        onClick: () => { setDeleteConfirm(false); setDeleteIdInput(""); setDeleteNote(null); },
-                      }, dgT("common.cancel")))
-                  )
-                : h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                    // g-183：共享/自有转换 + 解除引用（goal 详情方向独立；核心层守卫引用计数与归属）
-                    card.scope === "shared"
-                      ? h("button", {
-                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
-                          className: "dg-btn",
-                          disabled: card.status === "collecting",
-                          title: card.status === "collecting" ? dgT("drawer.unrefCollecting") : dgT("drawer.unrefTooltip"),
-                          onClick: async () => {
-                            try {
-                              const r = await fetch(graphUrl("/api/dsh-graph/unreference-shared-card"), {
-                                method: "POST", headers: { "content-type": "application/json" },
-                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
-                              });
-                              const data = await r.json();
-                              if (data.ok) { showToast(dgT("drawer.unrefSuccess")); props.onDeleted?.(); }
-                              else setDeleteNote(dgT("drawer.deleteRefFail") + (data.error || dgT("drag.unknownError")));
-                            } catch (e) { setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
-                          },
-                        }, dgT("drawer.unrefBtn"))
-                      : h("button", {
-                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
-                          className: "dg-btn",
-                          disabled: card.status === "collecting",
-                          title: card.status === "collecting" ? dgT("drawer.convertCollecting") : dgT("drawer.convertToSharedTooltip"),
-                          onClick: async () => {
-                            try {
-                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-shared"), {
-                                method: "POST", headers: { "content-type": "application/json" },
-                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
-                              });
-                              const data = await r.json();
-                              if (data.ok) { showToast(dgT("drawer.convertedToShared")); (props.onConverted ?? props.onDeleted)?.(); }
-                              else setDeleteNote(dgT("drawer.convertFail") + (data.error || dgT("drag.unknownError")));
-                            } catch (e) { setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
-                          },
-                        }, dgT("drawer.convertToShared")),
-                    card.scope === "shared"
-                      ? h("button", {
-                          style: { ...S.btn, fontSize: 11, padding: "2px 8px" },
-                          className: "dg-btn",
-                          disabled: card.status === "collecting",
-                          title: card.status === "collecting" ? dgT("drawer.convertCollecting") : dgT("drawer.convertToOwnedTooltip"),
-                          onClick: async () => {
-                            try {
-                              const r = await fetch(graphUrl("/api/dsh-graph/convert-card-to-owned"), {
-                                method: "POST", headers: { "content-type": "application/json" },
-                                body: JSON.stringify({ goal: props.goalId, card: props.cardId }),
-                              });
-                              const data = await r.json();
-                              if (data.ok) { showToast(dgT("drawer.convertedToOwned")); (props.onConverted ?? props.onDeleted)?.(); }
-                              else setDeleteNote(dgT("drawer.convertFail") + (data.error || dgT("drag.unknownError")));
-                            } catch (e) { setDeleteNote(dgT("drag.requestFail") + String(e?.message ?? e)); }
-                          },
-                        }, dgT("drawer.convertToOwned"))
-                      : null,
-                    // 仅 goal 自有卡可删除（共享卡走解除引用/共享面板显式删除，避免必然报错）
-                    card.scope !== "shared"
-                      ? h("button", {
-                          style: { ...S.btnDanger, fontSize: 11, padding: "2px 8px" },
-                          className: "dg-btn-danger",
-                          disabled: card.status === "collecting",
-                          title: card.status === "collecting" ? dgT("drawer.deleteCollecting") : dgT("drawer.deleteCardTooltip"),
-                          onClick: () => { setDeleteConfirm(true); setDeleteIdInput(""); setDeleteNote(null); },
-                        }, dgT("drawer.deleteCard"))
-                      : null),
-              deleteNote ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11, color: deleteNote.startsWith("⚠️") ? "var(--dsw-alias-state-error-primary, #d66)" : undefined } }, deleteNote) : null),
+            goalActionsPanel,
             // g-107：卡片会话内嵌——实时状态/模型/直达指令/最近记录
             // g-109 判据反馈：收集子代理出错时在实时会话控件内换 provider/model 重新收集
             card.child_id

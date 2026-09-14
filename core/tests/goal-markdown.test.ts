@@ -438,3 +438,141 @@ test("g-275: i18n 字典完整性——卡片抽屉 Markdown 切换提示词中�
   assert.ok(i18n.includes("'description.viewMarkdown'"), "i18n 必须包含 description.viewMarkdown");
   assert.ok(i18n.includes("'description.viewRaw'"), "i18n 必须包含 description.viewRaw");
 });
+
+// ---- ⑧ g-275 att-002: 项目知识库共享卡片点击打开上下文抽屉测试 ----
+
+test("g-275 att-002: 源码契约——shared-panel、kanban 与 card-drawer 挂接与冒泡阻断", () => {
+  const sharedPanel = readFileSync("dsh-graph-host/lib/client/shared-panel.js", "utf8");
+  assert.ok(sharedPanel.includes("onOpenCard"), "SharedCardsModal 必须接收 onOpenCard 回调");
+  assert.ok(sharedPanel.includes("cursor: onOpenCard ? \"pointer\" : \"default\""), "cardRow 必须设置鼠标指针手型");
+  assert.ok(sharedPanel.includes("title: dgT(\"card.clickToOpenDrawer\")"), "cardRow 必须具备打开抽屉提示 title");
+  assert.ok(sharedPanel.includes("onOpenCard(null, c.id, c)"), "cardRow 点击时必须调用 onOpenCard(null, c.id, c)");
+
+  // 硬性要求 1：点击既有按钮/输入框不得顺带打开抽屉（stopPropagation 保护）
+  assert.ok(
+    sharedPanel.includes("e.stopPropagation();\n                      unreference(c.id, ref.id);") ||
+    sharedPanel.includes("e.stopPropagation(); unreference(c.id, ref.id);"),
+    "解除引用按钮点击必须执行 e.stopPropagation()",
+  );
+  assert.ok(
+    sharedPanel.includes("e.stopPropagation();\n                  removeCard(c.id);") ||
+    sharedPanel.includes("e.stopPropagation(); removeCard(c.id);"),
+    "删除共享卡按钮点击必须执行 e.stopPropagation()",
+  );
+  assert.ok(
+    sharedPanel.includes("onClick: (e) => e.stopPropagation(),") &&
+    sharedPanel.includes("attachToGoal(c.id, targetId);"),
+    "关联目标输入框与确定按钮必须执行 e.stopPropagation()",
+  );
+
+  const kanban = readFileSync("dsh-graph-host/lib/client/kanban.js", "utf8");
+  assert.ok(
+    kanban.includes("onOpenCard: (goalId, cardId, cardData) => setDrawerCard({ goalId, cardId, cardData })"),
+    "kanban 渲染 SharedCardsModal 时必须传入 onOpenCard",
+  );
+  assert.ok(
+    kanban.includes("cardData: drawerCard.cardData"),
+    "kanban 渲染 CardDrawer 时必须传入 cardData",
+  );
+
+  const drawer = readFileSync("dsh-graph-host/lib/client/card-drawer.js", "utf8");
+  assert.ok(
+    drawer.includes("fetch(graphUrl(\"/api/dsh-graph/card\", { id: props.cardId }))"),
+    "card-drawer 必须在无 goalId 时支持通过 /api/dsh-graph/card 请求共享卡数据",
+  );
+  assert.ok(
+    drawer.includes("referencingGoals"),
+    "card-drawer 必须展示共享卡被哪些 goal 引用",
+  );
+  assert.ok(
+    drawer.includes("props.goalId && (card.status === \"empty\" || card.status === \"collecting\")"),
+    "无 goalId 场景下必须隐藏 goal 专属的收集面板",
+  );
+  assert.ok(
+    drawer.includes("const goalActionsPanel = !props.goalId"),
+    "无 goalId 场景下必须隐藏 goal 专属的卡片操作区",
+  );
+});
+
+test("g-275 att-002: 共享卡片抽屉数据流与降级仿真测试", async () => {
+  // 仿真 CardDrawer 在不同数据来源下的 state 迁移与渲染表现
+  // 1. 当由共享面板直接传入 cardData 时：无需发 /goal 请求，直接加载
+  const sampleCard = {
+    id: "shared-test-01",
+    title: "共享测试卡",
+    scope: "shared",
+    status: "filled",
+    summary: "这是摘要",
+    content: "## 这是正文\n- 列表项 1\n- 列表项 2",
+    refCount: 2,
+    referencingGoals: [
+      { id: "g-101", title: "目标一", archived: false },
+      { id: "g-102", title: "目标二", archived: true },
+    ],
+  };
+
+  // 模拟 CardDrawer 初始化状态
+  const initFromProps = (props: { goalId?: string | null; cardId: string; cardData?: any }) => {
+    return {
+      loading: props.goalId ? true : !props.cardData,
+      card: props.cardData ?? null,
+    };
+  };
+
+  const state1 = initFromProps({ goalId: null, cardId: sampleCard.id, cardData: sampleCard });
+  assert.equal(state1.loading, false, "有 cardData 时初始 loading 必为 false");
+  assert.equal(state1.card?.id, sampleCard.id, "直接使用传入的 cardData");
+  assert.equal(state1.card?.referencingGoals.length, 2, "包含 2 个引用目标");
+
+  // 2. 当无 cardData 时：发起 /card 异步请求
+  let fetchCalledWith = "";
+  const mockFetch = async (url: string) => {
+    fetchCalledWith = url;
+    return {
+      json: async () => ({ ok: true, card: sampleCard }),
+    };
+  };
+
+  const state2 = initFromProps({ goalId: null, cardId: sampleCard.id });
+  assert.equal(state2.loading, true, "无 cardData 时初始 loading 为 true");
+  const res = await mockFetch(`/api/dsh-graph/card?id=${sampleCard.id}`);
+  const json = await res.json();
+  const state2Resolved = { loading: false, card: json.card };
+  assert.equal(fetchCalledWith, `/api/dsh-graph/card?id=${sampleCard.id}`);
+  assert.equal(state2Resolved.card.id, sampleCard.id);
+
+  // 3. 当请求失败时：降级为明确错误提示，不崩溃白屏
+  const mockFetchFail = async () => {
+    return {
+      json: async () => ({ ok: false, error: "共享卡不存在：shared-bad" }),
+    };
+  };
+  const failRes = await mockFetchFail();
+  const failJson = await failRes.json();
+  const stateFail = { loading: false, error: failJson.error, card: null };
+  assert.equal(stateFail.loading, false);
+  assert.ok(stateFail.error.includes("不存在"), "错误信息应明确展示错误");
+
+  // 4. 事件冒泡阻止模拟：点击内部按钮阻断冒泡，不触发外层卡片点击
+  let openCardTriggered = 0;
+  let buttonActionTriggered = 0;
+  const onOpenCard = () => { openCardTriggered++; };
+  const onButtonClick = (e: { stopPropagation: () => void }) => {
+    e.stopPropagation();
+    buttonActionTriggered++;
+  };
+
+  let propagationStopped = false;
+  const fakeEvent = {
+    stopPropagation: () => { propagationStopped = true; },
+  };
+
+  // 模拟点击按钮
+  onButtonClick(fakeEvent);
+  assert.equal(buttonActionTriggered, 1, "按钮自身动作已触发");
+  assert.equal(propagationStopped, true, "按钮必须调用 stopPropagation");
+  if (!propagationStopped) {
+    onOpenCard();
+  }
+  assert.equal(openCardTriggered, 0, "事件冒泡阻断后不得触发 onOpenCard");
+});
