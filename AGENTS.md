@@ -236,6 +236,20 @@ node scripts/win-smoke-test.mjs --self-test                       # 离线自检
 **纪律**：Linux/WSL2 全绿**不能**替代本项；Windows 验证缺失时，README 的兼容声明必须
 如实标注「Windows 未验证」，不得宣称支持。
 
+### 版本号一致性：发布前统一检查（不塞进功能目标）
+
+来源：负责人 2026-09-14 明确——版本常量属**发布前检查项**，不并入任何功能目标。
+
+发布前必须逐项核对下列位置的版本表述**一致**（改完需重建生成物并提交）：
+
+1. `dsh-graph-host/package.json` 的 `version`（发布源）；
+2. `dsh-graph-host/lib/client/constants.js` 的 `PLUGIN_VERSION`（g-174 硬编码，标题栏显示用；
+   改后必须 `bash scripts/build-client.sh` 重建 `lib/client.js` 并一起提交）；
+3. `README.md` 与 `dsh-graph-host/README.md`（中英）中出现的版本号与平台验证声明。
+
+> 教训：0.11.0 发布前 `package.json` 已 bump 至 `0.11.0`，但 `PLUGIN_VERSION` 仍为 `0.11.0-alpha`
+> ——该常量不参与构建校验，**只有人工核对才能发现**，故固化为清单项。
+
 ## Important Notes
 
 - The generated file maintains the `window.__ModuleLoader__.load` contract required by the dsh client
