@@ -27,7 +27,7 @@ test("g-239 判据 1 & 4：通用执行纪律提示词统一为有限状态汇�
     attempt: "att-001",
     goalRel: ".dsh-graph/versions/v0.9.2/goals/g-239/goal.md",
     cardsSection: "## 已收集上下文卡片成果（g-120 注入）\n\n（无）",
-    worktreeBlock: resolveWorktreeGuide("task"),
+    worktreeBlock: resolveWorktreeGuide("task", true),
   });
 
   // 1. 不再要求每个 read/bash 动作机械追加状态调用
@@ -49,7 +49,7 @@ test("g-239 判据 1 & 4：通用执行纪律提示词统一为有限状态汇�
   assert.match(output, /【禁区】绝不自行 graph_transition 到 "delivered"/);
   assert.match(output, /delivered 是负责人\/supervisor 的 human gate/);
   assert.match(output, /【强制 worktree 隔离】/);
-  assert.match(output, /预创建并登记/);
+  assert.match(output, /supervisor 预建、或由插件在派发时创建/);
   assert.match(output, /绝不自行拉树、建分支、切分支、改分支/);
   assert.doesNotMatch(output, /git worktree add/, "WORKTREE_GUIDE 不再包含子代理自行 git worktree add 指令");
   assert.doesNotMatch(output, /合并 main/, "禁止写合并 main");
