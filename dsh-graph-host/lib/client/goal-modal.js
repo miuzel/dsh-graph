@@ -527,12 +527,14 @@
         setNote(null);
       };
       const hasContent = (description ?? "").trim().length > 0;
-      // g-270：标题行最右侧的「渲染 / 原文」切换（仅只读态且有内容时出现）
+      // g-270：标题行最右侧的「阅读模式 / Markdown原文」切换（仅只读态且有内容时出现）。
+      // 模式切换类控件：未选中项不显示边框与底色（边框置 transparent 以保持尺寸稳定、切换不跳动）
       const segStyle = (active) => ({
         ...S.btn, fontSize: 11, padding: "1px 6px",
-        opacity: active ? 1 : 0.5,
+        background: active ? S.btn.background : "transparent",
+        borderColor: active ? "var(--dsw-alias-state-business-primary, rgba(76,141,255,.55))" : "transparent",
+        opacity: active ? 1 : 0.6,
         fontWeight: active ? 600 : 400,
-        borderColor: active ? "var(--dsw-alias-border-l1, rgba(76,141,255,.55))" : undefined,
       });
 
       return h("div", { style: S.modalSection },
