@@ -198,6 +198,27 @@ function resolvePackageDir(dir) {
   return dir;
 }
 
+/**
+ * 把本地包目录打包成 tarball（--ignore-scripts 同时绕过依赖 bash 的 prepack，
+ * 后者在原生 Windows 上不可用）。返回 { file, detail }；file 为 null 表示失败。
+ */
+function packLocalPackage(pkgDir, destDir) {
+  mkdirSync(destDir, { recursive: true });
+  const r = runSync("npm", ["pack", "--ignore-scripts", "--pack-destination", destDir],
+    { cwd: pkgDir, timeout: 300_000 });
+  const output = (r.out || "") + "\n" + (r.err || "");
+  const lines = output.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  // npm 的 notice 行形如 "npm notice filename: x.tgz"，也会以 .tgz 结尾；
+  // 只接受「整行就是一个文件名」的那一行（无空格）。
+  const name = lines.filter((s) => /^[^\s]+\.tgz$/.test(s)).pop();
+  if (r.code !== 0 || !name) {
+    const errLine = lines.find((l) => /^npm error/.test(l)) ?? lines.slice(-1)[0] ?? `exit=${r.code}`;
+    return { file: null, detail: `${errLine}（目录 ${pkgDir}）` };
+  }
+  const full = join(destDir, basename(name));
+  return existsSync(full) ? { file: full, detail: "" } : { file: null, detail: `未找到产物 ${full}` };
+}
+
 function scanPosixNamedImports(pkgDir) {
   const files = [];
   const idx = join(pkgDir, "index.js");
@@ -334,9 +355,14 @@ async function tier3Core(smokeDir, opsPath, workspace) {
   const r = runSync(process.execPath, [script, opsPath, workspace], { timeout: 120_000 });
   const parsed = parseSmokeJson(r.out);
   if (!parsed) {
+    const stderr = (r.err || "").trim();
+    const depMissing = /ERR_MODULE_NOT_FOUND|Cannot find package/.test(stderr + r.out);
     record("T3", "core/ops.js 可加载并跑通", "FAIL",
-      `子进程未产出结果（exit=${r.code}）${r.err.trim() ? " :: " + r.err.trim().split(/\r?\n/)[0] : ""}` +
-      (r.out.trim() ? " :: " + r.out.trim().split(/\r?\n/).slice(-1)[0] : ""));
+      depMissing
+        ? "运行时依赖未解析（插件自带 dependencies 未随安装落地）——这正是「拷贝目录 + plugin add 目录」的失败形态 :: " +
+          (stderr.split(/\r?\n/).find((l) => /Cannot find package/.test(l)) ?? stderr.split(/\r?\n/)[0] ?? "")
+        : `子进程未产出结果（exit=${r.code}）${stderr ? " :: " + stderr.split(/\r?\n/)[0] : ""}` +
+          (r.out.trim() ? " :: " + r.out.trim().split(/\r?\n/).slice(-1)[0] : ""));
     return null;
   }
   const failed = parsed.steps.filter((s) => !s.ok);
@@ -598,19 +624,48 @@ async function main() {
       `exit=${init.code} :: ${(init.err || init.out).trim().split(/\r?\n/)[0]}`);
   }
 
-  const spec = opt.path ?? opt.spec;
+  // --path 也必须走「真实安装」语义：先 npm pack 成 tarball 再安装。
+  // 直接 `add <目录>` 会被 pnpm 处理成 link:，**不会安装该包的 dependencies**；
+  // 而依赖解析会顺着包所在目录的上层 node_modules 命中依赖，于是在开发仓库内
+  // 「看起来通过」，到了仓库外（或用户机器上拷贝的目录里）就 ERR_MODULE_NOT_FOUND。
+  // 用 tarball 安装与 registry 安装一致，杜绝这种假通过。
+  let spec = opt.spec;
+  if (opt.path) {
+    const localPkgDir = resolvePackageDir(opt.path);
+    const packed = packLocalPackage(localPkgDir, join(home, "_pack"));
+    if (!packed.file) {
+      record("T2", "本地目录打包为 tarball", "FAIL", packed.detail);
+      return finish(opt, home, { pkgDir: localPkgDir, logPath: null });
+    }
+    spec = packed.file;
+    record("T2", "本地目录已打包为 tarball", "PASS",
+      `${basename(packed.file)}（与 registry 安装同语义：会真正安装 dependencies）`);
+  }
+
   const install = runSync(dshCmd, [...dshPrefix, "plugin", "--profile", profile, "add", spec],
     { env: { ...process.env, DSH_HOME: home }, timeout: 900_000 });
   const installOut = install.out + install.err;
+  const installLabel = opt.path ? `本地构建 ${basename(spec)}` : `安装 ${spec}`;
   if (install.code === 0) {
-    record("T2", `安装 ${spec}`, "PASS");
+    record("T2", installLabel, "PASS");
   } else {
-    record("T2", `安装 ${spec}`, "FAIL",
+    record("T2", installLabel, "FAIL",
       `exit=${install.code} :: ${installOut.trim().split(/\r?\n/).slice(-3).join(" / ")}`);
+  }
+  if (/Issues with peer dependencies found/.test(installOut)) {
+    record("T2", "peer 依赖告警", "WARN",
+      "出现 Issues with peer dependencies found（宿主 profile 为 autoInstallPeers:false；" +
+      "若插件已按生态惯例标注 peerDependenciesMeta.optional 则不应出现）");
   }
   const peerWarns = installOut.split(/\r?\n/).filter((l) => /missing peer|✕/.test(l)).map((l) => l.trim());
   if (peerWarns.length > 0) {
-    record("T2", "peer 依赖告警", "INFO", `${peerWarns.length} 条：${peerWarns.slice(0, 3).join(" ; ")}`);
+    record("T2", "缺失 peer 明细", "INFO", `${peerWarns.length} 条：${peerWarns.slice(0, 3).join(" ; ")}`);
+  }
+  // 运行时依赖必须真的被装进 profile（捕捉「link 安装不装 dependencies」这类问题）
+  const yamlDep = join(home, "profiles", profile, "node_modules", "yaml");
+  if (existsSync(join(home, "profiles", profile, "node_modules", "dsh-graph"))) {
+    record("T2", "插件自带依赖已随安装落地", existsSync(yamlDep) ? "PASS" : "FAIL",
+      existsSync(yamlDep) ? "yaml 已安装" : "未找到 profile 内的 yaml（core/ops.js 顶层 import 它，会 ERR_MODULE_NOT_FOUND）");
   }
 
   const pkgDir = join(home, "profiles", profile, "node_modules", "dsh-graph");
@@ -643,7 +698,7 @@ async function main() {
   await sleep(300);
   killTree(boot.child);
 
-  return finish(opt, home, { pkgDir, logPath: boot.logPath, pkgVersion });
+  return finish(opt, home, { pkgDir, logPath: boot.logPath, pkgVersion, tarball: opt.path ? spec : null });
 }
 
 function finish(opt, home, extra) {
@@ -681,7 +736,7 @@ function summarize(opt, extra) {
 
   console.log("\n----- 可复制回传的报告 -----");
   console.log(`dsh-graph Windows 冒烟 | 平台=${process.platform}/${process.arch} node=${process.version}`);
-  console.log(`安装来源=${opt.path ?? opt.spec}${extra?.pkgVersion ? ` (实际版本 ${extra.pkgVersion})` : ""}`);
+  console.log(`安装来源=${opt.path ? `本地构建 ${basename(extra?.tarball ?? opt.path)}` : opt.spec}${extra?.pkgVersion ? ` (实际版本 ${extra.pkgVersion})` : ""}`);
   console.log(`结果=${pass ? "PASS" : "FAIL"} 通过${passes.length}/失败${fails.length}/告警${warns.length}`);
   for (const r of results.filter((x) => x.level === "FAIL" || x.level === "WARN")) {
     console.log(`  ${r.level} ${r.tier} ${r.name}${r.detail ? " :: " + r.detail.slice(0, 300) : ""}`);
