@@ -137,6 +137,7 @@ import {
   closeWatchers,
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
+import { readEvents } from "./core/events.js";
 import { sT } from "./lib/server-i18n.js";
 // g-133：接入 DSH profile 级用户设置（dsh-settings）。为避免在 @deepseek-ai/* 不可解析的上下文
 // （工作树 link、仅 headless、无 settings 供应商的组合）导致整个插件加载失败、拖垮 GUI，
@@ -640,6 +641,209 @@ export function formatAttemptPrompt({
     .filter((section) => section && section.trim())
     .join("\n\n");
 }
+
+// g-189：只读发现当前 canonical workspace 下约定的 attempt worktree。
+// 结果附加到 goal detail，不写入任何 graph 数据；失败时返回明确降级状态。
+export const worktreeCache = new Map();
+export const WORKTREE_CACHE_TTL = 20_000;
+export const WORKTREE_CACHE_CAP = 64;
+export const _clearWorktreeCache = () => { worktreeCache.clear(); };
+
+export const discoverAttemptWorktrees = (workspace, goalId, attempts, graphRoot = null) => {
+  let canonicalKey;
+  try { canonicalKey = realpathSync(resolve(workspace)); } catch { canonicalKey = resolve(workspace); }
+  const cacheKey = `${canonicalKey}::${goalId}`;
+  const now = Date.now();
+  // Expired entries are removed on every lookup; Map insertion order supplies LRU.
+  for (const [key, entry] of worktreeCache) {
+    if (now - entry.ts >= WORKTREE_CACHE_TTL) worktreeCache.delete(key);
+  }
+  const cached = worktreeCache.get(cacheKey);
+  if (cached) {
+    worktreeCache.delete(cacheKey);
+    worktreeCache.set(cacheKey, cached);
+    return cached.value;
+  }
+  const result = { status: "ok", items: {} };
+  try {
+    const text = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      cwd: workspace, encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"],
+    });
+    const entries = text.split(/\n\s*\n/).map((block) => {
+      const pathLine = block.split("\n").find((line) => line.startsWith("worktree "));
+      if (!pathLine) return null;
+      const branchLine = block.split("\n").find((line) => line.startsWith("branch "));
+      const headLine = block.split("\n").find((line) => line.startsWith("HEAD "));
+      return {
+        path: resolve(pathLine.slice(9).trim()),
+        branch: branchLine?.slice(7).trim() ?? null,
+        head: headLine?.slice(5).trim() ?? null,
+        locked: /(^|\n)locked(?: |$)/.test(block),
+        prunable: /(^|\n)prunable(?: |$)/.test(block),
+      };
+    }).filter(Boolean);
+    const canonical = realpathSync(resolve(workspace));
+    const prefix = `${goalId}-att-`;
+    const usedPaths = new Set();
+    const seenAttemptIds = new Set();
+
+    let goalEvents = [];
+    const eventRoot = graphRoot || resolveCanonicalRoot(workspace);
+    if (eventRoot) {
+      try {
+        goalEvents = readEvents(eventRoot).filter((e) => e.goal === goalId);
+      } catch {}
+    }
+
+    for (const attempt of attempts ?? []) {
+      const id = String(attempt?.id ?? "");
+      if (!id || seenAttemptIds.has(id)) continue;
+      seenAttemptIds.add(id);
+      const match = id.match(/^att-(\d+)$/);
+      if (!match) continue;
+      const numeric = Number(match[1]);
+      if (!Number.isSafeInteger(numeric)) continue;
+      const raw = match[1];
+      const names = [...new Set([
+        `${prefix}${String(numeric).padStart(2, "0")}`,
+        `${prefix}${String(numeric).padStart(3, "0")}`,
+        `${prefix}${raw}`,
+      ])];
+      const evidence = attempt.worktree && typeof attempt.worktree === "object" ? attempt.worktree : null;
+      if (evidence?.relative_path) {
+        const evidenceName = basename(String(evidence.relative_path));
+        if (evidenceName) names.push(evidenceName);
+      }
+      const matchEntry = names.map((name) => ({ name, branch: `refs/heads/${name}` }))
+        .map(({ name, branch }) => ({ name, entry: entries.find((x) => basename(x.path) === name && x.branch === branch && !usedPaths.has(x.path)) }))
+        .find(({ entry }) => entry);
+
+      if (matchEntry) {
+        const expected = matchEntry.name;
+        const expectedBranch = `refs/heads/${expected}`;
+        const entry = matchEntry.entry;
+
+        // Evidence is optional for historical attempts, but any recorded fields must agree.
+        if (evidence?.branch) {
+          const evidenceBranch = basename(String(evidence.branch).replace(/^refs\/heads\//, ""));
+          if (!names.includes(evidenceBranch)) continue;
+        }
+
+        // Cross-check both Git's live record and the attempt evidence. A same-named
+        // nested/foreign path is never accepted: the relative form must be exact.
+        let actual;
+        try {
+          actual = realpathSync(entry.path);
+        } catch {
+          if (entry.prunable) {
+            actual = resolve(entry.path);
+          } else {
+            continue;
+          }
+        }
+        const rel = relative(canonical, actual).replaceAll("\\", "/");
+        if (rel !== `.worktrees/${expected}` || rel.startsWith("..") || isAbsolute(rel) || rel.includes("\0")) continue;
+
+        // g-279: 放宽 HEAD 判定（相同或记录基线的后代；merge-base 不可用/非后代时退化为标记 HEAD 已推进）
+        let headAdvanced = false;
+        const baselineCommit = attempt?.baseline_commit ? String(attempt.baseline_commit).trim() : null;
+        const evidenceHead = evidence?.head ? String(evidence.head).trim() : null;
+        const baselineHead = baselineCommit || evidenceHead;
+
+        if (entry.head && (evidenceHead || baselineCommit)) {
+          const compareHead = evidenceHead || baselineCommit;
+          const same = entry.head === compareHead ||
+            (entry.head.startsWith(compareHead) && compareHead.length >= 7) ||
+            (compareHead.startsWith(entry.head) && entry.head.length >= 7);
+
+          if (!same) {
+            try {
+              execFileSync("git", ["merge-base", "--is-ancestor", compareHead, entry.head], {
+                cwd: workspace, encoding: "utf8", timeout: 3000, stdio: ["ignore", "ignore", "ignore"],
+              });
+            } catch {
+              // merge-base 不可用或返回非 0：退化为路径+分支匹配并标记 HEAD 已推进
+            }
+            headAdvanced = true;
+          }
+        }
+
+        const headShort = entry.head ? entry.head.slice(0, 7) : null;
+        const baselineShort = baselineHead ? baselineHead.slice(0, 7) : null;
+        const cleanBranch = entry.branch ? entry.branch.replace(/^refs\/heads\//, "") : expected;
+        const status = entry.locked ? "已锁定" : (entry.prunable ? "已移除" : "正常");
+
+        usedPaths.add(entry.path);
+        result.items[id] = {
+          path: rel,
+          branch: cleanBranch,
+          head: headShort,
+          baseline_head: baselineShort,
+          head_advanced: headAdvanced,
+          locked: Boolean(entry.locked),
+          prunable: Boolean(entry.prunable),
+          status,
+        };
+        continue;
+      }
+
+      // g-279: Git 实时列表不存在该 worktree 时，检查事件流是否有登记/清理历史
+      const candidateRegEv = goalEvents.slice().reverse().find(
+        (e) => e.event === "worktree.candidate_registered" && (e.details?.attempt === id || String(e.details?.id ?? "").includes(`:${id}:`))
+      );
+      const cleanedEv = goalEvents.find(
+        (e) => e.event === "worktree.cleaned" && (e.details?.attempt === id || String(e.details?.id ?? "").includes(`:${id}:`))
+      );
+      const removedEv = goalEvents.find(
+        (e) => e.event === "worktree.external_removed" && (e.details?.attempt === id || String(e.details?.id ?? "").includes(`:${id}:`))
+      );
+
+      if (cleanedEv || removedEv || candidateRegEv) {
+        const histDetails = cleanedEv?.details || removedEv?.details || candidateRegEv?.details;
+        let histPath = histDetails?.path || evidence?.relative_path || `.worktrees/${prefix}${raw}`;
+        let rel;
+        try {
+          if (isAbsolute(histPath)) {
+            rel = relative(canonical, resolve(histPath)).replaceAll("\\", "/");
+          } else {
+            rel = histPath.replaceAll("\\", "/");
+          }
+        } catch {
+          rel = histPath;
+        }
+
+        const histBranch = histDetails?.branch || evidence?.branch || `${prefix}${raw}`;
+        const cleanBranch = String(histBranch).replace(/^refs\/heads\//, "");
+        const histHead = histDetails?.head ? String(histDetails.head).slice(0, 7) : (evidence?.head ? String(evidence.head).slice(0, 7) : null);
+        const baselineCommit = attempt?.baseline_commit ? String(attempt.baseline_commit).trim() : null;
+        const evidenceHead = evidence?.head ? String(evidence.head).trim() : null;
+        const baselineHead = baselineCommit || evidenceHead;
+        const baselineShort = baselineHead ? baselineHead.slice(0, 7) : null;
+        const headAdvanced = Boolean(histHead && baselineShort && histHead !== baselineShort);
+        const status = cleanedEv ? "已清理" : "已移除";
+
+        result.items[id] = {
+          path: rel,
+          branch: cleanBranch,
+          head: histHead,
+          baseline_head: baselineShort,
+          head_advanced: headAdvanced,
+          locked: false,
+          prunable: false,
+          status,
+          cleaned: Boolean(cleanedEv),
+        };
+      }
+    }
+  } catch (error) {
+    result.status = "unavailable";
+    result.error = "Git worktree 列表不可用";
+  }
+  worktreeCache.delete(cacheKey);
+  worktreeCache.set(cacheKey, { ts: now, value: result });
+  while (worktreeCache.size > WORKTREE_CACHE_CAP) worktreeCache.delete(worktreeCache.keys().next().value);
+  return result;
+};
 
 export function apply(ctx, config) {
   // g-112：统一 root 解析 = resolve(workspaceRoot, config?.root ?? ".dsh-graph")
@@ -1678,7 +1882,11 @@ export function apply(ctx, config) {
         description: "用户明确选择后清理已实时验证的 worktree；默认不删除分支。",
         parameters: params({ id: str, confirm: { type: "boolean" } }, ["id", "confirm"]),
       },
-      run: (a, ex) => cleanWorktree(rootFor(ex), a.id, actorOf(ex), a.confirm === true),
+      run: (a, ex) => {
+        const r = cleanWorktree(rootFor(ex), a.id, actorOf(ex), a.confirm === true);
+        if (r.ok) _clearWorktreeCache();
+        return r;
+      },
     },
     {
       def: {
@@ -1895,94 +2103,6 @@ export function apply(ctx, config) {
     };
   };
 
-  // g-189：只读发现当前 canonical workspace 下约定的 attempt worktree。
-  // 结果附加到 goal detail，不写入任何 graph 数据；失败时返回明确降级状态。
-  const worktreeCache = new Map();
-  const WORKTREE_CACHE_TTL = 20_000;
-  const WORKTREE_CACHE_CAP = 64;
-  const discoverAttemptWorktrees = (workspace, goalId, attempts, graphRoot = null) => {
-    let canonicalKey;
-    try { canonicalKey = realpathSync(resolve(workspace)); } catch { canonicalKey = resolve(workspace); }
-    const cacheKey = `${canonicalKey}::${goalId}`;
-    const now = Date.now();
-    // Expired entries are removed on every lookup; Map insertion order supplies LRU.
-    for (const [key, entry] of worktreeCache) {
-      if (now - entry.ts >= WORKTREE_CACHE_TTL) worktreeCache.delete(key);
-    }
-    const cached = worktreeCache.get(cacheKey);
-    if (cached) {
-      worktreeCache.delete(cacheKey);
-      worktreeCache.set(cacheKey, cached);
-      return cached.value;
-    }
-    const result = { status: "ok", items: {} };
-    try {
-      const text = execFileSync("git", ["worktree", "list", "--porcelain"], {
-        cwd: workspace, encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"],
-      });
-      const entries = text.split(/\n\s*\n/).map((block) => {
-        const pathLine = block.split("\n").find((line) => line.startsWith("worktree "));
-        if (!pathLine) return null;
-        const branchLine = block.split("\n").find((line) => line.startsWith("branch "));
-        const headLine = block.split("\n").find((line) => line.startsWith("HEAD "));
-        return { path: resolve(pathLine.slice(9).trim()), branch: branchLine?.slice(7).trim() ?? null, head: headLine?.slice(5).trim() ?? null, locked: /(^|\n)locked(?: |$)/.test(block), prunable: /(^|\n)prunable(?: |$)/.test(block) };
-      }).filter(Boolean);
-      const canonical = realpathSync(resolve(workspace));
-      const prefix = `${goalId}-att-`;
-      const usedPaths = new Set();
-      const seenAttemptIds = new Set();
-      for (const attempt of attempts ?? []) {
-        const id = String(attempt?.id ?? "");
-        if (!id || seenAttemptIds.has(id)) continue;
-        seenAttemptIds.add(id);
-        const match = id.match(/^att-(\d+)$/);
-        if (!match) continue;
-        const numeric = Number(match[1]);
-        if (!Number.isSafeInteger(numeric)) continue;
-        const raw = match[1];
-        const names = [...new Set([
-          `${prefix}${String(numeric).padStart(2, "0")}`,
-          `${prefix}${String(numeric).padStart(3, "0")}`,
-          `${prefix}${raw}`,
-        ])];
-        const evidence = attempt.worktree && typeof attempt.worktree === "object" ? attempt.worktree : null;
-        if (evidence?.relative_path) {
-          const evidenceName = basename(String(evidence.relative_path));
-          if (evidenceName) names.push(evidenceName);
-        }
-        const matchEntry = names.map((name) => ({ name, branch: `refs/heads/${name}` }))
-          .map(({ name, branch }) => ({ name, entry: entries.find((x) => basename(x.path) === name && x.branch === branch && !usedPaths.has(x.path)) }))
-          .find(({ entry }) => entry);
-        if (!matchEntry) continue;
-        const expected = matchEntry.name;
-        const expectedBranch = `refs/heads/${expected}`;
-        const entry = matchEntry.entry;
-        if (entry.prunable || !entry.head) continue;
-        // Evidence is optional for historical attempts, but any recorded fields must agree.
-        if (evidence?.branch) {
-          const evidenceBranch = basename(String(evidence.branch).replace(/^refs\/heads\//, ""));
-          if (!names.includes(evidenceBranch)) continue;
-        }
-        if (evidence?.head && evidence.head !== entry.head) continue;
-        // Cross-check both Git's live record and the attempt evidence. A same-named
-        // nested/foreign path is never accepted: the relative form must be exact.
-        let actual;
-        try { actual = realpathSync(entry.path); } catch { continue; }
-        const rel = relative(canonical, actual).replaceAll("\\", "/");
-        if (rel !== `.worktrees/${expected}` || rel.startsWith("..") || isAbsolute(rel) || rel.includes("\0")) continue;
-        usedPaths.add(entry.path);
-        result.items[id] = { path: rel, status: entry.locked ? "已锁定" : "正常" };
-      }
-    } catch (error) {
-      result.status = "unavailable";
-      result.error = "Git worktree 列表不可用";
-    }
-    worktreeCache.delete(cacheKey);
-    worktreeCache.set(cacheKey, { ts: now, value: result });
-    while (worktreeCache.size > WORKTREE_CACHE_CAP) worktreeCache.delete(worktreeCache.keys().next().value);
-    return result;
-  };
-
   // webServer 路由定义（惰性：webServer 服务出现后才注册；headless 组合下静默跳过）
   const httpRoutes = () => [
     {
@@ -2137,6 +2257,7 @@ export function apply(ctx, config) {
           const body = await readBody(req);
           if (!body.id || body.confirm !== true) return json(res, 400, { error: "missing id or confirmation" });
           const result = cleanWorktree(rootForReq(req, body), String(body.id), "human:gui", true);
+          if (result.ok) _clearWorktreeCache();
           json(res, result.ok ? 200 : 409, result);
         } catch (e) { json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) }); }
       },
