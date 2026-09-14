@@ -335,6 +335,8 @@ window.__ModuleLoader__.load({
       'worktree.statusNormal': '正常',
       'worktree.statusLocked': '已锁定',
       'worktree.alreadyRemoved': '已移除',
+      'worktree.statusCleaned': '已清理',
+      'worktree.statusPrunable': '可修剪',
       'worktree.defaultReason': '已验证合入且干净',
       'worktree.confirmClean': '确认清理',
       'worktree.attemptTitle': '🌿 Attempt worktree',
@@ -1296,6 +1298,8 @@ window.__ModuleLoader__.load({
       'worktree.statusNormal': 'OK',
       'worktree.statusLocked': 'Locked',
       'worktree.alreadyRemoved': 'Removed',
+      'worktree.statusCleaned': 'Cleaned',
+      'worktree.statusPrunable': 'Prunable',
       'worktree.defaultReason': 'Verified merged and clean',
       'worktree.confirmClean': 'Confirm cleanup',
       'worktree.attemptTitle': '🌿 Attempt worktree',
@@ -6416,18 +6420,34 @@ window.__ModuleLoader__.load({
           h("div", { style: { ...S.meta, fontSize: 12, marginTop: 4 } }, dgT("worktree.noAttempts")));
       }
       const copyButton = (item) => item ? h("button", { className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, title: dgT("worktree.copyPathTooltip"), onClick: async () => { if (await copyText(item.path)) showToast(dgT("worktree.pathCopied")); } }, dgT("common.copy")) : null;
-      // i18n-keep(category-a)：匹配服务端 index.js 下发的遗留中文状态值（"正常"/"已锁定"）与本地合成哨兵（"已移除"），非 UI 文案源。
+      // i18n-keep(category-a)：匹配服务端 index.js 下发的遗留中文状态值（"正常"/"已锁定"）与本地合成哨兵（"已移除"/"已清理"），非 UI 文案源。
       const formatWorktreeStatus = (status) => {
         if (status === "正常" || status === "ok" || status === "normal") return dgT("worktree.normal");
         if (status === "已锁定" || status === "locked") return dgT("worktree.statusLocked");
-        if (status === "已移除" || status === "removed") return dgT("worktree.alreadyRemoved");
+        if (status === "已移除" || status === "removed" || status === "externally_removed") return dgT("worktree.alreadyRemoved");
+        if (status === "已清理" || status === "cleaned" || status === "user_cleaned") return dgT("worktree.statusCleaned");
+        if (status === "可修剪" || status === "prunable") return dgT("worktree.statusPrunable");
         return status;
       };
       const row = (a) => {
         const item = discovery.items?.[a.id];
+        let label = "";
+        if (item) {
+          const parts = [item.path];
+          if (item.branch) parts.push(item.branch);
+          if (item.head) {
+            if (item.head_advanced && item.baseline_head) {
+              parts.push(`baseline ${item.baseline_head} → HEAD ${item.head}`);
+            } else {
+              parts.push(`HEAD ${item.head}`);
+            }
+          }
+          if (item.status) parts.push(formatWorktreeStatus(item.status));
+          label = parts.join(" ｜ ");
+        }
         return h("div", { key: a.id, style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginTop: 4 } },
           h("span", { style: { flex: "0 0 auto", fontSize: 12 } }, a.id),
-          item ? h("span", { title: item.path, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, `${item.path} ｜ ${formatWorktreeStatus(item.status)}`) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
+          item ? h("span", { title: label, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, label) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
           copyButton(item));
       };
       return h("div", { key: "worktrees", style: S.modalSection },
