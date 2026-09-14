@@ -576,3 +576,17 @@ test("g-275 att-002: 共享卡片抽屉数据流与降级仿真测试", async ()
   }
   assert.equal(openCardTriggered, 0, "事件冒泡阻断后不得触发 onOpenCard");
 });
+
+// ---- ⑨ g-275 att-002 主管真机复核修正：共享卡路径的渲染期解引用保护 ----
+
+test("g-275 att-002 修正：card-drawer 不得无保护解引用 state.data（共享卡路径下恒为 undefined）", () => {
+  const drawer = readFileSync("dsh-graph-host/lib/client/card-drawer.js", "utf8");
+  // 共享卡无 goalId → 抽屉不发 /goal 请求，state.data 恒为 undefined。
+  // 任何 `state.data.xxx` 形式的解引用都会在渲染期抛
+  // "Cannot read properties of undefined (reading 'meta')"，导致点共享卡打不开抽屉（主管真机复现）。
+  const unguarded = drawer.match(/state\.data\.(?!\?)/g) ?? [];
+  assert.equal(unguarded.length, 0, `card-drawer.js 不得无保护解引用 state.data（发现 ${unguarded.length} 处）`);
+  assert.ok(drawer.includes("state.data?.meta?.title"), "goalTitle 必须可选链解引用 state.data");
+  assert.ok(drawer.includes("state.data?.root"), "root 必须可选链解引用 state.data");
+  assert.ok(drawer.includes("state.data?.attachmentsDir"), "attRoot 必须可选链解引用 state.data");
+});

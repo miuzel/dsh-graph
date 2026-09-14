@@ -65,10 +65,12 @@
         if (!card) inner = dgT("drawer.cardNotExist") + props.cardId;
         else {
           // g-145：生成完整的收集提示词，注入仓库根、goal/card 元数据、canonical 附件根、回填模板和禁区
-          const goalTitle = state.data.meta?.title ?? props.goalId;
+          // g-275 修正（主管真机复核）：共享卡路径无 goalId → 不发 /goal 请求，state.data 恒为 undefined，
+          // 三处必须可选链解引用，否则渲染期抛 "Cannot read properties of undefined (reading 'meta')"（抽屉打不开）
+          const goalTitle = state.data?.meta?.title ?? props.goalId ?? "";
           const cardTitle = card.title;
-          const root = state.data.root ?? dgT("drawer.unknownRoot");
-          const attRoot = state.data.attachmentsDir ?? (root !== dgT("drawer.unknownRoot") ? root + "/attachments" : dgT("drawer.unknownAttachmentRoot"));
+          const root = state.data?.root ?? dgT("drawer.unknownRoot");
+          const attRoot = state.data?.attachmentsDir ?? (root !== dgT("drawer.unknownRoot") ? root + "/attachments" : dgT("drawer.unknownAttachmentRoot"));
 
           // 可编辑的收集信息目标部分
           const editablePart = [
