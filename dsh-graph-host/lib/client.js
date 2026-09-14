@@ -211,6 +211,9 @@ window.__ModuleLoader__.load({
       'description.saved': '✅ 描述已保存',
       'description.saveFail': '⚠️ 保存失败：',
       'description.requestFail': '⚠️ 请求失败：',
+      'markdown.copy': '复制',
+      'markdown.copied': '已复制',
+      'markdown.footnotes': '脚注',
       'section.criteria': '✅ 质量判据',
       'section.criteriaEditTooltip': '编辑质量判据（保存后清空该目标已有勾选）',
       'section.infoCollect': '🔎 信息收集',
@@ -1158,6 +1161,9 @@ window.__ModuleLoader__.load({
       'description.saved': '✅ Description saved',
       'description.saveFail': '⚠️ Save failed: ',
       'description.requestFail': '⚠️ Request failed: ',
+      'markdown.copy': 'Copy',
+      'markdown.copied': 'Copied',
+      'markdown.footnotes': 'Footnotes',
       'section.criteria': '✅ Quality Criteria',
       'section.criteriaEditTooltip': 'Edit quality criteria (clears existing checks after save)',
       'section.infoCollect': '🔎 Information Collection',
@@ -2372,6 +2378,25 @@ window.__ModuleLoader__.load({
         background: rgba(30,31,36,.92); border: 1px solid rgba(76,141,255,.55);
         box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; font-weight: 600;
         color: #e6e6e6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      /* g-270：目标描述只读态半透明暗色底纹面板（圆角 + 内边距），视觉圈出正文区域，分层栏目标题，深浅主题自适应 */
+      .dg-description-preview {
+        background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.05));
+        border: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.08));
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin-top: 4px;
+        box-sizing: border-box;
+      }
+      body[data-ds-dark-theme] .dg-description-preview {
+        background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.25));
+        border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
+      }
+      @media (prefers-color-scheme: dark) {
+        body:not([data-ds-theme="light"]) .dg-description-preview {
+          background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.25));
+          border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
+        }
+      }
     `;
 
     const S = {
@@ -5763,22 +5788,62 @@ window.__ModuleLoader__.load({
       return elements;
     }
 
-    // g-270：目标描述 Markdown 展示组件（优先 MarkdownText，降级内置解析器）
+    // g-270：Markdown 渲染错误边界组件，防止 MarkdownText 原语在异常内容时崩溃卸载整页
+    class MarkdownErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false };
+      }
+      static getDerivedStateFromError() {
+        return { hasError: true };
+      }
+      componentDidCatch(err) {
+        console.warn("[dsh-graph] MarkdownText failed, fallback to simple markdown:", err);
+      }
+      render() {
+        if (this.state.hasError) {
+          const fallbackFn = this.props.fallback || renderSimpleMarkdown;
+          return fallbackFn(this.props.text);
+        }
+        return this.props.children;
+      }
+    }
+
+    // g-270：目标描述 Markdown 展示组件（优先 DSH 官方 MarkdownText 并传递完备 props，降级内置解析器）
     function GoalMarkdown(props) {
       const { text } = props;
       if (!text) return null;
+
+      // 组装 DSH MarkdownText 必需的 labels 与 streaming 等 props（避免 Lg 在非空代码块读 copyLabel 崩溃）
+      const markdownLabels = React.useMemo(() => ({
+        code: {
+          copyLabel: dgT("markdown.copy") || "Copy",
+          copiedLabel: dgT("markdown.copied") || "Copied",
+        },
+        footnotes: dgT("markdown.footnotes") || "Footnotes",
+      }), []);
+
+      const content = MarkdownText
+        ? h(MarkdownErrorBoundary, { text, fallback: renderSimpleMarkdown },
+            h(MarkdownText, {
+              text,
+              streaming: false,
+              labels: markdownLabels,
+            })
+          )
+        : renderSimpleMarkdown(text);
+
       return h("div", {
-        className: "dg-markdown-body",
+        className: "dg-markdown-body dg-description-preview",
         style: {
           whiteSpace: "normal",
           fontSize: 12,
           lineHeight: 1.6,
-          padding: "4px 0",
           overflowWrap: "anywhere",
           wordBreak: "break-word",
           color: "var(--dsw-alias-label-primary, inherit)",
         }
-      }, MarkdownText ? h(MarkdownText, { text }) : renderSimpleMarkdown(text));
+      }, content);
     }
 
     // g-260：目标描述组件（只读态↔编辑态切换，就地 markdown 编辑）

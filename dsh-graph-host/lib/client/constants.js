@@ -398,6 +398,25 @@
         background: rgba(30,31,36,.92); border: 1px solid rgba(76,141,255,.55);
         box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; font-weight: 600;
         color: #e6e6e6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      /* g-270：目标描述只读态半透明暗色底纹面板（圆角 + 内边距），视觉圈出正文区域，分层栏目标题，深浅主题自适应 */
+      .dg-description-preview {
+        background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.05));
+        border: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.08));
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin-top: 4px;
+        box-sizing: border-box;
+      }
+      body[data-ds-dark-theme] .dg-description-preview {
+        background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.25));
+        border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
+      }
+      @media (prefers-color-scheme: dark) {
+        body:not([data-ds-theme="light"]) .dg-description-preview {
+          background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.25));
+          border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
+        }
+      }
     `;
 
     const S = {

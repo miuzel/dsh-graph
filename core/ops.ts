@@ -33,6 +33,8 @@ import {
   serializeDoc,
   replaceSection,
   sectionText,
+  findSectionBounds,
+  computeClosedFenceMask,
   criteriaPresent,
   countCriteria,
   criteriaItems,
@@ -42,6 +44,12 @@ import {
   type GoalDoc,
   type GoalType,
 } from "./model.ts";
+export {
+  sectionText,
+  replaceSection,
+  findSectionBounds,
+  computeClosedFenceMask,
+};
 export const ATTEMPT_STATUS_STATES = ["working", "blocked", "done", "error"] as const;
 export type AttemptStatusState = (typeof ATTEMPT_STATUS_STATES)[number];
 
@@ -1904,9 +1912,11 @@ export function validate(root: string): string[] {
     ) {
       problems.push(`${id}: ${meta.status} 状态但质量判据为空`);
     }
-    // 目标描述小节重复检查（g-130）：行首锚定的独立小节标题，正文内引用不计
-    const descMatches = doc.body.match(/^## 目标描述$/gm);
-    if (descMatches && descMatches.length > 1) {
+    // 目标描述小节重复检查（g-130）：行首锚定的独立小节标题，正文内引用与闭合围栏内不计
+    const bodyLines = doc.body.split("\n");
+    const fenceMask = computeClosedFenceMask(bodyLines);
+    const descCount = bodyLines.filter((l, i) => !fenceMask[i] && l.trim() === "## 目标描述").length;
+    if (descCount > 1) {
       problems.push(`${id}: 目标描述小节重复`);
     }
     problems.push(...locationProblems(root, file, meta));
@@ -3880,10 +3890,10 @@ export function formatTargetContext(
   opts?: TargetContextBudgetOptions,
 ): string {
   const body = typeof docOrBody === "string" ? docOrBody : docOrBody.body;
-  const descMatch = body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
-  const critMatch = body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
-  let desc = descMatch ? descMatch[1].trim() : "（无描述）";
-  const crit = critMatch ? critMatch[1].trim() : "（无判据）";
+  const descRaw = sectionText(body, "目标描述");
+  const critRaw = sectionText(body, "质量判据");
+  let desc = descRaw !== null && descRaw.trim() !== "" ? descRaw.trim() : "（无描述）";
+  const crit = critRaw !== null && critRaw.trim() !== "" ? critRaw.trim() : "（无判据）";
 
   const maxDescChars = typeof opts?.maxDescChars === "number" && opts.maxDescChars > 0 ? opts.maxDescChars : 1500;
   if (desc.length > maxDescChars) {
@@ -5989,12 +5999,11 @@ export function amendGoal(
     } else {
       const { text, normalized } = normalizeAppend(opts.appendDescription);
       appendNormalized = normalized;
-      const desc = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
-      if (desc) {
-        doc.body = doc.body.replace(
-          /## 目标描述\n([\s\S]*?)(?=\n## |$)/,
-          `## 目标描述\n${desc[1].replace(/\n*$/, "")}\n\n${text}\n\n`,
-        );
+      const existingDesc = sectionText(doc.body, "目标描述");
+      if (existingDesc !== null) {
+        const trimmedExisting = existingDesc.trim();
+        const combined = trimmedExisting ? `${trimmedExisting}\n\n${text}` : text;
+        doc.body = replaceSection(doc.body, "目标描述", `\n${combined}\n\n`);
       } else {
         doc.body = doc.body.replace(/\n*$/, "") + "\n\n## 目标描述\n\n" + text + "\n";
       }
@@ -6508,7 +6517,7 @@ export function requestAcceptReview(
       : status === "collecting" || status === "ready"
         ? "判据"
         : "review";
-  const snapshot = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/)?.[1]?.trim()?.slice(0, 200) ?? "";
+  const snapshot = (sectionText(doc.body, "目标描述") ?? "").trim().slice(0, 200);
   appendEvent(root, {
     actor,
     event: "review.requested",

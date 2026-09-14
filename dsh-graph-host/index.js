@@ -96,6 +96,7 @@ import {
   readGoalDirective,
   setGoalDirective,
   setGoalDescription,
+  sectionText,
   readGoalComments,
   appendGoalComment,
   GraphError,
@@ -842,10 +843,10 @@ export function apply(ctx, config) {
     //    小节标签按提示词语言本地化（仅影响 prompt 展示，goal.md 解析仍用中文小节名）。
     const promptLanguage = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
     const isEnPrompt = promptLanguage === "en";
-    const descMatch = doc.body.match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
-    const critMatch = doc.body.match(/## 质量判据\n([\s\S]*?)(?=\n## |$)/);
-    const desc = descMatch ? descMatch[1].trim() : "";
-    const crit = critMatch ? critMatch[1].trim() : (isEnPrompt ? "(no criteria)" : "（无判据）");
+    const descRaw = sectionText(doc.body, "目标描述");
+    const critRaw = sectionText(doc.body, "质量判据");
+    const desc = descRaw ? descRaw.trim() : "";
+    const crit = critRaw ? critRaw.trim() : (isEnPrompt ? "(no criteria)" : "（无判据）");
     const targetContext = [
       isEnPrompt ? "## Goal description" : "## 目标描述",
       desc || (isEnPrompt ? "(no description)" : "（无描述）"),

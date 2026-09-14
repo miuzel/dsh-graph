@@ -428,22 +428,62 @@
       return elements;
     }
 
-    // g-270：目标描述 Markdown 展示组件（优先 MarkdownText，降级内置解析器）
+    // g-270：Markdown 渲染错误边界组件，防止 MarkdownText 原语在异常内容时崩溃卸载整页
+    class MarkdownErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false };
+      }
+      static getDerivedStateFromError() {
+        return { hasError: true };
+      }
+      componentDidCatch(err) {
+        console.warn("[dsh-graph] MarkdownText failed, fallback to simple markdown:", err);
+      }
+      render() {
+        if (this.state.hasError) {
+          const fallbackFn = this.props.fallback || renderSimpleMarkdown;
+          return fallbackFn(this.props.text);
+        }
+        return this.props.children;
+      }
+    }
+
+    // g-270：目标描述 Markdown 展示组件（优先 DSH 官方 MarkdownText 并传递完备 props，降级内置解析器）
     function GoalMarkdown(props) {
       const { text } = props;
       if (!text) return null;
+
+      // 组装 DSH MarkdownText 必需的 labels 与 streaming 等 props（避免 Lg 在非空代码块读 copyLabel 崩溃）
+      const markdownLabels = React.useMemo(() => ({
+        code: {
+          copyLabel: dgT("markdown.copy") || "Copy",
+          copiedLabel: dgT("markdown.copied") || "Copied",
+        },
+        footnotes: dgT("markdown.footnotes") || "Footnotes",
+      }), []);
+
+      const content = MarkdownText
+        ? h(MarkdownErrorBoundary, { text, fallback: renderSimpleMarkdown },
+            h(MarkdownText, {
+              text,
+              streaming: false,
+              labels: markdownLabels,
+            })
+          )
+        : renderSimpleMarkdown(text);
+
       return h("div", {
-        className: "dg-markdown-body",
+        className: "dg-markdown-body dg-description-preview",
         style: {
           whiteSpace: "normal",
           fontSize: 12,
           lineHeight: 1.6,
-          padding: "4px 0",
           overflowWrap: "anywhere",
           wordBreak: "break-word",
           color: "var(--dsw-alias-label-primary, inherit)",
         }
-      }, MarkdownText ? h(MarkdownText, { text }) : renderSimpleMarkdown(text));
+      }, content);
     }
 
     // g-260：目标描述组件（只读态↔编辑态切换，就地 markdown 编辑）
