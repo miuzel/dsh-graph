@@ -195,6 +195,25 @@ node --test core/tests/*.test.ts
    （尤其不得出现 `node:constants` / `O_DIRECTORY` 类模块加载错误）；
 3. 最小功能用例：写目标 → 加标签 → 派发 attempt → 看板渲染正常、`graph_validate` 正常。
 
+**执行件（已自动化）**：`scripts/win-smoke-test.mjs`（配 `win-smoke-test.cmd` 双击入口）。
+它把上述清单拆成分层检查并在**临时 DSH_HOME** 内完成，不动用户真实环境：
+
+- **T1 静态门禁**（跨平台）：发布包内不得对 POSIX 专有常量做 ESM 具名导入 ——
+  可直接预测「Windows 上插件完全无法加载」，无需 Windows 机器即可在发布前拦住；
+- **T2 安装**：全新隔离 profile 安装插件成功；
+- **T3 核心运行时**：直接调用安装后的 `core/ops.js` 跑 建目标/判据/标签锁/原子写/跨进程并发 CAS/validate；
+- **T4 实例启动**：`dsh --profile <p> --no-open --port <n>` 启动，插件树加载无平台错误；
+- **T5 REST 冒烟**：dsh-graph 路由已注册、看板载荷可读（证明插件真的 apply）。
+
+```sh
+node scripts/win-smoke-test.mjs                              # 从 npm 安装 dsh-graph 并全量验收
+node scripts/win-smoke-test.mjs --path <dsh-graph-host 目录>  # 发布前验证本地构建
+node scripts/win-smoke-test.mjs --static-only .              # 秒级静态门禁（跨平台）
+node scripts/win-smoke-test.mjs --self-test                  # 离线自检脚本自身判定逻辑
+```
+
+在 Linux/WSL2 上运行只对 T1/T2 结论有效；**T3–T5 的 PASS 不能替代 Windows 真机结论**（脚本会自行提示）。
+
 **纪律**：Linux/WSL2 全绿**不能**替代本项；Windows 验证缺失时，README 的兼容声明必须
 如实标注「Windows 未验证」，不得宣称支持。
 
