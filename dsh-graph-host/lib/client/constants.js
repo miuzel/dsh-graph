@@ -408,10 +408,15 @@
         box-sizing: border-box;
       }
       /* g-270 修正（负责人反馈）：浅色下正文底纹调淡；代码块/行内代码需比正文底纹略"深"，
-         覆盖 DSH MarkdownText 默认的近白底（实测 #f9fafb / #fafafa），避免"块比正文更浅"的观感 */
-      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block,
-      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block > div,
-      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block pre,
+         覆盖 DSH MarkdownText 默认的近白底（实测 #f9fafb / #fafafa），避免"块比正文更浅"的观感。
+         代码块只让最外层 .md-code-block 承载一次底纹，内部（复制条/pre/code 等）一律透明，
+         否则 pre 与其内层 code 会各叠一层、文字区域出现重复底纹（负责人反馈） */
+      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block {
+        background: rgba(0, 0, 0, 0.06);
+      }
+      body:not([data-ds-dark-theme]) .dg-description-preview .md-code-block *:not(button) {
+        background: transparent;
+      }
       body:not([data-ds-dark-theme]) .dg-description-preview code {
         background: rgba(0, 0, 0, 0.06);
       }
@@ -423,9 +428,12 @@
          注意：深色判定只用 DSH 自身解析出的 body[data-ds-dark-theme]，
          不得使用 @media (prefers-color-scheme: dark)——应用内浅色 + 系统深色时会把深色值泄漏到浅色 UI
          （负责人真机复现：app 浅色 + OS 深色 → 底纹变 rgba(0,0,0,.25)） */
-      body[data-ds-dark-theme] .dg-description-preview .md-code-block,
-      body[data-ds-dark-theme] .dg-description-preview .md-code-block > div,
-      body[data-ds-dark-theme] .dg-description-preview .md-code-block pre,
+      body[data-ds-dark-theme] .dg-description-preview .md-code-block {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      body[data-ds-dark-theme] .dg-description-preview .md-code-block *:not(button) {
+        background: transparent;
+      }
       body[data-ds-dark-theme] .dg-description-preview code {
         background: rgba(255, 255, 255, 0.06);
       }
