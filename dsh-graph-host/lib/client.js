@@ -2399,24 +2399,15 @@ window.__ModuleLoader__.load({
         background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.25));
         border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
       }
-      /* 深色：DSH 原语代码块实测仍写死近白底（不随主题变化）→ 改为微亮抬升面，避免暗色里的刺眼白块 */
+      /* 深色：DSH 原语代码块实测仍写死近白底（不随主题变化）→ 改为微亮抬升面，避免暗色里的刺眼白块。
+         注意：深色判定只用 DSH 自身解析出的 body[data-ds-dark-theme]，
+         不得使用 @media (prefers-color-scheme: dark)——应用内浅色 + 系统深色时会把深色值泄漏到浅色 UI
+         （负责人真机复现：app 浅色 + OS 深色 → 底纹变 rgba(0,0,0,.25)） */
       body[data-ds-dark-theme] .dg-description-preview .md-code-block,
       body[data-ds-dark-theme] .dg-description-preview .md-code-block > div,
       body[data-ds-dark-theme] .dg-description-preview .md-code-block pre,
       body[data-ds-dark-theme] .dg-description-preview code {
         background: rgba(255, 255, 255, 0.06);
-      }
-      @media (prefers-color-scheme: dark) {
-        body:not([data-ds-theme="light"]) .dg-description-preview {
-          background: var(--dsw-alias-fill-tsp-secondary, rgba(0, 0, 0, 0.25));
-          border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.10));
-        }
-        body:not([data-ds-theme="light"]) .dg-description-preview .md-code-block,
-        body:not([data-ds-theme="light"]) .dg-description-preview .md-code-block > div,
-        body:not([data-ds-theme="light"]) .dg-description-preview .md-code-block pre,
-        body:not([data-ds-theme="light"]) .dg-description-preview code {
-          background: rgba(255, 255, 255, 0.06);
-        }
       }
     `;
 
