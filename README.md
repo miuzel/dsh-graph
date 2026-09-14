@@ -2,6 +2,12 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
+> ### 🚀 v0.11.0 重要变化：Windows 原生由「不可用」变为「已支持」
+>
+> - **Windows 原生（此前完全不可用 → 现已支持）**：v0.10.0 及更早在 Windows 上会**模块加载即崩溃**（`core/ops.js` 具名导入 `node:constants` 的 `O_DIRECTORY`，Windows 无此导出），且安装时必报 peer 依赖告警。v0.11.0 已修复并在**原生 Windows（win32/x64）真机复验通过**：安装零告警、插件正常加载、标签锁与跨进程并发 CAS 实测通过。
+> - **macOS 新纳入验证矩阵**：与 Windows / Linux 使用**同一安装包（sha256 一致）**真机通过。
+> - **升级建议**：Windows 与 macOS 用户请升级到 v0.11.0；Linux/WSL2 用户升级可获得依赖告警消除，以及排期/派发体验修复（派发可真实创建隔离工作树、独立目标创建即「规划中」、backlog 卡片移出即时生效）。
+>
 > **✅ 支持 DeepSeek Harness `v0.1.5-rc.2`（Linux/WSL2、Windows、macOS 均已验证）**：本版本（v0.11.0）在该宿主版本上完整验证（隔离 Web 实例、看板交互、全部 `graph_*` 工具与 REST 端点、中英双语界面）；兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上。
 >
 > **✅ 跨平台（v0.11.0 起）**：此前 Windows 原生不可用的两类问题——① 平台代码使用 POSIX 专用文件锁常量（目录当 fd 打开 / `O_DIRECTORY` / `O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在 g-284 / g-285 修复，并**在原生 Windows（win32/x64，pnpm v10）与 macOS（darwin/arm64）真机复验通过**：安装零 peer 告警、插件正常 apply、标签锁与跨进程并发 CAS 实测通过（三平台使用同一安装包，指纹一致）。
