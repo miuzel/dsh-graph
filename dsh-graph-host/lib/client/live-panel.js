@@ -182,6 +182,7 @@
       const [provider, setProvider] = React.useState("");
       const [model, setModel] = React.useState("");
       const [mode, setMode] = React.useState("");
+      const [isolateWorktree, setIsolateWorktree] = React.useState(() => defaultWorktreeForGoalType(props.goalType));
       const [note, setNote] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
 
@@ -230,7 +231,12 @@
             model: model || undefined,
             mode: mode || undefined,
           };
-          if (kind === "collect") { body.card = cardId; body.prompt = prompt; }
+          if (kind === "collect") {
+            body.card = cardId;
+            body.prompt = prompt;
+          } else {
+            body.worktree = isolateWorktree;
+          }
           const r = await fetch(graphUrl(url), {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -297,6 +303,17 @@
                 },
                   h("option", { key: "", value: "", style: optStyle }, dgT("live.modeDefault")),
                   ...modeList.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))) : null,
+                kind !== "collect" ? h("label", {
+                  style: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", userSelect: "none" },
+                },
+                  h("input", {
+                    type: "checkbox",
+                    checked: isolateWorktree,
+                    onChange: (e) => setIsolateWorktree(e.target.checked),
+                    style: { cursor: "pointer" },
+                  }),
+                  h("span", null, dgT("exec.isolateWorktree")),
+                ) : null,
               ],
           h("button", {
             style: { ...S.btn, padding: "3px 10px", fontSize: 12 }, className: "dg-btn dg-relaunch",

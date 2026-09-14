@@ -224,6 +224,7 @@
       const [fbText, setFbText] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
+      const [inProgressOpen, setInProgressOpen] = React.useState(false);
       // 反馈预填模板（复制与显示共用，保证一致）
       // i18n-keep(category-b)：粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
       const prefillText = fbText.trim() ? `【${goalId} 反馈】\n${fbText.trim()}` : "";
@@ -390,7 +391,7 @@
           !isReview ? h("button", {
             style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
             disabled: loading,
-            onClick: startExecution,
+            onClick: () => setInProgressOpen(true),
           }, dgT("exec.execute")) : null,
           !isReview ? h(DefinitionPolish, {
             goalId, goalPath: props.goalPath, supervisorSession, status, events, attempts,
@@ -424,6 +425,25 @@
                 : null)
           : null,
         note ? h("div", { style: { ...S.meta, marginTop: 2 } }, note) : null,
+        inProgressOpen
+          ? h(InProgressPrompt, {
+              goalId,
+              goalData: {
+                id: goalId,
+                title: props.title ?? goalId,
+                type: props.goalType,
+                criteria_count: props.criteria ? 1 : 0,
+                attempt_child_id: hasActiveAttempt ? (attempts?.find((a) => a.status === "working")?.child_id ?? null) : null,
+                attempt_parent_session_id: supervisorSession,
+              },
+              supervisorSession,
+              onConfirm: () => {
+                setInProgressOpen(false);
+                onRefresh?.();
+              },
+              onCancel: () => setInProgressOpen(false),
+            })
+          : null,
       );
     }
 

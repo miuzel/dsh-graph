@@ -103,10 +103,10 @@ import {
   validateVersionRelease,
   versionDetail,
 } from "./version-lane.ts";
-import { registerWorktreeCandidates, listWorktrees, cleanWorktree } from "./worktree.ts";
+import { registerWorktreeCandidates, listWorktrees, cleanWorktree, defaultWorktreeForGoalType, prepareAttemptWorktree } from "./worktree.ts";
 export { GraphError, GraphConflictError };
 export { normalizeGoalType };
-export { registerWorktreeCandidates, listWorktrees, cleanWorktree };
+export { registerWorktreeCandidates, listWorktrees, cleanWorktree, defaultWorktreeForGoalType, prepareAttemptWorktree };
 export type { MemoryScope };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
@@ -4291,6 +4291,8 @@ export function startAttempt(
     promptHash?: string | null;
     contextDigest?: string | null;
     contextVersion?: string | null;
+    worktree?: boolean | Record<string, string>;
+    worktreeReason?: string | null;
   },
 ): string {
   // 校验 attemptBrief 类型（g-150 review 问题 4：必须是 string 或 undefined，不可是其他类型）
@@ -4344,7 +4346,8 @@ export function startAttempt(
     status_state: null,
     result: "pending",
     child_id: null,
-    worktree: attemptWorktreeEvidence(root, goalId, attId),
+    worktree: opts.worktree !== undefined ? opts.worktree : attemptWorktreeEvidence(root, goalId, attId),
+    ...(opts.worktree === false && opts.worktreeReason ? { worktree_reason: opts.worktreeReason } : {}),
   };
   if (opts.provider && opts.provider.trim()) {
     meta.provider = opts.provider.trim();
@@ -4405,6 +4408,8 @@ export function startAttempt(
   const details: Record<string, any> = {
     attempt: attId,
     executor: opts.executor,
+    ...(opts.worktree !== undefined ? { worktree: opts.worktree } : {}),
+    ...(opts.worktree === false && opts.worktreeReason ? { worktree_reason: opts.worktreeReason } : {}),
     ...(opts.provider && opts.provider.trim() ? { provider: opts.provider.trim() } : {}),
     ...(opts.model && opts.model.trim() ? { model: opts.model.trim() } : {}),
     ...(opts.modelRoute && opts.modelRoute.trim() ? { model_route: opts.modelRoute.trim() } : {}),

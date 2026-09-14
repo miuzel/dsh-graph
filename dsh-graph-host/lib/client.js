@@ -378,6 +378,7 @@ window.__ModuleLoader__.load({
       'exec.acceptResolved': '✅ 交付已生效',
       'exec.acceptFail': '⚠️ 接受失败：',
       'exec.execute': '🚀 执行',
+      'exec.isolateWorktree': '🌿 在工作树中隔离执行',
       'exec.executeFail': '⚠️ 执行失败：',
       'exec.stateTransitionFail': '⚠️ 状态迁移失败：',
       'exec.childDispatched': '✅ 已派发执行子代理，id：',
@@ -1348,6 +1349,7 @@ window.__ModuleLoader__.load({
       'exec.acceptResolved': '✅ Delivery accepted',
       'exec.acceptFail': '⚠️ Accept failed: ',
       'exec.execute': '🚀 Execute',
+      'exec.isolateWorktree': '🌿 Isolate execution in worktree',
       'exec.executeFail': '⚠️ Execution failed: ',
       'exec.stateTransitionFail': '⚠️ State transition failed: ',
       'exec.childDispatched': '✅ Execution subagent dispatched, id: ',
@@ -3246,6 +3248,18 @@ window.__ModuleLoader__.load({
       };
     }
 
+    // g-283：根据目标类型计算是否默认隔离 worktree 的纯函数（可单测）
+    function defaultWorktreeForGoalType(rawType) {
+      if (rawType === null || rawType === undefined || rawType === "") {
+        return false;
+      }
+      const t = String(rawType).trim().toLowerCase();
+      if (t === "patch" || t === "chore" || t === "task") {
+        return false;
+      }
+      return true;
+    }
+
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // Contract marker: 看板数据自动刷新
     // 数据源：sessions.binding(childId).session（uSES 快照 subscribe/getSnapshot），
     // 流式行读 chat.legacy.partial（必须先 session.open()），token/上下文走投影
@@ -3945,6 +3959,7 @@ window.__ModuleLoader__.load({
       const [provider, setProvider] = React.useState("");
       const [model, setModel] = React.useState("");
       const [mode, setMode] = React.useState("");
+      const [isolateWorktree, setIsolateWorktree] = React.useState(() => defaultWorktreeForGoalType(props.goalType));
       const [note, setNote] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
 
@@ -3993,7 +4008,12 @@ window.__ModuleLoader__.load({
             model: model || undefined,
             mode: mode || undefined,
           };
-          if (kind === "collect") { body.card = cardId; body.prompt = prompt; }
+          if (kind === "collect") {
+            body.card = cardId;
+            body.prompt = prompt;
+          } else {
+            body.worktree = isolateWorktree;
+          }
           const r = await fetch(graphUrl(url), {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -4060,6 +4080,17 @@ window.__ModuleLoader__.load({
                 },
                   h("option", { key: "", value: "", style: optStyle }, dgT("live.modeDefault")),
                   ...modeList.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))) : null,
+                kind !== "collect" ? h("label", {
+                  style: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", userSelect: "none" },
+                },
+                  h("input", {
+                    type: "checkbox",
+                    checked: isolateWorktree,
+                    onChange: (e) => setIsolateWorktree(e.target.checked),
+                    style: { cursor: "pointer" },
+                  }),
+                  h("span", null, dgT("exec.isolateWorktree")),
+                ) : null,
               ],
           h("button", {
             style: { ...S.btn, padding: "3px 10px", fontSize: 12 }, className: "dg-btn dg-relaunch",
@@ -5833,6 +5864,7 @@ window.__ModuleLoader__.load({
       const [fbText, setFbText] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
+      const [inProgressOpen, setInProgressOpen] = React.useState(false);
       // 反馈预填模板（复制与显示共用，保证一致）
       // i18n-keep(category-b)：粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
       const prefillText = fbText.trim() ? `【${goalId} 反馈】\n${fbText.trim()}` : "";
@@ -5999,7 +6031,7 @@ window.__ModuleLoader__.load({
           !isReview ? h("button", {
             style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",
             disabled: loading,
-            onClick: startExecution,
+            onClick: () => setInProgressOpen(true),
           }, dgT("exec.execute")) : null,
           !isReview ? h(DefinitionPolish, {
             goalId, goalPath: props.goalPath, supervisorSession, status, events, attempts,
@@ -6033,6 +6065,25 @@ window.__ModuleLoader__.load({
                 : null)
           : null,
         note ? h("div", { style: { ...S.meta, marginTop: 2 } }, note) : null,
+        inProgressOpen
+          ? h(InProgressPrompt, {
+              goalId,
+              goalData: {
+                id: goalId,
+                title: props.title ?? goalId,
+                type: props.goalType,
+                criteria_count: props.criteria ? 1 : 0,
+                attempt_child_id: hasActiveAttempt ? (attempts?.find((a) => a.status === "working")?.child_id ?? null) : null,
+                attempt_parent_session_id: supervisorSession,
+              },
+              supervisorSession,
+              onConfirm: () => {
+                setInProgressOpen(false);
+                onRefresh?.();
+              },
+              onCancel: () => setInProgressOpen(false),
+            })
+          : null,
       );
     }
 
@@ -6928,7 +6979,7 @@ window.__ModuleLoader__.load({
           : anyAtt
             ? h("div", { key: "relaunch-fallback", style: { ...S.livePanel, marginTop: 6 } },
                 h("div", { style: { ...S.meta, marginBottom: 2 } }, dgT("modal.relaunchFallback")),
-                h(ReExecBox, { goalId: props.id, kind: "exec", onRelaunched: setRelaunchRoute }))
+                h(ReExecBox, { goalId: props.id, kind: "exec", goalType: d?.type, onRelaunched: setRelaunchRoute }))
             : null;
 
         // g-a92e1406：tab 内容（占位文案视觉降级：trim 后以「（待」开头 → 小字灰色放标题右侧）
@@ -6975,7 +7026,7 @@ window.__ModuleLoader__.load({
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
           desc != null ? h(DescriptionBox, { key: "description", goalId: props.id, description: desc, onRefresh: load,
-            extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose }) }) : null,
+            extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose, goalType: d.type }) }) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           // g-170：「✏️ 判据」编辑入口放在小节标题处（负责人 2026-08-25 指示），点击打开判据编辑弹窗
           crit != null ? sectionBlock("c", dgT("section.criteria"), crit,
@@ -8342,6 +8393,7 @@ function resetSearchState(activeWs) {
       const hasCriteria = !!(goalData?.criteria_count);
       const oldChildId = goalData?.attempt_child_id ?? null;
       const oldParentId = goalData?.attempt_parent_session_id ?? null;
+      const [isolateWorktree, setIsolateWorktree] = React.useState(() => defaultWorktreeForGoalType(goalData?.type));
 
       // 有子代理时用 session.prompt 排队重新执行，无子代理时派新
       const { session: oldSession } = useBoundSession(oldParentId, oldChildId);
@@ -8395,7 +8447,7 @@ function resetSearchState(activeWs) {
             const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ goal: goalId }),
+              body: JSON.stringify({ goal: goalId, worktree: isolateWorktree }),
             });
             const data = await r.json();
             if (data.ok) {
@@ -8442,6 +8494,20 @@ function resetSearchState(activeWs) {
           !hasCriteria
             ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-warn-label, #e0a53a)", marginBottom: 4 } },
                 dgT("inProgress.noCriteria"))
+            : null,
+          // g-283：在工作树中隔离执行复选框（无活跃子代理准备派发新执行时展示）
+          !hasChild
+            ? h("label", {
+                style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: 4, marginBottom: 8, cursor: "pointer", userSelect: "none" },
+              },
+                h("input", {
+                  type: "checkbox",
+                  checked: isolateWorktree,
+                  onChange: (e) => setIsolateWorktree(e.target.checked),
+                  style: { cursor: "pointer" },
+                }),
+                h("span", null, dgT("exec.isolateWorktree")),
+              )
             : null,
           h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
             h("button", {
