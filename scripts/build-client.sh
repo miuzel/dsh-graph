@@ -28,6 +28,10 @@ PARTS=(
   # 必须排在 drag-prompts 之前（drag-prompts 打开 KanbanView 函数体，之后的代码
   # 在 KanbanView 局部作用域内；search-state 函数需在工厂作用域定义以被 KanbanView 引用）
   "search-state"
+  # g-290：retained 明细对账纯函数模块（修复 backlog/released 成员变化被旧明细掩盖的
+  # 幽灵卡片缺陷），kanban.js load() 依赖其导出函数；与 search-state 同理必须排在
+  # drag-prompts 之前（工厂作用域），否则会变成 KanbanView 内部的嵌套函数。
+  "board-retain"
   # g-243：version-drawer 必须排在 drag-prompts 之前（工厂作用域），不能夹在
   # drag-prompts 与 kanban 之间——drag-prompts 打开 KanbanView 函数体、kanban 收尾，
   # 夹在中间会让 VersionDrawer 变成 KanbanView 内部的嵌套函数：每次 KanbanView 渲染
