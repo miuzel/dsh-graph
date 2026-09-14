@@ -818,6 +818,8 @@ window.__ModuleLoader__.load({
       'event.handoffConfirmed': '确认返工 handoff',
       'event.handoffSuperseded': '覆盖旧 handoff',
       'event.attemptUnbound': '解绑子代理',
+      'event.attemptDetached': '遗留解绑子代理',
+      'event.attemptAbandoned': '放弃 attempt',
       'event.statusFlow': '状态流转：{from} → {to}',
       'event.reviewRequestedDetail': '请求主管复核：{stage}',
       'event.statusReport': '汇报：{status}',
@@ -830,6 +832,8 @@ window.__ModuleLoader__.load({
       'event.handoffConfirmedDetail': '确认 handoff：{id}',
       'event.handoffSupersededDetail': '覆盖 handoff：{old} → {new}',
       'event.unboundDetail': '解绑子代理：{id}',
+      'event.detachedDetail': '遗留解绑子代理：{id}',
+      'event.abandonedDetail': '放弃 attempt：{id}',
       'event.supervisorActor': '主管 Agent',
       'event.otherSessionActor': 'Agent（另一会话）',
 
@@ -892,6 +896,7 @@ window.__ModuleLoader__.load({
       'live.textOnly': '仅文本：子代理会话不支持图片等多模态输入（SUBAGENT_IMAGE_UNSUPPORTED）',
       'live.unbindFail': '⚠️ 解绑失败：',
       'live.unbindReason': '解绑原因（可选，记录审计事件）…',
+      'live.unbindReasonLegacyRequired': '⚠️ 遗留解绑必须填写原因说明',
       'live.unbindRunning': '⚠️ 子代理仍在运行中——请先受控停止或等待其结束，再解绑',
       'live.unbound': '✅ 已解绑子代理',
       'live.unboundSuccess': '✅ 已解绑子代理（绑定已清理，attempt/事件保留可审计）',
@@ -1783,6 +1788,8 @@ window.__ModuleLoader__.load({
       'event.handoffConfirmed': 'Handoff confirmed',
       'event.handoffSuperseded': 'Handoff superseded',
       'event.attemptUnbound': 'Subagent unbound',
+      'event.attemptDetached': 'Subagent detached (legacy)',
+      'event.attemptAbandoned': 'Attempt abandoned',
       'event.statusFlow': 'Status flow: {from} → {to}',
       'event.reviewRequestedDetail': 'Supervisor review requested: {stage}',
       'event.statusReport': 'Report: {status}',
@@ -1795,6 +1802,8 @@ window.__ModuleLoader__.load({
       'event.handoffConfirmedDetail': 'Handoff confirmed: {id}',
       'event.handoffSupersededDetail': 'Handoff superseded: {old} → {new}',
       'event.unboundDetail': 'Subagent unbound: {id}',
+      'event.detachedDetail': 'Subagent detached (legacy): {id}',
+      'event.abandonedDetail': 'Attempt abandoned: {id}',
       'event.supervisorActor': 'Supervisor Agent',
       'event.otherSessionActor': 'Agent (another session)',
 
@@ -1857,6 +1866,7 @@ window.__ModuleLoader__.load({
       'live.textOnly': 'Text only: subagent sessions do not support multimodal input (SUBAGENT_IMAGE_UNSUPPORTED)',
       'live.unbindFail': '⚠️ Unbind failed: ',
       'live.unbindReason': 'Unbind reason (optional, recorded in audit event)…',
+      'live.unbindReasonLegacyRequired': '⚠️ Legacy unbind requires a reason',
       'live.unbindRunning': '⚠️ Subagent is still running—stop it safely or wait until it ends before unbinding',
       'live.unbound': '✅ Subagent unbound',
       'live.unboundSuccess': '✅ Subagent unbound (binding cleared; attempt/events retained for audit)',
@@ -2082,6 +2092,8 @@ window.__ModuleLoader__.load({
       get "attempt.handoff.confirmed"() { return dgT('event.handoffConfirmed'); },
       get "attempt.handoff.superseded"() { return dgT('event.handoffSuperseded'); },
       get "attempt.unbound"() { return dgT('event.attemptUnbound'); },
+      get "attempt.detached"() { return dgT('event.attemptDetached'); },
+      get "attempt.abandoned"() { return dgT('event.attemptAbandoned'); },
     };
 
     // 近期动态只保留对人有用的事件：泳道切换、修订与人工补充、判据/评审/交付关键节点
@@ -2095,6 +2107,7 @@ window.__ModuleLoader__.load({
       "goal.directive_set", "goal.comment_added",
       "attempt.handoff.confirmed", "attempt.handoff.superseded",
       "attempt.unbound", // g-190
+      "attempt.detached", "attempt.abandoned", // g-282
     ]);
 
     // g-230：拆出事件三要素（时间/事件/执行者），供表格列渲染与 humanEvent 复用
@@ -2115,6 +2128,8 @@ window.__ModuleLoader__.load({
         else if (e.event === "attempt.handoff.confirmed") what = dgT('event.handoffConfirmedDetail', { id: d.handoff ?? "" });
         else if (e.event === "attempt.handoff.superseded") what = dgT('event.handoffSupersededDetail', { old: d.old_handoff ?? "", new: d.new_handoff ?? "" });
         else if (e.event === "attempt.unbound") what = dgT('event.unboundDetail', { id: d.child_id ?? "" }) + (d.reason ? "（" + d.reason + "）" : ""); // g-190
+        else if (e.event === "attempt.detached") what = dgT('event.detachedDetail', { id: d.child_id ?? d.attempt ?? "" }) + (d.reason ? "（" + d.reason + "）" : ""); // g-282
+        else if (e.event === "attempt.abandoned") what = dgT('event.abandonedDetail', { id: d.attempt ?? "" }) + (d.reason ? "（" + d.reason + "）" : ""); // g-282
         else what = e.event;
       }
       // g-230：执行者标签国际化
@@ -2151,6 +2166,8 @@ window.__ModuleLoader__.load({
       .dg-btn:active { filter: brightness(0.95); }
       .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
       /* g-188：统一“转到对话”入口的 hover/active/focus 反馈，不改变布局。 */
+      .dg-card-drawer-resize-handle { transition: background .12s ease, box-shadow .12s ease; }
+      .dg-card-drawer-resize-handle:hover, .dg-card-drawer-resize-handle:active, .dg-card-drawer-resize-handle.dg-dragging { background: var(--dsw-alias-state-business-primary, rgba(76,141,255,.35)) !important; box-shadow: inset 2px 0 0 0 var(--dsw-alias-state-business-primary, #4c8dff) !important; }
       .dg-session-link { border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.55)); }
       .dg-session-link:hover { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.30)); border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.85)); box-shadow: 0 0 0 2px rgba(76,141,255,.18); }
       .dg-session-link:active { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.42)); transform: translateY(1px); }
@@ -4064,13 +4081,19 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false);
       const [note, setNote] = React.useState(null);
       const doUnbind = async () => {
+        const isLegacy = !bindingToken;
+        if (isLegacy && !reason.trim()) {
+          setNote(dgT("live.unbindReasonLegacyRequired"));
+          return;
+        }
         setBusy(true);
         setNote(dgT("live.unbinding"));
         try {
           const body = {
             goal: goalId,
             attempt: attemptId,
-            token: bindingToken,
+            token: bindingToken || undefined,
+            legacy: isLegacy ? true : undefined,
             reason: reason.trim() || undefined,
           };
           const r = await fetch(graphUrl("/api/dsh-graph/unbind"), {
@@ -5541,7 +5564,7 @@ window.__ModuleLoader__.load({
         }
       }
       const resizeHandle = h("div", {
-        className: "dg-card-drawer-resize-handle",
+        className: isDragging ? "dg-card-drawer-resize-handle dg-dragging" : "dg-card-drawer-resize-handle",
         "data-testid": "card-drawer-resize-handle",
         title: dgT("drawer.resizeTip"),
         style: {

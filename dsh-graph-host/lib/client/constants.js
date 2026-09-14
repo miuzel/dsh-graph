@@ -72,6 +72,8 @@
       get "attempt.handoff.confirmed"() { return dgT('event.handoffConfirmed'); },
       get "attempt.handoff.superseded"() { return dgT('event.handoffSuperseded'); },
       get "attempt.unbound"() { return dgT('event.attemptUnbound'); },
+      get "attempt.detached"() { return dgT('event.attemptDetached'); },
+      get "attempt.abandoned"() { return dgT('event.attemptAbandoned'); },
     };
 
     // 近期动态只保留对人有用的事件：泳道切换、修订与人工补充、判据/评审/交付关键节点
@@ -85,6 +87,7 @@
       "goal.directive_set", "goal.comment_added",
       "attempt.handoff.confirmed", "attempt.handoff.superseded",
       "attempt.unbound", // g-190
+      "attempt.detached", "attempt.abandoned", // g-282
     ]);
 
     // g-230：拆出事件三要素（时间/事件/执行者），供表格列渲染与 humanEvent 复用
@@ -105,6 +108,8 @@
         else if (e.event === "attempt.handoff.confirmed") what = dgT('event.handoffConfirmedDetail', { id: d.handoff ?? "" });
         else if (e.event === "attempt.handoff.superseded") what = dgT('event.handoffSupersededDetail', { old: d.old_handoff ?? "", new: d.new_handoff ?? "" });
         else if (e.event === "attempt.unbound") what = dgT('event.unboundDetail', { id: d.child_id ?? "" }) + (d.reason ? "（" + d.reason + "）" : ""); // g-190
+        else if (e.event === "attempt.detached") what = dgT('event.detachedDetail', { id: d.child_id ?? d.attempt ?? "" }) + (d.reason ? "（" + d.reason + "）" : ""); // g-282
+        else if (e.event === "attempt.abandoned") what = dgT('event.abandonedDetail', { id: d.attempt ?? "" }) + (d.reason ? "（" + d.reason + "）" : ""); // g-282
         else what = e.event;
       }
       // g-230：执行者标签国际化
@@ -141,6 +146,8 @@
       .dg-btn:active { filter: brightness(0.95); }
       .dg-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
       /* g-188：统一“转到对话”入口的 hover/active/focus 反馈，不改变布局。 */
+      .dg-card-drawer-resize-handle { transition: background .12s ease, box-shadow .12s ease; }
+      .dg-card-drawer-resize-handle:hover, .dg-card-drawer-resize-handle:active, .dg-card-drawer-resize-handle.dg-dragging { background: var(--dsw-alias-state-business-primary, rgba(76,141,255,.35)) !important; box-shadow: inset 2px 0 0 0 var(--dsw-alias-state-business-primary, #4c8dff) !important; }
       .dg-session-link { border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.55)); }
       .dg-session-link:hover { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.30)); border-color: var(--dsw-alias-state-business-primary, rgba(76,141,255,.85)); box-shadow: 0 0 0 2px rgba(76,141,255,.18); }
       .dg-session-link:active { background: var(--dsw-alias-state-business-tertiary, rgba(76,141,255,.42)); transform: translateY(1px); }
