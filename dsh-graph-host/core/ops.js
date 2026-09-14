@@ -1343,9 +1343,11 @@ export function nextGoalSeq(root) {
 }
 export function createGoal(root, opts) {
     const id = nextGoalSeq(root);
-    // g-137：带 version（非 standalone）→ planning；backlog/standalone → draft
+    // g-287：带 version（含 standalone）→ planning；无 version（进 backlog）→ draft。
+    // 由此 `draft` 精确等价于「位于 backlog、尚未排期」，与 backlog 的迁移/建卡/派发禁令一致；
+    // 独立目标不再创建即落 draft（原 g-137 行为会留下「非 backlog 的 draft」死角：既不可派发、界面也无入口转 planning）。
     const isStandalone = opts.version === "standalone";
-    const initialStatus = (opts.version && !isStandalone) ? "planning" : "draft";
+    const initialStatus = opts.version ? "planning" : "draft";
     const meta = {
         id,
         title: opts.title,

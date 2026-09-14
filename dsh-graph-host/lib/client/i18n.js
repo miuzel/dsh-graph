@@ -233,6 +233,12 @@
       'goal.postponeSuccess': '✅ 已暂缓',
       'goal.postponeSuccessMsg': '✅ 目标已暂缓并移回 backlog',
       'goal.postponeFail': '⚠️ 暂缓失败：',
+      // g-287：历史遗留「非 backlog 草稿」转入规划入口（backlog 卡不显示，其正确路径是排期）
+      'goal.planEntry': '🧭 转入规划',
+      'goal.planEntryTooltip': '将该草稿目标转入规划（状态变为「规划中」，可开始收集/就绪/派发执行）',
+      'goal.planEntryReason': '负责人从看板界面转入规划',
+      'goal.planEntrySuccess': '✅ 已转入规划',
+      'goal.planEntryFail': '⚠️ 转入规划失败：',
       'goal.delete': '🗑 删除',
       'goal.deleteTooltip': '删除目标（仅已归档目标可删除，含卡片/attempts）',
       'goal.deleteConfirm': '确认删除？',
@@ -1204,6 +1210,13 @@
       'goal.postponeSuccess': '✅ Postponed',
       'goal.postponeSuccessMsg': '✅ Goal postponed and moved back to backlog',
       'goal.postponeFail': '⚠️ Postpone failed: ',
+      // g-287: entry to move a legacy non-backlog draft goal into planning
+      // (not shown for backlog cards — their correct path is scheduling)
+      'goal.planEntry': '🧭 Move to planning',
+      'goal.planEntryTooltip': 'Move this draft goal into planning (status becomes "planning"; collection/ready/dispatch become available)',
+      'goal.planEntryReason': 'Owner moved this goal to planning from the kanban',
+      'goal.planEntrySuccess': '✅ Moved to planning',
+      'goal.planEntryFail': '⚠️ Failed to move to planning: ',
       'goal.delete': '🗑 Delete',
       'goal.deleteTooltip': 'Delete goal (only archived goals can be deleted, includes cards/attempts)',
       'goal.deleteConfirm': 'Confirm delete?',
