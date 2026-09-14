@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -47,13 +47,22 @@ function createHarness({
   providers = ["spawn"],
   providerHasPrepareContinuable = true,
   spawnError = null,
+  gitRepo = false,
 }: {
   customWorkspace?: string;
   providers?: string[];
   providerHasPrepareContinuable?: boolean;
   spawnError?: string | null;
+  gitRepo?: boolean;
 } = {}) {
   const ws = customWorkspace ?? mkdtempSync(join(tmpdir(), "dsh-graph-g241-ws-"));
+  // g-283：worktree=true 会真实 `git worktree add`，需要真实 Git 仓库作为代码工作区。
+  if (gitRepo) {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
+    writeFileSync(join(ws, "README"), "x");
+    execFileSync("git", ["add", "."], { cwd: ws });
+    execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: ws });
+  }
   const root = join(ws, ".dsh-graph");
   init(root);
 
@@ -503,7 +512,8 @@ test("g-241 判据 5：准入门禁失败协同回归——未规划/阻塞/已�
 });
 
 test("g-241 判据 5：显式隔离优先级协同回归（g-218 规则）——patch/chore 在 worktree=true 时仍强制隔离", async () => {
-  const { root, toolsByName, execContext, capturedRequests } = createHarness();
+  // g-283：worktree=true 现在会真实建树，需真实 Git 仓库，否则按「非 git 仓库失败即停」拒绝派发。
+  const { root, toolsByName, execContext, capturedRequests } = createHarness({ gitRepo: true });
   const patchGoal = createGoal(root, { title: "补丁目标", version: "v1.0", type: "patch", actor: "human:gui" });
   setCriteria(root, patchGoal, ["判据"], "human:gui");
 
@@ -602,4 +612,106 @@ test("g-270: 目标描述含闭合围栏内 ## 伪标题时，prompt 目标描�
   assert.ok(promptText.includes("## 质量判据"), "prompt 必须包含质量判据");
   assert.ok(promptText.includes("判据 1：测试必须通过"), "判据项 1 必须完整");
   assert.ok(promptText.includes("判据 2：不得越界"), "判据项 2 必须完整");
+});
+
+// ============================================================================
+// g-283：派发时用户决定是否建 worktree（真实创建 / 幂等 / 失败即停），工具与 HTTP 同路径
+// ============================================================================
+
+test("g-283 派发端到端：worktree=true 真实建树并写入 attempt 记录，工具返回 worktree 对象", async () => {
+  const { ws, root, toolsByName, execContext, capturedRequests } = createHarness({ gitRepo: true });
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
+  const goalId = createGoal(root, { title: "隔离执行", version: "v1.0", type: "feature", actor: "human:gui" });
+  setCriteria(root, goalId, ["判据"], "human:gui");
+
+  const r = await toolsByName.get("graph_start_attempt")!.execute(
+    { goal: goalId, worktree: true, attempt_brief: "隔离执行" },
+    execContext,
+  );
+  assert.ok(r.attempt.startsWith("att-"));
+  assert.ok(r.worktree && typeof r.worktree === "object" && r.worktree.path, "工具结果必须返回真实 worktree 记录");
+  const wtPath = join(ws, ".worktrees", `${goalId}-att-01`);
+  assert.ok(existsSync(wtPath), "worktree 目录必须真实存在");
+  assert.equal(r.worktree.relative_path, join(".worktrees", `${goalId}-att-01`));
+  assert.equal(r.worktree.branch, `refs/heads/${goalId}-att-01`);
+  // attempt 记录写入了 worktree 与基线
+  const detail = goalDetail(root, goalId);
+  assert.equal(detail.attempts.length, 1);
+  assert.equal(detail.attempts[0].worktree.path, wtPath);
+  assert.equal(detail.attempts[0].worktree.head, r.worktree.head);
+  // 子代理确实被派发
+  assert.ok(capturedRequests.length >= 1, "勾选建树后仍应正常派发子代理");
+});
+
+test("g-283 默认规则：feature 省略 worktree 默认勾选自动建树，task 默认不勾选不建树", async () => {
+  const { ws, root, toolsByName, execContext } = createHarness({ gitRepo: true });
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
+
+  const featureGoal = createGoal(root, { title: "功能", version: "v1.0", type: "feature", actor: "human:gui" });
+  setCriteria(root, featureGoal, ["判据"], "human:gui");
+  const r1 = await toolsByName.get("graph_start_attempt")!.execute(
+    { goal: featureGoal, attempt_brief: "功能执行" },
+    execContext,
+  );
+  assert.ok(r1.worktree && r1.worktree.path, "feature 默认应建树");
+  assert.ok(existsSync(join(ws, ".worktrees", `${featureGoal}-att-01`)));
+
+  const taskGoal = createGoal(root, { title: "任务", version: "v1.0", type: "task", actor: "human:gui" });
+  setCriteria(root, taskGoal, ["判据"], "human:gui");
+  const r2 = await toolsByName.get("graph_start_attempt")!.execute(
+    { goal: taskGoal, attempt_brief: "任务执行" },
+    execContext,
+  );
+  assert.equal(r2.worktree, false, "task 默认不建树");
+  assert.ok(!existsSync(join(ws, ".worktrees", `${taskGoal}-att-01`)));
+  const detail = goalDetail(root, taskGoal);
+  assert.equal(detail.attempts[0].worktree, false);
+  // attempt 记录里必须同时写入 worktree=false 与原因（读 attempt.md 元数据验证）
+  const attFile = findGoalFile(root, taskGoal).replace(/goal\.md$/, `attempts/${detail.attempts[0].id}/attempt.md`);
+  const attMeta = loadGoal(attFile).meta;
+  assert.equal(attMeta.worktree, false);
+  assert.equal(attMeta.worktree_reason, "user_choice");
+});
+
+test("g-283 失败即停：非 git 仓库 + worktree=true 拒绝派发，未创建 attempt 且未启动子代理", async () => {
+  const { root, toolsByName, execContext, capturedRequests } = createHarness(); // 非 git 仓库
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
+  const goalId = createGoal(root, { title: "非git隔离", version: "v1.0", type: "feature", actor: "human:gui" });
+  setCriteria(root, goalId, ["判据"], "human:gui");
+
+  await assert.rejects(
+    () => toolsByName.get("graph_start_attempt")!.execute(
+      { goal: goalId, worktree: true, attempt_brief: "隔离" },
+      execContext,
+    ),
+    /不是 Git 仓库|git 不可用/,
+  );
+  assert.equal(capturedRequests.length, 0, "失败即停：未启动任何子代理");
+  const detail = goalDetail(root, goalId);
+  assert.equal(detail.attempts.length, 0, "失败即停：未创建 attempt");
+});
+
+test("g-283 HTTP 入口同路径：worktree=false 不建树且 attempt 记录 worktree=false，端点 200", async () => {
+  const { ws, root, registeredRoutes } = createHarness({ gitRepo: true });
+  writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
+  const goalId = createGoal(root, { title: "HTTP不隔离", version: "v1.0", type: "bug", actor: "human:gui" });
+  setCriteria(root, goalId, ["判据"], "human:gui");
+
+  const handler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
+    goal: goalId,
+    worktree: false,
+    attempt_brief: "HTTP 不隔离",
+  });
+  const res = fakeRes();
+  const p = handler(req, res);
+  req._emit();
+  await p;
+
+  assert.equal(res._code, 200);
+  assert.equal(res._body.worktree, false);
+  assert.ok(!existsSync(join(ws, ".worktrees", `${goalId}-att-01`)));
+  const detail = goalDetail(root, goalId);
+  assert.equal(detail.attempts.length, 1);
+  assert.equal(detail.attempts[0].worktree, false);
 });

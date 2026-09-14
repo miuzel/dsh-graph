@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { init, createGoal, startAttempt, findGoalFile, resolveAccept } from "../ops.ts";
-import { listWorktrees, cleanWorktree, registerWorktreeCandidates } from "../worktree.ts";
+import { listWorktrees, cleanWorktree, registerWorktreeCandidates, defaultWorktreeForGoalType, prepareAttemptWorktree } from "../worktree.ts";
 
 function repo() {
   const dir = mkdtempSync(join(tmpdir(), "dsh-worktree-"));
@@ -130,4 +130,102 @@ test("真实候选外部删除后记录 external_removed，重复 clean 稳定 n
   assert.equal(cleanWorktree(root, external.id, "human:test", true).reason, "already_cleaned");
   assert.equal(cleanWorktree(root, external.id, "human:test", true).reason, "already_cleaned");
   const unknown = cleanWorktree(root, "random-id", "human:test", true); assert.equal(unknown.ok, false); assert.equal(unknown.reason, "unknown_candidate");
+});
+
+// ============================================================================
+// g-283：派发时由用户决定是否建 worktree（真实创建 / 幂等复用 / 失败即停）
+// ============================================================================
+
+test("g-283 默认值纯函数：patch/chore/task 默认不勾选，其余类型（feature/bug/improvement 等）默认勾选", () => {
+  assert.equal(defaultWorktreeForGoalType("patch"), false);
+  assert.equal(defaultWorktreeForGoalType("chore"), false);
+  assert.equal(defaultWorktreeForGoalType("task"), false);
+  assert.equal(defaultWorktreeForGoalType("feature"), true);
+  assert.equal(defaultWorktreeForGoalType("bug"), true);
+  assert.equal(defaultWorktreeForGoalType("improvement"), true);
+  // 空值按默认 task 处理（false）
+  assert.equal(defaultWorktreeForGoalType(null), false);
+  assert.equal(defaultWorktreeForGoalType(undefined), false);
+  assert.equal(defaultWorktreeForGoalType(""), false);
+  // 大小写归一化
+  assert.equal(defaultWorktreeForGoalType("PATCH"), false);
+  assert.equal(defaultWorktreeForGoalType("Feature"), true);
+  // 未登记的自定义类型按「其余」默认勾选（隔离优先，绝不静默降级为主树执行）
+  assert.equal(defaultWorktreeForGoalType("research"), true);
+});
+
+test("g-283 勾选真实建树：enabled=true 创建 .worktrees/g-<goal>-att-NN，分支同名且基线为指定 commit", () => {
+  const dir = repo(); const root = join(dir, ".dsh-graph");
+  const baseline = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+  const r = prepareAttemptWorktree(root, "g-283", "att-003", { enabled: true, baselineCommit: baseline });
+  assert.equal(r.enabled, true);
+  assert.equal(r.created, true);
+  assert.equal(r.reused, false);
+  assert.equal(r.worktree.relative_path, join(".worktrees", "g-283-att-03"));
+  assert.equal(r.worktree.branch, "refs/heads/g-283-att-03");
+  assert.equal(r.worktree.head, baseline);
+  const wtPath = join(dir, ".worktrees", "g-283-att-03");
+  assert.ok(existsSync(wtPath), "worktree 目录必须真实存在");
+  assert.equal(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim(), "g-283-att-03");
+  assert.equal(execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), baseline);
+});
+
+test("g-283 未勾选不建：enabled=false 返回 worktree=false 且不创建任何目录", () => {
+  const dir = repo(); const root = join(dir, ".dsh-graph");
+  const r = prepareAttemptWorktree(root, "g-283", "att-003", { enabled: false, reason: "user_choice" });
+  assert.equal(r.enabled, false);
+  assert.equal(r.worktree, false);
+  assert.equal(r.reason, "user_choice");
+  assert.ok(!existsSync(join(dir, ".worktrees")), "未勾选时不得创建 .worktrees 目录");
+});
+
+test("g-283 幂等复用：同一 goal/attempt 再次派发复用已存在且匹配的 worktree，不报错", () => {
+  const dir = repo(); const root = join(dir, ".dsh-graph");
+  const baseline = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+  const r1 = prepareAttemptWorktree(root, "g-283", "att-003", { enabled: true, baselineCommit: baseline });
+  assert.equal(r1.created, true);
+  const r2 = prepareAttemptWorktree(root, "g-283", "att-003", { enabled: true, baselineCommit: baseline });
+  assert.equal(r2.created, false);
+  assert.equal(r2.reused, true);
+  assert.equal(r2.worktree.path, r1.worktree.path);
+  assert.equal(r2.worktree.branch, r1.worktree.branch);
+});
+
+test("g-283 路径冲突失败即停：路径被占用但分支/归属不匹配时抛 GraphError 拒绝派发", () => {
+  const dir = repo(); const root = join(dir, ".dsh-graph");
+  const path = join(dir, ".worktrees", "g-283-att-03");
+  execFileSync("git", ["worktree", "add", "-q", "-b", "g-999-att-01", path], { cwd: dir });
+  assert.throws(
+    () => prepareAttemptWorktree(root, "g-283", "att-003", { enabled: true }),
+    /归属\/分支不匹配|拒绝派发/,
+  );
+});
+
+test("g-283 路径被普通目录占用失败即停：非有效 worktree 的残留目录同样拒绝派发", () => {
+  const dir = repo(); const root = join(dir, ".dsh-graph");
+  const path = join(dir, ".worktrees", "g-283-att-03");
+  mkdirSync(path, { recursive: true });
+  writeFileSync(join(path, "dummy"), "x");
+  assert.throws(
+    () => prepareAttemptWorktree(root, "g-283", "att-003", { enabled: true }),
+    /文件系统占用|拒绝派发/,
+  );
+});
+
+test("g-283 非 git 仓库失败即停：enabled=true 时抛 GraphError 拒绝派发", () => {
+  const ws = mkdtempSync(join(tmpdir(), "dsh-nogit-wt-"));
+  const root = join(ws, ".dsh-graph");
+  init(root);
+  assert.throws(
+    () => prepareAttemptWorktree(root, "g-283", "att-003", { enabled: true }),
+    /不是 Git 仓库|git 不可用/,
+  );
+});
+
+test("g-283 基线无效失败即停：baselineCommit 不存在时抛 GraphError 拒绝派发", () => {
+  const dir = repo(); const root = join(dir, ".dsh-graph");
+  assert.throws(
+    () => prepareAttemptWorktree(root, "g-283", "att-003", { enabled: true, baselineCommit: "deadbeefdeadbeef" }),
+    /基线 commit 无效/,
+  );
 });
