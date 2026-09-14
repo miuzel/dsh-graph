@@ -34,7 +34,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证。** 此前 Windows 不可用的两类问题（① 平台代码使用 POSIX 专用文件锁常量：目录作为 fd、`O_DIRECTORY`、`O_NOFOLLOW`；② 宿主核心包同时出现在 `dependencies` 与 `peerDependencies`）已在 g-284 / g-285 修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过（同一安装包，三平台指纹一致）。
 >
-> **已知限制**：macOS 上工作区路径若含**符号链接**（如位于 `/tmp`、`/var` 之下——这两者在 macOS 上本身是软链），会被拒绝并报 `graph root symlink is not allowed`，请使用真实路径。跟踪目标 g-286。
+> **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下——这两者在 macOS 上本身是软链），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径。跟踪目标 g-286。
 >
 > 已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -154,7 +154,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **Platform scope**: **verified on Linux (WSL2), native Windows, and macOS.** The two problems that previously made Windows unusable — (1) POSIX-only file-lock constants (directory-as-fd, `O_DIRECTORY`, `O_NOFOLLOW`); (2) host core packages declared in both `dependencies` and `peerDependencies` — were fixed in g-284 / g-285 and re-verified on real Windows (win32/x64) and macOS (darwin/arm64) machines, all three platforms using the same artifact (identical sha256).
 >
-> **Known limitation**: on macOS a workspace path containing a **symlink** (e.g. under `/tmp` or `/var`, which are themselves symlinks on macOS) is rejected with `graph root symlink is not allowed` — use the real path. Tracked as goal g-286.
+> **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`, which are symlinks on macOS) is rejected with `graph root symlink is not allowed`. Paths derived from `process.cwd()` are unaffected (Node returns the physical path), but using a real path is recommended either way. Tracked as goal g-286.
 >
 > Official releases are distributed via npm and the dsh-market ecosystem.
 
