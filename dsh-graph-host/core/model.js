@@ -77,13 +77,21 @@ export function serializeDoc(doc) {
         "\n" +
         doc.body);
 }
-/** 提取 `## <name>` 小节到下一 `## ` 之间的原文（不含标题行）；不存在返回 null。 */
+const FENCE_PATTERN = /^(`{3,}|~{3,})/;
+/** 提取 `## <name>` 小节到下一 `## ` 之间的原文（不含标题行）；不存在返回 null。
+ *  代码围栏（``` 或 ~~~）内的 `## ` 标题不被误作为小节分隔符。 */
 export function sectionText(body, name) {
     const lines = body.split("\n");
     const head = `## ${name}`;
     let start = -1;
+    let inFence = false;
     for (let i = 0; i < lines.length; i++) {
-        if (lines[i].trim() === head) {
+        const line = lines[i];
+        if (FENCE_PATTERN.test(line.trimStart())) {
+            inFence = !inFence;
+            continue;
+        }
+        if (!inFence && line.trim() === head) {
             start = i;
             break;
         }
@@ -91,21 +99,34 @@ export function sectionText(body, name) {
     if (start < 0)
         return null;
     let end = lines.length;
+    inFence = false;
     for (let i = start + 1; i < lines.length; i++) {
-        if (lines[i].startsWith("## ")) {
+        const line = lines[i];
+        if (FENCE_PATTERN.test(line.trimStart())) {
+            inFence = !inFence;
+            continue;
+        }
+        if (!inFence && line.startsWith("## ")) {
             end = i;
             break;
         }
     }
     return lines.slice(start + 1, end).join("\n");
 }
-/** 替换 `## <name>` 小节内容（保留标题行与其余小节）。 */
+/** 替换 `## <name>` 小节内容（保留标题行与其余小节）。
+ *  代码围栏（``` 或 ~~~）内的 `## ` 标题不被误作为小节分隔符。 */
 export function replaceSection(body, name, content) {
     const lines = body.split("\n");
     const head = `## ${name}`;
     let start = -1;
+    let inFence = false;
     for (let i = 0; i < lines.length; i++) {
-        if (lines[i].trim() === head) {
+        const line = lines[i];
+        if (FENCE_PATTERN.test(line.trimStart())) {
+            inFence = !inFence;
+            continue;
+        }
+        if (!inFence && line.trim() === head) {
             start = i;
             break;
         }
@@ -113,8 +134,14 @@ export function replaceSection(body, name, content) {
     if (start < 0)
         throw new Error(`小节不存在：${head}`);
     let end = lines.length;
+    inFence = false;
     for (let i = start + 1; i < lines.length; i++) {
-        if (lines[i].startsWith("## ")) {
+        const line = lines[i];
+        if (FENCE_PATTERN.test(line.trimStart())) {
+            inFence = !inFence;
+            continue;
+        }
+        if (!inFence && line.startsWith("## ")) {
             end = i;
             break;
         }

@@ -10,6 +10,12 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require("react");
     const h = React.createElement;
+    // g-270：安全获取 DSH 官方 MarkdownText 组件（若缺失则优雅降级为内置解析器）
+    let MarkdownText = null;
+    try {
+      const prim = require("@deepseek-ai/dsh-client-ui-primitives");
+      if (prim && prim.MarkdownText) MarkdownText = prim.MarkdownText;
+    } catch { /* 降级到内置纯函数解析器 */ }
     // g-230：全局翻译函数——在 plugin apply 阶段由 registerI18n + createTranslator 初始化。
     // 所有组件通过 dgT('key', params) 获取当前语言翻译。
     let dgT = (key) => key;
@@ -5538,6 +5544,243 @@ window.__ModuleLoader__.load({
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
+    // g-270：轻量行内 Markdown 解析器（纯 React 元素树，零 innerHTML，天然免疫 XSS）
+    function parseInlineMarkdown(text) {
+      if (!text) return [];
+      const tokens = [];
+      const regex = /(`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*|(@att\/[a-zA-Z0-9_./-]+)|\[([^\]]+)\]\(([^)]+)\))/g;
+      let lastIndex = 0;
+      let match;
+      let key = 0;
+
+      while ((match = regex.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+          tokens.push(text.slice(lastIndex, match.index));
+        }
+        const [full, , code, bold, italic, attRef, linkText, linkUrl] = match;
+        if (code !== undefined) {
+          tokens.push(h("code", {
+            key: `c-${key++}`,
+            style: {
+              background: "var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))",
+              padding: "1px 4px",
+              borderRadius: 3,
+              fontSize: "0.9em",
+              fontFamily: "var(--ds-font-family-code, monospace)",
+            }
+          }, code));
+        } else if (bold !== undefined) {
+          tokens.push(h("strong", { key: `b-${key++}` }, parseInlineMarkdown(bold)));
+        } else if (italic !== undefined) {
+          tokens.push(h("em", { key: `i-${key++}` }, italic));
+        } else if (attRef !== undefined) {
+          const attName = attRef.slice(5);
+          tokens.push(h("a", {
+            key: `att-${key++}`,
+            href: graphUrl("/api/dsh-graph/attachment?name=" + encodeURIComponent(attName)),
+            target: "_blank",
+            rel: "noopener noreferrer",
+            title: dgT("common.open"),
+            style: { color: "var(--dsw-alias-label-link, #4c8dff)", textDecoration: "underline" }
+          }, attRef));
+        } else if (linkText !== undefined && linkUrl !== undefined) {
+          const safeUrl = /^(https?:|\/|\.\/|\.\.\/)/i.test(linkUrl.trim()) ? linkUrl.trim() : "#";
+          tokens.push(h("a", {
+            key: `a-${key++}`,
+            href: safeUrl,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            style: { color: "var(--dsw-alias-label-link, #4c8dff)", textDecoration: "underline" }
+          }, linkText));
+        }
+        lastIndex = regex.lastIndex;
+      }
+      if (lastIndex < text.length) {
+        tokens.push(text.slice(lastIndex));
+      }
+      return tokens.length === 1 && typeof tokens[0] === "string" ? tokens[0] : tokens;
+    }
+
+    // g-270：轻量 Markdown 块级解析器（标题、列表、代码块、引用、段落）
+    function renderSimpleMarkdown(rawText) {
+      if (!rawText) return null;
+      const lines = rawText.split("\n");
+      const elements = [];
+      let key = 0;
+      let i = 0;
+
+      while (i < lines.length) {
+        const line = lines[i];
+
+        // 1. 代码块 ``` 或 ~~~
+        const fenceMatch = /^([ \t]*)(`{3,}|~{3,})(\w*)/.exec(line);
+        if (fenceMatch) {
+          const fence = fenceMatch[2];
+          const codeLines = [];
+          i++;
+          while (i < lines.length) {
+            if (lines[i].trimStart().startsWith(fence)) {
+              i++;
+              break;
+            }
+            codeLines.push(lines[i]);
+            i++;
+          }
+          elements.push(
+            h("pre", {
+              key: `pre-${key++}`,
+              style: {
+                background: "var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.12))",
+                padding: "8px 12px",
+                borderRadius: 6,
+                fontSize: 11,
+                fontFamily: "var(--ds-font-family-code, monospace)",
+                overflowX: "auto",
+                margin: "6px 0",
+                whiteSpace: "pre-wrap",
+                lineHeight: 1.4,
+              }
+            }, h("code", null, codeLines.join("\n")))
+          );
+          continue;
+        }
+
+        // 2. 标题（# 至 ######）
+        const headingMatch = /^([ \t]{0,3})(#{1,6})[ \t]+(.*)$/.exec(line);
+        if (headingMatch) {
+          const level = headingMatch[2].length;
+          const headingContent = headingMatch[3].trim();
+          const fontSize = level === 1 ? 15 : level === 2 ? 14 : level === 3 ? 13 : 12;
+          elements.push(
+            h("div", {
+              key: `h-${key++}`,
+              style: {
+                fontWeight: 600,
+                fontSize,
+                margin: "8px 0 4px",
+                color: "var(--dsw-alias-label-primary, inherit)",
+              }
+            }, parseInlineMarkdown(headingContent))
+          );
+          i++;
+          continue;
+        }
+
+        // 3. 无序列表（- / * / +）
+        const ulMatch = /^([ \t]{0,3})[-*+][ \t]+(.*)$/.exec(line);
+        if (ulMatch) {
+          const items = [];
+          while (i < lines.length) {
+            const m = /^([ \t]{0,3})[-*+][ \t]+(.*)$/.exec(lines[i]);
+            if (!m) break;
+            items.push(m[2]);
+            i++;
+          }
+          elements.push(
+            h("ul", {
+              key: `ul-${key++}`,
+              style: { margin: "4px 0", paddingLeft: 20, listStyleType: "disc" }
+            }, items.map((item, idx) => h("li", { key: `li-${idx}`, style: { margin: "2px 0" } }, parseInlineMarkdown(item))))
+          );
+          continue;
+        }
+
+        // 4. 有序列表（1. 2. 等）
+        const olMatch = /^([ \t]{0,3})\d+\.[ \t]+(.*)$/.exec(line);
+        if (olMatch) {
+          const items = [];
+          while (i < lines.length) {
+            const m = /^([ \t]{0,3})\d+\.[ \t]+(.*)$/.exec(lines[i]);
+            if (!m) break;
+            items.push(m[2]);
+            i++;
+          }
+          elements.push(
+            h("ol", {
+              key: `ol-${key++}`,
+              style: { margin: "4px 0", paddingLeft: 22, listStyleType: "decimal" }
+            }, items.map((item, idx) => h("li", { key: `li-${idx}`, style: { margin: "2px 0" } }, parseInlineMarkdown(item))))
+          );
+          continue;
+        }
+
+        // 5. 引用块（>）
+        const bqMatch = /^([ \t]{0,3})>[ \t]?(.*)$/.exec(line);
+        if (bqMatch) {
+          const quoteLines = [];
+          while (i < lines.length) {
+            const m = /^([ \t]{0,3})>[ \t]?(.*)$/.exec(lines[i]);
+            if (!m) break;
+            quoteLines.push(m[2]);
+            i++;
+          }
+          elements.push(
+            h("blockquote", {
+              key: `bq-${key++}`,
+              style: {
+                borderLeft: "3px solid var(--dsw-alias-border-l2, rgba(128,128,128,.4))",
+                margin: "4px 0",
+                paddingLeft: 8,
+                opacity: 0.85,
+              }
+            }, parseInlineMarkdown(quoteLines.join(" ")))
+          );
+          continue;
+        }
+
+        // 6. 空行
+        if (line.trim() === "") {
+          i++;
+          continue;
+        }
+
+        // 7. 段落
+        const pLines = [line];
+        i++;
+        while (i < lines.length) {
+          const next = lines[i];
+          if (
+            next.trim() === "" ||
+            /^([ \t]*)(`{3,}|~{3,})/.test(next) ||
+            /^([ \t]{0,3})#{1,6}[ \t]+/.test(next) ||
+            /^([ \t]{0,3})[-*+][ \t]+/.test(next) ||
+            /^([ \t]{0,3})\d+\.[ \t]+/.test(next) ||
+            /^([ \t]{0,3})>[ \t]?/.test(next)
+          ) {
+            break;
+          }
+          pLines.push(next);
+          i++;
+        }
+        elements.push(
+          h("p", {
+            key: `p-${key++}`,
+            style: { margin: "4px 0", whiteSpace: "pre-wrap" }
+          }, parseInlineMarkdown(pLines.join("\n")))
+        );
+      }
+
+      return elements;
+    }
+
+    // g-270：目标描述 Markdown 展示组件（优先 MarkdownText，降级内置解析器）
+    function GoalMarkdown(props) {
+      const { text } = props;
+      if (!text) return null;
+      return h("div", {
+        className: "dg-markdown-body",
+        style: {
+          whiteSpace: "normal",
+          fontSize: 12,
+          lineHeight: 1.6,
+          padding: "4px 0",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
+          color: "var(--dsw-alias-label-primary, inherit)",
+        }
+      }, MarkdownText ? h(MarkdownText, { text }) : renderSimpleMarkdown(text));
+    }
+
     // g-260：目标描述组件（只读态↔编辑态切换，就地 markdown 编辑）
     function DescriptionBox(props) {
       const { goalId, description, onRefresh, extra } = props;
@@ -5608,7 +5851,7 @@ window.__ModuleLoader__.load({
                 }, dgT("common.cancel"))))
           : h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
               hasContent
-                ? h("div", { style: { whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.5, padding: "4px 0" } }, description)
+                ? h(GoalMarkdown, { text: description })
                 : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("description.empty"))),
         extra ?? null,
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
@@ -5904,9 +6147,40 @@ window.__ModuleLoader__.load({
       // g-181：主 overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
       const backdropGuard = useBackdropClose(props.onClose);
 
+      // g-270：代码围栏感知的小节提取函数，围栏内的 ## 标题不被误判为分隔符
       const section = (body, name) => {
-        const m = new RegExp(`## ${name}\\n([\\s\\S]*?)(?=\\n## |$)`).exec(body ?? "");
-        return m ? m[1].trim() : null;
+        if (!body) return null;
+        const lines = body.split("\n");
+        const head = `## ${name}`;
+        let start = -1;
+        let inFence = false;
+        const fencePattern = /^(`{3,}|~{3,})/;
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (fencePattern.test(line.trimStart())) {
+            inFence = !inFence;
+            continue;
+          }
+          if (!inFence && line.trim() === head) {
+            start = i;
+            break;
+          }
+        }
+        if (start < 0) return null;
+        let end = lines.length;
+        inFence = false;
+        for (let i = start + 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (fencePattern.test(line.trimStart())) {
+            inFence = !inFence;
+            continue;
+          }
+          if (!inFence && line.startsWith("## ")) {
+            end = i;
+            break;
+          }
+        }
+        return lines.slice(start + 1, end).join("\n").trim();
       };
 
       let content;
@@ -5918,7 +6192,7 @@ window.__ModuleLoader__.load({
       else {
         const d = state.data;
         // i18n-keep(category-a)：goal.md 正文的固定中文区段名（「目标描述」「质量判据」为数据格式契约，非 UI 文案）。
-        const desc = section(d.body, "目标描述");
+        const desc = d.description ?? section(d.body, "目标描述");
         const crit = section(d.body, "质量判据");
         const meta = d.meta ?? {};
         const status = String(meta.status ?? "unknown");

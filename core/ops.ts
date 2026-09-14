@@ -123,6 +123,32 @@ function sanitizeHeadingContent(text: string): string {
   return text.replace(/^([ \t]{0,3})(###[ \t]+|##[ \t]+)/gm, "$1\\$2");
 }
 
+/**
+ * 规范化目标描述正文中的 Markdown 标题语法（g-270）：
+ * 1. 代码围栏（``` 或 ~~~）内的内容逐字保留，不作任何改动；
+ * 2. 围栏外的 h1（#）与 h2（##）自动降级为 h3（###），既保留用户的标题语义与层级，
+ *    又防止 ## 标题与 goal.md 顶层小节分隔符冲突；
+ * 3. 围栏外的 h3 及更深层标题（###、#### 等）完全保留，不加字面反斜杠转义（无 \###）。
+ */
+export function normalizeDescriptionHeadings(text: string): string {
+  const lines = text.split("\n");
+  let inFence = false;
+  const fencePattern = /^(`{3,}|~{3,})/;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (fencePattern.test(line.trimStart())) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence) {
+      if (/^[ \t]{0,3}#{1,2}[ \t]+/.test(line) && !/^[ \t]{0,3}#{3,}/.test(line)) {
+        lines[i] = line.replace(/^([ \t]{0,3})#{1,2}([ \t]+)/, "$1###$2");
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
 /** 扫描图根下全部目标文件：backlog/*.md、backlog/<id>/goal.md、
  *  goals/<id>/goal.md、versions/<v>/goals/<id>/goal.md。
  *  opts.includeArchived=true 时也扫描 archived 目录下的目标。 */
@@ -1658,8 +1684,8 @@ export function setGoalDescription(
   const file = findGoalFile(root, goalId);
   const doc = loadGoal(file);
   const trimmed = description.trim();
-  // 防止 description 内容包含 ## 标题破坏 section 边界（与 setGoalDirective 同源防护）
-  const safe = sanitizeHeadingContent(trimmed);
+  // 规范化描述标题：h1/h2 降级为 h3，保护 goal.md ## 小节结构；不加 \### 静默转义（g-270）
+  const safe = normalizeDescriptionHeadings(trimmed);
   // 构造小节内容：以空行开头、换行结尾（与 sectionText 解析对齐）
   const sectionContent = `\n${safe}\n\n`;
   try {
@@ -5138,10 +5164,10 @@ export function deleteGoal(
   });
 }
 
-/** g-233：提取目标描述小节正文 */
+/** g-233/g-270：提取目标描述小节正文（使用 fence-aware 的 sectionText 解析） */
 export function extractGoalDescription(body: string): string {
-  const m = (body ?? "").match(/## 目标描述\n([\s\S]*?)(?=\n## |$)/);
-  return m ? m[1].trim() : "";
+  const s = sectionText(body ?? "", "目标描述");
+  return s ? s.trim() : "";
 }
 
 // ---- 看板数据投影（供 host 端点与文字版看板共用） ----
@@ -5868,6 +5894,7 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
   return {
     meta: doc.meta,
     body: doc.body,
+    description: extractGoalDescription(doc.body),
     // g-170：判据编辑弹窗数据源（与看板 criteria_items 同构，供 base_items 乐观并发 token）
     criteria_items: criteriaItems(doc.body),
     criteria_count: countCriteria(doc.body),

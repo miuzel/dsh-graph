@@ -135,9 +135,9 @@ test("g-260 setGoalDescription：空串事件记录 description=null", () => {
   assert.equal(descEvents[0].details?.description, null, "空串事件应记录 description=null");
 });
 
-// ---- ⑤ sanitizeHeadingContent 防标题注入 ----
+// ---- ⑤ g-270：normalizeDescriptionHeadings 标题结构保护（h1/h2 降级为 h3，不加反斜杠） ----
 
-test("g-260 setGoalDescription：## 标题注入被转义，不破坏 section 边界", () => {
+test("g-270 setGoalDescription：## 标题自动降级为 ###，不产生多余反斜杠且不破坏 section 边界", () => {
   const root = tmpRoot();
   const goal = createGoal(root, { title: "测试", version: "v-t", actor: "test" });
   // 尝试注入 ## 质量判据 标题
@@ -147,11 +147,12 @@ test("g-260 setGoalDescription：## 标题注入被转义，不破坏 section �
   const file = findGoalFile(root, goal);
   const body = loadGoal(file).body;
 
-  // 描述小节内不应出现未转义的 ## 质量判据
+  // 描述小节内不应出现未降级的 ## 质量判据，也不应出现反斜杠 \##
   const descSection = sectionText(body, "目标描述");
   assert.ok(descSection, "描述小节应存在");
-  assert.ok(!descSection.includes("\n## 质量判据\n"), "不应包含未转义的标题注入");
-  assert.ok(descSection.includes("\\## 质量判据"), "标题应被转义");
+  assert.ok(!descSection.includes("\n## 质量判据\n"), "不应包含未降级的 ## 标题");
+  assert.ok(!descSection.includes("\\##"), "不应包含反斜杠转义");
+  assert.ok(descSection.includes("### 质量判据"), "## 标题应被优雅降级为 ### 标题");
 
   // 质量判据小节应保持原样（模板占位）
   const critSection = sectionText(body, "质量判据");
@@ -159,17 +160,37 @@ test("g-260 setGoalDescription：## 标题注入被转义，不破坏 section �
   assert.ok(!critSection.includes("假判据内容"), "质量判据不应被注入内容");
 });
 
-test("g-260 setGoalDescription：### 标题注入也被转义", () => {
+test("g-270 setGoalDescription：### 标题完全保留，不加反斜杠转义", () => {
   const root = tmpRoot();
   const goal = createGoal(root, { title: "测试", version: "v-t", actor: "test" });
-  const malicious = "描述内容\n### 子标题注入";
-  setGoalDescription(root, goal, malicious, "test");
+  const input = "描述内容\n### 子标题注入\n#### 四级标题";
+  setGoalDescription(root, goal, input, "test");
 
   const file = findGoalFile(root, goal);
   const body = loadGoal(file).body;
   const descSection = sectionText(body, "目标描述");
   assert.ok(descSection, "描述小节应存在");
-  assert.ok(descSection.includes("\\### 子标题注入"), "### 标题应被转义");
+  assert.ok(descSection.includes("### 子标题注入"), "### 标题应原样保留");
+  assert.ok(descSection.includes("#### 四级标题"), "#### 标题应原样保留");
+  assert.ok(!descSection.includes("\\###"), "不应包含任何反斜杠转义字符");
+});
+
+test("g-270 setGoalDescription：代码围栏内的 ## 标题不被降级且不破坏小节边界", () => {
+  const root = tmpRoot();
+  const goal = createGoal(root, { title: "测试", version: "v-t", actor: "test" });
+  const fenced = "正文\n\n```markdown\n## 围栏内保留的标题\n```\n\n## 围栏外标题";
+  setGoalDescription(root, goal, fenced, "test");
+
+  const file = findGoalFile(root, goal);
+  const body = loadGoal(file).body;
+  const descSection = sectionText(body, "目标描述");
+  assert.ok(descSection, "描述小节应存在");
+  assert.ok(descSection.includes("```markdown\n## 围栏内保留的标题\n```"), "围栏内的 ## 标题应逐字保留");
+  assert.ok(descSection.includes("### 围栏外标题"), "围栏外的 ## 标题应降级为 ###");
+
+  // 质量判据小节依然完好
+  const critSection = sectionText(body, "质量判据");
+  assert.ok(critSection, "质量判据小节应完好存在");
 });
 
 // ---- ⑥ 特殊字符往返保存 ----
