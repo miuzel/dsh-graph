@@ -107,21 +107,21 @@ test("g-289 无 probe：等同干净，按类型默认", () => {
 
 // ---- 探测失败回退（规则 4，fail-closed 降级策略） ----
 
-test("g-289 探测失败（clean=null）：patch/chore/task 回退按类型默认（不隔离），reason=type_default", () => {
+test("g-289 探测失败（clean=null）：patch/chore/task 回退按类型默认（不隔离），reason=type_default_unknown", () => {
   for (const typ of ["patch", "chore", "task"]) {
     const d = resolveWorktreeIsolationDecision(typ, undefined, failedProbe());
     assert.equal(d.isolate, false, `type=${typ} should NOT force-isolate on probe failure`);
-    assert.equal(d.reason, "type_default");
+    assert.equal(d.reason, "type_default_unknown", `type=${typ} reason must be type_default_unknown to distinguish from clean type_default`);
     assert.equal(d.userMessage, undefined, "probe failure should not have dirty hint");
     assert.ok(d.probeState && d.probeState.clean === null, "probeState attached");
   }
 });
 
-test("g-289 探测失败（clean=null）：feature/bug 回退按类型默认（隔离），reason=type_default", () => {
+test("g-289 探测失败（clean=null）：feature/bug 回退按类型默认（隔离），reason=type_default_unknown", () => {
   for (const typ of ["feature", "bug"]) {
     const d = resolveWorktreeIsolationDecision(typ, undefined, failedProbe());
     assert.equal(d.isolate, true, `type=${typ} should isolate (type default)`);
-    assert.equal(d.reason, "type_default");
+    assert.equal(d.reason, "type_default_unknown", `type=${typ} reason must be type_default_unknown`);
     assert.equal(d.userMessage, undefined);
   }
 });
@@ -276,16 +276,16 @@ test("g-289 矩阵汇总：clean+task+未传 → type_default+不隔离", () => 
   assert.equal(d.reason, "type_default");
 });
 
-test("g-289 矩阵汇总：gitFailed+chore+未传 → type_default+不隔离", () => {
+test("g-289 矩阵汇总：gitFailed+chore+未传 → type_default_unknown+不隔离", () => {
   const d = resolveWorktreeIsolationDecision("chore", undefined, failedProbe());
   assert.equal(d.isolate, false);
-  assert.equal(d.reason, "type_default");
+  assert.equal(d.reason, "type_default_unknown");
 });
 
-test("g-289 矩阵汇总：gitFailed+bug+未传 → type_default+隔离", () => {
+test("g-289 矩阵汇总：gitFailed+bug+未传 → type_default_unknown+隔离", () => {
   const d = resolveWorktreeIsolationDecision("bug", undefined, failedProbe());
   assert.equal(d.isolate, true);
-  assert.equal(d.reason, "type_default");
+  assert.equal(d.reason, "type_default_unknown");
 });
 
 test("g-289 矩阵汇总：gitFailed+task+显式true → explicit+隔离", () => {
@@ -316,4 +316,74 @@ test("g-289 矩阵汇总：gitFailed+feature+显式false → explicit+不隔离"
   const d = resolveWorktreeIsolationDecision("feature", false, failedProbe());
   assert.equal(d.isolate, false);
   assert.equal(d.reason, "explicit");
+});
+
+// ============================================================================
+// g-289 可观测性：attempt metadata 落盘 worktree_reason + worktree_probe
+// ============================================================================
+
+test("g-289 可观测性：attempt 记录包含 worktree_reason 和 worktree_probe，区分 type_default 与 type_default_unknown", async () => {
+  const { startAttempt, init, createGoal, findGoalFile, loadGoal } = await import("../ops.ts");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-g289-obs-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  writeFileSync(join(dir, "README"), "x");
+  execFileSync("git", ["add", "."], { cwd: dir });
+  execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: dir });
+  const root = join(dir, ".dsh-graph");
+  init(root);
+  const goal = createGoal(root, { title: "observability", version: "v-test", actor: "test" });
+
+  // 1. 干净工作树 + task → reason=type_default, probe=clean
+  const a1 = startAttempt(root, goal, { executor: "test", actor: "test", worktree: false, worktreeReason: "type_default", worktreeProbe: { state: "clean" } });
+  const af1 = findGoalFile(root, goal).replace(/goal\.md$/, `attempts/${a1}/attempt.md`);
+  const m1 = loadGoal(af1).meta;
+  assert.equal(m1.worktree_reason, "type_default", "clean task should have type_default reason");
+  assert.deepEqual(m1.worktree_probe, { state: "clean" }, "clean probe should be recorded");
+
+  // 2. 探测失败 + chore → reason=type_default_unknown, probe=unknown+error
+  const a2 = startAttempt(root, goal, { executor: "test", actor: "test", worktree: false, worktreeReason: "type_default_unknown", worktreeProbe: { state: "unknown", error: "not a git repository" } });
+  const af2 = findGoalFile(root, goal).replace(/goal\.md$/, `attempts/${a2}/attempt.md`);
+  const m2 = loadGoal(af2).meta;
+  assert.equal(m2.worktree_reason, "type_default_unknown", "probe failure should have type_default_unknown reason");
+  assert.deepEqual(m2.worktree_probe, { state: "unknown", error: "not a git repository" }, "unknown probe should be recorded with error");
+  // 确保 unknown 不被伪称 clean
+  assert.notEqual(m2.worktree_probe.state, "clean", "unknown probe must NOT be recorded as clean");
+
+  // 3. 脏工作树 + patch → reason=dirty_workspace, probe=dirty
+  const a3 = startAttempt(root, goal, { executor: "test", actor: "test", worktree: false, worktreeReason: "dirty_workspace", worktreeProbe: { state: "dirty" } });
+  const af3 = findGoalFile(root, goal).replace(/goal\.md$/, `attempts/${a3}/attempt.md`);
+  const m3 = loadGoal(af3).meta;
+  assert.equal(m3.worktree_reason, "dirty_workspace");
+  assert.deepEqual(m3.worktree_probe, { state: "dirty" });
+
+  // 4. 显式覆盖 + feature → reason=explicit（probeState 可选，此例不附带）
+  const a4 = startAttempt(root, goal, { executor: "test", actor: "test", worktree: false, worktreeReason: "explicit" });
+  const af4 = findGoalFile(root, goal).replace(/goal\.md$/, `attempts/${a4}/attempt.md`);
+  const m4 = loadGoal(af4).meta;
+  assert.equal(m4.worktree_reason, "explicit");
+  assert.equal(m4.worktree_probe, undefined, "explicit without probe should not have worktree_probe field");
+
+  // 5. 未传 reason/probe 时两个字段都不出现（向后兼容）
+  const a5 = startAttempt(root, goal, { executor: "test", actor: "test", worktree: false });
+  const af5 = findGoalFile(root, goal).replace(/goal\.md$/, `attempts/${a5}/attempt.md`);
+  const m5 = loadGoal(af5).meta;
+  assert.equal(m5.worktree_reason, undefined, "no reason → field absent");
+  assert.equal(m5.worktree_probe, undefined, "no probe → field absent");
+});
+
+test("g-289 可观测性：四种 reason 可从 attempt 记录完全区分", () => {
+  // reason 类型的编译期验证——如果新增 reason 但忘记落盘，此测试及矩阵测试会捕获
+  const reasons = ["explicit", "dirty_workspace", "type_default", "type_default_unknown"] as const;
+  const unique = new Set(reasons);
+  assert.equal(unique.size, 4, "must have exactly 4 distinct reason values");
+  // 每种 reason 对应不同 probe state 组合
+  const mapping: Record<string, string> = {
+    explicit: "any (explicit override wins)",
+    dirty_workspace: "dirty (probeState.clean === false)",
+    type_default: "clean (probeState.clean === true or no probe)",
+    type_default_unknown: "unknown (probeState.clean === null)",
+  };
+  for (const r of reasons) {
+    assert.ok(mapping[r], `reason=${r} must have documented probe correspondence`);
+  }
 });

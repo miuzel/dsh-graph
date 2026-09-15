@@ -1195,6 +1195,10 @@ export function apply(ctx, config) {
     }
 
     // 9. 创建并持久化 attempt 记录与 attempt.started 事件
+    // g-289：将探测状态摘要（clean/dirty/unknown）落盘到 attempt metadata，与 worktree_reason 互补实现完整可观测性。
+    const probeSummary = cleanliness.clean === true ? { state: "clean" }
+      : cleanliness.clean === false ? { state: "dirty" }
+      : { state: "unknown", error: cleanliness.error };
     const attempt = startAttempt(root, goal, {
       executor: executor ?? (entrypoint === "http" ? "agent:executor" : actor),
       actor,
@@ -1218,6 +1222,7 @@ export function apply(ctx, config) {
       contextVersion,
       worktree: wtResult.worktree,
       worktreeReason: wtResult.reason,
+      worktreeProbe: probeSummary,
     });
 
     // 9. 启动与绑定子代理

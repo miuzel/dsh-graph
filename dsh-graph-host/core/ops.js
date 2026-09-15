@@ -4120,6 +4120,9 @@ export function startAttempt(root, goalId, opts) {
         // g-289：只要解析出了原因就落盘（不仅限 worktree=false），从而可从 attempt 记录区分
         // 默认隔离究竟来自「显式选择 / 脏工作区 / 类型默认 / 探测回退」哪一类。
         ...(opts.worktreeReason != null && String(opts.worktreeReason).trim() ? { worktree_reason: String(opts.worktreeReason).trim() } : {}),
+        // g-289：落盘探测状态摘要（clean/dirty/unknown），与 worktree_reason 互补实现完整可观测性。
+        // 仅在有探测结果时写入；显式覆盖时 probeState 可选附带。
+        ...(opts.worktreeProbe ? { worktree_probe: opts.worktreeProbe } : {}),
     };
     if (opts.provider && opts.provider.trim()) {
         meta.provider = opts.provider.trim();
@@ -4184,6 +4187,8 @@ export function startAttempt(root, goalId, opts) {
         ...(opts.worktree !== undefined ? { worktree: opts.worktree } : {}),
         // g-289：与 attempt.md 保持一致——只要有解析出的原因就在事件中留痕（可观测性）。
         ...(opts.worktreeReason != null && String(opts.worktreeReason).trim() ? { worktree_reason: String(opts.worktreeReason).trim() } : {}),
+        // g-289：事件中也落盘探测状态，保持 attempt.md 与 events.jsonl 对齐。
+        ...(opts.worktreeProbe ? { worktree_probe: opts.worktreeProbe } : {}),
         ...(opts.provider && opts.provider.trim() ? { provider: opts.provider.trim() } : {}),
         ...(opts.model && opts.model.trim() ? { model: opts.model.trim() } : {}),
         ...(opts.modelRoute && opts.modelRoute.trim() ? { model_route: opts.modelRoute.trim() } : {}),

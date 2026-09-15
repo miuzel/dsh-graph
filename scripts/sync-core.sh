@@ -14,20 +14,9 @@ cd "$(dirname "$0")/.."
 ROOT_CORE="core"
 PKGS=("dsh-graph-host")
 
-TSC="./node_modules/.bin/tsc"
-if [ ! -x "$TSC" ]; then
-  # 支持在 worktree 下工作，向上或在主工作区查找 tsc
-  MAIN_WS="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-  if [ -x "$MAIN_WS/../../node_modules/.bin/tsc" ]; then
-    TSC="$MAIN_WS/../../node_modules/.bin/tsc"
-  elif [ -x "/home/miuzel/workspace/personal/dsh-graph/node_modules/.bin/tsc" ]; then
-    TSC="/home/miuzel/workspace/personal/dsh-graph/node_modules/.bin/tsc"
-  fi
-fi
-
 echo "== 1. tsc 编译 core/*.ts → core-dist/*.js =="
 rm -rf core-dist
-"$TSC" -p tsconfig.json
+./node_modules/.bin/tsc -p tsconfig.json
 echo "编译完成：$(ls core-dist/*.js | wc -l) 个 .js 产物"
 
 echo "== 2. 同步 .js 产物 → 包 core/ =="

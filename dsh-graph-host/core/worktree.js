@@ -333,7 +333,16 @@ export function resolveWorktreeIsolationDecision(rawType, explicitIsolate, probe
             },
         };
     }
-    // 干净工作树、或探测不可靠（clean=null）/无 probe：按类型默认
+    // 探测不可靠（clean=null）：记录 unknown 回退，不伪称干净
+    if (probeState && probeState.clean === null) {
+        const byType = defaultWorktreeForGoalType(rawType);
+        return {
+            isolate: byType,
+            reason: "type_default_unknown",
+            probeState,
+        };
+    }
+    // 干净工作树或无 probe：按类型默认
     const byType = defaultWorktreeForGoalType(rawType);
     return {
         isolate: byType,
