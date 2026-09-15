@@ -183,6 +183,7 @@
       const [model, setModel] = React.useState("");
       const [mode, setMode] = React.useState("");
       const [isolateWorktree, setIsolateWorktree] = React.useState(() => defaultWorktreeForGoalType(props.goalType));
+      const [worktreeHint, setWorktreeHint] = React.useState(null);
       const [note, setNote] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
 
@@ -193,6 +194,17 @@
           .then((d) => {
             if (!alive) return;
             setOpts(d);
+            // g-289：根据工作区干净度更新工作树隔离默认值与提示文案。
+            // 可靠确认脏 → 默认勾选并显示原因；探测不可靠 → 仅信息性提示，不强改复选框。
+            const st = d?.workspaceState;
+            if (st) {
+              if (st.clean === false) {
+                setIsolateWorktree(true);
+                setWorktreeHint(dgT("exec.isolateWorktreeReasonDirty"));
+              } else if (st.clean === null) {
+                setWorktreeHint(dgT("exec.isolateWorktreeUnknown"));
+              }
+            }
             // g-109 判据反馈：默认 = project.yaml executor（spawn-options.default）；
             // provider 不在目录 → 选第一个；model 默认取 project.yaml，若不在所选 provider
             // 的模型清单 → 选该清单第一个（不再出现「模型写死」且 provider/model 失配）。
@@ -305,6 +317,7 @@
                   ...modeList.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))) : null,
                 kind !== "collect" ? h("label", {
                   style: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", userSelect: "none" },
+                  title: worktreeHint || undefined,
                 },
                   h("input", {
                     type: "checkbox",
@@ -313,6 +326,7 @@
                     style: { cursor: "pointer" },
                   }),
                   h("span", null, dgT("exec.isolateWorktree")),
+                  worktreeHint ? h("span", { style: { color: "var(--dsw-alias-state-warn-label, #e0a53a)", fontSize: 10 } }, worktreeHint) : null,
                 ) : null,
               ],
           h("button", {

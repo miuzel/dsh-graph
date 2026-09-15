@@ -103,10 +103,26 @@ import {
   validateVersionRelease,
   versionDetail,
 } from "./version-lane.ts";
-import { registerWorktreeCandidates, listWorktrees, cleanWorktree, defaultWorktreeForGoalType, prepareAttemptWorktree } from "./worktree.ts";
+import {
+  registerWorktreeCandidates,
+  listWorktrees,
+  cleanWorktree,
+  defaultWorktreeForGoalType,
+  detectWorkspaceCleanliness,
+  resolveWorktreeIsolationDecision,
+  prepareAttemptWorktree,
+} from "./worktree.ts";
 export { GraphError, GraphConflictError };
 export { normalizeGoalType };
-export { registerWorktreeCandidates, listWorktrees, cleanWorktree, defaultWorktreeForGoalType, prepareAttemptWorktree };
+export {
+  registerWorktreeCandidates,
+  listWorktrees,
+  cleanWorktree,
+  defaultWorktreeForGoalType,
+  detectWorkspaceCleanliness,
+  resolveWorktreeIsolationDecision,
+  prepareAttemptWorktree,
+};
 export type { MemoryScope };
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
@@ -4349,7 +4365,9 @@ export function startAttempt(
     result: "pending",
     child_id: null,
     worktree: opts.worktree !== undefined ? opts.worktree : attemptWorktreeEvidence(root, goalId, attId),
-    ...(opts.worktree === false && opts.worktreeReason ? { worktree_reason: opts.worktreeReason } : {}),
+    // g-289：只要解析出了原因就落盘（不仅限 worktree=false），从而可从 attempt 记录区分
+    // 默认隔离究竟来自「显式选择 / 脏工作区 / 类型默认 / 探测回退」哪一类。
+    ...(opts.worktreeReason != null && String(opts.worktreeReason).trim() ? { worktree_reason: String(opts.worktreeReason).trim() } : {}),
   };
   if (opts.provider && opts.provider.trim()) {
     meta.provider = opts.provider.trim();
@@ -4411,7 +4429,8 @@ export function startAttempt(
     attempt: attId,
     executor: opts.executor,
     ...(opts.worktree !== undefined ? { worktree: opts.worktree } : {}),
-    ...(opts.worktree === false && opts.worktreeReason ? { worktree_reason: opts.worktreeReason } : {}),
+    // g-289：与 attempt.md 保持一致——只要有解析出的原因就在事件中留痕（可观测性）。
+    ...(opts.worktreeReason != null && String(opts.worktreeReason).trim() ? { worktree_reason: String(opts.worktreeReason).trim() } : {}),
     ...(opts.provider && opts.provider.trim() ? { provider: opts.provider.trim() } : {}),
     ...(opts.model && opts.model.trim() ? { model: opts.model.trim() } : {}),
     ...(opts.modelRoute && opts.modelRoute.trim() ? { model_route: opts.modelRoute.trim() } : {}),

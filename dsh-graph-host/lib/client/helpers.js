@@ -674,4 +674,25 @@
       return true;
     }
 
+    // g-289：前端计算工作树隔离决策与提示文案（纯函数，可单测）。
+    // 与核心层 resolveWorktreeIsolationDecision 语义对齐：
+    // - 显式参数优先级最高；
+    // - 可靠确认脏（clean===false）→ 强制隔离并给出中英原因提示（复选框自动勾选的原因）；
+    // - 干净（clean===true）或探测不可靠（clean===null）→ 按类型默认，不给误导性提示
+    //   （探测不可靠绝不静默伪称干净，也不凭空强制勾选）。
+    function resolveClientWorktreeDecision(rawType, workspaceState, explicit) {
+      if (explicit !== undefined && explicit !== null) {
+        return { isolate: Boolean(explicit), reason: "explicit", hint: null };
+      }
+      if (workspaceState && workspaceState.clean === false) {
+        return {
+          isolate: true,
+          reason: "dirty_workspace",
+          hint: dgT("exec.isolateWorktreeReasonDirty"),
+        };
+      }
+      const byType = defaultWorktreeForGoalType(rawType);
+      return { isolate: byType, reason: "type_default", hint: null };
+    }
+
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // Contract marker: 看板数据自动刷新

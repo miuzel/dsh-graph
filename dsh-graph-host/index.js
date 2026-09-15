@@ -33,6 +33,8 @@ import {
   assertExecutionAdmission,
   ensureExecutionInProgress,
   defaultWorktreeForGoalType,
+  detectWorkspaceCleanliness,
+  resolveWorktreeIsolationDecision,
   prepareAttemptWorktree,
   reportStatus,
   reportSupervisorStatus,
@@ -1123,8 +1125,23 @@ export function apply(ctx, config) {
     const goalRel = goalFile ? relative(workspace, goalFile) : null;
     let gType = "task";
     try { gType = normalizeGoalType(doc.meta.type); } catch {}
-    // g-283：先解析「本次是否真的建树」，再据此决定提示词隔离声明，二者严格一致、零例外。
-    const isWorktree = worktree !== undefined ? Boolean(worktree) : defaultWorktreeForGoalType(gType);
+    // g-289：根据集成分支/主工作树干净度增强默认隔离策略。
+    // 干净度三分：clean=true（干净）/ clean=false（脏，可靠信号）/ clean=null（探测不可靠=unknown）。
+    // 关键纪律：探测不可靠（unknown）绝不静默伪称 clean=true，也不凭空翻转为强制隔离；
+    // 而是记录 cleanliness=unknown 与回退原因（fallback_to_type_default），仅在「可靠确认脏」时升级隔离。
+    const cleanliness = detectWorkspaceCleanliness(workspace);
+    if (cleanliness.clean === null) {
+      process.stderr.write(
+        `[dsh-graph-host] g-289 ℹ️ 工作树干净度 cleanliness=unknown（探测不可靠，未伪称干净）：${cleanliness.error}；` +
+        `回退按类型默认（fallback_to_type_default），不静默改变默认隔离行为\n`,
+      );
+    } else if (cleanliness.clean === false) {
+      process.stderr.write(
+        `[dsh-graph-host] g-289 ⚠️ 检测到集成分支存在未提交改动（cleanliness=dirty），patch/chore/task 也将默认隔离：${cleanliness.dirtyReason}\n`,
+      );
+    }
+    const isolationDecision = resolveWorktreeIsolationDecision(gType, worktree, cleanliness);
+    const isWorktree = isolationDecision.isolate;
     const worktreeBlock = resolveWorktreeGuide(gType, isWorktree, promptLanguage);
     const subagentPromptSection = (() => {
       const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(root, "subagent_prompt"));
@@ -1142,7 +1159,7 @@ export function apply(ctx, config) {
     const wtResult = prepareAttemptWorktree(root, goal, nextAttId, {
       enabled: isWorktree,
       baselineCommit: baseline_commit,
-      reason: "user_choice",
+      reason: isolationDecision.reason,
     });
 
     const prompt = formatAttemptPrompt({
@@ -2095,7 +2112,7 @@ export function apply(ctx, config) {
   // 枚举派发选项（重新执行选择器用）：LLM provider 分组模型目录（ctx.llm 注册表）+ 默认（project.yaml executor）。
   // 注意区分两个 provider 概念：subagent provider（spawn/fork，子代理创建方式，用户不可选）与
   // LLM provider（deepseek/kimi，模型路由，用户可选）。此处只暴露 LLM 目录，避免用户把 spawn/fork 当模型路由。
-  const readSpawnOptions = async (rootForReq) => {
+  const readSpawnOptions = async (rootForReq, ws = null) => {
     let modelGroups = null;
     try {
       const llm = ctx.get?.("llm");
@@ -2139,10 +2156,20 @@ export function apply(ctx, config) {
     // g-133：默认路由展示 = project.yaml executor/project（优先）+ profile 全局默认（缺省）
     const eff = resolveModelRoute(null, def, globalSettings);
     const effModeRes = resolveSubagentMode(null, def.mode, globalSettings.subagentMode);
+
+    // g-289：探测工作区/主工作树干净度并下发给客户端，指导 GUI 复选框与提示文案
+    const inspectDir = ws || dirname(rootForReq);
+    const cleanliness = detectWorkspaceCleanliness(inspectDir);
+
     return {
       modelGroups,
       modes: SUBAGENT_MODES.map((id) => SUBAGENT_MODE_SPECS[id]),
       default: { provider: eff.provider, model: eff.model, mode: effModeRes.mode, mode_source: effModeRes.source },
+      workspaceState: {
+        clean: cleanliness.clean,
+        dirtyReason: cleanliness.clean === false ? cleanliness.dirtyReason : undefined,
+        error: cleanliness.clean === null ? cleanliness.error : undefined,
+      },
     };
   };
 
@@ -2937,12 +2964,14 @@ export function apply(ctx, config) {
         }
       },
     },
-    // g-109 判据反馈：重新执行选择器用——枚举 providers + 模型分组 + project.yaml 默认
+    // g-109 判据反馈：重新执行选择器用——枚举 providers + 模型分组 + project.yaml 默认 + g-289 工作树干净度状态
     {
       path: "/api/dsh-graph/spawn-options",
       handler: async (req, res) => {
         try {
-          json(res, 200, await readSpawnOptions(rootForReq(req)));
+          const r = rootForReq(req);
+          const ws = workspaceOf(req) ?? dirname(r);
+          json(res, 200, await readSpawnOptions(r, ws));
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });

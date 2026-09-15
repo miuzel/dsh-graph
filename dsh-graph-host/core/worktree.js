@@ -272,6 +272,76 @@ export function defaultWorktreeForGoalType(rawType) {
     return true;
 }
 /**
+ * g-289：探测工作区/主工作树 Git 干净度（git status --porcelain）。
+ * - clean=true：集成分支工作树干净，无未提交改动；
+ * - clean=false：集成分支存在未提交改动（dirtyReason 记录 porcelain 摘要或状态）；
+ * - clean=null：探测不可靠（非 git 仓库 / git 不可用 / 命令超时或执行失败）。
+ *
+ * 注：clean=null 只表示「拿不到可靠的干净度信号」。是否据此改变默认隔离，交由
+ * {@link resolveWorktreeIsolationDecision} 结合可靠性语义裁定，见其注释。
+ */
+export function detectWorkspaceCleanliness(workspaceDir, gitRunner) {
+    const runner = gitRunner ?? git;
+    try {
+        const out = runner(workspaceDir, ["status", "--porcelain"]);
+        if (out.trim() === "") {
+            return { clean: true };
+        }
+        const lines = out.split(/\r?\n/).filter((l) => l.trim().length > 0);
+        const summary = lines.slice(0, 3).join("; ") + (lines.length > 3 ? ` ... (+${lines.length - 3} more)` : "");
+        return { clean: false, dirtyReason: summary };
+    }
+    catch (err) {
+        return { clean: null, error: String(err?.message ?? err) };
+    }
+}
+/**
+ * g-289：根据目标类型与工作区干净度综合决策是否默认启用 worktree 隔离（单一可单测函数）。
+ *
+ * 规则（自上而下短路求值）：
+ * - 规则 1（显式覆盖优先级最高）：explicitIsolate 非 undefined/null 时尊重显式参数，reason="explicit"。
+ *   探测只影响默认值，永远不推翻显式选择。
+ * - 规则 2（脏工作树防御，核心增量）：探测拿到「可靠」的不干净信号（clean === false）时，
+ *   即使 patch/chore/task 也默认隔离（isolate=true），reason="dirty_workspace" 并附中英提示。
+ *   这正是 g-280/281/282 串扰事故的防护点——事故发生在「真实 git 仓库且有未提交改动」，恰是可可靠探测到的情形。
+ * - 规则 3（干净基线）：探测拿到干净的信号（clean === true）或未传入 probe 时，按类型默认：
+ *   patch/chore/task=false，其余=true，reason="type_default"。
+ * - 规则 4（探测不可靠的回退）：clean === null（非 git / git 不可用 / 超时等）时，
+ *   「拿不到可靠信号」≠「一定不安全」，且此时也无法真正创建 worktree（准备阶段会失败即停），
+ *   为避免凭空翻转默认值造成可预测性损失与误伤，回退到按类型默认，reason="type_default"。
+ *   这是刻意选择的「探测不可靠 ⇒ 回退按类型默认」而非「一律强制隔离」的降级策略；
+ *   真正的 fail-closed 保护体现在：一旦探测到真实脏工作树（规则 2）必升级隔离，
+ *   以及显式/默认要求隔离时 prepareAttemptWorktree 在非 git 环境下仍会「失败即停」拒绝派发。
+ */
+export function resolveWorktreeIsolationDecision(rawType, explicitIsolate, probeState) {
+    if (explicitIsolate !== undefined && explicitIsolate !== null) {
+        return {
+            isolate: Boolean(explicitIsolate),
+            reason: "explicit",
+            ...(probeState ? { probeState } : {}),
+        };
+    }
+    // 工作树脏：即便是 patch/chore/task 也默认启用隔离（核心增量）
+    if (probeState && probeState.clean === false) {
+        return {
+            isolate: true,
+            reason: "dirty_workspace",
+            probeState,
+            userMessage: {
+                zh: "⚠️ 集成工作区存在未提交改动，已默认启用隔离以防串扰",
+                en: "⚠️ Integration workspace has uncommitted changes; isolation enabled by default to prevent crosstalk",
+            },
+        };
+    }
+    // 干净工作树、或探测不可靠（clean=null）/无 probe：按类型默认
+    const byType = defaultWorktreeForGoalType(rawType);
+    return {
+        isolate: byType,
+        reason: "type_default",
+        ...(probeState ? { probeState } : {}),
+    };
+}
+/**
  * g-283：派发前准备工作树（真实创建 / 幂等复用 / 失败即停）。
  * - enabled=false：不创建，返回 worktree=false 与原因；
  * - enabled=true：
@@ -284,7 +354,9 @@ export function prepareAttemptWorktree(root, goalId, attemptId, opts) {
         return {
             enabled: false,
             worktree: false,
-            reason: opts.reason || "user_choice",
+            // g-289：不再臆造 "user_choice" 兜底——未启用隔离的真实原因（explicit/type_default/
+            // dirty 豁免等）由调用方解析后经 reason 透传，保证 attempt 记录可观测「为何没建树」。
+            reason: opts.reason || null,
             created: false,
             reused: false,
         };

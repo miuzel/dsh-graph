@@ -67,6 +67,31 @@
       const oldChildId = goalData?.attempt_child_id ?? null;
       const oldParentId = goalData?.attempt_parent_session_id ?? null;
       const [isolateWorktree, setIsolateWorktree] = React.useState(() => defaultWorktreeForGoalType(goalData?.type));
+      const [worktreeHint, setWorktreeHint] = React.useState(null);
+
+      // g-289：弹窗挂载时异步探测集成工作区干净度。
+      // - 可靠确认脏 → 默认勾选隔离并显示「已默认隔离」原因（复选框浮动的可见理由）；
+      // - 探测不可靠 → 不强行改写复选框，仅给出「按类型默认」的信息性提示（不静默伪称干净）。
+      React.useEffect(() => {
+        let alive = true;
+        if (!hasChild) {
+          fetch(graphUrl("/api/dsh-graph/spawn-options"))
+            .then((r) => r.json())
+            .then((d) => {
+              if (!alive) return;
+              const st = d?.workspaceState;
+              if (!st) return;
+              if (st.clean === false) {
+                setIsolateWorktree(true);
+                setWorktreeHint(dgT("exec.isolateWorktreeReasonDirty"));
+              } else if (st.clean === null) {
+                setWorktreeHint(dgT("exec.isolateWorktreeUnknown"));
+              }
+            })
+            .catch(() => {});
+        }
+        return () => { alive = false; };
+      }, [goalData?.type, hasChild]);
 
       // 有子代理时用 session.prompt 排队重新执行，无子代理时派新
       const { session: oldSession } = useBoundSession(oldParentId, oldChildId);
@@ -172,6 +197,7 @@
           !hasChild
             ? h("label", {
                 style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: 4, marginBottom: 8, cursor: "pointer", userSelect: "none" },
+                title: worktreeHint || undefined,
               },
                 h("input", {
                   type: "checkbox",
@@ -180,6 +206,7 @@
                   style: { cursor: "pointer" },
                 }),
                 h("span", null, dgT("exec.isolateWorktree")),
+                worktreeHint ? h("span", { style: { color: "var(--dsw-alias-state-warn-label, #e0a53a)", fontSize: 11 } }, worktreeHint) : null,
               )
             : null,
           h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },

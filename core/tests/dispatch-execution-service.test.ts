@@ -60,6 +60,10 @@ function createHarness({
   if (gitRepo) {
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
     writeFileSync(join(ws, "README"), "x");
+    // g-289：镜像真实仓库的忽略规则——.dsh-graph/（看板数据，独立管理）与 .worktrees/
+    // （隔离工作树，插件内部产物）都不计入「未提交改动」，否则会误把工作区判定为脏，
+    // 在同仓多次派发间把对方的看板/工作树痕迹当作脏工作区而误升级隔离。
+    writeFileSync(join(ws, ".gitignore"), ".worktrees/\n.dsh-graph/\n", "utf8");
     execFileSync("git", ["add", "."], { cwd: ws });
     execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: ws });
   }
@@ -677,7 +681,8 @@ test("g-283 默认规则：feature 省略 worktree 默认勾选自动建树，ta
   const attFile = findGoalFile(root, taskGoal).replace(/goal\.md$/, `attempts/${detail.attempts[0].id}/attempt.md`);
   const attMeta = loadGoal(attFile).meta;
   assert.equal(attMeta.worktree, false);
-  assert.equal(attMeta.worktree_reason, "user_choice");
+  // g-289：attempt 记录始终落盘解析出的隔离原因；此处为「按类型默认不隔离」。
+  assert.equal(attMeta.worktree_reason, "type_default");
 });
 
 test("g-283 失败即停：非 git 仓库 + worktree=true 拒绝派发，未创建 attempt 且未启动子代理", async () => {

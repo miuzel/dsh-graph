@@ -385,6 +385,8 @@ window.__ModuleLoader__.load({
       'exec.acceptFail': '⚠️ 接受失败：',
       'exec.execute': '🚀 执行',
       'exec.isolateWorktree': '🌿 在工作树中隔离执行',
+      'exec.isolateWorktreeReasonDirty': '（集成工作区存在未提交改动，已默认隔离）',
+      'exec.isolateWorktreeUnknown': '（未能可靠检测工作区状态，按目标类型默认）',
       'exec.executeFail': '⚠️ 执行失败：',
       'exec.stateTransitionFail': '⚠️ 状态迁移失败：',
       'exec.childDispatched': '✅ 已派发执行子代理，id：',
@@ -1363,6 +1365,8 @@ window.__ModuleLoader__.load({
       'exec.acceptFail': '⚠️ Accept failed: ',
       'exec.execute': '🚀 Execute',
       'exec.isolateWorktree': '🌿 Isolate execution in worktree',
+      'exec.isolateWorktreeReasonDirty': '(Integration workspace has uncommitted changes; isolated by default)',
+      'exec.isolateWorktreeUnknown': '(Could not reliably detect workspace state; falling back to goal-type default)',
       'exec.executeFail': '⚠️ Execution failed: ',
       'exec.stateTransitionFail': '⚠️ State transition failed: ',
       'exec.childDispatched': '✅ Execution subagent dispatched, id: ',
@@ -3273,6 +3277,27 @@ window.__ModuleLoader__.load({
       return true;
     }
 
+    // g-289：前端计算工作树隔离决策与提示文案（纯函数，可单测）。
+    // 与核心层 resolveWorktreeIsolationDecision 语义对齐：
+    // - 显式参数优先级最高；
+    // - 可靠确认脏（clean===false）→ 强制隔离并给出中英原因提示（复选框自动勾选的原因）；
+    // - 干净（clean===true）或探测不可靠（clean===null）→ 按类型默认，不给误导性提示
+    //   （探测不可靠绝不静默伪称干净，也不凭空强制勾选）。
+    function resolveClientWorktreeDecision(rawType, workspaceState, explicit) {
+      if (explicit !== undefined && explicit !== null) {
+        return { isolate: Boolean(explicit), reason: "explicit", hint: null };
+      }
+      if (workspaceState && workspaceState.clean === false) {
+        return {
+          isolate: true,
+          reason: "dirty_workspace",
+          hint: dgT("exec.isolateWorktreeReasonDirty"),
+        };
+      }
+      const byType = defaultWorktreeForGoalType(rawType);
+      return { isolate: byType, reason: "type_default", hint: null };
+    }
+
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // Contract marker: 看板数据自动刷新
     // 数据源：sessions.binding(childId).session（uSES 快照 subscribe/getSnapshot），
     // 流式行读 chat.legacy.partial（必须先 session.open()），token/上下文走投影
@@ -3973,6 +3998,7 @@ window.__ModuleLoader__.load({
       const [model, setModel] = React.useState("");
       const [mode, setMode] = React.useState("");
       const [isolateWorktree, setIsolateWorktree] = React.useState(() => defaultWorktreeForGoalType(props.goalType));
+      const [worktreeHint, setWorktreeHint] = React.useState(null);
       const [note, setNote] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
 
@@ -3983,6 +4009,17 @@ window.__ModuleLoader__.load({
           .then((d) => {
             if (!alive) return;
             setOpts(d);
+            // g-289：根据工作区干净度更新工作树隔离默认值与提示文案。
+            // 可靠确认脏 → 默认勾选并显示原因；探测不可靠 → 仅信息性提示，不强改复选框。
+            const st = d?.workspaceState;
+            if (st) {
+              if (st.clean === false) {
+                setIsolateWorktree(true);
+                setWorktreeHint(dgT("exec.isolateWorktreeReasonDirty"));
+              } else if (st.clean === null) {
+                setWorktreeHint(dgT("exec.isolateWorktreeUnknown"));
+              }
+            }
             // g-109 判据反馈：默认 = project.yaml executor（spawn-options.default）；
             // provider 不在目录 → 选第一个；model 默认取 project.yaml，若不在所选 provider
             // 的模型清单 → 选该清单第一个（不再出现「模型写死」且 provider/model 失配）。
@@ -4095,6 +4132,7 @@ window.__ModuleLoader__.load({
                   ...modeList.map((m) => h("option", { key: m.id, value: m.id, style: optStyle }, m.name ?? m.id))) : null,
                 kind !== "collect" ? h("label", {
                   style: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", userSelect: "none" },
+                  title: worktreeHint || undefined,
                 },
                   h("input", {
                     type: "checkbox",
@@ -4103,6 +4141,7 @@ window.__ModuleLoader__.load({
                     style: { cursor: "pointer" },
                   }),
                   h("span", null, dgT("exec.isolateWorktree")),
+                  worktreeHint ? h("span", { style: { color: "var(--dsw-alias-state-warn-label, #e0a53a)", fontSize: 10 } }, worktreeHint) : null,
                 ) : null,
               ],
           h("button", {
@@ -8554,6 +8593,31 @@ function reconcileRetainedBoardState(data, retained, opts) {
       const oldChildId = goalData?.attempt_child_id ?? null;
       const oldParentId = goalData?.attempt_parent_session_id ?? null;
       const [isolateWorktree, setIsolateWorktree] = React.useState(() => defaultWorktreeForGoalType(goalData?.type));
+      const [worktreeHint, setWorktreeHint] = React.useState(null);
+
+      // g-289：弹窗挂载时异步探测集成工作区干净度。
+      // - 可靠确认脏 → 默认勾选隔离并显示「已默认隔离」原因（复选框浮动的可见理由）；
+      // - 探测不可靠 → 不强行改写复选框，仅给出「按类型默认」的信息性提示（不静默伪称干净）。
+      React.useEffect(() => {
+        let alive = true;
+        if (!hasChild) {
+          fetch(graphUrl("/api/dsh-graph/spawn-options"))
+            .then((r) => r.json())
+            .then((d) => {
+              if (!alive) return;
+              const st = d?.workspaceState;
+              if (!st) return;
+              if (st.clean === false) {
+                setIsolateWorktree(true);
+                setWorktreeHint(dgT("exec.isolateWorktreeReasonDirty"));
+              } else if (st.clean === null) {
+                setWorktreeHint(dgT("exec.isolateWorktreeUnknown"));
+              }
+            })
+            .catch(() => {});
+        }
+        return () => { alive = false; };
+      }, [goalData?.type, hasChild]);
 
       // 有子代理时用 session.prompt 排队重新执行，无子代理时派新
       const { session: oldSession } = useBoundSession(oldParentId, oldChildId);
@@ -8659,6 +8723,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
           !hasChild
             ? h("label", {
                 style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: 4, marginBottom: 8, cursor: "pointer", userSelect: "none" },
+                title: worktreeHint || undefined,
               },
                 h("input", {
                   type: "checkbox",
@@ -8667,6 +8732,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
                   style: { cursor: "pointer" },
                 }),
                 h("span", null, dgT("exec.isolateWorktree")),
+                worktreeHint ? h("span", { style: { color: "var(--dsw-alias-state-warn-label, #e0a53a)", fontSize: 11 } }, worktreeHint) : null,
               )
             : null,
           h("div", { style: { display: "flex", gap: 8, marginTop: 4 } },
