@@ -1099,8 +1099,13 @@
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
         const baseBg = "rgba(255,255,255,.03)";
         const stageBg = (stageIdx) => stageIdx % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)";
-        // g-162: 折叠态——显示摘要行
+        // g-162: 折叠态——显示摘要行（g-288: 支持拖放到折叠泳道）
         if (isCollapsed) {
+          // g-288: 判断拖放目标——仅高亮不同泳道
+          const anyDrag = drag !== null;
+          const isOverThisCollapsed = anyDrag && drag.overLaneKey === key;
+          const isFromThisLane = anyDrag && drag.laneKey === key;
+          const canDropHere = anyDrag && !isFromThisLane;
           return [
             h("div", {
               key: key + "-label",
@@ -1129,9 +1134,26 @@
               }, "＋")),
             h("div", {
               key: key + "-collapsed-summary",
-              style: { gridColumn: "2 / -1", ...S.cell, background: baseBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
+              style: { gridColumn: "2 / -1", ...S.cell, background: isOverThisCollapsed && canDropHere ? "rgba(76,141,255,.10)" : baseBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: dgT('lane.expandTooltip'),
+              className: isOverThisCollapsed && canDropHere ? "dg-cell-drop-active" : "",
               onClick: () => toggleLaneCollapse(key, false),
+              // g-288: 拖放到折叠泳道——高亮并执行移动
+              onDragOver: canDropHere ? (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" } : d);
+              } : undefined,
+              onDrop: canDropHere ? (e) => {
+                e.preventDefault();
+                if (!dropCommitted.current) {
+                  dropCommitted.current = true;
+                  setDrag(null);
+                  // g-288: 先展开泳道，再执行移动
+                  toggleLaneCollapse(key, false);
+                  commitCrossLaneMove(drag.goalId, key);
+                }
+              } : undefined,
             }, dgT('lane.collapsedSummary', { count: goals.length })),
           ];
         }
@@ -1393,8 +1415,13 @@
         const backlogBg = "rgba(0,0,0,.12)";
         // g-258: 优先使用实际已加载条数，未展开懒加载时回退 backlog_count 计数
         const count = (goals && goals.length > 0) ? goals.length : (b?.backlog_count ?? 0);
-        // g-162: 折叠态——显示摘要行
+        // g-162: 折叠态——显示摘要行（g-288: 支持拖放到折叠泳道）
         if (isCollapsed) {
+          // g-288: 判断拖放目标——仅高亮不同泳道
+          const anyDrag = drag !== null;
+          const isOverThisCollapsed = anyDrag && drag.overLaneKey === key;
+          const isFromThisLane = anyDrag && drag.laneKey === key;
+          const canDropHere = anyDrag && !isFromThisLane;
           return [
             h("div", {
               key: key + "-label",
@@ -1417,9 +1444,26 @@
               }, "＋")),
             h("div", {
               key: key + "-collapsed-summary",
-              style: { gridColumn: "2 / -1", ...S.cell, background: backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
+              style: { gridColumn: "2 / -1", ...S.cell, background: isOverThisCollapsed && canDropHere ? "rgba(76,141,255,.10)" : backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: dgT('lane.expandTooltip'),
+              className: isOverThisCollapsed && canDropHere ? "dg-cell-drop-active" : "",
               onClick: () => toggleLaneCollapse(key, false),
+              // g-288: 拖放到折叠泳道——高亮并执行移动
+              onDragOver: canDropHere ? (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" } : d);
+              } : undefined,
+              onDrop: canDropHere ? (e) => {
+                e.preventDefault();
+                if (!dropCommitted.current) {
+                  dropCommitted.current = true;
+                  setDrag(null);
+                  // g-288: 先展开泳道，再执行移动
+                  toggleLaneCollapse(key, false);
+                  commitCrossLaneMove(drag.goalId, key);
+                }
+              } : undefined,
             }, dgT('lane.collapsedSummary', { count })),
           ];
         }
