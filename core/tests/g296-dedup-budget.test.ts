@@ -209,6 +209,52 @@ test("g-296 回归：长标题+短正文不应误报单卡超限（预算语义=
   assert.ok(sec.includes("正文 4 字符"), "诊断应显示正文字符数");
 });
 
+test("g-296 回归：overTotal 告警追加后 output 仍等于 sec.length（maxTotalChars=10 触发超总预算）", () => {
+  const root = tmpRoot();
+  const goal = createGoal(root, { title: "g296-reg3", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据"], "test");
+
+  // 两张卡各100字摘要、短正文，设 maxTotalChars=10 强制超总预算
+  const c1 = addCard(root, goal, { title: "卡A", kind: "text", actor: "test", scope: "goal" });
+  const c2 = addCard(root, goal, { title: "卡B", kind: "text", actor: "test", scope: "goal" });
+  fillCard(root, goal, c1, { text: "内容A", summary: "摘要".repeat(50), by: "human:a", actor: "test" });
+  fillCard(root, goal, c2, { text: "内容B", summary: "摘要".repeat(50), by: "human:a", actor: "test" });
+
+  const sec = formatHarvestedCardsSection(root, goal, { diagnostics: true, maxTotalChars: 10 });
+  // 超总预算告警必须存在
+  assert.ok(sec.includes("总输出超出预算") || sec.includes("Total output exceeds budget"), "有超总预算告警");
+  // output 字符数必须等于 sec.length
+  const match = sec.match(/输出=0*(\d+) 字符/);
+  assert.ok(match, "诊断行应包含输出字符数");
+  const reportedOutput = Number(match![1]);
+  assert.equal(reportedOutput, sec.length, `overTotal 后 output=${reportedOutput} 必须等于 sec.length=${sec.length}`);
+});
+
+test("g-296 回归：折叠卡 bodyChars=0 不应误报单卡正文超限", () => {
+  const root = tmpRoot();
+  const goal = createGoal(root, { title: "g296-reg4", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据"], "test");
+
+  // 创建9张小卡片，第9张会被折叠（数量限制），bodyChars 应为 0
+  for (let i = 0; i < 9; i++) {
+    const ci = addCard(root, goal, { title: `卡${i}`, kind: "text", actor: "test", scope: "goal" });
+    fillCard(root, goal, ci, { text: `内容${i}`, summary: `摘要${i}`, by: "human:a", actor: "test" });
+  }
+
+  const sec = formatHarvestedCardsSection(root, goal, { diagnostics: true });
+  // 第9张卡被折叠，bodyChars=0，不应触发单卡正文超限
+  // 超限警告只应来自真正正文超限的卡片
+  const overLimitCards = (sec.match(/⚠️超限/g) || []).length;
+  assert.equal(overLimitCards, 0, "折叠卡 bodyChars=0 不应触发超限标记");
+  // 但应有超数量警告
+  assert.ok(sec.includes("超出完整展开卡片数量上限"), "有超数量警告");
+  // output == sec.length
+  const match = sec.match(/输出=0*(\d+) 字符/);
+  assert.ok(match, "诊断行应包含输出字符数");
+  const reportedOutput = Number(match![1]);
+  assert.equal(reportedOutput, sec.length, `output=${reportedOutput} 必须等于 sec.length=${sec.length}`);
+});
+
 test("g-296：未启用诊断时输出不变（黄金样本兼容）", () => {
   const root = tmpRoot();
   const goal = createGoal(root, { title: "g296-golden", version: "v-t", actor: "test" });

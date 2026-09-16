@@ -3496,7 +3496,7 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
             ? `\n\n> ⚠️ Card budget limit: ${inlinedCount} cards fully expanded; ${collapsedCount} cards exceeding the total budget collapsed to summary + exact path (read on demand; digest can be verified).`
             : `\n\n> ⚠️ 卡片总预算限制：已完整展开 ${inlinedCount} 张卡片，${collapsedCount} 张卡片超出总预算折叠为摘要+精确路径（按需读取，digest 可校验）。`
         : "";
-    // g-296：预算诊断——按最终返回串 JS.length 计量
+    // g-296：预算诊断——按最终返回串 JS.length 计量（所有分支均纳入占位模板）
     const mainOutput = [header, "", items.join("\n\n")].join("\n") + footer;
     let diagnosticsFooter = "";
     if (diagnosticsEnabled) {
@@ -3506,30 +3506,39 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
         const footerChars = footer.length;
         const overBudgetCards = cardSizes.filter((c) => c.bodyChars > maxCardChars);
         const overCount = inlinedCount >= maxFullCards && collapsedCount > 0;
-        const lines = [];
+        const baseLines = [];
         for (const cs of cardSizes) {
             const tag = cs.bodyChars > maxCardChars ? (isEn ? " ⚠️over" : " ⚠️超限") : "";
-            lines.push(isEn ? `>   ${cs.id} "${cs.title}": ${cs.bodyChars} body chars / ${cs.itemChars} total chars${tag}` : `>   ${cs.id}「${cs.title}」：正文 ${cs.bodyChars} 字符 / 合计 ${cs.itemChars} 字符${tag}`);
+            baseLines.push(isEn ? `>   ${cs.id} "${cs.title}": ${cs.bodyChars} body chars / ${cs.itemChars} total chars${tag}` : `>   ${cs.id}「${cs.title}」：正文 ${cs.bodyChars} 字符 / 合计 ${cs.itemChars} 字符${tag}`);
         }
         if (overBudgetCards.length > 0)
-            lines.push(isEn ? `> ⚠️ ${overBudgetCards.length} card(s) exceed per-card body budget (${maxCardChars} chars)` : `> ⚠️ ${overBudgetCards.length} 张卡片超出单卡正文预算（${maxCardChars} 字符）`);
+            baseLines.push(isEn ? `> ⚠️ ${overBudgetCards.length} card(s) exceed per-card body budget (${maxCardChars} chars)` : `> ⚠️ ${overBudgetCards.length} 张卡片超出单卡正文预算（${maxCardChars} 字符）`);
         if (overCount)
-            lines.push(isEn ? `> ⚠️ Exceeded max full cards count (${maxFullCards})` : `> ⚠️ 超出完整展开卡片数量上限（${maxFullCards}）`);
-        // 固定宽度占位符（8位），替换后长度不变，避免自引用计量循环
-        const diagBody = lines.join("\n");
+            baseLines.push(isEn ? `> ⚠️ Exceeded max full cards count (${maxFullCards})` : `> ⚠️ 超出完整展开卡片数量上限（${maxFullCards}）`);
+        // 先构建不含 overTotal 的版本，检测是否超总预算
         const fixedPlaceholder = "00000000";
-        const summaryTemplate = isEn
-            ? `> [Budget diagnostics] output=${fixedPlaceholder} chars (header=${headerChars}, cards=${itemsChars}, footer=${footerChars}), limit=${maxTotalChars}`
-            : `> [预算诊断] 输出=${fixedPlaceholder} 字符（header=${headerChars}，cards=${itemsChars}，footer=${footerChars}），限额=${maxTotalChars}`;
-        const footerTemplate = "\n\n" + summaryTemplate + "\n" + diagBody;
-        // 总输出 = mainOutput + diagnostics footer（占位符版本长度已固定）
-        const totalChars = mainOutput.length + footerTemplate.length;
-        diagnosticsFooter = footerTemplate.replace(fixedPlaceholder, String(totalChars).padStart(8, "0"));
-        const overTotal = totalChars > maxTotalChars;
-        if (overTotal) {
-            diagnosticsFooter += isEn
-                ? `\n> ⚠️ Total output exceeds budget (${totalChars} > ${maxTotalChars})`
-                : `\n> ⚠️ 总输出超出预算（${totalChars} > ${maxTotalChars}）`;
+        const makeSummary = (lines) => {
+            const diagBody = lines.join("\n");
+            const tpl = isEn
+                ? `> [Budget diagnostics] output=${fixedPlaceholder} chars (header=${headerChars}, cards=${itemsChars}, footer=${footerChars}), limit=${maxTotalChars}`
+                : `> [预算诊断] 输出=${fixedPlaceholder} 字符（header=${headerChars}，cards=${itemsChars}，footer=${footerChars}），限额=${maxTotalChars}`;
+            return "\n\n" + tpl + "\n" + diagBody;
+        };
+        // 第一步：不含 overTotal，检查是否超总预算
+        const preFooter = makeSummary(baseLines);
+        const preTotal = mainOutput.length + preFooter.length;
+        if (preTotal > maxTotalChars) {
+            // 第二步：超总预算 → 将 overTotal 告警纳入 lines，重新构建 footer（占位符宽度不变）
+            const overLine = isEn
+                ? `> ⚠️ Total output exceeds budget (${preTotal} > ${maxTotalChars})`
+                : `> ⚠️ 总输出超出预算（${preTotal} > ${maxTotalChars}）`;
+            const fullLines = [...baseLines, overLine];
+            const fullFooter = makeSummary(fullLines);
+            const totalChars = mainOutput.length + fullFooter.length; // totalChars ≈ preTotal，差异 ≤ 8 位数字宽度波动
+            diagnosticsFooter = fullFooter.replace(fixedPlaceholder, String(totalChars).padStart(8, "0"));
+        }
+        else {
+            diagnosticsFooter = preFooter.replace(fixedPlaceholder, String(preTotal).padStart(8, "0"));
         }
     }
     return mainOutput + diagnosticsFooter;
