@@ -172,6 +172,43 @@ test("g-296：预算诊断——单卡超限标记", () => {
   assert.ok(sec.includes("⚠️超限") || sec.includes("⚠️over"), "单卡超限标记");
 });
 
+test("g-296 回归：diagnostics output 字符数必须等于最终返回串 JS.length（含 diagnostics 自身）", () => {
+  const root = tmpRoot();
+  const goal = createGoal(root, { title: "g296-reg1", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据"], "test");
+
+  // 用短内容卡片制造 output 值较小的场景，方便验证
+  const c1 = addCard(root, goal, { title: "😀卡", kind: "text", actor: "test", scope: "goal" });
+  fillCard(root, goal, c1, { text: "短", summary: "摘要", by: "human:a", actor: "test" });
+
+  const sec = formatHarvestedCardsSection(root, goal, { diagnostics: true });
+  // 从诊断行提取报告的 output 值
+  const match = sec.match(/输出=(\d+) 字符/);
+  assert.ok(match, "诊断行应包含输出字符数");
+  const reportedOutput = Number(match![1]);
+  // 最终返回串的实际 JS.length
+  const actualLength = sec.length;
+  assert.equal(reportedOutput, actualLength, `报告的 output=${reportedOutput} 必须等于 sec.length=${actualLength}`);
+});
+
+test("g-296 回归：长标题+短正文不应误报单卡超限（预算语义=正文长度）", () => {
+  const root = tmpRoot();
+  const goal = createGoal(root, { title: "g296-reg2", version: "v-t", actor: "test" });
+  setCriteria(root, goal, ["判据"], "test");
+
+  // 标题很长（50字符），正文很短（10字符）
+  const longTitle = "这是一个非常非常非常非常非常非常非常长的卡片标题名称用于测试";
+  const c1 = addCard(root, goal, { title: longTitle, kind: "text", actor: "test", scope: "goal" });
+  fillCard(root, goal, c1, { text: "短短正文", summary: "短摘要", by: "human:a", actor: "test" });
+
+  const sec = formatHarvestedCardsSection(root, goal, { diagnostics: true });
+  // 正文只有 4 字符，远低于 1200 限额，不应标记超限
+  assert.ok(!sec.includes("⚠️超限"), "短正文不应因长标题误报超限");
+  assert.ok(!sec.includes("⚠️over"), "短正文不应因长标题误报超限(英文)");
+  // 诊断应显示正文字符数远低于限额
+  assert.ok(sec.includes("正文 4 字符"), "诊断应显示正文字符数");
+});
+
 test("g-296：未启用诊断时输出不变（黄金样本兼容）", () => {
   const root = tmpRoot();
   const goal = createGoal(root, { title: "g296-golden", version: "v-t", actor: "test" });
