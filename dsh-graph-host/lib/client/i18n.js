@@ -848,6 +848,11 @@
       'tagFilter.clear': '清除筛选',
       'tagFilter.noTags': '（暂无标签可筛选）',
 
+      // === 类型过滤弹窗 ===
+      'typeFilter.title': '🏷️ 类型筛选',
+      'typeFilter.clear': '清除筛选',
+      'typeFilter.selected': '已选 {count} 个类型',
+
       // === 刷新间隔设置 ===
       'refresh.title': '刷新间隔',
       'refresh.seconds': '秒',
@@ -1825,6 +1830,11 @@
       'tagFilter.title': '🏷️ Tag Filter',
       'tagFilter.clear': 'Clear filter',
       'tagFilter.noTags': '(No tags available for filtering)',
+
+      // === Type filter modal ===
+      'typeFilter.title': '🏷️ Type Filter',
+      'typeFilter.clear': 'Clear filter',
+      'typeFilter.selected': '{count} types selected',
 
       // === Refresh interval ===
       'refresh.title': 'Refresh interval',
