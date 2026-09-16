@@ -4458,6 +4458,93 @@ window.__ModuleLoader__.load({
         }, "#" + tag)));
     }
 
+    // g-294：可交互类型 badge——点击展开内联类型切换器，直接在看板卡片上修改 goal.type。
+    // 不引入类型筛选器；只做切换+API 调用+onTypeChanged 回调。
+    function TypeBadgeWithSelector(props) {
+      const { goalId, type, onTypeChanged } = props;
+      const [open, setOpen] = React.useState(false);
+      const [loading, setLoading] = React.useState(false);
+      const [error, setError] = React.useState(null);
+      const wrapRef = React.useRef(null);
+      const aType = normalizeGoalType(type);
+
+      React.useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => {
+          if (wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setError(null); }
+        };
+        document.addEventListener("mousedown", onDoc);
+        return () => document.removeEventListener("mousedown", onDoc);
+      }, [open]);
+
+      const switchType = async (t) => {
+        if (t === aType || loading) return;
+        setLoading(true); setError(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/set-goal-type"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, type: t }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setOpen(false);
+            onTypeChanged?.();
+          } else {
+            setError(data.error || "failed");
+          }
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const badge = h("span", {
+        key: "type-badge",
+        style: {
+          display: "inline-block", width: 16, height: 16, lineHeight: "16px",
+          textAlign: "center", borderRadius: 3, fontSize: 10, fontWeight: 700,
+          background: goalTypeColor(aType), color: "#fff",
+          verticalAlign: "middle", marginRight: 2, cursor: "pointer", flexShrink: 0,
+        },
+        title: dgT("goal.typeLabel", { type: GOAL_TYPE_LABELS[aType] ?? aType }),
+        onClick: (e) => { e.stopPropagation(); setOpen(!open); setError(null); },
+      }, GOAL_TYPE_ABBREV[aType] ?? aType[0]?.toUpperCase());
+
+      if (!open) return badge;
+
+      return h("span", { ref: wrapRef, style: { display: "inline-flex", alignItems: "center", gap: 2, marginRight: 2, verticalAlign: "middle", flexShrink: 0 } },
+        badge,
+        ...GOAL_TYPES.map((t) =>
+          h("button", {
+            key: t,
+            style: {
+              width: 16, height: 16, padding: 0, display: "inline-flex",
+              alignItems: "center", justifyContent: "center", cursor: loading ? "wait" : "pointer",
+              fontSize: 10, fontWeight: 700, lineHeight: 1, borderRadius: 3,
+              border: "1px solid " + (t === aType ? goalTypeColor(t) : goalTypeColor(t) + "66"),
+              background: t === aType ? goalTypeColor(t) : goalTypeColor(t) + "18",
+              color: t === aType ? "#fff" : goalTypeColor(t),
+              opacity: loading ? 0.6 : 1,
+              flexShrink: 0,
+            },
+            title: GOAL_TYPE_LABELS[t],
+            onClick: (e) => { e.stopPropagation(); switchType(t); },
+          }, GOAL_TYPE_ABBREV[t])),
+        h("button", {
+          style: {
+            width: 16, height: 16, padding: 0, display: "inline-flex",
+            alignItems: "center", justifyContent: "center", cursor: "pointer",
+            fontSize: 9, lineHeight: 1, borderRadius: 3,
+            border: "1px solid rgba(128,128,128,.35)", background: "rgba(128,128,128,.15)",
+            color: "inherit", opacity: 0.7, flexShrink: 0,
+          },
+          onClick: (e) => { e.stopPropagation(); setOpen(false); setError(null); },
+        }, "✕"),
+        error ? h("span", { style: { fontSize: 9, color: "var(--dsw-alias-state-error-primary, #d66)", marginLeft: 2 } }, "⚠") : null
+      );
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
@@ -4467,7 +4554,8 @@ window.__ModuleLoader__.load({
     // expanded 默认值由 KanbanView 决定（delivered/blocked 默认 false，其余默认 true），
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag) {
+    // g-294：onTypeChanged 参数——类型切换后回调（触发看板数据刷新）
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag, onTypeChanged) {
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -4512,18 +4600,8 @@ window.__ModuleLoader__.load({
          },
        }) : null;
        const badges = [];
-      // g-158：类型标记 badge（F/B/T/I + tooltip）——标题左侧，颜色与左栏/弹窗同源
-      const aType = normalizeGoalType(g.type);
-      const tBadge = h("span", {
-        key: "type-badge",
-        style: {
-          display: "inline-block", width: 16, height: 16, lineHeight: "16px",
-          textAlign: "center", borderRadius: 3, fontSize: 10, fontWeight: 700,
-          background: goalTypeColor(aType), color: "#fff",
-          verticalAlign: "middle", marginRight: 2,
-        },
-        title: GOAL_TYPE_LABELS[aType] ?? aType,
-      }, GOAL_TYPE_ABBREV[aType] ?? aType[0]?.toUpperCase());
+      // g-158/g-294：可交互类型标记 badge（点击展开内联类型切换器）——标题左侧，颜色与左栏/弹窗同源
+      const tBadge = h(TypeBadgeWithSelector, { goalId: g.id, type: g.type, onTypeChanged });
       if (g.reviewer === "human") badges.push("👤");
       if (g.reviewer === "ai") badges.push(dgT('review.aiBadge'));
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
@@ -8964,6 +9042,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
       const modalGoalOpenTsRef = React.useRef(null); // 弹窗打开时目标的 updated_at
       const forceReplayRef = React.useRef(null); // {goalId, openTs} 待关闭后强制补播
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
+      const forceFreshRef = React.useRef(false); // g-294：目标类型变更后跳过 retained 对账，强制拉取最新明细
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       // g-219：删除卡片信号（事件结果驱动，弹窗局部移除用）——{goalId, cardId, ts}
       const [deletedCardSignal, setDeletedCardSignal] = React.useState(null);
@@ -9557,13 +9636,25 @@ function reconcileRetainedBoardState(data, retained, opts) {
         if (retained) setState({ loading: false, data: retained, error: null });
         else setState({ loading: true, data: null, error: null });
         const params = "?lazy=1" + (showArchived ? "&includeArchived=1" : "");
+        // g-294: forceFresh 时跳过 If-None-Match，强制200 响应走 reconcile 对账路径
+        //（lazy payload 下 type-only 变更不改 generated_at/ETag，304 分支直接复用 retained
+        //  绕过 forceFreshRef 检查）；同步捕获并清除 flag 防并发干扰。
+        const isForceFresh = forceFreshRef.current;
+        if (isForceFresh) forceFreshRef.current = false;
         const headers = {};
         const prior = currentEtagRef.current.get(dimension);
-        if (prior) headers["If-None-Match"] = prior;
+        if (prior && !isForceFresh) headers["If-None-Match"] = prior;
         fetch(graphUrlForActive("/api/dsh-graph" + params, {}, activeWs), { headers })
           .then(async (r) => {
             if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
             if (r.status === 304) {
+              // g-294: 304 安全兜底——理论上 forceFresh 已跳过 If-None-Match 不会走这里，
+              // 但并发场景下仍有窗口；此时强制失效 ETag 并重试一次。
+              if (isForceFresh) {
+                currentEtagRef.current.delete(dimension);
+                load();
+                return;
+              }
               const retainedData = boardDataRef.current.get(dimension);
               if (!retainedData) {
                 currentEtagRef.current.delete(dimension);
@@ -9582,7 +9673,11 @@ function reconcileRetainedBoardState(data, retained, opts) {
             // g-290: 改由共享纯函数对账——计数以服务端为准；仅当载荷确为 lazy 且计数与 retained
             // 明细长度一致时才沿用明细（保住「展开态刷新不闪空」），计数不一致一律丢弃旧明细并
             // 复位已加载标记，立即交由既有懒加载路径补拉（绝不残留幽灵卡片）。
-            const retainResult = reconcileRetainedBoardState(data, retained, {
+            // g-294: 目标类型变更后 isForceFresh=true，跳过 retained 对账直接拉取最新明细，
+            // 避免 lazy 载荷下 backlog_count 未变导致旧明细（含旧 type）被沿用。
+            // 空对象使 canRetain=false（无 retainedBacklog），自然触发 refetchBacklog/Version。
+            const staleData = isForceFresh ? {} : retained;
+            const retainResult = reconcileRetainedBoardState(data, staleData, {
               collapsedLanes: collapsedLanes,
               openReleased: openReleased,
             });
@@ -10305,6 +10400,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
                     dropCommitted.current = false;
                   },
                 },
+                () => { forceFreshRef.current = true; load(); },
               );
             }),
           );
@@ -10516,6 +10612,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
                     dropCommitted.current = false;
                   },
                 },
+                () => { forceFreshRef.current = true; load(); },
               );
             }),
           ),
@@ -11147,7 +11244,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
               onPmFinished: () => setPolishGoal(null),
               goalStatus,
               supervisorSession: b.supervisorSession ?? null,
-              onRenamed: () => load(),
+              onRenamed: () => { forceFreshRef.current = true; load(); },
               onArchived: () => load(),
               onTagsChanged: () => load(),
               onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),

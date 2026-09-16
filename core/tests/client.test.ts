@@ -398,6 +398,7 @@ test("g-163 Card 真实调用链转发 camelCase criteriaItems", () => {
       createElement: h,
       useState: (initial: any) => [typeof initial === "function" ? initial() : initial, () => {}],
       useEffect: () => {},
+      useRef: (initial: any) => ({ current: initial }),
     },
     h,
     dgT: (key: string, params?: Record<string, any>) => {
@@ -418,6 +419,7 @@ test("g-163 Card 真实调用链转发 camelCase criteriaItems", () => {
         'criteria.toBeFilled': '（待填写）',
         'card.clickSummaryExpand': '点击展开摘要全文',
         'card.clickSummaryCollapse': '点击收起摘要',
+        'goal.typeLabel': '类型：{type}（点击切换）',
       };
       let text = dict[key] ?? key;
       if (params) {
@@ -432,8 +434,10 @@ test("g-163 Card 真实调用链转发 camelCase criteriaItems", () => {
     CARD_STATUS_ICON: {},
     GOAL_TYPE_LABELS: { feature: "功能" },
     GOAL_TYPE_ABBREV: { feature: "F" },
+    GOAL_TYPES: ["feature", "bug", "task", "improvement", "patch", "chore"],
     goalTypeColor: () => "#000",
     normalizeGoalType: () => "feature",
+    graphUrl: () => "/api/dsh-graph",
     rowHalf: () => "after",
     sessionLinkBtn: () => null,
     renderHighlight: (text: any) => text,
@@ -1975,6 +1979,7 @@ test("g-200 LiveStrip 隔离契约：Card 仅在 Goal 处于执行态或有活�
         'criteria.toBeFilled': '（待填写）',
         'card.clickSummaryExpand': '点击展开摘要全文',
         'card.clickSummaryCollapse': '点击收起摘要',
+        'goal.typeLabel': '类型：{type}（点击切换）',
       };
       let text = dict[key] ?? key;
       if (params) {

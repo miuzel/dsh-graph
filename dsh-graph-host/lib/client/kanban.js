@@ -11,6 +11,7 @@
       const modalGoalOpenTsRef = React.useRef(null); // 弹窗打开时目标的 updated_at
       const forceReplayRef = React.useRef(null); // {goalId, openTs} 待关闭后强制补播
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
+      const forceFreshRef = React.useRef(false); // g-294：目标类型变更后跳过 retained 对账，强制拉取最新明细
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       // g-219：删除卡片信号（事件结果驱动，弹窗局部移除用）——{goalId, cardId, ts}
       const [deletedCardSignal, setDeletedCardSignal] = React.useState(null);
@@ -604,13 +605,25 @@
         if (retained) setState({ loading: false, data: retained, error: null });
         else setState({ loading: true, data: null, error: null });
         const params = "?lazy=1" + (showArchived ? "&includeArchived=1" : "");
+        // g-294: forceFresh 时跳过 If-None-Match，强制200 响应走 reconcile 对账路径
+        //（lazy payload 下 type-only 变更不改 generated_at/ETag，304 分支直接复用 retained
+        //  绕过 forceFreshRef 检查）；同步捕获并清除 flag 防并发干扰。
+        const isForceFresh = forceFreshRef.current;
+        if (isForceFresh) forceFreshRef.current = false;
         const headers = {};
         const prior = currentEtagRef.current.get(dimension);
-        if (prior) headers["If-None-Match"] = prior;
+        if (prior && !isForceFresh) headers["If-None-Match"] = prior;
         fetch(graphUrlForActive("/api/dsh-graph" + params, {}, activeWs), { headers })
           .then(async (r) => {
             if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
             if (r.status === 304) {
+              // g-294: 304 安全兜底——理论上 forceFresh 已跳过 If-None-Match 不会走这里，
+              // 但并发场景下仍有窗口；此时强制失效 ETag 并重试一次。
+              if (isForceFresh) {
+                currentEtagRef.current.delete(dimension);
+                load();
+                return;
+              }
               const retainedData = boardDataRef.current.get(dimension);
               if (!retainedData) {
                 currentEtagRef.current.delete(dimension);
@@ -629,7 +642,11 @@
             // g-290: 改由共享纯函数对账——计数以服务端为准；仅当载荷确为 lazy 且计数与 retained
             // 明细长度一致时才沿用明细（保住「展开态刷新不闪空」），计数不一致一律丢弃旧明细并
             // 复位已加载标记，立即交由既有懒加载路径补拉（绝不残留幽灵卡片）。
-            const retainResult = reconcileRetainedBoardState(data, retained, {
+            // g-294: 目标类型变更后 isForceFresh=true，跳过 retained 对账直接拉取最新明细，
+            // 避免 lazy 载荷下 backlog_count 未变导致旧明细（含旧 type）被沿用。
+            // 空对象使 canRetain=false（无 retainedBacklog），自然触发 refetchBacklog/Version。
+            const staleData = isForceFresh ? {} : retained;
+            const retainResult = reconcileRetainedBoardState(data, staleData, {
               collapsedLanes: collapsedLanes,
               openReleased: openReleased,
             });
@@ -1352,6 +1369,7 @@
                     dropCommitted.current = false;
                   },
                 },
+                () => { forceFreshRef.current = true; load(); },
               );
             }),
           );
@@ -1563,6 +1581,7 @@
                     dropCommitted.current = false;
                   },
                 },
+                () => { forceFreshRef.current = true; load(); },
               );
             }),
           ),
@@ -2194,7 +2213,7 @@
               onPmFinished: () => setPolishGoal(null),
               goalStatus,
               supervisorSession: b.supervisorSession ?? null,
-              onRenamed: () => load(),
+              onRenamed: () => { forceFreshRef.current = true; load(); },
               onArchived: () => load(),
               onTagsChanged: () => load(),
               onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),

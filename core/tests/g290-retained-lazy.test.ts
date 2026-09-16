@@ -27,6 +27,7 @@ import {
   boardProjection,
   backlogGoals,
   versionGoals,
+  setGoalType,
 } from "../ops.ts";
 import { reconcileRetainedBoardState } from "../../dsh-graph-host/lib/client/board-retain.js";
 
@@ -330,5 +331,80 @@ test("g-290 kanban.js 与生成物接线守卫", () => {
     assert.match(src, /refetchBacklog/, "必须消费补拉结论");
     assert.doesNotMatch(src, /data\.backlog_count\s*=\s*retained\.backlog\.length/, "旧的无条件覆盖写法不得回流");
     assert.doesNotMatch(src, /ver\.goals_count\s*=\s*prevVer\.goals\.length/, "released 计数覆盖写法不得回流");
+  }
+});
+
+// ===== g-294：type-only 变更 + 304/forceFresh 回归 =====
+
+test("g-294 源契约：forceFresh 时跳过 If-None-Match 且 304 分支安全兜底", () => {
+  const kanbanSrc = readFileSync(new URL("../../dsh-graph-host/lib/client/kanban.js", import.meta.url), "utf8");
+  const bundleSrc = readFileSync(new URL("../../dsh-graph-host/lib/client.js", import.meta.url), "utf8");
+  for (const src of [kanbanSrc, bundleSrc]) {
+    // 1. forceFresh 捕获后立即清除，防并发干扰
+    assert.match(src, /isForceFresh\s*=\s*forceFreshRef\.current/, "必须同步捕获 forceFreshRef");
+    // 2. forceFresh 时跳过 If-None-Match（服务端304 绕过 forceFresh 检查的根因）
+    assert.match(src, /if\s*\(prior\s*&&\s*!isForceFresh\)\s*headers\[.If-None-Match.\]/,
+      "forceFresh 时必须跳过 If-None-Match");
+    // 3. 304 安全兜底：forceFresh 场景下失效 ETag 并重试
+    assert.match(src, /if\s*\(isForceFresh\)[\s\S]*?currentEtagRef\.current\.delete\(dimension\)[\s\S]*?load\(\)/,
+      "304 + forceFresh 必须失效 ETag 并重试");
+    // 4. 200 分支使用 isForceFresh（非 forceFreshRef.current，已被清除）+ 空对象触发补拉
+    assert.match(src, /const staleData\s*=\s*isForceFresh\s*\?\s*\{\}\s*:\s*retained/,
+      "200 分支必须用 isForceFresh 决定 retained（空对象触发补拉）");
+  }
+});
+
+test("g-294 reconcileRetainedBoardState：null retained 触发 backlog 补拉", () => {
+  const { root, cleanup } = setupTestProject();
+  try {
+    createGoal(root, { title: "Feature", type: "feature", actor: "test" });
+    createGoal(root, { title: "Bug", type: "bug", actor: "test" });
+    // lazy payload 模拟服务端返回（backlog_count=2, backlog=[]）
+    const lazy = boardProjection(root, { lazy: true });
+    assert.equal(lazy.backlog_count, 2);
+    assert.equal(lazy.backlog.length, 0, "lazy payload backlog 应为空");
+
+    // 模拟之前 retained 的旧数据（含旧 type）
+    const oldBacklog = backlogGoals(root);
+    oldBacklog[0].type = "task" as any; // 模拟旧 type
+
+    // 正常路径：retained 有数据 + count 一致 → 沿用
+    const normalResult = reconcileRetainedBoardState(
+      { ...lazy }, { ...lazy, backlog: oldBacklog }, { collapsedLanes: {} });
+    assert.equal(normalResult.refetchBacklog, false, "count 一致不应补拉");
+    assert.deepEqual(lazy.backlog, [], "原始 lazy.backlog 不变");
+
+    // forceFresh 路径：retained={} → canRetain=false → 触发补拉
+    const freshResult = reconcileRetainedBoardState(
+      { ...lazy }, {}, { collapsedLanes: {} });
+    assert.equal(freshResult.refetchBacklog, true, "空 retained 必须触发补拉");
+    assert.deepEqual(freshResult.data.backlog, [], "补拉前 backlog 保持空");
+  } finally {
+    cleanup();
+  }
+});
+
+test("g-294 boardProjection：setGoalType 后投影立即反映新 type", () => {
+  const { root, cleanup } = setupTestProject();
+  try {
+    const id = createGoal(root, { title: "测试", type: "feature", actor: "test" });
+    const before = boardProjection(root);
+    const goal = before.backlog.find((g) => g.id === id)!;
+    assert.equal(goal.type, "feature", "初始 type 应为 feature");
+
+    // 变更 type
+    setGoalType(root, id, { type: "bug", actor: "test" });
+
+    const after = boardProjection(root);
+    const updated = after.backlog.find((g) => g.id === id)!;
+    assert.equal(updated.type, "bug", "type 变更后投影应立即反映新 type");
+
+    // lazy 模式下补拉同样反映
+    const lazy = boardProjection(root, { lazy: true });
+    const fullBacklog = backlogGoals(root);
+    const lazyGoal = fullBacklog.find((g) => g.id === id)!;
+    assert.equal(lazyGoal.type, "bug", "lazy 补拉后 type 应为 bug");
+  } finally {
+    cleanup();
   }
 });
