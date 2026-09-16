@@ -5,6 +5,7 @@ window.__ModuleLoader__.load({
   id: "dsh-graph",
   factory(require) {
     const React = require("react");
+    const ReactDOM = require("react-dom");
     const h = React.createElement;
     // g-270：安全获取 DSH 官方 MarkdownText 组件（若缺失则优雅降级为内置解析器）
     let MarkdownText = null;

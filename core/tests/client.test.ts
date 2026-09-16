@@ -2460,9 +2460,9 @@ test("g-214 生成 bundle 契约：client.js 包含 g-214 倒计时与刷新间�
 test("g-216 源契约：helpers.js S.wrap、S.overlay、S.drawer、S.modal 合理规划 z-index 与层叠上下文", () => {
   const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
   assert.match(helpers, /wrap: \{[\s\S]*?position:\s*"relative",\s*zIndex:\s*1/);
-  assert.match(helpers, /overlay: \{[\s\S]*?zIndex:\s*20000/);
-  assert.match(helpers, /drawer: \{[\s\S]*?zIndex:\s*20001/);
-  assert.match(helpers, /modal: \{[\s\S]*?zIndex:\s*20002/);
+  assert.match(helpers, /overlay: \{[\s\S]*?zIndex:\s*99998/);
+  assert.match(helpers, /drawer: \{[\s\S]*?zIndex:\s*99999/);
+  assert.match(helpers, /modal: \{[\s\S]*?zIndex:\s*100000/);
 });
 
 test("g-216 源契约：constants.js 包含 widthHandle 蒙层防穿透与防遮挡样式规则", () => {
@@ -2482,9 +2482,9 @@ test("g-216 生成 bundle 契约：client.js 包含 g-216 层级规划与 widthH
   const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
   assert.match(bundle, /dg-modal-open/);
   assert.match(bundle, /\.wSkVaW_root:has\(\.dg-modal-open\)/);
-  assert.match(bundle, /zIndex:\s*20000/);
-  assert.match(bundle, /zIndex:\s*20001/);
-  assert.match(bundle, /zIndex:\s*20002/);
+  assert.match(bundle, /zIndex:\s*99998/);
+  assert.match(bundle, /zIndex:\s*99999/);
+  assert.match(bundle, /zIndex:\s*100000/);
 });
 test("g-225 卡片 LiveStrip 模型展示契约：LiveStrip 默认不渲染可见 model ID，完整 provider/model 仅在 tooltip (title) 显示，且 Hooks 顶层无条件调用", () => {
   const hooksSrc = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
@@ -2554,7 +2554,7 @@ test("g-223 源契约：kanban.js 挂载版本管理按钮、抽屉与隐藏版�
   assert.match(kanban, /dgT\(['"]versionDrawer\.activeHidden['"]/);
 
   // 4. VersionDrawer 挂载
-  assert.match(kanban, /showVersionDrawer\s*\?\s*h\(VersionDrawer/);
+  assert.match(kanban, /showVersionDrawer\s*\?\s*ReactDOM\.createPortal\(h\(VersionDrawer/);
   assert.match(kanban, /onShowAll/);
   assert.match(kanban, /onHideAll/);
   assert.match(kanban, /onShowActiveOnly/);

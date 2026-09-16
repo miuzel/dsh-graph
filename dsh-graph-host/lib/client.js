@@ -9,6 +9,7 @@ window.__ModuleLoader__.load({
   id: "dsh-graph",
   factory(require) {
     const React = require("react");
+    const ReactDOM = require("react-dom");
     const h = React.createElement;
     // g-270：安全获取 DSH 官方 MarkdownText 组件（若缺失则优雅降级为内置解析器）
     let MarkdownText = null;
@@ -2626,12 +2627,12 @@ window.__ModuleLoader__.load({
       },
       overlay: {
         position: "fixed", inset: 0, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.55))",
-        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20000,
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 99998,
       },
       drawer: {
         position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
         boxSizing: "border-box",
-        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 99999,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px 90px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
@@ -2640,7 +2641,7 @@ window.__ModuleLoader__.load({
       drawerLeft: {
         position: "fixed", top: 0, left: 0, height: "100vh", width: 380, maxWidth: "85vw",
         boxSizing: "border-box",
-        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 99999,
         boxShadow: "4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px 90px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
@@ -2650,7 +2651,7 @@ window.__ModuleLoader__.load({
       modal: {
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", borderRadius: 10,
         maxWidth: 720, width: "90%", maxHeight: "80vh", overflowY: "auto",
-        padding: "16px 20px", fontSize: 13, lineHeight: 1.6, position: "relative", zIndex: 20002,
+        padding: "16px 20px", fontSize: 13, lineHeight: 1.6, position: "relative", zIndex: 100000,
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
@@ -11265,7 +11266,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
             })
           : null,
         showVersionDrawer
-          ? h(VersionDrawer, {
+          ? ReactDOM.createPortal(h(VersionDrawer, {
               // g-243：显式稳定 key。本看板根节点的 children 列表里混有带 key 的元素
               // （...releasedRows 的 rel-<slug> 行）与嵌套数组；已发布版本泳道增删会改变
               // 这些兄弟的数量，未带 key 的尾部兄弟（本抽屉）会因按位置/索引匹配失败被
@@ -11313,10 +11314,10 @@ function reconcileRetainedBoardState(data, retained, opts) {
                 });
                 loadVersionDetail(v.slug);
               },
-            })
+            }), document.body)
           : null,
         drawerCard
-          ? h(CardDrawer, { // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建（同 g-243）
+          ? ReactDOM.createPortal(h(CardDrawer, { // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建（同 g-243）
                             key: "dg-card-drawer",
                             goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             cardData: drawerCard.cardData,
@@ -11351,7 +11352,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
                                 load();
                               }
                               setDrawerCard(null);
-                            } })
+                            } }), document.body)
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal
