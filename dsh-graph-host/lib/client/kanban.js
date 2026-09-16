@@ -11,6 +11,7 @@
       const modalGoalOpenTsRef = React.useRef(null); // 弹窗打开时目标的 updated_at
       const forceReplayRef = React.useRef(null); // {goalId, openTs} 待关闭后强制补播
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
+      const forceFreshRef = React.useRef(false); // g-294：目标类型变更后跳过 retained 对账，强制拉取最新明细
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       // g-219：删除卡片信号（事件结果驱动，弹窗局部移除用）——{goalId, cardId, ts}
       const [deletedCardSignal, setDeletedCardSignal] = React.useState(null);
@@ -629,7 +630,11 @@
             // g-290: 改由共享纯函数对账——计数以服务端为准；仅当载荷确为 lazy 且计数与 retained
             // 明细长度一致时才沿用明细（保住「展开态刷新不闪空」），计数不一致一律丢弃旧明细并
             // 复位已加载标记，立即交由既有懒加载路径补拉（绝不残留幽灵卡片）。
-            const retainResult = reconcileRetainedBoardState(data, retained, {
+            // g-294: 目标类型变更后 forceFreshRef=true，跳过 retained 对账直接拉取最新明细，
+            // 避免 lazy 载荷下 backlog_count 未变导致旧明细（含旧 type）被沿用。
+            const staleData = forceFreshRef.current ? null : retained;
+            forceFreshRef.current = false;
+            const retainResult = reconcileRetainedBoardState(data, staleData, {
               collapsedLanes: collapsedLanes,
               openReleased: openReleased,
             });
@@ -1352,6 +1357,7 @@
                     dropCommitted.current = false;
                   },
                 },
+                () => { forceFreshRef.current = true; load(); },
               );
             }),
           );
@@ -1563,6 +1569,7 @@
                     dropCommitted.current = false;
                   },
                 },
+                () => { forceFreshRef.current = true; load(); },
               );
             }),
           ),
@@ -2194,7 +2201,7 @@
               onPmFinished: () => setPolishGoal(null),
               goalStatus,
               supervisorSession: b.supervisorSession ?? null,
-              onRenamed: () => load(),
+              onRenamed: () => { forceFreshRef.current = true; load(); },
               onArchived: () => load(),
               onTagsChanged: () => load(),
               onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),
