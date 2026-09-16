@@ -9636,13 +9636,25 @@ function reconcileRetainedBoardState(data, retained, opts) {
         if (retained) setState({ loading: false, data: retained, error: null });
         else setState({ loading: true, data: null, error: null });
         const params = "?lazy=1" + (showArchived ? "&includeArchived=1" : "");
+        // g-294: forceFresh 时跳过 If-None-Match，强制200 响应走 reconcile 对账路径
+        //（lazy payload 下 type-only 变更不改 generated_at/ETag，304 分支直接复用 retained
+        //  绕过 forceFreshRef 检查）；同步捕获并清除 flag 防并发干扰。
+        const isForceFresh = forceFreshRef.current;
+        if (isForceFresh) forceFreshRef.current = false;
         const headers = {};
         const prior = currentEtagRef.current.get(dimension);
-        if (prior) headers["If-None-Match"] = prior;
+        if (prior && !isForceFresh) headers["If-None-Match"] = prior;
         fetch(graphUrlForActive("/api/dsh-graph" + params, {}, activeWs), { headers })
           .then(async (r) => {
             if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
             if (r.status === 304) {
+              // g-294: 304 安全兜底——理论上 forceFresh 已跳过 If-None-Match 不会走这里，
+              // 但并发场景下仍有窗口；此时强制失效 ETag 并重试一次。
+              if (isForceFresh) {
+                currentEtagRef.current.delete(dimension);
+                load();
+                return;
+              }
               const retainedData = boardDataRef.current.get(dimension);
               if (!retainedData) {
                 currentEtagRef.current.delete(dimension);
@@ -9661,10 +9673,10 @@ function reconcileRetainedBoardState(data, retained, opts) {
             // g-290: 改由共享纯函数对账——计数以服务端为准；仅当载荷确为 lazy 且计数与 retained
             // 明细长度一致时才沿用明细（保住「展开态刷新不闪空」），计数不一致一律丢弃旧明细并
             // 复位已加载标记，立即交由既有懒加载路径补拉（绝不残留幽灵卡片）。
-            // g-294: 目标类型变更后 forceFreshRef=true，跳过 retained 对账直接拉取最新明细，
+            // g-294: 目标类型变更后 isForceFresh=true，跳过 retained 对账直接拉取最新明细，
             // 避免 lazy 载荷下 backlog_count 未变导致旧明细（含旧 type）被沿用。
-            const staleData = forceFreshRef.current ? null : retained;
-            forceFreshRef.current = false;
+            // 空对象使 canRetain=false（无 retainedBacklog），自然触发 refetchBacklog/Version。
+            const staleData = isForceFresh ? {} : retained;
             const retainResult = reconcileRetainedBoardState(data, staleData, {
               collapsedLanes: collapsedLanes,
               openReleased: openReleased,
