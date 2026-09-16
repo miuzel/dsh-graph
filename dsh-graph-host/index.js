@@ -378,6 +378,49 @@ function renderPromptValue(value, missingReason) {
   return text.split("\n").map((line) => "> " + protectPromptMarkers(line)).join("\n");
 }
 
+/** 归一化文本用于去重比较：trim 首尾空白，合并连续换行与空白行为单个换行。 */
+function normalizeForDedup(text) {
+  return text.replace(/\r\n?/g, "\n").replace(/(?:[ \t]*\n)+[ \t]*/g, "\n").trim();
+}
+
+/** brief/directive 去重：归一化后相等时，brief 保留全文，directive 标记为冗余。
+ *  返回 [briefRendered, "", directiveRendered]（含标签行），可直接展开到 current 数组。
+ *  renderFn(value, missingReason) 用于渲染单个值，缺省用 renderPromptValue。 */
+function dedupBriefDirective(briefText, directiveText, missingReasonBrief, missingReasonDirective, { isEn = false, briefLabel, directiveLabel, renderFn } = {}) {
+  const render = renderFn || renderPromptValue;
+  const bLabel = briefLabel || (isEn ? "**Attempt brief (current data)**" : "**attempt brief（当前数据）**");
+  const dLabel = directiveLabel || (isEn ? "**Directive (current data)**" : "**directive（当前数据）**");
+  const b = promptText(briefText);
+  const d = promptText(directiveText);
+
+  // 两者均非空：归一化比较
+  if (b && d) {
+    const nb = normalizeForDedup(b);
+    const nd = normalizeForDedup(d);
+    if (nb === nd) {
+      // 完全相同：brief 保留全文，directive 标记冗余
+      return [
+        bLabel,
+        render(b, missingReasonBrief),
+        "",
+        dLabel,
+        isEn
+          ? "> (content identical to brief above after normalization; brief takes priority)"
+          : "> （归一化后与上方 brief 完全相同；以 brief 为准）",
+      ];
+    }
+  }
+
+  // 不同或仅一方空：各自渲染
+  return [
+    bLabel,
+    render(b, missingReasonBrief),
+    "",
+    dLabel,
+    render(d, missingReasonDirective),
+  ];
+}
+
 function compactPromptFact(value) {
   const text = promptText(value);
   return text ? protectPromptMarkers(text.replace(/\s*\n\s*/g, "；")) : ATTEMPT_PROMPT_MISSING;
@@ -537,14 +580,17 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     `You are execution attempt ${promptText(attempt) || missing} for goal ${promptText(goal) || missing}.`,
     `Goal file (workspace-relative): ${contextPath}`,
   ].join("\n");
+  const enRenderFn = (v, reason) => value(v, reason);
+  const dedupedItems = dedupBriefDirective(
+    attemptBrief, directive,
+    "attempt_brief was not supplied",
+    "no current directive was supplied",
+    { isEn: true, renderFn: enRenderFn },
+  );
   const current = [
     "## Current attempt brief/directive",
     "",
-    "**Attempt brief (current data)**",
-    value(attemptBrief, "attempt_brief was not supplied"),
-    "",
-    "**Directive (current data)**",
-    value(directive, "no current directive was supplied"),
+    ...dedupedItems,
   ].join("\n");
   const override = [
     "## Override declaration",
@@ -609,17 +655,18 @@ export function formatAttemptPrompt({
       : "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "——用 read 工具读它，不要自己猜路径。",
   ].join("\n");
 
+  const dedupedItems = dedupBriefDirective(
+    attemptBrief, directive,
+    "本次请求未传 attempt_brief，或该值不是非空字符串",
+    "当前目标没有最近指令，或该值不是非空字符串",
+  );
   const current = [
     "## 本次 attempt brief/directive",
     "",
     "唯一 action 来源：以下两项当前数据；历史 handoff、卡片和通用纪律均不产生新任务。",
     "brief 优先于 directive：brief 是当前任务的直接描述，directive 是目标文件中的背景指令；两者冲突以 brief 为准。",
     "",
-    "**attempt brief（当前数据）**",
-    renderPromptValue(brief, "本次请求未传 attempt_brief，或该值不是非空字符串"),
-    "",
-    "**directive（当前数据）**",
-    renderPromptValue(currentDirective, "当前目标没有最近指令，或该值不是非空字符串"),
+    ...dedupedItems,
   ];
   if (context) current.push("", "目标背景（来自当前 goal.md，仅供理解，不产生 action）", protectPromptMarkers(context));
 
