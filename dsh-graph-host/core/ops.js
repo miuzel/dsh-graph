@@ -3436,6 +3436,8 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
     let accumulatedChars = 0;
     let inlinedCount = 0;
     let collapsedCount = 0;
+    const diagnosticsEnabled = opts?.diagnostics === true;
+    const cardSizes = [];
     const items = [];
     for (let i = 0; i < cards.length; i++) {
         const c = cards[i];
@@ -3454,13 +3456,15 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
         const willExceedCount = inlinedCount >= maxFullCards;
         if (willExceedTotal || willExceedCount) {
             collapsedCount++;
-            items.push(isEn
+            const item = isEn
                 ? `- **${c.title}** (${meta}, ⚠️ body collapsed after exceeding the total card budget)\n` +
                     `  Summary: ${c.summary || "(no summary)"}\n` +
                     `  Exact path: ${exactPath} (read full content on demand, digest=${c.digest})${atts}`
                 : `- **${c.title}**（${meta}，⚠️ 已超出卡片总预算折叠正文）\n` +
                     `  摘要：${c.summary || "（无摘要）"}\n` +
-                    `  精确路径：${exactPath}（按需查阅全文，digest=${c.digest}）${atts}`);
+                    `  精确路径：${exactPath}（按需查阅全文，digest=${c.digest}）${atts}`;
+            items.push(item);
+            cardSizes.push({ id: c.id, title: c.title, chars: item.length });
         }
         else {
             inlinedCount++;
@@ -3475,9 +3479,11 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
             const body = bodyText
                 ? bodyText.split("\n").map((l) => `  ${l}`).join("\n")
                 : isEn ? "  (empty body)" : "  （正文为空）";
-            items.push(isEn
+            const item = isEn
                 ? `- **${c.title}** (${meta})\n${body}${atts}`
-                : `- **${c.title}**（${meta}）\n${body}${atts}`);
+                : `- **${c.title}**（${meta}）\n${body}${atts}`;
+            items.push(item);
+            cardSizes.push({ id: c.id, title: c.title, chars: item.length });
         }
     }
     const header = isEn
@@ -3488,7 +3494,35 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
             ? `\n\n> ⚠️ Card budget limit: ${inlinedCount} cards fully expanded; ${collapsedCount} cards exceeding the total budget collapsed to summary + exact path (read on demand; digest can be verified).`
             : `\n\n> ⚠️ 卡片总预算限制：已完整展开 ${inlinedCount} 张卡片，${collapsedCount} 张卡片超出总预算折叠为摘要+精确路径（按需读取，digest 可校验）。`
         : "";
-    return [header, "", items.join("\n\n")].join("\n") + footer;
+    // g-296：预算诊断——按 JavaScript length 计量最终返回串各段字符数
+    let diagnosticsFooter = "";
+    if (diagnosticsEnabled) {
+        const headerChars = header.length;
+        const itemsStr = items.join("\n\n");
+        const itemsChars = itemsStr.length;
+        const footerChars = footer.length;
+        const bodyStr = [header, "", itemsStr].join("\n");
+        const bodyChars = bodyStr.length;
+        const totalChars = bodyChars + footerChars;
+        const overBudgetCards = cardSizes.filter((c) => c.chars > maxCardChars);
+        const overTotal = totalChars > maxTotalChars;
+        const overCount = inlinedCount >= maxFullCards && collapsedCount > 0; // collapsed due to count limit
+        const lines = [
+            isEn ? `\n\n> [Budget diagnostics] output=${totalChars} chars (header=${headerChars}, cards=${itemsChars}, footer=${footerChars}), limit=${maxTotalChars}` : `\n\n> [预算诊断] 输出=${totalChars} 字符（header=${headerChars}，cards=${itemsChars}，footer=${footerChars}），限额=${maxTotalChars}`,
+        ];
+        for (const cs of cardSizes) {
+            const tag = cs.chars > maxCardChars ? (isEn ? " ⚠️over" : " ⚠️超限") : "";
+            lines.push(isEn ? `>   ${cs.id} "${cs.title}": ${cs.chars} chars${tag}` : `>   ${cs.id}「${cs.title}」：${cs.chars} 字符${tag}`);
+        }
+        if (overTotal)
+            lines.push(isEn ? `> ⚠️ Total output exceeds budget (${totalChars} > ${maxTotalChars})` : `> ⚠️ 总输出超出预算（${totalChars} > ${maxTotalChars}）`);
+        if (overBudgetCards.length > 0)
+            lines.push(isEn ? `> ⚠️ ${overBudgetCards.length} card(s) exceed per-card budget (${maxCardChars} chars)` : `> ⚠️ ${overBudgetCards.length} 张卡片超出单卡预算（${maxCardChars} 字符）`);
+        if (overCount)
+            lines.push(isEn ? `> ⚠️ Exceeded max full cards count (${maxFullCards})` : `> ⚠️ 超出完整展开卡片数量上限（${maxFullCards}）`);
+        diagnosticsFooter = lines.join("\n");
+    }
+    return [header, "", items.join("\n\n")].join("\n") + footer + diagnosticsFooter;
 }
 /** handoff 文件的正文模板（结构化可读指令，供新执行者阅读）。 */
 function handoffBody(h) {
