@@ -1898,6 +1898,7 @@
                setDrag((d) => (d ? { ...d, overGoalId: null, overStageKey: null, overLaneKey: null, overHalf: null } : d));
              }
            } : undefined },
+        h("div", { style: S.wrapContent },
         h("style", null, HOVER_CSS),
         h("div", { style: S.head },
           h("strong", null, "dsh-graph"),
@@ -2233,6 +2234,7 @@
               },
             })
           : null,
+        ), // g-303: close wrapContent — drawers 为 kanban root 直接子节点
         showVersionDrawer
           ? h(VersionDrawer, {
               // g-243：显式稳定 key。本看板根节点的 children 列表里混有带 key 的元素
