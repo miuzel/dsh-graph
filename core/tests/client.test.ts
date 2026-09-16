@@ -1832,11 +1832,11 @@ const G181_MODULES: Record<string, number> = {
   "criteria-modal.js": 3,
   "settings-modal.js": 3,
   "drag-prompts.js": 4,
-  "kanban.js": 6,
+  "kanban.js": 7,
   "shared-panel.js": 1,
   "batch-accept.js": 1,
 };
-const G181_TOTAL = Object.values(G181_MODULES).reduce((a, b) => a + b, 0); // 19
+const G181_TOTAL = Object.values(G181_MODULES).reduce((a, b) => a + b, 0); // 20
 
 test("g-181 源契约：helpers.js 提供共享 useBackdropClose（useRef 起点 + pointerdown + onClick 吞合成 click）", () => {
   const helpers = readFileSync(
@@ -1851,7 +1851,7 @@ test("g-181 源契约：helpers.js 提供共享 useBackdropClose（useRef 起点
   assert.match(helpers, /onClose\?\.\(\);/);
 });
 
-test("g-181 源契约：各模块全部 style: S.overlay 均接 guard（共 19 处），无裸 overlay onClick，panel stopPropagation 保留", () => {
+test("g-181 源契约：各模块全部 style: S.overlay 均接 guard（共 20 处），无裸 overlay onClick，panel stopPropagation 保留", () => {
   for (const [file, expected] of Object.entries(G181_MODULES)) {
     const src = readFileSync(
       join(import.meta.dirname, "../../dsh-graph-host/lib/client", file), "utf8");
@@ -1865,7 +1865,7 @@ test("g-181 源契约：各模块全部 style: S.overlay 均接 guard（共 19 �
     const stopProp = src.match(/onClick: \(e\) => e\.stopPropagation\(\)/g) ?? [];
     assert.ok(stopProp.length >= expected, `${file}: panel stopPropagation 保留（>= ${expected}，实际 ${stopProp.length}）`);
   }
-  // 全量约束 19 个父级 overlay 入口
+  // 全量约束 20 个父级 overlay 入口
   let total = 0;
   for (const file of Object.keys(G181_MODULES)) {
     const src = readFileSync(
@@ -1917,7 +1917,7 @@ test("g-181 hook 逻辑模拟：内容起点→backdrop 不关；backdrop→back
   assert.equal(closed, 2, "吞掉合成 click 后 ref 清零，下一次 backdrop 点击仍关闭");
 });
 
-test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、19 个 guard overlay、保留 GENERATED header", () => {
+test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、20 个 guard overlay、保留 GENERATED header", () => {
   const bundle = readFileSync(
     join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");

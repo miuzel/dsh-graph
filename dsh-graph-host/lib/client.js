@@ -869,6 +869,11 @@ window.__ModuleLoader__.load({
       'tagFilter.clear': '清除筛选',
       'tagFilter.noTags': '（暂无标签可筛选）',
 
+      // === 类型过滤弹窗 ===
+      'typeFilter.title': '🏷️ 类型筛选',
+      'typeFilter.clear': '清除筛选',
+      'typeFilter.selected': '已选 {count} 个类型',
+
       // === 刷新间隔设置 ===
       'refresh.title': '刷新间隔',
       'refresh.seconds': '秒',
@@ -1846,6 +1851,11 @@ window.__ModuleLoader__.load({
       'tagFilter.title': '🏷️ Tag Filter',
       'tagFilter.clear': 'Clear filter',
       'tagFilter.noTags': '(No tags available for filtering)',
+
+      // === Type filter modal ===
+      'typeFilter.title': '🏷️ Type Filter',
+      'typeFilter.clear': 'Clear filter',
+      'typeFilter.selected': '{count} types selected',
 
       // === Refresh interval ===
       'refresh.title': 'Refresh interval',
@@ -8992,6 +9002,11 @@ function reconcileRetainedBoardState(data, retained, opts) {
       const tagFilterGuard = useBackdropClose(() => setShowTagFilterModal(false));
       const tagsFor = (g) => Array.isArray(g?.tags) ? g.tags : [];
       const matchesTag = (g) => !tagFilter.length || tagsFor(g).some((tag) => tagFilter.includes(String(tag)));
+      // g-294：顶部多选类型筛选；选中多个类型时采用 OR。
+      const [typeFilter, setTypeFilter] = React.useState([]);
+      const [showTypeFilterModal, setShowTypeFilterModal] = React.useState(false);
+      const typeFilterGuard = useBackdropClose(() => setShowTypeFilterModal(false));
+      const matchesType = (g) => !typeFilter.length || typeFilter.includes(normalizeGoalType(g.type));
       // g-223: 版本管理抽屉与显隐过滤状态（本地存储持久化，按当前解析 workspace 隔离与响应）
       const [showVersionDrawer, setShowVersionDrawer] = React.useState(false);
       // Compatibility marker: const activeWs = resolveWorkspaceOfSession(props?.sessionId) || "default" (intentionally not used).
@@ -10046,7 +10061,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
       // g-77647351：泳道渲染（带拖放支持，跨 lane 拖放改归属）；g-129 版本 lane 标题「＋」预选版本
       // g-137：laneIndex 用于交替背景色；g-162：阶段列横向交替深浅
       const lane = (label, goals, key, version, laneIndex = 0, collapsible = true) => {
-        goals = goals.filter(matchesTag);
+        goals = goals.filter(matchesTag).filter(matchesType);
         // g-162: 普通泳道折叠状态；released 仅复用 lane 布局，不增加折叠入口
         const isCollapsed = collapsible && !!collapsedLanes[key];
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
@@ -10363,6 +10378,8 @@ function reconcileRetainedBoardState(data, retained, opts) {
 
       // g-137：backlog 行平铺展示函数；g-162: 支持独立折叠
       const backlogRow = (label, goals, key) => {
+        // g-294: 应用标签和类型筛选
+        goals = goals.filter(matchesTag).filter(matchesType);
         // g-162: backlog 泳道折叠状态（g-258: 默认折叠，显式展开为 false）
         const isCollapsed = collapsedLanes[key] !== false;
         const backlogBg = "rgba(0,0,0,.12)";
@@ -10864,6 +10881,21 @@ function reconcileRetainedBoardState(data, retained, opts) {
                 title: dgT("tagFilter.clear"),
                 onClick: () => setTagFilter([]),
               }, dgT("tagFilter.clear"))
+            : null,
+          // g-294：顶部类型筛选弹层入口
+          h("button", {
+            style: { ...tbBtnStyle, ...(typeFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
+            className: "dg-btn" + (typeFilter.length > 0 ? " dg-btn-active" : ""),
+            title: dgT("typeFilter.title"),
+            onClick: () => setShowTypeFilterModal(true),
+          }, typeFilter.length > 0 ? dgT("typeFilter.title") + ` (${typeFilter.length})` : dgT("typeFilter.title")),
+          typeFilter.length > 0
+            ? h("button", {
+                className: "dg-btn",
+                style: { ...tbBtnStyle, marginLeft: 4, padding: "0 6px", fontSize: 11 },
+                title: dgT("typeFilter.clear"),
+                onClick: () => setTypeFilter([]),
+              }, dgT("typeFilter.clear"))
             : null,
           // g-105: 记忆管理按钮（位于设置按钮左侧）
           h("button", {
@@ -11745,6 +11777,44 @@ function reconcileRetainedBoardState(data, retained, opts) {
                   h("div", { style: { display: "flex", gap: 8 } },
                     tagFilter.length > 0 ? h("button", { className: "dg-btn", style: S.btn, onClick: () => setTagFilter([]) }, dgT("tagFilter.clear")) : null,
                     h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => setShowTagFilterModal(false) }, dgT("common.ok"))))))
+          : null,
+        // g-294: 类型多选筛选弹窗/面板
+        showTypeFilterModal
+          ? h("div", { style: S.overlay, ...typeFilterGuard },
+              h("div", { style: { ...S.modal, minWidth: 320, maxWidth: 440 }, onClick: (e) => e.stopPropagation() },
+                h("span", { style: S.close, onClick: () => setShowTypeFilterModal(false) }, "✕"),
+                h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
+                  dgT("typeFilter.title"),
+                  h("span", { style: { ...S.meta, fontSize: 11, fontWeight: 400 } }, "")),
+                h("div", { style: { ...S.meta, marginBottom: 10 } }, ""),
+                h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto", padding: "2px 0", marginBottom: 12 } },
+                  GOAL_TYPES.map((t) => {
+                    const selected = typeFilter.includes(t);
+                    const color = goalTypeColor(t);
+                    return h("button", {
+                      key: t,
+                      className: "dg-btn",
+                      style: {
+                        ...S.btn,
+                        fontSize: 12,
+                        padding: "3px 10px",
+                        borderRadius: 12,
+                        background: selected ? color : color + "18",
+                        color: selected ? "#fff" : color,
+                        border: "1.5px solid " + (selected ? color : color + "66"),
+                        boxShadow: selected ? "none" : "inset 0 0 6px " + color + "22",
+                      },
+                      onClick: () => {
+                        if (selected) setTypeFilter(typeFilter.filter((x) => x !== t));
+                        else setTypeFilter([...typeFilter, t]);
+                      },
+                    }, (selected ? "✓ " : "") + (GOAL_TYPE_ABBREV[t] ?? t[0]?.toUpperCase()) + " " + t);
+                  })),
+                h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid rgba(128,128,128,.2)", paddingTop: 10 } },
+                  h("span", { style: S.meta }, dgT("typeFilter.selected", { count: typeFilter.length })),
+                  h("div", { style: { display: "flex", gap: 8 } },
+                    typeFilter.length > 0 ? h("button", { className: "dg-btn", style: S.btn, onClick: () => setTypeFilter([]) }, dgT("typeFilter.clear")) : null,
+                    h("button", { className: "dg-btn", style: S.btnPrimary, onClick: () => setShowTypeFilterModal(false) }, dgT("common.ok"))))))
           : null,
         // g-134: 删除版本泳道确认弹窗
         deleteVersionTarget
