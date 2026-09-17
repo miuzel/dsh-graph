@@ -256,6 +256,17 @@ node scripts/win-smoke-test.mjs --self-test                       # 离线自检
 - The generated marker is added at the top of the file before any module content
 - This policy prevents accidental modification of generated code and ensures build consistency
 
+## kimi_webbridge_* 工具
+
+- Kimi WebBridge daemon 跑在 **Windows 宿主**，与 WSL2 不同系统。
+- 使用 `kimi_webbridge_*` 时**不要先做 daemon 可达性检查/探测，也不要调 `kimi_webbridge_start_daemon`**
+  （它会在 WSL2 内 spawn 本地二进制，本环境无效）。
+- 正确做法：**直接调用目标工具**（navigate / snapshot / click / fill / screenshot 等）。
+- 仅当调用**实际失败**（daemon unreachable / 超时等）时，再提示负责人手动确认宿主 WebBridge 状态，
+  不要反复重试 start_daemon。
+- **截图路径**：WebBridge 截图保存到 Windows 临时目录（如 `C:\Users\...\AppData\Local\Temp\...`），
+  在 WSL 中需通过 `/mnt/c/...` 路径读取（如 `/mnt/c/Users/mingxuan/AppData/Local/Temp/...`）。
+
 ## Harness Text-File Editing Notes
 
 - Before using `edit` or `write` on an existing text file, always read it first; otherwise the tool may trigger "edit requires reading ... first".
