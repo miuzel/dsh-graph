@@ -205,11 +205,15 @@ test("g-283 att-005：静态 prompt 资源不写死 worktree 绝对路径，改�
 
 test("g-283 回归：dispatch 在提示词组装前计算 isWorktree 并传给 resolveWorktreeGuide", () => {
   const src = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
-  const isIdx = src.indexOf("const isWorktree = worktree !== undefined");
+  // g-289 起，isWorktree 由「类型 + 工作区干净度」的综合决策函数解析，仍是「解析后布尔」，
+  // 提示词隔离声明依旧与其严格一致（g-283 不变式保持不变）。
+  const decIdx = src.indexOf("const isolationDecision = resolveWorktreeIsolationDecision(gType, worktree, cleanliness)");
+  const isIdx = src.indexOf("const isWorktree = isolationDecision.isolate");
   const guideIdx = src.indexOf("resolveWorktreeGuide(gType, isWorktree, promptLanguage)");
-  assert.ok(isIdx >= 0, "index.js 存在 isWorktree 解析");
+  assert.ok(decIdx >= 0, "index.js 存在 g-289 隔离决策解析（resolveWorktreeIsolationDecision）");
+  assert.ok(isIdx >= 0, "index.js 存在 isWorktree 解析（取自决策结果）");
   assert.ok(guideIdx >= 0, "index.js 调用 resolveWorktreeGuide 传入 isWorktree（解析后布尔，非原始 worktree 参数）");
-  assert.ok(isIdx < guideIdx, "isWorktree 必须在 resolveWorktreeGuide 调用之前计算");
+  assert.ok(decIdx < isIdx && isIdx < guideIdx, "决策→isWorktree→提示词 顺序正确");
   // 不再以原始 worktree 参数作为第二参调用（旧缺陷根因）
   assert.ok(!src.includes("resolveWorktreeGuide(gType, worktree,"), "dispatch 不再用原始 worktree 参数解析提示词");
 });
