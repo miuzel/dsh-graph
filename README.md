@@ -2,21 +2,25 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
-> ### 🚀 v0.11.0 重要变化：Windows 原生由「不可用」变为「已支持」
+> ### 🚀 v0.11.1 新功能
 >
-> - **Windows 原生（此前完全不可用 → 现已支持）**：v0.10.0 及更早在 Windows 上会**模块加载即崩溃**（`core/ops.js` 具名导入 `node:constants` 的 `O_DIRECTORY`，Windows 无此导出），且安装时必报 peer 依赖告警。v0.11.0 已修复并在**原生 Windows（win32/x64）真机复验通过**：安装零告警、插件正常加载、标签锁与跨进程并发 CAS 实测通过。
-> - **macOS 新纳入验证矩阵**：与 Windows / Linux 使用**同一安装包（sha256 一致）**真机通过。
-> - **升级建议**：Windows 与 macOS 用户请升级到 v0.11.0；Linux/WSL2 用户升级可获得依赖告警消除，以及排期/派发体验修复（派发可真实创建隔离工作树、独立目标创建即「规划中」、backlog 卡片移出即时生效）。
+> - **backlog 卡片快速排期**：目标弹窗标题区新增「📅 排期」按钮（与「⏸ 暂缓」对应），一键将 backlog 目标排入活跃版本或转为独立目标；版本选择器自动过滤已归属版本，无活跃版本时按钮禁用。
+> - **共享卡转换工具**：新增 `graph_convert_card_to_shared` / `graph_convert_card_to_owned` 工具，goal 自有卡与共享卡互转无需再直接调 REST。
+> - **抽屉层级修复**：版本管理抽屉与上下文卡片抽屉在 Safari 中不再被 DSH 默认 UI 遮挡（React Portal 到 body 层 + z-index 提升）。
+> - **类型切换即时刷新**：backlog 卡片切换 goal 类型后看板立即更新，无需 F5。
+> - **拖拽到折叠泳道**：卡片可拖拽到已折叠的版本或 backlog 泳道，自动展开并高亮目标位置。
+> - **派发上下文去重**：brief/directive 内容重复时自动去重，减少 token 浪费；卡片预算诊断可追踪超预算来源。
+> - **graph_resolve_accept 修复**：`in_progress` 状态下调用自动补 `in_progress→review→delivered` 迁移；`blocked`/`delivered` 等无映射状态明确报错（含 force 通道）。
 >
-> **✅ 支持 DeepSeek Harness `v0.1.5-rc.2`（Linux/WSL2、Windows、macOS 均已验证）**：本版本（v0.11.0）在该宿主版本上完整验证（隔离 Web 实例、看板交互、全部 `graph_*` 工具与 REST 端点、中英双语界面）；兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上。
+> **✅ 支持 DeepSeek Harness `v0.1.5-rc.2`（Linux/WSL2、Windows、macOS 均已验证）**：本版本（v0.11.1）在该宿主版本上完整验证；兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上。
 >
-> **✅ 跨平台（v0.11.0 起）**：此前 Windows 原生不可用的两类问题——① 平台代码使用 POSIX 专用文件锁常量（目录当 fd 打开 / `O_DIRECTORY` / `O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在**本版本**修复，并**在原生 Windows（win32/x64，pnpm v10）与 macOS（darwin/arm64）真机复验通过**：安装零 peer 告警、插件正常 apply、标签锁与跨进程并发 CAS 实测通过（三平台使用同一安装包，指纹一致）。
+> **✅ 跨平台（v0.11.0 起）**：Windows 原生不可用问题已修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过。
 >
-> **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（例如位于 `/tmp`、`/var` 之下——这两者在 macOS 上本身是软链），会被拒绝并报 `graph root symlink is not allowed`；**由 `process.cwd()` 推导的路径不受影响**（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
+> **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（例如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；**由 `process.cwd()` 推导的路径不受影响**。
 
-单包发布：npm 包名 `dsh-graph`（当前版本 v0.11.0）。一个包同时提供：
+单包发布：npm 包名 `dsh-graph`（当前版本 v0.11.1）。一个包同时提供：
 
-- 面向 agent 的 40 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
+- 面向 agent 的 42 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
 - 浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
 
 数据以文件 + 事件流形式落在工作区 `.dsh-graph` 目录，git 友好、可审计。
