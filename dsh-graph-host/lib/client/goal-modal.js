@@ -1377,6 +1377,15 @@
                     onClick: () => { setPostponeConfirm(true); setPostponeNote(null); },
                   }, dgT("goal.postpone")))
               : null,
+            // g-306：backlog 目标「排期」按钮（与暂缓按钮位置对应），点击弹出版本选择器
+            isBacklogGoal && !isArchived
+              ? h(VersionSelectorButton, {
+                  goalId: props.id,
+                  goalVersion: state.data?.meta?.version ?? null,
+                  activeVersions: props.activeVersions ?? [],
+                  onScheduled: () => { load(); props.onArchived?.(); },
+                })
+              : null,
             // g-140: 删除按钮（仅已归档目标显示，二次确认）
             isArchived
               ? (deleteConfirm

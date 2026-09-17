@@ -181,8 +181,8 @@
       );
     }
 
-    // g-306：backlog 卡片「排期」按钮组件——内联版本选择器，点击弹出 active 版本下拉，
-    // 选择后调用 move-goal + transition 将目标排入版本的 planning lane。
+    // g-306：排期版本选择器组件——内联下拉，支持 active 版本 + 独立目标选项。
+    // 供 goal-modal.js 的 backlog 目标标题区复用（card.js 先于 goal-modal.js 拼接）。
     function VersionSelectorButton(props) {
       const { goalId, goalVersion, activeVersions, onScheduled } = props;
       const [open, setOpen] = React.useState(false);
@@ -190,8 +190,9 @@
       const [error, setError] = React.useState(null);
       const wrapRef = React.useRef(null);
 
-      // 过滤掉目标当前已归属的版本（避免重复排期）
-      const candidates = (activeVersions ?? []).filter((v) => v.slug !== goalVersion);
+      // 过滤掉目标当前已归属的版本（避免重复排期）；独立目标始终可选
+      const versionCandidates = (activeVersions ?? []).filter((v) => v.slug !== goalVersion);
+      const canSelectStandalone = goalVersion !== null && goalVersion !== undefined;
 
       React.useEffect(() => {
         if (!open) return;
@@ -202,15 +203,16 @@
         return () => document.removeEventListener("mousedown", onDoc);
       }, [open]);
 
-      const doSchedule = async (slug) => {
+      const doSchedule = async (to, version) => {
         if (loading) return;
         setLoading(true); setError(null);
         try {
-          // Step 1: move goal to target version
+          const body = { goal: goalId, to };
+          if (version) body.version = version;
           const moveR = await fetch(graphUrl("/api/dsh-graph/move-goal"), {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, to: "version", version: slug }),
+            body: JSON.stringify(body),
           });
           const moveData = await moveR.json();
           if (!moveData.ok) {
@@ -218,28 +220,31 @@
             setLoading(false);
             return;
           }
-          // Step 2: transition to planning
-          const trR = await fetch(graphUrl("/api/dsh-graph/transition"), {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, to: "planning" }),
-          });
-          const trData = await trR.json();
-          if (trData.ok) {
-            showToast(dgT("goal.scheduleSuccess", { version: slug }));
-            setOpen(false);
-            onScheduled?.();
-          } else {
-            setError(trData.error || dgT("drag.unknownError"));
+          // 转入版本时自动 transition 到 planning
+          if (to === "version") {
+            const trR = await fetch(graphUrl("/api/dsh-graph/transition"), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ goal: goalId, to: "planning" }),
+            });
+            const trData = await trR.json();
+            if (!trData.ok) {
+              setError(trData.error || dgT("drag.unknownError"));
+              setLoading(false);
+              return;
+            }
           }
+          const label = to === "standalone" ? dgT("lane.standalone") : version;
+          showToast(dgT("goal.scheduleSuccess", { version: label }));
+          setOpen(false);
+          onScheduled?.();
         } catch (e) {
           setError(String(e?.message ?? e));
         }
         setLoading(false);
       };
 
-      const hasCandidates = candidates.length > 0;
-      const noActive = !(activeVersions ?? []).length;
+      const hasAnyOption = versionCandidates.length > 0 || canSelectStandalone;
 
       return h("span", {
         ref: wrapRef,
@@ -248,13 +253,12 @@
         h("button", {
           className: "dg-btn",
           style: {
-            ...S.btn, fontSize: 11, padding: "1px 6px", marginLeft: 4,
-            background: "rgba(76,141,255,.15)", opacity: noActive ? 0.45 : 1,
-            cursor: noActive ? "not-allowed" : "pointer",
+            ...S.btn, fontSize: 11, padding: "1px 6px", marginLeft: 2,
+            background: "rgba(76,141,255,.15)",
           },
-          title: noActive ? dgT("goal.scheduleNoVersion") : dgT("goal.scheduleTooltip"),
-          disabled: noActive || loading,
-          onClick: (e) => { e.stopPropagation(); if (!noActive) { setOpen(!open); setError(null); } },
+          title: dgT("goal.scheduleTooltip"),
+          disabled: loading,
+          onClick: (e) => { e.stopPropagation(); setOpen(!open); setError(null); },
         }, dgT("goal.schedule")),
         open ? h("div", {
           style: {
@@ -268,20 +272,25 @@
           h("div", {
             style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 4px", borderBottom: "1px solid rgba(128,128,128,.2)" },
           }, dgT("goal.scheduleSelectVersion")),
-          hasCandidates
-            ? candidates.map((v) =>
-                h("div", {
-                  key: v.slug,
-                  style: {
-                    padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap",
-                    overflow: "hidden", textOverflow: "ellipsis",
-                  },
-                  className: "dg-schedule-version-item",
-                  onClick: () => doSchedule(v.slug),
-                }, `🏷️ ${v.name || v.slug}`))
-            : h("div", {
-                style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 },
-              }, dgT("goal.scheduleAlready")),
+          // 独立目标选项
+          canSelectStandalone
+            ? h("div", {
+                style: { padding: "5px 10px", cursor: "pointer", fontSize: 12 },
+                className: "dg-schedule-version-item",
+                onClick: () => doSchedule("standalone"),
+              }, `📌 ${dgT("lane.standalone")}`)
+            : null,
+          // active 版本选项
+          ...versionCandidates.map((v) =>
+            h("div", {
+              key: v.slug,
+              style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+              className: "dg-schedule-version-item",
+              onClick: () => doSchedule("version", v.slug),
+            }, `🏷️ ${v.name || v.slug}`)),
+          !hasAnyOption
+            ? h("div", { style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 } }, dgT("goal.scheduleAlready"))
+            : null,
           error ? h("div", {
             style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)", padding: "4px 10px 2px", borderTop: "1px solid rgba(128,128,128,.2)" },
           }, "⚠️ " + error) : null,
@@ -306,8 +315,7 @@
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
     // g-294：onTypeChanged 参数——类型切换后回调（触发看板数据刷新）
-    // g-306：activeVersions 参数——活跃版本列表（供排期选择器使用）；onSchedule 参数——排期成功后回调
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag, onTypeChanged, activeVersions, onSchedule) {
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag, onTypeChanged) {
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -449,15 +457,6 @@
                count: g.criteria_count ?? g.criteriaCount,
              }),
             sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, dgT('card.goToSession'))),
-          // g-306：backlog 卡片折叠态也显示「排期」按钮
-          g._isBacklog
-            ? h(VersionSelectorButton, {
-                goalId: g.id,
-                goalVersion: g.version,
-                activeVersions: activeVersions ?? [],
-                onScheduled: onSchedule,
-              })
-            : null,
           g._snippet ? h("div", {
             style: { fontSize: 11, opacity: 0.85, marginTop: 2, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" },
             title: "📝",
@@ -481,15 +480,6 @@
             count: g.criteria_count ?? g.criteriaCount,
           }),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, dgT('card.goToSession'))),
-        // g-306：backlog 卡片「排期」按钮（仅未排期目标显示，带内联版本选择器）
-        g._isBacklog
-          ? h(VersionSelectorButton, {
-              goalId: g.id,
-              goalVersion: g.version,
-              activeVersions: activeVersions ?? [],
-              onScheduled: onSchedule,
-            })
-          : null,
         g._snippet ? h("div", {
           style: { fontSize: 11, opacity: 0.85, marginTop: 2, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" },
           title: "📝",
