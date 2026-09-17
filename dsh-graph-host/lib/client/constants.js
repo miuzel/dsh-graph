@@ -194,6 +194,9 @@
       .dg-btn-accept:hover { background: rgba(58,166,117,.30); border-color: rgba(58,166,117,.55); }
       .dg-btn-accept:active { background: rgba(58,166,117,.42); }
       .dg-btn-accept:disabled { opacity: 0.45; cursor: default; }
+      /* g-306：排期版本选择器项 hover */
+      .dg-schedule-version-item { transition: background .12s ease; border-radius: 3px; }
+      .dg-schedule-version-item:hover { background: rgba(76,141,255,.18); }
       /* 统一弹窗与抽屉右上角关闭按钮 */
       .dg-close {
         transition: opacity .12s ease, background .12s ease, transform .12s ease;

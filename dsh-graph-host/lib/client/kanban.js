@@ -1545,6 +1545,7 @@
                 _isSearchMatched: !!mInfo,
                 _isSearchCurrent: currentMatchedGoalId === g.id,
                 _snippet: mInfo?.snippet ?? "",
+                _isBacklog: true, // g-306：标记 backlog 目标，供 Card 渲染排期按钮
               }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
@@ -1582,6 +1583,8 @@
                   },
                 },
                 () => { forceFreshRef.current = true; load(); },
+                active, // g-306：活跃版本列表（供排期选择器使用）
+                () => { forceFreshRef.current = true; load(); }, // g-306：排期成功后刷新看板
               );
             }),
           ),
