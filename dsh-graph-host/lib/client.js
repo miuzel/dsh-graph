@@ -255,6 +255,16 @@ window.__ModuleLoader__.load({
       'goal.postponeSuccess': '✅ 已暂缓',
       'goal.postponeSuccessMsg': '✅ 目标已暂缓并移回 backlog',
       'goal.postponeFail': '⚠️ 暂缓失败：',
+      // g-306：backlog 卡片快速排期入口
+      'goal.schedule': '📅 排期',
+      'goal.scheduleTooltip': '将目标排入活跃版本',
+      'goal.scheduleNoVersion': '暂无活跃版本',
+      'goal.scheduleSuccess': '✅ 已排期到 {version}',
+      'goal.scheduleFail': '⚠️ 排期失败：',
+      'goal.scheduleAlready': '已在该版本中',
+      'goal.scheduleSelectVersion': '选择目标版本',
+      'goal.scheduleCancel': '取消',
+      'goal.scheduleConfirm': '确认排期',
       // g-287：历史遗留「非 backlog 草稿」转入规划入口（backlog 卡不显示，其正确路径是排期）
       'goal.planEntry': '🧭 转入规划',
       'goal.planEntryTooltip': '将该草稿目标转入规划（状态变为「规划中」，可开始收集/就绪/派发执行）',
@@ -1232,6 +1242,16 @@ window.__ModuleLoader__.load({
       'goal.postponeSuccess': '✅ Postponed',
       'goal.postponeSuccessMsg': '✅ Goal postponed and moved back to backlog',
       'goal.postponeFail': '⚠️ Postpone failed: ',
+      // g-306: backlog card quick schedule entry
+      'goal.schedule': '📅 Schedule',
+      'goal.scheduleTooltip': 'Schedule goal into an active version',
+      'goal.scheduleNoVersion': 'No active versions',
+      'goal.scheduleSuccess': '✅ Scheduled to {version}',
+      'goal.scheduleFail': '⚠️ Schedule failed: ',
+      'goal.scheduleAlready': 'Already in this version',
+      'goal.scheduleSelectVersion': 'Select target version',
+      'goal.scheduleCancel': 'Cancel',
+      'goal.scheduleConfirm': 'Confirm schedule',
       // g-287: entry to move a legacy non-backlog draft goal into planning
       // (not shown for backlog cards — their correct path is scheduling)
       'goal.planEntry': '🧭 Move to planning',
@@ -2230,6 +2250,9 @@ window.__ModuleLoader__.load({
       .dg-btn-accept:hover { background: rgba(58,166,117,.30); border-color: rgba(58,166,117,.55); }
       .dg-btn-accept:active { background: rgba(58,166,117,.42); }
       .dg-btn-accept:disabled { opacity: 0.45; cursor: default; }
+      /* g-306：排期版本选择器项 hover */
+      .dg-schedule-version-item { transition: background .12s ease; border-radius: 3px; }
+      .dg-schedule-version-item:hover { background: rgba(76,141,255,.18); }
       /* 统一弹窗与抽屉右上角关闭按钮 */
       .dg-close {
         transition: opacity .12s ease, background .12s ease, transform .12s ease;
@@ -4546,6 +4569,121 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // g-306：backlog 卡片「排期」按钮组件——内联版本选择器，点击弹出 active 版本下拉，
+    // 选择后调用 move-goal + transition 将目标排入版本的 planning lane。
+    function VersionSelectorButton(props) {
+      const { goalId, goalVersion, activeVersions, onScheduled } = props;
+      const [open, setOpen] = React.useState(false);
+      const [loading, setLoading] = React.useState(false);
+      const [error, setError] = React.useState(null);
+      const wrapRef = React.useRef(null);
+
+      // 过滤掉目标当前已归属的版本（避免重复排期）
+      const candidates = (activeVersions ?? []).filter((v) => v.slug !== goalVersion);
+
+      React.useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => {
+          if (wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setError(null); }
+        };
+        document.addEventListener("mousedown", onDoc);
+        return () => document.removeEventListener("mousedown", onDoc);
+      }, [open]);
+
+      const doSchedule = async (slug) => {
+        if (loading) return;
+        setLoading(true); setError(null);
+        try {
+          // Step 1: move goal to target version
+          const moveR = await fetch(graphUrl("/api/dsh-graph/move-goal"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, to: "version", version: slug }),
+          });
+          const moveData = await moveR.json();
+          if (!moveData.ok) {
+            setError(moveData.error || dgT("drag.unknownError"));
+            setLoading(false);
+            return;
+          }
+          // Step 2: transition to planning
+          const trR = await fetch(graphUrl("/api/dsh-graph/transition"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, to: "planning" }),
+          });
+          const trData = await trR.json();
+          if (trData.ok) {
+            showToast(dgT("goal.scheduleSuccess", { version: slug }));
+            setOpen(false);
+            onScheduled?.();
+          } else {
+            setError(trData.error || dgT("drag.unknownError"));
+          }
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const hasCandidates = candidates.length > 0;
+      const noActive = !(activeVersions ?? []).length;
+
+      return h("span", {
+        ref: wrapRef,
+        style: { display: "inline-block", position: "relative", verticalAlign: "middle" },
+      },
+        h("button", {
+          className: "dg-btn",
+          style: {
+            ...S.btn, fontSize: 11, padding: "1px 6px", marginLeft: 4,
+            background: "rgba(76,141,255,.15)", opacity: noActive ? 0.45 : 1,
+            cursor: noActive ? "not-allowed" : "pointer",
+          },
+          title: noActive ? dgT("goal.scheduleNoVersion") : dgT("goal.scheduleTooltip"),
+          disabled: noActive || loading,
+          onClick: (e) => { e.stopPropagation(); if (!noActive) { setOpen(!open); setError(null); } },
+        }, dgT("goal.schedule")),
+        open ? h("div", {
+          style: {
+            position: "absolute", top: "100%", left: 0, marginTop: 4, zIndex: 9999,
+            background: "var(--dsw-alias-bg-base, #1e1e1e)", border: "1px solid rgba(128,128,128,.4)",
+            borderRadius: 6, padding: "6px 0", minWidth: 160, maxWidth: 240,
+            boxShadow: "0 4px 16px rgba(0,0,0,.45)",
+          },
+          onClick: (e) => e.stopPropagation(),
+        },
+          h("div", {
+            style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 4px", borderBottom: "1px solid rgba(128,128,128,.2)" },
+          }, dgT("goal.scheduleSelectVersion")),
+          hasCandidates
+            ? candidates.map((v) =>
+                h("div", {
+                  key: v.slug,
+                  style: {
+                    padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap",
+                    overflow: "hidden", textOverflow: "ellipsis",
+                  },
+                  className: "dg-schedule-version-item",
+                  onClick: () => doSchedule(v.slug),
+                }, `🏷️ ${v.name || v.slug}`))
+            : h("div", {
+                style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 },
+              }, dgT("goal.scheduleAlready")),
+          error ? h("div", {
+            style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)", padding: "4px 10px 2px", borderTop: "1px solid rgba(128,128,128,.2)" },
+          }, "⚠️ " + error) : null,
+          h("div", {
+            style: { padding: "4px 10px 2px", borderTop: "1px solid rgba(128,128,128,.2)" },
+          },
+            h("button", {
+              className: "dg-btn",
+              style: { ...S.btn, fontSize: 10, padding: "1px 6px" },
+              onClick: (e) => { e.stopPropagation(); setOpen(false); setError(null); },
+            }, dgT("goal.scheduleCancel"))))
+        : null);
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
@@ -4556,7 +4694,8 @@ window.__ModuleLoader__.load({
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
     // g-294：onTypeChanged 参数——类型切换后回调（触发看板数据刷新）
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag, onTypeChanged) {
+    // g-306：activeVersions 参数——活跃版本列表（供排期选择器使用）；onSchedule 参数——排期成功后回调
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag, onTypeChanged, activeVersions, onSchedule) {
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -4698,6 +4837,15 @@ window.__ModuleLoader__.load({
                count: g.criteria_count ?? g.criteriaCount,
              }),
             sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, dgT('card.goToSession'))),
+          // g-306：backlog 卡片折叠态也显示「排期」按钮
+          g._isBacklog
+            ? h(VersionSelectorButton, {
+                goalId: g.id,
+                goalVersion: g.version,
+                activeVersions: activeVersions ?? [],
+                onScheduled: onSchedule,
+              })
+            : null,
           g._snippet ? h("div", {
             style: { fontSize: 11, opacity: 0.85, marginTop: 2, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" },
             title: "📝",
@@ -4721,6 +4869,15 @@ window.__ModuleLoader__.load({
             count: g.criteria_count ?? g.criteriaCount,
           }),
           sessionLinkBtn(g.attempt_parent_session_id, g.attempt_child_id, dgT('card.goToSession'))),
+        // g-306：backlog 卡片「排期」按钮（仅未排期目标显示，带内联版本选择器）
+        g._isBacklog
+          ? h(VersionSelectorButton, {
+              goalId: g.id,
+              goalVersion: g.version,
+              activeVersions: activeVersions ?? [],
+              onScheduled: onSchedule,
+            })
+          : null,
         g._snippet ? h("div", {
           style: { fontSize: 11, opacity: 0.85, marginTop: 2, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" },
           title: "📝",
@@ -10577,6 +10734,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
                 _isSearchMatched: !!mInfo,
                 _isSearchCurrent: currentMatchedGoalId === g.id,
                 _snippet: mInfo?.snippet ?? "",
+                _isBacklog: true, // g-306：标记 backlog 目标，供 Card 渲染排期按钮
               }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
                 modalGoal === g.id, drawerCard?.cardId, goalStatus,
                 expanded,
@@ -10614,6 +10772,8 @@ function reconcileRetainedBoardState(data, retained, opts) {
                   },
                 },
                 () => { forceFreshRef.current = true; load(); },
+                active, // g-306：活跃版本列表（供排期选择器使用）
+                () => { forceFreshRef.current = true; load(); }, // g-306：排期成功后刷新看板
               );
             }),
           ),
