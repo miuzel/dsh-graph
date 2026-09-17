@@ -192,7 +192,7 @@
 
       // 过滤掉目标当前已归属的版本（避免重复排期）；独立目标始终可选
       const versionCandidates = (activeVersions ?? []).filter((v) => v.slug !== goalVersion);
-      const canSelectStandalone = goalVersion !== null && goalVersion !== undefined;
+      const canSelectStandalone = true; // 始终允许选择独立目标
 
       React.useEffect(() => {
         if (!open) return;
