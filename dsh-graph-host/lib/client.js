@@ -9,6 +9,7 @@ window.__ModuleLoader__.load({
   id: "dsh-graph",
   factory(require) {
     const React = require("react");
+    const ReactDOM = require("react-dom");
     const h = React.createElement;
     // g-270：安全获取 DSH 官方 MarkdownText 组件（若缺失则优雅降级为内置解析器）
     let MarkdownText = null;
@@ -11265,7 +11266,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
             })
           : null,
         showVersionDrawer
-          ? h(VersionDrawer, {
+          ? ReactDOM.createPortal(h(VersionDrawer, {
               // g-243：显式稳定 key。本看板根节点的 children 列表里混有带 key 的元素
               // （...releasedRows 的 rel-<slug> 行）与嵌套数组；已发布版本泳道增删会改变
               // 这些兄弟的数量，未带 key 的尾部兄弟（本抽屉）会因按位置/索引匹配失败被
@@ -11313,10 +11314,10 @@ function reconcileRetainedBoardState(data, retained, opts) {
                 });
                 loadVersionDetail(v.slug);
               },
-            })
+            }), document.body)
           : null,
         drawerCard
-          ? h(CardDrawer, { // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建（同 g-243）
+          ? ReactDOM.createPortal(h(CardDrawer, { // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建（同 g-243）
                             key: "dg-card-drawer",
                             goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             cardData: drawerCard.cardData,
@@ -11351,7 +11352,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
                                 load();
                               }
                               setDrawerCard(null);
-                            } })
+                            } }), document.body)
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal

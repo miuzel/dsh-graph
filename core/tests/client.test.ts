@@ -2554,7 +2554,7 @@ test("g-223 源契约：kanban.js 挂载版本管理按钮、抽屉与隐藏版�
   assert.match(kanban, /dgT\(['"]versionDrawer\.activeHidden['"]/);
 
   // 4. VersionDrawer 挂载
-  assert.match(kanban, /showVersionDrawer\s*\?\s*h\(VersionDrawer/);
+  assert.match(kanban, /showVersionDrawer\s*\?\s*ReactDOM\.createPortal\(h\(VersionDrawer/);
   assert.match(kanban, /onShowAll/);
   assert.match(kanban, /onHideAll/);
   assert.match(kanban, /onShowActiveOnly/);
