@@ -426,6 +426,7 @@ test("g-228：graph_start_attempt 使用 supervisor 独立关键字段，不从 
     assert.equal(tool.parameters.properties.acceptance_items.nullable, true);
     const result = await tool.execute({
       goal,
+      worktree: false, // g-283：真实建仓需有效基线；本例只验证结构化字段透传到 prompt，显式不建树
       attempt_brief: "brief 中有 rewrite、日语の修正、旧基线 1111111。",
       task_type: "merge",
       baseline_commit: "d34db33",
@@ -501,6 +502,7 @@ test("g-228：start-execution 端点透传 supervisor 独立关键字段", async
     writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
     const body = {
       goal,
+      worktree: false, // g-283：真实建仓需有效基线；本例只验证结构化字段透传到 prompt，显式不建树
       attempt_brief: "brief 中包含 rewrite、基线 old1111 和日本語の修正。",
       task_type: "fix",
       baseline_commit: "d34db33",
