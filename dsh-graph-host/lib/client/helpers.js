@@ -1,4 +1,5 @@
-      wrap: { padding: 12, fontSize: 13, color: "inherit", overflowX: "auto", position: "relative", zIndex: 1, minWidth: 0 },
+      wrap: { padding: 12, fontSize: 13, color: "inherit", position: "relative", zIndex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: "100%" },
+      wrapContent: { flex: 1, minWidth: 0, overflowX: "auto" },
       head: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
       grid: { display: "grid", gridTemplateColumns: "130px repeat(6, minmax(150px, 1fr))", gap: 4 },
       laneLabel: { fontWeight: 600, padding: "8px 6px", borderTop: "1px solid rgba(128,128,128,.35)" },
@@ -30,16 +31,16 @@
         display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20000,
       },
       drawer: {
-        position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
+        position: "absolute", top: 0, right: 0, height: "100%", width: 400,
         boxSizing: "border-box",
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px 90px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
       },
-      // g-223：左侧抽屉（版本管理抽屉，从屏幕左侧展开）
+      // g-223：左侧抽屉（版本管理抽屉，从看板容器内左侧展开）
       drawerLeft: {
-        position: "fixed", top: 0, left: 0, height: "100vh", width: 380, maxWidth: "85vw",
+        position: "absolute", top: 0, left: 0, height: "100%", width: 380, maxWidth: "85vw",
         boxSizing: "border-box",
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
         boxShadow: "4px 0 16px rgba(0,0,0,.45)",
