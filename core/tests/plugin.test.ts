@@ -30,7 +30,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 40); // 全量 40 个 graph_* 工具（g-282 新增 graph_abandon_attempt）
+  assert.equal(registered.length, 42); // 全量 42 个 graph_* 工具（g-304 新增 graph_convert_card_to_shared/owned）
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
@@ -48,6 +48,13 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
   await call("graph_bind_collect_card", { goal, card, child_id: "child-t" });
   await call("graph_fill_card", { goal, card, text: "内容" });
   await call("graph_review_card", { goal, card });
+  // g-304：graph_convert_card_to_shared / graph_convert_card_to_owned 工具封装
+  const { card: ownedCard } = await call("graph_add_card", { goal, title: "转共享测试", kind: "text", scope: "goal" });
+  await call("graph_convert_card_to_shared", { goal, card: ownedCard });
+  // 转换后 id 变为 shared-*，从 goal 的 context_cards 获取新 id 再转回
+  const goalDoc = loadGoal(findGoalFile(root, goal));
+  const sharedCardId = goalDoc.meta.context_cards.find((c: string) => c.startsWith("shared-"));
+  await call("graph_convert_card_to_owned", { goal, card: sharedCardId });
   const att = await call("graph_start_attempt", { goal });
   assert.equal(att.child_id, null); // 无 subagents → 降级
   assert.ok(typeof att.note === "string");

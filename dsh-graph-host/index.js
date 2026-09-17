@@ -1461,6 +1461,24 @@ export function apply(ctx, config) {
       run: (a, ex) => { deleteCard(rootFor(ex), a.goal, a.card, { actor: actorOf(ex) }); return { ok: true }; },
     },
     {
+      // g-304：将 goal 自有卡转换为共享卡（封装 convertOwnedToShared）。
+      def: {
+        name: "graph_convert_card_to_shared",
+        description: sT("tool.graph_convert_card_to_shared"),
+        parameters: params({ goal: str, card: str }, ["goal", "card"]),
+      },
+      run: (a, ex) => { convertOwnedToShared(rootFor(ex), a.goal, a.card, { actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
+      // g-304：将共享卡转换回 goal 自有卡（封装 convertSharedToOwned）。
+      def: {
+        name: "graph_convert_card_to_owned",
+        description: sT("tool.graph_convert_card_to_owned"),
+        parameters: params({ goal: str, card: str }, ["goal", "card"]),
+      },
+      run: (a, ex) => { convertSharedToOwned(rootFor(ex), a.goal, a.card, { actor: actorOf(ex) }); return { ok: true }; },
+    },
+    {
       // g-150：主管登记 attempt handoff（返工约束、前序失败、推荐基线、验收命令）。
       // 只有已 claim 的 supervisor 或负责人应调用；写入 handoff 文件 + 追加确认事件。
       def: {
