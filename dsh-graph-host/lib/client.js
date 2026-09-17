@@ -4608,20 +4608,7 @@ window.__ModuleLoader__.load({
             setLoading(false);
             return;
           }
-          // 转入版本时自动 transition 到 planning
-          if (to === "version") {
-            const trR = await fetch(graphUrl("/api/dsh-graph/transition"), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ goal: goalId, to: "planning" }),
-            });
-            const trData = await trR.json();
-            if (!trData.ok) {
-              setError(trData.error || dgT("drag.unknownError"));
-              setLoading(false);
-              return;
-            }
-          }
+          // moveGoal 已自动处理 draft→planning 转换，无需显式 transition
           const label = to === "standalone" ? dgT("lane.standalone") : version;
           showToast(dgT("goal.scheduleSuccess", { version: label }));
           setOpen(false);
