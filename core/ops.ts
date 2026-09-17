@@ -6948,6 +6948,12 @@ export function resolveAccept(
   const status = String(doc.meta.status ?? "");
 
   if (opts.force) {
+    // force 绕过非 force 门槛（仅 in_progress/review），但仍校验映射六态
+    if (!ACCEPT_MAPPED_STATUSES.has(status)) {
+      throw new GraphError(
+        `当前状态 ${status} 无 accept 映射（force 仅支持 ${[...ACCEPT_MAPPED_STATUSES].join("/")})`,
+      );
+    }
     if (opts.reason) {
       appendEvent(root, {
         actor: opts.actor,
@@ -6956,7 +6962,6 @@ export function resolveAccept(
         details: { note: `强制接受理由：${opts.reason}` },
       });
     }
-    // force 直接走 accept 分支（跳过状态限制）
     applyAcceptMapping(root, id, status, opts.actor);
     if (status === "review") registerWorktreeCandidates(root, id, opts.actor);
     return { ok: true };
@@ -6986,7 +6991,12 @@ export function resolveAccept(
   return { ok: true };
 }
 
-/** 接受生效的阶段映射（内部复用） */
+/** 接受映射覆盖的六态（由 applyAcceptMapping 分支派生，单一真源）。 */
+const ACCEPT_MAPPED_STATUSES = new Set([
+  "draft", "planning", "collecting", "ready", "in_progress", "review",
+]);
+
+/** 接受生效的阶段映射（内部复用）。调用方必须先校验 status ∈ ACCEPT_MAPPED_STATUSES。 */
 function applyAcceptMapping(root: string, id: string, status: string, actor: string): void {
   if (status === "draft" || status === "planning") {
     appendEvent(root, { actor, event: "description.confirmed", goal: id, details: {} });

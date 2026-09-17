@@ -661,6 +661,44 @@ test("g-305：review 状态 resolveAccept(accept) 正常路径不受影响", () 
   assert.ok(ev.some((e) => e.event === "review.passed"));
 });
 
+test("g-305：force blocked 状态明确失败（GraphError）", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test", force: true });
+  transition(root, id, "blocked", { reason: "等待上游", actor: "test" });
+  assert.throws(() => resolveAccept(root, id, { actor: "human:gui", verdict: "accept", force: true, reason: "强行通过" }), /blocked.*无 accept 映射/);
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "blocked");
+});
+
+test("g-305：force delivered 状态明确失败（GraphError）", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test", force: true });
+  transition(root, id, "review", { actor: "test" });
+  transition(root, id, "delivered", { actor: "test" });
+  assert.throws(() => resolveAccept(root, id, { actor: "human:gui", verdict: "accept", force: true, reason: "重复交付" }), /delivered.*无 accept 映射/);
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "delivered");
+});
+
+test("g-305：force 六态兼容——draft/planning/collecting/ready/in_progress/review 均可 force accept", () => {
+  const statuses = ["draft", "planning", "collecting", "ready", "in_progress", "review"];
+  for (const target of statuses) {
+    const root = tmpRoot();
+    const id = createGoal(root, { title: `force-${target}`, version: "v-t", actor: "test" });
+    // 依次迁移到目标状态
+    if (target === "collecting") transition(root, id, "collecting", { actor: "test" });
+    if (target === "ready") { transition(root, id, "collecting", { actor: "test" }); transition(root, id, "ready", { actor: "test" }); }
+    if (target === "in_progress") { transition(root, id, "collecting", { actor: "test" }); transition(root, id, "ready", { actor: "test" }); transition(root, id, "in_progress", { actor: "test", force: true }); }
+    if (target === "review") { transition(root, id, "collecting", { actor: "test" }); transition(root, id, "ready", { actor: "test" }); transition(root, id, "in_progress", { actor: "test", force: true }); transition(root, id, "review", { actor: "test" }); }
+    const result = resolveAccept(root, id, { actor: "human:gui", verdict: "accept", force: true, reason: "兼容测试" });
+    assert.equal(result.ok, true, `force accept 应成功：${target}`);
+  }
+});
+
 // ---- project.yaml supervisor.session（g-108） ----
 
 test("readSupervisorSession：读 supervisor.session，去注释/引号，缺失返回 null", () => {
