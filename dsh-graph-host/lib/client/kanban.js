@@ -11,6 +11,7 @@
       const modalGoalOpenTsRef = React.useRef(null); // 弹窗打开时目标的 updated_at
       const forceReplayRef = React.useRef(null); // {goalId, openTs} 待关闭后强制补播
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
+      const forceFreshRef = React.useRef(false); // g-294：目标类型变更后跳过 retained 对账，强制拉取最新明细
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       // g-219：删除卡片信号（事件结果驱动，弹窗局部移除用）——{goalId, cardId, ts}
       const [deletedCardSignal, setDeletedCardSignal] = React.useState(null);
@@ -604,13 +605,25 @@
         if (retained) setState({ loading: false, data: retained, error: null });
         else setState({ loading: true, data: null, error: null });
         const params = "?lazy=1" + (showArchived ? "&includeArchived=1" : "");
+        // g-294: forceFresh 时跳过 If-None-Match，强制200 响应走 reconcile 对账路径
+        //（lazy payload 下 type-only 变更不改 generated_at/ETag，304 分支直接复用 retained
+        //  绕过 forceFreshRef 检查）；同步捕获并清除 flag 防并发干扰。
+        const isForceFresh = forceFreshRef.current;
+        if (isForceFresh) forceFreshRef.current = false;
         const headers = {};
         const prior = currentEtagRef.current.get(dimension);
-        if (prior) headers["If-None-Match"] = prior;
+        if (prior && !isForceFresh) headers["If-None-Match"] = prior;
         fetch(graphUrlForActive("/api/dsh-graph" + params, {}, activeWs), { headers })
           .then(async (r) => {
             if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
             if (r.status === 304) {
+              // g-294: 304 安全兜底——理论上 forceFresh 已跳过 If-None-Match 不会走这里，
+              // 但并发场景下仍有窗口；此时强制失效 ETag 并重试一次。
+              if (isForceFresh) {
+                currentEtagRef.current.delete(dimension);
+                load();
+                return;
+              }
               const retainedData = boardDataRef.current.get(dimension);
               if (!retainedData) {
                 currentEtagRef.current.delete(dimension);
@@ -629,7 +642,11 @@
             // g-290: 改由共享纯函数对账——计数以服务端为准；仅当载荷确为 lazy 且计数与 retained
             // 明细长度一致时才沿用明细（保住「展开态刷新不闪空」），计数不一致一律丢弃旧明细并
             // 复位已加载标记，立即交由既有懒加载路径补拉（绝不残留幽灵卡片）。
-            const retainResult = reconcileRetainedBoardState(data, retained, {
+            // g-294: 目标类型变更后 isForceFresh=true，跳过 retained 对账直接拉取最新明细，
+            // 避免 lazy 载荷下 backlog_count 未变导致旧明细（含旧 type）被沿用。
+            // 空对象使 canRetain=false（无 retainedBacklog），自然触发 refetchBacklog/Version。
+            const staleData = isForceFresh ? {} : retained;
+            const retainResult = reconcileRetainedBoardState(data, staleData, {
               collapsedLanes: collapsedLanes,
               openReleased: openReleased,
             });
@@ -1099,8 +1116,13 @@
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
         const baseBg = "rgba(255,255,255,.03)";
         const stageBg = (stageIdx) => stageIdx % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)";
-        // g-162: 折叠态——显示摘要行
+        // g-162: 折叠态——显示摘要行（g-288: 支持拖放到折叠泳道）
         if (isCollapsed) {
+          // g-288: 判断拖放目标——仅高亮不同泳道
+          const anyDrag = drag !== null;
+          const isOverThisCollapsed = anyDrag && drag.overLaneKey === key;
+          const isFromThisLane = anyDrag && drag.laneKey === key;
+          const canDropHere = anyDrag && !isFromThisLane;
           return [
             h("div", {
               key: key + "-label",
@@ -1129,9 +1151,26 @@
               }, "＋")),
             h("div", {
               key: key + "-collapsed-summary",
-              style: { gridColumn: "2 / -1", ...S.cell, background: baseBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
+              style: { gridColumn: "2 / -1", ...S.cell, background: isOverThisCollapsed && canDropHere ? "rgba(76,141,255,.10)" : baseBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: dgT('lane.expandTooltip'),
+              className: isOverThisCollapsed && canDropHere ? "dg-cell-drop-active" : "",
               onClick: () => toggleLaneCollapse(key, false),
+              // g-288: 拖放到折叠泳道——高亮并执行移动
+              onDragOver: canDropHere ? (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" } : d);
+              } : undefined,
+              onDrop: canDropHere ? (e) => {
+                e.preventDefault();
+                if (!dropCommitted.current) {
+                  dropCommitted.current = true;
+                  setDrag(null);
+                  // g-288: 先展开泳道，再执行移动
+                  toggleLaneCollapse(key, false);
+                  commitCrossLaneMove(drag.goalId, key);
+                }
+              } : undefined,
             }, dgT('lane.collapsedSummary', { count: goals.length })),
           ];
         }
@@ -1330,6 +1369,7 @@
                     dropCommitted.current = false;
                   },
                 },
+                () => { forceFreshRef.current = true; load(); },
               );
             }),
           );
@@ -1393,8 +1433,13 @@
         const backlogBg = "rgba(0,0,0,.12)";
         // g-258: 优先使用实际已加载条数，未展开懒加载时回退 backlog_count 计数
         const count = (goals && goals.length > 0) ? goals.length : (b?.backlog_count ?? 0);
-        // g-162: 折叠态——显示摘要行
+        // g-162: 折叠态——显示摘要行（g-288: 支持拖放到折叠泳道）
         if (isCollapsed) {
+          // g-288: 判断拖放目标——仅高亮不同泳道
+          const anyDrag = drag !== null;
+          const isOverThisCollapsed = anyDrag && drag.overLaneKey === key;
+          const isFromThisLane = anyDrag && drag.laneKey === key;
+          const canDropHere = anyDrag && !isFromThisLane;
           return [
             h("div", {
               key: key + "-label",
@@ -1417,9 +1462,26 @@
               }, "＋")),
             h("div", {
               key: key + "-collapsed-summary",
-              style: { gridColumn: "2 / -1", ...S.cell, background: backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
+              style: { gridColumn: "2 / -1", ...S.cell, background: isOverThisCollapsed && canDropHere ? "rgba(76,141,255,.10)" : backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: dgT('lane.expandTooltip'),
+              className: isOverThisCollapsed && canDropHere ? "dg-cell-drop-active" : "",
               onClick: () => toggleLaneCollapse(key, false),
+              // g-288: 拖放到折叠泳道——高亮并执行移动
+              onDragOver: canDropHere ? (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" } : d);
+              } : undefined,
+              onDrop: canDropHere ? (e) => {
+                e.preventDefault();
+                if (!dropCommitted.current) {
+                  dropCommitted.current = true;
+                  setDrag(null);
+                  // g-288: 先展开泳道，再执行移动
+                  toggleLaneCollapse(key, false);
+                  commitCrossLaneMove(drag.goalId, key);
+                }
+              } : undefined,
             }, dgT('lane.collapsedSummary', { count })),
           ];
         }
@@ -1519,6 +1581,7 @@
                     dropCommitted.current = false;
                   },
                 },
+                () => { forceFreshRef.current = true; load(); },
               );
             }),
           ),
@@ -2150,7 +2213,7 @@
               onPmFinished: () => setPolishGoal(null),
               goalStatus,
               supervisorSession: b.supervisorSession ?? null,
-              onRenamed: () => load(),
+              onRenamed: () => { forceFreshRef.current = true; load(); },
               onArchived: () => load(),
               onTagsChanged: () => load(),
               onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),
@@ -2168,10 +2231,11 @@
                 });
                 setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug));
               },
+              activeVersions: active, // g-306：活跃版本列表（供排期选择器使用）
             })
           : null,
         showVersionDrawer
-          ? h(VersionDrawer, {
+          ? ReactDOM.createPortal(h(VersionDrawer, {
               // g-243：显式稳定 key。本看板根节点的 children 列表里混有带 key 的元素
               // （...releasedRows 的 rel-<slug> 行）与嵌套数组；已发布版本泳道增删会改变
               // 这些兄弟的数量，未带 key 的尾部兄弟（本抽屉）会因按位置/索引匹配失败被
@@ -2219,10 +2283,10 @@
                 });
                 loadVersionDetail(v.slug);
               },
-            })
+            }), document.body)
           : null,
         drawerCard
-          ? h(CardDrawer, { // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建（同 g-243）
+          ? ReactDOM.createPortal(h(CardDrawer, { // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建（同 g-243）
                             key: "dg-card-drawer",
                             goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             cardData: drawerCard.cardData,
@@ -2257,7 +2321,7 @@
                                 load();
                               }
                               setDrawerCard(null);
-                            } })
+                            } }), document.body)
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal

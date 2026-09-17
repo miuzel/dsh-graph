@@ -233,6 +233,16 @@
       'goal.postponeSuccess': '✅ 已暂缓',
       'goal.postponeSuccessMsg': '✅ 目标已暂缓并移回 backlog',
       'goal.postponeFail': '⚠️ 暂缓失败：',
+      // g-306：backlog 卡片快速排期入口
+      'goal.schedule': '📅 排期',
+      'goal.scheduleTooltip': '将目标排入活跃版本',
+      'goal.scheduleNoVersion': '暂无活跃版本',
+      'goal.scheduleSuccess': '✅ 已排期到 {version}',
+      'goal.scheduleFail': '⚠️ 排期失败：',
+      'goal.scheduleAlready': '已在该版本中',
+      'goal.scheduleSelectVersion': '选择目标版本',
+      'goal.scheduleCancel': '取消',
+      'goal.scheduleConfirm': '确认排期',
       // g-287：历史遗留「非 backlog 草稿」转入规划入口（backlog 卡不显示，其正确路径是排期）
       'goal.planEntry': '🧭 转入规划',
       'goal.planEntryTooltip': '将该草稿目标转入规划（状态变为「规划中」，可开始收集/就绪/派发执行）',
@@ -1210,6 +1220,16 @@
       'goal.postponeSuccess': '✅ Postponed',
       'goal.postponeSuccessMsg': '✅ Goal postponed and moved back to backlog',
       'goal.postponeFail': '⚠️ Postpone failed: ',
+      // g-306: backlog card quick schedule entry
+      'goal.schedule': '📅 Schedule',
+      'goal.scheduleTooltip': 'Schedule goal into an active version',
+      'goal.scheduleNoVersion': 'No active versions',
+      'goal.scheduleSuccess': '✅ Scheduled to {version}',
+      'goal.scheduleFail': '⚠️ Schedule failed: ',
+      'goal.scheduleAlready': 'Already in this version',
+      'goal.scheduleSelectVersion': 'Select target version',
+      'goal.scheduleCancel': 'Cancel',
+      'goal.scheduleConfirm': 'Confirm schedule',
       // g-287: entry to move a legacy non-backlog draft goal into planning
       // (not shown for backlog cards — their correct path is scheduling)
       'goal.planEntry': '🧭 Move to planning',

@@ -62,79 +62,6 @@ Examples: `.worktrees/g-125-att-03`, `.worktrees/g-163-att-03`.
 - Do not use ambiguous names such as `.worktrees/att-003`, `.worktrees/g165-att001`, or names that omit the goal id.
 - Existing active/review worktrees are not renamed automatically; apply this convention to new attempts and explicit follow-up work.
 
-## Worktree Isolation by Change Risk
-
-Not every task needs a new worktree. Choose isolation level by the risk of the change.
-
-**核心原则**：
-- `main` 分支**只承载已发布版本，只读**——任何开发、测试、review 改动不得在 main 上进行；
-- Supervisor 为每个版本先建立 `<version>-test`（或等价命名）开发集成分支。**默认直接将 main worktree 切换至该 `<version>-test` 分支作为权威集成与人工验证工作区**，统一使用主仓库根下的 `./tmp/test-review` 启动测试环境，避免多 worktree 导致测试环境与数据存储目录碎片化；
-- Supervisor 预创建并登记子代理 worktree（在 `<version>-test` 基线上预创建专属 `.worktrees/g-xxx-att-xx`）；子代理直接在给定的 worktree 中工作，**绝不自行拉树、建分支、改分支**；
-- 非平凡源码/测试/生成物/有副作用/并行改动仍必须隔离在独立 worktree。
-
-### worktree = true（强制隔离，默认）
-
-适用场景（以下任一即隔离）：
-- 修改多文件源码或生成物（编译产物、打包文件等）；
-- 会修改源码或测试（包括新增/删除测试文件）；
-- 并行执行时可能互相踩踏提交/文件（多 attempt 同时活跃、同一文件多代理修改）；
-- 有构建副作用（生成临时文件、改 node_modules、改数据库等）；
-- 任何 supervisor 无法预判副作用范围的任务。
-
-要求：
-- brief 必须写明**专属 worktree 路径**（如 `.worktrees/g-125-att-03`）；
-- brief 必须写明**版本分支**（如 `<version>-test`）与**基线 commit**；
-- brief 必须明确**禁止自行拉树/建分支/改分支**，子代理只准在给定树内工作；
-- brief 必须明确**禁止直接修改 main、golden、3080、主 DSH_HOME、tmp/test-review 或其他目标分支**；
-- 代码改动只能在 worktree 内进行，`.dsh-graph/` 看板数据仍在主工作树写（graph_* 工具写主树，不被 worktree 分支隔离）。
-
-### worktree = false（显式豁免，需理由）
-
-仅以下两类可在 brief 中显式写 `worktree=false` 并记录理由：
-
-1. **只读审计 / 静态检查 / 不可变 commit 验证**：
-   - 任务为纯只读 review、代码审计、文档审阅、commit diff 检查；
-   - brief 必须**明确禁止写文件**（"禁止修改任何源码、测试、生成物"）；
-   - 若审计过程需要构建副作用（如跑测试生成覆盖率），**复用一个已有的 audit worktree**，不重复新建；
-   - 只写 graph 数据（看板状态、事件流）可显式不建 worktree，但改源码仍必须隔离。
-
-2. **特别小的独立文档/记忆修改（快速通道）**：
-   - 改动范围严格限定于**一个或少量文件**、**无构建副作用**、**无并发冲突风险**；
-   - 由 supervisor 直接在当前版本分支做，或子代理显式 `worktree=false` 并记录理由；
-   - 子代理不得擅自套用此例外——只有 supervisor 能批准快速通道。
-
-**铁律**：`worktree=false` **绝不意味着可直接修改 main**。即使 worktree=false，仍禁止：
-- 修改 main 分支（main 只读）；
-- 修改多文件源码、修改生成物、修改测试；
-- 在任意分支上直接提交碎提交（review 后统一收口）；
-- 绕过 golden/3080/主 DSH_HOME 隔离、绕过人工 review/delivered gate。
-
-### 低风险小改动主管快速通道（Supervisor 直接执行）
-
-负责人授权（g-221）：对**单个 build 脚本、小工具或一两行的低风险单文件修复**，supervisor
-可直接在当前 `<version>-test` 集成分支修改，执行**针对性验证**后**快速请求负责人合并/验收**，
-不再为此类工作派发实现/review 子代理往返。
-
-**适用边界（须同时满足，缺一即走 worktree 隔离）**：
-- 改动限定为**单个文件**且为**一两行**低风险修复，或**单个 build 脚本 / 小工具**本身；
-- **不含**：多文件修改、生成物（编译产物/打包文件）、测试改动、有副作用（构建/写库/网络/
-  改 node_modules 等）、并发冲突风险；
-- supervisor 能预判完整影响范围与验证方式。
-
-**纪律**：此通道只授权 supervisor 直接在当前 `<version>-test` 上执行；**绝不意味着可直接修改
-main**（main 只读）；子代理不得擅自套用此例外；验证完成后仍须经过负责人合并/验收 gate，
-不因走此通道而绕过人工 review/delivered gate。
-
-## Worktree 安全清理
-
-删除旧 worktree 前必须逐项确认，**禁止批量 `rm -rf`**：
-
-1. **无未提交改动**：`git -C <worktree> status --short` 输出为空；
-2. **无活跃代理**：确认该 worktree 无 running/idle 子代理（`list_agents` 排查）；
-3. **无唯一审计证据**：确认该 worktree 内无未归档的测试报告、覆盖率、日志等唯一证据；
-4. **可由 commit 恢复**：确认 worktree 内所有有价值改动已 commit 到其分支，必要时已 push 到远程；
-5. **逐项确认后**再 `git worktree remove <path>`，不可脚本化批量清理。
-
 ## Isolated Dev/Test dsh Instance (two profiles)
 
 Development and verification run in a profile that is **fully isolated** from the main
@@ -179,82 +106,26 @@ node --test core/tests/*.test.ts
 
 ## 发布门禁（Release Gate）
 
-### Windows 兼容性：发布前统一验证，不逐功能验证
+以下为**跨版本发布红线**（本段为权威定义；g-295 未修改发布手册正文）：
 
-来源：负责人决定（2026-09-14，g-284/g-285）。
+- **Windows 兼容性**：每个版本发布前必须在原生 Windows 上做一次兼容性测试（T1–T5 分层检查，执行件 `scripts/win-smoke-test.mjs`），Linux/WSL2 全绿不能替代 Windows 真机结论；Windows 验证缺失时 README 须如实标注「Windows 未验证」。
+- **版本号一致性**：发布前必须核对 `package.json` version、`PLUGIN_VERSION`、README 中的版本表述一致（0.11.0 教训：常量不参与构建校验，只有人工核对才能发现）。
+- **产物传递纪律**：跨机器传递唯一渠道为 tarball，记录 sha256 对账。
 
-- Windows 原生兼容性是**平台层属性**，与单个功能无关 → **不作为每个功能的逐个验收项**；
-- 但**每个版本发布前必须做一次 Windows 兼容性测试**，作为发布门禁的一部分；
-- 依据：本项目长期只在 Linux/WSL2 上开发与验证，Windows 路径从未实测（首次 Windows 用户
-  反馈即撞上 `core/ops.js` 的 POSIX 常量具名导入，插件在 Windows 上**完全无法加载**）。
+> **与发布手册的职责边界**：[`docs/release-handbook.md`](docs/release-handbook.md) 记录 v0.3/v0.4
+> 发布操作流程（npm publish、GitHub repo、awesome-dsh-plugin PR）；上述三条跨版本红线不在手册内，
+> 以本段为唯一真源。
 
-**发布前 Windows 最小复验清单**（在原生 Windows 上执行，非 WSL2）：
+## kimi_webbridge_* 工具
 
-1. 全新 profile 安装：`npx @deepseek-ai/dsh plugin --profile <p> add <包/路径>`；
-2. 启动隔离实例：`npx @deepseek-ai/dsh web --port <非 3080 端口>`，确认插件 apply 无报错
-   （尤其不得出现 `node:constants` / `O_DIRECTORY` 类模块加载错误）；
-3. 最小功能用例：写目标 → 加标签 → 派发 attempt → 看板渲染正常、`graph_validate` 正常。
-
-**执行件（已自动化）**：`scripts/win-smoke-test.mjs`（配 `win-smoke-test.cmd` 双击入口）。
-它把上述清单拆成分层检查并在**临时 DSH_HOME** 内完成，不动用户真实环境：
-
-- **T1 静态门禁**（跨平台）：发布包内不得对 POSIX 专有常量做 ESM 具名导入 ——
-  可直接预测「Windows 上插件完全无法加载」，无需 Windows 机器即可在发布前拦住；
-- **T2 安装**：全新隔离 profile 安装插件成功；
-- **T3 核心运行时**：直接调用安装后的 `core/ops.js` 跑 建目标/判据/标签锁/原子写/跨进程并发 CAS/validate；
-- **T4 实例启动**：`dsh --profile <p> --no-open --port <n>` 启动，插件树加载无平台错误；
-- **T5 REST 冒烟**：dsh-graph 路由已注册、看板载荷可读（证明插件真的 apply）。
-
-```sh
-# Windows 侧（没有仓库、没有分支）：把脚本与产出的 tarball 一起拷过去即可
-node win-smoke-test.mjs --tarball D:\path\dsh-graph-<版本>.tgz   # 推荐：直接验现成安装包
-
-# 开发机（有仓库/分支）
-node scripts/win-smoke-test.mjs --path <dsh-graph-host 目录>      # 从本地源码打包后验证
-node scripts/win-smoke-test.mjs --spec dsh-graph@<版本>           # 从 registry 验证
-node scripts/win-smoke-test.mjs --static-only .                   # 秒级静态门禁（跨平台）
-node scripts/win-smoke-test.mjs --self-test                       # 离线自检脚本自身判定逻辑
-```
-
-**产物传递纪律**：Windows 机器上通常**没有本仓库、也没有开发分支**（负责人明确：暂不把 dev 分支推 GitHub）。
-因此跨机器传递的**唯一渠道是安装包（tarball）**，验证也应以 tarball 为一等输入：
-
-1. 开发机产出：`cd dsh-graph-host && npm pack --ignore-scripts --pack-destination <目录>`
-   （`--ignore-scripts` 同时绕过依赖 `bash` 的 `prepack`，后者在原生 Windows 不可用）；
-2. 记录 `sha256sum <tarball>` 一并交付，Windows 侧报告里的 `产物指纹=sha256:…` 用于对账
-   （确认两边验的是同一个产物）；
-3. Windows 侧：`plugin --profile <p> add <tarball>` 安装 → `dsh --profile <p> --port <非 3080>`
-   启动（`dsh web` 是固定 `web` profile 的别名；命名 profile 用 `dsh --profile <p> [应用参数]`）；
-4. 跑 `node win-smoke-test.mjs --tarball <tarball>` 取 T1–T5 完整结论并回传报告段。
-
-> 注意：`plugin add <目录>` 会被 pnpm 处理成 `link:`，**不会安装该包的 dependencies**，
-> 且依赖解析会命中包上层目录的 `node_modules` —— 在开发仓库内「看起来通过」，
-> 到用户机器上才 `ERR_MODULE_NOT_FOUND`。本脚本的 `--path` 一律先打包成 tarball 再用真实安装语义验证。
-
-在 Linux/WSL2 上运行只对 T1/T2 结论有效；**T3–T5 的 PASS 不能替代 Windows 真机结论**（脚本会自行提示）。
-
-**纪律**：Linux/WSL2 全绿**不能**替代本项；Windows 验证缺失时，README 的兼容声明必须
-如实标注「Windows 未验证」，不得宣称支持。
-
-### 版本号一致性：发布前统一检查（不塞进功能目标）
-
-来源：负责人 2026-09-14 明确——版本常量属**发布前检查项**，不并入任何功能目标。
-
-发布前必须逐项核对下列位置的版本表述**一致**（改完需重建生成物并提交）：
-
-1. `dsh-graph-host/package.json` 的 `version`（发布源）；
-2. `dsh-graph-host/lib/client/constants.js` 的 `PLUGIN_VERSION`（g-174 硬编码，标题栏显示用；
-   改后必须 `bash scripts/build-client.sh` 重建 `lib/client.js` 并一起提交）；
-3. `README.md` 与 `dsh-graph-host/README.md`（中英）中出现的版本号与平台验证声明。
-
-> 教训：0.11.0 发布前 `package.json` 已 bump 至 `0.11.0`，但 `PLUGIN_VERSION` 仍为 `0.11.0-alpha`
-> ——该常量不参与构建校验，**只有人工核对才能发现**，故固化为清单项。
-
-## Important Notes
-
-- The generated file maintains the `window.__ModuleLoader__.load` contract required by the dsh client
-- The generated marker is added at the top of the file before any module content
-- This policy prevents accidental modification of generated code and ensures build consistency
+- Kimi WebBridge daemon 跑在 **Windows 宿主**，与 WSL2 不同系统。
+- 使用 `kimi_webbridge_*` 时**不要先做 daemon 可达性检查/探测，也不要调 `kimi_webbridge_start_daemon`**
+  （它会在 WSL2 内 spawn 本地二进制，本环境无效）。
+- 正确做法：**直接调用目标工具**（navigate / snapshot / click / fill / screenshot 等）。
+- 仅当调用**实际失败**（daemon unreachable / 超时等）时，再提示负责人手动确认宿主 WebBridge 状态，
+  不要反复重试 start_daemon。
+- **截图路径**：WebBridge 截图保存到 Windows 临时目录（如 `C:\Users\...\AppData\Local\Temp\...`），
+  在 WSL 中需通过 `/mnt/c/...` 路径读取（如 `/mnt/c/Users/mingxuan/AppData/Local/Temp/...`）。
 
 ## Harness Text-File Editing Notes
 
@@ -264,86 +135,12 @@ node scripts/win-smoke-test.mjs --self-test                       # 离线自检
 - `grep` patterns are parsed as ripgrep regular expressions and are not automatically escaped. When searching for literal text, escape regex metacharacters yourself (for example, write `Card\(g,` rather than `Card(g,`), and escape `[ ] . ? + * | ^ $` and other metacharacters as needed.
 - These notes describe current Harness tool behavior; if the official read output format changes, follow the format actually returned at that time.
 
-## Security & Review Boundary (v0.8)
+## 协作规范导航
 
-> 本章节固化 v0.8 本地开发工具的审查边界，防止 fresh review 对本地工具无限升级攻击模型。
-> 来源：g-206（负责人确认）。
+以下规范由 dsh-graph 插件体系维护，不在本文件重复：
 
-### 威胁模型：单用户本地、owner-trusted
-
-- **适用场景**：dsh-graph 作为本地 dsh 插件运行，工作区由单一用户拥有并信任。
-- **强制基线（必须阻断）**：
-  1. **跨 workspace 越界**——插件不得访问当前工作区之外的文件系统路径；
-  2. **凭据泄漏**——API key、token、密码不得明文写入非受控日志或返回给无权限调用方；
-  3. **明显 symlink / 路径错误**——对 `..`、符号链接、绝对路径拼接等常见路径操纵必须有防御；
-  4. **普通并发数据丢失**——单用户本地多进程场景下，必须保证有限本地锁 / CAS 和正常数据完整性；
-  5. **未授权破坏性写入**——不得在无确认情况下执行 `rm -rf`、覆写生产配置等不可逆操作；
-  6. **错误输入崩溃**——对畸形输入、空值、超大值等必须返回可控错误，不得未捕获异常导致进程崩溃。
-- **边界外（不作为每个功能的强制 BLOCK，若功能确实需要再单独提高等级）**：
-  - 同 UID 恶意 FD 复用；
-  - 理论网络攻击（本地 UI 边界外）；
-  - 内核级全量 TOCTOU；
-  - 分布式一致性；
-  - 无限递归 rollback。
-
-### Review 子代理审查范围（owner-trusted 单机单用户本地 UI）
-
-Review 子代理按本项目 **owner-trusted、单机单用户本地 UI** 威胁模型审查，聚焦：
-
-- **功能正确性**：声明行为是否真实实现、可复现缺陷是否成立；
-- **强制基线**：上文「强制基线（必须阻断）」六项仍必须阻断——workspace 越界、凭据泄漏、
-  明显输入/路径错误、普通并发数据丢失、未授权破坏性写入、错误输入崩溃；
-- **可复现缺陷**：判 BLOCK 必须有可复现触发条件与证据，不凭理论可能性判 BLOCK。
-
-**边界外理论问题不默认 BLOCK**：理论网络攻击、同 UID 恶意竞争、内核级全量 TOCTOU、
-分布式一致性等边界外项，不作为每个功能的默认 BLOCK；若某功能确实需要更高安全等级，
-须在目标判据中单独声明并单独评审。
-
-**不得削弱强制基线**：即便按 owner-trusted 本地 UI 模型审查，workspace 越界、凭据泄漏、
-明显输入错误、普通本地并发丢失、未授权破坏性写入等基线仍必须阻断。
-
-### 并发模型：单用户本地多进程
-
-- 要求**有限本地锁 / CAS**和正常数据完整性；
-- **不要求**分布式系统语义（如分布式事务、线性一致性、Paxos/Raft）。
-
-### `@att/` 路径语法：明确受限
-
-- `@att/` 采取**明确受限语法**，仅用于引用附件/资源；
-- 已知限制必须记录在相关目标或长期记忆中；
-- **不无限扩张 regex 边界**——每新增一种 `@att/` 变体需单独评估并记录。
-
-### 共享基础设施优先
-
-- 共享事务 / 错误处理与 REST schema middleware 优先于各功能重复修复；
-- 新增功能应先复用现有中间件，再考虑局部补丁。
-
-## Subagent Architecture & Communication Guidelines
-
-### 1. 主管主动风险预警原则（First-time Risk Confirmation）
-
-- **禁止被动等待负责人提醒**：主管在分析需求、设计方案或评估实现时，一旦发现设计可能引发潜在副作用（如：配置缺失导致子代理失去控制、环境混淆、无法停轮、状态滞留、无障碍违背等），**必须第一时间主动向负责人预警并提出建议方案进行确认**，严禁知情不报或等到负责人排查出异常时才被动响应。
-
-### 2. Persona 与框架协同纪律双层解耦原则（Persona vs Framework Discipline）
-
-- **职责切分**：
-  - **Persona / Preset（管角色与专业风格）**：定义子代理的专业能力、思维方式与回答风格（如：代码审查专家、测试工程师、极简辅助等），允许用户或主管任意切换与自定义安装。
-  - **Framework Discipline（管看板协同纪律与底线契约）**：定义子代理在 dsh-graph 体系内的动作约束与状态报告机制（如：每动作通过 `graph_report_status` 更新 `status_line`；开工迁 `in_progress`，完工迁 `review`，遇阻迁 `blocked`；绝不自行迁 `delivered`）。
-- **底线铁律**：
-  - **框架协同纪律属于平台底线约束，绝不能仅写在特定 Persona 内**！
-  - 无论子代理切换至何种 Persona、无论是否为极简模式，执行派发的 prompt 模板中**必须无条件内嵌框架协同纪律段**，确保任何子代理都严格遵守看板流程、实时汇报进展、遵守 Human Gate 停轮审核。
-  - **极简模式（minimal / graph-minimal）适配**：
-    - 极简模式通过物理工具白名单过滤（`toolFilter: { allow: ["bash", "edit", "read", "write", "graph_report_status", "graph_transition"] }`）实现轻量受控；
-    - 该 6 项基础工具集完全覆盖了框架协同纪律所需的全部接口，保证极简子代理既不被高级工具误导，又能完整履行看板汇报与状态流转职责。
-
-### 3. 记忆分级决策铁律（Memory Scope Classification Discipline）
-
-- **默认按需法则（Default to On-demand）**：
-  - 一切日常工作总结、技术经验、架构决策、Bug 复盘，**100% 默认记入 `scope: "on_demand"`**；
-  - 按需记忆平时不注入系统 Prompt，不消耗 token，仅在主动检索（recall）或用户在 Web 面板查看时调取；
-  - 严禁 Agent 凭感觉或主观认为“很重要”就自发记为常驻记忆。
-- **常驻特权法则（Standing Privileges）**：
-  - **仅当满足以下任一条件时**，才允许使用 `scope: "standing"`：
-    1. **人类明确钦定**：人类负责人明确要求“将此设为常驻记忆/铁律/必须时刻遵守”；
-    2. **最高安全与环境隔离红线**：涉及当前工作区目录限制、物理沙盒隔离范围或绝对不可违背的凭据禁令；
-  - **硬上限契约**：常驻记忆单条字数硬上限严格为 **≤ 200 字符**，超过直接拒绝写入，彻底消除隐式截断失真。
+- **主管工作指南**：`dsh-graph-host/supervisor-guide.zh.md`（skill `dsh-graph-supervisor`）——
+  目标生命周期、判据门禁、人工 gate、执行派发、复核纪律、记忆分级。
+- **长期记忆索引**：`.dsh-graph/memory/long-term/INDEX.md`——架构模式、历史教训、环境事实。
+- **Worktree 隔离规范**：`executor-worktree-isolation` 记忆条目——隔离级别、快速通道、清理验收。
+- **Review 边界**：`review-boundary-local-dev` 记忆条目——威胁模型、强制基线、PASS/BLOCK/UNVERIFIED。

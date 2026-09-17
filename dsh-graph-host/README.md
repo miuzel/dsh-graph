@@ -30,17 +30,21 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
-> ### 🚀 v0.11.0 重要变化：Windows 原生由「不可用」变为「已支持」
+> ### 🚀 v0.11.1 新功能
 >
-> - **Windows 原生（此前完全不可用 → 现已支持）**：v0.10.0 及更早在 Windows 上会**模块加载即崩溃**（`core/ops.js` 具名导入 `node:constants` 的 `O_DIRECTORY`，Windows 无此导出），且安装时必报 peer 依赖告警。v0.11.0 已修复并在**原生 Windows（win32/x64）真机复验通过**。
-> - **macOS 新纳入验证矩阵**：与 Windows / Linux 使用**同一安装包（sha256 一致）**真机通过。
-> - **升级建议**：Windows 与 macOS 用户请升级到 v0.11.0。
+> - **backlog 卡片快速排期**：目标弹窗标题区新增「📅 排期」按钮（与「⏸ 暂缓」对应），一键将 backlog 目标排入活跃版本或转为独立目标。
+> - **共享卡转换工具**：新增 `graph_convert_card_to_shared` / `graph_convert_card_to_owned` 工具。
+> - **抽屉层级修复**：版本管理抽屉与上下文卡片抽屉在 Safari 中不再被 DSH 默认 UI 遮挡。
+> - **类型切换即时刷新**：backlog 卡片切换 goal 类型后看板立即更新，无需 F5。
+> - **拖拽到折叠泳道**：卡片可拖拽到已折叠的版本或 backlog 泳道，自动展开并高亮。
+> - **派发上下文去重**：brief/directive 内容重复时自动去重；卡片预算诊断可追踪超预算来源。
+> - **graph_resolve_accept 修复**：`in_progress` 状态下调用自动补迁移；`blocked`/`delivered` 等无映射状态明确报错。
 >
-> **DSH 版本兼容性**：本版本（v0.11.0）**已完整验证并支持 DeepSeek Harness `v0.1.5-rc.2`**——隔离实例（Web GUI + 看板 + 工具 + REST）与中英双语演示录制均在 `v0.1.5-rc.2` 上实测通过；`0.1.5-rc.2` 也是 v0.11.0 的**推荐宿主版本**。同时兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上版本（提示词/工具契约向后兼容）。
+> **DSH 版本兼容性**：本版本（v0.11.1）**已完整验证并支持 DeepSeek Harness `v0.1.5-rc.2`**；兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上版本。
 >
-> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证。** 此前 Windows 不可用的两类问题（① 平台代码使用 POSIX 专用文件锁常量：目录作为 fd、`O_DIRECTORY`、`O_NOFOLLOW`；② 宿主核心包同时出现在 `dependencies` 与 `peerDependencies`）已在**本版本**修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过（同一安装包，三平台指纹一致）。
+> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证。**
 >
-> **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下——这两者在 macOS 上本身是软链），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
+> **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 >
 > 已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -156,17 +160,21 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **Dependency Note**: Core packages provided by the DSH host (`@deepseek-ai/cordis` ^4.0.2, `@deepseek-ai/schemastery` ^3.18.2, `@deepseek-ai/dsh-settings` ^0.1.5-rc.2) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention), provided directly by the host runtime without peer dependency warnings during installation; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 >
-> ### 🚀 What's changed in v0.11.0: native Windows went from "unusable" to "supported"
+> ### 🚀 What's new in v0.11.1
 >
-> - **Native Windows (previously unusable → now supported)**: v0.10.0 and earlier **crashed at module load** on Windows (`core/ops.js` used a named import of `node:constants`' `O_DIRECTORY`, which Windows does not export) and always reported missing peer dependencies at install time. Fixed in v0.11.0 and re-verified on a **real Windows (win32/x64) machine**.
-> - **macOS added to the verification matrix**: same artifact as Windows / Linux (identical sha256), verified on a real Mac.
-> - **Upgrade advice**: Windows and macOS users should upgrade to v0.11.0.
+> - **Quick schedule for backlog cards**: A "📅 Schedule" button in the goal modal title area (corresponding to the "⏸ Postpone" button) lets you schedule a backlog goal into an active version or convert it to a standalone goal with one click.
+> - **Shared card conversion tools**: New `graph_convert_card_to_shared` / `graph_convert_card_to_owned` tools.
+> - **Drawer z-index fix**: Version management drawer and context card drawer are no longer obscured by the DSH default UI in Safari (React Portal to body layer + z-index boost).
+> - **Type change instant refresh**: Changing a backlog card's goal type updates the board immediately without F5.
+> - **Drag to collapsed lanes**: Cards can be dragged onto collapsed version or backlog lanes, auto-expanding with highlight.
+> - **Dispatch context dedup**: Duplicate brief/directive content is automatically deduplicated; card budget diagnostics track over-budget sources.
+> - **graph_resolve_accept fix**: Calling on `in_progress` auto-completes the migration; `blocked`/`delivered` and other unmapped states return clear errors (including force channel).
 >
-> **DSH version compatibility**: This release (v0.11.0) is **fully verified against and supports DeepSeek Harness `v0.1.5-rc.2`** — the isolated instance (Web GUI + kanban + tools + REST) and the bilingual demo recordings were all exercised on `v0.1.5-rc.2`, which is the **recommended host version** for v0.11.0. It also works on the `0.1.5` series and on `0.1.2-alpha.x` and later (prompt/tool contracts are backward compatible).
+> **DSH version compatibility**: This release (v0.11.1) is **fully verified against and supports DeepSeek Harness `v0.1.5-rc.2`**; it also works on the `0.1.5` series and on `0.1.2-alpha.x` and later.
 >
-> **Platform scope**: **verified on Linux (WSL2), native Windows, and macOS.** The two problems that previously made Windows unusable — (1) POSIX-only file-lock constants (directory-as-fd, `O_DIRECTORY`, `O_NOFOLLOW`); (2) host core packages declared in both `dependencies` and `peerDependencies` — were fixed in this release and re-verified on real Windows (win32/x64) and macOS (darwin/arm64) machines, all three platforms using the same artifact (identical sha256).
+> **Platform scope**: **verified on Linux (WSL2), native Windows, and macOS.**
 >
-> **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`, which are symlinks on macOS) is rejected with `graph root symlink is not allowed`. Paths derived from `process.cwd()` are unaffected (Node returns the physical path), but using a real path is recommended either way (tracked for a follow-up release).
+> **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`. Paths derived from `process.cwd()` are unaffected.
 >
 > Official releases are distributed via npm and the dsh-market ecosystem.
 

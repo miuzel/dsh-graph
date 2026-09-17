@@ -9,6 +9,7 @@ window.__ModuleLoader__.load({
   id: "dsh-graph",
   factory(require) {
     const React = require("react");
+    const ReactDOM = require("react-dom");
     const h = React.createElement;
     // g-270：安全获取 DSH 官方 MarkdownText 组件（若缺失则优雅降级为内置解析器）
     let MarkdownText = null;
@@ -254,6 +255,16 @@ window.__ModuleLoader__.load({
       'goal.postponeSuccess': '✅ 已暂缓',
       'goal.postponeSuccessMsg': '✅ 目标已暂缓并移回 backlog',
       'goal.postponeFail': '⚠️ 暂缓失败：',
+      // g-306：backlog 卡片快速排期入口
+      'goal.schedule': '📅 排期',
+      'goal.scheduleTooltip': '将目标排入活跃版本',
+      'goal.scheduleNoVersion': '暂无活跃版本',
+      'goal.scheduleSuccess': '✅ 已排期到 {version}',
+      'goal.scheduleFail': '⚠️ 排期失败：',
+      'goal.scheduleAlready': '已在该版本中',
+      'goal.scheduleSelectVersion': '选择目标版本',
+      'goal.scheduleCancel': '取消',
+      'goal.scheduleConfirm': '确认排期',
       // g-287：历史遗留「非 backlog 草稿」转入规划入口（backlog 卡不显示，其正确路径是排期）
       'goal.planEntry': '🧭 转入规划',
       'goal.planEntryTooltip': '将该草稿目标转入规划（状态变为「规划中」，可开始收集/就绪/派发执行）',
@@ -1231,6 +1242,16 @@ window.__ModuleLoader__.load({
       'goal.postponeSuccess': '✅ Postponed',
       'goal.postponeSuccessMsg': '✅ Goal postponed and moved back to backlog',
       'goal.postponeFail': '⚠️ Postpone failed: ',
+      // g-306: backlog card quick schedule entry
+      'goal.schedule': '📅 Schedule',
+      'goal.scheduleTooltip': 'Schedule goal into an active version',
+      'goal.scheduleNoVersion': 'No active versions',
+      'goal.scheduleSuccess': '✅ Scheduled to {version}',
+      'goal.scheduleFail': '⚠️ Schedule failed: ',
+      'goal.scheduleAlready': 'Already in this version',
+      'goal.scheduleSelectVersion': 'Select target version',
+      'goal.scheduleCancel': 'Cancel',
+      'goal.scheduleConfirm': 'Confirm schedule',
       // g-287: entry to move a legacy non-backlog draft goal into planning
       // (not shown for backlog cards — their correct path is scheduling)
       'goal.planEntry': '🧭 Move to planning',
@@ -2034,7 +2055,7 @@ window.__ModuleLoader__.load({
       }, []);
     }
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
-    const PLUGIN_VERSION = "0.11.0";
+    const PLUGIN_VERSION = "0.11.1";
 
     // g-230：阶段列定义——label 改为函数式动态翻译（每次渲染时读取当前语言）
     const STAGES = [
@@ -2229,6 +2250,9 @@ window.__ModuleLoader__.load({
       .dg-btn-accept:hover { background: rgba(58,166,117,.30); border-color: rgba(58,166,117,.55); }
       .dg-btn-accept:active { background: rgba(58,166,117,.42); }
       .dg-btn-accept:disabled { opacity: 0.45; cursor: default; }
+      /* g-306：排期版本选择器项 hover */
+      .dg-schedule-version-item { transition: background .12s ease; border-radius: 3px; }
+      .dg-schedule-version-item:hover { background: rgba(76,141,255,.18); }
       /* 统一弹窗与抽屉右上角关闭按钮 */
       .dg-close {
         transition: opacity .12s ease, background .12s ease, transform .12s ease;
@@ -2626,12 +2650,12 @@ window.__ModuleLoader__.load({
       },
       overlay: {
         position: "fixed", inset: 0, background: "var(--dsw-alias-bg-mask-1, rgba(0,0,0,.55))",
-        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20000,
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 99998,
       },
       drawer: {
         position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
         boxSizing: "border-box",
-        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 99999,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px 90px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
@@ -2640,7 +2664,7 @@ window.__ModuleLoader__.load({
       drawerLeft: {
         position: "fixed", top: 0, left: 0, height: "100vh", width: 380, maxWidth: "85vw",
         boxSizing: "border-box",
-        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
+        background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 99999,
         boxShadow: "4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px 90px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
@@ -2650,7 +2674,7 @@ window.__ModuleLoader__.load({
       modal: {
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", borderRadius: 10,
         maxWidth: 720, width: "90%", maxHeight: "80vh", overflowY: "auto",
-        padding: "16px 20px", fontSize: 13, lineHeight: 1.6, position: "relative", zIndex: 20002,
+        padding: "16px 20px", fontSize: 13, lineHeight: 1.6, position: "relative", zIndex: 100000,
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
@@ -4458,6 +4482,204 @@ window.__ModuleLoader__.load({
         }, "#" + tag)));
     }
 
+    // g-294：可交互类型 badge——点击展开内联类型切换器，直接在看板卡片上修改 goal.type。
+    // 不引入类型筛选器；只做切换+API 调用+onTypeChanged 回调。
+    function TypeBadgeWithSelector(props) {
+      const { goalId, type, onTypeChanged } = props;
+      const [open, setOpen] = React.useState(false);
+      const [loading, setLoading] = React.useState(false);
+      const [error, setError] = React.useState(null);
+      const wrapRef = React.useRef(null);
+      const aType = normalizeGoalType(type);
+
+      React.useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => {
+          if (wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setError(null); }
+        };
+        document.addEventListener("mousedown", onDoc);
+        return () => document.removeEventListener("mousedown", onDoc);
+      }, [open]);
+
+      const switchType = async (t) => {
+        if (t === aType || loading) return;
+        setLoading(true); setError(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/set-goal-type"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, type: t }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setOpen(false);
+            onTypeChanged?.();
+          } else {
+            setError(data.error || "failed");
+          }
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const badge = h("span", {
+        key: "type-badge",
+        style: {
+          display: "inline-block", width: 16, height: 16, lineHeight: "16px",
+          textAlign: "center", borderRadius: 3, fontSize: 10, fontWeight: 700,
+          background: goalTypeColor(aType), color: "#fff",
+          verticalAlign: "middle", marginRight: 2, cursor: "pointer", flexShrink: 0,
+        },
+        title: dgT("goal.typeLabel", { type: GOAL_TYPE_LABELS[aType] ?? aType }),
+        onClick: (e) => { e.stopPropagation(); setOpen(!open); setError(null); },
+      }, GOAL_TYPE_ABBREV[aType] ?? aType[0]?.toUpperCase());
+
+      if (!open) return badge;
+
+      return h("span", { ref: wrapRef, style: { display: "inline-flex", alignItems: "center", gap: 2, marginRight: 2, verticalAlign: "middle", flexShrink: 0 } },
+        badge,
+        ...GOAL_TYPES.map((t) =>
+          h("button", {
+            key: t,
+            style: {
+              width: 16, height: 16, padding: 0, display: "inline-flex",
+              alignItems: "center", justifyContent: "center", cursor: loading ? "wait" : "pointer",
+              fontSize: 10, fontWeight: 700, lineHeight: 1, borderRadius: 3,
+              border: "1px solid " + (t === aType ? goalTypeColor(t) : goalTypeColor(t) + "66"),
+              background: t === aType ? goalTypeColor(t) : goalTypeColor(t) + "18",
+              color: t === aType ? "#fff" : goalTypeColor(t),
+              opacity: loading ? 0.6 : 1,
+              flexShrink: 0,
+            },
+            title: GOAL_TYPE_LABELS[t],
+            onClick: (e) => { e.stopPropagation(); switchType(t); },
+          }, GOAL_TYPE_ABBREV[t])),
+        h("button", {
+          style: {
+            width: 16, height: 16, padding: 0, display: "inline-flex",
+            alignItems: "center", justifyContent: "center", cursor: "pointer",
+            fontSize: 9, lineHeight: 1, borderRadius: 3,
+            border: "1px solid rgba(128,128,128,.35)", background: "rgba(128,128,128,.15)",
+            color: "inherit", opacity: 0.7, flexShrink: 0,
+          },
+          onClick: (e) => { e.stopPropagation(); setOpen(false); setError(null); },
+        }, "✕"),
+        error ? h("span", { style: { fontSize: 9, color: "var(--dsw-alias-state-error-primary, #d66)", marginLeft: 2 } }, "⚠") : null
+      );
+    }
+
+    // g-306：排期版本选择器组件——内联下拉，支持 active 版本 + 独立目标选项。
+    // 供 goal-modal.js 的 backlog 目标标题区复用（card.js 先于 goal-modal.js 拼接）。
+    function VersionSelectorButton(props) {
+      const { goalId, goalVersion, activeVersions, onScheduled } = props;
+      const [open, setOpen] = React.useState(false);
+      const [loading, setLoading] = React.useState(false);
+      const [error, setError] = React.useState(null);
+      const wrapRef = React.useRef(null);
+
+      // 过滤掉目标当前已归属的版本（避免重复排期）；独立目标始终可选
+      const versionCandidates = (activeVersions ?? []).filter((v) => v.slug !== goalVersion);
+      const canSelectStandalone = true; // 始终允许选择独立目标
+
+      React.useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => {
+          if (wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setError(null); }
+        };
+        document.addEventListener("mousedown", onDoc);
+        return () => document.removeEventListener("mousedown", onDoc);
+      }, [open]);
+
+      const doSchedule = async (to, version) => {
+        if (loading) return;
+        setLoading(true); setError(null);
+        try {
+          const body = { goal: goalId, to };
+          if (version) body.version = version;
+          const moveR = await fetch(graphUrl("/api/dsh-graph/move-goal"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const moveData = await moveR.json();
+          if (!moveData.ok) {
+            setError(moveData.error || dgT("drag.unknownError"));
+            setLoading(false);
+            return;
+          }
+          // moveGoal 已自动处理 draft→planning 转换，无需显式 transition
+          const label = to === "standalone" ? dgT("lane.standalone") : version;
+          showToast(dgT("goal.scheduleSuccess", { version: label }));
+          setOpen(false);
+          onScheduled?.();
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const hasAnyOption = versionCandidates.length > 0 || canSelectStandalone;
+
+      return h("span", {
+        ref: wrapRef,
+        style: { display: "inline-block", position: "relative", verticalAlign: "middle" },
+      },
+        h("button", {
+          className: "dg-btn",
+          style: {
+            ...S.btn, fontSize: 11, padding: "1px 6px", marginLeft: 2,
+            background: "rgba(76,141,255,.15)",
+          },
+          title: dgT("goal.scheduleTooltip"),
+          disabled: loading,
+          onClick: (e) => { e.stopPropagation(); setOpen(!open); setError(null); },
+        }, dgT("goal.schedule")),
+        open ? h("div", {
+          style: {
+            position: "absolute", top: "100%", left: 0, marginTop: 4, zIndex: 9999,
+            background: "var(--dsw-alias-bg-base, #1e1e1e)", border: "1px solid rgba(128,128,128,.4)",
+            borderRadius: 6, padding: "6px 0", minWidth: 160, maxWidth: 240,
+            boxShadow: "0 4px 16px rgba(0,0,0,.45)",
+          },
+          onClick: (e) => e.stopPropagation(),
+        },
+          h("div", {
+            style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 4px", borderBottom: "1px solid rgba(128,128,128,.2)" },
+          }, dgT("goal.scheduleSelectVersion")),
+          // 独立目标选项
+          canSelectStandalone
+            ? h("div", {
+                style: { padding: "5px 10px", cursor: "pointer", fontSize: 12 },
+                className: "dg-schedule-version-item",
+                onClick: () => doSchedule("standalone"),
+              }, `📌 ${dgT("lane.standalone")}`)
+            : null,
+          // active 版本选项
+          ...versionCandidates.map((v) =>
+            h("div", {
+              key: v.slug,
+              style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+              className: "dg-schedule-version-item",
+              onClick: () => doSchedule("version", v.slug),
+            }, `🏷️ ${v.name || v.slug}`)),
+          !hasAnyOption
+            ? h("div", { style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 } }, dgT("goal.scheduleAlready"))
+            : null,
+          error ? h("div", {
+            style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)", padding: "4px 10px 2px", borderTop: "1px solid rgba(128,128,128,.2)" },
+          }, "⚠️ " + error) : null,
+          h("div", {
+            style: { padding: "4px 10px 2px", borderTop: "1px solid rgba(128,128,128,.2)" },
+          },
+            h("button", {
+              className: "dg-btn",
+              style: { ...S.btn, fontSize: 10, padding: "1px 6px" },
+              onClick: (e) => { e.stopPropagation(); setOpen(false); setError(null); },
+            }, dgT("goal.scheduleCancel"))))
+        : null);
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
@@ -4467,7 +4689,8 @@ window.__ModuleLoader__.load({
     // expanded 默认值由 KanbanView 决定（delivered/blocked 默认 false，其余默认 true），
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag) {
+    // g-294：onTypeChanged 参数——类型切换后回调（触发看板数据刷新）
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag, onTypeChanged) {
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -4512,18 +4735,8 @@ window.__ModuleLoader__.load({
          },
        }) : null;
        const badges = [];
-      // g-158：类型标记 badge（F/B/T/I + tooltip）——标题左侧，颜色与左栏/弹窗同源
-      const aType = normalizeGoalType(g.type);
-      const tBadge = h("span", {
-        key: "type-badge",
-        style: {
-          display: "inline-block", width: 16, height: 16, lineHeight: "16px",
-          textAlign: "center", borderRadius: 3, fontSize: 10, fontWeight: 700,
-          background: goalTypeColor(aType), color: "#fff",
-          verticalAlign: "middle", marginRight: 2,
-        },
-        title: GOAL_TYPE_LABELS[aType] ?? aType,
-      }, GOAL_TYPE_ABBREV[aType] ?? aType[0]?.toUpperCase());
+      // g-158/g-294：可交互类型标记 badge（点击展开内联类型切换器）——标题左侧，颜色与左栏/弹窗同源
+      const tBadge = h(TypeBadgeWithSelector, { goalId: g.id, type: g.type, onTypeChanged });
       if (g.reviewer === "human") badges.push("👤");
       if (g.reviewer === "ai") badges.push(dgT('review.aiBadge'));
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);
@@ -7572,6 +7785,15 @@ window.__ModuleLoader__.load({
                     onClick: () => { setPostponeConfirm(true); setPostponeNote(null); },
                   }, dgT("goal.postpone")))
               : null,
+            // g-306：backlog 目标「排期」按钮（与暂缓按钮位置对应），点击弹出版本选择器
+            isBacklogGoal && !isArchived
+              ? h(VersionSelectorButton, {
+                  goalId: props.id,
+                  goalVersion: state.data?.meta?.version ?? null,
+                  activeVersions: props.activeVersions ?? [],
+                  onScheduled: () => { load(); props.onArchived?.(); },
+                })
+              : null,
             // g-140: 删除按钮（仅已归档目标显示，二次确认）
             isArchived
               ? (deleteConfirm
@@ -8964,6 +9186,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
       const modalGoalOpenTsRef = React.useRef(null); // 弹窗打开时目标的 updated_at
       const forceReplayRef = React.useRef(null); // {goalId, openTs} 待关闭后强制补播
       const [polishGoal, setPolishGoal] = React.useState(null); // g-168：PM 润色中的看板目标
+      const forceFreshRef = React.useRef(false); // g-294：目标类型变更后跳过 retained 对账，强制拉取最新明细
       const [drawerCard, setDrawerCard] = React.useState(null); // {goalId, cardId}
       // g-219：删除卡片信号（事件结果驱动，弹窗局部移除用）——{goalId, cardId, ts}
       const [deletedCardSignal, setDeletedCardSignal] = React.useState(null);
@@ -9557,13 +9780,25 @@ function reconcileRetainedBoardState(data, retained, opts) {
         if (retained) setState({ loading: false, data: retained, error: null });
         else setState({ loading: true, data: null, error: null });
         const params = "?lazy=1" + (showArchived ? "&includeArchived=1" : "");
+        // g-294: forceFresh 时跳过 If-None-Match，强制200 响应走 reconcile 对账路径
+        //（lazy payload 下 type-only 变更不改 generated_at/ETag，304 分支直接复用 retained
+        //  绕过 forceFreshRef 检查）；同步捕获并清除 flag 防并发干扰。
+        const isForceFresh = forceFreshRef.current;
+        if (isForceFresh) forceFreshRef.current = false;
         const headers = {};
         const prior = currentEtagRef.current.get(dimension);
-        if (prior) headers["If-None-Match"] = prior;
+        if (prior && !isForceFresh) headers["If-None-Match"] = prior;
         fetch(graphUrlForActive("/api/dsh-graph" + params, {}, activeWs), { headers })
           .then(async (r) => {
             if (boardIdentityRef.current !== requestIdentity || requestSeqRef.current !== requestSeq) return;
             if (r.status === 304) {
+              // g-294: 304 安全兜底——理论上 forceFresh 已跳过 If-None-Match 不会走这里，
+              // 但并发场景下仍有窗口；此时强制失效 ETag 并重试一次。
+              if (isForceFresh) {
+                currentEtagRef.current.delete(dimension);
+                load();
+                return;
+              }
               const retainedData = boardDataRef.current.get(dimension);
               if (!retainedData) {
                 currentEtagRef.current.delete(dimension);
@@ -9582,7 +9817,11 @@ function reconcileRetainedBoardState(data, retained, opts) {
             // g-290: 改由共享纯函数对账——计数以服务端为准；仅当载荷确为 lazy 且计数与 retained
             // 明细长度一致时才沿用明细（保住「展开态刷新不闪空」），计数不一致一律丢弃旧明细并
             // 复位已加载标记，立即交由既有懒加载路径补拉（绝不残留幽灵卡片）。
-            const retainResult = reconcileRetainedBoardState(data, retained, {
+            // g-294: 目标类型变更后 isForceFresh=true，跳过 retained 对账直接拉取最新明细，
+            // 避免 lazy 载荷下 backlog_count 未变导致旧明细（含旧 type）被沿用。
+            // 空对象使 canRetain=false（无 retainedBacklog），自然触发 refetchBacklog/Version。
+            const staleData = isForceFresh ? {} : retained;
+            const retainResult = reconcileRetainedBoardState(data, staleData, {
               collapsedLanes: collapsedLanes,
               openReleased: openReleased,
             });
@@ -10052,8 +10291,13 @@ function reconcileRetainedBoardState(data, retained, opts) {
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
         const baseBg = "rgba(255,255,255,.03)";
         const stageBg = (stageIdx) => stageIdx % 2 === 0 ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)";
-        // g-162: 折叠态——显示摘要行
+        // g-162: 折叠态——显示摘要行（g-288: 支持拖放到折叠泳道）
         if (isCollapsed) {
+          // g-288: 判断拖放目标——仅高亮不同泳道
+          const anyDrag = drag !== null;
+          const isOverThisCollapsed = anyDrag && drag.overLaneKey === key;
+          const isFromThisLane = anyDrag && drag.laneKey === key;
+          const canDropHere = anyDrag && !isFromThisLane;
           return [
             h("div", {
               key: key + "-label",
@@ -10082,9 +10326,26 @@ function reconcileRetainedBoardState(data, retained, opts) {
               }, "＋")),
             h("div", {
               key: key + "-collapsed-summary",
-              style: { gridColumn: "2 / -1", ...S.cell, background: baseBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
+              style: { gridColumn: "2 / -1", ...S.cell, background: isOverThisCollapsed && canDropHere ? "rgba(76,141,255,.10)" : baseBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: dgT('lane.expandTooltip'),
+              className: isOverThisCollapsed && canDropHere ? "dg-cell-drop-active" : "",
               onClick: () => toggleLaneCollapse(key, false),
+              // g-288: 拖放到折叠泳道——高亮并执行移动
+              onDragOver: canDropHere ? (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" } : d);
+              } : undefined,
+              onDrop: canDropHere ? (e) => {
+                e.preventDefault();
+                if (!dropCommitted.current) {
+                  dropCommitted.current = true;
+                  setDrag(null);
+                  // g-288: 先展开泳道，再执行移动
+                  toggleLaneCollapse(key, false);
+                  commitCrossLaneMove(drag.goalId, key);
+                }
+              } : undefined,
             }, dgT('lane.collapsedSummary', { count: goals.length })),
           ];
         }
@@ -10283,6 +10544,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
                     dropCommitted.current = false;
                   },
                 },
+                () => { forceFreshRef.current = true; load(); },
               );
             }),
           );
@@ -10346,8 +10608,13 @@ function reconcileRetainedBoardState(data, retained, opts) {
         const backlogBg = "rgba(0,0,0,.12)";
         // g-258: 优先使用实际已加载条数，未展开懒加载时回退 backlog_count 计数
         const count = (goals && goals.length > 0) ? goals.length : (b?.backlog_count ?? 0);
-        // g-162: 折叠态——显示摘要行
+        // g-162: 折叠态——显示摘要行（g-288: 支持拖放到折叠泳道）
         if (isCollapsed) {
+          // g-288: 判断拖放目标——仅高亮不同泳道
+          const anyDrag = drag !== null;
+          const isOverThisCollapsed = anyDrag && drag.overLaneKey === key;
+          const isFromThisLane = anyDrag && drag.laneKey === key;
+          const canDropHere = anyDrag && !isFromThisLane;
           return [
             h("div", {
               key: key + "-label",
@@ -10370,9 +10637,26 @@ function reconcileRetainedBoardState(data, retained, opts) {
               }, "＋")),
             h("div", {
               key: key + "-collapsed-summary",
-              style: { gridColumn: "2 / -1", ...S.cell, background: backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
+              style: { gridColumn: "2 / -1", ...S.cell, background: isOverThisCollapsed && canDropHere ? "rgba(76,141,255,.10)" : backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: dgT('lane.expandTooltip'),
+              className: isOverThisCollapsed && canDropHere ? "dg-cell-drop-active" : "",
               onClick: () => toggleLaneCollapse(key, false),
+              // g-288: 拖放到折叠泳道——高亮并执行移动
+              onDragOver: canDropHere ? (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                setDrag((d) => d ? { ...d, overGoalId: null, overStageKey: "describe", overLaneKey: key, overHalf: "after" } : d);
+              } : undefined,
+              onDrop: canDropHere ? (e) => {
+                e.preventDefault();
+                if (!dropCommitted.current) {
+                  dropCommitted.current = true;
+                  setDrag(null);
+                  // g-288: 先展开泳道，再执行移动
+                  toggleLaneCollapse(key, false);
+                  commitCrossLaneMove(drag.goalId, key);
+                }
+              } : undefined,
             }, dgT('lane.collapsedSummary', { count })),
           ];
         }
@@ -10472,6 +10756,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
                     dropCommitted.current = false;
                   },
                 },
+                () => { forceFreshRef.current = true; load(); },
               );
             }),
           ),
@@ -11103,7 +11388,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
               onPmFinished: () => setPolishGoal(null),
               goalStatus,
               supervisorSession: b.supervisorSession ?? null,
-              onRenamed: () => load(),
+              onRenamed: () => { forceFreshRef.current = true; load(); },
               onArchived: () => load(),
               onTagsChanged: () => load(),
               onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),
@@ -11121,10 +11406,11 @@ function reconcileRetainedBoardState(data, retained, opts) {
                 });
                 setHiddenVersionSlugs(hiddenVersionSlugs.filter((s) => s !== slug));
               },
+              activeVersions: active, // g-306：活跃版本列表（供排期选择器使用）
             })
           : null,
         showVersionDrawer
-          ? h(VersionDrawer, {
+          ? ReactDOM.createPortal(h(VersionDrawer, {
               // g-243：显式稳定 key。本看板根节点的 children 列表里混有带 key 的元素
               // （...releasedRows 的 rel-<slug> 行）与嵌套数组；已发布版本泳道增删会改变
               // 这些兄弟的数量，未带 key 的尾部兄弟（本抽屉）会因按位置/索引匹配失败被
@@ -11172,10 +11458,10 @@ function reconcileRetainedBoardState(data, retained, opts) {
                 });
                 loadVersionDetail(v.slug);
               },
-            })
+            }), document.body)
           : null,
         drawerCard
-          ? h(CardDrawer, { // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建（同 g-243）
+          ? ReactDOM.createPortal(h(CardDrawer, { // g-256：稳定 key，防 releasedRows 兄弟增删时按索引重建（同 g-243）
                             key: "dg-card-drawer",
                             goalId: drawerCard.goalId, cardId: drawerCard.cardId,
                             cardData: drawerCard.cardData,
@@ -11210,7 +11496,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
                                 load();
                               }
                               setDrawerCard(null);
-                            } })
+                            } }), document.body)
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal

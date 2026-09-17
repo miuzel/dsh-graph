@@ -3430,12 +3430,15 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
                 : `（无：context_cards 为空或没有 filled/reviewed 卡片，无需复用，直接按目标描述/判据执行）`,
         ].join("\n");
     }
-    const maxCardChars = typeof opts?.maxCardChars === "number" && opts.maxCardChars > 0 ? opts.maxCardChars : 1200;
+    const maxCardChars = typeof opts?.maxCardChars === "number" && opts.maxCardChars > 0 ? opts.maxCardChars : 4096;
     const maxTotalChars = typeof opts?.maxTotalChars === "number" && opts.maxTotalChars > 0 ? opts.maxTotalChars : 4000;
     const maxFullCards = typeof opts?.maxFullCards === "number" && opts.maxFullCards > 0 ? opts.maxFullCards : 8;
     let accumulatedChars = 0;
     let inlinedCount = 0;
     let collapsedCount = 0;
+    const diagnosticsEnabled = opts?.diagnostics === true;
+    // g-296：per-card 诊断跟踪——bodyChars 用于正文预算比较，itemChars 用于总输出计量
+    const cardSizes = [];
     const items = [];
     for (let i = 0; i < cards.length; i++) {
         const c = cards[i];
@@ -3454,17 +3457,20 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
         const willExceedCount = inlinedCount >= maxFullCards;
         if (willExceedTotal || willExceedCount) {
             collapsedCount++;
-            items.push(isEn
+            const item = isEn
                 ? `- **${c.title}** (${meta}, ⚠️ body collapsed after exceeding the total card budget)\n` +
                     `  Summary: ${c.summary || "(no summary)"}\n` +
                     `  Exact path: ${exactPath} (read full content on demand, digest=${c.digest})${atts}`
                 : `- **${c.title}**（${meta}，⚠️ 已超出卡片总预算折叠正文）\n` +
                     `  摘要：${c.summary || "（无摘要）"}\n` +
-                    `  精确路径：${exactPath}（按需查阅全文，digest=${c.digest}）${atts}`);
+                    `  精确路径：${exactPath}（按需查阅全文，digest=${c.digest}）${atts}`;
+            items.push(item);
+            cardSizes.push({ id: c.id, title: c.title, bodyChars: 0, itemChars: item.length });
         }
         else {
             inlinedCount++;
             let bodyText = c.content;
+            const rawBodyLen = bodyText.length;
             if (bodyText.length > maxCardChars) {
                 bodyText = bodyText.slice(0, maxCardChars) +
                     (isEn
@@ -3475,9 +3481,11 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
             const body = bodyText
                 ? bodyText.split("\n").map((l) => `  ${l}`).join("\n")
                 : isEn ? "  (empty body)" : "  （正文为空）";
-            items.push(isEn
+            const item = isEn
                 ? `- **${c.title}** (${meta})\n${body}${atts}`
-                : `- **${c.title}**（${meta}）\n${body}${atts}`);
+                : `- **${c.title}**（${meta}）\n${body}${atts}`;
+            items.push(item);
+            cardSizes.push({ id: c.id, title: c.title, bodyChars: rawBodyLen, itemChars: item.length });
         }
     }
     const header = isEn
@@ -3488,7 +3496,52 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
             ? `\n\n> ⚠️ Card budget limit: ${inlinedCount} cards fully expanded; ${collapsedCount} cards exceeding the total budget collapsed to summary + exact path (read on demand; digest can be verified).`
             : `\n\n> ⚠️ 卡片总预算限制：已完整展开 ${inlinedCount} 张卡片，${collapsedCount} 张卡片超出总预算折叠为摘要+精确路径（按需读取，digest 可校验）。`
         : "";
-    return [header, "", items.join("\n\n")].join("\n") + footer;
+    // g-296：预算诊断——按最终返回串 JS.length 计量（所有分支均纳入占位模板）
+    const mainOutput = [header, "", items.join("\n\n")].join("\n") + footer;
+    let diagnosticsFooter = "";
+    if (diagnosticsEnabled) {
+        const headerChars = header.length;
+        const itemsStr = items.join("\n\n");
+        const itemsChars = itemsStr.length;
+        const footerChars = footer.length;
+        const overBudgetCards = cardSizes.filter((c) => c.bodyChars > maxCardChars);
+        const overCount = inlinedCount >= maxFullCards && collapsedCount > 0;
+        const baseLines = [];
+        for (const cs of cardSizes) {
+            const tag = cs.bodyChars > maxCardChars ? (isEn ? " ⚠️over" : " ⚠️超限") : "";
+            baseLines.push(isEn ? `>   ${cs.id} "${cs.title}": ${cs.bodyChars} body chars / ${cs.itemChars} total chars${tag}` : `>   ${cs.id}「${cs.title}」：正文 ${cs.bodyChars} 字符 / 合计 ${cs.itemChars} 字符${tag}`);
+        }
+        if (overBudgetCards.length > 0)
+            baseLines.push(isEn ? `> ⚠️ ${overBudgetCards.length} card(s) exceed per-card body budget (${maxCardChars} chars)` : `> ⚠️ ${overBudgetCards.length} 张卡片超出单卡正文预算（${maxCardChars} 字符）`);
+        if (overCount)
+            baseLines.push(isEn ? `> ⚠️ Exceeded max full cards count (${maxFullCards})` : `> ⚠️ 超出完整展开卡片数量上限（${maxFullCards}）`);
+        // 先构建不含 overTotal 的版本，检测是否超总预算
+        const fixedPlaceholder = "00000000";
+        const makeSummary = (lines) => {
+            const diagBody = lines.join("\n");
+            const tpl = isEn
+                ? `> [Budget diagnostics] output=${fixedPlaceholder} chars (header=${headerChars}, cards=${itemsChars}, footer=${footerChars}), limit=${maxTotalChars}`
+                : `> [预算诊断] 输出=${fixedPlaceholder} 字符（header=${headerChars}，cards=${itemsChars}，footer=${footerChars}），限额=${maxTotalChars}`;
+            return "\n\n" + tpl + "\n" + diagBody;
+        };
+        // 第一步：不含 overTotal，检查是否超总预算
+        const preFooter = makeSummary(baseLines);
+        const preTotal = mainOutput.length + preFooter.length;
+        if (preTotal > maxTotalChars) {
+            // 第二步：超总预算 → 将 overTotal 告警纳入 lines，重新构建 footer（占位符宽度不变）
+            const overLine = isEn
+                ? `> ⚠️ Total output exceeds budget (${preTotal} > ${maxTotalChars})`
+                : `> ⚠️ 总输出超出预算（${preTotal} > ${maxTotalChars}）`;
+            const fullLines = [...baseLines, overLine];
+            const fullFooter = makeSummary(fullLines);
+            const totalChars = mainOutput.length + fullFooter.length; // totalChars ≈ preTotal，差异 ≤ 8 位数字宽度波动
+            diagnosticsFooter = fullFooter.replace(fixedPlaceholder, String(totalChars).padStart(8, "0"));
+        }
+        else {
+            diagnosticsFooter = preFooter.replace(fixedPlaceholder, String(preTotal).padStart(8, "0"));
+        }
+    }
+    return mainOutput + diagnosticsFooter;
 }
 /** handoff 文件的正文模板（结构化可读指令，供新执行者阅读）。 */
 function handoffBody(h) {
@@ -6540,7 +6593,7 @@ export function requestAcceptReview(root, id, actor) {
     const file = findGoalFile(root, id);
     const doc = loadGoal(file);
     const status = String(doc.meta.status ?? "");
-    const allowed = ["draft", "planning", "collecting", "ready", "review"];
+    const allowed = ["draft", "planning", "collecting", "ready", "review", "in_progress"];
     if (!allowed.includes(status)) {
         throw new GraphError(`当前状态 ${status} 不允许接受操作`);
     }
@@ -6567,6 +6620,10 @@ export function resolveAccept(root, id, opts) {
     const doc = loadGoal(file);
     const status = String(doc.meta.status ?? "");
     if (opts.force) {
+        // force 绕过非 force 门槛（仅 in_progress/review），但仍校验映射六态
+        if (!ACCEPT_MAPPED_STATUSES.has(status)) {
+            throw new GraphError(`当前状态 ${status} 无 accept 映射（force 仅支持 ${[...ACCEPT_MAPPED_STATUSES].join("/")})`);
+        }
         if (opts.reason) {
             appendEvent(root, {
                 actor: opts.actor,
@@ -6575,7 +6632,6 @@ export function resolveAccept(root, id, opts) {
                 details: { note: `强制接受理由：${opts.reason}` },
             });
         }
-        // force 直接走 accept 分支
         applyAcceptMapping(root, id, status, opts.actor);
         if (status === "review")
             registerWorktreeCandidates(root, id, opts.actor);
@@ -6592,13 +6648,22 @@ export function resolveAccept(root, id, opts) {
         });
         return { ok: true };
     }
-    // verdict === "accept"
+    // verdict === "accept"（非 force）
+    // g-305：仅 in_progress（自动补迁移）和 review 允许 accept；
+    // 其他状态（blocked / delivered / draft / planning / collecting / ready）返回明确错误。
+    if (status !== "in_progress" && status !== "review") {
+        throw new GraphError(`当前状态 ${status} 不允许直接 accept——请先迁移到 review（或 in_progress 会自动补迁移）`);
+    }
     applyAcceptMapping(root, id, status, opts.actor);
     if (status === "review")
         registerWorktreeCandidates(root, id, opts.actor);
     return { ok: true };
 }
-/** 接受生效的阶段映射（内部复用） */
+/** 接受映射覆盖的六态（由 applyAcceptMapping 分支派生，单一真源）。 */
+const ACCEPT_MAPPED_STATUSES = new Set([
+    "draft", "planning", "collecting", "ready", "in_progress", "review",
+]);
+/** 接受生效的阶段映射（内部复用）。调用方必须先校验 status ∈ ACCEPT_MAPPED_STATUSES。 */
 function applyAcceptMapping(root, id, status, actor) {
     if (status === "draft" || status === "planning") {
         appendEvent(root, { actor, event: "description.confirmed", goal: id, details: {} });
@@ -6610,6 +6675,12 @@ function applyAcceptMapping(root, id, status, actor) {
     else if (status === "ready") {
         // 已在 ready，不再 transition，仅追加 criteria.confirmed
         appendEvent(root, { actor, event: "criteria.confirmed", goal: id, details: { actor: "human" } });
+    }
+    else if (status === "in_progress") {
+        // g-305：in_progress 自动补 in_progress→review 迁移，再执行 review→delivered
+        transition(root, id, "review", { actor });
+        transition(root, id, "delivered", { actor });
+        appendEvent(root, { actor, event: "review.passed", goal: id, details: {} });
     }
     else if (status === "review") {
         transition(root, id, "delivered", { actor });

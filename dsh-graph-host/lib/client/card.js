@@ -94,6 +94,204 @@
         }, "#" + tag)));
     }
 
+    // g-294：可交互类型 badge——点击展开内联类型切换器，直接在看板卡片上修改 goal.type。
+    // 不引入类型筛选器；只做切换+API 调用+onTypeChanged 回调。
+    function TypeBadgeWithSelector(props) {
+      const { goalId, type, onTypeChanged } = props;
+      const [open, setOpen] = React.useState(false);
+      const [loading, setLoading] = React.useState(false);
+      const [error, setError] = React.useState(null);
+      const wrapRef = React.useRef(null);
+      const aType = normalizeGoalType(type);
+
+      React.useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => {
+          if (wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setError(null); }
+        };
+        document.addEventListener("mousedown", onDoc);
+        return () => document.removeEventListener("mousedown", onDoc);
+      }, [open]);
+
+      const switchType = async (t) => {
+        if (t === aType || loading) return;
+        setLoading(true); setError(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/set-goal-type"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: goalId, type: t }),
+          });
+          const data = await r.json();
+          if (data.ok) {
+            setOpen(false);
+            onTypeChanged?.();
+          } else {
+            setError(data.error || "failed");
+          }
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const badge = h("span", {
+        key: "type-badge",
+        style: {
+          display: "inline-block", width: 16, height: 16, lineHeight: "16px",
+          textAlign: "center", borderRadius: 3, fontSize: 10, fontWeight: 700,
+          background: goalTypeColor(aType), color: "#fff",
+          verticalAlign: "middle", marginRight: 2, cursor: "pointer", flexShrink: 0,
+        },
+        title: dgT("goal.typeLabel", { type: GOAL_TYPE_LABELS[aType] ?? aType }),
+        onClick: (e) => { e.stopPropagation(); setOpen(!open); setError(null); },
+      }, GOAL_TYPE_ABBREV[aType] ?? aType[0]?.toUpperCase());
+
+      if (!open) return badge;
+
+      return h("span", { ref: wrapRef, style: { display: "inline-flex", alignItems: "center", gap: 2, marginRight: 2, verticalAlign: "middle", flexShrink: 0 } },
+        badge,
+        ...GOAL_TYPES.map((t) =>
+          h("button", {
+            key: t,
+            style: {
+              width: 16, height: 16, padding: 0, display: "inline-flex",
+              alignItems: "center", justifyContent: "center", cursor: loading ? "wait" : "pointer",
+              fontSize: 10, fontWeight: 700, lineHeight: 1, borderRadius: 3,
+              border: "1px solid " + (t === aType ? goalTypeColor(t) : goalTypeColor(t) + "66"),
+              background: t === aType ? goalTypeColor(t) : goalTypeColor(t) + "18",
+              color: t === aType ? "#fff" : goalTypeColor(t),
+              opacity: loading ? 0.6 : 1,
+              flexShrink: 0,
+            },
+            title: GOAL_TYPE_LABELS[t],
+            onClick: (e) => { e.stopPropagation(); switchType(t); },
+          }, GOAL_TYPE_ABBREV[t])),
+        h("button", {
+          style: {
+            width: 16, height: 16, padding: 0, display: "inline-flex",
+            alignItems: "center", justifyContent: "center", cursor: "pointer",
+            fontSize: 9, lineHeight: 1, borderRadius: 3,
+            border: "1px solid rgba(128,128,128,.35)", background: "rgba(128,128,128,.15)",
+            color: "inherit", opacity: 0.7, flexShrink: 0,
+          },
+          onClick: (e) => { e.stopPropagation(); setOpen(false); setError(null); },
+        }, "✕"),
+        error ? h("span", { style: { fontSize: 9, color: "var(--dsw-alias-state-error-primary, #d66)", marginLeft: 2 } }, "⚠") : null
+      );
+    }
+
+    // g-306：排期版本选择器组件——内联下拉，支持 active 版本 + 独立目标选项。
+    // 供 goal-modal.js 的 backlog 目标标题区复用（card.js 先于 goal-modal.js 拼接）。
+    function VersionSelectorButton(props) {
+      const { goalId, goalVersion, activeVersions, onScheduled } = props;
+      const [open, setOpen] = React.useState(false);
+      const [loading, setLoading] = React.useState(false);
+      const [error, setError] = React.useState(null);
+      const wrapRef = React.useRef(null);
+
+      // 过滤掉目标当前已归属的版本（避免重复排期）；独立目标始终可选
+      const versionCandidates = (activeVersions ?? []).filter((v) => v.slug !== goalVersion);
+      const canSelectStandalone = true; // 始终允许选择独立目标
+
+      React.useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => {
+          if (wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setError(null); }
+        };
+        document.addEventListener("mousedown", onDoc);
+        return () => document.removeEventListener("mousedown", onDoc);
+      }, [open]);
+
+      const doSchedule = async (to, version) => {
+        if (loading) return;
+        setLoading(true); setError(null);
+        try {
+          const body = { goal: goalId, to };
+          if (version) body.version = version;
+          const moveR = await fetch(graphUrl("/api/dsh-graph/move-goal"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const moveData = await moveR.json();
+          if (!moveData.ok) {
+            setError(moveData.error || dgT("drag.unknownError"));
+            setLoading(false);
+            return;
+          }
+          // moveGoal 已自动处理 draft→planning 转换，无需显式 transition
+          const label = to === "standalone" ? dgT("lane.standalone") : version;
+          showToast(dgT("goal.scheduleSuccess", { version: label }));
+          setOpen(false);
+          onScheduled?.();
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        }
+        setLoading(false);
+      };
+
+      const hasAnyOption = versionCandidates.length > 0 || canSelectStandalone;
+
+      return h("span", {
+        ref: wrapRef,
+        style: { display: "inline-block", position: "relative", verticalAlign: "middle" },
+      },
+        h("button", {
+          className: "dg-btn",
+          style: {
+            ...S.btn, fontSize: 11, padding: "1px 6px", marginLeft: 2,
+            background: "rgba(76,141,255,.15)",
+          },
+          title: dgT("goal.scheduleTooltip"),
+          disabled: loading,
+          onClick: (e) => { e.stopPropagation(); setOpen(!open); setError(null); },
+        }, dgT("goal.schedule")),
+        open ? h("div", {
+          style: {
+            position: "absolute", top: "100%", left: 0, marginTop: 4, zIndex: 9999,
+            background: "var(--dsw-alias-bg-base, #1e1e1e)", border: "1px solid rgba(128,128,128,.4)",
+            borderRadius: 6, padding: "6px 0", minWidth: 160, maxWidth: 240,
+            boxShadow: "0 4px 16px rgba(0,0,0,.45)",
+          },
+          onClick: (e) => e.stopPropagation(),
+        },
+          h("div", {
+            style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 4px", borderBottom: "1px solid rgba(128,128,128,.2)" },
+          }, dgT("goal.scheduleSelectVersion")),
+          // 独立目标选项
+          canSelectStandalone
+            ? h("div", {
+                style: { padding: "5px 10px", cursor: "pointer", fontSize: 12 },
+                className: "dg-schedule-version-item",
+                onClick: () => doSchedule("standalone"),
+              }, `📌 ${dgT("lane.standalone")}`)
+            : null,
+          // active 版本选项
+          ...versionCandidates.map((v) =>
+            h("div", {
+              key: v.slug,
+              style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+              className: "dg-schedule-version-item",
+              onClick: () => doSchedule("version", v.slug),
+            }, `🏷️ ${v.name || v.slug}`)),
+          !hasAnyOption
+            ? h("div", { style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 } }, dgT("goal.scheduleAlready"))
+            : null,
+          error ? h("div", {
+            style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)", padding: "4px 10px 2px", borderTop: "1px solid rgba(128,128,128,.2)" },
+          }, "⚠️ " + error) : null,
+          h("div", {
+            style: { padding: "4px 10px 2px", borderTop: "1px solid rgba(128,128,128,.2)" },
+          },
+            h("button", {
+              className: "dg-btn",
+              style: { ...S.btn, fontSize: 10, padding: "1px 6px" },
+              onClick: (e) => { e.stopPropagation(); setOpen(false); setError(null); },
+            }, dgT("goal.scheduleCancel"))))
+        : null);
+    }
+
     // 目标卡：只保留关键信息（标题/状态/状态行/徽标/依赖），子卡片扼要列出、点击开抽屉
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
@@ -103,7 +301,8 @@
     // expanded 默认值由 KanbanView 决定（delivered/blocked 默认 false，其余默认 true），
     // 用户手动切换后记录到 expandedGoals；Card 保持纯函数（无 hooks）。
     // g-77647351：drag 参数——可选拖放对象 {active, marker, start, hover, drop, end}
-    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag) {
+    // g-294：onTypeChanged 参数——类型切换后回调（触发看板数据刷新）
+    function Card(g, onOpen, onOpenCard, activeGoal, activeCard, goalStatus, expanded, onToggleExpand, drag, onTypeChanged) {
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
@@ -148,18 +347,8 @@
          },
        }) : null;
        const badges = [];
-      // g-158：类型标记 badge（F/B/T/I + tooltip）——标题左侧，颜色与左栏/弹窗同源
-      const aType = normalizeGoalType(g.type);
-      const tBadge = h("span", {
-        key: "type-badge",
-        style: {
-          display: "inline-block", width: 16, height: 16, lineHeight: "16px",
-          textAlign: "center", borderRadius: 3, fontSize: 10, fontWeight: 700,
-          background: goalTypeColor(aType), color: "#fff",
-          verticalAlign: "middle", marginRight: 2,
-        },
-        title: GOAL_TYPE_LABELS[aType] ?? aType,
-      }, GOAL_TYPE_ABBREV[aType] ?? aType[0]?.toUpperCase());
+      // g-158/g-294：可交互类型标记 badge（点击展开内联类型切换器）——标题左侧，颜色与左栏/弹窗同源
+      const tBadge = h(TypeBadgeWithSelector, { goalId: g.id, type: g.type, onTypeChanged });
       if (g.reviewer === "human") badges.push("👤");
       if (g.reviewer === "ai") badges.push(dgT('review.aiBadge'));
       if (g.pk_lanes > 1) badges.push("PK×" + g.pk_lanes);

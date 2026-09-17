@@ -508,14 +508,19 @@ test("requestAcceptReview 写 review.requested 事件并返回 pending", () => {
   assert.equal(ev[0].details.what, "描述");
 });
 
-test("resolveAccept accept 按阶段映射追加事件", () => {
+test("resolveAccept accept 按阶段映射追加事件（review 状态）", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
-  // g-137：带 version 的目标初始状态已是 planning，无需再迁移
+  // g-305：planning 状态不再允许直接 accept，改用 review 状态
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test", force: true });
+  transition(root, id, "review", { actor: "test" });
   requestAcceptReview(root, id, "human:gui");
   resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" });
   const ev = readEvents(root);
-  assert.ok(ev.some((e) => e.event === "description.confirmed"));
+  assert.ok(ev.some((e) => e.event === "review.passed"));
+  assert.ok(ev.some((e) => e.event === "goal.transition" && e.details.to === "delivered"));
 });
 
 test("resolveAccept object 写 review.objected", () => {
@@ -540,29 +545,158 @@ test("resolveAccept force 直接生效并记录理由", () => {
 
 test("readAcceptStatus 状态流转：none → pending → resolved", () => {
   const root = tmpRoot();
-  const id = createGoal(root, { title: "t", actor: "test" });
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
   assert.equal(readAcceptStatus(root, id).state, "none");
+  // g-305：仅 in_progress/review 允许 accept，使用 in_progress 状态
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test", force: true });
   requestAcceptReview(root, id, "human:gui");
   assert.equal(readAcceptStatus(root, id).state, "pending");
   resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" });
   assert.equal(readAcceptStatus(root, id).state, "resolved");
 });
 
-test("ready 状态下 resolveAccept(accept) 写 criteria.confirmed 且不抛异常、状态仍 ready", () => {
+test("ready 状态下 resolveAccept(accept) 返回明确错误", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
   transition(root, id, "collecting", { actor: "test" });
   transition(root, id, "ready", { actor: "test" });
   requestAcceptReview(root, id, "human:gui");
-  // 不应抛异常
-  resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" });
+  // g-305：ready 状态不再允许直接 accept，应返回明确错误
+  assert.throws(() => resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" }), /ready.*不允许直接 accept/);
   // 状态仍应为 ready
   assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "ready");
-  // 应有 criteria.confirmed 事件
+});
+
+// ---- g-305：resolveAccept in_progress 自动补迁移与非 review/in_progress 状态错误 ----
+
+test("g-305：in_progress 状态下 resolveAccept(accept) 自动补 in_progress→review→delivered", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test", force: true });
+  // 不手动迁移到 review，直接调用 resolveAccept
+  const result = resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" });
+  assert.equal(result.ok, true);
+  // 最终状态应为 delivered
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "delivered");
   const ev = readEvents(root);
-  assert.ok(ev.some((e) => e.event === "criteria.confirmed"));
-  // readAcceptStatus 应返回 resolved
-  assert.equal(readAcceptStatus(root, id).state, "resolved");
+  // 应有 in_progress→review 迁移事件
+  assert.ok(ev.some((e) => e.event === "goal.transition" && e.details.from === "in_progress" && e.details.to === "review"));
+  // 应有 review→delivered 迁移事件
+  assert.ok(ev.some((e) => e.event === "goal.transition" && e.details.from === "review" && e.details.to === "delivered"));
+  // 应有 review.passed 事件
+  assert.ok(ev.some((e) => e.event === "review.passed"));
+});
+
+test("g-305：blocked 状态下 resolveAccept(accept) 返回明确错误", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test", force: true });
+  transition(root, id, "blocked", { reason: "等待上游接口", actor: "test" });
+  assert.throws(() => resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" }), /blocked.*不允许直接 accept/);
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "blocked");
+});
+
+test("g-305：delivered 状态下 resolveAccept(accept) 返回明确错误", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test", force: true });
+  transition(root, id, "review", { actor: "test" });
+  transition(root, id, "delivered", { actor: "test" });
+  assert.throws(() => resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" }), /delivered.*不允许直接 accept/);
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "delivered");
+});
+
+test("g-305：draft 状态下 resolveAccept(accept) 返回明确错误", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", actor: "test" });
+  assert.throws(() => resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" }), /draft.*不允许直接 accept/);
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "draft");
+});
+
+test("g-305：planning 状态下 resolveAccept(accept) 返回明确错误", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  assert.throws(() => resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" }), /planning.*不允许直接 accept/);
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "planning");
+});
+
+test("g-305：collecting 状态下 resolveAccept(accept) 返回明确错误", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  assert.throws(() => resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" }), /collecting.*不允许直接 accept/);
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "collecting");
+});
+
+test("g-305：force 绕过状态限制（in_progress 可 force accept）", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test", force: true });
+  const result = resolveAccept(root, id, { actor: "human:gui", verdict: "accept", force: true, reason: "紧急上线" });
+  assert.equal(result.ok, true);
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "delivered");
+});
+
+test("g-305：review 状态 resolveAccept(accept) 正常路径不受影响", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test", force: true });
+  transition(root, id, "review", { actor: "test" });
+  const result = resolveAccept(root, id, { actor: "supervisor:k3", verdict: "accept" });
+  assert.equal(result.ok, true);
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "delivered");
+  const ev = readEvents(root);
+  assert.ok(ev.some((e) => e.event === "review.passed"));
+});
+
+test("g-305：force blocked 状态明确失败（GraphError）", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test", force: true });
+  transition(root, id, "blocked", { reason: "等待上游", actor: "test" });
+  assert.throws(() => resolveAccept(root, id, { actor: "human:gui", verdict: "accept", force: true, reason: "强行通过" }), /blocked.*无 accept 映射/);
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "blocked");
+});
+
+test("g-305：force delivered 状态明确失败（GraphError）", () => {
+  const root = tmpRoot();
+  const id = createGoal(root, { title: "t", version: "v-t", actor: "test" });
+  transition(root, id, "collecting", { actor: "test" });
+  transition(root, id, "ready", { actor: "test" });
+  transition(root, id, "in_progress", { actor: "test", force: true });
+  transition(root, id, "review", { actor: "test" });
+  transition(root, id, "delivered", { actor: "test" });
+  assert.throws(() => resolveAccept(root, id, { actor: "human:gui", verdict: "accept", force: true, reason: "重复交付" }), /delivered.*无 accept 映射/);
+  assert.equal(loadGoal(findGoalFile(root, id)).meta.status, "delivered");
+});
+
+test("g-305：force 六态兼容——draft/planning/collecting/ready/in_progress/review 均可 force accept", () => {
+  const statuses = ["draft", "planning", "collecting", "ready", "in_progress", "review"];
+  for (const target of statuses) {
+    const root = tmpRoot();
+    const id = createGoal(root, { title: `force-${target}`, version: "v-t", actor: "test" });
+    // 依次迁移到目标状态
+    if (target === "collecting") transition(root, id, "collecting", { actor: "test" });
+    if (target === "ready") { transition(root, id, "collecting", { actor: "test" }); transition(root, id, "ready", { actor: "test" }); }
+    if (target === "in_progress") { transition(root, id, "collecting", { actor: "test" }); transition(root, id, "ready", { actor: "test" }); transition(root, id, "in_progress", { actor: "test", force: true }); }
+    if (target === "review") { transition(root, id, "collecting", { actor: "test" }); transition(root, id, "ready", { actor: "test" }); transition(root, id, "in_progress", { actor: "test", force: true }); transition(root, id, "review", { actor: "test" }); }
+    const result = resolveAccept(root, id, { actor: "human:gui", verdict: "accept", force: true, reason: "兼容测试" });
+    assert.equal(result.ok, true, `force accept 应成功：${target}`);
+  }
 });
 
 // ---- project.yaml supervisor.session（g-108） ----
