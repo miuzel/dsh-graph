@@ -96,7 +96,7 @@
               flexDirection: "column",
               gap: 6,
               marginTop: 4,
-              maxHeight: "calc(100% - 190px)",
+              maxHeight: "calc(100vh - 190px)",
               overflowY: "auto",
               paddingRight: 4,
             },

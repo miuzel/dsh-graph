@@ -2597,8 +2597,7 @@ window.__ModuleLoader__.load({
     const S = {
 
     // Contract alias: "criteria.updated": "更新判据" (runtime value is a locale getter).
-      wrap: { padding: 12, fontSize: 13, color: "inherit", position: "relative", zIndex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: "100%" },
-      wrapContent: { flex: 1, minWidth: 0, overflowX: "auto" },
+      wrap: { padding: 12, fontSize: 13, color: "inherit", overflowX: "auto", position: "relative", zIndex: 1, minWidth: 0 },
       head: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 },
       grid: { display: "grid", gridTemplateColumns: "130px repeat(6, minmax(150px, 1fr))", gap: 4 },
       laneLabel: { fontWeight: 600, padding: "8px 6px", borderTop: "1px solid rgba(128,128,128,.35)" },
@@ -2630,16 +2629,16 @@ window.__ModuleLoader__.load({
         display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20000,
       },
       drawer: {
-        position: "absolute", top: 0, right: 0, height: "100%", width: 400,
+        position: "fixed", top: 0, right: 0, height: "100vh", width: 400,
         boxSizing: "border-box",
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
         boxShadow: "-4px 0 16px rgba(0,0,0,.45)",
         padding: "20px 22px 90px 22px", overflowY: "auto", fontSize: 13, lineHeight: 1.7,
         fontFamily: "inherit",
       },
-      // g-223：左侧抽屉（版本管理抽屉，从看板容器内左侧展开）
+      // g-223：左侧抽屉（版本管理抽屉，从屏幕左侧展开）
       drawerLeft: {
-        position: "absolute", top: 0, left: 0, height: "100%", width: 380, maxWidth: "85vw",
+        position: "fixed", top: 0, left: 0, height: "100vh", width: 380, maxWidth: "85vw",
         boxSizing: "border-box",
         background: "var(--dsw-alias-bg-layer-1, #1e1f24)", color: "var(--dsw-alias-label-primary, #e6e6e6)", zIndex: 20001,
         boxShadow: "4px 0 16px rgba(0,0,0,.45)",
@@ -8216,7 +8215,7 @@ function reconcileRetainedBoardState(data, retained, opts) {
               flexDirection: "column",
               gap: 6,
               marginTop: 4,
-              maxHeight: "calc(100% - 190px)",
+              maxHeight: "calc(100vh - 190px)",
               overflowY: "auto",
               paddingRight: 4,
             },
@@ -10930,7 +10929,6 @@ function reconcileRetainedBoardState(data, retained, opts) {
                setDrag((d) => (d ? { ...d, overGoalId: null, overStageKey: null, overLaneKey: null, overHalf: null } : d));
              }
            } : undefined },
-        h("div", { style: S.wrapContent },
         h("style", null, HOVER_CSS),
         h("div", { style: S.head },
           h("strong", null, "dsh-graph"),
@@ -11266,7 +11264,6 @@ function reconcileRetainedBoardState(data, retained, opts) {
               },
             })
           : null,
-        ), // g-303: close wrapContent — drawers 为 kanban root 直接子节点
         showVersionDrawer
           ? h(VersionDrawer, {
               // g-243：显式稳定 key。本看板根节点的 children 列表里混有带 key 的元素
