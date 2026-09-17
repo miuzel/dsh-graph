@@ -3430,7 +3430,7 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
                 : `（无：context_cards 为空或没有 filled/reviewed 卡片，无需复用，直接按目标描述/判据执行）`,
         ].join("\n");
     }
-    const maxCardChars = typeof opts?.maxCardChars === "number" && opts.maxCardChars > 0 ? opts.maxCardChars : 1200;
+    const maxCardChars = typeof opts?.maxCardChars === "number" && opts.maxCardChars > 0 ? opts.maxCardChars : 4096;
     const maxTotalChars = typeof opts?.maxTotalChars === "number" && opts.maxTotalChars > 0 ? opts.maxTotalChars : 4000;
     const maxFullCards = typeof opts?.maxFullCards === "number" && opts.maxFullCards > 0 ? opts.maxFullCards : 8;
     let accumulatedChars = 0;

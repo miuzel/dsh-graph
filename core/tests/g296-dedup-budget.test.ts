@@ -165,10 +165,10 @@ test("g-296：预算诊断——单卡超限标记", () => {
   setCriteria(root, goal, ["判据"], "test");
 
   const c1 = addCard(root, goal, { title: "长卡", kind: "text", actor: "test", scope: "goal" });
-  fillCard(root, goal, c1, { text: "X".repeat(1500), summary: "长摘要", by: "human:a", actor: "test" });
+  fillCard(root, goal, c1, { text: "X".repeat(5000), summary: "长摘要", by: "human:a", actor: "test" });
 
-  const sec = formatHarvestedCardsSection(root, goal, { diagnostics: true });
-  // 单卡正文 1500 > 默认 1200，应被截断且诊断标记超限
+  const sec = formatHarvestedCardsSection(root, goal, { diagnostics: true, maxTotalChars: 99999 });
+  // 单卡正文 5000 > 默认 4096，应被截断且诊断标记超限
   assert.ok(sec.includes("⚠️超限") || sec.includes("⚠️over"), "单卡超限标记");
 });
 
@@ -202,7 +202,7 @@ test("g-296 回归：长标题+短正文不应误报单卡超限（预算语义=
   fillCard(root, goal, c1, { text: "短短正文", summary: "短摘要", by: "human:a", actor: "test" });
 
   const sec = formatHarvestedCardsSection(root, goal, { diagnostics: true });
-  // 正文只有 4 字符，远低于 1200 限额，不应标记超限
+  // 正文只有 4 字符，远低于 4096 限额，不应标记超限
   assert.ok(!sec.includes("⚠️超限"), "短正文不应因长标题误报超限");
   assert.ok(!sec.includes("⚠️over"), "短正文不应因长标题误报超限(英文)");
   // 诊断应显示正文字符数远低于限额

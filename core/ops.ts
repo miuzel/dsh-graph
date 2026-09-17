@@ -3487,7 +3487,7 @@ function atomicCardDigest(cardFile: string): string | null {
 }
 
 export interface CardBudgetOptions {
-  maxCardChars?: number;     // 单卡正文预算（默认 1200）
+  maxCardChars?: number;     // 单卡正文预算（默认 4096）
   maxTotalChars?: number;    // 总卡片正文预算（默认 4000）
   maxFullCards?: number;     // 完整展开卡片数量上限（默认 8）
   diagnostics?: boolean;     // g-296：启用预算诊断（输出各段字符数与超预算来源）
@@ -3520,7 +3520,7 @@ export function formatHarvestedCardsSection(
     ].join("\n");
   }
 
-  const maxCardChars = typeof opts?.maxCardChars === "number" && opts.maxCardChars > 0 ? opts.maxCardChars : 1200;
+  const maxCardChars = typeof opts?.maxCardChars === "number" && opts.maxCardChars > 0 ? opts.maxCardChars : 4096;
   const maxTotalChars = typeof opts?.maxTotalChars === "number" && opts.maxTotalChars > 0 ? opts.maxTotalChars : 4000;
   const maxFullCards = typeof opts?.maxFullCards === "number" && opts.maxFullCards > 0 ? opts.maxFullCards : 8;
 
