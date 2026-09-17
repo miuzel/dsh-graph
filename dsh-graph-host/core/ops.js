@@ -6593,7 +6593,7 @@ export function requestAcceptReview(root, id, actor) {
     const file = findGoalFile(root, id);
     const doc = loadGoal(file);
     const status = String(doc.meta.status ?? "");
-    const allowed = ["draft", "planning", "collecting", "ready", "review"];
+    const allowed = ["draft", "planning", "collecting", "ready", "review", "in_progress"];
     if (!allowed.includes(status)) {
         throw new GraphError(`当前状态 ${status} 不允许接受操作`);
     }
@@ -6628,7 +6628,7 @@ export function resolveAccept(root, id, opts) {
                 details: { note: `强制接受理由：${opts.reason}` },
             });
         }
-        // force 直接走 accept 分支
+        // force 直接走 accept 分支（跳过状态限制）
         applyAcceptMapping(root, id, status, opts.actor);
         if (status === "review")
             registerWorktreeCandidates(root, id, opts.actor);
@@ -6645,7 +6645,12 @@ export function resolveAccept(root, id, opts) {
         });
         return { ok: true };
     }
-    // verdict === "accept"
+    // verdict === "accept"（非 force）
+    // g-305：仅 in_progress（自动补迁移）和 review 允许 accept；
+    // 其他状态（blocked / delivered / draft / planning / collecting / ready）返回明确错误。
+    if (status !== "in_progress" && status !== "review") {
+        throw new GraphError(`当前状态 ${status} 不允许直接 accept——请先迁移到 review（或 in_progress 会自动补迁移）`);
+    }
     applyAcceptMapping(root, id, status, opts.actor);
     if (status === "review")
         registerWorktreeCandidates(root, id, opts.actor);
@@ -6663,6 +6668,12 @@ function applyAcceptMapping(root, id, status, actor) {
     else if (status === "ready") {
         // 已在 ready，不再 transition，仅追加 criteria.confirmed
         appendEvent(root, { actor, event: "criteria.confirmed", goal: id, details: { actor: "human" } });
+    }
+    else if (status === "in_progress") {
+        // g-305：in_progress 自动补 in_progress→review 迁移，再执行 review→delivered
+        transition(root, id, "review", { actor });
+        transition(root, id, "delivered", { actor });
+        appendEvent(root, { actor, event: "review.passed", goal: id, details: {} });
     }
     else if (status === "review") {
         transition(root, id, "delivered", { actor });
