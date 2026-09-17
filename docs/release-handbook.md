@@ -63,38 +63,35 @@ gh repo edit miuzel/dsh-graph --add-topic dsh-plugin --add-topic dsh --add-topic
 
 > `miuzel/dsh-graph` 为 repo 名；npm 侧 `dsh-graph` 未占用（包名=repo 名，g-116 命名更正）；原 `dsh-graph-client` 名已废弃。
 
-## 4. pnpm publish 单包（B6 解除后）
+## 4. pnpm publish 单包（发布树标准流程）
 
-> **v0.10.0 复盘（2026-09-12）：发布必须在「发布 tag 的独立 worktree」里执行，不要在 `<version>-test` 集成分支上跑。**
-> 集成分支在发布合并之后随时可能继续提交，从那里 publish 会让「发布物 ≠ tag 内容」的隐患成立（v0.10.0 当时两者恰好逐字节一致，属侥幸）。
->
-> ```sh
-> # 0. 先把待发布内容并到 main 并打 tag（supervisor 执行）
-> git checkout main && git merge --no-ff vX.Y.Z-test && git tag -a vX.Y.Z -m "dsh-graph vX.Y.Z"
-> GIT_SSH_COMMAND="ssh -F /dev/null" git push origin main && GIT_SSH_COMMAND="ssh -F /dev/null" git push origin vX.Y.Z
->
-> # 1. 为 tag 建独立发布树（不打扰集成分支/开发实例），并让 prepack 的 tsc 可用
-> git worktree add --detach .worktrees/release-vX.Y.Z vX.Y.Z
-> ln -sfn "$PWD/node_modules" .worktrees/release-vX.Y.Z/node_modules
-> git -C .worktrees/release-vX.Y.Z describe --tags   # 必须输出 vX.Y.Z
-> (cd .worktrees/release-vX.Y.Z/dsh-graph-host && bash ../scripts/sync-core.sh)  # 预演 prepack：应零 diff
->
-> # 2. 在发布树里发布（发布前确认 package.json version == tag）
-> (cd .worktrees/release-vX.Y.Z/dsh-graph-host && pnpm publish --registry=https://registry.npmjs.org --no-git-checks)
->
-> # 3. 收尾：核验后清理发布树
-> git worktree remove .worktrees/release-vX.Y.Z
-> ```
+**权威流程（自 v0.10.0 复盘确定）**：发布必须在「发布 tag 的独立 worktree」里执行，严禁在 `<version>-test` 集成分支或主工作区直接发布。
+集成分支在发布合并之后随时可能继续提交，从那里 publish 会让「发布物 ≠ tag 内容」的隐患成立。
 
 ```sh
-# 前置：npm 官方登录（人工 gate，需负责人凭据）
+# 0. 前置：npm 官方登录（人工 gate，需负责人凭据）
 npm login --registry=https://registry.npmjs.org   # 或 NODE_AUTH_TOKEN + .npmrc
 
-# 发布（目录内执行，registry 显式指定官方；g-116 后仅单包）
-(cd dsh-graph-host && pnpm publish --registry=https://registry.npmjs.org --no-git-checks)  # 目录名保留 dsh-graph-host，npm 包名为 dsh-graph
+# 1. 把待发布内容合并到 main 并打 tag（由主管/负责人执行）
+git checkout main && git merge --no-ff vX.Y.Z-test && git tag -a vX.Y.Z -m "dsh-graph vX.Y.Z"
+GIT_SSH_COMMAND="ssh -F /dev/null" git push origin main && GIT_SSH_COMMAND="ssh -F /dev/null" git push origin vX.Y.Z
 
-# 核验
+# 2. 为 tag 建独立发布树（不打扰集成分支/开发实例），并软链仓库根 node_modules 确保 prepack/tsc 可用
+git worktree add --detach .worktrees/release-vX.Y.Z vX.Y.Z
+ln -sfn "$PWD/node_modules" .worktrees/release-vX.Y.Z/node_modules
+git -C .worktrees/release-vX.Y.Z describe --tags   # 必须输出 vX.Y.Z
+
+# 3. 预演 prepack 编译：产物应零 diff
+(cd .worktrees/release-vX.Y.Z/dsh-graph-host && bash ../scripts/sync-core.sh)
+
+# 4. 在发布树里发布（发布前确认 package.json version == tag）
+(cd .worktrees/release-vX.Y.Z/dsh-graph-host && pnpm publish --registry=https://registry.npmjs.org --no-git-checks)
+
+# 5. 核验线上版本
 npm view dsh-graph version
+
+# 6. 收尾：核验后清理发布树
+git worktree remove .worktrees/release-vX.Y.Z
 ```
 
 > 注意：本机 `~/.npmrc` 指向 npmmirror 镜像且未登录——发布前必须切官方 registry 并登录；

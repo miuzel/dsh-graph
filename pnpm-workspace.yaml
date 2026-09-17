@@ -6,6 +6,5 @@ packages:
   - .
   - 'dsh-graph-host'
 
-settings:
-  nodeLinker: hoisted
-  autoInstallPeers: false
+nodeLinker: hoisted
+autoInstallPeers: false

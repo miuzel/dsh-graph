@@ -4,9 +4,9 @@
 set -euo pipefail
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(CDPATH= cd -- "$SELF_DIR/.." && pwd -P)
-VERSION=""; PORT=""; HOST=""; USE_PROXY=0
+VERSION=""; PORT=""; HOST=""; HOST_DIR=""; USE_PROXY=0; SKIP_INSTALL=0
 die() { printf '错误：%s\n' "$*" >&2; exit 2; }
-usage() { printf '用法：%s <DSH 版本> [--port PORT] [--proxychains] [--host HOST]\n' "$(basename "$0")"; }
+usage() { printf '用法：%s <DSH 版本> [--port PORT] [--proxychains] [--host HOST] [--host-dir PATH] [--skip-install]\n' "$(basename "$0")"; }
 [ $# -gt 0 ] || { usage >&2; die '必须显式指定 DSH 版本'; }
 VERSION=$1; shift
 [[ "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || die "非法 DSH 版本：$VERSION"
@@ -14,10 +14,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --port) [ $# -ge 2 ] || die '--port 需要一个值'; [ -z "$PORT" ] || die '--port 不可重复'; PORT=$2; shift 2;;
     --host) [ $# -ge 2 ] || die '--host 需要一个值'; [ -z "$HOST" ] || die '--host 不可重复'; HOST=$2; shift 2;;
+    --host-dir) [ $# -ge 2 ] || die '--host-dir 需要一个值'; [ -z "$HOST_DIR" ] || die '--host-dir 不可重复'; HOST_DIR=$2; shift 2;;
     --proxychains) [ "$USE_PROXY" -eq 0 ] || die '--proxychains 不可重复'; USE_PROXY=1; shift;;
+    --skip-install|--no-install) [ "$SKIP_INSTALL" -eq 0 ] || die '--skip-install 不可重复'; SKIP_INSTALL=1; shift;;
     --help|-h) usage; exit 0;;
     --profile|--patch|--dump-config|--dump-default-config|--open|--no-open|--workspace|--cwd|--dsh-home|--DSH_HOME|--) die "禁止透传受管参数：$1";;
-    *) die "不支持的参数：$1（仅允许 --port、--host、--proxychains）";;
+    *) die "不支持的参数：$1（仅允许 --port、--host、--host-dir、--proxychains、--skip-install）";;
   esac
 done
 PORT="${PORT:-3082}"
@@ -59,7 +61,9 @@ VERSION_ROOT="$TEST_ROOT/$FULL_VERSION"
 DSH_HOME="$TEST_ROOT/$STABLE_VERSION/home"
 WORKSPACE="$VERSION_ROOT/workspace"
 CACHE_ROOT="$VERSION_ROOT/cache"
-HOST_DIR="$REPO_ROOT/dsh-graph-host"
+HOST_DIR="${HOST_DIR:-$REPO_ROOT/dsh-graph-host}"
+HOST_DIR=$(realpath -e "$HOST_DIR") || die "无法 canonicalize 本地插件目录：$HOST_DIR"
+case "$HOST_DIR" in "$REPO_ROOT/dsh-graph-host"|"$REPO_ROOT/.worktrees"/*/dsh-graph-host) ;; *) die "--host-dir 必须位于仓库 dsh-graph-host 或 .worktrees 下：$HOST_DIR";; esac
 [ -f "$HOST_DIR/package.json" ] || die "本地插件缺失：$HOST_DIR/package.json"
 [ "$(node -e 'console.log(require(process.argv[1]).name)' "$HOST_DIR/package.json")" = "dsh-graph" ] || die "本地插件 package name 必须为 dsh-graph：$HOST_DIR/package.json"
 # The web alias owns the fixed web profile; DSH_HOME (stable base home, shared across a prerelease family) is the profile boundary.
@@ -74,7 +78,10 @@ profile_ready() {
   node -e 'const fs=require("fs"),path=require("path"); try { const mf=process.argv[1],host=fs.realpathSync.native(process.argv[2]),m=JSON.parse(fs.readFileSync(mf,"utf8")); const resolved=require.resolve("dsh-graph/package.json",{paths:[path.dirname(mf)]}); const p=JSON.parse(fs.readFileSync(resolved,"utf8")); process.exit(m.dependencies?.["dsh-graph"]!==process.argv[3] || fs.realpathSync.native(resolved)!==host || p.name!=="dsh-graph" || p.dsh?.bundle?.patch===void 0 ? 1 : 0); } catch { process.exit(1); }' "$PROFILE_MANIFEST" "$HOST_DIR/package.json" "$HOST_LINK"
 }
 if [ -f "$PROFILE_MANIFEST" ] && profile_ready; then needs_install=0; fi
-if [ "$needs_install" -eq 1 ]; then
+if [ "$SKIP_INSTALL" -eq 1 ]; then
+  [ "$needs_install" -eq 0 ] || die '--skip-install 要求目标 DSH_HOME 已有可复用的 dsh-graph profile；请先不带该参数运行一次'
+  printf '==> 跳过 dsh-graph 插件安装（复用已有 profile）\n'
+elif [ "$needs_install" -eq 1 ]; then
   install=(pnpx --yes "@deepseek-ai/dsh@$VERSION" plugin --profile web add @deepseek-ai/schemastery)
   install=(pnpx --yes "@deepseek-ai/dsh@$VERSION" plugin --profile web add "$HOST_LINK")
   printf '==> 安装本地 dsh-graph 插件（每版本 profile）\n'
@@ -83,12 +90,19 @@ fi
 [ -f "$PROFILE_MANIFEST" ] || die "插件 profile manifest 缺失：$PROFILE_MANIFEST"
 profile_ready || die "插件 profile/link/bundle 未就绪：$PROFILE_MANIFEST"
 EFFECTIVE_CONFIG="$VERSION_ROOT/effective-config.yml"
-dump=(pnpx --yes "@deepseek-ai/dsh@$FULL_VERSION" web --dump-config)
+if [ "$SKIP_INSTALL" -eq 1 ]; then
+  command -v dsh >/dev/null 2>&1 || die '--skip-install 需要 PATH 中已有 dsh 命令'
+  DSH_CMD=(dsh)
+  printf '==> 复用 PATH 中的 dsh 命令（跳过 DSH 包安装）\n'
+else
+  DSH_CMD=(pnpx --yes "@deepseek-ai/dsh@$FULL_VERSION")
+fi
+dump=("${DSH_CMD[@]}" web --dump-config)
 if [ "$USE_PROXY" -eq 1 ]; then proxychains4 -q "${dump[@]}" >"$EFFECTIVE_CONFIG" 2>/dev/null || die "无法读取 web effective config：DSH $VERSION"; else "${dump[@]}" >"$EFFECTIVE_CONFIG" 2>/dev/null || die "无法读取 web effective config：DSH $VERSION"; fi
 grep -q "@deepseek-ai/dsh-base" "$EFFECTIVE_CONFIG" || die "web effective config 缺少 dsh-base：DSH $VERSION"
 grep -q "@deepseek-ai/dsh-web-app" "$EFFECTIVE_CONFIG" || die "web effective config 缺少 dsh-web-app：DSH $VERSION"
 grep -q "dsh-graph" "$EFFECTIVE_CONFIG" || die "web effective config 缺少 dsh-graph：DSH $VERSION"
-cmd=(pnpx --yes "@deepseek-ai/dsh@$FULL_VERSION" web --no-open --port "$PORT")
+cmd=("${DSH_CMD[@]}" web --no-open --port "$PORT")
 [ -n "$HOST" ] && cmd+=(--host "$HOST")
 printf '==> 加载本地 dsh-graph 插件\n'
 if [ "$USE_PROXY" -eq 1 ]; then exec proxychains4 -q "${cmd[@]}"; else exec "${cmd[@]}"; fi
