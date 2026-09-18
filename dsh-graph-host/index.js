@@ -639,7 +639,7 @@ export function formatAttemptPrompt({
   const currentDirective = promptText(directive);
   const handoff = promptText(handoffSection);
   const cards = promptText(cardsSection) || [
-    "## 已收集上下文卡片成果（g-120 注入）",
+    "## 已收集上下文卡片成果",
     "",
     ATTEMPT_PROMPT_MISSING,
     "未提供原因：当前派发没有可注入的 filled/reviewed 卡片成果。",

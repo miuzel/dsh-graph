@@ -3423,7 +3423,7 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
     const isEn = language === "en";
     if (cards.length === 0) {
         return [
-            isEn ? `## Harvested context card results` : `## 已收集上下文卡片成果（g-120 注入）`,
+            isEn ? `## Harvested context card results` : `## 已收集上下文卡片成果`,
             ``,
             isEn
                 ? `(none: context_cards is empty or has no filled/reviewed cards; no context to reuse—execute directly from the goal description and criteria)`
@@ -3490,7 +3490,7 @@ export function formatHarvestedCardsSection(root, goalId, opts, preHarvestedCard
     }
     const header = isEn
         ? `## Harvested context card results (ordered by context_cards; directly usable by subagents without guessing card paths)`
-        : `## 已收集上下文卡片成果（g-120 注入：按 context_cards 顺序，子代理直接使用，无需猜卡片路径）`;
+        : `## 已收集上下文卡片成果`;
     const footer = collapsedCount > 0
         ? isEn
             ? `\n\n> ⚠️ Card budget limit: ${inlinedCount} cards fully expanded; ${collapsedCount} cards exceeding the total budget collapsed to summary + exact path (read on demand; digest can be verified).`
