@@ -10,6 +10,8 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；graph_unarchive_goal(goal) 取消归档；
 - graph_report_supervisor_status(status) 主管自报状态（看板顶部状态栏）；graph_resolve_accept 评审裁决；
 - graph_handoff() / graph_claim_supervisor() 换会话交接。
+- graph_get_settings() 只读查询当前 workspace 项目配置（executor、automation、prompt_overrides 等）及合法枚举元信息；
+- graph_update_settings(patch) 更新项目配置（schema 校验、保留注释、原子写、记事件）。
 
 ## 接管 supervisor
 **仅在负责人明确要求你接管 supervisor 时执行**——默认任何会话都不得自动 claim（避免临时会话争抢主管角色）：

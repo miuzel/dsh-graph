@@ -10,6 +10,8 @@ dsh-graph is a plugin that organizes work into a "goal board". Available graph_*
 - graph_archive_goal(goal) archive a goal (only draft/planning/delivered may be archived); graph_unarchive_goal(goal) unarchive it;
 - graph_report_supervisor_status(status) supervisor reports status (in the board's top status bar); graph_resolve_accept resolves the review;
 - graph_handoff() / graph_claim_supervisor() hand off between sessions.
+- graph_get_settings() read-only query of current workspace project config (executor, automation, prompt_overrides, etc.) and valid enum metadata;
+- graph_update_settings(patch) update project config (schema validation, comment preservation, atomic write, event logging).
 
 ## Claim supervisor
 **Execute this only when the person in charge explicitly asks you to take over as supervisor**—by default no session may automatically claim (to prevent temporary sessions from competing for the supervisor role):
