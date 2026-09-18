@@ -4135,7 +4135,7 @@ export function getCardMeta(
   return { title: cardTitle, kind: cardKind, goalTitle };
 }
 
-/** 生成只读产品经理 (PM) 润色与定义提示词（g-242） */
+/** 生成只读产品经理 (PM) 润色与定义提示词（g-242、g-309） */
 export function formatPmPrompt(opts: {
   goalId: string;
   goalRel: string;
@@ -4151,12 +4151,16 @@ export function formatPmPrompt(opts: {
     "",
     "Read the goal.md with read first. Give concise, actionable advice on value, context, scope, verifiable criteria, boundaries, error paths, risks, and human verification. Preserve intent and do not write files.",
     "",
+    "## Report format requirement (g-309)",
+    `Your report MUST start with a title line in the exact format: 【${opts.goalId} 润色建议】`,
+    "This allows the supervisor to automatically identify which goal this report belongs to.",
+    "",
     "## Read-only constraints",
     "- Only read-only analysis is available; do not use management, code-editing, or command-execution tools.",
     "- Return analysis and suggestions only; do not modify project data.",
   ].join("\\n");
   const lines = [
-    `你是固定的产品经理 Agent。请只向主管 Agent 返回“目标定义/润色建议”，不要调用任何 graph_* 工具，不要修改目标、不改变状态、版本或执行语义。`,
+    `你是固定的产品经理 Agent。请只向主管 Agent 返回"目标定义/润色建议"，不要调用任何 graph_* 工具，不要修改目标、不改变状态、版本或执行语义。`,
     ``,
     `目标 ID：${opts.goalId}`,
     `goal.md 工作区相对路径：${opts.goalRel}`,
@@ -4164,11 +4168,26 @@ export function formatPmPrompt(opts: {
     ``,
     `请先用 read 工具读取上述 goal.md，再围绕目标价值、背景、范围、可验证判据、边界/错误路径、风险和人工核验给出简洁、可执行的润色建议；保留原意，不直接替换或写入目标。`,
     ``,
+    `## 回报格式要求（g-309）`,
+    `⚠️ 你的回报必须以标题行开头，格式严格为：【${opts.goalId} 润色建议】`,
+    `这是主管自动识别目标的关键标识，缺少此格式将导致建议无法正确关联到目标。`,
+    ``,
     `## 只读约束与纪律`,
     `- 物理工具拦截：不提供任何管理写工具、代码修改工具与命令执行工具，仅提供只读分析能力；`,
     `- 保留原意：仅输出分析与建议，不擅自修改任何项目数据。`,
   ];
   return lines.join("\n");
+}
+
+/**
+ * 从 PM 回报标题中解析 goal id（g-309）。
+ * 支持格式：【g-XXX 润色建议】或【g-XXX 定义建议】等变体。
+ * 返回解析到的 goal id（如 "g-308"），未匹配返回 null。
+ */
+export function parsePmReportGoalId(report: string): string | null {
+  // 匹配格式：【g-数字 润色建议】或【g-数字 定义建议】等
+  const match = report.match(/【(g-\d+)\s+(?:润色|定义)建议】/);
+  return match?.[1] ?? null;
 }
 
 /** 生成只读复核子代理 (Reviewer) 提示词（g-242） */
