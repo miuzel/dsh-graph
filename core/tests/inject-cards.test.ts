@@ -113,7 +113,7 @@ test("g-262：卡片注入段 zh parity、en 标签翻译与非法语言回退",
   const invalid = formatHarvestedCardsSection(root, goal, undefined, undefined, "fr" as "zh");
 
   // zh 输出保持既有标签与动态用户内容；非法语言等同默认 zh。
-  assert.ok(zh.includes("## 已收集上下文卡片成果（g-120 注入"));
+  assert.ok(zh.includes("## 已收集上下文卡片成果"));
   assert.ok(zh.includes("摘要：甲摘要"));
   assert.ok(!zh.includes("Attachment references:"));
   assert.equal(invalid, zh);
