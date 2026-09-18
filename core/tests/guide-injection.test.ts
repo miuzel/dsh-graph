@@ -139,7 +139,7 @@ test("g-118/g-119：注入不影响 graph_* 工具注册（16 + bind + help + re
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: session-super-1\n");
   const { ctx, registered, sections } = makeMockCtx();
   apply(ctx, { root });
-  assert.equal(registered.length, 42, "全量 42 个 graph_* 工具（g-304 新增 graph_convert_card_to_shared/owned）");
+  assert.equal(registered.length, 44, "全量 44 个 graph_* 工具（g-310 新增 graph_get_settings/graph_update_settings）");
   assert.equal(sections.filter((s) => s.name === "dsh-graph-guide-hint").length, 1, "section 只注册一次");
 });
 

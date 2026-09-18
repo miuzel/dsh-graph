@@ -30,7 +30,7 @@ test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async
     },
   };
   apply(ctx as any, { root });
-  assert.equal(registered.length, 42); // 全量 42 个 graph_* 工具（g-304 新增 graph_convert_card_to_shared/owned）
+  assert.equal(registered.length, 44); // 全量 44 个 graph_* 工具（g-310 新增 graph_get_settings/graph_update_settings）
 
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
@@ -275,4 +275,118 @@ test("g-117 graph_handoff / graph_claim_supervisor：生成交接 + claim 会话
   assert.match(c1.handoff, /# HANDOFF（换会话交接）/);
   const c2 = await byName.get("graph_claim_supervisor")!.execute({}, exec);
   assert.equal(c2.supervisor_session, "session-claim");
+});
+
+// ===== g-310：graph_get_settings / graph_update_settings 配置管理工具 =====
+
+test("g-310 graph_get_settings：只读查询返回配置 + 路径 + schema 提示", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-get-settings-"));
+  init(root);
+  // 写入一个含注释的 project.yaml
+  writeFileSync(join(root, "project.yaml"), [
+    "# 项目配置",
+    "executor:",
+    "  provider: deepseek-official",
+    "  model: deepseek-v3",
+    "  mode: standard",
+    "supervisor:",
+    "  automation:",
+    "    scope_planning: human",
+    "    rework: ai",
+    "prompt_overrides:",
+    "  subagent: default",
+  ].join("\n"), "utf8");
+  const registered: any[] = [];
+  const ctx = { get: () => undefined, effect: (fn: () => unknown) => fn(), tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) } };
+  apply(ctx as any, { root });
+  const byName = new Map(registered.map((d) => [d.name, d]));
+  const exec = { agent: undefined, signal: new AbortController().signal };
+  const out = await byName.get("graph_get_settings")!.execute({}, exec);
+  assertLossless(out);
+  // 配置内容
+  assert.equal(out.config.executor.provider, "deepseek-official");
+  assert.equal(out.config.executor.model, "deepseek-v3");
+  assert.equal(out.config.executor.mode, "standard");
+  assert.equal(out.config.supervisor.automation.scope_planning, "human");
+  assert.equal(out.config.supervisor.automation.rework, "ai");
+  assert.equal(out.config.supervisor.automation.memory_promotion, null); // 未配置
+  // 路径
+  assert.equal(out.config_path, join(root, "project.yaml"));
+  // schema 提示
+  assert.ok(Array.isArray(out.schema_hints["supervisor.automation"].keys));
+  assert.ok(out.schema_hints["supervisor.automation"].keys.length === 6);
+  assert.deepEqual(out.schema_hints["supervisor.automation"].values, ["human", "ai"]);
+  assert.ok(out.schema_hints["executor.mode"].includes("standard"));
+  assert.ok(out.schema_hints["executor.mode"].includes("minimal"));
+  assert.deepEqual(out.schema_hints["prompt_overrides.subagent"].states, ["default", "override", "disable"]);
+});
+
+test("g-310 graph_get_settings：无 project.yaml 时返回全 null 默认值", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-get-settings-empty-"));
+  init(root);
+  const registered: any[] = [];
+  const ctx = { get: () => undefined, effect: (fn: () => unknown) => fn(), tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) } };
+  apply(ctx as any, { root });
+  const byName = new Map(registered.map((d) => [d.name, d]));
+  const exec = { agent: undefined, signal: new AbortController().signal };
+  const out = await byName.get("graph_get_settings")!.execute({}, exec);
+  assertLossless(out);
+  assert.equal(out.config.executor.provider, null);
+  assert.equal(out.config.executor.model, null);
+  assert.equal(out.config.executor.mode, null);
+  assert.equal(out.config.supervisor.automation.scope_planning, null);
+  assert.equal(out.config.prompt_overrides.subagent.state, "default");
+});
+
+test("g-310 graph_update_settings：合法 patch 成功写入并记 project.config_set 事件", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-update-settings-"));
+  init(root);
+  writeFileSync(join(root, "project.yaml"), "executor:\n  provider: old-provider\nsupervisor:\n  automation:\n    scope_planning: human\n", "utf8");
+  const registered: any[] = [];
+  const ctx = { get: () => undefined, effect: (fn: () => unknown) => fn(), tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) } };
+  apply(ctx as any, { root });
+  const byName = new Map(registered.map((d) => [d.name, d]));
+  const exec = { agent: undefined, signal: new AbortController().signal };
+  const result = await byName.get("graph_update_settings")!.execute({
+    patch: {
+      executor: { provider: "new-provider", model: "new-model" },
+      supervisor: { automation: { rework: "ai" } },
+    },
+  }, exec);
+  assertLossless(result);
+  assert.equal(result.ok, true);
+  // 验证写入
+  const updated = await byName.get("graph_get_settings")!.execute({}, exec);
+  assert.equal(updated.config.executor.provider, "new-provider");
+  assert.equal(updated.config.executor.model, "new-model");
+  assert.equal(updated.config.supervisor.automation.scope_planning, "human"); // 未传的字段不变
+  assert.equal(updated.config.supervisor.automation.rework, "ai");
+  // 验证事件
+  const events = readEvents(root);
+  assert.ok(events.some((e) => e.event === "project.config_set" && e.details.fields.includes("executor") && e.details.fields.includes("supervisor")));
+});
+
+test("g-310 graph_update_settings：非法 patch 拒绝且原文件不变", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-update-settings-reject-"));
+  init(root);
+  const original = "executor:\n  provider: good-provider\n";
+  writeFileSync(join(root, "project.yaml"), original, "utf8");
+  const registered: any[] = [];
+  const ctx = { get: () => undefined, effect: (fn: () => unknown) => fn(), tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) } };
+  apply(ctx as any, { root });
+  const byName = new Map(registered.map((d) => [d.name, d]));
+  const exec = { agent: undefined, signal: new AbortController().signal };
+  // 非法枚举值：schema 校验拦截
+  try {
+    await byName.get("graph_update_settings")!.execute({ patch: { supervisor: { automation: { scope_planning: "invalid" } } } }, exec);
+    assert.fail("应抛出校验错误");
+  } catch (err: any) {
+    assert.ok(/校验失败|只允许|enum/.test(err.message), `unexpected error: ${err.message}`);
+  }
+  // 验证原文件不变
+  const { readFileSync } = await import("node:fs");
+  assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), original);
+  // 无 config_set 事件
+  const events = readEvents(root);
+  assert.ok(!events.some((e) => e.event === "project.config_set"));
 });

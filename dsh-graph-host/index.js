@@ -2079,6 +2079,45 @@ export function apply(ctx, config) {
         return { ok: true, ...result };
       },
     },
+    {
+      // g-310：读取当前 workspace 项目配置（只读查询 + schema/枚举元信息）
+      def: {
+        name: "graph_get_settings",
+        description: sT("tool.graph_get_settings"),
+        parameters: params({}, []),
+      },
+      run: (_a, ex) => {
+        const r = rootFor(ex);
+        const config = readProjectConfig(r);
+        return losslessJson({
+          config,
+          config_path: join(r, "project.yaml"),
+          schema_hints: {
+            "supervisor.automation": {
+              keys: ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"],
+              values: ["human", "ai"],
+            },
+            "executor.mode": SUBAGENT_MODES,
+            "prompt_overrides.subagent": {
+              states: ["default", "override", "disable"],
+            },
+          },
+        });
+      },
+    },
+    {
+      // g-310：更新当前 workspace 项目配置（schema 校验 + 事件先行 + 原子写）
+      def: {
+        name: "graph_update_settings",
+        description: sT("tool.graph_update_settings"),
+        parameters: params({ patch: { type: "object", description: "配置 patch（部分字段，未传字段保持不变）：可包含 executor、defaults、supervisor.automation、prompt_overrides 等" } }, ["patch"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        writeProjectConfig(r, a.patch, actorOf(ex));
+        return { ok: true };
+      },
+    },
   ];
 
   // ===== client 半边：/api/dsh-graph* REST 端点（原 dsh-graph-client/index.js，g-116 并入） =====
