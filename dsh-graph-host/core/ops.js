@@ -311,10 +311,10 @@ export function writeSupervisorSession(root, sessionId, actor) {
         throw new GraphError(`supervisor.session 写入失败（${result.phase}）：${result.error}`);
     }
 }
-/** 生成交接文档全文（g-117）：board 投影 + 长期记忆 + 固定环境事实段。
+/** 生成交接文档全文（g-117）：board 投影 + 长期记忆 + 常驻记忆环境事实段。
  *  产物不依赖会话上下文（不读 session、不读 ex）；opts.write 时落盘 <root>/HANDOFF.md。
  *  结构：目标看板（按版本/独立/backlog）→ 进行中（下一步就干）→ 已交付 → 阻塞 →
- *  关键环境事实（固定段）→ 长期记忆。 */
+ *  关键环境事实（来自常驻记忆，无则省略）→ 长期记忆。 */
 export function generateHandoff(root, opts = {}) {
     const board = boardProjection(root);
     const line = (g) => {
@@ -374,8 +374,12 @@ export function generateHandoff(root, opts = {}) {
             parts.push(line(g));
         parts.push("");
     }
-    parts.push("## 关键环境事实（固定段）", "");
-    parts.push("- **executor provider** = `deepseek-official`/deepseek-v4-flash（「deepseek」是错名；DSH adapter 注册名是 deepseek-official）", "- **本地 dev 的 root 覆盖必须用相对值 `.dsh-graph`**（绝对路径会被 `path.resolve` 顶掉、破坏 workspace 跟随）", "- **pnpm 11 supply-chain 策略在 `pnpm-workspace.yaml` 设 `minimumReleaseAge`**（不是 .npmrc）", "- **冻结脚本 R-03**：执行方不得改；规划方（supervisor）可改但必须加 revision 注记", "- **子代理 spawn 两个 provider 概念别混**：subagent provider（spawn/fork）≠ LLM provider（agentOptions）", "");
+    // g-318：关键环境事实不再硬编码——由工作区自身的 standing memory 动态提供
+    const standingSection = formatStandingMemorySection(root, { actor: opts.actor });
+    if (standingSection) {
+        parts.push("## 关键环境事实（来自常驻记忆）", "");
+        parts.push(standingSection, "");
+    }
     const recalled = opts.query?.trim()
         ? recallMemory(root, { query: opts.query, actor: opts.actor, limit: opts.memoryLimit ?? 20 })
         : { total: 0, matches: [] };

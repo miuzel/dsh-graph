@@ -262,11 +262,12 @@ test("g-117 graph_handoff / graph_claim_supervisor：生成交接 + claim 会话
     agent: { id: "a1", session: { id: "session-claim", header: { cwd: root } } },
     signal: new AbortController().signal,
   };
-  // graph_handoff：生成 + 落盘，产物含 board/环境事实
+  // graph_handoff：生成 + 落盘，产物含 board（无 standing memory 时不含环境事实段）
   const h = await byName.get("graph_handoff")!.execute({}, exec);
   assert.equal(h.ok, true);
   assert.match(h.handoff, /handoff 目标/);
-  assert.match(h.handoff, /deepseek-official/);
+  // g-318：无 standing memory 时不应出现硬编码的项目专属事实
+  assert.doesNotMatch(h.handoff, /deepseek-official/);
   assert.ok(JSON.parse(JSON.stringify(h)), "输出无损 JSON");
   // graph_claim_supervisor：更新 session + 幂等 + 返回 HANDOFF
   const c1 = await byName.get("graph_claim_supervisor")!.execute({}, exec);
