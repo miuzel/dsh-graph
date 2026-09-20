@@ -4,9 +4,10 @@
   "type": "module",
   "description": "A DeepSeek Harness plugin for graph-based goal management and kanban visualization.",
   "scripts": {
-    "build": "bash scripts/build-core.sh",
+    "build": "bash scripts/build.sh",
     "test": "node --test core/tests/*.test.ts",
-    "prepack": "bash scripts/build-core.sh"
+    "prepare": "bash scripts/build.sh",
+    "prepack": "bash scripts/build.sh"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
