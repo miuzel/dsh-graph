@@ -63,8 +63,8 @@ take over. If no process has taken over this workspace, explicitly take it over.
     - Rule: anything that is “the goal's own content” (to be implemented, to be seen by the executor/board) → `append`; anything that is
       “process/event/trace-only” → use only `note`. **When unsure, use `append`**. append contains only the body;
       do not include a `## 标题` yourself (see #7);
-11. **Goal Definition Polish & PM Suggestion Closure (g-309 Enhanced)**：
-    - PM Agent report format requirement (g-309): report title MUST include goal id in format `【g-XXX 润色建议】`or `【g-XXX 定义建议】`；
+11. **Goal Definition Polish & PM Suggestion Closure**：
+    - PM Agent report format requirement: report title MUST include goal id in format `【g-XXX 润色建议】`or `【g-XXX 定义建议】`；
     - Use `parsePmReportGoalId(report)` to automatically extract goal id from report title, ensuring suggestions are correctly associated with goals；
     - When receiving goal-definition/refinement suggestions from a product manager (PM) Agent, the supervisor **must not leave them only in the comments** (comments are process records only);
     - **The following two-step loop must be completed proactively**:

@@ -280,11 +280,11 @@ test("判据 6 - parsePmReportGoalId 正确解析 PM 回报中的 goal id", () =
   // 5. formatPmPrompt 生成的提示词包含格式要求
   const zhPrompt = formatPmPrompt({ goalId: "g-308", goalRel: ".dsh-graph/goals/g-308/goal.md" });
   assert.ok(zhPrompt.includes("【g-308 润色建议】"), "中文提示词必须包含示例格式");
-  assert.ok(zhPrompt.includes("回报格式要求（g-309）"), "中文提示词必须包含 g-309 格式要求段");
+  assert.ok(zhPrompt.includes("回报格式要求"), "中文提示词必须包含回报格式要求段");
 
   const enPrompt = formatPmPrompt({ goalId: "g-308", goalRel: ".dsh-graph/goals/g-308/goal.md", language: "en" });
   assert.ok(enPrompt.includes("【g-308 润色建议】"), "英文提示词必须包含示例格式");
-  assert.ok(enPrompt.includes("Report format requirement (g-309)"), "英文提示词必须包含 g-309 格式要求段");
+  assert.ok(enPrompt.includes("Report format requirement"), "英文提示词必须包含 Report format requirement 段");
 
   // 6. parsePmReportGoalId 能正确解析 formatPmPrompt 生成的格式示例
   const sampleReport = `【g-308 润色建议】\n建议将目标描述细化...`;
