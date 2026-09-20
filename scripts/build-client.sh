@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# dsh-graph client.js 构建脚本（g-142 模块化重构）
-# 将 dsh-graph-host/lib/client/ 目录下的子模块拼接组装为 dsh-graph-host/lib/client.js
+# dsh-graph client.js 构建脚本（g-319：产物输出到 dist/）
+# 将 dsh-graph-host/lib/client/ 目录下的子模块拼接组装为 dist/lib/client.js
 #
 # 用法：从仓库根目录运行 bash scripts/build-client.sh
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-OUT="dsh-graph-host/lib/client.js"
+OUT="dist/lib/client.js"
 MOD="dsh-graph-host/lib/client"
+
+mkdir -p "$(dirname "$OUT")"
 
 PARTS=(
   "_wrapper-top"

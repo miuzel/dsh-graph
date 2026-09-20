@@ -888,14 +888,16 @@ test("g-132 源契约：config 读写函数 + 三态继承语义在 core/ops.ts 
    assert.doesNotMatch(src, /PROMPT_OVERRIDE_KEYS = \["subagent", "supervisor"\]/); // 未配置默认为 default
 });
 
-test("generateHandoff：board 投影 + 环境事实 + 长期记忆，不依赖会话上下文", () => {
+test("generateHandoff：board 投影 + 常驻记忆环境事实 + 长期记忆，不依赖会话上下文", () => {
   const root = tmpRoot();
   const id = createGoal(root, { title: "交接测试目标", version: "v-t", actor: "test" });
   writeFileSync(join(root, "memory", "long-term", "mem-x.md"), "内容");
   const content = generateHandoff(root);
   assert.match(content, /# HANDOFF（换会话交接）/);
   assert.match(content, /交接测试目标/);
-  assert.match(content, /deepseek-official/);
+  // g-318：无 standing memory 时不应出现硬编码的项目专属事实
+  assert.doesNotMatch(content, /deepseek-official/);
+  assert.doesNotMatch(content, /关键环境事实/);
   assert.match(content, /mem-x\.md/);
   assert.match(content, new RegExp(id)); // 目标 id 出现在看板段
   // 产物不依赖会话：同一 root 两次生成内容一致（除时间戳行）

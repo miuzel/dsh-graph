@@ -30,7 +30,7 @@ import {
   writeSupervisorSession,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 /** 临时图根 + mock ctx 应用插件，返回 { root, byName }。agents 可注入（live registry mock）。 */
 function setup(agents?: Record<string, unknown>) {

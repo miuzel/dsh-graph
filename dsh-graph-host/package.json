@@ -1,6 +1,6 @@
 {
   "name": "dsh-graph",
-  "version": "0.11.2",
+  "version": "0.12.0",
   "description": "A DeepSeek Harness plugin for graph-based goal management and kanban visualization.",
   "license": "MIT",
   "type": "module",
@@ -11,17 +11,6 @@
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
-  "files": [
-    "index.js",
-    "core",
-    "lib",
-    "cordis.patch.yml",
-    "supervisor-guide.zh.md",
-    "supervisor-guide.en.md",
-    "prompts",
-    "README.md",
-    "LICENSE"
-  ],
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -57,11 +46,6 @@
   },
   "dependencies": {
     "yaml": "^2.9.0"
-  },
-  "scripts": {
-    "prepack": "bash ../scripts/sync-core.sh && node -e \"require('node:fs').existsSync('core/ops.js') || (console.error('core 未同步'), process.exit(1))\"",
-    "build": "bash ../scripts/sync-core.sh",
-    "test": "node --test ../core/tests/*.test.ts"
   },
   "dsh": {
     "bundle": {

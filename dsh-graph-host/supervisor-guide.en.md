@@ -63,7 +63,9 @@ take over. If no process has taken over this workspace, explicitly take it over.
     - Rule: anything that is “the goal's own content” (to be implemented, to be seen by the executor/board) → `append`; anything that is
       “process/event/trace-only” → use only `note`. **When unsure, use `append`**. append contains only the body;
       do not include a `## 标题` yourself (see #7);
-11. **Close the loop on goal-definition refinement and PM suggestions**:
+11. **Goal Definition Polish & PM Suggestion Closure**：
+    - PM Agent report format requirement: report title MUST include goal id in format `【g-XXX 润色建议】`or `【g-XXX 定义建议】`；
+    - Use `parsePmReportGoalId(report)` to automatically extract goal id from report title, ensuring suggestions are correctly associated with goals；
     - When receiving goal-definition/refinement suggestions from a product manager (PM) Agent, the supervisor **must not leave them only in the comments** (comments are process records only);
     - **The following two-step loop must be completed proactively**:
       1. Call `graph_amend_goal(append=...)` to add the refined background, requirements scope, and core mechanism to the goal description body;

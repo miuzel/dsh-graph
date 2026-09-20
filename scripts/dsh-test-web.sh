@@ -61,9 +61,9 @@ VERSION_ROOT="$TEST_ROOT/$FULL_VERSION"
 DSH_HOME="$TEST_ROOT/$STABLE_VERSION/home"
 WORKSPACE="$VERSION_ROOT/workspace"
 CACHE_ROOT="$VERSION_ROOT/cache"
-HOST_DIR="${HOST_DIR:-$REPO_ROOT/dsh-graph-host}"
+HOST_DIR="${HOST_DIR:-$REPO_ROOT/dist}"
 HOST_DIR=$(realpath -e "$HOST_DIR") || die "无法 canonicalize 本地插件目录：$HOST_DIR"
-case "$HOST_DIR" in "$REPO_ROOT/dsh-graph-host"|"$REPO_ROOT/.worktrees"/*/dsh-graph-host) ;; *) die "--host-dir 必须位于仓库 dsh-graph-host 或 .worktrees 下：$HOST_DIR";; esac
+case "$HOST_DIR" in "$REPO_ROOT/dist"|"$REPO_ROOT/dsh-graph-host"|"$REPO_ROOT/.worktrees"/*/dist|"$REPO_ROOT/.worktrees"/*/dsh-graph-host) ;; *) die "--host-dir 必须位于仓库 dist、dsh-graph-host 或 .worktrees 下：$HOST_DIR";; esac
 [ -f "$HOST_DIR/package.json" ] || die "本地插件缺失：$HOST_DIR/package.json"
 [ "$(node -e 'console.log(require(process.argv[1]).name)' "$HOST_DIR/package.json")" = "dsh-graph" ] || die "本地插件 package name 必须为 dsh-graph：$HOST_DIR/package.json"
 # The web alias owns the fixed web profile; DSH_HOME (stable base home, shared across a prerelease family) is the profile boundary.

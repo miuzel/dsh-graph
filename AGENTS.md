@@ -2,50 +2,50 @@
 
 ## Generated File Policy
 
-### `dsh-graph-host/core/*.js` (compiled core)
+### Build Output: `dist/` Directory
 
-These are compiled from `core/*.ts` and are **tracked in git** — GitHub source installs
-(`github:owner/repo`) do not run prepack, so the plugin would fail to load without them.
+All build artifacts are output to a standalone `dist/` directory (gitignored). `dsh-graph-host/` is a **pure source directory** — it contains no build products.
 
-- `core/*.ts` is the single source of truth. Never edit `dsh-graph-host/core/*.js` by hand.
-- After changing `core/*.ts`, run `bash scripts/sync-core.sh` and **commit the regenerated
-  `dsh-graph-host/core/*.js` together with the source**.
+- `core/*.ts` is the single source of truth for the core layer.
+- `dsh-graph-host/lib/client/*.js` are the source modules for the client bundle.
+- Build automatically via `pnpm build` or `pnpm prepack` (chains `sync-core.sh` + `build-client.sh` + asset copy).
+- GitHub source installs (`github:owner/repo`) trigger `prepare` script automatically on `npm install`.
 - `core-dist/` is a build intermediate and stays gitignored.
 
-### `dsh-graph-host/lib/client.js`
+### `dist/core/*.js` (compiled core)
+
+These are **auto-generated** from `core/*.ts`. Never edit them directly.
+
+### `dist/lib/client.js`
 
 This file is **auto-generated** and must **NOT** be edited directly.
 
-#### Why?
-- `dsh-graph-host/lib/client.js` is assembled from modular source files by `scripts/build-client.sh`
+- `dist/lib/client.js` is assembled from modular source files in `dsh-graph-host/lib/client/*.js`
 - Direct editing will be overwritten on next build
-- Maintains consistency between source modules and final bundle
 
-#### How to modify client code:
-1. Edit the source modules in `dsh-graph-host/lib/client/*.js`
-2. Run the build script: `bash scripts/build-client.sh`
-3. Verify the generated file reflects your changes
+#### Source Modules
+`dsh-graph-host/lib/client/*.js` — edit these, then rebuild.
 
-#### Build Command
+### Unified Build Command
+
 ```bash
-bash scripts/build-client.sh
+pnpm build          # or: bash scripts/build.sh
 ```
 
-#### Source Module Location
-`dsh-graph-host/lib/client/*.js`
+This runs `sync-core.sh` (core/*.ts → dist/core/*.js), `build-client.sh` (client modules → dist/lib/client.js), and copies all release assets to `dist/`.
 
 ### Verification
-After modifying source modules and rebuilding:
-1. Run `node --check dsh-graph-host/lib/client.js` to verify syntax
+After modifying source and rebuilding:
+1. Run `node --check dist/lib/client.js` to verify syntax
 2. Run the full test suite: `node --test core/tests/*.test.ts`
-3. Ensure the generated file contains the `⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY` marker
+3. Verify pack: `cd dist && pnpm pack --dry-run`
 
 ## Development Workflow
 
-1. **Always work with source modules** — never edit `dsh-graph-host/lib/client.js` directly
-2. **Rebuild after changes** — run `bash scripts/build-client.sh`
-3. **Verify compatibility** — ensure ModuleLoader contract and all tests pass
-4. **Commit source modules and generated file** — commit changes to `dsh-graph-host/lib/client/*.js` **and** the rebuilt `dsh-graph-host/lib/client.js`
+1. **Always work with source files** — never edit files in `dist/` directly
+2. **Rebuild after changes** — run `pnpm build` (or `bash scripts/build.sh`)
+3. **Verify compatibility** — ensure all tests pass
+4. **Commit only source files** — `dist/` is generated and gitignored; `dsh-graph-host/` is pure source
 
 ## Worktree Naming
 
@@ -84,16 +84,17 @@ bash scripts/dev-dsh-instance.sh status           # show both profiles' dsh-grap
 
 ### Development loop
 
-- **Node-side changes** (`dsh-graph-host/index.js`, `core/*.js`, `cordis.patch.yml`):
-  the test profile references the host via `link:`, so re-running `run` picks up the
+- **Node-side changes** (`dsh-graph-host/index.js`, `core/*.ts`, `cordis.patch.yml`):
+  the test profile references `dist/` via `link:`, so re-running `run` picks up the
   latest source — no reinstall needed (`setup` is just idempotent write + `pnpm install`).
+  After changing `core/*.ts`, rebuild with `pnpm build` to regenerate `dist/core/*.js`.
 - **Browser/kanban changes** (`dsh-graph-host/lib/client/*.js`): these are source modules.
-  Per the Generated File Policy above, never edit `lib/client.js` directly. Rebuild the
-  generated bundle and refresh the **test instance (3082)** page:
+  Per the Generated File Policy above, never edit `dist/lib/client.js` directly. Rebuild and
+  refresh the **test instance (3082)** page:
 
 ```sh
-bash scripts/build-client.sh
-node --check dsh-graph-host/lib/client.js
+pnpm build
+node --check dist/lib/client.js
 node --test core/tests/*.test.ts
 ```
 

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveWorktreeGuide, formatAttemptPrompt } from "../../dsh-graph-host/index.js";
+import { resolveWorktreeGuide, formatAttemptPrompt } from "../../dist/index.js";
 import { defaultWorktreeForGoalType } from "../ops.ts";
 
 /**
@@ -204,7 +204,7 @@ test("g-283 att-005：静态 prompt 资源不写死 worktree 绝对路径，改�
 });
 
 test("g-283 回归：dispatch 在提示词组装前计算 isWorktree 并传给 resolveWorktreeGuide", () => {
-  const src = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  const src = readFileSync(join(import.meta.dirname, "../../dist/index.js"), "utf8");
   // g-289 起，isWorktree 由「类型 + 工作区干净度」的综合决策函数解析，仍是「解析后布尔」，
   // 提示词隔离声明依旧与其严格一致（g-283 不变式保持不变）。
   const decIdx = src.indexOf("const isolationDecision = resolveWorktreeIsolationDecision(gType, worktree, cleanliness)");

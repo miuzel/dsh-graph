@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatAttemptPrompt } from "../../dsh-graph-host/index.js";
+import { formatAttemptPrompt } from "../../dist/index.js";
 import {
   init,
   createGoal,
@@ -20,7 +20,7 @@ function prompt(overrides = {}) {
     goal: "g-228",
     attempt: "att-004",
     goalRel: ".dsh-graph/versions/v0.8.2/goals/g-228/goal.md",
-    cardsSection: "## 已收集上下文卡片成果（g-120 注入）\n\n（无）",
+    cardsSection: "## 已收集上下文卡片成果\n\n（无）",
     worktreeBlock: "【强制 worktree 隔离】",
     ...overrides,
   });

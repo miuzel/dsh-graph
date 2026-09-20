@@ -5,11 +5,12 @@ import { join } from "node:path";
 import vm from "node:vm";
 
 const hostRoot = join(import.meta.dirname, "../../dsh-graph-host");
+const distRoot = join(import.meta.dirname, "../../dist");
 const i18nSource = readFileSync(join(hostRoot, "lib/client/i18n.js"), "utf8");
 const constantsSource = readFileSync(join(hostRoot, "lib/client/constants.js"), "utf8");
 const modalSource = readFileSync(join(hostRoot, "lib/client/goal-modal.js"), "utf8");
 const kanbanSource = readFileSync(join(hostRoot, "lib/client/kanban.js"), "utf8");
-const bundleSource = readFileSync(join(hostRoot, "lib/client.js"), "utf8");
+const bundleSource = readFileSync(join(distRoot, "lib/client.js"), "utf8");
 
 function loadClientI18n() {
   const sandbox: any = { React: {} };

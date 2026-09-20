@@ -9,7 +9,7 @@ import vm from "node:vm";
 import { init, createGoal, startAttempt, transition, goalDetail } from "../ops.ts";
 import { listWorktrees } from "../worktree.ts";
 import { appendEvent, nowIso } from "../events.ts";
-import { discoverAttemptWorktrees, _clearWorktreeCache } from "../../dsh-graph-host/index.js";
+import { discoverAttemptWorktrees, _clearWorktreeCache } from "../../dist/index.js";
 
 const rootPkg = join(import.meta.dirname, "../../dsh-graph-host");
 const i18nSource = readFileSync(join(rootPkg, "lib/client/i18n.js"), "utf8");

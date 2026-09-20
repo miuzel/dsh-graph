@@ -76,7 +76,7 @@ test("g-233 boardProjection：目标对象下发 description 字段供全文搜�
 });
 
 test("g-233 源码契约：模块与 Bundle 包含搜索框、高亮样式、导航与临时状态恢复", () => {
-  const bundle = readFileSync(join(__dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(__dirname, "../../dist/lib/client.js"), "utf8");
   const constants = readFileSync(join(__dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
   const helpers = readFileSync(join(__dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
   const card = readFileSync(join(__dirname, "../../dsh-graph-host/lib/client/card.js"), "utf8");

@@ -13,6 +13,7 @@ import {
   formatCollectPrompt,
   formatPmPrompt,
   formatReviewPrompt,
+  parsePmReportGoalId,
   SUBAGENT_ROLES,
   normalizeSubagentRole,
   ROLE_PROFILES,
@@ -20,7 +21,7 @@ import {
   toolFilterForRole,
   GRAPH_MINIMAL_ALLOWED_TOOLS,
 } from "../ops.ts";
-import { apply, formatAttemptPrompt } from "../../dsh-graph-host/index.js";
+import { apply, formatAttemptPrompt } from "../../dist/index.js";
 
 // ===== 判据 1：supervisor/executor/collector/reviewer/PM 角色能力与 prompt 要求统一映射测试 =====
 
@@ -160,7 +161,7 @@ test("判据 2 - collector 契约：无 graph_report_status，依托卡片生命
 });
 
 test("判据 2 - supervisor-guide 修正：明确收集子代理不创建 attempt 与不调用 graph_report_status", () => {
-  const guidePath = join(import.meta.dirname, "../../dsh-graph-host/supervisor-guide.zh.md");
+  const guidePath = join(import.meta.dirname, "../../dist/supervisor-guide.zh.md");
   const guide = readFileSync(guidePath, "utf8");
 
   assert.ok(
@@ -255,4 +256,37 @@ test("判据 5 - 角色能力通用性与边界解耦：不复制项目特有规
     // 不应包含具体的 Git committer 白名单逻辑（归 g-218）
     assert.ok(!text.includes("committer_whitelist"), `角色 ${role} profile 中不得硬编码 Git 治理细节`);
   }
+});
+
+// ===== 判据 6：PM 回报格式解析（g-309）=====
+
+test("判据 6 - parsePmReportGoalId 正确解析 PM 回报中的 goal id", () => {
+  // 1. 标准格式：【g-XXX 润色建议】
+  assert.equal(parsePmReportGoalId("【g-308 润色建议】\n这是润色内容"), "g-308");
+  assert.equal(parsePmReportGoalId("【g-1 润色建议】"), "g-1");
+  assert.equal(parsePmReportGoalId("【g-999 润色建议】详细建议内容..."), "g-999");
+
+  // 2. 定义建议格式
+  assert.equal(parsePmReportGoalId("【g-100 定义建议】目标定义内容"), "g-100");
+
+  // 3. 带前缀文本的情况
+  assert.equal(parsePmReportGoalId("以下是建议：\n【g-308 润色建议】\n建议内容"), "g-308");
+
+  // 4. 无匹配返回 null
+  assert.equal(parsePmReportGoalId("这是一份普通报告"), null);
+  assert.equal(parsePmReportGoalId("【润色建议】缺少 goal id"), null);
+  assert.equal(parsePmReportGoalId(""), null);
+
+  // 5. formatPmPrompt 生成的提示词包含格式要求
+  const zhPrompt = formatPmPrompt({ goalId: "g-308", goalRel: ".dsh-graph/goals/g-308/goal.md" });
+  assert.ok(zhPrompt.includes("【g-308 润色建议】"), "中文提示词必须包含示例格式");
+  assert.ok(zhPrompt.includes("回报格式要求"), "中文提示词必须包含回报格式要求段");
+
+  const enPrompt = formatPmPrompt({ goalId: "g-308", goalRel: ".dsh-graph/goals/g-308/goal.md", language: "en" });
+  assert.ok(enPrompt.includes("【g-308 润色建议】"), "英文提示词必须包含示例格式");
+  assert.ok(enPrompt.includes("Report format requirement"), "英文提示词必须包含 Report format requirement 段");
+
+  // 6. parsePmReportGoalId 能正确解析 formatPmPrompt 生成的格式示例
+  const sampleReport = `【g-308 润色建议】\n建议将目标描述细化...`;
+  assert.equal(parsePmReportGoalId(sampleReport), "g-308", "能正确解析标准回报格式");
 });

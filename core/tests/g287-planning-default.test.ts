@@ -159,7 +159,8 @@ test("g-287（负向）：backlog 目标仍不可派发执行", () => {
 
 const modalSource = readFileSync(join(hostRoot, "lib/client/goal-modal.js"), "utf8");
 const i18nSource = readFileSync(join(hostRoot, "lib/client/i18n.js"), "utf8");
-const bundleSource = readFileSync(join(hostRoot, "lib/client.js"), "utf8");
+const distRoot = join(import.meta.dirname, "../../dist");
+const bundleSource = readFileSync(join(distRoot, "lib/client.js"), "utf8");
 
 test("g-287：目标弹窗提供「转入规划」入口，且显式排除 backlog 目标（不依赖拖拽）", () => {
   assert.ok(modalSource.includes("canEnterPlanning"), "goal-modal.js 缺少 canEnterPlanning 判定");
