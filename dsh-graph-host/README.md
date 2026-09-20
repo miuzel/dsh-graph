@@ -30,17 +30,16 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
-> ### 🚀 v0.11.1 新功能
+> ### 🚀 v0.12.0 新功能
 >
-> - **backlog 卡片快速排期**：目标弹窗标题区新增「📅 排期」按钮（与「⏸ 暂缓」对应），一键将 backlog 目标排入活跃版本或转为独立目标。
-> - **共享卡转换工具**：新增 `graph_convert_card_to_shared` / `graph_convert_card_to_owned` 工具。
-> - **抽屉层级修复**：版本管理抽屉与上下文卡片抽屉在 Safari 中不再被 DSH 默认 UI 遮挡。
-> - **类型切换即时刷新**：backlog 卡片切换 goal 类型后看板立即更新，无需 F5。
-> - **拖拽到折叠泳道**：卡片可拖拽到已折叠的版本或 backlog 泳道，自动展开并高亮。
-> - **派发上下文去重**：brief/directive 内容重复时自动去重；卡片预算诊断可追踪超预算来源。
-> - **graph_resolve_accept 修复**：`in_progress` 状态下调用自动补迁移；`blocked`/`delivered` 等无映射状态明确报错。
+> - **配置管理工具补齐**：新增 `graph_get_settings` 与 `graph_update_settings` 工具，支持结构化查询、更新当前 workspace 的 `project.yaml`（含模式与 automation 配置），带合法枚举/schema 提示与事件审计，告别手工翻查与编辑源码。
+> - **构建流水线与 release 目录隔离**：构建产物统一输出至独立的 `dist/` 目录并自包含打包，Git 源码树彻底清除生成的重复副本（纯源码管理）。
+> - **产品经理回报机制修复**：PM 润色建议强制以 `【g-XXX 润色建议】` 为标题，主管自动精准识别目标并闭环更新，避免遗漏。
+> - **解耦环境事实与 HANDOFF 优化**：移除写死的项目特有环境事实，改为按需从工作区常驻记忆提取；长期记忆文件分节展示，接管时默认召回高优先级记忆，消除语义矛盾。
+> - **提示词生产级清洗**：全面地毯式清除 36 处可见界面的开发过程标记，提升提示词专业度与模型理解力。
+> - **帮助工具全面对齐**：`graph_help` 完整补齐全部 44 个工具的分类速查，修正 `graph_amend_goal` 的 `append` 参数签名。
 >
-> **DSH 版本兼容性**：本版本（v0.11.1）**已完整验证并支持 DeepSeek Harness `v0.1.5-rc.2`**；兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上版本。
+> **DSH 版本兼容性**：本版本（v0.12.0）**支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.5-rc.2`**（包含已完整验证的 `v0.1.5-rc.2`）；**暂不支持 `0.1.6-alpha.2`**（因宿主依赖构建审批拦截机制调整）。
 >
 > **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证。**
 >
@@ -76,6 +75,7 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 | **目标生命周期** | `graph_create_goal` | 创建目标（默认放入 Backlog，可指定版本） |
 | | `graph_rename_goal` | 重命名目标标题 |
 | | `graph_set_description` | 设置/更新目标描述正文（Markdown） |
+| | `graph_set_directive` | 为下一次 Attempt 注入补充指令与边界要求 |
 | | `graph_set_goal_type` | 设置目标类型（feature / bug / task / improvement / patch / chore） |
 | | `graph_set_goal_tags` | 设置目标标签列表（最多 20 个，乐观并发） |
 | | `graph_amend_goal` | 记录对目标的修订补充，可自动同步至描述 |
@@ -92,13 +92,17 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 | | `graph_fill_card` | 填充卡片内容并生成看板简要摘要 |
 | | `graph_review_card` | 复核卡片内容（filled → reviewed） |
 | | `graph_delete_card` | 删除未在收集中的卡片 |
+| | `graph_convert_card_to_shared` | 将自有卡转换为共享卡（放入共享池） |
+| | `graph_convert_card_to_owned` | 将共享卡收回为自有卡（独占） |
 | **附件管理** | `graph_store_attachment` | 存储文件附件到目标 |
 | | `graph_delete_attachment` | 删除目标附件 |
 | **排期管理** | `graph_move_goal` | 在 Backlog、独立目标与版本之间移动排期 |
-| **执行派发** | `graph_start_attempt` | 派发执行 Attempt，启动并绑定可续轮子代理 |
-| | `graph_set_directive` | 为下一次 Attempt 注入补充指令与边界要求 |
+| **执行与返工** | `graph_start_attempt` | 派发执行 Attempt，启动并绑定可续轮子代理 |
 | | `graph_record_attempt_handoff`| 记录前序 Attempt 的返工约束与排查基线 |
 | | `graph_unbind_goal_child` | 安全解绑目标执行子代理 |
+| | `graph_abandon_attempt` | 放弃陈旧或失联的 Attempt |
+| **配置管理** | `graph_get_settings` | 查询当前 workspace 项目配置及合法枚举元信息 |
+| | `graph_update_settings` | 结构化更新当前 workspace 项目配置（支持 patch） |
 | **记忆管理** | `graph_memory_add` | 写入按需/常驻记忆条目 |
 | | `graph_memory_recall` | 按关键词检索记忆 |
 | | `graph_memory_remove` | 删除指定记忆条目 |
@@ -109,7 +113,7 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 | **协作与交接** | `graph_add_comment` | 向目标追加可追溯的讨论与反馈历史 |
 | | `graph_handoff` | 生成跨会话交接文档 `HANDOFF.md` |
 | | `graph_claim_supervisor` | 新会话接管 Supervisor 并更新会话元数据 |
-| | `graph_help` | 输出插件功能说明与接管指引 |
+| | `graph_help` | 输出插件功能说明与 44 个工具速查清单 |
 | **数据与校验** | `graph_validate` | 执行全量不变式检查（状态、依赖环、卡片引用） |
 | | `graph_rebuild` | 从事件流完全重建目标状态并与元数据对账 |
 
@@ -160,17 +164,16 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **Dependency Note**: Core packages provided by the DSH host (`@deepseek-ai/cordis` ^4.0.2, `@deepseek-ai/schemastery` ^3.18.2, `@deepseek-ai/dsh-settings` ^0.1.5-rc.2) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention), provided directly by the host runtime without peer dependency warnings during installation; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 >
-> ### 🚀 What's new in v0.11.1
+> ### 🚀 What's new in v0.12.0
 >
-> - **Quick schedule for backlog cards**: A "📅 Schedule" button in the goal modal title area (corresponding to the "⏸ Postpone" button) lets you schedule a backlog goal into an active version or convert it to a standalone goal with one click.
-> - **Shared card conversion tools**: New `graph_convert_card_to_shared` / `graph_convert_card_to_owned` tools.
-> - **Drawer z-index fix**: Version management drawer and context card drawer are no longer obscured by the DSH default UI in Safari (React Portal to body layer + z-index boost).
-> - **Type change instant refresh**: Changing a backlog card's goal type updates the board immediately without F5.
-> - **Drag to collapsed lanes**: Cards can be dragged onto collapsed version or backlog lanes, auto-expanding with highlight.
-> - **Dispatch context dedup**: Duplicate brief/directive content is automatically deduplicated; card budget diagnostics track over-budget sources.
-> - **graph_resolve_accept fix**: Calling on `in_progress` auto-completes the migration; `blocked`/`delivered` and other unmapped states return clear errors (including force channel).
+> - **Settings Management Tools**: Added `graph_get_settings` and `graph_update_settings` tools for structured querying and updating of workspace `project.yaml` (including modes and automation configurations), with valid enum hints and event logging.
+> - **Build Pipeline & Release Directory Isolation**: All build artifacts are unified and isolated into the `dist/` directory; the git source tree is clean of compiled duplicates.
+> - **PM Report Format & Goal Association**: PM refining suggestions now require a title with `【g-XXX 润色建议】`, allowing supervisors to automatically recognize and update target goals.
+> - **Decoupled Environment Facts & Refined HANDOFF**: Hardcoded internal facts removed from HANDOFF, now driven by workspace standing memory; long-term memory files displayed under their own subheadings, with default high-priority recall.
+> - **Production-Grade Prompt Cleanup**: Thoroughly cleaned 36 instances of development tags across user-visible prompts, enhancing prompt clarity.
+> - **Help Assets Fully Aligned**: `graph_help` updated with the complete catalog of all 44 tools and corrected signatures (including `append` for `graph_amend_goal`).
 >
-> **DSH version compatibility**: This release (v0.11.1) is **fully verified against and supports DeepSeek Harness `v0.1.5-rc.2`**; it also works on the `0.1.5` series and on `0.1.2-alpha.x` and later.
+> **DSH version compatibility**: This release (v0.12.0) **supports DeepSeek Harness `0.1.2-rc.1` through `0.1.5-rc.2`** (including verified `v0.1.5-rc.2`); **`0.1.6-alpha.2` is temporarily unsupported** due to changes in host build approval script mechanisms.
 >
 > **Platform scope**: **verified on Linux (WSL2), native Windows, and macOS.**
 >
@@ -206,6 +209,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools:
 | **Goal Lifecycle** | `graph_create_goal` | Create a goal (defaults to Backlog, optional Version) |
 | | `graph_rename_goal` | Rename goal title |
 | | `graph_set_description` | Set/update goal description body (Markdown) |
+| | `graph_set_directive` | Inject instructions and boundaries for the upcoming attempt |
 | | `graph_set_goal_type` | Set goal type (feature / bug / task / improvement / patch / chore) |
 | | `graph_set_goal_tags` | Set goal tags (max 20, optimistic concurrency) |
 | | `graph_amend_goal` | Record amendments, optionally appending to description |
@@ -222,13 +226,17 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools:
 | | `graph_fill_card` | Populate card content with a concise board summary |
 | | `graph_review_card` | Review card content (filled → reviewed) |
 | | `graph_delete_card` | Delete cards not currently collecting |
+| | `graph_convert_card_to_shared` | Convert owned card to shared card |
+| | `graph_convert_card_to_owned` | Convert shared card back to owned card |
 | **Attachments** | `graph_store_attachment` | Store file attachments to a goal |
 | | `graph_delete_attachment` | Delete a goal attachment |
 | **Scheduling** | `graph_move_goal` | Move goals between Backlog, Standalone, and Versions |
-| **Execution** | `graph_start_attempt` | Dispatch an execution attempt and spawn a continuable subagent |
-| | `graph_set_directive` | Inject instructions and boundaries for the upcoming attempt |
+| **Execution & Rework** | `graph_start_attempt` | Dispatch an execution attempt and spawn a continuable subagent |
 | | `graph_record_attempt_handoff`| Record rework constraints, failure notes, and baseline |
 | | `graph_unbind_goal_child` | Safely detach an execution subagent from a goal |
+| | `graph_abandon_attempt` | Abandon a stale or lost attempt |
+| **Configuration** | `graph_get_settings` | Query workspace project configuration and enum metadata |
+| | `graph_update_settings` | Update workspace project configuration (supports partial patch) |
 | **Memory** | `graph_memory_add` | Write on-demand / standing memory entries |
 | | `graph_memory_recall` | Recall memory entries by keyword search |
 | | `graph_memory_remove` | Remove a specific memory entry |
@@ -237,6 +245,11 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools:
 | | `graph_report_supervisor_status` | Report supervisor status (top status bar animation) |
 | **Review & Verdict** | `graph_resolve_accept` | Accept or object to delivered attempts |
 | **Collaboration** | `graph_add_comment` | Append historical discussion or human feedback |
+| | `graph_handoff` | Export cross-session handover document (`HANDOFF.md`) |
+| | `graph_claim_supervisor` | Claim supervisor role in new session & update metadata |
+| | `graph_help` | Display usage instructions and 44-tool checklist |
+| **Validation** | `graph_validate` | Validate full invariants (states, cycles, card refs) |
+| | `graph_rebuild` | Rebuild goal state from `events.jsonl` and reconcile |
 | | `graph_handoff` | Export cross-session handover document (`HANDOFF.md`) |
 | | `graph_claim_supervisor` | Claim supervisor role in new session & update metadata |
 | | `graph_help` | Display usage instructions and claim guide |
