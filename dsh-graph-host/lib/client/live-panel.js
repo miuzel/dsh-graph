@@ -5,6 +5,9 @@
       const { session, mode } = useBoundSession(props.parentId, props.childId);
       const [text, setText] = React.useState("");
       const [note, setNote] = React.useState(null);
+      // g-321：排队状态改为安全探测（0.1.6 inbox 投影 / 0.1.5 快照 queue），
+      // 绝不解构 session.getSnapshot().queue（新版为 undefined，解构即崩渲染）。
+      const queueDepth = useSessionQueueDepth(session);
       if (!props.childId || !session) return null;
       if (mode === "one-shot") {
         return h("div", { style: { ...S.meta, marginTop: 3 } },
@@ -19,11 +22,18 @@
           const res = await session.prompt([{ type: "text", text: t }], sendMode);
           if (res?.ok) {
             setText("");
-            setNote(sendMode === "steer" ? dgT("common.sent") : dgT("common.sent"));
+            // g-321：以真实排队深度回执（inbox 投影），不再凭空断言已发送
+            const depth = sessionQueueState(session).pendingCount;
+            setNote(sendMode === "steer"
+              ? dgT("common.sent")
+              : (depth > 0 ? dgT("live.queuedDepth", { n: depth }) : dgT("common.sent")));
           } else {
             const err = res?.error ?? {};
             const reason = String(err?.details?.reason ?? err?.code ?? "");
-            if (reason.includes("SUBAGENT_IMAGE_UNSUPPORTED"))
+            // g-321：先识别 0.1.6 新增的派发/投递失败码，给出可操作提示
+            const friendly = subagentDispatchErrorText(err);
+            if (friendly) setNote(friendly);
+            else if (reason.includes("SUBAGENT_IMAGE_UNSUPPORTED"))
               setNote(dgT("live.textOnly"));
             else setNote(dgT("criteria.feedbackSendFail") + (err?.message ?? reason ?? dgT("drag.unknownError")));
           }
@@ -52,6 +62,7 @@
           }, dgT("live.steer"))),
         h("div", { style: { ...S.meta, fontSize: 10 } },
           dgT("live.textOnly"),
+          queueDepth > 0 ? " ｜ " + dgT("live.queueDepth", { n: queueDepth }) : "",
           note ? " ｜ " + note : ""),
       );
     }

@@ -235,7 +235,8 @@
           const copied = await copyText(promptText);
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
           if (rt && supervisorSession) {
-            rt.open?.(supervisorSession);
+            // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
+            openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
             activateChatTab();
           }
           if (copied) {

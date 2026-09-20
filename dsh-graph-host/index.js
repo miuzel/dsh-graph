@@ -125,6 +125,7 @@ import {
   normalizeSubagentMode,
   SUBAGENT_MODE_PROMPTS,
   resolveSubagentMode,
+  subagentSpawnErrorText,
   normalizeSubagentRole,
   toolFilterForRole,
   formatPmPrompt,
@@ -1367,7 +1368,8 @@ export function apply(ctx, config) {
           ok: true,
           attempt,
           child_id: null,
-          child_error: String(e?.message ?? e),
+          // g-321：0.1.6 并发槽位耗尽（ACTIVATION_LIMIT_REACHED）给出可操作提示
+          child_error: subagentSpawnErrorText(e),
           note: `subagent 派发失败（attempt 已本地创建）：${e?.message ?? e}`,
           model_route: effRoute,
           mode: effModeRes.mode,
@@ -1909,7 +1911,8 @@ export function apply(ctx, config) {
             result.child_id = started.childId;
             if (effRoute) result.model_route = effRoute;
           } catch (e) {
-            result.child_error = String(e?.message ?? e);
+            // g-321：收集子代理同样受 0.1.6 并发槽位约束，友好化 ACTIVATION_LIMIT_REACHED
+            result.child_error = subagentSpawnErrorText(e);
           }
           return result;
         }
@@ -2215,7 +2218,9 @@ export function apply(ctx, config) {
       const started = await subagents.startContinuable({ provider, label, request, signal: ac.signal });
       return { childId: started.childId, parentSessionId: supervisorId, error: null, model_route: `${effProvider ?? "继承"}/${effModel ?? "继承"}` };
     } catch (e) {
-      return { childId: null, parentSessionId: null, error: String(e?.message ?? e) };
+      // g-321：0.1.6 起 startContinuable 有并发槽位上限（默认 8），把 ACTIVATION_LIMIT_REACHED
+      // 翻译成可操作提示；其余错误原样透出 message（保留既有可追溯性）。
+      return { childId: null, parentSessionId: null, error: subagentSpawnErrorText(e) };
     }
   };
   // 枚举派发选项（重新执行选择器用）：LLM provider 分组模型目录（ctx.llm 注册表）+ 默认（project.yaml executor）。
