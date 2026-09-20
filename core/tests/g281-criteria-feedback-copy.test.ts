@@ -7,7 +7,8 @@ import vm from "node:vm";
 const hostRoot = join(import.meta.dirname, "../../dsh-graph-host");
 const i18nSource = readFileSync(join(hostRoot, "lib/client/i18n.js"), "utf8");
 const goalActionsSource = readFileSync(join(hostRoot, "lib/client/goal-actions.js"), "utf8");
-const bundleSource = readFileSync(join(hostRoot, "lib/client.js"), "utf8");
+const distRoot = join(import.meta.dirname, "../../dist");
+const bundleSource = readFileSync(join(distRoot, "lib/client.js"), "utf8");
 
 function loadClientI18n() {
   const sandbox: any = { React: {} };

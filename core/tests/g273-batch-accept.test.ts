@@ -18,7 +18,8 @@ const root = join(import.meta.dirname, "../../dsh-graph-host");
 const i18nSource = readFileSync(join(root, "lib/client/i18n.js"), "utf8");
 const moduleSource = readFileSync(join(root, "lib/client/batch-accept.js"), "utf8");
 const kanbanSource = readFileSync(join(root, "lib/client/kanban.js"), "utf8");
-const bundleSource = readFileSync(join(root, "lib/client.js"), "utf8");
+const distRoot = join(import.meta.dirname, "../../dist");
+const bundleSource = readFileSync(join(distRoot, "lib/client.js"), "utf8");
 const buildScript = readFileSync(join(root, "../scripts/build-client.sh"), "utf8");
 
 function loadClientI18n() {

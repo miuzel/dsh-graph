@@ -68,7 +68,7 @@ function fixture() {
 
 test("g-284 验收项 1: core/ops.ts 与 dsh-graph-host/core/ops.js 模块顶层不具名导入 POSIX 专有常量", () => {
   const opsTsSrc = readFileSync(join(REPO_ROOT, "core/ops.ts"), "utf8");
-  const opsJsSrc = readFileSync(join(REPO_ROOT, "dsh-graph-host/core/ops.js"), "utf8");
+  const opsJsSrc = readFileSync(join(REPO_ROOT, "dist/core/ops.js"), "utf8");
 
   // 严禁从 node:constants 具名导入 O_DIRECTORY 或 O_NOFOLLOW
   assert.doesNotMatch(opsTsSrc, /import\s*\{[^}]*O_DIRECTORY[^}]*\}\s*from\s*["']node:constants["']/);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
-import { formatAttemptPrompt, resolveWorktreeGuide } from "../../dsh-graph-host/index.js";
+import { formatAttemptPrompt, resolveWorktreeGuide } from "../../dist/index.js";
 import { buildSubagentDefaultPersona, SUBAGENT_MODE_PROMPTS } from "../ops.ts";
 
 /**
@@ -60,7 +60,7 @@ test("g-239 判据 1 & 4：通用执行纪律提示词统一为有限状态汇�
   assert.ok(SUBAGENT_MODE_PROMPTS.minimal.includes("graph_transition"));
 
   // 6. 清理未使用的 buildSubagentDefaultPersona 导入及 promptOverrideSection 死代码
-  const hostIndex = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  const hostIndex = readFileSync(join(import.meta.dirname, "../../dist/index.js"), "utf8");
   assert.doesNotMatch(hostIndex, /import\s*\{[^}]*buildSubagentDefaultPersona[^}]*\}\s*from/, "index.js 不再 import buildSubagentDefaultPersona");
   assert.doesNotMatch(hostIndex, /const promptOverrideSection =/, "index.js 清理死代码 promptOverrideSection");
 
@@ -71,7 +71,7 @@ test("g-239 判据 1 & 4：通用执行纪律提示词统一为有限状态汇�
   assert.match(personaText, /长任务适度节流心跳/);
 
   // 8. supervisor-guide.md 也同步更新为有限关键节点与节流，不残留旧口径
-  const guideText = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/supervisor-guide.zh.md"), "utf8");
+  const guideText = readFileSync(join(import.meta.dirname, "../../dist/supervisor-guide.zh.md"), "utf8");
   assert.doesNotMatch(guideText, /每做一个动作就写一句/);
   assert.match(guideText, /有限关键节点自报/);
   assert.match(guideText, /长任务适度节流心跳/);

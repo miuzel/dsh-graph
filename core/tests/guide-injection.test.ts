@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { init } from "../ops.ts";
 import { resolveRoot } from "../root.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 /** 构造带 systemPrompt stub 的 mock ctx：捕获 section 注册、tools.register 捕获工具定义。 */
 function makeMockCtx() {

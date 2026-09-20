@@ -15,7 +15,8 @@ import {
 const hostRoot = join(import.meta.dirname, "../../dsh-graph-host");
 const helpersSource = readFileSync(join(hostRoot, "lib/client/helpers.js"), "utf8");
 const cardDrawerSource = readFileSync(join(hostRoot, "lib/client/card-drawer.js"), "utf8");
-const clientBundleSource = readFileSync(join(hostRoot, "lib/client.js"), "utf8");
+const distRoot = join(import.meta.dirname, "../../dist");
+const clientBundleSource = readFileSync(join(distRoot, "lib/client.js"), "utf8");
 const i18nSource = readFileSync(join(hostRoot, "lib/client/i18n.js"), "utf8");
 
 // Mock Storage helper for read/writeDrawerWidth tests

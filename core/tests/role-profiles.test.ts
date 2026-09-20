@@ -21,7 +21,7 @@ import {
   toolFilterForRole,
   GRAPH_MINIMAL_ALLOWED_TOOLS,
 } from "../ops.ts";
-import { apply, formatAttemptPrompt } from "../../dsh-graph-host/index.js";
+import { apply, formatAttemptPrompt } from "../../dist/index.js";
 
 // ===== 判据 1：supervisor/executor/collector/reviewer/PM 角色能力与 prompt 要求统一映射测试 =====
 
@@ -161,7 +161,7 @@ test("判据 2 - collector 契约：无 graph_report_status，依托卡片生命
 });
 
 test("判据 2 - supervisor-guide 修正：明确收集子代理不创建 attempt 与不调用 graph_report_status", () => {
-  const guidePath = join(import.meta.dirname, "../../dsh-graph-host/supervisor-guide.zh.md");
+  const guidePath = join(import.meta.dirname, "../../dist/supervisor-guide.zh.md");
   const guide = readFileSync(guidePath, "utf8");
 
   assert.ok(

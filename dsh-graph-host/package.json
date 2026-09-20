@@ -4,24 +4,13 @@
   "description": "A DeepSeek Harness plugin for graph-based goal management and kanban visualization.",
   "license": "MIT",
   "type": "module",
-  "main": "index.js",
+  "main": "../dist/index.js",
   "exports": {
-    ".": "./index.js",
-    "./client": "./lib/client.js",
-    "./cordis.patch.yml": "./cordis.patch.yml",
+    ".": "../dist/index.js",
+    "./client": "../dist/lib/client.js",
+    "./cordis.patch.yml": "../dist/cordis.patch.yml",
     "./package.json": "./package.json"
   },
-  "files": [
-    "index.js",
-    "core",
-    "lib",
-    "cordis.patch.yml",
-    "supervisor-guide.zh.md",
-    "supervisor-guide.en.md",
-    "prompts",
-    "README.md",
-    "LICENSE"
-  ],
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -57,11 +46,6 @@
   },
   "dependencies": {
     "yaml": "^2.9.0"
-  },
-  "scripts": {
-    "prepack": "bash ../scripts/build.sh && node -e \"require('node:fs').existsSync('core/ops.js') || (console.error('core 未同步'), process.exit(1))\"",
-    "build": "bash ../scripts/build.sh",
-    "test": "node --test ../core/tests/*.test.ts"
   },
   "dsh": {
     "bundle": {

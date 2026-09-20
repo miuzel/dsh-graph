@@ -13,7 +13,7 @@ import { init, listGoalFiles } from "../ops.ts";
 import { resolveRoot, resolveCanonicalRoot, discoverGitWorktree, _clearCanonicalRootCache, _gitRunner, DEFAULT_CANONICAL_CACHE_TTL_MS } from "../root.ts";
 import { readEvents } from "../events.ts";
 import { execSync } from "node:child_process";
-import { apply as applyHost } from "../../dsh-graph-host/index.js";
+import { apply as applyHost } from "../../dist/index.js";
 
 function mockCtx(extra: Record<string, unknown> = {}) {
   const webServer = { register: () => () => {} };
@@ -55,7 +55,7 @@ test("resolveRoot：默认 workspace 根（process.cwd()）基准 + .dsh-graph�
 
 test("单包 index.js 与 core 的 resolveRoot 行为一致（g-116：合并后单包 re-export + 产物同步）", async () => {
   const coreRoot = resolveRoot;
-  const hostMod = await import("../../dsh-graph-host/index.js");
+  const hostMod = await import("../../dist/index.js");
   // 行为等价：相同输入 → 相同输出（防分叉的实质）
   const cases = [undefined, null, {}, { root: undefined }, { root: ".dsh-graph" }, { root: "data/g" }, { root: "/abs/g" }];
   for (const c of cases) {
@@ -63,7 +63,7 @@ test("单包 index.js 与 core 的 resolveRoot 行为一致（g-116：合并后�
   }
   // 产物同步：包内 core/root.js 为根 core/root.ts 的编译产物（sync-core.sh 强制，防副本漂移）
   // 校验方式：产物包含根源码的关键逻辑（resolve 调用 + 默认 .dsh-graph），且无 .ts 引用
-  const hostJs = readFileSync(new URL("../../dsh-graph-host/core/root.js", import.meta.url), "utf8");
+  const hostJs = readFileSync(new URL("../../dist/core/root.js", import.meta.url), "utf8");
   assert.match(hostJs, /resolve\(workspaceRoot/, "产物包含统一解析逻辑");
   assert.match(hostJs, /\.dsh-graph/, "产物保留默认 .dsh-graph");
   assert.ok(!hostJs.includes(".ts\""), "产物无 .ts 引用（node_modules 下 .ts 不可加载）");
@@ -289,7 +289,7 @@ test("g-149 resolveCanonicalRoot 返回值可直接传入 init（init 幂等兼�
 });
 
 test("g-149 host re-export 也暴露 resolveCanonicalRoot（模块同步）", async () => {
-  const hostMod = await import("../../dsh-graph-host/index.js");
+  const hostMod = await import("../../dist/index.js");
   assert.equal(typeof hostMod.resolveCanonicalRoot, "function", "host 模块导出 resolveCanonicalRoot");
   // 行为等价测试
   const base = mkdtempSync(join(tmpdir(), "g149-host-export-"));
@@ -647,6 +647,6 @@ test("g-210 不同 workspace 路径隔离：不同路径拥有独立的缓存条
 });
 
 test("g-210 host 模块同步暴露 _clearCanonicalRootCache", async () => {
-  const hostMod = await import("../../dsh-graph-host/index.js");
+  const hostMod = await import("../../dist/index.js");
   assert.equal(typeof hostMod._clearCanonicalRootCache, "function", "host 导出 _clearCanonicalRootCache");
 });

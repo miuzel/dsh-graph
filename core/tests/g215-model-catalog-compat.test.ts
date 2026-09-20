@@ -285,7 +285,7 @@ test("g-215 探测链阶段 3b：新旧 API 均抛出异常时优雅降级为 un
 test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 session.modelCatalog 与旧版降级探测", () => {
   const settings = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings.js"), "utf8");
   const modal = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/settings-modal.js"), "utf8");
-  const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(process.cwd(), "dist/lib/client.js"), "utf8");
   const plugin = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/plugin.js"), "utf8");
 
   // 1. settings.js 包含新版 RPC 与降级链
@@ -314,7 +314,7 @@ test("g-215 源契约与 Bundle 生成物：模块与 Bundle 均包含新版 ses
   assert.match(bundle, /legacyApi\?\.llm\?\.providers/);
 
   // 4. g-231：服务端 readSpawnOptions 调用 resolveModelInfo 获取 per-model reasoning 元数据
-  const host = readFileSync(join(process.cwd(), "dsh-graph-host/index.js"), "utf8");
+  const host = readFileSync(join(process.cwd(), "dist/index.js"), "utf8");
   assert.match(host, /llm\.resolveModelInfo/);
   assert.match(host, /resolved\.reasoning\.efforts\.map/);
 });

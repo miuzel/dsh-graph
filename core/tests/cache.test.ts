@@ -22,8 +22,8 @@ import {
   matchIfNoneMatch,
   _inspectBoardCache,
   writeHandoff,
-} from "../../dsh-graph-host/core/ops.js";
-import { apply } from "../../dsh-graph-host/index.js";
+} from "../../dist/core/ops.js";
+import { apply } from "../../dist/index.js";
 
 function setupTempGraph() {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-cache-test-"));

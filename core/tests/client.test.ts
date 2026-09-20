@@ -15,7 +15,7 @@ import http from "node:http";
 import { init, createGoal, findGoalFile, loadGoal, saveGoal, setCriteria, transition, readProjectConfig, startAttempt } from "../ops.ts";
 import { criteriaItems, replaceSection, sectionText } from "../model.ts";
 import { readEvents } from "../events.ts";
-import { apply, readRawBodyCapped, readBodyCapped, MAX_ATTACHMENT_JSON_BYTES } from "../../dsh-graph-host/index.js";
+import { apply, readRawBodyCapped, readBodyCapped, MAX_ATTACHMENT_JSON_BYTES } from "../../dist/index.js";
 
 function fakeRequest(method: string, body: unknown) {
   const req: any = {
@@ -195,7 +195,7 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.match(modal, /if \(!cur\[path\[i\]\].*typeof cur\[path\[i\]\] !== "object"/s);
   assert.doesNotMatch(modal, /主管补充提示词/);
   assert.doesNotMatch(modal, /prompt_overrides.*supervisor/);
-  const host = readFileSync(join(process.cwd(), "dsh-graph-host/index.js"), "utf8");
+  const host = readFileSync(join(process.cwd(), "dist/index.js"), "utf8");
   assert.doesNotMatch(host, /promptOverrideSection\([^\n]*"supervisor"/);
   assert.doesNotMatch(host, /主管补充提示词/);
   // att-002：settings GET 下发 canonical project.yaml 绝对路径（服务端唯一来源）
@@ -218,7 +218,7 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.match(modal, /title: dgT\("settings\.copyProjectPath"\)/);
   assert.match(modal, /\}, dgT\("tab\.openFile"\)\)/);
   assert.match(modal, /\}, dgT\("tab\.copyPath"\)\)/);
-  const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(process.cwd(), "dist/lib/client.js"), "utf8");
   assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
   assert.match(bundle, /function SettingsModal/);
 });
@@ -875,14 +875,14 @@ test("g-170 kanban 不再承载判据编辑入口（已移到详情弹窗）", (
 test("g-170 build-client PARTS 收录 criteria-modal 且 bundle 含生成标记与弹窗代码", () => {
   const script = readFileSync(join(process.cwd(), "scripts/build-client.sh"), "utf8");
   assert.match(script, /"criteria-modal"/);
-  const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(process.cwd(), "dist/lib/client.js"), "utf8");
   assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
   assert.match(bundle, /function CriteriaModal\(props\)/);
   assert.match(bundle, /dgT\("common\.edit"\)/);
 });
 
 test("g-243 VersionDrawer 必须在 KanbanView 函数体之外声明（否则每次渲染重建抽屉、版本清单滚动位置归零）", () => {
-  const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(process.cwd(), "dist/lib/client.js"), "utf8");
   const kanbanStart = bundle.indexOf("function KanbanView(props) {");
   assert.ok(kanbanStart > 0, "bundle 含 KanbanView");
   // 配平花括号求 KanbanView 函数体范围
@@ -1369,7 +1369,7 @@ test("g-148 模块源契约：goal-modal.js 向 AcceptFeedback 传递 onRefresh:
 
 test("g-148 生成 bundle 契约：client.js 含 onRefresh 解构/调用且无裸 load()，保留 generated header", () => {
   const bundle = readFileSync(
-    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+    join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   // generated header 存在
   assert.ok(
     bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"),
@@ -1397,7 +1397,7 @@ test("g-148 生成 bundle 契约：client.js 含 onRefresh 解构/调用且无�
 // g-154：卡片抽屉文件入口 UI 契约回归
 test("g-154 生成 bundle 契约：card-drawer.js 含 cardFile 开放/复制逻辑 + 无文件降级", () => {
   const bundle = readFileSync(
-    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+    join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   // CardDrawer 含 cardFile 开放逻辑
   assert.ok(
     /card\.cardFile/.test(bundle),
@@ -1419,7 +1419,7 @@ test("g-154 生成 bundle 契约：card-drawer.js 含 cardFile 开放/复制逻�
 // g-154：编译产物 dsh-graph-host/core/ops.js 含 goalCards cardFile 字段（防止 sync-core 遗漏）
 test("g-154 编译产物契约：dsh-graph-host/core/ops.js goalCards 输出含 cardFile 字段", () => {
   const compiledOps = readFileSync(
-    join(import.meta.dirname, "../../dsh-graph-host/core/ops.js"), "utf8");
+    join(import.meta.dirname, "../../dist/core/ops.js"), "utf8");
   assert.ok(
     /cardFile:\s*cardFilePath/.test(compiledOps),
     "编译 ops.js: goalCards 输出含 cardFile: cardFilePath");
@@ -1565,7 +1565,7 @@ test("g-168 PM 结果反馈：关闭弹窗并把动画挂在看板卡片", () =>
 });
 
 test("g-168 host prompt 契约：PM 读取 goal.md 并附带指导意见", () => {
-  const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  const host = readFileSync(join(import.meta.dirname, "../../dist/index.js"), "utf8");
   assert.ok(/const \{ goal, goal_path, guidance \}/.test(host));
   assert.ok(/goal\.md 工作区相对路径/.test(host));
   assert.ok(/read 工具读取上述 goal\.md/.test(host));
@@ -1646,7 +1646,7 @@ test("g-171 模块源契约：constants.js 含扫光/fade keyframe 与 reduced-m
 
 test("g-171/g-211/g-214 生成 bundle 契约：client.js 含更新强调逻辑且保留 generated header", () => {
   const bundle = readFileSync(
-    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+    join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
   assert.ok(/applyUpdateEmphasis/.test(bundle), "生成 bundle: 含 applyUpdateEmphasis");
   assert.ok(/dg-update-sheen/.test(bundle), "生成 bundle: 含 dg-update-sheen 浮层");
@@ -1743,7 +1743,7 @@ test("g-176 共享样式 token 化：S/HOVER_CSS 使用 DSH 主题变量并保�
   const constants = readFileSync(
     join(import.meta.dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
   const bundle = readFileSync(
-    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+    join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   // modal/drawer 背景与文字走主题变量（浅色可读），fallback 保留原暗色
   assert.match(helpers, /background: "var\(--dsw-alias-bg-layer-1, #1e1f24\)"/);
   assert.match(helpers, /color: "var\(--dsw-alias-label-primary, #e6e6e6\)"/);
@@ -1820,7 +1820,7 @@ test("g-179 模块源契约：goal-modal.js 信息收集标题统一为 🔎 信
 
 test("g-179 生成 bundle 契约：client.js 标题同步为 🔎 信息收集且保留 generated header", () => {
   const bundle = readFileSync(
-    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+    join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
   const matches = bundle.match(/dgT\("section\.infoCollect"\)/g) ?? [];
   assert.equal(matches.length, 2, "生成 bundle: 两处信息收集标题均由 i18n 提供");
@@ -1923,7 +1923,7 @@ test("g-181 hook 逻辑模拟：内容起点→backdrop 不关；backdrop→back
 
 test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、19 个 guard overlay、保留 GENERATED header", () => {
   const bundle = readFileSync(
-    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+    join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
   assert.match(bundle, /function useBackdropClose\(onClose\)/);
   assert.match(bundle, /e\.target !== e\.currentTarget/);
@@ -1939,7 +1939,7 @@ test("g-181 生成 bundle 契约：client.js 含 useBackdropClose、19 个 guard
 
 test("g-200 LiveStrip 隔离契约：Card 仅在 Goal 处于执行态或有活跃 execution attempt 时渲染 Goal LiveStrip，避免与 context card 重复", () => {
   const cardSrc = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/card.js"), "utf8");
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.match(cardSrc, /function hasActiveGoalExecutionAttempt\(attempts\)/, "card.js 包含活跃 execution attempt 判定");
   assert.match(cardSrc, /g\.attempt_child_id && \(g\.status === "in_progress" \|\| hasActiveGoalExecutionAttempt\(g\.attempts\)\)/, "Goal 卡片主体按执行状态与活跃 attempt 隔离 LiveStrip");
   assert.match(bundle, /hasActiveGoalExecutionAttempt/, "生成的 bundle 中包含 hasActiveGoalExecutionAttempt");
@@ -2087,7 +2087,7 @@ test("g-198 模块源契约：goal-modal.js 向 AddCardBox 传递 onRefresh: loa
 
 test("g-198 生成 bundle 契约：client.js 包含 AddCardBox onRefresh 调用与 GoalModal 传参", () => {
   const bundle = readFileSync(
-    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+    join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
   assert.match(bundle, /function AddCardBox\(props\)\s*\{\s*const\s*\{\s*goalId\s*,\s*supervisorSession\s*,\s*onRefresh\s*\}\s*=\s*props/);
   assert.match(bundle, /if\s*\(data\.ok\)\s*\{[\s\S]*?onRefresh\?\.\(\);[\s\S]*?\}\s*else/);
@@ -2341,7 +2341,7 @@ test("g-224 源契约：settings-modal.js 提供「实时代理输出流式显�
 
 test("g-224 生成 bundle 契约：client.js 包含实时显示开关与输出流门控逻辑", () => {
   const bundle = readFileSync(
-    join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+    join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
   assert.match(bundle, /LIVE_DISPLAY_KEY = "dsh-graph\.live-display"/);
   assert.match(bundle, /function openBoundSessionStream\(childId, session\)/);
@@ -2449,7 +2449,7 @@ test("g-214 源契约：kanban.js 挂载 RefreshCountdown 与刷新间隔监听"
 });
 
 test("g-214 生成 bundle 契约：client.js 包含 g-214 倒计时与刷新间隔配置逻辑", () => {
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.match(bundle, /RefreshCountdown/);
   assert.match(bundle, /dsh-graph\.refresh-interval/);
   assert.match(bundle, /MIN_REFRESH_INTERVAL = 5/);
@@ -2479,7 +2479,7 @@ test("g-216 源契约：kanban.js 具备 hasModal 状态与 dg-modal-open 动态
 });
 
 test("g-216 生成 bundle 契约：client.js 包含 g-216 层级规划与 widthHandle 穿透防护规则", () => {
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.match(bundle, /dg-modal-open/);
   assert.match(bundle, /\.wSkVaW_root:has\(\.dg-modal-open\)/);
   assert.match(bundle, /zIndex:\s*99998/);
@@ -2488,7 +2488,7 @@ test("g-216 生成 bundle 契约：client.js 包含 g-216 层级规划与 widthH
 });
 test("g-225 卡片 LiveStrip 模型展示契约：LiveStrip 默认不渲染可见 model ID，完整 provider/model 仅在 tooltip (title) 显示，且 Hooks 顶层无条件调用", () => {
   const hooksSrc = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/session-hooks.js"), "utf8");
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
 
   // 1. LiveStrip 源码构造完整 provider/model 的 modelTitle 用于 tooltip (title)
   assert.match(hooksSrc, /const modelTitle = props\.model/);
@@ -2517,7 +2517,7 @@ test("g-225 卡片 LiveStrip 模型展示契约：LiveStrip 默认不渲染可�
 test("g-223 源契约：build-client PARTS 收录 version-drawer 且 bundle 包含生成代码", () => {
   const script = readFileSync(join(import.meta.dirname, "../../scripts/build-client.sh"), "utf8");
   assert.match(script, /"version-drawer"/);
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.match(bundle, /function VersionDrawer\(props\)/);
   assert.match(bundle, /🏷️ 版本管理/);
   assert.match(bundle, /dg-version-manage-btn/);
@@ -2589,7 +2589,7 @@ test("g-223 VersionDrawer 组件逻辑与交互及 a11y 可访问性契约验证
 });
 
 test("g-223 纯函数 resolveWorkspaceOfSession 与动态会话切换行为契约", () => {
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   
   // 1. 验证 resolveWorkspaceOfSession 存在且具备完整回溯
   assert.match(bundle, /function resolveWorkspaceOfSession\(sessionId\)/);
@@ -2893,7 +2893,7 @@ test("g-188 转到对话入口与 LiveStrip：事件隔离、主题反馈及安�
   const live = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/session-hooks.js"), "utf8");
   const css = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/constants.js"), "utf8");
   const drawer = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/card-drawer.js"), "utf8");
-  const bundle = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(process.cwd(), "dist/lib/client.js"), "utf8");
   assert.match(plugin, /if \(!childId \|\| !parentSessionId\) return null;/);
   assert.match(plugin, /const openingChildSessions = new Set\(\)/);
   assert.match(plugin, /if \(openingChildSessions\.has\(navigationKey\)\) return/);
@@ -2949,7 +2949,7 @@ test("g-189 REST fixture：标准 attempt worktree 可发现且 foreign 分支�
 
 // g-189：worktree 发现保持只读、canonical workspace 与路径安全边界。
 test("g-189 worktree 发现与弹窗展示源契约", () => {
-  const host = readFileSync(join(dirname(new URL(import.meta.url).pathname), "../../dsh-graph-host/index.js"), "utf8");
+  const host = readFileSync(join(dirname(new URL(import.meta.url).pathname), "../../dist/index.js"), "utf8");
   const modal = readFileSync(join(dirname(new URL(import.meta.url).pathname), "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
   assert.match(host, /git.*worktree.*list.*porcelain/);
   assert.match(host, /canonicalWorkspace/);
@@ -2979,7 +2979,7 @@ test("g-189 worktree 发现与弹窗展示源契约", () => {
 test("g-186 review 接受交付入口：单一状态提示、不含‘裁决’、排队通知主管会话", () => {
   const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
   const constants = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/constants.js"), "utf8");
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.match(actions, /lastTransitionToCurrent/);
   assert.match(actions, /isReview && acceptState === "none"/);
   assert.match(actions, /"✅ 接受"/);
@@ -3002,8 +3002,8 @@ test("g-186 review 接受交付入口：单一状态提示、不含‘裁决’�
 test("g-192 标题栏主管徽章源契约：conversation.session.header.actions 槽位与徽章组件", () => {
   const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
   const bar = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/supervisor-bar.js"), "utf8");
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
-  const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
+  const host = readFileSync(join(import.meta.dirname, "../../dist/index.js"), "utf8");
   assert.match(plugin, /ctx\.slots\.inject\("conversation\.session\.header\.actions"/);
   assert.match(plugin, /id: "dsh-graph-supervisor-badge"/);
   assert.match(plugin, /order: -9/);
@@ -3020,8 +3020,8 @@ test("g-192 标题栏主管徽章源契约：conversation.session.header.actions
 // g-197：delivered 弹窗 worktree 清理候选源契约。
 test("g-197 client：delivered 目标展示 WorktreeCandidates 清理组件与 API 绑定", () => {
   const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-modal.js"), "utf8");
-  const host = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const host = readFileSync(join(import.meta.dirname, "../../dist/index.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.match(modal, /function WorktreeCandidates/);
   assert.match(modal, /status === "delivered"/);
   assert.match(modal, /"\/api\/dsh-graph\/worktrees"/);
@@ -3584,7 +3584,7 @@ test("g-244 Fail-Closed 不退化：孤儿/环/畸形输入返回 null 且不抛
 
 test("g-244 生成物一致：client.js 含真实 resolver 且与源模块同源", () => {
   const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
 
   // 源模块与生成物中的 resolver 片段必须逐字一致（build-client.sh 未过期）
@@ -3695,7 +3695,7 @@ test("g-246 行为模拟：规范化深比较消除假阳性（null↔\"\"、lan
 });
 
 test("g-246 生成 bundle 契约：client.js 同步含脏判定与统一拦截", () => {
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
   assert.match(bundle, /function normalizeSettingsDraft\(/);
   assert.match(bundle, /function settingsDraftIsDirty\(/);
@@ -3707,7 +3707,7 @@ test("g-246 生成 bundle 契约：client.js 同步含脏判定与统一拦截",
 
 test("g-259 源契约：settings-modal.js 与 client.js 将 setRefreshInterval 置于 POST 成功判定 (r.ok) 之后", () => {
   const modal = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/settings-modal.js"), "utf8");
-  const bundle = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client.js"), "utf8");
+  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
 
   // settings-modal.js 源文件契约：
   const saveStart = modal.indexOf("const save = async () => {");

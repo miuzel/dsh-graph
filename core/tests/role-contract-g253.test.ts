@@ -10,7 +10,7 @@ import {
   formatReviewPrompt,
   GRAPH_MINIMAL_ALLOWED_TOOLS,
 } from "../ops.ts";
-import { formatAttemptPrompt, resolveWorktreeGuide } from "../../dsh-graph-host/index.js";
+import { formatAttemptPrompt, resolveWorktreeGuide } from "../../dist/index.js";
 
 // ===== g-253 质量判据专项验证套件 =====
 // 判据 1. 纪律文本单一真源：ROLE_PROFILES.disciplineLines 与 host formatAttemptDiscipline、buildSubagentDefaultPersona
@@ -70,9 +70,9 @@ test("g-253 判据 1：纪律文本单一真源——ROLE_PROFILES 消除'每动
   // 5. 引用检查测试（防回归）：扫描核心代码与提示词文件，确保无旧文案残留
   const filesToCheck = [
     join(import.meta.dirname, "../ops.ts"),
-    join(import.meta.dirname, "../../dsh-graph-host/prompts/discipline.zh.md"),
-    join(import.meta.dirname, "../../dsh-graph-host/prompts/discipline.en.md"),
-    join(import.meta.dirname, "../../dsh-graph-host/supervisor-guide.zh.md"),
+    join(import.meta.dirname, "../../dist/prompts/discipline.zh.md"),
+    join(import.meta.dirname, "../../dist/prompts/discipline.en.md"),
+    join(import.meta.dirname, "../../dist/supervisor-guide.zh.md"),
     join(import.meta.dirname, "../../docs/guide-auto-injection.md"),
   ];
   for (const filePath of filesToCheck) {
@@ -84,7 +84,7 @@ test("g-253 判据 1：纪律文本单一真源——ROLE_PROFILES 消除'每动
 });
 
 test("g-253 判据 2：清理 dsh-graph-host/index.js 未使用导入与死代码", () => {
-  const hostIndex = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  const hostIndex = readFileSync(join(import.meta.dirname, "../../dist/index.js"), "utf8");
 
   // 1. 确认 4 个死导入已被彻底移除
   assert.doesNotMatch(hostIndex, /\bformatTargetContext\b/, "formatTargetContext 死导入已清理");
@@ -103,7 +103,7 @@ test("g-253 判据 2：清理 dsh-graph-host/index.js 未使用导入与死代�
 });
 
 test("g-253 判据 3：executor 执行派发接线 toolFilterForRole('executor', mode) 及统一映射测试", () => {
-  const hostIndex = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  const hostIndex = readFileSync(join(import.meta.dirname, "../../dist/index.js"), "utf8");
 
   // 1. dispatchAttempt 中使用 toolFilterForRole("executor", effModeRes.mode)
   assert.match(
@@ -177,6 +177,6 @@ test("g-253 判据 4：角色纪律在 persona 切换与 standard/minimal 下不
 
   // 5. g-248 reviewer 边界清晰：formatReviewPrompt 在 core 中定义并导出供 g-248 接线，但 host 未提前耦合
   assert.equal(typeof formatReviewPrompt, "function", "formatReviewPrompt 仍由 core 导出");
-  const hostIndex = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
+  const hostIndex = readFileSync(join(import.meta.dirname, "../../dist/index.js"), "utf8");
   assert.equal(hostIndex.includes("formatReviewPrompt"), false, "host 未提前接入 formatReviewPrompt（由 g-248 承接）");
 });

@@ -14,7 +14,7 @@ import { mkdtempSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { init, addMemory, removeMemory, recallMemory } from "../ops.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 /** 与 guide-injection.test.ts 相同的 mock ctx（捕获 section 注册）。 */
 function makeMockCtx() {

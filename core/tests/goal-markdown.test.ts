@@ -189,7 +189,7 @@ test("g-270: setGoalDescription 写入后 goalDetail.description 与 extractGoal
 // ---- ④ 客户端源码契约测试 ----
 
 test("g-270: 客户端 Bundle 契约——包含 Markdown 组件、DSH 原语引用、错误边界与样式", () => {
-  const clientBundle = readFileSync("dsh-graph-host/lib/client.js", "utf8");
+  const clientBundle = readFileSync("dist/lib/client.js", "utf8");
   assert.ok(clientBundle.includes("function GoalMarkdown("), "Bundle 应包含 GoalMarkdown 组件");
   assert.ok(clientBundle.includes("function renderSimpleMarkdown("), "Bundle 应包含 renderSimpleMarkdown 解析器");
   assert.ok(clientBundle.includes("function parseInlineMarkdown("), "Bundle 应包含 parseInlineMarkdown 解析器");
@@ -424,7 +424,7 @@ test("g-275: Markdown 共享模块抽取——build-client.sh 纳入 markdown.js
   assert.ok(cardDrawer.includes("GoalMarkdown"), "card-drawer.js 必须复用 GoalMarkdown");
   assert.ok(cardDrawer.includes("viewMode"), "card-drawer.js 必须包含 viewMode 状态");
 
-  const clientBundle = readFileSync("dsh-graph-host/lib/client.js", "utf8");
+  const clientBundle = readFileSync("dist/lib/client.js", "utf8");
   assert.ok(clientBundle.includes("function MarkdownViewToggle("), "Bundle 必须包含 MarkdownViewToggle");
   assert.ok(clientBundle.includes("function markdownSegStyle("), "Bundle 必须包含 markdownSegStyle");
 });

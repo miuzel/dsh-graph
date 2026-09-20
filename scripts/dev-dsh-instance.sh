@@ -36,7 +36,7 @@
 #   PROFILE=dsh-graph-test       测试 profile 名
 #   PORT=3082                    测试实例端口（必须 ≠ 3080）
 #   CWD=…                        测试实例的工作目录（决定 .dsh-graph 数据落在哪）
-#   HOST_DIR=…$REPO/dsh-graph-host  本地 host 插件目录
+#   HOST_DIR=…$REPO/dist             本地 host 插件目录（dist/ 发布产物目录）
 #   pnpm_config_store_dir=…      pnpm store（优先级高于 PNPM_STORE_DIR）
 #   PNPM_STORE_DIR=…             pnpm store（未设置时使用仓库 tmp/test-review/.pnpm-store）
 #   PUBLISHED_VER=^0.11.0       已发布版本 spec
@@ -59,7 +59,7 @@ DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 TEST_HOME="${TEST_HOME:-$REPO_ROOT/tmp/test-review}"
 PROFILE="${PROFILE:-dsh-graph-test}"
 PORT="${PORT:-3082}"
-HOST_DIR="${HOST_DIR:-$REPO_ROOT/dsh-graph-host}"
+HOST_DIR="${HOST_DIR:-$REPO_ROOT/dist}"
 PUBLISHED_VER="${PUBLISHED_VER:-^0.11.0}"
 MAIN_PROFILE="${MAIN_PROFILE:-web}"
 # 测试实例的工作目录决定 .dsh-graph 数据落点；setup 会写入绝对

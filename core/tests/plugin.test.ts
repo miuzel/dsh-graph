@@ -8,7 +8,7 @@ import { join, relative, dirname } from "node:path";
 import { init, findGoalFile, loadGoal, loadCard, createGoal, setCriteria, transition, readSupervisorSession } from "../ops.ts";
 import { resolveRoot } from "../root.ts";
 import { readEvents } from "../events.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 function assertLossless(v: unknown): void {
   assert.deepEqual(JSON.parse(JSON.stringify(v)), v, "输出必须是无损 JSON");
