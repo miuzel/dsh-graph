@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatAttemptPrompt } from "../../dsh-graph-host/index.js";
+import { formatAttemptPrompt } from "../../dist/index.js";
 import {
   init,
   createGoal,

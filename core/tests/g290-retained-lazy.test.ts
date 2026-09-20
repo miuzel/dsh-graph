@@ -325,7 +325,7 @@ test("g-290 未展开的 released 版本 / 非 lazy 载荷不注入旧明细", (
 
 test("g-290 kanban.js 与生成物接线守卫", () => {
   const kanbanSrc = readFileSync(new URL("../../dsh-graph-host/lib/client/kanban.js", import.meta.url), "utf8");
-  const bundleSrc = readFileSync(new URL("../../dsh-graph-host/lib/client.js", import.meta.url), "utf8");
+  const bundleSrc = readFileSync(new URL("../../dist/lib/client.js", import.meta.url), "utf8");
   for (const src of [kanbanSrc, bundleSrc]) {
     assert.match(src, /reconcileRetainedBoardState\(/, "必须调用共享对账纯函数");
     assert.match(src, /refetchBacklog/, "必须消费补拉结论");
@@ -338,7 +338,7 @@ test("g-290 kanban.js 与生成物接线守卫", () => {
 
 test("g-294 源契约：forceFresh 时跳过 If-None-Match 且 304 分支安全兜底", () => {
   const kanbanSrc = readFileSync(new URL("../../dsh-graph-host/lib/client/kanban.js", import.meta.url), "utf8");
-  const bundleSrc = readFileSync(new URL("../../dsh-graph-host/lib/client.js", import.meta.url), "utf8");
+  const bundleSrc = readFileSync(new URL("../../dist/lib/client.js", import.meta.url), "utf8");
   for (const src of [kanbanSrc, bundleSrc]) {
     // 1. forceFresh 捕获后立即清除，防并发干扰
     assert.match(src, /isForceFresh\s*=\s*forceFreshRef\.current/, "必须同步捕获 forceFreshRef");

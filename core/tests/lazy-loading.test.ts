@@ -17,7 +17,7 @@ import {
   moveGoal,
   GraphError,
 } from "../ops.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 function setupTestProject(): { root: string; ws: string; cleanup: () => void } {
   const ws = mkdtempSync(join(tmpdir(), "dsh-lazy-test-"));

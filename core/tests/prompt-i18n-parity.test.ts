@@ -2,10 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { SERVER_I18N, assertServerI18nParity } from "../../dsh-graph-host/lib/server-i18n.js";
-import { resolvePromptLanguage } from "../../dsh-graph-host/index.js";
+import { SERVER_I18N, assertServerI18nParity } from "../../dist/lib/server-i18n.js";
+import { resolvePromptLanguage } from "../../dist/index.js";
 
 const root = join(import.meta.dirname, "../../dsh-graph-host");
+const distRoot = join(import.meta.dirname, "../../dist");
 const prompts = join(root, "prompts");
 const placeholders = (text: string) => [...text.matchAll(/\{\{?([A-Za-z0-9_.-]+)\}?\}/g)].map((m) => m[1]).sort();
 const technicalTokens = (text: string) => [...text.matchAll(/(?:graph_[A-Za-z0-9_]+|@att\/[A-Za-z0-9_./<>-]+|worktree=false)/g)].map((m) => m[0]).sort();
@@ -24,8 +25,8 @@ test("prompt markdown zh/en assets keep heading and placeholder parity", () => {
 });
 
 test("supervisor guide zh/en is complete and structurally equivalent", () => {
-  const zh = readFileSync(join(root, "supervisor-guide.zh.md"), "utf8");
-  const en = readFileSync(join(root, "supervisor-guide.en.md"), "utf8");
+  const zh = readFileSync(join(distRoot, "supervisor-guide.zh.md"), "utf8");
+  const en = readFileSync(join(distRoot, "supervisor-guide.en.md"), "utf8");
   assert.ok(zh.split("\n").length >= 287, "supervisor-guide.zh.md must retain at least 90% of the original 319 lines");
   for (const phrase of ["不可妥协", "判据先于执行", "信息收集", "graph_report_status", "worktree 隔离"]) assert.ok(zh.includes(phrase), `guide contract phrase missing: ${phrase}`);
   assert.equal(zh.split("\n").length, en.split("\n").length, "supervisor guide line parity");
@@ -48,7 +49,7 @@ test("server i18n dictionaries are symmetric and English has no CJK text", () =>
 });
 
 test("server i18n has one symmetric key for every graph tool", () => {
-  const indexSource = readFileSync(join(root, "index.js"), "utf8");
+  const indexSource = readFileSync(join(distRoot, "index.js"), "utf8");
   const toolNames = [...indexSource.matchAll(/name: \"(graph_[A-Za-z0-9_]+)\"/g)].map((match) => match[1]);
   assert.equal(new Set(toolNames).size, toolNames.length);
   const expected = toolNames.map((name) => `tool.${name}`).sort();

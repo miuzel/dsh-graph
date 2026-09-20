@@ -20,7 +20,7 @@ import {
   transition,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 function fakeReq(method: string, queryParams: string, body: any) {
   const listeners: Record<string, Function> = {};

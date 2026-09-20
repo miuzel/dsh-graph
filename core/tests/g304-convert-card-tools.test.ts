@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { init, createGoal, setCriteria, transition, addCard, createSharedCard, addSharedCardRef, bindCardChild, referenceCount, sharedCards, loadGoal, findGoalFile } from "../ops.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 function setup() {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g304-"));

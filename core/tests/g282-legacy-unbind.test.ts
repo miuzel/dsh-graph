@@ -31,7 +31,7 @@ import {
   writeSupervisorSession,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 function setup(agents?: Record<string, unknown>) {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g282-"));

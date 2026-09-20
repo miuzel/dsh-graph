@@ -13,7 +13,8 @@ import { listWorktrees, cleanWorktree } from "../worktree.ts";
 const hostRoot = join(import.meta.dirname, "../../dsh-graph-host");
 const i18nSource = readFileSync(join(hostRoot, "lib/client/i18n.js"), "utf8");
 const worktreeTs = readFileSync(join(import.meta.dirname, "../worktree.ts"), "utf8");
-const worktreeJs = readFileSync(join(hostRoot, "core/worktree.js"), "utf8");
+const distRoot = join(import.meta.dirname, "../../dist");
+const worktreeJs = readFileSync(join(distRoot, "core/worktree.js"), "utf8");
 
 // 与 core/worktree.ts 及 goal-modal.js WORKTREE_REASON_ENUMS 同源的唯一清单。
 const REASON_ENUMS = [
@@ -115,9 +116,9 @@ test("g-272 att-002: worktree 候选 reason 全部输出稳定枚举（无中文
 test("g-272 att-002: cleanWorktree 枚举判断回归（不再用 外部删除 字符串包含判断）", () => {
   // 源与编译产物均不得残留中文字符串包含判断；必须是枚举等值判断。
   assert.ok(!worktreeTs.includes('includes("外部删除")'), "core/worktree.ts 仍含 外部删除 字符串判断");
-  assert.ok(!worktreeJs.includes('includes("外部删除")'), "dsh-graph-host/core/worktree.js 仍含 外部删除 字符串判断");
+  assert.ok(!worktreeJs.includes('includes("外部删除")'), "dist/core/worktree.js 仍含 外部删除 字符串判断");
   assert.ok(worktreeTs.includes('c.reason === "externally_removed"'), "core/worktree.ts 缺少枚举判断");
-  assert.ok(worktreeJs.includes('c.reason === "externally_removed"'), "dsh-graph-host/core/worktree.js 缺少枚举判断");
+  assert.ok(worktreeJs.includes('c.reason === "externally_removed"'), "dist/core/worktree.js 缺少枚举判断");
 
   const dir = repo(); const { root, goal, path } = setupGoalAttempt(dir, "review", "等待 review");
   resolveAccept(root, goal, { actor: "supervisor:test", verdict: "accept" });

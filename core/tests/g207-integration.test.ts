@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { init, writeSupervisorSession, readSupervisorSession, writeProjectConfig, readProjectConfig } from "../ops.ts";
 import { readEvents } from "../events.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g207-"));

@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, symlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { init } from "../../dsh-graph-host/core/ops.js";
-import { resolveRoot, resolveCanonicalRoot } from "../../dsh-graph-host/core/root.js";
-import { apply } from "../../dsh-graph-host/index.js";
-import { ensureWatcher, generation, closeWatchers } from "../../dsh-graph-host/core/cache-state.js";
+import { init } from "../../dist/core/ops.js";
+import { resolveRoot, resolveCanonicalRoot } from "../../dist/core/root.js";
+import { apply } from "../../dist/index.js";
+import { ensureWatcher, generation, closeWatchers } from "../../dist/core/cache-state.js";
 import { readFileSync } from "node:fs";
 
 function host(configRoot: string, workspace?: string, policyWorkspace: string | null | undefined = workspace) {
@@ -86,12 +86,12 @@ test("g212 watcher timer identity contract clears stale timers", () => {
 });
 
 test("g212 malformed POST matrix is wired through shared parser", () => {
-  const src = readFileSync(new URL("../../dsh-graph-host/index.js", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../../dist/index.js", import.meta.url), "utf8");
   assert.match(src, /reject\(new GraphError/);
   for (const route of ["transition", "set-criteria", "order", "start-execution"]) assert.match(src, new RegExp("/api/dsh-graph/" + route));
 });
 
 test("g212 apply disposer tears down compiled cache and invalidates board cache", () => {
-  const src = readFileSync(new URL("../../dsh-graph-host/index.js", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../../dist/index.js", import.meta.url), "utf8");
   assert.match(src, /closeWatchers\(\)/); assert.match(src, /invalidateBoardCache\(\)/);
 });

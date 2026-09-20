@@ -34,7 +34,7 @@ import {
 } from "../ops.ts";
 import { serializeDoc } from "../model.ts";
 import { readEvents } from "../events.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g150-"));

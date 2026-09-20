@@ -17,7 +17,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { init, createGoal, setCriteria, setGoalDirective, transition, findGoalFile, loadGoal } from "../ops.ts";
-import { formatAttemptPrompt, apply } from "../../dsh-graph-host/index.js";
+import { formatAttemptPrompt, apply } from "../../dist/index.js";
 
 // ===== formatAttemptPrompt 测试 =====
 

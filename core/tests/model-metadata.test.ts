@@ -25,7 +25,7 @@ import {
   resolveModelRoute,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g194-"));
@@ -293,7 +293,7 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
 });
 
 test("g-194 ⑥ 前端 formatModelDisplay / formatShortModelDisplay 与 client.js bundle 契约校验", () => {
-  const clientBundle = readFileSync(new URL("../../dsh-graph-host/lib/client.js", import.meta.url), "utf8");
+  const clientBundle = readFileSync(new URL("../../dist/lib/client.js", import.meta.url), "utf8");
   // 确保 generated header 存在
   assert.match(clientBundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
   // 确保 formatModelDisplay 与 formatShortModelDisplay 存在

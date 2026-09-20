@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { init, createGoal, addCard, findGoalFile, loadGoal, bindCardChild } from "../ops.ts";
 import { readEvents } from "../events.ts";
-import { apply } from "../../dsh-graph-host/index.js";
+import { apply } from "../../dist/index.js";
 
 /** 临时图根 + mock ctx 应用插件，返回 { root, byName }（byName 为工具名 → 定义）。 */
 function setup() {
@@ -146,7 +146,7 @@ test("g-119 ⑥ core bindCardChild 幂等（直调核心层）", () => {
 
 test("g-119 ⑦ supervisor-guide.md 信息收集规范含绑定硬约束文本", () => {
   const guide = readFileSync(
-    new URL("../../dsh-graph-host/supervisor-guide.zh.md", import.meta.url),
+    new URL("../../dist/supervisor-guide.zh.md", import.meta.url),
     "utf8",
   );
   assert.ok(guide.includes("graph_bind_collect_card"), "guide 应引用 graph_bind_collect_card 工具");
