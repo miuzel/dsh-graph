@@ -172,7 +172,7 @@ test("g-262：handoff 注入段 zh parity、en 标签翻译与截断提示", () 
   const en = formatReviewedAttemptHandoffsSection(root, goal, { maxFailuresChars: 40 }, undefined, "en");
   const invalid = formatReviewedAttemptHandoffsSection(root, goal, { maxFailuresChars: 40 }, undefined, "fr" as "zh");
   assert.equal(invalid, zh);
-  assert.ok(zh.includes("## 前序 attempt 已确认 handoff（g-150 注入"));
+  assert.ok(zh.includes("## 前序 attempt 已确认 handoff（仅主管/负责人确认的返工约束"));
   assert.ok(zh.includes("**已核实失败/风险：**") && zh.includes("**验收命令：**"));
   assert.ok(zh.includes("revision：1"), "zh revision label keeps the original full-width punctuation");
   assert.ok(en.includes("## Confirmed handoff from previous attempts"));
@@ -183,7 +183,7 @@ test("g-262：handoff 注入段 zh parity、en 标签翻译与截断提示", () 
   assert.ok(en.includes("**Verification command:**"));
   assert.ok(en.includes("verified failures truncated after exceeding the budget"));
   assert.ok(en.includes(constraints) && en.includes(baseline) && en.includes(verification));
-  assert.ok(!en.includes("g-150 注入") && !en.includes("已核实失败/风险") && !en.includes("返工约束（禁止项）"));
+  assert.ok(!en.includes("g-150") && !en.includes("已核实失败/风险") && !en.includes("返工约束（禁止项）"));
 });
 
 test("g-150：recordAttemptHandoff 写 handoff 文件 + attempt.handoff.confirmed 事件", () => {

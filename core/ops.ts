@@ -417,7 +417,7 @@ export function generateHandoff(
   };
   const parts: string[] = [];
   parts.push("# HANDOFF（换会话交接）", "");
-  parts.push(`> 由 graph_handoff 自动生成于 ${nowIso()}（g-117）。图根：\`${root}\`。`);
+  parts.push(`> 由 graph_handoff 自动生成于 ${nowIso()}。图根：\`${root}\`。`);
   parts.push("> 你的职责指南：dsh-graph-host/supervisor-guide.zh.md（注册为 skill `dsh-graph-supervisor`）。", "");
   parts.push("## 目标看板", "");
   for (const v of board.versions) {
@@ -1822,7 +1822,7 @@ export function appendGoalComment(
 export function formatGoalDirectiveSection(root: string, goalId: string): string {
   const directive = readGoalDirective(root, goalId);
   if (!directive) return "";
-  return `## 最近指令（g-150 注入：目标 ${goalId} 的当前补充约束）\n\n${directive}\n`;
+  return `## 最近指令（目标 ${goalId} 的当前补充约束）\n\n${directive}\n`;
 }
 
 /** 状态迁移：状态机校验 → 写回 frontmatter（保留正文）→ 追加事件。 */
@@ -3948,7 +3948,7 @@ export function formatReviewedAttemptHandoffsSection(
   const sections = [
     isEn
       ? `## Confirmed handoff from previous attempts (rework constraints confirmed by the supervisor/owner, not an agent's self-report)`
-      : `## 前序 attempt 已确认 handoff（g-150 注入：仅主管/负责人确认的返工约束，非 agent 自述）`,
+      : `## 前序 attempt 已确认 handoff（仅主管/负责人确认的返工约束，非 agent 自述）`,
     ``,
     isEn ? `(${meta})` : `（${meta}）`,
     ``,
@@ -4155,7 +4155,7 @@ export function formatPmPrompt(opts: {
     "",
     "Read the goal.md with read first. Give concise, actionable advice on value, context, scope, verifiable criteria, boundaries, error paths, risks, and human verification. Preserve intent and do not write files.",
     "",
-    "## Report format requirement (g-309)",
+    "## Report format requirement",
     `Your report MUST start with a title line in the exact format: 【${opts.goalId} 润色建议】`,
     "This allows the supervisor to automatically identify which goal this report belongs to.",
     "",
@@ -4172,7 +4172,7 @@ export function formatPmPrompt(opts: {
     ``,
     `请先用 read 工具读取上述 goal.md，再围绕目标价值、背景、范围、可验证判据、边界/错误路径、风险和人工核验给出简洁、可执行的润色建议；保留原意，不直接替换或写入目标。`,
     ``,
-    `## 回报格式要求（g-309）`,
+    `## 回报格式要求`,
     `⚠️ 你的回报必须以标题行开头，格式严格为：【${opts.goalId} 润色建议】`,
     `这是主管自动识别目标的关键标识，缺少此格式将导致建议无法正确关联到目标。`,
     ``,

@@ -1505,7 +1505,7 @@ export function apply(ctx, config) {
       // 只有已 claim 的 supervisor 或负责人应调用；写入 handoff 文件 + 追加确认事件。
       def: {
         name: "graph_record_attempt_handoff",
-        description: "主管/负责人登记前序 attempt 的返工 handoff（g-150，单文件简化）：记录已核实失败、返工约束（禁止项）、推荐基线/保留项与验收命令。每个 goal 仅一个 handoff，新登记覆盖旧内容；旧历史由事件流保留。source_attempts 必须属于该 goal。",
+        description: "主管/负责人登记前序 attempt 的返工 handoff：记录已核实失败、返工约束（禁止项）、推荐基线/保留项与验收命令。每个 goal 仅一个 handoff，新登记覆盖旧内容；旧历史由事件流保留。source_attempts 必须属于该 goal。",
         parameters: params(
           {
             goal: str,
@@ -1552,7 +1552,7 @@ export function apply(ctx, config) {
       // 写入 goal.md 的 `## 最近指令` 小节 + 追加 goal.directive_set 事件（事件先行）。
       def: {
         name: "graph_set_directive",
-        description: "设置/替换目标的「最近指令」（g-150）：写下一次 attempt 生效的补充任务、边界和验收。写入 goal.md 的「最近指令」小节并追加事件；新 attempt 派发时自动读取注入初始 prompt。directive 为空字符串时清空指令。",
+        description: "设置/替换目标的「最近指令」：写下一次 attempt 生效的补充任务、边界和验收。写入 goal.md 的「最近指令」小节并追加事件；新 attempt 派发时自动读取注入初始 prompt。directive 为空字符串时清空指令。",
         parameters: params({ goal: str, directive: str }, ["goal", "directive"]),
       },
       run: (a, ex) => {
@@ -1566,7 +1566,7 @@ export function apply(ctx, config) {
       // 写入 goal.md 的 `## 目标描述` 小节 + 追加 goal.description_set 事件（事件先行）。
       def: {
         name: "graph_set_description",
-        description: "设置/替换目标的「目标描述」（g-260）：就地编辑目标描述内容。写入 goal.md 的「目标描述」小节并追加事件；仅改描述小节正文，frontmatter 与其他小节字节级不变。description 为空字符串时清空描述。",
+        description: "设置/替换目标的「目标描述」：就地编辑目标描述内容。写入 goal.md 的「目标描述」小节并追加事件；仅改描述小节正文，frontmatter 与其他小节字节级不变。description 为空字符串时清空描述。",
         parameters: params({ goal: str, description: str }, ["goal", "description"]),
       },
       run: (a, ex) => {
@@ -1580,7 +1580,7 @@ export function apply(ctx, config) {
       // 不自动注入 prompt，执行者可通过目标文件查看。事件先行。
       def: {
         name: "graph_add_comment",
-        description: "向目标的「评论」小节追加一条可追溯的历史讨论/反馈（g-150）。评论不自动注入执行 prompt，但执行者可通过 goal.md 查看历史。事件先行。",
+        description: "向目标的「评论」小节追加一条可追溯的历史讨论/反馈。评论不自动注入执行 prompt，但执行者可通过 goal.md 查看历史。事件先行。",
         parameters: params({ goal: str, text: str }, ["goal", "text"]),
       },
       run: (a, ex) => {
@@ -1718,7 +1718,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_handoff",
-        description: "生成/更新 .dsh-graph/HANDOFF.md 换会话交接文档（g-117）：board 投影 + 长期记忆 + 关键环境事实段自动拼接。产物不依赖会话上下文；返回交接全文。旧会话交接时调用。写盘前若旧 HANDOFF.md 存在且内容不同，先归档到 <root>/handoffs/HANDOFF-<时间戳>.md（g-121，归档目录不入 git）。",
+        description: "生成/更新 .dsh-graph/HANDOFF.md 换会话交接文档：board 投影 + 长期记忆 + 关键环境事实段自动拼接。产物不依赖会话上下文；返回交接全文。旧会话交接时调用。写盘前若旧 HANDOFF.md 存在且内容不同，先归档到 <root>/handoffs/HANDOFF-<时间戳>.md（归档目录不入 git）。",
         parameters: params({ query: str, memory_limit: { type: "number" } }, []),
       },
       run: (a, ex) => {
@@ -1730,7 +1730,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_claim_supervisor",
-        description: "新会话接手时调用：把 project.yaml 的 supervisor.session 更新为当前会话 id（ex.agent.session 链），记 supervisor.claimed 事件（幂等：重复调用不重复记），返回 HANDOFF 交接全文并同时落盘 HANDOFF.md（写盘统一走归档逻辑：旧版先归档到 <root>/handoffs/，g-121）。",
+        description: "新会话接手时调用：把 project.yaml 的 supervisor.session 更新为当前会话 id（ex.agent.session 链），记 supervisor.claimed 事件（幂等：重复调用不重复记），返回 HANDOFF 交接全文并同时落盘 HANDOFF.md（写盘统一走归档逻辑：旧版先归档到 <root>/handoffs/）。",
         parameters: params({}, []),
       },
       run: (a, ex) => {
@@ -2033,7 +2033,7 @@ export function apply(ctx, config) {
       // 遗留绑定缺失 binding_token 时支持显式声明 legacy: true 并给出 reason 进行受控解绑。
       def: {
         name: "graph_unbind_goal_child",
-        description: "从目标解绑执行子代理（g-190/g-282，安全 detach）：按 goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 精确定位；仅授权主管或目标 owner 可执行；子代理不能自我解绑。解绑只清理绑定（attempt/事件/日志保留可审计），解绑后目标可暂缓/转移/重新派发；子代理仍运行（live registry）或状态不可确认时拒绝；token 未知/过期/并发冲突拒绝且不改数据；重复解绑幂等。对早期缺失 binding_token 的遗留绑定，支持显式声明 legacy: true 并给出 reason 进行受控解绑（写 attempt.detached 事件；若存在 token 则禁止用 legacy 绕过）。",
+        description: "从目标解绑执行子代理（安全 detach）：按 goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 精确定位；仅授权主管或目标 owner 可执行；子代理不能自我解绑。解绑只清理绑定（attempt/事件/日志保留可审计），解绑后目标可暂缓/转移/重新派发；子代理仍运行（live registry）或状态不可确认时拒绝；token 未知/过期/并发冲突拒绝且不改数据；重复解绑幂等。对早期缺失 binding_token 的遗留绑定，支持显式声明 legacy: true 并给出 reason 进行受控解绑（写 attempt.detached 事件；若存在 token 则禁止用 legacy 绕过）。",
         parameters: params(
           { goal: str, attempt: str, child_id: str, token: str, reason: str, legacy: { type: "boolean" } },
           ["goal"],
@@ -2062,7 +2062,7 @@ export function apply(ctx, config) {
       // g-282：放弃陈旧/失联 attempt（标记 result=cancelled、detached=true）——主管/目标 owner 专用。
       def: {
         name: "graph_abandon_attempt",
-        description: "放弃陈旧/失联 attempt（g-282）：把指定 attempt 标记为已放弃（result=cancelled、detached=true），清除绑定；仅授权主管或目标 owner 可执行；子代理仍运行（live registry）或状态不可确认时拒绝；事件先行（attempt.abandoned 含 reason/actor）。放弃后该 attempt 不再被判为活跃，目标可正常暂缓/归档/删除。",
+        description: "放弃陈旧/失联 attempt：把指定 attempt 标记为已放弃（result=cancelled、detached=true），清除绑定；仅授权主管或目标 owner 可执行；子代理仍运行（live registry）或状态不可确认时拒绝；事件先行（attempt.abandoned 含 reason/actor）。放弃后该 attempt 不再被判为活跃，目标可正常暂缓/归档/删除。",
         parameters: params(
           { goal: str, attempt: str, reason: str },
           ["goal", "attempt", "reason"],
