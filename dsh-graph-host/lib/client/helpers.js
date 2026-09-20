@@ -695,4 +695,42 @@
       return { isolate: byType, reason: "type_default", hint: null };
     }
 
+    // ===== g-321：消息排队状态检查（0.1.6 队列架构切换的安全读取） =====
+    // 0.1.5-rc.2：客户端快照直接带 queue；0.1.6-alpha.2 彻底废弃该字段，改为耐久的
+    // inbox 状态投影 `session.projections.faceOf('inbox')`（形如 { 'next-turn': [...], 'next-step': [...] }）。
+    // 铁律：绝不直接解构 `session.getSnapshot().queue`——新版该字段为 undefined，解构即 TypeError，
+    // 会让整个发送链路（判据反馈、看板直达指令、批量受理通知）在渲染期崩溃。
+    // 本函数只做特性探测，两条路径都读到才返回，读不到一律返回零值（不阻断发送）。
+    function sessionQueueState(session) {
+      const empty = { pendingCount: 0, queued: 0, steering: 0, source: null };
+      if (!session) return empty;
+      // 新路径（0.1.6）：inbox 投影。faceOf 缺失或投影未 seed 时静默降级到旧路径。
+      try {
+        const face = session.projections?.faceOf?.("inbox");
+        const value = face?.getSnapshot?.();
+        if (value && typeof value === "object") {
+          const nextTurn = Array.isArray(value["next-turn"]) ? value["next-turn"].length : 0;
+          const nextStep = Array.isArray(value["next-step"]) ? value["next-step"].length : 0;
+          return { pendingCount: nextTurn + nextStep, queued: nextTurn, steering: nextStep, source: "inbox" };
+        }
+      } catch { /* 投影不可用 → 回退旧路径 */ }
+      // 旧路径（0.1.5）：快照 queue（可能是数组，也可能是 { items } 容器）；一律先判类型再读。
+      try {
+        const snap = session.getSnapshot?.();
+        const q = snap && typeof snap === "object" ? snap.queue : null;
+        const items = Array.isArray(q) ? q : (Array.isArray(q?.items) ? q.items : null);
+        if (items) return { pendingCount: items.length, queued: items.length, steering: 0, source: "snapshot" };
+      } catch { /* 静默 */ }
+      return empty;
+    }
+
+    /** g-321：把 subagent 派发/投递失败码翻译为可操作文案（返回 null 表示非已知码，调用方自行回退原始 message）。 */
+    function subagentDispatchErrorText(err) {
+      const code = String(err?.code ?? err?.details?.reason ?? "");
+      const hay = `${code} ${String(err?.message ?? "")}`;
+      if (hay.includes("ACTIVATION_LIMIT_REACHED")) return dgT("live.activationLimit");
+      if (hay.includes("subagent/delivery-unavailable")) return dgT("live.deliveryUnavailable");
+      return null;
+    }
+
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // Contract marker: 看板数据自动刷新

@@ -185,6 +185,20 @@
       return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     }
 
+    // g-321：排队深度 hook（inbox 投影优先，0.1.5 快照 queue 回退）。
+    // getSnapshot 必须返回**按值稳定**的原语，否则 useSyncExternalStore 每次比较都判定变化 → 无限重渲染；
+    // 因此这里只返回 pendingCount 数字，完整形状由 sessionQueueState 在事件回调中读取。
+    function useSessionQueueDepth(session) {
+      const face = React.useMemo(
+        () => { try { return session?.projections?.faceOf?.("inbox") ?? null; } catch { return null; } },
+        [session]);
+      const subscribe = React.useCallback(
+        (cb) => (face ? face.subscribe(cb) : (session ? session.subscribe(cb) : NOOP_UNSUB())), [face, session]);
+      const getSnapshot = React.useCallback(
+        () => sessionQueueState(session).pendingCount, [session]);
+      return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    }
+
     // 流式快照（chat.legacy.partial）的最新一行可读输出
     function lastStreamLine(partial) {
       const blocks = partial?.blocks ?? [];

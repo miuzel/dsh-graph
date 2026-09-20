@@ -92,9 +92,25 @@
           return null;
         }
         // With no session selected, only the runtime's current session is eligible.
+        // g-321：会话激活判断双向兼容——0.1.5-rc.2 用 snap.current / snap.currentAddress；
+        // 0.1.6-alpha.2 移除了二者，改为「本地引用计数里 mainView > 0 的那一行」
+        // （与 DSH 自身 ui-workspace / ui-settings-general 的判定同源）。
+        const retainedMainViewId = (() => {
+          const list = Array.isArray(snap.items)
+            ? snap.items
+            : (snap.byId && typeof snap.byId === "object" ? Object.values(snap.byId) : []);
+          for (const s of list) {
+            if (!s || (s.retainedBy?.mainView ?? 0) <= 0) continue;
+            if (typeof s.id === "string" && s.id) return s.id;
+            if (typeof s.sessionId === "string" && s.sessionId) return s.sessionId;
+          }
+          return null;
+        })();
         const current = typeof snap.current === "string" && snap.current
           ? snap.current
-          : (typeof snap.currentAddress?.childSessionId === "string" ? snap.currentAddress.childSessionId : null);
+          : (typeof snap.currentAddress?.childSessionId === "string" && snap.currentAddress.childSessionId
+            ? snap.currentAddress.childSessionId
+            : retainedMainViewId);
         const resolved = current ? pathOf(current) : null;
         if (resolved) { setLastGoodWorkspace(resolved); return resolved; }
         return null;
@@ -129,6 +145,29 @@
       }));
     }
     const openingChildSessions = new Set();
+    // g-321：会话导航双向兼容（0.1.6 起导航职责从 sessions 服务迁移到 uiWorkspace）。
+    // uiWorkspace 由 ui-workspace 插件声明在 Context 上，按可选能力经 ctx.get 探测取得；
+    // 缺失（0.1.5-rc.2 或未激活该插件的精简 profile）时回退到 sessions.open/openSubagent，
+    // 绝不把 uiWorkspace 列为硬 inject——那会让旧 profile 的整个看板 client apply 被阻断。
+    function uiWorkspaceRt() {
+      try { return appCtx?.get?.("uiWorkspace") ?? appCtx?.uiWorkspace ?? null; } catch { return null; }
+    }
+    // 统一跳转：优先 uiWorkspace.openSession(target)（0.1.6），回退 legacyFn（0.1.5 的 sessions.*）。
+    // target 是 SessionId 或 SubagentAddress，两种版本共用同一份 address 形状。
+    function openSessionTarget(target, legacyFn) {
+      const uw = uiWorkspaceRt();
+      if (uw && typeof uw.openSession === "function") {
+        try { uw.openSession(target); return true; }
+        // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
+        catch (e) { console.warn("[dsh-graph-host] uiWorkspace.openSession 失败，回退 sessions.*", e); }
+      }
+      if (typeof legacyFn === "function") {
+        try { if (legacyFn() !== false) return true; }
+        // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
+        catch (e) { console.warn("[dsh-graph-host] 旧版会话导航 API 失败", e); }
+      }
+      return false;
+    }
     async function openChildSession(parentSessionId, childId) {
       if (!parentSessionId || !childId) return;
       const navigationKey = parentSessionId + "\u0000" + childId;
@@ -143,17 +182,26 @@
         const entries = rt.list?.getSnapshot?.().subagentsByParent?.[parentSessionId]?.entries ?? [];
         const entry = entries.find((e) => e.kind === "child" && e.id === childId);
         if (entry) {
-          rt.openSubagent?.({ parentSessionId, childSessionId: childId, mode: entry.mode });
+          // g-321：0.1.5 走 sessions.openSubagent(address)；0.1.6 该 API 已移除，
+          // 由 uiWorkspace.openSession(address) 一步完成「选中会话 + 切到对话」。
+          const address = { parentSessionId, childSessionId: childId, mode: entry.mode };
+          if (!openSessionTarget(address, typeof rt.openSubagent === "function" ? () => rt.openSubagent(address) : null)) {
+            // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
+            console.warn("[dsh-graph-host] 无可用子会话导航 API（uiWorkspace.openSession / sessions.openSubagent 均缺失）：", childId);
+          }
           activateChatTab();
         } else {
           // 目录里没有（不健康/已清理）：退化为打开父会话
           console.warn("[dsh-graph-host] child not in catalog, opening parent:", childId);
-          rt.open?.(parentSessionId);
+          openSessionTarget(parentSessionId, typeof rt.open === "function" ? () => rt.open(parentSessionId) : null);
           activateChatTab();
         }
       } catch (e) {
         console.warn("[dsh-graph-host] openSubagent failed", e);
-        try { rt?.open?.(parentSessionId); activateChatTab(); } catch { /* 静默 */ }
+        try {
+          openSessionTarget(parentSessionId, typeof rt?.open === "function" ? () => rt.open(parentSessionId) : null);
+          activateChatTab();
+        } catch { /* 静默 */ }
       } finally {
         openingChildSessions.delete(navigationKey);
       }

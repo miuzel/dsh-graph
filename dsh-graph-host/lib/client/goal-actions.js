@@ -30,13 +30,20 @@
           const res = await session.prompt(
             [{ type: "text", text: `【${props.goalId} 判据反馈】${criterion}\n${t}` }], "queue");
           if (res?.ok) {
-            setFbNote(dgT("criteria.feedbackQueued"));
+            // g-321：排队回执改为读真实排队状态（0.1.6 inbox 投影 / 0.1.5 快照 queue 回退），
+            // 而不是直接解构 session.getSnapshot().queue——新版该字段已废弃，解构即 TypeError。
+            const depth = sessionQueueState(session).pendingCount;
+            setFbNote(depth > 0 ? dgT("criteria.feedbackQueuedDepth", { n: depth }) : dgT("criteria.feedbackQueued"));
             setFbText("");
             setFbIdx(-1);
             // g-109：判据反馈提交后自动关闭弹窗
             if (props.onClose) props.onClose();
           }
-          else setFbNote(dgT("criteria.feedbackSendFail") + (res?.error?.message ?? dgT("drag.unknownError")));
+          else {
+            // g-321：0.1.6 的 subagent/delivery-unavailable 与 ACTIVATION_LIMIT_REACHED 给出可操作提示
+            const friendly = subagentDispatchErrorText(res?.error);
+            setFbNote(friendly ?? (dgT("criteria.feedbackSendFail") + (res?.error?.message ?? dgT("drag.unknownError"))));
+          }
         } catch (e) { setFbNote(dgT("criteria.feedbackSendFail") + String(e?.message ?? e)); }
       };
       return h("div", null,
@@ -157,7 +164,9 @@
           if (!rt) throw new Error(dgT("exec.supervisorUnavailable"));
           if (!supervisorSession) throw new Error(dgT("exec.supervisorNotConfigured"));
           const copied = await copyText(request);
-          rt.open?.(supervisorSession); activateChatTab();
+          // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
+          openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
+          activateChatTab();
           if (copied) showToast(dgT("exec.requestCopied"));
            setMode("supervisor");
            setFallback(!copied);
@@ -353,7 +362,8 @@
           if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
           // 自动复制预填内容（负责人指示），再切到主管对话窗直接粘贴发送
           const copied = prefillText ? await copyText(prefillText) : false;
-          rt.open?.(supervisorSession);
+          // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
+          openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
           activateChatTab();
           if (copied) {
             showToast(dgT("exec.precopied"));
@@ -488,7 +498,8 @@
           if (!rt) { setNote(dgT("exec.supervisorUnavailable")); return; }
           // 主管会话 id 由 board 端点下发（project.yaml supervisor.session，g-108）
           if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
-          rt.open?.(supervisorSession);
+          // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
+          openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
           activateChatTab();
           setNote(dgT("addCard.chatSwitched"));
         } catch (e) {
