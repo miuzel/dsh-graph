@@ -129,7 +129,8 @@
     // 旧逻辑回退父会话会把「父会话模型」冒充子代理实际模型（如用 flash 派发却显示 v4-pro），
     // 误导负责人。现改为失败即报错，由调用方用「重新执行指定路由」或「查询不可用」兜底。
     // g-194: 格式化模型展示文案，优雅降级，绝不向用户展示 owned by subagent routing 等内部错误
-    function formatModelDisplay(dynamicModel, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr) {
+    // g-321: modelPending —— 会话尚未接入 / binding 尚未 ready 的中性回落（不得显示「模型目录不可用」）
+    function formatModelDisplay(dynamicModel, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr, modelPending) {
       if (dynamicModel && dynamicModel.model) {
         const p = dynamicModel.provider ? `${dynamicModel.provider}/` : "";
         return `${p}${dynamicModel.model}` + (dynamicModel.fromParent ? " (" + dgT("live.inherited") + ")" : "");
@@ -152,6 +153,7 @@
         }
         return dgT("live.unavailable") + modelErr;
       }
+      if (modelPending) return dgT("live.modelPending");
       return dgT("live.defaultConfig");
     }
 
@@ -163,19 +165,23 @@
       return null;
     }
 
-    // 当前模型来自 sessions.binding(sessionId).session 的 modelSelection 投影。
+    // 当前模型来自已保留 binding 的 session 的 modelSelection 投影。
     // 旧版 api.sessions.models 已从 Host 移除；缺少该 API 时不能保持“查询中”假状态。
+    // g-321：与 useBoundSession 共用 useSessionBinding 的**同一份已保留 binding**
+    // （模块级按身份引用计数，SessionPanel 与其内嵌 LiveStrip 不会重复 retain 泄漏代际）。
+    // 0.1.6-alpha.2 起 binding(id) 只借用已存在的保留代际，被动调用恒 undefined —— 必须 retain。
     function useSessionModel(sessionId, parentId) {
-      const binding = React.useMemo(() => {
-        if (!sessionsRt || !sessionId) return null;
-        try { return sessionsRt.binding(sessionId) ?? null; }
-        catch { return null; }
-      }, [sessionId]);
-      const selection = useProjectionValue(binding?.session ?? null, "modelSelection");
+      const binding = useSessionBinding(sessionId, { parentId: parentId ?? null, childId: sessionId ?? null });
+      const session = binding.session;
+      const selection = useProjectionValue(session, "modelSelection");
       const current = selection?.next ?? selection?.lastUsed ?? null;
       return {
         model: current ? { provider: current.provider, model: current.model } : null,
-        modelErr: selection === undefined ? dgT("live.modelUnavailable") : null,
+        // g-321 / g-109：会话未接入或尚未 ready 时**不得**显示「模型目录不可用」——
+        // 回落中性状态（modelPending）；只有会话确实已接入、投影却缺失时才报不可用。
+        // 绝不用父会话模型冒充子代理实际模型。
+        modelErr: session && selection === undefined ? dgT("live.modelUnavailable") : null,
+        modelPending: !session,
       };
     }
 
@@ -447,7 +453,7 @@
       const snap = useSessionSnapshot(session);
       const usage = useProjectionValue(session, "tokenUsage");
       const pressure = useProjectionValue(session, "contextPressure");
-      const { model, modelErr } = useSessionModel(props.childId, props.parentId);
+      const { model, modelErr, modelPending } = useSessionModel(props.childId, props.parentId);
       const [showRecords, setShowRecords] = React.useState(false);
 
       const running = !!(snap && snap.running);
@@ -460,7 +466,7 @@
       const staticProvider = props.provider ?? null;
       const staticModel = props.model ?? null;
       const staticRoute = props.modelRoute ?? null;
-      const modelText = formatModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr);
+      const modelText = formatModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute, modelErr, modelPending);
       const shortModel = formatShortModelDisplay(model, staticProvider, staticModel, staticRoute, relaunchRoute);
       // 折叠态标题行的内联摘要：状态 + statusLine + token/ctx + 模型短名
       const collapsedBits = [

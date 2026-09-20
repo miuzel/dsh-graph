@@ -296,6 +296,9 @@ test("g-273: runBatchAccept — empty input is a no-op", async () => {
 // ===== 6. 聚合主管通知：整批一条；无 supervisorSession 静默跳过 =====
 test("g-273: notifySupervisorBatchAccept — exactly one queued message with goal list and count", async () => {
   const prompts: any[] = [];
+  // g-321 说明：本 stub 刻意只提供 binding()（**不含 retain**），即 0.1.5 形态——被测的
+  // notifySupervisorBatchAccept 走的是直连 rt.binding() 的既有路径，不经会话引用生命周期
+  // hook（useSessionBinding）；0.1.6 有 retain 时该模块不需要额外 stub 即可继续工作。
   (globalThis as any).sessionsRt = {
     binding: (id: string) => (id === "sup-1" ? { session: { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } } } : null),
   };
