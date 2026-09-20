@@ -4,11 +4,11 @@
   "description": "A DeepSeek Harness plugin for graph-based goal management and kanban visualization.",
   "license": "MIT",
   "type": "module",
-  "main": "../dist/index.js",
+  "main": "index.js",
   "exports": {
-    ".": "../dist/index.js",
-    "./client": "../dist/lib/client.js",
-    "./cordis.patch.yml": "../dist/cordis.patch.yml",
+    ".": "./index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "keywords": [
