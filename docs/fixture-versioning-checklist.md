@@ -16,10 +16,10 @@
 ### 1.2 隔离测试实例（`scripts/dev-dsh-instance.sh`）
 - **用途**: 启动隔离的 DSH web 实例用于开发和测试
 - **端口**: 3082（测试实例），3080（主实例）
-- **数据域**: `~/.dsh/dev-workspace/dsh-graph-test/.dsh-graph`
+- **数据域**: `./tmp/test-review/workspace/dsh-graph-test/.dsh-graph`（仓库内；由脚本默认值 `TEST_HOME=$REPO_ROOT/tmp/test-review` 与 `CWD=$TEST_HOME/workspace/$PROFILE` 决定）
 - **隔离特性**:
-  - 独立 DSH_HOME
-  - 独立 workspace
+  - 独立 DSH_HOME（`$REPO_ROOT/tmp/test-review`）
+  - 独立 workspace（`$TEST_HOME/workspace/$PROFILE`）
   - 独立 pnpm store
 
 ### 1.3 核心测试（`core/tests/*.test.ts`）
