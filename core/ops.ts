@@ -52,6 +52,9 @@ import {
   criteriaPresent,
   countCriteria,
   criteriaItems,
+  allCriteriaVerified,
+  verifiedCriteriaItems,
+  CRITERIA_VERIFIED_MARK,
   normalizeGoalType,
   normalizeGoalTags,
   rebuildCriteriaSection,
@@ -112,6 +115,14 @@ import {
   resolveWorktreeIsolationDecision,
   prepareAttemptWorktree,
 } from "./worktree.ts";
+import {
+  REVIEW_POLICIES,
+  normalizeReviewPolicy,
+  normalizeMachineReport,
+  resolveReviewPolicy,
+  evaluateFastTrackGate,
+  type ReviewPolicy,
+} from "./review-policy.ts";
 export { GraphError, GraphConflictError };
 export { normalizeGoalType };
 export {
@@ -124,6 +135,30 @@ export {
   prepareAttemptWorktree,
 };
 export type { MemoryScope };
+// g-311：分级评审策略与机器快速放行门禁（纯函数模块 review-policy.ts）经 ops 统一 re-export，
+// host 半边只需从 ./core/ops.js 取用（与 worktree 系列同款）。
+export {
+  REVIEW_POLICIES,
+  FAST_TRACK_CHECKS,
+  FAST_TRACK_MAX_PRODUCT_LINES,
+  CONTRACT_PATHS,
+  typeDefaultReviewPolicy,
+  normalizeReviewPolicy,
+  normalizeMachineReport,
+  resolveReviewPolicy,
+  evaluateFastTrackGate,
+  countProductChangedLines,
+  isProductCodePath,
+} from "./review-policy.ts";
+export type {
+  ReviewPolicy,
+  ReviewPolicyDecision,
+  StrictReason,
+  FastTrackCheck,
+  FastTrackEvidence,
+  FastTrackGateResult,
+} from "./review-policy.ts";
+export { allCriteriaVerified, verifiedCriteriaItems, CRITERIA_VERIFIED_MARK } from "./model.ts";
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
 export type { ObjectSchema };
@@ -871,6 +906,8 @@ export interface ProjectConfig {
   };
   supervisor: { automation: Record<string, string | null> };
   prompt_overrides: { subagent: PromptOverride };
+  /** g-311：顶层 review.policy——未配置/空/非三值一律为 null（由 review-policy 按目标类型派生）。 */
+  review: { policy: ReviewPolicy | null };
 }
 
 const AUTOMATION_KEYS = [
@@ -1047,6 +1084,7 @@ export function readProjectConfig(root: string): ProjectConfig {
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
       supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])) },
       prompt_overrides: { subagent: { state: "default", value: null } },
+      review: { policy: null },
     };
   }
   const lines = readFileSync(file, "utf8").split("\n");
@@ -1073,6 +1111,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     },
     supervisor: { automation: auto },
     prompt_overrides: { subagent },
+    review: { policy: normalizeReviewPolicy(scal(["review", "policy"])) },
   };
 }
 export function isMemoryToolsEnabled(root: string): boolean {
@@ -1265,6 +1304,17 @@ function validateConfigPatch(patch: any): void {
       needStr(o.value, `prompt_overrides.${key}.value`, { nullable: true });
     }
   }
+  // g-311：顶层 review.policy 二次校验（schema 已按 enum 拒绝非法值，此处兜住 core 层直调；
+  // 与 schema 同口径为**精确匹配**——读路径的大小写容错只服务历史值，不是写入许可）。
+  if ("review" in patch) {
+    needObj(patch.review, "review");
+    const rv = patch.review ?? {};
+    if (rv.policy !== undefined && rv.policy !== null) {
+      if (typeof rv.policy !== "string" || !(REVIEW_POLICIES as readonly string[]).includes(rv.policy)) {
+        throw new GraphError(`review.policy 只允许 ${REVIEW_POLICIES.join("/")}`);
+      }
+    }
+  }
 }
 
 /** g-132 写入 project.yaml 安全配置字段。patch 为部分字段（缺省字段不动）。
@@ -1323,6 +1373,10 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
       else if (state === "override") encoded = JSON.stringify(o.value ?? "");
       setScalar(["prompt_overrides", key], "", () => encoded);
     }
+  }
+  // g-311：顶层 review.policy（null/"" 清空 → 读回 null → 按目标类型派生）。
+  if (patch.review && "policy" in patch.review) {
+    setScalar(["review", "policy"], patch.review.policy ?? "");
   }
 
   const updated = lines.join("\n");
@@ -7281,12 +7335,23 @@ export function requestAcceptReview(
 /** 主管裁决接受请求。
  *  verdict="accept" → 按阶段追加 description.confirmed / criteria.confirmed(actor=human) / review.passed+transition delivered
  *  verdict="object" → 追加 review.objected（details.objection=异议内容）
- *  force=true + reason → 记 goal.amended（理由），直接走 accept 分支 */
+ *  force=true + reason → 记 goal.amended（理由），直接走 accept 分支
+ *  g-311 fast_track=true + machine_report → 机器快速放行：策略须为 auto 且四项门禁全绿，
+ *  通过则追加 review.fast_track（含四项机器证据与 baseline）再走同一 accept 映射；
+ *  任一不满足即抛 GraphError 且**零副作用**（不迁移、不记 review.passed）。缺省路径逐字不变。 */
 export function resolveAccept(
   root: string,
   id: string,
-  opts: { actor: string; verdict: "accept" | "object"; objection?: string; force?: boolean; reason?: string },
-): { ok: boolean } {
+  opts: {
+    actor: string;
+    verdict: "accept" | "object";
+    objection?: string;
+    force?: boolean;
+    reason?: string;
+    fast_track?: boolean;
+    machine_report?: unknown;
+  },
+): { ok: boolean; fast_track?: boolean } {
   const file = findGoalFile(root, id);
   const doc = loadGoal(file);
   const status = String(doc.meta.status ?? "");
@@ -7330,6 +7395,57 @@ export function resolveAccept(
       `当前状态 ${status} 不允许直接 accept——请先迁移到 review（或 in_progress 会自动补迁移）`,
     );
   }
+
+  // g-311：机器快速放行分支（准入校验全部前置，任何失败都在零副作用状态下抛错）。
+  if (opts.fast_track) {
+    const report = opts.machine_report;
+    const raw = report !== null && typeof report === "object" && !Array.isArray(report)
+      ? (report as Record<string, unknown>)
+      : {};
+    const evidence = normalizeMachineReport(report);
+    const policy = resolveReviewPolicy({
+      policy: readProjectConfig(root).review.policy,
+      type: doc.meta.type,
+      changedPaths: evidence.changed_paths,
+      productChangedLines: evidence.product_changed_lines,
+      strictRequired: raw.strict_required === true,
+    });
+    if (policy.policy !== "auto") {
+      throw new GraphError(
+        `fast_track 被拒：目标策略为 ${policy.policy}（${policy.reasons.join("；")}），不得走机器快速放行`,
+      );
+    }
+    // 门禁 ④ 以引擎自算的权威结果覆盖报告值——绝不采信调用方自报的「判据已验」。
+    const gate = evaluateFastTrackGate({ ...raw, criteria: { all_verified: allCriteriaVerified(doc.body) } });
+    if (!gate.allowed) {
+      const failed = gate.checks.filter((c) => !c.ok).map((c) => c.detail);
+      throw new GraphError(`fast_track 被拒：机器门禁未全绿（${failed.join("；")}）`);
+    }
+    appendEvent(root, {
+      actor: opts.actor,
+      event: "review.fast_track",
+      goal: id,
+      details: {
+        policy: "auto",
+        policy_source: policy.source,
+        baseline: gate.evidence.baseline_commit,
+        checks: Object.fromEntries(gate.checks.map((c) => [c.id, c.ok])),
+        evidence: {
+          changed_paths: gate.evidence.changed_paths,
+          product_changed_lines: gate.evidence.product_changed_lines,
+          untracked_files: gate.evidence.untracked_files,
+          tests_exit_code: gate.evidence.tests_exit_code,
+          tests_fail: gate.evidence.tests_fail,
+          typecheck_exit_code: gate.evidence.typecheck_exit_code,
+          criteria_all_verified: gate.evidence.criteria_all_verified,
+        },
+      },
+    });
+    applyAcceptMapping(root, id, status, opts.actor);
+    if (status === "review") registerWorktreeCandidates(root, id, opts.actor);
+    return { ok: true, fast_track: true };
+  }
+
   applyAcceptMapping(root, id, status, opts.actor);
   if (status === "review") registerWorktreeCandidates(root, id, opts.actor);
   return { ok: true };

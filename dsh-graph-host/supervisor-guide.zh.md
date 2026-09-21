@@ -124,6 +124,24 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
 - **`@att/` 受限语法**：已知限制记录在相关目标或长期记忆；不无限扩张 regex 边界。
 - **共享基础设施优先**：共享事务/错误处理与 REST schema middleware 优先于各功能重复修复。
 
+#### 分级评审与机器快速放行
+
+- **策略三值**：`project.yaml` 顶层 `review.policy ∈ {auto, strict, none}`（未配置为 null）。
+  - `auto`——允许走机器快速放行门禁；
+  - `strict`——必须派发独立（无作者偏见的）评审子代理，禁止 `fast_track`；
+  - `none`——既不要求独立评审也不要求机器门禁（仅限纯文档/记忆类零风险改动），仍不得绕过 `delivered` 人工 gate。
+- **未配置时按目标类型派生**：`patch`/`chore` → `auto`；`feature`/`bug`/`task`/`improvement` → `strict`；空/非法类型 → `strict`（安全侧兜底）。
+- **强制升级 strict 的闭集**（命中任一即 strict，显式 `auto`/`none` 不得推翻）：变更路径含 `core/schema.ts` 或 `schema/SCHEMA.md`（契约冻结）；产品代码变更 ≥150 行；变更跨 ≥3 个顶层区域（`core` / `dsh-graph-host` / `lib/client` / `prompts` / `scripts`）；supervisor 显式声明 `strict_required`（覆盖核心层重写等无法用路径与行数表达的情形）。
+- **机器门禁四项**（逐条可执行，`graph_resolve_accept(fast_track=true, machine_report=…)` 调用前须逐条实测）：
+  1. 全量测试：`node --test core/tests/*.test.ts` → `exit_code=0` 且 `fail=0`（双条件，只看文本会被截断误导）；
+  2. 类型检查：`./node_modules/.bin/tsc --noEmit -p tsconfig.json` → `exit_code=0`；覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内；
+  3. 变更规模：`git diff --numstat <attempt.baseline_commit> HEAD` 的产品代码增删合计 <150 行（口径排除 `core/tests/**`、`*.md` 与生成物；worktree 模式下须在 attempt 工作树内执行），且 `git status --porcelain` 复核无未跟踪新文件（未跟踪文件不计入 numstat，必须先提交）；
+  4. 判据已验：该目标全部判据文本均以 `✅已验` 结尾（由 `goal.md` 自算，不采信调用方自报）。
+- **fail-safe**：任一信号取不到（命令失败、报告缺字段、基线不可用）即不放行，不得把「拿不到证据」当作「证据为真」。
+- **通过后的行为**：`graph_resolve_accept(fast_track=true, …)` 先追加 `review.fast_track` 事件（含四项机器证据与 baseline），再走同一 accept 映射；任一项不满足即拒绝且零副作用（状态不变、无 `review.passed` 事件）。
+- **边界（如实标注）**：`strict` 的「必须派发独立评审子代理」在插件层只有判定与指南约束，不是引擎强制——插件层尚无 reviewer 派发入口（g-248 未接线）；`delivered` 仍只能经既有 accept 与人工路径达成，快速通道不新增任何绕过人工 gate 的路径。
+- **纯文档/记忆类改动**可设 `review.policy: none` 免除机器门禁；它只免除机器证据收集，不免除负责人对 `delivered` 的最终裁决。
+
 #### 测试力度分级（按改动性质）
 
 测试的目的是证明行为正确，不是为每个改动凑一份断言。写判据与派发时按改动性质选档：
