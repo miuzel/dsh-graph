@@ -103,15 +103,19 @@ README 中的显式声明位置：`README.md`（顶部 + 安装小节）、`dsh-
       `win-smoke-test.mjs --tarball`，**通过 10 项 / 失败 0 项 / 告警 0 项**，退出码 0；完整报告见 §3）
 - [x] tarball 已产出并记录 sha256，且**两机 sha256 逐字节一致**（发布门禁红线 3；见 §3）
 - [x] **发布树已就绪并完成「发布物 == 已验证产物」字节级对账**（见 §3.4）：
-      `.worktrees/release-v0.15.0`（detached @ `7553005`）内 `bash scripts/build.sh` → `dist/`
+      `.worktrees/release-v0.15.0`（detached **@ tag `v0.15.0`**）内 `bash scripts/build.sh` → `dist/`
       实打 `pnpm pack` → sha256 **`c102aca6…`（414,102 B）与 Windows 已验产物完全相同**
-- [ ] `v0.15.0-test` 合并 → `main`，推送 `main`；**annotated tag `v0.15.0` 由负责人创建/推送**
-      （负责人已明确「不移 tag」：主管不新建、不迁移、不推送 tag）
-      ⚠️ 当前 `git describe --tags` 在发布树输出 `v0.12.0-18-g7553005`，**tag 存在前 §4 的
-      `describe == vX.Y.Z` 断言不成立**，需负责人先打 tag（或授权主管合并 `main` 后由负责人打 tag）
+- [x] `v0.15.0-test` 合并 → `main`（**合并提交 `727bd2e`**，`--no-ff`，父提交 `f0ec94b` + `225c9c3`）；
+      **annotated tag `v0.15.0` 已创建**（由主管按负责人 2026-09-21 明确授权执行；
+      **未推送** —— push 仍由负责人决定）
+      ✅ 发布树 `git describe --tags` = `v0.15.0`，§4 断言成立
+      > 注：本行与下一行的勾选回填于 tag 之后，故 **tag `727bd2e` 内的本清单副本仍显示未勾选**；
+      > `docs/` 不入发布包，不影响发布物（sha256 仍为 `c102aca6…`）。
 - [ ] 负责人执行 `pnpm publish`（npm 官方 registry）；**发布目录是 `dist/`，不是 `dsh-graph-host/`**
       —— 完整命令序列见 [`docs/release-handbook.md`](release-handbook.md) §4
       （已在树内构建好 `dist/`；发布前务必确认 `dist/` 内**无 `.tgz`**、文件数 **36**）
+      ⚠️ **前置必做**：`npm whoami --registry=https://registry.npmjs.org` **2026-09-21 实测返回
+      `E401 Unauthorized`** —— `~/.npmrc` 里的 token 已失效，**必须先 `npm login` 再 publish**
 - [ ] 发布后核验：全新隔离 profile 安装（`dsh plugin --profile <p> add dsh-graph`）→ 工具 / 看板 /
       skill 注册正常；`npm view dsh-graph version` = `0.15.0`
 
@@ -260,8 +264,19 @@ dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.13.0
    `find dist -type f | wc -l` == **36**、`find dist -name '*.tgz' | wc -l` == **0**。
    （本次已删除试打产物，当前两值分别为 36 / 0。）
 
-**尚未满足的一项**：发布树当前 `git describe --tags` = `v0.12.0-18-g7553005`，因为 **`v0.15.0` tag
-尚不存在**。§4 要求 `describe` 输出 `vX.Y.Z`；需负责人先打 tag（tag 归负责人，主管不建/不移/不推）。
+**tag 与发布树终态**：`v0.15.0-test` 已 `--no-ff` 合并进 `main`（合并提交 **`727bd2e`**），并创建
+annotated tag **`v0.15.0`**（经负责人 2026-09-21 明确授权；**未推送**）。发布树已重新指向 tag 并重建：
+
+| 项 | 值 |
+|---|---|
+| 发布树 HEAD | `727bd2e`（= tag `v0.15.0` 指向的合并提交） |
+| `git describe --tags` | `v0.15.0` ✅（§4 断言成立） |
+| `dist/package.json` version | `0.15.0` ✅ |
+| 树内重建后 `pnpm pack` sha256 | **`c102aca6…`**（与 Windows 已验产物仍逐字节相同） |
+| `dist/` 文件数 / tgz 数 | **36 / 0** ✅ |
+
+⇒ 合并与迁移到 tag 都**没有改变发布物**：从 tag 树构建出的产物与通过 Windows T1–T5 的那一份
+仍是**同一个 sha256**。
 
 **tarball 版本说明**：产物目录中的 tarball 已在本会话内**重新打包过一次**——首次打包（413,706 B /
 `1a275aba…`）之后又调整了 README 的「平台范围」措辞使其与门禁红线一致，故重新 `pnpm pack`

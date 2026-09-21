@@ -86,7 +86,8 @@ gh repo edit miuzel/dsh-graph --add-topic dsh-plugin --add-topic dsh --add-topic
 ```sh
 # 0. 前置：确认 registry 与登录态（人工 gate）
 npm config get registry                             # 期望 https://registry.npmjs.org/
-npm whoami --registry=https://registry.npmjs.org    # 未登录再执行 npm login --registry=https://registry.npmjs.org
+npm whoami --registry=https://registry.npmjs.org    # ⚠️ 2026-09-21 实测 E401 → 现有 token 已失效
+npm login --registry=https://registry.npmjs.org     # ⇒ 发布前必须先重新登录（whoami 打印出用户名才算过）
 
 # 1. 把待发布内容合并到 main 并打 tag（由负责人执行；主管不新建/不迁移/不推送 tag）
 git checkout main && git merge --no-ff vX.Y.Z-test && git tag -a vX.Y.Z -m "dsh-graph vX.Y.Z"
@@ -112,9 +113,12 @@ npm view dsh-graph version
 git worktree remove .worktrees/release-vX.Y.Z
 ```
 
-> 注意：**registry 与登录态（2026-09-21 实测更新）**——早先「`~/.npmrc` 指向 npmmirror 且未登录」
-> 的描述已过时：当前 `npm config get registry` 输出 `https://registry.npmjs.org/`，且 `~/.npmrc`
-> 已含 `//registry.npmjs.org/:_authToken=…`。发布前仍用步骤 0 的 `whoami` 复核一次即可。
+> 注意：**registry 与登录态（2026-09-21 实测更新）**——早先「`~/.npmrc` 指向 npmmirror 镜像且未登录」
+> 的描述已过时：当前 `npm config get registry` 输出 `https://registry.npmjs.org/`。
+> 但 `~/.npmrc` 里**虽存在** `//registry.npmjs.org/:_authToken=…`，该 token **实测已失效**：
+> `npm whoami --registry=https://registry.npmjs.org` 返回 **`E401 Unauthorized`**（2026-09-21）。
+> ⇒ **不能只看 `.npmrc` 里有 token 就认定已登录**；发布前必须 `npm login` 并确认 `whoami` 能打印
+> 出用户名，否则 `pnpm publish` 必定 401。这正是步骤 0 要求「必做」的原因。
 >
 > 沙箱内 pnpm 的 supply-chain policy 会对本地 tgz 误报（minimum-release-age），真实发布到官方
 > registry 后无此问题（该 policy 只查官方 registry 的发布时间）。
