@@ -245,7 +245,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   graph_* 工具，**绝不在包目录（如 `dsh-graph-host/`）下跑**——否则工具会按会话 cwd
   在包目录自动 init 出一个 `.dsh-graph/` 骨架，弄乱工作区。**禁止**用 `git add -f`、
   `git rm --cached` 等方式把 `.dsh-graph` 数据纳入父仓库 Git——数据归内层独立仓库管理，
-  迁移由 `scripts/migrate-dsh-graph-repo.sh --apply` 显式执行；
+  迁移由 `scripts/archived/migrate-dsh-graph-repo.sh --apply` 显式执行；
 - **模型路由**：执行子代理**不继承父会话模型**——统一走 project.yaml 的
   `executor.provider/model`，`graph_start_attempt` 的 provider/model 参数可临时覆盖；
   路由结果显示在返回的 `model_route` 字段；

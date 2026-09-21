@@ -91,7 +91,7 @@ dsh plugin --profile <name> add dsh-graph
 
 ## 数据目录
 
-`<workspace>/.dsh-graph`：跟随调用会话的 workspace（`session.header.cwd`），数据落在每个项目自己的 `.dsh-graph`，git 友好。包含 `backlog/`、`goals/`、`versions/`、`events.jsonl`（事件流，唯一事实源）等。首次触达某 workspace 自动生成骨架，幂等、不建 demo 数据；`.dsh-graph` 也可配置为独立 Git 仓库（见 `docs/` 与 `scripts/migrate-dsh-graph-repo.sh`）。
+`<workspace>/.dsh-graph`：跟随调用会话的 workspace（`session.header.cwd`），数据落在每个项目自己的 `.dsh-graph`，git 友好。包含 `backlog/`、`goals/`、`versions/`、`events.jsonl`（事件流，唯一事实源）等。首次触达某 workspace 自动生成骨架，幂等、不建 demo 数据；`.dsh-graph` 也可配置为独立 Git 仓库（见 `docs/` 与 `scripts/archived/migrate-dsh-graph-repo.sh`）。
 
 ## 仓库结构（monorepo）
 
@@ -107,7 +107,7 @@ node --test core/tests/*.test.ts   # 全量测试
 
 # 复现 README 截图（虚构演示数据，写仓库外 /tmp，不提交 mock .dsh-graph）：
 node scripts/dsh-graph-mock-seed.mjs --validate               # 生成 nebula-notes mock 数据
-CWD=/tmp/dsh-graph-mock-demo bash scripts/dev-dsh-instance.sh run --port 3082  # 测试实例（开「看板」tab）
+CWD=/tmp/dsh-graph-mock-demo bash scripts/archived/dev-dsh-instance.sh run --port 3082  # 测试实例（开「看板」tab）
 # 截图：同一次 seed、同一实例、固定视口——看板全景 → screenshot/screenshot-1.png；
 # 点击看板上的目标卡片打开详情弹窗 → screenshot/screenshot-2.png
 ```
