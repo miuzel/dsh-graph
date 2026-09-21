@@ -102,9 +102,16 @@ README 中的显式声明位置：`README.md`（顶部 + 安装小节）、`dsh-
 - [x] **Windows 真机门禁 T1–T5 = PASS ✅**（发布门禁红线 1；2026-09-21 在**原生 Windows** 上跑
       `win-smoke-test.mjs --tarball`，**通过 10 项 / 失败 0 项 / 告警 0 项**，退出码 0；完整报告见 §3）
 - [x] tarball 已产出并记录 sha256，且**两机 sha256 逐字节一致**（发布门禁红线 3；见 §3）
+- [x] **发布树已就绪并完成「发布物 == 已验证产物」字节级对账**（见 §3.4）：
+      `.worktrees/release-v0.15.0`（detached @ `7553005`）内 `bash scripts/build.sh` → `dist/`
+      实打 `pnpm pack` → sha256 **`c102aca6…`（414,102 B）与 Windows 已验产物完全相同**
 - [ ] `v0.15.0-test` 合并 → `main`，推送 `main`；**annotated tag `v0.15.0` 由负责人创建/推送**
       （负责人已明确「不移 tag」：主管不新建、不迁移、不推送 tag）
-- [ ] 负责人执行 `pnpm publish`（npm 官方 registry；发布树必须自 tag 独立 worktree 建，见 `docs/release-handbook.md` §4）
+      ⚠️ 当前 `git describe --tags` 在发布树输出 `v0.12.0-18-g7553005`，**tag 存在前 §4 的
+      `describe == vX.Y.Z` 断言不成立**，需负责人先打 tag（或授权主管合并 `main` 后由负责人打 tag）
+- [ ] 负责人执行 `pnpm publish`（npm 官方 registry）；**发布目录是 `dist/`，不是 `dsh-graph-host/`**
+      —— 完整命令序列见 [`docs/release-handbook.md`](release-handbook.md) §4
+      （已在树内构建好 `dist/`；发布前务必确认 `dist/` 内**无 `.tgz`**、文件数 **36**）
 - [ ] 发布后核验：全新隔离 profile 安装（`dsh plugin --profile <p> add dsh-graph`）→ 工具 / 看板 /
       skill 注册正常；`npm view dsh-graph version` = `0.15.0`
 
@@ -225,6 +232,36 @@ dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.13.0
 
 这比脚本更强：它证明 **prompt 注入、子代理派发与回收、worktree 探测（在非 git 目录下正确回退
 `worktree=false`）、评论/记忆落盘** 在 Windows 上整链可用。
+
+### 3.4 发布树就绪与「发布物 == 已验证产物」字节级对账
+
+按手册 §4 建好独立发布树，并**用发布树自己构建的 `dist/` 实打了一次包**，与 Windows 已验产物对比：
+
+| 项 | 值 |
+|---|---|
+| 发布树 | `.worktrees/release-v0.15.0`（`git worktree add --detach` @ `7553005`，工作区干净） |
+| `node_modules` | 软链仓库根（§4 步骤 2） |
+| 构建 | 树内 `bash scripts/build.sh` → `dist/`（36 个文件） |
+| `dist/package.json` version | `0.15.0` ✅ |
+| 树内 `pnpm pack` 产物 | **414,102 B** |
+| 树内 pack 的 sha256 | **`c102aca650baebaaa32578202751b69b116f6ce5035908781a250b37c54db212`** |
+| Windows 真机验证用 tarball 的 sha256 | **`c102aca6…`（完全相同）** |
+
+⇒ **从发布 tag 树构建出的发布物，与通过 Windows T1–T5 的那一份逐字节相同**——不是"内容等价"，
+是**同一个 sha256**。这是本次发布最强的一条对账结论：已验产物就是待发布产物。
+
+**同时修正了两处会致错的流程问题（均已改进手册 §4）**：
+
+1. **发布目录应为 `dist/`，而非 `dsh-graph-host/`**（负责人 2026-09-21 确认）。`dsh-graph-host/`
+   里既无 `core/` 也无 `lib/client.js`（那是源码形态），照旧手册 publish 会发出 TS 源码并缺
+   编译产物，宿主侧 loader 直接失败。核对依据：线上 `dsh-graph@0.12.0` 包内 36 个文件与
+   `dist/` 同构（`core/*.js`、无 `.ts`）。
+2. **`dist/` 内残留 `.tgz` 会被一起发出去**。试打后必须 `rm dist/*.tgz`；发布前固定核对
+   `find dist -type f | wc -l` == **36**、`find dist -name '*.tgz' | wc -l` == **0**。
+   （本次已删除试打产物，当前两值分别为 36 / 0。）
+
+**尚未满足的一项**：发布树当前 `git describe --tags` = `v0.12.0-18-g7553005`，因为 **`v0.15.0` tag
+尚不存在**。§4 要求 `describe` 输出 `vX.Y.Z`；需负责人先打 tag（tag 归负责人，主管不建/不移/不推）。
 
 **tarball 版本说明**：产物目录中的 tarball 已在本会话内**重新打包过一次**——首次打包（413,706 B /
 `1a275aba…`）之后又调整了 README 的「平台范围」措辞使其与门禁红线一致，故重新 `pnpm pack`
