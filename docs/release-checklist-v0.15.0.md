@@ -147,7 +147,7 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 > 建议先把 `dsh-graph-0.15.0.tgz` 与 `win-smoke-test.mjs` 两个文件**复制到 Windows 本地盘**
 > （如 `C:\Users\<you>\Desktop\v0150\`）再执行；复制前后各算一次 sha256 与上表核对。
 
-**为什么本次 Windows 门禁预期风险较低（但**仍必须实测**）**：`v0.11.0` 已修复并真机复验过
+**为什么本次 Windows 门禁预期风险较低（但仍必须实测）**：`v0.11.0` 已修复并真机复验过
 Windows 的两类致命问题（POSIX 专有锁常量、核心包重复声明）。自 `v0.11.0` 到 `v0.15.0`：
 
 - `core/platform.ts`（平台判定与锁实现）**零改动**；
