@@ -41,7 +41,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **DSH 版本兼容性**：本版本（v0.15.0）**支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.6-alpha.2`**。本次周期在 `0.1.6-alpha.2` 与 `0.1.5-rc.2` 两个宿主版本上做了双向兼容实测：`0.1.6-alpha.2` 上完成会话导航/focus、实时会话区、批量接受通知与并发槽位提示的实机验证；`0.1.5-rc.2` 上完成被动 binding 回退路径的实机验证（无 retain 时不破坏既有行为）。更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但未在本次周期复跑。
 >
-> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证**（最近一次三平台真机复验：`v0.11.0`，三平台使用同一安装包、产物 sha256 指纹一致；自 `v0.11.0` 以来 `core/platform.ts` 与文件锁相关代码零改动）。按发布门禁，**每个版本发布前须在原生 Windows 上重跑一次 T1–T5 门禁**；本版本（v0.15.0）的真机门禁执行件为仓库内 `scripts/win-smoke-test.mjs`（`node win-smoke-test.mjs --tarball dsh-graph-0.15.0.tgz`），结论回填于 `docs/release-checklist-v0.15.0.md` §3。
+> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证**（三平台使用同一安装包）。**本版本（v0.15.0）已在 Linux（WSL2）与原生 Windows 上重新实测**：Windows 侧 T1–T5 分层门禁在原生 `win32/x64` 上全绿（**通过 10 项 / 失败 0 项 / 告警 0 项**，2026-09-21，含跨进程并发 CAS「4 抢 1」）；**macOS 最近一次真机复验为 `v0.11.0`**，自 `v0.11.0` 以来 `core/platform.ts` 与文件锁相关代码零改动。真机门禁执行件为仓库内 `scripts/win-smoke-test.mjs`（`node win-smoke-test.mjs --tarball dsh-graph-0.15.0.tgz`），结论回填于 `docs/release-checklist-v0.15.0.md` §3。
 >
 > **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 >
@@ -175,7 +175,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **DSH version compatibility**: This release (v0.15.0) **supports DeepSeek Harness `0.1.2-rc.1` through `0.1.6-alpha.2`**. This cycle verified bidirectional compatibility on two host versions: on `0.1.6-alpha.2`, session navigation/focus, the live session strip, batch-accept notification, and concurrency-slot hints were verified on a live instance; on `0.1.5-rc.2`, the passive-binding fallback path was verified on a live instance (no retain, no regression). The earlier `0.1.2-alpha.x` ~ `0.1.5` series remains backward compatible by tool and prompt contract, but was not re-run in this cycle.
 >
-> **Platform scope**: **verified on Linux (WSL2), native Windows, and macOS** (most recent three-platform re-verification: `v0.11.0`, all three platforms using the same package with an identical artifact sha256; `core/platform.ts` and the file-locking code are unchanged since `v0.11.0`). Per the release gate, **the T1–T5 gate must be re-run once on native Windows before every release**; for this version (v0.15.0) the on-device executor is `scripts/win-smoke-test.mjs` in the repository (`node win-smoke-test.mjs --tarball dsh-graph-0.15.0.tgz`), and the verdict is recorded in `docs/release-checklist-v0.15.0.md` §3.
+> **Platform scope**: **verified on Linux (WSL2), native Windows, and macOS** (all three using the same package). **This release (v0.15.0) was re-verified on Linux (WSL2) and native Windows**: the T1–T5 gate passed in full on native `win32/x64` (**10 passed / 0 failed / 0 warnings**, 2026-09-21, including the cross-process concurrent CAS "4 contend for 1"), and **macOS was last verified on-device at `v0.11.0`** (`core/platform.ts` and the file-locking code are unchanged since `v0.11.0`). The on-device gate executor is `scripts/win-smoke-test.mjs` in the repository (`node win-smoke-test.mjs --tarball dsh-graph-0.15.0.tgz`), and the verdict is recorded in `docs/release-checklist-v0.15.0.md` §3.
 >
 > **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`. Paths derived from `process.cwd()` are unaffected.
 >

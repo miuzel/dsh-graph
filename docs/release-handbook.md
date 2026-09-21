@@ -106,12 +106,23 @@ node -p "require('./.worktrees/release-vX.Y.Z/dist/package.json').version"   # �
 # 4. 在 dist/ 里发布（发布物必须来自「tag 树构建出的 dist/」）
 (cd .worktrees/release-vX.Y.Z/dist && pnpm publish --registry=https://registry.npmjs.org --no-git-checks)
 
-# 5. 核验线上版本
-npm view dsh-graph version
+# 5. 核验线上版本 + 内容级对账
+npm view dsh-graph version                       # 期望 X.Y.Z
+# ⚠️ registry 会重写上传的 tarball（条目排序/gzip 不同）⇒ 线上 sha256 必然 ≠ 本地 pack sha256。
+#    不要拿 tarball sha256 比对；要解包后比内容：
+mkdir -p /tmp/pubcheck && cd /tmp/pubcheck && npm pack dsh-graph@X.Y.Z && tar -xzf dsh-graph-X.Y.Z.tgz
+diff -r /tmp/pubcheck/package <本地已验包解包目录>     # 必须无输出（文件清单 + 逐文件字节一致）
 
 # 6. 收尾：核验后清理发布树
 git worktree remove .worktrees/release-vX.Y.Z
 ```
+
+> **发布后对账判据（v0.15.0 实证修正）**：v0.15.0 实测线上 414,753 B / sha256 `d72f8ea6…`，
+> 本地已验 414,102 B / `c102aca6…`——**差 651 B 但内容完全等价**：解包后 36/36 文件、逐文件
+> `diff -r` 无差异，且两者**未压缩 tar 体积相同**（1,564,672 B）、包内 mtime 相同（registry 可复现
+> 时间戳）。差异纯在打包层（条目顺序 + gzip 头/参数）。故：
+> **跨机器传递**（本机 ↔ Windows）用 tarball sha256 对账（红线 3）；
+> **registry 侧**必须用**内容级**对账（`diff -r` 或逐文件 sha256 列表）。
 
 > 注意：**registry 与登录态（2026-09-21 实测更新）**——早先「`~/.npmrc` 指向 npmmirror 镜像且未登录」
 > 的描述已过时：当前 `npm config get registry` 输出 `https://registry.npmjs.org/`。
