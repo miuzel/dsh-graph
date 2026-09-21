@@ -99,8 +99,9 @@ README 中的显式声明位置：`README.md`（顶部 + 安装小节）、`dsh-
 - [x] 工作区干净、`main` 只读未被触碰（全部改动先落 `v0.15.0-test`）
 - [x] **T1 静态门禁本机预检 PASS**（`node scripts/win-smoke-test.mjs --static-only`，对源码目录与 `dist/` 各跑一次；
       已扫描发布包内 JS，无 POSIX 专有常量具名导入）
-- [ ] **Windows 真机门禁 T1–T5**（发布门禁红线 1；见 §3，由负责人在原生 Windows 执行并回填）
-- [ ] tarball 已产出并记录 sha256（发布门禁红线 3；见 §3）
+- [x] **Windows 真机门禁 T1–T5 = PASS ✅**（发布门禁红线 1；2026-09-21 在**原生 Windows** 上跑
+      `win-smoke-test.mjs --tarball`，**通过 10 项 / 失败 0 项 / 告警 0 项**，退出码 0；完整报告见 §3）
+- [x] tarball 已产出并记录 sha256，且**两机 sha256 逐字节一致**（发布门禁红线 3；见 §3）
 - [ ] `v0.15.0-test` 合并 → `main`，推送 `main` + annotated tag `v0.15.0`（**由主管执行**）
 - [ ] 负责人执行 `pnpm publish`（npm 官方 registry；发布树必须自 tag 独立 worktree 建，见 `docs/release-handbook.md` §4）
 - [ ] 发布后核验：全新隔离 profile 安装（`dsh plugin --profile <p> add dsh-graph`）→ 工具 / 看板 /
@@ -159,8 +160,70 @@ Windows 的两类致命问题（POSIX 专有锁常量、核心包重复声明）
 - 本次周期的 4 个交付目标（g-321/323/324/325）改动面全在宿主 API 适配层与前端交互，**未触碰文件系统路径**；
 - T1 静态门禁（正是当年 Windows 崩溃的预测性检查）在本机对源码目录与 `dist/` 均 PASS。
 
-> 上述只是**风险判断**。发布门禁红线 1 明确要求「Linux/WSL2 全绿不能替代 Windows 真机结论」，
-> 因此本节勾选仍须由负责人在原生 Windows 上跑出真实结果后回填。
+> 上述只是**风险判断**，不能代替实测。发布门禁红线 1 要求「Linux/WSL2 全绿不能替代 Windows 真机结论」，
+> 故已按下节在原生 Windows 上实测。
+
+### 3.1 真机门禁执行结果：**PASS ✅**（2026-09-21）
+
+**执行环境（原生 Windows，非 WSL）**
+
+| 项 | 值 |
+|---|---|
+| 平台 | `win32/x64`（`node.exe` v24.13.0，Windows PowerShell，Windows `%TEMP%`） |
+| 宿主 DSH | `@deepseek-ai/dsh@0.1.6-alpha.2`（`npx -y @deepseek-ai/dsh@0.1.6-alpha.2`） |
+| 被测产物 | `D:\workspace\play\dsh-graph-0.15.0.tgz` |
+| 隔离 `DSH_HOME` | `%TEMP%\dsh-graph-win-smoke-1789984688253`（用后自动清理） |
+| 隔离 profile / 端口 | `win-smoke` / `3089`（不触碰负责人正在使用的 3100 实例） |
+
+**脚本回传报告（原文照录）**
+
+```
+dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.13.0
+安装来源=dsh-graph-0.15.0.tgz (实际版本 0.15.0)
+产物指纹=sha256:c102aca650baebaaa32578202751b69b116f6ce5035908781a250b37c54db212  414102 B
+结果=PASS 通过10/失败0/告警0
+```
+
+**逐层结果**
+
+| 层 | 检查 | 结果 |
+|---|---|---|
+| T1 | 无 POSIX 专有常量的 ESM 具名导入（扫描 14 个文件） | PASS |
+| T2 | 初始化 web 模板 profile | PASS |
+| T2 | 安装 tarball（实际版本 0.15.0） | PASS |
+| T2 | 插件自带依赖 `yaml` 随安装落地 | PASS |
+| T3 | 建目标 / 判据 / 标签锁 / CAS / validate — 6 步全通过，`validate` 返回空 | PASS |
+| T3 | **跨进程并发 CAS（4 抢 1）— 恰好 1 个成功、3 个冲突被拒** | PASS |
+| T4 | 实例启动 / 插件树加载（`dsh web` 就绪） | PASS |
+| T5 | dsh-graph 路由已注册 | PASS |
+| T5 | 看板载荷可读 | PASS |
+| T5 | Web UI 可达 | PASS |
+
+> **T3 的并发 CAS 是本次最有价值的一条**：它走的正是 v0.11.0 之前会在 Windows 上崩掉的
+> 文件锁路径（`O_DIRECTORY`/`O_NOFOLLOW` 一类 POSIX 专有常量）。4 抢 1 得到严格串行化结果，
+> 证明锁语义在 NTFS 上成立，而不只是"能启动"。
+
+### 3.2 三段独立对账（跨机器产物传递，红线 3）
+
+1. **两机 tarball sha256 逐字节一致**：WSL 侧产物 `c102aca6…`（414,102 B）== 负责人拷贝到
+   Windows 的 `D:\workspace\play\dsh-graph-0.15.0.tgz`（414,102 B）。红线 3 满足。
+2. **已安装包 == tarball**：Windows 侧 `C:\Users\mingxuan\.dsh\profiles\web\node_modules\dsh-graph`
+   与 tarball 解包结果**文件清单 36/36 一致、内容 36/36 逐字节一致**（`cmp` 全等，0 差异）。
+   即运行中的插件就是本次构建的产物，不存在"装错版本"。
+3. **运行中实例的产物指纹**：3100 实例（`npx @deepseek-ai/dsh@0.1.6-alpha.2 web --port 3100`）
+   由宿主提供的组合插件产物中 `PLUGIN_VERSION = "0.15.0"`；`/api/dsh-graph` 返回 200，
+   载荷 `_diagnostics.graphRoot = D:\workspace\play\.dsh-graph`（Windows 原生路径）。
+
+### 3.3 负责人侧真实使用（额外证据，非脚本构造）
+
+负责人已在同一 Windows 实例上完整跑通一条**真实**目标生命周期（`g-001`，落在 `D:\workspace\play\.dsh-graph`），
+事件流可查：`project.initialized` → `supervisor.claimed` → `goal.created` → `goal.amended` →
+`criteria.confirmed` → `planning→ready→in_progress→review` → `attempt.started`/`attempt.bound`
+（**真实派发了子代理** `child_id=848bc07c…`）→ 子代理 `attempt.status_reported` ×3 →
+`goal.comment_added`（主管复核）→ 产出 `evidence/g-001/smoke-report.md`（17,438 B）。
+
+这比脚本更强：它证明 **prompt 注入、子代理派发与回收、worktree 探测（在非 git 目录下正确回退
+`worktree=false`）、评论/记忆落盘** 在 Windows 上整链可用。
 
 **tarball 版本说明**：产物目录中的 tarball 已在本会话内**重新打包过一次**——首次打包（413,706 B /
 `1a275aba…`）之后又调整了 README 的「平台范围」措辞使其与门禁红线一致，故重新 `pnpm pack`
