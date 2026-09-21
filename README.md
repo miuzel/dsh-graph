@@ -2,25 +2,24 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
-> ### 🚀 v0.11.1 新功能
+> ### 🚀 v0.15.0 新功能
 >
-> - **backlog 卡片快速排期**：目标弹窗标题区新增「📅 排期」按钮（与「⏸ 暂缓」对应），一键将 backlog 目标排入活跃版本或转为独立目标；版本选择器自动过滤已归属版本，无活跃版本时按钮禁用。
-> - **共享卡转换工具**：新增 `graph_convert_card_to_shared` / `graph_convert_card_to_owned` 工具，goal 自有卡与共享卡互转无需再直接调 REST。
-> - **抽屉层级修复**：版本管理抽屉与上下文卡片抽屉在 Safari 中不再被 DSH 默认 UI 遮挡（React Portal 到 body 层 + z-index 提升）。
-> - **类型切换即时刷新**：backlog 卡片切换 goal 类型后看板立即更新，无需 F5。
-> - **拖拽到折叠泳道**：卡片可拖拽到已折叠的版本或 backlog 泳道，自动展开并高亮目标位置。
-> - **派发上下文去重**：brief/directive 内容重复时自动去重，减少 token 浪费；卡片预算诊断可追踪超预算来源。
-> - **graph_resolve_accept 修复**：`in_progress` 状态下调用自动补 `in_progress→review→delivered` 迁移；`blocked`/`delivered` 等无映射状态明确报错（含 force 通道）。
+> - **适配 DeepSeek Harness `0.1.6` 宿主 API 变更**：会话导航/focus 职责从 `sessions` 服务迁移到 `uiWorkspace`，统一走 `openSessionTarget`；子代理聚焦、点击「转到对话」、「交给产品经理」与用户反馈派发链路在新宿主下全部恢复可用。
+> - **看板实时会话区在 `0.1.6` 下恢复显示**：按新宿主的 retain 生命周期先保留会话引用再借取 binding，不再出现「⚠️ 会话未接入（不在会话列表）」与「模型目录不可用」，真实 tokens / ctx / 模型可正常渲染；`0.1.5` 无 retain 时自动回退被动 binding，双向兼容。
+> - **批量接受的主管通知在 `0.1.6` 下恢复**：通知派发改为能力探测分流，单卡接受与批量接受同形路径一并修复。
+> - **并发槽位耗尽给出可操作提示**：`0.1.6` 引入子代理激活上限（默认 8 个活跃 continuable 子代理），容量耗尽或冷恢复被拒时不再只透出英文错误码。
+> - **看板刷新按钮重置自动刷新倒计时**：点击刷新后倒计时立即回到完整周期，不再沿旧终点继续递减。
+> - **「定义/润色」复制模板改写为自述式主管指令**：标题标明由主管处理，明确接收者角色、下一步动作与本次边界（仅处理定义/润色，不执行代码、不推进状态或版本）。
 >
-> **✅ 支持 DeepSeek Harness `v0.1.5-rc.2`（Linux/WSL2、Windows、macOS 均已验证）**：本版本（v0.11.1）在该宿主版本上完整验证；兼容 `0.1.5` 系列与 `0.1.2-alpha.x` 及以上。
+> **✅ DSH 版本兼容性（重点）**：v0.15.0 **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.6-alpha.2`**。本次周期在 `0.1.6-alpha.2` 与 `0.1.5-rc.2` 两个宿主版本上做了**双向兼容**实测：`0.1.6-alpha.2` 上完成会话导航/focus、实时会话区、批量接受通知与并发槽位提示的实机验证；`0.1.5-rc.2` 上完成被动 binding 回退路径的实机验证（无 retain 时不破坏既有行为）。更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但未在本次周期复跑。
 >
 > **✅ 跨平台（v0.11.0 起）**：Windows 原生不可用问题已修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过。
 >
 > **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（例如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；**由 `process.cwd()` 推导的路径不受影响**。
 
-单包发布：npm 包名 `dsh-graph`（当前版本 v0.11.1）。一个包同时提供：
+单包发布：npm 包名 `dsh-graph`（当前版本 v0.15.0）。一个包同时提供：
 
-- 面向 agent 的 42 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
+- 面向 agent 的 44 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
 - 浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
 
 数据以文件 + 事件流形式落在工作区 `.dsh-graph` 目录，git 友好、可审计。
@@ -55,23 +54,24 @@ dsh plugin --profile <name> add dsh-graph
 >
 > **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
-> **✅ DSH 版本兼容性（重点）**：v0.11.0 **已完整验证并支持 DeepSeek Harness [`v0.1.5-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh)**——隔离测试实例（Web GUI + 二维泳道看板 + `graph_*` 工具 + REST 端点）与中英双语功能演示视频（见 [dsh-graph-videos](https://github.com/miuzel/dsh-graph-videos)）均在 `v0.1.5-rc.2` 上实测通过，**推荐与该版本配套使用**。同时兼容 `0.1.5` 系列及 `0.1.2-alpha.x` 及以上版本（工具与提示词契约向后兼容）。
+> **✅ DSH 版本兼容性（重点）**：v0.15.0 **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.6-alpha.2`**（最新的 `0.1.6-alpha.2` 已适配并实测通过）。本次周期在 `0.1.6-alpha.2` 与 `0.1.5-rc.2` 两个宿主版本上做了**双向兼容**实测：`0.1.6-alpha.2` 上完成会话导航/focus、实时会话区、批量接受通知与并发槽位提示的实机验证；`0.1.5-rc.2` 上完成被动 binding 回退路径的实机验证（无 retain 时不破坏既有行为）。更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但未在本次周期复跑。
 >
-> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证**（三平台使用同一安装包，产物 sha256 指纹一致）。此前 Windows 不可用的两类问题——① `core/ops.ts` 使用 POSIX 专用文件锁常量（目录当 fd 打开、`O_DIRECTORY`、`O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在**本版本**修复，并在原生 Windows 与 macOS 真机复验通过。**已知限制**：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
+> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证**（三平台使用同一安装包，产物 sha256 指纹一致）。此前 Windows 不可用的两类问题——① `core/ops.ts` 使用 POSIX 专用文件锁常量（目录当 fd 打开、`O_DIRECTORY`、`O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在 **v0.11.0** 修复，并在原生 Windows 与 macOS 真机复验通过。**已知限制**：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
 
 ## 提供的工具
 
-40 个 `graph_*` 工具，按功能分组：
+44 个 `graph_*` 工具，按功能分组：
 
 | 分组 | 工具 |
 |------|------|
 | 目标生命周期 | `graph_create_goal` · `graph_rename_goal` · `graph_set_description` · `graph_set_goal_type` · `graph_set_goal_tags` · `graph_amend_goal` · `graph_transition` · `graph_postpone_goal` · `graph_archive_goal` · `graph_unarchive_goal` · `graph_delete_goal` · `graph_clean_worktree` · `graph_list_worktrees` |
 | 质量判据 | `graph_set_criteria` |
-| 上下文卡片 | `graph_add_card` · `graph_fill_card` · `graph_review_card` · `graph_bind_collect_card` · `graph_delete_card` |
+| 上下文卡片 | `graph_add_card` · `graph_fill_card` · `graph_review_card` · `graph_bind_collect_card` · `graph_delete_card` · `graph_convert_card_to_shared` · `graph_convert_card_to_owned` |
 | 附件 | `graph_store_attachment` · `graph_delete_attachment` |
 | 排期 | `graph_move_goal` |
-| 执行派发 | `graph_start_attempt` · `graph_set_directive` · `graph_record_attempt_handoff` · `graph_unbind_goal_child` |
+| 执行派发 | `graph_start_attempt` · `graph_set_directive` · `graph_record_attempt_handoff` · `graph_unbind_goal_child` · `graph_abandon_attempt` |
 | 记忆 | `graph_memory_add` · `graph_memory_recall` · `graph_memory_remove` · `graph_memory_replace` |
+| 配置管理 | `graph_get_settings` · `graph_update_settings` |
 | 校验 / 对账 | `graph_validate` · `graph_rebuild` |
 | 状态汇报 | `graph_report_status` · `graph_report_supervisor_status` |
 | 评审裁决 | `graph_resolve_accept` |

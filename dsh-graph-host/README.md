@@ -30,16 +30,16 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
-> ### 🚀 v0.12.0 新功能
+> ### 🚀 v0.15.0 新功能
 >
-> - **配置管理工具补齐**：新增 `graph_get_settings` 与 `graph_update_settings` 工具，支持结构化查询、更新当前 workspace 的 `project.yaml`（含模式与 automation 配置），带合法枚举/schema 提示与事件审计，告别手工翻查与编辑源码。
-> - **构建流水线与 release 目录隔离**：构建产物统一输出至独立的 `dist/` 目录并自包含打包，Git 源码树彻底清除生成的重复副本（纯源码管理）。
-> - **产品经理回报机制修复**：PM 润色建议强制以 `【g-XXX 润色建议】` 为标题，主管自动精准识别目标并闭环更新，避免遗漏。
-> - **解耦环境事实与 HANDOFF 优化**：移除写死的项目特有环境事实，改为按需从工作区常驻记忆提取；长期记忆文件分节展示，接管时默认召回高优先级记忆，消除语义矛盾。
-> - **提示词生产级清洗**：全面地毯式清除 36 处可见界面的开发过程标记，提升提示词专业度与模型理解力。
-> - **帮助工具全面对齐**：`graph_help` 完整补齐全部 44 个工具的分类速查，修正 `graph_amend_goal` 的 `append` 参数签名。
+> - **适配 DeepSeek Harness `0.1.6` 宿主 API 变更**：会话导航/focus 职责从 `sessions` 服务迁移到 `uiWorkspace`，统一走 `openSessionTarget`；子代理聚焦、点击「转到对话」、「交给产品经理」与用户反馈派发链路在新宿主下全部恢复可用。
+> - **看板实时会话区在 `0.1.6` 下恢复显示**：按新宿主的 retain 生命周期先保留（retain）会话引用再借取 binding，不再出现「⚠️ 会话未接入（不在会话列表）」与「模型目录不可用」，真实 tokens / ctx / 模型可正常渲染；`0.1.5` 无 retain 时自动回退被动 binding，双向兼容。
+> - **批量接受的主管通知在 `0.1.6` 下恢复**：通知派发改为能力探测分流，单卡接受与批量接受同形路径一并修复。
+> - **并发槽位耗尽给出可操作提示**：`0.1.6` 引入子代理激活上限（默认 8 个活跃 continuable 子代理），容量耗尽或冷恢复被拒时不再只透出英文错误码。
+> - **看板刷新按钮重置自动刷新倒计时**：点击刷新后倒计时立即回到完整周期，不再沿旧终点继续递减。
+> - **「定义/润色」复制模板改写为自述式主管指令**：标题标明由主管处理，明确接收者角色、下一步动作与本次边界（仅处理定义/润色，不执行代码、不推进状态或版本）。
 >
-> **DSH 版本兼容性**：本版本（v0.12.0）**支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.5-rc.2`**（包含已完整验证的 `v0.1.5-rc.2`）；**暂不支持 `0.1.6-alpha.2`**（因宿主依赖构建审批拦截机制调整）。
+> **DSH 版本兼容性**：本版本（v0.15.0）**支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.6-alpha.2`**。本次周期在 `0.1.6-alpha.2` 与 `0.1.5-rc.2` 两个宿主版本上做了双向兼容实测：`0.1.6-alpha.2` 上完成会话导航/focus、实时会话区、批量接受通知与并发槽位提示的实机验证；`0.1.5-rc.2` 上完成被动 binding 回退路径的实机验证（无 retain 时不破坏既有行为）。更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但未在本次周期复跑。
 >
 > **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证。**
 >
@@ -164,16 +164,16 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **Dependency Note**: Core packages provided by the DSH host (`@deepseek-ai/cordis` ^4.0.2, `@deepseek-ai/schemastery` ^3.18.2, `@deepseek-ai/dsh-settings` ^0.1.5-rc.2) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention), provided directly by the host runtime without peer dependency warnings during installation; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 >
-> ### 🚀 What's new in v0.12.0
+> ### 🚀 What's new in v0.15.0
 >
-> - **Settings Management Tools**: Added `graph_get_settings` and `graph_update_settings` tools for structured querying and updating of workspace `project.yaml` (including modes and automation configurations), with valid enum hints and event logging.
-> - **Build Pipeline & Release Directory Isolation**: All build artifacts are unified and isolated into the `dist/` directory; the git source tree is clean of compiled duplicates.
-> - **PM Report Format & Goal Association**: PM refining suggestions now require a title with `【g-XXX 润色建议】`, allowing supervisors to automatically recognize and update target goals.
-> - **Decoupled Environment Facts & Refined HANDOFF**: Hardcoded internal facts removed from HANDOFF, now driven by workspace standing memory; long-term memory files displayed under their own subheadings, with default high-priority recall.
-> - **Production-Grade Prompt Cleanup**: Thoroughly cleaned 36 instances of development tags across user-visible prompts, enhancing prompt clarity.
-> - **Help Assets Fully Aligned**: `graph_help` updated with the complete catalog of all 44 tools and corrected signatures (including `append` for `graph_amend_goal`).
+> - **Adapted to DeepSeek Harness `0.1.6` host API changes**: session navigation/focus moved from the `sessions` service to `uiWorkspace`, now unified through `openSessionTarget`; subagent focus, "go to conversation", and the "hand off to PM" / user-feedback delivery paths are all functional again on the new host.
+> - **Live session strip restored under `0.1.6`**: session references are now retained through the new host's retain lifecycle before borrowing a binding, so "⚠️ session not attached (not in session list)" and "model catalog unavailable" no longer appear and real tokens / ctx / model render correctly; on `0.1.5`, which has no retain, it automatically falls back to passive binding — compatibility is bidirectional.
+> - **Supervisor notification on batch accept restored under `0.1.6`**: notification dispatch is routed by capability detection, fixing the single-card and batch-accept paths that shared the same shape.
+> - **Actionable hints when concurrency slots are exhausted**: `0.1.6` introduced a subagent activation cap (8 active continuable subagents by default); when capacity is exhausted or cold resume is refused, a bare English error code is no longer the only feedback.
+> - **Board refresh button resets the auto-refresh countdown**: clicking refresh immediately restarts the full interval instead of continuing toward the old deadline.
+> - **"Define/Polish" clipboard template rewritten as a self-describing supervisor instruction**: the title states it is for the supervisor and makes the recipient role, next action, and scope explicit (handles definition/polish only — no code execution, no status or version change).
 >
-> **DSH version compatibility**: This release (v0.12.0) **supports DeepSeek Harness `0.1.2-rc.1` through `0.1.5-rc.2`** (including verified `v0.1.5-rc.2`); **`0.1.6-alpha.2` is temporarily unsupported** due to changes in host build approval script mechanisms.
+> **DSH version compatibility**: This release (v0.15.0) **supports DeepSeek Harness `0.1.2-rc.1` through `0.1.6-alpha.2`**. This cycle verified bidirectional compatibility on two host versions: on `0.1.6-alpha.2`, session navigation/focus, the live session strip, batch-accept notification, and concurrency-slot hints were verified on a live instance; on `0.1.5-rc.2`, the passive-binding fallback path was verified on a live instance (no retain, no regression). The earlier `0.1.2-alpha.x` ~ `0.1.5` series remains backward compatible by tool and prompt contract, but was not re-run in this cycle.
 >
 > **Platform scope**: **verified on Linux (WSL2), native Windows, and macOS.**
 >
