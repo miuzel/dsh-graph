@@ -4059,7 +4059,7 @@ export function formatCollectPrompt(
       "4. Use card lifecycle only; do not create a fake attempt or call graph_report_status.",
     ];
     if (userPrompt && userPrompt.trim()) sections.push("", "**User addendum**:", userPrompt.trim());
-    return sections.join("\\n");
+    return sections.join("\n");
   }
 
   // 构建结构化提示词
@@ -4162,7 +4162,7 @@ export function formatPmPrompt(opts: {
     "## Read-only constraints",
     "- Only read-only analysis is available; do not use management, code-editing, or command-execution tools.",
     "- Return analysis and suggestions only; do not modify project data.",
-  ].join("\\n");
+  ].join("\n");
   const lines = [
     `你是固定的产品经理 Agent。请只向主管 Agent 返回"目标定义/润色建议"，不要调用任何 graph_* 工具，不要修改目标、不改变状态、版本或执行语义。`,
     ``,
@@ -4214,7 +4214,7 @@ export function formatReviewPrompt(opts: {
     if (opts.criteria?.length) lines.push("", "**Acceptance criteria**:", ...opts.criteria.map((item, i) => `${i + 1}. ${item}`));
     if (opts.guidance?.trim()) lines.push("", `**Review guidance**: ${opts.guidance.trim()}`);
     lines.push("", "## Review discipline and permissions", "- Read-only review: use read, glob, grep, and read-only tests only; do not edit or write code.", "- Do not call graph_* management write tools.", "- Return PASS or FAIL with concrete evidence; the supervisor/owner performs the final verdict.", "- bash, when available, is limited to local read-only tests and static checks.");
-    return lines.join("\\n");
+    return lines.join("\n");
   }
   const lines = [
     `你是专业的代码与目标复核 Agent（Reviewer）。请对目标 ${opts.goalId} 的执行 attempt ${opts.attemptId} 进行只读审查。`,
