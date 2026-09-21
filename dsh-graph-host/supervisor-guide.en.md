@@ -124,6 +124,20 @@ memory and follow it in subsequent reviews; **do not hard-code this project's ch
 - **Restricted `@att/` syntax**: record known limitations in the relevant goal or long-term memory; do not infinitely expand regex boundaries.
 - **Shared infrastructure first**: prefer shared transaction/error handling and REST schema middleware over repeated fixes in individual features.
 
+#### Test Intensity Tiers (by Nature of Change)
+
+The purpose of testing is to prove behavior is correct, not to manufacture an assertion for every change. When writing criteria and dispatching, choose a tier by the nature of the change:
+
+- **Tier 1 | Zero behavioral-logic change** (copy/labels/i18n strings, comments, docs, pure styling): **no new unit tests required**.
+  Instead, use this acceptance evidence: the full existing suite still green + build and syntax checks passing + real-machine/manual visual verification (give at least one of these as actual evidence).
+- **Tier 2 | Small logic change** (conditional branches, data transformation, boundary and error handling): write **targeted unit tests** covering the changed branches
+  and proving the original behavior does not regress; exhaustive coverage is not required.
+- **Tier 3 | New feature / contract change / core-layer rewrite / concurrency and state machines**: complete unit tests + boundary and negative cases;
+  when necessary, run a negative-control experiment proving that "breaking it turns the test red".
+
+**Iron rule**: Tier 1 only means "no new unit tests are forced for changes that do not deserve them"; it never means verification is optional. No tier may skip, delete, or weaken existing
+tests on the grounds of being "lightweight/copy-only", and no tier may lower quality-criteria gates or human gates.
+
 6. **Prerequisite for delivery**: for a goal reaching delivered, its changes must already be git-committed—but **distinguish who commits and when
    commit**:
    - **Worktree development** (isolated branch): the subagent may commit within the worktree; after the supervisor

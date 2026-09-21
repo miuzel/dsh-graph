@@ -4,4 +4,5 @@
 3. **Report progress at phase changes and key milestones**: call graph_report_supervisor_status (the board displays the status in real time; routine minor actions need no mechanical reporting);
 4. **Memory management discipline**: spontaneous summaries default to on_demand; record standing only when designated by a human or required by an isolation prohibition (≤200 characters); remove only for explicit retraction/confirmation of obsolescence;
 5. **review→delivered must wait for the person in charge's verdict**—never move to delivered yourself;
-6. See the complete discipline in the skill dsh-graph-supervisor (explicitly call it to load).
+6. **Test intensity is tiered by the nature of the change**: a zero behavioral-logic change (copy/comments/docs/pure styling) does not force new unit tests, but must provide real evidence such as the full existing suite green or real-machine visual verification; **never skip, delete, or weaken existing tests because a change is "lightweight/copy-only"**;
+7. See the complete discipline in the skill dsh-graph-supervisor (explicitly call it to load).

@@ -531,6 +531,41 @@ function historicalPromptBlock(title, section) {
   ].join("\n");
 }
 
+/**
+ * g-326：测试力度分级（按改动性质）——按改动性质决定单测力度，不为零行为逻辑改动凑断言。
+ *
+ * 为什么独立成段、而不是并入 formatAttemptDiscipline 的纪律条目：
+ * `core/tests/prompt-discipline-g239.test.ts` 判据 3 对「## 通用执行纪律 → 若本 prompt 同时含」
+ * 整段做字符/Token 收缩断言（字符减少 ≥ 8%、Token 减少 ≥ 10%），而该段在基线处仅剩
+ * 约 +6 字符 / +3 Token 余量（实测 1701→1559、475→424），且其余文本均为既有测试锚定或
+ * worktree 隔离硬约束、无法等量压缩。因此在纪律段内新增任何条目都会让该既有测试变红。
+ * ⇒ 分级要求以独立 section 随**同一份初始 prompt** 投递，纪律段一字不动。
+ */
+const TEST_INTENSITY_SECTIONS = {
+  zh: [
+    "## 测试力度分级（按改动性质）",
+    "",
+    "测试力度按改动性质分级：测试的目的是证明行为正确，不是为每个改动凑一份断言；按改动性质选档：",
+    "- 一档｜零行为逻辑改动（文案/标签/i18n 字符串、注释、文档、纯样式）：不要求新增单测，但必须给出既有测试全绿 + 构建/语法检查通过（或真机目视）的实际证据；",
+    "- 二档｜小幅逻辑改动（分支/数据变换/边界错误处理）：针对性单测覆盖被改分支，且原行为不回归；",
+    "- 三档｜新增功能/契约变更/核心层重写/并发与状态机：完整单测 + 边界与负向用例，必要时做「改坏就会红」的负向对照；",
+    "- 铁律（任何档位）：绝不因「轻量/文案」跳过、删改或削弱既有测试，也不降低判据门禁与人工 gate。",
+  ].join("\n"),
+  en: [
+    "## Test intensity tiers (by nature of change)",
+    "",
+    "Test intensity is tiered by the nature of the change: testing exists to prove behavior is correct, not to manufacture an assertion for every change; pick a tier by the nature of the change:",
+    "- Tier 1 | zero behavioral-logic change (copy/labels/i18n strings, comments, docs, pure styling): no new unit tests required, but you must provide real evidence such as the full existing suite still green plus build/syntax checks passing (or real-machine visual verification);",
+    "- Tier 2 | small logic change (branches, data transformation, boundary and error handling): targeted unit tests covering the changed branches, with the original behavior not regressing;",
+    "- Tier 3 | new feature / contract change / core-layer rewrite / concurrency and state machines: complete unit tests plus boundary and negative cases, and a \"breaking it turns it red\" negative control when necessary;",
+    "- Iron rule (any tier): never skip, delete, or weaken existing tests because a change is \"lightweight/copy-only\", and never lower criteria gates or human gates.",
+  ].join("\n"),
+};
+
+function formatTestIntensitySection(language = "zh") {
+  return TEST_INTENSITY_SECTIONS[normalizePromptLanguage(language)] || TEST_INTENSITY_SECTIONS.zh;
+}
+
 function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection }) {
   const lines = [
     "## 通用执行纪律",
@@ -611,7 +646,8 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     promptText(modeStrategySection) ? protectPromptMarkers(modeStrategySection) : "",
     promptText(worktreeBlock) ? protectPromptMarkers(worktreeBlock) : "",
   ].filter(Boolean).join("\n");
-  return [position, current, targetContext ? "## Goal context\n" + protectPromptMarkers(targetContext) : "", override, ...history, discipline, "If a prompt contains a historical handoff and a current brief, execute only the current brief."].filter(Boolean).join("\n\n");
+  const testIntensitySection = formatTestIntensitySection("en");
+  return [position, current, targetContext ? "## Goal context\n" + protectPromptMarkers(targetContext) : "", override, ...history, testIntensitySection, discipline, "If a prompt contains a historical handoff and a current brief, execute only the current brief."].filter(Boolean).join("\n\n");
 }
 
 /** 统一组装 supervisor 执行 attempt prompt，避免两处派发顺序漂移。 */
@@ -690,8 +726,9 @@ export function formatAttemptPrompt({
   if (handoffBlock) history.push(handoffBlock);
   history.push(historicalPromptBlock("## 历史卡片", cards));
   const discipline = formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection });
+  const testIntensitySection = formatTestIntensitySection("zh");
   const structuredStateInstruction = "【结构化状态字段】每次调用 graph_report_status 除 status 外必须传 state，且只能是 working、blocked、done、error；看板状态判定优先读取该字段，status 文本仅供展示。";
-  return [positioning, current.join("\n"), modeStrategySection, override, ...history, structuredStateInstruction, discipline, ATTEMPT_PROMPT_WARNING]
+  return [positioning, current.join("\n"), modeStrategySection, override, ...history, structuredStateInstruction, testIntensitySection, discipline, ATTEMPT_PROMPT_WARNING]
     .filter((section) => section && section.trim())
     .join("\n\n");
 }
