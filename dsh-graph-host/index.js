@@ -534,12 +534,17 @@ function historicalPromptBlock(title, section) {
 /**
  * g-326：测试力度分级（按改动性质）——按改动性质决定单测力度，不为零行为逻辑改动凑断言。
  *
- * 为什么独立成段、而不是并入 formatAttemptDiscipline 的纪律条目：
- * `core/tests/prompt-discipline-g239.test.ts` 判据 3 对「## 通用执行纪律 → 若本 prompt 同时含」
- * 整段做字符/Token 收缩断言（字符减少 ≥ 8%、Token 减少 ≥ 10%），而该段在基线处仅剩
- * 约 +6 字符 / +3 Token 余量（实测 1701→1559、475→424），且其余文本均为既有测试锚定或
- * worktree 隔离硬约束、无法等量压缩。因此在纪律段内新增任何条目都会让该既有测试变红。
- * ⇒ 分级要求以独立 section 随**同一份初始 prompt** 投递，纪律段一字不动。
+ * 投递位置有两个（负责人裁决：两者并存，缺一不可）：
+ *  1. 独立 section（本常量 + formatTestIntensitySection）：完整三档，随同一份初始 prompt 投递；
+ *  2. 纪律段条目（formatAttemptDiscipline 的 zh 条目 3 / formatAttemptPromptEnglish 的 en 对应条目）：
+ *     精简版，纪律段是分级规则的正式投递渠道。
+ *
+ * 关于纪律段的 g-239 收缩断言：`core/tests/prompt-discipline-g239.test.ts` 判据 3 对
+ * 「## 通用执行纪律 → 若本 prompt 同时含」整段做字符/Token 收缩断言（字符减少 ≥ 8%、Token 减少 ≥ 10%），
+ * 基线实测 1701→1559（8.35%）、475→424（10.74%），余量极小。**四个阈值一律不动**；
+ * 唯一成立的实现是「按增量放宽余量」：该测试在测量前用显式登记的方式把本次新增的分级条目**精确剔除**
+ * （见该文件 `DISCIPLINE_INCREMENT_MARKER` 与 `subtractRegisteredIncrement`）。
+ * ⇒ **后续再向纪律段新增内容，必须在 g-239 测试里同样登记增量或做等量删减**，否则该测试会如实变红。
  */
 const TEST_INTENSITY_SECTIONS = {
   zh: [
@@ -593,6 +598,14 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
     "   - 汇报触发点：仅在【开始开工】、【阶段转变/转向新任务】、【遇到阻塞】、【本轮完成待命】4类有限关键节点调用 graph_report_status(goal=\"" + goalValue + "\", attempt=\"" + attemptValue + "\", status=<一句话简短人话，≤20字>)；",
     "   - 长任务节流心跳：长耗时任务（如大型构建、多步批量排查）适度按心跳汇报进展，普通轻量读取/单步调试切忌每步机械追加汇报；不再要求每个 read/bash 动作机械调用状态；",
     "   - 迁移与状态同步：同步更新 status_line；迁移被引擎拒绝（如判据未登记）时不得继续实现，立即上报停止；",
+    // g-326 新增条目（精简版分级规则）：纪律段是分级规则的正式投递渠道。
+    // 本次增量为已登记增量——core/tests/prompt-discipline-g239.test.ts 在测量收缩比例前按稳定标记精确剔除本条目，
+    // 四个阈值未动。后续再向本段新增内容，须在该测试同样登记增量或做等量删减。
+    "3. 测试力度按改动性质分级（不为不值得单测的改动凑断言）：",
+    "   - 一档｜零行为逻辑改动（文案/标签/i18n 字符串、注释、文档、纯样式）：不要求新增单测，但必须给出既有测试全绿 + 构建/语法检查通过（或真机目视）的实际证据；",
+    "   - 二档｜小幅逻辑改动（分支/数据变换/边界错误处理）：针对性单测覆盖被改分支，且原行为不回归；",
+    "   - 三档｜新增功能/契约变更/核心层重写/并发与状态机：完整单测 + 边界与负向用例，必要时做「改坏就会红」的负向对照；",
+    "   - 绝不因「轻量/文案」跳过、删改或削弱既有测试，也不降低判据门禁与人工 gate。",
   );
   return lines.join("\n");
 }
@@ -642,6 +655,12 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     "## Execution discipline",
     "Use the assigned worktree only; main is read-only. Report state with graph_report_status using state=working, blocked, done, or error.",
     `At start migrate ${promptText(goal) || missing} to in_progress; on a blocker use blocked with a reason; when done migrate to review and stop. Never migrate to delivered.`,
+    // g-326 新增条目（精简版分级规则，与 zh 纪律条目 3 语义一致）：纪律段是分级规则的正式投递渠道。
+    "Tier test intensity by the nature of the change (never manufacture an assertion for a change that does not warrant one):",
+    "  - Tier 1 | zero behavioral-logic change (copy/labels/i18n strings, comments, docs, pure styling): no new unit tests required, but you must provide real evidence such as the full existing suite still green plus build/syntax checks passing (or real-machine visual verification);",
+    "  - Tier 2 | small logic change (branches, data transformation, boundary and error handling): targeted unit tests covering the changed branches, with the original behavior not regressing;",
+    "  - Tier 3 | new feature / contract change / core-layer rewrite / concurrency and state machines: complete unit tests plus boundary and negative cases, and a \"breaking it turns it red\" negative control when necessary;",
+    "  - Iron rule: never skip, delete, or weaken existing tests because a change is \"lightweight/copy-only\", and never lower criteria gates or human gates.",
     promptText(subagentPromptSection) ? protectPromptMarkers(subagentPromptSection) : "",
     promptText(modeStrategySection) ? protectPromptMarkers(modeStrategySection) : "",
     promptText(worktreeBlock) ? protectPromptMarkers(worktreeBlock) : "",
