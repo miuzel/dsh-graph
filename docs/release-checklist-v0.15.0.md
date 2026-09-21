@@ -131,8 +131,8 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 | 文件名 | `dsh-graph-0.15.0.tgz` |
 | 相对路径 | `tmp/release-v0.15.0/dsh-graph-0.15.0.tgz` |
 | 包内版本 | `0.15.0`（与 tag 一致） |
-| 体积 | 413,706 B |
-| sha256 | `1a275abad1fc8182b20552d25bcc7852d9731e1291a283627b0716c3ecac841e` |
+| 体积 | 414,102 B |
+| sha256 | `c102aca650baebaaa32578202751b69b116f6ce5035908781a250b37c54db212` |
 | Windows 侧可达路径（UNC） | `\\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.15.0\` |
 | 老式 UNC 别名 | `\\wsl$\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.15.0\` |
 
@@ -146,6 +146,21 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 > **Windows 侧取值建议**：UNC 路径下 `pnpm`/`npm` 的原生依赖安装较慢且部分工具对 UNC 支持不佳，
 > 建议先把 `dsh-graph-0.15.0.tgz` 与 `win-smoke-test.mjs` 两个文件**复制到 Windows 本地盘**
 > （如 `C:\Users\<you>\Desktop\v0150\`）再执行；复制前后各算一次 sha256 与上表核对。
+
+**为什么本次 Windows 门禁预期风险较低（但**仍必须实测**）**：`v0.11.0` 已修复并真机复验过
+Windows 的两类致命问题（POSIX 专有锁常量、核心包重复声明）。自 `v0.11.0` 到 `v0.15.0`：
+
+- `core/platform.ts`（平台判定与锁实现）**零改动**；
+- 全量 `core/` diff 中**无** `O_DIRECTORY` / `O_NOFOLLOW` / `process.platform` / `isWindows` / `ino` 相关改动；
+- 本次周期的 4 个交付目标（g-321/323/324/325）改动面全在宿主 API 适配层与前端交互，**未触碰文件系统路径**；
+- T1 静态门禁（正是当年 Windows 崩溃的预测性检查）在本机对源码目录与 `dist/` 均 PASS。
+
+> 上述只是**风险判断**。发布门禁红线 1 明确要求「Linux/WSL2 全绿不能替代 Windows 真机结论」，
+> 因此本节勾选仍须由负责人在原生 Windows 上跑出真实结果后回填。
+
+**tarball 版本说明**：产物目录中的 tarball 已在本会话内**重新打包过一次**——首次打包（413,706 B /
+`1a275aba…`）之后又调整了 README 的「平台范围」措辞使其与门禁红线一致，故重新 `pnpm pack`
+得到上表的最终件（414,102 B / `c102aca6…`）。**请以上表为准**，旧指纹已作废。
 
 ## 4. 发布后检查项
 
