@@ -455,19 +455,23 @@
     // g-214：局部化倒计时组件，避免每秒 tick 引起整个看板大面积重绘；
     // g-211：融合 visibilitychange 感知，页面后台时暂停倒计时，切回前台补偿触发
     function RefreshCountdown(props) {
-      const { generatedAt, intervalSec, onTriggerRefresh } = props;
+      const { generatedAt, refreshSignal, intervalSec, onTriggerRefresh } = props;
       const [remaining, setRemaining] = React.useState(intervalSec);
       const nextTriggerAtRef = React.useRef(Date.now() + intervalSec * 1000);
       const lastRefreshTimeRef = React.useRef(Date.now());
       const onTriggerRef = React.useRef(onTriggerRefresh);
       onTriggerRef.current = onTriggerRefresh;
 
-      // 周期或数据时间（手动/自动刷新完成）更新时重置倒计时终点
+      // g-324：重置信号 = 一次刷新流程完成（refreshSignal 由 kanban.js 的 load() 完成汇聚点
+      // 单调自增），不再依赖 generated_at 变化——304 复用 retained 载荷、watcher 缓存命中
+      // 回旧 payload 时 generated_at 不变，旧实现（依赖 [generatedAt, intervalSec]）不重置，
+      // 手动刷新后倒计时继续沿旧终点递减。generatedAt 仍作为「数据时间展示」来源保留。
+      // 周期（intervalSec）变化同样重置为完整周期。
       React.useEffect(() => {
         lastRefreshTimeRef.current = Date.now();
         nextTriggerAtRef.current = Date.now() + intervalSec * 1000;
         setRemaining(intervalSec);
-      }, [generatedAt, intervalSec]);
+      }, [refreshSignal, generatedAt, intervalSec]);
 
       // 独立 1 秒 tick 驱动平滑递减，归零时触发刷新；融合后台暂停与切回补偿
       React.useEffect(() => {

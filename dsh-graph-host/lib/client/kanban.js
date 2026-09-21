@@ -573,6 +573,11 @@
         }, remaining + 100);
       };
       const [refreshIntervalSec, setRefreshIntervalSec] = React.useState(getRefreshInterval);
+      // g-324：一次刷新流程（load()）真正结束的单调计数信号——手动/自动刷新、200/304/forceFresh
+      // 重试的任一「完成」路径都恰好自增一次，供 RefreshCountdown 重置倒计时。重置不再以
+      // generated_at（载荷内容）是否变化为准：304 复用 retained 载荷、watcher 缓存命中回旧 payload
+      // 时 generated_at 均不变，旧实现因此不重置（g-214 判据 3 回归）。
+      const [refreshCycle, setRefreshCycle] = React.useState(0);
       React.useEffect(() => {
         const onIntervalChange = (e) => {
           const next = e?.detail?.interval ?? getRefreshInterval();
@@ -600,6 +605,17 @@
         if (!activeWs) return;
         const requestIdentity = boardIdentity;
         const requestSeq = ++requestSeqRef.current;
+        // g-324：「一次刷新流程完成」的一次性完成信号——200（含 watcher 缓存命中）与 304
+        // 两条成功路径各恰好触发一次，供 RefreshCountdown 重置倒计时；错误路径不触发
+        // （刷新未完成，倒计时继续递减）。forceFresh 的并发兜底重试把信号让位给重试那次流程，
+        // 保证一次刷新只重置一次（不双重重置）。
+        let refreshFlowDone = false;
+        const signalRefreshFlowDone = () => {
+          if (refreshFlowDone) return;
+          refreshFlowDone = true;
+          setRefreshCycle((cycle) => cycle + 1);
+        };
+        const retryLoad = () => { refreshFlowDone = true; load(); };
         const dimension = String(props?.sessionId ?? "") + "::" + String(activeWs ?? "") + "::" + (showArchived ? "1" : "0");
         const retained = boardDataRef.current.get(dimension);
         if (retained) setState({ loading: false, data: retained, error: null });
@@ -621,7 +637,7 @@
               // 但并发场景下仍有窗口；此时强制失效 ETag 并重试一次。
               if (isForceFresh) {
                 currentEtagRef.current.delete(dimension);
-                load();
+                retryLoad();
                 return;
               }
               const retainedData = boardDataRef.current.get(dimension);
@@ -630,6 +646,7 @@
                 throw new Error("304 without matching dimension payload");
               }
               setState({ loading: false, data: retainedData, error: null });
+              signalRefreshFlowDone();
               loadOrder();
               return;
             }
@@ -657,6 +674,7 @@
             else currentEtagRef.current.delete(dimension);
             boardDataRef.current.set(dimension, data);
             setState({ loading: false, data }); loadOrder(); applyUpdateEmphasis(data); applyForceReplay(data);
+            signalRefreshFlowDone();
             if (Array.isArray(data?.versions)) {
               const versionMap = new Map(data.versions.map((v) => [v.slug, v]));
               const entries = getHiddenVersionEntries(activeWs);
@@ -1910,8 +1928,12 @@
             style: { ...S.meta, color: "var(--dsw-alias-state-business-primary, #8ab4ff)", cursor: "pointer", textDecoration: "underline" },
           }, "version: " + PLUGIN_VERSION),
           // g-214：局部化倒计时组件渲染数据更新时间及剩余秒数倒计时
+          // g-324：refreshSignal 为「一次刷新流程完成」的单调计数（load() 汇聚点自增），
+          // 倒计时以它而非 generated_at 变化作为重置终点——手动刷新在 304 / watcher 缓存
+          // 命中（generated_at 不变）时也立即回到完整周期。
           h(RefreshCountdown, {
             generatedAt: b.generated_at,
+            refreshSignal: refreshCycle,
             intervalSec: refreshIntervalSec,
             onTriggerRefresh: load,
           }),
