@@ -5,4 +5,5 @@
 4. **记忆管理纪律**：自发总结默认记 on_demand；仅人类钦定或隔离禁令才记 standing（≤200字）；remove 仅限明确撤回/证实过时；
 5. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；
 6. **测试力度按改动性质分级**：零行为逻辑改动（文案/注释/文档/纯样式）不强制新增单测，但必须有全量既有测试全绿或真机目视的实际证据；**绝不因「轻量/文案」跳过、删改或削弱既有测试**；
-7. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。
+7. **证据形式（断言化，禁长文倾倒）**：交付与核验证据以自动化断言为准，只写单行结构化概要 `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`（一套件一行、单条 ≤160 字符）；禁止向证据台账、评论区或回复倾倒多行 JSON、DOM dump、切片数据、原始日志与围栏代码块；UI/视觉层不可代码化部分保留轻量截图核验；
+8. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。

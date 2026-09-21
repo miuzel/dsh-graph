@@ -571,6 +571,12 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
     "   - 二档｜小幅逻辑改动（分支/数据变换/边界错误处理）：针对性单测覆盖被改分支，且原行为不回归；",
     "   - 三档｜新增功能/契约变更/核心层重写/并发与状态机：完整单测 + 边界与负向用例，必要时做「改坏就会红」的负向对照；",
     "   - 绝不因「轻量/文案」跳过、删改或削弱既有测试，也不降低判据门禁与人工 gate。",
+    // g-312 新增条目（断言化证据）：与真源 core/ops.ts 的 ROLE_PROFILES.executor.disciplineLines[6] 同口径
+    // （那里是 persona 侧，这里是 attempt prompt 侧投递副本，两处必须同一套口径）。
+    // ⚠️ 本条同样属于 g-239 收缩断言的**已登记增量**：core/tests/prompt-discipline-g239.test.ts 的
+    // DISCIPLINE_INCREMENT_MARKERS 已登记本条目首行；四个阈值（状态段 ≥20%/≥20%、整体 ≥8%/≥10%）
+    // 一律未动。后续再向纪律段新增内容，必须在该测试同样登记增量，否则它会如实变红。
+    "4. 证据形式：交付证据只写单行结构化概要（一套件一行、单条 ≤160 字符），格式为 `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`，并给出断言命令与结论；禁止倾倒多行 JSON、DOM dump、切片数据、原始日志与围栏代码块；运行态不变式一律沉淀为自动化断言，仅 UI 视觉层保留轻量截图核验。",
   );
   return lines.join("\n");
 }
@@ -626,6 +632,11 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     "  - Tier 2 | small logic change (branches, data transformation, boundary and error handling): targeted unit tests covering the changed branches, with the original behavior not regressing;",
     "  - Tier 3 | new feature / contract change / core-layer rewrite / concurrency and state machines: complete unit tests plus boundary and negative cases, and a \"breaking it turns it red\" negative control when necessary;",
     "  - Iron rule: never skip, delete, or weaken existing tests because a change is \"lightweight/copy-only\", and never lower criteria gates or human gates.",
+    // g-312 new entry (assertion-as-evidence): same standard as the Chinese entry 4 and as the single
+    // source ROLE_PROFILES.executor.disciplineLines in core/ops.ts. Keep this line CJK-free: the English
+    // render path asserts the whole prompt contains no CJK. It is also a registered g-239 increment
+    // (see DISCIPLINE_INCREMENT_MARKERS in core/tests/prompt-discipline-g239.test.ts).
+    "Evidence form: report deliverables only as a single-line structured summary (one suite per line, at most 160 characters each), formatted as `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`, together with the assertion command and its conclusion; never dump multi-line JSON, DOM dumps, sliced data, raw logs, or fenced code blocks; turn runtime invariants into automated assertions and keep lightweight screenshot verification only for the non-codifiable UI/visual layer.",
     promptText(subagentPromptSection) ? protectPromptMarkers(subagentPromptSection) : "",
     promptText(modeStrategySection) ? protectPromptMarkers(modeStrategySection) : "",
     promptText(worktreeBlock) ? protectPromptMarkers(worktreeBlock) : "",
