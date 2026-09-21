@@ -336,6 +336,182 @@ test("g-273: notifySupervisorBatchAccept — no supervisorSession silently skipp
   }
 });
 
+// ===== 6b. g-323：0.1.6 保留代际路径（retain / using）与降级配平 =====
+// 0.1.6-alpha.2 的 ClientSessions.binding(id) 只借用**已存在**的保留代际（不再按需 materialize），
+// 且没有 get(id)；未 retain 过的主管会话会静默失效。以下 stub 只提供 retain/using（无 get），
+// 模拟「supervisorSession 此前无任何保留代际」的宿主。
+type RefStub = {
+  sessionId: string;
+  ready: Promise<any>;
+  binding: any;
+  release: () => void;
+  releaseCount: () => number;
+  released: () => boolean;
+};
+
+function makeRefStub(
+  session: any,
+  opts: { ready?: Promise<any>; bindingThrowsAfterRelease?: boolean } = {},
+  releaseCalls: { n: number } = { n: 0 },
+): RefStub {
+  let released = false;
+  const ref: any = {
+    sessionId: "sup-1",
+    ready: opts.ready ?? Promise.resolve(),
+  };
+  if (opts.bindingThrowsAfterRelease) {
+    // 真实语义：release 后 binding getter 抛「Session Controller is disposed」，
+    // 实现必须在 release 之前读取 binding（否则本用例会失败）。
+    Object.defineProperty(ref, "binding", {
+      get() {
+        if (released) throw new Error("Session Controller is disposed");
+        return { session };
+      },
+    });
+  } else {
+    ref.binding = { session };
+  }
+  ref.release = () => { released = true; releaseCalls.n += 1; };
+  ref.releaseCount = () => releaseCalls.n;
+  ref.released = () => released;
+  return ref as RefStub;
+}
+
+test("g-323: notifySupervisorBatchAccept — retain 宿主（无 get）恰好一条 queue 消息且 release 配平", async () => {
+  const prompts: any[] = [];
+  const releaseCalls = { n: 0 };
+  const retainCalls: any[] = [];
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  let ref: RefStub | null = null;
+  (globalThis as any).sessionsRt = {
+    // 0.1.6 形态：无 get(id)，binding(id) 恒 undefined（未保留代际时不 materialize）
+    binding: () => undefined,
+    retain: (id: any, o: any) => { retainCalls.push({ id, o }); ref = makeRefStub(session, { bindingThrowsAfterRelease: true }, releaseCalls); return ref; },
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-1", ["g-11", "g-22"]);
+    assert.equal(sent, true, "retain 路径必须能取到会话并发出通知");
+    assert.equal(retainCalls.length, 1, "必须恰好 retain 一次");
+    assert.equal(retainCalls[0].id, "sup-1");
+    assert.deepEqual(retainCalls[0].o, { source: "dsh-graph" });
+    assert.equal(prompts.length, 1, "必须恰好一条聚合消息");
+    assert.equal(prompts[0].mode, "queue");
+    const text = prompts[0].parts[0].text;
+    assert.match(text, /【负责人批量交付复核请求】/);
+    assert.match(text, /g-11, g-22/);
+    assert.match(text, /共 2 个/);
+    assert.equal(releaseCalls.n, 1, "release 必须恰好调用一次（无代际泄漏）");
+    assert.equal(ref!.released(), true);
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: notifySupervisorBatchAccept — using 与 retain 同时可用时优先 using 且 release 由 using 配平", async () => {
+  const prompts: any[] = [];
+  const usingCalls: any[] = [];
+  const retainCalls: any[] = [];
+  const releaseCalls = { n: 0 };
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  (globalThis as any).sessionsRt = {
+    binding: () => undefined,
+    retain: () => { retainCalls.push(1); return makeRefStub(session, {}, { n: 0 }); },
+    // using 真实语义：内部 try/finally 保证 release
+    using: async (id: any, o: any, fn: any) => {
+      usingCalls.push({ id, o });
+      const r = makeRefStub(session, { bindingThrowsAfterRelease: true }, releaseCalls);
+      try { return await fn(r); } finally { r.release(); }
+    },
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-1", ["g-7"]);
+    assert.equal(sent, true);
+    assert.equal(usingCalls.length, 1, "必须优先走 using");
+    assert.equal(usingCalls[0].id, "sup-1");
+    assert.deepEqual(usingCalls[0].o, { source: "dsh-graph" });
+    assert.equal(retainCalls.length, 0, "using 可用时不得再自行 retain");
+    assert.equal(prompts.length, 1);
+    assert.equal(prompts[0].mode, "queue");
+    assert.match(prompts[0].parts[0].text, /共 1 个/);
+    assert.equal(releaseCalls.n, 1, "using 内部必须已 release 一次");
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: notifySupervisorBatchAccept — retain 抛 unknown session → false 且不误调 release", async () => {
+  const prompts: any[] = [];
+  (globalThis as any).sessionsRt = {
+    binding: () => undefined,
+    retain: () => { throw new Error("unknown session"); },
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-x", ["g-1"]);
+    assert.equal(sent, false);
+    assert.equal(prompts.length, 0, "不得发出任何消息");
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: notifySupervisorBatchAccept — ready 被拒 → false 且 release 仍配平一次", async () => {
+  const prompts: any[] = [];
+  const releaseCalls = { n: 0 };
+  (globalThis as any).sessionsRt = {
+    binding: () => undefined,
+    retain: () => makeRefStub({ prompt: async () => { prompts.push(1); } }, { ready: Promise.reject(new Error("Session Controller is disposed")) }, releaseCalls),
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-1", ["g-1"]);
+    assert.equal(sent, false);
+    assert.equal(prompts.length, 0, "ready 未就绪不得发消息");
+    assert.equal(releaseCalls.n, 1, "ready 被拒也必须 release 配平");
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: notifySupervisorBatchAccept — prompt 抛错 → false 且 release 仍配平一次", async () => {
+  const releaseCalls = { n: 0 };
+  (globalThis as any).sessionsRt = {
+    binding: () => undefined,
+    retain: () => makeRefStub({ prompt: async () => { throw new Error("prompt boom"); } }, { bindingThrowsAfterRelease: true }, releaseCalls),
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-1", ["g-1"]);
+    assert.equal(sent, false);
+    assert.equal(releaseCalls.n, 1, "prompt 抛错也必须 release 配平");
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: notifySupervisorBatchAccept — retain 宿主会话无 prompt → false 且 release 配平", async () => {
+  const releaseCalls = { n: 0 };
+  (globalThis as any).sessionsRt = {
+    binding: () => undefined,
+    retain: () => makeRefStub({}, { bindingThrowsAfterRelease: true }, releaseCalls),
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-1", ["g-1"]);
+    assert.equal(sent, false);
+    assert.equal(releaseCalls.n, 1, "无 prompt 也必须 release 配平");
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: 特性探测而非版本号分支（可执行代码不含 DSH 版本号判断）", () => {
+  // 只对剥离注释后的可执行代码断言：版本号判断是分支逻辑问题，注释里说明代际不算违反。
+  const codeOnly = moduleSource.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+  assert.match(codeOnly, /typeof rt\?\.using === "function"/);
+  assert.match(codeOnly, /typeof rt\?\.retain === "function"/);
+  assert.doesNotMatch(codeOnly, /0\.1\.[0-9]/, "可执行代码不得出现 DSH 版本号判断");
+  assert.doesNotMatch(codeOnly, /alpha|release candidate/, "可执行代码不得出现版本代际判断");
+  // 保留既有 0.1.5 被动回退形态：binding ?? get 仍在同一函数内
+  assert.match(codeOnly, /rt\?\.binding\?\.\(supervisorSession\)\?\.session \?\? rt\?\.get\?\.\(supervisorSession\)/);
+});
+
 test("g-273: batchAcceptSupervisorMessage — list + total", () => {
   const msg = batchAcceptSupervisorMessage(["g-a"]);
   assert.match(msg, /g-a/);
