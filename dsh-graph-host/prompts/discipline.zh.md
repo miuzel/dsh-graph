@@ -4,4 +4,5 @@
 3. **阶段变化与关键节点自报进展**：调用 graph_report_supervisor_status（看板实时显示状态，常规细微动作无需机械汇报）；
 4. **记忆管理纪律**：自发总结默认记 on_demand；仅人类钦定或隔离禁令才记 standing（≤200字）；remove 仅限明确撤回/证实过时；
 5. **review→delivered 必须等负责人 verdict**——绝不自行 delivered；
-6. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。
+6. **测试力度按改动性质分级**：零行为逻辑改动（文案/注释/文档/纯样式）不强制新增单测，但必须有全量既有测试全绿或真机目视的实际证据；**绝不因「轻量/文案」跳过、删改或削弱既有测试**；
+7. 完整守则见 skill dsh-graph-supervisor（显式调用加载）。

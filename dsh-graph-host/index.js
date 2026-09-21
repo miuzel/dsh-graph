@@ -558,6 +558,19 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
     "   - 汇报触发点：仅在【开始开工】、【阶段转变/转向新任务】、【遇到阻塞】、【本轮完成待命】4类有限关键节点调用 graph_report_status(goal=\"" + goalValue + "\", attempt=\"" + attemptValue + "\", status=<一句话简短人话，≤20字>)；",
     "   - 长任务节流心跳：长耗时任务（如大型构建、多步批量排查）适度按心跳汇报进展，普通轻量读取/单步调试切忌每步机械追加汇报；不再要求每个 read/bash 动作机械调用状态；",
     "   - 迁移与状态同步：同步更新 status_line；迁移被引擎拒绝（如判据未登记）时不得继续实现，立即上报停止；",
+    // g-326 新增条目（精简版分级规则）：纪律段是分级规则的**唯一**投递渠道。
+    // 负责人去重裁决（v0.16.0）：att-001 的独立分级区块及其常量/格式化函数已一并删除——同一份 prompt
+    // 出现两份表述与 g-239 压缩 prompt 的方向相反；护栏见 core/tests/test-intensity-tiers.test.ts 的
+    // 「去重护栏」用例（全篇恰好一次且落在纪律段切片内）。
+    // 关于 g-239 收缩断言：core/tests/prompt-discipline-g239.test.ts 判据 3 的四个阈值一律未动，
+    // 本次增量为**已登记增量**——该测试在测量收缩比例前按稳定标记精确剔除本条目
+    // （见其 DISCIPLINE_INCREMENT_MARKER 与 subtractRegisteredIncrement）。
+    // ⇒ 后续再向纪律段新增内容，必须在该测试同样登记增量或做等量删减，否则它会如实变红。
+    "3. 测试力度按改动性质分级（不为不值得单测的改动凑断言）：",
+    "   - 一档｜零行为逻辑改动（文案/标签/i18n 字符串、注释、文档、纯样式）：不要求新增单测，但必须给出既有测试全绿 + 构建/语法检查通过（或真机目视）的实际证据；",
+    "   - 二档｜小幅逻辑改动（分支/数据变换/边界错误处理）：针对性单测覆盖被改分支，且原行为不回归；",
+    "   - 三档｜新增功能/契约变更/核心层重写/并发与状态机：完整单测 + 边界与负向用例，必要时做「改坏就会红」的负向对照；",
+    "   - 绝不因「轻量/文案」跳过、删改或削弱既有测试，也不降低判据门禁与人工 gate。",
   );
   return lines.join("\n");
 }
@@ -607,6 +620,12 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     "## Execution discipline",
     "Use the assigned worktree only; main is read-only. Report state with graph_report_status using state=working, blocked, done, or error.",
     `At start migrate ${promptText(goal) || missing} to in_progress; on a blocker use blocked with a reason; when done migrate to review and stop. Never migrate to delivered.`,
+    // g-326 新增条目（精简版分级规则，与 zh 纪律条目 3 语义一致）：纪律段是分级规则的正式投递渠道。
+    "Tier test intensity by the nature of the change (never manufacture an assertion for a change that does not warrant one):",
+    "  - Tier 1 | zero behavioral-logic change (copy/labels/i18n strings, comments, docs, pure styling): no new unit tests required, but you must provide real evidence such as the full existing suite still green plus build/syntax checks passing (or real-machine visual verification);",
+    "  - Tier 2 | small logic change (branches, data transformation, boundary and error handling): targeted unit tests covering the changed branches, with the original behavior not regressing;",
+    "  - Tier 3 | new feature / contract change / core-layer rewrite / concurrency and state machines: complete unit tests plus boundary and negative cases, and a \"breaking it turns it red\" negative control when necessary;",
+    "  - Iron rule: never skip, delete, or weaken existing tests because a change is \"lightweight/copy-only\", and never lower criteria gates or human gates.",
     promptText(subagentPromptSection) ? protectPromptMarkers(subagentPromptSection) : "",
     promptText(modeStrategySection) ? protectPromptMarkers(modeStrategySection) : "",
     promptText(worktreeBlock) ? protectPromptMarkers(worktreeBlock) : "",
