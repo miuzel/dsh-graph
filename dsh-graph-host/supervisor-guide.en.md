@@ -153,6 +153,31 @@ tests on the grounds of being "lightweight/copy-only", and no tier may lower qua
 Key point: all status transitions go through tools (events first); **never manually edit the frontmatter status field**; criteria confirmation
 and review verdict are human gates—stop the round and wait for input, and do not rush through with automatic continuation.
 
+## Technology Selection and Architecture Evaluation
+
+Before adding an external library, run a **full-lifecycle cost evaluation**, not just "does it work": a heavy black-box library saves the initial implementation and charges it back with interest in glue layer debugging and dual-source-of-truth sync;
+it triggers on a new runtime dependency, an adapter or glue wrapper, or coexistence with the existing state, event, and render layers.
+
+| Dimension | Lightweight white-box in-house | Third-party heavy black-box library |
+|---|---|---|
+| Initial integration | Write core logic once, no adapter | Fast API hookup, but bridging existing models |
+| Glue/adapter layer size | No separate adapter layer | State mirroring and event bridges keep growing |
+| Dual truth and state sync | Single source of truth, no mirror | Library state plus business state, two truths |
+| Event and render loops | One-way data flow, easy to trace | Library events feed back, loops form easily |
+| Unused layer removal | Generates no extra structure | Library-mandated layers need later cleanup |
+| Upgrade and replacement cost | Owned code, change as needed | Breaking major versions force re-adaptation |
+| Debugging and Agent rework | Whole path readable in a white box | Black-box internals invisible, rework doubles |
+
+**Threshold (T1)**: `estimated glue layer LOC / estimated in-house business-logic LOC`. Sum per integration
+surface — state mirroring, event/render loops, layer removal, theme/CSS, i18n, serialization, build packaging — each
+tiered **S<=50 / M<=200 / L>200**; estimate the denominator with the same tiers over the in-house model+view+persistence.
+**A ratio >=0.5 raises a warning; >=1.0 defaults to a white-box in-house build, and keeping the library requires owner
+confirmation**. Fallbacks: T2 counts >=5 distinct third-party touch points or >= the number of in-house modules; T3 scores 8 items x 0-2 (>=8/16 warns, >=12/16 defaults in-house).
+
+How to use it while planning: create an "architecture comparison" collection card for the goal and pass the table above as the collect brief to the collection subagent (the brief
+enters the "additional user requirements" section verbatim, no code change needed); once the subagent fills in the numbers and evidence, apply the thresholds and use
+`graph_amend_goal(append=...)` to record the decision and estimate table in the goal description, with `graph_set_criteria` when needed, before dispatching implementation.
+
 ## Information Collection
 
 Each collection item is a context card, one card per collection task. **Prerequisite: the requirements description is finalized (the goal has left the description stage)**
