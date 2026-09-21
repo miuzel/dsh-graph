@@ -18,9 +18,39 @@ const root = join(import.meta.dirname, "../../dsh-graph-host");
 const i18nSource = readFileSync(join(root, "lib/client/i18n.js"), "utf8");
 const moduleSource = readFileSync(join(root, "lib/client/batch-accept.js"), "utf8");
 const kanbanSource = readFileSync(join(root, "lib/client/kanban.js"), "utf8");
+const hooksSource = readFileSync(join(root, "lib/client/session-hooks.js"), "utf8");
+const goalActionsSource = readFileSync(join(root, "lib/client/goal-actions.js"), "utf8");
 const distRoot = join(import.meta.dirname, "../../dist");
 const bundleSource = readFileSync(join(distRoot, "lib/client.js"), "utf8");
 const buildScript = readFileSync(join(root, "../scripts/build-client.sh"), "utf8");
+
+/** 从拼接前的源模块里精确抠出一个具名 function 声明（花括号配平）——与 g321-dsh-016-compat.test.ts 同法。 */
+function extractFunction(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `源模块中存在 function ${name}`);
+  const asyncPrefix = source.slice(Math.max(0, start - 6), start) === "async " ? "async " : "";
+  let depth = 0;
+  for (let i = source.indexOf("{", start); i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) return asyncPrefix + source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`function ${name} 花括号无法配平`);
+}
+
+// g-323 att-002：client 源模块在真实产物里是**同一工厂作用域拼接**（build-client.sh 的 PARTS），
+// 而本测试以 ESM 单独 import batch-accept.js——此时工厂作用域的共享 helper 对它是自由标识符，
+// 与既有的 sessionsRt / appCtx（同为工厂作用域变量、测试里挂 globalThis 驱动）解析方式一致。
+// 这里从 session-hooks.js **抠出真实的 promptSessionQueue** 装到 globalThis，
+// 使被测调用点消费的是真实共享实现（而非测试自造替身）：helper 若被破坏，本文件用例会一起失败。
+// 用 new Function（而非 vm.runInNewContext）求值：helper 内构造的 { source: "dsh-graph" } 必须与
+// 测试同属一个 realm，否则 deepStrictEqual 会因原型不同而误报。
+const promptSessionQueue: any = new Function(
+  `${extractFunction(hooksSource, "promptSessionQueue")}\nreturn promptSessionQueue;`,
+)();
+(globalThis as any).promptSessionQueue = promptSessionQueue;
 
 function loadClientI18n() {
   const sandbox: any = { React: {} };
@@ -78,7 +108,12 @@ test("g-273: source contracts — non-force accept body, single aggregated notif
   // 聚合通知：文案构造器唯一（单条消息），queue 模式
   const markerCount = moduleSource.split("【负责人批量交付复核请求】").length - 1;
   assert.equal(markerCount, 1, "aggregated supervisor message template must be defined exactly once");
-  assert.match(moduleSource, /"queue"/);
+  // g-323 att-002：派发形态（session.prompt(parts, "queue")）与能力探测一起收敛到工厂作用域共享 helper
+  // promptSessionQueue（session-hooks.js），故 "queue" 字面量随之迁移到 helper；本模块仍必须引用该 helper，
+  // 且自身不得再出现任何 session.prompt 调用点（否则就是把分流复制成了第二份）。
+  assert.match(hooksSource, /await session\.prompt\(parts, "queue"\)/);
+  assert.doesNotMatch(moduleCode, /session\.prompt\(/, "批量的派发形态必须只在共享 helper 内");
+  assert.match(moduleCode, /promptSessionQueue\(rt, supervisorSession, parts/);
   // 看板集成：确认列列头分支 + 弹窗渲染 + 提交后刷板
   assert.match(kanbanSource, /s\.key === "confirm"/);
   assert.match(kanbanSource, /batchAcceptButtonState\(reviewGoals\.length\)/);
@@ -501,15 +536,75 @@ test("g-323: notifySupervisorBatchAccept — retain 宿主会话无 prompt → f
   }
 });
 
-test("g-323: 特性探测而非版本号分支（可执行代码不含 DSH 版本号判断）", () => {
+test("g-323: 特性探测而非版本号分支（共享 helper 内唯一判定，两代宿主行为分流）", () => {
   // 只对剥离注释后的可执行代码断言：版本号判断是分支逻辑问题，注释里说明代际不算违反。
-  const codeOnly = moduleSource.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+  // att-002：探测判定已抽到工厂作用域共享 helper（session-hooks.js 的 promptSessionQueue），
+  // 故断言目标从 batch-accept.js 迁移到 helper——断言强度不变（仍是逐字精确匹配，非永真）。
+  const codeOnly = hooksSource.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
   assert.match(codeOnly, /typeof rt\?\.using === "function"/);
   assert.match(codeOnly, /typeof rt\?\.retain === "function"/);
   assert.doesNotMatch(codeOnly, /0\.1\.[0-9]/, "可执行代码不得出现 DSH 版本号判断");
   assert.doesNotMatch(codeOnly, /alpha|release candidate/, "可执行代码不得出现版本代际判断");
-  // 保留既有 0.1.5 被动回退形态：binding ?? get 仍在同一函数内
-  assert.match(codeOnly, /rt\?\.binding\?\.\(supervisorSession\)\?\.session \?\? rt\?\.get\?\.\(supervisorSession\)/);
+  // 保留既有 0.1.5 被动回退形态：binding ?? get 在 helper 的 legacy 分支里逐字保留
+  assert.match(codeOnly, /const session = rt\?\.binding\?\.\(target\)\?\.session \?\? rt\?\.get\?\.\(target\)/);
+  // 两处调用点自身不得再持有任何探测判定（否则就是把分流复制成了第二份/第三份）
+  const moduleCode = moduleSource.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+  const actionsCode = goalActionsSource.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+  for (const [label, src] of [["batch-accept.js", moduleCode], ["goal-actions.js", actionsCode]] as const) {
+    assert.doesNotMatch(src, /typeof\s+\w+\??\.\s*(using|retain)\s*===/, `${label} 不得自带 using/retain 探测`);
+    assert.match(src, /promptSessionQueue\(/, `${label} 必须引用共享 helper`);
+  }
+});
+
+test("g-323 共享性：using/retain 能力探测只在共享 helper 中定义，两个调用点均引用它", () => {
+  const clientModules = ["batch-accept", "goal-actions", "session-hooks", "plugin", "kanban", "drag-prompts", "helpers", "live-panel"];
+  const readCode = (name: string) => readFileSync(join(root, `lib/client/${name}.js`), "utf8")
+    .split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+  const sources = clientModules.map((n) => [n, readCode(n)] as const);
+
+  // using 探测：整个 client 只允许 helper 里出现一次
+  const usingProbes = sources.flatMap(([n, s]) => [...s.matchAll(/typeof\s+rt\??\.\s*using\s*===\s*"function"/g)].map(() => n));
+  assert.deepEqual(usingProbes, ["session-hooks"], "using 探测只允许出现在共享 helper 中一次");
+  // retain 探测：helper 一次 + g-321 渲染期 canRetain 一次（同一文件内两种不同机制，非本次收敛对象）
+  const retainProbes = sources
+    .flatMap(([n, s]) => [...s.matchAll(/typeof\s+\w+\??\.\s*retain\s*===\s*"function"/g)].map((m) => `${n}:${m[0]}`))
+    .sort();
+  assert.deepEqual(retainProbes, [
+    'session-hooks:typeof rt?.retain === "function"',
+    'session-hooks:typeof sessionsRt?.retain === "function"',
+  ], "retain 探测只允许存在于 session-hooks.js（helper 能力分流 + g-321 渲染期 canRetain）");
+  // 两个通知调用点都不含探测，且都引用同一个 helper
+  assert.match(moduleSource, /function notifySupervisorBatchAccept[\s\S]{0,600}?promptSessionQueue\(rt, supervisorSession, parts/);
+  assert.match(goalActionsSource, /function AcceptFeedback\(props\)[\s\S]*?promptSessionQueue\(rt, supervisorSession, parts/);
+  // helper 在 build 装配顺序中早于两个调用点（工厂作用域函数声明可被后置模块引用）
+  const idx = (p: string) => buildScript.indexOf(`"${p}"`);
+  assert.ok(idx("session-hooks") > 0 && idx("session-hooks") < idx("goal-actions"), "session-hooks 必须早于 goal-actions");
+  assert.ok(idx("session-hooks") < idx("batch-accept"), "session-hooks 必须早于 batch-accept");
+  // 生成物：helper 只定义一次，且两处调用都已进 bundle（含各自的 console.warn 标签）
+  assert.equal(bundleSource.split("function promptSessionQueue(").length - 1, 1, "bundle 内 helper 只定义一次");
+  assert.match(bundleSource, /promptSessionQueue\(rt, supervisorSession, parts, "\[dsh-graph-host\] batch accept: prompt supervisorSession failed:"\)/);
+  assert.match(bundleSource, /promptSessionQueue\(rt, supervisorSession, parts, "\[dsh-graph-host\] prompt supervisorSession failed:"\)/);
+});
+
+test("g-323 共享 helper 行为：0.1.5 被动回退（binding ?? get）不 retain，binding 缺失时按需 get", async () => {
+  const prompts: any[] = [];
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  const rt = {
+    binding: (id: string) => (id === "sup-1" ? { session } : undefined),
+    get: () => { throw new Error("0.1.5 有 binding 时不应走到 get"); },
+  };
+  assert.equal(await promptSessionQueue(rt, "sup-1", [{ type: "text", text: "x" }]), true);
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].mode, "queue");
+  // 无 retain/using 且 binding 取不到、也没有 get → 如实 false（不得虚报）
+  assert.equal(await promptSessionQueue({ binding: () => undefined }, "sup-1", [{ type: "text", text: "x" }]), false);
+  // get 是 0.1.5 的回退末梢（binding 返回 undefined 时才用到）
+  const rt2 = { binding: () => undefined, get: (id: string) => (id === "sup-2" ? session : undefined) };
+  assert.equal(await promptSessionQueue(rt2, "sup-2", [{ type: "text", text: "y" }]), true);
+  assert.equal(prompts.length, 2);
+  // 空 target → false（两处调用点都靠这一点保持「无 supervisorSession 静默跳过」）
+  assert.equal(await promptSessionQueue(rt, null, [{ type: "text", text: "z" }]), false);
+  assert.equal(await promptSessionQueue(rt, "", [{ type: "text", text: "z" }]), false);
 });
 
 test("g-273: batchAcceptSupervisorMessage — list + total", () => {

@@ -111,48 +111,18 @@
     // 发送聚合主管通知：整批**一条** queue 消息；无 supervisorSession / 会话不可用 → 静默跳过（返回 false），
     // 绝不影响接受流程本身；不得产生 N 条刷屏。
     //
-    // g-323：sessionsRt 的能力代际探测（**禁止**任何版本号判断），本函数是事件回调而非渲染期 hook，
-    // 绝不引入渲染期 retain、绝不依赖 session-hooks 的 hook：
-    // - 有 using → 用其 try/finally 语义发一条消息，release 由 using 内部配平；
-    // - 无 using 有 retain → 自行 retain 取 binding，finally 里 release（异常/拒绝也不泄漏代际）；
-    // - 两者皆无（旧宿主）→ 保持既有 binding ?? get 被动回退，行为一字不改。
-    // 新宿主的 binding(id) 只借用**已存在**的保留代际，不再按需 materialize，故必须先 retain。
+    // g-323：能力探测（using / retain / 0.1.5 被动回退）**不在本文件**——已抽成工厂作用域共享 helper
+    // promptSessionQueue（session-hooks.js，早于本模块装配），本处与 goal-actions.js 的单卡接受通知
+    // 共用同一份判定，禁止各写一遍。本函数是事件回调而非渲染期 hook，helper 内部也不含渲染期 retain。
+    // 文案逐字不变：仍由 batchAcceptSupervisorMessage 生成、仍恰好一条 queue 消息。
     async function notifySupervisorBatchAccept(supervisorSession, goalIds) {
       if (!supervisorSession || !Array.isArray(goalIds) || goalIds.length === 0) return false;
       try {
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
         const parts = [{ type: "text", text: batchAcceptSupervisorMessage(goalIds) }];
-        // 优先 using：其内部 try/finally 已保证 release 配平（含 ready 被拒 / prompt 抛错）。
-        if (typeof rt?.using === "function") {
-          let sent = false;
-          await rt.using(supervisorSession, { source: "dsh-graph" }, async (ref) => {
-            await ref.ready;
-            const session = ref.binding?.session;
-            if (!session?.prompt) return;
-            await session.prompt(parts, "queue");
-            sent = true;
-          });
-          return sent;
-        }
-        // 退回 retain：自行配平，release 必须幂等安全且异常时也不能漏。
-        if (typeof rt?.retain === "function") {
-          const ref = rt.retain(supervisorSession, { source: "dsh-graph" });
-          try {
-            await ref.ready;
-            const session = ref.binding?.session;
-            if (!session?.prompt) return false;
-            await session.prompt(parts, "queue");
-            return true;
-          } finally {
-            try { ref.release?.(); } catch (e) { /* 已释放 → 幂等忽略 */ }
-          }
-        }
-        // 旧宿主回退：被动借用既有 binding，或按需 get（原样保留，行为不退化）。
-        const session = rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession);
-        if (!session?.prompt) return false;
-        await session.prompt(parts, "queue");
-        return true;
+        return await promptSessionQueue(rt, supervisorSession, parts, "[dsh-graph-host] batch accept: prompt supervisorSession failed:");
       } catch (err) {
+        // helper 已自兜底（绝不抛）；此处仅作最后一道防线，保持既有 console.warn 形态。
         console.warn("[dsh-graph-host] batch accept: prompt supervisorSession failed:", err);
         return false;
       }

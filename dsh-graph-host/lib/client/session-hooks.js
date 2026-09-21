@@ -7,6 +7,61 @@
     const boundSetup = new Map(); // childId -> Promise（地址配置只做一次）
     const boundModes = new Map(); // childId -> 'one-shot' | 'continuable'
 
+    // ===== g-323：一次性「向某个会话投递一条 queue 消息」的**共享**能力探测入口 =====
+    // 与 g-321 的渲染期保留生命周期（useSessionBinding / canRetain）是两件事：本函数服务
+    // **事件回调**（批量接受 / 单卡接受的主管通知），只做一次短事务，绝不进入 render。
+    //
+    // 0.1.6-alpha.2 起 ClientSessions.binding(id) 只借用**已存在**的保留代际
+    // （scopes.get(id)?.binding），不再按需 materialize，且类中已无 get(id)：未被任何组件
+    // retain 过的会话（典型：主管会话未被看板任何面板绑定）恒取不到。0.1.5 的
+    // binding(id) 是 resolve(id)?.binding（按需 materialize）且仍有 get(id)，被动借用即可用。
+    // 故按**能力探测**分流，绝不写版本号分支；判定收敛为这一处，两个调用点共用
+    // （batch-accept.js 的 notifySupervisorBatchAccept 与 goal-actions.js 的单卡接受通知）：
+    //   - 有 using  → 用其 try/finally 语义（release 由 using 内部配平）；
+    //   - 无 using 有 retain → 自行 retain + finally release（ready 被拒 / prompt 抛错都不漏代际）；
+    //   - 两者皆无（0.1.5）→ 原样保留 binding ?? get 被动回退，行为一字不改。
+    // 契约：成功发出恰好一条 queue 消息返回 true；取不到会话 / 无 prompt / 任意异常返回 false，
+    // **绝不抛异常、绝不漏 release、绝不虚报成功**。warnLabel 可选：给出时沿用调用点既有的
+    // console.warn 形态回报异常（保持既有可诊断性，不新增报错风暴）。
+    async function promptSessionQueue(rt, target, parts, warnLabel) {
+      if (!target) return false;
+      try {
+        // 优先 using：其内部 try/finally 已保证 release 配平（含 ready 被拒 / prompt 抛错）。
+        if (typeof rt?.using === "function") {
+          let sent = false;
+          await rt.using(target, { source: "dsh-graph" }, async (reference) => {
+            await reference.ready;
+            const session = reference.binding?.session;
+            if (!session?.prompt) return;
+            await session.prompt(parts, "queue");
+            sent = true;
+          });
+          return sent;
+        }
+        // 退回 retain：自行配平。binding 是 getter，release 之后再读会抛错，故必须在 finally 之前读取。
+        if (typeof rt?.retain === "function") {
+          const reference = rt.retain(target, { source: "dsh-graph" });
+          try {
+            await reference.ready;
+            const session = reference.binding?.session;
+            if (!session?.prompt) return false;
+            await session.prompt(parts, "queue");
+            return true;
+          } finally {
+            try { reference.release?.(); } catch (e) { /* 已释放 → 幂等忽略 */ }
+          }
+        }
+        // 0.1.5 回退：被动借用既有 binding，或按需 get（原样保留，行为不退化）。
+        const session = rt?.binding?.(target)?.session ?? rt?.get?.(target);
+        if (!session?.prompt) return false;
+        await session.prompt(parts, "queue");
+        return true;
+      } catch (err) {
+        if (warnLabel) console.warn(warnLabel, err);
+        return false;
+      }
+    }
+
     // ===== g-321：0.1.6-alpha.2「先 retain 再借用」的会话引用生命周期 =====
     // 0.1.6-alpha.2 起 ClientSessions.binding(id) 只借用**已存在**的保留代际
     // （scopes.get(id)?.binding），不再按需 materialize scope：无任何 retain 时恒 undefined，
