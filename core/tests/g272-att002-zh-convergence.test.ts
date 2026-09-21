@@ -207,7 +207,7 @@ test("g-272 att-002: client 模块复扫——代码中残留 CJK 全部有 i18n
 test("g-272 att-002: 保留项锚点——提示词模板与遗留值匹配串必须存在且带标记", () => {
   const anchors: [string, string][] = [
     ["goal-actions.js", "【${props.goalId} 判据反馈】"],
-    ["goal-actions.js", "【${goalId} 定义/润色请求】"],
+    ["goal-actions.js", "【主管处理请求｜${goalId}｜目标定义/润色】"],
     ["goal-actions.js", "【${goalId} 反馈】"],
     ["goal-actions.js", "【负责人交付复核请求】"],
     ["goal-actions.js", "空闲|完成|待命|已交付|结束|等待"],

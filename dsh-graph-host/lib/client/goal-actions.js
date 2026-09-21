@@ -156,7 +156,16 @@
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       if (!allowed.includes(status) || hasActiveAttempt) return null;
       // i18n-keep(category-b)：复制到剪贴板并粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
-      const request = `【${goalId} 定义/润色请求】\n目标 ID：${goalId}\ngoal.md 工作区相对路径：${String(goalPath ?? "（路径未知）")}\n人工指导意见：${guidance.trim() || "（无）"}`;
+      const request = `【主管处理请求｜${goalId}｜目标定义/润色】\n\n`
+        + `请你以主管 Agent 身份处理这个目标的定义/润色请求。\n`
+        + `这条消息由负责人从看板复制发送，不是产品经理 Agent 的任务提示，\n`
+        + `也不是要求你扮演产品经理。\n\n`
+        + `请先读取目标文件，并按主管流程决定是否需要派发产品经理 Agent。\n`
+        + `如有润色建议，请由主管完成目标描述和质量判据的闭环。\n`
+        + `本次仅处理目标定义/润色，不执行代码，不推进目标状态或版本。\n\n`
+        + `目标 ID（唯一依据）：${goalId}\n`
+        + `目标文件（供读取）：\n${String(goalPath ?? "（路径未知）")}\n\n`
+        + `负责人补充意见：\n${guidance.trim() || "（无）"}`;
       const openSupervisor = async () => {
         setLoading(true); setNote(null);
         try {
