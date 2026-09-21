@@ -695,6 +695,15 @@ export const ROLE_PROFILES: Record<SubagentRole, RoleProfile> = {
       "3. 泳道流转：开工时若非 in_progress 则调用 graph_transition(to='in_progress')；完成后必须 graph_transition(to='review') 停轮等待复核；遇到阻塞 graph_transition(to='blocked', reason=...)；",
       "4. 绝不自行 delivered：禁止直接 graph_transition 到 delivered——delivered 属于负责人与主管的 human gate 裁决关口；",
       "5. 严格遵守环境隔离要求与质量判据核验，未通过判据不可声明完成。",
+      // ⚠️ 只允许在数组**末尾追加**：core/tests/role-contract-g253.test.ts 逐字锚定本数组的 [0] 与
+      // supervisor 的 [2]，另有「绝不自行 delivered」「严格遵守环境隔离要求」的存在性断言——插到前面必红。
+      // g-326（测试力度分级）此前误判 disciplineLines 为「未被渲染的死文本」而漏写；实际
+      // buildSubagentDefaultPersona（见下）会逐行展开进子代理 Persona，故此处补齐，避免 persona 与
+      // attempt prompt 长期两套口径。
+      "6. 测试力度按改动性质分级（不为不值得单测的改动凑断言）：一档｜零行为逻辑改动（文案/标签/i18n 字符串、注释、文档、纯样式）不要求新增单测，但必须给出既有测试全绿 + 构建/语法检查通过（或真机目视）的实际证据；二档｜小幅逻辑改动（分支/数据变换/边界错误处理）要有针对性单测覆盖被改分支且原行为不回归；三档｜新增功能/契约变更/核心层重写/并发与状态机要完整单测 + 边界与负向用例，必要时做「改坏就会红」的负向对照；绝不因「轻量/文案」跳过、删改或削弱既有测试，也不降低判据门禁与人工 gate。",
+      // g-312（断言化证据）：与 formatAttemptDiscipline 的 zh 纪律条目 4 同口径——persona 与 attempt
+      // prompt 必须是同一套证据规范（真源在此，prompt 侧是投递副本）。
+      "7. 证据形式：交付证据只写单行结构化概要（一套件一行、单条 ≤160 字符），格式为 `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`，并给出断言命令与结论；禁止向证据台账、评论区或回复倾倒多行 JSON、DOM dump、切片数据、原始日志与围栏代码块；运行态不变式一律沉淀为自动化断言，仅 UI 视觉层不可代码化的部分保留轻量截图核验。",
     ],
     requiredTools: ["graph_report_status", "graph_transition", "read", "write", "edit", "bash"],
     allowedTools: {
@@ -1799,6 +1808,9 @@ export function appendGoalComment(
     goal: goalId,
     details: { text: text.trim(), ts },
   });
+  // g-312 C-lite：超长评论只做软观测（report.oversize），绝不拒绝——评论本身承载核验记录与设计讨论，
+  // 硬拒绝会打断合法流程；如果确实在倾倒，事件流里能按 actor 归属统计出来（质量判据 3 的度量口径）。
+  observeOversize(root, goalId, actor, "comment", text.trim().length, OVERSIZE_COMMENT_CHARS, { ts });
   const raw = sectionText(doc.body, "评论");
   if (raw === null) {
     // 小节不存在（老目标模板）：追加到末尾
@@ -4552,6 +4564,276 @@ export function startAttempt(
   return attId;
 }
 
+/* ============================================================================
+ * g-312 断言化证据（Assertion-as-Evidence）：证据形式的机器可判定义 + 软观测
+ *
+ * 独立区块：勿并入 formatPmPrompt / formatReviewPrompt。本区块只服务「执行侧交付证据」
+ * 的单一形态（单行结构化概要），并把「是否仍在长文倾倒」变成事件流里可统计的指标。
+ *
+ * 设计边界（负责人已批准的计划，勿随手改成硬拒绝）：
+ *  - B（文案 + 纯函数）+ C-lite（软观测）：validate/parse 只做判定，**不拒绝调用**——
+ *    历史 status 有 42% 超 20 字口径，评论本身也承载核验记录与设计讨论，硬拒绝会打断合法流程；
+ *  - 结构化概要**不进 status_line**：概要 90–160 字符远大于现 p50（19 字符），塞进去会同时撞
+ *    host 的「≤20 字」口径与前端终态词解析。status_line 维持「一句人话」，概要在交付证据评论里。
+ * ========================================================================== */
+
+/** 交付证据单行前缀。`formatEvidenceSummary` 与 `parseEvidenceSummary` 共用同一常量。 */
+export const EVIDENCE_SUMMARY_PREFIX = "evidence:";
+
+/** 单条交付证据的字符上限（含前缀），对应质量判据 2 的「单条 ≤160 字符」。 */
+export const EVIDENCE_SUMMARY_MAX_CHARS = 160;
+
+/** 单个 JSON 片段超过该长度即判定为「数据倾倒」而不是结构化概要。 */
+export const EVIDENCE_SUMMARY_JSON_DUMP_CHARS = 200;
+
+/** 软观测阈值：status 超 40 字符、评论超 800 字符只追加 report.oversize 事件，绝不拒绝。 */
+export const OVERSIZE_STATUS_CHARS = 40;
+export const OVERSIZE_COMMENT_CHARS = 800;
+
+/** DOM dump 关键词（大小写不敏感）：命中即说明在倾倒运行态 DOM，而不是给断言结论。 */
+const EVIDENCE_DOM_DUMP_MARKERS: readonly string[] = [
+  "<!doctype",
+  "<html",
+  "<body",
+  "<div",
+  "<span",
+  "<svg",
+  "<script",
+  "outerhtml",
+  "innerhtml",
+  "textcontent",
+  "queryselector",
+  "getboundingclientrect",
+  "getcomputedstyle",
+];
+
+/** 代码围栏标记：多行日志/JSON 的典型包装。 */
+const EVIDENCE_FENCE_MARKERS: readonly string[] = ["```", "~~~"];
+
+export interface EvidenceSummary {
+  suite: string;
+  passed: number;
+  failed: number;
+  exit: number;
+  ms: number;
+  diffFiles: number;
+  diffAdded: number;
+  diffRemoved: number;
+  commit: string;
+}
+
+/** 格式化入参与解析产物同构（单一形态，避免两套字段名漂移）。 */
+export type EvidenceSummaryInput = EvidenceSummary;
+
+export type EvidenceSummaryIssue =
+  | "empty"
+  | "multiline"
+  | "code_fence"
+  | "json_dump"
+  | "dom_dump"
+  | "too_long"
+  | "format";
+
+export interface EvidenceSummaryValidation {
+  ok: boolean;
+  issue: EvidenceSummaryIssue | null;
+  detail: string;
+}
+
+const EVIDENCE_SUMMARY_KEYS: readonly string[] = ["suite", "passed", "failed", "exit", "ms", "diff", "commit"];
+
+function evidenceInt(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new GraphError(`evidence 概要保持纯函数语义：${field} 必须是非负整数，实际为 ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+/** 找出文本里成对括号包起来的片段（启发式，不要求是合法 JSON）：用于识别数据倾倒。 */
+function evidenceBracketSpans(text: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const open = text[i];
+    if (open !== "{" && open !== "[") continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < text.length; j += 1) {
+      const ch = text[j];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === "{" || ch === "[") depth += 1;
+      else if (ch === "}" || ch === "]") {
+        depth -= 1;
+        if (depth === 0) {
+          spans.push({ start: i, end: j + 1 });
+          i = j;
+          break;
+        }
+      }
+    }
+  }
+  return spans;
+}
+
+/**
+ * 把结构化概要渲染为**单行**规范形态（质量判据 2 的唯一格式）：
+ *   `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`
+ *
+ * 纯函数、无 IO。非法字段（非整数计数 / 空 suite / 非十六进制 commit）抛 GraphError；
+ * 渲染结果超过 `EVIDENCE_SUMMARY_MAX_CHARS` 同样抛错——该函数不允许产出违反契约的行。
+ */
+export function formatEvidenceSummary(input: EvidenceSummaryInput): string {
+  if (!input || typeof input !== "object") throw new GraphError("evidence 概要输入必须是对象");
+  const suite = typeof input.suite === "string" ? input.suite.trim() : "";
+  if (!suite || /\s/.test(suite)) {
+    throw new GraphError(`evidence 概要保持纯函数语义：suite 必须是非空且不含空白的套件标识，实际为 ${JSON.stringify(input.suite)}`);
+  }
+  const passed = evidenceInt(input.passed, "passed");
+  const failed = evidenceInt(input.failed, "failed");
+  const exit = evidenceInt(input.exit, "exit");
+  const ms = evidenceInt(input.ms, "ms");
+  const diffFiles = evidenceInt(input.diffFiles, "diffFiles");
+  const diffAdded = evidenceInt(input.diffAdded, "diffAdded");
+  const diffRemoved = evidenceInt(input.diffRemoved, "diffRemoved");
+  const commitRaw = typeof input.commit === "string" ? input.commit.trim().toLowerCase() : "";
+  if (!/^[0-9a-f]{7,40}$/.test(commitRaw)) {
+    throw new GraphError(`evidence 概要保持纯函数语义：commit 必须是 7–40 位十六进制 sha，实际为 ${JSON.stringify(input.commit)}`);
+  }
+  const line =
+    `${EVIDENCE_SUMMARY_PREFIX} suite=${suite} passed=${passed} failed=${failed} exit=${exit} ms=${ms}` +
+    ` diff=${diffFiles}f/+${diffAdded}/-${diffRemoved} commit=${commitRaw.slice(0, 7)}`;
+  if (line.length > EVIDENCE_SUMMARY_MAX_CHARS) {
+    throw new GraphError(
+      `evidence 概要超长（${line.length} > ${EVIDENCE_SUMMARY_MAX_CHARS} 字符）：缩短 suite 标识或拆分套件，不要靠删格式字段绕过`,
+    );
+  }
+  return line;
+}
+
+/**
+ * 宽松解析规范单行；非规范文本一律返回 null（**不抛错**，调用方可据此软观测）。
+ * 只接受 `EVIDENCE_SUMMARY_KEYS` 这套键——多一个未知键即视为非规范形态（防「概要里夹带私货」）。
+ */
+export function parseEvidenceSummary(text: unknown): EvidenceSummary | null {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.includes("\n") || trimmed.includes("\r")) return null;
+  if (!trimmed.startsWith(EVIDENCE_SUMMARY_PREFIX)) return null;
+  const fields = new Map<string, string>();
+  for (const token of trimmed.slice(EVIDENCE_SUMMARY_PREFIX.length).trim().split(/\s+/)) {
+    const at = token.indexOf("=");
+    if (at <= 0) return null;
+    const key = token.slice(0, at);
+    if (fields.has(key)) return null;
+    fields.set(key, token.slice(at + 1));
+  }
+  if (fields.size !== EVIDENCE_SUMMARY_KEYS.length) return null;
+  for (const key of EVIDENCE_SUMMARY_KEYS) if (!fields.has(key)) return null;
+  const suite = fields.get("suite") as string;
+  if (!suite) return null;
+  const diff = /^(\d+)f\/\+(\d+)\/-(\d+)$/.exec(fields.get("diff") as string);
+  if (!diff) return null;
+  const commit = fields.get("commit") as string;
+  if (!/^[0-9a-f]{7,40}$/.test(commit)) return null;
+  const numbers = [fields.get("passed"), fields.get("failed"), fields.get("exit"), fields.get("ms")];
+  if (numbers.some((value) => value === undefined || !/^\d+$/.test(value))) return null;
+  return {
+    suite,
+    passed: Number(numbers[0]),
+    failed: Number(numbers[1]),
+    exit: Number(numbers[2]),
+    ms: Number(numbers[3]),
+    diffFiles: Number(diff[1]),
+    diffAdded: Number(diff[2]),
+    diffRemoved: Number(diff[3]),
+    commit,
+  };
+}
+
+/**
+ * 「禁止倾倒」的机器化定义（质量判据 2）：一条交付证据**必须**是单行规范概要。
+ * 拒绝多行、代码围栏、>200 字符的 JSON 片段、DOM dump 关键词、超长与非规范形态。
+ * 返回结构化判定而非抛错，便于上层做软观测（永不硬拒绝用户输入）。
+ *
+ * 判定顺序固定为 empty → code_fence → multiline → json_dump → dom_dump → too_long → format：
+ * 越靠前越具体（先认出「这是围栏日志」「这是 300 字符的 JSON」这类形态，再落到通用的多行/超长），
+ * 从而给出可执行的修正建议；每条规则都必须能被单独观测到（core/tests/evidence-summary-g312.test.ts 逐条覆盖）。
+ */
+export function validateEvidenceSummary(text: unknown): EvidenceSummaryValidation {
+  if (typeof text !== "string" || !text.trim()) {
+    return { ok: false, issue: "empty", detail: "证据为空：至少给一行 `evidence: …` 结构化概要" };
+  }
+  for (const fence of EVIDENCE_FENCE_MARKERS) {
+    if (text.includes(fence)) {
+      return { ok: false, issue: "code_fence", detail: `证据不得包含代码围栏「${fence}」：围栏即多行日志/JSON 倾倒的形态` };
+    }
+  }
+  if (text.includes("\n") || text.includes("\r")) {
+    return { ok: false, issue: "multiline", detail: "证据必须是单行：多行正文请落到测试代码或文件里，正文只留一行结构化概要" };
+  }
+  const spans = evidenceBracketSpans(text);
+  const longest = spans.reduce((max, span) => Math.max(max, span.end - span.start), 0);
+  if (longest > EVIDENCE_SUMMARY_JSON_DUMP_CHARS) {
+    return {
+      ok: false,
+      issue: "json_dump",
+      detail: `证据含 ${longest} 字符的 JSON 片段（上限 ${EVIDENCE_SUMMARY_JSON_DUMP_CHARS}）：请改为断言命令与结论，数据留在测试代码里`,
+    };
+  }
+  const lowered = text.toLowerCase();
+  for (const marker of EVIDENCE_DOM_DUMP_MARKERS) {
+    if (lowered.includes(marker)) {
+      return { ok: false, issue: "dom_dump", detail: `证据含 DOM dump 关键词「${marker}」：DOM 断言应沉淀为测试代码，不倾倒运行态快照` };
+    }
+  }
+  if (text.trim().length > EVIDENCE_SUMMARY_MAX_CHARS) {
+    return {
+      ok: false,
+      issue: "too_long",
+      detail: `证据超长（${text.trim().length} > ${EVIDENCE_SUMMARY_MAX_CHARS} 字符）：一套件一行，超出部分改为断言或文件引用`,
+    };
+  }
+  if (!parseEvidenceSummary(text)) {
+    return {
+      ok: false,
+      issue: "format",
+      detail: `证据不是规范单行概要，应为：${EVIDENCE_SUMMARY_PREFIX} ${EVIDENCE_SUMMARY_KEYS.map((key) => `${key}=<…>`).join(" ")}`,
+    };
+  }
+  return { ok: true, issue: null, detail: "规范单行结构化概要" };
+}
+
+/**
+ * C-lite 软观测：超长只追加 `report.oversize` 事件，**不拒绝**调用。
+ * 分母与统计口径见质量判据 3（以 events.jsonl 为样本源，按 actor 归属分离执行侧与主管侧）。
+ */
+function observeOversize(
+  root: string,
+  goalId: string,
+  actor: string,
+  kind: "status" | "comment",
+  chars: number,
+  limit: number,
+  extra: Record<string, unknown> = {},
+): void {
+  if (chars <= limit) return;
+  appendEvent(root, {
+    actor,
+    event: "report.oversize",
+    goal: goalId,
+    details: { kind, chars, limit, ...extra },
+  });
+}
+
 /** 更新 attempt 的一句最新状态，追加 attempt.status_reported 事件。 */
 export function reportStatus(
   root: string,
@@ -4584,6 +4866,9 @@ export function reportStatus(
     goal: goalId,
     details: { attempt: attemptId, status: line, ...(state !== undefined ? { status_state: state } : {}) },
   });
+  // g-312 C-lite：超长 status 只做软观测（report.oversize），绝不拒绝——status_line 维持「一句人话」，
+  // 结构化证据概要不进这里（见本文件 g-312 独立区块的边界说明）。
+  observeOversize(root, goalId, actor, "status", line.trim().length, OVERSIZE_STATUS_CHARS, { attempt: attemptId });
 }
 
 /** 把 subagent childId 绑定到 attempt（startContinuable 之后调用）。
