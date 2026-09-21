@@ -93,7 +93,8 @@ README 中的显式声明位置：`README.md`（顶部 + 安装小节）、`dsh-
       **消除「暂不支持 0.1.6-alpha.2」表述**；工具表按实际注册数（44）校正并补齐
       `graph_convert_card_to_shared/owned`、`graph_abandon_attempt`、`graph_get_settings/update_settings`
 - [x] `dsh-graph-host/README.md`：中文与英文两处兼容性声明同步刷新为 v0.15.0 + `0.1.6` 支持
-- [x] 全量测试 `node --test core/tests/*.test.ts` 全绿（**1152/1152**，基线 1146 + 本次周期新增 6）
+- [x] 全量测试 `node --test core/tests/*.test.ts` 全绿（**1152/1152**；`v0.12.0` tag 处实测基线为
+      **1097/1097**，本次周期净增 55 个用例）
 - [x] `bash scripts/build.sh` 重建后 `node --check dist/lib/client.js` = OK；重建幂等（重复构建 sha256 不变）
 - [x] 工作区干净、`main` 只读未被触碰（全部改动先落 `v0.15.0-test`）
 - [x] **T1 静态门禁本机预检 PASS**（`node scripts/win-smoke-test.mjs --static-only`，对源码目录与 `dist/` 各跑一次；
