@@ -284,7 +284,8 @@ annotated tag **`v0.15.0`**（经负责人 2026-09-21 明确授权；**未推送
 
 ## 4. 发布后检查项
 
-- [ ] 主 3080 profile 切回已发布版本（`bash scripts/dev-dsh-instance.sh main-published`）
+- [x] 主 3080 profile 切回已发布版本 —— **由负责人自行从官方源安装最新版完成**（2026-09-21），
+      主管无需执行 `main-published`
 - [x] **推送 `main` + tag**（负责人 2026-09-21 授权）：`main` `f0ec94b..727bd2e`；annotated tag
       `v0.15.0`（对象 `c45e8f6` → commit `727bd2e`）。远端核验：`refs/heads/main` = `727bd2e`、
       `refs/tags/v0.15.0^{}` = `727bd2e`
@@ -304,12 +305,33 @@ annotated tag **`v0.15.0`**（经负责人 2026-09-21 明确授权；**未推送
       重算 sha256 不再是 `c102aca6…`）。若要复现 v0.15.0 的发布物，请
       `git checkout v0.15.0 && bash scripts/build.sh`（重建后仍得 `c102aca6…`，已实测）。
 - [x] 发布树已按 §4 步骤 6 移除（`git worktree remove .worktrees/release-v0.15.0`）
-- [ ] 开下一条开发线（`v0.16.0-test`，版本置 `0.16.0-alpha`）；
-      **注意 v0.16.0 泳道已有排期目标**：g-326（按改动性质分级测试力度）、g-327（定义/润色请求
-      直接投递主管会话）、g-311/g-312/g-313（评审与架构审查机制）
-- [ ] 按安全规则清理已合入的 attempt worktree / 分支（当前 `.worktrees/` 下约 20 个待清理：
-      g-318～g-323 各 attempt、`dev-instance-pnpm-att-01`、`pi-graph-v1.0.0-alpha*` 等）
-- [ ] 看板：v0.15.0 标记为 released；`dsh-graph-videos` README 补发布链接（如本次有录制）
+- [x] **开下一条开发线**（2026-09-21 完成）：自 `main`(`5d731cc`) 建分支 **`v0.16.0-test`**，
+      提交 **`2191a26`**，版本串两处置 `0.16.0-alpha`（沿用 `v0.15.0` 的 `31ef01f` 惯例，仅改
+      `dsh-graph-host/package.json` + `lib/client/constants.js:PLUGIN_VERSION`，README 留待发布时对齐）。
+      验证：`bash scripts/build.sh` OK、`dist/package.json` = `0.16.0-alpha`、测试 **1152/1152 pass**
+      **v0.16.0 泳道已有排期目标**（均已在该泳道，无需搬迁）：g-311/g-312/g-313（planning）、
+      g-326/g-327（ready）
+- [~] **清理已合入的 attempt worktree**（2026-09-21 部分完成）：**已清理 9 个**（工具实时验证
+      `merged=true & clean=true & active=false`）：g-308/g-309/g-310/g-318/g-319(att-001,002)/
+      g-320/g-321-att-003/g-323-att-002。**分支一律保留**（`graph_clean_worktree` 默认不删分支，
+      已逐个核验 9 个分支仍在）。`.worktrees/` 由 18 个降至 9 个（49 MB）。
+      **剩余 9 个未清理，均有明确原因**（见下），需负责人逐一裁定，不擅自删除：
+      | worktree | 原因 |
+      |---|---|
+      | `g-295-att-01` / `-02` | **目标 `g-295` 仍 `in_progress`（活跃）→ 必须保留** |
+      | `g-184-att-01` | 目标 `g-184` 已归档为 `draft`（未交付）——attempt 实为废弃 |
+      | `g-297-att-01` | **有未跟踪文件** `phase-a-baseline-report.md`（20,138 B）；已抢救到
+        `tmp/worktree-salvage/g-297-att-01/`（sha256 `9887b165…`）后**仍保留原地**待裁定 |
+      | `g-321-att-02` | 工具判为 `attempt_active`（目标已 delivered ⇒ 疑为**陈旧绑定**；
+        需先 `graph_abandon_attempt`/解绑才能清理） |
+      | `g-323-att-01` | 提交未合入（交付实际走 `att-002`）；属**被取代的废弃 attempt** |
+      | `pi-graph-v1.0.0-alpha` / `-k3` | **另一条产品线**（分支 `v1.0.0-alpha*`，泳道 `v1.0.0`
+        仍 `planning`）——非本仓库发布周期产物，保留 |
+      | `dev-instance-pnpm-att-01` | 非目标 attempt（dev 实例脚手架），用途待确认 |
+- [x] 看板：v0.15.0 已交付（g-328 `delivered`，五目标全交付）。
+      **`v0.15.0` 泳道自身的 `released` 标记待负责人在看板「版本详情 → 🚀 标记发布」点击**
+      （端点 `POST /api/dsh-graph/release-version` 的 `actor` 硬编码为 `human:gui`，主管不代调）；
+      `dsh-graph-videos` README 补发布链接（如本次有录制）——本次未录制，不适用
 - [x] **回填本文件 §2 的 Windows 真机门禁勾选与 §3 的对账表** — 已于 2026-09-21 发布前完成（T1–T5 PASS 10/0/0）
 
 ### 4.1 发布后对账：线上包 ≠ 本地包 sha256，但**内容逐字节相同**（重要）
