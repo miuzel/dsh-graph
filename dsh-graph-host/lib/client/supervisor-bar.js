@@ -23,7 +23,9 @@
       const { model, modelErr } = useSessionModel(props.id, null);
       const jump = () => {
         try {
-          sessionsRt?.open?.(props.id); // supervisor 是顶层会话，直接 open
+          // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）；
+          // supervisor 是顶层会话，直接以 sessionId 为目标。
+          openSessionTarget(props.id, typeof sessionsRt?.open === "function" ? () => sessionsRt.open(props.id) : null);
           activateChatTab();            // 已在该会话看板 tab 时切回「对话」
         } catch (e) {
           // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。

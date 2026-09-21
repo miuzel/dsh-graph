@@ -18,9 +18,39 @@ const root = join(import.meta.dirname, "../../dsh-graph-host");
 const i18nSource = readFileSync(join(root, "lib/client/i18n.js"), "utf8");
 const moduleSource = readFileSync(join(root, "lib/client/batch-accept.js"), "utf8");
 const kanbanSource = readFileSync(join(root, "lib/client/kanban.js"), "utf8");
+const hooksSource = readFileSync(join(root, "lib/client/session-hooks.js"), "utf8");
+const goalActionsSource = readFileSync(join(root, "lib/client/goal-actions.js"), "utf8");
 const distRoot = join(import.meta.dirname, "../../dist");
 const bundleSource = readFileSync(join(distRoot, "lib/client.js"), "utf8");
 const buildScript = readFileSync(join(root, "../scripts/build-client.sh"), "utf8");
+
+/** 从拼接前的源模块里精确抠出一个具名 function 声明（花括号配平）——与 g321-dsh-016-compat.test.ts 同法。 */
+function extractFunction(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `源模块中存在 function ${name}`);
+  const asyncPrefix = source.slice(Math.max(0, start - 6), start) === "async " ? "async " : "";
+  let depth = 0;
+  for (let i = source.indexOf("{", start); i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) return asyncPrefix + source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`function ${name} 花括号无法配平`);
+}
+
+// g-323 att-002：client 源模块在真实产物里是**同一工厂作用域拼接**（build-client.sh 的 PARTS），
+// 而本测试以 ESM 单独 import batch-accept.js——此时工厂作用域的共享 helper 对它是自由标识符，
+// 与既有的 sessionsRt / appCtx（同为工厂作用域变量、测试里挂 globalThis 驱动）解析方式一致。
+// 这里从 session-hooks.js **抠出真实的 promptSessionQueue** 装到 globalThis，
+// 使被测调用点消费的是真实共享实现（而非测试自造替身）：helper 若被破坏，本文件用例会一起失败。
+// 用 new Function（而非 vm.runInNewContext）求值：helper 内构造的 { source: "dsh-graph" } 必须与
+// 测试同属一个 realm，否则 deepStrictEqual 会因原型不同而误报。
+const promptSessionQueue: any = new Function(
+  `${extractFunction(hooksSource, "promptSessionQueue")}\nreturn promptSessionQueue;`,
+)();
+(globalThis as any).promptSessionQueue = promptSessionQueue;
 
 function loadClientI18n() {
   const sandbox: any = { React: {} };
@@ -78,7 +108,12 @@ test("g-273: source contracts — non-force accept body, single aggregated notif
   // 聚合通知：文案构造器唯一（单条消息），queue 模式
   const markerCount = moduleSource.split("【负责人批量交付复核请求】").length - 1;
   assert.equal(markerCount, 1, "aggregated supervisor message template must be defined exactly once");
-  assert.match(moduleSource, /"queue"/);
+  // g-323 att-002：派发形态（session.prompt(parts, "queue")）与能力探测一起收敛到工厂作用域共享 helper
+  // promptSessionQueue（session-hooks.js），故 "queue" 字面量随之迁移到 helper；本模块仍必须引用该 helper，
+  // 且自身不得再出现任何 session.prompt 调用点（否则就是把分流复制成了第二份）。
+  assert.match(hooksSource, /await session\.prompt\(parts, "queue"\)/);
+  assert.doesNotMatch(moduleCode, /session\.prompt\(/, "批量的派发形态必须只在共享 helper 内");
+  assert.match(moduleCode, /promptSessionQueue\(rt, supervisorSession, parts/);
   // 看板集成：确认列列头分支 + 弹窗渲染 + 提交后刷板
   assert.match(kanbanSource, /s\.key === "confirm"/);
   assert.match(kanbanSource, /batchAcceptButtonState\(reviewGoals\.length\)/);
@@ -296,6 +331,9 @@ test("g-273: runBatchAccept — empty input is a no-op", async () => {
 // ===== 6. 聚合主管通知：整批一条；无 supervisorSession 静默跳过 =====
 test("g-273: notifySupervisorBatchAccept — exactly one queued message with goal list and count", async () => {
   const prompts: any[] = [];
+  // g-321 说明：本 stub 刻意只提供 binding()（**不含 retain**），即 0.1.5 形态——被测的
+  // notifySupervisorBatchAccept 走的是直连 rt.binding() 的既有路径，不经会话引用生命周期
+  // hook（useSessionBinding）；0.1.6 有 retain 时该模块不需要额外 stub 即可继续工作。
   (globalThis as any).sessionsRt = {
     binding: (id: string) => (id === "sup-1" ? { session: { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } } } : null),
   };
@@ -331,6 +369,242 @@ test("g-273: notifySupervisorBatchAccept — no supervisorSession silently skipp
     delete (globalThis as any).sessionsRt;
     delete (globalThis as any).appCtx;
   }
+});
+
+// ===== 6b. g-323：0.1.6 保留代际路径（retain / using）与降级配平 =====
+// 0.1.6-alpha.2 的 ClientSessions.binding(id) 只借用**已存在**的保留代际（不再按需 materialize），
+// 且没有 get(id)；未 retain 过的主管会话会静默失效。以下 stub 只提供 retain/using（无 get），
+// 模拟「supervisorSession 此前无任何保留代际」的宿主。
+type RefStub = {
+  sessionId: string;
+  ready: Promise<any>;
+  binding: any;
+  release: () => void;
+  releaseCount: () => number;
+  released: () => boolean;
+};
+
+function makeRefStub(
+  session: any,
+  opts: { ready?: Promise<any>; bindingThrowsAfterRelease?: boolean } = {},
+  releaseCalls: { n: number } = { n: 0 },
+): RefStub {
+  let released = false;
+  const ref: any = {
+    sessionId: "sup-1",
+    ready: opts.ready ?? Promise.resolve(),
+  };
+  if (opts.bindingThrowsAfterRelease) {
+    // 真实语义：release 后 binding getter 抛「Session Controller is disposed」，
+    // 实现必须在 release 之前读取 binding（否则本用例会失败）。
+    Object.defineProperty(ref, "binding", {
+      get() {
+        if (released) throw new Error("Session Controller is disposed");
+        return { session };
+      },
+    });
+  } else {
+    ref.binding = { session };
+  }
+  ref.release = () => { released = true; releaseCalls.n += 1; };
+  ref.releaseCount = () => releaseCalls.n;
+  ref.released = () => released;
+  return ref as RefStub;
+}
+
+test("g-323: notifySupervisorBatchAccept — retain 宿主（无 get）恰好一条 queue 消息且 release 配平", async () => {
+  const prompts: any[] = [];
+  const releaseCalls = { n: 0 };
+  const retainCalls: any[] = [];
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  let ref: RefStub | null = null;
+  (globalThis as any).sessionsRt = {
+    // 0.1.6 形态：无 get(id)，binding(id) 恒 undefined（未保留代际时不 materialize）
+    binding: () => undefined,
+    retain: (id: any, o: any) => { retainCalls.push({ id, o }); ref = makeRefStub(session, { bindingThrowsAfterRelease: true }, releaseCalls); return ref; },
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-1", ["g-11", "g-22"]);
+    assert.equal(sent, true, "retain 路径必须能取到会话并发出通知");
+    assert.equal(retainCalls.length, 1, "必须恰好 retain 一次");
+    assert.equal(retainCalls[0].id, "sup-1");
+    assert.deepEqual(retainCalls[0].o, { source: "dsh-graph" });
+    assert.equal(prompts.length, 1, "必须恰好一条聚合消息");
+    assert.equal(prompts[0].mode, "queue");
+    const text = prompts[0].parts[0].text;
+    assert.match(text, /【负责人批量交付复核请求】/);
+    assert.match(text, /g-11, g-22/);
+    assert.match(text, /共 2 个/);
+    assert.equal(releaseCalls.n, 1, "release 必须恰好调用一次（无代际泄漏）");
+    assert.equal(ref!.released(), true);
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: notifySupervisorBatchAccept — using 与 retain 同时可用时优先 using 且 release 由 using 配平", async () => {
+  const prompts: any[] = [];
+  const usingCalls: any[] = [];
+  const retainCalls: any[] = [];
+  const releaseCalls = { n: 0 };
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  (globalThis as any).sessionsRt = {
+    binding: () => undefined,
+    retain: () => { retainCalls.push(1); return makeRefStub(session, {}, { n: 0 }); },
+    // using 真实语义：内部 try/finally 保证 release
+    using: async (id: any, o: any, fn: any) => {
+      usingCalls.push({ id, o });
+      const r = makeRefStub(session, { bindingThrowsAfterRelease: true }, releaseCalls);
+      try { return await fn(r); } finally { r.release(); }
+    },
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-1", ["g-7"]);
+    assert.equal(sent, true);
+    assert.equal(usingCalls.length, 1, "必须优先走 using");
+    assert.equal(usingCalls[0].id, "sup-1");
+    assert.deepEqual(usingCalls[0].o, { source: "dsh-graph" });
+    assert.equal(retainCalls.length, 0, "using 可用时不得再自行 retain");
+    assert.equal(prompts.length, 1);
+    assert.equal(prompts[0].mode, "queue");
+    assert.match(prompts[0].parts[0].text, /共 1 个/);
+    assert.equal(releaseCalls.n, 1, "using 内部必须已 release 一次");
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: notifySupervisorBatchAccept — retain 抛 unknown session → false 且不误调 release", async () => {
+  const prompts: any[] = [];
+  (globalThis as any).sessionsRt = {
+    binding: () => undefined,
+    retain: () => { throw new Error("unknown session"); },
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-x", ["g-1"]);
+    assert.equal(sent, false);
+    assert.equal(prompts.length, 0, "不得发出任何消息");
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: notifySupervisorBatchAccept — ready 被拒 → false 且 release 仍配平一次", async () => {
+  const prompts: any[] = [];
+  const releaseCalls = { n: 0 };
+  (globalThis as any).sessionsRt = {
+    binding: () => undefined,
+    retain: () => makeRefStub({ prompt: async () => { prompts.push(1); } }, { ready: Promise.reject(new Error("Session Controller is disposed")) }, releaseCalls),
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-1", ["g-1"]);
+    assert.equal(sent, false);
+    assert.equal(prompts.length, 0, "ready 未就绪不得发消息");
+    assert.equal(releaseCalls.n, 1, "ready 被拒也必须 release 配平");
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: notifySupervisorBatchAccept — prompt 抛错 → false 且 release 仍配平一次", async () => {
+  const releaseCalls = { n: 0 };
+  (globalThis as any).sessionsRt = {
+    binding: () => undefined,
+    retain: () => makeRefStub({ prompt: async () => { throw new Error("prompt boom"); } }, { bindingThrowsAfterRelease: true }, releaseCalls),
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-1", ["g-1"]);
+    assert.equal(sent, false);
+    assert.equal(releaseCalls.n, 1, "prompt 抛错也必须 release 配平");
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: notifySupervisorBatchAccept — retain 宿主会话无 prompt → false 且 release 配平", async () => {
+  const releaseCalls = { n: 0 };
+  (globalThis as any).sessionsRt = {
+    binding: () => undefined,
+    retain: () => makeRefStub({}, { bindingThrowsAfterRelease: true }, releaseCalls),
+  };
+  try {
+    const sent = await notifySupervisorBatchAccept("sup-1", ["g-1"]);
+    assert.equal(sent, false);
+    assert.equal(releaseCalls.n, 1, "无 prompt 也必须 release 配平");
+  } finally {
+    delete (globalThis as any).sessionsRt;
+  }
+});
+
+test("g-323: 特性探测而非版本号分支（共享 helper 内唯一判定，两代宿主行为分流）", () => {
+  // 只对剥离注释后的可执行代码断言：版本号判断是分支逻辑问题，注释里说明代际不算违反。
+  // att-002：探测判定已抽到工厂作用域共享 helper（session-hooks.js 的 promptSessionQueue），
+  // 故断言目标从 batch-accept.js 迁移到 helper——断言强度不变（仍是逐字精确匹配，非永真）。
+  const codeOnly = hooksSource.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+  assert.match(codeOnly, /typeof rt\?\.using === "function"/);
+  assert.match(codeOnly, /typeof rt\?\.retain === "function"/);
+  assert.doesNotMatch(codeOnly, /0\.1\.[0-9]/, "可执行代码不得出现 DSH 版本号判断");
+  assert.doesNotMatch(codeOnly, /alpha|release candidate/, "可执行代码不得出现版本代际判断");
+  // 保留既有 0.1.5 被动回退形态：binding ?? get 在 helper 的 legacy 分支里逐字保留
+  assert.match(codeOnly, /const session = rt\?\.binding\?\.\(target\)\?\.session \?\? rt\?\.get\?\.\(target\)/);
+  // 两处调用点自身不得再持有任何探测判定（否则就是把分流复制成了第二份/第三份）
+  const moduleCode = moduleSource.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+  const actionsCode = goalActionsSource.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+  for (const [label, src] of [["batch-accept.js", moduleCode], ["goal-actions.js", actionsCode]] as const) {
+    assert.doesNotMatch(src, /typeof\s+\w+\??\.\s*(using|retain)\s*===/, `${label} 不得自带 using/retain 探测`);
+    assert.match(src, /promptSessionQueue\(/, `${label} 必须引用共享 helper`);
+  }
+});
+
+test("g-323 共享性：using/retain 能力探测只在共享 helper 中定义，两个调用点均引用它", () => {
+  const clientModules = ["batch-accept", "goal-actions", "session-hooks", "plugin", "kanban", "drag-prompts", "helpers", "live-panel"];
+  const readCode = (name: string) => readFileSync(join(root, `lib/client/${name}.js`), "utf8")
+    .split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+  const sources = clientModules.map((n) => [n, readCode(n)] as const);
+
+  // using 探测：整个 client 只允许 helper 里出现一次
+  const usingProbes = sources.flatMap(([n, s]) => [...s.matchAll(/typeof\s+rt\??\.\s*using\s*===\s*"function"/g)].map(() => n));
+  assert.deepEqual(usingProbes, ["session-hooks"], "using 探测只允许出现在共享 helper 中一次");
+  // retain 探测：helper 一次 + g-321 渲染期 canRetain 一次（同一文件内两种不同机制，非本次收敛对象）
+  const retainProbes = sources
+    .flatMap(([n, s]) => [...s.matchAll(/typeof\s+\w+\??\.\s*retain\s*===\s*"function"/g)].map((m) => `${n}:${m[0]}`))
+    .sort();
+  assert.deepEqual(retainProbes, [
+    'session-hooks:typeof rt?.retain === "function"',
+    'session-hooks:typeof sessionsRt?.retain === "function"',
+  ], "retain 探测只允许存在于 session-hooks.js（helper 能力分流 + g-321 渲染期 canRetain）");
+  // 两个通知调用点都不含探测，且都引用同一个 helper
+  assert.match(moduleSource, /function notifySupervisorBatchAccept[\s\S]{0,600}?promptSessionQueue\(rt, supervisorSession, parts/);
+  assert.match(goalActionsSource, /function AcceptFeedback\(props\)[\s\S]*?promptSessionQueue\(rt, supervisorSession, parts/);
+  // helper 在 build 装配顺序中早于两个调用点（工厂作用域函数声明可被后置模块引用）
+  const idx = (p: string) => buildScript.indexOf(`"${p}"`);
+  assert.ok(idx("session-hooks") > 0 && idx("session-hooks") < idx("goal-actions"), "session-hooks 必须早于 goal-actions");
+  assert.ok(idx("session-hooks") < idx("batch-accept"), "session-hooks 必须早于 batch-accept");
+  // 生成物：helper 只定义一次，且两处调用都已进 bundle（含各自的 console.warn 标签）
+  assert.equal(bundleSource.split("function promptSessionQueue(").length - 1, 1, "bundle 内 helper 只定义一次");
+  assert.match(bundleSource, /promptSessionQueue\(rt, supervisorSession, parts, "\[dsh-graph-host\] batch accept: prompt supervisorSession failed:"\)/);
+  assert.match(bundleSource, /promptSessionQueue\(rt, supervisorSession, parts, "\[dsh-graph-host\] prompt supervisorSession failed:"\)/);
+});
+
+test("g-323 共享 helper 行为：0.1.5 被动回退（binding ?? get）不 retain，binding 缺失时按需 get", async () => {
+  const prompts: any[] = [];
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  const rt = {
+    binding: (id: string) => (id === "sup-1" ? { session } : undefined),
+    get: () => { throw new Error("0.1.5 有 binding 时不应走到 get"); },
+  };
+  assert.equal(await promptSessionQueue(rt, "sup-1", [{ type: "text", text: "x" }]), true);
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].mode, "queue");
+  // 无 retain/using 且 binding 取不到、也没有 get → 如实 false（不得虚报）
+  assert.equal(await promptSessionQueue({ binding: () => undefined }, "sup-1", [{ type: "text", text: "x" }]), false);
+  // get 是 0.1.5 的回退末梢（binding 返回 undefined 时才用到）
+  const rt2 = { binding: () => undefined, get: (id: string) => (id === "sup-2" ? session : undefined) };
+  assert.equal(await promptSessionQueue(rt2, "sup-2", [{ type: "text", text: "y" }]), true);
+  assert.equal(prompts.length, 2);
+  // 空 target → false（两处调用点都靠这一点保持「无 supervisorSession 静默跳过」）
+  assert.equal(await promptSessionQueue(rt, null, [{ type: "text", text: "z" }]), false);
+  assert.equal(await promptSessionQueue(rt, "", [{ type: "text", text: "z" }]), false);
 });
 
 test("g-273: batchAcceptSupervisorMessage — list + total", () => {

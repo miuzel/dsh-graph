@@ -7155,3 +7155,30 @@ export function resolveSubagentMode(
   if (gl) return { mode: gl, source: "global", prompt: SUBAGENT_MODE_PROMPTS[gl] };
   return { mode: DEFAULT_SUBAGENT_MODE, source: "default", prompt: SUBAGENT_MODE_PROMPTS[DEFAULT_SUBAGENT_MODE] };
 }
+
+/** g-321：把 subagents.startContinuable 抛出的异常翻译成可操作的提示文案。
+ *
+ * 背景：DSH 0.1.6-alpha.2 为 SubagentRuntime 引入了硬性并发槽位（默认 maxActiveSubagents: 8），
+ * 容量耗尽时 startContinuable 以 code=ACTIVATION_LIMIT_REACHED 拒绝；冷恢复失败则报
+ * subagent/delivery-unavailable。旧版（0.1.5-rc.2）没有该限制，因此错误对象里出现这些码
+ * 就说明用户撞上了新版本的真实边界，直接透出英文 code 无法指导操作。
+ *
+ * 双向兼容约束：本函数只识别上述新码，**其余错误原样返回 message**——
+ * 既有的可追溯性（如 "LLM quota exceeded"、provider 缺失提示）必须逐字保留。
+ */
+export function subagentSpawnErrorText(e: unknown): string {
+  const message = String((e as { message?: unknown } | null | undefined)?.message ?? e);
+  const err = e as { code?: unknown; details?: { reason?: unknown } | null } | null | undefined;
+  const code = typeof err?.code === "string" ? err.code : "";
+  const reason = typeof err?.details?.reason === "string" ? err.details.reason : "";
+  const hay = `${code} ${reason} ${message}`;
+  if (hay.includes("ACTIVATION_LIMIT_REACHED")) {
+    return `子代理激活已达上限（DSH 0.1.6 起默认最多 8 个活跃 continuable 子代理）：`
+      + `请等待现有子代理结算，或先解绑不再需要的子代理后重试。原始错误：${message}`;
+  }
+  if (hay.includes("subagent/delivery-unavailable")) {
+    return `子代理消息暂时无法送达（子代理未运行、父会话离线或已达激活上限，冷恢复被拒）：`
+      + `请等待其结算，或重新派发该目标。原始错误：${message}`;
+  }
+  return message;
+}

@@ -7,6 +7,235 @@
     const boundSetup = new Map(); // childId -> Promise（地址配置只做一次）
     const boundModes = new Map(); // childId -> 'one-shot' | 'continuable'
 
+    // ===== g-323：一次性「向某个会话投递一条 queue 消息」的**共享**能力探测入口 =====
+    // 与 g-321 的渲染期保留生命周期（useSessionBinding / canRetain）是两件事：本函数服务
+    // **事件回调**（批量接受 / 单卡接受的主管通知），只做一次短事务，绝不进入 render。
+    //
+    // 0.1.6-alpha.2 起 ClientSessions.binding(id) 只借用**已存在**的保留代际
+    // （scopes.get(id)?.binding），不再按需 materialize，且类中已无 get(id)：未被任何组件
+    // retain 过的会话（典型：主管会话未被看板任何面板绑定）恒取不到。0.1.5 的
+    // binding(id) 是 resolve(id)?.binding（按需 materialize）且仍有 get(id)，被动借用即可用。
+    // 故按**能力探测**分流，绝不写版本号分支；判定收敛为这一处，两个调用点共用
+    // （batch-accept.js 的 notifySupervisorBatchAccept 与 goal-actions.js 的单卡接受通知）：
+    //   - 有 using  → 用其 try/finally 语义（release 由 using 内部配平）；
+    //   - 无 using 有 retain → 自行 retain + finally release（ready 被拒 / prompt 抛错都不漏代际）；
+    //   - 两者皆无（0.1.5）→ 原样保留 binding ?? get 被动回退，行为一字不改。
+    // 契约：成功发出恰好一条 queue 消息返回 true；取不到会话 / 无 prompt / 任意异常返回 false，
+    // **绝不抛异常、绝不漏 release、绝不虚报成功**。warnLabel 可选：给出时沿用调用点既有的
+    // console.warn 形态回报异常（保持既有可诊断性，不新增报错风暴）。
+    async function promptSessionQueue(rt, target, parts, warnLabel) {
+      if (!target) return false;
+      try {
+        // 优先 using：其内部 try/finally 已保证 release 配平（含 ready 被拒 / prompt 抛错）。
+        if (typeof rt?.using === "function") {
+          let sent = false;
+          await rt.using(target, { source: "dsh-graph" }, async (reference) => {
+            await reference.ready;
+            const session = reference.binding?.session;
+            if (!session?.prompt) return;
+            await session.prompt(parts, "queue");
+            sent = true;
+          });
+          return sent;
+        }
+        // 退回 retain：自行配平。binding 是 getter，release 之后再读会抛错，故必须在 finally 之前读取。
+        if (typeof rt?.retain === "function") {
+          const reference = rt.retain(target, { source: "dsh-graph" });
+          try {
+            await reference.ready;
+            const session = reference.binding?.session;
+            if (!session?.prompt) return false;
+            await session.prompt(parts, "queue");
+            return true;
+          } finally {
+            try { reference.release?.(); } catch (e) { /* 已释放 → 幂等忽略 */ }
+          }
+        }
+        // 0.1.5 回退：被动借用既有 binding，或按需 get（原样保留，行为不退化）。
+        const session = rt?.binding?.(target)?.session ?? rt?.get?.(target);
+        if (!session?.prompt) return false;
+        await session.prompt(parts, "queue");
+        return true;
+      } catch (err) {
+        if (warnLabel) console.warn(warnLabel, err);
+        return false;
+      }
+    }
+
+    // ===== g-321：0.1.6-alpha.2「先 retain 再借用」的会话引用生命周期 =====
+    // 0.1.6-alpha.2 起 ClientSessions.binding(id) 只借用**已存在**的保留代际
+    // （scopes.get(id)?.binding），不再按需 materialize scope：无任何 retain 时恒 undefined，
+    // 渲染期被动 binding() 因此拿不到会话（看板「⚠️ 会话未接入」与「模型目录不可用」的根因）。
+    // 0.1.5 的 binding(id) 是 resolve(id)?.binding（会按需 materialize），被动调用仍可用。
+    // 故按能力探测分流，绝不做版本号分支：
+    //   有 retain → effect 内 retain(target,{source:"dsh-graph"}) → 等 ready → 借 binding → cleanup release()
+    //   无 retain → 保持原有渲染期被动 binding(id) 回退，行为不得退化
+    // retain/release 严格配平：模块级按身份引用计数，同一 target 在同一组件树多处消费
+    // （SessionPanel 与内嵌 LiveStrip 会同时解析同一 childId）只 retain 一次，计数归零才归还代际。
+    const retainedBindings = new Map(); // identity -> { count, started, reference, bound, promise, listeners }
+
+    function bindIdentity(parentId, childId) {
+      return parentId || childId ? (parentId ?? "") + "\u0000" + (childId ?? "") : null;
+    }
+
+    function ensureBindingEntry(identity) {
+      let entry = retainedBindings.get(identity);
+      if (!entry) {
+        entry = { count: 0, started: false, reference: null, bound: null, promise: null, listeners: new Set() };
+        retainedBindings.set(identity, entry);
+      }
+      return entry;
+    }
+
+    // 保留代际状态变化 → 通知订阅者重取快照（useSyncExternalStore 的 subscribe 回调）
+    function notifyBinding(entry) {
+      for (const cb of [...entry.listeners]) {
+        try { cb(); } catch (e) { /* 单个订阅者异常不得中断其它订阅者 */ }
+      }
+    }
+
+    // 目录 entry → SubagentAddress（与 setupBoundSession 的 entry 筛选口径保持一致）
+    function subagentAddressFromCatalog(parentId, childId) {
+      if (!parentId || !childId) return null;
+      let entries = [];
+      try { entries = sessionsRt?.list?.getSnapshot?.()?.subagentsByParent?.[parentId]?.entries ?? []; }
+      catch (e) { return null; }
+      const entry = entries.find((e) => e && e.kind === "child" && e.id === childId);
+      return entry ? { parentSessionId: parentId, childSessionId: childId, mode: entry.mode } : null;
+    }
+
+    // 子代理会话的 retain 目标：优先 SubagentAddress——resolveTarget 对地址不校验存在性，
+    // 且会把地址写入 manager.addresses，使 session.prompt 走 subagents 路由；
+    // 拿不到地址时先 setSubagentCatalogOpen + await refreshSubagents 再试；
+    // 仍未收录 → null（降级为空绑定、保留看板占位，绝不抛错、绝不刷 console）。
+    async function resolveSessionRetainTarget(parentId, childId) {
+      if (!childId) return null;
+      if (!parentId) return childId; // 顶层会话（supervisor）：id 即 retain 目标
+      try {
+        const direct = sessionsRt?.subagentAddress?.(childId);
+        if (direct) return direct;
+      } catch (e) { /* 地址探测不可用 → 继续走目录路径 */ }
+      const cached = subagentAddressFromCatalog(parentId, childId);
+      if (cached) return cached;
+      try {
+        sessionsRt?.setSubagentCatalogOpen?.(parentId, true);
+        await sessionsRt?.refreshSubagents?.(parentId);
+      } catch (e) { /* 目录刷新失败 → 按未收录降级为空绑定 */ }
+      return subagentAddressFromCatalog(parentId, childId);
+    }
+
+    // 建立一次保留代际并借取 binding。任何失败（unknown session / Controller disposed /
+    // open 失败）都降级为 bound=null（未接入占位），绝不让看板崩、绝不冒泡异常。
+    function startRetainedBinding(target, entry) {
+      let reference = null;
+      try {
+        reference = sessionsRt.retain(target, { source: "dsh-graph" });
+      } catch (e) {
+        entry.bound = null;
+        notifyBinding(entry);
+        return;
+      }
+      entry.reference = reference;
+      const settle = () => {
+        let bound = null;
+        try {
+          // binding 是 getter（释放后抛错），必须在 ready 之后、release 之前读取
+          const b = reference.binding;
+          bound = b ? { session: b.session ?? null, eventSource: b.eventSource ?? null, sessionId: reference.sessionId } : null;
+        } catch (e) { bound = null; }
+        entry.bound = bound;
+        notifyBinding(entry);
+      };
+      const ready = reference && reference.ready;
+      if (ready && typeof ready.then === "function") {
+        ready.then(settle, () => { entry.bound = null; notifyBinding(entry); });
+      } else {
+        settle();
+      }
+    }
+
+    // 计数归零才归还；retain 与 release 严格配平（含 retain 抛错、ready 未 settle 的情况）
+    function releaseBinding(identity) {
+      const entry = retainedBindings.get(identity);
+      if (!entry) return;
+      entry.count -= 1;
+      if (entry.count > 0) return;
+      retainedBindings.delete(identity);
+      const finish = () => { try { entry.reference?.release?.(); } catch (e) { /* 已释放，幂等 */ } };
+      const p = entry.promise;
+      if (p && typeof p.then === "function") p.then(finish, finish);
+      else finish();
+    }
+
+    // g-321：生命周期绑定的会话引用 hook（useBoundSession / useSessionModel 共用）。
+    //   target: SessionId 字符串或 SubagentAddress 对象；opts: { parentId, childId, enabled }
+    // 渲染期只读缓存快照，retain 一律发生在 effect 内，cleanup 里 release 配平。
+    // 返回 { session, eventSource, binding }；未接入 / 尚未 ready 时 session 与 eventSource 均为 null。
+    function useSessionBinding(target, opts) {
+      const o = opts || {};
+      const addressTarget = target && typeof target === "object" ? target : null;
+      const childId = o.childId ?? (addressTarget ? addressTarget.childSessionId : (typeof target === "string" ? target : null));
+      const parentId = o.parentId ?? (addressTarget ? addressTarget.parentSessionId : null);
+      const enabled = o.enabled !== false;
+      const canRetain = typeof sessionsRt?.retain === "function";
+      const identity = bindIdentity(parentId, childId);
+      // 0.1.5 回退路径仍需 list 快照驱动重渲染（子代理会话入列后 binding 才可解析）
+      const listSnap = useSessionsList();
+
+      // 无 retain（0.1.5）：保持原有渲染期被动解析，行为不得退化
+      const passive = React.useMemo(() => {
+        if (canRetain || !sessionsRt || !childId) return null;
+        try { return sessionsRt.binding(childId) ?? null; }
+        // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
+        catch (e) { console.warn("[dsh-graph-host] binding 解析失败", e); return null; }
+      }, [canRetain, childId, listSnap]);
+
+      // 快照读取必须引用稳定（entry.bound 只在保留代际建立/释放时替换），否则无限重渲染
+      const subscribe = React.useCallback((cb) => {
+        if (!canRetain || !enabled || identity == null) return NOOP_UNSUB();
+        const entry = ensureBindingEntry(identity);
+        entry.listeners.add(cb);
+        return () => { entry.listeners.delete(cb); };
+      }, [canRetain, enabled, identity]);
+
+      const getSnapshot = React.useCallback(() => {
+        if (!canRetain) return passive;
+        if (!enabled || identity == null) return null;
+        const entry = retainedBindings.get(identity);
+        return entry ? entry.bound : null;
+      }, [canRetain, enabled, identity, passive]);
+
+      const bound = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+
+      // 依赖只取能力与身份，**不含** listSnap：0.1.6 的 publishRetention 会因我们自己的 retain
+      // 更新 list 快照，若把 listSnap 放进依赖会形成 retain→通知→再 retain 的无限循环。
+      React.useEffect(() => {
+        if (!canRetain || !enabled || identity == null) return undefined;
+        const entry = ensureBindingEntry(identity);
+        entry.count += 1;
+        let released = false;
+        if (!entry.started) {
+          entry.started = true;
+          entry.promise = (async () => {
+            const resolved = await resolveSessionRetainTarget(parentId, childId);
+            if (resolved == null) { entry.bound = null; notifyBinding(entry); return; }
+            startRetainedBinding(resolved, entry);
+          })();
+        }
+        return () => {
+          if (released) return;
+          released = true;
+          releaseBinding(identity);
+        };
+      }, [canRetain, enabled, identity, parentId, childId]);
+
+      return {
+        session: bound?.session ?? null,
+        eventSource: bound?.eventSource ?? null,
+        binding: bound ?? null,
+      };
+    }
+
     // 子代理地址配置（路由 prompt/history 到 subagents.*）。
     // 目录 entry 提供真实 mode；目录未收录时跳过地址配置（指令走 session.prompt 默认路由，错误会明示）。
     // 实时窗口（session.open()）由 openBoundSessionStream 按 g-224 实时显示开关门控，不在此处打开。
@@ -70,19 +299,15 @@
       return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     }
 
-    // 解析绑定 childId 的 Session / eventSource（binding 是文档化的纯解析，渲染期安全）
+    // 解析绑定 childId 的 Session / eventSource。
+    // g-321：改为消费 useSessionBinding——0.1.6-alpha.2 先按生命周期 retain 再借取 binding
+    // （无 retain 的 0.1.5 自动回退被动解析）；session / eventSource 语义与对外形状不变。
     // g-217：0.1.2-alpha.2 实时输出新家在 binding.eventSource（不在 session 上）；
-    // binding 解析失败 → session/eventSource 均为 null，LiveStrip 保留'⚠️ 会话未接入'占位。
+    // 未接入 / 尚未 ready / retain 降级 → session、eventSource 均为 null，LiveStrip 保留占位。
     function useBoundSession(parentId, childId) {
-      const listSnap = useSessionsList();
-      const binding = React.useMemo(() => {
-        if (!sessionsRt || !childId) return null;
-        try { return sessionsRt.binding(childId) ?? null; }
-        // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
-        catch (e) { console.warn("[dsh-graph-host] binding 解析失败", e); return null; }
-      }, [childId, listSnap]);
-      const session = binding?.session ?? null;
-      const eventSource = binding?.eventSource ?? null;
+      const binding = useSessionBinding(childId, { parentId: parentId ?? null, childId: childId ?? null });
+      const session = binding.session;
+      const eventSource = binding.eventSource;
       const [mode, setMode] = React.useState(boundModes.get(childId) ?? null);
       // g-224：实时显示开关——关闭时跳过 session.open()（不激活输出流窗口），重开时恢复
       const liveEnabled = useLiveDisplayEnabled();
@@ -182,6 +407,20 @@
         (cb) => (face ? face.subscribe(cb) : NOOP_UNSUB()), [face]);
       const getSnapshot = React.useCallback(
         () => (face ? face.getSnapshot() : undefined), [face]);
+      return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    }
+
+    // g-321：排队深度 hook（inbox 投影优先，0.1.5 快照 queue 回退）。
+    // getSnapshot 必须返回**按值稳定**的原语，否则 useSyncExternalStore 每次比较都判定变化 → 无限重渲染；
+    // 因此这里只返回 pendingCount 数字，完整形状由 sessionQueueState 在事件回调中读取。
+    function useSessionQueueDepth(session) {
+      const face = React.useMemo(
+        () => { try { return session?.projections?.faceOf?.("inbox") ?? null; } catch { return null; } },
+        [session]);
+      const subscribe = React.useCallback(
+        (cb) => (face ? face.subscribe(cb) : (session ? session.subscribe(cb) : NOOP_UNSUB())), [face, session]);
+      const getSnapshot = React.useCallback(
+        () => sessionQueueState(session).pendingCount, [session]);
       return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     }
 

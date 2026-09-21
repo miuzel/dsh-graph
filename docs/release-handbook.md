@@ -68,24 +68,42 @@ gh repo edit miuzel/dsh-graph --add-topic dsh-plugin --add-topic dsh --add-topic
 **权威流程（自 v0.10.0 复盘确定）**：发布必须在「发布 tag 的独立 worktree」里执行，严禁在 `<version>-test` 集成分支或主工作区直接发布。
 集成分支在发布合并之后随时可能继续提交，从那里 publish 会让「发布物 ≠ tag 内容」的隐患成立。
 
-```sh
-# 0. 前置：npm 官方登录（人工 gate，需负责人凭据）
-npm login --registry=https://registry.npmjs.org   # 或 NODE_AUTH_TOKEN + .npmrc
+> ### ⚠️ 发布目录是 `dist/`，不是 `dsh-graph-host/`（2026-09-21 修正）
+>
+> 本仓库把**源码**与**发布物**分离：
+>
+> - **源码**：`dsh-graph-host/`（`index.js`、`lib/client/*.js` 拆模块、`package.json`、`prompts/`、
+>   `README.md`、`supervisor-guide.*`、`cordis.patch.yml`）+ 仓库根 `core/*.ts`。
+> - **发布物**：`dist/` —— 编译后的 `core/*.js`、拼装成单文件的 `lib/client.js`、以及以上静态资源。
+>
+> **`dsh-graph-host/` 里没有 `core/`、也没有 `lib/client.js`**，从那里 publish 会发出 TS 源码并
+> 缺 `core/*.js` / `lib/client.js`，装到宿主上直接 loader 失败。
+> 旧版手册的 `cd dsh-graph-host && pnpm publish` 是 0.4 时代残留，**已作废**。
+> 核对依据：线上 `dsh-graph@0.12.0` 包内 36 个文件与 `dist/` 内容逐一同构（`core/*.js`，无 `.ts`）。
+>
+> `dist/` 被 `.gitignore` 忽略 ⇒ **发布树里必须先构建**（见步骤 3）。
 
-# 1. 把待发布内容合并到 main 并打 tag（由主管/负责人执行）
+```sh
+# 0. 前置：确认 registry 与登录态（人工 gate）
+npm config get registry                             # 期望 https://registry.npmjs.org/
+npm whoami --registry=https://registry.npmjs.org    # 未登录再执行 npm login --registry=https://registry.npmjs.org
+
+# 1. 把待发布内容合并到 main 并打 tag（由负责人执行；主管不新建/不迁移/不推送 tag）
 git checkout main && git merge --no-ff vX.Y.Z-test && git tag -a vX.Y.Z -m "dsh-graph vX.Y.Z"
 GIT_SSH_COMMAND="ssh -F /dev/null" git push origin main && GIT_SSH_COMMAND="ssh -F /dev/null" git push origin vX.Y.Z
 
-# 2. 为 tag 建独立发布树（不打扰集成分支/开发实例），并软链仓库根 node_modules 确保 prepack/tsc 可用
+# 2. 为 tag 建独立发布树（不打扰集成分支/开发实例），并软链仓库根 node_modules 确保 tsc/pnpm 可用
 git worktree add --detach .worktrees/release-vX.Y.Z vX.Y.Z
 ln -sfn "$PWD/node_modules" .worktrees/release-vX.Y.Z/node_modules
 git -C .worktrees/release-vX.Y.Z describe --tags   # 必须输出 vX.Y.Z
 
-# 3. 预演 prepack 编译：产物应零 diff
-(cd .worktrees/release-vX.Y.Z/dsh-graph-host && bash ../scripts/sync-core.sh)
+# 3. 在发布树里构建 dist/（发布物的唯一来源），并核对版本号与产物内容
+(cd .worktrees/release-vX.Y.Z && bash scripts/build.sh)
+node -p "require('./.worktrees/release-vX.Y.Z/dist/package.json').version"   # 必须 == X.Y.Z
+(cd .worktrees/release-vX.Y.Z/dist && pnpm pack --dry-run)                   # 核对文件清单（应为 36 个文件）
 
-# 4. 在发布树里发布（发布前确认 package.json version == tag）
-(cd .worktrees/release-vX.Y.Z/dsh-graph-host && pnpm publish --registry=https://registry.npmjs.org --no-git-checks)
+# 4. 在 dist/ 里发布（发布物必须来自「tag 树构建出的 dist/」）
+(cd .worktrees/release-vX.Y.Z/dist && pnpm publish --registry=https://registry.npmjs.org --no-git-checks)
 
 # 5. 核验线上版本
 npm view dsh-graph version
@@ -94,9 +112,17 @@ npm view dsh-graph version
 git worktree remove .worktrees/release-vX.Y.Z
 ```
 
-> 注意：本机 `~/.npmrc` 指向 npmmirror 镜像且未登录——发布前必须切官方 registry 并登录；
+> 注意：**registry 与登录态（2026-09-21 实测更新）**——早先「`~/.npmrc` 指向 npmmirror 且未登录」
+> 的描述已过时：当前 `npm config get registry` 输出 `https://registry.npmjs.org/`，且 `~/.npmrc`
+> 已含 `//registry.npmjs.org/:_authToken=…`。发布前仍用步骤 0 的 `whoami` 复核一次即可。
+>
 > 沙箱内 pnpm 的 supply-chain policy 会对本地 tgz 误报（minimum-release-age），真实发布到官方
 > registry 后无此问题（该 policy 只查官方 registry 的发布时间）。
+>
+> ⚠️ **`dist/` 里不要留 `.tgz`**：若在 `dist/` 里试打过包（`pnpm pack` 会就地生成
+> `dsh-graph-X.Y.Z.tgz`），**必须先删掉再 `publish`**，否则该 tgz 会被当作普通文件一起打进发布包，
+> 污染发布物。发布前固定核对两项：
+> `find dist -type f | wc -l`（期望 **36**）与 `find dist -name '*.tgz' | wc -l`（期望 **0**）。
 >
 > 另：本机 `/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf` 权限损坏会导致所有 ssh 推送失败
 > （`Bad owner or permissions on ...`），git push 一律加 `GIT_SSH_COMMAND="ssh -F /dev/null"`（v0.9.2、
@@ -213,6 +239,15 @@ PR 合并后，dsh-market / DshMarketPlace / DSH Get 三家自动带出（同源
 
 ## 8. 发布 checklist（总）
 
+> ⚠️ **本节为历史存档（v0.4.0 / v0.5.1 时期），已不作当前版本的操作依据。**
+> §0–§7 的流程仍然有效（尤其 **§4 发布树标准流程**），但**每版本的检查清单已按版本独立成文**：
+>
+> - 当前版本：**[`docs/release-checklist-v0.15.0.md`](release-checklist-v0.15.0.md)**
+> - 上一版本：`docs/release-checklist-v0.10.0.md`
+>
+> 另注意：**跨版本发布红线（Windows 真机 T1–T5 门禁、版本号三处一致、tarball + sha256 对账）
+> 的权威定义在仓库根 [`AGENTS.md`](../AGENTS.md) 的「发布门禁」段，不在本手册内。**
+
 - [x] g-112 root 通用化完成（client patch 无硬编码路径，host/client 同一解析基准）
 - [x] B7 打包结构实现（boardPayload 移 core、core 副本进包、sync-core.sh、import 改包内路径）
 - [x] **B8 修复：core 编译为 .js 进包（node_modules 下可加载）**——tsconfig/tsc 链路 + sync-core.sh build 语义 + import 改 .js + 无 .ts 泄漏
@@ -222,7 +257,8 @@ PR 合并后，dsh-market / DshMarketPlace / DSH Get 三家自动带出（同源
 - [x] git user/remote 配置、代码 commit 全量入库（81 commits 已推 origin/main）
 - [x] 建公开 repo miuzel/dsh-graph（2026-08-21 17:56Z）+ dsh-plugin topic
 - [ ] **npm 发布 0.5.1**（v0.5 特性集：拖放 g-77647351 / 建目标 g-129 / append 规范 g-130 / 主管提醒 g-131 / backlog 平铺 g-137 / 重命名 g-141 / 归档 g-110 / 删除 g-140 / 阻塞折叠 g-127 + g-117 交接工具；0.3.2 弃用不动）——由负责人执行：
-      `cd dsh-graph-host && pnpm publish --registry=https://registry.npmjs.org --no-git-checks`（2FA 设备验证；若 token 失效先 `npm login`）
+      ~~`cd dsh-graph-host && pnpm publish --registry=https://registry.npmjs.org --no-git-checks`~~
+      **⚠️ 此命令已作废**（发布目录是 `dist/`，见 §4 顶部的修正说明）；保留仅作历史记录。
       发布后核验 `curl -s https://registry.npmjs.org/dsh-graph | grep '"version"'` 为 0.5.1，`.../index.js` 含 graph_archive_goal/delete_goal/rename_goal
 - [ ] 本地全新 profile `dsh plugin add` 验收通过（0.5.1 发布后）
 - [ ] **PR awesome-dsh-plugin**：分支 `miuzel/awesome-dsh-plugin:add-dsh-graph` 已备好（YAML + 双 README 再生成 1838 条，diff 仅 +1 行/README）；

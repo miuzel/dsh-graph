@@ -30,13 +30,20 @@
           const res = await session.prompt(
             [{ type: "text", text: `【${props.goalId} 判据反馈】${criterion}\n${t}` }], "queue");
           if (res?.ok) {
-            setFbNote(dgT("criteria.feedbackQueued"));
+            // g-321：排队回执改为读真实排队状态（0.1.6 inbox 投影 / 0.1.5 快照 queue 回退），
+            // 而不是直接解构 session.getSnapshot().queue——新版该字段已废弃，解构即 TypeError。
+            const depth = sessionQueueState(session).pendingCount;
+            setFbNote(depth > 0 ? dgT("criteria.feedbackQueuedDepth", { n: depth }) : dgT("criteria.feedbackQueued"));
             setFbText("");
             setFbIdx(-1);
             // g-109：判据反馈提交后自动关闭弹窗
             if (props.onClose) props.onClose();
           }
-          else setFbNote(dgT("criteria.feedbackSendFail") + (res?.error?.message ?? dgT("drag.unknownError")));
+          else {
+            // g-321：0.1.6 的 subagent/delivery-unavailable 与 ACTIVATION_LIMIT_REACHED 给出可操作提示
+            const friendly = subagentDispatchErrorText(res?.error);
+            setFbNote(friendly ?? (dgT("criteria.feedbackSendFail") + (res?.error?.message ?? dgT("drag.unknownError"))));
+          }
         } catch (e) { setFbNote(dgT("criteria.feedbackSendFail") + String(e?.message ?? e)); }
       };
       return h("div", null,
@@ -149,7 +156,16 @@
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       if (!allowed.includes(status) || hasActiveAttempt) return null;
       // i18n-keep(category-b)：复制到剪贴板并粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
-      const request = `【${goalId} 定义/润色请求】\n目标 ID：${goalId}\ngoal.md 工作区相对路径：${String(goalPath ?? "（路径未知）")}\n人工指导意见：${guidance.trim() || "（无）"}`;
+      const request = `【主管处理请求｜${goalId}｜目标定义/润色】\n\n`
+        + `请你以主管 Agent 身份处理这个目标的定义/润色请求。\n`
+        + `这条消息由负责人从看板复制发送，不是产品经理 Agent 的任务提示，\n`
+        + `也不是要求你扮演产品经理。\n\n`
+        + `请先读取目标文件，并按主管流程决定是否需要派发产品经理 Agent。\n`
+        + `如有润色建议，请由主管完成目标描述和质量判据的闭环。\n`
+        + `本次仅处理目标定义/润色，不执行代码，不推进目标状态或版本。\n\n`
+        + `目标 ID（唯一依据）：${goalId}\n`
+        + `目标文件（供读取）：\n${String(goalPath ?? "（路径未知）")}\n\n`
+        + `负责人补充意见：\n${guidance.trim() || "（无）"}`;
       const openSupervisor = async () => {
         setLoading(true); setNote(null);
         try {
@@ -157,7 +173,9 @@
           if (!rt) throw new Error(dgT("exec.supervisorUnavailable"));
           if (!supervisorSession) throw new Error(dgT("exec.supervisorNotConfigured"));
           const copied = await copyText(request);
-          rt.open?.(supervisorSession); activateChatTab();
+          // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
+          openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
+          activateChatTab();
           if (copied) showToast(dgT("exec.requestCopied"));
            setMode("supervisor");
            setFallback(!copied);
@@ -270,10 +288,14 @@
           if (data.pending) {
             try {
               const rt = sessionsRt ?? appCtx?.get?.("sessions");
-              const session = supervisorSession && (rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession));
               // i18n-keep(category-b)：发往主管会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
-              if (session?.prompt) await session.prompt([{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }], "queue");
+              const parts = [{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }];
+              // g-323：与批量接受（batch-accept.js 的 notifySupervisorBatchAccept）共用同一份能力探测 helper：
+              // 0.1.6 需先 retain 才借得到 binding（无 get(id)），0.1.5 保持被动 binding ?? get 回退。
+              // 本处是事件回调（doAccept），绝不引入渲染期 retain；文案与 queue 模式逐字不变。
+              await promptSessionQueue(rt, supervisorSession, parts, "[dsh-graph-host] prompt supervisorSession failed:");
             } catch (err) {
+              // helper 已自兜底（绝不抛）；此处仅作最后一道防线，保持既有 console.warn 形态。
               console.warn("[dsh-graph-host] prompt supervisorSession failed:", err);
             }
             onRefresh?.();
@@ -353,7 +375,8 @@
           if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
           // 自动复制预填内容（负责人指示），再切到主管对话窗直接粘贴发送
           const copied = prefillText ? await copyText(prefillText) : false;
-          rt.open?.(supervisorSession);
+          // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
+          openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
           activateChatTab();
           if (copied) {
             showToast(dgT("exec.precopied"));
@@ -488,7 +511,8 @@
           if (!rt) { setNote(dgT("exec.supervisorUnavailable")); return; }
           // 主管会话 id 由 board 端点下发（project.yaml supervisor.session，g-108）
           if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
-          rt.open?.(supervisorSession);
+          // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
+          openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
           activateChatTab();
           setNote(dgT("addCard.chatSwitched"));
         } catch (e) {

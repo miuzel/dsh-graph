@@ -455,19 +455,23 @@
     // g-214：局部化倒计时组件，避免每秒 tick 引起整个看板大面积重绘；
     // g-211：融合 visibilitychange 感知，页面后台时暂停倒计时，切回前台补偿触发
     function RefreshCountdown(props) {
-      const { generatedAt, intervalSec, onTriggerRefresh } = props;
+      const { generatedAt, refreshSignal, intervalSec, onTriggerRefresh } = props;
       const [remaining, setRemaining] = React.useState(intervalSec);
       const nextTriggerAtRef = React.useRef(Date.now() + intervalSec * 1000);
       const lastRefreshTimeRef = React.useRef(Date.now());
       const onTriggerRef = React.useRef(onTriggerRefresh);
       onTriggerRef.current = onTriggerRefresh;
 
-      // 周期或数据时间（手动/自动刷新完成）更新时重置倒计时终点
+      // g-324：重置信号 = 一次刷新流程完成（refreshSignal 由 kanban.js 的 load() 完成汇聚点
+      // 单调自增），不再依赖 generated_at 变化——304 复用 retained 载荷、watcher 缓存命中
+      // 回旧 payload 时 generated_at 不变，旧实现（依赖 [generatedAt, intervalSec]）不重置，
+      // 手动刷新后倒计时继续沿旧终点递减。generatedAt 仍作为「数据时间展示」来源保留。
+      // 周期（intervalSec）变化同样重置为完整周期。
       React.useEffect(() => {
         lastRefreshTimeRef.current = Date.now();
         nextTriggerAtRef.current = Date.now() + intervalSec * 1000;
         setRemaining(intervalSec);
-      }, [generatedAt, intervalSec]);
+      }, [refreshSignal, generatedAt, intervalSec]);
 
       // 独立 1 秒 tick 驱动平滑递减，归零时触发刷新；融合后台暂停与切回补偿
       React.useEffect(() => {
@@ -693,6 +697,44 @@
       }
       const byType = defaultWorktreeForGoalType(rawType);
       return { isolate: byType, reason: "type_default", hint: null };
+    }
+
+    // ===== g-321：消息排队状态检查（0.1.6 队列架构切换的安全读取） =====
+    // 0.1.5-rc.2：客户端快照直接带 queue；0.1.6-alpha.2 彻底废弃该字段，改为耐久的
+    // inbox 状态投影 `session.projections.faceOf('inbox')`（形如 { 'next-turn': [...], 'next-step': [...] }）。
+    // 铁律：绝不直接解构 `session.getSnapshot().queue`——新版该字段为 undefined，解构即 TypeError，
+    // 会让整个发送链路（判据反馈、看板直达指令、批量受理通知）在渲染期崩溃。
+    // 本函数只做特性探测，两条路径都读到才返回，读不到一律返回零值（不阻断发送）。
+    function sessionQueueState(session) {
+      const empty = { pendingCount: 0, queued: 0, steering: 0, source: null };
+      if (!session) return empty;
+      // 新路径（0.1.6）：inbox 投影。faceOf 缺失或投影未 seed 时静默降级到旧路径。
+      try {
+        const face = session.projections?.faceOf?.("inbox");
+        const value = face?.getSnapshot?.();
+        if (value && typeof value === "object") {
+          const nextTurn = Array.isArray(value["next-turn"]) ? value["next-turn"].length : 0;
+          const nextStep = Array.isArray(value["next-step"]) ? value["next-step"].length : 0;
+          return { pendingCount: nextTurn + nextStep, queued: nextTurn, steering: nextStep, source: "inbox" };
+        }
+      } catch { /* 投影不可用 → 回退旧路径 */ }
+      // 旧路径（0.1.5）：快照 queue（可能是数组，也可能是 { items } 容器）；一律先判类型再读。
+      try {
+        const snap = session.getSnapshot?.();
+        const q = snap && typeof snap === "object" ? snap.queue : null;
+        const items = Array.isArray(q) ? q : (Array.isArray(q?.items) ? q.items : null);
+        if (items) return { pendingCount: items.length, queued: items.length, steering: 0, source: "snapshot" };
+      } catch { /* 静默 */ }
+      return empty;
+    }
+
+    /** g-321：把 subagent 派发/投递失败码翻译为可操作文案（返回 null 表示非已知码，调用方自行回退原始 message）。 */
+    function subagentDispatchErrorText(err) {
+      const code = String(err?.code ?? err?.details?.reason ?? "");
+      const hay = `${code} ${String(err?.message ?? "")}`;
+      if (hay.includes("ACTIVATION_LIMIT_REACHED")) return dgT("live.activationLimit");
+      if (hay.includes("subagent/delivery-unavailable")) return dgT("live.deliveryUnavailable");
+      return null;
     }
 
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // Contract marker: 看板数据自动刷新
