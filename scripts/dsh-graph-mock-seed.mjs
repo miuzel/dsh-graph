@@ -17,7 +17,7 @@
  *
  * 截图复现（两图必须同一次 seed、同一 3082 实例、同一主题与固定视口）：
  *   1. MOCK_ROOT=/tmp/dsh-graph-mock-demo CWD=/tmp/dsh-graph-mock-demo \
- *        bash scripts/dev-dsh-instance.sh run --port 3082
+ *        bash scripts/archived/dev-dsh-instance.sh run --port 3082
  *   2. 等看板稳定渲染（旧数据 mtime 已固定为过去，不会触发更新强调扫光）后：
  *        screenshot/screenshot-1.png ← 看板全景（含版本泳道/backlog/独立目标）
  *        screenshot/screenshot-2.png ← 点击 g-006（收集列「就绪」）打开目标详情弹窗
