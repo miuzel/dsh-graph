@@ -133,10 +133,19 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 | 包内版本 | `0.15.0`（与 tag 一致） |
 | 体积 | 413,706 B |
 | sha256 | `1a275abad1fc8182b20552d25bcc7852d9731e1291a283627b0716c3ecac841e` |
-| Windows 侧可达路径 | `\\wsl.localhost\Arch\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.15.0\` |
+| Windows 侧可达路径（UNC） | `\\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.15.0\` |
+| 老式 UNC 别名 | `\\wsl$\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.15.0\` |
 
 > `tmp/` 已被 `.gitignore` 忽略，tarball 不入库；它是**候选发布物**，最终发布物以 tag 独立发布树
 > 经 `pnpm publish` 产出的为准（内容应与之逐字节一致——发布前用 §4 的 dry-run 对账）。
+>
+> **已做的一致性核对**：tarball 解包后与当前 `dist/` 逐文件 `cmp`，**35/36 文件逐字节一致**；
+> 唯一差异 `package.json` 仅差**末尾换行**（pnpm 重写时未保留尾换行），`JSON.parse` 后语义完全一致。
+> 即 tarball 确实是当前 `dist/` 的快照，不含陈旧内容。
+>
+> **Windows 侧取值建议**：UNC 路径下 `pnpm`/`npm` 的原生依赖安装较慢且部分工具对 UNC 支持不佳，
+> 建议先把 `dsh-graph-0.15.0.tgz` 与 `win-smoke-test.mjs` 两个文件**复制到 Windows 本地盘**
+> （如 `C:\Users\<you>\Desktop\v0150\`）再执行；复制前后各算一次 sha256 与上表核对。
 
 ## 4. 发布后检查项
 
