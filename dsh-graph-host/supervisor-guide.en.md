@@ -245,7 +245,7 @@ while the original agent remains in its original turn and can continue.
   graph_* tools, and **must never run them under a package directory (such as `dsh-graph-host/`)**—otherwise the tools use the session cwd
   and automatically initialize a `.dsh-graph/` skeleton in the package directory, messing up the workspace. **Do not** use `git add -f`,
   `git rm --cached`, or similar methods to include `.dsh-graph` data in the parent repository's Git—the data is managed by an independent inner repository,
-  and migration is performed explicitly with `scripts/migrate-dsh-graph-repo.sh --apply`;
+  and migration is performed explicitly with `scripts/archived/migrate-dsh-graph-repo.sh --apply`;
 - **Model routing**: execution subagents **do not inherit the parent session's model**—they uniformly use the
   `executor.provider/model` in project.yaml; the provider/model parameters of `graph_start_attempt` may temporarily override it;
   the routing result is shown in the returned `model_route` field;

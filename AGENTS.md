@@ -71,15 +71,15 @@ dsh, so an in-progress plugin can never break the production GUI.
   npm package.
 - **Test profile** (`dsh --profile dsh-graph-test`, port 3082) binds the **local**
   `dsh-graph-host` via `link:` — live dev/verification always happens here.
-- The two are switched and managed by `scripts/dev-dsh-instance.sh` (self-contained,
+- The two are switched and managed by `scripts/archived/dev-dsh-instance.sh` (self-contained,
   idempotent, default values overridable via env vars):
 
 ```sh
-bash scripts/dev-dsh-instance.sh run [--port N] [--host H] [--open]  # setup + start test instance (default 3082)
-bash scripts/dev-dsh-instance.sh setup            # create/install profile only, don't start
-bash scripts/dev-dsh-instance.sh main-published   # point main profile at published dsh-graph (^0.11.0) + reinstall
-bash scripts/dev-dsh-instance.sh main-dev         # point main profile back at local link: dev host
-bash scripts/dev-dsh-instance.sh status           # show both profiles' dsh-graph dep + port usage
+bash scripts/archived/dev-dsh-instance.sh run [--port N] [--host H] [--open]  # setup + start test instance (default 3082)
+bash scripts/archived/dev-dsh-instance.sh setup            # create/install profile only, don't start
+bash scripts/archived/dev-dsh-instance.sh main-published   # point main profile at published dsh-graph (^0.11.0) + reinstall
+bash scripts/archived/dev-dsh-instance.sh main-dev         # point main profile back at local link: dev host
+bash scripts/archived/dev-dsh-instance.sh status           # show both profiles' dsh-graph dep + port usage
 ```
 
 ### Development loop
