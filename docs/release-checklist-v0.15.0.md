@@ -102,7 +102,8 @@ README 中的显式声明位置：`README.md`（顶部 + 安装小节）、`dsh-
 - [x] **Windows 真机门禁 T1–T5 = PASS ✅**（发布门禁红线 1；2026-09-21 在**原生 Windows** 上跑
       `win-smoke-test.mjs --tarball`，**通过 10 项 / 失败 0 项 / 告警 0 项**，退出码 0；完整报告见 §3）
 - [x] tarball 已产出并记录 sha256，且**两机 sha256 逐字节一致**（发布门禁红线 3；见 §3）
-- [ ] `v0.15.0-test` 合并 → `main`，推送 `main` + annotated tag `v0.15.0`（**由主管执行**）
+- [ ] `v0.15.0-test` 合并 → `main`，推送 `main`；**annotated tag `v0.15.0` 由负责人创建/推送**
+      （负责人已明确「不移 tag」：主管不新建、不迁移、不推送 tag）
 - [ ] 负责人执行 `pnpm publish`（npm 官方 registry；发布树必须自 tag 独立 worktree 建，见 `docs/release-handbook.md` §4）
 - [ ] 发布后核验：全新隔离 profile 安装（`dsh plugin --profile <p> add dsh-graph`）→ 工具 / 看板 /
       skill 注册正常；`npm view dsh-graph version` = `0.15.0`
@@ -232,12 +233,21 @@ dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.13.0
 ## 4. 发布后检查项
 
 - [ ] 主 3080 profile 切回已发布版本（`bash scripts/dev-dsh-instance.sh main-published`）
+- [ ] **README 平台声明小改（负责人已决定「发布后再小改」）**：把 `dsh-graph-host/README.md`（中/英各一处）
+      与根 `README.md` 的平台范围从「最近一次三平台真机复验：`v0.11.0`」更新为含 `v0.15.0` 的表述。
+      **本次发布前故意不动**：`README.md` 在 tarball 内，改它会改变已验证产物的 sha256，导致
+      「已验证产物 ≠ 待发布产物」。⚠️ 注意副作用：**npm 包页面的 README 冻结于发布时的那一份**，
+      发布后再改只影响 GitHub 仓库首页；若要 npm 页面也同步，需一个 patch 版本重新发布。
 - [ ] 开下一条开发线（`v0.16.0-test`，版本置 `0.16.0-alpha`）；
       **注意 v0.16.0 泳道已有排期目标**：g-326（按改动性质分级测试力度）、g-327（定义/润色请求
       直接投递主管会话）、g-311/g-312/g-313（评审与架构审查机制）
 - [ ] 按安全规则清理已合入的 attempt worktree / 分支（g-321-att-02/03、g-323-att-01/02 等）
 - [ ] 看板：v0.15.0 标记为 released；`dsh-graph-videos` README 补发布链接（如本次有录制）
-- [ ] **回填本文件 §2 的 Windows 真机门禁勾选与 §3 的对账表**（若发布时尚未回填）
+- [x] **回填本文件 §2 的 Windows 真机门禁勾选与 §3 的对账表** — 已于 2026-09-21 发布前完成（T1–T5 PASS 10/0/0）
+
+> **tag 归属（负责人要求「不移 tag」）**：`git tag` 的新建/移动**一律由负责人执行**，
+> 主管不创建也不迁移 tag。手册 §4 的发布树流程以 `vX.Y.Z` tag 为起点，故 **publish 前需先由负责人
+> 打好 tag**；主管侧只准备并核对待发布产物（sha256 `c102aca6…`）。
 
 ## 5. 已知问题（不阻断本次发布）
 
