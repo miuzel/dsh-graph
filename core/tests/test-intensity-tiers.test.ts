@@ -13,13 +13,14 @@
  *     长文本；因此命中的分级文本只可能来自框架自身注入的执行纪律，而不是被回显的 brief
  *     或粘贴的源码字符串；
  *  2. 断言打在**渲染后的字符串**上（第 2 条为核心）；纪律段的存在性证明一律做**段落切片**断言
- *     （切片内查，而不是 grep 全文——独立区块同样落在全文里，grep 全文不构成纪律段证据）；
+ *     （切片内查，而不是 grep 全文——只 grep 全文无法区分「纪律段里有」与「纪律段外另有一份」）；
  *  3. 指南与纪律提醒同时校验源码副本与构建后投递副本（dist），防止「只改一处」。
  *
- * 落点说明（重要，勿随手「整理」）：分级要求有两个投递落点，**两者并存**：
- *  1. index.js 的独立 section（TEST_INTENSITY_SECTIONS / formatTestIntensitySection）——完整三档；
- *  2. `formatAttemptDiscipline` 的 zh 纪律条目 3 / `formatAttemptPromptEnglish` 的 en 纪律条目——
- *     精简三档，纪律段是分级规则的正式投递渠道（负责人裁决，att-002 返工落地）。
+ * 唯一真源（负责人 v0.16.0 去重裁决，勿随手「整理」）：分级要求只有一个投递落点——
+ * `formatAttemptDiscipline` 的 zh 纪律条目 3 / `formatAttemptPromptEnglish` 的 en 纪律条目。
+ * att-001 曾在纪律段之外另投一份「独立分级区块」，同一份 prompt 里三档规则因此出现两次
+ * （中英双路合计约 1100 字符重复，与 g-239 压缩 prompt 的方向相反）；该区块及其投递机制已删除，
+ * 并由本文件的「去重护栏」用例锁死：**全篇恰好出现一次，且唯一出现处落在纪律段切片内**。
  *
  * 关于 g-239 的收缩断言：`core/tests/prompt-discipline-g239.test.ts` 判据 3 对
  * 「## 通用执行纪律 → 若本 prompt 同时含」整段做收缩断言（字符减少 ≥ 8%、Token 减少 ≥ 10%）。
@@ -57,6 +58,18 @@ function expectOrder(text: string, label: string, tokens: readonly string[]) {
     [...positions].sort((a, b) => a - b),
     `${label} 档位顺序错乱（应为一档→二档→三档）：${tokens.map((t, i) => `${t}@${positions[i]}`).join(" ")}`,
   );
+}
+
+/** 数出 token 在整篇文本中出现的次数（非重叠）；去重护栏据此证明「只有一份表述」。 */
+function countOccurrences(text: string, token: string): number {
+  let count = 0;
+  let from = 0;
+  for (;;) {
+    const at = text.indexOf(token, from);
+    if (at < 0) return count;
+    count += 1;
+    from = at + token.length;
+  }
 }
 
 /** 指南用带空格的排版，派发提示词用压缩排版，故三档适用范围分开定义。 */
@@ -99,7 +112,7 @@ const GUIDE_EN = [
 const GUIDE_ZH_TIERS = ["一档｜零行为逻辑改动", "二档｜小幅逻辑改动", "三档｜新增功能"];
 const GUIDE_EN_TIERS = ["Tier 1", "Tier 2", "Tier 3"];
 
-/** 派发提示词的压缩版三档措辞（档位标识 + 适用范围）；独立分级区块与纪律段精简条目两处都含这些片段。 */
+/** 派发提示词的压缩版三档措辞（档位标识 + 适用范围）；去重后只应出现在纪律段精简条目这一处。 */
 const PROMPT_ZH_TIERS = [
   "零行为逻辑改动（文案/标签/i18n 字符串、注释、文档、纯样式）",
   "小幅逻辑改动（分支/数据变换/边界错误处理）",
@@ -122,7 +135,7 @@ const PROMPT_ZH = [
   "绝不因「轻量/文案」跳过、删改或削弱既有测试，也不降低判据门禁与人工 gate。",
 ];
 const PROMPT_EN = [
-  "Test intensity is tiered by the nature of the change",
+  "Tier test intensity by the nature of the change",
   "no new unit tests required",
   "full existing suite still green",
   "build/syntax checks passing",
@@ -159,17 +172,16 @@ test("g-326 判据 2（核心）：formatAttemptPrompt 渲染产物中英文两�
   expectOrder(zhOutput, "渲染产物·中文", PROMPT_ZH_TIERS);
   expectOrder(enOutput, "渲染产物·英文", PROMPT_EN_TIERS);
 
-  // 必须是可识别的独立分级区块（与纪律段内的精简条目并存，两者都不得被删）。
-  assert.ok(zhOutput.includes("## 测试力度分级（按改动性质）"), "中文渲染产物必须有独立的测试力度分级区块标题");
-  assert.ok(enOutput.includes("## Test intensity tiers (by nature of change)"), "英文渲染产物必须有独立的测试力度分级区块标题");
+  // 必须是可识别的分级要求（唯一投递落点为纪律段；其「恰好一次且在切片内」由下面的去重护栏用例锁死）。
   // 初始 prompt 以固定收尾语结束，分级要求必须真的在 prompt 内（而不是被挤出收尾语之后）。
   assert.ok(
-    zhOutput.indexOf("## 测试力度分级（按改动性质）") < zhOutput.indexOf("若本 prompt 同时含历史 handoff"),
-    "中文分级区块必须位于初始 prompt 收尾语之前",
+    zhOutput.indexOf("测试力度按改动性质分级") < zhOutput.indexOf("若本 prompt 同时含历史 handoff"),
+    "中文分级要求必须位于初始 prompt 收尾语之前",
   );
   assert.ok(
-    enOutput.indexOf("## Test intensity tiers (by nature of change)") < enOutput.indexOf("If a prompt contains a historical handoff"),
-    "英文分级区块必须位于初始 prompt 收尾语之前",
+    enOutput.indexOf("Tier test intensity by the nature of the change")
+      < enOutput.indexOf("If a prompt contains a historical handoff"),
+    "英文分级要求必须位于初始 prompt 收尾语之前",
   );
 });
 
@@ -213,6 +225,69 @@ test("g-326 判据 2 补充（护栏·已翻转）：分级规则必须落在 g-
     assert.ok(discipline.includes(c.ironRule), `${c.label}纪律段内部必须含禁止削弱既有测试的铁律`);
     // 档位在纪律段切片内也必须按一档→二档→三档有序（防被压成一句或改序）。
     expectOrder(discipline, `${c.label}纪律段切片`, c.tiers);
+  }
+});
+
+/**
+ * 去重护栏（负责人 v0.16.0 裁决：纪律段是分级规则的唯一真源）。
+ *
+ * att-001 除了纪律段之外还投递了一个「独立分级区块」，同一份 prompt 里三档规则因此出现两次
+ * （中英双路合计约 1100 字符重复，与 g-239 压缩 prompt 的方向相反）。本用例是防止第二份表述
+ * 重新长出来的最强断言：**整篇 prompt 里分级规则恰好出现一次，且该唯一出现处落在纪律段切片内**。
+ *
+ * 为什么必须两头都断言：只 grep 全文抓不到「出现两次」，只切纪律段抓不到「切片之外还有一份」。
+ * 计数片段同时覆盖条目首行、三档适用范围与铁律，任何一处被复制成第二份都会被计数抓到。
+ */
+test("g-326 判据 2 去重护栏：分级规则在整篇 prompt 中恰好出现一次，且唯一出现处位于纪律段切片内", () => {
+  const cases = [
+    {
+      label: "中文",
+      output: formatAttemptPrompt({ ...renderArgs }),
+      start: "## 通用执行纪律",
+      end: "若本 prompt 同时含",
+      markers: [
+        "3. 测试力度按改动性质分级（不为不值得单测的改动凑断言）：",
+        ...PROMPT_ZH_TIERS,
+        "绝不因「轻量/文案」跳过、删改或削弱既有测试，也不降低判据门禁与人工 gate。",
+      ],
+      staleHeadings: ["## 测试力度分级（按改动性质）"],
+    },
+    {
+      label: "英文",
+      output: formatAttemptPrompt({ ...renderArgs, promptLanguage: "en" }),
+      start: "## Execution discipline",
+      end: "If a prompt contains a historical handoff",
+      markers: [
+        "Tier test intensity by the nature of the change",
+        ...PROMPT_EN_TIERS,
+        "never skip, delete, or weaken existing tests because a change is",
+      ],
+      staleHeadings: ["## Test intensity tiers (by nature of change)"],
+    },
+  ] as const;
+  for (const c of cases) {
+    const startAt = c.output.indexOf(c.start);
+    const endAt = c.output.indexOf(c.end);
+    assert.ok(startAt >= 0 && endAt > startAt, `${c.label}纪律段切片边界必须存在且有序`);
+    for (const marker of c.markers) {
+      assert.equal(
+        countOccurrences(c.output, marker),
+        1,
+        `${c.label}分级片段「${marker}」在整篇 prompt 中必须恰好出现一次（≥2 次即说明又冒出了第二份表述）`,
+      );
+      const at = c.output.indexOf(marker);
+      assert.ok(
+        at >= startAt && at < endAt,
+        `${c.label}分级片段「${marker}」的唯一出现处必须落在纪律段切片 [${startAt}, ${endAt}) 内，实际位置 ${at}`,
+      );
+    }
+    // 已被删除的独立分级区块标题不得以任何形式回到渲染产物里。
+    for (const heading of c.staleHeadings) {
+      assert.ok(
+        !c.output.includes(heading),
+        `${c.label}渲染产物不得再含已删除的独立分级区块标题：「${heading}」`,
+      );
+    }
   }
 });
 
