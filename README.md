@@ -13,7 +13,7 @@
 >
 > **✅ DSH 版本兼容性（重点）**：v0.15.0 **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.6-alpha.2`**。本次周期在 `0.1.6-alpha.2` 与 `0.1.5-rc.2` 两个宿主版本上做了**双向兼容**实测：`0.1.6-alpha.2` 上完成会话导航/focus、实时会话区、批量接受通知与并发槽位提示的实机验证；`0.1.5-rc.2` 上完成被动 binding 回退路径的实机验证（无 retain 时不破坏既有行为）。更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但未在本次周期复跑。
 >
-> **✅ 跨平台（v0.11.0 起）**：Windows 原生不可用问题已修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过。
+> **✅ 跨平台（v0.11.0 起）**：Windows 原生不可用问题已修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过；**v0.15.0 已在原生 Windows 上重跑 T1–T5 门禁并全绿**（通过 10 项 / 失败 0 项 / 告警 0 项）。
 >
 > **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（例如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；**由 `process.cwd()` 推导的路径不受影响**。
 
@@ -56,7 +56,7 @@ dsh plugin --profile <name> add dsh-graph
 >
 > **✅ DSH 版本兼容性（重点）**：v0.15.0 **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.6-alpha.2`**（最新的 `0.1.6-alpha.2` 已适配并实测通过）。本次周期在 `0.1.6-alpha.2` 与 `0.1.5-rc.2` 两个宿主版本上做了**双向兼容**实测：`0.1.6-alpha.2` 上完成会话导航/focus、实时会话区、批量接受通知与并发槽位提示的实机验证；`0.1.5-rc.2` 上完成被动 binding 回退路径的实机验证（无 retain 时不破坏既有行为）。更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但未在本次周期复跑。
 >
-> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证**（三平台使用同一安装包，产物 sha256 指纹一致）。此前 Windows 不可用的两类问题——① `core/ops.ts` 使用 POSIX 专用文件锁常量（目录当 fd 打开、`O_DIRECTORY`、`O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在 **v0.11.0** 修复，并在原生 Windows 与 macOS 真机复验通过。**已知限制**：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
+> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证**（三平台使用同一安装包）。**本版本（v0.15.0）已在 Linux（WSL2）与原生 Windows 上重新实测**——Windows 侧 T1–T5 分层门禁在原生 `win32/x64` 上全绿（**通过 10 项 / 失败 0 项 / 告警 0 项**，含跨进程并发 CAS「4 抢 1」）；**macOS 最近一次真机复验为 `v0.11.0`**，自 `v0.11.0` 以来 `core/platform.ts` 与文件锁相关代码零改动。此前 Windows 不可用的两类问题——① `core/ops.ts` 使用 POSIX 专用文件锁常量（目录当 fd 打开、`O_DIRECTORY`、`O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在 **v0.11.0** 修复，并在原生 Windows 与 macOS 真机复验通过。**已知限制**：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
 
 ## 提供的工具
 

@@ -103,15 +103,19 @@ README 中的显式声明位置：`README.md`（顶部 + 安装小节）、`dsh-
       `win-smoke-test.mjs --tarball`，**通过 10 项 / 失败 0 项 / 告警 0 项**，退出码 0；完整报告见 §3）
 - [x] tarball 已产出并记录 sha256，且**两机 sha256 逐字节一致**（发布门禁红线 3；见 §3）
 - [x] **发布树已就绪并完成「发布物 == 已验证产物」字节级对账**（见 §3.4）：
-      `.worktrees/release-v0.15.0`（detached @ `7553005`）内 `bash scripts/build.sh` → `dist/`
+      `.worktrees/release-v0.15.0`（detached **@ tag `v0.15.0`**）内 `bash scripts/build.sh` → `dist/`
       实打 `pnpm pack` → sha256 **`c102aca6…`（414,102 B）与 Windows 已验产物完全相同**
-- [ ] `v0.15.0-test` 合并 → `main`，推送 `main`；**annotated tag `v0.15.0` 由负责人创建/推送**
-      （负责人已明确「不移 tag」：主管不新建、不迁移、不推送 tag）
-      ⚠️ 当前 `git describe --tags` 在发布树输出 `v0.12.0-18-g7553005`，**tag 存在前 §4 的
-      `describe == vX.Y.Z` 断言不成立**，需负责人先打 tag（或授权主管合并 `main` 后由负责人打 tag）
+- [x] `v0.15.0-test` 合并 → `main`（**合并提交 `727bd2e`**，`--no-ff`，父提交 `f0ec94b` + `225c9c3`）；
+      **annotated tag `v0.15.0` 已创建**（由主管按负责人 2026-09-21 明确授权执行；
+      **未推送** —— push 仍由负责人决定）
+      ✅ 发布树 `git describe --tags` = `v0.15.0`，§4 断言成立
+      > 注：本行与下一行的勾选回填于 tag 之后，故 **tag `727bd2e` 内的本清单副本仍显示未勾选**；
+      > `docs/` 不入发布包，不影响发布物（sha256 仍为 `c102aca6…`）。
 - [ ] 负责人执行 `pnpm publish`（npm 官方 registry）；**发布目录是 `dist/`，不是 `dsh-graph-host/`**
       —— 完整命令序列见 [`docs/release-handbook.md`](release-handbook.md) §4
       （已在树内构建好 `dist/`；发布前务必确认 `dist/` 内**无 `.tgz`**、文件数 **36**）
+      ⚠️ **前置必做**：`npm whoami --registry=https://registry.npmjs.org` **2026-09-21 实测返回
+      `E401 Unauthorized`** —— `~/.npmrc` 里的 token 已失效，**必须先 `npm login` 再 publish**
 - [ ] 发布后核验：全新隔离 profile 安装（`dsh plugin --profile <p> add dsh-graph`）→ 工具 / 看板 /
       skill 注册正常；`npm view dsh-graph version` = `0.15.0`
 
@@ -260,8 +264,19 @@ dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.13.0
    `find dist -type f | wc -l` == **36**、`find dist -name '*.tgz' | wc -l` == **0**。
    （本次已删除试打产物，当前两值分别为 36 / 0。）
 
-**尚未满足的一项**：发布树当前 `git describe --tags` = `v0.12.0-18-g7553005`，因为 **`v0.15.0` tag
-尚不存在**。§4 要求 `describe` 输出 `vX.Y.Z`；需负责人先打 tag（tag 归负责人，主管不建/不移/不推）。
+**tag 与发布树终态**：`v0.15.0-test` 已 `--no-ff` 合并进 `main`（合并提交 **`727bd2e`**），并创建
+annotated tag **`v0.15.0`**（经负责人 2026-09-21 明确授权；**未推送**）。发布树已重新指向 tag 并重建：
+
+| 项 | 值 |
+|---|---|
+| 发布树 HEAD | `727bd2e`（= tag `v0.15.0` 指向的合并提交） |
+| `git describe --tags` | `v0.15.0` ✅（§4 断言成立） |
+| `dist/package.json` version | `0.15.0` ✅ |
+| 树内重建后 `pnpm pack` sha256 | **`c102aca6…`**（与 Windows 已验产物仍逐字节相同） |
+| `dist/` 文件数 / tgz 数 | **36 / 0** ✅ |
+
+⇒ 合并与迁移到 tag 都**没有改变发布物**：从 tag 树构建出的产物与通过 Windows T1–T5 的那一份
+仍是**同一个 sha256**。
 
 **tarball 版本说明**：产物目录中的 tarball 已在本会话内**重新打包过一次**——首次打包（413,706 B /
 `1a275aba…`）之后又调整了 README 的「平台范围」措辞使其与门禁红线一致，故重新 `pnpm pack`
@@ -270,21 +285,63 @@ dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.13.0
 ## 4. 发布后检查项
 
 - [ ] 主 3080 profile 切回已发布版本（`bash scripts/dev-dsh-instance.sh main-published`）
-- [ ] **README 平台声明小改（负责人已决定「发布后再小改」）**：把 `dsh-graph-host/README.md`（中/英各一处）
-      与根 `README.md` 的平台范围从「最近一次三平台真机复验：`v0.11.0`」更新为含 `v0.15.0` 的表述。
-      **本次发布前故意不动**：`README.md` 在 tarball 内，改它会改变已验证产物的 sha256，导致
-      「已验证产物 ≠ 待发布产物」。⚠️ 注意副作用：**npm 包页面的 README 冻结于发布时的那一份**，
-      发布后再改只影响 GitHub 仓库首页；若要 npm 页面也同步，需一个 patch 版本重新发布。
+- [x] **推送 `main` + tag**（负责人 2026-09-21 授权）：`main` `f0ec94b..727bd2e`；annotated tag
+      `v0.15.0`（对象 `c45e8f6` → commit `727bd2e`）。远端核验：`refs/heads/main` = `727bd2e`、
+      `refs/tags/v0.15.0^{}` = `727bd2e`
+- [x] **`npm publish` 成功 + 线上版本核验**：`npm view dsh-graph version` = **`0.15.0`**；
+      线上 tarball `https://registry.npmjs.org/dsh-graph/-/dsh-graph-0.15.0.tgz` = 414,753 B /
+      sha256 `d72f8ea6183b57c0cdfce4598d2a647eeaef4d17c6aceda6b25db01a5c4a084f`
+- [x] **发布后产物对账（内容级，详见 §4.1）**：线上包与「Windows T1–T5 已验产物」
+      **文件清单 36/36 一致、逐文件内容逐字节一致**（解包后 `diff -r` 无差异）
+- [x] **独立安装核验**：全新隔离 `DSH_HOME` + 全新 profile，从 **npm** 安装 `dsh-graph@0.15.0`
+      成功（`dsh plugin --profile web add dsh-graph@0.15.0`），安装包版本读出 `0.15.0`
+- [x] **README 平台声明小改**（按负责人既定安排「发布后再小改」）：`dsh-graph-host/README.md`
+      中/英各一处 + 根 `README.md` 两处，由「最近一次三平台真机复验：`v0.11.0`」更新为
+      「v0.15.0 已在 Linux(WSL2) + 原生 Windows 重新实测；macOS 最近一次为 `v0.11.0`」
+      ⚠️ 该改动**只影响 GitHub 仓库首页**；**npm 包页面 README 仍冻结于发布时那一份**（符合预期，
+      如需 npm 页面同步须以 patch 版本重新发布）
+      ⇒ **副作用（须知）**：**仓库 tip 构建出的 `dist/` 已与发布物不同**（仅 `README.md` 一个文件，
+      重算 sha256 不再是 `c102aca6…`）。若要复现 v0.15.0 的发布物，请
+      `git checkout v0.15.0 && bash scripts/build.sh`（重建后仍得 `c102aca6…`，已实测）。
+- [x] 发布树已按 §4 步骤 6 移除（`git worktree remove .worktrees/release-v0.15.0`）
 - [ ] 开下一条开发线（`v0.16.0-test`，版本置 `0.16.0-alpha`）；
       **注意 v0.16.0 泳道已有排期目标**：g-326（按改动性质分级测试力度）、g-327（定义/润色请求
       直接投递主管会话）、g-311/g-312/g-313（评审与架构审查机制）
-- [ ] 按安全规则清理已合入的 attempt worktree / 分支（g-321-att-02/03、g-323-att-01/02 等）
+- [ ] 按安全规则清理已合入的 attempt worktree / 分支（当前 `.worktrees/` 下约 20 个待清理：
+      g-318～g-323 各 attempt、`dev-instance-pnpm-att-01`、`pi-graph-v1.0.0-alpha*` 等）
 - [ ] 看板：v0.15.0 标记为 released；`dsh-graph-videos` README 补发布链接（如本次有录制）
 - [x] **回填本文件 §2 的 Windows 真机门禁勾选与 §3 的对账表** — 已于 2026-09-21 发布前完成（T1–T5 PASS 10/0/0）
 
-> **tag 归属（负责人要求「不移 tag」）**：`git tag` 的新建/移动**一律由负责人执行**，
-> 主管不创建也不迁移 tag。手册 §4 的发布树流程以 `vX.Y.Z` tag 为起点，故 **publish 前需先由负责人
-> 打好 tag**；主管侧只准备并核对待发布产物（sha256 `c102aca6…`）。
+### 4.1 发布后对账：线上包 ≠ 本地包 sha256，但**内容逐字节相同**（重要）
+
+首次对账时发现线上 tarball 与本地已验 tarball **sha256 不同**，体积也差 651 B：
+
+| | 本地已验产物 | 线上（registry）产物 |
+|---|---|---|
+| 体积 | 414,102 B | **414,753 B** |
+| sha256 | `c102aca6…` | **`d72f8ea6…`** |
+| sha1 | `a455a32c…` | `806e4f79…`（= `dist.shasum`） |
+| 解包后文件数 | 36 | 36 |
+| 解包后文件清单 | — | **完全一致** |
+| 解包后逐文件内容 | — | **逐字节一致**（`diff -r` 无差异） |
+| 未压缩 tar 体积 | 1,564,672 B | **1,564,672 B（相同）** |
+| 包内文件 mtime | `1985-10-26 16:15` | `1985-10-26 16:15`（相同，均为可复现打包时间戳） |
+
+**结论：内容完全等价，差异纯粹来自打包层**——registry 会重写上传的 tarball（条目排序与 gzip
+参数/头不同；`file` 对本地件显示 `from Unix`、对线上件不显示）。故**不能用「发布物 sha256 ==
+本地 pack sha256」作为发布后对账判据**。
+
+> ⚠️ **发布后对账的正确判据**（修正跨版本做法）：
+> 1. `npm view dsh-graph version` = 目标版本；
+> 2. 拉线上 tarball 解包，与本地已验 tarball 解包结果做 **`diff -r`**（文件清单 + 逐文件字节）；
+> 3. 需要指纹时用**内容指纹**（逐文件 sha256 列表）而非 tarball sha256。
+>
+> 红线 3「记录 sha256 对账」用于**跨机器传递**（本机 ↔ Windows，实测 `c102aca6…` 两边全等），
+> 对 **registry 侧**应改用上述内容级判据。
+
+**发布树归属说明（历史）**：负责人最初要求「不移 tag」，随后于 2026-09-21 **明确授权**主管执行
+「合并 `main` + 创建 annotated tag `v0.15.0`」（推送另行授权）。最终执行为：主管合并+打 tag，
+负责人在收到推送授权后由主管推送 `main` 与 tag。**下次发布前应重新确认该授权边界。**
 
 ## 5. 已知问题（不阻断本次发布）
 

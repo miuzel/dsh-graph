@@ -86,7 +86,8 @@ gh repo edit miuzel/dsh-graph --add-topic dsh-plugin --add-topic dsh --add-topic
 ```sh
 # 0. 前置：确认 registry 与登录态（人工 gate）
 npm config get registry                             # 期望 https://registry.npmjs.org/
-npm whoami --registry=https://registry.npmjs.org    # 未登录再执行 npm login --registry=https://registry.npmjs.org
+npm whoami --registry=https://registry.npmjs.org    # ⚠️ 2026-09-21 实测 E401 → 现有 token 已失效
+npm login --registry=https://registry.npmjs.org     # ⇒ 发布前必须先重新登录（whoami 打印出用户名才算过）
 
 # 1. 把待发布内容合并到 main 并打 tag（由负责人执行；主管不新建/不迁移/不推送 tag）
 git checkout main && git merge --no-ff vX.Y.Z-test && git tag -a vX.Y.Z -m "dsh-graph vX.Y.Z"
@@ -105,16 +106,30 @@ node -p "require('./.worktrees/release-vX.Y.Z/dist/package.json').version"   # �
 # 4. 在 dist/ 里发布（发布物必须来自「tag 树构建出的 dist/」）
 (cd .worktrees/release-vX.Y.Z/dist && pnpm publish --registry=https://registry.npmjs.org --no-git-checks)
 
-# 5. 核验线上版本
-npm view dsh-graph version
+# 5. 核验线上版本 + 内容级对账
+npm view dsh-graph version                       # 期望 X.Y.Z
+# ⚠️ registry 会重写上传的 tarball（条目排序/gzip 不同）⇒ 线上 sha256 必然 ≠ 本地 pack sha256。
+#    不要拿 tarball sha256 比对；要解包后比内容：
+mkdir -p /tmp/pubcheck && cd /tmp/pubcheck && npm pack dsh-graph@X.Y.Z && tar -xzf dsh-graph-X.Y.Z.tgz
+diff -r /tmp/pubcheck/package <本地已验包解包目录>     # 必须无输出（文件清单 + 逐文件字节一致）
 
 # 6. 收尾：核验后清理发布树
 git worktree remove .worktrees/release-vX.Y.Z
 ```
 
-> 注意：**registry 与登录态（2026-09-21 实测更新）**——早先「`~/.npmrc` 指向 npmmirror 且未登录」
-> 的描述已过时：当前 `npm config get registry` 输出 `https://registry.npmjs.org/`，且 `~/.npmrc`
-> 已含 `//registry.npmjs.org/:_authToken=…`。发布前仍用步骤 0 的 `whoami` 复核一次即可。
+> **发布后对账判据（v0.15.0 实证修正）**：v0.15.0 实测线上 414,753 B / sha256 `d72f8ea6…`，
+> 本地已验 414,102 B / `c102aca6…`——**差 651 B 但内容完全等价**：解包后 36/36 文件、逐文件
+> `diff -r` 无差异，且两者**未压缩 tar 体积相同**（1,564,672 B）、包内 mtime 相同（registry 可复现
+> 时间戳）。差异纯在打包层（条目顺序 + gzip 头/参数）。故：
+> **跨机器传递**（本机 ↔ Windows）用 tarball sha256 对账（红线 3）；
+> **registry 侧**必须用**内容级**对账（`diff -r` 或逐文件 sha256 列表）。
+
+> 注意：**registry 与登录态（2026-09-21 实测更新）**——早先「`~/.npmrc` 指向 npmmirror 镜像且未登录」
+> 的描述已过时：当前 `npm config get registry` 输出 `https://registry.npmjs.org/`。
+> 但 `~/.npmrc` 里**虽存在** `//registry.npmjs.org/:_authToken=…`，该 token **实测已失效**：
+> `npm whoami --registry=https://registry.npmjs.org` 返回 **`E401 Unauthorized`**（2026-09-21）。
+> ⇒ **不能只看 `.npmrc` 里有 token 就认定已登录**；发布前必须 `npm login` 并确认 `whoami` 能打印
+> 出用户名，否则 `pnpm publish` 必定 401。这正是步骤 0 要求「必做」的原因。
 >
 > 沙箱内 pnpm 的 supply-chain policy 会对本地 tgz 误报（minimum-release-age），真实发布到官方
 > registry 后无此问题（该 policy 只查官方 registry 的发布时间）。
