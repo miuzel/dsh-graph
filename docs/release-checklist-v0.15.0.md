@@ -108,6 +108,10 @@ README 中的显式声明位置：`README.md`（顶部 + 安装小节）、`dsh-
 
 ## 3. Windows 真机门禁与产物对账
 
+**权威流程**见 [`docs/release-handbook.md`](release-handbook.md) §0–§7（尤其 §4 发布树标准流程）；
+**跨版本发布红线**（Windows 真机 T1–T5 / 版本号三处一致 / tarball + sha256 对账）的权威定义在
+仓库根 [`AGENTS.md`](../AGENTS.md) 的「发布门禁」段。本节只记录 **v0.15.0 的具体执行件与对账信息**。
+
 **执行件**：`scripts/win-smoke-test.mjs`（单文件、纯 Node、无第三方依赖，可直接拷到 Windows 运行）。
 本次随 tarball 一并拷贝了一份 `win-smoke-test.mjs` 到产物目录，无需从仓库取。
 

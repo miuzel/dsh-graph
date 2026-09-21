@@ -213,6 +213,15 @@ PR 合并后，dsh-market / DshMarketPlace / DSH Get 三家自动带出（同源
 
 ## 8. 发布 checklist（总）
 
+> ⚠️ **本节为历史存档（v0.4.0 / v0.5.1 时期），已不作当前版本的操作依据。**
+> §0–§7 的流程仍然有效（尤其 **§4 发布树标准流程**），但**每版本的检查清单已按版本独立成文**：
+>
+> - 当前版本：**[`docs/release-checklist-v0.15.0.md`](release-checklist-v0.15.0.md)**
+> - 上一版本：`docs/release-checklist-v0.10.0.md`
+>
+> 另注意：**跨版本发布红线（Windows 真机 T1–T5 门禁、版本号三处一致、tarball + sha256 对账）
+> 的权威定义在仓库根 [`AGENTS.md`](../AGENTS.md) 的「发布门禁」段，不在本手册内。**
+
 - [x] g-112 root 通用化完成（client patch 无硬编码路径，host/client 同一解析基准）
 - [x] B7 打包结构实现（boardPayload 移 core、core 副本进包、sync-core.sh、import 改包内路径）
 - [x] **B8 修复：core 编译为 .js 进包（node_modules 下可加载）**——tsconfig/tsc 链路 + sync-core.sh build 语义 + import 改 .js + 无 .ts 泄漏
