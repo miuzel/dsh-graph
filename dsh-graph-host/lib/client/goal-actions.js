@@ -279,10 +279,14 @@
           if (data.pending) {
             try {
               const rt = sessionsRt ?? appCtx?.get?.("sessions");
-              const session = supervisorSession && (rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession));
               // i18n-keep(category-b)：发往主管会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
-              if (session?.prompt) await session.prompt([{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }], "queue");
+              const parts = [{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }];
+              // g-323：与批量接受（batch-accept.js 的 notifySupervisorBatchAccept）共用同一份能力探测 helper：
+              // 0.1.6 需先 retain 才借得到 binding（无 get(id)），0.1.5 保持被动 binding ?? get 回退。
+              // 本处是事件回调（doAccept），绝不引入渲染期 retain；文案与 queue 模式逐字不变。
+              await promptSessionQueue(rt, supervisorSession, parts, "[dsh-graph-host] prompt supervisorSession failed:");
             } catch (err) {
+              // helper 已自兜底（绝不抛）；此处仅作最后一道防线，保持既有 console.warn 形态。
               console.warn("[dsh-graph-host] prompt supervisorSession failed:", err);
             }
             onRefresh?.();

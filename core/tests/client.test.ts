@@ -3966,3 +3966,176 @@ test("g-259 行为模拟：判据 1~4 全覆盖（成功生效、校验失败零
   }
 });
 
+
+// ===== g-323 att-002：单卡「接受」按钮的主管通知（goal-actions.js AcceptFeedback.doAccept） =====
+// att-001 只修了批量接受（batch-accept.js）；单卡接受是同形同根因的第二处：
+//   0.1.6-alpha.2 的 ClientSessions.binding(id) 只借用**已存在**的保留代际且类中无 get(id)，
+//   主管会话未被任何面板 retain 时，单卡接受的主管通知同样静默失效——而单卡接受更常用。
+// doAccept 是 AcceptFeedback 内部的闭包，无法直接 import；这里按 g-321 既有做法（花括号配平抠函数 +
+// vm 注入真实实现）从源码里精确抠出这个箭头函数，并把它的闭包自由变量显式注入——**执行的是模块里
+// 真实的 doAccept 代码本身**（不是重写一份），共享 helper 亦抠自 session-hooks.js 的真实
+// promptSessionQueue。故 goal-actions.js 的分流一旦回退为旧的单行 `binding ?? get`，
+// 下方 0.1.6 用例必然失败（负向对照 (b)）。
+
+/** 从源模块中按花括号配平抠出一个 `async (...) { ... }` / `async () => { ... }` 函数体。 */
+function extractBalanced(source: string, marker: string, fromIndex = 0): string {
+  const at = source.indexOf(marker, fromIndex);
+  assert.ok(at >= 0, `源模块中存在 ${marker}`);
+  let depth = 0;
+  for (let i = source.indexOf("{", at); i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) return source.slice(at, i + 1);
+    }
+  }
+  throw new Error(`${marker} 花括号无法配平`);
+}
+
+const goalActionsClientSrc = () => readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+const sessionHooksClientSrc = () => readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/session-hooks.js"), "utf8");
+
+/** 真实共享 helper：从 session-hooks.js 抠出 promptSessionQueue 并求值（与测试同 realm，便于断言）。 */
+function loadPromptSessionQueueHelper(): any {
+  const src = extractBalanced(sessionHooksClientSrc(), "async function promptSessionQueue(");
+  const helper = new Function(`${src}\nreturn promptSessionQueue;`)();
+  assert.equal(typeof helper, "function", "抠出的共享 helper 可调用");
+  return helper;
+}
+
+/** 真实 doAccept：抠出箭头函数并把闭包自由变量做成形参注入，返回可直接 await 的调用器。 */
+function makeDoAcceptRunner(rt: any, supervisorSession: any, goalId: string, jsonResult: any, onRefresh?: () => void) {
+  const src = goalActionsClientSrc();
+  const arrow = extractBalanced(src, "const doAccept = ").slice("const doAccept = ".length).trim();
+  assert.match(arrow, /^async \(\) => \{/, "抠到的确实是 doAccept 箭头函数");
+  const make = new Function(
+    "confirm", "dgT", "goalId", "setLoading", "setNote", "fetch", "graphUrl",
+    "onRefresh", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue", "console",
+    `return ${arrow};`,
+  );
+  return make(
+    () => true, (k: string) => k, goalId, () => {}, () => {},
+    async () => ({ json: async () => jsonResult }), (p: string) => p,
+    onRefresh ?? (() => {}), rt, null, supervisorSession, loadPromptSessionQueueHelper(), console,
+  ) as () => Promise<void>;
+}
+
+/** 0.1.6-alpha.2 宿主形态：无 get(id)；retain 才有保留代际；binding 是 getter（release 后读会抛错）。 */
+function makeDsh016RetainHost(session: any, record: { releases: number; retains: any[] }) {
+  let released = false;
+  return {
+    binding: () => undefined,
+    retain: (id: any, options: any) => {
+      record.retains.push({ id, options });
+      const reference: any = { sessionId: id, ready: Promise.resolve() };
+      Object.defineProperty(reference, "binding", {
+        get() {
+          if (released) throw new Error("Session reference is released");
+          return { session };
+        },
+      });
+      reference.release = () => { released = true; record.releases += 1; };
+      return reference;
+    },
+  };
+}
+
+test("g-323 单卡接受：0.1.6 retain 宿主（无 get）下 doAccept 发出恰好一条 queue 主管通知且 release 配平", async () => {
+  const arrow = extractBalanced(goalActionsClientSrc(), "const doAccept = ");
+  assert.match(arrow, /promptSessionQueue\(rt, supervisorSession, parts,/, "doAccept 必须消费共享 helper");
+  assert.match(arrow, /【负责人交付复核请求】/, "单卡文案逐字不变");
+  assert.doesNotMatch(arrow, /typeof\s+\w+\??\.\s*(using|retain)\s*===/, "doAccept 不得自带能力探测");
+
+  const prompts: any[] = [];
+  const record = { releases: 0, retains: [] as any[] };
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  const doAccept = makeDoAcceptRunner(makeDsh016RetainHost(session, record), "sup-1", "g-1", { pending: true });
+  await doAccept();
+
+  assert.equal(record.retains.length, 1, "0.1.6 单卡接受必须先 retain 才借得到会话");
+  assert.deepEqual(record.retains[0], { id: "sup-1", options: { source: "dsh-graph" } });
+  assert.equal(prompts.length, 1, "单卡接受必须恰好一条主管通知（不得 0 条，也不得 N 条）");
+  assert.equal(prompts[0].mode, "queue");
+  const text = String(prompts[0].parts[0].text);
+  assert.match(text, /【负责人交付复核请求】/);
+  assert.match(text, /「g-1」/, "文案含被接受的目标 id");
+  assert.doesNotMatch(text, /【负责人批量交付复核请求】/, "单卡不得误用批量文案");
+  assert.equal(record.releases, 1, "release 必须恰好配平一次（无代际泄漏）");
+});
+
+test("g-323 单卡接受：0.1.5 被动回退（只有 binding、无 retain/get）行为不退化", async () => {
+  const prompts: any[] = [];
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  const rt = { binding: (id: string) => (id === "sup-1" ? { session } : undefined) };
+  const doAccept = makeDoAcceptRunner(rt, "sup-1", "g-9", { pending: true });
+  await doAccept();
+  assert.equal(prompts.length, 1, "0.1.5 被动回退仍须恰好一条 queue 主管通知");
+  assert.equal(prompts[0].mode, "queue");
+  assert.match(String(prompts[0].parts[0].text), /【负责人交付复核请求】/);
+  assert.match(String(prompts[0].parts[0].text), /「g-9」/);
+});
+
+test("g-323 单卡接受：无 supervisorSession / prompt 抛错 / 非 pending 分支 → 静默不抛，接受流程零影响", async () => {
+  const prompts: any[] = [];
+  const probeSession = { prompt: async () => { prompts.push(1); } };
+  let refreshed = 0;
+  // 无 supervisorSession → 不通知，但仍完成 pending 分支的刷板
+  let doAccept = makeDoAcceptRunner({ binding: () => ({ session: probeSession }) }, null, "g-2", { pending: true }, () => { refreshed += 1; });
+  await doAccept();
+  assert.equal(prompts.length, 0, "无 supervisorSession 不得发消息");
+  assert.equal(refreshed, 1, "通知失败不得影响 pending 分支的刷板");
+  // 0.1.6 宿主但 prompt 抛错 → 静默（不穿出 doAccept）+ release 配平 + 仍刷板
+  const record = { releases: 0, retains: [] as any[] };
+  doAccept = makeDoAcceptRunner(
+    makeDsh016RetainHost({ prompt: async () => { throw new Error("prompt boom"); } }, record),
+    "sup-1", "g-3", { pending: true }, () => { refreshed += 1; },
+  );
+  await assert.doesNotReject(() => doAccept(), "prompt 抛错绝不得穿出 doAccept");
+  assert.equal(record.releases, 1, "prompt 抛错也必须 release 配平");
+  assert.equal(refreshed, 2, "通知失败仍须完成刷板");
+  // retain 抛 unknown session → 静默 + 不误发
+  const doAcceptFail = makeDoAcceptRunner({ binding: () => undefined, retain: () => { throw new Error("sessions.retain: unknown session sup-x"); } }, "sup-x", "g-5", { pending: true }, () => { refreshed += 1; });
+  await assert.doesNotReject(() => doAcceptFail(), "retain 抛错绝不得穿出 doAccept");
+  assert.equal(refreshed, 3, "retain 抛错仍须完成刷板");
+  // 后端返回非 pending → 完全不通知
+  doAccept = makeDoAcceptRunner({ binding: () => ({ session: probeSession }) }, "sup-1", "g-4", { ok: true }, () => { refreshed += 1; });
+  await doAccept();
+  assert.equal(prompts.length, 0, "非 pending 分支不得发主管通知");
+});
+
+test("g-323 单卡接受：0.1.6 有 using 的宿主优先走 using，恰好一条 queue 且 release 由 using 配平", async () => {
+  const prompts: any[] = [];
+  const usingCalls: any[] = [];
+  const retainCalls: any[] = [];
+  const record = { releases: 0, retains: [] as any[] };
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  let released = false;
+  const rt = {
+    binding: () => undefined,
+    retain: (id: any, options: any) => { retainCalls.push({ id, options }); return makeDsh016RetainHost(session, record); },
+    // using 真实语义：内部 try/finally 保证 release 恰好一次
+    using: async (target: any, options: any, operation: any) => {
+      usingCalls.push({ target, options });
+      const reference: any = { sessionId: target, ready: Promise.resolve() };
+      Object.defineProperty(reference, "binding", {
+        get() {
+          if (released) throw new Error("Session reference is released");
+          return { session };
+        },
+      });
+      reference.release = () => { released = true; record.releases += 1; };
+      try { return await operation(reference); } finally { reference.release(); }
+    },
+  };
+  const doAccept = makeDoAcceptRunner(rt, "sup-1", "g-7", { pending: true });
+  await doAccept();
+
+  assert.equal(usingCalls.length, 1, "有 using 时必须优先 using");
+  assert.deepEqual(usingCalls[0], { target: "sup-1", options: { source: "dsh-graph" } });
+  assert.equal(retainCalls.length, 0, "using 可用时不得再自行 retain");
+  assert.equal(prompts.length, 1, "单卡接受恰好一条 queue 主管通知");
+  assert.equal(prompts[0].mode, "queue");
+  assert.match(String(prompts[0].parts[0].text), /【负责人交付复核请求】/);
+  assert.match(String(prompts[0].parts[0].text), /「g-7」/);
+  assert.equal(record.releases, 1, "release 必须恰好一次（无代际泄漏）");
+});

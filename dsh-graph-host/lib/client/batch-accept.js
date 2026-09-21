@@ -110,15 +110,19 @@
 
     // 发送聚合主管通知：整批**一条** queue 消息；无 supervisorSession / 会话不可用 → 静默跳过（返回 false），
     // 绝不影响接受流程本身；不得产生 N 条刷屏。
+    //
+    // g-323：能力探测（using / retain / 0.1.5 被动回退）**不在本文件**——已抽成工厂作用域共享 helper
+    // promptSessionQueue（session-hooks.js，早于本模块装配），本处与 goal-actions.js 的单卡接受通知
+    // 共用同一份判定，禁止各写一遍。本函数是事件回调而非渲染期 hook，helper 内部也不含渲染期 retain。
+    // 文案逐字不变：仍由 batchAcceptSupervisorMessage 生成、仍恰好一条 queue 消息。
     async function notifySupervisorBatchAccept(supervisorSession, goalIds) {
       if (!supervisorSession || !Array.isArray(goalIds) || goalIds.length === 0) return false;
       try {
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
-        const session = rt?.binding?.(supervisorSession)?.session ?? rt?.get?.(supervisorSession);
-        if (!session?.prompt) return false;
-        await session.prompt([{ type: "text", text: batchAcceptSupervisorMessage(goalIds) }], "queue");
-        return true;
+        const parts = [{ type: "text", text: batchAcceptSupervisorMessage(goalIds) }];
+        return await promptSessionQueue(rt, supervisorSession, parts, "[dsh-graph-host] batch accept: prompt supervisorSession failed:");
       } catch (err) {
+        // helper 已自兜底（绝不抛）；此处仅作最后一道防线，保持既有 console.warn 形态。
         console.warn("[dsh-graph-host] batch accept: prompt supervisorSession failed:", err);
         return false;
       }
