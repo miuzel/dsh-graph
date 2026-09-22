@@ -450,7 +450,7 @@ const ZH_TOKENS = [
   "`review.fast_track`",
   "零副作用",
   "不是引擎强制",
-  "（g-248 未接线）",
+  "评审子代理的派发入口（尚未接线）",
   "不得绕过 `delivered` 人工 gate",
 ];
 const EN_TOKENS = [
@@ -468,7 +468,7 @@ const EN_TOKENS = [
   "`review.fast_track`",
   "zero side effects",
   "not engine enforcement",
-  "(g-248 not wired)",
+  "reviewer-subagent dispatch entry point yet (not wired up)",
   "must not bypass the `delivered` human gate",
 ];
 
