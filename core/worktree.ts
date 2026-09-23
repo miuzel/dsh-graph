@@ -31,6 +31,25 @@ function trees(cwd: string): GitTree[] {
 function goalStatus(root: string, goal: string): string | null {
   try { return String(loadGoal(findGoalFile(root, goal)).meta.status ?? ""); } catch { return null; }
 }
+/**
+ * g-329：attempt.md 中 `result` 的**终态取值**——命中即代表该 attempt 不再活跃。
+ *
+ * 该表必须与所有「结束 attempt」写入点的实际取值逐一核对，写入方新增取值时必须同步
+ * 在此登记，否则 isActive 会保守地把已结束的 attempt 判为活跃，其 worktree 被
+ * `protected / attempt_active` 永久锁死（放弃路径漏登记 `cancelled` 即此故障的成因）。
+ * 写入点与对应事件（事件流为审计真源，见 events.ts 的追加语义）：
+ *  - `abandonAttempt`（core/ops.ts）：`attempt.abandoned` → `result="cancelled"`
+ *  - `unbindGoalChild` 正常解绑（core/ops.ts）：`attempt.unbound` → 原 pending 置 `result="detached"`
+ *  - 解绑时被取代的旧 attempt（core/ops.ts, g-190）：`attempt.superseded` → `result="superseded"`
+ *  - 评审/交付路径：`selected` / `merged` / `rejected` / `completed` / `failed`
+ * 口径对齐：ops.ts 的 `attemptIsActive()`（暂缓/删除门禁）以 `detached === true || result !== "pending"`
+ * 判非活跃，客户端 `hasActiveExecutionAttempt()` 亦以 `result !== "pending"` 收敛；
+ * 本表是同一语义的工作树侧显式版本，只对已知终态放行，未知取值仍保守视为活跃。
+ */
+const ATTEMPT_TERMINAL_RESULTS = [
+  "completed", "failed", "selected", "merged", "rejected", "superseded",
+  "cancelled", "detached",
+] as const;
 function isActive(root: string, goal: string, attempt: string): boolean {
   try {
     const file = join(dirname(findGoalFile(root, goal)), "attempts", attempt, "attempt.md");
@@ -38,7 +57,7 @@ function isActive(root: string, goal: string, attempt: string): boolean {
     const meta = loadGoal(file).meta as any;
     const result = meta.result;
     if (typeof result !== "string") return true;
-    if (result !== "pending" && !["completed", "failed", "selected", "merged", "rejected", "superseded"].includes(result)) return true;
+    if (result !== "pending" && !(ATTEMPT_TERMINAL_RESULTS as readonly string[]).includes(result)) return true;
     if (result !== "pending") return false;
     // g-247: structured state is authoritative; legacy text parsing is fallback only.
     if (["working", "blocked", "done", "error"].includes(meta.status_state)) return meta.status_state === "working";
