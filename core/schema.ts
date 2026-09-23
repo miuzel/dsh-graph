@@ -369,6 +369,15 @@ export const projectConfigPatchSchema: ObjectSchema = {
       },
       additionalProperties: false,
     },
+    // g-311：顶层 review.policy（分级评审机制）。三值之外一律拒绝（含 "" 与大小写不符），
+    // null 表示「未配置」→ 由 core/review-policy.ts 按目标类型派生。
+    review: {
+      type: "object",
+      properties: {
+        policy: { type: "string", enum: ["auto", "strict", "none"], nullable: true },
+      },
+      additionalProperties: false,
+    },
   },
   additionalProperties: false,
 };

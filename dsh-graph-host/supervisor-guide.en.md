@@ -124,6 +124,24 @@ memory and follow it in subsequent reviews; **do not hard-code this project's ch
 - **Restricted `@att/` syntax**: record known limitations in the relevant goal or long-term memory; do not infinitely expand regex boundaries.
 - **Shared infrastructure first**: prefer shared transaction/error handling and REST schema middleware over repeated fixes in individual features.
 
+#### Graded Review and Machine Fast Track
+
+- **Three policy values**: top-level `review.policy ∈ {auto, strict, none}` in `project.yaml` (unset reads as null).
+  - `auto`—permits the machine fast-track gates;
+  - `strict`—an independent (author-unbiased) review subagent must be dispatched, and `fast_track` is forbidden;
+  - `none`—neither independent review nor the machine gates are required (zero-risk docs/memory changes only), yet it still must not bypass the `delivered` human gate.
+- **Derived from the goal type when unset**: `patch`/`chore` → `auto`; `feature`/`bug`/`task`/`improvement` → `strict`; empty/invalid type → `strict` (safe-side fallback).
+- **Closed set that forces strict** (any single hit wins; an explicit `auto`/`none` cannot override it): changed paths include `core/schema.ts` or `schema/SCHEMA.md` (contract freeze); product-code churn is ≥150 lines; changes span ≥3 top-level regions (`core` / `dsh-graph-host` / `lib/client` / `prompts` / `scripts`); the supervisor explicitly declares `strict_required` (covering core-layer rewrites that paths and line counts cannot express).
+- **Four machine gates** (each executable; measure every one before calling `graph_resolve_accept(fast_track=true, machine_report=…)`):
+  1. Full tests: `node --test core/tests/*.test.ts` → `exit_code=0` and `fail=0` (both conditions; truncated text alone misleads);
+  2. Type check: `./node_modules/.bin/tsc --noEmit -p tsconfig.json` → `exit_code=0`; state the coverage gap honestly—the `include` of `tsconfig.json` is only `core/*.ts`, so `core/tests` and host `.js` fall outside it;
+  3. Change size: product-code insertions plus deletions from `git diff --numstat <attempt.baseline_commit> HEAD` total under 150 lines (excluding `core/tests/**`, `*.md` and generated artifacts; under a worktree, run it inside the attempt worktree), and `git status --porcelain` confirms no untracked new files (untracked files never appear in numstat, so commit first);
+  4. Criteria verified: every criterion line of the goal ends with `✅已验` (computed from `goal.md`; the caller's self-report is never trusted).
+- **fail-safe**: if any signal is unavailable (command failed, report field missing, baseline unusable), do not pass the gate, and never treat "no evidence" as "evidence of truth".
+- **Behavior on success**: `graph_resolve_accept(fast_track=true, …)` first appends a `review.fast_track` event (carrying the four machine evidence items and the baseline), then follows the same accept mapping; any failing item rejects with zero side effects (status unchanged, no `review.passed` event).
+- **Boundary (stated honestly)**: "strict must dispatch an independent review subagent" is only a decision plus a guide constraint at the plugin layer, not engine enforcement—the plugin layer has no reviewer-subagent dispatch entry point yet (not wired up); `delivered` is still reachable only through the existing accept and human paths, and the fast track adds no route around the human gate.
+- **Docs-only or memory-only changes** may set `review.policy: none` to skip the machine gates; that waives machine evidence collection only, never the owner's final decision on `delivered`.
+
 #### Test Intensity Tiers (by Nature of Change)
 
 The purpose of testing is to prove behavior is correct, not to manufacture an assertion for every change. When writing criteria and dispatching, choose a tier by the nature of the change:

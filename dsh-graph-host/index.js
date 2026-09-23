@@ -117,6 +117,7 @@ import {
   readPromptOverrideValue,
   readProjectConfig,
   writeProjectConfig,
+  REVIEW_POLICIES,
   listWorktrees,
   cleanWorktree,
   SUBAGENT_MODES,
@@ -1988,24 +1989,31 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_resolve_accept",
-        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。",
+        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict）且 machine_report 四项门禁全绿（tests exit_code=0 且 fail=0、typecheck exit_code=0、产品代码增删 <150 行且无未跟踪新文件、全部判据以 ✅已验 结尾，由引擎自算）；任一不满足即拒绝且零副作用，通过则记 review.fast_track 事件。",
         parameters: params({
           goal: str,
           verdict: { type: "string", enum: ["accept", "object"] },
           objection: str,
           force: { type: "boolean" },
           reason: str,
+          fast_track: { type: "boolean", description: "机器快速放行开关；缺省 false（默认路径逐字不变）。" },
+          machine_report: {
+            type: "object",
+            description: "机器证据包：{ baseline_commit, changed_paths[], product_changed_lines, untracked_files, tests:{exit_code,fail}, typecheck:{exit_code}, strict_required? }。门禁 ④（全部判据 ✅已验）由引擎自算，报告不得自报。",
+          },
         }, ["goal", "verdict"]),
       },
       run: (a, ex) => {
-        resolveAccept(rootFor(ex), a.goal, {
+        const r = resolveAccept(rootFor(ex), a.goal, {
           actor: actorOf(ex),
           verdict: a.verdict,
           objection: a.objection,
           force: a.force,
           reason: a.reason,
+          fast_track: a.fast_track,
+          machine_report: a.machine_report,
         });
-        return { ok: true };
+        return { ok: true, fast_track: r.fast_track === true };
       },
     },
     {
@@ -2133,6 +2141,10 @@ export function apply(ctx, config) {
             "executor.mode": SUBAGENT_MODES,
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],
+            },
+            // g-311：顶层 review.policy 三值；未配置为 null，按目标类型派生策略。
+            "review.policy": {
+              values: [...REVIEW_POLICIES],
             },
           },
         });
@@ -2443,9 +2455,9 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, verdict, objection, force, reason } = body;
+          const { goal, verdict, objection, force, reason, fast_track, machine_report } = body;
           if (!goal || !verdict) return json(res, 400, { error: "missing goal or verdict" });
-          resolveAccept(rootForReq(req, body), goal, { actor: "human:gui", verdict, objection, force, reason });
+          resolveAccept(rootForReq(req, body), goal, { actor: "human:gui", verdict, objection, force, reason, fast_track, machine_report });
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;

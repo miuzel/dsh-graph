@@ -209,6 +209,28 @@ export function countCriteria(body: string): number {
   return criteriaItems(body).length;
 }
 
+/** 判据「已验」标记：判据项文本以此结尾才算该项已验（机器快速放行门禁 ④ 的判定依据）。 */
+export const CRITERIA_VERIFIED_MARK = "✅已验";
+
+/** 单项判据是否已验：规范化行文本（含 `1. ` 序号）去除尾部空白后以 ✅已验 结尾。 */
+export function isCriterionVerified(item: string): boolean {
+  return String(item ?? "").trimEnd().endsWith(CRITERIA_VERIFIED_MARK);
+}
+
+/** 已验判据项（与 {@link criteriaItems} 同源顺序；供门禁 ④ 与看板复用）。 */
+export function verifiedCriteriaItems(body: string): string[] {
+  return criteriaItems(body).filter(isCriterionVerified);
+}
+
+/**
+ * 全部判据是否均已验——机器快速放行门禁 ④ 的唯一权威来源。
+ * **无判据时为 false**：没有判据就没有可核验的验收口径，不得快速放行。
+ */
+export function allCriteriaVerified(body: string): boolean {
+  const items = criteriaItems(body);
+  return items.length > 0 && items.every(isCriterionVerified);
+}
+
 /**
  * g-170：重写质量判据小节内容（不含 `## 质量判据` 标题行，与 sectionText 同构）。
  * 只替换「判据项行」（与 criteriaItems 同源定义：非空、非 HTML 注释、非模板占位行），
