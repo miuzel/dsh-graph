@@ -3621,7 +3621,7 @@ test("g-246 源契约：settings-modal.js 提供规范化脏判定函数且所�
   assert.match(modal, /function settingsDraftIsDirty\(baseline, form, refreshIntervalInput\)/);
   // 统一拦截函数存在，确认文案明确
   assert.match(modal, /const requestClose = \(\) => \{/);
-  assert.match(modal, /window\.confirm\(dgT\("common\.confirm"\)\)/);
+  assert.match(modal, /window\.confirm\(dgT\("settings\.discardDirtyConfirm"\)\)/);
   // saving 中阻止关闭（避免保存与关闭确认竞态）
   assert.match(modal, /if \(saving\) \{ setNote\(\{ kind: "err", text: dgT\("common\.saving"\) \}\); return; \}/);
   // ✕（loading/失败/主表单 3 处）+ 底部「关闭」按钮全部走同一 requestClose
@@ -3699,7 +3699,7 @@ test("g-246 生成 bundle 契约：client.js 同步含脏判定与统一拦截",
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
   assert.match(bundle, /function normalizeSettingsDraft\(/);
   assert.match(bundle, /function settingsDraftIsDirty\(/);
-  assert.match(bundle, /window\.confirm\(dgT\("common\.confirm"\)\)/);
+  assert.match(bundle, /window\.confirm\(dgT\("settings\.discardDirtyConfirm"\)\)/);
   assert.match(bundle, /useBackdropClose\(requestClose\)/);
 });
 
@@ -3938,7 +3938,7 @@ test("g-259 行为模拟：判据 1~4 全覆盖（成功生效、校验失败零
     h.calls.confirm = [];
     h.harness.requestClose();
     assert.equal(h.calls.confirm.length, 1, "关窗被拦截，弹出 confirm 提示");
-    assert.equal(h.calls.confirm[0], "common.confirm");
+    assert.equal(h.calls.confirm[0], "settings.discardDirtyConfirm");
     // 用户确认丢弃并关闭，localStorage 严格保持原值 10，无脏数据泄露
     assert.equal(h.store.get("dsh-graph.refresh-interval"), "10", "确认丢弃后原值 10 严格保持");
 

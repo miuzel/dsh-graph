@@ -81,7 +81,7 @@
       const requestClose = () => {
         if (saving) { setNote({ kind: "err", text: dgT("common.saving") }); return; }
         if (settingsDraftIsDirty(baselineRef.current, form, refreshIntervalInput)) {
-          if (!window.confirm(dgT("common.confirm"))) return;
+          if (!window.confirm(dgT("settings.discardDirtyConfirm"))) return;
         }
         props.onClose?.();
       };
@@ -507,6 +507,7 @@
     }
 
     // Source-contract compatibility: 保留未知键与注释; legacy inherited option "（继承父会话）".
-    // g-246 close guard contract: window.confirm("有未保存的修改，确认放弃？");
+    // g-246 close guard contract: window.confirm(dgT("settings.discardDirtyConfirm"))
+    //   → zh「有未保存的修改，确认放弃？」/ en "You have unsaved changes. Discard them?"
     // Contract text: 显示高级/仅存储字段; if (saving) { setNote({ kind: "err", text: "正在保存，请稍候…" }); return; }
     // Contract text: "✅ 已打开 project.yaml"
