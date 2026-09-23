@@ -506,7 +506,15 @@ export function generateHandoff(
     limit: opts.memoryLimit ?? 20,
   });
   const structuredMemories = recalled.matches;
-  const safeMemory = (s: string) => s.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/```/g, "'''").replace(/^(\s*)(system|assistant|user)\s*:/gim, "$1[$2]:").slice(0, 500);
+  // g-339：注入侧单条上限与存储上限同源（MEMORY_LIMITS），**绝不静默截断**。
+  // 存储侧已拒绝 >on_demand 码点的条目，正常数据不会走到标记分支；一旦 memory.jsonl 里
+  // 出现超长条目（历史遗留 / 手工编辑），注入必须留下**明确可见**的截断标记，而不是悄悄砍半。
+  const safeMemory = (s: string, limit: number = MEMORY_LIMITS.on_demand) => {
+    const cleaned = s.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/```/g, "'''").replace(/^(\s*)(system|assistant|user)\s*:/gim, "$1[$2]:");
+    const codepoints = [...cleaned];
+    if (codepoints.length <= limit) return cleaned;
+    return `${codepoints.slice(0, limit).join("")}……［本条已截断：单条上限 ${limit} 字符，原文 ${codepoints.length} 字］`;
+  };
 
   parts.push("## 长期记忆", "");
   if (structuredMemories.length > 0) {
@@ -518,8 +526,8 @@ export function generateHandoff(
       const value = safeMemory(m.text);
       const id = safeMemory(m.id);
       const row = `- **${id}** ${tag} ${value}`;
-      if (memoryChars + row.length > 4000) {
-        parts.push("- ...（已达到 4000 字符上限，剩余条目已截断）");
+      if (memoryChars + row.length > MEMORY_INJECT_TOTAL_BUDGET) {
+        parts.push(`- ...（已达到 ${MEMORY_INJECT_TOTAL_BUDGET} 字符上限，剩余条目已截断）`);
         break;
       }
       parts.push(row);
@@ -6994,6 +7002,26 @@ export function setGoalTags(
 
 // ===== g-105：记忆管理操作（add / replace / remove / recall） =====
 
+/** g-339：记忆单条硬上限的**真源常量**（码点计数，非 UTF-16 长度）。
+ *
+ *  存储侧校验（`validateMemoryInput`）与注入侧渲染（`generateHandoff` 里的 `safeMemory`）
+ *  必须共用同一个值：只放宽存储、不放宽注入，会让「新上限之内的长条目」从「诚实拒绝」
+ *  退化成「写进去了但注入被静默截断」——比拒绝更危险。两边都从这里取值即可锁死一致性。
+ *
+ *  注意：`dsh-graph-host/lib/client/*.js` 是**独立打包的客户端 bundle**，无法 import 本文件；
+ *  客户端副本（client/constants.js）与 host 文案（index.js、lib/server-i18n.js）的一致性
+ *  由 `core/tests/memory-limits-g339.test.ts` 的断言核对——断言是现有构建下唯一可达手段，
+ *  这里不声称「字面共享常量」。 */
+export const MEMORY_LIMITS = {
+  /** 常驻记忆（standing）单条硬上限：200 字铁律，本目标不动 */
+  standing: 200,
+  /** 按需记忆（on_demand）单条硬上限：g-339 放宽到 1000（硬上限，超限报错；旧值见 g-339 事件流） */
+  on_demand: 1000,
+} as const;
+
+/** g-339：注入/交接时结构化记忆段的总字符预算。单条上限放宽**不**改变它。 */
+export const MEMORY_INJECT_TOTAL_BUDGET = 4000;
+
 const SECRET = /(authorization\s*:\s*bearer|bearer\s+[a-z0-9._-]{12,}|(?:api[_ -]?key|token|password|secret)\s*[:=]\s*\S+)/i;
 
 function validateMemoryText(value: unknown, field: string): string {
@@ -7010,11 +7038,11 @@ function validateMemoryInput(opts: any, replace = false): void {
   if (opts.importance !== undefined && (typeof opts.importance !== "number" || !Number.isFinite(opts.importance) || opts.importance < 1 || opts.importance > 5)) throw new GraphError("importance 必须为 1-5 数字");
   if (opts.source_goal !== undefined) { validateMemoryText(opts.source_goal, "source_goal"); }
   const text = validateMemoryText(opts.text, "text");
-  // 铁律：常驻记忆单条硬上限 ≤ 200 字；普通记忆单条 ≤ 500 字
-  if (opts.scope === "standing" && [...text].length > 200) {
-    throw new GraphError(`常驻记忆 (standing) 每条文字硬上限为 200 字符（当前 ${[...text].length} 字），请精炼后写入`);
-  } else if ([...text].length > 500) {
-    throw new GraphError(`记忆内容每条上限 500 字符（当前 ${[...text].length} 字）`);
+  // 铁律：常驻记忆单条硬上限 200 字（不动）；按需记忆单条硬上限见 MEMORY_LIMITS.on_demand
+  if (opts.scope === "standing" && [...text].length > MEMORY_LIMITS.standing) {
+    throw new GraphError(`常驻记忆 (standing) 每条文字硬上限为 ${MEMORY_LIMITS.standing} 字符（当前 ${[...text].length} 字），请精炼后写入`);
+  } else if ([...text].length > MEMORY_LIMITS.on_demand) {
+    throw new GraphError(`记忆内容每条上限 ${MEMORY_LIMITS.on_demand} 字符（当前 ${[...text].length} 字）`);
   }
 }
 
