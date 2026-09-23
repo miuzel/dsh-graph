@@ -95,6 +95,9 @@ function renderSettingsModal(modalSrc: string, snapshot: any, zh: Dict) {
   const sandbox: any = {
     console,
     h,
+    // 与 helpers.js dgOverlay 同语义的轻量复刻：vm 沙箱无 DOM/ReactDOM，退化为裸 div
+    // （弹层 portal 落点不影响本文件断言的渲染结构；断言强度不变）
+    dgOverlay: (props: any, ...children: any[]) => h("div", props, ...children),
     settingsModalModeInstanceSeq: 0,
     dgT: (k: string) => zh[k] ?? k,
     S: new Proxy({}, { get: () => ({}) }),
