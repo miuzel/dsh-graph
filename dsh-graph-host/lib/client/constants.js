@@ -1,3 +1,13 @@
+    // g-339：记忆单条硬上限（**客户端副本**）。
+    // 真源在 core/ops.ts 的 MEMORY_LIMITS；lib/client/*.js 是独立打包的浏览器 bundle，
+    // 无法 import core 常量，故此处只能放副本——两边的数值一致性由
+    // core/tests/memory-limits-g339.test.ts 的一致性断言核对（改一边不改另一边必红）。
+    // standing 200 为常驻铁律（不动）；on_demand 1000 为本目标放宽后的硬上限。
+    const MEMORY_LIMITS = { standing: 200, on_demand: 1000 };
+    // 前端拦截与输入提示统一走这里，保证与服务端同阈值：
+    // 前端绝不放行超限输入去吃服务端报错（判据 6）。
+    function memLimit(scope) { return scope === "standing" ? MEMORY_LIMITS.standing : MEMORY_LIMITS.on_demand; }
+
     // g-174：标题栏显示的插件版本（快速通道：硬编码当前包版本，不做版本号自动同步机制）
     const PLUGIN_VERSION = "0.16.0-alpha";
 
