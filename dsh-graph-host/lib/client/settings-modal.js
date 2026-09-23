@@ -177,14 +177,14 @@
       };
 
       if (loading) {
-        return h("div", { style: S.overlay, ...backdropGuard },
+        return dgOverlay({ style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
             h("div", { style: S.modalH }, dgT("settings.title")),
             h("div", { style: { ...S.meta, marginTop: 8 } }, dgT("settings.loading"))));
       }
       if (!form) {
-        return h("div", { style: S.overlay, ...backdropGuard },
+        return dgOverlay({ style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
             h("div", { style: S.modalH }, dgT("settings.title")),
@@ -315,7 +315,7 @@
         if (typeof effort?.id === "string" && effort.id !== "") effortOptions.push(opt("effort:" + effort.id, effort.id, effort.name ?? effort.id));
       }
 
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
           h("div", { style: S.modalH }, dgT("settings.title")),

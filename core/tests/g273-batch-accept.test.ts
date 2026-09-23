@@ -648,6 +648,9 @@ function makeModalSandbox(locale: "zh" | "en") {
         onClick: (e: any) => { if (inside) { inside = false; return; } onClose?.(); },
       };
     },
+    // 与 helpers.js dgOverlay 同语义的轻量复刻：vm 沙箱无 DOM/ReactDOM，退化为裸 div
+    // （弹层 portal 落点不影响本文件断言的渲染结构；断言强度不变）
+    dgOverlay: (props: any, ...children: any[]) => h("div", props, ...children),
     window: {
       addEventListener: (name: string, fn: any) => { if (name === "keydown") keydownHandlers.push(fn); },
       removeEventListener: () => {},

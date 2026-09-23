@@ -1413,7 +1413,7 @@
             planEntryNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, planEntryNote) : null);
 
       return h(React.Fragment, null,
-        h("div",
+        dgOverlay(
           { style: S.overlay, ...backdropGuard },
           // g-158：弹窗顶部边框使用类型色（与卡片左侧色条、标题 badge 同色）
           h("div", { style: { ...S.modal, borderTop: `3px solid ${currentTypeColor}` }, onClick: (e) => e.stopPropagation() },
