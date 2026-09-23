@@ -1519,6 +1519,7 @@ test("g-247 客户端 formatStatusWithLifecycle：结构化状态优先，缺失
 });
 
 test("g-168 复制失败 fallback：初始隐藏且只在失败后显示可复制请求", () => {
+  // g-327：这套降级契约是「投递不可用」时的兜底路径，逐字保留；直发分支见文件末尾的 g-327 用例。
   const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
   assert.ok(/const \[fallback, setFallback\] = React\.useState\(false\)/.test(actions));
   assert.ok(/setFallback\(!copied\)/.test(actions));
@@ -4141,4 +4142,261 @@ test("g-323 单卡接受：0.1.6 有 using 的宿主优先走 using，恰好一�
   assert.match(String(prompts[0].parts[0].text), /【负责人交付复核请求】/);
   assert.match(String(prompts[0].parts[0].text), /「g-7」/);
   assert.equal(record.releases, 1, "release 必须恰好一次（无代际泄漏）");
+});
+
+
+// ===== g-327：定义/润色「发送给主管」——能直发就直发，不能直发完整退回 g-168 复制契约 =====
+// 能力分流（using / retain / 0.1.5 被动回退）全部在共享 helper promptSessionQueue 内部按**能力**判定；
+// openSupervisor 只按它的返回值分流，自身绝不写版本号分支、也绝不自带第二份 using/retain 探测。
+// 下列 runner 从源码里按花括号配平抠出**真实的 openSupervisor 箭头函数**并注入其闭包自由变量，
+// 共享 helper 同样抠自 session-hooks.js 的真实实现——执行的是模块里的真实代码，不是重写的一份。
+
+let cachedGoalActionsI18n: { zh: Record<string, string>; en: Record<string, string>; dgT: any } | null = null;
+/** 真实 i18n 字典 + 中文降级 dgT：从 i18n.js 求值（与 g-272 既有做法一致）。 */
+function goalActionsI18n() {
+  if (cachedGoalActionsI18n) return cachedGoalActionsI18n;
+  const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/i18n.js"), "utf8");
+  const sandbox: any = { React: {}, console };
+  vm.runInNewContext(source + "; this.zh = zh; this.en = en; this.dgT = createTranslator();", sandbox);
+  cachedGoalActionsI18n = { zh: sandbox.zh, en: sandbox.en, dgT: sandbox.dgT };
+  return cachedGoalActionsI18n;
+}
+
+/** 真实 openSupervisor：抠出箭头函数 + 注入闭包自由变量，返回可 await 的调用器与可观测状态。 */
+function makeOpenSupervisorRunner(opts: {
+  rt: any; supervisorSession: any; request: string;
+  copyText?: (text: string) => boolean | Promise<boolean>;
+  appCtx?: any;
+}) {
+  const arrow = extractBalanced(goalActionsClientSrc(), "const openSupervisor = ").slice("const openSupervisor = ".length).trim();
+  assert.match(arrow, /^async \(\) => \{/, "抠到的确实是 openSupervisor 箭头函数");
+  const state = {
+    loading: [] as boolean[], notes: [] as any[], modes: [] as any[], fallbacks: [] as any[],
+    toasts: [] as string[], opened: [] as any[], activated: 0, copied: [] as string[],
+  };
+  const make = new Function(
+    "dgT", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue", "request",
+    "copyText", "openSessionTarget", "activateChatTab", "showToast",
+    "setLoading", "setMode", "setNote", "setFallback",
+    `return ${arrow};`,
+  );
+  const run = make(
+    goalActionsI18n().dgT, opts.rt, opts.appCtx ?? null, opts.supervisorSession, loadPromptSessionQueueHelper(), opts.request,
+    // 记录每一次调用：直发成功分支若也走剪贴板，state.copied 会立刻非空（强负向对照）
+    async (text: string) => { state.copied.push(text); return opts.copyText ? await opts.copyText(text) : false; },
+    (...args: any[]) => { state.opened.push(args); },
+    () => { state.activated += 1; },
+    (text: string) => { state.toasts.push(text); },
+    (v: boolean) => { state.loading.push(v); },
+    (v: any) => { state.modes.push(v); },
+    (v: any) => { state.notes.push(v); },
+    (v: any) => { state.fallbacks.push(v); },
+  ) as () => Promise<void>;
+  return { run, state };
+}
+
+/** 0.1.6 形态的 using 宿主：内部 try/finally 保证 release 恰好一次（真实语义）。 */
+function makeDsh016UsingHost(session: any, record: { releases: number; usingCalls: any[]; released: boolean }) {
+  return {
+    binding: () => undefined,
+    using: async (target: any, options: any, operation: any) => {
+      record.usingCalls.push({ target, options });
+      const reference: any = { sessionId: target, ready: Promise.resolve() };
+      Object.defineProperty(reference, "binding", {
+        get() {
+          if (record.released) throw new Error("Session reference is released");
+          return { session };
+        },
+      });
+      reference.release = () => { record.released = true; record.releases += 1; };
+      try { return await operation(reference); } finally { reference.release(); }
+    },
+  };
+}
+
+test("g-327 直发契约（源码）：先投递后复制、直发成功分支不写剪贴板，兜底复制契约逐字保留", () => {
+  const open = extractBalanced(goalActionsClientSrc(), "const openSupervisor = ");
+  // 版本号/代际判断只在**可执行代码**里违规，注释里说明代际不算（与 g-273/g-321 既有断言口径一致）
+  const stripComments = (s: string) => s.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+  const code = stripComments(open);
+
+  // 分流完全交给共享 helper：自身零探测、零版本号判断
+  assert.match(code, /promptSessionQueue\(rt, supervisorSession,/, "openSupervisor 必须消费共享 helper");
+  assert.doesNotMatch(code, /typeof\s+\w+\??\.\s*(using|retain)\s*===/, "不得自带 using/retain 探测");
+  assert.doesNotMatch(code, /0\.1\.[0-9]|alpha/, "不得写版本号/代际分支");
+
+  // 顺序：投递尝试必须先于剪贴板复制（复制只是投递失败后的兜底）
+  const deliverAt = code.indexOf("promptSessionQueue(");
+  const copyAt = code.indexOf("copyText(request)");
+  assert.ok(deliverAt >= 0, "存在直发调用");
+  assert.ok(copyAt > deliverAt, "必须先尝试直发，copyText 只能是投递失败后的兜底");
+
+  // 直发成功分支：不写剪贴板、给如实反馈、清掉手动复制预览、仍打开主管会话
+  const branch = /if \(delivered\) \{([\s\S]*?)\n          \}/.exec(open);
+  assert.ok(branch, "存在 if (delivered) 直发成功分支");
+  const deliveredBody = stripComments(branch![1]);
+  assert.doesNotMatch(deliveredBody, /copyText\(/, "直发成功分支绝不得写剪贴板（负责人：直接发不需要复制一份）");
+  assert.doesNotMatch(deliveredBody, /exec\.requestCopied/, "直发成功分支不得复用「已复制…请粘贴发送」文案");
+  assert.match(deliveredBody, /dgT\("exec\.requestDelivered"\)/, "直发成功必须给如实 toast");
+  assert.match(deliveredBody, /setFallback\(false\)/, "直发成功不得展示手动复制预览");
+  assert.match(deliveredBody, /openSessionTarget\(supervisorSession/, "直发后仍打开主管会话便于跟进");
+  assert.match(deliveredBody, /activateChatTab\(\)/);
+
+  // 兜底复制契约逐字保留（copyText / openSessionTarget / activateChatTab / setFallback 仍被真实调用）
+  assert.match(code, /const copied = await copyText\(request\);/);
+  assert.match(code, /if \(copied\) showToast\(dgT\("exec\.requestCopied"\)\);/);
+  assert.match(code, /setFallback\(!copied\)/);
+  assert.match(code, /setNote\(copied \? dgT\("exec\.requestCopiedOpened"\) : dgT\("exec\.autocopyFailedRequest"\)\);/);
+  assert.match(code, /openSessionTarget\(supervisorSession, typeof rt\.open === "function"/);
+  // 手动复制预览在 DefinitionPolish 的渲染分支里（openSupervisor 之外），故查整份模块源码
+  assert.match(goalActionsClientSrc(), /fallback \? h\("textarea", \{ readOnly: true, value: request/, "复制失败的手动复制预览仍在");
+  // 原错误分支与 loading 配平保留
+  assert.match(code, /exec\.supervisorUnavailable/);
+  assert.match(code, /exec\.supervisorNotConfigured/);
+  assert.match(code, /exec\.supervisorPathFailed/);
+});
+
+/** openSupervisor 开头会先 setNote(null) 清空旧提示；断言只看随后写入的真实文案。 */
+const settledNotes = (state: { notes: any[] }) => state.notes.filter((v) => v !== null);
+
+test("g-327 直发分支行为：using 宿主下恰好一条 queue 消息、copyText 零调用、文案如实", async () => {
+  const prompts: any[] = [];
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  const record = { releases: 0, usingCalls: [] as any[], released: false };
+  const { run, state } = makeOpenSupervisorRunner({
+    rt: makeDsh016UsingHost(session, record), supervisorSession: "sup-1", request: "REQ-TEXT",
+    // 直发分支若触碰剪贴板，这里会立刻抛错并改为失败路径
+    copyText: () => { throw new Error("直发分支不得调用 copyText"); },
+  });
+  await run();
+
+  assert.equal(record.usingCalls.length, 1, "有 using 时必须优先 using");
+  assert.deepEqual(record.usingCalls[0], { target: "sup-1", options: { source: "dsh-graph" } });
+  assert.equal(record.releases, 1, "release 必须恰好配平一次");
+  assert.equal(prompts.length, 1, "直发必须恰好一条消息（不得 0 条，也不得 N 条）");
+  assert.equal(prompts[0].mode, "queue");
+  assert.equal(String(prompts[0].parts[0].text), "REQ-TEXT", "投递的正是本次请求文本");
+  assert.deepEqual(state.copied, [], "直发成功本轮绝不写剪贴板");
+
+  const { zh } = goalActionsI18n();
+  assert.deepEqual(state.toasts, [zh["exec.requestDelivered"]], "toast 必须如实说已直接发送");
+  assert.deepEqual(settledNotes(state), [zh["exec.requestDeliveredOpened"]]);
+  assert.match(state.toasts[0], /直接发送/);
+  assert.doesNotMatch(state.toasts[0], /复制|粘贴|剪贴板/, "直发成功不得再说已复制/请粘贴");
+  assert.deepEqual(state.fallbacks, [false], "直发成功不展示手动复制预览");
+  assert.deepEqual(state.modes, ["supervisor"]);
+  assert.equal(state.activated, 1, "仍切换到主管对话窗");
+  assert.equal(state.opened.length, 1, "仍打开主管会话");
+  assert.equal(state.opened[0][0], "sup-1");
+  assert.deepEqual(state.loading, [true, false], "loading 必须配平释放");
+});
+
+test("g-327 直发分支行为：0.1.6 retain 宿主（无 get）同样直发且 release 配平", async () => {
+  const prompts: any[] = [];
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  const record = { releases: 0, retains: [] as any[] };
+  const { run, state } = makeOpenSupervisorRunner({
+    rt: makeDsh016RetainHost(session, record), supervisorSession: "sup-1", request: "REQ",
+    copyText: () => { throw new Error("直发分支不得调用 copyText"); },
+  });
+  await run();
+  assert.equal(record.retains.length, 1, "0.1.6 必须先 retain 才借得到会话");
+  assert.equal(record.releases, 1, "release 必须恰好配平一次");
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].mode, "queue");
+  assert.equal(String(prompts[0].parts[0].text), "REQ");
+  assert.deepEqual(state.copied, [], "直发成功本轮绝不写剪贴板");
+  assert.equal(state.toasts.length, 1);
+  assert.match(state.toasts[0], /直接发送/);
+});
+
+test("g-327 退回分支行为：投递不可用时完整退回 g-168 复制契约（复制成功）", async () => {
+  const { run, state } = makeOpenSupervisorRunner({
+    // 无 using / 无 retain / get 取不到会话 → 投递不可用
+    rt: { binding: () => undefined, get: () => undefined }, supervisorSession: "sup-1", request: "REQ",
+    copyText: (text: string) => text === "REQ",
+  });
+  await run();
+  const { zh } = goalActionsI18n();
+  assert.deepEqual(state.copied, ["REQ"], "取不到会话时必须退回剪贴板复制");
+  assert.deepEqual(state.toasts, [zh["exec.requestCopied"]], "复制成功沿用原 toast");
+  assert.deepEqual(settledNotes(state), [zh["exec.requestCopiedOpened"]], "复制成功沿用原提示");
+  assert.deepEqual(state.fallbacks, [false], "复制成功不展示手动复制预览");
+  assert.deepEqual(state.modes, ["supervisor"]);
+  assert.equal(state.activated, 1);
+  assert.equal(state.opened.length, 1);
+  assert.deepEqual(state.loading, [true, false]);
+});
+
+test("g-327 退回分支行为：投递抛错 / 复制失败仍走原契约与手动复制预览", async () => {
+  // 投递路径抛错（prompt 抛错）→ helper 如实 false → 退回复制契约，且绝不穿出异常
+  const prompts: any[] = [];
+  const record = { releases: 0, usingCalls: [] as any[], released: false };
+  const boom = makeOpenSupervisorRunner({
+    rt: makeDsh016UsingHost({ prompt: async () => { prompts.push(1); throw new Error("prompt boom"); } }, record),
+    supervisorSession: "sup-1", request: "REQ", copyText: () => true,
+  });
+  await assert.doesNotReject(() => boom.run(), "投递抛错绝不得穿出 openSupervisor");
+  const { zh } = goalActionsI18n();
+  assert.equal(prompts.length, 1, "确实尝试过投递");
+  assert.equal(record.releases, 1, "prompt 抛错也必须 release 配平");
+  assert.deepEqual(boom.state.copied, ["REQ"], "投递失败后必须退回剪贴板复制");
+  assert.deepEqual(boom.state.toasts, [zh["exec.requestCopied"]]);
+  assert.deepEqual(boom.state.fallbacks, [false]);
+  assert.deepEqual(boom.state.loading, [true, false]);
+
+  // 投递不可用 + 复制失败 → 原契约的降级：fallback=true、展示可复制请求、如实提示，且不误报成功
+  const fail = makeOpenSupervisorRunner({
+    rt: { binding: () => undefined }, supervisorSession: "sup-1", request: "REQ", copyText: () => false,
+  });
+  await fail.run();
+  assert.deepEqual(fail.state.copied, ["REQ"]);
+  assert.deepEqual(fail.state.toasts, [], "复制失败不得显示成功 toast");
+  assert.deepEqual(settledNotes(fail.state), [zh["exec.autocopyFailedRequest"]], "复制失败沿用原降级提示");
+  assert.deepEqual(fail.state.fallbacks, [true], "复制失败必须置 fallback=true 展示可复制 textarea");
+});
+
+test("g-327 原错误分支保留：无会话服务 / 未配置主管会话时零投递、零复制并如实报错", async () => {
+  const noRt = makeOpenSupervisorRunner({
+    rt: null, appCtx: { get: () => null }, supervisorSession: "sup-1", request: "REQ",
+    copyText: () => { throw new Error("错误分支不得复制"); },
+  });
+  await noRt.run();
+  const { zh } = goalActionsI18n();
+  assert.deepEqual(noRt.state.copied, [], "无会话服务不得走剪贴板");
+  assert.deepEqual(noRt.state.toasts, []);
+  assert.equal(settledNotes(noRt.state).length, 1);
+  assert.match(String(settledNotes(noRt.state)[0]), /会话服务不可用/);
+  assert.deepEqual(noRt.state.loading, [true, false]);
+
+  const noSup = makeOpenSupervisorRunner({
+    rt: { binding: () => undefined }, supervisorSession: null, request: "REQ",
+    copyText: () => { throw new Error("错误分支不得复制"); },
+  });
+  await noSup.run();
+  assert.deepEqual(noSup.state.copied, []);
+  assert.deepEqual(noSup.state.toasts, []);
+  assert.equal(settledNotes(noSup.state).length, 1);
+  assert.match(String(settledNotes(noSup.state)[0]), /未配置主管会话/);
+  assert.deepEqual(noSup.state.loading, [true, false]);
+});
+
+test("g-327 i18n：直发文案如实（无「复制/粘贴」）、en 零 CJK、复制兜底文案逐字保留", () => {
+  const { zh, en } = goalActionsI18n();
+  for (const key of ["exec.requestDelivered", "exec.requestDeliveredOpened"]) {
+    assert.ok(zh[key] !== undefined, `zh 缺少 ${key}`);
+    assert.ok(en[key] !== undefined, `en 缺少 ${key}`);
+    assert.match(zh[key], /直接发送/, `zh ${key} 必须如实说明已直接发送`);
+    assert.doesNotMatch(zh[key], /复制|粘贴|剪贴板/, `zh ${key} 不得谎称复制/粘贴`);
+    assert.doesNotMatch(en[key], /[\u3400-\u9fff]/, `en ${key} 含 CJK`);
+    assert.match(en[key], /directly/i, `en ${key} 必须如实说明已直接发送`);
+    assert.doesNotMatch(en[key], /copi|paste|clipboard/i, `en ${key} 不得谎称复制/粘贴`);
+  }
+  // 按钮文案不再写死「复制请求」：直发与复制兜底两条分支下都必须如实
+  assert.doesNotMatch(zh["exec.goToSupervisor"], /复制/);
+  assert.doesNotMatch(en["exec.goToSupervisor"], /copi|clipboard|paste/i);
+  // 复制兜底分支文案逐字保留（复制路径仍是真实兜底）
+  assert.equal(zh["exec.requestCopied"], "✅ 请求已复制到剪贴板，可在主管对话窗粘贴发送");
+  assert.equal(zh["exec.requestCopiedOpened"], "✅ 请求已复制，已打开主管会话，请粘贴发送");
+  assert.equal(zh["exec.autocopyFailedRequest"], "⚠️ 自动复制失败，请手动复制下方请求");
 });
