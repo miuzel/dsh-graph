@@ -15,7 +15,6 @@
         auto[k] = (v === "human" || v === "ai") ? v : null;
       }
       const po = form?.prompt_overrides?.subagent ?? { state: "default", value: null };
-      const poState = (po.state === "override" || po.state === "disable") ? po.state : "default";
       return {
         executor: {
           provider: normStr(form?.executor?.provider),
@@ -28,7 +27,7 @@
           pk: { lanes: Number.isInteger(lanesNum) ? lanesNum : normStr(lanesRaw), sandbox: normStr(form?.defaults?.pk?.sandbox) },
         },
         supervisor: { automation: auto },
-        prompt_overrides: { subagent: { state: poState, value: poState === "override" ? normStr(po.value) : "" } },
+        prompt_overrides: { subagent: normalizePromptOverrideDraft(po) },
         review: { policy: normalizeReviewPolicyDraft(form?.review?.policy) },
         refreshInterval: String(refreshIntervalInput ?? ""),
       };
@@ -36,6 +35,44 @@
     function settingsDraftIsDirty(baseline, form, refreshIntervalInput) {
       if (!baseline || !form) return false;
       return JSON.stringify(normalizeSettingsDraft(form, refreshIntervalInput)) !== JSON.stringify(baseline);
+    }
+    // ===== g-333：override + 空文本 ≡ disable =====
+    // core 已显式定义该语义（writeProjectConfig 用 JSON.stringify 编码：空串写回 `""`，结构化读取器
+    // 读回即 disable；「空 override」在存储层不可表示）。这里把同一语义前移到**草稿归一化**与
+    // **提交载荷**，避免弹窗提交一个存储层无法表示的状态——否则界面显示「覆盖」而实际生效为「禁用」，
+    // 正是本目标要消灭的「看起来能配、实际不生效」。合法 state 闭集与 core 一致：default/override/disable。
+    function normalizePromptOverrideDraft(po) {
+      const state = (po?.state === "override" || po?.state === "disable") ? po.state : "default";
+      const value = po?.value === null || po?.value === undefined ? "" : String(po.value);
+      if (state === "override" && value === "") return { state: "disable", value: "" };
+      return { state, value: state === "override" ? value : "" };
+    }
+    // g-333：设置弹窗的提交载荷（从 save 内联构造中抽出为独立函数，使「弹窗草稿 → REST 载荷」
+    // 链路可被测试直接驱动，而不必重写一份等价实现）。字段口径与 save 原实现**逐字一致**
+    //（保存前 save 已 `if (!form) return`，故此处与旧内联代码相同，不对 form 本身做可选链，
+    //  使 g-133/g-231 的既有源契约断言继续绑定真实代码路径）。
+    function buildSettingsPatch(form) {
+      const lanesRaw = form.defaults?.pk?.lanes;
+      const lanes = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
+      const rawAuto = form.supervisor?.automation ?? {};
+      const cleanAuto = {};
+      for (const [k, v] of Object.entries(rawAuto)) {
+        if (v === "human" || v === "ai") cleanAuto[k] = v;
+        else cleanAuto[k] = null;
+      }
+      // g-342：review.policy 三值直传；「继承/未配置」写 null（schema 的 enum 只认三值与 null，
+      // 写 "" 会被拒；core 侧 setScalar 对 null 清空 → 读回 null → 按目标类型派生）。
+      const reviewPolicy = normalizeReviewPolicyDraft(form.review?.policy);
+      return {
+        executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "", reasoning_effort: form.executor?.reasoning_effort ?? "", mode: form.executor?.mode ?? "" },
+        defaults: {
+          review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
+          pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
+        },
+        supervisor: { automation: cleanAuto },
+        review: { policy: reviewPolicy === "" ? null : reviewPolicy },
+        prompt_overrides: { subagent: normalizePromptOverrideDraft(form.prompt_overrides?.subagent) },
+      };
     }
     // ===== g-342：顶层 review.policy 四态下拉（继承未配置 / auto / strict / none） =====
     // 合法值真源在 core/review-policy.ts 的 REVIEW_POLICIES；lib/client/*.js 是独立打包的浏览器
@@ -156,27 +193,8 @@
           setNote({ kind: "err", text: dgT("settings.pkLanesError") });
           setSaving(false); return;
         }
-        const rawAuto = form.supervisor?.automation ?? {};
-        const cleanAuto = {};
-        for (const [k, v] of Object.entries(rawAuto)) {
-          if (v === "human" || v === "ai") cleanAuto[k] = v;
-          else cleanAuto[k] = null;
-        }
-        // g-342：review.policy 三值直传；「继承/未配置」写 null（schema 的 enum 只认三值与 null，
-        // 写 "" 会被拒；core 侧 setScalar 对 null 清空 → 读回 null → 按目标类型派生）。
-        const reviewPolicy = normalizeReviewPolicyDraft(form.review?.policy);
-        const patch = {
-          executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "", reasoning_effort: form.executor?.reasoning_effort ?? "", mode: form.executor?.mode ?? "" },
-          defaults: {
-            review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
-            pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
-          },
-          supervisor: { automation: cleanAuto },
-          review: { policy: reviewPolicy === "" ? null : reviewPolicy },
-          prompt_overrides: {
-            subagent: form.prompt_overrides?.subagent ?? { state: "default", value: null },
-          },
-        };
+        // g-333：载荷构造抽到模块级 buildSettingsPatch（同上），三态口径与草稿归一化同源。
+        const patch = buildSettingsPatch(form);
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/settings"), {
             method: "POST",

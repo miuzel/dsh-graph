@@ -113,8 +113,7 @@ import {
   validateVersionRelease,
   versionDetail,
   resolveModelRoute,
-  resolvePromptOverride,
-  readPromptOverrideValue,
+  resolveSubagentPrompt,
   readProjectConfig,
   writeProjectConfig,
   REVIEW_POLICIES,
@@ -994,21 +993,13 @@ export function apply(ctx, config) {
       return { ...GRAPH_SETTINGS_DEFAULTS };
     }
   };
-  // g-133：workspace 子代理补充提示词覆盖字段读取（与 g-132 三态语义对齐，核心逻辑在 core/ops.ts）。
-  // project.yaml 的对应字段三种取值：`default`/缺失 → 继承全局；非空文本 → 覆盖；
-  // 显式空值（'' 或 ""）→ 禁用全局提示词。字段名为 `defaults.subagent_prompt`。
-  const readPromptOverride = (rootFor, key) => {
-    try {
-      const file = join(rootFor, "project.yaml");
-      if (!existsSync(file)) return "default";
-      return readPromptOverrideValue(readFileSync(file, "utf8"), key);
-    } catch {
-      return "default";
-    }
-  };
-  // 把「全局提示词 + workspace 覆盖值」合成最终注入值（三态，核心逻辑在 core/ops.ts）。
-  const effectivePrompt = (globalPrompt, override) =>
-    resolvePromptOverride(globalPrompt, override);
+  // g-333：workspace 子代理补充提示词的**唯一消费者**——结构化三态 `prompt_overrides.subagent`
+  //（core `resolveSubagentPrompt`，闭集优先级：override/disable/default；default 回落遗留
+  // `defaults.subagent_prompt`，再回落 profile 全局 `subagentPrompt`）。
+  // 旧实现直接用 core 的**遗留全文件正则读取器**扫 project.yaml 文本取键名 `subagent_prompt`：
+  // 全文件匹配 + 只剥引号，与设置弹窗写入的 `prompt_overrides.subagent` **零交集**（配置改了不影响派发），
+  // 且多行文本会把字面 `\n` 带进 prompt。该读取器调用点与本地包装已删除；
+  // `defaults.subagent_prompt` 仅作 deprecated 兼容回落（由 core 结构化消费，不再是独立消费者）。
   // g-149：workspace 校验——无明确 workspace 且非绝对 config.root 时抛 GraphError
   const requireWorkspace = (ex) => {
     if (isAbsoluteConfig) return config.root; // 绝对 root 不需要 workspace
@@ -1223,7 +1214,8 @@ export function apply(ctx, config) {
     const isWorktree = isolationDecision.isolate;
     const worktreeBlock = resolveWorktreeGuide(gType, isWorktree, promptLanguage);
     const subagentPromptSection = (() => {
-      const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(root, "subagent_prompt"));
+      // g-333：单一消费者（结构化三态 + 遗留回落 + 全局回落），见 resolveSubagentPrompt。
+      const p = resolveSubagentPrompt(root, globalSettings.subagentPrompt);
       return p ? ["## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join("\n") : null;
     })();
     const modeStrategySection = effModeRes.prompt ? ["## 子代理执行模式（" + effModeRes.mode + "）", "", effModeRes.prompt].join("\n") : null;

@@ -1055,7 +1055,9 @@ function readScalarByPath(lines: string[], path: string[]): string | null {
   return null;
 }
 
-/** 读取 prompt_overrides.<key> 的三态覆盖。未配置/缺失 → default（继承 profile 全局值）。 */
+/** 读取 prompt_overrides.<key> 的三态覆盖。未配置/缺失 → default（继承 profile 全局值）。
+ *  编码形态：裸 `default` → default；`disable`/`null`/`~`/`""`/`''`/空 → disable；
+ *  其余标量（含 `writeProjectConfig` 用 JSON.stringify 编码的多行文本）→ override 并解码转义。 */
 export function readPromptOverride(root: string, key: "subagent"): PromptOverride {
   const file = join(root, "project.yaml");
   if (!existsSync(file)) return { state: "default", value: null };
@@ -1076,6 +1078,12 @@ function readPromptOverrideConfig(lines: string[], key: string): { value: Prompt
   const trimmed = raw.trim();
   if (trimmed === "" || trimmed === "null" || trimmed === "~") return { value: { state: "disable", value: null } };
   if (trimmed === "default") return { value: { state: "default", value: null } };
+  // g-333：`disable` **裸字面量**必须读成 disable 态——它与 `default` 同为对外声明的状态名
+  // （schema_hints 广告 default/override/disable）。此前只认 `""`，裸写 `subagent: disable` 会被
+  // 当成 override 文本 "disable" 注入子代理 prompt（「看起来能配、实际注入垃圾」的同类缺陷）；
+  // 规范化写入仍是 `""`（writeProjectConfig），两种形态自此等价读回。
+  // 带引号的 `"disable"` 仍按 YAML 标量语义视为显式文本覆盖（需要文本时用引号转义）。
+  if (trimmed === "disable") return { value: { state: "disable", value: null } };
   if (trimmed === '""' || trimmed === "''") return { value: { state: "disable", value: null } };
   const decoded = parseYamlScalar(raw);
   if (decoded === null) return { value: { state: "disable", value: null } };
@@ -7564,7 +7572,13 @@ export function resolvePromptOverride(globalPrompt: string, overrideValue: strin
   return overrideValue;
 }
 
-/** g-133：从 project.yaml 文本解析补充提示词覆盖字段。 */
+/** g-133：从 project.yaml 文本解析补充提示词覆盖字段（**遗留**全文件正则读取器）。
+ *
+ *  g-333 起派发侧不再调用本函数：它以 `^\s*<key>:` 在**全文件**匹配（任意缩进、任意块），
+ *  且只剥引号、**不解码 `\n` 转义**——对 `writeProjectConfig` 用 `JSON.stringify` 编码的
+ *  `prompt_overrides.subagent` 会把字面 `\n` 带进 prompt（g-333 关键陷阱 1）。
+ *  三态消费请走 `resolveSubagentPrompt` / `composeSubagentPrompt`；本函数仅为遗留单值语义
+ *  与既有断言保留（生产调用点已移除）。 */
 export function readPromptOverrideValue(projectYamlText: string, key: string): string {
   const m = projectYamlText.match(new RegExp(`^\\s*${key}:\\s*([^\\n]*)$`, "m"));
   if (!m) return "default";
@@ -7577,6 +7591,57 @@ export function readPromptOverrideValue(projectYamlText: string, key: string): s
   const hash = raw.indexOf("#");
   if (hash >= 0) raw = raw.slice(0, hash).trim();
   return raw;
+}
+
+/** g-333：遗留 `defaults.subagent_prompt`（**deprecated**，仅历史 YAML 手写，无写入入口）的路径化读取。
+ *
+ *  与 `readPromptOverrideValue` 的口径差异（均为「更安全」方向的**有意收紧**，逐条列明）：
+ *  - 按 `defaults.subagent_prompt` **路径**在块内定位，不再是 `^\s*<key>:` 全文件正则
+ *    （不会误命中注释块或其它层级的同名行）；
+ *  - 复用 core 既有标量解码（双引号转义 `\n`/`\"` 等按 YAML 语义还原），不再是「只剥引号」；
+ *  - 缺失 / `null` / `~` → `"default"`（回落 profile 全局）。遗留读取器会把字面 `null` 当文本
+ *    注入，此处**不再复刻该缺陷**。
+ *  其余与遗留口径逐字对齐：`default` 字面量 → `"default"`；显式空值（`''`/`""`）→ `""`（禁用）；
+ *  其余 → 原文（行尾 `# 注释` 按 YAML 标量语义截断）。
+ */
+export function readLegacySubagentPrompt(root: string): string {
+  const file = join(root, "project.yaml");
+  if (!existsSync(file)) return "default";
+  const lines = readFileSync(file, "utf8").split("\n");
+  const raw = readScalarByPath(lines, ["defaults", "subagent_prompt"]);
+  // null 覆盖「键缺失」「null」「~」三种情形 → 均视为未配置（回落）；"" 是显式禁用，必须保留。
+  return raw === null ? "default" : raw;
+}
+
+/** g-333：workspace 子代理补充提示词的合成（纯函数；闭集优先级，便于穷举三态用例）。
+ *
+ *  优先级（**闭集**，无其它分支）：
+ *  `prompt_overrides.subagent`（结构化三态）＞ `defaults.subagent_prompt`（遗留，deprecated）＞ profile 全局 `subagentPrompt`。
+ *
+ *  - `override` + 非空文本 → 该文本（覆盖遗留与全局）；
+ *  - `override` + 空文本（`null`/`""`）→ **等价 `disable`**：`writeProjectConfig` 以 `JSON.stringify`
+ *    编码，空串写回 `""`，结构化读取器读回即 `disable`——「空 override」在存储层不可表示，
+ *    故在此**显式定义**为 disable（整段不注入、不回落），不得依赖编码副作用的静默行为（判据 3）；
+ *  - `disable` → 不注入该段，且**不回落**全局（判据 2）；
+ *  - `default`/未配置 → 回落遗留值：遗留 `default`/缺失 → 全局；遗留 `""` → 不注入；遗留文本 → 该文本。
+ *
+ *  返回 `null` 表示「不注入该段」（与返回空串区分）。
+ */
+export function composeSubagentPrompt(
+  globalPrompt: string,
+  override: PromptOverride,
+  legacyValue: string,
+): string | null {
+  if (override.state === "override") return override.value ? override.value : null;
+  if (override.state === "disable") return null;
+  const fallback = resolvePromptOverride(globalPrompt, legacyValue);
+  return fallback ? fallback : null;
+}
+
+/** g-333：派发侧**唯一**消费者——从 workspace 根读取 `prompt_overrides.subagent`（结构化三态，
+ *  走 `readPromptOverride`）与遗留 `defaults.subagent_prompt`，按闭集优先级合成最终注入文本。 */
+export function resolveSubagentPrompt(root: string, globalPrompt: string): string | null {
+  return composeSubagentPrompt(globalPrompt, readPromptOverride(root, "subagent"), readLegacySubagentPrompt(root));
 }
 
 /** g-191：子代理模式优先级合成——单次派发 override > workspace project.yaml 明确值 > profile 全局默认 > 系统默认（standard）。
