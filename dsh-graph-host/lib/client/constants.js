@@ -402,11 +402,15 @@
       body:has([style*="position:fixed"]) [data-width-handle] {
         display: none !important;
       }
-      /* 弹窗与抽屉打开时，降低 composer 对话框层级并禁用点击穿透，彻底防止遮挡抽屉 */
+      /* 弹窗与抽屉打开时禁用 composer 的点击穿透（输入框被浮层盖住时不可误触）。
+         g-343：此处原本还有 z-index: 0 !important —— 那是为了「不让 composer 遮挡抽屉」，
+         但 composer 与看板子树同处一个层叠上下文，压到 0 会让子树内任何 z-index ≥ 1 的
+         卡片元素（主管条 50、卡片内弹层 9999）翻到 composer 之前。浮层改由 dgOverlay
+         portal 到 body（逃出看板子树）后，composer 保持原生 z-index:7 即可同时满足
+         「卡片 < composer < 遮罩/抽屉」，故不再降级层级。 */
       .wSkVaW_root:has(.dg-modal-open) .wSkVaW_composerSeat,
       .wSkVaW_body:has(.dg-modal-open) .wSkVaW_composerSeat,
       body:has(.dg-modal-open) [class*="composerSeat"] {
-        z-index: 0 !important;
         pointer-events: none !important;
       }
       /* g-a92e1406：运行中状态摘要流动背景 + 图标动画 */

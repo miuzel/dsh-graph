@@ -141,6 +141,20 @@
       },
     };
 
+    // g-343：浮层统一 portal 到 document.body。
+    // 看板根节点用共享样式 S.wrap（position: relative + z-index: 1）⇒ 它自成层叠上下文：
+    // 遮罩(99998)/弹窗(100000)/抽屉(99999) 若渲染在子树内，就被囚禁在 z-index:1 的上下文里，
+    // 与子树外的 composer（原生 sticky z-index:7）只能「整体比高低」，无法同时满足
+    // 「卡片 < composer」与「composer < 遮罩」。实测（隔离实例 elementsFromPoint 命中栈）：
+    // composer=0 时卡片压在 composer 之上；composer=7 时 composer 浮到遮罩之上。
+    // 故把浮层挂到 body（逃出子树）后 composer 保持原生 7 即可同时成立。
+    // 实参形状与 h("div", props, ...children) 一致，调用点只改函数名。
+    function dgOverlay(props, ...children) {
+      const node = h("div", props, ...children);
+      if (typeof document === "undefined" || !document.body) return node;
+      return ReactDOM.createPortal(node, document.body);
+    }
+
     function stageOf(status) {
       for (const s of STAGES) if (s.statuses.includes(status)) return s.key;
       return "describe";

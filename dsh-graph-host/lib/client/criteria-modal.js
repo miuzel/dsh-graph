@@ -77,14 +77,14 @@
       };
 
       if (state.loading) {
-        return h("div", { style: S.overlay, ...backdropGuard },
+        return dgOverlay({ style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, dgT("criteria.editTitle")),
             h("div", { style: { ...S.meta, marginTop: 6 } }, dgT("common.loading"))));
       }
       if (state.error) {
-        return h("div", { style: S.overlay, ...backdropGuard },
+        return dgOverlay({ style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
             h("div", { style: { fontWeight: 700, fontSize: 15 } }, dgT("criteria.editTitle")),
@@ -97,7 +97,7 @@
         title: tip,
         onClick: (e) => { e.stopPropagation(); onClick(); },
       }, label);
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 620 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: onClose }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 15 } }, dgT("criteria.editTitle")),

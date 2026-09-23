@@ -25,7 +25,7 @@
           onConfirm(reason.trim());
         }
       };
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
@@ -168,7 +168,7 @@
         setLoading(false);
       };
 
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
@@ -244,7 +244,7 @@
           }
         } catch { /* 静默 */ }
       };
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
@@ -402,7 +402,7 @@
       const onDemandList = entries.filter((e) => (e.scope ?? "on_demand") === "on_demand");
       const currentList = tab === "standing" ? standingList : onDemandList;
 
-      return h("div", { style: S.overlay, ...memoryGuard },
+      return dgOverlay({ style: S.overlay, ...memoryGuard },
         h("div", { style: { ...S.modal, minWidth: 460, maxWidth: 640, maxHeight: "85vh", display: "flex", flexDirection: "column" }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
           h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingRight: 24 } },

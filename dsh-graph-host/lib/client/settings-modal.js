@@ -201,14 +201,14 @@
       };
 
       if (loading) {
-        return h("div", { style: S.overlay, ...backdropGuard },
+        return dgOverlay({ style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
             h("div", { style: S.modalH }, dgT("settings.title")),
             h("div", { style: { ...S.meta, marginTop: 8 } }, dgT("settings.loading"))));
       }
       if (!form) {
-        return h("div", { style: S.overlay, ...backdropGuard },
+        return dgOverlay({ style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
             h("div", { style: S.modalH }, dgT("settings.title")),
@@ -344,7 +344,7 @@
       // 选项 style 与 automationOptions / mode select 同源（g-176 主题变量，不硬编码暗色）
       const policyOptionStyle = { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" };
 
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
           h("div", { style: S.modalH }, dgT("settings.title")),

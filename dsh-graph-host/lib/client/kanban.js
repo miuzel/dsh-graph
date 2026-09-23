@@ -2353,7 +2353,7 @@
           : null,
         // g-129: 新建目标弹窗
         showCreateGoal
-          ? h("div", { style: S.overlay, ...createGoalGuard },
+          ? dgOverlay({ style: S.overlay, ...createGoalGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowCreateGoal(false) }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("createGoal.title")),
@@ -2477,7 +2477,7 @@
           : null,
         // g-134/g-135: 版本详情弹窗（含摘要/范围/working/released 操作）
         versionDetailTarget
-          ? h("div", { style: S.overlay, ...versionDetailGuard },
+          ? dgOverlay({ style: S.overlay, ...versionDetailGuard },
               h("div", { style: { ...S.modal, minWidth: 360, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setVersionDetailTarget(null); setVersionDetailData(null); } }, "✕"),
                 // g-177: 重命名按钮移到版本标题右边（跟 goal 卡片交互一致：标题行内小 ✏️）
@@ -2718,7 +2718,7 @@
           : null,
         // g-134: 创建版本泳道弹窗
         showCreateVersion
-          ? h("div", { style: S.overlay, ...createVersionGuard },
+          ? dgOverlay({ style: S.overlay, ...createVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowCreateVersion(false) }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("createVersion.title")),
@@ -2756,7 +2756,7 @@
           : null,
         // g-134: 重命名版本泳道弹窗
         renameVersionTarget
-          ? h("div", { style: S.overlay, ...renameVersionGuard },
+          ? dgOverlay({ style: S.overlay, ...renameVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setRenameVersionTarget(null); setRenameVersionNote(null); } }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("version.renameTitle")),
@@ -2803,7 +2803,7 @@
           : null,
         // g-187: 标签多选筛选弹窗/面板
         showTagFilterModal
-          ? h("div", { style: S.overlay, ...tagFilterGuard },
+          ? dgOverlay({ style: S.overlay, ...tagFilterGuard },
               h("div", { style: { ...S.modal, minWidth: 320, maxWidth: 440 }, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => setShowTagFilterModal(false) }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 } },
@@ -2843,7 +2843,7 @@
           : null,
         // g-134: 删除版本泳道确认弹窗
         deleteVersionTarget
-          ? h("div", { style: S.overlay, ...deleteVersionGuard },
+          ? dgOverlay({ style: S.overlay, ...deleteVersionGuard },
               h("div", { style: S.modal, onClick: (e) => e.stopPropagation() },
                 h("span", { style: S.close, onClick: () => { setDeleteVersionTarget(null); setDeleteVersionNote(null); } }, "✕"),
                 h("div", { style: { fontWeight: 700, fontSize: 15, marginBottom: 12 } }, dgT("version.deleteTitle")),
