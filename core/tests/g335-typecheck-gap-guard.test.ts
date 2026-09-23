@@ -1,0 +1,257 @@
+/**
+ * g-335：门禁②「类型检查仅覆盖 core 层」覆盖缺口的**防静默删除**断言。
+ *
+ * 背景（负责人裁定 2026-09-24 = 方案③「最低成本」）：
+ *  - `tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内，
+ *    故 `tsc --noEmit -p tsconfig.json` 的 `exit_code=0` **不能**代表全仓类型零错；
+ *  - 方案①（修到 0 错并把 `core/tests` 纳入）与方案②（tests 专用宽松 tsconfig + 错误数基线门禁）
+ *    均被否决；方案③维持现状，但必须在指南与门禁定义里**如实标注**该缺口。
+ *
+ * 本目标要解决的问题：该标注原先**没有任何断言守护**——实测把它删掉后全量测试仍全绿，
+ * 即缺口说明可被静默删除（虚假完整性回归）。本文件就是那道守护。
+ *
+ * 判据映射：
+ *  - 判据 1 → 缺口标注存在于 `dsh-graph-host/supervisor-guide.{zh,en}.md` 的门禁②行、
+ *             以及 `core/review-policy.ts` 的门禁定义注释与失败文案；zh/en 行数严格相等。
+ *  - 判据 2 → 本文件的断言即交付物：删除或改写任一侧的缺口说明必红。
+ *  - 判据 3 → `package.json` 暴露 `typecheck` 脚本（门禁②命令），且**未**接进 build/prepare。
+ *  - 判据 4 → 守卫方案③裁定：`tsconfig.json` 仍只 include `core/*.ts`、exclude `core/tests`，
+ *             且不存在 tests 专用宽松 tsconfig（即不得退回被否决的①②）。
+ *
+ * 反自我满足设计（与 g-313 / g-311 同一口径，不另立第二套规则）：
+ *  1. 断言逐字比对**承载 tsc 命令的那一行**与其**锚点行**（`lineWithAll` 要求同一行命中全部
+ *     anchors），而不是「关键词在全文某处出现」——把标注搬走、挪到无关段落同样必红；
+ *  2. 负向对照在内存里对真实文本做定点破坏后重放**同一个检查器**，并断言真实文件逐字节未变
+ *     （hermetic，不污染工作树、不依赖 worktree）；
+ *  3. 源文件与 dist 产物**双侧**断言：源侧守护「静默删除」，dist 侧守护「要发布的那一份」。
+ *
+ * 运行前需先 `bash scripts/build.sh`（判据 1 的 dist 分支读 dist/，dist/ 是生成物禁止手改）。
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
+
+const repoRoot = join(import.meta.dirname, "../..");
+const distRoot = join(repoRoot, "dist");
+
+const ZH_GUIDE_SRC = join(repoRoot, "dsh-graph-host", "supervisor-guide.zh.md");
+const EN_GUIDE_SRC = join(repoRoot, "dsh-graph-host", "supervisor-guide.en.md");
+const POLICY_SRC = join(repoRoot, "core", "review-policy.ts");
+const ZH_GUIDE_DIST = join(distRoot, "supervisor-guide.zh.md");
+const EN_GUIDE_DIST = join(distRoot, "supervisor-guide.en.md");
+const POLICY_DIST = join(distRoot, "core", "review-policy.js");
+
+/** 门禁②的命令字面量（指南与门禁失败文案共用；判据 3 的 typecheck 脚本亦须暴露它）。 */
+const TSC_COMMAND = "./node_modules/.bin/tsc --noEmit -p tsconfig.json";
+
+const BUILD_HINT =
+  "门禁断言读取源文件与 dist 产物：请先运行 `bash scripts/build.sh` 再跑测试（dist/ 是生成物，禁止手改）";
+
+/** zh 门禁②行缺口标注的完整字面量（不含前导「；」）；负向对照复用同一字面量。 */
+const ZH_GAP_TEXT =
+  "覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内";
+
+/** 指南门禁②行必须逐字命中的缺口标注片段（缺任一即红）。 */
+const ZH_GATE2_ANNOTATION = [
+  "覆盖缺口如实标注",
+  "`include` 仅 `core/*.ts`",
+  "`core/tests` 与 host 的 `.js` 不在其内",
+];
+const EN_GATE2_ANNOTATION = [
+  "state the coverage gap honestly",
+  "the `include` of `tsconfig.json` is only `core/*.ts`",
+  "`core/tests` and host `.js` fall outside it",
+];
+
+/** `core/review-policy.ts` 门禁②定义注释行与失败文案行必须命中的缺口标注片段。 */
+const POLICY_DEF_ANNOTATION = ["仅覆盖 core 层", "缺口已在指南如实标注"];
+const POLICY_DETAIL_ANNOTATION = ["仅覆盖 core 层"];
+
+function readText(path: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    throw new Error(`${BUILD_HINT}\n读取失败：${relative(repoRoot, path)}`);
+  }
+}
+
+/**
+ * 定位「同一行同时含全部 anchors」的那一行；`count !== 1` 表示锚点失效（0）或不唯一（>1），
+ * 两种情况都必须报红——否则删除标注会被「别处仍命中」掩盖。
+ */
+function lineWithAll(text: string, anchors: readonly string[]): { line: string; count: number } {
+  const hits = text.split("\n").filter((line) => anchors.every((anchor) => line.includes(anchor)));
+  return { line: hits[0] ?? "", count: hits.length };
+}
+
+/**
+ * 指南检查器：门禁②行逐字含缺口标注 + zh/en 行数相等。返回缺口列表（空 = 通过）。
+ * 抽成纯函数是为了让负向对照能在内存里破坏真实文本后重放**同一套判定**。
+ */
+function guideGapGaps(zh: string, en: string, label: string): string[] {
+  const gaps: string[] = [];
+
+  const zhHit = lineWithAll(zh, ["2. 类型检查：", TSC_COMMAND]);
+  if (zhHit.count !== 1) gaps.push(`${label}：zh 指南门禁②行定位失败（命中 ${zhHit.count} 行，应为 1）`);
+  else for (const needle of ZH_GATE2_ANNOTATION) if (!zhHit.line.includes(needle)) gaps.push(`${label}：zh 门禁②行缺缺口标注「${needle}」`);
+
+  const enHit = lineWithAll(en, ["2. Type check:", TSC_COMMAND]);
+  if (enHit.count !== 1) gaps.push(`${label}：en 指南门禁②行定位失败（命中 ${enHit.count} 行，应为 1）`);
+  else for (const needle of EN_GATE2_ANNOTATION) if (!enHit.line.includes(needle)) gaps.push(`${label}：en 门禁②行缺缺口标注「${needle}」`);
+
+  const zhLines = zh.split("\n").length;
+  const enLines = en.split("\n").length;
+  if (zhLines !== enLines) gaps.push(`${label}：zh/en 指南行数不等（${zhLines} vs ${enLines}）`);
+
+  return gaps;
+}
+
+/**
+ * 门禁定义检查器：`core/review-policy.ts`（及其编译产物）的两处标注各自锚定一行——
+ * 定义注释行（② 定义 + 「缺口已在指南如实标注」）与失败文案行（② 命令 + 「要求 0；」）。
+ * 两处分别校验，避免「删掉一处、另一处仍在」被漏过。
+ */
+function policyGapGaps(policy: string, label: string): string[] {
+  const gaps: string[] = [];
+
+  const defHit = lineWithAll(policy, ["② 类型检查：", "缺口已在指南如实标注"]);
+  if (defHit.count !== 1) gaps.push(`${label}：门禁②定义注释行定位失败（命中 ${defHit.count} 行，应为 1）`);
+  else for (const needle of POLICY_DEF_ANNOTATION) if (!defHit.line.includes(needle)) gaps.push(`${label}：门禁②定义注释缺「${needle}」`);
+
+  const detailHit = lineWithAll(policy, [`② ${TSC_COMMAND}`, "要求 0；"]);
+  if (detailHit.count !== 1) gaps.push(`${label}：门禁②失败文案行定位失败（命中 ${detailHit.count} 行，应为 1）`);
+  else for (const needle of POLICY_DETAIL_ANNOTATION) if (!detailHit.line.includes(needle)) gaps.push(`${label}：门禁②失败文案缺「${needle}」`);
+
+  return gaps;
+}
+
+// ---------------------------------------------------------------------------
+// 判据 1 + 判据 2：源侧守护（静默删除即红）
+// ---------------------------------------------------------------------------
+
+test("g-335 判据 1/2：指南源文件门禁②行如实标注覆盖缺口，且 zh/en 行数严格相等", () => {
+  const gaps = guideGapGaps(readText(ZH_GUIDE_SRC), readText(EN_GUIDE_SRC), "源指南");
+  assert.deepEqual(gaps, [], gaps.join("\n"));
+});
+
+test("g-335 判据 1/2：core/review-policy.ts 门禁定义注释与失败文案均标注「仅覆盖 core 层」", () => {
+  const gaps = policyGapGaps(readText(POLICY_SRC), "review-policy.ts 源文件");
+  assert.deepEqual(gaps, [], gaps.join("\n"));
+});
+
+// ---------------------------------------------------------------------------
+// 判据 1 + 判据 2：dist 侧守护（要发布的那一份同样不得丢标注）
+// ---------------------------------------------------------------------------
+
+test("g-335 判据 1/2：dist 产物（指南与 core/review-policy.js）同样保留缺口标注", () => {
+  const gaps = [
+    ...guideGapGaps(readText(ZH_GUIDE_DIST), readText(EN_GUIDE_DIST), "dist 指南"),
+    ...policyGapGaps(readText(POLICY_DIST), "dist/core/review-policy.js"),
+  ];
+  assert.deepEqual(gaps, [], `${BUILD_HINT}\n${gaps.join("\n")}`);
+});
+
+// ---------------------------------------------------------------------------
+// 判据 2：判别力自证（负向对照改坏即红）+ hermetic
+// ---------------------------------------------------------------------------
+
+test("g-335 判据 2：分别删除/改写四处缺口说明中的任一情形必红，且负向对照不污染工作树", () => {
+  const zhGuide = readText(ZH_GUIDE_SRC);
+  const enGuide = readText(EN_GUIDE_SRC);
+  const policy = readText(POLICY_SRC);
+
+  // 前提：正样本本身必须全绿，否则下面的负向对照没有判别力。
+  assert.deepEqual(guideGapGaps(zhGuide, enGuide, "源指南"), [], "负向对照前提不成立：源指南本来就不绿");
+  assert.deepEqual(policyGapGaps(policy, "review-policy.ts 源文件"), [], "负向对照前提不成立：门禁定义本来就不绿");
+
+  // 负向对照 1：zh 侧删掉缺口标注整段（模拟「静默删除」）→ 必红。
+  const zhDropped = zhGuide.replace(`；${ZH_GAP_TEXT}`, "");
+  assert.notEqual(zhDropped, zhGuide, "负向对照失效：zh 指南未找到可删除的缺口标注片段");
+  assert.ok(guideGapGaps(zhDropped, enGuide, "源指南").length > 0, "删掉 zh 缺口标注后竟然仍绿");
+
+  // 负向对照 2：en 侧改写缺口标注（语句在、语义反转）→ 必红。
+  const enRewritten = enGuide.replace(
+    "state the coverage gap honestly—the `include` of `tsconfig.json` is only `core/*.ts`, so `core/tests` and host `.js` fall outside it",
+    "the type check covers the whole repository",
+  );
+  assert.notEqual(enRewritten, enGuide, "负向对照失效：en 指南未找到可改写的缺口标注片段");
+  assert.ok(guideGapGaps(zhGuide, enRewritten, "源指南").length > 0, "改写 en 缺口标注后竟然仍绿");
+
+  // 负向对照 3：门禁定义注释行删掉「缺口已在指南如实标注」→ 必红。
+  const defDropped = policy.replace("，缺口已在指南如实标注", "");
+  assert.notEqual(defDropped, policy, "负向对照失效：未找到定义注释里的缺口说明");
+  assert.ok(policyGapGaps(defDropped, "review-policy.ts 源文件").length > 0, "删掉定义注释缺口说明后竟然仍绿");
+
+  // 负向对照 4：失败文案行删掉「仅覆盖 core 层」→ 必红（只看定义注释会漏掉这一处）。
+  const detailDropped = policy.replace("（要求 0；仅覆盖 core 层）", "（要求 0）");
+  assert.notEqual(detailDropped, policy, "负向对照失效：未找到失败文案里的缺口说明");
+  assert.ok(policyGapGaps(detailDropped, "review-policy.ts 源文件").length > 0, "删掉失败文案缺口说明后竟然仍绿");
+
+  // 负向对照 5：把缺口标注**搬到另一行**（门禁①行），行数不变 → 仍必红。
+  // 这一对照必须与「行数不变量」解耦，否则无法证明判据锚定的是「门禁②这一行」而非全文任一处。
+  const movedOut = zhGuide
+    .replace(`；${ZH_GAP_TEXT}`, "")
+    .replace("  1. 全量测试：", `  1. 全量测试：${ZH_GAP_TEXT}`);
+  assert.notEqual(movedOut, zhGuide, "负向对照失效：未找到可搬迁的缺口标注片段");
+  assert.equal(movedOut.split("\n").length, zhGuide.split("\n").length, "负向对照 5 失控：搬迁不得改变行数");
+  assert.ok(movedOut.includes(ZH_GAP_TEXT), "负向对照 5 失控：搬迁后标注应仍在全文某处");
+  assert.ok(guideGapGaps(movedOut, enGuide, "源指南").length > 0, "缺口标注被搬离门禁②行后竟然仍绿");
+
+  // 负向对照 6：zh/en 行数被破坏 → 必红。
+  assert.ok(guideGapGaps(zhGuide, `${enGuide}\nextra line\n`, "源指南").length > 0, "en 指南行数被破坏后竟然仍绿");
+
+  // hermetic：负向对照只改内存字符串，真实文件必须逐字节未变。
+  assert.equal(readText(ZH_GUIDE_SRC), zhGuide, "负向对照污染了源指南");
+  assert.equal(readText(EN_GUIDE_SRC), enGuide, "负向对照污染了源指南");
+  assert.equal(readText(POLICY_SRC), policy, "负向对照污染了 core/review-policy.ts");
+  assert.deepEqual(
+    guideGapGaps(readText(ZH_GUIDE_SRC), readText(EN_GUIDE_SRC), "源指南"),
+    [],
+    "真实源指南被破坏",
+  );
+  assert.deepEqual(policyGapGaps(readText(POLICY_SRC), "review-policy.ts 源文件"), [], "真实 core/review-policy.ts 被破坏");
+});
+
+// ---------------------------------------------------------------------------
+// 判据 3 + 判据 4：脚本暴露与「不引入全仓/测试类型门禁」的裁定守卫
+// ---------------------------------------------------------------------------
+
+test("g-335 判据 3：package.json 提供 typecheck 脚本暴露门禁②命令，且未接进 build/prepare", () => {
+  const pkg = JSON.parse(readText(join(repoRoot, "package.json"))) as { scripts?: Record<string, string> };
+  const scripts = pkg.scripts ?? {};
+
+  const typecheck = scripts.typecheck ?? "";
+  assert.ok(
+    typecheck.includes("tsc --noEmit -p tsconfig.json"),
+    `typecheck 脚本须暴露门禁②命令 \`tsc --noEmit -p tsconfig.json\`（实际：「${typecheck}」）`,
+  );
+
+  for (const chained of ["build", "prepare"]) {
+    assert.ok(
+      !(scripts[chained] ?? "").includes("typecheck"),
+      `${chained} 脚本不得接进 typecheck（判据 3：不得作为新的放行门禁或 build 流程的一环）`,
+    );
+  }
+});
+
+test("g-335 判据 4：tsconfig 仍只含 core 层、仍排除 core/tests，且不存在 tests 专用宽松 tsconfig", () => {
+  const tsconfig = JSON.parse(readText(join(repoRoot, "tsconfig.json"))) as {
+    include?: string[];
+    exclude?: string[];
+  };
+
+  assert.deepEqual(tsconfig.include, ["core/*.ts"], "判据 4：不得把 core/tests 或全仓纳入 include（被否决的方案①）");
+  assert.ok((tsconfig.exclude ?? []).includes("core/tests"), "判据 4：exclude 必须仍含 core/tests");
+  assert.ok(!(tsconfig.include ?? []).some((p) => p.includes("dsh-graph-host")), "判据 4：host 的 .js 不得被纳入类型检查");
+
+  const extraTsconfigs = [repoRoot, join(repoRoot, "core")]
+    .flatMap((dir) => readdirSync(dir).map((name) => join(dir, name)))
+    .filter((path) => /^tsconfig.*\.json$/.test(path.split("/").pop() ?? "") && path !== join(repoRoot, "tsconfig.json"));
+  assert.deepEqual(
+    extraTsconfigs.map((path) => relative(repoRoot, path)),
+    [],
+    "判据 4：不得新建 tests 专用宽松 tsconfig（被否决的方案②）",
+  );
+});
