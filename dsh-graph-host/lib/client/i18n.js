@@ -384,7 +384,7 @@
       'exec.supervisorUnavailable': '⚠️ 会话服务不可用',
       'exec.supervisorNotConfigured': '⚠️ 未配置主管会话（project.yaml 的 supervisor.session）',
       'exec.requestCopied': '✅ 请求已复制到剪贴板，可在主管对话窗粘贴发送',
-      'exec.goToSupervisor': '发送给主管（复制请求）',
+      'exec.goToSupervisor': '发送给主管',
       'exec.askPm': '交给产品经理 Agent',
       'exec.objection': '⚠️ 主管已提出异议',
       'exec.polish': '📝 定义/润色',
@@ -406,6 +406,9 @@
       // g-272 att-002：定义/润色「发送给主管」路径的复制结果提示
       'exec.requestCopiedOpened': '✅ 请求已复制，已打开主管会话，请粘贴发送',
       'exec.autocopyFailedRequest': '⚠️ 自动复制失败，请手动复制下方请求',
+      // g-327：能直发时的如实反馈（不得复用「已复制…请粘贴发送」）
+      'exec.requestDelivered': '✅ 请求已直接发送给主管会话',
+      'exec.requestDeliveredOpened': '✅ 请求已直接发送给主管会话，已打开主管会话',
 
       // === 进执行列确认 ===
       'inProgress.title': '🚀 执行「{title}」',
@@ -1388,7 +1391,7 @@
       'exec.supervisorUnavailable': '⚠️ Session service unavailable',
       'exec.supervisorNotConfigured': '⚠️ Supervisor session not configured (project.yaml)',
       'exec.requestCopied': '✅ Request copied to clipboard, paste in supervisor chat',
-      'exec.goToSupervisor': 'Send to supervisor (copy request)',
+      'exec.goToSupervisor': 'Send to supervisor',
       'exec.askPm': 'Delegate to PM Agent',
       'exec.objection': '⚠️ Supervisor raised an objection',
       'exec.polish': '📝 Define/Polish',
@@ -1410,6 +1413,9 @@
       // g-272 att-002: copy-result hints for the define/polish "send to supervisor" path
       'exec.requestCopiedOpened': '✅ Request copied, supervisor session opened — paste to send',
       'exec.autocopyFailedRequest': '⚠️ Auto-copy failed, please copy the request below manually',
+      // g-327: honest feedback when the request is delivered straight to the supervisor session
+      'exec.requestDelivered': '✅ Request sent directly to the supervisor session',
+      'exec.requestDeliveredOpened': '✅ Request sent directly to the supervisor session — session opened',
 
       // === In Progress prompt ===
       'inProgress.title': '🚀 Execute "{title}"',
