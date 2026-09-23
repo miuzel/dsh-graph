@@ -140,6 +140,10 @@
     }
 
     const HOVER_CSS = `
+      /* g-330：右侧栏页签（host="sidebar"）宽度远窄于 conversation.view，头部单行 flex 会
+         把标题/版本/按钮压成竖排不可读；仅该实例带 .dg-head-sidebar，故此处放开换行。
+         会话内 conversation.view 不带此 class，外观零变化。 */
+      .dg-head-sidebar { flex-wrap: wrap; row-gap: 6px; }
       .dg-card { transition: box-shadow .12s ease, transform .12s ease, border-color .12s ease; }
       .dg-card:hover { box-shadow: 0 0 0 2px rgba(76,141,255,.55); transform: translateY(-1px); }
       .dg-card:active { transform: translateY(0); box-shadow: 0 0 0 2px rgba(76,141,255,.8); }

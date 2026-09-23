@@ -56,6 +56,9 @@
       // === 看板顶部/加载 ===
       'board.title': '看板',
       'board.tab': 'Kanban',
+      // g-330：右侧栏页签入口（方案 B）——页签 chip 标题与侧栏 guide 条目文案
+      'sidebar.tab.title': '看板',
+      'sidebar.guide.description': '在这个会话里查看和操作目标看板',
       'kanban.loading': 'dsh-graph 看板加载中…',
       'kanban.error.workspace': '⚠️ 无法确定工作区，已暂停看板请求。',
       'kanban.error.fetch': '看板数据获取失败：',
@@ -1059,6 +1062,9 @@
       // === Kanban top/loading ===
       'board.title': 'Kanban',
       'board.tab': 'Kanban',
+      // g-330: right-sidebar tab entry (option B) — tab chip title and sidebar guide copy
+      'sidebar.tab.title': 'Kanban',
+      'sidebar.guide.description': 'View and manage the goal board in this session',
       'kanban.loading': 'dsh-graph board loading…',
       'kanban.error.workspace': '⚠️ Unable to determine workspace, board requests paused.',
       'kanban.error.fetch': 'Failed to fetch board data: ',
