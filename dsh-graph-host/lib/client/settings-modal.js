@@ -1,5 +1,6 @@
     // ===== g-132：workspace 看板设置弹窗（读取/可视化编辑 .dsh-graph/project.yaml 安全配置） =====
     // 字段范围（本期）：executor.provider/model、defaults.review、defaults.pk、supervisor.automation、
+    // 顶层 review.policy（g-342 四态：继承未配置 / auto / strict / none）、
     // 子代理补充提示词 workspace 覆盖（三态：default 继承 / 自定义覆盖 / 显式空禁用）。
     // 保存走 PUT/POST /api/dsh-graph/settings（原子写；保留注释/未知键；失败不半写入）。
     let settingsModalModeInstanceSeq = 0;
@@ -28,6 +29,7 @@
         },
         supervisor: { automation: auto },
         prompt_overrides: { subagent: { state: poState, value: poState === "override" ? normStr(po.value) : "" } },
+        review: { policy: normalizeReviewPolicyDraft(form?.review?.policy) },
         refreshInterval: String(refreshIntervalInput ?? ""),
       };
     }
@@ -35,11 +37,29 @@
       if (!baseline || !form) return false;
       return JSON.stringify(normalizeSettingsDraft(form, refreshIntervalInput)) !== JSON.stringify(baseline);
     }
+    // ===== g-342：顶层 review.policy 四态下拉（继承未配置 / auto / strict / none） =====
+    // 合法值真源在 core/review-policy.ts 的 REVIEW_POLICIES；lib/client/*.js 是独立打包的浏览器
+    // bundle，无法 import core 常量，故此处只能放**副本**——两边一致性由
+    // core/tests/g342-settings-review-policy.test.ts 的断言核对（改一边不改另一边必红）。
+    // 归一化把 null/undefined/"" 以及任何非三值统一为 ""（＝「继承/未配置」），
+    // 因此服务端 null 与表单 "" 不会造成假脏（判据 2）；保存时 "" → null——
+    // schema 的 policy 只接受三值或 null，写 "" 会被 enum 直接拒绝。
+    const REVIEW_POLICY_VALUES = ["auto", "strict", "none"];
+    const REVIEW_POLICY_LABEL_KEYS = {
+      auto: "settings.reviewPolicyAuto",
+      strict: "settings.reviewPolicyStrict",
+      none: "settings.reviewPolicyNone",
+    };
+    const normalizeReviewPolicyDraft = (v) => (REVIEW_POLICY_VALUES.includes(v) ? v : "");
     function SettingsModal(props) {
       useLocaleRevision();
       const modeIdRef = React.useRef(null);
       if (modeIdRef.current == null) modeIdRef.current = `dg-workspace-subagent-mode-${++settingsModalModeInstanceSeq}`;
       const modeId = modeIdRef.current;
+      // g-342：review.policy 下拉的稳定 id（与 modeIdRef 同款生成方式，供 label htmlFor 绑定）
+      const reviewPolicyIdRef = React.useRef(null);
+      if (reviewPolicyIdRef.current == null) reviewPolicyIdRef.current = `dg-workspace-review-policy-${++settingsModalModeInstanceSeq}`;
+      const reviewPolicyId = reviewPolicyIdRef.current;
       const [loading, setLoading] = React.useState(true);
       const [form, setForm] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
@@ -142,6 +162,9 @@
           if (v === "human" || v === "ai") cleanAuto[k] = v;
           else cleanAuto[k] = null;
         }
+        // g-342：review.policy 三值直传；「继承/未配置」写 null（schema 的 enum 只认三值与 null，
+        // 写 "" 会被拒；core 侧 setScalar 对 null 清空 → 读回 null → 按目标类型派生）。
+        const reviewPolicy = normalizeReviewPolicyDraft(form.review?.policy);
         const patch = {
           executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "", reasoning_effort: form.executor?.reasoning_effort ?? "", mode: form.executor?.mode ?? "" },
           defaults: {
@@ -149,6 +172,7 @@
             pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
           },
           supervisor: { automation: cleanAuto },
+          review: { policy: reviewPolicy === "" ? null : reviewPolicy },
           prompt_overrides: {
             subagent: form.prompt_overrides?.subagent ?? { state: "default", value: null },
           },
@@ -314,6 +338,11 @@
       for (const effort of effortChoices) {
         if (typeof effort?.id === "string" && effort.id !== "") effortOptions.push(opt("effort:" + effort.id, effort.id, effort.name ?? effort.id));
       }
+      // g-342：review.policy 当前选中值——非三值/缺失一律显示为「继承（未配置）」，
+      // 与 normalizeSettingsDraft 用同一归一化，避免「显示继承但被判脏」的错位。
+      const curReviewPolicy = normalizeReviewPolicyDraft(form.review?.policy);
+      // 选项 style 与 automationOptions / mode select 同源（g-176 主题变量，不硬编码暗色）
+      const policyOptionStyle = { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" };
 
       return h("div", { style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
@@ -419,6 +448,24 @@
             catReady
               ? dgT("settings.catalogReady")
               : (catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg"))),
+
+          // g-342：顶层 review.policy 四态下拉（继承未配置 / auto / strict / none）。
+          // 渲染方式（label htmlFor + select + meta 提示）与选项 style 比照上方 executor.mode 与
+          // supervisor.automation；脏状态由 normalizeSettingsDraft 统一覆盖（判据 2）。
+          // 归属主区而非「高级/仅存储字段」：该字段被 core/review-policy.ts 的受理门禁真实消费。
+          h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+          h("div", { style: { minWidth: 0 } },
+            h("label", { htmlFor: reviewPolicyId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reviewPolicyLabel")),
+            h("select", {
+              id: reviewPolicyId,
+              "aria-label": dgT("settings.reviewPolicyAria"),
+              style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+              value: curReviewPolicy,
+              onChange: (e) => set(["review", "policy"], e.target.value),
+            },
+              h("option", { value: "", style: policyOptionStyle }, dgT("settings.reviewPolicyInherit")),
+              ...REVIEW_POLICY_VALUES.map((p) => h("option", { key: p, value: p, style: policyOptionStyle }, dgT(REVIEW_POLICY_LABEL_KEYS[p])))),
+            h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } }, dgT("settings.reviewPolicyHint"))),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
           h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),
