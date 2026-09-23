@@ -1901,6 +1901,12 @@
         gap: 4,
         verticalAlign: "middle",
       };
+      // g-330：右侧栏页签（sidebar.right.pane.tab）投递 host="sidebar"；会话内 conversation.view 不传。
+      // 右侧栏宽度远窄于 conversation.view，头部是单行 flex（S.head 无 flexWrap），窄宽度下
+      // 标题/版本/各按钮会被压成竖排不可读——故只对右侧栏给头部加一个额外 class（见
+      // constants.js 的 .dg-head-sidebar），由 CSS 放开换行（最小适配，见判据 5）。
+      // 会话内路径：className 为 undefined，style 仍是 S.head 本体，外观与 DOM 逐字不变。
+      const sidebarHost = props?.host === "sidebar";
       return h(
         "div",
         { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
@@ -1917,7 +1923,7 @@
              }
            } : undefined },
         h("style", null, HOVER_CSS),
-        h("div", { style: S.head },
+        h("div", { style: S.head, className: sidebarHost ? "dg-head-sidebar" : undefined },
           h("strong", null, "dsh-graph"),
           // g-174：标题栏显示插件版本，点击以新标签打开插件官网
           h("a", {

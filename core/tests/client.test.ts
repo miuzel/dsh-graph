@@ -326,7 +326,10 @@ test("g-164 released 泳道与 active/version 泳道共用同一动态列模板�
 
 test("g-174 标题栏源契约：version 链接、新建版本入口迁移、设置按钮位于 DEBUG 左侧", () => {
   const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
-  const head = source.slice(source.indexOf('h("div", { style: S.head },'), source.indexOf("// g-108：顶部 supervisor 状态栏"));
+  // g-330：切片锚点由 'h("div", { style: S.head },' 放宽为 'h("div", { style: S.head'
+  //（该行新增了右侧栏专用的条件 className，样式本体仍是 S.head 本体、会话内为 undefined）。
+  // 切片终点与下面三条断言逐字未变，标题栏契约的覆盖范围与强度不受影响。
+  const head = source.slice(source.indexOf('h("div", { style: S.head'), source.indexOf("// g-108：顶部 supervisor 状态栏"));
   // 标题栏显示插件版本链接，新标签打开插件官网。
   assert.match(head, /href: "https:\/\/github\.com\/miuzel\/dsh-graph",\s*\n\s*target: "_blank"/);
   assert.match(head, /"version: " \+ PLUGIN_VERSION/);

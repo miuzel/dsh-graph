@@ -134,6 +134,10 @@
     // 跳转后把会话页切回「对话」tab：chat 是 conversation.view 中 order=0 的固定首 tab；
     // tab 选中态存在 ui-conversation 的 per-session chatStore 内、无跨插件 API（源码核实），
     // 故在跳转后点一下首 tab（仅当当前选中不是它）。无 tab 栏（单视图）时不动。
+    // g-330 风险核实（0.1.6-alpha.2 真机 3083）：右侧栏页签条本身是 role="presentation"
+    //（`data-dockkit-strip-tabs`），不构成 `[role="tablist"]`，故下面这条全文档查询在右侧栏
+    // 打开时也不会取到右侧栏页签；实测从右侧栏看板点「转到对话」后主区确实切回「对话」。
+    // 结论：前提成立，无需为此改动本函数（不改共享跳转路径）。
     function activateChatTab() {
       requestAnimationFrame(() => requestAnimationFrame(() => {
         try {
@@ -217,6 +221,42 @@
         onClick: (e) => { e.stopPropagation(); void openChildSession(parentSessionId, childId); },
       }, label ?? dgT("card.goToSession"));
     }
+    // ===== g-330：右侧栏页签入口（方案 B）=====
+    // 保留会话内 conversation.view 入口不变，另在 DSH 右侧栏以 tab 形式打开同一份 KanbanView。
+    // 做法对齐 dsh-context 的 watchSidebarContextTab（两段式注册）：
+    //   ① ctx.sidebarRightTabs.register({ id, kind, title, guide }) —— 类型（静态面）
+    //   ② sidebar.right.pane.tab        seat（key = 同一个 id）—— 本体
+    //   ③ sidebar.right.pane.tab.title  seat（key = 同一个 id）—— chip 标题
+    // id 必须全局唯一、kind 必须带命名空间：registry 对重复 id、以及同 band 的 kind 冲突会抛异常，
+    // 外部插件可能已占用朴素名 graph/kanban/context，故两者都用包名 "dsh-graph"。
+    const SIDEBAR_TAB_ID = "dsh-graph";
+    const SIDEBAR_TAB_KIND = "dsh-graph";
+    // guide 胶囊的位置：排在宿主内置 Files 条目（order 10）之后，与 dsh-context（order 20）一致。
+    const SIDEBAR_GUIDE_ORDER = 20;
+    // 右侧栏页签的字形（看板列）。currentColor + 透明度分层，自动跟随宿主主题；
+    // 自带组件而非复用产品图标：不依赖 primitives 的图标导出面（旧宿主可能没有）。
+    function GraphTabIcon({ size = 16, className }) {
+      return h("svg", {
+        width: size, height: size, viewBox: "0 0 16 16", fill: "none", className,
+        "aria-hidden": "true", xmlns: "http://www.w3.org/2000/svg",
+        style: { flex: "none" },
+      },
+        h("rect", { x: 1, y: 2, width: 3.6, height: 12, rx: 1.2, fill: "currentColor", opacity: 0.5 }),
+        h("rect", { x: 6.2, y: 2, width: 3.6, height: 8.5, rx: 1.2, fill: "currentColor", opacity: 0.78 }),
+        h("rect", { x: 11.4, y: 2, width: 3.6, height: 5.5, rx: 1.2, fill: "currentColor" }));
+    }
+    // chip 标题 seat：图标 + 文案。dockkit 的 chip 标题是 flex 行、且右侧有 30px 渐隐遮罩
+    // （._tabTitle mask-image linear-gradient calc(100% - 30px)），故图标 flex:none、
+    // 文案留 30px 右内边距，让渐隐落在文字之后——与 dsh-context 的 lc-title-label 同一处理。
+    function GraphTabTitle() {
+      // 切语言时重算：本组件订阅 dsh-graph:locale-changed（plugin 在 locale/change 时广播）。
+      useLocaleRevision();
+      return h(React.Fragment, null,
+        h(GraphTabIcon, { size: 16 }),
+        h("span", {
+          style: { paddingRight: 30, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+        }, dgT("sidebar.tab.title")));
+    }
     return {
       name: "dsh-graph",
       // connection/remote/modelDirectories 是可选 capability：不得把它们列为硬 inject，
@@ -278,6 +318,63 @@
           connectionRt = scope.get?.("connection") ?? connectionRt;
           // 已注册的 settings section 通过 appCtx 变量读取 catalog，无需重复注册。
         });
+        // ===== g-330：右侧栏页签（方案 B）=====
+        // 必须走 deferred inject，不得进上面的硬 inject（inject: ["slots", "sessions"] 保持不变）：
+        // 宿主没有 sidebarRightTabs（精简 profile / 旧宿主）时回调不触发 ⇒ 不注册、不 pend、不报错，
+        // 会话内看板、设置页、header badge 全部照旧。全程特性探测，不做任何版本号比较。
+        try {
+          ctx.inject?.(["sidebarRightTabs"], (injected) => {
+            const scope = injected ?? {};
+            const disposers = [];
+            const own = (result) => { if (typeof result === "function") disposers.push(result); };
+            const disposeAll = () => {
+              for (const d of disposers) { try { d(); } catch { /* 静默 */ } }
+            };
+            try {
+              const tabs = scope.sidebarRightTabs;
+              // 注册表经注入的 scope 取 slots（与 dsh-context 同源）；形状不符即静默降级。
+              const sidebarSlots = scope.slots ?? ctx.slots;
+              if (!tabs || typeof tabs.register !== "function") return;
+              if (!sidebarSlots || typeof sidebarSlots.register !== "function") return;
+              own(tabs.register({
+                id: SIDEBAR_TAB_ID,
+                kind: SIDEBAR_TAB_KIND,
+                // g-230 纪律：thunk 标签，按活跃语言即时重算（guide 条目同理）
+                title: () => dgT("sidebar.tab.title"),
+                guide: [{
+                  id: SIDEBAR_TAB_ID,
+                  order: SIDEBAR_GUIDE_ORDER,
+                  title: () => dgT("sidebar.tab.title"),
+                  description: () => dgT("sidebar.guide.description"),
+                  icon: GraphTabIcon,
+                }],
+              }));
+              // 本体 seat：复用与 conversation.view 完全相同的 KanbanView 与数据源，只多传 host: "sidebar"
+              // （该 seat 是 session 作用域，投递与 conversation.view 相同的标准套件，含 sessionId ⇒
+              //  workspace 解析链无需任何改动，也不触碰 g-113 的会话隔离边界）。
+              own(sidebarSlots.inject("sidebar.right.pane.tab", () => sidebarSlots.register(
+                { name: "sidebar.right.pane.tab", key: SIDEBAR_TAB_ID, locale: "dsh-graph" },
+                (props) => h(KanbanView, { ...props, host: "sidebar" }),
+              )));
+              // chip 标题 seat
+              own(sidebarSlots.inject("sidebar.right.pane.tab.title", () => sidebarSlots.register(
+                { name: "sidebar.right.pane.tab.title", key: SIDEBAR_TAB_ID },
+                (props) => h(GraphTabTitle, props),
+              )));
+            } catch (e) {
+              // id/kind 被占用、registry 抛错等：撤销已成功的部分注册；
+              // 右侧栏只是没有这个页签，绝不拖垮浏览器。
+              disposeAll();
+              // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
+              console.warn("[dsh-graph-host] sidebarRight tab 注册失败，已撤销（右侧栏无该页签）", e);
+              return;
+            }
+            return disposeAll;
+          });
+        } catch (e) {
+          // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
+          console.warn("[dsh-graph-host] sidebarRight deferred inject 失败（右侧栏无该页签）", e);
+        }
         console.log("[dsh-graph-host] client apply: kanban view registered (i18n enabled)");
       },
     };
