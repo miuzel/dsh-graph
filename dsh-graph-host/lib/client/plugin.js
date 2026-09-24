@@ -28,6 +28,21 @@
         };
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
         const snap = rt?.list?.getSnapshot?.() ?? {};
+        // g-351：直接父索引的目录来源改为形状探测（旧 subagentsByParent / 新 projectionsBySession），
+        // 索引构造与反查口径保持不变。
+        const catalogsByParent = new Map();
+        try {
+          const legacy = snap.subagentsByParent;
+          if (legacy && typeof legacy === "object") {
+            for (const pid of Object.keys(legacy)) catalogsByParent.set(pid, legacy[pid]?.entries);
+          }
+          const projected = snap.projectionsBySession;
+          if (projected && typeof projected === "object") {
+            for (const pid of Object.keys(projected)) {
+              if (!catalogsByParent.has(pid)) catalogsByParent.set(pid, projected[pid]?.values?.subagentCatalog);
+            }
+          }
+        } catch { /* 形状不符 → 空索引，按未收录降级 */ }
         // g-244：运行时列表快照是 byId 记录；仅旧/降级形状是 items 数组，两种都读。
         const itemList = Array.isArray(snap.items) ? snap.items : null;
         const byId = (sid) => {
@@ -35,17 +50,13 @@
           if (rec && typeof rec === "object" && Object.prototype.hasOwnProperty.call(rec, sid)) return rec[sid];
           return itemList ? itemList.find((s) => s && (s.sessionId === sid || s.id === sid)) : undefined;
         };
-        // g-244：子 → 直接父 反查表（subagentsByParent 目录 + currentAddress 导航地址）。
+        // g-244：子 → 直接父 反查表（子代理目录 + currentAddress 导航地址）。
         const parentIndex = new Map();
-        const catalogs = snap.subagentsByParent;
-        if (catalogs && typeof catalogs === "object") {
-          for (const pid of Object.keys(catalogs)) {
-            const entries = catalogs[pid]?.entries;
-            if (!Array.isArray(entries)) continue;
-            for (const e of entries) {
-              if (e && e.kind === "child" && typeof e.id === "string" && e.id && !parentIndex.has(e.id)) {
-                parentIndex.set(e.id, pid);
-              }
+        for (const [pid, entries] of catalogsByParent) {
+          if (!Array.isArray(entries)) continue;
+          for (const e of entries) {
+            if (e && e.kind === "child" && typeof e.id === "string" && e.id && !parentIndex.has(e.id)) {
+              parentIndex.set(e.id, pid);
             }
           }
         }
@@ -181,10 +192,8 @@
       try {
         if (!rt) return;
         // 目录必须先加载，否则 selectSubagent 抛 "not a healthy catalog child"（发现#21）
-        rt.setSubagentCatalogOpen?.(parentSessionId, true);
-        await rt.refreshSubagents?.(parentSessionId);
-        const entries = rt.list?.getSnapshot?.().subagentsByParent?.[parentSessionId]?.entries ?? [];
-        const entry = entries.find((e) => e.kind === "child" && e.id === childId);
+        await refreshSubagentCatalog(rt, parentSessionId);
+        const entry = subagentCatalogEntries(rt, parentSessionId).find((e) => e.kind === "child" && e.id === childId);
         if (entry) {
           // g-321：0.1.5 走 sessions.openSubagent(address)；0.1.6 该 API 已移除，
           // 由 uiWorkspace.openSession(address) 一步完成「选中会话 + 切到对话」。

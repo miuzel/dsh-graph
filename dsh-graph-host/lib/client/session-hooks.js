@@ -95,18 +95,14 @@
     }
 
     // 目录 entry → SubagentAddress（与 setupBoundSession 的 entry 筛选口径保持一致）
+    // g-351：目录形状由 helpers.subagentCatalogEntries 探测（旧 subagentsByParent / 新 projectionsBySession）。
     function subagentAddressFromCatalog(parentId, childId) {
-      if (!parentId || !childId) return null;
-      let entries = [];
-      try { entries = sessionsRt?.list?.getSnapshot?.()?.subagentsByParent?.[parentId]?.entries ?? []; }
-      catch (e) { return null; }
-      const entry = entries.find((e) => e && e.kind === "child" && e.id === childId);
-      return entry ? { parentSessionId: parentId, childSessionId: childId, mode: entry.mode } : null;
+      return subagentAddressOf(sessionsRt, parentId, childId);
     }
 
     // 子代理会话的 retain 目标：优先 SubagentAddress——resolveTarget 对地址不校验存在性，
     // 且会把地址写入 manager.addresses，使 session.prompt 走 subagents 路由；
-    // 拿不到地址时先 setSubagentCatalogOpen + await refreshSubagents 再试；
+    // 拿不到地址时先按能力刷新目录（新 refreshProjections / 旧 refreshSubagents）再试；
     // 仍未收录 → null（降级为空绑定、保留看板占位，绝不抛错、绝不刷 console）。
     async function resolveSessionRetainTarget(parentId, childId) {
       if (!childId) return null;
@@ -117,10 +113,7 @@
       } catch (e) { /* 地址探测不可用 → 继续走目录路径 */ }
       const cached = subagentAddressFromCatalog(parentId, childId);
       if (cached) return cached;
-      try {
-        sessionsRt?.setSubagentCatalogOpen?.(parentId, true);
-        await sessionsRt?.refreshSubagents?.(parentId);
-      } catch (e) { /* 目录刷新失败 → 按未收录降级为空绑定 */ }
+      await refreshSubagentCatalog(sessionsRt, parentId);
       return subagentAddressFromCatalog(parentId, childId);
     }
 
@@ -244,9 +237,8 @@
       const p = (async () => {
         if (parentId) {
           try {
-            sessionsRt.setSubagentCatalogOpen?.(parentId, true);
-            await sessionsRt.refreshSubagents?.(parentId);
-            const entries = sessionsRt.list?.getSnapshot?.().subagentsByParent?.[parentId]?.entries ?? [];
+            await refreshSubagentCatalog(sessionsRt, parentId);
+            const entries = subagentCatalogEntries(sessionsRt, parentId);
             const entry = entries.find((e) => e.kind === "child" && e.id === childId);
             if (entry) {
               boundModes.set(childId, entry.mode);

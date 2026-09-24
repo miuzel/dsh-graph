@@ -587,6 +587,11 @@ function makeSessionHooksSandbox(
     "var retainedBindings = new Map();",
     "var LIVE_DISPLAY_KEY = 'dsh-graph.live-display';",
     ...names.map((n) => extractFunction(hooks, n)),
+    // g-351：目录读取/刷新改为 helpers 里的形状与能力探测实现，沙箱需连同其定义注入
+    //（断言与语义均不变，仅随实现位置补齐依赖）。
+    extractFunction(helpers, "subagentCatalogEntries"),
+    extractFunction(helpers, "subagentAddressOf"),
+    extractFunction(helpers, "refreshSubagentCatalog"),
     extractFunction(helpers, "getLiveDisplay"),
     extractFunction(helpers, "useLiveDisplayEnabled"),
     "this.parts = { useSessionBinding, useBoundSession, retainedBindings, boundModes };",
@@ -1052,6 +1057,10 @@ function renderLiveStrip(rt: unknown, props: Record<string, unknown>, liveDispla
     "var LIVE_DISPLAY_KEY = 'dsh-graph.live-display';",
     "var dgT = (k, p) => { var s = (zh[k] !== undefined ? zh[k] : k); if (p) for (var key in p) s = s.split('{' + key + '}').join(p[key]); return s; };",
     ...names.map((n) => extractFunction(bundle, n)),
+    // g-351：目录读取/刷新改为形状与能力探测实现（同上，补齐沙箱依赖，断言不变）。
+    extractFunction(bundle, "subagentCatalogEntries"),
+    extractFunction(bundle, "subagentAddressOf"),
+    extractFunction(bundle, "refreshSubagentCatalog"),
     extractFunction(bundle, "getLiveDisplay"),
     extractFunction(bundle, "useLiveDisplayEnabled"),
     extractFunction(bundle, "formatStatusWithLifecycle"),
@@ -1142,6 +1151,10 @@ test("g-321 端到端（真实产物）：0.1.6 语义下 useSessionModel 拿得
       "var retainedBindings = new Map();",
       "var dgT = (k) => (zh[k] !== undefined ? zh[k] : k);",
       ...names.map((n) => extractFunction(bundle, n)),
+      // g-351：补齐目录形状/能力探测实现（沙箱依赖，断言不变）。
+      extractFunction(bundle, "subagentCatalogEntries"),
+      extractFunction(bundle, "subagentAddressOf"),
+      extractFunction(bundle, "refreshSubagentCatalog"),
       "this.useSessionModel = useSessionModel;",
     ].join("\n"), sandbox, { filename: "dist/lib/client.js#useSessionModel" });
     return sandbox;

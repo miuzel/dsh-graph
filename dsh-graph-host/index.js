@@ -15,7 +15,8 @@ import { writeFileSync, readFileSync, realpathSync, mkdirSync, readdirSync, exis
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { relative, join, resolve, dirname, basename, isAbsolute } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import {
   createGoal,
   normalizeGoalType,
@@ -255,6 +256,9 @@ const ATTEMPT_STATUS_STATE_SCHEMA = {
 // g-133：dsh-graph profile 级全局默认（DSH settings namespace「dsh-graph」）。
 // 仅保留子代理 provider/model/补充提示词；主管提示词属于 workspace 配置（g-132）。
 const GRAPH_SETTINGS_NS = "dsh-graph"; // 合法 namespace（[a-z][a-z0-9-]*）
+// g-351：新宿主（0.1.7 线）的设置表单以 **profile 条目 id** 为键（`SettingsDescriptor.ns`），
+// 即 cordis.patch.yml 的 insert id；插件自身 name 一并纳入匹配，容忍用户层 patch 改 id。
+const GRAPH_SETTINGS_ENTRY_ID = "dsh-graph-host";
 const GRAPH_SETTINGS_DEFAULTS = Object.freeze({
   subagentProvider: "",
   subagentModel: "",
@@ -274,6 +278,54 @@ function buildGraphSettingsSchema(z) {
     promptLanguage: z.union(["follow", "zh", "en"]).default("follow"),
   });
 }
+
+// g-351：profile 级全局默认在**新宿主**上的声明面。
+// 旧宿主（0.1.6 线）的 settings 服务提供 namespace 注册 API（`settings.register`），值存于
+// $DSH_HOME/settings.yaml；新宿主（0.1.7 线）移除了该 API，改为把插件 entry 的 Config schema
+// 投影成设置表单、并把编辑写回 profile patch。故这里以命名导出 `Config` 声明**同一组字段**，
+// 供新宿主生成表单；每个字段标记 volatile ⇒ 可在设置页热改而无需重挂载。
+// 旧宿主上这份声明没有消费方（其值仍由 namespace 路径提供），故不改变 0.1.6 行为。
+// schemastery 是可选 peer：同步解析失败时 `Config` 为 undefined（等价旧行为，插件照常加载）。
+function buildGraphSettingsConfigSchema(z) {
+  const live = (field) => (typeof field?.volatile === "function" ? field.volatile() : field);
+  return z.object({
+    subagentProvider: live(z.string().default("")),
+    subagentMode: live(z.union(["", "standard", "minimal"]).default("")),
+    subagentModel: live(z.string().default("")),
+    subagentReasoningEffort: live(z.string().default("")),
+    subagentPrompt: live(z.string().default("")),
+    promptLanguage: live(z.union(["follow", "zh", "en"]).default("follow")),
+  });
+}
+// g-351：schemastery 是**可选** peer，插件不得硬依赖它。宿主部署形态不同，可解析的基准也不同
+// （插件自身相邻的 node_modules / 宿主 CLI 自身的 node_modules），故按基准依次尝试；
+// 全部失败返回 null（等价旧行为：不声明 Config、namespace 路径跳过）。
+function resolveSchemastery() {
+  const bases = [];
+  try { bases.push(import.meta.url); } catch { /* 无 import.meta */ }
+  try {
+    if (process.argv[1]) {
+      bases.push(pathToFileURL(process.argv[1]).href);
+      // 包管理器常以 symlink 启动 CLI（如 fnm 的 bin/dsh → lib/node_modules/.../bin.js），
+      // 而 node_modules 查找要沿**真实路径**上行，故再补一个 realpath 基准。
+      bases.push(pathToFileURL(realpathSync(process.argv[1])).href);
+    }
+  } catch { /* 无 argv[1] 或不可 realpath */ }
+  for (const base of bases) {
+    try {
+      const loaded = createRequire(base)("@deepseek-ai/schemastery");
+      const schema = loaded?.default ?? loaded;
+      if (schema && typeof schema.object === "function") return schema;
+    } catch { /* 该基准不可解析，试下一个 */ }
+  }
+  return null;
+}
+let graphSettingsConfig;
+try {
+  const z = resolveSchemastery();
+  if (z) graphSettingsConfig = buildGraphSettingsConfigSchema(z);
+} catch { /* 可选 peer 缺失：不声明 Config */ }
+export { graphSettingsConfig as Config };
 
 function params(properties, required) {
   // g-190（review P0）：工具参数严格白名单——拒绝未知/多余字段
@@ -944,33 +996,70 @@ export function apply(ctx, config) {
   // 绝对 config.root 时跳过 workspace 要求（root 完全由配置决定）。
   const isAbsoluteConfig = !!(config?.root && isAbsolute(config.root));
   const sessionWorkspace = (ex) => ex?.agent?.session?.header?.cwd ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? null;
-  // g-133：注册 dsh-graph settings namespace（profile 级全局默认）。
-  // 守卫式动态 import schemastery（@deepseek-ai/*），失败/缺失时优雅降级（plugin 始终可加载）。
+  // g-133 起 profile 级全局默认由宿主 settings 服务承载；g-351 起改为**能力探测分流**
+  // （零版本号字面量比较），因为该服务的形态在宿主上换过代：
+  //   ① 旧能力：服务暴露 namespace 注册 API `settings.register(ns, schema, { base })`，
+  //      值存于 $DSH_HOME/settings.yaml（0.1.6 线）。
+  //   ② 新能力：该 API 已从服务上移除，改为「profile 条目 Config → 设置表单」投影
+  //      （`describe` / `update` / `replace` / `mutate`，0.1.7 线）。此时 profile 级默认
+  //      就是本插件 entry 的 Config（由本模块的 `Config` 命名导出声明），current 值以
+  //      `describe()` 的 descriptor 读取。
+  // 探测按「旧 → 新」依次尝试：首个可用且成功者胜出；两条能力都不在时才如实降级到
+  // stderr —— 且措辞说明是**能力缺失**，不再是误导性的「注册失败」。
   // ctx.inject(["settings"], cb) 等待 settings 服务出现（同 dsh-subagent-model-picker 的已上线模式）；
-  // settings 服务缺失（无 provider 组合）时 namespace 不注册、看板/工具/模型路由不受影响。
-  // owner scope 的 get() 读当前 resolved 值（用户改 profile 设置后实时反映），watch() 可订阅变化。
+  // settings 服务缺失（无 provider 组合）时不影响看板/工具/模型路由。
   let graphSettingsScope = null;
-  const setupGraphSettings = async () => {
-    let z;
+  /** 新能力：从设置表单投影里读本插件 entry 的 current 值（entry id 见 cordis.patch.yml）。 */
+  const readGraphSettingsFromForms = (svc) => {
     try {
-      z = (await import("@deepseek-ai/schemastery")).default;
-      if (!z) return; // 解析到空：降级
+      if (typeof svc?.describe !== "function") return null;
+      const rows = svc.describe({ redactSecrets: true });
+      if (!Array.isArray(rows)) return null;
+      const row = rows.find((r) => r?.ns === GRAPH_SETTINGS_ENTRY_ID || r?.ns === name);
+      return row?.value ?? null;
     } catch {
-      process.stderr.write("[dsh-graph-host] g-133: @deepseek-ai/schemastery 不可解析，profile 全局默认降级（模型路由/提示词走 project.yaml/继承）\n");
-      return;
+      return null;
     }
-    const schema = buildGraphSettingsSchema(z);
+  };
+  const setupGraphSettings = async () => {
+    const z = resolveSchemastery();
     if (typeof ctx.inject !== "function") return; // 无 inject 的上下文（如部分 mock）降级
     ctx.inject(["settings"], (sctx) => {
-      try {
-        graphSettingsScope = sctx.settings.register(GRAPH_SETTINGS_NS, schema, {
-          base: { ...GRAPH_SETTINGS_DEFAULTS },
-        });
-        sctx.effect(() => () => { graphSettingsScope = null; });
-      } catch (e) {
-        // duplicate registration 或存储段非法：降级（读取走默认/继承）
-        process.stderr.write(`[dsh-graph-host] g-133 settings 注册失败（降级，模型路由/提示词走默认）：${e?.message ?? e}\n`);
+      const svc = sctx?.settings;
+      // 旧能力优先：只要服务上还有 namespace 注册 API，就绝不改走表单投影
+      // （0.1.6 线的 SettingsProvider 同时暴露 register 与 describe，但后者的 ns 是
+      //  namespace 而非 profile 条目 id —— 误走表单分支会**静默**退回默认值）。
+      const registerCapable = typeof svc?.register === "function";
+      if (registerCapable) {
+        if (!z) {
+          // schema 依赖 schemastery；解析不到时如实说明，且**不再**退化成无提示的默认值。
+          process.stderr.write("[dsh-graph-host] g-351: @deepseek-ai/schemastery 不可解析，profile 全局默认降级（模型路由/提示词走 project.yaml/继承）\n");
+          return;
+        }
+        try {
+          graphSettingsScope = svc.register(GRAPH_SETTINGS_NS, buildGraphSettingsSchema(z), {
+            base: { ...GRAPH_SETTINGS_DEFAULTS },
+          });
+          sctx.effect(() => () => { graphSettingsScope = null; });
+          return;
+        } catch (e) {
+          const reason = `register: ${e?.message ?? e}`;
+          process.stderr.write(`[dsh-graph-host] g-351 settings 注册失败（降级，模型路由/提示词走默认）：${reason}\n`);
+          return;
+        }
       }
+      // 新能力：profile 条目 Config 经设置表单投影（0.1.7 线）。值由 `Config` 声明，
+      // `configure({ auto: true })` 声明该 entry 允许自动生成设置页（策略可选，失败不致命）。
+      if (typeof svc?.describe === "function") {
+        if (typeof svc.configure === "function") {
+          try { sctx.effect(() => svc.configure({ auto: true })); } catch { /* 页面策略可选 */ }
+        }
+        graphSettingsScope = { get: () => readGraphSettingsFromForms(svc) };
+        sctx.effect(() => () => { graphSettingsScope = null; });
+        return;
+      }
+      // 两条能力都不可用：如实降级（读取走 project.yaml/继承），不伪装成注册异常。
+      process.stderr.write("[dsh-graph-host] g-351 settings 能力不可用（降级，模型路由/提示词走 project.yaml/继承）：settings 服务未提供 namespace 注册或表单投影 API\n");
     });
   };
   setupGraphSettings();

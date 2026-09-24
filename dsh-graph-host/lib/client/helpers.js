@@ -751,4 +751,51 @@
       return null;
     }
 
+    // ===== g-351：子代理目录的**形状/能力探测**读取（零版本号比较）=====
+    // 宿主改过代：旧形态把直接子目录放在 `list.getSnapshot().subagentsByParent[parentId].entries`；
+    // 新形态移除了该字段，改由共享会话投影承载 `projectionsBySession[sid].values.subagentCatalog`。
+    // 两种形状都读，任一处命中即返回；形状不符返回 []，调用方按「未收录」降级。
+    function subagentCatalogEntries(rt, parentId) {
+      if (!rt || !parentId) return [];
+      let snap = null;
+      try { snap = rt.list?.getSnapshot?.() ?? null; } catch { return []; }
+      if (!snap || typeof snap !== "object") return [];
+      try {
+        const legacy = snap.subagentsByParent?.[parentId]?.entries;
+        if (Array.isArray(legacy)) return legacy;
+      } catch { /* 形状不符 → 试新形态 */ }
+      try {
+        const projected = snap.projectionsBySession?.[parentId]?.values?.subagentCatalog;
+        if (Array.isArray(projected)) return projected;
+      } catch { /* 形状不符 → 未收录 */ }
+      return [];
+    }
+
+    /** 目录 entry → SubagentAddress（与调用方的 entry 筛选口径保持一致）。 */
+    function subagentAddressOf(rt, parentId, childId) {
+      if (!parentId || !childId) return null;
+      try {
+        const direct = rt?.subagentAddress?.(childId);
+        if (direct) return direct;
+      } catch { /* 地址探测不可用 → 走目录 */ }
+      const entry = subagentCatalogEntries(rt, parentId).find((e) => e && e.kind === "child" && e.id === childId);
+      return entry ? { parentSessionId: parentId, childSessionId: childId, mode: entry.mode } : null;
+    }
+
+    /** 按能力刷新子代理目录：新形态用 `refreshProjections()`，旧形态用
+     *  `setSubagentCatalogOpen()` + `refreshSubagents()`；两者都缺失则原样返回（调用方自行降级）。 */
+    function refreshSubagentCatalog(rt, parentId) {
+      if (!rt || !parentId) return Promise.resolve();
+      try {
+        if (typeof rt.refreshProjections === "function") {
+          return Promise.resolve(rt.refreshProjections(parentId)).then(() => {}, () => {});
+        }
+        rt.setSubagentCatalogOpen?.(parentId, true);
+        const pending = rt.refreshSubagents?.(parentId);
+        return pending && typeof pending.then === "function" ? pending.then(() => {}, () => {}) : Promise.resolve();
+      } catch {
+        return Promise.resolve();
+      }
+    }
+
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // Contract marker: 看板数据自动刷新
