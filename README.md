@@ -91,6 +91,22 @@ dsh plugin --profile <name> add dsh-graph
 
 ![目标详情弹窗](screenshot/screenshot-2.png)
 
+## 侧边栏用法
+
+右侧栏的「**看板**」与会话页的「**看板**」页签是**同一份实现**——同一个看板组件、同一套头部与窄档逻辑，**两侧完全一致**（零 host 门控），任选其一即可。
+
+- **入口**：在会话里打开右侧栏 → 点「看板」磁贴；打开的看板面板会成为右侧栏顶部的一个页签常驻，随时切回。
+- **`⋯ 工具`**：刷新 / 标签筛选 / 记忆 / 项目知识库（共享条目）/ 看板设置 / 已归档。工具条按**头部实测宽度装不下**自动折叠为这一项（不是写死的窗口断点）。
+- **`[🏷️]` 版本管理**：角落的方形图标按钮（可访问名称为「🏷️ 版本管理」），点开版本管理抽屉；紧邻其右是**同一行等高**的 `创建版本`。
+- **版本选择器**：位于泳道行 `[+]`（新建目标）**左侧**，切换当前显示的泳道（具体版本 / Backlog / 独立目标）。
+- **窄档行为**（分档依据是**看板根容器实测宽度**，与窗口宽度无关——右侧栏被宿主拖窄时同样生效）：
+  - **`≥ 480px`（宽档）**：多泳道横向并排，各版本 / Backlog / 独立目标可同时查看；
+  - **`< 480px`（单泳道档）**：阶段列由横向并排改为**纵向堆叠**，泳道内容由版本选择器决定（**具体版本 / Backlog / 独立目标三选一**）；该档**没有版本折叠开关**（收起来等于空板），并同时**把工具条强制折叠为「⋯ 工具」**、**隐藏 DEBUG 行**。
+
+下图为右侧栏「看板」面板（虚构演示数据 nebula-notes，宽度落在 `< 480px` 单泳道档：阶段列纵向堆叠、工具条折叠为「⋯ 工具」、DEBUG 行按规则隐藏；「确认」列头右侧即 `✅ 批量接受` 入口）：
+
+![侧边栏看板](screenshot/sidebar-kanban.png)
+
 ## 数据目录
 
 `<workspace>/.dsh-graph`：跟随调用会话的 workspace（`session.header.cwd`），数据落在每个项目自己的 `.dsh-graph`，git 友好。包含 `backlog/`、`goals/`、`versions/`、`events.jsonl`（事件流，唯一事实源）等。首次触达某 workspace 自动生成骨架，幂等、不建 demo 数据；`.dsh-graph` 也可配置为独立 Git 仓库（见 `docs/` 与 `scripts/archived/migrate-dsh-graph-repo.sh`）。
@@ -112,6 +128,8 @@ node scripts/dsh-graph-mock-seed.mjs --validate               # 生成 nebula-no
 CWD=/tmp/dsh-graph-mock-demo bash scripts/archived/dev-dsh-instance.sh run --port 3082  # 测试实例（开「看板」tab）
 # 截图：同一次 seed、同一实例、固定视口——看板全景 → screenshot/screenshot-1.png；
 # 点击看板上的目标卡片打开详情弹窗 → screenshot/screenshot-2.png
+# 侧边栏看板 → screenshot/sidebar-kanban.png：同一实例里打开右侧栏 → 点「看板」磁贴，
+# 再把右侧栏拖到 <480px（单泳道档，工具条折叠、DEBUG 行自动隐藏）后截「看板」面板
 ```
 
 ## License
