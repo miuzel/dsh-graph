@@ -233,19 +233,45 @@ test("g-330 判据3：右侧栏本体与 conversation.view 挂载同一个 Kanba
   assert.equal(defs.reduce((a, b) => a + b, 0), 1, "不得存在第二套看板渲染实现");
 });
 
-// ---------------------------------------------------------------- 5. 窄宽度最小适配
+// ---------------------------------------------------------------- 5. 窄宽度适配（g-352 取代 g-330 最小适配）
 
-test("g-330 判据5：窄宽度最小适配只在 host=sidebar 生效，会话内头样式逐字不变", () => {
+// g-352 取代说明：g-330 的判据 5 是 `.dg-head-sidebar { flex-wrap: wrap; row-gap: 6px }` 纯 CSS
+// 最小适配；本目标改为「以看板根容器实测宽度分档 + 工具条折叠进下拉容器 + <360px 单版本模式」，
+// 故本段按负责人显式授权（判据 5）改写为新的窄宽度契约。会话内 conversation.view 路径的
+// DOM/样式零变化这一条不变，仍然逐字断言。
+test("g-352 取代 g-330 判据5：窄宽度以根容器实测宽度分档、只在 host=sidebar 生效，会话内头样式逐字不变", () => {
   const src = readClient("kanban");
   const css = readClient("constants");
+  const narrow = readClient("narrow-width");
   assert.match(src, /const sidebarHost = props\?\.host === "sidebar";/);
-  // 会话内路径：style 仍是 S.head 本体、className 为 undefined（DOM/外观零变化）
+  // 断点真源 = 看板根容器实测宽度（ResizeObserver 观测 boardRootRef），不是 window 宽度
+  assert.match(src, /new ResizeObserver\(measure\)/);
+  assert.match(src, /ro\.observe\(el\)/);
+  assert.match(src, /const w = typeof el\.clientWidth === "number" && el\.clientWidth > 0/);
+  assert.doesNotMatch(src, /window\.innerWidth|matchMedia/);
+  // 阈值与分档集中在 narrow-width.js 纯函数模块（测试断言同一实现，不是复制一份常量）
+  assert.match(narrow, /const NARROW_TOOLBAR_MAX_WIDTH = 480;/);
+  assert.match(narrow, /const NARROW_SINGLE_VERSION_MAX_WIDTH = 360;/);
+  assert.match(src, /const widthTier = boardWidthTier\(boardWidth\);/);
+  // 会话内路径：style 仍是 S.head 本体（sidebarHost=false ⇒ 展开空对象、零额外样式键）、
+  // className 为 undefined（DOM/外观零变化）
+  // 会话内路径：style 仍是 S.head **本体**（无额外样式键、无对象拷贝）、className 为 undefined
   assert.match(src, /h\("div", \{ style: S\.head, className: sidebarHost \? "dg-head-sidebar" : undefined \}/);
-  // 窄宽度适配只落在该 class 上（CSS 注入在同一实例内），未按 host 分叉出第二套布局
-  assert.match(css, /\.dg-head-sidebar \{ flex-wrap: wrap; row-gap: 6px; \}/);
+  // 右侧栏专属布局只经 .dg-head-sidebar 的布局兜底（换行 + 按钮不压缩），且不得把
+  // 样式键写成 props 顶层（那会渲染成 lowercase DOM 属性 flexwrap="wrap"，样式根本不生效）
+  assert.match(css, /\.dg-head-sidebar \{ flex-wrap: wrap; \}/);
+  assert.match(css, /\.dg-head-sidebar > \* \{ flex-shrink: 0; \}/);
+  assert.doesNotMatch(src, /style: S\.head, \.\.\./, "禁止把样式键漏成 props 顶层（会渲染成 lowercase DOM 属性）");
+  // 取代关系：g-330 的纯 CSS 放开换行已删除（换行改为测量驱动的内联样式）
+  assert.doesNotMatch(css, /\.dg-head-sidebar \{ flex-wrap: wrap; row-gap: 6px; \}/);
+  // 且绝不给侧栏全部按钮加 min-width:0（那会把宽档按钮压到十几像素、文字反而越框）
+  assert.doesNotMatch(css, /\.dg-head-sidebar \.dg-btn \{ min-width: 0; \}/);
+  // 根因兜底（判据 2）：触发按钮自身也要 min-width:0 + text-overflow:ellipsis，否则仍会越框
+  assert.match(css, /\.dg-narrow-head-btn \{ min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \}/);
+  assert.match(src, /minWidth: 0, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"/);
   // 根容器仍是同一个 S.wrap（其中已含 overflowX: auto → 窄宽度可横向滚动）
   assert.match(src, /style: S\.wrap/);
-  // 网格模板只由同一个 gridCols 计算，未按 host 分叉出第二套列宽
+  // 网格模板仍只有同一份派生（顶部表头 + released 泳道共用 gridCols），未按 host 分叉出第二套列宽
   assert.equal([...src.matchAll(/gridTemplateColumns: /g)].length, 3, "网格模板数量不变（无 host 分叉）");
   assert.doesNotMatch(src, /sidebarHost[\s\S]{0,120}gridTemplateColumns/);
 });

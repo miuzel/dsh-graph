@@ -312,7 +312,11 @@ test("g-164 released 泳道与 active/version 泳道共用同一动态列模板�
   const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
   // 顶部表头网格与 released 泳道网格必须共用同一份按折叠状态动态计算的列模板，
   // 否则 released 泳道展开并折叠交付/阻塞列时列宽与上方泳道错位。
-  assert.match(source, /const gridCols = \["130px",/);
+  // g-352（负责人显式授权改写本段布局契约断言）：横向模板（130px 标题 + 6 阶段列）改名为
+  // horizontalGridCols；宽档的 gridCols 即它本体，只有 <360px 单版本档才派生为单列全宽模板
+  //（阶段列纵向堆叠，判据 3）——仍是同一份派生，不存在第二套列宽来源。
+  assert.match(source, /const horizontalGridCols = \["130px",/);
+  assert.match(source, /const gridCols = singleVersionMode \? "minmax\(0, 1fr\)" : horizontalGridCols;/);
   assert.match(source, /deliverColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ deliver/);
   assert.match(source, /blockedColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ blocked/);
   // 顶部表头网格：(1) 处使用 gridCols；首个单元格为左上角 stageHead 锚点
