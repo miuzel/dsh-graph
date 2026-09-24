@@ -54,7 +54,7 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 ## 工作树·状态·配置
 - graph_list_worktrees([goal]) 查询 worktree 清理候选（只读）；
 - graph_clean_worktree(id, confirm) 清理已验证的 worktree（默认保留分支）；
-- graph_report_status(goal, attempt, status, state) 上报 attempt 状态（state: working/blocked/done/error）；
+- graph_report_status(goal, attempt, status[, state]) 上报 attempt 状态（state: working/blocked/done/error，可选）；
 - graph_report_supervisor_status(status) 主管自报状态（看板顶部状态栏）；
 - graph_get_settings() 只读查询项目配置及合法枚举元信息；
 - graph_update_settings(patch) 更新项目配置（schema 校验、保留注释、原子写）。
