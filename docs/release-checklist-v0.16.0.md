@@ -214,10 +214,11 @@ supervisor session（本轮不写剪贴板）；不可投递时**完整退回**�
 - [ ] **Windows 真机门禁 T1–T5**（发布门禁红线 1）——**由负责人在原生 Windows 上执行，
       结论待回填本文件 §3**；⚠️ **在回填之前不得对外声明 Windows 已验证**，缺失时按红线 1 标注
       「**Windows 未验证**」
-- [ ] tarball 已产出并记录 sha256（发布门禁红线 3）——由主管在**发布树**（tag 树）内 `pnpm pack`
-      产出后回填 §3；**不得**用本 worktree 的临时产物指纹冒充发布物
-- [ ] `v0.16.0-test` 合并 → `main`（`--no-ff`）+ annotated tag `v0.16.0`（**经负责人授权**；
-      **未推送**）—— 属主管授权动作，本清单只预置勾选项
+- [x] tarball 已产出并记录 sha256（发布门禁红线 3）：发布树 `.worktrees/release-v0.16.0`
+      （detached @ tag `v0.16.0`，`git describe --tags` = `v0.16.0`）内 `bash scripts/build.sh` 后
+      `pnpm pack` ⇒ `dsh-graph-0.16.0.tgz`，**486,172 B**，sha256 **`75738dce…`**（见 §3.2）
+- [x] `v0.16.0-test` 合并 → `main`（`--no-ff`，合并提交 **`d4f6ec1`**）+ annotated tag **`v0.16.0`**
+      （tag 对象，指向 `d4f6ec1`；**未推送** —— 推送由负责人另行授权）—— 经负责人 2026-09-25 明确授权执行
 - [ ] 负责人执行 `pnpm publish`（npm 官方 registry）；**发布目录是 `dist/`，不是 `dsh-graph-host/`**
       —— 完整命令序列见 [`docs/release-handbook.md`](release-handbook.md) §4
       （发布前务必确认 `dist/` 内**无 `.tgz`**、文件数 **37**）
@@ -275,12 +276,12 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 
 | 项 | 值 |
 |---|---|
-| 文件名 | `dsh-graph-0.16.0.tgz`（`pnpm pack --dry-run` 实测目标名） |
+| 文件名 | `dsh-graph-0.16.0.tgz`（发布树内 `pnpm pack` 实测产出名） |
 | 建议相对路径 | `tmp/release-v0.16.0/dsh-graph-0.16.0.tgz` |
 | 包内版本 | `0.16.0`（`dist/package.json` 实测；须与 tag 一致） |
 | 包内文件数 | **37**（`pnpm pack --dry-run` 清单实测，与 `dist/` 实数逐项一致） |
-| 体积 | ⏳ **待回填**（发布树内 `pnpm pack` 之后） |
-| sha256 | ⏳ **待回填**（发布树内 `pnpm pack` 之后） |
+| 体积 | **486,172 B**（发布树内 `pnpm pack` 实测，2026-09-25） |
+| sha256 | **`75738dcecdae92d8ca92eeb39c6a852df274c533e03abdfd82dafd78c3bc5261`**（同上） |
 | Windows 侧可达路径（UNC） | `\\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.16.0\` |
 | 老式 UNC 别名 | `\\wsl$\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.16.0\` |
 
@@ -288,6 +289,13 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 > 必须重新打包并声明旧指纹失效」的情况。发布物**必须**来自 tag 树的 `dist/`（手册 §4 步骤 3），
 > 而 tag 尚未创建 ⇒ 此刻任何本地指纹都只是**候选**，写进来反而会变成过期指纹。
 > 故 §3.2 的体积与 sha256 一律留**占位**，由主管在合并 + 打 tag 后按手册 §4 步骤 3 产出并回填。
+>
+> **✅ 已回填（2026-09-25）**：tag `v0.16.0` 于 **`d4f6ec1`** 创建后，主管在发布树
+> `.worktrees/release-v0.16.0`（detached @ `v0.16.0`，`git describe --tags` = `v0.16.0`）内重建 `dist/`
+> （`dist/package.json` = `0.16.0`；`dist/lib/client.js` md5 `d6cc82b5235f523b02979ce948fd9386`，
+> 与主树同值 ⇒ 跨树构建一致），`pnpm pack` 得 §3.2 表内数值；该 tarball 与发布树 `dist/` 逐文件
+> `diff -r` **文件清单 0 差异**（唯一差异 `package.json` 末尾换行 = pnpm 打包重写的已知行为）。
+> 发布树保留至负责人完成 `pnpm publish` 后再按手册 §4 步骤 6 清理。
 >
 > **发布物对账顺序（v0.15.0 实证，务必遵守）**：
 > 1. 先在**发布树**（`git worktree add --detach .worktrees/release-v0.16.0 v0.16.0`）内
