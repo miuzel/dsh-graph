@@ -95,6 +95,28 @@ function isMoveToBacklogRejection(code) {
   return code === MOVE_TO_BACKLOG_ERROR_CODE;
 }
 
+/**
+ * 看板头部**搜索框包装层**的内联样式（判据 5：conversation.view 路径 DOM/样式逐字不变）。
+ *
+ * 基线（g-352 之前）恰好是下面这 5 个键；g-352 唯一新增的 `min-width: 0` 只在右侧栏窄档
+ * （narrowActive）追加 —— 未测量 / 非 sidebarHost 时返回的键集合与基线**逐字一致**，
+ * 会话内渲染路径不会多出任何样式键（这正是 att-001 被判 BLOCK 的 C3 项）。
+ * 之所以抽成纯函数：门控本身必须能被真实断言（不是源码正则），见 g352 测试「判据 5」。
+ *
+ * @param {boolean} narrowActive 是否处于右侧栏窄档（<480px）
+ * @returns {object} React 内联样式对象
+ */
+function searchBarWrapStyle(narrowActive) {
+  const base = { display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", flexShrink: 0 };
+  return narrowActive ? { ...base, minWidth: 0 } : base;
+}
+
+/** 搜索框**内层**（输入框 + 清除按钮的定位容器）的内联样式；门控口径同 searchBarWrapStyle。 */
+function searchBarInnerStyle(narrowActive) {
+  const base = { position: "relative", display: "flex", alignItems: "center" };
+  return narrowActive ? { ...base, minWidth: 0 } : base;
+}
+
 // >>>ESM-EXPORTS-START>>> (build script strips this block for browser bundle)
 export {
   NARROW_TOOLBAR_MAX_WIDTH,
@@ -106,5 +128,7 @@ export {
   pickSingleVersion,
   scheduleTargetOptions,
   isMoveToBacklogRejection,
+  searchBarWrapStyle,
+  searchBarInnerStyle,
 };
 // <<<ESM-EXPORTS-END<<<

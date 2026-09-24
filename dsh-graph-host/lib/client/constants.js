@@ -149,6 +149,13 @@
          会话内 conversation.view 不带此 class，外观零变化。 */
       .dg-head-sidebar { flex-wrap: wrap; }
       .dg-head-sidebar > * { flex-shrink: 0; }
+      /* g-352 共享声明（判据 5）：HOVER_CSS 这一整块样式表由**两个宿主共同注入**，因此下面的
+         新增规则对会话内路径只是「样式表文本变长」，**不影响任何实际渲染**——它们的每个选择器
+         都要求元素只在 host=sidebar 且根容器宽度落入窄档时才会被创建：
+           · .dg-head-sidebar / .dg-head-sidebar > *  → 要求头部带 .dg-head-sidebar（仅 sidebar）；
+           · .dg-narrow-head-btn / .dg-narrow-panel-btn → 只挂在窄档才会渲染的触发按钮/弹层行上；
+           · .dg-backlog-flat-vertical                → 只在 <360px 的 backlog 唯一泳道里出现。
+         故 conversation.view 的 DOM 与计算样式逐字不变（att-001 BLOCK 项 C3 的门控补齐）。 */
       .dg-card { transition: box-shadow .12s ease, transform .12s ease, border-color .12s ease; }
       .dg-card:hover { box-shadow: 0 0 0 2px rgba(76,141,255,.55); transform: translateY(-1px); }
       .dg-card:active { transform: translateY(0); box-shadow: 0 0 0 2px rgba(76,141,255,.8); }
@@ -528,6 +535,14 @@
         flex: 0 0 220px;
         width: 220px;
         box-sizing: border-box;
+      }
+      /* g-352：backlog 作为**唯一泳道**（<360px 单版本档的「版本备选」）时的纵向档样式——
+         单列全宽网格里 220px 定宽卡片在 240px 容器里会横向溢出，故改为占满整行、卡面全宽可读。
+         该 class 只在 host=sidebar 且根容器 <360px 时出现，conversation.view 路径恒不命中。 */
+      .dg-backlog-flat-vertical .dg-card {
+        flex: 1 1 100%;
+        width: 100%;
+        min-width: 0;
       }
       .dg-backlog-flat .dg-cell-drop-active {
         background: rgba(76,141,255,.08);
