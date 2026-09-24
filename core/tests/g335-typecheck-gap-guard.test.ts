@@ -22,7 +22,9 @@
  *  1. 断言逐字比对**承载 tsc 命令的那一行**与其**锚点行**（`lineWithAll` 要求同一行命中全部
  *     anchors），而不是「关键词在全文某处出现」——把标注搬走、挪到无关段落同样必红；
  *  2. 负向对照在内存里对真实文本做定点破坏后重放**同一个检查器**，并断言真实文件逐字节未变
- *     （hermetic，不污染工作树、不依赖 worktree）；
+ *     （hermetic，不污染工作树、不依赖 worktree）；定点破坏自 g-346 问题② 起改为**anchors 定位式**
+ *     （`spliceAnchoredRegion` / `moveAnchoredRegion`）——删除「门禁②行内命中全部标注 anchors 的那一段」，
+ *     而非删固定字面量，故同一行内的合法重排不再让负向对照自身误红；
  *  3. 源文件与 dist 产物**双侧**断言：源侧守护「静默删除」，dist 侧守护「要发布的那一份」。
  *
  * 运行前需先 `bash scripts/build.sh`（判据 1 的 dist 分支读 dist/，dist/ 是生成物禁止手改）。
@@ -45,6 +47,15 @@ const POLICY_DIST = join(distRoot, "core", "review-policy.js");
 
 /** 门禁②的命令字面量（指南与门禁失败文案共用；判据 3 的 typecheck 脚本亦须暴露它）。 */
 const TSC_COMMAND = "./node_modules/.bin/tsc --noEmit -p tsconfig.json";
+
+/**
+ * g-346 判据 2 收敛（问题②）：门禁②行的**定位锚点**。
+ * 检查器与负向对照共用同一组锚点，负向对照因此不再依赖「缺口标注能原样连续出现」。
+ */
+const ZH_GATE2_LINE_ANCHORS = ["2. 类型检查：", TSC_COMMAND];
+const EN_GATE2_LINE_ANCHORS = ["2. Type check:", TSC_COMMAND];
+const POLICY_DEF_LINE_ANCHORS = ["② 类型检查：", "缺口已在指南如实标注"];
+const POLICY_DETAIL_LINE_ANCHORS = [`② ${TSC_COMMAND}`, "要求 0；"];
 
 const BUILD_HINT =
   "门禁断言读取源文件与 dist 产物：请先运行 `bash scripts/build.sh` 再跑测试（dist/ 是生成物，禁止手改）";
@@ -84,7 +95,11 @@ function walkRepoFiles(dir: string = repoRoot): string[] {
   return out;
 }
 
-/** zh 门禁②行缺口标注的完整字面量（不含前导「；」）；负向对照复用同一字面量。 */
+/**
+ * zh 门禁②行缺口标注的**旧**完整字面量（不含前导「；」）。
+ * g-346 问题② 后不再用于构造负样本（改用 anchors 定位），只用于「行内重排自证」：
+ * 证明重排会让该字面量消失——旧的字面量式负向对照正因此误红。
+ */
 const ZH_GAP_TEXT =
   "覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内";
 
@@ -121,6 +136,66 @@ function lineWithAll(text: string, anchors: readonly string[]): { line: string; 
   return { line: hits[0] ?? "", count: hits.length };
 }
 
+type AnchoredRegion = { lineIndex: number; start: number; end: number; text: string };
+
+/**
+ * g-346 问题②：用 anchors 在**行内**定位缺口标注区段（首个命中 anchor 的起点 → 最末命中 anchor 的终点）。
+ * 行内重排/等效改写不影响定位——这正是旧实现 `.replace(<固定字面量>)` 缺的能力。
+ * 返回 null 表示行锚点不唯一或标注锚点不完整（负样本无法构造，属真实的对照失效）。
+ */
+function locateAnchoredRegion(
+  text: string,
+  lineAnchors: readonly string[],
+  annotationAnchors: readonly string[],
+): AnchoredRegion | null {
+  const lines = text.split("\n");
+  const lineIndex = lines.findIndex((line) => lineAnchors.every((anchor) => line.includes(anchor)));
+  if (lineIndex < 0) return null;
+
+  const line = lines[lineIndex]!;
+  let start = -1;
+  let end = -1;
+  for (const anchor of annotationAnchors) {
+    const at = line.indexOf(anchor);
+    if (at < 0) return null;
+    if (start < 0 || at < start) start = at;
+    if (at + anchor.length > end) end = at + anchor.length;
+  }
+  return { lineIndex, start, end, text: line.slice(start, end) };
+}
+
+/** 定位式改写：把门禁②行内命中全部标注 anchors 的那一段替换为 replacement（默认「删除」语义）。 */
+function spliceAnchoredRegion(
+  text: string,
+  lineAnchors: readonly string[],
+  annotationAnchors: readonly string[],
+  replacement = "",
+): string | null {
+  const hit = locateAnchoredRegion(text, lineAnchors, annotationAnchors);
+  if (!hit) return null;
+  const lines = text.split("\n");
+  const line = lines[hit.lineIndex]!;
+  lines[hit.lineIndex] = `${line.slice(0, hit.start)}${replacement}${line.slice(hit.end)}`;
+  return lines.join("\n");
+}
+
+/** 定位式搬迁：把标注区段从门禁②行搬到 targetLineAnchor 所在行（行数不变）。 */
+function moveAnchoredRegion(
+  text: string,
+  lineAnchors: readonly string[],
+  annotationAnchors: readonly string[],
+  targetLineAnchor: string,
+): string | null {
+  const hit = locateAnchoredRegion(text, lineAnchors, annotationAnchors);
+  if (!hit) return null;
+  const lines = text.split("\n");
+  const targetIndex = lines.findIndex((line) => line.includes(targetLineAnchor));
+  if (targetIndex < 0) return null;
+  lines[hit.lineIndex] = `${lines[hit.lineIndex]!.slice(0, hit.start)}${lines[hit.lineIndex]!.slice(hit.end)}`;
+  lines[targetIndex] = `${lines[targetIndex]!}${hit.text}`;
+  return lines.join("\n");
+}
+
 /**
  * 指南检查器：门禁②行逐字含缺口标注 + zh/en 行数相等。返回缺口列表（空 = 通过）。
  * 抽成纯函数是为了让负向对照能在内存里破坏真实文本后重放**同一套判定**。
@@ -128,11 +203,11 @@ function lineWithAll(text: string, anchors: readonly string[]): { line: string; 
 function guideGapGaps(zh: string, en: string, label: string): string[] {
   const gaps: string[] = [];
 
-  const zhHit = lineWithAll(zh, ["2. 类型检查：", TSC_COMMAND]);
+  const zhHit = lineWithAll(zh, ZH_GATE2_LINE_ANCHORS);
   if (zhHit.count !== 1) gaps.push(`${label}：zh 指南门禁②行定位失败（命中 ${zhHit.count} 行，应为 1）`);
   else for (const needle of ZH_GATE2_ANNOTATION) if (!zhHit.line.includes(needle)) gaps.push(`${label}：zh 门禁②行缺缺口标注「${needle}」`);
 
-  const enHit = lineWithAll(en, ["2. Type check:", TSC_COMMAND]);
+  const enHit = lineWithAll(en, EN_GATE2_LINE_ANCHORS);
   if (enHit.count !== 1) gaps.push(`${label}：en 指南门禁②行定位失败（命中 ${enHit.count} 行，应为 1）`);
   else for (const needle of EN_GATE2_ANNOTATION) if (!enHit.line.includes(needle)) gaps.push(`${label}：en 门禁②行缺缺口标注「${needle}」`);
 
@@ -151,11 +226,11 @@ function guideGapGaps(zh: string, en: string, label: string): string[] {
 function policyGapGaps(policy: string, label: string): string[] {
   const gaps: string[] = [];
 
-  const defHit = lineWithAll(policy, ["② 类型检查：", "缺口已在指南如实标注"]);
+  const defHit = lineWithAll(policy, POLICY_DEF_LINE_ANCHORS);
   if (defHit.count !== 1) gaps.push(`${label}：门禁②定义注释行定位失败（命中 ${defHit.count} 行，应为 1）`);
   else for (const needle of POLICY_DEF_ANNOTATION) if (!defHit.line.includes(needle)) gaps.push(`${label}：门禁②定义注释缺「${needle}」`);
 
-  const detailHit = lineWithAll(policy, [`② ${TSC_COMMAND}`, "要求 0；"]);
+  const detailHit = lineWithAll(policy, POLICY_DETAIL_LINE_ANCHORS);
   if (detailHit.count !== 1) gaps.push(`${label}：门禁②失败文案行定位失败（命中 ${detailHit.count} 行，应为 1）`);
   else for (const needle of POLICY_DETAIL_ANNOTATION) if (!detailHit.line.includes(needle)) gaps.push(`${label}：门禁②失败文案缺「${needle}」`);
 
@@ -192,7 +267,7 @@ test("g-335 判据 1/2：dist 产物（指南与 core/review-policy.js）同样�
 // 判据 2：判别力自证（负向对照改坏即红）+ hermetic
 // ---------------------------------------------------------------------------
 
-test("g-335 判据 2：分别删除/改写四处缺口说明中的任一情形必红，且负向对照不污染工作树", () => {
+test("g-335 判据 2：分别删除/改写四处缺口说明中的任一情形必红，且同行重排不误红、负向对照不污染工作树", () => {
   const zhGuide = readText(ZH_GUIDE_SRC);
   const enGuide = readText(EN_GUIDE_SRC);
   const policy = readText(POLICY_SRC);
@@ -202,40 +277,81 @@ test("g-335 判据 2：分别删除/改写四处缺口说明中的任一情形�
   assert.deepEqual(policyGapGaps(policy, "review-policy.ts 源文件"), [], "负向对照前提不成立：门禁定义本来就不绿");
 
   // 负向对照 1：zh 侧删掉缺口标注整段（模拟「静默删除」）→ 必红。
-  const zhDropped = zhGuide.replace(`；${ZH_GAP_TEXT}`, "");
-  assert.notEqual(zhDropped, zhGuide, "负向对照失效：zh 指南未找到可删除的缺口标注片段");
+  // 定位方式为 anchors（门禁②行 + 行内标注锚点区段），不再依赖固定字面量连续出现。
+  const zhDropped = spliceAnchoredRegion(zhGuide, ZH_GATE2_LINE_ANCHORS, ZH_GATE2_ANNOTATION);
+  assert.ok(zhDropped !== null, "负向对照失效：zh 指南门禁②行未同时命中线锚点与缺口标注锚点");
+  assert.notEqual(zhDropped, zhGuide, "负向对照失效：zh 缺口标注定位删除未改变文本");
   assert.ok(guideGapGaps(zhDropped, enGuide, "源指南").length > 0, "删掉 zh 缺口标注后竟然仍绿");
 
   // 负向对照 2：en 侧改写缺口标注（语句在、语义反转）→ 必红。
-  const enRewritten = enGuide.replace(
-    "state the coverage gap honestly—the `include` of `tsconfig.json` is only `core/*.ts`, so `core/tests` and host `.js` fall outside it",
+  const enRewritten = spliceAnchoredRegion(
+    enGuide,
+    EN_GATE2_LINE_ANCHORS,
+    EN_GATE2_ANNOTATION,
     "the type check covers the whole repository",
   );
-  assert.notEqual(enRewritten, enGuide, "负向对照失效：en 指南未找到可改写的缺口标注片段");
+  assert.ok(enRewritten !== null, "负向对照失效：en 指南门禁②行未同时命中线锚点与缺口标注锚点");
+  assert.notEqual(enRewritten, enGuide, "负向对照失效：en 缺口标注定位改写未改变文本");
   assert.ok(guideGapGaps(zhGuide, enRewritten, "源指南").length > 0, "改写 en 缺口标注后竟然仍绿");
 
   // 负向对照 3：门禁定义注释行删掉「缺口已在指南如实标注」→ 必红。
-  const defDropped = policy.replace("，缺口已在指南如实标注", "");
-  assert.notEqual(defDropped, policy, "负向对照失效：未找到定义注释里的缺口说明");
+  const defDropped = spliceAnchoredRegion(policy, POLICY_DEF_LINE_ANCHORS, POLICY_DEF_ANNOTATION);
+  assert.ok(defDropped !== null, "负向对照失效：未定位到定义注释行的缺口说明锚点");
+  assert.notEqual(defDropped, policy, "负向对照失效：定义注释锚点定位删除未改变文本");
   assert.ok(policyGapGaps(defDropped, "review-policy.ts 源文件").length > 0, "删掉定义注释缺口说明后竟然仍绿");
 
   // 负向对照 4：失败文案行删掉「仅覆盖 core 层」→ 必红（只看定义注释会漏掉这一处）。
-  const detailDropped = policy.replace("（要求 0；仅覆盖 core 层）", "（要求 0）");
-  assert.notEqual(detailDropped, policy, "负向对照失效：未找到失败文案里的缺口说明");
+  const detailDropped = spliceAnchoredRegion(policy, POLICY_DETAIL_LINE_ANCHORS, POLICY_DETAIL_ANNOTATION);
+  assert.ok(detailDropped !== null, "负向对照失效：未定位到失败文案行的缺口说明锚点");
+  assert.notEqual(detailDropped, policy, "负向对照失效：失败文案锚点定位删除未改变文本");
   assert.ok(policyGapGaps(detailDropped, "review-policy.ts 源文件").length > 0, "删掉失败文案缺口说明后竟然仍绿");
 
   // 负向对照 5：把缺口标注**搬到另一行**（门禁①行），行数不变 → 仍必红。
   // 这一对照必须与「行数不变量」解耦，否则无法证明判据锚定的是「门禁②这一行」而非全文任一处。
-  const movedOut = zhGuide
-    .replace(`；${ZH_GAP_TEXT}`, "")
-    .replace("  1. 全量测试：", `  1. 全量测试：${ZH_GAP_TEXT}`);
-  assert.notEqual(movedOut, zhGuide, "负向对照失效：未找到可搬迁的缺口标注片段");
+  const movedOut = moveAnchoredRegion(zhGuide, ZH_GATE2_LINE_ANCHORS, ZH_GATE2_ANNOTATION, "  1. 全量测试：");
+  assert.ok(movedOut !== null, "负向对照失效：未找到可搬迁的缺口标注区段或目标行");
+  assert.notEqual(movedOut, zhGuide, "负向对照失效：搬迁未改变 zh 指南");
   assert.equal(movedOut.split("\n").length, zhGuide.split("\n").length, "负向对照 5 失控：搬迁不得改变行数");
-  assert.ok(movedOut.includes(ZH_GAP_TEXT), "负向对照 5 失控：搬迁后标注应仍在全文某处");
+  for (const anchor of ZH_GATE2_ANNOTATION) {
+    assert.ok(movedOut.includes(anchor), `负向对照 5 失控：搬迁后标注锚点「${anchor}」应仍在全文某处`);
+  }
   assert.ok(guideGapGaps(movedOut, enGuide, "源指南").length > 0, "缺口标注被搬离门禁②行后竟然仍绿");
 
   // 负向对照 6：zh/en 行数被破坏 → 必红。
   assert.ok(guideGapGaps(zhGuide, `${enGuide}\nextra line\n`, "源指南").length > 0, "en 指南行数被破坏后竟然仍绿");
+
+  // g-346 问题② 自证：**同一条门禁②行内重排**（语义不变、行数不变）→ 必须绿。
+  // 旧实现用 `.replace("；" + ZH_GAP_TEXT, "")` 构造负样本，重排后该前置 `assert.notEqual` 会报红
+  //（「负向对照失效」）——合法编辑红在错误原因上。现改为 anchors 定位，重排后仍应可定位、可判别。
+  const [zhAnchorMarker, zhAnchorInclude, zhAnchorOutside] = ZH_GATE2_ANNOTATION as [string, string, string];
+  const reorderedGuide = spliceAnchoredRegion(
+    zhGuide,
+    ZH_GATE2_LINE_ANCHORS,
+    ZH_GATE2_ANNOTATION,
+    `${zhAnchorMarker}——${zhAnchorOutside}，\`tsconfig.json\` 的 ${zhAnchorInclude}`,
+  );
+  assert.ok(reorderedGuide !== null, "重排对照失控：未定位到 zh 门禁②行的缺口标注区段");
+  assert.equal(reorderedGuide.split("\n").length, zhGuide.split("\n").length, "重排对照失控：重排不得改变行数");
+  assert.ok(
+    !reorderedGuide.includes(ZH_GAP_TEXT),
+    "重排对照失控：重排后不应再含旧的字面量片段（旧负向对照正是靠它定位，故重排会误红）",
+  );
+  for (const anchor of ZH_GATE2_ANNOTATION) {
+    assert.ok(reorderedGuide.includes(anchor), `重排对照失控：重排后标注锚点「${anchor}」应仍在门禁②行内`);
+  }
+  assert.deepEqual(
+    guideGapGaps(reorderedGuide, enGuide, "源指南"),
+    [],
+    "同一门禁②行内重排（语义不变）不应误红（g-346 问题②）",
+  );
+  // 重排后仍须能构造出「删除标注 → 必红」的负样本，证明 anchors 定位本身不依赖原排列。
+  const droppedAfterReorder = spliceAnchoredRegion(reorderedGuide, ZH_GATE2_LINE_ANCHORS, ZH_GATE2_ANNOTATION);
+  assert.ok(droppedAfterReorder !== null, "重排后 anchors 定位失效：无法构造删除负样本");
+  assert.notEqual(droppedAfterReorder, reorderedGuide, "重排后 anchors 定位失效：删除未改变文本");
+  assert.ok(
+    guideGapGaps(droppedAfterReorder, enGuide, "源指南").length > 0,
+    "重排后删掉缺口标注竟然仍绿（判别力被削弱）",
+  );
 
   // hermetic：负向对照只改内存字符串，真实文件必须逐字节未变。
   assert.equal(readText(ZH_GUIDE_SRC), zhGuide, "负向对照污染了源指南");
