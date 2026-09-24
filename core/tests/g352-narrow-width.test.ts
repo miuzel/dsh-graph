@@ -42,6 +42,9 @@ import {
   searchBarWrapStyle,
   searchBarInnerStyle,
   headPanelEntry,
+  headPanelMenuStyle,
+  headPanelRowStyle,
+  headPanelStackingOk,
   viewOptionLabel,
   viewPickerTriggerText,
   rowBtnStyle,
@@ -1145,6 +1148,193 @@ test("g-352 att-003 第1项（渲染级）：折叠工具条下拉每一行都�
   assert.ok(archived, "弹层里保留显示已归档开关");
   assert.ok(treeText(archived).includes("已归档"));
   assert.equal([...treeText(archived)].some((c) => /\p{Extended_Pictographic}/u.test(c)), true, "已归档行带图标");
+});
+
+// ============================================================================
+// g-352 att-007：⋯ 工具 弹层的**位置级**断言（att-006 自证时发现、att-003/005 漏检的那条）
+//   漏检复盘：att-003 只查文本/尺寸（**没查 x/y**）；att-005/006 真机只查行数与越框——
+//   横向排布时「每行宽度仍与菜单同宽（320）」⇒ 越框恒为 0，于是「5 行同一 y」没被发现。
+//   本组断言落在**行间位置**上：① 各行 y 严格递增；② 末行底部落在菜单框内
+//   （或 scrollHeight <= clientHeight）；③ 行数 = 期望项数；④ 每行 cw == sw（不截断）；
+//   ⑤ 菜单右缘 ≈ 看板右缘。**两侧（会话页看板页签 / 右侧栏）都断言。**
+//   真机几何（3086 改后 / 3088 改前）在下方以常量固化，保证这条判据不依赖人工重复操作。
+// ============================================================================
+
+/**
+ * att-007 极简布局模型：只模拟与本次缺陷相关的两条规则（其余一切忽略）。
+ *  ① 容器 display:flex + flexDirection:column ⇒ 子项被块级化，各占一行：y 依次累加（行高 + margin-top）；
+ *  ② 否则子项按行内流排布：容器（或继承）的 white-space 不是 normal 时**没有换行机会** ⇒
+ *     全部同一 y、x 依次累加（每行宽度 = 菜单内容宽度）—— 这正是 att-006 真机实测到的形态。
+ * 目的：让「y 严格递增」这条判据能由**渲染出来的样式**推导，并且可被证伪
+ * （喂 att-006 的容器/行样式 ⇒ 必判 not-ascending；喂修复后的样式 ⇒ 通过）。
+ */
+function modelPanelRows(menuStyle: any, rowStyles: any[], menuWidth: number, menuTop = 100) {
+  const px = (v: any, dflt: number) => {
+    const n = Number(String(v ?? dflt).replace("px", ""));
+    return Number.isFinite(n) ? n : dflt;
+  };
+  const column = String(menuStyle.display) === "flex" && String(menuStyle.flexDirection) === "column";
+  const wraps = String(menuStyle.whiteSpace ?? "nowrap") === "normal";
+  const padV = 12; // S.inlineMenu 的 padding "6px 0"
+  const marginTop = (s: any) => px(String(s.margin ?? "0").split(" ")[0], 0);
+  const rows: Array<{ y: number; height: number }> = [];
+  let y = menuTop + padV;
+  for (const s of rowStyles) {
+    const h = px(s.height, 26);
+    const mt = marginTop(s);
+    // 纵向堆叠 = 容器是 flex column **或** 行内流里有换行机会（white-space 不是 nowrap）
+    if (column || wraps) { rows.push({ y, height: h }); y += h + mt; }
+    else { rows.push({ y: menuTop + padV, height: h }); }
+  }
+  const contentH = column
+    ? padV * 2 + rowStyles.reduce((a, s) => a + px(s.height, 26) + marginTop(s), 0)
+    : padV * 2 + Math.max(...rowStyles.map((s) => px(s.height, 26)));
+  void menuWidth;
+  return { rows, menu: { top: menuTop, height: contentH, scrollHeight: contentH, clientHeight: contentH } };
+}
+
+/** 改后真机实测（att-007 门禁 3086：conv=会话页看板页签 / side=右侧栏；geometry 取自 probe-after.log）。 */
+const PANEL_GEOM_AFTER = [
+  { label: "conv-430", rows: [177, 207, 237, 267, 297], menu: { top: 145, height: 212, scrollHeight: 210, clientHeight: 210 }, boardRight: 423, menuRight: 423 },
+  { label: "conv-324", rows: [203, 233, 263, 293, 323], menu: { top: 171, height: 212, scrollHeight: 210, clientHeight: 210 }, boardRight: 317, menuRight: 317 },
+  { label: "side-444", rows: [139, 169, 199, 229, 259], menu: { top: 107, height: 212, scrollHeight: 210, clientHeight: 210 }, boardRight: 1585, menuRight: 1584.98 },
+  { label: "side-324", rows: [139, 169, 199, 229, 259], menu: { top: 107, height: 212, scrollHeight: 210, clientHeight: 210 }, boardRight: 1585, menuRight: 1585 },
+];
+/** 改前真机实测（att-006 dist / 3088：5 行同一 y、x 每次 +320、框内仅首行可见）。 */
+const PANEL_GEOM_BEFORE = {
+  conv430: { rows: [177, 177, 177, 177, 177], x: [102, 422, 742, 1062, 1382], menu: { top: 140, height: 92, scrollHeight: 90, clientHeight: 90 } },
+  side444: { rows: [139, 139, 139, 139, 139], x: [1263.98, 1583.98, 1903.98, 2223.98, 2543.98], menu: { top: 107, height: 92, scrollHeight: 90, clientHeight: 90 } },
+};
+
+test("g-352 att-007（纯函数 + 真机几何固化）：容器纵向堆叠是唯一真源，行位置判据能抓住横向排布", () => {
+  // ① 容器样式唯一真源：纵向 flex（子项块级化）+ nowrap 复位（nowrap 只作用于行内文字）
+  const menu = headPanelMenuStyle(null);
+  assert.equal(menu.display, "flex", "弹层容器必须是 flex 容器");
+  assert.equal(menu.flexDirection, "column", "弹层容器必须纵向堆叠（横向排布的修复点）");
+  assert.equal(menu.alignItems, "stretch", "行按钮撑满菜单宽度");
+  assert.equal(menu.whiteSpace, "normal", "nowrap 不得作用于行与行的排布（本次缺陷根因复位）");
+  assert.equal(menu.left, "auto");
+  assert.equal(menu.right, 0);
+  assert.equal(menu.minWidth, 240);
+  assert.equal(menu.maxWidth, 320);
+  assert.equal(menu.zIndex, 100000);
+  assert.equal(menu.maxHeight, "70vh");
+  assert.equal(menu.overflowY, "auto");
+  assert.deepEqual(plain(headPanelMenuStyle({ right: -279, minWidth: 226 })), { ...plain(menu), right: -279, minWidth: 226 }, "锚定值透传（缺省回落 0 / 240）");
+  assert.deepEqual(plain(headPanelMenuStyle({ right: NaN, minWidth: NaN })), plain(menu), "测量不可用 ⇒ 回落旧口径，不产生 NaN");
+  // ② 行按钮：块级 flex（覆盖 rowBtnStyle 的 inline-flex）+ 本行 nowrap；不裁字（cw == sw 的样式前提）
+  const row = headPanelRowStyle();
+  assert.equal(row.display, "flex", "行按钮必须是块级 flex，不得再用 inline-flex 参与行内流");
+  assert.equal(row.whiteSpace, "nowrap", "nowrap 只保留在行内文字上");
+  assert.equal(row.width, "100%");
+  assert.equal(row.minWidth, 0);
+  assert.equal(row.maxWidth, "none");
+  assert.equal(Object.prototype.hasOwnProperty.call(row, "overflow"), false, "行不得裁字（cw == sw）");
+  assert.equal(Object.prototype.hasOwnProperty.call(row, "textOverflow"), false, "行不得用省略号吞字");
+
+  // ③ 改后真机几何：位置判据全部成立（y 严格递增 / 末行在框内 / 右缘对齐）
+  for (const g of PANEL_GEOM_AFTER) {
+    const rows = g.rows.map((y) => ({ y, height: 26 }));
+    const v = headPanelStackingOk(rows, g.menu);
+    assert.equal(v.ok, true, `${g.label} 真机几何必须通过行位置判据（实得 ${v.code} ${v.detail}）`);
+    assert.equal(Math.abs(g.menuRight - g.boardRight) <= 1.5, true, `${g.label}：菜单右缘必须贴着看板右缘`);
+  }
+  // ④ 改前真机几何：必须判 not-ascending —— 这就是 att-003/005 漏检、att-006 才发现的那条
+  for (const [label, g] of Object.entries(PANEL_GEOM_BEFORE)) {
+    const v = headPanelStackingOk(g.rows.map((y) => ({ y, height: 26 })), g.menu);
+    assert.equal(v.ok, false, `${label}（改前）必须被判不通过`);
+    assert.equal(v.code, "not-ascending", `${label}（改前）的失败原因必须是「y 未严格递增」`);
+    // 横向排布的形态学：同一 y + x 每次 +320（菜单框只有 322 宽 ⇒ 只有首行可见）
+    assert.equal(new Set(g.rows).size, 1, `${label}：5 行同一 y`);
+    assert.deepEqual(g.x.map((x, i) => Math.round(x - g.x[0] - i * 320)), [0, 0, 0, 0, 0], `${label}：x 每次 +320`);
+  }
+  // ⑤ 模型级负向对照：喂 att-006 的容器/行样式 ⇒ 模型复现横向排布 ⇒ 判 not-ascending
+  const legacyRowStyle = { display: "inline-flex", width: "100%", height: 26, margin: "4px 0 0", whiteSpace: "nowrap" };
+  const legacy = modelPanelRows({ display: "block", flexDirection: "row", whiteSpace: "nowrap", maxWidth: 320 }, Array.from({ length: 5 }, () => legacyRowStyle), 322);
+  assert.equal(new Set(legacy.rows.map((r) => r.y)).size, 1, "旧容器样式 ⇒ 模型给出「5 行同一 y」（横向排布）");
+  assert.equal(headPanelStackingOk(legacy.rows, legacy.menu).code, "not-ascending", "旧容器样式必须判 not-ascending（改坏就红）");
+  // ⑥ 修复后的容器样式喂同一模型 ⇒ 全行纵向、末行在框内
+  const fixed = modelPanelRows(headPanelMenuStyle(null), Array.from({ length: 5 }, () => legacyRowStyle), 242);
+  assert.deepEqual(fixed.rows.map((r) => r.y), [112, 142, 172, 202, 232], "修复后：各行 y 严格递增（行高 26 + 间距 4）");
+  assert.equal(headPanelStackingOk(fixed.rows, fixed.menu).ok, true, "修复后的样式必须通过行位置判据");
+
+  // ⑦ 判据边界：裁切 / 末行越框 / 几何不可测 / 空行 各自给出**语言中立**的稳定 code
+  assert.equal(headPanelStackingOk([], { height: 100 }).code, "empty");
+  assert.equal(headPanelStackingOk([{ y: NaN, height: 26 }], { height: 100 }).code, "unmeasured");
+  assert.equal(headPanelStackingOk([{ y: 0, height: 26 }, { y: 30, height: 26 }], { top: 0, height: 200, scrollHeight: 210, clientHeight: 200 }).code, "clipped");
+  assert.equal(headPanelStackingOk([{ y: 0, height: 26 }, { y: 180, height: 26 }], { top: 0, height: 100 }).code, "overflow-bottom");
+  assert.equal(headPanelStackingOk([{ y: 0, height: 26 }, { y: 30, height: 26 }], { top: 0, height: 57 }).ok, true, "末行底部恰好贴框底 ⇒ 通过");
+  assert.equal(headPanelStackingOk([{ y: 0, height: 26 }, { y: 30, height: 26 }], { top: 0, height: 55 }).ok, false, "差 1px 越框 ⇒ 不通过");
+});
+
+test("g-352 att-007（渲染级/两侧）：弹层容器纵向堆叠、行是块级子项、位置级判据全成立", async () => {
+  const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
+  const EXPECTED = ["refresh", "tagfilter", "memory", "shared", "settings"];
+  const sides: Array<{ label: string; host: string | undefined; sig?: any }> = [
+    { label: "会话页看板页签", host: undefined },
+    { label: "右侧栏", host: "sidebar" },
+  ];
+  for (const side of sides) {
+    const h = createRenderHarness({ boardWidth: 250, payload: payload() });
+    let r = await h.settle({ sessionId: "s1", host: side.host });
+    const trigger = withClass(r.passElements(), "dg-head-overflow-trigger").pop();
+    assert.ok(trigger, `${side.label}：窄档存在「⋯ 工具」触发按钮`);
+    trigger.props.onClick({ stopPropagation() {} });
+    r = await h.settle({ sessionId: "s1", host: side.host });
+    const els = r.passElements();
+    const menuEl = withClass(els, "dg-narrow-panel").pop();
+    assert.ok(menuEl, `${side.label}：弹层容器带共用 class .dg-narrow-panel（两侧同一实现）`);
+    // ① 容器：纵向 flex + nowrap 复位（行间排布不再受 nowrap 影响）
+    assert.equal(menuEl.props.style.display, "flex", `${side.label}：容器 display:flex`);
+    assert.equal(menuEl.props.style.flexDirection, "column", `${side.label}：容器 flexDirection:column（纵向堆叠）`);
+    assert.equal(menuEl.props.style.alignItems, "stretch", `${side.label}：行撑满菜单宽度`);
+    assert.equal(menuEl.props.style.whiteSpace, "normal", `${side.label}：容器 white-space:normal（nowrap 只作用于行内文字）`);
+    assert.equal(menuEl.props.style.left, "auto");
+    assert.equal(menuEl.props.style.right, 0, "假节点触发按钮与看板同矩形 ⇒ 偏移 0");
+    assert.equal(menuEl.props.style.minWidth, 226, "菜单宽度按板宽收敛（250-24）");
+    // ② 行数 = 期望项数（默认无标签筛选：刷新/标签筛选/记忆/知识库/设置）
+    const rows = withClass(els, "dg-narrow-panel-btn");
+    assert.deepEqual(rows.map((x) => String(x.props.key).replace(/^ov-/, "")), EXPECTED, `${side.label}：弹层行数与项数一致`);
+    // ③ 行是容器的**直接子项**（不是头部子项、也不与容器并列）—— 结构级，抓「搬到容器外」这类改动
+    const menuKids = (menuEl.children ?? []).flat(Infinity).filter((c: any) => c && typeof c === "object" && c.type);
+    for (const rowEl of rows) assert.ok(menuKids.includes(rowEl), `${side.label}：行按钮必须是弹层容器的直接子项`);
+    // ④ 行是块级 flex（覆盖 rowBtnStyle 的 inline-flex）+ 本行 nowrap；不截断（cw == sw 的样式前提）
+    for (const rowEl of rows) {
+      const key = String(rowEl.props.key).replace(/^ov-/, "");
+      assert.equal(rowEl.props.style.display, "flex", `${side.label}/${key}：行必须块级 flex（不得 inline-flex）`);
+      assert.equal(rowEl.props.style.whiteSpace, "nowrap", `${side.label}/${key}：nowrap 只作用于行内文字`);
+      assert.equal(rowEl.props.style.width, "100%", `${side.label}/${key}：行占满菜单宽度`);
+      assert.equal(rowEl.props.style.minWidth, 0);
+      assert.notEqual(rowEl.props.style.textOverflow, "ellipsis", `${side.label}/${key}：不得用省略号吞字（cw == sw）`);
+      assert.notEqual(rowEl.props.style.overflow, "hidden", `${side.label}/${key}：不得裁掉文字`);
+    }
+    // ⑤ 位置级：用渲染出来的样式跑「行内流 vs 纵向 flex」模型 ⇒ y 严格递增、末行在框内
+    const model = modelPanelRows(menuEl.props.style, rows.map((x) => x.props.style), menuEl.props.style.minWidth);
+    const v = headPanelStackingOk(model.rows, model.menu);
+    assert.equal(v.ok, true, `${side.label}：行位置判据必须全通过（实得 ${v.code} ${v.detail}）`);
+    for (let i = 1; i < model.rows.length; i++) assert.ok(model.rows[i].y > model.rows[i - 1].y, `${side.label}：第 ${i + 1} 行 y 严格递增`);
+    const last = model.rows[model.rows.length - 1];
+    assert.ok(last.y + last.height - model.menu.top <= model.menu.height + 0.5, `${side.label}：末行底部落在菜单框内`);
+    // ⑥ 已归档开关也随六项纵向排列（它在容器子树内、位于行之后）
+    const archivedRow = treeOf(menuEl).filter((c: any) => c?.props?.key === "tb-archived");
+    assert.equal(archivedRow.length, 1, `${side.label}：已归档开关在弹层容器内`);
+    side.sig = plain({
+      menu: menuEl.props.style,
+      rows: rows.map((x) => ({ key: x.props.key, style: x.props.style })),
+      archived: archivedRow[0].props.style,
+    });
+  }
+  // ⑦ 两侧**完全一致**：容器/行/已归档样式签名逐字相等（同一实现，零 host 门控）
+  assert.deepEqual(sides[0].sig, sides[1].sig, "会话页看板页签与右侧栏的弹层样式签名必须逐字相等");
+  // ⑧ 唯一真源接线契约：容器与行样式只能来自 narrow-width.js 的两个纯函数；CSS 兜底同名规则存在
+  const kanban = readClient("kanban");
+  assert.match(kanban, /className: "dg-narrow-panel",\s*\n\s*style: \{ \.\.\.S\.inlineMenu, \.\.\.headPanelMenuStyle\(popoverAnchorState\) \}/, "容器样式必须来自 headPanelMenuStyle()");
+  assert.match(kanban, /style: \{ \.\.\.S\.btn, \.\.\.rowBtnStyle\(\), \.\.\.headPanelRowStyle\(\) \}/, "行样式必须来自 rowBtnStyle() + headPanelRowStyle()");
+  assert.doesNotMatch(kanban, /left: "auto", right: popoverAnchorState\?\.right \?\? 0,\s*\n\s*minWidth: popoverAnchorState\?\.minWidth \?\? 240, maxWidth: 320, zIndex: 100000/, "不得回退到旧的字面弹层样式");
+  const css = readClient("constants");
+  assert.match(css, /\.dg-narrow-panel \{ display: flex; flex-direction: column; align-items: stretch; white-space: normal; \}/, "HOVER_CSS 必须有同一份纵向堆叠兜底规则");
+  assert.match(css, /\.dg-narrow-panel-btn \{ display: flex;/, "弹层行必须是块级 flex（不是 inline-flex）");
+  assert.equal(readClient("kanban").includes("sidebarHost") || readClient("kanban").includes("props?.host"), false, "零 host 门控不得重新引入");
 });
 
 test("g-352 att-003 第2项（渲染级）：窄档隐藏 DEBUG（sessionId/ws）—— 两侧同口径", async () => {

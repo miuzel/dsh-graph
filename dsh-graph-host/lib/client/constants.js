@@ -227,8 +227,16 @@
          仍会因 min-width:auto（不可收缩到内容宽度以下）而把文字顶出按钮框，故这里同时给
          「min-width: 0」 + 「text-overflow: ellipsis」 —— 宽度不足时省略号收敛，绝不越框。 */
       .dg-narrow-head-btn { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* g-352 att-007：折叠工具条弹层**容器**——纵向堆叠的唯一真源是 narrow-width.js 的
+         headPanelMenuStyle()（内联），这条 CSS 是同一份声明的兜底与自解释：
+         ① display:flex + flex-direction:column ⇒ 行按钮成为块级 flex 项、各占一行
+            （att-006 实测缺陷：容器无纵向布局 + 行按钮 inline-flex + 继承 nowrap ⇒ 5 行同 y）；
+         ② white-space:normal ⇒ .dg-head > * 的 nowrap **不得**作用于行与行的排布
+            （nowrap 只应落在行内文字上，见下面 .dg-narrow-panel-btn 自己那条）。 */
+      .dg-narrow-panel { display: flex; flex-direction: column; align-items: stretch; white-space: normal; }
       /* 窄宽度弹层内的整行按钮：全宽；g-352 att-003 第 1 项要求「图标 + 文字」完整可读 ⇒
-         不再用 text-overflow: ellipsis 吞字（弹层宽度按最长一行自适应，字号/行高与触发按钮同一口径） */
+         不再用 text-overflow: ellipsis 吞字（弹层宽度按最长一行自适应，字号/行高与触发按钮同一口径）。
+         g-352 att-007：display:flex（块级，不取 inline-flex）+ 本行 nowrap —— 只让本行文字不换行。 */
       .dg-narrow-panel-btn { display: flex; align-items: center; min-width: 0; max-width: none; white-space: nowrap; text-align: left; }
       /* 统一弹窗与抽屉右上角关闭按钮 */
       .dg-close {

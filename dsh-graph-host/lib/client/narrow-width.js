@@ -228,6 +228,111 @@ function rowBtnStyle(opts) {
 }
 
 /**
+ * g-352 att-007（修复 "⋯ 工具" 折叠弹层**横向排布** ⇒ 只有首行可见、窄档工具条实际不可用）：
+ * 折叠弹层**容器**的内联样式（唯一真源，两侧共用）。
+ *
+ * 缺陷根因（att-006 真机实测：5 行同 y=139、x 每次 +320，菜单框仅 322px 宽）：
+ *   ① 容器没有纵向布局（默认 block 内的行内格式化上下文）；
+ *   ② 行按钮 `display: inline-flex`（rowBtnStyle）⇒ **行内级**盒子；
+ *   ③ `.dg-head > *, .dg-head button { white-space: nowrap; }` 继承到容器 ⇒ 行间没有换行机会。
+ *   三者叠加 ⇒ 行与行横向排列，`overflow: visible` 又不裁切 ⇒ 第 2 行起跑到菜单框外。
+ *
+ * 修复 = 在容器上建立**纵向 flex 格式化上下文**（子项被 blockify，各占一行、高度随行数自适应），
+ * 并把 `white-space` 复位为 `normal` —— `nowrap` 从此**只作用于行内文字**（行按钮各自 nowrap），
+ * 不再参与「行与行之间」的排布（判据 3）。`maxHeight + overflowY:auto` 只作兜底（版本/标签数固定时
+ * 不触发滚动，`scrollHeight <= clientHeight`），保证菜单永远落在视口内。
+ *
+ * @param {{right?: number, minWidth?: number}|null} anchor popoverAnchor() 的返回值（可为 null ⇒ 回落旧口径）
+ * @returns {object} React 内联样式对象（与 S.inlineMenu 叠加使用）
+ */
+function headPanelMenuStyle(anchor) {
+  const right = Number(anchor?.right);
+  const minWidth = Number(anchor?.minWidth);
+  return {
+    left: "auto",
+    right: Number.isFinite(right) ? right : 0,
+    minWidth: Number.isFinite(minWidth) ? minWidth : 240,
+    maxWidth: 320,
+    // ① 纵向堆叠：flex column ⇒ 每个行按钮成为块级 flex 项，各占一行
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "stretch",
+    // ③ 根因复位：nowrap 只作用于行内文字，不得作用于行与行的排布
+    whiteSpace: "normal",
+    // 兜底：菜单再高也不越出视口（固定行数下不产生滚动）
+    maxHeight: "70vh",
+    overflowY: "auto",
+    zIndex: 100000,
+  };
+}
+
+/**
+ * g-352 att-007：折叠弹层**行按钮**的内联样式（与 rowBtnStyle() 叠加，覆盖其中的 inline-flex）。
+ * 行按钮是纵向 flex 容器的子项 ⇒ `display:flex`（块级）而不是 `inline-flex`（行内级）；
+ * `white-space:nowrap` 保留在本行上 —— 它只让**本行文字**不换行（`cw == sw` 不截断）。
+ * @returns {object} React 内联样式对象
+ */
+function headPanelRowStyle() {
+  return {
+    display: "flex",
+    width: "100%",
+    minWidth: 0,
+    maxWidth: "none",
+    whiteSpace: "nowrap",
+    textAlign: "left",
+    justifyContent: "flex-start",
+    margin: "4px 0 0",
+  };
+}
+
+/**
+ * g-352 att-007（判别力补强）：**行间纵向堆叠不变式**——把弹层行位置判据收敛成一处纯函数，
+ * 供渲染级断言与「改坏就红」的负向对照共用。
+ *
+ * 判据（brief 第 4 条）：① 各行 y **严格递增**；② 末行底部落在菜单框内；③ 行数 = 期望项数。
+ * 入参是**实测几何**（真机 getBoundingClientRect）或测试里的等价模型输出。
+ *
+ * @param {Array<{y: number, height: number}>} rows 各行实测矩形（按 DOM 次序，视口坐标）
+ * @param {{top?: number, height?: number, scrollHeight?: number, clientHeight?: number}|null} menu 菜单框实测几何
+ *        （top 缺省时以首行 y 为框顶基准 —— 真机一律给 top）
+ * @returns {{ok: boolean, code: string, detail: string}} 不通过时 code 是**语言中立**的稳定标识
+ *          （empty / unmeasured / not-ascending / clipped / overflow-bottom），detail 为可读的纯 ASCII 数值；
+ *          文案一律不进本模块（判据 6：本模块字符串字面量零中文）。
+ */
+function headPanelStackingOk(rows, menu) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (list.length === 0) return { ok: false, code: "empty", detail: "no rows" };
+  for (let i = 0; i < list.length; i++) {
+    const r = list[i];
+    if (!r || !Number.isFinite(Number(r.y)) || !Number.isFinite(Number(r.height))) {
+      return { ok: false, code: "unmeasured", detail: "row " + (i + 1) };
+    }
+  }
+  // ① 严格递增（横向排布时各行同 y ⇒ 立即变红）
+  for (let i = 1; i < list.length; i++) {
+    if (!(Number(list[i].y) > Number(list[i - 1].y))) {
+      return { ok: false, code: "not-ascending", detail: "row " + (i + 1) + " y=" + list[i].y + " <= row " + i + " y=" + list[i - 1].y };
+    }
+  }
+  // ② 末行底部落在菜单框内（优先用 scrollHeight <= clientHeight，没有就用几何）
+  const scrollHeight = Number(menu?.scrollHeight);
+  const clientHeight = Number(menu?.clientHeight);
+  if (Number.isFinite(scrollHeight) && Number.isFinite(clientHeight) && scrollHeight > clientHeight) {
+    return { ok: false, code: "clipped", detail: "scrollHeight=" + scrollHeight + " > clientHeight=" + clientHeight };
+  }
+  const menuHeight = Number(menu?.height);
+  if (Number.isFinite(menuHeight) && menuHeight > 0) {
+    const last = list[list.length - 1];
+    const menuTop = Number.isFinite(Number(menu.top)) ? Number(menu.top) : Number(list[0].y);
+    const bottom = Number(last.y) + Number(last.height) - menuTop;
+    if (bottom > menuHeight + 0.5) {
+      return { ok: false, code: "overflow-bottom", detail: "bottom=" + Math.round(bottom) + " > menuHeight=" + Math.round(menuHeight) };
+    }
+  }
+  return { ok: true, code: "ok", detail: "" };
+}
+
+/**
  * g-352 att-003 真机修正（第 1 项）：窄档下拉/选择器弹层的**锚定**——菜单右缘对齐**看板右缘**，
  * 绝不左伸出侧栏被宿主裁掉（真机 439px 实测：原来的 right:0 锚在触发按钮右缘，240px 菜单左伸
  * 172px 被侧栏裁掉 ⇒ 行文字全被吞，与「图标 + 文字齐备」的要求相悖）。
@@ -306,6 +411,9 @@ export {
   searchBarWrapStyle,
   searchBarInnerStyle,
   headPanelEntry,
+  headPanelMenuStyle,
+  headPanelRowStyle,
+  headPanelStackingOk,
   viewOptionLabel,
   viewPickerTriggerText,
   rowBtnStyle,

@@ -2509,8 +2509,10 @@
                 }, dgT("toolbar.more")),
                 showHeadOverflow
                   ? h("div", {
-                      style: { ...S.inlineMenu, left: "auto", right: popoverAnchorState?.right ?? 0,
-                               minWidth: popoverAnchorState?.minWidth ?? 240, maxWidth: 320, zIndex: 100000 },
+                      // g-352 att-007（修复横向排布）：容器样式全部来自 headPanelMenuStyle()
+                      //（flex column + white-space:normal + 视口高度兜底），详见该纯函数注释。
+                      className: "dg-narrow-panel",
+                      style: { ...S.inlineMenu, ...headPanelMenuStyle(popoverAnchorState) },
                       onClick: (e) => e.stopPropagation(),
                     },
                       h("div", { style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 6px", borderBottom: "1px solid rgba(128,128,128,.2)" } },
@@ -2520,13 +2522,10 @@
                         // g-352 att-003：第 1 项要求「每一行都同时有图标与文字」，第 9 项要求
                         // 「触发按钮与被收进的下拉项风格一致」⇒ 这里去掉省略号（文字不再被吞），
                         // 且尺寸口径与触发按钮同一处（rowBtnStyle）——菜单宽度按最长一行自适应。
+                        // g-352 att-007：行样式取 headPanelRowStyle()（块级 flex，覆盖 inline-flex）
+                        // ⇒ 不再以行内级盒子参与容器的行内格式化上下文（横向排布的根因之一）。
                         className: "dg-btn dg-narrow-panel-btn",
-                        style: {
-                          ...S.btn, ...rowBtnStyle(),
-                          width: "100%", minWidth: 0, maxWidth: "none",
-                          whiteSpace: "nowrap", textAlign: "left", justifyContent: "flex-start",
-                          margin: "4px 0 0",
-                        },
+                        style: { ...S.btn, ...rowBtnStyle(), ...headPanelRowStyle() },
                         title: it.title,
                         onClick: it.onClick,
                       }, it.label)),
