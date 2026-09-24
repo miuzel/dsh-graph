@@ -133,6 +133,24 @@
       // g-173：看板根节点 ref——自动滚动 effect 从它向上找真实垂直滚动容器
       //（比 querySelector('[style*="padding: 12px"]') 更精确：不会误命中页面其它内联 padding 元素）
       const boardRootRef = React.useRef(null);
+      // g-352：窄宽度响应式——断点真源是**看板根容器实测宽度**（不是 window 宽度：
+      // 右侧栏由宿主拖拽改宽时 window 宽度不变）。ResizeObserver 观测 S.wrap 的 clientWidth；
+      // 仅在 host="sidebar"（右侧栏实例）挂观测，conversation.view 不订阅、不分支 ⇒ DOM/样式逐字不变。
+      // 未测量/无 ResizeObserver 时保持 Infinity（= wide 档），默认外观与全宽路径一致。
+      // 注意：根节点只在数据就绪后才渲染（loading/错误分支是裸 div、没有 ref），普通 useRef 变更
+      // 又不触发 effect ⇒ 必须在依赖里带上「已挂载」与 kanbanRenderKey（换节点），否则观测会在
+      // 根节点还不存在时挂上并永久失效（真机 3082 实测踩到）。
+      const [boardWidth, setBoardWidth] = React.useState(Infinity);
+      // g-352：窄宽度弹层（工具条折叠容器）开关
+      const [showHeadOverflow, setShowHeadOverflow] = React.useState(false);
+      // g-352：单版本模式选中的版本 slug——**仅会话内 React state，不落任何持久化存储**
+      //（口径：无键名、作用域=KanbanView 实例；隐藏状态唯一持久真源仍是 hiddenVersionSlugs）。
+      const [viewVersionSlug, setViewVersionSlug] = React.useState(null);
+      // g-352：「全部版本」哨兵值（非版本 slug；不落任何持久化存储，与 viewVersionSlug 同生命周期）
+      const VIEW_ALL_VERSIONS_SLUG = "__all__";
+      const [showVersionPicker, setShowVersionPicker] = React.useState(false);
+      const versionPickerRef = React.useRef(null);
+      const headOverflowRef = React.useRef(null);
       const [orderMap, setOrderMap] = React.useState({}); // {laneKey: {stageKey: goalId[]}}
       const [transitionNote, setTransitionNote] = React.useState(null);
       // g-132：右上角齿轮 → 看板设置弹窗
@@ -383,13 +401,12 @@
             if (data.ok) {
               showToast(dgT('drag.moveToSuccess', { goalId, target: targetLaneKey }));
               load();
+            } else if (isMoveToBacklogRejection(data.code)) {
+              // g-352：带附件目标移回 backlog 被服务端拒绝 → 稳定错误码 → 本地化失败态提示
+              //（旧实现用中文子串匹配服务端文案，永远匹配不上；也避免中文原文漏进英文界面）
+              showToast(dgT('drag.moveToBacklogError'));
             } else {
-              const err = data.error || dgT('drag.unknownError');
-              if (err.includes(dgT("drag.moveToBacklogError"))) {
-                showToast(dgT('drag.moveToBacklogError'));
-              } else {
-                showToast(dgT('drag.moveToFail') + err);
-              }
+              showToast(dgT('drag.moveToFail') + (data.error || dgT('drag.unknownError')));
             }
           })
           .catch((e) => showToast(dgT('drag.requestFail') + String(e?.message ?? e)));
@@ -819,6 +836,53 @@
       const renameVersionGuard = useBackdropClose(() => { setRenameVersionTarget(null); setRenameVersionNote(null); });
       const deleteVersionGuard = useBackdropClose(() => { setDeleteVersionTarget(null); setDeleteVersionNote(null); });
 
+      // g-352：根节点是否已挂载（数据就绪）——作为观测 effect 的依赖之一
+      const boardMounted = !state.loading && !!state.data;
+      // g-352：看板根容器实测宽度的观测（取代 g-330 的纯 CSS 最小适配）。
+      // 只在右侧栏实例（host="sidebar"）挂观测：会话内 conversation.view 不订阅 ResizeObserver、
+      // 不引入任何窄宽度分支 ⇒ 其 DOM/样式逐字不变（判据 5）。
+      const sidebarHost = props?.host === "sidebar";
+      React.useEffect(() => {
+        if (!sidebarHost) return undefined;
+        const el = boardRootRef.current;
+        if (!el) return undefined;
+        const measure = () => {
+          const w = typeof el.clientWidth === "number" && el.clientWidth > 0
+            ? el.clientWidth
+            : (el.getBoundingClientRect?.().width ?? Infinity);
+          // 亚像素抖动不触发重渲染，避免 ResizeObserver 与 React 更新互相抖死。
+          setBoardWidth((prev) => (Math.abs(prev - w) < 1 ? prev : w));
+        };
+        measure();
+        if (typeof ResizeObserver === "undefined") return undefined;
+        const ro = new ResizeObserver(measure);
+        ro.observe(el);
+        return () => ro.disconnect();
+      }, [sidebarHost, activeWs, boardMounted, kanbanRenderKey]);
+      // 断点分档（阈值与派生集中在 narrow-width.js 纯函数模块，便于断言同一实现）
+      const widthTier = boardWidthTier(boardWidth);
+      // 窄宽度只在右侧栏实例生效：conversation.view 路径 tier 恒为 wide。
+      const narrowActive = sidebarHost && widthTier !== "wide";
+      const narrowSingleTier = sidebarHost && isSingleVersionTier(boardWidth);
+
+      // g-352 降级：栏宽拉回全宽（或离开单版本档）时收起窄宽度专属浮层，不残留、不抛错（判据 7）。
+      React.useEffect(() => {
+        if (!narrowActive) setShowHeadOverflow(false);
+        if (!narrowSingleTier) setShowVersionPicker(false);
+      }, [narrowActive, narrowSingleTier]);
+
+      // g-352：两个内联下拉（工具条折叠容器 / 查看版本选择器）的点击外部关闭——
+      // 与排期版本选择器 card.js 完全同一套交互（document mousedown + wrapRef.contains）。
+      React.useEffect(() => {
+        if (!showVersionPicker && !showHeadOverflow) return undefined;
+        const onDoc = (e) => {
+          if (showVersionPicker && versionPickerRef.current && !versionPickerRef.current.contains(e.target)) setShowVersionPicker(false);
+          if (showHeadOverflow && headOverflowRef.current && !headOverflowRef.current.contains(e.target)) setShowHeadOverflow(false);
+        };
+        document.addEventListener("mousedown", onDoc);
+        return () => document.removeEventListener("mousedown", onDoc);
+      }, [showVersionPicker, showHeadOverflow]);
+
       if (!activeWs) return h("div", { style: S.wrap, role: "status" }, dgT('kanban.error.workspace'));
       if (state.loading) return h("div", { style: S.wrap }, dgT('kanban.loading'));
       if (state.error) return h("div", { style: S.wrap }, dgT('kanban.error.fetch') + state.error);
@@ -830,6 +894,19 @@
       // g-233 P1: 纯内存覆盖层——临时可见版本从 hiddenVersionSet 排除，不写持久隐藏偏好（g-255: 使用 search-state.js 纯函数）
       const hiddenVersionSet = computeEffectiveHiddenVersionSlugs(hiddenVersionSlugs, searchUnhiddenSlugs);
       const active = allActiveVersions.filter((v) => !hiddenVersionSet.has(v.slug));
+      // g-352：单版本模式（<360px）的可见版本派生（判据 3）——**只做投影，不新增状态真源**：
+      // 入参 active 已是「hiddenVersionSlugs 持久底账 + searchUnhiddenSlugs 搜索临时覆盖层」
+      // 共同作用后的结果，这里仅再收窄到一个版本。
+      // 持久化口径：viewVersionSlug 只存在于本组件 React state（**零持久化键**，
+      // 作用域=KanbanView 实例）；隐藏状态的唯一持久真源仍是 useHiddenVersionSlugs 的
+      // hiddenVersionSlugs（其键名/作用域由该 hook 唯一持有，本目标不新增任何存储读写）。
+      // 与 g-233 的优先级：搜索处于激活态时**挂起**单版本收窄，保证搜索匹配不被视图过滤藏掉。
+      // 选中态三义：null=未显式选择（默认收窄到第一个可见版本）/ slug=该版本 / 哨兵=「全部版本」
+      //（哨兵让「全部版本」入口在多泳道档之外也真正生效：<360px 下显式选「全部版本」即退出收窄）。
+      const singleVersion = (narrowSingleTier && !searchActiveQuery && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG)
+        ? pickSingleVersion(active, viewVersionSlug)
+        : null;
+      const singleVersionMode = !!(narrowSingleTier && singleVersion);
       const released = allReleasedVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       // 全量目标 id→status 映射（依赖徽章状态化，发现#23：已交付依赖算「依赖满足」）
       const goalStatus = {};
@@ -1127,8 +1204,13 @@
       };
       // g-77647351：泳道渲染（带拖放支持，跨 lane 拖放改归属）；g-129 版本 lane 标题「＋」预选版本
       // g-137：laneIndex 用于交替背景色；g-162：阶段列横向交替深浅
-      const lane = (label, goals, key, version, laneIndex = 0, collapsible = true) => {
+      const lane = (label, goals, key, version, laneIndex = 0, collapsible = true, vertical = false) => {
         goals = goals.filter(matchesTag);
+        // g-352：单版本模式（<360px）下面板已退化为全宽单列，阶段纵向堆叠——
+        // 此时交付/阻塞列不再走 36px 竖条折叠形态（竖条在纵向堆叠里不可读且无意义），
+        // 一律按展开态渲染；宽档（含 <480px 多泳道档）仍用原折叠语义。
+        const deliverCollapsed = vertical ? false : deliverColumnCollapsed;
+        const blockedCollapsed = vertical ? false : blockedColumnCollapsed;
         // g-162: 普通泳道折叠状态；released 仅复用 lane 布局，不增加折叠入口
         const isCollapsed = collapsible && !!collapsedLanes[key];
         // g-162: 统一基础背景层级（active 与 released 相同），阶段列横向轻微交替
@@ -1213,7 +1295,7 @@
           // g-162: 阶段列横向交替深浅背景
           const laneBg = stageBg(sIdx);
           // g-127：阻塞列折叠态——竖条汇总替代卡片列表
-          if (s.key === "blocked" && blockedColumnCollapsed) {
+          if (s.key === "blocked" && blockedCollapsed) {
             // 计算最长阻塞时间（从 created_at 到现在）
             let maxDays = 0;
             for (const g of orderedGoals) {
@@ -1268,7 +1350,7 @@
             }, summaryText);
           }
           // g-156: 交付列折叠态——竖条汇总替代卡片列表
-          if (s.key === "deliver" && deliverColumnCollapsed) {
+          if (s.key === "deliver" && deliverCollapsed) {
             const count = orderedGoals.length;
             return h("div", {
               key: key + "-" + s.key,
@@ -1441,6 +1523,23 @@
                toggleLaneCollapse(key, true);
              },
            }, h("span", { className: "dg-lane-collapse-triangle" })) : null);
+        if (vertical) {
+          // g-352：单版本模式——阶段列由横向并排改为**纵向堆叠**（判据 3）：每个阶段先一行列头、
+          // 再是全宽单元格，卡面按全宽渲染（阶段列不再各自 minmax(150px,1fr) 横向挤压）。
+          // 单元格本体（cells）与宽档完全同一份实现，只改排布方向，不复制第二套渲染。
+          const stacked = STAGES.map((s, sIdx) => h("div", {
+            key: key + "-v-" + s.key,
+            style: { minWidth: 0, display: "flex", flexDirection: "column", gap: 4 },
+          },
+            h("div", {
+              style: { ...S.stageHead, textAlign: "left", padding: "4px 6px 2px", opacity: 0.8 },
+            }, s.label),
+            cells[sIdx]));
+          return [labelEl, h("div", {
+            key: key + "-vstack",
+            style: { gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 },
+          }, ...stacked)];
+        }
         return [labelEl, ...cells];
       };
 
@@ -1631,7 +1730,7 @@
       // 保证 released 泳道展开后与 active/version 泳道左侧标题宽/阶段列宽/列顺序完全一致；
       // 折叠列保留窄栏 36px，普通阶段列保持既有的 minmax(150px, 1fr) 宽。
       // STAGES 顺序: describe, collect, execute, confirm, deliver, blocked
-      const gridCols = ["130px",
+      const horizontalGridCols = ["130px",
         "minmax(150px, 1fr)",  // describe
         "minmax(150px, 1fr)",  // collect
         "minmax(150px, 1fr)",  // execute
@@ -1639,19 +1738,28 @@
         deliverColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // deliver
         blockedColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // blocked
       ].join(" ");
+      // g-352：单版本模式（根容器实测宽度 <360px）——阶段列由横向并排改为纵向堆叠（判据 3）：
+      // 列模板退化为单列全宽，泳道内的阶段块依次堆叠（见 lane() 的 vertical 分支），
+      // 卡面全宽可读、不需要横向滚动。宽档仍共用同一份横向模板。
+      const gridCols = singleVersionMode ? "minmax(0, 1fr)" : horizontalGridCols;
       // Released lanes intentionally share the same computed template by reference.
       const releasedGridCols = gridCols;
 
       const rows = [];
+      if (singleVersionMode) {
+        // 判据 3：单版本模式只渲染选中版本**一个**泳道（阶段列纵向堆叠、全宽可读）。
+        // 非版本泳道（独立目标/backlog/released）在该档不渲染；「全部版本」入口在头部选择器里保留。
+        rows.push(...lane(`🏷️ ${singleVersion.name}`, singleVersion.goals, "v-" + singleVersion.slug, singleVersion.slug, 0, true, true));
+      }
       let laneIndex = 0;
-      for (const v of active) {
+      for (const v of (singleVersionMode ? [] : active)) {
         rows.push(...lane(`🏷️ ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
         laneIndex++;
       }
       // g-223：如果所有版本都被隐藏（或存在 active 且 active 全部被隐藏），展示友好空状态提示行
       const totalVersionsCount = (b.versions ?? []).length;
       const visibleVersionsCount = active.length + released.length;
-      if (totalVersionsCount > 0 && (visibleVersionsCount === 0 || (allActiveVersions.length > 0 && active.length === 0))) {
+      if (!singleVersionMode && totalVersionsCount > 0 && (visibleVersionsCount === 0 || (allActiveVersions.length > 0 && active.length === 0))) {
         const hintText = visibleVersionsCount === 0
           ? dgT('versionDrawer.allHidden', { count: totalVersionsCount })
           : dgT('versionDrawer.activeHidden', { count: allActiveVersions.length });
@@ -1684,11 +1792,14 @@
             }, dgT("versionDrawer.showAll"))),
         );
       }
-      rows.push(...lane(dgT("lane.standalone"), b.standalone, "standalone", null, laneIndex));
-      laneIndex++;
-      rows.push(...backlogRow("backlog", b.backlog, "backlog"));
+      if (!singleVersionMode) {
+        rows.push(...lane(dgT("lane.standalone"), b.standalone, "standalone", null, laneIndex));
+        laneIndex++;
+        rows.push(...backlogRow("backlog", b.backlog, "backlog"));
+      }
 
-      const releasedRows = released.map((v, idx) => {
+      // g-352：单版本模式不渲染 released 折叠区（判据 3：DOM 中仅存在选中版本一个泳道）。
+      const releasedRows = (singleVersionMode ? [] : released).map((v, idx) => {
         const open = !!openReleased[v.slug];
         const count = (v.goals && v.goals.length > 0) ? v.goals.length : (v.goals_count ?? 0);
         let openContent = null;
@@ -1901,12 +2012,41 @@
         gap: 4,
         verticalAlign: "middle",
       };
-      // g-330：右侧栏页签（sidebar.right.pane.tab）投递 host="sidebar"；会话内 conversation.view 不传。
-      // 右侧栏宽度远窄于 conversation.view，头部是单行 flex（S.head 无 flexWrap），窄宽度下
-      // 标题/版本/各按钮会被压成竖排不可读——故只对右侧栏给头部加一个额外 class（见
-      // constants.js 的 .dg-head-sidebar），由 CSS 放开换行（最小适配，见判据 5）。
-      // 会话内路径：className 为 undefined，style 仍是 S.head 本体，外观与 DOM 逐字不变。
-      const sidebarHost = props?.host === "sidebar";
+      // g-352：窄宽度适配**取代** g-330 的纯 CSS 最小适配（那条 `.dg-head-sidebar` 换行规则）。
+      // 断点以看板根容器实测宽度为准（`boardWidth`，见上方 ResizeObserver），且只在 host="sidebar"
+      // 的右侧栏实例生效：会话内 conversation.view 路径 narrowActive 恒为 false ⇒ 与 g-330 之前逐字一致。
+      // 兜底：把按钮搬进弹层并不能解决「触发按钮自身」的溢出——S.head 单行 flex 的每个子项默认
+      // min-width:auto 不可收缩到内容宽度以下，文字会顶出按钮框。同时给 min-width:0 + 省略号
+      //（与 constants.js 的 .dg-narrow-head-btn 同款）才真正无溢出（判据 2）。
+      const narrowHeadBtnStyle = narrowActive
+        ? { minWidth: 0, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
+        : null;
+      const headBtnStyle = narrowHeadBtnStyle ? { ...tbBtnStyle, ...narrowHeadBtnStyle } : tbBtnStyle;
+      const headBtnClass = "dg-btn" + (narrowActive ? " dg-narrow-head-btn" : "");
+      // g-352：窄档弹层内的按钮集合——与宽档平铺的工具条**同一批功能**（刷新/标签筛选/[清空标签]/
+      // 记忆/知识库/设置/显示已归档），只是排成整行。宽档保留原有的字面量渲染（会话内路径与 g-324
+      // 的刷新按钮源契约因此逐字不变），这里只描述窄档弹层需要的标签与动作。
+      const headPanelItems = [
+        { key: "refresh", label: dgT("common.refresh"), title: dgT("common.refresh"), onClick: load },
+        { key: "tagfilter", label: tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title"), title: dgT("tagFilter.title"), onClick: () => setShowTagFilterModal(true) },
+        tagFilter.length > 0 ? { key: "tagclear", label: dgT("tagFilter.clear"), title: dgT("tagFilter.clear"), onClick: () => setTagFilter([]) } : null,
+        { key: "memory", label: dgT("memory.btn"), title: dgT("memory.title"), onClick: () => setShowMemoryModal(true) },
+        { key: "shared", label: dgT("shared.title").split("（")[0], title: dgT("shared.title"), onClick: () => setShowSharedPanel(true) },
+        { key: "settings", label: "⚙", title: dgT("settings.title"), onClick: () => setShowSettings(true) },
+      ].filter(Boolean)
+        // 点击任一动作先收起本下拉再执行（避免下拉叠浮层）
+        .map((it) => ({ ...it, onClick: () => { setShowHeadOverflow(false); it.onClick(); } }));
+      // g-110: 显示已归档目标的 checkbox（宽档位于 DEBUG 信息左侧；窄档收进弹层）
+      const archivedToggle = h("label", {
+        key: "tb-archived",
+        style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 12, cursor: "pointer", fontSize: 12, opacity: 0.8 },
+      },
+        h("input", {
+          type: "checkbox",
+          checked: showArchived,
+          onChange: (e) => setShowArchived(e.target.checked),
+        }),
+        dgT("card.archived"));
       return h(
         "div",
         { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
@@ -1923,15 +2063,20 @@
              }
            } : undefined },
         h("style", null, HOVER_CSS),
+        // g-352：右侧栏实例（host="sidebar"）的头部布局：style 仍是 S.head **本体**（会话内
+        // sidebarHost=false ⇒ 无额外样式键、className 为 undefined，DOM/样式逐字不变，判据 5）；
+        // 右侧栏专属的布局兜底走 .dg-head-sidebar（见 constants.js：放不下就换行 + 按钮不压缩）。
+        // 真正的窄宽度适配是测量驱动的：<480px 工具条整批收进下拉容器、<360px 单版本模式。
         h("div", { style: S.head, className: sidebarHost ? "dg-head-sidebar" : undefined },
-          h("strong", null, "dsh-graph"),
+          // g-352：窄档下标题不内部折行（nowrap + min-width:auto ⇒ 保持自然宽度，由头部换行让位）
+          h("strong", { style: narrowActive ? { whiteSpace: "nowrap", flexShrink: 0 } : undefined }, "dsh-graph"),
           // g-174：标题栏显示插件版本，点击以新标签打开插件官网
           h("a", {
             href: "https://github.com/miuzel/dsh-graph",
             target: "_blank",
             rel: "noreferrer",
             title: "dsh-graph",
-            style: { ...S.meta, color: "var(--dsw-alias-state-business-primary, #8ab4ff)", cursor: "pointer", textDecoration: "underline" },
+            style: { ...S.meta, color: "var(--dsw-alias-state-business-primary, #8ab4ff)", cursor: "pointer", textDecoration: "underline", ...(narrowActive ? { whiteSpace: "nowrap", flexShrink: 0 } : {}) },
           }, "version: " + PLUGIN_VERSION),
           // g-214：局部化倒计时组件渲染数据更新时间及剩余秒数倒计时
           // g-324：refreshSignal 为「一次刷新流程完成」的单调计数（load() 汇聚点自增），
@@ -1943,51 +2088,119 @@
             intervalSec: refreshIntervalSec,
             onTriggerRefresh: load,
           }),
-          h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, dgT("common.refresh")),
+          // ===== g-352：宽档平铺 / 窄档折叠 =====
+          // 宽档（根容器实测宽度 ≥480px 或非右侧栏实例）：工具条按钮与显示归档开关原地平铺，
+          // 与 g-330 之前逐字一致（会话内 conversation.view 恒走此分支）。
+          // 窄档（<480px）：同一批按钮原样收进一个弹层容器（headPanelItems），头部只留一个触发按钮——
+          // 触发按钮自身同样带 min-width:0 + 省略号兜底（判据 2）。
+          narrowActive ? null : h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, dgT("common.refresh")),
           // g-187：顶部标签筛选弹层入口
-          h("button", {
+          narrowActive ? null : h("button", {
             style: { ...tbBtnStyle, ...(tagFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
             className: "dg-btn" + (tagFilter.length > 0 ? " dg-btn-active" : ""),
             title: dgT("tagFilter.title"),
             onClick: () => setShowTagFilterModal(true),
           }, tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title")),
-          tagFilter.length > 0
-            ? h("button", {
+          narrowActive || tagFilter.length === 0
+            ? null
+            : h("button", {
                 className: "dg-btn",
                 style: { ...tbBtnStyle, marginLeft: 4, padding: "0 6px", fontSize: 11 },
                 title: dgT("tagFilter.clear"),
                 onClick: () => setTagFilter([]),
-              }, dgT("tagFilter.clear"))
-            : null,
+              }, dgT("tagFilter.clear")),
           // g-105: 记忆管理按钮（位于设置按钮左侧）
-          h("button", {
+          narrowActive ? null : h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
             title: dgT("memory.title"),
             onClick: () => setShowMemoryModal(true),
           }, dgT("memory.btn")),
           // g-183: 项目知识库面板入口
-          h("button", {
+          narrowActive ? null : h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
             title: dgT("shared.title"),
             onClick: () => setShowSharedPanel(true),
           }, dgT("shared.title").split("（")[0]),
           // g-132: 右上角齿轮 → 看板设置
-          h("button", {
+          narrowActive ? null : h("button", {
             style: { ...tbBtnStyle, padding: "0 7px", fontSize: 14 },
             className: "dg-btn",
             title: dgT("settings.title"),
             onClick: () => setShowSettings(true),
           }, "⚙"),
           // g-110: 显示已归档目标的 checkbox（移至右侧，DEBUG 信息左侧，布局更规整）
-          h("label", { style: { display: "flex", alignItems: "center", gap: 4, marginLeft: 12, cursor: "pointer", fontSize: 12, opacity: 0.8 } },
-            h("input", {
-              type: "checkbox",
-              checked: showArchived,
-              onChange: (e) => setShowArchived(e.target.checked),
-            }),
-            dgT("card.archived")),
+          narrowActive ? null : archivedToggle,
+          narrowActive
+            // g-352 窄档（<480px）：工具条收进一个**下拉容器**。容器与选项行复用既有内联下拉实现
+            //（helpers.js 的 S.inlineMenu 样式 token + .dg-schedule-version-item 行样式，
+            // 即 g-306 排期版本选择器 card.js:246-291 的那一套）⇒ 全仓仍只有一套下拉实现，
+            // 不引入第三套；也不新增内联 S.overlay 浮层调用点（g-181/g-343 的 19 处计数契约零回归）。
+            // 锚点靠右（left:auto + right:0），窄容器里也不会被 S.wrap 的横向滚动裁掉。
+            ? h("span", { key: "tb-overflow", ref: headOverflowRef, style: { display: "inline-block", position: "relative", verticalAlign: "middle", minWidth: 0, flexShrink: 0 } },
+                h("button", {
+                  style: headBtnStyle,
+                  className: headBtnClass + " dg-head-overflow-trigger",
+                  title: dgT("toolbar.moreTooltip"),
+                  "aria-label": dgT("toolbar.moreTooltip"),
+                  "aria-expanded": showHeadOverflow ? "true" : "false",
+                  onClick: () => setShowHeadOverflow((v) => !v),
+                }, dgT("toolbar.more")),
+                showHeadOverflow
+                  ? h("div", {
+                      style: { ...S.inlineMenu, left: "auto", right: 0, minWidth: 240, maxWidth: 320, zIndex: 100000 },
+                      onClick: (e) => e.stopPropagation(),
+                    },
+                      h("div", { style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 6px", borderBottom: "1px solid rgba(128,128,128,.2)" } },
+                        dgT("toolbar.moreTitle")),
+                      ...headPanelItems.map((it) => h("button", {
+                        key: "ov-" + it.key,
+                        className: "dg-btn dg-narrow-head-btn dg-narrow-panel-btn",
+                        style: {
+                          ...S.btn, width: "100%", minWidth: 0, maxWidth: "100%",
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          textAlign: "left", justifyContent: "flex-start", margin: "4px 0 0",
+                        },
+                        title: it.title,
+                        onClick: it.onClick,
+                      }, it.label)),
+                      // 显示已归档开关：与宽档头部复用同一个元素定义（archivedToggle）
+                      h("div", { style: { minWidth: 0, marginTop: 6, padding: "0 2px" } }, archivedToggle))
+                  : null)
+            : null,
+          // g-352：单版本档（<360px）头部放不下的「查看版本」选择器触发按钮——
+          // 与工具条折叠同一个兜底样式；下拉本体与排期版本选择器共用 S.inlineMenu（零第三套下拉）。
+          narrowSingleTier
+            ? h("span", { key: "tb-version-picker", ref: versionPickerRef, style: { display: "inline-block", position: "relative", verticalAlign: "middle", minWidth: 0, maxWidth: "100%", flexShrink: 0 } },
+                h("button", {
+                  style: headBtnStyle,
+                  className: headBtnClass + " dg-version-picker-trigger",
+                  title: dgT("view.pickVersionTooltip"),
+                  "aria-label": dgT("view.pickVersionTooltip"),
+                  "aria-expanded": showVersionPicker ? "true" : "false",
+                  onClick: (e) => { e.stopPropagation(); setShowVersionPicker((v) => !v); },
+                }, dgT("view.pickVersion", { version: singleVersion ? singleVersion.name : dgT("view.allVersions") })),
+                showVersionPicker
+                  ? h("div", { style: { ...S.inlineMenu, minWidth: 220 }, onClick: (e) => e.stopPropagation() },
+                  h("div", { style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 4px", borderBottom: "1px solid rgba(128,128,128,.2)" } },
+                    dgT("view.pickVersionTooltip")),
+                  h("div", {
+                    className: "dg-schedule-version-item",
+                    style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+                    onClick: () => { setViewVersionSlug(VIEW_ALL_VERSIONS_SLUG); setShowVersionPicker(false); },
+                  }, `${viewVersionSlug === VIEW_ALL_VERSIONS_SLUG ? "✓ " : "▸ "}${dgT("view.allVersions")}`),
+                  ...active.map((v) => h("div", {
+                    key: "vp-" + v.slug,
+                    className: "dg-schedule-version-item",
+                    style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+                    onClick: () => { setViewVersionSlug(v.slug); setShowVersionPicker(false); },
+                  }, `${singleVersion && singleVersion.slug === v.slug ? "✓ " : "🏷️ "}${v.name || v.slug}`)),
+                  active.length === 0
+                    ? h("div", { style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 } }, dgT("goal.scheduleNoVersion"))
+                    : null)
+                  : null)
+            : null,
           // g-113 临时诊断（灰色低调显示，两行省略，详情在 tooltip 显示，为搜索框留出空间）：显示当前解析的 workspace 与会话 id
           h("div", {
             style: {
@@ -2032,11 +2245,14 @@
               alignItems: "center",
               gap: 6,
               marginLeft: "auto",
+              // g-352：搜索框保持自然宽度（flexShrink:0）——窄档下靠头部换行另起一行，
+              // 而不是被压成 54px 的窄条（真机 3082 实测：压窄后搜索框自身也会越框）
               flexShrink: 0,
+              minWidth: 0,
             },
             className: "dg-search-bar",
           },
-            h("div", { style: { position: "relative", display: "flex", alignItems: "center" } },
+            h("div", { style: { position: "relative", display: "flex", alignItems: "center", minWidth: 0 } },
               h("input", {
                 ref: searchInputRef,
                 type: "text",
@@ -2164,7 +2380,9 @@
                 setCreateVersionNote(null);
               },
             }, dgT("createVersion.createBtn"))),
-          STAGES.map((s) => {
+          // g-352：单版本模式下没有横向阶段列，阶段列头由 lane() 的纵向堆叠分支提供
+          //（每个阶段块自带一行列头），故此处不再渲染表头行。
+          singleVersionMode ? null : STAGES.map((s) => {
             // g-127：blocked 列头可点击切换折叠/展开
             // g-152：折叠态列头只显示 ▸（36px 窄条，竖条单元格已有 ⛔ 标识）
             if (s.key === "blocked") {

@@ -55,6 +55,15 @@
       },
       modalSection: { marginTop: 10, whiteSpace: "pre-wrap" },
       modalH: { fontWeight: 700, marginBottom: 4 },
+      // g-352：**唯一**的内联下拉菜单样式 token——排期版本选择器（card.js VersionSelectorButton）
+      // 与看板顶部「查看版本」选择器共用它 + `.dg-schedule-version-item` 行样式，
+      // 避免出现第三套下拉实现（判据 6）。
+      inlineMenu: {
+        position: "absolute", top: "100%", left: 0, marginTop: 4, zIndex: 9999,
+        background: "var(--dsw-alias-bg-base, #1e1e1e)", border: "1px solid rgba(128,128,128,.4)",
+        borderRadius: 6, padding: "6px 0", minWidth: 160, maxWidth: 240,
+        boxShadow: "0 4px 16px rgba(0,0,0,.45)",
+      },
       // g-153：共享按钮样式 token——暗色主题下确保可读性与层级；g-176：改 DSH 主题变量并保留暗色 fallback
       btn: {
         fontSize: 12, padding: "2px 10px", cursor: "pointer",
