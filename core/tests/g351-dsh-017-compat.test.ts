@@ -18,6 +18,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import vm from "node:vm";
 import { join } from "node:path";
 import { apply } from "../../dist/index.js";
 
@@ -180,4 +181,92 @@ test("g-351 判据3：profile 全局默认字段以 volatile 声明（新宿主�
   }
   // 旧路径 schema 必须保持原样（不是 volatile），否则 namespace 解析出的会是 volatile 包装而非标量
   assert.match(src, /subagentMode: z\.union\(\["", "standard", "minimal"\]\)\.default\(""\)/);
+});
+
+// ---------------------------------------------------------------------------
+// 客户端：子代理目录的**形状 / 能力探测**（0.1.7 移除了 subagentsByParent 与
+// setSubagentCatalogOpen/refreshSubagents；替代物是 projectionsBySession 与 refreshProjections）
+// ---------------------------------------------------------------------------
+
+function extractFunction(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `源模块中存在 function ${name}`);
+  let depth = 0;
+  for (let i = source.indexOf("{", start); i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`function ${name} 花括号无法配平`);
+}
+
+function makeCatalogSandbox() {
+  const bundle = readFileSync(join(dist, "lib/client.js"), "utf8");
+  const code = [
+    extractFunction(bundle, "subagentCatalogEntries"),
+    extractFunction(bundle, "subagentAddressOf"),
+    extractFunction(bundle, "refreshSubagentCatalog"),
+    "this.api = { subagentCatalogEntries, subagentAddressOf, refreshSubagentCatalog };",
+  ].join("\n");
+  const sandbox: any = { Promise, console: { warn: () => {} } };
+  vm.runInNewContext(code, sandbox, { filename: "dist/lib/client.js#subagentCatalog" });
+  return sandbox.api;
+}
+
+test("g-351 客户端：新形态（projectionsBySession）子代理目录可读，旧形态（subagentsByParent）不退化", async () => {
+  const { subagentCatalogEntries, subagentAddressOf } = makeCatalogSandbox();
+  const entry = { kind: "child", id: "child-1", mode: "continuable" };
+
+  // 0.1.7 形态：没有 subagentsByParent，目录在共享投影里
+  const rtNew: any = {
+    list: { getSnapshot: () => ({ ids: [], byId: {}, projectionsBySession: { "parent-1": { values: { subagentCatalog: [entry] } } } }) },
+  };
+  // 跨 vm realm 的对象原型不同，用 JSON 比较取值而非 deepEqual
+  assert.equal(JSON.stringify(subagentCatalogEntries(rtNew, "parent-1")), JSON.stringify([entry]), "新形态目录必须可读（否则子会话导航静默退化为打开父会话）");
+  assert.equal(
+    JSON.stringify(subagentAddressOf(rtNew, "parent-1", "child-1")),
+    JSON.stringify({ parentSessionId: "parent-1", childSessionId: "child-1", mode: "continuable" }),
+    "新形态下必须能构造出 SubagentAddress",
+  );
+
+  // 0.1.6 形态：subagentsByParent 仍是权威来源
+  const rtOld: any = {
+    list: { getSnapshot: () => ({ ids: [], byId: {}, subagentsByParent: { "parent-1": { entries: [entry] } } }) },
+  };
+  assert.equal(JSON.stringify(subagentCatalogEntries(rtOld, "parent-1")), JSON.stringify([entry]), "旧形态目录必须继续可读（不退化）");
+
+  // 形状都不符：空目录（调用方按未收录降级），不得抛错
+  assert.equal(subagentCatalogEntries({ list: { getSnapshot: () => ({}) } }, "parent-1").length, 0);
+  assert.equal(subagentCatalogEntries({}, "parent-1").length, 0);
+  assert.equal(subagentAddressOf(rtNew, "parent-1", "nope"), null);
+});
+
+test("g-351 客户端：目录刷新按能力分流（新 refreshProjections / 旧 setSubagentCatalogOpen+refreshSubagents）", async () => {
+  const { refreshSubagentCatalog } = makeCatalogSandbox();
+
+  const calls: string[] = [];
+  const rtNew: any = {
+    refreshProjections: async (p: string) => { calls.push(`refreshProjections:${p}`); },
+    setSubagentCatalogOpen: () => calls.push("setSubagentCatalogOpen"),
+    refreshSubagents: async () => calls.push("refreshSubagents"),
+  };
+  await refreshSubagentCatalog(rtNew, "parent-1");
+  assert.deepEqual(calls, ["refreshProjections:parent-1"], "新能力存在时必须只走 refreshProjections，不得再调用已移除的旧 API");
+
+  const legacyCalls: string[] = [];
+  const rtOld: any = {
+    setSubagentCatalogOpen: (p: string) => legacyCalls.push(`open:${p}`),
+    refreshSubagents: async (p: string) => { legacyCalls.push(`refresh:${p}`); },
+  };
+  await refreshSubagentCatalog(rtOld, "parent-1");
+  assert.deepEqual(legacyCalls, ["open:parent-1", "refresh:parent-1"], "旧宿主必须继续走旧刷新序列");
+
+  // 两种能力都没有：静默返回（调用方按未收录降级），绝不抛出
+  await refreshSubagentCatalog({}, "parent-1");
+  await refreshSubagentCatalog(undefined, "parent-1");
+
+  // 新 API 抛错时不得冒泡（看板不得崩）
+  await refreshSubagentCatalog({ refreshProjections: async () => { throw new Error("boom"); } }, "parent-1");
 });
