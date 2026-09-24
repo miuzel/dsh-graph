@@ -9,6 +9,13 @@ core-dist/
 # g-319：构建产物隔离到独立 dist/ 目录（由 scripts/build.sh 自动生成）
 dist/
 
+# g-348：build.sh 的原子发布暂存根（`.dist-stage.XXXXXX/`，与 dist 同文件系统，
+# 全部步骤成功后 `mv -T --exchange` 与 dist 原子互换；EXIT trap 负责清理）。
+# 正常/失败路径都不残留；仅 SIGKILL 会留下惰性残留，故加忽略规则兜底。
+/.dist-stage.*/
+# 退化路径（mv 无 --exchange）用于暂存旧 dist 的临时名，同样兜底忽略。
+/dist.prev.*/
+
 # g-319：dsh-graph-host/core/*.js 是 core/*.ts 的编译产物，不再跟踪。
 # dsh-graph-host/lib/client.js 是客户端模块拼接产物，不再跟踪。
 # 构建流水线（pnpm build / pnpm prepack / npm prepare）自动编译到 dist/。

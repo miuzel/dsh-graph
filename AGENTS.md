@@ -34,11 +34,23 @@ pnpm build          # or: bash scripts/build.sh
 
 This runs `sync-core.sh` (core/*.ts → dist/core/*.js), `build-client.sh` (client modules → dist/lib/client.js), and copies all release assets to `dist/`.
 
+**Atomic publish (g-348)**: `build.sh` never wipes the live `dist/`. All artifacts are first assembled in a staging root inside the repository (`.dist-stage.XXXXXX/`, same filesystem as `dist/`); only after every step succeeds is the tree switched with a single `mv -T --exchange` (`renameat2(RENAME_EXCHANGE)`). A failed build leaves the previous `dist/` byte-for-byte intact and removes the staging root via an EXIT trap. Where `mv --exchange` is unavailable (needs GNU coreutils ≥ 9.6; macOS/BSD), it falls back to two renames and warns on stderr. `DIST_DIR` / `CORE_DIST` let `sync-core.sh` and `build-client.sh` write into the staging root; their standalone defaults are unchanged.
+
 ### Verification
 After modifying source and rebuilding:
 1. Run `node --check dist/lib/client.js` to verify syntax
 2. Run the full test suite: `node --test core/tests/*.test.ts`
 3. Verify pack: `cd dist && pnpm pack --dry-run`
+
+## Build Isolation（构建隔离：禁止在主树跑实验性构建）
+
+**实验性构建禁止在主树进行 —— 一律在隔离 worktree 或仓库内私有副本中进行。**
+
+- 主树 `dist/` 是**正在运行的宿主的资产来源**：宿主对 `dist/prompts/*.md` 等资产是**每次调用现读**（非启动缓存）。在主树跑构建会与运行中的宿主、以及任何会读 prompt 资产的 worker 争用该目录；历史上由此产生过 `dsh-graph prompt asset missing or unreadable: guide-hint.zh.md`，并**直接终止进行中的轮次**（g-346 att-001/att-002 均因此静默死亡、零提交）。
+- 验证构建请用专属 worktree（`.worktrees/g-<goal>-att-<NN>`）或 `tmp/` 下的私有副本；主树只在发布/复核的明确时点构建。
+- `pnpm typecheck` 会连带触发本包 `prepare`（= 完整构建）⇒ 在主树改用 `./node_modules/.bin/tsc --noEmit -p tsconfig.json`。
+- g-348 的原子发布保护的是「读者的可读性」，**不改变**本条纪律：原子发布消除的是构建自身的窗口，而「不要在主树跑实验构建」避免的是与运行中宿主的一切争用。
+- 回归守卫：`core/tests/g348-atomic-build.test.ts`（结构性守卫禁止对活动 `dist` 执行 `rm -rf`；3 个并发读者 × 3 轮构建断言 0 缺失；并把「改回旧模式」的负向对照钉住 ⇒ 人为回退必红）。
 
 ## Development Workflow
 
