@@ -16,7 +16,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -506,10 +506,16 @@ test("g-352 C2-m5：build-client PARTS 覆盖 lib/client 全部模块，且 bund
 //   不可能来自 1.5s 空闲预加载（变异掉按需拉取即变红）。
 // ============================================================================
 
-interface RenderResult { passElements: () => any[] }
+interface RenderResult { passElements: () => any[]; root: () => any }
 
 function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSession?: any }) {
-  const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
+  // g-352 att-004（B1 证据口径）：G352_BUNDLE 可把渲染对象指向**另一份构建产物**——
+  // 用于把同一套断言跑在基线 commit（83bb041）的 bundle 上，从而给出「HEAD vs 基线签名差异 0 行」
+  // 的可复现证据，而不是只凭截图。默认仍是本仓库 dist/lib/client.js（判据 5 契约不变）。
+  const bundle = readFileSync(
+    process.env.G352_BUNDLE || join(import.meta.dirname, "../../dist/lib/client.js"),
+    "utf8",
+  );
   const boardWidth = opts.boardWidth ?? 250;
   const elements: any[] = [];
   const fetchLog: string[] = [];
@@ -675,13 +681,16 @@ function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSess
   async function settle(props: any, maxPasses = 40): Promise<RenderResult> {
     const KanbanView = cv!.renderer(props).type;
     assert.equal(typeof KanbanView, "function", "conversation.view renderer 产出 KanbanView 组件");
+    // g-352 att-004：保留**本次渲染返回的根节点**——签名必须只看真正挂载进这棵树的元素；
+    // 组件里创建却未挂载的元素（如仅 sidebar 分支使用的 versionManageBtn）不是 DOM，不能计入。
+    let tree: any = null;
     for (let p = 0; p < maxPasses; p++) {
       passes++;
       dirty = false;
       cursor.clear();
       pendingEffects = [];
       lastStart = elements.length;
-      KanbanView(props); // 同步渲染；effect 抛错会直接冒泡 ⇒ 断言失败（生命周期缺陷必须变红）
+      tree = KanbanView(props); // 同步渲染；effect 抛错会直接冒泡 ⇒ 断言失败（生命周期缺陷必须变红）
       for (const s of pendingEffects) {
         if (typeof s.cleanup === "function") s.cleanup();
         s.cleanup = s.fn();
@@ -690,7 +699,7 @@ function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSess
       await new Promise((r) => setImmediate(r));
       if (!dirty) break;
     }
-    return { passElements: () => elements.slice(lastStart) };
+    return { passElements: () => elements.slice(lastStart), root: () => tree };
   }
   return { settle, elements, fetchLog, observed, passes: () => passes };
 }
@@ -1303,4 +1312,147 @@ test("g-352 att-003 第9项（渲染级）：同一行按钮等高同风格（�
   const supBtn = treeOf(supBar).filter((e: any) => elClass(e).includes("dg-supervisor-jump-icon")).pop();
   assert.equal(supBtn.props.style.height, ROW_BTN_METRICS.height);
   assert.equal(supBtn.props.style.width, ROW_BTN_METRICS.height);
+});
+
+// ============================================================================
+// g-352 att-004（B1）：DEBUG 块必须留在 .dg-head 内部
+//   att-003 的判别力缺口：只断言 `debug:true/false`（元素在不在）——抓不住「块被搬到头部之外」。
+//   这里补两级断言：① 父子/次序（结构级）；② 整棵 conversation.view 元素签名（签名级）。
+//   签名基线取自 att-002 的 commit 83bb041（构建产物），冻结在 fixtures/g352-conv-signature.txt。
+// ============================================================================
+
+/** 子 → 父 索引（把 h() 元素树展开；children 可能是嵌套数组）。 */
+function parentIndexOf(els: any[]): Map<any, any> {
+  const m = new Map<any, any>();
+  const walk = (node: any, parent: any): void => {
+    if (node == null || typeof node !== "object") return;
+    if (Array.isArray(node)) { for (const n of node) walk(n, parent); return; }
+    if (!node.type) return;
+    m.set(node, parent);
+    walk(node.children, node);
+  };
+  for (const el of els) if (!m.has(el)) m.set(el, null);
+  for (const el of els) walk(el.children, el);
+  return m;
+}
+
+/**
+ * 元素**结构签名**（一行一个元素，文档序 DFS）：tag / key / className / 样式键值 / 关键 prop 存在性。
+ * 刻意**不含文案与时间戳**（插件版本号、generated_at 倒计时、i18n 文案）⇒ 可跨版本冻结；
+ * 只在 DOM 结构或样式真的变化时变红 —— att-003 的「DEBUG 被搬出 .dg-head」正是这一类变化。
+ * 只看**根节点可达**的元素（未挂载的孤立元素不是 DOM）。
+ */
+function elementSignature(root: any): string[] {
+  const out: string[] = [];
+  const styleOf = (e: any) => {
+    const st = e?.props?.style;
+    if (!st || typeof st !== "object") return "-";
+    return Object.keys(st).sort().map((k) => `${k}=${String(st[k])}`).join(";");
+  };
+  const flagsOf = (e: any) =>
+    ["title", "aria-label", "aria-expanded", "placeholder", "href"].filter((k) => typeof e?.props?.[k] === "string").join(",") || "-";
+  const walk = (node: any, depth: number): void => {
+    if (node == null || typeof node !== "object") return;
+    if (Array.isArray(node)) { for (const n of node) walk(n, depth); return; }
+    if (!node.type) return;
+    const tag = typeof node.type === "string" ? node.type : (node.type?.name || "Component");
+    const cls = typeof node.props?.className === "string" ? node.props.className : "-";
+    const key = node.props?.key == null ? "-" : String(node.props.key);
+    out.push(`${"  ".repeat(depth)}${tag} key=${key} class=${cls} style=${styleOf(node)} flags=${flagsOf(node)}`);
+    walk(node.children, depth + 1);
+  };
+  walk(root, 0);
+  return out;
+}
+
+const CONV_SIGNATURE_FIXTURE = join(import.meta.dirname, "fixtures/g352-conv-signature.txt");
+
+test("g-352 att-004 B1（结构级）：DEBUG 是 .dg-head 的子节点，次序 已归档 → DEBUG → 搜索行", async () => {
+  const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
+  const cases: Array<[string, any, number]> = [
+    ["conversation.view（判据 5 路径）", { sessionId: "s1" }, 250],
+    ["右侧栏宽档", { sessionId: "s1", host: "sidebar" }, 900],
+  ];
+  for (const [label, props, width] of cases) {
+    const h = createRenderHarness({ boardWidth: width, payload: payload() });
+    const els = (await h.settle(props)).passElements();
+    const parents = parentIndexOf(els);
+    const strong = els.filter((e) => e.type === "strong" && treeText(e) === "dsh-graph").pop();
+    assert.ok(strong, `${label}：看板标题存在`);
+    const head = parents.get(strong);
+    assert.ok(head, `${label}：标题在头部容器内`);
+    assert.ok(treeOf(head).some((e) => elClass(e) === "dg-search-bar"), `${label}：搜索框在这个头部容器里`);
+    const debug = els.filter((e) => typeof e.props?.title === "string" && e.props.title.startsWith("DEBUG sessionId=")).pop();
+    assert.ok(debug, `${label}：DEBUG 块已渲染`);
+    assert.equal(parents.get(debug), head, `${label}：DEBUG 必须是 .dg-head 的直接子节点（att-003 缺陷：成了看板根容器的兄弟）`);
+    assert.notEqual(parents.get(head), null, `${label}：头部本身不是最外层根容器（DEBUG 才有「头部内部」可言）`);
+    // 次序：已归档 → DEBUG → 搜索行（与基线一致；搜索行在宽档是 head-search-row 容器，会话内是搜索框本体）
+    const kids = (head.children ?? []).flat(Infinity).filter((c: any) => c && typeof c === "object" && c.type);
+    const iArch = kids.findIndex((c: any) => c.props?.key === "tb-archived");
+    const iDebug = kids.indexOf(debug);
+    const iSearch = kids.findIndex((c: any) => treeOf(c).some((e) => elClass(e) === "dg-search-bar"));
+    assert.ok(iArch >= 0, `${label}：已归档开关在头部`);
+    assert.ok(iSearch >= 0, `${label}：搜索行在头部`);
+    assert.ok(iDebug > iArch, `${label}：DEBUG 在「已归档」之后（实得 ${iDebug} vs ${iArch}）`);
+    assert.ok(iDebug < iSearch, `${label}：DEBUG 在「搜索行」之前（实得 ${iDebug} vs ${iSearch}）`);
+  }
+});
+
+test("g-352 att-004 B1（会话内签名）：conversation.view 元素签名与 83bb041 基线逐字一致（0 行差异）", async () => {
+  const h = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
+  const r = await h.settle({ sessionId: "s1" });
+  const actual = elementSignature(r.root());
+  // 维护者工具（重新冻结基线签名，需先把基线 bundle 构建出来）：
+  //   G352_BUNDLE=<83bb041 的 dist/lib/client.js> G352_SIG_DUMP=1 \
+  //     node --test --test-name-pattern="会话内签名" core/tests/g352-narrow-width.test.ts
+  // G352_SIG_DUMP 也可给绝对/相对路径，把签名导到别处做 diff（不覆盖冻结基线）。
+  if (process.env.G352_SIG_DUMP) {
+    const target = process.env.G352_SIG_DUMP === "1" ? CONV_SIGNATURE_FIXTURE : process.env.G352_SIG_DUMP;
+    writeFileSync(target, actual.join("\n") + "\n");
+    return;
+  }
+  const expected = readFileSync(CONV_SIGNATURE_FIXTURE, "utf8").split("\n").filter((l) => l !== "");
+  assert.deepEqual(actual, expected, "conversation.view 路径的元素签名必须与 83bb041 冻结值逐字一致（差异 0 行）");
+});
+
+test("g-352 att-004 N1（渲染级）：标签筛选激活时头部「清除筛选」与同行按钮同口径", async () => {
+  const board = boardFixture({
+    versions: [{ slug: "v1", name: "V1", status: "active", goals: [{ id: "g-001", title: "版本目标", status: "draft", tags: ["alpha"], criteria_count: 0, cards_count: 0 }], goals_count: 1, lazy: false, loaded: true }],
+  });
+  const payload = { board, backlogGoals: backlogGoalsFixture };
+  const h = createRenderHarness({ boardWidth: 900, payload });
+  /** 头部（.dg-head）子树内、文字匹配的按钮——弹窗里也有一个「清除筛选」，必须排除。 */
+  const headBtn = (els: any[], text: string) => {
+    const strong = els.filter((e) => e.type === "strong" && treeText(e) === "dsh-graph").pop();
+    assert.ok(strong, "看板标题存在");
+    const head = parentIndexOf(els).get(strong);
+    assert.ok(head, "标题在头部容器内");
+    return treeOf(head).filter((e) => isButtonEl(e) && treeText(e) === text).pop();
+  };
+  let els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  assert.equal(headBtn(els, "清除筛选"), undefined, "无筛选时头部不渲染「清除筛选」");
+  // 打开标签筛选弹层并选中一个标签 ⇒ tagFilter 非空（清除按钮出现）
+  const tfBtn = headBtn(els, "🏷️ 标签筛选");
+  assert.ok(tfBtn, "头部有标签筛选入口");
+  tfBtn.props.onClick({ stopPropagation() {} });
+  els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const tagOpt = els.filter((e) => isButtonEl(e) && treeText(e) === "#alpha").pop();
+  assert.ok(tagOpt, "标签弹层列出可选标签");
+  tagOpt.props.onClick({ stopPropagation() {} });
+  els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const clearBtn = headBtn(els, "清除筛选");
+  assert.ok(clearBtn, "标签筛选激活后头部出现「清除筛选」");
+  // N1：同行基准（rowBtnStyle 唯一真源）——原先自覆盖 padding 0 6px / fontSize 11 ⇒ 同行有大有小
+  const sibling = headBtn(els, "🏷️ 标签筛选 (1)");
+  assert.ok(sibling, "筛选激活后同行按钮文字带计数（标签筛选 (1)）");
+  assert.equal(clearBtn.props.style.padding, ROW_BTN_METRICS.padding, "不得再自覆盖 0 6px");
+  assert.equal(clearBtn.props.style.fontSize, ROW_BTN_METRICS.fontSize, "不得再自覆盖 11px");
+  assert.equal(clearBtn.props.style.height, ROW_BTN_METRICS.height);
+  assert.equal(clearBtn.props.style.lineHeight, ROW_BTN_METRICS.lineHeight);
+  for (const k of ["height", "fontSize", "lineHeight", "padding", "boxSizing", "display", "alignItems"] as const) {
+    assert.equal(clearBtn.props.style[k], sibling.props.style[k], `清除筛选与同行按钮 ${k} 必须一致（同行无大有小）`);
+  }
+  const kanban = readClient("kanban");
+  assert.doesNotMatch(kanban, /marginLeft: 4, padding: "0 6px", fontSize: 11/, "源码里不得再有 tagclear 的自覆盖口径");
+  assert.match(kanban, /style: \{ \.\.\.S\.btn, \.\.\.rowBtnStyle\(\), marginLeft: 4 \}/, "tagclear 走 rowBtnStyle 同行基准");
 });

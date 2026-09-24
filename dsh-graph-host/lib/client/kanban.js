@@ -2408,7 +2408,10 @@
             ? null
             : h("button", {
                 className: "dg-btn",
-                style: { ...tbBtnStyle, marginLeft: 4, padding: "0 6px", fontSize: 11 },
+                // g-352 att-004 N1：这枚「清除筛选」与同行按钮**同一尺寸口径**（rowBtnStyle 是唯一真源，
+                // 含 padding 0 8px / fontSize 12px / height 26px）；原先自覆盖 0 6px / 11px ⇒
+                // 标签筛选激活时同行按钮「有大有小」。仅保留它特有的 4px 左间距。
+                style: { ...S.btn, ...rowBtnStyle(), marginLeft: 4 },
                 title: dgT("tagFilter.clear"),
                 onClick: () => setTagFilter([]),
               }, dgT("tagFilter.clear")),
@@ -2483,17 +2486,14 @@
           // 见上方 renderVersionPicker / laneVersionPickerEl；头部只在「全部版本」态（多泳道）保留一份——
           // 该档泳道头只有 130px 宽塞不下选择器，且这样「切回单泳道」的出口在任一档位都可达。
           narrowSingleTier && !singleLaneMode ? renderVersionPicker(false) : null,
-          // g-352 att-003 第 7 项：版本管理 + 创建版本 + 搜索框/全文开关**同一行**，
-          // 两颗按钮靠左（搜索框自带 marginLeft:auto ⇒ 被推到这一行右端）。窄档两颗按钮在折叠下拉里。
-          sidebarHost
-            ? h("div", { key: "head-search-row", style: { display: "flex", alignItems: "center", gap: 6, flex: "1 1 auto", minWidth: 0 } },
-                narrowActive ? null : versionManageBtn,
-                narrowActive ? null : createVersionBtn,
-                searchBarEl)
-            : searchBarEl),
           // g-113 临时诊断（灰色低调显示，两行省略，详情在 tooltip 显示，为搜索框留出空间）：显示当前解析的 workspace 与会话 id
           // g-352 att-003 第 2 项（负责人人工 gate 反馈「窄幅条件下隐藏 debug 信息」）：
           // 窄档（<480px）整块不渲染；宽档与 conversation.view 路径逐字不变。
+          // ⚠️ g-352 att-004 B1 修正：DEBUG 必须仍是 **.dg-head 的子节点**，且次序恢复基线
+          // `已归档 → DEBUG → 搜索行` —— att-003 曾把它放在头部**之外**（成为看板根容器的兄弟），
+          // 后果：① 会话内 conversation.view 元素签名 base→HEAD diff=10 行（判据 5「逐字不变」破）；
+          //       ② 宽档下 DEBUG 之下内容整体下移 ≈34px（第 2 项自身「宽档保持现状」也破）。
+          // 窄档隐藏的门控保留，只是门控对象回到头部内部（宽档/会话内渲染结果与基线逐字一致）。
           narrowActive ? null : h("div", {
             style: {
               ...S.meta,
@@ -2530,6 +2530,14 @@
                 display: "block",
               },
             }, "ws=" + (activeWs ?? "∅"))),
+          // g-352 att-003 第 7 项：版本管理 + 创建版本 + 搜索框/全文开关**同一行**，
+          // 两颗按钮靠左（搜索框自带 marginLeft:auto ⇒ 被推到这一行右端）。窄档两颗按钮在折叠下拉里。
+          sidebarHost
+            ? h("div", { key: "head-search-row", style: { display: "flex", alignItems: "center", gap: 6, flex: "1 1 auto", minWidth: 0 } },
+                narrowActive ? null : versionManageBtn,
+                narrowActive ? null : createVersionBtn,
+                searchBarEl)
+            : searchBarEl),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
