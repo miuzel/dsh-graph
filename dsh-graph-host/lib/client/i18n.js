@@ -246,6 +246,19 @@
       'goal.scheduleSelectVersion': '选择目标版本',
       'goal.scheduleCancel': '取消',
       'goal.scheduleConfirm': '确认排期',
+      // g-352：排期的两种语义分别给期望结果——backlog→版本 = 排期（draft→planning）；
+      // 版本↔版本 = 归属变更、生命周期状态保持。
+      'goal.rescheduleSuccess': '✅ 已改为归属 {version}',
+      // g-352：窄宽度（<480px）工具条折叠容器
+      'toolbar.more': '⋯ 工具',
+      'toolbar.moreTooltip': '更多工具（收窄后折叠）',
+      'toolbar.moreTitle': '看板工具',
+      // g-352：单版本模式（<360px）的查看版本选择器
+      'view.pickVersion': '📋 {version}',
+      'view.pickVersionTooltip': '选择要查看的版本',
+      'view.allVersions': '全部版本',
+      // g-352（负责人裁决）：backlog 也可作为单版本档的一个「版本备选」（唯一泳道）。
+      'view.backlogLane': 'backlog',
       // g-287：历史遗留「非 backlog 草稿」转入规划入口（backlog 卡不显示，其正确路径是排期）
       'goal.planEntry': '🧭 转入规划',
       'goal.planEntryTooltip': '将该草稿目标转入规划（状态变为「规划中」，可开始收集/就绪/派发执行）',
@@ -1256,6 +1269,19 @@
       'goal.scheduleSelectVersion': 'Select target version',
       'goal.scheduleCancel': 'Cancel',
       'goal.scheduleConfirm': 'Confirm schedule',
+      // g-352: the two schedule semantics get distinct expected outcomes — backlog→version =
+      // scheduling (draft→planning); version↔version = ownership change with status preserved.
+      'goal.rescheduleSuccess': '✅ Ownership changed to {version}',
+      // g-352: narrow-width (<480px) collapsed toolbar container
+      'toolbar.more': '⋯ Tools',
+      'toolbar.moreTooltip': 'More tools (collapsed when narrow)',
+      'toolbar.moreTitle': 'Board tools',
+      // g-352: single-version mode (<360px) version picker
+      'view.pickVersion': '📋 {version}',
+      'view.pickVersionTooltip': 'Choose a version to view',
+      'view.allVersions': 'All versions',
+      // g-352 (owner ruling): backlog is also selectable as a single-version-tier lane alternative.
+      'view.backlogLane': 'Backlog',
       // g-287: entry to move a legacy non-backlog draft goal into planning
       // (not shown for backlog cards — their correct path is scheduling)
       'goal.planEntry': '🧭 Move to planning',

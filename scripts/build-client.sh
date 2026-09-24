@@ -36,6 +36,10 @@ PARTS=(
   # 幽灵卡片缺陷），kanban.js load() 依赖其导出函数；与 search-state 同理必须排在
   # drag-prompts 之前（工厂作用域），否则会变成 KanbanView 内部的嵌套函数。
   "board-retain"
+  # g-352：窄宽度响应式派生纯函数模块（断点分档/单版本投影/排期目标选项）。
+  # 与 search-state、board-retain 同理必须排在 drag-prompts 之前（工厂作用域），
+  # 否则会变成 KanbanView 内部的嵌套函数。
+  "narrow-width"
   # g-243：version-drawer 必须排在 drag-prompts 之前（工厂作用域），不能夹在
   # drag-prompts 与 kanban 之间——drag-prompts 打开 KanbanView 函数体、kanban 收尾，
   # 夹在中间会让 VersionDrawer 变成 KanbanView 内部的嵌套函数：每次 KanbanView 渲染

@@ -726,6 +726,20 @@
                                textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "…");
       // g-225：常态展示精简 model ID，仅在 tooltip (title) 保留完整 provider/model 追溯
       const modelTitle = props.model ? dgT("live.model") + `${props.provider ? props.provider + "/" : ""}${props.model}` : null;
+      // g-352 att-003 第 3 项：compact（窄档主管栏）＝ **单行**形态 —— 只保留「状态 + 状态行」这一行，
+      // 不渲染 meter / 独立流式行 / 第二行状态行；文字一律 min-width:0 + 省略号收敛（不再互相重叠）。
+      // 默认（未传 compact）走下面的原渲染路径，逐字不变（conversation.view 与卡片内嵌 LiveStrip 均如此）。
+      if (props.compact) {
+        return h(
+          "div",
+          { ...stripProps, title: [statusFull, props.statusLine ? dgT("live.status") + props.statusLine : null, modelTitle, meter ? dgT("live.resource") + meter : null].filter(Boolean).join("\n") },
+          h("div", { style: { display: "flex", alignItems: "center", gap: 5, minWidth: 0, overflow: "hidden" } },
+            h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
+              statusLabel),
+            h("span", { style: { ...S.meta, fontSize: 10, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+              statusRowText || (line ? "⏵ " + line : "…"))),
+        );
+      }
       return h(
         "div",
         { ...stripProps, title: [statusFull, props.statusLine ? dgT("live.status") + props.statusLine : null, modelTitle, meter ? dgT("live.resource") + meter : null, line ? dgT("live.stream") + line : null].filter(Boolean).join("\n") },

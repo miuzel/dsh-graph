@@ -140,10 +140,21 @@
     }
 
     const HOVER_CSS = `
-      /* g-330：右侧栏页签（host="sidebar"）宽度远窄于 conversation.view，头部单行 flex 会
-         把标题/版本/按钮压成竖排不可读；仅该实例带 .dg-head-sidebar，故此处放开换行。
-         会话内 conversation.view 不带此 class，外观零变化。 */
-      .dg-head-sidebar { flex-wrap: wrap; row-gap: 6px; }
+      /* g-352：**取代** g-330 那条「头部放开换行」的最小适配 CSS 规则——
+         那条单规则已删除。窄宽度适配改为「以看板根容器实测宽度分档」：<480px 工具条整批收进
+         下拉容器、<360px 单版本模式（阈值与派生见 lib/client/narrow-width.js，观测见 kanban.js
+         的 ResizeObserver；纯 CSS 不再承担分档）。下面两条只保留与分档无关的布局兜底：
+         ① 放不下就换行（不产生横向裁切）；② 按钮保持内容宽度不参与压缩——若给头部全部按钮加
+         min-width:0，宽档单行头部会把按钮压到十几像素、文字反而越框（真机 3082 实测复现，
+         也是负责人 1585px 截图上「按钮文字竖排」的根因：CJK 的 min-content 只有一个字宽，
+         可被 flex 压成逐字换行）。
+         g-352 att-005（负责人 gate「两侧完全一致」）：本 class 由**两个宿主共同使用**——
+         会话页看板页签与右侧栏渲染同一个 KanbanView、同一份头部实现、零 host 门控。 */
+      .dg-head { flex-wrap: wrap; }
+      .dg-head > * { flex-shrink: 0; }
+      /* g-352 att-005 共享声明：HOVER_CSS 这一整块样式表由**两个宿主共同注入**（同一实现的
+         一部分），故下面的新增规则在两个宿主上都是同一套： */
+      .dg-head > *, .dg-head button { white-space: nowrap; }
       .dg-card { transition: box-shadow .12s ease, transform .12s ease, border-color .12s ease; }
       .dg-card:hover { box-shadow: 0 0 0 2px rgba(76,141,255,.55); transform: translateY(-1px); }
       .dg-card:active { transform: translateY(0); box-shadow: 0 0 0 2px rgba(76,141,255,.8); }
@@ -208,9 +219,25 @@
       .dg-btn-accept:hover { background: rgba(58,166,117,.30); border-color: rgba(58,166,117,.55); }
       .dg-btn-accept:active { background: rgba(58,166,117,.42); }
       .dg-btn-accept:disabled { opacity: 0.45; cursor: default; }
-      /* g-306：排期版本选择器项 hover */
+      /* g-306：排期版本选择器项 hover（g-352：看板顶部「查看版本」选择器复用同一套行样式） */
       .dg-schedule-version-item { transition: background .12s ease; border-radius: 3px; }
       .dg-schedule-version-item:hover { background: rgba(76,141,255,.18); }
+      /* g-352：窄宽度工具条兜底（取代 g-330 那条「头部放开换行」的最小适配 CSS 规则）。
+         溢出根因是 S.head 单行 flex 里每个子项缺 「min-width: 0」：把按钮搬进弹层后，触发按钮**自身**
+         仍会因 min-width:auto（不可收缩到内容宽度以下）而把文字顶出按钮框，故这里同时给
+         「min-width: 0」 + 「text-overflow: ellipsis」 —— 宽度不足时省略号收敛，绝不越框。 */
+      .dg-narrow-head-btn { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* g-352 att-007：折叠工具条弹层**容器**——纵向堆叠的唯一真源是 narrow-width.js 的
+         headPanelMenuStyle()（内联），这条 CSS 是同一份声明的兜底与自解释：
+         ① display:flex + flex-direction:column ⇒ 行按钮成为块级 flex 项、各占一行
+            （att-006 实测缺陷：容器无纵向布局 + 行按钮 inline-flex + 继承 nowrap ⇒ 5 行同 y）；
+         ② white-space:normal ⇒ .dg-head > * 的 nowrap **不得**作用于行与行的排布
+            （nowrap 只应落在行内文字上，见下面 .dg-narrow-panel-btn 自己那条）。 */
+      .dg-narrow-panel { display: flex; flex-direction: column; align-items: stretch; white-space: normal; }
+      /* 窄宽度弹层内的整行按钮：全宽；g-352 att-003 第 1 项要求「图标 + 文字」完整可读 ⇒
+         不再用 text-overflow: ellipsis 吞字（弹层宽度按最长一行自适应，字号/行高与触发按钮同一口径）。
+         g-352 att-007：display:flex（块级，不取 inline-flex）+ 本行 nowrap —— 只让本行文字不换行。 */
+      .dg-narrow-panel-btn { display: flex; align-items: center; min-width: 0; max-width: none; white-space: nowrap; text-align: left; }
       /* 统一弹窗与抽屉右上角关闭按钮 */
       .dg-close {
         transition: opacity .12s ease, background .12s ease, transform .12s ease;
@@ -516,6 +543,14 @@
         flex: 0 0 220px;
         width: 220px;
         box-sizing: border-box;
+      }
+      /* g-352：backlog 作为**唯一泳道**（<360px 单版本档的「版本备选」）时的纵向档样式——
+         单列全宽网格里 220px 定宽卡片在 240px 容器里会横向溢出，故改为占满整行、卡面全宽可读。
+         该 class 只在 host=sidebar 且根容器 <360px 时出现，conversation.view 路径恒不命中。 */
+      .dg-backlog-flat-vertical .dg-card {
+        flex: 1 1 100%;
+        width: 100%;
+        min-width: 0;
       }
       .dg-backlog-flat .dg-cell-drop-active {
         background: rgba(76,141,255,.08);

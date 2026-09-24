@@ -1,0 +1,61 @@
+# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-352 att-007 重新生成；正文与 att-006 逐字相同）
+# source-commit: addf34400a8e045810fb2b0582b9303bc472a625
+# source-sha256: 125098c623dbacadee4de18504401f1177ca17f7a9fabc883d3d1e2da613fc9e
+# source-files: kanban,constants,narrow-width,helpers   # 源 hash 覆盖的模块（决定头部/泳道渲染）
+# content-sha256: 0e6b7094deafa61e0525d617f792a8da30b9aeba1a3c72cb221ee4061f783ed3
+# board-width: 250
+div key=kanban-0 class=dg-kanban-root style=color=inherit;fontSize=13;minWidth=0;overflowX=auto;padding=12;position=relative;zIndex=1 flags=-
+  style key=- class=- style=- flags=-
+  div key=- class=dg-head style=alignItems=center;display=flex;gap=12;marginBottom=8 flags=-
+    strong key=- class=- style=flexShrink=0;whiteSpace=nowrap flags=-
+    a key=- class=- style=color=var(--dsw-alias-state-business-primary, #8ab4ff);cursor=pointer;flexShrink=0;fontSize=12;opacity=0.65;textDecoration=underline;whiteSpace=nowrap flags=title,href
+    RefreshCountdown key=- class=- style=- flags=-
+    span key=tb-overflow class=- style=display=inline-flex;flex=1 1 auto;justifyContent=flex-end;minWidth=0;position=relative;verticalAlign=middle flags=-
+      button key=- class=dg-btn dg-narrow-head-btn dg-head-overflow-trigger style=alignItems=center;background=var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));border=1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));borderRadius=4;boxSizing=border-box;color=var(--dsw-alias-label-primary, #e6e6e6);cursor=pointer;display=inline-flex;fontSize=12;gap=4;height=26;justifyContent=center;lineHeight=22px;marginLeft=8;maxWidth=100%;minWidth=0;overflow=hidden;padding=0 8px;textOverflow=ellipsis;verticalAlign=middle;whiteSpace=nowrap flags=title,aria-label,aria-expanded
+    div key=- class=dg-search-bar style=alignItems=center;display=flex;flexShrink=0;gap=6;marginLeft=auto;minWidth=0 flags=-
+      div key=- class=- style=alignItems=center;display=flex;minWidth=0;position=relative flags=-
+        input key=- class=dg-search-input style=background=var(--dsw-alias-bg-layer-2, rgba(30,31,36,.92));border=1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.35));borderRadius=4;boxSizing=border-box;color=var(--dsw-alias-label-primary, #e6e6e6);fontSize=12;height=24;outline=none;padding=3px 22px 3px 8px;width=130 flags=placeholder
+      label key=- class=- style=alignItems=center;cursor=pointer;display=flex;fontSize=12;gap=3;opacity=0.85;userSelect=none;whiteSpace=nowrap flags=title
+        input key=- class=- style=- flags=-
+  div key=- class=- style=display=grid;gap=4;gridTemplateColumns=minmax(0, 1fr) flags=-
+    div key=grid-corner class=dg-grid-corner style=alignItems=center;display=flex;flexDirection=row;flexWrap=nowrap;fontWeight=600;gap=4;justifyContent=flex-start;maxWidth=100%;minWidth=0;opacity=0.75;overflow=hidden;padding=4px 2px;textAlign=center;whiteSpace=nowrap flags=-
+      button key=- class=dg-btn dg-version-manage-btn style=alignItems=center;background=var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));border=1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));borderRadius=4;boxSizing=border-box;color=var(--dsw-alias-label-primary, #e6e6e6);cursor=pointer;display=inline-flex;flex=0 0 auto;fontSize=12;gap=4;height=26;justifyContent=center;lineHeight=22px;minWidth=26;padding=0;verticalAlign=middle;width=26 flags=title,aria-label
+      button key=- class=dg-btn style=alignItems=center;background=var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));border=1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));borderRadius=4;boxSizing=border-box;color=var(--dsw-alias-label-primary, #e6e6e6);cursor=pointer;display=inline-flex;fontSize=12;gap=4;height=26;justifyContent=center;lineHeight=22px;maxWidth=100%;minWidth=0;overflow=hidden;padding=0 8px;textOverflow=ellipsis;verticalAlign=middle flags=title
+    div key=v-v1-label class=dg-version-label style=background=rgba(255,255,255,.03);borderTop=1px solid rgba(128,128,128,.35);cursor=pointer;fontWeight=600;padding=8px 6px;paddingRight=136;position=relative flags=title
+      span key=vp-lane class=- style=display=inline-block;maxWidth=110;minWidth=0;position=absolute;right=40;top=8;zIndex=5 flags=-
+        button key=- class=dg-btn dg-narrow-head-btn dg-version-picker-trigger style=alignItems=center;background=var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));border=1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));borderRadius=4;boxSizing=border-box;color=var(--dsw-alias-label-primary, #e6e6e6);cursor=pointer;display=inline-flex;fontSize=12;gap=4;height=26;justifyContent=center;lineHeight=22px;marginLeft=8;maxWidth=110;minWidth=0;overflow=hidden;padding=0 8px;textOverflow=ellipsis;verticalAlign=middle;whiteSpace=nowrap flags=title,aria-label,aria-expanded
+      button key=- class=dg-btn style=alignItems=center;background=var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));border=1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));borderRadius=4;bottom=auto;boxSizing=border-box;color=var(--dsw-alias-label-primary, #e6e6e6);cursor=pointer;display=inline-flex;fontSize=12;gap=4;height=26;justifyContent=center;lineHeight=22px;minWidth=26;padding=0;position=absolute;right=6;top=8;verticalAlign=middle;width=26 flags=title
+    div key=v-v1-vstack class=- style=display=flex;flexDirection=column;gap=8;gridColumn=1 / -1;minWidth=0 flags=-
+      div key=v-v1-v-describe class=- style=display=flex;flexDirection=column;gap=4;minWidth=0 flags=-
+        div key=- class=- style=alignItems=center;display=flex;fontWeight=600;gap=6;justifyContent=space-between;opacity=0.8;padding=4px 6px 2px;textAlign=left;whiteSpace=nowrap flags=-
+          span key=- class=- style=minWidth=0;overflow=hidden;textOverflow=ellipsis flags=-
+        div key=v-v1-describe class= style=background=rgba(255,255,255,.03);borderTop=1px solid rgba(128,128,128,.35);minHeight=40;padding=4;verticalAlign=top flags=-
+          div key=g-001 class=dg-card style=background=rgba(128,128,128,.08);border=1px solid rgba(128,128,128,.45);borderLeft=5px solid #8a8a8a;borderRadius=6;cursor=pointer;marginBottom=6;padding=6px 8px flags=title
+            div key=- class=- style=lineHeight=1.5 flags=-
+              button key=- class=dg-chevron style=display=inline-block;marginRight=4;verticalAlign=middle flags=title
+              TypeBadgeWithSelector key=- class=- style=- flags=-
+              span key=- class=- style=display=inline;fontWeight=600;marginBottom=2;verticalAlign=middle flags=-
+            GoalTags key=- class=- style=- flags=-
+            div key=- class=- style=fontSize=12;opacity=0.65 flags=-
+              CriteriaProgress key=- class=- style=- flags=-
+      div key=v-v1-v-collect class=- style=display=flex;flexDirection=column;gap=4;minWidth=0 flags=-
+        div key=- class=- style=alignItems=center;display=flex;fontWeight=600;gap=6;justifyContent=space-between;opacity=0.8;padding=4px 6px 2px;textAlign=left;whiteSpace=nowrap flags=-
+          span key=- class=- style=minWidth=0;overflow=hidden;textOverflow=ellipsis flags=-
+        div key=v-v1-collect class= style=background=rgba(0,0,0,.03);borderTop=1px solid rgba(128,128,128,.35);minHeight=40;padding=4;verticalAlign=top flags=-
+      div key=v-v1-v-execute class=- style=display=flex;flexDirection=column;gap=4;minWidth=0 flags=-
+        div key=- class=- style=alignItems=center;display=flex;fontWeight=600;gap=6;justifyContent=space-between;opacity=0.8;padding=4px 6px 2px;textAlign=left;whiteSpace=nowrap flags=-
+          span key=- class=- style=minWidth=0;overflow=hidden;textOverflow=ellipsis flags=-
+        div key=v-v1-execute class= style=background=rgba(255,255,255,.03);borderTop=1px solid rgba(128,128,128,.35);minHeight=40;padding=4;verticalAlign=top flags=-
+      div key=v-v1-v-confirm class=- style=display=flex;flexDirection=column;gap=4;minWidth=0 flags=-
+        div key=- class=- style=alignItems=center;display=flex;fontWeight=600;gap=6;justifyContent=space-between;opacity=0.8;padding=4px 6px 2px;textAlign=left;whiteSpace=nowrap flags=-
+          span key=- class=- style=minWidth=0;overflow=hidden;textOverflow=ellipsis flags=-
+          button key=- class=dg-btn dg-batch-accept-btn style=background=var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));border=1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));borderRadius=4;color=var(--dsw-alias-label-primary, #e6e6e6);cursor=pointer;flexShrink=0;fontSize=11;lineHeight=1.4;opacity=0.5;padding=1px 8px;whiteSpace=nowrap flags=title,aria-label
+        div key=v-v1-confirm class= style=background=rgba(0,0,0,.03);borderTop=1px solid rgba(128,128,128,.35);minHeight=40;padding=4;verticalAlign=top flags=-
+      div key=v-v1-v-deliver class=- style=display=flex;flexDirection=column;gap=4;minWidth=0 flags=-
+        div key=- class=- style=alignItems=center;display=flex;fontWeight=600;gap=6;justifyContent=space-between;opacity=0.8;padding=4px 6px 2px;textAlign=left;whiteSpace=nowrap flags=-
+          span key=- class=- style=minWidth=0;overflow=hidden;textOverflow=ellipsis flags=-
+        div key=v-v1-deliver class= style=background=rgba(255,255,255,.03);borderTop=1px solid rgba(128,128,128,.35);minHeight=40;padding=4;verticalAlign=top flags=-
+      div key=v-v1-v-blocked class=- style=display=flex;flexDirection=column;gap=4;minWidth=0 flags=-
+        div key=- class=- style=alignItems=center;display=flex;fontWeight=600;gap=6;justifyContent=space-between;opacity=0.8;padding=4px 6px 2px;textAlign=left;whiteSpace=nowrap flags=-
+          span key=- class=- style=minWidth=0;overflow=hidden;textOverflow=ellipsis flags=-
+        div key=v-v1-blocked class= style=background=rgba(0,0,0,.03);borderTop=1px solid rgba(128,128,128,.35);minHeight=40;padding=4;verticalAlign=top flags=-

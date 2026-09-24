@@ -2640,7 +2640,11 @@ export function apply(ctx, config) {
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
-          json(res, code, { error: String(e?.message ?? e) });
+          const message = String(e?.message ?? e);
+          // g-352：给「带附件（cards/attempts）不能回 backlog」一个**语言中立**的稳定错误码，
+          // 客户端据此给本地化失败态（旧实现用中文子串匹配永远匹配不上，且会把中文原文漏进英文界面）。
+          const errCode = /附件/.test(message) && /backlog/i.test(message) ? "move-to-backlog-has-attachments" : null;
+          json(res, code, errCode ? { error: message, code: errCode } : { error: message });
         }
       },
     },
