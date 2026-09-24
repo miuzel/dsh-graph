@@ -1,6 +1,6 @@
-# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-352 att-007 重新生成；正文与 att-006 逐字相同）
-# source-commit: addf34400a8e045810fb2b0582b9303bc472a625
-# source-sha256: 125098c623dbacadee4de18504401f1177ca17f7a9fabc883d3d1e2da613fc9e
+# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-356 重新冻结：单泳道阈值 <480，正文与 att-007 逐字相同 content-sha 未变）
+# source-commit: 91cc034db8d7e112455019b753c69bbb84e33943
+# source-sha256: ca33c7206657e155e81e29f3acc201770d7748f63b933bbe88e8c753707b57bf
 # source-files: kanban,constants,narrow-width,helpers   # 源 hash 覆盖的模块（决定头部/泳道渲染）
 # content-sha256: 0e6b7094deafa61e0525d617f792a8da30b9aeba1a3c72cb221ee4061f783ed3
 # board-width: 250
