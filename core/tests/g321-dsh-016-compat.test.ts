@@ -22,6 +22,12 @@ const clientRoot = join(hostRoot, "lib/client");
 const distRoot = join(import.meta.dirname, "../../dist");
 const readClient = (name: string) => readFileSync(join(clientRoot, `${name}.js`), "utf8");
 
+/**
+ * g-351：子代理目录 entry 的**形状探测**族。子会话地址构造（subagentAddressOf）与
+ * 谱系反查（catalogParentIndex）都依赖它们，沙箱注入目录读取函数时必须连同这族一并注入。
+ */
+const CATALOG_SHAPE_FUNCS = ["isCatalogChildEntry", "catalogChildEntry", "catalogParentIndex", "catalogEntryMode", "catalogAddressMode"];
+
 /** 从拼接前的源模块里精确抠出一个具名 function 声明（花括号配平），供 vm 行为测试使用。 */
 function extractFunction(source: string, name: string): string {
   const start = source.indexOf(`function ${name}(`);
@@ -587,6 +593,12 @@ function makeSessionHooksSandbox(
     "var retainedBindings = new Map();",
     "var LIVE_DISPLAY_KEY = 'dsh-graph.live-display';",
     ...names.map((n) => extractFunction(hooks, n)),
+    // g-351：目录读取/刷新改为 helpers 里的形状与能力探测实现，沙箱需连同其定义注入
+    //（断言与语义均不变，仅随实现位置补齐依赖）。
+    extractFunction(helpers, "subagentCatalogEntries"),
+    extractFunction(helpers, "subagentAddressOf"),
+    extractFunction(helpers, "refreshSubagentCatalog"),
+    ...CATALOG_SHAPE_FUNCS.map((n) => extractFunction(helpers, n)),
     extractFunction(helpers, "getLiveDisplay"),
     extractFunction(helpers, "useLiveDisplayEnabled"),
     "this.parts = { useSessionBinding, useBoundSession, retainedBindings, boundModes };",
@@ -1052,6 +1064,11 @@ function renderLiveStrip(rt: unknown, props: Record<string, unknown>, liveDispla
     "var LIVE_DISPLAY_KEY = 'dsh-graph.live-display';",
     "var dgT = (k, p) => { var s = (zh[k] !== undefined ? zh[k] : k); if (p) for (var key in p) s = s.split('{' + key + '}').join(p[key]); return s; };",
     ...names.map((n) => extractFunction(bundle, n)),
+    // g-351：目录读取/刷新改为形状与能力探测实现（同上，补齐沙箱依赖，断言不变）。
+    extractFunction(bundle, "subagentCatalogEntries"),
+    extractFunction(bundle, "subagentAddressOf"),
+    extractFunction(bundle, "refreshSubagentCatalog"),
+    ...CATALOG_SHAPE_FUNCS.map((n) => extractFunction(bundle, n)),
     extractFunction(bundle, "getLiveDisplay"),
     extractFunction(bundle, "useLiveDisplayEnabled"),
     extractFunction(bundle, "formatStatusWithLifecycle"),
@@ -1142,6 +1159,11 @@ test("g-321 端到端（真实产物）：0.1.6 语义下 useSessionModel 拿得
       "var retainedBindings = new Map();",
       "var dgT = (k) => (zh[k] !== undefined ? zh[k] : k);",
       ...names.map((n) => extractFunction(bundle, n)),
+      // g-351：补齐目录形状/能力探测实现（沙箱依赖，断言不变）。
+      extractFunction(bundle, "subagentCatalogEntries"),
+      extractFunction(bundle, "subagentAddressOf"),
+      extractFunction(bundle, "refreshSubagentCatalog"),
+      ...CATALOG_SHAPE_FUNCS.map((n) => extractFunction(bundle, n)),
       "this.useSessionModel = useSessionModel;",
     ].join("\n"), sandbox, { filename: "dist/lib/client.js#useSessionModel" });
     return sandbox;

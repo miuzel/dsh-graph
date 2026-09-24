@@ -28,6 +28,21 @@
         };
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
         const snap = rt?.list?.getSnapshot?.() ?? {};
+        // g-351：直接父索引的目录来源改为形状探测（旧 subagentsByParent / 新 projectionsBySession），
+        // 索引构造与反查口径保持不变。
+        const catalogsByParent = new Map();
+        try {
+          const legacy = snap.subagentsByParent;
+          if (legacy && typeof legacy === "object") {
+            for (const pid of Object.keys(legacy)) catalogsByParent.set(pid, legacy[pid]?.entries);
+          }
+          const projected = snap.projectionsBySession;
+          if (projected && typeof projected === "object") {
+            for (const pid of Object.keys(projected)) {
+              if (!catalogsByParent.has(pid)) catalogsByParent.set(pid, projected[pid]?.values?.subagentCatalog);
+            }
+          }
+        } catch { /* 形状不符 → 空索引，按未收录降级 */ }
         // g-244：运行时列表快照是 byId 记录；仅旧/降级形状是 items 数组，两种都读。
         const itemList = Array.isArray(snap.items) ? snap.items : null;
         const byId = (sid) => {
@@ -35,20 +50,10 @@
           if (rec && typeof rec === "object" && Object.prototype.hasOwnProperty.call(rec, sid)) return rec[sid];
           return itemList ? itemList.find((s) => s && (s.sessionId === sid || s.id === sid)) : undefined;
         };
-        // g-244：子 → 直接父 反查表（subagentsByParent 目录 + currentAddress 导航地址）。
-        const parentIndex = new Map();
-        const catalogs = snap.subagentsByParent;
-        if (catalogs && typeof catalogs === "object") {
-          for (const pid of Object.keys(catalogs)) {
-            const entries = catalogs[pid]?.entries;
-            if (!Array.isArray(entries)) continue;
-            for (const e of entries) {
-              if (e && e.kind === "child" && typeof e.id === "string" && e.id && !parentIndex.has(e.id)) {
-                parentIndex.set(e.id, pid);
-              }
-            }
-          }
-        }
+        // g-244：子 → 直接父 反查表（子代理目录 + currentAddress 导航地址）。
+        // g-351：目录 entry 的形状探测（旧带 kind / 新无 kind）统一走 catalogParentIndex，
+        //        与子会话导航、地址构造共用同一判定函数；此处不再内联 kind 谓词。
+        const parentIndex = catalogParentIndex(catalogsByParent);
         const addr = snap.currentAddress;
         if (addr && typeof addr.childSessionId === "string" && typeof addr.parentSessionId === "string"
           && !parentIndex.has(addr.childSessionId)) {
@@ -181,14 +186,15 @@
       try {
         if (!rt) return;
         // 目录必须先加载，否则 selectSubagent 抛 "not a healthy catalog child"（发现#21）
-        rt.setSubagentCatalogOpen?.(parentSessionId, true);
-        await rt.refreshSubagents?.(parentSessionId);
-        const entries = rt.list?.getSnapshot?.().subagentsByParent?.[parentSessionId]?.entries ?? [];
-        const entry = entries.find((e) => e.kind === "child" && e.id === childId);
+        await refreshSubagentCatalog(rt, parentSessionId);
+        // g-351：entry 形状探测与地址构造统一走 helpers 的同一判定函数
+        //（旧宿主 entry 带 kind、新宿主无 kind；此处内联 kind 谓词会让新宿主恒不命中，
+        //  点「↗ 转到对话」静默退化为打开父会话）。
+        const entry = catalogChildEntry(subagentCatalogEntries(rt, parentSessionId), childId);
         if (entry) {
           // g-321：0.1.5 走 sessions.openSubagent(address)；0.1.6 该 API 已移除，
           // 由 uiWorkspace.openSession(address) 一步完成「选中会话 + 切到对话」。
-          const address = { parentSessionId, childSessionId: childId, mode: entry.mode };
+          const address = { parentSessionId, childSessionId: childId, mode: catalogAddressMode(entry) };
           if (!openSessionTarget(address, typeof rt.openSubagent === "function" ? () => rt.openSubagent(address) : null)) {
             // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
             console.warn("[dsh-graph-host] 无可用子会话导航 API（uiWorkspace.openSession / sessions.openSubagent 均缺失）：", childId);

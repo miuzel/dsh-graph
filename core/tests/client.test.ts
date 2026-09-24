@@ -3437,7 +3437,28 @@ test("真实 HTTP：readBodyCapped 超限返回可读 400（无 ECONNRESET）且
 /**
  * 从 plugin.js 源模块中按花括号配平提取真实的 resolveWorkspaceOfSession 片段，
  * 在 vm 上下文中执行，避免测试再写一份「看起来一样」的模拟实现。
+ * g-351：resolveWorkspaceOfSession 的子→父反查索引改由 helpers 的 catalogParentIndex
+ * 承担（形状探测：旧 entry 带 kind / 新 entry 无 kind），故把 helpers 里的形状探测族
+ * 一并从真实源模块提取注入沙箱——与浏览器 bundle 的同一工厂作用域拼接口径一致。
  */
+function extractBraceBalanced(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `源模块中存在 function ${name}`);
+  let depth = 0;
+  for (let i = source.indexOf("{", start); i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") { depth--; if (depth === 0) return source.slice(start, i + 1); }
+  }
+  throw new Error(`function ${name} 花括号无法配平`);
+}
+
+const CATALOG_SHAPE_FUNCS = ["isCatalogChildEntry", "catalogChildEntry", "catalogParentIndex"];
+
+function catalogShapeSource(): string {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  return CATALOG_SHAPE_FUNCS.map((n) => extractBraceBalanced(helpers, n)).join("\n");
+}
+
 function loadRealWorkspaceResolver() {
   const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
   const start = plugin.indexOf("let lastGoodWorkspace = null;");
@@ -3451,7 +3472,7 @@ function loadRealWorkspaceResolver() {
     else if (ch === "}") { depth--; if (depth === 0) { end = i + 1; break; } }
   }
   assert.ok(end > 0, "resolveWorkspaceOfSession 花括号必须配平");
-  const src = plugin.slice(start, end);
+  const src = `${catalogShapeSource()}\n${plugin.slice(start, end)}`;
   const ctx: any = {};
   vm.createContext(ctx);
   new vm.Script(`${src}\nglobalThis.__resolveWs = resolveWorkspaceOfSession;`).runInContext(ctx);
@@ -3483,11 +3504,29 @@ test("g-244 子代理会话解析：parentId/items 双形状、subagentsByParent
   assert.equal(resolve("child-1", { workspacesRt, sessionsRt: byIdRt }), "/repo-beta", "byId+parentId 回溯到父工作区");
 
   // 3. 子会话只在 subagentsByParent 目录里（byId 缺失）也能反查父会话
+  //    entry 为 0.1.6 真实形状：带 kind（权威：dsh-api-remotes subagents.list 结果 schema）
   const catalogRt = sessSnap({
     byId: {},
-    subagentsByParent: { "s-b": { entries: [{ kind: "child", id: "child-2", mode: "continuable", label: "x" }] } },
+    subagentsByParent: { "s-b": { entries: [{ kind: "child", id: "child-2", activity: "inactive", hasChildren: false, mode: "continuable", label: "x" }] } },
   });
   assert.equal(resolve("child-2", { workspacesRt, sessionsRt: catalogRt }), "/repo-beta", "subagentsByParent 反查父会话");
+
+  // 3b. g-351：0.1.7 真实形状——快照只有 projectionsBySession，且 entry **无 kind**
+  //     （权威：0.1.7 dsh-api-remotes/lib/client.js:9055）。反查索引若不换 entry 形状，
+  //     这里会解析失败 ⇒ 看板卡片找不到所属 workspace。
+  const projRt = sessSnap({
+    byId: {},
+    projectionsBySession: { "s-b": { values: { subagentCatalog: [{ id: "child-2n", createdAt: 21, mode: "continuable", label: "x" }] } } },
+  });
+  assert.equal(resolve("child-2n", { workspacesRt, sessionsRt: projRt }), "/repo-beta", "0.1.7 projectionsBySession（无 kind entry）反查父会话");
+
+  // 3c. g-351：0.1.6 的 diagnostic 行带 id 但**不是**子会话，不得进反查索引
+  //     （只按 id 认会把 diagnostic 误当子会话，形状探测必须以 kind 判别）
+  const diagRt = sessSnap({
+    byId: {},
+    subagentsByParent: { "s-b": { entries: [{ kind: "diagnostic", id: "child-diag", reason: "corrupt" }] } },
+  });
+  assert.equal(resolve("child-diag", { workspacesRt, sessionsRt: diagRt }), null, "diagnostic 行不得被当成子会话（无法定位父）");
 
   // 4. 多层嵌套：孙会话 → 子会话 → 父会话
   const nestedRt = sessSnap({
