@@ -966,16 +966,29 @@
       // 作用域=KanbanView 实例）；隐藏状态的唯一持久真源仍是 useHiddenVersionSlugs 的
       // hiddenVersionSlugs（其键名/作用域由该 hook 唯一持有，本目标不新增任何存储读写）。
       // 与 g-233 的优先级：搜索处于激活态时**挂起**单泳道收窄，保证搜索匹配不被视图过滤藏掉。
-      // 选中态四义：null=未显式选择（默认收窄到第一个可见版本）/ slug=该版本 /
+      // 选中态四义：null=未显式选择（有可见版本→收窄到第一个可见版本；无可见版本→独立目标，见下）/
+      //   slug=该版本 /
       //   VIEW_ALL_VERSIONS_SLUG=「全部版本」（显式退出收窄，回到多泳道横向档）/
       //   VIEW_BACKLOG_SLUG=backlog 唯一泳道（负责人裁决；见 viewBacklogOnly）/
       //   VIEW_STANDALONE_SLUG=独立目标唯一泳道（att-003 第 5 项③；见 viewStandaloneOnly）。
-      const singleVersion = (narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && !viewStandaloneOnly && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG)
+      //
+      // g-358（负责人 2026-09-25 实测报障修复）：**standalone 也是常驻「版本」**——窄档（<480px）下
+      // 「可见版本为空」（versions: []，或版本全被隐藏/仅剩 released）时，默认落点就是独立目标这条
+      // 常驻泳道，而不再回落横向多泳道网格（横向网格在 <480 必然比面板宽、确认列被裁）。
+      // 只兜「未显式选择」这一种：显式「全部版本」仍是显式退出收窄（判据 2），backlog / 独立目标
+      // 显式选中由 viewBacklogOnly / viewStandaloneOnly 各自成立。纯派生：不新增状态真源、不落持久化键。
+      const standaloneLaneDefault = !!(narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && !viewStandaloneOnly
+        && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG && active.length === 0);
+      // 单泳道档里「独立目标泳道」的**实际生效态** = 显式选中 ∪ 无可见版本时的默认落点。
+      // 渲染分支 / 选择器当前项 / 下拉勾选三处共用这一个布尔 ⇒ 不会出现「默认落了 standalone
+      // 泳道、选择器却还显示『全部版本』」的口径分裂。
+      const standaloneLaneActive = !!(viewStandaloneOnly || standaloneLaneDefault);
+      const singleVersion = (narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && !standaloneLaneActive && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG)
         ? pickSingleVersion(active, viewVersionSlug)
         : null;
       // 「单泳道档」= 收窄到某一个版本 **或** 收窄到 backlog / 独立目标（三者都用单列全宽纵向排布，
       // 且都只渲染一个泳道；released 在该档一律不渲染）。
-      const singleLaneMode = !!(narrowSingleTier && !searchActiveQuery && (singleVersion || viewBacklogOnly || viewStandaloneOnly));
+      const singleLaneMode = !!(narrowSingleTier && !searchActiveQuery && (singleVersion || viewBacklogOnly || standaloneLaneActive));
 
       // ===== g-352：头部/泳道共用的按钮与「查看版本」选择器（样式与元素都在泳道渲染之前就位）=====
       // g-352 att-003 第 9 项：工具条按钮的尺寸口径**收敛到 narrow-width.js 的 rowBtnStyle()**
@@ -994,10 +1007,12 @@
       // 单泳道档的泳道头部预留「选择器 + [ + ]」的横向空间（选择器在 right:40、[ + ] 在 right:6；
       // 该字面量与既有的 40px 标题预留区分开，不动既有四条标题预留）
       const singleLaneLabelPaddingRight = 136;
-      // 当前视图名（选择器触发器文案；独立目标与 backlog 各按自己的泳道口径显示）
+      // 当前视图名（选择器触发器文案；独立目标与 backlog 各按自己的泳道口径显示）。
+      // g-358：无可见版本时默认落到独立目标 ⇒ 触发器也必须显示「独立目标」（判据 3），
+      // 故这里吃 standaloneLaneActive（显式选中 ∪ 默认落点），不是只看显式选中。
       const viewPickerCurrentLabel = viewBacklogOnly
         ? dgT("view.backlogLane")
-        : (viewStandaloneOnly ? dgT("lane.standalone") : (singleVersion ? singleVersion.name : dgT("view.allVersions")));
+        : (standaloneLaneActive ? dgT("lane.standalone") : (singleVersion ? singleVersion.name : dgT("view.allVersions")));
       // g-352 att-003 第 8 项：版本选择下拉从头部移入**版本泳道头部行**（创建 goal 的 [ + ] 左侧）。
       // inLane=true ⇒ 绝对定位到泳道标题右侧、紧贴 [ + ] 左边；inLane=false ⇒ 头部行内联（「全部版本」态）。
       const renderVersionPicker = (inLane) => h("span", {
@@ -1049,7 +1064,7 @@
             className: "dg-schedule-version-item",
             style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
             onClick: () => { setViewVersionSlug(VIEW_STANDALONE_SLUG); setShowVersionPicker(false); },
-          }, viewOptionLabel("standalone", dgT("lane.standalone"), viewStandaloneOnly)),
+          }, viewOptionLabel("standalone", dgT("lane.standalone"), standaloneLaneActive)),
           active.length === 0
             ? h("div", { style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 } }, dgT("goal.scheduleNoVersion"))
             : null)
@@ -1954,9 +1969,12 @@
         // 第 4 参 vertical=true：单列全宽 + 强制展开（backlog 泳道默认折叠态在窄档里等于
         // 「只有计数没有卡片」，必须显式展开）；卡片全宽见 constants.js 的 .dg-backlog-flat-vertical。
         rows.push(...backlogRow("backlog", b.backlog, "backlog", true));
-      } else if (singleLaneMode && viewStandaloneOnly) {
+      } else if (singleLaneMode && standaloneLaneActive) {
         // g-352（att-003 第 5 项③）：独立目标作为唯一泳道时，**复用既有 lane 渲染路径**
         //（卡片 / 拖动 / 新建入口全部同一条实现，不复制第二套），从而「真有卡片」而非只有计数。
+        // g-358：该分支现在同时承载「显式选中独立目标」与「无可见版本时的默认落点」两种进入方式
+        //（两者由 standaloneLaneActive 归一）；空板（standalone 也为空）时同样走这里 ⇒ 渲染
+        // 空单泳道（六个阶段块 + 泳道头的「＋」新建入口），绝不回落横向网格、不抛错（判据 4）。
         // 第 6 参 collapsible=false（负责人人工 gate 反馈④：只有一个泳道时不要折叠开关）。
         rows.push(...lane(dgT("lane.standalone"), b.standalone, "standalone", null, 0, false, true));
       } else if (singleLaneMode) {
