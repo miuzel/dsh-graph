@@ -49,6 +49,41 @@ const TSC_COMMAND = "./node_modules/.bin/tsc --noEmit -p tsconfig.json";
 const BUILD_HINT =
   "门禁断言读取源文件与 dist 产物：请先运行 `bash scripts/build.sh` 再跑测试（dist/ 是生成物，禁止手改）";
 
+/**
+ * g-346 判据 4 收敛（问题①）：tsconfig 扫描跳过的目录。
+ *
+ * 旧实现只扫 `repoRoot` 与 `core/` 两层——实测在 `dsh-graph-host/tsconfig.tests.json` 放一个宽松
+ * tsconfig，守护仍然全绿，即「把 core/tests 纳入类型检查」的偷偷回归可从 host 目录绕过。
+ * 现改为递归「全仓非忽略目录」；跳过项与 `.gitignore` 的忽略口径一致
+ * （依赖、VCS、隔离工作树、生成物、临时目录、看板内层仓库），避免把生成物/数据误判为绕过。
+ */
+const SCAN_SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  ".pnpm-store",
+  ".worktrees",
+  "dist",
+  "core-dist",
+  "tmp",
+  "probe",
+  "handoffs",
+  ".dsh-graph",
+]);
+
+/** 递归列出「全仓非忽略文件」相对 repoRoot 的路径（`/` 分隔，便于负向/正向对照断言）。 */
+function walkRepoFiles(dir: string = repoRoot): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (SCAN_SKIP_DIRS.has(entry.name)) continue;
+      out.push(...walkRepoFiles(join(dir, entry.name)));
+    } else if (entry.isFile()) {
+      out.push(relative(repoRoot, join(dir, entry.name)));
+    }
+  }
+  return out;
+}
+
 /** zh 门禁②行缺口标注的完整字面量（不含前导「；」）；负向对照复用同一字面量。 */
 const ZH_GAP_TEXT =
   "覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内";
@@ -246,12 +281,32 @@ test("g-335 判据 4：tsconfig 仍只含 core 层、仍排除 core/tests，且�
   assert.ok((tsconfig.exclude ?? []).includes("core/tests"), "判据 4：exclude 必须仍含 core/tests");
   assert.ok(!(tsconfig.include ?? []).some((p) => p.includes("dsh-graph-host")), "判据 4：host 的 .js 不得被纳入类型检查");
 
-  const extraTsconfigs = [repoRoot, join(repoRoot, "core")]
-    .flatMap((dir) => readdirSync(dir).map((name) => join(dir, name)))
-    .filter((path) => /^tsconfig.*\.json$/.test(path.split("/").pop() ?? "") && path !== join(repoRoot, "tsconfig.json"));
-  assert.deepEqual(
-    extraTsconfigs.map((path) => relative(repoRoot, path)),
-    [],
-    "判据 4：不得新建 tests 专用宽松 tsconfig（被否决的方案②）",
+  const extraTsconfigs = walkRepoFiles().filter(
+    (path) => /^tsconfig.*\.json$/.test(path.split("/").pop() ?? "") && path !== "tsconfig.json",
   );
+  assert.deepEqual(
+    extraTsconfigs,
+    [],
+    "判据 4：不得新建 tests 专用宽松 tsconfig（被否决的方案②）——扫描范围为全仓非忽略目录，host 目录同样在内",
+  );
+});
+
+test("g-346 判据 1：tsconfig 扫描覆盖全仓非忽略目录（含 dsh-graph-host/），且排除依赖/产物/隔离工作树", () => {
+  const files = walkRepoFiles();
+
+  // 正向：扫描确实递归进 dsh-graph-host/（旧实现只扫 repoRoot + core/，host 目录的绕过因此看不见）。
+  assert.ok(
+    files.includes("dsh-graph-host/supervisor-guide.zh.md"),
+    "判据 4 收敛失效：tsconfig 扫描未覆盖 dsh-graph-host/（host 内的宽松 tsconfig 可绕过守护）",
+  );
+  assert.ok(files.includes("core/review-policy.ts"), "判据 4 收敛失效：扫描未覆盖 core/");
+
+  // 反向：忽略目录不得被扫入，否则会在依赖/产物/其他 attempt 工作树里误报红。
+  for (const prefix of ["node_modules/", ".git/", ".worktrees/", "dist/", "core-dist/", "tmp/"]) {
+    assert.deepEqual(
+      files.filter((path) => path.startsWith(prefix)),
+      [],
+      `判据 4 收敛：扫描范围不得包含忽略目录 ${prefix}`,
+    );
+  }
 });
