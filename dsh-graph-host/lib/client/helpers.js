@@ -752,9 +752,68 @@
     }
 
     // ===== g-351：子代理目录的**形状/能力探测**读取（零版本号比较）=====
-    // 宿主改过代：旧形态把直接子目录放在 `list.getSnapshot().subagentsByParent[parentId].entries`；
-    // 新形态移除了该字段，改由共享会话投影承载 `projectionsBySession[sid].values.subagentCatalog`。
-    // 两种形状都读，任一处命中即返回；形状不符返回 []，调用方按「未收录」降级。
+    // 宿主改过代，**容器与 entry 两层形状同时换代**，两层都必须探测：
+    //   容器：旧 `list.getSnapshot().subagentsByParent[parentId].entries`；
+    //         新 `list.getSnapshot().projectionsBySession[sid].values.subagentCatalog`
+    //         （0.1.7 全参考树 `subagentsByParent` 零命中）。
+    //   entry：旧 `{kind:'child'|'diagnostic', id, activity, hasChildren, mode, label?}`——**带判别字段 `kind`**
+    //         （权威来源：0.1.6 `dsh-api-remotes/lib/client.js` 的 `subagents.list` 结果 schema）；
+    //         新 `{id, createdAt, mode:'one-shot'|'continuable'|'unknown', label?}`——**无 `kind`**
+    //         （权威来源：0.1.7 `dsh-api-remotes/lib/client.js:9055` 的 `subagentCatalog` union；
+    //          0.1.7 全树 client.js 对 `kind === "child"` **零命中**）。
+    // 只换容器不换 entry 形状 ⇒ 新宿主上条目能读到但谓词恒假，子会话导航**静默**退化为打开父会话。
+    // 谓词一律按**形状探测**：entry 自带 `kind` 走旧判定（`kind === 'child'`），不带 `kind` 按 `id` 命中。
+
+    /** 目录 entry 是否就是 `childId` 这个子会话（形状探测，零版本号比较）。
+     *  旧形态的 `diagnostic` 行同样带 `id`，必须用 `kind` 排除，绝不能只按 `id` 认。 */
+    function isCatalogChildEntry(entry, childId) {
+      if (!entry || typeof entry !== "object") return false;
+      if (typeof childId !== "string" || !childId) return false;
+      if (typeof entry.id !== "string" || entry.id !== childId) return false;
+      if (Object.prototype.hasOwnProperty.call(entry, "kind")) return entry.kind === "child";
+      return true;
+    }
+
+    /** 从目录 entry 数组里取出 `childId` 的子会话 entry；未收录返回 null（调用方按未收录降级）。 */
+    function catalogChildEntry(entries, childId) {
+      if (!Array.isArray(entries)) return null;
+      return entries.find((e) => isCatalogChildEntry(e, childId)) ?? null;
+    }
+
+    /** 子代理目录（parentId → entries）→ 子→直接父 反查表（形状探测，零版本号比较）。 */
+    function catalogParentIndex(catalogsByParent) {
+      const index = new Map();
+      try {
+        for (const [pid, entries] of catalogsByParent ?? []) {
+          if (!Array.isArray(entries)) continue;
+          for (const e of entries) {
+            if (!isCatalogChildEntry(e, e?.id)) continue;
+            if (!index.has(e.id)) index.set(e.id, pid);
+          }
+        }
+      } catch { /* 形状不符 → 空索引，按未收录降级 */ }
+      return index;
+    }
+
+    /** 目录 entry 的**具体**执行模式：只认 'one-shot' / 'continuable'；
+     *  宿主的「未判定」（0.1.7 新增的 'unknown'、字段缺失或非法值）一律返回 null。
+     *  调用方据此**降级**（展示层不臆断成 'one-shot'，路由层不冒充具体模式）。 */
+    function catalogEntryMode(entry) {
+      const m = entry && typeof entry.mode === "string" ? entry.mode : "";
+      return m === "one-shot" || m === "continuable" ? m : null;
+    }
+
+    /** 目录 entry → SubagentAddress 的 `mode` 字段：具体模式不可得时下发宿主自己的
+     *  「未判定」通配值 `'unknown'`（0.1.7 `SubagentAddress.mode` 合法取值之一，
+     *  宿主的 history 路由对 `address.mode === 'unknown'` 跳过一致性校验并按 identity 回填）。
+     *  **不得**省略该字段：0.1.7 上有 mode 缺失会被判 `subagent/unauthorized`
+     *  「subagent mode does not match the supplied address」。 */
+    function catalogAddressMode(entry) {
+      return catalogEntryMode(entry) ?? "unknown";
+    }
+
+    /** 读取子代理目录 entry 数组：两代容器形状都读，任一处命中即返回；
+     *  形状不符返回 []，调用方按「未收录」降级。 */
     function subagentCatalogEntries(rt, parentId) {
       if (!rt || !parentId) return [];
       let snap = null;
@@ -771,15 +830,16 @@
       return [];
     }
 
-    /** 目录 entry → SubagentAddress（与调用方的 entry 筛选口径保持一致）。 */
+    /** 目录 entry → SubagentAddress（entry 筛选统一走 `catalogChildEntry` 形状探测；
+     *  mode 经 `catalogAddressMode`：具体模式不可得时下发宿主的「未判定」通配值）。 */
     function subagentAddressOf(rt, parentId, childId) {
       if (!parentId || !childId) return null;
       try {
         const direct = rt?.subagentAddress?.(childId);
         if (direct) return direct;
       } catch { /* 地址探测不可用 → 走目录 */ }
-      const entry = subagentCatalogEntries(rt, parentId).find((e) => e && e.kind === "child" && e.id === childId);
-      return entry ? { parentSessionId: parentId, childSessionId: childId, mode: entry.mode } : null;
+      const entry = catalogChildEntry(subagentCatalogEntries(rt, parentId), childId);
+      return entry ? { parentSessionId: parentId, childSessionId: childId, mode: catalogAddressMode(entry) } : null;
     }
 
     /** 按能力刷新子代理目录：新形态用 `refreshProjections()`，旧形态用

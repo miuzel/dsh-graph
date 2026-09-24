@@ -22,6 +22,12 @@ const clientRoot = join(hostRoot, "lib/client");
 const distRoot = join(import.meta.dirname, "../../dist");
 const readClient = (name: string) => readFileSync(join(clientRoot, `${name}.js`), "utf8");
 
+/**
+ * g-351：子代理目录 entry 的**形状探测**族。子会话地址构造（subagentAddressOf）与
+ * 谱系反查（catalogParentIndex）都依赖它们，沙箱注入目录读取函数时必须连同这族一并注入。
+ */
+const CATALOG_SHAPE_FUNCS = ["isCatalogChildEntry", "catalogChildEntry", "catalogParentIndex", "catalogEntryMode", "catalogAddressMode"];
+
 /** 从拼接前的源模块里精确抠出一个具名 function 声明（花括号配平），供 vm 行为测试使用。 */
 function extractFunction(source: string, name: string): string {
   const start = source.indexOf(`function ${name}(`);
@@ -592,6 +598,7 @@ function makeSessionHooksSandbox(
     extractFunction(helpers, "subagentCatalogEntries"),
     extractFunction(helpers, "subagentAddressOf"),
     extractFunction(helpers, "refreshSubagentCatalog"),
+    ...CATALOG_SHAPE_FUNCS.map((n) => extractFunction(helpers, n)),
     extractFunction(helpers, "getLiveDisplay"),
     extractFunction(helpers, "useLiveDisplayEnabled"),
     "this.parts = { useSessionBinding, useBoundSession, retainedBindings, boundModes };",
@@ -1061,6 +1068,7 @@ function renderLiveStrip(rt: unknown, props: Record<string, unknown>, liveDispla
     extractFunction(bundle, "subagentCatalogEntries"),
     extractFunction(bundle, "subagentAddressOf"),
     extractFunction(bundle, "refreshSubagentCatalog"),
+    ...CATALOG_SHAPE_FUNCS.map((n) => extractFunction(bundle, n)),
     extractFunction(bundle, "getLiveDisplay"),
     extractFunction(bundle, "useLiveDisplayEnabled"),
     extractFunction(bundle, "formatStatusWithLifecycle"),
@@ -1155,6 +1163,7 @@ test("g-321 端到端（真实产物）：0.1.6 语义下 useSessionModel 拿得
       extractFunction(bundle, "subagentCatalogEntries"),
       extractFunction(bundle, "subagentAddressOf"),
       extractFunction(bundle, "refreshSubagentCatalog"),
+      ...CATALOG_SHAPE_FUNCS.map((n) => extractFunction(bundle, n)),
       "this.useSessionModel = useSessionModel;",
     ].join("\n"), sandbox, { filename: "dist/lib/client.js#useSessionModel" });
     return sandbox;

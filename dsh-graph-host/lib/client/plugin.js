@@ -51,15 +51,9 @@
           return itemList ? itemList.find((s) => s && (s.sessionId === sid || s.id === sid)) : undefined;
         };
         // g-244：子 → 直接父 反查表（子代理目录 + currentAddress 导航地址）。
-        const parentIndex = new Map();
-        for (const [pid, entries] of catalogsByParent) {
-          if (!Array.isArray(entries)) continue;
-          for (const e of entries) {
-            if (e && e.kind === "child" && typeof e.id === "string" && e.id && !parentIndex.has(e.id)) {
-              parentIndex.set(e.id, pid);
-            }
-          }
-        }
+        // g-351：目录 entry 的形状探测（旧带 kind / 新无 kind）统一走 catalogParentIndex，
+        //        与子会话导航、地址构造共用同一判定函数；此处不再内联 kind 谓词。
+        const parentIndex = catalogParentIndex(catalogsByParent);
         const addr = snap.currentAddress;
         if (addr && typeof addr.childSessionId === "string" && typeof addr.parentSessionId === "string"
           && !parentIndex.has(addr.childSessionId)) {
@@ -193,11 +187,14 @@
         if (!rt) return;
         // 目录必须先加载，否则 selectSubagent 抛 "not a healthy catalog child"（发现#21）
         await refreshSubagentCatalog(rt, parentSessionId);
-        const entry = subagentCatalogEntries(rt, parentSessionId).find((e) => e.kind === "child" && e.id === childId);
+        // g-351：entry 形状探测与地址构造统一走 helpers 的同一判定函数
+        //（旧宿主 entry 带 kind、新宿主无 kind；此处内联 kind 谓词会让新宿主恒不命中，
+        //  点「↗ 转到对话」静默退化为打开父会话）。
+        const entry = catalogChildEntry(subagentCatalogEntries(rt, parentSessionId), childId);
         if (entry) {
           // g-321：0.1.5 走 sessions.openSubagent(address)；0.1.6 该 API 已移除，
           // 由 uiWorkspace.openSession(address) 一步完成「选中会话 + 切到对话」。
-          const address = { parentSessionId, childSessionId: childId, mode: entry.mode };
+          const address = { parentSessionId, childSessionId: childId, mode: catalogAddressMode(entry) };
           if (!openSessionTarget(address, typeof rt.openSubagent === "function" ? () => rt.openSubagent(address) : null)) {
             // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
             console.warn("[dsh-graph-host] 无可用子会话导航 API（uiWorkspace.openSession / sessions.openSubagent 均缺失）：", childId);

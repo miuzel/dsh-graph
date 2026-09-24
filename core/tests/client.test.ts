@@ -3437,7 +3437,28 @@ test("真实 HTTP：readBodyCapped 超限返回可读 400（无 ECONNRESET）且
 /**
  * 从 plugin.js 源模块中按花括号配平提取真实的 resolveWorkspaceOfSession 片段，
  * 在 vm 上下文中执行，避免测试再写一份「看起来一样」的模拟实现。
+ * g-351：resolveWorkspaceOfSession 的子→父反查索引改由 helpers 的 catalogParentIndex
+ * 承担（形状探测：旧 entry 带 kind / 新 entry 无 kind），故把 helpers 里的形状探测族
+ * 一并从真实源模块提取注入沙箱——与浏览器 bundle 的同一工厂作用域拼接口径一致。
  */
+function extractBraceBalanced(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `源模块中存在 function ${name}`);
+  let depth = 0;
+  for (let i = source.indexOf("{", start); i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") { depth--; if (depth === 0) return source.slice(start, i + 1); }
+  }
+  throw new Error(`function ${name} 花括号无法配平`);
+}
+
+const CATALOG_SHAPE_FUNCS = ["isCatalogChildEntry", "catalogChildEntry", "catalogParentIndex"];
+
+function catalogShapeSource(): string {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  return CATALOG_SHAPE_FUNCS.map((n) => extractBraceBalanced(helpers, n)).join("\n");
+}
+
 function loadRealWorkspaceResolver() {
   const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
   const start = plugin.indexOf("let lastGoodWorkspace = null;");
@@ -3451,7 +3472,7 @@ function loadRealWorkspaceResolver() {
     else if (ch === "}") { depth--; if (depth === 0) { end = i + 1; break; } }
   }
   assert.ok(end > 0, "resolveWorkspaceOfSession 花括号必须配平");
-  const src = plugin.slice(start, end);
+  const src = `${catalogShapeSource()}\n${plugin.slice(start, end)}`;
   const ctx: any = {};
   vm.createContext(ctx);
   new vm.Script(`${src}\nglobalThis.__resolveWs = resolveWorkspaceOfSession;`).runInContext(ctx);
