@@ -216,9 +216,12 @@ supervisor session（本轮不写剪贴板）；不可投递时**完整退回**�
       「**Windows 未验证**」
 - [x] tarball 已产出并记录 sha256（发布门禁红线 3）：发布树 `.worktrees/release-v0.16.0`
       （detached @ tag `v0.16.0`，`git describe --tags` = `v0.16.0`）内 `bash scripts/build.sh` 后
-      `pnpm pack` ⇒ `dsh-graph-0.16.0.tgz`，**486,172 B**，sha256 **`75738dce…`**（见 §3.2）
-- [x] `v0.16.0-test` 合并 → `main`（`--no-ff`，合并提交 **`d4f6ec1`**）+ annotated tag **`v0.16.0`**
-      （tag 对象，指向 `d4f6ec1`；**未推送** —— 推送由负责人另行授权）—— 经负责人 2026-09-25 明确授权执行
+      `pnpm pack` ⇒ `dsh-graph-0.16.0.tgz`，**486,889 B**，sha256 **`3690b899…`**（见 §3.2）
+      —— **已重切一次**：g-358 / g-359 合入后 tag 重打，旧指纹 `75738dce…` **作废**
+- [x] `v0.16.0-test` 合并 → `main`（`--no-ff`）+ annotated tag **`v0.16.0`**（**未推送** —— 推送由负责人另行授权）
+      —— 经负责人 2026-09-25 明确授权执行。**重切记录**：因 g-358（窄档单泳道修复）与 g-359（macOS 门禁
+      执行件）随后合入，`main` 已回退到 `origin/main`（`5d731cc`）**重新单次合并** ⇒ 最终 `main` =
+      **`2ed393a`**；tag 删除后重打并指向 `2ed393a`（旧合并提交 `d4f6ec1` 已被取代）
 - [ ] 负责人执行 `pnpm publish`（npm 官方 registry）；**发布目录是 `dist/`，不是 `dsh-graph-host/`**
       —— 完整命令序列见 [`docs/release-handbook.md`](release-handbook.md) §4
       （发布前务必确认 `dist/` 内**无 `.tgz`**、文件数 **37**）
@@ -280,8 +283,8 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 | 建议相对路径 | `tmp/release-v0.16.0/dsh-graph-0.16.0.tgz` |
 | 包内版本 | `0.16.0`（`dist/package.json` 实测；须与 tag 一致） |
 | 包内文件数 | **37**（`pnpm pack --dry-run` 清单实测，与 `dist/` 实数逐项一致） |
-| 体积 | **486,172 B**（发布树内 `pnpm pack` 实测，2026-09-25） |
-| sha256 | **`75738dcecdae92d8ca92eeb39c6a852df274c533e03abdfd82dafd78c3bc5261`**（同上） |
+| 体积 | **486,889 B**（发布树内 `pnpm pack` 实测，2026-09-25，**重切后**） |
+| sha256 | **`3690b89965e3b9999c5bce43bcdcaa87b7528b012e5c73e2ada548dff97b9587`**（同上） |
 | Windows 侧可达路径（UNC） | `\\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.16.0\` |
 | 老式 UNC 别名 | `\\wsl$\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.16.0\` |
 
@@ -296,6 +299,14 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 > 与主树同值 ⇒ 跨树构建一致），`pnpm pack` 得 §3.2 表内数值；该 tarball 与发布树 `dist/` 逐文件
 > `diff -r` **文件清单 0 差异**（唯一差异 `package.json` 末尾换行 = pnpm 打包重写的已知行为）。
 > 发布树保留至负责人完成 `pnpm publish` 后再按手册 §4 步骤 6 清理。
+>
+> **⚠️ 已重切（2026-09-25 同日）**：上表首次记录的是 g-358 之前的产物（`75738dce…`）。负责人报障
+> 「只有独立目标、没有创建版本时窄窗单泳道不激活」⇒ 立 g-358 修复（standalone 视为常驻泳道）+
+> g-359 补 macOS 门禁执行件；两者合入 `v0.16.0-test`（`ceda4a8`，全量 **1356/0**）后，`main` 回退
+> `5d731cc` **重新单次合并**为 **`2ed393a`**，tag `v0.16.0` 删除重打指向 `2ed393a`（仍未推送），发布树
+> 重指后重建（`dist/lib/client.js` md5 `c8736a6a…`，与主树一致）并重新 `pnpm pack` ⇒ **上表数值为最终值**；
+> 旧指纹 `75738dce…` 作废，任何基于旧包得出的门禁结论须以新包重跑。g-359 经独立复核**对发布物零影响**
+> （其 worktree `dist/` 与重切前主树发布构建 `diff -r` = 0 差异）。
 >
 > **发布物对账顺序（v0.15.0 实证，务必遵守）**：
 > 1. 先在**发布树**（`git worktree add --detach .worktrees/release-v0.16.0 v0.16.0`）内
@@ -321,6 +332,23 @@ tarball（条目排序与 gzip 参数/头不同），`v0.15.0` 实测线上 414,
 
 > 红线 3「记录 sha256 对账」用于**跨机器传递**（本机 ↔ Windows）；对 **registry 侧**改用内容级判据。
 
+### 3.4 macOS 门禁（v0.16.0 新增执行件；结论待回填）
+
+Mac 侧执行件为 [`scripts/macos-smoke-test.mjs`](../scripts/macos-smoke-test.mjs)（纯 Node、零第三方依赖，
+规避 macOS 自带 bash 3.2 的 bashism）：**转发**既有 `win-smoke-test.mjs` 的 T1–T5（不复制其逻辑），
+另加四项 Mac 专检 —— **M1** 退化构建路径（无 `mv --exchange` ⇒ 两次 rename + 告警；macOS/BSD 与
+coreutils < 9.6 的 Linux 用户都走这条，g-359 起有机器测试覆盖）、**M2** APFS 大小写不敏感探针
+（只报告、不改核心行为）、**M3** 软链 root 边界（显式 `/tmp` root 被拒 / realpath 物理路径通过）、
+**M4** 发布脚本 Linux-only 假设扫描。命令序列、每项预期输出与判读、回填表见
+[`docs/macos-gate.md`](macos-gate.md)。
+
+| 项 | 值 |
+|---|---|
+| 是否已执行 | **⏳ 待回填**（负责人本周期在 Mac 上执行） |
+| 被测产物 | §3.2 同一 tarball（sha256 `3690b899…`） |
+| 结果 | ⏳ 待回填（M1/M2/M4 期望 PASS；M3 在非 darwin 上必然 WARN，属如实降级口径） |
+| 若未执行 | README 保持「macOS 门禁执行件已就绪 + 真机结论待回填」，**不得**声明 macOS 已验证 |
+
 ## 4. 发布操作
 
 完整命令序列见 [`docs/release-handbook.md`](release-handbook.md) **§4「pnpm publish 单包
@@ -341,8 +369,13 @@ tarball（条目排序与 gzip 参数/头不同），`v0.15.0` 实测线上 414,
 1. **Windows 真机门禁尚未执行**（截至本清单编写时点）：由负责人按决策 3 在原生 Windows 上执行
    `win-smoke-test.mjs --tarball`，结论回填 §3.1。**在回填之前，本项目不得对外声称 Windows 已验证**；
    若发布时仍未执行，README 与 §3.1 必须如实写「**Windows 未验证**」（发布门禁红线 1 例外条款）。
-2. **macOS 真机门禁本周期未复跑**：最近一次真机复验为 **`v0.11.0`**；自 `v0.11.0` 以来
-   `core/platform.ts` 与文件锁相关代码零改动。README 已如实区分，未作过度声明。
+2. **macOS 真机门禁待复跑（执行件已就绪）**：最近一次真机复验仍为 **`v0.11.0`**；自 `v0.11.0` 以来
+   `core/platform.ts` 与文件锁相关代码零改动。本版本已落地 **`scripts/macos-smoke-test.mjs`**（四项
+   Mac 专检 M1–M4 + 转发既有 `win-smoke-test.mjs` 的 T1–T5），命令序列、预期输出、判读口径与回填表见
+   [`docs/macos-gate.md`](macos-gate.md) 与本文 §3.4；**真机结论由负责人在 Mac 上跑出后回填**。
+   README 已如实区分（「执行件已就绪 + 真机结论待回填」），未作预先声明。
+   另注：M1（退化构建路径）需仓库检出与 `node_modules`（`pnpm install`）；只验产物时可加 `--skip-build`
+   跳过 M1，仅跑 M2–M4 + 转发的 T1–T5。
 3. **`0.1.5-rc.2` 及更早宿主未在本周期复跑**：`0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约
    向后兼容，但**本周期实测只覆盖 `0.1.7-rc.1` 与 `0.1.6-alpha.2`**，README 已如实区分。
 4. **macOS 符号链接工作区路径限制**（沿用旧版）：经**显式传入且含符号链接**的工作区路径
