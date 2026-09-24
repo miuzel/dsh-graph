@@ -19,12 +19,19 @@ const NARROW_TOOLBAR_MAX_WIDTH = 480;
  * 已折叠状态要重新展开，必须多出这么多余量（避免折叠↔展开在同一宽度上自激抖动）。
  */
 const HEAD_FIT_SLACK = 24;
-/** <360px：单版本模式——只渲染选中版本一个泳道，阶段列由横向并排改为纵向堆叠 */
-const NARROW_SINGLE_VERSION_MAX_WIDTH = 360;
+/**
+ * g-356（负责人 2026-09-25 gate 反馈）：单泳道档阈值由 360 抬到 **480** —— 与工具条折叠档同界。
+ * 动机：360–480px 区间（真机 460px）里泳道网格比面板宽、只能横向滚动，「确认 / 批量接受」列被
+ * 推出可视区 ⇒ 该档直接进单泳道（阶段列纵向堆叠，确认块头自带同构批量入口），缺口消失。
+ */
+const NARROW_SINGLE_VERSION_MAX_WIDTH = 480;
 
 /**
  * 宽度分档。宽度不可用（SSR / 尚未测量 / ResizeObserver 缺失 → Infinity）时按 wide 处理，
  * 绝不误折叠：默认外观与 g-330 之前的全宽路径逐字一致。
+ *
+ * g-356：两档阈值同界（均 480）⇒ "narrow" 分支当前不可达，但**保留**它：单泳道阈值若被单独
+ * 回调到 480 以下，分档仍自动成立，不必再引入第二份数字字面量。
  * @param {number|undefined|null} width 看板根容器实测宽度（px）
  * @returns {"wide"|"narrow"|"single"}
  */
@@ -35,12 +42,12 @@ function boardWidthTier(width) {
   return "wide";
 }
 
-/** <480px 折叠工具条（含 <360px 的单版本档）。 */
+/** <480px 折叠工具条（与单泳道档同界 ⇒ 该档恒折叠）。 */
 function shouldCollapseToolbar(width) {
   return boardWidthTier(width) !== "wide";
 }
 
-/** <360px 进入单版本模式。 */
+/** <480px 进入单泳道档（单版本 / 单 backlog / 单独立目标三选一）。 */
 function isSingleVersionTier(width) {
   return boardWidthTier(width) === "single";
 }

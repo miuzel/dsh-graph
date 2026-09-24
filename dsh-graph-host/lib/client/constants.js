@@ -142,7 +142,7 @@
     const HOVER_CSS = `
       /* g-352：**取代** g-330 那条「头部放开换行」的最小适配 CSS 规则——
          那条单规则已删除。窄宽度适配改为「以看板根容器实测宽度分档」：<480px 工具条整批收进
-         下拉容器、<360px 单版本模式（阈值与派生见 lib/client/narrow-width.js，观测见 kanban.js
+         下拉容器、单泳道档同界 <480px（阈值与派生见 lib/client/narrow-width.js，观测见 kanban.js
          的 ResizeObserver；纯 CSS 不再承担分档）。下面两条只保留与分档无关的布局兜底：
          ① 放不下就换行（不产生横向裁切）；② 按钮保持内容宽度不参与压缩——若给头部全部按钮加
          min-width:0，宽档单行头部会把按钮压到十几像素、文字反而越框（真机 3082 实测复现，
@@ -544,9 +544,9 @@
         width: 220px;
         box-sizing: border-box;
       }
-      /* g-352：backlog 作为**唯一泳道**（<360px 单版本档的「版本备选」）时的纵向档样式——
+      /* g-352：backlog 作为**唯一泳道**（单泳道档 <480px 的「版本备选」）时的纵向档样式——
          单列全宽网格里 220px 定宽卡片在 240px 容器里会横向溢出，故改为占满整行、卡面全宽可读。
-         该 class 只在 host=sidebar 且根容器 <360px 时出现，conversation.view 路径恒不命中。 */
+         该 class 只在单泳道档（根容器实测 <480px）出现，宽档路径恒不命中。 */
       .dg-backlog-flat-vertical .dg-card {
         flex: 1 1 100%;
         width: 100%;

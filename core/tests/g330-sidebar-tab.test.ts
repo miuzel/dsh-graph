@@ -236,7 +236,8 @@ test("g-330 判据3：右侧栏本体与 conversation.view 挂载同一个 Kanba
 // ---------------------------------------------------------------- 5. 窄宽度适配（g-352 取代 g-330 最小适配）
 
 // g-352 取代说明：g-330 的判据 5 是「头部放开换行」那条纯 CSS
-// 最小适配；g-352 改为「以看板根容器实测宽度分档 + 工具条折叠进下拉容器 + <360px 单版本模式」。
+// 最小适配；g-352 改为「以看板根容器实测宽度分档 + 工具条折叠进下拉容器 + 单泳道档」；
+// g-356 把单泳道阈值由 <360px 抬到 <480px（与折叠档同界）。
 // g-352 att-005（负责人 2026-09-25 人工 gate「两侧完全一致」）再次改写：**拆掉 host 门控**——
 // 会话页看板页签与右侧栏渲染同一份头部/工具条实现（同一个 KanbanView），两侧行为完全一致；
 // 判据 5 的新口径是 ①「会话内看板页签 == 侧栏（同一组件/同一逻辑）」+ ②「对话本体零新增差异」。
@@ -257,7 +258,7 @@ test("g-352 att-005 取代 g-330 判据5：断点/折叠是同一份共用实现
   assert.doesNotMatch(src, /window\.innerWidth|matchMedia/);
   // 阈值与分档集中在 narrow-width.js 纯函数模块（测试断言同一实现，不是复制一份常量）
   assert.match(narrow, /const NARROW_TOOLBAR_MAX_WIDTH = 480;/);
-  assert.match(narrow, /const NARROW_SINGLE_VERSION_MAX_WIDTH = 360;/);
+  assert.match(narrow, /const NARROW_SINGLE_VERSION_MAX_WIDTH = 480;/);
   assert.match(src, /const widthTier = boardWidthTier\(boardWidth\);/);
   // 窄档判定两侧同口径（不再 `sidebarHost && …`）
   assert.match(src, /const narrowActive = widthTier !== "wide";/);
