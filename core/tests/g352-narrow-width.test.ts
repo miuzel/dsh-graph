@@ -1369,6 +1369,9 @@ test("g-352 att-006 B2（渲染级）：角落改单行 [🏷️] [创建版本]
   // 不溢出：创建版本按钮可收缩 + 省略号兜底；角落单元格裁切
   assert.equal(corner.props.style.overflow, "hidden", "单元格不溢出到相邻阶段列头");
   assert.equal(corner.props.style.minWidth, 0);
+  // 130px 列宽在 en 下需要 26+4+93=123px ⇒ 水平内边距收到 2px（垂直仍 4px，行高不变）才不裁字
+  assert.equal(corner.props.style.padding, "4px 2px", "角落水平内边距收到 2px（en 标签零截断），垂直仍 4px");
+  assert.equal(corner.props.style.gap, 4, "图标与文字按钮间距 4px");
   assert.equal(cv.props.style.maxWidth, "100%");
   assert.equal(cv.props.style.minWidth, 0);
   assert.equal(cv.props.style.overflow, "hidden");

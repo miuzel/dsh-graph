@@ -2283,11 +2283,15 @@
           setCreateVersionNote(null);
         },
       }, dgT("createVersion.createBtn"));
-      // 网格左上角单元格：两个按钮**同一行**、靠左、垂直居中（单行不占额外高度）
+      // 网格左上角单元格：两个按钮**同一行**、靠左、垂直居中（单行不占额外高度）。
+      // 水平内边距由 S.stageHead 的 4px 收到 2px（垂直仍是 4px ⇒ 行高不变）：130px 列宽在 **en**
+      // 下需要 26(图标) + 4(gap) + 93(`Create Version`) = 123px，S.stageHead 的 8px 内边距只剩 122px
+      // ⇒ 会裁掉 1px。角落单元格无底纹/边框，2px 与 4px 的差别肉眼不可见，换来 en 标签**零截断**
+      //（真机实测 sw<=cw；zh 本来就宽松）。不改变与阶段列头的对齐（阶段列头是居中文本）。
       const gridCornerEl = h("div", {
         key: "grid-corner",
         className: "dg-grid-corner",
-        style: { ...S.stageHead, display: "flex", flexDirection: "row", alignItems: "center", justifyContent: "flex-start", flexWrap: "nowrap", gap: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" },
+        style: { ...S.stageHead, padding: "4px 2px", display: "flex", flexDirection: "row", alignItems: "center", justifyContent: "flex-start", flexWrap: "nowrap", gap: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" },
       }, versionManageBtn, createVersionBtn);
       // g-233：标题行最右侧增加搜索框（g-352 att-005：**保持原设计**——与标题同一行、不再有同行容器包装）
       const searchBarEl = h("div", {
