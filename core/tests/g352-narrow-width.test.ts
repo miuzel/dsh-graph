@@ -241,7 +241,9 @@ test("g-352 判据3：单版本投影只做派生（选中失效则回落首个�
 test("g-352 判据3：单版本模式下只渲染选中版本一个泳道，阶段列改为纵向堆叠，保留「全部版本」入口", () => {
   const src = readClient("kanban");
   // 单版本派生只用既有可见性判定的结果 active（hiddenVersionSlugs + search 覆盖层之后的集合）
-  assert.match(src, /const singleVersion = \(narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && !viewStandaloneOnly && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG\)/);
+  // g-358：排除项由「显式独立目标」扩为 standaloneLaneActive（显式 ∪ 无可见版本时的默认落点）——
+  // 断言强度不变：仍是逐字钉住该表达式（窄档门控 + 搜索挂起 + 两个唯一泳道 + 「全部版本」退出）。
+  assert.match(src, /const singleVersion = \(narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && !standaloneLaneActive && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG\)/);
   assert.match(src, /const VIEW_ALL_VERSIONS_SLUG = "__all__";/);
   // g-352（负责人裁决）：backlog 也是单版本档的视图备选 → 单泳道档 = 单版本 ∪ 单 backlog
   assert.match(src, /const VIEW_BACKLOG_SLUG = "__backlog__";/);
@@ -249,7 +251,11 @@ test("g-352 判据3：单版本模式下只渲染选中版本一个泳道，阶�
   // att-003 第 5 项③：独立目标同样是单泳道档的视图备选 → 单泳道档 = 单版本 ∪ 单 backlog ∪ 单独立目标
   assert.match(src, /const VIEW_STANDALONE_SLUG = "__standalone__";/);
   assert.match(src, /const viewStandaloneOnly = !!\(narrowSingleTier && !searchActiveQuery && viewVersionSlug === VIEW_STANDALONE_SLUG\);/);
-  assert.match(src, /const singleLaneMode = !!\(narrowSingleTier && !searchActiveQuery && \(singleVersion \|\| viewBacklogOnly \|\| viewStandaloneOnly\)\);/);
+  assert.match(src, /const singleLaneMode = !!\(narrowSingleTier && !searchActiveQuery && \(singleVersion \|\| viewBacklogOnly \|\| standaloneLaneActive\)\);/);
+  // g-358（负责人 2026-09-25 报障）：standalone 视为常驻「版本」——窄档下可见版本为空时它就是默认落点，
+  // 故单泳道档成员由「单版本 ∪ 单 backlog ∪ 单独立目标（显式或默认）」三义组成（强度不削弱）。
+  assert.match(src, /const standaloneLaneDefault = !!\(narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && !viewStandaloneOnly\n\s*&& viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG && active\.length === 0\);/);
+  assert.match(src, /const standaloneLaneActive = !!\(viewStandaloneOnly \|\| standaloneLaneDefault\);/);
   // 只渲染选中版本一个泳道，且以纵向模式（lane 第 7 参 vertical=true）渲染；
   // att-003 第 4 项：单泳道档第 6 参 collapsible=false（只有一个泳道 ⇒ 不给版本头部 ▲/▼ 折叠开关）
   assert.match(src, /rows\.push\(\.\.\.lane\(`🏷️ \$\{singleVersion\.name\}`, singleVersion\.goals, "v-" \+ singleVersion\.slug, singleVersion\.slug, 0, false, true\)\)/);
@@ -482,7 +488,9 @@ test("g-352 判据7：无活跃版本 / 选中版本失效 / 拉回全宽均安�
   // 未测量 / 无 ResizeObserver → wide 档，不误折叠
   assert.equal(boardWidthTier(Infinity), "wide");
   // 搜索激活时挂起单版本收窄（g-233 优先级：搜索匹配不被视图过滤藏掉）
-  assert.match(kanban, /!searchActiveQuery && !viewBacklogOnly && !viewStandaloneOnly && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG\)/);
+  // g-358：新分支同样逐项带 !searchActiveQuery ⇒ 搜索激活一律挂起（口径不变、力度不减）。
+  assert.match(kanban, /const singleVersion = \(narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && !standaloneLaneActive && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG\)/);
+  assert.match(kanban, /const standaloneLaneDefault = !!\(narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && !viewStandaloneOnly\n\s*&& viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG && active\.length === 0\);/);
   // 选中 backlog 但处于搜索激活态时同样挂起（g-233 优先级不变）
   assert.match(kanban, /const viewBacklogOnly = !!\(narrowSingleTier && !searchActiveQuery/);
 });
@@ -944,6 +952,133 @@ test("g-356 判据1/3（渲染级）：460/479/480/520 采样档逐档渲染 —
   const side = await hSide.settle({ sessionId: "s1", host: "sidebar" });
   assert.deepEqual(elementSignature(conv.root()), elementSignature(side.root()), "460px：两侧元素签名逐字一致");
   assert.equal(withClass(conv.passElements(), "dg-batch-accept-btn").length, withClass(side.passElements(), "dg-batch-accept-btn").length, "两侧批量接受入口同进同出");
+});
+
+// ============================================================================
+// g-358（bug）：无版本时窄档单泳道不激活 —— standalone 视为常驻「版本」
+//   负责人 2026-09-25 实测报障：「当只有独立目标没有创建版本时，窄窗单泳道模式不激活」，
+//   并补充口径「但实际上 standalone 也算一个常驻的版本」。
+//   根因：可见版本为空 ⇒ pickSingleVersion(active=[], …) 返回 null，而 backlog / 独立目标两个
+//   分支都要求 viewVersionSlug 被**显式**选中 ⇒ singleLaneMode=false ⇒ <480 仍渲染横向网格
+//   （网格比面板宽，确认列被推出可视区）。
+//   修复口径：<480 且可见版本为空 ⇒ 默认落点 = 独立目标常驻泳道；显式「全部版本」仍是显式退出。
+// ============================================================================
+
+/** 「只有独立目标、没有版本」的板（负责人报障场景的原样复刻）。 */
+function noVersionBoard(over: Record<string, any> = {}) {
+  return boardFixture({
+    versions: [],
+    standalone: [
+      { id: "g-900", title: "独立目标一", status: "draft", tags: [], criteria_count: 0, cards_count: 0 },
+      { id: "g-901", title: "独立目标二", status: "review", tags: [], criteria_count: 0, cards_count: 0 },
+    ],
+    backlog: [],
+    backlog_count: 0,
+    ...over,
+  });
+}
+
+test("g-358 判据1/3（渲染级）：无可见版本 + 有 standalone ⇒ <480 默认落到独立目标单泳道（两侧一致）", async () => {
+  const payload = () => ({ board: noVersionBoard(), backlogGoals: [] });
+  const cases: Array<[string, any]> = [["会话内看板页签", { sessionId: "s1" }], ["右侧栏", { sessionId: "s1", host: "sidebar" }]];
+  for (const [label, props] of cases) {
+    const h = createRenderHarness({ boardWidth: 460, payload: payload() });
+    const els = (await h.settle(props)).passElements();
+    const tpl = gridTemplates(els)[0];
+    assert.equal(tpl, "minmax(0, 1fr)", `${label}：460px 无版本 ⇒ 必须进单列全宽单泳道（实得 ${tpl}）`);
+    assert.ok(!String(tpl).startsWith("130px"), `${label}：不得回落横向多泳道网格（报障形态）`);
+    const vblocks = els.filter((e) => typeof e.props?.key === "string" && /^standalone-v-[a-z]+$/.test(e.props.key));
+    assert.equal(vblocks.length, 6, `${label}：默认泳道 = 独立目标 ⇒ 六个阶段块纵向堆叠（实得 ${vblocks.length}）`);
+    const vstack = parentIndexOf(els).get(vblocks[0]);
+    assert.ok(vstack, `${label}：阶段块挂在 vstack 容器内`);
+    assert.equal(vstack.props.style.flexDirection, "column", `${label}：阶段纵向堆叠（不是横向并排）`);
+    assert.equal(vstack.props.style.gridColumn, "1 / -1", `${label}：vstack 占满单列网格整行`);
+    assert.equal(cardEls(els).length, 2, `${label}：独立目标泳道真有卡片（不是只有计数）`);
+    assert.equal(els.filter((e) => e.props?.key === "backlog-label").length, 0, `${label}：backlog 泳道不渲染`);
+    assert.equal(withClass(els, "dg-version-label").length, 0, `${label}：无版本泳道`);
+    assert.equal(withClass(els, "dg-lane-collapse").length, 0, `${label}：单泳道档无版本折叠 ▲/▼`);
+    assert.ok(withClass(els, "dg-batch-accept-btn").length >= 1, `${label}：确认阶段块头自带批量接受入口（窄档缺口不复发）`);
+
+    // 判据 3：选择器当前项显示「独立目标」（不是「全部版本」），且 backlog / 「全部版本」出口保留
+    const trigger = withClass(els, "dg-version-picker-trigger").pop();
+    assert.ok(trigger, `${label}：单泳道档存在「查看版本」触发器`);
+    assert.ok(treeText(trigger).includes("独立目标"), `${label}：当前项显示「独立目标」（实得「${treeText(trigger)}」）`);
+    assert.ok(!treeText(trigger).includes("全部版本"), `${label}：当前项不得显示「全部版本」`);
+    trigger.props.onClick({ stopPropagation() {} });
+    const opened = (await h.settle(props)).passElements();
+    const items = opened.filter((e) => elClass(e) === "dg-schedule-version-item");
+    const keys = items.map((e) => e.props?.key ?? "(all)");
+    assert.ok(keys.includes("(all)"), `${label}：「全部版本」出口保留（实得 ${JSON.stringify(keys)}）`);
+    assert.ok(keys.includes("vp-backlog"), `${label}：backlog 仍可选（实得 ${JSON.stringify(keys)}）`);
+    const standaloneOpt = items.find((e) => e.props?.key === "vp-standalone");
+    assert.ok(standaloneOpt, `${label}：独立目标仍是选项`);
+    assert.ok(treeText(standaloneOpt).trim().startsWith("✓"), `${label}：独立目标呈选中态（实得「${treeText(standaloneOpt)}」）`);
+  }
+  // 两侧完全一致（零 host 门控不复发）
+  const hConv = createRenderHarness({ boardWidth: 460, payload: payload() });
+  const hSide = createRenderHarness({ boardWidth: 460, payload: payload() });
+  const conv = await hConv.settle({ sessionId: "s1" });
+  const side = await hSide.settle({ sessionId: "s1", host: "sidebar" });
+  assert.deepEqual(elementSignature(conv.root()), elementSignature(side.root()), "460px 无版本：两侧元素签名逐字一致");
+});
+
+test("g-358 判据2（渲染级）：无版本时显式「全部版本」仍回多泳道；搜索激活仍挂起收窄", async () => {
+  const payload = () => ({ board: noVersionBoard(), backlogGoals: [] });
+  // ① 显式「全部版本」⇒ 退出收窄、回到横向多泳道档（既有口径不变）
+  const h = createRenderHarness({ boardWidth: 460, payload: payload() });
+  let r = await h.settle({ sessionId: "s1", host: "sidebar" });
+  const trigger = withClass(r.passElements(), "dg-version-picker-trigger").pop();
+  assert.ok(trigger, "单泳道档存在「查看版本」触发器");
+  trigger.props.onClick({ stopPropagation() {} });
+  r = await clickOpenOption(h, await h.settle({ sessionId: "s1", host: "sidebar" }),
+    (e) => elClass(e) === "dg-schedule-version-item" && e.props?.key == null);
+  const els = r.passElements();
+  const tpl = gridTemplates(els)[0];
+  assert.ok(String(tpl).startsWith("130px"), `显式「全部版本」必须回横向多列模板（实得 ${tpl}）`);
+  assert.equal(els.filter((e) => e.props?.key === "standalone-label").length, 1, "横向档下独立目标泳道回到常规形态");
+  assert.equal(els.filter((e) => typeof e.props?.key === "string" && /^standalone-v-/.test(e.props.key)).length, 0, "横向档不再纵向堆叠");
+
+  // ② 搜索激活 ⇒ 挂起收窄：无版本时同样不落单泳道（g-233 优先级不变）
+  const h2 = createRenderHarness({ boardWidth: 460, payload: payload() });
+  let r2 = await h2.settle({ sessionId: "s1", host: "sidebar" });
+  assert.equal(gridTemplates(r2.passElements())[0], "minmax(0, 1fr)", "先确认默认已进单泳道");
+  const input = r2.passElements().filter((e) => e.props?.className === "dg-search-input").pop();
+  assert.ok(input, "存在搜索输入框");
+  input.props.onChange({ target: { value: "独立" } });
+  r2 = await h2.settle({ sessionId: "s1", host: "sidebar" });
+  const input2 = r2.passElements().filter((e) => e.props?.className === "dg-search-input").pop();
+  assert.ok(input2, "搜索框仍在渲染");
+  input2.props.onKeyDown({ key: "Enter", shiftKey: false, preventDefault() {} });
+  r2 = await h2.settle({ sessionId: "s1", host: "sidebar" });
+  const tpl2 = gridTemplates(r2.passElements())[0];
+  assert.ok(String(tpl2).startsWith("130px"), `搜索激活必须挂起单泳道收窄 ⇒ 回多泳道横向档（实得 ${tpl2}）`);
+});
+
+test("g-358 判据4（渲染级）：全空（versions/standalone/backlog 皆空）时 <480 不渲染横向网格、不抛错", async () => {
+  const board = boardFixture({ versions: [], standalone: [], backlog: [], backlog_count: 0 });
+  const payload = () => ({ board, backlogGoals: [] });
+  // 所选口径（用断言钉住）：渲染**空单泳道**——六个阶段块 + 泳道头「＋」新建入口，不是横向网格、不是空态行。
+  for (const width of [250, 460, 479]) {
+    const h = createRenderHarness({ boardWidth: width, payload: payload() });
+    const els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+    const tpl = gridTemplates(els)[0];
+    assert.equal(tpl, "minmax(0, 1fr)", `${width}px 全空 ⇒ 空单泳道（实得 ${tpl}）`);
+    assert.ok(!String(tpl).startsWith("130px"), `${width}px 全空不得渲染横向网格`);
+    assert.equal(els.filter((e) => typeof e.props?.key === "string" && /^standalone-v-[a-z]+$/.test(e.props.key)).length, 6,
+      `${width}px 全空仍给六个阶段块（所处口径 = 空单泳道）`);
+    assert.equal(cardEls(els).length, 0, `${width}px 全空零卡片`);
+    assert.equal(withClass(els, "dg-lane-collapse").length, 0, `${width}px 单泳道档无折叠开关`);
+  }
+  // 480px（边界外侧）仍为宽档横向模板 —— ≥480 各档与改动前一致
+  const h480 = createRenderHarness({ boardWidth: 480, payload: payload() });
+  const e480 = (await h480.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  assert.ok(String(gridTemplates(e480)[0]).startsWith("130px"), "480px 全空仍为横向多泳道档（与改动前一致）");
+  // 两侧完全一致
+  const hConv = createRenderHarness({ boardWidth: 460, payload: payload() });
+  const hSide = createRenderHarness({ boardWidth: 460, payload: payload() });
+  const conv = await hConv.settle({ sessionId: "s1" });
+  const side = await hSide.settle({ sessionId: "s1", host: "sidebar" });
+  assert.deepEqual(elementSignature(conv.root()), elementSignature(side.root()), "460px 全空：两侧元素签名逐字一致");
 });
 
 test("g-352 B1（渲染级）：搜索激活态仍挂起单泳道收窄（g-233 优先级不变）", async () => {
@@ -1927,7 +2062,7 @@ test("g-352 att-005：会话内看板页签签名 == 冻结 fixture，且 fixtur
       assert.fail("拒绝覆盖冻结基线：需 G352_SIG_ACK=1 显式确认（或 G352_SIG_DUMP=<其他路径> 只导出做 diff）");
     }
     const head = [
-      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-356 重新冻结：单泳道阈值 <480，正文与 att-007 逐字相同 content-sha 未变）",
+      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-358 重新冻结：无版本窄档默认落独立目标泳道，正文与 g-356 逐字相同 content-sha 未变）",
       `# source-commit: ${execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot(), encoding: "utf8" }).trim()}`,
       `# source-sha256: ${sourceFingerprint()}`,
       `# source-files: ${SIG_SOURCE_FILES.join(",")}   # 源 hash 覆盖的模块（决定头部/泳道渲染）`,
