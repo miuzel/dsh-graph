@@ -30,6 +30,10 @@
 #   - 退化路径：mv 不支持 --exchange（需 GNU coreutils ≥ 9.6；macOS/BSD mv 与旧 coreutils
 #     均无）时退回「两次 rename」并在 stderr 明确告警 —— 该路径存在极短空窗，仅为可用性兜底，
 #     Linux/WSL2 目标平台不走这里。
+#   - g-359：退化路径此前**零测试覆盖**（在 coreutils ≥ 9.6 的构建机上永远走不到），且它同样
+#     影响 coreutils < 9.6 的 Linux 用户与 macOS。故提供**行为中性**的测试注入
+#     `BUILD_FORCE_TWO_RENAME=1`：强制跳过 `mv --exchange` 能力探测、直接走两次 rename。
+#     未设置（或非 "1"）时判断与历史实现逐字等价（仍按 mv 能力探测），发布方式与产物一字未变。
 #   - 子脚本（sync-core.sh / build-client.sh）的产物根由 DIST_DIR 重定向到暂存区，编译中间
 #     目录由 CORE_DIST 重定向，故并发构建之间不再共享（也不再互相 rm -rf）任何可写目录。
 #
@@ -106,16 +110,22 @@ cd "$REPO_ROOT"
 
 echo ""
 echo "--- 原子发布：切换 dist/ ---"
+# g-359 测试注入：仅当字面等于 "1" 时强制走退化路径；未设置/其它取值 ⇒ 与历史实现等价。
+FORCE_TWO_RENAME="${BUILD_FORCE_TWO_RENAME:-0}"
 if [ ! -e "$DIST" ]; then
   # 首次构建：目标不存在，单次 rename 即就位
   mv "$STAGE_DIST" "$DIST"
   echo "✅ 原子发布（首次）：dist/ 由暂存树单次 rename 就位"
-elif mv --exchange --help >/dev/null 2>&1; then
+elif [ "$FORCE_TWO_RENAME" != "1" ] && mv --exchange --help >/dev/null 2>&1; then
   # renameat2(RENAME_EXCHANGE)：暂存树与 dist/ 在单次系统调用内互换，读者零空窗
   mv -T --exchange "$STAGE_DIST" "$DIST"
   echo "✅ 原子发布：mv -T --exchange（单次系统调用，读者零空窗）"
 else
-  echo "⚠️ 当前 mv 不支持 --exchange（需 GNU coreutils ≥ 9.6），退回两次 rename：存在极短空窗" >&2
+  if [ "$FORCE_TWO_RENAME" = "1" ]; then
+    echo "⚠️ BUILD_FORCE_TWO_RENAME=1（g-359 测试注入）：跳过 mv --exchange 探测，退回两次 rename：存在极短空窗" >&2
+  else
+    echo "⚠️ 当前 mv 不支持 --exchange（需 GNU coreutils ≥ 9.6），退回两次 rename：存在极短空窗" >&2
+  fi
   mv "$DIST" "$LEGACY_PREV"
   mv "$STAGE_DIST" "$DIST"
   rm -rf "$LEGACY_PREV"
