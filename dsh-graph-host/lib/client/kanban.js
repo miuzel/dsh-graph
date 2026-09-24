@@ -148,6 +148,10 @@
       const [viewVersionSlug, setViewVersionSlug] = React.useState(null);
       // g-352：「全部版本」哨兵值（非版本 slug；不落任何持久化存储，与 viewVersionSlug 同生命周期）
       const VIEW_ALL_VERSIONS_SLUG = "__all__";
+      // g-352（负责人裁决 2026-09-24，修正侦察期定策点 #4）：backlog 同样是单版本档下的一个
+      // **版本备选** —— 它不是版本、而是「唯一泳道」，故与「全部版本」一样用哨兵值表示，
+      // 绝不与任何版本 slug 混淆（版本 slug 就叫 "backlog" 也不会被误判）。
+      const VIEW_BACKLOG_SLUG = "__backlog__";
       const [showVersionPicker, setShowVersionPicker] = React.useState(false);
       const versionPickerRef = React.useRef(null);
       const headOverflowRef = React.useRef(null);
@@ -864,6 +868,10 @@
       // 窄宽度只在右侧栏实例生效：conversation.view 路径 tier 恒为 wide。
       const narrowActive = sidebarHost && widthTier !== "wide";
       const narrowSingleTier = sidebarHost && isSingleVersionTier(boardWidth);
+      // g-352（负责人裁决）：单版本档的视图选择器可选 backlog —— 选中后 backlog 成为**唯一泳道**。
+      // 与单版本收窄完全同口径（搜索激活时一律挂起，保证 g-233 的搜索匹配不被视图过滤藏掉）；
+      // 同样是纯派生，不新增状态真源、不落任何持久化键。
+      const viewBacklogOnly = !!(narrowSingleTier && !searchActiveQuery && viewVersionSlug === VIEW_BACKLOG_SLUG);
 
       // g-352 降级：栏宽拉回全宽（或离开单版本档）时收起窄宽度专属浮层，不残留、不抛错（判据 7）。
       React.useEffect(() => {
@@ -883,6 +891,18 @@
         return () => document.removeEventListener("mousedown", onDoc);
       }, [showVersionPicker, showHeadOverflow]);
 
+      // g-352（负责人裁决）：选中 backlog 作为「版本备选」时必须真正给出**卡片**，不能只有计数——
+      // backlog 明细走既有惰性路径（b.backlog 按需拉取 + backlogRow 渲染）。这里在选中时立即调
+      // 既有 loadBacklogGoals（去重防竞态已由 sectionPromisesRef 保证），不依赖 1.5s 空闲预加载
+      //（否则 <360px 下选中瞬间泳道只有计数、要等预加载才有卡片）。
+      React.useEffect(() => {
+        if (!viewBacklogOnly) return;
+        const bd = state.data;
+        if (bd && bd.lazy && !bd.backlog_loaded && (!bd.backlog || bd.backlog.length === 0) && bd.backlog_count !== 0) {
+          loadBacklogGoals();
+        }
+      }, [viewBacklogOnly, state.data]);
+
       if (!activeWs) return h("div", { style: S.wrap, role: "status" }, dgT('kanban.error.workspace'));
       if (state.loading) return h("div", { style: S.wrap }, dgT('kanban.loading'));
       if (state.error) return h("div", { style: S.wrap }, dgT('kanban.error.fetch') + state.error);
@@ -900,13 +920,16 @@
       // 持久化口径：viewVersionSlug 只存在于本组件 React state（**零持久化键**，
       // 作用域=KanbanView 实例）；隐藏状态的唯一持久真源仍是 useHiddenVersionSlugs 的
       // hiddenVersionSlugs（其键名/作用域由该 hook 唯一持有，本目标不新增任何存储读写）。
-      // 与 g-233 的优先级：搜索处于激活态时**挂起**单版本收窄，保证搜索匹配不被视图过滤藏掉。
-      // 选中态三义：null=未显式选择（默认收窄到第一个可见版本）/ slug=该版本 / 哨兵=「全部版本」
-      //（哨兵让「全部版本」入口在多泳道档之外也真正生效：<360px 下显式选「全部版本」即退出收窄）。
-      const singleVersion = (narrowSingleTier && !searchActiveQuery && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG)
+      // 与 g-233 的优先级：搜索处于激活态时**挂起**单泳道收窄，保证搜索匹配不被视图过滤藏掉。
+      // 选中态四义：null=未显式选择（默认收窄到第一个可见版本）/ slug=该版本 /
+      //   VIEW_ALL_VERSIONS_SLUG=「全部版本」（显式退出收窄，回到多泳道横向档）/
+      //   VIEW_BACKLOG_SLUG=backlog 唯一泳道（负责人裁决；见 viewBacklogOnly）。
+      const singleVersion = (narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG)
         ? pickSingleVersion(active, viewVersionSlug)
         : null;
-      const singleVersionMode = !!(narrowSingleTier && singleVersion);
+      // 「单泳道档」= 收窄到某一个版本 **或** 收窄到 backlog（两者都用单列全宽纵向排布，
+      // 且都只渲染一个泳道；released/standalone 在该档一律不渲染）。
+      const singleLaneMode = !!(narrowSingleTier && !searchActiveQuery && (singleVersion || viewBacklogOnly));
       const released = allReleasedVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       // 全量目标 id→status 映射（依赖徽章状态化，发现#23：已交付依赖算「依赖满足」）
       const goalStatus = {};
@@ -1544,9 +1567,14 @@
       };
 
       // g-137：backlog 行平铺展示函数；g-162: 支持独立折叠
-      const backlogRow = (label, goals, key) => {
+      // g-352：第 4 参 vertical —— backlog 作为**唯一泳道**（<360px 单版本档的「版本备选」）时，
+      // 强制展开（默认折叠态在该档等于「只有计数没有卡片」）、标题与内容各占整行（单列网格里
+      // "2 / -1" 会退化为 0 跨度），并把卡片改为全宽。其余分支与宽档逐字共用同一份实现。
+      const backlogRow = (label, goals, key, vertical = false) => {
         // g-162: backlog 泳道折叠状态（g-258: 默认折叠，显式展开为 false）
-        const isCollapsed = collapsedLanes[key] !== false;
+        const isCollapsed = vertical ? false : collapsedLanes[key] !== false;
+        // 单列网格（纵向档）里没有第 2 条网格线，内容/标题必须占满整行
+        const rowSpan = vertical ? "1 / -1" : "2 / -1";
         const backlogBg = "rgba(0,0,0,.12)";
         // g-258: 优先使用实际已加载条数，未展开懒加载时回退 backlog_count 计数
         const count = (goals && goals.length > 0) ? goals.length : (b?.backlog_count ?? 0);
@@ -1579,7 +1607,7 @@
               }, "＋")),
             h("div", {
               key: key + "-collapsed-summary",
-              style: { gridColumn: "2 / -1", ...S.cell, background: isOverThisCollapsed && canDropHere ? "rgba(76,141,255,.10)" : backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
+              style: { gridColumn: rowSpan, ...S.cell, background: isOverThisCollapsed && canDropHere ? "rgba(76,141,255,.10)" : backlogBg, padding: "6px 8px", cursor: "pointer", userSelect: "none" },
               title: dgT('lane.expandTooltip'),
               className: isOverThisCollapsed && canDropHere ? "dg-cell-drop-active" : "",
               onClick: () => toggleLaneCollapse(key, false),
@@ -1604,10 +1632,12 @@
         }
         // 展开态：正常渲染
         const isOverThisCell = drag && drag.overLaneKey === key;
-        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, paddingRight: 40, position: "relative", background: backlogBg } },
+        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, paddingRight: 40, position: "relative", background: backlogBg, ...(vertical ? { gridColumn: "1 / -1" } : {}) } },
           label,
           // g-162: 泳道折叠按钮
-          h("button", {
+          // g-352：backlog 作为**唯一泳道**（vertical）时不提供折叠入口——它就是这个档位的全部
+          // 内容，折起来等于空板（且与「必须看到卡片」的负责人裁决相悖）；其余档位保持既有按钮。
+          vertical ? null : h("button", {
             style: { position: "absolute", left: "50%", right: "auto", bottom: 2 },
             className: "dg-lane-collapse",
             // a11y contract: "aria-label": "折叠泳道"
@@ -1631,7 +1661,7 @@
           .filter(Boolean);
         const flatCell = h("div", {
           key: key + "-flat",
-          style: { gridColumn: "2 / -1", minHeight: 40, borderTop: "1px solid rgba(128,128,128,.35)" },
+          style: { gridColumn: rowSpan, minHeight: 40, borderTop: "1px solid rgba(128,128,128,.35)" },
           className: "dg-backlog-lane" + (isOverThisCell ? " dg-cell-drop-active" : ""),
           onDragOver: drag ? (e) => {
             e.preventDefault();
@@ -1647,7 +1677,7 @@
             }
           } : undefined,
         },
-          h("div", { className: "dg-backlog-flat" },
+          h("div", { className: "dg-backlog-flat" + (vertical ? " dg-backlog-flat-vertical" : "") },
             orderedGoals.map((g) => {
               const defExpanded = g.status !== "delivered" && g.status !== "blocked";
               const expanded = expandedGoals[g.id] ?? defExpanded;
@@ -1707,12 +1737,12 @@
         if (sectionLoading['backlog']) {
           contentEl = h("div", {
             key: key + "-loading",
-            style: { gridColumn: "2 / -1", minHeight: 40, padding: "12px 16px", color: "var(--dsw-alias-label-secondary, #999)", fontSize: 13, borderTop: "1px solid rgba(128,128,128,.35)" }
+            style: { gridColumn: rowSpan, minHeight: 40, padding: "12px 16px", color: "var(--dsw-alias-label-secondary, #999)", fontSize: 13, borderTop: "1px solid rgba(128,128,128,.35)" }
           }, dgT('kanban.loading'));
         } else if (sectionError['backlog']) {
           contentEl = h("div", {
             key: key + "-error",
-            style: { gridColumn: "2 / -1", minHeight: 40, padding: "12px 16px", color: "var(--dsw-alias-danger, #dd6666)", fontSize: 13, borderTop: "1px solid rgba(128,128,128,.35)" }
+            style: { gridColumn: rowSpan, minHeight: 40, padding: "12px 16px", color: "var(--dsw-alias-danger, #dd6666)", fontSize: 13, borderTop: "1px solid rgba(128,128,128,.35)" }
           },
             dgT('kanban.error.fetch') + " ",
             h("button", {
@@ -1741,25 +1771,31 @@
       // g-352：单版本模式（根容器实测宽度 <360px）——阶段列由横向并排改为纵向堆叠（判据 3）：
       // 列模板退化为单列全宽，泳道内的阶段块依次堆叠（见 lane() 的 vertical 分支），
       // 卡面全宽可读、不需要横向滚动。宽档仍共用同一份横向模板。
-      const gridCols = singleVersionMode ? "minmax(0, 1fr)" : horizontalGridCols;
+      const gridCols = singleLaneMode ? "minmax(0, 1fr)" : horizontalGridCols;
       // Released lanes intentionally share the same computed template by reference.
       const releasedGridCols = gridCols;
 
       const rows = [];
-      if (singleVersionMode) {
+      if (singleLaneMode && viewBacklogOnly) {
+        // g-352（负责人裁决）：backlog 选定为「版本备选」时它是唯一泳道。**复用既有 backlogRow
+        // 渲染路径**（惰性明细 / 拖动落点 / 新建目标 / 排期入口全部同一条实现，不复制第二套），
+        // 第 4 参 vertical=true：单列全宽 + 强制展开（backlog 泳道默认折叠态在窄档里等于
+        // 「只有计数没有卡片」，必须显式展开）；卡片全宽见 constants.js 的 .dg-backlog-flat-vertical。
+        rows.push(...backlogRow("backlog", b.backlog, "backlog", true));
+      } else if (singleLaneMode) {
         // 判据 3：单版本模式只渲染选中版本**一个**泳道（阶段列纵向堆叠、全宽可读）。
         // 非版本泳道（独立目标/backlog/released）在该档不渲染；「全部版本」入口在头部选择器里保留。
         rows.push(...lane(`🏷️ ${singleVersion.name}`, singleVersion.goals, "v-" + singleVersion.slug, singleVersion.slug, 0, true, true));
       }
       let laneIndex = 0;
-      for (const v of (singleVersionMode ? [] : active)) {
+      for (const v of (singleLaneMode ? [] : active)) {
         rows.push(...lane(`🏷️ ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
         laneIndex++;
       }
       // g-223：如果所有版本都被隐藏（或存在 active 且 active 全部被隐藏），展示友好空状态提示行
       const totalVersionsCount = (b.versions ?? []).length;
       const visibleVersionsCount = active.length + released.length;
-      if (!singleVersionMode && totalVersionsCount > 0 && (visibleVersionsCount === 0 || (allActiveVersions.length > 0 && active.length === 0))) {
+      if (!singleLaneMode && totalVersionsCount > 0 && (visibleVersionsCount === 0 || (allActiveVersions.length > 0 && active.length === 0))) {
         const hintText = visibleVersionsCount === 0
           ? dgT('versionDrawer.allHidden', { count: totalVersionsCount })
           : dgT('versionDrawer.activeHidden', { count: allActiveVersions.length });
@@ -1792,14 +1828,14 @@
             }, dgT("versionDrawer.showAll"))),
         );
       }
-      if (!singleVersionMode) {
+      if (!singleLaneMode) {
         rows.push(...lane(dgT("lane.standalone"), b.standalone, "standalone", null, laneIndex));
         laneIndex++;
         rows.push(...backlogRow("backlog", b.backlog, "backlog"));
       }
 
       // g-352：单版本模式不渲染 released 折叠区（判据 3：DOM 中仅存在选中版本一个泳道）。
-      const releasedRows = (singleVersionMode ? [] : released).map((v, idx) => {
+      const releasedRows = (singleLaneMode ? [] : released).map((v, idx) => {
         const open = !!openReleased[v.slug];
         const count = (v.goals && v.goals.length > 0) ? v.goals.length : (v.goals_count ?? 0);
         let openContent = null;
@@ -2180,9 +2216,11 @@
                   "aria-label": dgT("view.pickVersionTooltip"),
                   "aria-expanded": showVersionPicker ? "true" : "false",
                   onClick: (e) => { e.stopPropagation(); setShowVersionPicker((v) => !v); },
-                }, dgT("view.pickVersion", { version: singleVersion ? singleVersion.name : dgT("view.allVersions") })),
+                }, dgT("view.pickVersion", { version: viewBacklogOnly ? dgT("view.backlogLane") : (singleVersion ? singleVersion.name : dgT("view.allVersions")) })),
                 showVersionPicker
-                  ? h("div", { style: { ...S.inlineMenu, minWidth: 220 }, onClick: (e) => e.stopPropagation() },
+                  // maxHeight + 纵向滚动：版本数量多时也必须够得到末尾的 backlog 选项（负责人裁决
+                  // 要求 backlog **必须可选**，不能因菜单被裁掉而实际不可达）。
+                  ? h("div", { style: { ...S.inlineMenu, minWidth: 220, maxHeight: "60vh", overflowY: "auto" }, onClick: (e) => e.stopPropagation() },
                   h("div", { style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 4px", borderBottom: "1px solid rgba(128,128,128,.2)" } },
                     dgT("view.pickVersionTooltip")),
                   h("div", {
@@ -2196,6 +2234,16 @@
                     style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
                     onClick: () => { setViewVersionSlug(v.slug); setShowVersionPicker(false); },
                   }, `${singleVersion && singleVersion.slug === v.slug ? "✓ " : "🏷️ "}${v.name || v.slug}`)),
+                  // g-352（负责人裁决）：backlog 也是单版本档下的一个「版本备选」——选中它 backlog
+                  // 成为**唯一泳道**（明细走既有惰性路径，见 backlogRow 的 vertical 分支）。
+                  // 位置与看板泳道顺序一致（活跃版本之后）；菜单带 maxHeight 滚动，版本再多也够得到。
+                  // 排期选择器**不提供**本选项（两条选择器语义不同，别混淆）。
+                  h("div", {
+                    key: "vp-backlog",
+                    className: "dg-schedule-version-item",
+                    style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+                    onClick: () => { setViewVersionSlug(VIEW_BACKLOG_SLUG); setShowVersionPicker(false); },
+                  }, `${viewBacklogOnly ? "✓ " : "📥 "}${dgT("view.backlogLane")}`),
                   active.length === 0
                     ? h("div", { style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 } }, dgT("goal.scheduleNoVersion"))
                     : null)
@@ -2240,19 +2288,12 @@
             }, "ws=" + (activeWs ?? "∅"))),
           // g-233：标题行最右侧增加搜索框
           h("div", {
-            style: {
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              marginLeft: "auto",
-              // g-352：搜索框保持自然宽度（flexShrink:0）——窄档下靠头部换行另起一行，
-              // 而不是被压成 54px 的窄条（真机 3082 实测：压窄后搜索框自身也会越框）
-              flexShrink: 0,
-              minWidth: 0,
-            },
+            // g-352（判据 5）：样式本体（含唯一新增的 min-width:0 门控）在 narrow-width.js 的
+            // searchBarWrapStyle 纯函数里——非窄档（含 conversation.view）返回的键集合与基线逐字一致。
+            style: searchBarWrapStyle(narrowActive),
             className: "dg-search-bar",
           },
-            h("div", { style: { position: "relative", display: "flex", alignItems: "center", minWidth: 0 } },
+            h("div", { style: searchBarInnerStyle(narrowActive) },
               h("input", {
                 ref: searchInputRef,
                 type: "text",
@@ -2382,7 +2423,7 @@
             }, dgT("createVersion.createBtn"))),
           // g-352：单版本模式下没有横向阶段列，阶段列头由 lane() 的纵向堆叠分支提供
           //（每个阶段块自带一行列头），故此处不再渲染表头行。
-          singleVersionMode ? null : STAGES.map((s) => {
+          singleLaneMode ? null : STAGES.map((s) => {
             // g-127：blocked 列头可点击切换折叠/展开
             // g-152：折叠态列头只显示 ▸（36px 窄条，竖条单元格已有 ⛔ 标识）
             if (s.key === "blocked") {
