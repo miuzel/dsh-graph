@@ -83,6 +83,129 @@ function scheduleTargetOptions(activeVersions, currentVersion, allowStandalone) 
   return opts;
 }
 
+/**
+ * g-352 负责人人工 gate 反馈①：折叠工具条弹层的**每一行都必须同时有图标与文字**。
+ *
+ * 图标是语言中立的符号（zh/en 共用同一套，故不进 i18n 词条；与仓库既有 🏷️/＋/⚙ 同口径），
+ * 文字取既有 i18n 标签并剥掉标签自带的前导符号与括号补充说明 —— 既避免「🏷️ 🏷️ 标签筛选」
+ * 式重复，也让 en 的长标签（`📇 Project Knowledge Base (Shared Entries)`）在窄弹层里可读。
+ * 本函数只做派生、不持有状态。
+ */
+const HEAD_PANEL_ICONS = {
+  refresh: "⟳",
+  tagfilter: "🏷️",
+  tagclear: "✕",
+  memory: "🧠",
+  shared: "📇",
+  settings: "⚙",
+  versionmanage: "🏷️",
+  createversion: "＋",
+};
+
+/** 剥掉文案的前导符号/空白，再剥掉尾部的括号补充说明（中英文括号都吃）。 */
+function stripPanelLabelDecorations(rawLabel) {
+  return String(rawLabel ?? "")
+    .replace(/[（(][^）)]*[）)]\s*$/u, "")
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .trim();
+}
+
+/**
+ * 弹层行的「图标 + 文字」标签（图标与文字都非空 ⇒ 每行同时有图标与文字）。
+ * @param {string} key 行标识（refresh/tagfilter/tagclear/memory/shared/settings）
+ * @param {string} rawLabel 既有 i18n 标签原文
+ * @returns {{icon: string, text: string, label: string}}
+ */
+function headPanelEntry(key, rawLabel) {
+  const icon = HEAD_PANEL_ICONS[key] ?? "";
+  const text = stripPanelLabelDecorations(rawLabel);
+  return { icon, text, label: icon ? icon + " " + text : text };
+}
+
+/** 「查看版本」选择器各选项的图标（与看板泳道一致：版本 🏷️ / backlog 📥 / 独立目标 📌）。 */
+const VIEW_OPTION_ICONS = { all: "▸", version: "🏷️", backlog: "📥", standalone: "📌" };
+
+/**
+ * 「查看版本」选择器的选项标签（判据 5①）：图标与看板泳道一致，且**选中勾选标记不替代图标**
+ * （✓ 与图标并存，而不是二选一）。图标同样是语言中立符号，zh/en 共用。
+ * @param {"all"|"version"|"backlog"|"standalone"} kind 选项种类
+ * @param {string} text 选项文字（来自 dgT）
+ * @param {boolean} selected 是否为当前选中项
+ */
+function viewOptionLabel(kind, text, selected) {
+  const icon = VIEW_OPTION_ICONS[kind] ?? "";
+  return (selected ? "✓ " : "") + (icon ? icon + " " : "") + String(text ?? "");
+}
+
+/** 「查看版本」触发器文字 + 下拉箭头（判据 5②：让「可点开」可发现）。 */
+function viewPickerTriggerText(text) {
+  return String(text ?? "") + " ▾";
+}
+
+/**
+ * g-352 att-003 第 9 项（负责人人工 gate 反馈）：「同一行按钮有大有小」——
+ * 把**同一行按钮**的尺寸口径收敛到**这一处**（唯一真源），头部/工具条/版本行/折叠弹层全部复用。
+ *
+ * 口径：同行文字按钮统一 height/line-height/字号/内边距/圆角基准；图标按钮是**与同行文字按钮
+ * 等高**的 1:1 方形（width = height），不得「一边小方块、一边大长条」。
+ */
+const ROW_BTN_METRICS = {
+  height: 26,
+  fontSize: 12,
+  lineHeight: "22px",
+  padding: "0 8px",
+  gap: 4,
+  verticalAlign: "middle",
+};
+
+/**
+ * 同行按钮内联样式（与 S.btn 叠加使用）。
+ * @param {{iconOnly?: boolean}} [opts] iconOnly=true ⇒ 等高 1:1 方形图标按钮
+ * @returns {object} React 内联样式对象
+ */
+function rowBtnStyle(opts) {
+  const iconOnly = !!opts?.iconOnly;
+  const base = {
+    height: ROW_BTN_METRICS.height,
+    boxSizing: "border-box",
+    fontSize: ROW_BTN_METRICS.fontSize,
+    lineHeight: ROW_BTN_METRICS.lineHeight,
+    padding: iconOnly ? "0" : ROW_BTN_METRICS.padding,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: ROW_BTN_METRICS.gap,
+    verticalAlign: ROW_BTN_METRICS.verticalAlign,
+  };
+  // 图标按钮：宽=高，且锁死最小宽度，避免被 flex 压扁成非方形
+  return iconOnly ? { ...base, width: ROW_BTN_METRICS.height, minWidth: ROW_BTN_METRICS.height } : base;
+}
+
+/**
+ * g-352 att-003 真机修正（第 1 项）：窄档下拉/选择器弹层的**锚定**——菜单右缘对齐**看板右缘**，
+ * 绝不左伸出侧栏被宿主裁掉（真机 439px 实测：原来的 right:0 锚在触发按钮右缘，240px 菜单左伸
+ * 172px 被侧栏裁掉 ⇒ 行文字全被吞，与「图标 + 文字齐备」的要求相悖）。
+ *
+ * 纯函数、无 DOM 依赖：调用方传入触发元素与看板根元素的 getBoundingClientRect()。
+ * 测量不可用（SSR / vm harness 假节点无 right）→ null，调用方回落 right:0（行为不变）。
+ * @param {{right?: number}|null} triggerRect
+ * @param {{right?: number, width?: number}|null} boardRect
+ * @param {number} [wantMinWidth] 菜单期望最小宽度（工具条 240 / 选择器 220）
+ * @returns {{right: number, minWidth: number}|null}
+ */
+function popoverAnchor(triggerRect, boardRect, wantMinWidth) {
+  const sright = Number(triggerRect?.right);
+  const bright = Number(boardRect?.right);
+  const bw = Number(boardRect?.width);
+  if (!Number.isFinite(sright) || !Number.isFinite(bright) || !Number.isFinite(bw) || bw <= 0) return null;
+  const want = Number.isFinite(Number(wantMinWidth)) && Number(wantMinWidth) > 0 ? Number(wantMinWidth) : 240;
+  return {
+    // 菜单右缘落到看板右缘：right 是相对触发元素右缘的偏移（负值 = 向右推）
+    right: Math.round(sright - bright),
+    minWidth: Math.max(160, Math.min(want, Math.round(bw) - 24)),
+  };
+}
+
 /** 「带附件不能回 backlog」的稳定错误码（dsh-graph-host 服务端 move-goal 端点下发）。 */
 const MOVE_TO_BACKLOG_ERROR_CODE = "move-to-backlog-has-attachments";
 
@@ -122,6 +245,9 @@ export {
   NARROW_TOOLBAR_MAX_WIDTH,
   NARROW_SINGLE_VERSION_MAX_WIDTH,
   MOVE_TO_BACKLOG_ERROR_CODE,
+  HEAD_PANEL_ICONS,
+  VIEW_OPTION_ICONS,
+  ROW_BTN_METRICS,
   boardWidthTier,
   shouldCollapseToolbar,
   isSingleVersionTier,
@@ -130,5 +256,10 @@ export {
   isMoveToBacklogRejection,
   searchBarWrapStyle,
   searchBarInnerStyle,
+  headPanelEntry,
+  viewOptionLabel,
+  viewPickerTriggerText,
+  rowBtnStyle,
+  popoverAnchor,
 };
 // <<<ESM-EXPORTS-END<<<

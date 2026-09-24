@@ -152,7 +152,12 @@
       // **版本备选** —— 它不是版本、而是「唯一泳道」，故与「全部版本」一样用哨兵值表示，
       // 绝不与任何版本 slug 混淆（版本 slug 就叫 "backlog" 也不会被误判）。
       const VIEW_BACKLOG_SLUG = "__backlog__";
+      // g-352（负责人人工 gate 反馈 2026-09-24 → att-003 第 5 项③）：单泳道档 = {版本, backlog, 独立目标}。
+      // 独立目标与 backlog 同口径：哨兵值 + **复用既有 lane 渲染路径**（真有卡片，不是只有计数）。
+      const VIEW_STANDALONE_SLUG = "__standalone__";
       const [showVersionPicker, setShowVersionPicker] = React.useState(false);
+      // g-352 att-003：弹层锚定（真机裁切修正）——{right, minWidth}；测量不可用时为 null（回落 right:0）
+      const [popoverAnchorState, setPopoverAnchorState] = React.useState(null);
       const versionPickerRef = React.useRef(null);
       const headOverflowRef = React.useRef(null);
       const [orderMap, setOrderMap] = React.useState({}); // {laneKey: {stageKey: goalId[]}}
@@ -872,6 +877,9 @@
       // 与单版本收窄完全同口径（搜索激活时一律挂起，保证 g-233 的搜索匹配不被视图过滤藏掉）；
       // 同样是纯派生，不新增状态真源、不落任何持久化键。
       const viewBacklogOnly = !!(narrowSingleTier && !searchActiveQuery && viewVersionSlug === VIEW_BACKLOG_SLUG);
+      // g-352（att-003 第 5 项③）：独立目标也可作为单泳道档的视图备选，口径与 backlog 完全一致
+      //（搜索激活时一律挂起；纯派生，不新增状态真源、不落任何持久化键）。
+      const viewStandaloneOnly = !!(narrowSingleTier && !searchActiveQuery && viewVersionSlug === VIEW_STANDALONE_SLUG);
 
       // g-352 降级：栏宽拉回全宽（或离开单版本档）时收起窄宽度专属浮层，不残留、不抛错（判据 7）。
       React.useEffect(() => {
@@ -923,13 +931,98 @@
       // 与 g-233 的优先级：搜索处于激活态时**挂起**单泳道收窄，保证搜索匹配不被视图过滤藏掉。
       // 选中态四义：null=未显式选择（默认收窄到第一个可见版本）/ slug=该版本 /
       //   VIEW_ALL_VERSIONS_SLUG=「全部版本」（显式退出收窄，回到多泳道横向档）/
-      //   VIEW_BACKLOG_SLUG=backlog 唯一泳道（负责人裁决；见 viewBacklogOnly）。
-      const singleVersion = (narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG)
+      //   VIEW_BACKLOG_SLUG=backlog 唯一泳道（负责人裁决；见 viewBacklogOnly）/
+      //   VIEW_STANDALONE_SLUG=独立目标唯一泳道（att-003 第 5 项③；见 viewStandaloneOnly）。
+      const singleVersion = (narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && !viewStandaloneOnly && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG)
         ? pickSingleVersion(active, viewVersionSlug)
         : null;
-      // 「单泳道档」= 收窄到某一个版本 **或** 收窄到 backlog（两者都用单列全宽纵向排布，
-      // 且都只渲染一个泳道；released/standalone 在该档一律不渲染）。
-      const singleLaneMode = !!(narrowSingleTier && !searchActiveQuery && (singleVersion || viewBacklogOnly));
+      // 「单泳道档」= 收窄到某一个版本 **或** 收窄到 backlog / 独立目标（三者都用单列全宽纵向排布，
+      // 且都只渲染一个泳道；released 在该档一律不渲染）。
+      const singleLaneMode = !!(narrowSingleTier && !searchActiveQuery && (singleVersion || viewBacklogOnly || viewStandaloneOnly));
+
+      // ===== g-352：头部/泳道共用的按钮与「查看版本」选择器（样式与元素都在泳道渲染之前就位）=====
+      // g-352 att-003 第 9 项：工具条按钮的尺寸口径**收敛到 narrow-width.js 的 rowBtnStyle()**
+      //（唯一真源）——高度/字号/行高/内边距/圆角基准只此一处，头部、工具条、版本行、折叠弹层
+      // 全部复用；图标按钮走 rowBtnStyle({ iconOnly: true })（与同行文字按钮等高的 1:1 方形）。
+      // 展开后的键值与原字面量**逐字一致**（会话内 conversation.view 路径样式零变化）。
+      const tbBtnStyle = { ...S.btn, ...rowBtnStyle(), marginLeft: 8 };
+      // 兜底：把按钮搬进弹层并不能解决「触发按钮自身」的溢出——S.head 单行 flex 的每个子项默认
+      // min-width:auto 不可收缩到内容宽度以下，文字会顶出按钮框。同时给 min-width:0 + 省略号
+      //（与 constants.js 的 .dg-narrow-head-btn 同款）才真正无溢出（判据 2）。
+      const narrowHeadBtnStyle = narrowActive
+        ? { minWidth: 0, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
+        : null;
+      const headBtnStyle = narrowHeadBtnStyle ? { ...tbBtnStyle, ...narrowHeadBtnStyle } : tbBtnStyle;
+      const headBtnClass = "dg-btn" + (narrowActive ? " dg-narrow-head-btn" : "");
+      // 单泳道档的泳道头部预留「选择器 + [ + ]」的横向空间（选择器在 right:40、[ + ] 在 right:6；
+      // 该字面量与既有的 40px 标题预留区分开，不动既有四条标题预留）
+      const singleLaneLabelPaddingRight = 136;
+      // 当前视图名（选择器触发器文案；独立目标与 backlog 各按自己的泳道口径显示）
+      const viewPickerCurrentLabel = viewBacklogOnly
+        ? dgT("view.backlogLane")
+        : (viewStandaloneOnly ? dgT("lane.standalone") : (singleVersion ? singleVersion.name : dgT("view.allVersions")));
+      // g-352 att-003 第 8 项：版本选择下拉从头部移入**版本泳道头部行**（创建 goal 的 [ + ] 左侧）。
+      // inLane=true ⇒ 绝对定位到泳道标题右侧、紧贴 [ + ] 左边；inLane=false ⇒ 头部行内联（「全部版本」态）。
+      const renderVersionPicker = (inLane) => h("span", {
+        key: inLane ? "vp-lane" : "tb-version-picker",
+        ref: versionPickerRef,
+        style: inLane
+          ? { position: "absolute", right: 40, top: 8, display: "inline-block", minWidth: 0, maxWidth: 110, zIndex: 5 }
+          : { display: "inline-block", position: "relative", verticalAlign: "middle", minWidth: 0, maxWidth: "100%", flexShrink: 0 },
+      },
+        h("button", {
+          style: inLane ? { ...headBtnStyle, maxWidth: 110 } : headBtnStyle,
+          className: headBtnClass + " dg-version-picker-trigger",
+          title: dgT("view.pickVersionTooltip"),
+          "aria-label": dgT("view.pickVersionTooltip"),
+          "aria-expanded": showVersionPicker ? "true" : "false",
+          onClick: (e) => { e.stopPropagation(); anchorPopover(versionPickerRef.current, 220); setShowVersionPicker((v) => !v); },
+        }, viewPickerTriggerText(dgT("view.pickVersion", { version: viewPickerCurrentLabel }))),
+        showVersionPicker
+          // maxHeight + 纵向滚动：版本数量多时也必须够得到末尾的 backlog / 独立目标选项（负责人裁决
+          // 要求 backlog **必须可选**，不能因菜单被裁掉而实际不可达）。
+          // g-352 att-003 真机修正：向左展开（left:auto + right:0）——按 left:0 右伸会被侧栏右缘裁掉
+          ? h("div", { style: { ...S.inlineMenu, left: "auto", right: popoverAnchorState?.right ?? 0,
+                                 minWidth: popoverAnchorState?.minWidth ?? 220, maxHeight: "60vh", overflowY: "auto" }, onClick: (e) => e.stopPropagation() },
+          h("div", { style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 4px", borderBottom: "1px solid rgba(128,128,128,.2)" } },
+            dgT("view.pickVersionTooltip")),
+          h("div", {
+            className: "dg-schedule-version-item",
+            style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+            onClick: () => { setViewVersionSlug(VIEW_ALL_VERSIONS_SLUG); setShowVersionPicker(false); },
+          }, viewOptionLabel("all", dgT("view.allVersions"), viewVersionSlug === VIEW_ALL_VERSIONS_SLUG)),
+          ...active.map((v) => h("div", {
+            key: "vp-" + v.slug,
+            className: "dg-schedule-version-item",
+            style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+            onClick: () => { setViewVersionSlug(v.slug); setShowVersionPicker(false); },
+          }, viewOptionLabel("version", v.name || v.slug, !!(singleVersion && singleVersion.slug === v.slug)))),
+          // g-352（负责人裁决）：backlog 也是单泳道档下的一个「版本备选」——选中它 backlog
+          // 成为**唯一泳道**（明细走既有惰性路径，见 backlogRow 的 vertical 分支）。
+          // 排期选择器**不提供**本选项（两条选择器语义不同，别混淆）。
+          h("div", {
+            key: "vp-backlog",
+            className: "dg-schedule-version-item",
+            style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+            onClick: () => { setViewVersionSlug(VIEW_BACKLOG_SLUG); setShowVersionPicker(false); },
+          }, viewOptionLabel("backlog", dgT("view.backlogLane"), viewBacklogOnly)),
+          // g-352 att-003 第 5 项③：独立目标同样是单泳道档的视图备选（选中 → 唯一泳道且真有卡片）。
+          h("div", {
+            key: "vp-standalone",
+            className: "dg-schedule-version-item",
+            style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+            onClick: () => { setViewVersionSlug(VIEW_STANDALONE_SLUG); setShowVersionPicker(false); },
+          }, viewOptionLabel("standalone", dgT("lane.standalone"), viewStandaloneOnly)),
+          active.length === 0
+            ? h("div", { style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 } }, dgT("goal.scheduleNoVersion"))
+            : null)
+          : null);
+      // 单泳道档（<360px 单版本 / backlog / 独立目标）：选择器就挂在这一行泳道头上 ⇒ 任何档位
+      // 都能切回「全部版本」或换一个版本可见（判据 3：入口保留、出口可达）。
+      const laneVersionPickerEl = singleLaneMode ? renderVersionPicker(true) : null;
+      // 弹层锚定：菜单右缘对齐看板右缘（避免被侧栏裁掉；判据来自同一份纯函数，便于断言）
+      const anchorPopover = (triggerEl, wantMinWidth) =>
+        setPopoverAnchorState(popoverAnchor(triggerEl?.getBoundingClientRect?.(), boardRootRef.current?.getBoundingClientRect?.(), wantMinWidth));
       const released = allReleasedVersions.filter((v) => !hiddenVersionSet.has(v.slug));
       // 全量目标 id→status 映射（依赖徽章状态化，发现#23：已交付依赖算「依赖满足」）
       const goalStatus = {};
@@ -955,6 +1048,26 @@
       for (const v of [...active, ...released]) for (const g of (v.goals ?? [])) goalVersionLabel[g.id] = v.name;
       for (const g of b.standalone) goalVersionLabel[g.id] = dgT("lane.standalone");
       for (const g of b.backlog) goalVersionLabel[g.id] = "backlog";
+      // g-352 att-003 第 6 项：确认入口的**单一实现**——宽档「确认」列列头与窄档（单泳道档）
+      // 「确认」阶段块头共用这一个按钮构造器（同一 class / 同一状态派生 / 同一二次确认弹窗路径）。
+      // iconized=true 只影响可见文案（补「图标 + 文字」），行为与校验路径完全不变。
+      const renderBatchAcceptButton = (iconized) => {
+        const ba = batchAcceptButtonState(reviewGoals.length);
+        return h("button", {
+          style: { ...S.btn, fontSize: 11, padding: "1px 8px", lineHeight: 1.4,
+                   whiteSpace: "nowrap", flexShrink: 0, opacity: ba.disabled ? 0.5 : 1 },
+          className: "dg-btn dg-batch-accept-btn",
+          disabled: ba.disabled || batchAcceptLoading,
+          title: ba.title,
+          "aria-label": ba.label,
+          onClick: (e) => {
+            e.stopPropagation();
+            if (ba.disabled || batchAcceptLoading) return;
+            setBatchAcceptFailures(null);
+            setBatchAcceptOpen(true);
+          },
+        }, batchAcceptLoading ? dgT("common.submitting") : (iconized ? "✅ " + ba.label : ba.label));
+      };
       // 批量提交：逐个走非 force accept（语义与逐卡「接受」逐字一致，详见 batch-accept.js），
       // 限流并发 + 部分失败容错 + 整批一条聚合主管通知 + 完成刷板（被接受目标离开确认列）。
       async function submitBatchAccept(goalIds) {
@@ -1504,6 +1617,8 @@
           style: {
             ...S.laneLabel,
                  paddingRight: 40,
+            // g-352 att-003 第 8 项：单泳道档的选择器挂在标题右侧（[ + ] 左边）⇒ 标题预留更宽的右侧空间
+            ...(vertical ? { paddingRight: singleLaneLabelPaddingRight } : {}),
             position: "relative",
             background: labelBg,
             cursor: version ? "pointer" : "default",
@@ -1526,9 +1641,15 @@
           } : undefined,
         },
           label,
+          // g-352 att-003 第 8 项：「查看版本」下拉就挂在版本行标题里、[ + ] 左侧（单泳道档唯一一行）
+          vertical ? laneVersionPickerEl : null,
           // g-129: 每个 lane 标题右下角加「+」按钮（版本 lane 预选版本，独立/backlog 进 backlog）
           h("button", {
-            style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+            style: {
+              ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto",
+              // g-352 att-003 第 9 项：单泳道档的 [ + ] 与同行「查看版本」下拉等高（26×26 方形）
+              ...(vertical ? rowBtnStyle({ iconOnly: true }) : { fontSize: 11, padding: "0 5px", lineHeight: 1.4 }),
+            },
             className: "dg-btn",
             title: key === "standalone" ? dgT('lane.newStandaloneGoal') : (version ? dgT('lane.newGoalInVersion', { version }) : dgT('lane.newBacklogGoal')),
             onClick: (e) => {
@@ -1555,8 +1676,16 @@
             style: { minWidth: 0, display: "flex", flexDirection: "column", gap: 4 },
           },
             h("div", {
-              style: { ...S.stageHead, textAlign: "left", padding: "4px 6px 2px", opacity: 0.8 },
-            }, s.label),
+              // g-352 att-003 第 6 项：单泳道档没有横向列头（批量入口原在列头里，会随之消失）
+              // ⇒ 在「确认」阶段块头补同构入口（同一个 renderBatchAcceptButton 工厂、
+              //  同一二次确认弹窗、逐目标走既有单卡「接受」路径；失败项在弹窗内逐条列出）。
+              // 语义边界：这是**人工在 UI 上点击**，等价于人工 verdict ⇒ 允许批量；
+              //  不新增任何后端批量路径，也不为 agent/自动流程提供自动交付入口。
+              style: { ...S.stageHead, textAlign: "left", padding: "4px 6px 2px", opacity: 0.8,
+                       display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 },
+            },
+              h("span", { style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" } }, s.label),
+              s.key === "confirm" ? renderBatchAcceptButton(true) : null),
             cells[sIdx]));
           return [labelEl, h("div", {
             key: key + "-vstack",
@@ -1632,8 +1761,10 @@
         }
         // 展开态：正常渲染
         const isOverThisCell = drag && drag.overLaneKey === key;
-        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, paddingRight: 40, position: "relative", background: backlogBg, ...(vertical ? { gridColumn: "1 / -1" } : {}) } },
+        const labelEl = h("div", { key: key + "-label", style: { ...S.laneLabel, paddingRight: 40, position: "relative", background: backlogBg, ...(vertical ? { gridColumn: "1 / -1", paddingRight: singleLaneLabelPaddingRight } : {}) } },
           label,
+          // g-352 att-003 第 8 项：backlog 作为唯一泳道时，选择器同样挂在这一行标题里（[ + ] 左侧）
+          vertical ? laneVersionPickerEl : null,
           // g-162: 泳道折叠按钮
           // g-352：backlog 作为**唯一泳道**（vertical）时不提供折叠入口——它就是这个档位的全部
           // 内容，折起来等于空板（且与「必须看到卡片」的负责人裁决相悖）；其余档位保持既有按钮。
@@ -1649,7 +1780,11 @@
             },
           }, h("span", { className: "dg-lane-collapse-triangle" })),
           h("button", {
-            style: { ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto", fontSize: 11, padding: "0 5px", lineHeight: 1.4 },
+            style: {
+              ...S.btn, position: "absolute", right: 6, top: 8, bottom: "auto",
+              // g-352 att-003 第 9 项：单泳道档的 [ + ] 与同行「查看版本」下拉等高（26×26 方形）
+              ...(vertical ? rowBtnStyle({ iconOnly: true }) : { fontSize: 11, padding: "0 5px", lineHeight: 1.4 }),
+            },
             className: "dg-btn",
             title: dgT('lane.newBacklogGoal'),
             onClick: () => openCreateGoal(null),
@@ -1782,10 +1917,17 @@
         // 第 4 参 vertical=true：单列全宽 + 强制展开（backlog 泳道默认折叠态在窄档里等于
         // 「只有计数没有卡片」，必须显式展开）；卡片全宽见 constants.js 的 .dg-backlog-flat-vertical。
         rows.push(...backlogRow("backlog", b.backlog, "backlog", true));
+      } else if (singleLaneMode && viewStandaloneOnly) {
+        // g-352（att-003 第 5 项③）：独立目标作为唯一泳道时，**复用既有 lane 渲染路径**
+        //（卡片 / 拖动 / 新建入口全部同一条实现，不复制第二套），从而「真有卡片」而非只有计数。
+        // 第 6 参 collapsible=false（负责人人工 gate 反馈④：只有一个泳道时不要折叠开关）。
+        rows.push(...lane(dgT("lane.standalone"), b.standalone, "standalone", null, 0, false, true));
       } else if (singleLaneMode) {
         // 判据 3：单版本模式只渲染选中版本**一个**泳道（阶段列纵向堆叠、全宽可读）。
         // 非版本泳道（独立目标/backlog/released）在该档不渲染；「全部版本」入口在头部选择器里保留。
-        rows.push(...lane(`🏷️ ${singleVersion.name}`, singleVersion.goals, "v-" + singleVersion.slug, singleVersion.slug, 0, true, true));
+        // 第 6 参 collapsible=false：负责人人工 gate 反馈④——只有一个泳道时不给版本头部 ▲/▼ 折叠开关
+        //（该档下折叠起来等于空板；collapsedLanes 在宽档留下的折叠记忆在此档也被忽略）。
+        rows.push(...lane(`🏷️ ${singleVersion.name}`, singleVersion.goals, "v-" + singleVersion.slug, singleVersion.slug, 0, false, true));
       }
       let laneIndex = 0;
       for (const v of (singleLaneMode ? [] : active)) {
@@ -2034,44 +2176,37 @@
       // g-216: 判定是否有任何弹窗或抽屉处于打开态
       const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer || showSharedPanel || showMemoryModal || showTagFilterModal);
 
-      const tbBtnStyle = {
-        ...S.btn,
-        marginLeft: 8,
-        height: 26,
-        boxSizing: "border-box",
-        fontSize: 12,
-        lineHeight: "22px",
-        padding: "0 8px",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 4,
-        verticalAlign: "middle",
-      };
       // g-352：窄宽度适配**取代** g-330 的纯 CSS 最小适配（那条 `.dg-head-sidebar` 换行规则）。
       // 断点以看板根容器实测宽度为准（`boardWidth`，见上方 ResizeObserver），且只在 host="sidebar"
       // 的右侧栏实例生效：会话内 conversation.view 路径 narrowActive 恒为 false ⇒ 与 g-330 之前逐字一致。
-      // 兜底：把按钮搬进弹层并不能解决「触发按钮自身」的溢出——S.head 单行 flex 的每个子项默认
-      // min-width:auto 不可收缩到内容宽度以下，文字会顶出按钮框。同时给 min-width:0 + 省略号
-      //（与 constants.js 的 .dg-narrow-head-btn 同款）才真正无溢出（判据 2）。
-      const narrowHeadBtnStyle = narrowActive
-        ? { minWidth: 0, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
-        : null;
-      const headBtnStyle = narrowHeadBtnStyle ? { ...tbBtnStyle, ...narrowHeadBtnStyle } : tbBtnStyle;
-      const headBtnClass = "dg-btn" + (narrowActive ? " dg-narrow-head-btn" : "");
-      // g-352：窄档弹层内的按钮集合——与宽档平铺的工具条**同一批功能**（刷新/标签筛选/[清空标签]/
-      // 记忆/知识库/设置/显示已归档），只是排成整行。宽档保留原有的字面量渲染（会话内路径与 g-324
-      // 的刷新按钮源契约因此逐字不变），这里只描述窄档弹层需要的标签与动作。
-      const headPanelItems = [
-        { key: "refresh", label: dgT("common.refresh"), title: dgT("common.refresh"), onClick: load },
-        { key: "tagfilter", label: tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title"), title: dgT("tagFilter.title"), onClick: () => setShowTagFilterModal(true) },
-        tagFilter.length > 0 ? { key: "tagclear", label: dgT("tagFilter.clear"), title: dgT("tagFilter.clear"), onClick: () => setTagFilter([]) } : null,
-        { key: "memory", label: dgT("memory.btn"), title: dgT("memory.title"), onClick: () => setShowMemoryModal(true) },
-        { key: "shared", label: dgT("shared.title").split("（")[0], title: dgT("shared.title"), onClick: () => setShowSharedPanel(true) },
-        { key: "settings", label: "⚙", title: dgT("settings.title"), onClick: () => setShowSettings(true) },
-      ].filter(Boolean)
-        // 点击任一动作先收起本下拉再执行（避免下拉叠浮层）
-        .map((it) => ({ ...it, onClick: () => { setShowHeadOverflow(false); it.onClick(); } }));
+      //（工具条按钮样式 tbBtnStyle / 窄档兜底 headBtnStyle 已在泳道渲染之前就位，见上方。
+      //  窄档弹层内的按钮集合——与宽档平铺的工具条**同一批功能**（刷新/标签筛选/[清空标签]/
+      //  记忆/知识库/设置/版本管理/创建版本/显示已归档），只是排成整行。宽档保留原有的字面量渲染
+      //（会话内路径与 g-324 的刷新按钮源契约因此逐字不变），这里只描述窄档弹层需要的标签与动作。
+      //  行的动作与 tooltip 仍是既有实现；标签（图标 + 文字）由 headPanelEntry 统一派生。）
+      const headPanelRows = [
+        { key: "refresh", label: dgT("common.refresh"), title: dgT("common.refresh"), action: load },
+        { key: "tagfilter", label: tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title"), title: dgT("tagFilter.title"), action: () => setShowTagFilterModal(true) },
+        tagFilter.length > 0 ? { key: "tagclear", label: dgT("tagFilter.clear"), title: dgT("tagFilter.clear"), action: () => setTagFilter([]) } : null,
+        { key: "memory", label: dgT("memory.btn"), title: dgT("memory.title"), action: () => setShowMemoryModal(true) },
+        { key: "shared", label: dgT("shared.title"), title: dgT("shared.title"), action: () => setShowSharedPanel(true) },
+        { key: "settings", label: dgT("settings.title"), title: dgT("settings.title"), action: () => setShowSettings(true) },
+        // g-352 att-003 第 7 项：窄档下「版本管理 / 创建版本」同样收进本下拉（图标 + 文字齐备）
+        { key: "versionmanage", label: dgT("versionDrawer.title"), title: dgT("versionDrawer.title"), action: () => setShowVersionDrawer(true) },
+        { key: "createversion", label: dgT("createVersion.createBtn"), title: dgT("createVersion.createBtn"), action: () => { setShowCreateVersion(true); setNewVersionSlug(""); setNewVersionName(""); setCreateVersionNote(null); } },
+      ].filter(Boolean).map((it) => {
+        const entry = headPanelEntry(it.key, it.label);
+        return {
+          key: it.key,
+          icon: entry.icon,
+          text: entry.text,
+          label: entry.label,
+          title: it.title,
+          // 点击任一动作先收起本下拉再执行（避免下拉叠浮层）
+          onClick: () => { setShowHeadOverflow(false); it.action(); },
+        };
+      });
+      const headPanelItems = headPanelRows;
       // g-110: 显示已归档目标的 checkbox（宽档位于 DEBUG 信息左侧；窄档收进弹层）
       const archivedToggle = h("label", {
         key: "tb-archived",
@@ -2083,211 +2218,33 @@
           onChange: (e) => setShowArchived(e.target.checked),
         }),
         dgT("card.archived"));
-      return h(
-        "div",
-        { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
-          className: hasModal ? "dg-kanban-root dg-modal-open" : "dg-kanban-root",
-          "data-dsh-graph-kanban": "",
-          onDragLeave: drag ? (e) => {
-             // 进入子元素不清除；离开整个看板内容（如进入页面顶部/底部边缘、
-             // header/composer 等视口触发区）时只清除悬停落点，不结束整个拖拽——
-             // g-173：结束 drag 会让 g-157 自动滚动 effect 立即卸载，边缘自动滚动失效；
-             // 保持 drag 存活，回到看板时由单元格 onDragOver 重新建立落点，
-             // 真正的清理仍由 dragend/drop/取消（原生事件）路径完成。
-             if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
-               setDrag((d) => (d ? { ...d, overGoalId: null, overStageKey: null, overLaneKey: null, overHalf: null } : d));
-             }
-           } : undefined },
-        h("style", null, HOVER_CSS),
-        // g-352：右侧栏实例（host="sidebar"）的头部布局：style 仍是 S.head **本体**（会话内
-        // sidebarHost=false ⇒ 无额外样式键、className 为 undefined，DOM/样式逐字不变，判据 5）；
-        // 右侧栏专属的布局兜底走 .dg-head-sidebar（见 constants.js：放不下就换行 + 按钮不压缩）。
-        // 真正的窄宽度适配是测量驱动的：<480px 工具条整批收进下拉容器、<360px 单版本模式。
-        h("div", { style: S.head, className: sidebarHost ? "dg-head-sidebar" : undefined },
-          // g-352：窄档下标题不内部折行（nowrap + min-width:auto ⇒ 保持自然宽度，由头部换行让位）
-          h("strong", { style: narrowActive ? { whiteSpace: "nowrap", flexShrink: 0 } : undefined }, "dsh-graph"),
-          // g-174：标题栏显示插件版本，点击以新标签打开插件官网
-          h("a", {
-            href: "https://github.com/miuzel/dsh-graph",
-            target: "_blank",
-            rel: "noreferrer",
-            title: "dsh-graph",
-            style: { ...S.meta, color: "var(--dsw-alias-state-business-primary, #8ab4ff)", cursor: "pointer", textDecoration: "underline", ...(narrowActive ? { whiteSpace: "nowrap", flexShrink: 0 } : {}) },
-          }, "version: " + PLUGIN_VERSION),
-          // g-214：局部化倒计时组件渲染数据更新时间及剩余秒数倒计时
-          // g-324：refreshSignal 为「一次刷新流程完成」的单调计数（load() 汇聚点自增），
-          // 倒计时以它而非 generated_at 变化作为重置终点——手动刷新在 304 / watcher 缓存
-          // 命中（generated_at 不变）时也立即回到完整周期。
-          h(RefreshCountdown, {
-            generatedAt: b.generated_at,
-            refreshSignal: refreshCycle,
-            intervalSec: refreshIntervalSec,
-            onTriggerRefresh: load,
-          }),
-          // ===== g-352：宽档平铺 / 窄档折叠 =====
-          // 宽档（根容器实测宽度 ≥480px 或非右侧栏实例）：工具条按钮与显示归档开关原地平铺，
-          // 与 g-330 之前逐字一致（会话内 conversation.view 恒走此分支）。
-          // 窄档（<480px）：同一批按钮原样收进一个弹层容器（headPanelItems），头部只留一个触发按钮——
-          // 触发按钮自身同样带 min-width:0 + 省略号兜底（判据 2）。
-          narrowActive ? null : h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, dgT("common.refresh")),
-          // g-187：顶部标签筛选弹层入口
-          narrowActive ? null : h("button", {
-            style: { ...tbBtnStyle, ...(tagFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
-            className: "dg-btn" + (tagFilter.length > 0 ? " dg-btn-active" : ""),
-            title: dgT("tagFilter.title"),
-            onClick: () => setShowTagFilterModal(true),
-          }, tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title")),
-          narrowActive || tagFilter.length === 0
-            ? null
-            : h("button", {
-                className: "dg-btn",
-                style: { ...tbBtnStyle, marginLeft: 4, padding: "0 6px", fontSize: 11 },
-                title: dgT("tagFilter.clear"),
-                onClick: () => setTagFilter([]),
-              }, dgT("tagFilter.clear")),
-          // g-105: 记忆管理按钮（位于设置按钮左侧）
-          narrowActive ? null : h("button", {
-            style: tbBtnStyle,
-            className: "dg-btn",
-            title: dgT("memory.title"),
-            onClick: () => setShowMemoryModal(true),
-          }, dgT("memory.btn")),
-          // g-183: 项目知识库面板入口
-          narrowActive ? null : h("button", {
-            style: tbBtnStyle,
-            className: "dg-btn",
-            title: dgT("shared.title"),
-            onClick: () => setShowSharedPanel(true),
-          }, dgT("shared.title").split("（")[0]),
-          // g-132: 右上角齿轮 → 看板设置
-          narrowActive ? null : h("button", {
-            style: { ...tbBtnStyle, padding: "0 7px", fontSize: 14 },
-            className: "dg-btn",
-            title: dgT("settings.title"),
-            onClick: () => setShowSettings(true),
-          }, "⚙"),
-          // g-110: 显示已归档目标的 checkbox（移至右侧，DEBUG 信息左侧，布局更规整）
-          narrowActive ? null : archivedToggle,
-          narrowActive
-            // g-352 窄档（<480px）：工具条收进一个**下拉容器**。容器与选项行复用既有内联下拉实现
-            //（helpers.js 的 S.inlineMenu 样式 token + .dg-schedule-version-item 行样式，
-            // 即 g-306 排期版本选择器 card.js:246-291 的那一套）⇒ 全仓仍只有一套下拉实现，
-            // 不引入第三套；也不新增内联 S.overlay 浮层调用点（g-181/g-343 的 19 处计数契约零回归）。
-            // 锚点靠右（left:auto + right:0），窄容器里也不会被 S.wrap 的横向滚动裁掉。
-            ? h("span", { key: "tb-overflow", ref: headOverflowRef, style: { display: "inline-block", position: "relative", verticalAlign: "middle", minWidth: 0, flexShrink: 0 } },
-                h("button", {
-                  style: headBtnStyle,
-                  className: headBtnClass + " dg-head-overflow-trigger",
-                  title: dgT("toolbar.moreTooltip"),
-                  "aria-label": dgT("toolbar.moreTooltip"),
-                  "aria-expanded": showHeadOverflow ? "true" : "false",
-                  onClick: () => setShowHeadOverflow((v) => !v),
-                }, dgT("toolbar.more")),
-                showHeadOverflow
-                  ? h("div", {
-                      style: { ...S.inlineMenu, left: "auto", right: 0, minWidth: 240, maxWidth: 320, zIndex: 100000 },
-                      onClick: (e) => e.stopPropagation(),
-                    },
-                      h("div", { style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 6px", borderBottom: "1px solid rgba(128,128,128,.2)" } },
-                        dgT("toolbar.moreTitle")),
-                      ...headPanelItems.map((it) => h("button", {
-                        key: "ov-" + it.key,
-                        className: "dg-btn dg-narrow-head-btn dg-narrow-panel-btn",
-                        style: {
-                          ...S.btn, width: "100%", minWidth: 0, maxWidth: "100%",
-                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                          textAlign: "left", justifyContent: "flex-start", margin: "4px 0 0",
-                        },
-                        title: it.title,
-                        onClick: it.onClick,
-                      }, it.label)),
-                      // 显示已归档开关：与宽档头部复用同一个元素定义（archivedToggle）
-                      h("div", { style: { minWidth: 0, marginTop: 6, padding: "0 2px" } }, archivedToggle))
-                  : null)
-            : null,
-          // g-352：单版本档（<360px）头部放不下的「查看版本」选择器触发按钮——
-          // 与工具条折叠同一个兜底样式；下拉本体与排期版本选择器共用 S.inlineMenu（零第三套下拉）。
-          narrowSingleTier
-            ? h("span", { key: "tb-version-picker", ref: versionPickerRef, style: { display: "inline-block", position: "relative", verticalAlign: "middle", minWidth: 0, maxWidth: "100%", flexShrink: 0 } },
-                h("button", {
-                  style: headBtnStyle,
-                  className: headBtnClass + " dg-version-picker-trigger",
-                  title: dgT("view.pickVersionTooltip"),
-                  "aria-label": dgT("view.pickVersionTooltip"),
-                  "aria-expanded": showVersionPicker ? "true" : "false",
-                  onClick: (e) => { e.stopPropagation(); setShowVersionPicker((v) => !v); },
-                }, dgT("view.pickVersion", { version: viewBacklogOnly ? dgT("view.backlogLane") : (singleVersion ? singleVersion.name : dgT("view.allVersions")) })),
-                showVersionPicker
-                  // maxHeight + 纵向滚动：版本数量多时也必须够得到末尾的 backlog 选项（负责人裁决
-                  // 要求 backlog **必须可选**，不能因菜单被裁掉而实际不可达）。
-                  ? h("div", { style: { ...S.inlineMenu, minWidth: 220, maxHeight: "60vh", overflowY: "auto" }, onClick: (e) => e.stopPropagation() },
-                  h("div", { style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 4px", borderBottom: "1px solid rgba(128,128,128,.2)" } },
-                    dgT("view.pickVersionTooltip")),
-                  h("div", {
-                    className: "dg-schedule-version-item",
-                    style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
-                    onClick: () => { setViewVersionSlug(VIEW_ALL_VERSIONS_SLUG); setShowVersionPicker(false); },
-                  }, `${viewVersionSlug === VIEW_ALL_VERSIONS_SLUG ? "✓ " : "▸ "}${dgT("view.allVersions")}`),
-                  ...active.map((v) => h("div", {
-                    key: "vp-" + v.slug,
-                    className: "dg-schedule-version-item",
-                    style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
-                    onClick: () => { setViewVersionSlug(v.slug); setShowVersionPicker(false); },
-                  }, `${singleVersion && singleVersion.slug === v.slug ? "✓ " : "🏷️ "}${v.name || v.slug}`)),
-                  // g-352（负责人裁决）：backlog 也是单版本档下的一个「版本备选」——选中它 backlog
-                  // 成为**唯一泳道**（明细走既有惰性路径，见 backlogRow 的 vertical 分支）。
-                  // 位置与看板泳道顺序一致（活跃版本之后）；菜单带 maxHeight 滚动，版本再多也够得到。
-                  // 排期选择器**不提供**本选项（两条选择器语义不同，别混淆）。
-                  h("div", {
-                    key: "vp-backlog",
-                    className: "dg-schedule-version-item",
-                    style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
-                    onClick: () => { setViewVersionSlug(VIEW_BACKLOG_SLUG); setShowVersionPicker(false); },
-                  }, `${viewBacklogOnly ? "✓ " : "📥 "}${dgT("view.backlogLane")}`),
-                  active.length === 0
-                    ? h("div", { style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 } }, dgT("goal.scheduleNoVersion"))
-                    : null)
-                  : null)
-            : null,
-          // g-113 临时诊断（灰色低调显示，两行省略，详情在 tooltip 显示，为搜索框留出空间）：显示当前解析的 workspace 与会话 id
-          h("div", {
-            style: {
-              ...S.meta,
-              color: "rgba(128,128,128,.55)",
-              marginLeft: 8,
-              fontSize: 10,
-              lineHeight: 1.25,
-              display: "flex",
-              flexDirection: "column",
-              maxWidth: 160,
-              minWidth: 0,
-              overflow: "hidden",
-              cursor: "default",
-              userSelect: "none",
-              flexShrink: 1,
-            },
-            title: `DEBUG sessionId=${props?.sessionId ?? "∅"}\nws=${activeWs ?? "∅"}`,
-          },
-            h("span", {
-              style: {
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                maxWidth: "100%",
-                display: "block",
-              },
-            }, "DEBUG sessionId=" + (props?.sessionId ?? "∅")),
-            h("span", {
-              style: {
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                maxWidth: "100%",
-                display: "block",
-              },
-            }, "ws=" + (activeWs ?? "∅"))),
-          // g-233：标题行最右侧增加搜索框
-          h("div", {
+      // g-352 att-003 第 7 项（负责人人工 gate 反馈 + 澄清）：版本管理（点开**版本管理抽屉**）与
+      // 「创建版本」不再独占网格左上角那一行，改为**靠左并入搜索框同一行**。
+      // · 版本管理按钮不再是「无文字裸图标」——补可见文字（图标 + 文字，与第 1 项同口径），
+      //   title/aria-label 仍指向版本管理抽屉（行为不变）；
+      // · 两者与搜索框/全文开关同行，且共用 rowBtnStyle() ⇒ 与同行按钮等高同风格（第 9 项）；
+      // · 仅右侧栏实例如此（会话内 conversation.view 路径 DOM/样式按判据 5 逐字不变），
+      //   窄档则由上面的 headPanelRows 收进折叠下拉（同样图标 + 文字齐备）。
+      const versionManageBtn = h("button", {
+        style: { ...S.btn, ...rowBtnStyle() },
+        className: "dg-btn dg-version-manage-btn",
+        title: dgT("versionDrawer.title"),
+        "aria-label": dgT("versionDrawer.title"),
+        onClick: () => setShowVersionDrawer(true),
+      }, headPanelEntry("versionmanage", dgT("versionDrawer.title")).label);
+      const createVersionBtn = h("button", {
+        style: { ...S.btn, ...rowBtnStyle() },
+        className: "dg-btn",
+        title: dgT("createVersion.createBtn"),
+        onClick: () => {
+          setShowCreateVersion(true);
+          setNewVersionSlug("");
+          setNewVersionName("");
+          setCreateVersionNote(null);
+        },
+      }, dgT("createVersion.createBtn"));
+      // g-233：标题行最右侧增加搜索框（g-352 att-003：元素本体抽成变量，以便右侧栏把它与版本管理/创建版本放进同一行）
+      const searchBarEl = h("div", {
             // g-352（判据 5）：样式本体（含唯一新增的 min-width:0 门控）在 narrow-width.js 的
             // searchBarWrapStyle 纯函数里——非窄档（含 conversation.view）返回的键集合与基线逐字一致。
             style: searchBarWrapStyle(narrowActive),
@@ -2392,35 +2349,222 @@
                 whiteSpace: "nowrap",
               },
             }, searchFeedback) : null,
-          )),
+      );
+      return h(
+        "div",
+        { key: "kanban-" + kanbanRenderKey, ref: boardRootRef, style: S.wrap,
+          className: hasModal ? "dg-kanban-root dg-modal-open" : "dg-kanban-root",
+          "data-dsh-graph-kanban": "",
+          onDragLeave: drag ? (e) => {
+             // 进入子元素不清除；离开整个看板内容（如进入页面顶部/底部边缘、
+             // header/composer 等视口触发区）时只清除悬停落点，不结束整个拖拽——
+             // g-173：结束 drag 会让 g-157 自动滚动 effect 立即卸载，边缘自动滚动失效；
+             // 保持 drag 存活，回到看板时由单元格 onDragOver 重新建立落点，
+             // 真正的清理仍由 dragend/drop/取消（原生事件）路径完成。
+             if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
+               setDrag((d) => (d ? { ...d, overGoalId: null, overStageKey: null, overLaneKey: null, overHalf: null } : d));
+             }
+           } : undefined },
+        h("style", null, HOVER_CSS),
+        // g-352：右侧栏实例（host="sidebar"）的头部布局：style 仍是 S.head **本体**（会话内
+        // sidebarHost=false ⇒ 无额外样式键、className 为 undefined，DOM/样式逐字不变，判据 5）；
+        // 右侧栏专属的布局兜底走 .dg-head-sidebar（见 constants.js：放不下就换行 + 按钮不压缩）。
+        // 真正的窄宽度适配是测量驱动的：<480px 工具条整批收进下拉容器、<360px 单版本模式。
+        h("div", { style: S.head, className: sidebarHost ? "dg-head-sidebar" : undefined },
+          // g-352：窄档下标题不内部折行（nowrap + min-width:auto ⇒ 保持自然宽度，由头部换行让位）
+          h("strong", { style: narrowActive ? { whiteSpace: "nowrap", flexShrink: 0 } : undefined }, "dsh-graph"),
+          // g-174：标题栏显示插件版本，点击以新标签打开插件官网
+          h("a", {
+            href: "https://github.com/miuzel/dsh-graph",
+            target: "_blank",
+            rel: "noreferrer",
+            title: "dsh-graph",
+            style: { ...S.meta, color: "var(--dsw-alias-state-business-primary, #8ab4ff)", cursor: "pointer", textDecoration: "underline", ...(narrowActive ? { whiteSpace: "nowrap", flexShrink: 0 } : {}) },
+          }, "version: " + PLUGIN_VERSION),
+          // g-214：局部化倒计时组件渲染数据更新时间及剩余秒数倒计时
+          // g-324：refreshSignal 为「一次刷新流程完成」的单调计数（load() 汇聚点自增），
+          // 倒计时以它而非 generated_at 变化作为重置终点——手动刷新在 304 / watcher 缓存
+          // 命中（generated_at 不变）时也立即回到完整周期。
+          h(RefreshCountdown, {
+            generatedAt: b.generated_at,
+            refreshSignal: refreshCycle,
+            intervalSec: refreshIntervalSec,
+            onTriggerRefresh: load,
+          }),
+          // ===== g-352：宽档平铺 / 窄档折叠 =====
+          // 宽档（根容器实测宽度 ≥480px 或非右侧栏实例）：工具条按钮与显示归档开关原地平铺，
+          // 与 g-330 之前逐字一致（会话内 conversation.view 恒走此分支）。
+          // 窄档（<480px）：同一批按钮原样收进一个弹层容器（headPanelItems），头部只留一个触发按钮——
+          // 触发按钮自身同样带 min-width:0 + 省略号兜底（判据 2）。
+          narrowActive ? null : h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, dgT("common.refresh")),
+          // g-187：顶部标签筛选弹层入口
+          narrowActive ? null : h("button", {
+            style: { ...tbBtnStyle, ...(tagFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
+            className: "dg-btn" + (tagFilter.length > 0 ? " dg-btn-active" : ""),
+            title: dgT("tagFilter.title"),
+            onClick: () => setShowTagFilterModal(true),
+          }, tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title")),
+          narrowActive || tagFilter.length === 0
+            ? null
+            : h("button", {
+                className: "dg-btn",
+                style: { ...tbBtnStyle, marginLeft: 4, padding: "0 6px", fontSize: 11 },
+                title: dgT("tagFilter.clear"),
+                onClick: () => setTagFilter([]),
+              }, dgT("tagFilter.clear")),
+          // g-105: 记忆管理按钮（位于设置按钮左侧）
+          narrowActive ? null : h("button", {
+            style: tbBtnStyle,
+            className: "dg-btn",
+            title: dgT("memory.title"),
+            onClick: () => setShowMemoryModal(true),
+          }, dgT("memory.btn")),
+          // g-183: 项目知识库面板入口
+          narrowActive ? null : h("button", {
+            style: tbBtnStyle,
+            className: "dg-btn",
+            title: dgT("shared.title"),
+            onClick: () => setShowSharedPanel(true),
+          }, dgT("shared.title").split("（")[0]),
+          // g-352 att-003 第 9 项：右上角齿轮是**图标按钮**，与同行文字按钮等高 ⇒ 走
+          // rowBtnStyle({ iconOnly: true })（26×26 方形，不再 0 7px/14px 各自为政）。
+          // 仅右侧栏实例改（会话内 conversation.view 路径按钮样式按判据 5 逐字不变）。
+          narrowActive ? null : h("button", {
+            style: sidebarHost ? { ...S.btn, ...rowBtnStyle({ iconOnly: true }), marginLeft: 8 } : { ...tbBtnStyle, padding: "0 7px", fontSize: 14 },
+            className: "dg-btn",
+            title: dgT("settings.title"),
+            onClick: () => setShowSettings(true),
+          }, "⚙"),
+          // g-110: 显示已归档目标的 checkbox（移至右侧，DEBUG 信息左侧，布局更规整）
+          narrowActive ? null : archivedToggle,
+          narrowActive
+            // g-352 窄档（<480px）：工具条收进一个**下拉容器**。容器与选项行复用既有内联下拉实现
+            //（helpers.js 的 S.inlineMenu 样式 token + .dg-schedule-version-item 行样式，
+            // 即 g-306 排期版本选择器 card.js:246-291 的那一套）⇒ 全仓仍只有一套下拉实现，
+            // 不引入第三套；也不新增内联 S.overlay 浮层调用点（g-181/g-343 的 19 处计数契约零回归）。
+            // 锚点靠右（left:auto + right:0），窄容器里也不会被 S.wrap 的横向滚动裁掉。
+            ? h("span", { key: "tb-overflow", ref: headOverflowRef, style: { display: "inline-flex", justifyContent: "flex-end", position: "relative", verticalAlign: "middle", minWidth: 0, flex: "1 1 auto" } },
+                h("button", {
+                  style: headBtnStyle,
+                  className: headBtnClass + " dg-head-overflow-trigger",
+                  title: dgT("toolbar.moreTooltip"),
+                  "aria-label": dgT("toolbar.moreTooltip"),
+                  "aria-expanded": showHeadOverflow ? "true" : "false",
+                  onClick: () => { anchorPopover(headOverflowRef.current, 240); setShowHeadOverflow((v) => !v); },
+                }, dgT("toolbar.more")),
+                showHeadOverflow
+                  ? h("div", {
+                      style: { ...S.inlineMenu, left: "auto", right: popoverAnchorState?.right ?? 0,
+                               minWidth: popoverAnchorState?.minWidth ?? 240, maxWidth: 320, zIndex: 100000 },
+                      onClick: (e) => e.stopPropagation(),
+                    },
+                      h("div", { style: { fontSize: 11, opacity: 0.6, padding: "2px 10px 6px", borderBottom: "1px solid rgba(128,128,128,.2)" } },
+                        dgT("toolbar.moreTitle")),
+                      ...headPanelItems.map((it) => h("button", {
+                        key: "ov-" + it.key,
+                        // g-352 att-003：第 1 项要求「每一行都同时有图标与文字」，第 9 项要求
+                        // 「触发按钮与被收进的下拉项风格一致」⇒ 这里去掉省略号（文字不再被吞），
+                        // 且尺寸口径与触发按钮同一处（rowBtnStyle）——菜单宽度按最长一行自适应。
+                        className: "dg-btn dg-narrow-panel-btn",
+                        style: {
+                          ...S.btn, ...rowBtnStyle(),
+                          width: "100%", minWidth: 0, maxWidth: "none",
+                          whiteSpace: "nowrap", textAlign: "left", justifyContent: "flex-start",
+                          margin: "4px 0 0",
+                        },
+                        title: it.title,
+                        onClick: it.onClick,
+                      }, it.label)),
+                      // 显示已归档开关：与宽档头部复用同一个元素定义（archivedToggle）
+                      h("div", { style: { minWidth: 0, marginTop: 6, padding: "0 2px" } }, archivedToggle))
+                  : null)
+            : null,
+          // g-352 att-003 第 8 项：版本选择下拉已移入**版本泳道头部行**（[ + ] 左侧），
+          // 见上方 renderVersionPicker / laneVersionPickerEl；头部只在「全部版本」态（多泳道）保留一份——
+          // 该档泳道头只有 130px 宽塞不下选择器，且这样「切回单泳道」的出口在任一档位都可达。
+          narrowSingleTier && !singleLaneMode ? renderVersionPicker(false) : null,
+          // g-352 att-003 第 7 项：版本管理 + 创建版本 + 搜索框/全文开关**同一行**，
+          // 两颗按钮靠左（搜索框自带 marginLeft:auto ⇒ 被推到这一行右端）。窄档两颗按钮在折叠下拉里。
+          sidebarHost
+            ? h("div", { key: "head-search-row", style: { display: "flex", alignItems: "center", gap: 6, flex: "1 1 auto", minWidth: 0 } },
+                narrowActive ? null : versionManageBtn,
+                narrowActive ? null : createVersionBtn,
+                searchBarEl)
+            : searchBarEl),
+          // g-113 临时诊断（灰色低调显示，两行省略，详情在 tooltip 显示，为搜索框留出空间）：显示当前解析的 workspace 与会话 id
+          // g-352 att-003 第 2 项（负责人人工 gate 反馈「窄幅条件下隐藏 debug 信息」）：
+          // 窄档（<480px）整块不渲染；宽档与 conversation.view 路径逐字不变。
+          narrowActive ? null : h("div", {
+            style: {
+              ...S.meta,
+              color: "rgba(128,128,128,.55)",
+              marginLeft: 8,
+              fontSize: 10,
+              lineHeight: 1.25,
+              display: "flex",
+              flexDirection: "column",
+              maxWidth: 160,
+              minWidth: 0,
+              overflow: "hidden",
+              cursor: "default",
+              userSelect: "none",
+              flexShrink: 1,
+            },
+            title: `DEBUG sessionId=${props?.sessionId ?? "∅"}\nws=${activeWs ?? "∅"}`,
+          },
+            h("span", {
+              style: {
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                maxWidth: "100%",
+                display: "block",
+              },
+            }, "DEBUG sessionId=" + (props?.sessionId ?? "∅")),
+            h("span", {
+              style: {
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                maxWidth: "100%",
+                display: "block",
+              },
+            }, "ws=" + (activeWs ?? "∅"))),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
-          ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null, statusAt: b.supervisorStatusAt ?? null })
+          // g-352 att-003 第 3 项：窄档（<480px，仅右侧栏实例）主管区重排为单行 + 图标按钮 + 隐藏模型 id
+          ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null, statusAt: b.supervisorStatusAt ?? null, narrow: narrowActive })
           : null,
         // g-127/g-156/g-164：折叠时对应列窄化为 36px（blocked 和 deliver 独立折叠），
         // 列模板统一由 gridCols 按当前折叠状态动态计算，与 released 泳道网格保持一致
         h("div", { style: { ...S.grid, gridTemplateColumns: gridCols } },
-          // g-174 & g-223：看板左上角单元格放置「版本管理」图标入口与「＋ 新建版本」按钮
-          h("div", { style: S.stageHead },
-            h("button", {
-              style: { ...S.btn, fontSize: 12, padding: "2px 6px", marginRight: 4, lineHeight: 1.2 },
-              className: "dg-btn dg-version-manage-btn",
-              title: dgT("versionDrawer.title"),
-              "aria-label": dgT("versionDrawer.title"),
-              onClick: () => setShowVersionDrawer(true),
-            }, "🏷️"),
-            h("button", {
-              style: { ...S.btn, fontSize: 12, padding: "2px 8px" },
-              className: "dg-btn",
-              title: dgT("createVersion.title"),
-              onClick: () => {
-                setShowCreateVersion(true);
-                setNewVersionSlug("");
-                setNewVersionName("");
-                setCreateVersionNote(null);
-              },
-            }, dgT("createVersion.createBtn"))),
+          // g-174 & g-223：看板左上角单元格放置「版本管理」图标入口与「＋ 新建版本」按钮。
+          // g-352 att-003 第 7 项（负责人人工 gate 反馈）：右侧栏实例把这两颗**移到头部搜索行**
+          //（见 head-search-row）⇒ 角落只留一个**对齐锚点**，保证阶段列表头仍与泳道标题列对齐；
+          // 共享列模板（顶部表头与 released 泳道共用的那一份派生）与网格容器数量都不变。
+          // 会话内 conversation.view 路径仍在此原位渲染原两颗按钮（判据 5：DOM/样式逐字不变）。
+          sidebarHost
+            ? h("div", { style: S.stageHead, key: "grid-corner", className: "dg-grid-corner" })
+            : h("div", { style: S.stageHead },
+              h("button", {
+                style: { ...S.btn, fontSize: 12, padding: "2px 6px", marginRight: 4, lineHeight: 1.2 },
+                className: "dg-btn dg-version-manage-btn",
+                title: dgT("versionDrawer.title"),
+                "aria-label": dgT("versionDrawer.title"),
+                onClick: () => setShowVersionDrawer(true),
+              }, "🏷️"),
+              h("button", {
+                style: { ...S.btn, fontSize: 12, padding: "2px 8px" },
+                className: "dg-btn",
+                title: dgT("createVersion.title"),
+                onClick: () => {
+                  setShowCreateVersion(true);
+                  setNewVersionSlug("");
+                  setNewVersionName("");
+                  setCreateVersionNote(null);
+                },
+              }, dgT("createVersion.createBtn"))),
           // g-352：单版本模式下没有横向阶段列，阶段列头由 lane() 的纵向堆叠分支提供
           //（每个阶段块自带一行列头），故此处不再渲染表头行。
           singleLaneMode ? null : STAGES.map((s) => {
@@ -2461,27 +2605,13 @@
             // ≥1 → 可用并显示数量。flex 行内布局：whiteSpace nowrap（继承 stageHead）+
             // overflow hidden + 按钮 flexShrink 0，150px 最小列宽与相邻列折叠/展开时不换行不重叠。
             if (s.key === "confirm") {
-              const ba = batchAcceptButtonState(reviewGoals.length);
               return h("div", {
                 key: s.key,
                 style: { ...S.stageHead, display: "flex", alignItems: "center", justifyContent: "center",
                          gap: 6, overflow: "hidden" },
               },
                 h("span", { style: { flexShrink: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" } }, s.label),
-                h("button", {
-                  style: { ...S.btn, fontSize: 11, padding: "1px 8px", lineHeight: 1.4,
-                           whiteSpace: "nowrap", flexShrink: 0, opacity: ba.disabled ? 0.5 : 1 },
-                  className: "dg-btn dg-batch-accept-btn",
-                  disabled: ba.disabled || batchAcceptLoading,
-                  title: ba.title,
-                  "aria-label": ba.label,
-                  onClick: (e) => {
-                    e.stopPropagation();
-                    if (ba.disabled || batchAcceptLoading) return;
-                    setBatchAcceptFailures(null);
-                    setBatchAcceptOpen(true);
-                  },
-                }, batchAcceptLoading ? dgT("common.submitting") : ba.label));
+                renderBatchAcceptButton(false));
             }
             return h("div", { key: s.key, style: S.stageHead }, s.label);
           }),

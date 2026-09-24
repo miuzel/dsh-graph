@@ -228,8 +228,9 @@
          仍会因 min-width:auto（不可收缩到内容宽度以下）而把文字顶出按钮框，故这里同时给
          「min-width: 0」 + 「text-overflow: ellipsis」 —— 宽度不足时省略号收敛，绝不越框。 */
       .dg-narrow-head-btn { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      /* 窄宽度弹层内的整行按钮：全宽、同行内省略号收敛 */
-      .dg-narrow-panel-btn { display: flex; align-items: center; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+      /* 窄宽度弹层内的整行按钮：全宽；g-352 att-003 第 1 项要求「图标 + 文字」完整可读 ⇒
+         不再用 text-overflow: ellipsis 吞字（弹层宽度按最长一行自适应，字号/行高与触发按钮同一口径） */
+      .dg-narrow-panel-btn { display: flex; align-items: center; min-width: 0; max-width: none; white-space: nowrap; text-align: left; }
       /* 统一弹窗与抽屉右上角关闭按钮 */
       .dg-close {
         transition: opacity .12s ease, background .12s ease, transform .12s ease;
