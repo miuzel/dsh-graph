@@ -54,7 +54,7 @@ dsh-graph is a plugin that organizes work into a "goal board". Available graph_*
 ## Worktree · Status · Settings
 - graph_list_worktrees([goal]) list worktree cleanup candidates (read-only);
 - graph_clean_worktree(id, confirm) clean a verified worktree (keeps branch by default);
-- graph_report_status(goal, attempt, status, state) report attempt status (state: working/blocked/done/error);
+- graph_report_status(goal, attempt, status[, state]) report attempt status (state: working/blocked/done/error, optional);
 - graph_report_supervisor_status(status) supervisor reports status (board top status bar);
 - graph_get_settings() read-only query of project config and valid enum metadata;
 - graph_update_settings(patch) update project config (schema validation, comment preservation, atomic write).
