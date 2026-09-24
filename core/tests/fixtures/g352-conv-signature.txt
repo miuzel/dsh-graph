@@ -1,5 +1,5 @@
 # g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-352 att-005 重新生成）
-# source-commit: 0dbff2c14710b289a473982d0bc06e65404caa0c
+# source-commit: 7bbd7c2de7d2e5b17f92bc2b93c26735990d3c55
 # source-sha256: 80ab9833c5c37d41e1f681fd3f8a23bb3ecff655432f086306f18b6c2282c93d
 # source-files: kanban,constants,narrow-width,helpers   # 源 hash 覆盖的模块（决定头部/泳道渲染）
 # content-sha256: 6cb21f456e73ca28e77a843188f915c7f3b5e86aacd489f76306b3f7a3ab8052
