@@ -1200,10 +1200,14 @@ const PANEL_GEOM_AFTER = [
   { label: "side-444", rows: [139, 169, 199, 229, 259], menu: { top: 107, height: 212, scrollHeight: 210, clientHeight: 210 }, boardRight: 1585, menuRight: 1584.98 },
   { label: "side-324", rows: [139, 169, 199, 229, 259], menu: { top: 107, height: 212, scrollHeight: 210, clientHeight: 210 }, boardRight: 1585, menuRight: 1585 },
 ];
-/** 改前真机实测（att-006 dist / 3088：5 行同一 y、x 每次 +320、框内仅首行可见）。 */
+/**
+ * 改前真机实测（att-006 dist / 3088：5 行同一 y、x 每次 +320、框内仅首行可见）。
+ * height/scrollHeight/clientHeight 为真机实测值；**菜单 rect 的 top 未采（不影响判定：
+ * `not-ascending` 先于 `clipped/overflow-bottom` 触发，故这里不填 top）。**
+ */
 const PANEL_GEOM_BEFORE = {
-  conv430: { rows: [177, 177, 177, 177, 177], x: [102, 422, 742, 1062, 1382], menu: { top: 140, height: 92, scrollHeight: 90, clientHeight: 90 } },
-  side444: { rows: [139, 139, 139, 139, 139], x: [1263.98, 1583.98, 1903.98, 2223.98, 2543.98], menu: { top: 107, height: 92, scrollHeight: 90, clientHeight: 90 } },
+  conv430: { rows: [177, 177, 177, 177, 177], x: [102, 422, 742, 1062, 1382], menu: { height: 92, scrollHeight: 90, clientHeight: 90 } },
+  side444: { rows: [139, 139, 139, 139, 139], x: [1263.98, 1583.98, 1903.98, 2223.98, 2543.98], menu: { height: 92, scrollHeight: 90, clientHeight: 90 } },
 };
 
 test("g-352 att-007（纯函数 + 真机几何固化）：容器纵向堆叠是唯一真源，行位置判据能抓住横向排布", () => {
