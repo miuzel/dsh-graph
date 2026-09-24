@@ -2256,21 +2256,24 @@
       // g-352 att-005 第 B-2 项（负责人 gate「回到原来的位置、不要并入搜索行、靠左对齐」）：
       // 撤销 att-003 第 7 项的结构性搬家 —— 「版本管理 / 创建版本」回到**网格左上角**原位置
       //（g-174 / g-223 的落点），**两侧完全一致**（同一份定义，两处调用点共用）。
-      // 保留 att-003 的两项成果：
-      //  ① 「补齐可读标签」——版本管理按钮带可见文字（图标 + 文字，不再是无文字裸图标）；
-      //  ② 「打开版本管理抽屉不溢出」——点击仍走既有抽屉（version-drawer.js），宽度由既有 S.modal 约束。
-      // 角落只有 130px 列宽：两个按钮**纵向靠左堆叠** + `maxWidth:100%` + 省略号兜底
-      //（en 标签 `🏷️ Version Management` 比 zh 长），绝不横向溢出压到相邻阶段列头。
-      const cornerBtnStyle = { ...S.btn, ...rowBtnStyle(), maxWidth: "100%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" };
+      // g-352 att-006（负责人 gate 续 chore）：「版本管理」**去掉可见文字、只留图标**⇒ 两颗按钮
+      // **同一行** `[🏷️] [创建版本]`、靠左、等高 26px（图标按钮 26×26 方形），角落行高回到单行 26px
+      //（此前带文字 ⇒ 纵向堆叠占两行 56px，把创建版本挤到下一行——负责人配图所指问题）。
+      //  ① 图标按钮走 `rowBtnStyle({ iconOnly: true })`（与同行文字按钮同口径的唯一真源：width = height = 26）；
+      //  ② 去文字但**保留可访问名称**：`title` + `aria-label` 都取既有 i18n 文案 `versionDrawer.title`
+      //    （zh `🏷️ 版本管理` / en `🏷️ Version Management`，两侧对称），绝不退回「无名称裸图标」；
+      //  ③ 图标本身由 headPanelEntry 的图标表派生（语言中立符号，与折叠弹层同一处），不硬编码。
+      // 角落只有 130px 列宽：`minWidth:0` + 省略号兜底，绝不横向溢出压到相邻阶段列头。
+      const versionManageIcon = headPanelEntry("versionmanage", dgT("versionDrawer.title")).icon;
       const versionManageBtn = h("button", {
-        style: cornerBtnStyle,
+        style: { ...S.btn, ...rowBtnStyle({ iconOnly: true }), flex: "0 0 auto" },
         className: "dg-btn dg-version-manage-btn",
         title: dgT("versionDrawer.title"),
         "aria-label": dgT("versionDrawer.title"),
         onClick: () => setShowVersionDrawer(true),
-      }, headPanelEntry("versionmanage", dgT("versionDrawer.title")).label);
+      }, versionManageIcon);
       const createVersionBtn = h("button", {
-        style: cornerBtnStyle,
+        style: { ...S.btn, ...rowBtnStyle(), maxWidth: "100%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" },
         className: "dg-btn",
         title: dgT("createVersion.title"),
         onClick: () => {
@@ -2280,11 +2283,11 @@
           setCreateVersionNote(null);
         },
       }, dgT("createVersion.createBtn"));
-      // 网格左上角单元格：两个按钮（图标 + 文字）靠左对齐、纵向排列
+      // 网格左上角单元格：两个按钮**同一行**、靠左、垂直居中（单行不占额外高度）
       const gridCornerEl = h("div", {
         key: "grid-corner",
         className: "dg-grid-corner",
-        style: { ...S.stageHead, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" },
+        style: { ...S.stageHead, display: "flex", flexDirection: "row", alignItems: "center", justifyContent: "flex-start", flexWrap: "nowrap", gap: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" },
       }, versionManageBtn, createVersionBtn);
       // g-233：标题行最右侧增加搜索框（g-352 att-005：**保持原设计**——与标题同一行、不再有同行容器包装）
       const searchBarEl = h("div", {

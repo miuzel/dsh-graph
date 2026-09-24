@@ -1323,33 +1323,73 @@ test("g-352 att-003 第6项（渲染级）：单泳道档「确认」阶段块�
   assert.match(kanban, /s\.key === "confirm" \? renderBatchAcceptButton\(true\) : null/, "单泳道档确认阶段块头挂入口");
 });
 
-test("g-352 att-005 B2（渲染级）：版本管理+创建版本回到网格左上角原位置（靠左、可读标签、两侧一致）", async () => {
+test("g-352 att-006 B2（渲染级）：角落改单行 [🏷️] [创建版本]（同 y 行、等高 26、图标 26×26 方形、可访问名称、两侧一致）", async () => {
   const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
   const h = createRenderHarness({ boardWidth: 900, payload: payload() });
   const els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
-  // ① 原位置 = 网格左上角单元格（g-174/g-223 的落点），且不再是 att-003 的「空锚点」
+  // ① 原位置 = 网格左上角单元格（g-174/g-223 的落点），仍是**单一** gridCornerEl
   const corner = els.filter((e) => e.props?.key === "grid-corner").pop();
   assert.ok(corner, "网格左上角单元格在");
   assert.equal(elClass(corner), "dg-grid-corner", "单元格带稳定 class（真机核验可选中）");
+  assert.equal(els.filter((e) => e.props?.key === "grid-corner").length, 1, "角落仍是单一 gridCornerEl（无重复单元格）");
   const inCorner = treeOf(corner);
   const vm = inCorner.filter((e) => elClass(e).includes("dg-version-manage-btn")).pop();
-  assert.ok(vm, "版本管理按钮在网格左上角（不再并入搜索行）");
-  assert.equal(treeText(vm), "🏷️ 版本管理", "保留「补齐可读标签」成果：图标 + 可见文字");
-  assert.ok(vm.props.title && vm.props["aria-label"], "title/aria-label 仍指向版本管理抽屉");
+  assert.ok(vm, "版本管理按钮在网格左上角（仍不并入搜索行）");
   const cv = inCorner.filter((e) => isButtonEl(e) && treeText(e) === "创建版本").pop();
   assert.ok(cv, "创建版本按钮同样在网格左上角");
-  // ② 靠左对齐 + 纵向堆叠 + 不溢出（130px 列宽；en 标签更长 ⇒ 省略号兜底）
-  assert.equal(corner.props.style.flexDirection, "column", "两颗按钮纵向靠左堆叠（130px 列宽放不下同一行）");
-  assert.equal(corner.props.style.alignItems, "flex-start", "靠左对齐");
+
+  // ② att-006 核心：两按钮**同一行**（同一父 flex 行 = 同一 y 坐标）
+  assert.equal(corner.props.style.flexDirection, "row", "角落必须是**横向** flex 容器（两颗按钮同一行、同一 y）");
+  assert.equal(corner.props.style.flexWrap, "nowrap", "不得换行（换行就等于回到两行、占额外高度）");
+  assert.equal(corner.props.style.alignItems, "center", "同一行内垂直居中对齐（两按钮 y 相同）");
+  assert.equal(corner.props.style.justifyContent, "flex-start", "靠左对齐");
+  const cornerKids = (corner.children || []).flat(Infinity) as any[];
+  assert.equal(cornerKids.length, 2, `角落恰好两颗按钮（实得 ${cornerKids.length}）`);
+  assert.equal(cornerKids[0], vm, "版本管理图标按钮是同一 flex 行的第 1 个子项");
+  assert.equal(cornerKids[1], cv, "创建版本按钮是同一 flex 行的第 2 个子项");
+  // 行高 = 单行 max(子项高) = 26（改前纵向堆叠 = 26 + gap 4 + 26 = 56 ⇒ 本次不增反降）
+  const rowHeightNow = Math.max(vm.props.style.height, cv.props.style.height);
+  const rowHeightBefore = ROW_BTN_METRICS.height * 2 + (corner.props.style.gap ?? 0);
+  assert.equal(rowHeightNow, ROW_BTN_METRICS.height, "角落行高 = 单行 26px");
+  assert.ok(rowHeightNow < rowHeightBefore, `角落行高不得增加（改前 ${rowHeightBefore}px 纵向两行 → 改后 ${rowHeightNow}px 单行）`);
+
+  // ③ 等高 26px + 图标按钮 26×26 方形（rowBtnStyle 唯一真源）
+  assert.equal(vm.props.style.height, ROW_BTN_METRICS.height, "版本管理按钮高 26px");
+  assert.equal(cv.props.style.height, ROW_BTN_METRICS.height, "创建版本按钮高 26px（两按钮等高）");
+  assert.equal(vm.props.style.width, ROW_BTN_METRICS.height, "图标按钮为 26×26 方形（宽 = 高）");
+  assert.equal(vm.props.style.minWidth, ROW_BTN_METRICS.height, "图标按钮宽度锁死，不得被 flex 压扁成非方形");
+  assert.equal(vm.props.style.padding, "0", "图标按钮无内边距（rowBtnStyle({iconOnly:true}) 口径）");
+  assert.equal(vm.props.style.display, "inline-flex");
+  assert.equal(vm.props.style.boxSizing, "border-box");
+  const iconRef = rowBtnStyle({ iconOnly: true });
+  assert.equal(vm.props.style.width, iconRef.width, "方形宽来自 rowBtnStyle({iconOnly:true}) 同一真源（非就地写死）");
+  assert.equal(vm.props.style.height, iconRef.height, "方形高来自 rowBtnStyle({iconOnly:true}) 同一真源");
+  assert.equal(vm.props.style.minWidth, iconRef.minWidth, "minWidth 同源（不可压扁）");
+  assert.equal(cv.props.style.padding, ROW_BTN_METRICS.padding, "创建版本按钮走 rowBtnStyle() 文字口径");
+  // 不溢出：创建版本按钮可收缩 + 省略号兜底；角落单元格裁切
   assert.equal(corner.props.style.overflow, "hidden", "单元格不溢出到相邻阶段列头");
-  for (const b of [vm, cv]) {
-    assert.equal(b.props.style.maxWidth, "100%");
-    assert.equal(b.props.style.minWidth, 0);
-    assert.equal(b.props.style.overflow, "hidden");
-    assert.equal(b.props.style.textOverflow, "ellipsis");
-    assert.equal(b.props.style.height, ROW_BTN_METRICS.height, "两颗按钮同行同口径（rowBtnStyle 唯一真源）");
-    assert.equal(b.props.style.padding, ROW_BTN_METRICS.padding);
-  }
+  assert.equal(corner.props.style.minWidth, 0);
+  assert.equal(cv.props.style.maxWidth, "100%");
+  assert.equal(cv.props.style.minWidth, 0);
+  assert.equal(cv.props.style.overflow, "hidden");
+  assert.equal(cv.props.style.textOverflow, "ellipsis");
+
+  // ④ att-006：「版本管理」去掉**可见文字**、只留图标，但**保留可访问名称**（title + aria-label）
+  assert.equal(treeText(vm), "🏷️", "按钮可见内容只有图标（可见文字已删除）");
+  assert.doesNotMatch(treeText(vm), /[\u3400-\u9fff]/, "图标按钮内不得残留中文可见文字");
+  assert.ok(vm.props.title, "title 必须存在（hover 提示）");
+  assert.ok(vm.props["aria-label"], "aria-label 必须存在（可访问名称）");
+  assert.equal(vm.props.title, vm.props["aria-label"], "title 与 aria-label 同源同文（均为版本管理抽屉文案）");
+  assert.match(vm.props.title, /版本管理/, `可访问名称必须指向版本管理（实得「${vm.props.title}」）——不得退回无名称裸图标`);
+  assert.equal(typeof vm.props.onClick, "function", "点击行为不变");
+  // 既有 i18n 文案 zh/en 对称（不新增词条，直接复用 versionDrawer.title）
+  const i18nSrc = readClient("i18n");
+  const zhKey = i18nSrc.match(/'versionDrawer\.title':\s*'([^']*)'/);
+  const enKey = i18nSrc.match(/'versionDrawer\.title':\s*'([^']*)'/g) ?? [];
+  assert.equal(enKey.length, 2, "versionDrawer.title 在 zh/en 各出现一次（复用既有词条，零新增键）");
+  assert.match(zhKey![1], /版本管理/, "zh 可访问名称含「版本管理」");
+  assert.match(enKey[1], /Version Management/, "en 可访问名称含 Version Management（zh/en 对称）");
+  assert.doesNotMatch(enKey[1], /[\u3400-\u9fff]/, "en 文案零 CJK");
   // ③ 头部不再有 att-003 的同行容器；搜索框是头部的直接子节点（B-1：与标题同一行、不新增行）
   assert.equal(els.filter((e) => e.props?.key === "head-search-row").length, 0, "不再有 head-search-row 包装层");
   const head = els.filter((e) => elClass(e) === "dg-head").pop();
@@ -1369,14 +1409,17 @@ test("g-352 att-005 B2（渲染级）：版本管理+创建版本回到网格左
   assert.equal(typeof drawer.props.onClose, "function", "抽屉 props 齐备（既有版本管理抽屉）");
   assert.ok(Array.isArray(drawer.props.versions), "抽屉仍吃既有 versions 数据源（宽度由既有 S.modal 约束，不溢出）");
 
-  // ⑤ 两侧完全一致：会话内看板页签的角落与侧栏逐字相同（att-005 判据 5①）
+  // ⑤ 两侧完全一致：会话内看板页签的角落与侧栏逐字相同（att-005 判据 5① / att-006 两侧同一实现）
   const hc = createRenderHarness({ boardWidth: 900, payload: payload() });
   const cEls = (await hc.settle({ sessionId: "s1" })).passElements();
   const cCorner = cEls.filter((e) => e.props?.key === "grid-corner").pop();
   assert.ok(cCorner, "会话内看板页签同样在原位置渲染角落（两侧一致）");
   assert.deepEqual(plain(cCorner), plain(corner), "两侧角落元素逐字一致");
   const cvm = cEls.filter((e) => elClass(e).includes("dg-version-manage-btn")).pop();
-  assert.equal(treeText(cvm), "🏷️ 版本管理", "会话内看板页签同口径（不再是无文字裸图标）");
+  assert.equal(treeText(cvm), "🏷️", "会话内看板页签同口径（去文字只留图标）");
+  assert.equal(cvm.props.title, vm.props.title, "两侧可访问名称逐字一致");
+  // 零 host 门控（g330 契约）：角落渲染路径不得再出现 host 分叉
+  assert.doesNotMatch(readClient("kanban"), /sidebarHost|props\?\.host/, "角落/头部渲染路径不得重新引入 host 门控");
 });
 
 test("g-352 att-003 第8项（渲染级）：版本选择下拉在版本行标题里、[+] 左侧；「全部版本」出口仍可达", async () => {
@@ -1422,17 +1465,20 @@ test("g-352 att-003 第9项（渲染级）：同一行按钮等高同风格（�
       assert.equal(b.props.style.padding, ROW_BTN_METRICS.padding, "文字按钮同级内边距");
     }
   }
-  // att-005 B-2：负责人截图指出的两颗（版本管理小方图标 / 创建版本大长条）现都在网格左上角、完全同口径
+  // att-006：角落两颗按钮**同一行、等高 26px**；版本管理已去文字 ⇒ 走 rowBtnStyle({iconOnly:true}) 方形口径
   const corner = els.filter((e) => e.props?.key === "grid-corner").pop();
   const cornerBtns = treeOf(corner).filter(isButtonEl);
   const vm = cornerBtns.find((b) => elClass(b).includes("dg-version-manage-btn"));
   const cv = cornerBtns.find((b) => treeText(b) === "创建版本");
   assert.ok(vm && cv, "两颗按钮都在网格左上角（原位置）");
-  assert.deepEqual(
-    [vm!.props.style.height, vm!.props.style.padding, vm!.props.style.fontSize, vm!.props.style.lineHeight, vm!.props.style.boxSizing],
-    [cv!.props.style.height, cv!.props.style.padding, cv!.props.style.fontSize, cv!.props.style.lineHeight, cv!.props.style.boxSizing],
-    "两颗按钮尺寸口径完全一致（rowBtnStyle 唯一真源）",
-  );
+  assert.equal(corner.props.style.flexDirection, "row", "两颗按钮同一行（行高 = 单行 26px，不再占两行）");
+  assert.equal(vm!.props.style.height, cv!.props.style.height, "两按钮等高 26px（rowBtnStyle 唯一真源）");
+  assert.equal(vm!.props.style.width, vm!.props.style.height, "图标按钮 26×26 方形");
+  assert.equal(vm!.props.style.fontSize, cv!.props.style.fontSize, "同行同字号");
+  assert.equal(vm!.props.style.lineHeight, cv!.props.style.lineHeight, "同行同行高");
+  assert.equal(vm!.props.style.boxSizing, cv!.props.style.boxSizing, "同行同盒模型");
+  assert.equal(cv!.props.style.padding, ROW_BTN_METRICS.padding, "创建版本按钮走文字口径内边距");
+  assert.equal(vm!.props.style.padding, "0", "图标按钮走 iconOnly 口径内边距");
   // 齿轮图标按钮与同行文字按钮等高
   const gear = btns.filter((b) => treeText(b) === "⚙");
   assert.equal(gear.length, 1);
