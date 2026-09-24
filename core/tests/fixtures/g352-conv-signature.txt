@@ -1,8 +1,8 @@
-# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-352 att-005 重新生成）
-# source-commit: 7bbd7c2de7d2e5b17f92bc2b93c26735990d3c55
-# source-sha256: 80ab9833c5c37d41e1f681fd3f8a23bb3ecff655432f086306f18b6c2282c93d
+# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-352 att-006 重新生成）
+# source-commit: b226ea357979fa478f2fbdba361c7cf708fd432b
+# source-sha256: 1c63eae9495c210bd530e3de080c569dc2c1f87e1a455c10a278719fbbd45535
 # source-files: kanban,constants,narrow-width,helpers   # 源 hash 覆盖的模块（决定头部/泳道渲染）
-# content-sha256: 6cb21f456e73ca28e77a843188f915c7f3b5e86aacd489f76306b3f7a3ab8052
+# content-sha256: edd419e616f66ccb274d425718aa66dc872e8a2e619fb603e64a7864488d3222
 # board-width: 250
 div key=kanban-0 class=dg-kanban-root style=color=inherit;fontSize=13;minWidth=0;overflowX=auto;padding=12;position=relative;zIndex=1 flags=-
   style key=- class=- style=- flags=-
@@ -18,8 +18,8 @@ div key=kanban-0 class=dg-kanban-root style=color=inherit;fontSize=13;minWidth=0
       label key=- class=- style=alignItems=center;cursor=pointer;display=flex;fontSize=12;gap=3;opacity=0.85;userSelect=none;whiteSpace=nowrap flags=title
         input key=- class=- style=- flags=-
   div key=- class=- style=display=grid;gap=4;gridTemplateColumns=minmax(0, 1fr) flags=-
-    div key=grid-corner class=dg-grid-corner style=alignItems=flex-start;display=flex;flexDirection=column;fontWeight=600;gap=4;maxWidth=100%;minWidth=0;opacity=0.75;overflow=hidden;padding=4;textAlign=center;whiteSpace=nowrap flags=-
-      button key=- class=dg-btn dg-version-manage-btn style=alignItems=center;background=var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));border=1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));borderRadius=4;boxSizing=border-box;color=var(--dsw-alias-label-primary, #e6e6e6);cursor=pointer;display=inline-flex;fontSize=12;gap=4;height=26;justifyContent=center;lineHeight=22px;maxWidth=100%;minWidth=0;overflow=hidden;padding=0 8px;textOverflow=ellipsis;verticalAlign=middle flags=title,aria-label
+    div key=grid-corner class=dg-grid-corner style=alignItems=center;display=flex;flexDirection=row;flexWrap=nowrap;fontWeight=600;gap=4;justifyContent=flex-start;maxWidth=100%;minWidth=0;opacity=0.75;overflow=hidden;padding=4;textAlign=center;whiteSpace=nowrap flags=-
+      button key=- class=dg-btn dg-version-manage-btn style=alignItems=center;background=var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));border=1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));borderRadius=4;boxSizing=border-box;color=var(--dsw-alias-label-primary, #e6e6e6);cursor=pointer;display=inline-flex;flex=0 0 auto;fontSize=12;gap=4;height=26;justifyContent=center;lineHeight=22px;minWidth=26;padding=0;verticalAlign=middle;width=26 flags=title,aria-label
       button key=- class=dg-btn style=alignItems=center;background=var(--dsw-alias-interactive-bg-hover-solid, rgba(128,128,128,.15));border=1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.30));borderRadius=4;boxSizing=border-box;color=var(--dsw-alias-label-primary, #e6e6e6);cursor=pointer;display=inline-flex;fontSize=12;gap=4;height=26;justifyContent=center;lineHeight=22px;maxWidth=100%;minWidth=0;overflow=hidden;padding=0 8px;textOverflow=ellipsis;verticalAlign=middle flags=title
     div key=v-v1-label class=dg-version-label style=background=rgba(255,255,255,.03);borderTop=1px solid rgba(128,128,128,.35);cursor=pointer;fontWeight=600;padding=8px 6px;paddingRight=136;position=relative flags=title
       span key=vp-lane class=- style=display=inline-block;maxWidth=110;minWidth=0;position=absolute;right=40;top=8;zIndex=5 flags=-
