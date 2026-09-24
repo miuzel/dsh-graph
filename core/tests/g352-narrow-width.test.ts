@@ -26,6 +26,9 @@ import {
   NARROW_TOOLBAR_MAX_WIDTH,
   NARROW_SINGLE_VERSION_MAX_WIDTH,
   MOVE_TO_BACKLOG_ERROR_CODE,
+  HEAD_PANEL_ICONS,
+  VIEW_OPTION_ICONS,
+  ROW_BTN_METRICS,
   boardWidthTier,
   shouldCollapseToolbar,
   isSingleVersionTier,
@@ -34,6 +37,11 @@ import {
   isMoveToBacklogRejection,
   searchBarWrapStyle,
   searchBarInnerStyle,
+  headPanelEntry,
+  viewOptionLabel,
+  viewPickerTriggerText,
+  rowBtnStyle,
+  popoverAnchor,
 } from "../../dsh-graph-host/lib/client/narrow-width.js";
 import {
   init,
@@ -147,14 +155,18 @@ test("g-352 判据3：单版本投影只做派生（选中失效则回落首个�
 test("g-352 判据3：单版本模式下只渲染选中版本一个泳道，阶段列改为纵向堆叠，保留「全部版本」入口", () => {
   const src = readClient("kanban");
   // 单版本派生只用既有可见性判定的结果 active（hiddenVersionSlugs + search 覆盖层之后的集合）
-  assert.match(src, /const singleVersion = \(narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG\)/);
+  assert.match(src, /const singleVersion = \(narrowSingleTier && !searchActiveQuery && !viewBacklogOnly && !viewStandaloneOnly && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG\)/);
   assert.match(src, /const VIEW_ALL_VERSIONS_SLUG = "__all__";/);
   // g-352（负责人裁决）：backlog 也是单版本档的视图备选 → 单泳道档 = 单版本 ∪ 单 backlog
   assert.match(src, /const VIEW_BACKLOG_SLUG = "__backlog__";/);
   assert.match(src, /const viewBacklogOnly = !!\(narrowSingleTier && !searchActiveQuery && viewVersionSlug === VIEW_BACKLOG_SLUG\);/);
-  assert.match(src, /const singleLaneMode = !!\(narrowSingleTier && !searchActiveQuery && \(singleVersion \|\| viewBacklogOnly\)\);/);
-  // 只渲染选中版本一个泳道，且以纵向模式（lane 第 7 参 vertical=true）渲染
-  assert.match(src, /rows\.push\(\.\.\.lane\(`🏷️ \$\{singleVersion\.name\}`, singleVersion\.goals, "v-" \+ singleVersion\.slug, singleVersion\.slug, 0, true, true\)\)/);
+  // att-003 第 5 项③：独立目标同样是单泳道档的视图备选 → 单泳道档 = 单版本 ∪ 单 backlog ∪ 单独立目标
+  assert.match(src, /const VIEW_STANDALONE_SLUG = "__standalone__";/);
+  assert.match(src, /const viewStandaloneOnly = !!\(narrowSingleTier && !searchActiveQuery && viewVersionSlug === VIEW_STANDALONE_SLUG\);/);
+  assert.match(src, /const singleLaneMode = !!\(narrowSingleTier && !searchActiveQuery && \(singleVersion \|\| viewBacklogOnly \|\| viewStandaloneOnly\)\);/);
+  // 只渲染选中版本一个泳道，且以纵向模式（lane 第 7 参 vertical=true）渲染；
+  // att-003 第 4 项：单泳道档第 6 参 collapsible=false（只有一个泳道 ⇒ 不给版本头部 ▲/▼ 折叠开关）
+  assert.match(src, /rows\.push\(\.\.\.lane\(`🏷️ \$\{singleVersion\.name\}`, singleVersion\.goals, "v-" \+ singleVersion\.slug, singleVersion\.slug, 0, false, true\)\)/);
   // 其他泳道（其余 active 版本、standalone、backlog、released）在该档一律不渲染
   assert.match(src, /for \(const v of \(singleLaneMode \? \[\] : active\)\)/);
   assert.match(src, /const releasedRows = \(singleLaneMode \? \[\] : released\)\.map/);
@@ -384,7 +396,7 @@ test("g-352 判据7：无活跃版本 / 选中版本失效 / 拉回全宽均安�
   // 未测量 / 无 ResizeObserver → wide 档，不误折叠
   assert.equal(boardWidthTier(Infinity), "wide");
   // 搜索激活时挂起单版本收窄（g-233 优先级：搜索匹配不被视图过滤藏掉）
-  assert.match(kanban, /!searchActiveQuery && !viewBacklogOnly && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG\)/);
+  assert.match(kanban, /!searchActiveQuery && !viewBacklogOnly && !viewStandaloneOnly && viewVersionSlug !== VIEW_ALL_VERSIONS_SLUG\)/);
   // 选中 backlog 但处于搜索激活态时同样挂起（g-233 优先级不变）
   assert.match(kanban, /const viewBacklogOnly = !!\(narrowSingleTier && !searchActiveQuery/);
 });
@@ -496,7 +508,7 @@ test("g-352 C2-m5：build-client PARTS 覆盖 lib/client 全部模块，且 bund
 
 interface RenderResult { passElements: () => any[] }
 
-function createRenderHarness(opts: { boardWidth?: number; payload: any }) {
+function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSession?: any }) {
   const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
   const boardWidth = opts.boardWidth ?? 250;
   const elements: any[] = [];
@@ -507,7 +519,7 @@ function createRenderHarness(opts: { boardWidth?: number; payload: any }) {
 
   const makeFakeNode = () => ({
     clientWidth: boardWidth, scrollWidth: 0, scrollHeight: 0, scrollTop: 0, style: {},
-    getBoundingClientRect: () => ({ width: boardWidth, height: 10, top: 0, left: 0 }),
+    getBoundingClientRect: () => ({ width: boardWidth, height: 10, top: 0, left: 0, right: boardWidth }),
     focus: noop, select: noop, blur: noop, contains: () => false,
     addEventListener: noop, removeEventListener: noop, appendChild: noop, setAttribute: noop,
     querySelector: () => null, querySelectorAll: () => [],
@@ -630,7 +642,8 @@ function createRenderHarness(opts: { boardWidth?: number; payload: any }) {
 
   const requireStub = (name: string) => {
     if (name === "react") return ReactStub;
-    if (name === "react-dom") return { render: noop, createRoot: () => ({ render: noop, unmount: noop }) };
+    // createPortal：dgOverlay 用它把弹窗挂到 document.body（att-003 第 6/7 项要断言「点击后弹窗/抽屉真的出现」）
+    if (name === "react-dom") return { render: noop, createPortal: (node: any) => node, createRoot: () => ({ render: noop, unmount: noop }) };
     throw new Error(`module not found: ${name}`);
   };
   const mod = factory(requireStub);
@@ -641,7 +654,12 @@ function createRenderHarness(opts: { boardWidth?: number; payload: any }) {
     register: (def: any, renderer: any) => { registered.push({ def, renderer }); return noop; },
   };
   const ctx: any = {
-    sessions: { list: { getSnapshot: () => ({ byId: {}, items: [], subagentsByParent: {} }) } },
+    // liveSession：0.1.5 被动解析路径（sessionsRt.binding）注入一个假会话，使 LiveStrip 走到
+    // 真实的「单行 compact / 两行默认」渲染分支（att-003 第 3 项的渲染级断言需要）。
+    sessions: {
+      list: { getSnapshot: () => ({ byId: {}, items: [], subagentsByParent: {} }) },
+      ...(opts.liveSession ? { binding: () => ({ session: opts.liveSession, eventSource: null }) } : {}),
+    },
     get: (n: string) => (n === "workspaces" ? workspacesRt : null),
     slots: slotsObj,
     on: noop,
@@ -676,6 +694,16 @@ function createRenderHarness(opts: { boardWidth?: number; payload: any }) {
   }
   return { settle, elements, fetchLog, observed, passes: () => passes };
 }
+
+/** 子树里的全部元素（递归；h() 产生的宿主元素带 children 数组）。 */
+function treeOf(node: any, out: any[] = []): any[] {
+  if (node == null || typeof node !== "object") return out;
+  if (Array.isArray(node)) { for (const n of node) treeOf(n, out); return out; }
+  if (node.type) { out.push(node); treeOf(node.children, out); }
+  return out;
+}
+/** 是否为按钮元素。 */
+const isButtonEl = (e: any) => e?.type === "button";
 
 /** 元素树文本（含子元素递归）。 */
 function treeText(node: any): string {
@@ -844,7 +872,11 @@ test("g-352 C3/判据5：min-width:0 的门控是纯函数契约（非窄档返�
   // 会话内路径不可能命中这些选择器：其元素只在 host=sidebar 且窄档时创建（渲染级反证见下一条）
   const conv = readClient("kanban");
   assert.match(conv, /narrowActive[\s\S]{0,600}?key: "tb-overflow"/, "窄档专属元素由 narrowActive 门控");
-  assert.match(conv, /narrowSingleTier[\s\S]{0,600}?key: "tb-version-picker"/, "单泳道档专属选择器由 narrowSingleTier 门控");
+  // att-003 第 8 项：选择器改由 renderVersionPicker(inLane) 统一构造 —— 头部只在「全部版本」
+  // 多泳道档保留一份（narrowSingleTier && !singleLaneMode），单泳道档则挂进版本行标题（laneVersionPickerEl）
+  assert.match(conv, /narrowSingleTier && !singleLaneMode \? renderVersionPicker\(false\) : null/, "头部选择器由 narrowSingleTier/单泳道档门控");
+  assert.match(conv, /const laneVersionPickerEl = singleLaneMode \? renderVersionPicker\(true\) : null;/, "单泳道档选择器由 singleLaneMode 门控");
+  assert.match(conv, /vertical \? laneVersionPickerEl : null/, "选择器挂在纵向（唯一）泳道行标题里");
 });
 
 test("g-352 判据5（渲染级反证）：conversation.view 路径不出现任何窄档专属元素/class", async () => {
@@ -853,4 +885,422 @@ test("g-352 判据5（渲染级反证）：conversation.view 路径不出现任�
   for (const k of ["dg-narrow-head-btn", "dg-narrow-panel-btn", "dg-backlog-flat-vertical", "dg-head-overflow-trigger", "dg-version-picker-trigger", "dg-head-sidebar"]) {
     assert.equal(withClass(conv, k).length, 0, `会话内路径不得出现 ${k}（HOVER_CSS 新增规则对它零影响）`);
   }
+});
+
+// ============================================================================
+// att-003：负责人人工 gate 反馈（1-5 项）+ 追加（6/7/8/9 项）
+//   —— 与 1-5 同一套证据口径：纯函数口径 + **渲染级**断言（vm + 迷你 React harness，
+//      真调用 KanbanView / SupervisorBar / LiveStrip，真点击触发按钮/选项）。
+// ============================================================================
+
+test("g-352 att-003 第1/5/9项（纯函数口径）：图标 + 文字、选项图标与勾选、同行按钮尺寸唯一真源", () => {
+  // 第 1 项：折叠弹层每一行都同时有图标与文字；i18n 标签自带的图标被剥离（不出现「🏷️ 🏷️ 标签筛选」）
+  const rows: Array<[string, string, string]> = [
+    ["refresh", "刷新", "⟳ 刷新"],
+    ["tagfilter", "🏷️ 标签筛选", "🏷️ 标签筛选"],
+    ["tagclear", "清除筛选", "✕ 清除筛选"],
+    ["memory", "🧠 记忆", "🧠 记忆"],
+    ["shared", "📇 项目知识库（共享条目）", "📇 项目知识库"],
+    ["settings", "看板设置", "⚙ 看板设置"],
+    ["versionmanage", "🏷️ 版本管理", "🏷️ 版本管理"],
+    ["createversion", "创建版本", "＋ 创建版本"],
+  ];
+  for (const [key, raw, label] of rows) {
+    const e = headPanelEntry(key, raw);
+    assert.ok(e.icon, `${key} 行必须有图标`);
+    assert.ok(e.text, `${key} 行必须有文字`);
+    assert.equal(e.label, label, `${key} 行的「图标 + 文字」口径`);
+    assert.equal(e.label, e.icon + " " + e.text);
+    assert.doesNotMatch(e.text, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u, `${key} 的文字不得再带前导图标`);
+  }
+  // en 长标签同样去掉括号补充说明（窄弹层里可读）
+  assert.equal(headPanelEntry("shared", "📇 Project Knowledge Base (Shared Entries)").label, "📇 Project Knowledge Base");
+  assert.equal(headPanelEntry("memory", "🧠 Memory").label, "🧠 Memory");
+  // 第 5 项①：选项用与看板一致的图标；**勾选不替代图标**（✓ 与图标并存）
+  assert.equal(viewOptionLabel("version", "V1", false), "🏷️ V1");
+  assert.equal(viewOptionLabel("version", "V1", true), "✓ 🏷️ V1");
+  assert.equal(viewOptionLabel("all", "全部版本", false), "▸ 全部版本");
+  assert.equal(viewOptionLabel("all", "全部版本", true), "✓ ▸ 全部版本");
+  assert.equal(viewOptionLabel("backlog", "backlog", true), "✓ 📥 backlog");
+  assert.equal(viewOptionLabel("standalone", "独立目标", true), "✓ 📌 独立目标");
+  assert.equal(VIEW_OPTION_ICONS.version, "🏷️", "版本图标与看板泳道一致");
+  assert.equal(VIEW_OPTION_ICONS.standalone, "📌", "独立目标图标与排期选择器一致");
+  // 第 5 项②：触发器带下拉箭头
+  assert.equal(viewPickerTriggerText("📋 V1"), "📋 V1 ▾");
+  // 第 9 项：同行按钮尺寸口径唯一真源（文字按钮等高；图标按钮与同行文字按钮等高的 1:1 方形）
+  const tb = rowBtnStyle();
+  const iconOnly = rowBtnStyle({ iconOnly: true });
+  assert.equal(tb.height, ROW_BTN_METRICS.height);
+  assert.equal(iconOnly.height, ROW_BTN_METRICS.height, "图标按钮必须与同行文字按钮等高");
+  assert.equal(iconOnly.width, ROW_BTN_METRICS.height, "图标按钮必须 1:1 方形");
+  assert.equal(iconOnly.minWidth, ROW_BTN_METRICS.height, "图标按钮不得被压扁");
+  assert.equal(tb.padding, ROW_BTN_METRICS.padding);
+  assert.equal(iconOnly.padding, "0");
+  assert.equal(tb.fontSize, iconOnly.fontSize, "同字号基准");
+  assert.equal(tb.lineHeight, iconOnly.lineHeight, "同行高基准");
+  // 源码契约：口径只有一处定义，头部/工具条/泳道/弹层/主管栏全部引用它
+  const helpers = readClient("helpers");
+  assert.doesNotMatch(helpers, /rowBtnStyle|ROW_BTN_METRICS/, "尺寸口径不在 helpers 里另立一份");
+  const kanban = readClient("kanban");
+  assert.match(kanban, /const tbBtnStyle = \{ \.\.\.S\.btn, \.\.\.rowBtnStyle\(\), marginLeft: 8 \};/);
+  assert.match(kanban, /\.\.\.rowBtnStyle\(\{ iconOnly: true \}\)/, "图标按钮（齿轮/泳道 [+]）走同一方形口径");
+  assert.match(readClient("supervisor-bar"), /rowBtnStyle\(\{ iconOnly: true \}\)/, "主管栏跳转图标按钮走同一口径");
+  for (const mod of ["kanban", "supervisor-bar", "narrow-width"]) {
+    assert.doesNotMatch(readClient(mod), /^\s*import\s/m, `${mod} 不得引入 ESM import（零新依赖）`);
+  }
+});
+
+test("g-352 att-003 第1项（渲染级）：折叠工具条下拉每一行都「图标 + 文字」，文字不被省略号吞掉", async () => {
+  const h = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
+  let els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const trigger = withClass(els, "dg-head-overflow-trigger").pop();
+  assert.ok(trigger, "窄档存在折叠工具条触发按钮");
+  trigger.props.onClick({ stopPropagation() {} });
+  els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const rows = withClass(els, "dg-narrow-panel-btn");
+  assert.equal(rows.length, 7, "默认（无标签筛选）应有 7 行：刷新/标签筛选/记忆/知识库/设置/版本管理/创建版本");
+  const iconOf: Record<string, string> = {
+    refresh: "⟳", tagfilter: "🏷️", memory: "🧠", shared: "📇", settings: "⚙",
+    versionmanage: "🏷️", createversion: "＋",
+  };
+  for (const row of rows) {
+    const key = String(row.props.key).replace(/^ov-/, "");
+    const text = treeText(row);
+    assert.ok(iconOf[key], `未预期的弹层行 ${key}`);
+    assert.ok(text.startsWith(iconOf[key] + " "), `${key} 行必须以「图标 + 空格」开头（实得「${text}」）`);
+    assert.ok(text.slice(iconOf[key].length + 1).trim().length > 0, `${key} 行必须有可见文字`);
+    assert.ok(row.props.title, `${key} 行必须有 tooltip`);
+    // 文字不得被省略号吞掉：内联与 CSS 兜底都不再省略（弹层宽度按最长一行自适应）
+    assert.notEqual(row.props.style.textOverflow, "ellipsis", `${key} 行不得用省略号吞字`);
+    assert.notEqual(row.props.style.overflow, "hidden", `${key} 行不得裁掉文字`);
+    // 第 9 项：下拉项与触发按钮同一尺寸口径
+    assert.equal(row.props.style.height, trigger.props.style.height, `${key} 行与触发按钮等高`);
+    assert.equal(row.props.style.padding, trigger.props.style.padding, `${key} 行与触发按钮同级内边距`);
+  }
+  // 负责人点名的两处：刷新补图标、设置补文字
+  assert.equal(treeText(rows.find((r) => r.props.key === "ov-refresh")!), "⟳ 刷新");
+  assert.equal(treeText(rows.find((r) => r.props.key === "ov-settings")!), "⚙ 看板设置");
+  assert.equal(treeText(rows.find((r) => r.props.key === "ov-versionmanage")!), "🏷️ 版本管理");
+  assert.equal(treeText(rows.find((r) => r.props.key === "ov-createversion")!), "＋ 创建版本");
+  // 真机修正（第 1 项）：弹层锚定到看板右缘 —— 否则菜单左伸出侧栏会被宿主裁掉、行文字全被吞
+  //（439px 真机实测：原 right:0 锚在触发按钮右缘，240px 菜单左伸 172px 被裁）
+  assert.deepEqual(popoverAnchor({ right: 1149 }, { right: 1428, width: 427 }, 240), { right: -279, minWidth: 240 });
+  assert.deepEqual(popoverAnchor({ right: 1149 }, { right: 1428, width: 427 }, 220), { right: -279, minWidth: 220 });
+  assert.equal(popoverAnchor({ right: 1149 }, { right: 1250, width: 250 }, 240)!.minWidth, 226, "板宽不足时菜单宽度收敛到板内");
+  assert.equal(popoverAnchor({ right: 100 }, { right: 100, width: 330 }, 220)!.right, 0, "触发按钮已在右缘 ⇒ 偏移 0");
+  assert.equal(popoverAnchor({}, { right: 100, width: 330 }, 220), null, "测量不可用 → null（调用方回落 right:0）");
+  assert.equal(popoverAnchor({ right: 10 }, { right: 10, width: 0 }, 220), null);
+  // 弹层容器（工具条折叠菜单的 zIndex 100000 是它唯一的稳定标记）
+  const menuEl = els.filter((e) => e.props?.style?.zIndex === 100000).pop();
+  assert.ok(menuEl, "弹层容器可定位");
+  assert.equal(menuEl.props.style.right, 0, "假节点触发按钮与看板同矩形 ⇒ 偏移 0");
+  assert.equal(menuEl.props.style.minWidth, 226, "菜单宽度按板宽收敛（250-24），绝不超出看板可视区");
+  // 已归档行仍是「勾选框 + 图标文字」
+  const archived = els.filter((e) => e.props?.key === "tb-archived").pop();
+  assert.ok(archived, "弹层里保留显示已归档开关");
+  assert.ok(treeText(archived).includes("已归档"));
+  assert.equal([...treeText(archived)].some((c) => /\p{Extended_Pictographic}/u.test(c)), true, "已归档行带图标");
+});
+
+test("g-352 att-003 第2项（渲染级）：窄档隐藏 DEBUG（sessionId/ws），宽档与会话内路径保留", async () => {
+  const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
+  const narrow = createRenderHarness({ boardWidth: 250, payload: payload() });
+  const nEls = (await narrow.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  assert.equal(nEls.filter((e) => treeText(e).includes("DEBUG sessionId=")).length, 0, "窄档（<480px）不得渲染 DEBUG 调试信息");
+
+  const wide = createRenderHarness({ boardWidth: 900, payload: payload() });
+  const wEls = (await wide.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const debugEls = wEls.filter((e) => treeText(e).includes("DEBUG sessionId=") && treeText(e).includes("ws="));
+  assert.ok(debugEls.length >= 1, "宽档必须保留 DEBUG（含 sessionId 与 ws）");
+
+  const conv = createRenderHarness({ boardWidth: 250, payload: payload() });
+  const cEls = (await conv.settle({ sessionId: "s1" })).passElements();
+  assert.ok(cEls.some((e) => treeText(e).includes("DEBUG sessionId=")), "会话内 conversation.view 路径逐字不变（DEBUG 仍在）");
+});
+
+test("g-352 att-003 第3项（渲染级）：窄档主管区=单行 statusline + 纯图标跳转按钮 + 无模型 id；宽档不变", async () => {
+  // harness 只显式调用 KanbanView，嵌套函数组件默认只被「创建」不被执行 ⇒ 这里对
+  // SupervisorBar / LiveStrip 做**真调用**（与 KanbanView 同一套迷你 React，不是源码正则）。
+  const renderFn = (e: any) => e.type(e.props);
+  const board = boardFixture({ supervisorSession: "sup-1", supervisorStatus: "正在收敛 g-352", supervisorStatusAt: 1 });
+  const narrow = createRenderHarness({ boardWidth: 250, payload: { board } });
+  const nEls = (await narrow.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const nBarEl = nEls.filter((e) => e.type?.name === "SupervisorBar").pop();
+  assert.ok(nBarEl, "看板在设置了 supervisorSession 时渲染 SupervisorBar");
+  const bar = renderFn(nBarEl);
+  assert.equal(elClass(bar), "dg-supervisor dg-supervisor-narrow", "窄档主管栏带专属 class");
+  assert.equal(bar.props.style.marginBottom, 8, "窄档主管栏样式仍是 S.supervisorBar 本体（未另造一套）");
+  assert.equal(bar.children.length, 3, "窄档主管栏只有 3 项：主管标识 + 单行 statusline + 图标按钮");
+  const jump = bar.children[2];
+  assert.equal(treeText(jump), "↗", "「转到对话」缩成纯图标按钮");
+  assert.ok(jump.props.title && jump.props["aria-label"], "纯图标按钮必须保留 title/aria-label 可读性");
+  assert.equal(jump.props["aria-label"], jump.props.title);
+  assert.equal(jump.props.style.width, jump.props.style.height, "图标按钮 1:1（第 9 项）");
+  assert.equal(jump.props.style.height, ROW_BTN_METRICS.height);
+  // 单行：LiveStrip 走 compact 形态（只渲染一行），且不再有模型两行竖排
+  const stripWrap = bar.children[1];
+  const liveEl = stripWrap.children[0];
+  assert.equal(liveEl.type?.name, "LiveStrip");
+  assert.equal(liveEl.props.compact, true, "窄档主管栏请求 LiveStrip 的单行形态");
+  // LiveStrip 的 renderFn 会撞上「会话未接入」占位（假会话未注入）⇒ 单行形态要用带 liveSession 的实例真渲染
+  const fakeSession = {
+    getSnapshot: () => ({ running: true }),
+    subscribe: () => () => {},
+    projections: { faceOf: () => null },
+  };
+  assert.equal(liveEl.props.compact, true);
+  const liveN = createRenderHarness({ boardWidth: 250, liveSession: fakeSession, payload: { board } });
+  const lNEls = (await liveN.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const lBar = lNEls.filter((e) => e.type?.name === "SupervisorBar").pop();
+  const lLiveEl = lBar.type(lBar.props).children[1].children[0];
+  const live = renderFn(lLiveEl);
+  assert.equal(live.children.length, 1, "窄档 LiveStrip 只渲染一行（单行 statusline）");
+  const row = live.children[0];
+  assert.equal(row.props.style.display, "flex");
+  assert.equal(row.props.style.minWidth, 0, "单行内文字可收缩（不再互相重叠）");
+  assert.equal(row.children.length, 2, "一行 = 状态 + 状态行文本");
+  assert.ok(treeText(row).length > 0, "单行里仍有状态/statusline 文本");
+  assert.equal(treeOf(bar).filter((e: any) => e.props?.style?.flexDirection === "column").length, 0, "窄档不得再有模型 id 竖排");
+
+  // 宽档：同一 LiveStrip 仍是「状态行 + statusline 行」两行（未传 compact ⇒ 逐字不变）
+  const liveW = createRenderHarness({ boardWidth: 900, liveSession: fakeSession, payload: { board } });
+  const lWEls = (await liveW.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const wBarEl0 = lWEls.filter((e) => e.type?.name === "SupervisorBar").pop();
+  const wLiveEl = wBarEl0.type(wBarEl0.props).children[1].children[0];
+  assert.equal(wLiveEl.props.compact, undefined, "宽档不传 compact");
+  assert.equal(renderFn(wLiveEl).children.length, 2, "宽档 LiveStrip 仍是两行");
+  const wide = createRenderHarness({ boardWidth: 900, payload: { board } });
+  const wEls = (await wide.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const wBarEl = wEls.filter((e) => e.type?.name === "SupervisorBar").pop();
+  assert.ok(wBarEl);
+  const wBar = renderFn(wBarEl);
+  assert.equal(elClass(wBar), "dg-supervisor", "宽档不加窄档 class（逐字不变）");
+  assert.equal(wBar.props.narrow, undefined, "宽档不传 narrow");
+  assert.equal(wBar.children.length, 4, "宽档保持 4 项：标识 + LiveStrip + 模型位 + 文字按钮");
+  assert.ok(treeText(wBar.children[3]).length > 1, "宽档仍是带文字的「↗ 主管对话」按钮");
+});
+
+test("g-352 att-003 第4项（渲染级）：单泳道档不渲染版本头 ▲/▼ 折叠开关；多泳道窄档仍保留", async () => {
+  const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
+  const h = createRenderHarness({ boardWidth: 250, payload: payload() });
+  let r = await h.settle({ sessionId: "s1", host: "sidebar" });
+  assert.equal(withClass(r.passElements(), "dg-lane-collapse").length, 0, "单泳道档（默认单版本）不得有折叠开关");
+  // 选中 backlog / 独立目标：同样没有（backlogRow 纵向档本就不给折叠入口）
+  r = await clickPickerOption(h, r, (e) => e.props?.key === "vp-backlog");
+  assert.equal(withClass(r.passElements(), "dg-lane-collapse").length, 0, "backlog 唯一泳道不得有折叠开关");
+  r = await clickPickerOption(h, r, (e) => e.props?.key === "vp-standalone");
+  assert.equal(withClass(r.passElements(), "dg-lane-collapse").length, 0, "独立目标唯一泳道不得有折叠开关");
+
+  const multi = createRenderHarness({ boardWidth: 400, payload: payload() });
+  const mEls = (await multi.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  assert.ok(withClass(mEls, "dg-lane-collapse").length > 0, "360-480px 多泳道档仍保留各泳道折叠开关");
+});
+
+test("g-352 att-003 第5项（渲染级）：选项带版本图标、触发器有 ▾、补「独立目标」且选中后为唯一泳道（真有卡片）", async () => {
+  const h = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
+  let r = await h.settle({ sessionId: "s1", host: "sidebar" });
+  const trigger = withClass(r.passElements(), "dg-version-picker-trigger").pop();
+  assert.ok(trigger, "单泳道档存在查看版本选择器");
+  assert.ok(treeText(trigger).endsWith(" ▾"), `触发器必须带下拉箭头（实得「${treeText(trigger)}」）`);
+  assert.equal(trigger.props["aria-expanded"], "false");
+  trigger.props.onClick({ stopPropagation() {} });
+  r = await h.settle({ sessionId: "s1", host: "sidebar" });
+  const opts = r.passElements().filter((e) => elClass(e) === "dg-schedule-version-item");
+  const byKey = new Map(opts.map((e) => [e.props?.key ?? "(all)", e]));
+  assert.ok(byKey.has("vp-standalone"), `必须补「独立目标」选项（实得 ${JSON.stringify([...byKey.keys()])}）`);
+  assert.equal(treeText(byKey.get("vp-v1")!), "✓ 🏷️ V1", "选中项保留勾选但不得替代版本图标");
+  assert.equal(treeText(byKey.get("vp-v2")!), "🏷️ V2", "未选中项用与看板一致的版本图标");
+  assert.equal(treeText(byKey.get("(all)")!), "▸ 全部版本", "「全部版本」出口保留");
+  assert.equal(treeText(byKey.get("vp-backlog")!), "📥 backlog");
+  assert.equal(treeText(byKey.get("vp-standalone")!), "📌 独立目标");
+  assert.ok(!byKey.has("vp-v0"), "已发布版本仍不作为视图备选");
+
+  // 选中独立目标 → 唯一泳道且**真有卡片**（复用既有 lane 渲染路径）
+  r = await clickOpenOption(h, r, (e) => e.props?.key === "vp-standalone");
+  const els = r.passElements();
+  assert.equal(withClass(els, "dg-version-label").length, 0, "不再渲染任何版本泳道");
+  assert.equal(els.filter((e) => e.props?.key === "standalone-label").length, 1, "独立目标泳道已渲染");
+  assert.equal(els.filter((e) => e.props?.key === "backlog-label").length, 0, "backlog 不渲染");
+  assert.equal(cardEls(els).length, 1, "独立目标明细必须真的渲染出卡片（fixture 有 1 个独立目标）");
+  assert.equal(gridTemplates(els)[0], "minmax(0, 1fr)", "独立目标唯一泳道同样是单列全宽");
+  assert.equal(withClass(els, "dg-lane-collapse").length, 0);
+});
+
+test("g-352 att-003 第6项（渲染级）：单泳道档「确认」阶段块头有批量确认入口（图标+文字），复用同一弹窗；宽档列头入口不变", async () => {
+  const board = boardFixture({
+    versions: [
+      { slug: "v1", name: "V1", status: "active", goals: [
+        { id: "g-001", title: "版本目标", status: "draft", tags: [], criteria_count: 0, cards_count: 0 },
+        { id: "g-002", title: "待确认", status: "review", tags: [], criteria_count: 0, cards_count: 0 },
+      ], goals_count: 2, lazy: false, loaded: true },
+      { slug: "v2", name: "V2", status: "active", goals: [], goals_count: 0, lazy: false, loaded: true },
+      { slug: "v0", name: "V0", status: "released", goals: [], goals_count: 0, lazy: false, loaded: true },
+    ],
+  });
+  const h = createRenderHarness({ boardWidth: 250, payload: { board, backlogGoals: backlogGoalsFixture } });
+  let r = await h.settle({ sessionId: "s1", host: "sidebar" });
+  let btns = withClass(r.passElements(), "dg-batch-accept-btn");
+  assert.equal(btns.length, 1, "单泳道档恰好一个批量确认入口（横向列头在该档不渲染）");
+  const btn = btns[0];
+  assert.equal(btn.props.disabled, false, "有 1 个待确认目标 ⇒ 入口可用");
+  assert.ok(treeText(btn).startsWith("✅ "), `入口必须是「图标 + 文字」（实得「${treeText(btn)}」）`);
+  assert.match(treeText(btn), /\(1\)/, "数量提示与既有弹窗口径一致");
+  assert.ok(btn.props.title && btn.props["aria-label"], "hover/可访问名称齐备");
+  // 点击 → 打开**既有** BatchAcceptModal（逐个走单卡「接受」等价路径，不新造后端批量路径）
+  btn.props.onClick({ stopPropagation() {} });
+  r = await h.settle({ sessionId: "s1", host: "sidebar" });
+  const els = r.passElements();
+  assert.ok(els.some((e) => e.props?.key === "batch-accept-modal"), "点击后打开既有批量接受弹窗（二次确认）");
+  assert.ok(els.some((e) => treeText(e).includes("批量接受")), "弹窗标题走既有 i18n 文案");
+
+  // 无待确认目标 ⇒ 禁用 + 悬停说明（与既有 batchAcceptButtonState 口径一致）
+  const h0 = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
+  const b0 = withClass((await h0.settle({ sessionId: "s1", host: "sidebar" })).passElements(), "dg-batch-accept-btn");
+  assert.equal(b0.length, 1);
+  assert.equal(b0[0].props.disabled, true, "0 个待确认 ⇒ 入口禁用");
+  assert.ok(b0[0].props.title);
+
+  // 宽档（多泳道）仍在「确认」列头渲染入口（同一工厂、同一 class、文案不变）
+  const hw = createRenderHarness({ boardWidth: 900, payload: { board, backlogGoals: backlogGoalsFixture } });
+  const bw = withClass((await hw.settle({ sessionId: "s1", host: "sidebar" })).passElements(), "dg-batch-accept-btn");
+  assert.equal(bw.length, 1, "宽档确认列头入口唯一且不变");
+  assert.doesNotMatch(treeText(bw[0]), /^✅ /, "宽档列头文案逐字不变（未加图标）");
+
+  // 单一实现：两处调用点共用同一工厂（源码契约）
+  const kanban = readClient("kanban");
+  assert.match(kanban, /const renderBatchAcceptButton = \(iconized\) => \{/, "工厂只有一处定义");
+  assert.equal([...kanban.matchAll(/renderBatchAcceptButton\(/g)].length, 2, "恰好 2 处调用（宽档确认列头 / 单泳道确认阶段块头）");
+  assert.equal([...kanban.matchAll(/batchAcceptButtonState\(reviewGoals\.length\)/g)].length, 1, "状态派生只在工厂里一份");
+  assert.match(kanban, /s\.key === "confirm" \? renderBatchAcceptButton\(true\) : null/, "单泳道档确认阶段块头挂入口");
+});
+
+test("g-352 att-003 第7项（渲染级）：右侧栏「版本管理+创建版本」靠左并入搜索行，角落仅对齐锚点；会话内路径逐字不变", async () => {
+  const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
+  const h = createRenderHarness({ boardWidth: 900, payload: payload() });
+  const els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const row = els.filter((e) => e.props?.key === "head-search-row").pop();
+  assert.ok(row, "右侧栏存在「版本管理 / 创建版本 / 搜索框」同行容器");
+  const inRow = treeOf(row);
+  const vm = inRow.filter((e) => elClass(e).includes("dg-version-manage-btn")).pop();
+  assert.ok(vm, "版本管理按钮在搜索行里（靠左）");
+  assert.equal(treeText(vm), "🏷️ 版本管理", "版本管理按钮必须有可见文字（不再是裸图标）");
+  assert.ok(vm.props.title && vm.props["aria-label"], "title/aria-label 仍指向版本管理抽屉");
+  assert.equal(inRow.filter((e) => elClass(e) === "dg-search-bar").length, 1, "同一行里有搜索框");
+  assert.ok(inRow.some((e) => treeText(e) === "创建版本"), "同一行里有创建版本按钮");
+  assert.ok(inRow.some((e) => treeText(e).trim() === "全文"), "同一行里有全文开关");
+  // 版本管理 与 创建版本 同一行等高同风格（第 9 项）
+  const cv = inRow.filter((e) => isButtonEl(e) && treeText(e) === "创建版本").pop();
+  assert.equal(vm.props.style.height, cv.props.style.height);
+  assert.equal(vm.props.style.padding, cv.props.style.padding);
+  // 网格左上角只剩对齐锚点（不再渲染两颗按钮），网格容器与列模板仍在
+  const corner = els.filter((e) => e.props?.key === "grid-corner").pop();
+  assert.ok(corner, "网格左上角保留对齐锚点（阶段列表头仍与泳道标题列对齐）");
+  assert.equal(elClass(corner), "dg-grid-corner", "锚点带稳定 class（真机核验可选中）");
+  assert.equal(treeOf(corner).filter((e) => elClass(e).includes("dg-version-manage-btn")).length, 0);
+  assert.ok(gridTemplates(els)[0]!.startsWith("130px"), "共享列模板不变");
+  // 点击仍打开版本管理抽屉（行为不变）
+  vm.props.onClick({ stopPropagation() {} });
+  const els2 = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  assert.ok(els2.some((e) => e.props?.key === "dg-version-drawer"), "点击版本管理按钮 → 打开版本管理抽屉");
+  const drawer = els2.filter((e) => e.props?.key === "dg-version-drawer").pop();
+  assert.equal(typeof drawer.props.onClose, "function", "抽屉 props 齐备（既有版本管理抽屉，无新实现）");
+  assert.ok(Array.isArray(drawer.props.versions), "抽屉仍吃既有 versions 数据源（宽度由既有 S.modal 约束，不溢出）");
+
+  // 会话内 conversation.view 路径：不引入同行容器，角落仍是原两颗按钮（判据 5 逐字不变）
+  const hc = createRenderHarness({ boardWidth: 900, payload: payload() });
+  const cEls = (await hc.settle({ sessionId: "s1" })).passElements();
+  assert.equal(cEls.filter((e) => e.props?.key === "head-search-row").length, 0, "会话内路径不引入同行容器");
+  assert.equal(cEls.filter((e) => e.props?.key === "grid-corner").length, 0, "会话内路径无对齐锚点（角落仍是原按钮）");
+  const cvm = cEls.filter((e) => elClass(e).includes("dg-version-manage-btn")).pop();
+  assert.equal(treeText(cvm), "🏷️", "会话内路径的版本管理入口逐字不变（裸图标 + title/aria-label）");
+  assert.equal(cvm.props.style.padding, "2px 6px", "会话内路径样式逐字不变");
+});
+
+test("g-352 att-003 第8项（渲染级）：版本选择下拉在版本行标题里、[+] 左侧；「全部版本」出口仍可达", async () => {
+  const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
+  const h = createRenderHarness({ boardWidth: 250, payload: payload() });
+  let r = await h.settle({ sessionId: "s1", host: "sidebar" });
+  const label = r.passElements().filter((e) => e.props?.key === "v-v1-label").pop();
+  assert.ok(label, "存在版本行标题");
+  const inside = treeOf(label);
+  const picker = inside.filter((e) => elClass(e).includes("dg-version-picker-trigger")).pop();
+  assert.ok(picker, "选择器在版本行标题里");
+  const plus = inside.filter((e) => isButtonEl(e) && treeText(e) === "＋").pop();
+  assert.ok(plus, "版本行标题里有创建 goal 的 [ + ]");
+  assert.ok(inside.indexOf(picker) < inside.indexOf(plus), "选择器必须位于 [ + ] 左侧");
+  assert.equal(plus.props.style.position, "absolute", "创建 goal 的 [ + ] 仍在标题右侧绝对定位（原样式口径）");
+  assert.equal(plus.props.style.height, picker.props.style.height, "同行的 [ + ] 与选择器等高（第 9 项）");
+  assert.equal(plus.props.style.width, plus.props.style.height, "[ + ] 是 1:1 方形图标按钮");
+  // 头部不再重复挂一份（单泳道档只有这一处）
+  assert.equal(withClass(r.passElements(), "dg-version-picker-trigger").length, 1, "单泳道档只有一份选择器（不会 N 份重复下拉）");
+  // backlog / 独立目标唯一泳道时同样挂在这一行（出口处处可达）
+  r = await clickPickerOption(h, r, (e) => e.props?.key === "vp-backlog");
+  const bl = r.passElements().filter((e) => e.props?.key === "backlog-label").pop();
+  assert.ok(bl, "backlog 唯一泳道已渲染");
+  assert.ok(treeOf(bl).some((e) => elClass(e).includes("dg-version-picker-trigger")), "backlog 泳道标题里也有选择器");
+  // 「全部版本」出口仍可达：从版本行选择器切回多泳道横向档
+  r = await clickPickerOption(h, r, (e) => elClass(e) === "dg-schedule-version-item" && e.props?.key == null);
+  const tpl = gridTemplates(r.passElements())[0];
+  assert.ok(tpl && tpl.startsWith("130px"), `「全部版本」出口必须可达（实得 ${tpl}）`);
+});
+
+test("g-352 att-003 第9项（渲染级）：同一行按钮等高同风格（头部/工具条/泳道行/主管栏）", async () => {
+  const h = createRenderHarness({ boardWidth: 900, payload: { board: boardFixture({ supervisorSession: "sup-1" }), backlogGoals: backlogGoalsFixture } });
+  const els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const head = els.filter((e) => elClass(e) === "dg-head-sidebar").pop();
+  assert.ok(head, "右侧栏头部带 .dg-head-sidebar");
+  const btns = treeOf(head).filter((e) => isButtonEl(e) && elClass(e).includes("dg-btn"));
+  assert.ok(btns.length >= 7, `头部至少 7 颗按钮（实得 ${btns.length}）`);
+  assert.deepEqual([...new Set(btns.map((b) => b.props.style.height))], [ROW_BTN_METRICS.height], "同一行/同区按钮必须等高");
+  for (const b of btns) {
+    if (b.props.style.width === ROW_BTN_METRICS.height) {
+      assert.equal(b.props.style.minWidth, ROW_BTN_METRICS.height, "图标按钮必须 1:1 且不可压扁");
+    } else {
+      assert.equal(b.props.style.padding, ROW_BTN_METRICS.padding, "文字按钮同级内边距");
+    }
+  }
+  // 负责人截图指出的两颗：版本管理（曾是小方图标）与创建版本（大长条）现在完全同口径
+  const vm = btns.find((b) => elClass(b).includes("dg-version-manage-btn"));
+  const cv = btns.find((b) => treeText(b) === "创建版本");
+  assert.ok(vm && cv, "两颗按钮都在头部搜索行");
+  assert.deepEqual(
+    [vm!.props.style.height, vm!.props.style.padding, vm!.props.style.fontSize, vm!.props.style.lineHeight, vm!.props.style.boxSizing],
+    [cv!.props.style.height, cv!.props.style.padding, cv!.props.style.fontSize, cv!.props.style.lineHeight, cv!.props.style.boxSizing],
+    "同行文字按钮尺寸口径完全一致",
+  );
+  // 齿轮图标按钮与同行文字按钮等高
+  const gear = btns.filter((b) => treeText(b) === "⚙");
+  assert.equal(gear.length, 1);
+  assert.equal(gear[0].props.style.height, ROW_BTN_METRICS.height);
+  assert.equal(gear[0].props.style.width, ROW_BTN_METRICS.height);
+
+  // 窄档：折叠触发按钮与被收进的下拉项同口径（第 9 项第 4 点）
+  const hn = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture({ supervisorSession: "sup-1" }), backlogGoals: backlogGoalsFixture } });
+  let nEls = (await hn.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const trigger = withClass(nEls, "dg-head-overflow-trigger").pop();
+  assert.equal(trigger.props.style.height, ROW_BTN_METRICS.height);
+  trigger.props.onClick({ stopPropagation() {} });
+  nEls = (await hn.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  for (const row of withClass(nEls, "dg-narrow-panel-btn")) {
+    assert.equal(row.props.style.height, ROW_BTN_METRICS.height, "下拉项与触发按钮等高");
+  }
+  // 单泳道档：版本行选择器与 [ + ] 同行等高（同为 26px）
+  const hs = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
+  const sEls = (await hs.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const sLabel = sEls.filter((e) => e.props?.key === "v-v1-label").pop();
+  const sInside = treeOf(sLabel);
+  const sPicker = sInside.filter((e) => elClass(e).includes("dg-version-picker-trigger")).pop();
+  const sPlus = sInside.filter((e) => isButtonEl(e) && treeText(e) === "＋").pop();
+  assert.equal(sPicker.props.style.height, ROW_BTN_METRICS.height);
+  assert.equal(sPlus.props.style.height, ROW_BTN_METRICS.height);
+
+  // 主管栏窄档图标按钮同样与同行按钮等高（SupervisorBar 需真调用，见第 3 项）
+  const supBoard = boardFixture({ supervisorSession: "sup-1" });
+  const hSup = createRenderHarness({ boardWidth: 250, payload: { board: supBoard } });
+  const supEls = (await hSup.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const supBarEl = supEls.filter((e) => e.type?.name === "SupervisorBar").pop();
+  const supBar = supBarEl.type(supBarEl.props);
+  const supBtn = treeOf(supBar).filter((e: any) => elClass(e).includes("dg-supervisor-jump-icon")).pop();
+  assert.equal(supBtn.props.style.height, ROW_BTN_METRICS.height);
+  assert.equal(supBtn.props.style.width, ROW_BTN_METRICS.height);
 });
