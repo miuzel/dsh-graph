@@ -3504,11 +3504,29 @@ test("g-244 子代理会话解析：parentId/items 双形状、subagentsByParent
   assert.equal(resolve("child-1", { workspacesRt, sessionsRt: byIdRt }), "/repo-beta", "byId+parentId 回溯到父工作区");
 
   // 3. 子会话只在 subagentsByParent 目录里（byId 缺失）也能反查父会话
+  //    entry 为 0.1.6 真实形状：带 kind（权威：dsh-api-remotes subagents.list 结果 schema）
   const catalogRt = sessSnap({
     byId: {},
-    subagentsByParent: { "s-b": { entries: [{ kind: "child", id: "child-2", mode: "continuable", label: "x" }] } },
+    subagentsByParent: { "s-b": { entries: [{ kind: "child", id: "child-2", activity: "inactive", hasChildren: false, mode: "continuable", label: "x" }] } },
   });
   assert.equal(resolve("child-2", { workspacesRt, sessionsRt: catalogRt }), "/repo-beta", "subagentsByParent 反查父会话");
+
+  // 3b. g-351：0.1.7 真实形状——快照只有 projectionsBySession，且 entry **无 kind**
+  //     （权威：0.1.7 dsh-api-remotes/lib/client.js:9055）。反查索引若不换 entry 形状，
+  //     这里会解析失败 ⇒ 看板卡片找不到所属 workspace。
+  const projRt = sessSnap({
+    byId: {},
+    projectionsBySession: { "s-b": { values: { subagentCatalog: [{ id: "child-2n", createdAt: 21, mode: "continuable", label: "x" }] } } },
+  });
+  assert.equal(resolve("child-2n", { workspacesRt, sessionsRt: projRt }), "/repo-beta", "0.1.7 projectionsBySession（无 kind entry）反查父会话");
+
+  // 3c. g-351：0.1.6 的 diagnostic 行带 id 但**不是**子会话，不得进反查索引
+  //     （只按 id 认会把 diagnostic 误当子会话，形状探测必须以 kind 判别）
+  const diagRt = sessSnap({
+    byId: {},
+    subagentsByParent: { "s-b": { entries: [{ kind: "diagnostic", id: "child-diag", reason: "corrupt" }] } },
+  });
+  assert.equal(resolve("child-diag", { workspacesRt, sessionsRt: diagRt }), null, "diagnostic 行不得被当成子会话（无法定位父）");
 
   // 4. 多层嵌套：孙会话 → 子会话 → 父会话
   const nestedRt = sessSnap({

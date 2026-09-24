@@ -296,12 +296,15 @@ function snapshot017(catalog: readonly unknown[]) {
 function extractFunction(source: string, name: string): string {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `源模块中存在 function ${name}`);
+  // async 函数：`function ` 紧跟在 `async ` 之后，抽取时必须带上限定符，否则 await 落在
+  // 非 async 函数里 → SyntaxError（openChildSession 是 async）。
+  const asyncPrefix = source.slice(Math.max(0, start - 6), start) === "async " ? "async " : "";
   let depth = 0;
   for (let i = source.indexOf("{", start); i < source.length; i++) {
     if (source[i] === "{") depth++;
     else if (source[i] === "}") {
       depth--;
-      if (depth === 0) return source.slice(start, i + 1);
+      if (depth === 0) return asyncPrefix + source.slice(start, i + 1);
     }
   }
   throw new Error(`function ${name} 花括号无法配平`);
@@ -327,6 +330,49 @@ function makeCatalogSandbox() {
   const sandbox: any = { Promise, console: { warn: () => {} } };
   vm.runInNewContext(code, sandbox, { filename: "dist/lib/client.js#subagentCatalog" });
   return sandbox.api;
+}
+
+/**
+ * 子会话导航（`openChildSession`，即卡片「↗ 转到对话」按钮的落点）的真实源片段沙箱。
+ * 从 plugin.js 抠出导航链路、从 helpers.js 抠出目录形状探测族——与浏览器 bundle 的
+ * 同一工厂作用域拼接口径一致。用于把 **BLOCK-1 的症状**端到端钉住：
+ * 0.1.7 上必须解析出 `childSessionId === childId` 的地址，而不是退回打开父会话。
+ */
+const NAV_PLUGIN_FUNCS = ["uiWorkspaceRt", "openSessionTarget", "activateChatTab", "openChildSession"];
+
+function makeNavigationSandbox() {
+  const plugin = readFileSync(join(process.cwd(), "dsh-graph-host", "lib", "client", "plugin.js"), "utf8");
+  const helpers = readFileSync(join(process.cwd(), "dsh-graph-host", "lib", "client", "helpers.js"), "utf8");
+  const code = [
+    "var sessionsRt = null; var appCtx = null;",
+    "const openingChildSessions = new Set();",
+    ...NAV_PLUGIN_FUNCS.map((n) => extractFunction(plugin, n)),
+    ...CATALOG_FUNCS.map((n) => extractFunction(helpers, n)),
+    "this.api = { openChildSession, setRt: (rt, app) => { sessionsRt = rt; appCtx = app ?? null; } };",
+  ].join("\n");
+  const sandbox: any = {
+    Promise,
+    requestAnimationFrame: (cb: () => void) => { cb(); return 0; },
+    console: { warn: () => {} },
+  };
+  vm.runInNewContext(code, sandbox, { filename: "dsh-graph-host/lib/client/plugin.js#openChildSession" });
+  return sandbox.api as { openChildSession: (p: string, c: string) => Promise<void>; setRt: (rt: unknown, app?: unknown) => void };
+}
+
+/** 记录 uiWorkspace.openSession / sessions.open / openSubagent 的入参。 */
+function makeNavHost(snapshot: unknown) {
+  const opened: any[] = [];
+  const legacyOpened: any[] = [];
+  const rt: any = {
+    list: { getSnapshot: () => snapshot },
+    open: (sid: string) => { legacyOpened.push(sid); return undefined; },
+    refreshProjections: async () => {},
+    setSubagentCatalogOpen: () => {},
+    refreshSubagents: async () => {},
+  };
+  const uiWorkspace = { openSession: (target: any) => { opened.push(target); } };
+  const appCtx = { get: (name: string) => (name === "uiWorkspace" ? uiWorkspace : rt) };
+  return { rt, appCtx, opened, legacyOpened };
 }
 
 test("g-351 客户端：0.1.7 真实 entry 形状（无 kind）下子会话可解析为子会话地址，不静默退化为父会话", () => {
@@ -415,6 +461,48 @@ test("g-351 客户端：形状都不符时目录为空且不抛出（调用方�
   assert.equal(subagentCatalogEntries({ list: { getSnapshot: () => { throw new Error("boom"); } } }, "parent-1").length, 0, "快照读取抛错不得冒泡");
   assert.equal(subagentAddressOf({ list: { getSnapshot: () => snapshot017([ENTRY_017_CONTINUABLE]) } }, "parent-1", "nope"), null);
   assert.equal(subagentAddressOf({ list: { getSnapshot: () => snapshot017([]) } }, "", "child-cont"), null);
+});
+
+test("g-351 客户端（行为·BLOCK-1 症状）：0.1.7 上「↗ 转到对话」解析到子会话，而非退回打开父会话", async () => {
+  const api = makeNavigationSandbox();
+
+  // 0.1.7：快照只有 projectionsBySession，entry 无 kind
+  const hostNew = makeNavHost(snapshot017([ENTRY_017_ONESHOT, ENTRY_017_CONTINUABLE]));
+  api.setRt(hostNew.rt, hostNew.appCtx);
+  await api.openChildSession("parent-1", "child-cont");
+  assert.equal(hostNew.opened.length, 1, "必须调用一次会话打开（uiWorkspace.openSession）");
+  assert.deepEqual(
+    { ...(hostNew.opened[0] as any) },
+    { parentSessionId: "parent-1", childSessionId: "child-cont", mode: "continuable" },
+    "0.1.7 上必须打开**子会话**地址（修复前这里退化为打开父会话 'parent-1'，即 BLOCK-1 症状）",
+  );
+  assert.deepEqual(hostNew.legacyOpened, [], "不得走「打开父会话」的回退分支");
+
+  // 0.1.7 · mode:'unknown'：仍解析到子会话，mode 用宿主通配值
+  const hostUnk = makeNavHost(snapshot017([ENTRY_017_UNKNOWN]));
+  api.setRt(hostUnk.rt, hostUnk.appCtx);
+  await api.openChildSession("parent-1", "child-unk");
+  assert.deepEqual(
+    { ...(hostUnk.opened[0] as any) },
+    { parentSessionId: "parent-1", childSessionId: "child-unk", mode: "unknown" },
+    "mode:'unknown' 也必须解析到子会话，并以宿主通配值下发 mode",
+  );
+
+  // 0.1.6：旧容器 + 带 kind 的 entry，旧路径零退化
+  const hostOld = makeNavHost(snapshot016([ENTRY_016_CHILD]));
+  api.setRt(hostOld.rt, hostOld.appCtx);
+  await api.openChildSession("parent-1", "child-cont");
+  assert.deepEqual(
+    { ...(hostOld.opened[0] as any) },
+    { parentSessionId: "parent-1", childSessionId: "child-cont", mode: "continuable" },
+    "0.1.6 旧路径必须同样解析到子会话（双向兼容）",
+  );
+
+  // 负向：目录里只有该 id 的 **diagnostic** 行 ⇒ 不得冒充子会话，应如实退化为打开父会话
+  const hostDiag = makeNavHost(snapshot016([ENTRY_016_DIAGNOSTIC]));
+  api.setRt(hostDiag.rt, hostDiag.appCtx);
+  await api.openChildSession("parent-1", "child-diag");
+  assert.deepEqual(hostDiag.opened, ["parent-1"], "diagnostic 行必须退化为打开父会话（形状探测不得只按 id；父会话以裸 SessionId 打开）");
 });
 
 test("g-351 客户端：三处调用点统一走同一形状判定函数，不得残留内联 kind 谓词（结构性钉住）", () => {

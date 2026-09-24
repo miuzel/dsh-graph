@@ -152,6 +152,11 @@ import { sT } from "./lib/server-i18n.js";
 // 这里不静态 import @deepseek-ai/*；改为在 apply() 内**守卫式动态 import** schemastery（仅 schema），
 // settings 服务经 ctx.inject(["settings"]) 等待（参照已上线的 dsh-subagent-model-picker）。
 // 解析失败或 settings 服务缺失时优雅降级：namespace 不注册、看板/工具/模型路由不受影响。
+// g-351 / NB-2 措辞订正：这类降级**不是「静默」**——基线（96c29cb 起）在 schemastery 不可解析
+// 时写 stderr `g-133: @deepseek-ai/schemastery 不可解析…`，在 register 抛错时写
+// `g-133 settings 注册失败（降级…）`（负责人实测的 0.1.7 告警即后者）。真正「静默」的是
+// **后果**：profile 全局默认不再生效（子代理派发回落默认路由），日志与用户可见状态脱节。
+// g-351 的判据 3 要消灭的是这个后果（能力探测分流让值真正生效），而不是「补一条告警」。
 
 // g-112：两半共用同一 root 解析函数（re-export 供验收/测试直接核对函数同一性）
 export { resolveRoot } from "./core/root.js";
@@ -1032,7 +1037,10 @@ export function apply(ctx, config) {
       const registerCapable = typeof svc?.register === "function";
       if (registerCapable) {
         if (!z) {
-          // schema 依赖 schemastery；解析不到时如实说明，且**不再**退化成无提示的默认值。
+          // schema 依赖 schemastery；解析不到时如实说明。
+          // NB-2 措辞订正：基线（g-351 之前）此分支**也有**同形 stderr 告警
+          //（`g-133: @deepseek-ai/schemastery 不可解析…`，见 96c29cb:dsh-graph-host/index.js:959），
+          // 并非「无提示的默认值」；此处沿用同一如实告警口径，"g-351" 前缀仅用于区分代次。
           process.stderr.write("[dsh-graph-host] g-351: @deepseek-ai/schemastery 不可解析，profile 全局默认降级（模型路由/提示词走 project.yaml/继承）\n");
           return;
         }
