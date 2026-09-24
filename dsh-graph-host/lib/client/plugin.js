@@ -355,9 +355,11 @@
                   icon: GraphTabIcon,
                 }],
               }));
-              // 本体 seat：复用与 conversation.view 完全相同的 KanbanView 与数据源，只多传 host: "sidebar"
-              // （该 seat 是 session 作用域，投递与 conversation.view 相同的标准套件，含 sessionId ⇒
-              //  workspace 解析链无需任何改动，也不触碰 g-113 的会话隔离边界）。
+              // 本体 seat：复用与 conversation.view **完全相同**的 KanbanView、数据源与渲染实现
+              // （g-352 att-005：头部/工具条是同一份实现、零 host 门控 ⇒ 两侧 DOM/行为完全一致；
+              //  host: "sidebar" 仅作为挂载点标识保留，不再门控任何渲染）。
+              // 该 seat 是 session 作用域，投递与 conversation.view 相同的标准套件，含 sessionId ⇒
+              //  workspace 解析链无需任何改动，也不触碰 g-113 的会话隔离边界。
               own(sidebarSlots.inject("sidebar.right.pane.tab", () => sidebarSlots.register(
                 { name: "sidebar.right.pane.tab", key: SIDEBAR_TAB_ID, locale: "dsh-graph" },
                 (props) => h(KanbanView, { ...props, host: "sidebar" }),

@@ -133,9 +133,13 @@
       // g-173：看板根节点 ref——自动滚动 effect 从它向上找真实垂直滚动容器
       //（比 querySelector('[style*="padding: 12px"]') 更精确：不会误命中页面其它内联 padding 元素）
       const boardRootRef = React.useRef(null);
+      // g-352 att-005：头部 ref——「装不下就把六项工具条收进 ⋯ 工具」按**头部自身实测**判定
+      //（视口宽度无关：会话页看板页签与右侧栏可用宽度都由外层容器决定）。
+      const headRef = React.useRef(null);
       // g-352：窄宽度响应式——断点真源是**看板根容器实测宽度**（不是 window 宽度：
-      // 右侧栏由宿主拖拽改宽时 window 宽度不变）。ResizeObserver 观测 S.wrap 的 clientWidth；
-      // 仅在 host="sidebar"（右侧栏实例）挂观测，conversation.view 不订阅、不分支 ⇒ DOM/样式逐字不变。
+      // 右侧栏由宿主拖拽改宽时 window 宽度不变）。ResizeObserver 观测 S.wrap 的 clientWidth。
+      // att-005（负责人 gate「两侧完全一致」）：会话页看板页签与右侧栏渲染同一个 KanbanView、
+      // 同一份头部/工具条实现、零 host 门控 ⇒ 两侧都挂观测、都按同一套断点与折叠逻辑渲染。
       // 未测量/无 ResizeObserver 时保持 Infinity（= wide 档），默认外观与全宽路径一致。
       // 注意：根节点只在数据就绪后才渲染（loading/错误分支是裸 div、没有 ref），普通 useRef 变更
       // 又不触发 effect ⇒ 必须在依赖里带上「已挂载」与 kanbanRenderKey（换节点），否则观测会在
@@ -848,11 +852,8 @@
       // g-352：根节点是否已挂载（数据就绪）——作为观测 effect 的依赖之一
       const boardMounted = !state.loading && !!state.data;
       // g-352：看板根容器实测宽度的观测（取代 g-330 的纯 CSS 最小适配）。
-      // 只在右侧栏实例（host="sidebar"）挂观测：会话内 conversation.view 不订阅 ResizeObserver、
-      // 不引入任何窄宽度分支 ⇒ 其 DOM/样式逐字不变（判据 5）。
-      const sidebarHost = props?.host === "sidebar";
+      // 两个宿主（会话页看板页签 / 右侧栏）都用同一份实现、都挂观测 ⇒ 两侧行为完全一致。
       React.useEffect(() => {
-        if (!sidebarHost) return undefined;
         const el = boardRootRef.current;
         if (!el) return undefined;
         const measure = () => {
@@ -867,12 +868,48 @@
         const ro = new ResizeObserver(measure);
         ro.observe(el);
         return () => ro.disconnect();
-      }, [sidebarHost, activeWs, boardMounted, kanbanRenderKey]);
+      }, [activeWs, boardMounted, kanbanRenderKey]);
       // 断点分档（阈值与派生集中在 narrow-width.js 纯函数模块，便于断言同一实现）
       const widthTier = boardWidthTier(boardWidth);
-      // 窄宽度只在右侧栏实例生效：conversation.view 路径 tier 恒为 wide。
-      const narrowActive = sidebarHost && widthTier !== "wide";
-      const narrowSingleTier = sidebarHost && isSingleVersionTier(boardWidth);
+      // 两侧完全一致（att-005）：窄档判定不再有 host 门控——会话页看板页签同样是窄档。
+      const narrowActive = widthTier !== "wide";
+      const narrowSingleTier = isSingleVersionTier(boardWidth);
+      // g-352 att-005：「装不下就把**六项工具条**（刷新/标签筛选/记忆/项目知识库/⚙/已归档）
+      // 收进「⋯ 工具」弹层」的**实测**判定——断点档（<480）之外，头部自然宽度超过可用宽度时
+      // 同样折叠，否则 S.head 单行 flex 会把按钮压成逐字竖排（负责人 1585px 截图；
+      // 真机实测：英文界面下头部自然宽度 ≈1318px > 会话页 1298px 可用宽度）。
+      // 状态派生全部在 narrow-width.js（headNaturalWidth / fitCollapseState），这里只做测量接线。
+      const [toolbarCollapsedByFit, setToolbarCollapsedByFit] = React.useState(false);
+      const headExpandedNeedRef = React.useRef(0);
+      // 头部内容键：内容变化（标签筛选激活、搜索计数/反馈、已归档开关）也要重测自然宽度
+      const headContentKey = [
+        tagFilter.length, searchActiveQuery ? 1 : 0, searchMatches.length,
+        searchFeedback ? 1 : 0, searchFullText ? 1 : 0, showArchived ? 1 : 0,
+      ].join("|");
+      React.useLayoutEffect(() => {
+        const el = headRef.current;
+        if (!el) return undefined;
+        const measure = () => {
+          const kids = Array.from(el.children || []);
+          const natural = headNaturalWidth(kids.map((k) => k.offsetWidth), S.head.gap);
+          const next = fitCollapseState({
+            collapsed: toolbarCollapsedByFit,
+            naturalWidth: natural,
+            availableWidth: el.clientWidth,
+            expandedNeed: headExpandedNeedRef.current,
+          });
+          if (!next) return;   // 测量不可用（vm/SSR/首帧）⇒ 保持现状，只按断点分档
+          headExpandedNeedRef.current = next.expandedNeed;
+          setToolbarCollapsedByFit((prev) => (prev === next.collapsed ? prev : next.collapsed));
+        };
+        measure();
+        if (typeof ResizeObserver === "undefined") return undefined;
+        const ro = new ResizeObserver(measure);
+        ro.observe(el);
+        return () => ro.disconnect();
+      }, [boardMounted, activeWs, kanbanRenderKey, toolbarCollapsedByFit, headContentKey]);
+      // 折叠与否：断点档（<480px）**强制**折叠；其余档位由头部实测决定（装不下才折叠）。
+      const toolbarCollapsed = shouldCollapseToolbar(boardWidth) || toolbarCollapsedByFit;
       // g-352（负责人裁决）：单版本档的视图选择器可选 backlog —— 选中后 backlog 成为**唯一泳道**。
       // 与单版本收窄完全同口径（搜索激活时一律挂起，保证 g-233 的搜索匹配不被视图过滤藏掉）；
       // 同样是纯派生，不新增状态真源、不落任何持久化键。
@@ -2176,14 +2213,15 @@
       // g-216: 判定是否有任何弹窗或抽屉处于打开态
       const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer || showSharedPanel || showMemoryModal || showTagFilterModal);
 
-      // g-352：窄宽度适配**取代** g-330 的纯 CSS 最小适配（那条 `.dg-head-sidebar` 换行规则）。
-      // 断点以看板根容器实测宽度为准（`boardWidth`，见上方 ResizeObserver），且只在 host="sidebar"
-      // 的右侧栏实例生效：会话内 conversation.view 路径 narrowActive 恒为 false ⇒ 与 g-330 之前逐字一致。
-      //（工具条按钮样式 tbBtnStyle / 窄档兜底 headBtnStyle 已在泳道渲染之前就位，见上方。
-      //  窄档弹层内的按钮集合——与宽档平铺的工具条**同一批功能**（刷新/标签筛选/[清空标签]/
-      //  记忆/知识库/设置/版本管理/创建版本/显示已归档），只是排成整行。宽档保留原有的字面量渲染
-      //（会话内路径与 g-324 的刷新按钮源契约因此逐字不变），这里只描述窄档弹层需要的标签与动作。
-      //  行的动作与 tooltip 仍是既有实现；标签（图标 + 文字）由 headPanelEntry 统一派生。）
+      // g-352：窄宽度适配**取代** g-330 的纯 CSS 最小适配（那条「头部放开换行」规则）。
+      // 断点以看板根容器实测宽度为准（`boardWidth`，见上方 ResizeObserver）。
+      // att-005（负责人 gate「两侧完全一致」）：会话页看板页签与右侧栏共用**同一份**头部/工具条
+      // 实现（同一个 KanbanView，零 host 门控）——折叠逻辑因此两侧完全一致。
+      //（工具条按钮样式 tbBtnStyle / 折叠态兜底 headBtnStyle 已在泳道渲染之前就位，见上方。
+      //  折叠态弹层内的按钮集合 = **只收这六项**（刷新/标签筛选/[清空标签]/记忆/知识库/设置/显示已归档），
+      //  排成整行、每行图标 + 文字；「版本管理 / 创建版本」不再进弹层（att-005 第 B-2 项：回到网格
+      //  左上角原位置、靠左对齐）。宽档平铺保留原有的字面量渲染与动作/tooltip。
+      //  标签（图标 + 文字）由 headPanelEntry 统一派生。）
       const headPanelRows = [
         { key: "refresh", label: dgT("common.refresh"), title: dgT("common.refresh"), action: load },
         { key: "tagfilter", label: tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title"), title: dgT("tagFilter.title"), action: () => setShowTagFilterModal(true) },
@@ -2191,9 +2229,6 @@
         { key: "memory", label: dgT("memory.btn"), title: dgT("memory.title"), action: () => setShowMemoryModal(true) },
         { key: "shared", label: dgT("shared.title"), title: dgT("shared.title"), action: () => setShowSharedPanel(true) },
         { key: "settings", label: dgT("settings.title"), title: dgT("settings.title"), action: () => setShowSettings(true) },
-        // g-352 att-003 第 7 项：窄档下「版本管理 / 创建版本」同样收进本下拉（图标 + 文字齐备）
-        { key: "versionmanage", label: dgT("versionDrawer.title"), title: dgT("versionDrawer.title"), action: () => setShowVersionDrawer(true) },
-        { key: "createversion", label: dgT("createVersion.createBtn"), title: dgT("createVersion.createBtn"), action: () => { setShowCreateVersion(true); setNewVersionSlug(""); setNewVersionName(""); setCreateVersionNote(null); } },
       ].filter(Boolean).map((it) => {
         const entry = headPanelEntry(it.key, it.label);
         return {
@@ -2218,24 +2253,26 @@
           onChange: (e) => setShowArchived(e.target.checked),
         }),
         dgT("card.archived"));
-      // g-352 att-003 第 7 项（负责人人工 gate 反馈 + 澄清）：版本管理（点开**版本管理抽屉**）与
-      // 「创建版本」不再独占网格左上角那一行，改为**靠左并入搜索框同一行**。
-      // · 版本管理按钮不再是「无文字裸图标」——补可见文字（图标 + 文字，与第 1 项同口径），
-      //   title/aria-label 仍指向版本管理抽屉（行为不变）；
-      // · 两者与搜索框/全文开关同行，且共用 rowBtnStyle() ⇒ 与同行按钮等高同风格（第 9 项）；
-      // · 仅右侧栏实例如此（会话内 conversation.view 路径 DOM/样式按判据 5 逐字不变），
-      //   窄档则由上面的 headPanelRows 收进折叠下拉（同样图标 + 文字齐备）。
+      // g-352 att-005 第 B-2 项（负责人 gate「回到原来的位置、不要并入搜索行、靠左对齐」）：
+      // 撤销 att-003 第 7 项的结构性搬家 —— 「版本管理 / 创建版本」回到**网格左上角**原位置
+      //（g-174 / g-223 的落点），**两侧完全一致**（同一份定义，两处调用点共用）。
+      // 保留 att-003 的两项成果：
+      //  ① 「补齐可读标签」——版本管理按钮带可见文字（图标 + 文字，不再是无文字裸图标）；
+      //  ② 「打开版本管理抽屉不溢出」——点击仍走既有抽屉（version-drawer.js），宽度由既有 S.modal 约束。
+      // 角落只有 130px 列宽：两个按钮**纵向靠左堆叠** + `maxWidth:100%` + 省略号兜底
+      //（en 标签 `🏷️ Version Management` 比 zh 长），绝不横向溢出压到相邻阶段列头。
+      const cornerBtnStyle = { ...S.btn, ...rowBtnStyle(), maxWidth: "100%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" };
       const versionManageBtn = h("button", {
-        style: { ...S.btn, ...rowBtnStyle() },
+        style: cornerBtnStyle,
         className: "dg-btn dg-version-manage-btn",
         title: dgT("versionDrawer.title"),
         "aria-label": dgT("versionDrawer.title"),
         onClick: () => setShowVersionDrawer(true),
       }, headPanelEntry("versionmanage", dgT("versionDrawer.title")).label);
       const createVersionBtn = h("button", {
-        style: { ...S.btn, ...rowBtnStyle() },
+        style: cornerBtnStyle,
         className: "dg-btn",
-        title: dgT("createVersion.createBtn"),
+        title: dgT("createVersion.title"),
         onClick: () => {
           setShowCreateVersion(true);
           setNewVersionSlug("");
@@ -2243,10 +2280,16 @@
           setCreateVersionNote(null);
         },
       }, dgT("createVersion.createBtn"));
-      // g-233：标题行最右侧增加搜索框（g-352 att-003：元素本体抽成变量，以便右侧栏把它与版本管理/创建版本放进同一行）
+      // 网格左上角单元格：两个按钮（图标 + 文字）靠左对齐、纵向排列
+      const gridCornerEl = h("div", {
+        key: "grid-corner",
+        className: "dg-grid-corner",
+        style: { ...S.stageHead, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4, minWidth: 0, maxWidth: "100%", overflow: "hidden" },
+      }, versionManageBtn, createVersionBtn);
+      // g-233：标题行最右侧增加搜索框（g-352 att-005：**保持原设计**——与标题同一行、不再有同行容器包装）
       const searchBarEl = h("div", {
-            // g-352（判据 5）：样式本体（含唯一新增的 min-width:0 门控）在 narrow-width.js 的
-            // searchBarWrapStyle 纯函数里——非窄档（含 conversation.view）返回的键集合与基线逐字一致。
+            // g-352：样式本体（含窄档唯一新增的 min-width:0 门控）在 narrow-width.js 的
+            // searchBarWrapStyle 纯函数里——两侧共用同一实现。
             style: searchBarWrapStyle(narrowActive),
             className: "dg-search-bar",
           },
@@ -2366,11 +2409,13 @@
              }
            } : undefined },
         h("style", null, HOVER_CSS),
-        // g-352：右侧栏实例（host="sidebar"）的头部布局：style 仍是 S.head **本体**（会话内
-        // sidebarHost=false ⇒ 无额外样式键、className 为 undefined，DOM/样式逐字不变，判据 5）；
-        // 右侧栏专属的布局兜底走 .dg-head-sidebar（见 constants.js：放不下就换行 + 按钮不压缩）。
-        // 真正的窄宽度适配是测量驱动的：<480px 工具条整批收进下拉容器、<360px 单版本模式。
-        h("div", { style: S.head, className: sidebarHost ? "dg-head-sidebar" : undefined },
+        // g-352 att-005：头部（标题 + 版本链接 + 更新时间 + 工具条 + DEBUG + 搜索框）是**两个宿主
+        // 共用的同一份实现**（同一个 KanbanView，零 host 门控），class 与样式在两侧完全一致。
+        // style 仍是 S.head 本体（不新增样式键）；布局兜底走 .dg-head（见 constants.js：
+        // 放不下就换行 + 子项/按钮不压缩不折行 ⇒ 任何宽度都不会出现竖排/逐字换行）。
+        // 适配是测量驱动的：<480px 六项工具条整批收进下拉容器、头部实测装不下时同样折叠、
+        // <360px 单版本模式。
+        h("div", { style: S.head, className: "dg-head", ref: headRef },
           // g-352：窄档下标题不内部折行（nowrap + min-width:auto ⇒ 保持自然宽度，由头部换行让位）
           h("strong", { style: narrowActive ? { whiteSpace: "nowrap", flexShrink: 0 } : undefined }, "dsh-graph"),
           // g-174：标题栏显示插件版本，点击以新标签打开插件官网
@@ -2391,20 +2436,19 @@
             intervalSec: refreshIntervalSec,
             onTriggerRefresh: load,
           }),
-          // ===== g-352：宽档平铺 / 窄档折叠 =====
-          // 宽档（根容器实测宽度 ≥480px 或非右侧栏实例）：工具条按钮与显示归档开关原地平铺，
-          // 与 g-330 之前逐字一致（会话内 conversation.view 恒走此分支）。
-          // 窄档（<480px）：同一批按钮原样收进一个弹层容器（headPanelItems），头部只留一个触发按钮——
-          // 触发按钮自身同样带 min-width:0 + 省略号兜底（判据 2）。
-          narrowActive ? null : h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, dgT("common.refresh")),
+          // ===== g-352：工具条六项 —— 装得下平铺 / 装不下（或 <480px）收进「⋯ 工具」弹层 =====
+          // 折叠判据 = 断点档（<480px，shouldCollapseToolbar）**或**头部实测自然宽度超过可用宽度
+          //（toolbarCollapsedByFit）⇒ 头部始终单行，绝不把按钮压成竖排。
+          // 折叠时只收这六项 + 显示已归档开关（headPanelItems），每行图标 + 文字。
+          toolbarCollapsed ? null : h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, dgT("common.refresh")),
           // g-187：顶部标签筛选弹层入口
-          narrowActive ? null : h("button", {
+          toolbarCollapsed ? null : h("button", {
             style: { ...tbBtnStyle, ...(tagFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
             className: "dg-btn" + (tagFilter.length > 0 ? " dg-btn-active" : ""),
             title: dgT("tagFilter.title"),
             onClick: () => setShowTagFilterModal(true),
           }, tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title")),
-          narrowActive || tagFilter.length === 0
+          toolbarCollapsed || tagFilter.length === 0
             ? null
             : h("button", {
                 className: "dg-btn",
@@ -2416,35 +2460,36 @@
                 onClick: () => setTagFilter([]),
               }, dgT("tagFilter.clear")),
           // g-105: 记忆管理按钮（位于设置按钮左侧）
-          narrowActive ? null : h("button", {
+          toolbarCollapsed ? null : h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
             title: dgT("memory.title"),
             onClick: () => setShowMemoryModal(true),
           }, dgT("memory.btn")),
           // g-183: 项目知识库面板入口
-          narrowActive ? null : h("button", {
+          toolbarCollapsed ? null : h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
             title: dgT("shared.title"),
             onClick: () => setShowSharedPanel(true),
           }, dgT("shared.title").split("（")[0]),
           // g-352 att-003 第 9 项：右上角齿轮是**图标按钮**，与同行文字按钮等高 ⇒ 走
-          // rowBtnStyle({ iconOnly: true })（26×26 方形，不再 0 7px/14px 各自为政）。
-          // 仅右侧栏实例改（会话内 conversation.view 路径按钮样式按判据 5 逐字不变）。
-          narrowActive ? null : h("button", {
-            style: sidebarHost ? { ...S.btn, ...rowBtnStyle({ iconOnly: true }), marginLeft: 8 } : { ...tbBtnStyle, padding: "0 7px", fontSize: 14 },
+          // rowBtnStyle({ iconOnly: true })（26×26 方形）。
+          // att-005：两侧完全一致 —— 不再按 host 分叉样式（会话页看板页签同口径）。
+          toolbarCollapsed ? null : h("button", {
+            style: { ...S.btn, ...rowBtnStyle({ iconOnly: true }), marginLeft: 8 },
             className: "dg-btn",
             title: dgT("settings.title"),
             onClick: () => setShowSettings(true),
           }, "⚙"),
-          // g-110: 显示已归档目标的 checkbox（移至右侧，DEBUG 信息左侧，布局更规整）
-          narrowActive ? null : archivedToggle,
-          narrowActive
-            // g-352 窄档（<480px）：工具条收进一个**下拉容器**。容器与选项行复用既有内联下拉实现
-            //（helpers.js 的 S.inlineMenu 样式 token + .dg-schedule-version-item 行样式，
-            // 即 g-306 排期版本选择器 card.js:246-291 的那一套）⇒ 全仓仍只有一套下拉实现，
-            // 不引入第三套；也不新增内联 S.overlay 浮层调用点（g-181/g-343 的 19 处计数契约零回归）。
+          // g-110: 显示已归档目标的 checkbox（平铺时位于 DEBUG 信息左侧；折叠时收进弹层）
+          toolbarCollapsed ? null : archivedToggle,
+          toolbarCollapsed
+            // g-352：工具条六项收进一个**下拉容器**（断点档 <480px **或**头部实测装不下）。
+            // 容器与选项行复用既有内联下拉实现（helpers.js 的 S.inlineMenu 样式 token +
+            // .dg-schedule-version-item 行样式，即 g-306 排期版本选择器 card.js:246-291 的那一套）
+            // ⇒ 全仓仍只有一套下拉实现，不引入第三套；也不新增内联 S.overlay 浮层调用点
+            //（g-181/g-343 的 19 处计数契约零回归）。
             // 锚点靠右（left:auto + right:0），窄容器里也不会被 S.wrap 的横向滚动裁掉。
             ? h("span", { key: "tb-overflow", ref: headOverflowRef, style: { display: "inline-flex", justifyContent: "flex-end", position: "relative", verticalAlign: "middle", minWidth: 0, flex: "1 1 auto" } },
                 h("button", {
@@ -2488,12 +2533,10 @@
           narrowSingleTier && !singleLaneMode ? renderVersionPicker(false) : null,
           // g-113 临时诊断（灰色低调显示，两行省略，详情在 tooltip 显示，为搜索框留出空间）：显示当前解析的 workspace 与会话 id
           // g-352 att-003 第 2 项（负责人人工 gate 反馈「窄幅条件下隐藏 debug 信息」）：
-          // 窄档（<480px）整块不渲染；宽档与 conversation.view 路径逐字不变。
-          // ⚠️ g-352 att-004 B1 修正：DEBUG 必须仍是 **.dg-head 的子节点**，且次序恢复基线
-          // `已归档 → DEBUG → 搜索行` —— att-003 曾把它放在头部**之外**（成为看板根容器的兄弟），
-          // 后果：① 会话内 conversation.view 元素签名 base→HEAD diff=10 行（判据 5「逐字不变」破）；
-          //       ② 宽档下 DEBUG 之下内容整体下移 ≈34px（第 2 项自身「宽档保持现状」也破）。
-          // 窄档隐藏的门控保留，只是门控对象回到头部内部（宽档/会话内渲染结果与基线逐字一致）。
+          // 窄档（<480px）整块不渲染。
+          // ⚠️ g-352 att-004 B1 修正：DEBUG 必须仍是 **.dg-head 的子节点**，且次序保持
+          // `已归档 → DEBUG → 搜索行`（att-003 曾把它放在头部**之外**，导致 DEBUG 之下内容整体下移）。
+          // att-005：两侧完全一致 —— 门控口径两侧相同。
           narrowActive ? null : h("div", {
             style: {
               ...S.meta,
@@ -2530,14 +2573,11 @@
                 display: "block",
               },
             }, "ws=" + (activeWs ?? "∅"))),
-          // g-352 att-003 第 7 项：版本管理 + 创建版本 + 搜索框/全文开关**同一行**，
-          // 两颗按钮靠左（搜索框自带 marginLeft:auto ⇒ 被推到这一行右端）。窄档两颗按钮在折叠下拉里。
-          sidebarHost
-            ? h("div", { key: "head-search-row", style: { display: "flex", alignItems: "center", gap: 6, flex: "1 1 auto", minWidth: 0 } },
-                narrowActive ? null : versionManageBtn,
-                narrowActive ? null : createVersionBtn,
-                searchBarEl)
-            : searchBarEl),
+          // g-352 att-005 第 B-1 项（负责人 gate「搜索保持原设计与标题同一行、不增加 header 行高」）：
+          // 搜索框/全文开关回到**头部本行**（原设计：`dsh-graph / version / 更新于 / ⟳ / [搜索目标…] / 全文`
+          // 同一行，搜索框自带 marginLeft:auto 被推到右端），不再有 att-003 的 head-search-row 包装层
+          // —— 既不新增行，也不把搜索挤到下一行；「版本管理 / 创建版本」已回到网格左上角（见 gridCornerEl）。
+          searchBarEl),
         // g-108：顶部 supervisor 状态栏（id 由 board 端点下发，未配置则不显示）；
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
@@ -2547,32 +2587,12 @@
         // g-127/g-156/g-164：折叠时对应列窄化为 36px（blocked 和 deliver 独立折叠），
         // 列模板统一由 gridCols 按当前折叠状态动态计算，与 released 泳道网格保持一致
         h("div", { style: { ...S.grid, gridTemplateColumns: gridCols } },
-          // g-174 & g-223：看板左上角单元格放置「版本管理」图标入口与「＋ 新建版本」按钮。
-          // g-352 att-003 第 7 项（负责人人工 gate 反馈）：右侧栏实例把这两颗**移到头部搜索行**
-          //（见 head-search-row）⇒ 角落只留一个**对齐锚点**，保证阶段列表头仍与泳道标题列对齐；
-          // 共享列模板（顶部表头与 released 泳道共用的那一份派生）与网格容器数量都不变。
-          // 会话内 conversation.view 路径仍在此原位渲染原两颗按钮（判据 5：DOM/样式逐字不变）。
-          sidebarHost
-            ? h("div", { style: S.stageHead, key: "grid-corner", className: "dg-grid-corner" })
-            : h("div", { style: S.stageHead },
-              h("button", {
-                style: { ...S.btn, fontSize: 12, padding: "2px 6px", marginRight: 4, lineHeight: 1.2 },
-                className: "dg-btn dg-version-manage-btn",
-                title: dgT("versionDrawer.title"),
-                "aria-label": dgT("versionDrawer.title"),
-                onClick: () => setShowVersionDrawer(true),
-              }, "🏷️"),
-              h("button", {
-                style: { ...S.btn, fontSize: 12, padding: "2px 8px" },
-                className: "dg-btn",
-                title: dgT("createVersion.title"),
-                onClick: () => {
-                  setShowCreateVersion(true);
-                  setNewVersionSlug("");
-                  setNewVersionName("");
-                  setCreateVersionNote(null);
-                },
-              }, dgT("createVersion.createBtn"))),
+          // g-174 & g-223：看板左上角单元格放置「版本管理」入口与「＋ 新建版本」按钮。
+          // g-352 att-005 第 B-2 项（负责人 gate「回到原来的位置、不要并入搜索行、靠左对齐」）：
+          // 撤销 att-003 第 7 项的搬家 —— 两颗按钮**两侧、各档位都在此原位渲染**
+          //（同一份定义 gridCornerEl；单泳道档同样保留 ⇒ 版本管理入口在最窄档也不丢失），
+          // 靠左对齐；共享列模板（顶部表头与 released 泳道共用的那一份派生）与网格容器数量不变。
+          gridCornerEl,
           // g-352：单版本模式下没有横向阶段列，阶段列头由 lane() 的纵向堆叠分支提供
           //（每个阶段块自带一行列头），故此处不再渲染表头行。
           singleLaneMode ? null : STAGES.map((s) => {

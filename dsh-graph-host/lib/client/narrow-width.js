@@ -1,5 +1,5 @@
 // dsh-graph 看板窄宽度响应式派生纯函数模块（g-352）
-// 取代 g-330 的「最小适配」（constants.js 的 `.dg-head-sidebar { flex-wrap: wrap; row-gap: 6px }`）。
+// 取代 g-330 的「最小适配」（constants.js 里那条「头部放开换行」的纯 CSS 规则）。
 //
 // 断点真源 = **看板根容器实测宽度**（ResizeObserver 观测 S.wrap 的 clientWidth），不是 window 宽度：
 // 右侧栏宽度由宿主拖拽改变，window 宽度可以完全不变。
@@ -14,6 +14,11 @@
 
 /** <480px：工具条（刷新/标签筛选/记忆/知识库/设置/显示归档）收进一个弹层容器 */
 const NARROW_TOOLBAR_MAX_WIDTH = 480;
+/**
+ * g-352 att-005：头部「装不下就把六项工具条收进 ⋯ 工具」的实测判定余量（px）。
+ * 已折叠状态要重新展开，必须多出这么多余量（避免折叠↔展开在同一宽度上自激抖动）。
+ */
+const HEAD_FIT_SLACK = 24;
 /** <360px：单版本模式——只渲染选中版本一个泳道，阶段列由横向并排改为纵向堆叠 */
 const NARROW_SINGLE_VERSION_MAX_WIDTH = 360;
 
@@ -38,6 +43,47 @@ function shouldCollapseToolbar(width) {
 /** <360px 进入单版本模式。 */
 function isSingleVersionTier(width) {
   return boardWidthTier(width) === "single";
+}
+
+/**
+ * g-352 att-005（负责人 gate「装不下进「⋯ 工具」弹层」）：头部**单行自然宽度**。
+ *
+ * 头部子项一律 `flex-shrink: 0`（.dg-head > *），故每个子项的 offsetWidth 就是它的自然宽度；
+ * 自然宽度之和 + 间隙 = 头部排成一行所需的最小宽度。任一子项测不到（vm harness / SSR / 首帧）
+ * ⇒ 返回 null，调用方保持现状（绝不误折叠）。
+ * @param {Array<number>} childWidths 子项 offsetWidth
+ * @param {number} gap 头部 flex gap（S.head.gap）
+ * @returns {number|null}
+ */
+function headNaturalWidth(childWidths, gap) {
+  const list = Array.isArray(childWidths) ? childWidths : [];
+  if (list.length === 0) return null;
+  if (!list.every((w) => Number.isFinite(Number(w)) && Number(w) > 0)) return null;
+  const g = Number.isFinite(Number(gap)) ? Number(gap) : 0;
+  return list.reduce((sum, w) => sum + Number(w), 0) + g * (list.length - 1);
+}
+
+/**
+ * g-352 att-005：头部六项工具条「折叠 / 展开」的下一次状态（纯函数，唯一真源）。
+ *
+ * 判据是头部**实测自然宽度**（而不是某个写死的视口宽度）：装不下（自然宽度 > 可用宽度）就折叠；
+ * 已折叠状态用「上次展开态实测需求 + HEAD_FIT_SLACK」作展开门槛 ⇒ 折叠↔展开不会自激抖动
+ *（折叠后自然宽度必然变小，若按当前宽度直接判定会立刻反弹）。
+ * 测量不可用（任一入参非正有限值）⇒ null，调用方保持现状（只按断点分档：<480 折叠）。
+ * @param {{collapsed:boolean, naturalWidth:number, availableWidth:number, expandedNeed:number}} input
+ * @returns {{collapsed:boolean, expandedNeed:number}|null}
+ */
+function fitCollapseState(input) {
+  const natural = Number(input?.naturalWidth);
+  const available = Number(input?.availableWidth);
+  if (!Number.isFinite(natural) || !Number.isFinite(available) || natural <= 0 || available <= 0) return null;
+  const prevNeed = Number(input?.expandedNeed);
+  if (!input?.collapsed) {
+    // 展开态：这次实测的自然宽度就是「展开所需宽度」，直接据它判定是否装得下
+    return { collapsed: natural > available + 1, expandedNeed: natural };
+  }
+  const need = Number.isFinite(prevNeed) && prevNeed > 0 ? prevNeed : natural;
+  return { collapsed: available < need + HEAD_FIT_SLACK, expandedNeed: Number.isFinite(prevNeed) && prevNeed > 0 ? prevNeed : 0 };
 }
 
 /**
@@ -219,14 +265,14 @@ function isMoveToBacklogRejection(code) {
 }
 
 /**
- * 看板头部**搜索框包装层**的内联样式（判据 5：conversation.view 路径 DOM/样式逐字不变）。
+ * 看板头部**搜索框包装层**的内联样式。
  *
- * 基线（g-352 之前）恰好是下面这 5 个键；g-352 唯一新增的 `min-width: 0` 只在右侧栏窄档
- * （narrowActive）追加 —— 未测量 / 非 sidebarHost 时返回的键集合与基线**逐字一致**，
- * 会话内渲染路径不会多出任何样式键（这正是 att-001 被判 BLOCK 的 C3 项）。
- * 之所以抽成纯函数：门控本身必须能被真实断言（不是源码正则），见 g352 测试「判据 5」。
+ * 基线（g-352 之前）恰好是下面这 5 个键；g-352 唯一新增的 `min-width: 0` 只在窄档
+ * （narrowActive）追加 —— 未测量 / 宽档时返回的键集合与基线**逐字一致**。
+ * 之所以抽成纯函数：门控本身必须能被真实断言（不是源码正则），见 g352 测试「判据 2/判据 5」。
+ * att-005（负责人 gate「两侧完全一致」）：两个宿主共用这一份实现（同一 KanbanView，零 host 门控）。
  *
- * @param {boolean} narrowActive 是否处于右侧栏窄档（<480px）
+ * @param {boolean} narrowActive 是否处于窄档（<480px）
  * @returns {object} React 内联样式对象
  */
 function searchBarWrapStyle(narrowActive) {
@@ -244,6 +290,7 @@ function searchBarInnerStyle(narrowActive) {
 export {
   NARROW_TOOLBAR_MAX_WIDTH,
   NARROW_SINGLE_VERSION_MAX_WIDTH,
+  HEAD_FIT_SLACK,
   MOVE_TO_BACKLOG_ERROR_CODE,
   HEAD_PANEL_ICONS,
   VIEW_OPTION_ICONS,
@@ -251,6 +298,8 @@ export {
   boardWidthTier,
   shouldCollapseToolbar,
   isSingleVersionTier,
+  headNaturalWidth,
+  fitCollapseState,
   pickSingleVersion,
   scheduleTargetOptions,
   isMoveToBacklogRejection,

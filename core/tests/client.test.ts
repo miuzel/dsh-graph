@@ -321,9 +321,14 @@ test("g-164 released 泳道与 active/version 泳道共用同一动态列模板�
   assert.match(source, /const gridCols = singleLaneMode \? "minmax\(0, 1fr\)" : horizontalGridCols;/);
   assert.match(source, /deliverColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ deliver/);
   assert.match(source, /blockedColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ blocked/);
-  // 顶部表头网格：(1) 处使用 gridCols；首个单元格为左上角 stageHead 锚点
-  //（g-174 起承载「＋ 新建版本」入口，替换原「泳道＼阶段」文字）。
-  assert.match(source, /h\("div", \{ style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \} \},[\s\S]*?h\("div", \{ style: S\.stageHead \},\s*\n\s*h\("button", \{[\s\S]*?\}, dgT\("createVersion\.createBtn"\)\)\)/);
+  // 顶部表头网格：(1) 处使用 gridCols；首个单元格是**左上角单元格本体**（g-174 起承载
+  // 「版本管理 + ＋ 新建版本」入口，替换原「泳道＼阶段」文字）。
+  // g-352 att-005（负责人显式授权改写本段布局契约断言）：两颗按钮回到网格左上角原位置后，
+  // 该单元格抽成**单一变量** `gridCornerEl`（两侧/各档位共用同一份定义，不再有两处复制粘贴），
+  // 故这里改为断言「网格首个 child 就是 gridCornerEl，且它由版本管理 + 创建版本两颗按钮组成」。
+  assert.match(source, /const gridCornerEl = h\("div", \{[\s\S]*?\}, versionManageBtn, createVersionBtn\);/);
+  assert.match(source, /h\("div", \{ style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \} \},\s*\n\s*\/\/[\s\S]*?\n\s*gridCornerEl,/);
+  assert.match(source, /\}, dgT\("createVersion\.createBtn"\)\);/);
   // released 泳道网格：(1) 处使用 gridCols（relx- 容器），保证与上方泳道列宽/顺序一致。
   assert.match(source, /relx-" \+ v\.slug, style: \{ \.\.\.S\.grid, gridTemplateColumns: releasedGridCols \}/);
   // 全文件恰好两处（顶部表头 + released 泳道）引用该共享模板，不存在各排各的静态模板。

@@ -16,6 +16,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +26,7 @@ import vm from "node:vm";
 import {
   NARROW_TOOLBAR_MAX_WIDTH,
   NARROW_SINGLE_VERSION_MAX_WIDTH,
+  HEAD_FIT_SLACK,
   MOVE_TO_BACKLOG_ERROR_CODE,
   HEAD_PANEL_ICONS,
   VIEW_OPTION_ICONS,
@@ -32,6 +34,8 @@ import {
   boardWidthTier,
   shouldCollapseToolbar,
   isSingleVersionTier,
+  headNaturalWidth,
+  fitCollapseState,
   pickSingleVersion,
   scheduleTargetOptions,
   isMoveToBacklogRejection,
@@ -104,7 +108,7 @@ test("g-352 判据1：断点真源为看板根容器实测宽度（ResizeObserve
   assert.match(src, /const boardMounted = !state\.loading && !!state\.data;/);
   assert.match(src, /const el = boardRootRef\.current;/);
   assert.match(src, /ref: boardRootRef, style: S\.wrap,/);
-  assert.match(src, /\}, \[sidebarHost, activeWs, boardMounted, kanbanRenderKey\]\);/);
+  assert.match(src, /\}, \[activeWs, boardMounted, kanbanRenderKey\]\);/);
   assert.match(src, /const w = typeof el\.clientWidth === "number" && el\.clientWidth > 0/);
   assert.match(src, /const ro = new ResizeObserver\(measure\);/);
   assert.match(src, /ro\.observe\(el\);/);
@@ -115,10 +119,58 @@ test("g-352 判据1：断点真源为看板根容器实测宽度（ResizeObserve
   assert.doesNotMatch(src, /window\.innerWidth|window\.outerWidth|matchMedia/);
   // 分档走纯函数模块（阈值唯一真源），不是散落的数字字面量
   assert.match(src, /const widthTier = boardWidthTier\(boardWidth\);/);
-  assert.match(src, /const narrowActive = sidebarHost && widthTier !== "wide";/);
-  assert.match(src, /const narrowSingleTier = sidebarHost && isSingleVersionTier\(boardWidth\);/);
+  // att-005：断点/折叠是**两侧共用实现**——不再有 host 门控（会话页看板页签同口径）
+  assert.match(src, /const narrowActive = widthTier !== "wide";/);
+  assert.match(src, /const narrowSingleTier = isSingleVersionTier\(boardWidth\);/);
+  assert.doesNotMatch(src, /sidebarHost/);
   const narrow = readClient("narrow-width");
   assert.doesNotMatch(narrow, /\bdocument\.|\bwindow\./, "断点派生是纯函数，不触碰 DOM/window");
+});
+
+test("g-352 att-005 B3：头部实测「装不下就折叠」的纯函数契约（唯一真源，含防抖动余量）", () => {
+  const narrow = readClient("narrow-width");
+  assert.match(narrow, /const HEAD_FIT_SLACK = 24;/);
+  assert.equal(HEAD_FIT_SLACK, 24);
+  // 自然宽度 = 子项宽度之和 + 间隙；测量不全（vm/SSR/首帧）⇒ null，绝不误折叠
+  assert.equal(headNaturalWidth([100, 100, 100], 12), 324);
+  assert.equal(headNaturalWidth([100], 12), 100);
+  assert.equal(headNaturalWidth([100, 0], 12), null, "任一子项测不到 ⇒ null");
+  assert.equal(headNaturalWidth([100, undefined as any], 12), null);
+  assert.equal(headNaturalWidth([], 12), null);
+  assert.equal(headNaturalWidth(null as any, 12), null);
+  // 展开态：装不下就折叠，装得下不折叠（expandedNeed 记录本次实测需求，供折叠态判展开门槛）
+  assert.deepEqual(fitCollapseState({ collapsed: false, naturalWidth: 1318, availableWidth: 1298, expandedNeed: 0 }), { collapsed: true, expandedNeed: 1318 });
+  assert.deepEqual(fitCollapseState({ collapsed: false, naturalWidth: 1180, availableWidth: 1298, expandedNeed: 0 }), { collapsed: false, expandedNeed: 1180 });
+  assert.deepEqual(fitCollapseState({ collapsed: false, naturalWidth: 1299, availableWidth: 1298, expandedNeed: 0 }), { collapsed: false, expandedNeed: 1299 }, "1px 亚像素容差内视为装得下");
+  assert.deepEqual(fitCollapseState({ collapsed: false, naturalWidth: 1300, availableWidth: 1298, expandedNeed: 0 }), { collapsed: true, expandedNeed: 1300 }, "超出容差即折叠");
+  // 折叠态：必须比「上次展开所需宽度 + slack」还宽才展开 ⇒ 折叠/展开不会在同一宽度自激抖动
+  assert.deepEqual(
+    fitCollapseState({ collapsed: true, naturalWidth: 700, availableWidth: 1298, expandedNeed: 1318 }),
+    { collapsed: true, expandedNeed: 1318 },
+    "1298 < 1318+24 ⇒ 保持折叠（否则展开→装不下→折叠的抖动）",
+  );
+  assert.equal(fitCollapseState({ collapsed: true, naturalWidth: 700, availableWidth: 1342, expandedNeed: 1318 })!.collapsed, false, "1342 >= 1318+24 ⇒ 展开");
+  // 测量不可用 ⇒ null（调用方保持现状，只按 <480 断点档折叠）
+  for (const bad of [
+    { collapsed: false, naturalWidth: NaN, availableWidth: 900, expandedNeed: 0 },
+    { collapsed: false, naturalWidth: 0, availableWidth: 900, expandedNeed: 0 },
+    { collapsed: false, naturalWidth: 900, availableWidth: 0, expandedNeed: 0 },
+    { collapsed: false, naturalWidth: 900, availableWidth: Infinity, expandedNeed: 0 },
+  ]) {
+    assert.equal(fitCollapseState(bad as any), null, `测量不可用必须回 null：${JSON.stringify(bad)}`);
+  }
+  // 接线契约：头部 ref 实测 offsetWidth + clientWidth，折叠状态 = 断点档 OR 实测
+  const src = readClient("kanban");
+  assert.match(src, /const headRef = React\.useRef\(null\);/);
+  assert.match(src, /h\("div", \{ style: S\.head, className: "dg-head", ref: headRef \}/);
+  assert.match(src, /const natural = headNaturalWidth\(kids\.map\(\(k\) => k\.offsetWidth\), S\.head\.gap\);/);
+  assert.match(src, /React\.useLayoutEffect\(\(\) => \{/);
+  assert.match(src, /const ro = new ResizeObserver\(measure\);\s*\n\s*ro\.observe\(el\);/);
+  assert.match(src, /const toolbarCollapsed = shouldCollapseToolbar\(boardWidth\) \|\| toolbarCollapsedByFit;/);
+  // 六项之外不得再往弹层里塞别的东西（负责人：「只折叠这几个」）
+  const panelSlice = src.slice(src.indexOf("const headPanelRows = ["), src.indexOf("const headPanelItems"));
+  assert.doesNotMatch(panelSlice, /versionmanage|createversion/, "版本管理/创建版本不再进折叠弹层（回网格左上角）");
+  assert.equal([...panelSlice.matchAll(/key: "/g)].length, 6, "弹层候选恰好六项（刷新/标签筛选/[清空标签]/记忆/知识库/设置）");
 });
 
 // ============================================================ 判据 2：无溢出兜底
@@ -135,6 +187,14 @@ test("g-352 判据2：min-width:0 + text-overflow:ellipsis 兜底（触发按钮
   assert.match(src, /className: headBtnClass \+ " dg-version-picker-trigger"/);
   // 折叠后头部剩下的可见控件都是可收缩的：DEBUG 块已有 minWidth:0 + 省略号，搜索框固定宽度 flexShrink:0
   assert.match(src, /minWidth: 0,\n\s*overflow: "hidden",\n\s*cursor: "default",/);
+  // att-005「任何宽度不得竖排/逐字换行」的根因兜底：头部子项与按钮一律 nowrap + 不参与压缩
+  //（CJK 的 min-content 只有一个字宽，缺这两条就会被 flex 压成逐字换行 —— 负责人 1585px 截图缺陷）
+  assert.match(css, /\.dg-head \{ flex-wrap: wrap; \}/);
+  assert.match(css, /\.dg-head > \* \{ flex-shrink: 0; \}/);
+  assert.match(css, /\.dg-head > \*, \.dg-head button \{ white-space: nowrap; \}/);
+  assert.doesNotMatch(css, /\.dg-head \.dg-btn \{ min-width: 0; \}/, "不得给头部全部按钮加 min-width:0（那才会压成竖排）");
+  // 工具条六项在平铺态用 tbBtnStyle（同样 nowrap；头部按钮统一由 CSS 兜底）
+  assert.match(src, /const tbBtnStyle = \{ \.\.\.S\.btn, \.\.\.rowBtnStyle\(\), marginLeft: 8 \};/);
 });
 
 // ============================================================ 判据 3：单版本模式
@@ -508,7 +568,7 @@ test("g-352 C2-m5：build-client PARTS 覆盖 lib/client 全部模块，且 bund
 
 interface RenderResult { passElements: () => any[]; root: () => any }
 
-function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSession?: any }) {
+function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSession?: any; headChildWidth?: number; headChildCount?: number }) {
   // g-352 att-004（B1 证据口径）：G352_BUNDLE 可把渲染对象指向**另一份构建产物**——
   // 用于把同一套断言跑在基线 commit（83bb041）的 bundle 上，从而给出「HEAD vs 基线签名差异 0 行」
   // 的可复现证据，而不是只凭截图。默认仍是本仓库 dist/lib/client.js（判据 5 契约不变）。
@@ -517,6 +577,10 @@ function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSess
     "utf8",
   );
   const boardWidth = opts.boardWidth ?? 250;
+  // att-005：假节点可选带 offsetWidth —— 让「头部实测装不下 ⇒ 折叠六项工具条」这条**实测**路径
+  // 也能在渲染级被驱动（不传则 undefined ⇒ headNaturalWidth 返回 null ⇒ 只按 <480 断点档）。
+  const headChildWidth = opts.headChildWidth;
+  const headChildCount = opts.headChildCount ?? 0;
   const elements: any[] = [];
   const fetchLog: string[] = [];
   const observed: any[] = [];
@@ -525,6 +589,9 @@ function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSess
 
   const makeFakeNode = () => ({
     clientWidth: boardWidth, scrollWidth: 0, scrollHeight: 0, scrollTop: 0, style: {},
+    offsetWidth: headChildWidth,
+    // 头部适配测量读的是 headRef.current.children 里各子项的 offsetWidth；这里给出可控的假子项数组
+    children: Array.from({ length: headChildCount }, () => ({ offsetWidth: headChildWidth, clientWidth: boardWidth })),
     getBoundingClientRect: () => ({ width: boardWidth, height: 10, top: 0, left: 0, right: boardWidth }),
     focus: noop, select: noop, blur: noop, contains: () => false,
     addEventListener: noop, removeEventListener: noop, appendChild: noop, setAttribute: noop,
@@ -701,7 +768,7 @@ function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSess
     }
     return { passElements: () => elements.slice(lastStart), root: () => tree };
   }
-  return { settle, elements, fetchLog, observed, passes: () => passes };
+  return { settle, elements, fetchLog, observed, passes: () => passes, mod, registered };
 }
 
 /** 子树里的全部元素（递归；h() 产生的宿主元素带 children 数组）。 */
@@ -723,6 +790,8 @@ function treeText(node: any): string {
   return "";
 }
 const elClass = (e: any): string => (typeof e?.props?.className === "string" ? e.props.className : "");
+/** 跨 vm realm 的深比较：JSON 往返成宿主 realm 的普通对象（deepStrictEqual 比原型，跨 realm 会误判）。 */
+const plain = (v: any) => JSON.parse(JSON.stringify(v));
 const withClass = (els: any[], needle: string) => els.filter((e) => elClass(e).includes(needle));
 const cardEls = (els: any[]) => els.filter((e) => /(^|\s)dg-card(\s|$)/.test(elClass(e)));
 const gridTemplates = (els: any[]) => els.filter((e) => e?.props?.style?.gridTemplateColumns).map((e) => e.props.style.gridTemplateColumns);
@@ -831,35 +900,75 @@ test("g-352 判据7（渲染级）：数据未就绪（loading 根节点无 ref�
   assert.equal(h.observed.length, 0, "根节点未挂载 ⇒ 绝不能让 ResizeObserver 观测到 null（守卫生效）");
 });
 
-test("g-352 判据5（渲染级）：conversation.view 搜索框样式逐字不变，min-width:0 只在 sidebar 窄档追加", async () => {
-  const hConv = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
-  const conv = (await hConv.settle({ sessionId: "s1" })).passElements();
-  const convBar = conv.filter((e) => elClass(e) === "dg-search-bar").pop();
-  assert.ok(convBar, "会话内路径仍渲染同一个搜索框");
-  assert.deepEqual(Object.keys(convBar.props.style).sort(), ["alignItems", "display", "flexShrink", "gap", "marginLeft"], "会话内搜索框包装层不得多出任何样式键（基线 5 键）");
-  assert.equal(Object.prototype.hasOwnProperty.call(convBar.props.style, "minWidth"), false, "会话内路径不得出现 min-width:0");
-  const convInner = conv.filter((e) => e.props?.style?.position === "relative" && e.props?.style?.display === "flex" && e.props?.style?.alignItems === "center").pop();
-  assert.ok(convInner, "会话内路径渲染搜索框内层容器");
-  assert.equal(Object.prototype.hasOwnProperty.call(convInner.props.style, "minWidth"), false, "搜索框内层同样不得出现 min-width:0");
-  // 会话内路径不订阅 ResizeObserver、不出现窄档专属控件、头部不带 sidebar class
-  assert.equal(hConv.observed.length, 0, "conversation.view 不订阅 ResizeObserver");
-  assert.equal(withClass(conv, "dg-version-picker-trigger").length, 0);
-  assert.equal(withClass(conv, "dg-head-overflow-trigger").length, 0);
-  assert.equal(conv.filter((e) => elClass(e) === "dg-head-sidebar").length, 0);
+// ============================================================================
+// g-352 att-005（负责人 2026-09-25 人工 gate）：判据 5 新口径
+//   ① 会话内看板页签 == 侧栏（同一组件 / 同一份实现 / 同一逻辑）
+//   ② 对话本体零新增差异（对话内容区仍是红线）
+//   —— 旧口径「conversation.view 路径 DOM/样式逐字不变」已由负责人显式放宽并替换。
+// ============================================================================
 
-  const hSide = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
-  const side = (await hSide.settle({ sessionId: "s1", host: "sidebar" })).passElements();
-  const sideBar = side.filter((e) => elClass(e) === "dg-search-bar").pop();
-  assert.equal(sideBar.props.style.minWidth, 0, "sidebar 窄档才追加 min-width:0（兜底不越框）");
-  assert.equal(hSide.observed.length, 1, "sidebar 实例确实订阅了根容器宽度");
+test("g-352 att-005 判据5①（渲染级）：会话内看板页签 == 侧栏 —— 同一组件/同一实现，元素签名逐字一致", async () => {
+  const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
+  for (const width of [250, 480, 900]) {
+    const hConv = createRenderHarness({ boardWidth: width, payload: payload() });
+    const conv = await hConv.settle({ sessionId: "s1" });
+    const hSide = createRenderHarness({ boardWidth: width, payload: payload() });
+    const side = await hSide.settle({ sessionId: "s1", host: "sidebar" });
+    // 同一个 renderer / 同一个组件：两侧元素签名（结构 + class + 样式键值 + 关键 prop 存在性）逐字一致
+    assert.deepEqual(
+      elementSignature(conv.root()), elementSignature(side.root()),
+      `${width}px：会话内看板页签与侧栏必须渲染完全一致的元素树（att-005 判据 5①）`,
+    );
+    // 两侧都挂宽度观测、都带共用的 .dg-head、窄档行为一致
+    assert.equal(hConv.observed.length, hSide.observed.length, `${width}px：两侧的 ResizeObserver 订阅数一致`);
+    const convHead = conv.passElements().filter((e) => elClass(e) === "dg-head");
+    const sideHead = side.passElements().filter((e) => elClass(e) === "dg-head");
+    assert.equal(convHead.length, 1, `${width}px：会话内看板页签头部带共用 .dg-head`);
+    assert.equal(sideHead.length, 1, `${width}px：侧栏头部带同一个 .dg-head`);
+    assert.deepEqual(plain(convHead[0].props.style), plain(sideHead[0].props.style), "两侧头部样式逐字一致（S.head 本体）");
+    assert.deepEqual(plain(convHead[0].props.style), { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }, "头部样式仍是 S.head 本体");
+    // 窄档专属控件在两侧同进同出（不再有「只有侧栏才有」的分叉）
+    for (const cls of ["dg-head-overflow-trigger", "dg-narrow-head-btn"]) {
+      assert.equal(withClass(conv.passElements(), cls).length, withClass(side.passElements(), cls).length,
+        `${width}px：${cls} 在两侧出现次数一致`);
+    }
+  }
+  // 单一实现：全仓只有一个 KanbanView 定义、客户端源码零 host 门控
+  const defs = ["drag-prompts", "kanban", "plugin"].flatMap((m) => [...readClient(m).matchAll(/function KanbanView\(/g)].length);
+  assert.equal(defs.reduce((a, b) => a + b, 0), 1, "不得存在第二套看板渲染实现");
+  assert.doesNotMatch(readClient("kanban"), /sidebarHost|props\?\.host/);
 });
 
-test("g-352 C3/判据5：min-width:0 的门控是纯函数契约（非窄档返回的键集合与基线逐字一致）", () => {
+test("g-352 att-005 判据5②（渲染级）：对话本体零新增差异（插件只在自己的看板根里渲染）", async () => {
+  // 「对话本体」= 宿主渲染的对话内容区。插件对它唯一的接触点是 conversation.view 的注册块
+  //（逐字未变的强断言在 g330-sidebar-tab.test.ts「判据2」，本套件不重复也不削弱）
+  // + 自己的看板根节点；其余 DOM（弹窗/抽屉）只在用户点击后经既有 portal 打开。
+  // 这里给出可自动化的两条：① 挂载点集合/依赖面不变；② 静态渲染只产出一个自有根节点。
+  const plugin = readClient("plugin");
+  assert.match(plugin, /ctx\.slots\.inject\("conversation\.view"/, "conversation.view 挂载点仍在");
+  assert.match(plugin, /\(props\) => h\(KanbanView, props\)/, "conversation.view 仍渲染同一个 KanbanView");
+  assert.match(plugin, /inject: \["slots", "sessions"\]/, "硬 inject 不得新增（对话本体的依赖面不变）");
+  const h = createRenderHarness({ boardWidth: 900, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
+  assert.deepEqual(Array.from(h.mod.inject), ["slots", "sessions"], "运行时 inject 仍是 [slots, sessions]");
+  assert.equal(h.registered.filter((r) => r.def?.name === "conversation.view").length, 1, "conversation.view 仍只有一个注册项（未新增宿主挂载点）");
+  // 静态（无任何点击）渲染：自有根节点恰好一个，且就是看板根（不往对话本体里插别的节点）
+  const r = await h.settle({ sessionId: "s1" });
+  const els = r.passElements();
+  const roots = els.filter((e) => e.props?.["data-dsh-graph-kanban"] === "");
+  assert.equal(roots.length, 1, "静态渲染只产出一个 [data-dsh-graph-kanban] 根节点");
+  assert.equal(r.root(), roots[0], "渲染返回值就是该根节点（没有额外的兄弟/portal 节点混进对话本体）");
+  assert.equal(elClass(roots[0]), "dg-kanban-root", "根节点 class 不变");
+  for (const marker of ["dg-version-drawer", "dg-goal-modal", "batch-accept-modal"]) {
+    assert.equal(els.filter((e) => e.props?.key === marker).length, 0, `静态渲染不得打开 ${marker}（弹窗/抽屉仍需用户点击）`);
+  }
+});
+
+test("g-352 C3/判据2：min-width:0 的门控是纯函数契约（宽档返回的键集合与基线逐字一致）", () => {
   // 基线（g-352 之前）搜索框两层的内联样式键集合——逐字对照，不做近似
   const BASELINE_WRAP = { display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", flexShrink: 0 };
   const BASELINE_INNER = { position: "relative", display: "flex", alignItems: "center" };
-  assert.deepEqual(searchBarWrapStyle(false), BASELINE_WRAP, "会话内（非窄档）搜索框包装层必须与基线逐字一致");
-  assert.deepEqual(searchBarInnerStyle(false), BASELINE_INNER, "会话内搜索框内层必须与基线逐字一致");
+  assert.deepEqual(searchBarWrapStyle(false), BASELINE_WRAP, "宽档搜索框包装层必须与基线逐字一致");
+  assert.deepEqual(searchBarInnerStyle(false), BASELINE_INNER, "宽档搜索框内层必须与基线逐字一致");
   assert.equal(Object.prototype.hasOwnProperty.call(searchBarWrapStyle(false), "minWidth"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(searchBarInnerStyle(false), "minWidth"), false);
   // 恰好窄档多一个 minWidth:0，其余键一字不改
@@ -869,31 +978,59 @@ test("g-352 C3/判据5：min-width:0 的门控是纯函数契约（非窄档返�
   const kanban = readClient("kanban");
   assert.match(kanban, /style: searchBarWrapStyle\(narrowActive\),/);
   assert.match(kanban, /h\("div", \{ style: searchBarInnerStyle\(narrowActive\) \},/);
-  const searchBarSlice = kanban.slice(kanban.indexOf('className: "dg-search-bar"') - 900, kanban.indexOf('className: "dg-search-bar"') + 900);
+  const searchBarStart = kanban.indexOf("const searchBarEl = h(\"div\", {");
+  assert.ok(searchBarStart > 0, "搜索框定义可定位");
+  const searchBarSlice = kanban.slice(searchBarStart, searchBarStart + 900);
   assert.doesNotMatch(searchBarSlice, /minWidth: 0/, "搜索框路径不得再有裸 minWidth:0（必须经 searchBarWrapStyle/InnerStyle 门控）");
-  // HOVER_CSS 是共享样式表：新增规则必须都只命中 sidebar/窄档专属选择器，且共享声明在位
+  // HOVER_CSS 是共享样式表（两个宿主共同注入同一份实现），新增规则必须带显式声明
   const css = readClient("constants");
-  assert.match(css, /g-352 共享声明（判据 5）：HOVER_CSS 这一整块样式表由\*\*两个宿主共同注入\*\*/, "共享 HOVER_CSS 的增加必须有显式声明（复核者 C3 要求）");
+  assert.match(css, /g-352 att-005 共享声明：HOVER_CSS 这一整块样式表由\*\*两个宿主共同注入\*\*/, "共享 HOVER_CSS 的增加必须有显式声明（复核者 C3 要求）");
   const hover = css.slice(css.indexOf("const HOVER_CSS"), css.indexOf("`;", css.indexOf("const HOVER_CSS")));
-  for (const sel of [".dg-narrow-head-btn", ".dg-narrow-panel-btn", ".dg-backlog-flat-vertical"]) {
+  for (const sel of [".dg-head", ".dg-narrow-head-btn", ".dg-narrow-panel-btn", ".dg-backlog-flat-vertical"]) {
     assert.ok(hover.includes(sel), `HOVER_CSS 内定义 ${sel}`);
   }
-  // 会话内路径不可能命中这些选择器：其元素只在 host=sidebar 且窄档时创建（渲染级反证见下一条）
-  const conv = readClient("kanban");
-  assert.match(conv, /narrowActive[\s\S]{0,600}?key: "tb-overflow"/, "窄档专属元素由 narrowActive 门控");
+  // 折叠弹层只由 toolbarCollapsed（断点档 OR 头部实测）门控
+  assert.match(kanban, /toolbarCollapsed[\s\S]{0,700}?key: "tb-overflow"/, "折叠弹层由 toolbarCollapsed 门控");
   // att-003 第 8 项：选择器改由 renderVersionPicker(inLane) 统一构造 —— 头部只在「全部版本」
   // 多泳道档保留一份（narrowSingleTier && !singleLaneMode），单泳道档则挂进版本行标题（laneVersionPickerEl）
-  assert.match(conv, /narrowSingleTier && !singleLaneMode \? renderVersionPicker\(false\) : null/, "头部选择器由 narrowSingleTier/单泳道档门控");
-  assert.match(conv, /const laneVersionPickerEl = singleLaneMode \? renderVersionPicker\(true\) : null;/, "单泳道档选择器由 singleLaneMode 门控");
-  assert.match(conv, /vertical \? laneVersionPickerEl : null/, "选择器挂在纵向（唯一）泳道行标题里");
+  assert.match(kanban, /narrowSingleTier && !singleLaneMode \? renderVersionPicker\(false\) : null/, "头部选择器由 narrowSingleTier/单泳道档门控");
+  assert.match(kanban, /const laneVersionPickerEl = singleLaneMode \? renderVersionPicker\(true\) : null;/, "单泳道档选择器由 singleLaneMode 门控");
+  assert.match(kanban, /vertical \? laneVersionPickerEl : null/, "选择器挂在纵向（唯一）泳道行标题里");
 });
 
-test("g-352 判据5（渲染级反证）：conversation.view 路径不出现任何窄档专属元素/class", async () => {
-  const hConv = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
-  const conv = (await hConv.settle({ sessionId: "s1" })).passElements();
-  for (const k of ["dg-narrow-head-btn", "dg-narrow-panel-btn", "dg-backlog-flat-vertical", "dg-head-overflow-trigger", "dg-version-picker-trigger", "dg-head-sidebar"]) {
-    assert.equal(withClass(conv, k).length, 0, `会话内路径不得出现 ${k}（HOVER_CSS 新增规则对它零影响）`);
+test("g-352 att-005 B3（渲染级）：六项工具条折叠由「<480 断点 OR 头部实测装不下」驱动，且只折叠这六项", async () => {
+  const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
+  const flat = ["Refresh", "Tag Filter", "Memory", "Knowledge", "⚙"];
+  const headOf = (els: any[]) => els.filter((e) => elClass(e) === "dg-head").pop();
+  // ① 宽档 + 头部实测装得下（6 个子项 × 50px + 间隙 = 360px ≤ 900px）⇒ 平铺、无折叠触发
+  const hFit = createRenderHarness({ boardWidth: 900, headChildWidth: 50, headChildCount: 6, payload: payload() });
+  const fitEls = (await hFit.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  assert.equal(withClass(fitEls, "dg-head-overflow-trigger").length, 0, "装得下不得折叠");
+  assert.equal(treeOf(headOf(fitEls)).filter(isButtonEl).length, 5, "平铺态头部 5 颗工具条按钮（+ ⚙ 已计入）");
+  // ② 宽档 + 头部实测装不下（6 × 200 + 间隙 = 1260px > 900px）⇒ 折叠六项进「⋯ 工具」
+  const hTight = createRenderHarness({ boardWidth: 900, headChildWidth: 200, headChildCount: 6, payload: payload() });
+  let tightEls = (await hTight.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const trigger = withClass(tightEls, "dg-head-overflow-trigger").pop();
+  assert.ok(trigger, "头部实测装不下（1260 > 900）⇒ 必须折叠");
+  const headBtns = treeOf(headOf(tightEls)).filter(isButtonEl).map((b) => treeText(b).trim().slice(0, 12));
+  assert.deepEqual(headBtns, ["⋯ 工具"], "折叠后头部只剩「⋯ 工具」触发按钮（六项全部收进弹层）");
+  // ③ 弹层里恰好这六项（图标 + 文字），不再夹带版本管理/创建版本
+  trigger.props.onClick({ stopPropagation() {} });
+  tightEls = (await hTight.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const rows = withClass(tightEls, "dg-narrow-panel-btn");
+  const keys = rows.map((r) => String(r.props.key).replace(/^ov-/, ""));
+  assert.deepEqual(keys, ["refresh", "tagfilter", "memory", "shared", "settings"], "默认（无标签筛选）弹层恰好 5 行 + 已归档开关");
+  for (const row of rows) {
+    const text = treeText(row);
+    assert.ok(/^\S+ \S/.test(text), `弹层行必须「图标 + 文字」：${text}`);
+    assert.notEqual(row.props.style.textOverflow, "ellipsis", "弹层行不得用省略号吞字");
   }
+  assert.ok(tightEls.filter((e) => e.props?.key === "tb-archived").length === 1, "已归档开关随六项进弹层");
+  // ④ 断点档（<480）即便「测得装得下」也必须折叠（负责人判据 1 的硬断点）
+  const hTier = createRenderHarness({ boardWidth: 250, headChildWidth: 10, headChildCount: 6, payload: payload() });
+  const tierEls = (await hTier.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  assert.equal(withClass(tierEls, "dg-head-overflow-trigger").length, 1, "<480px 必须折叠（即使实测宽度足够）");
+  assert.ok(!flat.some((t) => treeOf(headOf(tierEls)).some((e) => isButtonEl(e) && treeText(e).includes(t))), "断点档头部不得残留六项按钮");
 });
 
 // ============================================================================
@@ -967,10 +1104,9 @@ test("g-352 att-003 第1项（渲染级）：折叠工具条下拉每一行都�
   trigger.props.onClick({ stopPropagation() {} });
   els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
   const rows = withClass(els, "dg-narrow-panel-btn");
-  assert.equal(rows.length, 7, "默认（无标签筛选）应有 7 行：刷新/标签筛选/记忆/知识库/设置/版本管理/创建版本");
+  assert.equal(rows.length, 5, "默认（无标签筛选）应有 5 行：刷新/标签筛选/记忆/知识库/设置（att-005：版本管理/创建版本回网格左上角，不再进弹层）");
   const iconOf: Record<string, string> = {
     refresh: "⟳", tagfilter: "🏷️", memory: "🧠", shared: "📇", settings: "⚙",
-    versionmanage: "🏷️", createversion: "＋",
   };
   for (const row of rows) {
     const key = String(row.props.key).replace(/^ov-/, "");
@@ -989,8 +1125,8 @@ test("g-352 att-003 第1项（渲染级）：折叠工具条下拉每一行都�
   // 负责人点名的两处：刷新补图标、设置补文字
   assert.equal(treeText(rows.find((r) => r.props.key === "ov-refresh")!), "⟳ 刷新");
   assert.equal(treeText(rows.find((r) => r.props.key === "ov-settings")!), "⚙ 看板设置");
-  assert.equal(treeText(rows.find((r) => r.props.key === "ov-versionmanage")!), "🏷️ 版本管理");
-  assert.equal(treeText(rows.find((r) => r.props.key === "ov-createversion")!), "＋ 创建版本");
+  assert.equal(rows.find((r) => r.props.key === "ov-versionmanage"), undefined, "版本管理不再进弹层（回网格左上角）");
+  assert.equal(rows.find((r) => r.props.key === "ov-createversion"), undefined, "创建版本不再进弹层（回网格左上角）");
   // 真机修正（第 1 项）：弹层锚定到看板右缘 —— 否则菜单左伸出侧栏会被宿主裁掉、行文字全被吞
   //（439px 真机实测：原 right:0 锚在触发按钮右缘，240px 菜单左伸 172px 被裁）
   assert.deepEqual(popoverAnchor({ right: 1149 }, { right: 1428, width: 427 }, 240), { right: -279, minWidth: 240 });
@@ -1011,7 +1147,7 @@ test("g-352 att-003 第1项（渲染级）：折叠工具条下拉每一行都�
   assert.equal([...treeText(archived)].some((c) => /\p{Extended_Pictographic}/u.test(c)), true, "已归档行带图标");
 });
 
-test("g-352 att-003 第2项（渲染级）：窄档隐藏 DEBUG（sessionId/ws），宽档与会话内路径保留", async () => {
+test("g-352 att-003 第2项（渲染级）：窄档隐藏 DEBUG（sessionId/ws）—— 两侧同口径", async () => {
   const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
   const narrow = createRenderHarness({ boardWidth: 250, payload: payload() });
   const nEls = (await narrow.settle({ sessionId: "s1", host: "sidebar" })).passElements();
@@ -1022,9 +1158,13 @@ test("g-352 att-003 第2项（渲染级）：窄档隐藏 DEBUG（sessionId/ws�
   const debugEls = wEls.filter((e) => treeText(e).includes("DEBUG sessionId=") && treeText(e).includes("ws="));
   assert.ok(debugEls.length >= 1, "宽档必须保留 DEBUG（含 sessionId 与 ws）");
 
+  // att-005：会话页看板页签与侧栏同口径 —— 窄档同样隐藏 DEBUG
   const conv = createRenderHarness({ boardWidth: 250, payload: payload() });
   const cEls = (await conv.settle({ sessionId: "s1" })).passElements();
-  assert.ok(cEls.some((e) => treeText(e).includes("DEBUG sessionId=")), "会话内 conversation.view 路径逐字不变（DEBUG 仍在）");
+  assert.equal(cEls.filter((e) => treeText(e).includes("DEBUG sessionId=")).length, 0, "会话内看板页签窄档同样隐藏 DEBUG（两侧一致）");
+  const convWide = createRenderHarness({ boardWidth: 900, payload: payload() });
+  const cwEls = (await convWide.settle({ sessionId: "s1" })).passElements();
+  assert.ok(cwEls.some((e) => treeText(e).includes("DEBUG sessionId=")), "会话内看板页签宽档同样保留 DEBUG（两侧一致）");
 });
 
 test("g-352 att-003 第3项（渲染级）：窄档主管区=单行 statusline + 纯图标跳转按钮 + 无模型 id；宽档不变", async () => {
@@ -1183,46 +1323,60 @@ test("g-352 att-003 第6项（渲染级）：单泳道档「确认」阶段块�
   assert.match(kanban, /s\.key === "confirm" \? renderBatchAcceptButton\(true\) : null/, "单泳道档确认阶段块头挂入口");
 });
 
-test("g-352 att-003 第7项（渲染级）：右侧栏「版本管理+创建版本」靠左并入搜索行，角落仅对齐锚点；会话内路径逐字不变", async () => {
+test("g-352 att-005 B2（渲染级）：版本管理+创建版本回到网格左上角原位置（靠左、可读标签、两侧一致）", async () => {
   const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
   const h = createRenderHarness({ boardWidth: 900, payload: payload() });
   const els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
-  const row = els.filter((e) => e.props?.key === "head-search-row").pop();
-  assert.ok(row, "右侧栏存在「版本管理 / 创建版本 / 搜索框」同行容器");
-  const inRow = treeOf(row);
-  const vm = inRow.filter((e) => elClass(e).includes("dg-version-manage-btn")).pop();
-  assert.ok(vm, "版本管理按钮在搜索行里（靠左）");
-  assert.equal(treeText(vm), "🏷️ 版本管理", "版本管理按钮必须有可见文字（不再是裸图标）");
-  assert.ok(vm.props.title && vm.props["aria-label"], "title/aria-label 仍指向版本管理抽屉");
-  assert.equal(inRow.filter((e) => elClass(e) === "dg-search-bar").length, 1, "同一行里有搜索框");
-  assert.ok(inRow.some((e) => treeText(e) === "创建版本"), "同一行里有创建版本按钮");
-  assert.ok(inRow.some((e) => treeText(e).trim() === "全文"), "同一行里有全文开关");
-  // 版本管理 与 创建版本 同一行等高同风格（第 9 项）
-  const cv = inRow.filter((e) => isButtonEl(e) && treeText(e) === "创建版本").pop();
-  assert.equal(vm.props.style.height, cv.props.style.height);
-  assert.equal(vm.props.style.padding, cv.props.style.padding);
-  // 网格左上角只剩对齐锚点（不再渲染两颗按钮），网格容器与列模板仍在
+  // ① 原位置 = 网格左上角单元格（g-174/g-223 的落点），且不再是 att-003 的「空锚点」
   const corner = els.filter((e) => e.props?.key === "grid-corner").pop();
-  assert.ok(corner, "网格左上角保留对齐锚点（阶段列表头仍与泳道标题列对齐）");
-  assert.equal(elClass(corner), "dg-grid-corner", "锚点带稳定 class（真机核验可选中）");
-  assert.equal(treeOf(corner).filter((e) => elClass(e).includes("dg-version-manage-btn")).length, 0);
+  assert.ok(corner, "网格左上角单元格在");
+  assert.equal(elClass(corner), "dg-grid-corner", "单元格带稳定 class（真机核验可选中）");
+  const inCorner = treeOf(corner);
+  const vm = inCorner.filter((e) => elClass(e).includes("dg-version-manage-btn")).pop();
+  assert.ok(vm, "版本管理按钮在网格左上角（不再并入搜索行）");
+  assert.equal(treeText(vm), "🏷️ 版本管理", "保留「补齐可读标签」成果：图标 + 可见文字");
+  assert.ok(vm.props.title && vm.props["aria-label"], "title/aria-label 仍指向版本管理抽屉");
+  const cv = inCorner.filter((e) => isButtonEl(e) && treeText(e) === "创建版本").pop();
+  assert.ok(cv, "创建版本按钮同样在网格左上角");
+  // ② 靠左对齐 + 纵向堆叠 + 不溢出（130px 列宽；en 标签更长 ⇒ 省略号兜底）
+  assert.equal(corner.props.style.flexDirection, "column", "两颗按钮纵向靠左堆叠（130px 列宽放不下同一行）");
+  assert.equal(corner.props.style.alignItems, "flex-start", "靠左对齐");
+  assert.equal(corner.props.style.overflow, "hidden", "单元格不溢出到相邻阶段列头");
+  for (const b of [vm, cv]) {
+    assert.equal(b.props.style.maxWidth, "100%");
+    assert.equal(b.props.style.minWidth, 0);
+    assert.equal(b.props.style.overflow, "hidden");
+    assert.equal(b.props.style.textOverflow, "ellipsis");
+    assert.equal(b.props.style.height, ROW_BTN_METRICS.height, "两颗按钮同行同口径（rowBtnStyle 唯一真源）");
+    assert.equal(b.props.style.padding, ROW_BTN_METRICS.padding);
+  }
+  // ③ 头部不再有 att-003 的同行容器；搜索框是头部的直接子节点（B-1：与标题同一行、不新增行）
+  assert.equal(els.filter((e) => e.props?.key === "head-search-row").length, 0, "不再有 head-search-row 包装层");
+  const head = els.filter((e) => elClass(e) === "dg-head").pop();
+  assert.ok(head, "头部带共用 .dg-head");
+  assert.ok((head.children || []).flat(Infinity).some((c: any) => elClass(c) === "dg-search-bar"), "搜索框是头部的直接子节点（与标题同一行）");
+  const headKids = (head.children || []).flat(Infinity).filter((c: any) => c?.type);
+  assert.equal(headKids[headKids.length - 1]?.props?.className, "dg-search-bar", "搜索框是头部最后一个子节点（原设计：marginLeft:auto 推到同一行右端）");
+  const cBar = headKids[headKids.length - 1];
+  assert.equal(cBar.props.style.marginLeft, "auto", "搜索框仍是 marginLeft:auto（同一行、不新增行）");
+  assert.equal(head.props.style.flexDirection, undefined, "头部不得改成纵向容器（那会新增行高）");
   assert.ok(gridTemplates(els)[0]!.startsWith("130px"), "共享列模板不变");
-  // 点击仍打开版本管理抽屉（行为不变）
+  // ④ 点击仍打开版本管理抽屉（行为不变、无新实现）
   vm.props.onClick({ stopPropagation() {} });
   const els2 = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
   assert.ok(els2.some((e) => e.props?.key === "dg-version-drawer"), "点击版本管理按钮 → 打开版本管理抽屉");
   const drawer = els2.filter((e) => e.props?.key === "dg-version-drawer").pop();
-  assert.equal(typeof drawer.props.onClose, "function", "抽屉 props 齐备（既有版本管理抽屉，无新实现）");
+  assert.equal(typeof drawer.props.onClose, "function", "抽屉 props 齐备（既有版本管理抽屉）");
   assert.ok(Array.isArray(drawer.props.versions), "抽屉仍吃既有 versions 数据源（宽度由既有 S.modal 约束，不溢出）");
 
-  // 会话内 conversation.view 路径：不引入同行容器，角落仍是原两颗按钮（判据 5 逐字不变）
+  // ⑤ 两侧完全一致：会话内看板页签的角落与侧栏逐字相同（att-005 判据 5①）
   const hc = createRenderHarness({ boardWidth: 900, payload: payload() });
   const cEls = (await hc.settle({ sessionId: "s1" })).passElements();
-  assert.equal(cEls.filter((e) => e.props?.key === "head-search-row").length, 0, "会话内路径不引入同行容器");
-  assert.equal(cEls.filter((e) => e.props?.key === "grid-corner").length, 0, "会话内路径无对齐锚点（角落仍是原按钮）");
+  const cCorner = cEls.filter((e) => e.props?.key === "grid-corner").pop();
+  assert.ok(cCorner, "会话内看板页签同样在原位置渲染角落（两侧一致）");
+  assert.deepEqual(plain(cCorner), plain(corner), "两侧角落元素逐字一致");
   const cvm = cEls.filter((e) => elClass(e).includes("dg-version-manage-btn")).pop();
-  assert.equal(treeText(cvm), "🏷️", "会话内路径的版本管理入口逐字不变（裸图标 + title/aria-label）");
-  assert.equal(cvm.props.style.padding, "2px 6px", "会话内路径样式逐字不变");
+  assert.equal(treeText(cvm), "🏷️ 版本管理", "会话内看板页签同口径（不再是无文字裸图标）");
 });
 
 test("g-352 att-003 第8项（渲染级）：版本选择下拉在版本行标题里、[+] 左侧；「全部版本」出口仍可达", async () => {
@@ -1256,10 +1410,10 @@ test("g-352 att-003 第8项（渲染级）：版本选择下拉在版本行标�
 test("g-352 att-003 第9项（渲染级）：同一行按钮等高同风格（头部/工具条/泳道行/主管栏）", async () => {
   const h = createRenderHarness({ boardWidth: 900, payload: { board: boardFixture({ supervisorSession: "sup-1" }), backlogGoals: backlogGoalsFixture } });
   const els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
-  const head = els.filter((e) => elClass(e) === "dg-head-sidebar").pop();
-  assert.ok(head, "右侧栏头部带 .dg-head-sidebar");
+  const head = els.filter((e) => elClass(e) === "dg-head").pop();
+  assert.ok(head, "头部带共用的 .dg-head（两侧同一实现）");
   const btns = treeOf(head).filter((e) => isButtonEl(e) && elClass(e).includes("dg-btn"));
-  assert.ok(btns.length >= 7, `头部至少 7 颗按钮（实得 ${btns.length}）`);
+  assert.equal(btns.length, 5, `头部恰好 5 颗按钮（实得 ${btns.length}：刷新/标签筛选/记忆/知识库/⚙；已归档是 label、清除筛选仅在筛选激活时出现）`);
   assert.deepEqual([...new Set(btns.map((b) => b.props.style.height))], [ROW_BTN_METRICS.height], "同一行/同区按钮必须等高");
   for (const b of btns) {
     if (b.props.style.width === ROW_BTN_METRICS.height) {
@@ -1268,14 +1422,16 @@ test("g-352 att-003 第9项（渲染级）：同一行按钮等高同风格（�
       assert.equal(b.props.style.padding, ROW_BTN_METRICS.padding, "文字按钮同级内边距");
     }
   }
-  // 负责人截图指出的两颗：版本管理（曾是小方图标）与创建版本（大长条）现在完全同口径
-  const vm = btns.find((b) => elClass(b).includes("dg-version-manage-btn"));
-  const cv = btns.find((b) => treeText(b) === "创建版本");
-  assert.ok(vm && cv, "两颗按钮都在头部搜索行");
+  // att-005 B-2：负责人截图指出的两颗（版本管理小方图标 / 创建版本大长条）现都在网格左上角、完全同口径
+  const corner = els.filter((e) => e.props?.key === "grid-corner").pop();
+  const cornerBtns = treeOf(corner).filter(isButtonEl);
+  const vm = cornerBtns.find((b) => elClass(b).includes("dg-version-manage-btn"));
+  const cv = cornerBtns.find((b) => treeText(b) === "创建版本");
+  assert.ok(vm && cv, "两颗按钮都在网格左上角（原位置）");
   assert.deepEqual(
     [vm!.props.style.height, vm!.props.style.padding, vm!.props.style.fontSize, vm!.props.style.lineHeight, vm!.props.style.boxSizing],
     [cv!.props.style.height, cv!.props.style.padding, cv!.props.style.fontSize, cv!.props.style.lineHeight, cv!.props.style.boxSizing],
-    "同行文字按钮尺寸口径完全一致",
+    "两颗按钮尺寸口径完全一致（rowBtnStyle 唯一真源）",
   );
   // 齿轮图标按钮与同行文字按钮等高
   const gear = btns.filter((b) => treeText(b) === "⚙");
@@ -1367,11 +1523,11 @@ function elementSignature(root: any): string[] {
 
 const CONV_SIGNATURE_FIXTURE = join(import.meta.dirname, "fixtures/g352-conv-signature.txt");
 
-test("g-352 att-004 B1（结构级）：DEBUG 是 .dg-head 的子节点，次序 已归档 → DEBUG → 搜索行", async () => {
+test("g-352 att-005 B1（结构级/两侧一致）：DEBUG 是 .dg-head 的直接子节点，次序 已归档 → DEBUG → 搜索框", async () => {
   const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
   const cases: Array<[string, any, number]> = [
-    ["conversation.view（判据 5 路径）", { sessionId: "s1" }, 250],
-    ["右侧栏宽档", { sessionId: "s1", host: "sidebar" }, 900],
+    ["会话内看板页签（宽档）", { sessionId: "s1" }, 900],
+    ["右侧栏（宽档）", { sessionId: "s1", host: "sidebar" }, 900],
   ];
   for (const [label, props, width] of cases) {
     const h = createRenderHarness({ boardWidth: width, payload: payload() });
@@ -1381,38 +1537,110 @@ test("g-352 att-004 B1（结构级）：DEBUG 是 .dg-head 的子节点，次序
     assert.ok(strong, `${label}：看板标题存在`);
     const head = parents.get(strong);
     assert.ok(head, `${label}：标题在头部容器内`);
+    assert.equal(elClass(head), "dg-head", `${label}：头部是共用的 .dg-head`);
     assert.ok(treeOf(head).some((e) => elClass(e) === "dg-search-bar"), `${label}：搜索框在这个头部容器里`);
     const debug = els.filter((e) => typeof e.props?.title === "string" && e.props.title.startsWith("DEBUG sessionId=")).pop();
     assert.ok(debug, `${label}：DEBUG 块已渲染`);
     assert.equal(parents.get(debug), head, `${label}：DEBUG 必须是 .dg-head 的直接子节点（att-003 缺陷：成了看板根容器的兄弟）`);
     assert.notEqual(parents.get(head), null, `${label}：头部本身不是最外层根容器（DEBUG 才有「头部内部」可言）`);
-    // 次序：已归档 → DEBUG → 搜索行（与基线一致；搜索行在宽档是 head-search-row 容器，会话内是搜索框本体）
+    // 次序：已归档 → DEBUG → 搜索框（两侧同一份实现 ⇒ 两侧同一次序）
     const kids = (head.children ?? []).flat(Infinity).filter((c: any) => c && typeof c === "object" && c.type);
     const iArch = kids.findIndex((c: any) => c.props?.key === "tb-archived");
     const iDebug = kids.indexOf(debug);
-    const iSearch = kids.findIndex((c: any) => treeOf(c).some((e) => elClass(e) === "dg-search-bar"));
+    const iSearch = kids.findIndex((c: any) => elClass(c) === "dg-search-bar");
     assert.ok(iArch >= 0, `${label}：已归档开关在头部`);
-    assert.ok(iSearch >= 0, `${label}：搜索行在头部`);
+    assert.ok(iSearch >= 0, `${label}：搜索框在头部`);
     assert.ok(iDebug > iArch, `${label}：DEBUG 在「已归档」之后（实得 ${iDebug} vs ${iArch}）`);
-    assert.ok(iDebug < iSearch, `${label}：DEBUG 在「搜索行」之前（实得 ${iDebug} vs ${iSearch}）`);
+    assert.ok(iDebug < iSearch, `${label}：DEBUG 在「搜索框」之前（实得 ${iDebug} vs ${iSearch}）`);
   }
 });
 
-test("g-352 att-004 B1（会话内签名）：conversation.view 元素签名与 83bb041 基线逐字一致（0 行差异）", async () => {
-  const h = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
+// ============================================================================
+// g-352 att-005：冻结签名 fixture（重新生成 + 来源 commit/内容 hash 头 + 断言）
+//   新口径：① 会话内看板页签 == 侧栏（同一组件/同一逻辑，逐字签名相等，见上方判据 5①）
+//          ② 对话本体零新增差异（见上方判据 5②）
+//   冻结的会话内签名仍然逐字断言 —— 它的作用是「头部/泳道结构被无意改动就变红」。
+// ============================================================================
+
+/** fixture 头：来源 commit + 源码 hash（决定头部渲染的 4 个源模块）+ 正文内容 hash。 */
+const SIG_HEADER_PREFIX = "# ";
+const SIG_SOURCE_FILES = ["kanban", "constants", "narrow-width", "helpers"];
+
+/** 仓库根（core/tests → ../..）——供 git 溯源断言与签名 dump 工具使用。 */
+const repoRoot = () => join(import.meta.dirname, "../..");
+
+function sourceFingerprint(): string {
+  const hash = createHash("sha256");
+  for (const name of SIG_SOURCE_FILES) hash.update(name + "\n" + readClient(name) + "\n");
+  return hash.digest("hex");
+}
+
+function parseSignatureFixture(raw: string): { meta: Map<string, string>; body: string[] } {
+  const meta = new Map<string, string>();
+  const body: string[] = [];
+  for (const line of raw.split("\n")) {
+    if (line === "") continue;
+    if (line.startsWith(SIG_HEADER_PREFIX)) {
+      const i = line.indexOf(":", SIG_HEADER_PREFIX.length);
+      if (i > 0) meta.set(line.slice(SIG_HEADER_PREFIX.length, i).trim(), line.slice(i + 1).trim());
+      continue;
+    }
+    body.push(line);
+  }
+  return { meta, body };
+}
+
+const bodyHash = (body: string[]) => createHash("sha256").update(body.join("\n") + "\n").digest("hex");
+
+test("g-352 att-005：会话内看板页签签名 == 冻结 fixture，且 fixture 的来源 commit/内容 hash 头自校验", async () => {
+  // 维护者工具（改动头部/泳道结构后重新冻结）：
+  //   G352_SIG_DUMP=1 G352_SIG_ACK=1 node --test --test-name-pattern="会话内看板页签签名" core/tests/g352-narrow-width.test.ts
+  // 只导出做 diff（不覆盖冻结基线）：G352_SIG_DUMP=<其他路径>（无需 ack）
+  const SIG_BOARD_WIDTH = 250;
+  const h = createRenderHarness({ boardWidth: SIG_BOARD_WIDTH, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
   const r = await h.settle({ sessionId: "s1" });
   const actual = elementSignature(r.root());
-  // 维护者工具（重新冻结基线签名，需先把基线 bundle 构建出来）：
-  //   G352_BUNDLE=<83bb041 的 dist/lib/client.js> G352_SIG_DUMP=1 \
-  //     node --test --test-name-pattern="会话内签名" core/tests/g352-narrow-width.test.ts
-  // G352_SIG_DUMP 也可给绝对/相对路径，把签名导到别处做 diff（不覆盖冻结基线）。
   if (process.env.G352_SIG_DUMP) {
     const target = process.env.G352_SIG_DUMP === "1" ? CONV_SIGNATURE_FIXTURE : process.env.G352_SIG_DUMP;
-    writeFileSync(target, actual.join("\n") + "\n");
+    if (target === CONV_SIGNATURE_FIXTURE && process.env.G352_SIG_ACK !== "1") {
+      assert.fail("拒绝覆盖冻结基线：需 G352_SIG_ACK=1 显式确认（或 G352_SIG_DUMP=<其他路径> 只导出做 diff）");
+    }
+    const head = [
+      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-352 att-005 重新生成）",
+      `# source-commit: ${execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot(), encoding: "utf8" }).trim()}`,
+      `# source-sha256: ${sourceFingerprint()}`,
+      `# source-files: ${SIG_SOURCE_FILES.join(",")}   # 源 hash 覆盖的模块（决定头部/泳道渲染）`,
+      `# content-sha256: ${bodyHash(actual)}`,
+      `# board-width: ${SIG_BOARD_WIDTH}`,
+      "",
+    ].join("\n");
+    writeFileSync(target, head + actual.join("\n") + "\n");
     return;
   }
-  const expected = readFileSync(CONV_SIGNATURE_FIXTURE, "utf8").split("\n").filter((l) => l !== "");
-  assert.deepEqual(actual, expected, "conversation.view 路径的元素签名必须与 83bb041 冻结值逐字一致（差异 0 行）");
+  const raw = readFileSync(CONV_SIGNATURE_FIXTURE, "utf8");
+  const { meta, body } = parseSignatureFixture(raw);
+  // ① 来源 commit 头必须是本仓库真实存在的提交，且是 HEAD 的祖先（可追溯来源，不接受手写字符串）
+  const sourceCommit = meta.get("source-commit");
+  assert.ok(sourceCommit && /^[0-9a-f]{7,40}$/.test(sourceCommit), `fixture 必须带来源 commit 头（实得 ${sourceCommit}）`);
+  execFileSync("git", ["cat-file", "-e", `${sourceCommit}^{commit}`], { cwd: repoRoot(), stdio: "ignore" });
+  execFileSync("git", ["merge-base", "--is-ancestor", sourceCommit, "HEAD"], { cwd: repoRoot(), stdio: "ignore" });
+  // ② 内容 hash 头必须与正文一致（手改正文而不更新头 ⇒ 立即变红）
+  assert.equal(bodyHash(body), meta.get("content-sha256"), "fixture 内容 hash 与正文不一致（被手改过？）");
+  // ③ 源码 hash 头必须与当前「决定头部渲染的源模块」一致 ⇒ fixture 与源码同步，改坏必红
+  assert.equal(sourceFingerprint(), meta.get("source-sha256"), "fixture 与源码不同步：确认改动后按维护者工具重新冻结");
+  // ④ 会话内看板页签的实渲染签名 == 冻结正文（逐字）
+  assert.equal(Number(meta.get("board-width")), SIG_BOARD_WIDTH, "fixture 记录了冻结时的板宽，须与本测试一致");
+  assert.deepEqual(actual, body, "会话内看板页签元素签名必须与冻结值逐字一致（差异 0 行）");
+});
+
+test("g-352 att-005：签名 fixture 维护者工具需显式 ack，绝不无条件覆盖冻结基线", () => {
+  const src = readFileSync(import.meta.filename, "utf8");
+  // 覆盖冻结基线前必须校验来源 hash 或要求第二个显式 ack 变量（G352_SIG_ACK=1）
+  assert.match(src, /G352_SIG_ACK/, "必须存在第二个显式 ack 变量");
+  assert.match(src, /if \(target === CONV_SIGNATURE_FIXTURE && process\.env\.G352_SIG_ACK !== "1"\)/, "覆盖冻结基线必须要求 ack");
+  assert.match(src, /assert\.fail\(/, "未 ack 时必须显式失败，而不是静默写入");
+  // dump 到别处（做 diff）不需要 ack，但绝不覆盖冻结基线
+  assert.match(src, /G352_SIG_DUMP/);
 });
 
 test("g-352 att-004 N1（渲染级）：标签筛选激活时头部「清除筛选」与同行按钮同口径", async () => {
