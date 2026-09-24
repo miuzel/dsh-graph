@@ -939,7 +939,7 @@
       // g-352（负责人裁决）：选中 backlog 作为「版本备选」时必须真正给出**卡片**，不能只有计数——
       // backlog 明细走既有惰性路径（b.backlog 按需拉取 + backlogRow 渲染）。这里在选中时立即调
       // 既有 loadBacklogGoals（去重防竞态已由 sectionPromisesRef 保证），不依赖 1.5s 空闲预加载
-      //（否则 <360px 下选中瞬间泳道只有计数、要等预加载才有卡片）。
+      //（否则单泳道档（g-356 起 <480px）下选中瞬间泳道只有计数、要等预加载才有卡片）。
       React.useEffect(() => {
         if (!viewBacklogOnly) return;
         const bd = state.data;
@@ -959,7 +959,7 @@
       // g-233 P1: 纯内存覆盖层——临时可见版本从 hiddenVersionSet 排除，不写持久隐藏偏好（g-255: 使用 search-state.js 纯函数）
       const hiddenVersionSet = computeEffectiveHiddenVersionSlugs(hiddenVersionSlugs, searchUnhiddenSlugs);
       const active = allActiveVersions.filter((v) => !hiddenVersionSet.has(v.slug));
-      // g-352：单版本模式（<360px）的可见版本派生（判据 3）——**只做投影，不新增状态真源**：
+      // g-352：单泳道档（g-356 起 <480px）的可见版本派生（判据 3）——**只做投影，不新增状态真源**：
       // 入参 active 已是「hiddenVersionSlugs 持久底账 + searchUnhiddenSlugs 搜索临时覆盖层」
       // 共同作用后的结果，这里仅再收窄到一个版本。
       // 持久化口径：viewVersionSlug 只存在于本组件 React state（**零持久化键**，
@@ -1054,7 +1054,7 @@
             ? h("div", { style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 } }, dgT("goal.scheduleNoVersion"))
             : null)
           : null);
-      // 单泳道档（<360px 单版本 / backlog / 独立目标）：选择器就挂在这一行泳道头上 ⇒ 任何档位
+      // 单泳道档（<480px：单版本 / backlog / 独立目标）：选择器就挂在这一行泳道头上 ⇒ 任何档位
       // 都能切回「全部版本」或换一个版本可见（判据 3：入口保留、出口可达）。
       const laneVersionPickerEl = singleLaneMode ? renderVersionPicker(true) : null;
       // 弹层锚定：菜单右缘对齐看板右缘（避免被侧栏裁掉；判据来自同一份纯函数，便于断言）
@@ -1379,9 +1379,9 @@
       // g-137：laneIndex 用于交替背景色；g-162：阶段列横向交替深浅
       const lane = (label, goals, key, version, laneIndex = 0, collapsible = true, vertical = false) => {
         goals = goals.filter(matchesTag);
-        // g-352：单版本模式（<360px）下面板已退化为全宽单列，阶段纵向堆叠——
+        // g-352：单泳道档（g-356 起 <480px）下面板已退化为全宽单列，阶段纵向堆叠——
         // 此时交付/阻塞列不再走 36px 竖条折叠形态（竖条在纵向堆叠里不可读且无意义），
-        // 一律按展开态渲染；宽档（含 <480px 多泳道档）仍用原折叠语义。
+        // 一律按展开态渲染；宽档（≥480px）仍用原折叠语义。
         const deliverCollapsed = vertical ? false : deliverColumnCollapsed;
         const blockedCollapsed = vertical ? false : blockedColumnCollapsed;
         // g-162: 普通泳道折叠状态；released 仅复用 lane 布局，不增加折叠入口
@@ -1733,7 +1733,7 @@
       };
 
       // g-137：backlog 行平铺展示函数；g-162: 支持独立折叠
-      // g-352：第 4 参 vertical —— backlog 作为**唯一泳道**（<360px 单版本档的「版本备选」）时，
+      // g-352：第 4 参 vertical —— backlog 作为**唯一泳道**（单泳道档 <480px 的「版本备选」）时，
       // 强制展开（默认折叠态在该档等于「只有计数没有卡片」）、标题与内容各占整行（单列网格里
       // "2 / -1" 会退化为 0 跨度），并把卡片改为全宽。其余分支与宽档逐字共用同一份实现。
       const backlogRow = (label, goals, key, vertical = false) => {
@@ -1940,7 +1940,7 @@
         deliverColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // deliver
         blockedColumnCollapsed ? "36px" : "minmax(150px, 1fr)",  // blocked
       ].join(" ");
-      // g-352：单版本模式（根容器实测宽度 <360px）——阶段列由横向并排改为纵向堆叠（判据 3）：
+      // g-352：单泳道档（根容器实测宽度 <480px，g-356 起）——阶段列由横向并排改为纵向堆叠（判据 3）：
       // 列模板退化为单列全宽，泳道内的阶段块依次堆叠（见 lane() 的 vertical 分支），
       // 卡面全宽可读、不需要横向滚动。宽档仍共用同一份横向模板。
       const gridCols = singleLaneMode ? "minmax(0, 1fr)" : horizontalGridCols;
@@ -2421,7 +2421,7 @@
         // style 仍是 S.head 本体（不新增样式键）；布局兜底走 .dg-head（见 constants.js：
         // 放不下就换行 + 子项/按钮不压缩不折行 ⇒ 任何宽度都不会出现竖排/逐字换行）。
         // 适配是测量驱动的：<480px 六项工具条整批收进下拉容器、头部实测装不下时同样折叠、
-        // <360px 单版本模式。
+        // 单泳道档同界 <480px（g-356）。
         h("div", { style: S.head, className: "dg-head", ref: headRef },
           // g-352：窄档下标题不内部折行（nowrap + min-width:auto ⇒ 保持自然宽度，由头部换行让位）
           h("strong", { style: narrowActive ? { whiteSpace: "nowrap", flexShrink: 0 } : undefined }, "dsh-graph"),

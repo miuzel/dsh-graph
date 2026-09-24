@@ -313,7 +313,7 @@ test("g-164 released 泳道与 active/version 泳道共用同一动态列模板�
   // 顶部表头网格与 released 泳道网格必须共用同一份按折叠状态动态计算的列模板，
   // 否则 released 泳道展开并折叠交付/阻塞列时列宽与上方泳道错位。
   // g-352（负责人显式授权改写本段布局契约断言）：横向模板（130px 标题 + 6 阶段列）改名为
-  // horizontalGridCols；宽档的 gridCols 即它本体，只有 <360px 单泳道档才派生为单列全宽模板
+  // horizontalGridCols；宽档的 gridCols 即它本体，只有单泳道档（g-356 起 <480px）才派生为单列全宽模板
   //（阶段列纵向堆叠，判据 3）——仍是同一份派生，不存在第二套列宽来源。
   // att-002：单泳道档由「单版本」放宽为「单版本 ∪ backlog 唯一泳道」（负责人裁决），故变量名
   // 由 singleVersionMode 改为 singleLaneMode；列模板派生的唯一性不变。

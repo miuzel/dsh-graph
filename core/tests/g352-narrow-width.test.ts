@@ -2,7 +2,8 @@
  * g-352：侧栏窄宽度适配（**取代** g-330 的「最小适配」）回归测试。
  *
  * 判据覆盖：
- *  1. 断点以看板根容器实测宽度为准（非 window 宽度），<480px 折叠工具条、<360px 单版本模式，
+ *  1. 断点以看板根容器实测宽度为准（非 window 宽度）：<480px 折叠工具条、<480px 单泳道档
+ *     （g-356：单泳道阈值由 360 抬到 480，与折叠档同界），
  *     ResizeObserver 监听动态拖拽 —— 阈值边界用真实数值逐点断言 + 源码契约。
  *  2. 无溢出：min-width:0 + text-overflow:ellipsis 兜底（触发按钮自身也不越框）。
  *  3. 单版本模式：只渲染选中版本一个泳道，阶段列横向并排 → 纵向堆叠；保留「全部版本」入口。
@@ -77,16 +78,21 @@ function setupTestProject(): { root: string; cleanup: () => void } {
 
 // ============================================================ 判据 1：断点阈值（真实数值）
 
-test("g-352 判据1：断点阈值 <480px 折叠工具条、<360px 单版本模式（边界数值逐点断言）", () => {
+test("g-352 判据1 / g-356：断点阈值 <480px 折叠工具条、<480px 单泳道档（边界数值逐点断言）", () => {
   assert.equal(NARROW_TOOLBAR_MAX_WIDTH, 480, "折叠工具条断点为 480px");
-  assert.equal(NARROW_SINGLE_VERSION_MAX_WIDTH, 360, "单版本模式断点为 360px");
+  assert.equal(NARROW_SINGLE_VERSION_MAX_WIDTH, 480, "单泳道档断点为 480px（g-356：由 360 抬到 480）");
+  // g-356：两档阈值同界 ⇒ 只有 single/wide 两档生效（"narrow" 分支保留但当前不可达）
+  assert.equal(NARROW_SINGLE_VERSION_MAX_WIDTH, NARROW_TOOLBAR_MAX_WIDTH, "g-356 起两档同界");
 
-  // 上界为开区间：恰好 480/360 仍属上一档
+  // 上界为开区间：**恰好 480 属宽档**，479 属单泳道档
   assert.equal(boardWidthTier(900), "wide");
-  assert.equal(boardWidthTier(480), "wide", "恰好 480px 不折叠（<480 才折叠）");
-  assert.equal(boardWidthTier(479.9), "narrow");
-  assert.equal(boardWidthTier(400), "narrow");
-  assert.equal(boardWidthTier(360), "narrow", "恰好 360px 仍是多泳道窄档（<360 才单版本）");
+  assert.equal(boardWidthTier(520), "wide", "520px 仍是多泳道宽档（真机采样档）");
+  assert.equal(boardWidthTier(480), "wide", "恰好 480px 不折叠也不是单泳道（<480 才进单泳道档）");
+  assert.equal(boardWidthTier(479.9), "single", "479.9px 已进单泳道档");
+  assert.equal(boardWidthTier(479), "single", "g-356 边界：479 ⇒ 单泳道");
+  assert.equal(boardWidthTier(460), "single", "g-356 动机档：460px（原被裁档）⇒ 单泳道");
+  assert.equal(boardWidthTier(400), "single", "400px（旧多泳道窄档）⇒ 单泳道");
+  assert.equal(boardWidthTier(360), "single", "360px（旧单泳道上界）⇒ 单泳道");
   assert.equal(boardWidthTier(359.9), "single");
   assert.equal(boardWidthTier(240), "single");
   // 宽度不可用（未测量 / ResizeObserver 缺失 / SSR）→ wide，绝不误折叠
@@ -94,12 +100,29 @@ test("g-352 判据1：断点阈值 <480px 折叠工具条、<360px 单版本模�
     assert.equal(boardWidthTier(unusable as any), "wide", `宽度 ${String(unusable)} 必须回落 wide`);
   }
 
-  assert.equal(shouldCollapseToolbar(479), true);
-  assert.equal(shouldCollapseToolbar(480), false);
-  assert.equal(shouldCollapseToolbar(300), true, "<360px 同样折叠工具条（单版本档是其子集）");
+  assert.equal(shouldCollapseToolbar(479), true, "479px 折叠工具条");
+  assert.equal(shouldCollapseToolbar(480), false, "g-356 边界：480 ⇒ 非单泳道、不折叠");
+  assert.equal(shouldCollapseToolbar(300), true, "更窄档同样折叠工具条（单泳道档是其子集）");
+  assert.equal(isSingleVersionTier(479), true, "g-356 边界：479 ⇒ 单泳道");
+  assert.equal(isSingleVersionTier(480), false, "g-356 边界：480 ⇒ 非单泳道");
+  assert.equal(isSingleVersionTier(520), false);
   assert.equal(isSingleVersionTier(359), true);
-  assert.equal(isSingleVersionTier(360), false);
-  assert.equal(isSingleVersionTier(479), false);
+  assert.equal(isSingleVersionTier(360), true, "g-356：360px 由旧「多泳道窄档」改判为单泳道");
+});
+
+test("g-356 判据1：460/479/480/520 采样档与阈值逐点对照（真机采样档同口径）", () => {
+  // 真机自证采样档（brief 第 5 条）：460（原被裁档）/ 479-480（边界）/ 520（仍多泳道）
+  const samples: Array<[number, string, boolean, boolean]> = [
+    [460, "single", true, true],
+    [479, "single", true, true],
+    [480, "wide", false, false],
+    [520, "wide", false, false],
+  ];
+  for (const [w, tier, single, collapse] of samples) {
+    assert.equal(boardWidthTier(w), tier, `${w}px 分档`);
+    assert.equal(isSingleVersionTier(w), single, `${w}px isSingleVersionTier`);
+    assert.equal(shouldCollapseToolbar(w), collapse, `${w}px shouldCollapseToolbar`);
+  }
 });
 
 test("g-352 判据1：断点真源为看板根容器实测宽度（ResizeObserver 观测），不是 window 宽度", () => {
@@ -832,7 +855,7 @@ const clickPickerOption = async (h: ReturnType<typeof createRenderHarness>, r: R
   return clickOpenOption(h, await h.settle({ sessionId: "s1", host: "sidebar" }), match);
 };
 
-test("g-352 B1（渲染级）：<360px 视图选择器可选 backlog；选中后 backlog 成为唯一泳道且有卡片", async () => {
+test("g-352 B1（渲染级）：单泳道档视图选择器可选 backlog；选中后 backlog 成为唯一泳道且有卡片", async () => {
   const h = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
   // 默认：单版本档收窄到第一个可见版本（V1），两侧非版本泳道都不渲染
   let r = await h.settle({ sessionId: "s1", host: "sidebar" });
@@ -867,6 +890,60 @@ test("g-352 B1（渲染级）：<360px 视图选择器可选 backlog；选中后
   // released / standalone 在该档仍不渲染
   assert.equal(els.filter((e) => e.props?.key === "rel-v0").length, 0, "released 泳道不渲染");
   assert.equal(els.filter((e) => typeof e.props?.key === "string" && e.props.key.startsWith("standalone")).length, 0, "独立目标泳道不渲染");
+});
+
+test("g-356 判据1/3（渲染级）：460/479/480/520 采样档逐档渲染 —— 460 档进单泳道且批量接受入口在树内", async () => {
+  // 动机（brief 第 5 条）：旧阈值下 460px 是多泳道窄档 ⇒ 泳道网格比面板宽、横向滚动把
+  // 「确认 / 批量接受」列推出可视区。抬阈值后 460px 直接进单泳道，确认阶段块头自带同构入口。
+  // reviewGoals 非空才有一张待确认卡（batchAcceptButtonState 的计数来源）
+  const board = boardFixture({
+    versions: [{ slug: "v1", name: "V1", status: "active", goals: [{ id: "g-001", title: "待确认目标", status: "review", tags: [], criteria_count: 0, cards_count: 0 }], goals_count: 1, lazy: false, loaded: true }],
+  });
+  const payload = () => ({ board, backlogGoals: backlogGoalsFixture });
+
+  // ① 460px（原被裁档）⇒ 单泳道：单列全宽模板 + 纵向阶段堆叠 + 批量接受入口在元素树内
+  const h460 = createRenderHarness({ boardWidth: 460, payload: payload() });
+  const r460 = await h460.settle({ sessionId: "s1", host: "sidebar" });
+  const e460 = r460.passElements();
+  assert.equal(gridTemplates(e460)[0], "minmax(0, 1fr)", "460px ⇒ 列模板退化为单列（阶段纵向堆叠，无横向滚动）");
+  // 纵向堆叠分支的判据：阶段块键形如 `<lane>-v-<stage>`，其父容器是 vstack（flexDirection: column）
+  const vblocks = e460.filter((e) => typeof e.props?.key === "string" && /-v-[a-z]+$/.test(e.props.key));
+  assert.equal(vblocks.length, 6, `460px ⇒ 六个阶段各一个纵向堆叠块（实得 ${vblocks.length}）`);
+  const vstack = parentIndexOf(e460).get(vblocks[0]);
+  assert.ok(vstack, "阶段块挂在 vstack 容器内");
+  assert.equal(vstack.props.style.flexDirection, "column", "阶段块纵向堆叠（不是横向并排）");
+  assert.equal(vstack.props.style.gridColumn, "1 / -1", "vstack 占满单列网格整行");
+  assert.equal(withClass(e460, "dg-lane-collapse").length, 0, "460px 单泳道档无版本折叠 ▲/▼");
+  const ba460 = withClass(e460, "dg-batch-accept-btn");
+  assert.equal(ba460.length, 1, "460px 确认阶段块头必须渲染「批量接受」入口（原缺口：被横向推出可视区）");
+  assert.ok(treeText(ba460[0]).includes("批量接受"), `批量接受入口文案可见（实得「${treeText(ba460[0])}」）`);
+  assert.equal(ba460[0].props.disabled, false, "有 1 张待确认卡 ⇒ 入口可用（不是 disabled 占位）");
+
+  // ② 479px（新边界内侧）⇒ 同为单泳道
+  const h479 = createRenderHarness({ boardWidth: 479, payload: payload() });
+  const e479 = (await h479.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  assert.equal(gridTemplates(e479)[0], "minmax(0, 1fr)", "479px ⇒ 单泳道");
+  assert.equal(withClass(e479, "dg-lane-collapse").length, 0, "479px 单泳道档无版本折叠开关");
+
+  // ③ 480px（边界外侧）⇒ 多泳道宽档：横向模板 + 各泳道折叠开关 + 列表头批量入口
+  const h480 = createRenderHarness({ boardWidth: 480, payload: payload() });
+  const e480 = (await h480.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  assert.notEqual(gridTemplates(e480)[0], "minmax(0, 1fr)", "480px ⇒ 横向多泳道模板（与改动前一致）");
+  assert.ok(withClass(e480, "dg-lane-collapse").length > 0, "480px 多泳道档保留各泳道折叠开关");
+
+  // ④ 520px（真机采样档）⇒ 仍多泳道，与 480 档同口径
+  const h520 = createRenderHarness({ boardWidth: 520, payload: payload() });
+  const e520 = (await h520.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  assert.equal(gridTemplates(e520)[0], gridTemplates(e480)[0], "520px 与 480px 同为多泳道模板（≥480 行为一致）");
+  assert.ok(withClass(e520, "dg-lane-collapse").length > 0, "520px 多泳道档保留各泳道折叠开关");
+
+  // ⑤ 两侧完全一致（零 host 门控）：460px 下会话页看板页签 == 右侧栏
+  const hConv = createRenderHarness({ boardWidth: 460, payload: payload() });
+  const hSide = createRenderHarness({ boardWidth: 460, payload: payload() });
+  const conv = await hConv.settle({ sessionId: "s1" });
+  const side = await hSide.settle({ sessionId: "s1", host: "sidebar" });
+  assert.deepEqual(elementSignature(conv.root()), elementSignature(side.root()), "460px：两侧元素签名逐字一致");
+  assert.equal(withClass(conv.passElements(), "dg-batch-accept-btn").length, withClass(side.passElements(), "dg-batch-accept-btn").length, "两侧批量接受入口同进同出");
 });
 
 test("g-352 B1（渲染级）：搜索激活态仍挂起单泳道收窄（g-233 优先级不变）", async () => {
@@ -1423,7 +1500,7 @@ test("g-352 att-003 第3项（渲染级）：窄档主管区=单行 statusline +
   assert.ok(treeText(wBar.children[3]).length > 1, "宽档仍是带文字的「↗ 主管对话」按钮");
 });
 
-test("g-352 att-003 第4项（渲染级）：单泳道档不渲染版本头 ▲/▼ 折叠开关；多泳道窄档仍保留", async () => {
+test("g-352 att-003 第4项 / g-356（渲染级）：单泳道档不渲染版本头 ▲/▼ 折叠开关；≥480px 宽档仍保留", async () => {
   const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
   const h = createRenderHarness({ boardWidth: 250, payload: payload() });
   let r = await h.settle({ sessionId: "s1", host: "sidebar" });
@@ -1434,9 +1511,10 @@ test("g-352 att-003 第4项（渲染级）：单泳道档不渲染版本头 ▲/
   r = await clickPickerOption(h, r, (e) => e.props?.key === "vp-standalone");
   assert.equal(withClass(r.passElements(), "dg-lane-collapse").length, 0, "独立目标唯一泳道不得有折叠开关");
 
-  const multi = createRenderHarness({ boardWidth: 400, payload: payload() });
+  // g-356：旧「400px 多泳道窄档」已并入单泳道档 ⇒ 采样档改为 520px（仍多泳道）
+  const multi = createRenderHarness({ boardWidth: 520, payload: payload() });
   const mEls = (await multi.settle({ sessionId: "s1", host: "sidebar" })).passElements();
-  assert.ok(withClass(mEls, "dg-lane-collapse").length > 0, "360-480px 多泳道档仍保留各泳道折叠开关");
+  assert.ok(withClass(mEls, "dg-lane-collapse").length > 0, "≥480px 多泳道档仍保留各泳道折叠开关");
 });
 
 test("g-352 att-003 第5项（渲染级）：选项带版本图标、触发器有 ▾、补「独立目标」且选中后为唯一泳道（真有卡片）", async () => {

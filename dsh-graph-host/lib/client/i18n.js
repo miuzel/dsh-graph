@@ -253,7 +253,7 @@
       'toolbar.more': '⋯ 工具',
       'toolbar.moreTooltip': '更多工具（收窄后折叠）',
       'toolbar.moreTitle': '看板工具',
-      // g-352：单版本模式（<360px）的查看版本选择器
+      // g-352：单泳道档（g-356 起 <480px）的查看版本选择器
       'view.pickVersion': '📋 {version}',
       'view.pickVersionTooltip': '选择要查看的版本',
       'view.allVersions': '全部版本',
@@ -1276,7 +1276,7 @@
       'toolbar.more': '⋯ Tools',
       'toolbar.moreTooltip': 'More tools (collapsed when narrow)',
       'toolbar.moreTitle': 'Board tools',
-      // g-352: single-version mode (<360px) version picker
+      // g-352: single-lane tier (g-356: <480px) version picker
       'view.pickVersion': '📋 {version}',
       'view.pickVersionTooltip': 'Choose a version to view',
       'view.allVersions': 'All versions',
