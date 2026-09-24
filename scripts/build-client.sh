@@ -4,10 +4,12 @@
 #
 # 用法：从仓库根目录运行 bash scripts/build-client.sh
 #
+# 可重定向（g-348，默认值与独立调用契约不变）：DIST_DIR 为产物根目录，默认 dist/。
+# build.sh 把它指向原子发布暂存区，使发布前 dist/ 不被触碰。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-OUT="dist/lib/client.js"
+OUT="${DIST_DIR:-dist}/lib/client.js"
 MOD="dsh-graph-host/lib/client"
 
 mkdir -p "$(dirname "$OUT")"
