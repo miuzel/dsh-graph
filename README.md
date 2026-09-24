@@ -2,7 +2,7 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
-> ### 🚀 v0.16.0-alpha 新功能
+> ### 🚀 v0.16.0 新功能
 >
 > - **适配 DeepSeek Harness `0.1.7` 宿主 settings 服务换代**：旧 `settings.register(namespace, schema)` API 已被移除（实测告警 `sctx.settings.register is not a function`）。插件改为**能力探测分流**——服务提供 `register` 走旧 namespace 注册，否则回落 `describe` 表单投影（profile 条目 `Config`）；两条路径均在隔离实例上双宿主实机验证，且**零版本号比较**。
 > - **适配 `0.1.7` 子代理目录换代（两层）**：容器由 `subagentsByParent` 改为 `projectionsBySession[sid].values.subagentCatalog`，**entry 形状同时去掉 `kind`**（新形状 `{id, createdAt, mode, label?}`，新增 `mode:'unknown'`）。目录谓词改为形状探测（有 `kind` 走旧判定、无 `kind` 按 `id`），避免点「↗ 转到对话」**静默**打开父会话。
@@ -13,13 +13,13 @@
 > - **看板刷新按钮重置自动刷新倒计时**：点击刷新后倒计时立即回到完整周期，不再沿旧终点继续递减。
 > - **「定义/润色」复制模板改写为自述式主管指令**：标题标明由主管处理，明确接收者角色、下一步动作与本次边界（仅处理定义/润色，不执行代码、不推进状态或版本）。
 >
-> **✅ DSH 版本兼容性（重点）**：v0.16.0-alpha **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.7-rc.1`**。**本周期（g-351）实测的双宿主对照**：`0.1.7-rc.1` 上验证宿主 settings 服务换代后的**能力探测分流**——新 API 存在则走「profile 条目 Config → 设置表单」，实测 `sctx.settings.register is not a function` 降级告警消失、profile 全局默认（如 `subagentMode`）经 profile patch 真正生效（`mode_source=global`），`graph_*` 工具计数仍为 44、`/api/dsh-graph*` 端点注册齐全；`0.1.6-alpha.2` 上重跑旧路径，确认 namespace 注册（`$DSH_HOME/settings.yaml`）与 profile 全局默认照常生效，**零退化**。此前版本（`0.1.5-rc.2` 及 `0.1.2-alpha.x` ~ `0.1.5` 系列）按工具与提示词契约向后兼容，但**未在本周期复跑**。
+> **✅ DSH 版本兼容性（重点）**：v0.16.0 **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.7-rc.1`**。**本周期（g-351）实测的双宿主对照**：`0.1.7-rc.1` 上验证宿主 settings 服务换代后的**能力探测分流**——新 API 存在则走「profile 条目 Config → 设置表单」，实测 `sctx.settings.register is not a function` 降级告警消失、profile 全局默认（如 `subagentMode`）经 profile patch 真正生效（`mode_source=global`），`graph_*` 工具计数仍为 44、`/api/dsh-graph*` 端点注册齐全；`0.1.6-alpha.2` 上重跑旧路径，确认 namespace 注册（`$DSH_HOME/settings.yaml`）与 profile 全局默认照常生效，**零退化**。此前版本（`0.1.5-rc.2` 及 `0.1.2-alpha.x` ~ `0.1.5` 系列）按工具与提示词契约向后兼容，但**未在本周期复跑**。
 >
-> **✅ 跨平台（v0.11.0 起）**：Windows 原生不可用问题已修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过；**Windows 真机门禁最近一次全绿为上一版本 `v0.15.0` 周期**（T1–T5 通过 10 项 / 失败 0 项 / 告警 0 项）；**当前版本 `v0.16.0-alpha` 未复跑 Windows 真机门禁**（本周期为 Linux/WSL2 单平台实测）。
+> **✅ 跨平台（v0.11.0 起）**：Windows 原生不可用问题已修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过；**Windows 真机门禁最近一次全绿为上一版本 `v0.15.0` 周期**（T1–T5 通过 10 项 / 失败 0 项 / 告警 0 项）；**本版本 `v0.16.0` 的 Windows 真机门禁由负责人在本次发布前于原生 Windows 执行（发布红线 1），结论见 [`docs/release-checklist-v0.16.0.md`](docs/release-checklist-v0.16.0.md) §3**（本周期 Linux/WSL2 侧已实测）；**不予预先声明 PASS**——若发布时该门禁未执行，则以「**Windows 未验证**」如实标注。
 >
 > **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（例如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；**由 `process.cwd()` 推导的路径不受影响**。
 
-单包发布：npm 包名 `dsh-graph`（当前版本 v0.16.0-alpha，与 `package.json` / `PLUGIN_VERSION` 一致）。一个包同时提供：
+单包发布：npm 包名 `dsh-graph`（当前版本 v0.16.0，与 `package.json` / `PLUGIN_VERSION` 一致）。一个包同时提供：
 
 - 面向 agent 的 44 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
 - 浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
@@ -56,9 +56,9 @@ dsh plugin --profile <name> add dsh-graph
 >
 > **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
-> **✅ DSH 版本兼容性（重点）**：v0.16.0-alpha **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.7-rc.1`**（最新的 `0.1.7-rc.1` 已适配并实测通过，`0.1.6-alpha.2` 在本周期同批复跑确认零退化）。宿主 settings 服务在 `0.1.7` 线换成「profile 条目 Config → 设置表单」形态（旧 `settings.register` 已移除），插件改为**能力探测分流**：新 API 存在走新路径，否则回落旧 namespace 注册；两条路径均在隔离实例上实机验证。`0.1.5-rc.2` 及更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但**未在本周期复跑**。
+> **✅ DSH 版本兼容性（重点）**：v0.16.0 **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.7-rc.1`**（最新的 `0.1.7-rc.1` 已适配并实测通过，`0.1.6-alpha.2` 在本周期同批复跑确认零退化）。宿主 settings 服务在 `0.1.7` 线换成「profile 条目 Config → 设置表单」形态（旧 `settings.register` 已移除），插件改为**能力探测分流**：新 API 存在走新路径，否则回落旧 namespace 注册；两条路径均在隔离实例上实机验证。`0.1.5-rc.2` 及更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但**未在本周期复跑**。
 >
-> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证**（三平台使用同一安装包）。**上一版本 `v0.15.0` 周期已在 Linux（WSL2）与原生 Windows 上实测**——Windows 侧 T1–T5 分层门禁在原生 `win32/x64` 上全绿（**通过 10 项 / 失败 0 项 / 告警 0 项**，含跨进程并发 CAS「4 抢 1」）；**当前版本 `v0.16.0-alpha` 本周期只在 Linux（WSL2）上实测，Windows 真机门禁未复跑**；**macOS 最近一次真机复验为 `v0.11.0`**，自 `v0.11.0` 以来 `core/platform.ts` 与文件锁相关代码零改动。此前 Windows 不可用的两类问题——① `core/ops.ts` 使用 POSIX 专用文件锁常量（目录当 fd 打开、`O_DIRECTORY`、`O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在 **v0.11.0** 修复，并在原生 Windows 与 macOS 真机复验通过。**已知限制**：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
+> **平台范围**：**Linux（WSL2）、原生 Windows、macOS**（三平台使用同一安装包；macOS 最近一次真机复验为 `v0.11.0`，自 `v0.11.0` 以来 `core/platform.ts` 与文件锁相关代码零改动）。**本版本 `v0.16.0` 已在 Linux（WSL2）实测**；**Windows 真机门禁（T1–T5）由负责人在本次发布前于原生 Windows 执行 `node win-smoke-test.mjs --tarball dsh-graph-0.16.0.tgz`，结论见 [`docs/release-checklist-v0.16.0.md`](docs/release-checklist-v0.16.0.md) §3**——**本次不预先声明 PASS（红线 1）**；若发布时未执行该门禁，则以「**Windows 未验证**」如实标注。此前 Windows 不可用的两类问题——① `core/ops.ts` 使用 POSIX 专用文件锁常量（目录当 fd 打开、`O_DIRECTORY`、`O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在 **v0.11.0** 修复，并在原生 Windows 与 macOS 真机复验通过。**已知限制**：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
 
 ## 提供的工具
 
