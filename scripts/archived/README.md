@@ -21,7 +21,7 @@
 | `dev-dsh-instance.sh` | 早期隔离开发实例管理：管 `web` + `dsh-graph-test` **双 profile**，子命令 `run/setup/main-published/main-dev/status/help`，隔离靠 `TEST_HOME`/`CWD` 环境变量 | 2026-09-20 |
 | `macos-smoke-test.mjs` | macOS 门禁执行件（g-359 / v0.16.0）：M1 退化构建路径 + M2 APFS 大小写探针 + M3 软链 root 边界 + M4 Linux-only 假设扫描，并转发 `win-smoke-test.mjs` 的 T1–T5 | 2026-09-25 |
 
-**取代关系（`macos-smoke-test.mjs`，g-362 / v0.17.0）**：macOS 与 Linux 门禁**合并为一份跨平台实现** [`platform-smoke-test.mjs`](../../docs/platform-gate.md)（六项平台探针 P1–P6 + 平台无关审计 M4 + 转发 T1–T5；平台差异只体现在判定口径与平台标注）。`scripts/macos-smoke-test.mjs` 现只做「打印取代提示 + 原样转发」（**零重复逻辑**，结构守卫见 `core/tests/g362-platform-gate.test.ts`）。其中 **M4 作为平台无关检查在新件里保持存活并导出**（`LINUX_ONLY_PATTERNS` / `scanLinuxOnlyAssumptions` / `collectScanFiles`），既有 g-359 测试的 M4 用例改从新件导入；**M1 属已取消范围**（其风险面已由 M4 的「能力探测 + 回退」判定覆盖），只随本归档保留。
+**取代关系（`macos-smoke-test.mjs`，g-362 / v0.16.1）**：macOS 与 Linux 门禁**合并为一份跨平台实现** [`platform-smoke-test.mjs`](../../docs/platform-gate.md)（六项平台探针 P1–P6 + 平台无关审计 M4 + 转发 T1–T5；平台差异只体现在判定口径与平台标注）。`scripts/macos-smoke-test.mjs` 现只做「打印取代提示 + 原样转发」（**零重复逻辑**，结构守卫见 `core/tests/g362-platform-gate.test.ts`）。其中 **M4 作为平台无关检查在新件里保持存活并导出**（`LINUX_ONLY_PATTERNS` / `scanLinuxOnlyAssumptions` / `collectScanFiles`），既有 g-359 测试的 M4 用例改从新件导入；**M1 属已取消范围**（其风险面已由 M4 的「能力探测 + 回退」判定覆盖），只随本归档保留。
 
 **取代关系（`dev-dsh-instance.sh`）**：`dsh-test-web.sh <DSH版本> [--port PORT] [--proxychains] [--host HOST] [--host-dir PATH] [--skip-install]` 按 **DSH 版本**启动单实例、以 `DSH_HOME` 为隔离边界，并**拒绝透传受管参数**（`--profile`/`--dsh-home`/`--workspace`/`--patch` 等）。两者设计不同，不是同一工具的两个版本。
 

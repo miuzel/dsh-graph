@@ -1,7 +1,7 @@
 # 平台门禁（macOS / Linux 合并执行件）
 
 **执行件**：[`scripts/platform-smoke-test.mjs`](../scripts/platform-smoke-test.mjs)（单文件、纯 Node、零第三方依赖）
-**状态（v0.17.0 / g-362）**：执行件已就绪，**Linux（WSL2）侧已实测全绿**（见 §6）；**macOS 侧结论待回填**（见 §7）。
+**状态（v0.16.1 / g-362）**：执行件已就绪，**Linux（WSL2）侧已实测全绿**（见 §6）；**macOS 侧结论待回填**（见 §7）。
 **本页不预先声明 macOS 已验证。**
 
 本页是**一份**跨平台门禁手册：执行件用法、检查分层、macOS 与 Linux 各自可直接粘贴的命令序列、
