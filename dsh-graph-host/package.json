@@ -26,7 +26,8 @@
     "url": "https://github.com/miuzel/dsh-graph.git"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "dsh": ">=0.1.5-rc.2 <0.1.8-0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
