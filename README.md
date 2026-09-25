@@ -56,7 +56,7 @@ dsh plugin --profile <name> add dsh-graph
 >
 > **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
-> **宿主兼容声明**：`engines.dsh` 声明 DSH 兼容范围 `>=0.1.5-rc.2 <0.1.8-0`（与 `@deepseek-ai/dsh-settings` peer `^0.1.5-rc.2` 取交集后自洽；上界 `-0` 表示排除 `0.1.8` 的**一切预发布与正式版**——下代宿主须重新验证后再放宽），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取；市场的判定是 `engines.dsh` 与各 peer 范围的**合取**，且发现阶段**不读** `peerDependenciesMeta.optional`。
+> **宿主兼容声明**：`engines.dsh` 声明 DSH 兼容范围 `>=0.1.5-rc.2 <0.1.8-0`（与 `@deepseek-ai/dsh-settings` peer `^0.1.5-rc.2` 取交集后自洽；上界 `-0` 表示排除 `0.1.8` 的**一切预发布与正式版**——下代宿主须重新验证后再放宽），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取（市场读到的是 registry 上**已发布**版本的清单且有缓存 ⇒ 本声明自**包含它的版本发布后**才生效）；市场的判定是 `engines.dsh` 与各 peer 范围的**合取**，且发现阶段**不读** `peerDependenciesMeta.optional`。
 >
 > **✅ DSH 版本兼容性（重点）**：**声明的宿主兼容范围**（自 v0.16.1 起，`engines.dsh`）：`>=0.1.5-rc.2 <0.1.8-0`（最新的 `0.1.7-rc.2` 已适配并实测通过 —— 2026-09-25 用 v0.16.0 发布物 tarball 在 Linux/WSL2 上跑 T1–T5 全绿 **10/0/0**，并逐包比对 `0.1.7-rc.1`→`rc.2`：子代理目录层（`dsh-session-projection`）零代码变化、`listProviders`/`listModels`/`resolveModelInfo` 签名逐字未变、客户端只用到的 `MarkdownText` 仍在；`0.1.7-rc.1` 为 g-351 双宿主对照实测；`0.1.6-alpha.2` 在本周期同批复跑确认零退化）。宿主 settings 服务在 `0.1.7` 线换成「profile 条目 Config → 设置表单」形态（旧 `settings.register` 已移除），插件改为**能力探测分流**：新 API 存在走新路径，否则回落旧 namespace 注册；两条路径均在隔离实例上实机验证。更早的 `0.1.2-alpha.x` ~ `0.1.4` 系列按工具与提示词契约向后兼容，但**未在本周期复跑**，且**自 v0.16.1 起不在声明范围内**（市场安装预检会保守挡住）。
 >

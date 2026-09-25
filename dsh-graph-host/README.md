@@ -30,7 +30,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
-> **宿主兼容声明**：`engines.dsh` 声明 DSH 兼容范围 `>=0.1.5-rc.2 <0.1.8-0`（与 `@deepseek-ai/dsh-settings` peer `^0.1.5-rc.2` 取交集后自洽；上界 `-0` 表示排除 `0.1.8` 的**一切预发布与正式版**——下代宿主须重新验证后再放宽），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取；市场的判定是 `engines.dsh` 与各 peer 范围的**合取**，且发现阶段**不读** `peerDependenciesMeta.optional`。
+> **宿主兼容声明**：`engines.dsh` 声明 DSH 兼容范围 `>=0.1.5-rc.2 <0.1.8-0`（与 `@deepseek-ai/dsh-settings` peer `^0.1.5-rc.2` 取交集后自洽；上界 `-0` 表示排除 `0.1.8` 的**一切预发布与正式版**——下代宿主须重新验证后再放宽），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取（市场读到的是 registry 上**已发布**版本的清单且有缓存 ⇒ 本声明自**包含它的版本发布后**才生效）；市场的判定是 `engines.dsh` 与各 peer 范围的**合取**，且发现阶段**不读** `peerDependenciesMeta.optional`。
 >
 > ### 🚀 v0.16.0 新功能
 >
@@ -187,7 +187,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **Dependency Note**: Core packages provided by the DSH host (`@deepseek-ai/cordis` ^4.0.2, `@deepseek-ai/schemastery` ^3.18.2, `@deepseek-ai/dsh-settings` ^0.1.5-rc.2) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention), provided directly by the host runtime without peer dependency warnings during installation; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 >
-> **Host compatibility declaration**: `engines.dsh` declares the DSH range `>=0.1.5-rc.2 <0.1.8-0` (self-consistent with the `@deepseek-ai/dsh-settings` peer `^0.1.5-rc.2`; the `-0` upper bound excludes **every** `0.1.8` prerelease and final release — the next host generation must be re-verified before the range is re-opened). Host-aware markets such as dsh-market read it for card display and install/update pre-flight; the market's verdict is a **conjunction** of `engines.dsh` and each peer range, and discovery does **not** honor `peerDependenciesMeta.optional`.
+> **Host compatibility declaration**: `engines.dsh` declares the DSH range `>=0.1.5-rc.2 <0.1.8-0` (self-consistent with the `@deepseek-ai/dsh-settings` peer `^0.1.5-rc.2`; the `-0` upper bound excludes **every** `0.1.8` prerelease and final release — the next host generation must be re-verified before the range is re-opened). Host-aware markets such as dsh-market read it for card display and install/update pre-flight (**markets read the manifest of the *published* version, with caching — so this declaration takes effect once the version carrying it is published**); the market's verdict is a **conjunction** of `engines.dsh` and each peer range, and discovery does **not** honor `peerDependenciesMeta.optional`.
 >
 > ### 🚀 What's new in v0.16.0
 >
