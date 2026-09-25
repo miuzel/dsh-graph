@@ -27,7 +27,7 @@
 
 | 验证面 | 证据 |
 |---|---|
-| `0.1.7-rc.2` 宿主（**2026-09-25 复验**） | 用 v0.16.0 发布物 tarball 真实安装 + 启动 ⇒ **T1–T5 全绿 10/0/0**；逐包比对 `rc.1`→`rc.2`：`dsh-base` 零 JS 变化（仅 `cordis.patch.yml` 把 LLM provider 插件换成 `dsh-llm-deepseek-api-key` 并新增 account 条目）、`dsh-session-projection`（子代理目录层）与 `dsh-skill` 零代码变化、`dsh-llm` 的 `listProviders`/`listModels`/`resolveModelInfo` **签名逐字未变**（仅新增可选字段 `toolUpdate`）、客户端唯一用到的 `MarkdownText` 仍在（导出 268→279，仅移除我们未用的 `OnboardingSurface`） |
+| `0.1.7-rc.2` 宿主（**2026-09-25 复验**） | 用 v0.16.0 发布物 tarball 真实安装 + 启动 ⇒ **T1–T5 全绿 10/0/0**（最终包 `fe852e23…` 复跑同样 10/0/0）；逐包比对 `rc.1`→`rc.2`：`dsh-base` 零 JS 变化（仅 `cordis.patch.yml` 把 LLM provider 插件换成 `dsh-llm-deepseek-api-key` 并新增 account 条目）、`dsh-session-projection`（子代理目录层）与 `dsh-skill` 零代码变化、`dsh-llm` 的 `listProviders`/`listModels`/`resolveModelInfo` **签名逐字未变**（仅新增可选字段 `toolUpdate`）、客户端唯一用到的 `MarkdownText` 仍在（导出 268→279，仅移除我们未用的 `OnboardingSurface`） |
 | `0.1.7-rc.1` 隔离实例（**本周期实测**） | settings 服务换代后走**能力探测分流**：新 API 存在 ⇒ 「profile 条目 Config → 设置表单」投影。实测 `sctx.settings.register is not a function` 降级告警**消失**；profile 全局默认（如 `subagentMode`）经 profile patch **真正生效**（`mode_source=global`）；`graph_*` 工具计数仍为 **44**、`/api/dsh-graph*` 端点注册齐全 |
 | `0.1.7-rc.1` 子代理目录换代（**本周期实测**） | 容器由 `subagentsByParent` 改为 `projectionsBySession[sid].values.subagentCatalog`，entry 形状**去掉 `kind`** 并新增 `mode:'unknown'`；目录谓词改为形状探测，避免点「↗ 转到对话」**静默**打开父会话 |
 | `0.1.6-alpha.2` 旧路径复跑（**本周期实测**） | 重跑 namespace 注册路径：`$DSH_HOME/settings.yaml` 与 profile 全局默认照常生效，**零退化** |
@@ -217,9 +217,10 @@ supervisor session（本轮不写剪贴板）；不可投递时**完整退回**�
       「**Windows 未验证**」
 - [x] tarball 已产出并记录 sha256（发布门禁红线 3）：发布树 `.worktrees/release-v0.16.0`
       （detached @ tag `v0.16.0`，`git describe --tags` = `v0.16.0`）内 `bash scripts/build.sh` 后
-      `pnpm pack` ⇒ `dsh-graph-0.16.0.tgz`，**487,120 B**，sha256 **`548afccd…`**（见 §3.2）
-      —— **已重切两次**：g-358 / g-359 合入后一次；宿主 `0.1.7-rc.2` 复验并将声明上界抬到 rc.2 后又一次
-      （npm README 属包内文件）；旧指纹 `75738dce…`、`3690b899…` **全部作废**
+      `pnpm pack` ⇒ `dsh-graph-0.16.0.tgz`，**488,218 B**，sha256 **`fe852e23…`**（见 §3.2）
+      —— **已重切三次**：①g-358 / g-359 合入后；②宿主 `0.1.7-rc.2` 复验并将声明上界抬到 rc.2 后；
+      ③g-360 文档口径校准（「分档吃看板根容器 clientWidth」）合入后
+      （②③都改了包内 `README.md`）；旧指纹 `75738dce…`、`3690b899…`、`548afccd…` **全部作废**
 - [x] `v0.16.0-test` 合并 → `main`（`--no-ff`）+ annotated tag **`v0.16.0`**（**未推送** —— 推送由负责人另行授权）
       —— 经负责人 2026-09-25 明确授权执行。**重切记录**：因 g-358（窄档单泳道修复）与 g-359（macOS 门禁
       执行件）随后合入，`main` 已回退到 `origin/main`（`5d731cc`）并**重新做单次合并**，tag 删除后重打；
@@ -287,8 +288,8 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 | 建议相对路径 | `tmp/release-v0.16.0/dsh-graph-0.16.0.tgz` |
 | 包内版本 | `0.16.0`（`dist/package.json` 实测；须与 tag 一致） |
 | 包内文件数 | **37**（`pnpm pack --dry-run` 清单实测，与 `dist/` 实数逐项一致） |
-| 体积 | **487,120 B**（发布树内 `pnpm pack` 实测，2026-09-25，**最终重切后**） |
-| sha256 | **`548afccd4ca7f62b91ef09a650882b6aa93c3b82c3bf866406dff77ed8705224`**（同上） |
+| 体积 | **488,218 B**（发布树内 `pnpm pack` 实测，2026-09-25，**最终重切后**） |
+| sha256 | **`fe852e2353d5223ae6229bdc914eee32d8655df1c2fb96582a025dcd8e34f827`**（同上） |
 | Windows 侧可达路径（UNC） | `\\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.16.0\` |
 | 老式 UNC 别名 | `\\wsl$\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.16.0\` |
 
@@ -318,6 +319,17 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 > 据此把 README（两份、中英）声明的支持上界由 `0.1.7-rc.1` 抬到 **`0.1.7-rc.2`**（npm 那份 `README.md` 属
 > 发布包内文件 ⇒ 指纹随之变化）⇒ 发布物重打：上表数值为**最终值**，此前 `3690b899…`（及更早 `75738dce…`）
 > **全部作废**；门禁结论须以最终包重跑（建议显式 `--dsh "npx -y @deepseek-ai/dsh@0.1.7-rc.2"` 使结论与声明一致）。
+>
+> **⚠️ 第三次重切（同日，g-360 复核后）**：负责人报「g-358 在原生 Windows 实机未生效」。核查结论：**g-358 已合入 tag
+> 与发布包、逻辑本身正确**；未生效的原因是**第 1 条前置条件不成立** —— 分档吃的是**看板根容器实测 `clientWidth`**
+> （不是窗口宽度、也不是视口宽度），而宿主默认单页签下该值实测 **719px**（≥480）⇒ 按设计走宽档横向网格。已用发布包
+> 在隔离实例 + 真实浏览器取证：459/479 ⇒ 单泳道且选择器当前项「独立目标」；480/500 ⇒ 宽档，且**整个看板没有版本
+> 选择器**（故宽档里看到的「全部版本」只可能来自打开的下拉选项，而非当前选中项；新 profile 的视图初值为 `null`、
+> 零持久化）。据此把用户指导改准：旧文「把右侧栏拖到 <480px」实测该页签宿主下没有拖拽手柄，**已删除**；改为用页签
+> `分栏` 进入（实测每页签 **359px** / 单页签 719 / 全屏 799），并补记宽档残留（网格最小宽 ≈ **956px**，480–956px
+> 仍会横向滚动）。该文档改动在包内 ⇒ 发布物第三次重打；上表数值为**最终值**，`548afccd…` 亦作废。
+> **未改客户端行为**：重建产物 `dist/lib/client.js` 与前一版**逐字节一致**（md5 `c8736a6a…`）⇒ g352 冻结签名无需重冻。
+> 残留点（480–956px 宽档横向滚动）经负责人裁决**不在本发布窗口做语义变更**，另开 **g-361**（v0.17.0）评估。
 >
 > **发布物对账顺序（v0.15.0 实证，务必遵守）**：
 > 1. 先在**发布树**（`git worktree add --detach .worktrees/release-v0.16.0 v0.16.0`）内
@@ -356,7 +368,7 @@ coreutils < 9.6 的 Linux 用户都走这条，g-359 起有机器测试覆盖）
 | 项 | 值 |
 |---|---|
 | 是否已执行 | **⏳ 待回填**（负责人本周期在 Mac 上执行） |
-| 被测产物 | §3.2 同一 tarball（sha256 `548afccd…`）；宿主建议 `--dsh "npx -y @deepseek-ai/dsh@0.1.7-rc.2"` |
+| 被测产物 | §3.2 同一 tarball（sha256 `fe852e23…`）；宿主建议 `--dsh "npx -y @deepseek-ai/dsh@0.1.7-rc.2"` |
 | 结果 | ⏳ 待回填（M1/M2/M4 期望 PASS；M3 在非 darwin 上必然 WARN，属如实降级口径） |
 | 若未执行 | README 保持「macOS 门禁执行件已就绪 + 真机结论待回填」，**不得**声明 macOS 已验证 |
 
