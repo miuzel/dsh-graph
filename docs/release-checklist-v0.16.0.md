@@ -436,3 +436,24 @@ coreutils < 9.6 的 Linux 用户都走这条，g-359 起有机器测试覆盖）
    测试 2/3 是手改 YAML 的判定侧映射测试（不覆盖写入侧）；② 新注释宣称的
    「评审/交付路径 `selected`/`merged`/`rejected`/`completed`/`failed`」在当前源码中查不到写入点
    （历史遗留白名单项）；③ 注释未点名 legacy 事件 `attempt.detached`（与 `attempt.unbound` 共用写入点）。
+
+---
+
+## 4. 发布后对账（2026-09-25，发布后回填）
+
+**发布确认**：负责人已发布 npm 包。按红线 3 的口径，**跨机器传递用 tarball + sha256，registry 侧改用内容级判据**
+（npm 会在打包时重写 tarball，并向 `package.json` 注入 `gitHead`）。
+
+| 项 | 值 |
+|---|---|
+| 包名 / 版本 | `dsh-graph` / `0.16.0`（unscoped） |
+| registry 文件数 | **37**（`dist.fileCount`，与本机发布树 `find dist -type f` 一致） |
+| registry unpackedSize | 1,724,378 B |
+| registry integrity | `sha512-I4g4ol8L0Y55XtfmQmyGyta4sTzWEG5PfxO1fnc+uCsviUQNpaGfF7iDSLKIVQhPQFuOeNYbER5rJ7O4yXcClg==` |
+| registry tarball | 488,758 B / sha256 `545a3e85…`（**与本机 488,218 B / `fe852e23…` 不同属预期**：npm 重打包） |
+| 内容级对账 | `diff -r --brief <解包后的 registry 包> <本机发布树 dist/>` ⇒ **仅 1 处差异**：`package.json` |
+| 差异解释 | 该差异**只是 npm 注入的 `gitHead`**；剔除后与本机**完全一致** ⇒ 发布内容 == 门禁所测产物 |
+| 逐项抽检 | `lib/client.js` md5 两侧同为 `c8736a6a…`；包内 README 仍为过渡文案；包内版本 `0.16.0` |
+
+**结论**：已发布的 `0.16.0` 与原生 Windows 门禁所测产物**内容一致** ⇒ 红线 1 的结论对正式版有效，
+§3 各项门禁结论适用于 `dsh-graph@0.16.0`。
