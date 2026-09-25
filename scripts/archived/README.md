@@ -8,17 +8,22 @@
 - **保留仅供追溯**——记录当时目标如何验收、当时迁移怎么做，不作为可复用工具维护；
 - **内容一字未改**——归档仅做 `git mv` 位置迁移，未修改任何脚本内容（见下「已知限制」）。
 
-> **现行脚本见 `scripts/`**（构建链 `build.sh` / `build-client.sh` / `sync-core.sh`、发布门禁 `win-smoke-test.mjs` / `win-smoke-test.cmd`、测试实例 `dsh-test-web.sh`、mock seed `dsh-graph-mock-seed.mjs`）。
+> **现行脚本见 `scripts/`**（构建链 `build.sh` / `build-client.sh` / `sync-core.sh`、发布门禁 `win-smoke-test.mjs` / `win-smoke-test.cmd`、**跨平台门禁 `platform-smoke-test.mjs`**、测试实例 `dsh-test-web.sh`、mock seed `dsh-graph-mock-seed.mjs`）。
 >
 > **`dev-dsh-instance.sh` 已被 `dsh-test-web.sh` 取代**，不要再使用旧脚本。
+>
+> **`macos-smoke-test.mjs`（原 macOS 门禁）已被跨平台执行件 `platform-smoke-test.mjs` 取代**（见 A 节第 2 行）。
 
-## A. 被取代（1 个）
+## A. 被取代（2 个）
 
 | 脚本 | 用途 | 最后改动 |
 |---|---|---|
 | `dev-dsh-instance.sh` | 早期隔离开发实例管理：管 `web` + `dsh-graph-test` **双 profile**，子命令 `run/setup/main-published/main-dev/status/help`，隔离靠 `TEST_HOME`/`CWD` 环境变量 | 2026-09-20 |
+| `macos-smoke-test.mjs` | macOS 门禁执行件（g-359 / v0.16.0）：M1 退化构建路径 + M2 APFS 大小写探针 + M3 软链 root 边界 + M4 Linux-only 假设扫描，并转发 `win-smoke-test.mjs` 的 T1–T5 | 2026-09-25 |
 
-**取代关系**：`dsh-test-web.sh <DSH版本> [--port PORT] [--proxychains] [--host HOST] [--host-dir PATH] [--skip-install]` 按 **DSH 版本**启动单实例、以 `DSH_HOME` 为隔离边界，并**拒绝透传受管参数**（`--profile`/`--dsh-home`/`--workspace`/`--patch` 等）。两者设计不同，不是同一工具的两个版本。
+**取代关系（`macos-smoke-test.mjs`，g-362 / v0.16.1）**：macOS 与 Linux 门禁**合并为一份跨平台实现** [`platform-smoke-test.mjs`](../../docs/platform-gate.md)（六项平台探针 P1–P6 + 平台无关审计 M4 + 转发 T1–T5；平台差异只体现在判定口径与平台标注）。`scripts/macos-smoke-test.mjs` 现只做「打印取代提示 + 原样转发」（**零重复逻辑**，结构守卫见 `core/tests/g362-platform-gate.test.ts`）。其中 **M4 作为平台无关检查在新件里保持存活并导出**（`LINUX_ONLY_PATTERNS` / `scanLinuxOnlyAssumptions` / `collectScanFiles`），既有 g-359 测试的 M4 用例改从新件导入；**M1 属已取消范围**（其风险面已由 M4 的「能力探测 + 回退」判定覆盖），只随本归档保留。
+
+**取代关系（`dev-dsh-instance.sh`）**：`dsh-test-web.sh <DSH版本> [--port PORT] [--proxychains] [--host HOST] [--host-dir PATH] [--skip-install]` 按 **DSH 版本**启动单实例、以 `DSH_HOME` 为隔离边界，并**拒绝透传受管参数**（`--profile`/`--dsh-home`/`--workspace`/`--patch` 等）。两者设计不同，不是同一工具的两个版本。
 
 ## B. per-goal 一次性验收脚本（14 个）
 
@@ -80,6 +85,7 @@
 | `check_g205.sh` | `GUIDE="${SCRIPT_DIR}/../dsh-graph-host/supervisor-guide.zh.md"` | `scripts/dsh-graph-host/...` | 文件路径不存在 |
 | `check-migration-fixtures.sh` | `REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"` | `scripts/` 而非仓库根 | 仓库根推算错位 |
 | `g294-verify.cjs` | `path.resolve(__dirname, '../tmp/g294-verify/...')` | `scripts/tmp/g294-verify/...` | 临时目录错位 |
+| `macos-smoke-test.mjs` | `join(import.meta.dirname, "..")`（默认 `--repo`） | `scripts/` 而非仓库根 | **只影响「直接运行归档副本」这一路径**：转发 shim 与既有测试都显式传仓库根 / 指向新件，不受影响。若确需重跑归档副本，显式加 `--repo <仓库根>` 即可 |
 
 `g294-verify.cjs` 另依赖已不存在的 `tmp/pw-browsers/**` Playwright 可执行文件，本就不具备直接可重跑性。
 

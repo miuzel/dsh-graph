@@ -1,10 +1,17 @@
 /**
  * core/tests/g359-macos-gate.test.ts
  *
- * g-359 质量判据 1/2 的自动化守卫：`scripts/macos-smoke-test.mjs` 必须
+ * g-359 质量判据 1/2 的自动化守卫。**v0.16.1（g-362）起 import 指向合并后的跨平台执行件**
+ * `scripts/platform-smoke-test.mjs`：macOS 与 Linux 门禁已合并为一份实现，原
+ * `scripts/macos-smoke-test.mjs` 降为转发 shim（其被取代的实现归档在 `scripts/archived/`）。
+ *   - `buildForwardArgs` / `probeCaseAliasing` / `collectScanFiles` / `LINUX_ONLY_PATTERNS` /
+ *     `scanLinuxOnlyAssumptions` 全部由**新件**导出（M4 作为平台无关检查在新件里保持存活）。
+ *   - 本文件的 5 个用例与断言**一条未删**：只改了 import 来源与执行件路径。
+ *
+ * g-359 判据 1/2 的要求仍然成立：执行件必须
  *   ① 把 `--tarball/--spec/--path/--static-only/--self-test` 原样转发给既有执行件
  *      `scripts/win-smoke-test.mjs`（不复制其逻辑）；
- *   ② 自带四项 macOS 专检，且其中"M1 退化构建路径""M4 Linux-only 假设扫描"的判定
+ *   ② 自带 macOS/Linux 专检，且其中"M4 Linux-only 假设扫描"的判定
  *      **有判别力**（真隐患必红、已覆盖不误报）。
  *
  * 为什么需要：
@@ -15,7 +22,7 @@
  *
  * 说明（平台边界）：`probeCaseAliasing` 的**正向**结论（APFS 大小写不敏感 ⇒ 别名）无法在
  *   Linux 上合成 —— 那需要真的大小写不敏感卷。故本测试只断言探针返回值自洽且可复现，
- *   正向判定留给 macOS 真机（`docs/macos-gate.md`）。
+ *   正向判定留给 macOS 真机（`docs/platform-gate.md`）。
  */
 
 import { test } from "node:test";
@@ -31,10 +38,10 @@ import {
   LINUX_ONLY_PATTERNS,
   probeCaseAliasing,
   scanLinuxOnlyAssumptions,
-} from "../../scripts/macos-smoke-test.mjs";
+} from "../../scripts/platform-smoke-test.mjs";
 
 const repoRoot = join(import.meta.dirname, "../..");
-const SCRIPT = join(repoRoot, "scripts", "macos-smoke-test.mjs");
+const SCRIPT = join(repoRoot, "scripts", "platform-smoke-test.mjs");
 
 // ============================================================================
 // ① 转发：五个规定选项原样转发给 win-smoke-test.mjs

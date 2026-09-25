@@ -1,5 +1,11 @@
 # macOS 门禁（g-359）
 
+> **⚠️ 本页已被 [`docs/platform-gate.md`](platform-gate.md) 取代（v0.16.0 历史记录，保留）**：
+> v0.16.1（g-362）起 macOS 与 Linux 门禁**合并为一份跨平台执行件** `scripts/platform-smoke-test.mjs`（原计划 `v0.17.0`，实际随 `v0.16.1` 发布）；
+> 本页的 `scripts/macos-smoke-test.mjs` 已降为转发 shim，其 M1–M4 实现归档在
+> [`scripts/archived/macos-smoke-test.mjs`](../scripts/archived/macos-smoke-test.mjs)（其中 M4 作为
+> 平台无关检查在新件里保持存活）。**请以 `docs/platform-gate.md` 为准**；本页仅作当时验收方式的追溯。
+
 **状态：执行件已就绪（v0.16.0）；真机结论待回填（见文末「回填表」）。本页不预先声明 macOS 已验证。**
 
 本页是 macOS 侧的**可执行门禁手册**：执行件位置、检查分层、负责人可直接粘贴的命令序列、
