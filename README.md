@@ -19,7 +19,7 @@
 >
 > **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（例如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；**由 `process.cwd()` 推导的路径不受影响**。
 
-单包发布：npm 包名 `dsh-graph`（当前版本 v0.16.0，与 `package.json` / `PLUGIN_VERSION` 一致）。一个包同时提供：
+单包发布：npm 包名 `dsh-graph`（当前版本 v0.16.1，与 `package.json` / `PLUGIN_VERSION` 一致）。一个包同时提供：
 
 - 面向 agent 的 44 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
 - 浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
