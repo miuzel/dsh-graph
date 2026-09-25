@@ -11,14 +11,16 @@
 > 「准备发布，当前版本无跨平台敏感内容，可省略 win/mac 门禁，linux 已测试过，请跑一下门禁。」
 
 据此：**Windows / macOS 原生门禁本次裁定省略**（发布红线 1 的**例外**，结论见 §3.1，**不得视为 PASS**）；
-Linux 门禁由主管在 worktree 内**实跑**（§4）。**合并 `main` 与打 tag 经负责人 2026-09-26 授权后由主管在本机执行；`git push` 与 `pnpm publish` 仍由负责人人工 gate。**
+Linux 门禁由主管在 worktree 内**实跑**（§4）。**合并 `main`、打 tag 与 `git push` 经负责人 2026-09-26 授权后由主管在本机执行；`pnpm publish` 由负责人在发布树人工执行（已完成）。**
 
 **本次执行树**：worktree `.worktrees/g-368-att-02`，分支 `g-368-att-02`，基线 **`e345386`**
 （= `v0.16.1-test` HEAD，含 g-362 + g-365 + g-366）。
 **纪律（准备阶段）**：全部构建/测试/门禁均在 worktree 内完成；准备阶段**未写主树 `dist/`**、**未 push / 未 publish / 未打 tag**、
 **未执行 `pnpm add` / `npm install`**（worktree 缺 `node_modules`，经**符号链接**指向主树只读复用，不入 git）。
 **发布阶段（负责人授权后，2026-09-26）**：主管在本机合并 `v0.16.1-test` → `main`（`10045ca`）并创建 annotated tag `v0.16.1`；
-**发布物在主树 tag 树重切并复算指纹**（见 §3.3 末「终值确认」）。`git push` 与 `pnpm publish` **仍未执行**。
+**发布物在主树 tag 树重切并复算指纹**（见 §3.3 末「终值确认」）。
+**发布收尾（2026-09-26）**：`pnpm publish` 由负责人在发布树 `.worktrees/release-v0.16.1/dist` 执行，`npm view dsh-graph version` = **`0.16.1`**（负责人实测）；
+`git push origin main`（`1ecfbba..1ed1054`）与 `git push origin v0.16.1`（远端 tag 对象 `3816b791…`）由主管执行并经 `git ls-remote` 核对。
 
 ---
 
@@ -89,9 +91,10 @@ locale 编码逐字节往返）+ 平台无关审计 **M4**（Linux-only 假设�
 - [x] `g-368-att-02` 合并 → `v0.16.1-test`（`c40fe95`）→ 陈旧文档一行校正（`18ac316`）→ `v0.16.1-test` 合并 → `main`（`--no-ff`，`10045ca`）—— 负责人 2026-09-26 授权
 - [x] annotated tag `v0.16.1` —— 主管在本机创建，指向 `main` 上含本清单定稿的提交
 - [x] **发布树重切产物并复算指纹**：`v0.16.1-test` 与 `main` 两次重切均 = `1e34ec34…` / 492,955 B（与门禁所测包**逐位相同**，见 §3.3）
-- [ ] 负责人执行 `pnpm publish`（npm 官方 registry；**发布目录是 `dist/`，不是 `dsh-graph-host/`**）
-      —— 命令序列见 [`docs/release-handbook.md`](release-handbook.md) §4
-- [ ] 发布后核验：全新隔离 profile 安装 → 工具/看板/skill 注册正常；`npm view dsh-graph version` = `0.16.1`
+- [x] 负责人执行 `pnpm publish`（npm 官方 registry；**发布目录是 `dist/`，不是 `dsh-graph-host/`**）
+      —— 2026-09-26 于发布树 `.worktrees/release-v0.16.1/dist` 完成；`npm view dsh-graph version` = `0.16.1`
+- [ ] 发布后核验（全新隔离 profile 安装 → 工具/看板/skill 注册）：**本版未做** —— 负责人 2026-09-26 裁定「就到此」。
+      等价证据可参照：Linux 门禁 §4.3 的 T2–T5 已对**同一 tarball**（`1e34ec34…`，与发布树重切逐位相同）做过安装 → 实例启动 → REST 路由/载荷核验
 
 ## 3. 三条发布红线逐条结论
 
@@ -301,5 +304,5 @@ node scripts/platform-smoke-test.mjs --self-test           # → tmp/release-016
    token 已失效，**必须先重新登录**再 publish。
 
 **本次已执行（负责人 2026-09-26 授权范围内）**：合并 `v0.16.1-test` → `main`（`10045ca`）、创建 annotated tag `v0.16.1`（本机）、
-主树发布构建与重切指纹复算（`1e34ec34…`）。
-**仍未执行且不应自行执行**：`git push`（含 tag）、`pnpm publish` —— 等负责人执行或明确授权。
+主树发布构建与重切指纹复算（`1e34ec34…`）、**推送 `main` 与 tag 至 GitHub origin**；`pnpm publish` 由负责人在发布树执行（`npm view` = `0.16.1`）。
+**仍未执行**：发布后「全新隔离 profile 安装」核验（负责人裁定「就到此」）。
