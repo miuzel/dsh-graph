@@ -54,9 +54,11 @@ locale 编码逐字节往返）+ 平台无关审计 **M4**（Linux-only 假设�
 运行手册（命令序列、逐项判读、回填表）见 [`docs/platform-gate.md`](platform-gate.md)。
 **用户可见效果**：macOS/Linux 侧结论的表达不再依赖两份并行实现（消除双份维护与漂移）。
 
-> **文档口径澄清（新增括注，不改写历史）**：v0.16.0 小节内「**`v0.17.0` 起** macOS 与 Linux 门禁已合并」
-> 是当时（版本排期未定）的**前瞻表述**；该合并**实际随 `v0.16.1` 发布**。v0.16.0 小节原文**逐字保留**，
-> 仅在新增的 v0.16.1 小节内以括注澄清。
+> **文档口径校正（复核意见，2026-09-26）**：v0.16.0 小节内的「**`v0.17.0` 起** macOS 与 Linux 门禁已合并」
+> 是**面向用户的现状陈述**（会随 `v0.16.1` 发布物出厂），原计划 `v0.17.0` 但**实际随 `v0.16.1` 发布** ⇒
+> 出厂即不实。故**只改版本身份**：`v0.17.0 起` → **`v0.16.1` 起**（并注明「原计划 `v0.17.0`，实际随
+> `v0.16.1` 发布」）。**同段内关于 v0.16.0 周期的历史事实一律未动**（Windows 10/0/0、macOS 2/0/3、
+> 「用 v0.16.0 发布物 tarball 复验」等逐字保留）。校正范围见本清单「发布前检查项」与 §7.5。
 
 ## 2. 发布前检查项
 
@@ -71,6 +73,9 @@ locale 编码逐字节往返）+ 平台无关审计 **M4**（Linux-only 假设�
       使版本表述在**发布物内**亦可核对
 - [x] **平台声明如实（发布红线 1 例外条款）**：两份 README 均写明本版**未**在原生 Windows/macOS 执行门禁
       （负责人裁定省略 + 理由）、**不得视为 PASS**，并注明最近真机结论出处（`docs/release-checklist-v0.16.0.md` §3 / §3.4）
+- [x] **版本身份陈述校正（复核意见）**：把面向用户的「门禁合并」现状陈述由 `v0.17.0 起` 校正为
+      **`v0.16.1` 起**（注明「原计划 `v0.17.0`，实际随 `v0.16.1` 发布」），共 **8 处文档/README + 2 处测试注释**；
+      **v0.16.0 周期的历史结论逐字未动**（详见 §7.5）
 - [x] g-352 冻结签名 fixture 随 `PLUGIN_VERSION` 变更**重新冻结**：正文与 `content-sha256`
       （`0e6b7094…`）**逐字节未变**，仅 provenance 三行更新（description / source-commit / source-sha256）
       —— 维护者工具 + `G352_SIG_ACK=1` 显式 ack，与 v0.16.0 同一做法
@@ -132,22 +137,28 @@ locale 编码逐字节往返）+ 平台无关审计 **M4**（Linux-only 假设�
 | 包内版本 | `0.16.1`（`dist/package.json` 实测） |
 | 包内文件数 | **37**（`pnpm pack --dry-run` 清单实测，与 `find dist -type f` 实数一致） |
 | 包内构建中间物 | **零**：清单内无 `*.ts`、无 `core-dist/`、无 `*.map`（`grep -cE '\.ts$\|core-dist\|\.map$'` = **0**） |
-| 体积 | **492,967 B** |
-| sha256 | **`36d38bc402c1ff3b7d945343b1eb003cda3b173749e58afb327df893d49310d3`** |
-| 门禁自报指纹 | 门禁 T2 打印 `dsh-graph-0.16.1.tgz  492967 B  sha256=36d38bc4…` —— 与上表**逐位一致** |
+| 体积 | **492,955 B** |
+| sha256 | **`1e34ec342eaaccb53553a02c5e33a0de90e3c978769ae71acc8a023fa07e2ecc`** |
+| 门禁自报指纹 | 门禁 T2 打印 `dsh-graph-0.16.1.tgz  492955 B  sha256=1e34ec34…` —— 与上表**逐位一致** |
 | Windows 侧可达路径（UNC） | `\\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\.worktrees\g-368-att-02\tmp\` |
 | 原始输出 | `tmp/release-0161/4.3-pack.log`、`4.3-sha256.log`、`4.3-pack-dryrun.log` |
 
-> **本 sha256 是候选值，不是发布物终值**：发布物**必须**来自 **tag 树**的 `dist/`（手册 §4 步骤 3），
-> 而 tag 尚未创建。按 v0.16.0 的教训（README 调整会换包 ⇒ 指纹作废），**合并 + 打 tag 后须按手册 §4
-> 重切一次并回填**；本清单记录的是「**本次 Linux 门禁所测的那个包**」的指纹（红线 3 的跨机器传递口径）。
+> **指纹沿革（只保留最终值作为结论）**：本清单**只以 `1e34ec34…` / 492,955 B 为最终值**。
+> 版本身份校正（§1.3 括注）之前的候选值为 `36d38bc402c1ff3b7d945343b1eb003cda3b173749e58afb327df893d49310d3`
+> / 492,967 B（**已作废** —— 包内 `README.md` 是该校正的一部分 ⇒ 换包）。
+> 与 v0.16.0 周期的教训一致：**任何包内 README 调整都会换包、使旧指纹作废**。
 >
-> **发布前确认 `dist/` 内无 `.tgz`**：`find dist -name '*.tgz' | wc -l` = **0**（实测）。
+> **本 sha256 是候选值，不是发布物终值**：发布物**必须**来自 **tag 树**的 `dist/`（手册 §4 步骤 3），
+> 而 tag 尚未创建。**合并 + 打 tag 后须按手册 §4 重切一次并回填**；本清单记录的是
+> 「**本次 Linux 门禁所测的那个包**」的指纹（红线 3 的跨机器传递口径）。
+>
+> **发布前确认 `dist/` 内无 `.tgz`**：`find dist -name '*.tgz' | wc -l` = **0**（实测）；`find dist -type f | wc -l` = **37**。
 
 ## 4. Linux 完整门禁实跑（`docs/platform-gate.md` §4.1–4.4）：**✅ 全绿**
 
 **执行环境**：原生 Linux（WSL2 内 Arch Linux）/ `linux x64` / node `v26.7.0` / 2026-09-26。
 **所有命令均在 worktree 内**，`export npm_config_cache="$PWD/tmp/npm-cache"`。
+**本节全部数据来自「版本身份校正后」的最终一轮重跑**（tree = 提交 `9c5365d` + 清单回填，产物 = §3.3 最终值）。
 **命令与原始日志**（日志路径相对 worktree）：
 
 ```bash
@@ -192,7 +203,7 @@ node scripts/platform-smoke-test.mjs --self-test           # → tmp/release-016
 
 | 段 | 汇总 | 用途与判读 |
 |---|---|---|
-| §4.1 `--skip-build` | `逐项=P1=PASS P2=WARN P3=PASS P4=WARN P5=WARN P6=WARN M4=PASS`，**通过 3 / 失败 0 / 告警 5**，退出码 0 | 秒级预检（不需要 `dist`）。5 条 WARN **全部是「未构建 dist ⇒ 依赖 `dist/core/*.js` 的项跳过」**，非缺陷；P2/P4.a/P4.b/P5/P6 在 §4.2/§4.3 构建后**全部转 PASS**。**WARN 不致非零退出**，故单独列出逐项判读 |
+| §4.1 `--skip-build` | `逐项=P1=PASS P2=PASS P3=PASS P4=WARN P5=WARN P6=WARN M4=PASS`，**通过 4 / 失败 0 / 告警 4**，退出码 0 | 秒级预检（自身不构建）。4 条 WARN **全部是「依赖 `dist/core/*.js` 的项未实测而跳过」**（P4.a/P4.b/P5/P6），非缺陷；它们在 §4.2/§4.3（构建后）**全部转 PASS**。P2 取决于**运行时 `dist` 是否已存在**：本轮重跑时 `dist` 已构建 ⇒ P2 载入真实 `resolveRoot` 实测并转 **PASS**；首轮（`dist` 尚未构建）时为 WARN「未构建 dist ⇒ 未能实测」，**两种口径都不冒充通过**。**WARN 不致非零退出**，故单独列出逐项判读 |
 | §4.2 `--static-only .` | `逐项=P1=PASS P2=PASS P3=PASS P4=PASS P5=PASS P6=PASS M4=PASS`，**通过 9 / 失败 0 / 告警 0**，转发 T1 亦 OK，退出码 0 | 静态门禁（需要已构建 `dist`）；不联网、不装插件 |
 | §4.4 `--self-test` | **通过 1 / 失败 0 / 告警 0**，转发 exit=0（执行件自检区 **70 项** `[ OK ]` 全通过、**0 失败**；转发段另有「自检全部通过」），退出码 0 | 确认**执行件自身**没坏：对 P1–P6/M4 与转发的**判读函数**做「好样本 PASS / 坏样本 FAIL」的判别力自检（如「P2 软链 root 未被拒 ⇒ FAIL」「静默降级为拷贝 ⇒ FAIL」「未运行过的项是 SKIP（不冒充 PASS）」），并自校验沙箱根、命令行引号与包目录解析 |
 
@@ -219,20 +230,29 @@ node scripts/platform-smoke-test.mjs --self-test           # → tmp/release-016
 
 **背景**：g-363（门禁运行可能向**生产**看板/记忆写入痕迹）**本版未修**，故须实测比对。
 
+**方法**：以**最终产物**（§3.3 的 `1e34ec34…`）为核心，做一次**干净的「量—跑门禁—再量」闭环**
+（`tmp/release-0161/6-board-guard.log` 逐字留痕）。
+
 | 观测点 | 基线（brief 给定） | 门禁运行**前**（实测） | 门禁运行**后**（实测） | 门禁引起的差值 |
 |---|---|---|---|---|
 | `.dsh-graph/project.yaml` md5 | `1c69db65a39cfb0efbda73211b7ff089` | `1c69db65a39cfb0efbda73211b7ff089` | `1c69db65a39cfb0efbda73211b7ff089` | **0（未变）** |
 | `.dsh-graph/memory/memory.jsonl` md5 | `f98f689a08349cdc6bf2e563a93a1c5b` | `f98f689a08349cdc6bf2e563a93a1c5b` | `f98f689a08349cdc6bf2e563a93a1c5b` | **0（未变）** |
-| `.dsh-graph/events.jsonl` 行数 | `12174` | `12186` | `12186` | **0（未变）** |
+| `.dsh-graph/events.jsonl` 行数 | `12174` | `12191` | `12191` | **0（未变）** |
+
+该次门禁运行本身：`GATE_EXIT=0`、`逐项=P1=PASS P2=PASS P3=PASS P4=PASS P5=PASS P6=PASS M4=PASS`、
+`结果=PASS 通过9/失败0/告警0 转发exit=0`、指纹 `1e34ec34…` / 492,955 B —— 即**门禁确实跑满并通过**，
+而**看板零写入**。
 
 **结论**：**门禁运行未向生产看板/记忆写入任何条目** —— 三个观测点在门禁前后**逐位一致**，
 无需清理任何条目。门禁的隔离边界（`DSH_HOME` 落在 worktree `tmp/platform-gate/`）**按设计生效**。
+（两轮门禁运行 —— 校正前与校正后 —— 均为该结论，独立复现。）
 
-**关于 `12174 → 12186` 的 +12 行**（**非门禁所致**，如实登记）：差值来自 **g-368 自身的看板记账**——
-`criteria.confirmed` / `goal.moved` / `goal.directive_set`×2 / `goal.transition` / `attempt.started`×2 /
-`attempt.bound`×2 / `attempt.abandoned`（att-001 中断）/ `supervisor.status_reported` /
-`attempt.status_reported`，actor 为 `session-3287a541…`（主管）与 `8d0ce9d4…`（att-001 执行者），
-**全部是本次目标生命周期事件，无一由门禁产生**。**未执行任何历史条目清理**（不动历史）。
+**关于 `12174 → 12191` 的 +17 行**（**非门禁所致**，如实登记）：差值来自 **g-368 自身的看板记账**——
+`criteria.confirmed` / `goal.moved` / `goal.directive_set`×2 / `goal.transition`×3 / `attempt.started`×2 /
+`attempt.bound`×2 / `attempt.abandoned`（att-001 中断）/ `goal.comment_added`（复核意见）/
+`supervisor.status_reported`×2 / `attempt.status_reported`×2，actor 为 `session-3287a541…`（主管）与
+`8d0ce9d4…`（att-001 执行者）—— **全部是本次目标生命周期事件，无一由门禁产生**（已逐条核对）。
+**未执行任何历史条目清理**（不动历史）。
 
 ## 7. 已知限制（不阻断本次发布）
 
@@ -246,8 +266,15 @@ node scripts/platform-smoke-test.mjs --self-test           # → tmp/release-016
 4. **macOS/Linux 门禁的 M4 只覆盖发布路径**：`scripts/archived/` 内仍存在 **41 处** Linux-only 假设
    （`sha256sum` / `mktemp -d` 无模板 / `readlink -f` / `stat -c` / `md5sum` / `sed -i` 无备份 / `grep -P` /
    `date -d` / `cp --reflink`）。这些**是非发布路径的归档脚本**，按设计只列 INFO、不计门禁。
-5. **`v0.16.0` 小节的「`v0.17.0` 起合并」为历史前瞻表述**：该表述**按纪律原文保留**（历史零改写），
-   实际合并随 `v0.16.1` 发布；已在新 v0.16.1 小节内以括注澄清（§1.3）。
+5. **版本身份陈述已校正（原「v0.17.0 起」，实际随 `v0.16.1` 发布）**：g-362 的门禁合并在起草期按
+   `v0.17.0` 排期，但**实际归入 `v0.16.1`**，而两处「`v0.17.0` 起 …」是**面向用户的现状陈述**（随发布物出厂）
+   ⇒ 出厂即不实，**已校正为 `v0.16.1` 起**（并注明「原计划 `v0.17.0`，实际随 `v0.16.1` 发布」）。
+   校正点：`README.md`（跨平台段 / 平台范围段）、`dsh-graph-host/README.md`（中英各一处 v0.16.1 小节内括注）、
+   `docs/platform-gate.md` 状态行、`docs/macos-gate.md` 取代说明、`scripts/archived/README.md` 取代关系行，
+   以及两处测试文件注释（`core/tests/g359-macos-gate.test.ts` / `g362-platform-gate.test.ts`）。
+   **同段内 v0.16.0 周期的历史结论（Windows 10/0/0、macOS 2/0/3、tarball 复验原文）逐字未动。**
+   > 说明：测试夹具里的 `dsh-graph-0.17.0.tgz` / `dsh-graph@0.17.0` 是**参数转发的任意样本数据**
+   > （不是版本身份声明），故按原样保留。
 6. **门禁「平台效力」的边界**：本清单 §4 的 PASS **只对 Linux 成立**。其中 P1/P3 是**平台相关**探针
    （判定口径随手性），P2/P4/P5/P6/M4 为平台无关；在 macOS 上应由负责人按其卷实况重跑后再回填
    `docs/platform-gate.md` 的回填表，**不得把 Linux 结论外推到 macOS**。
