@@ -17,7 +17,7 @@
 
 ## 0. 宿主版本兼容性（本次发布强调项）
 
-**✅ v0.16.0 支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.7-rc.1`。**
+**✅ v0.16.0 支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.7-rc.2`。**
 
 本周期（`0.1.7` 线）的核心工作是 **g-351 的 DSH `0.1.7` 适配**：宿主在 `0.1.7` 线上同时改动了
 **settings 服务**与**子代理目录**两处 API 形态。插件一律以**能力/形状探测**分流，**零版本号比较**
@@ -27,6 +27,7 @@
 
 | 验证面 | 证据 |
 |---|---|
+| `0.1.7-rc.2` 宿主（**2026-09-25 复验**） | 用 v0.16.0 发布物 tarball 真实安装 + 启动 ⇒ **T1–T5 全绿 10/0/0**；逐包比对 `rc.1`→`rc.2`：`dsh-base` 零 JS 变化（仅 `cordis.patch.yml` 把 LLM provider 插件换成 `dsh-llm-deepseek-api-key` 并新增 account 条目）、`dsh-session-projection`（子代理目录层）与 `dsh-skill` 零代码变化、`dsh-llm` 的 `listProviders`/`listModels`/`resolveModelInfo` **签名逐字未变**（仅新增可选字段 `toolUpdate`）、客户端唯一用到的 `MarkdownText` 仍在（导出 268→279，仅移除我们未用的 `OnboardingSurface`） |
 | `0.1.7-rc.1` 隔离实例（**本周期实测**） | settings 服务换代后走**能力探测分流**：新 API 存在 ⇒ 「profile 条目 Config → 设置表单」投影。实测 `sctx.settings.register is not a function` 降级告警**消失**；profile 全局默认（如 `subagentMode`）经 profile patch **真正生效**（`mode_source=global`）；`graph_*` 工具计数仍为 **44**、`/api/dsh-graph*` 端点注册齐全 |
 | `0.1.7-rc.1` 子代理目录换代（**本周期实测**） | 容器由 `subagentsByParent` 改为 `projectionsBySession[sid].values.subagentCatalog`，entry 形状**去掉 `kind`** 并新增 `mode:'unknown'`；目录谓词改为形状探测，避免点「↗ 转到对话」**静默**打开父会话 |
 | `0.1.6-alpha.2` 旧路径复跑（**本周期实测**） | 重跑 namespace 注册路径：`$DSH_HOME/settings.yaml` 与 profile 全局默认照常生效，**零退化** |
@@ -192,7 +193,7 @@ supervisor session（本轮不写剪贴板）；不可投递时**完整退回**�
       README 版本表述 = **`0.16.0`**（根 `README.md` + `dsh-graph-host/README.md` 中英各半）；
       `dist/package.json` 亦为 `0.16.0`
 - [x] `README.md`：版本表述 → v0.16.0 + 顶部与安装小节显式声明
-      **支持 `0.1.2-rc.1` ~ `0.1.7-rc.1`**（区分「本周期实测」与「按契约兼容未复跑」）
+      **支持 `0.1.2-rc.1` ~ `0.1.7-rc.2`**（区分「本周期实测」与「按契约兼容未复跑」）
 - [x] `dsh-graph-host/README.md`：中文与英文两处兼容性声明同步刷新为 v0.16.0 + `0.1.7` 支持
 - [x] **平台声明如实（红线 1 例外条款）**：Windows 一行写成
       「**本次发布前由负责人在原生 Windows 执行门禁，结论见 §3**」，**未预先写 PASS**；
@@ -216,13 +217,14 @@ supervisor session（本轮不写剪贴板）；不可投递时**完整退回**�
       「**Windows 未验证**」
 - [x] tarball 已产出并记录 sha256（发布门禁红线 3）：发布树 `.worktrees/release-v0.16.0`
       （detached @ tag `v0.16.0`，`git describe --tags` = `v0.16.0`）内 `bash scripts/build.sh` 后
-      `pnpm pack` ⇒ `dsh-graph-0.16.0.tgz`，**486,889 B**，sha256 **`3690b899…`**（见 §3.2）
-      —— **已重切一次**：g-358 / g-359 合入后 tag 重打，旧指纹 `75738dce…` **作废**
+      `pnpm pack` ⇒ `dsh-graph-0.16.0.tgz`，**487,120 B**，sha256 **`548afccd…`**（见 §3.2）
+      —— **已重切两次**：g-358 / g-359 合入后一次；宿主 `0.1.7-rc.2` 复验并将声明上界抬到 rc.2 后又一次
+      （npm README 属包内文件）；旧指纹 `75738dce…`、`3690b899…` **全部作废**
 - [x] `v0.16.0-test` 合并 → `main`（`--no-ff`）+ annotated tag **`v0.16.0`**（**未推送** —— 推送由负责人另行授权）
       —— 经负责人 2026-09-25 明确授权执行。**重切记录**：因 g-358（窄档单泳道修复）与 g-359（macOS 门禁
       执行件）随后合入，`main` 已回退到 `origin/main`（`5d731cc`）并**重新做单次合并**，tag 删除后重打；
       最终 `main` 与 tag 指向**同一次合并提交**（核对：`git rev-parse v0.16.0^{commit}` 与
-      `git log --merges -1 main` 应一致）。此前两轮的合并提交 `d4f6ec1`、`2ed393a` 均已被取代
+      `git log --merges -1 main` 应一致）。此前三轮的合并提交（`d4f6ec1`、`2ed393a` 及其后续一轮）均已被取代，以「tag 与 `main` 同点」为最终判据
 - [ ] 负责人执行 `pnpm publish`（npm 官方 registry）；**发布目录是 `dist/`，不是 `dsh-graph-host/`**
       —— 完整命令序列见 [`docs/release-handbook.md`](release-handbook.md) §4
       （发布前务必确认 `dist/` 内**无 `.tgz`**、文件数 **37**）
@@ -242,7 +244,8 @@ supervisor session（本轮不写剪贴板）；不可投递时**完整退回**�
 
 ```bat
 :: 在原生 Windows 上（推荐：直接验现成 tarball，等于用户真实安装语义）
-node win-smoke-test.mjs --tarball <path>\dsh-graph-0.16.0.tgz
+node win-smoke-test.mjs --tarball <path>\dsh-graph-0.16.0.tgz --dsh "npx -y @deepseek-ai/dsh@0.1.7-rc.2"
+:: 建议显式指定宿主，使门禁结论与本版本 README 声明的上界（0.1.7-rc.2）一致
 :: 或只跑秒级静态门禁：
 node win-smoke-test.mjs --static-only <解包后的包目录>
 ```
@@ -284,8 +287,8 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 | 建议相对路径 | `tmp/release-v0.16.0/dsh-graph-0.16.0.tgz` |
 | 包内版本 | `0.16.0`（`dist/package.json` 实测；须与 tag 一致） |
 | 包内文件数 | **37**（`pnpm pack --dry-run` 清单实测，与 `dist/` 实数逐项一致） |
-| 体积 | **486,889 B**（发布树内 `pnpm pack` 实测，2026-09-25，**重切后**） |
-| sha256 | **`3690b89965e3b9999c5bce43bcdcaa87b7528b012e5c73e2ada548dff97b9587`**（同上） |
+| 体积 | **487,120 B**（发布树内 `pnpm pack` 实测，2026-09-25，**最终重切后**） |
+| sha256 | **`548afccd4ca7f62b91ef09a650882b6aa93c3b82c3bf866406dff77ed8705224`**（同上） |
 | Windows 侧可达路径（UNC） | `\\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.16.0\` |
 | 老式 UNC 别名 | `\\wsl$\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\release-v0.16.0\` |
 
@@ -308,6 +311,13 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 > 发布树重指后重建（`dist/lib/client.js` md5 `c8736a6a…`，与主树一致）并重新 `pnpm pack` ⇒ **上表数值为最终值**；
 > 旧指纹 `75738dce…` 作废，任何基于旧包得出的门禁结论须以新包重跑。g-359 经独立复核**对发布物零影响**
 > （其 worktree `dist/` 与重切前主树发布构建 `diff -r` = 0 差异）。
+>
+> **⚠️ 再重切一次（同日，宿主 `0.1.7-rc.2` 发布后）**：负责人在 `@deepseek-ai/dsh@0.1.7-rc.2` 发布后要求核查
+> API 变更影响。结论：**无影响** —— 用**本文件 §3.2 的发布物 tarball** 在 rc.2 上真实安装 + 启动跑完 T1–T5
+> 全绿 **10/0/0**；逐包静态比对确认子代理目录层与 `dsh-skill` 零代码变化、`llm` 服务三个方法签名逐字未变。
+> 据此把 README（两份、中英）声明的支持上界由 `0.1.7-rc.1` 抬到 **`0.1.7-rc.2`**（npm 那份 `README.md` 属
+> 发布包内文件 ⇒ 指纹随之变化）⇒ 发布物重打：上表数值为**最终值**，此前 `3690b899…`（及更早 `75738dce…`）
+> **全部作废**；门禁结论须以最终包重跑（建议显式 `--dsh "npx -y @deepseek-ai/dsh@0.1.7-rc.2"` 使结论与声明一致）。
 >
 > **发布物对账顺序（v0.15.0 实证，务必遵守）**：
 > 1. 先在**发布树**（`git worktree add --detach .worktrees/release-v0.16.0 v0.16.0`）内
@@ -346,7 +356,7 @@ coreutils < 9.6 的 Linux 用户都走这条，g-359 起有机器测试覆盖）
 | 项 | 值 |
 |---|---|
 | 是否已执行 | **⏳ 待回填**（负责人本周期在 Mac 上执行） |
-| 被测产物 | §3.2 同一 tarball（sha256 `3690b899…`） |
+| 被测产物 | §3.2 同一 tarball（sha256 `548afccd…`）；宿主建议 `--dsh "npx -y @deepseek-ai/dsh@0.1.7-rc.2"` |
 | 结果 | ⏳ 待回填（M1/M2/M4 期望 PASS；M3 在非 darwin 上必然 WARN，属如实降级口径） |
 | 若未执行 | README 保持「macOS 门禁执行件已就绪 + 真机结论待回填」，**不得**声明 macOS 已验证 |
 
