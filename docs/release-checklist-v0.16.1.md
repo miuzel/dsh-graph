@@ -11,12 +11,14 @@
 > 「准备发布，当前版本无跨平台敏感内容，可省略 win/mac 门禁，linux 已测试过，请跑一下门禁。」
 
 据此：**Windows / macOS 原生门禁本次裁定省略**（发布红线 1 的**例外**，结论见 §3.1，**不得视为 PASS**）；
-Linux 门禁由主管在 worktree 内**实跑**（§4）。**发布、push、打 tag 一律由负责人人工 gate。**
+Linux 门禁由主管在 worktree 内**实跑**（§4）。**合并 `main` 与打 tag 经负责人 2026-09-26 授权后由主管在本机执行；`git push` 与 `pnpm publish` 仍由负责人人工 gate。**
 
 **本次执行树**：worktree `.worktrees/g-368-att-02`，分支 `g-368-att-02`，基线 **`e345386`**
 （= `v0.16.1-test` HEAD，含 g-362 + g-365 + g-366）。
-**纪律**：全部构建/测试/门禁均在 worktree 内完成；**未写主树 `dist/`**、**未 push / 未 publish / 未打 tag**、
+**纪律（准备阶段）**：全部构建/测试/门禁均在 worktree 内完成；准备阶段**未写主树 `dist/`**、**未 push / 未 publish / 未打 tag**、
 **未执行 `pnpm add` / `npm install`**（worktree 缺 `node_modules`，经**符号链接**指向主树只读复用，不入 git）。
+**发布阶段（负责人授权后，2026-09-26）**：主管在本机合并 `v0.16.1-test` → `main`（`10045ca`）并创建 annotated tag `v0.16.1`；
+**发布物在主树 tag 树重切并复算指纹**（见 §3.3 末「终值确认」）。`git push` 与 `pnpm publish` **仍未执行**。
 
 ---
 
@@ -84,7 +86,9 @@ locale 编码逐字节往返）+ 平台无关审计 **M4**（Linux-only 假设�
 - [x] `./node_modules/.bin/tsc --noEmit -p tsconfig.json` = **exit 0**（§5）
 - [x] tarball 已产出并记录 sha256（发布门禁红线 3）：见 §3.3
 - [x] 生产看板污染守卫（g-363 未修 ⇒ 必须自查）：见 §6
-- [ ] `v0.16.1-test` 合并 → `main`（`--no-ff`）+ annotated tag `v0.16.1` —— **待负责人授权**
+- [x] `g-368-att-02` 合并 → `v0.16.1-test`（`c40fe95`）→ 陈旧文档一行校正（`18ac316`）→ `v0.16.1-test` 合并 → `main`（`--no-ff`，`10045ca`）—— 负责人 2026-09-26 授权
+- [x] annotated tag `v0.16.1` —— 主管在本机创建，指向 `main` 上含本清单定稿的提交
+- [x] **发布树重切产物并复算指纹**：`v0.16.1-test` 与 `main` 两次重切均 = `1e34ec34…` / 492,955 B（与门禁所测包**逐位相同**，见 §3.3）
 - [ ] 负责人执行 `pnpm publish`（npm 官方 registry；**发布目录是 `dist/`，不是 `dsh-graph-host/`**）
       —— 命令序列见 [`docs/release-handbook.md`](release-handbook.md) §4
 - [ ] 发布后核验：全新隔离 profile 安装 → 工具/看板/skill 注册正常；`npm view dsh-graph version` = `0.16.1`
@@ -148,9 +152,11 @@ locale 编码逐字节往返）+ 平台无关审计 **M4**（Linux-only 假设�
 > / 492,967 B（**已作废** —— 包内 `README.md` 是该校正的一部分 ⇒ 换包）。
 > 与 v0.16.0 周期的教训一致：**任何包内 README 调整都会换包、使旧指纹作废**。
 >
-> **本 sha256 是候选值，不是发布物终值**：发布物**必须**来自 **tag 树**的 `dist/`（手册 §4 步骤 3），
-> 而 tag 尚未创建。**合并 + 打 tag 后须按手册 §4 重切一次并回填**；本清单记录的是
-> 「**本次 Linux 门禁所测的那个包**」的指纹（红线 3 的跨机器传递口径）。
+> **终值确认（2026-09-26，负责人授权合并+打 tag 后）**：`1e34ec34…` / 492,955 B 即**发布物终值**。证明链：
+> ① worktree 内门禁所测包（§4 的 T2 自报指纹逐位一致）＝ ② `v0.16.1-test` 合并后**主树重切**（`c40fe95` 树）
+> ＝ ③ `main` 合并后**主树重切**（`10045ca` 树）—— 三者 **sha256 逐位相同**；
+> ④ 独立评审（子代理 a8cf0aba）在私有副本从 `2387c17` 全新 `build+pack` 亦得**同一 sha256**，且两包解包 `diff -r` **37/37 零差异**。
+> ⇒「门禁所测产物 == 发布树产物」由**字节**证明。（`docs/` 不在包内 ⇒ 本清单定稿与 `dev-instance-guide` 一行校正不影响包内容，tag 树重切后复算仍为同一指纹。）
 >
 > **发布前确认 `dist/` 内无 `.tgz`**：`find dist -name '*.tgz' | wc -l` = **0**（实测）；`find dist -type f | wc -l` = **37**。
 
@@ -278,10 +284,10 @@ node scripts/platform-smoke-test.mjs --self-test           # → tmp/release-016
 6. **门禁「平台效力」的边界**：本清单 §4 的 PASS **只对 Linux 成立**。其中 P1/P3 是**平台相关**探针
    （判定口径随手性），P2/P4/P5/P6/M4 为平台无关；在 macOS 上应由负责人按其卷实况重跑后再回填
    `docs/platform-gate.md` 的回填表，**不得把 Linux 结论外推到 macOS**。
-7. **tarball sha256 为候选值**：tag 未创建 ⇒ §3.3 的指纹可能随 tag 树重切而作废
-   （v0.16.0 曾重切三次）。发布物以**发布树内重新 `pnpm pack`**的产物为准，并被要求与红线 1 所测产物
-   **内容一致**（跨机器用 sha256 对账；**registry 侧改用内容级判据**，见 v0.16.0 清单 §3.3 的 414,753 B
-   vs 414,102 B 实证：npm 会重写 tarball，sha256 必然不同，`diff -r` 才是正确判据）。
+7. **tarball 指纹已定稿（原「候选值」风险已消解）**：`v0.16.1-test` 与 `main` 两次发布树重切均与门禁所测包
+   **sha256 逐位相同**（§3.3），独立评审另在私有副本复现同一指纹 ⇒ 不再存在「tag 树重切换包」的悬置风险。
+   仍需注意：**registry 侧**（npm 会重写 tarball）sha256 必然不同 —— 跨机器对账用 sha256，**registry 侧用内容级判据**
+   （见 v0.16.0 清单 §3.3 的 414,753 B vs 414,102 B 实证）。
 
 ## 8. 发布操作（**人工 gate，主管不自行执行**）
 
@@ -294,5 +300,6 @@ node scripts/platform-smoke-test.mjs --self-test           # → tmp/release-016
 3. **`npm login` 是前置**：`npm whoami --registry=https://registry.npmjs.org` 返回 `E401 Unauthorized` 时
    token 已失效，**必须先重新登录**再 publish。
 
-**主管侧未执行且不应自行执行的动作**：合并 `main`、创建/推送 tag、`pnpm publish`、`git push`
-—— 一律等负责人授权。
+**本次已执行（负责人 2026-09-26 授权范围内）**：合并 `v0.16.1-test` → `main`（`10045ca`）、创建 annotated tag `v0.16.1`（本机）、
+主树发布构建与重切指纹复算（`1e34ec34…`）。
+**仍未执行且不应自行执行**：`git push`（含 tag）、`pnpm publish` —— 等负责人执行或明确授权。
