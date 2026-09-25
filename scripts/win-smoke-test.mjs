@@ -186,19 +186,33 @@ function quoteForCmd(args) {
     typeof a === "string" && /[\s"&^|<>]/.test(a) && !/^".*"$/.test(a) ? `"${a}"` : a);
 }
 
-function shellSafeArgs(args) {
-  return isWin ? quoteForCmd(args) : args;
+/**
+ * DEP0190：`shell: true` 且传 **args 数组**时，Node 会把参数直接拼进命令行（不转义）并发出
+ *   DeprecationWarning（`Passing args to a child process with shell option true …`）。
+ *   修复口径：需要 shell 的场景（Windows 上的 `npm` / `npx` 等 `.cmd`）把**完整命令行**作为
+ *   **单个字符串**交给 shell（`spawnSync(commandLine, { shell: true })`，不传 args）；
+ *   其余（含所有内部 node 子进程调用）一律 `shell: false` + args 数组，不做任何字符串拼接。
+ *   本函数把「命令 + 参数」拼成一条完整命令行，参数按 cmd.exe 规则加引号（含空格/中文的路径
+ *   例如放在「我的文档」下的 tarball 不会被截断）。
+ */
+function buildShellCommandLine(cmd, args) {
+  return quoteForCmd([cmd, ...args]).join(" ");
 }
 
 function runSync(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, shellSafeArgs(args), {
+  const useShell = opts.shell ?? isWin;
+  const base = {
     encoding: "utf8",
-    shell: opts.shell ?? isWin,  // Windows 上 .cmd 需要 shell；内部 node 调用显式传 shell:false 避免 DEP0190
     maxBuffer: 32 * 1024 * 1024,
     timeout: opts.timeout ?? 600_000,
     cwd: opts.cwd,
     env: opts.env ?? process.env,
-  });
+  };
+  // shell 分支：只传完整命令行字符串（不传 args 数组）⇒ 不触发 DEP0190；
+  // 非 shell 分支：shell:false + args 数组（内部 node 子进程一律走这里）。
+  const r = useShell
+    ? spawnSync(buildShellCommandLine(cmd, args), { ...base, shell: true })
+    : spawnSync(cmd, args, { ...base, shell: false });
   return {
     code: r.status ?? (r.error ? -1 : 0),
     out: r.stdout ?? "",
@@ -474,13 +488,23 @@ async function tier45Boot(ctx) {
   const [cmd, ...prefix] = splitCmd(ctx.dshCmd);
   // 命名 profile 的启动形式是 `dsh --profile <p> [web 应用参数…]`（见 scripts/archived/dev-dsh-instance.sh）；
   // `dsh web` 是固定 web profile 的别名，不接受 --profile。
-  const child = spawn(cmd, shellSafeArgs([...prefix, "--profile", ctx.profile, "--no-open", "--port", String(ctx.port)]), {
-    cwd: ctx.workspace,
-    env: { ...process.env, DSH_HOME: ctx.dshHome },
-    shell: isWin,
-    detached: !isWin,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const dshArgs = [...prefix, "--profile", ctx.profile, "--no-open", "--port", String(ctx.port)];
+  // DEP0190：需要 shell 时只传完整命令行字符串；不需要 shell 时 shell:false + args 数组。
+  const child = isWin
+    ? spawn(buildShellCommandLine(cmd, dshArgs), {
+        cwd: ctx.workspace,
+        env: { ...process.env, DSH_HOME: ctx.dshHome },
+        shell: true,
+        detached: false,
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+    : spawn(cmd, dshArgs, {
+        cwd: ctx.workspace,
+        env: { ...process.env, DSH_HOME: ctx.dshHome },
+        shell: false,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
   let log = "";
   const onData = (d) => {
     log += d.toString();
@@ -619,6 +643,12 @@ function selfTest() {
     'plugin|add|"D:\\my docs\\dsh-graph-0.11.0-alpha.tgz"');
   check("无空格路径不被加引号",
     quoteForCmd(["add", ".\\dsh-graph-0.11.0-alpha.tgz"]).join("|") === "add|.\\dsh-graph-0.11.0-alpha.tgz");
+  // DEP0190 修复的形状：需要 shell 时只传**完整命令行字符串**，不再传 args 数组
+  check("完整命令行：命令与含空格参数都被引号包住",
+    buildShellCommandLine("dsh.cmd", ["plugin", "add", "D:\\my docs\\a.tgz"]) ===
+    'dsh.cmd plugin add "D:\\my docs\\a.tgz"');
+  check("完整命令行：无空格参数不加引号（与历史行为一致）",
+    buildShellCommandLine("npm", ["pack", "--ignore-scripts"]) === "npm pack --ignore-scripts");
   check("包目录解析：仓库根 → dsh-graph-host",
     resolvePackageDir(process.cwd()) === process.cwd() ||
     basename(resolvePackageDir(process.cwd())) === "dsh-graph-host");
