@@ -6,6 +6,7 @@
   "scripts": {
     "build": "bash scripts/build.sh",
     "test": "node --test core/tests/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepare": "bash scripts/build.sh"
   },
   "devDependencies": {

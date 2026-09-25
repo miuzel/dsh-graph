@@ -124,6 +124,38 @@ memory and follow it in subsequent reviews; **do not hard-code this project's ch
 - **Restricted `@att/` syntax**: record known limitations in the relevant goal or long-term memory; do not infinitely expand regex boundaries.
 - **Shared infrastructure first**: prefer shared transaction/error handling and REST schema middleware over repeated fixes in individual features.
 
+#### Graded Review and Machine Fast Track
+
+- **Three policy values**: top-level `review.policy ∈ {auto, strict, none}` in `project.yaml` (unset reads as null).
+  - `auto`—permits the machine fast-track gates;
+  - `strict`—an independent (author-unbiased) review subagent must be dispatched, and `fast_track` is forbidden;
+  - `none`—neither independent review nor the machine gates are required (zero-risk docs/memory changes only), yet it still must not bypass the `delivered` human gate.
+- **Derived from the goal type when unset**: `patch`/`chore` → `auto`; `feature`/`bug`/`task`/`improvement` → `strict`; empty/invalid type → `strict` (safe-side fallback).
+- **Closed set that forces strict** (any single hit wins; an explicit `auto`/`none` cannot override it): changed paths include `core/schema.ts` or `schema/SCHEMA.md` (contract freeze); product-code churn is ≥150 lines; changes span ≥3 top-level regions (`core` / `dsh-graph-host` / `lib/client` / `prompts` / `scripts`); the supervisor explicitly declares `strict_required` (covering core-layer rewrites that paths and line counts cannot express).
+- **Four machine gates** (each executable; measure every one before calling `graph_resolve_accept(fast_track=true, machine_report=…)`):
+  1. Full tests: `node --test core/tests/*.test.ts` → `exit_code=0` and `fail=0` (both conditions; truncated text alone misleads);
+  2. Type check: `./node_modules/.bin/tsc --noEmit -p tsconfig.json` → `exit_code=0`; state the coverage gap honestly—the `include` of `tsconfig.json` is only `core/*.ts`, so `core/tests` and host `.js` fall outside it;
+  3. Change size: product-code insertions plus deletions from `git diff --numstat <attempt.baseline_commit> HEAD` total under 150 lines (excluding `core/tests/**`, `*.md` and generated artifacts; under a worktree, run it inside the attempt worktree), and `git status --porcelain` confirms no untracked new files (untracked files never appear in numstat, so commit first);
+  4. Criteria verified: every criterion line of the goal ends with `✅已验` (computed from `goal.md`; the caller's self-report is never trusted).
+- **fail-safe**: if any signal is unavailable (command failed, report field missing, baseline unusable), do not pass the gate, and never treat "no evidence" as "evidence of truth".
+- **Behavior on success**: `graph_resolve_accept(fast_track=true, …)` first appends a `review.fast_track` event (carrying the four machine evidence items and the baseline), then follows the same accept mapping; any failing item rejects with zero side effects (status unchanged, no `review.passed` event).
+- **Boundary (stated honestly)**: "strict must dispatch an independent review subagent" is only a decision plus a guide constraint at the plugin layer, not engine enforcement—the plugin layer has no reviewer-subagent dispatch entry point yet (not wired up). **The `delivered` human gate is likewise a guide constraint, not engine enforcement**: neither `graph_resolve_accept` nor `graph_transition(to='delivered')` checks any human signal (no token, no GUI confirmation, and the event payload records no approver), so the engine cannot tell "the owner decided" from "the supervisor let itself through". ⇒ Quality control is therefore a **shared responsibility of the supervisor agent and the owner**, with deliberate flexibility: **no machine enforcement**—enforcement only invites gaming and burns time and tokens. The discipline lives in the supervisor, not in the engine.
+- **Docs-only or memory-only changes** may set `review.policy: none` to skip the machine gates; that waives machine evidence collection only, never the owner's final decision on `delivered`.
+
+#### Test Intensity Tiers (by Nature of Change)
+
+The purpose of testing is to prove behavior is correct, not to manufacture an assertion for every change. When writing criteria and dispatching, choose a tier by the nature of the change:
+
+- **Tier 1 | Zero behavioral-logic change** (copy/labels/i18n strings, comments, docs, pure styling): **no new unit tests required**.
+  Instead, use this acceptance evidence: the full existing suite still green + build and syntax checks passing + real-machine/manual visual verification (give at least one of these as actual evidence).
+- **Tier 2 | Small logic change** (conditional branches, data transformation, boundary and error handling): write **targeted unit tests** covering the changed branches
+  and proving the original behavior does not regress; exhaustive coverage is not required.
+- **Tier 3 | New feature / contract change / core-layer rewrite / concurrency and state machines**: complete unit tests + boundary and negative cases;
+  when necessary, run a negative-control experiment proving that "breaking it turns the test red".
+
+**Iron rule**: Tier 1 only means "no new unit tests are forced for changes that do not deserve them"; it never means verification is optional. No tier may skip, delete, or weaken existing
+tests on the grounds of being "lightweight/copy-only", and no tier may lower quality-criteria gates or human gates.
+
 6. **Prerequisite for delivery**: for a goal reaching delivered, its changes must already be git-committed—but **distinguish who commits and when
    commit**:
    - **Worktree development** (isolated branch): the subagent may commit within the worktree; after the supervisor
@@ -138,6 +170,31 @@ memory and follow it in subsequent reviews; **do not hard-code this project's ch
 
 Key point: all status transitions go through tools (events first); **never manually edit the frontmatter status field**; criteria confirmation
 and review verdict are human gates—stop the round and wait for input, and do not rush through with automatic continuation.
+
+## Technology Selection and Architecture Evaluation
+
+Before adding an external library, run a **full-lifecycle cost evaluation**, not just "does it work": a heavy black-box library saves the initial implementation and charges it back with interest in glue layer debugging and dual-source-of-truth sync;
+it triggers on a new runtime dependency, an adapter or glue wrapper, or coexistence with the existing state, event, and render layers.
+
+| Dimension | Lightweight white-box in-house | Third-party heavy black-box library |
+|---|---|---|
+| Initial integration | Write core logic once, no adapter | Fast API hookup, but bridging existing models |
+| Glue/adapter layer size | No separate adapter layer | State mirroring and event bridges keep growing |
+| Dual truth and state sync | Single source of truth, no mirror | Library state plus business state, two truths |
+| Event and render loops | One-way data flow, easy to trace | Library events feed back, loops form easily |
+| Unused layer removal | Generates no extra structure | Library-mandated layers need later cleanup |
+| Upgrade and replacement cost | Owned code, change as needed | Breaking major versions force re-adaptation |
+| Debugging and Agent rework | Whole path readable in a white box | Black-box internals invisible, rework doubles |
+
+**Threshold (T1)**: `estimated glue layer LOC / estimated in-house business-logic LOC`. Sum per integration
+surface — state mirroring, event/render loops, layer removal, theme/CSS, i18n, serialization, build packaging — each
+tiered **S<=50 / M<=200 / L>200**; estimate the denominator with the same tiers over the in-house model+view+persistence.
+**A ratio >=0.5 raises a warning; >=1.0 defaults to a white-box in-house build, and keeping the library requires owner
+confirmation**. Fallbacks: T2 counts >=5 distinct third-party touch points or >= the number of in-house modules; T3 scores 8 items x 0-2 (>=8/16 warns, >=12/16 defaults in-house).
+
+How to use it while planning: create an "architecture comparison" collection card for the goal and pass the table above as the collect brief to the collection subagent (the brief
+enters the "additional user requirements" section verbatim, no code change needed); once the subagent fills in the numbers and evidence, apply the thresholds and use
+`graph_amend_goal(append=...)` to record the decision and estimate table in the goal description, with `graph_set_criteria` when needed, before dispatching implementation.
 
 ## Information Collection
 
@@ -245,7 +302,7 @@ while the original agent remains in its original turn and can continue.
   graph_* tools, and **must never run them under a package directory (such as `dsh-graph-host/`)**—otherwise the tools use the session cwd
   and automatically initialize a `.dsh-graph/` skeleton in the package directory, messing up the workspace. **Do not** use `git add -f`,
   `git rm --cached`, or similar methods to include `.dsh-graph` data in the parent repository's Git—the data is managed by an independent inner repository,
-  and migration is performed explicitly with `scripts/migrate-dsh-graph-repo.sh --apply`;
+  and migration is performed explicitly with `scripts/archived/migrate-dsh-graph-repo.sh --apply`;
 - **Model routing**: execution subagents **do not inherit the parent session's model**—they uniformly use the
   `executor.provider/model` in project.yaml; the provider/model parameters of `graph_start_attempt` may temporarily override it;
   the routing result is shown in the returned `model_route` field;
@@ -260,7 +317,8 @@ while the original agent remains in its original turn and can continue.
   - **Take the next after completion**: after the current goal review is complete and marked, consult the staged memory file and take the next ready goal in order for independent verification until the queue is fully reviewed;
 - **Criteria self-verification and checkmark conventions (distinguish human operations from Supervisor self-verification)**:
   - **Do not use an `[x]` prefix**: the page Checklist (checkbox/progress bar) is based on localStorage and is provided for the **human owner (Human Reviewer)** to check interactively in the Web UI and perform final gating; if the Supervisor writes `[x]` before a criterion, it will be confused with the human's checkmark;
-  - **Use the uniform `✅已验` suffix**: after completing real-machine checks, code review, and automated verification, if a criterion has strictly passed, the Supervisor / Review subagent uses `graph_set_criteria` to append `✅已验` to the end of each passed criterion's text, and adds a detailed test-verification record and evidence to the goal's comments; leave failed or untested items unchanged;
+  - **Use the uniform `✅已验` suffix**: after completing real-machine checks, code review, and automated verification, if a criterion has strictly passed, the Supervisor / Review subagent uses `graph_set_criteria` to append `✅已验` to the end of each passed criterion's text, and adds a **structured evidence summary** to the goal's comments (a single `evidence: suite=… passed=… failed=… exit=… ms=… diff=… commit=…` line per suite, at most 160 characters each, with the assertion command and its conclusion) rather than a long-form verification narrative; leave failed or untested items unchanged;
+  - **Evidence form (assertion-based; no long-form dumping)**: deliverables and verification evidence rest on **automated assertions**—each piece of evidence gives the command, the assertion conclusion, and an output summary, and runtime invariants (alignment, grid snapping, no orphan elements, boundaries and errors) must be codified as tests; **never** dump multi-line JSON, DOM dumps, sliced data, raw logs, or fenced code blocks into the evidence ledger, goal comments, or replies; when a long log really must be cited, give only the **file path plus the key assertion line**, keep each entry at most 150 characters and one suite per line; keep lightweight screenshot verification only for the UI/visual layer that cannot be codified, mark it `UNVERIFIED` per the rule above when it cannot be covered, and never fabricate evidence or force PASS.
 - **Review feedback must be actionable (cross-model alignment)**: when finding a problem, do not merely report “there is a bug here/please fix it.”
   Each blocker/major/minor must also clearly state: ① **evidence** (exact file/line, trigger condition, actual vs. expected behavior, and a minimal reproduction when needed);
   ② **a brief principle/invariant** (what the system must protect, why the current branch violates it, and the scope of impact);

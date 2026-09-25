@@ -15,7 +15,8 @@ import { writeFileSync, readFileSync, realpathSync, mkdirSync, readdirSync, exis
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { relative, join, resolve, dirname, basename, isAbsolute } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import {
   createGoal,
   normalizeGoalType,
@@ -113,10 +114,10 @@ import {
   validateVersionRelease,
   versionDetail,
   resolveModelRoute,
-  resolvePromptOverride,
-  readPromptOverrideValue,
+  resolveSubagentPrompt,
   readProjectConfig,
   writeProjectConfig,
+  REVIEW_POLICIES,
   listWorktrees,
   cleanWorktree,
   SUBAGENT_MODES,
@@ -151,6 +152,11 @@ import { sT } from "./lib/server-i18n.js";
 // 这里不静态 import @deepseek-ai/*；改为在 apply() 内**守卫式动态 import** schemastery（仅 schema），
 // settings 服务经 ctx.inject(["settings"]) 等待（参照已上线的 dsh-subagent-model-picker）。
 // 解析失败或 settings 服务缺失时优雅降级：namespace 不注册、看板/工具/模型路由不受影响。
+// g-351 / NB-2 措辞订正：这类降级**不是「静默」**——基线（96c29cb 起）在 schemastery 不可解析
+// 时写 stderr `g-133: @deepseek-ai/schemastery 不可解析…`，在 register 抛错时写
+// `g-133 settings 注册失败（降级…）`（负责人实测的 0.1.7 告警即后者）。真正「静默」的是
+// **后果**：profile 全局默认不再生效（子代理派发回落默认路由），日志与用户可见状态脱节。
+// g-351 的判据 3 要消灭的是这个后果（能力探测分流让值真正生效），而不是「补一条告警」。
 
 // g-112：两半共用同一 root 解析函数（re-export 供验收/测试直接核对函数同一性）
 export { resolveRoot } from "./core/root.js";
@@ -255,6 +261,9 @@ const ATTEMPT_STATUS_STATE_SCHEMA = {
 // g-133：dsh-graph profile 级全局默认（DSH settings namespace「dsh-graph」）。
 // 仅保留子代理 provider/model/补充提示词；主管提示词属于 workspace 配置（g-132）。
 const GRAPH_SETTINGS_NS = "dsh-graph"; // 合法 namespace（[a-z][a-z0-9-]*）
+// g-351：新宿主（0.1.7 线）的设置表单以 **profile 条目 id** 为键（`SettingsDescriptor.ns`），
+// 即 cordis.patch.yml 的 insert id；插件自身 name 一并纳入匹配，容忍用户层 patch 改 id。
+const GRAPH_SETTINGS_ENTRY_ID = "dsh-graph-host";
 const GRAPH_SETTINGS_DEFAULTS = Object.freeze({
   subagentProvider: "",
   subagentModel: "",
@@ -274,6 +283,54 @@ function buildGraphSettingsSchema(z) {
     promptLanguage: z.union(["follow", "zh", "en"]).default("follow"),
   });
 }
+
+// g-351：profile 级全局默认在**新宿主**上的声明面。
+// 旧宿主（0.1.6 线）的 settings 服务提供 namespace 注册 API（`settings.register`），值存于
+// $DSH_HOME/settings.yaml；新宿主（0.1.7 线）移除了该 API，改为把插件 entry 的 Config schema
+// 投影成设置表单、并把编辑写回 profile patch。故这里以命名导出 `Config` 声明**同一组字段**，
+// 供新宿主生成表单；每个字段标记 volatile ⇒ 可在设置页热改而无需重挂载。
+// 旧宿主上这份声明没有消费方（其值仍由 namespace 路径提供），故不改变 0.1.6 行为。
+// schemastery 是可选 peer：同步解析失败时 `Config` 为 undefined（等价旧行为，插件照常加载）。
+function buildGraphSettingsConfigSchema(z) {
+  const live = (field) => (typeof field?.volatile === "function" ? field.volatile() : field);
+  return z.object({
+    subagentProvider: live(z.string().default("")),
+    subagentMode: live(z.union(["", "standard", "minimal"]).default("")),
+    subagentModel: live(z.string().default("")),
+    subagentReasoningEffort: live(z.string().default("")),
+    subagentPrompt: live(z.string().default("")),
+    promptLanguage: live(z.union(["follow", "zh", "en"]).default("follow")),
+  });
+}
+// g-351：schemastery 是**可选** peer，插件不得硬依赖它。宿主部署形态不同，可解析的基准也不同
+// （插件自身相邻的 node_modules / 宿主 CLI 自身的 node_modules），故按基准依次尝试；
+// 全部失败返回 null（等价旧行为：不声明 Config、namespace 路径跳过）。
+function resolveSchemastery() {
+  const bases = [];
+  try { bases.push(import.meta.url); } catch { /* 无 import.meta */ }
+  try {
+    if (process.argv[1]) {
+      bases.push(pathToFileURL(process.argv[1]).href);
+      // 包管理器常以 symlink 启动 CLI（如 fnm 的 bin/dsh → lib/node_modules/.../bin.js），
+      // 而 node_modules 查找要沿**真实路径**上行，故再补一个 realpath 基准。
+      bases.push(pathToFileURL(realpathSync(process.argv[1])).href);
+    }
+  } catch { /* 无 argv[1] 或不可 realpath */ }
+  for (const base of bases) {
+    try {
+      const loaded = createRequire(base)("@deepseek-ai/schemastery");
+      const schema = loaded?.default ?? loaded;
+      if (schema && typeof schema.object === "function") return schema;
+    } catch { /* 该基准不可解析，试下一个 */ }
+  }
+  return null;
+}
+let graphSettingsConfig;
+try {
+  const z = resolveSchemastery();
+  if (z) graphSettingsConfig = buildGraphSettingsConfigSchema(z);
+} catch { /* 可选 peer 缺失：不声明 Config */ }
+export { graphSettingsConfig as Config };
 
 function params(properties, required) {
   // g-190（review P0）：工具参数严格白名单——拒绝未知/多余字段
@@ -558,6 +615,25 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
     "   - 汇报触发点：仅在【开始开工】、【阶段转变/转向新任务】、【遇到阻塞】、【本轮完成待命】4类有限关键节点调用 graph_report_status(goal=\"" + goalValue + "\", attempt=\"" + attemptValue + "\", status=<一句话简短人话，≤20字>)；",
     "   - 长任务节流心跳：长耗时任务（如大型构建、多步批量排查）适度按心跳汇报进展，普通轻量读取/单步调试切忌每步机械追加汇报；不再要求每个 read/bash 动作机械调用状态；",
     "   - 迁移与状态同步：同步更新 status_line；迁移被引擎拒绝（如判据未登记）时不得继续实现，立即上报停止；",
+    // g-326 新增条目（精简版分级规则）：纪律段是分级规则的**唯一**投递渠道。
+    // 负责人去重裁决（v0.16.0）：att-001 的独立分级区块及其常量/格式化函数已一并删除——同一份 prompt
+    // 出现两份表述与 g-239 压缩 prompt 的方向相反；护栏见 core/tests/test-intensity-tiers.test.ts 的
+    // 「去重护栏」用例（全篇恰好一次且落在纪律段切片内）。
+    // 关于 g-239 收缩断言：core/tests/prompt-discipline-g239.test.ts 判据 3 的四个阈值一律未动，
+    // 本次增量为**已登记增量**——该测试在测量收缩比例前按稳定标记精确剔除本条目
+    // （见其 DISCIPLINE_INCREMENT_MARKER 与 subtractRegisteredIncrement）。
+    // ⇒ 后续再向纪律段新增内容，必须在该测试同样登记增量或做等量删减，否则它会如实变红。
+    "3. 测试力度按改动性质分级（不为不值得单测的改动凑断言）：",
+    "   - 一档｜零行为逻辑改动（文案/标签/i18n 字符串、注释、文档、纯样式）：不要求新增单测，但必须给出既有测试全绿 + 构建/语法检查通过（或真机目视）的实际证据；",
+    "   - 二档｜小幅逻辑改动（分支/数据变换/边界错误处理）：针对性单测覆盖被改分支，且原行为不回归；",
+    "   - 三档｜新增功能/契约变更/核心层重写/并发与状态机：完整单测 + 边界与负向用例，必要时做「改坏就会红」的负向对照；",
+    "   - 绝不因「轻量/文案」跳过、删改或削弱既有测试，也不降低判据门禁与人工 gate。",
+    // g-312 新增条目（断言化证据）：与真源 core/ops.ts 的 ROLE_PROFILES.executor.disciplineLines[6] 同口径
+    // （那里是 persona 侧，这里是 attempt prompt 侧投递副本，两处必须同一套口径）。
+    // ⚠️ 本条同样属于 g-239 收缩断言的**已登记增量**：core/tests/prompt-discipline-g239.test.ts 的
+    // DISCIPLINE_INCREMENT_MARKERS 已登记本条目首行；四个阈值（状态段 ≥20%/≥20%、整体 ≥8%/≥10%）
+    // 一律未动。后续再向纪律段新增内容，必须在该测试同样登记增量，否则它会如实变红。
+    "4. 证据形式：交付证据只写单行结构化概要（一套件一行、单条 ≤160 字符），格式为 `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`，并给出断言命令与结论；禁止倾倒多行 JSON、DOM dump、切片数据、原始日志与围栏代码块；运行态不变式一律沉淀为自动化断言，仅 UI 视觉层保留轻量截图核验。",
   );
   return lines.join("\n");
 }
@@ -607,6 +683,17 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     "## Execution discipline",
     "Use the assigned worktree only; main is read-only. Report state with graph_report_status using state=working, blocked, done, or error.",
     `At start migrate ${promptText(goal) || missing} to in_progress; on a blocker use blocked with a reason; when done migrate to review and stop. Never migrate to delivered.`,
+    // g-326 新增条目（精简版分级规则，与 zh 纪律条目 3 语义一致）：纪律段是分级规则的正式投递渠道。
+    "Tier test intensity by the nature of the change (never manufacture an assertion for a change that does not warrant one):",
+    "  - Tier 1 | zero behavioral-logic change (copy/labels/i18n strings, comments, docs, pure styling): no new unit tests required, but you must provide real evidence such as the full existing suite still green plus build/syntax checks passing (or real-machine visual verification);",
+    "  - Tier 2 | small logic change (branches, data transformation, boundary and error handling): targeted unit tests covering the changed branches, with the original behavior not regressing;",
+    "  - Tier 3 | new feature / contract change / core-layer rewrite / concurrency and state machines: complete unit tests plus boundary and negative cases, and a \"breaking it turns it red\" negative control when necessary;",
+    "  - Iron rule: never skip, delete, or weaken existing tests because a change is \"lightweight/copy-only\", and never lower criteria gates or human gates.",
+    // g-312 new entry (assertion-as-evidence): same standard as the Chinese entry 4 and as the single
+    // source ROLE_PROFILES.executor.disciplineLines in core/ops.ts. Keep this line CJK-free: the English
+    // render path asserts the whole prompt contains no CJK. It is also a registered g-239 increment
+    // (see DISCIPLINE_INCREMENT_MARKERS in core/tests/prompt-discipline-g239.test.ts).
+    "Evidence form: report deliverables only as a single-line structured summary (one suite per line, at most 160 characters each), formatted as `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`, together with the assertion command and its conclusion; never dump multi-line JSON, DOM dumps, sliced data, raw logs, or fenced code blocks; turn runtime invariants into automated assertions and keep lightweight screenshot verification only for the non-codifiable UI/visual layer.",
     promptText(subagentPromptSection) ? protectPromptMarkers(subagentPromptSection) : "",
     promptText(modeStrategySection) ? protectPromptMarkers(modeStrategySection) : "",
     promptText(worktreeBlock) ? protectPromptMarkers(worktreeBlock) : "",
@@ -914,33 +1001,73 @@ export function apply(ctx, config) {
   // 绝对 config.root 时跳过 workspace 要求（root 完全由配置决定）。
   const isAbsoluteConfig = !!(config?.root && isAbsolute(config.root));
   const sessionWorkspace = (ex) => ex?.agent?.session?.header?.cwd ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? null;
-  // g-133：注册 dsh-graph settings namespace（profile 级全局默认）。
-  // 守卫式动态 import schemastery（@deepseek-ai/*），失败/缺失时优雅降级（plugin 始终可加载）。
+  // g-133 起 profile 级全局默认由宿主 settings 服务承载；g-351 起改为**能力探测分流**
+  // （零版本号字面量比较），因为该服务的形态在宿主上换过代：
+  //   ① 旧能力：服务暴露 namespace 注册 API `settings.register(ns, schema, { base })`，
+  //      值存于 $DSH_HOME/settings.yaml（0.1.6 线）。
+  //   ② 新能力：该 API 已从服务上移除，改为「profile 条目 Config → 设置表单」投影
+  //      （`describe` / `update` / `replace` / `mutate`，0.1.7 线）。此时 profile 级默认
+  //      就是本插件 entry 的 Config（由本模块的 `Config` 命名导出声明），current 值以
+  //      `describe()` 的 descriptor 读取。
+  // 探测按「旧 → 新」依次尝试：首个可用且成功者胜出；两条能力都不在时才如实降级到
+  // stderr —— 且措辞说明是**能力缺失**，不再是误导性的「注册失败」。
   // ctx.inject(["settings"], cb) 等待 settings 服务出现（同 dsh-subagent-model-picker 的已上线模式）；
-  // settings 服务缺失（无 provider 组合）时 namespace 不注册、看板/工具/模型路由不受影响。
-  // owner scope 的 get() 读当前 resolved 值（用户改 profile 设置后实时反映），watch() 可订阅变化。
+  // settings 服务缺失（无 provider 组合）时不影响看板/工具/模型路由。
   let graphSettingsScope = null;
-  const setupGraphSettings = async () => {
-    let z;
+  /** 新能力：从设置表单投影里读本插件 entry 的 current 值（entry id 见 cordis.patch.yml）。 */
+  const readGraphSettingsFromForms = (svc) => {
     try {
-      z = (await import("@deepseek-ai/schemastery")).default;
-      if (!z) return; // 解析到空：降级
+      if (typeof svc?.describe !== "function") return null;
+      const rows = svc.describe({ redactSecrets: true });
+      if (!Array.isArray(rows)) return null;
+      const row = rows.find((r) => r?.ns === GRAPH_SETTINGS_ENTRY_ID || r?.ns === name);
+      return row?.value ?? null;
     } catch {
-      process.stderr.write("[dsh-graph-host] g-133: @deepseek-ai/schemastery 不可解析，profile 全局默认降级（模型路由/提示词走 project.yaml/继承）\n");
-      return;
+      return null;
     }
-    const schema = buildGraphSettingsSchema(z);
+  };
+  const setupGraphSettings = async () => {
+    const z = resolveSchemastery();
     if (typeof ctx.inject !== "function") return; // 无 inject 的上下文（如部分 mock）降级
     ctx.inject(["settings"], (sctx) => {
-      try {
-        graphSettingsScope = sctx.settings.register(GRAPH_SETTINGS_NS, schema, {
-          base: { ...GRAPH_SETTINGS_DEFAULTS },
-        });
-        sctx.effect(() => () => { graphSettingsScope = null; });
-      } catch (e) {
-        // duplicate registration 或存储段非法：降级（读取走默认/继承）
-        process.stderr.write(`[dsh-graph-host] g-133 settings 注册失败（降级，模型路由/提示词走默认）：${e?.message ?? e}\n`);
+      const svc = sctx?.settings;
+      // 旧能力优先：只要服务上还有 namespace 注册 API，就绝不改走表单投影
+      // （0.1.6 线的 SettingsProvider 同时暴露 register 与 describe，但后者的 ns 是
+      //  namespace 而非 profile 条目 id —— 误走表单分支会**静默**退回默认值）。
+      const registerCapable = typeof svc?.register === "function";
+      if (registerCapable) {
+        if (!z) {
+          // schema 依赖 schemastery；解析不到时如实说明。
+          // NB-2 措辞订正：基线（g-351 之前）此分支**也有**同形 stderr 告警
+          //（`g-133: @deepseek-ai/schemastery 不可解析…`，见 96c29cb:dsh-graph-host/index.js:959），
+          // 并非「无提示的默认值」；此处沿用同一如实告警口径，"g-351" 前缀仅用于区分代次。
+          process.stderr.write("[dsh-graph-host] g-351: @deepseek-ai/schemastery 不可解析，profile 全局默认降级（模型路由/提示词走 project.yaml/继承）\n");
+          return;
+        }
+        try {
+          graphSettingsScope = svc.register(GRAPH_SETTINGS_NS, buildGraphSettingsSchema(z), {
+            base: { ...GRAPH_SETTINGS_DEFAULTS },
+          });
+          sctx.effect(() => () => { graphSettingsScope = null; });
+          return;
+        } catch (e) {
+          const reason = `register: ${e?.message ?? e}`;
+          process.stderr.write(`[dsh-graph-host] g-351 settings 注册失败（降级，模型路由/提示词走默认）：${reason}\n`);
+          return;
+        }
       }
+      // 新能力：profile 条目 Config 经设置表单投影（0.1.7 线）。值由 `Config` 声明，
+      // `configure({ auto: true })` 声明该 entry 允许自动生成设置页（策略可选，失败不致命）。
+      if (typeof svc?.describe === "function") {
+        if (typeof svc.configure === "function") {
+          try { sctx.effect(() => svc.configure({ auto: true })); } catch { /* 页面策略可选 */ }
+        }
+        graphSettingsScope = { get: () => readGraphSettingsFromForms(svc) };
+        sctx.effect(() => () => { graphSettingsScope = null; });
+        return;
+      }
+      // 两条能力都不可用：如实降级（读取走 project.yaml/继承），不伪装成注册异常。
+      process.stderr.write("[dsh-graph-host] g-351 settings 能力不可用（降级，模型路由/提示词走 project.yaml/继承）：settings 服务未提供 namespace 注册或表单投影 API\n");
     });
   };
   setupGraphSettings();
@@ -963,21 +1090,13 @@ export function apply(ctx, config) {
       return { ...GRAPH_SETTINGS_DEFAULTS };
     }
   };
-  // g-133：workspace 子代理补充提示词覆盖字段读取（与 g-132 三态语义对齐，核心逻辑在 core/ops.ts）。
-  // project.yaml 的对应字段三种取值：`default`/缺失 → 继承全局；非空文本 → 覆盖；
-  // 显式空值（'' 或 ""）→ 禁用全局提示词。字段名为 `defaults.subagent_prompt`。
-  const readPromptOverride = (rootFor, key) => {
-    try {
-      const file = join(rootFor, "project.yaml");
-      if (!existsSync(file)) return "default";
-      return readPromptOverrideValue(readFileSync(file, "utf8"), key);
-    } catch {
-      return "default";
-    }
-  };
-  // 把「全局提示词 + workspace 覆盖值」合成最终注入值（三态，核心逻辑在 core/ops.ts）。
-  const effectivePrompt = (globalPrompt, override) =>
-    resolvePromptOverride(globalPrompt, override);
+  // g-333：workspace 子代理补充提示词的**唯一消费者**——结构化三态 `prompt_overrides.subagent`
+  //（core `resolveSubagentPrompt`，闭集优先级：override/disable/default；default 回落遗留
+  // `defaults.subagent_prompt`，再回落 profile 全局 `subagentPrompt`）。
+  // 旧实现直接用 core 的**遗留全文件正则读取器**扫 project.yaml 文本取键名 `subagent_prompt`：
+  // 全文件匹配 + 只剥引号，与设置弹窗写入的 `prompt_overrides.subagent` **零交集**（配置改了不影响派发），
+  // 且多行文本会把字面 `\n` 带进 prompt。该读取器调用点与本地包装已删除；
+  // `defaults.subagent_prompt` 仅作 deprecated 兼容回落（由 core 结构化消费，不再是独立消费者）。
   // g-149：workspace 校验——无明确 workspace 且非绝对 config.root 时抛 GraphError
   const requireWorkspace = (ex) => {
     if (isAbsoluteConfig) return config.root; // 绝对 root 不需要 workspace
@@ -1192,7 +1311,8 @@ export function apply(ctx, config) {
     const isWorktree = isolationDecision.isolate;
     const worktreeBlock = resolveWorktreeGuide(gType, isWorktree, promptLanguage);
     const subagentPromptSection = (() => {
-      const p = effectivePrompt(globalSettings.subagentPrompt, readPromptOverride(root, "subagent_prompt"));
+      // g-333：单一消费者（结构化三态 + 遗留回落 + 全局回落），见 resolveSubagentPrompt。
+      const p = resolveSubagentPrompt(root, globalSettings.subagentPrompt);
       return p ? ["## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join("\n") : null;
     })();
     const modeStrategySection = effModeRes.prompt ? ["## 子代理执行模式（" + effModeRes.mode + "）", "", effModeRes.prompt].join("\n") : null;
@@ -1745,7 +1865,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_memory_add",
-        description: "新增持久事实/记忆。\n【scope 决策铁律】：\n1. 默认法则：一切自发总结、技术经验、方案决策 100% 默认 scope=\"on_demand\"（按需记忆，不占常驻 Prompt）；\n2. 常驻特权法则：仅在「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」时，才允许设 scope=\"standing\"（硬上限 200 字符，超过拒绝；普通记忆上限 500 字符）。事件先行。",
+        description: "新增持久事实/记忆。\n【scope 决策铁律】：\n1. 默认法则：一切自发总结、技术经验、方案决策 100% 默认 scope=\"on_demand\"（按需记忆，不占常驻 Prompt）；\n2. 常驻特权法则：仅在「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」时，才允许设 scope=\"standing\"（硬上限 200 字符，超过拒绝；普通记忆上限 1000 字符）。事件先行。",
         parameters: params({
           kind: { type: "string", enum: ["project", "user"] },
           scope: { type: "string", enum: ["standing", "on_demand"] },
@@ -1958,24 +2078,31 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_resolve_accept",
-        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。",
+        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict）且 machine_report 四项门禁全绿（tests exit_code=0 且 fail=0、typecheck exit_code=0、产品代码增删 <150 行且无未跟踪新文件、全部判据以 ✅已验 结尾，由引擎自算）；任一不满足即拒绝且零副作用，通过则记 review.fast_track 事件。",
         parameters: params({
           goal: str,
           verdict: { type: "string", enum: ["accept", "object"] },
           objection: str,
           force: { type: "boolean" },
           reason: str,
+          fast_track: { type: "boolean", description: "机器快速放行开关；缺省 false（默认路径逐字不变）。" },
+          machine_report: {
+            type: "object",
+            description: "机器证据包：{ baseline_commit, changed_paths[], product_changed_lines, untracked_files, tests:{exit_code,fail}, typecheck:{exit_code}, strict_required? }。门禁 ④（全部判据 ✅已验）由引擎自算，报告不得自报。",
+          },
         }, ["goal", "verdict"]),
       },
       run: (a, ex) => {
-        resolveAccept(rootFor(ex), a.goal, {
+        const r = resolveAccept(rootFor(ex), a.goal, {
           actor: actorOf(ex),
           verdict: a.verdict,
           objection: a.objection,
           force: a.force,
           reason: a.reason,
+          fast_track: a.fast_track,
+          machine_report: a.machine_report,
         });
-        return { ok: true };
+        return { ok: true, fast_track: r.fast_track === true };
       },
     },
     {
@@ -2103,6 +2230,10 @@ export function apply(ctx, config) {
             "executor.mode": SUBAGENT_MODES,
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],
+            },
+            // g-311：顶层 review.policy 三值；未配置为 null，按目标类型派生策略。
+            "review.policy": {
+              values: [...REVIEW_POLICIES],
             },
           },
         });
@@ -2413,9 +2544,9 @@ export function apply(ctx, config) {
         try {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
-          const { goal, verdict, objection, force, reason } = body;
+          const { goal, verdict, objection, force, reason, fast_track, machine_report } = body;
           if (!goal || !verdict) return json(res, 400, { error: "missing goal or verdict" });
-          resolveAccept(rootForReq(req, body), goal, { actor: "human:gui", verdict, objection, force, reason });
+          resolveAccept(rootForReq(req, body), goal, { actor: "human:gui", verdict, objection, force, reason, fast_track, machine_report });
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
@@ -2509,7 +2640,11 @@ export function apply(ctx, config) {
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
-          json(res, code, { error: String(e?.message ?? e) });
+          const message = String(e?.message ?? e);
+          // g-352：给「带附件（cards/attempts）不能回 backlog」一个**语言中立**的稳定错误码，
+          // 客户端据此给本地化失败态（旧实现用中文子串匹配永远匹配不上，且会把中文原文漏进英文界面）。
+          const errCode = /附件/.test(message) && /backlog/i.test(message) ? "move-to-backlog-has-attachments" : null;
+          json(res, code, errCode ? { error: message, code: errCode } : { error: message });
         }
       },
     },

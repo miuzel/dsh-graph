@@ -144,8 +144,8 @@ test("g-272 att-002: reason 枚举 → i18n 双语映射（zh 逐字保留、en 
     assert.doesNotMatch(String(en[key]), /[\u3400-\u9fff]/, `en ${key} 含 CJK: ${en[key]}`);
     if (LEGACY_ZH_REASONS[e]) assert.equal(zh[key], LEGACY_ZH_REASONS[e], `zh ${key} 未逐字保留原文案`);
   }
-  // 本次新增的其他词条键对称 + en 零 CJK
-  for (const key of ["exec.requestCopiedOpened", "exec.autocopyFailedRequest", "settings.readProfileFail", "settings.saveProfileFail", "goal.renameFail", "exec.acceptConfirm"]) {
+  // 本次新增的其他词条键对称 + en 零 CJK（g-327 追加直发反馈词条）
+  for (const key of ["exec.requestCopiedOpened", "exec.autocopyFailedRequest", "settings.readProfileFail", "settings.saveProfileFail", "goal.renameFail", "exec.acceptConfirm", "exec.requestDelivered", "exec.requestDeliveredOpened"]) {
     assert.ok(zh[key] !== undefined, `zh 缺少 ${key}`);
     assert.ok(en[key] !== undefined, `en 缺少 ${key}`);
     assert.doesNotMatch(String(en[key]), /[\u3400-\u9fff]/, `en ${key} 含 CJK`);

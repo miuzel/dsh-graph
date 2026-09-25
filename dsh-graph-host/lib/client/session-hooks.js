@@ -5,7 +5,9 @@
     // 最近记录走 connection.api.subagents.history。
 
     const boundSetup = new Map(); // childId -> Promise（地址配置只做一次）
-    const boundModes = new Map(); // childId -> 'one-shot' | 'continuable'
+    // g-351：值为**具体**模式 'one-shot' | 'continuable'；宿主给「未判定」（0.1.7 'unknown'）时为 null
+    //（展示层据此省略会话模式，不把未判定冒充成「一次性」）。
+    const boundModes = new Map(); // childId -> 'one-shot' | 'continuable' | null
 
     // ===== g-323：一次性「向某个会话投递一条 queue 消息」的**共享**能力探测入口 =====
     // 与 g-321 的渲染期保留生命周期（useSessionBinding / canRetain）是两件事：本函数服务
@@ -95,18 +97,14 @@
     }
 
     // 目录 entry → SubagentAddress（与 setupBoundSession 的 entry 筛选口径保持一致）
+    // g-351：目录形状由 helpers.subagentCatalogEntries 探测（旧 subagentsByParent / 新 projectionsBySession）。
     function subagentAddressFromCatalog(parentId, childId) {
-      if (!parentId || !childId) return null;
-      let entries = [];
-      try { entries = sessionsRt?.list?.getSnapshot?.()?.subagentsByParent?.[parentId]?.entries ?? []; }
-      catch (e) { return null; }
-      const entry = entries.find((e) => e && e.kind === "child" && e.id === childId);
-      return entry ? { parentSessionId: parentId, childSessionId: childId, mode: entry.mode } : null;
+      return subagentAddressOf(sessionsRt, parentId, childId);
     }
 
     // 子代理会话的 retain 目标：优先 SubagentAddress——resolveTarget 对地址不校验存在性，
     // 且会把地址写入 manager.addresses，使 session.prompt 走 subagents 路由；
-    // 拿不到地址时先 setSubagentCatalogOpen + await refreshSubagents 再试；
+    // 拿不到地址时先按能力刷新目录（新 refreshProjections / 旧 refreshSubagents）再试；
     // 仍未收录 → null（降级为空绑定、保留看板占位，绝不抛错、绝不刷 console）。
     async function resolveSessionRetainTarget(parentId, childId) {
       if (!childId) return null;
@@ -117,10 +115,7 @@
       } catch (e) { /* 地址探测不可用 → 继续走目录路径 */ }
       const cached = subagentAddressFromCatalog(parentId, childId);
       if (cached) return cached;
-      try {
-        sessionsRt?.setSubagentCatalogOpen?.(parentId, true);
-        await sessionsRt?.refreshSubagents?.(parentId);
-      } catch (e) { /* 目录刷新失败 → 按未收录降级为空绑定 */ }
+      await refreshSubagentCatalog(sessionsRt, parentId);
       return subagentAddressFromCatalog(parentId, childId);
     }
 
@@ -237,23 +232,26 @@
     }
 
     // 子代理地址配置（路由 prompt/history 到 subagents.*）。
-    // 目录 entry 提供真实 mode；目录未收录时跳过地址配置（指令走 session.prompt 默认路由，错误会明示）。
+    // 目录 entry 提供 mode：具体模式（'one-shot'/'continuable'）直接下发；宿主的「未判定」
+    //（0.1.7 'unknown'）按 `catalogAddressMode` 下发通配值并由宿主按 identity 回填。
+    // 目录未收录时跳过地址配置（指令走 session.prompt 默认路由，错误会明示）。
     // 实时窗口（session.open()）由 openBoundSessionStream 按 g-224 实时显示开关门控，不在此处打开。
     function setupBoundSession(parentId, childId, session) {
       if (boundSetup.has(childId)) return boundSetup.get(childId);
       const p = (async () => {
         if (parentId) {
           try {
-            sessionsRt.setSubagentCatalogOpen?.(parentId, true);
-            await sessionsRt.refreshSubagents?.(parentId);
-            const entries = sessionsRt.list?.getSnapshot?.().subagentsByParent?.[parentId]?.entries ?? [];
-            const entry = entries.find((e) => e.kind === "child" && e.id === childId);
+            await refreshSubagentCatalog(sessionsRt, parentId);
+            // g-351：与子会话导航/地址构造共用同一 entry 形状探测函数（旧带 kind、新无 kind）。
+            const entry = catalogChildEntry(subagentCatalogEntries(sessionsRt, parentId), childId);
             if (entry) {
-              boundModes.set(childId, entry.mode);
+              // g-351：展示层只认具体模式；宿主的「未判定」（0.1.7 'unknown'）记 null，
+              //        由 live-panel 省略该字段，绝不臆断显示成「一次性」。
+              boundModes.set(childId, catalogEntryMode(entry));
               // g-217：0.1.2-alpha.2 权威签名 configureSubagent(address, parentAvailable?)——
               // 按指南单参调用（address 含 parentSessionId/childSessionId/mode），parentAvailable 缺省 undefined
               session.configureSubagent?.(
-                { parentSessionId: parentId, childSessionId: childId, mode: entry.mode });
+                { parentSessionId: parentId, childSessionId: childId, mode: catalogAddressMode(entry) });
             }
           } catch (e) {
             // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
@@ -728,6 +726,20 @@
                                textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "…");
       // g-225：常态展示精简 model ID，仅在 tooltip (title) 保留完整 provider/model 追溯
       const modelTitle = props.model ? dgT("live.model") + `${props.provider ? props.provider + "/" : ""}${props.model}` : null;
+      // g-352 att-003 第 3 项：compact（窄档主管栏）＝ **单行**形态 —— 只保留「状态 + 状态行」这一行，
+      // 不渲染 meter / 独立流式行 / 第二行状态行；文字一律 min-width:0 + 省略号收敛（不再互相重叠）。
+      // 默认（未传 compact）走下面的原渲染路径，逐字不变（conversation.view 与卡片内嵌 LiveStrip 均如此）。
+      if (props.compact) {
+        return h(
+          "div",
+          { ...stripProps, title: [statusFull, props.statusLine ? dgT("live.status") + props.statusLine : null, modelTitle, meter ? dgT("live.resource") + meter : null].filter(Boolean).join("\n") },
+          h("div", { style: { display: "flex", alignItems: "center", gap: 5, minWidth: 0, overflow: "hidden" } },
+            h("span", { style: { color: running ? "var(--dsw-alias-state-success-primary, #3aa675)" : "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", flexShrink: 0 } },
+              statusLabel),
+            h("span", { style: { ...S.meta, fontSize: 10, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+              statusRowText || (line ? "⏵ " + line : "…"))),
+        );
+      }
       return h(
         "div",
         { ...stripProps, title: [statusFull, props.statusLine ? dgT("live.status") + props.statusLine : null, modelTitle, meter ? dgT("live.resource") + meter : null, line ? dgT("live.stream") + line : null].filter(Boolean).join("\n") },

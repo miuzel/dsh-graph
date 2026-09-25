@@ -25,7 +25,7 @@
           onConfirm(reason.trim());
         }
       };
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
@@ -168,7 +168,7 @@
         setLoading(false);
       };
 
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 480 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
@@ -244,7 +244,7 @@
           }
         } catch { /* 静默 */ }
       };
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: onCancel }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 8 } },
@@ -344,8 +344,14 @@
       const addMem = async () => {
         const text = newText.trim();
         if (!text) return;
-        if (newScope === "standing" && [...text].length > 200) {
-          setNote(dgT("memory.standingCharsExceeded", { count: [...text].length }));
+        // g-339：前端拦截与服务端同阈值（memLimit ← client/constants.js 的 MEMORY_LIMITS 副本）。
+        // 放宽 on_demand 到 1000 后，这里必须同时覆盖 on_demand——否则前端放行 >1000
+        // 只能吃服务端报错（判据 6）。standing 仍 200，拒绝文案保持原样。
+        const limit = memLimit(newScope);
+        if ([...text].length > limit) {
+          setNote(newScope === "standing"
+            ? dgT("memory.standingCharsExceeded", { count: [...text].length })
+            : dgT("memory.onDemandCharsExceeded", { count: [...text].length, limit }));
           return;
         }
         setSaving(true);
@@ -396,7 +402,7 @@
       const onDemandList = entries.filter((e) => (e.scope ?? "on_demand") === "on_demand");
       const currentList = tab === "standing" ? standingList : onDemandList;
 
-      return h("div", { style: S.overlay, ...memoryGuard },
+      return dgOverlay({ style: S.overlay, ...memoryGuard },
         h("div", { style: { ...S.modal, minWidth: 460, maxWidth: 640, maxHeight: "85vh", display: "flex", flexDirection: "column" }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: props.onClose }, "✕"),
           h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingRight: 24 } },
@@ -455,8 +461,8 @@
               onChange: (e) => setNewText(e.target.value),
             }),
             h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 } },
-              h("span", { style: { ...S.meta, fontSize: 11, color: newScope === "standing" && [...newText].length > 200 ? "#e74c3c" : undefined } },
-                dgT("memory.charCount", { count: [...newText].length, limit: newScope === "standing" ? 200 : 500 })),
+              h("span", { style: { ...S.meta, fontSize: 11, color: [...newText].length > memLimit(newScope) ? "#e74c3c" : undefined } },
+                dgT("memory.charCount", { count: [...newText].length, limit: memLimit(newScope) })),
               h("button", {
                 className: "dg-btn",
                 style: { ...S.btnPrimary, fontSize: 12 },

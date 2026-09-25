@@ -284,7 +284,8 @@ annotated tag **`v0.15.0`**（经负责人 2026-09-21 明确授权；**未推送
 
 ## 4. 发布后检查项
 
-- [ ] 主 3080 profile 切回已发布版本（`bash scripts/dev-dsh-instance.sh main-published`）
+- [x] 主 3080 profile 切回已发布版本 —— **由负责人自行从官方源安装最新版完成**（2026-09-21），
+      主管无需执行 `main-published`
 - [x] **推送 `main` + tag**（负责人 2026-09-21 授权）：`main` `f0ec94b..727bd2e`；annotated tag
       `v0.15.0`（对象 `c45e8f6` → commit `727bd2e`）。远端核验：`refs/heads/main` = `727bd2e`、
       `refs/tags/v0.15.0^{}` = `727bd2e`
@@ -304,12 +305,40 @@ annotated tag **`v0.15.0`**（经负责人 2026-09-21 明确授权；**未推送
       重算 sha256 不再是 `c102aca6…`）。若要复现 v0.15.0 的发布物，请
       `git checkout v0.15.0 && bash scripts/build.sh`（重建后仍得 `c102aca6…`，已实测）。
 - [x] 发布树已按 §4 步骤 6 移除（`git worktree remove .worktrees/release-v0.15.0`）
-- [ ] 开下一条开发线（`v0.16.0-test`，版本置 `0.16.0-alpha`）；
-      **注意 v0.16.0 泳道已有排期目标**：g-326（按改动性质分级测试力度）、g-327（定义/润色请求
-      直接投递主管会话）、g-311/g-312/g-313（评审与架构审查机制）
-- [ ] 按安全规则清理已合入的 attempt worktree / 分支（当前 `.worktrees/` 下约 20 个待清理：
-      g-318～g-323 各 attempt、`dev-instance-pnpm-att-01`、`pi-graph-v1.0.0-alpha*` 等）
-- [ ] 看板：v0.15.0 标记为 released；`dsh-graph-videos` README 补发布链接（如本次有录制）
+- [x] **开下一条开发线**（2026-09-21 完成）：自 `main`(`5d731cc`) 建分支 **`v0.16.0-test`**，
+      提交 **`2191a26`**，版本串两处置 `0.16.0-alpha`（沿用 `v0.15.0` 的 `31ef01f` 惯例，仅改
+      `dsh-graph-host/package.json` + `lib/client/constants.js:PLUGIN_VERSION`，README 留待发布时对齐）。
+      验证：`bash scripts/build.sh` OK、`dist/package.json` = `0.16.0-alpha`、测试 **1152/1152 pass**
+      **v0.16.0 泳道已有排期目标**（均已在该泳道，无需搬迁）：g-311/g-312/g-313（planning）、
+      g-326/g-327（ready）
+- [x] **清理残留 attempt worktree**（2026-09-21 完成）：**`.worktrees/` 由 18 个降至 4 个**
+      （49 MB → 20 MB）。**分支一律保留**——14 个分支逐个核验仍在，无任何提交丢失。
+      - **工具实时验证后清理（9 个）**（`merged=true & clean=true & active=false`）：
+        g-308 / g-309 / g-310 / g-318 / g-319(`att-001`,`att-002`) / g-320 / g-321-`att-003` /
+        g-323-`att-002`
+      - **负责人逐项裁定后清理（5 个）**：`g-297-att-01`（未跟踪文件已抢救至
+        `tmp/worktree-salvage/g-297-att-01/`，sha256 `9887b165…`；删文件后工具验证为 candidate 并正常清理）、
+        `g-321-att-02`、`g-323-att-01`、`g-184-att-01`、`dev-instance-pnpm-att-01`。
+        后 4 个**工具拒绝**（`attempt_active` / `not_merged` / `not_delivered`），依负责人明确裁定改用
+        `git worktree remove` 绕过；**分支保留，故未合入的工作仍可恢复**：
+        `g-323-att-01`(`02be186`，被 `att-002` 取代)、`g-184-att-01`(`294ec74` + 2 个 livestrip 提交，
+        目标已归档 `draft`)、`dev-instance-pnpm-att-01`(`44085ef`+`5b012e8`，其两处
+        `dev-dsh-instance.sh` 修复**当前 main 已另行具备**：`TEST_HOME=$REPO_ROOT/tmp/test-review`
+        与 `PNPM_STORE_DIR=…/tmp/test-review/.pnpm-store`，故属陈旧重复）
+      - **保留 4 个（正确地未清理）**：`g-295-att-01` / `g-295-att-02`（**目标 `g-295` 仍
+        `in_progress`，活跃**）、`pi-graph-v1.0.0-alpha` / `-k3`（**另一条产品线**
+        `v1.0.0-alpha*`，泳道 `v1.0.0` 仍 `planning`）
+- [x] **清理过程中发现并登记 1 个真 bug → 已立目标 `g-329`（v0.16.0, bug）**：
+      `core/worktree.ts` 的 `isActive()` 终态白名单为
+      `["completed","failed","selected","merged","rejected","superseded"]`，**不含 `"cancelled"`**，
+      而 `"cancelled"` 正是 `graph_abandon_attempt` 写入 `attempt.md` 的 `result` 值
+      ⇒ 已放弃 attempt 的 worktree **永远**被判为活跃，`graph_clean_worktree` 永久拒绝清理。
+      实证：`g-321-att-02` 早在 09-21 03:59 就有 `attempt.abandoned` 事件且 `result=cancelled`，
+      本次仍被判 `active: true / attempt_active`。根因与建议修法已写入 g-329 描述与判据。
+- [x] 看板：v0.15.0 已交付（g-328 `delivered`，五目标全交付）。
+      **`v0.15.0` 泳道自身的 `released` 标记待负责人在看板「版本详情 → 🚀 标记发布」点击**
+      （端点 `POST /api/dsh-graph/release-version` 的 `actor` 硬编码为 `human:gui`，主管不代调）；
+      `dsh-graph-videos` README 补发布链接（如本次有录制）——本次未录制，不适用
 - [x] **回填本文件 §2 的 Windows 真机门禁勾选与 §3 的对账表** — 已于 2026-09-21 发布前完成（T1–T5 PASS 10/0/0）
 
 ### 4.1 发布后对账：线上包 ≠ 本地包 sha256，但**内容逐字节相同**（重要）

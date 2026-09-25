@@ -1,5 +1,6 @@
     // ===== g-132：workspace 看板设置弹窗（读取/可视化编辑 .dsh-graph/project.yaml 安全配置） =====
     // 字段范围（本期）：executor.provider/model、defaults.review、defaults.pk、supervisor.automation、
+    // 顶层 review.policy（g-342 四态：继承未配置 / auto / strict / none）、
     // 子代理补充提示词 workspace 覆盖（三态：default 继承 / 自定义覆盖 / 显式空禁用）。
     // 保存走 PUT/POST /api/dsh-graph/settings（原子写；保留注释/未知键；失败不半写入）。
     let settingsModalModeInstanceSeq = 0;
@@ -14,7 +15,6 @@
         auto[k] = (v === "human" || v === "ai") ? v : null;
       }
       const po = form?.prompt_overrides?.subagent ?? { state: "default", value: null };
-      const poState = (po.state === "override" || po.state === "disable") ? po.state : "default";
       return {
         executor: {
           provider: normStr(form?.executor?.provider),
@@ -27,7 +27,8 @@
           pk: { lanes: Number.isInteger(lanesNum) ? lanesNum : normStr(lanesRaw), sandbox: normStr(form?.defaults?.pk?.sandbox) },
         },
         supervisor: { automation: auto },
-        prompt_overrides: { subagent: { state: poState, value: poState === "override" ? normStr(po.value) : "" } },
+        prompt_overrides: { subagent: normalizePromptOverrideDraft(po) },
+        review: { policy: normalizeReviewPolicyDraft(form?.review?.policy) },
         refreshInterval: String(refreshIntervalInput ?? ""),
       };
     }
@@ -35,11 +36,67 @@
       if (!baseline || !form) return false;
       return JSON.stringify(normalizeSettingsDraft(form, refreshIntervalInput)) !== JSON.stringify(baseline);
     }
+    // ===== g-333：override + 空文本 ≡ disable =====
+    // core 已显式定义该语义（writeProjectConfig 用 JSON.stringify 编码：空串写回 `""`，结构化读取器
+    // 读回即 disable；「空 override」在存储层不可表示）。这里把同一语义前移到**草稿归一化**与
+    // **提交载荷**，避免弹窗提交一个存储层无法表示的状态——否则界面显示「覆盖」而实际生效为「禁用」，
+    // 正是本目标要消灭的「看起来能配、实际不生效」。合法 state 闭集与 core 一致：default/override/disable。
+    function normalizePromptOverrideDraft(po) {
+      const state = (po?.state === "override" || po?.state === "disable") ? po.state : "default";
+      const value = po?.value === null || po?.value === undefined ? "" : String(po.value);
+      if (state === "override" && value === "") return { state: "disable", value: "" };
+      return { state, value: state === "override" ? value : "" };
+    }
+    // g-333：设置弹窗的提交载荷（从 save 内联构造中抽出为独立函数，使「弹窗草稿 → REST 载荷」
+    // 链路可被测试直接驱动，而不必重写一份等价实现）。字段口径与 save 原实现**逐字一致**
+    //（保存前 save 已 `if (!form) return`，故此处与旧内联代码相同，不对 form 本身做可选链，
+    //  使 g-133/g-231 的既有源契约断言继续绑定真实代码路径）。
+    function buildSettingsPatch(form) {
+      const lanesRaw = form.defaults?.pk?.lanes;
+      const lanes = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
+      const rawAuto = form.supervisor?.automation ?? {};
+      const cleanAuto = {};
+      for (const [k, v] of Object.entries(rawAuto)) {
+        if (v === "human" || v === "ai") cleanAuto[k] = v;
+        else cleanAuto[k] = null;
+      }
+      // g-342：review.policy 三值直传；「继承/未配置」写 null（schema 的 enum 只认三值与 null，
+      // 写 "" 会被拒；core 侧 setScalar 对 null 清空 → 读回 null → 按目标类型派生）。
+      const reviewPolicy = normalizeReviewPolicyDraft(form.review?.policy);
+      return {
+        executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "", reasoning_effort: form.executor?.reasoning_effort ?? "", mode: form.executor?.mode ?? "" },
+        defaults: {
+          review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
+          pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
+        },
+        supervisor: { automation: cleanAuto },
+        review: { policy: reviewPolicy === "" ? null : reviewPolicy },
+        prompt_overrides: { subagent: normalizePromptOverrideDraft(form.prompt_overrides?.subagent) },
+      };
+    }
+    // ===== g-342：顶层 review.policy 四态下拉（继承未配置 / auto / strict / none） =====
+    // 合法值真源在 core/review-policy.ts 的 REVIEW_POLICIES；lib/client/*.js 是独立打包的浏览器
+    // bundle，无法 import core 常量，故此处只能放**副本**——两边一致性由
+    // core/tests/g342-settings-review-policy.test.ts 的断言核对（改一边不改另一边必红）。
+    // 归一化把 null/undefined/"" 以及任何非三值统一为 ""（＝「继承/未配置」），
+    // 因此服务端 null 与表单 "" 不会造成假脏（判据 2）；保存时 "" → null——
+    // schema 的 policy 只接受三值或 null，写 "" 会被 enum 直接拒绝。
+    const REVIEW_POLICY_VALUES = ["auto", "strict", "none"];
+    const REVIEW_POLICY_LABEL_KEYS = {
+      auto: "settings.reviewPolicyAuto",
+      strict: "settings.reviewPolicyStrict",
+      none: "settings.reviewPolicyNone",
+    };
+    const normalizeReviewPolicyDraft = (v) => (REVIEW_POLICY_VALUES.includes(v) ? v : "");
     function SettingsModal(props) {
       useLocaleRevision();
       const modeIdRef = React.useRef(null);
       if (modeIdRef.current == null) modeIdRef.current = `dg-workspace-subagent-mode-${++settingsModalModeInstanceSeq}`;
       const modeId = modeIdRef.current;
+      // g-342：review.policy 下拉的稳定 id（与 modeIdRef 同款生成方式，供 label htmlFor 绑定）
+      const reviewPolicyIdRef = React.useRef(null);
+      if (reviewPolicyIdRef.current == null) reviewPolicyIdRef.current = `dg-workspace-review-policy-${++settingsModalModeInstanceSeq}`;
+      const reviewPolicyId = reviewPolicyIdRef.current;
       const [loading, setLoading] = React.useState(true);
       const [form, setForm] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
@@ -61,7 +118,7 @@
       const requestClose = () => {
         if (saving) { setNote({ kind: "err", text: dgT("common.saving") }); return; }
         if (settingsDraftIsDirty(baselineRef.current, form, refreshIntervalInput)) {
-          if (!window.confirm(dgT("common.confirm"))) return;
+          if (!window.confirm(dgT("settings.discardDirtyConfirm"))) return;
         }
         props.onClose?.();
       };
@@ -136,23 +193,8 @@
           setNote({ kind: "err", text: dgT("settings.pkLanesError") });
           setSaving(false); return;
         }
-        const rawAuto = form.supervisor?.automation ?? {};
-        const cleanAuto = {};
-        for (const [k, v] of Object.entries(rawAuto)) {
-          if (v === "human" || v === "ai") cleanAuto[k] = v;
-          else cleanAuto[k] = null;
-        }
-        const patch = {
-          executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "", reasoning_effort: form.executor?.reasoning_effort ?? "", mode: form.executor?.mode ?? "" },
-          defaults: {
-            review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
-            pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
-          },
-          supervisor: { automation: cleanAuto },
-          prompt_overrides: {
-            subagent: form.prompt_overrides?.subagent ?? { state: "default", value: null },
-          },
-        };
+        // g-333：载荷构造抽到模块级 buildSettingsPatch（同上），三态口径与草稿归一化同源。
+        const patch = buildSettingsPatch(form);
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/settings"), {
             method: "POST",
@@ -177,14 +219,14 @@
       };
 
       if (loading) {
-        return h("div", { style: S.overlay, ...backdropGuard },
+        return dgOverlay({ style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
             h("div", { style: S.modalH }, dgT("settings.title")),
             h("div", { style: { ...S.meta, marginTop: 8 } }, dgT("settings.loading"))));
       }
       if (!form) {
-        return h("div", { style: S.overlay, ...backdropGuard },
+        return dgOverlay({ style: S.overlay, ...backdropGuard },
           h("div", { style: { ...S.modal, maxWidth: 520 }, onClick: (e) => e.stopPropagation() },
             h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
             h("div", { style: S.modalH }, dgT("settings.title")),
@@ -314,8 +356,13 @@
       for (const effort of effortChoices) {
         if (typeof effort?.id === "string" && effort.id !== "") effortOptions.push(opt("effort:" + effort.id, effort.id, effort.name ?? effort.id));
       }
+      // g-342：review.policy 当前选中值——非三值/缺失一律显示为「继承（未配置）」，
+      // 与 normalizeSettingsDraft 用同一归一化，避免「显示继承但被判脏」的错位。
+      const curReviewPolicy = normalizeReviewPolicyDraft(form.review?.policy);
+      // 选项 style 与 automationOptions / mode select 同源（g-176 主题变量，不硬编码暗色）
+      const policyOptionStyle = { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" };
 
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
           h("div", { style: S.modalH }, dgT("settings.title")),
@@ -420,6 +467,24 @@
               ? dgT("settings.catalogReady")
               : (catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg"))),
 
+          // g-342：顶层 review.policy 四态下拉（继承未配置 / auto / strict / none）。
+          // 渲染方式（label htmlFor + select + meta 提示）与选项 style 比照上方 executor.mode 与
+          // supervisor.automation；脏状态由 normalizeSettingsDraft 统一覆盖（判据 2）。
+          // 归属主区而非「高级/仅存储字段」：该字段被 core/review-policy.ts 的受理门禁真实消费。
+          h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+          h("div", { style: { minWidth: 0 } },
+            h("label", { htmlFor: reviewPolicyId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reviewPolicyLabel")),
+            h("select", {
+              id: reviewPolicyId,
+              "aria-label": dgT("settings.reviewPolicyAria"),
+              style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+              value: curReviewPolicy,
+              onChange: (e) => set(["review", "policy"], e.target.value),
+            },
+              h("option", { value: "", style: policyOptionStyle }, dgT("settings.reviewPolicyInherit")),
+              ...REVIEW_POLICY_VALUES.map((p) => h("option", { key: p, value: p, style: policyOptionStyle }, dgT(REVIEW_POLICY_LABEL_KEYS[p])))),
+            h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } }, dgT("settings.reviewPolicyHint"))),
+
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
           h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),
           h("div", { style: { display: showAdvanced ? "flex" : "none", gap: 8, flexWrap: "wrap" } },
@@ -460,6 +525,7 @@
     }
 
     // Source-contract compatibility: 保留未知键与注释; legacy inherited option "（继承父会话）".
-    // g-246 close guard contract: window.confirm("有未保存的修改，确认放弃？");
+    // g-246 close guard contract: window.confirm(dgT("settings.discardDirtyConfirm"))
+    //   → zh「有未保存的修改，确认放弃？」/ en "You have unsaved changes. Discard them?"
     // Contract text: 显示高级/仅存储字段; if (saving) { setNote({ kind: "err", text: "正在保存，请稍候…" }); return; }
     // Contract text: "✅ 已打开 project.yaml"

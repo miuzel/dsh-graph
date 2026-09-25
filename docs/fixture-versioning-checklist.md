@@ -13,13 +13,13 @@
   - 卡片、attempt、状态汇报
   - 评论、描述
 
-### 1.2 隔离测试实例（`scripts/dev-dsh-instance.sh`）
+### 1.2 隔离测试实例（`scripts/archived/dev-dsh-instance.sh`）
 - **用途**: 启动隔离的 DSH web 实例用于开发和测试
 - **端口**: 3082（测试实例），3080（主实例）
-- **数据域**: `~/.dsh/dev-workspace/dsh-graph-test/.dsh-graph`
+- **数据域**: `./tmp/test-review/workspace/dsh-graph-test/.dsh-graph`（仓库内；由脚本默认值 `TEST_HOME=$REPO_ROOT/tmp/test-review` 与 `CWD=$TEST_HOME/workspace/$PROFILE` 决定）
 - **隔离特性**:
-  - 独立 DSH_HOME
-  - 独立 workspace
+  - 独立 DSH_HOME（`$REPO_ROOT/tmp/test-review`）
+  - 独立 workspace（`$TEST_HOME/workspace/$PROFILE`）
   - 独立 pnpm store
 
 ### 1.3 核心测试（`core/tests/*.test.ts`）
@@ -42,7 +42,7 @@
 ### 2.2 测试实例版本化
 - **当前版本**: 与仓库版本一致
 - **更新规则**:
-  1. 修改 `dsh-graph-host` 后，重新运行 `bash scripts/dev-dsh-instance.sh run`
+  1. 修改 `dsh-graph-host` 后，重新运行 `bash scripts/archived/dev-dsh-instance.sh run`
   2. 测试实例会自动重新安装插件（`link:` 方式）
   3. 验证 `node --test core/tests/*.test.ts` 通过
 - **回滚**: 使用 `git checkout` 回退到之前的 commit
@@ -103,7 +103,7 @@ ls -la /tmp/dsh-graph-mock-demo/.dsh-graph/
 ### 4.2 测试实例验证
 ```bash
 # 启动测试实例
-bash scripts/dev-dsh-instance.sh run --port 3082
+bash scripts/archived/dev-dsh-instance.sh run --port 3082
 
 # 验证插件加载
 curl http://127.0.0.1:3082/api/dsh-graph/board

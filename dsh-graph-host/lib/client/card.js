@@ -181,18 +181,26 @@
       );
     }
 
-    // g-306：排期版本选择器组件——内联下拉，支持 active 版本 + 独立目标选项。
-    // 供 goal-modal.js 的 backlog 目标标题区复用（card.js 先于 goal-modal.js 拼接）。
+    // g-306/g-352：排期（归属变更）版本选择器组件——内联下拉，支持活跃版本 + 独立目标选项。
+    // g-352 起从「仅 backlog 目标」放开到任意非归档目标（goal-modal.js 调用点同步放开）：
+    //   - backlog → 版本/独立目标 = **排期**（core moveGoal：draft → planning）
+    //   - 版本 ↔ 版本 / 版本 ↔ 独立目标 = **归属变更**（core moveGoal：生命周期状态保持）
+    //   - 选项**永不包含 backlog**（scheduleTargetOptions 结构上不可能产出），
+    //     故不存在「从这里把带附件目标移回 backlog」的路径；拖放路径回 backlog 由服务端
+    //     GraphError 拒绝并下发稳定错误码，客户端据此给本地化失败态（判据 4）。
     function VersionSelectorButton(props) {
-      const { goalId, goalVersion, activeVersions, onScheduled } = props;
+      const { goalId, goalVersion, activeVersions, onScheduled, allowStandalone } = props;
       const [open, setOpen] = React.useState(false);
       const [loading, setLoading] = React.useState(false);
       const [error, setError] = React.useState(null);
+      const [errorCode, setErrorCode] = React.useState(null);
       const wrapRef = React.useRef(null);
 
-      // 过滤掉目标当前已归属的版本（避免重复排期）；独立目标始终可选
-      const versionCandidates = (activeVersions ?? []).filter((v) => v.slug !== goalVersion);
-      const canSelectStandalone = true; // 始终允许选择独立目标
+      // g-352：选项派生统一走 narrow-width.js 的纯函数（不再就地 filter）——结构上排除 backlog 选项，
+      // 并排除目标当前已归属的版本（避免原地排期）。
+      const scheduleOptions = scheduleTargetOptions(activeVersions, goalVersion, allowStandalone !== false);
+      const versionOptions = scheduleOptions.filter((o) => o.to === "version");
+      const canSelectStandalone = scheduleOptions.some((o) => o.to === "standalone");
 
       React.useEffect(() => {
         if (!open) return;
@@ -216,13 +224,20 @@
           });
           const moveData = await moveR.json();
           if (!moveData.ok) {
-            setError(moveData.error || dgT("drag.unknownError"));
+            // g-352：用语言中立的稳定错误码判定「带附件不能回 backlog」（服务端 GraphError →
+            // HTTP 400 的 code 字段），给本地化失败态；其余错误保留服务端原文。
+            const rejected = isMoveToBacklogRejection(moveData.code);
+            setError(rejected ? dgT("drag.moveToBacklogError") : (moveData.error || dgT("drag.unknownError")));
+            setErrorCode(rejected ? MOVE_TO_BACKLOG_ERROR_CODE : null);
+            // 失败态保留选项与下拉：负责人可改选其它目标重试（判据 4 的失败态提示）
             setLoading(false);
             return;
           }
-          // moveGoal 已自动处理 draft→planning 转换，无需显式 transition
+          // moveGoal 已自动处理 draft→planning 转换，无需显式 transition。
+          // g-352：两种语义分别给期望结果——从 backlog 首次排期走「排期」文案；
+          // 原本已有版本归属的目标（版本↔版本 / 版本↔独立目标）走「归属变更」文案。
           const label = to === "standalone" ? dgT("lane.standalone") : version;
-          showToast(dgT("goal.scheduleSuccess", { version: label }));
+          showToast(dgT(goalVersion ? "goal.rescheduleSuccess" : "goal.scheduleSuccess", { version: label }));
           setOpen(false);
           onScheduled?.();
         } catch (e) {
@@ -231,7 +246,7 @@
         setLoading(false);
       };
 
-      const hasAnyOption = versionCandidates.length > 0 || canSelectStandalone;
+      const hasAnyOption = versionOptions.length > 0 || canSelectStandalone;
 
       return h("span", {
         ref: wrapRef,
@@ -247,13 +262,11 @@
           disabled: loading,
           onClick: (e) => { e.stopPropagation(); setOpen(!open); setError(null); },
         }, dgT("goal.schedule")),
+        // g-352：下拉本体样式统一取 S.inlineMenu（与看板顶部「查看版本」选择器同一个 token，
+        // 避免第三套下拉实现）；选项行仍用既有 .dg-schedule-version-item。
         open ? h("div", {
-          style: {
-            position: "absolute", top: "100%", left: 0, marginTop: 4, zIndex: 9999,
-            background: "var(--dsw-alias-bg-base, #1e1e1e)", border: "1px solid rgba(128,128,128,.4)",
-            borderRadius: 6, padding: "6px 0", minWidth: 160, maxWidth: 240,
-            boxShadow: "0 4px 16px rgba(0,0,0,.45)",
-          },
+          style: S.inlineMenu,
+          "data-error-code": errorCode ?? undefined,
           onClick: (e) => e.stopPropagation(),
         },
           h("div", {
@@ -267,14 +280,14 @@
                 onClick: () => doSchedule("standalone"),
               }, `📌 ${dgT("lane.standalone")}`)
             : null,
-          // active 版本选项
-          ...versionCandidates.map((v) =>
+          // active 版本选项（scheduleOptions 已排除当前归属版本，且**不包含 backlog**）
+          ...versionOptions.map((v) =>
             h("div", {
-              key: v.slug,
+              key: v.version,
               style: { padding: "5px 10px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
               className: "dg-schedule-version-item",
-              onClick: () => doSchedule("version", v.slug),
-            }, `🏷️ ${v.name || v.slug}`)),
+              onClick: () => doSchedule("version", v.version),
+            }, `🏷️ ${v.label}`)),
           !hasAnyOption
             ? h("div", { style: { padding: "5px 10px", fontSize: 12, opacity: 0.5 } }, dgT("goal.scheduleAlready"))
             : null,

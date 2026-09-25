@@ -472,7 +472,7 @@ async function tier45Boot(ctx) {
   const logPath = join(ctx.smokeDir, "dsh-web.log");
   writeFileSync(logPath, "", "utf8");
   const [cmd, ...prefix] = splitCmd(ctx.dshCmd);
-  // 命名 profile 的启动形式是 `dsh --profile <p> [web 应用参数…]`（见 scripts/dev-dsh-instance.sh）；
+  // 命名 profile 的启动形式是 `dsh --profile <p> [web 应用参数…]`（见 scripts/archived/dev-dsh-instance.sh）；
   // `dsh web` 是固定 web profile 的别名，不接受 --profile。
   const child = spawn(cmd, shellSafeArgs([...prefix, "--profile", ctx.profile, "--no-open", "--port", String(ctx.port)]), {
     cwd: ctx.workspace,

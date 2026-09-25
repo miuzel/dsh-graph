@@ -172,7 +172,7 @@
               : null));
       };
 
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640, maxHeight: "80vh", overflowY: "auto" }, onClick: (e) => e.stopPropagation() },
           h("div", { style: S.modalH }, dgT("shared.title")),
           h("div", { style: { ...S.meta, marginBottom: 6 } },

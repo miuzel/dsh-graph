@@ -2,22 +2,24 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
-> ### 🚀 v0.15.0 新功能
+> ### 🚀 v0.16.0 新功能
 >
-> - **适配 DeepSeek Harness `0.1.6` 宿主 API 变更**：会话导航/focus 职责从 `sessions` 服务迁移到 `uiWorkspace`，统一走 `openSessionTarget`；子代理聚焦、点击「转到对话」、「交给产品经理」与用户反馈派发链路在新宿主下全部恢复可用。
+> - **适配 DeepSeek Harness `0.1.7` 宿主 settings 服务换代**：旧 `settings.register(namespace, schema)` API 已被移除（实测告警 `sctx.settings.register is not a function`）。插件改为**能力探测分流**——服务提供 `register` 走旧 namespace 注册，否则回落 `describe` 表单投影（profile 条目 `Config`）；两条路径均在隔离实例上双宿主实机验证，且**零版本号比较**。
+> - **适配 `0.1.7` 子代理目录换代（两层）**：容器由 `subagentsByParent` 改为 `projectionsBySession[sid].values.subagentCatalog`，**entry 形状同时去掉 `kind`**（新形状 `{id, createdAt, mode, label?}`，新增 `mode:'unknown'`）。目录谓词改为形状探测（有 `kind` 走旧判定、无 `kind` 按 `id`），避免点「↗ 转到对话」**静默**打开父会话。
+> - （以下为此前版本的累积亮点）**适配 `0.1.6` 宿主 API 变更**：会话导航/focus 职责从 `sessions` 服务迁移到 `uiWorkspace`，统一走 `openSessionTarget`；子代理聚焦、点击「转到对话」、「交给产品经理」与用户反馈派发链路在新宿主下全部恢复可用。
 > - **看板实时会话区在 `0.1.6` 下恢复显示**：按新宿主的 retain 生命周期先保留会话引用再借取 binding，不再出现「⚠️ 会话未接入（不在会话列表）」与「模型目录不可用」，真实 tokens / ctx / 模型可正常渲染；`0.1.5` 无 retain 时自动回退被动 binding，双向兼容。
 > - **批量接受的主管通知在 `0.1.6` 下恢复**：通知派发改为能力探测分流，单卡接受与批量接受同形路径一并修复。
 > - **并发槽位耗尽给出可操作提示**：`0.1.6` 引入子代理激活上限（默认 8 个活跃 continuable 子代理），容量耗尽或冷恢复被拒时不再只透出英文错误码。
 > - **看板刷新按钮重置自动刷新倒计时**：点击刷新后倒计时立即回到完整周期，不再沿旧终点继续递减。
 > - **「定义/润色」复制模板改写为自述式主管指令**：标题标明由主管处理，明确接收者角色、下一步动作与本次边界（仅处理定义/润色，不执行代码、不推进状态或版本）。
 >
-> **✅ DSH 版本兼容性（重点）**：v0.15.0 **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.6-alpha.2`**。本次周期在 `0.1.6-alpha.2` 与 `0.1.5-rc.2` 两个宿主版本上做了**双向兼容**实测：`0.1.6-alpha.2` 上完成会话导航/focus、实时会话区、批量接受通知与并发槽位提示的实机验证；`0.1.5-rc.2` 上完成被动 binding 回退路径的实机验证（无 retain 时不破坏既有行为）。更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但未在本次周期复跑。
+> **✅ DSH 版本兼容性（重点）**：v0.16.0 **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.7-rc.2`**。**本周期（g-351）实测的双宿主对照**：`0.1.7-rc.1` 上验证宿主 settings 服务换代后的**能力探测分流**——新 API 存在则走「profile 条目 Config → 设置表单」，实测 `sctx.settings.register is not a function` 降级告警消失、profile 全局默认（如 `subagentMode`）经 profile patch 真正生效（`mode_source=global`），`graph_*` 工具计数仍为 44、`/api/dsh-graph*` 端点注册齐全；`0.1.6-alpha.2` 上重跑旧路径，确认 namespace 注册（`$DSH_HOME/settings.yaml`）与 profile 全局默认照常生效，**零退化**。此前版本（`0.1.5-rc.2` 及 `0.1.2-alpha.x` ~ `0.1.5` 系列）按工具与提示词契约向后兼容，但**未在本周期复跑**。
 >
-> **✅ 跨平台（v0.11.0 起）**：Windows 原生不可用问题已修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过；**v0.15.0 已在原生 Windows 上重跑 T1–T5 门禁并全绿**（通过 10 项 / 失败 0 项 / 告警 0 项）。
+> **✅ 跨平台（v0.11.0 起）**：Windows 原生不可用问题已修复，并在原生 Windows（win32/x64）与 macOS（darwin/arm64）真机复验通过；**Windows 真机门禁最近一次全绿为上一版本 `v0.15.0` 周期**（T1–T5 通过 10 项 / 失败 0 项 / 告警 0 项）；**本版本 `v0.16.0` 的 Windows 真机门禁由负责人在本次发布前于原生 Windows 执行（发布红线 1），结论见 [`docs/release-checklist-v0.16.0.md`](docs/release-checklist-v0.16.0.md) §3**（本周期 Linux/WSL2 侧已实测）；**不予预先声明 PASS**——若发布时该门禁未执行，则以「**Windows 未验证**」如实标注。**macOS 门禁执行件已就绪（v0.16.0）**：`scripts/macos-smoke-test.mjs`（M1–M4 专检 + 转发既有 T1–T5）已随本版本落地，**macOS 真机结论待回填**（命令序列与回填表见 [`docs/macos-gate.md`](docs/macos-gate.md)）——**本版本不预先声明 macOS 已验证**，上一处 macOS 真机复验仍为 `v0.11.0`。
 >
 > **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（例如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；**由 `process.cwd()` 推导的路径不受影响**。
 
-单包发布：npm 包名 `dsh-graph`（当前版本 v0.15.0）。一个包同时提供：
+单包发布：npm 包名 `dsh-graph`（当前版本 v0.16.0，与 `package.json` / `PLUGIN_VERSION` 一致）。一个包同时提供：
 
 - 面向 agent 的 44 个 `graph_*` 工具（覆盖目标全生命周期）+ `/api/dsh-graph*` REST 端点；
 - 浏览器二维泳道看板（`lib/client.js`），渲染进 `conversation.view` 槽。
@@ -54,9 +56,9 @@ dsh plugin --profile <name> add dsh-graph
 >
 > **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
-> **✅ DSH 版本兼容性（重点）**：v0.15.0 **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.6-alpha.2`**（最新的 `0.1.6-alpha.2` 已适配并实测通过）。本次周期在 `0.1.6-alpha.2` 与 `0.1.5-rc.2` 两个宿主版本上做了**双向兼容**实测：`0.1.6-alpha.2` 上完成会话导航/focus、实时会话区、批量接受通知与并发槽位提示的实机验证；`0.1.5-rc.2` 上完成被动 binding 回退路径的实机验证（无 retain 时不破坏既有行为）。更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但未在本次周期复跑。
+> **✅ DSH 版本兼容性（重点）**：v0.16.0 **支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.7-rc.2`**（最新的 `0.1.7-rc.2` 已适配并实测通过 —— 2026-09-25 用 v0.16.0 发布物 tarball 在 Linux/WSL2 上跑 T1–T5 全绿 **10/0/0**，并逐包比对 `0.1.7-rc.1`→`rc.2`：子代理目录层（`dsh-session-projection`）零代码变化、`listProviders`/`listModels`/`resolveModelInfo` 签名逐字未变、客户端只用到的 `MarkdownText` 仍在；`0.1.7-rc.1` 为 g-351 双宿主对照实测；`0.1.6-alpha.2` 在本周期同批复跑确认零退化）。宿主 settings 服务在 `0.1.7` 线换成「profile 条目 Config → 设置表单」形态（旧 `settings.register` 已移除），插件改为**能力探测分流**：新 API 存在走新路径，否则回落旧 namespace 注册；两条路径均在隔离实例上实机验证。`0.1.5-rc.2` 及更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但**未在本周期复跑**。
 >
-> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证**（三平台使用同一安装包）。**本版本（v0.15.0）已在 Linux（WSL2）与原生 Windows 上重新实测**——Windows 侧 T1–T5 分层门禁在原生 `win32/x64` 上全绿（**通过 10 项 / 失败 0 项 / 告警 0 项**，含跨进程并发 CAS「4 抢 1」）；**macOS 最近一次真机复验为 `v0.11.0`**，自 `v0.11.0` 以来 `core/platform.ts` 与文件锁相关代码零改动。此前 Windows 不可用的两类问题——① `core/ops.ts` 使用 POSIX 专用文件锁常量（目录当 fd 打开、`O_DIRECTORY`、`O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在 **v0.11.0** 修复，并在原生 Windows 与 macOS 真机复验通过。**已知限制**：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
+> **平台范围**：**Linux（WSL2）、原生 Windows、macOS**（三平台使用同一安装包；macOS 最近一次真机复验为 `v0.11.0`，自 `v0.11.0` 以来 `core/platform.ts` 与文件锁相关代码零改动）。**本版本 `v0.16.0` 已在 Linux（WSL2）实测**；**macOS 门禁执行件已就绪（v0.16.0）** —— [`scripts/macos-smoke-test.mjs`](scripts/macos-smoke-test.mjs) 提供四项 macOS 专检（退化构建路径 / APFS 大小写探针 / 软链 root 边界 / Linux-only 假设扫描）并转发既有 `win-smoke-test.mjs` 的 T1–T5，**macOS 真机结论待回填**（命令序列与回填表见 [`docs/macos-gate.md`](docs/macos-gate.md)），**本版本不预先声明 macOS 已验证**；**Windows 真机门禁（T1–T5）由负责人在本次发布前于原生 Windows 执行 `node win-smoke-test.mjs --tarball dsh-graph-0.16.0.tgz`，结论见 [`docs/release-checklist-v0.16.0.md`](docs/release-checklist-v0.16.0.md) §3**——**本次不预先声明 PASS（红线 1）**；若发布时未执行该门禁，则以「**Windows 未验证**」如实标注。此前 Windows 不可用的两类问题——① `core/ops.ts` 使用 POSIX 专用文件锁常量（目录当 fd 打开、`O_DIRECTORY`、`O_NOFOLLOW`）；② 宿主提供的核心包被同时写进 `dependencies` 与 `peerDependencies`——已在 **v0.11.0** 修复，并在原生 Windows 与 macOS 真机复验通过。**已知限制**：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响（Node 返回物理路径），但建议一律使用真实路径（后续版本继续跟进）。
 
 ## 提供的工具
 
@@ -89,9 +91,25 @@ dsh plugin --profile <name> add dsh-graph
 
 ![目标详情弹窗](screenshot/screenshot-2.png)
 
+## 侧边栏用法
+
+右侧栏的「**看板**」与会话页的「**看板**」页签是**同一份实现**——同一个看板组件、同一套头部与窄档逻辑，**两侧完全一致**（零 host 门控），任选其一即可。
+
+- **入口**：在会话里打开右侧栏 → 点「看板」磁贴；打开的看板面板会成为右侧栏顶部的一个页签常驻，随时切回。
+- **`⋯ 工具`**：刷新 / 标签筛选 / 记忆 / 项目知识库（共享条目）/ 看板设置 / 已归档。工具条按**头部实测宽度装不下**自动折叠为这一项（不是写死的窗口断点）。
+- **`[🏷️]` 版本管理**：角落的方形图标按钮（可访问名称为「🏷️ 版本管理」），点开版本管理抽屉；紧邻其右是**同一行等高**的 `创建版本`。
+- **版本选择器**：位于泳道行 `[+]`（新建目标）**左侧**，切换当前显示的泳道（具体版本 / Backlog / 独立目标）。
+- **窄档行为**（分档依据是**看板根容器实测宽度**，与窗口宽度无关——右侧栏被宿主拖窄时同样生效）：
+  - **`≥ 480px`（宽档）**：多泳道横向并排，各版本 / Backlog / 独立目标可同时查看；
+  - **`< 480px`（单泳道档）**：阶段列由横向并排改为**纵向堆叠**，泳道内容由版本选择器决定（**具体版本 / Backlog / 独立目标三选一**）；该档**没有版本折叠开关**（收起来等于空板），并同时**把工具条强制折叠为「⋯ 工具」**、**隐藏 DEBUG 行**。
+
+下图为右侧栏「看板」面板（虚构演示数据 nebula-notes，宽度落在 `< 480px` 单泳道档：阶段列纵向堆叠、工具条折叠为「⋯ 工具」、DEBUG 行按规则隐藏；「确认」列头右侧即 `✅ 批量接受` 入口）：
+
+![侧边栏看板](screenshot/sidebar-kanban.png)
+
 ## 数据目录
 
-`<workspace>/.dsh-graph`：跟随调用会话的 workspace（`session.header.cwd`），数据落在每个项目自己的 `.dsh-graph`，git 友好。包含 `backlog/`、`goals/`、`versions/`、`events.jsonl`（事件流，唯一事实源）等。首次触达某 workspace 自动生成骨架，幂等、不建 demo 数据；`.dsh-graph` 也可配置为独立 Git 仓库（见 `docs/` 与 `scripts/migrate-dsh-graph-repo.sh`）。
+`<workspace>/.dsh-graph`：跟随调用会话的 workspace（`session.header.cwd`），数据落在每个项目自己的 `.dsh-graph`，git 友好。包含 `backlog/`、`goals/`、`versions/`、`events.jsonl`（事件流，唯一事实源）等。首次触达某 workspace 自动生成骨架，幂等、不建 demo 数据；`.dsh-graph` 也可配置为独立 Git 仓库（见 `docs/` 与 `scripts/archived/migrate-dsh-graph-repo.sh`）。
 
 ## 仓库结构（monorepo）
 
@@ -107,9 +125,11 @@ node --test core/tests/*.test.ts   # 全量测试
 
 # 复现 README 截图（虚构演示数据，写仓库外 /tmp，不提交 mock .dsh-graph）：
 node scripts/dsh-graph-mock-seed.mjs --validate               # 生成 nebula-notes mock 数据
-CWD=/tmp/dsh-graph-mock-demo bash scripts/dev-dsh-instance.sh run --port 3082  # 测试实例（开「看板」tab）
+CWD=/tmp/dsh-graph-mock-demo bash scripts/archived/dev-dsh-instance.sh run --port 3082  # 测试实例（开「看板」tab）
 # 截图：同一次 seed、同一实例、固定视口——看板全景 → screenshot/screenshot-1.png；
 # 点击看板上的目标卡片打开详情弹窗 → screenshot/screenshot-2.png
+# 侧边栏看板 → screenshot/sidebar-kanban.png：同一实例里打开右侧栏 → 点「看板」磁贴，
+# 再把右侧栏拖到 <480px（单泳道档，工具条折叠、DEBUG 行自动隐藏）后截「看板」面板
 ```
 
 ## License

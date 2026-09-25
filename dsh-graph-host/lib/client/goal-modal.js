@@ -1108,6 +1108,9 @@
       const [postponeNote, setPostponeNote] = React.useState(null);
       const goalFile = String(state.data?.goalFile ?? "");
       const isBacklogGoal = goalFile.includes("/backlog/") || goalFile.includes("\\\\backlog\\\\");
+      // g-352：独立目标 = 不在 backlog、也不属于任何版本（meta.version 为空）。
+      // 用于把「独立目标」从排期选项里去掉（已在独立目标上再选独立目标是空操作）。
+      const isStandaloneGoal = !isArchived && !isBacklogGoal && !state.data?.meta?.version;
       const canPostpone = !isArchived && !isBacklogGoal && Boolean(state.data?.meta?.status);
       // g-287：历史遗留的「非 backlog draft」转入规划入口。
       // 该状态在 g-287 之后不再由自然路径产生（独立/版本目标创建即 planning），此入口纯为
@@ -1377,12 +1380,18 @@
                     onClick: () => { setPostponeConfirm(true); setPostponeNote(null); },
                   }, dgT("goal.postpone")))
               : null,
-            // g-306：backlog 目标「排期」按钮（与暂缓按钮位置对应），点击弹出版本选择器
-            isBacklogGoal && !isArchived
+            // g-306：目标「排期」按钮（与暂缓按钮位置对应），点击弹出版本选择器。
+            // g-352：从「仅 backlog 目标」放开到**任意非归档目标**（判据 4）——
+            // backlog → 版本/独立目标 = 排期（draft→planning）；版本↔版本 / 版本↔独立目标 =
+            // 归属变更、生命周期状态保持（语义均由 core moveGoal 决定，客户端只发同一请求）。
+            // 反直觉项定策：不往每张看板卡片标题栏再加「排期」按钮（那会与「窄宽度收窄工具条」目标相悖）；
+            // 排期入口保持在本详情弹窗的动作条里，卡片本身不再新增按钮。
+            !isArchived
               ? h(VersionSelectorButton, {
                   goalId: props.id,
                   goalVersion: state.data?.meta?.version ?? null,
                   activeVersions: props.activeVersions ?? [],
+                  allowStandalone: !isStandaloneGoal,
                   onScheduled: () => { load(); props.onArchived?.(); },
                 })
               : null,
@@ -1413,7 +1422,7 @@
             planEntryNote ? h("span", { style: { ...S.meta, fontSize: 11, marginLeft: 4 } }, planEntryNote) : null);
 
       return h(React.Fragment, null,
-        h("div",
+        dgOverlay(
           { style: S.overlay, ...backdropGuard },
           // g-158：弹窗顶部边框使用类型色（与卡片左侧色条、标题 badge 同色）
           h("div", { style: { ...S.modal, borderTop: `3px solid ${currentTypeColor}` }, onClick: (e) => e.stopPropagation() },
