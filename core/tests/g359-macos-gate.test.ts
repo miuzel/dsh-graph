@@ -1,7 +1,7 @@
 /**
  * core/tests/g359-macos-gate.test.ts
  *
- * g-359 质量判据 1/2 的自动化守卫。**v0.17.0（g-362）起 import 指向合并后的跨平台执行件**
+ * g-359 质量判据 1/2 的自动化守卫。**v0.16.1（g-362）起 import 指向合并后的跨平台执行件**
  * `scripts/platform-smoke-test.mjs`：macOS 与 Linux 门禁已合并为一份实现，原
  * `scripts/macos-smoke-test.mjs` 降为转发 shim（其被取代的实现归档在 `scripts/archived/`）。
  *   - `buildForwardArgs` / `probeCaseAliasing` / `collectScanFiles` / `LINUX_ONLY_PATTERNS` /

@@ -2084,7 +2084,7 @@ test("g-352 att-005：会话内看板页签签名 == 冻结 fixture，且 fixtur
       assert.fail("拒绝覆盖冻结基线：需 G352_SIG_ACK=1 显式确认（或 G352_SIG_DUMP=<其他路径> 只导出做 diff）");
     }
     const head = [
-      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-366 重新冻结：窄档搜索改走单列聚合泳道，非搜索态渲染契约逐字未变 ⇒ content-sha 未变）",
+      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.16.1 重新冻结：仅 constants 的 PLUGIN_VERSION 0.16.0→0.16.1 变更，渲染契约逐字未变 ⇒ content-sha 未变；上一轮为 g-366 窄档搜索改走单列聚合泳道）",
       `# source-commit: ${execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot(), encoding: "utf8" }).trim()}`,
       `# source-sha256: ${sourceFingerprint()}`,
       `# source-files: ${SIG_SOURCE_FILES.join(",")}   # 源 hash 覆盖的模块（决定头部/泳道渲染）`,

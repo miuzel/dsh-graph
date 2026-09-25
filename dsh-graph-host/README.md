@@ -28,9 +28,19 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 > **环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。
 >
+> **当前版本**：`v0.16.1`（与 `package.json` 的 `version`、看板 `PLUGIN_VERSION` 三处一致；发布门禁红线 2）。
+>
 > **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
 > **宿主兼容声明**：`engines.dsh` 声明 DSH 兼容范围 `>=0.1.5-rc.2 <0.1.8-0`（与 `@deepseek-ai/dsh-settings` peer `^0.1.5-rc.2` 取交集后自洽；上界 `-0` 表示排除 `0.1.8` 的**一切预发布与正式版**——下代宿主须重新验证后再放宽），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取（市场读到的是 registry 上**已发布**版本的清单且有缓存 ⇒ 本声明自**包含它的版本发布后**才生效）；市场的判定是 `engines.dsh` 与各 peer 范围的**合取**，且发现阶段**不读** `peerDependenciesMeta.optional`。
+>
+> ### 🚀 v0.16.1 新功能
+>
+> - **声明宿主兼容范围 `engines.dsh`**：包清单新增 `"dsh": ">=0.1.5-rc.2 <0.1.8-0"`（上界 `-0` 表示排除 `0.1.8` 的**一切预发布与正式版**），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取；该声明自**包含它的版本发布后**才在市场上生效（市场读的是 registry 上已发布版本的清单且有缓存），判定口径为 `engines.dsh` 与各 peer 范围的**合取**。
+> - **侧边栏窄档搜索改为单列「搜索结果」聚合泳道**：窄档（<480px）下激活搜索时，看板不再退出单泳道收窄、退回横向多泳道「全宽」网格；命中卡（含跨分区命中）聚合进单列「搜索结果」泳道，既保住 g-233「搜索命中不得被视图过滤藏掉」，又保持窄档纵向单列、零横向溢出。宽档（≥480px）搜索行为与视觉**零变化**（不新增状态真源、不新增持久化键）。
+> - **macOS / Linux 门禁合并为一份跨平台执行件**：`scripts/platform-smoke-test.mjs` 成为**唯一一份** macOS/Linux 门禁实现——转发既有 `win-smoke-test.mjs` 的 T1–T5（在原生 macOS/Linux 上取得**平台效力**：T3–T5 真跑）+ 六项平台无关探针 P1–P6 + 平台无关审计 M4；旧路径 `scripts/macos-smoke-test.mjs` 降为一行转发 shim、原实现归档在 `scripts/archived/`，命令序列、逐项判读与回填表见 `docs/platform-gate.md`。（v0.16.0 小节原写「`v0.17.0` 起」，本版按实际归入校正为 `v0.16.1`。）
+>
+> **⚠️ Windows / macOS 原生门禁：本版未执行，不得视为 PASS**：`v0.16.1` **未**在原生 Windows/macOS 上执行门禁——**负责人裁定省略**，理由为**本版无跨平台敏感内容**（`g-365` = 元数据与文档、`g-366` = 纯客户端渲染逻辑、`g-362` = 门禁执行件重构，均未触碰文件锁与平台判定路径）；Linux/WSL2 侧已实跑全绿。最近一次真机结论出自 **v0.16.0 周期**：Windows 原生 `win32/x64` PASS 通过 10/失败 0/告警 0，macOS `darwin/arm64` 专检 通过 2/失败 0/告警 3（转发 T1–T5 = 10/0/0）——出处 `docs/release-checklist-v0.16.0.md` §3 / §3.4。本版 Linux 门禁逐项结论见 `docs/release-checklist-v0.16.1.md`。
 >
 > ### 🚀 v0.16.0 新功能
 >
@@ -185,9 +195,19 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 > **Requirements**: Node.js ≥ 22 (includes precompiled core runtime).
 >
+> **Current version**: `v0.16.1` (consistent across `package.json` `version`, the board's `PLUGIN_VERSION`, and this README; release-gate red line 2).
+>
 > **Dependency Note**: Core packages provided by the DSH host (`@deepseek-ai/cordis` ^4.0.2, `@deepseek-ai/schemastery` ^3.18.2, `@deepseek-ai/dsh-settings` ^0.1.5-rc.2) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention), provided directly by the host runtime without peer dependency warnings during installation; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 >
 > **Host compatibility declaration**: `engines.dsh` declares the DSH range `>=0.1.5-rc.2 <0.1.8-0` (self-consistent with the `@deepseek-ai/dsh-settings` peer `^0.1.5-rc.2`; the `-0` upper bound excludes **every** `0.1.8` prerelease and final release — the next host generation must be re-verified before the range is re-opened). Host-aware markets such as dsh-market read it for card display and install/update pre-flight (**markets read the manifest of the *published* version, with caching — so this declaration takes effect once the version carrying it is published**); the market's verdict is a **conjunction** of `engines.dsh` and each peer range, and discovery does **not** honor `peerDependenciesMeta.optional`.
+>
+> ### 🚀 What's new in v0.16.1
+>
+> - **Declared host compatibility range (`engines.dsh`)**: the package manifest now carries `"dsh": ">=0.1.5-rc.2 <0.1.8-0"` (the `-0` upper bound excludes **every** `0.1.8` prerelease and final release), read by host-aware markets such as dsh-market for card display and install/update pre-flight; the declaration takes effect on the market only **once the version carrying it is published** (markets read the registry manifest of the published version, with caching), and the verdict is a **conjunction** of `engines.dsh` and each peer range.
+> - **Narrow-sidebar search now uses a single-column "Search results" aggregate lane**: in the narrow tier (<480px) an active search no longer drops out of the single-lane narrowing back into the horizontally scrolling full-width multi-lane grid; matching cards (including matches from other partitions) are aggregated into one "Search results" lane, which preserves the g-233 rule that **search hits must never be hidden by view filtering** while keeping the narrow tier a single vertical column with zero horizontal overflow. Wide tier (≥480px) search behavior and visuals are **unchanged** (no new state source, no new persisted key).
+> - **macOS / Linux gates merged into one cross-platform executor**: `scripts/platform-smoke-test.mjs` is now the **single** macOS/Linux gate implementation — it forwards the existing `win-smoke-test.mjs` T1–T5 (which gain **platform authority** on native macOS/Linux: T3–T5 really run) and adds six platform-agnostic probes P1–P6 plus the platform-agnostic audit M4; the old `scripts/macos-smoke-test.mjs` is reduced to a one-line forwarding shim with its implementation archived under `scripts/archived/`. Command sequence, per-item verdicts, and the back-fill table live in `docs/platform-gate.md`. (The v0.16.0 section originally said "from v0.17.0"; it is corrected here to `v0.16.1` to match the actual release vehicle.)
+>
+> **⚠️ Native Windows / macOS gate: not executed for this release — must not be read as PASS**: `v0.16.1` was **not** gated on native Windows/macOS — **the owner waived it**, on the grounds that **this release has no cross-platform-sensitive content** (`g-365` = metadata and docs, `g-366` = pure client-side rendering logic, `g-362` = gate-executor refactor; none of them touches the file-locking or platform-detection paths), and the Linux/WSL2 side was run in full. The most recent on-device verdicts come from the **v0.16.0 cycle**: native Windows `win32/x64` PASS 10 passed / 0 failed / 0 warnings, macOS `darwin/arm64` 2 passed / 0 failed / 3 warnings (forwarded T1–T5 = 10/0/0) — see `docs/release-checklist-v0.16.0.md` §3 / §3.4. Per-item Linux gate verdicts for this release are in `docs/release-checklist-v0.16.1.md`.
 >
 > ### 🚀 What's new in v0.16.0
 >
