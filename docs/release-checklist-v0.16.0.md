@@ -212,9 +212,10 @@ supervisor session（本轮不写剪贴板）；不可投递时**完整退回**�
 - [x] g-352 签名 fixture 随 `PLUGIN_VERSION` 变更**重新冻结**：正文（`content-sha256`
       `0e6b7094…`）与冻结基线**逐字节相同**，仅更新 `source-sha256` / `source-commit` 两行 provenance
       （维护者工具需显式 ack，已按 g-356 同一做法执行）
-- [ ] **Windows 真机门禁 T1–T5**（发布门禁红线 1）——**由负责人在原生 Windows 上执行，
-      结论待回填本文件 §3**；⚠️ **在回填之前不得对外声明 Windows 已验证**，缺失时按红线 1 标注
-      「**Windows 未验证**」
+- [x] **Windows 真机门禁 T1–T5**（发布门禁红线 1）——**已由负责人在原生 Windows 执行**
+      （2026-09-25，`win32/x64` / node `v24.13.0`）：被测产物 `fe852e23…`（488,218 B），
+      **通过 10 / 失败 0 / 告警 0**、退出码 0 ⇒ 红线 1 满足，**无需**「Windows 未验证」标注；
+      原始报告块已回填 §3.1
 - [x] tarball 已产出并记录 sha256（发布门禁红线 3）：发布树 `.worktrees/release-v0.16.0`
       （detached @ tag `v0.16.0`，`git describe --tags` = `v0.16.0`）内 `bash scripts/build.sh` 后
       `pnpm pack` ⇒ `dsh-graph-0.16.0.tgz`，**488,218 B**，sha256 **`fe852e23…`**（见 §3.2）
@@ -258,17 +259,28 @@ node win-smoke-test.mjs --static-only <解包后的包目录>
 > **T1/T2 平台敏感性最低，T4/T5 才是 Windows 真正要跑的。** Linux/WSL2 上取得的 PASS **不能替代**真机结论。
 > 本机预检（WSL2）已跑 T1 = PASS（见 §2），**但这不构成 Windows 结论**。
 
-### 3.1 真机门禁执行结果：**⏳ 待负责人回填**（2026-09-25 预置）
+### 3.1 真机门禁执行结果：**✅ PASS（2026-09-25，负责人在原生 Windows 执行）**
 
 | 项 | 值 |
 |---|---|
-| 是否已执行 | **⏳ 待回填**（决策 3：由负责人在原生 Windows 执行） |
-| 执行日期 | ⏳ 待回填 |
-| 平台 | ⏳ 待回填（期望 `win32/x64`） |
-| 宿主 DSH 版本 | ⏳ 待回填 |
-| 被测产物 | ⏳ 待回填（§3.2 的 tarball） |
-| 结果 | ⏳ 待回填（期望 `PASS 通过 N/失败 0/告警 0`，退出码 0） |
-| 若未执行 | **必须写「Windows 未验证」并同步 README 平台声明（红线 1 例外条款）** |
+| 是否已执行 | ✅ 已执行（决策 3：由负责人在原生 Windows 执行） |
+| 执行日期 | 2026-09-25 |
+| 平台 | `win32/x64`（**原生 Windows 真机**；node `v24.13.0`） |
+| 宿主 DSH 版本 | `0.1.7-rc.2`（`--dsh "npx -y @deepseek-ai/dsh@0.1.7-rc.2"`，与本版本 README 声明上界一致） |
+| 被测产物 | §3.2 的 tarball `dsh-graph-0.16.0.tgz` / **488,218 B** / sha256 **`fe852e23…`**（与 §3.2 逐位一致） |
+| 结果 | **PASS：通过 10 / 失败 0 / 告警 0**，退出码 0（T2 安装 → T1 静态 → T3 运行时含跨进程 CAS → T4 实例启动 → T5 REST 冒烟） |
+| 备注 | 执行期出现 1 条 Node 24 `DEP0190` 警告：来自**执行件** `win-smoke-test.mjs` 的 Windows 分支给 `spawnSync` 传 args 又 `shell=true`；已确认 `dist/` 内**零出现**（非发出去的代码），不影响结论，清理项挂 **g-362** |
+
+**负责人原始回传（逐字保留）**：
+
+```text
+dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.13.0
+安装来源=dsh-graph-0.16.0.tgz (实际版本 0.16.0)
+产物指纹=sha256:fe852e2353d5223ae6229bdc914eee32d8655df1c2fb96582a025dcd8e34f827  488218 B
+结果=PASS 通过10/失败0/告警0
+启动日志=C:\Users\mingxuan\AppData\Local\Temp\dsh-graph-win-smoke-1790319130406\_smoke\dsh-web.log
+```
+| 若未执行 | （本次**已执行**，此条不适用）若未执行则**必须写「Windows 未验证」并同步 README 平台声明（红线 1 例外条款）** |
 
 **为什么本次 Windows 门禁预期风险较低（但仍必须实测）**：`v0.11.0` 已修复并真机复验过 Windows 的
 两类致命问题（POSIX 专有锁常量、核心包重复声明）。自 `v0.11.0` 到 `v0.16.0`：
@@ -355,7 +367,7 @@ tarball（条目排序与 gzip 参数/头不同），`v0.15.0` 实测线上 414,
 
 > 红线 3「记录 sha256 对账」用于**跨机器传递**（本机 ↔ Windows）；对 **registry 侧**改用内容级判据。
 
-### 3.4 macOS 门禁（v0.16.0 新增执行件；结论待回填）
+### 3.4 macOS 门禁（v0.16.0 新增执行件；**2026-09-25 已在 Mac 上执行**）
 
 Mac 侧执行件为 [`scripts/macos-smoke-test.mjs`](../scripts/macos-smoke-test.mjs)（纯 Node、零第三方依赖，
 规避 macOS 自带 bash 3.2 的 bashism）：**转发**既有 `win-smoke-test.mjs` 的 T1–T5（不复制其逻辑），
@@ -367,9 +379,12 @@ coreutils < 9.6 的 Linux 用户都走这条，g-359 起有机器测试覆盖）
 
 | 项 | 值 |
 |---|---|
-| 是否已执行 | **⏳ 待回填**（负责人本周期在 Mac 上执行） |
+| 是否已执行 | ✅ 已执行（2026-09-25，负责人在 Mac 上；macOS **不属**发布红线，本次为附加证据） |
 | 被测产物 | §3.2 同一 tarball（sha256 `fe852e23…`）；宿主建议 `--dsh "npx -y @deepseek-ai/dsh@0.1.7-rc.2"` |
-| 结果 | ⏳ 待回填（M1/M2/M4 期望 PASS；M3 在非 darwin 上必然 WARN，属如实降级口径） |
+| 结果 | **PASS：Mac 专检 通过 2 / 失败 0 / 告警 3**，转发执行件 exit=0（转发部分 T1–T5 = **通过 10/失败 0/告警 0**，并带正确的跨平台免责声明「T3–T5 在非 win32 上不能替代 Windows 真机结论」） |
+| 执行环境 | `darwin/arm64` / node `v26.8.2`；被测产物同为 §3.2 的 `fe852e23…`（488,218 B） |
+| 告警明细 | **M2 真跑并给出实结论**：该卷**大小写不敏感**，仅大小写不同的 slug/id 会互相别名（`fileAliased=true sameInode=true dirAliased=true`）⇒ 记为**已知平台限制**；**M1/M3 未执行**（检出 `~/workspace/dsh-graph-test` 未构建 ⇒ 脚本按设计给 WARN 而非 FAIL）——如需真覆盖，须在该检出内 `pnpm install && pnpm build` 后重跑（`--skip-build` 会跳过 M1） |
+| 为何不改包内 README | 包内 README 现状（「macOS 最近一次真机复验为 `v0.11.0`，此后 `core/platform.ts` 与文件锁代码零改动」+「门禁执行件已就绪」）如实且不过度声明；**改动包内 README 即换包 ⇒ 已取得的 Windows 红线结论作废**，故 macOS 结果只落本清单与根 README |
 | 若未执行 | README 保持「macOS 门禁执行件已就绪 + 真机结论待回填」，**不得**声明 macOS 已验证 |
 
 ## 4. 发布操作
