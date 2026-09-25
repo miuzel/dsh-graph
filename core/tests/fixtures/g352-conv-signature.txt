@@ -1,6 +1,6 @@
-# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-358 重新冻结：无版本窄档默认落独立目标泳道，正文与 g-356 逐字相同 content-sha 未变）
-# source-commit: ba511ab1af08d21183907727ab7e4d60b5fbc7ea
-# source-sha256: ea33a330bfcfb38266bde72ac36ecd0a728cbd8a90a8f772166b509e82e24694
+# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.16.1 重新冻结：仅 constants 的 PLUGIN_VERSION 0.16.0→0.16.1 变更，渲染契约逐字未变 ⇒ content-sha 未变；上一轮为 g-366 窄档搜索改走单列聚合泳道）
+# source-commit: e3453867b3812d325342eca810ddde0b2a7aca01
+# source-sha256: 1efbf514c0472424a368744698af6db056a7b2fbd95426af91e15bcc1bd67bd5
 # source-files: kanban,constants,narrow-width,helpers   # 源 hash 覆盖的模块（决定头部/泳道渲染）
 # content-sha256: 0e6b7094deafa61e0525d617f792a8da30b9aeba1a3c72cb221ee4061f783ed3
 # board-width: 250

@@ -151,6 +151,8 @@
       'search.noResults': '未找到匹配',
       'search.fullText': '全文',
       'search.matchCount': '{count} 项匹配',
+      // g-366：窄档搜索激活时单列「搜索结果」聚合泳道的标题
+      'search.laneLabel': '搜索结果（{count}）',
 
       // === 目标详情弹窗 ===
       'modal.loadingDetail': '加载详情…',
@@ -1174,6 +1176,8 @@
       'search.noResults': 'No matches found',
       'search.fullText': 'Full text',
       'search.matchCount': '{count} matches',
+      // g-366: title of the single-column "search results" aggregate lane in narrow tier
+      'search.laneLabel': 'Search results ({count})',
 
       // === Goal detail modal ===
       'modal.loadingDetail': 'Loading details…',
