@@ -56,6 +56,9 @@
       // === 看板顶部/加载 ===
       'board.title': '看板',
       'board.tab': 'Kanban',
+      // g-330：右侧栏页签入口（方案 B）——页签 chip 标题与侧栏 guide 条目文案
+      'sidebar.tab.title': '看板',
+      'sidebar.guide.description': '在这个会话里查看和操作目标看板',
       'kanban.loading': 'dsh-graph 看板加载中…',
       'kanban.error.workspace': '⚠️ 无法确定工作区，已暂停看板请求。',
       'kanban.error.fetch': '看板数据获取失败：',
@@ -243,6 +246,19 @@
       'goal.scheduleSelectVersion': '选择目标版本',
       'goal.scheduleCancel': '取消',
       'goal.scheduleConfirm': '确认排期',
+      // g-352：排期的两种语义分别给期望结果——backlog→版本 = 排期（draft→planning）；
+      // 版本↔版本 = 归属变更、生命周期状态保持。
+      'goal.rescheduleSuccess': '✅ 已改为归属 {version}',
+      // g-352：窄宽度（<480px）工具条折叠容器
+      'toolbar.more': '⋯ 工具',
+      'toolbar.moreTooltip': '更多工具（收窄后折叠）',
+      'toolbar.moreTitle': '看板工具',
+      // g-352：单泳道档（g-356 起 <480px）的查看版本选择器
+      'view.pickVersion': '📋 {version}',
+      'view.pickVersionTooltip': '选择要查看的版本',
+      'view.allVersions': '全部版本',
+      // g-352（负责人裁决）：backlog 也可作为单版本档的一个「版本备选」（唯一泳道）。
+      'view.backlogLane': 'backlog',
       // g-287：历史遗留「非 backlog 草稿」转入规划入口（backlog 卡不显示，其正确路径是排期）
       'goal.planEntry': '🧭 转入规划',
       'goal.planEntryTooltip': '将该草稿目标转入规划（状态变为「规划中」，可开始收集/就绪/派发执行）',
@@ -384,7 +400,7 @@
       'exec.supervisorUnavailable': '⚠️ 会话服务不可用',
       'exec.supervisorNotConfigured': '⚠️ 未配置主管会话（project.yaml 的 supervisor.session）',
       'exec.requestCopied': '✅ 请求已复制到剪贴板，可在主管对话窗粘贴发送',
-      'exec.goToSupervisor': '发送给主管（复制请求）',
+      'exec.goToSupervisor': '发送给主管',
       'exec.askPm': '交给产品经理 Agent',
       'exec.objection': '⚠️ 主管已提出异议',
       'exec.polish': '📝 定义/润色',
@@ -406,6 +422,9 @@
       // g-272 att-002：定义/润色「发送给主管」路径的复制结果提示
       'exec.requestCopiedOpened': '✅ 请求已复制，已打开主管会话，请粘贴发送',
       'exec.autocopyFailedRequest': '⚠️ 自动复制失败，请手动复制下方请求',
+      // g-327：能直发时的如实反馈（不得复用「已复制…请粘贴发送」）
+      'exec.requestDelivered': '✅ 请求已直接发送给主管会话',
+      'exec.requestDeliveredOpened': '✅ 请求已直接发送给主管会话，已打开主管会话',
 
       // === 进执行列确认 ===
       'inProgress.title': '🚀 执行「{title}」',
@@ -536,6 +555,13 @@
       'settings.modeInherited': '（继承 profile 全局 / 系统默认：标准模式）',
       'settings.advanced': '高级/仅存储字段',
       'settings.supervisorAutomation': '主管自动化（高级/仅存储字段）',
+      'settings.reviewPolicyLabel': '分级评审策略 (review.policy)',
+      'settings.reviewPolicyAria': 'workspace 分级评审策略',
+      'settings.reviewPolicyInherit': '继承（未配置，按目标类型派生）',
+      'settings.reviewPolicyAuto': 'auto（自动：可走机器快速通道，命中门禁仍升级 strict）',
+      'settings.reviewPolicyStrict': 'strict（严格：必须走独立/人工评审）',
+      'settings.reviewPolicyNone': 'none（不评审：仅登记判定，不阻断交付）',
+      'settings.reviewPolicyHint': '未配置时按目标类型派生（patch/chore → auto，其余 → strict）；显式三值覆盖类型派生，但契约路径等机器门禁命中时仍强制 strict。',
       'settings.promptOverride': '补充提示词 workspace 覆盖',
       'settings.loading': '正在读取配置…',
       'settings.editHint': '编辑当前 workspace 的 .dsh-graph/project.yaml 安全配置；写回保留未知键与注释。',
@@ -579,6 +605,7 @@
       'settings.subagentPrompt': '子代理补充提示词',
       'settings.saveBtn': '保存',
       'settings.closeBtn': '关闭',
+      'settings.discardDirtyConfirm': '有未保存的修改，确认放弃？',
       'settings.saveFail': '保存失败：',
       'settings.loadFail': '加载配置失败：',
       'settings.pkLanesError': 'pk.lanes 必须是 >=1 的整数',
@@ -623,18 +650,18 @@
       'memory.btn': '🧠 记忆',
       'memory.deletedByUser': '用户在管理面板手动删除',
       'memory.standingLabel': '常驻记忆(≤200字)',
-      'memory.onDemandLabel': '按需记忆(≤500字)',
+      'memory.onDemandLabel': '按需记忆(≤1000字)',
       'memory.standing': '常驻记忆 (固定植入)',
       'memory.onDemand': '按需记忆 (分页检索)',
       'memory.searchPlaceholder': '搜索记忆内容…',
       'memory.standingHint': '💡【常驻记忆】：作为系统 Prompt 独立章节固定植入每个会话（单条硬上限 ≤ 200 字），适合记录工作区核心硬性约束与安全铁律。',
-      'memory.onDemandHint': '💡【按需记忆】：平时不植入会话、不占 token；仅在检索或手动调用时按需提取，适合技术方案决策与参考事实。',
+      'memory.onDemandHint': '💡【按需记忆】：平时不植入会话、不占 token；仅在检索或手动调用时按需提取（单条硬上限 ≤ 1000 字），适合技术方案决策与参考事实。',
       'memory.total': '共 {count} 条（第 {page} / {totalPages} 页）',
       'memory.addBtn': '＋ 新增记忆',
       'memory.collapseInput': '收起输入框',
       'memory.typeLabel': '类型：',
       'memory.standingType': ' 常驻记忆(≤200字)',
-      'memory.onDemandType': ' 按需记忆(≤500字)',
+      'memory.onDemandType': ' 按需记忆(≤1000字)',
       'memory.standingPlaceholder': '输入要沉淀的常驻约束（硬上限 200 字符）…',
       'memory.onDemandPlaceholder': '输入按需参考记忆…',
       'memory.charCount': '{count} / {limit} 字',
@@ -655,6 +682,7 @@
       'memory.toolsDisabledToast': '🔒 已禁用 Agent 记忆工具（纯手工管理模式）',
       'memory.toggleFail': '⚠️ 切换失败：',
       'memory.standingCharsExceeded': '⚠️ 常驻记忆硬上限为 200 字符，当前已输入 {count} 字',
+      'memory.onDemandCharsExceeded': '⚠️ 按需记忆硬上限为 {limit} 字符，当前已输入 {count} 字',
       'memory.loadFail': '⚠️ 加载失败：',
       'memory.networkError': '⚠️ 网络错误：',
       'memory.from': '来自: ',
@@ -1051,6 +1079,9 @@
       // === Kanban top/loading ===
       'board.title': 'Kanban',
       'board.tab': 'Kanban',
+      // g-330: right-sidebar tab entry (option B) — tab chip title and sidebar guide copy
+      'sidebar.tab.title': 'Kanban',
+      'sidebar.guide.description': 'View and manage the goal board in this session',
       'kanban.loading': 'dsh-graph board loading…',
       'kanban.error.workspace': '⚠️ Unable to determine workspace, board requests paused.',
       'kanban.error.fetch': 'Failed to fetch board data: ',
@@ -1238,6 +1269,19 @@
       'goal.scheduleSelectVersion': 'Select target version',
       'goal.scheduleCancel': 'Cancel',
       'goal.scheduleConfirm': 'Confirm schedule',
+      // g-352: the two schedule semantics get distinct expected outcomes — backlog→version =
+      // scheduling (draft→planning); version↔version = ownership change with status preserved.
+      'goal.rescheduleSuccess': '✅ Ownership changed to {version}',
+      // g-352: narrow-width (<480px) collapsed toolbar container
+      'toolbar.more': '⋯ Tools',
+      'toolbar.moreTooltip': 'More tools (collapsed when narrow)',
+      'toolbar.moreTitle': 'Board tools',
+      // g-352: single-lane tier (g-356: <480px) version picker
+      'view.pickVersion': '📋 {version}',
+      'view.pickVersionTooltip': 'Choose a version to view',
+      'view.allVersions': 'All versions',
+      // g-352 (owner ruling): backlog is also selectable as a single-version-tier lane alternative.
+      'view.backlogLane': 'Backlog',
       // g-287: entry to move a legacy non-backlog draft goal into planning
       // (not shown for backlog cards — their correct path is scheduling)
       'goal.planEntry': '🧭 Move to planning',
@@ -1380,7 +1424,7 @@
       'exec.supervisorUnavailable': '⚠️ Session service unavailable',
       'exec.supervisorNotConfigured': '⚠️ Supervisor session not configured (project.yaml)',
       'exec.requestCopied': '✅ Request copied to clipboard, paste in supervisor chat',
-      'exec.goToSupervisor': 'Send to supervisor (copy request)',
+      'exec.goToSupervisor': 'Send to supervisor',
       'exec.askPm': 'Delegate to PM Agent',
       'exec.objection': '⚠️ Supervisor raised an objection',
       'exec.polish': '📝 Define/Polish',
@@ -1402,6 +1446,9 @@
       // g-272 att-002: copy-result hints for the define/polish "send to supervisor" path
       'exec.requestCopiedOpened': '✅ Request copied, supervisor session opened — paste to send',
       'exec.autocopyFailedRequest': '⚠️ Auto-copy failed, please copy the request below manually',
+      // g-327: honest feedback when the request is delivered straight to the supervisor session
+      'exec.requestDelivered': '✅ Request sent directly to the supervisor session',
+      'exec.requestDeliveredOpened': '✅ Request sent directly to the supervisor session — session opened',
 
       // === In Progress prompt ===
       'inProgress.title': '🚀 Execute "{title}"',
@@ -1532,6 +1579,13 @@
       'settings.modeInherited': '(Inherit profile-wide / system default: standard mode)',
       'settings.advanced': 'Advanced / storage-only fields',
       'settings.supervisorAutomation': 'Supervisor automation (advanced / storage-only fields)',
+      'settings.reviewPolicyLabel': 'Graded review policy (review.policy)',
+      'settings.reviewPolicyAria': 'Workspace graded review policy',
+      'settings.reviewPolicyInherit': 'Inherit (unset; derived from goal type)',
+      'settings.reviewPolicyAuto': 'auto (automatic: fast-track eligible, gate hits still escalate to strict)',
+      'settings.reviewPolicyStrict': 'strict (independent or human review required)',
+      'settings.reviewPolicyNone': 'none (no review: decision recorded only, delivery not blocked)',
+      'settings.reviewPolicyHint': 'When unset, the policy is derived from the goal type (patch/chore -> auto, otherwise -> strict). An explicit value overrides that derivation, but machine gates such as contract paths still force strict.',
       'settings.promptOverride': 'Workspace prompt override',
       'settings.loading': 'Loading config…',
       'settings.editHint': 'Edit workspace .dsh-graph/project.yaml safe config; preserves unknown keys and comments on save.',
@@ -1575,6 +1629,7 @@
       'settings.subagentPrompt': 'Subagent supplementary prompt',
       'settings.saveBtn': 'Save',
       'settings.closeBtn': 'Close',
+      'settings.discardDirtyConfirm': 'You have unsaved changes. Discard them?',
       'settings.saveFail': 'Save failed: ',
       'settings.loadFail': 'Failed to load config: ',
       'settings.pkLanesError': 'pk.lanes must be an integer >= 1',
@@ -1619,18 +1674,18 @@
       'memory.btn': '🧠 Memory',
       'memory.deletedByUser': 'User manually deleted this from the management panel',
       'memory.standingLabel': 'Standing memory (≤200 chars)',
-      'memory.onDemandLabel': 'On-demand memory (≤500 chars)',
+      'memory.onDemandLabel': 'On-demand memory (≤1000 chars)',
       'memory.standing': 'Standing (Fixed implant)',
       'memory.onDemand': 'On-demand (Paginated retrieval)',
       'memory.searchPlaceholder': 'Search memory content…',
       'memory.standingHint': '💡[Standing]: Implanted as a dedicated system prompt section in every session (≤200 chars per entry). Suitable for core constraints and safety rules.',
-      'memory.onDemandHint': '💡[On-demand]: Not implanted, no token usage; extracted only on retrieval or manual call. Suitable for technical decisions and reference facts.',
+      'memory.onDemandHint': '💡[On-demand]: Not implanted, no token usage; extracted only on retrieval or manual call (hard limit 1000 chars per entry). Suitable for technical decisions and reference facts.',
       'memory.total': '{count} total (Page {page} / {totalPages})',
       'memory.addBtn': '＋ Add Memory',
       'memory.collapseInput': 'Collapse input',
       'memory.typeLabel': 'Type: ',
       'memory.standingType': ' Standing (≤200 chars)',
-      'memory.onDemandType': ' On-demand (≤500 chars)',
+      'memory.onDemandType': ' On-demand (≤1000 chars)',
       'memory.standingPlaceholder': 'Enter standing constraint (hard limit 200 chars)…',
       'memory.onDemandPlaceholder': 'Enter on-demand reference memory…',
       'memory.charCount': '{count} / {limit} chars',
@@ -1651,6 +1706,7 @@
       'memory.toolsDisabledToast': '🔒 Agent memory tools disabled (manual-only mode)',
       'memory.toggleFail': '⚠️ Toggle failed: ',
       'memory.standingCharsExceeded': '⚠️ Standing memory hard limit is 200 chars, current input is {count} chars',
+      'memory.onDemandCharsExceeded': '⚠️ On-demand memory hard limit is {limit} chars, current input is {count} chars',
       'memory.loadFail': '⚠️ Load failed: ',
       'memory.networkError': '⚠️ Network error: ',
       'memory.from': 'From: ',

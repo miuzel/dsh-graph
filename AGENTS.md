@@ -34,11 +34,23 @@ pnpm build          # or: bash scripts/build.sh
 
 This runs `sync-core.sh` (core/*.ts → dist/core/*.js), `build-client.sh` (client modules → dist/lib/client.js), and copies all release assets to `dist/`.
 
+**Atomic publish (g-348)**: `build.sh` never wipes the live `dist/`. All artifacts are first assembled in a staging root inside the repository (`.dist-stage.XXXXXX/`, same filesystem as `dist/`); only after every step succeeds is the tree switched with a single `mv -T --exchange` (`renameat2(RENAME_EXCHANGE)`). A failed build leaves the previous `dist/` byte-for-byte intact and removes the staging root via an EXIT trap. Where `mv --exchange` is unavailable (needs GNU coreutils ≥ 9.6; macOS/BSD), it falls back to two renames and warns on stderr. `DIST_DIR` / `CORE_DIST` let `sync-core.sh` and `build-client.sh` write into the staging root; their standalone defaults are unchanged.
+
 ### Verification
 After modifying source and rebuilding:
 1. Run `node --check dist/lib/client.js` to verify syntax
 2. Run the full test suite: `node --test core/tests/*.test.ts`
 3. Verify pack: `cd dist && pnpm pack --dry-run`
+
+## Build Isolation（构建隔离：禁止在主树跑实验性构建）
+
+**实验性构建禁止在主树进行 —— 一律在隔离 worktree 或仓库内私有副本中进行。**
+
+- 主树 `dist/` 是**正在运行的宿主的资产来源**：宿主对 `dist/prompts/*.md` 等资产是**每次调用现读**（非启动缓存）。在主树跑构建会与运行中的宿主、以及任何会读 prompt 资产的 worker 争用该目录；历史上由此产生过 `dsh-graph prompt asset missing or unreadable: guide-hint.zh.md`，并**直接终止进行中的轮次**（g-346 att-001/att-002 均因此静默死亡、零提交）。
+- 验证构建请用专属 worktree（`.worktrees/g-<goal>-att-<NN>`）或 `tmp/` 下的私有副本；主树只在发布/复核的明确时点构建。
+- `pnpm typecheck` 会连带触发本包 `prepare`（= 完整构建）⇒ 在主树改用 `./node_modules/.bin/tsc --noEmit -p tsconfig.json`。
+- g-348 的原子发布保护的是「读者的可读性」，**不改变**本条纪律：原子发布消除的是构建自身的窗口，而「不要在主树跑实验构建」避免的是与运行中宿主的一切争用。
+- 回归守卫：`core/tests/g348-atomic-build.test.ts`（结构性守卫禁止对活动 `dist` 执行 `rm -rf`；3 个并发读者 × 3 轮构建断言 0 缺失；并把「改回旧模式」的负向对照钉住 ⇒ 人为回退必红）。
 
 ## Development Workflow
 
@@ -62,48 +74,11 @@ Examples: `.worktrees/g-125-att-03`, `.worktrees/g-163-att-03`.
 - Do not use ambiguous names such as `.worktrees/att-003`, `.worktrees/g165-att001`, or names that omit the goal id.
 - Existing active/review worktrees are not renamed automatically; apply this convention to new attempts and explicit follow-up work.
 
-## Isolated Dev/Test dsh Instance (two profiles)
+## Isolated Dev/Test dsh Instance
 
-Development and verification run in a profile that is **fully isolated** from the main
-dsh, so an in-progress plugin can never break the production GUI.
-
-- **Main web profile** (`dsh --profile web`, port 3080) uses the **published** `dsh-graph`
-  npm package.
-- **Test profile** (`dsh --profile dsh-graph-test`, port 3082) binds the **local**
-  `dsh-graph-host` via `link:` — live dev/verification always happens here.
-- The two are switched and managed by `scripts/dev-dsh-instance.sh` (self-contained,
-  idempotent, default values overridable via env vars):
-
-```sh
-bash scripts/dev-dsh-instance.sh run [--port N] [--host H] [--open]  # setup + start test instance (default 3082)
-bash scripts/dev-dsh-instance.sh setup            # create/install profile only, don't start
-bash scripts/dev-dsh-instance.sh main-published   # point main profile at published dsh-graph (^0.11.0) + reinstall
-bash scripts/dev-dsh-instance.sh main-dev         # point main profile back at local link: dev host
-bash scripts/dev-dsh-instance.sh status           # show both profiles' dsh-graph dep + port usage
-```
-
-### Development loop
-
-- **Node-side changes** (`dsh-graph-host/index.js`, `core/*.ts`, `cordis.patch.yml`):
-  the test profile references `dist/` via `link:`, so re-running `run` picks up the
-  latest source — no reinstall needed (`setup` is just idempotent write + `pnpm install`).
-  After changing `core/*.ts`, rebuild with `pnpm build` to regenerate `dist/core/*.js`.
-- **Browser/kanban changes** (`dsh-graph-host/lib/client/*.js`): these are source modules.
-  Per the Generated File Policy above, never edit `dist/lib/client.js` directly. Rebuild and
-  refresh the **test instance (3082)** page:
-
-```sh
-pnpm build
-node --check dist/lib/client.js
-node --test core/tests/*.test.ts
-```
-
-  dsh-graph's own client bundle has no live-reload watcher, so it's "rebuild + refresh".
-- **Test instance isolation:** `.dsh-graph` data lives under `~/.dsh/dev-workspace/dsh-graph-test/.dsh-graph`,
-  separate from the main repo's data — the g-149 canonical root logic does not merge these.
-- **Main profile:** only switched via `main-published` / `main-dev`. After switching, the
-  main GUI (3080) must be restarted/refreshed to load the new version. Always verify in the
-  test instance first, then switch the main profile.
+开发/验证在**与主 dsh 完全隔离**的实例中进行：隔离边界是 **`DSH_HOME`**（默认 `./tmp/dsh-test/<稳定版本>/home`，workspace 默认 `./tmp/dsh-test/<完整版本>/workspace`），主 GUI（3080）不受影响。
+启动：`bash scripts/dsh-test-web.sh <DSH版本> [--port PORT] [--host HOST] [--host-dir PATH] [--proxychains] [--skip-install]`（默认端口 3082；拒绝端口 3080 与受管参数透传）；插件经 `link:` 指向 `--host-dir`（默认 `dist/`），改完源码须先 `pnpm build`。
+参数表、开发回路、看板数据落点与已归档的 `dev-dsh-instance.sh` 说明见 [`docs/dev-instance-guide.md`](docs/dev-instance-guide.md)。
 
 ## 发布门禁（Release Gate）
 
@@ -130,11 +105,9 @@ node --test core/tests/*.test.ts
 
 ## Harness Text-File Editing Notes
 
-- Before using `edit` or `write` on an existing text file, always read it first; otherwise the tool may trigger "edit requires reading ... first".
-- In read output such as `132:     text`, `132:` is tool-added line-number metadata, and the first space after the colon is also a separator; neither belongs to the file content. Match `old_string`/`new_string` against the actual body text exactly; copy indentation and spaces only from the body after that separator, never the line number or separator space. If `old_string` does not match, re-read the surrounding content and adjust rather than retrying blindly.
-- For multiline `edit`, read output adds a line number, colon, and exactly one separator space to every line. When constructing multiline `old_string`/`new_string`, remove exactly that one separator space from every line, including the second and later lines after each `\n`; preserve any remaining spaces that belong to the body. This also applies to blank or whitespace-only lines: after each `\n`, discard the displayed line's first space before counting body spaces. For example, if read shows `132:    first` and `133:    second` (the first space after each colon is metadata, leaving three body spaces), use `   first\n   second`, not `   first\n    second`. Do not fix only the first line; if matching fails, re-read the surrounding multiple lines and check each line individually.
-- `grep` patterns are parsed as ripgrep regular expressions and are not automatically escaped. When searching for literal text, escape regex metacharacters yourself (for example, write `Card\(g,` rather than `Card(g,`), and escape `[ ] . ? + * | ^ $` and other metacharacters as needed.
-- These notes describe current Harness tool behavior; if the official read output format changes, follow the format actually returned at that time.
+- 改已有文本文件前先 `read`（否则 `edit`/`write` 会报 "edit requires reading ... first"）；`old_string`/`new_string` 只按**正文**逐字匹配——read 输出每行前缀的行号、冒号及其后**一个**分隔空格都不属于文件内容。
+- 多行匹配时每一行都要先去掉那一个分隔空格，只保留正文空格（空行/纯空白行、以及每个 `\n` 之后的行同样处理）：read 显示 `132:    first` 与 `133:    second`（冒号后第一个空格是工具添加的分隔符，正文是三格），故多行 `edit` 应写 `   first\n   second`，不是 `   first\n    second`；匹配失败先重读上下文逐行核对，不要只修第一行或盲目重试。
+- `grep` 的模式按 ripgrep 正则解析、不会自动转义：按字面搜索时自行转义元字符（如写 `Card\(g,`，以及 `[ ] . ? + * | ^ $` 等）。
 
 ## 协作规范导航
 

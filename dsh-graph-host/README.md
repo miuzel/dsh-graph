@@ -30,18 +30,20 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **依赖说明**：宿主提供的核心包（`@deepseek-ai/cordis` ^4.0.2、`@deepseek-ai/schemastery` ^3.18.2、`@deepseek-ai/dsh-settings` ^0.1.5-rc.2）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 >
-> ### 🚀 v0.15.0 新功能
+> ### 🚀 v0.16.0 新功能
 >
-> - **适配 DeepSeek Harness `0.1.6` 宿主 API 变更**：会话导航/focus 职责从 `sessions` 服务迁移到 `uiWorkspace`，统一走 `openSessionTarget`；子代理聚焦、点击「转到对话」、「交给产品经理」与用户反馈派发链路在新宿主下全部恢复可用。
+> - **适配 DeepSeek Harness `0.1.7` 宿主 settings 服务换代**：旧 `settings.register(namespace, schema)` API 已移除（实测告警 `sctx.settings.register is not a function`）。插件改为**能力探测分流**——服务提供 `register` 走旧 namespace 注册，否则回落 `describe` 表单投影（profile 条目 `Config`）；两条路径均在隔离实例上双宿主实机验证，且**零版本号比较**。
+> - **适配 `0.1.7` 子代理目录换代（两层）**：容器由 `subagentsByParent` 改为 `projectionsBySession[sid].values.subagentCatalog`，**entry 形状同时去掉 `kind`**（新形状 `{id, createdAt, mode, label?}`，新增 `mode:'unknown'`）。目录谓词改为形状探测（有 `kind` 走旧判定、无 `kind` 按 `id`），避免点「↗ 转到对话」**静默**打开父会话。
+> - （以下为此前版本的累积亮点）**适配 `0.1.6` 宿主 API 变更**：会话导航/focus 职责从 `sessions` 服务迁移到 `uiWorkspace`，统一走 `openSessionTarget`；子代理聚焦、点击「转到对话」、「交给产品经理」与用户反馈派发链路在新宿主下全部恢复可用。
 > - **看板实时会话区在 `0.1.6` 下恢复显示**：按新宿主的 retain 生命周期先保留（retain）会话引用再借取 binding，不再出现「⚠️ 会话未接入（不在会话列表）」与「模型目录不可用」，真实 tokens / ctx / 模型可正常渲染；`0.1.5` 无 retain 时自动回退被动 binding，双向兼容。
 > - **批量接受的主管通知在 `0.1.6` 下恢复**：通知派发改为能力探测分流，单卡接受与批量接受同形路径一并修复。
 > - **并发槽位耗尽给出可操作提示**：`0.1.6` 引入子代理激活上限（默认 8 个活跃 continuable 子代理），容量耗尽或冷恢复被拒时不再只透出英文错误码。
 > - **看板刷新按钮重置自动刷新倒计时**：点击刷新后倒计时立即回到完整周期，不再沿旧终点继续递减。
 > - **「定义/润色」复制模板改写为自述式主管指令**：标题标明由主管处理，明确接收者角色、下一步动作与本次边界（仅处理定义/润色，不执行代码、不推进状态或版本）。
 >
-> **DSH 版本兼容性**：本版本（v0.15.0）**支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.6-alpha.2`**。本次周期在 `0.1.6-alpha.2` 与 `0.1.5-rc.2` 两个宿主版本上做了双向兼容实测：`0.1.6-alpha.2` 上完成会话导航/focus、实时会话区、批量接受通知与并发槽位提示的实机验证；`0.1.5-rc.2` 上完成被动 binding 回退路径的实机验证（无 retain 时不破坏既有行为）。更早的 `0.1.2-alpha.x` ~ `0.1.5` 系列按工具与提示词契约向后兼容，但未在本次周期复跑。
+> **DSH 版本兼容性**：本版本（v0.16.0）**支持 DeepSeek Harness `0.1.2-rc.1` ~ `0.1.7-rc.2`**（`0.1.7-rc.2` 于 2026-09-25 用 v0.16.0 发布物 tarball 复验：T1–T5 全绿 **10/0/0**；逐包比对确认子代理目录层零代码变化、`llm` 服务三个方法签名逐字未变）。**本周期（g-351）实测的双宿主对照**：`0.1.7-rc.1` 上验证宿主 settings 服务换代后的**能力探测分流**——新 API 存在则走「profile 条目 Config → 设置表单」，实测 `sctx.settings.register is not a function` 降级告警消失、profile 全局默认（如 `subagentMode`）经 profile patch 真正生效（`mode_source=global`），`graph_*` 工具计数仍为 44、`/api/dsh-graph*` 端点注册齐全；`0.1.6-alpha.2` 上重跑旧路径，确认 namespace 注册（`$DSH_HOME/settings.yaml`）与 profile 全局默认照常生效，**零退化**。此前版本（`0.1.5-rc.2` 及 `0.1.2-alpha.x` ~ `0.1.5` 系列）按工具与提示词契约向后兼容，但**未在本周期复跑**。
 >
-> **平台范围**：**Linux（WSL2）、原生 Windows、macOS 均已验证**（三平台使用同一安装包）。**本版本（v0.15.0）已在 Linux（WSL2）与原生 Windows 上重新实测**：Windows 侧 T1–T5 分层门禁在原生 `win32/x64` 上全绿（**通过 10 项 / 失败 0 项 / 告警 0 项**，2026-09-21，含跨进程并发 CAS「4 抢 1」）；**macOS 最近一次真机复验为 `v0.11.0`**，自 `v0.11.0` 以来 `core/platform.ts` 与文件锁相关代码零改动。真机门禁执行件为仓库内 `scripts/win-smoke-test.mjs`（`node win-smoke-test.mjs --tarball dsh-graph-0.15.0.tgz`），结论回填于 `docs/release-checklist-v0.15.0.md` §3。
+> **平台范围**：**Linux（WSL2）、原生 Windows、macOS**（三平台使用同一安装包；**macOS 最近一次真机复验为 `v0.11.0`**，自 `v0.11.0` 以来 `core/platform.ts` 与文件锁相关代码零改动）。**本版本 `v0.16.0` 已在 Linux（WSL2）上实测**；**Windows 真机门禁（T1–T5）由负责人在本次发布前于原生 Windows 执行，结论见 `docs/release-checklist-v0.16.0.md` §3**——**本次不预先声明 PASS**；若发布时未执行该门禁，则以「**Windows 未验证**」如实标注（发布门禁红线 1）。真机门禁执行件为仓库内 `scripts/win-smoke-test.mjs`（`node win-smoke-test.mjs --tarball dsh-graph-0.16.0.tgz`）。
 >
 > **已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 >
@@ -128,6 +130,25 @@ dsh-graph 为 Agent 提供了完善的工具链，按功能划分为以下分类
 
 ---
 
+### 侧边栏用法
+
+右侧栏的「**看板**」与会话页的「**看板**」页签是**同一份实现**——同一个看板组件、同一套头部与窄档逻辑，**两侧完全一致**（零 host 门控），任选其一即可。
+
+- **入口**：在会话里打开右侧栏 → 点「看板」磁贴；打开的看板面板会成为右侧栏顶部的一个页签常驻，随时切回。
+- **`⋯ 工具`**：刷新 / 标签筛选 / 记忆 / 项目知识库（共享条目）/ 看板设置 / 已归档。工具条按**头部实测宽度装不下**自动折叠为这一项（不是写死的窗口断点）。
+- **`[🏷️]` 版本管理**：角落的方形图标按钮（可访问名称为「🏷️ 版本管理」），点开版本管理抽屉；紧邻其右是**同一行等高**的 `创建版本`。
+- **版本选择器**：位于泳道行 `[+]`（新建目标）**左侧**，切换当前显示的泳道（具体版本 / Backlog / 独立目标）。
+- **窄档行为**（分档依据是**看板根容器实测宽度**——即看板组件自身元素的 `clientWidth`，**不是窗口宽度、也不是浏览器视口宽度**）：
+  - **`≥ 480px`（宽档）**：多泳道横向并排，各版本 / Backlog / 独立目标可同时查看；
+  - **`< 480px`（单泳道档）**：阶段列由横向并排改为**纵向堆叠**，泳道内容由版本选择器决定（**具体版本 / Backlog / 独立目标三选一**；**工作区一个版本都没有时，默认落点就是「独立目标」**，选择器当前项显示「独立目标」）；该档**没有版本折叠开关**（收起来等于空板），并同时**把工具条强制折叠为「⋯ 工具」**、**隐藏 DEBUG 行**。
+  - **怎么把看板放进 `< 480px`**：宿主页签的宽度由**页签布局模式**决定，不是拖出来的——实测（1600px 视口）单页签 **719px**、页签上的 `分栏` 之后每页签 **359px**（该档随窗口宽度变化）、`全屏` **799px**。所以**默认单页签宽度（719px）落在宽档**，此时不会出现单泳道；需要单泳道档时用页签上的 **`分栏`**，或把窗口收窄到看板面板实测宽度 <480px。
+  - **宽档残留（实测）**：宽档网格的最小宽度实测约 **956px**，所以看板面板实测宽度在这之下时（例如默认单页签 **719px**），宽档网格**仍会横向滚动**、把「确认 / 批量接受」列推到可视区外；真正消除横向滚动的是单泳道档（<480px）。
+  - **版本选择器只在单泳道档渲染**：宽档下整个看板**没有**版本选择器（该元素不渲染）。因此宽档里能看到的「全部版本」只可能来自**打开的下拉选项列表**，而不是当前选中项。
+
+效果截图见仓库 [`screenshot/sidebar-kanban.png`](https://github.com/miuzel/dsh-graph/blob/main/screenshot/sidebar-kanban.png)（虚构演示数据 nebula-notes，右侧栏宽度落在 `< 480px` 单泳道档）；本 npm 包不包含仓库的 `screenshot/` 目录，故此处只给出仓库路径。
+
+---
+
 ### 数据存储说明
 
 插件数据保存在当前工作区下的 `.dsh-graph/` 目录：
@@ -164,18 +185,20 @@ dsh plugin --profile <profile-name> add dsh-graph
 >
 > **Dependency Note**: Core packages provided by the DSH host (`@deepseek-ai/cordis` ^4.0.2, `@deepseek-ai/schemastery` ^3.18.2, `@deepseek-ai/dsh-settings` ^0.1.5-rc.2) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention), provided directly by the host runtime without peer dependency warnings during installation; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 >
-> ### 🚀 What's new in v0.15.0
+> ### 🚀 What's new in v0.16.0
 >
-> - **Adapted to DeepSeek Harness `0.1.6` host API changes**: session navigation/focus moved from the `sessions` service to `uiWorkspace`, now unified through `openSessionTarget`; subagent focus, "go to conversation", and the "hand off to PM" / user-feedback delivery paths are all functional again on the new host.
+> - **Adapted to the DeepSeek Harness `0.1.7` settings-service generation change**: the old `settings.register(namespace, schema)` API is gone (observed warning: `sctx.settings.register is not a function`). The plugin now **probes capabilities**: if the service exposes `register` it uses the legacy namespace registration, otherwise it falls back to the `describe` form projection (profile entry `Config`); both paths were verified on a live, isolated instance against both hosts, with **zero version-literal comparison**.
+> - **Adapted to the `0.1.7` subagent-catalog generation change (both layers)**: the container moved from `subagentsByParent` to `projectionsBySession[sid].values.subagentCatalog`, and the **entry shape lost `kind`** (now `{id, createdAt, mode, label?}`, with a new `mode:'unknown'`). Catalog predicates now probe the shape (entries that carry `kind` use the old rule, entries without it match by `id`), so "↗ go to conversation" can no longer **silently** open the parent session.
+> - (Cumulative highlights from earlier releases) **Adapted to DeepSeek Harness `0.1.6` host API changes**: session navigation/focus moved from the `sessions` service to `uiWorkspace`, now unified through `openSessionTarget`; subagent focus, "go to conversation", and the "hand off to PM" / user-feedback delivery paths are all functional again on the new host.
 > - **Live session strip restored under `0.1.6`**: session references are now retained through the new host's retain lifecycle before borrowing a binding, so "⚠️ session not attached (not in session list)" and "model catalog unavailable" no longer appear and real tokens / ctx / model render correctly; on `0.1.5`, which has no retain, it automatically falls back to passive binding — compatibility is bidirectional.
 > - **Supervisor notification on batch accept restored under `0.1.6`**: notification dispatch is routed by capability detection, fixing the single-card and batch-accept paths that shared the same shape.
 > - **Actionable hints when concurrency slots are exhausted**: `0.1.6` introduced a subagent activation cap (8 active continuable subagents by default); when capacity is exhausted or cold resume is refused, a bare English error code is no longer the only feedback.
 > - **Board refresh button resets the auto-refresh countdown**: clicking refresh immediately restarts the full interval instead of continuing toward the old deadline.
 > - **"Define/Polish" clipboard template rewritten as a self-describing supervisor instruction**: the title states it is for the supervisor and makes the recipient role, next action, and scope explicit (handles definition/polish only — no code execution, no status or version change).
 >
-> **DSH version compatibility**: This release (v0.15.0) **supports DeepSeek Harness `0.1.2-rc.1` through `0.1.6-alpha.2`**. This cycle verified bidirectional compatibility on two host versions: on `0.1.6-alpha.2`, session navigation/focus, the live session strip, batch-accept notification, and concurrency-slot hints were verified on a live instance; on `0.1.5-rc.2`, the passive-binding fallback path was verified on a live instance (no retain, no regression). The earlier `0.1.2-alpha.x` ~ `0.1.5` series remains backward compatible by tool and prompt contract, but was not re-run in this cycle.
+> **DSH version compatibility**: This release (v0.16.0) **supports DeepSeek Harness `0.1.2-rc.1` through `0.1.7-rc.2`** (`0.1.7-rc.2` re-verified on 2026-09-25 with the v0.16.0 release tarball: T1–T5 all green, **10/0/0**; a per-package diff confirmed the subagent-catalog layer has zero code changes and the `llm` service's `listProviders`/`listModels`/`resolveModelInfo` signatures are byte-identical). **Bidirectional host comparison measured in this cycle (g-351)**: on `0.1.7-rc.1` the plugin now routes by **capability detection** across the host's reworked settings service — when the new API is present it uses the profile-entry `Config` → settings-form projection; the `sctx.settings.register is not a function` degradation warning is gone, profile-level defaults (e.g. `subagentMode`) set through the profile patch take effect (`mode_source=global`), the `graph_*` tool count stays at 44, and all `/api/dsh-graph*` routes register. On `0.1.6-alpha.2` the legacy path was re-run: namespace registration (`$DSH_HOME/settings.yaml`) and profile-level defaults still work, with **no regression**. The earlier `0.1.5-rc.2` and `0.1.2-alpha.x` ~ `0.1.5` series remains backward compatible by tool and prompt contract, but was **not re-run in this cycle**.
 >
-> **Platform scope**: **verified on Linux (WSL2), native Windows, and macOS** (all three using the same package). **This release (v0.15.0) was re-verified on Linux (WSL2) and native Windows**: the T1–T5 gate passed in full on native `win32/x64` (**10 passed / 0 failed / 0 warnings**, 2026-09-21, including the cross-process concurrent CAS "4 contend for 1"), and **macOS was last verified on-device at `v0.11.0`** (`core/platform.ts` and the file-locking code are unchanged since `v0.11.0`). The on-device gate executor is `scripts/win-smoke-test.mjs` in the repository (`node win-smoke-test.mjs --tarball dsh-graph-0.15.0.tgz`), and the verdict is recorded in `docs/release-checklist-v0.15.0.md` §3.
+> **Platform scope**: **Linux (WSL2), native Windows, and macOS** (all three using the same package; **macOS was last verified on-device at `v0.11.0`**, and `core/platform.ts` plus the file-locking code are unchanged since `v0.11.0`). **This release, `v0.16.0`, has been verified on Linux (WSL2)**; **its Windows on-device gate (T1–T5) is executed by the owner on native Windows before this release, with the verdict recorded in `docs/release-checklist-v0.16.0.md` §3** — **no PASS is claimed in advance**; if that gate is not run before release, the release must be labeled "**Windows not verified**" (release gate red line 1). The on-device gate executor is `scripts/win-smoke-test.mjs` in the repository (`node win-smoke-test.mjs --tarball dsh-graph-0.16.0.tgz`).
 >
 > **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`. Paths derived from `process.cwd()` are unaffected.
 >
@@ -264,6 +287,25 @@ Embedded directly within the DSH Web console:
 - **2D Swimlane Layout**: View the progress of multiple versions and categories simultaneously;
 - **Live Streaming Updates**: Cards and the top status bar stream real-time execution updates; external file edits trigger visual highlights;
 - **Interactive Modals & Drawers**: Click cards to inspect quality criteria, context cards, attempt histories, and detailed instructions.
+
+---
+
+### Sidebar Usage
+
+The sidebar's "**Kanban**" tile and the conversation page's "**Kanban**" tab are **the same implementation** — the same board component and the same header / narrow-width logic, **fully identical on both sides** (zero host gating). Either entry point works.
+
+- **Entry**: open the right sidebar in a session → click the "Kanban" tile; the opened board then stays as a persistent tab at the top of the sidebar, one click away.
+- **`⋯ Tools`**: Refresh / Tag filter / Memory / Project Knowledge Base (shared entries) / Board settings / Archived. The toolbar collapses into this single item automatically when it **does not fit the measured header width** (not a hard-coded viewport breakpoint).
+- **`[🏷️]` Version Management**: the square icon button in the corner (accessible name "🏷️ Version Management") opens the version-management drawer; immediately to its right sits `Create Version`, **same row and equal height**.
+- **Version selector**: sits **to the left of** the lane-row `[+]` (new goal) and switches the lane currently shown (a specific version / Backlog / Standalone).
+- **Narrow-width behaviour** (tiered by the **measured width of the board's root container** — the board element's own `clientWidth`, **not the window width and not the browser viewport width**):
+  - **`≥ 480px` (wide tier)**: multiple swimlanes side by side, so versions / Backlog / Standalone are all visible at once;
+  - **`< 480px` (single-lane tier)**: stage columns switch from side-by-side to **vertically stacked**, and the lane shown is chosen by the version selector (**exactly one of a specific version / Backlog / Standalone**; **when the workspace has no versions at all, the default landing lane is "Standalone"**, and the selector's current item reads "Standalone"); this tier has **no per-lane collapse toggle** (collapsing would leave an empty board), and it also **forces the toolbar into `⋯ Tools`** and **hides the DEBUG line**.
+  - **How to get the board into `< 480px`**: the host tab's width comes from the **tab layout mode**, not from dragging — measured at a 1600px viewport: single tab **719px**, **359px** per tab after the tab's `Split` mode (this mode scales with the window width), **799px** in `Fullscreen`. So the **default single-tab width (719px) lands in the wide tier** and no single lane appears; use the tab's **`Split`** mode, or narrow the window until the board panel measures <480px. Once there, it is obvious: the six stage blocks are **stacked vertically** and the version selector appears next to the lane title.
+  - **Residual in the wide tier (measured)**: the wide-tier grid's minimum width is about **956px**, so whenever the board panel measures less than that (e.g. the default single tab at **719px**) the wide grid **still scrolls horizontally** and pushes the confirm / bulk-accept column out of view; the tier that actually removes horizontal scrolling is the single-lane one (<480px).
+  - **The version selector is rendered only in the single-lane tier**: in the wide tier the board has **no** version selector at all. So an "All versions" string seen in the wide tier can only come from an **opened dropdown option list**, never from the current selection; and in the single-lane tier, before any explicit view choice, the current item is "Standalone" — **not** "All versions".
+
+See [`screenshot/sidebar-kanban.png`](https://github.com/miuzel/dsh-graph/blob/main/screenshot/sidebar-kanban.png) in the repository for a screenshot (fictional demo data nebula-notes, sidebar width in the `< 480px` single-lane tier); this npm package does not ship the repository's `screenshot/` directory, so only the repository path is given here.
 
 ---
 

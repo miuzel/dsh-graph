@@ -155,10 +155,11 @@
       const allowed = ["draft", "planning", "collecting", "ready"];
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       if (!allowed.includes(status) || hasActiveAttempt) return null;
-      // i18n-keep(category-b)：复制到剪贴板并粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
+      // i18n-keep(category-b)：发给主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
+      // g-327：措辞改为中性——直发（看板直接投递）与复制兜底两条分支下均如实，不再写死「负责人复制发送」。
       const request = `【主管处理请求｜${goalId}｜目标定义/润色】\n\n`
         + `请你以主管 Agent 身份处理这个目标的定义/润色请求。\n`
-        + `这条消息由负责人从看板复制发送，不是产品经理 Agent 的任务提示，\n`
+        + `这条请求由看板的目标定义/润色入口发出，不是产品经理 Agent 的任务提示，\n`
         + `也不是要求你扮演产品经理。\n\n`
         + `请先读取目标文件，并按主管流程决定是否需要派发产品经理 Agent。\n`
         + `如有润色建议，请由主管完成目标描述和质量判据的闭环。\n`
@@ -172,6 +173,26 @@
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
           if (!rt) throw new Error(dgT("exec.supervisorUnavailable"));
           if (!supervisorSession) throw new Error(dgT("exec.supervisorNotConfigured"));
+          // g-327：能直发就直发——先尝试投递恰好一条 queue 消息给主管会话。
+          // 能力探测（using / retain / 0.1.5 被动回退）全部由共享 helper promptSessionQueue 内部分流，
+          // 本处只按它的返回值判定，**绝不**写版本号分支、也绝不自带第二份 using/retain 探测。
+          const delivered = await promptSessionQueue(rt, supervisorSession,
+            [{ type: "text", text: request }],
+            "[dsh-graph-host] define/polish: prompt supervisorSession failed:");
+          if (delivered) {
+            // 直发成功：消息已投递给主管会话，不再写剪贴板（负责人要求「直接发不需要复制一份」）；
+            // 仍打开主管会话便于负责人跟进。
+            openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
+            activateChatTab();
+            setMode("supervisor");
+            setFallback(false);
+            showToast(dgT("exec.requestDelivered"));
+            setNote(dgT("exec.requestDeliveredOpened"));
+            setLoading(false);
+            return;
+          }
+          // 投递不可用（无会话服务 / 未配置 supervisor.session / 会话取不到 / 无 prompt / 任意异常）
+          // → 以下完整退回 g-168 原复制契约，逐字不变（含复制失败时的手动复制预览）。
           const copied = await copyText(request);
           // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
           openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);

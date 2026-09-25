@@ -32,6 +32,30 @@
           console.warn("[dsh-graph-host] 跳转主管会话失败", e);
         }
       };
+      const narrow = !!props.narrow;
+      // g-352 att-003 第 3 项（负责人人工 gate 反馈「主管对话区域需要重排一下，只留一行 statusline 和
+      // 转到对话按钮（缩成一个图标）并隐藏模型 id」）：窄档只保留**一行** —— 主管标识 + 状态行
+      //（LiveStrip 的 compact 单行形态）+ 纯图标「↗转到对话」按钮（title/aria-label 仍是完整文案）。
+      // 模型 id（provider/model 两行）与 meter 在此档不再渲染 ⇒ 不再有文字互相重叠。
+      // 宽档（含 conversation.view 路径）走下面原分支，逐字不变。
+      const jumpTooltip = dgT('supervisor.goToChatTooltip');
+      if (narrow) {
+        return h(
+          "div",
+          { style: S.supervisorBar, className: "dg-supervisor dg-supervisor-narrow" },
+          h("span", { style: { fontWeight: 600, flexShrink: 0 } }, dgT('supervisor.label')),
+          h("div", { style: { flex: 1, minWidth: 0, overflow: "hidden" } },
+            h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null, statusAt: props.statusAt ?? null, compact: true })),
+          // 图标按钮与同行按钮等高（rowBtnStyle({ iconOnly: true }) ⇒ 26×26 方形，第 9 项）
+          h("button", {
+            style: { ...S.btn, ...rowBtnStyle({ iconOnly: true }), flexShrink: 0 },
+            className: "dg-btn dg-supervisor-jump-icon",
+            title: jumpTooltip,
+            "aria-label": jumpTooltip,
+            onClick: jump,
+          }, "↗"),
+        );
+      }
       return h(
         "div",
         { style: S.supervisorBar, className: "dg-supervisor" },

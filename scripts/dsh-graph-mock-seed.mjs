@@ -17,7 +17,7 @@
  *
  * 截图复现（两图必须同一次 seed、同一 3082 实例、同一主题与固定视口）：
  *   1. MOCK_ROOT=/tmp/dsh-graph-mock-demo CWD=/tmp/dsh-graph-mock-demo \
- *        bash scripts/dev-dsh-instance.sh run --port 3082
+ *        bash scripts/archived/dev-dsh-instance.sh run --port 3082
  *   2. 等看板稳定渲染（旧数据 mtime 已固定为过去，不会触发更新强调扫光）后：
  *        screenshot/screenshot-1.png ← 看板全景（含版本泳道/backlog/独立目标）
  *        screenshot/screenshot-2.png ← 点击 g-006（收集列「就绪」）打开目标详情弹窗
@@ -33,6 +33,7 @@ import {
   utimesSync,
   statSync,
   readFileSync,
+  existsSync,
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -162,6 +163,20 @@ function goalFileOf(id) {
     } catch { /* 不存在则试下一个 */ }
   }
   throw new Error(`找不到目标文件：${id}`);
+}
+
+/** 卡片文件定位（g-355）：add-card CLI 默认建**共享卡**，落项目共享池
+ *  `.dsh-graph/shared-cards/<id>.md`（g-183 起为最终形态）；旧的 goal 自有布局
+ *  `<goal>/cards/<id>.md` 保留为兼容回退，避免影响依赖旧布局的调用。 */
+function cardFileOf(goalFile, cardId) {
+  const candidates = [
+    path.join(GRAPH, "shared-cards", `${cardId}.md`),
+    path.join(path.dirname(goalFile), "cards", `${cardId}.md`),
+  ];
+  for (const f of candidates) {
+    if (existsSync(f)) return f;
+  }
+  throw new Error(`找不到卡片文件：${cardId}（goal: ${goalFile}）`);
 }
 
 const pendingCollectingCards = [];
@@ -300,9 +315,7 @@ function main() {
 
   // 4) 收集中的卡片状态（展示层：bind_collect_card 之后、填充之前的形态）
   for (const pc of pendingCollectingCards) {
-    const doc = readGoalDoc(pc.file);
-    const cardsDir = path.join(path.dirname(pc.file), "cards");
-    const cardFile = path.join(cardsDir, `${pc.cardId}.md`);
+    const cardFile = cardFileOf(pc.file, pc.cardId);
     const cdoc = readGoalDoc(cardFile);
     cdoc.meta.status = "collecting";
     cdoc.meta.summary = "收集子代理已派发，等待填充";

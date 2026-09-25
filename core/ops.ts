@@ -52,6 +52,9 @@ import {
   criteriaPresent,
   countCriteria,
   criteriaItems,
+  allCriteriaVerified,
+  verifiedCriteriaItems,
+  CRITERIA_VERIFIED_MARK,
   normalizeGoalType,
   normalizeGoalTags,
   rebuildCriteriaSection,
@@ -112,6 +115,14 @@ import {
   resolveWorktreeIsolationDecision,
   prepareAttemptWorktree,
 } from "./worktree.ts";
+import {
+  REVIEW_POLICIES,
+  normalizeReviewPolicy,
+  normalizeMachineReport,
+  resolveReviewPolicy,
+  evaluateFastTrackGate,
+  type ReviewPolicy,
+} from "./review-policy.ts";
 export { GraphError, GraphConflictError };
 export { normalizeGoalType };
 export {
@@ -124,6 +135,30 @@ export {
   prepareAttemptWorktree,
 };
 export type { MemoryScope };
+// g-311：分级评审策略与机器快速放行门禁（纯函数模块 review-policy.ts）经 ops 统一 re-export，
+// host 半边只需从 ./core/ops.js 取用（与 worktree 系列同款）。
+export {
+  REVIEW_POLICIES,
+  FAST_TRACK_CHECKS,
+  FAST_TRACK_MAX_PRODUCT_LINES,
+  CONTRACT_PATHS,
+  typeDefaultReviewPolicy,
+  normalizeReviewPolicy,
+  normalizeMachineReport,
+  resolveReviewPolicy,
+  evaluateFastTrackGate,
+  countProductChangedLines,
+  isProductCodePath,
+} from "./review-policy.ts";
+export type {
+  ReviewPolicy,
+  ReviewPolicyDecision,
+  StrictReason,
+  FastTrackCheck,
+  FastTrackEvidence,
+  FastTrackGateResult,
+} from "./review-policy.ts";
+export { allCriteriaVerified, verifiedCriteriaItems, CRITERIA_VERIFIED_MARK } from "./model.ts";
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
 export type { ObjectSchema };
@@ -471,7 +506,15 @@ export function generateHandoff(
     limit: opts.memoryLimit ?? 20,
   });
   const structuredMemories = recalled.matches;
-  const safeMemory = (s: string) => s.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/```/g, "'''").replace(/^(\s*)(system|assistant|user)\s*:/gim, "$1[$2]:").slice(0, 500);
+  // g-339：注入侧单条上限与存储上限同源（MEMORY_LIMITS），**绝不静默截断**。
+  // 存储侧已拒绝 >on_demand 码点的条目，正常数据不会走到标记分支；一旦 memory.jsonl 里
+  // 出现超长条目（历史遗留 / 手工编辑），注入必须留下**明确可见**的截断标记，而不是悄悄砍半。
+  const safeMemory = (s: string, limit: number = MEMORY_LIMITS.on_demand) => {
+    const cleaned = s.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/```/g, "'''").replace(/^(\s*)(system|assistant|user)\s*:/gim, "$1[$2]:");
+    const codepoints = [...cleaned];
+    if (codepoints.length <= limit) return cleaned;
+    return `${codepoints.slice(0, limit).join("")}……［本条已截断：单条上限 ${limit} 字符，原文 ${codepoints.length} 字］`;
+  };
 
   parts.push("## 长期记忆", "");
   if (structuredMemories.length > 0) {
@@ -483,8 +526,8 @@ export function generateHandoff(
       const value = safeMemory(m.text);
       const id = safeMemory(m.id);
       const row = `- **${id}** ${tag} ${value}`;
-      if (memoryChars + row.length > 4000) {
-        parts.push("- ...（已达到 4000 字符上限，剩余条目已截断）");
+      if (memoryChars + row.length > MEMORY_INJECT_TOTAL_BUDGET) {
+        parts.push(`- ...（已达到 ${MEMORY_INJECT_TOTAL_BUDGET} 字符上限，剩余条目已截断）`);
         break;
       }
       parts.push(row);
@@ -695,6 +738,15 @@ export const ROLE_PROFILES: Record<SubagentRole, RoleProfile> = {
       "3. 泳道流转：开工时若非 in_progress 则调用 graph_transition(to='in_progress')；完成后必须 graph_transition(to='review') 停轮等待复核；遇到阻塞 graph_transition(to='blocked', reason=...)；",
       "4. 绝不自行 delivered：禁止直接 graph_transition 到 delivered——delivered 属于负责人与主管的 human gate 裁决关口；",
       "5. 严格遵守环境隔离要求与质量判据核验，未通过判据不可声明完成。",
+      // ⚠️ 只允许在数组**末尾追加**：core/tests/role-contract-g253.test.ts 逐字锚定本数组的 [0] 与
+      // supervisor 的 [2]，另有「绝不自行 delivered」「严格遵守环境隔离要求」的存在性断言——插到前面必红。
+      // g-326（测试力度分级）此前误判 disciplineLines 为「未被渲染的死文本」而漏写；实际
+      // buildSubagentDefaultPersona（见下）会逐行展开进子代理 Persona，故此处补齐，避免 persona 与
+      // attempt prompt 长期两套口径。
+      "6. 测试力度按改动性质分级（不为不值得单测的改动凑断言）：一档｜零行为逻辑改动（文案/标签/i18n 字符串、注释、文档、纯样式）不要求新增单测，但必须给出既有测试全绿 + 构建/语法检查通过（或真机目视）的实际证据；二档｜小幅逻辑改动（分支/数据变换/边界错误处理）要有针对性单测覆盖被改分支且原行为不回归；三档｜新增功能/契约变更/核心层重写/并发与状态机要完整单测 + 边界与负向用例，必要时做「改坏就会红」的负向对照；绝不因「轻量/文案」跳过、删改或削弱既有测试，也不降低判据门禁与人工 gate。",
+      // g-312（断言化证据）：与 formatAttemptDiscipline 的 zh 纪律条目 4 同口径——persona 与 attempt
+      // prompt 必须是同一套证据规范（真源在此，prompt 侧是投递副本）。
+      "7. 证据形式：交付证据只写单行结构化概要（一套件一行、单条 ≤160 字符），格式为 `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`，并给出断言命令与结论；禁止向证据台账、评论区或回复倾倒多行 JSON、DOM dump、切片数据、原始日志与围栏代码块；运行态不变式一律沉淀为自动化断言，仅 UI 视觉层不可代码化的部分保留轻量截图核验。",
     ],
     requiredTools: ["graph_report_status", "graph_transition", "read", "write", "edit", "bash"],
     allowedTools: {
@@ -862,6 +914,8 @@ export interface ProjectConfig {
   };
   supervisor: { automation: Record<string, string | null> };
   prompt_overrides: { subagent: PromptOverride };
+  /** g-311：顶层 review.policy——未配置/空/非三值一律为 null（由 review-policy 按目标类型派生）。 */
+  review: { policy: ReviewPolicy | null };
 }
 
 const AUTOMATION_KEYS = [
@@ -1001,7 +1055,9 @@ function readScalarByPath(lines: string[], path: string[]): string | null {
   return null;
 }
 
-/** 读取 prompt_overrides.<key> 的三态覆盖。未配置/缺失 → default（继承 profile 全局值）。 */
+/** 读取 prompt_overrides.<key> 的三态覆盖。未配置/缺失 → default（继承 profile 全局值）。
+ *  编码形态：裸 `default` → default；`disable`/`null`/`~`/`""`/`''`/空 → disable；
+ *  其余标量（含 `writeProjectConfig` 用 JSON.stringify 编码的多行文本）→ override 并解码转义。 */
 export function readPromptOverride(root: string, key: "subagent"): PromptOverride {
   const file = join(root, "project.yaml");
   if (!existsSync(file)) return { state: "default", value: null };
@@ -1022,6 +1078,12 @@ function readPromptOverrideConfig(lines: string[], key: string): { value: Prompt
   const trimmed = raw.trim();
   if (trimmed === "" || trimmed === "null" || trimmed === "~") return { value: { state: "disable", value: null } };
   if (trimmed === "default") return { value: { state: "default", value: null } };
+  // g-333：`disable` **裸字面量**必须读成 disable 态——它与 `default` 同为对外声明的状态名
+  // （schema_hints 广告 default/override/disable）。此前只认 `""`，裸写 `subagent: disable` 会被
+  // 当成 override 文本 "disable" 注入子代理 prompt（「看起来能配、实际注入垃圾」的同类缺陷）；
+  // 规范化写入仍是 `""`（writeProjectConfig），两种形态自此等价读回。
+  // 带引号的 `"disable"` 仍按 YAML 标量语义视为显式文本覆盖（需要文本时用引号转义）。
+  if (trimmed === "disable") return { value: { state: "disable", value: null } };
   if (trimmed === '""' || trimmed === "''") return { value: { state: "disable", value: null } };
   const decoded = parseYamlScalar(raw);
   if (decoded === null) return { value: { state: "disable", value: null } };
@@ -1038,6 +1100,7 @@ export function readProjectConfig(root: string): ProjectConfig {
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
       supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])) },
       prompt_overrides: { subagent: { state: "default", value: null } },
+      review: { policy: null },
     };
   }
   const lines = readFileSync(file, "utf8").split("\n");
@@ -1064,6 +1127,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     },
     supervisor: { automation: auto },
     prompt_overrides: { subagent },
+    review: { policy: normalizeReviewPolicy(scal(["review", "policy"])) },
   };
 }
 export function isMemoryToolsEnabled(root: string): boolean {
@@ -1256,6 +1320,17 @@ function validateConfigPatch(patch: any): void {
       needStr(o.value, `prompt_overrides.${key}.value`, { nullable: true });
     }
   }
+  // g-311：顶层 review.policy 二次校验（schema 已按 enum 拒绝非法值，此处兜住 core 层直调；
+  // 与 schema 同口径为**精确匹配**——读路径的大小写容错只服务历史值，不是写入许可）。
+  if ("review" in patch) {
+    needObj(patch.review, "review");
+    const rv = patch.review ?? {};
+    if (rv.policy !== undefined && rv.policy !== null) {
+      if (typeof rv.policy !== "string" || !(REVIEW_POLICIES as readonly string[]).includes(rv.policy)) {
+        throw new GraphError(`review.policy 只允许 ${REVIEW_POLICIES.join("/")}`);
+      }
+    }
+  }
 }
 
 /** g-132 写入 project.yaml 安全配置字段。patch 为部分字段（缺省字段不动）。
@@ -1314,6 +1389,10 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
       else if (state === "override") encoded = JSON.stringify(o.value ?? "");
       setScalar(["prompt_overrides", key], "", () => encoded);
     }
+  }
+  // g-311：顶层 review.policy（null/"" 清空 → 读回 null → 按目标类型派生）。
+  if (patch.review && "policy" in patch.review) {
+    setScalar(["review", "policy"], patch.review.policy ?? "");
   }
 
   const updated = lines.join("\n");
@@ -1799,6 +1878,9 @@ export function appendGoalComment(
     goal: goalId,
     details: { text: text.trim(), ts },
   });
+  // g-312 C-lite：超长评论只做软观测（report.oversize），绝不拒绝——评论本身承载核验记录与设计讨论，
+  // 硬拒绝会打断合法流程；如果确实在倾倒，事件流里能按 actor 归属统计出来（质量判据 3 的度量口径）。
+  observeOversize(root, goalId, actor, "comment", text.trim().length, OVERSIZE_COMMENT_CHARS, { ts });
   const raw = sectionText(doc.body, "评论");
   if (raw === null) {
     // 小节不存在（老目标模板）：追加到末尾
@@ -4059,7 +4141,7 @@ export function formatCollectPrompt(
       "4. Use card lifecycle only; do not create a fake attempt or call graph_report_status.",
     ];
     if (userPrompt && userPrompt.trim()) sections.push("", "**User addendum**:", userPrompt.trim());
-    return sections.join("\\n");
+    return sections.join("\n");
   }
 
   // 构建结构化提示词
@@ -4155,6 +4237,11 @@ export function formatPmPrompt(opts: {
     "",
     "Read the goal.md with read first. Give concise, actionable advice on value, context, scope, verifiable criteria, boundaries, error paths, risks, and human verification. Preserve intent and do not write files.",
     "",
+    "## Architecture selection bias",
+    "- Before recommending a heavy third-party black-box library, estimate the full-lifecycle cost: glue/adapter layer size, dual source of truth and state sync, event/render loops, unused layer removal, upgrade and replacement, and debugging plus Agent rework.",
+    "- Threshold: estimated glue layer LOC / estimated in-house business-logic LOC (tier each integration surface S<=50 / M<=200 / L>200). A ratio >=0.5 raises a warning; >=1.0 defaults to a lightweight white-box in-house build - keeping the library requires owner confirmation.",
+    "- When glue work approaches or exceeds the in-house business logic, prefer the white-box in-house path, and record the estimate and decision in goal.md.",
+    "",
     "## Report format requirement",
     `Your report MUST start with a title line in the exact format: 【${opts.goalId} 润色建议】`,
     "This allows the supervisor to automatically identify which goal this report belongs to.",
@@ -4162,7 +4249,7 @@ export function formatPmPrompt(opts: {
     "## Read-only constraints",
     "- Only read-only analysis is available; do not use management, code-editing, or command-execution tools.",
     "- Return analysis and suggestions only; do not modify project data.",
-  ].join("\\n");
+  ].join("\n");
   const lines = [
     `你是固定的产品经理 Agent。请只向主管 Agent 返回"目标定义/润色建议"，不要调用任何 graph_* 工具，不要修改目标、不改变状态、版本或执行语义。`,
     ``,
@@ -4171,6 +4258,11 @@ export function formatPmPrompt(opts: {
     `人工指导意见：${String(opts.guidance ?? "").trim() || "（无）"}`,
     ``,
     `请先用 read 工具读取上述 goal.md，再围绕目标价值、背景、范围、可验证判据、边界/错误路径、风险和人工核验给出简洁、可执行的润色建议；保留原意，不直接替换或写入目标。`,
+    ``,
+    `## 架构选型倾向`,
+    `- 推荐引入重型第三方黑盒库前，先估全生命周期成本：胶水/适配层规模、双真相与状态同步、事件与渲染回环、无用图层剔除、升级与替换、排错与 Agent 返工；`,
+    `- 阈值：胶水层预估 LOC ÷ 自研业务逻辑预估 LOC（集成面逐项打档 S≤50 / M≤200 / L>200）。比值 ≥0.5 触发预警；≥1.0 默认推荐自研白盒轻量实现，要继续用库须负责人确认；`,
+    `- 胶水层工作量接近或超过自研业务逻辑时，优先推荐自研白盒，并把估算与决策记入 goal.md。`,
     ``,
     `## 回报格式要求`,
     `⚠️ 你的回报必须以标题行开头，格式严格为：【${opts.goalId} 润色建议】`,
@@ -4214,7 +4306,7 @@ export function formatReviewPrompt(opts: {
     if (opts.criteria?.length) lines.push("", "**Acceptance criteria**:", ...opts.criteria.map((item, i) => `${i + 1}. ${item}`));
     if (opts.guidance?.trim()) lines.push("", `**Review guidance**: ${opts.guidance.trim()}`);
     lines.push("", "## Review discipline and permissions", "- Read-only review: use read, glob, grep, and read-only tests only; do not edit or write code.", "- Do not call graph_* management write tools.", "- Return PASS or FAIL with concrete evidence; the supervisor/owner performs the final verdict.", "- bash, when available, is limited to local read-only tests and static checks.");
-    return lines.join("\\n");
+    return lines.join("\n");
   }
   const lines = [
     `你是专业的代码与目标复核 Agent（Reviewer）。请对目标 ${opts.goalId} 的执行 attempt ${opts.attemptId} 进行只读审查。`,
@@ -4552,6 +4644,276 @@ export function startAttempt(
   return attId;
 }
 
+/* ============================================================================
+ * g-312 断言化证据（Assertion-as-Evidence）：证据形式的机器可判定义 + 软观测
+ *
+ * 独立区块：勿并入 formatPmPrompt / formatReviewPrompt。本区块只服务「执行侧交付证据」
+ * 的单一形态（单行结构化概要），并把「是否仍在长文倾倒」变成事件流里可统计的指标。
+ *
+ * 设计边界（负责人已批准的计划，勿随手改成硬拒绝）：
+ *  - B（文案 + 纯函数）+ C-lite（软观测）：validate/parse 只做判定，**不拒绝调用**——
+ *    历史 status 有 42% 超 20 字口径，评论本身也承载核验记录与设计讨论，硬拒绝会打断合法流程；
+ *  - 结构化概要**不进 status_line**：概要 90–160 字符远大于现 p50（19 字符），塞进去会同时撞
+ *    host 的「≤20 字」口径与前端终态词解析。status_line 维持「一句人话」，概要在交付证据评论里。
+ * ========================================================================== */
+
+/** 交付证据单行前缀。`formatEvidenceSummary` 与 `parseEvidenceSummary` 共用同一常量。 */
+export const EVIDENCE_SUMMARY_PREFIX = "evidence:";
+
+/** 单条交付证据的字符上限（含前缀），对应质量判据 2 的「单条 ≤160 字符」。 */
+export const EVIDENCE_SUMMARY_MAX_CHARS = 160;
+
+/** 单个 JSON 片段超过该长度即判定为「数据倾倒」而不是结构化概要。 */
+export const EVIDENCE_SUMMARY_JSON_DUMP_CHARS = 200;
+
+/** 软观测阈值：status 超 40 字符、评论超 800 字符只追加 report.oversize 事件，绝不拒绝。 */
+export const OVERSIZE_STATUS_CHARS = 40;
+export const OVERSIZE_COMMENT_CHARS = 800;
+
+/** DOM dump 关键词（大小写不敏感）：命中即说明在倾倒运行态 DOM，而不是给断言结论。 */
+const EVIDENCE_DOM_DUMP_MARKERS: readonly string[] = [
+  "<!doctype",
+  "<html",
+  "<body",
+  "<div",
+  "<span",
+  "<svg",
+  "<script",
+  "outerhtml",
+  "innerhtml",
+  "textcontent",
+  "queryselector",
+  "getboundingclientrect",
+  "getcomputedstyle",
+];
+
+/** 代码围栏标记：多行日志/JSON 的典型包装。 */
+const EVIDENCE_FENCE_MARKERS: readonly string[] = ["```", "~~~"];
+
+export interface EvidenceSummary {
+  suite: string;
+  passed: number;
+  failed: number;
+  exit: number;
+  ms: number;
+  diffFiles: number;
+  diffAdded: number;
+  diffRemoved: number;
+  commit: string;
+}
+
+/** 格式化入参与解析产物同构（单一形态，避免两套字段名漂移）。 */
+export type EvidenceSummaryInput = EvidenceSummary;
+
+export type EvidenceSummaryIssue =
+  | "empty"
+  | "multiline"
+  | "code_fence"
+  | "json_dump"
+  | "dom_dump"
+  | "too_long"
+  | "format";
+
+export interface EvidenceSummaryValidation {
+  ok: boolean;
+  issue: EvidenceSummaryIssue | null;
+  detail: string;
+}
+
+const EVIDENCE_SUMMARY_KEYS: readonly string[] = ["suite", "passed", "failed", "exit", "ms", "diff", "commit"];
+
+function evidenceInt(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new GraphError(`evidence 概要保持纯函数语义：${field} 必须是非负整数，实际为 ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+/** 找出文本里成对括号包起来的片段（启发式，不要求是合法 JSON）：用于识别数据倾倒。 */
+function evidenceBracketSpans(text: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const open = text[i];
+    if (open !== "{" && open !== "[") continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < text.length; j += 1) {
+      const ch = text[j];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === "{" || ch === "[") depth += 1;
+      else if (ch === "}" || ch === "]") {
+        depth -= 1;
+        if (depth === 0) {
+          spans.push({ start: i, end: j + 1 });
+          i = j;
+          break;
+        }
+      }
+    }
+  }
+  return spans;
+}
+
+/**
+ * 把结构化概要渲染为**单行**规范形态（质量判据 2 的唯一格式）：
+ *   `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`
+ *
+ * 纯函数、无 IO。非法字段（非整数计数 / 空 suite / 非十六进制 commit）抛 GraphError；
+ * 渲染结果超过 `EVIDENCE_SUMMARY_MAX_CHARS` 同样抛错——该函数不允许产出违反契约的行。
+ */
+export function formatEvidenceSummary(input: EvidenceSummaryInput): string {
+  if (!input || typeof input !== "object") throw new GraphError("evidence 概要输入必须是对象");
+  const suite = typeof input.suite === "string" ? input.suite.trim() : "";
+  if (!suite || /\s/.test(suite)) {
+    throw new GraphError(`evidence 概要保持纯函数语义：suite 必须是非空且不含空白的套件标识，实际为 ${JSON.stringify(input.suite)}`);
+  }
+  const passed = evidenceInt(input.passed, "passed");
+  const failed = evidenceInt(input.failed, "failed");
+  const exit = evidenceInt(input.exit, "exit");
+  const ms = evidenceInt(input.ms, "ms");
+  const diffFiles = evidenceInt(input.diffFiles, "diffFiles");
+  const diffAdded = evidenceInt(input.diffAdded, "diffAdded");
+  const diffRemoved = evidenceInt(input.diffRemoved, "diffRemoved");
+  const commitRaw = typeof input.commit === "string" ? input.commit.trim().toLowerCase() : "";
+  if (!/^[0-9a-f]{7,40}$/.test(commitRaw)) {
+    throw new GraphError(`evidence 概要保持纯函数语义：commit 必须是 7–40 位十六进制 sha，实际为 ${JSON.stringify(input.commit)}`);
+  }
+  const line =
+    `${EVIDENCE_SUMMARY_PREFIX} suite=${suite} passed=${passed} failed=${failed} exit=${exit} ms=${ms}` +
+    ` diff=${diffFiles}f/+${diffAdded}/-${diffRemoved} commit=${commitRaw.slice(0, 7)}`;
+  if (line.length > EVIDENCE_SUMMARY_MAX_CHARS) {
+    throw new GraphError(
+      `evidence 概要超长（${line.length} > ${EVIDENCE_SUMMARY_MAX_CHARS} 字符）：缩短 suite 标识或拆分套件，不要靠删格式字段绕过`,
+    );
+  }
+  return line;
+}
+
+/**
+ * 宽松解析规范单行；非规范文本一律返回 null（**不抛错**，调用方可据此软观测）。
+ * 只接受 `EVIDENCE_SUMMARY_KEYS` 这套键——多一个未知键即视为非规范形态（防「概要里夹带私货」）。
+ */
+export function parseEvidenceSummary(text: unknown): EvidenceSummary | null {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.includes("\n") || trimmed.includes("\r")) return null;
+  if (!trimmed.startsWith(EVIDENCE_SUMMARY_PREFIX)) return null;
+  const fields = new Map<string, string>();
+  for (const token of trimmed.slice(EVIDENCE_SUMMARY_PREFIX.length).trim().split(/\s+/)) {
+    const at = token.indexOf("=");
+    if (at <= 0) return null;
+    const key = token.slice(0, at);
+    if (fields.has(key)) return null;
+    fields.set(key, token.slice(at + 1));
+  }
+  if (fields.size !== EVIDENCE_SUMMARY_KEYS.length) return null;
+  for (const key of EVIDENCE_SUMMARY_KEYS) if (!fields.has(key)) return null;
+  const suite = fields.get("suite") as string;
+  if (!suite) return null;
+  const diff = /^(\d+)f\/\+(\d+)\/-(\d+)$/.exec(fields.get("diff") as string);
+  if (!diff) return null;
+  const commit = fields.get("commit") as string;
+  if (!/^[0-9a-f]{7,40}$/.test(commit)) return null;
+  const numbers = [fields.get("passed"), fields.get("failed"), fields.get("exit"), fields.get("ms")];
+  if (numbers.some((value) => value === undefined || !/^\d+$/.test(value))) return null;
+  return {
+    suite,
+    passed: Number(numbers[0]),
+    failed: Number(numbers[1]),
+    exit: Number(numbers[2]),
+    ms: Number(numbers[3]),
+    diffFiles: Number(diff[1]),
+    diffAdded: Number(diff[2]),
+    diffRemoved: Number(diff[3]),
+    commit,
+  };
+}
+
+/**
+ * 「禁止倾倒」的机器化定义（质量判据 2）：一条交付证据**必须**是单行规范概要。
+ * 拒绝多行、代码围栏、>200 字符的 JSON 片段、DOM dump 关键词、超长与非规范形态。
+ * 返回结构化判定而非抛错，便于上层做软观测（永不硬拒绝用户输入）。
+ *
+ * 判定顺序固定为 empty → code_fence → multiline → json_dump → dom_dump → too_long → format：
+ * 越靠前越具体（先认出「这是围栏日志」「这是 300 字符的 JSON」这类形态，再落到通用的多行/超长），
+ * 从而给出可执行的修正建议；每条规则都必须能被单独观测到（core/tests/evidence-summary-g312.test.ts 逐条覆盖）。
+ */
+export function validateEvidenceSummary(text: unknown): EvidenceSummaryValidation {
+  if (typeof text !== "string" || !text.trim()) {
+    return { ok: false, issue: "empty", detail: "证据为空：至少给一行 `evidence: …` 结构化概要" };
+  }
+  for (const fence of EVIDENCE_FENCE_MARKERS) {
+    if (text.includes(fence)) {
+      return { ok: false, issue: "code_fence", detail: `证据不得包含代码围栏「${fence}」：围栏即多行日志/JSON 倾倒的形态` };
+    }
+  }
+  if (text.includes("\n") || text.includes("\r")) {
+    return { ok: false, issue: "multiline", detail: "证据必须是单行：多行正文请落到测试代码或文件里，正文只留一行结构化概要" };
+  }
+  const spans = evidenceBracketSpans(text);
+  const longest = spans.reduce((max, span) => Math.max(max, span.end - span.start), 0);
+  if (longest > EVIDENCE_SUMMARY_JSON_DUMP_CHARS) {
+    return {
+      ok: false,
+      issue: "json_dump",
+      detail: `证据含 ${longest} 字符的 JSON 片段（上限 ${EVIDENCE_SUMMARY_JSON_DUMP_CHARS}）：请改为断言命令与结论，数据留在测试代码里`,
+    };
+  }
+  const lowered = text.toLowerCase();
+  for (const marker of EVIDENCE_DOM_DUMP_MARKERS) {
+    if (lowered.includes(marker)) {
+      return { ok: false, issue: "dom_dump", detail: `证据含 DOM dump 关键词「${marker}」：DOM 断言应沉淀为测试代码，不倾倒运行态快照` };
+    }
+  }
+  if (text.trim().length > EVIDENCE_SUMMARY_MAX_CHARS) {
+    return {
+      ok: false,
+      issue: "too_long",
+      detail: `证据超长（${text.trim().length} > ${EVIDENCE_SUMMARY_MAX_CHARS} 字符）：一套件一行，超出部分改为断言或文件引用`,
+    };
+  }
+  if (!parseEvidenceSummary(text)) {
+    return {
+      ok: false,
+      issue: "format",
+      detail: `证据不是规范单行概要，应为：${EVIDENCE_SUMMARY_PREFIX} ${EVIDENCE_SUMMARY_KEYS.map((key) => `${key}=<…>`).join(" ")}`,
+    };
+  }
+  return { ok: true, issue: null, detail: "规范单行结构化概要" };
+}
+
+/**
+ * C-lite 软观测：超长只追加 `report.oversize` 事件，**不拒绝**调用。
+ * 分母与统计口径见质量判据 3（以 events.jsonl 为样本源，按 actor 归属分离执行侧与主管侧）。
+ */
+function observeOversize(
+  root: string,
+  goalId: string,
+  actor: string,
+  kind: "status" | "comment",
+  chars: number,
+  limit: number,
+  extra: Record<string, unknown> = {},
+): void {
+  if (chars <= limit) return;
+  appendEvent(root, {
+    actor,
+    event: "report.oversize",
+    goal: goalId,
+    details: { kind, chars, limit, ...extra },
+  });
+}
+
 /** 更新 attempt 的一句最新状态，追加 attempt.status_reported 事件。 */
 export function reportStatus(
   root: string,
@@ -4584,6 +4946,9 @@ export function reportStatus(
     goal: goalId,
     details: { attempt: attemptId, status: line, ...(state !== undefined ? { status_state: state } : {}) },
   });
+  // g-312 C-lite：超长 status 只做软观测（report.oversize），绝不拒绝——status_line 维持「一句人话」，
+  // 结构化证据概要不进这里（见本文件 g-312 独立区块的边界说明）。
+  observeOversize(root, goalId, actor, "status", line.trim().length, OVERSIZE_STATUS_CHARS, { attempt: attemptId });
 }
 
 /** 把 subagent childId 绑定到 attempt（startContinuable 之后调用）。
@@ -6645,6 +7010,26 @@ export function setGoalTags(
 
 // ===== g-105：记忆管理操作（add / replace / remove / recall） =====
 
+/** g-339：记忆单条硬上限的**真源常量**（码点计数，非 UTF-16 长度）。
+ *
+ *  存储侧校验（`validateMemoryInput`）与注入侧渲染（`generateHandoff` 里的 `safeMemory`）
+ *  必须共用同一个值：只放宽存储、不放宽注入，会让「新上限之内的长条目」从「诚实拒绝」
+ *  退化成「写进去了但注入被静默截断」——比拒绝更危险。两边都从这里取值即可锁死一致性。
+ *
+ *  注意：`dsh-graph-host/lib/client/*.js` 是**独立打包的客户端 bundle**，无法 import 本文件；
+ *  客户端副本（client/constants.js）与 host 文案（index.js、lib/server-i18n.js）的一致性
+ *  由 `core/tests/memory-limits-g339.test.ts` 的断言核对——断言是现有构建下唯一可达手段，
+ *  这里不声称「字面共享常量」。 */
+export const MEMORY_LIMITS = {
+  /** 常驻记忆（standing）单条硬上限：200 字铁律，本目标不动 */
+  standing: 200,
+  /** 按需记忆（on_demand）单条硬上限：g-339 放宽到 1000（硬上限，超限报错；旧值见 g-339 事件流） */
+  on_demand: 1000,
+} as const;
+
+/** g-339：注入/交接时结构化记忆段的总字符预算。单条上限放宽**不**改变它。 */
+export const MEMORY_INJECT_TOTAL_BUDGET = 4000;
+
 const SECRET = /(authorization\s*:\s*bearer|bearer\s+[a-z0-9._-]{12,}|(?:api[_ -]?key|token|password|secret)\s*[:=]\s*\S+)/i;
 
 function validateMemoryText(value: unknown, field: string): string {
@@ -6661,11 +7046,11 @@ function validateMemoryInput(opts: any, replace = false): void {
   if (opts.importance !== undefined && (typeof opts.importance !== "number" || !Number.isFinite(opts.importance) || opts.importance < 1 || opts.importance > 5)) throw new GraphError("importance 必须为 1-5 数字");
   if (opts.source_goal !== undefined) { validateMemoryText(opts.source_goal, "source_goal"); }
   const text = validateMemoryText(opts.text, "text");
-  // 铁律：常驻记忆单条硬上限 ≤ 200 字；普通记忆单条 ≤ 500 字
-  if (opts.scope === "standing" && [...text].length > 200) {
-    throw new GraphError(`常驻记忆 (standing) 每条文字硬上限为 200 字符（当前 ${[...text].length} 字），请精炼后写入`);
-  } else if ([...text].length > 500) {
-    throw new GraphError(`记忆内容每条上限 500 字符（当前 ${[...text].length} 字）`);
+  // 铁律：常驻记忆单条硬上限 200 字（不动）；按需记忆单条硬上限见 MEMORY_LIMITS.on_demand
+  if (opts.scope === "standing" && [...text].length > MEMORY_LIMITS.standing) {
+    throw new GraphError(`常驻记忆 (standing) 每条文字硬上限为 ${MEMORY_LIMITS.standing} 字符（当前 ${[...text].length} 字），请精炼后写入`);
+  } else if ([...text].length > MEMORY_LIMITS.on_demand) {
+    throw new GraphError(`记忆内容每条上限 ${MEMORY_LIMITS.on_demand} 字符（当前 ${[...text].length} 字）`);
   }
 }
 
@@ -6986,12 +7371,23 @@ export function requestAcceptReview(
 /** 主管裁决接受请求。
  *  verdict="accept" → 按阶段追加 description.confirmed / criteria.confirmed(actor=human) / review.passed+transition delivered
  *  verdict="object" → 追加 review.objected（details.objection=异议内容）
- *  force=true + reason → 记 goal.amended（理由），直接走 accept 分支 */
+ *  force=true + reason → 记 goal.amended（理由），直接走 accept 分支
+ *  g-311 fast_track=true + machine_report → 机器快速放行：策略须为 auto 且四项门禁全绿，
+ *  通过则追加 review.fast_track（含四项机器证据与 baseline）再走同一 accept 映射；
+ *  任一不满足即抛 GraphError 且**零副作用**（不迁移、不记 review.passed）。缺省路径逐字不变。 */
 export function resolveAccept(
   root: string,
   id: string,
-  opts: { actor: string; verdict: "accept" | "object"; objection?: string; force?: boolean; reason?: string },
-): { ok: boolean } {
+  opts: {
+    actor: string;
+    verdict: "accept" | "object";
+    objection?: string;
+    force?: boolean;
+    reason?: string;
+    fast_track?: boolean;
+    machine_report?: unknown;
+  },
+): { ok: boolean; fast_track?: boolean } {
   const file = findGoalFile(root, id);
   const doc = loadGoal(file);
   const status = String(doc.meta.status ?? "");
@@ -7035,6 +7431,57 @@ export function resolveAccept(
       `当前状态 ${status} 不允许直接 accept——请先迁移到 review（或 in_progress 会自动补迁移）`,
     );
   }
+
+  // g-311：机器快速放行分支（准入校验全部前置，任何失败都在零副作用状态下抛错）。
+  if (opts.fast_track) {
+    const report = opts.machine_report;
+    const raw = report !== null && typeof report === "object" && !Array.isArray(report)
+      ? (report as Record<string, unknown>)
+      : {};
+    const evidence = normalizeMachineReport(report);
+    const policy = resolveReviewPolicy({
+      policy: readProjectConfig(root).review.policy,
+      type: doc.meta.type,
+      changedPaths: evidence.changed_paths,
+      productChangedLines: evidence.product_changed_lines,
+      strictRequired: raw.strict_required === true,
+    });
+    if (policy.policy !== "auto") {
+      throw new GraphError(
+        `fast_track 被拒：目标策略为 ${policy.policy}（${policy.reasons.join("；")}），不得走机器快速放行`,
+      );
+    }
+    // 门禁 ④ 以引擎自算的权威结果覆盖报告值——绝不采信调用方自报的「判据已验」。
+    const gate = evaluateFastTrackGate({ ...raw, criteria: { all_verified: allCriteriaVerified(doc.body) } });
+    if (!gate.allowed) {
+      const failed = gate.checks.filter((c) => !c.ok).map((c) => c.detail);
+      throw new GraphError(`fast_track 被拒：机器门禁未全绿（${failed.join("；")}）`);
+    }
+    appendEvent(root, {
+      actor: opts.actor,
+      event: "review.fast_track",
+      goal: id,
+      details: {
+        policy: "auto",
+        policy_source: policy.source,
+        baseline: gate.evidence.baseline_commit,
+        checks: Object.fromEntries(gate.checks.map((c) => [c.id, c.ok])),
+        evidence: {
+          changed_paths: gate.evidence.changed_paths,
+          product_changed_lines: gate.evidence.product_changed_lines,
+          untracked_files: gate.evidence.untracked_files,
+          tests_exit_code: gate.evidence.tests_exit_code,
+          tests_fail: gate.evidence.tests_fail,
+          typecheck_exit_code: gate.evidence.typecheck_exit_code,
+          criteria_all_verified: gate.evidence.criteria_all_verified,
+        },
+      },
+    });
+    applyAcceptMapping(root, id, status, opts.actor);
+    if (status === "review") registerWorktreeCandidates(root, id, opts.actor);
+    return { ok: true, fast_track: true };
+  }
+
   applyAcceptMapping(root, id, status, opts.actor);
   if (status === "review") registerWorktreeCandidates(root, id, opts.actor);
   return { ok: true };
@@ -7125,7 +7572,13 @@ export function resolvePromptOverride(globalPrompt: string, overrideValue: strin
   return overrideValue;
 }
 
-/** g-133：从 project.yaml 文本解析补充提示词覆盖字段。 */
+/** g-133：从 project.yaml 文本解析补充提示词覆盖字段（**遗留**全文件正则读取器）。
+ *
+ *  g-333 起派发侧不再调用本函数：它以 `^\s*<key>:` 在**全文件**匹配（任意缩进、任意块），
+ *  且只剥引号、**不解码 `\n` 转义**——对 `writeProjectConfig` 用 `JSON.stringify` 编码的
+ *  `prompt_overrides.subagent` 会把字面 `\n` 带进 prompt（g-333 关键陷阱 1）。
+ *  三态消费请走 `resolveSubagentPrompt` / `composeSubagentPrompt`；本函数仅为遗留单值语义
+ *  与既有断言保留（生产调用点已移除）。 */
 export function readPromptOverrideValue(projectYamlText: string, key: string): string {
   const m = projectYamlText.match(new RegExp(`^\\s*${key}:\\s*([^\\n]*)$`, "m"));
   if (!m) return "default";
@@ -7138,6 +7591,57 @@ export function readPromptOverrideValue(projectYamlText: string, key: string): s
   const hash = raw.indexOf("#");
   if (hash >= 0) raw = raw.slice(0, hash).trim();
   return raw;
+}
+
+/** g-333：遗留 `defaults.subagent_prompt`（**deprecated**，仅历史 YAML 手写，无写入入口）的路径化读取。
+ *
+ *  与 `readPromptOverrideValue` 的口径差异（均为「更安全」方向的**有意收紧**，逐条列明）：
+ *  - 按 `defaults.subagent_prompt` **路径**在块内定位，不再是 `^\s*<key>:` 全文件正则
+ *    （不会误命中注释块或其它层级的同名行）；
+ *  - 复用 core 既有标量解码（双引号转义 `\n`/`\"` 等按 YAML 语义还原），不再是「只剥引号」；
+ *  - 缺失 / `null` / `~` → `"default"`（回落 profile 全局）。遗留读取器会把字面 `null` 当文本
+ *    注入，此处**不再复刻该缺陷**。
+ *  其余与遗留口径逐字对齐：`default` 字面量 → `"default"`；显式空值（`''`/`""`）→ `""`（禁用）；
+ *  其余 → 原文（行尾 `# 注释` 按 YAML 标量语义截断）。
+ */
+export function readLegacySubagentPrompt(root: string): string {
+  const file = join(root, "project.yaml");
+  if (!existsSync(file)) return "default";
+  const lines = readFileSync(file, "utf8").split("\n");
+  const raw = readScalarByPath(lines, ["defaults", "subagent_prompt"]);
+  // null 覆盖「键缺失」「null」「~」三种情形 → 均视为未配置（回落）；"" 是显式禁用，必须保留。
+  return raw === null ? "default" : raw;
+}
+
+/** g-333：workspace 子代理补充提示词的合成（纯函数；闭集优先级，便于穷举三态用例）。
+ *
+ *  优先级（**闭集**，无其它分支）：
+ *  `prompt_overrides.subagent`（结构化三态）＞ `defaults.subagent_prompt`（遗留，deprecated）＞ profile 全局 `subagentPrompt`。
+ *
+ *  - `override` + 非空文本 → 该文本（覆盖遗留与全局）；
+ *  - `override` + 空文本（`null`/`""`）→ **等价 `disable`**：`writeProjectConfig` 以 `JSON.stringify`
+ *    编码，空串写回 `""`，结构化读取器读回即 `disable`——「空 override」在存储层不可表示，
+ *    故在此**显式定义**为 disable（整段不注入、不回落），不得依赖编码副作用的静默行为（判据 3）；
+ *  - `disable` → 不注入该段，且**不回落**全局（判据 2）；
+ *  - `default`/未配置 → 回落遗留值：遗留 `default`/缺失 → 全局；遗留 `""` → 不注入；遗留文本 → 该文本。
+ *
+ *  返回 `null` 表示「不注入该段」（与返回空串区分）。
+ */
+export function composeSubagentPrompt(
+  globalPrompt: string,
+  override: PromptOverride,
+  legacyValue: string,
+): string | null {
+  if (override.state === "override") return override.value ? override.value : null;
+  if (override.state === "disable") return null;
+  const fallback = resolvePromptOverride(globalPrompt, legacyValue);
+  return fallback ? fallback : null;
+}
+
+/** g-333：派发侧**唯一**消费者——从 workspace 根读取 `prompt_overrides.subagent`（结构化三态，
+ *  走 `readPromptOverride`）与遗留 `defaults.subagent_prompt`，按闭集优先级合成最终注入文本。 */
+export function resolveSubagentPrompt(root: string, globalPrompt: string): string | null {
+  return composeSubagentPrompt(globalPrompt, readPromptOverride(root, "subagent"), readLegacySubagentPrompt(root));
 }
 
 /** g-191：子代理模式优先级合成——单次派发 override > workspace project.yaml 明确值 > profile 全局默认 > 系统默认（standard）。

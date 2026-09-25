@@ -28,6 +28,21 @@
         };
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
         const snap = rt?.list?.getSnapshot?.() ?? {};
+        // g-351：直接父索引的目录来源改为形状探测（旧 subagentsByParent / 新 projectionsBySession），
+        // 索引构造与反查口径保持不变。
+        const catalogsByParent = new Map();
+        try {
+          const legacy = snap.subagentsByParent;
+          if (legacy && typeof legacy === "object") {
+            for (const pid of Object.keys(legacy)) catalogsByParent.set(pid, legacy[pid]?.entries);
+          }
+          const projected = snap.projectionsBySession;
+          if (projected && typeof projected === "object") {
+            for (const pid of Object.keys(projected)) {
+              if (!catalogsByParent.has(pid)) catalogsByParent.set(pid, projected[pid]?.values?.subagentCatalog);
+            }
+          }
+        } catch { /* 形状不符 → 空索引，按未收录降级 */ }
         // g-244：运行时列表快照是 byId 记录；仅旧/降级形状是 items 数组，两种都读。
         const itemList = Array.isArray(snap.items) ? snap.items : null;
         const byId = (sid) => {
@@ -35,20 +50,10 @@
           if (rec && typeof rec === "object" && Object.prototype.hasOwnProperty.call(rec, sid)) return rec[sid];
           return itemList ? itemList.find((s) => s && (s.sessionId === sid || s.id === sid)) : undefined;
         };
-        // g-244：子 → 直接父 反查表（subagentsByParent 目录 + currentAddress 导航地址）。
-        const parentIndex = new Map();
-        const catalogs = snap.subagentsByParent;
-        if (catalogs && typeof catalogs === "object") {
-          for (const pid of Object.keys(catalogs)) {
-            const entries = catalogs[pid]?.entries;
-            if (!Array.isArray(entries)) continue;
-            for (const e of entries) {
-              if (e && e.kind === "child" && typeof e.id === "string" && e.id && !parentIndex.has(e.id)) {
-                parentIndex.set(e.id, pid);
-              }
-            }
-          }
-        }
+        // g-244：子 → 直接父 反查表（子代理目录 + currentAddress 导航地址）。
+        // g-351：目录 entry 的形状探测（旧带 kind / 新无 kind）统一走 catalogParentIndex，
+        //        与子会话导航、地址构造共用同一判定函数；此处不再内联 kind 谓词。
+        const parentIndex = catalogParentIndex(catalogsByParent);
         const addr = snap.currentAddress;
         if (addr && typeof addr.childSessionId === "string" && typeof addr.parentSessionId === "string"
           && !parentIndex.has(addr.childSessionId)) {
@@ -134,6 +139,10 @@
     // 跳转后把会话页切回「对话」tab：chat 是 conversation.view 中 order=0 的固定首 tab；
     // tab 选中态存在 ui-conversation 的 per-session chatStore 内、无跨插件 API（源码核实），
     // 故在跳转后点一下首 tab（仅当当前选中不是它）。无 tab 栏（单视图）时不动。
+    // g-330 风险核实（0.1.6-alpha.2 真机 3083）：右侧栏页签条本身是 role="presentation"
+    //（`data-dockkit-strip-tabs`），不构成 `[role="tablist"]`，故下面这条全文档查询在右侧栏
+    // 打开时也不会取到右侧栏页签；实测从右侧栏看板点「转到对话」后主区确实切回「对话」。
+    // 结论：前提成立，无需为此改动本函数（不改共享跳转路径）。
     function activateChatTab() {
       requestAnimationFrame(() => requestAnimationFrame(() => {
         try {
@@ -177,14 +186,15 @@
       try {
         if (!rt) return;
         // 目录必须先加载，否则 selectSubagent 抛 "not a healthy catalog child"（发现#21）
-        rt.setSubagentCatalogOpen?.(parentSessionId, true);
-        await rt.refreshSubagents?.(parentSessionId);
-        const entries = rt.list?.getSnapshot?.().subagentsByParent?.[parentSessionId]?.entries ?? [];
-        const entry = entries.find((e) => e.kind === "child" && e.id === childId);
+        await refreshSubagentCatalog(rt, parentSessionId);
+        // g-351：entry 形状探测与地址构造统一走 helpers 的同一判定函数
+        //（旧宿主 entry 带 kind、新宿主无 kind；此处内联 kind 谓词会让新宿主恒不命中，
+        //  点「↗ 转到对话」静默退化为打开父会话）。
+        const entry = catalogChildEntry(subagentCatalogEntries(rt, parentSessionId), childId);
         if (entry) {
           // g-321：0.1.5 走 sessions.openSubagent(address)；0.1.6 该 API 已移除，
           // 由 uiWorkspace.openSession(address) 一步完成「选中会话 + 切到对话」。
-          const address = { parentSessionId, childSessionId: childId, mode: entry.mode };
+          const address = { parentSessionId, childSessionId: childId, mode: catalogAddressMode(entry) };
           if (!openSessionTarget(address, typeof rt.openSubagent === "function" ? () => rt.openSubagent(address) : null)) {
             // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
             console.warn("[dsh-graph-host] 无可用子会话导航 API（uiWorkspace.openSession / sessions.openSubagent 均缺失）：", childId);
@@ -216,6 +226,42 @@
         title: dgT('card.goToSession'),
         onClick: (e) => { e.stopPropagation(); void openChildSession(parentSessionId, childId); },
       }, label ?? dgT("card.goToSession"));
+    }
+    // ===== g-330：右侧栏页签入口（方案 B）=====
+    // 保留会话内 conversation.view 入口不变，另在 DSH 右侧栏以 tab 形式打开同一份 KanbanView。
+    // 做法对齐 dsh-context 的 watchSidebarContextTab（两段式注册）：
+    //   ① ctx.sidebarRightTabs.register({ id, kind, title, guide }) —— 类型（静态面）
+    //   ② sidebar.right.pane.tab        seat（key = 同一个 id）—— 本体
+    //   ③ sidebar.right.pane.tab.title  seat（key = 同一个 id）—— chip 标题
+    // id 必须全局唯一、kind 必须带命名空间：registry 对重复 id、以及同 band 的 kind 冲突会抛异常，
+    // 外部插件可能已占用朴素名 graph/kanban/context，故两者都用包名 "dsh-graph"。
+    const SIDEBAR_TAB_ID = "dsh-graph";
+    const SIDEBAR_TAB_KIND = "dsh-graph";
+    // guide 胶囊的位置：排在宿主内置 Files 条目（order 10）之后，与 dsh-context（order 20）一致。
+    const SIDEBAR_GUIDE_ORDER = 20;
+    // 右侧栏页签的字形（看板列）。currentColor + 透明度分层，自动跟随宿主主题；
+    // 自带组件而非复用产品图标：不依赖 primitives 的图标导出面（旧宿主可能没有）。
+    function GraphTabIcon({ size = 16, className }) {
+      return h("svg", {
+        width: size, height: size, viewBox: "0 0 16 16", fill: "none", className,
+        "aria-hidden": "true", xmlns: "http://www.w3.org/2000/svg",
+        style: { flex: "none" },
+      },
+        h("rect", { x: 1, y: 2, width: 3.6, height: 12, rx: 1.2, fill: "currentColor", opacity: 0.5 }),
+        h("rect", { x: 6.2, y: 2, width: 3.6, height: 8.5, rx: 1.2, fill: "currentColor", opacity: 0.78 }),
+        h("rect", { x: 11.4, y: 2, width: 3.6, height: 5.5, rx: 1.2, fill: "currentColor" }));
+    }
+    // chip 标题 seat：图标 + 文案。dockkit 的 chip 标题是 flex 行、且右侧有 30px 渐隐遮罩
+    // （._tabTitle mask-image linear-gradient calc(100% - 30px)），故图标 flex:none、
+    // 文案留 30px 右内边距，让渐隐落在文字之后——与 dsh-context 的 lc-title-label 同一处理。
+    function GraphTabTitle() {
+      // 切语言时重算：本组件订阅 dsh-graph:locale-changed（plugin 在 locale/change 时广播）。
+      useLocaleRevision();
+      return h(React.Fragment, null,
+        h(GraphTabIcon, { size: 16 }),
+        h("span", {
+          style: { paddingRight: 30, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+        }, dgT("sidebar.tab.title")));
     }
     return {
       name: "dsh-graph",
@@ -278,6 +324,65 @@
           connectionRt = scope.get?.("connection") ?? connectionRt;
           // 已注册的 settings section 通过 appCtx 变量读取 catalog，无需重复注册。
         });
+        // ===== g-330：右侧栏页签（方案 B）=====
+        // 必须走 deferred inject，不得进上面的硬 inject（inject: ["slots", "sessions"] 保持不变）：
+        // 宿主没有 sidebarRightTabs（精简 profile / 旧宿主）时回调不触发 ⇒ 不注册、不 pend、不报错，
+        // 会话内看板、设置页、header badge 全部照旧。全程特性探测，不做任何版本号比较。
+        try {
+          ctx.inject?.(["sidebarRightTabs"], (injected) => {
+            const scope = injected ?? {};
+            const disposers = [];
+            const own = (result) => { if (typeof result === "function") disposers.push(result); };
+            const disposeAll = () => {
+              for (const d of disposers) { try { d(); } catch { /* 静默 */ } }
+            };
+            try {
+              const tabs = scope.sidebarRightTabs;
+              // 注册表经注入的 scope 取 slots（与 dsh-context 同源）；形状不符即静默降级。
+              const sidebarSlots = scope.slots ?? ctx.slots;
+              if (!tabs || typeof tabs.register !== "function") return;
+              if (!sidebarSlots || typeof sidebarSlots.register !== "function") return;
+              own(tabs.register({
+                id: SIDEBAR_TAB_ID,
+                kind: SIDEBAR_TAB_KIND,
+                // g-230 纪律：thunk 标签，按活跃语言即时重算（guide 条目同理）
+                title: () => dgT("sidebar.tab.title"),
+                guide: [{
+                  id: SIDEBAR_TAB_ID,
+                  order: SIDEBAR_GUIDE_ORDER,
+                  title: () => dgT("sidebar.tab.title"),
+                  description: () => dgT("sidebar.guide.description"),
+                  icon: GraphTabIcon,
+                }],
+              }));
+              // 本体 seat：复用与 conversation.view **完全相同**的 KanbanView、数据源与渲染实现
+              // （g-352 att-005：头部/工具条是同一份实现、零 host 门控 ⇒ 两侧 DOM/行为完全一致；
+              //  host: "sidebar" 仅作为挂载点标识保留，不再门控任何渲染）。
+              // 该 seat 是 session 作用域，投递与 conversation.view 相同的标准套件，含 sessionId ⇒
+              //  workspace 解析链无需任何改动，也不触碰 g-113 的会话隔离边界。
+              own(sidebarSlots.inject("sidebar.right.pane.tab", () => sidebarSlots.register(
+                { name: "sidebar.right.pane.tab", key: SIDEBAR_TAB_ID, locale: "dsh-graph" },
+                (props) => h(KanbanView, { ...props, host: "sidebar" }),
+              )));
+              // chip 标题 seat
+              own(sidebarSlots.inject("sidebar.right.pane.tab.title", () => sidebarSlots.register(
+                { name: "sidebar.right.pane.tab.title", key: SIDEBAR_TAB_ID },
+                (props) => h(GraphTabTitle, props),
+              )));
+            } catch (e) {
+              // id/kind 被占用、registry 抛错等：撤销已成功的部分注册；
+              // 右侧栏只是没有这个页签，绝不拖垮浏览器。
+              disposeAll();
+              // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
+              console.warn("[dsh-graph-host] sidebarRight tab 注册失败，已撤销（右侧栏无该页签）", e);
+              return;
+            }
+            return disposeAll;
+          });
+        } catch (e) {
+          // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
+          console.warn("[dsh-graph-host] sidebarRight deferred inject 失败（右侧栏无该页签）", e);
+        }
         console.log("[dsh-graph-host] client apply: kanban view registered (i18n enabled)");
       },
     };

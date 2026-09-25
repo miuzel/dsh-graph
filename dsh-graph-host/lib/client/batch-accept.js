@@ -170,7 +170,7 @@
       const groups = batchAcceptGroupByVersion(items, dgT("lane.standalone"));
 
       const cbStyle = { flexShrink: 0, cursor: "pointer", width: 16, height: 16, margin: 0 };
-      return h("div", { style: S.overlay, ...backdropGuard },
+      return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 560 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: { ...S.close, ...(loading ? { opacity: 0.4, pointerEvents: "none" } : {}) }, onClick: closeIfIdle }, "✕"),
           h("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 6 } }, dgT("batchAccept.title")),

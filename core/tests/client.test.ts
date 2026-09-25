@@ -312,12 +312,23 @@ test("g-164 released 泳道与 active/version 泳道共用同一动态列模板�
   const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
   // 顶部表头网格与 released 泳道网格必须共用同一份按折叠状态动态计算的列模板，
   // 否则 released 泳道展开并折叠交付/阻塞列时列宽与上方泳道错位。
-  assert.match(source, /const gridCols = \["130px",/);
+  // g-352（负责人显式授权改写本段布局契约断言）：横向模板（130px 标题 + 6 阶段列）改名为
+  // horizontalGridCols；宽档的 gridCols 即它本体，只有单泳道档（g-356 起 <480px）才派生为单列全宽模板
+  //（阶段列纵向堆叠，判据 3）——仍是同一份派生，不存在第二套列宽来源。
+  // att-002：单泳道档由「单版本」放宽为「单版本 ∪ backlog 唯一泳道」（负责人裁决），故变量名
+  // 由 singleVersionMode 改为 singleLaneMode；列模板派生的唯一性不变。
+  assert.match(source, /const horizontalGridCols = \["130px",/);
+  assert.match(source, /const gridCols = singleLaneMode \? "minmax\(0, 1fr\)" : horizontalGridCols;/);
   assert.match(source, /deliverColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ deliver/);
   assert.match(source, /blockedColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ blocked/);
-  // 顶部表头网格：(1) 处使用 gridCols；首个单元格为左上角 stageHead 锚点
-  //（g-174 起承载「＋ 新建版本」入口，替换原「泳道＼阶段」文字）。
-  assert.match(source, /h\("div", \{ style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \} \},[\s\S]*?h\("div", \{ style: S\.stageHead \},\s*\n\s*h\("button", \{[\s\S]*?\}, dgT\("createVersion\.createBtn"\)\)\)/);
+  // 顶部表头网格：(1) 处使用 gridCols；首个单元格是**左上角单元格本体**（g-174 起承载
+  // 「版本管理 + ＋ 新建版本」入口，替换原「泳道＼阶段」文字）。
+  // g-352 att-005（负责人显式授权改写本段布局契约断言）：两颗按钮回到网格左上角原位置后，
+  // 该单元格抽成**单一变量** `gridCornerEl`（两侧/各档位共用同一份定义，不再有两处复制粘贴），
+  // 故这里改为断言「网格首个 child 就是 gridCornerEl，且它由版本管理 + 创建版本两颗按钮组成」。
+  assert.match(source, /const gridCornerEl = h\("div", \{[\s\S]*?\}, versionManageBtn, createVersionBtn\);/);
+  assert.match(source, /h\("div", \{ style: \{ \.\.\.S\.grid, gridTemplateColumns: gridCols \} \},\s*\n\s*\/\/[\s\S]*?\n\s*gridCornerEl,/);
+  assert.match(source, /\}, dgT\("createVersion\.createBtn"\)\);/);
   // released 泳道网格：(1) 处使用 gridCols（relx- 容器），保证与上方泳道列宽/顺序一致。
   assert.match(source, /relx-" \+ v\.slug, style: \{ \.\.\.S\.grid, gridTemplateColumns: releasedGridCols \}/);
   // 全文件恰好两处（顶部表头 + released 泳道）引用该共享模板，不存在各排各的静态模板。
@@ -326,7 +337,10 @@ test("g-164 released 泳道与 active/version 泳道共用同一动态列模板�
 
 test("g-174 标题栏源契约：version 链接、新建版本入口迁移、设置按钮位于 DEBUG 左侧", () => {
   const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/kanban.js"), "utf8");
-  const head = source.slice(source.indexOf('h("div", { style: S.head },'), source.indexOf("// g-108：顶部 supervisor 状态栏"));
+  // g-330：切片锚点由 'h("div", { style: S.head },' 放宽为 'h("div", { style: S.head'
+  //（该行新增了右侧栏专用的条件 className，样式本体仍是 S.head 本体、会话内为 undefined）。
+  // 切片终点与下面三条断言逐字未变，标题栏契约的覆盖范围与强度不受影响。
+  const head = source.slice(source.indexOf('h("div", { style: S.head'), source.indexOf("// g-108：顶部 supervisor 状态栏"));
   // 标题栏显示插件版本链接，新标签打开插件官网。
   assert.match(head, /href: "https:\/\/github\.com\/miuzel\/dsh-graph",\s*\n\s*target: "_blank"/);
   assert.match(head, /"version: " \+ PLUGIN_VERSION/);
@@ -1516,6 +1530,7 @@ test("g-247 客户端 formatStatusWithLifecycle：结构化状态优先，缺失
 });
 
 test("g-168 复制失败 fallback：初始隐藏且只在失败后显示可复制请求", () => {
+  // g-327：这套降级契约是「投递不可用」时的兜底路径，逐字保留；直发分支见文件末尾的 g-327 用例。
   const actions = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
   assert.ok(/const \[fallback, setFallback\] = React\.useState\(false\)/.test(actions));
   assert.ok(/setFallback\(!copied\)/.test(actions));
@@ -3433,7 +3448,28 @@ test("真实 HTTP：readBodyCapped 超限返回可读 400（无 ECONNRESET）且
 /**
  * 从 plugin.js 源模块中按花括号配平提取真实的 resolveWorkspaceOfSession 片段，
  * 在 vm 上下文中执行，避免测试再写一份「看起来一样」的模拟实现。
+ * g-351：resolveWorkspaceOfSession 的子→父反查索引改由 helpers 的 catalogParentIndex
+ * 承担（形状探测：旧 entry 带 kind / 新 entry 无 kind），故把 helpers 里的形状探测族
+ * 一并从真实源模块提取注入沙箱——与浏览器 bundle 的同一工厂作用域拼接口径一致。
  */
+function extractBraceBalanced(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `源模块中存在 function ${name}`);
+  let depth = 0;
+  for (let i = source.indexOf("{", start); i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") { depth--; if (depth === 0) return source.slice(start, i + 1); }
+  }
+  throw new Error(`function ${name} 花括号无法配平`);
+}
+
+const CATALOG_SHAPE_FUNCS = ["isCatalogChildEntry", "catalogChildEntry", "catalogParentIndex"];
+
+function catalogShapeSource(): string {
+  const helpers = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/helpers.js"), "utf8");
+  return CATALOG_SHAPE_FUNCS.map((n) => extractBraceBalanced(helpers, n)).join("\n");
+}
+
 function loadRealWorkspaceResolver() {
   const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
   const start = plugin.indexOf("let lastGoodWorkspace = null;");
@@ -3447,7 +3483,7 @@ function loadRealWorkspaceResolver() {
     else if (ch === "}") { depth--; if (depth === 0) { end = i + 1; break; } }
   }
   assert.ok(end > 0, "resolveWorkspaceOfSession 花括号必须配平");
-  const src = plugin.slice(start, end);
+  const src = `${catalogShapeSource()}\n${plugin.slice(start, end)}`;
   const ctx: any = {};
   vm.createContext(ctx);
   new vm.Script(`${src}\nglobalThis.__resolveWs = resolveWorkspaceOfSession;`).runInContext(ctx);
@@ -3479,11 +3515,29 @@ test("g-244 子代理会话解析：parentId/items 双形状、subagentsByParent
   assert.equal(resolve("child-1", { workspacesRt, sessionsRt: byIdRt }), "/repo-beta", "byId+parentId 回溯到父工作区");
 
   // 3. 子会话只在 subagentsByParent 目录里（byId 缺失）也能反查父会话
+  //    entry 为 0.1.6 真实形状：带 kind（权威：dsh-api-remotes subagents.list 结果 schema）
   const catalogRt = sessSnap({
     byId: {},
-    subagentsByParent: { "s-b": { entries: [{ kind: "child", id: "child-2", mode: "continuable", label: "x" }] } },
+    subagentsByParent: { "s-b": { entries: [{ kind: "child", id: "child-2", activity: "inactive", hasChildren: false, mode: "continuable", label: "x" }] } },
   });
   assert.equal(resolve("child-2", { workspacesRt, sessionsRt: catalogRt }), "/repo-beta", "subagentsByParent 反查父会话");
+
+  // 3b. g-351：0.1.7 真实形状——快照只有 projectionsBySession，且 entry **无 kind**
+  //     （权威：0.1.7 dsh-api-remotes/lib/client.js:9055）。反查索引若不换 entry 形状，
+  //     这里会解析失败 ⇒ 看板卡片找不到所属 workspace。
+  const projRt = sessSnap({
+    byId: {},
+    projectionsBySession: { "s-b": { values: { subagentCatalog: [{ id: "child-2n", createdAt: 21, mode: "continuable", label: "x" }] } } },
+  });
+  assert.equal(resolve("child-2n", { workspacesRt, sessionsRt: projRt }), "/repo-beta", "0.1.7 projectionsBySession（无 kind entry）反查父会话");
+
+  // 3c. g-351：0.1.6 的 diagnostic 行带 id 但**不是**子会话，不得进反查索引
+  //     （只按 id 认会把 diagnostic 误当子会话，形状探测必须以 kind 判别）
+  const diagRt = sessSnap({
+    byId: {},
+    subagentsByParent: { "s-b": { entries: [{ kind: "diagnostic", id: "child-diag", reason: "corrupt" }] } },
+  });
+  assert.equal(resolve("child-diag", { workspacesRt, sessionsRt: diagRt }), null, "diagnostic 行不得被当成子会话（无法定位父）");
 
   // 4. 多层嵌套：孙会话 → 子会话 → 父会话
   const nestedRt = sessSnap({
@@ -3621,7 +3675,7 @@ test("g-246 源契约：settings-modal.js 提供规范化脏判定函数且所�
   assert.match(modal, /function settingsDraftIsDirty\(baseline, form, refreshIntervalInput\)/);
   // 统一拦截函数存在，确认文案明确
   assert.match(modal, /const requestClose = \(\) => \{/);
-  assert.match(modal, /window\.confirm\(dgT\("common\.confirm"\)\)/);
+  assert.match(modal, /window\.confirm\(dgT\("settings\.discardDirtyConfirm"\)\)/);
   // saving 中阻止关闭（避免保存与关闭确认竞态）
   assert.match(modal, /if \(saving\) \{ setNote\(\{ kind: "err", text: dgT\("common\.saving"\) \}\); return; \}/);
   // ✕（loading/失败/主表单 3 处）+ 底部「关闭」按钮全部走同一 requestClose
@@ -3699,7 +3753,7 @@ test("g-246 生成 bundle 契约：client.js 同步含脏判定与统一拦截",
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "client.js 保留 GENERATED FILE header");
   assert.match(bundle, /function normalizeSettingsDraft\(/);
   assert.match(bundle, /function settingsDraftIsDirty\(/);
-  assert.match(bundle, /window\.confirm\(dgT\("common\.confirm"\)\)/);
+  assert.match(bundle, /window\.confirm\(dgT\("settings\.discardDirtyConfirm"\)\)/);
   assert.match(bundle, /useBackdropClose\(requestClose\)/);
 });
 
@@ -3938,7 +3992,7 @@ test("g-259 行为模拟：判据 1~4 全覆盖（成功生效、校验失败零
     h.calls.confirm = [];
     h.harness.requestClose();
     assert.equal(h.calls.confirm.length, 1, "关窗被拦截，弹出 confirm 提示");
-    assert.equal(h.calls.confirm[0], "common.confirm");
+    assert.equal(h.calls.confirm[0], "settings.discardDirtyConfirm");
     // 用户确认丢弃并关闭，localStorage 严格保持原值 10，无脏数据泄露
     assert.equal(h.store.get("dsh-graph.refresh-interval"), "10", "确认丢弃后原值 10 严格保持");
 
@@ -4138,4 +4192,261 @@ test("g-323 单卡接受：0.1.6 有 using 的宿主优先走 using，恰好一�
   assert.match(String(prompts[0].parts[0].text), /【负责人交付复核请求】/);
   assert.match(String(prompts[0].parts[0].text), /「g-7」/);
   assert.equal(record.releases, 1, "release 必须恰好一次（无代际泄漏）");
+});
+
+
+// ===== g-327：定义/润色「发送给主管」——能直发就直发，不能直发完整退回 g-168 复制契约 =====
+// 能力分流（using / retain / 0.1.5 被动回退）全部在共享 helper promptSessionQueue 内部按**能力**判定；
+// openSupervisor 只按它的返回值分流，自身绝不写版本号分支、也绝不自带第二份 using/retain 探测。
+// 下列 runner 从源码里按花括号配平抠出**真实的 openSupervisor 箭头函数**并注入其闭包自由变量，
+// 共享 helper 同样抠自 session-hooks.js 的真实实现——执行的是模块里的真实代码，不是重写的一份。
+
+let cachedGoalActionsI18n: { zh: Record<string, string>; en: Record<string, string>; dgT: any } | null = null;
+/** 真实 i18n 字典 + 中文降级 dgT：从 i18n.js 求值（与 g-272 既有做法一致）。 */
+function goalActionsI18n() {
+  if (cachedGoalActionsI18n) return cachedGoalActionsI18n;
+  const source = readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/i18n.js"), "utf8");
+  const sandbox: any = { React: {}, console };
+  vm.runInNewContext(source + "; this.zh = zh; this.en = en; this.dgT = createTranslator();", sandbox);
+  cachedGoalActionsI18n = { zh: sandbox.zh, en: sandbox.en, dgT: sandbox.dgT };
+  return cachedGoalActionsI18n;
+}
+
+/** 真实 openSupervisor：抠出箭头函数 + 注入闭包自由变量，返回可 await 的调用器与可观测状态。 */
+function makeOpenSupervisorRunner(opts: {
+  rt: any; supervisorSession: any; request: string;
+  copyText?: (text: string) => boolean | Promise<boolean>;
+  appCtx?: any;
+}) {
+  const arrow = extractBalanced(goalActionsClientSrc(), "const openSupervisor = ").slice("const openSupervisor = ".length).trim();
+  assert.match(arrow, /^async \(\) => \{/, "抠到的确实是 openSupervisor 箭头函数");
+  const state = {
+    loading: [] as boolean[], notes: [] as any[], modes: [] as any[], fallbacks: [] as any[],
+    toasts: [] as string[], opened: [] as any[], activated: 0, copied: [] as string[],
+  };
+  const make = new Function(
+    "dgT", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue", "request",
+    "copyText", "openSessionTarget", "activateChatTab", "showToast",
+    "setLoading", "setMode", "setNote", "setFallback",
+    `return ${arrow};`,
+  );
+  const run = make(
+    goalActionsI18n().dgT, opts.rt, opts.appCtx ?? null, opts.supervisorSession, loadPromptSessionQueueHelper(), opts.request,
+    // 记录每一次调用：直发成功分支若也走剪贴板，state.copied 会立刻非空（强负向对照）
+    async (text: string) => { state.copied.push(text); return opts.copyText ? await opts.copyText(text) : false; },
+    (...args: any[]) => { state.opened.push(args); },
+    () => { state.activated += 1; },
+    (text: string) => { state.toasts.push(text); },
+    (v: boolean) => { state.loading.push(v); },
+    (v: any) => { state.modes.push(v); },
+    (v: any) => { state.notes.push(v); },
+    (v: any) => { state.fallbacks.push(v); },
+  ) as () => Promise<void>;
+  return { run, state };
+}
+
+/** 0.1.6 形态的 using 宿主：内部 try/finally 保证 release 恰好一次（真实语义）。 */
+function makeDsh016UsingHost(session: any, record: { releases: number; usingCalls: any[]; released: boolean }) {
+  return {
+    binding: () => undefined,
+    using: async (target: any, options: any, operation: any) => {
+      record.usingCalls.push({ target, options });
+      const reference: any = { sessionId: target, ready: Promise.resolve() };
+      Object.defineProperty(reference, "binding", {
+        get() {
+          if (record.released) throw new Error("Session reference is released");
+          return { session };
+        },
+      });
+      reference.release = () => { record.released = true; record.releases += 1; };
+      try { return await operation(reference); } finally { reference.release(); }
+    },
+  };
+}
+
+test("g-327 直发契约（源码）：先投递后复制、直发成功分支不写剪贴板，兜底复制契约逐字保留", () => {
+  const open = extractBalanced(goalActionsClientSrc(), "const openSupervisor = ");
+  // 版本号/代际判断只在**可执行代码**里违规，注释里说明代际不算（与 g-273/g-321 既有断言口径一致）
+  const stripComments = (s: string) => s.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+  const code = stripComments(open);
+
+  // 分流完全交给共享 helper：自身零探测、零版本号判断
+  assert.match(code, /promptSessionQueue\(rt, supervisorSession,/, "openSupervisor 必须消费共享 helper");
+  assert.doesNotMatch(code, /typeof\s+\w+\??\.\s*(using|retain)\s*===/, "不得自带 using/retain 探测");
+  assert.doesNotMatch(code, /0\.1\.[0-9]|alpha/, "不得写版本号/代际分支");
+
+  // 顺序：投递尝试必须先于剪贴板复制（复制只是投递失败后的兜底）
+  const deliverAt = code.indexOf("promptSessionQueue(");
+  const copyAt = code.indexOf("copyText(request)");
+  assert.ok(deliverAt >= 0, "存在直发调用");
+  assert.ok(copyAt > deliverAt, "必须先尝试直发，copyText 只能是投递失败后的兜底");
+
+  // 直发成功分支：不写剪贴板、给如实反馈、清掉手动复制预览、仍打开主管会话
+  const branch = /if \(delivered\) \{([\s\S]*?)\n          \}/.exec(open);
+  assert.ok(branch, "存在 if (delivered) 直发成功分支");
+  const deliveredBody = stripComments(branch![1]);
+  assert.doesNotMatch(deliveredBody, /copyText\(/, "直发成功分支绝不得写剪贴板（负责人：直接发不需要复制一份）");
+  assert.doesNotMatch(deliveredBody, /exec\.requestCopied/, "直发成功分支不得复用「已复制…请粘贴发送」文案");
+  assert.match(deliveredBody, /dgT\("exec\.requestDelivered"\)/, "直发成功必须给如实 toast");
+  assert.match(deliveredBody, /setFallback\(false\)/, "直发成功不得展示手动复制预览");
+  assert.match(deliveredBody, /openSessionTarget\(supervisorSession/, "直发后仍打开主管会话便于跟进");
+  assert.match(deliveredBody, /activateChatTab\(\)/);
+
+  // 兜底复制契约逐字保留（copyText / openSessionTarget / activateChatTab / setFallback 仍被真实调用）
+  assert.match(code, /const copied = await copyText\(request\);/);
+  assert.match(code, /if \(copied\) showToast\(dgT\("exec\.requestCopied"\)\);/);
+  assert.match(code, /setFallback\(!copied\)/);
+  assert.match(code, /setNote\(copied \? dgT\("exec\.requestCopiedOpened"\) : dgT\("exec\.autocopyFailedRequest"\)\);/);
+  assert.match(code, /openSessionTarget\(supervisorSession, typeof rt\.open === "function"/);
+  // 手动复制预览在 DefinitionPolish 的渲染分支里（openSupervisor 之外），故查整份模块源码
+  assert.match(goalActionsClientSrc(), /fallback \? h\("textarea", \{ readOnly: true, value: request/, "复制失败的手动复制预览仍在");
+  // 原错误分支与 loading 配平保留
+  assert.match(code, /exec\.supervisorUnavailable/);
+  assert.match(code, /exec\.supervisorNotConfigured/);
+  assert.match(code, /exec\.supervisorPathFailed/);
+});
+
+/** openSupervisor 开头会先 setNote(null) 清空旧提示；断言只看随后写入的真实文案。 */
+const settledNotes = (state: { notes: any[] }) => state.notes.filter((v) => v !== null);
+
+test("g-327 直发分支行为：using 宿主下恰好一条 queue 消息、copyText 零调用、文案如实", async () => {
+  const prompts: any[] = [];
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  const record = { releases: 0, usingCalls: [] as any[], released: false };
+  const { run, state } = makeOpenSupervisorRunner({
+    rt: makeDsh016UsingHost(session, record), supervisorSession: "sup-1", request: "REQ-TEXT",
+    // 直发分支若触碰剪贴板，这里会立刻抛错并改为失败路径
+    copyText: () => { throw new Error("直发分支不得调用 copyText"); },
+  });
+  await run();
+
+  assert.equal(record.usingCalls.length, 1, "有 using 时必须优先 using");
+  assert.deepEqual(record.usingCalls[0], { target: "sup-1", options: { source: "dsh-graph" } });
+  assert.equal(record.releases, 1, "release 必须恰好配平一次");
+  assert.equal(prompts.length, 1, "直发必须恰好一条消息（不得 0 条，也不得 N 条）");
+  assert.equal(prompts[0].mode, "queue");
+  assert.equal(String(prompts[0].parts[0].text), "REQ-TEXT", "投递的正是本次请求文本");
+  assert.deepEqual(state.copied, [], "直发成功本轮绝不写剪贴板");
+
+  const { zh } = goalActionsI18n();
+  assert.deepEqual(state.toasts, [zh["exec.requestDelivered"]], "toast 必须如实说已直接发送");
+  assert.deepEqual(settledNotes(state), [zh["exec.requestDeliveredOpened"]]);
+  assert.match(state.toasts[0], /直接发送/);
+  assert.doesNotMatch(state.toasts[0], /复制|粘贴|剪贴板/, "直发成功不得再说已复制/请粘贴");
+  assert.deepEqual(state.fallbacks, [false], "直发成功不展示手动复制预览");
+  assert.deepEqual(state.modes, ["supervisor"]);
+  assert.equal(state.activated, 1, "仍切换到主管对话窗");
+  assert.equal(state.opened.length, 1, "仍打开主管会话");
+  assert.equal(state.opened[0][0], "sup-1");
+  assert.deepEqual(state.loading, [true, false], "loading 必须配平释放");
+});
+
+test("g-327 直发分支行为：0.1.6 retain 宿主（无 get）同样直发且 release 配平", async () => {
+  const prompts: any[] = [];
+  const session = { prompt: async (parts: any, mode: any) => { prompts.push({ parts, mode }); return { ok: true }; } };
+  const record = { releases: 0, retains: [] as any[] };
+  const { run, state } = makeOpenSupervisorRunner({
+    rt: makeDsh016RetainHost(session, record), supervisorSession: "sup-1", request: "REQ",
+    copyText: () => { throw new Error("直发分支不得调用 copyText"); },
+  });
+  await run();
+  assert.equal(record.retains.length, 1, "0.1.6 必须先 retain 才借得到会话");
+  assert.equal(record.releases, 1, "release 必须恰好配平一次");
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].mode, "queue");
+  assert.equal(String(prompts[0].parts[0].text), "REQ");
+  assert.deepEqual(state.copied, [], "直发成功本轮绝不写剪贴板");
+  assert.equal(state.toasts.length, 1);
+  assert.match(state.toasts[0], /直接发送/);
+});
+
+test("g-327 退回分支行为：投递不可用时完整退回 g-168 复制契约（复制成功）", async () => {
+  const { run, state } = makeOpenSupervisorRunner({
+    // 无 using / 无 retain / get 取不到会话 → 投递不可用
+    rt: { binding: () => undefined, get: () => undefined }, supervisorSession: "sup-1", request: "REQ",
+    copyText: (text: string) => text === "REQ",
+  });
+  await run();
+  const { zh } = goalActionsI18n();
+  assert.deepEqual(state.copied, ["REQ"], "取不到会话时必须退回剪贴板复制");
+  assert.deepEqual(state.toasts, [zh["exec.requestCopied"]], "复制成功沿用原 toast");
+  assert.deepEqual(settledNotes(state), [zh["exec.requestCopiedOpened"]], "复制成功沿用原提示");
+  assert.deepEqual(state.fallbacks, [false], "复制成功不展示手动复制预览");
+  assert.deepEqual(state.modes, ["supervisor"]);
+  assert.equal(state.activated, 1);
+  assert.equal(state.opened.length, 1);
+  assert.deepEqual(state.loading, [true, false]);
+});
+
+test("g-327 退回分支行为：投递抛错 / 复制失败仍走原契约与手动复制预览", async () => {
+  // 投递路径抛错（prompt 抛错）→ helper 如实 false → 退回复制契约，且绝不穿出异常
+  const prompts: any[] = [];
+  const record = { releases: 0, usingCalls: [] as any[], released: false };
+  const boom = makeOpenSupervisorRunner({
+    rt: makeDsh016UsingHost({ prompt: async () => { prompts.push(1); throw new Error("prompt boom"); } }, record),
+    supervisorSession: "sup-1", request: "REQ", copyText: () => true,
+  });
+  await assert.doesNotReject(() => boom.run(), "投递抛错绝不得穿出 openSupervisor");
+  const { zh } = goalActionsI18n();
+  assert.equal(prompts.length, 1, "确实尝试过投递");
+  assert.equal(record.releases, 1, "prompt 抛错也必须 release 配平");
+  assert.deepEqual(boom.state.copied, ["REQ"], "投递失败后必须退回剪贴板复制");
+  assert.deepEqual(boom.state.toasts, [zh["exec.requestCopied"]]);
+  assert.deepEqual(boom.state.fallbacks, [false]);
+  assert.deepEqual(boom.state.loading, [true, false]);
+
+  // 投递不可用 + 复制失败 → 原契约的降级：fallback=true、展示可复制请求、如实提示，且不误报成功
+  const fail = makeOpenSupervisorRunner({
+    rt: { binding: () => undefined }, supervisorSession: "sup-1", request: "REQ", copyText: () => false,
+  });
+  await fail.run();
+  assert.deepEqual(fail.state.copied, ["REQ"]);
+  assert.deepEqual(fail.state.toasts, [], "复制失败不得显示成功 toast");
+  assert.deepEqual(settledNotes(fail.state), [zh["exec.autocopyFailedRequest"]], "复制失败沿用原降级提示");
+  assert.deepEqual(fail.state.fallbacks, [true], "复制失败必须置 fallback=true 展示可复制 textarea");
+});
+
+test("g-327 原错误分支保留：无会话服务 / 未配置主管会话时零投递、零复制并如实报错", async () => {
+  const noRt = makeOpenSupervisorRunner({
+    rt: null, appCtx: { get: () => null }, supervisorSession: "sup-1", request: "REQ",
+    copyText: () => { throw new Error("错误分支不得复制"); },
+  });
+  await noRt.run();
+  const { zh } = goalActionsI18n();
+  assert.deepEqual(noRt.state.copied, [], "无会话服务不得走剪贴板");
+  assert.deepEqual(noRt.state.toasts, []);
+  assert.equal(settledNotes(noRt.state).length, 1);
+  assert.match(String(settledNotes(noRt.state)[0]), /会话服务不可用/);
+  assert.deepEqual(noRt.state.loading, [true, false]);
+
+  const noSup = makeOpenSupervisorRunner({
+    rt: { binding: () => undefined }, supervisorSession: null, request: "REQ",
+    copyText: () => { throw new Error("错误分支不得复制"); },
+  });
+  await noSup.run();
+  assert.deepEqual(noSup.state.copied, []);
+  assert.deepEqual(noSup.state.toasts, []);
+  assert.equal(settledNotes(noSup.state).length, 1);
+  assert.match(String(settledNotes(noSup.state)[0]), /未配置主管会话/);
+  assert.deepEqual(noSup.state.loading, [true, false]);
+});
+
+test("g-327 i18n：直发文案如实（无「复制/粘贴」）、en 零 CJK、复制兜底文案逐字保留", () => {
+  const { zh, en } = goalActionsI18n();
+  for (const key of ["exec.requestDelivered", "exec.requestDeliveredOpened"]) {
+    assert.ok(zh[key] !== undefined, `zh 缺少 ${key}`);
+    assert.ok(en[key] !== undefined, `en 缺少 ${key}`);
+    assert.match(zh[key], /直接发送/, `zh ${key} 必须如实说明已直接发送`);
+    assert.doesNotMatch(zh[key], /复制|粘贴|剪贴板/, `zh ${key} 不得谎称复制/粘贴`);
+    assert.doesNotMatch(en[key], /[\u3400-\u9fff]/, `en ${key} 含 CJK`);
+    assert.match(en[key], /directly/i, `en ${key} 必须如实说明已直接发送`);
+    assert.doesNotMatch(en[key], /copi|paste|clipboard/i, `en ${key} 不得谎称复制/粘贴`);
+  }
+  // 按钮文案不再写死「复制请求」：直发与复制兜底两条分支下都必须如实
+  assert.doesNotMatch(zh["exec.goToSupervisor"], /复制/);
+  assert.doesNotMatch(en["exec.goToSupervisor"], /copi|clipboard|paste/i);
+  // 复制兜底分支文案逐字保留（复制路径仍是真实兜底）
+  assert.equal(zh["exec.requestCopied"], "✅ 请求已复制到剪贴板，可在主管对话窗粘贴发送");
+  assert.equal(zh["exec.requestCopiedOpened"], "✅ 请求已复制，已打开主管会话，请粘贴发送");
+  assert.equal(zh["exec.autocopyFailedRequest"], "⚠️ 自动复制失败，请手动复制下方请求");
 });
