@@ -2140,3 +2140,121 @@ test("g-352 att-004 N1（渲染级）：标签筛选激活时头部「清除筛�
   assert.doesNotMatch(kanban, /marginLeft: 4, padding: "0 6px", fontSize: 11/, "源码里不得再有 tagclear 的自覆盖口径");
   assert.match(kanban, /style: \{ \.\.\.S\.btn, \.\.\.rowBtnStyle\(\), marginLeft: 4 \}/, "tagclear 走 rowBtnStyle 同行基准");
 });
+
+
+// ============================================================================
+// g-360（负责人 2026-09-25 Windows 实机复验报障）：窄档单泳道「未生效」
+//
+// 取证结论（发布包 tarball 548afccd… → 隔离实例 → 真实浏览器 DOM 断言）：
+//   **6 个触发条件里不成立的是第 1 条「宽度 < 480」**。宿主页签宽度由**页签布局模式**决定
+//   （实测单页签 ≈720px / `分栏` ≈360px / `全屏` ≈800px，并随窗口宽度等比变化），默认单页签
+//   宽度 **719px ≫ 480** ⇒ `narrowSingleTier=false` ⇒ 渲染横向多泳道网格。
+//   viewVersionSlug 初值 `null`、**零持久化**（发布包 bundle 内亦为 `useState(null)`）；
+//   `active` 口径由服务端 `readdirSync(versions)` + `version.md` 存在性构造，**不含伪版本项**。
+//   故 H2（初值/持久化=「全部版本」）与 H3（active 含伪版本）均**不成立**，宽度的同源同断点也成立。
+//   本组用例把这条**唯一闸门**钉死，并给出负向对照（宽度是必要前置，不是零版本就够）。
+//   不改语义：<480 默认落独立目标（g-358）与显式「全部版本」退出收窄（判据 2）逐字保持。
+// ============================================================================
+
+/** g-360 报障场景：工作区仅有独立目标、零版本。 */
+const g360StandaloneOnly = () => boardFixture({
+  versions: [],
+  standalone: [
+    { id: "g-900", title: "独立目标一", status: "draft", tags: [], criteria_count: 0, cards_count: 0 },
+    { id: "g-901", title: "独立目标二", status: "review", tags: [], criteria_count: 0, cards_count: 0 },
+  ],
+  backlog: [],
+  backlog_count: 0,
+});
+
+test("g-360 判据1/2（渲染级）：<480 与 ≥480 的 459/479/480/500 边界矩阵（三态一致）", async () => {
+  // 三态 × 四宽度；narrowExpectedLane = <480 时选择器当前项应显示的泳道名
+  const states: Array<[string, any, string | null]> = [
+    ["仅独立目标无版本", g360StandaloneOnly(), "独立目标"],
+    ["有 1 个版本", boardFixture({ versions: [{ slug: "v1", name: "V1", status: "active", goals: [], goals_count: 0, lazy: false, loaded: true }], standalone: [], backlog: [], backlog_count: 0 }), "V1"],
+    ["空工作区", boardFixture({ versions: [], standalone: [], backlog: [], backlog_count: 0 }), "独立目标"],
+  ];
+  for (const [name, board, narrowLane] of states) {
+    for (const [w, narrow] of [[459, true], [479, true], [480, false], [500, false]] as Array<[number, boolean]>) {
+      const h = createRenderHarness({ boardWidth: w, payload: { board, backlogGoals: [] } });
+      const els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+      const tpl = String(gridTemplates(els)[0]);
+      const trigger = withClass(els, "dg-version-picker-trigger").pop();
+      if (narrow) {
+        assert.equal(tpl, "minmax(0, 1fr)", `${name} ${w}px：<480 必须单列全宽（实得 ${tpl}）`);
+        assert.ok(trigger, `${name} ${w}px：<480 必须存在「查看版本」选择器`);
+        assert.ok(treeText(trigger).includes(narrowLane as string),
+          `${name} ${w}px：当前项必须是「${narrowLane}」（实得「${treeText(trigger)}」）`);
+        assert.equal(els.filter((e) => e.props?.key === "backlog-label").length, 0, `${name} ${w}px：<480 无 backlog 泳道`);
+        if (!narrowLane || narrowLane === "独立目标") {
+          assert.equal(withClass(els, "dg-version-label").length, 0, `${name} ${w}px：<480 无版本泳道`);
+        }
+      } else {
+        assert.ok(tpl.startsWith("130px"), `${name} ${w}px：≥480 必须横向多泳道网格（实得 ${tpl}）`);
+        // 负向对照（改坏就红）：宽档**整个看板都不渲染版本选择器** ⇒ 宽档下不存在「当前选中项」
+        assert.equal(trigger, undefined, `${name} ${w}px：≥480 不得渲染版本选择器（选择器只属于单泳道档）`);
+        assert.equal(withClass(els, "dg-version-picker-trigger").length, 0, `${name} ${w}px：选择器数量必须为 0`);
+      }
+    }
+  }
+});
+
+test("g-360 判据1（负向对照）：零版本**不足以**进单泳道 —— 宽度是必要前置", async () => {
+  // 同一块「仅独立目标、零版本」的板：<480 落单泳道；≥480 仍横向多泳道。
+  // 若有人把 standaloneLaneDefault 的 narrowSingleTier 闸门删掉（或把断点抬到 ≥480），本用例立即变红。
+  const board = g360StandaloneOnly();
+  const narrow = createRenderHarness({ boardWidth: 479, payload: { board, backlogGoals: [] } });
+  const nEls = (await narrow.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  assert.equal(gridTemplates(nEls)[0], "minmax(0, 1fr)", "479px + 零版本 ⇒ 单泳道");
+  assert.ok(withClass(nEls, "dg-version-picker-trigger").length > 0, "479px + 零版本 ⇒ 选择器在（默认项=独立目标）");
+
+  const wide = createRenderHarness({ boardWidth: 480, payload: { board, backlogGoals: [] } });
+  const wEls = (await wide.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const wTpl = String(gridTemplates(wEls)[0]);
+  assert.ok(wTpl.startsWith("130px"), `480px + 零版本 ⇒ 仍横向多泳道（实得 ${wTpl}）`);
+  // 独立目标在宽档回到常规横向形态（不是纵向堆叠的 6 个阶段块）
+  assert.equal(wEls.filter((e) => typeof e.props?.key === "string" && /^standalone-v-[a-z]+$/.test(e.props.key)).length, 0,
+    "480px 宽档：独立目标不得纵向堆叠");
+  assert.equal(wEls.filter((e) => e.props?.key === "standalone-label").length, 1, "480px 宽档：独立目标泳道仍在（常规形态）");
+  assert.equal(wEls.filter((e) => e.props?.key === "backlog-label").length, 1, "480px 宽档：backlog 泳道仍在");
+});
+
+test("g-360 判据1（报障文案复核）：「全部版本」文本只可能出现在单泳道档的下拉选项里", async () => {
+  const board = g360StandaloneOnly();
+  // ① 宽档（报障实测 719px 所在档）：整棵树里**没有任何**「全部版本」文本，也没有选择器
+  const wide = createRenderHarness({ boardWidth: 719, payload: { board, backlogGoals: [] } });
+  const wRoot = (await wide.settle({ sessionId: "s1", host: "sidebar" })).root();
+  assert.ok(!treeText(wRoot).includes("全部版本"),
+    "719px 宽档：整棵树不得出现「全部版本」文本（负责人看到的「全部版本」不可能来自宽档当前项）");
+  assert.ok(!treeText(wRoot).includes("选择要查看的版本"), "719px 宽档：不得出现版本选择器下拉");
+
+  // ② 单泳道档：当前项是「独立目标」；「全部版本」只作为**下拉里的一个选项**（未勾选）出现
+  const h = createRenderHarness({ boardWidth: 459, payload: { board, backlogGoals: [] } });
+  const els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const trigger = withClass(els, "dg-version-picker-trigger").pop();
+  assert.ok(trigger, "459px：存在选择器");
+  assert.ok(treeText(trigger).includes("独立目标"), "459px：当前项必须是「独立目标」");
+  assert.ok(!treeText(trigger).includes("全部版本"), "459px：当前项不得是「全部版本」");
+  trigger.props.onClick({ stopPropagation() {} });
+  const opened = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
+  const allOpt = opened.filter((e) => elClass(e) === "dg-schedule-version-item" && !String(e.props?.key ?? "").startsWith("vp-")).pop();
+  assert.ok(allOpt, "459px：下拉里存在「全部版本」选项");
+  const allText = treeText(allOpt);
+  assert.ok(allText.includes("全部版本"), "459px：该选项文案为「全部版本」");
+  assert.ok(!allText.trim().startsWith("✓"), "459px：「全部版本」选项**未勾选**（当前项是独立目标）");
+});
+
+test("g-360 判据4（澄清）：单泳道档与工具条折叠同源同断点；boardWidthTier 的 narrow 档当前不可达", () => {
+  // 同源：两处都吃同一个 boardWidth 派生量，且断点常量同界 ⇒ 不存在「工具条已折叠但泳道未收窄」。
+  assert.equal(NARROW_TOOLBAR_MAX_WIDTH, NARROW_SINGLE_VERSION_MAX_WIDTH, "两档阈值必须同界（同源同断点）");
+  for (const w of [0, 240, 359, 400, 460, 479, 479.9]) {
+    assert.equal(isSingleVersionTier(w), true, `${w}px ⇒ 单泳道档`);
+    assert.equal(shouldCollapseToolbar(w), true, `${w}px ⇒ 工具条同时折叠（不存在半折叠）`);
+  }
+  for (const w of [480, 481, 500, 719, 900, Infinity]) {
+    assert.equal(isSingleVersionTier(w), false, `${w}px ⇒ 不在单泳道档`);
+  }
+  // narrow 档不可达但**保留**：它是 single 与 wide 之间的空档，阈值一旦被单独回调即自动恢复语义。
+  const seen = new Set([...Array(2000).keys()].map((i) => boardWidthTier(i)));
+  assert.deepEqual([...seen].sort(), ["single", "wide"], "当前只可能产出 single / wide 两档（narrow 保留但不可达）");
+});
