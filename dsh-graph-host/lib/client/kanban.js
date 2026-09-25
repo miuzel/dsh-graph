@@ -2005,7 +2005,11 @@
             _polishActive: polishGoal === g.id,
             _updateEmphasis: updateEmphasis[g.id] ?? null,
             _searchQuery: searchActiveQuery,
-            _isSearchMatched: !!mInfo,
+            // 负责人裁决 2026-09-26（补充）：聚合泳道里**只渲染命中者**，故「命中」黄色边框
+            // （_isSearchMatched ⇒ .dg-card-matched）已无区分价值 —— 显式关掉，界面更干净；
+            // 入参四件套仍逐一显式传入（不改 Card 调用路径/契约）。「当前命中」橙色锚点
+            // （_isSearchCurrent）保留：i/N 跳转需要一个可见落点。宽档路径零改动（那边仍有非命中卡）。
+            _isSearchMatched: false,
             _isSearchCurrent: currentMatchedGoalId === g.id,
             _snippet: mInfo?.snippet ?? "",
           }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),

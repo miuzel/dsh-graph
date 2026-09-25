@@ -2406,8 +2406,10 @@ test("g-366 判据1/2（渲染级）：460px + 搜索 ⇒ 只渲染一条单列�
   // 命中仍带高亮类与 current 标记
   const cards = cardEls(laneCards.length ? laneCards : els);
   assert.equal(cards.length, G366_MATCH_ORDER.length, "聚合泳道只含命中卡");
-  assert.equal(cards.filter((e) => elClass(e).includes("dg-card-search-current")).length, 1, "恰好一张卡是「当前命中」");
-  assert.equal(cards.filter((e) => elClass(e).includes("dg-card-matched")).length, G366_MATCH_ORDER.length - 1, "当前命中以外的命中卡带 matched 高亮类");
+  // 负责人补充裁决（2026-09-26）：聚合泳道里只渲染命中者 ⇒ 「命中」黄色边框无区分价值，显式关掉；
+  // 「当前命中」橙色锚点保留（i/N 跳转需要可见落点）。
+  assert.equal(cards.filter((e) => elClass(e).includes("dg-card-matched")).length, 0, "聚合泳道内零 matched 黄色边框");
+  assert.equal(cards.filter((e) => elClass(e).includes("dg-card-search-current")).length, 1, "当前命中锚点仍在（唯一）");
   assert.ok(treeOf(cards[0]).some((e) => elClass(e) === "dg-search-highlight" || elClass(e) === "dg-search-highlight-current"),
     "命中标题按既有 renderHighlight 打高亮（dg-search-highlight*）");
   // 单列泳道本体不横向撑破（minWidth:0 + 单列模板）
@@ -2480,6 +2482,12 @@ test("g-366 判据4（渲染级对照）：宽档（≥480px）搜索布局与�
       .filter((e) => typeof e.props?.id === "string" && e.props.id.startsWith("goal-"));
     assert.ok(matched.some((e) => e.props.id === "goal-g-101"), `${width}px：命中卡仍在原泳道渲染`);
     assert.ok(matched.some((e) => e.props.id === "goal-g-102"), `${width}px：非命中卡在宽档照常渲染（既有口径）`);
+    // 宽档仍有非命中卡 ⇒ 「命中」黄色边框有区分价值，必须与基线一致地保留（g-366 补充裁决只作用于聚合泳道）
+    const renderedIds = new Set(matched.map((e) => e.props.id));
+    const expectMatched = G366_MATCH_ORDER.filter((id) => renderedIds.has("goal-" + id) && id !== "g-101").length;
+    assert.ok(expectMatched > 0, `${width}px：宽档确实渲染了「非当前命中」的命中卡`);
+    assert.equal(treeOf((await hYes.settle(G366_SIDE)).root()).filter((e) => elClass(e).includes("dg-card-matched")).length,
+      expectMatched, `${width}px：宽档命中黄色边框数量与基线口径一致`);
   }
 });
 
@@ -2573,10 +2581,15 @@ test("g-366 源码契约/i18n：单列闸门是纯派生、搜索不再挂起收
   assert.doesNotMatch(kanban, /localStorage\.(getItem|setItem)\([^)]*[Ss]earchLane/);
   // 不新增第二套卡片渲染：Card( 仍是既有三处（lane / backlogRow / searchResultsLane）
   assert.equal([...kanban.matchAll(/return Card\(\{/g)].length, 3, "Card 渲染调用点仍为既有三处");
-  // 聚合泳道复用的是既有卡片入参四件套
+  // 聚合泳道复用的是既有卡片入参四件套（四件套在聚合泳道里仍逐一显式传入，Card 调用路径不变）
   for (const prop of ["_searchQuery", "_isSearchMatched", "_isSearchCurrent", "_snippet"]) {
     assert.ok([...kanban.matchAll(new RegExp(`\\b${prop}:`, "g"))].length >= 3, `${prop} 由聚合泳道与既有两条路径共用`);
   }
+  // g-366 补充裁决：聚合泳道内显式关掉「命中」黄色边框（只渲染命中者 ⇒ 无区分价值），保留当前命中锚点
+  const laneBlock = kanban.slice(kanban.indexOf("const searchResultsLane = ()"), kanban.indexOf("const rows = [];"));
+  assert.match(laneBlock, /_isSearchMatched: false,/, "聚合泳道显式传 _isSearchMatched: false");
+  assert.match(laneBlock, /_isSearchCurrent: currentMatchedGoalId === g\.id,/, "聚合泳道保留当前命中锚点");
+  assert.match(laneBlock, /_searchQuery: searchActiveQuery,/, "聚合泳道仍传搜索词（标题内 <mark> 高亮不变）");
   // i18n：新文案 zh/en 双写、en 零 CJK、走 dgT、零硬编码中文
   assert.match(kanban, /dgT\("search\.laneLabel", \{ count: searchMatches\.length \}\)/);
   const i18n = readClient("i18n");
