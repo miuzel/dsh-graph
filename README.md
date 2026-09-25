@@ -2,6 +2,14 @@
 
 把工作组织成**目标看板**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件——基于图的目标管理（Graph-based Goal Management）。
 
+> ### 🚀 v0.16.1 新功能
+>
+> - **声明宿主兼容范围 `engines.dsh`**：包清单新增 `"dsh": ">=0.1.5-rc.2 <0.1.8-0"`（上界 `-0` 表示排除 `0.1.8` 的**一切预发布与正式版**），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取；该声明自**包含它的版本发布后**才在市场上生效（市场读的是 registry 上已发布版本的清单且有缓存），判定口径为 `engines.dsh` 与各 peer 范围的**合取**。
+> - **侧边栏窄档搜索改为单列「搜索结果」聚合泳道**：窄档（<480px）下激活搜索时，看板不再退出单泳道收窄、退回横向多泳道「全宽」网格；命中卡（含跨分区命中）聚合进单列「搜索结果」泳道，既保住 g-233「搜索命中不得被视图过滤藏掉」，又保持窄档纵向单列、零横向溢出。宽档（≥480px）搜索行为与视觉**零变化**（不新增状态真源、不新增持久化键）。
+> - **macOS / Linux 门禁合并为一份跨平台执行件**：[`scripts/platform-smoke-test.mjs`](scripts/platform-smoke-test.mjs) 成为**唯一一份** macOS/Linux 门禁实现——转发既有 `win-smoke-test.mjs` 的 T1–T5（在原生 macOS/Linux 上取得**平台效力**：T3–T5 真跑）+ 六项平台无关探针 P1–P6 + 平台无关审计 M4；旧路径 `scripts/macos-smoke-test.mjs` 降为一行转发 shim、原实现归档在 [`scripts/archived/`](scripts/archived/)，命令序列、逐项判读与回填表见 [`docs/platform-gate.md`](docs/platform-gate.md)。（v0.16.0 小节中「`v0.17.0` 起合并」是当时的前瞻表述，该合并**实际随 `v0.16.1` 发布**。）
+>
+> **⚠️ Windows / macOS 原生门禁：本版未执行，不得视为 PASS**：`v0.16.1` **未**在原生 Windows/macOS 上执行门禁——**负责人裁定省略**，理由为**本版无跨平台敏感内容**（`g-365` = 元数据与文档、`g-366` = 纯客户端渲染逻辑、`g-362` = 门禁执行件重构，均未触碰文件锁与平台判定路径）；Linux/WSL2 侧已实跑全绿。最近一次真机结论出自 **v0.16.0 周期**：Windows 原生 `win32/x64` PASS 通过 10/失败 0/告警 0，macOS `darwin/arm64` 专检 通过 2/失败 0/告警 3（转发 T1–T5 = 10/0/0）——出处 [`docs/release-checklist-v0.16.0.md`](docs/release-checklist-v0.16.0.md) §3 / §3.4。本版 Linux 门禁逐项结论见 [`docs/release-checklist-v0.16.1.md`](docs/release-checklist-v0.16.1.md)。
+>
 > ### 🚀 v0.16.0 新功能
 >
 > - **适配 DeepSeek Harness `0.1.7` 宿主 settings 服务换代**：旧 `settings.register(namespace, schema)` API 已被移除（实测告警 `sctx.settings.register is not a function`）。插件改为**能力探测分流**——服务提供 `register` 走旧 namespace 注册，否则回落 `describe` 表单投影（profile 条目 `Config`）；两条路径均在隔离实例上双宿主实机验证，且**零版本号比较**。
