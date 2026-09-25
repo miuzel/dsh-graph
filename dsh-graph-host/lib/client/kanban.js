@@ -989,6 +989,19 @@
       // 「单泳道档」= 收窄到某一个版本 **或** 收窄到 backlog / 独立目标（三者都用单列全宽纵向排布，
       // 且都只渲染一个泳道；released 在该档一律不渲染）。
       const singleLaneMode = !!(narrowSingleTier && !searchActiveQuery && (singleVersion || viewBacklogOnly || standaloneLaneActive));
+      // ===== g-366（负责人 2026-09-26 裁决 (a)）：窄档搜索激活 ⇒ 单列「搜索结果」聚合泳道 =====
+      // 报障形态：窄档（实测 <480px）搜索时布局档位被切换回横向多泳道全宽网格（面板比网格窄、被裁）。
+      // 新口径：**收窄**不再被搜索挂起，而是换成一条**单列纵向的「搜索结果」聚合泳道**——跨分区
+      //（多版本 / backlog / 独立目标 / 已隐藏版本）的全部命中都在这条泳道里纵向呈现，非命中不渲染。
+      // 命中集合与顺序沿用**既有** searchMatches（含 snippet），卡片入参沿用既有
+      // _searchQuery / _isSearchMatched / _isSearchCurrent / _snippet ⇒ 不改搜索语义、不改匹配集合；
+      // g-233「搜索命中不得被视图过滤藏掉」因此既不回退也不需要原来的「挂起收窄」实现方式。
+      // 纯派生：零新增状态真源、零新增持久化键（searchActiveQuery / searchMatches 都是既有 state）。
+      // N=0（无命中）：仍进单列档（不回横向网格）但**不渲染空泳道**，既有「未找到匹配」空态在工具条上。
+      const searchLaneActive = !!(narrowSingleTier && !!searchActiveQuery);
+      const searchLaneMode = !!(searchLaneActive && searchMatches.length > 0);
+      // 布局/行渲染的单列闸门：单泳道档（非搜索）∪ 搜索聚合泳道 —— 两者都用「minmax(0, 1fr)」单列模板。
+      const singleColumnMode = !!(singleLaneMode || searchLaneActive);
 
       // ===== g-352：头部/泳道共用的按钮与「查看版本」选择器（样式与元素都在泳道渲染之前就位）=====
       // g-352 att-003 第 9 项：工具条按钮的尺寸口径**收敛到 narrow-width.js 的 rowBtnStyle()**
@@ -1958,12 +1971,69 @@
       // g-352：单泳道档（根容器实测宽度 <480px，g-356 起）——阶段列由横向并排改为纵向堆叠（判据 3）：
       // 列模板退化为单列全宽，泳道内的阶段块依次堆叠（见 lane() 的 vertical 分支），
       // 卡面全宽可读、不需要横向滚动。宽档仍共用同一份横向模板。
-      const gridCols = singleLaneMode ? "minmax(0, 1fr)" : horizontalGridCols;
+      const gridCols = singleColumnMode ? "minmax(0, 1fr)" : horizontalGridCols;
       // Released lanes intentionally share the same computed template by reference.
       const releasedGridCols = gridCols;
 
+      // g-366：搜索结果聚合泳道的命中卡**完整入参**解析——searchMatches 只带 id/title/status/snippet，
+      // 卡片其余字段从 board payload 的既有分区取回（同一批对象本就喂给既有 lane / backlogRow，
+      // 零新增数据源）。取不到时用命中本身兜底（id/title/status）⇒ 命中卡数与工具条计数 N 恒等，
+      // 不因某分区处于惰性未加载而少渲染一张命中卡。
+      const goalById = new Map();
+      for (const v of (b.versions ?? [])) {
+        for (const g of (v.goals ?? [])) if (g && g.id) goalById.set(g.id, g);
+      }
+      for (const g of (b.standalone ?? [])) if (g && g.id) goalById.set(g.id, g);
+      for (const g of (b.backlog ?? [])) if (g && g.id) goalById.set(g.id, g);
+      // g-366：单列「搜索结果」聚合泳道——顺序 == searchMatches 顺序，故 i/N 跳转的**次序**与纵向视觉
+      // 次序一致（跳转本身仍走既有 navigateToMatch ⇒ #goal-<id> / data-goal-id 锚点，卡片同一条 Card
+      // 渲染路径）。该泳道不参与跨泳道拖放（命中跨分区 ⇒ 没有唯一落点），故不传 drag。
+      const searchResultsLane = () => {
+        const labelEl = h("div", {
+          key: "search-lane-label",
+          className: "dg-lane-label dg-search-lane-label",
+          style: { ...S.laneLabel, background: "rgba(128,128,128,.06)" },
+        }, dgT("search.laneLabel", { count: searchMatches.length }));
+        const cardEls = searchMatches.map((m) => {
+          const g = goalById.get(m.id) ?? { id: m.id, title: m.title, status: m.status };
+          const defExpanded = g.status !== "delivered" && g.status !== "blocked";
+          const expanded = expandedGoals[g.id] ?? defExpanded;
+          const mInfo = matchedGoalMap.get(g.id);
+          return Card({
+            ...g,
+            _tags: tagsFor(g),
+            _polishActive: polishGoal === g.id,
+            _updateEmphasis: updateEmphasis[g.id] ?? null,
+            _searchQuery: searchActiveQuery,
+            // 负责人裁决 2026-09-26（补充）：聚合泳道里**只渲染命中者**，故「命中」黄色边框
+            // （_isSearchMatched ⇒ .dg-card-matched）已无区分价值 —— 显式关掉，界面更干净；
+            // 入参四件套仍逐一显式传入（不改 Card 调用路径/契约）。「当前命中」橙色锚点
+            // （_isSearchCurrent）保留：i/N 跳转需要一个可见落点。宽档路径零改动（那边仍有非命中卡）。
+            _isSearchMatched: false,
+            _isSearchCurrent: currentMatchedGoalId === g.id,
+            _snippet: mInfo?.snippet ?? "",
+          }, setModalGoal, (goalId, cardId) => setDrawerCard({ goalId, cardId }),
+            modalGoal === g.id, drawerCard?.cardId, goalStatus,
+            expanded,
+            (id) => setExpandedGoals((p) => ({ ...p, [id]: !expanded })),
+            null,
+            () => { forceFreshRef.current = true; load(); });
+        });
+        return [labelEl, h("div", {
+          key: "search-lane-cards",
+          className: "dg-search-lane-cards",
+          // 单列网格里没有第 2 条网格线 ⇒ 内容占满整行；纵向 flex 让卡片各自成行、卡面全宽
+          //（gridColumn "1 / -1" 与 g-352 纵向泳道同款；minWidth:0 保证窄容器内不横向撑破）。
+          style: { ...S.cell, gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 4, minWidth: 0 },
+        }, ...cardEls)];
+      };
+
       const rows = [];
-      if (singleLaneMode && viewBacklogOnly) {
+      if (searchLaneActive) {
+        // g-366：窄档搜索激活 —— 只渲染这一条单列聚合泳道（N=0 时不渲染泳道，工具条给既有空态）。
+        if (searchLaneMode) rows.push(...searchResultsLane());
+        // 宽档（≥480px）searchLaneActive 恒为 false ⇒ 下面的分支与基线逐字一致（判据 4）。
+      } else if (singleLaneMode && viewBacklogOnly) {
         // g-352（负责人裁决）：backlog 选定为「版本备选」时它是唯一泳道。**复用既有 backlogRow
         // 渲染路径**（惰性明细 / 拖动落点 / 新建目标 / 排期入口全部同一条实现，不复制第二套），
         // 第 4 参 vertical=true：单列全宽 + 强制展开（backlog 泳道默认折叠态在窄档里等于
@@ -1985,14 +2055,15 @@
         rows.push(...lane(`🏷️ ${singleVersion.name}`, singleVersion.goals, "v-" + singleVersion.slug, singleVersion.slug, 0, false, true));
       }
       let laneIndex = 0;
-      for (const v of (singleLaneMode ? [] : active)) {
+      // g-366：搜索聚合泳道激活时同样不渲染任何常规泳道（singleColumnMode = 单泳道档 ∪ 搜索档）
+      for (const v of (singleColumnMode ? [] : active)) {
         rows.push(...lane(`🏷️ ${v.name}`, v.goals, "v-" + v.slug, v.slug, laneIndex));
         laneIndex++;
       }
       // g-223：如果所有版本都被隐藏（或存在 active 且 active 全部被隐藏），展示友好空状态提示行
       const totalVersionsCount = (b.versions ?? []).length;
       const visibleVersionsCount = active.length + released.length;
-      if (!singleLaneMode && totalVersionsCount > 0 && (visibleVersionsCount === 0 || (allActiveVersions.length > 0 && active.length === 0))) {
+      if (!singleColumnMode && totalVersionsCount > 0 && (visibleVersionsCount === 0 || (allActiveVersions.length > 0 && active.length === 0))) {
         const hintText = visibleVersionsCount === 0
           ? dgT('versionDrawer.allHidden', { count: totalVersionsCount })
           : dgT('versionDrawer.activeHidden', { count: allActiveVersions.length });
@@ -2025,14 +2096,15 @@
             }, dgT("versionDrawer.showAll"))),
         );
       }
-      if (!singleLaneMode) {
+      if (!singleColumnMode) {
         rows.push(...lane(dgT("lane.standalone"), b.standalone, "standalone", null, laneIndex));
         laneIndex++;
         rows.push(...backlogRow("backlog", b.backlog, "backlog"));
       }
 
       // g-352：单版本模式不渲染 released 折叠区（判据 3：DOM 中仅存在选中版本一个泳道）。
-      const releasedRows = (singleLaneMode ? [] : released).map((v, idx) => {
+      // g-366：搜索聚合泳道档同理不渲染 released 折叠区（命中若在已发布/已隐藏版本，由聚合泳道直接呈现）。
+      const releasedRows = (singleColumnMode ? [] : released).map((v, idx) => {
         const open = !!openReleased[v.slug];
         const count = (v.goals && v.goals.length > 0) ? v.goals.length : (v.goals_count ?? 0);
         let openContent = null;
@@ -2619,7 +2691,8 @@
           gridCornerEl,
           // g-352：单版本模式下没有横向阶段列，阶段列头由 lane() 的纵向堆叠分支提供
           //（每个阶段块自带一行列头），故此处不再渲染表头行。
-          singleLaneMode ? null : STAGES.map((s) => {
+          // g-366：搜索聚合泳道档同理——单列网格里横向 6 个阶段列头会被逐行堆叠，毫无意义。
+          singleColumnMode ? null : STAGES.map((s) => {
             // g-127：blocked 列头可点击切换折叠/展开
             // g-152：折叠态列头只显示 ▸（36px 窄条，竖条单元格已有 ⛔ 标识）
             if (s.key === "blocked") {

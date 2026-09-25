@@ -259,14 +259,17 @@ test("g-352 判据3：单版本模式下只渲染选中版本一个泳道，阶�
   // 只渲染选中版本一个泳道，且以纵向模式（lane 第 7 参 vertical=true）渲染；
   // att-003 第 4 项：单泳道档第 6 参 collapsible=false（只有一个泳道 ⇒ 不给版本头部 ▲/▼ 折叠开关）
   assert.match(src, /rows\.push\(\.\.\.lane\(`🏷️ \$\{singleVersion\.name\}`, singleVersion\.goals, "v-" \+ singleVersion\.slug, singleVersion\.slug, 0, false, true\)\)/);
+  // g-366：单列闸门 = 单泳道档 ∪ 窄档搜索聚合泳道（搜索激活不再回落横向网格，而是同样单列）
+  assert.match(src, /const singleColumnMode = !!\(singleLaneMode \|\| searchLaneActive\);/);
   // 其他泳道（其余 active 版本、standalone、backlog、released）在该档一律不渲染
-  assert.match(src, /for \(const v of \(singleLaneMode \? \[\] : active\)\)/);
-  assert.match(src, /const releasedRows = \(singleLaneMode \? \[\] : released\)\.map/);
-  assert.match(src, /if \(!singleLaneMode\) \{\n\s*rows\.push\(\.\.\.lane\(dgT\("lane\.standalone"\)/);
+  // （断言强度不变：逐字钉住表达式；闸门由 singleLaneMode 扩为 singleColumnMode ⇒ 搜索档同样成立）
+  assert.match(src, /for \(const v of \(singleColumnMode \? \[\] : active\)\)/);
+  assert.match(src, /const releasedRows = \(singleColumnMode \? \[\] : released\)\.map/);
+  assert.match(src, /if \(!singleColumnMode\) \{\n\s*rows\.push\(\.\.\.lane\(dgT\("lane\.standalone"\)/);
   // 列模板退化为单列全宽（阶段纵向堆叠而非横向挤压）
-  assert.match(src, /const gridCols = singleLaneMode \? "minmax\(0, 1fr\)" : horizontalGridCols;/);
+  assert.match(src, /const gridCols = singleColumnMode \? "minmax\(0, 1fr\)" : horizontalGridCols;/);
   // 横向阶段列头在单版本档不渲染（改由每个阶段块自带列头）
-  assert.match(src, /singleLaneMode \? null : STAGES\.map\(\(s\) => \{/);
+  assert.match(src, /singleColumnMode \? null : STAGES\.map\(\(s\) => \{/);
   // 纵向堆叠分支：每阶段一个块（列头 + 全宽单元格），容器 flexDirection: column
   assert.match(src, /const stacked = STAGES\.map\(\(s, sIdx\) => h\("div", \{\n\s*key: key \+ "-v-" \+ s\.key,/);
   assert.match(src, /gridColumn: "1 \/ -1", display: "flex", flexDirection: "column", gap: 8, minWidth: 0/);
@@ -602,11 +605,12 @@ test("g-352 C2-m5：build-client PARTS 覆盖 lib/client 全部模块，且 bund
 
 interface RenderResult { passElements: () => any[]; root: () => any }
 
-function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSession?: any; headChildWidth?: number; headChildCount?: number }) {
+function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSession?: any; headChildWidth?: number; headChildCount?: number; bundle?: string; storage?: Record<string, string> }) {
   // g-352 att-004（B1 证据口径）：G352_BUNDLE 可把渲染对象指向**另一份构建产物**——
   // 用于把同一套断言跑在基线 commit（83bb041）的 bundle 上，从而给出「HEAD vs 基线签名差异 0 行」
   // 的可复现证据，而不是只凭截图。默认仍是本仓库 dist/lib/client.js（判据 5 契约不变）。
-  const bundle = readFileSync(
+  // g-366：opts.bundle 显式覆盖（负向对照用**变异 bundle** 跑同一套断言，证明改回旧行为必红）。
+  const bundle = opts.bundle ?? readFileSync(
     process.env.G352_BUNDLE || join(import.meta.dirname, "../../dist/lib/client.js"),
     "utf8",
   );
@@ -704,7 +708,11 @@ function createRenderHarness(opts: { boardWidth?: number; payload: any; liveSess
     console, URL, URLSearchParams, TextEncoder, TextDecoder,
     setTimeout: () => 0, clearTimeout: noop, setInterval: () => 0, clearInterval: noop,
     queueMicrotask, requestAnimationFrame: () => 1, cancelAnimationFrame: noop,
-    localStorage: { getItem: () => null, setItem: noop, removeItem: noop, key: () => null, length: 0 },
+    // g-366：opts.storage 可预置 localStorage 快照（用于「已隐藏版本」的命中仍出现在搜索聚合泳道）
+    localStorage: {
+      getItem: (k: any) => (opts.storage && Object.prototype.hasOwnProperty.call(opts.storage, k) ? opts.storage[k] : null),
+      setItem: noop, removeItem: noop, key: () => null, length: 0,
+    },
     navigator: {},
     fetch: async (url: any) => {
       const u = String(url);
@@ -1022,7 +1030,7 @@ test("g-358 判据1/3（渲染级）：无可见版本 + 有 standalone ⇒ <480
   assert.deepEqual(elementSignature(conv.root()), elementSignature(side.root()), "460px 无版本：两侧元素签名逐字一致");
 });
 
-test("g-358 判据2（渲染级）：无版本时显式「全部版本」仍回多泳道；搜索激活仍挂起收窄", async () => {
+test("g-358 判据2（渲染级）：无版本时显式「全部版本」仍回多泳道；搜索激活改走 g-366 单列聚合泳道", async () => {
   const payload = () => ({ board: noVersionBoard(), backlogGoals: [] });
   // ① 显式「全部版本」⇒ 退出收窄、回到横向多泳道档（既有口径不变）
   const h = createRenderHarness({ boardWidth: 460, payload: payload() });
@@ -1038,7 +1046,8 @@ test("g-358 判据2（渲染级）：无版本时显式「全部版本」仍回�
   assert.equal(els.filter((e) => e.props?.key === "standalone-label").length, 1, "横向档下独立目标泳道回到常规形态");
   assert.equal(els.filter((e) => typeof e.props?.key === "string" && /^standalone-v-/.test(e.props.key)).length, 0, "横向档不再纵向堆叠");
 
-  // ② 搜索激活 ⇒ 挂起收窄：无版本时同样不落单泳道（g-233 优先级不变）
+  // ② g-366 改口径后：搜索激活**不再挂起收窄回落横向网格**，而是换成单列「搜索结果」聚合泳道
+  //（无可见版本 + 命中独立目标 ⇒ 该命中仍必须在场，g-233「命中不得被视图过滤藏掉」不回退）。
   const h2 = createRenderHarness({ boardWidth: 460, payload: payload() });
   let r2 = await h2.settle({ sessionId: "s1", host: "sidebar" });
   assert.equal(gridTemplates(r2.passElements())[0], "minmax(0, 1fr)", "先确认默认已进单泳道");
@@ -1050,8 +1059,12 @@ test("g-358 判据2（渲染级）：无版本时显式「全部版本」仍回�
   assert.ok(input2, "搜索框仍在渲染");
   input2.props.onKeyDown({ key: "Enter", shiftKey: false, preventDefault() {} });
   r2 = await h2.settle({ sessionId: "s1", host: "sidebar" });
-  const tpl2 = gridTemplates(r2.passElements())[0];
-  assert.ok(String(tpl2).startsWith("130px"), `搜索激活必须挂起单泳道收窄 ⇒ 回多泳道横向档（实得 ${tpl2}）`);
+  const els2 = r2.passElements();
+  const tpl2 = gridTemplates(els2)[0];
+  assert.equal(tpl2, "minmax(0, 1fr)", `搜索激活必须保持单列（实得 ${tpl2}）`);
+  assert.ok(!String(tpl2).startsWith("130px"), "搜索激活不得回落横向多泳道全宽网格（g-366 判据 1）");
+  assert.equal(els2.filter((e) => e.props?.key === "search-lane-label").length, 1, "只渲染一条「搜索结果」聚合泳道");
+  assert.equal(els2.filter((e) => e.props?.id === "goal-g-900").length, 1, "独立目标命中仍在渲染（g-233 不回退）");
 });
 
 test("g-358 判据4（渲染级）：全空（versions/standalone/backlog 皆空）时 <480 不渲染横向网格、不抛错", async () => {
@@ -1081,18 +1094,27 @@ test("g-358 判据4（渲染级）：全空（versions/standalone/backlog 皆空
   assert.deepEqual(elementSignature(conv.root()), elementSignature(side.root()), "460px 全空：两侧元素签名逐字一致");
 });
 
-test("g-352 B1（渲染级）：搜索激活态仍挂起单泳道收窄（g-233 优先级不变）", async () => {
+test("g-352 B1（渲染级）：搜索激活时 g-366 单列聚合泳道取代 backlog 唯一泳道（g-233 优先级不变）", async () => {
   const h = createRenderHarness({ boardWidth: 250, payload: { board: boardFixture(), backlogGoals: backlogGoalsFixture } });
   let r = await h.settle({ sessionId: "s1", host: "sidebar" });
-  // 选中 backlog 后进入搜索态：收窄必须挂起，回到多泳道（搜索结果不被视图过滤藏掉）
+  // 选中 backlog 后进入搜索态：常规收窄让位给「搜索结果」聚合泳道，命中仍全部在场（不被视图过滤藏掉）
   r = await clickPickerOption(h, r, (e) => e.props?.key === "vp-backlog");
   assert.equal(withClass(r.passElements(), "dg-backlog-flat-vertical").length, 1, "先确认 backlog 唯一泳道生效");
   const input = r.passElements().filter((e) => e.props?.className === "dg-search-input").pop();
   assert.ok(input, "存在搜索输入框");
-  input.props.onChange({ target: { value: "V1" } });
+  input.props.onChange({ target: { value: "目标" } });
   r = await h.settle({ sessionId: "s1", host: "sidebar" });
-  // searchActiveQuery 需要提交/防抖才生效；这里断言不会抛错且视图仍可用（挂起语义由源码契约与判据7共同覆盖）
-  assert.ok(r.passElements().length > 0, "搜索交互后仍渲染出看板（不抛错）");
+  const input2 = r.passElements().filter((e) => e.props?.className === "dg-search-input").pop();
+  assert.ok(input2, "搜索框仍在渲染");
+  input2.props.onKeyDown({ key: "Enter", shiftKey: false, preventDefault() {} });
+  r = await h.settle({ sessionId: "s1", host: "sidebar" });
+  const els = r.passElements();
+  assert.equal(els.filter((e) => e.props?.key === "search-lane-label").length, 1, "搜索激活 ⇒ 单列「搜索结果」聚合泳道");
+  assert.equal(withClass(els, "dg-backlog-flat-vertical").length, 0, "backlog 唯一泳道在搜索态让位（不叠加渲染）");
+  // g-233：命中（含 backlog 惰性加载进来的两条）不得被视图过滤藏掉
+  for (const id of ["g-001", "g-900", "g-101", "g-102"]) {
+    assert.equal(els.filter((e) => e.props?.id === "goal-" + id).length, 1, `命中 ${id} 必须在聚合泳道内渲染`);
+  }
 });
 
 test("g-352 B1（渲染级）：「全部版本」出口保留 —— 选中后回到多泳道横向档", async () => {
@@ -2062,7 +2084,7 @@ test("g-352 att-005：会话内看板页签签名 == 冻结 fixture，且 fixtur
       assert.fail("拒绝覆盖冻结基线：需 G352_SIG_ACK=1 显式确认（或 G352_SIG_DUMP=<其他路径> 只导出做 diff）");
     }
     const head = [
-      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-358 重新冻结：无版本窄档默认落独立目标泳道，正文与 g-356 逐字相同 content-sha 未变）",
+      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（g-366 重新冻结：窄档搜索改走单列聚合泳道，非搜索态渲染契约逐字未变 ⇒ content-sha 未变）",
       `# source-commit: ${execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot(), encoding: "utf8" }).trim()}`,
       `# source-sha256: ${sourceFingerprint()}`,
       `# source-files: ${SIG_SOURCE_FILES.join(",")}   # 源 hash 覆盖的模块（决定头部/泳道渲染）`,
@@ -2257,4 +2279,325 @@ test("g-360 判据4（澄清）：单泳道档与工具条折叠同源同断点�
   // narrow 档不可达但**保留**：它是 single 与 wide 之间的空档，阈值一旦被单独回调即自动恢复语义。
   const seen = new Set([...Array(2000).keys()].map((i) => boardWidthTier(i)));
   assert.deepEqual([...seen].sort(), ["single", "wide"], "当前只可能产出 single / wide 两档（narrow 保留但不可达）");
+});
+
+// ============================================================================
+// g-366（fix，负责人 2026-09-26 裁决 (a)）：窄档（实测 <480px）搜索激活时
+//   「挂起单泳道收窄 ⇒ 回落横向多泳道全宽网格」改为**单列「搜索结果」聚合泳道**：
+//   跨分区（多版本 / backlog / 独立目标 / 已隐藏版本）的全部命中以单列纵向呈现，非命中不渲染。
+//   —— 命中数据源沿用既有 searchMatches（含 snippet）与既有卡片入参；纯派生、零新增状态真源/持久化键。
+// ============================================================================
+
+/** 隐藏版本的持久底账键（workspace 由 harness 的 workspacesRt 固定为 /ws）。 */
+const G366_HIDDEN_KEY = "dsh-graph.hidden-versions./ws";
+const G366_SIDE = { sessionId: "s1", host: "sidebar" };
+/** 跨分区板：命中标题含 "alpha"、非命中标题含 "beta"（同一分区内各一条 ⇒ 「非命中不渲染」可被证伪）。
+ *  vhid 为**隐藏版本**（由 localStorage 底账隐藏）——它的命中同样必须出现在聚合泳道里（g-233）。 */
+const g366Board = () => ({
+  lazy: false, backlog_loaded: true, backlog_count: 2, generated_at: "2026-09-26T00:00:00Z",
+  supervisorSession: null,
+  versions: [
+    { slug: "v1", name: "V1", status: "active", goals: [
+      { id: "g-101", title: "alpha 版本一", status: "draft", tags: [], criteria_count: 0, cards_count: 0 },
+      { id: "g-102", title: "beta 版本一", status: "draft", tags: [], criteria_count: 0, cards_count: 0 }], goals_count: 2, lazy: false, loaded: true },
+    { slug: "v2", name: "V2", status: "active", goals: [
+      { id: "g-201", title: "alpha 版本二", status: "in_progress", tags: [], criteria_count: 0, cards_count: 0 },
+      { id: "g-202", title: "beta 版本二", description: "正文里出现了 alpha 关键词，作为 snippet 来源", status: "draft", tags: [], criteria_count: 0, cards_count: 0 }], goals_count: 2, lazy: false, loaded: true },
+    { slug: "v0", name: "V0", status: "released", goals: [
+      { id: "g-001", title: "alpha 已发布", status: "delivered", tags: [], criteria_count: 0, cards_count: 0 },
+      { id: "g-002", title: "beta 已发布", status: "delivered", tags: [], criteria_count: 0, cards_count: 0 }], goals_count: 2, lazy: false, loaded: true },
+    { slug: "vhid", name: "VHID", status: "active", goals: [
+      { id: "g-301", title: "alpha 隐藏版本", status: "draft", tags: [], criteria_count: 0, cards_count: 0 }], goals_count: 1, lazy: false, loaded: true },
+  ],
+  standalone: [
+    { id: "g-900", title: "alpha 独立目标", status: "draft", tags: [], criteria_count: 0, cards_count: 0 },
+    { id: "g-901", title: "beta 独立目标", status: "draft", tags: [], criteria_count: 0, cards_count: 0 }],
+  backlog: [
+    { id: "g-401", title: "alpha backlog", status: "draft", tags: [], criteria_count: 0, cards_count: 0 },
+    { id: "g-402", title: "beta backlog", status: "draft", tags: [], criteria_count: 0, cards_count: 0 }],
+});
+/** searchMatches 的既有顺序：b.versions(v1→v2→v0→vhid) → standalone → backlog。 */
+const G366_MATCH_ORDER = ["g-101", "g-201", "g-001", "g-301", "g-900", "g-401"];
+const G366_MISS_IDS = ["g-102", "g-202", "g-002", "g-901", "g-402"];
+/** 隐藏版本底账：只藏 vhid。 */
+const g366Storage = () => ({ [G366_HIDDEN_KEY]: JSON.stringify(["vhid"]) });
+
+/** 驱动一次真实搜索（输入 → 可选全文开关 → Enter），返回稳定后的渲染结果。 */
+async function g366Search(h: ReturnType<typeof createRenderHarness>, props: any, value: string, fullText = false) {
+  let r = await h.settle(props);
+  const input = r.passElements().filter((e) => e.props?.className === "dg-search-input").pop();
+  assert.ok(input, "存在搜索输入框");
+  input.props.onChange({ target: { value } });
+  r = await h.settle(props);
+  if (fullText) {
+    const cb = r.passElements().filter((e) => e.type === "input" && e.props?.type === "checkbox").pop();
+    assert.ok(cb, "存在「全文」开关");
+    cb.props.onChange({ target: { checked: true } });
+    r = await h.settle(props);
+  }
+  const input2 = r.passElements().filter((e) => e.props?.className === "dg-search-input").pop();
+  assert.ok(input2, "搜索框仍在渲染");
+  input2.props.onKeyDown({ key: "Enter", shiftKey: false, preventDefault() {} });
+  return h.settle(props);
+}
+/** Esc 退出搜索。 */
+async function g366Escape(h: ReturnType<typeof createRenderHarness>, props: any) {
+  const r = await h.settle(props);
+  const input = r.passElements().filter((e) => e.props?.className === "dg-search-input").pop();
+  assert.ok(input, "存在搜索输入框");
+  input.props.onKeyDown({ key: "Escape", preventDefault() {} });
+  return h.settle(props);
+}
+/** 工具条 i/N 计数文本。 */
+const g366Counter = (root: any): string =>
+  treeOf(root).filter((e) => e.type === "span" && /^\d+\/\d+$/.test(treeText(e))).map(treeText).pop() ?? "";
+/** 按 key 取子树（含自身）。 */
+const g366Subtree = (root: any, key: string) => {
+  const node = treeOf(root).find((e) => e.props?.key === key);
+  return node ? treeOf(node) : [];
+};
+/** 泳道结构投影（宽档对照用：只取布局相关量，不含高亮/文案）。 */
+const g366Layout = (root: any) => {
+  const els = treeOf(root);
+  return {
+    gridTemplates: gridTemplates(els),
+    laneKeys: els.filter((e) => typeof e.props?.key === "string"
+      && /(-label$|^rellane-|^rel-|collapsed-summary$|^standalone-v-|^v-.*-v-)/.test(e.props.key)).map((e) => e.props.key),
+    cardIds: els.filter((e) => typeof e.props?.id === "string" && e.props.id.startsWith("goal-")).map((e) => e.props.id),
+  };
+};
+
+test("g-366 判据1/2（渲染级）：460px + 搜索 ⇒ 只渲染一条单列「搜索结果」聚合泳道，跨分区命中齐全、非命中不渲染", async () => {
+  const h = createRenderHarness({ boardWidth: 460, payload: { board: g366Board(), backlogGoals: [] }, storage: g366Storage() });
+  // ① 搜索前：隐藏版本的命中**不在**渲染树里（它被视图过滤），且默认是单版本收窄档
+  const before = (await h.settle(G366_SIDE)).passElements();
+  assert.equal(gridTemplates(before)[0], "minmax(0, 1fr)", "460px 默认已进单列档");
+  assert.equal(before.filter((e) => e.props?.id === "goal-g-301").length, 0, "隐藏版本的目标在搜索前不渲染（正常）");
+  // ② 搜索 "alpha" ⇒ 单列聚合泳道
+  const r = await g366Search(h, G366_SIDE, "alpha");
+  const els = r.passElements();
+  const tpl = gridTemplates(els)[0];
+  assert.equal(tpl, "minmax(0, 1fr)", `窄档搜索必须保持单列（实得 ${tpl}）`);
+  assert.ok(!String(tpl).startsWith("130px"), "不得回落横向多泳道全宽网格");
+  assert.equal(els.filter((e) => e.props?.key === "search-lane-label").length, 1, "只渲染一条「搜索结果」泳道");
+  assert.equal(withClass(els, "dg-lane-collapse").length, 0, "聚合泳道没有折叠开关");
+  // 只有一条泳道：版本/独立目标/backlog/released 常规泳道一律不渲染
+  assert.equal(els.filter((e) => e.props?.key === "standalone-label").length, 0, "不渲染独立目标常规泳道");
+  assert.equal(els.filter((e) => e.props?.key === "backlog-label").length, 0, "不渲染 backlog 常规泳道");
+  assert.equal(els.filter((e) => typeof e.props?.key === "string" && /^v-.*-label$/.test(e.props.key)).length, 0, "不渲染版本泳道");
+  assert.equal(els.filter((e) => typeof e.props?.key === "string" && /^rel-/.test(e.props.key)).length, 0, "不渲染 released 折叠区");
+  for (const sk of ["describe", "collect", "execute", "confirm", "deliver", "blocked"]) {
+    assert.equal(els.filter((e) => e.props?.key === sk).length, 0, `不渲染横向阶段列头 ${sk}`);
+  }
+  // 命中卡数 == 工具条计数 N，且顺序与 searchMatches 一致
+  assert.equal(g366Counter(r.root()), `1/${G366_MATCH_ORDER.length}`, "工具条计数 == 命中总数");
+  const laneCards = g366Subtree(r.root(), "search-lane-cards").filter((e) => typeof e.props?.id === "string" && e.props.id.startsWith("goal-"));
+  assert.equal(laneCards.length, G366_MATCH_ORDER.length, `聚合泳道内命中卡数 == N（实得 ${laneCards.length}）`);
+  assert.deepEqual(laneCards.map((e) => e.props.id), G366_MATCH_ORDER.map((id) => "goal-" + id),
+    "聚合泳道顺序 == searchMatches 顺序（i/N 次序与纵向视觉次序一致）");
+  // 跨分区：两个活跃版本 + 已发布版本 + **已隐藏版本** + 独立目标 + backlog 全部在场（g-233 不回退）
+  for (const id of G366_MATCH_ORDER) {
+    assert.equal(els.filter((e) => e.props?.id === "goal-" + id).length, 1, `命中 ${id} 必须在聚合泳道内渲染一次`);
+  }
+  // 非命中一律不渲染
+  for (const id of G366_MISS_IDS) {
+    assert.equal(els.filter((e) => e.props?.id === "goal-" + id).length, 0, `非命中 ${id} 不得渲染`);
+  }
+  // 命中仍带高亮类与 current 标记
+  const cards = cardEls(laneCards.length ? laneCards : els);
+  assert.equal(cards.length, G366_MATCH_ORDER.length, "聚合泳道只含命中卡");
+  // 负责人补充裁决（2026-09-26）：聚合泳道里只渲染命中者 ⇒ 「命中」黄色边框无区分价值，显式关掉；
+  // 「当前命中」橙色锚点保留（i/N 跳转需要可见落点）。
+  assert.equal(cards.filter((e) => elClass(e).includes("dg-card-matched")).length, 0, "聚合泳道内零 matched 黄色边框");
+  assert.equal(cards.filter((e) => elClass(e).includes("dg-card-search-current")).length, 1, "当前命中锚点仍在（唯一）");
+  assert.ok(treeOf(cards[0]).some((e) => elClass(e) === "dg-search-highlight" || elClass(e) === "dg-search-highlight-current"),
+    "命中标题按既有 renderHighlight 打高亮（dg-search-highlight*）");
+  // 单列泳道本体不横向撑破（minWidth:0 + 单列模板）
+  const laneBody = treeOf(r.root()).find((e) => e.props?.key === "search-lane-cards");
+  assert.equal(laneBody?.props?.style?.minWidth, 0, "聚合泳道本体 minWidth:0（窄容器不横向溢出）");
+  assert.equal(laneBody?.props?.style?.gridColumn, "1 / -1", "聚合泳道占满单列网格整行");
+});
+
+test("g-366 判据2（渲染级）：全文命中带既有 snippet；N=0 走既有空态、不渲染空泳道、不抛错", async () => {
+  const h = createRenderHarness({ boardWidth: 460, payload: { board: g366Board(), backlogGoals: [] }, storage: g366Storage() });
+  // ① 全文搜索：描述命中（g-202）也进聚合泳道，并带既有 📝 snippet 行
+  const r = await g366Search(h, G366_SIDE, "alpha", true);
+  const els = r.passElements();
+  const card = treeOf(r.root()).find((e) => e.props?.id === "goal-g-202");
+  assert.ok(card, "全文命中（仅描述命中）必须出现在聚合泳道里");
+  const cardText = treeText(card);
+  assert.ok(cardText.includes("📝"), "全文命中卡带既有 📝 snippet 行");
+  assert.ok(cardText.replace(/\s+/g, "").includes("alpha关键词"), `snippet 内容取自既有 extractMatchSnippet（实得：${cardText.slice(0, 120)}）`);
+  assert.equal(g366Counter(r.root()), `1/${G366_MATCH_ORDER.length + 1}`, "全文命中计入同一计数");
+  // ② N=0：单列档但不渲染空泳道，既有「未找到匹配」空态文本在场，且不抛错
+  const h2 = createRenderHarness({ boardWidth: 460, payload: { board: g366Board(), backlogGoals: [] }, storage: g366Storage() });
+  const r2 = await g366Search(h2, G366_SIDE, "zzz-no-such-goal");
+  const els2 = r2.passElements();
+  assert.equal(gridTemplates(els2)[0], "minmax(0, 1fr)", "N=0 仍保持单列（不回横向网格）");
+  assert.equal(els2.filter((e) => e.props?.key === "search-lane-label").length, 0, "N=0 不渲染空聚合泳道");
+  assert.equal(cardEls(els2).length, 0, "N=0 零卡片");
+  assert.ok(treeText(r2.root()).includes("未找到匹配"), "走既有「未找到匹配」空态");
+});
+
+test("g-366 判据3（渲染级）：i/N 跳转器在聚合泳道内可用，跳转目标就在泳道里（可滚到可见）", async () => {
+  const h = createRenderHarness({ boardWidth: 460, payload: { board: g366Board(), backlogGoals: [] }, storage: g366Storage() });
+  let r = await g366Search(h, G366_SIDE, "alpha");
+  assert.equal(g366Counter(r.root()), `1/${G366_MATCH_ORDER.length}`, "↑/↓ 前计数为 1/N");
+  const next = r.passElements().filter((e) => e.type === "button" && e.props?.title === "↓").pop();
+  assert.ok(next, "存在「下一个」跳转按钮（title=↓）");
+  assert.equal(treeText(next), "›", "「下一个」按钮仍是既有 › 文案");
+  next.props.onClick({ stopPropagation() {} });
+  r = await h.settle(G366_SIDE);
+  assert.equal(g366Counter(r.root()), `2/${G366_MATCH_ORDER.length}`, "点「下一个」⇒ 计数前进到 2/N");
+  const currentCards = treeOf(r.root()).filter((e) => elClass(e).includes("dg-card-search-current"));
+  assert.equal(currentCards.length, 1, "恰好一张卡成为当前命中");
+  assert.equal(currentCards[0].props.id, "goal-g-201", "当前命中 == searchMatches[1]（既有 navigateToMatch 口径）");
+  // 跳转目标的锚点（#goal-<id>）就在聚合泳道内 ⇒ 不会被泳道裁掉/藏掉
+  const laneCardIds = g366Subtree(r.root(), "search-lane-cards")
+    .filter((e) => typeof e.props?.id === "string").map((e) => e.props.id);
+  assert.ok(laneCardIds.includes("goal-g-201"), "跳转目标卡在聚合泳道内（可见/可滚到）");
+  // 上一个回到 1/N
+  const prev = r.passElements().filter((e) => e.type === "button" && e.props?.title === "↑").pop();
+  assert.ok(prev, "存在「上一个」跳转按钮（title=↑）");
+  prev.props.onClick({ stopPropagation() {} });
+  r = await h.settle(G366_SIDE);
+  assert.equal(g366Counter(r.root()), `1/${G366_MATCH_ORDER.length}`, "点「上一个」⇒ 计数回到 1/N");
+});
+
+test("g-366 判据4（渲染级对照）：宽档（≥480px）搜索布局与基线逐项一致（搜索只加高亮、不改结构）", async () => {
+  for (const width of [480, 900]) {
+    const mk = () => createRenderHarness({ boardWidth: width, payload: { board: g366Board(), backlogGoals: [] } });
+    // 同一块板、同一输入：不搜索 vs 搜索 —— 布局投影（网格模板 / 泳道键序 / 卡片 id 序）必须逐项一致
+    const hNo = mk();
+    const base = g366Layout((await hNo.settle(G366_SIDE)).root());
+    const hYes = mk();
+    const searched = g366Layout((await g366Search(hYes, G366_SIDE, "alpha")).root());
+    assert.ok(String(base.gridTemplates[0]).startsWith("130px"), `${width}px：宽档仍是横向多泳道模板`);
+    assert.deepEqual(searched, base, `${width}px：宽档搜索不得改变布局（网格模板/泳道/卡片序列逐项一致）`);
+    assert.equal(searched.gridTemplates.filter((t) => t === "minmax(0, 1fr)").length, 0, `${width}px：宽档不出现单列聚合泳道模板`);
+    const els = (await hYes.settle(G366_SIDE)).passElements();
+    assert.equal(els.filter((e) => e.props?.key === "search-lane-label").length, 0, `${width}px：宽档不渲染聚合泳道`);
+    // 命中仍在各自泳道内原位高亮（宽档不做任何聚合/过滤）
+    const matched = treeOf((await hYes.settle(G366_SIDE)).root())
+      .filter((e) => typeof e.props?.id === "string" && e.props.id.startsWith("goal-"));
+    assert.ok(matched.some((e) => e.props.id === "goal-g-101"), `${width}px：命中卡仍在原泳道渲染`);
+    assert.ok(matched.some((e) => e.props.id === "goal-g-102"), `${width}px：非命中卡在宽档照常渲染（既有口径）`);
+    // 宽档仍有非命中卡 ⇒ 「命中」黄色边框有区分价值，必须与基线一致地保留（g-366 补充裁决只作用于聚合泳道）
+    const renderedIds = new Set(matched.map((e) => e.props.id));
+    const expectMatched = G366_MATCH_ORDER.filter((id) => renderedIds.has("goal-" + id) && id !== "g-101").length;
+    assert.ok(expectMatched > 0, `${width}px：宽档确实渲染了「非当前命中」的命中卡`);
+    assert.equal(treeOf((await hYes.settle(G366_SIDE)).root()).filter((e) => elClass(e).includes("dg-card-matched")).length,
+      expectMatched, `${width}px：宽档命中黄色边框数量与基线口径一致`);
+  }
+});
+
+test("g-366 判据5（渲染级）：退出搜索后窄档四义口径完全恢复（单版本/ backlog / 独立目标 / standalone 默认落点）", async () => {
+  // ① 单版本收窄（默认落点）
+  const h1 = createRenderHarness({ boardWidth: 460, payload: { board: g366Board(), backlogGoals: [] } });
+  await g366Search(h1, G366_SIDE, "alpha");
+  const r1 = await g366Escape(h1, G366_SIDE);
+  const e1 = r1.passElements();
+  assert.equal(gridTemplates(e1)[0], "minmax(0, 1fr)", "退出搜索仍为单列档");
+  assert.equal(e1.filter((e) => e.props?.key === "search-lane-label").length, 0, "聚合泳道已消失（纯派生，无残留）");
+  assert.equal(e1.filter((e) => e.props?.key === "v-v1-label").length, 1, "恢复单版本收窄（收窄到第一个可见版本 V1）");
+  assert.equal(e1.filter((e) => typeof e.props?.key === "string" && /^v-v1-v-[a-z]+$/.test(e.props.key)).length, 6, "恢复纵向阶段堆叠");
+  assert.equal(e1.filter((e) => e.props?.key === "standalone-label").length, 0, "单版本档不渲染独立目标泳道");
+  assert.equal(e1.filter((e) => cardEls([e]).length > 0 && e.props?.id === "goal-g-101").length, 1, "V1 卡片恢复原位");
+
+  // ② backlog 唯一泳道
+  const h2 = createRenderHarness({ boardWidth: 250, payload: { board: g366Board(), backlogGoals: [] } });
+  let r2 = await h2.settle(G366_SIDE);
+  r2 = await clickPickerOption(h2, r2, (e) => e.props?.key === "vp-backlog");
+  assert.equal(withClass(r2.passElements(), "dg-backlog-flat-vertical").length, 1, "先确认 backlog 唯一泳道生效");
+  await g366Search(h2, G366_SIDE, "alpha");
+  r2 = await g366Escape(h2, G366_SIDE);
+  assert.equal(withClass(r2.passElements(), "dg-backlog-flat-vertical").length, 1, "退出搜索后 backlog 唯一泳道完全恢复");
+  assert.equal(r2.passElements().filter((e) => e.props?.id === "goal-g-401").length, 1, "backlog 卡片仍在");
+
+  // ③ 独立目标唯一泳道（显式选中）
+  const h3 = createRenderHarness({ boardWidth: 250, payload: { board: g366Board(), backlogGoals: [] } });
+  let r3 = await h3.settle(G366_SIDE);
+  r3 = await clickPickerOption(h3, r3, (e) => e.props?.key === "vp-standalone");
+  assert.equal(r3.passElements().filter((e) => typeof e.props?.key === "string" && /^standalone-v-[a-z]+$/.test(e.props.key)).length, 6,
+    "先确认独立目标唯一泳道生效");
+  await g366Search(h3, G366_SIDE, "alpha");
+  r3 = await g366Escape(h3, G366_SIDE);
+  assert.equal(r3.passElements().filter((e) => typeof e.props?.key === "string" && /^standalone-v-[a-z]+$/.test(e.props.key)).length, 6,
+    "退出搜索后独立目标唯一泳道完全恢复");
+
+  // ④ 无可见版本 ⇒ standalone 默认落点（g-358）
+  const h4 = createRenderHarness({ boardWidth: 460, payload: { board: noVersionBoard(), backlogGoals: [] } });
+  assert.equal(gridTemplates((await h4.settle(G366_SIDE)).passElements())[0], "minmax(0, 1fr)", "先确认默认落独立目标单泳道");
+  await g366Search(h4, G366_SIDE, "独立");
+  const r4 = await g366Escape(h4, G366_SIDE);
+  const e4 = r4.passElements();
+  assert.equal(e4.filter((e) => typeof e.props?.key === "string" && /^standalone-v-[a-z]+$/.test(e.props.key)).length, 6,
+    "退出搜索后 standalone 默认落点完全恢复");
+  assert.ok(withClass(e4, "dg-version-picker-trigger").length > 0, "选择器（当前项=独立目标）也在");
+});
+
+test("g-366 负向对照（判据6）：把聚合泳道短路回「搜索挂起收窄」旧行为必须红", async () => {
+  const bundlePath = join(import.meta.dirname, "../../dist/lib/client.js");
+  const real = readFileSync(bundlePath, "utf8");
+  const anchor = "const searchLaneActive = !!(narrowSingleTier && !!searchActiveQuery);";
+  assert.ok(real.includes(anchor), "变异锚点必须存在于构建产物（源码契约）");
+  // 旧行为等价变异：搜索激活时聚合泳道不生效 ⇒ 单列档同样不生效 ⇒ 回落横向多泳道全宽网格
+  const mutated = real.replace(anchor, "const searchLaneActive = !!(narrowSingleTier && !!searchActiveQuery && false);");
+  assert.notEqual(mutated, real, "变异必须真正改写产物");
+  const run = async (bundle: string) => {
+    const h = createRenderHarness({ boardWidth: 460, payload: { board: g366Board(), backlogGoals: [] }, storage: g366Storage(), bundle });
+    const r = await g366Search(h, G366_SIDE, "alpha");
+    const root = r.root();
+    const els = treeOf(root);
+    const ids = els.filter((e) => typeof e.props?.id === "string" && e.props.id.startsWith("goal-")).map((e) => e.props.id);
+    return {
+      singleColumn: gridTemplates(els)[0] === "minmax(0, 1fr)",
+      horizontal: String(gridTemplates(els)[0]).startsWith("130px"),
+      searchLane: els.filter((e) => e.props?.key === "search-lane-label").length,
+      matchedPresent: G366_MATCH_ORDER.filter((id) => ids.includes("goal-" + id)).length,
+      missPresent: G366_MISS_IDS.filter((id) => ids.includes("goal-" + id)).length,
+    };
+  };
+  const good = await run(real);
+  assert.deepEqual(good, { singleColumn: true, horizontal: false, searchLane: 1, matchedPresent: G366_MATCH_ORDER.length, missPresent: 0 },
+    "真产物：单列聚合泳道，命中齐全且非命中不渲染");
+  const bad = await run(mutated);
+  assert.equal(bad.singleColumn, false, "旧行为下判据 1 的「单列」断言必然不成立（红）");
+  assert.equal(bad.horizontal, true, "旧行为下确实回落横向多泳道全宽网格（报障形态复现）");
+  assert.equal(bad.searchLane, 0, "旧行为下不存在聚合泳道");
+  assert.equal(bad.missPresent, 3, "旧行为把非命中卡也一并渲染回横向网格（不是过滤，而是布局档位被切换）");
+  assert.ok(bad.matchedPresent < G366_MATCH_ORDER.length,
+    "旧行为下隐藏版本的命中（g-301）被视图过滤藏掉 ⇒ g-233 口径只有聚合泳道才能同时满足");
+});
+
+test("g-366 源码契约/i18n：单列闸门是纯派生、搜索不再挂起收窄、零新增状态真源与持久化键", () => {
+  const kanban = readClient("kanban");
+  // 纯派生：搜索聚合泳道 = 窄档 ∧ 搜索激活；单列闸门 = 单泳道档 ∪ 搜索档
+  assert.match(kanban, /const searchLaneActive = !!\(narrowSingleTier && !!searchActiveQuery\);/);
+  assert.match(kanban, /const singleColumnMode = !!\(singleLaneMode \|\| searchLaneActive\);/);
+  assert.match(kanban, /const gridCols = singleColumnMode \? "minmax\(0, 1fr\)" : horizontalGridCols;/);
+  // 零新增状态真源 / 零新增持久化键：不得为聚合泳道引入新的 useState/useRef/localStorage 键
+  assert.doesNotMatch(kanban, /useState\([^)]*[Ss]earchLane/);
+  assert.doesNotMatch(kanban, /localStorage\.(getItem|setItem)\([^)]*[Ss]earchLane/);
+  // 不新增第二套卡片渲染：Card( 仍是既有三处（lane / backlogRow / searchResultsLane）
+  assert.equal([...kanban.matchAll(/return Card\(\{/g)].length, 3, "Card 渲染调用点仍为既有三处");
+  // 聚合泳道复用的是既有卡片入参四件套（四件套在聚合泳道里仍逐一显式传入，Card 调用路径不变）
+  for (const prop of ["_searchQuery", "_isSearchMatched", "_isSearchCurrent", "_snippet"]) {
+    assert.ok([...kanban.matchAll(new RegExp(`\\b${prop}:`, "g"))].length >= 3, `${prop} 由聚合泳道与既有两条路径共用`);
+  }
+  // g-366 补充裁决：聚合泳道内显式关掉「命中」黄色边框（只渲染命中者 ⇒ 无区分价值），保留当前命中锚点
+  const laneBlock = kanban.slice(kanban.indexOf("const searchResultsLane = ()"), kanban.indexOf("const rows = [];"));
+  assert.match(laneBlock, /_isSearchMatched: false,/, "聚合泳道显式传 _isSearchMatched: false");
+  assert.match(laneBlock, /_isSearchCurrent: currentMatchedGoalId === g\.id,/, "聚合泳道保留当前命中锚点");
+  assert.match(laneBlock, /_searchQuery: searchActiveQuery,/, "聚合泳道仍传搜索词（标题内 <mark> 高亮不变）");
+  // i18n：新文案 zh/en 双写、en 零 CJK、走 dgT、零硬编码中文
+  assert.match(kanban, /dgT\("search\.laneLabel", \{ count: searchMatches\.length \}\)/);
+  const i18n = readClient("i18n");
+  const zhBlock = i18n.slice(i18n.indexOf("const zh = {"), i18n.indexOf("const en = {"));
+  const enBlock = i18n.slice(i18n.indexOf("const en = {"));
+  assert.equal([...zhBlock.matchAll(/'search\.laneLabel':/g)].length, 1, "zh 词条唯一");
+  assert.equal([...enBlock.matchAll(/'search\.laneLabel':/g)].length, 1, "en 词条唯一");
+  const enVal = enBlock.match(/'search\.laneLabel':\s*'([^']*)'/)![1];
+  assert.doesNotMatch(enVal, /[\u3400-\u9fff]/, "en 文案零 CJK");
+  assert.match(enVal, /\{count\}/, "en 词条保留 {count} 占位");
 });

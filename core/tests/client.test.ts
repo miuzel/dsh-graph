@@ -318,7 +318,10 @@ test("g-164 released 泳道与 active/version 泳道共用同一动态列模板�
   // att-002：单泳道档由「单版本」放宽为「单版本 ∪ backlog 唯一泳道」（负责人裁决），故变量名
   // 由 singleVersionMode 改为 singleLaneMode；列模板派生的唯一性不变。
   assert.match(source, /const horizontalGridCols = \["130px",/);
-  assert.match(source, /const gridCols = singleLaneMode \? "minmax\(0, 1fr\)" : horizontalGridCols;/);
+  // g-366：单列闸门由 singleLaneMode 扩为 singleColumnMode（单泳道档 ∪ 窄档搜索聚合泳道）——
+  // 两者都用同一份单列全宽模板，列宽来源仍是唯一一份派生（断言强度不变，仍逐字钉住表达式）。
+  assert.match(source, /const singleColumnMode = !!\(singleLaneMode \|\| searchLaneActive\);/);
+  assert.match(source, /const gridCols = singleColumnMode \? "minmax\(0, 1fr\)" : horizontalGridCols;/);
   assert.match(source, /deliverColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ deliver/);
   assert.match(source, /blockedColumnCollapsed \? "36px" : "minmax\(150px, 1fr\)",\s*\/\/ blocked/);
   // 顶部表头网格：(1) 处使用 gridCols；首个单元格是**左上角单元格本体**（g-174 起承载
