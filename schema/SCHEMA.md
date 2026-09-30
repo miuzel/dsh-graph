@@ -65,6 +65,11 @@ depends_on:                 # 数据流依赖（§2.2），建边时引擎做环
   - goal: g-01J4W0AB3C
     consumes:               # 消费上游的哪些产出
       - delivery/api-spec.md
+relations:                  # g-379：目标间「覆盖/调整/补充」关系（类型闭集，建边时校验）
+  - type: supersedes        # supersedes | amends | extends | related
+    goal: g-107             # 关系对端目标 id；自关联/不存在/已删除一律拒绝（已归档放行并标注）
+                            # depends_on 不得写进 relations（写入拒绝 + validate 报错）：见上方 depends_on 字段
+superseded_by: g-108        # g-379 派生镜像：入向 supersedes 的源目标 id；引擎维护，请勿手工编辑
 review:
   reviewer: ai              # human | ai
   prompt: null              # 自定义审核提示词（可覆盖项目默认）
@@ -101,6 +106,9 @@ skill_refs: []              # planning 引用的技能
 
 ## 依赖我的下游
 <!-- 受管小节：引擎维护的反向索引，便于看板连线与交付通知 -->
+
+## 目标关系
+<!-- 受管小节（g-379）：由 frontmatter 的 relations/depends_on 派生；无关系时引擎会移除本小节 -->
 ```
 
 **受管字段不变式（引擎校验）**：
@@ -111,7 +119,41 @@ skill_refs: []              # planning 引用的技能
   编写冻结；执行期间脚本变更视同判据变更；
 - `status: blocked` 时 `blocked_reason` 非空；
 - `depends_on` 不得构成环（建边时检测）；
+- `relations[].type` 只能承载 `supersedes/amends/extends/related`；自关联、
+  不存在的目标 id、已删除 id 一律拒绝（已归档对端放行并标注「已归档」）；
+- `supersedes`/`amends` 替代链不得构成环（与 `depends_on` 环检测复用同一 DFS 实现）；
+  报错含完整环路径；`extends`/`related` 允许互引；
+- **`depends_on` 不得写进 `relations`**（写入路径拒绝、`validate` 报错、读取侧不采信）：
+  每种类型只有一个权威存储——`depends_on` ⇒ `depends_on` 字段，其余 ⇒ `relations` 字段；
+- `meta.superseded_by` 必须与关系条目派生值**全等**（缺失/多余/被删除同样报错）——禁止双真相；
 - `review.reviewer: human` 的目标，完成声明者与审核者不得为同一人（多人场景）。
+
+### 2.4 目标关系（relations，g-379）
+
+**单一真源**：关系只写在各 `goal.md` 的 frontmatter。`index` / 看板卡片 / `goal.md` 的
+`目标关系`、`依赖我的下游` 小节**全部为派生视图**，引擎在关系写入时重算，不手工双写。
+每个类型**只有一个权威存储**：`depends_on` ⇒ `depends_on` 字段（本目标的既有语义，不搬家）；
+`supersedes/amends/extends/related` ⇒ `relations` 字段。
+
+- **`relations` 不承载 `depends_on`**：`normalizeRelation` / `addRelation` 拒绝写入，
+  `validate` 对存量手写条目报错（文案指向 `depends_on` 字段），读取侧 `goalRelations` 不采信；
+  关系写入/解除会顺手清理该非法承载（收敛，不留 validate 红残留）；
+
+- **写入入口**：`addRelation` / `removeRelation`（core/ops.ts）、CLI
+  `add-relation|remove-relation`、REST `POST /api/dsh-graph/relations`（查询用 `GET ...?goal=<id>`）；
+- **幂等**：重复新增/解除同一关系为 no-op（不写文件、不记事件）；
+- **留痕**：新增记 `goal.relation.added`、解除记 `goal.relation.removed`，
+  `details={type,target,conflicted}`；
+- **并发**：`base_relations`（`type:goal` 列表）与当前不一致 → `GraphConflictError`（REST 409）；
+  `force=true` 时以本地内容覆盖并把 `conflicted=true` 记入事件；
+- **落法 A（不新增状态）**：被整体覆盖不引入 `deprecated` 状态；`meta.superseded_by` 是
+  入向 `supersedes` 的**派生镜像**（引擎维护），目标 `status` 原样不动 ⇒ 对版本发布
+  `delivered` guard 零影响：**被覆盖目标仍计入** `validateVersionRelease`，不为其开旁路；
+- **处置是人工的**：本目标不实现任何自动归档/自动改状态/发布路径处置提示；被覆盖目标的
+  收尾由负责人或主管手动完成（必要时先 `postpone` 再 `archive`）；
+- **跨版本引用**：放行，并在视图中标注 `cross_version`；
+- **悬空引用**：对端归档显示「已归档」、对端删除显示「未知 id」且不崩 UI（`validate` 报告）；
+- **展示**：列表/徽标式，**不引入任何图可视化库**（mermaid/cytoscape/d3-dag 等）。
 
 ## 2.5 上下文卡片（cards）
 

@@ -1991,9 +1991,37 @@ export function transition(
   return problems;
 }
 
-/** 依赖环检测：对所有目标的 depends_on 做 DFS。 */
-function cycleProblems(docs: Map<string, GoalDoc>): string[] {
+/** 有向边 DFS 环检测（唯一实现，g-379 复用给依赖边与关系替代边；禁止第二套）。
+ *  edges：节点 → 出边目标；仅当目标也在 edges 中时才继续深入（悬空边由调用方另行报告）。
+ *  label 用于报错前缀（`依赖环：…` / `关系替代环：…`），环路径用 ` → ` 连接。 */
+function dfsCycleProblems(edges: Map<string, string[]>, label: string): string[] {
   const problems: string[] = [];
+  const state = new Map<string, number>(); // 0=未访问 1=在栈 2=完成
+  const stack: string[] = [];
+  const visit = (id: string): void => {
+    state.set(id, 1);
+    stack.push(id);
+    for (const dep of edges.get(id) ?? []) {
+      if (!edges.has(dep)) continue; // 悬空依赖由 validate 另行报告
+      const s = state.get(dep) ?? 0;
+      if (s === 1) {
+        const cycle = [...stack.slice(stack.indexOf(dep)), dep].join(" → ");
+        problems.push(`${label}环：${cycle}`);
+      } else if (s === 0) {
+        visit(dep);
+      }
+    }
+    stack.pop();
+    state.set(id, 2);
+  };
+  for (const id of edges.keys()) {
+    if ((state.get(id) ?? 0) === 0) visit(id);
+  }
+  return problems;
+}
+
+/** 依赖环检测：对所有目标的 depends_on 做 DFS（沿用既有 message `依赖环：…`）。 */
+function cycleProblems(docs: Map<string, GoalDoc>): string[] {
   const deps = new Map<string, string[]>();
   for (const [id, doc] of docs) {
     const list = Array.isArray(doc.meta.depends_on) ? doc.meta.depends_on : [];
@@ -2002,26 +2030,631 @@ function cycleProblems(docs: Map<string, GoalDoc>): string[] {
       list.map((d: any) => String(d?.goal ?? d)),
     );
   }
-  const state = new Map<string, number>(); // 0=未访问 1=在栈 2=完成
-  const stack: string[] = [];
-  const visit = (id: string): void => {
-    state.set(id, 1);
-    stack.push(id);
-    for (const dep of deps.get(id) ?? []) {
-      if (!deps.has(dep)) continue; // 悬空依赖由 validate 另行报告
-      const s = state.get(dep) ?? 0;
-      if (s === 1) {
-        const cycle = [...stack.slice(stack.indexOf(dep)), dep].join(" → ");
-        problems.push(`依赖环：${cycle}`);
-      } else if (s === 0) {
-        visit(dep);
+  const problems = dfsCycleProblems(deps, "依赖");
+  // g-379（判据 2）：supersedes/amends 替代链无环——复用同一 DFS，不另造实现。
+  // extends/related 不参与环检测（非互斥替代语义，允许互相引用）。
+  const relEdges = new Map<string, string[]>();
+  for (const [id, doc] of docs) {
+    const outs = goalRelations(doc.meta)
+      .filter((r) => RELATION_CYCLE_TYPES.has(r.type))
+      .map((r) => r.goal);
+    if (outs.length) relEdges.set(id, outs);
+  }
+  problems.push(...dfsCycleProblems(relEdges, "关系替代"));
+  return problems;
+}
+
+// ---- g-379：目标间「覆盖/调整/补充」关系（落法 A：不新增 status） ----
+//
+// 单一真源：关系只写在各 goal 的 frontmatter。
+//   · meta.relations: [{ type, goal }]  —— supersedes/amends/extends/related 的权威来源；
+//   · meta.depends_on: [...]            —— depends_on 的权威来源（既有语义，本目标不重造、不搬家）；
+//   · meta.superseded_by: "g-xxx"       —— 派生镜像（由入向 supersedes 唯一确定），引擎维护、只读。
+// index / 看板 / goal.md 的「目标关系」「依赖我的下游」小节全部为派生视图，不手工双写。
+// 跨版本引用：放行并在视图中标注 cross_version（不拒绝）；指向不存在/已删除 id 在写入时拒绝、
+// 存量悬空引用在视图中标 missing 并在 validate 报错。
+
+/** 关系类型闭集（判据 1）。开放集会让 schema 校验无法收敛。 */
+export const RELATION_TYPES = [
+  "supersedes",
+  "amends",
+  "extends",
+  "depends_on",
+  "related",
+] as const;
+export type RelationType = (typeof RELATION_TYPES)[number];
+
+/** `relations` 字段允许承载的类型（判据 1/4）。
+ *  depends_on 仍在关系闭集内（语义不变），但其**唯一权威存储是 `meta.depends_on`**：
+ *  写进 `relations` 一律拒绝（写入路径抛错 + validate 报红 + 读取侧不采信），禁止双真相。 */
+export const RELATIONS_FIELD_TYPES = ["supersedes", "amends", "extends", "related"] as const;
+export type RelationsFieldType = (typeof RELATIONS_FIELD_TYPES)[number];
+
+/** 关系写入口的允许类型（供 REST/CLI 校验与报错文案复用）。 */
+export function isRelationType(raw: unknown): raw is RelationType {
+  return typeof raw === "string" && (RELATION_TYPES as readonly string[]).includes(raw);
+}
+
+/** `relations` 承载 depends_on 的统一拒绝文案（写入/校验共用，明确指向权威字段）。 */
+export function dependsOnNotInRelationsError(id?: string): string {
+  return `${id ? `${id}: ` : ""}relations 不得承载 depends_on——depends_on 的权威存储是 meta.depends_on（禁止双真相），请改用 meta.depends_on 字段`;
+}
+
+function isRelationsFieldType(raw: unknown): raw is RelationsFieldType {
+  return typeof raw === "string" && (RELATIONS_FIELD_TYPES as readonly string[]).includes(raw);
+}
+
+/** 参与环检测的替代关系（判据 2：supersedes/amends 链无环）；extends/related 允许互引。 */
+export const RELATION_CYCLE_TYPES: ReadonlySet<string> = new Set(["supersedes", "amends"]);
+
+/** goal.md 中承载关系标记的受管小节名。 */
+export const RELATION_SECTION = "目标关系";
+/** goal.md 中既有的反向索引小节名（现在改为派生维护）。 */
+export const DOWNSTREAM_SECTION = "依赖我的下游";
+
+/** 规范化关系条目：只接受 `relations` 字段可承载的 { type, goal }；depends_on/非法 type 抛 GraphError。 */
+export function normalizeRelation(raw: any): { type: RelationsFieldType; goal: string } {
+  const type = String(raw?.type ?? "").trim();
+  if (!isRelationType(type)) {
+    throw new GraphError(
+      `非法关系类型 ${JSON.stringify(raw?.type ?? null)}——闭集：${RELATION_TYPES.join(" / ")}`,
+    );
+  }
+  if (type === "depends_on") throw new GraphError(dependsOnNotInRelationsError());
+  const goal = String(raw?.goal ?? "").trim();
+  if (!goal) throw new GraphError("关系条目缺少 goal（对端目标 id）");
+  return { type, goal };
+}
+
+/** 目标 frontmatter 中的显式关系条目（meta.relations；缺失/非法形态安全降级为空数组）。
+ *  depends_on 的权威存储是 meta.depends_on ⇒ 写进 relations 的条目**不采信**（validate 会报红）。 */
+export function goalRelations(meta: Record<string, any>): Array<{ type: RelationsFieldType; goal: string }> {
+  const raw = meta?.relations;
+  if (!Array.isArray(raw)) return [];
+  const out: Array<{ type: RelationsFieldType; goal: string }> = [];
+  for (const r of raw) {
+    if (r === null || typeof r !== "object") continue; // 结构错误由 validate 报告
+    const type = String((r as any).type ?? "");
+    const goal = String((r as any).goal ?? "").trim();
+    if (!isRelationsFieldType(type) || !goal) continue;
+    out.push({ type, goal });
+  }
+  return out;
+}
+
+/** depends_on 的字符串形态（兼容对象形态 {goal, consumes}）。 */
+export function dependsOnTargets(meta: Record<string, any>): string[] {
+  const raw = meta?.depends_on;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((d: any) => String(d?.goal ?? d)).filter((s: string) => s !== "");
+}
+
+/** 按 (type, goal) 去重（保留首个）——纵深防御：历史数据/手写文件可能重复，
+ *  重复会在视图里渲染重复行并产生重复 React key（`out-<type>-<goal>`）。 */
+function dedupeRelationEntries<T extends { type: RelationType; goal: string }>(entries: T[]): T[] {
+  const seen = new Set<string>();
+  return entries.filter((r) => {
+    const key = `${r.type}\u0000${r.goal}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** 目标的全部出向关系（显式 relations + depends_on），统一为闭集形态（去重）。 */
+function outgoingRelationEntries(
+  meta: Record<string, any>,
+): Array<{ type: RelationType; goal: string }> {
+  return dedupeRelationEntries([
+    ...goalRelations(meta),
+    ...dependsOnTargets(meta).map((goal) => ({ type: "depends_on" as RelationType, goal })),
+  ]);
+}
+
+/** 关系 token 列表（`type:goal`，排序稳定）——乐观并发 base_relations 的比较基准。 */
+export function relationsToken(meta: Record<string, any>): string[] {
+  return outgoingRelationEntries(meta)
+    .map((r) => `${r.type}:${r.goal}`)
+    .sort();
+}
+
+/** 全局目标索引（含已归档）：解析关系对端、判跨版本、判悬空的唯一数据源。 */
+interface GoalIndexEntry {
+  id: string;
+  title: string;
+  status: string;
+  archived: boolean;
+  version: string | null;
+  relations: Array<{ type: RelationType; goal: string }>;
+  depends_on: string[];
+}
+
+/** 关系索引构建计数（仅供测试观察，仿 cache.ts 的 `_inspectBoardCache`）。
+ *  用途：结构性/行为性守卫「列表投影必须一次性复用索引」，防 B2 的 O(n) 索引重建回归。 */
+let goalIndexBuilds = 0;
+export function _inspectGoalIndexBuilds(reset = false): number {
+  const n = goalIndexBuilds;
+  if (reset) goalIndexBuilds = 0;
+  return n;
+}
+
+function buildGoalIndex(root: string): Map<string, GoalIndexEntry> {
+  goalIndexBuilds++;
+  const index = new Map<string, GoalIndexEntry>();
+  for (const file of listGoalFiles(root, { includeArchived: true })) {
+    let doc: GoalDoc;
+    try {
+      doc = loadGoal(file);
+    } catch {
+      continue; // 坏文件由 validate 报告
+    }
+    const id = String(doc.meta.id ?? "").trim();
+    if (!id || index.has(id)) continue;
+    index.set(id, {
+      id,
+      title: String(doc.meta.title ?? id),
+      status: String(doc.meta.status ?? "unknown"),
+      archived: doc.meta.archived === true || isArchivedFile(file),
+      version: doc.meta.version == null ? null : String(doc.meta.version),
+      relations: goalRelations(doc.meta),
+      depends_on: dependsOnTargets(doc.meta),
+    });
+  }
+  return index;
+}
+
+/** 关系视图条目（下发给看板；对端不可解析时 missing=true，UI 显示「未知 id」而非崩溃）。 */
+export interface RelationView {
+  type: RelationType;
+  goal: string;
+  title: string;
+  status: string;
+  archived: boolean;
+  cross_version: boolean;
+  missing: boolean;
+}
+
+export interface GoalRelationViews {
+  outgoing: RelationView[];
+  incoming: RelationView[];
+  superseded_by: string | null;
+  downstream: string[];
+}
+
+const RELATION_TYPE_ORDER: Record<string, number> = {
+  supersedes: 0,
+  amends: 1,
+  extends: 2,
+  depends_on: 3,
+  related: 4,
+};
+
+function relationViewOf(
+  index: Map<string, GoalIndexEntry>,
+  selfId: string,
+  entry: { type: RelationType; goal: string },
+): RelationView {
+  const other = index.get(entry.goal);
+  const self = index.get(selfId);
+  return {
+    type: entry.type,
+    goal: entry.goal,
+    title: other ? other.title : entry.goal,
+    status: other ? other.status : "unknown",
+    archived: other ? other.archived : false,
+    cross_version: !!(other && self && other.version !== self.version),
+    missing: !other,
+  };
+}
+
+function sortRelationViews(views: RelationView[]): RelationView[] {
+  return views.slice().sort((a, b) => {
+    const ta = RELATION_TYPE_ORDER[a.type] ?? 99;
+    const tb = RELATION_TYPE_ORDER[b.type] ?? 99;
+    if (ta !== tb) return ta - tb;
+    return a.goal.localeCompare(b.goal);
+  });
+}
+
+/** 从 frontmatter 派生目标的完整关系视图（出向 / 入向 / superseded_by / 下游）。 */
+export function deriveGoalRelations(
+  index: Map<string, GoalIndexEntry>,
+  id: string,
+): GoalRelationViews {
+  const self = index.get(id);
+  const outgoingRaw = self
+    ? dedupeRelationEntries([
+        ...self.relations,
+        ...self.depends_on.map((goal) => ({ type: "depends_on" as RelationType, goal })),
+      ])
+    : [];
+  const outgoing = sortRelationViews(outgoingRaw.map((r) => relationViewOf(index, id, r)));
+  const incoming: RelationView[] = [];
+  for (const [otherId, other] of index) {
+    if (otherId === id) continue;
+    const outs = dedupeRelationEntries([
+      ...other.relations,
+      ...other.depends_on.map((goal) => ({ type: "depends_on" as RelationType, goal })),
+    ]);
+    for (const r of outs) {
+      if (r.goal !== id) continue;
+      incoming.push(relationViewOf(index, id, { type: r.type, goal: otherId }));
+    }
+  }
+  const incomingSorted = sortRelationViews(dedupeRelationEntries(incoming));
+  const superseded = incomingSorted.find((v) => v.type === "supersedes");
+  return {
+    outgoing,
+    incoming: incomingSorted,
+    superseded_by: superseded ? superseded.goal : null,
+    downstream: incomingSorted.filter((v) => v.type === "depends_on").map((v) => v.goal),
+  };
+}
+
+/** 派生视图查询入口：单目标关系视图（含已归档对端解析）。 */
+export function goalRelationViews(root: string, id: string): GoalRelationViews {
+  return deriveGoalRelations(buildGoalIndex(root), id);
+}
+
+function relationEndpointLabel(v: RelationView): string {
+  if (v.missing) return `${v.goal}（未知 id / 已删除）`;
+  if (v.archived) return `${v.goal}（已归档：${v.title}）`;
+  return `${v.goal}（${v.title}）· ${v.status}${v.cross_version ? " · 跨版本" : ""}`;
+}
+
+/** 渲染受管 `## 目标关系` 小节正文；无任何关系时返回 null（不渲染空壳）。 */
+function renderRelationSection(views: GoalRelationViews): string | null {
+  const hasAny = views.outgoing.length > 0 || views.incoming.length > 0;
+  if (!hasAny) return null;
+  const lines: string[] = [];
+  lines.push(
+    "<!-- 受管小节（g-379）：由 frontmatter 的 relations / depends_on 派生，请勿手工编辑 -->",
+  );
+  lines.push("");
+  for (const v of views.incoming) {
+    if (v.type === "supersedes") {
+      lines.push(
+        `> ⚠️ 本目标已被 \`${v.goal}\` 取代（supersedes）——相关能力可能已移除，请勿据本卡片补做已存在的能力。`,
+      );
+    } else if (v.type === "amends") {
+      lines.push(`> ⚠️ 本目标已被 \`${v.goal}\` 调整（amends）——相关能力可能已移除或改写。`);
+    }
+  }
+  if (views.incoming.some((v) => v.type === "supersedes" || v.type === "amends")) lines.push("");
+  if (views.outgoing.length > 0) {
+    lines.push("**本目标覆盖/调整/补充了谁（出向）**");
+    for (const v of views.outgoing) lines.push(`- ${v.type} → ${relationEndpointLabel(v)}`);
+    lines.push("");
+  }
+  if (views.incoming.length > 0) {
+    lines.push("**谁覆盖/调整/补充/依赖了本目标（入向）**");
+    for (const v of views.incoming) lines.push(`- ${v.type} ← ${relationEndpointLabel(v)}`);
+    lines.push("");
+  }
+  return "\n" + lines.join("\n").replace(/\n+$/, "") + "\n";
+}
+
+/** 渲染受管 `## 依赖我的下游` 小节正文（派生，空时沿用模板占位「（暂无）」）。 */
+function renderDownstreamSection(downstream: string[]): string {
+  if (downstream.length === 0) return "\n（暂无）\n";
+  const lines = [
+    "<!-- 受管小节：由各目标 frontmatter 的 depends_on 反向派生，请勿手工编辑 -->",
+    "",
+  ];
+  for (const id of downstream) lines.push(`- ${id}`);
+  return "\n" + lines.join("\n") + "\n";
+}
+
+/** 就地替换/追加/删除受管小节；返回是否发生实际改动（避免无谓改写 goal.md）。 */
+function applyManagedSection(doc: GoalDoc, name: string, content: string | null): boolean {
+  const bounds = findSectionBounds(doc.body, name);
+  const current = bounds ? bounds.lines.slice(bounds.start + 1, bounds.end).join("\n") : null;
+  if (content === null) {
+    if (!bounds) return false;
+    const lines = bounds.lines;
+    const next = [...lines.slice(0, bounds.start), ...lines.slice(bounds.end)];
+    // 折叠删除后遗留的连续空行，保持 round-trip 稳定
+    const collapsed: string[] = [];
+    for (const l of next) {
+      if (l.trim() === "" && collapsed.length > 0 && collapsed[collapsed.length - 1].trim() === "") continue;
+      collapsed.push(l);
+    }
+    doc.body = collapsed.join("\n");
+    return true;
+  }
+  if (current !== null) {
+    if (current === content) return false;
+    doc.body = replaceSection(doc.body, name, content);
+    return true;
+  }
+  const base = doc.body.replace(/\n+$/, "");
+  doc.body = `${base}\n\n## ${name}\n${content}`;
+  return true;
+}
+
+/** 同步派生视图：重算 meta.superseded_by（派生镜像）+ 重写受管小节。仅改动有变化的文件。 */
+function syncRelationDerived(root: string, ids: string[]): void {
+  const index = buildGoalIndex(root);
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    let file: string;
+    try {
+      file = findGoalFile(root, id);
+    } catch {
+      continue; // 目标已被删除：悬空关系由 validate/视图标记，不崩
+    }
+    let doc: GoalDoc;
+    try {
+      doc = loadGoal(file);
+    } catch {
+      continue;
+    }
+    const views = deriveGoalRelations(index, id);
+    let changed = false;
+    const expected = views.superseded_by;
+    const current = doc.meta.superseded_by == null ? null : String(doc.meta.superseded_by);
+    if (current !== expected) {
+      if (expected) doc.meta.superseded_by = expected;
+      else delete doc.meta.superseded_by;
+      changed = true;
+    }
+    if (applyManagedSection(doc, RELATION_SECTION, renderRelationSection(views))) changed = true;
+    if (applyManagedSection(doc, DOWNSTREAM_SECTION, renderDownstreamSection(views.downstream))) changed = true;
+    if (changed) saveGoal(file, doc);
+  }
+}
+
+export interface RelationMutationOpts {
+  from: string;
+  type: string;
+  goal: string;
+  actor: string;
+  /** 乐观并发 token（`type:goal` 列表，与 relationsToken 同形态）；不一致且未 force → GraphConflictError(409)。 */
+  base_relations?: string[] | null;
+  force?: boolean;
+}
+
+export interface RelationMutationResult {
+  changed: boolean;
+  from: string;
+  type: RelationType;
+  goal: string;
+  relations: string[];
+  conflicted: boolean;
+}
+
+/** 关系写入的公共前置校验（判据 1：闭集 / 自关联 / 不存在 id 一律拒绝）。
+ *  allowMissingTarget=true 仅用于 remove：对端已被删除时仍允许清理悬空关系（否则无法收敛）。 */
+function prepareRelationMutation(
+  root: string,
+  opts: RelationMutationOpts,
+  allowMissingTarget = false,
+): { file: string; doc: GoalDoc; type: RelationType; target: string; conflicted: boolean } {
+  const type = String(opts.type ?? "").trim();
+  if (!isRelationType(type)) {
+    throw new GraphError(
+      `非法关系类型 ${JSON.stringify(opts.type ?? null)}——闭集：${RELATION_TYPES.join(" / ")}`,
+    );
+  }
+  const from = String(opts.from ?? "").trim();
+  if (!from) throw new GraphError("缺少源目标 id");
+  const target = String(opts.goal ?? "").trim();
+  if (!target) throw new GraphError("缺少关系对端目标 id");
+  if (!isSafeIdString(target)) throw new GraphError(`关系对端 id 不安全：${JSON.stringify(target)}`);
+  if (target === from) throw new GraphError(`关系自关联被拒：${from} 不能与自身建立 ${type} 关系`);
+  const file = findGoalFile(root, from); // 不存在 → GraphError
+  const doc = loadGoal(file);
+  if (!isSafeIdString(from)) throw new GraphError(`源目标 id 不安全：${JSON.stringify(from)}`);
+  // 对端必须存在（含已归档）；已删除/从未存在 → 拒绝（remove 且条目确实存在时例外，允许清理悬空）
+  const rawRelations = Array.isArray(doc.meta.relations) ? doc.meta.relations : [];
+  const illegalDependsOn = rawRelations.some(
+    (r: any) => String(r?.type ?? "") === "depends_on" && String(r?.goal ?? "").trim() === target,
+  );
+  const entryExists = type === "depends_on"
+    ? dependsOnTargets(doc.meta).includes(target) || illegalDependsOn
+    : goalRelations(doc.meta).some((r) => r.type === type && r.goal === target);
+  if (!(allowMissingTarget && entryExists)) findGoalFile(root, target);
+  // 乐观并发：base_relations 与当前 token 不一致且未 force → 409
+  let conflicted = false;
+  if (Array.isArray(opts.base_relations)) {
+    const current = relationsToken(doc.meta);
+    const base = opts.base_relations.map(String).slice().sort();
+    const same = current.length === base.length && current.every((t, i) => t === base[i]);
+    if (!same) {
+      if (opts.force === true) conflicted = true;
+      else {
+        throw new GraphConflictError(
+          "目标关系已被其他编辑修改（并发冲突）——请刷新后重试；或确认以本地内容覆盖",
+        );
       }
     }
-    stack.pop();
-    state.set(id, 2);
+  }
+  return { file, doc, type, target, conflicted };
+}
+
+function isSafeIdString(id: string): boolean {
+  try {
+    assertSafeId(id, "目标 id");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 清理非法承载：把写进 `relations` 的 depends_on 条目移出（权威存储是 `meta.depends_on`）。
+ *  关系写入/解除时顺手收敛，避免「合法操作后文件仍是 validate 红」的暗中残留。返回是否发生改动。 */
+function stripIllegalDependsOnFromRelations(meta: Record<string, any>, target: string): boolean {
+  const raw = meta?.relations;
+  if (!Array.isArray(raw)) return false;
+  const next = raw.filter(
+    (r: any) => !(String(r?.type ?? "") === "depends_on" && String(r?.goal ?? "").trim() === target),
+  );
+  if (next.length === raw.length) return false;
+  if (next.length) meta.relations = next;
+  else delete meta.relations;
+  return true;
+}
+
+/**
+ * 建立关系（幂等：已存在时不写文件、不记事件，返回 changed=false）。
+ * 事件：`goal.relation.added`，goal=源目标，details={type, target, conflicted}。
+ * depends_on 复用既有 meta.depends_on（不搬到 relations，避免双真相）。
+ */
+export function addRelation(root: string, opts: RelationMutationOpts): RelationMutationResult {
+  const { file, doc, type, target, conflicted } = prepareRelationMutation(root, opts);
+  const from = String(doc.meta.id ?? opts.from);
+  let changed = false;
+  if (type === "depends_on") {
+    const existing = Array.isArray(doc.meta.depends_on) ? doc.meta.depends_on : [];
+    const present = existing.some((d: any) => String(d?.goal ?? d) === target);
+    if (!present) {
+      doc.meta.depends_on = [...existing, { goal: target }];
+      changed = true;
+    }
+    // 收敛历史/手写数据里的非法承载（relations 承载 depends_on）——只走 meta.depends_on 一条权威通道
+    if (stripIllegalDependsOnFromRelations(doc.meta, target)) changed = true;
+  } else {
+    const existing = Array.isArray(doc.meta.relations) ? doc.meta.relations : [];
+    const present = existing.some(
+      (r: any) => String(r?.type ?? "") === type && String(r?.goal ?? "") === target,
+    );
+    if (!present) {
+      doc.meta.relations = [...existing, { type, goal: target }];
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveGoal(file, doc);
+    appendEvent(root, {
+      actor: opts.actor,
+      event: "goal.relation.added",
+      goal: from,
+      details: { type, target, conflicted },
+    });
+    syncRelationDerived(root, [from, target]);
+  }
+  const after = loadGoal(file);
+  return {
+    changed,
+    from,
+    type,
+    goal: target,
+    relations: relationsToken(after.meta),
+    conflicted,
   };
-  for (const id of deps.keys()) {
-    if ((state.get(id) ?? 0) === 0) visit(id);
+}
+
+/**
+ * 解除关系（幂等：不存在时不写文件、不记事件，返回 changed=false）。
+ * 事件：`goal.relation.removed`，goal=源目标，details={type, target, conflicted}。
+ */
+export function removeRelation(root: string, opts: RelationMutationOpts): RelationMutationResult {
+  const { file, doc, type, target, conflicted } = prepareRelationMutation(root, opts, true);
+  const from = String(doc.meta.id ?? opts.from);
+  let changed = false;
+  if (type === "depends_on") {
+    const existing = Array.isArray(doc.meta.depends_on) ? doc.meta.depends_on : [];
+    const next = existing.filter((d: any) => String(d?.goal ?? d) !== target);
+    if (next.length !== existing.length) {
+      // 沿用既有形态：清空后保留 `depends_on: []`（与 goal.md 模板一致，round-trip 字节稳定）
+      doc.meta.depends_on = next;
+      changed = true;
+    }
+    // 合法条目（meta.depends_on）与非法承载（relations 承载 depends_on）都真正解除，不得静默 no-op
+    if (stripIllegalDependsOnFromRelations(doc.meta, target)) changed = true;
+  } else {
+    const existing = Array.isArray(doc.meta.relations) ? doc.meta.relations : [];
+    const next = existing.filter(
+      (r: any) => !(String(r?.type ?? "") === type && String(r?.goal ?? "") === target),
+    );
+    if (next.length !== existing.length) {
+      if (next.length) doc.meta.relations = next;
+      else delete doc.meta.relations;
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveGoal(file, doc);
+    appendEvent(root, {
+      actor: opts.actor,
+      event: "goal.relation.removed",
+      goal: from,
+      details: { type, target, conflicted },
+    });
+    syncRelationDerived(root, [from, target]);
+  }
+  const after = loadGoal(file);
+  return {
+    changed,
+    from,
+    type,
+    goal: target,
+    relations: relationsToken(after.meta),
+    conflicted,
+  };
+}
+
+/** 关系不变式（判据 1/8）：闭集、自关联、悬空引用、superseded_by 双真相漂移。
+ *  已归档对端放行（视图标注「已归档」）；跨版本引用放行并在视图中标注 cross_version。 */
+function relationProblems(root: string): string[] {
+  const problems: string[] = [];
+  const index = buildGoalIndex(root);
+  const archivedIds = new Set(
+    [...index.values()].filter((e) => e.archived).map((e) => e.id),
+  );
+  for (const file of listGoalFiles(root)) {
+    let doc: GoalDoc;
+    try {
+      doc = loadGoal(file);
+    } catch {
+      continue; // 解析失败由 validate 主循环报告
+    }
+    const id = String(doc.meta.id ?? basename(file));
+    if (doc.meta.relations !== undefined && !Array.isArray(doc.meta.relations)) {
+      problems.push(`${id}: relations 必须是数组`);
+      continue;
+    }
+    for (const r of Array.isArray(doc.meta.relations) ? doc.meta.relations : []) {
+      if (r === null || typeof r !== "object" || Array.isArray(r)) {
+        problems.push(`${id}: 关系条目必须是对象 {type, goal}`);
+        continue;
+      }
+      const type = String((r as any).type ?? "");
+      const target = String((r as any).goal ?? "").trim();
+      if (!isRelationType(type)) {
+        problems.push(`${id}: 非法关系类型 ${JSON.stringify(type)}——闭集：${RELATION_TYPES.join("/")}`);
+        continue;
+      }
+      if (type === "depends_on") {
+        // depends_on 的唯一权威存储是 meta.depends_on：写进 relations 一律判为非法（禁止双真相）
+        problems.push(dependsOnNotInRelationsError(id));
+        continue;
+      }
+      if (!target) {
+        problems.push(`${id}: 关系条目缺少 goal`);
+        continue;
+      }
+      if (target === id) {
+        problems.push(`${id}: 关系自关联被拒（${type} ${target}）`);
+        continue;
+      }
+      if (!index.has(target)) {
+        problems.push(`${id}: 关系指向不存在的目标 ${target}`);
+        continue;
+      }
+      void archivedIds; // 已归档对端放行（视图标注「已归档」）
+    }
+    // superseded_by 派生一致性（防双真相：frontmatter 镜像必须能由入向 supersedes 复算）
+    // 全等比较（不只比较 declared!==null）：镜像被整体删除而关系仍宣称被取代时同样必须报红
+    const derived = deriveGoalRelations(index, id);
+    const declared = doc.meta.superseded_by == null ? null : String(doc.meta.superseded_by);
+    if (declared !== derived.superseded_by) {
+      problems.push(
+        `${id}: meta.superseded_by=${declared ?? "无"} 与关系条目派生值(${derived.superseded_by ?? "无"})不一致——请勿手工编辑派生字段`,
+      );
+    }
   }
   return problems;
 }
@@ -2120,6 +2753,8 @@ export function validate(root: string): string[] {
     }
   }
   problems.push(...cycleProblems(docs));
+  // g-379：关系闭集/自关联/悬空/superseded_by 双真相漂移（已归档对端放行）
+  problems.push(...relationProblems(root));
   try {
     readEvents(root);
   } catch (e) {
@@ -7596,6 +8231,12 @@ export interface BoardGoal {
   updated_at?: number | null;
   /** g-233：目标正文描述（供看板全文搜索） */
   description?: string;
+  /** g-379：出向/入向关系派生视图（含 depends_on；对端已归档/缺失均安全标注）。无关系时为两份空数组。 */
+  relations?: { outgoing: RelationView[]; incoming: RelationView[] };
+  /** g-379：派生镜像——入向 supersedes 的源目标 id（落法 A：不新增 status）；无则 null。 */
+  superseded_by?: string | null;
+  /** g-379：入向 amends 的源目标 id（供卡片「已被调整」徽标）；无则 null。 */
+  amended_by?: string | null;
 }
 
 export interface BoardVersion {
@@ -7608,7 +8249,11 @@ export interface BoardVersion {
   lazy?: boolean;
 }
 
-function buildBoardGoalItem(root: string, file: string): BoardGoal {
+function buildBoardGoalItem(
+  root: string,
+  file: string,
+  index?: Map<string, GoalIndexEntry>,
+): BoardGoal {
   assertContainedPath(root, file);
   const doc = loadGoal(file);
   const meta = doc.meta;
@@ -7720,6 +8365,21 @@ function buildBoardGoalItem(root: string, file: string): BoardGoal {
     rules_snapshot: meta.rules_snapshot ?? null,
     updated_at: updatedAt,
     description: extractGoalDescription(doc.body),
+    ...(() => {
+      // g-379：关系视图（派生）。索引缺失时按需构建（O(n) 一次），保证单目标查询也正确。
+      try {
+        const idx = index ?? buildGoalIndex(root);
+        const views = deriveGoalRelations(idx, String(meta.id));
+        return {
+          relations: { outgoing: views.outgoing, incoming: views.incoming },
+          superseded_by: views.superseded_by,
+          amended_by: views.incoming.find((v) => v.type === "amends")?.goal ?? null,
+        };
+      } catch {
+        // 关系派生失败绝不能让看板白屏/整卡丢失
+        return { relations: { outgoing: [], incoming: [] }, superseded_by: null, amended_by: null };
+      }
+    })(),
   };
 }
 
@@ -7772,13 +8432,15 @@ export function versionGoals(root: string, slug: string, opts?: { includeArchive
   const vdir = join(root, "versions", slug);
   if (!existsSync(vdir)) throw new GraphError(`版本 ${slug} 不存在`);
   const goals: BoardGoal[] = [];
+  // g-379：关系视图索引构建一次，供本版本全部目标复用
+  const relationIndex = buildGoalIndex(root);
   const gdir = join(vdir, "goals");
   if (existsSync(gdir)) {
     for (const g of readdirSync(gdir).sort()) {
       const gf = join(gdir, g, "goal.md");
       if (!existsSync(gf)) continue;
       try {
-        goals.push(buildBoardGoalItem(root, gf));
+        goals.push(buildBoardGoalItem(root, gf, relationIndex));
       } catch {
         /* 坏目标文件跳过 */
       }
@@ -7791,7 +8453,7 @@ export function versionGoals(root: string, slug: string, opts?: { includeArchive
         const gf = join(archivedDir, g, "goal.md");
         if (!existsSync(gf)) continue;
         try {
-          goals.push(buildBoardGoalItem(root, gf));
+          goals.push(buildBoardGoalItem(root, gf, relationIndex));
         } catch {
           /* 坏目标文件跳过 */
         }
@@ -7805,6 +8467,9 @@ export function versionGoals(root: string, slug: string, opts?: { includeArchive
 export function backlogGoals(root: string, opts?: { includeArchived?: boolean }): BoardGoal[] {
   const includeArchived = opts?.includeArchived ?? false;
   const backlog: BoardGoal[] = [];
+  // g-379：关系视图索引构建一次，供全部 backlog 项复用（同 versionGoals/boardProjection；
+  // 逐项重建会在真实 253 目标根下把本函数拖慢数倍——B2 回归点）
+  const relationIndex = buildGoalIndex(root);
   const bdir = join(root, "backlog");
   if (existsSync(bdir)) {
     for (const f of readdirSync(bdir).sort()) {
@@ -7814,14 +8479,14 @@ export function backlogGoals(root: string, opts?: { includeArchived?: boolean })
           for (const af of readdirSync(archivedDir).sort()) {
             if (af.endsWith(".md")) {
               try {
-                backlog.push(buildBoardGoalItem(root, join(archivedDir, af)));
+                backlog.push(buildBoardGoalItem(root, join(archivedDir, af), relationIndex));
               } catch {}
               continue;
             }
             const nested = join(archivedDir, af, "goal.md");
             if (!existsSync(nested)) continue;
             try {
-              backlog.push(buildBoardGoalItem(root, nested));
+              backlog.push(buildBoardGoalItem(root, nested, relationIndex));
             } catch {}
           }
         }
@@ -7829,14 +8494,14 @@ export function backlogGoals(root: string, opts?: { includeArchived?: boolean })
       }
       if (f.endsWith(".md")) {
         try {
-          backlog.push(buildBoardGoalItem(root, join(bdir, f)));
+          backlog.push(buildBoardGoalItem(root, join(bdir, f), relationIndex));
         } catch {}
         continue;
       }
       const nested = join(bdir, f, "goal.md");
       if (!existsSync(nested)) continue;
       try {
-        backlog.push(buildBoardGoalItem(root, nested));
+        backlog.push(buildBoardGoalItem(root, nested, relationIndex));
       } catch {}
     }
   }
@@ -7933,7 +8598,9 @@ export function boardProjection(root: string, opts?: { includeArchived?: boolean
   const includeArchived = opts?.includeArchived ?? false;
   const lazy = opts?.lazy ?? false;
   const events = opts?.events ?? readEvents(root);
-  const goalItem = (file: string): BoardGoal => buildBoardGoalItem(root, file);
+  // g-379：关系视图的全局索引只构建一次（含已归档对端），避免逐目标 O(n²) 读盘。
+  const relationIndex = buildGoalIndex(root);
+  const goalItem = (file: string): BoardGoal => buildBoardGoalItem(root, file, relationIndex);
   const versions: BoardVersion[] = [];
   const vdir = join(root, "versions");
   if (existsSync(vdir)) {

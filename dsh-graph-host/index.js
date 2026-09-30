@@ -46,6 +46,10 @@ import {
   bindAttemptChild,
   moveGoal,
   amendGoal,
+  // g-379：目标间关系（覆盖/调整/补充）写入/解除 + 单目标关系视图
+  addRelation,
+  removeRelation,
+  goalRelationViews,
   renameGoal,
   setGoalType,
   addMemory,
@@ -2989,6 +2993,46 @@ export function apply(ctx, config) {
           json(res, 200, { ok: true, ...result });
         } catch (e) {
           // 并发冲突 → 409（客户端据 D8 自动以本地内容覆盖重试）
+          if (e instanceof GraphConflictError) {
+            return json(res, 409, { error: String(e?.message ?? e) });
+          }
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-379：目标关系写入/解除/查询端点（落法 A：不新增 status）
+    //   POST {goal, target, type, action:"add"|"remove", base_relations?, force?} → 幂等；并发不一致 409
+    //   GET  ?goal=g-xxx                                     → 派生关系视图（只读）
+    {
+      path: "/api/dsh-graph/relations",
+      handler: async (req, res) => {
+        try {
+          const body = req.method === "GET"
+            ? Object.fromEntries(new URL(req.url, "http://localhost").searchParams)
+            : await readBody(req);
+          const rRoot = rootForReq(req, body);
+          if (req.method === "GET") {
+            const goal = body.goal;
+            if (!goal) return json(res, 400, { error: "missing goal" });
+            return json(res, 200, { ok: true, goal, ...goalRelationViews(rRoot, String(goal)) });
+          }
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const { goal, target, type, base_relations, force } = body;
+          const action = body.action === "remove" ? "remove" : "add";
+          if (!goal || !target || !type) return json(res, 400, { error: "missing goal/target/type" });
+          const mutate = action === "remove" ? removeRelation : addRelation;
+          const result = mutate(rRoot, {
+            from: String(goal),
+            type: String(type),
+            goal: String(target),
+            actor: "human:gui",
+            base_relations: Array.isArray(base_relations) ? base_relations.map(String) : null,
+            force: force === true,
+          });
+          json(res, 200, { ok: true, action, ...result });
+        } catch (e) {
+          // 并发冲突 → 409（客户端刷新后重试；force=true 可本地覆盖）
           if (e instanceof GraphConflictError) {
             return json(res, 409, { error: String(e?.message ?? e) });
           }

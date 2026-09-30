@@ -309,6 +309,102 @@
     // 依赖徽章状态化（发现#23）：已交付依赖显示「依赖满足」，仅未交付依赖显示「等待」并触发琥珀边框
     // 被复用徽章（g-a92e1406）：reused_by 由 boardProjection 派生（attempt.reused 事件 + 绑定记录双源），
     // 客户端直接消费 g.reused_by，不再用数组顺序猜测旧/新绑定。
+    // g-379：关系标记（硬需求：被覆盖目标往往是已发布过的旧目标，必须显式标记，
+    // 防止后来主管/执行者把旧卡片误读为「功能缺失/待补需求」）。
+    // 数据源：board 投影的 relations/superseded_by（全部派生自 goal frontmatter，客户端不双写）。
+    // 无关系时不渲染任何空壳；对端缺失/已归档只改文案，绝不抛错。
+    function relationIncoming(g) {
+      try {
+        const inc = g && g.relations && Array.isArray(g.relations.incoming) ? g.relations.incoming : [];
+        return inc.filter((r) => r && typeof r === "object");
+      } catch { return []; }
+    }
+
+    function relationPeerLabel(v) {
+      const id = String((v && v.goal) || "");
+      if (!id) return "";
+      if (v && v.missing) return dgT('card.relationMissing', { id });
+      if (v && v.archived) return dgT('card.relationArchived', { id });
+      return id;
+    }
+
+    // 被覆盖/被调整徽标：折叠态也可见（徽标 + 点击跳转对端卡片）
+    function RelationBadges(props) {
+      const { g, onOpen } = props;
+      const inc = relationIncoming(g);
+      const supersede = inc.find((r) => r.type === "supersedes") || null;
+      const amend = inc.find((r) => r.type === "amends") || null;
+      const items = [];
+      if (supersede) items.push({
+        key: "supersedes",
+        peer: supersede,
+        text: dgT('card.superseded', { id: relationPeerLabel(supersede) }),
+        color: "var(--dsw-alias-state-error-primary, #d66)",
+        bg: "rgba(214,102,102,.14)",
+      });
+      if (amend) items.push({
+        key: "amends",
+        peer: amend,
+        text: dgT('card.amended', { id: relationPeerLabel(amend) }),
+        color: "var(--dsw-alias-state-warn-label, #e0a53a)",
+        bg: "rgba(224,165,58,.16)",
+      });
+      if (!items.length) return null;
+      return h("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 2 } },
+        items.map((it) => h("span", {
+          key: it.key,
+          className: "dg-relation-badge dg-relation-" + it.key,
+          title: it.peer.missing ? it.text : dgT('card.relationJump', { id: it.peer.goal }),
+          style: {
+            fontSize: 10, padding: "1px 6px", borderRadius: 3,
+            cursor: it.peer.missing ? "default" : "pointer",
+            background: it.bg, color: it.color, border: "1px solid " + it.color,
+          },
+          onClick: (e) => {
+            e.stopPropagation();
+            if (it.peer.missing || typeof onOpen !== "function") return;
+            onOpen(String(it.peer.goal));
+          },
+        }, it.text)));
+    }
+
+    // 展开态的完整关系清单（列表式，不引入任何图可视化库）
+    function RelationList(props) {
+      const { g, onOpen } = props;
+      let out = [], inc = [];
+      try {
+        out = g && g.relations && Array.isArray(g.relations.outgoing) ? g.relations.outgoing : [];
+        inc = g && g.relations && Array.isArray(g.relations.incoming) ? g.relations.incoming : [];
+      } catch { return null; }
+      if (!out.length && !inc.length) return null;
+      const row = (r, arrow, prefix) => {
+        const missing = !!r.missing;
+        const label = missing
+          ? dgT('card.relationMissing', { id: r.goal })
+          : (r.archived ? dgT('card.relationArchived', { id: r.goal }) : `${r.goal}${r.title && r.title !== r.goal ? " " + r.title : ""}`);
+        return h("div", { key: prefix + r.type + "-" + r.goal, style: { display: "flex", gap: 4, alignItems: "baseline" } },
+          h("span", { style: { flexShrink: 0 } }, `${dgT('card.relType.' + r.type)} ${arrow}`),
+          h("span", {
+            style: {
+              cursor: missing ? "default" : "pointer",
+              textDecoration: missing ? "none" : "underline",
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            },
+            title: missing ? label : dgT('card.relationJump', { id: r.goal }),
+            onClick: (e) => {
+              e.stopPropagation();
+              if (missing || typeof onOpen !== "function") return;
+              onOpen(String(r.goal));
+            },
+          }, label),
+          r.cross_version && !missing ? h("span", { style: { flexShrink: 0, opacity: 0.7 } }, dgT('card.relationCrossVersion')) : null);
+      };
+      return h("div", { className: "dg-relation-list", style: { ...S.meta, marginTop: 2, display: "flex", flexDirection: "column", gap: 1 } },
+        h("div", { style: { opacity: 0.75 } }, "🔗 " + dgT('card.relationsTitle')),
+        out.map((r) => row(r, "→", "out-")),
+        inc.map((r) => row(r, "←", "in-")));
+    }
+
     // g-125：所有卡片统一用标题左侧小三角展开/收起；delivered/blocked 默认折叠精简
     //（折叠态只留标题+状态行，隐藏依赖/livestrip/执行按钮/上下文卡片），可展开查看完整。
     // expanded 默认值由 KanbanView 决定（delivered/blocked 默认 false，其余默认 true），
@@ -319,6 +415,16 @@
       const blocked = g.status === "blocked";
       const collapsed = !expanded;
       const deps = g.depends_on ?? [];
+      // g-379：仅当确有关系时才挂载关系节点（无关系不渲染空壳，也不改变既有卡片树）
+      const hasRelations = (() => {
+        try {
+          const rel = g && g.relations;
+          if (!rel) return false;
+          const out = Array.isArray(rel.outgoing) ? rel.outgoing.length : 0;
+          const inc = Array.isArray(rel.incoming) ? rel.incoming.length : 0;
+          return out + inc > 0;
+        } catch { return false; }
+      })();
       const pendingDeps = deps.filter((d) => goalStatus?.[d] !== "delivered");
       const metDeps = deps.filter((d) => goalStatus?.[d] === "delivered");
       const hasDep = pendingDeps.length > 0;
@@ -447,6 +553,7 @@
           polishOverlay,
           updateSheen,
            titleRow,
+          hasRelations ? h(RelationBadges, { g, onOpen }) : null,
           h(GoalTags, { tags: g._tags ?? g.tags }),
           h("div", { style: S.meta },
             highlight(g.id, g._searchQuery, g._isSearchCurrent),
@@ -470,6 +577,7 @@
         polishOverlay,
         updateSheen,
            titleRow,
+        hasRelations ? h(RelationBadges, { g, onOpen }) : null,
         h(GoalTags, { tags: g._tags ?? g.tags }),
         h("div", { style: S.meta },
           highlight(g.id, g._searchQuery, g._isSearchCurrent),
@@ -490,6 +598,7 @@
         metDeps.length
           ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-label-primary, #3aa675)" } }, dgT('card.depsSatisfied', { deps: metDeps.join(", ") }))
           : null,
+        hasRelations ? h(RelationList, { g, onOpen }) : null,
         blocked && g.blocked_reason
           ? h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + g.blocked_reason)
           : null,

@@ -18,6 +18,8 @@ import {
   reportStatus,
   moveGoal,
   amendGoal,
+  addRelation,
+  removeRelation,
   deleteGoal,
   archiveGoal,
   unarchiveGoal,
@@ -164,6 +166,21 @@ function main(): void {
       console.log("ok");
       return;
     }
+    // g-379：关系（覆盖/调整/补充）写入/解除；幂等，changed=false 表示无变化
+    case "add-relation":
+    case "remove-relation": {
+      const mutate = args.command === "add-relation" ? addRelation : removeRelation;
+      const result = mutate(args.root, {
+        from: need(args, "goal"),
+        type: need(args, "type"),
+        goal: need(args, "target"),
+        actor,
+        base_relations: args.flags.has("base-relation") ? flagAll(args, "base-relation") : null,
+        force: args.flags.has("force"),
+      });
+      console.log(result.changed ? "changed" : "noop");
+      return;
+    }
     case "move-goal": {
       const to = need(args, "to");
       if (to !== "backlog" && to !== "standalone" && to !== "version") {
@@ -267,7 +284,7 @@ function main(): void {
     }
     default:
       throw new GraphError(
-        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|delete-card|start-attempt|report-status|move-goal|amend-goal|archive-goal|unarchive-goal|delete-goal|postpone-goal|unbind-goal-child|abandon-attempt|validate|rebuild> [flags]",
+        "用法：node core/main.ts [--root DIR] <init|create-goal|set-criteria|transition|add-card|fill-card|review-card|delete-card|start-attempt|report-status|move-goal|amend-goal|add-relation|remove-relation|archive-goal|unarchive-goal|delete-goal|postpone-goal|unbind-goal-child|abandon-attempt|validate|rebuild> [flags]",
       );
   }
 }

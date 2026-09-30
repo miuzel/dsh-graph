@@ -117,6 +117,20 @@
       'card.criteriaProgress': '质量判据：已完成 {done}/{total}',
       'card.archived': '📦已归档',
 
+      // === g-379 目标关系（覆盖/调整/补充）===
+      'card.superseded': '⚠️ 已被 {id} 取代',
+      'card.amended': '✏️ 已被 {id} 调整',
+      'card.relationsTitle': '目标关系',
+      'card.relationMissing': '{id}（未知 id / 已删除）',
+      'card.relationArchived': '{id}（已归档）',
+      'card.relationCrossVersion': '（跨版本）',
+      'card.relationJump': '点击跳转到 {id}',
+      'card.relType.supersedes': '取代',
+      'card.relType.amends': '调整',
+      'card.relType.extends': '补充',
+      'card.relType.depends_on': '依赖',
+      'card.relType.related': '相关',
+
       // === 判据占位符 ===
       'criteria.pending': '（待登记）',
       'criteria.pendingDetail': '（待登记；进入 in_progress 前必须非空且已确认）',
@@ -1175,6 +1189,20 @@
       'card.clickToOpenDrawer': 'Click to open context drawer',
       'card.criteriaProgress': 'Criteria: {done}/{total} completed',
       'card.archived': '📦Archived',
+
+      // === g-379 goal relations (supersedes/amends/extends) ===
+      'card.superseded': '⚠️ Superseded by {id}',
+      'card.amended': '✏️ Amended by {id}',
+      'card.relationsTitle': 'Relations',
+      'card.relationMissing': '{id} (unknown id / deleted)',
+      'card.relationArchived': '{id} (archived)',
+      'card.relationCrossVersion': '(cross-version)',
+      'card.relationJump': 'Open {id}',
+      'card.relType.supersedes': 'supersedes',
+      'card.relType.amends': 'amends',
+      'card.relType.extends': 'extends',
+      'card.relType.depends_on': 'depends on',
+      'card.relType.related': 'related',
 
       // === Criteria placeholders ===
       'criteria.pending': '(Pending registration)',
