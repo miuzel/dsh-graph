@@ -20,12 +20,18 @@ import {
   findGoalFile,
   boardProjection,
   boardPayload,
+  backlogGoals,
+  versionGoals,
   addRelation,
   removeRelation,
   goalRelationViews,
   relationsToken,
   deriveGoalRelations,
+  goalRelations,
+  normalizeRelation,
   RELATION_TYPES,
+  RELATIONS_FIELD_TYPES,
+  _inspectGoalIndexBuilds,
   GraphError,
   GraphConflictError,
   sectionText,
@@ -695,4 +701,191 @@ test("g-379 REST：关系接口失败不得让看板白屏（boardPayload 仍可
   const payload = boardPayload(root);
   assert.ok(payload && Array.isArray(payload.versions), "关系写入失败后看板数据仍可投影");
   assert.equal(validate(root).length, 0, "失败请求不得留下半写状态");
+});
+
+// ---- att-002 返工：B1（relations 承载 depends_on 自相矛盾）/ B2（backlog 索引重建）/ N1（mirror 缺失） ----
+
+/** 渲染关系清单并收集 React key（与 card.js 同源：`<out|in>-<type>-<goal>`）。 */
+function relationRenderKeys(g: any): string[] {
+  const cardSrc = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/card.js"), "utf8");
+  const start = cardSrc.indexOf("    function relationIncoming(g) {");
+  const end = cardSrc.indexOf("    function Card(g, onOpen");
+  assert.ok(start > 0 && end > start, "关系渲染辅助函数必须存在");
+  const h = (type: any, props: any, ...children: any[]) => ({ type, props: props || {}, children });
+  const sandbox: any = { h, S: { meta: {} }, dgT: (k: string) => k, React: {} };
+  vm.runInNewContext(cardSrc.slice(start, end) + "; this.RelationList = RelationList;", sandbox);
+  const tree = sandbox.RelationList({ g, onOpen: () => {} });
+  const keys: string[] = [];
+  const walk = (n: any) => {
+    if (!n || typeof n !== "object") return;
+    if (Array.isArray(n)) return void n.forEach(walk);
+    if (n.props && n.props.key !== undefined) keys.push(String(n.props.key));
+    (n.children ?? []).forEach(walk);
+  };
+  walk(tree);
+  return keys;
+}
+
+/** 手写非法承载：把 depends_on 条目写进 relations（历史数据/手工编辑形态）。 */
+function writeRelationsDependsOn(root: string, id: string, target: string): string {
+  const file = findGoalFile(root, id);
+  const doc = loadGoal(file);
+  doc.meta.relations = [{ type: "depends_on", goal: target }];
+  saveGoal(file, doc);
+  return file;
+}
+
+test("g-379 B1：relations 不得承载 depends_on——写入路径拒绝，文案指向 meta.depends_on", () => {
+  assert.ok(
+    !(RELATIONS_FIELD_TYPES as readonly string[]).includes("depends_on"),
+    "relations 字段闭集不得包含 depends_on",
+  );
+  assert.throws(
+    () => normalizeRelation({ type: "depends_on", goal: "g-2" }),
+    (e: any) => e instanceof GraphError && /不得承载 depends_on/.test(e.message) && /meta\.depends_on/.test(e.message),
+    "写入路径必须拒绝 depends_on 承载并指向 meta.depends_on",
+  );
+  // 合法类型不受影响
+  assert.deepEqual(normalizeRelation({ type: "related", goal: "g-2" }), { type: "related", goal: "g-2" });
+});
+
+test("g-379 B1：手写 relations.depends_on ⇒ validate 必红，且读取侧不采信", () => {
+  const root = tmpRoot();
+  const a = makeGoal(root, "A", "v-x");
+  const b = makeGoal(root, "B", "v-x");
+  const file = writeRelationsDependsOn(root, a, addr(root, b));
+  const problems = validate(root);
+  const hit = problems.find((p) => p.includes(`${addr(root, a)}:`) && p.includes("不得承载 depends_on"));
+  assert.ok(hit, `非法承载必须红色报错，实际：${JSON.stringify(problems)}`);
+  assert.match(String(hit), /meta\.depends_on/);
+  // 读取侧不采信：非法承载既不算 depends_on 出向，也不进下游/派生
+  assert.deepEqual(goalRelations(loadGoal(file).meta), []);
+  assert.deepEqual(goalRelationViews(root, a).outgoing, []);
+  assert.deepEqual(goalRelationViews(root, b).downstream, []);
+  assert.deepEqual(relationsToken(loadGoal(file).meta), []);
+});
+
+test("g-379 B1：双写（relations + meta.depends_on）不再产生重复行与重复 React key", () => {
+  const root = tmpRoot();
+  const a = makeGoal(root, "A", "v-x");
+  const b = makeGoal(root, "B", "v-x");
+  const file = findGoalFile(root, a);
+  const doc = loadGoal(file);
+  doc.meta.relations = [{ type: "depends_on", goal: addr(root, b) }]; // 非法承载
+  doc.meta.depends_on = [{ goal: addr(root, b) }];                    // 权威承载
+  saveGoal(file, doc);
+  const bId = addr(root, b);
+  assert.ok(validate(root).some((p) => p.includes("不得承载 depends_on")), "双写必须报红");
+  // 派生视图：恰好一行、token 去重为 1（修复前为 2 行 + 重复 key "out-depends_on-<id>"）
+  const views = goalRelationViews(root, a);
+  assert.deepEqual(views.outgoing.map((r) => `${r.type}:${r.goal}`), [`depends_on:${bId}`]);
+  assert.deepEqual(views.downstream, []);
+  assert.deepEqual(relationsToken(loadGoal(file).meta), [`depends_on:${bId}`]);
+  const item = boardProjection(root).versions[0].goals.find((g) => g.id === addr(root, a))!;
+  assert.equal(item.relations!.outgoing.length, 1, "看板投影不得出现重复行");
+  const keys = relationRenderKeys(item);
+  assert.deepEqual(keys, [`out-depends_on-${bId}`], "渲染 key 必须恰好一条且无重复");
+  assert.equal(new Set(keys).size, keys.length, "React key 不得重复");
+  // 纵深防御：重复的合法条目（非 depends_on）同样去重，不产生重复 key
+  const aFile = findGoalFile(root, a);
+  const doc2 = loadGoal(aFile);
+  delete doc2.meta.depends_on;
+  doc2.meta.relations = [
+    { type: "supersedes", goal: bId },
+    { type: "supersedes", goal: bId },
+  ];
+  saveGoal(aFile, doc2);
+  const item2 = boardProjection(root).versions[0].goals.find((g) => g.id === addr(root, a))!;
+  assert.deepEqual(item2.relations!.outgoing.map((r) => `${r.type}:${r.goal}`), [`supersedes:${bId}`]);
+  assert.deepEqual(relationRenderKeys(item2), [`out-supersedes-${bId}`]);
+});
+
+test("g-379 B1：合法条目的解除真正生效（不静默 no-op），非法承载可被收敛清理", () => {
+  // ① 合法承载 meta.depends_on：add → remove 必须真正生效
+  const root = tmpRoot();
+  const a = makeGoal(root, "A", "v-x");
+  const b = makeGoal(root, "B", "v-x");
+  addRelation(root, REQ(root, a, "depends_on", b));
+  assert.deepEqual(loadGoal(findGoalFile(root, a)).meta.depends_on, [{ goal: addr(root, b) }]);
+  const removed = removeRelation(root, REQ(root, a, "depends_on", b));
+  assert.equal(removed.changed, true, "合法条目的解除不得静默失效");
+  assert.deepEqual(relationsToken(loadGoal(findGoalFile(root, a)).meta), []);
+  assert.deepEqual(validate(root), []);
+  // ② 非法承载：removeRelation 真正删除（修复前 changed=false、字节不变、条目仍在）
+  const file = writeRelationsDependsOn(root, a, addr(root, b));
+  const before = readFileSync(file, "utf8");
+  const cleaned = removeRelation(root, REQ(root, a, "depends_on", b));
+  assert.equal(cleaned.changed, true, "非法承载的解除也必须生效（收敛而非静默保留）");
+  assert.notEqual(readFileSync(file, "utf8"), before, "文件必须真正被改写");
+  assert.equal(loadGoal(file).meta.relations, undefined);
+  assert.deepEqual(validate(root), [], "收敛后不得残留 validate 红");
+  // ③ 非法承载存在时再次 add 同一依赖：收敛到唯一权威字段
+  const file2 = writeRelationsDependsOn(root, a, addr(root, b));
+  const added = addRelation(root, REQ(root, a, "depends_on", b));
+  assert.equal(added.changed, true);
+  const meta2 = loadGoal(file2).meta;
+  assert.equal(meta2.relations, undefined, "非法承载必须被清理");
+  assert.deepEqual(meta2.depends_on, [{ goal: addr(root, b) }]);
+  assert.deepEqual(validate(root), []);
+});
+
+test("g-379 N1：meta.superseded_by 被整体删除时 validate 必红（全等比较，不再短路）", () => {
+  const root = tmpRoot();
+  const a = makeGoal(root, "A", "v-x");
+  const b = makeGoal(root, "B", "v-x");
+  addRelation(root, REQ(root, a, "supersedes", b));
+  const bFile = findGoalFile(root, b);
+  assert.equal(loadGoal(bFile).meta.superseded_by, addr(root, a));
+  const doc = loadGoal(bFile);
+  delete doc.meta.superseded_by; // 关系仍宣称被取代，但镜像被整体删除
+  saveGoal(bFile, doc);
+  const problems = validate(root);
+  const hit = problems.find((p) => p.includes(`${addr(root, b)}:`) && p.includes("meta.superseded_by=无"));
+  assert.ok(hit, `镜像被删除必须报红，实际：${JSON.stringify(problems)}`);
+  assert.match(String(hit), new RegExp(addr(root, a)), "报错应给出派生期望值");
+  // 无关系且无镜像 ⇒ 不得误报（全等比较不引入假阳性）
+  const c = makeGoal(root, "C", "v-x");
+  assert.equal(loadGoal(findGoalFile(root, c)).meta.superseded_by, undefined);
+  assert.ok(!validate(root).some((p) => p.includes(`${addr(root, c)}:`) && p.includes("superseded_by")));
+});
+
+test("g-379 B2：看板列表投影一次性复用关系索引（行为性计数守卫，防 O(n) 重建回归）", () => {
+  const root = tmpRoot();
+  for (let i = 0; i < 12; i++) makeGoal(root, `backlog-${i}`);        // backlog/
+  for (let i = 0; i < 3; i++) makeGoal(root, `version-${i}`, "v-b2"); // versions/v-b2
+  _inspectGoalIndexBuilds(true);
+  const backlog = backlogGoals(root, { includeArchived: true });
+  const backlogBuilds = _inspectGoalIndexBuilds(true);
+  assert.equal(backlog.length, 12);
+  assert.equal(backlogBuilds, 1, `backlogGoals 必须只构建一次索引（逐项重建会变成 ${backlog.length + 1} 次）`);
+  assert.equal(versionGoals(root, "v-b2").length, 3);
+  assert.equal(_inspectGoalIndexBuilds(true), 1, "versionGoals 必须复用一次性索引");
+  boardProjection(root, { includeArchived: true });
+  assert.equal(_inspectGoalIndexBuilds(true), 1, "boardProjection 必须复用一次性索引");
+});
+
+test("g-379 B2：全部 buildBoardGoalItem 调用点必须显式传 relationIndex（结构性守卫 + 负向对照）", () => {
+  const opsSrc = readFileSync(join(import.meta.dirname, "../ops.ts"), "utf8");
+  const callLines = (src: string) => src.split("\n").filter((l) => l.includes("buildBoardGoalItem(root,"));
+  const sites = callLines(opsSrc);
+  assert.equal(sites.length, 7, `调用点数量变化，请同步本守卫（实际 ${sites.length}）`);
+  for (const site of sites) {
+    assert.match(site, /relationIndex/, `调用点缺 relationIndex（会逐项重建全量索引）：${site.trim()}`);
+  }
+  // 负向对照：backlogGoals 去掉 relationIndex 后，同一守卫必须报红
+  const at = opsSrc.indexOf("export function backlogGoals(");
+  const i = opsSrc.lastIndexOf("{", opsSrc.indexOf("\n", at)); // 签名行末尾的函数体花括号
+  let depth = 0, end = i;
+  for (let j = i; j < opsSrc.length; j++) {
+    if (opsSrc[j] === "{") depth++;
+    else if (opsSrc[j] === "}" && --depth === 0) { end = j + 1; break; }
+  }
+  const body = opsSrc.slice(i, end);
+  assert.match(body, /const relationIndex = buildGoalIndex\(root\)/, "backlogGoals 必须构建一次索引");
+  assert.equal(callLines(body).length, 4, "backlogGoals 内应有 4 个 buildBoardGoalItem 调用点");
+  const regressed = body.replace(/, relationIndex\)/g, ")");
+  assert.ok(
+    callLines(regressed).some((l) => !/relationIndex/.test(l)),
+    "负向对照失败：去掉 relationIndex 后本守卫必须能报红",
+  );
 });

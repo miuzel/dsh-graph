@@ -2063,9 +2063,24 @@ export const RELATION_TYPES = [
 ] as const;
 export type RelationType = (typeof RELATION_TYPES)[number];
 
+/** `relations` 字段允许承载的类型（判据 1/4）。
+ *  depends_on 仍在关系闭集内（语义不变），但其**唯一权威存储是 `meta.depends_on`**：
+ *  写进 `relations` 一律拒绝（写入路径抛错 + validate 报红 + 读取侧不采信），禁止双真相。 */
+export const RELATIONS_FIELD_TYPES = ["supersedes", "amends", "extends", "related"] as const;
+export type RelationsFieldType = (typeof RELATIONS_FIELD_TYPES)[number];
+
 /** 关系写入口的允许类型（供 REST/CLI 校验与报错文案复用）。 */
 export function isRelationType(raw: unknown): raw is RelationType {
   return typeof raw === "string" && (RELATION_TYPES as readonly string[]).includes(raw);
+}
+
+/** `relations` 承载 depends_on 的统一拒绝文案（写入/校验共用，明确指向权威字段）。 */
+export function dependsOnNotInRelationsError(id?: string): string {
+  return `${id ? `${id}: ` : ""}relations 不得承载 depends_on——depends_on 的权威存储是 meta.depends_on（禁止双真相），请改用 meta.depends_on 字段`;
+}
+
+function isRelationsFieldType(raw: unknown): raw is RelationsFieldType {
+  return typeof raw === "string" && (RELATIONS_FIELD_TYPES as readonly string[]).includes(raw);
 }
 
 /** 参与环检测的替代关系（判据 2：supersedes/amends 链无环）；extends/related 允许互引。 */
@@ -2076,29 +2091,31 @@ export const RELATION_SECTION = "目标关系";
 /** goal.md 中既有的反向索引小节名（现在改为派生维护）。 */
 export const DOWNSTREAM_SECTION = "依赖我的下游";
 
-/** 规范化关系条目：只接受 { type, goal } 对象；非法 type 抛 GraphError。 */
-export function normalizeRelation(raw: any): { type: RelationType; goal: string } {
+/** 规范化关系条目：只接受 `relations` 字段可承载的 { type, goal }；depends_on/非法 type 抛 GraphError。 */
+export function normalizeRelation(raw: any): { type: RelationsFieldType; goal: string } {
   const type = String(raw?.type ?? "").trim();
   if (!isRelationType(type)) {
     throw new GraphError(
       `非法关系类型 ${JSON.stringify(raw?.type ?? null)}——闭集：${RELATION_TYPES.join(" / ")}`,
     );
   }
+  if (type === "depends_on") throw new GraphError(dependsOnNotInRelationsError());
   const goal = String(raw?.goal ?? "").trim();
   if (!goal) throw new GraphError("关系条目缺少 goal（对端目标 id）");
   return { type, goal };
 }
 
-/** 目标 frontmatter 中的显式关系条目（meta.relations；缺失/非法形态安全降级为空数组）。 */
-export function goalRelations(meta: Record<string, any>): Array<{ type: RelationType; goal: string }> {
+/** 目标 frontmatter 中的显式关系条目（meta.relations；缺失/非法形态安全降级为空数组）。
+ *  depends_on 的权威存储是 meta.depends_on ⇒ 写进 relations 的条目**不采信**（validate 会报红）。 */
+export function goalRelations(meta: Record<string, any>): Array<{ type: RelationsFieldType; goal: string }> {
   const raw = meta?.relations;
   if (!Array.isArray(raw)) return [];
-  const out: Array<{ type: RelationType; goal: string }> = [];
+  const out: Array<{ type: RelationsFieldType; goal: string }> = [];
   for (const r of raw) {
     if (r === null || typeof r !== "object") continue; // 结构错误由 validate 报告
     const type = String((r as any).type ?? "");
     const goal = String((r as any).goal ?? "").trim();
-    if (!isRelationType(type) || !goal) continue;
+    if (!isRelationsFieldType(type) || !goal) continue;
     out.push({ type, goal });
   }
   return out;
@@ -2111,21 +2128,26 @@ export function dependsOnTargets(meta: Record<string, any>): string[] {
   return raw.map((d: any) => String(d?.goal ?? d)).filter((s: string) => s !== "");
 }
 
-/** 目标的全部出向关系（显式 relations + depends_on），统一为闭集形态。 */
-function outgoingRelationEntries(
-  meta: Record<string, any>,
-): Array<{ type: RelationType; goal: string }> {
-  const merged: Array<{ type: RelationType; goal: string }> = [
-    ...goalRelations(meta),
-    ...dependsOnTargets(meta).map((goal) => ({ type: "depends_on" as RelationType, goal })),
-  ];
+/** 按 (type, goal) 去重（保留首个）——纵深防御：历史数据/手写文件可能重复，
+ *  重复会在视图里渲染重复行并产生重复 React key（`out-<type>-<goal>`）。 */
+function dedupeRelationEntries<T extends { type: RelationType; goal: string }>(entries: T[]): T[] {
   const seen = new Set<string>();
-  return merged.filter((r) => {
+  return entries.filter((r) => {
     const key = `${r.type}\u0000${r.goal}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+/** 目标的全部出向关系（显式 relations + depends_on），统一为闭集形态（去重）。 */
+function outgoingRelationEntries(
+  meta: Record<string, any>,
+): Array<{ type: RelationType; goal: string }> {
+  return dedupeRelationEntries([
+    ...goalRelations(meta),
+    ...dependsOnTargets(meta).map((goal) => ({ type: "depends_on" as RelationType, goal })),
+  ]);
 }
 
 /** 关系 token 列表（`type:goal`，排序稳定）——乐观并发 base_relations 的比较基准。 */
@@ -2146,7 +2168,17 @@ interface GoalIndexEntry {
   depends_on: string[];
 }
 
+/** 关系索引构建计数（仅供测试观察，仿 cache.ts 的 `_inspectBoardCache`）。
+ *  用途：结构性/行为性守卫「列表投影必须一次性复用索引」，防 B2 的 O(n) 索引重建回归。 */
+let goalIndexBuilds = 0;
+export function _inspectGoalIndexBuilds(reset = false): number {
+  const n = goalIndexBuilds;
+  if (reset) goalIndexBuilds = 0;
+  return n;
+}
+
 function buildGoalIndex(root: string): Map<string, GoalIndexEntry> {
+  goalIndexBuilds++;
   const index = new Map<string, GoalIndexEntry>();
   for (const file of listGoalFiles(root, { includeArchived: true })) {
     let doc: GoalDoc;
@@ -2230,25 +2262,25 @@ export function deriveGoalRelations(
 ): GoalRelationViews {
   const self = index.get(id);
   const outgoingRaw = self
-    ? [
+    ? dedupeRelationEntries([
         ...self.relations,
         ...self.depends_on.map((goal) => ({ type: "depends_on" as RelationType, goal })),
-      ]
+      ])
     : [];
   const outgoing = sortRelationViews(outgoingRaw.map((r) => relationViewOf(index, id, r)));
   const incoming: RelationView[] = [];
   for (const [otherId, other] of index) {
     if (otherId === id) continue;
-    const outs = [
+    const outs = dedupeRelationEntries([
       ...other.relations,
       ...other.depends_on.map((goal) => ({ type: "depends_on" as RelationType, goal })),
-    ];
+    ]);
     for (const r of outs) {
       if (r.goal !== id) continue;
       incoming.push(relationViewOf(index, id, { type: r.type, goal: otherId }));
     }
   }
-  const incomingSorted = sortRelationViews(incoming);
+  const incomingSorted = sortRelationViews(dedupeRelationEntries(incoming));
   const superseded = incomingSorted.find((v) => v.type === "supersedes");
   return {
     outgoing,
@@ -2415,8 +2447,12 @@ function prepareRelationMutation(
   const doc = loadGoal(file);
   if (!isSafeIdString(from)) throw new GraphError(`源目标 id 不安全：${JSON.stringify(from)}`);
   // 对端必须存在（含已归档）；已删除/从未存在 → 拒绝（remove 且条目确实存在时例外，允许清理悬空）
+  const rawRelations = Array.isArray(doc.meta.relations) ? doc.meta.relations : [];
+  const illegalDependsOn = rawRelations.some(
+    (r: any) => String(r?.type ?? "") === "depends_on" && String(r?.goal ?? "").trim() === target,
+  );
   const entryExists = type === "depends_on"
-    ? dependsOnTargets(doc.meta).includes(target)
+    ? dependsOnTargets(doc.meta).includes(target) || illegalDependsOn
     : goalRelations(doc.meta).some((r) => r.type === type && r.goal === target);
   if (!(allowMissingTarget && entryExists)) findGoalFile(root, target);
   // 乐观并发：base_relations 与当前 token 不一致且未 force → 409
@@ -2446,6 +2482,20 @@ function isSafeIdString(id: string): boolean {
   }
 }
 
+/** 清理非法承载：把写进 `relations` 的 depends_on 条目移出（权威存储是 `meta.depends_on`）。
+ *  关系写入/解除时顺手收敛，避免「合法操作后文件仍是 validate 红」的暗中残留。返回是否发生改动。 */
+function stripIllegalDependsOnFromRelations(meta: Record<string, any>, target: string): boolean {
+  const raw = meta?.relations;
+  if (!Array.isArray(raw)) return false;
+  const next = raw.filter(
+    (r: any) => !(String(r?.type ?? "") === "depends_on" && String(r?.goal ?? "").trim() === target),
+  );
+  if (next.length === raw.length) return false;
+  if (next.length) meta.relations = next;
+  else delete meta.relations;
+  return true;
+}
+
 /**
  * 建立关系（幂等：已存在时不写文件、不记事件，返回 changed=false）。
  * 事件：`goal.relation.added`，goal=源目标，details={type, target, conflicted}。
@@ -2462,6 +2512,8 @@ export function addRelation(root: string, opts: RelationMutationOpts): RelationM
       doc.meta.depends_on = [...existing, { goal: target }];
       changed = true;
     }
+    // 收敛历史/手写数据里的非法承载（relations 承载 depends_on）——只走 meta.depends_on 一条权威通道
+    if (stripIllegalDependsOnFromRelations(doc.meta, target)) changed = true;
   } else {
     const existing = Array.isArray(doc.meta.relations) ? doc.meta.relations : [];
     const present = existing.some(
@@ -2505,9 +2557,12 @@ export function removeRelation(root: string, opts: RelationMutationOpts): Relati
     const existing = Array.isArray(doc.meta.depends_on) ? doc.meta.depends_on : [];
     const next = existing.filter((d: any) => String(d?.goal ?? d) !== target);
     if (next.length !== existing.length) {
+      // 沿用既有形态：清空后保留 `depends_on: []`（与 goal.md 模板一致，round-trip 字节稳定）
       doc.meta.depends_on = next;
       changed = true;
     }
+    // 合法条目（meta.depends_on）与非法承载（relations 承载 depends_on）都真正解除，不得静默 no-op
+    if (stripIllegalDependsOnFromRelations(doc.meta, target)) changed = true;
   } else {
     const existing = Array.isArray(doc.meta.relations) ? doc.meta.relations : [];
     const next = existing.filter(
@@ -2571,6 +2626,11 @@ function relationProblems(root: string): string[] {
         problems.push(`${id}: 非法关系类型 ${JSON.stringify(type)}——闭集：${RELATION_TYPES.join("/")}`);
         continue;
       }
+      if (type === "depends_on") {
+        // depends_on 的唯一权威存储是 meta.depends_on：写进 relations 一律判为非法（禁止双真相）
+        problems.push(dependsOnNotInRelationsError(id));
+        continue;
+      }
       if (!target) {
         problems.push(`${id}: 关系条目缺少 goal`);
         continue;
@@ -2586,11 +2646,12 @@ function relationProblems(root: string): string[] {
       void archivedIds; // 已归档对端放行（视图标注「已归档」）
     }
     // superseded_by 派生一致性（防双真相：frontmatter 镜像必须能由入向 supersedes 复算）
+    // 全等比较（不只比较 declared!==null）：镜像被整体删除而关系仍宣称被取代时同样必须报红
     const derived = deriveGoalRelations(index, id);
     const declared = doc.meta.superseded_by == null ? null : String(doc.meta.superseded_by);
-    if (declared !== null && declared !== derived.superseded_by) {
+    if (declared !== derived.superseded_by) {
       problems.push(
-        `${id}: meta.superseded_by=${declared} 与关系条目派生值(${derived.superseded_by ?? "无"})不一致——请勿手工编辑派生字段`,
+        `${id}: meta.superseded_by=${declared ?? "无"} 与关系条目派生值(${derived.superseded_by ?? "无"})不一致——请勿手工编辑派生字段`,
       );
     }
   }
@@ -8376,6 +8437,9 @@ export function versionGoals(root: string, slug: string, opts?: { includeArchive
 export function backlogGoals(root: string, opts?: { includeArchived?: boolean }): BoardGoal[] {
   const includeArchived = opts?.includeArchived ?? false;
   const backlog: BoardGoal[] = [];
+  // g-379：关系视图索引构建一次，供全部 backlog 项复用（同 versionGoals/boardProjection；
+  // 逐项重建会在真实 253 目标根下把本函数拖慢数倍——B2 回归点）
+  const relationIndex = buildGoalIndex(root);
   const bdir = join(root, "backlog");
   if (existsSync(bdir)) {
     for (const f of readdirSync(bdir).sort()) {
@@ -8385,14 +8449,14 @@ export function backlogGoals(root: string, opts?: { includeArchived?: boolean })
           for (const af of readdirSync(archivedDir).sort()) {
             if (af.endsWith(".md")) {
               try {
-                backlog.push(buildBoardGoalItem(root, join(archivedDir, af)));
+                backlog.push(buildBoardGoalItem(root, join(archivedDir, af), relationIndex));
               } catch {}
               continue;
             }
             const nested = join(archivedDir, af, "goal.md");
             if (!existsSync(nested)) continue;
             try {
-              backlog.push(buildBoardGoalItem(root, nested));
+              backlog.push(buildBoardGoalItem(root, nested, relationIndex));
             } catch {}
           }
         }
@@ -8400,14 +8464,14 @@ export function backlogGoals(root: string, opts?: { includeArchived?: boolean })
       }
       if (f.endsWith(".md")) {
         try {
-          backlog.push(buildBoardGoalItem(root, join(bdir, f)));
+          backlog.push(buildBoardGoalItem(root, join(bdir, f), relationIndex));
         } catch {}
         continue;
       }
       const nested = join(bdir, f, "goal.md");
       if (!existsSync(nested)) continue;
       try {
-        backlog.push(buildBoardGoalItem(root, nested));
+        backlog.push(buildBoardGoalItem(root, nested, relationIndex));
       } catch {}
     }
   }
