@@ -14,7 +14,7 @@
  *  3. 门禁正向与豁免成对：补写描述后同一目标重试成功（编号仍从 att-001 起）；
  *     drag/强制启动（HTTP 入口：transition force + start-execution）、
  *     planning 的 g-236 兜底、已执行目标的存量空描述重派、validate/看板投影均不受影响；
- *  4. 不新增 `graph_*` 工具（仍 49），门禁为纯同步校验（不引入轮询/watcher、不写盘）。
+ *  4. graph_* 工具集合只增不减（g-380 起 50），门禁为纯同步校验（不引入轮询/watcher、不写盘）。
  *
  * 生效面钉住：门禁只作用于「尚未开始执行」的准备态（见 `DESCRIPTION_GATE_STATUSES`）。
  * 两处豁免都不是顺手放过——`planning` 是 g-236 既有的无描述派发路径（引擎兜底 brief 承接，
@@ -248,13 +248,13 @@ test("g-378 判据 3（豁免正向）：validate 与看板投影不对空描述
 });
 
 // ============================================================================
-// 判据 4：不新增工具；门禁为纯同步校验（生效面钉住）
+// 判据 4：工具集合只增不减（g-380 起 50）；门禁为纯同步校验（生效面钉住）
 // ============================================================================
 
-test("g-378 判据 4：不新增 graph_* 工具（仍 49），生效面仅『尚未开始执行的准备态』", () => {
+test("g-378 判据 4：graph_* 工具集合只增不减（g-380 起 50），生效面仅『尚未开始执行的准备态』", () => {
   const h = createHarness();
   const graphTools = [...h.toolsByName.keys()].filter((n) => n.startsWith("graph_"));
-  assert.equal(graphTools.length, 49, `graph_* 工具计数必须仍为 49，实际 ${graphTools.length}`);
+  assert.equal(graphTools.length, 50, `graph_* 工具计数必须为 50（g-380 新增 graph_set_relation），实际 ${graphTools.length}`);
   assert.deepEqual(
     [...DESCRIPTION_GATE_STATUSES].sort(),
     ["collecting", "ready"],

@@ -50,6 +50,10 @@ import {
   addRelation,
   removeRelation,
   goalRelationViews,
+  // g-380：关系工具的入参闭集与写入前环探测（环检测复用 core 唯一 DFS，host 侧不另造实现）
+  RELATIONS_FIELD_TYPES,
+  dependsOnNotInRelationsError,
+  relationCycleProblem,
   renameGoal,
   setGoalType,
   addMemory,
@@ -1979,6 +1983,53 @@ export function apply(ctx, config) {
         const r = rootFor(ex);
         setGoalDescription(r, a.goal, a.description, actorOf(ex));
         return { ok: true, goal: a.goal };
+      },
+    },
+    {
+      // g-380：目标间关系标记（可增可删）——本目标**唯一**新增的 graph_* 工具（计数 49 → 50）。
+      // 内部复用 g-379 既有 addRelation/removeRelation（禁止第二套关系写入实现）：单一真源仍是
+      // goal frontmatter 的 meta.relations，派生视图不双写、不旁路 validate。
+      // type 闭集 = supersedes/amends/extends/related；depends_on 的权威存储是 meta.depends_on，
+      // 本工具一律拒绝（中文文案指向 meta.depends_on），绝不写进 relations。
+      // 写入前用 core 的唯一 DFS 做替代环探测（host 侧不另造环检测实现）。
+      def: {
+        name: "graph_set_relation",
+        description: "标记/解除目标间关系（可增可删）：action=add|remove；type 限 supersedes（取代）/amends（调整）/extends（补充）/related（相关）；target 为对端目标 id。复用 g-379 既有关系写入路径，只写 goal frontmatter 的 meta.relations；幂等（重复调用不重复写事件、不改字节）。depends_on 请改用 meta.depends_on（本工具拒绝写入 relations）；会形成替代环的标记被拒绝。",
+        parameters: params({ goal: str, action: str, type: str, target: str }, ["goal", "action", "type", "target"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        const from = String(a.goal ?? "").trim();
+        const target = String(a.target ?? "").trim();
+        const type = String(a.type ?? "").trim();
+        const action = String(a.action ?? "").trim();
+        if (action !== "add" && action !== "remove") {
+          throw new GraphError(
+            `graph_set_relation：action 非法（${JSON.stringify(a.action ?? null)}）——只能是 "add"（建立标记）或 "remove"（解除标记）`,
+          );
+        }
+        // depends_on 的唯一权威存储是 meta.depends_on：先于闭集检查给出指向性文案
+        if (type === "depends_on") throw new GraphError(dependsOnNotInRelationsError(from));
+        if (!RELATIONS_FIELD_TYPES.includes(type)) {
+          throw new GraphError(
+            `graph_set_relation：type 非法（${JSON.stringify(a.type ?? null)}）——闭集：${RELATIONS_FIELD_TYPES.join(" / ")}；depends_on 请改用 meta.depends_on 字段`,
+          );
+        }
+        // 环检测：复用 core 唯一 DFS（只用新增的 supersedes/amends 边判环；extends/related 允许互引）
+        if (action === "add") {
+          const cycle = relationCycleProblem(r, { from, type, goal: target });
+          if (cycle) {
+            throw new GraphError(
+              `${cycle}——该标记会形成替代环，已拒绝写入；请先解除环上的一条 supersedes/amends，或改用 extends/related`,
+            );
+          }
+        }
+        const mutate = action === "add" ? addRelation : removeRelation;
+        const result = mutate(r, { from, type, goal: target, actor: actorOf(ex) });
+        return {
+          ok: true, action, goal: result.from, type: result.type, target: result.goal,
+          changed: result.changed, relations: result.relations,
+        };
       },
     },
     {

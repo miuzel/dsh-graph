@@ -2296,6 +2296,40 @@ export function goalRelationViews(root: string, id: string): GoalRelationViews {
   return deriveGoalRelations(buildGoalIndex(root), id);
 }
 
+/** g-380：关系写入前的替代环探测（只读，不写文件、不记事件）。
+ *  **复用唯一 DFS 实现 `dfsCycleProblems`**（禁止第二套环检测）；边集来源与 validate 一致
+ *  （`goalRelations` 的 supersedes/amends 边），因此「工具拒绝的」与「validate 会报红的」同一口径。
+ *  仅当本次写入会**新增**一条参与环检测的边时才可能引入新环：边已存在（幂等重复调用）返回 null。
+ *  返回**含完整环路径**的问题文案（`关系替代环：A → B → A`），无新环返回 null。 */
+export function relationCycleProblem(
+  root: string,
+  opts: { from: string; type: string; goal: string },
+): string | null {
+  const type = String(opts?.type ?? "").trim();
+  // extends/related 不参与环检测（非互斥替代语义，允许互引）——与 validate 同一判定。
+  if (!RELATION_CYCLE_TYPES.has(type)) return null;
+  const from = String(opts?.from ?? "").trim();
+  const target = String(opts?.goal ?? "").trim();
+  if (!from || !target || from === target) return null;
+  const index = buildGoalIndex(root);
+  // 端点缺失由写入路径给出「目标不存在」的权威报错，这里不越权判环
+  if (!index.has(from) || !index.has(target)) return null;
+  const edges = new Map<string, string[]>();
+  for (const [id, entry] of index) {
+    const outs = entry.relations
+      .filter((r) => RELATION_CYCLE_TYPES.has(r.type))
+      .map((r) => r.goal);
+    if (outs.length) edges.set(id, outs);
+  }
+  const current = edges.get(from) ?? [];
+  // 边已存在 ⇒ 幂等重复调用不会引入新环（无效写入不改变图）
+  if (current.includes(target)) return null;
+  edges.set(from, [...current, target]);
+  // 只认「包含本次新增边 from → target」的环：图中其他位置的历史环不牵连本次写入。
+  const marker = `${from} → ${target}`;
+  return dfsCycleProblems(edges, "关系替代").find((p) => p.includes(marker)) ?? null;
+}
+
 function relationEndpointLabel(v: RelationView): string {
   if (v.missing) return `${v.goal}（未知 id / 已删除）`;
   if (v.archived) return `${v.goal}（已归档：${v.title}）`;

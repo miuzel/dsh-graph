@@ -6,8 +6,8 @@
  *     按目标类型派生）；选三值 → 提交体直传，经 `/api/dsh-graph/settings` 写入并被 readProjectConfig 读回同值
  *  2. 脏状态三态齐备：未改动不脏 / 改动算脏 / 保存后复原；服务端 null 与表单 "" 不造成假阳性
  *  3. 保存走既有通道：原子写、保留 YAML 注释与未知键、非法值被 schema 拒绝且文件**逐字节不变**；
- *     schema 与策略判定逻辑未被削弱（`""` / 大小写 / 类型不符仍拒绝）、graph_* 工具注册计数 49 且无重名
- *     （本判据原为「不新增工具、计数 44」；g-369 起新增 3 个共享卡工具、g-374 新增 2 个结果面工具 ⇒ 49）
+ *     schema 与策略判定逻辑未被削弱（`""` / 大小写 / 类型不符仍拒绝）、graph_* 工具注册计数 50 且无重名
+ *     （本判据原为「不新增工具、计数 44」；g-369 起新增 3 个共享卡工具、g-374 新增 2 个结果面工具、g-380 新增 1 个关系工具 ⇒ 50）
  *  4. 客户端 i18n zh/en 键对称（en 侧零 CJK）、`node --check dist/lib/client.js` 通过、
  *     build 产物含新控件（未 rebuild 即红）
  *
@@ -416,8 +416,8 @@ test("g-342 判据2：下拉显示值与归一化同源——不出现「显示�
 });
 
 // =====================================================================================
-// 判据 3：既有通道 / 原子写 / 非法值拒绝且文件逐字节不变 / 工具计数 49
-//（本判据原为「不新增 graph_* 工具、计数仍 44」；g-369 起新增 3 个共享卡工具、g-374 新增 2 个 ⇒ 49）
+// 判据 3：既有通道 / 原子写 / 非法值拒绝且文件逐字节不变 / 工具计数 50
+//（本判据原为「不新增 graph_* 工具、计数仍 44」；g-369 起新增 3 个共享卡工具、g-374 新增 2 个、g-380 新增 1 个 ⇒ 50）
 // =====================================================================================
 
 test("g-342 判据3：非法值被 schema 拒绝且文件逐字节不变、零事件", async () => {
@@ -459,11 +459,11 @@ test("g-342 判据3：core 层直调同样拒绝非法值（schema 不是唯一�
   assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), before, "拒绝后文件逐字节不变");
 });
 
-test("g-342 判据3：graph_* 工具注册计数 49 且无重名（本判据原为「不新增 graph_* 工具、计数仍 44」；g-369 新增 3 个共享卡工具），且工具 hints 与控件口径一致", () => {
+test("g-342 判据3：graph_* 工具注册计数 50 且无重名（本判据原为「不新增 graph_* 工具、计数仍 44」；g-369 新增 3 个共享卡工具），且工具 hints 与控件口径一致", () => {
   const { toolNames } = setupInstance();
   const graphTools = toolNames.filter((n) => n.startsWith("graph_"));
-  assert.equal(graphTools.length, 49, "graph_* 工具注册计数为 49");
-  assert.equal(new Set(graphTools).size, 49, "无重名工具");
+  assert.equal(graphTools.length, 50, "graph_* 工具注册计数为 50");
+  assert.equal(new Set(graphTools).size, 50, "无重名工具");
   // graph_get_settings 的 value hints 与新控件同一口径（三值 + 未配置为 null）
   const indexSrc = readFileSync(join(repoRoot, "dsh-graph-host/index.js"), "utf8");
   const start = indexSrc.indexOf('"review.policy": {');

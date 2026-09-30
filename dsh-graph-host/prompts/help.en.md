@@ -1,4 +1,4 @@
-dsh-graph is a plugin that organizes work into a "goal board". Available graph_* tools (49 total):
+dsh-graph is a plugin that organizes work into a "goal board". Available graph_* tools (50 total):
 
 ## Goal lifecycle
 - graph_create_goal(title[, version][, type]) create a goal (enters backlog; with version, schedule it; type: feature/bug/task/improvement/patch/chore);
@@ -13,6 +13,7 @@ dsh-graph is a plugin that organizes work into a "goal board". Available graph_*
 - graph_amend_goal(goal, note[, append]) record revisions/human feedback; note is the revision note, append writes into the goal description;
 - graph_set_description(goal, description) edit the goal description in place (empty clears it);
 - graph_set_directive(goal, directive) set supplemental directive for the next attempt (empty clears it);
+- graph_set_relation(goal, action, type, target) mark or unmark a relation between goals (action: add / remove; type: supersedes / amends / extends / related; target is the peer goal id); idempotent, rejects supersede cycles, use meta.depends_on for depends_on;
 - graph_set_goal_tags(goal, tags[, base_tags][, force]) set tags (≤20; base_tags is the optimistic-concurrency baseline, force overwrites);
 - graph_set_goal_type(goal, type) set type feature/bug/task/improvement/patch/chore;
 - graph_move_goal(goal, to[, version]) move goal between backlog / standalone goals/ / version;
@@ -65,7 +66,7 @@ dsh-graph is a plugin that organizes work into a "goal board". Available graph_*
 - graph_update_settings(patch) update project config (schema validation, comment preservation, atomic write).
 
 ## Help
-- graph_help() display this help (full 49-tool checklist with parameter reference).
+- graph_help() display this help (full 50-tool checklist with parameter reference).
 
 ## Claim supervisor
 **Execute this only when the person in charge explicitly asks you to take over as supervisor**—by default no session may automatically claim:

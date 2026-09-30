@@ -1,4 +1,4 @@
-dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具（共 49 个）：
+dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具（共 50 个）：
 
 ## 目标生命周期
 - graph_create_goal(title[, version][, type]) 建目标（进 backlog，带 version 则排期；type 可选 feature/bug/task/improvement/patch/chore）；
@@ -13,6 +13,7 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_amend_goal(goal, note[, append]) 记录修订/人工反馈；note 为修订备注，append 追加进描述正文；
 - graph_set_description(goal, description) 就地编辑目标描述（description 空则清空）；
 - graph_set_directive(goal, directive) 设置下一次 attempt 的补充指令（空则清空）；
+- graph_set_relation(goal, action, type, target) 标记/解除目标间关系（action: add 建立 / remove 解除；type: supersedes 取代 / amends 调整 / extends 补充 / related 相关；target 为对端目标 id）；幂等，拒绝替代环，depends_on 请改用 meta.depends_on；
 - graph_set_goal_tags(goal, tags[, base_tags][, force]) 设置标签（≤20 个；base_tags 为乐观并发基线，force 强制覆盖）；
 - graph_set_goal_type(goal, type) 设置类型 feature/bug/task/improvement/patch/chore；
 - graph_move_goal(goal, to[, version]) 移动目标：backlog ↔ 独立 goals/ ↔ 版本；
@@ -65,7 +66,7 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_update_settings(patch) 更新项目配置（schema 校验、保留注释、原子写）。
 
 ## 帮助
-- graph_help() 显示本帮助（全部 49 个工具清单与参数速查）。
+- graph_help() 显示本帮助（全部 50 个工具清单与参数速查）。
 
 ## 接管 supervisor
 **仅在负责人明确要求你接管 supervisor 时执行**——默认任何会话都不得自动 claim：

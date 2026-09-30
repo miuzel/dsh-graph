@@ -6,11 +6,11 @@
  *    只有「不重建」才被 `g312` 以**新鲜度**（dist 副本逐字一致）抓到，属复制断言而非语义断言；
  *  - 根 README 追加「按需记忆每条硬上限 2000 字符」（错值）全绿——`g339` 只禁字面 `上限 500`；
  *  - `g347` 已把 `help.{zh,en}.md` 与引擎 schema 钉住，但**三张 README 工具表**与其计数声明
- *    此前零内容级断言 ⇒ 「49 个工具名在六处一致」只靠人工复核。
+ *    此前零内容级断言 ⇒ 「工具名在六处一致」只靠人工复核。
  *
  * 断言面（真源 = 引擎实际注册的 tool def，取自 `apply()`；不硬编码 49 名单）：
  *  A. 集合相等：root README 工具表 / host README zh 表 / host README en 表 / help.zh / help.en
- *     / `dsh-graph-host/index.js` 注册名 —— 六者与引擎注册集合**逐一相等**，且各恰 49；
+ *     / `dsh-graph-host/index.js` 注册名 —— 六者与引擎注册集合**逐一相等**，且各恰 50；
  *  A2. 表内无重复工具行、每行列数与表头一致、工具列 token 全部是已注册工具名；
  *  B. 计数声明：两份 README 里「N 个 `graph_*` 工具 / N `graph_*` tools」的 N 必须等于注册实数，
  *     且至少存在一处声明（守卫不得恒真退化为「无声明即通过」）；
@@ -41,7 +41,7 @@ const HELP_EN = join(repoRoot, "dsh-graph-host", "prompts", "help.en.md");
 const INDEX_JS = join(repoRoot, "dsh-graph-host", "index.js");
 
 /** 判据 1 明文要求的工具数；引擎加工具时必须同步所有文档面并改这一个常量（刻意的防静默漂移门禁）。 */
-const EXPECTED_TOOL_COUNT = 49;
+const EXPECTED_TOOL_COUNT = 50;
 
 /** 工具名 token：容忍大小写与下划线，以便「改错一个字符」也能被完整捕获（而不是当成前缀匹配）。 */
 const TOOL_TOKEN = /graph_[A-Za-z0-9_]+/g;
@@ -178,7 +178,7 @@ function diffOf(a: string[], b: string[]): { onlyA: string[]; onlyB: string[] } 
   return { onlyA: [...sa].filter((x) => !sb.has(x)), onlyB: [...sb].filter((x) => !sa.has(x)) };
 }
 
-/** 判据 1 + 2（工具面）：六处名集合逐一相等、各恰 49、表内无重复、结构完整。 */
+/** 判据 1 + 2（工具面）：六处名集合逐一相等、各恰 50、表内无重复、结构完整。 */
 function toolFaceProblems(input: FaceInput): string[] {
   const problems: string[] = [];
   const reference = [...new Set(input.schemaTools)];
@@ -286,12 +286,12 @@ function realInput(): FaceInput {
   return { schemaTools: REAL_SCHEMA, ...REAL_TEXT };
 }
 
-test("g-371 判据1：六处工具名集合逐一相等（root/host-zh/host-en 表 · help.zh/en · index.js 注册 · 引擎 schema），各恰 49", () => {
+test("g-371 判据1：六处工具名集合逐一相等（root/host-zh/host-en 表 · help.zh/en · index.js 注册 · 引擎 schema），各恰 50", () => {
   const problems = toolFaceProblems(realInput());
   assert.deepEqual(problems, [], `工具面漂移：\n${problems.join("\n")}`);
 });
 
-test("g-371 判据1：README 工具计数声明（49）与引擎注册实数一致", () => {
+test("g-371 判据1：README 工具计数声明（50）与引擎注册实数一致", () => {
   const problems = countClaimProblems(
     [
       { id: "README.md", text: REAL_TEXT.rootReadme },
@@ -347,7 +347,7 @@ test("g-371 判据2/6 负向对照：删表行 / 工具名改错字符 / 计数�
   const base = realInput();
   assert.deepEqual(toolFaceProblems(base), [], "基线（真实文件）必须零问题");
 
-  // ① 删 root README 表一行（单工具行「质量判据」）⇒ 48 ≠ 49
+  // ① 删 root README 表一行（单工具行「质量判据」）⇒ 49 ≠ 50
   const dropRoot = { ...base, rootReadme: dropTableRow(base.rootReadme, "## 提供的工具", 2, "`graph_set_criteria`") };
   assert.notEqual(dropRoot.rootReadme, base.rootReadme, "变异确实生效");
   expectRed(toolFaceProblems(dropRoot), /root README 工具表：缺少已注册工具 graph_set_criteria/, "删 root README 表一行");
@@ -383,8 +383,8 @@ test("g-371 判据2/6 负向对照：删表行 / 工具名改错字符 / 计数�
   };
   expectRed(toolFaceProblems(dup), /root README 工具表：存在重复工具名 graph_set_criteria×2/, "表内重复行");
 
-  // ④ 计数声明改错 ⇒ 必红（49 → 50）
-  const badCount = { ...base, rootReadme: base.rootReadme.replace("49 个 `graph_*` 工具", "50 个 `graph_*` 工具") };
+  // ④ 计数声明改错 ⇒ 必红（50 → 51）
+  const badCount = { ...base, rootReadme: base.rootReadme.replace("50 个 `graph_*` 工具", "51 个 `graph_*` 工具") };
   const countProblems = countClaimProblems(
     [
       { id: "README.md", text: badCount.rootReadme },
@@ -392,13 +392,13 @@ test("g-371 判据2/6 负向对照：删表行 / 工具名改错字符 / 计数�
     ],
     base.schemaTools.length,
   );
-  expectRed(countProblems, /README\.md:18 工具计数声明为 50/, "README 工具计数改错");
+  expectRed(countProblems, /README\.md:18 工具计数声明为 51/, "README 工具计数改错");
 
   // ④′ 计数声明被整段删除 ⇒ 守卫不得恒真退化
   const noCount = {
     ...base,
-    rootReadme: base.rootReadme.replace(/49 个 `graph_\*` 工具/g, "全部 `graph_*` 工具"),
-    hostReadme: base.hostReadme.replace(/49 个 `graph_\*` 工具/g, "全部 `graph_*` 工具").replace(/49 `graph_\*` tools/g, "all `graph_*` tools"),
+    rootReadme: base.rootReadme.replace(/50 个 `graph_\*` 工具/g, "全部 `graph_*` 工具"),
+    hostReadme: base.hostReadme.replace(/50 个 `graph_\*` 工具/g, "全部 `graph_*` 工具").replace(/50 `graph_\*` tools/g, "all `graph_*` tools"),
   };
   expectRed(
     countClaimProblems(

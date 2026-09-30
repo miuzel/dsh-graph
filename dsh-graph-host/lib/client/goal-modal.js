@@ -209,13 +209,204 @@
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
 
+    // g-380：目标关系标记面板（入口在「目标描述」标题右侧）——可添加（选类型 + 选对端目标）与删除已有标记。
+    // 写入复用既有 REST `POST /api/dsh-graph/relations`（单一真源仍是 goal frontmatter 的 meta.relations，
+    // 客户端不双写、不旁路 validate）；一次成功回包后**重取一次**关系数据即可（无轮询 / 无 watcher）；
+    // 并发冲突(409) 给可操作提示 + 「重试」路径（重试前重取 base_relations）；任何失败都 try/catch 兜底。
+    function RelationMarker(props) {
+      const { goalId, peers, onChanged } = props;
+      // 可写进 relations 的闭集（depends_on 的权威存储是 meta.depends_on，不在此入口内）
+      const MARK_TYPES = ["supersedes", "amends", "extends", "related"];
+      const [data, setData] = React.useState(null);
+      const [loadErr, setLoadErr] = React.useState(null);
+      const [type, setType] = React.useState("supersedes");
+      const [peer, setPeer] = React.useState("");
+      const [note, setNote] = React.useState(null);
+      const [busy, setBusy] = React.useState(false);
+      const pendingRef = React.useRef(null);
+
+      const load = React.useCallback(() => {
+        setLoadErr(null);
+        return fetch(graphUrl("/api/dsh-graph/relations", { goal: goalId }))
+          .then((r) => r.json())
+          .then((d) => {
+            if (d && d.ok) {
+              setData({
+                outgoing: Array.isArray(d.outgoing) ? d.outgoing : [],
+                incoming: Array.isArray(d.incoming) ? d.incoming : [],
+              });
+            } else {
+              setData({ outgoing: [], incoming: [] });
+              setLoadErr(String((d && d.error) || dgT("drag.unknownError")));
+            }
+          })
+          .catch((e) => {
+            // 读取失败不白屏：清单降级为空 + 可见错误提示
+            setData({ outgoing: [], incoming: [] });
+            setLoadErr(String(e?.message ?? e));
+          });
+      }, [goalId]);
+
+      React.useEffect(() => { load(); }, [load]);
+
+      // 乐观并发基准：取「将被写入的那个目标」当前的关系 token（与 core relationsToken 同形态）
+      const tokensFor = async (source) => {
+        const r = await fetch(graphUrl("/api/dsh-graph/relations", { goal: source }));
+        const d = await r.json();
+        const out = d && Array.isArray(d.outgoing) ? d.outgoing : [];
+        return out.map((v) => `${v.type}:${v.goal}`).sort();
+      };
+
+      const submit = async (action, source, markType, target) => {
+        setBusy(true);
+        setNote(null);
+        try {
+          const base = await tokensFor(source);
+          const r = await fetch(graphUrl("/api/dsh-graph/relations"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: source, target, type: markType, action, base_relations: base }),
+          });
+          const payload = await r.json().catch(() => ({}));
+          if (r.status === 409) {
+            pendingRef.current = { action, source, type: markType, target };
+            setNote({ kind: "err", text: dgT("relation.conflict"), retry: true });
+          } else if (!r.ok || !payload || payload.ok !== true) {
+            setNote({ kind: "err", text: dgT("relation.saveFail") + String((payload && payload.error) || dgT("drag.unknownError")) });
+          } else {
+            pendingRef.current = null;
+            setNote({ kind: "ok", text: dgT("relation.saved") });
+            await load(); // 一次成功回包后重取（非轮询）
+            if (typeof onChanged === "function") onChanged();
+          }
+        } catch (e) {
+          setNote({ kind: "err", text: dgT("relation.requestFail") + String(e?.message ?? e) });
+        }
+        setBusy(false);
+      };
+
+      const addMark = () => {
+        if (!peer) { setNote({ kind: "err", text: dgT("relation.needTarget") }); return; }
+        submit("add", goalId, type, peer);
+      };
+      const retry = () => {
+        const p = pendingRef.current;
+        if (p) submit(p.action, p.source, p.type, p.target);
+      };
+
+      const label = (r) => {
+        if (r.missing) return dgT("card.relationMissing", { id: r.goal });
+        if (r.archived) return dgT("card.relationArchived", { id: r.goal });
+        return `${r.goal}${r.title && r.title !== r.goal ? " " + r.title : ""}`;
+      };
+      const row = (r, dir) => {
+        const outgoing = dir === "out";
+        return h("div", {
+          key: dir + "-" + r.type + "-" + r.goal,
+          style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0 },
+        },
+          h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } },
+            (outgoing ? "→ " : "← ") + dgT("card.relType." + r.type)),
+          h("span", {
+            style: {
+              fontSize: 11, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            },
+            title: label(r),
+          }, label(r)),
+          !outgoing
+            ? h("span", { style: { ...S.meta, fontSize: 10, opacity: 0.7, flexShrink: 0 } },
+                dgT("relation.incomingFrom", { id: r.goal }))
+            : null,
+          h("button", {
+            className: "dg-btn",
+            disabled: busy,
+            style: { ...S.btn, fontSize: 10, padding: "1px 6px", flexShrink: 0 },
+            title: outgoing
+              ? dgT("relation.removeTip")
+              : dgT("relation.removeIncomingTip", { id: r.goal }),
+            onClick: (e) => {
+              e.stopPropagation();
+              // 入向标记归属「对端目标」——解除即从对端 frontmatter 移出该条（仍走同一 ops 通道，不双写）
+              if (outgoing) submit("remove", goalId, r.type, r.goal);
+              else submit("remove", r.goal, r.type, goalId);
+            },
+          }, dgT("relation.removeBtn")));
+      };
+
+      const options = (Array.isArray(peers) ? peers : [])
+        .filter((p) => p && p.id && p.id !== goalId)
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      const out = (data && data.outgoing) || [];
+      const inc = (data && data.incoming) || [];
+
+      return h("div", {
+        className: "dg-relation-marker",
+        style: {
+          marginTop: 6, padding: "6px 8px", borderRadius: 4,
+          border: "1px solid rgba(128,128,128,.25)", display: "flex", flexDirection: "column", gap: 4,
+        },
+      },
+        h("div", { style: { ...S.meta, fontSize: 11, fontWeight: 700 } }, "🔗 " + dgT("relation.title")),
+        h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+          h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("relation.addType")),
+          h("select", {
+            className: "dg-select", style: S.select, value: type,
+            onChange: (e) => setType(e.target.value),
+          }, MARK_TYPES.map((t) => h("option", { key: t, value: t }, dgT("card.relType." + t)))),
+          h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("relation.addTarget")),
+          h("select", {
+            className: "dg-select", style: S.select, value: peer,
+            onChange: (e) => setPeer(e.target.value),
+          },
+            h("option", { value: "" }, dgT("relation.addTargetPlaceholder")),
+            options.map((p) => h("option", { key: p.id, value: p.id },
+              `${p.id}${p.title && p.title !== p.id ? " " + p.title : ""}`))),
+          h("button", {
+            className: "dg-btn", disabled: busy,
+            style: { ...S.btnPrimary, fontSize: 11, padding: "1px 6px" },
+            onClick: addMark,
+          }, busy ? dgT("common.saving") : dgT("relation.addBtn"))),
+        h("div", { style: { ...S.meta, fontSize: 11, opacity: 0.8 } }, dgT("relation.outgoingTitle")),
+        out.length
+          ? out.map((r) => row(r, "out"))
+          : h("div", { style: { ...S.meta, fontSize: 11, opacity: 0.6 } }, dgT("relation.empty")),
+        inc.length
+          ? h("div", { style: { ...S.meta, fontSize: 11, opacity: 0.8, marginTop: 2 } }, dgT("relation.incomingTitle"))
+          : null,
+        inc.map((r) => row(r, "in")),
+        loadErr
+          ? h("div", { style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary, #d66)" } },
+              dgT("relation.loadFail") + loadErr)
+          : null,
+        note
+          ? h("div", {
+              style: {
+                fontSize: 11, display: "flex", gap: 6, alignItems: "center",
+                color: note.kind === "err"
+                  ? "var(--dsw-alias-state-error-primary, #d66)"
+                  : "var(--dsw-alias-label-primary, #3aa675)",
+              },
+            },
+              note.text,
+              note.retry
+                ? h("button", {
+                    className: "dg-btn", disabled: busy,
+                    style: { ...S.btn, fontSize: 10, padding: "1px 6px" },
+                    onClick: retry,
+                  }, dgT("relation.retry"))
+                : null)
+          : null);
+    }
+
     // g-260：目标描述组件（只读态↔编辑态切换，就地 markdown 编辑）
     function DescriptionBox(props) {
-      const { goalId, description, onRefresh, extra } = props;
+      const { goalId, description, onRefresh, extra, peers, onRelationsChanged } = props;
       const [editing, setEditing] = React.useState(false);
       const [text, setText] = React.useState(description ?? "");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
+      // g-380：关系标记面板开合（入口固定在「目标描述」标题右侧）
+      const [markOpen, setMarkOpen] = React.useState(false);
       // g-270：只读态展示模式——markdown 渲染 / 原文
       const [viewMode, setViewMode] = React.useState("markdown");
 
@@ -254,6 +445,14 @@
       return h("div", { style: S.modalSection },
         h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
           h("div", { style: S.modalH }, dgT("section.description")),
+          // g-380：关系标记入口——紧贴「目标描述」标题右侧（负责人 2026-10-01 指定位置）
+          h("button", {
+            className: "dg-btn dg-relation-mark-btn",
+            style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+            title: dgT("relation.markTip"),
+            "aria-expanded": markOpen ? "true" : "false",
+            onClick: () => setMarkOpen((v) => !v),
+          }, dgT("relation.markBtn")),
           !editing
             ? h("button", {
                 style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
@@ -265,6 +464,12 @@
           !editing && hasContent
             ? h(MarkdownViewToggle, { viewMode, onChange: setViewMode })
             : null),
+        markOpen
+          ? h(RelationMarker, {
+              goalId, peers,
+              onChanged: () => { if (typeof onRefresh === "function") onRefresh(); if (typeof onRelationsChanged === "function") onRelationsChanged(); },
+            })
+          : null,
         editing
           ? h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
               h("textarea", {
@@ -990,6 +1195,7 @@
         const isBacklog = d.goalFile && d.goalFile.includes("/backlog/") && !d.goalFile.endsWith("/goal.md");
         const detailTab = [
           desc != null ? h(DescriptionBox, { key: "description", goalId: props.id, description: desc, onRefresh: load,
+            peers: props.goalOptions, onRelationsChanged: props.onRelationsChanged,
             extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose, goalType: d.meta.type }) }) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           // g-170：「✏️ 判据」编辑入口放在小节标题处（负责人 2026-08-25 指示），点击打开判据编辑弹窗

@@ -1096,6 +1096,20 @@
       for (const v of b.versions) for (const g of v.goals) goalStatus[g.id] = g.status;
       for (const g of b.standalone) goalStatus[g.id] = g.status;
       for (const g of b.backlog) goalStatus[g.id] = g.status;
+      // g-380：目标详情「标记关系」的对端候选（id/title/status）——纯投影，取全量 board 数据
+      // （不受当前视图隐藏/懒加载影响，隐藏版本里的对端也能被标记）；零新增状态真源，
+      // 对端存在性/闭集/环检测仍由 core ops 与 REST 校验。
+      const goalOptions = [];
+      const seenGoalOptions = new Set();
+      const pushGoalOption = (g) => {
+        const id = g && g.id ? String(g.id) : "";
+        if (!id || seenGoalOptions.has(id)) return;
+        seenGoalOptions.add(id);
+        goalOptions.push({ id, title: g.title ?? id, status: g.status ?? "unknown" });
+      };
+      for (const v of b.versions) for (const g of (v.goals ?? [])) pushGoalOption(g);
+      for (const g of b.standalone) pushGoalOption(g);
+      for (const g of b.backlog) pushGoalOption(g);
       // g-a92e1406：被复用徽章派生已移交 boardProjection（attempt.reused 事件 + 绑定记录双源），
       // 客户端直接消费 g.reused_by，不再用数组顺序猜测旧/新绑定。
       const allGoals = [
@@ -2799,6 +2813,9 @@
               onRenamed: () => { forceFreshRef.current = true; load(); },
               onArchived: () => load(),
               onTagsChanged: () => load(),
+              // g-380：关系标记成功后刷新看板（卡片关系行/徽标即时反映；一次成功回包触发，非轮询/watcher）
+              goalOptions,
+              onRelationsChanged: () => load(),
               onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),
               deletedCardSignal,
               onDeletedCardHandled: () => setDeletedCardSignal(null),
