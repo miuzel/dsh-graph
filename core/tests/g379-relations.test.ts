@@ -495,6 +495,23 @@ test("g-379 判据8：无 relations 字段的既有 goal.md 读取不报错且 r
   assert.equal(readFileSync(file, "utf8"), once, "round-trip 序列化必须稳定");
 });
 
+test("g-379 判据8：受管小节 round-trip——新增后解除还原字节级一致（正文零残留）", () => {
+  const root = tmpRoot();
+  const a = makeGoal(root, "A", "v-x");
+  const b = makeGoal(root, "B", "v-x");
+  const bFile = findGoalFile(root, b);
+  const aFile = findGoalFile(root, a);
+  const bBefore = loadGoal(bFile).body;
+  const aBefore = loadGoal(aFile).body;
+  const bRawBefore = readFileSync(bFile, "utf8");
+  addRelation(root, REQ(root, a, "supersedes", b));
+  assert.ok(loadGoal(bFile).body.includes("## 目标关系"), "写入后应出现受管小节");
+  removeRelation(root, REQ(root, a, "supersedes", b));
+  assert.equal(loadGoal(bFile).body, bBefore, "入向受管小节解除后必须字节级还原");
+  assert.equal(readFileSync(bFile, "utf8"), bRawBefore, "整文件（含 frontmatter 派生字段）必须还原");
+  assert.equal(loadGoal(aFile).body, aBefore, "出向受管小节解除后必须字节级还原");
+});
+
 test("g-379 判据8：关系新增/解除写 events.jsonl，事件名与幂等语义明确", () => {
   const root = tmpRoot();
   const a = makeGoal(root, "A");
