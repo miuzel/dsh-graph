@@ -194,6 +194,24 @@ export function criteriaPresent(body: string): boolean {
   return criteriaItems(body).length > 0;
 }
 
+/** 目标描述的模板占位行（与看板 i18n 的 `criteria.toBeFilled` 同一枚占位符）。 */
+const DESCRIPTION_PLACEHOLDERS = new Set([
+  "（待填写）",
+]);
+
+/** 目标描述小节是否有实质内容（去掉 HTML 注释与模板占位行）。
+ *  g-378：仅供「派发前检查一次」使用——不做结构/长度/小节模板校验，
+ *  也不参与 validate / 看板标红（存量空描述目标一律保持静默）。 */
+export function descriptionPresent(body: string): boolean {
+  const t = sectionText(body, "目标描述");
+  if (t === null) return false;
+  const stripped = t.replace(/<!--[\s\S]*?-->/g, "");
+  return stripped.split("\n").some((l) => {
+    const line = l.trim();
+    return line !== "" && !DESCRIPTION_PLACEHOLDERS.has(line);
+  });
+}
+
 /** 质量判据的稳定有序 key：与客户端 checklist 使用同一规范化行文本。 */
 export function criteriaItems(body: string): string[] {
   const t = sectionText(body, "质量判据");

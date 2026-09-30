@@ -274,6 +274,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   等人工输入的空窗期也要报「正在等 X」，让负责人知道你没卡死；
 - **每轮收尾更新为完成态**：结束工作前最后一步把 status 更新为「空闲待命 / 本轮完成 /
   等待输入」等完成态——看板如实反映空闲/完成状态；
+- **派发前先写目标描述**：目标描述为空（或仅占位符）时 `graph_start_attempt` 直接拒绝派发——先 `graph_set_description` 补写清楚，再重试；
 - `graph_start_attempt` 派发执行；传入可选 `card` 参数时统一派发卡片收集（自动生成完整收集提示词并绑定卡片）；**status_line 仅由执行子代理更新**
   （`graph_report_status`，绑定 attempt），**supervisor 绝不替子代理汇报**——卡片上那句话是子代理的
   自述，代劳即伪造进展。**收集子代理不创建 attempt，绝不伪造 attempt 调用 `graph_report_status`**；

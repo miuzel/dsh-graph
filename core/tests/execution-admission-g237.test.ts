@@ -211,7 +211,11 @@ test("g-237 判据 1：blocked 目标经 HTTP 入口同样被拒且不启动子�
 test("g-237 判据 2：合法目标派发成功并自动落入 in_progress，看板状态与执行事实一致", async () => {
   const h = createHarness();
   writeFileSync(join(h.root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
-  const goalId = createGoal(h.root, { title: "合法执行目标", version: "v1.0", actor: "test" });
+  const goalId = createGoal(h.root, {
+    title: "合法执行目标", version: "v1.0", actor: "test",
+    // g-378：ready 目标派发要求目标描述非空（空描述须先 graph_set_description 补写）。
+    description: "验证合法状态的派发路径：派发成功后目标自动落入 in_progress。",
+  });
   setCriteria(h.root, goalId, ["判据 A"], "test");
   transition(h.root, goalId, "ready", { actor: "test" });
 

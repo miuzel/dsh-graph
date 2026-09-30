@@ -274,6 +274,7 @@ and `supervisor:<sessionId>` matching `project.yaml` `supervisor.session` are al
   during idle periods waiting for human input, also report “waiting for X” so the owner knows you are not stuck;
 - **Update to a completed state at the end of every round**: before ending work, make the final step a status update such as “idle and standing by / round complete /
   waiting for input”—the board should truthfully reflect idle/completed status;
+- **Write the goal description before dispatching**: when the goal description is empty (or only a placeholder), `graph_start_attempt` refuses to dispatch—fill it in with `graph_set_description`, then retry;
 - `graph_start_attempt` dispatches execution; when the optional `card` parameter is provided, it uniformly dispatches card collection (automatically generating a complete collection prompt and binding the card); **status_line is updated only by the execution subagent**
   (`graph_report_status`, bound to the attempt), and the **supervisor must never report on behalf of the subagent**—the sentence on the card is the subagent's
   own statement; doing it for them fabricates progress. **Collection subagents do not create attempts and must never fabricate an attempt by calling `graph_report_status`**;

@@ -51,6 +51,7 @@ import {
   computeClosedFenceMask,
   criteriaPresent,
   countCriteria,
+  descriptionPresent,
   criteriaItems,
   allCriteriaVerified,
   verifiedCriteriaItems,
@@ -4835,6 +4836,16 @@ function attemptWorktreeEvidence(root: string, goalId: string, attemptId: string
 }
 
 /**
+ * g-378：需要描述门禁的状态——**尚未开始执行**的准备态（`collecting` / `ready`）。
+ * 两处刻意豁免，均非「顺手放过」：
+ * - `planning`：g-236 既有的「无描述也能派发」路径，由引擎兜底 brief
+ *   「执行目标描述和质量判据中的任务」承接（非门禁途径启动时的引擎兜底，断言不得改）；
+ * - `in_progress` / `review`：目标已执行过（含 GUI 强制启动/拖拽路径），重派属于既有
+ *   强制启动路径的延续，不得因存量空描述被回溯拦截（非目标：不阻断拖拽或既有强制启动路径）。
+ */
+export const DESCRIPTION_GATE_STATUSES: ReadonlySet<string> = new Set(["collecting", "ready"]);
+
+/**
  * g-237/g-241：执行准入门禁校验（工具/HTTP 共享，零副作用）。
  * 在派发 attempt / 启动子代理之前完成完整准入核验：
  * - 位置与状态：backlog/draft/blocked/delivered 直接拒绝；
@@ -4843,11 +4854,17 @@ function attemptWorktreeEvidence(root: string, goalId: string, attemptId: string
  *   （rules_snapshot / 判据非空 / criteria.confirmed 事件 / 迁移边合法），
  *   否则在启动 child 之前即拒绝——绝不先启动子代理再吞掉迁移失败。
  * 返回 status/needsTransition 供调用方决定是否落地真实迁移。
+ *
+ * g-378：追加「派发前检查一次目标描述」（`opts.requireDescription`，仅 `graph_start_attempt`
+ * 工具入口置真）。刻意只做**有没有实质内容**这一件事：不做结构/长度/小节模板校验，
+ * 也不动 validate 与状态机——HTTP 入口（GUI 拖拽/执行按钮/既有人工强制启动路径）保持原行为，
+ * 存量空描述目标不标红、不报警。检查排在状态/判据准入之后，既有拒绝文案逐字不变；
+ * 生效状态与豁免面见 {@link DESCRIPTION_GATE_STATUSES}。
  */
 export function assertExecutionAdmission(
   root: string,
   goalId: string,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; requireDescription?: boolean },
 ): { goalFile: string; doc: GoalDoc; status: string; needsTransition: boolean } {
   const goalFile = findGoalFile(root, goalId);
   if (basename(goalFile) !== "goal.md") {
@@ -4864,8 +4881,20 @@ export function assertExecutionAdmission(
   if (status === "delivered") {
     throw new GraphError(`已交付目标不允许直接派发执行，如需修改请先退回 review`);
   }
+  // g-378：描述门禁——零副作用的纯校验，抛错发生在任何 mkdir/事件/子代理之前。
+  // 只作用于「尚未开始执行」的准备态，豁免面与理由见 DESCRIPTION_GATE_STATUSES。
+  const assertDescription = (): void => {
+    if (!opts?.requireDescription) return;
+    if (!DESCRIPTION_GATE_STATUSES.has(status)) return;
+    if (descriptionPresent(doc.body)) return;
+    throw new GraphError(
+      `目标描述为空（或仅占位符「（待填写）」），拒绝派发（未创建 attempt、未启动子代理）：` +
+      `请先用 graph_set_description 补写目标描述（写清要做什么、边界与验收），再重试 graph_start_attempt`,
+    );
+  };
   // 已在执行：幂等放行，无需再次迁移
   if (status === "in_progress") {
+    assertDescription();
     return { goalFile, doc, status, needsTransition: false };
   }
   // g-237：启动 child 前的完整准入——用状态机不变式预演 in_progress 迁移（不写盘、不启动子代理）
@@ -4885,6 +4914,7 @@ export function assertExecutionAdmission(
     }
     throw new GraphError(`执行准入拒绝（未创建 attempt、未启动子代理）：${reason}`);
   }
+  assertDescription();
   return { goalFile, doc, status, needsTransition: true };
 }
 

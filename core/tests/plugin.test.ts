@@ -168,7 +168,11 @@ test("g-113 graph_start_attempt 注入目标相对路径以 workspace 根为基�
 test("g-202 graph_start_attempt：无 card 创建并绑定 Goal attempt、ready→in_progress", async () => {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g202-exec-"));
   init(root);
-  const goal = createGoal(root, { title: "执行目标", version: "v-t", actor: "test" });
+  // g-378：ready 目标派发要求目标描述非空（空描述须先 graph_set_description 补写）。
+  const goal = createGoal(root, {
+    title: "执行目标", version: "v-t", actor: "test",
+    description: "验证 graph_start_attempt 无 card 时创建并绑定 Goal attempt。",
+  });
   setCriteria(root, goal, ["通过"], "test");
   transition(root, goal, "ready", { actor: "test" });
   const registered: any[] = [];

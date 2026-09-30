@@ -582,7 +582,10 @@ function resolveEffectiveBrief(attemptBrief, directive, goalDesc) {
     const truncated = desc.length > 200 ? desc.slice(0, 200) + "…" : desc;
     return { brief: `执行目标描述中的任务：${truncated}`, source: "auto_from_desc" };
   }
-  // 目标描述也为空：最终兜底
+  // 目标描述也为空：最终兜底。
+  // g-378 定位：这是**非门禁途径**（HTTP 入口：GUI 拖拽/执行按钮等既有人工强制启动路径）
+  // 启动时的引擎兜底——工具入口 `graph_start_attempt` 已在准入门禁处拒绝空描述派发，
+  // 因此本分支只为不设描述门禁的路径保留，行为与文案一字未改（g-236 断言不动）。
   return { brief: "执行目标描述和质量判据中的任务", source: "fallback" };
 }
 
@@ -1429,7 +1432,9 @@ export function apply(ctx, config) {
 
     // 2. 执行准入门禁校验（g-237/g-241 协同）：启动 child 之前完成状态/判据/授权准入。
     //    拒绝时零副作用（不建 attempt、不启动子代理、不迁移），绝不允许先启动再吞掉迁移失败。
-    const admission = assertExecutionAdmission(root, goal, { force });
+    //    g-378：只有 `graph_start_attempt` 工具入口要求目标描述非空（补写后重试即可）；
+    //    HTTP 入口（GUI 拖拽/执行按钮）是既有人工强制启动路径，保持原行为不受影响。
+    const admission = assertExecutionAdmission(root, goal, { force, requireDescription: entrypoint === "tool" });
     const { goalFile, doc } = admission;
 
     // 3. 一次性上下文快照（保证注入清单与注入内容一致，零二次读取漂移）
