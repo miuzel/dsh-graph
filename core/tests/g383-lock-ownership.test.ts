@@ -65,21 +65,44 @@ function assertNoResidue(root: string): void {
 // ---------------------------------------------------------------------------
 
 const CHILD_SOURCE = `
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 
-const [, , txPath, root, lockName, holdMs, timeoutMs, logFile, tag] = process.argv;
+const [, , txPath, root, lockName, holdMs, timeoutMs, logFile, tag, waitFile, failInfoFile] = process.argv;
 const { withTx } = await import(pathToFileURL(txPath).href);
 
 const log = (line) => appendFileSync(logFile, line + "\\n");
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const lockPath = join(root, ".lock." + lockName);
 
 const r = withTx({ root, actor: "child" }, { lockName, lockTimeoutMs: Number(timeoutMs) }, () => {
   log("enter " + tag + " " + Date.now());
-  sleep(Number(holdMs));
+  if (waitFile) {
+    // 握手：持锁者等到对端写出「失败标记」后再退出，holdMs 仅作上限 ——
+    // 使「等待者确实在持锁期间超时」由构造保证，不依赖 wall-clock 余量
+    const deadline = Date.now() + Number(holdMs);
+    while (Date.now() < deadline) {
+      if (existsSync(waitFile)) break;
+      sleep(5);
+    }
+  } else {
+    sleep(Number(holdMs));
+  }
   log("exit " + tag + " " + Date.now());
   return { value: tag, events: [] };
 });
+
+if (!r.ok && failInfoFile) {
+  // 失败者在自己失败的那一刻记录锁现状：此刻持锁者仍在临界区内（它在等这份标记）
+  let lockExists = false;
+  let lockHolder = null;
+  try {
+    lockExists = existsSync(lockPath);
+    if (lockExists) lockHolder = readFileSync(lockPath, "utf8").trim();
+  } catch { /* 读不到就只记录存在性 */ }
+  writeFileSync(failInfoFile, JSON.stringify({ tag, ok: false, phase: r.phase, error: r.error, lockExists, lockHolder }));
+}
 process.stdout.write(JSON.stringify({ tag, ok: r.ok, phase: r.ok ? null : r.phase, error: r.ok ? null : r.error }) + "\\n");
 `;
 
@@ -96,7 +119,12 @@ interface Fixture {
   logFile: string;
   lockPath: string;
   childScript: string;
-  spawn: (tag: string, holdMs: number, timeoutMs: number) => { proc: ChildProcess; done: Promise<ChildRun> };
+  spawn: (
+    tag: string,
+    holdMs: number,
+    timeoutMs: number,
+    opts?: { waitFile?: string; failInfoFile?: string },
+  ) => { proc: ChildProcess; done: Promise<ChildRun> };
   logLines: () => string[];
   waitForLog: (prefix: string, timeoutMs: number) => Promise<void>;
   intervals: () => { tag: string; enter: number; exit: number }[];
@@ -120,10 +148,13 @@ function makeFixture(lockName: string): Fixture {
     logFile,
     lockPath: join(root, `.lock.${lockName}`),
     childScript,
-    spawn(tag, holdMs, timeoutMs) {
+    spawn(tag, holdMs, timeoutMs, opts) {
       const proc = spawn(
         process.execPath,
-        [childScript, TX_PATH, root, lockName, String(holdMs), String(timeoutMs), logFile, tag],
+        [
+          childScript, TX_PATH, root, lockName, String(holdMs), String(timeoutMs), logFile, tag,
+          opts?.waitFile ?? "", opts?.failInfoFile ?? "",
+        ],
         { stdio: ["ignore", "pipe", "pipe"] },
       );
       const done = new Promise<ChildRun>((resolve, reject) => {
@@ -232,22 +263,31 @@ test("g-383②：等待者超时不得删除存活进程持有的锁（预置活
 
 test("g-383②：真实子进程等待超时后，仍持锁进程的锁必须还在，且后来者不得闯入其临界区", async () => {
   const fx = makeFixture("busy");
-  const holdMs = 800;
-  const a = fx.spawn("A", holdMs, 5000);
+  // g-394 顺带项：把本用例改成**握手式**，消除对 wall-clock 余量的依赖
+  // （原实现靠 holdMs=800 覆盖 B 的 120ms 超时，余量约 3x，并行 CI 有触红风险）：
+  // A 持锁并轮询等待 B 写出「失败标记」后才退出，holdMs 仅作 30s 上限
+  // ⇒「B 在 A 持锁期间超时失败」由构造保证，与机器快慢无关。
+  const failMarker = join(dirname(fx.logFile), "b-failed.json");
+  const a = fx.spawn("A", 30_000, 5000, { waitFile: failMarker });
   await fx.waitForLog("enter A", 5000);
 
   // B 在 A 持锁期间等待，120ms 后超时失败——其 finally 不得删除 A 的锁
-  const b = fx.spawn("B", 0, 120);
+  const b = fx.spawn("B", 0, 120, { failInfoFile: failMarker });
   const rb = await b.done;
   assert.equal(rb.ok, false, "B 应在 A 持锁时超时失败");
   assert.equal(rb.phase, "read");
   assert.match(String(rb.error), /获取锁超时/);
-  assert.equal(
-    existsSync(fx.lockPath),
-    true,
-    "等待超时者不得删除存活持有者的锁",
-  );
-  assert.equal(readFileSync(fx.lockPath, "utf8").trim(), String(a.proc.pid), "锁仍应属于 A");
+
+  // 锁现状由 B 在**自己失败的那一刻**记录（此时 A 仍在临界区内等这份标记），
+  // 因此断言不再有「A 可能已释放」的竞态窗口。
+  const failInfo = JSON.parse(readFileSync(failMarker, "utf8")) as {
+    tag: string;
+    lockExists: boolean;
+    lockHolder: string | null;
+  };
+  assert.equal(failInfo.tag, "B");
+  assert.equal(failInfo.lockExists, true, "等待超时者不得删除存活持有者的锁");
+  assert.equal(failInfo.lockHolder, String(a.proc.pid), "锁仍应属于 A");
   assert.equal(fx.logLines().some((l) => l.startsWith("enter B")), false, "B 不得进入临界区");
 
   // C 在 A 仍持锁时启动；修复前 B 已删锁，C 会与 A 重叠 → 本条在负向对照下必红
