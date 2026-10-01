@@ -4475,6 +4475,10 @@ export function apply(ctx, config) {
               const cwd = context?.agent?.session?.header?.cwd;
               if (!cwd) return "";
               const canonical = resolveCanonicalRoot(config, cwd);
+              // g-252：此路径**不传 actor**（host 侧此处无可靠会话身份）⇒ recallMemory 会过滤掉
+              // 全部 kind:"user" 条目（owner 隔离）：user 常驻记忆在本路径等价「仅按需 recall」，
+              // 这是有意语义。若将来要按 actor 注入，必须同时把 actor 纳入下方 cachedRender 的
+              // 缓存键（现在是 `mem:${root}`），否则同一 root 的不同 actor 会拿到同一份渲染结果 ⇒ 跨 actor 泄漏。
               return cachedRender(`mem:${canonical.root}`, canonical.root, ["memory/memory.jsonl"],
                 () => formatStandingMemorySection(canonical.root) ?? "");
             } catch {
