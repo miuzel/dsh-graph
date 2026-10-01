@@ -94,7 +94,7 @@
     //   无 retain → 保持原有渲染期被动 binding(id) 回退，行为不得退化
     // retain/release 严格配平：模块级按身份引用计数，同一 target 在同一组件树多处消费
     // （SessionPanel 与内嵌 LiveStrip 会同时解析同一 childId）只 retain 一次，计数归零才归还代际。
-    const retainedBindings = new Map(); // identity -> { count, started, reference, bound, promise, listeners }
+    const retainedBindings = new Map(); // identity -> { count, started, phase, identity, reference, bound, promise, listeners }
 
     function bindIdentity(parentId, childId) {
       return parentId || childId ? (parentId ?? "") + "\u0000" + (childId ?? "") : null;
@@ -103,7 +103,7 @@
     function ensureBindingEntry(identity) {
       let entry = retainedBindings.get(identity);
       if (!entry) {
-        entry = { count: 0, started: false, reference: null, bound: null, promise: null, listeners: new Set() };
+        entry = { count: 0, started: false, phase: "waiting", identity, reference: null, bound: null, promise: null, listeners: new Set() };
         retainedBindings.set(identity, entry);
       }
       return entry;
@@ -222,8 +222,43 @@
 
       const bound = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
+      // ===== g-387：解析→保留的三态状态机（entry.phase），本 hook 私有 =====
+      // 修复的根因：首次挂载时目录里还没有这个 child，旧实现先把 entry.started 置上，解析得到
+      // null 后**永不重试** ⇒ 实时输出 / 模型 / 反馈会话一直未接入，直到组件卸载或身份切换。
+      //
+      //   "waiting"   —— 尚未解析出 retain 目标。目录刷新（useSessionsList 快照变化）**允许**重试。
+      //   "resolving" —— 已在飞（entry.promise 非空）：同一 entry 绝不重复发起第二次解析。
+      //   "retained"  —— 目标已解析并已发起 retain（代际建立成功，或宿主明确拒绝）：
+      //                  目录变化**不得**再唤醒，否则 retain → publishRetention（目录变）→ 再 retain
+      //                  就是审查点名的快照回环。
+      // entry.started 仍是「已发起过首次解析」的标记（既有源契约断言的锚点）；重试判据只看
+      // phase === "waiting" && !entry.promise，与 started 无关。
+      function beginBindingRetain(entry, parentId, childId) {
+        if (entry.phase === "retained" || entry.promise) return; // 已成功 / 在飞 → 不重复启动
+        entry.phase = "resolving";
+        entry.promise = (async () => {
+          let resolved = null;
+          try { resolved = await resolveSessionRetainTarget(parentId, childId); }
+          catch (e) { resolved = null; }
+          // 迟到的异步结果：身份已切换或条目已随卸载释放（不再是当前代）→ 直接丢弃。
+          // 绝不把旧身份的结果写进任何现存条目，也绝不为已释放的条目建立代际（那会漏 release）。
+          if (retainedBindings.get(entry.identity) !== entry) return;
+          entry.promise = null;
+          if (resolved == null) {
+            // 目录尚未收录：回到 "waiting" 等下一次目录刷新唤醒。bound 本就是 null（无状态变化），
+            // 故不发通知——既避免无谓重渲染，也断掉「通知→重渲染→重解析」的回环路径。
+            entry.phase = "waiting";
+            entry.bound = null;
+            return;
+          }
+          entry.phase = "retained";
+          startRetainedBinding(resolved, entry);
+        })();
+      }
+
       // 依赖只取能力与身份，**不含** listSnap：0.1.6 的 publishRetention 会因我们自己的 retain
       // 更新 list 快照，若把 listSnap 放进依赖会形成 retain→通知→再 retain 的无限循环。
+      // g-387：首次解析的目标未解析出时不再「永久失效」——目录迟到改由下面独立的唤醒 effect 兜底。
       React.useEffect(() => {
         if (!canRetain || !enabled || identity == null) return undefined;
         const entry = ensureBindingEntry(identity);
@@ -231,11 +266,7 @@
         let released = false;
         if (!entry.started) {
           entry.started = true;
-          entry.promise = (async () => {
-            const resolved = await resolveSessionRetainTarget(parentId, childId);
-            if (resolved == null) { entry.bound = null; notifyBinding(entry); return; }
-            startRetainedBinding(resolved, entry);
-          })();
+          beginBindingRetain(entry, parentId, childId);
         }
         return () => {
           if (released) return;
@@ -243,6 +274,17 @@
           releaseBinding(identity);
         };
       }, [canRetain, enabled, identity, parentId, childId]);
+
+      // g-387：目录迟到唤醒。与上面的生命周期 effect **分开**，唯一目的是把 listSnap 纳入触发源
+      // 而不让 retain 自己引发的目录变化反过来触发生命周期 effect（快照回环）。
+      // 守卫全部在 beginBindingRetain 内：已成功（"retained"）或在飞（promise 非空）直接返回，
+      // 只有 "waiting" 的条目才重新解析。本 effect 自身不 retain、不 release，不参与引用计数配平。
+      React.useEffect(() => {
+        if (!canRetain || !enabled || identity == null) return undefined;
+        const entry = retainedBindings.get(identity);
+        if (entry) beginBindingRetain(entry, parentId, childId);
+        return undefined;
+      }, [canRetain, enabled, identity, parentId, childId, listSnap]);
 
       return {
         session: bound?.session ?? null,
