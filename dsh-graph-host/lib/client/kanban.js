@@ -1300,72 +1300,19 @@
       };
 
       const executeSearch = (queryText, isFullText = searchFullText) => {
-        const q = String(queryText ?? "").trim();
+        const q = normalizeSearchQuery(queryText);
         if (!q) {
           setSearchFeedback(dgT('search.enterKeyword'));
           setTimeout(() => setSearchFeedback((fb) => fb === dgT('search.enterKeyword') ? null : fb), 2500);
           return;
         }
         setSearchFeedback(null);
-        const lowerQ = q.toLowerCase();
 
-        // 遍历所有目标候选（包含所有版本，含当前处于隐藏状态的版本）
-        const candidates = [];
-        for (const v of (b?.versions ?? [])) {
-          const isRel = v.status === "released";
-          for (const g of (v.goals ?? [])) {
-            candidates.push({
-              ...g,
-              versionSlug: v.slug,
-              versionName: v.name,
-              isReleased: isRel,
-              // g-367：泳道 key 约定收敛到 search-groups.js 的 versionLaneKey()（唯一真源）——
-              // 该 key 现在同时决定搜索命中的分区归属（聚合泳道的组头），不能再有两份字面量。
-              laneKey: versionLaneKey(v),
-            });
-          }
-        }
-        for (const g of (b?.standalone ?? [])) {
-          candidates.push({
-            ...g,
-            versionSlug: null,
-            isReleased: false,
-            laneKey: "standalone",
-          });
-        }
-        for (const g of (b?.backlog ?? [])) {
-          candidates.push({
-            ...g,
-            versionSlug: null,
-            isReleased: false,
-            laneKey: "backlog",
-          });
-        }
-
-        const matches = [];
-        for (const c of candidates) {
-          const titleHit = String(c.title ?? "").toLowerCase().includes(lowerQ);
-          const idHit = String(c.id ?? "").toLowerCase().includes(lowerQ);
-          let descHit = false;
-          let snippet = "";
-          if (isFullText && c.description) {
-            descHit = String(c.description).toLowerCase().includes(lowerQ);
-            if (descHit) {
-              snippet = extractMatchSnippet(c.description, q);
-            }
-          }
-          if (titleHit || idHit || descHit) {
-            matches.push({
-              id: c.id,
-              title: c.title,
-              status: c.status,
-              versionSlug: c.versionSlug,
-              isReleased: c.isReleased,
-              laneKey: c.laneKey,
-              snippet: snippet || (descHit ? extractMatchSnippet(c.description, q) : ""),
-            });
-          }
-        }
+        // g-381：候选收集与匹配判定**唯一实现**收敛到 search-match.js 的 collectSearchMatches
+        // （本函数原有内联实现已逐字迁出；目标详情「🔗 标记关系」对端搜索框调用同一实现 ⇒ 全仓
+        // 不再有第二套 includes 匹配/排序）。命中次序、字段形态与迁移前逐字相同；片段仍复用既有
+        // helpers.js 的 extractMatchSnippet（本函数不复制片段实现）。
+        const matches = collectSearchMatches(b, q, { fullText: isFullText, snippetOf: extractMatchSnippet });
 
         setSearchActiveQuery(q);
         setSearchMatches(matches);

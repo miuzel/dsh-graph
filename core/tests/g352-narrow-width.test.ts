@@ -2091,7 +2091,7 @@ test("g-352 att-005：会话内看板页签签名 == 冻结 fixture，且 fixtur
       assert.fail("拒绝覆盖冻结基线：需 G352_SIG_ACK=1 显式确认（或 G352_SIG_DUMP=<其他路径> 只导出做 diff）");
     }
     const head = [
-      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.17.1 开发线重新冻结：PLUGIN_VERSION 0.17.0→0.17.1-alpha 版本串刷新，正文与 content-sha256 逐字节未变；渲染契约逐字未变 ⇒ content-sha 未变，仅 source-sha256 头随 constants.js 变更）",
+      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.17.1 开发线；g-381 重新冻结：kanban.js executeSearch 的候选收集与匹配判定抽取为 search-match.js 唯一实现（搜索泳道行为逐字不变）⇒ 签名正文与 content-sha256 逐字节未变（已用 G352_SIG_DUMP 导出与旧基线 diff 验证 0 行差异），仅 source-sha256 头随 kanban.js 变更）",
       `# source-commit: ${execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot(), encoding: "utf8" }).trim()}`,
       `# source-sha256: ${sourceFingerprint()}`,
       `# source-files: ${SIG_SOURCE_FILES.join(",")}   # 源 hash 覆盖的模块（决定头部/泳道渲染）`,
@@ -2822,7 +2822,12 @@ test("g-367 源码契约/i18n：分组纯派生、零新增状态真源与持久
   assert.match(kanban, /dgT\("search\.groupLabel", \{ name: searchGroupLabel\(grp\), count: grp\.items\.length \}\)/);
   assert.equal([...kanban.matchAll(/return Card\(\{/g)].length, 3, "Card 渲染调用点仍为既有三处");
   // 泳道 key 约定唯一真源：搜索候选改走 versionLaneKey，全文件只剩 released 泳道那一处字面量
-  assert.match(kanban, /laneKey: versionLaneKey\(v\),/);
+  // （g-381：搜索候选构造/匹配抽取到 search-match.js 的唯一实现；断言随真源迁移，口径不变）
+  const searchMatch = readClient("search-match");
+  assert.match(searchMatch, /laneKey: versionLaneKey\(v\),/, "搜索候选仍走 versionLaneKey（唯一真源）");
+  assert.equal([...searchMatch.matchAll(/"rellane-"/g)].length, 0, "候选构造不得内联泳道 key 字面量");
+  assert.match(kanban, /collectSearchMatches\(b, q, \{ fullText: isFullText, snippetOf: extractMatchSnippet \}\)/,
+    "kanban 搜索必须委托 search-match.js 的唯一匹配实现（不得回归内联第二套匹配）");
   assert.equal([...kanban.matchAll(/"rellane-"/g)].length, 1, "rellane- 字面量只剩已发布泳道那一处");
   // 零新增状态真源 / 持久化键
   assert.doesNotMatch(kanban, /useState\([^)]*[Gg]roup/);

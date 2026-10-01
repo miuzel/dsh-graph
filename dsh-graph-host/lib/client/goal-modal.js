@@ -213,6 +213,10 @@
     // 写入复用既有 REST `POST /api/dsh-graph/relations`（单一真源仍是 goal frontmatter 的 meta.relations，
     // 客户端不双写、不旁路 validate）；一次成功回包后**重取一次**关系数据即可（无轮询 / 无 watcher）；
     // 并发冲突(409) 给可操作提示 + 「重试」路径（重试前重取 base_relations）；任何失败都 try/catch 兜底。
+    // g-381：对端选择由「普通下拉」改为**搜索输入框**（编号 / 标题关键字，实时过滤 + 键盘 ↑↓/Enter/Esc）。
+    //   匹配与次序**复用全仓唯一实现** search-match.js 的 filterCandidateMatches / matchGoalCandidate
+    //   （看板搜索泳道 collectSearchMatches 同源），不新造第二套匹配/排序；
+    //   渲染规模由 RELATION_PEER_LIMIT 候选上限兜住（~400 目标根下逐键输入不重排/不挂载全量节点）。
     function RelationMarker(props) {
       const { goalId, peers, onChanged } = props;
       // 可写进 relations 的闭集（depends_on 的权威存储是 meta.depends_on，不在此入口内）
@@ -221,9 +225,14 @@
       const [loadErr, setLoadErr] = React.useState(null);
       const [type, setType] = React.useState("supersedes");
       const [peer, setPeer] = React.useState("");
+      const [query, setQuery] = React.useState("");
+      const [peerOpen, setPeerOpen] = React.useState(false);
+      const [peerActive, setPeerActive] = React.useState(0);
       const [note, setNote] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
       const pendingRef = React.useRef(null);
+      const peerInputRef = React.useRef(null);
+      const peerListRef = React.useRef(null);
 
       const load = React.useCallback(() => {
         setLoadErr(null);
@@ -294,6 +303,63 @@
         if (p) submit(p.action, p.source, p.type, p.target);
       };
 
+      // 候选池：既有 goalOptions 投影（跨视图全量、已去重）+ 排除自身；**保序**（板序），
+      // 与看板搜索 collectSearchMatches 的候选次序同源 ⇒ 命中次序/语义与既有搜索一致。
+      const peerPool = React.useMemo(
+        () => (Array.isArray(peers) ? peers : []).filter((p) => p && p.id && p.id !== goalId),
+        [peers, goalId],
+      );
+      // 过滤 + 候选上限走唯一实现（search-match.js）；上限只截断**渲染**集合，total 仍是真实命中数。
+      const peerMatches = React.useMemo(
+        () => filterCandidateMatches(peerPool, query, { limit: RELATION_PEER_LIMIT }),
+        [peerPool, query],
+      );
+      const peerItems = peerMatches.items;
+      const peerActiveIdx = peerItems.length ? Math.min(peerActive, peerItems.length - 1) : -1;
+
+      const selectPeer = (c) => {
+        if (!c) return;
+        setPeer(String(c.id));
+        setQuery(goalCandidateLabel(c));
+        setPeerOpen(false);
+        setPeerActive(0);
+      };
+      const onPeerQueryChange = (value) => {
+        // 用户改写查询 ⇒ 之前的选中不再对应当前可见文本，作废选中（避免「看到的不是将提交的」）
+        setQuery(value);
+        setPeer("");
+        setPeerActive(0);
+        setPeerOpen(true);
+      };
+      const onPeerKeyDown = (e) => {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          if (!peerOpen) setPeerOpen(true);
+          else setPeerActive(Math.min(peerActiveIdx + 1, peerItems.length - 1));
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setPeerActive(Math.max(peerActiveIdx - 1, 0));
+        } else if (e.key === "Enter") {
+          if (peerOpen && peerItems.length) {
+            e.preventDefault();
+            selectPeer(peerItems[peerActiveIdx < 0 ? 0 : peerActiveIdx]);
+          }
+        } else if (e.key === "Escape") {
+          if (peerOpen) { e.preventDefault(); setPeerOpen(false); }
+          else if (peerInputRef.current && typeof peerInputRef.current.blur === "function") peerInputRef.current.blur();
+        }
+      };
+      // 键盘选中项滚入可视区（无定时器/无 rAF：仅在渲染后同步读 DOM 一次，缺失即静默跳过）
+      React.useEffect(() => {
+        if (!peerOpen) return;
+        try {
+          const list = peerListRef.current;
+          if (!list || typeof list.querySelector !== "function") return;
+          const el = list.querySelector('[aria-selected="true"]');
+          if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+        } catch { /* 滚动失败不影响选择 */ }
+      }, [peerOpen, peerActiveIdx]);
+
       const label = (r) => {
         if (r.missing) return dgT("card.relationMissing", { id: r.goal });
         if (r.archived) return dgT("card.relationArchived", { id: r.goal });
@@ -333,11 +399,13 @@
           }, dgT("relation.removeBtn")));
       };
 
-      const options = (Array.isArray(peers) ? peers : [])
-        .filter((p) => p && p.id && p.id !== goalId)
-        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
       const out = (data && data.outgoing) || [];
       const inc = (data && data.incoming) || [];
+      // 候选上限提示：只在「命中数超过上限」时出现（可读文案，不静默截断）
+      const peerHint = peerMatches.limited
+        ? dgT("relation.limitHint", { limit: RELATION_PEER_LIMIT, count: peerMatches.total })
+        : null;
+      const peerEmpty = peerMatches.total === 0;
 
       return h("div", {
         className: "dg-relation-marker",
@@ -354,18 +422,72 @@
             onChange: (e) => setType(e.target.value),
           }, MARK_TYPES.map((t) => h("option", { key: t, value: t }, dgT("card.relType." + t)))),
           h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("relation.addTarget")),
-          h("select", {
-            className: "dg-select", style: S.select, value: peer,
-            onChange: (e) => setPeer(e.target.value),
-          },
-            h("option", { value: "" }, dgT("relation.addTargetPlaceholder")),
-            options.map((p) => h("option", { key: p.id, value: p.id },
-              `${p.id}${p.title && p.title !== p.id ? " " + p.title : ""}`))),
+          // g-381：对端选择 = 搜索输入框（编号 / 标题关键字实时过滤；↑↓ 选择、Enter 确认、Esc 关闭）
+          h("input", {
+            type: "text",
+            ref: peerInputRef,
+            className: "dg-relation-peer-input",
+            style: { ...S.promptInput, flex: "0 1 220px", minWidth: 140 },
+            value: query,
+            placeholder: dgT("relation.addTargetPlaceholder"),
+            role: "combobox",
+            "aria-expanded": peerOpen ? "true" : "false",
+            "aria-controls": "dg-relation-peer-list",
+            "aria-autocomplete": "list",
+            "aria-activedescendant": peerOpen && peerActiveIdx >= 0 ? "dg-relation-peer-opt-" + peerItems[peerActiveIdx].id : undefined,
+            onChange: (e) => onPeerQueryChange(e.target.value),
+            onKeyDown: onPeerKeyDown,
+            onFocus: () => setPeerOpen(true),
+            onBlur: () => setPeerOpen(false),
+          }),
           h("button", {
             className: "dg-btn", disabled: busy,
             style: { ...S.btnPrimary, fontSize: 11, padding: "1px 6px" },
             onClick: addMark,
           }, busy ? dgT("common.saving") : dgT("relation.addBtn"))),
+        peer
+          ? h("div", { className: "dg-relation-peer-selected", style: { ...S.meta, fontSize: 11 } },
+              dgT("relation.selected", { label: goalCandidateLabel({ id: peer, title: (peerPool.find((p) => String(p.id) === peer) || {}).title }) }))
+          : null,
+        peerOpen
+          ? h("div", { className: "dg-relation-peer-panel", style: { display: "flex", flexDirection: "column", gap: 2 } },
+              h("div", { style: { ...S.meta, fontSize: 10, opacity: 0.75 } }, dgT("relation.searchHint")),
+              h("div", {
+                id: "dg-relation-peer-list",
+                ref: peerListRef,
+                role: "listbox",
+                className: "dg-relation-peer-list",
+                style: {
+                  maxHeight: 168, overflowY: "auto",
+                  border: "1px solid rgba(128,128,128,.25)", borderRadius: 4,
+                },
+              },
+                peerEmpty
+                  ? h("div", {
+                      className: "dg-relation-peer-empty",
+                      style: { ...S.meta, fontSize: 11, padding: "4px 6px", opacity: 0.75 },
+                    }, dgT("relation.noMatch"))
+                  : peerItems.map((p, i) => h("div", {
+                      key: p.id,
+                      id: "dg-relation-peer-opt-" + p.id,
+                      role: "option",
+                      "aria-selected": i === peerActiveIdx ? "true" : "false",
+                      className: "dg-relation-peer-option",
+                      title: goalCandidateLabel(p),
+                      style: {
+                        fontSize: 11, padding: "3px 6px", cursor: "pointer",
+                        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                        background: i === peerActiveIdx ? "rgba(76,141,255,.20)" : "transparent",
+                      },
+                      // 阻止默认 mousedown ⇒ 输入框不失焦，点击选项不会被 onBlur 的关闭抢先吞掉
+                      onMouseDown: (e) => e.preventDefault(),
+                      onMouseEnter: () => setPeerActive(i),
+                      onClick: () => selectPeer(p),
+                    }, goalCandidateLabel(p)))),
+              peerHint
+                ? h("div", { className: "dg-relation-peer-limit", style: { ...S.meta, fontSize: 10, opacity: 0.75 } }, peerHint)
+                : null)
+          : null,
         h("div", { style: { ...S.meta, fontSize: 11, opacity: 0.8 } }, dgT("relation.outgoingTitle")),
         out.length
           ? out.map((r) => row(r, "out"))

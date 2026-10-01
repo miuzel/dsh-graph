@@ -10,7 +10,8 @@
 //   4. 组内保持 searchMatches 的既有相对次序 ⇒ **i/N 全局次序不变**（窄/宽档同源，`searchMatches`
 //      本身一字不改）；分组只改「纵向落点」，不改跳转次序；
 //   5. 泳道 key 约定（`v-<slug>` / `rellane-<slug>` / `standalone` / `backlog`）在本模块**唯一持有**，
-//      kanban.js 的搜索候选构造复用 versionLaneKey ⇒ 全仓不再有第二份这样的字面量。
+//      搜索候选构造（g-381 起唯一实现在 search-match.js）复用 versionLaneKey ⇒ 全仓不再有第二份
+//      这样的字面量。
 
 /** 已隐藏版本的聚合组 key：不参与常规分区顺序，恒置于末尾。 */
 const SEARCH_GROUP_HIDDEN = "__hidden__";
