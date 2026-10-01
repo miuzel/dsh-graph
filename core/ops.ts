@@ -1527,31 +1527,162 @@ const GOAL_BODY = `
 （暂无）
 `;
 
-/** 连号 id：扫描所有目标（含已归档，g-234）的 frontmatter meta.id 取最大数字编号 +1（g-001…g-9999）。
- *  注意必须读 frontmatter 而非路径——真实仓库目录/文件名是 slug（如 goals/session-embed/），
- *  g-id 只存在于 meta.id（发现#24：按路径推导曾误生成 g-001 撞号）。
- *  历史上的随机 8 位 id（如 g-a92e1406、g-77647351）不匹配 \d{1,4}，自然跳过；
- *  既有 id 永不改写（事件流引用它们，R-02）。 */
-export function nextGoalSeq(root: string): string {
-  let max = 0;
+// ---- g-337：目标编号高水位（已分配编号永不复用） ----
+//
+// 旧实现（g-234）只扫「现存 + 归档」目标 frontmatter 的 meta.id 取 max+1：物理删除**最高号**
+// 目标后 max 回落 ⇒ 新目标复用旧编号，而旧事件/关系/卡片/记忆仍引用该编号，指向被替换的新对象。
+// 现取三路来源的最大值作为高水位（g-001…g-9999）：
+//  1) 现存 + 归档 frontmatter（g-234 既有行为，必须保留）；
+//  2) events.jsonl 中出现过的 g-NNNN：**物理删除**的目标不再有 frontmatter，但其历史事件
+//     （goal.created / goal.deleted / goal.relations… 的 goal 与 details 字段）永久留在事件流里
+//     （该文件从不裁剪）⇒ 删除最高号后水位不回退；
+//  3) root/next-seq.json 持久高水位（单调只增）：覆盖「事件流被裁剪/不可读」「编号已分配但
+//     创建失败（预留语义）」等前两者看不到的情形；缺失/损坏/版本不符时回退到 1)+2) 推导并自愈重写。
+// 必须读 frontmatter 而非路径——真实仓库目录/文件名是 slug（如 goals/session-embed/），
+// g-id 只存在于 meta.id（发现#24：按路径推导曾误生成 g-001 撞号）。
+// 历史上的随机 8 位 id（如 g-a92e1406、g-77647351）不匹配 \d{1,4}，自然跳过；
+// 既有 id 永不改写（事件流引用它们，R-02）——本机制只向后分配新号，不改号、不重写事件、不迁移引用。
+
+/** 编号形态：g-001…g-9999（非数字/超 4 位的历史随机 id 不参与编号分配）。 */
+const GOAL_SEQ_RE = /^g-(\d{1,4})$/;
+const GOAL_SEQ_MAX = 9999;
+/** 事件流单行 JSON 损坏时的兜底形态：要求编号后不再接数字，避免把 g-77647351 截成 g-7764。 */
+const GOAL_SEQ_LOOSE_RE = /g-(\d{1,4})(?!\d)/g;
+/** 持久高水位文件（看板 root 级状态文件，与 index.json/order.json 同级；内容只有编号，不含路径）。 */
+const SEQ_FLOOR_FILE = "next-seq.json";
+const SEQ_FLOOR_VERSION = 1;
+
+/** 从任意 JSON 值里收集「整体恰为 g-NNNN 的字符串」抬高上界（深度受限）。
+ *  只认整值形态、不做正文正则：评论/记忆正文里偶然提到的编号不会被当成已分配编号而虚抬水位。 */
+function raiseSeqFromValue(v: unknown, depth: number, sink: { max: number }): void {
+  if (v === null || v === undefined || depth > 4) return;
+  if (typeof v === "string") {
+    const m = GOAL_SEQ_RE.exec(v);
+    if (m) sink.max = Math.max(sink.max, parseInt(m[1], 10));
+    return;
+  }
+  if (Array.isArray(v)) {
+    for (const x of v) raiseSeqFromValue(x, depth + 1, sink);
+    return;
+  }
+  if (typeof v === "object") {
+    const obj = v as Record<string, unknown>;
+    for (const k of Object.keys(obj)) raiseSeqFromValue(obj[k], depth + 1, sink);
+  }
+}
+
+/** 来源 1：现存 + 归档目标的 frontmatter meta.id。 */
+function maxSeqFromGoalFiles(root: string): number {
+  const sink = { max: 0 };
   for (const f of listGoalFiles(root, { includeArchived: true })) {
     let id = "";
     try {
       id = String(loadGoal(f).meta.id ?? "");
     } catch {
+      // frontmatter 不可解析：退化为原文提取——坏掉的目标文件也必须占住它的编号
+      try {
+        const m = /"id"\s*:\s*"g-(\d{1,4})"/.exec(readFileSync(f, "utf8"));
+        if (m) sink.max = Math.max(sink.max, parseInt(m[1], 10));
+      } catch {
+        /* 文件不可读：交给事件流与持久高水位兜底 */
+      }
       continue;
     }
-    const m = /^g-(\d{1,4})$/.exec(id);
-    if (m) max = Math.max(max, parseInt(m[1], 10));
+    const m = GOAL_SEQ_RE.exec(id);
+    if (m) sink.max = Math.max(sink.max, parseInt(m[1], 10));
   }
-  return "g-" + String(max + 1).padStart(3, "0");
+  return sink.max;
+}
+
+/** 来源 2：events.jsonl 中出现过的 g-NNNN（含已物理删除目标的编号）。 */
+function maxSeqFromEvents(root: string): number {
+  const file = join(root, "events.jsonl");
+  if (!existsSync(file)) return 0; // 无事件流 = 无历史（而非异常）
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (e) {
+    // fail-closed：历史读不到就无法可靠判定上界，宁可拒绝分配也不回退到危险编号
+    throw new GraphError(
+      `无法读取事件流 ${file}（${(e as Error).message}）：无法可靠判定历史编号上界，拒绝分配新目标编号`,
+    );
+  }
+  const sink = { max: 0 };
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      // 单行损坏（半写/截断）：无法结构化取值，用宽松正则兜底抬高上界——宁可跳号，不可复用
+      for (const m of line.matchAll(GOAL_SEQ_LOOSE_RE)) {
+        sink.max = Math.max(sink.max, parseInt(m[1], 10));
+      }
+      continue;
+    }
+    if (!ev || typeof ev !== "object") continue;
+    raiseSeqFromValue(ev.goal, 0, sink);
+    raiseSeqFromValue(ev.details, 0, sink);
+  }
+  return sink.max;
+}
+
+/** 来源 3：持久高水位。缺失/损坏/版本不符 → 0（回退到来源 1+2 推导），绝不静默退回危险编号。 */
+function readSeqFloor(root: string): number {
+  const file = join(root, SEQ_FLOOR_FILE);
+  if (!existsSync(file)) return 0;
+  try {
+    const obj = JSON.parse(readFileSync(file, "utf8"));
+    if (!obj || typeof obj !== "object" || obj.version !== SEQ_FLOOR_VERSION) return 0;
+    const n = obj.max_seq;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 0) return 0;
+    return Math.min(n, GOAL_SEQ_MAX);
+  } catch {
+    return 0;
+  }
+}
+
+/** 单调抬高持久高水位（原子写；只增不减，故任何调用都不会让已分配编号重新可用）。 */
+function raiseSeqFloor(root: string, seq: number): void {
+  if (seq <= 0 || seq <= readSeqFloor(root)) return;
+  mkdirSync(root, { recursive: true }); // 全新 root 时下一步的原子写需要父目录存在
+  atomicWrite(
+    join(root, SEQ_FLOOR_FILE),
+    JSON.stringify({ version: SEQ_FLOOR_VERSION, max_seq: seq }) + "\n",
+  );
+}
+
+/** 编号高水位（纯读，无副作用）：三路来源取最大。 */
+function seqUpperBound(root: string): number {
+  return Math.max(readSeqFloor(root), maxSeqFromGoalFiles(root), maxSeqFromEvents(root));
+}
+
+function formatGoalSeq(seq: number): string {
+  if (seq > GOAL_SEQ_MAX) {
+    // 4 位编号空间耗尽：再分配就会产生 g-10000（不匹配编号形态，后续扫描看不见它 ⇒ 撞号）
+    throw new GraphError(
+      `目标编号空间已耗尽（g-${GOAL_SEQ_MAX}）：拒绝分配无法表示的新编号`,
+    );
+  }
+  return "g-" + String(seq).padStart(3, "0");
+}
+
+/** 连号 id：历史高水位 +1（现存/归档 frontmatter ∪ 事件流 ∪ 持久高水位，见上）。
+ *  纯读：不写任何文件（分配与预留由 createGoal 负责）。 */
+export function nextGoalSeq(root: string): string {
+  return formatGoalSeq(seqUpperBound(root) + 1);
 }
 
 export function createGoal(
   root: string,
   opts: { title: string; version?: string; description?: string; type?: string; actor: string },
 ): string {
-  const id = nextGoalSeq(root);
+  // g-337：先取历史高水位 +1，并**在落盘前先持久抬高水位**（预留语义）——
+  // 即使随后建目录/写 goal.md 失败，该编号也已被占用，下次创建不复用它。
+  const bound = seqUpperBound(root);
+  const id = formatGoalSeq(bound + 1);
+  raiseSeqFloor(root, bound + 1);
   // g-287：带 version（含 standalone）→ planning；无 version（进 backlog）→ draft。
   // 由此 `draft` 精确等价于「位于 backlog、尚未排期」，与 backlog 的迁移/建卡/派发禁令一致；
   // 独立目标不再创建即落 draft（原 g-137 行为会留下「非 backlog 的 draft」死角：既不可派发、界面也无入口转 planning）。
@@ -8242,6 +8373,14 @@ export function deleteGoal(
     goal: id,
     details: { id },
   });
+  // g-337：删除是唯一会让「现存/归档 frontmatter」丢失编号的路径，故在此把历史高水位落盘，
+  // 使旧项目（此前没有 next-seq.json）即便日后事件流被裁剪也不复用该编号。
+  // best-effort：删除已完成，此处失败只影响持久化兜底（事件流仍保留该编号作为历史证据）。
+  try {
+    raiseSeqFloor(root, seqUpperBound(root));
+  } catch {
+    /* 事件流不可读/磁盘异常：不回滚已完成的删除 */
+  }
 }
 
 /** g-233/g-270：提取目标描述小节正文（使用 fence-aware 的 sectionText 解析） */
