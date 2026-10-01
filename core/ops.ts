@@ -199,26 +199,27 @@ function sanitizeHeadingContent(text: string): string {
 }
 
 /**
- * 规范化目标描述正文中的 Markdown 标题语法（g-270）：
- * 1. 代码围栏（``` 或 ~~~）内的内容逐字保留，不作任何改动；
+ * 规范化目标描述正文中的 Markdown 标题语法（g-270；g-385 修正围栏识别口径）：
+ * 1. 代码围栏内的内容逐字保留，不作任何改动。围栏识别与 `sectionText`/`findSectionBounds`
+ *    **共用同一实现**（`computeClosedFenceMask`）：同字符才配对（``` 与 ~~~ 不混用）、
+ *    闭合长度必须 ≥ 开启长度、闭合行除围栏标记外不得有其余内容；未闭合围栏按既有口径
+ *    退化为普通文本行（与读侧一致，保证「写入 → 读回」不截断）。
+ *    （g-385 前为朴素 toggle：四反引号围栏内含三反引号示例时，代码内 ## 被改写、外部 ## 未降级。）
  * 2. 围栏外的 h1（#）与 h2（##）自动降级为 h3（###），既保留用户的标题语义与层级，
  *    又防止 ## 标题与 goal.md 顶层小节分隔符冲突；
  * 3. 围栏外的 h3 及更深层标题（###、#### 等）完全保留，不加字面反斜杠转义（无 \###）。
+ * 不变式：凡被 `sectionText` 视作小节边界的正文行（围栏外行首 `## `）都在降级集合内，
+ * 故本函数的输出重新写回 goal.md 后读回不会提前截断。
  */
 export function normalizeDescriptionHeadings(text: string): string {
   const lines = text.split("\n");
-  let inFence = false;
-  const fencePattern = /^(`{3,}|~{3,})/;
+  // 与读侧同一围栏识别：mask[i]=true 表示第 i 行处于「有效闭合围栏」内（含围栏标记行）
+  const fenceMask = computeClosedFenceMask(lines);
   for (let i = 0; i < lines.length; i++) {
+    if (fenceMask[i]) continue;
     const line = lines[i];
-    if (fencePattern.test(line.trimStart())) {
-      inFence = !inFence;
-      continue;
-    }
-    if (!inFence) {
-      if (/^[ \t]{0,3}#{1,2}[ \t]+/.test(line) && !/^[ \t]{0,3}#{3,}/.test(line)) {
-        lines[i] = line.replace(/^([ \t]{0,3})#{1,2}([ \t]+)/, "$1###$2");
-      }
+    if (/^[ \t]{0,3}#{1,2}[ \t]+/.test(line) && !/^[ \t]{0,3}#{3,}/.test(line)) {
+      lines[i] = line.replace(/^([ \t]{0,3})#{1,2}([ \t]+)/, "$1###$2");
     }
   }
   return lines.join("\n");
@@ -1614,9 +1615,12 @@ export function createGoal(
     mkdirSync(join(root, "backlog"), { recursive: true });
   }
   // g-129: 支持初始描述——有 description 时替换 GOAL_BODY 的目标描述小节占位
+  // g-385: 创建与编辑同口径——初始描述同样经过围栏感知的标题规范化
+  // （此前创建路径完全不规范化：描述里的 ## 会直接写入并截断 sectionText 读回）
   let body = GOAL_BODY;
   if (opts.description?.trim()) {
-    body = body.replace(/## 目标描述\n/, `## 目标描述\n\n${opts.description.trim()}\n`);
+    const safe = normalizeDescriptionHeadings(opts.description.trim());
+    body = body.replace(/## 目标描述\n/, `## 目标描述\n\n${safe}\n`);
   }
   saveGoal(file, { meta, body });
   appendEvent(root, {
@@ -9063,21 +9067,16 @@ export function normalizeAppend(raw: string): { text: string; normalized: boolea
     throw new GraphError("append 只含标题没有正文");
   }
 
-  // 2. 降级正文中 h2 → h3（代码围栏内不处理）
-  let inFence = false;
-  const fencePattern = /^(`{3,}|~{3,})/;
+  // 2. 降级正文中 h2 → h3（代码围栏内不处理；g-385：与 normalizeDescriptionHeadings
+  //    共用同一围栏识别口径 computeClosedFenceMask，不再朴素 toggle）
+  const fenceMask = computeClosedFenceMask(lines);
   for (let i = 0; i < lines.length; i++) {
+    if (fenceMask[i]) continue;
     const line = lines[i];
-    if (fencePattern.test(line.trimStart())) {
-      inFence = !inFence;
-      continue;
-    }
-    if (!inFence) {
-      // 匹配 h2（## 开头）但不匹配 h3+（### 开头）
-      if (/^[ \t]{0,3}##[ \t]+/.test(line) && !/^#{3}/.test(line)) {
-        lines[i] = line.replace(/^([ \t]{0,3})##([ \t]+)/, "$1###$2");
-        normalized = true;
-      }
+    // 匹配 h2（## 开头）但不匹配 h3+（### 开头）
+    if (/^[ \t]{0,3}##[ \t]+/.test(line) && !/^#{3}/.test(line)) {
+      lines[i] = line.replace(/^([ \t]{0,3})##([ \t]+)/, "$1###$2");
+      normalized = true;
     }
   }
 
