@@ -96,7 +96,7 @@ import {
   type MemoryScope,
 } from "./events.ts";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.ts";
-import { withTx, TxError, TxCasError, type TxContext } from "./transaction.ts";
+import { withTx, TxError, TxCasError, commitPrepared, type TxContext } from "./transaction.ts";
 import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema, type ObjectSchema } from "./schema.ts";
 
 import {
@@ -383,7 +383,9 @@ export function readSupervisorSession(root: string): string | null {
 /** 写 project.yaml 的 supervisor.session（g-117）：原子写（临时文件 + rename）、事件先行。
  *  有则替换值并保留行尾注释与其他键。事件：supervisor.claimed（actor 为调用者）。
  *  幂等由 claimSupervisor 把关（值未变不重复记事件）；本 op 每次调用都写 + 记事件。
- *  g-207：迁移到事务模板——锁保护下读-改-写，原子文件操作，事件先行。 */
+ *  g-207：迁移到事务模板——锁保护下读-改-写，原子文件操作，事件先行。
+ *  g-384：回调只做 prepare（计算新内容），写盘经 `persist` 在事件成功后才执行——
+ *  supervisor.claimed 追加失败 ⇒ project.yaml 保持原值；写盘失败 ⇒ tx.persist_failed 诊断。 */
 export function writeSupervisorSession(root: string, sessionId: string, actor: string): void {
   if (!sessionId.trim()) throw new GraphError("session id 不能为空");
   const file = join(root, "project.yaml");
@@ -392,9 +394,11 @@ export function writeSupervisorSession(root: string, sessionId: string, actor: s
     { root, actor },
     { lockName: "project.yaml" },
     (ctx) => {
+      // prepare：只计算新内容，**不落盘**（g-384：写盘放进 persist，事件成功后才执行）
       const text = existsSync(file) ? readFileSync(file, "utf8") : "";
       const lines = text.split("\n");
       const blockIdx = lines.findIndex((l) => /^supervisor:\s*$/.test(l));
+      let next: string;
       if (blockIdx >= 0) {
         let sessionIdx = -1;
         let indent = "  ";
@@ -411,11 +415,11 @@ export function writeSupervisorSession(root: string, sessionId: string, actor: s
         } else {
           lines.splice(blockIdx + 1, 0, `${indent}session: ${sessionId}`);
         }
-        atomicWrite(file, lines.join("\n"));
+        next = lines.join("\n");
       } else {
         const block = `supervisor:\n  session: ${sessionId}`;
         const trimmed = text.replace(/\s+$/, "");
-        atomicWrite(file, trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`);
+        next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
       }
       return {
         value: undefined as void,
@@ -424,6 +428,7 @@ export function writeSupervisorSession(root: string, sessionId: string, actor: s
           event: "supervisor.claimed",
           details: { supervisor_session: sessionId },
         }],
+        persist: () => atomicWrite(file, next),
       };
     },
   );
@@ -1934,7 +1939,10 @@ export function formatGoalDirectiveSection(root: string, goalId: string): string
   return `## 最近指令（目标 ${goalId} 的当前补充约束）\n\n${directive}\n`;
 }
 
-/** 状态迁移：状态机校验 → 写回 frontmatter（保留正文）→ 追加事件。 */
+/** 状态迁移：状态机校验 → 事件先行（R-02）→ 写回 frontmatter（保留正文）。
+ *  g-384：顺序为 event → persist（commitPrepared）。事件追加失败 ⇒ 抛 TxError("event")，
+ *  goal.md **保持原值**，不再出现「报失败但状态已改变」；persist 失败 ⇒ 记 tx.persist_failed
+ *  并以 TxError("persist") 报出（重试同一调用即收敛）。 */
 export function transition(
   root: string,
   id: string,
@@ -1966,12 +1974,16 @@ export function transition(
     doc.meta.blocked_reason = null;
   }
   doc.meta.status = to;
-  saveGoal(file, doc);
-  appendEvent(root, {
-    actor: opts.actor,
-    event: "goal.transition",
-    goal: id,
-    details: { from, to, ...(opts.reason ? { reason: opts.reason } : {}) },
+  // prepare 只改内存；事件成功后才落盘（persist 由 helper 在 event 之后调用）
+  commitPrepared(root, { actor: opts.actor, goal: id }, {
+    value: undefined as void,
+    events: [{
+      actor: opts.actor,
+      event: "goal.transition",
+      goal: id,
+      details: { from, to, ...(opts.reason ? { reason: opts.reason } : {}) },
+    }],
+    persist: () => saveGoal(file, doc),
   });
 }
 
@@ -7669,12 +7681,16 @@ export function unbindGoalChild(
           if (oldAtt === binding.attempt) continue; // 跳过当前已解绑的 attempt
           const oldFile = join(attDir, oldAtt, "attempt.md");
           if (!existsSync(oldFile)) continue;
+          // g-384 F2：区分「事件已落盘后的失败」与「读取/预检阶段的失败」——
+          // 前者会让事件流宣称 superseded 而文件仍绑定，必须可诊断、绝不静默。
+          let eventWritten = false;
+          let supersededChildId: string | null = null;
           try {
             const oldDoc = loadGoal(oldFile);
             if (oldDoc.meta.id !== oldAtt || oldDoc.meta.goal !== goalId) continue;
             // 只处理有绑定且未解绑的旧 attempt
             if (oldDoc.meta.detached === true) continue;
-            const supersededChildId = oldDoc.meta.child_id ?? null;
+            supersededChildId = oldDoc.meta.child_id ?? null;
             if (!supersededChildId) continue;
             // 逐项 live 预检（g-382）：running/unknown 不得清理；无 liveCheck ⇒ unknown ⇒ 保留。
             const oldLive = opts.liveCheck ? opts.liveCheck(String(supersededChildId)) : "unknown";
@@ -7692,6 +7708,7 @@ export function unbindGoalChild(
                 live_state: oldLive,
               },
             });
+            eventWritten = true;
             // 标记为 superseded（被新 attempt 绑定取代）
             oldDoc.meta.detached = true;
             oldDoc.meta.detached_at = detachedAt;
@@ -7704,7 +7721,26 @@ export function unbindGoalChild(
             // g-374：被取代的旧 attempt 也记完成摘要占位（source=detach / reason=superseded）。
             detachedForResults.push({ attempt: oldAtt, childId: supersededChildId, reason: "superseded" });
           } catch (e) {
-            // 忽略旧 attempt 的读取错误，不影响当前解绑
+            const msg = String((e as Error)?.message ?? e);
+            // g-384 F2：失败必须可诊断——补记 attempt.supersede_failed（best-effort，
+            // 绝不覆盖原始错误）。rebuild 不重放 attempt 事件，无此诊断则「事件=superseded、
+            // 文件=仍绑定」既无对账也无从发现。读取/预检阶段的失败同样留痕（event_written=false）。
+            try {
+              appendEvent(root, {
+                actor: "system",
+                event: "attempt.supersede_failed",
+                goal: goalId,
+                details: {
+                  attempt: oldAtt,
+                  child_id: supersededChildId,
+                  error: msg,
+                  event_written: eventWritten,
+                  phase: eventWritten ? "persist" : "prepare",
+                  reason: "被新 attempt " + binding.attempt + " 的绑定取代",
+                },
+              });
+            } catch { /* 诊断写入失败：绝不覆盖原始错误 */ }
+            // 忽略旧 attempt 的失败，不影响当前解绑
             console.warn("[g-190] 标记旧 attempt " + oldAtt + " 为 superseded 失败:", e);
           }
         }
