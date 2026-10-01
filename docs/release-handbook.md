@@ -101,7 +101,7 @@ git -C .worktrees/release-vX.Y.Z describe --tags   # 必须输出 vX.Y.Z
 # 3. 在发布树里构建 dist/（发布物的唯一来源），并核对版本号与产物内容
 (cd .worktrees/release-vX.Y.Z && bash scripts/build.sh)
 node -p "require('./.worktrees/release-vX.Y.Z/dist/package.json').version"   # 必须 == X.Y.Z
-(cd .worktrees/release-vX.Y.Z/dist && pnpm pack --dry-run)                   # 核对文件清单（应为 36 个文件）
+(cd .worktrees/release-vX.Y.Z/dist && pnpm pack --dry-run)                   # 核对文件清单（v0.18.0 起应为 37 个文件）
 
 # 4. 在 dist/ 里发布（发布物必须来自「tag 树构建出的 dist/」）
 (cd .worktrees/release-vX.Y.Z/dist && pnpm publish --registry=https://registry.npmjs.org --no-git-checks)
@@ -123,6 +123,14 @@ git worktree remove .worktrees/release-vX.Y.Z
 > 时间戳）。差异纯在打包层（条目顺序 + gzip 头/参数）。故：
 > **跨机器传递**（本机 ↔ Windows）用 tarball sha256 对账（红线 3）；
 > **registry 侧**必须用**内容级**对账（`diff -r` 或逐文件 sha256 列表）。
+>
+> **v0.18.0 再次实证（2026-10-02）**：npm `dist.integrity` = `sha512-qZFf141MLYECy4jdPBXRWZXPrjU7h+44EP4kcepesQC3yTJ+fBYGomNmcjjaWUuXNJR51B5ZfQlJJqIObP1Kqg==`
+> （tarball **570,878 B**）vs 本地 `pnpm pack` = `sha512-MOgg3ZJd…`（**570,157 B**）——**差 721 B**；
+> 但 `diff -rq` **零差异**、**37/37 文件**、排除 `package.json` 后逐文件 sha256 聚合两边同为
+> `daf705b6a6ee919f…`，且 `package.json` 本身**逐字节相同**。⇒ 规则不变，**别拿 tarball sha256 比 registry**；
+> 只有**同一个本地 tarball**（v0.18.0 = `3ae728dd…`，570,157 B）才用于本机 ↔ Windows/macOS 的对账。
+> 另：`npm publish` 会**重新压缩并改写** tarball，因此**发布后不可能用本地 sha256 复现 registry 指纹**，
+> 这不是发布事故、**无需返工**——按内容级判据放行即可。
 
 > 注意：**registry 与登录态（2026-09-21 实测更新）**——早先「`~/.npmrc` 指向 npmmirror 镜像且未登录」
 > 的描述已过时：当前 `npm config get registry` 输出 `https://registry.npmjs.org/`。
@@ -137,7 +145,7 @@ git worktree remove .worktrees/release-vX.Y.Z
 > ⚠️ **`dist/` 里不要留 `.tgz`**：若在 `dist/` 里试打过包（`pnpm pack` 会就地生成
 > `dsh-graph-X.Y.Z.tgz`），**必须先删掉再 `publish`**，否则该 tgz 会被当作普通文件一起打进发布包，
 > 污染发布物。发布前固定核对两项：
-> `find dist -type f | wc -l`（期望 **36**）与 `find dist -name '*.tgz' | wc -l`（期望 **0**）。
+> `find dist -type f | wc -l`（**v0.18.0 起期望 37**：g-381 新增 `lib/client/search-match.js`；此前为 36）与 `find dist -name '*.tgz' | wc -l`（期望 **0**）。
 >
 > 另：本机 `/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf` 权限损坏会导致所有 ssh 推送失败
 > （`Bad owner or permissions on ...`），git push 一律加 `GIT_SSH_COMMAND="ssh -F /dev/null"`（v0.9.2、
