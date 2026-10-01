@@ -1,5 +1,5 @@
-# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.17.1 开发线；g-381 重新冻结：kanban.js executeSearch 的候选收集与匹配判定抽取为 search-match.js 唯一实现（搜索泳道行为逐字不变）⇒ 签名正文与 content-sha256 逐字节未变（已用 G352_SIG_DUMP 导出与旧基线 diff 验证 0 行差异），仅 source-sha256 头随 kanban.js 变更）
-# source-commit: 07e01120ab11a50e7ac7306276cd36e095fc4b4a
+# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.18.0 开发线；g-380 关系标记入口 / g-381 搜索式对端选择 / 弹窗关系清单 等客户端与 kanban.js 改动均未触及签名正文 ⇒ 正文与 content-sha256 逐字节未变（已用 G352_SIG_DUMP 导出并与旧基线 diff 验证 0 行差异），仅 source-sha256 头随源码变更；本次同步更新本说明文字以反映当前开发线）
+# source-commit: 1edfaddc306c0fa18f0e278599c2b62736955f7d
 # source-sha256: 42a98df99d8bc6d3c4e4171123f55b8a1a009443d4b40615723c1335f9b9e786
 # source-files: kanban,constants,narrow-width,helpers   # 源 hash 覆盖的模块（决定头部/泳道渲染）
 # content-sha256: 0e6b7094deafa61e0525d617f792a8da30b9aeba1a3c72cb221ee4061f783ed3
