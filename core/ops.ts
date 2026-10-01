@@ -7681,12 +7681,16 @@ export function unbindGoalChild(
           if (oldAtt === binding.attempt) continue; // 跳过当前已解绑的 attempt
           const oldFile = join(attDir, oldAtt, "attempt.md");
           if (!existsSync(oldFile)) continue;
+          // g-384 F2：区分「事件已落盘后的失败」与「读取/预检阶段的失败」——
+          // 前者会让事件流宣称 superseded 而文件仍绑定，必须可诊断、绝不静默。
+          let eventWritten = false;
+          let supersededChildId: string | null = null;
           try {
             const oldDoc = loadGoal(oldFile);
             if (oldDoc.meta.id !== oldAtt || oldDoc.meta.goal !== goalId) continue;
             // 只处理有绑定且未解绑的旧 attempt
             if (oldDoc.meta.detached === true) continue;
-            const supersededChildId = oldDoc.meta.child_id ?? null;
+            supersededChildId = oldDoc.meta.child_id ?? null;
             if (!supersededChildId) continue;
             // 逐项 live 预检（g-382）：running/unknown 不得清理；无 liveCheck ⇒ unknown ⇒ 保留。
             const oldLive = opts.liveCheck ? opts.liveCheck(String(supersededChildId)) : "unknown";
@@ -7704,6 +7708,7 @@ export function unbindGoalChild(
                 live_state: oldLive,
               },
             });
+            eventWritten = true;
             // 标记为 superseded（被新 attempt 绑定取代）
             oldDoc.meta.detached = true;
             oldDoc.meta.detached_at = detachedAt;
@@ -7716,7 +7721,26 @@ export function unbindGoalChild(
             // g-374：被取代的旧 attempt 也记完成摘要占位（source=detach / reason=superseded）。
             detachedForResults.push({ attempt: oldAtt, childId: supersededChildId, reason: "superseded" });
           } catch (e) {
-            // 忽略旧 attempt 的读取错误，不影响当前解绑
+            const msg = String((e as Error)?.message ?? e);
+            // g-384 F2：失败必须可诊断——补记 attempt.supersede_failed（best-effort，
+            // 绝不覆盖原始错误）。rebuild 不重放 attempt 事件，无此诊断则「事件=superseded、
+            // 文件=仍绑定」既无对账也无从发现。读取/预检阶段的失败同样留痕（event_written=false）。
+            try {
+              appendEvent(root, {
+                actor: "system",
+                event: "attempt.supersede_failed",
+                goal: goalId,
+                details: {
+                  attempt: oldAtt,
+                  child_id: supersededChildId,
+                  error: msg,
+                  event_written: eventWritten,
+                  phase: eventWritten ? "persist" : "prepare",
+                  reason: "被新 attempt " + binding.attempt + " 的绑定取代",
+                },
+              });
+            } catch { /* 诊断写入失败：绝不覆盖原始错误 */ }
+            // 忽略旧 attempt 的失败，不影响当前解绑
             console.warn("[g-190] 标记旧 attempt " + oldAtt + " 为 superseded 失败:", e);
           }
         }

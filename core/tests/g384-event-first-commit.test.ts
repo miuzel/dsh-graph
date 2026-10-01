@@ -8,12 +8,15 @@
  *  ① 事件追加失败：goal.md / project.yaml **逐字节**保持原值，错误准确表达失败阶段；
  *  ② 事件成功而落盘失败：诊断事件 + 阶段=persist，重试后事件与 frontmatter 对账一致；
  *  ③ 正常操作：事件重放与文件对账一致（rebuild 无 drift）；
- *  ④ withTx 契约单元钉：event 失败不执行 persist；两条失败路径都释放锁、无锁/临时文件残留。
+ *  ④ withTx 契约单元钉：event 失败不执行 persist；两条失败路径都释放锁、无锁/临时文件残留；
+ *  ⑤ F2（主管指定必做）：取代路径「attempt.superseded 已落盘、attempt.md 落盘失败」
+ *     必须补记 `attempt.supersede_failed`（否则 rebuild 不重放 attempt 事件 ⇒ 无从发现）。
  *
  *  负向对照（改坏/回退修复就会红）：
  *  - 把 transition 改回 `saveGoal` → `appendEvent`，① 的「goal.md 逐字节未变」立即失败；
  *  - 把 writeSupervisorSession 的 atomicWrite 搬回 withTx 回调内，① 的
  *    「project.yaml 逐字节未变」立即失败；
+ *  - 去掉取代路径 catch 里的 `attempt.supersede_failed` 补记，⑤ 立即失败；
  *  - 把 withTx 的 `if (acquired) releaseLock` 改回无条件释放，
  *    core/tests/g383-lock-ownership.test.ts ② 立即失败（g-383 锁所有权语义未被本改动弱化）。
  */
@@ -24,7 +27,7 @@ import fs from "node:fs";
 import { mkdtempSync, readFileSync, existsSync, writeFileSync, readdirSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   init,
   createGoal,
@@ -35,6 +38,9 @@ import {
   rebuild,
   writeSupervisorSession,
   readSupervisorSession,
+  startAttempt,
+  bindAttemptChild,
+  unbindGoalChild,
 } from "../ops.ts";
 import { withTx, atomicWrite } from "../transaction.ts";
 import { readEvents } from "../events.ts";
@@ -318,5 +324,67 @@ test("g-384④：event 失败不执行 persist；persist 失败释放锁并落�
   assert.ok(evs.some((e) => e.event === "tx.persist_failed"));
   assert.equal(existsSync(target), false);
   assert.equal(existsSync(join(root, ".lock.g384")), false, "persist 失败也必须释放锁");
+  assertNoResidue(root);
+});
+
+// ---------------------------------------------------------------------------
+// ⑤ F2（主管指定必做）：取代路径「事件已落盘、attempt.md 落盘失败」必须可诊断
+// ---------------------------------------------------------------------------
+
+/** 同目标两个 attempt：旧（child-old，稍后被取代）+ 最新（child-new）。 */
+function twoBoundAttempts(): { root: string; goal: string; oldAtt: string; newAtt: string } {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-g384-supersede-"));
+  init(root);
+  const goal = createGoal(root, { title: "g-384 F2", version: "v0.19.0", actor: ACTOR });
+  setCriteria(root, goal, ["取代失败必须可诊断"], ACTOR);
+  const oldAtt = startAttempt(root, goal, { executor: "agent:exec-old", actor: ACTOR });
+  bindAttemptChild(root, goal, oldAtt, "child-old", ACTOR, "sess-old");
+  const newAtt = startAttempt(root, goal, { executor: "agent:exec-new", actor: ACTOR });
+  bindAttemptChild(root, goal, newAtt, "child-new", ACTOR, "sess-new");
+  return { root, goal, oldAtt, newAtt };
+}
+
+test("g-384⑤ F2：superseded 事件已落盘而 attempt.md 落盘失败 ⇒ 补记 attempt.supersede_failed", () => {
+  const { root, goal, oldAtt, newAtt } = twoBoundAttempts();
+  const attDir = join(dirname(findGoalFile(root, goal)), "attempts");
+  const oldFile = join(attDir, oldAtt, "attempt.md");
+  const newFile = join(attDir, newAtt, "attempt.md");
+  const oldBefore = readFileSync(oldFile, "utf8");
+  const token = String(loadGoal(newFile).meta.binding_token);
+
+  const restore = failPersist(oldFile);
+  let res: ReturnType<typeof unbindGoalChild> | undefined;
+  let err: Error | undefined;
+  try {
+    res = unbindGoalChild(root, goal, {
+      actor: ACTOR,
+      attempt: newAtt,
+      token,
+      liveCheck: () => "idle",
+    });
+  } catch (e) {
+    err = e as Error;
+  } finally {
+    restore();
+  }
+
+  assert.equal(err, undefined, "旧 attempt 取代失败不得让本次解绑整体失败（不改变既有语义）");
+  assert.equal(res?.detached, true, "selector 选中的最新 attempt 已正常解绑");
+
+  // 危险窗口：事件流已宣称 superseded（真相源已前进），文件却仍绑定
+  const superseded = readEvents(root).filter((e) => e.event === "attempt.superseded" && e.goal === goal);
+  assert.equal(superseded.length, 1);
+  assert.equal(superseded[0].details?.child_id, "child-old");
+  assert.equal(readFileSync(oldFile, "utf8"), oldBefore, "落盘失败 ⇒ 旧 attempt 文件逐字节原值（仍绑定）");
+  assert.equal(loadGoal(oldFile).meta.child_id, "child-old");
+
+  // 必须留下显式诊断（无此事件则该窗口既无对账也无从发现——负向对照点）
+  const failed = readEvents(root).filter((e) => e.event === "attempt.supersede_failed" && e.goal === goal);
+  assert.equal(failed.length, 1, "必须补记恰好一条 attempt.supersede_failed");
+  assert.equal(failed[0].details?.attempt, oldAtt);
+  assert.equal(failed[0].details?.child_id, "child-old");
+  assert.equal(failed[0].details?.event_written, true);
+  assert.equal(failed[0].details?.phase, "persist");
+  assert.match(String(failed[0].details?.error), /EIO/);
   assertNoResidue(root);
 });
