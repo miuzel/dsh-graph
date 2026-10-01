@@ -1144,34 +1144,25 @@
       const backdropGuard = useBackdropClose(props.onClose);
 
       // g-270：代码围栏感知的小节提取函数，围栏内的 ## 标题不被误判为分隔符
+      // g-385：围栏识别改用 markdown.js 共享的 computeClosedFenceMask（与 core 同一口径）——
+      // 原朴素 toggle 在「四反引号围栏内含三反引号示例」的合法文档里会翻转错位，
+      // 使后续 `## 质量判据` 被误判为仍在围栏内而整节失踪。
       const section = (body, name) => {
         if (!body) return null;
         const lines = body.split("\n");
         const head = `## ${name}`;
+        const fenceMask = computeClosedFenceMask(lines);
         let start = -1;
-        let inFence = false;
-        const fencePattern = /^(`{3,}|~{3,})/;
         for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          if (fencePattern.test(line.trimStart())) {
-            inFence = !inFence;
-            continue;
-          }
-          if (!inFence && line.trim() === head) {
+          if (!fenceMask[i] && lines[i].trim() === head) {
             start = i;
             break;
           }
         }
         if (start < 0) return null;
         let end = lines.length;
-        inFence = false;
         for (let i = start + 1; i < lines.length; i++) {
-          const line = lines[i];
-          if (fencePattern.test(line.trimStart())) {
-            inFence = !inFence;
-            continue;
-          }
-          if (!inFence && line.startsWith("## ")) {
+          if (!fenceMask[i] && lines[i].startsWith("## ")) {
             end = i;
             break;
           }

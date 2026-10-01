@@ -1,6 +1,40 @@
     // g-270 / g-275：Markdown 共享解析、渲染与模式切换控件模块
     // 供目标描述（goal-modal.js）与卡片抽屉（card-drawer.js）共同复用
 
+    // g-385：代码围栏感知的小节切分（客户端与 core 的 computeClosedFenceMask 同一口径）。
+    // mask[i]=true 表示第 i 行处于「有效闭合围栏」内（含围栏标记行）：
+    // 同字符才配对（``` 与 ~~~ 不混用）、闭合长度必须 ≥ 开启长度、闭合行除标记外无其余内容；
+    // 未闭合围栏退化为普通文本行（与 core sectionText 一致，避免合法四反引号围栏让后续 ## 小节失踪）。
+    function computeClosedFenceMask(lines) {
+      const mask = new Array(lines.length).fill(false);
+      const fencePattern = /^(`{3,}|~{3,})/;
+      let i = 0;
+      while (i < lines.length) {
+        const match = lines[i].trimStart().match(fencePattern);
+        if (match) {
+          const fenceChar = match[1][0];
+          const fenceLen = match[1].length;
+          let closeIdx = -1;
+          for (let j = i + 1; j < lines.length; j++) {
+            const nextMatch = lines[j].trimStart().match(fencePattern);
+            if (nextMatch && nextMatch[1][0] === fenceChar && nextMatch[1].length >= fenceLen) {
+              if (lines[j].trimStart().slice(nextMatch[1].length).trim() === "") {
+                closeIdx = j;
+              }
+              break;
+            }
+          }
+          if (closeIdx !== -1) {
+            for (let k = i; k <= closeIdx; k++) mask[k] = true;
+            i = closeIdx + 1;
+            continue;
+          }
+        }
+        i++;
+      }
+      return mask;
+    }
+
     // g-270：轻量行内 Markdown 解析器（纯 React 元素树，零 innerHTML，天然免疫 XSS）
     function parseInlineMarkdown(text) {
       if (!text) return [];
@@ -336,5 +370,6 @@ export {
   markdownSegStyle,
   segStyle,
   MarkdownViewToggle,
+  computeClosedFenceMask,
 };
 // <<<ESM-EXPORTS-END<<<
