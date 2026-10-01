@@ -96,7 +96,7 @@ import {
   type MemoryScope,
 } from "./events.ts";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.ts";
-import { withTx, TxError, TxCasError, type TxContext } from "./transaction.ts";
+import { withTx, TxError, TxCasError, commitPrepared, type TxContext } from "./transaction.ts";
 import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema, type ObjectSchema } from "./schema.ts";
 
 import {
@@ -383,7 +383,9 @@ export function readSupervisorSession(root: string): string | null {
 /** 写 project.yaml 的 supervisor.session（g-117）：原子写（临时文件 + rename）、事件先行。
  *  有则替换值并保留行尾注释与其他键。事件：supervisor.claimed（actor 为调用者）。
  *  幂等由 claimSupervisor 把关（值未变不重复记事件）；本 op 每次调用都写 + 记事件。
- *  g-207：迁移到事务模板——锁保护下读-改-写，原子文件操作，事件先行。 */
+ *  g-207：迁移到事务模板——锁保护下读-改-写，原子文件操作，事件先行。
+ *  g-384：回调只做 prepare（计算新内容），写盘经 `persist` 在事件成功后才执行——
+ *  supervisor.claimed 追加失败 ⇒ project.yaml 保持原值；写盘失败 ⇒ tx.persist_failed 诊断。 */
 export function writeSupervisorSession(root: string, sessionId: string, actor: string): void {
   if (!sessionId.trim()) throw new GraphError("session id 不能为空");
   const file = join(root, "project.yaml");
@@ -392,9 +394,11 @@ export function writeSupervisorSession(root: string, sessionId: string, actor: s
     { root, actor },
     { lockName: "project.yaml" },
     (ctx) => {
+      // prepare：只计算新内容，**不落盘**（g-384：写盘放进 persist，事件成功后才执行）
       const text = existsSync(file) ? readFileSync(file, "utf8") : "";
       const lines = text.split("\n");
       const blockIdx = lines.findIndex((l) => /^supervisor:\s*$/.test(l));
+      let next: string;
       if (blockIdx >= 0) {
         let sessionIdx = -1;
         let indent = "  ";
@@ -411,11 +415,11 @@ export function writeSupervisorSession(root: string, sessionId: string, actor: s
         } else {
           lines.splice(blockIdx + 1, 0, `${indent}session: ${sessionId}`);
         }
-        atomicWrite(file, lines.join("\n"));
+        next = lines.join("\n");
       } else {
         const block = `supervisor:\n  session: ${sessionId}`;
         const trimmed = text.replace(/\s+$/, "");
-        atomicWrite(file, trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`);
+        next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
       }
       return {
         value: undefined as void,
@@ -424,6 +428,7 @@ export function writeSupervisorSession(root: string, sessionId: string, actor: s
           event: "supervisor.claimed",
           details: { supervisor_session: sessionId },
         }],
+        persist: () => atomicWrite(file, next),
       };
     },
   );
@@ -1934,7 +1939,10 @@ export function formatGoalDirectiveSection(root: string, goalId: string): string
   return `## 最近指令（目标 ${goalId} 的当前补充约束）\n\n${directive}\n`;
 }
 
-/** 状态迁移：状态机校验 → 写回 frontmatter（保留正文）→ 追加事件。 */
+/** 状态迁移：状态机校验 → 事件先行（R-02）→ 写回 frontmatter（保留正文）。
+ *  g-384：顺序为 event → persist（commitPrepared）。事件追加失败 ⇒ 抛 TxError("event")，
+ *  goal.md **保持原值**，不再出现「报失败但状态已改变」；persist 失败 ⇒ 记 tx.persist_failed
+ *  并以 TxError("persist") 报出（重试同一调用即收敛）。 */
 export function transition(
   root: string,
   id: string,
@@ -1966,12 +1974,16 @@ export function transition(
     doc.meta.blocked_reason = null;
   }
   doc.meta.status = to;
-  saveGoal(file, doc);
-  appendEvent(root, {
-    actor: opts.actor,
-    event: "goal.transition",
-    goal: id,
-    details: { from, to, ...(opts.reason ? { reason: opts.reason } : {}) },
+  // prepare 只改内存；事件成功后才落盘（persist 由 helper 在 event 之后调用）
+  commitPrepared(root, { actor: opts.actor, goal: id }, {
+    value: undefined as void,
+    events: [{
+      actor: opts.actor,
+      event: "goal.transition",
+      goal: id,
+      details: { from, to, ...(opts.reason ? { reason: opts.reason } : {}) },
+    }],
+    persist: () => saveGoal(file, doc),
   });
 }
 

@@ -9,6 +9,12 @@
  * - 锁内重读/CAS：读-改-写必须在锁保护下完成，写前重读校验预期状态。
  * - 有限恢复：失败时记录诊断信息，不吞错、不递归扩大失败路径。
  * - 基本安全：越界/凭据/明显 symlink 安全检查保留。
+ *
+ * g-384：prepare → event → persist 三段契约的**唯一次序实现**是
+ * {@link commitPrepared}（withTx 在其上加锁）；两个阶段的失败语义与诊断见该函数注释，
+ * 完整契约/审计清单见 docs/event-first-commit-contract.zh.md。
+ * 注意：事件先行 ≠ 跨文件原子事务——helper 只保证「event 失败则磁盘原值不动」
+ * 与「persist 失败可诊断」，不宣称多文件一致。
  */
 
 import { readFileSync, existsSync, writeFileSync, rmSync, lstatSync } from "node:fs";
@@ -143,38 +149,119 @@ function releaseLock(lockPath: string): void {
   } catch { /* 锁文件可能已被其他进程清理 */ }
 }
 
+/** g-384：一次提交的「准备结果」——prepare/event/persist 契约的载体。
+ *
+ *  - `value`/`events`：由**调用方（prepare 阶段）**产出，必须是纯内存结果；
+ *    prepare 阶段不得有文件副作用（写文件一律放进 `persist`），否则事件失败时
+ *    磁盘已经被改动，契约失效。
+ *  - `persist`：唯一允许写盘的地方，只在 event 阶段全部成功后才被调用；
+ *    省略表示本次提交无文件写入（纯事件追加）。 */
+export interface PreparedCommit<T> {
+  value: T;
+  events: Omit<GraphEvent, "ts">[];
+  persist?: () => void;
+}
+
+/** 提交结果：返回值 + 本次真实写入的事件（含 ts）。 */
+export interface CommitOutcome<T> {
+  value: T;
+  events: GraphEvent[];
+}
+
+/** g-384（v0.18.0 审查 C3）：事件先行提交——prepare → event → persist 的唯一次序实现。
+ *
+ *  契约（三段，职责边界明确，不宣称跨文件原子事务）：
+ *  1. **prepare**（调用方，调用本函数之前）：校验 + 全部内存变更，零文件副作用。
+ *  2. **event**（本函数）：任何文件写入之前先消费 `plan.events`（R-02 事件先行）。
+ *     本阶段失败 ⇒ 抛出 TxError(phase="event")，**persist 不执行** ⇒ 磁盘保持原值，
+ *     调用方报错阶段准确（这是「失败时不留下已改状态」的保证）。
+ *  3. **persist**（本函数）：事件已落盘后写文件。本阶段失败 ⇒ 补记一条
+ *     `tx.persist_failed` 诊断事件（best-effort，绝不覆盖原始错误）并抛出
+ *     TxError(phase="persist")：事件流（唯一真相源）已前进而投影文件未更新，
+ *     属**可诊断、可收敛**的有限恢复场景——幂等重试同一调用即可对齐；
+ *     诊断事件本身写不进去时只保留异常信息，不引入无限 rollback。
+ *
+ *  诚实边界：event 与 persist 是两个文件/两套写入，中间**不是**原子窗口；
+ *  本 helper 不提供跨文件事务，也不自动重试（自动重试会掩盖真实 EIO/ENOSPC）。 */
+export function commitPrepared<T>(
+  root: string,
+  meta: { actor: string; goal?: string },
+  plan: PreparedCommit<T>,
+): CommitOutcome<T> {
+  // ---- event 阶段：先追加事件，失败则磁盘原值不动 ----
+  const written: GraphEvent[] = [];
+  try {
+    for (const ev of plan.events) written.push(appendEvent(root, ev));
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e);
+    const where = meta.goal ? `目标 ${meta.goal}；` : "";
+    throw new TxError(
+      `事件追加失败（event 阶段：${where}未发生任何文件写入，磁盘保持原值）：${msg}`,
+      "event",
+      true,
+    );
+  }
+  if (!plan.persist) return { value: plan.value, events: written };
+
+  // ---- persist 阶段：事件已落盘后写文件；失败补记诊断事件 ----
+  try {
+    plan.persist();
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e);
+    try {
+      appendEvent(root, {
+        actor: meta.actor,
+        event: "tx.persist_failed",
+        ...(meta.goal ? { goal: meta.goal } : {}),
+        details: {
+          phase: "persist",
+          error: msg,
+          events: written.map((w) => w.event),
+          recovery: "retry",
+        },
+      });
+    } catch { /* 诊断写入失败：绝不覆盖原始错误 */ }
+    throw new TxError(
+      "文件持久化失败（persist 阶段：事件已先行落盘，磁盘可能落后于事件流；" +
+        `已补记 tx.persist_failed，重试同一调用即可收敛）：${msg}`,
+      "persist",
+      e instanceof TxError ? e.recoverable : true,
+    );
+  }
+  return { value: plan.value, events: written };
+}
+
 /** 在锁保护下执行读-改-写事务。
- *  流程：校验 → 加锁 → 重读 → CAS 校验 → 内存变更 → 事件先行 → 持久化 → 解锁。
+ *  流程：校验 → 加锁 → prepare（重读 + CAS + 内存变更）→ 事件先行 → 持久化 → 解锁。
  *  任何阶段失败立即解锁并返回 TxFailure，不递归重试。
+ *  回调只负责 prepare：**不得在回调里写盘**——把文件写入放进返回值的 `persist`
+ *  （见 {@link commitPrepared}），否则 event 失败时磁盘已被改动（g-384 修复的正是这一形态）。
  *  g-383：只有 acquireLock 正常返回（本次确实取得锁）才释放；超时/同进程嵌套
  *  获取失败的调用不持有锁，绝不释放——否则会删掉原持有者仍在使用的锁，
  *  使后续调用得以闯入其临界区。 */
 export function withTx<T>(
   ctx: TxContext,
   opts: { lockName: string; lockTimeoutMs?: number },
-  fn: (ctx: TxContext) => { value: T; events: Omit<GraphEvent, "ts">[] },
+  fn: (ctx: TxContext) => PreparedCommit<T>,
 ): TxResult<T> | TxFailure {
   const lockPath = lockFilePath(ctx.root, opts.lockName);
-  let phase: TxPhase = "validate";
+  const phase: TxPhase = "validate"; // 未分类异常的回报阶段（历史口径，见下方 catch）
   let acquired = false; // 本次调用是否真正取得锁（唯一释放依据）
   try {
     // 1. 加锁
     acquireLock(lockPath, opts.lockTimeoutMs ?? 5000);
     acquired = true; // 抛错则不会执行到这里：超时/嵌套失败者无所有权
 
-    // 2. 执行业务逻辑（在锁内）
-    const result = fn(ctx);
+    // 2. prepare：锁内只读 + 内存变更（回调不得有文件副作用）
+    //    未分类异常仍按历史语义回报 phase="validate"（既有断言标题依赖该口径）
+    const plan = fn(ctx);
 
-    // 3. 事件先行
-    phase = "event";
-    const events: GraphEvent[] = [];
-    for (const ev of result.events) {
-      events.push(appendEvent(ctx.root, ev));
-    }
+    // 3. event 先行 + 4. persist（唯一次序实现，含失败诊断）
+    const outcome = commitPrepared(ctx.root, { actor: ctx.actor, goal: ctx.goal }, plan);
 
-    // 4. 返回成功
+    // 5. 返回成功
     releaseLock(lockPath);
-    return { ok: true, value: result.value, events };
+    return { ok: true, value: outcome.value, events: outcome.events };
   } catch (e) {
     if (acquired) releaseLock(lockPath); // 获取失败者无锁：不得释放他人的锁
     if (e instanceof TxError) {
