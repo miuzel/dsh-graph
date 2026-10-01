@@ -1199,11 +1199,23 @@ export function isHumanActor(actor?: string): boolean {
 }
 
 /** 格式化常驻记忆：供所有会话作为独立 section 固定植入。
- *  - 严格统一预算与条数上限（默认 10 条、2000 字符），防止无限制膨胀；
- *  - 重要约束优先：安全/隔离禁令及高重要度条目优先排入，不静默丢弃；
- *  - 明确来源权威区分：人类授权沉淀 vs Agent 自发总结，避免提升背景材料权威；
- *  - 溢出项显式列出 id 及摘要/digest，明确可见且可通过 recallMemory 按需检索；
- *  - 隐私 user 记忆隔离：未提供匹配 actor 时不跨 actor 暴露。
+ *
+ *  g-252 计量与溢出策略（只修选择/说明，**不**引入第二套预算体系）：
+ *  - 计量口径唯一：`maxChars` 计的是**整条渲染行的码点数**（`- **[id]**（来源，目标:x）正文`），
+ *    id / 来源权威标注 / 正文三者一并计入 ⇒ 声明预算即真实上界，不再「正文没超、渲染超了」；
+ *    `maxItems` 计注入条目数。两者都是**硬上限**，任何分支都不得豁免。
+ *  - 关键禁令超限策略：优先级仍为 关键约束（安全/隔离禁令关键词或 importance≥5）> 人类授权
+ *    > 重要度 > 更新时间，因此禁令只会被**另一条禁令**挤出，不会被普通条目挤占；但约束
+ *    **不再豁免**条数/字符上限（修复 g-240 遗留的 `isConstraint || 预算检查` OR 放行）。
+ *    关键约束落入溢出时不算静默丢弃：段内**显式停报**（未注入条数 + id + 停报原因 + 处置建议）。
+ *    记忆条目本身绝不删除，仍可由 recallMemory 按需取回。
+ *  - 溢出提示自身有界：列出条数 / 单条 digest / 整块字符三重上限，且只给 id+digest、
+ *    **不复制禁令正文** ⇒ 不会用另一段无界文本把折叠掉的禁令补回来。
+ *  - 明确来源权威区分：人类授权沉淀 vs Agent 自发总结，避免提升背景材料权威。
+ *  - 隐私 user 记忆隔离（现状如实，未改）：`recallMemory` 对 `kind:"user"` 只放行
+ *    `actor` 非空且 `owner === actor` 的条目 ⇒ 无 actor 的常驻路径（host 固定植入章节）
+ *    看不到任何 user 条目，user 常驻记忆在该路径等价「仅按需 recall」；只有传入可信 actor
+ *    的路径（如 generateHandoff）才按 owner 注入，且不同 actor 之间互不可见。
  */
 export function formatStandingMemorySection(
   root: string,
@@ -1216,12 +1228,10 @@ export function formatStandingMemorySection(
     const maxItems = typeof opts?.maxItems === "number" && opts.maxItems > 0 ? opts.maxItems : 10;
     const maxChars = typeof opts?.maxChars === "number" && opts.maxChars > 0 ? opts.maxChars : 2000;
 
-    const isConstraint = (m: MemoryEntry) =>
-      (m.importance !== undefined && m.importance >= 5) ||
-      /隔离|安全|禁令|禁止|红线|凭据|沙盒|worktree/i.test(m.text);
+    const isConstraint = isConstraintMemory;
 
     // 优先级排序：
-    // 1. 安全/隔离禁令与最高重要度优先（保证不丢弃隔离禁令）
+    // 1. 关键约束（安全/隔离禁令与最高重要度）优先——保证禁令不会被普通条目挤占（只会被另一条禁令挤出）
     // 2. 人类授权优先于 Agent 自述（避免错误提升来源权威）
     // 3. 重要度（importance）降序
     // 4. 更新时间（updated_at）倒序
@@ -1241,21 +1251,34 @@ export function formatStandingMemorySection(
       return b.updated_at.localeCompare(a.updated_at);
     });
 
+    // 渲染行必须与下方输出**逐字同源**：计量与输出共用它，才能保证「声明的 maxChars 是真实上界」。
+    const renderLine = (m: MemoryEntry): string => {
+      const auth = isHumanActor(m.created_by)
+        ? `人类授权${m.created_by ? `:${m.created_by}` : ""}`
+        : `Agent自述${m.created_by ? `:${m.created_by}` : ""}，参考`;
+      const goalPart = m.source_goal ? `，目标:${m.source_goal}` : "";
+      return `- **[${m.id}]**（${auth}${goalPart}）${m.text}`;
+    };
+
     const included: MemoryEntry[] = [];
     const overflow: MemoryEntry[] = [];
     let accumulatedChars = 0;
 
     for (const m of sorted) {
-      const itemLen = m.text.length;
-      if (isConstraint(m) || (included.length < maxItems && accumulatedChars + itemLen <= maxChars)) {
+      const lineLen = [...renderLine(m)].length;
+      // g-252：约束**不再豁免**上限——预算内优先，预算外进溢出并显式停报（见 renderStandingOverflowNotice）。
+      // 既不允许「含禁令关键词」无界放行条数/字符，也不静默丢弃禁令。
+      if (included.length < maxItems && accumulatedChars + lineLen <= maxChars) {
         included.push(m);
-        accumulatedChars += itemLen;
+        accumulatedChars += lineLen;
       } else {
         overflow.push(m);
       }
     }
 
-    if (!included.length) return null;
+    const overflowConstraints = overflow.filter(isConstraint);
+    // 关键约束连一条都放不进预算 ⇒ 不静默返回 null（那等于禁令无声消失），改为显式停报段。
+    if (!included.length && !overflowConstraints.length) return null;
 
     const lines = [
       "## dsh-graph 常驻记忆（环境硬性约束与重要事实）",
@@ -1264,23 +1287,14 @@ export function formatStandingMemorySection(
       "",
     ];
 
-    for (const m of included) {
-      const auth = isHumanActor(m.created_by)
-        ? `人类授权${m.created_by ? `:${m.created_by}` : ""}`
-        : `Agent自述${m.created_by ? `:${m.created_by}` : ""}，参考`;
-      const goalPart = m.source_goal ? `，目标:${m.source_goal}` : "";
-      lines.push(`- **[${m.id}]**（${auth}${goalPart}）${m.text}`);
-    }
+    for (const m of included) lines.push(renderLine(m));
 
     if (overflow.length > 0) {
-      const overflowList = overflow.map((m) => {
-        const auth = isHumanActor(m.created_by) ? "人类授权" : "Agent自述";
-        return `[${m.id}](${auth}, ${m.text.slice(0, 10)}...)`;
-      }).join("，");
-      lines.push(
-        "",
-        `> ⚠️ 常驻记忆预算超限：已注入前 ${included.length} 条高优先级条目（核心安全约束始终保留），其余 ${overflow.length} 条条目已折叠（可通过 recallMemory 按需检索）：${overflowList}`,
-      );
+      lines.push("", ...renderStandingOverflowNotice(overflow, overflowConstraints, {
+        included: included.length,
+        maxItems,
+        maxChars,
+      }));
     }
 
     return lines.join("\n");
@@ -1289,6 +1303,61 @@ export function formatStandingMemorySection(
   }
 }
 
+
+/** g-252：关键约束分类（安全/隔离禁令关键词或高重要度）——排序优先级与溢出停报共用同一分类，
+ *  避免「排序认它是禁令、停报却不认」的口径漂移。 */
+function isConstraintMemory(m: MemoryEntry): boolean {
+  return (m.importance !== undefined && m.importance >= 5) ||
+    /隔离|安全|禁令|禁止|红线|凭据|沙盒|worktree/i.test(m.text);
+}
+
+/** g-252：常驻段溢出提示自身的硬上限（**独立于**注入预算，不占 maxChars/maxItems）。
+ *  三重有界 ⇒ 折叠再多条目，溢出说明也不会膨胀成「另一段无界文本」。 */
+const STANDING_OVERFLOW_MAX_LISTED = 12;
+const STANDING_OVERFLOW_DIGEST_CHARS = 16;
+const STANDING_OVERFLOW_MAX_CHARS = 600;
+
+/** g-252：渲染有界溢出摘要（id + 来源权威 + 有界 digest）；**只给摘要，绝不复制完整正文**。 */
+function renderStandingOverflowDigests(entries: MemoryEntry[]): { text: string; hidden: number } {
+  const pieces: string[] = [];
+  let used = 0;
+  for (const m of entries) {
+    if (pieces.length >= STANDING_OVERFLOW_MAX_LISTED) break;
+    const cp = [...m.text];
+    const digest = cp.slice(0, STANDING_OVERFLOW_DIGEST_CHARS).join("") + (cp.length > STANDING_OVERFLOW_DIGEST_CHARS ? "…" : "");
+    const piece = `[${m.id}](${isHumanActor(m.created_by) ? "人类授权" : "Agent自述"}, ${digest})`;
+    if (used + [...piece].length + 1 > STANDING_OVERFLOW_MAX_CHARS) break;
+    pieces.push(piece);
+    used += [...piece].length + 1;
+  }
+  return { text: pieces.join("，"), hidden: entries.length - pieces.length };
+}
+
+/** g-252：溢出提示——有界、诚实（说明省略了什么、为什么），关键约束溢出时显式停报。
+ *  - 不再无条件宣称「核心约束恒定保留」（约束自身超限时那是假话）；改为逐项说明实际未注入的关键条目。
+ *  - 不复制禁令正文，也不自动删除记忆条目：可见性靠 id + recallMemory，而非把预算补回来。 */
+function renderStandingOverflowNotice(
+  overflow: MemoryEntry[],
+  overflowConstraints: MemoryEntry[],
+  budget: { included: number; maxItems: number; maxChars: number },
+): string[] {
+  const out: string[] = [];
+  const ordinary = overflow.filter((m) => !isConstraintMemory(m));
+  const { text: ordinaryDigests, hidden: hiddenOrdinary } = renderStandingOverflowDigests(ordinary);
+
+  if (overflowConstraints.length > 0) {
+    const shown = overflowConstraints.slice(0, STANDING_OVERFLOW_MAX_LISTED).map((m) => m.id);
+    const idText = shown.join("，") + (overflowConstraints.length > shown.length ? `（…另有 ${overflowConstraints.length - shown.length} 条）` : "");
+    out.push(
+      `> ⛔ 关键隔离禁令未完整注入（预算不足，**非**静默丢弃）：${overflowConstraints.length} 条关键约束（安全/隔离禁令关键词或 importance≥5，按既有分类）放不进本次注入预算（条数上限 ${budget.maxItems}、字符上界 ${budget.maxChars}，按码点计整条渲染行）。未注入 id：${idText}。停报原因：预算无法同时容纳全部关键约束；处置：精炼/合并禁令后重写，或由负责人授权有界摘要——本提示自身有界且不复制禁令正文。`,
+    );
+  }
+
+  out.push(
+    `> ⚠️ 常驻记忆预算超限：已注入前 ${budget.included} 条高优先级条目，其余 ${overflow.length} 条条目已折叠（可通过 recallMemory 按需检索）：${ordinaryDigests || "（见上方未注入 id 列表）"}${hiddenOrdinary > 0 ? `，……另有 ${hiddenOrdinary} 条未列出（id 见 memory/memory.jsonl）` : ""}。`,
+  );
+  return out;
+}
 
 /** 校验配置 patch（字段类型与允许值）。不合法抛 GraphError。 */
 function validateConfigPatch(patch: any): void {
@@ -9910,6 +9979,10 @@ export function recallMemory(
 ): { total: number; matches: MemoryEntry[] } {
   const entries = readMemory(root);
   // Project facts are shared; user facts are private to their creating actor.
+  // g-252：`kind:"user"` 需 opts.actor 非空**且** owner 精确匹配才放行 ⇒ 无 actor 的调用
+  // （如 host 固定植入章节）看不到任何 user 条目。这是 owner 隔离的**有意**行为，不是缺陷：
+  // user 常驻记忆在无身份路径上等价「仅按需 recall」。要按 actor 注入必须提供可信身份，
+  // 且缓存/渲染键必须含该身份，否则会跨 actor 泄漏。
   let filtered = entries.filter((e) => e.kind === "project" || (e.kind === "user" && !!opts?.actor && e.owner === opts.actor));
 
   if (opts?.kind) {
