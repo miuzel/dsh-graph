@@ -1,8 +1,8 @@
 # dsh-graph v0.18.0 发布检查清单
 
-> **本文件状态：发布准备中（Windows 已实测 PASS，macOS 待回填）。** 发布准备阶段创建，只登记**已实测**的结论；
+> **本文件状态：发布准备中（Windows 原生 PASS；macOS 非 win32 PASS）。** 发布准备阶段创建，只登记**已实测**的结论；
 > **Windows 真机门禁已执行 = PASS**（2026-10-01，win32/x64，T1–T5 10/0/0，被测产物即发布候选包）；
-> **macOS 真机门禁本次未执行**，对应行标注「待回填」——**不得读出「已通过」**。
+> **macOS 已执行 = PASS**（darwin/arm64，非 win32 口径：T1/T2 有效，**不替代** Windows 结论）。
 >
 > 流程沿用 v0.10.0 起确立的做法：主管完成准备并（经负责人授权后）合并 `main` + 打 annotated tag，
 > 再由**负责人手动执行 `pnpm publish`**。
@@ -123,7 +123,9 @@ worktree 缺 `node_modules`，经**符号链接**指向主树只读复用（不�
 - **Windows 真机门禁：已执行 = PASS**（2026-10-01，win32/x64，Node v24.13.0，宿主 `0.2.0-rc.2`，T1–T5 10/0/0）。
   被测产物即**发布候选包** `dsh-graph-0.18.0.tgz`（570157 B，sha256 `3ae728dd8c3525411aba5f71e31b6f744a7ddc4ca3c705a1e99139abd476974c`）；
   回填见 [`docs/platform-gate.md`](platform-gate.md) §7。
-- **macOS 真机门禁：本次未执行。** 最近一次真机结论为 **v0.16.0 周期**
-  （出处 [`docs/release-checklist-v0.16.0.md`](release-checklist-v0.16.0.md)）——**不构成本版结论**。
+- **macOS 真机门禁：已执行 = PASS**（2026-10-01，darwin/arm64，Node v26.8.2，宿主 `0.2.0-rc.2`，10/0/0）。
+  口径：非 win32 运行时 **T1/T2 结论有效**，T3–T5 只证明脚本与代码可跑、**不替代 Windows 真机结论**；
+  被测产物同为 `dsh-graph-0.18.0.tgz`（sha256 `3ae728dd…`）。**注意**：tarball 安装路径不执行 `build.sh`，
+  故 macOS 上 `mv --exchange` 不可用时的**两段 rename 回退仍未验证**（该分支只在本机源码构建时走到）。
 - **未执行**：`npm publish`、annotated tag、GitHub release、`git push`、合并 `main`。
 - **未触碰**：`engines` / `peerDependencies` / 产品逻辑语义（本版仅版本串与文案变更）。
