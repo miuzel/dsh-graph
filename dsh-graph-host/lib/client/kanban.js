@@ -1157,17 +1157,21 @@
         try {
           const { ok, failed } = await runBatchAccept(goalIds, { urlOf: (p) => graphUrlForActive(p) });
           // 聚合主管通知：仅在有成功项时整批发一条；无 supervisorSession 静默跳过，不影响接受流程
-          if (ok.length) {
-            await notifySupervisorBatchAccept(b.supervisorSession ?? null, ok.map((x) => x.goal));
+          // g-386：消费投递回执——通知未确认送达时**只加警示前缀**，接受结果本身（成功/失败计数）逐字保留，
+          // 绝不因通知失败把已成功的接受回滚或报成失败；未配置主管会话时仍保持原「静默跳过」语义。
+          let notifyUnconfirmed = false;
+          if (ok.length && b.supervisorSession) {
+            notifyUnconfirmed = !(await notifySupervisorBatchAccept(b.supervisorSession, ok.map((x) => x.goal)));
           }
+          const notifyPrefix = notifyUnconfirmed ? dgT("batchAccept.notifyFail") : "";
           if (failed.length === 0) {
             setBatchAcceptFailures(null);
             setBatchAcceptOpen(false);
-            showToast(dgT("batchAccept.allOk", { count: ok.length }));
+            showToast(notifyPrefix + dgT("batchAccept.allOk", { count: ok.length }));
           } else {
             // 部分失败：不整体崩溃——弹窗保持打开并持久列出失败目标与原因，勾选重置为失败项
             setBatchAcceptFailures(failed);
-            showToast(dgT("batchAccept.partialResult", { ok: ok.length, fail: failed.length }));
+            showToast(notifyPrefix + dgT("batchAccept.partialResult", { ok: ok.length, fail: failed.length }));
           }
           load(); // 刷新看板：被接受目标（已写 review.requested）按当前视图重算
         } catch (e) {

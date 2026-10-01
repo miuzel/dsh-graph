@@ -22,11 +22,34 @@
     //   - 有 using  → 用其 try/finally 语义（release 由 using 内部配平）；
     //   - 无 using 有 retain → 自行 retain + finally release（ready 被拒 / prompt 抛错都不漏代际）；
     //   - 两者皆无（0.1.5）→ 原样保留 binding ?? get 被动回退，行为一字不改。
-    // 契约：成功发出恰好一条 queue 消息返回 true；取不到会话 / 无 prompt / 任意异常返回 false，
-    // **绝不抛异常、绝不漏 release、绝不虚报成功**。warnLabel 可选：给出时沿用调用点既有的
-    // console.warn 形态回报异常（保持既有可诊断性，不新增报错风暴）。
+    // 契约（g-386 起含回执口径）：**仅在拿到正向回执（`res.ok === true`）时**返回 true；
+    // 负回执（`ok:false`）/ 空回执 / 取不到会话 / 无 prompt / 任意异常一律返回 false（绝不虚报成功）。
+    // 空回执的老宿主兼容口径见函数内 `accepted` / `settle` 注释：按「未确认」处理，与全仓既有
+    // 三处回执消费点（`if (res?.ok)`）同口径。warnLabel 可选：给出时沿用调用点既有的 console.warn
+    // 形态回报失败原因（负回执回报 `res.error`，空回执回报说明性 Error）——保持可诊断性，
+    // 每次投递尝试至多一条，不新增报错风暴。
     async function promptSessionQueue(rt, target, parts, warnLabel) {
       if (!target) return false;
+      // g-386：投递回执的**唯一**裁决点（内联在 helper 内，保持其自包含——测试按花括号配平只抠本函数）。
+      // `session.prompt` 的返回是 RemoteResult 判别联合（权威形状见 DSH `Session.prompt` 契约：
+      // `{ok:true,value:{accepted:true}}` ｜ `{ok:false,error}`）。
+      // 口径（明确、可测试、可解释）：**只有正向回执 `ok === true` 才算已送达**，其余一律不确认送达：
+      //   - `ok === false`：宿主明确拒绝（delivery-unavailable / ACTIVATION_LIMIT_REACHED 等非抛错失败）；
+      //   - 空回执（undefined / null / 非对象 / 无 ok 字段）：**未确认**——与全仓既有三处回执消费点
+      //     （live-panel.js / drag-prompts.js / goal-actions.js 判据反馈，一律 `if (res?.ok)`）同口径，
+      //     按未送达处理，由调用方退回各自兜底（润色→复制契约；接受通知→可见提示）。
+      //     风险（如实记录）：若某老宿主在**成功**投递后确实不返回回执，该宿主上的直发会退化为复制兜底，
+      //     属可用性降级而非正确性损失；反向口径（空回执视为成功）会把未知失败重新谎报成成功，
+      //     正是本目标要修的缺陷，故不采用。
+      const accepted = (res) => res?.ok === true;
+      const rejected = (res) => !!res && typeof res === "object" && res.ok === false;
+      const report = (reason) => { if (warnLabel) console.warn(warnLabel, reason); };
+      // 统一收口：正向回执 → true；负回执 / 空回执 → false（并回报可诊断原因）。
+      const settle = (res) => {
+        if (accepted(res)) return true;
+        report(rejected(res) ? res.error : new Error("session.prompt returned no receipt (delivery unconfirmed)"));
+        return false;
+      };
       try {
         // 优先 using：其内部 try/finally 已保证 release 配平（含 ready 被拒 / prompt 抛错）。
         if (typeof rt?.using === "function") {
@@ -35,8 +58,7 @@
             await reference.ready;
             const session = reference.binding?.session;
             if (!session?.prompt) return;
-            await session.prompt(parts, "queue");
-            sent = true;
+            sent = settle(await session.prompt(parts, "queue"));
           });
           return sent;
         }
@@ -47,8 +69,7 @@
             await reference.ready;
             const session = reference.binding?.session;
             if (!session?.prompt) return false;
-            await session.prompt(parts, "queue");
-            return true;
+            return settle(await session.prompt(parts, "queue"));
           } finally {
             try { reference.release?.(); } catch (e) { /* 已释放 → 幂等忽略 */ }
           }
@@ -56,10 +77,9 @@
         // 0.1.5 回退：被动借用既有 binding，或按需 get（原样保留，行为不退化）。
         const session = rt?.binding?.(target)?.session ?? rt?.get?.(target);
         if (!session?.prompt) return false;
-        await session.prompt(parts, "queue");
-        return true;
+        return settle(await session.prompt(parts, "queue"));
       } catch (err) {
-        if (warnLabel) console.warn(warnLabel, err);
+        report(err);
         return false;
       }
     }

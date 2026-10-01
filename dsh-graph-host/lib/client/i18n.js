@@ -97,6 +97,8 @@
       'batchAccept.confirmBtn': '确认接受 ({count})',
       'batchAccept.allOk': '✅ 已对 {count} 个目标发起交付复核请求',
       'batchAccept.partialResult': '⚠️ {ok} 个成功、{fail} 个失败',
+      // g-386：主管通知投递未确认送达时的警示前缀（接受结果本身逐字保留，绝不改写为失败）
+      'batchAccept.notifyFail': '⚠️ 主管会话通知未确认送达；',
       'batchAccept.failedListTitle': '以下目标接受失败（其余已正常提交）：',
       'batchAccept.requestFail': '⚠️ 批量接受请求失败：',
       'batchAccept.groupHeader': '{label} · {count}',
@@ -465,6 +467,8 @@
       'exec.acceptPending': '⏳ 已请求主管复核，等待响应',
       'exec.acceptResolved': '✅ 交付已生效',
       'exec.acceptFail': '⚠️ 接受失败：',
+      // g-386：接受本身已成功、仅主管通知未确认送达时的可见提示（绝不改判为接受失败）
+      'exec.acceptNotifyFail': '⚠️ 接受已成功，但主管会话通知未确认送达；请在主管会话手动确认',
       'exec.execute': '🚀 执行',
       'exec.isolateWorktree': '🌿 在工作树中隔离执行',
       'exec.isolateWorktreeReasonDirty': '（集成工作区存在未提交改动，已默认隔离）',
@@ -1197,6 +1201,7 @@
       'batchAccept.confirmBtn': 'Confirm Accept ({count})',
       'batchAccept.allOk': '✅ Delivery review requested for {count} goal(s)',
       'batchAccept.partialResult': '⚠️ {ok} succeeded, {fail} failed',
+      'batchAccept.notifyFail': '⚠️ Supervisor notification unconfirmed; ',
       'batchAccept.failedListTitle': 'These goals failed to accept (the rest were submitted):',
       'batchAccept.requestFail': '⚠️ Batch accept request failed: ',
       'batchAccept.groupHeader': '{label} · {count}',
@@ -1566,6 +1571,7 @@
       'exec.acceptPending': '⏳ Supervisor review requested, awaiting response',
       'exec.acceptResolved': '✅ Delivery accepted',
       'exec.acceptFail': '⚠️ Accept failed: ',
+      'exec.acceptNotifyFail': '⚠️ Accept succeeded, but the supervisor notification is unconfirmed; please verify in the supervisor session',
       'exec.execute': '🚀 Execute',
       'exec.isolateWorktree': '🌿 Isolate execution in worktree',
       'exec.isolateWorktreeReasonDirty': '(Integration workspace has uncommitted changes; isolated by default)',

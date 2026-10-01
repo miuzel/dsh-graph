@@ -314,7 +314,10 @@
               // g-323：与批量接受（batch-accept.js 的 notifySupervisorBatchAccept）共用同一份能力探测 helper：
               // 0.1.6 需先 retain 才借得到 binding（无 get(id)），0.1.5 保持被动 binding ?? get 回退。
               // 本处是事件回调（doAccept），绝不引入渲染期 retain；文案与 queue 模式逐字不变。
-              await promptSessionQueue(rt, supervisorSession, parts, "[dsh-graph-host] prompt supervisorSession failed:");
+              // g-386：消费投递回执。接受本身已成功（服务端已写 review.requested），此处**只补可见提示**，
+              // 绝不回滚/改判接受结果（`data.pending` 分支照常 onRefresh）。
+              const notified = await promptSessionQueue(rt, supervisorSession, parts, "[dsh-graph-host] prompt supervisorSession failed:");
+              if (supervisorSession && !notified) setNote(dgT("exec.acceptNotifyFail"));
             } catch (err) {
               // helper 已自兜底（绝不抛）；此处仅作最后一道防线，保持既有 console.warn 形态。
               console.warn("[dsh-graph-host] prompt supervisorSession failed:", err);
