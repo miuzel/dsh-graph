@@ -108,8 +108,12 @@
       return `【负责人批量交付复核请求】负责人已对目标 ${goalIds.join(", ")}（共 ${goalIds.length} 个）确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。`;
     }
 
-    // 发送聚合主管通知：整批**一条** queue 消息；无 supervisorSession / 会话不可用 → 静默跳过（返回 false），
+    // 发送聚合主管通知：整批**一条** queue 消息；无 supervisorSession / 会话不可用 → 返回 false，
     // 绝不影响接受流程本身；不得产生 N 条刷屏。
+    //
+    // g-386：返回 false 有两种来源，调用方按需区分——(a) 未配置主管会话（配置态，kanban 侧保持原
+    // 「静默跳过」）；(b) 配置了但投递未确认送达（负回执 / 空回执 / 异常），kanban 侧必须给出可见提示，
+    // 且**不得**因此把已成功的接受改写为失败。
     //
     // g-323：能力探测（using / retain / 0.1.5 被动回退）**不在本文件**——已抽成工厂作用域共享 helper
     // promptSessionQueue（session-hooks.js，早于本模块装配），本处与 goal-actions.js 的单卡接受通知
