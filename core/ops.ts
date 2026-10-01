@@ -886,11 +886,33 @@ export function normalizeSubagentMode(mode: unknown): SubagentMode | null {
   return null;
 }
 
-/** 模式策略提示词片段（仅影响执行策略/提示参数，不越过凭据/provider边界，不接受命令注入） */
+/** 模式策略提示词片段（仅影响执行策略/提示参数，不越过凭据/provider边界，不接受命令注入）
+ *
+ *  g-390：本常量是**中文真源**，保持逐字不变（既有断言与 zh 渲染产物按其锁定）。
+ *  英文对照见 SUBAGENT_MODE_PROMPTS_EN；两条来源必须同义、逐 mode 对称。 */
 export const SUBAGENT_MODE_PROMPTS: Record<SubagentMode, string> = {
   standard: "",
   minimal: "【极简模式执行策略】仅提供受控 6 项基础工具（bash、edit、read、write、graph_report_status、graph_transition），保持紧凑输出，不展开冗余高级调用。",
 };
+
+/** g-390：SUBAGENT_MODE_PROMPTS 的英文对照（与 zh 版**同义**，逐 mode 一一对应）。
+ *
+ *  约束：en 值必须零汉字——英文派发正文出现内置汉字即本次修复的目标缺陷。
+ *  与 zh 版一致，standard 为空串（standard 不注入模式段）。 */
+export const SUBAGENT_MODE_PROMPTS_EN: Record<SubagentMode, string> = {
+  standard: "",
+  minimal: "[Minimal mode execution strategy] Only the controlled 6 base tools are provided (bash, edit, read, write, graph_report_status, graph_transition); keep the output compact and do not expand redundant advanced calls.",
+};
+
+/** g-390：按提示词语言取模式策略片段。
+ *
+ *  language 只认字面量 "en"；其余（含 undefined/null/"follow"/未知值）一律回落 zh——
+ *  与 host 侧 normalizePromptLanguage / resolvePromptLanguage 的默认一致，保证向后兼容：
+ *  未显式声明语言的既有调用方得到与修复前**逐字相同**的中文片段。 */
+export function subagentModePrompt(mode: SubagentMode, language?: string | null): string {
+  const table = language === "en" ? SUBAGENT_MODE_PROMPTS_EN : SUBAGENT_MODE_PROMPTS;
+  return table[mode] ?? "";
+}
 
 /** 读取 project.yaml 的 executor.provider/model/mode。
  * 使用 YAML 解析器处理注释、空行和合法标量；配置缺失或解析失败时安全降级。 */
@@ -10113,19 +10135,23 @@ export function resolveSubagentPrompt(root: string, globalPrompt: string): strin
 }
 
 /** g-191：子代理模式优先级合成——单次派发 override > workspace project.yaml 明确值 > profile 全局默认 > 系统默认（standard）。
- * 返回生效模式与决策来源，供 attempt 审计。 */
+ * 返回生效模式与决策来源，供 attempt 审计。
+ *
+ * g-390：四条来源（override/project/global/default）的 prompt 一律经 subagentModePrompt(mode, language)
+ * 渲染——**单一渲染点**，不新增分支漂移面。language 缺省即 zh，与修复前逐字相同（向后兼容）。 */
 export function resolveSubagentMode(
   overrideMode?: string | null,
   projectMode?: string | null,
   globalMode?: string | null,
+  language?: string | null,
 ): { mode: SubagentMode; source: "override" | "project" | "global" | "default"; prompt: string } {
   const ov = normalizeSubagentMode(overrideMode);
-  if (ov) return { mode: ov, source: "override", prompt: SUBAGENT_MODE_PROMPTS[ov] };
+  if (ov) return { mode: ov, source: "override", prompt: subagentModePrompt(ov, language) };
   const pr = normalizeSubagentMode(projectMode);
-  if (pr) return { mode: pr, source: "project", prompt: SUBAGENT_MODE_PROMPTS[pr] };
+  if (pr) return { mode: pr, source: "project", prompt: subagentModePrompt(pr, language) };
   const gl = normalizeSubagentMode(globalMode);
-  if (gl) return { mode: gl, source: "global", prompt: SUBAGENT_MODE_PROMPTS[gl] };
-  return { mode: DEFAULT_SUBAGENT_MODE, source: "default", prompt: SUBAGENT_MODE_PROMPTS[DEFAULT_SUBAGENT_MODE] };
+  if (gl) return { mode: gl, source: "global", prompt: subagentModePrompt(gl, language) };
+  return { mode: DEFAULT_SUBAGENT_MODE, source: "default", prompt: subagentModePrompt(DEFAULT_SUBAGENT_MODE, language) };
 }
 
 /** g-321：把 subagents.startContinuable 抛出的异常翻译成可操作的提示文案。

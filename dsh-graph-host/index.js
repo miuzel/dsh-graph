@@ -1502,7 +1502,7 @@ export function apply(ctx, config) {
     const effModel = eff.model;
     const effReasoningEffort = eff.reasoning_effort;
     const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
-    const effModeRes = resolveSubagentMode(mode, projectExec.mode, globalSettings.subagentMode);
+    const effModeRes = resolveSubagentMode(mode, projectExec.mode, globalSettings.subagentMode, promptLanguage);
 
     // 6. 统一校验 subagent prepareContinuable 能力（g-241 判据 4：禁止回退虚构 spawn）
     const subagents = ctx.get?.("subagents");
@@ -1541,10 +1541,12 @@ export function apply(ctx, config) {
     const worktreeBlock = resolveWorktreeGuide(gType, isWorktree, promptLanguage);
     const subagentPromptSection = (() => {
       // g-333：单一消费者（结构化三态 + 遗留回落 + 全局回落），见 resolveSubagentPrompt。
+      // g-390：**小节标题是插件内置文本**，按 promptLanguage 本地化；正文 p 是用户材料，逐字不动。
       const p = resolveSubagentPrompt(root, globalSettings.subagentPrompt);
-      return p ? ["## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join("\n") : null;
+      return p ? [isEnPrompt ? "## dsh-graph subagent supplementary prompt (profile global / workspace override)" : "## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join("\n") : null;
     })();
-    const modeStrategySection = effModeRes.prompt ? ["## 子代理执行模式（" + effModeRes.mode + "）", "", effModeRes.prompt].join("\n") : null;
+    // g-390：模式标题 + 模式策略片段按 promptLanguage 本地化（片段语言由 resolveSubagentMode 的第 4 参传入）。
+    const modeStrategySection = effModeRes.prompt ? [(isEnPrompt ? "## Subagent execution mode (" + effModeRes.mode + ")" : "## 子代理执行模式（" + effModeRes.mode + "）"), "", effModeRes.prompt].join("\n") : null;
 
     // 预测下一 attempt ID（用于 prompt 中精准渲染 attempt 编号）
     const attemptsDir = join(dirname(goalFile), "attempts");
