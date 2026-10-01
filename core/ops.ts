@@ -7488,6 +7488,11 @@ export interface UnbindResult {
  *    并给出 reason 的情况下受控解绑，记 attempt.detached 事件（details 标注 legacy/reason/actor）；
  *    若绑定存在 binding_token 则严禁使用 legacy 绕过 CAS。
  *  - 幂等：重复解绑（已无绑定）为 no-op（不重复记事件）；解绑后重绑换新 token → 旧 token 立即失效（ABA 防护）。
+ *  - g-382：本操作**默认只解绑 selector 指定的那一个 binding**。对更旧 attempt 的「取代」清理是可选的附带项，
+ *    且每一项都必须先通过 liveCheck：仅可确认已停止（idle/gone）才允许清理，running/unknown（含未注入
+ *    liveCheck）一律保留原绑定——「被取代」≠「已停止」，否则 postponeGoal 会误判无活跃而搬走仍有
+ *    子代理在跑的目标目录；attempt.superseded 事件写入**清除前捕获的真实 child_id**。
+ *    重复解绑一个已 detached 的 selector 目标为幂等 no-op（不因目标仍有其它绑定而误报并发冲突）。
  *  - 事件先行（R-02）：attempt.unbound / attempt.detached 事件在 attempt.md 落盘前追加；
  *    若落盘失败，事件已记而绑定仍在——重试可自愈，不产生半解绑假象。
  *  - 并发：withTx 锁内重读 + CAS，解绑/解绑、解绑/重绑串行化（有限本地锁，符合单用户本地并发模型）。 */
@@ -7527,12 +7532,32 @@ export function unbindGoalChild(
       if (!binding) {
         return { value: { detached: false, already: true } as UnbindResult, events: [] };
       }
+      // g-382：selector 指向的 attempt 若**已解绑**（detached），按幂等 no-op 处理——
+      // 不因「目标仍存在其它绑定」（例如仍 running、按设计必须保留的旧 attempt）而把重复调用
+      // 误判为 selector 并发冲突。此处仅只读探测；真正短路在 archived/delivered 门禁之后，
+      // 门禁语义逐字不变，且影响面为零（不读 token、不做任何写入）。
+      let selectorAlreadyDetached = false;
+      if (attempt !== null && attempt !== binding.attempt) {
+        const selectedFile = join(goalDirOf(binding.goalFile), "attempts", attempt, "attempt.md");
+        if (existsSync(selectedFile)) {
+          try {
+            const selectedDoc = loadGoal(selectedFile);
+            selectorAlreadyDetached =
+              selectedDoc.meta.id === attempt && selectedDoc.meta.goal === goalId && selectedDoc.meta.detached === true;
+          } catch {
+            selectorAlreadyDetached = false; // 读取失败 → 落到常规 selector 冲突分支（保守拒绝）
+          }
+        }
+      }
       const goalDoc = binding.goal;
       if (goalDoc.meta.archived === true || isArchivedFile(binding.goalFile)) {
         throw new GraphError("已归档目标 " + goalId + " 不可解绑子代理");
       }
       if (goalDoc.meta.status === "delivered") {
         throw new GraphError("已交付目标 " + goalId + " 不可解绑子代理");
+      }
+      if (selectorAlreadyDetached) {
+        return { value: { detached: false, already: true } as UnbindResult, events: [] };
       }
       // 选择器精确匹配当前绑定（不匹配 → 并发/定位冲突，拒绝且不改数据）
       if (attempt !== null && attempt !== binding.attempt) {
@@ -7631,7 +7656,12 @@ export function unbindGoalChild(
       if (doc.meta.result === "pending") doc.meta.result = "detached";
       saveGoal(attFile, doc);
       
-      // g-190 fix: 顺带把更旧 attempt 的绑定标记为 superseded（解决多 attempt 目标暂缓被阻塞问题）
+      // g-190/g-382：顺带把更旧 attempt 中**可确认已停止**的绑定标记为 superseded
+      //（解决多 attempt 目标暂缓被阻塞问题）。
+      // g-382 硬性边界：本解绑默认只作用于 selector 指定的那个 binding；此处每一项都必须先做
+      // live 预检，只有可确认已停止（idle/gone）才允许清理——running/unknown（含调用方未注入
+      // liveCheck）一律保留原绑定，绝不把「被取代」等同于「已停止」而制造假 detached，
+      // 否则 postponeGoal 会误判无活跃并搬走目标目录，而真实子代理仍在运行。
       const attDir = join(goalDirOf(binding.goalFile), "attempts");
       if (existsSync(attDir)) {
         const allAtts = readdirSync(attDir).filter((d) => d.startsWith("att-")).sort();
@@ -7644,9 +7674,25 @@ export function unbindGoalChild(
             if (oldDoc.meta.id !== oldAtt || oldDoc.meta.goal !== goalId) continue;
             // 只处理有绑定且未解绑的旧 attempt
             if (oldDoc.meta.detached === true) continue;
-            if (!oldDoc.meta.child_id) continue;
-            // 标记为 superseded（被新 attempt 绑定取代）
             const supersededChildId = oldDoc.meta.child_id ?? null;
+            if (!supersededChildId) continue;
+            // 逐项 live 预检（g-382）：running/unknown 不得清理；无 liveCheck ⇒ unknown ⇒ 保留。
+            const oldLive = opts.liveCheck ? opts.liveCheck(String(supersededChildId)) : "unknown";
+            if (oldLive !== "idle" && oldLive !== "gone") continue;
+            // 事件先行（R-02）：真实 child_id 必须在清除绑定前捕获并写进事件，否则身份丢失。
+            appendEvent(root, {
+              actor: "system",
+              event: "attempt.superseded",
+              goal: goalId,
+              details: {
+                attempt: oldAtt,
+                child_id: supersededChildId,
+                reason: "被新 attempt " + binding.attempt + " 的绑定取代",
+                superseded_at: detachedAt,
+                live_state: oldLive,
+              },
+            });
+            // 标记为 superseded（被新 attempt 绑定取代）
             oldDoc.meta.detached = true;
             oldDoc.meta.detached_at = detachedAt;
             oldDoc.meta.detached_by = "system:superseded";
@@ -7657,18 +7703,6 @@ export function unbindGoalChild(
             saveGoal(oldFile, oldDoc);
             // g-374：被取代的旧 attempt 也记完成摘要占位（source=detach / reason=superseded）。
             detachedForResults.push({ attempt: oldAtt, childId: supersededChildId, reason: "superseded" });
-            // 记录事件
-            appendEvent(root, {
-              actor: "system",
-              event: "attempt.superseded",
-              goal: goalId,
-              details: {
-                attempt: oldAtt,
-                child_id: oldDoc.meta.child_id ?? null,
-                reason: "被新 attempt " + binding.attempt + " 的绑定取代",
-                superseded_at: detachedAt,
-              },
-            });
           } catch (e) {
             // 忽略旧 attempt 的读取错误，不影响当前解绑
             console.warn("[g-190] 标记旧 attempt " + oldAtt + " 为 superseded 失败:", e);
