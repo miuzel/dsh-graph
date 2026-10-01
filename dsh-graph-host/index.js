@@ -80,6 +80,7 @@ import {
   goalDetail,
   loadGoal,
   bindCardChild,
+  assertCollectAdmission,
   harvestedCards,
   formatHarvestedCardsSection,
   formatCollectPrompt,
@@ -2460,6 +2461,13 @@ export function apply(ctx, config) {
            const effReasoningEffort = eff.reasoning_effort;
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
           const result = { card: a.card, child_id: null, child_error: null };
+          // g-388：spawn 前准入——共享卡已在 collecting 时直接拒绝，绝不启动 child。
+          // （与 REST start-collection 共用同一判定；此处早于 provider 选择，保持零 spawn 副作用。）
+          const admissionErr = collectAdmissionBlock(r, a.goal, a.card);
+          if (admissionErr) {
+            result.child_error = subagentSpawnErrorText(admissionErr);
+            return result;
+          }
           const subagents = ctx.get?.("subagents");
           if (!subagents || !ex?.agent) {
             result.child_error = "subagents 服务不可用或无调用 agent";
@@ -2487,14 +2495,17 @@ export function apply(ctx, config) {
               request,
               signal: ex.signal,
             });
-            bindCardChild(r, a.goal, a.card, {
-              childId: started.childId,
+            const bound = bindCollectWithConvergence(r, a.goal, a.card, {
+              started,
               parentSessionId: started.parentSessionId ?? ex.agent?.session?.id ?? null,
               actor: actorOf(ex),
               provider: effProvider,
               model: effModel,
             });
-            result.child_id = started.childId;
+            // g-388：绑定失败也不丢 child_id——收敛结果始终带回刚启动的 child（便于事后定位/中断核对）。
+            result.child_id = bound.child_id;
+            if (bound.child_error) result.child_error = bound.child_error;
+            if (bound.interrupted) result.child_interrupted = true;
             if (effRoute) result.model_route = effRoute;
           } catch (e) {
             // g-321：收集子代理同样受 0.1.6 并发槽位约束，友好化 ACTIVATION_LIMIT_REACHED
@@ -2818,6 +2829,63 @@ export function apply(ctx, config) {
       // g-321：0.1.6 起 startContinuable 有并发槽位上限（默认 8），把 ACTIVATION_LIMIT_REACHED
       // 翻译成可操作提示；其余错误原样透出 message（保留既有可追溯性）。
       return { childId: null, parentSessionId: null, error: subagentSpawnErrorText(e) };
+    }
+  };
+
+  // ---- g-388：收集派发的有限收敛策略（工具 graph_start_attempt+card 与 REST start-collection 共用一套）----
+  // 修复「collecting 共享卡重试收集会孤儿化子代理并丢失 child_id」：
+  //   ① spawn 前准入（collectAdmissionBlock）：冲突在启动 child 之前就被拒 ⇒ 不产生任何孤儿 worker；
+  //   ② spawn 后 bind 失败（bindCollectWithConvergence）：请求中断该 child 并把 child_id 带进结果/错误；
+  //      中断能力缺失或中断本身失败时如实上报，绝不虚称「已停止」。
+  // 有限收敛：只处理这一张卡的绑定与这一个 child 的中断，不 detach/supersede/改状态其它 card/goal/attempt，
+  // 也不引入分布式租约（冲突判定复用 core assertCollectAdmission 的同一条件）。
+
+  /** spawn 前准入门禁：返回可上报的 Error（共享卡已在 collecting）或 null（放行）。 */
+  const collectAdmissionBlock = (rootForCard, goal, card) => {
+    try {
+      assertCollectAdmission(rootForCard, goal, card);
+      return null;
+    } catch (e) {
+      return e;
+    }
+  };
+
+  /** spawn 成功后的绑定 + 有限收敛。返回 { child_id, child_error, interrupted }：
+   *  成功 → child_id 已绑定、child_error=null；失败 → child_id 始终保留（可追溯），
+   *  child_error 说明「已启动但绑定失败」以及中断是否被请求/为何没能中断。 */
+  const bindCollectWithConvergence = (rootForCard, goal, card, { started, parentSessionId, actor, provider, model }) => {
+    const childId = started?.childId ?? null;
+    try {
+      bindCardChild(rootForCard, goal, card, {
+        childId,
+        parentSessionId: parentSessionId ?? null,
+        actor,
+        provider,
+        model,
+      });
+      return { child_id: childId, child_error: null, interrupted: false };
+    } catch (bindErr) {
+      // 与 executor 派发的 g-237 收敛同构：先请求中断刚启动的 child，再抛出携带 child_id 的可追溯错误。
+      const subagents = ctx.get?.("subagents");
+      let interrupted = false;
+      let interruptNote;
+      try {
+        const pid = parentSessionId ?? started?.parentSessionId ?? null;
+        if (pid && typeof subagents?.interruptByParent === "function") {
+          subagents.interruptByParent(childId, pid, "continuable");
+          interrupted = true;
+          interruptNote = "已请求中断该 child";
+        } else {
+          interruptNote = "无法中断该 child（缺少 parent session 或 subagents.interruptByParent 能力）";
+        }
+      } catch (interruptErr) {
+        interruptNote = `中断该 child 失败：${interruptErr?.message ?? interruptErr}`;
+      }
+      return {
+        child_id: childId,
+        child_error: `收集子代理已启动（child ${childId}）但卡片绑定失败：${bindErr?.message ?? bindErr}；${interruptNote}`,
+        interrupted,
+      };
     }
   };
   // 枚举派发选项（重新执行选择器用）：LLM provider 分组模型目录（ctx.llm 注册表）+ 默认（project.yaml executor）。
@@ -3688,6 +3756,11 @@ export function apply(ctx, config) {
           // g-183 返工 F：先完整校验（resolveCard 成员关系/backlog/卡状态权限）生成提示词，
           //  再创建 attempt/子代理——校验失败不得留下 attempt/事件副作用。
           const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt, resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
+          // g-388：spawn 前准入——共享卡已在 collecting 时直接拒绝，绝不启动 child（与工具入口同一判定）。
+          const admissionErr = collectAdmissionBlock(rRoot, goal, card);
+          if (admissionErr) {
+            return json(res, 200, { ok: true, card, attempt: null, child_id: null, child_error: String(admissionErr?.message ?? admissionErr), model_route: effRoute });
+          }
           const spawned = await spawnChild(
             `graph:collect/${goal}/${card}`,
             fullPrompt,
@@ -3695,14 +3768,26 @@ export function apply(ctx, config) {
             rRoot,
             { provider: effProvider, model: effModel, reasoning_effort: effReasoningEffort, role: "collector" },
           );
+          let childId = spawned.childId;
+          let childError = spawned.error;
           if (spawned.error) {
             console.error("[dsh-graph-host] start-collection 子代理启动失败:", spawned.error);
           } else {
             // 事件先行：card.collecting（bindCardChild 写 child_id/parent_session_id）。
             // g-242：collector 依托卡片生命周期协作，不创建虚假 attempt
-            bindCardChild(rRoot, goal, card, { childId: spawned.childId, parentSessionId: spawned.parentSessionId, actor: "human:gui", provider: effProvider, model: effModel });
+            // g-388：绑定失败走同一套有限收敛（请求中断 + 保留 child_id），不再让 child_id 丢失。
+            const bound = bindCollectWithConvergence(rRoot, goal, card, {
+              started: { childId: spawned.childId, parentSessionId: spawned.parentSessionId },
+              parentSessionId: spawned.parentSessionId,
+              actor: "human:gui",
+              provider: effProvider,
+              model: effModel,
+            });
+            childId = bound.child_id;
+            childError = bound.child_error;
+            if (bound.child_error) console.error("[dsh-graph-host] start-collection 卡片绑定失败:", bound.child_error);
           }
-          json(res, 200, { ok: true, card, attempt: null, child_id: spawned.childId, child_error: spawned.error, model_route: effRoute });
+          json(res, 200, { ok: true, card, attempt: null, child_id: childId, child_error: childError, model_route: effRoute });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });

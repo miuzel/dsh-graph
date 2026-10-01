@@ -4286,6 +4286,24 @@ export function deleteCard(
   rmSync(file, { force: true });
 }
 
+/** g-388：共享卡「正在收集」冲突文案的唯一真源——bindCardChild 的拒绝与 spawn 前准入共用同一句，
+ *  保证同因同话（避免两处文案各自漂移）。 */
+function collectConflictMessage(cardId: string, childId: string): string {
+  return `共享卡 ${cardId} 正在由 ${childId} 收集，不能并行收集——只允许一个权威收集者（如需重收先停止该子代理）`;
+}
+
+/** g-388：收集派发的 spawn 前准入门禁——与 bindCardChild 的 g-183 拒绝条件严格同源
+ *  （共享卡 + status=collecting + 已有 child_id）。把冲突判定前移到 spawn 之前，避免
+ *  「先启动 child、再在绑定时被拒」留下无人追踪且仍在写卡的孤儿 worker。
+ *  通过返回 void；冲突抛 GraphError（文案与 bindCardChild 逐字一致）。
+ *  自有卡（scope=goal）沿用 g-119 语义（换 child 重收仍正常写），不在此拦截。 */
+export function assertCollectAdmission(root: string, goalId: string, cardId: string): void {
+  const { doc, scope } = loadCard(root, goalId, cardId);
+  if (scope === "shared" && doc.meta.status === "collecting" && doc.meta.child_id) {
+    throw new GraphError(collectConflictMessage(cardId, String(doc.meta.child_id)));
+  }
+}
+
 /** 把收集子代理绑定到卡片（g-109）：写 child_id/parent_session_id、置 status=collecting，并记 card.collecting 事件（事件先行）。
  *  g-119：幂等——同一 child_id+parent_session_id 对同一卡片重复绑定（状态已 collecting）为 no-op，
  *  不重写、不重复记事件（防重试/重复派发刷事件流）；换 child（重新收集）或换 parent 仍正常写。
@@ -4306,9 +4324,7 @@ export function bindCardChild(
   const parentSessionId = opts.parentSessionId ?? null;
   // g-183：共享卡 collecting 时只允许一个权威收集者——换 child 重新收集被拒绝（判据 #6）。
   if (scope === "shared" && doc.meta.status === "collecting" && doc.meta.child_id && doc.meta.child_id !== opts.childId) {
-    throw new GraphError(
-      `共享卡 ${cardId} 正在由 ${doc.meta.child_id} 收集，不能并行收集——只允许一个权威收集者（如需重收先停止该子代理）`,
-    );
+    throw new GraphError(collectConflictMessage(cardId, String(doc.meta.child_id)));
   }
   const provider = opts.provider !== undefined ? (opts.provider || null) : (doc.meta.provider ?? null);
   const model = opts.model !== undefined ? (opts.model || null) : (doc.meta.model ?? null);
