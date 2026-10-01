@@ -4402,6 +4402,27 @@ export function apply(ctx, config) {
     // 方案 A 机制复用（调研结论）：section.text 渲染进 system prompt；此处无空文本分支，
     // 恒渲染 GUIDE_HINT（简短，token 成本 ~120 字）。
     // systemPrompt 服务可能晚激活（dsh-base bundle 行，激活时序不保证）：轮询注册。
+    //
+    // g-389：本插件注册的 section 全部是**字面量**，必须显式 `interpolate: false`。
+    // 宿主 `renderPrompt` 默认解释 `{{变量}}`：section 正文里出现合法的模板示例（最典型是
+    // standing memory —— 人类授权/Agent 自述里可能写着 `{{customer_name}}` 这类模板）时，
+    // 未注册变量会抛 `unknown prompt variable` 并**阻断该 workspace 的会话**；恰好同名已注册
+    // 变量则被**静默替换**（用户数据被篡改）。置 false 后正文逐字保留，**不要求用户转义或
+    // 删除合法的记忆模板**（这是修复的硬要求，不是可用选项）。
+    // 依据：本插件从不注册 prompt 变量（无 `sp.variable(...)`），也不注册 context，故没有任何
+    // section 是真模板；宿主与其它插件的真模板 section 未被本插件改动，仍按原契约插值。
+    // 审计范围（本插件自有 section，共 3 个，全部字面量）：
+    //   ① dsh-graph-guide-hint（order 10）—— 本地化资产 guide-hint.<lang>.md；
+    //   ② dsh-graph-supervisor-discipline（order 11）—— 本地化资产 discipline.<lang>.md；
+    //   ③ dsh-graph-standing-memory（order 92）—— **用户/Agent 动态文本**（记忆库正文）。
+    // 宿主兼容性（实测各版本 @deepseek-ai/dsh-system-prompt 真实 renderPrompt；dsh 与
+    // system-prompt 版本锁步，peerDependencies 精确同版）：
+    //   · 0.2.0-rc.2 / 0.1.6-alpha.1：认 `interpolate: false` ⇒ 逐字保留（修复生效）；
+    //   · 0.1.5-rc.2 / 0.1.5-rc.3（= engines 下界一侧）：**忽略**该字段（旧 renderPrompt 无条件
+    //     插值）⇒ 旧宿主上本修复不生效，含 `{{...}}` 的记忆仍会抛错/被替换；传该字段本身无害
+    //     （旧宿主 assemble 只取 name/text，多余键被丢弃，不报错）。
+    // 未验证范围：0.1.6-alpha.2 / 0.1.7-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.1 仅做源码特征核对
+    // （renderPrompt 含 `interpolate === false` 分支），未逐一实跑。
     const sectionState = { registered: false, timer: null };
     const registerGuideSection = () => {
       if (sectionState.registered) return;
@@ -4411,6 +4432,7 @@ export function apply(ctx, config) {
         disposers.push(sp.section({
           name: "dsh-graph-guide-hint",
           order: 10,
+          interpolate: false, // g-389：字面量 section（本地化资产），逐字保留、不参与 {{变量}} 插值
           text: () => localizedPrompt("guide-hint", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)),
         }));
         // g-238：system prompt 渲染纯读化——section.text 渲染路径绝不 init（不创建目录/文件、
@@ -4447,6 +4469,7 @@ export function apply(ctx, config) {
         disposers.push(sp.section({
           name: "dsh-graph-supervisor-discipline",
           order: 11,
+          interpolate: false, // g-389：字面量 section（本地化资产），逐字保留、不参与 {{变量}} 插值
           text: (context) => {
             try {
               const sessionId = context?.agent?.session?.id;
@@ -4467,9 +4490,13 @@ export function apply(ctx, config) {
         }));
         // g-105：常驻记忆（standing）作为独立章节固定植入所有会话系统 Prompt
         // g-238：纯读 + 按 memory/memory.jsonl 指纹失效缓存（撤回/新增/替换立即生效）
+        // g-389：**必须** interpolate:false —— 记忆正文是用户/Agent 动态文本，可能包含合法模板
+        // 示例（{{customer_name}} 等）；默认插值会抛 unknown prompt variable 阻断会话，或静默
+        // 替换同名变量。逐字保留，不要求用户转义/删除。
         ctx.effect(() => sp.section({
           name: "dsh-graph-standing-memory",
           order: 92,
+          interpolate: false, // g-389：字面量 section（用户动态记忆正文），逐字保留
           text: (context) => {
             try {
               const cwd = context?.agent?.session?.header?.cwd;
