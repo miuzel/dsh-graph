@@ -2763,6 +2763,11 @@
               // g-380：关系标记成功后刷新看板（卡片关系行/徽标即时反映；一次成功回包触发，非轮询/watcher）
               goalOptions,
               onRelationsChanged: () => load(),
+              // rel-display-018：目标弹窗内「目标描述」下方的只读关系清单——
+              // 数据复用看板投影（modalGoalData 即 board 投影，relations 已派生）⇒ 同一份数据、不新增请求；
+              // 跳转对端复用既有 setModalGoal（与卡片 onOpen 同一入口，无新状态）。
+              relations: modalGoalData?.relations,
+              onOpenGoal: setModalGoal,
               onOpenCard: (goalId, cardId) => setDrawerCard({ goalId, cardId }),
               deletedCardSignal,
               onDeletedCardHandled: () => setDeletedCardSignal(null),

@@ -522,7 +522,7 @@
 
     // g-260：目标描述组件（只读态↔编辑态切换，就地 markdown 编辑）
     function DescriptionBox(props) {
-      const { goalId, description, onRefresh, extra, peers, onRelationsChanged } = props;
+      const { goalId, description, onRefresh, extra, peers, onRelationsChanged, relations, onOpenGoal } = props;
       const [editing, setEditing] = React.useState(false);
       const [text, setText] = React.useState(description ?? "");
       const [note, setNote] = React.useState(null);
@@ -614,6 +614,16 @@
               hasContent
                 ? h(GoalMarkdown, { text: description, viewMode })
                 : h("div", { style: { ...S.meta, fontSize: 12, opacity: 0.6 } }, dgT("description.empty"))),
+        // rel-display-018：只读关系清单**直接可见**（此前必须先点开「🔗 标记关系」面板才能看到）。
+        // 位置：「目标描述」小节内、描述正文正下方；编辑入口（RelationMarker 面板）行为不变。
+        // 全部复用既有实现，不写第二套关系/匹配逻辑：
+        //   · 派生数据 = 看板投影 g.relations（与卡片同源，客户端不双写、**不新增任何请求**）；
+        //   · 渲染 = card.js 工厂作用域的 RelationBadges（既有关系徽标：被取代/被调整）+ RelationList
+        //     （既有行清单：出向 → / 入向 ←、标题、跨版本标记）；悬空「未知 id / 已删除」、已归档
+        //     降级与「跳转对端」（onOpen）能力、i18n 键均与看板卡片逐字一致；
+        //   · 无关系时 RelationBadges / RelationList 各自返回 null ⇒ 不渲染任何空壳（零空 div）。
+        h(RelationBadges, { g: { relations }, onOpen: onOpenGoal }),
+        h(RelationList, { g: { relations }, onOpen: onOpenGoal }),
         extra ?? null,
         note ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, note) : null);
     }
@@ -1318,6 +1328,8 @@
         const detailTab = [
           desc != null ? h(DescriptionBox, { key: "description", goalId: props.id, description: desc, onRefresh: load,
             peers: props.goalOptions, onRelationsChanged: props.onRelationsChanged,
+            // rel-display-018：只读关系清单的数据源与跳转入口（均由看板侧传入，见 kanban.js GoalModal props）
+            relations: props.relations, onOpenGoal: props.onOpenGoal,
             extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose, goalType: d.meta.type }) }) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           // g-170：「✏️ 判据」编辑入口放在小节标题处（负责人 2026-08-25 指示），点击打开判据编辑弹窗
