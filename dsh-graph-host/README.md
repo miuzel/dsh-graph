@@ -40,7 +40,7 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**当前版本**：v0.17.0（= npm 上已发布的最新版）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+**当前版本**：v0.18.0（本次发布准备产物；`0.18.0-alpha` 为开发线版本串）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
 **宿主兼容范围**：`engines.dsh` 声明 `>=0.1.5-rc.2 <0.2.1-0`（上界 `-0` 排除 `0.2.1` 的一切预发布与正式版），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
@@ -48,21 +48,21 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 | 平台 | 本版状态 |
 |------|----------|
-| Linux / WSL2 | ✅ 已实测通过 |
-| 原生 Windows | ✅ **已实测通过**（原生 `win32/x64` / node `v24.13.0`，宿主 `@deepseek-ai/dsh@0.2.0-rc.2`；本版包 T1–T5 **通过 10 / 失败 0 / 告警 0**，Windows `certutil` 复算 sha256 `4e11d772…` 与产出侧逐字节一致） |
-| macOS | ⚠️ **未验证**（最近真机结论见 [v0.16.0 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md)） |
+| Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0） |
+| 原生 Windows | ⚠️ **本次未执行真机门禁**（不得读出「已通过」）；本版验证结果见发布核对表（运行中，待回填）。最近一次真机结论见 [v0.17.0 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.17.0.md) §3.1 |
+| macOS | ⚠️ **本次未执行真机门禁**（不得读出「已通过」）；本版验证结果见发布核对表（运行中，待回填）。最近一次真机结论见 [v0.16.0 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md) |
 
 三平台使用同一安装包。**已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
-**最新亮点（v0.17.0）**
+**最新亮点（v0.18.0）**
 
-- **支持 DSH 0.2.0 系宿主**：宿主兼容范围放宽为 `>=0.1.5-rc.2 <0.2.1-0`，并在隔离实例上实测 `0.2.0-rc.1` / `0.2.0-rc.2`。
-- **目标完成摘要**：目标弹窗新增只读「完成摘要」页签，子代理每次执行的输出自动落盘（零额外 token），也支持一键更新为 LLM 详情级摘要。
-- **窄档搜索按版本/分区分组**：窄档（<480px）搜索命中在聚合泳道内按版本/分区加组头与计数，仍保持单列纵向、零横向溢出。
-- **隔离实例与看板数据互不污染**：修正「仓库内子目录被误判为 linked worktree」，隔离实例、门禁与测试不再写真实看板数据；并修复 pnpm 12 下无法从零新建隔离实例。
-- **文档面机器守卫**：工具表六面一致性、工具计数、记忆上限取值与 CHANGELOG 版本节结构由测试钉住（改坏即红）。
+- **目标间关系标记**：新增「取代 / 调整 / 补充 / 相关」四类关系，关系只记在目标文件（frontmatter）这一处真源；依赖声明与关系严格分离，不再混写在同一个字段里。
+- **新增 `graph_set_relation` 工具**：标记 / 解除目标间关系，重复标记同一关系不产生第二条，并拒绝形成互相取代的环。
+- **看板与弹窗都能看到关系**：卡片显示关系徽标；目标弹窗在「**目标描述**」正下方直接列出只读关系清单（本目标发出 / 指向本目标，标注跨版本与已归档）。
+- **标记对端改为搜索式选择**：输入编号或标题关键字即可定位对端目标，候选复用看板搜索的同一套匹配实现；候选过多时提示继续输入以缩小范围。
+- **派发前先写目标描述**：主管派发前收到提醒；目标描述为空（或仅占位符 / 注释）时 `graph_start_attempt` 拒绝派发并提示用 `graph_set_description` 补写后重试，零副作用。
 
-完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [v0.17.0 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.17.0.md)，平台门禁运行手册见 [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
+完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [v0.18.0 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.18.0.md)，平台门禁运行手册见 [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
 
 ---
 
@@ -76,6 +76,8 @@ dsh plugin --profile <profile-name> add dsh-graph
   支持文本（Text）、文件（File）、图片（Image）、数据（Data）等多种上下文类型。经历 `empty → collecting → filled → reviewed` 闭环生命周期，为执行子代理提供精确的上下文种子。
 - **二维泳道看板**：
   横向按生命周期阶段划分列，纵向按排期划分版本（Version）、暂存池（Backlog）与独立目标（Standalone）泳道；支持拖拽排期。
+- **目标间关系标记**：
+  目标之间可标记「取代 / 调整 / 补充 / 相关」四类关系（也可解除），关系只记在目标文件（frontmatter）这一处真源；看板卡片显示关系徽标，目标弹窗在「目标描述」下方直接列出关系清单（含跨版本与已归档标注）。
 - **流畅跨会话交接（Handoff & Supervisor Claim）**：
   支持生成包含看板投影、长期记忆与关键环境事实的 `HANDOFF.md`，换会话后新 Supervisor 可幂等认领上下文并快速接管。
 - **现代交互与双主题适配**：
@@ -205,7 +207,7 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**Current version**: v0.17.0 (the latest version published on npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+**Current version**: v0.18.0 (this release-preparation artifact; `0.18.0-alpha` was the development version string — not yet published to npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
 **Host compatibility range**: `engines.dsh` declares `>=0.1.5-rc.2 <0.2.1-0` (the `-0` upper bound excludes every `0.2.1` prerelease and final release); host-aware markets such as dsh-market read it for card display and install/update pre-flight. **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, and `0.2.0-rc.1`; `0.2.0-rc.2` (verified by the maintainer on 2026-09-30). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
@@ -213,21 +215,21 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 | Platform | Status for this release |
 |----------|-------------------------|
-| Linux / WSL2 | ✅ Verified on-device |
-| Native Windows | ✅ **Verified on-device** (native `win32/x64` / node `v24.13.0`, host `@deepseek-ai/dsh@0.2.0-rc.2`; T1–T5 on this release's tarball: **10 passed / 0 failed / 0 warnings**; Windows `certutil` SHA256 recomputed and byte-identical to the build side) |
-| macOS | ⚠️ **Not verified** (most recent on-device verdict: [v0.16.0 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md)) |
+| Linux / WSL2 | ✅ Verified on-device (this release's full test suite: 0 failures) |
+| Native Windows | ⚠️ **No on-device gate was run for this release** (must not be read as "verified"); this release's results are recorded in the release checklist (in progress, to be back-filled). Most recent on-device verdict: [v0.17.0 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.17.0.md) §3.1 |
+| macOS | ⚠️ **No on-device gate was run for this release** (must not be read as "verified"); this release's results are recorded in the release checklist (in progress, to be back-filled). Most recent on-device verdict: [v0.16.0 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.16.0.md) |
 
 All three platforms share the same package. **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
 
-**What's new (v0.17.0)**
+**What's new (v0.18.0)**
 
-- **DSH 0.2.0 host line supported**: the declared host range is widened to `>=0.1.5-rc.2 <0.2.1-0`, with `0.2.0-rc.1` / `0.2.0-rc.2` verified on an isolated instance.
-- **Goal completion summaries**: the goal dialog gains a read-only "Completion summary" tab; every sub-agent run's output is captured to disk automatically (zero extra tokens), and can be upgraded to an LLM detailed summary in one click.
-- **Narrow-tier search grouped by version/section**: hits in the aggregate lane now carry group headers with counts, still a single vertical column with zero horizontal overflow.
-- **Isolated instances no longer pollute board data**: fixed the "repository subdirectory mistaken for a linked worktree" defect, so isolated instances, gates and tests no longer write to the real board data; also fixed creating an isolated instance from scratch under pnpm 12.
-- **Machine guards for the documentation surface**: tool-table six-way consistency, tool counts, memory limits and CHANGELOG section structure are pinned by tests (breaking them turns red).
+- **Relations between goals**: four relation kinds — supersedes / amends / extends / related — recorded in exactly one source of truth (the goal's frontmatter); dependency declarations and relations are kept strictly apart instead of sharing one field.
+- **New `graph_set_relation` tool**: mark or unmark a relation between goals; marking the same relation twice never creates a second entry, and mutually superseding cycles are rejected.
+- **Relations are visible on the board and in the dialog**: cards show relation badges, and the goal dialog lists a read-only relation inventory directly **under "Goal description"** (outgoing / incoming, with cross-version and archived peers flagged).
+- **Peer selection now searches**: pick the peer goal by typing its id or a title keyword; candidates reuse the board's one and only search-matching implementation, and an oversized candidate set prompts you to keep typing.
+- **Write the goal description before dispatching**: supervisors get a reminder, and `graph_start_attempt` refuses to dispatch while the description is empty, placeholder-only, or comment-only — telling you to fill it in via `graph_set_description` and retry, with zero side effects.
 
-See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history; per-release gate verdicts live in the [v0.17.0 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.17.0.md) and the platform gate runbook in [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md). Official releases are distributed via npm and the dsh-market ecosystem.
+See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history; per-release gate verdicts live in the [v0.18.0 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.18.0.md) and the platform gate runbook in [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md). Official releases are distributed via npm and the dsh-market ecosystem.
 
 ---
 
@@ -241,6 +243,8 @@ See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) 
   Supports Text, File, Image, and Data cards. Follows a structured lifecycle (`empty → collecting → filled → reviewed`) to seed precise task context for execution subagents.
 - **2D Swimlane Board**:
   Columns represent lifecycle stages, while horizontal swimlanes organize goals by Version, Backlog, and Standalone categories, complete with drag-and-drop scheduling.
+- **Relations Between Goals**:
+  Goals can be linked with four relation kinds — supersedes / amends / extends / related — and unlinked again; relations live in exactly one source of truth (the goal's frontmatter). Cards show relation badges, and the goal dialog lists the full inventory under "Goal description" (cross-version and archived peers flagged).
 - **Seamless Session Handoff**:
   Generate `HANDOFF.md` summarizing board projections, long-term memory, and environment facts. A new session can claim the Supervisor role idempotently via `graph_claim_supervisor`.
 - **Modern UI & Dual-Theme Support**:

@@ -15,25 +15,25 @@
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.1--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
-**当前版本 v0.17.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 50 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
+**当前版本 v0.18.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 50 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
 
-**最新亮点（v0.17.0）**
+**最新亮点（v0.18.0）**
 
-- **支持 DSH 0.2.0 系宿主**：宿主兼容范围放宽为 `>=0.1.5-rc.2 <0.2.1-0`，并在隔离实例上实测 `0.2.0-rc.1` / `0.2.0-rc.2`。
-- **目标完成摘要**：目标弹窗新增只读「完成摘要」页签，子代理每次执行的输出自动落盘（零额外 token），也支持一键更新为 LLM 详情级摘要。
-- **窄档搜索按版本/分区分组**：窄档（<480px）搜索命中在聚合泳道内按版本/分区加组头与计数，仍保持单列纵向、零横向溢出。
-- **隔离实例与看板数据互不污染**：修正「仓库内子目录被误判为 linked worktree」，隔离实例、门禁与测试不再写真实看板数据；并修复 pnpm 12 下无法从零新建隔离实例。
-- **文档面机器守卫**：工具表六面一致性、工具计数、记忆上限取值与 CHANGELOG 版本节结构由测试钉住（改坏即红）。
+- **目标间关系标记**：新增「取代 / 调整 / 补充 / 相关」四类关系，关系只记在目标文件（frontmatter）这一处真源；依赖声明与关系严格分离，不再混写在同一个字段里。
+- **新增 `graph_set_relation` 工具**：标记 / 解除目标间关系，重复标记同一关系不产生第二条，并拒绝形成互相取代的环。
+- **看板与弹窗都能看到关系**：卡片显示关系徽标；目标弹窗在「**目标描述**」正下方直接列出只读关系清单（本目标发出 / 指向本目标，标注跨版本与已归档）。
+- **标记对端改为搜索式选择**：输入编号或标题关键字即可定位对端目标，候选复用看板搜索的同一套匹配实现；候选过多时提示继续输入以缩小范围。
+- **派发前先写目标描述**：主管派发前收到提醒；目标描述为空（或仅占位符 / 注释）时 `graph_start_attempt` 拒绝派发并提示用 `graph_set_description` 补写后重试，零副作用。
 
-变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [docs/release-checklist-v0.17.0.md](docs/release-checklist-v0.17.0.md)，平台门禁运行手册见 [docs/platform-gate.md](docs/platform-gate.md)。
+变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)；逐版本门禁结论见 [docs/release-checklist-v0.18.0.md](docs/release-checklist-v0.18.0.md)，平台门禁运行手册见 [docs/platform-gate.md](docs/platform-gate.md)。
 
 ## 平台状态
 
 | 平台 | 本版状态 |
 |------|----------|
-| Linux / WSL2 | ✅ 已实测通过 |
-| 原生 Windows | ✅ **已实测通过**（原生 `win32/x64`，宿主 `@deepseek-ai/dsh@0.2.0-rc.2`；本版包 T1–T5 通过 10 / 失败 0 / 告警 0，见 [v0.17.0 清单](docs/release-checklist-v0.17.0.md) §3.1） |
-| macOS | ⚠️ **未验证**（最近真机结论见 [v0.16.0 清单](docs/release-checklist-v0.16.0.md)） |
+| Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0） |
+| 原生 Windows | ⚠️ **本次未执行真机门禁**（不得读出「已通过」）；本版验证结果见发布核对表（运行中，待回填）。最近一次真机结论见 [v0.17.0 清单](docs/release-checklist-v0.17.0.md) §3.1 |
+| macOS | ⚠️ **本次未执行真机门禁**（不得读出「已通过」）；本版验证结果见发布核对表（运行中，待回填）。最近一次真机结论见 [v0.16.0 清单](docs/release-checklist-v0.16.0.md) |
 
 三平台共用同一安装包。已知限制：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
@@ -53,6 +53,7 @@ dsh plugin --profile <name> add dsh-graph
 - **上下文卡片**：目标 Runner 的种子上下文，生命周期 `empty → collecting → filled → reviewed`；形态分文本 / 文件 / 图片 / 数据。
 - **排期**：Backlog（暂存池）↔ Version（批量质量管理）↔ 独立目标（standalone）；看板泳道顺序是展示态，可拖拽调整。
 - **换会话交接**：`graph_handoff` 生成交接文档（board 投影 + 长期记忆 + 环境事实），`graph_claim_supervisor` 由新会话幂等接管。
+- **目标间关系**：目标之间可标记「取代 / 调整 / 补充 / 相关」四类关系（`graph_set_relation`，可增可删）；关系只记在目标 frontmatter 这一处真源，看板卡片与目标弹窗直接可见。
 
 ## 提供的工具
 
