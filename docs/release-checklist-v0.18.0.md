@@ -1,7 +1,8 @@
 # dsh-graph v0.18.0 发布检查清单
 
-> **本文件状态：发布准备中（运行中，待回填）。** 发布准备阶段创建，只登记**已实测**的结论；
-> **Windows / macOS 真机门禁本次未执行**，对应行保持空白并标注「待回填」——**不得读出「已通过」**。
+> **本文件状态：发布准备中（Windows 已实测 PASS，macOS 待回填）。** 发布准备阶段创建，只登记**已实测**的结论；
+> **Windows 真机门禁已执行 = PASS**（2026-10-01，win32/x64，T1–T5 10/0/0，被测产物即发布候选包）；
+> **macOS 真机门禁本次未执行**，对应行标注「待回填」——**不得读出「已通过」**。
 >
 > 流程沿用 v0.10.0 起确立的做法：主管完成准备并（经负责人授权后）合并 `main` + 打 annotated tag，
 > 再由**负责人手动执行 `pnpm publish`**。
@@ -60,9 +61,9 @@ worktree 缺 `node_modules`，经**符号链接**指向主树只读复用（不�
 - [x] 两份 README（中 / 英）+ 根 README 同步 v0.18.0 版本表述与「最新亮点（v0.18.0）」，
       并把新增能力补进功能列表；工具计数六面一致，仍为 **50**
 - [x] `CHANGELOG.md` 新增 `## v0.18.0 — 2026-10-02` 节（5 条，符合每节 ≤5 条）
-- [ ] **平台声明如实（红线 1）**：三处平台状态表（根 + 包内中/英）的 **Windows / macOS 行**
-      本次均为「**未执行真机门禁**（不得读出「已通过」）；本版验证结果见发布核对表（运行中，待回填）」；
-      **Linux / WSL2 = 已实测通过**（本 worktree 全量测试，见 §5）。**Windows / macOS 结论待回填**（§6）
+- [ ] **平台声明如实（红线 1）**：三处平台状态表（根 + 包内中/英）保持 v0.18.0 发布准备措辞不变——
+      **负责人裁决：平台结论只落 docs（不回填 README）**，因为 `dsh-graph-host/README.md` 会被打进包内，任何 README 改动都会使已验证产物 sha 失效；
+      **Linux / WSL2 = 已实测通过**（§5）；**Windows = 已实测 PASS**（§6，被测产物即候选包）；**macOS = 待回填**（§6）
 - [x] 全量测试 `node --test core/tests/*.test.ts` = **1604 / 1604，fail 0**（§5；基线同为 1604，用例数未减少）
 - [x] `./node_modules/.bin/tsc --noEmit -p tsconfig.json` = **exit 0**（§5）
 - [x] `node --check dist/lib/client.js` = **OK**（exit 0，§5）
@@ -119,8 +120,9 @@ worktree 缺 `node_modules`，经**符号链接**指向主树只读复用（不�
 
 ## 6. 未执行项与待回填（如实登记）
 
-- **Windows 真机门禁：本次未执行。** 最近一次真机结论为 **v0.17.0 周期**
-  （出处 [`docs/release-checklist-v0.17.0.md`](release-checklist-v0.17.0.md) §3.1）——**不构成本版结论**。
+- **Windows 真机门禁：已执行 = PASS**（2026-10-01，win32/x64，Node v24.13.0，宿主 `0.2.0-rc.2`，T1–T5 10/0/0）。
+  被测产物即**发布候选包** `dsh-graph-0.18.0.tgz`（570157 B，sha256 `3ae728dd8c3525411aba5f71e31b6f744a7ddc4ca3c705a1e99139abd476974c`）；
+  回填见 [`docs/platform-gate.md`](platform-gate.md) §7。
 - **macOS 真机门禁：本次未执行。** 最近一次真机结论为 **v0.16.0 周期**
   （出处 [`docs/release-checklist-v0.16.0.md`](release-checklist-v0.16.0.md)）——**不构成本版结论**。
 - **未执行**：`npm publish`、annotated tag、GitHub release、`git push`、合并 `main`。

@@ -194,6 +194,7 @@ evidence: suite=core/tests node --test passed=1379 failed=0 skipped=0 exit=0
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Linux (WSL2) | 2026-09-25 | linux/x64 | v26.7.0 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 10/0/0 | **PASS**（已填） | agent:g-362-att-002 |
 | Linux (WSL2) · **v0.17.0** | 2026-09-30 | linux/x64 | v26.7.0 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 10/0/0 | **PASS**（已填；完整段 P1–P6/M4 = 9/0/0 + 转发 T1–T5 = 10/0/0，宿主 `0.2.0-rc.2`，端口 3095，最终包 sha256 `b5b3e0a4…`） | agent:独立验证者（v0.17.0 发布收尾） |
+| Windows · **v0.18.0** | 2026-10-01 | win32/x64 | v24.13.0 | — | — | — | — | — | — | — | 10/0/0 | **PASS**（T1–T5 全过；宿主 `0.2.0-rc.2`，端口 3088；**被测产物即发布候选包** `dsh-graph-0.18.0.tgz` sha256 `3ae728dd…` 570157 B） | 负责人（v0.18.0 发布收尾） |
 | macOS | 待填 | darwin/arm64 | | | | | | | | | | | |
 
 回填时请一并粘贴「可复制回传的报告」整段（执行件在结论后自动打印），并在 `README.md` 平台范围段落更新结论。
