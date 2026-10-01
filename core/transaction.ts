@@ -122,15 +122,33 @@ function acquireLock(lockPath: string, timeoutMs: number = 5000): void {
   }
 }
 
+/** 释放锁：仅当锁文件仍记录本进程 PID 时才删除（g-383）。
+ *
+ *  获取锁失败/超时的调用本无所有权（acquired=false），调用方不会走到这里；
+ *  能走到这里说明本进程确实写过该锁文件。但「过期锁抢占」路径用非原子的
+ *  `flag: "w"` 覆写实现，覆写本身不构成独占证明：锁可能已被其他进程接管。
+ *  因此删除前必须校验持有者标识，绝不盲删他人（或外层）的锁。
+ *  读不到持有者身份时保守放弃删除——宁可留残余锁文件，也不误删他人锁。 */
 function releaseLock(lockPath: string): void {
   try {
+    if (!existsSync(lockPath)) return;
+    let holder: string;
+    try {
+      holder = readFileSync(lockPath, "utf8").trim();
+    } catch {
+      return; // 无法确认持有者身份：保守不删
+    }
+    if (holder !== String(process.pid)) return; // 锁已被他人接管：不删
     rmSync(lockPath, { force: true });
   } catch { /* 锁文件可能已被其他进程清理 */ }
 }
 
 /** 在锁保护下执行读-改-写事务。
  *  流程：校验 → 加锁 → 重读 → CAS 校验 → 内存变更 → 事件先行 → 持久化 → 解锁。
- *  任何阶段失败立即解锁并返回 TxFailure，不递归重试。 */
+ *  任何阶段失败立即解锁并返回 TxFailure，不递归重试。
+ *  g-383：只有 acquireLock 正常返回（本次确实取得锁）才释放；超时/同进程嵌套
+ *  获取失败的调用不持有锁，绝不释放——否则会删掉原持有者仍在使用的锁，
+ *  使后续调用得以闯入其临界区。 */
 export function withTx<T>(
   ctx: TxContext,
   opts: { lockName: string; lockTimeoutMs?: number },
@@ -138,9 +156,11 @@ export function withTx<T>(
 ): TxResult<T> | TxFailure {
   const lockPath = lockFilePath(ctx.root, opts.lockName);
   let phase: TxPhase = "validate";
+  let acquired = false; // 本次调用是否真正取得锁（唯一释放依据）
   try {
     // 1. 加锁
     acquireLock(lockPath, opts.lockTimeoutMs ?? 5000);
+    acquired = true; // 抛错则不会执行到这里：超时/嵌套失败者无所有权
 
     // 2. 执行业务逻辑（在锁内）
     const result = fn(ctx);
@@ -156,7 +176,7 @@ export function withTx<T>(
     releaseLock(lockPath);
     return { ok: true, value: result.value, events };
   } catch (e) {
-    releaseLock(lockPath);
+    if (acquired) releaseLock(lockPath); // 获取失败者无锁：不得释放他人的锁
     if (e instanceof TxError) {
       return { ok: false, phase: e.phase, error: e.message, recoverable: e.recoverable };
     }
