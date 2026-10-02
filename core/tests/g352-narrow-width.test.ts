@@ -2091,7 +2091,7 @@ test("g-352 att-005：会话内看板页签签名 == 冻结 fixture，且 fixtur
       assert.fail("拒绝覆盖冻结基线：需 G352_SIG_ACK=1 显式确认（或 G352_SIG_DUMP=<其他路径> 只导出做 diff）");
     }
     const head = [
-      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.19.0 开发线；本版仅 constants 的 PLUGIN_VERSION 0.18.0→0.19.0-alpha 变更，g-380 关系标记入口 / g-381 搜索式对端选择 / 弹窗关系清单 / g-386 批量接受主管通知回执消费 等客户端与 kanban.js 改动均未触及签名正文 ⇒ 正文与 content-sha256 逐字节未变（已用 G352_SIG_DUMP 导出并与旧基线 diff 验证 0 行差异），仅 source-sha256 头随源码变更；本次同步更新本说明文字以反映发布线）",
+      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.19.0 开发线；本版为 g-257 旧宿主目录刷新 fallback 的一次性收敛——仅 helpers.js 的 refreshSubagentCatalog 能力分流（删去 setSubagentCatalogOpen 持久登记）改动，与头部/泳道渲染无关 ⇒ 正文与 content-sha256 逐字节未变（已用 G352_SIG_DUMP 导出并与旧基线 diff 验证 0 行差异），仅 source-sha256 头随源码变更；本次同步更新本说明文字以反映改动来源）",
       `# source-commit: ${execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot(), encoding: "utf8" }).trim()}`,
       `# source-sha256: ${sourceFingerprint()}`,
       `# source-files: ${SIG_SOURCE_FILES.join(",")}   # 源 hash 覆盖的模块（决定头部/泳道渲染）`,

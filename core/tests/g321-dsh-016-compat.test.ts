@@ -798,8 +798,8 @@ test("g-321 目录未收录降级：拿不到地址且刷新后仍未收录 → 
   const harness = makeHookHarness((R) => { box.React = R; return box.parts.useBoundSession("parent-1", "child-9"); });
   harness.render();
   await flushAsync();
-  assert.equal(catalogOpened, 1, "拿不到地址时必须先 setSubagentCatalogOpen(parentId, true)");
-  assert.equal(refreshed, 1, "并 await refreshSubagents(parentId) 再试一次");
+  assert.equal(refreshed, 1, "拿不到地址时必须一次性 refreshSubagents(parentId) 再试一次");
+  assert.equal(catalogOpened, 0, "g-257：一次性地址查询不得登记持续观察——setSubagentCatalogOpen(true) 会把 parent 永久加进官方共享 openCatalogs");
   assert.equal(box0.calls.retain.length, 0, "仍未收录时降级为空绑定——不得用裸 childId 去 retain（会 unknown session）");
   assert.equal(harness.value().session, null, "保留未接入占位");
   assert.deepEqual(logs, [], "降级路径不得刷 console");
