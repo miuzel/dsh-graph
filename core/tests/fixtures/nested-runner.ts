@@ -172,6 +172,18 @@
  *  导出清单/不变式由 `g421` 结构性守卫按调用闭包钉住
  *  （{@link NESTED_EVIDENCE_VERDICTS} / {@link NESTED_EVIDENCE_PRECONDITIONS} / {@link NESTED_EVIDENCE_PARTS} /
  *  {@link NESTED_NON_VERDICT_EXPORTS}；**所有**运行时导出必须恰好归属其中一张清单，未归类即判红）。
+ *
+ *  **第三轮收口（g-424，只核「有 test 级失败事件 + 签名匹配」仍不够）**：签名可被**另一个目标**的
+ *  真实失败满足，而被声明的目标其断言**从未执行**——终局复核在 tip `7121112` 实测的最小复现（两目标）：
+ *   · A = `test('expected', () => assert.fail('EXPECTED_NEGATIVE_SIG'))`
+ *   · B = `test.skip('skipped intended assertion', () => { throw new Error('EXPECTED_NEGATIVE_SIG') })`
+ *   ⇒ `code 1 / tests 2 / fail 1 / skipped 1 / files=[A,B] / test 级失败 1 条`，旧负向裁决**接受**，
+ *   而 B 的意图断言从未执行（`skip` 回调不运行、`todo` 零验证、`cancelled` 未跑完 ⇒ 都不参与通过判定）。
+ *   这三类用例**照常**产出
+ *   文件级完成事件、计数自洽 ⇒ 覆盖/通道校验看不出来。故 {@link nestedSuiteFailedProblems} 现与
+ *   {@link nestedSuitePassProblems} / 顶层闸门**同口径**地要求 `cancelled === 0 && skipped === 0 &&
+ *   todo === 0`（各自**点名红因**）；**只增不减、无 opt-out**。守卫见
+ *   `core/tests/g424-negative-verdict-skip-todo.test.ts`。
  */
 
 import assert from "node:assert/strict";
@@ -1502,11 +1514,16 @@ export function nestedTestLevelFailures(run: NestedRunResult): TestFailureEvent[
  *
  * 判据 = **非零退出（且非信号终止）** + **输出含预期错误特征** + **与正向裁决同一组证据不变式**
  * （{@link nestedEvidenceProblems}：目标集合 ≡ 逐文件完成事件集合且 `>0` + 通道/口径交叉校验）
+ * + **`cancelled === 0 && skipped === 0 && todo === 0`**（g-424，与正向裁决/顶层闸门同口径）
  * + **确有 test/subtest 级真实失败事件**，且（传入签名时）该失败事件的文本**匹配签名**。
  *
  * 前两条是 g-407 的「双断言」；第三条是 g-421 第一轮收口（早退 ⇒ 无完成事件）；
  * 第四条是 g-421 第二轮收口 —— 只核覆盖挡不住「**良性用例 + `process.exitCode = 1`**」：
- * 该形态**正常产出**文件级完成事件、计数自洽，唯一破绽就是「失败事件是文件包装，没有 test 级断言失败」。
+ * 该形态**正常产出**文件级完成事件、计数自洽，唯一破绽就是「失败事件是文件包装，没有 test 级断言失败」；
+ * 第五条是 g-424 收口（终局复核在 tip `7121112` 实测的新 P1）—— 只核「有 test 级失败事件 + 签名匹配」
+ * 挡不住「**签名由另一个目标的真实失败满足、而被声明的目标其断言从未执行**」（另一目标被 `skip`/`todo`/
+ * `cancelled`）。这三类用例**照常**产出文件级完成事件、计数自洽 ⇒ 覆盖/通道校验都看不出来，唯有与正向
+ * 裁决同口径地**点名拒绝**。
  *
  * 与 {@link nestedSuitePassProblems} **共用同一实现**（不各写一份）—— 守卫见
  * `core/tests/g421-nested-runner-negative-verdict.test.ts`。
@@ -1527,6 +1544,38 @@ export function nestedSuiteFailedProblems(run: NestedRunResult, signature: RegEx
     );
   } else if (run.code === 0) {
     problems.push(`期望失败的嵌套运行必须非零退出（exit=${run.code}）——只判输出特征会留下单点永真`);
+  }
+  // g-424：**负向裁决与正向裁决同口径** —— 与 {@link nestedSuitePassProblems} / 顶层闸门一致，
+  // 要求 `cancelled === 0 && skipped === 0 && todo === 0`（各自**点名红因**，措辞与正向裁决同口径）。
+  //
+  // 为什么必须（终局复核在 tip `7121112` 上实测的新 P1）：只核「证据核心 + ≥1 test 级真实失败事件 +
+  // 签名匹配」**挡不住**「签名由**另一个目标**的真实失败满足、而**被声明的目标其断言从未执行**」。
+  // 最小复现（两目标、真实可达，无需蓄意破坏）：
+  //   A = `test('expected', () => assert.fail('EXPECTED_NEGATIVE_SIG'))`
+  //   B = `test.skip('skipped intended assertion', () => { throw new Error('EXPECTED_NEGATIVE_SIG') })`
+  //   ⇒ 实测 `code 1 / tests 2 / fail 1 / skipped 1 / files=[A,B] / test 级失败 1 条`，
+  //   旧负向裁决**接受** —— 而 B 的意图断言**从未执行**（`test.skip` 的回调根本不运行）。
+  // 同理：`todo` 是「零验证」（不计入 pass/fail，可 exit 0），`cancelled`（timeout/取消）意味着用例
+  // 未跑完 ⇒ 三者都是「断言未执行/未验证却可冒充如期报红」的旁路。
+  // 这三条与 {@link nestedEvidenceProblems} 的「覆盖/通道」正交：skip/todo 的用例**照常**产出文件级
+  // 完成事件、计数自洽，故覆盖校验与通道交叉校验都看不出来。
+  if (run.summary.cancelled > 0) {
+    problems.push(
+      `有被**取消**的用例（cancelled=${run.summary.cancelled}）—— 取消的用例断言**从未执行**，` +
+        `不能作为「如期报红」的证据（负向裁决与正向裁决同口径）`,
+    );
+  }
+  if (run.summary.skipped > 0) {
+    problems.push(
+      `有用例被**跳过**（skipped=${run.summary.skipped}）—— 跳过的用例断言**从未执行**，` +
+        `不能作为「如期报红」的证据（负向裁决与正向裁决同口径）`,
+    );
+  }
+  if (run.summary.todo > 0) {
+    problems.push(
+      `有**待办**用例（todo=${run.summary.todo}）—— 待办不是验证，` +
+        `不得作为「如期报红」的证据（负向裁决与正向裁决同口径）`,
+    );
   }
   // g-421：同口径证据不变式 —— 失败必须由**目标文件的真实测试断言**产生。
   for (const problem of nestedEvidenceProblems(run)) {
