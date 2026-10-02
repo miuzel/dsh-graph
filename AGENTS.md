@@ -72,16 +72,21 @@ After modifying source and rebuilding:
 **自身**核对「目标文件集合 ≡ 逐文件**完成事件**（带 `file` 的 `test:summary`）集合且 `>0`」，并与人类可读
 汇总 + 事件通道逐字段交叉校验；**fail-closed、无 opt-out**，既有 `code`/`fail`/`cancelled`/`skipped`/`todo`
 /计数口径断言只增不减。目标集合由 helper 从调用参数（`--test` 后的位置参数）推导，支持多文件 / 目录 /
-`<dir>/*<suffix>` glob（与网关同口径）；无法推导时须显式传 `opts.targets`，两者皆无则**抛错拒绝执行**
-（不存在「跳过覆盖断言」的静默路径）。私有事件通道经 `NODE_OPTIONS` 注入，argv / shell 两形态统一生效；
-消费点 `g350`/`g353`/`g407`/`g413`/`g415` 共用同一实现。
+`<dir>/*<suffix>` glob（与网关同口径）；**可推导时必须以推导集合为准**，同时给出的 `opts.targets` 必须与推导
+集合**精确一致**（realpath 归一后集合相等），不一致即**抛错拒绝执行**（g-418①：声明子集不得掩盖真实目标，
+如 argv 里的早退文件被声明集合漏掉 ⇒ 其失败断言从未执行却判绿）；**仅无法推导时**才允许使用 `opts.targets`，
+两者皆无则**抛错拒绝执行**（不存在「跳过覆盖断言」的静默路径）。私有事件通道经 `NODE_OPTIONS` 注入，
+argv / shell 两形态统一生效；消费点 `g350`/`g353`/`g407`/`g413`/`g415` 共用同一实现。
 
-**同一 helper 的嵌套运行入口**还按 g-417 收口：**同样拒绝**测试选集/分片开关 —— **生效** `NODE_OPTIONS`
-（`process.env` 与 `opts.env` 合并后、即子进程真正拿到的值）含 `--test-only` / `--test-name-pattern` /
-`--test-skip-pattern` / `--test-shard` 时**在 spawn 之前抛错拒绝执行并点名开关**（复用 g-415 的
-`findTestSelectionOption`，不另立口径 —— 用例级选集既不计 `fail` 也不计 `skipped`，文件级覆盖断言看不出来），
-`--no-warnings` / `--max-old-space-size=…` 等合法项不受影响；同时通道路径按 Node 的 `NODE_OPTIONS` 引号规则
-编码（双引号分组 + 转义 `\`/`"`）⇒ 含空格（乃至 Windows 形态反斜杠）的 `TMPDIR` 下通道照常挂上、不再误红。
+**同一 helper 的嵌套运行入口**还按 g-417/g-418 收口：**同样拒绝**测试选集/分片开关 —— **生效** `NODE_OPTIONS`
+（`process.env` 与 `opts.env` 合并后、即子进程真正拿到的值）**以及实际传给子进程的 argv**（`runNestedArgv`
+的 `args`；`runNestedCommand` 经 shell 语义切分出的等价 argv，含 `=值` / 独立取值 / 多重空格等变体）
+含 `--test-only` / `--test-name-pattern` / `--test-skip-pattern` / `--test-shard` 时**在 spawn 之前抛错拒绝执行
+并点名开关**（复用 g-415 的 `findTestSelectionOption` 同源 token 口径，不另立口径 —— 用例级选集既不计 `fail`
+也不计 `skipped`，文件级覆盖断言看不出来；argv 形态见 g-418②），`--no-warnings` / `--max-old-space-size=…` /
+`--test-reporter` / `--test-reporter-destination` 等合法项与文件路径不受影响；同时通道路径按 Node 的
+`NODE_OPTIONS` 引号规则编码（双引号分组 + 转义 `\`/`"`）⇒ 含空格（乃至 Windows 形态反斜杠）的 `TMPDIR` 下
+通道照常挂上、不再误红。
 
 ## Build Isolation（构建隔离：禁止在主树跑实验性构建）
 

@@ -223,16 +223,17 @@ test("g-416 判据2：无法推导目标 ⇒ fail-closed（抛错 / 判红），
   );
 });
 
-test("g-416 判据2：显式声明 targets 被采信且被真正校验（声明错文件 ⇒ 判红）", async (t) => {
+test("g-416 判据2：显式声明 targets 被采信且被真正校验（一致 ⇒ 通过；与推导不一致 ⇒ 拒绝，g-418 收紧）", async (t) => {
   const ok = await runNestedArgv(process.execPath, ["--test", PASS_A], { cwd: repoRoot, targets: [PASS_A] });
   assert.deepEqual(nestedSuitePassProblems(ok), [], "显式声明与真实目标一致 ⇒ 必须通过（逃生口可用）");
-  const wrong = await runNestedArgv(process.execPath, ["--test", PASS_A], { cwd: repoRoot, targets: [PASS_B] });
-  assert.match(
-    nestedSuitePassProblems(wrong).join("；"),
-    COVERAGE_RE,
-    "声明的目标没跑完 ⇒ 必须判红（声明不能被当成橡皮图章）",
+  // g-418①（语义收紧）：`args` 可推导时**必须以推导集合为准**；声明错文件不再「跑完再由覆盖判据判红」，
+  // 而是**在 spawn 之前直接拒绝**（旧实现会静默取声明）；覆盖判据仍保留给「无法推导时用声明」的形态。
+  assert.throws(
+    () => runNestedArgv(process.execPath, ["--test", PASS_A], { cwd: repoRoot, targets: [PASS_B] }),
+    /不一致|精确一致/,
+    "声明的目标与推导集合不一致 ⇒ 必须拒绝执行（声明不能被当成橡皮图章）",
   );
-  t.diagnostic(`evidence: suite=g416-explicit-targets ok=accepted wrong=red`);
+  t.diagnostic(`evidence: suite=g416-explicit-targets ok=accepted mismatched=refused`);
 });
 
 // ============================================================================
