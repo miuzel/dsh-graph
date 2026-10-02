@@ -1356,7 +1356,7 @@ test("g-148 模块源契约：goal-actions.js AcceptFeedback 解构 onRefresh �
   // 成功路径调用 onRefresh?.()
   assert.ok(
     /onRefresh\?\.\(\)/.test(src),
-    "startExecution 成功分支调用 onRefresh?.()");
+    "doAccept 成功分支调用 onRefresh?.()");
 });
 
 test("g-148 模块源契约：goal-actions.js AcceptFeedback 成功路径无裸 load() 调用", () => {
@@ -1384,6 +1384,34 @@ test("g-148 模块源契约：goal-modal.js 向 AcceptFeedback 传递 onRefresh:
     "load 使用 useCallback 定义为稳定回调");
 });
 
+// ===== g-391：不可达旧路径删除后的结构守卫（替代 g-272 的「【${goalId} 反馈】」字面锚点） =====
+// 原 g-272「保留项锚点」用字面串钉住一段**无入口**的反馈 UI 提示词模板（`prefillText`，仅由
+// 从未被 `setMode("feedback")` 触发的分支引用）。该段与 doForceAccept（引用未定义的
+// forceReason/setForceMode/setForceReason）、startExecution、openSupervisorWithFeedback 一并
+// 删除后，字面锚点已无对应活代码——保留它只会逼迫仓库继续保留无效文本。
+// 故改为**结构断言**：死路径必须缺席（任一回归即红），且活入口必须存在。这不是削弱：原锚点只
+// 断言「某字符串存在」，新断言同时覆盖未定义引用缺席、无入口 state 缺席与执行/接受/判据反馈活入口。
+test("g-391 结构契约：AcceptFeedback 不可达旧路径缺席且活入口（doAccept/InProgressPrompt/判据反馈）保留", () => {
+  const src = readFileSync(
+    join(import.meta.dirname, "../../dsh-graph-host/lib/client/goal-actions.js"), "utf8");
+  // ① 已证不可达 / 引用未定义符号的旧路径必须缺席
+  for (const gone of [
+    "doForceAccept", "forceReason", "setForceMode", "setForceReason",
+    "const startExecution = ", "openSupervisorWithFeedback", "prefillText",
+    'mode === "feedback"', 'setMode("feedback")',
+  ]) {
+    assert.ok(!src.includes(gone), `不可达旧路径残留：${gone}`);
+  }
+  // ② 活入口必须保留（抠真实 doAccept 函数体，断言其内部行为而非全文出现）
+  const doAccept = extractBalanced(src, "const doAccept = ");
+  assert.match(doAccept, /promptSessionQueue\(rt, supervisorSession, parts,/, "doAccept 主管通知通路保留");
+  assert.match(doAccept, /onRefresh\?\.\(\)/, "doAccept 成功路径仍调用 onRefresh?.()");
+  assert.match(src, /h\(InProgressPrompt, \{/, "执行入口仍走 InProgressPrompt");
+  assert.match(src, /dgT\("criteria\.feedbackBtn"\)/, "判据反馈入口保留");
+  // ③ 确认列不得重新出现强制接受请求体
+  assert.ok(!/force:\s*true,\s*reason/.test(src), "确认列不得重新出现强制接受请求体");
+});
+
 test("g-148 生成 bundle 契约：client.js 含 onRefresh 解构/调用且无裸 load()，保留 generated header", () => {
   const bundle = readFileSync(
     join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
@@ -1398,7 +1426,7 @@ test("g-148 生成 bundle 契约：client.js 含 onRefresh 解构/调用且无�
   // 成功路径调用 onRefresh?.()
   assert.ok(
     /onRefresh\?\.\(\)/.test(bundle),
-    "生成 bundle: startExecution 成功分支调用 onRefresh?.()");
+    "生成 bundle: doAccept 成功分支调用 onRefresh?.()");
   // GoalModal 向 AcceptFeedback 传递 onRefresh: load
   assert.ok(
     /onRefresh:\s*load/.test(bundle),
