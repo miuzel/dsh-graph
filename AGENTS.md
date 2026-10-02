@@ -113,6 +113,37 @@ argv / shell 两形态统一生效；消费点 `g350`/`g353`/`g407`/`g413`/`g415
 ⇒ **零副作用**（未建通道、未启动进程、未产生 marker）；含空格的路径请改用引号包裹
 （`node --test 'a b.test.ts'`）。守卫见 `core/tests/g420-nested-runner-crosscheck-and-shell-subset.test.ts`。
 
+**负向裁决与正向裁决同口径（g-421）**：同一 helper 的**负向**裁决入口不再只看「非零退出 + 输出正则」——
+`assertNestedSuiteFailed`（负向变异对照专用）与 `assertNestedSuiteRan`（被 `g353` 两个负向对照
+「陈旧产物 / 漏模块」与整套件自证闸门直接消费）现与 `nestedSuitePassProblems` / `assertNestedSuitePassed`
+**共用同一组证据不变式** `nestedEvidenceProblems`：目标文件集合 ≡ 逐文件**完成事件**（带 `file` 的
+`test:summary`）集合且 `>0`、人类可读汇总 ↔ 通道 `summary` 逐字段交叉校验、通道**内部** `tally` ↔
+`summary` 交叉校验（两侧各自计数口径自洽）。**fail-closed、无 opt-out**：`channel.files=[]` / 提前退出 /
+断言未执行 ⇒ **拒绝**并点名「失败不是由真实测试断言产生」（终局复核实测：夹具打印 sentinel、注册
+`assert.fail(sentinel)` 后立即 `process.exit(1)` 得 `code 1 / tests 1 / fail 1` 而 `files=[]`，旧负向裁决
+**接受** ⇒ 「进程早退」可冒充「预期失败」= false-positive test evidence，定级 P1）。
+
+**仅「有完成事件 + 非零退出」仍不够（第二轮 P1）**：`test('assertions pass', () => {})` **良性通过** +
+打印期望签名 + 模块末尾 `process.exitCode = 1` ⇒ Node **正常产出**文件级完成事件、计数自洽（实测
+`code 1 / tests 2 / pass 1 / fail 1 / files=1`），那唯一 1 个 `fail` 只是 Node 为**文件进程**非零退出合成的
+「**文件包装**失败」（`details.error` 带进程级 `exitCode`/`signal`），**本该失败的断言从未执行**。
+故负向裁决现在还要求：干净通道里**确有 test/subtest 级的真实失败事件**（`details.type === "test"` 且
+**不带**进程级 `exitCode`/`signal`），且（签名是 `assertNestedSuiteFailed` 的**必需**参数，省略即抛错）
+**该失败事件的 `error`/`details` 文本必须匹配签名** —— 签名**只**在事件通道上匹配，**绝不**匹配 stdout /
+整段人类可读输出（那正是可以被夹具自己打印的伪造面）。为此 `scripts/test-reporter-events.mjs`
+**加法式**新增 `{"type":"failure", …}` 实体级记录（`name`/`entityType`/`message`/`file`/`exitCode`/`signal`；
+summary/tally 语义不变 ⇒ 顶层闸门只用计数的交叉校验不受影响），由 `parseEventChannel` 收进
+`channel.failures`；`scripts/` 不是产品代码、不入 `dist/`。
+
+**全体裁决 helper 普查 + 结构性守卫**：任何 `assertNested*` / `nested*Problems` 导出都必须登记进 helper 的
+`NESTED_EVIDENCE_VERDICTS` / `NESTED_EVIDENCE_PRECONDITIONS` / `NESTED_EVIDENCE_PARTS`，且其**调用闭包**
+必须到达 `nestedEvidenceProblems`；**所有运行时导出**（穷举 `function` / `async function` / `generator` /
+`const|let|var` 形态）还必须**恰好**归属上述三张表或 `NESTED_NON_VERDICT_EXPORTS` 之一 —— 未归类、
+重复登记、清单漂移、不支持的 `export` 形态、以及「形如裁决入口却藏进非裁决清单」一律 fail-closed 判红。
+既有命令与 glob 表述不变：上面的 `node --test core/tests/*.test.ts`、`node scripts/run-tests.mjs`
+（同一 glob `core/tests/*.test.ts`）与 `assertNestedSuitePassed` 的既有判据**只增不减**。
+守卫见 `core/tests/g421-nested-runner-negative-verdict.test.ts`。
+
 ## Build Isolation（构建隔离：禁止在主树跑实验性构建）
 
 **实验性构建禁止在主树进行 —— 一律在隔离 worktree 或仓库内私有副本中进行。**
