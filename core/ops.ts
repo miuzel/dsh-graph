@@ -3018,23 +3018,39 @@ function versionSlugDiagnostics(root: string): string[] {
   const CANONICAL_ROOT_DIRS = new Set([
     "backlog", "goals", "versions", "memory", "shared-cards", "attachments", "handoffs", "worktrees", "node_modules", "tmp",
   ]);
-  for (const entry of readdirSync(root)) {
-    if (entry.startsWith(".") || CANONICAL_ROOT_DIRS.has(entry)) continue;
-    const gdir = join(root, entry, "goals");
-    if (!isDir(gdir)) continue;
-    for (const gid of readdirSync(gdir)) {
-      const gf = join(gdir, gid, "goal.md");
-      if (!existsSync(gf)) continue;
+  // 逃逸形态一律以 `.../goals/<id>/goal.md` 收尾；深度**有界递归**（此前的单层扫描会漏掉
+  // `../x/y` 这类产物：落点是 <board>/x/y/goals/<id>/goal.md，在根下一层之外）。
+  // 上界 4 层覆盖 <board>/a/b/c/goals/<id>/goal.md；更深或逃出 board 根之外的产物不可能被
+  // 板内诊断看到（不扫祖先/兄弟目录），属已记录残余。
+  const ESCAPE_SHAPE = /(^|\/)goals\/[^/]+\/goal\.md$/;
+  const scanEscape = (dir: string, depth: number, rel: string): void => {
+    if (depth > 4) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const p = join(dir, entry);
+      const childRel = `${rel}/${entry}`;
+      if (isDir(p)) {
+        scanEscape(p, depth + 1, childRel);
+        continue;
+      }
+      if (entry !== "goal.md" || !ESCAPE_SHAPE.test(childRel)) continue;
       let version: unknown = null;
       try {
-        version = parseDoc(readFileSync(gf, "utf8")).meta.version ?? null;
+        version = parseDoc(readFileSync(p, "utf8")).meta.version ?? null;
       } catch {
         /* 坏目标文件：仅按落点报告 */
       }
-      problems.push(
-        `${entry}/goals/${gid}/goal.md: 目标逃出 versions/ 泳道（version=${ref(version)}）——只读诊断，不自动迁移`,
-      );
+      problems.push(`${childRel}: 目标逃出 versions/ 泳道（version=${ref(version)}）——只读诊断，不自动迁移`);
     }
+  };
+  for (const entry of readdirSync(root)) {
+    if (entry.startsWith(".") || CANONICAL_ROOT_DIRS.has(entry)) continue;
+    if (isDir(join(root, entry))) scanEscape(join(root, entry), 0, entry);
   }
   return problems;
 }
@@ -9084,6 +9100,13 @@ function countBacklogGoals(root: string, includeArchived = false): number {
 /** 获取指定版本的目标明细列表（g-258 首屏懒加载按需展开）。 */
 export function versionGoals(root: string, slug: string, opts?: { includeArchived?: boolean }): BoardGoal[] {
   assertSafeId(slug, "版本 slug");
+  // g-404：读入口接入与写入口**同一** slug 规则（assertVersionSlug 复用 versionSlugSchema）。
+  // 追加而非替换 `assertSafeId`——后者是通用 id 守卫，漏判控制字符与单独的 `.`：
+  //   versionGoals(root, "\u0001bad") 曾只报「不存在」（其实已解析进 versions/ 内），
+  //   versionGoals(root, ".") 曾解析到 versions/ 自身并返回空列表。
+  // 保留 assertSafeId 的额外严格度（如含 `..` 子串的 `v..1`），且**不引入精确名匹配**：
+  // 合法 slug 的泳道解析仍完全由 existsSync/卷大小写语义决定（g-364 的别名读取行为不变）。
+  assertVersionSlug(slug, "slug");
   const includeArchived = opts?.includeArchived ?? false;
   const vdir = join(root, "versions", slug);
   if (!existsSync(vdir)) throw new GraphError(`版本 ${slug} 不存在`);

@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -27,7 +27,10 @@ import {
   releaseVersion,
   setVersionStatus,
   versionDetail,
+  versionGoals,
+  withCaseInsensitiveVolumeForTesting,
 } from "../ops.ts";
+import { caseAliasVersionSlug } from "../version-lane.ts";
 import { readEvents } from "../events.ts";
 import { validateSchema, versionSlugSchema, assertVersionSlug, isVersionSlug, VERSION_SLUG_PATTERN } from "../schema.ts";
 import { apply } from "../../dist/index.js";
@@ -303,4 +306,79 @@ test("g-404 非法 version 字段的既有目标被只读报出（validate 不�
   assert.doesNotThrow(() => { problems = validate(root); }, "validate 不得因历史非法数据抛错");
   assert.ok(problems.some((p) => /非法 slug/.test(p) && /只读诊断/.test(p)), `应报非法 version 字段：${problems.join(" | ")}`);
   assert.equal(readFileSync(file, "utf8"), forged, "只读诊断不改写目标文件");
+});
+
+// ===== ⑥ 读入口 versionGoals：与写入口同一规则，且不破坏合法/大小写别名读取（复核 P2a 订正） =====
+
+/** 真实卷是否大小写不敏感（探针建后即删；不依赖注入，反映生产路径的真实语义）。 */
+function volumeIsCaseInsensitive(root: string): boolean {
+  const probe = join(root, "versions", "__g404-probe-Ab");
+  mkdirSync(probe, { recursive: true });
+  const folded = existsSync(join(root, "versions", "__g404-probe-aB"));
+  rmSync(probe, { recursive: true, force: true });
+  return folded;
+}
+
+test("g-404 versionGoals 读入口接入同一 slug 守卫：补齐 assertSafeId 漏判的控制字符与单独的 `.`", () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-g404-vg-"));
+  init(root);
+  const goal = createGoal(root, { title: "in-lane", version: "v0.19.4", actor: "test" });
+  // 旧行为（负向对照）：这两个值 assertSafeId 都放行 —— `\u0001bad` 只报「不存在」（其实已进 versions/ 内部），
+  // `.` 解析到 versions/ 自身并返回空列表。接入同一规则后必须一律以「非法版本 slug」拒绝。
+  assert.throws(() => versionGoals(root, "\u0001bad"), /非法版本 slug/, "控制字符必须被同一 slug 规则拒绝");
+  assert.throws(() => versionGoals(root, "."), /非法版本 slug/, "单独的 `.` 必须被拒绝（旧行为会解析到 versions/ 自身）");
+  for (const { slug, why } of ILLEGAL) {
+    // 两条守卫的报错前缀都是「版本 slug」/「非法版本 slug」；任一拒绝即可（本目标是统一拒绝语义）
+    assert.throws(() => versionGoals(root, slug), /版本 slug/, `读入口拒绝 ${JSON.stringify(slug)}（${why}）`);
+  }
+  // ① 合法读取正常
+  assert.deepEqual(versionGoals(root, "v0.19.4").map((g: any) => g.id), [goal]);
+  // ② 大小写别名：守卫本身**必须放行**——安全性来自非法字符维度，不是靠拒绝大小写别名实现的
+  assert.equal(isVersionSlug("V0.19.4"), true, "大小写别名不是本目标的非法维度");
+  assert.equal(assertVersionSlug("V0.19.4"), "V0.19.4");
+  assert.equal(isVersionSlug("V0.19.3"), true);
+  // ③ 别名读取结果仍完全由真实卷语义决定（本改动未引入精确名匹配 ⇒ 既有行为逐字不变）
+  if (volumeIsCaseInsensitive(root)) {
+    // 不敏感卷：别名读取照常解析到同一泳道（g-364 既有读取行为不得被破坏）
+    assert.deepEqual(versionGoals(root, "V0.19.4").map((g: any) => g.id), [goal], "不敏感卷：别名读取必须仍命中同一泳道");
+  } else {
+    // 敏感卷（ext4/WSL2 本机）：别名读取如旧报「不存在」，**错误类型不得变成 slug 非法**
+    assert.throws(() => versionGoals(root, "V0.19.4"), /不存在/, "敏感卷：别名读取仍报「不存在」（与基线一致）");
+    assert.throws(() => versionGoals(root, "V0.19.4"), (e: any) => !/非法版本 slug/.test(e.message), "别名不得被误判为非法 slug");
+  }
+  // ④ g-364 写入侧的别名守卫语义未受影响（注入不敏感卷语义仍报出磁盘实际拼写）
+  assert.equal(
+    withCaseInsensitiveVolumeForTesting(true, () => caseAliasVersionSlug(root, "V0.19.4")),
+    "v0.19.4",
+    "g-364 的 caseAliasVersionSlug 语义不得被本改动改变",
+  );
+  // ⑤ 注入不敏感语义不改变 versionGoals 的判定（本函数只用真实 FS 解析泳道，未接入注入）
+  assert.equal(isVersionSlug("V0.19.4"), withCaseInsensitiveVolumeForTesting(true, () => isVersionSlug("V0.19.4")));
+});
+
+// ===== ⑦ 逃逸诊断的深度覆盖（复核 P2b：板内更深嵌套不得漏报） =====
+
+test("g-404 逃逸诊断覆盖板内更深嵌套：`../x/y` 形态（根下两层）与一层形态都被报出", () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-graph-g404-deep-"));
+  init(root);
+  const goalDoc = (id: string, version: string) =>
+    `---\n{"id":"${id}","title":"${id}","status":"draft","version":"${version}"}\n---\n\n## 质量判据\n\n- x\n`;
+  // 一层（旧实现已覆盖）：slug `../z` ⇒ <board>/z/goals/g-002/goal.md
+  mkdirSync(join(root, "z", "goals", "g-002"), { recursive: true });
+  writeFileSync(join(root, "z", "goals", "g-002", "goal.md"), goalDoc("g-002", "../z"), "utf8");
+  // 两层（旧单层扫描**漏报**，即复核 P2b）：slug `../x/y` ⇒ <board>/x/y/goals/g-001/goal.md
+  mkdirSync(join(root, "x", "y", "goals", "g-001"), { recursive: true });
+  writeFileSync(join(root, "x", "y", "goals", "g-001", "goal.md"), goalDoc("g-001", "../x/y"), "utf8");
+  // 非逃逸形态的同名文件不得误报（避免把任意 goal.md 当逃逸产物）
+  mkdirSync(join(root, "notescaped"), { recursive: true });
+  writeFileSync(join(root, "notescaped", "goal.md"), goalDoc("g-003", "v0.1"), "utf8");
+
+  const problems = validate(root);
+  assert.ok(problems.some((p) => p.startsWith("z/goals/g-002/goal.md")), `应报一层逃逸：${problems.join(" | ")}`);
+  assert.ok(
+    problems.some((p) => p.startsWith("x/y/goals/g-001/goal.md") && /version="\.\.\/x\/y"/.test(p)),
+    `应报两层逃逸（复核 P2b）：${problems.join(" | ")}`,
+  );
+  assert.ok(!problems.some((p) => /notescaped/.test(p)), `非逃逸位置的 goal.md 不得误报：${problems.join(" | ")}`);
+  assert.ok(!problems.some((p) => /g-003/.test(p)), "g-003 不是逃逸目标");
 });
