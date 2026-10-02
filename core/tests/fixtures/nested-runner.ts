@@ -75,6 +75,21 @@
  *     ⇒ 通道文件写到被截断的前缀、读不到 ⇒ 覆盖断言判红（安全但**误红**）。现由
  *     {@link quoteNodeOptionsValue} 按 Node 的引号规则编码（双引号分组 + 转义 `\` 与 `"`；实测单引号
  *     不被识别、引号内 `\` 仍是转义符）⇒ 含空格（乃至 Windows 形态的反斜杠）路径下通道照常挂上。
+ *
+ * ── g-418 的两条收口（g-417 终局复核实测的 P1；均为**合法 API 误用即静默少跑**）──────────────
+ *  ① **`opts.targets` 掩盖真实目标**：旧 `planNestedTargets` 形如 `opts.targets ?? deriveNestedTargetTokens(args)`
+ *     ⇒ 只要声明非空就**不与 argv 实际集合比对**。实测 `runNestedArgv(node, ['--test', passA, reflectionExitB],
+ *     {cwd, targets:[passA]})`（B = 注册失败断言后反射早退的夹具）得 `code 0 / targets [passA] / files [passA]
+ *     / tests 2 / pass 2 / fail 0`，{@link nestedSuitePassProblems} 为空、{@link assertNestedSuitePassed}
+ *     **接受** —— B 的失败断言从未执行。现由 {@link resolveNestedTargetPlan} 收口：**可推导时以推导集合为准**，
+ *     声明必须与推导集合 realpath 归一后**精确一致**，否则抛错；**仅无法推导时**才允许使用声明。
+ *  ② **`args` 内选集开关未拦**：g-417① 只查**生效 `NODE_OPTIONS`**，而 `runNestedArgv` 的 `args` 本身可携带
+ *     用例级选集。实测 `runNestedArgv(node, ['--test','--test-name-pattern=vis', mix], {cwd})`（mix = 1 通过
+ *     + 1 必失败）得 `code 0 / tests 1 / pass 1 / fail 0` 且目标文件**照常产出完成事件** ⇒ 覆盖断言看不出来、
+ *     helper **接受**，失败用例被参数选集静默排除。现由 {@link nestedArgvTestSelectionProblem} /
+ *     {@link assertNoNestedArgvTestSelection} 在**入口**（spawn 之前）拒绝并点名开关，复用 g-417 的
+ *     {@link findTestSelectionOption} 同源 token 口径（`selectionOptionNameOfToken`），
+ *     `--test-reporter` 等合法选项与文件路径不误拒。
  */
 
 import assert from "node:assert/strict";
@@ -142,15 +157,29 @@ function splitNodeOptions(value: string): string[] {
 }
 
 /**
+ * 单个 token 是否为**选集/分片**开关（`--test-name-pattern=…` 归一为 `--test-name-pattern`）；
+ * 不是则返回 `null`。**只有以 `-` 开头的 token 才当选项**（文件路径 / 独立取值不得误拒）。
+ *
+ * g-418②：这是「生效 `NODE_OPTIONS` 判定」与「传入子进程的 argv 判定」**共用**的唯一 token 级口径
+ * （消费点分别见 {@link findTestSelectionOption} 与 {@link nestedArgvTestSelectionProblem}），
+ * 保证两处不会各写一套、逐字漂移。
+ */
+function selectionOptionNameOfToken(token: string): string | null {
+  if (!token.startsWith("-")) return null;
+  const eq = token.indexOf("=");
+  const name = eq === -1 ? token : token.slice(0, eq);
+  return (TEST_SELECTION_OPTION_NAMES as readonly string[]).includes(name) ? name : null;
+}
+
+/**
  * 命中**选集/分片**开关时返回该开关名（`--test-name-pattern=…` 归一为 `--test-name-pattern`），
  * 否则返回 `null`。不改变选中集合的合法选项（内存/告警/类型剥离等）一律不受影响。
  */
 export function findTestSelectionOption(nodeOptions: string | undefined | null): string | null {
   if (!nodeOptions) return null;
   for (const token of splitNodeOptions(nodeOptions)) {
-    const eq = token.indexOf("=");
-    const name = eq === -1 ? token : token.slice(0, eq);
-    if ((TEST_SELECTION_OPTION_NAMES as readonly string[]).includes(name)) return name;
+    const name = selectionOptionNameOfToken(token);
+    if (name !== null) return name;
   }
   return null;
 }
@@ -182,6 +211,42 @@ export function nestedTestSelectionProblem(nodeOptions: string | undefined | nul
  */
 export function assertNoNestedTestSelection(nodeOptions: string | undefined | null, label: string): void {
   const problem = nestedTestSelectionProblem(nodeOptions);
+  if (problem !== null) throw new Error(`${label}：${problem}`);
+}
+
+/**
+ * g-418②：**实际传给子进程的 argv**（`runNestedArgv` 的 `args`；`runNestedCommand` 经 shell 语义
+ * 切分出的等价 argv）里命中选集/分片开关时，返回**点名该开关**的红因文本，否则 `null`。
+ *
+ * 为什么入口必须**同时**拦 argv（不只拦生效 `NODE_OPTIONS`，g-417①）：`args` 本身就能携带用例级选集。
+ * 实测 `runNestedArgv(node, ['--test','--test-name-pattern=vis', mix], {cwd})`（mix = 1 通过 + 1 必失败）
+ * 得 `code 0 / tests 1 / pass 1 / fail 0`，且目标文件**照常产出完成事件** ⇒ 文件级覆盖断言看不出来，
+ * helper 会**接受**（失败用例被参数选集静默排除）。
+ *
+ * 口径与 `NODE_OPTIONS` 判定**完全一致**：复用 {@link selectionOptionNameOfToken} /
+ * {@link TEST_SELECTION_OPTION_NAMES}（`=值`、独立取值、多重空格等变体都归一为同一开关名）；
+ * `--test-reporter` / `--test-reporter-destination` 等合法选项与文件路径（不以 `-` 开头）一律不受影响。
+ * `--` 之后的 token 由 Node 视为**位置参数（目标文件）**，因此与 {@link deriveNestedTargetTokens}
+ * 同口径地停止扫描（不把「文件名叫 `--test-only`」这种路径误判为开关）。
+ */
+export function nestedArgvTestSelectionProblem(argv: readonly string[]): string | null {
+  for (const token of argv) {
+    if (token === "--") break;
+    const offending = selectionOptionNameOfToken(token);
+    if (offending !== null) {
+      return (
+        `参数（argv）含测试选集/分片开关 ${offending}：嵌套子 runner 会按它**静默**改变「哪些用例/文件` +
+        `真的跑」（用例级选集既不计 fail 也不计 skipped，逐文件完成事件照样产出 ⇒ 文件级覆盖断言看不出来）` +
+        `⇒ fail-closed 拒绝嵌套执行；请从传给子进程的参数中移除 ${offending}`
+      );
+    }
+  }
+  return null;
+}
+
+/** g-418②：入口守卫 —— 传给子进程的 argv 命中选集/分片开关即抛错拒绝（**无 opt-out**）。 */
+export function assertNoNestedArgvTestSelection(argv: readonly string[], label: string): void {
+  const problem = nestedArgvTestSelectionProblem(argv);
   if (problem !== null) throw new Error(`${label}：${problem}`);
 }
 
@@ -507,7 +572,10 @@ export interface NestedRunOptions {
   timeout?: number;
   /**
    * g-416：**显式声明**本次嵌套运行的目标文件（相对 `cwd` 或绝对；支持多文件 / 目录 / `<dir>/*<suffix>`）。
-   * 仅在 helper 无法从参数推导目标时使用（如走默认文件发现、或命令形态非 `node --test`）；
+   *
+   * g-418①（语义收紧）：**仅在 helper 无法从参数推导目标时**（走默认文件发现、或命令形态非 `node --test`）
+   * 才被采用；**`args` 可推导时必须以推导集合为准**，此时若同时声明本项，必须与推导集合**精确一致**
+   * （realpath 归一后集合相等），否则**抛错拒绝执行**（声明子集不得掩盖真实目标）。
    * 两者都没有 ⇒ helper 抛错 fail-closed（不存在「跳过覆盖断言」的静默路径）。
    */
   targets?: string[];
@@ -564,22 +632,76 @@ function capture(
   });
 }
 
-/** 目标推导的统一出口：自动推导 → 调用方显式声明兜底 → 两者皆无则抛错（fail-closed，无 opt-out）。 */
-function planNestedTargets(args: readonly string[], opts: NestedRunOptions, source: string): string[] {
-  const tokens = opts.targets ?? deriveNestedTargetTokens(args);
-  if (!tokens || tokens.length === 0) {
+/**
+ * g-418①：realpath 归一的**集合相等**（{@link expandNestedTargets} 已去重；顺序无关，元素必须逐一对应）。
+ * 声明集合与推导集合的比对与既有覆盖判据**同一口径**（`nestedNormPath` ⇒ realpath）。
+ */
+function sameNestedTargetSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((entry) => set.has(entry));
+}
+
+/**
+ * g-418①：目标集合的**唯一裁决**（`opts.targets` 语义收紧）——
+ *   ① **可推导时必须以推导集合为准**，显式声明只能与推导集合**精确一致**（realpath 归一）；
+ *      不一致 ⇒ **抛错拒绝执行**（不得静默取其一，否则声明子集可掩盖真实目标、让早退目标不被覆盖）；
+ *   ② **仅无法推导时**才允许使用声明集合（该集合仍受逐目标完成事件覆盖约束）；
+ *   ③ 两者皆无 ⇒ 抛错（不存在「跳过覆盖断言」的静默路径）。
+ */
+function resolveNestedTargetPlan(
+  derived: string[] | null,
+  declared: string[] | null,
+  source: string,
+  cwd: string,
+): string[] {
+  if (derived === null && declared === null) {
     throw new Error(
-      `${source}：无法推导嵌套运行的目标文件（未给 --test 目标 / 走默认文件发现）⇒ fail-closed 拒绝执行。` +
-        `请显式传 opts.targets（相对 cwd 或绝对；支持多文件、目录、<dir>/*<suffix>）。`,
+      `${source}：无法推导嵌套运行的目标文件（未给 --test 目标 / 走默认文件发现），调用方也未显式声明 ` +
+        `opts.targets ⇒ fail-closed 拒绝执行。请显式传 opts.targets（相对 cwd 或绝对；支持多文件、目录、` +
+        `<dir>/*<suffix>）。`,
     );
   }
-  return expandNestedTargets(tokens, opts.cwd);
+  if (derived === null) return declared as string[];
+  if (declared === null) return derived;
+  if (!sameNestedTargetSet(derived, declared)) {
+    const show = (files: readonly string[]): string => {
+      const shown = files.slice(0, 5).map((f) => relative(cwd, f));
+      return `${shown.join("、")}${files.length > 5 ? ` …(+${files.length - 5})` : ""}`;
+    };
+    throw new Error(
+      `${source}：显式声明的 opts.targets 与从参数**推导**出的目标集合不一致（realpath 归一后集合不相等）` +
+        `⇒ fail-closed 拒绝执行：可推导时必须以推导集合为准，声明不得掩盖真实目标。` +
+        `推导集合 ${derived.length} 个 [${show(derived)}]；声明集合 ${declared.length} 个 [${show(declared)}]。`,
+    );
+  }
+  return derived;
+}
+
+/**
+ * 目标推导的统一出口：**推导优先** → 一致声明只作校验 → 无法推导时才用声明 → 不一致 / 两者皆无则抛错
+ * （fail-closed，无 opt-out）。入口先拦 argv 选集/分片开关（g-418②），全部发生在 spawn 之前。
+ */
+function planNestedTargets(args: readonly string[], opts: NestedRunOptions, source: string): string[] {
+  // g-418②：**spawn 之前**拦 argv（argv 形态即 `args`；shell 形态为 shell 语义切分出的等价 argv）。
+  assertNoNestedArgvTestSelection(args, source);
+
+  // g-418①：可推导 ⇒ 采用**推导集合**；`opts.targets` 只在与之一致时被校验，仅无法推导时才被采用。
+  const derivedTokens = deriveNestedTargetTokens(args);
+  const derived =
+    derivedTokens !== null && derivedTokens.length > 0 ? expandNestedTargets(derivedTokens, opts.cwd) : null;
+  const declared =
+    opts.targets !== undefined && opts.targets.length > 0 ? expandNestedTargets(opts.targets, opts.cwd) : null;
+
+  return resolveNestedTargetPlan(derived, declared, source, opts.cwd);
 }
 
 /**
  * 跑一条**嵌套测试**命令（shell 形态，供 `package.json` 里取到的脚本文本直接用）。
  * env 一律经 {@link cleanTestEnv} 清洗；生效 `NODE_OPTIONS` 命中选择集/分片开关则**抛错拒绝执行**
- * （{@link assertNoNestedTestSelection}，g-417①）；无法推导目标同样抛错（g-416）。
+ * （{@link assertNoNestedTestSelection}，g-417①）；**shell 语义切分出的等价 argv** 命中选集/分片开关
+ * 同样在 spawn 前抛错拒绝（{@link assertNoNestedArgvTestSelection}，g-418②）；目标不一致 / 无法推导同样抛错
+ * （g-418① / g-416）。
  */
 export function runNestedCommand(cmd: string, opts: NestedRunOptions): Promise<NestedRunResult> {
   const targets = planNestedTargets(splitNodeOptions(cmd), opts, `runNestedCommand(${cmd})`);
@@ -589,7 +711,8 @@ export function runNestedCommand(cmd: string, opts: NestedRunOptions): Promise<N
 /**
  * 跑一个**嵌套测试**进程（argv 形态，跨平台；`node --test …` 的推荐入口）。
  * env 一律经 {@link cleanTestEnv} 清洗；生效 `NODE_OPTIONS` 命中选择集/分片开关则**抛错拒绝执行**
- * （{@link assertNoNestedTestSelection}，g-417①）；无法推导目标同样抛错（g-416）。
+ * （{@link assertNoNestedTestSelection}，g-417①）；`args` 命中选集/分片开关同样在 spawn 前抛错拒绝
+ * （{@link assertNoNestedArgvTestSelection}，g-418②）；目标不一致 / 无法推导同样抛错（g-418① / g-416）。
  */
 export function runNestedArgv(
   file: string,
