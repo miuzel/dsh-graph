@@ -25,6 +25,12 @@
  * 顺序不同、无法推导时用声明、合法 reporter 选项、正常多文件）→ **反向变异对照**（分别回退两守卫 ⇒
  * ⑧⑨ 复活为「被接受」，给实测值）→ 接线结构守卫。
  *
+ * 注（g-419，v0.19.7 lane）：⑧ 的**不可推导**分支已被 g-419 进一步收紧 —— 无法推导时 helper 会把声明
+ * 目标**注入 spawn**（argv 插到 `--test` 之后 / shell 等价重写），使「实际运行集 ≡ 声明集」；因此
+ * 「声明一个同目录之外的正常文件」不再判红（它会被真的跑），判据改由「注入可观测 + 声明里的早退文件
+ * 仍然无完成事件 ⇒ 红」保证（见本文件 判据1 正向 的第二段断言与 `g419-nested-runner-fallback-injection`）。
+ * 可推导分支（本文件 ⑧ 的负向主体）语义与守卫不变。
+ *
  * 复用既有夹具（都在 fixtures 子目录，不被顶层 glob 误收）：
  * `fixtures/g416/{pass-a,pass-b,reflection-exit}.test.ts`、`fixtures/g417/mix.test.ts`。
  */
@@ -125,7 +131,7 @@ test("g-418 判据1（正向）：声明集合与推导集合一致（含顺序�
   t.diagnostic(`evidence: suite=g418-declared-consistent accepted=1 reordered=accepted targets=2 files=2`);
 });
 
-test("g-418 判据1（正向）：无法推导目标时（--test 默认发现）才采用 opts.targets，且仍被覆盖判据校验", async (t) => {
+test("g-418 判据1（正向）：无法推导目标时才采用 opts.targets，且仍被覆盖判据校验", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g418-nonderive-"));
   try {
     const only = join(dir, "only.test.ts");
@@ -134,17 +140,27 @@ test("g-418 判据1（正向）：无法推导目标时（--test 默认发现）
     const run = await runNestedArgv(process.execPath, ["--test"], { cwd: dir, targets: [only] });
     assert.deepEqual(nestedSuitePassProblems(run), [], "无法推导时声明集合必须被采用且判绿");
     assert.equal(run.targets.length, 1, "采用的就是声明的 1 个目标");
-    assert.equal(run.channel.files.length, 1, "默认发现的文件必须产出完成事件（声明集合被真正校验）");
+    assert.equal(run.channel.files.length, 1, "声明集合的文件必须产出完成事件（声明集合被真正校验）");
     assertNestedSuitePassed(run, "g-418 无法推导时用声明");
 
-    // 声明错文件（同目录发现的不是它）⇒ 覆盖判据判红：声明不是橡皮图章。
-    const wrong = await runNestedArgv(process.execPath, ["--test"], { cwd: dir, targets: [PASS_A] });
-    assert.match(
-      nestedSuitePassProblems(wrong).join("；"),
-      COVERAGE_RE,
-      "无法推导时声明错文件 ⇒ 必须判红（声明只提供集合，不豁免覆盖断言）",
+    // g-419①（本文件的这一断言在 g-419 上被收紧）：无法推导 ⇒ helper 把声明目标**注入 spawn**，
+    // 声明集即实际运行集；因此「声明一个同目录之外的正常文件」不再判红（它会被真的跑），
+    // 「声明不是橡皮图章」改由下面两条更强的不变式保证：注入可观测 + 声明里的早退文件仍判红。
+    assert.match(run.command, new RegExp(only.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "声明目标必须出现在实际命令行里（注入 spawn）");
+    const early = join(dir, "early.test.ts");
+    writeFileSync(
+      early,
+      'import { test } from "node:test";\nimport assert from "node:assert/strict";\n' +
+        'test("g-418 早退夹具：注册失败断言后立即退出", () => { assert.fail("G418_EARLY_MUST_FAIL"); });\n' +
+        "process.exit(0);\n",
     );
-    t.diagnostic(`evidence: suite=g418-nonderive declared=used green=1 wrong_declared=red`);
+    const withEarly = await runNestedArgv(process.execPath, ["--test"], { cwd: dir, targets: [only, early] });
+    assert.match(
+      nestedSuitePassProblems(withEarly).join("；"),
+      COVERAGE_RE,
+      "声明集合里含早退文件 ⇒ 它没有完成事件，必须判红（声明只提供集合，不豁免覆盖断言）",
+    );
+    t.diagnostic(`evidence: suite=g418-nonderive declared=used green=1 injected=1 early_declared=red`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

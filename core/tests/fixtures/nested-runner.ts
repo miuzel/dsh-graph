@@ -90,6 +90,24 @@
  *     {@link assertNoNestedArgvTestSelection} 在**入口**（spawn 之前）拒绝并点名开关，复用 g-417 的
  *     {@link findTestSelectionOption} 同源 token 口径（`selectionOptionNameOfToken`），
  *     `--test-reporter` 等合法选项与文件路径不误拒。
+ *
+ * ── g-419 的两条收口（终局复核在 tip `c049a00` 上实测的**第三态 P1**）─────────────────────────
+ *  ① **`opts.targets` 在 fallback 路径上成了 opt-out**：`resolveNestedTargetPlan` 仅在**可推导**时
+ *     把声明与推导集合比对；**无法推导**（`['--test']` 无位置目标）时直接采信声明，而 spawn 的参数
+ *     仍是 `['--test']` ⇒ Node 照旧**默认发现**，跑的文件可比声明多。实测私有 cwd 放
+ *     `pass-a.test.mjs` + 注册失败断言后 `process.exit(0)` 的 `early-b.test.mjs`，
+ *     `runNestedArgv(node, ['--test'], {cwd, targets:[passA]})` 得
+ *     `code 0 / tests 2 / pass 2 / fail 0`，而 `channel.files=[passA]`（B 无逐文件完成事件）——
+ *     单向覆盖只核声明集合 ⇒ `problems=[]`、{@link assertNestedSuitePassed} **接受**，
+ *     B 的失败断言从未执行。现由 {@link injectPositionalTargetsIntoArgv} /
+ *     {@link injectPositionalTargetsIntoCommand} 把**声明目标作为显式位置参数注入 spawn**
+ *     （argv 形态插到 `--test` 之后；shell 形态等价重写）⇒ Node **不再默认发现**，
+ *     「实际运行集 ≡ 声明集」由构造保证，再按既有判据核验完成事件；
+ *     **无法安全重写**（不是 `node … --test …` 形态、缺 `--test` 等）⇒ **抛错 fail-closed**，
+ *     绝不信任未经验证的声明；既无法推导又无声明仍抛错（既有行为保留）。
+ *  ② **覆盖比对单向**：{@link nestedTargetCoverageProblems} 只查「目标未产出完成事件」。
+ *     现改为**双向**：任何**产出了完成事件却不在目标集合内**的文件同样判红 —— 关闭「Node 实际跑得
+ *     比 helper 展开更多」（glob 展开口径差异、默认发现漏网）的形态。
  */
 
 import assert from "node:assert/strict";
@@ -125,13 +143,33 @@ export const TEST_SELECTION_OPTION_NAMES = [
   "--test-shard",
 ] as const;
 
-/** 尽力按 shell 语义切分 `NODE_OPTIONS`（支持单/双引号与反斜杠转义）；切分不完美也不影响判定。 */
-function splitNodeOptions(value: string): string[] {
-  const tokens: string[] = [];
+/** shell 语义切分出的单个 token 及其在源串里的**字符区间**（g-419：shell 形态安全重写用）。 */
+interface ShellToken {
+  token: string;
+  /** 起始下标（含）。 */
+  start: number;
+  /** 结束下标（不含）。 */
+  end: number;
+}
+
+/**
+ * 按 shell 语义切分（支持单/双引号与引号内的反斜杠转义；引号外的 `\` 是普通字符 —— 与原
+ * {@link splitNodeOptions} 逐字同口径），并**保留每个 token 的源串区间** —— g-419 的 shell 形态重写
+ * 需要在 `--test` 那个 token 之后插词，只有区间才能保证插入位置正确（重新拼接会丢掉原有引号/空格）。
+ */
+function tokenizeShellWithSpans(value: string): ShellToken[] {
+  const tokens: ShellToken[] = [];
   let current = "";
+  let start = -1;
   let quote: string | null = null;
+  const flush = (end: number): void => {
+    if (current !== "") tokens.push({ token: current, start, end });
+    current = "";
+    start = -1;
+  };
   for (let i = 0; i < value.length; i += 1) {
     const ch = value[i];
+    if (start === -1 && !/\s/.test(ch)) start = i;
     if (quote) {
       if (ch === quote) {
         quote = null;
@@ -146,14 +184,18 @@ function splitNodeOptions(value: string): string[] {
     if (ch === '"' || ch === "'") {
       quote = ch;
     } else if (/\s/.test(ch)) {
-      if (current !== "") tokens.push(current);
-      current = "";
+      flush(i);
     } else {
       current += ch;
     }
   }
-  if (current !== "") tokens.push(current);
+  flush(value.length);
   return tokens;
+}
+
+/** 尽力按 shell 语义切分 `NODE_OPTIONS`（支持单/双引号与反斜杠转义）；切分不完美也不影响判定。 */
+function splitNodeOptions(value: string): string[] {
+  return tokenizeShellWithSpans(value).map((entry) => entry.token);
 }
 
 /**
@@ -633,6 +675,86 @@ function capture(
 }
 
 /**
+ * g-419①：`node` 可执行文件判定 —— 只有 `node` / `node.exe`（可带路径、可带 `.exe`）才允许做
+ * 「把声明目标注入 spawn」的重写。其它可执行文件（bash / 自定义脚本 / `env` 包裹等）形态无法保证
+ * 注入后语义等价 ⇒ 一律 fail-closed（{@link injectPositionalTargetsIntoArgv}）。
+ */
+function isNodeBinary(token: string): boolean {
+  const base = token.replaceAll("\\", "/").split("/").pop() ?? token;
+  return base === "node" || base === "node.exe";
+}
+
+/** POSIX 单引号包裹（`'` → `'\''`）：注入含空格/特殊字符的绝对路径必须安全。 */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * g-419①：**argv 形态**的安全重写 —— 把声明目标作为**显式位置参数**插到 `--test` 之后，
+ * 使 Node **不再走默认文件发现**（默认发现跑的文件数可比声明多 ⇒ 声明集不再代表实际运行集）。
+ *
+ * 插入点在 `--test` token 之后（`--` 终止符则在注入之后）⇒ `--test <files> [options]` 与
+ * `--test <files> --` 都被 Node 当作位置目标（已实测；`node --test f --test-reporter=spec` 正常）。
+ *
+ * fail-closed：只有「`file` 是 node 可执行文件」且「`args` 里确有 `--test` token」才可安全重写；
+ * 其余形态一律抛错 —— 不猜、也**不静默退回默认发现**（那正是第三态 P1 的成因）。
+ */
+function injectPositionalTargetsIntoArgv(
+  file: string,
+  args: readonly string[],
+  targetPaths: readonly string[],
+  source: string,
+): string[] {
+  if (!isNodeBinary(file)) {
+    throw new Error(
+      `${source}：无法从参数推导目标、需按 opts.targets 注入显式位置参数，但被启动的可执行文件不是 node` +
+        `（${file}）⇒ 无法安全重写（注入会改变非测试进程的语义）⇒ fail-closed 拒绝执行。`,
+    );
+  }
+  const testIndex = args.indexOf("--test");
+  if (testIndex === -1) {
+    throw new Error(
+      `${source}：无法从参数推导目标、需按 opts.targets 注入显式位置参数，但参数里没有 --test` +
+        `⇒ 无法安全重写 ⇒ fail-closed 拒绝执行（绝不信任未经验证的声明）。`,
+    );
+  }
+  const rewritten = [...args];
+  rewritten.splice(testIndex + 1, 0, ...targetPaths);
+  return rewritten;
+}
+
+/**
+ * g-419①：**shell 形态**的等价重写 —— 在 `--test` token 的**源串区间末尾**插入同样被 shell 安全引号
+ * 包裹的绝对目标路径。用区间插入（不重新拼接整条命令）⇒ 原引号、多余空格、重定向/管道一律原样保留。
+ *
+ * fail-closed：首 token 必须是 node 可执行文件、且命令里确有 `--test` token，否则抛错（见
+ * {@link injectPositionalTargetsIntoArgv} 的同款理由）。
+ */
+function injectPositionalTargetsIntoCommand(
+  cmd: string,
+  targetPaths: readonly string[],
+  source: string,
+): string {
+  const tokens = tokenizeShellWithSpans(cmd);
+  const head = tokens[0]?.token ?? "";
+  if (!isNodeBinary(head)) {
+    throw new Error(
+      `${source}：无法从参数推导目标、需按 opts.targets 注入显式位置参数，但命令首 token 不是 node` +
+        `（${head === "" ? "<空命令>" : head}）⇒ shell 结构无法安全改写 ⇒ fail-closed 拒绝执行。`,
+    );
+  }
+  const testToken = tokens.find((entry) => entry.token === "--test");
+  if (!testToken) {
+    throw new Error(
+      `${source}：无法从参数推导目标、需按 opts.targets 注入显式位置参数，但命令里没有 --test token` +
+        `⇒ fail-closed 拒绝执行（绝不信任未经验证的声明）。`,
+    );
+  }
+  const injected = targetPaths.map(shellQuote).join(" ");
+  return `${cmd.slice(0, testToken.end)} ${injected}${cmd.slice(testToken.end)}`;
+}
+
+/**
  * g-418①：realpath 归一的**集合相等**（{@link expandNestedTargets} 已去重；顺序无关，元素必须逐一对应）。
  * 声明集合与推导集合的比对与既有覆盖判据**同一口径**（`nestedNormPath` ⇒ realpath）。
  */
@@ -679,8 +801,10 @@ function resolveNestedTargetPlan(
 }
 
 /**
- * 目标推导的统一出口：**推导优先** → 一致声明只作校验 → 无法推导时才用声明 → 不一致 / 两者皆无则抛错
- * （fail-closed，无 opt-out）。入口先拦 argv 选集/分片开关（g-418②），全部发生在 spawn 之前。
+ * 目标推导的统一出口：**推导优先** → 一致声明只作校验 → 无法推导时才用声明（且必须**注入显式位置
+ * 目标**，见 {@link needsFallbackInjection} / {@link injectPositionalTargetsIntoArgv}，g-419①）
+ * → 不一致 / 两者皆无则抛错（fail-closed，无 opt-out）。入口先拦 argv 选集/分片开关（g-418②），
+ * 全部发生在 spawn 之前。
  */
 function planNestedTargets(args: readonly string[], opts: NestedRunOptions, source: string): string[] {
   // g-418②：**spawn 之前**拦 argv（argv 形态即 `args`；shell 形态为 shell 语义切分出的等价 argv）。
@@ -693,7 +817,22 @@ function planNestedTargets(args: readonly string[], opts: NestedRunOptions, sour
   const declared =
     opts.targets !== undefined && opts.targets.length > 0 ? expandNestedTargets(opts.targets, opts.cwd) : null;
 
+  // g-419①：fallback（无法推导）时，上面采纳的声明集合**不是**现成的运行集 —— 调用方必须按
+  // {@link needsFallbackInjection} 把它注入 spawn，否则 Node 仍走默认发现、声明就成了 opt-out。
   return resolveNestedTargetPlan(derived, declared, source, opts.cwd);
+}
+
+/**
+ * g-419①：本次调用是否走 **fallback**（args 无法推导目标 ⇒ 上面的裁决来源只能是 `opts.targets`）。
+ * 为真时调用方**必须**把（裁决得到的）目标集合注入 spawn：argv 形态见
+ * {@link injectPositionalTargetsIntoArgv}、shell 形态见 {@link injectPositionalTargetsIntoCommand}；
+ * 注入不安全就抛错 —— **绝不**让 spawn 保持默认发现（那正是第三态 P1：声明集 ≠ 实际运行集）。
+ *
+ * 与 {@link planNestedTargets} 同源判定（同一 `deriveNestedTargetTokens` 口径），不另立第二套。
+ */
+function needsFallbackInjection(args: readonly string[]): boolean {
+  const tokens = deriveNestedTargetTokens(args);
+  return tokens === null || tokens.length === 0;
 }
 
 /**
@@ -701,26 +840,32 @@ function planNestedTargets(args: readonly string[], opts: NestedRunOptions, sour
  * env 一律经 {@link cleanTestEnv} 清洗；生效 `NODE_OPTIONS` 命中选择集/分片开关则**抛错拒绝执行**
  * （{@link assertNoNestedTestSelection}，g-417①）；**shell 语义切分出的等价 argv** 命中选集/分片开关
  * 同样在 spawn 前抛错拒绝（{@link assertNoNestedArgvTestSelection}，g-418②）；目标不一致 / 无法推导同样抛错
- * （g-418① / g-416）。
+ * （g-418① / g-416）；**无法推导但有声明 ⇒ 把声明目标注入命令后再执行**（g-419①，注入失败即抛错）。
  */
 export function runNestedCommand(cmd: string, opts: NestedRunOptions): Promise<NestedRunResult> {
-  const targets = planNestedTargets(splitNodeOptions(cmd), opts, `runNestedCommand(${cmd})`);
-  return capture("bash", ["-c", cmd], opts, cmd, targets);
+  const source = `runNestedCommand(${cmd})`;
+  const argv = splitNodeOptions(cmd);
+  const targets = planNestedTargets(argv, opts, source);
+  const command = needsFallbackInjection(argv) ? injectPositionalTargetsIntoCommand(cmd, targets, source) : cmd;
+  return capture("bash", ["-c", command], opts, command, targets);
 }
 
 /**
  * 跑一个**嵌套测试**进程（argv 形态，跨平台；`node --test …` 的推荐入口）。
  * env 一律经 {@link cleanTestEnv} 清洗；生效 `NODE_OPTIONS` 命中选择集/分片开关则**抛错拒绝执行**
  * （{@link assertNoNestedTestSelection}，g-417①）；`args` 命中选集/分片开关同样在 spawn 前抛错拒绝
- * （{@link assertNoNestedArgvTestSelection}，g-418②）；目标不一致 / 无法推导同样抛错（g-418① / g-416）。
+ * （{@link assertNoNestedArgvTestSelection}，g-418②）；目标不一致 / 无法推导同样抛错（g-418① / g-416）；
+ * **无法推导但有声明 ⇒ 把声明目标注入 argv 后再 spawn**（g-419①，注入失败即抛错）。
  */
 export function runNestedArgv(
   file: string,
   args: string[],
   opts: NestedRunOptions,
 ): Promise<NestedRunResult> {
-  const targets = planNestedTargets(args, opts, `runNestedArgv(${file} ${args.join(" ")})`);
-  return capture(file, args, opts, `${file} ${args.join(" ")}`, targets);
+  const source = `runNestedArgv(${file} ${args.join(" ")})`;
+  const targets = planNestedTargets(args, opts, source);
+  const argv = needsFallbackInjection(args) ? injectPositionalTargetsIntoArgv(file, args, targets, source) : [...args];
+  return capture(file, argv, opts, `${file} ${argv.join(" ")}`, targets);
 }
 
 function tail(run: NestedRunResult, n = 600): string {
@@ -825,8 +970,10 @@ const CROSS_CHECK_FIELDS = ["tests", "pass", "fail", "cancelled", "skipped", "to
 /**
  * g-416：**逐目标文件完成事件覆盖**的判据（非抛错形态；空数组 = 覆盖成立）。
  *
- * 判据：`targets`（helper 从调用参数推导 / 调用方显式声明）**非空**，且其中每个文件都出现在
- * 事件通道的**逐文件完成事件**（带 `file` 的 `test:summary`）里。
+ * 判据（**双向**，g-419②）：`targets`（helper 从调用参数推导 / 调用方显式声明）**非空**，且
+ *   ① 其中每个文件都出现在事件通道的**逐文件完成事件**（带 `file` 的 `test:summary`）里；
+ *   ② **反向**：任何产出完成事件却**不在** `targets` 内的文件同样判红 —— 否则「Node 跑得比 helper
+ *      展开/声明更多」（glob 展开口径差异、默认发现漏网）会被静默放过。
  * 为什么用「逐文件汇总」而不是文件级 `test:pass`：后者在测试内提前退出时**仍会发出**，
  * 无法区分「跑完」与「刚注册就退出」；被排除/中途早退的文件**不会**产出逐文件汇总。
  *
@@ -845,14 +992,31 @@ export function nestedTargetCoverageProblems(
     return problems;
   }
   const completed = new Set((channel?.files ?? []).map((f) => nestedNormPath(resolve(cwd, f))));
-  const missing = targets.map(nestedNormPath).filter((t) => !completed.has(t));
-  if (missing.length === 0) return problems;
-  const shown = missing.slice(0, 5).map((f) => relative(cwd, f)).join("、");
-  problems.push(
-    `目标文件未产出完成事件（被选集/分片静默排除，或测试内提前退出）${missing.length}/${targets.length} 个` +
-      `${completed.size === 0 ? "（事件通道里一条逐文件完成事件都没有：未挂干净 reporter 或测试内提前退出）" : ""}` +
-      `：${shown}${missing.length > 5 ? " …" : ""}`,
-  );
+  const targetSet = new Set(targets.map(nestedNormPath));
+  const show = (files: readonly string[]): string =>
+    `${files
+      .slice(0, 5)
+      .map((f) => relative(cwd, f))
+      .join("、")}${files.length > 5 ? " …" : ""}`;
+
+  const missing = [...targetSet].filter((t) => !completed.has(t));
+  if (missing.length > 0) {
+    problems.push(
+      `目标文件未产出完成事件（被选集/分片静默排除，或测试内提前退出）${missing.length}/${targetSet.size} 个` +
+        `${completed.size === 0 ? "（事件通道里一条逐文件完成事件都没有：未挂干净 reporter 或测试内提前退出）" : ""}` +
+        `：${show(missing)}`,
+    );
+  }
+
+  // g-419②：**双向**比对 —— 产出完成事件却不在目标集合内的文件同样判红
+  // （关闭「Node 实际跑得比 helper 展开/声明更多」：glob 展开口径差异、默认发现漏网）。
+  const extra = [...completed].filter((f) => !targetSet.has(f));
+  if (extra.length > 0) {
+    problems.push(
+      `有文件产出了完成事件却**不在目标文件集合内**（Node 实际运行集大于 helper 推导/声明集合）` +
+        `${extra.length} 个：${show(extra)} ⇒ 声明集合不代表实际运行集，fail-closed 判红`,
+    );
+  }
   return problems;
 }
 
