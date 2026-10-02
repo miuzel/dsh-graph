@@ -484,13 +484,16 @@ function normalizeForDedup(text) {
 
 /** brief/directive 去重：归一化后相等时，brief 保留全文，directive 标记为冗余。
  *  返回 [briefRendered, "", directiveRendered]（含标签行），可直接展开到 current 数组。
- *  renderFn(value, missingReason) 用于渲染单个值，缺省用 renderPromptValue。 */
-function dedupBriefDirective(briefText, directiveText, missingReasonBrief, missingReasonDirective, { isEn = false, briefLabel, directiveLabel, renderFn } = {}) {
+ *  renderFn(value, missingReason) 用于渲染单个值，缺省用 renderPromptValue。
+ *  briefNote（g-251）：来源标注，插在 brief 正文之后、directive 标签之前——保证既有
+ *  「标签行紧邻正文」的断言形态不变（如 `**attempt brief（当前数据）**\n（未提供）`）。 */
+function dedupBriefDirective(briefText, directiveText, missingReasonBrief, missingReasonDirective, { isEn = false, briefLabel, directiveLabel, renderFn, briefNote } = {}) {
   const render = renderFn || renderPromptValue;
   const bLabel = briefLabel || (isEn ? "**Attempt brief (current data)**" : "**attempt brief（当前数据）**");
   const dLabel = directiveLabel || (isEn ? "**Directive (current data)**" : "**directive（当前数据）**");
   const b = promptText(briefText);
   const d = promptText(directiveText);
+  const note = promptText(briefNote) ? [promptText(briefNote)] : [];
 
   // 两者均非空：归一化比较
   if (b && d) {
@@ -501,6 +504,7 @@ function dedupBriefDirective(briefText, directiveText, missingReasonBrief, missi
       return [
         bLabel,
         render(b, missingReasonBrief),
+        ...note,
         "",
         dLabel,
         isEn
@@ -514,6 +518,7 @@ function dedupBriefDirective(briefText, directiveText, missingReasonBrief, missi
   return [
     bLabel,
     render(b, missingReasonBrief),
+    ...note,
     "",
     dLabel,
     render(d, missingReasonDirective),
@@ -599,23 +604,51 @@ function validateAttemptPromptFields({ taskType, baselineCommit, sourceAttempt, 
 
 // g-236：当 attempt_brief 和 directive 均为空时，从目标描述生成默认 action，
 // 防止静默启动空任务。brief 优先于 directive（brief 是当前任务，directive 是背景指令）。
+//
+// g-251：本函数是 `brief_source` 的**唯一生产者**，取值闭集与真源见 core/ops.ts 的
+// ATTEMPT_BRIEF_SOURCE_VALUES（brief / directive / auto_from_desc / fallback），
+// 并且该值必须与实际用在 prompt 里、落进 attempt meta/事件的文本同源：
+//   · auto_from_desc **完整承载目标描述全文**，不再截到 200 字。历史行为把长描述截断后，
+//     目标全文只出现在「目标背景（…不产生 action）」区块，描述尾部要求可能沦为非任务
+//     （判据 1：不得静默遗漏）。宁可与 targetContext 有一次冗余，也不让尾部要求丢失。
+//   · fallback 仍是空描述路径的引擎兜底（g-378 门禁不在此处，见其注释），文案一字未改。
 function resolveEffectiveBrief(attemptBrief, directive, goalDesc) {
   const b = promptText(attemptBrief);
   if (b) return { brief: b, source: "brief" };
   const d = promptText(directive);
   if (d) return { brief: d, source: "directive" };
-  // 两者均空：从目标描述生成默认 action
+  // 两者均空：从目标描述生成默认 action（完整承载，不截断）
   const desc = promptText(goalDesc);
-  if (desc) {
-    // 截取目标描述前 200 字符作为默认 action，避免过长
-    const truncated = desc.length > 200 ? desc.slice(0, 200) + "…" : desc;
-    return { brief: `执行目标描述中的任务：${truncated}`, source: "auto_from_desc" };
-  }
+  if (desc) return { brief: `执行目标描述中的任务：${desc}`, source: "auto_from_desc" };
   // 目标描述也为空：最终兜底。
   // g-378 定位：这是**非门禁途径**（HTTP 入口：GUI 拖拽/执行按钮等既有人工强制启动路径）
   // 启动时的引擎兜底——工具入口 `graph_start_attempt` 已在准入门禁处拒绝空描述派发，
   // 因此本分支只为不设描述门禁的路径保留，行为与文案一字未改（g-236 断言不动）。
   return { brief: "执行目标描述和质量判据中的任务", source: "fallback" };
+}
+
+/**
+ * g-251：派发 action 来源标注（判据 1：spawn prompt 里必须能区分显式 brief / directive / 合成来源）。
+ * 静态文案，紧跟在 action 来源正文之后输出。英文表不得含汉字——英文派发路径只对**插件内置文本**
+ * 断言零汉字（用户材料不在此限；合成 brief 的中文前缀属既有范围，本目标不动）。
+ */
+const ATTEMPT_BRIEF_SOURCE_NOTES = {
+  brief: "来源：显式 attempt_brief（supervisor 直接提供；原意保留，未截断、未合成）。",
+  directive: "来源：directive（本次未传显式 attempt_brief，action 由目标文件「最近指令」小节承接）。",
+  auto_from_desc: "来源：auto_from_desc（本次未传显式 attempt_brief 且目标无最近指令，由目标描述自动合成；目标描述**全文**已完整承载于上文，尾部要求与首部同等有效，下方「目标背景」仅供交叉核对）。",
+  fallback: "来源：fallback（目标描述为空时的引擎兜底文案；具体任务以目标文件的目标描述与质量判据为准）。",
+};
+const ATTEMPT_BRIEF_SOURCE_NOTES_EN = {
+  brief: "Source: explicit attempt_brief (supplied by the supervisor; carried verbatim, neither truncated nor synthesized).",
+  directive: "Source: directive (no explicit attempt_brief this time; the action is taken over from the goal file's current-directive section).",
+  auto_from_desc: "Source: auto_from_desc (no explicit attempt_brief and no directive: synthesized from the goal description. The **full** goal description is carried above, so trailing requirements are as authoritative as leading ones; the goal-context block below is only for cross-checking).",
+  fallback: "Source: fallback (the goal description is empty, so the engine supplied this fallback action text; the real task is the goal file's description and criteria).",
+};
+
+/** 来源标注文本；未知/缺省来源返回 null（不猜、不伪造）。 */
+function briefSourceNote(source, isEn = false) {
+  const table = isEn ? ATTEMPT_BRIEF_SOURCE_NOTES_EN : ATTEMPT_BRIEF_SOURCE_NOTES;
+  return (typeof source === "string" && table[source]) || null;
 }
 
 function historicalPromptBlock(title, section) {
@@ -681,7 +714,7 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
 }
 
 /** English counterpart of the execution prompt. User-provided brief/context remains verbatim. */
-function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, directive, taskType, baselineCommit, sourceAttempt, acceptanceItems, handoffSection, cardsSection, targetContext, subagentPromptSection, modeStrategySection, worktreeBlock } = {}) {
+function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, briefSource, directive, taskType, baselineCommit, sourceAttempt, acceptanceItems, handoffSection, cardsSection, targetContext, subagentPromptSection, modeStrategySection, worktreeBlock } = {}) {
   // g-400：本渲染器即英文派发路径 ⇒ 本函数内**每一处** protectPromptMarkers 调用都必须显式传 "en"，
   // 使反伪装替换串走零汉字的英文表（回归守卫：core/tests/g400-marker-guard-i18n.test.ts）。
   const missing = "(not provided)";
@@ -708,7 +741,7 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, dire
     attemptBrief, directive,
     "attempt_brief was not supplied",
     "no current directive was supplied",
-    { isEn: true, renderFn: enRenderFn },
+    { isEn: true, renderFn: enRenderFn, briefNote: briefSourceNote(briefSource, true) },
   );
   const current = [
     "## Current attempt brief/directive",
@@ -752,6 +785,7 @@ export function formatAttemptPrompt({
   attempt,
   goalRel,
   attemptBrief,
+  briefSource,
   directive,
   taskType,
   baselineCommit,
@@ -766,7 +800,7 @@ export function formatAttemptPrompt({
   promptLanguage = "zh",
 } = {}) {
   if (normalizePromptLanguage(promptLanguage) === "en") {
-    return formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, directive, taskType, baselineCommit, sourceAttempt, acceptanceItems, handoffSection, cardsSection, targetContext, subagentPromptSection, modeStrategySection, worktreeBlock });
+    return formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, briefSource, directive, taskType, baselineCommit, sourceAttempt, acceptanceItems, handoffSection, cardsSection, targetContext, subagentPromptSection, modeStrategySection, worktreeBlock });
   }
   const brief = promptText(attemptBrief);
   const currentDirective = promptText(directive);
@@ -794,6 +828,7 @@ export function formatAttemptPrompt({
     attemptBrief, directive,
     "本次请求未传 attempt_brief，或该值不是非空字符串",
     "当前目标没有最近指令，或该值不是非空字符串",
+    { briefNote: briefSourceNote(briefSource) },
   );
   const current = [
     "## 本次 attempt brief/directive",
@@ -1589,6 +1624,7 @@ export function apply(ctx, config) {
       attempt: nextAttId,
       goalRel,
       attemptBrief: resolvedBrief.brief,
+      briefSource: resolvedBrief.source,
       directive: currentDirective,
       taskType: task_type,
       baselineCommit: baseline_commit,
@@ -1627,6 +1663,8 @@ export function apply(ctx, config) {
       injectedCards,
       injectedHandoffs: injectedHandoffRefs,
       attemptBrief: resolvedBrief.brief ?? undefined,
+      // g-251：来源与实际用在 prompt 里的 brief 同源，落进 attempt meta 与 attempt.started 事件
+      briefSource: resolvedBrief.source,
       injectedDirective: currentDirective ?? undefined,
       provider: effProvider,
       model: effModel,
@@ -2569,7 +2607,9 @@ export function apply(ctx, config) {
         if (execRes.child_error) result.child_error = execRes.child_error;
         if (execRes.note) result.note = execRes.note;
         if (execRes.brief) result.brief = execRes.brief;
-        if (execRes.brief_source && execRes.brief_source !== "brief") result.brief_source = execRes.brief_source;
+        // g-251：来源闭集四值一律回传（含 "brief"）——显式 brief 也是一等来源，不再被吞成 undefined，
+        // 保证工具响应对来源的表述与 attempt meta/事件/goalDetail 三处完全一致。
+        if (execRes.brief_source) result.brief_source = execRes.brief_source;
         if (execRes.model_route) result.model_route = execRes.model_route;
         return result;
       },

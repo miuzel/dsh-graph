@@ -5871,6 +5871,15 @@ export function ensureExecutionInProgress(
   }
 }
 
+/**
+ * g-251：派发 action 来源闭集（`brief_source` 的唯一取值域）。
+ * 三处必须同值：attempt.md 的 `meta.brief_source`、`attempt.started` 事件的 `details.brief_source`、
+ * `goalDetail()` 的 attempt 投影；旧记录缺该字段一律读回 `null`（不按 brief/directive 猜测冒充历史）。
+ * host 侧 `resolveEffectiveBrief` 是唯一生产者，任何漂移都会在这里的校验处显式抛错（不静默吞）。
+ */
+export const ATTEMPT_BRIEF_SOURCE_VALUES = ["brief", "directive", "auto_from_desc", "fallback"] as const;
+export type AttemptBriefSource = (typeof ATTEMPT_BRIEF_SOURCE_VALUES)[number];
+
 export function startAttempt(
   root: string,
   goalId: string,
@@ -5880,6 +5889,8 @@ export function startAttempt(
     injectedCards?: string[];
     injectedHandoffs?: Array<{ id: string; revision: number; source_attempts: string[] }>;
     attemptBrief?: string;
+    /** g-251：本次 action 文本的来源（闭集见 ATTEMPT_BRIEF_SOURCE_VALUES）。未传=不落盘该字段。 */
+    briefSource?: AttemptBriefSource | null;
     injectedDirective?: string;
     provider?: string | null;
     model?: string | null;
@@ -5906,6 +5917,10 @@ export function startAttempt(
     throw new GraphError("attemptBrief 必须是 string 类型");
   }
   // g-241：校验结构化任务字段
+  if (opts.briefSource !== undefined && opts.briefSource !== null
+    && !(ATTEMPT_BRIEF_SOURCE_VALUES as readonly string[]).includes(opts.briefSource)) {
+    throw new GraphError("briefSource 必须是 brief、directive、auto_from_desc 或 fallback；空值请传 null 或省略");
+  }
   if (opts.taskType !== undefined && opts.taskType !== null && !["merge", "rewrite", "fix"].includes(opts.taskType)) {
     throw new GraphError("task_type 必须是 merge、rewrite 或 fix；空值请传 null 或省略");
   }
@@ -6011,6 +6026,11 @@ export function startAttempt(
   if (opts.attemptBrief && opts.attemptBrief.trim()) {
     meta.brief = opts.attemptBrief;
   }
+  // g-251：持久化派发 action 来源到 attempt meta（与 attempt.started 事件、goalDetail 投影同值）。
+  // 仅当调用方明确传入时落盘（含显式 null）——不传就保持缺字段，使「旧记录缺失」可被如实区分。
+  if (opts.briefSource !== undefined) {
+    meta.brief_source = opts.briefSource;
+  }
   // g-150 范围扩展：写入最近指令快照到 attempt meta（审计可追溯）
   if (opts.injectedDirective && opts.injectedDirective.trim()) {
     meta.injected_directive = opts.injectedDirective.trim();
@@ -6049,6 +6069,8 @@ export function startAttempt(
     ...(opts.attemptBrief && opts.attemptBrief.trim()
       ? { brief: opts.attemptBrief }
       : {}),
+    // g-251：来源与 attempt.md 同值落进事件流（审计闭环；未传时不出现该键）
+    ...(opts.briefSource !== undefined ? { brief_source: opts.briefSource } : {}),
     // g-150 范围扩展：记录注入的最近指令快照
     ...(opts.injectedDirective && opts.injectedDirective.trim()
       ? { injected_directive: opts.injectedDirective.trim() }
@@ -9272,6 +9294,9 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
             // g-374 F2：主管给本次 attempt 的 brief（「这个目标涉及哪些改动」的最直接来源；
             // 落盘真源是 attempt.md 的 meta.brief，此处仅只读透出，供完成摘要拼装）。
             brief: typeof m.brief === "string" && m.brief.trim() ? m.brief.trim() : null,
+            // g-251：派发 action 来源只读透出（与 attempt meta/事件同值）。旧记录缺该字段一律返回
+            // null——不按 brief/injected_directive 反推来源，避免用推测冒充历史事实。
+            brief_source: m.brief_source ?? null,
             // g-241：结构化任务事实与快照审计
             task_type: m.task_type ?? null,
             baseline_commit: m.baseline_commit ?? null,
