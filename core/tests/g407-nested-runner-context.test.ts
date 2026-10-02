@@ -28,6 +28,7 @@ import {
   assertNestedSuitePassed,
   assertNestedSuiteRan,
   cleanTestEnv,
+  parseEventChannel,
   parseTestSummary,
   runNestedArgv,
   type NestedRunResult,
@@ -63,8 +64,20 @@ function rawRun(fixture: string, env: NodeJS.ProcessEnv): { code: number | null;
 const rawInheritedRun = (fixture: string) =>
   rawRun(fixture, { ...process.env, NODE_TEST_CONTEXT: INHERITED_CONTEXT });
 
+/**
+ * 合成 `NestedRunResult`（g-416：接口新增 `cwd`/`targets`/`channel`，此处显式给出空通道）。
+ * 这些合成结果只喂 {@link assertNestedSuiteRan} / {@link assertNestedSuiteFailed}（不判全绿），
+ * 故空目标 / 空通道不影响其判别力。
+ */
 function asResult(r: { code: number | null; out: string; err: string }, command = "(synthetic)"): NestedRunResult {
-  return { ...r, command, summary: parseTestSummary(r.out, r.err) };
+  return {
+    ...r,
+    command,
+    summary: parseTestSummary(r.out, r.err),
+    cwd: repoRoot,
+    targets: [],
+    channel: parseEventChannel(""),
+  };
 }
 
 // ============================================================================

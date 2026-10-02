@@ -47,7 +47,7 @@ After modifying source and rebuilding:
 2. Run the full test suite: `node --test core/tests/*.test.ts`
 3. Verify pack: `cd dist && pnpm pack --dry-run`
 
-**整套件自证闸门（g-350 / g-407 R1 / g-413 / g-415）**：`node scripts/run-tests.mjs` —— 跨平台入口，先摘除
+**整套件自证闸门（g-350 / g-407 R1 / g-413 / g-415 / g-416）**：`node scripts/run-tests.mjs` —— 跨平台入口，先摘除
 `NODE_TEST_CONTEXT`/`NODE_TEST_WORKER_ID` 再起 runner，并**自证**「退出码 `0` 且确实跑了 `tests > 0`
 且 `skipped == 0` 且 `fail == 0` 且 `cancelled == 0` 且 `todo == 0` 且计数口径自洽
 （`pass + fail + cancelled + skipped + todo == tests`）」；计数取自
@@ -55,7 +55,8 @@ After modifying source and rebuilding:
 并与人类可读汇总、子进程退出码**三方交叉校验**。注入形态（`NODE_TEST_CONTEXT=… node --test core/tests/*.test.ts`
 会被 `node --test` 静默 skip 全部文件并 `exit 0`）下只有它可判定。它**不替换**上面的命令，
 两者共用同一 glob `core/tests/*.test.ts`（守卫见 `core/tests/g350-test-hygiene.test.ts`、
-`core/tests/g413-gate-integrity.test.ts` 与 `core/tests/g415-gate-hardening.test.ts`）。
+`core/tests/g413-gate-integrity.test.ts`、`core/tests/g415-gate-hardening.test.ts` 与
+`core/tests/g416-nested-runner-coverage.test.ts`）。
 
 闸门另有三道 **fail-closed** 防线（g-415）：①`NODE_OPTIONS` 含测试选集/分片开关（`--test-only` /
 `--test-name-pattern` / `--test-skip-pattern` / `--test-shard`）时**拒绝运行**并 `exit≠0`（内存/告警等
@@ -65,6 +66,15 @@ After modifying source and rebuilding:
 缓冲被丢弃（旧版实测 `exit 0` 且 stdout 恰 64 KiB、自证行不可见）。结构守卫
 `core/tests/g415-gate-hardening.test.ts` 另禁止被收集集合 `core/tests/*.test.ts` 出现选集式 only 标记与
 直接退出进程调用（`process.exit` / `process.exitCode`，含 hook 内同型调用）。
+
+**同一覆盖判据也已下沉到共享 helper（g-416）**：任何**嵌套** `node --test`（经
+`core/tests/fixtures/nested-runner.ts` 启动）都由 `nestedSuitePassProblems` / `assertNestedSuitePassed`
+**自身**核对「目标文件集合 ≡ 逐文件**完成事件**（带 `file` 的 `test:summary`）集合且 `>0`」，并与人类可读
+汇总 + 事件通道逐字段交叉校验；**fail-closed、无 opt-out**，既有 `code`/`fail`/`cancelled`/`skipped`/`todo`
+/计数口径断言只增不减。目标集合由 helper 从调用参数（`--test` 后的位置参数）推导，支持多文件 / 目录 /
+`<dir>/*<suffix>` glob（与网关同口径）；无法推导时须显式传 `opts.targets`，两者皆无则**抛错拒绝执行**
+（不存在「跳过覆盖断言」的静默路径）。私有事件通道经 `NODE_OPTIONS` 注入，argv / shell 两形态统一生效；
+消费点 `g350`/`g353`/`g407`/`g413`/`g415` 共用同一实现。
 
 ## Build Isolation（构建隔离：禁止在主树跑实验性构建）
 

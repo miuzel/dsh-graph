@@ -42,10 +42,32 @@
  *       已补 {@link findTestSelectionOption} 供闸门 fail-closed 拒绝运行。
  *  P2-3「目标文件覆盖」：{@link parseEventChannel} 现收集**逐文件完成事件**（`test:summary` 带 `file`），
  *       闸门据此断言匹配集合 ≡ 完成事件集合 ⇒ 关闭 shard/pattern/测试内 `process.exit(0)` 早退。
+ *
+ * ── g-416 的收口（同一根因域在**共享 helper 层**的残余洞）──────────────────────────────────
+ *  P2-3 此前只落在闸门 `scripts/run-tests.mjs` 里；**被 helper 消费**的嵌套套件仍可「断言未执行却局部判绿」：
+ *  夹具注册 `test('pass',…)` + `test('fail',()=>assert.fail())` 后，在文件顶层用**反射退出**
+ *  `globalThis['pro'+'cess']['ex'+'it'](0)` 早退，`runNestedArgv(…,['--test',f],…)` 得
+ *  `code 0 / tests 1 / pass 1 / fail 0`，旧的 {@link nestedSuitePassProblems} **接受**。
+ *  现收口三件事（全部 **fail-closed，无 opt-out**）：
+ *   ① {@link nestedTargetCoverageProblems}：**目标文件集合**（helper 从调用参数推导，见
+ *      {@link deriveNestedTargetTokens} → {@link expandNestedTargets}）必须与**产出逐文件
+ *      `test:summary`（带 `file`）的集合**一致且 `>0`，否则判红；
+ *   ② 事件通道交叉校验：`run.channel` 必须完整（summary + tally）且与人类可读汇总逐字段一致，
+ *      否则人类通道视为可伪造、判红（保留既有 `code`/`fail`/`cancelled`/`skipped`/`todo`/口径断言）；
+ *   ③ 目标来源：helper 自身从调用参数推导（`--test` 后的位置参数，支持多文件 / 目录 / `<dir>/*<suffix>`
+ *      glob，与顶层闸门展开口径一致）；**无法推导时**退回调用方显式声明 `opts.targets`，两者都没有则
+ *      **抛错 fail-closed**（选「自动推导 + 显式声明兜底 + 无声明即拒绝」而非「静默跳过检查」，理由：
+ *      不存在任何能绕过覆盖断言的静默路径；消费点无需为新检查逐个开关）。
+ *  事件通道经 **`NODE_OPTIONS`** 注入 `--test-reporter=…test-reporter-events.mjs` +
+ *  `--test-reporter-destination=<私有临时文件>`（argv / shell 两种形态统一生效，无需改写调用方命令行）。
  */
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /**
  * 测试运行器注入到「测试文件进程」的环境变量。
@@ -275,6 +297,133 @@ export function parseEventChannel(text: string): EventChannelReading {
   return { summary, tally, summaries, files, badLines };
 }
 
+/** g-416：`node --test` 中**独立取值**（`--opt value`）的选项名 —— 其后的 token 不是目标文件。 */
+export const VALUE_TAKING_TEST_OPTIONS = new Set([
+  "--test-reporter",
+  "--test-reporter-destination",
+  "--test-concurrency",
+  "--test-name-pattern",
+  "--test-skip-pattern",
+  "--test-shard",
+  "--test-timeout",
+  "--test-rerun-failures",
+]);
+
+/** 与顶层闸门 `scripts/run-tests.mjs` 同口径：只有 `<dir>/*<suffix>` 形态的 glob 被支持。 */
+function expandNestedGlob(glob: string, cwd: string): string[] {
+  const m = /^([^*]+)\/(\*[^/]*)$/.exec(glob);
+  if (!m) {
+    throw new Error(
+      `nested-runner：不支持的 glob 形态（与顶层闸门同口径，只支持 <dir>/*<suffix>）：${glob} ⇒ fail-closed`,
+    );
+  }
+  const [, dir, pattern] = m;
+  const suffix = pattern.slice(1);
+  const absDir = resolve(cwd, dir);
+  return readdirSync(absDir)
+    .filter((name) => name.endsWith(suffix))
+    .sort()
+    .map((name) => join(absDir, name));
+}
+
+/** 与顶层闸门同口径：目录型目标递归展开为 `*.test.<ext>`（避免把非测试文件当目标）。 */
+const NESTED_TEST_FILE_RE = /\.test\.(?:ts|mts|cts|js|mjs|cjs)$/;
+function expandNestedDir(absDir: string): string[] {
+  return readdirSync(absDir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && NESTED_TEST_FILE_RE.test(entry.name))
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
+}
+
+/** 归一化路径：存在则取 realpath（与事件通道里的 `file` 同口径比较），否则退回绝对路径。 */
+function nestedNormPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
+/**
+ * 把目标 token 展开成**具体测试文件集合**（绝对 + realpath 归一），与顶层闸门
+ * `scripts/run-tests.mjs` 的展开口径一致：目录 ⇒ 递归 `*.test.*`；glob ⇒ 仅 `<dir>/*<suffix>`。
+ * 展开为空一律抛错（fail-closed），不返回空集合让调用方「看起来没事」。
+ */
+export function expandNestedTargets(tokens: readonly string[], cwd: string): string[] {
+  const files: string[] = [];
+  for (const token of tokens) {
+    if (/[*?[\]]/.test(token)) {
+      files.push(...expandNestedGlob(token, cwd));
+      continue;
+    }
+    const abs = resolve(cwd, token);
+    if (statSync(abs, { throwIfNoEntry: false })?.isDirectory()) files.push(...expandNestedDir(abs));
+    else files.push(abs);
+  }
+  const unique = [...new Set(files.map(nestedNormPath))];
+  if (unique.length === 0) {
+    throw new Error(
+      `nested-runner：目标展开后为空（tokens=${tokens.join(" ")}；cwd=${cwd}）⇒ 无法断言逐文件完成事件，fail-closed`,
+    );
+  }
+  return unique;
+}
+
+/**
+ * 从 argv / 命令行 token 里推导 `node --test` 的**目标文件 token**（不含选项）。
+ * 返回 `null` ⇒ 不是 `--test` 形态或走默认文件发现（此时需调用方显式声明 `opts.targets`）。
+ */
+export function deriveNestedTargetTokens(args: readonly string[]): string[] | null {
+  const testIndex = args.indexOf("--test");
+  if (testIndex === -1) return null;
+  const tokens: string[] = [];
+  for (let i = testIndex + 1; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--") {
+      tokens.push(...args.slice(i + 1));
+      break;
+    }
+    if (arg.startsWith("-")) {
+      if (!arg.includes("=") && VALUE_TAKING_TEST_OPTIONS.has(arg)) i += 1; // 跳过其独立取值
+      continue;
+    }
+    tokens.push(arg);
+  }
+  return tokens;
+}
+
+/** 私有的干净事件通道 reporter（与闸门同一实现：NDJSON 带类型事件，测试输出伪造不进来）。 */
+const EVENTS_REPORTER_URL = pathToFileURL(
+  join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "scripts", "test-reporter-events.mjs"),
+).href;
+
+/**
+ * 为一次嵌套运行开一条**私有**事件通道：经 `NODE_OPTIONS` 注入 reporter（argv / shell 两形态统一生效，
+ * 无需改写调用方命令行），通道文件落在系统临时目录（不写仓库、不参与任何 glob），运行结束即删。
+ *
+ * 必须**同时**注入 `spec → stdout`：一旦显式给出 `--test-reporter`，node 就不再挂默认 reporter，
+ * 调用方在 `run.out` 上的人类可读输出（g-353/g-407 的断言对象）会被整个抹掉。
+ */
+function openEventChannel(env: NodeJS.ProcessEnv): { env: NodeJS.ProcessEnv; eventsPath: string; close: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-graph-nested-runner-"));
+  const eventsPath = join(dir, "events.ndjson");
+  const injected =
+    `--test-reporter=spec --test-reporter-destination=stdout ` +
+    `--test-reporter=${EVENTS_REPORTER_URL} --test-reporter-destination=${eventsPath}`;
+  const inherited = env.NODE_OPTIONS?.trim();
+  return {
+    env: { ...env, NODE_OPTIONS: inherited ? `${inherited} ${injected}` : injected },
+    eventsPath,
+    close: () => {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* 清理失败不影响判定结果 */
+      }
+    },
+  };
+}
+
 export interface NestedRunResult {
   /** 子进程退出码（null = 被信号终止）。 */
   code: number | null;
@@ -284,6 +433,12 @@ export interface NestedRunResult {
   summary: TestSummary;
   /** 便于失败消息复现的完整命令行。 */
   command: string;
+  /** 子进程 cwd（把事件通道里的 `file` 归一化时用；g-416）。 */
+  cwd: string;
+  /** 本次嵌套运行的**目标文件集合**（绝对 + realpath 归一；g-416）。 */
+  targets: string[];
+  /** 私有**干净事件通道**的读取结果（逐文件完成事件 + 权威计数；g-416）。 */
+  channel: EventChannelReading;
 }
 
 export interface NestedRunOptions {
@@ -291,10 +446,24 @@ export interface NestedRunOptions {
   /** 附加环境变量（注入变量仍会被摘除）。 */
   env?: NodeJS.ProcessEnv;
   timeout?: number;
+  /**
+   * g-416：**显式声明**本次嵌套运行的目标文件（相对 `cwd` 或绝对；支持多文件 / 目录 / `<dir>/*<suffix>`）。
+   * 仅在 helper 无法从参数推导目标时使用（如走默认文件发现、或命令形态非 `node --test`）；
+   * 两者都没有 ⇒ helper 抛错 fail-closed（不存在「跳过覆盖断言」的静默路径）。
+   */
+  targets?: string[];
 }
 
-function finish(code: number | null, out: string, err: string, command: string): NestedRunResult {
-  return { code, out, err, command, summary: parseTestSummary(out, err) };
+function finish(
+  code: number | null,
+  out: string,
+  err: string,
+  command: string,
+  cwd: string,
+  targets: string[],
+  channel: EventChannelReading,
+): NestedRunResult {
+  return { code, out, err, command, cwd, targets, channel, summary: parseTestSummary(out, err) };
 }
 
 function capture(
@@ -302,11 +471,13 @@ function capture(
   args: string[],
   opts: NestedRunOptions,
   command: string,
+  targets: string[],
 ): Promise<NestedRunResult> {
-  return new Promise((resolve, reject) => {
+  const events = openEventChannel(cleanTestEnv(opts.env));
+  return new Promise((resolveRun, reject) => {
     const child = spawn(file, args, {
       cwd: opts.cwd,
-      env: cleanTestEnv(opts.env),
+      env: events.env,
       stdio: ["ignore", "pipe", "pipe"],
       timeout: opts.timeout,
     });
@@ -314,9 +485,33 @@ function capture(
     let err = "";
     child.stdout?.on("data", (chunk) => (out += String(chunk)));
     child.stderr?.on("data", (chunk) => (err += String(chunk)));
-    child.on("error", reject);
-    child.on("close", (code) => resolve(finish(code, out, err, command)));
+    child.on("error", (e) => {
+      events.close();
+      reject(e);
+    });
+    child.on("close", (code) => {
+      let eventsText = "";
+      try {
+        eventsText = readFileSync(events.eventsPath, "utf8");
+      } catch {
+        eventsText = ""; // 通道文件缺失 = 通道未完成 ⇒ 覆盖断言据此判红
+      }
+      events.close();
+      resolveRun(finish(code, out, err, command, opts.cwd, targets, parseEventChannel(eventsText)));
+    });
   });
+}
+
+/** 目标推导的统一出口：自动推导 → 调用方显式声明兜底 → 两者皆无则抛错（fail-closed，无 opt-out）。 */
+function planNestedTargets(args: readonly string[], opts: NestedRunOptions, source: string): string[] {
+  const tokens = opts.targets ?? deriveNestedTargetTokens(args);
+  if (!tokens || tokens.length === 0) {
+    throw new Error(
+      `${source}：无法推导嵌套运行的目标文件（未给 --test 目标 / 走默认文件发现）⇒ fail-closed 拒绝执行。` +
+        `请显式传 opts.targets（相对 cwd 或绝对；支持多文件、目录、<dir>/*<suffix>）。`,
+    );
+  }
+  return expandNestedTargets(tokens, opts.cwd);
 }
 
 /**
@@ -324,7 +519,8 @@ function capture(
  * env 一律经 {@link cleanTestEnv} 清洗。
  */
 export function runNestedCommand(cmd: string, opts: NestedRunOptions): Promise<NestedRunResult> {
-  return capture("bash", ["-c", cmd], opts, cmd);
+  const targets = planNestedTargets(splitNodeOptions(cmd), opts, `runNestedCommand(${cmd})`);
+  return capture("bash", ["-c", cmd], opts, cmd, targets);
 }
 
 /**
@@ -336,7 +532,8 @@ export function runNestedArgv(
   args: string[],
   opts: NestedRunOptions,
 ): Promise<NestedRunResult> {
-  return capture(file, args, opts, `${file} ${args.join(" ")}`);
+  const targets = planNestedTargets(args, opts, `runNestedArgv(${file} ${args.join(" ")})`);
+  return capture(file, args, opts, `${file} ${args.join(" ")}`, targets);
 }
 
 function tail(run: NestedRunResult, n = 600): string {
@@ -399,6 +596,13 @@ export function assertNestedSuiteRan(run: NestedRunResult, label: string): void 
  *
  * 与 {@link assertNestedSuitePassed} **共用同一实现**：闸门需要把交叉校验红因与这些不达标项
  * 一次性打全，故单独暴露非抛错形态，避免两处各写一份判据。
+ *
+ * ── g-416 追加（**只增不减**，全部 fail-closed、无 opt-out）──────────────────────────────
+ *  ⑥ 事件通道交叉校验：`run.channel` 必须完整（有 runner 汇总 + 逐事件计数），且与人类可读汇总
+ *     逐字段一致；人类可读通道混有测试自己的 `console.log`（可打印伪造的 `ℹ tests 1`），不可单独采信；
+ *  ⑦ **逐目标文件完成事件覆盖**（{@link nestedTargetCoverageProblems}）：目标文件集合 ≡ 产出
+ *     逐文件 `test:summary`（带 `file`）的集合且 `>0`，否则判红 —— 关闭「注册用例后反射/直接早退」
+ *     这类「断言未执行却局部判绿」（P2-3 此前只落在闸门，被 helper 消费的嵌套套件仍可绕过）。
  */
 export function nestedSuitePassProblems(run: NestedRunResult): string[] {
   const s = run.summary;
@@ -410,6 +614,58 @@ export function nestedSuitePassProblems(run: NestedRunResult): string[] {
   if (s.fail > 0) problems.push(`有**失败**用例（fail=${s.fail}）`);
   if (s.skipped > 0) problems.push(`有用例被**跳过**（skipped=${s.skipped}）`);
   if (s.todo > 0) problems.push(`有**待办**用例（todo=${s.todo}）——待办不是验证，不得判绿`);
+  const channel = run.channel;
+  if (!channel || !channel.summary || !channel.tally) {
+    problems.push(
+      "干净事件通道不完整（缺 runner 汇总或逐事件计数）⇒ 人类可读汇总可被测试打印伪造，计数不可信，fail-closed 判红",
+    );
+  } else {
+    for (const field of CROSS_CHECK_FIELDS) {
+      if (channel.summary[field] !== s[field]) {
+        problems.push(
+          `人类可读汇总与事件通道不一致：${field} ${s[field]} ≠ ${channel.summary[field]}（人类通道可能被伪造）`,
+        );
+      }
+    }
+  }
+  problems.push(...nestedTargetCoverageProblems(run.targets, channel, run.cwd));
+  return problems;
+}
+
+/** 人类可读汇总与事件通道必须逐字段一致的计数字段（`suites` 不在内：`describe` 聚合口径不同，g-415 已单独校验）。 */
+const CROSS_CHECK_FIELDS = ["tests", "pass", "fail", "cancelled", "skipped", "todo"] as const;
+
+/**
+ * g-416：**逐目标文件完成事件覆盖**的判据（非抛错形态；空数组 = 覆盖成立）。
+ *
+ * 判据：`targets`（helper 从调用参数推导 / 调用方显式声明）**非空**，且其中每个文件都出现在
+ * 事件通道的**逐文件完成事件**（带 `file` 的 `test:summary`）里。
+ * 为什么用「逐文件汇总」而不是文件级 `test:pass`：后者在测试内提前退出时**仍会发出**，
+ * 无法区分「跑完」与「刚注册就退出」；被排除/中途早退的文件**不会**产出逐文件汇总。
+ *
+ * fail-closed：目标集合为空（无法推导且未声明）同样判红 —— 不存在跳过该检查的静默路径。
+ */
+export function nestedTargetCoverageProblems(
+  targets: readonly string[] | null | undefined,
+  channel: EventChannelReading | null | undefined,
+  cwd: string,
+): string[] {
+  const problems: string[] = [];
+  if (!targets || targets.length === 0) {
+    problems.push(
+      "无法确定嵌套运行的目标文件集合（helper 未能从参数推导，调用方也未显式声明 targets）⇒ 无法证明跑全，fail-closed 判红",
+    );
+    return problems;
+  }
+  const completed = new Set((channel?.files ?? []).map((f) => nestedNormPath(resolve(cwd, f))));
+  const missing = targets.map(nestedNormPath).filter((t) => !completed.has(t));
+  if (missing.length === 0) return problems;
+  const shown = missing.slice(0, 5).map((f) => relative(cwd, f)).join("、");
+  problems.push(
+    `目标文件未产出完成事件（被选集/分片静默排除，或测试内提前退出）${missing.length}/${targets.length} 个` +
+      `${completed.size === 0 ? "（事件通道里一条逐文件完成事件都没有：未挂干净 reporter 或测试内提前退出）" : ""}` +
+      `：${shown}${missing.length > 5 ? " …" : ""}`,
+  );
   return problems;
 }
 
