@@ -382,7 +382,13 @@ describe("版本泳道管理集成", () => {
   it("rename 预检：NUL 字符失败不留下假事件", () => {
     createVersion(root, { slug: "v0.7", actor: "test" });
     const eventsBefore = readEvents(root).length;
-    assert.throws(() => renameVersion(root, { slug: "v0.7", newSlug: "v0.8\0bad", actor: "test" }), /NUL/);
+    // g-404：NUL 改由统一 slug 守卫（core/schema.ts 的 versionSlugSchema）拒绝——文案随之统一为
+    // 「非法版本 slug」，并回显磁盘实际 slug（NUL 以 \u0000 转义可见）。拒绝时机仍早于事件写入。
+    assert.throws(
+      () => renameVersion(root, { slug: "v0.7", newSlug: "v0.8\0bad", actor: "test" }),
+      (e: any) => /非法版本 slug/.test(e.message) && /\\u0000/.test(e.message),
+      "NUL 应被统一 slug 守卫拒绝且转义回显",
+    );
     const eventsAfter = readEvents(root).length;
     assert.equal(eventsAfter, eventsBefore, "NUL 失败不应留下假事件");
   });

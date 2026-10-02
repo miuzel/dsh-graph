@@ -16,6 +16,7 @@ import { parseDoc, serializeDoc, sectionText, type GoalDoc } from "./model.ts";
 import { appendEvent, readEvents, nowIso } from "./events.ts";
 import { GraphError } from "./machine.ts";
 import { resolveExistingEntry } from "./platform.ts";
+import { assertVersionSlug } from "./schema.ts";
 
 // ---- 辅助函数 ----
 
@@ -161,16 +162,15 @@ function updateGoalsVersionField(root: string, slug: string, newSlug: string): v
 // ---- 公开 API ----
 
 /** 创建版本泳道：创建版本目录与 version.md，记录 version.created 事件。
- *  校验：slug 非空且不含路径分隔符；版本目录不能已存在。
+ *  校验：g-404 统一守卫（复用 versionSlugSchema）拒绝路径分隔符/上跳段/绝对路径/空段/控制字符；版本目录不能已存在。
  *  事件先行：先写事件，再创建目录和文件；若事件写入失败则不创建任何内容。 */
 export function createVersion(
   root: string,
   opts: { slug: string; name?: string; actor: string },
 ): { slug: string; name: string } {
   const slug = opts.slug.trim();
-  if (!slug) throw new GraphError("版本 slug 不能为空");
-  if (slug.includes("/") || slug.includes("\\")) throw new GraphError("版本 slug 不能包含路径分隔符");
-  if (slug.includes("\0")) throw new GraphError("版本 slug 不能包含 NUL 字符");
+  // g-404：任何副作用之前统一守卫（此前只查 `/`、`\`、NUL，`..`/控制字符可落盘）
+  assertVersionSlug(slug, "slug");
 
   const vdir = join(root, "versions", slug);
   // g-364：先查「卷别名」再查精确存在——别名复用会被明确拒绝（要求改用磁盘实际 slug），
@@ -222,7 +222,7 @@ export function createVersion(
 }
 
 /** 重命名版本泳道：更新版本目录名、version.md 的 name 字段、所有目标的 version 引用，记录 version.renamed 事件。
- *  校验：版本必须存在；新 slug 非空且不含路径分隔符；新 slug 不能已存在（除非与旧 slug 相同，此时仅更新 name）。
+ *  校验：版本必须存在；新旧 slug 均经 g-404 统一守卫（复用 versionSlugSchema）；新 slug 不能已存在（除非与旧 slug 相同，此时仅更新 name）。
  *  版本目录、目标 version 引用、事件记录保持一致且可追溯。
  *  预检先行：先完成所有可能失败的校验，再写事件，再执行变更。 */
 export function renameVersion(
@@ -230,7 +230,8 @@ export function renameVersion(
   opts: { slug: string; newSlug?: string; newName?: string; actor: string },
 ): { old_slug: string; new_slug: string; old_name: string; new_name: string } {
   const slug = opts.slug.trim();
-  if (!slug) throw new GraphError("版本 slug 不能为空");
+  // g-404：旧 slug 也接收自外部，同样在任何副作用（含 existsSync/loadVersionMeta 的路径解析）之前守卫
+  assertVersionSlug(slug, "slug");
 
   const vdir = join(root, "versions", slug);
   if (!existsSync(vdir)) throw new GraphError(`版本 ${slug} 不存在`);
@@ -241,8 +242,8 @@ export function renameVersion(
   const newSlug = opts.newSlug?.trim() || slug;
   const newName = opts.newName?.trim() || oldName;
 
-  if (newSlug.includes("/") || newSlug.includes("\\")) throw new GraphError("新版本 slug 不能包含路径分隔符");
-  if (newSlug.includes("\0")) throw new GraphError("新版本 slug 不能包含 NUL 字符");
+  // g-404：统一守卫（此前仅查 `/`、`\`、NUL，`..`/控制字符可把泳道移出 versions/）
+  assertVersionSlug(newSlug, "newSlug");
 
   // 预检：如果 slug 变了，先检查新 slug 是否已存在（避免写事件后失败留下假事件）
   const slugChanged = newSlug !== slug;
@@ -303,7 +304,8 @@ export function deleteVersion(
   opts: { slug: string; actor: string },
 ): { slug: string } {
   const slug = opts.slug.trim();
-  if (!slug) throw new GraphError("版本 slug 不能为空");
+  // g-404：统一守卫（复用 versionSlugSchema），在任何路径解析/副作用之前拒绝非法 slug
+  assertVersionSlug(slug, "slug");
 
   const vdir = join(root, "versions", slug);
   if (!existsSync(vdir)) throw new GraphError(`版本 ${slug} 不存在`);
@@ -471,7 +473,8 @@ export function releaseVersion(
   opts: { slug: string; actor: string },
 ): { ok: true } | { ok: false; blocking: Array<{ id: string; title: string; status: string }> } {
   const slug = opts.slug.trim();
-  if (!slug) throw new GraphError("版本 slug 不能为空");
+  // g-404：统一守卫（复用 versionSlugSchema），在任何路径解析/副作用之前拒绝非法 slug
+  assertVersionSlug(slug, "slug");
 
   // 校验 actor 身份：仅 human:* 或 supervisor:* 可发布
   if (!opts.actor.startsWith("human:") && !opts.actor.startsWith("supervisor:")) {
@@ -523,7 +526,8 @@ export function setVersionStatus(
   opts: { slug: string; status: string; actor: string; confirmed?: boolean },
 ): void {
   const slug = opts.slug.trim();
-  if (!slug) throw new GraphError("版本 slug 不能为空");
+  // g-404：统一守卫（复用 versionSlugSchema），在任何路径解析/副作用之前拒绝非法 slug
+  assertVersionSlug(slug, "slug");
 
   const newStatus = opts.status.trim();
   // released 只能经 releaseVersion（含 delivered-goal guard），不能走此直接路径
@@ -582,6 +586,8 @@ export function versionDetail(root: string, slug: string): {
   goals_count: number;
   blocking: Array<{ id: string; title: string; status: string }>;
 } {
+  // g-404：只读入口同样守卫——非法 slug 会解析到 versions/ 之外（读错实体或“找不到”误导）
+  assertVersionSlug(slug, "slug");
   const vdir = join(root, "versions", slug);
   if (!existsSync(vdir)) throw new GraphError(`版本 ${slug} 不存在`);
 
