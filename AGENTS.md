@@ -56,6 +56,31 @@ After modifying source and rebuilding:
 - g-348 的原子发布保护的是「读者的可读性」，**不改变**本条纪律：原子发布消除的是构建自身的窗口，而「不要在主树跑实验构建」避免的是与运行中宿主的一切争用。
 - 回归守卫：`core/tests/g348-atomic-build.test.ts`（结构性守卫禁止对活动 `dist` 执行 `rm -rf`；3 个并发读者 × 3 轮构建断言 0 缺失；并把「改回旧模式」的负向对照钉住 ⇒ 人为回退必红）。
 
+### 派发即隔离：返回语义与「隔离三件套核验」（g-406）
+
+`graph_start_attempt` 的返回必须**可据以判定隔离** —— 不要只看 `worktree` 是否为 `false`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `isolated` | 本次是否真的建了独立 worktree，并据此启动子代理 |
+| `worktree` | 已建时为 `{path, relative_path, branch, head}`；未建为 `false` |
+| `worktree_reason` | 未建时的原因枚举：`explicit` / `type_default` / `dirty_workspace` / `type_default_unknown` |
+| `worktree_created` / `worktree_reused` | 创建结果（新建 / 幂等复用，二者恰一为真） |
+
+- 隔离解析（g-283/g-289）：显式 `worktree` 参数优先；未传时按**目标类型 × 工作区干净度**解析 —— 干净工作区下 `patch`/`chore`/`task` 默认**不建树**（微小改动快速通道），`feature`/`bug`/`improvement` 默认建树；可靠判脏（`clean=false`）时任何类型都升级为建树。
+  ⇒ 因此「批量派发时某个 attempt 返回 `false`」是**类型默认**，与 batch 位置无关（g-406 用私有板副本 N=2/N=5 实证并回归）；单独派发结果完全相同。
+- 无主树窗口：`prepareAttemptWorktree` 是**同步**调用，位于子代理启动之前、且两者之间无 `await`（同一同步临界区）⇒ 子代理启动时工作树**必已创建并注册**；建树失败一律抛 `GraphError`（零副作用：不迁移状态、不建 attempt、不启动子代理），**绝不**静默降级为主树执行。
+- 响应构造是**白名单**：工具入口与 HTTP/GUI 入口各自手写返回字段；新增隔离语义字段必须**两处同时登记**，否则主管拿到的响应不可判定。
+- 结构性守卫：`core/tests/g406-dispatch-isolation-verdict.test.ts`（N=2/N=5 逐 attempt 一致性 + 启动时刻实拍注册状态 + 负向对照：旧响应形状必红、创建晚于启动/中间插 `await` 必红、白名单漏登记必红）。
+
+派发后**隔离三件套核验**（主管/执行者自查，任一不合即按未隔离处理）：
+
+1. `git worktree list` 命中该 attempt 的工作树路径（`.worktrees/<goal>-att-<NN>`，注意是两位序号）；
+2. 主树 `git status --porcelain` 为 0 改动；
+3. 主树 `dist/` mtime 未变（未在主树构建）。
+
+`isolated:false` 时**不要**臆断为「隔离失败」：该 attempt 按策略在工作区根目录运行（`minor-task`/`no-isolation` 指引）。若本次任务**确实需要**隔离（例如要跑构建），主管应在派发时**显式传 `worktree:true`**，不要依赖任何「默认强制隔离」的旧表述。
+
 ## Development Workflow
 
 1. **Always work with source files** — never edit files in `dist/` directly
