@@ -218,11 +218,37 @@ function makeShellProbe(): ShellProbe {
 }
 
 /**
- * 现存的**事件通道**目录数（`openEventChannel` 用 `mkdtempSync(join(tmpdir(), "dsh-graph-nested-runner-"))`
- * 创建，收尾即删）。入口门禁在 `capture()` **之前**抛出 ⇒ 该计数必须纹丝不动。
+ * 给定目录里的**事件通道**目录数（`openEventChannel` 用
+ * `mkdtempSync(join(tmpdir(), "dsh-graph-nested-runner-"))` 创建，收尾即删）。入口门禁在 `capture()`
+ * **之前**抛出 ⇒ 该计数必须纹丝不动。
+ *
+ * g-423：`root` **必须**是本用例**私有**的 TMPDIR —— 直接数全局 `tmpdir()` 会与其他并发测试文件
+ * （各自创建/删除同前缀的嵌套运行工作目录）互相干扰 ⇒ 随机**假红**（实测闸门里 `4 !== 5`，
+ * 而同一次加固包装全量却全绿）。
  */
-function openChannelDirs(): number {
-  return readdirSync(tmpdir()).filter((name) => name.startsWith("dsh-graph-nested-runner-")).length;
+function openChannelDirs(root: string): number {
+  return readdirSync(root).filter((name) => name.startsWith("dsh-graph-nested-runner-")).length;
+}
+
+/**
+ * g-423：把 `TMPDIR` 指向本用例私有目录后执行 `fn`，并把「**私有**通道目录计数」交给它。
+ * `os.tmpdir()` 每次调用都读 `TMPDIR` ⇒ helper 若真的在 `capture()` 里建了通道，必然落在该私有目录内,
+ * 判据**不失真**；同时**自校验**隔离生效（计数起点必须为 0，否则说明 `TMPDIR` 未被采纳 —— 立刻
+ * fail-closed 报错，而不是静默退回带竞态的全局计数）。
+ */
+function withPrivateTmpdir<T>(fn: (channels: () => number) => T): T {
+  const privateTmp = mkdtempSync(join(tmpdir(), "g420-negative-tmp-"));
+  const previous = process.env.TMPDIR;
+  process.env.TMPDIR = privateTmp;
+  const channels = (): number => openChannelDirs(privateTmp);
+  try {
+    assert.equal(channels(), 0, "私有 TMPDIR 必须被 os.tmpdir() 采纳（否则通道计数仍受并发干扰 ⇒ 假红）");
+    return fn(channels);
+  } finally {
+    if (previous === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previous;
+    rmSync(privateTmp, { recursive: true, force: true });
+  }
 }
 
 test("g-420 判据2（负向）：各不支持形态 ⇒ spawn 之前 fail-closed 拒绝，且零副作用（无通道 / 无进程 / 无 marker）", (t) => {
@@ -253,26 +279,28 @@ test("g-420 判据2（负向）：各不支持形态 ⇒ spawn 之前 fail-close
     ["换行分隔两条命令", `node --test ${fixture}\nnode --test ${fixture}`, /换行|命令分隔符/],
   ];
   try {
-    const channelsBefore = openChannelDirs();
-    for (const [label, cmd, reasonRe] of forms) {
-      // 同步抛出即「未返回 Promise」⇒ 必然发生在 capture()（唯一创建通道处）之前。
-      assert.throws(
-        () => runNestedCommand(cmd, { cwd: dir }),
-        REFUSED_RE,
-        `${label} 必须在 spawn 之前 fail-closed 拒绝：${cmd}`,
-      );
-      assert.throws(
-        () => runNestedCommand(cmd, { cwd: dir }),
-        reasonRe,
-        `${label} 的红因必须点名该形态：${cmd}`,
-      );
-      assert.equal(existsSync(marker), false, `${label} 拒绝时不得真的跑起夹具（marker 出现即已 spawn）`);
-      assert.equal(
-        openChannelDirs(),
-        channelsBefore,
-        `${label} 拒绝时不得创建事件通道（tmpdir 里的通道目录数必须不变）`,
-      );
-    }
+    withPrivateTmpdir((channels) => {
+      const channelsBefore = channels();
+      for (const [label, cmd, reasonRe] of forms) {
+        // 同步抛出即「未返回 Promise」⇒ 必然发生在 capture()（唯一创建通道处）之前。
+        assert.throws(
+          () => runNestedCommand(cmd, { cwd: dir }),
+          REFUSED_RE,
+          `${label} 必须在 spawn 之前 fail-closed 拒绝：${cmd}`,
+        );
+        assert.throws(
+          () => runNestedCommand(cmd, { cwd: dir }),
+          reasonRe,
+          `${label} 的红因必须点名该形态：${cmd}`,
+        );
+        assert.equal(existsSync(marker), false, `${label} 拒绝时不得真的跑起夹具（marker 出现即已 spawn）`);
+        assert.equal(
+          channels(),
+          channelsBefore,
+          `${label} 拒绝时不得创建事件通道（私有 TMPDIR 里的通道目录数必须不变）`,
+        );
+      }
+    });
     t.diagnostic(
       `evidence: suite=g420-shell-refused forms=${forms.length} spawn_before=1 marker=absent channel_created=0`,
     );
@@ -323,20 +351,22 @@ const COMPOUND_RE = /多段 runner|命令分隔符|重定向/;
 test("g-420 判据2（P1 负向）：复合 shell（`;` / 粘连 `>/dev/null` / 带 opts.targets）⇒ spawn 前拒绝且零副作用", (t) => {
   const repro = makeCompoundRepro();
   try {
-    const channelsBefore = openChannelDirs();
     const forms: ReadonlyArray<readonly [string, string, { targets?: string[] }]> = [
       ["无声明 `;` 版", `node --test; node --test ${repro.pass}`, {}],
       ["粘连 `>/dev/null` 版", `node --test>/dev/null; node --test ${repro.pass}`, {}],
       ["带 opts.targets 版", `node --test; node --test ${repro.pass}`, { targets: [repro.pass] }],
       ["换行分隔（无控制符）版", `node --test\nnode --test ${repro.pass}`, {}],
     ];
-    for (const [label, cmd, extra] of forms) {
-      assert.throws(() => runNestedCommand(cmd, { cwd: repro.dir, ...extra }), REFUSED_RE, `${label} 必须拒绝`);
-      assert.throws(() => runNestedCommand(cmd, { cwd: repro.dir, ...extra }), COMPOUND_RE, `${label} 红因须点名`);
-      assert.equal(existsSync(repro.firstMarker), false, `${label}：第一段必失败夹具**不得加载**（marker 出现即已跑）`);
-      assert.equal(existsSync(repro.passMarker), false, `${label}：任何一段都不得跑`);
-      assert.equal(openChannelDirs(), channelsBefore, `${label}：拒绝时不得创建事件通道`);
-    }
+    withPrivateTmpdir((channels) => {
+      const channelsBefore = channels();
+      for (const [label, cmd, extra] of forms) {
+        assert.throws(() => runNestedCommand(cmd, { cwd: repro.dir, ...extra }), REFUSED_RE, `${label} 必须拒绝`);
+        assert.throws(() => runNestedCommand(cmd, { cwd: repro.dir, ...extra }), COMPOUND_RE, `${label} 红因须点名`);
+        assert.equal(existsSync(repro.firstMarker), false, `${label}：第一段必失败夹具**不得加载**（marker 出现即已跑）`);
+        assert.equal(existsSync(repro.passMarker), false, `${label}：任何一段都不得跑`);
+        assert.equal(channels(), channelsBefore, `${label}：拒绝时不得创建事件通道（私有 TMPDIR 计数不变）`);
+      }
+    });
     t.diagnostic(`evidence: suite=g420-compound-refused forms=${forms.length} first_segment_ran=0 marker=absent`);
   } finally {
     rmSync(repro.dir, { recursive: true, force: true });
