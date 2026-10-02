@@ -276,8 +276,11 @@ function topLevelFunctions(src: string): Map<string, string> {
  * 弱裁决 helper 可绕过 registry 比较）。
  *
  * `values` = 运行时值导出（可执行 ⇒ 可能下裁决）；`types` = 类型导出（`type`/`interface`/`class`/`enum`）。
- * **fail-closed**：任何以 `export` 开头却**不属于**已支持形态、也不是 `export {…}` / `export default` /
- * `export *` 的行 ⇒ 抛错（新形态必须显式支持，绝不静默跳过）。
+ * **fail-closed（g-422 收紧）**：除上表已支持的三种形态外，**任何**以 `export` 开头的行都抛错 ——
+ * 也包括 `export {…}`（可 `as` 别名重命名）、`export default`、`export *`：它们会让裁决入口以**别名 /
+ * 默认导出**的形态绕过导出普查（`function weak(){…}; export {weak as assertNestedFoo}` 在 `values`
+ * 里完全不可见 ⇒ 清单完备性与调用闭包比较全部失效）。本文件当前不含这些形态；将来若确需，
+ * 必须**先**扩展枚举并把新入口登记进清单，**绝不**静默跳过。
  */
 function exportInventory(src: string): { values: string[]; types: string[] } {
   const values: string[] = [];
@@ -297,7 +300,8 @@ function exportInventory(src: string): { values: string[]; types: string[] } {
   for (const line of src.matchAll(/^export\b.*$/gm)) {
     if (declared.has(line.index as number)) continue;
     const text = line[0].trim();
-    if (/^export\s*\{/.test(text) || /^export\s+default\b/.test(text) || /^export\s*\*/.test(text)) continue;
+    // g-422：`export {…}`（含 `as` 别名）、`export default`、`export *` **不得**静默跳过 ——
+    // 别名/默认导出能把裁决入口藏到 `values` 之外，使下面的清单完备性与调用闭包比较整体失效。
     throw new Error(`不支持的 export 形态（守卫 fail-closed，请显式支持并登记）：${text.slice(0, 120)}`);
   }
   return { values, types };
@@ -512,6 +516,19 @@ test("g-421 判据2 防回归：导出枚举覆盖 async/const 形态，未归�
     /不支持的 export 形态/,
     "无法识别的 export 形态必须 fail-closed 判红，不得静默跳过",
   );
+  // g-422：别名 / 默认 / 星号导出同样必须 fail-closed —— 它们是「裁决入口绕过导出普查」的可行旁路
+  // （`function weak(){…}; export {weak as assertNestedFoo}` 在 `values` 中完全不可见 ⇒ 清单完备性失效）。
+  for (const form of [
+    "export { weak as assertNestedFoo };\n",
+    "export default function assertNestedFoo() {}\n",
+    "export * from './nested-runner.js';\n",
+  ]) {
+    assert.throws(
+      () => exportInventory(form),
+      /不支持的 export 形态/,
+      `别名/默认/星号导出必须 fail-closed 判红（会绕过导出普查）：${form.trim()}`,
+    );
+  }
   assert.throws(
     () => classifyExports(["A"], { X: ["A"], Y: ["A"] }),
     /同时登记/,

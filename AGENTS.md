@@ -139,7 +139,11 @@ summary/tally 语义不变 ⇒ 顶层闸门只用计数的交叉校验不受影�
 `NESTED_EVIDENCE_VERDICTS` / `NESTED_EVIDENCE_PRECONDITIONS` / `NESTED_EVIDENCE_PARTS`，且其**调用闭包**
 必须到达 `nestedEvidenceProblems`；**所有运行时导出**（穷举 `function` / `async function` / `generator` /
 `const|let|var` 形态）还必须**恰好**归属上述三张表或 `NESTED_NON_VERDICT_EXPORTS` 之一 —— 未归类、
-重复登记、清单漂移、不支持的 `export` 形态、以及「形如裁决入口却藏进非裁决清单」一律 fail-closed 判红。
+重复登记、清单漂移、不支持的 `export` 形态、以及「形如裁决入口却藏进非裁决清单」一律 fail-closed 判红；
+**别名 / 默认 / 星号导出同样 fail-closed（g-422）**：`export` 行若既不属于已支持形态、也不是
+`export function`/`async function`/`generator`/`const|let|var`，则**一律抛错**（含 `export {…}`（可 `as` 别名）、
+`export default`、`export *` —— 它们能把裁决入口藏到枚举之外，使清单完备性与调用闭包比较整体失效；
+该文件当前不含这些形态，将来若确需必须先扩展枚举并登记）。
 既有命令与 glob 表述不变：上面的 `node --test core/tests/*.test.ts`、`node scripts/run-tests.mjs`
 （同一 glob `core/tests/*.test.ts`）与 `assertNestedSuitePassed` 的既有判据**只增不减**。
 守卫见 `core/tests/g421-nested-runner-negative-verdict.test.ts`。
