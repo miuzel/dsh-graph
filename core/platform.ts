@@ -7,6 +7,7 @@
  * - 跨平台文件锁（Windows 下 mkdir 互斥 + wx owner 文件，不把目录当 fd 打开）
  * - 跨平台原子写（wx 语义创建、rename 替换与失败清理）
  * - 跨平台文件同一性校验（POSIX dev+ino / Windows 内容哈希+size+mtimeMs）
+ * - g-364: 卷「大小写别名」语义（请求名 → 磁盘实际条目名）与测试注入
  */
 
 import * as C from "node:constants";
@@ -20,9 +21,11 @@ import {
   fchmodSync,
   chmodSync,
   readFileSync,
+  readdirSync,
   renameSync,
   unlinkSync,
 } from "node:fs";
+import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
 /**
@@ -52,6 +55,85 @@ export function withPlatformForTesting<T>(platform: string, fn: () => T): T {
   } finally {
     platformOverride = prev;
   }
+}
+
+/**
+ * g-364：卷「大小写别名」语义（单一注入点，与平台判定同层）。
+ *
+ * 背景：大小写不敏感卷（APFS 默认、WSL 的 drvfs `/mnt/*`、部分网络挂载）把**仅大小写不同**
+ * 的名字折叠到同一实体。名字入口（附件相对路径、版本泳道 slug）若按请求拼写读写与返回，
+ * 在真实不敏感卷上会：返回一个磁盘上并不存在的拼写（引用在大小写敏感卷上悬空）、或静默复用
+ * 既有的别名实体（事件/元数据记错名字）。产品侧因此需要在**复用既有实体之前**解析出磁盘实际
+ * 条目名，并据此拒绝或回填真实名。
+ *
+ * 注入语义：默认 `null` = **不注入**，判定完全来自真实文件系统——
+ *   - `readdirSync` 是「磁盘实际拼写」的权威；
+ *   - `lstat` 是「该卷是否认为此名存在」的权威。
+ * 测试可注入 `true`，在**大小写敏感的开发卷**上复现不敏感卷的别名行为（不依赖真实挂载、
+ * 不往生产看板写探针）。注入不改变「精确名优先」：逐字节同名永远是精确名，绝不被判为别名。
+ */
+let caseInsensitiveVolumeOverride: boolean | null = null;
+
+/** 是否处于「注入的大小写不敏感卷」模式（生产路径恒为 false：不注入）。 */
+export function isCaseInsensitiveVolumeInjected(): boolean {
+  return caseInsensitiveVolumeOverride === true;
+}
+
+export function setCaseInsensitiveVolumeForTesting(mode: boolean | null): void {
+  caseInsensitiveVolumeOverride = mode;
+}
+
+export function withCaseInsensitiveVolumeForTesting<T>(mode: boolean | null, fn: () => T): T {
+  const prev = caseInsensitiveVolumeOverride;
+  caseInsensitiveVolumeOverride = mode;
+  try {
+    return fn();
+  } finally {
+    caseInsensitiveVolumeOverride = prev;
+  }
+}
+
+/** 条目名折叠键：Unicode 规范化（macOS 磁盘名常为 NFD，请求名常为 NFC）+ 大小写不敏感。 */
+export function foldEntryName(name: string): string {
+  return name.normalize("NFC").toLowerCase();
+}
+
+/**
+ * 在父目录的**真实条目**中定位请求名，返回磁盘实际拼写：
+ *   - 逐字节同名 ⇒ `{ actual: 请求名, aliased: false }`（**精确名优先**，永不被判为别名）；
+ *   - 只有折叠同名的条目（大小写/规范化差异）：仅当**注入不敏感语义**、或 `lstat` 命中
+ *     （真实不敏感卷上该请求名确实解析到既有条目）⇒ `{ actual: 磁盘条目, aliased: true }`；
+ *   - 其余（含**大小写敏感卷上只有异名条目**）⇒ `null`：调用方按「不存在」新建，
+ *     **不产生假别名**（这正是「大小写敏感卷 + 精确名不得误伤」的保障）。
+ *
+ * 不抛错：父目录不存在/不可读、条目为悬空软链等一律按无法判定处理（保守返回 null 或原名）。
+ * 多条目折叠同名（人为构造的矛盾状态）时按名字排序取首个，保证判定确定性。
+ */
+export function resolveExistingEntry(
+  parentDir: string,
+  requested: string,
+): { actual: string; aliased: boolean } | null {
+  let entries: string[];
+  try {
+    entries = readdirSync(parentDir).sort();
+  } catch {
+    return null;
+  }
+  if (entries.includes(requested)) return { actual: requested, aliased: false };
+  const folded = entries.find((e) => foldEntryName(e) === foldEntryName(requested));
+  if (caseInsensitiveVolumeOverride === true) {
+    return folded ? { actual: folded, aliased: true } : null;
+  }
+  let present = false;
+  try {
+    lstatSync(join(parentDir, requested));
+    present = true;
+  } catch {
+    present = false;
+  }
+  if (!present) return null;
+  // 请求名在真实卷上确实命中，但磁盘拼写不是逐字节同名 ⇒ 该卷把它折叠到了既有条目。
+  return folded ? { actual: folded, aliased: true } : { actual: requested, aliased: false };
 }
 
 /**
