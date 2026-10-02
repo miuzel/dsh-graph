@@ -16,6 +16,16 @@
  *                                    最后一条全局级 `file` 为 `null`）
  *   {"type":"tally","counts":{…},…}  reporter 自行按事件累加的独立计数（source 耗尽时才产，
  *                                    因此**子进程被杀死 ⇒ 没有 tally 行**，可判「通道未完成」）
+ *   {"type":"failure",…}             g-421：**每个 `test:fail` 一条实体级明细**（纯**加法**，
+ *                                    不改 summary/tally 语义 ⇒ 顶层闸门只用计数的交叉校验不受影响）：
+ *                                    `name` / `entityType`（`details.type`：test|suite）/ `message` /
+ *                                    `file` / `exitCode` / `signal`。
+ *                                    用途：负向裁决必须区分「**真实 test/subtest 断言失败**」与
+ *                                    「**文件包装**因进程退出码/信号被判失败」—— 后者
+ *                                    （`test('pass',()=>{})` + `process.exitCode = 1`）会正常产出
+ *                                    文件级 summary，仅凭「非零退出 + 覆盖 + 输出正则」无法识别。
+ *                                    判别依据：Node 为**进程级**失败合成的 error 带 `exitCode`/`signal`，
+ *                                    真实断言失败的 error 只有 `message`/`cause`（Error 对象）。
  *
  * 用法（由 scripts/run-tests.mjs 拼装，勿单独依赖）：
  *   node --test --test-reporter=spec --test-reporter-destination=stdout \
@@ -45,6 +55,21 @@ export default async function* reporter(source) {
 
     if (ev.type !== "test:pass" && ev.type !== "test:fail") continue;
     const data = ev.data ?? {};
+    if (ev.type === "test:fail") {
+      // g-421：实体级失败明细（纯加法）。`exitCode`/`signal` 只在 Node 因**进程级**失败
+      // （文件进程非零退出 / 被信号杀死）合成 error 时出现 ⇒ 据此可把「文件包装失败」
+      // 与「真实 test/subtest 断言失败」区分开（后者 error 只有 message/cause）。
+      const err = data.details?.error ?? {};
+      yield emit({
+        type: "failure",
+        name: typeof data.name === "string" ? data.name : "",
+        entityType: typeof data.details?.type === "string" ? data.details.type : "unknown",
+        message: typeof err.message === "string" ? err.message : typeof err.cause === "string" ? err.cause : "",
+        file: typeof data.file === "string" ? data.file : null,
+        exitCode: typeof err.exitCode === "number" ? err.exitCode : null,
+        signal: typeof err.signal === "string" ? err.signal : null,
+      });
+    }
     // `describe()` 块的聚合事件（`details.type === "suite"`）**不是用例**：node 汇总把它计进
     // `suites` 而不是 `tests`。不区分会在含 describe 的套件上把 tally 多算（实测全量 1883 + 9）。
     if (data.details?.type === "suite") {

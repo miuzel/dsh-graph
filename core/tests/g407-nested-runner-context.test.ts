@@ -15,6 +15,11 @@
  *  ④ **判别力**：helper 不会把正常全绿的嵌套运行误判为红（守卫不是恒抛的假守卫）。
  *
  * 边界：不改 runner 选型、不引入新依赖/新框架、不改被测产品逻辑。
+ *
+ * g-421 注：`assertNestedSuiteRan` 与 `assertNestedSuiteFailed` 现**同样**消费证据不变式
+ * （目标覆盖 + 通道/计数交叉校验）。故本文件的**负向「双断言」用例**改用
+ * `asEvidencedResult()`（证据完整的合成结果），使红因只可能来自「退出码 / 输出特征」两条判据；
+ * `asResult()`（空通道）保留给「跑过没 / 零用例 / 无汇总」这类**更基础**的分支，它们仍在证据检查之前判红。
  */
 
 import assert from "node:assert/strict";
@@ -66,8 +71,11 @@ const rawInheritedRun = (fixture: string) =>
 
 /**
  * 合成 `NestedRunResult`（g-416：接口新增 `cwd`/`targets`/`channel`，此处显式给出空通道）。
- * 这些合成结果只喂 {@link assertNestedSuiteRan} / {@link assertNestedSuiteFailed}（不判全绿），
- * 故空目标 / 空通道不影响其判别力。
+ * 这些合成结果只喂 {@link assertNestedSuiteRan} 的「跑过没 / 零用例 / 无汇总 / 口径」分支
+ * —— 它们都会在**证据不变式之前**判红，故空目标 / 空通道不影响其判别力。
+ *
+ * ⚠️ g-421：**负向「双断言」用例不能**用本工厂（空通道会被新增的证据不变式先判红，掩盖
+ * 「退出码 / 输出特征」两条判据）—— 那类用例请用 {@link asEvidencedResult}。
  */
 function asResult(r: { code: number | null; out: string; err: string }, command = "(synthetic)"): NestedRunResult {
   return {
@@ -77,6 +85,53 @@ function asResult(r: { code: number | null; out: string; err: string }, command 
     cwd: repoRoot,
     targets: [],
     channel: parseEventChannel(""),
+  };
+}
+
+/**
+ * g-421：**证据完整**的合成结果 —— 负向「双断言」用例专用。
+ *
+ * 目标集合 ≡ 通道逐文件完成事件（同一路径）、`channel.summary` ≡ `channel.tally` ≡ 人类可读汇总，
+ * 三者计数口径自洽；并给出**一条 test 级失败事件**（`failureMessage` 可控）⇒
+ * {@link nestedEvidenceProblems} 为空，于是红因**只**可能来自「退出码 / 事件文本特征」这两条判据本身
+ * （判别力不被覆盖/通道不变式掩盖）。
+ *
+ * ⚠️ g-421 第二轮：签名**只在事件通道上**匹配（`name + error.message`），不再看 stdout —— 故失败用例
+ * 必须真的带一条 test 级失败事件（否则红因会变成「没有任何 test/subtest 级的失败事件」）。
+ */
+function asEvidencedResult(
+  r: { code: number | null; out: string; err: string },
+  command = "(synthetic-evidenced)",
+  failureMessage = "unrelated failure text (not the expected signature)",
+): NestedRunResult {
+  const summary = parseTestSummary(r.out, r.err);
+  const target = join(repoRoot, "core", "tests", "fixtures", "g407", "synthetic.test.ts");
+  return {
+    ...r,
+    command,
+    summary,
+    cwd: repoRoot,
+    targets: [target],
+    channel: {
+      summary,
+      tally: summary,
+      summaries: 2,
+      files: [target],
+      failures:
+        summary.fail > 0
+          ? [
+              {
+                name: "g-407 合成用例：必然失败的断言",
+                entityType: "test",
+                message: failureMessage,
+                file: target,
+                exitCode: null,
+                signal: null,
+              },
+            ]
+          : [],
+      badLines: 0,
+    },
   };
 }
 
@@ -175,7 +230,7 @@ test("g-407 判据 3：零用例 / 被 skip / 无汇总 ⇒ 显式失败（回�
 });
 
 test("g-407 判据 3：双断言各自独立生效（单点永真被消除）", () => {
-  const ranButNoSignature = asResult({
+  const ranButNoSignature = asEvidencedResult({
     code: 1,
     out: "✔ unrelated\nℹ tests 1\nℹ pass 0\nℹ fail 1\n",
     err: "",
@@ -186,7 +241,7 @@ test("g-407 判据 3：双断言各自独立生效（单点永真被消除）", 
     "只有非零退出、没有预期错误特征 ⇒ 不足以证明负向对照成立，必须判红",
   );
 
-  const signatureButZeroExit = asResult({
+  const signatureButZeroExit = asEvidencedResult({
     code: 0,
     out: `ℹ tests 1\nℹ pass 1\nℹ fail 0\n${FAIL_MARKER}\n`,
     err: "",

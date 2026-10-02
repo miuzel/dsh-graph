@@ -46,6 +46,7 @@ import { join } from "node:path";
 
 // g-407：嵌套 runner 的唯一共用入口（env 清洗 + 「确实跑了用例」判据）。
 import {
+  assertNestedSuiteFailed,
   assertNestedSuitePassed,
   assertNestedSuiteRan,
   cleanTestEnv,
@@ -553,6 +554,9 @@ test("g-353 判据 3：只读 check 不改任何文件，且能识别陈旧产�
     assertNestedSuiteRan(redStale, "g-353 负向对照 A（陈旧产物）");
     assert.notEqual(redStale.code, 0, "陈旧产物必须被只读 check 识别（不得静默通过）");
     assert.match(redStale.out, /产物陈旧|内容不一致/, `陈旧族必须报红，实际输出：${redStale.out.slice(-600)}`);
+    // g-421：负向对照还必须证明「确有 **test/subtest 级真实失败事件**，且其 error 文本匹配预期特征」——
+    // 只看「非零退出 + 输出正则」时，一个「良性用例 + `process.exitCode = 1`」的假只读 check 也能冒充成立。
+    assertNestedSuiteFailed(redStale, "g-353 负向对照 A（陈旧产物）", /产物陈旧|内容不一致/);
 
     // 负向对照 B：从 PARTS 里删掉一个真实模块（漏模块）⇒ 必须报红。
     const bc = join(sb.repo, "scripts", "build-client.sh");
@@ -560,6 +564,8 @@ test("g-353 判据 3：只读 check 不改任何文件，且能识别陈旧产�
     const redModule = await runNestedCommand(cmd, { cwd: sb.repo, env: cleanEnv() });
     assertNestedSuiteRan(redModule, "g-353 负向对照 B（漏模块）");
     assert.notEqual(redModule.code, 0, "漏模块必须被只读 check 识别（不得静默通过）");
+    // g-421：同上 —— 必须确有 test/subtest 级真实失败事件且文本匹配（不得由退出码伪装）。
+    assertNestedSuiteFailed(redModule, "g-353 负向对照 B（漏模块）", /PARTS|一一对应/);
     assert.match(
       redModule.out,
       /PARTS|一一对应/,

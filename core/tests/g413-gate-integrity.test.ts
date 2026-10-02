@@ -264,12 +264,18 @@ test("g-413 判据1/2：闸门从干净事件通道取数并与人类汇总/退�
 
   const reporter = readFileSync(REPORTER, "utf8");
   assert.match(reporter, /ev\.type === "test:summary"/, "reporter 必须只转发带类型事件");
-  // 结构性保证：reporter **只**产出 runner 自产的 summary/tally 记录 —— 测试 stdout 无法被转发进来。
+  // 结构性保证：reporter **只**产出 runner 自产的 summary/tally/**failure** 记录 —— 测试 stdout 无法被转发进来。
+  // （g-421：`failure` = 逐 `test:fail` 的实体级明细，仍只由**带类型事件**产生；见下一行的来源断言。）
   const emitted = [...reporter.matchAll(/yield\s+emit\(\{\s*type:\s*"([^"]+)"/g)].map((m) => m[1]).sort();
   assert.deepEqual(
     [...new Set(emitted)],
-    ["summary", "tally"],
-    `reporter 只允许产出 summary/tally（实际：${emitted.join(",")}）⇒ 伪造汇总进不了干净通道`,
+    ["failure", "summary", "tally"],
+    `reporter 只允许产出 summary/tally/failure（实际：${emitted.join(",")}）⇒ 伪造汇总进不了干净通道`,
+  );
+  assert.match(
+    reporter,
+    /if \(ev\.type === "test:fail"\) \{[\s\S]*?type: "failure"/,
+    "g-421：failure 记录必须只由 `test:fail` **带类型事件**产生（不得由 stdout/人类可读文本产生）",
   );
   assert.doesNotMatch(reporter, /ev\.type\s*===\s*"test:stdout"/, "reporter 不得按 test:stdout 分流测试输出");
 });

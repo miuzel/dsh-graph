@@ -141,6 +141,37 @@
  *     （1 逐文件完成事件 + 1 全局汇总），改用人类可读 `summaryBlocks` 同样会被外层 `NODE_OPTIONS`
  *     注入的内层继承所误伤（实测嵌套 g353 被判红）；且 `>/dev/null` 粘连变体只剩 1 块 ⇒ 该层对上述
  *     三个复现零判别力。**防线全部落在 ① 粘连控制符识别 + ② 强制单一 runner**（均 spawn 前 fail-closed）。
+ *
+ * ── g-421 的收口（终局复核在 tip `ae1414c` 上实测的**负向裁决** P1：早退冒充「预期失败」）────────
+ *  `{@link assertNestedSuiteFailed}`（负向变异对照专用）此前只核 `run.code !== 0` + 输出正则，
+ *  **不核目标覆盖/事件通道** ⇒ 夹具先打印 sentinel、注册 `assert.fail(sentinel)` 后**立即
+ *  `process.exit(1)`**，得 `code 1 / tests 1 / fail 1` 而 **`channel.files=[]`**（断言从未执行），
+ *  helper **仍然接受** —— 「进程早退」可冒充「预期失败」= false-positive test evidence（P1）。
+ *
+ *  现收口：**正向与负向裁决共用同一组证据不变式**（{@link nestedEvidenceProblems} =
+ *  目标集合 ≡ 逐文件完成事件集合且 `>0` + 人类汇总 ↔ 通道**逐字段**交叉校验 + 通道**内部**
+ *  tally ↔ summary 交叉校验，全部 fail-closed、无 opt-out）：
+ *   · {@link nestedSuitePassProblems}（正向，全绿）与 {@link nestedSuiteFailedProblems}（负向，如期报红）
+ *     都调用同一实现 ⇒ 两端口径**只增不减**地一致，且**不各写一份**（结构性守卫钉住）；
+ *   · {@link assertNestedSuiteRan}（「跑过没」前置）**同样**强制这组不变式 —— 它被 `g353` 的两个
+ *     **负向对照消费点**（陈旧产物 / 漏模块）与整套件自证闸门直接消费，只核「跑过」会让
+ *     「非零退出 + 输出签名」的早退伪造冒充负向对照成立；
+ *   · `channel.files=[]` / 提前退出 / 断言未执行 ⇒ 一律**拒绝**并给明确红因
+ *     （「失败不是由真实测试断言产生」）。
+ *
+ *  **第二轮收口（只核覆盖仍不够）**：另一种伪造**照常产出**文件级完成事件与自洽计数 ——
+ *  `test('assertions pass', () => {})` **良性通过** + 打印期望签名 + 模块末尾 `process.exitCode = 1`
+ *  ⇒ 实测 `code 1 / tests 2 / pass 1 / fail 1 / files=1`，那唯一 1 个 `fail` 只是 Node 为**文件进程**
+ *  非零退出合成的「**文件包装**失败」（`details.error` 带 `exitCode`/`signal`），**本该失败的断言从未执行**。
+ *  ⇒ 负向裁决（{@link nestedSuiteFailedProblems}）现在还要求事件通道里**确有 test/subtest 级的真实
+ *  失败事件**（{@link nestedTestLevelFailures}：`details.type === "test"` 且**不带**进程级
+ *  `exitCode`/`signal`），并且（传入签名时）**该失败事件的文本必须匹配签名**（证明失败正是预期的那个）。
+ *  为此 `scripts/test-reporter-events.mjs` **加法式**新增 `{"type":"failure",…}` 实体级记录
+ *  （`name`/`entityType`/`message`/`file`/`exitCode`/`signal`；summary/tally 语义不变 ⇒ 顶层闸门只用
+ *  计数的交叉校验不受影响），由 {@link parseEventChannel} 收进 `channel.failures`。
+ *  导出清单/不变式由 `g421` 结构性守卫按调用闭包钉住
+ *  （{@link NESTED_EVIDENCE_VERDICTS} / {@link NESTED_EVIDENCE_PRECONDITIONS} / {@link NESTED_EVIDENCE_PARTS} /
+ *  {@link NESTED_NON_VERDICT_EXPORTS}；**所有**运行时导出必须恰好归属其中一张清单，未归类即判红）。
  */
 
 import assert from "node:assert/strict";
@@ -601,6 +632,32 @@ export function tallyOf(s: TestSummary): number {
 }
 
 /**
+ * g-421：`test:fail` 的**实体级**明细（由 `scripts/test-reporter-events.mjs` 以 `type:"failure"`
+ * 记录转发；见 {@link EventChannelReading.failures}）。
+ *
+ * 负向裁决必须能区分两种「失败」：
+ *   - **真实 test/subtest 断言失败**：`entityType === "test"` 且**不带**进程级 `exitCode`/`signal`
+ *     （error 只有 `message`/`cause` 的 Error 对象）；
+ *   - **文件包装失败**：Node 因**文件进程**非零退出 / 被信号杀死而合成的失败 —— 带
+ *     `exitCode`（数字）或 `signal`（如 `SIGKILL`）。`test('pass',()=>{}) + process.exitCode = 1`
+ *     就属这一类：文件级完成事件照常产出，**但没有任何真实断言失败**。
+ */
+export interface TestFailureEvent {
+  /** 事件实体名（真实用例 = 用例名；文件包装失败 = **文件路径**）。 */
+  name: string;
+  /** 事件实体层级（`details.type`：`test` / `suite` / …）。 */
+  entityType: string;
+  /** 失败文本（`details.error.message`，退化取字符串型 `cause`）。 */
+  message: string;
+  /** 事件自报的文件路径（可空）。 */
+  file: string | null;
+  /** **进程级**退出码 —— 仅「文件包装失败」带（真实断言失败为 `null`）。 */
+  exitCode: number | null;
+  /** **进程级**信号 —— 仅「被信号杀死的文件包装失败」带（真实断言失败为 `null`）。 */
+  signal: string | null;
+}
+
+/**
  * **干净事件通道**（`scripts/test-reporter-events.mjs`，NDJSON）的解析结果。
  *
  * 这是 g-413 的权威计数来源：只有 runner 自产的**带类型**事件能进来（测试的 `console.log`
@@ -620,6 +677,12 @@ export interface EventChannelReading {
    * 被排除或中途早退的文件**根本不会**产出这条带 `file` 的汇总。
    */
   files: string[];
+  /**
+   * g-421：**逐 `test:fail` 的实体级明细**（可被信任的「失败是什么」来源）。
+   * 计数无法区分「真实断言失败」与「文件包装因退出码/信号失败」，本字段可以 —— 见
+   * {@link TestFailureEvent} 与 {@link nestedTestLevelFailures}。
+   */
+  failures: TestFailureEvent[];
   /** 无法解析/未知类型的行数（`> 0` ⇒ 通道被损坏或截断，计数不可信）。 */
   badLines: number;
 }
@@ -654,18 +717,45 @@ export function parseEventChannel(text: string): EventChannelReading {
   let summaries = 0;
   let badLines = 0;
   const files: string[] = [];
+  const failures: TestFailureEvent[] = [];
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (line === "") continue;
-    let record: { type?: unknown; counts?: unknown; file?: unknown };
+    let record: {
+      type?: unknown;
+      counts?: unknown;
+      file?: unknown;
+      name?: unknown;
+      entityType?: unknown;
+      message?: unknown;
+      exitCode?: unknown;
+      signal?: unknown;
+    };
     try {
-      record = JSON.parse(line) as { type?: unknown; counts?: unknown; file?: unknown };
+      record = JSON.parse(line) as typeof record;
     } catch {
       badLines += 1;
       continue;
     }
-    const counts = record?.counts;
-    if (typeof record?.type !== "string" || typeof counts !== "object" || counts === null) {
+    if (typeof record?.type !== "string") {
+      badLines += 1;
+      continue;
+    }
+    // g-421：实体级失败明细**不带** `counts` ⇒ 必须在下面的 counts 校验之前分支，否则会被算作坏行
+    // （顶层闸门把 `badLines > 0` 当红因 ⇒ 漏掉这里会直接把合法运行判红）。
+    if (record.type === "failure") {
+      failures.push({
+        name: typeof record.name === "string" ? record.name : "",
+        entityType: typeof record.entityType === "string" ? record.entityType : "unknown",
+        message: typeof record.message === "string" ? record.message : "",
+        file: typeof record.file === "string" ? record.file : null,
+        exitCode: typeof record.exitCode === "number" ? record.exitCode : null,
+        signal: typeof record.signal === "string" ? record.signal : null,
+      });
+      continue;
+    }
+    const counts = record.counts;
+    if (typeof counts !== "object" || counts === null) {
       badLines += 1;
       continue;
     }
@@ -680,7 +770,7 @@ export function parseEventChannel(text: string): EventChannelReading {
       badLines += 1;
     }
   }
-  return { summary, tally, summaries, files, badLines };
+  return { summary, tally, summaries, files, failures, badLines };
 }
 
 /** g-416：`node --test` 中**独立取值**（`--opt value`）的选项名 —— 其后的 token 不是目标文件。 */
@@ -1127,6 +1217,19 @@ function tail(run: NestedRunResult, n = 600): string {
  *
  * 注意：`pass === 0` **不**单独判红 —— 「唯一用例就是负向对照且如期失败」是合法形态，
  * 此类调用请用 {@link assertNestedSuiteFailed}。
+ *
+ * ── g-421 追加：**与全绿/如期报红裁决同一组证据不变式**（只增不减，fail-closed、无 opt-out）──────
+ *  ⑤ {@link nestedEvidenceProblems}：目标集合 ≡ 逐文件**完成事件**集合且 `>0` + 人类汇总 ↔ 通道
+ *     **逐字段**交叉校验 + 通道**内部** tally ↔ summary 交叉校验。缺了它，「文件级早退」会得到
+ *     `tests > 0 / fail > 0` 的**自洽计数**（repro 实测 `code 1 / tests 1 / fail 1 / files []`）⇒
+ *     本函数会误判「真的跑了」。
+ *
+ *  为什么本函数**必须**也核这些（终局复核追加要求）：它被 `g353` 的两个**负向对照消费点**
+ *  （陈旧产物 / 漏模块）与整套件自证闸门直接消费 —— 若它只核「跑过」，「非零退出 + 输出签名」
+ *  的**早退伪造**即可冒充「负向对照成立」。故本函数不是弱裁决：**任何**据运行证据下结论的入口
+ *  都必须消费证据不变式（结构性守卫 `g421` 钉住：`assertNested*` 的调用闭包必须到达核心）。
+ *  排序说明：先判「没跑 / 零用例 / 口径」这类**更基础**的红因（`g407` 的合成负向用例据此给出
+ *  可读红因），最后追加证据不足 —— 两类红因都**只增不减**。
  */
 export function assertNestedSuiteRan(run: NestedRunResult, label: string): void {
   const s = run.summary;
@@ -1153,6 +1256,15 @@ export function assertNestedSuiteRan(run: NestedRunResult, label: string): void 
     assert.fail(
       `${label}：汇总**计数口径不自洽**（tests=${s.tests} ≠ pass+fail+cancelled+skipped+todo=${tallyOf(s)}）` +
         `⇒ 计数不可信（解析截断或通道被污染），不得判绿。命令：${run.command}\n输出尾部：${tail(run)}`,
+    );
+  }
+  // g-421⑤：证据不变式（覆盖 + 通道交叉校验）—— 与全绿/如期报红裁决**同一组**，不得豁免。
+  const evidence = nestedEvidenceProblems(run);
+  if (evidence.length > 0) {
+    assert.fail(
+      `${label}：嵌套运行的**证据不足以判定通过或失败**（exit=${run.code}）—— 该运行可能根本没跑完，` +
+        `其**失败/通过都不是由目标文件的真实测试断言产生的**：${evidence.join("；")}\n` +
+        `命令：${run.command}\n输出尾部：${tail(run)}`,
     );
   }
 }
@@ -1190,6 +1302,11 @@ export function assertNestedSuiteRan(run: NestedRunResult, label: string): void 
  *     `clean` 运行 `summaryBlocks=2` ⇒ 被判红）。该层对 g-420② 的三个复现零判别力（`>/dev/null`
  *     变体只剩 1 块）。**放弃后同一命令实测 `code 0 / tests 7 / pass 7 / fail 0 / problems []`**。
  *     防线只在入口 (a)(b)。
+ *
+ * ── g-421 追加（**只增不减**，fail-closed、无 opt-out）────────────────────────────────────
+ *  ⑩ ⑥⑦⑧ 三条证据不变式（通道完整性 / 人类汇总 ↔ 通道逐字段 / 通道内部 tally ↔ summary / 目标覆盖）
+ *     收归**唯一实现** {@link nestedEvidenceProblems}，本函数与**负向裁决**
+ *     （{@link nestedSuiteFailedProblems}）**共用**它 —— 关闭「负向路径少核覆盖/通道 ⇒ 早退冒充预期失败」。
  */
 export function nestedSuitePassProblems(run: NestedRunResult): string[] {
   const s = run.summary;
@@ -1212,23 +1329,8 @@ export function nestedSuitePassProblems(run: NestedRunResult): string[] {
   // 放弃后实测（同一命令）：`code 0 / tests 7 / pass 7 / fail 0 / channel_summaries 2 / problems []`。
   // ⇒ 防线全部落在入口 (a) 粘连控制符识别 + (b) 强制单一 runner（spawn 前 fail-closed）。
 
-  const channel = run.channel;
-  if (!channel || !channel.summary || !channel.tally) {
-    problems.push(
-      "干净事件通道不完整（缺 runner 汇总或逐事件计数）⇒ 人类可读汇总可被测试打印伪造，计数不可信，fail-closed 判红",
-    );
-  } else {
-    for (const field of CROSS_CHECK_FIELDS) {
-      if (channel.summary[field] !== s[field]) {
-        problems.push(
-          `人类可读汇总与事件通道不一致：${field} ${s[field]} ≠ ${channel.summary[field]}（人类通道可能被伪造）`,
-        );
-      }
-    }
-    // g-420①：事件通道**内部**（逐事件计数 ↔ runner 汇总）同样逐字段交叉校验（与顶层闸门同口径）。
-    problems.push(...nestedChannelCrossCheckProblems(channel.tally, channel.summary));
-  }
-  problems.push(...nestedTargetCoverageProblems(run.targets, channel, run.cwd));
+  // g-421：证据不变式（覆盖 + 通道交叉校验）收归**唯一实现**，正向与负向裁决共用（同口径、不各写一份）。
+  problems.push(...nestedEvidenceProblems(run));
   return problems;
 }
 
@@ -1329,6 +1431,45 @@ export function nestedTargetCoverageProblems(
   return problems;
 }
 
+/**
+ * g-421：**运行证据不变式**的唯一实现（非抛错形态；空数组 = 证据链完整）。
+ *
+ * 这是一次嵌套运行的**证据充分性核心**，**正向与负向裁决必须共用它**（同口径 fail-closed）：
+ *   ① 干净事件通道必须完整（runner 汇总 + 逐事件计数）—— 人类可读汇总混有测试自己的 `console.log`，
+ *      可被打印伪造（如 `ℹ tests 1`），单独采信即永真；
+ *   ② 人类可读汇总 ↔ 事件通道 `summary` **逐字段**一致（{@link CROSS_CHECK_FIELDS}）；
+ *   ③ 事件通道**内部** `tally` ↔ `summary` 逐字段交叉校验且两侧口径自洽
+ *      （{@link nestedChannelCrossCheckProblems}，g-420①）；
+ *   ④ **逐目标文件完成事件覆盖**（{@link nestedTargetCoverageProblems}，g-416/g-419②，双向、`>0`）。
+ *
+ * 为什么必须共用：{@link assertNestedSuiteFailed} 曾只核「非零退出 + 输出正则」，于是
+ * 「注册失败断言后立即 `process.exit(1)`」（`channel.files=[]`、断言从未执行）可冒充「预期失败」
+ * （g-421 P1，false-positive test evidence）。抽成单一实现后，任何**据证据下结论**的裁决路径
+ * 都只能经它，未来新增裁决 helper 漏掉不变式会被 `g421` 结构性守卫判红。
+ */
+export function nestedEvidenceProblems(run: NestedRunResult): string[] {
+  const s = run.summary;
+  const problems: string[] = [];
+  const channel = run.channel;
+  if (!channel || !channel.summary || !channel.tally) {
+    problems.push(
+      "干净事件通道不完整（缺 runner 汇总或逐事件计数）⇒ 人类可读汇总可被测试打印伪造，计数不可信，fail-closed 判红",
+    );
+  } else {
+    for (const field of CROSS_CHECK_FIELDS) {
+      if (channel.summary[field] !== s[field]) {
+        problems.push(
+          `人类可读汇总与事件通道不一致：${field} ${s[field]} ≠ ${channel.summary[field]}（人类通道可能被伪造）`,
+        );
+      }
+    }
+    // g-420①：事件通道**内部**（逐事件计数 ↔ runner 汇总）同样逐字段交叉校验（与顶层闸门同口径）。
+    problems.push(...nestedChannelCrossCheckProblems(channel.tally, channel.summary));
+  }
+  problems.push(...nestedTargetCoverageProblems(run.targets, channel, run.cwd));
+  return problems;
+}
+
 /** 断言嵌套运行「真的跑了」且**全绿**（g-413 补全判据，见 {@link nestedSuitePassProblems}）。 */
 export function assertNestedSuitePassed(run: NestedRunResult, label: string): void {
   assertNestedSuiteRan(run, label);
@@ -1339,19 +1480,173 @@ export function assertNestedSuitePassed(run: NestedRunResult, label: string): vo
 }
 
 /**
- * 断言嵌套运行「真的跑了」且**如期报红** —— **双断言**：非零退出码 **且** 输出含预期错误特征。
- * 单看退出码会留下单点永真（子进程从未运行、或为了别的原因失败，都会被误读为「负向对照成立」）。
+ * g-421：**真实 test/subtest 级失败事件**（排除「文件包装」因进程退出码/信号被判失败的合成事件）。
+ *
+ * 判据（两道，缺一不可）：
+ *   ① `entityType === "test"` —— `suite` 是聚合块，不是断言；
+ *   ② `exitCode === null && signal === null` —— 带进程级退出码/信号的是 Node 为**文件进程**失败
+ *      合成的「包装失败」（`test('pass',()=>{}) + process.exitCode = 1` 即此形态），**不是**断言失败。
+ *
+ * 为什么需要它：「非零退出 + 文件级完成事件 + 输出正则」全部可以被「良性用例 + 改退出码」满足
+ * （实测 `code 1 / tests 2 / pass 1 / fail 1 / files=1`，那 1 个 fail 只是文件包装）⇒ 负向裁决
+ * 必须要求**确有 test 级失败**，否则「预期失败」可被无断言失败的运行冒充。
  */
-export function assertNestedSuiteFailed(
-  run: NestedRunResult,
-  label: string,
-  signature: RegExp,
-): void {
-  assertNestedSuiteRan(run, label);
-  assert.notEqual(run.code, 0, `${label}：期望失败的嵌套运行必须非零退出（exit=${run.code}）\n${tail(run, 1500)}`);
-  assert.match(
-    `${run.out}\n${run.err}`,
-    signature,
-    `${label}：期望失败的嵌套运行必须输出预期错误特征 ${signature}（只判退出码会留下单点永真）`,
+export function nestedTestLevelFailures(run: NestedRunResult): TestFailureEvent[] {
+  return (run.channel?.failures ?? []).filter(
+    (f) => f.entityType === "test" && f.exitCode === null && f.signal === null,
   );
 }
+
+/**
+ * g-421：**负向裁决**的非抛错形态（{@link assertNestedSuiteFailed} 的实现体；空数组 = 如期报红且证据充分）。
+ *
+ * 判据 = **非零退出（且非信号终止）** + **输出含预期错误特征** + **与正向裁决同一组证据不变式**
+ * （{@link nestedEvidenceProblems}：目标集合 ≡ 逐文件完成事件集合且 `>0` + 通道/口径交叉校验）
+ * + **确有 test/subtest 级真实失败事件**，且（传入签名时）该失败事件的文本**匹配签名**。
+ *
+ * 前两条是 g-407 的「双断言」；第三条是 g-421 第一轮收口（早退 ⇒ 无完成事件）；
+ * 第四条是 g-421 第二轮收口 —— 只核覆盖挡不住「**良性用例 + `process.exitCode = 1`**」：
+ * 该形态**正常产出**文件级完成事件、计数自洽，唯一破绽就是「失败事件是文件包装，没有 test 级断言失败」。
+ *
+ * 与 {@link nestedSuitePassProblems} **共用同一实现**（不各写一份）—— 守卫见
+ * `core/tests/g421-nested-runner-negative-verdict.test.ts`。
+ */
+export function nestedSuiteFailedProblems(run: NestedRunResult, signature: RegExp): string[] {
+  // g-421：签名是**必需**判据（省略签名 = 放弃「失败正是预期的那个」这一判据 ⇒ fail-closed 抛错，
+  // 不给「弱化调用」留后门；类型上亦为必填，这里是运行时兜底）。
+  if (!(signature instanceof RegExp)) {
+    throw new Error(
+      "负向裁决必须给出签名正则：省略签名等于放弃「失败正是预期的那个失败」判据，不允许弱化调用（g-421）",
+    );
+  }
+  const problems: string[] = [];
+  if (run.code === null) {
+    problems.push(
+      `期望失败的嵌套运行**不得被信号终止**（exit=null）—— 信号终止（SIGKILL/超时等）不是测试断言失败，` +
+        `不能作为「如期报红」的证据`,
+    );
+  } else if (run.code === 0) {
+    problems.push(`期望失败的嵌套运行必须非零退出（exit=${run.code}）——只判输出特征会留下单点永真`);
+  }
+  // g-421：同口径证据不变式 —— 失败必须由**目标文件的真实测试断言**产生。
+  for (const problem of nestedEvidenceProblems(run)) {
+    problems.push(
+      `负向裁决证据不足：失败不是由目标文件真实测试断言产生的可能（提前退出 / 断言未执行）——${problem}`,
+    );
+  }
+  // g-421：**必须存在 test/subtest 级的真实失败事件**，且其 **error/details 文本**匹配签名。
+  // ⚠️ 签名**只**在事件通道上匹配，**绝不**匹配 stdout / 整段人类可读输出 —— 后者正是伪造面
+  // （夹具可自己 `console.error(<签名>)`）；`name=<basename>` + `error="test failed"` 的退出码伪装
+  // 也正因「事件文本不含调用方签名」而被拒。
+  const testFailures = nestedTestLevelFailures(run);
+  if (testFailures.length === 0) {
+    const wrapper = (run.channel?.failures ?? []).filter((f) => f.exitCode !== null || f.signal !== null);
+    problems.push(
+      `事件通道中**没有任何 test/subtest 级的失败事件** ⇒ 失败只是**文件包装**（进程退出码/信号）被判失败，` +
+        `本该失败的断言根本没执行（实测形态：良性用例通过 + \`process.exitCode = 1\`；` +
+        `包装失败事件 ${wrapper.length} 条）——「非零退出 + 文件级汇总 + 输出正则」不足以证明「确有一次真实断言失败」`,
+    );
+  } else {
+    const matched = testFailures.some((f) => {
+      signature.lastIndex = 0; // 每个候选都重置（带 /g 的签名会推进 lastIndex）
+      return signature.test(`${f.name}\n${f.message}`);
+    });
+    if (!matched) {
+      const seen = testFailures
+        .map((f) => `${f.name}: ${f.message.slice(0, 80)}`)
+        .join(" | ")
+        .slice(0, 400);
+      problems.push(
+        `期望失败的嵌套运行必须输出预期错误特征 ${signature}，且该特征必须由 **test/subtest 级失败事件的 ` +
+          `error 文本**命中（只看 stdout/人类可读输出会被伪造）：test 级失败事件有 ${testFailures.length} 条，` +
+          `但**没有一条的文本匹配** —— 失败不是「预期的那个失败」（fail-closed 判红）；实际失败：${seen}`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
+ * 断言嵌套运行「真的跑了」且**如期报红** —— **四重断言**：非零退出码（且非信号终止）**且** 输出含预期
+ * 错误特征 **且** 证据链充分（{@link nestedEvidenceProblems}）**且** 事件通道里**确有 test/subtest 级
+ * 真实失败事件**（其文本还必须匹配签名）。
+ * 单看退出码会留下单点永真（子进程从未运行、或为了别的原因失败，都会被误读为「负向对照成立」）；
+ * 只看「非零退出 + 输出特征」会留下 g-421 第一轮的 P1（打印特征后立即早退 ⇒ 断言从未执行却判「如期报红」）；
+ * 只看「非零退出 + 完成事件覆盖」会留下第二轮的 P1（**良性用例 + `process.exitCode = 1`** ⇒ 文件级
+ * 完成事件与计数都正常，`fail 1` 只是**文件包装**被判失败，断言根本没失败）。
+ */
+export function assertNestedSuiteFailed(run: NestedRunResult, label: string, signature: RegExp): void {
+  assertNestedSuiteRan(run, label);
+  const problems = nestedSuiteFailedProblems(run, signature);
+  if (problems.length > 0) {
+    assert.fail(`${label}：期望失败的嵌套运行不达标 —— ${problems.join("；")}\n${tail(run, 1500)}`);
+  }
+}
+
+/**
+ * g-421：**据运行证据下最终结论**的裁决 helper（结构性守卫 `core/tests/g421-*.test.ts` 的唯一真源）。
+ * 每一个的**调用闭包**都必须到达 {@link nestedEvidenceProblems} —— 新增裁决 helper 若漏掉覆盖/通道
+ * 不变式，守卫会因为「闭包到不了核心」而判红（不靠人工 remember）。
+ */
+export const NESTED_EVIDENCE_VERDICTS = [
+  "nestedSuitePassProblems",
+  "nestedSuiteFailedProblems",
+  "assertNestedSuitePassed",
+  "assertNestedSuiteFailed",
+] as const;
+
+/**
+ * g-421：**据运行证据下结论**的阶段组件（被终局裁决与 `g353`/自证闸门直接消费）—— 它与终局裁决
+ * **同一组**不变式：调用闭包同样必须到达 {@link nestedEvidenceProblems}（不是弱裁决的豁免名单）。
+ * 守卫另外钉住它必须被至少一个 {@link NESTED_EVIDENCE_VERDICTS} 组合。
+ */
+export const NESTED_EVIDENCE_PRECONDITIONS = ["assertNestedSuiteRan"] as const;
+
+/**
+ * g-421：**证据不变式的构成部分**（{@link nestedEvidenceProblems} 本体 + 其两个判据实现）。
+ * 守卫钉住核心本体必须引用两个构成判据（防止把核心掏空成恒返回 `[]` 的空壳）。
+ */
+export const NESTED_EVIDENCE_PARTS = [
+  "nestedEvidenceProblems",
+  "nestedChannelCrossCheckProblems",
+  "nestedTargetCoverageProblems",
+] as const;
+
+/**
+ * g-421：**非裁决**运行时导出（纯工具 / 解析 / 运行入口 / 入口门禁 / 查询助手 / 守卫清单常量）——
+ * 它们**不据运行证据下结论**，故不要求消费 {@link nestedEvidenceProblems}。
+ *
+ * 为什么要有这张表：结构性守卫要求**所有运行时导出的名字被四张清单恰好覆盖一次**
+ * ⇒ 任何新增导出（`function` / `async function` / `const … = …`）都必须**显式归类**：
+ * 归进 {@link NESTED_EVIDENCE_VERDICTS}/{@link NESTED_EVIDENCE_PRECONDITIONS} 就必须履行证据不变式，
+ * 归进本清单则是「我声明它不下结论」的**显式**决定。未归类的导出 ⇒ 守卫**判红**（fail-closed），
+ * 不会被静默跳过 —— 这正是「未来新增弱裁决 helper」的防回归缺口。
+ */
+export const NESTED_NON_VERDICT_EXPORTS = [
+  // 入口门禁（spawn 前 fail-closed 拒绝执行，不产生运行证据，故无「裁决」可言）
+  "TEST_CONTEXT_VARS",
+  "TEST_SELECTION_OPTION_NAMES",
+  "NESTED_SHELL_SUBSET",
+  "VALUE_TAKING_TEST_OPTIONS",
+  "findTestSelectionOption",
+  "nestedTestSelectionProblem",
+  "assertNoNestedTestSelection",
+  "nestedArgvTestSelectionProblem",
+  "assertNoNestedArgvTestSelection",
+  // 运行入口 / 环境
+  "cleanTestEnv",
+  "runNestedCommand",
+  "runNestedArgv",
+  // 解析与查询
+  "parseTestSummary",
+  "parseEventChannel",
+  "tallyOf",
+  "expandNestedTargets",
+  "deriveNestedTargetTokens",
+  "nestedTestLevelFailures",
+  // 本节的守卫清单常量自身
+  "NESTED_EVIDENCE_VERDICTS",
+  "NESTED_EVIDENCE_PRECONDITIONS",
+  "NESTED_EVIDENCE_PARTS",
+  "NESTED_NON_VERDICT_EXPORTS",
+] as const;
