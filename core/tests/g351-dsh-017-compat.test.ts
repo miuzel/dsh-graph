@@ -14,18 +14,106 @@
  *
  * 可观测载荷：profile 全局默认 `promptLanguage` 决定注册给宿主的 supervisor-guide skill 用
  * 中文还是英文资产 —— 值被真正读到才会变。
+ *
+ * g-396（测试隔离；本文件唯一改动面，不改任何产品行为）：
+ *   apply() 在有 `sandboxPolicy.workspaceRoot` 时会走 `init(resolveCanonicalRoot(config, ws).root)`
+ *   （dsh-graph-host/index.js 的 g-149 路径）。此前本文件把 workspace 设为 `process.cwd()`：
+ *   在 linked worktree 内 canonical 会把它归一到**主工作树的真实看板**，于是全量测试会对真实
+ *   看板调 init()。init() 目前只在骨架缺失时落盘，因此「恰好」无副作用；但任何让 init()（或被
+ *   此测试触发的其它路径）写入的改动都会在跑测试时**静默污染真实看板**。
+ *   现改为：每个触碰 apply() 的用例都在 `tmp/` 下的**自包含临时 workspace** 内运行、用后删除。
+ *   `tmp/` 是 .gitignore 的 scratch 区，g-363 使它在 canonical 解析中成为独立项目根（不归一）。
+ *
+ *   `core/tests/**` 的 `process.cwd()` 命中点审计（`grep -rn "process.cwd()" core/tests/`）：
+ *     · 本文件 :52（旧 `sandboxPolicy.workspaceRoot`）——**唯一会命中真实看板**，已修复；
+ *     · client.test.ts(44) / g215-model-catalog-compat.test.ts(6) / core.test.ts(1) /
+ *       plugin.test.ts:114 / worktree-isolation-g283.test.ts:198：全部是 readFileSync /
+ *       existsSync / resolveRoot 纯路径计算 ⇒ 只读，安全；
+ *     · root.test.ts(9 行命中，仅 :44 是可执行代码)：resolveRoot 的默认基准断言（纯路径计算）+
+ *       「无 sandboxPolicy 不 init」负向用例（其 mockCtx 对 sandboxPolicy 返回 undefined
+ *       ⇒ apply 推迟 init，不触达任何看板）⇒ 只读，安全；
+ *     · tags.test.ts:42：spawn 子进程的 `cwd` 选项；子进程只写自己的 tmpdir root ⇒ 安全。
+ *   本文件其余命中同样是「定位仓库产物（dist/、dsh-graph-host/）/ 在 tmp 放 schemastery 桩」，
+ *   只读或 scratch（桩目录用后 rmSync）。
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import vm from "node:vm";
 import { join } from "node:path";
-import { apply } from "../../dist/index.js";
+import { apply, resolveCanonicalRoot } from "../../dist/index.js";
 
 const dist = join(process.cwd(), "dist");
 const hostSource = () => readFileSync(join(dist, "index.js"), "utf8");
 const guideEn = () => readFileSync(join(dist, "supervisor-guide.en.md"), "utf8");
 const guideZh = () => readFileSync(join(dist, "supervisor-guide.zh.md"), "utf8");
+
+// ---------------------------------------------------------------------------
+// g-396：测试隔离底座（自包含临时 workspace + 「真实看板零污染」观测器）
+// ---------------------------------------------------------------------------
+
+/**
+ * init() 会创建/触达的骨架面——也正是「污染真实看板」的唯一入口面。
+ * 有意**不做整棵看板的递归指纹**：真实看板是活的（主管/GUI 会持续新建目标目录、追加
+ * events.jsonl），整树哈希/清单会把正常看板活动误报成污染。这里只钉 init() 真正会写的路径。
+ */
+const SKELETON_PATHS = ["backlog", "goals", "versions", "memory/long-term", "shared-cards", "attachments", "events.jsonl", "index.json", "rules.md"];
+/** 仅由 init() 写入的小文件 ⇒ 内容哈希可作污染指纹（events.jsonl 随正常活动增长，故只比存在性）。 */
+const INIT_OWNED_FILES = ["index.json", "rules.md"];
+
+const PROJECT_TMP = join(process.cwd(), "tmp");
+
+/** 真实看板根：以 process.cwd() 为 workspace 的 canonical 解析（linked worktree 内会归一到主工作树）。 */
+function realBoardRoot(): string {
+  return resolveCanonicalRoot({ root: ".dsh-graph" }, process.cwd()).root;
+}
+
+/** 骨架面指纹/清单：每行 `<相对路径>=absent|dir|file[:sha256 前 16 位]`。 */
+function boardSkeletonFingerprint(board: string): string {
+  return SKELETON_PATHS.map((rel) => {
+    const p = join(board, rel);
+    if (!existsSync(p)) return `${rel}=absent`;
+    if (statSync(p).isDirectory()) return `${rel}=dir`;
+    if (INIT_OWNED_FILES.includes(rel)) {
+      return `${rel}=file:${createHash("sha256").update(readFileSync(p)).digest("hex").slice(0, 16)}`;
+    }
+    return `${rel}=file`;
+  }).join("\n");
+}
+
+/** 真实看板顶层文件清单（排除 `.` 开头的内部项，避免 .dsh-graph/.git 内部文件抖动）。 */
+function boardTopLevel(board: string): string[] {
+  if (!existsSync(board)) return [];
+  return readdirSync(board).filter((n) => !n.startsWith(".")).sort();
+}
+
+/**
+ * 隔离守卫（负向对照的钉点）：测试 workspace 必须**自包含**，绝不能 canonical 归一到真实看板。
+ * 把 `sandboxPolicy.workspaceRoot` 改回 `process.cwd()`（旧实现）⇒ 本函数立刻转红。
+ */
+function assertWorkspaceIsolated(ws: string): void {
+  const resolved = resolveCanonicalRoot({ root: ".dsh-graph" }, ws).root;
+  assert.notEqual(ws, process.cwd(), "测试 workspace 绝不能是 process.cwd()（那会命中真实看板）");
+  assert.equal(resolved, join(ws, ".dsh-graph"), `测试 workspace 的看板必须自包含在自身内部（实际 ${resolved}）`);
+  assert.notEqual(resolved, realBoardRoot(), `测试 workspace 绝不能归一到真实看板 ${resolved}`);
+}
+
+/** 在 `tmp/` 下的自包含临时 workspace 内执行 fn；用后（含断言失败路径）递归清理。 */
+function withTempWorkspace<T>(fn: (ws: string) => T): T {
+  mkdirSync(PROJECT_TMP, { recursive: true });
+  const ws = mkdtempSync(join(PROJECT_TMP, "g396-ws-"));
+  try {
+    return fn(ws);
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+}
+
+/** 触碰 apply() 的用例一律走这里：保证 workspace 自包含、用后清理。 */
+function isolatedTest(name: string, fn: (ws: string) => void): void {
+  test(name, () => { withTempWorkspace(fn); });
+}
 
 /** 捕获 apply 期间的 stderr；apply 内 setupGraphSettings 同步执行（无 await）。 */
 function captureStderr(fn) {
@@ -43,18 +131,25 @@ function captureStderr(fn) {
   return chunks.join("");
 }
 
-/** 最小宿主 mock：只提供本用例关心的服务，其余按可选缺失处理。 */
-function makeCtx(services: Record<string, unknown>) {
+/**
+ * 最小宿主 mock：只提供本用例关心的服务，其余按可选缺失处理。
+ * g-396：workspace 必须由调用方显式传入自包含临时 workspace（不再默认 process.cwd()）。
+ */
+function makeCtx(services: Record<string, unknown>, workspace: string) {
+  const sandboxPolicy = { workspaceRoot: workspace };
   const registeredSkills: any[] = [];
   const ctx: any = {
     get: (name: string) => {
       if (name === "skills") return { register: (d: any) => registeredSkills.push(d) };
-      if (name === "sandboxPolicy") return { workspaceRoot: process.cwd() };
+      if (name === "sandboxPolicy") return sandboxPolicy;
       return services[name];
     },
     effect: (fn: () => unknown) => fn(),
     tools: { register: () => () => {}, get: () => ({}) },
   };
+  // g-396 隔离守卫：校验**实际下发给 apply 的 workspace**（而非仅函数入参）——
+  // 因此把上面 `sandboxPolicy.workspaceRoot` 改回 `process.cwd()`（旧实现）即转红。
+  assertWorkspaceIsolated(sandboxPolicy.workspaceRoot);
   return { ctx, registeredSkills };
 }
 
@@ -125,7 +220,7 @@ function stripComments(src: string): string {
   return out;
 }
 
-test("g-351 判据3：新形态（settings 无 register、有 describe）走新路径，且不再报「注册失败」", () => {
+isolatedTest("g-351 判据3：新形态（settings 无 register、有 describe）走新路径，且不再报「注册失败」", (ws) => {
   const calls: string[] = [];
   const settings = {
     // 0.1.7 线：SettingsForms.describe() → descriptor.ns 为 profile 条目 id
@@ -137,7 +232,7 @@ test("g-351 判据3：新形态（settings 无 register、有 describe）走新�
       ];
     },
   };
-  const { ctx, registeredSkills } = makeCtx({ settings });
+  const { ctx, registeredSkills } = makeCtx({ settings }, ws);
   ctx.inject = injectWith(settings);
 
   const stderr = captureStderr(() => apply(ctx, { root: ".dsh-graph" }));
@@ -151,7 +246,7 @@ test("g-351 判据3：新形态（settings 无 register、有 describe）走新�
   assert.equal(supervisor.content, guideEn(), "profile 全局 promptLanguage=en 必须真正被读到（新路径生效）");
 });
 
-test("g-351 判据3：旧形态（settings 有 register、无 describe）仍走 namespace 注册，不退化", () => {
+isolatedTest("g-351 判据3：旧形态（settings 有 register、无 describe）仍走 namespace 注册，不退化", (ws) => {
   withSchemasteryStub(() => {
     const registerCalls: any[] = [];
     const settings = {
@@ -161,7 +256,7 @@ test("g-351 判据3：旧形态（settings 有 register、无 describe）仍走 
       },
       // 旧宿主没有表单投影 API（这正是 0.1.6 线的形态）
     };
-    const { ctx, registeredSkills } = makeCtx({ settings });
+    const { ctx, registeredSkills } = makeCtx({ settings }, ws);
     ctx.inject = injectWith(settings);
 
     const stderr = captureStderr(() => apply(ctx, { root: ".dsh-graph" }));
@@ -180,7 +275,7 @@ test("g-351 判据3：旧形态（settings 有 register、无 describe）仍走 
   });
 });
 
-test("g-351 NB-1：register 与 describe 同时具备时 register 优先（0.1.6 真实形态）", () => {
+isolatedTest("g-351 NB-1：register 与 describe 同时具备时 register 优先（0.1.6 真实形态）", (ws) => {
   // 承载性不变量：0.1.6 线的 SettingsProvider 同时暴露 register 与 describe，
   // 但 describe 的 `ns` 是 namespace 而非 profile 条目 id ⇒ 误走表单分支会**静默**
   // 返回 mode_source=default（无任何告警）。本用例把「旧能力优先」钉住。
@@ -202,7 +297,7 @@ test("g-351 NB-1：register 与 describe 同时具备时 register 优先（0.1.6
         ];
       },
     };
-    const { ctx, registeredSkills } = makeCtx({ settings });
+    const { ctx, registeredSkills } = makeCtx({ settings }, ws);
     ctx.inject = injectWith(settings);
 
     const stderr = captureStderr(() => apply(ctx, { root: ".dsh-graph" }));
@@ -217,9 +312,9 @@ test("g-351 NB-1：register 与 describe 同时具备时 register 优先（0.1.6
   });
 });
 
-test("g-351 判据3：两种能力都缺失时如实报「能力不可用」，不伪装成注册异常", () => {
+isolatedTest("g-351 判据3：两种能力都缺失时如实报「能力不可用」，不伪装成注册异常", (ws) => {
   const settings = {}; // 既无 register 也无 describe
-  const { ctx, registeredSkills } = makeCtx({ settings });
+  const { ctx, registeredSkills } = makeCtx({ settings }, ws);
   ctx.inject = injectWith(settings);
 
   const stderr = captureStderr(() => apply(ctx, { root: ".dsh-graph" }));
@@ -229,6 +324,44 @@ test("g-351 判据3：两种能力都缺失时如实报「能力不可用」，�
   // 降级但绝不中断：skill 仍按默认语言（zh）注册
   const supervisor = registeredSkills.find((s) => s.name === "dsh-graph-supervisor");
   assert.equal(supervisor?.content, guideZh(), "能力缺失时回落默认语言，插件照常可用");
+});
+
+// ---------------------------------------------------------------------------
+// g-396：真实看板零污染回归（运行前后指纹 / 文件清单比对）
+// ---------------------------------------------------------------------------
+
+isolatedTest("g-396 隔离回归：apply 的 init 只落在自包含临时 workspace，真实看板骨架零污染", (ws) => {
+  const realBoard = realBoardRoot();
+  const boardBefore = boardSkeletonFingerprint(realBoard);
+  const topBefore = boardTopLevel(realBoard);
+
+  // ① 负向对照的钉点：隔离判定必须成立。把 sandboxPolicy.workspaceRoot 改回 process.cwd()（旧实现）
+  //    ⇒ assertWorkspaceIsolated 转红（makeCtx 里也调用同一守卫，故每个 apply 用例都受保护）。
+  assertWorkspaceIsolated(ws);
+
+  // ② apply 真的会写骨架（不是「恰好无副作用」，而是「写在别处」）：临时 workspace 初始无看板，
+  //    运行后骨架必须落在**它自己**的看板里。
+  const tempBoard = join(ws, ".dsh-graph");
+  const tempBefore = boardSkeletonFingerprint(tempBoard);
+  assert.equal(existsSync(join(tempBoard, "events.jsonl")), false, "临时 workspace 初始不得带看板");
+
+  const newShape = { describe: () => [{ ns: "dsh-graph-host", value: { promptLanguage: "en" } }] };
+  const noneShape = {}; // 两种能力都缺失：同样走 init（init 在 settings 分流之前）
+  for (const settings of [newShape, noneShape]) {
+    const { ctx } = makeCtx({ settings }, ws);
+    ctx.inject = injectWith(settings);
+    captureStderr(() => apply(ctx, { root: ".dsh-graph" }));
+  }
+
+  const tempAfter = boardSkeletonFingerprint(tempBoard);
+  assert.notEqual(tempAfter, tempBefore, "指纹必须能观测到 init 建骨架（否则本回归的观测力为零）");
+  for (const rel of SKELETON_PATHS) {
+    assert.ok(existsSync(join(tempBoard, rel)), `init 骨架 ${rel} 必须落在临时 workspace 内`);
+  }
+
+  // ③ 真实看板：运行前后指纹（骨架面存在性/类型 + init 自有文件内容）+ 顶层清单逐字不变。
+  assert.equal(boardSkeletonFingerprint(realBoard), boardBefore, "运行前后真实看板骨架指纹必须逐字不变（零污染）");
+  assert.deepEqual(boardTopLevel(realBoard), topBefore, "运行前后真实看板顶层清单必须逐字不变（零污染）");
 });
 
 test("g-351 判据4：settings 分流块零版本号字面量比较", () => {
