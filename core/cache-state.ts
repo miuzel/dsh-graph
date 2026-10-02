@@ -15,6 +15,14 @@ export const MAX_WATCHERS = 32;
 // 只是少优化、不少正确性。
 const IDLE_CLOSE_MS = 20_000;
 const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// g-411：空闲 TTL 的**测试专用**注入。默认 null ⇒ 与修复前逐字等价的 20s；且仅在 node:test
+// 子进程（NODE_TEST_CONTEXT 由测试运行器设置）内生效 —— 生产进程调用是 no-op，故它不构成
+// 生产配置面（无 env 开关、无配置文件、无对外 API），默认 20s 生产语义不可能被改掉。
+let idleCloseMsForTests: number | null = null;
+export function __setWatcherIdleCloseMsForTests(ms: number | null): void {
+  if (!process.env.NODE_TEST_CONTEXT) return;
+  idleCloseMsForTests = ms;
+}
 function bumpWatcherEpoch(key: string): void { watcherEpochs.set(key, (watcherEpochs.get(key) ?? 0) + 1); }
 export function generation(root: string): number { return generations.get(resolve(root)) ?? 0; }
 export function invalidate(root?: string): void { if (!root) { generations.clear(); watcherEpochs.clear(); return; } const key=resolve(root); generations.set(key,generation(key)+1); }
@@ -24,7 +32,7 @@ function armIdle(key: string, w: FSWatcher): void {
     if (watchers.get(key) !== w || idleTimers.get(key) !== timer) return;
     try { w.close(); } catch {}
     watchers.delete(key); idleTimers.delete(key); bumpWatcherEpoch(key);
-  }, IDLE_CLOSE_MS);
+  }, watcherIdleCloseMs());
   timer.unref?.(); idleTimers.set(key,timer);
 }
 export function ensureWatcher(root: string): boolean {
@@ -41,8 +49,10 @@ export function watcherSafe(root: string): boolean { return ensureWatcher(root) 
 export function watcherEpoch(root: string): number { return watcherEpochs.get(resolve(root)) ?? 0; }
 export function closeWatchers(): void { for (const key of watchers.keys()) bumpWatcherEpoch(key); for (const t of idleTimers.values()) clearTimeout(t); idleTimers.clear(); for (const w of watchers.values()) try { w.close(); } catch {} watchers.clear(); }
 export function inspectGenerations() { return generations; }
-/** g-392：空闲关闭 TTL 的只读口径（供回归测试断言「有限 TTL 必须覆盖默认轮询间隔」）。 */
-export function watcherIdleCloseMs(): number { return IDLE_CLOSE_MS; }
+/** g-392：空闲关闭 TTL 的只读口径（供回归测试断言「有限 TTL 必须覆盖默认轮询间隔」）。
+ *  g-411：返回测试注入值（若有），否则默认 IDLE_CLOSE_MS —— armIdle 也读同一口径，
+ *  保证「注入值 = 真实排定的定时器延迟」不会被两条路径写歪。 */
+export function watcherIdleCloseMs(): number { return idleCloseMsForTests ?? IDLE_CLOSE_MS; }
 /** g-392：资源自省（只读计数，不暴露可变引用）——watcher/timer 数量与计时器 unref 状态。
  *  注：Node 的 FSWatcher 不暴露 hasRef()，且本平台（Node v26/Linux）递归 watcher 的 unref 不生效
  *  （既有平台事实，非本次改动引入）；真实释放路径（closeWatchers / 上限驱逐）由
