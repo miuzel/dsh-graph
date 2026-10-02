@@ -306,7 +306,7 @@ test("g-335 判据 1/2：dist 产物同样保留缺口标注，且指南 dist �
 // 判据 2：判别力（合成夹具驱动同一检查函数，改坏即红）
 // ---------------------------------------------------------------------------
 
-test("g-335 判据 2：六类改坏（合成夹具）全部必红，且首报是准确的门禁断言", () => {
+test("g-335 判据 2：八类改坏（合成夹具，含 zh/en 两侧极性）全部必红，且首报是准确的门禁断言", () => {
   const [zhNeedle1, zhNeedle2] = ZH_GATE2_ANNOTATION as [string, string, string];
   const [enNeedle1] = EN_GATE2_ANNOTATION as [string, string, string];
 
@@ -339,6 +339,19 @@ test("g-335 判据 2：六类改坏（合成夹具）全部必红，且首报是
     {
       name: "⑥ 前置否定词（针前加「不」）",
       guide: synthGuides(ZH_SYNTH_GATE2.replace(zhNeedle1, `不${zhNeedle1}`)),
+      expect: "前置否定词",
+    },
+    // g-350（g-346 att-005 复核 NR-a）：EN 半边此前**零夹具覆盖** —— 把 `EN_GATE2_CLOSURE`
+    // 置空、或把 `EN_NEGATION_TAIL` 改成永不匹配，整套件仍 GREEN（同法改 zh 常量则必红）。
+    // ⑦⑧ 是这两条 EN 判据各自的负向对照：改坏 EN 常量即红（实证见交付说明）。
+    {
+      name: "⑦ en 强闭合式反转（追加 the gap is fixed）",
+      guide: synthGuides(undefined, `${EN_SYNTH_GATE2} the gap is fixed`),
+      expect: "缺口已闭合",
+    },
+    {
+      name: "⑧ en 前置否定词（针前加 not）",
+      guide: synthGuides(undefined, EN_SYNTH_GATE2.replace(enNeedle1, `not ${enNeedle1}`)),
       expect: "前置否定词",
     },
   ];

@@ -33,8 +33,10 @@ import { spawn } from "node:child_process";
 export const TEST_CONTEXT_VARS = ["NODE_TEST_CONTEXT", "NODE_TEST_WORKER_ID"] as const;
 
 /**
- * 派生**任何**子进程前的干净 env：先复制 `process.env`，再摘掉运行器注入变量。
- * `extra` 在摘除**之后**合并，因此调用方无法（也不应）通过 `extra` 把注入变量塞回去。
+ * 派生**任何**子进程前的干净 env：`process.env` 与 `extra` **先**合并，**再**摘掉运行器注入变量。
+ * ⇒ `extra` 在摘除**之前**合并，因此调用方无法（也不应）通过 `extra` 把注入变量塞回去；
+ * 反过来说，本 helper **构造不出**「带 `NODE_TEST_CONTEXT`」的 env（`extra` 里带上也会被摘除）。
+ * （g-350：此处曾写成「extra 在摘除之后合并」，与实现相反；以本条为准。）
  */
 export function cleanTestEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
