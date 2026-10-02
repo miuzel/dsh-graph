@@ -6,6 +6,12 @@
 > 剩余人工 gate 见 §1 表（B6 npm 登录凭据）。
 > 依据：调研卡 card-996e88de + docs/release-prep-gh-recon.md（att-003 实机侦查）。
 
+> **现行打包口径（g-353，2026-10，覆盖下文 §2.1/§6.1 的旧描述）**：唯一打包入口是根目录
+> `bash scripts/build.sh`（= `pnpm build` = `prepare` 生命周期；根 `package.json` **没有**
+> `prepack` 脚本）。打包 = `bash scripts/build.sh && (cd dist && npm pack)`。只读检查用
+> `pnpm check:dist`（不构建、不修复、不改文件）。下文提到的「包内 `prepack`」属 v0.4.0 多包
+> 结构，**已废止**，勿照做。
+
 ## 0. 总体路径（负责人定案）
 
 补缺口 → 建公开 repo + 打 dsh-plugin topic → pnpm publish 单包（dsh-graph，g-116 合并，包名=repo 名）→

@@ -6,11 +6,23 @@
 #
 # 可重定向（g-348，默认值与独立调用契约不变）：DIST_DIR 为产物根目录，默认 dist/。
 # build.sh 把它指向原子发布暂存区，使发布前 dist/ 不被触碰。
+#
+# ⚠️ g-353：**独立调用（未给 DIST_DIR）会就地重写活动 dist/lib/client.js，且该写入非原子** ——
+# 拼接过程中读者可能读到半截 bundle（本仓库刻意保持这一独立调用契约，未改成原子构建）。
+# **发布一律走唯一打包入口** `bash scripts/build.sh`（暂存构建 + 一次原子切换，见该脚本头部）；
+# 本脚本的独立调用只用于分段调试与构建接线测试。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 OUT="${DIST_DIR:-dist}/lib/client.js"
 MOD="dsh-graph-host/lib/client"
+
+# 只在「独立调用」时告警：build.sh 传了 DIST_DIR（指向暂存区）时产物不在活动路径，无此风险，
+# 故该告警对构建路径零噪音（行为中性）。
+if [ -z "${DIST_DIR:-}" ]; then
+  echo "⚠️ build-client.sh 独立调用：将**就地**重写 dist/lib/client.js，该写入**非原子**（读者可能读到半截 bundle）" >&2
+  echo "   发布请改走唯一打包入口：bash scripts/build.sh（暂存构建 + 原子切换，见该脚本头部说明）" >&2
+fi
 
 mkdir -p "$(dirname "$OUT")"
 
