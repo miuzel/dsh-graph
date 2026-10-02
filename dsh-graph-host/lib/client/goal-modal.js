@@ -899,6 +899,20 @@
         if (status === "可修剪" || status === "prunable") return dgT("worktree.statusPrunable");
         return status;
       };
+      // g-409：attempt 未发现 worktree 时，如实标注**隔离判定来源**——「按类型策略豁免」
+      // （type_default / type_default_unknown / 显式 worktree=false）是**策略默认、不是建树失败**；
+      // 建树失败从不静默降级（prepareAttemptWorktree 一律抛错，零副作用），故这里只可能是策略。
+      // 旧 attempt 记录缺 worktree_reason ⇒ 保持原文案，不伪造原因（向后兼容）。
+      const ISOLATION_EXEMPT_KEYS = {
+        explicit: "worktree.isolation.explicit",
+        type_default: "worktree.isolation.typeDefault",
+        type_default_unknown: "worktree.isolation.typeDefaultUnknown",
+        dirty_workspace: "worktree.isolation.dirtyWorkspace",
+      };
+      const notCreatedLabel = (a) => {
+        const key = ISOLATION_EXEMPT_KEYS[a?.worktree_reason];
+        return key ? `${dgT("worktree.notCreated")} · ${dgT(key)}` : dgT("worktree.notCreated");
+      };
       const row = (a) => {
         const item = discovery.items?.[a.id];
         let label = "";
@@ -917,7 +931,7 @@
         }
         return h("div", { key: a.id, style: { display: "flex", alignItems: "center", gap: 8, minWidth: 0, marginTop: 4 } },
           h("span", { style: { flex: "0 0 auto", fontSize: 12 } }, a.id),
-          item ? h("span", { title: label, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, label) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, dgT("worktree.notCreated")),
+          item ? h("span", { title: label, style: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontFamily: "monospace", fontSize: 11 } }, label) : h("span", { style: { ...S.meta, flex: 1, fontSize: 11 } }, notCreatedLabel(a)),
           copyButton(item));
       };
       return h("div", { key: "worktrees", style: S.modalSection },

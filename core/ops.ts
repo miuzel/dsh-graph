@@ -9686,6 +9686,16 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
             detached_at: m.detached_at ?? null,
             detached_by: m.detached_by ?? null,
             worktree: m.worktree ?? null,
+            // g-409：把**隔离判定**如实透出到 GUI（此前只在 attempt.md 落盘、投影未带 ⇒ 客户端
+            // 只能看到 worktree=false/缺失，无法区分「按类型策略豁免」与「建树失败」）。
+            // - worktree_reason：逐字读取落盘值（g-289 起写入）；旧记录无该字段 ⇒ null。
+            //   **不按 worktree/brief 反推原因、不填默认值**（否则是用推测冒充历史事实）。
+            // - isolated：仅由已落盘的 worktree 证据推导（false=记录明确未建树、true=记录含
+            //   worktree 对象）；连 worktree 字段都没有的老记录 ⇒ null，同样不猜测。
+            // - worktree_created/worktree_reused 是**派发返回的一次性结果**，从不落盘 ⇒ 此处
+            //   不透出，绝不用推导值冒充（调用方要判定请读 graph_start_attempt 的返回）。
+            worktree_reason: typeof m.worktree_reason === "string" && m.worktree_reason.trim() ? m.worktree_reason.trim() : null,
+            isolated: m.worktree === undefined ? null : Boolean(m.worktree),
             // g-374 F2：主管给本次 attempt 的 brief（「这个目标涉及哪些改动」的最直接来源；
             // 落盘真源是 attempt.md 的 meta.brief，此处仅只读透出，供完成摘要拼装）。
             brief: typeof m.brief === "string" && m.brief.trim() ? m.brief.trim() : null,
