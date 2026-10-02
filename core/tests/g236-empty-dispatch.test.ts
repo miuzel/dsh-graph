@@ -166,7 +166,12 @@ test("g-236 工具路径：有 attempt_brief 时使用用户提供的 brief", as
   const out = await byName.get("graph_start_attempt")!.execute({ goal, attempt_brief: "修复登录 bug" }, exec);
   assert.equal(out.child_id, "test-child");
   assert.equal(out.brief, "修复登录 bug");
-  assert.equal(out.brief_source, undefined, "用户提供的 brief 不应有 brief_source");
+  // g-251 **契约变更（有意为之，非放宽断言）**：来源闭集扩为四值（brief/directive/auto_from_desc/
+  // fallback），显式 brief 也是一等来源，故响应与 attempt meta/事件/goalDetail 一律回传 "brief"。
+  // 历史行为是把 "brief" 吞成 undefined，使「来源」成了「非显式」的同义词；本目标要求三处同值，
+  // 故此处断言由 undefined 改为 "brief"。深层覆盖（四值可达、三处一致、旧记录 null）见
+  // core/tests/g251-brief-source-contract.test.ts。
+  assert.equal(out.brief_source, "brief", "显式 attempt_brief 的来源应为 brief（g-251 四值闭集）");
   const prompt = getPrompt();
   assert.match(prompt, /修复登录 bug/);
 });
