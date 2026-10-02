@@ -666,7 +666,7 @@ test("g-351 客户端：三处调用点统一走同一形状判定函数，不�
   assert.match(code, /hasOwnProperty\.call\(entry, "kind"\)/, "形状探测必须以「entry 是否自带 kind」为判别依据");
 });
 
-test("g-351 客户端：目录刷新按能力分流（新 refreshProjections / 旧 setSubagentCatalogOpen+refreshSubagents）", async () => {
+test("g-351/g-257 客户端：目录刷新按能力分流（新 refreshProjections / 旧 refreshSubagents），一律一次性语义", async () => {
   const { refreshSubagentCatalog } = makeCatalogSandbox();
 
   const calls: string[] = [];
@@ -678,18 +678,43 @@ test("g-351 客户端：目录刷新按能力分流（新 refreshProjections / �
   await refreshSubagentCatalog(rtNew, "parent-1");
   assert.deepEqual(calls, ["refreshProjections:parent-1"], "新能力存在时必须只走 refreshProjections，不得再调用已移除的旧 API");
 
+  // 旧宿主（0.1.5/0.1.6）：只允许一次性的 refreshSubagents。
+  // g-257：`setSubagentCatalogOpen(true)` 的官方语义是「某个目录菜单正在消费实时成员更新」
+  //（0.1.6-alpha.2 `manager.setSubagentCatalogOpen`），它把 parent 加进**无引用计数的共享 Set**
+  // `openCatalogs`；graph 只用一次性地址/mode 查询 ⇒ 该登记非必要，而 set(false) 会连带关掉
+  // 官方菜单自己的实时更新 ⇒ 唯一安全做法是不登记。
   const legacyCalls: string[] = [];
   const rtOld: any = {
     setSubagentCatalogOpen: (p: string) => legacyCalls.push(`open:${p}`),
     refreshSubagents: async (p: string) => { legacyCalls.push(`refresh:${p}`); },
   };
   await refreshSubagentCatalog(rtOld, "parent-1");
-  assert.deepEqual(legacyCalls, ["open:parent-1", "refresh:parent-1"], "旧宿主必须继续走旧刷新序列");
+  assert.deepEqual(legacyCalls, ["refresh:parent-1"], "旧宿主只走一次性 refreshSubagents，不得登记持续观察");
+
+  // 只有旧「打开目录」能力、没有一次性刷新能力的宿主：静默 no-op（宁可降级为未收录，也不留登记）
+  const openOnlyCalls: string[] = [];
+  await refreshSubagentCatalog({ setSubagentCatalogOpen: (p: string) => openOnlyCalls.push(`open:${p}`) }, "parent-1");
+  assert.deepEqual(openOnlyCalls, [], "不得以持久登记换取一次性刷新");
 
   // 两种能力都没有：静默返回（调用方按未收录降级），绝不抛出
   await refreshSubagentCatalog({}, "parent-1");
   await refreshSubagentCatalog(undefined, "parent-1");
 
-  // 新 API 抛错时不得冒泡（看板不得崩）
+  // 新 / 旧刷新 API 抛错时均不得冒泡（看板不得崩）
   await refreshSubagentCatalog({ refreshProjections: async () => { throw new Error("boom"); } }, "parent-1");
+  await refreshSubagentCatalog({ refreshSubagents: async () => { throw new Error("boom"); } }, "parent-1");
+});
+
+test("g-257 结构性钉住：客户端源码不得残留 setSubagentCatalogOpen 调用（回退修复即红）", () => {
+  const clientDir = join(process.cwd(), "dsh-graph-host", "lib", "client");
+  for (const file of ["helpers.js", "plugin.js", "session-hooks.js"]) {
+    const code = stripComments(readFileSync(join(clientDir, file), "utf8"));
+    assert.equal(
+      (code.match(/setSubagentCatalogOpen/g) ?? []).length, 0,
+      `${file} 不得再调用 setSubagentCatalogOpen（0.1.5/0.1.6 专有 API，语义是持久登记实时更新订阅）`);
+  }
+  // 一次性刷新必须保留：删掉它会让目录永不被拉取 ⇒ 地址/mode 解析静默退化
+  const helpers = stripComments(readFileSync(join(clientDir, "helpers.js"), "utf8"));
+  assert.match(helpers, /rt\.refreshSubagents\?\.\(parentId\)/, "旧宿主的一次性目录刷新必须保留");
+  assert.match(helpers, /rt\.refreshProjections\(parentId\)/, "新宿主的一次性投影刷新必须保留");
 });

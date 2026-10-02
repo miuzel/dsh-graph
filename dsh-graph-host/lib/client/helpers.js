@@ -851,15 +851,23 @@
       return entry ? { parentSessionId: parentId, childSessionId: childId, mode: catalogAddressMode(entry) } : null;
     }
 
-    /** 按能力刷新子代理目录：新形态用 `refreshProjections()`，旧形态用
-     *  `setSubagentCatalogOpen()` + `refreshSubagents()`；两者都缺失则原样返回（调用方自行降级）。 */
+    /** 按能力做**一次性**子代理目录刷新（g-257：绝不留下持续观察）。
+     *  - 0.1.7+：`refreshProjections(parentId)`——官方的一次性投影基线装载
+     *    （单飞 `projectionInflight` + `ready` 缓存 ⇒ 第二次起是即时 no-op，不注册任何观察者）；
+     *  - 0.1.5/0.1.6：`refreshSubagents(parentId)`——官方的一次性目录拉取（单飞 `catalogInflight`），
+     *    结果直接落进 `catalogs` ⇒ `list.getSnapshot().subagentsByParent`，足以支撑地址/mode 查询。
+     *  **不得**再调 `setSubagentCatalogOpen(parentId, true)`：官方语义是「某个目录菜单正在消费
+     *  实时成员更新」，它把 parentId 加进**无引用计数的共享 Set** `openCatalogs`，此后该父会话每次
+     *  子会话加入（`handleSessionAdded` → 50ms 去抖）与重连（`handleConnected`）都会额外触发目录刷新。
+     *  graph 只用一次性地址/mode 查询，不需要该持续观察；而释放（`set(false)`）会把官方菜单自己的
+     *  实时更新一并关掉（共享 Set 无所有权）⇒ 唯一安全的做法是**不登记**。
+     *  两者都缺失则原样返回（调用方自行按「未收录」降级）。 */
     function refreshSubagentCatalog(rt, parentId) {
       if (!rt || !parentId) return Promise.resolve();
       try {
         if (typeof rt.refreshProjections === "function") {
           return Promise.resolve(rt.refreshProjections(parentId)).then(() => {}, () => {});
         }
-        rt.setSubagentCatalogOpen?.(parentId, true);
         const pending = rt.refreshSubagents?.(parentId);
         return pending && typeof pending.then === "function" ? pending.then(() => {}, () => {}) : Promise.resolve();
       } catch {
