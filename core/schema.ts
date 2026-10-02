@@ -36,6 +36,8 @@ export interface FieldSchema {
   minLength?: number;
   /** 字符串最大长度。 */
   maxLength?: number;
+  /** 字符串正则约束（JS 正则源，整体匹配 `^...$` 语义；不匹配即拒绝）。 */
+  pattern?: string;
   /** 数值最小值（含）。 */
   minimum?: number;
   /** 数值最大值（含）。 */
@@ -142,6 +144,10 @@ function validateField(
   path: string,
   errors: Array<{ path: string; message: string; code: string }>,
 ): void {
+  // 显式 undefined（非 JSON 来源的调用，如工具参数）按「缺失」处理：对象层的 required 已负责报错，
+  // 继续走字符串分支会在 `s.length` 处抛 TypeError（getActualType 对 undefined 落入 default）。
+  if (value === undefined) return;
+
   // 处理 nullable
   const types = Array.isArray(schema.type)
     ? schema.type
@@ -193,6 +199,10 @@ function validateField(
     }
     if (schema.maxLength !== undefined && s.length > schema.maxLength) {
       errors.push({ path, message: `长度不能大于 ${schema.maxLength}`, code: "maxLength" });
+    }
+    // g-404：正则约束——格式规则（如版本 slug）与字段 schema 同源，不再散落为各入口的手写检查
+    if (schema.pattern !== undefined && !patternRegex(schema.pattern).test(s)) {
+      errors.push({ path, message: `不符合格式要求（需匹配 ${schema.pattern}）`, code: "pattern" });
     }
   }
 
@@ -248,6 +258,17 @@ function getActualType(value: unknown): SchemaType {
   }
 }
 
+/** pattern 编译缓存（schema 为常量，避免每次校验重复构造 RegExp）。 */
+const patternCache = new Map<string, RegExp>();
+function patternRegex(src: string): RegExp {
+  let re = patternCache.get(src);
+  if (!re) {
+    re = new RegExp(src);
+    patternCache.set(src, re);
+  }
+  return re;
+}
+
 // ---- 预定义 schema（供各 endpoint 复用） ----
 
 /** goal ID：非空字符串。 */
@@ -267,12 +288,59 @@ export const cardKindSchema: FieldSchema = {
   description: "卡片类型",
 };
 
-/** 版本 slug：非空字符串，不含路径分隔符。 */
+/** 版本 slug 的**唯一规则**（单一真源）：非空，且不含路径分隔符 `/` 与反斜杠 `\`、
+ *  单独的 `.`/`..` 段、绝对路径与空段（后两者均被分隔符规则覆盖）、控制字符（C0 与 DEL，含 NUL）。
+ *  由 `validateField` 的 pattern 分支执行；运行时写入口经 `assertVersionSlug` 复用同一 schema，
+ *  不再各写一套手检（g-404）。 */
+export const VERSION_SLUG_PATTERN = "^(?!\\.{1,2}$)[^/\\\\\\u0000-\\u001F\\u007F]+$";
+
+/** 版本 slug：非空字符串，不含路径分隔符/上跳段/控制字符。 */
 export const versionSlugSchema: FieldSchema = {
   type: "string",
   minLength: 1,
-  description: "版本标识",
+  pattern: VERSION_SLUG_PATTERN,
+  description: "版本标识（非空；不含路径分隔符、单独的 . 或 .. 段、绝对路径、空段、控制字符）",
 };
+
+/** 版本 slug 是否合法（**只读判定**，不抛错；与 assertVersionSlug / versionSlugSchema 同一规则）。
+ *  供 validate 的只读诊断使用——诊断绝不能因历史非法数据而抛错中断整轮校验。 */
+export function isVersionSlug(value: unknown): boolean {
+  const probe: Record<string, unknown> = {};
+  if (value !== undefined) probe.version = value;
+  return validateSchema(probe, {
+    type: "object",
+    properties: { version: versionSlugSchema },
+    required: ["version"],
+    additionalProperties: false,
+  }).valid;
+}
+
+/** 版本 slug 的运行时守卫（**复用 versionSlugSchema**，非第二套规则）。
+ *  所有接收 version/slug 的写入口必须在产生任何副作用之前调用；非法即抛 GraphError（REST 面映射 400）。
+ *  错误信息回显**磁盘上的实际 slug**（JSON 转义 ⇒ 控制字符/NUL 可见）与它会被拼出的路径。 */
+export function assertVersionSlug(slug: unknown, field = "version"): string {
+  // 只在确有值时才放入探针对象：`{ [field]: undefined }` 会落进 validateField 的字符串分支。
+  const probe: Record<string, unknown> = {};
+  if (slug !== undefined) probe[field] = slug;
+  const result = validateSchema(probe, {
+    type: "object",
+    properties: { [field]: versionSlugSchema },
+    required: [field],
+    additionalProperties: false,
+  });
+  if (result.valid) return slug as string;
+  const first = result.errors[0];
+  const shown = typeof slug === "string" ? JSON.stringify(slug) : String(JSON.stringify(slug));
+  const reason =
+    first.code === "required" ? "不能为空或缺失"
+    : first.code === "minLength" ? "不能为空"
+    : first.code === "type" ? `必须是字符串（实际类型 ${slug === null ? "null" : typeof slug}）`
+    : "含被禁止的字符或段（路径分隔符 / 或 \\、单独的 . 或 .. 段、绝对路径、空段、控制字符）";
+  throw new GraphError(
+    `非法版本 slug ${shown}：${reason}。该值会被拼进版本泳道路径 <board>/versions/<slug>` +
+      `（必须严格落在 versions/ 内，当前已阻止任何写入）；请改用不含路径分隔符、上跳段与控制字符的名称`,
+  );
+}
 
 /** 布尔值（严格，拒绝字符串）。 */
 export const strictBooleanSchema: FieldSchema = {

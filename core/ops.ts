@@ -110,7 +110,7 @@ import {
 } from "./events.ts";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.ts";
 import { withTx, TxError, TxCasError, commitPrepared, type TxContext } from "./transaction.ts";
-import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema, type ObjectSchema } from "./schema.ts";
+import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema, assertVersionSlug, isVersionSlug, type ObjectSchema } from "./schema.ts";
 
 import {
   createVersion,
@@ -1790,6 +1790,11 @@ export function createGoal(
   root: string,
   opts: { title: string; version?: string; description?: string; type?: string; actor: string },
 ): string {
+  // g-404：版本 slug 的**统一运行时守卫**（复用 core/schema.ts 的 versionSlugSchema），
+  // 必须早于一切副作用（含下面的别名查询、g-337 高水位预留与 mkdir）——否则 `../x`/`..` 会把
+  // 目标目录写到 versions/ 之外（实测逃逸到 <board>/x/goals/<id>/，且 validate 看不见）。
+  // `standalone` 是「不带版本」的哨兵值，天然通过同一规则。
+  if (opts.version !== undefined) assertVersionSlug(opts.version, "version");
   // g-364：版本泳道名的**卷别名前置校验**（在任何副作用之前，含 g-337 的高水位预留）。
   // 不敏感卷上 `V0.19.3` 会折叠到既有 `v0.19.3`：若照旧 `mkdir` + 复用，会静默把目标挂到别名
   // 泳道上，写出 `meta.version`(V0.19.3) 与目录(v0.19.3) 不一致的目标（validate 必报错）。
@@ -2959,9 +2964,85 @@ function relationProblems(root: string): string[] {
   return problems;
 }
 
+/** g-404：版本 slug 的**只读诊断**（绝不自动改名/迁移/规范化）。
+ *  运行时守卫（assertVersionSlug）只拦新写入，管不到既有数据；本函数把历史非法数据如实报出来，
+ *  让人工决定如何处置。三类：① versions/ 下直接子目录名非法；② versions/ 下非规范落点的 goal.md；
+ *  ③ 已被写到 versions/ 之外的目标目录（逃逸形态 <board>/<dir>/goals/<id>/goal.md）。 */
+function versionSlugDiagnostics(root: string): string[] {
+  const problems: string[] = [];
+  const versions = join(root, "versions");
+  if (!existsSync(versions)) return problems;
+  const ref = (v: unknown): string => (typeof v === "string" ? JSON.stringify(v) : String(v));
+  const isDir = (p: string): boolean => {
+    try {
+      return statSync(p).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+
+  // ① 泳道目录名本身非法
+  for (const entry of readdirSync(versions)) {
+    if (entry.startsWith(".") || !isDir(join(versions, entry))) continue;
+    if (!isVersionSlug(entry)) {
+      problems.push(
+        `versions/${ref(entry)}: 非法版本泳道名（含路径分隔符/上跳段/控制字符）——只读诊断，不自动改名或迁移`,
+      );
+    }
+  }
+
+  // ② 非规范落点：合法形态只有 <v>/goals/<id>/goal.md、<v>/archived/<id>/goal.md、archived/<id>/goal.md
+  const canonical = /^([^/]+\/(goals|archived)\/[^/]+\/goal\.md|archived\/[^/]+\/goal\.md)$/;
+  const walk = (dir: string, depth: number, rel: string): void => {
+    if (depth > 3) return;
+    for (const entry of readdirSync(dir)) {
+      const p = join(dir, entry);
+      if (isDir(p)) {
+        if (entry === "cards") continue; // 卡片目录不在落点诊断范围
+        walk(p, depth + 1, `${rel}/${entry}`);
+        continue;
+      }
+      if (entry !== "goal.md") continue;
+      const full = `${rel}/${entry}`;
+      if (canonical.test(full)) continue;
+      problems.push(
+        `versions/${full}: 目标落在非规范版本位置（应为 versions/<slug>/goals/<id>/goal.md）——只读诊断，不自动迁移`,
+      );
+    }
+  };
+  for (const v of readdirSync(versions)) {
+    if (!v.startsWith(".") && isDir(join(versions, v))) walk(join(versions, v), 0, v);
+  }
+
+  // ③ 逃逸到 versions/ 之外的目标（g-404 实测形态：<board>/<dir>/goals/<id>/goal.md）
+  const CANONICAL_ROOT_DIRS = new Set([
+    "backlog", "goals", "versions", "memory", "shared-cards", "attachments", "handoffs", "worktrees", "node_modules", "tmp",
+  ]);
+  for (const entry of readdirSync(root)) {
+    if (entry.startsWith(".") || CANONICAL_ROOT_DIRS.has(entry)) continue;
+    const gdir = join(root, entry, "goals");
+    if (!isDir(gdir)) continue;
+    for (const gid of readdirSync(gdir)) {
+      const gf = join(gdir, gid, "goal.md");
+      if (!existsSync(gf)) continue;
+      let version: unknown = null;
+      try {
+        version = parseDoc(readFileSync(gf, "utf8")).meta.version ?? null;
+      } catch {
+        /* 坏目标文件：仅按落点报告 */
+      }
+      problems.push(
+        `${entry}/goals/${gid}/goal.md: 目标逃出 versions/ 泳道（version=${ref(version)}）——只读诊断，不自动迁移`,
+      );
+    }
+  }
+  return problems;
+}
+
 /** 全量不变式校验；返回问题列表（空 = 通过）。 */
 export function validate(root: string): string[] {
   const problems: string[] = [];
+  problems.push(...versionSlugDiagnostics(root));
   const docs = new Map<string, GoalDoc>();
   for (const file of listGoalFiles(root)) {
     let doc: GoalDoc;
@@ -2998,6 +3079,12 @@ export function validate(root: string): string[] {
       problems.push(`${id}: 目标描述小节重复`);
     }
     problems.push(...locationProblems(root, file, meta));
+    // g-404：既有目标的 version 字段若含非法 slug（历史逃逸留下的 meta.version）——只读报告，不改写
+    if (typeof meta.version === "string" && meta.version !== "" && !isVersionSlug(meta.version)) {
+      problems.push(
+        `${id}: version 字段是非法 slug ${JSON.stringify(meta.version)}（含路径分隔符/上跳段/控制字符）——只读诊断，不自动改写`,
+      );
+    }
     // 卡片引用完整性（g-183：自有卡 + 共享卡引用均可解析；共享卡允许零引用；统一安全解析）
     if (Array.isArray(meta.context_cards) && basename(file) === "goal.md") {
       const dir = file.slice(0, file.length - "goal.md".length);
@@ -8327,6 +8414,10 @@ export function moveGoal(
     }
   } else if (opts.to === "version") {
     if (!opts.version) throw new GraphError("移动到版本需要指定 version");
+    // g-404：与 createGoal 同口径的**统一守卫**，且必须早于任何副作用（本函数末尾的 commitPrepared
+    // 会先落 goal.moved 事件再搬迁）——非法 slug 曾在此把目录搬到 versions/ 之外，或让 NUL 值在
+    // 事件已先行落盘后 persist 失败，留下指向不存在位置的 goal.moved 幽灵事件。
+    assertVersionSlug(opts.version, "version");
     // g-364：与 createGoal 同口径——不敏感卷上仅大小写不同的 slug 是同一泳道，静默迁入会让
     // meta.version 与目录名不一致（validate 必报错）、事件记错 slug。明确拒绝并要求改用实际 slug。
     const alias = caseAliasVersionSlug(root, opts.version);
