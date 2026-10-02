@@ -12,8 +12,8 @@
  *  钉住的契约（g-384 的 `commitPrepared`）：event 失败 ⇒ 磁盘逐字节原值 + `phase="event"`；
  *  persist 失败 ⇒ 事件已先行 + `tx.persist_failed` 诊断 + 重试同一调用收敛（不宣称跨文件原子）。
  *
- *  负向对照（实跑）：把 core/ops.ts 回退到本批修复前（`git stash push core/ops.ts`），
- *  本文件 5 处 ①（事件失败）断言全部转红——「先落盘后记事件」下注入 EIO 后磁盘已被改动。
+ *  负向对照（实跑）：`git checkout -- core/ops.ts` 回退到本批修复前（备份/恢复后 sha256 校验一致），
+ *  本文件 **9 例全部转红**——「先落盘后记事件」下注入 EIO 后磁盘已被改动、且落盘失败无诊断事件。
  */
 
 import { test } from "node:test";

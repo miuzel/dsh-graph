@@ -8279,9 +8279,13 @@ export function moveGoal(
   if (existsSync(targetFile)) throw new GraphError(`目标位置已存在：${targetFile}`);
   // g-395：事件先行（`goal.moved` 是归属变更的唯一真相，rebuild 不重放它、也不比对位置，
   // 反序时「文件已搬迁、事件缺失」完全不可诊断）。persist 内**先写 frontmatter（仍在原位）、
-  // 后搬迁**：两步各自的失败都落在「frontmatter 与原位/目标位不一致」，该形态由 validate 的
-  // locationProblems 检出；且两种失败重试都能收敛（原位未被占用，重跑即补齐），
-  // 而「先搬迁、后写 frontmatter」在搬迁成功后写盘失败时重试会撞「目标位置已存在」而死。
+  // 后搬迁**：winA（frontmatter 写失败）磁盘零改动；winB（搬迁失败）frontmatter 已在原位更新——
+  // 迁移改变 meta.version 时该形态由 validate 的 locationProblems 检出（「位于 backlog/ 但 version=vY」
+  // 或「version 字段(vY) 与目录(vX)不一致」），**不改变 version 的迁移（如 backlog→standalone）
+  // 检不出，只能靠 tx.persist_failed 诊断事件**。两种顺序在 winB 下都留下不一致，差别在重试语义：
+  // 本顺序原位未被占用，重试重跑即完整收敛；反序（先搬迁、后写）会因 `targetFile === file` 提前
+  // 返回而**静默 no-op**（位置正确、frontmatter 永久滞后；基线事件在最后，代价是 goal.moved 永久缺失）
+  // ——即本顺序规避的是「目标事件永久缺失 / frontmatter 永久滞后」，不是死局。
   commitPrepared(root, { actor: opts.actor, goal: id }, {
     value: undefined as void,
     events: [
@@ -8357,8 +8361,10 @@ export function archiveGoal(
   doc.meta.archived = true;
   // g-395：事件先行——`goal.archived` 追加失败时不再留下「目标已搬进 archived/、事件流无记录」
   // 的静默状态改变（rebuild 只比对 status 而归档目标已不在 listGoalFiles 中 ⇒ 事后完全不可诊断）。
-  // persist 先写 frontmatter（仍在原位）、后搬迁，与 moveGoal 同口径：两类失败均可被 validate 的
-  // locationProblems/归档位置校验检出，且重试收敛（原路径未被占用）。
+  // persist 先写 frontmatter（仍在原位）、后搬迁，与 moveGoal 同口径：winA 磁盘零改动；
+  // winB 中原位 frontmatter 已置 archived=true（位置未变），**validate 检不出该形态，只能靠
+  // tx.persist_failed 诊断事件发现**；两种顺序在 winB 下都留下不一致，差别在重试语义：本顺序
+  // 原位未被占用、重试重跑即收敛；反序（先搬迁、后写）会撞下方的「归档位置已存在」抛错而死。
   commitPrepared(root, { actor: opts.actor, goal: id }, {
     value: undefined as void,
     events: [{

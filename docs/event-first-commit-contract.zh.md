@@ -94,9 +94,24 @@ prepare（调用方）  →  event（commitPrepared）  →  persist（commitPre
 
 ### 3.4 g-395 批次收敛进度（原 21 处残余）
 
-排序口径：**调用频率（F，1–5）× 失败后状态错位严重度（S，1–5）**。S 的判据是「事件缺失后
-事后能否被发现」：`rebuild` 只比对 `goal.created`/`goal.transition` 重放的 status（且归档目标
-已不在 `listGoalFiles` 中），故归属/搬迁类与 attempt 级写点的错位**事后不可诊断** ⇒ S=5/4。
+排序口径：**调用频率（F，1–5）× 失败后状态错位严重度（S，1–5）**。
+
+S 的判据是「事件缺失后，错位的**后果**有多重」，先看可发现性、再按后果分档（统一口径，避免
+把「不可诊断」直接等同于同一个分值）：
+
+| S | 判据（三条同时成立才取该档） |
+| --- | --- |
+| 5 | `rebuild`/`validate` **均不覆盖「事件缺失」这一错位本身**（validate 只在特定形态下覆盖 frontmatter/位置不一致，见 3.4.1），且它直接改变目标的**归属/存在性**（搬迁、归档） |
+| 4 | 事后不可诊断，且在磁盘上留下**改变后续行为**的新物件（如孤儿 attempt 目录改变 `count(att-*)+1` 的分配） |
+| 3 | 事后不可诊断，但错位局限于**某个投影字段**（绑定/类型/关系/卡片状态），不改变归属、也不改变后续分配 |
+| 2 | 事后不可诊断，影响仅限**审计/履历**（状态履历、判据、引用计数） |
+| 1 | 纯文案 |
+
+可发现性基线（实测 `core/ops.ts:3060 rebuild()`）：它只比对 `goal.created`/`goal.transition` 重放的
+status，且只遍历 `listGoalFiles(root)`（不含归档）⇒ 搬迁/归属类（`goal.moved`/`goal.archived` 不重放、
+也不比对位置，归档后目标甚至不在对账集合内）与 attempt 级（attempt 事件不重放、attempt.md 不参与对账）
+都落在「不可诊断」一侧，因此 `startAttempt`=4、`bindAttemptChild`=3、`reportStatus`=2 并非口径不一，
+而是同一族按后果分档的结果（分别对应「改变后续分配」「投影字段」「仅履历」）。
 
 #### 3.4.1 已收敛（5 处 + 1 嵌套，g-395 第一批）
 
@@ -105,8 +120,23 @@ prepare（调用方）  →  event（commitPrepared）  →  persist（commitPre
 | `startAttempt` | 5×4 | 事件失败留下「无事件的孤儿 attempt 目录」，且被 `count(att-*)+1` 计入 ⇒ 重试换号 | 事件先行；`attempts/` 与 `attempt.md` 移入 `persist`；失败时清理本次新建的半成品目录（有界） |
 | `bindAttemptChild` | 5×3 | attempt.md 已绑 child 而事件流无 `attempt.bound` | 事件先行，`saveGoal` 进 `persist` |
 | `reportStatus` | 5×2 | 最高频写点：attempt.md 已改而状态履历缺最新一条 | 同上 |
-| `moveGoal` | 3×5 | 目标已搬迁而事件流无 `goal.moved`（rebuild 不重放它、也不比对位置 ⇒ 静默） | 事件先行；`persist` = 先写 frontmatter（仍在原位）→ 再搬迁，两个失败窗口都可重试收敛；同函数的隐式 `version.created` 骨架一并收敛 |
+| `moveGoal` | 3×5 | 目标已搬迁而事件流无 `goal.moved`（rebuild 不重放它、也不比对位置 ⇒ 静默） | 事件先行；`persist` = 先写 frontmatter（仍在原位）→ 再搬迁，两个失败窗口都可重试收敛（可发现性见下）；同函数的隐式 `version.created` 骨架一并收敛 |
 | `archiveGoal` | 2×5 | 目标已搬进 `archived/` 而事件流无 `goal.archived`；归档后已不在对账集合内 ⇒ 完全不可诊断 | 同 `moveGoal` |
+
+**搬迁类两个失败窗口的可发现性（按形态分别陈述，实测）**：
+
+| 窗口 | 磁盘状态 | 能否被 `validate` 检出 |
+| --- | --- | --- |
+| winA：写 frontmatter 失败（原子写，未生效） | 完全零改动（原位原值、未搬迁） | `validate=[]`；**只能靠 `tx.persist_failed` 诊断事件发现** |
+| winB：搬迁步骤失败，且迁移**会改变 `meta.version`**（如 `backlog→version`、`vX→vY`） | frontmatter 已更新但仍在原位 | **可以**：`位于 backlog/ 但 version=vY` / `version 字段(vY) 与目录(vX)不一致` |
+| winB：搬迁步骤失败，且迁移**不改变 `meta.version`**（如 `backlog→standalone`：仅 status draft→planning） | frontmatter 已更新但仍在原位 | `validate=[]`（`locationProblems` 只看 version 与目录的一致性）；**只能靠 `tx.persist_failed` 诊断事件发现** |
+
+**为何仍取「先写 frontmatter、后搬迁」**：两种顺序在 winB 下都留下「frontmatter 与位置不一致」，
+差别在**重试语义**（实测）：本批顺序下原位未被占用，重试重跑即完整收敛；而反序（先搬迁、后写）
+在搬迁成功而写盘失败后，`moveGoal` 的重试会因 `targetFile === file` **静默 no-op**（位置正确、
+frontmatter 永久滞后；基线版本事件在最后，代价是 `goal.moved` **永久缺失**），`archiveGoal` 的重试
+则直接抛「归档位置已存在」。即本批顺序规避的是「目标事件永久缺失 / frontmatter 永久滞后」，
+而非「重试必然死局」。
 
 回归守卫：`core/tests/g395-event-first-batch1.test.ts`（9 例，精确 EIO 注入 + 负向对照 9/9 转红）。
 
@@ -134,6 +164,13 @@ prepare（调用方）  →  event（commitPrepared）  →  persist（commitPre
 **注记（形态残余，已诊断）**：`unbindGoalChild`、`writeAttemptResults`、`refreshGoalResults` 的
 文件写入发生在 `withTx` 回调内（而非经 `persist`），严格意义上偏离 2.1 的「prepare 零副作用」；
 但三者都已满足「事件先行 + 落盘失败有诊断」，故不作为缺陷，仅登记为后续可收敛的形态债。
+
+**既有噪声（既有、未修、已另立目标 g-403）**：`moveGoal` 会按 g-137/g-147 规则改 `meta.status`
+（`backlog→standalone` 时 draft→planning）却**不记 `goal.transition`**，而 `rebuild` 只从
+`goal.created`/`goal.transition` 重放 status ⇒ `init → createGoal → moveGoal(backlog→standalone) → rebuild`
+恒报 `frontmatter=planning 与事件流重建=draft 不一致`。基线 `b186ad0` 同样复现（与本批改动无关，
+g-395 的两名复核者均独立实测确认）。本批回归用例改用**不改状态**的 `standalone→version` 迁移规避该噪声，
+未修改其语义。
 
 **残余风险（与修复前 C3 同类）**：3.4.2 中的写点事件追加失败时仍会留下「文件已改、无事件、调用报错」
 的静默状态改变；`rebuild` 只重放 `goal.created`/`goal.transition`，attempt 级事件不重放 ⇒ attempt
