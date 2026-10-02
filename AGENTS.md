@@ -77,9 +77,9 @@ After modifying source and rebuilding:
 
 - 隔离解析（g-283/g-289）：显式 `worktree` 参数优先；未传时按**目标类型 × 工作区干净度**解析 —— 干净工作区下 `patch`/`chore`/`task` 默认**不建树**（微小改动快速通道），`feature`/`bug`/`improvement` 默认建树；可靠判脏（`clean=false`）时任何类型都升级为建树。
   ⇒ 因此「批量派发时某个 attempt 返回 `false`」是**类型默认**，与 batch 位置无关（g-406 用私有板副本 N=2/N=5 实证并回归）；单独派发结果完全相同。
-- 无主树窗口：`prepareAttemptWorktree` 是**同步**调用，位于子代理启动之前、且两者之间无 `await`（同一同步临界区）⇒ 子代理启动时工作树**必已创建并注册**；建树失败一律抛 `GraphError`（零副作用：不迁移状态、不建 attempt、不启动子代理），**绝不**静默降级为主树执行。
+- 无主树窗口：`prepareAttemptWorktree` 是**同步**调用，位于子代理启动之前、且两者之间无 `await`（同一同步临界区）⇒ 子代理启动时工作树**必已创建并注册**；建树失败一律抛 `GraphError`（零副作用：不迁移状态、不建 attempt、不启动子代理，**且不预建 `attempts/`** —— attempt ID 预测是只读的，目录不存在按 0 项计；`attempts/` 只在建树成功之后才创建），**绝不**静默降级为主树执行。
 - 响应构造是**白名单**：工具入口与 HTTP/GUI 入口各自手写返回字段；新增隔离语义字段必须**两处同时登记**，否则主管拿到的响应不可判定。
-- 结构性守卫：`core/tests/g406-dispatch-isolation-verdict.test.ts`（N=2/N=5 逐 attempt 一致性 + 启动时刻实拍注册状态 + 负向对照：旧响应形状必红、创建晚于启动/中间插 `await` 必红、白名单漏登记必红）。
+- 结构性守卫：`core/tests/g406-dispatch-isolation-verdict.test.ts`（N=2/N=5 逐 attempt 一致性 + 启动时刻实拍注册状态 + 负向对照：旧响应形状必红、创建晚于启动/中间插 `await` 必红、白名单漏登记必红）；建树失败路径的目录零残留与 ID 预测口径见 `core/tests/g414-dispatch-prediction-readonly.test.ts`（g-414）。
 
 派发后**隔离三件套核验**（主管/执行者自查，任一不合即按未隔离处理）：
 

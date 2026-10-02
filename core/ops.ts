@@ -6209,8 +6209,10 @@ export function startAttempt(
   const normalizedMode = normalizeSubagentMode(opts.mode);
   // g-395：attempts/ 的创建是文件副作用 ⇒ 移入 persist（prepare 只读）。
   // 分配公式保持 `count(att-*)+1` 逐字不变——宿主 dispatch 在 startAttempt 之前
-  // 用同一公式预测 nextAttId（dsh-graph-host/index.js:1577）并据此命名 worktree 与
-  // prompt，改公式会让两者错位；目录不存在（首次 attempt）时等价于空目录计数。
+  // 用同一公式预测 nextAttId（dsh-graph-host/index.js 的「预测下一 attempt ID」段）并据此
+  // 命名 worktree 与 prompt，改公式会让两者错位；目录不存在（首次 attempt）时等价于空目录计数。
+  // g-414：宿主侧预测同为只读（ENOENT 视为 0 项，不预建 attempts/），只在建树成功之后
+  // 才 mkdir（早于本函数 persist），故正常路径上两次独立计数必然一致。
   const dir = join(goalDirOf(goalFile), "attempts");
   const seq = (existsSync(dir) ? readdirSync(dir).filter((d) => d.startsWith("att-")).length : 0) + 1;
   const attId = `att-${String(seq).padStart(3, "0")}`;
