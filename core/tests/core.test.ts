@@ -406,12 +406,18 @@ test("move-goal：standalone ↔ version 迁移保留 delivered 状态（g-145 �
   assert.equal(doc.meta.status, "delivered");
   assert.equal(doc.meta.version, null);
 
-  // 验证事件序列：只有 goal.moved，没有额外的 goal.transition
+  // 验证事件序列：3 次 goal.moved；其中只有 backlog→standalone 改动了状态（draft→planning），
+  // g-403 起该「位置变更附带的状态调整」必须由 moveGoal 自身补记 goal.transition（此前只有
+  // 手动 transition，事件流无法独立重建 status）；另两次保留 delivered、状态未变，不补记。
   const movedEvents = readEvents(root).filter((e) => e.event === "goal.moved");
   assert.equal(movedEvents.length, 3); // backlog→standalone, standalone→version, version→standalone
   const transitionEvents = readEvents(root).filter((e) => e.event === "goal.transition");
-  // 应该只有我们手动调用的 transition，没有由 moveGoal 触发的额外 transition
-  assert.equal(transitionEvents.length, 5); // collecting, ready, in_progress, review, delivered
+  // 手动调用的 5 次（collecting, ready, in_progress, review, delivered）+ 搬迁派生的 1 次
+  assert.equal(transitionEvents.length, 6);
+  const moveTransitions = transitionEvents.filter(
+    (e) => e.details?.from === "draft" && e.details?.to === "planning",
+  );
+  assert.equal(moveTransitions.length, 1, "backlog→standalone 的 draft→planning 必须补记 transition");
 });
 
 test("move-goal：standalone ↔ version 迁移保留 collecting 状态", () => {
