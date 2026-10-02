@@ -42,6 +42,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// g-407：嵌套 runner 的唯一共用入口（env 清洗 + 「确实跑了用例」判据）。
+import {
+  assertNestedSuitePassed,
+  assertNestedSuiteRan,
+  cleanTestEnv,
+  runNestedCommand,
+} from "./fixtures/nested-runner.ts";
+
 const repoRoot = join(import.meta.dirname, "../..");
 const BUILD_SCRIPT = join(repoRoot, "scripts", "build.sh");
 const BUILD_CLIENT_SCRIPT = join(repoRoot, "scripts", "build-client.sh");
@@ -107,13 +115,14 @@ function runBash(cmd: string, cwd: string, env: NodeJS.ProcessEnv): Promise<RunR
  * **`NODE_TEST_CONTEXT` 必须摘掉**：它会让嵌套 `node --test` 打印
  * 「node:test run() is being called recursively… skipping running files」并**以 0 退出**，
  * 使「只读 check 报红」这类断言变成永真。本套件已由负向对照实测踩到过这个坑。
+ *
+ * g-407：摘除实现**已收归共用 helper**（`fixtures/nested-runner.ts` 的 `cleanTestEnv`），
+ * 本函数只负责**本套件专有**的构建故障注入变量，不得再自行 delete NODE_TEST_CONTEXT。
  */
 function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env = cleanTestEnv();
   delete env.BUILD_FORCE_TWO_RENAME;
   delete env.BUILD_INJECT_PUBLISH_FAILURE;
-  delete env.NODE_TEST_CONTEXT;
-  delete env.NODE_TEST_WORKER_ID;
   return { ...env, ...extra };
 }
 
@@ -509,10 +518,12 @@ test("g-353 判据 3：只读 check 不改任何文件，且能识别陈旧产�
   const sb = makeSandbox({ withFreshnessSuite: true });
   try {
     const before = fullDigest(sb.repo);
-    const clean = await runBash(cmd, sb.repo, cleanEnv());
+    const clean = await runNestedCommand(cmd, { cwd: sb.repo, env: cleanEnv() });
     t.diagnostic(
       `evidence: suite=g353-readonly-check exit=${clean.code} digestStable=${fullDigest(sb.repo) === before}`,
     );
+    // g-407：先断言嵌套 runner **确实跑了用例**（零用例 / 被 skip / 无汇总一律显式失败），再判绿。
+    assertNestedSuitePassed(clean, "g-353 只读 check（新鲜仓库）");
     assert.equal(clean.code, 0, `只读 check 在新鲜仓库上应绿：\n${clean.out.slice(-1500)}`);
     // 判别力前提：守卫必须**真的被执行**。宿主注入 NODE_TEST_CONTEXT 时嵌套 `node --test` 会
     // 「skipping running files」并以 0 退出 ⇒ 下面的报红断言会变成永真（本套件实测踩到过）。
@@ -531,14 +542,16 @@ test("g-353 判据 3：只读 check 不改任何文件，且能识别陈旧产�
     const stale = join(sb.repo, "core", "model.ts");
     const future = new Date(Date.now() + 60_000);
     utimesSync(stale, future, future);
-    const redStale = await runBash(cmd, sb.repo, cleanEnv());
+    const redStale = await runNestedCommand(cmd, { cwd: sb.repo, env: cleanEnv() });
+    assertNestedSuiteRan(redStale, "g-353 负向对照 A（陈旧产物）");
     assert.notEqual(redStale.code, 0, "陈旧产物必须被只读 check 识别（不得静默通过）");
     assert.match(redStale.out, /产物陈旧|内容不一致/, `陈旧族必须报红，实际输出：${redStale.out.slice(-600)}`);
 
     // 负向对照 B：从 PARTS 里删掉一个真实模块（漏模块）⇒ 必须报红。
     const bc = join(sb.repo, "scripts", "build-client.sh");
     writeFileSync(bc, replaceOnce(readFileSync(bc, "utf8"), '  "narrow-width"\n', ""));
-    const redModule = await runBash(cmd, sb.repo, cleanEnv());
+    const redModule = await runNestedCommand(cmd, { cwd: sb.repo, env: cleanEnv() });
+    assertNestedSuiteRan(redModule, "g-353 负向对照 B（漏模块）");
     assert.notEqual(redModule.code, 0, "漏模块必须被只读 check 识别（不得静默通过）");
     assert.match(
       redModule.out,
