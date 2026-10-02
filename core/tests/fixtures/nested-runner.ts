@@ -60,6 +60,21 @@
  *      不存在任何能绕过覆盖断言的静默路径；消费点无需为新检查逐个开关）。
  *  事件通道经 **`NODE_OPTIONS`** 注入 `--test-reporter=…test-reporter-events.mjs` +
  *  `--test-reporter-destination=<私有临时文件>`（argv / shell 两种形态统一生效，无需改写调用方命令行）。
+ *
+ * ── g-417 的两条收口（g-416 复核确认的 P2 残余；同一根因域）────────────────────────────────
+ *  ① **选集开关在 helper 侧未 fail-closed**：`cleanTestEnv()` 保留 `NODE_OPTIONS`，而逐文件覆盖只看
+ *     **文件级**完成事件 ⇒ **用例级**选集（`--test-only` / `--test-name-pattern` / `--test-skip-pattern`
+ *     / `--test-shard`）可静默排除失败用例而文件照常完成、照样判绿（实测：1 通过 + 1 失败的文件在
+ *     `NODE_OPTIONS=--test-only` 下得 `tests 1 / pass 1 / fail 0`，被排除者**不计 skipped 也不计 fail**）。
+ *     现由 {@link assertNoNestedTestSelection} 在**入口**（`capture` 内、spawn 之前）检测**生效**
+ *     `NODE_OPTIONS`（= `process.env` 与 `opts.env` 合并后的值，与子进程实际拿到的一致），命中即**抛错
+ *     拒绝执行**并**点名开关** —— 与自证闸门同口径（复用 {@link findTestSelectionOption} /
+ *     {@link TEST_SELECTION_OPTION_NAMES}，不另立第二套口径）；`--no-warnings` /
+ *     `--max-old-space-size=…` 等不改变选中集合的合法项照常放行。
+ *  ② **含空格 `TMPDIR` 误红**：`NODE_OPTIONS` 由 Node 按空白切分，未加引号的含空格通道路径被切成两段
+ *     ⇒ 通道文件写到被截断的前缀、读不到 ⇒ 覆盖断言判红（安全但**误红**）。现由
+ *     {@link quoteNodeOptionsValue} 按 Node 的引号规则编码（双引号分组 + 转义 `\` 与 `"`；实测单引号
+ *     不被识别、引号内 `\` 仍是转义符）⇒ 含空格（乃至 Windows 形态的反斜杠）路径下通道照常挂上。
  */
 
 import assert from "node:assert/strict";
@@ -138,6 +153,36 @@ export function findTestSelectionOption(nodeOptions: string | undefined | null):
     if ((TEST_SELECTION_OPTION_NAMES as readonly string[]).includes(name)) return name;
   }
   return null;
+}
+
+/**
+ * g-417①：嵌套运行**入口**的「生效 `NODE_OPTIONS` 选集」红因（复用 {@link findTestSelectionOption}）。
+ * 命中四类选集/分片开关时返回**点名该开关**的红因文本，否则 `null`。
+ *
+ * 为什么必须在 helper 入口就拒绝（而不是只靠逐文件覆盖）：覆盖判据是**文件级**的，而
+ * `--test-only` / `--test-name-pattern` / `--test-skip-pattern` 是**用例级**的 ——
+ * 被它们排除的用例**既不计 `fail` 也不计 `skipped`**（实测「1 通过 + 1 失败」的文件在
+ * `NODE_OPTIONS=--test-only` 下得 `tests 1 / pass 1 / fail 0`），文件照常产出完成事件 ⇒
+ * 嵌套裁决可被环境**静默弱化**。与自证闸门同口径：**拒绝执行**，不采「清洗后继续」
+ * （清洗要额外论证与用户显式选集语义等价，拒绝不需要）。
+ */
+export function nestedTestSelectionProblem(nodeOptions: string | undefined | null): string | null {
+  const offending = findTestSelectionOption(nodeOptions);
+  if (offending === null) return null;
+  return (
+    `NODE_OPTIONS 含测试选集/分片开关 ${offending}：嵌套子 runner 会继承它并**静默**改变「哪些用例/文件` +
+    `真的跑」（用例级选集既不计 fail 也不计 skipped，逐文件完成事件照样产出 ⇒ 文件级覆盖断言看不出来）` +
+    `⇒ fail-closed 拒绝嵌套执行；请从 NODE_OPTIONS 移除 ${offending}`
+  );
+}
+
+/**
+ * g-417①：入口守卫 —— 生效 `NODE_OPTIONS`（`process.env` 与 `opts.env` 合并后、即子进程真正拿到的值）
+ * 命中选集/分片开关即抛错拒绝执行。**无 opt-out**：不存在「带着被弱化的选集继续跑」的静默路径。
+ */
+export function assertNoNestedTestSelection(nodeOptions: string | undefined | null, label: string): void {
+  const problem = nestedTestSelectionProblem(nodeOptions);
+  if (problem !== null) throw new Error(`${label}：${problem}`);
 }
 
 /**
@@ -398,6 +443,19 @@ const EVENTS_REPORTER_URL = pathToFileURL(
 ).href;
 
 /**
+ * g-417②：按 Node 对 `NODE_OPTIONS` 的**引号规则**编码单个参数值。
+ *
+ * Node 的分词器按空白切分、并识别**双引号**分组（实测：单引号**不**被识别，会被原样当成路径字符）；
+ * 双引号内 `\` 仍是转义符（实测 `"/a\b/c"` 会解析成 `/ab/c`）。故规则 = 双引号包裹 +
+ * 把 `\` → `\\`、`"` → `\"`：
+ *   - 含空格路径：不编码会被切成两段（通道路径被截断）⇒ 覆盖断言误红；
+ *   - Windows 形态路径（`C:\Users\…`）：只加引号不转义反斜杠会把分隔符吞掉 ⇒ 同样误红。
+ */
+function quoteNodeOptionsValue(value: string): string {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+/**
  * 为一次嵌套运行开一条**私有**事件通道：经 `NODE_OPTIONS` 注入 reporter（argv / shell 两形态统一生效，
  * 无需改写调用方命令行），通道文件落在系统临时目录（不写仓库、不参与任何 glob），运行结束即删。
  *
@@ -409,7 +467,8 @@ function openEventChannel(env: NodeJS.ProcessEnv): { env: NodeJS.ProcessEnv; eve
   const eventsPath = join(dir, "events.ndjson");
   const injected =
     `--test-reporter=spec --test-reporter-destination=stdout ` +
-    `--test-reporter=${EVENTS_REPORTER_URL} --test-reporter-destination=${eventsPath}`;
+    `--test-reporter=${EVENTS_REPORTER_URL} ` +
+    `--test-reporter-destination=${quoteNodeOptionsValue(eventsPath)}`;
   const inherited = env.NODE_OPTIONS?.trim();
   return {
     env: { ...env, NODE_OPTIONS: inherited ? `${inherited} ${injected}` : injected },
@@ -473,7 +532,10 @@ function capture(
   command: string,
   targets: string[],
 ): Promise<NestedRunResult> {
-  const events = openEventChannel(cleanTestEnv(opts.env));
+  const baseEnv = cleanTestEnv(opts.env);
+  // g-417①：入口 fail-closed —— 生效 NODE_OPTIONS 含选集/分片开关就拒绝执行（不做「清洗后继续」）。
+  assertNoNestedTestSelection(baseEnv.NODE_OPTIONS, `嵌套运行入口（${command}）`);
+  const events = openEventChannel(baseEnv);
   return new Promise((resolveRun, reject) => {
     const child = spawn(file, args, {
       cwd: opts.cwd,
@@ -516,7 +578,8 @@ function planNestedTargets(args: readonly string[], opts: NestedRunOptions, sour
 
 /**
  * 跑一条**嵌套测试**命令（shell 形态，供 `package.json` 里取到的脚本文本直接用）。
- * env 一律经 {@link cleanTestEnv} 清洗。
+ * env 一律经 {@link cleanTestEnv} 清洗；生效 `NODE_OPTIONS` 命中选择集/分片开关则**抛错拒绝执行**
+ * （{@link assertNoNestedTestSelection}，g-417①）；无法推导目标同样抛错（g-416）。
  */
 export function runNestedCommand(cmd: string, opts: NestedRunOptions): Promise<NestedRunResult> {
   const targets = planNestedTargets(splitNodeOptions(cmd), opts, `runNestedCommand(${cmd})`);
@@ -525,7 +588,8 @@ export function runNestedCommand(cmd: string, opts: NestedRunOptions): Promise<N
 
 /**
  * 跑一个**嵌套测试**进程（argv 形态，跨平台；`node --test …` 的推荐入口）。
- * env 一律经 {@link cleanTestEnv} 清洗。
+ * env 一律经 {@link cleanTestEnv} 清洗；生效 `NODE_OPTIONS` 命中选择集/分片开关则**抛错拒绝执行**
+ * （{@link assertNoNestedTestSelection}，g-417①）；无法推导目标同样抛错（g-416）。
  */
 export function runNestedArgv(
   file: string,
