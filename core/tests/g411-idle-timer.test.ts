@@ -32,6 +32,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+
+import { cleanTestEnv } from "./fixtures/nested-runner.ts";
 import { boardPayload, createGoal, init } from "../../dist/core/ops.js";
 import { getCachedBoardPayload } from "../../dist/core/cache.js";
 import {
@@ -180,18 +182,24 @@ test("g-411 判据 1：TTL 注入只在测试进程生效，生产形态进程�
     __setWatcherIdleCloseMsForTests(null);
     assert.equal(watcherIdleCloseMs(), DEFAULT_TTL, "复位后必须回到 20s");
 
+    // 探针同时回传「子进程内是否真的没有 NODE_TEST_CONTEXT」与读到的 TTL：
+    // no-op 断言因此**子进程自证**前提，而不是靠父进程口头约定。
     const probe =
       `const { __setWatcherIdleCloseMsForTests, watcherIdleCloseMs } = await import(MOD);` +
-      `__setWatcherIdleCloseMsForTests(5); process.stdout.write(String(watcherIdleCloseMs()));`;
-    const prodEnv: NodeJS.ProcessEnv = { ...process.env };
-    delete prodEnv.NODE_TEST_CONTEXT;
-    const prod = runChildModule(STATE_DIST_URL, probe, prodEnv);
+      `__setWatcherIdleCloseMsForTests(5);` +
+      `process.stdout.write(JSON.stringify({ ctx: process.env.NODE_TEST_CONTEXT ?? null, ttl: watcherIdleCloseMs() }));`;
+    // 生产形态：子进程 env 必须经**唯一实现** cleanTestEnv() 摘除运行器注入变量（g-407）。
+    const prod = runChildModule(STATE_DIST_URL, probe, cleanTestEnv());
     assert.equal(prod.status, 0, prod.stderr);
-    assert.equal(prod.stdout, String(DEFAULT_TTL), "生产形态进程内注入必须 no-op（TTL 仍是 20s）");
-    const testEnv: NodeJS.ProcessEnv = { ...process.env, NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT };
-    const t = runChildModule(STATE_DIST_URL, probe, testEnv);
+    const prodOut = JSON.parse(prod.stdout) as { ctx: string | null; ttl: number };
+    assert.equal(prodOut.ctx, null, "生产形态子进程内必须确实没有 NODE_TEST_CONTEXT（子进程自证）");
+    assert.equal(prodOut.ttl, DEFAULT_TTL, "生产形态进程内注入必须 no-op（TTL 仍是 20s）");
+    // 正向对照：同一探针在**继承**注入变量的测试上下文内必须读到注入值（否则上面的 no-op 断言是空转）。
+    const t = runChildModule(STATE_DIST_URL, probe, { ...process.env });
     assert.equal(t.status, 0, t.stderr);
-    assert.equal(t.stdout, "5", "同一探针在测试上下文内必须读到注入值（否则上面的 no-op 断言是空转）");
+    const testOut = JSON.parse(t.stdout) as { ctx: string | null; ttl: number };
+    assert.ok(testOut.ctx, "正向对照子进程必须确实带着 NODE_TEST_CONTEXT（否则对照是空转）");
+    assert.equal(testOut.ttl, 5, "同一探针在测试上下文内必须读到注入值（否则上面的 no-op 断言是空转）");
   } finally {
     __setWatcherIdleCloseMsForTests(null);
   }
