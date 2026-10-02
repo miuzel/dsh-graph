@@ -21,6 +21,7 @@ import {
   formatETag,
   matchIfNoneMatch,
   _inspectBoardCache,
+  closeWatchers,
   writeHandoff,
 } from "../../dist/core/ops.js";
 import { apply } from "../../dist/index.js";
@@ -180,7 +181,9 @@ test("g-212 watcher idle/reopen 保留稳定 ETag，并校验关闭期间的外�
     assert.equal(first.fromCache, false);
 
     // idle close must not bump generation or rebuild an unchanged payload.
-    await new Promise((r) => setTimeout(r, 650));
+    // g-392：空闲关闭 TTL 已放宽到覆盖 GUI 轮询间隔，故此处**显式**关闭以确定性地复现
+    // 「空闲关闭 → 重开」路径（不再依赖 650ms 睡眠撞 500ms 计时器）。
+    closeWatchers();
     const repeat = getCachedBoardPayload(root);
     assert.equal(repeat.fromCache, true, "watcher 重开且内容不变应复用缓存");
     assert.equal(repeat.etag, first.etag);
@@ -215,7 +218,8 @@ test("g-212 watcher idle/reopen 保留稳定 ETag，并校验关闭期间的外�
 
     // The watcher is closed again while idle; this write must not be hidden
     // by the retained cache when the next request recreates it.
-    await new Promise((r) => setTimeout(r, 650));
+    // g-392：显式关闭以确定性复现断档窗口。
+    closeWatchers();
     writeFileSync(
       join(root, "backlog", goalId + ".md"),
       "---\n" + JSON.stringify({ id: goalId, title: "关闭期间外部修改", status: "backlog" }) + "\n---\n\n## 描述\n外部写入\n",
@@ -247,7 +251,8 @@ test("g-212 watcher epoch 按 includeArchived 维度分别校验重开缓存", a
     const archived = getCachedBoardPayload(root, { includeArchived: true });
     const archivedFile = join(root, "backlog", "archived", goalId + ".md");
 
-    await new Promise((r) => setTimeout(r, 650));
+    // g-392：显式关闭以确定性复现「watcher 重开（epoch 变化）」路径。
+    closeWatchers();
     writeFileSync(
       archivedFile,
       "---\n" + JSON.stringify({ id: goalId, title: "归档关闭期间修改", status: "draft", archived: true }) + "\n---\n\n## 描述\n外部写入\n",
