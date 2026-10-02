@@ -76,6 +76,13 @@ After modifying source and rebuilding:
 （不存在「跳过覆盖断言」的静默路径）。私有事件通道经 `NODE_OPTIONS` 注入，argv / shell 两形态统一生效；
 消费点 `g350`/`g353`/`g407`/`g413`/`g415` 共用同一实现。
 
+**同一 helper 的嵌套运行入口**还按 g-417 收口：**同样拒绝**测试选集/分片开关 —— **生效** `NODE_OPTIONS`
+（`process.env` 与 `opts.env` 合并后、即子进程真正拿到的值）含 `--test-only` / `--test-name-pattern` /
+`--test-skip-pattern` / `--test-shard` 时**在 spawn 之前抛错拒绝执行并点名开关**（复用 g-415 的
+`findTestSelectionOption`，不另立口径 —— 用例级选集既不计 `fail` 也不计 `skipped`，文件级覆盖断言看不出来），
+`--no-warnings` / `--max-old-space-size=…` 等合法项不受影响；同时通道路径按 Node 的 `NODE_OPTIONS` 引号规则
+编码（双引号分组 + 转义 `\`/`"`）⇒ 含空格（乃至 Windows 形态反斜杠）的 `TMPDIR` 下通道照常挂上、不再误红。
+
 ## Build Isolation（构建隔离：禁止在主树跑实验性构建）
 
 **实验性构建禁止在主树进行 —— 一律在隔离 worktree 或仓库内私有副本中进行。**
