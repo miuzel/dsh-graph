@@ -165,12 +165,14 @@ frontmatter 永久滞后；基线版本事件在最后，代价是 `goal.moved` 
 文件写入发生在 `withTx` 回调内（而非经 `persist`），严格意义上偏离 2.1 的「prepare 零副作用」；
 但三者都已满足「事件先行 + 落盘失败有诊断」，故不作为缺陷，仅登记为后续可收敛的形态债。
 
-**既有噪声（既有、未修、已另立目标 g-403）**：`moveGoal` 会按 g-137/g-147 规则改 `meta.status`
+**既有噪声（已于 g-403 修复）**：`moveGoal` 曾按 g-137/g-147 规则改 `meta.status`
 （`backlog→standalone` 时 draft→planning）却**不记 `goal.transition`**，而 `rebuild` 只从
 `goal.created`/`goal.transition` 重放 status ⇒ `init → createGoal → moveGoal(backlog→standalone) → rebuild`
-恒报 `frontmatter=planning 与事件流重建=draft 不一致`。基线 `b186ad0` 同样复现（与本批改动无关，
-g-395 的两名复核者均独立实测确认）。本批回归用例改用**不改状态**的 `standalone→version` 迁移规避该噪声，
-未修改其语义。
+恒报 `frontmatter=planning 与事件流重建=draft 不一致`（基线 `b186ad0` 同样复现，g-395 的两名复核者
+均独立实测确认）。**g-403 已修**：`moveGoal` 在 status **真变化**时把 `goal.transition`
+（from/to/reason/actor）与 `goal.moved` 放进**同一次** `commitPrepared`（事件先行顺序不变），
+事件流由此可独立重建 status；历史缺事件数据仅由 `validate()` 给出**只读诊断**，不伪造补记。
+本批（g-395）回归用例当时改用**不改状态**的 `standalone→version` 迁移规避该噪声，未修改其语义。
 
 **残余风险（与修复前 C3 同类）**：3.4.2 中的写点事件追加失败时仍会留下「文件已改、无事件、调用报错」
 的静默状态改变；`rebuild` 只重放 `goal.created`/`goal.transition`，attempt 级事件不重放 ⇒ attempt
