@@ -89,8 +89,9 @@ function boardTopLevel(board: string): string[] {
 }
 
 /**
- * 隔离守卫（负向对照的钉点）：测试 workspace 必须**自包含**，绝不能 canonical 归一到真实看板。
- * 把 `sandboxPolicy.workspaceRoot` 改回 `process.cwd()`（旧实现）⇒ 本函数立刻转红。
+ * 隔离守卫（负向对照的钉点）：被断言的 workspace 必须**自包含**，绝不能 canonical 归一到真实看板。
+ * 入参必须是「apply 实际消费的那个值」——即 `ctx.get("sandboxPolicy").workspaceRoot`
+ * （`makeCtx` 里就是这么调的），把该 getter 改回 `{ workspaceRoot: process.cwd() }` ⇒ 立刻转红。
  */
 function assertWorkspaceIsolated(ws: string): void {
   const resolved = resolveCanonicalRoot({ root: ".dsh-graph" }, ws).root;
@@ -136,20 +137,22 @@ function captureStderr(fn) {
  * g-396：workspace 必须由调用方显式传入自包含临时 workspace（不再默认 process.cwd()）。
  */
 function makeCtx(services: Record<string, unknown>, workspace: string) {
-  const sandboxPolicy = { workspaceRoot: workspace };
   const registeredSkills: any[] = [];
   const ctx: any = {
     get: (name: string) => {
       if (name === "skills") return { register: (d: any) => registeredSkills.push(d) };
-      if (name === "sandboxPolicy") return sandboxPolicy;
+      if (name === "sandboxPolicy") return { workspaceRoot: workspace };
       return services[name];
     },
     effect: (fn: () => unknown) => fn(),
     tools: { register: () => () => {}, get: () => ({}) },
   };
-  // g-396 隔离守卫：校验**实际下发给 apply 的 workspace**（而非仅函数入参）——
-  // 因此把上面 `sandboxPolicy.workspaceRoot` 改回 `process.cwd()`（旧实现）即转红。
-  assertWorkspaceIsolated(sandboxPolicy.workspaceRoot);
+  // g-396 隔离守卫：断言 apply **实际消费的值**——apply 读的是 `ctx.get?.("sandboxPolicy")?.workspaceRoot`
+  // 这一个 getter 返回值（dsh-graph-host/index.js g-149 init 路径），不是本函数的入参。
+  // 教训留痕（g-396 复核）：首版守卫断言的是局部常量（恒等于入参），把上面这个 getter 改回
+  // `{ workspaceRoot: process.cwd() }` 的**忠实回退**并不会触发它（假绿，实跑仅 1/15 红）；
+  // 改成断言 getter 返回值后，同一忠实回退必红（5/15）。
+  assertWorkspaceIsolated(ctx.get("sandboxPolicy").workspaceRoot);
   return { ctx, registeredSkills };
 }
 
@@ -335,8 +338,9 @@ isolatedTest("g-396 隔离回归：apply 的 init 只落在自包含临时 works
   const boardBefore = boardSkeletonFingerprint(realBoard);
   const topBefore = boardTopLevel(realBoard);
 
-  // ① 负向对照的钉点：隔离判定必须成立。把 sandboxPolicy.workspaceRoot 改回 process.cwd()（旧实现）
-  //    ⇒ assertWorkspaceIsolated 转红（makeCtx 里也调用同一守卫，故每个 apply 用例都受保护）。
+  // ① 负向对照的钉点：临时 workspace 自身必须自包含（本夹具层面）；apply 实际消费的那个值由
+  //    makeCtx 里的同一守卫断言（每个 apply 用例都受保护）。把 getter 改回
+  //    `{ workspaceRoot: process.cwd() }`（旧实现）⇒ 每处 makeCtx 立刻转红。
   assertWorkspaceIsolated(ws);
 
   // ② apply 真的会写骨架（不是「恰好无副作用」，而是「写在别处」）：临时 workspace 初始无看板，
