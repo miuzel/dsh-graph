@@ -22,9 +22,10 @@
  *      断言旧语义必然给出磁盘上不存在的名字或漏计引用（回退修复即红）。
  *
  * 平台边界（如实标注）：本套件在 Linux/WSL2 的 **ext4（大小写敏感）** 上运行，不敏感卷行为
- *   全部由注入复现；**原生 Windows / macOS 真机未实测**（分别在 README 平台状态表与
- *   `docs/case-alias-naming.md` 中标注为未验证）。Unicode 规范化（macOS NFD/NFC）只覆盖了
- *   `foldEntryName` 的折叠键，未做真机验证。
+ *   全部由注入复现；**原生 Windows / macOS 真机未实测** —— 据实记录在本目标文档
+ *   `docs/case-alias-naming.md` 的「平台限制与实测状态」小节（README 的平台范围段落是按版本的
+ *   **通用声明**，没有 g-364 专属条目，不作为本目标的实测依据）。Unicode 规范化（macOS NFD/NFC）
+ *   只覆盖了 `foldEntryName` 的折叠键，未做真机验证。
  */
 
 import { test } from "node:test";

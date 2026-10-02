@@ -12,8 +12,14 @@
 
 ## 1. 逐实际命名入口的保护现状
 
-「现状」列的三分类：**版本拒绝** = 已有/新增的显式拒绝（要求改名）；**附件幂等** = 已有幂等契约；
-**真实缺口** = 本轮修掉的行为缺陷。
+「现状」列的取值（判据①要求的**三类**为前三个，其余为补充类别，逐行标注、**不泛称已覆盖**）：
+
+- **版本拒绝** = 已有/新增的显式拒绝（要求改用磁盘实际 slug）；
+- **附件幂等** = 已有幂等契约（同内容复用、异内容唯一名、绝不覆盖）；
+- **真实缺口** = 本轮修掉的行为缺陷；
+- **只读诊断** = 只报告不修改（不改写正文、不迁移引用）；
+- **按 FS 解析（残余，未改）** = 名义上按**请求拼写**解析，真实不敏感卷上靠文件系统折叠命中真实条目；见 §1.2；
+- **N/A** = 该入口不存在「请求拼写 vs 磁盘实际拼写」的分歧（名字由磁盘遍历或纯数字/十六进制 id 派生）。
 
 | # | 入口（实现） | 名字来源 | 现状 | 复现/结论 |
 | --- | --- | --- | --- | --- |
@@ -25,11 +31,14 @@
 | 6 | 版本重命名 `renameVersion` | 新 slug | **版本拒绝** | 同上口径：新 slug 只与既有目录大小写不同 ⇒ 拒绝并点明实际 slug |
 | 7 | 目标创建带版本 `createGoal({version})` | version 参数 | **真实缺口（已修）** | 修复前 `mkdir` 静默复用别名泳道 ⇒ 目标落在 `versions/v0.19.3/` 而 `meta.version` 写 `V0.19.3`（`validate` 的位置/归属校验必报「version 字段与目录不一致」），事件也记下磁盘上不存在的 slug。现在**任何副作用之前**（含 `g-337` 的高水位预留）明确拒绝并要求改用实际 slug。敏感卷上照常新建独立泳道 |
 | 8 | 目标迁移到版本 `moveGoal({to:"version"})` | version 参数 | **真实缺口（已修）** | 与 #7 同口径拒绝（目标未移动、`meta.version` 未被改写） |
-| 9 | 版本删除/发布/状态/详情 `deleteVersion` / `releaseVersion` / `setVersionStatus` / `versionDetail` | slug | **按 FS 解析（残余，未改）** | 这些是**读/既定 slug 的破坏性操作**：真实不敏感卷上 `existsSync(versions/<slug>)` 会经别名命中，操作落在真实泳道上（行为符合「就是那条泳道」的意图）；但事件/details 仍记录**请求拼写**。大小写敏感卷上请求异名 slug 直接「不存在」。**本轮不改**（避免扩大：改它要动版本读路径与事件口径）；需要时按「只读诊断」先给出磁盘实际 slug 再操作 |
+| 9 | 版本读/破坏性入口 `versionGoals` / `versionDetail` / `validateVersionRelease` / `deleteVersion` / `releaseVersion` / `setVersionStatus`，以及 `renameVersion` 的**旧 slug 路径** | slug | **按 FS 解析（残余，未改；逐入口明细见 §1.2）** | 真实不敏感卷上 `existsSync(versions/<请求拼写>)` 经别名命中，操作落在真实泳道上（符合「就是那条泳道」的意图）；大小写敏感卷上请求异名 slug 直接「不存在」（fail-closed，不会落到别的泳道）。**但事件/details 记请求拼写**（如 `version`、`deleted_version_dir`），`renameVersion` 只改写 `meta.version === <请求拼写>` 的目标 ⇒ 账本拼写可能与磁盘不一致。本轮只拒绝**新** slug 的别名（#6），**未改**这些读路径与事件口径 |
 | 10 | 卡片 id `card-…` / `shared-…` | `randomUUID()` 前 8 位十六进制 | **N/A（无大小写变体）** | id 只含小写十六进制，没有「仅大小写不同」的两个合法名字；越权请求走 `context_cards` 引用守卫，**fail-closed** |
 | 11 | 目标 id `g-<seq>` | 单调序号 | **N/A** | 纯数字序号（`g-337` 高水位），无大小写变体 |
 | 12 | 记忆 id `mem-…` | `randomUUID()` 前 8 位 | **N/A** | 同 #10 |
 | 13 | worktree / 分支 `.worktrees/g-<goal>-att-<NN>` | 由目标 id 派生 | **N/A** | 由纯数字目标 id 派生，无大小写变体 |
+| 14 | 附件读取 `readAttachment` / `attachmentInfo` | 请求名 | **已随 #1/#2 覆盖（读取）；回显为残余** | 读取走同一解析器（`resolveAttachmentPath`）⇒ 不敏感卷上别名请求读到的是**真实文件**（不误读/不空读）。残余：`attachmentInfo` 返回的 `name` 仍是**请求拼写**（只读信息字段），本轮不改该返回形状（避免动 GUI/工具契约） |
+| 15 | 由 `readdirSync` 驱动的只读入口 `listAttachments` / `boardProjection` / `countVersionGoals` | 磁盘条目名 | **N/A（无外部名输入）** | 名字来自磁盘遍历本身（即**磁盘实际拼写**），不存在「请求拼写 vs 实际拼写」的分歧 |
+| 16 | 归档/取消归档 `archiveGoal` / `unarchiveGoal` | 目标既有位置 / 存储的 `meta.version` | **N/A 与残余各一** | `archiveGoal` 的版本段取自**磁盘实际路径**（`findGoalFile` 的结果）⇒ N/A。`unarchiveGoal` 由**存储的** `meta.version` 派生写路径：历史别名拼写在不敏感卷上仍落在真实泳道（正确落点）、敏感卷上 fail-closed 报错；该不一致早已由 `validate` 的 `locationProblems` 报出，本轮**不改写** `meta.version` |
 
 ### 1.1 复现方式（不依赖真实不敏感挂载）
 
@@ -43,6 +52,25 @@
   （照常新建独立条目），这就是「敏感卷 + 精确名不误伤」的保障。
 
 产物：`core/tests/g364-case-alias-entry.test.ts`（敏感/不敏感 × 同内容/异内容 × 精确名/别名 × 回退负向对照）。
+
+### 1.2 #9 残余组逐入口明细（均为「按请求拼写解析」，本轮未改）
+
+- **读**：`versionGoals`（`ops.ts`：`existsSync(versions/<slug>)` 后遍历 `goals/`）、`versionDetail`、
+  `validateVersionRelease` —— 按请求拼写解析；真实不敏感卷由 FS 折叠命中**真实泳道**（读到的是那条泳道的目标），
+  大小写敏感卷上异名 slug 直接「不存在」（**fail-closed**，不会读到别的泳道）。
+- **破坏性**：`deleteVersion`、`releaseVersion`、`setVersionStatus` —— 解析口径同上；
+  事件/details 记**请求拼写**（`version.deleted` 的 `version` 与 `deleted_version_dir: versions/<请求拼写>`、
+  `version.released` 的 `version` 等）。
+- **`renameVersion` 的旧 slug 路径**：#6 只拒绝了**新** slug 的别名；**旧** slug 仍按请求拼写
+  `existsSync` / `loadVersionMeta` / `renameSync(vdir, …)`，且 `updateGoalsVersionField(root, slug, newSlug)`
+  只改写 `meta.version === <请求拼写>` 的目标（历史别名拼写不会被改写），事件 `old_slug`/`old_name`
+  也记请求拼写 ⇒ 不敏感卷上操作落点正确，但**账本拼写**可能与磁盘不一致。
+- **`unarchiveGoal`**：写路径由**存储的** `meta.version` 派生（见 #16）。
+
+**为什么本轮不改**：这些入口的共同点是「既定 slug 的读 / 破坏性操作」，改它们要动版本读路径与
+事件/details 口径，超出负责人收缩后的最小范围（判据①只要求**如实分类**，判据②只要求
+「不敏感卷别名应明确拒绝**或**按幂等返回磁盘实际名」——写入口已覆盖）。真机上需要「账本记的就是磁盘那条泳道」时，
+先用只读诊断拿到磁盘实际 slug 再操作。
 
 ---
 
@@ -58,6 +86,9 @@
 
 > 历史回填（v0.18.0 的 Windows/macOS 真机 T1–T5 全过）**不覆盖本条改动**：那次未针对命名入口的
 > 大小写别名做验证。本页因此分别标注为「未实测」，不得读出已通过。
+>
+> `README.md` 的平台范围段落是**按版本的通用声明**（它不逐条追踪各目标的卷语义验证），
+> 因此**本目标的平台实测状态以本页为准**；README 不足以作为 g-364 的实测依据。
 
 **Unicode 规范化残余**：折叠键 `foldEntryName` 用 `NFC + toLowerCase`，可覆盖 macOS 常见的
 NFD 磁盘名 vs NFC 请求名；但**未在 macOS 真机验证**，且更冷僻的规范化形式（如多码位等价序列）
@@ -78,5 +109,5 @@ NFD 磁盘名 vs NFC 请求名；但**未在 macOS 真机验证**，且更冷僻
 1. `createGoal` / `moveGoal` 的 `version` 参数**未拒绝路径分隔符**（`createVersion` 有校验），
    `version: "../x"` 会拼出 `versions/../x`。与本目标（大小写别名/引用一致性）不同类，
    **未擅自扩大修复**；建议另开目标加与 `createVersion` 同口径的 slug 校验。
-2. 版本读/破坏性入口（上表 #9）在真实不敏感卷上按请求拼写记事件；如需账本拼写与磁盘一致，
-   应作为独立小项处理（先只读诊断给出实际 slug）。
+2. 版本读/破坏性入口（上表 #9，逐入口明细见 §1.2）在真实不敏感卷上按请求拼写解析并记事件；
+   如需账本拼写与磁盘一致，应作为独立小项处理（先只读诊断给出实际 slug）。
