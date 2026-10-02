@@ -1707,9 +1707,18 @@ export function apply(ctx, config) {
     const modeStrategySection = effModeRes.prompt ? [(isEnPrompt ? "## Subagent execution mode (" + effModeRes.mode + ")" : "## 子代理执行模式（" + effModeRes.mode + "）"), "", effModeRes.prompt].join("\n") : null;
 
     // 预测下一 attempt ID（用于 prompt 中精准渲染 attempt 编号）
+    // g-414：预测是**只读**的——容忍 attempts/ 不存在（首次派发等价于空目录计数 ⇒ 仍得 att-001），
+    // 绝不为「预测」预建目录。计数口径与 core startAttempt 的 `count(att-*)+1` 逐字一致；
+    // 「计数+1 未加锁」是既有语义（并发下可能撞号），本目标不改变也不扩大它。
     const attemptsDir = join(dirname(goalFile), "attempts");
-    mkdirSync(attemptsDir, { recursive: true });
-    const seq = readdirSync(attemptsDir).filter((d) => d.startsWith("att-")).length + 1;
+    let attemptEntries = [];
+    try {
+      attemptEntries = readdirSync(attemptsDir);
+    } catch (e) {
+      // 仅「目录不存在」视为 0 项；EACCES/ENOTDIR 等其它错误照旧抛出（不静默吞错）。
+      if (e?.code !== "ENOENT") throw e;
+    }
+    const seq = attemptEntries.filter((d) => d.startsWith("att-")).length + 1;
     const nextAttId = `att-${String(seq).padStart(3, "0")}`;
 
     // 真实创建 / 幂等复用 / 失败即停（在状态迁移与创建 attempt 之前执行，失败即停零副作用）
@@ -1718,6 +1727,11 @@ export function apply(ctx, config) {
       baselineCommit: baseline_commit,
       reason: isolationDecision.reason,
     });
+
+    // g-414：建树已成功（失败已于上一行抛 GraphError ⇒ 此刻未迁移状态、未建 attempt、未启动子代理，
+    // 且 attempts/ 尚未被创建 = 真正零副作用可重试）⇒ 此时才为后续写入准备目标 attempts/ 目录。
+    // 位置必须早于真正写入 attempt 目录的时机（startAttempt 的 persist）。
+    mkdirSync(attemptsDir, { recursive: true });
 
     // g-406：派发返回必须**可据以判定隔离**，否则 `worktree:false` 会把两种完全不同的
     // 情形混成同一个值：①解析为「本次不建树」（显式 worktree=false / 干净工作区下
