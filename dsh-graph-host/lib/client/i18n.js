@@ -437,6 +437,13 @@
       'worktree.noAttempts': '暂无 attempt 执行记录与 worktree',
       'worktree.copyPathTooltip': '复制安全相对路径',
       'worktree.pathCopied': '✅ worktree 路径已复制',
+      // g-409：隔离判定来源（attempt.worktree_reason 稳定枚举，key 后缀语义化）。
+      // 口径：这四类都是**策略默认 / 显式选择**，不是「建树失败」——建树失败一律抛错、零副作用，
+      // 不会留下已派发的 attempt。
+      'worktree.isolation.explicit': '显式跳过隔离（非失败）',
+      'worktree.isolation.typeDefault': '策略默认豁免隔离（非失败）',
+      'worktree.isolation.typeDefaultUnknown': '探测不可靠，按类型默认豁免（非失败）',
+      'worktree.isolation.dirtyWorkspace': '工作区有未提交改动，已升级为隔离',
       // g-272 att-002：服务端 worktree 候选/清理 reason 稳定枚举 → 中文映射（key 后缀即枚举值原文）
       'worktree.reason.path_not_canonical_name': 'worktree 路径不是规范 goal-attempt 名称',
       'worktree.reason.branch_not_canonical_name': 'worktree 分支不是规范 goal-attempt 名称',
@@ -1543,6 +1550,13 @@
       'worktree.noAttempts': 'No attempts or worktrees yet',
       'worktree.copyPathTooltip': 'Copy safe relative path',
       'worktree.pathCopied': '✅ Worktree path copied',
+      // g-409: isolation-verdict source (attempt.worktree_reason stable enum, semantic key suffix).
+      // These four are policy default / explicit choice, never a worktree creation failure:
+      // a failed creation throws with zero side effects and leaves no dispatched attempt.
+      'worktree.isolation.explicit': 'Isolation skipped explicitly (not a failure)',
+      'worktree.isolation.typeDefault': 'Exempt by type policy default (not a failure)',
+      'worktree.isolation.typeDefaultUnknown': 'Probe unreliable, type default exemption (not a failure)',
+      'worktree.isolation.dirtyWorkspace': 'Workspace was dirty, isolation upgraded',
       // g-272 att-002: server worktree candidate/cleanup reason enums → English mapping (key suffix = enum verbatim)
       'worktree.reason.path_not_canonical_name': 'Worktree path is not a canonical goal-attempt name',
       'worktree.reason.branch_not_canonical_name': 'Worktree branch is not a canonical goal-attempt name',

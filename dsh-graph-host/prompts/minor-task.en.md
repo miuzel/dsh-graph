@@ -2,3 +2,4 @@
 - Exempt from independent worktree isolation: code or documentation changes may be made directly in the current workspace and version integration branch, without creating a .worktrees/ isolated branch;
 - Change boundaries: strictly limit changes to the declared minor-change scope; unrelated side effects are forbidden, and privately expanding the blast radius is forbidden;
 - Verification and reporting: after the change, run the targeted unit tests and checks successfully, use graph_report_status to report, and upon completion move to review and wait for review.
+- Exemption semantics (do not misread): on a clean workspace the default exemption for patch / chore is a **type policy default, not a worktree creation failure** (a failed creation stops with zero side effects and leaves no dispatched attempt); if this task really needs isolation (for example to run a build or to write files), ask the supervisor to **explicitly pass `worktree:true`** at dispatch time.
