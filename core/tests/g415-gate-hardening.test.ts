@@ -45,6 +45,7 @@ import {
 const repoRoot = join(import.meta.dirname, "../..");
 const GATE = join(repoRoot, "scripts", "run-tests.mjs");
 const REPORTER = join(repoRoot, "scripts", "test-reporter-events.mjs");
+const HELPER = join(repoRoot, "core", "tests", "fixtures", "nested-runner.ts");
 const TESTS_DIR = join(repoRoot, "core", "tests");
 const FIXTURES = join(TESTS_DIR, "fixtures", "g415");
 const GUARD_FILE = join(import.meta.dirname, "g415-gate-hardening.test.ts");
@@ -88,8 +89,23 @@ function redReason(err: string): string {
   return err.split("\n").find((line) => line.includes("[run-tests] ✖")) ?? "";
 }
 
-function syntheticRun(code: number | null, out: string): NestedRunResult {
-  return { code, out, err: "", summary: parseTestSummary(out, ""), command: "(synthetic)" };
+/**
+ * 合成 `NestedRunResult`（g-416：必须同时给出 `cwd`/`targets`/`channel`）。
+ * 事件通道汇总逐字段复制人类汇总、`files` 覆盖全部目标 —— 即「两块通道一致且文件跑全」，
+ * 于是 `nestedSuitePassProblems` 的判红只可能来自被测的那一项（如 todo）。
+ */
+function syntheticRun(code: number | null, out: string, targets = ["/synthetic/g415.test.ts"]): NestedRunResult {
+  const summary = parseTestSummary(out, "");
+  return {
+    code,
+    out,
+    err: "",
+    summary,
+    command: "(synthetic)",
+    cwd: "/",
+    targets,
+    channel: { summary: { ...summary }, tally: { ...summary }, summaries: 1, files: [...targets], badLines: 0 },
+  };
 }
 
 const summaryBlock = (o: {
@@ -218,23 +234,40 @@ test("g-415 判据3：多文件全绿 ⇒ 覆盖断言不得误红（覆盖不�
 });
 
 test("g-415 判据3 变异对照：去掉覆盖断言后提前退出形态复活为绿（证明覆盖是真守卫）", (t) => {
+  // g-416：覆盖判据现由**两处**把关 —— 闸门侧 `coverageProblems` 与共享 helper 的
+  // `nestedTargetCoverageProblems`（在 `nestedSuitePassProblems` 内）。只摘一处仍判红（双保险），
+  // 故变异必须把两处一起摘掉，才能证明「覆盖断言本身」是判别力来源。
   const original = readFileSync(GATE, "utf8");
   const anchor = "    problems.push(...coverageProblems(targetFiles, channel)); // g-415 判据③：逐文件覆盖";
-  const mutantSrc = original.replace(anchor, "    // mutant: coverage removed");
+  const mutantSrc = original.replace(anchor, "    // mutant: gate-side coverage removed");
   assert.notEqual(mutantSrc, original, "变异锚点失效：闸门里必须存在覆盖断言那一行");
-  const fixed = mutantSrc.replace(
-    /const repoRoot = join\(dirname\(fileURLToPath\(import\.meta\.url\)\), "\.\."\);/,
-    `const repoRoot = ${JSON.stringify(repoRoot)};`,
-  );
-  assert.notEqual(fixed, mutantSrc, "变异副本的 repoRoot 重写锚点失效");
+
+  const helperSrc = readFileSync(HELPER, "utf8");
+  const helperAnchor = "  problems.push(...nestedTargetCoverageProblems(run.targets, channel, run.cwd));";
+  const mutantHelperSrc = helperSrc.replace(helperAnchor, "  // mutant: helper-side coverage removed");
+  assert.notEqual(mutantHelperSrc, helperSrc, "变异锚点失效：helper 里必须存在覆盖断言那一行");
+
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g415-mutant-"));
   try {
+    const mutantHelper = join(dir, "nested-runner-mutant.ts");
+    writeFileSync(mutantHelper, mutantHelperSrc);
+    const fixed = mutantSrc.replace(
+      /const repoRoot = join\(dirname\(fileURLToPath\(import\.meta\.url\)\), "\.\."\);/,
+      `const repoRoot = ${JSON.stringify(repoRoot)};`,
+    );
+    assert.notEqual(fixed, mutantSrc, "变异副本的 repoRoot 重写锚点失效");
+    // 闸门必须加载**变异 helper**（否则 helper 侧覆盖仍会拦下早退形态，变异不成立）。
+    const withMutantHelper = fixed.replace(
+      'join(repoRoot, "core/tests/fixtures/nested-runner.ts")',
+      JSON.stringify(mutantHelper),
+    );
+    assert.notEqual(withMutantHelper, fixed, "变异副本的 helper import 重定向锚点失效");
     const mutant = join(dir, "run-tests-mutant.mjs");
-    writeFileSync(mutant, fixed);
+    writeFileSync(mutant, withMutantHelper);
     const g = runGate([EARLY_EXIT], {}, mutant);
     assert.equal(g.code, 0, `去掉覆盖断言后提前退出形态必须复活为绿（否则覆盖断言不是唯一判别力）\n${g.err.slice(-500)}`);
     assert.match(g.out, /✔ 自证通过/, "变异闸门必须回显自证通过（证明原闸门的判红来自覆盖断言）");
-    t.diagnostic(`evidence: suite=g415-coverage-mutant exit=${g.code} red=none-coverage-removed`);
+    t.diagnostic(`evidence: suite=g415-coverage-mutant exit=${g.code} red=none-coverage-removed layers=2`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

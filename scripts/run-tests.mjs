@@ -49,6 +49,11 @@
  *  ⑤ **管道截断**：旧版 `process.stdout.write(bigOut)` 后立即 `process.exit(0)` ⇒ 未 flush 的管道缓冲被丢弃
  *     （实测 exit 0、stdout 恰 64 KiB、自证行不可见）。现全部收尾只设 `process.exitCode`、**不调 `process.exit`**
  *     （仅极小的同步早退消息经 `writeSync(2, …)` 后退出），让运行时自然 flush 再收尾。
+ *
+ * ── g-416：覆盖判据下沉到**共享 helper**（同一根因域：闸门可被判绿而未真正跑全）──────────────
+ *  `nestedSuitePassProblems`（被本闸门与全部嵌套消费点共用）现**自身**核对「目标文件集合 ≡ 逐文件
+ *  完成事件集合且 >0」并与事件通道交叉校验；本闸门把已算好的 `targets`/`channel`/`cwd` 挂到 `run` 上，
+ *  其自身的 {@link coverageProblems} 调用点**保留**（只增不减，双保险）。
  */
 
 import { spawn } from "node:child_process";
@@ -276,6 +281,11 @@ child.on("close", (code, signal) => {
     err,
     summary: channel.summary ?? human,
     command: `${process.execPath} --test ${spawnTargets.join(" ")}`,
+    // g-416：共享 helper 的判据现要求「目标文件集合 ≡ 逐文件完成事件集合」与事件通道交叉校验，
+    // 故把闸门已算好的目标集合 / 通道 / cwd 挂到 run 上（同一份数据，不另起一套口径）。
+    cwd: repoRoot,
+    targets: targetFiles,
+    channel,
   };
 
   try {

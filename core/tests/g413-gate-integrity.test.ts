@@ -62,8 +62,23 @@ function redReason(err: string): string {
   return err.split("\n").find((line) => line.includes("[run-tests] ✖")) ?? "";
 }
 
-function syntheticRun(code: number | null, out: string): NestedRunResult {
-  return { code, out, err: "", summary: parseTestSummary(out, ""), command: "(synthetic)" };
+/**
+ * 合成 `NestedRunResult`（g-416：必须同时给出 `cwd`/`targets`/`channel`）。
+ * 事件通道汇总逐字段复制人类汇总、`files` 覆盖全部目标 —— 即「人类通道与事件通道一致且文件跑全」，
+ * 于是 `nestedSuitePassProblems` 的判红只可能来自被测的那一项（退出码 / cancelled / skipped / 口径）。
+ */
+function syntheticRun(code: number | null, out: string, targets = ["/synthetic/g413.test.ts"]): NestedRunResult {
+  const summary = parseTestSummary(out, "");
+  return {
+    code,
+    out,
+    err: "",
+    summary,
+    command: "(synthetic)",
+    cwd: "/",
+    targets,
+    channel: { summary: { ...summary }, tally: { ...summary }, summaries: 1, files: [...targets], badLines: 0 },
+  };
 }
 
 const summaryBlock = (o: { tests: number; pass: number; fail: number; cancelled: number; skipped: number; todo?: number }) =>
