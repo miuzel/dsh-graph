@@ -92,29 +92,58 @@ prepare（调用方）  →  event（commitPrepared）  →  persist（commitPre
 `unbindGoalChild` 主路径（选中 attempt 的解绑）亦为事件先行（7623/7643 事件 → 7669 落盘）；
 其「回调内落盘」形态见 3.4 注记。
 
-### 3.4 残余（同类反序，未在本次修复，21 处）
+### 3.4 g-395 批次收敛进度（原 21 处残余）
 
-`createGoal`(1595/1604) · `setCriteria`(1657) · `updateCriteria`(1749) · `addRelation`(2575) ·
-`removeRelation`(2625) · `addCard`(2990) · `createSharedCard`(3077) · `addSharedCardRef`(3100) ·
-`removeSharedCardRef`(3469) · `storeAttachment`(3859) · `reviewCard`(4083) · `bindCardChild`(4174) ·
-`startAttempt`(5776) · `reportStatus`(6119) · `bindAttemptChild`(6171) · `moveGoal`(7946) ·
-`archiveGoal`(8048) · `unarchiveGoal`(8105) · `amendGoal`(9156) · `renameGoal`(9182) ·
-`setGoalType`(9821)（`core/ops.ts` 行号）。
+排序口径：**调用频率（F，1–5）× 失败后状态错位严重度（S，1–5）**。S 的判据是「事件缺失后
+事后能否被发现」：`rebuild` 只比对 `goal.created`/`goal.transition` 重放的 status（且归档目标
+已不在 `listGoalFiles` 中），故归属/搬迁类与 attempt 级写点的错位**事后不可诊断** ⇒ S=5/4。
+
+#### 3.4.1 已收敛（5 处 + 1 嵌套，g-395 第一批）
+
+| 写点 | F×S | 失败后错位（修复前） | 收敛方式 |
+| --- | --- | --- | --- |
+| `startAttempt` | 5×4 | 事件失败留下「无事件的孤儿 attempt 目录」，且被 `count(att-*)+1` 计入 ⇒ 重试换号 | 事件先行；`attempts/` 与 `attempt.md` 移入 `persist`；失败时清理本次新建的半成品目录（有界） |
+| `bindAttemptChild` | 5×3 | attempt.md 已绑 child 而事件流无 `attempt.bound` | 事件先行，`saveGoal` 进 `persist` |
+| `reportStatus` | 5×2 | 最高频写点：attempt.md 已改而状态履历缺最新一条 | 同上 |
+| `moveGoal` | 3×5 | 目标已搬迁而事件流无 `goal.moved`（rebuild 不重放它、也不比对位置 ⇒ 静默） | 事件先行；`persist` = 先写 frontmatter（仍在原位）→ 再搬迁，两个失败窗口都可重试收敛；同函数的隐式 `version.created` 骨架一并收敛 |
+| `archiveGoal` | 2×5 | 目标已搬进 `archived/` 而事件流无 `goal.archived`；归档后已不在对账集合内 ⇒ 完全不可诊断 | 同 `moveGoal` |
+
+回归守卫：`core/tests/g395-event-first-batch1.test.ts`（9 例，精确 EIO 注入 + 负向对照 9/9 转红）。
+
+#### 3.4.2 残余（16 处，供后续批次接手）
+
+`createGoal`(16) · `addCard`(12) · `bindCardChild`(9) · `createSharedCard`(9) ·
+`storeAttachment`(9) · `setGoalType`(9) · `setCriteria`(6) · `addRelation`(6) ·
+`removeRelation`(6) · `addSharedCardRef`(6) · `reviewCard`(6) · `amendGoal`(6) ·
+`renameGoal`(6) · `unarchiveGoal`(5) · `updateCriteria`(4) · `removeSharedCardRef`(4)
+（括号为 F×S 分值；行号随 g-395 改动漂移，故只列函数名）。
+
+**两处需要专门设计、不可机械迁移**：
+
+- `createGoal`(F4×S4，分值最高)：id 由 `seqUpperBound()+1` 分配，且 `raiseSeqFloor` 已在落盘前
+  持久抬高水位（g-337 预留语义）。事件先行后，`seqUpperBound` 含 `maxSeqFromEvents` ⇒ 事件已落盘
+  而 persist 失败时，重试会把事件里的 `g-N` 计入水位并分配 `g-(N+1)`，事件流出现「有记录、无文件」
+  的目标。收敛需要幂等键/显式 id 预留，属 API 设计变更。
+- `addCard`(F4×S3)：组合写点（shared 路径先 `createSharedCard` 再 `addSharedCardRef`，goal 路径
+  依次写 card 文件与 goal.md），需先收敛两个子写点再谈整体。
+
+**新增登记（不在原 21 处内，本轮审计发现）**：`createGoal` 的隐式 version 骨架
+（`saveGoal(version.md)` → `appendEvent(version.created)`）是与 `moveGoal` 同形的嵌套反序写点；
+`moveGoal` 的同形骨架已随本批收敛，`createGoal` 的随其主写点一并处理。
 
 **注记（形态残余，已诊断）**：`unbindGoalChild`、`writeAttemptResults`、`refreshGoalResults` 的
 文件写入发生在 `withTx` 回调内（而非经 `persist`），严格意义上偏离 2.1 的「prepare 零副作用」；
 但三者都已满足「事件先行 + 落盘失败有诊断」，故不作为缺陷，仅登记为后续可收敛的形态债。
 
-**残余风险（与修复前 C3 同类）**：3.4 中的写点事件追加失败时仍会留下「文件已改、无事件、调用报错」
-的静默状态改变；`rebuild` 对 goal frontmatter 可检出 drift（attempt 级事件不重放，故 attempt 级
-需靠 3.1/3.2 的诊断事件）。
+**残余风险（与修复前 C3 同类）**：3.4.2 中的写点事件追加失败时仍会留下「文件已改、无事件、调用报错」
+的静默状态改变；`rebuild` 只重放 `goal.created`/`goal.transition`，attempt 级事件不重放 ⇒ attempt
+级写点需靠 3.1/3.2 的诊断事件。
 
-**为何不一次性机械互换顺序**（本次硬边界）：每个写点的可收敛性依赖各自的幂等/重试语义
-（如 `createGoal` 的 id 分配、`moveGoal` 的跨目录搬迁、`startAttempt` 的 attempt 目录创建、
+**为何不一次性机械互换顺序**（贯穿全部批次）：每个写点的可收敛性依赖各自的幂等/重试语义
+（如 `createGoal` 的 id 分配、`storeAttachment` 的「同内容复用」早退、`startAttempt` 的目录/序号、
 权限与 CAS 门禁），必须逐点复核「事件先行后重试是否仍幂等」，否则会把「静默状态改变」换成
-「重复事件/重复 id」。`commitPrepared` 已就位，后续可按同一契约逐点跟进（建议优先级：
-状态/归属类 `archiveGoal`、`unarchiveGoal`、`moveGoal`、`startAttempt`、`bindAttemptChild`、
-`setGoalType`、`reportStatus`）。
+「重复事件/重复 id」。本批实测到一例：`moveGoal` 的隐式 version 骨架会**先于** `goal.moved` 抛错，
+从而绕过主写点的事件先行修复。
 
 ## 4. 验证
 

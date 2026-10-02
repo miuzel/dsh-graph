@@ -5935,12 +5935,14 @@ export function startAttempt(
     throw new GraphError("modeSource 只允许 override/project/global/default");
   }
   const normalizedMode = normalizeSubagentMode(opts.mode);
+  // g-395：attempts/ 的创建是文件副作用 ⇒ 移入 persist（prepare 只读）。
+  // 分配公式保持 `count(att-*)+1` 逐字不变——宿主 dispatch 在 startAttempt 之前
+  // 用同一公式预测 nextAttId（dsh-graph-host/index.js:1577）并据此命名 worktree 与
+  // prompt，改公式会让两者错位；目录不存在（首次 attempt）时等价于空目录计数。
   const dir = join(goalDirOf(goalFile), "attempts");
-  mkdirSync(dir, { recursive: true });
-  const seq = readdirSync(dir).filter((d) => d.startsWith("att-")).length + 1;
+  const seq = (existsSync(dir) ? readdirSync(dir).filter((d) => d.startsWith("att-")).length : 0) + 1;
   const attId = `att-${String(seq).padStart(3, "0")}`;
   const attDir = join(dir, attId);
-  mkdirSync(join(attDir, "delivery"), { recursive: true });
   const meta: Record<string, any> = {
     id: attId,
     goal: goalId,
@@ -6015,7 +6017,6 @@ export function startAttempt(
   if (opts.injectedDirective && opts.injectedDirective.trim()) {
     meta.injected_directive = opts.injectedDirective.trim();
   }
-  saveGoal(join(attDir, "attempt.md"), { meta, body: ATTEMPT_BODY });
   const details: Record<string, any> = {
     attempt: attId,
     executor: opts.executor,
@@ -6054,13 +6055,33 @@ export function startAttempt(
       ? { injected_directive: opts.injectedDirective.trim() }
       : {}),
   };
-  appendEvent(root, {
-    actor: opts.actor,
-    event: "attempt.started",
-    goal: goalId,
-    details,
-  });
-  return attId;
+  // g-395：事件先行（R-02）——事件追加失败 ⇒ 一个字节都不落盘（不再留下「无事件的孤儿
+  // attempt 目录」，也不再让孤儿目录被下次 startAttempt 计入 seq）。
+  return commitPrepared(root, { actor: opts.actor, goal: goalId }, {
+    value: attId,
+    events: [{
+      actor: opts.actor,
+      event: "attempt.started",
+      goal: goalId,
+      details,
+    }],
+    persist: () => {
+      mkdirSync(dir, { recursive: true });
+      const attDirPreexisted = existsSync(attDir); // 仅清理本次调用新建的目录，绝不删既有 attempt
+      try {
+        mkdirSync(join(attDir, "delivery"), { recursive: true });
+        saveGoal(join(attDir, "attempt.md"), { meta, body: ATTEMPT_BODY });
+      } catch (e) {
+        // 本次调用新建的半成品 attempt 目录必须清理：留下它会让下次 startAttempt 的
+        // `count(att-*)+1` 把空目录计入 ⇒ 重试分配到另一个编号（与首条事件记录的编号错位）。
+        // 有界清理（只删本次新建的这一层），不引入回滚框架；清理失败不覆盖原始错误。
+        if (!attDirPreexisted) {
+          try { rmSync(attDir, { recursive: true, force: true }); } catch { /* 忽略清理失败 */ }
+        }
+        throw e;
+      }
+    },
+  }).value;
 }
 
 /* ============================================================================
@@ -6358,12 +6379,17 @@ export function reportStatus(
   if (state !== undefined) {
     doc.meta.status_state = state;
   }
-  saveGoal(file, doc);
-  appendEvent(root, {
-    actor,
-    event: "attempt.status_reported",
-    goal: goalId,
-    details: { attempt: attemptId, status: line, ...(state !== undefined ? { status_state: state } : {}) },
+  // g-395：事件先行——状态汇报是最高频写点（每次心跳/阶段转变），事件追加失败时
+  // 不再留下「attempt.md 已改、履历无记录」的静默状态改变；重试写同一内容即收敛。
+  commitPrepared(root, { actor, goal: goalId }, {
+    value: undefined as void,
+    events: [{
+      actor,
+      event: "attempt.status_reported",
+      goal: goalId,
+      details: { attempt: attemptId, status: line, ...(state !== undefined ? { status_state: state } : {}) },
+    }],
+    persist: () => saveGoal(file, doc),
   });
   // g-312 C-lite：超长 status 只做软观测（report.oversize），绝不拒绝——status_line 维持「一句人话」，
   // 结构化证据概要不进这里（见本文件 g-312 独立区块的边界说明）。
@@ -6410,18 +6436,24 @@ export function bindAttemptChild(
     doc.meta.mode = normalizedMode;
     if (modeSource) doc.meta.mode_source = modeSource;
   }
-  saveGoal(file, doc);
   const details: Record<string, any> = { attempt: attemptId, child_id: childId, binding_version: doc.meta.binding_version };
   if (doc.meta.provider) details.provider = doc.meta.provider;
   if (doc.meta.model) details.model = doc.meta.model;
   if (doc.meta.model_route) details.model_route = doc.meta.model_route;
   if (doc.meta.mode) details.mode = doc.meta.mode;
   if (doc.meta.mode_source) details.mode_source = doc.meta.mode_source;
-  appendEvent(root, {
-    actor,
-    event: "attempt.bound",
-    goal: goalId,
-    details,
+  // g-395：事件先行——`attempt.bound` 追加失败 ⇒ attempt.md 保持原值（不再出现「文件已绑定、
+  // 事件流无记录」的静默绑定）。binding_token 每次调用新生成，仅落盘不落事件：persist 失败
+  // 后重试得到的是同一 binding_version（磁盘未变）的新 token，语义等价、可收敛。
+  commitPrepared(root, { actor, goal: goalId }, {
+    value: undefined as void,
+    events: [{
+      actor,
+      event: "attempt.bound",
+      goal: goalId,
+      details,
+    }],
+    persist: () => saveGoal(file, doc),
   });
 }
 
@@ -8150,6 +8182,13 @@ export function moveGoal(
   const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
   let targetFile: string;
   let targetDirForm: boolean;
+  /** g-395：隐式 version 骨架（prepare 只算内容，落盘进 persist，与 goal.moved 同一次 commit）。 */
+  let implicitVersion: {
+    dir: string;
+    file: string;
+    doc: GoalDoc;
+    event: { actor: string; event: string; details: Record<string, any> };
+  } | null = null;
   // g-137：记录迁移前状态，迁移后根据目标位置调整状态
   const prevStatus = doc.meta.status as string;
   if (opts.to === "backlog") {
@@ -8179,33 +8218,39 @@ export function moveGoal(
     targetFile = join(root, "versions", opts.version, "goals", id, "goal.md");
     targetDirForm = true;
     doc.meta.version = opts.version;
-    // 隐式版本：version.md 不存在时补骨架（与 createGoal 一致）
+    // 隐式版本：version.md 不存在时补骨架（与 createGoal 一致）。
+    // g-395：与 goal.moved 同一次 commit 收敛（事件先行）——原实现先 `saveGoal(vfile)` 再
+    // `appendEvent(version.created)`，事件追加失败会留下「无事件的 version.md」，且它**先于**
+    // goal.moved 抛错，使 goal.moved 的事件先行修复在该场景下被绕过（本批回归实测到了这一点）。
     const vfile = join(root, "versions", opts.version, "version.md");
     if (!existsSync(vfile)) {
       const vId = "v-" + randomUUID().slice(0, 8);
       const vCreatedAt = nowIso();
-      mkdirSync(join(root, "versions", opts.version), { recursive: true });
-      saveGoal(vfile, {
-        meta: {
-          id: vId,
-          name: opts.version,
-          status: "planning",
-          created_at: vCreatedAt,
+      implicitVersion = {
+        dir: join(root, "versions", opts.version),
+        file: vfile,
+        doc: {
+          meta: {
+            id: vId,
+            name: opts.version,
+            status: "planning",
+            created_at: vCreatedAt,
+          },
+          body: "\n## 范围\n\n（隐式创建：由 move-goal --version 带入）\n",
         },
-        body: "\n## 范围\n\n（隐式创建：由 move-goal --version 带入）\n",
-      });
-      appendEvent(root, {
-        actor: opts.actor,
-        event: "version.created",
-        details: {
-          version: opts.version,
-          name: opts.version,
-          version_id: vId,
-          status: "planning",
-          created_at: vCreatedAt,
-          implicit: true,
+        event: {
+          actor: opts.actor,
+          event: "version.created",
+          details: {
+            version: opts.version,
+            name: opts.version,
+            version_id: vId,
+            status: "planning",
+            created_at: vCreatedAt,
+            implicit: true,
+          },
         },
-      });
+      };
     }
     // g-147：只有从 backlog（draft 状态）进入时才变为 planning
     if (prevStatus === "draft") {
@@ -8214,28 +8259,58 @@ export function moveGoal(
   } else {
     throw new GraphError(`非法移动目标：${opts.to}`);
   }
-  if (targetFile === file) return;
-  if (existsSync(targetFile)) throw new GraphError(`目标位置已存在：${targetFile}`);
-  mkdirSync(dirname(targetFile), { recursive: true });
-  if (srcDir && targetDirForm) {
-    // 目录形态互转：整体移动目录（cards/ attempts/ 一起走）
-    renameSync(srcDir, dirname(targetFile));
-  } else {
-    renameSync(file, targetFile);
-    if (srcDir) {
-      try {
-        rmdirSync(srcDir); // 仅当空目录（移回 backlog 平铺方向）
-      } catch {
-        /* 有附件目录则保留 */
-      }
+  // 隐式版本骨架落盘（幂等：目录/文件已存在时 mkdir 与原子写都等价重放）
+  const persistImplicitVersion = (): void => {
+    if (!implicitVersion) return;
+    mkdirSync(implicitVersion.dir, { recursive: true });
+    saveGoal(implicitVersion.file, implicitVersion.doc);
+  };
+  if (targetFile === file) {
+    // 与原行为一致：no-op 迁移仍补建隐式版本骨架（只是改为事件先行）
+    if (implicitVersion) {
+      commitPrepared(root, { actor: opts.actor, goal: id }, {
+        value: undefined as void,
+        events: [implicitVersion.event],
+        persist: persistImplicitVersion,
+      });
     }
+    return;
   }
-  saveGoal(targetFile, doc);
-  appendEvent(root, {
-    actor: opts.actor,
-    event: "goal.moved",
-    goal: id,
-    details: { from: relative(root, file), to: relative(root, targetFile) },
+  if (existsSync(targetFile)) throw new GraphError(`目标位置已存在：${targetFile}`);
+  // g-395：事件先行（`goal.moved` 是归属变更的唯一真相，rebuild 不重放它、也不比对位置，
+  // 反序时「文件已搬迁、事件缺失」完全不可诊断）。persist 内**先写 frontmatter（仍在原位）、
+  // 后搬迁**：两步各自的失败都落在「frontmatter 与原位/目标位不一致」，该形态由 validate 的
+  // locationProblems 检出；且两种失败重试都能收敛（原位未被占用，重跑即补齐），
+  // 而「先搬迁、后写 frontmatter」在搬迁成功后写盘失败时重试会撞「目标位置已存在」而死。
+  commitPrepared(root, { actor: opts.actor, goal: id }, {
+    value: undefined as void,
+    events: [
+      ...(implicitVersion ? [implicitVersion.event] : []),
+      {
+        actor: opts.actor,
+        event: "goal.moved",
+        goal: id,
+        details: { from: relative(root, file), to: relative(root, targetFile) },
+      },
+    ],
+    persist: () => {
+      persistImplicitVersion();
+      saveGoal(file, doc);
+      mkdirSync(dirname(targetFile), { recursive: true });
+      if (srcDir && targetDirForm) {
+        // 目录形态互转：整体移动目录（cards/ attempts/ 一起走）
+        renameSync(srcDir, dirname(targetFile));
+      } else {
+        renameSync(file, targetFile);
+        if (srcDir) {
+          try {
+            rmdirSync(srcDir); // 仅当空目录（移回 backlog 平铺方向）
+          } catch {
+            /* 有附件目录则保留 */
+          }
+        }
+      }
+    },
   });
 }
 
@@ -8280,19 +8355,28 @@ export function archiveGoal(
   if (existsSync(targetFile)) throw new GraphError(`归档位置已存在：${targetFile}`);
   // 标记已归档
   doc.meta.archived = true;
-  mkdirSync(dirname(targetFile), { recursive: true });
-  if (srcDir) {
-    // 目录形态：整体移动目录（cards/ attempts/ 一起走）
-    renameSync(srcDir, dirname(targetFile));
-  } else {
-    renameSync(file, targetFile);
-  }
-  saveGoal(targetFile, doc);
-  appendEvent(root, {
-    actor: opts.actor,
-    event: "goal.archived",
-    goal: id,
-    details: { from: relative(root, file), to: relative(root, targetFile), status },
+  // g-395：事件先行——`goal.archived` 追加失败时不再留下「目标已搬进 archived/、事件流无记录」
+  // 的静默状态改变（rebuild 只比对 status 而归档目标已不在 listGoalFiles 中 ⇒ 事后完全不可诊断）。
+  // persist 先写 frontmatter（仍在原位）、后搬迁，与 moveGoal 同口径：两类失败均可被 validate 的
+  // locationProblems/归档位置校验检出，且重试收敛（原路径未被占用）。
+  commitPrepared(root, { actor: opts.actor, goal: id }, {
+    value: undefined as void,
+    events: [{
+      actor: opts.actor,
+      event: "goal.archived",
+      goal: id,
+      details: { from: relative(root, file), to: relative(root, targetFile), status },
+    }],
+    persist: () => {
+      saveGoal(file, doc);
+      mkdirSync(dirname(targetFile), { recursive: true });
+      if (srcDir) {
+        // 目录形态：整体移动目录（cards/ attempts/ 一起走）
+        renameSync(srcDir, dirname(targetFile));
+      } else {
+        renameSync(file, targetFile);
+      }
+    },
   });
 }
 
