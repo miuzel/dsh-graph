@@ -51,11 +51,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { apply } from "../../dist/index.js";
+import { init, unbindGoalChild } from "../ops.ts";
 
 const repoRoot = join(import.meta.dirname, "../..");
 
@@ -492,19 +493,58 @@ test("D graph_help run() 返回源资产原文，且 dist 副本与源逐字一�
  * 让 tmp 镜像里的 `dist/core/*.js` 仍能解析 `yaml` 等依赖：把镜像根下的 node_modules
  * 符号链接到仓库（或任一上层目录）的 node_modules。R3：镜像不再需要落在仓库内，
  * 因此只读检出（无仓库内可写 tmp/）也能跑测试 E。
- * @returns 是否成功建立链接（未找到 node_modules 时返回 false，调用方给出可读诊断）
+ *
+ * g-350（Windows 符号链接能力）：`symlinkSync(dir)` 在**原生 Windows**（未开开发者模式 /
+ * 无 `SeCreateSymbolicLinkPrivilege`）会 EPERM；Windows 上目录**联接（junction）不需要该特权**，
+ * 故先试 `dir` 再回退 `junction`。两路皆失败时返回**可读诊断**（点名 errno + 回退建议），
+ * 而不是让调用方看到一句误导的「未找到 node_modules」。
+ * `symlink` 可注入：本机（Linux/WSL2）无法原生复现 Windows 分支，用注入桩覆盖两条回退路径；
+ * **原生 Windows 未验证**（如实标注，见测试 G2 注释）。
+ * @returns `{ ok, via, reason }` —— `via` 记录实际走通的链接方式（`symlink` / `junction`）。
  */
-function linkDependencies(mirrorRoot: string): boolean {
+function linkDependencies(
+  mirrorRoot: string,
+  deps: { symlink?: typeof symlinkSync } = {},
+): { ok: boolean; via: "symlink" | "junction" | null; reason: string } {
+  const symlink = deps.symlink ?? symlinkSync;
+  const link = join(mirrorRoot, "node_modules");
+  const attempts: Array<{ via: "symlink" | "junction"; type: "dir" | "junction" }> = [
+    { via: "symlink", type: "dir" },
+    { via: "junction", type: "junction" },
+  ];
   for (let dir = repoRoot; ; ) {
     const candidate = join(dir, "node_modules");
     if (existsSync(candidate)) {
-      symlinkSync(candidate, join(mirrorRoot, "node_modules"), "dir");
-      return true;
+      const errors: string[] = [];
+      for (const attempt of attempts) {
+        try {
+          symlink(candidate, link, attempt.type);
+          return { ok: true, via: attempt.via, reason: "" };
+        } catch (e: any) {
+          errors.push(`${attempt.via}=${e?.code ?? e?.message ?? "unknown"}`);
+        }
+      }
+      return {
+        ok: false,
+        via: null,
+        reason:
+          `找到 ${candidate} 但无法建立 node_modules 链接（${errors.join(", ")}）；` +
+          `Windows 上目录链接需开发者模式/符号链接特权，回退 junction 亦失败，请检查权限或改用非镜像夹具`,
+      };
     }
     const parent = dirname(dir);
-    if (parent === dir) return false;
+    if (parent === dir) return { ok: false, via: null, reason: "向上遍历到根仍未找到 node_modules" };
     dir = parent;
   }
+}
+
+/**
+ * g-350：把**镜像（授权临时目录）内**待覆写的文件恢复为 0644。
+ * 只读检出（全树 0444）下 `cpSync` 会把只读权限一起复制进镜像，测试 E 的覆写因此 EACCES
+ * （g-349 复核 N1 的最小复现）。本函数**只作用于镜像副本**，源检出一个字节、一个权限位都不动。
+ */
+function makeWritableForTest(path: string): void {
+  chmodSync(path, 0o644);
 }
 
 test("E 加载机制：资产为每次调用读取，改动后同一模块实例立即生效（无需重启宿主）", async () => {
@@ -517,10 +557,14 @@ test("E 加载机制：资产为每次调用读取，改动后同一模块实例
       !mirrorRoot.startsWith(repoRoot + "/"),
       `镜像不得落在仓库内（只读检出会因不可写而失败）: ${mirrorRoot}`,
     );
-    assert.ok(linkDependencies(mirrorRoot), "未找到仓库 node_modules，tmp 镜像无法解析 yaml 依赖");
+    const link = linkDependencies(mirrorRoot);
+    assert.ok(link.ok, `镜像无法解析 yaml 依赖：${link.reason}`);
     const mirrorDist = join(mirrorRoot, "dist");
     cpSync(join(repoRoot, "dist"), mirrorDist, { recursive: true });
     const mirrorHelp = join(mirrorDist, "prompts", "help.zh.md");
+    // g-350：只读检出（全树 0444）下 `cpSync` 连权限一起复制，镜像副本因此不可写 ⇒
+    // 覆写前必须把**镜像副本**恢复为 0644（源检出不改；根因与负向对照见测试 G）。
+    makeWritableForTest(mirrorHelp);
     const original = readFileSync(mirrorHelp, "utf8");
 
     const mod = await import(`${pathToFileURL(join(mirrorDist, "index.js")).href}?g347=${Date.now()}`);
@@ -678,4 +722,146 @@ test("F 负向对照：判定函数对合成样本「改坏即红 / 合法改写
     /graph_delta.*one-of 组 \{kind\|importance\|source_goal\} 不在白名单/s,
     "方括号内嵌假 XOR",
   );
+});
+
+// ============================================================================
+// G（g-350）：0444 只读副本可写性 —— 只读检出（全树 0444）下测试 E 不因权限而 red
+// ============================================================================
+
+test("G 0444 只读副本可写性：cpSync 连权限一起复制 ⇒ 必须显式恢复镜像副本可写（负向对照：不恢复即 EACCES）", (t) => {
+  // root 绕过权限位 ⇒「不可写」前提不成立。如实标注本能力边界，不制造假绿。
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    t.skip("当前以 root 运行：0444 权限位不构成写保护，本夹具前提不成立（非 root 环境下方真实生效）");
+    return;
+  }
+  const srcRoot = mkdtempSync(join(outOfRepoTempBase(), "dsh-graph-g347-ro-src-"));
+  const dstRoot = mkdtempSync(join(outOfRepoTempBase(), "dsh-graph-g347-ro-dst-"));
+  try {
+    // 只读检出形态：资产文件 0444（目录 0755，故可建/删文件，但文件本身不可写）
+    const srcFile = join(srcRoot, "help.zh.md");
+    writeFileSync(srcFile, "READONLY-SENTINEL");
+    chmodSync(srcFile, 0o444);
+    assert.equal(statSync(srcFile).mode & 0o777, 0o444, "夹具前置：源文件必须真的是 0444");
+
+    const dstFile = join(dstRoot, "help.zh.md");
+    cpSync(srcFile, dstFile);
+    // 根因：cpSync 会**连权限一起复制** ⇒ 镜像副本同样 0444。
+    assert.equal(
+      statSync(dstFile).mode & 0o777,
+      0o444,
+      "根因断言：cpSync 保留源权限，镜像副本继承 0444（这正是测试 E 在全树 0444 检出下 EACCES 的成因）",
+    );
+    // 负向对照（= 回退修复 makeWritableForTest）：不恢复可写时覆写必须失败
+    assert.throws(
+      () => writeFileSync(dstFile, "OVERWRITE"),
+      /EACCES|EPERM|permission denied/i,
+      "未恢复可写时必须 EACCES —— 这就是「回退修复」后测试 E 的红灯形态",
+    );
+    // 修复：只对**镜像副本**恢复 0644
+    makeWritableForTest(dstFile);
+    assert.equal(statSync(dstFile).mode & 0o777, 0o644, "镜像副本必须恢复为 0644");
+    assert.equal(statSync(srcFile).mode & 0o777, 0o444, "修复只作用于镜像副本：源检出必须仍是 0444（零改动）");
+    writeFileSync(dstFile, "OVERWRITE");
+    assert.equal(readFileSync(dstFile, "utf8"), "OVERWRITE", "恢复可写后覆写必须成功");
+    t.diagnostic(`evidence: suite=g347-ro-copy src_mode=444 dst_after_cp=444 write_before=EPERM dst_after_fix=644`);
+  } finally {
+    for (const f of [join(srcRoot, "help.zh.md"), join(dstRoot, "help.zh.md")]) {
+      try { chmodSync(f, 0o644); } catch { /* 文件可能未建 */ }
+    }
+    rmSync(srcRoot, { recursive: true, force: true });
+    rmSync(dstRoot, { recursive: true, force: true });
+  }
+});
+
+// ============================================================================
+// G2（g-350）：Windows 符号链接能力 —— dir 失败回退 junction，失败给可读诊断
+// ============================================================================
+
+test("G2 Windows 符号链接能力：dir 抛 EPERM 时回退 junction；两路皆失败给可读诊断（注入桩）", () => {
+  const mirror = () => mkdtempSync(join(outOfRepoTempBase(), "dsh-graph-g347-link-"));
+  const made: string[] = [];
+  try {
+    // (a) 能力齐全：一次 dir 链接成功，不得多试 junction
+    const a = mirror();
+    made.push(a);
+    const callsA: string[] = [];
+    const ra = linkDependencies(a, {
+      symlink: ((_t: string, _p: string, type: string) => { callsA.push(type); }) as unknown as typeof symlinkSync,
+    });
+    assert.equal(ra.ok, true, `能力可用时必须成功：${ra.reason}`);
+    assert.equal(ra.via, "symlink");
+    assert.deepEqual(callsA, ["dir"], "能力可用时不得额外尝试 junction");
+
+    // (b) 原生 Windows 无符号链接特权：dir 抛 EPERM ⇒ 必须回退 junction（Windows 不需要该特权）
+    const b = mirror();
+    made.push(b);
+    const callsB: string[] = [];
+    const rb = linkDependencies(b, {
+      symlink: ((_t: string, _p: string, type: string) => {
+        callsB.push(type);
+        if (type === "dir") {
+          const e: NodeJS.ErrnoException = new Error("EPERM: operation not permitted, symlink");
+          e.code = "EPERM";
+          throw e;
+        }
+      }) as unknown as typeof symlinkSync,
+    });
+    assert.equal(rb.ok, true, `dir 抛 EPERM 时必须回退 junction（原实现直接失败）：${rb.reason}`);
+    assert.equal(rb.via, "junction");
+    assert.deepEqual(callsB, ["dir", "junction"], "必须先 dir 后 junction");
+
+    // (c) 两路皆失败：boolean 时代只会报「未找到 node_modules」（误导性），现须给可读诊断
+    const c = mirror();
+    made.push(c);
+    const rc = linkDependencies(c, {
+      symlink: ((_t: string, _p: string, type: string) => {
+        const e: NodeJS.ErrnoException = new Error(`EPERM: operation not permitted, symlink ${type}`);
+        e.code = "EPERM";
+        throw e;
+      }) as unknown as typeof symlinkSync,
+    });
+    assert.equal(rc.ok, false, "两路皆失败时 ok 必须为 false");
+    assert.equal(rc.via, null);
+    assert.match(rc.reason, /EPERM/, "诊断必须点名真实 errno（而非「未找到 node_modules」这种误导信息）");
+    assert.match(rc.reason, /junction/, "诊断必须指出已尝试的回退方式");
+  } finally {
+    for (const d of made) rmSync(d, { recursive: true, force: true });
+  }
+  // 能力边界（如实标注）：本机为 Linux/WSL2，上述 Windows 分支由注入桩覆盖；
+  // **原生 Windows 真机未验证**（发布门禁要求的 Windows T1–T5 另由 scripts/win-smoke-test.mjs 承担）。
+});
+
+// ============================================================================
+// H（g-350）：真实 UNION_WHITELIST 自保护 —— 白名单本身此前无断言守护
+// ============================================================================
+
+test("H 真实 UNION_WHITELIST 自保护：窄登记（扩宽/删项必红），且唯一合法项对应引擎真实 XOR 校验", () => {
+  // ① 结构钉死：实测给白名单**多登记**一组（`graph_memory_replace: [["old","text"]]`）后
+  //    A/B/C/D/E/F 全部仍绿 ⇒ 假 XOR 可被「顺手放行」。本条把登记面收敛为精确形状。
+  assert.deepEqual(
+    Object.entries(UNION_WHITELIST).map(([tool, groups]) => [tool, groups.map((g) => [...g].sort())]),
+    [["graph_unbind_goal_child", [["attempt", "child_id"]]]],
+    "UNION_WHITELIST 只允许登记引擎确有互斥/XOR 校验的工具；扩宽或删项都必须同时给出引擎侧证据",
+  );
+
+  // ② 引擎接地：白名单不是自我声明 —— 直接调用引擎核心，验证这两个参数确实是「二者恰取其一」。
+  const root = mkdtempSync(join(outOfRepoTempBase(), "dsh-graph-g347-union-"));
+  try {
+    init(root);
+    const failure = (opts: Record<string, unknown>): string => {
+      try {
+        unbindGoalChild(root, "g-none", { actor: "human:gui", token: "t", ...opts });
+        return "(no throw)";
+      } catch (e: unknown) {
+        return String((e as Error)?.message ?? e);
+      }
+    };
+    const XOR = /必须且只能指定一个选择器：attempt 或 child_id/;
+    assert.match(failure({ attempt: "att-001", childId: "child-1" }), XOR, "引擎在「两个都给」时必须拒绝（真 XOR 的判据）");
+    assert.match(failure({}), XOR, "引擎在「一个都不给」时必须拒绝（真 XOR 的判据）");
+    assert.doesNotMatch(failure({ attempt: "att-001" }), XOR, "只给一个选择器时 XOR 校验必须放行（其后失败于目标不存在）");
+    assert.doesNotMatch(failure({ childId: "child-1" }), XOR, "只给一个选择器时 XOR 校验必须放行（其后失败于目标不存在）");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -47,6 +47,12 @@ After modifying source and rebuilding:
 2. Run the full test suite: `node --test core/tests/*.test.ts`
 3. Verify pack: `cd dist && pnpm pack --dry-run`
 
+**整套件自证闸门（g-350 / g-407 R1）**：`node scripts/run-tests.mjs` —— 跨平台入口，先摘除
+`NODE_TEST_CONTEXT`/`NODE_TEST_WORKER_ID` 再起 runner，并**自证**「确实跑了 `tests > 0` 且
+`skipped == 0` 且 `fail == 0`」；注入形态（`NODE_TEST_CONTEXT=… node --test core/tests/*.test.ts`
+会被 `node --test` 静默 skip 全部文件并 `exit 0`）下只有它可判定。它**不替换**上面的命令，
+两者共用同一 glob `core/tests/*.test.ts`（守卫见 `core/tests/g350-test-hygiene.test.ts`）。
+
 ## Build Isolation（构建隔离：禁止在主树跑实验性构建）
 
 **实验性构建禁止在主树进行 —— 一律在隔离 worktree 或仓库内私有副本中进行。**
