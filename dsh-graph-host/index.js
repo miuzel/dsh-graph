@@ -611,7 +611,8 @@ function validateAttemptPromptFields({ taskType, baselineCommit, sourceAttempt, 
 //   · auto_from_desc **完整承载目标描述全文**，不再截到 200 字。历史行为把长描述截断后，
 //     目标全文只出现在「目标背景（…不产生 action）」区块，描述尾部要求可能沦为非任务
 //     （判据 1：不得静默遗漏）。宁可与 targetContext 有一次冗余，也不让尾部要求丢失。
-//   · fallback 仍是空描述路径的引擎兜底（g-378 门禁不在此处，见其注释），文案一字未改。
+//   · fallback 仍是空描述路径的引擎兜底（g-378 门禁不在此处，见其注释），文案语义一字未变；
+//     g-405 起该文案按 `promptLanguage` 取表（见 EMPTY_DESC_FALLBACK_BRIEF），zh 值逐字不变。
 //
 // g-402：合成 brief 的**前缀是插件内置文本**（不是用户材料），故必须按 `promptLanguage` 取表——
 // 英文派发（`promptLanguage=en`）时汉字不得进入英文执行者的 action 切片（g-390/g-400 同族第三处残留）。
@@ -620,6 +621,17 @@ function validateAttemptPromptFields({ taskType, baselineCommit, sourceAttempt, 
 const AUTO_FROM_DESC_BRIEF_PREFIX = {
   zh: "执行目标描述中的任务：",
   en: "Execute the task from the goal description: ",
+};
+
+// g-405：空描述路径的**引擎兜底文案同样是插件内置文本**（不是用户材料），故与 g-402 的前缀表同风格
+// 按 `promptLanguage` 取表——英文派发（`promptLanguage=en`）时汉字不得进入英文执行者的 action 切片
+// （g-390/g-400/g-402 同族**第四处**残留；g-402 复核者已穷尽该函数体无其它内置汉字）。
+// zh 文案与基线**逐字相同**（zh 派发产物逐字节不变，「执行目标描述和质量判据中的任务」）；兜底语义不变
+// （仍指向「目标描述与质量判据」）。门禁语义不受影响：工具入口空描述仍在准入门禁处拒绝（g-378），
+// 本分支只为 HTTP 等非门禁入口保留。来源闭集/`brief_source` 四处同值契约不变。
+const EMPTY_DESC_FALLBACK_BRIEF = {
+  zh: "执行目标描述和质量判据中的任务",
+  en: "Execute the task in the goal description and quality criteria.",
 };
 
 function resolveEffectiveBrief(attemptBrief, directive, goalDesc, promptLanguage = "zh") {
@@ -636,16 +648,21 @@ function resolveEffectiveBrief(attemptBrief, directive, goalDesc, promptLanguage
   // 目标描述也为空：最终兜底。
   // g-378 定位：这是**非门禁途径**（HTTP 入口：GUI 拖拽/执行按钮等既有人工强制启动路径）
   // 启动时的引擎兜底——工具入口 `graph_start_attempt` 已在准入门禁处拒绝空描述派发，
-  // 因此本分支只为不设描述门禁的路径保留，行为与文案一字未改（g-236 断言不动）。
-  return { brief: "执行目标描述和质量判据中的任务", source: "fallback" };
+  // 因此本分支只为不设描述门禁的路径保留（门禁语义一字未改，g-236 断言的 zh 值不变）。
+  // g-405：兜底文案按 promptLanguage 取表（en 零汉字、zh 逐字等于基线）。
+  return {
+    brief: EMPTY_DESC_FALLBACK_BRIEF[normalizePromptLanguage(promptLanguage)],
+    source: "fallback",
+  };
 }
 
 /**
  * g-251：派发 action 来源标注（判据 1：spawn prompt 里必须能区分显式 brief / directive / 合成来源）。
  * 静态文案，紧跟在 action 来源正文之后输出。英文表不得含汉字——英文派发路径只对**插件内置文本**
  * 断言零汉字（用户材料不在此限）。注：合成 brief 的中文前缀在 g-251 时属既有残留；
- * g-402 已把 auto_from_desc 前缀按 promptLanguage 取表（见 AUTO_FROM_DESC_BRIEF_PREFIX），
- * 故英文路径的 action 切片现无内置汉字（空描述 fallback 文案是另一处独立残留，未在本目标处理）。
+ * g-402 已把 auto_from_desc 前缀按 promptLanguage 取表（见 AUTO_FROM_DESC_BRIEF_PREFIX）；
+ * g-405 又把空描述 fallback 文案并入同风格语言表（见 EMPTY_DESC_FALLBACK_BRIEF），
+ * 故英文派发路径的 action 切片现无内置汉字（两处残留均已收敛）。
  */
 const ATTEMPT_BRIEF_SOURCE_NOTES = {
   brief: "来源：显式 attempt_brief（supervisor 直接提供；原意保留，未截断、未合成）。",

@@ -5852,7 +5852,8 @@ function attemptWorktreeEvidence(root: string, goalId: string, attemptId: string
  * g-378：需要描述门禁的状态——**尚未开始执行**的准备态（`collecting` / `ready`）。
  * 两处刻意豁免，均非「顺手放过」：
  * - `planning`：g-236 既有的「无描述也能派发」路径，由引擎兜底 brief
- *   「执行目标描述和质量判据中的任务」承接（非门禁途径启动时的引擎兜底，断言不得改）；
+ *   「执行目标描述和质量判据中的任务」承接（非门禁途径启动时的引擎兜底；zh 文案与断言不得改，
+ *   g-405 起该文案按 promptLanguage 取表，英文派发用英文兜底，门禁语义不变）；
  * - `in_progress` / `review`：目标已执行过（含 GUI 强制启动/拖拽路径），重派属于既有
  *   强制启动路径的延续，不得因存量空描述被回溯拦截（非目标：不阻断拖拽或既有强制启动路径）。
  */
