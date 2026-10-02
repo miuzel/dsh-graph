@@ -529,6 +529,8 @@
       'backward.withoutChild': '理由将作为补充信息记录（无执行子代理时供主管参考）。',
       'backward.reasonPlaceholder': '请输入回退理由（可选）…',
       'backward.confirmBtn': '确认回退',
+      'backward.reasonUnconfirmedCopied': '⚠️ 回退理由未确认送达子代理；理由已复制到剪贴板，可到子代理会话粘贴',
+      'backward.reasonUnconfirmedManual': '⚠️ 回退理由未确认送达子代理，自动复制也失败；理由已随回退事件留档',
 
       // === 交付确认弹窗 ===
       'deliver.title': '📦 交付「{title}」',
@@ -1632,6 +1634,8 @@
       'backward.withoutChild': 'The reason will be recorded as supplementary info (for supervisor reference when no subagent exists).',
       'backward.reasonPlaceholder': 'Enter revert reason (optional)…',
       'backward.confirmBtn': 'Confirm revert',
+      'backward.reasonUnconfirmedCopied': '⚠️ Revert reason not confirmed delivered to the subagent; it has been copied to the clipboard for manual paste',
+      'backward.reasonUnconfirmedManual': '⚠️ Revert reason not confirmed delivered to the subagent, and auto-copy failed; the reason is archived with the revert event',
 
       // === Deliver prompt ===
       'deliver.title': '📦 Deliver "{title}"',

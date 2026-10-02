@@ -3,6 +3,7 @@
       const [reason, setReason] = React.useState("");
       const [sending, setSending] = React.useState(false);
       const [sent, setSent] = React.useState(false);
+      const [note, setNote] = React.useState(null);
       // 如果有子代理，通过 session.prompt 发送理由
       const { session } = useBoundSession(parentId, childId);
       // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
@@ -11,14 +12,33 @@
         if (!reason.trim()) { onConfirm(""); return; }
         if (hasChild && session?.prompt) {
           setSending(true);
+          setNote(null);
+          let delivered = false;
           try {
             // i18n-keep(category-b)：发往子代理会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
-            await session.prompt(
+            const res = await session.prompt(
               [{ type: "text", text: `【${goalId} 回退理由】${reason.trim()}` }], "queue");
+            // g-397：消费回执，直接沿用 g-386 在 session-hooks.js 建立的**同一裁决口径**（那里的 accepted）：
+            // 只认正向回执 ok === true 才算已送达；ok:false（delivery-unavailable / 激活上限等**非抛错**失败）
+            // 与空回执（undefined / null / 非对象 / 无 ok 字段，老宿主未返回）一律按「未确认」处理。
+            // 此处不得另立第二套判据（例如把空回执当成功、或改读 res.value.accepted）。
+            delivered = res?.ok === true;
+          } catch {
+            delivered = false;
+          }
+          if (delivered) {
             setSent(true);
             setTimeout(() => onConfirm(reason.trim()), 800);
-          } catch {
-            onConfirm(reason.trim());
+          } else {
+            // 未确认送达：绝不置 sent（按钮不得显示「已发送」，杜绝虚报）。
+            // 用户已输入的理由不得丢失：先尝试复制到剪贴板兜底（复用 copyText），并把可操作提示
+            // 同时留在弹窗内与 toast 上；回退本身照常提交——理由仍随 transition 事件留档，
+            // 不因「通知未确认」吞掉用户拖放所表达的意图（与修复前抛错分支的语义一致，只是补上可见提示）。
+            const copied = await copyText(reason.trim());
+            const hint = dgT(copied ? "backward.reasonUnconfirmedCopied" : "backward.reasonUnconfirmedManual");
+            showToast(hint);
+            setNote(hint);
+            setTimeout(() => onConfirm(reason.trim()), 1500);
           }
           setSending(false);
         } else {
@@ -51,6 +71,7 @@
               style: { ...S.btn, padding: "4px 12px", fontSize: 12 }, className: "dg-btn",
               onClick: onCancel,
             }, dgT("common.cancel"))),
+          note ? h("div", { style: { ...S.meta, marginTop: 6, color: "var(--dsw-alias-state-warn-label, #e0a53a)" } }, note) : null,
         ),
       );
     }
