@@ -71,7 +71,10 @@ After modifying source and rebuilding:
 `core/tests/fixtures/nested-runner.ts` 启动）都由 `nestedSuitePassProblems` / `assertNestedSuitePassed`
 **自身**核对「目标文件集合 ≡ 逐文件**完成事件**（带 `file` 的 `test:summary`）集合且 `>0`」（**双向**：
 产出了完成事件却**不在**目标集合内的文件同样判红 ⇒ 关闭「Node 跑得比 helper 展开/声明更多」，g-419②），
-并与人类可读汇总 + 事件通道逐字段交叉校验；**fail-closed、无 opt-out**，既有 `code`/`fail`/`cancelled`/`skipped`/`todo`
+并与人类可读汇总 + 事件通道逐字段交叉校验（**三方且对称**：人类可读汇总 ↔ `channel.summary`、
+`channel.summary` ↔ `channel.tally`（reporter 按带类型事件**独立累加**）**逐字段双向**比对，两侧各自还须
+计数口径自洽 `tests == pass+fail+cancelled+skipped+todo`，分歧即**点名分歧字段**判红；g-420①补齐了此前只比
+「summary ↔ 人类汇总」这条腿的缺口）；**fail-closed、无 opt-out**，既有 `code`/`fail`/`cancelled`/`skipped`/`todo`
 /计数口径断言只增不减。目标集合由 helper 从调用参数（`--test` 后的位置参数）推导，支持多文件 / 目录 /
 `<dir>/*<suffix>` glob（与网关同口径）；**可推导时必须以推导集合为准**，同时给出的 `opts.targets` 必须与推导
 集合**精确一致**（realpath 归一后集合相等），不一致即**抛错拒绝执行**（g-418①：声明子集不得掩盖真实目标，
@@ -91,6 +94,24 @@ argv / shell 两形态统一生效；消费点 `g350`/`g353`/`g407`/`g413`/`g415
 `--test-reporter` / `--test-reporter-destination` 等合法项与文件路径不受影响；同时通道路径按 Node 的
 `NODE_OPTIONS` 引号规则编码（双引号分组 + 转义 `\`/`"`）⇒ 含空格（乃至 Windows 形态反斜杠）的 `TMPDIR` 下
 通道照常挂上、不再误红。
+
+**同一 helper 的 shell 形态入口（`runNestedCommand`）只接受显式、封闭的 shell 支持子集（g-420②）**：
+首 token 必须是 `node`（可带路径）、命令必须**含且只含 1 个** `--test`，参数以空白分隔、可用 POSIX 单/双引号
+包裹（引号内为字面量），`--test` 之后的位置参数支持单文件 / 目录 / `<dir>/*<suffix>` glob（与网关同口径）；
+其余形态一律**在 spawn 之前 fail-closed 拒绝**并给出清晰原因（不再「先跑后红」）—— 未加引号的反斜杠转义
+（`space\ name`）、重定向（`>`/`<`/`2>`）、管道（`|`）、`;`/`&&`/`&`、子 shell `( )`、换行、变量/命令替换
+（`$VAR`/`${…}`/`$(…)`/反引号）、`cd`/`env`/`FOO=1` 等前缀、非 node 首 token、缺 `--test`。识别按**字符**
+而非「空白分词的 token 首字符」⇒ **粘连控制符同样被拦**（`--test;`、`--test>/dev/null`、`--test|cat`、
+`--test&&…`）。**并且强制单一 runner**：`node` 调用数或 `--test` 次数 `> 1` 即拒绝 —— 多段 runner 会
+**共用同一 events 文件**，后者截断覆盖前者 ⇒ 第一段的 `fail`/非零退出码被静默隐藏（实测
+`node --test; node --test pass.test.mjs` 得 `code 0 / tests 1 / pass 1 / fail 0 / problems []` 被接受；
+粘连 `>/dev/null` 变体连人类汇总都只剩 1 块），**绝不**允许「多段 runner 共享一个 events 路径、只取最后
+摘要/最后退出码」；**并已按终局复核纠正放弃「汇总块数 ≠ 1 判红」这类摘要计数红线**——合法消费点 g353
+的嵌套运行 `channel.summaries` 本就是 `2`（1 逐文件完成事件 + 1 全局汇总），改用人类可读 `summaryBlocks`
+也会因外层 `NODE_OPTIONS` 注入被内层继承而误伤合法全绿运行（实测嵌套 g353 即被判红）⇒ 防误红优先，
+防线只在入口 (a)(b)。拒绝发生在**创建事件通道之前**
+⇒ **零副作用**（未建通道、未启动进程、未产生 marker）；含空格的路径请改用引号包裹
+（`node --test 'a b.test.ts'`）。守卫见 `core/tests/g420-nested-runner-crosscheck-and-shell-subset.test.ts`。
 
 ## Build Isolation（构建隔离：禁止在主树跑实验性构建）
 

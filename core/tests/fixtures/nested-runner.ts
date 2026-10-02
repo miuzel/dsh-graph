@@ -108,6 +108,39 @@
  *  ② **覆盖比对单向**：{@link nestedTargetCoverageProblems} 只查「目标未产出完成事件」。
  *     现改为**双向**：任何**产出了完成事件却不在目标集合内**的文件同样判红 —— 关闭「Node 实际跑得
  *     比 helper 展开更多」（glob 展开口径差异、默认发现漏网）的形态。
+ *
+ * ── g-420 的两条收口（终局复核在 tip `f495c09` 上给出的两项**非假绿** P2：文档与实现不一致 / 误红）──
+ *  ① **交叉校验不对称**：g-416 的嵌套裁决只逐字段比较 `channel.summary` ↔ 人类可读 `run.summary`，
+ *     **不比较 `channel.tally` ↔ `channel.summary`** —— 而顶层 `scripts/run-tests.mjs` 的
+ *     `crossCheckProblems` 两者都比，与 AGENTS.md「与人类可读汇总 + 事件通道**逐字段交叉校验**」的
+ *     声明不一致（复核者未找到 Node 26 上能让 tally/summary 分歧且仍全绿的真实形态，故非假绿、定级 P2）。
+ *     现由 {@link nestedChannelCrossCheckProblems} 按与顶层**同口径**补齐：`channel.tally` 与
+ *     `channel.summary` 逐字段（{@link CROSS_CHECK_FIELDS}）双向比对，且**两侧各自**核计数口径
+ *     自洽（`tests === pass+fail+cancelled+skipped+todo`），分歧即判红并点名分歧字段。
+ *  ② **shell 文法边界与误红**：`runNestedCommand` 的 shell 分词把**未加引号的反斜杠当普通字符**
+ *     ⇒ `node --test /path/space\ name.test.mjs` 被误分词，**先跑后红**（幻觉出两个不存在目标 +
+ *     一个额外完成事件）；重定向/管道等含元字符的命令同样先跑后红。现把支持的 shell 子集**显式化**
+ *     （见 {@link runNestedCommand} 与 {@link NESTED_SHELL_SUBSET}）：只接受 `node … --test …` +
+ *     空白分隔 + POSIX 单/双引号包裹的参数 + 普通路径/选项；**其它一切形态在 spawn 之前
+ *     fail-closed 拒绝**（{@link assertSupportedNestedShellCommand}）并给清晰原因 ——
+ *     未加引号的反斜杠转义、重定向（`>`/`<`/`2>`）、管道（`|`）、`;`/`&&`/`&`、子 shell `( )`、
+ *     变量展开/命令替换（`$VAR`/`${…}`/`$(…)`/反引号）、`cd`/`env`/`FOO=1` 前缀、非 node 首 token、
+ *     缺 `--test`。拒绝时**未创建事件通道、未启动任何进程、未产生 marker**（无副作用）。
+ *  ③ **复合 shell 真 P1（终局复核在 `c8aa8a3`/`f495c09` 上实测）** —— ② 的类别但更严：
+ *     `runNestedCommand('node --test; node --test pass.test.mjs', {cwd})`（**无** `opts.targets`）里
+ *     两段都是**正常合法的 shell compound**、两段也**确实都跑了**；但两段**共用同一私有 events 文件**，
+ *     后者**截断覆盖**前者 ⇒ 只有最后一段的 `test:summary` / 退出码存活，第一段真实 `fail` 被完全隐藏
+ *     （实测 `code 0 / targets=[pass] / files=[pass] / tests 1 / pass 1 / fail 0 / summaryBlocks 2 /
+ *     problems=[]` ⇒ helper **接受**）。粘连变体 `--test>/dev/null; node --test pass.test.mjs` 更强：
+ *     第一段失败被重定向 + 覆盖双重隐藏，`summaryBlocks` 只剩 1。带 `opts.targets` 的版本同样复现。
+ *     收口（**全部 spawn 前 fail-closed**）：①**粘连控制符**也要识别（按**字符**而非「空白分词的 token
+ *     首字符」扫描，`--test;` / `--test>/dev/null` / `--test|cat` / `--test&&…` / 换行一律拒绝）；
+ *     ②**强制单一 runner**（{@link nestedMultiRunnerProblem}：`node` 调用数或 `--test` 次数 `> 1` 即拒绝）
+ *     —— **绝不**允许「多段 runner 共享一个 events 路径、只取最后摘要/最后退出码」。
+ *     ③**「汇总块数 ≠ 1 判红」经终局复核后放弃**：合法消费点 g353 的嵌套运行 `channel.summaries === 2`
+ *     （1 逐文件完成事件 + 1 全局汇总），改用人类可读 `summaryBlocks` 同样会被外层 `NODE_OPTIONS`
+ *     注入的内层继承所误伤（实测嵌套 g353 被判红）；且 `>/dev/null` 粘连变体只剩 1 块 ⇒ 该层对上述
+ *     三个复现零判别力。**防线全部落在 ① 粘连控制符识别 + ② 强制单一 runner**（均 spawn 前 fail-closed）。
  */
 
 import assert from "node:assert/strict";
@@ -196,6 +229,207 @@ function tokenizeShellWithSpans(value: string): ShellToken[] {
 /** 尽力按 shell 语义切分 `NODE_OPTIONS`（支持单/双引号与反斜杠转义）；切分不完美也不影响判定。 */
 function splitNodeOptions(value: string): string[] {
   return tokenizeShellWithSpans(value).map((entry) => entry.token);
+}
+
+/**
+ * g-420②：`runNestedCommand` **支持的 shell 子集**（唯一权威表述；`runNestedCommand` 的文档、
+ * 结构守卫与本常量三处同源，避免「文档说一套、实现做一套」再次发生）。
+ *
+ * **支持**：
+ *  - 首个 token 是 `node` / `node.exe`（可带路径）；
+ *  - 命令里含 `--test` token；
+ *  - token 以空白分隔；参数可用 POSIX 单引号或双引号包裹（引号内为字面量；双引号内 `\` 转义下一个字符）；
+ *  - `--test` 之后的位置参数：单个文件、目录、或 `<dir>/*<suffix>` glob（与顶层闸门同口径）；
+ *  - 其余 node 选项（`--test-reporter=spec`、`--test-concurrency=…` 等）原样保留。
+ *
+ * **不支持（一律在 spawn 之前 fail-closed 拒绝，绝不「先跑后红」）**：
+ *  - 未加引号的反斜杠转义（`space\ name`）—— 应改用引号包裹（`'space name'` / `"space name"`）；
+ *  - 重定向 `>` / `<` / `2>`、管道 `|`、`;` / `&&` / `&`、子 shell `( )`、换行；**粘连形态同样拒绝**
+ *    （`--test;`、`--test>/dev/null`、`--test|cat`、`--test&&…` —— 按**字符**而非「空白分词的 token 首字符」识别）；
+ *  - 变量展开 / 命令替换：`$VAR`、`${…}`、`$(…)`、反引号；
+ *  - `cd` / `env` / `FOO=1` 之类前缀，或任何非 node 首 token；
+ *  - 缺 `--test`；
+ *  - **多段 runner**：`node` 调用数或 `--test` 出现次数 `> 1`（终局复核在 `c8aa8a3`/`f495c09` 上实测的 P1 ——
+ *    多段 runner **共用同一 events 文件**，后者截断覆盖前者 ⇒ 第一段的 `fail` 与非零退出码被完全隐藏，
+ *    只留下最后一段的摘要/退出码；`node --test; node --test pass.test.mjs` 因此被判绿。一次只允许一个 runner）。
+ */
+export const NESTED_SHELL_SUBSET =
+  "首 token 必须是 node；必须含且只含 1 个 --test；只允许单段 runner（node 调用数 / --test 次数均 ≤ 1）；" +
+  "仅支持空白分隔 + POSIX 单/双引号包裹的参数 + 普通路径/选项；反斜杠转义、重定向、管道、; && &、( )、换行、" +
+  "$VAR/${}/$( )/反引号、cd/env/FOO=1 前缀一律拒绝";
+
+/** shell 元字符（**引号外**）⇒ 不支持的原因文案。`$` 单独处理（涵盖 `$VAR` / `${}` / `$()`）。 */
+const SHELL_METACHAR_REASONS: Readonly<Record<string, string>> = {
+  ">": "重定向 `>`",
+  "<": "重定向 `<`",
+  "|": "管道 `|`",
+  ";": "命令分隔符 `;`",
+  "&": "后台/逻辑分隔符 `&`",
+  "(": "子 shell `(`",
+  ")": "子 shell `)`",
+  "`": "命令替换（反引号）",
+  $: "变量展开 / 命令替换（`$`）",
+};
+
+/** `FOO=1` 形态的命令前缀（环境变量赋值）。 */
+const SHELL_ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** 常见「包裹/前缀」命令 —— 明确点名，避免只给一句笼统的「首 token 不是 node」。 */
+const SHELL_PREFIX_COMMANDS = new Set(["cd", "env", "exec", "nohup", "sudo", "time", "command"]);
+
+interface ShellScan {
+  /** 引号已剥离、按空白切分的 token（与真实 shell 语义一致：单引号内**无**转义）。 */
+  spans: ShellToken[];
+  /** 不支持形态的可读原因（去重，空数组 ⇒ 属于受支持子集）。 */
+  problems: string[];
+}
+
+/**
+ * g-420②：**严格** shell 扫描 —— 与 {@link tokenizeShellWithSpans} 的「尽力切分」不同，本函数在切分的
+ * 同时**记录不支持形态**（引号外的反斜杠/元字符、引号内的 `$`/反引号、未闭合引号），供入口 fail-closed。
+ *
+ * 与 {@link tokenizeShellWithSpans} 的语义差异（本函数更贴近真实 shell，故 `runNestedCommand` 一律用它）：
+ * 单引号内**没有**转义（`'a\b'` ⇒ `a\b`，而非 `ab`）；未加引号的反斜杠**不再被吞**（并判为不支持）。
+ */
+function scanNestedShellCommand(value: string): ShellScan {
+  const spans: ShellToken[] = [];
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  const note = (reason: string): void => {
+    if (seen.has(reason)) return;
+    seen.add(reason);
+    problems.push(reason);
+  };
+  let current = "";
+  let start = -1;
+  let quote: "'" | '"' | null = null;
+  const flush = (end: number): void => {
+    if (current !== "") spans.push({ token: current, start, end });
+    current = "";
+    start = -1;
+  };
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (start === -1 && !/\s/.test(ch)) start = i;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else current += ch;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') {
+        quote = null;
+      } else if (ch === "\\" && i + 1 < value.length) {
+        current += value[i + 1];
+        i += 1;
+      } else {
+        if (ch === "`" || ch === "$") note(SHELL_METACHAR_REASONS[ch]);
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === "\n" || ch === "\r") {
+      // g-420②（终局复核 P1）：换行也是 shell 命令分隔符 ⇒ `node --test a\nnode --test b` 会起**两段 runner**。
+      note("换行/回车（shell 命令分隔符）不被支持 —— 一次只允许一条命令");
+      flush(i);
+    } else if (/\s/.test(ch)) {
+      flush(i);
+    } else if (ch === "\\") {
+      note(
+        "未加引号的反斜杠转义（`\\`）不被支持 —— 请改用引号包裹整个参数（如 'a b' 或 \"a b\"）",
+      );
+      current += ch;
+    } else {
+      const reason = SHELL_METACHAR_REASONS[ch];
+      if (reason) note(reason);
+      current += ch;
+    }
+  }
+  flush(value.length);
+  if (quote !== null) problems.push(`引号未闭合（${quote === "'" ? "单引号" : "双引号"}）`);
+  return { spans, problems };
+}
+
+/**
+ * g-420②（终局复核 P1）：**多段 runner 一律拒绝** —— 与「元字符/分隔符」检查互为纵深。
+ *
+ * 为什么单列：`node --test; node --test pass.test.mjs` 里每段都是**正常且合法**的 shell compound，
+ * 两段也确实都跑了；但两段**共用同一私有 events 文件**，后者**截断覆盖**前者 ⇒ 只有最后一段的
+ * `test:summary` / 退出码存活，第一段真实 `fail` 被完全隐藏（实测 `code 0 / tests 1 / pass 1 /
+ * fail 0 / problems []` 且 helper **接受**；`--test>/dev/null` 粘连变体连人类汇总都只剩 1 块）。
+ * 因此「一次运行只允许一个 runner」必须是**结构不变式**，不能寄望于摘要计数兜底。
+ *
+ * 计数口径：`node` 可执行 token 数（{@link isNodeBinary}，与注入判定同源）与**恰好等于** `--test`
+ * 的 token 数（`--test-reporter` 等合法选项名不算 `--test`）。
+ */
+function nestedMultiRunnerProblem(spans: readonly ShellToken[]): string | null {
+  const nodeCalls = spans.filter((entry) => isNodeBinary(entry.token));
+  if (nodeCalls.length > 1) {
+    return (
+      `命令里出现 ${nodeCalls.length} 个 node 调用（${nodeCalls
+        .slice(0, 3)
+        .map((entry) => entry.token)
+        .join("、")}${nodeCalls.length > 3 ? " …" : ""}）⇒ 多段 runner 不被支持`
+    );
+  }
+  const testFlags = spans.filter((entry) => entry.token === "--test");
+  if (testFlags.length > 1) {
+    return `命令里出现 ${testFlags.length} 个 --test 标志 ⇒ 多段 runner 不被支持`;
+  }
+  return null;
+}
+
+/**
+ * g-420②：`runNestedCommand` 的入口门禁 —— 只放行 {@link NESTED_SHELL_SUBSET}，其余形态**在 spawn 之前**
+ * 抛错（调用方 `runNestedCommand` 在 `capture()`（会创建事件通道）之前调用本函数 ⇒ 拒绝时零副作用：
+ * 未创建通道、未启动进程、未产生 marker）。
+ *
+ * 与 g-419① 的 `injectPositionalTargetsIntoCommand` 共用 {@link isNodeBinary} 口径；`--test` 存在性同样前置，
+ * 使「非 node 首 token / 缺 --test」不再要等到 fallback 注入才发现。
+ */
+function assertSupportedNestedShellCommand(cmd: string, source: string): ShellToken[] {
+  const scan = scanNestedShellCommand(cmd);
+  const zero = "（未创建事件通道、未启动任何进程）";
+  if (scan.problems.length > 0) {
+    throw new Error(
+      `${source}：命令不属于受支持的 shell 子集 —— ${scan.problems.join("；")}。` +
+        `runNestedCommand 只支持：${NESTED_SHELL_SUBSET} ⇒ fail-closed 拒绝执行${zero}。`,
+    );
+  }
+  const head = scan.spans[0]?.token ?? "";
+  if (SHELL_ENV_ASSIGNMENT_RE.test(head)) {
+    throw new Error(
+      `${source}：不支持的环境变量赋值前缀（${head}）—— 请改用 opts.env（或 runNestedArgv 形态）` +
+        `⇒ fail-closed 拒绝执行${zero}。`,
+    );
+  }
+  if (SHELL_PREFIX_COMMANDS.has(head)) {
+    throw new Error(
+      `${source}：不支持的前缀命令（${head}）—— 请直接把 node 作为首个 token` +
+        `⇒ fail-closed 拒绝执行${zero}。`,
+    );
+  }
+  if (!isNodeBinary(head)) {
+    throw new Error(
+      `${source}：首 token 不是 node 可执行文件（${head === "" ? "<空命令>" : head}）` +
+        `⇒ 无法安全重写/执行 ⇒ fail-closed 拒绝执行${zero}。`,
+    );
+  }
+  if (!scan.spans.some((entry) => entry.token === "--test")) {
+    throw new Error(
+      `${source}：命令里没有 --test token ⇒ 不是嵌套测试运行形态 ⇒ fail-closed 拒绝执行${zero}。`,
+    );
+  }
+  const multi = nestedMultiRunnerProblem(scan.spans);
+  if (multi !== null) {
+    throw new Error(
+      `${source}：${multi} —— 多段 runner 会**共用同一 events 通道**、后者截断覆盖前者 ⇒ ` +
+        `第一段的 fail/退出码被静默隐藏（实测可判绿）。请一次只运行一个 runner` +
+        `⇒ fail-closed 拒绝执行${zero}。`,
+    );
+  }
+  return scan.spans;
 }
 
 /**
@@ -735,15 +969,16 @@ function injectPositionalTargetsIntoCommand(
   targetPaths: readonly string[],
   source: string,
 ): string {
-  const tokens = tokenizeShellWithSpans(cmd);
-  const head = tokens[0]?.token ?? "";
+  // g-420②：与入口门禁同源（严格 scanner）—— 此刻命令已通过子集校验，重扫只为拿 `--test` 的源串区间。
+  const spans = scanNestedShellCommand(cmd).spans;
+  const head = spans[0]?.token ?? "";
   if (!isNodeBinary(head)) {
     throw new Error(
       `${source}：无法从参数推导目标、需按 opts.targets 注入显式位置参数，但命令首 token 不是 node` +
         `（${head === "" ? "<空命令>" : head}）⇒ shell 结构无法安全改写 ⇒ fail-closed 拒绝执行。`,
     );
   }
-  const testToken = tokens.find((entry) => entry.token === "--test");
+  const testToken = spans.find((entry) => entry.token === "--test");
   if (!testToken) {
     throw new Error(
       `${source}：无法从参数推导目标、需按 opts.targets 注入显式位置参数，但命令里没有 --test token` +
@@ -841,10 +1076,18 @@ function needsFallbackInjection(args: readonly string[]): boolean {
  * （{@link assertNoNestedTestSelection}，g-417①）；**shell 语义切分出的等价 argv** 命中选集/分片开关
  * 同样在 spawn 前抛错拒绝（{@link assertNoNestedArgvTestSelection}，g-418②）；目标不一致 / 无法推导同样抛错
  * （g-418① / g-416）；**无法推导但有声明 ⇒ 把声明目标注入命令后再执行**（g-419①，注入失败即抛错）。
+ *
+ * g-420②：**只接受 {@link NESTED_SHELL_SUBSET} 描述的 shell 子集** —— 入口第一步即
+ * {@link assertSupportedNestedShellCommand}（早于会创建事件通道的 `capture()`）：
+ * 未加引号的反斜杠转义、重定向/管道/`;`/`&&`/`&`/`( )`、`$VAR`/`${…}`/`$(…)`/反引号、
+ * `cd`/`env`/`FOO=1` 前缀、非 node 首 token、缺 `--test` 一律**在 spawn 之前 fail-closed 拒绝**
+ * 并给出清晰原因（不再「先跑后红」：旧分词把未引号反斜杠当普通字符 ⇒ `space\ name` 被切成两段）。
  */
 export function runNestedCommand(cmd: string, opts: NestedRunOptions): Promise<NestedRunResult> {
   const source = `runNestedCommand(${cmd})`;
-  const argv = splitNodeOptions(cmd);
+  // g-420②：入口门禁（spawn 之前、且早于 capture() 创建事件通道）⇒ 拒绝时零副作用。
+  const spans = assertSupportedNestedShellCommand(cmd, source);
+  const argv = spans.map((entry) => entry.token);
   const targets = planNestedTargets(argv, opts, source);
   const command = needsFallbackInjection(argv) ? injectPositionalTargetsIntoCommand(cmd, targets, source) : cmd;
   return capture("bash", ["-c", command], opts, command, targets);
@@ -935,6 +1178,18 @@ export function assertNestedSuiteRan(run: NestedRunResult, label: string): void 
  *  ⑦ **逐目标文件完成事件覆盖**（{@link nestedTargetCoverageProblems}）：目标文件集合 ≡ 产出
  *     逐文件 `test:summary`（带 `file`）的集合且 `>0`，否则判红 —— 关闭「注册用例后反射/直接早退」
  *     这类「断言未执行却局部判绿」（P2-3 此前只落在闸门，被 helper 消费的嵌套套件仍可绕过）。
+ *
+ * ── g-420① 追加（**只增不减**，fail-closed、无 opt-out）────────────────────────────────────
+ *  ⑧ **事件通道内部交叉校验**（{@link nestedChannelCrossCheckProblems}）：`channel.tally`
+ *     （reporter 按带类型事件独立累加）与 `channel.summary`（runner 自产汇总）必须逐字段双向一致，
+ *     且两侧各自计数口径自洽；分歧即点名分歧字段判红 —— 补上「三方交叉校验」在本 helper 上缺失的
+ *     那一条腿（此前只比了 `channel.summary` ↔ 人类可读汇总）。
+ *  ⑨ **（终局复核后放弃，勿再加）**「汇总块数 ≠ 1 即判红」**刻意不实现** —— 实测会误伤合法嵌套运行：
+ *     合法消费点 g353 的嵌套运行 `channel.summaries === 2`；改用人类可读 `summaryBlocks` 也不安全，
+ *     外层 `NODE_OPTIONS` 注入会被内层再次追加 ⇒ 内层 stdout 汇总行加倍（实测嵌套 g353 的内层正例
+ *     `clean` 运行 `summaryBlocks=2` ⇒ 被判红）。该层对 g-420② 的三个复现零判别力（`>/dev/null`
+ *     变体只剩 1 块）。**放弃后同一命令实测 `code 0 / tests 7 / pass 7 / fail 0 / problems []`**。
+ *     防线只在入口 (a)(b)。
  */
 export function nestedSuitePassProblems(run: NestedRunResult): string[] {
   const s = run.summary;
@@ -946,6 +1201,17 @@ export function nestedSuitePassProblems(run: NestedRunResult): string[] {
   if (s.fail > 0) problems.push(`有**失败**用例（fail=${s.fail}）`);
   if (s.skipped > 0) problems.push(`有用例被**跳过**（skipped=${s.skipped}）`);
   if (s.todo > 0) problems.push(`有**待办**用例（todo=${s.todo}）——待办不是验证，不得判绿`);
+  // g-420②（终局复核修正）：**刻意不做**「汇总块数 ≠ 1 即判红」。
+  // 实测依据（worktree 内真实运行）：
+  //  · 合法消费点 g353 的嵌套运行 `channel.summaries === 2`（1 个逐文件完成事件 + 1 个全局汇总）
+  //    ⇒ 任何以**事件通道摘要块数**为红因的守卫都会误伤真实形态（复核者已给出该数据点）。
+  //  · 即便改用**人类可读** `summaryBlocks` 也不安全：外层 helper 经 `NODE_OPTIONS` 注入的 reporter 会被
+  //    内层 helper 再次追加（`cleanEnv()` 不摘 `NODE_OPTIONS`）⇒ 内层子进程 stdout 的汇总行**加倍**，
+  //    实测嵌套 g353 的内层正例 `clean` 运行 `summaryBlocks=2` ⇒ 合法全绿运行被判红。
+  //  · 交换性：`>/dev/null` 粘连变体只剩 1 块 ⇒ 该层对 g-420② 的三个复现**零判别力**。
+  // 放弃后实测（同一命令）：`code 0 / tests 7 / pass 7 / fail 0 / channel_summaries 2 / problems []`。
+  // ⇒ 防线全部落在入口 (a) 粘连控制符识别 + (b) 强制单一 runner（spawn 前 fail-closed）。
+
   const channel = run.channel;
   if (!channel || !channel.summary || !channel.tally) {
     problems.push(
@@ -959,6 +1225,8 @@ export function nestedSuitePassProblems(run: NestedRunResult): string[] {
         );
       }
     }
+    // g-420①：事件通道**内部**（逐事件计数 ↔ runner 汇总）同样逐字段交叉校验（与顶层闸门同口径）。
+    problems.push(...nestedChannelCrossCheckProblems(channel.tally, channel.summary));
   }
   problems.push(...nestedTargetCoverageProblems(run.targets, channel, run.cwd));
   return problems;
@@ -966,6 +1234,47 @@ export function nestedSuitePassProblems(run: NestedRunResult): string[] {
 
 /** 人类可读汇总与事件通道必须逐字段一致的计数字段（`suites` 不在内：`describe` 聚合口径不同，g-415 已单独校验）。 */
 const CROSS_CHECK_FIELDS = ["tests", "pass", "fail", "cancelled", "skipped", "todo"] as const;
+
+/**
+ * g-420①：**事件通道内部**交叉校验的缺失项（非抛错形态；空数组 = tally 与 summary 逐字段一致且各自计数口径自洽）。
+ *
+ * 与顶层 `scripts/run-tests.mjs` 的 `crossCheckProblems` **同口径**（同一个 {@link CROSS_CHECK_FIELDS} 字段集，
+ * 逐字段、双向、无「哪一方权威」的假设）：`channel.tally`（reporter 从**原始事件流**独立累加）与
+ * `channel.summary`（runner **自报**汇总）是两个独立来源，只比其中一方时另一方出错不会被发现。
+ * 任一侧出现分歧即**点名该字段**判红；两侧还各自必须满足计数口径自洽
+ * （`tests === pass+fail+cancelled+skipped+todo`），否则计数本身不可信。
+ */
+export function nestedChannelCrossCheckProblems(
+  tally: TestSummary | null | undefined,
+  summary: TestSummary | null | undefined,
+): string[] {
+  const problems: string[] = [];
+  const sides = [
+    ["逐事件计数（tally）", tally],
+    ["runner 汇总（summary）", summary],
+  ] as const;
+  for (const [name, side] of sides) {
+    if (!side) {
+      problems.push(`事件通道不完整：缺 ${name} ⇒ 计数不可信，fail-closed 判红`);
+      continue;
+    }
+    if (tallyOf(side) !== side.tests) {
+      problems.push(
+        `${name}的计数口径不自洽（tests=${side.tests} ≠ pass+fail+cancelled+skipped+todo=${tallyOf(side)}）⇒ 计数不可信`,
+      );
+    }
+  }
+  if (!tally || !summary) return problems;
+  for (const field of CROSS_CHECK_FIELDS) {
+    if (tally[field] !== summary[field]) {
+      problems.push(
+        `事件通道内部不一致（逐事件计数 vs runner 汇总）：${field} ${tally[field]} ≠ ${summary[field]}` +
+          `⇒ 计数通道自相矛盾，fail-closed 判红`,
+      );
+    }
+  }
+  return problems;
+}
 
 /**
  * g-416：**逐目标文件完成事件覆盖**的判据（非抛错形态；空数组 = 覆盖成立）。
