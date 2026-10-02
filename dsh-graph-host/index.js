@@ -1719,6 +1719,20 @@ export function apply(ctx, config) {
       reason: isolationDecision.reason,
     });
 
+    // g-406：派发返回必须**可据以判定隔离**，否则 `worktree:false` 会把两种完全不同的
+    // 情形混成同一个值：①解析为「本次不建树」（显式 worktree=false / 干净工作区下
+    // patch/chore/task 的类型默认豁免）②建树失败——后者不存在静默降级：prepareAttemptWorktree
+    // 失败一律抛 GraphError，此时尚未迁移状态、未建 attempt、未启动子代理（零副作用可重试）。
+    // 故返回三件套：isolated（是否真的建了隔离树并据此启动子代理）、worktree_reason（为何如此，
+    // 与 attempt 记录 / attempt.started 事件的 worktree_reason 同值）、created/reused（创建结果）。
+    // 该对象在**同一同步临界区**内由 wtResult 求得，且下面的子代理启动晚于此（见 g-406 结构性守卫）。
+    const isolationReport = {
+      isolated: Boolean(wtResult.worktree),
+      worktree_reason: wtResult.reason ?? null,
+      worktree_created: Boolean(wtResult.created),
+      worktree_reused: Boolean(wtResult.reused),
+    };
+
     const prompt = formatAttemptPrompt({
       goal,
       attempt: nextAttId,
@@ -1801,6 +1815,7 @@ export function apply(ctx, config) {
         injected_cards: injectedCards,
         injected_handoffs: injectedHandoffRefs,
         worktree: wtResult.worktree,
+        ...isolationReport,
         brief: resolvedBrief.brief,
         brief_source: resolvedBrief.source,
         prompt,
@@ -1876,6 +1891,7 @@ export function apply(ctx, config) {
           injected_cards: injectedCards,
           injected_handoffs: injectedHandoffRefs,
           worktree: wtResult.worktree,
+          ...isolationReport,
           brief: resolvedBrief.brief,
           brief_source: resolvedBrief.source,
           prompt,
@@ -1896,6 +1912,7 @@ export function apply(ctx, config) {
           injected_cards: injectedCards,
           injected_handoffs: injectedHandoffRefs,
           worktree: wtResult.worktree,
+          ...isolationReport,
           brief: resolvedBrief.brief,
           brief_source: resolvedBrief.source,
           prompt,
@@ -1916,6 +1933,7 @@ export function apply(ctx, config) {
         injected_cards: injectedCards,
         injected_handoffs: injectedHandoffRefs,
         worktree: wtResult.worktree,
+        ...isolationReport,
         brief: resolvedBrief.brief,
         brief_source: resolvedBrief.source,
         prompt,
@@ -2585,7 +2603,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_start_attempt",
-        description: "为目标派发一个 attempt：派发前先执行准入门禁（backlog/draft/blocked/delivered 及无判据/未确认判据/状态不允许的目标直接拒绝，零副作用：不建 attempt、不启动子代理）；准入通过后先落地 in_progress 迁移，再创建 attempt 目录与记录并启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。默认强制注入独立 worktree 隔离提示；仅 supervisor 明确传 worktree=false 并说明理由时才关闭。attempt_brief 是当前 action 原文；task_type 必须传 merge（合入）、rewrite（重写）或 fix（修复）之一，baseline_commit/source_attempt 是 supervisor 直接提供的当前事实，acceptance_items 是当前验收项 string[]；这些字段不从 brief/handoff 截取。task_type/baseline_commit/source_attempt 的空值传 null 或省略表示未提供；acceptance_items=[] 表示明确无单独验收项，null 或省略表示未提供；空字符串非法。",
+        description: "为目标派发一个 attempt：派发前先执行准入门禁（backlog/draft/blocked/delivered 及无判据/未确认判据/状态不允许的目标直接拒绝，零副作用：不建 attempt、不启动子代理）；准入通过后先落地 in_progress 迁移，再创建 attempt 目录与记录并启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。隔离解析（g-283/g-289）：worktree 显式传值优先；未传时按目标类型与工作区干净度解析——干净工作区下 patch/chore/task 默认不建树（微小改动快速通道），feature/bug/improvement 默认建树；可靠判脏（clean=false）时任何类型都升级为建树；隔离提示与实际是否建树严格一致。返回隔离语义（g-406）：isolated=是否真的建了独立 worktree 并据此启动子代理；worktree=已建时为 {path,relative_path,branch,head}、未建为 false；worktree_reason=explicit/type_default/dirty_workspace/type_default_unknown；worktree_created/worktree_reused=创建结果。子代理只在工作树创建并注册完成后启动；建树失败一律抛错（零副作用），绝不静默降级为主树执行。attempt_brief 是当前 action 原文；task_type 必须传 merge（合入）、rewrite（重写）或 fix（修复）之一，baseline_commit/source_attempt 是 supervisor 直接提供的当前事实，acceptance_items 是当前验收项 string[]；这些字段不从 brief/handoff 截取。task_type/baseline_commit/source_attempt 的空值传 null 或省略表示未提供；acceptance_items=[] 表示明确无单独验收项，null 或省略表示未提供；空字符串非法。",
         parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, reasoning_effort: str, mode: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
       },
       run: async (a, ex) => {
@@ -2703,6 +2721,13 @@ export function apply(ctx, config) {
           mode: execRes.mode,
           mode_source: execRes.mode_source,
           worktree: execRes.worktree,
+          // g-406：本层是**白名单构造**——凡不在此显式登记的字段都会在工具响应里消失，
+          // 主管就无从判定隔离（事故里只看到 worktree:false，看不出「策略豁免」还是「建树失败」）。
+          // 故隔离判定四件套必须一并登记（值来自 dispatchExecutionAttempt 的 isolationReport）。
+          isolated: execRes.isolated,
+          worktree_reason: execRes.worktree_reason ?? null,
+          worktree_created: execRes.worktree_created === true,
+          worktree_reused: execRes.worktree_reused === true,
         };
         if (execRes.child_error) result.child_error = execRes.child_error;
         if (execRes.note) result.note = execRes.note;
@@ -4033,6 +4058,11 @@ export function apply(ctx, config) {
             injected_cards: execRes.injected_cards,
             injected_handoffs: execRes.injected_handoffs,
             worktree: execRes.worktree,
+            // g-406：同工具入口——HTTP/GUI 入口也是白名单构造，隔离判定必须一并回传。
+            isolated: execRes.isolated,
+            worktree_reason: execRes.worktree_reason ?? null,
+            worktree_created: execRes.worktree_created === true,
+            worktree_reused: execRes.worktree_reused === true,
           });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
