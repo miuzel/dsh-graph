@@ -552,6 +552,12 @@ test("g-353 判据 3：只读 check 不改任何文件，且能识别陈旧产�
     utimesSync(stale, future, future);
     const redStale = await runNestedCommand(cmd, { cwd: sb.repo, env: cleanEnv() });
     assertNestedSuiteRan(redStale, "g-353 负向对照 A（陈旧产物）");
+    // g-424：负向裁决现与正向同口径地要求 skipped===0 && todo===0 ⇒ 消费点复算（判别力不得被削弱）。
+    t.diagnostic(
+      `evidence-row: g353-redStale code=${redStale.code} tests=${redStale.summary.tests} ` +
+        `fail=${redStale.summary.fail} skipped=${redStale.summary.skipped} todo=${redStale.summary.todo} ` +
+        `files=${redStale.channel.files.length}`,
+    );
     assert.notEqual(redStale.code, 0, "陈旧产物必须被只读 check 识别（不得静默通过）");
     assert.match(redStale.out, /产物陈旧|内容不一致/, `陈旧族必须报红，实际输出：${redStale.out.slice(-600)}`);
     // g-421：负向对照还必须证明「确有 **test/subtest 级真实失败事件**，且其 error 文本匹配预期特征」——
@@ -563,6 +569,12 @@ test("g-353 判据 3：只读 check 不改任何文件，且能识别陈旧产�
     writeFileSync(bc, replaceOnce(readFileSync(bc, "utf8"), '  "narrow-width"\n', ""));
     const redModule = await runNestedCommand(cmd, { cwd: sb.repo, env: cleanEnv() });
     assertNestedSuiteRan(redModule, "g-353 负向对照 B（漏模块）");
+    // g-424：同上 —— 复算 skipped/todo（判别力不得被削弱）。
+    t.diagnostic(
+      `evidence-row: g353-redModule code=${redModule.code} tests=${redModule.summary.tests} ` +
+        `fail=${redModule.summary.fail} skipped=${redModule.summary.skipped} todo=${redModule.summary.todo} ` +
+        `files=${redModule.channel.files.length}`,
+    );
     assert.notEqual(redModule.code, 0, "漏模块必须被只读 check 识别（不得静默通过）");
     // g-421：同上 —— 必须确有 test/subtest 级真实失败事件且文本匹配（不得由退出码伪装）。
     assertNestedSuiteFailed(redModule, "g-353 负向对照 B（漏模块）", /PARTS|一一对应/);

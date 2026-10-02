@@ -135,6 +135,18 @@ argv / shell 两形态统一生效；消费点 `g350`/`g353`/`g407`/`g413`/`g415
 summary/tally 语义不变 ⇒ 顶层闸门只用计数的交叉校验不受影响），由 `parseEventChannel` 收进
 `channel.failures`；`scripts/` 不是产品代码、不入 `dist/`。
 
+**负向裁决与正向裁决同口径（含 skip/todo/cancelled，g-424 / 第三轮 P1）**：只核「证据核心 + ≥1 test 级
+真实失败事件 + 签名匹配」仍不够 —— **签名可被另一个目标的真实失败满足，而被声明的目标其断言从未执行**。
+终局复核在 tip `7121112` 实测的最小复现（两目标）：A = `test('expected', () => assert.fail('SIG'))`；
+B = `test.skip('…', () => { throw new Error('SIG') })` ⇒ `code 1 / tests 2 / fail 1 / skipped 1 / files=[A,B]`，
+旧负向裁决**接受**。同类旁路：`todo`（`test.todo` / `{todo:true}`，零验证、无回调）与 `cancelled`
+（超时/取消，回调未跑完）。三者都与「覆盖/通道」**正交**：它们照常产出文件级完成事件、计数自洽。
+故 `nestedSuiteFailedProblems` 现与 `nestedSuitePassProblems` / 顶层闸门**同口径**地要求
+`cancelled === 0 && skipped === 0 && todo === 0`（各自**点名红因**，措辞与正向裁决一致）；既有全部判据
+（非零且非信号退出 + 证据核心 + ≥1 test 级真实失败事件 + 签名匹配事件通道 error）**只增不减、无 opt-out**
+（合法 skip/todo 场景应**改用例为断言拒绝或重构夹具**，不得给 helper 加豁免开关）。
+守卫见 `core/tests/g424-negative-verdict-skip-todo.test.ts`。
+
 **全体裁决 helper 普查 + 结构性守卫**：任何 `assertNested*` / `nested*Problems` 导出都必须登记进 helper 的
 `NESTED_EVIDENCE_VERDICTS` / `NESTED_EVIDENCE_PRECONDITIONS` / `NESTED_EVIDENCE_PARTS`，且其**调用闭包**
 必须到达 `nestedEvidenceProblems`；**所有运行时导出**（穷举 `function` / `async function` / `generator` /

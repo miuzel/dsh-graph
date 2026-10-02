@@ -215,6 +215,7 @@ test("g-421 判据1 正向：真实断言失败的嵌套文件（有完成事件
   });
   t.diagnostic(
     `evidence: suite=g421-real-failure exit=${run.code} fail=${run.summary.fail} files=${run.channel.files.length} ` +
+      `skipped=${run.summary.skipped} todo=${run.summary.todo} cancelled=${run.summary.cancelled} ` +
       `test_level=${nestedTestLevelFailures(run).length}`,
   );
   assert.notEqual(run.code, 0, "真实失败必须非零退出");
@@ -282,6 +283,56 @@ function topLevelFunctions(src: string): Map<string, string> {
  * 里完全不可见 ⇒ 清单完备性与调用闭包比较全部失效）。本文件当前不含这些形态；将来若确需，
  * 必须**先**扩展枚举并把新入口登记进清单，**绝不**静默跳过。
  */
+/**
+ * g-424：从 `export (const|let|var) NAME` 之后扫描**同一条声明语句**，返回其**顶层**声明符分隔逗号
+ * 的位置（无则 `null`）。用于 fail-closed 收口「同一 `export const|let|var` 语句的顶层多声明符」——
+ * 旧实现只记录**首个**名字（`/^export\s+(?:const|let|var)\s+(\w+)/`），于是
+ * `export const safe = 1, assertNestedWeak = () => …` 的**第二个运行时导出会被静默漏掉** ⇒
+ * 足以绕过「清单完备性 + 调用闭包」普查（弱裁决入口藏进多声明符即可）。
+ *
+ * **豁免规则**（避免误伤合法样本）：`()` / `[]` / `{}` 内的逗号（`export const X = ["a","b"]`、
+ * `export const F = { a: 1, b: 2 }`）与字符串/模板字面量内的逗号（`export const SEP = ","`）**不计**。
+ * 语句边界：深度 0 的 `;`；或深度 0 的换行**且**上一有效字符不是逗号（多行声明
+ * `export const a = 1,\n  b = 2;` 因此仍会被识别为多声明符）。
+ */
+function findTopLevelDeclaratorComma(src: string, from: number): number | null {
+  let depth = 0;
+  let quote: "'" | '"' | "`" | null = null;
+  let lastSignificant = "";
+  for (let i = from; i < src.length; i += 1) {
+    const ch = src[i] as string;
+    if (quote) {
+      if (ch === "\\") {
+        i += 1; // 跳过被转义字符（含 \" \' \` \\）
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(" || ch === "[" || ch === "{") {
+      depth += 1;
+      lastSignificant = ch;
+      continue;
+    }
+    if (ch === ")" || ch === "]" || ch === "}") {
+      depth -= 1;
+      lastSignificant = ch;
+      continue;
+    }
+    if (depth === 0) {
+      if (ch === ",") return i;
+      if (ch === ";") return null;
+      if (ch === "\n" && lastSignificant !== ",") return null;
+    }
+    if (!/\s/.test(ch)) lastSignificant = ch;
+  }
+  return null;
+}
+
 function exportInventory(src: string): { values: string[]; types: string[] } {
   const values: string[] = [];
   const types: string[] = [];
@@ -294,6 +345,17 @@ function exportInventory(src: string): { values: string[]; types: string[] } {
   for (const [re, kind] of forms) {
     for (const m of src.matchAll(re)) {
       declared.add(m.index as number);
+      // g-424：多声明符 fail-closed —— 只记首个名字会**漏掉第二个运行时导出**（弱裁决入口可据此
+      // 绕过清单完备性）。同一条语句出现顶层逗号即抛错并提示显式支持；括号/字符串内的逗号已豁免。
+      const commaAt = findTopLevelDeclaratorComma(src, (m.index as number) + m[0].length);
+      if (commaAt !== null) {
+        const statement = src.slice(m.index as number, commaAt + 60).split("\n")[0] as string;
+        throw new Error(
+          `不支持的 export 声明形态（守卫 fail-closed）：同一 export const|let|var 语句出现**顶层多声明符**` +
+            `（只记首个名字会漏掉后续运行时导出 ⇒ 可绕过导出普查）—— 请拆成多条 export 或先扩展枚举：` +
+            `${statement.trim().slice(0, 120)}`,
+        );
+      }
       (kind === "value" ? values : types).push(m[1] as string);
     }
   }
@@ -540,6 +602,52 @@ test("g-421 判据2 防回归：导出枚举覆盖 async/const 形态，未归�
     "清单与源码漂移（登记了不存在的导出）必须判红",
   );
   t.diagnostic("evidence: suite=g421-guard-hardening forms=5 fail_closed=4");
+});
+
+test("g-424 判据4 防回归：exportInventory 同形顶层多声明符 fail-closed（合法逗号必须豁免）", (t) => {
+  // ── ① 多声明符 ⇒ 必须抛错（旧实现只记首个名字 ⇒ 第二个运行时导出被静默漏掉）。
+  for (const sample of [
+    "export const safe = 1, assertNestedWeak = () => nestedEvidenceProblems(0);\n",
+    "export let a = 1, b = 2;\n",
+    "export var x = 1, y = 2;\n",
+    "export const multi = 1,\n  second = 2;\n", // 多行声明同样必须被识别
+  ]) {
+    assert.throws(
+      () => exportInventory(sample),
+      /顶层多声明符/,
+      `同一 export const|let|var 语句的顶层多声明符必须 fail-closed 判红：${sample.trim()}`,
+    );
+  }
+  // 漏掉第二个导出 = 弱裁决入口可绕过清单普查（这里钉住「确实会被漏掉」这一前提）。
+  const firstOnly = /^export\s+(?:const|let|var)\s+(\w+)/gm;
+  assert.deepEqual(
+    [..."export const safe = 1, assertNestedWeak = () => 1;".matchAll(firstOnly)].map((m) => m[1]),
+    ["safe"],
+    "前提：旧枚举形态确实只认首个声明符（第二个运行时导出不可见）",
+  );
+
+  // ── ② 合法样本 ⇒ 正常归类，不得误红（括号/方括号/花括号与字符串/模板内逗号已豁免）。
+  const legal = [
+    "export const X = [\"a\", \"b\"];",
+    "export const F = { a: 1, b: 2 };",
+    'export const SEP = ",";',
+    "export const T = `a,b`;",
+    "export const CALL = f(1, 2);",
+    "export const NESTED = [{ a: [1, 2], b: 3 }];",
+    "export const ESCAPED = \"a\\\",b\";",
+  ].join("\n");
+  const inv = exportInventory(`${legal}\n`);
+  assert.deepEqual(
+    [...inv.values].sort(),
+    ["CALL", "ESCAPED", "F", "NESTED", "SEP", "T", "X"],
+    "合法样本（括号/字符串/模板内逗号）必须正常归类，不得误红",
+  );
+  assert.deepEqual(inv.types, [], "合法样本里没有类型导出");
+  // 负向对照：同一批合法名字必须能被清单分类器接受（否则「不误红」证据不完整）。
+  classifyExports(inv.values, { NON_VERDICT: inv.values });
+  t.diagnostic(
+    `evidence: suite=g424-export-inventory multi_declarator_red=4 legal_ok=${inv.values.length} misfire=0`,
+  );
 });
 
 test("g-421 判据1 负向加固：信号终止即便通道/覆盖完整也不得冒充「如期报红」", (t) => {

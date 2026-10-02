@@ -186,7 +186,8 @@ test("g-407 判据 3：共用 helper 清除 NODE_TEST_CONTEXT 后，同一失败
   const run = await runNestedArgv(process.execPath, ["--test", FIXTURE_FAIL], { cwd: repoRoot });
   t.diagnostic(
     `evidence: suite=g407-helper exit=${run.code} pass=${run.summary.pass} fail=${run.summary.fail} ` +
-      `skipped=${run.summary.skipped} hasSummary=${run.summary.hasSummary} skipMarker=${run.summary.runnerSkippedFiles}`,
+      `skipped=${run.summary.skipped} todo=${run.summary.todo} cancelled=${run.summary.cancelled} ` +
+      `files=${run.channel.files.length} hasSummary=${run.summary.hasSummary} skipMarker=${run.summary.runnerSkippedFiles}`,
   );
 
   // 双断言：非零退出 **且** 输出含预期错误特征 —— 单点永真被消除。
