@@ -208,7 +208,9 @@ test("g-272 att-002: 保留项锚点——提示词模板与遗留值匹配串�
   const anchors: [string, string][] = [
     ["goal-actions.js", "【${props.goalId} 判据反馈】"],
     ["goal-actions.js", "【主管处理请求｜${goalId}｜目标定义/润色】"],
-    ["goal-actions.js", "【${goalId} 反馈】"],
+    // g-391：原 ["goal-actions.js", "【${goalId} 反馈】"] 锚点随不可达反馈 UI（prefillText 及其
+    // 无 setMode("feedback") 入口的分支）一并删除——保留该字面锚点等于逼迫仓库保留无效文本。
+    // 覆盖改由 core/tests/client.test.ts 的「g-391 结构契约」承担：死路径缺席 + 活入口存在（更严）。
     ["goal-actions.js", "【负责人交付复核请求】"],
     ["goal-actions.js", "空闲|完成|待命|已交付|结束|等待"],
     ["drag-prompts.js", "【${goalId} 回退理由】"],

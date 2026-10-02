@@ -254,19 +254,14 @@
           fallback ? h("textarea", { readOnly: true, value: request, style: { ...S.promptInput, minHeight: 72, resize: "vertical", fontFamily: "monospace", fontSize: 11 }, "aria-label": dgT("exec.polish") }) : null) : null);
     }
 
-    // g-109：目标描述区执行/反馈交互组件（执行按钮直接创建子代理；接受默认经主管 Agent 复核，
-    // 无异议生效，有异议显示在按钮处并转「强制接受」，可选理由记 goal.amended 事件供学习）
+    // g-109：目标描述区执行/接受交互组件（执行按钮打开 InProgressPrompt 创建子代理；接受默认经主管
+    // Agent 复核，异议在按钮处显示说明；确认列不提供强制接受入口）
     function AcceptFeedback(props) {
       const { goalId, status, events, supervisorSession, onRefresh } = props;
       const { attempts } = props;
-      const [mode, setMode] = React.useState("idle"); // idle | feedback
-      const [fbText, setFbText] = React.useState("");
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
       const [inProgressOpen, setInProgressOpen] = React.useState(false);
-      // 反馈预填模板（复制与显示共用，保证一致）
-      // i18n-keep(category-b)：粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
-      const prefillText = fbText.trim() ? `【${goalId} 反馈】\n${fbText.trim()}` : "";
 
       // 接受复核状态只关联当前生命周期周期：
       // 以最后一次进入当前阶段（goal.transition to === status）为起点，
@@ -331,94 +326,12 @@
         }
         setLoading(false);
       };
-      // 强制接受：跳过主管复核，可选理由记入 goal.amended 事件
-      const doForceAccept = async () => {
-        setLoading(true);
-        try {
-          const r = await fetch(graphUrl("/api/dsh-graph/accept"), {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, force: true, reason: forceReason.trim() || undefined }),
-          });
-          const data = await r.json();
-          if (data.ok) setNote(forceReason.trim() ? dgT("exec.forceAcceptWithReason") : dgT("exec.forceAccept"));
-          else setNote(dgT("exec.forceAcceptFail") + (data.error || dgT("drag.unknownError")));
-          setForceMode(false);
-          setForceReason("");
-        } catch (e) {
-          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
-        }
-        setLoading(false);
-      };
-
-      const startExecution = async () => {
-        setLoading(true);
-        try {
-          // Step 1: force transition 到 in_progress（人工操作视为授权）
-          const tr = await fetch(graphUrl("/api/dsh-graph/transition"), {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId, to: "in_progress", force: true }),
-          });
-          const trData = await tr.json();
-          if (!trData.ok) {
-            setNote(dgT("exec.stateTransitionFail") + (trData.error || dgT("drag.unknownError")));
-            setLoading(false);
-            return;
-          }
-          // Step 2: 派发执行子代理
-          const r = await fetch(graphUrl("/api/dsh-graph/start-execution"), {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ goal: goalId }),
-          });
-          const data = await r.json();
-          if (data.ok) {
-            if (data.child_id) {
-              setNote(dgT("exec.childDispatched") + data.child_id);
-            } else if (data.child_error) {
-              setNote(dgT("exec.childFailed") + data.child_error);
-            } else {
-              setNote(dgT("exec.childNotStarted"));
-            }
-            onRefresh?.(); // g-148：刷新看板（回调由父组件 GoalModal 传入）
-          } else {
-            setNote(dgT("exec.executeFail") + (data.error || dgT("drag.unknownError")));
-          }
-        } catch (e) {
-          setNote(dgT("drag.requestFail") + String(e?.message ?? e));
-        }
-        setLoading(false);
-      };
-
-      const openSupervisorWithFeedback = async () => {
-        try {
-          const rt = sessionsRt ?? appCtx?.get?.("sessions");
-          if (!rt) { setNote(dgT("exec.supervisorUnavailable")); return; }
-          // 打开主管会话（id 由 board 端点下发 project.yaml supervisor.session，g-108）
-          if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
-          // 自动复制预填内容（负责人指示），再切到主管对话窗直接粘贴发送
-          const copied = prefillText ? await copyText(prefillText) : false;
-          // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
-          openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
-          activateChatTab();
-          if (copied) {
-            showToast(dgT("exec.precopied"));
-            setNote(dgT("exec.prefillCopied"));
-          } else {
-            setNote(dgT("exec.autocopyFailed"));
-          }
-        } catch (e) {
-          setNote(dgT("exec.supervisorJumpFail") + String(e?.message ?? e));
-        }
-      };
-
       // 是否有活跃「执行」attempt（已启动但未完成）。
       // g-109 定点 bug：「开始收集」也写 attempt.started（executor=agent:collect），
-      // 若不加区分，只收集过未执行的目标其 🚀 执行/💬 反馈会被误藏。
+      // 若不加区分，只收集过未执行的目标其 🚀 执行入口会被误藏。
       // 只认非 collect 的 attempt：凡非收集类（agent:collect）的 attempt 都视为活跃执行。
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
-      // review 及之后阶段、或已有活跃 attempt，不显示执行/反馈按钮
+      // review 及之后阶段、或已有活跃 attempt，不显示执行入口
       const isReview = status === "review";
       const allowed = ["draft", "planning", "collecting", "ready", "review"];
       if (!allowed.includes(status) || (hasActiveAttempt && !isReview)) return null;
@@ -452,24 +365,6 @@
                 dgT("exec.objection")),
               objectionText ? h("div", { style: S.meta }, objectionText) : null,
             )
-          : null,
-        mode === "feedback"
-          ? h("div", { style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 2 } },
-              h("input", {
-                style: { ...S.promptInput, flex: 1 },
-                value: fbText, placeholder: dgT("exec.feedbackPlaceholder"),
-                onChange: (e) => setFbText(e.target.value),
-              }),
-              h("button", {
-                style: { ...S.btn, fontSize: 11, alignSelf: "flex-start" }, className: "dg-btn",
-                onClick: openSupervisorWithFeedback,
-              }, dgT("exec.goToSupervisorChat")),
-              fbText.trim()
-                ? h("div", { style: { ...S.meta, padding: "4px 6px", background: "rgba(128,128,128,.08)", borderRadius: 4 } },
-                    dgT("exec.precopied"),
-                    h("pre", { style: { margin: "4px 0 0", whiteSpace: "pre-wrap", fontSize: 11 } },
-                      prefillText))
-                : null)
           : null,
         note ? h("div", { style: { ...S.meta, marginTop: 2 } }, note) : null,
         inProgressOpen
