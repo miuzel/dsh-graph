@@ -31,22 +31,23 @@ web 实例，在本地插件产物上做开发/验证，而不会碰主 GUI（`d
 脚本的 `usage()` 原文：
 
 ```text
-用法：dsh-test-web.sh <DSH 版本> [--port PORT] [--proxychains] [--host HOST] [--host-dir PATH] [--skip-install]
+用法：dsh-test-web.sh <DSH 版本> [--port PORT] [--proxychains] [--host HOST] [--host-dir PATH] [--skip-install] [--dry-run]
 ```
 
 ```bash
-bash scripts/dsh-test-web.sh <DSH版本> [--port PORT] [--proxychains] [--host HOST] [--host-dir PATH] [--skip-install]
+bash scripts/dsh-test-web.sh <DSH版本> [--port PORT] [--proxychains] [--host HOST] [--host-dir PATH] [--skip-install] [--dry-run]
 ```
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `<DSH版本>`（位置参数，必填） | 无 | 要拉起的 DSH 版本，如 `0.1.6-alpha.2`、`v0.1.6-alpha.2`；必须匹配 `^[A-Za-z0-9][A-Za-z0-9._+~-]*$` |
-| `--port PORT` | `3082` | 实例端口；必须为 1–65535 的整数，且**不能是 3080**、不能已被占用 |
-| `--host HOST` | 不传（dsh 默认） | 透传给 `dsh web --host` |
+| `--port PORT` | `3082` | 实例端口；必须为 1–65535 的十进制整数（禁止前导零）、**不能是 3080**、不能已被占用 |
+| `--host HOST` | 不传（dsh 默认） | 透传给 `dsh web --host`；只允许字母/数字/`.`/`-`/`_`/`:` 且不得以 `-` 开头（空值与 shell 元字符拒绝） |
 | `--host-dir PATH` | `$REPO_ROOT/dist` | 本地 dsh-graph 插件目录（允许的落点见下） |
 | `--proxychains` | 关 | 安装与启动都经 `proxychains4 -q`（需 PATH 中有 `proxychains4`） |
 | `--skip-install`（别名 `--no-install`） | 关 | 跳过插件安装，复用已有 profile；要求该 `DSH_HOME` 已有可用 profile，且 PATH 中已有 `dsh` |
-| `--help` / `-h` | — | 打印用法后退出 0 |
+| `--dry-run`（别名 `--doctor`） | 关 | **只读预检**：复用启动路径的端口/工具/link/隔离检查并如实报告缺项，零副作用（见 §2.2） |
+| `--help` / `-h` | — | 打印用法后退出 0（不依赖位置参数，任何位置生效） |
 
 启动前脚本还会：创建 `DSH_HOME` / workspace / cache / pnpm-store 目录，按需
 `plugin --profile web add link:<HOST_DIR>`，导出 `npm_config_cache`、`pnpm_config_store_dir`、
@@ -85,7 +86,46 @@ bash scripts/dsh-test-web.sh <DSH版本> [--port PORT] [--proxychains] [--host H
 默认端口 `3082`。
 
 另外，沿用的 `DSH_TEST_ROOT` 只在内部离线 smoke（`DSH_TEST_MODE=1`）里有效，日常调用会被拒绝；
-它本身也必须位于 canonical `$REPO_ROOT/tmp` 之下、不含 `..`、不经 symlink 越界。
+它本身也必须位于 canonical `$REPO_ROOT/tmp` 之下、不含 `..`、不经 symlink 越界；指向生产
+`$HOME` / `$HOME/.dsh` 或看板 `.dsh-graph` 的路径在任何副作用之前就被拒绝。
+
+### 2.2 只读预检 `--dry-run` / `--doctor`（g-301）
+
+`--dry-run`（别名 `--doctor`）回答一个问题：**按当前这组参数，现在能不能启动？缺什么？**
+它复用启动路径**同一份**判定（工具探测、端口占用、隔离根 canonicalize 与边界、`--host-dir`
+允许落点、`profile_ready` 的 profile/link/bundle 判定），但**零副作用**：
+
+- 不建目录（`mkdir` 全部在预检 `return` 之后）、不安装（不跑 pnpm / `plugin add`）、不写配置、
+  不启动服务（**不跑 `web --dump-config`**，那需要子进程/运行时 ⇒ 报告里显式列为未验证）；
+- 不自动安装、不自动修环境、不自动安装缺失工具；不回显任何环境变量/凭据值（如 `NEWAPI_ASEIT_API_KEY`）；
+- 只读预检与 `--help` 的前后**文件与进程快照相同**（`core/tests/g301-dry-run-doctor.test.ts` 断言）。
+
+报告内容：平台与平台范围、生效参数、`TEST_ROOT`/`DSH_HOME`/`WORKSPACE`/cache/pnpm-store 的
+**实际状态**（`缺失` / `目录` / `非目录(!)`）、工具可用性与绝对路径、端口探测结论、候选
+`host-dir` 与**实际 link 目标**（`link:<canonical host-dir>`）、`RUNTIME_DSH` / profile manifest /
+`pnpm-workspace.yaml` 的存在性与 profile 诊断明细，最后是**阻塞项**与**缺项**两张清单。
+「目录存在 ≠ 环境正确」：就绪与否看 profile/link/`bundle.patch` 是否与实际 `link:` 一致，而不是看目录在不在。
+
+退出码：
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 按当前参数**可以启动**（无阻塞项；缺项会在启动时创建/安装，故缺项不单独判失败） |
+| `1` | 存在**阻塞项**（缺工具、端口被占用、`host-dir` 无有效插件、隔离根存在但不是目录、`--skip-install` 而 profile 未就绪等） |
+| `2` | **非法/危险输入**：非法端口（越界/前导零/空值/非数字）、3080、非法 `--host`、空值、生产 `HOME` 或看板路径、受管参数透传、未知参数 |
+
+`--dry-run` 下的危险输入**同样先拒绝**（`exit 2`，先于一切 `mkdir`/install/配置写入/启动/端口探测之外的动作）。
+
+```bash
+# 预检（不产生任何副作用）
+bash scripts/dsh-test-web.sh <DSH版本> --dry-run [--port PORT] [--host-dir PATH] [--skip-install]
+# 例：在隔离 worktree 里用源码目录做预检
+bash scripts/dsh-test-web.sh 0.2.0-rc.2 --dry-run --port 3090 --host-dir "$PWD/dsh-graph-host"
+```
+
+> **平台范围（如实登记）**：脚本与预检按 **linux/WSL2（bash + GNU coreutils）** 编写与验证；
+> 原生 Windows / macOS 未验证（`usage()` 与预检报告都会打印这一行）。`ss` 缺失时端口探测退回
+> node 的短暂 bind/close 探测；`realpath` 缺失时预检报阻塞项（`exit 1`）而不是猜测路径。
 
 ## 3. 开发回路
 
