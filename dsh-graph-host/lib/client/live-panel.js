@@ -273,14 +273,18 @@
           });
           const data = await r.json();
           if (data.ok) {
-            if (data.child_id) {
+            // g-398：先判 child_error（与 card-drawer.js 同序）——bind 失败收敛路径返回
+            // child_id 非空 + child_error 非空，若先判 child_id 会把绑定失败渲染成成功。
+            if (data.child_error) {
+              setNote(dgT("exec.childFailed") + data.child_error);
+            } else if (data.child_id) {
               const route = data.model_route ? `（${data.model_route}）` : "";
               const modeTag = data.mode ? `[${data.mode}]` : "";
               setNote(dgT("live.relaunched") + " " + modeTag + "，id：" + data.child_id + " " + route);
               showToast(dgT("live.relaunched") + " " + modeTag + " " + route);
               if (data.model_route) props.onRelaunched?.(data.model_route);
             } else {
-              setNote(dgT("exec.childFailed") + (data.child_error || dgT("exec.childNotStarted")));
+              setNote(dgT("exec.childFailed") + dgT("exec.childNotStarted"));
             }
           } else {
             setNote(dgT("exec.executeFail") + (data.error || dgT("drag.unknownError")));
