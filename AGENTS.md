@@ -67,14 +67,18 @@ After modifying source and rebuilding:
 `core/tests/g415-gate-hardening.test.ts` 另禁止被收集集合 `core/tests/*.test.ts` 出现选集式 only 标记与
 直接退出进程调用（`process.exit` / `process.exitCode`，含 hook 内同型调用）。
 
-**同一覆盖判据也已下沉到共享 helper（g-416）**：任何**嵌套** `node --test`（经
+**同一覆盖判据也已下沉到共享 helper（g-416 / g-419）**：任何**嵌套** `node --test`（经
 `core/tests/fixtures/nested-runner.ts` 启动）都由 `nestedSuitePassProblems` / `assertNestedSuitePassed`
-**自身**核对「目标文件集合 ≡ 逐文件**完成事件**（带 `file` 的 `test:summary`）集合且 `>0`」，并与人类可读
-汇总 + 事件通道逐字段交叉校验；**fail-closed、无 opt-out**，既有 `code`/`fail`/`cancelled`/`skipped`/`todo`
+**自身**核对「目标文件集合 ≡ 逐文件**完成事件**（带 `file` 的 `test:summary`）集合且 `>0`」（**双向**：
+产出了完成事件却**不在**目标集合内的文件同样判红 ⇒ 关闭「Node 跑得比 helper 展开/声明更多」，g-419②），
+并与人类可读汇总 + 事件通道逐字段交叉校验；**fail-closed、无 opt-out**，既有 `code`/`fail`/`cancelled`/`skipped`/`todo`
 /计数口径断言只增不减。目标集合由 helper 从调用参数（`--test` 后的位置参数）推导，支持多文件 / 目录 /
 `<dir>/*<suffix>` glob（与网关同口径）；**可推导时必须以推导集合为准**，同时给出的 `opts.targets` 必须与推导
 集合**精确一致**（realpath 归一后集合相等），不一致即**抛错拒绝执行**（g-418①：声明子集不得掩盖真实目标，
 如 argv 里的早退文件被声明集合漏掉 ⇒ 其失败断言从未执行却判绿）；**仅无法推导时**才允许使用 `opts.targets`，
+此时 helper 必须把声明目标**作为显式位置参数注入 spawn**（argv 插到 `--test` 之后，shell 命令在 `--test`
+token 之后等价重写）⇒ **实际运行集 ≡ 声明集**、Node **不再走默认发现**；无法安全重写（非 `node … --test …`
+形态、缺 `--test`）即**抛错拒绝**（g-419①：否则声明子集在 fallback 路径上等价于 opt-out）；
 两者皆无则**抛错拒绝执行**（不存在「跳过覆盖断言」的静默路径）。私有事件通道经 `NODE_OPTIONS` 注入，
 argv / shell 两形态统一生效；消费点 `g350`/`g353`/`g407`/`g413`/`g415` 共用同一实现。
 
