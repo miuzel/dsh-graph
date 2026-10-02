@@ -221,6 +221,29 @@ test("g-312 判据 4：编译/拼接族源文件 mtime 不得新于产物（手�
   assert.deepEqual(stale, [], `${BUILD_HINT}\n${stale.join("\n")}`);
 });
 
+test("g-353 判据 3：build-client.sh 的 PARTS 与 lib/client/*.js 一一对应（漏模块被只读检查识别）", () => {
+  // 只读：只解析脚本 + 列目录，不执行构建、不改任何文件。放在本套件里的理由见 `check:dist`：
+  // 它是**唯一**的只读检查入口，必须同时覆盖「产物陈旧」与「漏模块」两族；g-352 的同名断言
+  // 伴随一次真实临时构建（语义更强但不适合做只读入口），故这里补结构族检查而非复用其执行路径。
+  const script = readFileSync(join(repoRoot, "scripts", "build-client.sh"), "utf8");
+  const start = script.indexOf("PARTS=(");
+  const end = script.indexOf("\n)", start);
+  assert.ok(start >= 0 && end > start, "build-client.sh 含 PARTS=(...) 列表");
+  const parts = [...script.slice(start, end).matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(parts.length >= 20, `PARTS 解析下限校验失败（实际 ${parts.length} 项）—— 解析失效会让本断言变永真`);
+  const modules = readdirSync(join(repoRoot, "dsh-graph-host", "lib", "client"))
+    .filter((name) => name.endsWith(".js"))
+    .map((name) => name.slice(0, -3));
+  const missing = modules.filter((m) => !parts.includes(m)).sort();
+  const extra = parts.filter((p) => !modules.includes(p)).sort();
+  assert.deepEqual(
+    { missing, extra },
+    { missing: [], extra: [] },
+    "build-client.sh 的 PARTS 与 lib/client/*.js 必须一一对应（漏模块 ⇒ bundle 内被调用却无定义 ⇒ " +
+      `真机 ReferenceError）：漏=[${missing.join(",")}] 多=[${extra.join(",")}]`,
+  );
+});
+
 test("g-312 判据 4 负向对照：在 tmp 镜像里手改源不重建，三族检查都必须报红（且真实仓库零改动）", () => {
   const mirror = mkdtempSync(join(tmpdir(), "dsh-graph-g312-freshness-"));
   try {

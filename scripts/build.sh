@@ -37,13 +37,32 @@
 #   - 子脚本（sync-core.sh / build-client.sh）的产物根由 DIST_DIR 重定向到暂存区，编译中间
 #     目录由 CORE_DIST 重定向，故并发构建之间不再共享（也不再互相 rm -rf）任何可写目录。
 #
+# ── g-353：无 exchange 平台（coreutils < 9.6 / macOS / BSD）的两次 rename 加固 ──────────
+# 两次 rename 之间必然存在一个「dist/ 已被移走、新树尚未就位」的窗口。此前：
+#   - 第二次 rename 失败 ⇒ set -e 退出 ⇒ EXIT trap 顺手 rm -rf dist.prev.<pid> ⇒ 旧树也没了；
+#   - 窗口内被 SIGKILL ⇒ trap 根本不运行 ⇒ dist/ 缺失、旧树孤零零留在 dist.prev.<pid>。
+# 现在（最小可恢复 + fail-closed 并存）：
+#   1. 第二次 rename 失败 ⇒ 先**回滚**（mv dist.prev.<pid> dist），活动路径恢复为逐字节完好的
+#      旧树，再以非 0 退出；只有回滚也失败才进入 fail-closed。
+#   2. fail-closed：此刻旧树是**唯一完好副本**，EXIT trap 绝不删除它（被 INT/TERM 打断时同理），
+#      并打印恢复命令。绝不为了兜底而删除仍然完好的旧 dist。
+#   3. SIGKILL（trap 无法运行，遗留 dist.prev.<pid>）⇒ 下次构建启动时自动恢复（可重放：恢复
+#      动作幂等，重复执行无副作用），或手工执行恢复命令。
+# 恢复命令（dist/ 缺失、旧树在 dist.prev.<pid> 时）：
+#   mv dist.prev.<pid> dist
+# 能力探测与实际失败的区分：`mv --exchange --help` 只判定 **mv 二进制能力**；`mv -T --exchange`
+# 的运行时失败（文件系统/挂载点不支持 RENAME_EXCHANGE，如部分 overlayfs / 网络挂载）是另一回事，
+# 此时暂存树与 dist/ 都完好，退回两次 rename 继续发布并明确告警，而不是把两者混为一谈。
+#
 # ⚠️ 实验性构建禁止在主树进行（见 AGENTS.md「Build Isolation」）：构建一律在隔离 worktree
 # 或仓库内私有副本中进行；主树 dist/ 是运行中宿主的资产来源。
 #
-# 适用场景：
-# - 本地开发：pnpm build / npm run build
-# - 预发布：pnpm prepack / npm run prepack
-# - GitHub 源码安装：npm install github:owner/repo 自动触发 prepare 脚本
+# 适用场景（g-353：**唯一打包入口**，根 package.json 的 build 与 prepare 都指向本脚本；
+# 根没有 prepack —— 打包 = 先构建、再进产物目录打包）：
+# - 本地开发 / 构建：pnpm build（= bash scripts/build.sh）
+# - 打包 / 预发布：bash scripts/build.sh && (cd dist && npm pack)
+# - GitHub 源码安装：npm install github:owner/repo 自动触发 prepare 脚本（同一条入口）
+# - 只读检查（不构建、不修复、不改文件）：pnpm check:dist
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO_ROOT="$PWD"
@@ -58,8 +77,33 @@ STAGE_CORE_DIST_REL="$STAGE_ROOT_REL/core-dist"
 STAGE_DIST="$STAGE_ROOT/dist"
 # 仅退化路径（无 --exchange）使用的旧树临时名；正常路径不创建。
 LEGACY_PREV="$REPO_ROOT/dist.prev.$$"
-cleanup() { rm -rf "$STAGE_ROOT" "$LEGACY_PREV"; }
+# g-353：两次 rename 的中间窗口标志。置 1 = dist/ 已被移走、新树尚未就位 —— 此刻
+# LEGACY_PREV 是**唯一完好副本**，EXIT trap 绝不能删除它（fail-closed，绝不为兜底删旧树）。
+SWAP_IN_FLIGHT=""
+cleanup() {
+  if [ -n "$SWAP_IN_FLIGHT" ] && [ -e "$LEGACY_PREV" ]; then
+    echo "⚠️ 发布未完成：旧 dist/ 是唯一完好副本，完好保留在 $LEGACY_PREV（未删除）" >&2
+    echo "   恢复命令：mv \"$LEGACY_PREV\" \"$DIST\"（下次 bash scripts/build.sh 亦会自动恢复）" >&2
+  else
+    rm -rf "$LEGACY_PREV"
+  fi
+  rm -rf "$STAGE_ROOT"
+}
 trap cleanup EXIT
+
+# ── g-353：上次两次 rename 被 SIGKILL 打断后的**可重放恢复** ─────────────────────────────
+# 中断窗口留下的最小痕迹：dist/ 缺失 + 遗留 dist.prev.<pid>。此时 dist.prev.<pid> 就是最后
+# 一次成功构建的完整产物，放回活动路径即可恢复；恢复动作幂等，重复执行无副作用。
+# 只在 dist/ **确实缺失**时恢复：绝不覆盖现存 dist/，也绝不删除任何 dist.prev.*（不自动 GC）。
+prev_latest=""
+for cand in "$REPO_ROOT"/dist.prev.*; do
+  [ -d "$cand" ] || continue
+  if [ -z "$prev_latest" ] || [ "$cand" -nt "$prev_latest" ]; then prev_latest="$cand"; fi
+done
+if [ ! -e "$DIST" ] && [ -n "$prev_latest" ]; then
+  echo "⚠️ 检测到被中断的两次 rename 发布（dist/ 缺失）：自动恢复 $prev_latest → dist/" >&2
+  mv "$prev_latest" "$DIST"
+fi
 
 echo "=== 统一构建：核心层 + 客户端 + dist 组装（原子发布）==="
 echo "暂存目录：$STAGE_ROOT_REL（发布前 dist/ 保持不变）"
@@ -112,23 +156,79 @@ echo ""
 echo "--- 原子发布：切换 dist/ ---"
 # g-359 测试注入：仅当字面等于 "1" 时强制走退化路径；未设置/其它取值 ⇒ 与历史实现等价。
 FORCE_TWO_RENAME="${BUILD_FORCE_TWO_RENAME:-0}"
+# g-353 故障注入（仅测试；未设置/其它取值 ⇒ 与历史实现逐字等价）：
+#   exchange      = 能力探测通过、文件系统实际 exchange 失败（运行时失败）
+#   second-rename = 第二次 rename 失败（回滚成功）
+#   rollback      = 第二次 rename 失败且回滚也失败（fail-closed）
+#   kill          = 第一次 rename 后被 SIGKILL（trap 不运行，模拟不可捕获的中断）
+BUILD_FAIL_INJECT="${BUILD_INJECT_PUBLISH_FAILURE:-}"
+
+# 发布动作各包一层，便于故障注入；未注入时与直接 `mv` 逐字等价。
+# renameat2(RENAME_EXCHANGE)：暂存树与 dist/ 在单次系统调用内互换，读者零空窗。
+exchange_publish() { mv -T --exchange "$STAGE_DIST" "$DIST"; }
+swap_out_old() { mv "$DIST" "$LEGACY_PREV"; }
+swap_in_new() { mv "$STAGE_DIST" "$DIST"; }
+rollback_old() { mv "$LEGACY_PREV" "$DIST"; }
+case "$BUILD_FAIL_INJECT" in
+  exchange) exchange_publish() { echo "⚠️ [注入] 模拟 RENAME_EXCHANGE 运行时失败（EXDEV/EINVAL）" >&2; return 1; } ;;
+  second-rename | rollback) swap_in_new() { echo "⚠️ [注入] 模拟第二次 rename 失败" >&2; return 1; } ;;
+esac
+if [ "$BUILD_FAIL_INJECT" = "rollback" ]; then
+  rollback_old() { echo "⚠️ [注入] 模拟回滚 rename 失败" >&2; return 1; }
+fi
+
+# 退化发布路径：两次 rename（存在极短空窗）+ 第二次失败回滚 + 回滚失败 fail-closed。
+two_rename_publish() {
+  echo "  → 两次 rename：dist/ → $(basename "$LEGACY_PREV")，再把新树就位" >&2
+  SWAP_IN_FLIGHT=1
+  if ! swap_out_old; then
+    SWAP_IN_FLIGHT=""
+    echo "❌ 无法移出旧 dist/（$DIST → $LEGACY_PREV）：dist/ 一字未动，构建中止" >&2
+    exit 1
+  fi
+  if [ "$BUILD_FAIL_INJECT" = "kill" ]; then
+    echo "⚠️ [注入] 模拟第一次 rename 后被 SIGKILL（trap 不运行）" >&2
+    kill -9 "$$"
+  fi
+  if swap_in_new; then
+    rm -rf "$LEGACY_PREV"
+    SWAP_IN_FLIGHT=""
+    echo "✅ 发布完成（退化路径：两次 rename）"
+    return 0
+  fi
+  echo "❌ 第二次 rename 失败（dist/ 当前缺失）：尝试回滚" >&2
+  if rollback_old; then
+    SWAP_IN_FLIGHT=""
+    echo "✅ 已回滚：dist/ 恢复为逐字节完好的旧树，本次构建中止（exit 1）" >&2
+    exit 1
+  fi
+  echo "❌ 回滚也失败（fail-closed）：旧 dist 完整保留在 $LEGACY_PREV（绝不删除）" >&2
+  echo "   恢复命令：mv \"$LEGACY_PREV\" \"$DIST\"（下次 bash scripts/build.sh 亦会自动恢复）" >&2
+  exit 1
+}
+
 if [ ! -e "$DIST" ]; then
   # 首次构建：目标不存在，单次 rename 即就位
   mv "$STAGE_DIST" "$DIST"
   echo "✅ 原子发布（首次）：dist/ 由暂存树单次 rename 就位"
 elif [ "$FORCE_TWO_RENAME" != "1" ] && mv --exchange --help >/dev/null 2>&1; then
-  # renameat2(RENAME_EXCHANGE)：暂存树与 dist/ 在单次系统调用内互换，读者零空窗
-  mv -T --exchange "$STAGE_DIST" "$DIST"
-  echo "✅ 原子发布：mv -T --exchange（单次系统调用，读者零空窗）"
+  # ① 能力判定：mv 二进制是否支持 --exchange（GNU coreutils ≥ 9.6）。
+  # ② 运行时：文件系统/挂载点**实际**是否支持 renameat2(RENAME_EXCHANGE)。二者必须区分：
+  #    能力探测通过而运行时失败（部分 overlayfs / 网络挂载）不是「平台不支持」，而是本次
+  #    发布的运行时失败；此时暂存树与 dist/ 都完好，退回两次 rename 继续发布并明确告警。
+  if exchange_publish; then
+    echo "✅ 原子发布：mv -T --exchange（单次系统调用，读者零空窗）"
+  else
+    echo "⚠️ 能力探测通过（mv 支持 --exchange），但文件系统实际 exchange 失败（RENAME_EXCHANGE 不受支持）：退回两次 rename，存在极短空窗" >&2
+    two_rename_publish
+  fi
 else
   if [ "$FORCE_TWO_RENAME" = "1" ]; then
     echo "⚠️ BUILD_FORCE_TWO_RENAME=1（g-359 测试注入）：跳过 mv --exchange 探测，退回两次 rename：存在极短空窗" >&2
   else
     echo "⚠️ 当前 mv 不支持 --exchange（需 GNU coreutils ≥ 9.6），退回两次 rename：存在极短空窗" >&2
   fi
-  mv "$DIST" "$LEGACY_PREV"
-  mv "$STAGE_DIST" "$DIST"
-  rm -rf "$LEGACY_PREV"
+  two_rename_publish
 fi
 
 echo ""

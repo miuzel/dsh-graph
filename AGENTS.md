@@ -8,7 +8,9 @@ All build artifacts are output to a standalone `dist/` directory (gitignored). `
 
 - `core/*.ts` is the single source of truth for the core layer.
 - `dsh-graph-host/lib/client/*.js` are the source modules for the client bundle.
-- Build automatically via `pnpm build` or `pnpm prepack` (chains `sync-core.sh` + `build-client.sh` + asset copy).
+- Build automatically via `pnpm build` (= `bash scripts/build.sh`; chains `sync-core.sh` + `build-client.sh` + asset copy). There is **no** root `prepack` — `build` and `prepare` are the same single entry (g-353).
+- Packaging = build first, then pack inside the artifact dir: `bash scripts/build.sh && (cd dist && npm pack)`.
+- Read-only check (never builds, never repairs, writes nothing): `pnpm check:dist`.
 - GitHub source installs (`github:owner/repo`) trigger `prepare` script automatically on `npm install`.
 - `core-dist/` is a build intermediate and stays gitignored.
 
@@ -35,6 +37,8 @@ pnpm build          # or: bash scripts/build.sh
 This runs `sync-core.sh` (core/*.ts → dist/core/*.js), `build-client.sh` (client modules → dist/lib/client.js), and copies all release assets to `dist/`.
 
 **Atomic publish (g-348)**: `build.sh` never wipes the live `dist/`. All artifacts are first assembled in a staging root inside the repository (`.dist-stage.XXXXXX/`, same filesystem as `dist/`); only after every step succeeds is the tree switched with a single `mv -T --exchange` (`renameat2(RENAME_EXCHANGE)`). A failed build leaves the previous `dist/` byte-for-byte intact and removes the staging root via an EXIT trap. Where `mv --exchange` is unavailable (needs GNU coreutils ≥ 9.6; macOS/BSD), it falls back to two renames and warns on stderr. `DIST_DIR` / `CORE_DIST` let `sync-core.sh` and `build-client.sh` write into the staging root; their standalone defaults are unchanged.
+
+**Fallback hardening (g-353)**: on the two-rename path the capability probe (`mv --exchange --help`, binary capability) is kept distinct from an actual runtime `RENAME_EXCHANGE` failure (filesystem/mount does not support it) — the latter warns and still falls back to two renames. If the second rename fails, `build.sh` first **rolls back** (`mv dist.prev.<pid> dist`), so the live path is byte-for-byte the old tree again; if the rollback also fails it goes **fail-closed**: the old tree is the only intact copy, the EXIT trap never deletes it, and the recovery command is printed. A leftover `dist.prev.<pid>` with a missing `dist/` (e.g. after SIGKILL) is auto-restored by the next build. Recovery command: `mv dist.prev.<pid> dist`. Standalone `build-client.sh` (no `DIST_DIR`) rewrites the live `dist/lib/client.js` **non-atomically** and warns on stderr — publishing always goes through `build.sh`.
 
 ### Verification
 After modifying source and rebuilding:
