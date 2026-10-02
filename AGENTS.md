@@ -10,7 +10,8 @@ All build artifacts are output to a standalone `dist/` directory (gitignored). `
 - `dsh-graph-host/lib/client/*.js` are the source modules for the client bundle.
 - Build automatically via `pnpm build` (= `bash scripts/build.sh`; chains `sync-core.sh` + `build-client.sh` + asset copy). There is **no** root `prepack` — `build` and `prepare` are the same single entry (g-353).
 - Packaging = build first, then pack inside the artifact dir: `bash scripts/build.sh && (cd dist && npm pack)`.
-- Read-only check (never builds, never repairs, writes nothing): `pnpm check:dist`.
+- **Pure read-only check (never builds, never repairs, writes nothing): `node --test core/tests/dist-freshness-g312.test.ts`.** It does not go through pnpm, so no dependency check and no lifecycle script can run.
+- ⚠️ `pnpm check:dist` is **not** a read-only entry (g-408). `pnpm <script>` is `pnpm run <script>`, and pnpm runs its `verifyDepsBeforeRun` check before `run`/`exec` (default `install` since pnpm 11; `false` back in pnpm 10). When `node_modules` is not up to date, it **silently runs `pnpm install`**, which runs the root lifecycle script `prepare` = `bash scripts/build.sh` ⇒ **full build + atomic replacement of `dist/`** — only then does the freshness guard run. Reproduced 2026-10-02 with pnpm 12.3.4: a sentinel file placed in `dist/` was wiped by a single `pnpm check:dist` run (`dist` treehash `fbd6df9be2bf1684` → `ae66501b8d4d2166`). Treat it exactly like `pnpm typecheck`: **never run it in the main tree.**
 - GitHub source installs (`github:owner/repo`) trigger `prepare` script automatically on `npm install`.
 - `core-dist/` is a build intermediate and stays gitignored.
 
@@ -53,6 +54,7 @@ After modifying source and rebuilding:
 - 主树 `dist/` 是**正在运行的宿主的资产来源**：宿主对 `dist/prompts/*.md` 等资产是**每次调用现读**（非启动缓存）。在主树跑构建会与运行中的宿主、以及任何会读 prompt 资产的 worker 争用该目录；历史上由此产生过 `dsh-graph prompt asset missing or unreadable: guide-hint.zh.md`，并**直接终止进行中的轮次**（g-346 att-001/att-002 均因此静默死亡、零提交）。
 - 验证构建请用专属 worktree（`.worktrees/g-<goal>-att-<NN>`）或 `tmp/` 下的私有副本；主树只在发布/复核的明确时点构建。
 - `pnpm typecheck` 会连带触发本包 `prepare`（= 完整构建）⇒ 在主树改用 `./node_modules/.bin/tsc --noEmit -p tsconfig.json`。
+- **同类陷阱（g-408）：`pnpm check:dist` 不是安全入口** —— `pnpm run` 在每个脚本前先做 `verifyDepsBeforeRun` 检查（pnpm ≥ 11 默认 `install`；pnpm 10 为 `false`），`node_modules` 不新鲜时会**隐式 `pnpm install` ⇒ 根 `prepare` ⇒ 完整构建并原子替换 `dist/`**，之后才跑 dist-freshness 守卫。2026-10-02 已因此在**主树**真实重建 `dist/`（mtime 02:44:14 → 13:35:53）。**纯只读检查一律用 `node --test core/tests/dist-freshness-g312.test.ts`**（不经 pnpm；实测运行前后 `dist` mtime + 全树 hash 逐字节不变）。
 - g-348 的原子发布保护的是「读者的可读性」，**不改变**本条纪律：原子发布消除的是构建自身的窗口，而「不要在主树跑实验构建」避免的是与运行中宿主的一切争用。
 - 回归守卫：`core/tests/g348-atomic-build.test.ts`（结构性守卫禁止对活动 `dist` 执行 `rm -rf`；3 个并发读者 × 3 轮构建断言 0 缺失；并把「改回旧模式」的负向对照钉住 ⇒ 人为回退必红）。
 

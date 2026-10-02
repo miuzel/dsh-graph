@@ -62,7 +62,10 @@
 # - 本地开发 / 构建：pnpm build（= bash scripts/build.sh）
 # - 打包 / 预发布：bash scripts/build.sh && (cd dist && npm pack)
 # - GitHub 源码安装：npm install github:owner/repo 自动触发 prepare 脚本（同一条入口）
-# - 只读检查（不构建、不修复、不改文件）：pnpm check:dist
+# - 纯只读检查（不构建、不修复、不改文件）：node --test core/tests/dist-freshness-g312.test.ts
+#   ⚠️ g-408：`pnpm check:dist` **不是**只读入口 —— pnpm 在 run/exec 前先做 verifyDepsBeforeRun
+#   检查（pnpm ≥ 11 默认 install），node_modules 不新鲜时会隐式 `pnpm install`，从而执行本脚本
+#   （prepare = 完整构建）并原子替换 dist/（2026-10-02 实测，pnpm 12.3.4）。绝不要在主树跑它。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO_ROOT="$PWD"

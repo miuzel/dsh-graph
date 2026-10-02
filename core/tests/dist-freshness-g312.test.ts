@@ -222,9 +222,11 @@ test("g-312 判据 4：编译/拼接族源文件 mtime 不得新于产物（手�
 });
 
 test("g-353 判据 3：build-client.sh 的 PARTS 与 lib/client/*.js 一一对应（漏模块被只读检查识别）", () => {
-  // 只读：只解析脚本 + 列目录，不执行构建、不改任何文件。放在本套件里的理由见 `check:dist`：
-  // 它是**唯一**的只读检查入口，必须同时覆盖「产物陈旧」与「漏模块」两族；g-352 的同名断言
-  // 伴随一次真实临时构建（语义更强但不适合做只读入口），故这里补结构族检查而非复用其执行路径。
+  // 本套件**自身**是只读的：只解析脚本 + 列目录，不执行构建、不改任何文件 —— 它就是纯只读入口
+  // `node --test core/tests/dist-freshness-g312.test.ts`（实测运行前后 dist mtime + 全树 hash 不变）。
+  // ⚠️ g-408：**`pnpm check:dist` 不是只读入口**（pnpm 的 verifyDepsBeforeRun 会在 run 前隐式
+  // install ⇒ prepare 完整构建）。放在本套件里的理由：它必须同时覆盖「产物陈旧」与「漏模块」两族；
+  // g-352 的同名断言伴随一次真实临时构建（语义更强但不适合做只读入口），故这里补结构族检查。
   const script = readFileSync(join(repoRoot, "scripts", "build-client.sh"), "utf8");
   const start = script.indexOf("PARTS=(");
   const end = script.indexOf("\n)", start);

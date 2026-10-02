@@ -13,7 +13,9 @@
  *  ② `build-client.sh` 独立调用会**就地非原子**重写活动 `dist/lib/client.js` ⇒ 明确告警并指向
  *     `build.sh`；`build.sh` 传 DIST_DIR 时零噪音（不把它改成原子构建）。
  *  ③ 打包入口唯一化：根 `build` = `prepare` = `bash scripts/build.sh`，**没有** prepack，文档与
- *     真实脚本一致；只读入口 `check:dist` 不构建、不修复、不改文件，且能识别陈旧产物与漏模块。
+ *     真实脚本一致；`check:dist` 指向的守卫本身不构建、不修复、不改文件，且能识别陈旧产物与漏模块
+ *     —— 但**经 pnpm 运行时**会先触发 `prepare` 完整构建（g-408），故纯只读入口一律直接调
+ *     `node --test core/tests/dist-freshness-g312.test.ts`，不经 pnpm。
  *
  * 全部断言在 os.tmpdir() 的 hermetic 沙箱里跑**真实** `scripts/build.sh` / `build-client.sh`，
  * 绝不触碰仓库 dist/（在测试里构建活动 dist 正是 g-348 要消除的故障）。
@@ -482,7 +484,12 @@ test("g-353 判据 3：根打包入口唯一（build = prepare = build.sh，无 
   }
   const agents = readFileSync(join(repoRoot, "AGENTS.md"), "utf8");
   assert.match(agents, /bash scripts\/build\.sh/, "AGENTS.md 须给出唯一构建/打包入口");
-  assert.match(agents, /check:dist/, "AGENTS.md 须给出只读检查入口");
+  assert.match(agents, /check:dist/, "AGENTS.md 须给出 check:dist 入口（其非只读告警见 g-408）");
+  assert.match(
+    agents,
+    /node --test core\/tests\/dist-freshness-g312\.test\.ts/,
+    "AGENTS.md 须给出不触发构建的纯只读入口（node --test …）",
+  );
   const handbook = readFileSync(join(repoRoot, "docs", "release-handbook.md"), "utf8");
   assert.match(handbook, /唯一打包入口/, "发布手册须给出唯一的现行打包入口");
   assert.match(handbook, /已废止/, "发布手册须标注历史 prepack 已废止");

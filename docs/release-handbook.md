@@ -8,9 +8,12 @@
 
 > **现行打包口径（g-353，2026-10，覆盖下文 §2.1/§6.1 的旧描述）**：唯一打包入口是根目录
 > `bash scripts/build.sh`（= `pnpm build` = `prepare` 生命周期；根 `package.json` **没有**
-> `prepack` 脚本）。打包 = `bash scripts/build.sh && (cd dist && npm pack)`。只读检查用
-> `pnpm check:dist`（不构建、不修复、不改文件）。下文提到的「包内 `prepack`」属 v0.4.0 多包
-> 结构，**已废止**，勿照做。
+> `prepack` 脚本）。打包 = `bash scripts/build.sh && (cd dist && npm pack)`。**纯只读检查**（不构建、
+> 不修复、不改文件）用 `node --test core/tests/dist-freshness-g312.test.ts`。⚠️ **不要用
+> `pnpm check:dist` 当只读入口**（g-408）：pnpm 在 `run`/`exec` 前会做 `verifyDepsBeforeRun` 检查
+> （pnpm ≥ 11 默认 `install`，pnpm 10 为 `false`），`node_modules` 不新鲜时会隐式 `pnpm install` ⇒
+> 根 `prepare`（= 完整构建）并原子替换 `dist/`，随后才跑守卫。下文提到的「包内 `prepack`」属
+> v0.4.0 多包结构，**已废止**，勿照做。
 
 ## 0. 总体路径（负责人定案）
 
