@@ -36,12 +36,25 @@
  *     spec/tap/dot/junit/lcov），故自带一个只转发带类型事件的最小 reporter（本地无外部依赖）。
  *
  * 用法：node scripts/run-tests.mjs [测试文件…]     （缺省 = TEST_GLOB）
+ *
+ * ── g-415 的五条补洞（终局复核在 tip `0a130d0` 上实测仍可判绿）──────────────────────────
+ *  ① `todo` 漏门禁：`test.todo('x')` / `test('x',{todo:true},…)` ⇒ `tests 1 / todo 1 / pass 0` 仍报
+ *     `✔ 自证通过` 且 `exit 0`。现由 {@link nestedSuitePassProblems} 补 `todo === 0`。
+ *  ② `NODE_OPTIONS` 选集旁路：`--test-only`（配 `.only`）/`--test-name-pattern`/`--test-skip-pattern`/
+ *     `--test-shard` 被 `cleanTestEnv()` 原样继承 ⇒ 失败文件被静默排除而 `exit 0`。现 **fail-closed 拒绝运行**。
+ *  ③ 目标文件覆盖：事件通道现转发逐文件 `test:summary` 的 `file`，闸门断言「匹配到的文件集合」
+ *     ≡ 「真正产出完成事件的文件集合」⇒ 关闭 shard/pattern/测试内 `process.exit(0)` 早退等**静默少跑**。
+ *  ④ 结构守卫（在 `core/tests/g415-gate-hardening.test.ts`）：禁止 `core/tests/*.test.ts`（被收集集合）
+ *     出现选集式 `.only` 与直接 `process.exit(` / `process.exitCode`。
+ *  ⑤ **管道截断**：旧版 `process.stdout.write(bigOut)` 后立即 `process.exit(0)` ⇒ 未 flush 的管道缓冲被丢弃
+ *     （实测 exit 0、stdout 恰 64 KiB、自证行不可见）。现全部收尾只设 `process.exitCode`、**不调 `process.exit`**
+ *     （仅极小的同步早退消息经 `writeSync(2, …)` 后退出），让运行时自然 flush 再收尾。
  */
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -56,6 +69,7 @@ const {
   parseEventChannel,
   assertNestedSuiteRan,
   nestedSuitePassProblems,
+  findTestSelectionOption,
 } = await import(pathToFileURL(join(repoRoot, "core/tests/fixtures/nested-runner.ts")).href);
 
 /** 干净计数通道的 reporter（NDJSON 带类型事件；唯一实现见该文件头）。 */
@@ -73,12 +87,87 @@ function expandGlob(glob) {
     .map((name) => `${dir}/${name}`);
 }
 
+/**
+ * g-415：极小的**同步**早退消息 —— `writeSync(2, …)` 写 fd 之后 `process.exit` 不会丢字节。
+ * 大输出（子 runner 的 stdout/stderr）**绝不**走这条路径，见下面 `close` 收尾只设 `process.exitCode`。
+ */
+function exitNow(message, code) {
+  writeSync(2, `${message}\n`);
+  process.exit(code);
+}
+
+/** 归一化路径：存在则取 realpath（消解 macOS `/tmp` 等符号链接差异），否则退回绝对路径。 */
+function normPath(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
+/** 目录型入参展开为 node 会运行的测试文件（本仓测试均为 `*.test.<ext>`），否则无法做逐文件覆盖断言。 */
+const TEST_FILE_RE = /\.test\.(?:ts|mts|cts|js|mjs|cjs)$/;
+function expandDir(absDir) {
+  return readdirSync(absDir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && TEST_FILE_RE.test(entry.name))
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
+}
+
+/**
+ * g-415 判据③：**目标文件覆盖** —— 「glob/入参匹配到的文件集合」必须与「真正产出完成事件的文件集合」
+ * （事件通道里带 `file` 的 `test:summary`）**一致**，且文件数 > 0。
+ *
+ * 完成事件用的是**逐文件汇总**（不是文件级 `test:pass`/`test:complete`：那两者在测试内
+ * `process.exit(0)` 早退时**仍会发出**，无法区分「跑完」与「刚注册就退出」）。被 shard/pattern 排除、
+ * 或中途早退的文件**不会**产出逐文件汇总 ⇒ 必然在这里报红。
+ */
+function coverageProblems(targetFiles, channel) {
+  const problems = [];
+  if (targetFiles.length === 0) {
+    problems.push("未匹配到任何目标文件（glob/入参展开为空）⇒ 不得判绿");
+    return problems;
+  }
+  const completed = new Set((channel.files ?? []).map((f) => normPath(resolve(repoRoot, f))));
+  const missing = targetFiles.filter((f) => !completed.has(f));
+  if (missing.length > 0) {
+    const shown = missing.slice(0, 5).map((f) => relative(repoRoot, f)).join("、");
+    problems.push(
+      `目标文件未产出完成事件（被选集/分片静默排除，或测试内提前退出）` +
+        `${missing.length}/${targetFiles.length} 个：${shown}${missing.length > 5 ? " …" : ""}`,
+    );
+  }
+  return problems;
+}
+
 const argv = process.argv.slice(2);
 const targets = argv.length > 0 ? argv : expandGlob(TEST_GLOB);
 if (targets.length === 0) {
-  console.error(`[run-tests] 未展开到任何测试文件（glob=${TEST_GLOB}）⇒ 不得判绿`);
-  process.exit(2);
+  exitNow(`[run-tests] 未展开到任何测试文件（glob=${TEST_GLOB}）⇒ 不得判绿`, 2);
 }
+
+// ── g-415 判据②：NODE_OPTIONS 含测试选集/分片开关 ⇒ fail-closed（拒绝运行，绝不静默少跑）──────
+const selectionOffender = findTestSelectionOption(process.env.NODE_OPTIONS);
+if (selectionOffender) {
+  exitNow(
+    `[run-tests] ✖ 自证失败：NODE_OPTIONS 含测试选集/分片开关 ${selectionOffender} ⇒ ` +
+      `它会让部分目标文件/用例被静默排除，闸门无法自证「跑全」；fail-closed 拒绝运行` +
+      `（请从 NODE_OPTIONS 移除该开关；内存/告警/类型剥离等不改变选中集合的合法选项不受影响）`,
+    1,
+  );
+}
+
+// 目录入参展开成具体文件（并把基准目录固定为 repoRoot）⇒ 覆盖断言有确定的「匹配集合」可比。
+const spawnTargets = [];
+for (const t of targets) {
+  const abs = resolve(repoRoot, t);
+  if (statSync(abs, { throwIfNoEntry: false })?.isDirectory()) spawnTargets.push(...expandDir(abs));
+  else spawnTargets.push(t);
+}
+if (spawnTargets.length === 0) {
+  exitNow(`[run-tests] 目标展开后没有任何测试文件（glob=${TEST_GLOB}）⇒ 不得判绿`, 2);
+}
+const targetFiles = [...new Set(spawnTargets.map((t) => normPath(resolve(repoRoot, t))))];
 
 const started = Date.now();
 // 私有计数通道落在外面的临时目录：不写仓库、不参与 glob、不留给下一次运行。
@@ -102,7 +191,7 @@ const child = spawn(
     // 干净计数通道（判定只认它）：带类型事件，测试输出无法伪造。
     `--test-reporter=${eventsReporter}`,
     `--test-reporter-destination=${eventsPath}`,
-    ...targets,
+    ...spawnTargets,
   ],
   {
     cwd: repoRoot,
@@ -113,12 +202,15 @@ const child = spawn(
 
 let out = "";
 let err = "";
+let finished = false;
 child.stdout.on("data", (chunk) => { out += chunk; });
 child.stderr.on("data", (chunk) => { err += chunk; });
 child.on("error", (e) => {
+  if (finished) return;
+  finished = true;
   dropChannel();
   console.error(`[run-tests] 无法启动测试 runner：${e?.message ?? e}`);
-  process.exit(2);
+  process.exitCode = 2; // g-415：不调 process.exit，让缓冲自然 flush
 });
 
 /** 需要逐字段对齐的计数字段（含 `suites`：`describe` 聚合事件必须与 runner 汇总一致，见 reporter 的 tally）。 */
@@ -161,6 +253,10 @@ function crossCheckProblems({ summary, tally, human, code, summaries, badLines }
 }
 
 child.on("close", (code, signal) => {
+  if (finished) return;
+  finished = true;
+  // g-415 P1-⑥：这里**只写流、不 process.exit** —— 出口统一设 `process.exitCode`，由运行时把
+  // 未 flush 的管道缓冲写完后自然收尾（旧版 write 后立刻 exit(0) 会把大输出截在 64 KiB）。
   process.stdout.write(out);
   process.stderr.write(err);
 
@@ -179,7 +275,7 @@ child.on("close", (code, signal) => {
     out,
     err,
     summary: channel.summary ?? human,
-    command: `${process.execPath} --test ${targets.join(" ")}`,
+    command: `${process.execPath} --test ${spawnTargets.join(" ")}`,
   };
 
   try {
@@ -190,7 +286,7 @@ child.on("close", (code, signal) => {
           `⇒ 计数不可信，禁止判绿（信号=${signal ?? "无"}）`,
       );
     }
-    // 交叉校验红因 + 全绿判据（退出码 0 / cancelled 0 / fail 0 / skipped 0）**一次性打全**，
+    // 交叉校验红因 + 全绿判据（退出码 0 / cancelled 0 / fail 0 / skipped 0 / todo 0）**一次性打全**，
     // 便于一眼定位是「计数通道不可信」还是「套件真的没全绿」。
     const problems = crossCheckProblems({
       summary: channel.summary,
@@ -201,19 +297,21 @@ child.on("close", (code, signal) => {
       badLines: channel.badLines,
     });
     problems.push(...nestedSuitePassProblems(run));
+    problems.push(...coverageProblems(targetFiles, channel)); // g-415 判据③：逐文件覆盖
     if (problems.length > 0) {
       throw new Error(`整套件自证闸门不达标 —— ${problems.join("；")}`);
     }
   } catch (e) {
     dropChannel();
     console.error(`\n[run-tests] ✖ 自证失败：${e?.message ?? e}`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   dropChannel();
   const s = run.summary;
   console.log(
     `\n[run-tests] ✔ 自证通过：tests=${s.tests} (>0) skipped=${s.skipped} fail=${s.fail} cancelled=${s.cancelled} ` +
-      `pass=${s.pass} exit=${code} ms=${Date.now() - started} glob=${TEST_GLOB}`,
+      `todo=${s.todo} pass=${s.pass} exit=${code} ms=${Date.now() - started} glob=${TEST_GLOB}`,
   );
-  process.exit(0);
+  process.exitCode = 0;
 });

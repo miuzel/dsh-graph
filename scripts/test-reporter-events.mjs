@@ -12,7 +12,8 @@
  * 测试的 `console.log` 走 `test:stdout` 事件 —— 本 reporter **不转发**它，故伪造文本进不了本通道。
  *
  * 输出（NDJSON，一行一个对象）：
- *   {"type":"summary","counts":{…}}  每个 runner 汇总一条（文件级 + 最后一条全局级）
+ *   {"type":"summary","file":<string|null>,"counts":{…}} 每个 runner 汇总一条（文件级带 `file`，
+ *                                    最后一条全局级 `file` 为 `null`）
  *   {"type":"tally","counts":{…},…}  reporter 自行按事件累加的独立计数（source 耗尽时才产，
  *                                    因此**子进程被杀死 ⇒ 没有 tally 行**，可判「通道未完成」）
  *
@@ -36,7 +37,8 @@ export default async function* reporter(source) {
       const counts = ev.data?.counts;
       if (counts) {
         summaries += 1;
-        yield emit({ type: "summary", counts });
+        // g-415：带上 `file`（逐文件汇总才有；最后的全局汇总没有）⇒ 闸门可断言「每个目标文件都产出了完成事件」。
+        yield emit({ type: "summary", file: typeof ev.data?.file === "string" ? ev.data.file : null, counts });
       }
       continue;
     }

@@ -47,14 +47,24 @@ After modifying source and rebuilding:
 2. Run the full test suite: `node --test core/tests/*.test.ts`
 3. Verify pack: `cd dist && pnpm pack --dry-run`
 
-**整套件自证闸门（g-350 / g-407 R1 / g-413）**：`node scripts/run-tests.mjs` —— 跨平台入口，先摘除
+**整套件自证闸门（g-350 / g-407 R1 / g-413 / g-415）**：`node scripts/run-tests.mjs` —— 跨平台入口，先摘除
 `NODE_TEST_CONTEXT`/`NODE_TEST_WORKER_ID` 再起 runner，并**自证**「退出码 `0` 且确实跑了 `tests > 0`
-且 `skipped == 0` 且 `fail == 0` 且 `cancelled == 0` 且计数口径自洽」；计数取自
+且 `skipped == 0` 且 `fail == 0` 且 `cancelled == 0` 且 `todo == 0` 且计数口径自洽
+（`pass + fail + cancelled + skipped + todo == tests`）」；计数取自
 `scripts/test-reporter-events.mjs` 的**带类型事件**通道（测试自己打印的 `ℹ tests …` 伪造汇总无法污染），
 并与人类可读汇总、子进程退出码**三方交叉校验**。注入形态（`NODE_TEST_CONTEXT=… node --test core/tests/*.test.ts`
 会被 `node --test` 静默 skip 全部文件并 `exit 0`）下只有它可判定。它**不替换**上面的命令，
-两者共用同一 glob `core/tests/*.test.ts`（守卫见 `core/tests/g350-test-hygiene.test.ts` 与
-`core/tests/g413-gate-integrity.test.ts`）。
+两者共用同一 glob `core/tests/*.test.ts`（守卫见 `core/tests/g350-test-hygiene.test.ts`、
+`core/tests/g413-gate-integrity.test.ts` 与 `core/tests/g415-gate-hardening.test.ts`）。
+
+闸门另有三道 **fail-closed** 防线（g-415）：①`NODE_OPTIONS` 含测试选集/分片开关（`--test-only` /
+`--test-name-pattern` / `--test-skip-pattern` / `--test-shard`）时**拒绝运行**并 `exit≠0`（内存/告警等
+不改变选中集合的合法选项不受影响）；②**目标文件覆盖断言**：`glob`/入参匹配到的文件集合必须与真正产出
+**完成事件**（逐文件 `test:summary`，带 `file`）的文件集合一致，据此关闭 shard/pattern 与测试内提前退出
+等**静默少跑**；③收尾只设 `process.exitCode`、**不调 `process.exit`**，避免大输出经 pipe 时未 flush 的
+缓冲被丢弃（旧版实测 `exit 0` 且 stdout 恰 64 KiB、自证行不可见）。结构守卫
+`core/tests/g415-gate-hardening.test.ts` 另禁止被收集集合 `core/tests/*.test.ts` 出现选集式 only 标记与
+直接退出进程调用（`process.exit` / `process.exitCode`，含 hook 内同型调用）。
 
 ## Build Isolation（构建隔离：禁止在主树跑实验性构建）
 

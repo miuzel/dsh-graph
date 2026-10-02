@@ -33,6 +33,15 @@
  *           `summaryBlocks` 块数供调用方判「该通道是否唯一/可信」；
  *         · `parseEventChannel()` 读取 `scripts/test-reporter-events.mjs` 产出的**带类型事件**通道
  *           （测试输出走 `test:stdout`，伪造不出 `test:summary`/`test:pass`/`test:fail`），权威计数只认它。
+ *
+ * ── g-415 的三条补洞（同一根因域：闸门可被判绿而未真正跑全）────────────────────────────
+ *  P2-1「待办不算红」：`test.todo(...)` / `test(…,{todo:true},…)` 计入 `todo` 而不入 `fail`
+ *       ⇒ 只判 fail/cancelled/skipped 会放行。已补 `todo === 0`（见 {@link nestedSuitePassProblems}）。
+ *  P2-2「NODE_OPTIONS 选集旁路」：`cleanTestEnv()` 保留 `NODE_OPTIONS`，故 `--test-only` /
+ *       `--test-name-pattern` / `--test-skip-pattern` / `--test-shard` 会让部分目标被静默排除。
+ *       已补 {@link findTestSelectionOption} 供闸门 fail-closed 拒绝运行。
+ *  P2-3「目标文件覆盖」：{@link parseEventChannel} 现收集**逐文件完成事件**（`test:summary` 带 `file`），
+ *       闸门据此断言匹配集合 ≡ 完成事件集合 ⇒ 关闭 shard/pattern/测试内 `process.exit(0)` 早退。
  */
 
 import assert from "node:assert/strict";
@@ -43,6 +52,71 @@ import { spawn } from "node:child_process";
  * 继承给孙进程会让嵌套 `node --test` 静默跳过全部文件（见文件头缺陷说明）。
  */
 export const TEST_CONTEXT_VARS = ["NODE_TEST_CONTEXT", "NODE_TEST_WORKER_ID"] as const;
+
+/**
+ * g-415：`NODE_OPTIONS` 里会**改变「哪些文件/用例真的运行」**的开关（选集/分片类）。
+ *
+ * `cleanTestEnv()` 出于「不误伤合法用法」的考虑**保留** `NODE_OPTIONS`，于是这些开关会被原样
+ * 继承给子 runner，让部分目标文件被**静默排除**而仍然 `exit 0`：
+ *   - `--test-only`（配 `test.only`：只跑选集用例，其余静默不跑）；
+ *   - `--test-name-pattern` / `--test-skip-pattern`（按名过滤 ⇒ 失败用例可被静默排除）；
+ *   - `--test-shard`（只跑一个分片 ⇒ 其余文件静默不跑）。
+ *
+ * 自证闸门对四类一律 **fail-closed**（拒绝运行并 `exit≠0`），**不**采「清洗后再继续」：
+ * 「清洗」要额外证明与用户显式选集**语义等价**，而「拒绝运行」不需要该论证，也不会误伤
+ * 内存（`--max-old-space-size`）/告警（`--no-warnings`）/类型剥离等**不改变选中集合**的合法选项。
+ */
+export const TEST_SELECTION_OPTION_NAMES = [
+  "--test-only",
+  "--test-name-pattern",
+  "--test-skip-pattern",
+  "--test-shard",
+] as const;
+
+/** 尽力按 shell 语义切分 `NODE_OPTIONS`（支持单/双引号与反斜杠转义）；切分不完美也不影响判定。 */
+function splitNodeOptions(value: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else if (ch === "\\" && i + 1 < value.length) {
+        current += value[i + 1];
+        i += 1;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (/\s/.test(ch)) {
+      if (current !== "") tokens.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  if (current !== "") tokens.push(current);
+  return tokens;
+}
+
+/**
+ * 命中**选集/分片**开关时返回该开关名（`--test-name-pattern=…` 归一为 `--test-name-pattern`），
+ * 否则返回 `null`。不改变选中集合的合法选项（内存/告警/类型剥离等）一律不受影响。
+ */
+export function findTestSelectionOption(nodeOptions: string | undefined | null): string | null {
+  if (!nodeOptions) return null;
+  for (const token of splitNodeOptions(nodeOptions)) {
+    const eq = token.indexOf("=");
+    const name = eq === -1 ? token : token.slice(0, eq);
+    if ((TEST_SELECTION_OPTION_NAMES as readonly string[]).includes(name)) return name;
+  }
+  return null;
+}
 
 /**
  * 派生**任何**子进程前的干净 env：`process.env` 与 `extra` **先**合并，**再**摘掉运行器注入变量。
@@ -131,6 +205,13 @@ export interface EventChannelReading {
   tally: TestSummary | null;
   /** 出现过的 runner 汇总条数（文件级 + 最后一条全局级）。 */
   summaries: number;
+  /**
+   * g-415：**逐文件完成事件** —— `test:summary` 携带 `file` 的那些路径（全局汇总不带 `file`，不计入）。
+   * 闸门据此断言「glob/入参匹配到的文件集合」与「真正产出完成事件的文件集合」一致，
+   * 从而关闭 `--test-shard` / `--test-name-pattern` / 测试内 `process.exit(0)` 早退等**静默少跑**：
+   * 被排除或中途早退的文件**根本不会**产出这条带 `file` 的汇总。
+   */
+  files: string[];
   /** 无法解析/未知类型的行数（`> 0` ⇒ 通道被损坏或截断，计数不可信）。 */
   badLines: number;
 }
@@ -164,12 +245,13 @@ export function parseEventChannel(text: string): EventChannelReading {
   let tally: TestSummary | null = null;
   let summaries = 0;
   let badLines = 0;
+  const files: string[] = [];
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (line === "") continue;
-    let record: { type?: unknown; counts?: unknown };
+    let record: { type?: unknown; counts?: unknown; file?: unknown };
     try {
-      record = JSON.parse(line) as { type?: unknown; counts?: unknown };
+      record = JSON.parse(line) as { type?: unknown; counts?: unknown; file?: unknown };
     } catch {
       badLines += 1;
       continue;
@@ -181,6 +263,8 @@ export function parseEventChannel(text: string): EventChannelReading {
     }
     if (record.type === "summary") {
       summaries += 1;
+      // g-415：只收**带 file** 的逐文件完成事件（全局汇总不带 file ⇒ 不能充当任何文件的完成证据）。
+      if (typeof record.file === "string" && record.file !== "") files.push(record.file);
       summary = summaryFromCounts(counts as Record<string, unknown>); // 逐条覆盖 ⇒ 留下最后（全局）一条
     } else if (record.type === "tally") {
       tally = summaryFromCounts(counts as Record<string, unknown>);
@@ -188,7 +272,7 @@ export function parseEventChannel(text: string): EventChannelReading {
       badLines += 1;
     }
   }
-  return { summary, tally, summaries, badLines };
+  return { summary, tally, summaries, files, badLines };
 }
 
 export interface NestedRunResult {
@@ -303,11 +387,15 @@ export function assertNestedSuiteRan(run: NestedRunResult, label: string): void 
 
 /**
  * 全绿判据的**非抛错**形态：返回**全部**不达标项（空数组 = 达标）。
- * 判据：**退出码 0** 且 `cancelled === 0` 且 `fail === 0` 且 `skipped === 0`
+ * 判据：**退出码 0** 且 `cancelled === 0` 且 `fail === 0` 且 `skipped === 0` 且 `todo === 0`
  * （`tests > 0` 由 {@link assertNestedSuiteRan} 保证）。
  *
  * 为什么 `cancelled` 必须单列：`node --test` 把被取消（如 timeout）的用例计入 `cancelled` 而**不是** `fail`，
  * 只看 `fail === 0` 会把它放行（g-413 P1-1 的 false-green 洞）。
+ *
+ * 为什么 `todo` 必须单列（g-415）：`test.todo('x')` / `test('x',{todo:true},…)` 产出
+ * `tests 1 / pass 0 / fail 0 / cancelled 0 / skipped 0 / todo 1` 且 **exit 0** —— 旧的
+ * `fail/cancelled/skipped` 三判全部放行，于是「零个真实验证」被当成「全绿」。待办**不是**验证。
  *
  * 与 {@link assertNestedSuitePassed} **共用同一实现**：闸门需要把交叉校验红因与这些不达标项
  * 一次性打全，故单独暴露非抛错形态，避免两处各写一份判据。
@@ -321,6 +409,7 @@ export function nestedSuitePassProblems(run: NestedRunResult): string[] {
   if (s.cancelled > 0) problems.push(`有被**取消**的用例（cancelled=${s.cancelled}）`);
   if (s.fail > 0) problems.push(`有**失败**用例（fail=${s.fail}）`);
   if (s.skipped > 0) problems.push(`有用例被**跳过**（skipped=${s.skipped}）`);
+  if (s.todo > 0) problems.push(`有**待办**用例（todo=${s.todo}）——待办不是验证，不得判绿`);
   return problems;
 }
 
