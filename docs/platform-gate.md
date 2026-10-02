@@ -220,3 +220,4 @@ evidence: suite=core/tests node --test passed=1379 failed=0 skipped=0 exit=0
 - 历史手册：[`docs/macos-gate.md`](macos-gate.md)（v0.16.0，已被本页取代）
 - 转发的既有门禁：[`scripts/win-smoke-test.mjs`](../scripts/win-smoke-test.mjs)（T1–T5；Windows 真机门禁执行件）
 - 测试守卫：[`core/tests/g362-platform-gate.test.ts`](../core/tests/g362-platform-gate.test.ts)（本次新增）、[`core/tests/g359-macos-gate.test.ts`](../core/tests/g359-macos-gate.test.ts)（用例零削减，仅改 import）
+- P1 的下游影响面：[`docs/case-alias-naming.md`](case-alias-naming.md)（g-364：真实命名入口在大小写不敏感卷上的保护现状、注入复现方式与平台实测状态）

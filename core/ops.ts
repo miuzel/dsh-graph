@@ -36,9 +36,22 @@ import {
   areSameStat,
   setPlatformForTesting,
   withPlatformForTesting,
+  resolveExistingEntry,
+  setCaseInsensitiveVolumeForTesting,
+  withCaseInsensitiveVolumeForTesting,
+  isCaseInsensitiveVolumeInjected,
   type FileIdentitySnapshot,
 } from "./platform.ts";
-export { isWindows, setPlatformForTesting, withPlatformForTesting };
+export {
+  isWindows,
+  setPlatformForTesting,
+  withPlatformForTesting,
+  // g-364：卷大小写别名语义的注入点与解析器（测试用；生产路径恒为不注入）
+  resolveExistingEntry,
+  setCaseInsensitiveVolumeForTesting,
+  withCaseInsensitiveVolumeForTesting,
+  isCaseInsensitiveVolumeInjected,
+};
 import { join, basename, dirname, relative, resolve, isAbsolute, sep } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
@@ -107,6 +120,8 @@ import {
   setVersionStatus,
   validateVersionRelease,
   versionDetail,
+  // g-364：版本泳道名的卷别名守卫（与附件路径共用同一解析语义）
+  caseAliasVersionSlug,
 } from "./version-lane.ts";
 import {
   registerWorktreeCandidates,
@@ -1775,6 +1790,19 @@ export function createGoal(
   root: string,
   opts: { title: string; version?: string; description?: string; type?: string; actor: string },
 ): string {
+  // g-364：版本泳道名的**卷别名前置校验**（在任何副作用之前，含 g-337 的高水位预留）。
+  // 不敏感卷上 `V0.19.3` 会折叠到既有 `v0.19.3`：若照旧 `mkdir` + 复用，会静默把目标挂到别名
+  // 泳道上，写出 `meta.version`(V0.19.3) 与目录(v0.19.3) 不一致的目标（validate 必报错）。
+  // 故此处明确拒绝并要求改用磁盘实际 slug——不自动改名、不合并泳道。
+  if (opts.version && opts.version !== "standalone") {
+    const alias = caseAliasVersionSlug(root, opts.version);
+    if (alias) {
+      throw new GraphError(
+        `版本 ${opts.version} 与磁盘上的 ${alias} 仅大小写不同（在不敏感卷上是同一实体），拒绝静默复用——` +
+          `请改用磁盘实际 slug「${alias}」或先创建新版本；未创建目标`,
+      );
+    }
+  }
   // g-337：先取历史高水位 +1，并**在落盘前先持久抬高水位**（预留语义）——
   // 即使随后建目录/写 goal.md 失败，该编号也已被占用，下次创建不复用它。
   const bound = seqUpperBound(root);
@@ -3947,20 +3975,27 @@ function resolveAttachmentPath(root: string, relPath: string, createDirs = false
   const base = segs[segs.length - 1];
   let cur = realRoot;
   for (const seg of segs.slice(0, -1)) {
-    cur = join(cur, seg);
-    const st = tryLstat(cur);
+    // g-364：目录段同样可能只大小写不同（不敏感卷上 `Sub/` 与既有 `sub/` 是同一实体）。
+    // 折叠命中时改用**磁盘实际段名**，使读/写/删除都落在真实条目上，且返回的引用名可用。
+    const ent = resolveExistingEntry(cur, seg);
+    const next = join(cur, ent ? ent.actual : seg);
+    const st = tryLstat(next);
     if (st && st.isSymbolicLink()) throw new GraphError(`附件路径含 symlink 目录：${seg}`);
     if (st && !st.isDirectory()) throw new GraphError(`附件路径段不是目录：${seg}`);
     if (!st) {
       if (!createDirs) return null; // 父目录缺失 → 文件不存在（不创建）
-      mkdirSync(cur, { recursive: true });
+      mkdirSync(next, { recursive: true });
     }
+    const dirReal = realpathSync(next);
+    if (!(dirReal === realRoot || dirReal.startsWith(realRoot + sep))) {
+      throw new GraphError("附件路径越界（realpath 不在 attachments 根内）");
+    }
+    cur = dirReal;
   }
-  const dirReal = realpathSync(cur);
-  if (!(dirReal === realRoot || dirReal.startsWith(realRoot + sep))) {
-    throw new GraphError("附件路径越界（realpath 不在 attachments 根内）");
-  }
-  return { realRoot, segs, file: join(dirReal, base) };
+  // g-364：基名同样解析到磁盘实际拼写——不敏感卷上请求 `Foo.md` 可能解析到既有 `foo.md`；
+  // 敏感卷上只有异名条目时 resolveExistingEntry 返回 null，仍按请求名新建（不产生假别名）。
+  const baseEnt = resolveExistingEntry(cur, base);
+  return { realRoot, segs, file: join(cur, baseEnt ? baseEnt.actual : base) };
 }
 
 /** 在真正执行 fs 操作前重验父目录仍安全（防 TOCTOU：解析后被替换为指向外部的 symlink）：
@@ -4035,7 +4070,10 @@ function atomicWrite(target: string, data: Buffer | string): void {
  *  - 路径规范化（可安全子目录）拒绝绝对路径、. / ..、NUL、反斜杠、冒号；
  *  - realpath/lstat 包含校验：attachments 根内任何途中目录/symlink 均被拒绝，落盘目标不越界；
  *  - 原子写：temp + fsync + rename；异常/中断不留半文件；
- *  - 覆盖保护：目标已存在且内容相同 → 幂等返回原引用名；内容不同 → 追加短 digest 唯一名，绝不覆盖；
+ *  - 覆盖保护：目标已存在且内容相同 → 幂等返回**磁盘实际引用名**；内容不同 → 追加短 digest 唯一名，绝不覆盖；
+ *  - g-364：在大小写不敏感卷（APFS 默认 / WSL drvfs / 部分网络挂载）上，请求名可能只与既有条目
+ *    相差大小写——此时**返回磁盘实际名**（不是请求拼写）并复用/派生到真实条目上，避免返回一个
+ *    磁盘上并不存在的名字（那会让 @att 引用在大小写敏感卷上悬空）。
  *  - 返回稳定、可审计的相对引用名（供 @att/<name> 引用）。 */
 export function storeAttachment(
   root: string,
@@ -4058,28 +4096,42 @@ export function storeAttachment(
   }
   const r = resolveAttachmentPath(root, relPath, true);
   if (!r) throw new GraphError("附件存储失败：attachments 根不可用"); // createDirs=true 下根缺失会被创建，不应为 null
-  const { realRoot: attRootReal, segs, file } = r;
+  const { realRoot: attRootReal, file } = r;
   const parentReal = dirname(file);
   if (!(parentReal === attRootReal || parentReal.startsWith(attRootReal + sep))) {
     throw new GraphError("附件路径越界（realpath 不在 attachments 根内）");
   }
-  let target = file;
-  let finalRel = relPath;
   const digest = createHash("sha1").update(data).digest("hex");
-  const base = segs[segs.length - 1];
+  /** 相对 attachments 根的**磁盘实际**引用名（目录段已 canonical，基名取真实条目拼写）。 */
+  const relOf = (abs: string): string => relative(attRootReal, abs).split(sep).join("/");
+  let target = file;
+  let finalRel = relOf(file);
   const tst = tryLstat(target);
   if (tst) {
     if (tst.isSymbolicLink()) throw new GraphError(`附件目标存在且为 symlink：${relPath}`);
     if (!tst.isFile()) throw new GraphError(`附件目标非普通文件：${relPath}`);
-    if (readFileSync(target).equals(data)) return relPath; // 幂等：同内容复用，不覆盖
-    // 内容不同 → 唯一名（追加短 digest）
-    const dot = base.lastIndexOf(".");
-    const b = dot > 0 ? base.slice(0, dot) : base;
-    const e = dot > 0 ? base.slice(dot) : "";
+    const actualBase = basename(target);
+    if (readFileSync(target).equals(data)) return finalRel; // 幂等：同内容复用，返回磁盘实际名，不覆盖
+    // 内容不同 → 唯一名（追加短 digest）。基名取**磁盘实际基名**，与目录既有拼写约定一致。
+    const dot = actualBase.lastIndexOf(".");
+    const b = dot > 0 ? actualBase.slice(0, dot) : actualBase;
+    const e = dot > 0 ? actualBase.slice(dot) : "";
     const newBase = `${b}-${digest.slice(0, 8)}${e}`;
-    target = join(parentReal, newBase);
-    finalRel = [...segs.slice(0, -1), newBase].join("/");
-    if (tryLstat(target)) throw new GraphError(`唯一名目标已存在：${finalRel}`);
+    // g-364：唯一名同样按卷语义解析——不敏感卷上它可能命中一个仅大小写不同的既有条目
+    // （同一内容的重复存储应幂等返回磁盘实际名，而不是报「已存在」）。
+    const newEnt = resolveExistingEntry(parentReal, newBase);
+    target = join(parentReal, newEnt ? newEnt.actual : newBase);
+    finalRel = relOf(target);
+    const ntst = tryLstat(target);
+    if (ntst) {
+      if (ntst.isSymbolicLink() || !ntst.isFile()) {
+        throw new GraphError(`唯一名目标不可用（非普通文件）：${finalRel}`);
+      }
+      if (!readFileSync(target).equals(data)) {
+        throw new GraphError(`唯一名目标已存在且内容不同：${finalRel}`); // 摘要碰撞：明确拒绝，绝不覆盖
+      }
+      // 同内容：幂等返回磁盘实际名（此前会误报「唯一名目标已存在」）
+    }
   }
   reassertContainedParent(attRootReal, target); // 写前重验父目录（防 TOCTOU 父目录替换 symlink 越界写）
   atomicWrite(target, data);
@@ -4126,9 +4178,27 @@ export function attachmentInfo(root: string, name: string): { name: string; exis
   }
 }
 
-/** 统计某个附件相对路径在「所有 goal 正文 + 所有卡片正文（自有卡 + 共享池，含已归档）」中的引用次数。 */
+/** 把附件引用名解析到 **canonical 文件路径**（存在且为普通文件时）；不抛错。
+ *  g-364：用于判断两个拼写是否指向**同一实体**——不敏感卷上 `Foo.md` 与 `foo.md` 是同一文件，
+ *  只有按同一性而非按字面相等计数，才不会把「仍被 @att/旧拼写 引用」的附件判为可删。 */
+function resolveExistingAttachmentReal(root: string, name: string): string | null {
+  try {
+    const r = resolveAttachmentPath(root, name, false);
+    if (!r) return null;
+    const st = tryLstat(r.file);
+    if (!st || !st.isFile() || st.isSymbolicLink()) return null;
+    return realpathSync(r.file);
+  } catch {
+    return null;
+  }
+}
+
+/** 统计某个附件相对路径在「所有 goal 正文 + 所有卡片正文（自有卡 + 共享池，含已归档）」中的引用次数。
+ *  g-364：字面同名**或解析到同一 canonical 文件**（大小写/规范化别名指向同一实体）都计入，
+ *  绝不因拼写差异漏计而让删除留下悬空引用。 */
 export function attachmentReferenceCount(root: string, name: string): number {
   const safeName = sanitizeAttachmentPath(name);
+  const targetReal = resolveExistingAttachmentReal(root, safeName);
   let count = 0;
   const bodies: string[] = [];
   for (const gfile of listGoalFiles(root, { includeArchived: true })) {
@@ -4150,19 +4220,28 @@ export function attachmentReferenceCount(root: string, name: string): number {
       try { bodies.push(loadGoal(join(sdir, f)).body); } catch { /* 跳过 */ }
     }
   }
-  // 用 parseAttachmentRefs 精确计数：仅当正文实际解析出该附件 ref 才 +1（避免 foo 误配 foo2）
-  for (const body of bodies) if (parseAttachmentRefs(body).includes(safeName)) count++;
+  // 用 parseAttachmentRefs 精确计数：仅当正文实际解析出该附件 ref 才 +1（避免 foo 误配 foo2）。
+  // 别名判定按「解析到同一 canonical 文件」——精确同名仍是最常见分支，先判以免多跑 fs。
+  for (const body of bodies) {
+    const refs = parseAttachmentRefs(body);
+    if (refs.includes(safeName)) { count++; continue; }
+    if (!targetReal) continue;
+    if (refs.some((ref) => resolveExistingAttachmentReal(root, ref) === targetReal)) count++;
+  }
   return count;
 }
 
 /** 显式删除附件；仍被引用的附件禁止删除（解除/删除卡片不误删仍引用附件）。
- *  根/子目录 symlink 与越界由 resolveAttachmentPath 统一拒绝。 */
+ *  根/子目录 symlink 与越界由 resolveAttachmentPath 统一拒绝。
+ *  g-364：引用计数按「解析到同一实体」统计（别名拼写也算），事件记录**磁盘实际名**——
+ *  删除请求可以只大小写不同，但账本与磁盘必须一致（不留下对不上盘的 slug）。 */
 export function deleteAttachment(root: string, name: string, opts: { actor: string }): void {
   const safeName = sanitizeAttachmentPath(name);
   const r = resolveAttachmentPath(root, safeName);
   if (!r) throw new GraphError(`附件不存在：${safeName}`);
   const st = tryLstat(r.file);
   if (!st || !st.isFile() || st.isSymbolicLink()) throw new GraphError(`附件不存在或非普通文件：${safeName}`);
+  const actualRel = relative(r.realRoot, r.file).split(sep).join("/");
   const refs = attachmentReferenceCount(root, safeName);
   if (refs > 0) {
     throw new GraphError(`附件 ${safeName} 仍被 ${refs} 处引用，不能删除——请先解除引用`);
@@ -4178,7 +4257,7 @@ export function deleteAttachment(root: string, name: string, opts: { actor: stri
   }
   let eventErr: unknown = null;
   try {
-    appendEvent(root, { actor: opts.actor, event: "attachment.deleted", details: { name: safeName } });
+    appendEvent(root, { actor: opts.actor, event: "attachment.deleted", details: { name: actualRel } });
   } catch (e) {
     eventErr = e;
   }
@@ -4211,7 +4290,18 @@ export function attachmentProblems(root: string): string[] {
         const r = resolveAttachmentPath(root, name);
         if (!r) { problems.push(`${where}: 附件引用不存在 @att/${name}`); continue; }
         const st = tryLstat(r.file);
-        if (!st || !st.isFile() || st.isSymbolicLink()) problems.push(`${where}: 附件引用不存在 @att/${name}`);
+        if (!st || !st.isFile() || st.isSymbolicLink()) { problems.push(`${where}: 附件引用不存在 @att/${name}`); continue; }
+        // g-364：**只读诊断**——引用拼写与磁盘实际条目名仅大小写/规范化不同（靠卷别名才解析得到）。
+        // 这不是可自动修的问题（不自动改名/删数据/迁移引用）：该引用搬到大小写敏感卷（Linux ext4）
+        // 上就会悬空，故如实报告并提示手工改名。大小写敏感卷上异名引用根本解析不到文件，
+        // 走上面「引用不存在」分支，本诊断不会误报。
+        const actualRel = relative(r.realRoot, realpathSync(r.file)).split(sep).join("/");
+        if (actualRel !== name) {
+          problems.push(
+            `${where}: 附件引用 @att/${name} 依赖卷的大小写别名（磁盘实际名 @att/${actualRel}）——` +
+              "在大小写敏感卷上会悬空，请手工改为实际名",
+          );
+        }
       } catch (e) {
         problems.push(`${where}: 附件引用无法解析 @att/${name}：${(e as Error).message}`);
       }
@@ -8237,6 +8327,15 @@ export function moveGoal(
     }
   } else if (opts.to === "version") {
     if (!opts.version) throw new GraphError("移动到版本需要指定 version");
+    // g-364：与 createGoal 同口径——不敏感卷上仅大小写不同的 slug 是同一泳道，静默迁入会让
+    // meta.version 与目录名不一致（validate 必报错）、事件记错 slug。明确拒绝并要求改用实际 slug。
+    const alias = caseAliasVersionSlug(root, opts.version);
+    if (alias) {
+      throw new GraphError(
+        `版本 ${opts.version} 与磁盘上的 ${alias} 仅大小写不同（在不敏感卷上是同一实体），拒绝静默复用——` +
+          `请改用磁盘实际 slug「${alias}」或另选名称；目标未移动`,
+      );
+    }
     targetFile = join(root, "versions", opts.version, "goals", id, "goal.md");
     targetDirForm = true;
     doc.meta.version = opts.version;

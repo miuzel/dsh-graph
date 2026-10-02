@@ -15,8 +15,26 @@ import { randomUUID } from "node:crypto";
 import { parseDoc, serializeDoc, sectionText, type GoalDoc } from "./model.ts";
 import { appendEvent, readEvents, nowIso } from "./events.ts";
 import { GraphError } from "./machine.ts";
+import { resolveExistingEntry } from "./platform.ts";
 
 // ---- 辅助函数 ----
+
+/**
+ * g-364：版本泳道写入口的**卷别名守卫**。
+ *
+ * 返回磁盘上与 `slug` **仅作大小写/规范化差异**的既有版本目录名（不存在该实体时返回 null）。
+ * 不敏感卷（APFS 默认、WSL drvfs）上 `V0.19.3` 与 `v0.19.3` 是**同一实体**：若静默复用，
+ * 会写出 `meta.version` 与目录名不一致的目标（`validate` 的 locationProblems 必报错）、
+ * 并在事件流里记下一个磁盘上不存在的 slug。故此处**只报事实、不做改名/迁移**——调用方据此
+ * 明确拒绝并要求改用磁盘实际 slug。
+ *
+ * 语义与附件路径共用 `resolveExistingEntry`：精确名优先（逐字节同名 ⇒ 返回 null，正常路径不误伤），
+ * 敏感卷上只有异名条目 ⇒ 返回 null（照常新建独立泳道）。
+ */
+export function caseAliasVersionSlug(root: string, slug: string): string | null {
+  const found = resolveExistingEntry(join(root, "versions"), slug);
+  return found && found.aliased ? found.actual : null;
+}
 
 /** 读取版本元数据文件 */
 function loadVersionMeta(root: string, slug: string): Record<string, any> {
@@ -155,6 +173,15 @@ export function createVersion(
   if (slug.includes("\0")) throw new GraphError("版本 slug 不能包含 NUL 字符");
 
   const vdir = join(root, "versions", slug);
+  // g-364：先查「卷别名」再查精确存在——别名复用会被明确拒绝（要求改用磁盘实际 slug），
+  // 绝不静默落到同一实体上（那会让版本目录名与各处记录的名字不一致）。
+  const alias = caseAliasVersionSlug(root, slug);
+  if (alias) {
+    throw new GraphError(
+      `版本 ${slug} 与磁盘上的 ${alias} 仅大小写不同（在不敏感卷上是同一实体），拒绝创建——` +
+        `请改用磁盘实际 slug「${alias}」或另选名称`,
+    );
+  }
   if (existsSync(vdir)) throw new GraphError(`版本 ${slug} 已存在`);
 
   const name = opts.name?.trim() || slug;
@@ -220,6 +247,15 @@ export function renameVersion(
   // 预检：如果 slug 变了，先检查新 slug 是否已存在（避免写事件后失败留下假事件）
   const slugChanged = newSlug !== slug;
   if (slugChanged) {
+    // g-364：新 slug 若只与既有版本目录大小写不同，不敏感卷上 rename 会把同一实体改名成自己
+    // （或静默覆盖另一泳道）⇒ 显式拒绝并要求改用磁盘实际 slug/另选名称。
+    const alias = caseAliasVersionSlug(root, newSlug);
+    if (alias) {
+      throw new GraphError(
+        `新版本 slug ${newSlug} 与磁盘上的 ${alias} 仅大小写不同（在不敏感卷上是同一实体），拒绝重命名——` +
+          `请改用磁盘实际 slug 或另选名称`,
+      );
+    }
     const newVdir = join(root, "versions", newSlug);
     if (existsSync(newVdir)) throw new GraphError(`版本 ${newSlug} 已存在`);
   }
