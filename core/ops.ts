@@ -3055,10 +3055,73 @@ function versionSlugDiagnostics(root: string): string[] {
   return problems;
 }
 
+/** g-403：历史「搬迁改了 status 却缺 goal.transition」的**只读诊断**（绝不自动补记/伪造事件）。
+ *  修复只保证**此后**的搬迁落事件，管不到既有数据；本函数把这类历史漂移如实报出并标注成因，
+ *  由人工决定处置（人工确认后用 graph_transition 显式迁移，或保留并接受 rebuild 的 drift 报告）。
+ *  判定条件（全部只读、零写入）：① frontmatter status 与事件流重建不一致；② 该目标确有 goal.moved
+ *  事件；③ 差异恰好等于 moveGoal 的位置→状态策略会产生的那个——当前位置在 backlog/ → draft，
+ *  在 goals/ 或 versions/<v>/ 且事件流重建=draft → planning；④ 事件流里**没有**任何把重建出的
+ *  那个 status 记录下来的 goal.transition。
+ *  ④ 是必要的鉴别：事件先行下 persist 失败（winB）会留下「事件已记 to=planning、磁盘仍是 draft」
+ *  的同形态，那是**事件已记、落盘滞后**（由 tx.persist_failed 诊断负责），不是「缺事件」；
+ *  只看漂移方向会把两者混为一谈。加了 ④ 后本诊断偏保守（宁漏不误报），漏报的那部分仍由
+ *  rebuild 的通用 drift 如实报出。
+ *  其余漂移（goal.deleted 终态、frontmatter 被外部篡改等）不在此列，保持既有报告口径，
+ *  也不改变 rebuild 的语义。 */
+function moveTransitionDiagnostics(root: string): string[] {
+  const problems: string[] = [];
+  let events: GraphEvent[];
+  try {
+    events = readEvents(root);
+  } catch {
+    return problems; // 事件流不可读由 validate 的统一检查另行报告
+  }
+  const replayed = replayStatuses(events);
+  const moved = new Set(
+    events.filter((e) => e.event === "goal.moved" && e.goal).map((e) => String(e.goal)),
+  );
+  // 事件流里被 goal.transition 显式记录过的 status（按目标聚合）
+  const recorded = new Map<string, Set<string>>();
+  for (const e of events) {
+    if (e.event !== "goal.transition" || !e.goal) continue;
+    const to = e.details?.to;
+    if (typeof to !== "string") continue;
+    const key = String(e.goal);
+    if (!recorded.has(key)) recorded.set(key, new Set());
+    recorded.get(key)!.add(to);
+  }
+  for (const file of listGoalFiles(root)) {
+    let doc: GoalDoc;
+    try {
+      doc = loadGoal(file);
+    } catch {
+      continue; // 解析失败归 validate 的既有分支
+    }
+    const id = String(doc.meta.id);
+    const expected = replayed.get(id);
+    const actual = String(doc.meta.status);
+    if (expected === undefined || expected === actual) continue;
+    if (!moved.has(id)) continue;
+    const rel = relative(root, file);
+    const inBacklog = rel.startsWith("backlog/");
+    const inSchedule = rel.startsWith("goals/") || rel.startsWith("versions/");
+    if (!inBacklog && !inSchedule) continue;
+    const impliedByMove = inBacklog ? "draft" : expected === "draft" ? "planning" : null;
+    if (impliedByMove === null || impliedByMove !== actual) continue;
+    if (recorded.get(id)?.has(expected)) continue; // ④ 事件流已记录该 status ⇒ 不是缺事件
+    problems.push(
+      `${id}: frontmatter=${actual} 与事件流重建=${expected} 不一致，形态与历史 moveGoal 搬迁改 status 而缺 goal.transition 一致——只读诊断，不自动补记事件（如确需修正，请人工确认后用 graph_transition 显式迁移）`,
+    );
+  }
+  return problems;
+}
+
 /** 全量不变式校验；返回问题列表（空 = 通过）。 */
 export function validate(root: string): string[] {
   const problems: string[] = [];
   problems.push(...versionSlugDiagnostics(root));
+  // g-403：历史缺事件搬迁（只读诊断；不自动补记，也不放宽 rebuild）
+  problems.push(...moveTransitionDiagnostics(root));
   const docs = new Map<string, GoalDoc>();
   for (const file of listGoalFiles(root)) {
     let doc: GoalDoc;
@@ -8488,6 +8551,32 @@ export function moveGoal(
   } else {
     throw new GraphError(`非法移动目标：${opts.to}`);
   }
+  // g-403：搬迁**改写了 status 却不记 goal.transition**，事件流因而无法独立重建 status——rebuild
+  // 在完全正常的排期路径（backlog→standalone/version 的 draft→planning）上恒报 drift。这里把
+  // 「位置变更附带的状态调整」补记为 goal.transition（含 from/to/reason/actor），与 goal.moved
+  // 放进**同一次** commitPrepared：延续 g-395 已收敛的事件先行顺序（先落事件、再改盘），不额外
+  // 引入事务，也不动搬迁逻辑本身。
+  // 与 goal.moved 的关系（不重复、不冲突）：goal.moved 记**归属/位置**（rebuild 不重放它、也不
+  // 对账位置），goal.transition 只记**状态机状态**（replayStatuses 唯一的 status 真相）；二者维度
+  // 正交，一次搬迁各自最多记一次。顺序为「先 moved 后 transition」：moved 是被请求的操作，
+  // transition 是它派生的状态结果；replay 只取后者，顺序不影响重建。
+  // 仅当状态**确实变化**时才追加：no-op 迁移（targetFile === file）在下方早退且不写 frontmatter，
+  // 若在此记事件反而会制造「事件说变了、磁盘没变」的新 drift。
+  const nextStatus = doc.meta.status as string;
+  const statusTransition: Omit<GraphEvent, "ts"> | null =
+    nextStatus !== prevStatus
+      ? {
+          actor: opts.actor,
+          event: "goal.transition",
+          goal: id,
+          details: {
+            from: prevStatus,
+            to: nextStatus,
+            reason: `move-goal → ${opts.to}${opts.version ? `(${opts.version})` : ""}：位置变更附带的状态调整`,
+            actor: opts.actor,
+          },
+        }
+      : null;
   // 隐式版本骨架落盘（幂等：目录/文件已存在时 mkdir 与原子写都等价重放）
   const persistImplicitVersion = (): void => {
     if (!implicitVersion) return;
@@ -8525,6 +8614,8 @@ export function moveGoal(
         goal: id,
         details: { from: relative(root, file), to: relative(root, targetFile) },
       },
+      // g-403：位置变更附带的状态调整（状态未变时为空）——同一事务、事件先行
+      ...(statusTransition ? [statusTransition] : []),
     ],
     persist: () => {
       persistImplicitVersion();
