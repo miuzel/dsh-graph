@@ -8450,6 +8450,62 @@ export function abandonAttempt(
 }
 
 /**
+ * g-427：**目录形态**目标搬迁的共享不变量 —— 让「目录 rename」在任何平台上都只有一种结果。
+ *
+ * 缺陷（负责人 Windows 真机实测）：旧实现在目录形态站点统一先跑
+ * `mkdirSync(dirname(targetFile), { recursive: true })` 再 `renameSync(srcDir, dirname(targetFile))`
+ * ——对目录形态而言，那就是**把紧接着 rename 的目标目录本身建了出来**。POSIX `rename(dir, emptyDir)`
+ * 允许替换空目录（本地 Linux 长期掩盖），Windows/NTFS（MoveFileEx）不允许用目录替换已存在目录
+ * ⇒ **EPERM**（与权限无关），盘面留下「空目标目录 + 原位文件」半迁移态且**重试永不收敛**。
+ *
+ * 本函数是目录形态搬迁（srcDir 非 null）的**唯一执行点**，四条站点全部收口于此：
+ * `moveGoal`（→version / →standalone）、`archiveGoal`、`unarchiveGoal`、`postponeGoal`。
+ * 承载三条不变量：
+ *  1. **父目录保证**：只创建目标目录的**父目录**，末级目录留给 rename 自己创建（扁平文件形态不受影响，
+ *     仍由调用方 `mkdirSync(dirname(targetFile))` 建好文件所在目录）；
+ *  2. **残留空目录清理**：目标目录已存在且为空 ⇒ 先 rmdir 再 rename（让已被旧缺陷卡住的盘面自愈）；
+ *  3. **非空冲突报错**：目标目录已存在且非空（或存在但非目录）⇒ 抛明确的 `GraphError`（含路径与
+ *     「已存在」语义），绝不把平台 EPERM / ENOTEMPTY 直接冒给用户。
+ *
+ * 调用方保证 `srcDir` 存在且 `destDir !== srcDir`；执行后 rename 的**目标目录必不存在**（不变量）。
+ */
+function renameDirInto(srcDir: string, destDir: string): void {
+  // ① 父目录保证：只建 destDir 的父目录，**绝不**预建 destDir 本身
+  mkdirSync(dirname(destDir), { recursive: true });
+  let st: ReturnType<typeof lstatSync> | null = null;
+  try {
+    st = lstatSync(destDir);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e;
+  }
+  if (st) {
+    if (!st.isDirectory() || st.isSymbolicLink()) {
+      throw new GraphError(`目标位置已存在且不是目录，拒绝覆盖：${destDir}（源目录仍在原位，未移动）`);
+    }
+    let entries: string[];
+    try {
+      entries = readdirSync(destDir);
+    } catch (e) {
+      throw new GraphError(`目标位置已存在且无法读取，拒绝覆盖：${destDir}（${String((e as Error).message)}）`);
+    }
+    if (entries.length > 0) {
+      // ③ 非空冲突：明确报错，不让平台 EPERM/ENOTEMPTY 冒给用户
+      throw new GraphError(
+        `目标位置已存在且非空，拒绝覆盖：${destDir}（源目录仍在原位，未移动；请先人工处理该目录）`,
+      );
+    }
+    // ② 残留空目录（旧缺陷遗留）：先删除，恢复「rename 前目标目录不存在」不变量
+    try {
+      rmdirSync(destDir);
+    } catch (e) {
+      throw new GraphError(`目标位置已存在且无法清理，拒绝覆盖：${destDir}（${String((e as Error).message)}）`);
+    }
+  }
+  // 不变式：此刻 destDir 必不存在 ⇒ rename 自行创建末级目录，Windows/NTFS 亦成立
+  renameSync(srcDir, destDir);
+}
+
+/**
  * 排期/位置移动（backlog ↔ standalone goals/ ↔ versions/<v>/）。
  * 文件移动即归属变更，记 goal.moved 事件（不影响状态机状态）。
  */
@@ -8622,11 +8678,14 @@ export function moveGoal(
     persist: () => {
       persistImplicitVersion();
       saveGoal(file, doc);
-      mkdirSync(dirname(targetFile), { recursive: true });
       if (srcDir && targetDirForm) {
         // 目录形态互转：整体移动目录（cards/ attempts/ 一起走）
-        renameSync(srcDir, dirname(targetFile));
+        // g-427：收口到共享不变量（父目录保证 + 残留空目录清理 + 非空冲突报错）——
+        // 旧实现先 mkdirSync(dirname(targetFile)) 会把 rename 的目标目录预建出来 ⇒ Windows EPERM
+        renameDirInto(srcDir, dirname(targetFile));
       } else {
+        // 扁平文件形态：目标目录刚建好正合适（rename 的是文件，不是目录）
+        mkdirSync(dirname(targetFile), { recursive: true });
         renameSync(file, targetFile);
         if (srcDir) {
           try {
@@ -8697,11 +8756,12 @@ export function archiveGoal(
     }],
     persist: () => {
       saveGoal(file, doc);
-      mkdirSync(dirname(targetFile), { recursive: true });
       if (srcDir) {
         // 目录形态：整体移动目录（cards/ attempts/ 一起走）
-        renameSync(srcDir, dirname(targetFile));
+        // g-427：收口到共享不变量（旧实现先 mkdir 目标目录 ⇒ Windows EPERM）
+        renameDirInto(srcDir, dirname(targetFile));
       } else {
+        mkdirSync(dirname(targetFile), { recursive: true });
         renameSync(file, targetFile);
       }
     },
@@ -8749,11 +8809,12 @@ export function unarchiveGoal(
   if (existsSync(targetFile)) throw new GraphError(`恢复位置已存在：${targetFile}`);
   // 清除归档标记
   doc.meta.archived = false;
-  mkdirSync(dirname(targetFile), { recursive: true });
   if (srcDir) {
     // 目录形态：整体移动目录（cards/ attempts/ 一起走）
-    renameSync(srcDir, dirname(targetFile));
+    // g-427：收口到共享不变量（旧实现先 mkdir 目标目录 ⇒ Windows EPERM）
+    renameDirInto(srcDir, dirname(targetFile));
   } else {
+    mkdirSync(dirname(targetFile), { recursive: true });
     renameSync(file, targetFile);
   }
   saveGoal(targetFile, doc);
@@ -8846,9 +8907,10 @@ export function postponeGoal(
   }
 
   // 事件/检查完成后才执行单次目录 rename，避免失败留下半迁移目录。
+  // g-427：本处原就是正确范式（只建 backlog/ 父目录、不预建 backlog/<id>），现与其余三条站点
+  // 同口径收口到 renameDirInto —— 不变量不变，额外获得「残留空目录自愈 + 非空冲突明确报错」。
   if (srcDir) {
-    mkdirSync(join(root, "backlog"), { recursive: true });
-    renameSync(srcDir, targetDir);
+    renameDirInto(srcDir, targetDir);
   } else {
     mkdirSync(targetDir, { recursive: true });
     renameSync(file, targetFile);
