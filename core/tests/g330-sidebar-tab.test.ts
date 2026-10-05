@@ -334,6 +334,9 @@ test("g-330 判据7：package.json 的 dsh.client.inject 声明 sidebar-right，
   const inject: string[] = pkg.dsh.client.inject;
   assert.ok(inject.includes("@deepseek-ai/dsh-client-ui-sidebar-right"), "必须声明右侧栏客户端包");
   assert.ok(inject.includes("@deepseek-ai/dsh-client-ui-primitives"), "既有声明不得丢失");
+  // g-425：inject 是加载顺序边（名字在客户端清单里才前置加载），死引用必须在升级残留安装里
+  // 才会成行并级联拖死本插件 ⇒ 必须缺席。完整守卫见 g425-client-inject-dead-reference.test.ts。
+  assert.ok(!inject.includes("@deepseek-ai/dsh-client-runtime"), "不得声明死引用 @deepseek-ai/dsh-client-runtime");
   assert.equal(pkg.dsh.client.platform, "web");
 });
 
