@@ -483,6 +483,8 @@ function makeNavigationSandbox() {
   const code = [
     "var sessionsRt = null; var appCtx = null;",
     "const openingChildSessions = new Set();",
+    // g-425：导航链路的 uiWorkspaceRt 走 optionalService（同一工厂作用域 helper）⇒ 注入同源片段
+    extractFunction(helpers, "optionalService"),
     ...NAV_PLUGIN_FUNCS.map((n) => extractFunction(plugin, n)),
     ...CATALOG_FUNCS.map((n) => extractFunction(helpers, n)),
     "this.api = { openChildSession, setRt: (rt, app) => { sessionsRt = rt; appCtx = app ?? null; } };",

@@ -160,7 +160,10 @@ test("g-321 客户端导航：uiWorkspace.openSession 优先，回退 sessions.o
   const plugin = readClient("plugin");
   // 特性探测取得 uiWorkspace（绝不做硬 inject，否则旧 profile 的 client apply 会被阻断）
   assert.match(plugin, /function uiWorkspaceRt\(\)/);
-  assert.match(plugin, /appCtx\?\.get\?\.\("uiWorkspace"\)/);
+  // g-425：读取口径收敛到受保护 helper（ctx.get 优先 + 属性访问兜 try/catch，见 helpers.js）；
+  // `appCtx?.uiWorkspace` 裸回退在 uiWorkspace 缺席时会撞 cordis 注入门禁抛错，故禁止裸读。
+  assert.match(plugin, /optionalService\(appCtx, "uiWorkspace"\)/);
+  assert.doesNotMatch(plugin, /\?\?\s*appCtx\s*\?\.\s*uiWorkspace/);
   assert.match(plugin, /function openSessionTarget\(target, legacyFn\)/);
   assert.match(plugin, /typeof uw\.openSession === "function"/);
   // 子会话：address 形态在两版共用，0.1.5 回退 openSubagent
@@ -191,9 +194,12 @@ test("g-321 会话激活判断：兼容 0.1.5 的 current/currentAddress 与 0.1
 
 function makeNavigationSandbox() {
   const plugin = readClient("plugin");
+  const helpers = readClient("helpers");
   const sandbox: any = { console, appCtx: null };
   vm.runInNewContext(
-    `${extractFunction(plugin, "uiWorkspaceRt")}\n`
+    // g-425：uiWorkspaceRt 改走 optionalService（同一工厂作用域 helper）⇒ 沙箱注入同源片段
+    `${extractFunction(helpers, "optionalService")}\n`
+    + `${extractFunction(plugin, "uiWorkspaceRt")}\n`
     + `${extractFunction(plugin, "openSessionTarget")}\n`
     + `this.openSessionTarget = openSessionTarget;`,
     sandbox,

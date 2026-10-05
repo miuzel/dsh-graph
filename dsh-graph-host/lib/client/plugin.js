@@ -159,7 +159,10 @@
     // 缺失（0.1.5-rc.2 或未激活该插件的精简 profile）时回退到 sessions.open/openSubagent，
     // 绝不把 uiWorkspace 列为硬 inject——那会让旧 profile 的整个看板 client apply 被阻断。
     function uiWorkspaceRt() {
-      try { return appCtx?.get?.("uiWorkspace") ?? appCtx?.uiWorkspace ?? null; } catch { return null; }
+      // g-425：受保护读取（g-425 统一口径）——旧写法 `appCtx?.uiWorkspace` 在 uiWorkspace 服务
+      // 缺席时同样会撞 cordis 注入门禁抛错，只是外层 try/catch 把它吞成了 null（结果相同，
+      // 但把「服务缺失」与「读取异常」混为一谈）；改走 optionalService 后语义显式且零抛错。
+      return optionalService(appCtx, "uiWorkspace");
     }
     // 统一跳转：优先 uiWorkspace.openSession(target)（0.1.6），回退 legacyFn（0.1.5 的 sessions.*）。
     // target 是 SessionId 或 SubagentAddress，两种版本共用同一份 address 形状。
@@ -277,7 +280,15 @@
         workspacesRt = ctx.get?.("workspaces") ?? null;
         // g-230：注册 i18n 命名空间并创建全局翻译函数 t。
         // locale 服务通过 ctx.get 可选获取（核心内置服务但不列为硬 inject 以免阻断旧 profile）。
-        const localeService = ctx.get?.("locale") ?? ctx.locale ?? null;
+        // g-425：**必须**走受保护读取——桌面冷启动实测本行是 fiber FAILED 的真因：
+        //   ① `ctx.get("locale")` 在 locale 尚未注册时返回 undefined；
+        //   ② 旧写法 `?? ctx.locale` 求值未声明服务属性 ⇒ cordis/lib/index.js:676
+        //      `cannot get property "locale" without inject` 抛出 ⇒ 本次 apply 再无任何日志
+        //      （+339ms apply:enter/inject-resolved 之后直接中断），紧随 `web boot: 1 entry did not
+        //      activate / dsh-graph: failed`；+415ms 第二次 apply 时 locale 已就绪、右侧短路 ⇒ 正常。
+        //   ③ optionalService 用 ctx.get 优先 + 属性访问兜 try/catch，locale 缺失时返回 null，
+        //      后续 registerI18n/createTranslator 按既有降级语义继续（翻译函数仍可用，不抛错）。
+        const localeService = optionalService(ctx, "locale");
         const localeBind = registerI18n({ locale: localeService });
         dgT = createTranslator(localeBind);
         // g-230：监听语言切换——locale/change 事件触发时重建翻译函数（locale.bind 返回稳定引用，

@@ -387,7 +387,11 @@ export function resolvePromptLanguage(override = "follow", ctx = null) {
   } catch { /* settings 服务可选 */ }
   try {
     // 次选：直接暴露的 locale 服务（部分宿主组合）。
-    const locale = ctx?.locale ?? ctx?.get?.("locale");
+    // g-425：**顺序必须是 ctx.get 优先** —— locale 未注册为服务时 `ctx.locale` 裸访问会抛
+    // `cannot get property "locale" without inject`（cordis 注入门禁），被本 try 吞掉后
+    // `ctx.get("locale")` 这条兜底根本没机会执行（等于该分支永久失效）。反过来先 get：
+    // 服务在时两者是同一实例（行为不变），不在时 get 返回 undefined ⇒ 才轮到受 try 保护的裸访问。
+    const locale = ctx?.get?.("locale") ?? ctx?.locale;
     const snapshot = locale?.getLocale?.() ?? locale?.snapshot?.() ?? locale;
     const active = pick(snapshot?.active ?? snapshot?.locale ?? snapshot?.id ?? locale?.active);
     if (active) return active;
