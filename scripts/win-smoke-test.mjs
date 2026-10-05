@@ -937,14 +937,23 @@ export function judgeBoardSummary(summary) {
 /**
  * 失败路径判据（夹具级负向对照：预置非空目标目录 ⇒ 明确业务错误）。
  * obs = {threw, message, expectedPath, sourceIntact, obstacleIntact, persistFailedDelta}
+ *
+ * g-428 真机现场修正（2026-10-06）：产品文案里的目标位置来自平台 `join()`（Windows 上是反斜杠路径），
+ * 而夹具的 `expectedPath` 由 POSIX 拼接得到 ⇒ 裸 `includes` 在真机上恒假，把**正确的**业务错误判成
+ * 「未包含目标路径」（v0.19.0-alpha.fix3 真机实测：该步其余子判据全绿，仅此条假红）。
+ * 故比对前两侧统一归一化为 `/`；判定意图不变（错误信息必须指明目标位置，缺路径仍判红）。
  */
+function posixPath(v) {
+  return String(v ?? "").replace(/\\/g, "/");
+}
+
 export function judgeExpectedFailure(obs) {
   const problems = [];
   const o = obs ?? {};
   if (!o.threw) problems.push("预置非空目标目录时未报错（应当拒绝覆盖）");
   const leak = platformErrorLeak(o.message);
   if (leak) problems.push("用户可见文案泄漏平台错误码 " + leak);
-  if (o.expectedPath && !String(o.message ?? "").includes(o.expectedPath)) {
+  if (o.expectedPath && !posixPath(o.message).includes(posixPath(o.expectedPath))) {
     problems.push("错误信息未包含目标路径（应指明目标位置）");
   }
   if (!/已存在|非空|拒绝/.test(String(o.message ?? ""))) {
@@ -2052,6 +2061,16 @@ function selfTest() {
     sourceIntact: true, obstacleIntact: true, persistFailedDelta: 1,
   };
   check("失败路径判定：合格业务错误判绿", judgeExpectedFailure(goodFail).length === 0);
+  check("失败路径判定：Windows 反斜杠文案 + POSIX 期望路径判绿（真机现场回归）",
+    judgeExpectedFailure({
+      ...goodFail,
+      message: "目标位置已存在且非空，拒绝覆盖：D:\\ws\\.dsh-graph\\versions\\v2-smoke\\goals\\g-1（源目录仍在原位，未移动）",
+    }).length === 0);
+  check("失败路径判定：确实不含目标路径时仍判红（归一化不得削弱判定力）",
+    judgeExpectedFailure({
+      ...goodFail,
+      message: "目标位置已存在且非空，拒绝覆盖：别处（源目录仍在原位，未移动）",
+    }).some((p) => p.includes("目标路径")));
   check("失败路径判定：未报错 / 裸 EPERM / 源被破坏 / 事件计数不符 逐项判红",
     judgeExpectedFailure({ ...goodFail, threw: false }).length === 1 &&
     judgeExpectedFailure({ ...goodFail, message: "EPERM: operation not permitted" }).length >= 3 &&

@@ -263,6 +263,24 @@ test("g-428 判据 1：失败路径判定有判别力（未报错 / 裸 EPERM / 
   assert.ok(leaked.some((p) => p.includes("业务语义")), "缺业务语义必须判红");
   assert.equal(judgeExpectedFailure({ ...good, sourceIntact: false }).length, 1, "破坏源位置（半迁移态）必须判红");
   assert.equal(judgeExpectedFailure({ ...good, persistFailedDelta: 0 }).length, 1, "失败不可诊断必须判红");
+
+  // g-428 真机现场修正（v0.19.0-alpha.fix3 实测）：产品文案里的目标位置来自平台 join()（Windows 反斜杠），
+  // 夹具 expectedPath 是 POSIX 拼接 ⇒ 裸 includes 恒假，把正确业务错误判成「未包含目标路径」。
+  assert.deepEqual(
+    judgeExpectedFailure({
+      ...good,
+      message: "目标位置已存在且非空，拒绝覆盖：D:\\ws\\.dsh-graph\\versions\\v2-smoke\\goals\\g-1（源目录仍在原位，未移动）",
+    }),
+    [],
+    "反斜杠文案 + 斜杠期望路径必须判绿（否则真机假红）",
+  );
+  assert.ok(
+    judgeExpectedFailure({
+      ...good,
+      message: "目标位置已存在且非空，拒绝覆盖：别处（源目录仍在原位，未移动）",
+    }).some((p) => p.includes("目标路径")),
+    "确实不含目标路径时仍须判红（归一化不得削弱判定力）",
+  );
 });
 
 test("g-428 判据 4：突变构造可信（形状不匹配必须拒绝，不得静默做无效对照）", () => {
