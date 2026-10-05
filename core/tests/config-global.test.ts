@@ -33,7 +33,11 @@ test("g-133/g-191 profile settings 契约：受控字段并保留 Host API fallb
 test("g-133 provider/model 目录 select 源契约：connection.api 捕获 + llm RPC + 已存值保留 + advisory 不拦截保存", () => {
   const client = readFileSync(new URL("../../dsh-graph-host/lib/client/settings.js", import.meta.url), "utf8");
   // 数据源：settings 模块内捕获 ctx.get('connection').api，挂载时调用 llm.providers/models 目录 RPC
-  assert.match(client, /ctx\?\.get\?\.\("connection"\)/);
+  // g-425：connection 捕获改走受保护读取 helper（optionalService：ctx.get 优先 + 属性访问兜 try/catch，
+  // 见 helpers.js），语义不变——仍是从 ctx 取 connection 再取 .api（裸 `ctx?.connection` 在连接服务
+  // 缺席时会撞 cordis 注入门禁抛错并中断降级链）。
+  assert.match(client, /optionalService\(ctx, "connection"\)/);
+  assert.match(client, /createGraphSettingsApiScope\(connection\?\.api, ctx\)/);
   assert.match(client, /api\.llm\.providers/);
   assert.match(client, /api\.llm\.models/);
   // provider/model 是目录 select（非自由文本 input）；首项留空继承

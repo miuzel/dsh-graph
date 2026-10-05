@@ -150,6 +150,24 @@
       },
     };
 
+    // ===== g-425：可选服务受保护读取（冷启动真因修复）=====
+    // Cordis 的 Context 代理对「未在 `inject` 中声明、且当前 fiber 链上无实现」的属性访问
+    // **直接抛错**：`@deepseek-ai/cordis/lib/index.js:676`
+    //   `new Error(\`cannot get property "${prop}" without inject\`)`
+    // ⇒ 任何 `ctx.<service>` 裸属性回退都是**定时炸弹**：服务稍晚注册（冷启动时序）时抛错，
+    // 客户端插件 fiber 直接 FAILED ⇒ 桌面壳 `web boot: 1 entry did not activate / dsh-graph: failed`。
+    // `ctx.get(name)` 是唯一**永不抛错**的读取口径（ReflectService.get，未提供时返回 undefined，
+    // 见 cordis `get(name, strict = true)`），故统一「ctx.get 优先 + 属性访问兜 try/catch」：
+    //   - 服务已注册：`ctx.get(name)` 与 `ctx[name]` 是同一实例，行为与裸属性访问**完全一致**；
+    //   - 服务缺失/未注册：返回 null，调用方照既有降级语义走，绝不新增抛错路径。
+    function optionalService(ctx, name) {
+      try {
+        const value = ctx?.get?.(name);
+        if (value != null) return value;
+      } catch { /* get 本身异常（非 Cordis 上下文等）⇒ 继续尝试属性访问 */ }
+      try { return ctx?.[name] ?? null; } catch { return null; }
+    }
+
     // g-343：浮层统一 portal 到 document.body。
     // 看板根节点用共享样式 S.wrap（position: relative + z-index: 1）⇒ 它自成层叠上下文：
     // 遮罩(99998)/弹窗(100000)/抽屉(99999) 若渲染在子树内，就被囚禁在 z-index:1 的上下文里，
@@ -445,7 +463,9 @@
         // g-222: Access remote.session via ctx.get() for backward compatibility
         // In 0.1.2+, remote.session is available; in 0.1.1-rc.2 it's not
         const remoteSession = appCtx?.get?.("remote.session") ?? null;
-        const remote = appCtx?.get?.("remote") ?? appCtx?.remote;
+        // g-425：`appCtx?.remote` 裸回退在 remote 服务缺席时会撞注入门禁抛错（被本函数 catch 吞成
+        // 早退错误，掩盖下方 connection.api.host.openPath 兜底）；改受保护读取后兜底链恢复。
+        const remote = optionalService(appCtx, "remote");
         const openFn = remoteSession?.openWorkspacePath ?? remote?.session?.openWorkspacePath ?? (typeof remote?.["session/openWorkspacePath"] === "function" ? remote["session/openWorkspacePath"].bind(remote) : null);
         if (typeof openFn === "function") {
           const res = await openFn({ path });

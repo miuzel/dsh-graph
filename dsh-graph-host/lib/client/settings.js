@@ -16,7 +16,11 @@
     // 3082 的 settingsScope 在非 loopback 浏览器上下文会是 memory；此时仍可
     // 通过已存在的 profile settings RPC 读写 Host，而不是把配置伪装成 workspace 数据。
     function createGraphSettingsApiScope(api, ctx = (typeof appCtx !== "undefined" ? appCtx : null)) {
-      const remoteSettings = ctx?.get?.("remote")?.settings ?? ctx?.remote?.settings ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("remote")?.settings ?? appCtx?.remote?.settings) : null);
+      // g-425：受保护读取——`ctx?.remote` 裸回退在 remote 服务缺席时会撞 cordis 注入门禁抛错
+      // （被调用方 bindGraphSettingsScope 的 try/catch 吞成「设置页整页降级」）；改为
+      // optionalService 后语义不变（remote 在时取同一实例），缺失即 null、继续走 REST 降级。
+      const remoteSettingsOf = (c) => (c ? optionalService(c, "remote")?.settings ?? null : null);
+      const remoteSettings = remoteSettingsOf(ctx) ?? remoteSettingsOf(typeof appCtx !== "undefined" ? appCtx : null);
       const describeFn = typeof remoteSettings?.describe === "function"
         ? () => remoteSettings.describe()
         : (typeof api?.settings?.describe === "function" ? () => api.settings.describe({}) : null);
@@ -63,7 +67,8 @@
       try {
         const bound = ctx?.get?.("settingsScope")?.bind({ namespace: GRAPH_SETTINGS_NS });
         if (bound && bound.getSnapshot?.().mode !== "memory") return (gSettingsScope = bound);
-        const connection = ctx?.get?.("connection") ?? ctx?.connection;
+        // g-425：`ctx?.connection` 同口径改受保护读取（connection 未注册时不再抛错中断降级链）。
+        const connection = optionalService(ctx, "connection");
         return (gSettingsScope = createGraphSettingsApiScope(connection?.api, ctx));
       } catch {
         gSettingsScope = null;
@@ -81,7 +86,11 @@
     async function loadHostCatalog(api, ctx = (typeof appCtx !== "undefined" ? appCtx : null)) {
       // 1. 优先调用 0.1.2-alpha.2 新版 API
       try {
-        const remote = ctx?.get?.("remote") ?? ctx?.remote ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("remote") ?? appCtx?.remote) : null) ?? (typeof window !== "undefined" ? window.__DSH_REMOTE__ : null);
+        // g-425：`ctx?.remote` / `appCtx?.remote` 同口径改受保护读取——旧写法在 remote 缺席时
+        // 会撞注入门禁抛错并被本 try 吞掉，使第 1 步（含 modelDirectories 精确目录）整段被跳过。
+        const remote = optionalService(ctx, "remote")
+          ?? (typeof appCtx !== "undefined" ? optionalService(appCtx, "remote") : null)
+          ?? (typeof window !== "undefined" ? window.__DSH_REMOTE__ : null);
         // Remote session 方法依赖所属 session proxy 的 this；脱离 receiver 调用会失败并误回退到
         // 旧 llm.models（旧目录不含 reasoning 元数据），导致有能力的模型显示为空选择器。
         const session = remote?.session;
@@ -131,7 +140,11 @@
 
       // 2. 0.1.1-rc 旧版 API 探测（api.llm.providers / api.llm.models）
       try {
-        const legacyApi = api ?? (ctx?.get?.("connection") ?? ctx?.connection ?? (typeof appCtx !== "undefined" ? (appCtx?.get?.("connection") ?? appCtx?.connection) : null))?.api;
+        // g-425：`ctx?.connection` / `appCtx?.connection` 同口径改受保护读取（connection 缺席时
+        // 旧写法抛错被本 try 吞掉，使旧版 API 探测整段被跳过）。
+        const legacyConn = optionalService(ctx, "connection")
+          ?? (typeof appCtx !== "undefined" ? optionalService(appCtx, "connection") : null);
+        const legacyApi = api ?? legacyConn?.api;
         if (legacyApi?.llm?.providers && legacyApi?.llm?.models) {
           const [pRes, mRes] = await Promise.allSettled([legacyApi.llm.providers({}), legacyApi.llm.models({})]);
           const pv = pRes.status === "fulfilled" ? pRes.value?.result?.value : null;
@@ -460,7 +473,9 @@
       try {
         // g-133：数据源捕获 —— ctx.get('connection').api（组件挂载时读 llm.providers/models 目录）。
         gConnectionApi = (() => {
-          try { return (ctx?.get?.("connection") ?? ctx?.connection)?.api ?? null; } catch { return null; }
+          // g-425：统一走 optionalService（原实现靠外层 try/catch 兜住 `ctx?.connection` 裸访问；
+          // 结果等价，改为唯一读取口径后静态守卫可 fail-closed 禁止裸回退复发）。
+          try { return optionalService(ctx, "connection")?.api ?? null; } catch { return null; }
         })();
         bindGraphSettingsScope(ctx);
         ctx.slots.inject("settings.section", () =>

@@ -15,11 +15,20 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
 
+import { extractFunction } from "./_g387-harness.ts";
+
 // 从编译后/组装后的 client.js 中提取 loadHostCatalog 函数
 function getLoadHostCatalogFromSource() {
   const settingsCode = readFileSync(
     join(process.cwd(), "dsh-graph-host/lib/client/settings.js"),
     "utf8",
+  );
+  // g-425：settings.js 的受保护读取走同一工厂作用域的 optionalService（见 helpers.js）。
+  // 本沙箱只求值单个模块 ⇒ 必须把同源 helper 一并注入（从真实源码抠出，避免手抄副本漂移）；
+  // 缺少它时 loadHostCatalog 会静默降级成 unavailable（ReferenceError 被既有 try/catch 吞掉）。
+  const optionalServiceSrc = extractFunction(
+    readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/helpers.js"), "utf8"),
+    "optionalService",
   );
   // 在沙箱中执行 settings.js 中定义的 loadHostCatalog
   const context = vm.createContext({
@@ -32,6 +41,7 @@ function getLoadHostCatalogFromSource() {
     console,
   });
   const wrappedCode = `
+    ${optionalServiceSrc}
     ${settingsCode}
     globalThis.loadHostCatalog = loadHostCatalog;
   `;

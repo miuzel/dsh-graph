@@ -2260,12 +2260,17 @@
       };
     }
 
-    /** 注册 dsh-graph 命名空间到 DSH locale 服务。在 plugin apply 阶段调用。 */
+    /** 注册 dsh-graph 命名空间到 DSH locale 服务。在 plugin apply 阶段调用。
+     *  g-425：入参既可能是 plugin.js 传入的包装对象 `{ locale }`，也可能是真实 Cordis ctx
+     *  （旧 profile/未来调用方）。两者都必须走受保护读取——真实 ctx 上 `ctx.locale` 是未在
+     *  `inject` 中声明的服务属性，冷启动时会抛 `cannot get property "locale" without inject`。
+     *  optionalService 对包装对象等价于 `ctx.locale`（无 get 方法时回退属性访问），行为不变。 */
     function registerI18n(ctx) {
-      if (!ctx?.locale) return null;
+      const localeService = optionalService(ctx, "locale");
+      if (!localeService) return null;
       try {
-        ctx.locale.register('dsh-graph', { zh, en });
-        return ctx.locale.bind('dsh-graph');
+        localeService.register('dsh-graph', { zh, en });
+        return localeService.bind('dsh-graph');
       } catch (e) {
         console.warn('[dsh-graph] Failed to register i18n namespace:', e);
         return null;
