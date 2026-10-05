@@ -291,19 +291,51 @@
         const localeService = optionalService(ctx, "locale");
         const localeBind = registerI18n({ locale: localeService });
         dgT = createTranslator(localeBind);
-        // g-230：监听语言切换——locale/change 事件触发时重建翻译函数（locale.bind 返回稳定引用，
-        // 但字典注册不触发 locale/change；仅活跃语言切换时需要响应）。
-        if (localeService && typeof ctx.on === "function") {
-          ctx.on('locale/change', () => {
-            // bind 返回稳定引用（已注册的命名空间），翻译函数自动读取当前活跃语言；
-            // 此处仅在语言切换时强制刷新 React 渲染（通过状态广播机制）。
-            try {
-              dgT = createTranslator(localeBind || registerI18n({ locale: localeService }));
-              // 通知看板组件重新渲染以响应语言切换
-              window.dispatchEvent(new CustomEvent('dsh-graph:locale-changed'));
-            } catch { /* 静默 */ }
-          });
-        }
+        // 记录「字典已注册在哪个服务实例上」：同一实例只注册一次（locale.register 对同一 ns+locale 会抛
+        // `already has locale`），而服务实例更换（provider 重启/重放）时必须**重新注册**——否则新实例上
+        // 命名空间缺失，翻译会退回本地中文字典（语言又不跟随了）。
+        let localeRegisteredOn = localeService;
+        // g-431：**迟到绑定**——locale 缺席时不再「永久放弃」，而是等它可用（含 apply 之后才 provide）
+        // 再执行整段集成。为什么必须这样（负责人 desktop 真机取证：插件文案**恒为中文**、宿主界面照常切换）：
+        //   g-425 之前第一次 apply 因裸取 `ctx.locale` 抛错而 FAILED ⇒ runner 在依赖就绪后**重试第二次
+        //   apply** ⇒ 那次 localeService 有值 ⇒ 订阅被注册，语言「本来能跟随」；g-425 改成受保护读取后
+        //   第一次 apply 不再失败、也不再依赖 locale ⇒ **重试不再发生** ⇒ `localeService === null` 恒成立
+        //   ⇒ 旧写法 `if (localeService && …)` 整段被跳过：字典没注册、订阅没挂，`dgT` 停在本地中文字典
+        //   降级 ⇒ 初始与切换后都恒为中文。web profile 因 locale 先于我们注册而从未暴露。
+        // 硬约束（g-425 不变量）：locale **绝不进硬 inject**（未激活该服务的 profile 会整块 apply 被阻断）；
+        // 回调内仍走受保护读取（客户端源码零裸服务属性读取）；缺席时本回调不执行、apply 照常完成全部注册。
+        const refreshLocale = (svc) => {
+          // bind 返回稳定引用、按当前活跃语言求值；语言切换后必须重新取一次翻译函数。
+          try { dgT = createTranslator(svc.bind("dsh-graph")); } catch { return; }
+          // 通知已挂载的看板组件重渲染（useLocaleRevision 订阅本事件）；无 DOM 环境静默降级。
+          if (typeof window !== "undefined") {
+            try { window.dispatchEvent(new CustomEvent('dsh-graph:locale-changed')); } catch { /* 静默 */ }
+          }
+        };
+        ctx.inject?.(["locale"], (scope) => {
+          const svc = optionalService(scope, "locale");
+          if (!svc) return;
+          // `scope.effect` 缺失的极旧宿主退化为立即调用：行为不变，只是不参与作用域释放。
+          const scoped = (fn) => (typeof scope.effect === "function" ? scope.effect(fn) : fn());
+          try {
+            // ① 字典注册（disposal-safe，按服务实例去重）：apply 阶段已注册过同一实例（locale 先就绪的
+            //    profile）就不再注册；注册失败（同 ns+locale 已存在）按「已注册」处理，绝不能带崩下面的订阅。
+            if (localeRegisteredOn !== svc) {
+              try { scoped(() => svc.register("dsh-graph", { zh, en })); } catch { /* 已注册 ⇒ 继续装配 */ }
+              localeRegisteredOn = svc;
+            }
+            // ② 订阅**只挂一条**：优先服务自身的 Face 契约 subscribe（每次快照变化都通知，含字典注册），
+            //    旧宿主没有 subscribe 时才退回全局 locale/change 事件（避免同一拍重复广播）。
+            scoped(() => {
+              if (typeof svc.subscribe === "function") return svc.subscribe(() => refreshLocale(svc));
+              if (typeof scope.on === "function") return scope.on("locale/change", () => refreshLocale(svc));
+              return undefined;
+            });
+            // ③ 迟到绑定这一拍本身可能没有任何事件（服务刚 provide、语言没切）⇒ 立即重绑定 + 广播一次，
+            //    否则早已按降级文案挂载过的容器会一直停在旧语言。
+            refreshLocale(svc);
+          } catch { /* 静默：locale 集成失败不得拖垮看板 */ }
+        });
         ctx.slots.inject("conversation.session.header.actions", () =>
           ctx.slots.register(
             { name: "conversation.session.header.actions", id: "dsh-graph-supervisor-badge", order: -9 },

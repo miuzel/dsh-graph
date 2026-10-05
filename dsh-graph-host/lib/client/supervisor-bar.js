@@ -1,5 +1,8 @@
     // g-192：仅当当前查看会话与后端受保护 supervisor.session 相等时显示。
     function SupervisorHeaderBadge(props) {
+      // g-431：本组件是**顶层 slot**（conversation.session.header.actions），不在看板子树里，
+      // 宿主不会因 locale 变化替我们重渲染 ⇒ 必须自己订阅重渲染广播，否则切语言后徽标文案残留。
+      useLocaleRevision();
       const [supervisorSession, setSupervisorSession] = React.useState(null);
       const sessionId = props?.sessionId ?? props?.session?.sessionId ?? props?.id ?? null;
       const workspace = props?.workspace ?? props?.cwd ?? props?.session?.cwd ?? props?.session?.header?.cwd ?? (typeof resolveWorkspaceOfSession === "function" ? resolveWorkspaceOfSession(sessionId) : null);
