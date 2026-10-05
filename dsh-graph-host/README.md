@@ -66,6 +66,57 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 ---
 
+### 升级残留自检与清理
+
+**现象**（外部报告；本仓在官方 Web 壳上**未复现**，桌面壳真机不可得）：升级宿主后 Web GUI 冷启动报
+`web boot: N entry did not activate` / `<插件名>: failed` —— 插件的 host 半边（`graph_*` 工具）正常、热加载也正常，只有浏览器半边不激活。
+
+**成因**：`dsh.client.inject` **不是「名录」，而是加载顺序边**。浏览器端 loader
+（`@deepseek-ai/dsh-client-modules/lib/client.js:655-658`）只对 inject 中**已存在于客户端清单**的包名做前置加载，
+名字不在清单里就**静默跳过**。而 `@deepseek-ai/dsh-client-runtime` 自 dsh 0.2.x 起**不再随宿主分发**
+（在 dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 的安装树里均无此包），但它的包清单**仍声明 `dsh.client`**：
+升级过程中若这个旧条目/旧副本残留在 profile 里，它会**重新变成一条客户端清单行**；该行的加载失败会被级联成
+`client-modules: "<插件>" not loaded because dependency "…" failed`，把**任何仍声明它的插件**一起拖死。
+干净安装没有这一行，所以不复现。**dsh-graph 自 g-425 起已删除该声明**（即使残留仍在，本插件也不再是它的消费者）。
+
+**首选动作：把 dsh-graph 升级到含本修复的版本即可，残留无需处理。** 含本修复的版本已不再声明该死引用 ⇒ 无论 profile 里是否还残留旧副本，本插件都不再是它的消费者，也不会被它拖死。下面的自检只是「想确认现状」时的只读排查；清理残留是**可选**的进阶动作。
+
+**自检（全部只读；下述命令已在隔离实例 dsh 0.2.0-rc.2 / 0.1.7-rc.2 上实测）**：
+
+把 `<DSH_HOME>` 换成你的 DSH home：web 版默认是 `~/.dsh`（也可由 `DSH_HOME` 环境变量指定）；**桌面版是另一套路径**，请以该壳的配置/日志里显示的 profile 目录为准。
+
+```sh
+# ① 本插件的声明 —— 期望 3 项，且不含 dsh-client-runtime
+node -e 'console.log(JSON.stringify(require(process.argv[1]).dsh.client.inject))' \
+  "<DSH_HOME>/profiles/web/node_modules/dsh-graph/package.json"
+
+# ② profile 清单里是否还列着它 —— 期望输出 0
+#    （注意：grep -c 在计数为 0 时退出码是 1，看打印出的数字即可，不要看退出码）
+grep -c dsh-client-runtime "<DSH_HOME>/profiles/web/package.json"
+
+# ③ 整个 DSH home 内是否还有名为 dsh-client-runtime 的目录 —— 期望无输出
+find "<DSH_HOME>" -type d -name dsh-client-runtime 2>/dev/null
+
+# ④（可选，仅在 Web 版且实例正在运行时）客户端清单里是否还有该行 —— 期望无输出
+#    「dsh web」启动行会打印带 token 的 URL，把它原样填进 <URL>
+curl -sL -b "" "<URL>" | grep -o '"@deepseek-ai/dsh-client-runtime"' | head -1
+```
+
+隔离实例实测结果（本仓 g-425 产物，dsh 0.2.0-rc.2）：
+
+- ① → `["@deepseek-ai/dsh-client-ui-settings","@deepseek-ai/dsh-client-ui-primitives","@deepseek-ai/dsh-client-ui-sidebar-right"]`
+- ② → `0`
+- ③ → 无输出
+- ④ → 无输出；`curl` 返回 200、35125 字节（同一命令对清单里**确实存在**的行名如 `@deepseek-ai/dsh-client-ui-settings` 能打印出来）
+- 命令有效性反证（都不是恒真空跑）：在一份确实含该名字的清单文件上 ② 打印 `1`；在 profile 里放入名为 `dsh-client-runtime` 的目录后 ③ **确实打印出该路径**（随即移除）
+
+**清理（可选，先备份）**：仅当你确实想清干净、且 ②非 0 或 ③有输出时：先**备份** profile，再删除 ③ 打印出的残留目录（并在 ② 命中的清单里去掉对应条目），然后**重启宿主** —— 客户端包元数据在激活期缓存，增删客户端插件必须重启才生效。**风险提示**：在 live profile 上直接删目录/改清单有改坏环境的风险；**更稳妥的替代**是重装同版本 dsh-graph 或新建一个干净 profile。自行清理前务必留备份，异常时用备份复原。
+
+**未验证**：本机无桌面壳真机（`@deepseek-ai/dsh-desktop` 在 npm 为 E404）。上述现象与成因链引用负责人真机复现结论与宿主源码，
+**不声称在本机复现了桌面壳症状**。
+
+---
+
 ### 核心特性
 
 - **四阶段生命周期状态机**：
@@ -230,6 +281,69 @@ All three platforms share the same package. **Known limitation**: on macOS a wor
 - **Write the goal description before dispatching**: supervisors get a reminder, and `graph_start_attempt` refuses to dispatch while the description is empty, placeholder-only, or comment-only — telling you to fill it in via `graph_set_description` and retry, with zero side effects.
 
 See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history; per-release gate verdicts live in the [v0.18.0 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.18.0.md) and the platform gate runbook in [platform-gate.md](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md). Official releases are distributed via npm and the dsh-market ecosystem.
+
+---
+
+### Upgrade-residue self-check and cleanup
+
+**Symptom** (externally reported; **not reproduced** in this repo on the official Web shell, and the desktop shell is unavailable here):
+after upgrading the host, a Web GUI cold start reports `web boot: N entry did not activate` / `<plugin>: failed` — the plugin's
+host half (`graph_*` tools) works and hot reload works, but its browser half never activates.
+
+**Cause**: `dsh.client.inject` is **not a directory listing, it is a load-order edge**. The browser-side loader
+(`@deepseek-ai/dsh-client-modules/lib/client.js:655-658`) preloads only those inject names that **already exist in the client
+manifest**, and silently skips the rest. `@deepseek-ai/dsh-client-runtime` is **no longer shipped with the host** since dsh 0.2.x
+(absent from the install trees of dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2), yet its package manifest **still declares `dsh.client`**.
+If an old entry/copy of it survives an upgrade in your profile, it **becomes a client manifest row again**; that row's load failure
+cascades into `client-modules: "<plugin>" not loaded because dependency "…" failed`, dragging down **every plugin that still declares it**.
+A clean install has no such row, which is why it does not reproduce. **dsh-graph has dropped that declaration as of g-425** — even if the
+residue is still present, this plugin is no longer one of its consumers.
+
+**Preferred action: just upgrade dsh-graph to a build that contains this fix — the residue needs no handling.** A fixed build no longer
+declares the dead name, so whether or not an old copy survives in your profile, this plugin is no longer one of its consumers and can no
+longer be dragged down by it. The self-check below is only a read-only way to inspect the current state; cleaning up the residue is an
+**optional** advanced step.
+
+**Self-check (read-only; every command below was measured on isolated instances of dsh 0.2.0-rc.2 / 0.1.7-rc.2)**:
+
+Replace `<DSH_HOME>` with your DSH home: for the Web build it defaults to `~/.dsh` (or wherever `DSH_HOME` points); the **desktop build
+uses a different path** — take the profile directory shown in that shell's configuration or logs.
+
+```sh
+# (1) This plugin's declaration — expect three names, without dsh-client-runtime
+node -e 'console.log(JSON.stringify(require(process.argv[1]).dsh.client.inject))' \
+  "<DSH_HOME>/profiles/web/node_modules/dsh-graph/package.json"
+
+# (2) Does the profile manifest still list it? — expect the number 0
+#     (note: `grep -c` exits 1 when the count is 0 — read the printed number, not the exit code)
+grep -c dsh-client-runtime "<DSH_HOME>/profiles/web/package.json"
+
+# (3) Is there still a directory named dsh-client-runtime anywhere under the DSH home? — expect no output
+find "<DSH_HOME>" -type d -name dsh-client-runtime 2>/dev/null
+
+# (4) Optional, Web build with a running instance only: is it still a row in the client manifest? — expect no output
+#     `dsh web` prints a tokenized URL on startup; paste it verbatim as <URL>
+curl -sL -b "" "<URL>" | grep -o '"@deepseek-ai/dsh-client-runtime"' | head -1
+```
+
+Measured on an isolated instance (this repo's g-425 artifact, dsh 0.2.0-rc.2):
+
+- (1) → `["@deepseek-ai/dsh-client-ui-settings","@deepseek-ai/dsh-client-ui-primitives","@deepseek-ai/dsh-client-ui-sidebar-right"]`
+- (2) → `0`
+- (3) → no output
+- (4) → no output, while `curl` returned 200 with 35125 bytes (the same command does print a row name that **is** present in the manifest,
+  e.g. `@deepseek-ai/dsh-client-ui-settings`)
+- Command-sanity counter-checks (neither command is vacuously silent): (2) prints `1` on a manifest file that really contains the name, and
+  (3) **did print the path** after a directory named `dsh-client-runtime` was deliberately placed into the profile (removed again immediately).
+
+**Cleanup (optional, back up first)**: only if you really want a clean slate and (2) is non-zero or (3) has output: **back up** the profile first,
+then remove the residue directory printed by (3) (and drop the matching entry from the manifest that (2) flagged), then **restart the host** —
+client package metadata is cached at activation time, so adding/removing client plugins only takes effect after a restart. **Risk note**: deleting
+directories or editing the manifest of a live profile can break your environment; the **safer alternatives** are reinstalling the same dsh-graph
+version or creating a fresh, clean profile. Always keep a backup before doing this yourself, and restore from it if anything misbehaves.
+
+**Not verified**: no desktop-shell machine is available here (`@deepseek-ai/dsh-desktop` is E404 on npm). The symptom and cause chain above cite the
+maintainer's on-device reproduction and host source code; this README does **not** claim the desktop-shell symptom was reproduced locally.
 
 ---
 

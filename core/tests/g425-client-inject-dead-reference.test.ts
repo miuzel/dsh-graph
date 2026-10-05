@@ -118,7 +118,11 @@ function injectProblems(
   const problems: string[] = [];
 
   if (!Array.isArray(inject)) return ["dsh.client.inject 必须是数组"];
-  if (inject.length === 0) problems.push("dsh.client.inject 不得为空数组");
+  // 空表是**合法且最安全**的状态：零条依赖边 ⇒ loader 按「无前置依赖」处理，绝无坏行可级联。
+  // 本守卫**不禁止空表**——本次事故的根因恰恰是「声明了用不到的名字」，禁止空表等于逼未来的
+  // 维护者在宿主线变化时为过守卫而保留/添加一个用不到的名字，即把事故成因写进守卫。
+  // 被判红的只有：未登记名、证据缺失、row 类空 hosts / hosts 越出 SUPPORTED_HOSTS、
+  // inert-module 的 required_by 与本仓真实 require() 对不上、重复名、非 string、死引用黑名单。
 
   const seen = new Set<string>();
   for (const raw of inject) {
@@ -211,6 +215,19 @@ test("g-425 判据1：登记表自洽——row 类非空 hosts 且落在受支�
     if (entry.class === "row") assert.ok((entry.hosts ?? []).length > 0, `${name} 是 row 类必须有 hosts`);
     else assert.ok(entry.required_by, `${name} 是 inert-module 必须有 required_by`);
   }
+});
+
+test("g-425 判据2：空表合法且最安全——禁止的是未登记名/证据缺失/黑名单命中，不是空表", () => {
+  // 空表 = 零条加载顺序边（loader 对缺省即按空表处理）⇒ 无坏行可级联，是**最安全**状态。
+  // 本次事故根因是「声明了用不到的名字」，故守卫绝不能禁止空表：那会逼维护者在宿主线变化时
+  // 为过守卫而保留/添加用不到的名字，等于把事故成因写进守卫本身。
+  assert.deepEqual(injectProblems([]), [], "空 inject 表必须全绿（零依赖边最安全）");
+  // dist 同口径判定里，源与 dist 同为 [] 也必须全绿（只有与源不一致才判红）
+  assert.deepEqual(distInjectProblems([], []), [], "源与 dist 同为空表必须全绿");
+  // 反向对照：非空 + 未登记名仍然必红（证明「空表全绿」不是因为判定函数被短路）
+  assert.ok(injectProblems(["@deepseek-ai/dsh-client-ui-not-registered"]).length > 0, "非空未登记名仍必红");
+  // 源与 dist 一个空、一个非空 ⇒ 仍按「与源不一致」判红（空表合法 ≠ 可以不同步）
+  assert.ok(distInjectProblems(["@deepseek-ai/dsh-client-ui-settings"], []).length > 0, "源/dist 不一致仍必红");
 });
 
 // ------------------------------------------------------------------ 判据 2 / 3（负向对照）
