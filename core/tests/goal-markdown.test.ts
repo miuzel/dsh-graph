@@ -208,6 +208,12 @@ test("g-270: 客户端 Bundle 契约——包含 Markdown 组件、DSH 原语引
     pkg.dsh?.client?.inject?.includes("@deepseek-ai/dsh-client-ui-primitives"),
     "package.json 的 client.inject 应声明 @deepseek-ai/dsh-client-ui-primitives",
   );
+  // g-425：inject 是加载顺序边（名字在客户端清单里才前置加载）；死引用会在升级残留安装里
+  // 变成坏行并级联拖死本插件，故必须缺席（完整守卫见 g425-client-inject-dead-reference.test.ts）。
+  assert.ok(
+    !pkg.dsh?.client?.inject?.includes("@deepseek-ai/dsh-client-runtime"),
+    "package.json 的 client.inject 不得包含死引用 @deepseek-ai/dsh-client-runtime",
+  );
 });
 
 // ---- ⑤ 未闭合代码围栏防护测试（>=3条）----

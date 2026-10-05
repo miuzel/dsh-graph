@@ -297,7 +297,7 @@ g-101 证据 ev-01/ev-02）。DSH 是 cordis 插件体系：插件即 `apply(ctx
 | PK 沙盒隔离 | git worktree / 独立交付目录 | 无对应 DSH 机制，自建 |
 | 人工补充细节、review 人工节点 | `ask_user_question`（`dsh-tool-ask-user`） | |
 | 技能沉淀 | 写 SKILL.md（`dsh-skill-filesystem` 扫描 `.dsh/skills` 等目录）或 `ctx.skills.register()` 运行时注册（`dsh-skill`） | 两条路都保留 |
-| 看板界面 | client-plugin：`ctx.slots.inject/register`（`dsh-client-runtime`） | 挂点见 §8.6 |
+| 看板界面 | client-plugin：`ctx.slots.inject/register`（客户端 `slots` 服务；`dsh.client.inject` 只是**加载顺序边**，见 §8.6 与 `docs/client-plugin-loading-recipe.md`） | 挂点见 §8.6 |
 | host↔client 自定义通道 | `ctx.webServer.register/registerUpgrade`（`dsh-host-webserver`） | 见下方限制 2 |
 | 阶段进度投影 | `todo_write`（仅展示视图，非真相源） | |
 

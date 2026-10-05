@@ -41,8 +41,9 @@ HTTP/1.1 200 OK · content-type: text/javascript; charset=utf-8 · cache-control
   `{ name, inject: ['slots', ...], apply(ctx) }`——**`inject` 是客户端 cordis 服务名**；
 - `require(spec)` 应答顺序：平台种子词 → 已物化模块 → 已注册 factory → 否则抛错。
   **种子词**（外壳 `staticModules`，见 dsh-web-frontend dist）：`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-primitives`；
-  其余包（如 `@deepseek-ai/dsh-client-runtime[/client]`）走 `__DSH_BOOT__` 图行动态到达；
-- 包间依赖：在 `dsh.client.external` 声明精确 specifier，宿主排序成「提供方先于消费者」；`dsh.client.inject`（包名）进 wire row 仅作名录/校验，**boot 不消费它**（服务等待靠模块 `exports.inject`——dsh-project-kanban 把它填成服务名也能跑，官方约定是包名，建议照官方）。
+  其余包（即客户端清单里的行，如 `@deepseek-ai/dsh-api-gateway`、各 `dsh-client-ui-*`）走 `__DSH_BOOT__.entries` 图行动态到达；
+- 包间依赖：在 `dsh.client.external` 声明精确 specifier，宿主排序成「提供方先于消费者」；`dsh.client.inject`（包名）是**加载顺序边**，不是「名录」——浏览器端 loader（`@deepseek-ai/dsh-client-modules/lib/client.js:655-658`）**只**对 inject 里**存在于客户端清单**的包名做前置加载（`arriveDependency`），名字不在清单里则**静默跳过**（`graphRows.get(name) === undefined`）。服务等待仍靠模块 `exports.inject`（dsh-project-kanban 把它填成服务名也能跑，官方约定是包名，建议照官方）。
+  ⚠️ **绝不声明用不到的名字**（g-425 订正；原文「仅作名录/校验、boot 不消费它」与实测不符）：静默跳过只在**干净安装**成立。若某个名字在**升级残留安装**里解析成一条客户端清单行，该坏行加载失败会被级联成 `client-modules: "<本插件>" not loaded because dependency "…" failed`，把本插件一起拖死。实例：`@deepseek-ai/dsh-client-runtime` 的包清单**声明了 `dsh.client`**（platform:web、immediately:true；npm 0.0.1-rc.1 / 0.1.1-rc.2 实测），但自 2026-08-21 起未随 dsh 0.2.x 分发——在 dsh **0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2** 三条受支持线上安装树均 0 命中，故干净安装不复现、残留安装必炸。dsh-graph 已删除该 inject 条目，并由 `core/tests/g425-client-inject-dead-reference.test.ts`（fail-closed、无豁免开关）逐个登记保留名（`row`=在 ≥1 条受支持线确为客户端清单行；`inert-module`=包清单无 `dsh` 字段、只被 `require` 当模块用、永不成行）。
 
 **apply(ctx) 可用的客户端服务**（实测/官方 bundle 佐证）：`slots`（SlotRegistry）、`sessions`、`workspaces`、`remote`（`ctx.remote.$on/$dispatch` + 领域 facade 如 `remote.goals`）、`locale`、`conversationEvents`、`conversationViews`、`modules`（ClientModuleLoader）、`loader`（vendored cordis Loader）、`logger`；通用 `ctx.get(name)`/`ctx.effect()`/`ctx.on()`。
 
@@ -63,6 +64,7 @@ ctx.slots.inject('conversation.view', () =>           // 声明存在即同步�
 
 - `package.json`：`"main":"index.js"`；`exports` 含 `"."`、`"./client":"./lib/client.js"`、`"./cordis.patch.yml"`、`"./package.json"`；
   `"dsh":{"bundle":{"patch":"./cordis.patch.yml"},"client":{"platform":"web","inject":["@deepseek-ai/dsh-client-runtime"]}}`
+  （**探针时代原样记录**；该 inject 名现已不在 dsh 0.2.x 安装树里，照抄会踩 §2 的坑——新插件请填**确实存在**的客户端清单行名，或按 `inert-module` 口径留空。）
 - `cordis.patch.yml`：`- insert: [{ id: dsh-hello-client, name: dsh-hello-client }]`（裸包名）
 - `index.js`（host 半）：`export const name/inject=['webServer']`；`apply` 里 `ctx.effect(() => ctx.webServer.register({kind:'exact', path:'/api/hello-client', handler:(req,res)=>…JSON…}))`；**禁止 export default**
 - `lib/client.js`（浏览器半）：§2 的 `__ModuleLoader__.load({id, factory})` 骨架；`require('react')`；`inject:['slots']`；`apply` 里 `slots.inject('conversation.view', …)`
@@ -94,14 +96,14 @@ Node 侧模拟浏览器契约（无浏览器 smoke）：`new Function('window', 
 2. bundle 必须是 classic script：顶层 `import/export` 会直接 SyntaxError；`load()` 的 `id` 必须与包名一致（`stripClientSuffix` 归一 `<id>/client`→`<id>`）；重复注册同一 id 抛错。
 3. 包元数据（是否 client 包）**激活期缓存且永不过期**：增删 client 插件必须重启 host；bundle 内容变更只有 HMR watcher（源码 checkout 的 `pnpm run dev:web`）调 `rebuilt()` 才更新 rev——无 watcher 时改 `client.js` 后**刷新页面即可拿到新内容**（no-cache + 每次读文件），但 URL 上的 rev 不变、无热替换。
 4. 客户端 `loader.unload` 是 stub——client 插件运行时不可卸载，调试用刷新/重启。
-5. 从 `@deepseek-ai/dsh-client-runtime` 导入值必须 `require('@deepseek-ai/dsh-client-runtime/client')`（图行别名到包行）；裸包名不在种子表时会走图行同一份，但官方警告：不在 externals 表的裸名会内联第二实例（scope-tag Symbol 失配）。
+5. 从 `@deepseek-ai/dsh-client-runtime` 导入值必须 `require('@deepseek-ai/dsh-client-runtime/client')`（图行别名到包行）；裸包名不在种子表时会走图行同一份，但官方警告：不在 externals 表的裸名会内联第二实例（scope-tag Symbol 失配）。**（历史记录，探针时代实测；该包自 2026-08-21 起未随 dsh 0.2.x 分发，现行宿主上无此包、也无作图行——不要在 0.2.x 上照抄本条，见 §2 的 inject 警告。）**
 6. 本沙箱：pnpm 需 `--store-dir` 可写目录；`/tmp` 跨 bash 调用不保留（探针台放工作区 `tmp/`，已 gitignore）。
 
 ## 6. 结构落地（g-116 已按此合并为单包）
 
 ```
 dsh-graph-host/                  # 单包双半（对照 kanban；npm 包名 = dsh-graph，目录名保留 dsh-graph-host）
-  package.json                   # dsh.bundle.patch + dsh.client{platform:web, inject:["@deepseek-ai/dsh-client-runtime"]}
+  package.json                   # dsh.bundle.patch + dsh.client{platform:web, inject:[ui-settings, ui-primitives, ui-sidebar-right]}（g-425 起不含 dsh-client-runtime）
                                  #   exports["./client"] → ./lib/client.js
   cordis.patch.yml               # 一条 insert 自己（host+client 两个半边同由该 entry 提供）
   index.js                       # host 半：graph_* 工具（inject:['tools']）+ /api/dsh-graph* 端点

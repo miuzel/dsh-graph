@@ -303,7 +303,7 @@ function deriveLive(entries, running, toolDetail) {
 5. **断线重连**：事件窗口可能 `replace`（`change.kind === 'replace'`），此时要全量重扫，不能只按 `append` 增量。
 6. **`open()` 是开口**：`eventSource` 窗口靠 `open()` 填充；`open()` 非幂等地重复调用安全（复用 in-flight promise）。
 7. **`SessionSnapshot` 已无 `prompt`**：若想显示提示词预览，取不到——契约上就不暴露（消费方应忽略）。
-8. **inject 引用过时包**：若客户端 `inject` 列表引用了已不存在的包（如 `dsh-client-runtime`），宿主对未知 inject 宽容跳过（死引用），但应清理。
+8. **inject 引用过时包**（g-425 按 dsh 0.2.x 实测订正）：客户端 `dsh.client.inject` 是**加载顺序边**而非「纯名录」——浏览器端 loader（`@deepseek-ai/dsh-client-modules/lib/client.js:655-658`）只对 inject 里**存在于客户端清单**的包名做前置加载（`arriveDependency`），名字不在清单里才**静默跳过**。因此「未知 inject 宽容跳过」只在**干净安装**成立：若该名字在**升级残留安装**里解析成一条客户端清单行（`@deepseek-ai/dsh-client-runtime` 的包清单声明了 `dsh.client`，但自 2026-08-21 起未随 0.2.x 分发，在 dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 上安装树 0 命中），坏行加载失败会被级联成 `client-modules: "<本插件>" not loaded because dependency "…" failed`。⇒ **绝不声明用不到的名字**；dsh-graph 已删除该条目，fail-closed 守卫见 `core/tests/g425-client-inject-dead-reference.test.ts`。
 9. **`running` 来源**：行数据的 `running` 来自 `SessionSummary.running`（经 `handleRunning` 中继），比从事件流推断更直接。
 
 ---

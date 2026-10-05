@@ -7,7 +7,10 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const ReactDOM = require("react-dom");
     const h = React.createElement;
-    // g-270：安全获取 DSH 官方 MarkdownText 组件（若缺失则优雅降级为内置解析器）
+    // g-270：安全获取 DSH 官方 MarkdownText 组件（若缺失则优雅降级为内置解析器）。
+    // g-425：本行 require("…dsh-client-ui-primitives") 同时是「该包只作模块用、永不成客户端清单行」
+    // 的机器证据——守卫 core/tests/g425-client-inject-dead-reference.test.ts 把它登记为
+    // inert-module 的 required_by，找不到这行 require 即判红。改动本 specifier 必须同步守卫登记表。
     let MarkdownText = null;
     try {
       const prim = require("@deepseek-ai/dsh-client-ui-primitives");
