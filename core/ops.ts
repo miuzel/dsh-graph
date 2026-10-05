@@ -198,12 +198,156 @@ function assertNoSymlinkPath(file: string, forWrite = false): void {
   } catch (e) { if (e instanceof GraphError) throw e; }
 }
 
+// ---- g-429：相对路径归一化（Windows 反斜杠 → POSIX `/`）与看板归属分类 ----
+//
+// 背景（真机实证，非理论风险）：`relative()` / `file.slice(root.length + 1)` 在 Windows 上产出 `\`
+// 分隔路径，而归档/取消归档/位置一致性/搬迁对账四处站点硬编码 `/` 切分与匹配 ⇒
+// 前两者必抛（`无法确定目标 … 的当前位置：versions\v-win-smoke\goals\g-001\goal.md`，用户点「归档」100% 失败），
+// 后两者**静默失效**（一致性检查与搬迁对账被跳过、不报错）。结论回填见 docs/platform-gate.md §7。
+//
+// 收口：**core 内对相对路径的分隔符手术只允许出现在下面这个标记区间里**（其余站点一律调用这里导出的
+// 纯函数；结构守卫 core/tests/g429-win-rel-separator.test.ts 会把区间外的裸 split("/")/startsWith("x/") 判红）。
+
+// g-429:rel-separator-surgery:begin
+
+/**
+ * 归一化「板内相对路径」：把 `\` 一律换成 `/`（Windows `relative()` / `slice(root.length+1)` 的产出形态）。
+ *
+ * rel 的来源与安全前提（为什么可以无条件把 `\` 当分隔符，而不是只在 Windows 上转换）：
+ *  1. **来源**：只接受本仓看板布局的产物 —— `init`/`join()` 构造的 `versions|goals|backlog` 树、
+ *     卡片/附件路径（g-364 已把附件路径解析收口到 `sanitizeAttachmentPath` + realpath/lstat 校验），
+ *     以及 `relative(root, file)` / `file.slice(root.length + 1)` 对它们的取值；
+ *  2. **前提**：合法条目名里不可能出现会被误当分隔符的 `\` —— 版本泳道 slug 由 `assertVersionSlug`/`isVersionSlug`
+ *     校验（含路径分隔符即判非法），附件名由 `sanitizeAttachmentPath` 显式拒绝 `\` 与 `:`，目标 id 形如 `g-<n>`；
+ *  3. **不适用**：git 输出、用户任意文件名等不满足 1/2 的字符串**不得**走本函数（`core/review-policy.ts` 的
+ *     `p.startsWith("core/")` 是对 git 路径的匹配，不在此列）。
+ */
+export function normalizeRelPath(rel: string): string {
+  return String(rel).replace(/\\/g, "/");
+}
+
+/** 归一化后按 `/` 切分的片段数组。这是 core 内**唯一**允许对相对路径做 `split("/")` 的出口
+ *  （站点自行切分 = Windows 上只切出一整段，正是 g-429 的缺陷形态；由结构守卫判红）。 */
+export function relPathSegments(rel: string): string[] {
+  return normalizeRelPath(rel).split("/");
+}
+
+/** 归一化后的「目录前缀」判定：`segments` 逐段相等**且后面还至少有一段**（等价于旧写法 `rel.startsWith("x/")`）。
+ *  站点不再自行写 `startsWith("x/")`，故 Windows 反斜杠形态同样命中。 */
+export function relPathStartsWithSegments(rel: string, segments: string[]): boolean {
+  const parts = relPathSegments(rel);
+  if (parts.length <= segments.length) return false;
+  return segments.every((seg, i) => parts[i] === seg);
+}
+
+/** 相对路径是否逃出根目录（`..` / `../…` / 绝对路径）。归一化后判定 ⇒ Windows 的 `..\..\x` 同样命中
+ *  （旧写法 `rel.startsWith(".." + "/")` 在 Windows 上 fail-open，嵌套上跳漏检）。 */
+export function relEscapesRoot(rel: string): boolean {
+  const n = normalizeRelPath(rel);
+  return n === ".." || n.startsWith("../") || isAbsolute(rel);
+}
+
+/** 顶层归属：`backlog` 泳道 / 排期泳道（`goals|versions`）/ 其他（`validate` 的搬迁对账用）。 */
+export function relOwnership(rel: string): "backlog" | "schedule" | "other" {
+  if (relPathStartsWithSegments(rel, ["backlog"])) return "backlog";
+  if (relPathStartsWithSegments(rel, ["goals"]) || relPathStartsWithSegments(rel, ["versions"])) return "schedule";
+  return "other";
+}
+
+/** 目标文件相对路径的形态（`archiveGoal`/`unarchiveGoal` 的分类依据）。 */
+export type GoalRelForm =
+  | "version-goal"        // versions/<v>/goals/<id>/goal.md
+  | "version-archived"    // versions/<v>/archived/<id>/goal.md
+  | "archived-version"    // versions/archived/<id>/goal.md（无版本目录，需 meta.version 才能复原）
+  | "standalone-goal"     // goals/<id>/goal.md
+  | "standalone-archived" // goals/archived/<id>/goal.md
+  | "backlog-goal"        // backlog/<id>/goal.md 或 backlog/<id>.md
+  | "backlog-archived"    // backlog/archived/<id>/goal.md 或 backlog/archived/<id>.md
+  | "unknown";            // 非板内布局（调用方按既有逻辑抛错）
+
+/** 目标文件相对路径的归属分类结果。 */
+export interface GoalRelLocation {
+  /** 归一化（POSIX `/`）后的相对路径 */
+  rel: string;
+  /** 归一化后的片段（分隔符手术已收口，调用方只读不切） */
+  segments: string[];
+  form: GoalRelForm;
+  /** 顶层目录；非板内布局为 null */
+  top: "versions" | "goals" | "backlog" | null;
+  /** `versions/<v>/…` 的 `<v>`（`versions/archived/…` 时为 `"archived"`）；非 versions 为 null */
+  version: string | null;
+  /** 是否位于 archived 层 */
+  archived: boolean;
+}
+
+/** **纯函数**：按相对路径分类目标文件归属。注入 `\` 形态的相对路径即可在 Linux 上判定 Windows 语义
+ *  （`versions\v1\goals\g-1\goal.md`、`backlog\archived\g-1.md` …），不依赖真机。 */
+export function classifyGoalRel(rel: string): GoalRelLocation {
+  const normalized = normalizeRelPath(rel);
+  const segments = normalized.split("/");
+  const head = segments[0];
+  const top: GoalRelLocation["top"] =
+    head === "versions" || head === "goals" || head === "backlog" ? head : null;
+  const isVersions = top === "versions";
+  let form: GoalRelForm = "unknown";
+  if (isVersions && segments[1] === "archived") form = "archived-version";
+  else if (isVersions && segments[2] === "archived") form = "version-archived";
+  else if (isVersions) form = "version-goal";
+  else if (top === "goals" && segments[1] === "archived") form = "standalone-archived";
+  else if (top === "goals") form = "standalone-goal";
+  else if (top === "backlog" && segments[1] === "archived") form = "backlog-archived";
+  else if (top === "backlog") form = "backlog-goal";
+  const archived =
+    form === "version-archived" || form === "archived-version" ||
+    form === "standalone-archived" || form === "backlog-archived";
+  return { rel: normalized, segments, form, top, version: isVersions ? (segments[1] ?? null) : null, archived };
+}
+
+/** **纯函数**：归档目标相对路径（POSIX `/` 形态；调用方 `join(root, …)`）。
+ *  `null` = 非板内布局，调用方按既有文案抛「无法确定…位置」。
+ *  `dirForm` = 源是目录形态（`<dir>/goal.md`）而非扁平 `.md`（backlog 两种形态由此区分，与 g-110 一致）。 */
+export function archiveTargetRel(loc: GoalRelLocation, id: string, dirForm: boolean): string | null {
+  if (loc.top === "versions") return ["versions", loc.segments[1], "archived", id, "goal.md"].join("/");
+  if (loc.top === "goals") return ["goals", "archived", id, "goal.md"].join("/");
+  if (loc.top === "backlog") {
+    return dirForm ? ["backlog", "archived", id, "goal.md"].join("/") : ["backlog", "archived", `${id}.md`].join("/");
+  }
+  return null;
+}
+
+/** **纯函数**：取消归档的目标相对路径（POSIX `/` 形态）。
+ *  `metaVersion` = `meta.version`（仅 `archived-version` 形态需要，用于复原版本目录；缺失时调用方先行报错）。
+ *  `null` = 位置形态无法确定（非 archived 层），调用方按既有文案抛错。 */
+export function unarchiveTargetRel(
+  loc: GoalRelLocation,
+  id: string,
+  dirForm: boolean,
+  metaVersion: string | null,
+): string | null {
+  switch (loc.form) {
+    case "archived-version":
+      return metaVersion ? ["versions", metaVersion, "goals", id, "goal.md"].join("/") : null;
+    case "version-archived":
+      return ["versions", loc.segments[1], "goals", id, "goal.md"].join("/");
+    case "standalone-archived":
+      return ["goals", id, "goal.md"].join("/");
+    case "backlog-archived":
+      return dirForm ? ["backlog", id, "goal.md"].join("/") : ["backlog", `${id}.md`].join("/");
+    default:
+      return null;
+  }
+}
+
+// g-429:rel-separator-surgery:end
+
 function assertContainedPath(root: string, file: string): void {
   try {
     const rr = realpathSync(root);
     const rf = realpathSync(file);
+    // g-429：rel 是 `relative()` 产物，Windows 上为反斜杠；旧写法 `startsWith(".." + "/")` 会漏检
+    // 嵌套上跳（`..\..\x` ⇒ fail-open），收口到 relEscapesRoot（归一化后判定 + 平台无关的绝对路径判定）。
     const rel = relative(rr, rf);
-    if (rel === ".." || rel.startsWith(".." + "/") || rel.startsWith("/")) throw new GraphError("拒绝读取 workspace 外 symlink 路径");
+    if (relEscapesRoot(rel)) throw new GraphError("拒绝读取 workspace 外 symlink 路径");
   } catch (e) { if (e instanceof GraphError) throw e; }
 }
 
@@ -2246,20 +2390,25 @@ export function transition(
   });
 }
 
-/** 位置/归属一致性：backlog 与 goals/ 下 version 必须为 null；版本内必须等于目录名。 */function locationProblems(root: string, file: string, meta: Record<string, any>): string[] {
+/** 位置/归属一致性（**纯函数**形态，g-429）：backlog 与 goals/ 下 version 必须为 null；版本内必须等于目录名。
+ *  输入相对路径而非绝对路径 ⇒ 注入反斜杠形态即可在 Linux 上判定 Windows 语义。 */
+export function locationProblemsForRel(rel: string, id: string, version: unknown): string[] {
   const problems: string[] = [];
-  const rel = file.slice(root.length + 1);
-  const parts = rel.split("/");
-  const version = meta.version ?? null;
+  const parts = relPathSegments(rel);
   if (parts[0] === "versions") {
     const dirVersion = parts[1];
     if (version !== dirVersion) {
-      problems.push(`${meta.id}: version 字段(${version}) 与目录(${dirVersion})不一致`);
+      problems.push(`${id}: version 字段(${version}) 与目录(${dirVersion})不一致`);
     }
   } else if ((parts[0] === "backlog" || parts[0] === "goals") && version !== null) {
-    problems.push(`${meta.id}: 位于 ${parts[0]}/ 但 version=${version}`);
+    problems.push(`${id}: 位于 ${parts[0]}/ 但 version=${version}`);
   }
   return problems;
+}
+
+/** 位置/归属一致性：委托给纯函数（g-429 收口；本函数不再自行切分相对路径）。 */
+function locationProblems(root: string, file: string, meta: Record<string, any>): string[] {
+  return locationProblemsForRel(file.slice(root.length + 1), String(meta.id), meta.version ?? null);
 }
 
 /** 有向边 DFS 环检测（唯一实现，g-379 复用给依赖边与关系替代边；禁止第二套）。
@@ -3102,18 +3251,36 @@ function moveTransitionDiagnostics(root: string): string[] {
     const actual = String(doc.meta.status);
     if (expected === undefined || expected === actual) continue;
     if (!moved.has(id)) continue;
-    const rel = relative(root, file);
-    const inBacklog = rel.startsWith("backlog/");
-    const inSchedule = rel.startsWith("goals/") || rel.startsWith("versions/");
-    if (!inBacklog && !inSchedule) continue;
-    const impliedByMove = inBacklog ? "draft" : expected === "draft" ? "planning" : null;
-    if (impliedByMove === null || impliedByMove !== actual) continue;
-    if (recorded.get(id)?.has(expected)) continue; // ④ 事件流已记录该 status ⇒ 不是缺事件
-    problems.push(
-      `${id}: frontmatter=${actual} 与事件流重建=${expected} 不一致，形态与历史 moveGoal 搬迁改 status 而缺 goal.transition 一致——只读诊断，不自动补记事件（如确需修正，请人工确认后用 graph_transition 显式迁移）`,
-    );
+    const problem = moveTransitionProblemFor({
+      rel: relative(root, file),
+      id,
+      actual,
+      expected,
+      recorded: recorded.get(id)?.has(expected) ?? false, // ④ 事件流已记录该 status ⇒ 不是缺事件
+    });
+    if (problem) problems.push(problem);
   }
   return problems;
+}
+
+/** **纯函数**（g-429 收口）：单目标的「搬迁改了 status 却缺 goal.transition」判定；
+ *  输入相对路径 ⇒ 注入反斜杠形态即可在 Linux 上判定 Windows 语义（旧写法 `rel.startsWith("backlog/")`
+ *  在 Windows 上永不匹配 ⇒ 整段对账被静默跳过）。前置条件（`expected` 已知且与 `actual` 不同、
+ *  该目标确有 `goal.moved`）由调用方先行过滤；本函数只负责「位置 → 状态推论」与 ④ 事件鉴别。 */
+export function moveTransitionProblemFor(input: {
+  rel: string;
+  id: string;
+  actual: string;
+  expected: string;
+  recorded: boolean;
+}): string | null {
+  const ownership = relOwnership(input.rel);
+  if (ownership === "other") return null;
+  const inBacklog = ownership === "backlog";
+  const impliedByMove = inBacklog ? "draft" : input.expected === "draft" ? "planning" : null;
+  if (impliedByMove === null || impliedByMove !== input.actual) return null;
+  if (input.recorded) return null; // ④ 事件流已记录该 status ⇒ 不是缺事件
+  return `${input.id}: frontmatter=${input.actual} 与事件流重建=${input.expected} 不一致，形态与历史 moveGoal 搬迁改 status 而缺 goal.transition 一致——只读诊断，不自动补记事件（如确需修正，请人工确认后用 graph_transition 显式迁移）`;
 }
 
 /** 全量不变式校验；返回问题列表（空 = 通过）。 */
@@ -4728,11 +4895,13 @@ export function attachmentDigest(root: string, name: string): string | null {
  *  引用 id 经 assertSafeId 安全解析，恶意/越界 ref 被跳过（统一安全解析）。 */
 /** 将 graph 内部卡片路径转换为相对工作区根的精确路径（以 .dsh-graph/ 开头，供执行者按需读取）。 */
 export function toWorkspaceCardPath(root: string, cardFile: string): string {
+  // g-429：走归一化（Windows 上 `relative()` 产出 `\`，旧写法 `startsWith(".dsh-graph/")` 不命中
+  // ⇒ 落进 join 分支拼出 `.dsh-graph\.dsh-graph\…` 的重复前缀）。返回值为 POSIX `/` 形态（注入契约）。
   if (basename(root) === ".dsh-graph") {
-    return relative(dirname(root), cardFile);
+    return normalizeRelPath(relative(dirname(root), cardFile));
   }
-  const rel = relative(root, cardFile);
-  return rel.startsWith(".dsh-graph/") ? rel : join(".dsh-graph", rel);
+  const rel = normalizeRelPath(relative(root, cardFile));
+  return relPathStartsWithSegments(rel, [".dsh-graph"]) ? rel : join(".dsh-graph", rel);
 }
 
 export function harvestedCards(root: string, goalId: string): HarvestedCard[] {
@@ -8717,26 +8886,11 @@ export function archiveGoal(
     throw new GraphError(`目标 ${id} 当前状态为 ${status}，只有 draft/planning/delivered 可归档`);
   }
   const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
-  const rel = file.slice(root.length + 1);
-  const parts = rel.split("/");
-  let targetFile: string;
-  if (parts[0] === "versions") {
-    // 版本目标 → versions/vX/archived/<id>/goal.md
-    const ver = parts[1];
-    targetFile = join(root, "versions", ver, "archived", id, "goal.md");
-  } else if (parts[0] === "goals") {
-    // 独立目标 → goals/archived/<id>/goal.md
-    targetFile = join(root, "goals", "archived", id, "goal.md");
-  } else if (parts[0] === "backlog") {
-    // backlog 目标：目录形态 → backlog/archived/<id>/goal.md；扁平 → backlog/archived/<id>.md
-    if (srcDir) {
-      targetFile = join(root, "backlog", "archived", id, "goal.md");
-    } else {
-      targetFile = join(root, "backlog", "archived", `${id}.md`);
-    }
-  } else {
-    throw new GraphError(`无法确定目标 ${id} 的当前位置：${rel}`);
-  }
+  // g-429：分类与目标位置都走纯函数（归一化后判定）——旧写法 `rel.split("/")` 在 Windows 上只切出一整段 ⇒ 必抛
+  const loc = classifyGoalRel(file.slice(root.length + 1));
+  const targetRel = archiveTargetRel(loc, id, srcDir !== null);
+  if (targetRel === null) throw new GraphError(`无法确定目标 ${id} 的当前位置：${loc.rel}`);
+  const targetFile = join(root, targetRel);
   if (existsSync(targetFile)) throw new GraphError(`归档位置已存在：${targetFile}`);
   // 标记已归档
   doc.meta.archived = true;
@@ -8780,32 +8934,15 @@ export function unarchiveGoal(
   if (!doc.meta.archived) {
     throw new GraphError(`目标 ${id} 未归档，无需取消归档`);
   }
-  const rel = file.slice(root.length + 1);
-  const parts = rel.split("/");
+  // g-429：分类与目标位置都走纯函数（归一化后判定）——旧写法 `rel.split("/")` 在 Windows 上只切出一整段 ⇒ 必抛
+  const loc = classifyGoalRel(file.slice(root.length + 1));
   const srcDir = basename(file) === "goal.md" ? dirname(file) : null;
-  let targetFile: string;
-  if (parts[0] === "versions" && parts[1] === "archived") {
-    // versions/archived/<id>/goal.md → 需要知道原版本，从 meta.version 取
-    const ver = doc.meta.version;
-    if (!ver) throw new GraphError(`归档目标 ${id} 缺少 version 字段，无法恢复到版本目录`);
-    targetFile = join(root, "versions", ver, "goals", id, "goal.md");
-  } else if (parts[0] === "versions" && parts[2] === "archived") {
-    // versions/vX/archived/<id>/goal.md → versions/vX/goals/<id>/goal.md
-    const ver = parts[1];
-    targetFile = join(root, "versions", ver, "goals", id, "goal.md");
-  } else if (parts[0] === "goals" && parts[1] === "archived") {
-    // goals/archived/<id>/goal.md → goals/<id>/goal.md
-    targetFile = join(root, "goals", id, "goal.md");
-  } else if (parts[0] === "backlog" && parts[1] === "archived") {
-    // backlog/archived/<id>/goal.md → backlog/<id>/goal.md；backlog/archived/<id>.md → backlog/<id>.md
-    if (srcDir) {
-      targetFile = join(root, "backlog", id, "goal.md");
-    } else {
-      targetFile = join(root, "backlog", `${id}.md`);
-    }
-  } else {
-    throw new GraphError(`无法确定归档目标 ${id} 的位置：${rel}`);
+  if (loc.form === "archived-version" && !doc.meta.version) {
+    throw new GraphError(`归档目标 ${id} 缺少 version 字段，无法恢复到版本目录`);
   }
+  const targetRel = unarchiveTargetRel(loc, id, srcDir !== null, (doc.meta.version ?? null) as string | null);
+  if (targetRel === null) throw new GraphError(`无法确定归档目标 ${id} 的位置：${loc.rel}`);
+  const targetFile = join(root, targetRel);
   if (existsSync(targetFile)) throw new GraphError(`恢复位置已存在：${targetFile}`);
   // 清除归档标记
   doc.meta.archived = false;
