@@ -352,10 +352,20 @@ test("g-301 危险/无效参数表：mkdir/install/配置写入/启动之前 exi
     const misplaced = runScript(["v0.19.4", "--dry-run"], { env: { DSH_TEST_ROOT: homeDsh }, cwd: sb });
     assert.equal(misplaced.status, 2, "预检同样必须先拒绝生产 HOME 测试根");
     assert.ok(misplaced.stderr.includes("拒绝把测试根指向生产 HOME"), misplaced.stderr);
+    // 真实看板路径（主树承载看板）：只断言「确实被拦」，**不**拿它的既有状态做存在性判据 ——
+    // 主树里 `.dsh-graph` 本就存在，以仓库根为判据的「不存在」断言在那里会退化为空断言（g-426 根因）。
     const kanban = runScript(["v0.19.4", "--dry-run"], { env: { DSH_TEST_ROOT: join(REPO_ROOT, ".dsh-graph") }, cwd: sb });
     assert.equal(kanban.status, 2, "预检同样必须先拒绝看板数据测试根");
     assert.ok(kanban.stderr.includes("拒绝把测试根指向看板数据"), kanban.stderr);
-    assert.ok(!existsSync(join(REPO_ROOT, ".dsh-graph")), "不得创建看板目录");
+    // 「不得创建看板目录」判据落在**私有沙箱**路径：守卫谓词是纯语法 `*/.dsh-graph`（与是否在仓库根
+    // 无关）⇒ 同样 exit 2 + 同一拒绝文案；而沙箱内「不存在」恒可真检（任何创建都会被抓到），
+    // 并与用例末尾的 `snapshot(sb)` 前后全量对照互为双重证据。
+    const boardInSb = join(sb, ".dsh-graph");
+    assert.ok(!existsSync(boardInSb), "沙箱内看板形态路径在调用前必须不存在（否则本条空转）");
+    const kanbanInSb = runScript(["v0.19.4", "--dry-run"], { env: { DSH_TEST_ROOT: boardInSb }, cwd: sb });
+    assert.equal(kanbanInSb.status, 2, "预检同样必须先拒绝沙箱内的看板形态测试根");
+    assert.ok(kanbanInSb.stderr.includes("拒绝把测试根指向看板数据"), kanbanInSb.stderr);
+    assert.ok(!existsSync(boardInSb), "不得创建看板目录");
     for (const bad of ["/tmp/g301-outside", join(TMP_ROOT, "..", "escape"), "relative/root"]) {
       const r = runScript(["v0.19.4", "--dry-run"], { env: { DSH_TEST_ROOT: bad }, cwd: sb });
       assert.equal(r.status, 2, `DSH_TEST_ROOT=${bad} 必须拒绝`);
@@ -417,6 +427,66 @@ test("g-301 负向对照：基线脚本在拒绝前会 mkdir（回退预检 ⇒ 
   } finally {
     rmSync(sb, { recursive: true, force: true });
   }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// D2. g-426：看板存在性判据的判别力与防回退守卫
+// ────────────────────────────────────────────────────────────────────────────
+
+/** 内联变异（负向对照专用，不改产品脚本）：在看板守卫**之前**插入一次 mkdir ——
+ *  退出码与拒绝文案逐字不变，唯一差别是「被拒绝的路径上已被创建」⇒ 存在性断言必红。 */
+function mutateKanbanGuardToCreateFirst(text: string): string {
+  const anchor = `case "$TEST_ROOT" in\n  */.dsh-graph|*/.dsh-graph/*) die "拒绝把测试根指向看板数据：$TEST_ROOT";;\nesac`;
+  assert.ok(text.includes(anchor), "负向对照夹具必须找到看板守卫原文（否则用例空转）");
+  const mutated = text.replace(anchor, `mkdir -p "$TEST_ROOT"\n${anchor}`);
+  assert.notEqual(mutated, text, "负向对照必须真的改写了脚本（否则用例空转）");
+  assert.ok(mutated.includes(`mkdir -p "$TEST_ROOT"\ncase "$TEST_ROOT" in`), "创建必须插在拒绝之前");
+  return mutated;
+}
+
+test("g-426 负向对照：看板守卫若在拒绝前创建目录，「不得创建看板目录」断言必红", { skip: SKIP }, () => {
+  const sb = mkSandbox();
+  try {
+    const fake = join(sb, "fake");
+    mkdirSync(join(fake, "scripts"), { recursive: true });
+    mkdirSync(join(fake, "tmp"), { recursive: true });
+    const mutated = join(fake, "scripts", "dsh-test-web.sh");
+    writeFileSync(mutated, mutateKanbanGuardToCreateFirst(readFileSync(SCRIPT, "utf8")));
+    chmodSync(mutated, 0o755);
+    const boardInSb = join(fake, "tmp", ".dsh-graph");
+    assert.ok(!existsSync(boardInSb), "夹具起点必须没有看板目录");
+    const r = spawnSync(BASH, [mutated, "v0.19.4", "--dry-run"], {
+      cwd: sb,
+      env: { ...(process.env as Record<string, string>), DSH_TEST_MODE: "1", DSH_TEST_ROOT: boardInSb },
+      encoding: "utf8",
+    });
+    // 与真实脚本逐字相同的退出码 + 拒绝文案，唯一差别是目录已被创建 ⇒ 判别力只落在存在性断言上。
+    assert.equal(r.status, 2, `变异脚本仍以 exit 2 拒绝：${r.stderr ?? ""}`);
+    assert.ok((r.stderr ?? "").includes("拒绝把测试根指向看板数据"), r.stderr ?? "");
+    assert.ok(existsSync(boardInSb), "负向对照：变异脚本确实在被拒绝的看板路径上创建了目录（否则对照失效）");
+    // 实拍变红：把新断言原样跑一遍，此刻必须抛出（证明它能抓到创建）。
+    assert.throws(
+      () => assert.ok(!existsSync(boardInSb), "不得创建看板目录"),
+      /不得创建看板目录/,
+      "负向对照：目录一被创建，新断言必红（本套件具备判别力）",
+    );
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});
+
+test("g-426 防回退守卫：看板存在性判据必须绑定私有沙箱，不得以仓库根既有状态为判据", { skip: SKIP }, () => {
+  const src = readFileSync(join(import.meta.dirname, "g301-dry-run-doctor.test.ts"), "utf8");
+  // 禁形：以仓库根既有状态为判据的存在性断言（主树里看板目录本就存在 ⇒ 断言退化为恒真）。
+  assert.ok(
+    !/!\s*existsSync\(\s*join\(\s*REPO_ROOT\s*,\s*"\.dsh-graph"\s*\)\s*\)/.test(src),
+    "回退警报：不得以仓库根既有状态判定「不得创建看板目录」",
+  );
+  assert.ok(src.includes(`const boardInSb = join(sb, ".dsh-graph")`), "存在性判据必须落在私有沙箱路径 boardInSb");
+  assert.ok(
+    /assert\.ok\(!existsSync\(boardInSb\),\s*"不得创建看板目录"\)/.test(src),
+    "必须保留「不得创建看板目录」断言并绑定沙箱路径（不得 skip/todo 或删除）",
+  );
 });
 
 // ────────────────────────────────────────────────────────────────────────────
