@@ -190,6 +190,7 @@ worktree 内**未执行任何 `pnpm` 命令**（`pnpm run` 会先做依赖检查
 | **终版**产物语法 | `node --check dist/lib/client.js` | **通过**（exit 0） |
 | **终版**只读新鲜度 | `node --test core/tests/dist-freshness-g312.test.ts` | **5 / 5 pass，fail 0**（exit 0） |
 | g-434 守卫（含负向对照） | `node --test core/tests/g434-script-var-multibyte-guard.test.ts` | **3 / 3 pass**；放入含裸写 `$PROBE（` 的探针脚本 ⇒ **实拍判红**并给出 `${PROBE}` 修法（探针已删） |
+| （留痕）主树新鲜度一度误红 | `node --test core/tests/dist-freshness-g312.test.ts` | 2026-10-06 12:21 有一批受版本控制文件被**外部批量触碰 mtime**（`git status` **干净、内容未变**），而 `dist/` 为 12:15 构建 ⇒ 纯 mtime 判据报「产物陈旧」；**重建后 5/5 pass**，且重建产物 sha256 **仍为 `3800ba76…`**（= 已发布产物）⇒ 内容无回归，非发布事故 |
 
 ## 6. 执行与未执行项（如实登记）
 
