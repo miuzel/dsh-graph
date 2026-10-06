@@ -88,10 +88,14 @@ worktree 内**未执行任何 `pnpm` 命令**（`pnpm run` 会先做依赖检查
       `FORBIDDEN_TRACES` 未改）；`g352` 冻结签名 fixture 按维护者口径**仅刷 provenance**（见 §3 注）
 - [x] 全量测试 / 自证闸门 / 产物语法 / 打包：见 §5
 - [x] `npm pack` 产出 `dsh-graph-0.19.7.tgz` 并记录字节数与 sha256 / sha1（§4）
-- [ ] **平台声明如实（红线 1）**：三处平台状态表的 Windows 行已如实化（§0）——「**v0.19.7 RC 尚未跑
-      真机门禁，不得读出「已通过」**」+ 保留 0.19.x 产品代码的 `fix4` 真机记录，结论指向本清单；
-      **Windows = 待回填**（本次 RC 未跑原生 Windows 真机门禁）；**macOS = 未执行**；
-      Linux / WSL2 = 已实测通过（§5）。**本清单与两份 README 全文均未预填 Windows PASS**
+- [x] **平台声明如实（红线 1）**：三处平台状态表按「用户可读的支持 / 验证结果」口径重写（**不含**内部工作编号、
+      门禁机制、待回填 / RC 等开发过程信息）——`Linux / WSL2 = ✅ 支持`、`原生 Windows = ✅ 支持（已在原生 Windows 上实测）`、
+      `macOS = ✅ 支持（已在 macOS 上实测）`；APFS 默认大小写不敏感并入「已知限制」。**真机结论**：
+      Windows `--tarball` = **通过 15 / 失败 0 / 告警 1** + 仓库根台账对账 **2/0/0**（§7.3）；
+      macOS `--static-only .` = **7/0/2**、`--tarball` = **16/0/0**（§7.4）
+- [x] **macOS 源码构建路径首次真机验证 + 阻断缺陷修复（g-434）**：`bash scripts/build.sh` 在原生 macOS 上因
+      「多字节变量名吞并」（bash 3.2 + UTF-8 locale）必然中止 ⇒ 10 处改 `${VAR}` + 新增结构性守卫；修复后
+      三步走完并原子就位（§7.4）。**该缺陷不影响发布产物**（`scripts/` 不在包内）
 - [ ] 合并 `main` / 打 annotated tag / `pnpm publish` —— **准备阶段未执行**，由负责人人工 gate 决定
 
 ## 3. 版本号一致性（红线 2）逐处证据
@@ -145,7 +149,25 @@ worktree 内**未执行任何 `pnpm` 命令**（`pnpm run` 会先做依赖检查
 
 `tmp/` 为 gitignored 临时目录，tarball 不入 git（跨机器传递时以上表指纹对账）。
 
-## 5. 测试与静态检查（worktree `.worktrees/g-432-att-01` 内）
+**终版产物（README 用户口径清理 + macOS 结论回填后重打）**：
+
+| 项 | 值 |
+|---|---|
+| 产物 | `tmp/release-0197-final/dsh-graph-0.19.7.tgz` |
+| 字节数 | **624934** |
+| sha256 | `3800ba76b1002ae9475019008cc4e973b6390a09953071ae89a1589cbdfd02bd` |
+| sha1 | `dbf5e6c6dc0359aa4dc71f990b15aa8149761bf6` |
+| 成员文件数 | **37** |
+| 与 RC 的差异 | `diff -rq` 输出**仅 1 行**：`README.md` 不同 ⇒ 其余 **36 个文件逐字节相同**（实拍见 `docs/platform-gate.md` §7.5） |
+| 包内版本实锤 | `package/package.json` version = `0.19.7`；`package/lib/client.js` `PLUGIN_VERSION = "0.19.7"` |
+
+> **被测产物 vs 发布产物（红线 3 口径）**：§7.3 / §7.4 的真机门禁跑在**上表的 RC**（`86198a39…`）上，
+> 发布用的是**终版包**（`667d2c10…`）。两者差异**仅 `README.md`**（用户可见文案：平台行与开发措辞清理），
+> 产品代码、客户端 bundle、`prompts` 资产逐字节相同 ⇒ 真机结论对发布产物**继续有效**。
+> 若要求严格「被测产物 ≡ 发布产物」，对终版包按 `docs/platform-gate.md` §7 与 §5 的命令各重跑一次即可
+> （由负责人决定；本次按「先出结论、再清 README」的顺序执行）。
+
+## 5. 测试与静态检查（RC：worktree `.worktrees/g-432-att-01` 内；终版：主树发布时点）
 
 | 项 | 命令 | 结果 |
 |---|---|---|
@@ -155,23 +177,39 @@ worktree 内**未执行任何 `pnpm` 命令**（`pnpm run` 会先做依赖检查
 | 冻结签名正文比对 | `G352_SIG_DUMP=<tmp> node --test --test-name-pattern="会话内看板页签签名" core/tests/g352-narrow-width.test.ts` + `diff` | 正文 **diff 0 行**（55/55 行一致）；`content-sha256` 仍为 `0e6b7094…`，仅 `source-sha256` 随源码变更 |
 | 产物语法 | `node --check dist/lib/client.js` | **通过**（exit 0） |
 | 只读新鲜度 | `node --test core/tests/dist-freshness-g312.test.ts` | **5 / 5 pass，fail 0**（exit 0） |
+| **终版**整套件自证闸门 | `node scripts/run-tests.mjs` | **tests=2077 / pass=2077 / fail=0 / skipped=0 / cancelled=0 / todo=0，exit 0**（自证行：`tests=2077 (>0) skipped=0 fail=0 cancelled=0 todo=0 pass=2077 exit=0 ms=31487 glob=core/tests/*.test.ts`；+3 = g-434 新增守卫的 3 条用例） |
+| **终版**产物语法 | `node --check dist/lib/client.js` | **通过**（exit 0） |
+| **终版**只读新鲜度 | `node --test core/tests/dist-freshness-g312.test.ts` | **5 / 5 pass，fail 0**（exit 0） |
+| g-434 守卫（含负向对照） | `node --test core/tests/g434-script-var-multibyte-guard.test.ts` | **3 / 3 pass**；放入含裸写 `$PROBE（` 的探针脚本 ⇒ **实拍判红**并给出 `${PROBE}` 修法（探针已删） |
 
-## 6. 未执行项与待回填（如实登记）
+## 6. 执行与未执行项（如实登记）
 
-- **Windows 真机门禁（红线 1）：未执行 ⇒ 待回填。** 本次发布候选包 `dsh-graph-0.19.7.tgz`
-  （625760 B，sha256 `86198a39…`）**尚未**在**原生 Windows** 上运行门禁。负责人执行：
-  `node scripts/win-smoke-test.mjs --tarball dsh-graph-0.19.7.tgz`
-  （回填落 `docs/platform-gate.md` §7）。**在此之前，本清单与两份 README 均不得读出「Windows 已通过」。**
-  参考（**不替代**）：`docs/platform-gate.md` §7.1 / §7.2 已登记的两次 0.19.x 真机 PASS（复验包 `fix3` / `fix4`）。
-- **顺序口径（`be5641c` 的实际做法，写清以免下次误解）**：
-  ① 发布准备提交里，三处平台状态表写「**待回填**」，**不写**结论；
-  ② 负责人对**被测产物 = 本清单 §4 记录的 RC tarball**（以 sha256 对账）执行真机门禁；
-  ③ 真机结论的回填（两份 README 平台行 + `docs/platform-gate.md` §7 + 本清单 §2/§6）发生在**发布提交之后的
-     文档提交**中，不修改已冻结的 RC 产物。
-  ⇒ 本次自动化发布准备止于「待回填」，**不含**任何 Windows 结论。
-- **macOS 真机门禁：未执行**（不得读出「已通过」）。最近一次真机结论见 v0.16.0 清单。
-- **未执行**：`npm publish`、annotated tag、GitHub release、`git push`、合并 `main`。
+- **Windows 真机门禁（红线 1）：已执行 ⇒ PASS。** 负责人对**被测产物 = §4 RC**（625760 B，sha256 `86198a39…`）
+  在**原生 Windows** 上执行 `node scripts/win-smoke-test.mjs --tarball dsh-graph-0.19.7.tgz`
+  ⇒ **通过 15 / 失败 0 / 告警 1**（T3 看板 FS 生命周期 32 步）；另在仓库根执行 `--static-only .`
+  ⇒ **2 / 0 / 0**（OS 台账 65 项 / 253 处命中 / **未登记 0**，fail-closed）。逐字报告见 `docs/platform-gate.md` §7.3。
+- **macOS 真机门禁：已执行 ⇒ PASS，并修掉一个真机阻断缺陷。**
+  ① `--static-only .` = **7 / 0 / 2**（P2 / P3 / P4 / P6 与 M4 **PASS**；`P1=WARN` = APFS 默认大小写不敏感，
+  判读表即如此定义，已把该限制写入 README「已知限制」；`P5=WARN` = 无「可写的第二文件系统」，
+  执行件按设计**拒绝**冒充通过）；
+  ② `--tarball` = **16 / 0 / 0**，T3 生命周期 32/32 步，被测产物指纹与 §4 RC 一致 ⇒ **macOS 可安装可用**；
+  ③ **源码构建**：首轮 `bash scripts/build.sh` 在 macOS 自带 **bash 3.2** 下第 112 行因「多字节变量名吞并」
+  （`$VAR` 紧跟全角括号 ⇒ `set -u` 判未绑定）**必然中止**、`dist/` 从未构建 ⇒ 修复 `2c6c5c3`
+  （10 处改 `${VAR}` + 新增结构性守卫）后三步走完并原子就位。**这是源码构建路径第一次在 macOS 上被真机
+  验证**（v0.18.0 的 macOS 门禁只走 tarball，不执行 build.sh）。逐字报告与根因见 `docs/platform-gate.md` §7.4。
+  **该缺陷不影响发布产物**（`scripts/` 不在包内）。
+- **顺序口径（本次实际做法，写清以免下次误解）**：
+  ① 发布准备提交写「**待回填**」，**不写**结论；
+  ② 负责人对**被测产物 = §4 记录的 RC tarball**（以 sha256 对账）执行两平台真机门禁（Windows + macOS）；
+  ③ 结论回填发生在**发布提交之后的文档提交**中：两份 README 平台行改为**用户可读的支持 / 验证结果**口径
+     （按负责人指示**不含**内部工作编号、门禁机制、待回填等开发过程信息）+ `docs/platform-gate.md` §7 + 本清单；
+  ④ 回填后 `bash scripts/build.sh` 重打**终版包**（§4 终版表）：与 RC **仅 `README.md` 不同**
+     （`diff -rq` 恰 1 行，其余 **36 / 37 逐字节相同**，实拍见 `docs/platform-gate.md` §7.5）
+     ⇒ 真机结论对发布产物继续有效。若要求严格「被测产物 ≡ 发布产物」，对终版包重跑两平台门禁即可。
+- **未执行**：`npm publish`、annotated tag、GitHub release、`git push`、合并 `main`（均由负责人执行）。
 - **未触碰**：`engines` / `peerDependencies` / 产品逻辑代码（`core/*.ts`、`dsh-graph-host/lib/**`
-  除 `constants.js` 的版本串外零改动；`core/version-lane.ts` 零 diff）。
-- **平台状态表**：三处 Windows 行已按 §0 如实化为「RC 待回填 + 保留 `fix4` 真机记录」，**未**写入任何
-  Windows 结论；macOS 行逐字未改。
+  除 `constants.js` 的版本串外零改动；`core/version-lane.ts` 零 diff）。终版相对 RC 追加的改动仅：
+  `scripts/build.sh` + `scripts/dsh-test-web.sh`（10 处加花括号，**不入包**）、新增守卫测试
+  `core/tests/g434-script-var-multibyte-guard.test.ts`、`docs/**`、两份 `README.md`（用户可见文案）。
+- **平台状态表**：三处平台行已写入**真机结论**（Windows = `✅ 支持（已在原生 Windows 上实测）`；
+  macOS = `✅ 支持（已在 macOS 上实测）`），APFS 大小写不敏感并入「已知限制」。README 全文无未验证声明。

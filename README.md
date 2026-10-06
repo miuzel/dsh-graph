@@ -33,9 +33,9 @@
 |------|----------|
 | Linux / WSL2 | ✅ 支持 |
 | 原生 Windows | ✅ 支持（已在原生 Windows 上实测） |
-| macOS | ⚠️ 未经真机验证 |
+| macOS | ✅ 支持（已在 macOS 上实测） |
 
-三平台共用同一安装包。已知限制：macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
+三平台共用同一安装包。已知限制：① macOS 默认文件系统 APFS 大小写不敏感——仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`，由 `process.cwd()` 推导的路径不受影响。
 
 ## 安装
 

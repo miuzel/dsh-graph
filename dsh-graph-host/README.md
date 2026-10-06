@@ -50,9 +50,9 @@ dsh plugin --profile <profile-name> add dsh-graph
 |------|----------|
 | Linux / WSL2 | ✅ 支持 |
 | 原生 Windows | ✅ 支持（已在原生 Windows 上实测） |
-| macOS | ⚠️ 未经真机验证 |
+| macOS | ✅ 支持（已在 macOS 上实测） |
 
-三平台使用同一安装包。**已知限制**：macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
+三平台使用同一安装包。**已知限制**：① macOS 默认文件系统 APFS 大小写不敏感 —— 仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
 **最新亮点（v0.19.7）**
 
@@ -112,8 +112,8 @@ curl -sL -b "" "<URL>" | grep -o '"@deepseek-ai/dsh-client-runtime"' | head -1
 
 **清理（可选，先备份）**：仅当你确实想清干净、且 ②非 0 或 ③有输出时：先**备份** profile，再删除 ③ 打印出的残留目录（并在 ② 命中的清单里去掉对应条目），然后**重启宿主** —— 客户端包元数据在激活期缓存，增删客户端插件必须重启才生效。**风险提示**：在 live profile 上直接删目录/改清单有改坏环境的风险；**更稳妥的替代**是重装同版本 dsh-graph 或新建一个干净 profile。自行清理前务必留备份，异常时用备份复原。
 
-**未验证**：本机无桌面壳真机（`@deepseek-ai/dsh-desktop` 在 npm 为 E404）。上述现象与成因链引用负责人真机复现结论与宿主源码，
-**不声称在本机复现了桌面壳症状**。
+**未验证**：无桌面壳环境可用（`@deepseek-ai/dsh-desktop` 在 npm 为 E404）。上述现象与成因链引用外部报告与宿主源码，
+**不声称已复现桌面壳症状**。
 
 ---
 
@@ -268,9 +268,9 @@ dsh plugin --profile <profile-name> add dsh-graph
 |----------|---------|
 | Linux / WSL2 | ✅ Supported |
 | Native Windows | ✅ Supported (verified on native Windows) |
-| macOS | ⚠️ Not verified on-device |
+| macOS | ✅ Supported (verified on macOS) |
 
-All three platforms share the same package. **Known limitation**: on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
+All three platforms share the same package. **Known limitations**: (1) APFS, the macOS default, is case-insensitive — entries that differ only by case resolve to the **same entity**, so do not rely on case alone to distinguish goal ids or version lanes; (2) on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
 
 **What's new (v0.19.7)**
 
@@ -342,8 +342,8 @@ client package metadata is cached at activation time, so adding/removing client 
 directories or editing the manifest of a live profile can break your environment; the **safer alternatives** are reinstalling the same dsh-graph
 version or creating a fresh, clean profile. Always keep a backup before doing this yourself, and restore from it if anything misbehaves.
 
-**Not verified**: no desktop-shell machine is available here (`@deepseek-ai/dsh-desktop` is E404 on npm). The symptom and cause chain above cite the
-maintainer's on-device reproduction and host source code; this README does **not** claim the desktop-shell symptom was reproduced locally.
+**Not verified**: no desktop-shell environment is available (`@deepseek-ai/dsh-desktop` is E404 on npm). The symptom and cause chain above cite the
+external report and host source code; this README does **not** claim the desktop-shell symptom was reproduced.
 
 ---
 

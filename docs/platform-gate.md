@@ -349,7 +349,7 @@ evidence: suite=core/tests node --test passed=1379 failed=0 skipped=0 exit=0
 
 | Windows · **v0.19.7**（发布候选包；含 0.19.x 全线修复） | 2026-10-06 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（真机 T1–T5：通过 15 / 失败 0 / 告警 1；宿主 `0.2.0-rc.2`，端口 3088；**被测产物 = v0.19.7 发布候选包** `dsh-graph-0.19.7.tgz` sha256 `86198a3935988536ef2fa5294cbe3e641f9786b8c8fa00be3c21744796ebb90a` 625760 B，即发布树 `ab99b2c` 构建的产物）。**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）+ 失败路径（预置非空目标）判据全绿 + 跨进程 CAS 4 抢 1 + 32 步文案无平台错误码；台账对账在仓库根 `node scripts/win-smoke-test.mjs --static-only .` = **PASS 通过2/失败0/告警0**（清单 65 项 / 253 处命中 / 未登记 0 / 忽略 0 行）。唯一告警 = `--tarball` 模式不含 `core/*.ts`（设计而非缺陷 ⇒ 台账对账改在仓库根完成）。逐字报告见 §7.3；「被测候选包 vs 终版包」的差异记录见 §7.4 | 负责人（真机） |
 
-| macOS · **v0.19.7**（首轮：**构建失败，非结论**） | 2026-10-06 | darwin/arm64 | v26.8.2 | WARN | WARN | PASS | WARN | WARN | WARN | PASS | exit=0（`--static-only` 只转发了 T1） | **不成立 / 待重跑**：`bash scripts/build.sh` 在 macOS 自带 bash 3.2 下第 112 行因「多字节变量名吞并」立即中止（`set -u`）⇒ `dist/` 从未构建 ⇒ P2/P4/P5/P6 全部退化为「需 dist」的 WARN（执行件按设计**拒绝**冒充通过）、转发的 T1–T5 在 `--static-only` 下只覆盖 T1。`P1=WARN` 属**预期**（探针检出 APFS 默认大小写不敏感，附平台影响说明）。缺陷已修（`2c6c5c3`，见 §7.4）⇒ **必须重跑后回填本行** | 负责人（真机） |
+| macOS · **v0.19.7** | 2026-10-06 | darwin/arm64 | v26.8.2 | WARN | PASS | PASS | PASS | WARN | PASS | PASS | **16/0/0**（`--tarball`） | **PASS**（`--static-only .` = 通过 7 / 失败 0 / 告警 2；`--tarball` = 通过 16 / 失败 0 / 告警 0，被测产物 = 冻结候选包 `dsh-graph-0.19.7.tgz` sha256 `86198a39…` 625760 B，T3 生命周期 32/32 步；宿主 `0.2.0-rc.2`）。**源码构建已实测**：修复 `2c6c5c3` 后 `bash scripts/build.sh` 在原生 macOS 上三步走完并原子就位（首建走「dist 不存在 ⇒ 单次 rename 就位」，**未触及** `mv --exchange` 两次 rename 回退——该回退由 `core/tests/g359-two-rename-fallback.test.ts` 注入真跑覆盖）。两处 WARN 均**非缺陷**：P1 = APFS 默认大小写不敏感（判读表即如此定义，已把该限制写入两份 README 的「已知限制」）；P5 = 无「可写的第二文件系统」，执行件按设计拒绝冒充通过。首轮构建失败（bash 3.2 多字节陷阱）与根因见 §7.4 | 负责人（真机） |
 
 回填时请一并粘贴「可复制回传的报告」整段（执行件在结论后自动打印），并在 `README.md` 平台范围段落更新结论。
 该报告块自 g-428 起额外含 **`覆盖=…`** 一行（台账项数/命中数/忽略处数 + T3 生命周期步数），
@@ -457,12 +457,69 @@ dsh-graph 平台门禁 | 平台=darwin/arm64 node=v26.8.2 标注=macOS
 **处置**：`2c6c5c3` —— `scripts/build.sh` 4 处 + `scripts/dsh-test-web.sh` 6 处（含 `$1（` 位置参数形态）
 一律改 `${VAR}`（只加花括号，语义与输出文案逐字不变），新增
 `core/tests/g434-script-var-multibyte-guard.test.ts`（文件集非空 + 该模式 0 命中 + 判别力自检，
-负向对照实测为真）；全量门禁 `tests=2077 pass=2077 fail=0 exit=0`。**macOS 结论待重跑后回填 §7 表。**
+负向对照实测为真）；全量门禁 `tests=2077 pass=2077 fail=0 exit=0`。**重跑后结论已回填 §7 表（PASS）。**
+
+**重跑（修复后，同机同日；逐字粘贴）**：
+
+```text
+$ bash scripts/build.sh
+=== 统一构建：核心层 + 客户端 + dist 组装（原子发布）===
+暂存目录：.dist-stage.FZNXc8（发布前 dist/ 保持不变）
+
+--- 步骤 1/3：编译核心层 → dist/core/ ---
+== OK：.dist-stage.FZNXc8/dist/core/*.js 为根 core/*.ts 的编译产物 ==
+
+--- 步骤 2/3：打包客户端 → dist/lib/client.js ---
+✅ client.js 已组装完成 (   16481 行)
+
+--- 步骤 3/3：组装发布产物到 dist/（暂存，未发布）---
+✅ 原子发布（首次）：dist/ 由暂存树单次 rename 就位
+
+=== 构建完成 ===
+```
+
+```text
+dsh-graph 平台门禁 | 平台=darwin/arm64 node=v26.8.2 标注=macOS
+仓库=/Users/miuzel/workspace/dsh-graph-test/dsh-graph
+逐项=P1=WARN P2=PASS P3=PASS P4=PASS P5=WARN P6=PASS M4=PASS
+结果=PASS 通过7/失败0/告警2 转发exit=0
+  WARN P1 大小写敏感性（建 A / a 是否互相别名，文件 + 目录） :: fsType=apfs 大小写敏感=false fileAliased=true sameInode=true dirAliased=true
+  WARN P5 跨 FS rename(EXDEV) :: 未找到可写的第二文件系统（候选：/dev/shm, /tmp, /var/tmp）
+```
+
+```text
+dsh-graph Windows 冒烟 | 平台=darwin/arm64 node=v26.8.2
+安装来源=dsh-graph-0.19.7.tgz (实际版本 0.19.7)
+产物指纹=sha256:86198a3935988536ef2fa5294cbe3e641f9786b8c8fa00be3c21744796ebb90a  625760 B
+结果=PASS 通过16/失败0/告警0
+覆盖=台账=65项/253处命中（忽略0行，未登记即判红）  T3生命周期=32步（g-427 形态 8 步，每步盘面断言）
+```
+
+（`--tarball` 那一跑的转发报告块标题仍自报为 "Windows 冒烟" —— 那是执行件对自身产物的命名；本机是原生 macOS，
+其 T3–T5 在真实 POSIX 语义下真跑，对 macOS 具平台效力。）
+
+**结论**：修复后 macOS **三条路径全部实测通过** —— ① 源码构建 `bash scripts/build.sh`；
+② 平台探针 `--static-only .`（7/0/2，两处 WARN 均非缺陷：APFS 默认大小写不敏感 / 无可写第二 FS）；
+③ 安装 + 起隔离实例 `--tarball`（16/0/0，被测产物即冻结候选包，指纹与 §7.3 同一份）。
+**这是源码构建路径第一次在 macOS 上被真机验证**（v0.18.0 的 macOS 门禁只走 tarball，不执行 build.sh）。
 
 ### 7.5 被测候选包 vs 终版包（差异实拍，2026-10-06）
 
-（终版包产出后回填：`diff -r` 两侧解包目录的逐文件结果。已知差异来源：① 两份 `README.md` 的平台行与
-开发措辞清理；② `scripts/*.sh` 的 10 处花括号修复 —— 后者**不在**发布包内，故发布包差异应**仅为 `README.md`**。）
+终版包 `tmp/release-0197-final/dsh-graph-0.19.7.tgz`（**624934 B**，sha256 `3800ba76…`）与**被测候选包**
+`tmp/release-0197/dsh-graph-0.19.7.tgz`（**625760 B**，sha256 `86198a39…`）各自解包后逐文件对比：
+
+```text
+$ diff -rq tmp/rc-extract/package tmp/final-extract/package
+Files tmp/rc-extract/package/README.md and tmp/final-extract/package/README.md differ
+```
+
+⇒ **差异文件数 = 1（仅 `README.md`），逐字节相同 = 36 / 37**；两包的 `package/package.json` version 与
+`package/lib/client.js` 的 `PLUGIN_VERSION` 均为 `0.19.7`。差异内容**全部是用户可见文案**：平台状态表三行
+（Windows / macOS 的结论表述 + macOS 行）、README 顶部版本行，以及移除开发过程措辞（内部工作编号、
+门禁机制描述、核对表 / platform-gate 链接、「本仓未复现」限定语）。
+
+**边界**：`scripts/*.sh` 的 10 处花括号修复与 `docs/` 的全部改动**不在发布包内**（包内 `scripts` / `docs`
+条目数 = 0）⇒ 该修复对发布产物**零影响**，§7.3 / §7.4 的真机结论对终版包继续有效。
 
 ---
 
