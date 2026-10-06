@@ -169,6 +169,12 @@ worktree 内**未执行任何 `pnpm` 命令**（`pnpm run` 会先做依赖检查
 > **可复现性实证（2026-10-06）**：在隔离 worktree（`tmp/rel-verify`，detached @ `3577122`）内
 > `bash scripts/build.sh` + `npm pack` **复算出同一 sha256** `3800ba76…`，解包内容与终版**逐字节一致**
 > ⇒ 发布 worktree 在 tag 上打出的包即此产物：发布前直接比 sha256 即可，无需重跑门禁。
+>
+> **发布后对账（2026-10-06，已发布）**：npm `latest` 已指向 **0.19.7**；线上 tarball = **628367 B** /
+> sha256 `9874e83d…`。解包与本地终版对账：**成员集合 37/37 相同**，逐文件差异**仅 `package.json` 末尾换行**
+> （registry 规范化），其余 **36 个文件逐字节一致** ⇒ 内容等价，放行（口径已补入 `docs/release-handbook.md` §4）。
+> 线上包 manifest 实锤：`dsh.client.inject` **已无** `@deepseek-ai/dsh-client-runtime`（v0.18.0 中它在首位）
+> ⇒ GitHub issue #1 的根因在**发布产物**上被直接证实并修复；该 issue 已给出成因 + 两条解法并关闭（`COMPLETED`）。
 
 ## 5. 测试与静态检查（RC：worktree `.worktrees/g-432-att-01` 内；终版：主树发布时点）
 

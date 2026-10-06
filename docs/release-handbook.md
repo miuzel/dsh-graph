@@ -120,7 +120,7 @@ npm view dsh-graph version                       # 期望 X.Y.Z
 # ⚠️ registry 会重写上传的 tarball（条目排序/gzip 不同）⇒ 线上 sha256 必然 ≠ 本地 pack sha256。
 #    不要拿 tarball sha256 比对；要解包后比内容：
 mkdir -p /tmp/pubcheck && cd /tmp/pubcheck && npm pack dsh-graph@X.Y.Z && tar -xzf dsh-graph-X.Y.Z.tgz
-diff -r /tmp/pubcheck/package <本地已验包解包目录>     # 必须无输出（文件清单 + 逐文件字节一致）
+diff -r /tmp/pubcheck/package <本地已验包解包目录>     # 期望无输出；唯一已知例外：package.json 末尾换行（见下方对账判据）
 
 # 6. 收尾：核验后清理发布树
 git worktree remove .worktrees/release-vX.Y.Z
@@ -140,6 +140,16 @@ git worktree remove .worktrees/release-vX.Y.Z
 > 只有**同一个本地 tarball**（v0.18.0 = `3ae728dd…`，570,157 B）才用于本机 ↔ Windows/macOS 的对账。
 > 另：`npm publish` 会**重新压缩并改写** tarball，因此**发布后不可能用本地 sha256 复现 registry 指纹**，
 > 这不是发布事故、**无需返工**——按内容级判据放行即可。
+>
+> **v0.19.7 第三次实证（2026-10-06）——「唯一的合法差异」已被钉死**：线上 tarball **628,367 B** /
+> sha256 `9874e83d2c6e3c9a5f2d46f75c64b4b89d785e4088069d4c86933dd231a01690`，本地终版 **624,934 B** /
+> `3800ba76b1002ae9475019008cc4e973b6390a09953071ae89a1589cbdfd02bd`（差 **3,433 B**）。
+> 解包对账：**成员集合 37/37 完全相同**，逐文件差异**只有 `package.json` 一处** —— registry 规范化
+> **删掉了文件末尾的换行**（`diff -u` 显示 `\ No newline at end of file`），其余 **36 个文件逐字节一致**。
+> ⇒ 判据收紧为：**`diff -r` 出现且仅出现「`package.json` 末尾换行」这一处差异 = 等价放行**；
+> 除此之外的任何差异（含 `package.json` 的其他字段）都必须查清再放行。
+> （本次另一条平行证据：同一提交在隔离 worktree 内独立 build + pack 复算出**同一**本地 sha256 ⇒ 本地侧
+> 字节可复现，唯一变量就是 registry 的重写。）
 
 > 注意：**registry 与登录态（2026-09-21 实测更新）**——早先「`~/.npmrc` 指向 npmmirror 镜像且未登录」
 > 的描述已过时：当前 `npm config get registry` 输出 `https://registry.npmjs.org/`。
