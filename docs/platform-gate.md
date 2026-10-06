@@ -93,6 +93,13 @@ node scripts/win-smoke-test.mjs --tarball <tgz>        # 完整门禁（含 Wind
 （`LINUX_ONLY_PATTERNS` / `scanLinuxOnlyAssumptions` / `collectScanFiles` / `isCommentLine` / `ignoredLineMask`），
 `core/tests/g359-macos-gate.test.ts` 的两个 M4 用例即从**新件**导入这组导出。
 
+**已知盲区（2026-10-06 真机证伪，g-434）**：M4 是**静态**审计 —— 它在 0.19.7 候选期判定 PASS 的同一时刻，
+`scripts/build.sh` 在原生 macOS 上**必然中止**：`行 112: STAGE_ROOT_REL<0xEF>: 未绑定的变量`
+（macOS 自带 bash 3.2 在 UTF-8 locale 下把 `$VAR` 后**紧跟的多字节字符首字节**并进变量名 ⇒ `set -u` 判未绑定）。
+该形态不在 `LINUX_ONLY_PATTERNS` 的 GNU/BSD 差异表内，且静态表天然覆盖不到「解释器版本语义差异」这类陷阱。
+⇒ 此类缺陷改由 `core/tests/g434-script-var-multibyte-guard.test.ts` 断言（文件集非空 + 该模式 0 命中 +
+判别力自检）；真机事故、根因与处置见 §7.4。
+
 ### 3.3 转发的既有门禁（T1–T5，由 `win-smoke-test.mjs` 执行）
 
 不复制其逻辑，`--tarball/--spec/--path/--static-only/--self-test` 原样转发。在**原生 macOS/Linux** 上运行时，
@@ -342,6 +349,8 @@ evidence: suite=core/tests node --test passed=1379 failed=0 skipped=0 exit=0
 
 | Windows · **v0.19.7**（发布候选包；含 0.19.x 全线修复） | 2026-10-06 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（真机 T1–T5：通过 15 / 失败 0 / 告警 1；宿主 `0.2.0-rc.2`，端口 3088；**被测产物 = v0.19.7 发布候选包** `dsh-graph-0.19.7.tgz` sha256 `86198a3935988536ef2fa5294cbe3e641f9786b8c8fa00be3c21744796ebb90a` 625760 B，即发布树 `ab99b2c` 构建的产物）。**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）+ 失败路径（预置非空目标）判据全绿 + 跨进程 CAS 4 抢 1 + 32 步文案无平台错误码；台账对账在仓库根 `node scripts/win-smoke-test.mjs --static-only .` = **PASS 通过2/失败0/告警0**（清单 65 项 / 253 处命中 / 未登记 0 / 忽略 0 行）。唯一告警 = `--tarball` 模式不含 `core/*.ts`（设计而非缺陷 ⇒ 台账对账改在仓库根完成）。逐字报告见 §7.3；「被测候选包 vs 终版包」的差异记录见 §7.4 | 负责人（真机） |
 
+| macOS · **v0.19.7**（首轮：**构建失败，非结论**） | 2026-10-06 | darwin/arm64 | v26.8.2 | WARN | WARN | PASS | WARN | WARN | WARN | PASS | exit=0（`--static-only` 只转发了 T1） | **不成立 / 待重跑**：`bash scripts/build.sh` 在 macOS 自带 bash 3.2 下第 112 行因「多字节变量名吞并」立即中止（`set -u`）⇒ `dist/` 从未构建 ⇒ P2/P4/P5/P6 全部退化为「需 dist」的 WARN（执行件按设计**拒绝**冒充通过）、转发的 T1–T5 在 `--static-only` 下只覆盖 T1。`P1=WARN` 属**预期**（探针检出 APFS 默认大小写不敏感，附平台影响说明）。缺陷已修（`2c6c5c3`，见 §7.4）⇒ **必须重跑后回填本行** | 负责人（真机） |
+
 回填时请一并粘贴「可复制回传的报告」整段（执行件在结论后自动打印），并在 `README.md` 平台范围段落更新结论。
 该报告块自 g-428 起额外含 **`覆盖=…`** 一行（台账项数/命中数/忽略处数 + T3 生命周期步数），
 它是「真机到底覆盖了什么」的对账依据 ⇒ **回填时必须连同这一行一起粘贴**；
@@ -414,9 +423,46 @@ T4/T5：实例就绪 + dsh-graph 路由已注册 + 看板载荷可读 + Web UI �
 （仅两份 `README.md`）⇒ 终版包与本次被测候选包的差异**仅 README 内容**，产品代码/客户端 bundle 逐字节相同，
 差异实拍见 §7.4。
 
-### 7.4 被测候选包 vs 终版包（差异实拍，2026-10-06）
+### 7.4 macOS v0.19.7 首轮真机（**构建失败 ⇒ 非结论**，2026-10-06）
 
-（终版包产出后回填：`diff -r` 两侧解包目录的逐文件结果，证明差异仅为 `README.md`。）
+真机命令与输出（逐字粘贴；终端打印的非法字节按 `<0xEF>` 转写）：
+
+```text
+$ bash scripts/build.sh
+=== 统一构建：核心层 + 客户端 + dist 组装（原子发布）===
+scripts/build.sh: 行 112: STAGE_ROOT_REL<0xEF>: 未绑定的变量
+```
+
+```text
+dsh-graph 平台门禁 | 平台=darwin/arm64 node=v26.8.2 标注=macOS
+仓库=/Users/miuzel/workspace/dsh-graph-test/dsh-graph
+逐项=P1=WARN P2=WARN P3=PASS P4=WARN P5=WARN P6=WARN M4=PASS
+结果=PASS 通过3/失败0/告警6 转发exit=0
+  WARN P1 大小写敏感性 :: fsType=apfs 大小写敏感=false fileAliased=true sameInode=true dirAliased=true（预期：APFS 默认不敏感）
+  WARN P2 软链 root 边界 :: 未找到可载入的 dist/core/root.js ⇒ 未能实测（explicitSymlink=(未构建 dist)）
+  WARN P4.a 并发 CAS(4抢1) / P4.b 原子写 / P5 跨 FS EXDEV / P6 locale :: 未找到 dist/core/*.js、dist/prompts：请先 `pnpm build`
+```
+
+**根因（真 bug，非环境问题）**：第 112 行原文是 `echo "暂存目录：$STAGE_ROOT_REL（发布前 dist/ 保持不变）"`
+—— 变量名后**紧跟全角括号**（UTF-8 `EF BC 88`）。macOS 自带 **bash 3.2** 在 UTF-8 locale 下把该多字节字符
+首字节**并进变量名**（报错里的 `STAGE_ROOT_REL<0xEF>` 即其证），展开的名字不存在 ⇒ `set -euo pipefail`
+（`scripts/build.sh:69`）判「未绑定变量」并立即中止。Linux / Git Bash 用的是 bash 4/5，在 ASCII 边界停止
+（本机 bash 5.3 实测 `$x（` 正常展开）⇒ 同一份源码长期不暴露；且 **build.sh 此前从未在 macOS 上真跑过**
+（v0.18.0 的 macOS 门禁只走 tarball 路径，不执行 build.sh）⇒ 这正是 §3.2 M4 静态审计的盲区。
+
+**影响面**：macOS 上**任何源码构建**都必然失败（含 `npm install github:miuzel/dsh-graph` 触发的 `prepare`）。
+**npm / dsh-market 安装 tarball 的用户不受影响**（`scripts/` 不在发布包内，tarball 内 `scripts` 条目数 = 0）
+⇒ 本缺陷**不改变任何发布产物**，Windows 真机结论（§7.3）与已冻结候选包继续有效。
+
+**处置**：`2c6c5c3` —— `scripts/build.sh` 4 处 + `scripts/dsh-test-web.sh` 6 处（含 `$1（` 位置参数形态）
+一律改 `${VAR}`（只加花括号，语义与输出文案逐字不变），新增
+`core/tests/g434-script-var-multibyte-guard.test.ts`（文件集非空 + 该模式 0 命中 + 判别力自检，
+负向对照实测为真）；全量门禁 `tests=2077 pass=2077 fail=0 exit=0`。**macOS 结论待重跑后回填 §7 表。**
+
+### 7.5 被测候选包 vs 终版包（差异实拍，2026-10-06）
+
+（终版包产出后回填：`diff -r` 两侧解包目录的逐文件结果。已知差异来源：① 两份 `README.md` 的平台行与
+开发措辞清理；② `scripts/*.sh` 的 10 处花括号修复 —— 后者**不在**发布包内，故发布包差异应**仅为 `README.md`**。）
 
 ---
 
@@ -424,7 +470,7 @@ T4/T5：实例就绪 + dsh-graph 路由已注册 + 看板载荷可读 + Web UI �
 
 | 项 | 原设想 | 取消理由（负责人裁决） | 处置 |
 | --- | --- | --- | --- |
-| **L1**（原 Linux 专检第 1 项） | 用 `BUILD_FORCE_TWO_RENAME=1` 强制 `build.sh` 的**退化发布路径**（无 `mv --exchange` 时两次 rename + 告警），在 Linux 上复刻 macOS 分支 | 该分支**已由 macOS 门禁的 M4 覆盖**（指针：`build.sh` 的 `mv --exchange --help` 能力探测 + 两次 rename 回退已被 M4 判为「已覆盖」，且真实 macOS 构建走的正是这条路径）⇒ 在 Linux 上人为强制是重复覆盖 | L1 的**代码与测试用例一并删除**（不在新件、不在新测试里） |
+| **L1**（原 Linux 专检第 1 项） | 用 `BUILD_FORCE_TWO_RENAME=1` 强制 `build.sh` 的**退化发布路径**（无 `mv --exchange` 时两次 rename + 告警），在 Linux 上复刻 macOS 分支 | 该分支**已由 macOS 门禁的 M4 覆盖**（指针：`build.sh` 的 `mv --exchange --help` 能力探测 + 两次 rename 回退已被 M4 判为「已覆盖」，且真实 macOS 构建走的正是这条路径）⇒ 在 Linux 上人为强制是重复覆盖 <br>⚠️ **2026-10-06 真机证伪（g-434）**：M4 是**静态**审计，它判该分支「已覆盖」的同一时刻，`scripts/build.sh` 在真实 macOS 构建上因「多字节变量名吞并」**必然失败**（§7.4）⇒「真实 macOS 构建走的正是这条路径」**不构成**覆盖证据；该回退路径的机器覆盖现由 `core/tests/g359-two-rename-fallback.test.ts`（`BUILD_FORCE_TWO_RENAME=1`，真跑 `build.sh`）承担。教训：**发布脚本的跨平台可移植性不能只靠静态审计** | L1 的**代码与测试用例一并删除**（不在新件、不在新测试里） |
 | **L5**（原 Linux 专检第 5 项） | 全仓库 GNU-only 假设审计（`readlink -f` / `stat -c` / `sha256sum` / `flock` / `cp --reflink` / `realpath -m` / `sort -V` / `xargs -r` / `find -printf` …） | 与 **M4** 是同一件事的两个实现（M4 自 g-359 起就在守这条），保留两份必然漂移 ⇒ 合并期只留 M4 | L5 **不实现**；M4 作为平台无关检查在新件里保持存活并导出（见 §3.2） |
 | **`scripts/linux-smoke-test.mjs`** | 另开一个 Linux 专属执行件 | 「一份实现」是本次裁决：跨平台差异只体现在判定口径，不另开文件 | 不创建；若曾创建则删除（已删） |
 | **`scripts/macos-smoke-test.mjs`（原实现）** | 继续维护 macOS 专属实现 | 同上；但**既有测试零削减**是硬约束 ⇒ 不能真删 | 降为**转发 shim**（打印取代提示 + 原样转发），原实现**归档**到 `scripts/archived/macos-smoke-test.mjs`（内容一字未改），既有用例只改 import 来源 |
