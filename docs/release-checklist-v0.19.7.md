@@ -162,10 +162,13 @@ worktree 内**未执行任何 `pnpm` 命令**（`pnpm run` 会先做依赖检查
 | 包内版本实锤 | `package/package.json` version = `0.19.7`；`package/lib/client.js` `PLUGIN_VERSION = "0.19.7"` |
 
 > **被测产物 vs 发布产物（红线 3 口径）**：§7.3 / §7.4 的真机门禁跑在**上表的 RC**（`86198a39…`）上，
-> 发布用的是**终版包**（`667d2c10…`）。两者差异**仅 `README.md`**（用户可见文案：平台行与开发措辞清理），
+> 发布用的是**终版包**（`3800ba76…`）。两者差异**仅 `README.md`**（用户可见文案：平台行、版本表述与开发措辞清理），
 > 产品代码、客户端 bundle、`prompts` 资产逐字节相同 ⇒ 真机结论对发布产物**继续有效**。
-> 若要求严格「被测产物 ≡ 发布产物」，对终版包按 `docs/platform-gate.md` §7 与 §5 的命令各重跑一次即可
-> （由负责人决定；本次按「先出结论、再清 README」的顺序执行）。
+> **负责人裁决（2026-10-06）：差异仅 `README.md`，接受 ⇒ 不对终版包重跑门禁。**
+>
+> **可复现性实证（2026-10-06）**：在隔离 worktree（`tmp/rel-verify`，detached @ `3577122`）内
+> `bash scripts/build.sh` + `npm pack` **复算出同一 sha256** `3800ba76…`，解包内容与终版**逐字节一致**
+> ⇒ 发布 worktree 在 tag 上打出的包即此产物：发布前直接比 sha256 即可，无需重跑门禁。
 
 ## 5. 测试与静态检查（RC：worktree `.worktrees/g-432-att-01` 内；终版：主树发布时点）
 
@@ -205,7 +208,7 @@ worktree 内**未执行任何 `pnpm` 命令**（`pnpm run` 会先做依赖检查
      （按负责人指示**不含**内部工作编号、门禁机制、待回填等开发过程信息）+ `docs/platform-gate.md` §7 + 本清单；
   ④ 回填后 `bash scripts/build.sh` 重打**终版包**（§4 终版表）：与 RC **仅 `README.md` 不同**
      （`diff -rq` 恰 1 行，其余 **36 / 37 逐字节相同**，实拍见 `docs/platform-gate.md` §7.5）
-     ⇒ 真机结论对发布产物继续有效。若要求严格「被测产物 ≡ 发布产物」，对终版包重跑两平台门禁即可。
+     ⇒ 真机结论对发布产物继续有效。**负责人裁决：接受 README-only 差异，不再重跑门禁。**
 - **未执行**：`npm publish`、annotated tag、GitHub release、`git push`、合并 `main`（均由负责人执行）。
 - **未触碰**：`engines` / `peerDependencies` / 产品逻辑代码（`core/*.ts`、`dsh-graph-host/lib/**`
   除 `constants.js` 的版本串外零改动；`core/version-lane.ts` 零 diff）。终版相对 RC 追加的改动仅：
