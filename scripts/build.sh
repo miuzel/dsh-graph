@@ -85,7 +85,7 @@ LEGACY_PREV="$REPO_ROOT/dist.prev.$$"
 SWAP_IN_FLIGHT=""
 cleanup() {
   if [ -n "$SWAP_IN_FLIGHT" ] && [ -e "$LEGACY_PREV" ]; then
-    echo "⚠️ 发布未完成：旧 dist/ 是唯一完好副本，完好保留在 $LEGACY_PREV（未删除）" >&2
+    echo "⚠️ 发布未完成：旧 dist/ 是唯一完好副本，完好保留在 ${LEGACY_PREV}（未删除）" >&2
     echo "   恢复命令：mv \"$LEGACY_PREV\" \"$DIST\"（下次 bash scripts/build.sh 亦会自动恢复）" >&2
   else
     rm -rf "$LEGACY_PREV"
@@ -109,7 +109,7 @@ if [ ! -e "$DIST" ] && [ -n "$prev_latest" ]; then
 fi
 
 echo "=== 统一构建：核心层 + 客户端 + dist 组装（原子发布）==="
-echo "暂存目录：$STAGE_ROOT_REL（发布前 dist/ 保持不变）"
+echo "暂存目录：${STAGE_ROOT_REL}（发布前 dist/ 保持不变）"
 
 # 暂存根内提供 `dsh-graph-host` 视图：下面第 3 步的复制清单保持字面 `dsh-graph-host/... →
 # dist/...` 形式（既有 dist 同步断言逐条解析该清单），故把组装阶段的 cwd 切到暂存根。
@@ -186,7 +186,7 @@ two_rename_publish() {
   SWAP_IN_FLIGHT=1
   if ! swap_out_old; then
     SWAP_IN_FLIGHT=""
-    echo "❌ 无法移出旧 dist/（$DIST → $LEGACY_PREV）：dist/ 一字未动，构建中止" >&2
+    echo "❌ 无法移出旧 dist/（$DIST → ${LEGACY_PREV}）：dist/ 一字未动，构建中止" >&2
     exit 1
   fi
   if [ "$BUILD_FAIL_INJECT" = "kill" ]; then
@@ -205,7 +205,7 @@ two_rename_publish() {
     echo "✅ 已回滚：dist/ 恢复为逐字节完好的旧树，本次构建中止（exit 1）" >&2
     exit 1
   fi
-  echo "❌ 回滚也失败（fail-closed）：旧 dist 完整保留在 $LEGACY_PREV（绝不删除）" >&2
+  echo "❌ 回滚也失败（fail-closed）：旧 dist 完整保留在 ${LEGACY_PREV}（绝不删除）" >&2
   echo "   恢复命令：mv \"$LEGACY_PREV\" \"$DIST\"（下次 bash scripts/build.sh 亦会自动恢复）" >&2
   exit 1
 }

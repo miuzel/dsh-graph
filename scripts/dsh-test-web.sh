@@ -35,17 +35,17 @@ while [ $# -gt 0 ]; do
     --dry-run|--doctor) [ "$DRY_RUN" -eq 0 ] || die '--dry-run 不可重复'; DRY_RUN=1; shift;;
     --help|-h) usage; exit 0;;
     --profile|--patch|--dump-config|--dump-default-config|--open|--no-open|--workspace|--cwd|--dsh-home|--DSH_HOME|--) die "禁止透传受管参数：$1";;
-    *) die "不支持的参数：$1（仅允许 --port、--host、--host-dir、--proxychains、--skip-install、--dry-run）";;
+    *) die "不支持的参数：${1}（仅允许 --port、--host、--host-dir、--proxychains、--skip-install、--dry-run）";;
   esac
 done
 PORT="${PORT:-3082}"
 [[ "$PORT" =~ ^[0-9]+$ ]] || die "非法端口：$PORT"
-if [ "${#PORT}" -gt 1 ] && [[ "$PORT" = 0* ]]; then die "非法端口：$PORT（禁止前导零）"; fi
-(( PORT >= 1 && PORT <= 65535 )) || die "非法端口：$PORT（必须为 1-65535）"
+if [ "${#PORT}" -gt 1 ] && [[ "$PORT" = 0* ]]; then die "非法端口：${PORT}（禁止前导零）"; fi
+(( PORT >= 1 && PORT <= 65535 )) || die "非法端口：${PORT}（必须为 1-65535）"
 [ "$PORT" != 3080 ] || die '拒绝端口 3080（生产 DSH web）'
 # --host 只接受主机名/IP 字面量所需字符：空值、前导 '-'、空白/换行与 shell 元字符一律先拒绝。
 if [ -n "$HOST" ]; then
-  [[ "$HOST" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] || die "非法 --host：$HOST（仅允许字母/数字/.-_: 且不得以 - 开头）"
+  [[ "$HOST" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] || die "非法 --host：${HOST}（仅允许字母/数字/.-_: 且不得以 - 开头）"
 fi
 # 工具可用性：启动路径缺任一即拒绝；只读预检只如实登记缺项（不自动安装、不自动修环境）。
 if [ "$DRY_RUN" -eq 0 ]; then
@@ -232,7 +232,7 @@ doctor() {
     printf '%-11s %s  [%s]\n' "$line" "$state" "$(dir_state "$state")"
     if [ -d "$state" ]; then :
     elif [ -e "$state" ]; then blockers+=("$line 存在但不是目录：$state")
-    else missing+=("$line（启动时将创建）：$state"); fi
+    else missing+=("${line}（启动时将创建）：$state"); fi
   done
   printf '（DSH_HOME 为稳定版本 %s 的共享 home；workspace/cache 按完整版本 %s 隔离）\n' "$STABLE_VERSION" "$FULL_VERSION"
   printf -- '--- 工具 ---\n'
@@ -326,7 +326,7 @@ else
   if [ ! -x "$RUNTIME_DSH" ]; then
     printf '==> 安装 DSH 运行时到版本目录（隔离仓库根 pnpm 配置）\n'
     install_step "$RUNTIME_DIR" "$VERSION_ROOT/runtime-install.log" pnpm add "@deepseek-ai/dsh@$FULL_VERSION" \
-      || die "DSH 运行时安装失败：DSH $FULL_VERSION（详见 $VERSION_ROOT/runtime-install.log）"
+      || die "DSH 运行时安装失败：DSH ${FULL_VERSION}（详见 $VERSION_ROOT/runtime-install.log）"
   fi
   if [ "$needs_install" -eq 1 ]; then
     printf '==> 安装本地 dsh-graph 插件（每版本 profile）\n'
