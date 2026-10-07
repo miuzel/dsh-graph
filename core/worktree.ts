@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync, mkdirSync } from "node:fs";
-import { resolve, relative, join, sep, dirname } from "node:path";
+import { resolve, relative, join, sep, dirname, isAbsolute } from "node:path";
 import { appendEvent, readEvents, nowIso } from "./events.ts";
 import { discoverGitWorktree, isScratchWorkspace } from "./root.ts";
 import { findGoalFile, loadGoal } from "./ops.ts";
@@ -204,6 +204,7 @@ export type GitCleanlinessResult =
 export function detectWorkspaceCleanliness(
   workspaceDir: string,
   gitRunner?: (cwd: string, args: string[]) => string,
+  graphRoot?: string,
 ): GitCleanlinessResult {
   const runner = gitRunner ?? git;
   try {
@@ -217,12 +218,56 @@ export function detectWorkspaceCleanliness(
     // 发现失败不影响原有探测路径（下面按原逻辑走 git status）
   }
   try {
-    const out = runner(workspaceDir, ["status", "--porcelain"]);
-    if (out.trim() === "") {
-      return { clean: true };
+    const out = runner(workspaceDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    const entries = out.includes("\0")
+      ? out.split("\0").filter(Boolean)
+      : out.split(/\r?\n/).filter((entry) => entry.trim().length > 0);
+    const ownedUntracked = new Set<string>();
+    if (graphRoot) {
+      const graphPath = resolve(graphRoot);
+      // Do not let a misconfigured graph root that is an ancestor of the project hide
+      // ordinary project files. The graph root must be a strict descendant of this repo.
+      const repoRoot = resolve(runner(workspaceDir, ["rev-parse", "--show-toplevel"]));
+      const graphRel = relative(repoRoot, graphPath);
+      const graphIsInsideRepo = graphRel !== "" && graphRel !== ".." &&
+        !graphRel.startsWith(`..${sep}`) && !isAbsolute(graphRel);
+      // Only untracked plugin data under the actual configured graph root is ignored.
+      // Tracked modifications are never exempted, even when they live there.
+      if (graphIsInsideRepo) ownedUntracked.add(graphPath);
+
+      // A nested worktree is plugin-owned only when Git currently registers it and
+      // this graph's attempt.started event records that exact path. A name or location
+      // under .worktrees alone is not sufficient evidence of ownership.
+      try {
+        const registered = new Set(runner(workspaceDir, ["worktree", "list", "--porcelain"])
+          .split(/\r?\n/).filter((line) => line.startsWith("worktree "))
+          .map((line) => resolve(line.slice("worktree ".length).trim())));
+        const recorded = new Set(readEvents(graphRoot)
+          .filter((event) => event.event === "attempt.started")
+          .map((event) => {
+            const worktree = (event.details as any)?.worktree;
+            return typeof worktree === "string" ? resolve(worktree) :
+              typeof worktree?.path === "string" ? resolve(worktree.path) : null;
+          }).filter((path): path is string => !!path));
+        for (const path of registered) if (recorded.has(path)) ownedUntracked.add(path);
+      } catch {
+        // Missing or unreadable provenance fails closed: only graph-root data is exempt.
+      }
     }
-    const lines = out.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    const summary = lines.slice(0, 3).join("; ") + (lines.length > 3 ? ` ... (+${lines.length - 3} more)` : "");
+
+    const remaining = entries.filter((entry) => {
+      const status = entry.slice(0, 2);
+      if (status !== "??" || ownedUntracked.size === 0) return true;
+      const path = entry.slice(3).replace(/[\\/]$/, "");
+      const absolute = resolve(workspaceDir, path);
+      for (const owned of ownedUntracked) {
+        const rel = relative(owned, absolute);
+        if (rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))) return false;
+      }
+      return true;
+    });
+    if (remaining.length === 0) return { clean: true };
+    const summary = remaining.slice(0, 3).join("; ") + (remaining.length > 3 ? ` ... (+${remaining.length - 3} more)` : "");
     return { clean: false, dirtyReason: summary };
   } catch (err: any) {
     return { clean: null, error: String(err?.message ?? err) };

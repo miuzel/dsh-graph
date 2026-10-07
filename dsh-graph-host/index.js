@@ -1687,7 +1687,7 @@ export function apply(ctx, config) {
     // 干净度三分：clean=true（干净）/ clean=false（脏，可靠信号）/ clean=null（探测不可靠=unknown）。
     // 关键纪律：探测不可靠（unknown）绝不静默伪称 clean=true，也不凭空翻转为强制隔离；
     // 而是记录 cleanliness=unknown 与回退原因（fallback_to_type_default），仅在「可靠确认脏」时升级隔离。
-    const cleanliness = detectWorkspaceCleanliness(workspace);
+    const cleanliness = detectWorkspaceCleanliness(workspace, undefined, root);
     if (cleanliness.clean === null) {
       process.stderr.write(
         `[dsh-graph-host] g-289 ℹ️ 工作树干净度 cleanliness=unknown（探测不可靠，未伪称干净）：${cleanliness.error}；` +
@@ -3143,7 +3143,7 @@ export function apply(ctx, config) {
 
     // g-289：探测工作区/主工作树干净度并下发给客户端，指导 GUI 复选框与提示文案
     const inspectDir = ws || dirname(rootForReq);
-    const cleanliness = detectWorkspaceCleanliness(inspectDir);
+    const cleanliness = detectWorkspaceCleanliness(inspectDir, undefined, rootForReq);
 
     return {
       modelGroups,
