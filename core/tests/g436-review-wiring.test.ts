@@ -48,6 +48,7 @@ import {
   REVIEW_RECORD_EVENT_NAMES,
   REVIEW_INDEPENDENT_MISSING_EVENT,
   formatReviewPrompt,
+  resolveReviewPolicy,
 } from "../ops.ts";
 import { appendEvent, readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
@@ -77,7 +78,7 @@ function fakeRes() {
 }
 
 /** 真实 Git 工作区 + 私有看板根；subagents 服务用可预测的 child 队列。 */
-function createHarness(opts: { policy?: string; childQueue?: string[] } = {}) {
+function createHarness(opts: { policy?: string; regions?: string[]; childQueue?: string[] } = {}) {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g436-"));
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
   writeFileSync(join(ws, "README"), "x");
@@ -89,8 +90,14 @@ function createHarness(opts: { policy?: string; childQueue?: string[] } = {}) {
 
   const root = join(ws, ".dsh-graph");
   init(root);
-  const policyLine = opts.policy ? `review:\n  policy: ${opts.policy}\n` : "";
-  writeFileSync(join(root, "project.yaml"), `${policyLine}supervisor:\n  session: sess-super\n`, "utf8");
+  // 评审配置为 **opt-in**：`review` 段只在显式传入 policy/regions 时才写入（缺省与既有夹具逐字一致，
+  // 不影响其它用例）。`regions` 用于把「显式登记变更区域」的用例恢复为 auto——合入 g-435 后
+  // `core/ops.ts` 不在缺省区域（DEFAULT_REVIEW_REGIONS）内，会被 `unknown_region` 安全升级为 strict。
+  const reviewLines: string[] = [];
+  if (opts.policy) reviewLines.push(`  policy: ${opts.policy}`);
+  if (opts.regions) reviewLines.push(`  regions:\n${opts.regions.map((r) => `    - ${r}`).join("\n")}`);
+  const reviewBlock = reviewLines.length > 0 ? `review:\n${reviewLines.join("\n")}\n` : "";
+  writeFileSync(join(root, "project.yaml"), `${reviewBlock}supervisor:\n  session: sess-super\n`, "utf8");
 
   const childQueue = [...(opts.childQueue ?? ["child-exec-1", "child-review-1", "child-review-2", "child-review-3"])];
   // 派发失败注入：只作用于**评审**派发（作者 attempt 必须先真实建立，才有评审对象）。
@@ -517,20 +524,70 @@ test("g-436 判据4：非 strict 目标 accept 零新增事件（默认路径零
   assert.equal(String(loadGoal(fx.goalFile).meta.status), "delivered");
 });
 
+/**
+ * fast_track 机器报告。判据 4 的两个交互用例**共用同一份**（changed_paths 恒为 `core/ops.ts`），
+ * 唯一变量是看板是否把 `core` 登记进 `review.regions`。
+ */
+function fastTrackReport(head: string) {
+  return {
+    baseline_commit: head, changed_paths: ["core/ops.ts"], product_changed_lines: 12,
+    untracked_files: 0, tests: { exit_code: 0, fail: 0 }, typecheck: { exit_code: 0 },
+  };
+}
+
 test("g-436 判据4：fast_track（auto 策略）成功路径的事件序列逐字不变", async () => {
-  const h = createHarness(); // auto
+  // 合入 g-435 后 `core/ops.ts` 落在未登记区域 ⇒ unknown_region 安全升级 strict。
+  // 该用例的前提是 patch 派生 auto，因此**必须显式登记变更区域**（opt-in，不改全局缺省）。
+  const h = createHarness({ regions: ["core"] }); // auto + core 已登记
   const fx = await prepareDispatched(h, { type: "patch" });
   await callTool(h, "graph_resolve_accept", {
     goal: fx.goal, verdict: "accept", fast_track: true,
-    machine_report: {
-      baseline_commit: h.head, changed_paths: ["core/ops.ts"], product_changed_lines: 12,
-      untracked_files: 0, tests: { exit_code: 0, fail: 0 }, typecheck: { exit_code: 0 },
-    },
+    machine_report: fastTrackReport(h.head),
   }, h.authExec);
   const names = readEvents(h.root).filter((e) => e.goal === fx.goal).map((e) => e.event);
   const tail = names.slice(-3);
   assert.deepEqual(tail, ["review.fast_track", "goal.transition", "review.passed"], "快速放行序列不被可见化污染");
   assert.ok(!names.includes("review.independent_missing"), "auto 策略不追加标注事件");
+});
+
+// g-435 × g-436 交互钉住：**同一变更**在未登记区域下必须被拒——把安全升级语义锁死，
+// 而不是简单把红用例改绿。
+test("g-436 判据4：未登记区域（无 review.regions）下 fast_track 被拒且点名 unknown_region，零副作用", async () => {
+  const h = createHarness(); // 无 review.regions ⇒ core/ops.ts 未登记
+  const fx = await prepareDispatched(h, { type: "patch" });
+
+  const report = fastTrackReport(h.head);
+  // 同源纯函数复核：拒绝确由 unknown_region 触发（不是别的 strict 原因，也不是门禁失败）。
+  const decision = resolveReviewPolicy({
+    policy: null, type: "patch", changedPaths: report.changed_paths,
+    productChangedLines: report.product_changed_lines, regions: null,
+    contractPaths: null, nonProductPrefixes: null,
+  });
+  assert.equal(decision.policy, "strict", "未登记区域必须安全升级 strict");
+  assert.deepEqual(decision.strictReasons, ["unknown_region"], "唯一 strict 原因就是 unknown_region");
+  assert.match(decision.reasons.join("；"), /未登记区域/);
+
+  // 零副作用基线快照
+  const statusBefore = String(loadGoal(fx.goalFile).meta.status);
+  const eventsBefore = readEvents(h.root).filter((e) => e.goal === fx.goal).map((e) => e.event);
+
+  const err = await toolError(h, "graph_resolve_accept", {
+    goal: fx.goal, verdict: "accept", fast_track: true, machine_report: report,
+  }, h.authExec);
+  assert.match(err, /fast_track 被拒/, "必须明确拒绝机器快速放行");
+  assert.match(err, /未登记区域/, "拒绝理由点名未登记区域");
+  assert.match(err, /strict/, "如实标注安全升级为 strict");
+
+  // 零副作用：状态、事件、review.fast_track 均无
+  assert.ok(["in_progress", "review"].includes(statusBefore), `前置状态可接受 accept（实际 ${statusBefore}）`);
+  assert.equal(String(loadGoal(fx.goalFile).meta.status), statusBefore, "拒绝不得改变目标状态");
+  const eventsAfter = readEvents(h.root).filter((e) => e.goal === fx.goal).map((e) => e.event);
+  assert.deepEqual(eventsAfter, eventsBefore, "拒绝路径零新增事件");
+  const delta = eventsAfter.slice(eventsBefore.length);
+  assert.deepEqual(delta, [], "拒绝路径零新增事件（逐条）");
+  assert.ok(!delta.includes("review.fast_track"), "绝不记快速放行");
+  assert.ok(!delta.includes("goal.transition"), "绝不发生交付收口迁移");
+  assert.ok(!delta.includes("review.passed"), "绝不记通过");
 });
 
 // ---------------------------------------------------------------------------------
