@@ -43,6 +43,9 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
      变更需确认；
    - 「简单任务例外」：一两行改动可先做后追认，但不得擅自扩大范围、不得把
      简单例外套用到复杂任务；
+   - **配置化的动作指导**：`supervisor.automation` 六键（`scope_planning` / `integration_decision` /
+     `rework` / `memory_promotion` / `skill_proposal` / `release`）渲染成主管提示——human 请求负责人
+     确认、ai 在已授权范围内自主判断并留痕、未配置保持既有指导；只影响提示、不构成引擎强制，不改上面四类 gate。
 5. **不静默修复**：缺陷与矛盾记录入册（证据台账/记忆），宁可 blocked 不可猜测；
 6. **惰性激活**：下游工作（收集、执行）只有上游结论成立后才派发；
 7. **目标内容体现最终修订**：负责人的补充与修正用 `graph_amend_goal` 记录，并把

@@ -443,6 +443,62 @@ const GUIDE = requirePromptAsset("supervisor-guide", "zh");
 
 // g-131：主管纪律提醒按 locale 整体加载 prompts/discipline.*.md
 
+// ==== g-439 automation guidance: extractable block begin ====
+// g-439：`supervisor.automation` 六键 → 主管动作指导的唯一映射表（消费点 = 下方
+// 「dsh-graph-supervisor-discipline」section）。只把当前 workspace 的 human/ai 选择渲染成
+// **动作指导文本**：不新增工具/API 授权凭据、不新增审批凭据、不做轮次控制，也不新增任何引擎硬门禁。
+// 六键与四类人工 gate **不是一一映射**：`scope_planning` / `integration_decision` 只管
+// 范围排期与候选合入取舍，**不**等于首次 start 授权或 review verdict / delivered 授权；
+// 「开始工作」与「审核」两类 gate **没有对应键**，其既有要求（含 review→delivered 必须等
+// 负责人 verdict）原样保留。六键全 null/非法 ⇒ 渲染空串 ⇒ 该 section 输出与既有逐字一致。
+// 本块自包含（不引用外部符号），测试按 begin/end 标记原文抽取 + 变异求值。
+const AUTOMATION_GUIDANCE_KEYS = ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"];
+const AUTOMATION_GUIDANCE = {
+  zh: {
+    header: "⚠️ **自动化动作指导**（来自本 workspace 的 supervisor.automation 配置）：",
+    confirm: "请就此动作请求负责人确认",
+    autonomous: "在已授权范围内自主判断并留痕",
+    line: (key, value, action, clause, boundary) => `- \`${key}\` = ${value}：${action}，${clause}（${boundary}）。`,
+    actions: {
+      scope_planning: { action: "**范围/排期与版本计划调整**", boundary: "不是首次 start 授权" },
+      integration_decision: { action: "**候选选择与合入取舍**", boundary: "不是 review verdict / delivered 授权" },
+      rework: { action: "**既有目标返工取舍**", boundary: "不授权首次 start、不自动批准扩大范围" },
+      memory_promotion: { action: "**记忆提炼**", boundary: "不绕 standing 特权：仍默认 on_demand，standing 仅限人类常驻指令/安全禁令且 ≤200 字" },
+      skill_proposal: { action: "**是否提出 skill 沉淀建议**", boundary: "不等于安装或发布" },
+      release: { action: "**发布决策**", boundary: "release=ai 也不能单独放行 delivered" },
+    },
+    trailer: "边界与优先级（只增不减）：human 只增加确认要求，绝不被低风险豁免覆盖；负责人明确、范围清楚的批量授权可覆盖其**列明动作**的逐项询问，笼统方向授权不构成覆盖；明确禁 push/publish/tag 永远优先；Full access 不是业务批准。四类 gate 中「开始工作」与「审核」没有对应键，其既有要求（含 review→delivered 必须等负责人 verdict）保持不变。本指导只影响提示，不改变工具权限，也不构成引擎强制。",
+  },
+  en: {
+    header: "⚠️ **Automation action guidance** (from this workspace's supervisor.automation config):",
+    confirm: "request the person in charge's confirmation for this action",
+    autonomous: "decide autonomously within the already authorized scope and leave a trace",
+    line: (key, value, action, clause, boundary) => `- \`${key}\` = ${value}: ${action} — ${clause} (${boundary}).`,
+    actions: {
+      scope_planning: { action: "**scope/scheduling and version-plan adjustments**", boundary: "it is not first-start authorization" },
+      integration_decision: { action: "**candidate selection and merge trade-offs**", boundary: "it is not a review verdict or delivered authorization" },
+      rework: { action: "**rework trade-offs for existing goals**", boundary: "it does not authorize a first start or automatically approve scope expansion" },
+      memory_promotion: { action: "**memory distillation**", boundary: "it does not bypass the standing privilege: the default stays on_demand, and standing is limited to a human standing instruction or safety prohibition with a 200-character cap" },
+      skill_proposal: { action: "**whether to propose a skill**", boundary: "it is not installation or release" },
+      release: { action: "**release decision**", boundary: "an ai setting still cannot approve delivered on its own" },
+    },
+    trailer: "Boundaries and precedence (add-only, never relaxed): human only adds confirmation requirements and is never overridden by a low-risk exemption; an explicit, clearly scoped batch authorization from the person in charge may cover item-by-item confirmation for exactly the listed actions, while a vague directional authorization does not; an explicit prohibition of push/publish/tag always takes precedence; Full access is not business approval. Among the four gates, \"start work\" and \"review\" have no corresponding key, so their existing requirements (including that review→delivered must wait for the person in charge's verdict) stay unchanged. This guidance only affects the prompt: it changes no tool permission and is not engine enforcement.",
+  },
+};
+/** 渲染六键动作指导：只有 human/ai 生效（其余按未配置处理）；无生效键 ⇒ 空串（保持既有文本逐字不变）。 */
+function renderAutomationGuidance(automation, language) {
+  const table = AUTOMATION_GUIDANCE[language === "en" ? "en" : "zh"];
+  const lines = [];
+  for (const key of AUTOMATION_GUIDANCE_KEYS) {
+    const value = automation?.[key];
+    if (value !== "human" && value !== "ai") continue;
+    const spec = table.actions[key];
+    lines.push(table.line(key, value, spec.action, value === "human" ? table.confirm : table.autonomous, spec.boundary));
+  }
+  if (!lines.length) return "";
+  return `\n\n${table.header}\n${lines.join("\n")}\n\n${table.trailer}`;
+}
+// ==== g-439 automation guidance: extractable block end ====
 
 // g-118：dsh-graph help 内容按 locale 整体加载 prompts/help.*.md
 
@@ -5199,6 +5255,23 @@ export function apply(ctx, config) {
           return value;
         };
         disposers.push(() => sectionRenderCache.clear());
+        // g-439：读本 workspace 的六键 automation 配置数据（纯读、白名单过滤）。
+        // 只认 human/ai；其余（未配置/畸形/非法枚举）一律按 null 处理 ⇒ **fail-closed 不产生任何指导**，
+        // 绝不把无法判定的取值当作授权。读失败同样按全 null（不让配置读取异常吞掉既有纪律注入）。
+        const readAutomationConfig = (canonicalRoot) => {
+          const out = {};
+          let auto = null;
+          try {
+            auto = readProjectConfig(canonicalRoot)?.supervisor?.automation ?? null;
+          } catch {
+            auto = null;
+          }
+          for (const k of AUTOMATION_GUIDANCE_KEYS) {
+            const v = auto?.[k];
+            out[k] = v === "human" || v === "ai" ? v : null;
+          }
+          return out;
+        };
         // g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
         // g-149：使用 resolveCanonicalRoot 确保 worktree 会话也能正确读到主树 project.yaml
         // text(context) 里取 sessionId=context?.agent?.session?.id；
@@ -5219,10 +5292,18 @@ export function apply(ctx, config) {
               if (!cwd) return ""; // cwd 缺失则不注入（避免误注入）
               const canonical = resolveCanonicalRoot(config, cwd);
               // g-238：纯读——不 init；.dsh-graph/project.yaml 不存在时 readSupervisorSession 返回 null
-              const supervisorId = cachedRender(`sup:${canonical.root}`, canonical.root, ["project.yaml"],
-                () => readSupervisorSession(canonical.root));
-              if (!supervisorId || supervisorId !== sessionId) return "";
-              return "\n" + (localizedPrompt("discipline", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)));
+              // g-439：缓存的是**配置数据**（主管身份 + 六键 automation），语言渲染在缓存之外 ⇒
+              // 同一份数据按当前语言现渲染（zh/en 切换立即生效，不冻结语言）；配置更新/删除后
+              // project.yaml 指纹变化 ⇒ 缓存失效 ⇒ 六键回到 null 即恢复既有指导（逐字不变）。
+              const supConfig = cachedRender(`sup:${canonical.root}`, canonical.root, ["project.yaml"],
+                () => ({
+                  supervisorId: readSupervisorSession(canonical.root),
+                  automation: readAutomationConfig(canonical.root),
+                }));
+              if (!supConfig || !supConfig.supervisorId || supConfig.supervisorId !== sessionId) return "";
+              const language = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
+              return "\n" + localizedPrompt("discipline", language)
+                + renderAutomationGuidance(supConfig.automation, language);
             } catch {
               return "";
             }
