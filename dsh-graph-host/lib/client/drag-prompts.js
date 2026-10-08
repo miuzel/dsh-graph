@@ -500,7 +500,9 @@
                   h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
                     h("span", { style: { fontSize: 11, fontFamily: "monospace", opacity: 0.7 } }, m.id),
                     h("span", { style: { fontSize: 10, padding: "0 4px", borderRadius: 4, background: m.scope === "standing" ? "rgba(76,175,80,.15)" : "rgba(33,150,243,.15)", color: m.scope === "standing" ? "#4caf50" : "#2196f3" } }, m.scope === "standing" ? dgT("memory.standing") : dgT("memory.onDemand")),
-                    m.source_goal ? h("span", { style: { fontSize: 10, opacity: 0.6 } }, dgT("memory.from") + m.source_goal) : null),
+                    m.source_goal ? h("span", { style: { fontSize: 10, opacity: 0.6 } }, dgT("memory.from") + m.source_goal) : null,
+                    // g-445：迁移来源引用（source_ref）与 source_goal 同为「来源」面，管理面须可见
+                    m.source_ref ? h("span", { style: { fontSize: 10, opacity: 0.6 }, title: m.source_ref }, dgT("memory.sourceRef") + m.source_ref) : null),
                   h("button", {
                     className: "dg-btn",
                     style: { ...S.btn, fontSize: 11, padding: "1px 6px", color: "#e74c3c" },

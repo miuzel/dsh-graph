@@ -209,7 +209,9 @@ test("g-105: generateHandoff 包含结构化记忆与 long-term 文件引用", (
 
   const handoff = generateHandoff(root, { query: "统一", actor: "agent:test" });
   assert.ok(handoff.includes("## 长期记忆"));
-  assert.ok(handoff.includes("结构化记忆（`memory/memory.jsonl`，共 1 条"));
+  // g-445：数量表述区分「活跃匹配 / 本次选中 / 实际展示」，且明确 memory.jsonl 为唯一真源
+  assert.ok(handoff.includes("结构化记忆（`memory/memory.jsonl` 为唯一真源：活跃匹配 1 条 / 本次选中 1 条 / 实际展示 1 条"));
+  assert.ok(handoff.includes('关键词匹配 "统一"'));
   assert.ok(handoff.includes("架构事实：dsh-graph-host 统一工具注册"));
 });
 

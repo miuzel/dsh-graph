@@ -48,7 +48,7 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_rebuild() 从事件流重建状态并与 frontmatter 对账。
 
 ## 记忆管理
-- graph_memory_add(kind, text[, scope][, importance][, source_goal]) 新增记忆（scope: on_demand 默认 / standing 常驻；source_goal 关联来源目标）；
+- graph_memory_add(kind, text[, scope][, importance][, source_goal][, source_ref]) 新增记忆（scope: on_demand 默认 / standing 常驻；source_goal 关联来源目标；source_ref 为迁移来源键，提供后同来源重试幂等、不会被覆盖或复活）；
 - graph_memory_replace(old, text[, kind][, importance][, source_goal]) 修正已有记忆（old 定位，text 为新内容，source_goal 关联来源目标）；
 - graph_memory_remove(old[, reason]) 删除记忆（须确认过时或撤回）；
 - graph_memory_recall([query][, kind][, limit]) 检索记忆。

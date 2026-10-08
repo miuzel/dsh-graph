@@ -2528,13 +2528,14 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_memory_add",
-        description: "新增持久事实/记忆。\n【scope 决策铁律】：\n1. 默认法则：一切自发总结、技术经验、方案决策 100% 默认 scope=\"on_demand\"（按需记忆，不占常驻 Prompt）；\n2. 常驻特权法则：仅在「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」时，才允许设 scope=\"standing\"（硬上限 200 字符，超过拒绝；普通记忆上限 1000 字符）。事件先行。",
+        description: "新增持久事实/记忆。\n【scope 决策铁律】：\n1. 默认法则：一切自发总结、技术经验、方案决策 100% 默认 scope=\"on_demand\"（按需记忆，不占常驻 Prompt）；\n2. 常驻特权法则：仅在「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」时，才允许设 scope=\"standing\"（硬上限 200 字符，超过拒绝；普通记忆上限 1000 字符）。\n【source_ref 幂等迁移】：可选 source_ref 是「迁移来源键」（如旧 memory/long-term/*.md 路径 + 单元标识）。提供它时同来源重复 add 幂等——同输入重试返回原 ID 且不重复追加事件；已被 replace 的条目保留后续修订、不覆盖；已被 remove 的条目明确跳过、不复活；同来源不同输入属冲突、不自动替换。引擎不读旧文档、不调 LLM、不截断拆条：摘要须由主管显式确认后作为 text 传入。事件先行。",
         parameters: params({
           kind: { type: "string", enum: ["project", "user"] },
           scope: { type: "string", enum: ["standing", "on_demand"] },
           text: str,
           importance: { type: "number" },
           source_goal: str,
+          source_ref: str,
         }, ["kind", "text"]),
       },
       run: (a, ex) => {
@@ -2546,9 +2547,10 @@ export function apply(ctx, config) {
           text: a.text,
           importance: a.importance !== undefined ? Number(a.importance) : undefined,
           source_goal: a.source_goal,
+          source_ref: a.source_ref,
           actor: memoryActorOf(ex),
         });
-        return losslessJson({ ok: true, id: res.id, entry: res.entry });
+        return losslessJson({ ok: true, id: res.id, entry: res.entry, deduped: res.deduped, skipped: res.skipped, source_ref: res.source_ref, reason: res.reason });
       },
     },
     {
@@ -3553,7 +3555,7 @@ export function apply(ctx, config) {
           if (query) {
             const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
             entries = entries.filter((e) => {
-              const haystack = `${e.text} ${e.id} ${e.source_goal ?? ""}`.toLowerCase();
+              const haystack = `${e.text} ${e.id} ${e.source_goal ?? ""} ${e.source_ref ?? ""}`.toLowerCase();
               return tokens.every((tok) => haystack.includes(tok));
             });
           }
@@ -3593,9 +3595,19 @@ export function apply(ctx, config) {
             text: body.text,
             importance: body.importance !== undefined ? Number(body.importance) : undefined,
             source_goal: body.source_goal,
+            source_ref: body.source_ref,
             actor: "human:gui",
           });
-          json(res, 200, { ok: true, id: resEntry.id, entry: resEntry.entry });
+          // g-445：source_ref 幂等命中（deduped/skipped）同样如实回传，供管理面显示「未新增」
+          json(res, 200, {
+            ok: true,
+            id: resEntry.id,
+            entry: resEntry.entry,
+            ...(resEntry.deduped ? { deduped: true } : {}),
+            ...(resEntry.skipped ? { skipped: true } : {}),
+            ...(resEntry.source_ref ? { source_ref: resEntry.source_ref } : {}),
+            ...(resEntry.reason ? { reason: resEntry.reason } : {}),
+          });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
