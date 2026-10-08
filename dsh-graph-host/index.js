@@ -37,6 +37,8 @@ import {
   detectWorkspaceCleanliness,
   resolveWorktreeIsolationDecision,
   prepareAttemptWorktree,
+  // g-437 P1：非隔离 attempt 的引擎侧区间锚点（派发时的仓库 HEAD）
+  readRepoHead,
   reportStatus,
   reportSupervisorStatus,
   readSupervisorStatus,
@@ -1803,6 +1805,18 @@ export function apply(ctx, config) {
     // 位置必须早于真正写入 attempt 目录的时机（startAttempt 的 persist）。
     mkdirSync(attemptsDir, { recursive: true });
 
+    // g-437 P1：**门禁③的区间锚点必须由引擎在派发时落盘**（引擎只信 attempt 记录，绝不信报告）。
+    // 否则「报告把 baseline 取到自己的 HEAD」就能让 diff 恒为空（0 行 0 未跟踪）必然放行。
+    //  - 隔离 attempt：锚点 = 刚建/复用工作树的实际起点（`prepareAttemptWorktree` 已算好并落盘）；
+    //  - 非隔离 attempt：在工作区仓库根执行，recorded 形态里没有 head ⇒ 取派发这一刻的仓库 HEAD；
+    //  - 显式 `baseline_commit` 优先（原样回显，语义不变）；取不到（非 Git 仓库 / 无提交 / git 不可用）
+    //    ⇒ `undefined`/`null`（不写基线；门禁③对这类 attempt fail-closed 拒绝，不退回采信报告）。
+    const engineBaselineCommit = baseline_commit !== undefined && baseline_commit !== null
+      ? baseline_commit
+      : (wtResult.worktree && typeof wtResult.worktree.head === "string" && wtResult.worktree.head
+        ? wtResult.worktree.head
+        : readRepoHead(dirname(root)));
+
     // g-406：派发返回必须**可据以判定隔离**，否则 `worktree:false` 会把两种完全不同的
     // 情形混成同一个值：①解析为「本次不建树」（显式 worktree=false / 干净工作区下
     // patch/chore/task 的类型默认豁免）②建树失败——后者不存在静默降级：prepareAttemptWorktree
@@ -1815,6 +1829,9 @@ export function apply(ctx, config) {
       worktree_reason: wtResult.reason ?? null,
       worktree_created: Boolean(wtResult.created),
       worktree_reused: Boolean(wtResult.reused),
+      // g-437 P1：落盘的区间锚点（fast_track 的 `machine_report.baseline_commit` 必须与之相等）。
+      // null = 取不到锚点（非 Git 仓库等）⇒ 该 attempt 走不了 fast_track，如实回传而不是编一个值。
+      baseline_commit: engineBaselineCommit ?? null,
     };
 
     const prompt = formatAttemptPrompt({
@@ -1825,7 +1842,7 @@ export function apply(ctx, config) {
       briefSource: resolvedBrief.source,
       directive: currentDirective,
       taskType: task_type,
-      baselineCommit: baseline_commit,
+      baselineCommit: engineBaselineCommit,
       sourceAttempt: source_attempt,
       acceptanceItems: acceptance_items,
       handoffSection: handoffsSection,
@@ -1871,7 +1888,7 @@ export function apply(ctx, config) {
       mode: effModeRes.mode,
       modeSource: effModeRes.source,
       taskType: task_type,
-      baselineCommit: baseline_commit,
+      baselineCommit: engineBaselineCommit,
       sourceAttempt: source_attempt,
       acceptanceItems: acceptance_items,
       templateVersion,
@@ -3099,6 +3116,9 @@ export function apply(ctx, config) {
           worktree_reason: execRes.worktree_reason ?? null,
           worktree_created: execRes.worktree_created === true,
           worktree_reused: execRes.worktree_reused === true,
+          // g-437 P1：区间锚点也必须回传（与上面四件套同一理由——白名单漏登记主管就看不到）。
+          // 主管据此填 `machine_report.baseline_commit`；null = 该 attempt 无锚点（走不了 fast_track）。
+          baseline_commit: execRes.baseline_commit ?? null,
         };
         if (execRes.child_error) result.child_error = execRes.child_error;
         if (execRes.note) result.note = execRes.note;
@@ -3154,7 +3174,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_resolve_accept",
-        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict）且 machine_report 四项门禁全绿（tests exit_code=0 且 fail=0、typecheck exit_code=0、产品代码增删 <150 行且无未跟踪新文件、全部判据以 ✅已验 结尾，由引擎自算）；任一不满足即拒绝且零副作用，通过则记 review.fast_track 事件。",
+        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict）且 machine_report 四项门禁全绿——① tests（exit_code=0 且 fail=0）与 ② typecheck（exit_code=0）是**调用方证据**（引擎不复跑，须留痕 command/collected_at/source）；③ 变更规模（产品代码增删 <150 行且无未跟踪新文件）由**引擎 Git 自算**：machine_report.attempt 必填（显式绑定执行树），引擎在该 attempt 的实际工作树采集真源并与报告逐项对账（不一致、未提交 tracked 改动、工作树缺失/已删、git 或基线不可解析一律拒绝），且与策略层 M2 用**同一条 150 行阈值**（≥150 行先被策略层升级 strict）；④ 全部判据以 ✅已验 结尾由引擎自算。任一不满足即拒绝且零副作用，通过则记 review.fast_track 事件（含证据分层与 Git 真源）。",
         parameters: params({
           goal: str,
           verdict: { type: "string", enum: ["accept", "object"] },
@@ -3164,7 +3184,10 @@ export function apply(ctx, config) {
           fast_track: { type: "boolean", description: "机器快速放行开关；缺省 false（默认路径逐字不变）。" },
           machine_report: {
             type: "object",
-            description: "机器证据包：{ baseline_commit, changed_paths[], product_changed_lines, untracked_files, tests:{exit_code,fail}, typecheck:{exit_code}, strict_required? }。门禁 ④（全部判据 ✅已验）由引擎自算，报告不得自报。",
+            description:
+              "机器证据包：{ attempt, baseline_commit, changed_paths[], product_changed_lines, untracked_files, tests:{exit_code,fail,command,collected_at,source}, typecheck:{exit_code,command,collected_at,source}, strict_required? }。" +
+              "attempt 必填（显式绑定实际执行树，引擎不猜）；①② tests/typecheck 为调用方证据并须留痕命令原文/采集时间/来源（引擎不复跑）；" +
+              "③ 由引擎在实际 attempt 工作树的 Git 真源自算并与报告逐项对账（报告必须与 `git diff --numstat -z`（rename 含旧新两条路径）及未跟踪用户文件数完全一致）；④ 由引擎自算（全部判据 ✅已验），报告不得自报。",
           },
         }, ["goal", "verdict"]),
       },
@@ -4518,6 +4541,8 @@ export function apply(ctx, config) {
             worktree_reason: execRes.worktree_reason ?? null,
             worktree_created: execRes.worktree_created === true,
             worktree_reused: execRes.worktree_reused === true,
+            // g-437 P1：同工具入口（白名单两处同时登记）。
+            baseline_commit: execRes.baseline_commit ?? null,
           });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;

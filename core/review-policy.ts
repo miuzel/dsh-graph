@@ -301,7 +301,9 @@ export function matchRegionSegment(path: string, region: string): boolean {
 export function isContractPath(path: string, contractPaths?: readonly string[] | null): boolean {
   const p = normalizePolicyPath(path);
   if (!p) return false;
-  const paths = contractPaths !== undefined && contractPaths !== null ? contractPaths : DEFAULT_CONTRACT_PATHS;
+  // g-437：契约路径的归一化同样只有一个实现（effectiveContractPathsOf）——此前这里是第四份
+  // 内联三分支，非法标量会直接喂给 `.some()` 抛 TypeError。
+  const paths = effectiveContractPathsOf(contractPaths);
   return paths.some((cp) => normalizePolicyPath(cp) === p);
 }
 
@@ -313,11 +315,9 @@ export function isContractPath(path: string, contractPaths?: readonly string[] |
 export function regionOfPath(path: string, configuredRegions?: readonly string[] | null): ReviewRegion | null {
   const p = normalizePolicyPath(path);
   if (!p) return null;
-  const regions = Array.isArray(configuredRegions)
-    ? configuredRegions
-    : configuredRegions === null || configuredRegions === undefined
-      ? DEFAULT_REVIEW_REGIONS
-      : [];
+  // g-437：区域列的归一化**只有一个实现**（effectiveReviewRegionsOf）——策略解析、门禁③分类与
+  // 设置面投影都必须取同一份有效值，此处不再内联第二份「数组/未配置/其它」三分支。
+  const regions = effectiveReviewRegionsOf(configuredRegions);
 
   // 筛选出所有匹配的区域
   const matched = regions.filter((r) => typeof r === "string" && matchRegionSegment(p, r));
@@ -340,11 +340,8 @@ export function regionOfPath(path: string, configuredRegions?: readonly string[]
 
 /** 变更路径覆盖的顶层区域集合（按配置顺序，去重）。缺省使用普适默认 DEFAULT_REVIEW_REGIONS。 */
 export function regionsOfPaths(paths: readonly string[], configuredRegions?: readonly string[] | null): ReviewRegion[] {
-  const regions = Array.isArray(configuredRegions)
-    ? configuredRegions
-    : configuredRegions === null || configuredRegions === undefined
-      ? DEFAULT_REVIEW_REGIONS
-      : [];
+  // g-437：同 regionOfPath —— 单一归一化入口（effectiveReviewRegionsOf）。
+  const regions = effectiveReviewRegionsOf(configuredRegions);
   const seen = new Set<ReviewRegion>();
   for (const p of paths) {
     const r = regionOfPath(p, regions);
@@ -420,6 +417,61 @@ export function formatStrictReasonText(
   }
 }
 
+// ---------------------------------------------------------------------------
+// g-437 → g-442：有效值的**唯一真源**是上面的 `resolveReviewListInput`。
+//
+// 本目标曾自带一份「数组 / 未配置 / 其它」三分支归一化（当时把散落在 `resolveReviewPolicy`、
+// `regionOfPath`、`regionsOfPaths`、`isProductCodePath`、`isContractPath` 的默认点收敛到它）。
+// g-442 合入后 `diagnoseConfigList` → `isMalformedConfigList` → `resolveReviewListInput` 成为
+// 引擎（`resolveReviewPolicy`）、设置面投影（`reviewEffectiveProjection`）与写侧校验共用的**同一条链**
+// ⇒ 这里**删掉本体、改为一行委托**：`effective*Of` 只保留导出名与既有调用面（门禁③采集、四个匹配器、
+// 键控分发），与投影是同一条表达式的产物，结构上不可能再分叉。
+//
+// 委托语义（= 引擎真正遍历的值；实测 48 组中 6 组值差异全部为「剔除非字符串项」，分类决策 0 差异）：
+//  - 合法数组（含内容畸形）⇒ 原样（仅剔除对匹配无影响的非字符串项）；
+//  - `null` / `undefined`（未配置）⇒ 该字段缺省值（`source: "default"`）；
+//  - 其它原始值（标量 / 映射…）⇒ `[]` 且 `malformed: true`（绝不冒充「未配置」套默认放行）。
+//  - **畸形判定不在本函数内**：唯一谓词是 {@link isMalformedConfigList}（`diagnoseConfigList` 的布尔投影），
+//    且**只看原始值**（`[""]` / `["core/"]` / `["../core"]` / `["core","core"]` 的有效值仍是原数组，
+//    由策略层据此升级 `policy_unrecognized`）——有效值与畸形标记必须一起用，缺一即口径不全。
+// ---------------------------------------------------------------------------
+
+/** 三项列表字段的键（与 `project.yaml` 的 `review.<key>` 同名；= g-442 的 `ReviewListFieldKey`）。 */
+export type ReviewListFieldName = ReviewListFieldKey;
+
+/** 字段 → SPEC（只读映射；SPEC 表是 g-442 的唯一真源，此处不另抄任何默认值）。 */
+const REVIEW_LIST_SPEC: Record<ReviewListFieldKey, ReviewListFieldSpec> = Object.fromEntries(
+  REVIEW_LIST_FIELDS.map((spec) => [spec.key, spec]),
+) as Record<ReviewListFieldKey, ReviewListFieldSpec>;
+
+/** 有效契约路径（委托唯一归一化；语义见上）。 */
+export function effectiveContractPathsOf(contractPaths?: unknown): readonly string[] {
+  return resolveReviewListInput(REVIEW_LIST_SPEC.contract_paths, contractPaths).value;
+}
+
+/** 有效顶层区域列表（同 {@link effectiveContractPathsOf}）。 */
+export function effectiveReviewRegionsOf(regions?: unknown): readonly string[] {
+  return resolveReviewListInput(REVIEW_LIST_SPEC.regions, regions).value;
+}
+
+/** 有效产品码排除前缀（同 {@link effectiveContractPathsOf}）。 */
+export function effectiveNonProductPrefixesOf(nonProductPrefixes?: unknown): readonly string[] {
+  return resolveReviewListInput(REVIEW_LIST_SPEC.non_product_prefixes, nonProductPrefixes).value;
+}
+
+/**
+ * 键控分发：`effectiveReviewListValue(key, raw)` ≡ 对应的 `effectiveXOf(raw)`。
+ *
+ * 供**投影/UI 等消费面**使用，避免它们各自再写一张「字段 → 默认值」表（与 g-442 同一条口径）。
+ */
+export function effectiveReviewListValue(field: ReviewListFieldName, raw: unknown): readonly string[] {
+  switch (field) {
+    case "regions": return effectiveReviewRegionsOf(raw);
+    case "contract_paths": return effectiveContractPathsOf(raw);
+    case "non_product_prefixes": return effectiveNonProductPrefixesOf(raw);
+    default: return [];
+  }
+}
 /**
  * 解析目标应走的评审策略（单一可单测入口）。
  */
@@ -522,9 +574,9 @@ export function isProductCodePath(
   const p = normalizePolicyPath(path).replace(/\\/g, "/");
   if (p === "") return false;
   if ((NON_PRODUCT_EXACT as readonly string[]).includes(p)) return false;
-  const prefixes = nonProductPrefixes !== undefined && nonProductPrefixes !== null
-    ? nonProductPrefixes
-    : DEFAULT_NON_PRODUCT_PREFIXES;
+  // g-437：产品码排除前缀的归一化同样只有一个实现（effectiveNonProductPrefixesOf）——
+  // 门禁③的真源分类（summarizeProductLinesStrict）与策略层 M2/M3 必须取同一份有效值。
+  const prefixes = effectiveNonProductPrefixesOf(nonProductPrefixes);
   if (prefixes.some((prefix) => {
     const normPre = normalizePolicyPath(prefix).replace(/\/+$/, "").replace(/\\/g, "/");
     if (normPre === "") return false;
@@ -550,14 +602,18 @@ export interface ProductLineCount {
  * 解析 `git diff --numstat <baseline> HEAD` 输出，按产品代码口径汇总增删行数。
  * 二进制行（`-\t-\t<path>`）计入文件但贡献 0 行；无法解析的行按 0 行计入其路径
  * （fail-safe：宁可少算行数也要如实列出文件，避免静默丢弃变更）。
+ *
+ * **g-437：本函数是「非 `-z` 文本」的**遗留**解码器**（`parts.slice(2).join("\t")` 对
+ * rename/引号路径会得到复合串，且非数字列静默计 0 —— 后者对 M2 是**放行方向**）。
+ * `resolveAccept(fast_track=true)` 的门禁③**不再**使用它：真源用 {@link parseNumstatZ}
+ * （NUL 分隔、rename 给两条路径）+ {@link summarizeProductLinesStrict}（解析不了即不放行）。
+ * 保留本导出只为兼容既有调用方与断言，不得用于任何准入判定。
  */
 export function countProductChangedLines(
   numstat: string,
   nonProductPrefixes?: readonly string[] | null,
 ): ProductLineCount {
-  const files: string[] = [];
-  const skipped: string[] = [];
-  let lines = 0;
+  const entries: NumstatEntry[] = [];
   for (const raw of String(numstat ?? "").split("\n")) {
     const row = raw.trim();
     if (row === "") continue;
@@ -565,16 +621,174 @@ export function countProductChangedLines(
     if (parts.length < 3) continue;
     const path = parts.slice(2).join("\t").trim();
     if (path === "") continue;
-    if (!isProductCodePath(path, nonProductPrefixes)) {
-      skipped.push(path);
+    entries.push({
+      added: /^\d+$/.test(parts[0]) ? Number(parts[0]) : null,
+      deleted: /^\d+$/.test(parts[1]) ? Number(parts[1]) : null,
+      paths: [path],
+    });
+  }
+  const strict = summarizeProductLinesStrict(entries, nonProductPrefixes);
+  // 遗留语义：非数字列按 0 计（不计入 malformed），只回传 lines/files/skipped。
+  return { lines: strict.lines, files: strict.files, skipped: strict.skipped };
+}
+
+// ---------------------------------------------------------------------------
+// g-437：门禁③的 Git 真源解码（NUL 输出 + 严格计数）
+//
+// 为什么必须换解码器：
+//  1. `git diff --numstat -z` 对 rename/copy 给出**两条**路径（旧/新），而非 `old => new`
+//     复合串；按复合串做产品码分类会分类错，契约匹配也看不到旧路径（M1 漏判）。
+//  2. 路径可能含制表符/空格/非 ASCII：`-z` 不做引号化，按 `\t` 切列后第 3 列起原样拼接，
+//     不 trim、不按换行解析。
+//  3. 非数字列（二进制 `-`）**不得静默计 0** —— 对「≥150 行即 strict」的 M2 那是放行方向。
+//     严格口径下解析不了即进 `malformed`，由调用方**拒绝** fast_track。
+// ---------------------------------------------------------------------------
+
+/** `git diff --numstat -z` 的单条记录。 */
+export interface NumstatEntry {
+  /** `null` = 该列不是十进制数字（二进制 `-` 或不可解析）⇒ 严格口径下不放行。 */
+  added: number | null;
+  deleted: number | null;
+  /** 涉及的仓库相对路径：普通记录 1 条；rename/copy 为 `[旧, 新]`（两条都参与分类与契约匹配）。 */
+  paths: string[];
+}
+
+export interface NumstatParseResult {
+  entries: NumstatEntry[];
+  /** 不可解析记录的原因（空数组 = 全部可解析）。 */
+  malformed: string[];
+}
+
+const describePath = (p: string) => (p.length > 120 ? `${p.slice(0, 117)}…` : p);
+
+/**
+ * 解析 `git diff --numstat -z` 输出（NUL 分隔，**绝不 trim、绝不按换行切分**）。
+ * 记录形态：`<added>\t<deleted>\t<path>\0`；rename/copy：`<added>\t<deleted>\t\0<old>\0<new>\0`。
+ */
+export function parseNumstatZ(out: string): NumstatParseResult {
+  const entries: NumstatEntry[] = [];
+  const malformed: string[] = [];
+  const tokens = String(out ?? "").split("\0");
+  if (tokens.length > 0 && tokens[tokens.length - 1] === "") tokens.pop();
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const parts = token.split("\t");
+    if (parts.length < 3) {
+      malformed.push(`numstat 记录字段不足（应为 3 列）：${describePath(token)}`);
       continue;
     }
-    files.push(path);
-    const added = /^\d+$/.test(parts[0]) ? Number(parts[0]) : 0;
-    const deleted = /^\d+$/.test(parts[1]) ? Number(parts[1]) : 0;
-    lines += added + deleted;
+    const inlinePath = parts.slice(2).join("\t");
+    let paths: string[];
+    if (inlinePath === "") {
+      const oldPath = tokens[i + 1];
+      const newPath = tokens[i + 2];
+      if (oldPath === undefined || newPath === undefined) {
+        malformed.push("numstat rename/copy 记录缺少旧/新路径");
+        break;
+      }
+      i += 2;
+      paths = [oldPath, newPath];
+    } else {
+      paths = [inlinePath];
+    }
+    if (paths.some((p) => p === "")) {
+      malformed.push(`numstat 记录含空路径：${describePath(token)}`);
+      continue;
+    }
+    entries.push({
+      added: /^\d+$/.test(parts[0]) ? Number(parts[0]) : null,
+      deleted: /^\d+$/.test(parts[1]) ? Number(parts[1]) : null,
+      paths,
+    });
   }
-  return { lines, files: [...new Set(files)], skipped: [...new Set(skipped)] };
+  return { entries, malformed };
+}
+
+/** 严格计数结果：`malformed` 非空 ⇒ 调用方必须拒绝放行（绝不当作 0 行）。 */
+export interface StrictProductLineCount extends ProductLineCount {
+  malformed: string[];
+}
+
+/**
+ * 按产品代码口径汇总 numstat 记录。**分类看两条路径**（rename/copy 的旧新都参与
+ * 「产品码 / 非产品码」与契约匹配），但**行数按记录只计一次**（同一记录的两条路径不是两次改动，
+ * 重复计会让 rename+edit 的行数翻倍）。非数字列计入 `malformed`（不静默计 0）。
+ */
+export function summarizeProductLinesStrict(
+  entries: readonly NumstatEntry[],
+  nonProductPrefixes?: readonly string[] | null,
+): StrictProductLineCount {
+  const files: string[] = [];
+  const skipped: string[] = [];
+  const malformed: string[] = [];
+  let lines = 0;
+  for (const e of entries) {
+    let touchesProduct = false;
+    for (const p of e.paths) {
+      if (isProductCodePath(p, nonProductPrefixes)) {
+        files.push(p);
+        touchesProduct = true;
+      } else {
+        skipped.push(p);
+      }
+    }
+    if (e.added === null || e.deleted === null) {
+      malformed.push(`numstat 非数字列（二进制或不可解析，不得计 0）：${e.paths.map(describePath).join(" / ")}`);
+      continue;
+    }
+    if (touchesProduct) lines += e.added + e.deleted;
+  }
+  return { lines, files: [...new Set(files)], skipped: [...new Set(skipped)], malformed };
+}
+
+/** `git status --porcelain=v1 -z` 的单条记录。 */
+export interface PorcelainEntry {
+  /** 两字符状态码（`??` = 未跟踪）。 */
+  status: string;
+  /** 普通记录 1 条；rename/copy 为 `[新, 旧]`（git 的 `-z` 顺序）。 */
+  paths: string[];
+}
+
+export interface PorcelainParseResult {
+  entries: PorcelainEntry[];
+  malformed: string[];
+}
+
+/**
+ * 解析 `git status --porcelain=v1 -z --untracked-files=all` 输出。
+ * 记录形态：`XY <path>\0`；rename/copy：`XY <new>\0<old>\0`（第二路径不得当独立状态记录）。
+ */
+export function parsePorcelainZ(out: string): PorcelainParseResult {
+  const entries: PorcelainEntry[] = [];
+  const malformed: string[] = [];
+  const tokens = String(out ?? "").split("\0");
+  if (tokens.length > 0 && tokens[tokens.length - 1] === "") tokens.pop();
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.length < 3 || token[2] !== " ") {
+      malformed.push(`status 记录形态非法（应形如 "XY <path>"）：${describePath(token)}`);
+      continue;
+    }
+    const status = token.slice(0, 2);
+    const path = token.slice(3);
+    if (path === "") {
+      malformed.push(`status 记录含空路径：${describePath(token)}`);
+      continue;
+    }
+    const paths = [path];
+    const renaming = status[0] === "R" || status[0] === "C" || status[1] === "R" || status[1] === "C";
+    if (renaming) {
+      const other = tokens[i + 1];
+      if (other === undefined) {
+        malformed.push("status rename/copy 记录缺少原路径");
+        break;
+      }
+      i += 1;
+      paths.push(other);
+    }
+    entries.push({ status, paths });
+  }
+  return { entries, malformed };
 }
 
 // ---------------------------------------------------------------------------
@@ -712,3 +926,57 @@ export function evaluateFastTrackGate(report: unknown): FastTrackGateResult {
   const failed = checks.filter((c) => !c.ok).map((c) => c.id);
   return { allowed: failed.length === 0, checks, evidence: e, failed };
 }
+
+// ---------------------------------------------------------------------------
+// g-437：报告 ↔ Git 真源对账（纯函数，零 IO）
+// ---------------------------------------------------------------------------
+
+/** 引擎从实际 attempt 树采集到的门禁③真源事实（路径一律 repo-root-relative）。 */
+export interface GitTruthFacts {
+  changed_paths: string[];
+  product_changed_lines: number;
+  untracked_files: number;
+}
+
+const sortedNormalized = (paths: readonly string[]): string[] =>
+  [...new Set(paths.map((p) => normalizePolicyPath(p)).filter((p) => p !== ""))].sort();
+
+/**
+ * 把调用方报告的门禁③值与引擎 Git 真源逐项对账，返回不一致项（空数组 = 一致）。
+ *
+ * 口径为**集合相等**（不是子集）：报告漏报会藏起契约路径/未知区域（M1/M3 漏判），
+ * 多报则说明报告与真源不同源。任何一项不一致都必须拒绝放行。
+ */
+export function reconcileMachineReportWithGitTruth(
+  evidence: FastTrackEvidence,
+  truth: GitTruthFacts,
+): string[] {
+  const problems: string[] = [];
+  const reportPaths = sortedNormalized(evidence.changed_paths);
+  const truthPaths = sortedNormalized(truth.changed_paths);
+  if (reportPaths.join("\n") !== truthPaths.join("\n")) {
+    const missing = truthPaths.filter((p) => !reportPaths.includes(p));
+    const extra = reportPaths.filter((p) => !truthPaths.includes(p));
+    problems.push(
+      `changed_paths 与 Git 真源不一致（引擎 ${truthPaths.length} 条 / 报告 ${reportPaths.length} 条` +
+        `${missing.length ? `；报告漏报：${missing.slice(0, 5).map(describePath).join(" / ")}` : ""}` +
+        `${extra.length ? `；报告多报：${extra.slice(0, 5).map(describePath).join(" / ")}` : ""}）`,
+    );
+  }
+  if (evidence.product_changed_lines !== truth.product_changed_lines) {
+    problems.push(
+      `product_changed_lines 与 Git 真源不一致（引擎 ${truth.product_changed_lines} / 报告 ${
+        evidence.product_changed_lines === null ? "缺失" : evidence.product_changed_lines
+      }）`,
+    );
+  }
+  if (evidence.untracked_files !== truth.untracked_files) {
+    problems.push(
+      `untracked_files 与 Git 真源不一致（引擎 ${truth.untracked_files} / 报告 ${
+        evidence.untracked_files === null ? "缺失" : evidence.untracked_files
+      }）`,
+    );
+  }
+  return problems;
+}
+

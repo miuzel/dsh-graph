@@ -345,6 +345,8 @@ test("g-406 判据 2：HTTP/GUI 入口（第二处响应白名单）同样回传
   assert.equal(res._body.isolated, true, "feature 默认建树");
   assert.equal(res._body.worktree_created, true);
   assert.equal(res._body.worktree_reused, false);
+  // g-437 P1：区间锚点也是「可据以裁决」的字段 ⇒ HTTP/GUI 入口（第二处白名单）必须同样登记。
+  assert.equal(res._body.baseline_commit, res._body.worktree.head, "HTTP 响应必须回传引擎侧区间锚点");
 });
 
 // ============================================================================
