@@ -4907,8 +4907,15 @@ export function readAttachment(root: string, name: string): { buffer: Buffer; si
   return { buffer, size: buffer.length, digest, contentType: ct.type, inline: ct.inline };
 }
 
-/** 原子写入：temp 文件 + fsync + rename；失败删除 temp（不留半文件），并 fsync 目录。 */
-function atomicWrite(target: string, data: Buffer | string): void {
+/**
+ * 原子写入：temp 文件 + fsync + rename；失败删除 temp（不留半文件），并 fsync 目录。
+ * 临时文件取 `join(dirname(target), ".tmp-<uuid>")` ⇒ 与目标**同目录**（同文件系统），
+ * rename 才是真正的原子替换；`fsync` 在 rename 之前 ⇒ 断电也不会留下空文件/半文件。
+ *
+ * g-451：导出供 `core/worktree.ts` 的看板归属标记写入复用（同一份语义，不在别处再造第二套
+ * 原子写；临时名与残留清理口径也与既有 g-374 断言一致）。
+ */
+export function atomicWrite(target: string, data: Buffer | string): void {
   const buf = typeof data === "string" ? Buffer.from(data, "utf8") : data;
   const dir = dirname(target);
   const tmp = join(dir, `.tmp-${randomUUID()}`);
