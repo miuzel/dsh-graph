@@ -2072,6 +2072,32 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
   });
 }
 
+/** g-450：写入前核验「父级是块式映射头」（`key:` 后为空或仅注释），否则 fail-closed。
+ *  父级为标量 / 内联 flow-style 值（非空值）或块式序列（首个内容行为 `- `）时，向其中写键都会产出
+ *  不可解析 YAML；此前写路径不设防 ⇒ 返回 200 却写坏配置（静默数据损坏，与 g-435 列表变体同族）。 */
+function assertBlockMappingParent(lines: string[], idx: number, path: string[]): void {
+  const line = lines[idx];
+  const indent = lineIndent(line);
+  const body = line.slice(indent);
+  const colon = body.indexOf(":");
+  const parentKey = colon >= 0 ? body.slice(0, colon) : body;
+  const pathText = path.join(".");
+  const notMapping = (why: string): never => {
+    throw new GraphError(`无法写入 ${pathText}：父级「${parentKey}」不是块式映射（${why}），请先改为标准缩进 YAML 块式映射`);
+  };
+  if (colon < 0) notMapping("缺少 \"key:\" 结构");
+  const { value } = splitValueComment(body.slice(colon + 1));
+  if (value !== "") notMapping("其值非空，是标量或内联 flow-style 值");
+  const end = blockChildrenEnd(lines, idx, indent);
+  for (let i = idx + 1; i < end; i++) {
+    const l = lines[i];
+    if (l.trim() === "") continue;
+    if (/^[ \t]*#/.test(l)) continue; // 注释行不参与结构判定（与 blockChildrenEnd 同口径）
+    if (/^[ \t]*-([ \t]|$)/.test(l)) notMapping("其内容为序列");
+    break;
+  }
+}
+
 /** 在 lines 上按路径把叶子标量设为 encode(value)（保留行尾注释；缺失块按缩进创建；整条链缺失则文末补）。 */
 function setScalarAtPath(lines: string[], path: string[], value: string | number, encode: (v: any) => string): void {
   const ensureBlock = (parentIdx: number, parentEnd: number, childIndent: string, childKey: string): number => {
@@ -2087,6 +2113,7 @@ function setScalarAtPath(lines: string[], path: string[], value: string | number
     buildMissingChain(lines, path, encode(value));
     return;
   }
+  assertBlockMappingParent(lines, rootIdx, path);
   let parentIdx = rootIdx;
   let parentIndent = lineIndent(lines[parentIdx]);
   for (let lvl = 1; lvl < path.length - 1; lvl++) {
@@ -2101,6 +2128,7 @@ function setScalarAtPath(lines: string[], path: string[], value: string | number
       parentIndent = childIndent.length;
       continue;
     }
+    assertBlockMappingParent(lines, keyIdx, path);
     parentIdx = keyIdx;
     parentIndent = lineIndent(lines[keyIdx]);
   }
@@ -2129,15 +2157,14 @@ function setListAtPath(lines: string[], path: string[], list: string[] | null | 
   };
   const rootKey = path[0];
   let rootIdx = findKeyLine(lines, rootKey, 0, 0, lines.length);
-  if (rootIdx >= 0 && lines[rootIdx].includes("{") && lines[rootIdx].includes("}")) {
-    throw new GraphError(`不支持向内联 flow-style YAML 映射中结构化更新列表字段，请使用标准缩进 YAML`);
-  }
   if (rootIdx < 0) {
     // 根不存在且待写入值为 null/undefined 时无需创建
     if (list === null || list === undefined) return;
     buildMissingListChain(lines, path, list);
     return;
   }
+  // g-450：父级须为块式映射头（g-435 只挡了根级内联 flow-style 映射，标量与序列形态漏网）
+  assertBlockMappingParent(lines, rootIdx, path);
   let parentIdx = rootIdx;
   let parentIndent = lineIndent(lines[parentIdx]);
   for (let lvl = 1; lvl < path.length - 1; lvl++) {
@@ -2145,9 +2172,6 @@ function setListAtPath(lines: string[], path: string[], list: string[] | null | 
     const childIndent = " ".repeat(parentIndent + 2);
     const end = blockChildrenEnd(lines, parentIdx, parentIndent);
     const keyIdx = findKeyLine(lines, key, childIndent.length, parentIdx + 1, end);
-    if (keyIdx >= 0 && lines[keyIdx].includes("{") && lines[keyIdx].includes("}")) {
-      throw new GraphError(`不支持向内联 flow-style YAML 映射中结构化更新列表字段，请使用标准缩进 YAML`);
-    }
     if (keyIdx < 0) {
       if (list === null || list === undefined) return;
       const inserted = ensureBlock(parentIdx, end, childIndent, key);
@@ -2155,6 +2179,7 @@ function setListAtPath(lines: string[], path: string[], list: string[] | null | 
       parentIndent = childIndent.length;
       continue;
     }
+    assertBlockMappingParent(lines, keyIdx, path);
     parentIdx = keyIdx;
     parentIndent = lineIndent(lines[keyIdx]);
   }
