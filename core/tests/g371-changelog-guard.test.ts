@@ -36,6 +36,7 @@ const CHANGELOG_PATH = join(repoRoot, "CHANGELOG.md");
  * 这是「删整节 / 删某节一条」必红的唯一可靠手段（M3 复盘：弱规则接不住多条节内的删除）。
  */
 const EXPECTED_SECTIONS: Array<{ version: string; bullets: number }> = [
+  { version: "v0.19.8", bullets: 5 },
   { version: "v0.19.7", bullets: 5 },
   { version: "v0.18.0", bullets: 5 },
   { version: "v0.17.0", bullets: 5 },
