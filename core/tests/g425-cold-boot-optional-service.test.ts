@@ -222,9 +222,9 @@ test("g-425 判据12：locale 未注册 + 未声明服务属性访问即抛时�
   assert.deepEqual(registeredSlots, [
     "conversation.session.header.actions",
     "conversation.view",
-    // g-453：profile 全局设置页新增两个席位（设置→内置插件 tab / 插件面板组合包配置页）
+    // g-453（返工后）：profile 全局设置页**两个**席位（设置 → 看板设置 / 插件面板组合包配置页）；
+    // 「设置 → 内置插件」标签页席位已按负责人裁定取消 ⇒ 不得再出现在注册面（反向断言见下）。
     "plugins.bundle.config",
-    "settings.plugins.tab",
     "settings.section",
     "sidebar.right.pane.tab",
     "sidebar.right.pane.tab.title",
@@ -240,24 +240,27 @@ test("g-425 判据12：locale 未注册 + 未声明服务属性访问即抛时�
   const settingsSection = boot.registrations.find((r) => r.slotName === "settings.section");
   assert.ok(settingsSection, "settings.section 必须注册（设置页 section 命中）");
   assert.equal(settingsSection!.meta.id, "dsh-graph-settings");
+  assert.equal(settingsSection!.meta.order, 60);
   assert.equal(typeof settingsSection!.comp, "function");
+  // g-230（逐字保留的契约，断言强度只增不减）：label 是 locale-following thunk；locale 缺席时走本地
+  // 字典降级 ⇒ 必须真的解析到 `settings.title`（原断言只比对「与 tab 席位同源」，tab 删除后改为钉住取值）。
+  assert.equal(typeof settingsSection!.meta.label, "function", "settings.section label 必须是 locale-following thunk");
+  assert.equal(settingsSection!.meta.label(), "看板设置", "label thunk 必须解析到本地字典的 settings.title");
 
-  // g-453：三个席位**一律经 slots.inject 注册**（宿主只在对应页面挂载时才声明该 slot；
-  // apply 里直接 register 会静默 no-op）。这两个新席位在冷启动夹具里也必须走 inject 回调。
-  for (const seat of ["settings.section", "settings.plugins.tab", "plugins.bundle.config"]) {
+  // g-453（返工后）：**两个**席位一律经 slots.inject 注册（宿主只在对应页面挂载时才声明该 slot；
+  // apply 里直接 register 会静默 no-op）。
+  for (const seat of ["settings.section", "plugins.bundle.config"]) {
     assert.ok(boot.calls.includes(`slots.inject@root:${seat}`), `${seat} 必须经 ctx.slots.inject 注册`);
   }
 
-  // g-453 席位②：设置 → 内置插件 的 tab（id/order 稳定，label 与 section 同源 thunk）
-  const pluginsTab = boot.registrations.find((r) => r.slotName === "settings.plugins.tab");
-  assert.ok(pluginsTab, "settings.plugins.tab 必须注册（设置→内置插件 标签页席位）");
-  assert.equal(pluginsTab!.meta.id, "dsh-graph");
-  assert.equal(pluginsTab!.meta.order, 60);
-  assert.equal(typeof pluginsTab!.meta.label, "function", "plugins tab label 必须是 locale-following thunk");
-  assert.equal(pluginsTab!.meta.label(), settingsSection!.meta.label(), "两个席位的标签同源（dgT('settings.title')）");
-  assert.equal(typeof pluginsTab!.comp, "function");
+  // g-453 返工反向断言：负责人裁定取消「设置 → 内置插件」标签页席位 ⇒ 注册面与 inject/register 面
+  // 都不得出现它（未来有人重加该席位时，本节与下方「判别力自证」用例都会必红）。
+  assert.ok(!boot.registrations.some((r) => r.slotName === "settings.plugins.tab"),
+    "settings.plugins.tab 不得被注册（负责人已裁定设置面收敛为两个入口）");
+  assert.ok(!boot.calls.some((c) => c.endsWith(":settings.plugins.tab")),
+    "不得对 settings.plugins.tab 发起 slots.inject / register（无死代码）");
 
-  // g-453 席位③：插件面板 → dsh-graph 组合包配置页（keyed by 包名；summary 按契约返回 null）
+  // g-453 席位②：插件面板 → dsh-graph 组合包配置页（keyed by 包名；summary 按契约返回 null）
   const bundleConfig = boot.registrations.find((r) => r.slotName === "plugins.bundle.config");
   assert.ok(bundleConfig, "plugins.bundle.config 必须注册（组合包配置页席位）");
   assert.equal(bundleConfig!.meta.key, "dsh-graph", "组合包配置页必须按包名 dsh-graph 绑定 key");
@@ -320,9 +323,88 @@ test("g-425 判据12：sidebarRightTabs 缺席（精简 profile/旧宿主）时�
   assert.equal(boot.applyError, null, "右侧栏服务缺席不得拖垮 apply");
   for (const hit of boot.gateHits) assert.ok(CAUGHT_OPTIONAL_PROBES.includes(hit), `门禁命中不得越界：${hit}`);
   assert.deepEqual(boot.registrations.map((r) => r.slotName).sort(),
-    // g-453：设置页三个席位与右侧栏 tab 无关 ⇒ 右侧栏缺席时照旧全注册
-    ["conversation.session.header.actions", "conversation.view", "plugins.bundle.config", "settings.plugins.tab", "settings.section"]);
+    // g-453（返工后）：设置页两个席位与右侧栏 tab 无关 ⇒ 右侧栏缺席时照旧全注册；
+    // 内置插件 tab 席位已取消，任何 profile 下都不得出现。
+    ["conversation.session.header.actions", "conversation.view", "plugins.bundle.config", "settings.section"]);
   assert.equal(boot.tabRegistrations.length, 0);
+});
+
+// ============================================================================
+// g-453 返工：已取消席位（settings.plugins.tab）的反向守卫 + 判别力自证
+// ============================================================================
+
+/** 两席位策略的**期望注册清单**（与上方主用例逐字同源，变异对照复用同一清单）。 */
+const TWO_SEAT_REGISTERED_SLOTS = [
+  "conversation.session.header.actions",
+  "conversation.view",
+  "plugins.bundle.config",
+  "settings.section",
+  "sidebar.right.pane.tab",
+  "sidebar.right.pane.tab.title",
+];
+
+/**
+ * 合成变异（仅内存字符串，不落盘）：把负责人已裁定取消的「设置 → 内置插件」tab 席位**按旧实现形态
+ * 重新注册**回产物。锚点是保留席位 `plugins.bundle.config` 的 inject 调用 —— 与它同处
+ * `registerGraphSettingsSection(ctx)` 作用域，故 `ctx` / `dgT` / `h` / `GraphSettingsSection` 均可解析。
+ */
+const TAB_SEAT_ANCHOR = 'ctx.slots.inject("plugins.bundle.config"';
+const TAB_SEAT_MUTATION = [
+  'ctx.slots.inject("settings.plugins.tab", () =>',
+  '  ctx.slots.register({ name: "settings.plugins.tab", id: "dsh-graph", order: 60, label: () => dgT("settings.title") },',
+  '    () => h(GraphSettingsSection, {})));',
+  "",
+].join("\n") + "        ";
+
+/** `hideTitle` 静态反向断言的合成变异锚点（该属性仅被已取消的 tab 席位使用）。 */
+const HIDE_TITLE_ANCHOR = 'const titleNode = h("h3"';
+const HIDE_TITLE_MUTATION = `const hideTitle = props?.hideTitle === true;\n      ${HIDE_TITLE_ANCHOR}`;
+
+/** 反向判据的**唯一谓词**：产物求值后不得在注册面与 inject/register 面出现已取消的 tab 席位。 */
+function cancelledTabSeatProblems(bundle: string): string[] {
+  const { plugin } = loadClientPlugin(bundle);
+  const boot = runColdBoot(plugin);
+  const problems: string[] = [];
+  for (const r of boot.registrations) if (r.slotName === "settings.plugins.tab") problems.push(`registered:${r.slotName}`);
+  for (const c of boot.calls) if (c.endsWith(":settings.plugins.tab")) problems.push(`called:${c}`);
+  return problems;
+}
+
+test("g-453 返工判别力自证：重加「设置 → 内置插件」tab 席位后，行为面与静态面反向守卫都必红（合成变异对照）", () => {
+  const bundle = readFileSync(bundlePath, "utf8");
+
+  // ① 真实产物：唯一谓词必须零命中（两席位策略成立）。
+  assert.deepEqual(cancelledTabSeatProblems(bundle), [],
+    "真实产物不得再注册/ inject 已取消的 settings.plugins.tab 席位");
+
+  // ② 行为面判别力：按旧实现把该席位重新注册回去 ⇒ 同一谓词必红；且主用例那条两席位 deepEqual 也必红。
+  assert.ok(bundle.includes(TAB_SEAT_ANCHOR), "变异锚点必须命中产物（否则对照空转）");
+  const regressed = bundle.replace(TAB_SEAT_ANCHOR, TAB_SEAT_MUTATION + TAB_SEAT_ANCHOR);
+  assert.notEqual(regressed, bundle, "变异必须真的改写产物");
+  const problems = cancelledTabSeatProblems(regressed);
+  assert.ok(problems.some((p) => p.startsWith("registered:")),
+    `重加 tab 席位后注册面必须判红，实际 ${JSON.stringify(problems)}`);
+  assert.ok(problems.some((p) => p.startsWith("called:")),
+    `重加 tab 席位后 inject/register 调用面必须判红，实际 ${JSON.stringify(problems)}`);
+  const regressedBoot = runColdBoot(loadClientPlugin(regressed).plugin);
+  assert.throws(
+    () => assert.deepEqual(regressedBoot.registrations.map((r) => r.slotName).sort(), TWO_SEAT_REGISTERED_SLOTS),
+    "主用例的两席位注册清单在「重加 tab」对照下必红（守卫可重加判红）");
+
+  // ③ 静态面判别力：同一条 `doesNotMatch(code, /settings\.plugins\.tab/)` / `hideTitle` 谓词在
+  //    「把旧形态写回源码」的合成变异上必判红（证明它们不是恒真断言）。
+  const settingsSrc = readFileSync(join(clientSrcDir, "settings.js"), "utf8");
+  const settingsCode = stripNonCode(settingsSrc, true);
+  assert.doesNotMatch(settingsCode, /settings\.plugins\.tab/);
+  assert.doesNotMatch(settingsCode, /hideTitle/);
+  const mutatedSeatSrc = settingsSrc.replace(TAB_SEAT_ANCHOR, TAB_SEAT_MUTATION + TAB_SEAT_ANCHOR);
+  const mutatedTitleSrc = settingsSrc.replace(HIDE_TITLE_ANCHOR, HIDE_TITLE_MUTATION);
+  assert.notEqual(mutatedSeatSrc, settingsSrc, "席位源码变异必须真的改写");
+  assert.notEqual(mutatedTitleSrc, settingsSrc, "hideTitle 源码变异必须真的改写");
+  assert.throws(() => assert.doesNotMatch(stripNonCode(mutatedSeatSrc, true), /settings\.plugins\.tab/),
+    "静态面反向断言在「重加 tab 席位」的源码对照下必红");
+  assert.throws(() => assert.doesNotMatch(stripNonCode(mutatedTitleSrc, true), /hideTitle/),
+    "hideTitle 静态反向断言在同型对照下必红（改回旧形态即判红）");
 });
 
 // ============================================================================
@@ -529,7 +611,7 @@ function versionComparisonFindings(code: string): string[] {
   return [...findings];
 }
 
-test("g-453：设置 scope 能力探测只用 inject/ctx.get（点分名零属性回退、零版本号比较），三席位全走 slots.inject", () => {
+test("g-453：设置 scope 能力探测只用 inject/ctx.get（点分名零属性回退、零版本号比较），两席位全走 slots.inject", () => {
   const settings = readFileSync(join(clientSrcDir, "settings.js"), "utf8");
   // 保留字符串字面量（断言里的服务名/席位名本身是字符串），只抹注释
   const code = stripNonCode(settings, true);
@@ -549,11 +631,15 @@ test("g-453：设置 scope 能力探测只用 inject/ctx.get（点分名零属�
   // ③ 迟到绑定：两个服务键各自 inject 探测（宿主没有该服务 ⇒ 回调不触发、零报错）
   assert.match(code, /const GRAPH_SETTINGS_SERVICE_KEYS = \["settingsScope", "remote\.settings"\]/);
   assert.match(code, /ctx\?\.inject\?\.\(\[key\]/);
-  // ④ 同一组件的三个席位一律经 ctx.slots.inject（直接 register 在宿主未声明 slot 时静默 no-op）
-  for (const seat of ["settings.section", "settings.plugins.tab", "plugins.bundle.config"]) {
+  // ④ 同一组件的**两个**席位一律经 ctx.slots.inject（直接 register 在宿主未声明 slot 时静默 no-op）
+  for (const seat of ["settings.section", "plugins.bundle.config"]) {
     assert.match(code, new RegExp(`ctx\\.slots\\.inject\\("${seat.replace(/\./g, "\\.")}"`),
       `${seat} 必须经 ctx.slots.inject 注册`);
   }
+  // ④b g-453 返工：内置插件 tab 席位已取消 ⇒ 源码（去注释）不得再出现该 slot 名，
+  // 也不得残留仅它使用的 `hideTitle` 属性（静态面 fail-closed，判别力自证见下方专用用例）。
+  assert.doesNotMatch(code, /settings\.plugins\.tab/, "settings.js 不得再出现已取消的 tab 席位名");
+  assert.doesNotMatch(code, /hideTitle/, "hideTitle 仅 tab 席位使用 ⇒ 必须随席位一并删除（无死代码残留）");
   // ⑤ 能力判定禁止比对宿主版本号（dsh-market 的 `settingsScope`→`settings` 改名即静默失效教训）
   //    5a. 语义判定（新增，覆盖真实版本比较的各种写法）—— 能力判定路径（含 i18n.js 的服务探测面）逐一扫描
   assert.deepEqual(CAPABILITY_PATH_SOURCES, ["settings.js", "helpers.js", "plugin.js", "i18n.js"],

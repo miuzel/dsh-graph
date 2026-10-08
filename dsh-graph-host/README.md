@@ -230,13 +230,12 @@ dsh-graph 为 Agent 提供了完善的工具链（共 51 个 `graph_*` 工具）
 
 子代理默认 provider / model、推理档位、执行模式、提示词语言与补充提示词是 **profile 级全局默认** —— 写入当前 DSH profile、**跨 workspace 生效**，且 workspace 的 `project.yaml` 明确配置与单次派发参数都更优先。
 
-同一个设置页在**三个位置**都能打开，三处是**同一份实现**、读写同一份 profile 配置：
+同一个设置页在**两个入口**都能打开，两处是**同一份实现**、读写同一份 profile 配置：
 
 - **设置 → 看板设置**：左侧设置导航里的独立设置页；
-- **设置 → 内置插件 → 看板设置**：与宿主内置「插件列表」并列的标签页；
 - **右侧栏 → 插件 → dsh-graph**：组合包详情页里的配置区（按包名 `dsh-graph` 绑定）。
 
-宿主未提供某个位面时（精简 profile / 旧宿主），对应席位自动不出现，看板与工具不受影响；三者都取不到设置服务时，页面**如实提示**当前 profile 未暴露设置服务，而不是假装已启用。配置文件落在 profile 的设置文档里（0.2.0 系宿主为 profile 的 `cordis.patch.yml` 中 `dsh-graph-host` 条目，0.1.6 系宿主为 `$DSH_HOME/settings.yaml` 的 `dsh-graph` 命名空间）。
+宿主未提供某个位面时（精简 profile / 旧宿主），对应席位自动不出现，看板与工具不受影响；两处都取不到设置服务时，页面**如实提示**当前 profile 未暴露设置服务，而不是假装已启用。配置文件落在 profile 的设置文档里（0.2.0 系宿主为 profile 的 `cordis.patch.yml` 中 `dsh-graph-host` 条目，0.1.6 系宿主为 `$DSH_HOME/settings.yaml` 的 `dsh-graph` 命名空间）。
 
 ---
 
@@ -477,13 +476,12 @@ See [screenshot/sidebar-kanban.png](https://github.com/miuzel/dsh-graph/blob/mai
 
 The subagent default provider / model, reasoning effort, execution mode, prompt language and supplementary prompt are **profile-wide defaults**: they are written to the current DSH profile, apply **across workspaces**, and an explicit `project.yaml` value or a per-dispatch argument still takes precedence.
 
-The same settings page opens from **three places**, all backed by one implementation reading and writing the same profile configuration:
+The same settings page opens from **two places**, both backed by one implementation reading and writing the same profile configuration:
 
 - **Settings → Kanban Settings**: the standalone page in the settings navigation;
-- **Settings → Built-in plugins → Kanban Settings**: a tab next to the host's own "Plugin list";
 - **Right sidebar → Plugins → dsh-graph**: the configuration block on the bundle page (bound by the package name `dsh-graph`).
 
-When the host does not expose a given seat (slim profile / older host) that seat simply does not appear and the board and tools are unaffected; when no settings service is reachable from any of them the page **says so** instead of pretending the settings are live. Values live in the profile's settings document (on 0.2.0-line hosts the `dsh-graph-host` entry in the profile's `cordis.patch.yml`; on 0.1.6-line hosts the `dsh-graph` namespace in `$DSH_HOME/settings.yaml`).
+When the host does not expose a given seat (slim profile / older host) that seat simply does not appear and the board and tools are unaffected; when no settings service is reachable from either of them the page **says so** instead of pretending the settings are live. Values live in the profile's settings document (on 0.2.0-line hosts the `dsh-graph-host` entry in the profile's `cordis.patch.yml`; on 0.1.6-line hosts the `dsh-graph` namespace in `$DSH_HOME/settings.yaml`).
 
 ---
 

@@ -301,13 +301,10 @@
     };
 
     // 看板设置页组件：读/写 dsh-graph profile 全局默认。
-    // g-453：同一组件占三个席位（settings.section / settings.plugins.tab / plugins.bundle.config）；
-    // `hideTitle` 由注册方给出——标签页席位紧邻同名 tab 标签，组件不再重复同名标题
-    // （宿主内置「插件列表」tab 同样不自带页内标题）；section 与组合包页保留标题。
+    // g-453（返工后）：同一组件占**两个**席位（settings.section / plugins.bundle.config）。
+    // 「设置 → 内置插件」标签页席位已按负责人裁定取消 ⇒ `hideTitle` 一并删除（保留的两个席位都自带页内标题）。
     function GraphSettingsSection(props) {
       useLocaleRevision();
-      useLocaleRevision();
-      const hideTitle = props?.hideTitle === true;
       const modeIdRef = React.useRef(null);
       if (modeIdRef.current == null) modeIdRef.current = `dg-global-subagent-mode-${++settingsModeInstanceSeq}`;
       const modeId = modeIdRef.current;
@@ -340,7 +337,7 @@
         return () => { alive = false; };
       }, []);
 
-      const titleNode = hideTitle ? null : h("h3", { style: GSS.title }, dgT("settings.title"));
+      const titleNode = h("h3", { style: GSS.title }, dgT("settings.title"));
 
       // 没有 settings scope 且没有 Host API：整页降级（确实无持久化能力）
       if (!scope) {
@@ -561,11 +558,12 @@
       );
     }
 
-    // 注册 profile 全局设置页的三个席位（plugin.js apply 调用）：
+    // 注册 profile 全局设置页的两个席位（plugin.js apply 调用）：
     //   ① `settings.section`「看板设置」——g-133 旧线席位，**保留**（读写成活后不再降级）；
-    //   ② `settings.plugins.tab`——g-453：设置 → 内置插件 里的 dsh-graph 标签页；
-    //   ③ `plugins.bundle.config`——g-453：侧边栏插件面板 → dsh-graph 组合包页的配置表单（keyed by 包名）。
-    // 三个席位**一律经 ctx.slots.inject 注册**：宿主只在对应页面挂载时才声明该 slot，apply 里直接
+    //   ② `plugins.bundle.config`——g-453：侧边栏插件面板 → dsh-graph 组合包页的配置表单（keyed by 包名）。
+    // g-453 返工：`settings.plugins.tab`（设置 → 内置插件 标签页）已按负责人 2026-10-08 UAT 裁定**取消注册**
+    // ——入口过多，设置面收敛为上述两个入口。
+    // 两个席位**一律经 ctx.slots.inject 注册**：宿主只在对应页面挂载时才声明该 slot，apply 里直接
     // register 会静默 no-op 或报错；宿主没有该 slot 时 inject 回调永不触发且零报错（不影响看板与工具）。
     // settingsScope / remote.settings 缺失时页面按既有语义给提示，绝不抛错。
     const GRAPH_PACKAGE_NAME = "dsh-graph";
@@ -591,20 +589,7 @@
             (props) => h(GraphSettingsSection, props),
           ),
         );
-        // 席位②：标签页紧邻同名 tab 标签 ⇒ 传 hideTitle，不重复渲染同名页内标题。
-        ctx.slots.inject("settings.plugins.tab", () =>
-          ctx.slots.register(
-            {
-              name: "settings.plugins.tab",
-              id: GRAPH_PACKAGE_NAME,
-              order: 60,
-              // 同 g-230：locale-following thunk，切语言时宿主重算标签文案
-              label: () => dgT("settings.title"),
-            },
-            () => h(GraphSettingsSection, { hideTitle: true }),
-          ),
-        );
-        // 席位③：`summary` 是列表里的一行摘要（组合包自身描述已承担），按 slot 契约返回 null；只渲染 page。
+        // 席位②：`summary` 是列表里的一行摘要（组合包自身描述已承担），按 slot 契约返回 null；只渲染 page。
         ctx.slots.inject("plugins.bundle.config", () =>
           ctx.slots.register(
             {
