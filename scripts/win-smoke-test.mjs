@@ -717,7 +717,8 @@ const OS_SITE_ROWS = [
   ["dsh-graph-host/index.js", "statSync", 1, ["apply"],
    "文件 mtime 探测（REST 载荷）",
    "exempt:只读探测；REST 读路径由 T5 覆盖"],
-// ROWS=66 HITS=257 MISSING=0
+// 台账规模**不写死**：行数与命中数由 buildLedgerRow 汇总后运行时打印（`台账=<rows>项/<hits>处命中`），
+// 未登记即判红。历史教训：此处曾写死 253 / 257，而实际先后是 255 / 258 ⇒ 一律以运行时报数为准。
 ];
 
 /** 展开后的清单（含解析过的映射引用）。 */
