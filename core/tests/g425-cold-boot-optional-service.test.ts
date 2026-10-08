@@ -435,38 +435,98 @@ test("g-425 判据13 负向对照：守卫对裸回退样本必报红，对声�
 });
 
 /**
- * g-453 判据 1/2：「能力判定不得用版本号字符串」的**语义**守卫（Lane B 复核 P2）。
+ * g-453 判据 1/2：「能力判定不得用版本号字符串」的**语义**守卫（Lane B 复核 P2 + 收窄轮）。
  *
  * 为什么名字式断言不够（复核给的最小复现）：`const hostVersion = "0.2.0-rc.2"; if (hostVersion >= "0.2") {}`
  * 是**真实的版本比较**，却不含任何 `compareVersion*` 字样 —— 只按标识符名字（`/\bversion\b/`）判定时它照样全绿。
  * 故按**语义形态**判定（调用方先抹注释、**保留字符串字面量**——版本号本身就是字符串），命中即点名原因：
- *   ① 与**版本样式字面量**比较（`"0.2"` / `"0.2.0-rc.2"` / `"v1.2.3"`），比较符两侧任一侧；
- *   ② semver 命名空间调用（`semver.satisfies(...)` / `semver.coerce(...)` / `semver.gte(...)`）；
- *   ③ 版本比较/解析/范围判定调用（`compareVersions(...)` / `parseVersion(...)` / `satisfiesRange(...)` …）；
- *   ④ **版本样式标识符**参与比较（`hostVersion >= …` / `apiVersion === …` / `pkg.version < …`）。
- * ④ 只在**能力判定路径**（`settings.js` / `helpers.js` / `plugin.js`）上断言：看板里合法的**展示型**比较
- * （如 `batch-accept.js` 的 `versionLabel === …` —— 版本泳道标签，与宿主能力无关）不在本判据范围内。
+ *   ① **强**版本字面量比较：三段式 `"0.2.0"`、`v` 前缀 `"v1.2.3"`、带预发布后缀 `"0.2.0-rc.1"`；
+ *   ② **两段式** `"0.2"` 比较：**必须与版本样式标识符同行同现**才算命中 —— 否则 `ratio > "1.5"` /
+ *      `price >= "2.0"` 这类与宿主能力无关的普通数值比较会被误红（复核实测）；
+ *   ③ semver 命名空间调用（`semver.satisfies/coerce/gte…`）；
+ *   ④ 版本比较/解析/范围判定调用（`compareVersions(...)` / `parseVersion(...)` / `satisfiesRange(...)` …）；
+ *   ⑤ **手写版本解析**：`parseInt(`/`Number(` 作用于版本样式表达式（`pkg.version.split(".")[0]`、
+ *      `Number(hostVersion)`）—— 手写大版本号比较是最常见的替代写法；
+ *   ⑥ `major/minor/patch` 数值比较（`ver.major >= 2`）；
+ *   ⑦ `switch` 按版本号分派 / `case "0.2":` 版本分支；
+ *   ⑧ 版本前缀判定（`hostVersion.startsWith("0.1")`）。
+ *
+ * **扫描面 = 设置/服务能力路径**：`settings.js` / `helpers.js` / `plugin.js` / `i18n.js`
+ * （`i18n.js` 也做 `optionalService(ctx, "locale")` 服务探测，属同一能力判定面）。
+ * 这不是「全客户端」口径 —— 看板里合法的**展示型**比较（`batch-accept.js` 的 `versionLabel === …`：
+ * 版本泳道标签，与宿主能力无关）刻意不在扫描面内，勿把本口径误读成漏洞。
  */
-const VERSION_LITERAL_RE = String.raw`["']v?\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.\-]+)?["']`;
 const COMPARISON_OP_RE = String.raw`(?:===|!==|==|!=|>=|<=|>|<)`;
-const CAPABILITY_PATH_SOURCES = ["settings.js", "helpers.js", "plugin.js"];
-const VERSION_COMPARISON_SIGNS: Array<{ reason: string; re: RegExp }> = [
-  { reason: "版本样式字面量在比较符右侧", re: new RegExp(`${COMPARISON_OP_RE}\\s*${VERSION_LITERAL_RE}`) },
-  { reason: "版本样式字面量在比较符左侧", re: new RegExp(`${VERSION_LITERAL_RE}\\s*${COMPARISON_OP_RE}`) },
+/** 强版本字面量：三段式 / `v` 前缀两段式 / 任何带预发布（`-rc.1`）或构建（`+x`）后缀者。 */
+const STRONG_VERSION_LITERAL_RE = String.raw`["'](?:v\d+\.\d+(?:\.\d+)*|\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?|\d+\.\d+[-+][0-9A-Za-z.\-]+)["']`;
+/** 弱版本字面量：裸两段式 `"0.2"`（单独出现与普通数值无异，须与版本样式标识符同现才算）。 */
+const WEAK_VERSION_LITERAL_RE = String.raw`["']\d+\.\d+["']`;
+/** 任意版本样式字面量（用于 `case "0.2":` / `startsWith("0.1")` 这类**自身就是版本语义**的位置）。 */
+const ANY_VERSION_LITERAL_RE = String.raw`["']v?\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.\-]+)?["']`;
+/**
+ * 版本样式标识符：`hostVersion` / `PLUGIN_VERSION` / `pkg.version` / `ver` / 裸 `VERSION`。
+ * 刻意**不**匹配 `conversion` 之类：版本后缀必须落在驼峰边界（`[A-Z]ersion`）、下划线/全大写
+ * （`_VERSION`）上，或本身就是 `version`/`ver` 一词。
+ */
+const VERSION_TOKEN_RE = /\b[A-Za-z_$][\w$]*?[a-z0-9_](?:[A-Z]ersion|VERSION)\b|\b[Vv]ersion\w*|\bVERSION\b|\bver\b/;
+/** 版本**数据**形态（即使没有 `version` 字样也说明这行在处理版本号）。 */
+const VERSION_DATA_RE = /\.\s*version\b|\.\s*split\s*\(\s*["']\.["']\s*\)|\bmajor\b|\bminor\b|\bpatch\b/;
+const CAPABILITY_PATH_SOURCES = ["settings.js", "helpers.js", "plugin.js", "i18n.js"];
+
+const VERSION_COMPARISON_SIGNS: Array<{ reason: string; re: RegExp; needsVersionContext?: boolean }> = [
+  { reason: "强版本字面量在比较符右侧", re: new RegExp(`${COMPARISON_OP_RE}\\s*${STRONG_VERSION_LITERAL_RE}`) },
+  { reason: "强版本字面量在比较符左侧", re: new RegExp(`${STRONG_VERSION_LITERAL_RE}\\s*${COMPARISON_OP_RE}`) },
+  {
+    reason: "两段式版本字面量比较（同行有版本样式标识符）",
+    re: new RegExp(`${COMPARISON_OP_RE}\\s*${WEAK_VERSION_LITERAL_RE}|${WEAK_VERSION_LITERAL_RE}\\s*${COMPARISON_OP_RE}`),
+    needsVersionContext: true,
+  },
   { reason: "semver 命名空间调用", re: /\bsemver\s*\.\s*[A-Za-z_$][\w$]*\s*\(/ },
   {
     reason: "版本比较/解析/范围判定调用",
     re: /\b(?:compareVersions?|compareSemver|versionCompare|versionSatisfies|satisfiesVersion|satisfiesRange|parseVersion|coerceVersion|isVersion(?:Gte|Lte|AtLeast|AtMost)|checkVersion|assertVersion|minVersion)\s*\(/,
   },
   {
-    reason: "版本样式标识符参与比较",
-    re: new RegExp(String.raw`\b(?:host|plugin|dsh|core|api|schema|engine|client|server)?[Vv]ersion\w*\s*${COMPARISON_OP_RE}`),
+    reason: "手写版本解析（parseInt/Number 作用于版本号）",
+    re: /\b(?:parseInt|parseFloat|Number)\s*\(/,
+    needsVersionContext: true,
   },
+  {
+    reason: "major/minor/patch 数值比较",
+    re: new RegExp(String.raw`\b(?:[A-Za-z_$][\w$]*\s*\.\s*)?(?:major|minor|patch)\b\s*${COMPARISON_OP_RE}`),
+  },
+  { reason: "switch 按版本号分派", re: /\bswitch\s*\(/, needsVersionContext: true },
+  { reason: "switch 的 case 分支按版本字面量分派", re: new RegExp(String.raw`\bcase\s*${ANY_VERSION_LITERAL_RE}\s*:`) },
+  { reason: "版本前缀判定（startsWith 版本字面量）", re: new RegExp(String.raw`\.\s*startsWith\s*\(\s*${ANY_VERSION_LITERAL_RE}`) },
 ];
 
-/** 返回命中原因列表（空 = 未发现任何版本号比较的语义形态）。 */
+/** 版本样式的**局部变量名**（`const v = pkg.version` / `const major = parseInt(…version…)`）。 */
+function versionishNames(code: string): Set<string> {
+  const names = new Set<string>();
+  for (const m of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^\n;]*)/g)) {
+    if (VERSION_TOKEN_RE.test(m[2]) || VERSION_DATA_RE.test(m[2]) || /["']\d+\.\d+/.test(m[2])) names.add(m[1]);
+  }
+  return names;
+}
+
+/**
+ * 返回命中原因列表（空 = 未发现任何版本号比较的语义形态）。按**行**判定：弱形态（两段式字面量 /
+ * `parseInt|Number` / `switch`）要求该行确有版本上下文（版本样式标识符、版本数据形态或版本携带变量），
+ * 强形态（三段式字面量、semver 调用、`major` 比较、`case "0.2":`、`startsWith("0.1")`）自身即版本语义。
+ */
 function versionComparisonFindings(code: string): string[] {
-  return VERSION_COMPARISON_SIGNS.filter(({ re }) => re.test(code)).map(({ reason }) => reason);
+  const names = versionishNames(code);
+  const nameRe = names.size > 0 ? new RegExp(`\\b(?:${[...names].join("|")})\\b`) : null;
+  const findings = new Set<string>();
+  for (const line of code.split("\n")) {
+    const versionContext = VERSION_TOKEN_RE.test(line) || VERSION_DATA_RE.test(line) || nameRe?.test(line) === true;
+    for (const { reason, re, needsVersionContext } of VERSION_COMPARISON_SIGNS) {
+      if (!re.test(line)) continue;
+      if (needsVersionContext === true && !versionContext) continue;
+      findings.add(reason);
+    }
+  }
+  return [...findings];
 }
 
 test("g-453：设置 scope 能力探测只用 inject/ctx.get（点分名零属性回退、零版本号比较），三席位全走 slots.inject", () => {
@@ -494,12 +554,19 @@ test("g-453：设置 scope 能力探测只用 inject/ctx.get（点分名零属�
       `${seat} 必须经 ctx.slots.inject 注册`);
   }
   // ⑤ 能力判定禁止比对宿主版本号（dsh-market 的 `settingsScope`→`settings` 改名即静默失效教训）
-  //    5a. 语义判定（新增，覆盖真实版本比较的各种写法）—— 能力判定路径三个模块逐一扫描
+  //    5a. 语义判定（新增，覆盖真实版本比较的各种写法）—— 能力判定路径（含 i18n.js 的服务探测面）逐一扫描
+  assert.deepEqual(CAPABILITY_PATH_SOURCES, ["settings.js", "helpers.js", "plugin.js", "i18n.js"],
+    "扫描面 = 设置/服务能力路径（i18n.js 也做 optionalService 服务探测）");
   for (const name of CAPABILITY_PATH_SOURCES) {
     const src = readFileSync(join(clientSrcDir, name), "utf8");
-    assert.deepEqual(versionComparisonFindings(stripNonCode(src, true)), [],
-      `${name} 出现版本号比较的语义形态（能力判定只允许「服务能否取到 / 能否 inject」）`);
+    const findings = versionComparisonFindings(stripNonCode(src, true));
+    assert.deepEqual(findings, [],
+      `${name} 出现版本号比较的语义形态（${findings.join("；")}）—— 能力判定只允许「服务能否取到 / 能否 inject」`);
   }
+  // 扩面不得误红：i18n.js 现有实现必须真的零命中（不是靠「文件不存在」空转）
+  const i18nSrc = readFileSync(join(clientSrcDir, "i18n.js"), "utf8");
+  assert.ok(i18nSrc.includes("optionalService(ctx"), "i18n.js 必须仍含服务探测（扫描面语义的锚点）");
+  assert.ok(i18nSrc.length > 10_000, `i18n.js 必须真的被读到（实际 ${i18nSrc.length} 字符）`);
   //    5b. 名字式判定（**原有断言逐字保留，只增不减**）：设置模块连 version 字样都不该有
   assert.doesNotMatch(code, /\bversion\b/i, "设置能力判定不得出现版本号比较（只允许服务/inject 探测）");
 });
@@ -507,25 +574,35 @@ test("g-453：设置 scope 能力探测只用 inject/ctx.get（点分名零属�
 test("g-453 判据1/2 判别力自检：版本比较的语义形态必命中、合法写法不误红（负向对照实测）", () => {
   const hit = (src: string) => versionComparisonFindings(stripNonCode(src, true));
 
-  // 正向：**必须命中** —— 复核给的最小复现 + 各类真实版本比较写法
+  // 正向：**必须命中** —— 复核给的最小复现 + 各类真实版本比较写法（含手写大版本解析 / 数值分支 /
+  // switch 版本分派 / 前缀判定 —— 这些是「用版本号做能力判定」最可能的替代写法，原表曾漏掉）
   const mustHit: Array<[string, string]> = [
-    ["复核最小复现（标识符 + 字面量比较）", `const hostVersion = "0.2.0-rc.2"; if (hostVersion >= "0.2") { }`],
+    ["复核最小复现（标识符 + 两段式字面量比较）", `const hostVersion = "0.2.0-rc.2"; if (hostVersion >= "0.2") { }`],
     ["属性路径版本比较", `if (sctx.settings.version >= "0.1.7") {}`],
     ["字面量在左侧", `if ("0.2" <= hostVersion) {}`],
-    ["三等号比较版本字面量", `if (pkg.version === "0.19.8-alpha") {}`],
-    ["v 前缀版本字面量", `const ok = "v1.2.3" !== apiVersion;`],
+    ["三等号比较带预发布后缀的版本", `if (pkg.version === "0.19.8-alpha") {}`],
+    ["v 前缀版本字面量（独立命中）", `const ok = "v1.2.3" !== apiVersion;`],
+    ["三段式字面量（独立命中）", `if (schemaVersion === "0.2.0") {}`],
     ["semver.satisfies 范围判定", `if (semver.satisfies(hostVersion, ">=0.2")) {}`],
     ["semver.coerce 解析", `if (semver.coerce(v)) {}`],
     ["semver.gte 比较", `if (semver.gte(a, b)) {}`],
     ["compareVersions 调用", `if (compareVersions(a, b) >= 0) {}`],
     ["parseVersion 调用", `const ok = parseVersion(host) >= 0;`],
     ["版本样式标识符参与比较", `if (apiVersion < "0.2") {}`],
+    ["手写大版本解析（parseInt + split + major 比较）", `const major = parseInt(pkg.version.split(".")[0], 10); if (major >= 2) {}`],
+    ["Number(v.split(\".\")[0]) 数值比较", `if (Number(v.split(".")[0]) >= 2) {}`],
+    ["Number(hostVersion) 数值比较", `if (Number(hostVersion) >= 0.2) {}`],
+    ["major/minor/patch 数值比较", `if (ver.major >= 2) {}`],
+    ["switch 按版本号分派", `switch (hostVersion) { default: break; }`],
+    ["switch 的 case 按版本字面量分派", `switch (v) { case "0.2": break; }`],
+    ["版本前缀判定（startsWith）", `if (hostVersion.startsWith("0.1")) {}`],
   ];
   for (const [label, src] of mustHit) {
     assert.ok(hit(src).length > 0, `正向样本必须命中：${label}（实际零命中 = 守卫失效）`);
   }
 
-  // 合法：**必须不命中** —— 注释里的 version 字样、仅用于展示的 pluginVersion、与版本无关的比较
+  // 合法：**必须不命中** —— 注释里的 version 字样、仅用于展示的 pluginVersion、与版本无关的比较，
+  // 以及**两段式收窄**后必须放行的普通数值比较（`ratio > "1.5"` / `price >= "2.0"`，复核实测的误红）
   const mustMiss: Array<[string, string]> = [
     ["注释里的 version 字样", `// host version 0.2.0 不需要比较\nconst a = 1;`],
     ["仅用于展示的 pluginVersion（不参与比较）", `const pluginVersion = PLUGIN_VERSION;\nrenderLabel(pluginVersion);`],
@@ -533,6 +610,10 @@ test("g-453 判据1/2 判别力自检：版本比较的语义形态必命中、�
     ["普通数值比较", `if (revision >= 3) {}`],
     ["字符串包含版本样式片段但不作比较", `if (note.includes("0.2.0")) {}`],
     ["版本号仅出现在文案里", `const hint = "宿主 0.2.0 起设置服务改名";`],
+    ["两段式误红样例（纯比例阈值）", `if (ratio > "1.5") {}`],
+    ["两段式误红样例（纯价格阈值）", `if (price >= "2.0") {}`],
+    ["含 version 词形的无关标识符（conversion）", `const conversionRate = 0.1; if (conversionRate > "1.5") {}`],
+    ["非版本 switch 分支", `switch (kind) { case "summary": break; }`],
   ];
   for (const [label, src] of mustMiss) {
     assert.deepEqual(hit(src), [], `合法样本不得误红：${label}`);
