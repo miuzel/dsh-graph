@@ -456,11 +456,37 @@ const ALICE = "agent:alice";
 const BOB = "agent:bob";
 const SHARED_REF = "memory/long-term/private.md#unit";
 
-/** 负向断言：结果里不得出现他人条目 ID / 正文（含错误信息）。 */
+/**
+ * 负向断言：结果里不得出现他人条目 ID / 正文（含错误信息）。
+ *
+ * review r2 的 F2：旧调用点误传了**不含 `text` 字段**的结果对象（`AddMemoryResult`），
+ * `other.text === undefined` ⇒ `dump.includes(undefined)` 退化为查找字面量 "undefined"，
+ * 「不泄露他人私有正文」这条腿**静默空洞**（同时是 TS2345，但 `tsconfig` 排除 `core/tests`、
+ * 闸门只 `node --test` 剥类型 ⇒ 两道门禁都看不见）。故这里先 **fail-closed 校验实参**，
+ * 令任何「传错对象」的复用立刻显性判红，而不是悄悄退化成恒真断言。
+ */
 function assertNoLeak(result: unknown, other: { id: string; text: string }, label: string) {
+  assert.equal(typeof other.id, "string", `${label}：assertNoLeak 的 other.id 必须是字符串`);
+  assert.equal(typeof other.text, "string", `${label}：assertNoLeak 的 other.text 必须是字符串`);
+  assert.ok(other.id.length > 0, `${label}：assertNoLeak 的 other.id 不得为空`);
+  assert.ok(other.text.length > 0, `${label}：assertNoLeak 的 other.text 不得为空`);
   const dump = JSON.stringify(result);
+  assert.equal(typeof dump, "string", `${label}：待检结果必须可序列化，否则断言不可信`);
   assert.equal(dump.includes(other.id), false, `${label}：不得泄露他人条目 ID`);
   assert.equal(dump.includes(other.text), false, `${label}：不得泄露他人私有正文`);
+}
+
+/**
+ * 只查「他人条目 ID」泄漏面，用于 F1② 这类**双方正文逐字相同**的形态：
+ * 彼处 bob 自己的正文就是同一字面量，若照样断言「结果不含该文本」，对**正确实现也必然失败**
+ * （属错误断言而非加强），故文本面由正文不同的 F1①/F1③ 覆盖，此处改用 owner 归属硬判。
+ */
+function assertNoIdLeak(result: unknown, otherId: string, label: string) {
+  assert.equal(typeof otherId, "string", `${label}：assertNoIdLeak 的 otherId 必须是字符串`);
+  assert.ok(otherId.length > 0, `${label}：assertNoIdLeak 的 otherId 不得为空`);
+  const dump = JSON.stringify(result);
+  assert.equal(typeof dump, "string", `${label}：待检结果必须可序列化，否则断言不可信`);
+  assert.equal(dump.includes(otherId), false, `${label}：不得泄露他人条目 ID`);
 }
 
 test("review F1①：他人 source_ref + 不同 text ⇒ 无命中（不抛冲突、不回显他人 ID），bob 写入自己的条目", () => {
@@ -477,7 +503,7 @@ test("review F1①：他人 source_ref + 不同 text ⇒ 无命中（不抛冲�
   assert.equal(bob.entry.text, bobText);
   assert.equal(bob.deduped, undefined, "不是幂等命中");
   assert.equal(bob.skipped, undefined);
-  assertNoLeak(bob, alice, "F1①");
+  assertNoLeak(bob, { id: alice.id, text: aliceText }, "F1①");
 
   // 两条各自独立存在，各自 recall 只见自己
   assert.equal(readMemory(root).length, 2, "alice/bob 各有一条");
@@ -496,8 +522,11 @@ test("review F1②：他人 source_ref + 相同 text ⇒ 不静默并入，bob �
 
   assert.notEqual(bob.id, alice.id, "bob 不得被并入 alice 的私有条目（否则 bob 拿不到自己的条目）");
   assert.equal(bob.entry.text, sameText);
+  // 本形态双方正文逐字相同 ⇒ 只能查 ID 泄漏面 + 归属（旧实现会把 bob 的调用并进 alice 的条目：
+  // `bob.id === alice.id`、且返回的 created_by 是 ALICE），文本面见 F1①/F1③。
+  assertNoIdLeak(bob, alice.id, "F1②");
+  assert.equal(bob.entry.created_by, BOB, "bob 拿到的条目必须记在 bob 名下，而不是 alice");
   assert.equal(bob.deduped, undefined);
-  assertNoLeak(bob, alice, "F1②");
   assert.equal(readMemory(root).length, 2, "两人各一条，互不覆盖");
   assert.equal(recallMemory(root, { actor: BOB }).total, 1);
   assert.equal(recallMemory(root, { actor: ALICE }).total, 1);
@@ -550,4 +579,21 @@ test("review F1 回归：同 owner 幂等不回归；project 类全局幂等语�
   // project 冲突语义不变（任何人同来源不同输入 ⇒ 冲突，不回显他人私有 ID）
   assert.throws(() => addMemory(root, { kind: "project", text: "project 另写", source_ref: pRef, actor: BOB }), /冲突/);
   assert.equal(addedEvents(root).length, 2, "冲突零副作用");
+});
+
+test("review F2：负向断言自身有效 —— 文本腿非空洞、实参误用 fail-closed", () => {
+  const alice = { id: "mem-alice01", text: "ALICE-私有：仅 alice 可见" };
+  // 干净载荷（只含自己的信息）必须通过
+  assertNoLeak({ id: "mem-bob01", entry: { text: "BOB-私有" } }, alice, "F2-clean");
+  assertNoIdLeak({ id: "mem-bob01" }, alice.id, "F2-clean-id");
+  // 文本腿/ID 腿确实会判红（旧写法 `dump.includes(undefined)` 在此恒过 ⇒ 空洞断言）
+  assert.throws(() => assertNoLeak({ entry: { text: alice.text } }, alice, "F2-leak"), /不得泄露他人私有正文/);
+  assert.throws(() => assertNoLeak({ id: alice.id }, alice, "F2-leak-id"), /不得泄露他人条目 ID/);
+  assert.throws(() => assertNoIdLeak({ id: alice.id }, alice.id, "F2-leak-id2"), /不得泄露他人条目 ID/);
+  // 旧调用点的真实误用形态（传 AddMemoryResult ⇒ 无 text 字段）必须**显性判红**，不得退化成恒真
+  const misuse = { id: alice.id, entry: { text: alice.text } } as unknown as { id: string; text: string };
+  assert.throws(() => assertNoLeak(misuse, misuse, "F2-misuse"), /other\.text 必须是字符串/);
+  assert.throws(() => assertNoIdLeak({}, "", "F2-misuse-id"), /otherId 不得为空/);
+  // 不可序列化结果不得被当作「无泄露」
+  assert.throws(() => assertNoLeak(undefined, alice, "F2-unserializable"), /必须可序列化/);
 });
