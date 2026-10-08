@@ -294,7 +294,9 @@ test("g-231 默认 reasoning effort 控件随精确模型能力目录变化且�
     assert.doesNotMatch(source, /\["low", "medium", "high"\]/);
   }
   assert.match(settings, /subagentReasoningEffort/);
-  assert.match(settings, /gSettingsScope\.set\("subagentReasoningEffort"/);
+  // g-453：写入对象从模块级变量改为**订阅得到的当次 scope**（迟到绑定后重渲染，见 subscribeGraphSettingsScope）
+  assert.match(settings, /scope\.set\("subagentReasoningEffort"/);
+  assert.match(settings, /subscribeGraphSettingsScope/);
   assert.match(modal, /set\(\["executor", "reasoning_effort"\]/);
   // g-442：稀疏 patch ⇒ 「reasoning_effort 会随保存写入」改为行为断言
   const payload = loadSettingsModalPayload(modal);

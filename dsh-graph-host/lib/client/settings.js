@@ -7,20 +7,66 @@
     // 的 llm.providers/llm.models（仅 advisory 可选列表，不拦截保存）；settings.yaml 已存但目录
     // 未列出的旧值保留为「已存值（当前目录未列出）」固定 option（不可自由编辑、可继续保存）。
     const GRAPH_SETTINGS_NS = "dsh-graph";
-    // plugin.js apply 里绑定后的 settings scope（从 ctx.settingsScope.bind 得到），组件经它读写。
+    // g-453：新线（宿主设置表单投影）的命名空间 = profile 条目 id（cordis.patch.yml 的 insert id）
+    // —— 与历史 namespace 名不同，两者都作候选按 describe 的实际 ns 集合发现（见 createGraphSettingsApiScope）。
+    const GRAPH_SETTINGS_ENTRY_ID = "dsh-graph-host";
+    const GRAPH_SETTINGS_NS_CANDIDATES = [GRAPH_SETTINGS_ENTRY_ID, GRAPH_SETTINGS_NS];
+    // g-453：profile 全局设置 scope。绑定**迟到且可订阅**：
+    //  - 宿主 0.2.0-rc.2 起客户端设置服务不再叫 `settingsScope`，改为点分服务名 `remote.settings`
+    //    （`ctx.get("remote.settings")` 可取；属性访问 `ctx.remote.settings` 会撞 cordis 注入门禁
+    //    `cannot get property "remote.settings" without inject` —— 0.2.0-rc.2 隔离实例实测）。
+    //    但该腿**可被补偿**（下方 `ctx.inject(["remote.settings"], …)` 的声明即补偿），故不是承重腿：
+    //    真正的承重腿是**命名空间发现**（=`profile 条目 id`，见 createGraphSettingsApiScope 处注释）。
+    //  - 服务可能在 apply 之后才 provide（api-gateway 的 `$mount` 是异步的）⇒ 不能只绑一次。
+    //  - 能力判定 = 「服务自身能否取到 / 能否 inject」，任何地方都不比对宿主版本号。
+    //  - **迟到订阅路径的可达性（如实标注）**：本宿主上 `apply` 的绑定**先于**组件挂载（立即绑定已完成、
+    //    `remote.settings` 在设置页打开前已可读）⇒ 「先渲染降级态、再 publish 重渲染」这段端到端序列在
+    //    **真机上不可达**，属**防御路径**（宿主将来把服务 provide 推迟到挂载之后才会走到）。
+    //    该路径的语义由 `core/tests/config-global.test.ts` 的 vm 行为夹具**直接驱动真实源码**覆盖
+    //    （服务缺席 → inject 迟到触发 → 订阅者被唤醒 → 读到可用绑定；退订后不再唤醒），
+    //    组件侧接线（effect 订阅 + `[scope]` 重渲染依赖）另有结构断言 —— 不再声称「真机已覆盖」。
     let gSettingsScope = null;
+    // 绑定来源与优先级：同源幂等、高优先级（旧线 `settingsScope`）不被低优先级替换、服务实例更换即重绑。
+    let gSettingsScopeSource = null;
+    let gSettingsScopeRank = -1;
+    const gSettingsScopeListeners = new Set();
+    function subscribeGraphSettingsScope(listener) {
+      gSettingsScopeListeners.add(listener);
+      return () => { gSettingsScopeListeners.delete(listener); };
+    }
+    function publishGraphSettingsScope(scope, source, rank) {
+      if (!scope) return gSettingsScope; // 解析失败不覆盖既有可用绑定（降级态保持原样）
+      if (gSettingsScope && rank < gSettingsScopeRank) return gSettingsScope;
+      if (gSettingsScope && rank === gSettingsScopeRank && source === gSettingsScopeSource) return gSettingsScope;
+      gSettingsScope = scope;
+      gSettingsScopeSource = source ?? null;
+      gSettingsScopeRank = rank;
+      for (const listener of [...gSettingsScopeListeners]) { try { listener(); } catch { /* 静默 */ } }
+      return gSettingsScope;
+    }
     // g-133：数据源 = ctx.get('connection').api（registerGraphSettingsSection 捕获），挂载时读 llm 目录。
     let gConnectionApi = null;
     let settingsModeInstanceSeq = 0;
 
     // 3082 的 settingsScope 在非 loopback 浏览器上下文会是 memory；此时仍可
     // 通过已存在的 profile settings RPC 读写 Host，而不是把配置伪装成 workspace 数据。
-    function createGraphSettingsApiScope(api, ctx = (typeof appCtx !== "undefined" ? appCtx : null)) {
+    function createGraphSettingsApiScope(api, ctx = (typeof appCtx !== "undefined" ? appCtx : null), remoteSettingsIn = null) {
       // g-425：受保护读取——`ctx?.remote` 裸回退在 remote 服务缺席时会撞 cordis 注入门禁抛错
-      // （被调用方 bindGraphSettingsScope 的 try/catch 吞成「设置页整页降级」）；改为
-      // optionalService 后语义不变（remote 在时取同一实例），缺失即 null、继续走 REST 降级。
-      const remoteSettingsOf = (c) => (c ? optionalService(c, "remote")?.settings ?? null : null);
-      const remoteSettings = remoteSettingsOf(ctx) ?? remoteSettingsOf(typeof appCtx !== "undefined" ? appCtx : null);
+      // （被调用方 bindGraphSettingsScope 的 try/catch 吞成「设置页整页降级」）。
+      // g-453 根因是**两条腿**（Lane A 真机变异核验后的如实表述）：
+      //   腿① 读取口径：`remote.settings` 是**点分服务名**，属性访问撞注入门禁
+      //   `cannot get property "remote.settings" without inject`（0.2.0-rc.2 隔离实例实测：**基线产物**
+      //   apply 后 ≈353ms 即抛、被 catch 吞成 `gSettingsScope = null` ⇒ 整页降级）。**但这条腿可被补偿**：
+      //   本版新增的 `ctx.inject(["remote.settings"], …)` 声明使属性访问在同一注入域内合法 ⇒ Lane A 变异
+      //   n1（把读取改回属性回退）真机**仍可用** ⇒ 腿①**不足单独解释**用户可见缺陷。静态守卫仍钉住它
+      //   （`optionalServicePath` 语义 + 点分名不得走 optionalService），但不声称它单独致命。
+      //   腿② 命名空间发现（**承重腿，无任何补偿**）：新线设置命名空间 = **profile 条目 id**
+      //   `dsh-graph-host`，不是历史 namespace 名 `dsh-graph` —— 写死历史名 ⇒ 0 控件 + 「未暴露命名空间」，
+      //   且当时整套门禁全绿（与 dsh-market 的 `settingsScope`→`settings` 静默失效同型）。
+      //   ⇒ 腿② 必须按 `describe()` 返回的**实际 ns 集合**发现（见下方 GRAPH_SETTINGS_NS_CANDIDATES）。
+      const remoteSettings = remoteSettingsIn
+        ?? optionalServicePath(ctx, "remote.settings")
+        ?? (typeof appCtx !== "undefined" ? optionalServicePath(appCtx, "remote.settings") : null);
       const describeFn = typeof remoteSettings?.describe === "function"
         ? () => remoteSettings.describe()
         : (typeof api?.settings?.describe === "function" ? () => api.settings.describe({}) : null);
@@ -30,6 +76,18 @@
 
       if (!describeFn || !mutateFn) return null;
       let snapshot = { status: "loading", value: null, writable: false, revision: undefined };
+      // g-453：新线（设置表单投影）里 `SettingsDescriptor.ns` 是 **profile 条目 id**
+      // （cordis.patch.yml 的 insert id = `dsh-graph-host`），不是历史 namespace 名 `dsh-graph`
+      // ——0.2.0-rc.2 隔离实例实测 describe() 服务的是 `dsh-graph-host`。宿主侧
+      // `readGraphSettingsFromForms` 同样容忍「条目 id 或包名」，故这里按 describe 的**实际 ns 集合**
+      // 发现绑定（能力探测，不比对任何版本号），历史 namespace 名保留为候选。
+      let resolvedNs = null;
+      const pickRow = (view) => {
+        const rows = Array.isArray(view?.namespaces) ? view.namespaces : [];
+        return rows.find((candidate) => candidate?.ns === resolvedNs)
+          ?? rows.find((candidate) => GRAPH_SETTINGS_NS_CANDIDATES.includes(candidate?.ns))
+          ?? null;
+      };
       const listeners = new Set();
       const notify = () => listeners.forEach((listener) => listener());
       const scope = {
@@ -39,18 +97,22 @@
           const res = await describeFn();
           const view = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
           if (!view) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? dgT("settings.readProfileFail"));
-          const row = view.namespaces?.find((candidate) => candidate.ns === GRAPH_SETTINGS_NS);
+          const row = pickRow(view);
           if (!row) {
+            resolvedNs = null;
             snapshot = { ...snapshot, status: "unavailable", writable: view.writable !== false };
           } else {
+            resolvedNs = row.ns;
             snapshot = { status: "ready", value: row.value ?? {}, writable: view.writable !== false, revision: row.revision };
           }
           notify();
         },
         async set(field, value) {
-          const res = await mutateFn(GRAPH_SETTINGS_NS, [{ op: "set", path: [field], value }], snapshot.revision);
+          const ns = resolvedNs ?? GRAPH_SETTINGS_NS;
+          const res = await mutateFn(ns, [{ op: "set", path: [field], value }], snapshot.revision);
           const row = res && typeof res === "object" && "ok" in res ? (res.ok ? res.value : null) : (res?.result?.ok ? res.result.value : null);
           if (!row) throw new Error(res?.error?.message ?? res?.result?.error?.message ?? dgT("settings.saveProfileFail"));
+          resolvedNs = row.ns ?? ns;
           snapshot = { ...snapshot, status: "ready", value: row.value ?? snapshot.value, revision: row.revision };
           notify();
         },
@@ -62,17 +124,36 @@
       return scope;
     }
 
-    // 优先使用官方 settingsScope；memory scope 只提供本地空壳，必须改用 Host API。
+    // g-133/g-453：解析并绑定 profile 设置 scope。
+    // 优先级：① 旧线注入键 `settingsScope`（memory 空壳不算，改用 Host API）→ ② `remote.settings`
+    // 点分服务 / `connection.api` REST 降级。**能力判定只看服务能否取到**，不看宿主版本号。
     function bindGraphSettingsScope(ctx) {
+      if (!ctx) return gSettingsScope;
       try {
-        const bound = ctx?.get?.("settingsScope")?.bind({ namespace: GRAPH_SETTINGS_NS });
-        if (bound && bound.getSnapshot?.().mode !== "memory") return (gSettingsScope = bound);
+        const legacy = optionalServicePath(ctx, "settingsScope");
+        const bound = typeof legacy?.bind === "function" ? legacy.bind({ namespace: GRAPH_SETTINGS_NS }) : null;
+        if (bound && bound.getSnapshot?.().mode !== "memory") return publishGraphSettingsScope(bound, legacy, 1);
         // g-425：`ctx?.connection` 同口径改受保护读取（connection 未注册时不再抛错中断降级链）。
+        const remoteSettings = optionalServicePath(ctx, "remote.settings");
         const connection = optionalService(ctx, "connection");
-        return (gSettingsScope = createGraphSettingsApiScope(connection?.api, ctx));
+        const apiScope = createGraphSettingsApiScope(connection?.api, ctx, remoteSettings);
+        return publishGraphSettingsScope(apiScope, remoteSettings ?? connection?.api ?? null, 0);
       } catch {
-        gSettingsScope = null;
-        return null;
+        // 解析失败：不覆盖既有可用绑定（页面仍显示既有降级提示，语义与 g-425 一致）
+        return gSettingsScope;
+      }
+    }
+
+    // g-453：席位服务可能在 apply 之后才 provide ⇒ 除立即尝试外，按**服务自身**再等一次。
+    // `settingsScope`（旧线注入键）与 `remote.settings`（0.2.0-rc.2 点分名）各自独立探测、互不阻塞；
+    // 宿主没有该服务时 inject 回调永不触发且零报错（dsh-market 同款纪律，检测手段只有 inject 探测）。
+    const GRAPH_SETTINGS_SERVICE_KEYS = ["settingsScope", "remote.settings"];
+    function armGraphSettingsScope(ctx) {
+      bindGraphSettingsScope(ctx);
+      for (const key of GRAPH_SETTINGS_SERVICE_KEYS) {
+        try {
+          ctx?.inject?.([key], (scope) => { bindGraphSettingsScope(scope ?? ctx); });
+        } catch { /* inject 不可用：静默（立即绑定的结果照旧生效） */ }
       }
     }
 
@@ -220,12 +301,23 @@
     };
 
     // 看板设置页组件：读/写 dsh-graph profile 全局默认。
-    function GraphSettingsSection(_props) {
+    // g-453：同一组件占三个席位（settings.section / settings.plugins.tab / plugins.bundle.config）；
+    // `hideTitle` 由注册方给出——标签页席位紧邻同名 tab 标签，组件不再重复同名标题
+    // （宿主内置「插件列表」tab 同样不自带页内标题）；section 与组合包页保留标题。
+    function GraphSettingsSection(props) {
       useLocaleRevision();
       useLocaleRevision();
+      const hideTitle = props?.hideTitle === true;
       const modeIdRef = React.useRef(null);
       if (modeIdRef.current == null) modeIdRef.current = `dg-global-subagent-mode-${++settingsModeInstanceSeq}`;
       const modeId = modeIdRef.current;
+      // g-453：scope 可能**迟到绑定**（服务 apply 之后才 provide）⇒ 组件必须订阅绑定事件重渲染，
+      // 否则早已按降级提示挂载的页面会永远停在旧态（与 g-431 locale 迟到绑定同型教训）。
+      const [scope, setScope] = React.useState(gSettingsScope);
+      React.useEffect(() => {
+        setScope(gSettingsScope);
+        return subscribeGraphSettingsScope(() => setScope(gSettingsScope));
+      }, []);
       const [snap, setSnap] = React.useState(gSettingsScope ? gSettingsScope.getSnapshot() : null);
       const [draft, setDraft] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
@@ -233,12 +325,11 @@
       const [error, setError] = React.useState("");
       const [catalog, setCatalog] = React.useState({ status: "loading" });
       React.useEffect(() => {
-        if (!gSettingsScope) return;
-        const upd = () => { const s = gSettingsScope.getSnapshot(); setSnap(s); };
+        if (!scope) return undefined;
+        const upd = () => { setSnap(scope.getSnapshot()); };
         upd();
-        const un = gSettingsScope.subscribe(upd);
-        return un;
-      }, []);
+        return scope.subscribe(upd);
+      }, [scope]);
       // g-133 / g-215：挂载时读取 llm.providers/llm.models（当前 Host 合法目录）。
       // RPC 缺失/失败时目录状态置 unavailable，页面降级为「提示 + 保留已存值」，不崩溃。
       React.useEffect(() => {
@@ -249,10 +340,12 @@
         return () => { alive = false; };
       }, []);
 
+      const titleNode = hideTitle ? null : h("h3", { style: GSS.title }, dgT("settings.title"));
+
       // 没有 settings scope 且没有 Host API：整页降级（确实无持久化能力）
-      if (!gSettingsScope) {
+      if (!scope) {
         return h("div", { style: GSS.panel },
-          h("h3", { style: GSS.title }, dgT("settings.title")),
+          titleNode,
           h("p", { style: GSS.desc }, dgT("profileSettings.unavailableDesc")),
         );
       }
@@ -262,13 +355,13 @@
 
       if (status === "loading") {
         return h("div", { style: GSS.panel },
-          h("h3", { style: GSS.title }, dgT("settings.title")),
+          titleNode,
           h("p", { style: GSS.note }, dgT("profileSettings.reading")),
         );
       }
       if (status === "unavailable") {
         return h("div", { style: GSS.panel },
-          h("h3", { style: GSS.title }, dgT("settings.title")),
+          titleNode,
           h("p", { style: GSS.desc }, dgT("profileSettings.noNamespace")),
         );
       }
@@ -386,17 +479,17 @@
       }
 
       const save = async () => {
-        if (!gSettingsScope || !writable) return;
+        if (!scope || !writable) return;
         // g-133：目录仅作 advisory 可选列表，不拦截保存——留空继承、已存旧值、目录合法项均可保存。
         setSaving(true); setError(""); setSaved("");
         try {
           // 一次提交，按字段逐个 set（settings scope 每字段 revision-fenced 写入）。
-          await gSettingsScope.set("subagentProvider", draftValue.subagentProvider ?? "");
-          await gSettingsScope.set("subagentModel", draftValue.subagentModel ?? "");
-          await gSettingsScope.set("subagentReasoningEffort", draftValue.subagentReasoningEffort ?? "");
-          await gSettingsScope.set("subagentMode", draftValue.subagentMode ?? "");
-          await gSettingsScope.set("subagentPrompt", draftValue.subagentPrompt ?? "");
-           await gSettingsScope.set("promptLanguage", draftValue.promptLanguage ?? "follow");
+          await scope.set("subagentProvider", draftValue.subagentProvider ?? "");
+          await scope.set("subagentModel", draftValue.subagentModel ?? "");
+          await scope.set("subagentReasoningEffort", draftValue.subagentReasoningEffort ?? "");
+          await scope.set("subagentMode", draftValue.subagentMode ?? "");
+          await scope.set("subagentPrompt", draftValue.subagentPrompt ?? "");
+           await scope.set("promptLanguage", draftValue.promptLanguage ?? "follow");
           setSaved(dgT("profileSettings.saved"));
           setDraft(null); // 成功后才归位草稿（快照已更新）
         } catch (e) {
@@ -408,7 +501,7 @@
       };
 
       return h("div", { style: GSS.panel },
-        h("h3", { style: GSS.title }, dgT("settings.title")),
+        titleNode,
         h("p", { style: GSS.desc }, dgT("profileSettings.desc")),
         h("p", { style: GSS.badge }, status === "ready" && !writable ? dgT("profileSettings.readOnly") : ""),
         h("div", { style: GSS.field },
@@ -468,7 +561,14 @@
       );
     }
 
-    // 注册「看板设置」settings.section 页（plugin.js apply 调用）。settingsScope 缺失时整页降级。
+    // 注册 profile 全局设置页的三个席位（plugin.js apply 调用）：
+    //   ① `settings.section`「看板设置」——g-133 旧线席位，**保留**（读写成活后不再降级）；
+    //   ② `settings.plugins.tab`——g-453：设置 → 内置插件 里的 dsh-graph 标签页；
+    //   ③ `plugins.bundle.config`——g-453：侧边栏插件面板 → dsh-graph 组合包页的配置表单（keyed by 包名）。
+    // 三个席位**一律经 ctx.slots.inject 注册**：宿主只在对应页面挂载时才声明该 slot，apply 里直接
+    // register 会静默 no-op 或报错；宿主没有该 slot 时 inject 回调永不触发且零报错（不影响看板与工具）。
+    // settingsScope / remote.settings 缺失时页面按既有语义给提示，绝不抛错。
+    const GRAPH_PACKAGE_NAME = "dsh-graph";
     function registerGraphSettingsSection(ctx) {
       try {
         // g-133：数据源捕获 —— ctx.get('connection').api（组件挂载时读 llm.providers/models 目录）。
@@ -477,7 +577,8 @@
           // 结果等价，改为唯一读取口径后静态守卫可 fail-closed 禁止裸回退复发）。
           try { return optionalService(ctx, "connection")?.api ?? null; } catch { return null; }
         })();
-        bindGraphSettingsScope(ctx);
+        // g-453：绑定 + 迟到等待（宿主服务改名/晚 provide 都不再永久降级）。
+        armGraphSettingsScope(ctx);
         ctx.slots.inject("settings.section", () =>
           ctx.slots.register(
             {
@@ -488,6 +589,29 @@
               label: () => dgT("settings.title"),
             },
             (props) => h(GraphSettingsSection, props),
+          ),
+        );
+        // 席位②：标签页紧邻同名 tab 标签 ⇒ 传 hideTitle，不重复渲染同名页内标题。
+        ctx.slots.inject("settings.plugins.tab", () =>
+          ctx.slots.register(
+            {
+              name: "settings.plugins.tab",
+              id: GRAPH_PACKAGE_NAME,
+              order: 60,
+              // 同 g-230：locale-following thunk，切语言时宿主重算标签文案
+              label: () => dgT("settings.title"),
+            },
+            () => h(GraphSettingsSection, { hideTitle: true }),
+          ),
+        );
+        // 席位③：`summary` 是列表里的一行摘要（组合包自身描述已承担），按 slot 契约返回 null；只渲染 page。
+        ctx.slots.inject("plugins.bundle.config", () =>
+          ctx.slots.register(
+            {
+              name: "plugins.bundle.config",
+              key: GRAPH_PACKAGE_NAME,
+            },
+            (ownerProps) => (ownerProps?.view === "summary" ? null : h(GraphSettingsSection, {})),
           ),
         );
       } catch { /* slots 缺失或重复注册：静默（不影响看板/工具） */ }

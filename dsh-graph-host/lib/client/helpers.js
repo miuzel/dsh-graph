@@ -168,6 +168,18 @@
       try { return ctx?.[name] ?? null; } catch { return null; }
     }
 
+    // g-453：**点分/组合服务名**（如 `remote.settings`）只能经 `ctx.get` 读取，绝不做属性访问回退。
+    // 为什么：cordis 的可追踪服务代理对 `remote.settings` 会落回 `Reflect.get(ctx, "remote.settings")`，
+    // 而该属性名不在消费方声明的注入面里 ⇒ 抛 `cannot get property "remote.settings" without inject`
+    // （0.2.0-rc.2 隔离实例实测：`ctx.get("remote.settings")` 取得到、`ctx.remote.settings` 必抛）。
+    // 该抛错会被调用方的降级 try/catch 吞成「设置页整页降级」，故点分名一律只走永不抛错的 `ctx.get`。
+    function optionalServicePath(ctx, name) {
+      try {
+        const value = ctx?.get?.(name);
+        return value == null ? null : value;
+      } catch { return null; }
+    }
+
     // g-343：浮层统一 portal 到 document.body。
     // 看板根节点用共享样式 S.wrap（position: relative + z-index: 1）⇒ 它自成层叠上下文：
     // 遮罩(99998)/弹窗(100000)/抽屉(99999) 若渲染在子树内，就被囚禁在 z-index:1 的上下文里，
