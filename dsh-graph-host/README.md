@@ -40,27 +40,27 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**当前版本**：v0.19.7。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+**当前版本**：v0.19.8（本次发布准备产物；`0.19.8-alpha` 为开发线版本串）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
 **宿主兼容范围**：`engines.dsh` 声明 `>=0.1.5-rc.2 <0.2.1-0`（上界 `-0` 排除 `0.2.1` 的一切预发布与正式版），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
 **平台状态**：
 
-| 平台 | 支持情况 |
+| 平台 | 本版状态 |
 |------|----------|
-| Linux / WSL2 | ✅ 支持 |
-| 原生 Windows | ✅ 支持（已在原生 Windows 上实测） |
-| macOS | ✅ 支持（已在 macOS 上实测） |
+| Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0） |
+| 原生 Windows | ⚠️ **v0.19.8 发布候选包尚未在原生 Windows 上执行门禁**（不得读出「已通过」）；结论待回填至[发布核对表](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.19.8.md)（发布准备中，Windows 待回填）。**已实测的真实记录不能替代本次 RC**：最近一次 Windows 真机门禁针对 **v0.19.7 发布产物**（`win-smoke` 通过 15 / 失败 0 / 告警 1，T3 看板文件系统生命周期 32/32 步），而 v0.19.8 含 16 项目标的产品改动、**未在原生 Windows 上验过**，逐字报告见 [platform-gate §7.3](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) |
+| macOS | ⚠️ **本次未执行真机门禁**（不得读出「已通过」）；本版验证结果见[发布核对表](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.19.8.md)（发布准备中，待回填）。最近一次真机结论见 [v0.19.7 清单](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.19.7.md) 与 [platform-gate §7.4](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) |
 
 三平台使用同一安装包。**已知限制**：① macOS 默认文件系统 APFS 大小写不敏感 —— 仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
-**最新亮点（v0.19.7）**
+**最新亮点（v0.19.8）**
 
-- **界面文案跟随宿主语言**：宿主切换语言时插件文案当场跟着变，不再需要重载；重启后也以宿主当前语言初始渲染。同时修掉「升级宿主后插件浏览器半边不激活」的冷启动问题。
-- **Windows 上的文件系统操作不再踩坑**：目录形态的目标搬迁不再因为提前建了同名目录而被系统拒绝；看板内的相对路径按平台统一分隔符，归档 / 取消归档与路径校验不再报错或静默失效。
-- **状态与记录不再可能对不上**：状态变更先记事件再落盘，中途失败不会留下「状态已改、记录没写」的中间态；取锁失败不再释放别人的锁，坏掉的锁能自行收敛而不是永久卡住；目标编号不会被删除后重新发出去；解绑只作用于被指定的那一次执行。
-- **英文模式下不再夹带中文**：英文派发时，内置的模式片段、小节标题、空描述兜底材料都按语言渲染，界面与提示词里不再冒出中文。
-- **「成功」不再可能是假的**：向会话投递内容、重新派发子代理等操作改为等待回执，没拿到回执就如实提示并给出复制兜底；仓库自带的整套测试也不再可能「看起来全绿」而实际漏跑文件、跳过用例或提前退出。
+- **设置页修好、也补齐了**：升级宿主后设置页不再变空；全局设置在两处入口（「设置」里的插件页与右侧栏插件入口）都能打开，读写的是同一份配置；评审条件（按项目目录结构登记的区域、冻结契约、哪些算产品改动）可直接查看与编辑，尚未按本项目校准时明确标注为「缺省（普适）」；主管自动化开关也不再只是存着。
+- **「机器快速放行」的证据不再只靠自报**：改动了多少行、还有没有未跟踪文件，改由引擎自己从版本库取，采集不到就不放行；没有登记过的区域自动升级为严格评审；评审子代理可以从正式入口独立派发，缺独立评审的交付会在看板上如实标注（不阻断放行）。
+- **长期记忆只有一个真源**：记忆统一由结构化条目管理（常驻 / 按需两档的语义与权限不变），不再要求手工维护长期记忆索引文件；历史文档保留为可选说明，可一次性、可追溯地迁入，重复执行不会重复导入。
+- **插件不再污染用户项目、也不再假设本仓库的结构**：插件自有的目录与工作树不会再把用户仓库判成「有未提交改动」，也不会再挡住机器快速放行；面向模型与用户的提示词、工具描述去掉了只适用于本仓库的路径、分支与脚本假设。
+- **跨看板更安全、测试结论更可信**：同一仓库存在多块看板时，同号的目标不会互相误复用、也不会误删对方的工作树；自定义图根下的卡片路径指向真正的那张卡片；整套测试不再有间歇性假红，「全绿」不再受概率影响。
 
 完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -273,27 +273,27 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**Current version**: v0.19.7. **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+**Current version**: v0.19.8 (this release-preparation artifact; `0.19.8-alpha` was the development version string — not yet published to npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
 **Host compatibility range**: `engines.dsh` declares `>=0.1.5-rc.2 <0.2.1-0` (the `-0` upper bound excludes every `0.2.1` prerelease and final release); host-aware markets such as dsh-market read it for card display and install/update pre-flight. **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, and `0.2.0-rc.1`; `0.2.0-rc.2` (verified by the maintainer on 2026-09-30). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
 **Platform status**:
 
-| Platform | Support |
-|----------|---------|
-| Linux / WSL2 | ✅ Supported |
-| Native Windows | ✅ Supported (verified on native Windows) |
-| macOS | ✅ Supported (verified on macOS) |
+| Platform | Status for this release |
+|----------|-------------------------|
+| Linux / WSL2 | ✅ Verified on-device (this release's full test suite: 0 failures) |
+| Native Windows | ⚠️ **The v0.19.8 release candidate has not yet run the on-device gate** (must not be read as "verified"); results are to be back-filled into the [release checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.19.8.md) (release preparation, Windows pending). **Actual on-device records do not substitute for this RC**: the most recent Windows gate ran against the **v0.19.7 release artifact** (`win-smoke` 15 passed / 0 failed / 1 warning, T3 board file-system lifecycle 32/32 steps), whereas v0.19.8 carries product changes from 16 goals that **have not been verified on native Windows**; verbatim report in [platform-gate §7.3](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) |
+| macOS | ⚠️ **No on-device gate was run for this release** (must not be read as "verified"); results are to be back-filled into the [release checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.19.8.md) (release preparation, pending). Most recent on-device verdict: [v0.19.7 checklist](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.19.7.md) and [platform-gate §7.4](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) |
 
 All three platforms share the same package. **Known limitations**: (1) APFS, the macOS default, is case-insensitive — entries that differ only by case resolve to the **same entity**, so do not rely on case alone to distinguish goal ids or version lanes; (2) on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
 
-**What's new (v0.19.7)**
+**What's new (v0.19.8)**
 
-- **Plugin text follows the host language**: switching the host language updates the plugin's wording on the spot — no reload needed — and after a restart it renders in the host's current language from the start. The cold-boot failure where the browser half of the plugin never activated after a host upgrade is fixed as well.
-- **File-system operations no longer stumble on Windows**: moving a goal between directory and flat layouts no longer fails because a same-named directory was created ahead of time; relative paths recorded on the board now use the platform's separator, so archiving / unarchiving and path validation no longer error out or silently do nothing.
-- **State and records can no longer disagree**: a state change is journalled before it is persisted, so a mid-way failure never leaves "status changed, record missing"; losing a lock race no longer releases someone else's lock, a broken lock recovers on its own instead of stalling forever; goal numbers are never handed out twice after a deletion; unbinding only affects the exact execution you named.
-- **English mode no longer leaks Chinese**: built-in mode snippets, section headings and the empty-description fallback material are all rendered per language, so no Chinese shows up in the UI or in prompts.
-- **"Success" can no longer be fake**: delivering content to a session or re-dispatching a subagent now waits for a receipt — without one you get an honest notice plus a copy fallback; and the repo's own test suite can no longer look all-green while files were skipped, cases were skipped, or the process exited early.
+- **The settings page works again — and is more complete**: after a host upgrade the settings page no longer comes up empty; global settings open from both entry points (the plugin page under "Settings" and the right-hand plugin entry) and read/write one and the same configuration; review conditions (registered regions, frozen contracts, what counts as a product change) can be inspected and edited directly, and when they are not yet calibrated for your project they are clearly labelled as defaults; the supervisor-automation switches are no longer just stored.
+- **Fast-track evidence no longer rests on self-reporting**: how many lines changed and whether any untracked files remain are now collected by the engine itself from version control, and if collection fails the fast track is refused; regions that were never registered are escalated to strict review; a review subagent can be dispatched through a first-class entry, and deliveries lacking an independent review are honestly flagged on the board (without blocking acceptance).
+- **Long-term memory has a single source of truth**: memory is managed uniformly as structured entries (the standing / on-demand semantics and permissions are unchanged), and hand-maintaining a long-term memory index file is no longer required; legacy documents remain available as optional notes and can be migrated once, traceably, without re-importing on repeat runs.
+- **The plugin no longer pollutes your project — or assumes this repository's layout**: the plugin's own directories and worktrees no longer make your repository look like it has uncommitted changes, and no longer block the fast track; prompts and tool descriptions aimed at models and users had repository-specific paths, branches and script assumptions removed.
+- **Safer across boards, more trustworthy test verdicts**: with several boards in one repository, goals carrying the same number no longer reuse each other's worktrees or delete them; card paths under a custom graph root point at the actual card; and the flaky intermittent failure in the test suite is fixed, so "all green" no longer depends on chance.
 
 See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history. Official releases are distributed via npm and the dsh-market ecosystem.
 
