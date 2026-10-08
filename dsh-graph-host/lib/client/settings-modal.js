@@ -441,14 +441,21 @@
         const smallBtn = (text, onClick, title) => h("button", {
           className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "2px 8px", cursor: "pointer" }, title, onClick,
         }, text);
+        // P2①：文件里已有 `regions: []` 时规格不允许（写侧拒收 + 引擎 fail-closed 升 strict）
+        // ⇒ 必须如实标「非法取值」，不得渲染成合法的「显式空列表」生效态。
+        const illegalEmpty = eff?.illegal_empty === true;
         const sourceBadge = malformed
           ? dgT("settings.reviewSourceMalformed")
-          : (explicit ? dgT("settings.reviewSourceExplicit") : dgT("settings.reviewSourceDefault"));
+          : illegalEmpty
+            ? dgT("settings.reviewSourceIllegalEmpty")
+            : (explicit ? dgT("settings.reviewSourceExplicit") : dgT("settings.reviewSourceDefault"));
+        // 生效值逐条可见；空串条目如实标注（畸形数组原样透出时可能出现）
+        const showValue = (list) => list.map((v) => (v === "" ? dgT("settings.reviewEffectiveBlank") : v)).join(", ");
         // 生效值行只在服务端给了投影时渲染——缺投影绝不伪造（不写「（空）」冒充生效值）
         const effectiveView = eff
           ? h("div", { style: metaStyle },
               dgT("settings.reviewEffectiveLabel") + "：" +
-                (eff.value.length > 0 ? eff.value.join(", ") : dgT("settings.reviewEffectiveEmpty")))
+                (eff.value.length > 0 ? showValue(eff.value) : dgT("settings.reviewEffectiveEmpty")))
           : null;
         const body = malformed
           ? h("div", null,
@@ -467,10 +474,15 @@
                   onChange: (e) => set(["review", key], e.target.value.split("\n").map((s) => s.trim()).filter((s) => s !== "")),
                 }),
                 h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 4 } },
-                  items.length === 0 ? h("span", { style: metaStyle }, dgT("settings.reviewExplicitEmpty")) : null,
+                  items.length === 0 && allowEmpty ? h("span", { style: metaStyle }, dgT("settings.reviewExplicitEmpty")) : null,
                   items.length > 0 ? smallBtn(dgT("settings.reviewClear"), () => set(["review", key], []), dgT("settings.reviewClearTitle")) : null,
                   smallBtn(dgT("settings.reviewResetUnset"), () => set(["review", key], null), dgT("settings.reviewResetUnsetTitle")),
-                  !allowEmpty ? h("span", { style: metaStyle }, dgT("settings.reviewEmptyForbidden")) : null))
+                  !allowEmpty && items.length > 0 ? h("span", { style: metaStyle }, dgT("settings.reviewEmptyForbidden")) : null),
+                // 显式空列表 + 规格不允许 ⇒ 错误态（非「显式空」标签）：既覆盖文件既有 `regions: []`，
+                // 也覆盖用户在草稿里清空 regions 的情形——保存前校验同样会拦下。
+                !allowEmpty && items.length === 0
+                  ? h("div", { style: errStyle }, dgT("settings.reviewIllegalEmpty"))
+                  : null)
             : h("div", null,
                 effectiveView,
                 h("div", { style: metaStyle }, dgT("settings.reviewUnsetHint")),

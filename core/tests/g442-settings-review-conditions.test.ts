@@ -33,7 +33,19 @@ import {
   REVIEW_LIST_FIELDS,
   reviewEffectiveProjection,
 } from "../ops.ts";
-import { resolveReviewPolicy, DEFAULT_REVIEW_REGIONS } from "../review-policy.ts";
+import {
+  resolveReviewPolicy,
+  resolveReviewListInput,
+  diagnoseConfigList,
+  isMalformedConfigList,
+  isContractPath,
+  isProductCodePath,
+  regionOfPath,
+  REVIEW_LIST_FIELDS as ENGINE_LIST_FIELDS,
+  DEFAULT_REVIEW_REGIONS,
+  DEFAULT_CONTRACT_PATHS,
+  DEFAULT_NON_PRODUCT_PREFIXES,
+} from "../review-policy.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
 
@@ -74,6 +86,9 @@ const G442_I18N_KEYS = [
   "settings.reviewClear",
   "settings.reviewClearTitle",
   "settings.reviewExplicitEmpty",
+  "settings.reviewSourceIllegalEmpty",
+  "settings.reviewEffectiveBlank",
+  "settings.reviewIllegalEmpty",
   "settings.reviewItemsPlaceholder",
   "settings.reviewRegionsLabel",
   "settings.reviewRegionsAria",
@@ -639,7 +654,20 @@ test("g-442 验收3：客户端校验与 core 写侧**行为等价**（同一组
       apiRejects,
       `两端对 ${JSON.stringify(items)} 的裁决必须一致（客户端 ${clientRejects} / core ${apiRejects}）`,
     );
+    // 且与**唯一真源**诊断一致：客户端拒绝 ⟺ diagnoseConfigList 报问题 ∪ regions 不允许空列表
+    const engineRejects = isMalformedConfigList(items, false) || items.length === 0;
+    assert.equal(
+      clientRejects,
+      engineRejects,
+      `客户端裁决必须与 core 唯一诊断一致（客户端 ${clientRejects} / diagnose ${engineRejects}）：${JSON.stringify(items)}`,
+    );
   }
+  // 另两组（allowEmpty=true）时客户端不得对 `[]` 报错（只有 regions 不允许空列表）
+  const emptySnapshot: any = { review: { contract_paths: [], non_product_prefixes: [], effective: {
+    contract_paths: { value: [], source: "explicit", malformed: false, allow_empty: true },
+    non_product_prefixes: { value: [], source: "explicit", malformed: false, allow_empty: true },
+  } } };
+  assert.deepEqual(plain(helpers.collectReviewListErrors(emptySnapshot)), [], "另两组显式空列表合法");
   void zh;
 });
 
@@ -840,7 +868,11 @@ test("g-442 验收6：畸形文件上「不含 review 段」的合法 patch 仍�
   const tool: any = await callTool(byName, "graph_get_settings");
   assert.equal(tool.config.review.config_malformed, true);
   assert.equal(tool.config.review.effective.regions.malformed, true);
-  assert.equal(tool.config.review.effective.regions.source, "default", "畸形时策略层回落缺省（fail-closed 由 strict 承担）");
+  // 引擎对「字段存在但取值不是列表」的实际消费是**空列表**（fail-closed），绝不冒充缺省值：
+  // 旧断言在这里钉住了错误值（value=缺省列表 ⇒ UI 宣称 src 生效），Lane A P1 变异 B3 即由此而来。
+  assert.deepEqual([...tool.config.review.effective.regions.value], [], "投影 value 必须等于引擎实际消费值（[]）");
+  assert.equal(tool.config.review.effective.regions.source, "malformed", "来源必须是「不可用/畸形」，不是缺省");
+  assert.equal(tool.config.review.effective.regions.illegal_empty, false, "非空列表形态不涉及非法空");
 });
 
 test("g-442 验收6：目录建议只读——来自真实 workspace 布局、排除隐藏/生成物、任何读取都不写入", async () => {
@@ -971,6 +1003,238 @@ test("g-442 验收7：dist/lib/client.js 同步含新控件（未 rebuild 即红
 // =====================================================================================
 // 「改坏即红」负向对照（hermetic：只改内存副本，绝不触碰真实文件）
 // =====================================================================================
+
+// ===========================================================================
+// P1 返工：`review.effective` 必须与 `resolveReviewPolicy` **实际消费**的口径一致
+// （Lane A 用同一份 YAML 的 15 组输入逐项对照出 8 组分歧：value 4 组 + malformed 4 组）
+// ===========================================================================
+
+/** 与引擎无关的**独立复算**：基线（bb8cb8a）谓词 + 基线取值公式，用来对拍重构后的口径。 */
+function legacyPredicate(list: unknown, allowTrailingSlash = false): boolean {
+  if (list === undefined || list === null) return false;
+  if (!Array.isArray(list)) return true;
+  const seen = new Set<string>();
+  for (const item of list) {
+    if (typeof item !== "string") return true;
+    const trimmed = item.trim();
+    if (trimmed === "" || trimmed.startsWith("invalid:")) return true;
+    const norm = trimmed.replace(/\\/g, "/");
+    if (norm.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(trimmed)) return true;
+    if (!allowTrailingSlash && norm.endsWith("/")) return true;
+    if (norm.split("/").includes("..")) return true;
+    const canonical = norm.replace(/^\.\//, "").replace(/\/+$/, "");
+    if (seen.has(canonical)) return true;
+    seen.add(canonical);
+  }
+  return false;
+}
+function legacyValue(raw: unknown, defaultValues: readonly string[]): readonly string[] {
+  if (Array.isArray(raw)) return raw as string[];
+  return raw === null || raw === undefined ? defaultValues : [];
+}
+
+/** 全部 15 组输入（与 Lane A 探针同集合）：值 4 组分歧 + malformed 4 组分歧都在内。 */
+const ENGINE_CONSISTENCY_CASES: Array<[string, string | null]> = [
+  ["missing-file", null],
+  ["empty-file", ""],
+  ["all-null-explicit", "review:\n  policy: null\n  regions: null\n  contract_paths: null\n  non_product_prefixes: null\n"],
+  ["explicit-nonempty", "review:\n  regions: [src]\n  contract_paths: [core/schema.ts]\n  non_product_prefixes: [dist]\n"],
+  ["regions-empty", "review:\n  regions: []\n"],
+  ["cp-npp-empty", "review:\n  contract_paths: []\n  non_product_prefixes: []\n"],
+  ["regions-nonstring", "review:\n  regions: [src, 123]\n"],
+  ["regions-scalar", "review:\n  regions: 123\n"],
+  ["regions-emptystr", 'review:\n  regions: [""]\n'],
+  ["regions-trailing-slash", "review:\n  regions: [core/]\n"],
+  ["regions-dotdot", "review:\n  regions: [../core]\n"],
+  ["regions-dup", "review:\n  regions: [core, core]\n"],
+  ["regions-map", "review:\n  regions:\n    a: b\n"],
+  ["whole-yaml-broken", "review:\n  regions: [src, 123\n"],
+  ["review-not-map", "review: not-a-map\n"],
+];
+
+const CANARY_PATHS = ["src/a.ts", "core/ops.ts", "dist/x.js", "node_modules/y.js", "docs/a.md", "core/schema.ts"];
+const DEFAULT_OF: Record<string, readonly string[]> = {
+  regions: DEFAULT_REVIEW_REGIONS,
+  contract_paths: DEFAULT_CONTRACT_PATHS,
+  non_product_prefixes: DEFAULT_NON_PRODUCT_PREFIXES,
+};
+
+/** 用投影值预测引擎决策；任一不一致即分歧（返回错误描述数组）。 */
+function projectionEngineDivergences(
+  field: string,
+  raw: unknown,
+  proj: any,
+  sectionFieldMalformed: boolean,
+  sectionMalformed: boolean,
+  allProj: Record<string, any>,
+): string[] {
+  const bad: string[] = [];
+  // (a) value ≡ 基线引擎取值公式（行为等价：逐 canary 比对匹配结果）
+  const legacy = legacyValue(raw, DEFAULT_OF[field]);
+  const match = (v: readonly string[], p: string) =>
+    field === "regions" ? regionOfPath(p, v) : field === "contract_paths" ? isContractPath(p, v) : isProductCodePath(p, v);
+  for (const p of CANARY_PATHS) {
+    const a = JSON.stringify(plain(match(proj.value, p)));
+    const b = JSON.stringify(plain(match(legacy, p)));
+    if (a !== b) bad.push(`${field}.value~legacyEngine: ${p} 投影=${a} 基线引擎=${b}`);
+  }
+  // (b) value 预测引擎决策（regions ⇒ unknown_region；contract_paths ⇒ contract_change；前缀 ⇒ 产品码口径）
+  const base = { type: "task", policy: "auto" as const, regions: null, contractPaths: null, nonProductPrefixes: null };
+  if (field === "regions") {
+    const dec = resolveReviewPolicy({ ...base, changedPaths: ["src/a.ts"], regions: raw });
+    const pred = regionOfPath("src/a.ts", proj.value) === null;
+    const act = dec.strictReasons.includes("unknown_region");
+    if (pred !== act) bad.push(`regions.value: unknown_region pred=${pred} act=${act}`);
+  } else if (field === "contract_paths") {
+    const dec = resolveReviewPolicy({ ...base, changedPaths: ["core/schema.ts"], contractPaths: raw });
+    const pred = isContractPath("core/schema.ts", proj.value);
+    const act = dec.strictReasons.includes("contract_change");
+    if (pred !== act) bad.push(`contract_paths.value: contract_change pred=${pred} act=${act}`);
+  } else {
+    const dec = resolveReviewPolicy({ ...base, changedPaths: ["dist/a.js"], regions: [], nonProductPrefixes: raw });
+    const pred = !isProductCodePath("dist/a.js", proj.value);
+    const act = !dec.strictReasons.includes("unknown_region");
+    if (pred !== act) bad.push(`non_product_prefixes.value: product(dist) pred=${pred} act=${act}`);
+  }
+  // (c) malformed ≡ 基线谓词 ∪ 段级字段信号（逐字段归因，伞形 config_malformed 不参与）
+  const predMal = legacyPredicate(raw) || sectionFieldMalformed;
+  if (proj.malformed !== predMal) bad.push(`${field}.malformed: pred=${predMal} act=${proj.malformed}`);
+  // (d) 段级决策口径：任一字段畸形 ⇒ 引擎 policy_unrecognized（config_malformed 伞形同样升 strict）
+  const decAll = resolveReviewPolicy({
+    type: "task", policy: "auto", configMalformed: sectionMalformed,
+    regions: (allProj.raw as any).regions, contractPaths: (allProj.raw as any).contract_paths,
+    nonProductPrefixes: (allProj.raw as any).non_product_prefixes,
+  });
+  const anyMalformed = REVIEW_LIST_KEYS.some((k) => allProj[k].malformed);
+  const actAll = decAll.strictReasons.includes("policy_unrecognized");
+  if (anyMalformed !== actAll) bad.push(`section: policy_unrecognized pred=${anyMalformed} act=${actAll}`);
+  return bad;
+}
+
+test("g-442 P1：15 组输入投影 == 引擎实际消费（值 4 组分歧 + malformed 4 组分歧全覆盖）", async () => {
+  for (const [label, yaml] of ENGINE_CONSISTENCY_CASES) {
+    const { root, byName } = setupInstance();
+    if (yaml !== null) writeFileSync(join(root, "project.yaml"), yaml, "utf8");
+    const tool: any = await callTool(byName, "graph_get_settings");
+    const cfg = tool.config;
+    const proj = cfg.review.effective;
+    const raw = { regions: cfg.review.regions, contract_paths: cfg.review.contract_paths, non_product_prefixes: cfg.review.non_product_prefixes };
+    const allProj: any = { ...proj, raw };
+    const sectionFieldMalformed = Boolean(cfg.review.invalid_fields?.review);
+    const sectionMalformed = cfg.review.config_malformed === true;
+    const bad: string[] = [];
+    for (const f of REVIEW_LIST_KEYS) bad.push(...projectionEngineDivergences(f, (raw as any)[f], proj[f], sectionFieldMalformed, sectionMalformed, allProj));
+    assert.deepEqual(bad, [], `${label}: 投影与引擎口径必须零分歧`);
+    // malformed 与 invalid_fields 归因必须一致（客户端据此显示「非法/需修 project.yaml」）
+    for (const f of REVIEW_LIST_KEYS) {
+      assert.equal(proj[f].malformed, Boolean(cfg.review.invalid_fields?.[f]) || sectionFieldMalformed,
+        `${label}/${f}: 投影 malformed 必须与 invalid_fields 归因一致`);
+    }
+  }
+});
+
+test("g-442 P1：变异 B3 等价体必红（把畸形分支的 value/malformed 改回错值即判红）", () => {
+  const { root, byName } = setupInstance();
+  writeFileSync(join(root, "project.yaml"), "review:\n  regions: 123\n", "utf8");
+  return callTool(byName, "graph_get_settings").then((tool: any) => {
+    const cfg = tool.config;
+    const proj = cfg.review.effective;
+    const raw = { regions: cfg.review.regions, contract_paths: cfg.review.contract_paths, non_product_prefixes: cfg.review.non_product_prefixes };
+    const allProj: any = { ...proj, raw };
+    const sectionFieldMalformed = Boolean(cfg.review.invalid_fields?.review);
+    const sectionMalformed = cfg.review.config_malformed === true;
+    assert.equal(proj.regions.source, "malformed");
+    assert.deepEqual([...proj.regions.value], []);
+    // 绿：未变异的投影零分歧
+    assert.deepEqual(projectionEngineDivergences("regions", raw.regions, proj.regions, sectionFieldMalformed, sectionMalformed, allProj), []);
+    // 红 1：value 改回「缺省列表」（Lane A 变异 B3 的等价体）
+    const wrongValue = { ...proj.regions, value: [...DEFAULT_REVIEW_REGIONS] };
+    const badValue = projectionEngineDivergences("regions", raw.regions, wrongValue, sectionFieldMalformed, sectionMalformed,
+      { ...allProj, regions: wrongValue });
+    assert.ok(badValue.some((m) => m.includes("unknown_region")), `B3(value) 必须判红，实际：${JSON.stringify(badValue)}`);
+    // 红 2：malformed 改回 false
+    const wrongMal = { ...proj.regions, malformed: false };
+    const badMal = projectionEngineDivergences("regions", raw.regions, wrongMal, sectionFieldMalformed, sectionMalformed,
+      { ...allProj, regions: wrongMal });
+    assert.ok(badMal.some((m) => m.includes("malformed") || m.includes("policy_unrecognized")),
+      `B3(malformed) 必须判红，实际：${JSON.stringify(badMal)}`);
+  });
+});
+
+test("g-442 P2①（UI）：`regions: []` 渲染为非法态（无「显式空列表」标签）+ 畸形字段显示引擎消费值", () => {
+  const { root } = setupInstance();
+  const { zh, en } = loadClientI18n();
+  writeFileSync(join(root, "project.yaml"), "review:\n  regions: []\n", "utf8");
+  const cfg = readProjectConfig(root);
+  const tree = renderSettingsModal(readModal(), cfg, zh);
+  const text = collectText(tree);
+  assert.ok(text.includes(zh["settings.reviewSourceIllegalEmpty"]), "徽标标「非法取值」");
+  assert.ok(text.includes(zh["settings.reviewIllegalEmpty"]), "给出可读非法原因（写侧拒收 + 引擎升 strict）");
+  assert.equal(text.includes(zh["settings.reviewExplicitEmpty"]), false, "regions 显式空不得渲染成合法「显式空列表」");
+  assert.ok(reviewTextareas(tree, zh).length >= 1, "仍可编辑以便修正");
+  assert.match(en["settings.reviewIllegalEmpty"], /regions/, "en 同步说明");
+
+  // 畸形（regions: 123）：显示引擎实际消费值（[] ⇒ 「（空）」），不是缺省列表
+  const { root: root2 } = setupInstance();
+  writeFileSync(join(root2, "project.yaml"), "review:\n  regions: 123\n", "utf8");
+  const cfg2 = readProjectConfig(root2);
+  const text2 = collectText(renderSettingsModal(readModal(), cfg2, zh));
+  assert.ok(text2.includes(zh["settings.reviewSourceMalformed"]), "畸形徽标");
+  assert.ok(text2.includes(zh["settings.reviewEffectiveLabel"] + "：" + zh["settings.reviewEffectiveEmpty"]),
+    "畸形字段的生效值行显示引擎消费值（空列表）——绝不显示缺省列表冒充生效");
+  assert.equal(text2.includes(DEFAULT_REVIEW_REGIONS.join(", ")), false, "缺省区域列表不得出现在畸形字段的生效值行");
+
+  // 空串条目（畸形数组原样透出）⇒ 生效值行如实标注空串
+  const { root: root3 } = setupInstance();
+  writeFileSync(join(root3, "project.yaml"), 'review:\n  regions: [""]\n', "utf8");
+  const text3 = collectText(renderSettingsModal(readModal(), readProjectConfig(root3), zh));
+  assert.ok(text3.includes(zh["settings.reviewEffectiveBlank"]), "空串条目如实标注");
+  assert.equal(text3.includes(DEFAULT_REVIEW_REGIONS.join(", ")), false, "畸形字段仍不显示缺省列表");
+});
+
+test("g-442 P2②：畸形谓词收敛为**唯一**真源（core 只有一处实现，读写引擎共用）", () => {
+  const policySrc = readFileSync(join(repoRoot, "core/review-policy.ts"), "utf8");
+  const opsSrc = readFileSync(join(repoRoot, "core/ops.ts"), "utf8");
+  // 唯一判定实现：item 级检查只允许出现在 diagnoseConfigList 里
+  const countOccurrences = (hay: string, needle: string) => hay.split(needle).length - 1;
+  assert.equal(countOccurrences(policySrc, 'startsWith("invalid:")'), 1, "item 级判定只允许一处（diagnoseConfigList）");
+  assert.equal(countOccurrences(policySrc, 'norm.endsWith("/")'), 1, "尾随斜杠判定只允许一处");
+  assert.equal(countOccurrences(policySrc, "function isMalformedConfigList"), 1, "谓词只允许一个定义（布尔投影）");
+  assert.match(policySrc, /export function isMalformedConfigList[\s\S]{0,120}diagnoseConfigList\(list, allowTrailingSlash\) !== null/,
+    "谓词必须是 diagnoseConfigList 的布尔投影");
+  assert.equal(countOccurrences(opsSrc, 'startsWith("invalid:")'), 0, "ops 读/写侧不得自持 item 级判定");
+  assert.ok(opsSrc.includes("diagnoseConfigList(list, allowTrailingSlash)"), "写侧校验用同一诊断决定是否拒绝");
+  assert.ok(opsSrc.includes("malformed: isMalformedConfigList(arr, false)"), "读侧 list 用同一谓词判畸形");
+  // 引擎不再自持 fallback 分支：三项列表全部经 resolveReviewListInput
+  const engineBody = policySrc.slice(policySrc.indexOf("export function resolveReviewPolicy"), policySrc.indexOf("export function isProductCodePath"));
+  assert.equal(countOccurrences(engineBody, "resolveReviewListInput("), 3, "引擎三项列表都必须经唯一归一化");
+  assert.equal(countOccurrences(engineBody, "Array.isArray(input.regions)"), 0, "引擎不得再自持 regions fallback");
+  assert.equal(countOccurrences(engineBody, "DEFAULT_REVIEW_REGIONS"), 0, "引擎不得再自持缺省回落");
+  // 读侧投影与写侧约束都锚在同一条归一化/同一张表上
+  assert.equal(countOccurrences(policySrc, "export function resolveReviewListInput"), 1);
+  assert.deepEqual(plain(ENGINE_LIST_FIELDS.map((f: any) => [f.key, f.allowEmpty])),
+    [["regions", false], ["contract_paths", true], ["non_product_prefixes", true]], "写侧约束表口径不变");
+});
+
+test("g-442 P2①：文件里已有 `regions: []` 时投影如实标非法（不得渲染成合法生效态）", async () => {
+  const { root, byName } = setupInstance();
+  writeFileSync(join(root, "project.yaml"), "review:\n  regions: []\n", "utf8");
+  const tool: any = await callTool(byName, "graph_get_settings");
+  const eff = tool.config.review.effective;
+  assert.deepEqual([...eff.regions.value], [], "引擎消费值 = 显式空列表");
+  assert.equal(eff.regions.malformed, false, "空列表不是「畸形」");
+  assert.equal(eff.regions.illegal_empty, true, "但规格不允许 ⇒ 投影必须标非法");
+  assert.equal(eff.regions.allow_empty, false);
+  assert.equal(eff.contract_paths.illegal_empty, false, "另两组显式 [] 合法");
+  // 引擎同口径：显式空 regions ⇒ cross_region 升级 strict
+  const dec = resolveReviewPolicy({ type: "task", policy: "auto", regions: [] });
+  assert.ok(dec.strictReasons.includes("cross_region"), "引擎对 regions [] 升 strict");
+  // 另两组显式 [] 合法：投影不标非法，引擎不因它们升 strict
+  assert.deepEqual(plain(resolveReviewListInput(ENGINE_LIST_FIELDS[1], []).illegal_empty), false);
+  assert.deepEqual(plain(resolveReviewListInput(ENGINE_LIST_FIELDS[2], []).illegal_empty), false);
+  assert.deepEqual(plain(diagnoseConfigList([], false)), null, "空列表不是诊断问题");
+  assert.equal(isMalformedConfigList([], false), false);
+});
 
 test("g-442 负向对照：全表 patch 回归 / 缺省物化 / 空列表放行 / 畸形回填 / 建议自动写入 均必红且真实文件未变", async () => {
   const modalReal = readModal();

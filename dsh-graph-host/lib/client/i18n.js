@@ -655,6 +655,9 @@
       // === g-442：评审条件（regions / contract_paths / non_product_prefixes）===
       'settings.reviewConditions': '评审条件（按项目目录结构校准）',
       'settings.reviewConditionsHint': '主管按项目目录结构设置这三项：区域列表（regions）、契约路径（contract_paths）、产品代码排除前缀（non_product_prefixes）。缺省值是普适默认（并非按本项目校准），未配置时策略层按缺省值生效；只有显式登记才会写入 project.yaml。',
+      'settings.reviewSourceIllegalEmpty': '非法取值',
+      'settings.reviewEffectiveBlank': '（空串）',
+      'settings.reviewIllegalEmpty': '⚠️ 该值非法：regions 不允许显式空列表（写侧会拒收，引擎按 fail-closed 升级为 strict）——请登记区域条目，或点「恢复未配置」。',
       'settings.reviewCalibrationGuide': '口径与主管指南《Review 严格度校准（项目专属）》一致：主管按项目实际架构校准（必要时先向负责人确认），也可直接用 graph_get_settings 查询、graph_update_settings 写入同一份 project.yaml 配置。',
       'settings.reviewSourceLabel': '来源',
       'settings.reviewSourceExplicit': '显式配置',
@@ -1805,8 +1808,11 @@
       // === g-442: review conditions (regions / contract_paths / non_product_prefixes) ===
       'settings.reviewConditions': 'Review conditions (calibrated per project layout)',
       'settings.reviewConditionsHint': 'Supervisors set these three per project layout: top-level regions, contract paths, and non-product-code prefixes. The defaults are generic (not calibrated for this project); when unset the policy layer uses those defaults. Only an explicit entry is written to project.yaml.',
+      'settings.reviewSourceIllegalEmpty': 'invalid value',
+      'settings.reviewEffectiveBlank': '(empty string)',
+      'settings.reviewIllegalEmpty': '⚠️ Invalid value: an explicit empty list is not allowed for regions (the write side rejects it and the engine escalates to strict via fail-closed) — add region entries, or click "Restore unset".',
       'settings.reviewCalibrationGuide': 'Aligned with the supervisor guide section "Review Strictness Calibration (Project-Specific)": the supervisor calibrates to the real project layout (confirming with the owner when needed), and graph_get_settings / graph_update_settings read and write the same project.yaml configuration.',
-      'settings.reviewSourceLabel': 'Source',
+'settings.reviewSourceLabel': 'Source',
       'settings.reviewSourceExplicit': 'explicitly configured',
       'settings.reviewSourceDefault': 'default (generic)',
       'settings.reviewSourceMalformed': 'invalid / fix project.yaml',
