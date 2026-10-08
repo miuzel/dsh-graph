@@ -340,6 +340,41 @@ test("g-435 判据 5：regions[] fail-closed；contract_paths[] 与 non_product_
   );
   const cfgNull = readProjectConfig(root);
   assert.equal(cfgNull.review.regions, null, "null 带注释必须被读为 null 而非 []");
+
+  // 7. 手写数字标量与混合元素 [src, 123]、[src, null] 读取后策略安全升级 strict
+  for (const field of ["regions", "contract_paths", "non_product_prefixes"] as const) {
+    writeFileSync(
+      join(root, "project.yaml"),
+      `review:\n  policy: auto\n  regions: ${field === "regions" ? "123" : "[src]"}\n  ${field === "regions" ? "contract_paths: []" : field + ": 123"}\n`,
+      "utf8",
+    );
+    const d = resolveReviewPolicy({
+      policy: "auto",
+      type: "patch",
+      regions: readProjectConfig(root).review.regions,
+      contractPaths: readProjectConfig(root).review.contract_paths,
+      nonProductPrefixes: readProjectConfig(root).review.non_product_prefixes,
+      changedPaths: ["src/a.ts"],
+    });
+    assert.equal(d.policy, "strict", `${field}: 123 必须升级 strict`);
+    assert.ok(d.strictReasons.includes("policy_unrecognized"));
+  }
+
+  for (const mixed of ["[src, 123]", "[src, null]"]) {
+    writeFileSync(
+      join(root, "project.yaml"),
+      `review:\n  policy: auto\n  regions: ${mixed}\n`,
+      "utf8",
+    );
+    const d = resolveReviewPolicy({
+      policy: "auto",
+      type: "patch",
+      regions: readProjectConfig(root).review.regions,
+      changedPaths: ["src/a.ts"],
+    });
+    assert.equal(d.policy, "strict", `regions: ${mixed} 必须升级 strict`);
+    assert.ok(d.strictReasons.includes("policy_unrecognized"));
+  }
 });
 
 // ---------------------------------------------------------------------------

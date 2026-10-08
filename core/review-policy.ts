@@ -260,7 +260,7 @@ export function isMalformedConfigList(list: unknown, allowTrailingSlash = false)
   for (const item of list) {
     if (typeof item !== "string") return true;
     const trimmed = item.trim();
-    if (trimmed === "") return true;
+    if (trimmed === "" || trimmed.startsWith("invalid:")) return true;
     const norm = trimmed.replace(/\\/g, "/");
     if (norm.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(trimmed)) return true;
     if (!allowTrailingSlash && norm.endsWith("/")) return true;

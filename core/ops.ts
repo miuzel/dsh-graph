@@ -1299,7 +1299,13 @@ function readListByPath(lines: string[], path: string[]): string[] | null {
       if (valPart.startsWith("[") && valPart.includes("]")) {
         const inside = valPart.slice(1, valPart.indexOf("]")).trim();
         if (inside === "") return [];
-        return inside.split(",").map((s) => parseYamlScalar(s)).filter((s): s is string => s !== null);
+        return inside.split(",").map((s) => {
+          const t = s.trim();
+          if (t === "null" || t === "~" || t === "") return "invalid:null";
+          // 若为未加引号的纯数字，标记为 invalid，防止被当作合法字符串
+          if (/^\d+$/.test(t)) return `invalid:${t}`;
+          return parseYamlScalar(s) ?? `invalid:${s}`;
+        });
       }
       // 多行列表形态：收集子行 `- item`
       const listEnd = blockChildrenEnd(lines, idx, keyIndent);
@@ -1375,9 +1381,52 @@ export function readProjectConfig(root: string): ProjectConfig {
       review: { policy: null, regions: null, contract_paths: null, non_product_prefixes: null },
     };
   }
-  const lines = readFileSync(file, "utf8").split("\n");
-  const scal = (path: string[]): string | null => readScalarByPath(lines, path);
-  const list = (path: string[]): string[] | null => readListByPath(lines, path);
+  const rawText = readFileSync(file, "utf8");
+
+  // 尝试使用完整 YAML 解析器作为备选读取，精准支持包含 flow-style 映射或标量类型判定的合法配置
+  let parsedDoc: any = null;
+  try {
+    parsedDoc = parseYaml(rawText);
+  } catch {}
+
+  const lines = rawText.split("\n");
+  const scal = (path: string[]): string | null => {
+    if (parsedDoc && typeof parsedDoc === "object") {
+      let cur = parsedDoc;
+      for (const p of path) {
+        if (cur && typeof cur === "object" && p in cur) cur = cur[p];
+        else { cur = undefined; break; }
+      }
+      if (cur !== undefined) return cur === null ? null : String(cur);
+    }
+    return readScalarByPath(lines, path);
+  };
+
+  const list = (path: string[]): string[] | null => {
+    // 优先尝试从 parsedDoc 读取以获取真实的数组结构与元素类型
+    if (parsedDoc && typeof parsedDoc === "object") {
+      let cur = parsedDoc;
+      let foundKey = true;
+      for (const p of path) {
+        if (cur && typeof cur === "object" && p in cur) cur = cur[p];
+        else { foundKey = false; break; }
+      }
+      if (foundKey) {
+        if (cur === null || cur === undefined) return null;
+        if (!Array.isArray(cur)) {
+          // 非数组类型（例如数字 123、字符串），标记为非法 sentinel
+          return [`invalid:${cur}`];
+        }
+        return cur.map((item) => {
+          if (item === null || item === undefined) return "invalid:null";
+          if (typeof item !== "string") return `invalid:${item}`;
+          return item;
+        });
+      }
+    }
+    return readListByPath(lines, path);
+  };
+
   const auto: Record<string, string | null> = {};
   for (const k of AUTOMATION_KEYS) auto[k] = scal(["supervisor", "automation", k]);
   const lanesRaw = scal(["defaults", "pk", "lanes"]);
