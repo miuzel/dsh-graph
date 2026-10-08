@@ -9,14 +9,22 @@
 //      ③ `dsh-graph-host/lib/client/i18n.js`（GUI 可见文案）与 `dist/lib/client.js` 的
 //         **全部字符串字面量**（`'…'` / `"…"` / 反引号，含数组元素、赋值右侧、键名；拼接片段不可导入，
 //         故按字符扫描）。四条 fail-closed 不变式：
-//           · **解转义后入面** ⇒ `'…DSH\u00200.1.6…'` 这类编码写法照样命中；
-//           · **字面量普查**：注释（`//`、`/* */`）与正则字面量之外的残留引号必须为 0，
-//             无法解析的字面量必须为 0（宁可判红，不许静默）；
-//           · 源码字面量多重集 ⊆ dist 字面量多重集（兼作 dist 新鲜度）+ 分辨率下限 + 金丝雀。
+//           · **解转义后入面** ⇒ `'…DSH\u00200.1.6…'` 这类编码写法照样命中；**行继续**（`\` + LF/CRLF/CR）
+//             按运行时语义**归空串**（`'DSH 0.1.\⏎6'` 运行时即 `DSH 0.1.6`）；
+//           · **相邻字面量 `+` 拼接折叠**后入面（`'k': 'a' + 'b'`、`` `${'a' + 'b'}` ``、`const s = 'a' + 'b'`
+//             同口径）⇒ 拆到多个字面量的 token 仍被拼回命中；
+//           · **承重完备性腿**：无法解析的含引号内容（未闭合字面量/块注释）必须为 0（宁可判红，不许静默）；
+//             （另一条「注释外残留引号 = 0」经复核插桩证明是**恒真式**——每个引号必然走字面量或未闭合
+//             分支——已删除，不再并列宣称。）
+//           · 源码字面量多重集 ⊆ dist 字面量多重集（兼作 dist 新鲜度；折叠派生条目不参与）+ 分辨率下限 + 金丝雀。
 //         合法插值（`{n}` 等）不受影响。
+//  · **收口声明（2026-10-08，最后一轮复核后）**：本守卫是**词法绊线**，不是「无本仓假设」的完备证明。
+//    已记录并接受、**不再追修**的局限：① **拼写变体**（`dsh_graph_host/`、反斜杠、大小写、双空格…）；
+//    ② **跨非相邻构造拆分 token**（如 `'DSH' + x + ' 0.1.6'`、变量/别名中转、`String.raw`、`%s` 占位拼接）；
+//    ③ 任何需要**常量折叠 / 别名分析**才能识别的形态。后人不必反复扩张本守卫。
 //  · **粒度下限是粗网，精细网在邻居守卫**（复核实测 2026-10-08）：把 `prompts/worktree.{zh,en}.md`
-//    对称截断到 1 长行（179/205 字节）并重建后，本守卫 13/13 仍绿，但整套件 `2142 pass / 8 fail`
-//    （`g239` / `g241` / `g253` / `g283` 三处 + 「zh prompt assets are not stubs」兜住）⇒ **不构成套件级
+//    对称截断到 1 长行（179/205 字节）并重建后，本守卫 13/13 仍绿，但整套件 **8 红** =
+//    `g239`×1 + `g241`×1 + `g253`×1 + `g283`×4 + 「zh prompt assets are not stubs」×1 ⇒ **不构成套件级
 //    静默绿**。故本守卫不加「基线一半」「逐资产锚点表」这类会随正常改文误红的阈值（预案保留、未采用），
 //    只留「非空行 ≥1 且字节 ≥100」的粗网与聚合断言（资产数 32、扫描行数 >1000）。
 //  · 显式豁免（各自都有正例与「豁免不过宽」的反例）：
@@ -158,12 +166,17 @@ function scanServerI18n(label: string, dict: { zh: Record<string, unknown>; en: 
   return out;
 }
 
+type LiteralEntry = {
+  value: string;
+  line: number;
+  /** 相邻字面量 `+` 拼接折叠出的派生条目（不参与「源码 ⊆ dist」腿，只入扫描面）。 */
+  folded?: boolean;
+};
+
 type LiteralScan = {
   /** 解转义后的**全部**字符串字面量（单引号 / 双引号 / 反引号；含数组元素、赋值右侧、键名）。 */
-  values: { value: string; line: number }[];
-  /** 注释与正则字面量被空格化后的代码文本：其中残留引号必须为 0（字面量普查腿）。 */
-  codeText: string;
-  /** 含引号却无法安全解析的位置（未闭合字面量 / 未闭合块注释）⇒ 判红，绝不静默。 */
+  values: LiteralEntry[];
+  /** 含引号却无法安全解析的位置（未闭合字面量 / 未闭合块注释）⇒ 判红，绝不静默（**承重完备性腿**）。 */
   unparsed: { line: number; why: string }[];
 };
 
@@ -171,9 +184,13 @@ const ESCAPES: Record<string, string> = {
   n: "\n", t: "\t", r: "\r", b: "\b", f: "\f", v: "\v", "0": "\0", "\\": "\\", "'": "'", '"': '"', "`": "`",
 };
 
-/** 解 JS 字符串转义（`\n` `\t` `\'` `\"` `\\` `\xNN` `\uNNNN` `\u{…}`）⇒ 编码写法也能被 token 命中。 */
+/**
+ * 解 JS 字符串转义（`\n` `\t` `\'` `\"` `\\` `\xNN` `\uNNNN` `\u{…}`），
+ * 并正确处理**行继续**：`\` + LF / CRLF / CR 在运行时**整段删除**（归空串，不是换行）。
+ */
 function decodeEscapes(raw: string): string {
-  return raw.replace(/\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g, (_m, g: string) => {
+  return raw.replace(/\\(\r\n|u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g, (_m, g: string) => {
+    if (g === "\r\n" || g === "\n" || g === "\r") return "";
     if (g.startsWith("u{")) return String.fromCodePoint(parseInt(g.slice(2, -1), 16));
     if (g.startsWith("u")) return String.fromCharCode(parseInt(g.slice(1), 16));
     if (g.startsWith("x")) return String.fromCharCode(parseInt(g.slice(1), 16));
@@ -181,30 +198,108 @@ function decodeEscapes(raw: string): string {
   });
 }
 
+type LitToken = { raw: string; line: number; end: number; endLine: number };
+
+/** 从 `start` 处读一个字面量（`'` / `"` / 反引号）；未闭合返回 null（调用方记 unparsed）。 */
+function readLiteral(text: string, start: number, line: number): LitToken | null {
+  const quote = text[start];
+  if (quote !== "'" && quote !== '"' && quote !== "`") return null;
+  let raw = "";
+  let cur = line;
+  for (let j = start + 1; j < text.length; j += 1) {
+    const d = text[j];
+    if (d === "\\") {
+      raw += d;
+      if (j + 1 < text.length) {
+        const nxt = text[j + 1];
+        raw += nxt;
+        j += 1;
+        if (nxt === "\n") cur += 1;
+        else if (nxt === "\r" && text[j + 1] === "\n") { raw += "\n"; j += 1; cur += 1; }
+      }
+      continue;
+    }
+    if (d === quote) return { raw, line, end: j, endLine: cur };
+    if (d === "\n") {
+      if (quote !== "`") return null;
+      cur += 1;
+    }
+    raw += d;
+  }
+  return null;
+}
+
+/** 跳过空白与注释（折叠与前瞻用），返回下一个有效字符位置。 */
+function skipTrivia(text: string, index: number, line: number): { index: number; line: number } {
+  let i = index;
+  let cur = line;
+  for (;;) {
+    const c = text[i];
+    if (c === undefined) return { index: i, line: cur };
+    if (c === "\n") { cur += 1; i += 1; continue; }
+    if (c === " " || c === "\t" || c === "\r") { i += 1; continue; }
+    if (c === "/" && text[i + 1] === "/") { while (i < text.length && text[i] !== "\n") i += 1; continue; }
+    if (c === "/" && text[i + 1] === "*") { const end = text.indexOf("*/", i + 2); i = end < 0 ? text.length : end + 2; continue; }
+    return { index: i, line: cur };
+  }
+}
+
+/** 取出模板字面量里 `${…}` 的**代码片段**（括号配对、内嵌字符串跳过）⇒ 递归入面，供 `` `${'a' + 'b'}` `` 折叠。 */
+function templateExpressions(raw: string, baseLine: number): { code: string; line: number }[] {
+  const out: { code: string; line: number }[] = [];
+  let i = 0;
+  const lineAt = (upto: number) => baseLine + (raw.slice(0, upto).match(/\n/g)?.length ?? 0);
+  while (i < raw.length) {
+    if (raw[i] === "\\") { i += 2; continue; }
+    if (raw[i] === "$" && raw[i + 1] === "{") {
+      let depth = 1;
+      let j = i + 2;
+      const start = j;
+      while (j < raw.length && depth > 0) {
+        const d = raw[j];
+        if (d === "\\") { j += 2; continue; }
+        if (d === "'" || d === '"' || d === "`") {
+          j += 1;
+          while (j < raw.length && raw[j] !== d) { if (raw[j] === "\\") j += 1; j += 1; }
+          j += 1;
+          continue;
+        }
+        if (d === "{") depth += 1;
+        else if (d === "}") depth -= 1;
+        j += 1;
+      }
+      out.push({ code: raw.slice(start, Math.max(start, j - 1)), line: lineAt(start) });
+      i = j;
+      continue;
+    }
+    i += 1;
+  }
+  return out;
+}
+
 /**
- * 按字符扫描 JS 文本，提取**全部字符串字面量**并解转义。
+ * 按字符扫描 JS 文本，提取**全部字符串字面量**并解转义，另把**相邻字面量 `+` 拼接**折叠后再入面。
  * 不进扫描面：`//` 与块注释（源码注释豁免）、正则字面量（其内部引号不代表文案）。
- * fail-closed：未闭合字面量/注释记入 `unparsed`；其余引号都必须在 `codeText` 中留下 0 个残留。
+ * fail-closed：未闭合字面量/注释记入 `unparsed`（**承重腿**：解析不到的含引号内容必判红）。
+ * 明确不追的形态见文件头「收口声明」（拼写变体、跨非相邻构造拆分、需常量折叠/别名分析的形态）。
  */
 function scanLiterals(text: string): LiteralScan {
-  const values: LiteralScan["values"] = [];
-  const code: string[] = [];
+  const values: LiteralEntry[] = [];
   const unparsed: LiteralScan["unparsed"] = [];
   let i = 0;
   let line = 1;
   let prev = "";
-  const push = (ch: string) => code.push(ch);
   while (i < text.length) {
     const c = text[i];
     if (c === "\n") line += 1;
     if (c === "/" && text[i + 1] === "/") {
-      while (i < text.length && text[i] !== "\n") { push(" "); i += 1; }
+      while (i < text.length && text[i] !== "\n") i += 1;
       continue;
     }
     if (c === "/" && text[i + 1] === "*") {
       const end = text.indexOf("*/", i + 2);
       const stop = end < 0 ? text.length : end + 2;
-      for (; i < stop; i += 1) { if (text[i] === "\n") { push("\n"); line += 1; } else push(" "); }
+      for (; i < stop; i += 1) if (text[i] === "\n") line += 1;
       if (end < 0) unparsed.push({ line, why: "未闭合块注释" });
       continue;
     }
@@ -221,66 +316,65 @@ function scanLiterals(text: string): LiteralScan {
         else if (d === "]") inClass = false;
         else if (d === "/" && !inClass) { closed = true; break; }
       }
-      if (closed) { for (; i <= j; i += 1) push(" "); prev = "/"; continue; }
+      if (closed) { i = j + 1; prev = "/"; continue; }
     }
     if (c === "'" || c === '"' || c === "`") {
-      const quote = c;
-      const startLine = line;
-      let raw = "";
-      let j = i + 1;
-      let closed = false;
-      for (; j < text.length; j += 1) {
-        const d = text[j];
-        if (d === "\\") {
-          raw += d;
-          if (j + 1 < text.length) {
-            raw += text[j + 1];
-            if (text[j + 1] === "\n") line += 1;
-            j += 1;
-          }
-          continue;
-        }
-        if (d === quote) { closed = true; break; }
-        if (d === "\n" && quote !== "`") break;
-        if (d === "\n") line += 1;
-        raw += d;
-      }
-      if (!closed) {
-        unparsed.push({ line: startLine, why: "未闭合字符串字面量" });
-        for (; i < text.length && text[i] !== "\n"; i += 1) push(" ");
+      const first = readLiteral(text, i, line);
+      if (first === null) {
+        unparsed.push({ line, why: "未闭合字符串字面量" });
+        while (i < text.length && text[i] !== "\n") i += 1;
         continue;
       }
-      values.push({ value: decodeEscapes(raw), line: startLine });
-      push(" "); push(" ");
-      for (i += 1; i < j; i += 1) push(text[i] === "\n" ? "\n" : " ");
-      i = j + 1;
-      prev = quote;
+      const parts = [decodeEscapes(first.raw)];
+      values.push({ value: parts[0], line: first.line });
+      // 模板字面量：`${…}` 内的代码片段递归入面（`` `${'a' + 'b'}` `` 也能被折叠命中）。
+      if (c === "`") {
+        for (const inner of templateExpressions(first.raw, first.line)) {
+          const sub = scanLiterals(inner.code);
+          for (const v of sub.values) values.push({ ...v, line: inner.line + v.line - 1 });
+          for (const u of sub.unparsed) unparsed.push({ line: inner.line + u.line - 1, why: `模板插值内：${u.why}` });
+        }
+      }
+      let end = first.end;
+      let endLine = first.endLine;
+      // 相邻字面量 `+` 拼接：整链折叠后再入面（`'a' + 'b'` 与 `'k': 'a' + 'b'` 同口径）。
+      for (;;) {
+        const op = skipTrivia(text, end + 1, endLine);
+        if (text[op.index] !== "+") break;
+        const operand = skipTrivia(text, op.index + 1, op.line);
+        const next = readLiteral(text, operand.index, operand.line);
+        if (next === null) break;
+        parts.push(decodeEscapes(next.raw));
+        values.push({ value: parts[parts.length - 1], line: next.line });
+        end = next.end;
+        endLine = next.endLine;
+      }
+      if (parts.length > 1) values.push({ value: parts.join(""), line: first.line, folded: true });
+      i = end + 1;
+      line = endLine;
+      prev = text[end];
       continue;
     }
-    push(c);
     if (!/\s/.test(c)) prev = c;
     i += 1;
   }
-  return { values, codeText: code.join(""), unparsed };
+  return { values, unparsed };
 }
 
-/** 客户端 i18n（GUI 可见文案）：源码与 dist 拼接副本两侧的**全部字符串字面量**。 */
+/** 客户端 i18n（GUI 可见文案）：源码与 dist 拼接副本两侧的**全部字符串字面量**（含 `+` 拼接折叠）。 */
 function scanClientI18n(): string[] {
   const out: string[] = [];
   const src = scanLiterals(readFileSync(CLIENT_I18N_SRC, "utf8"));
   const dist = scanLiterals(readFileSync(CLIENT_BUNDLE_DIST, "utf8"));
   const sides = [["源/lib/client/i18n.js", src], ["dist/lib/client.js", dist]] as const;
-  // 完备性（fail-closed）：任何「含引号却没被解析」或「注释/正则之外残留引号」都判红。
+  // 完备性（fail-closed）：含引号却解析不了的形态必判红。**这是本扫描面的承重完备性腿**
+  // （另一条「注释外残留引号 = 0」经复核插桩证明是恒真式：每个引号必然走字面量/未闭合分支，已删除）。
   for (const [label, r] of sides) {
     if (r.unparsed.length > 0) {
       out.push(`${label}: 有 ${r.unparsed.length} 处字面量无法解析（首个 line ${r.unparsed[0].line}：${r.unparsed[0].why}）——扫描面不可信`);
     }
-    const leftover = (r.codeText.match(/['"`]/g) ?? []).length;
-    if (leftover !== 0) {
-      out.push(`${label}: 注释与正则之外仍有 ${leftover} 个引号未归属任何字面量——扫描面不可信`);
-    }
   }
-  // 分辨率下限 + 源码字面量必须落进 dist（兼作 dist 新鲜度）。
+  // 分辨率下限 + 源码字面量必须落进 dist（兼作 dist 新鲜度）；**折叠派生条目**不参与该腿。
   if (src.values.length < CLIENT_I18N_MIN_LITERALS) {
     out.push(`源/lib/client/i18n.js: 字面量条数 ${src.values.length} < ${CLIENT_I18N_MIN_LITERALS}——文件被清空/截断`);
   }
@@ -288,9 +382,13 @@ function scanClientI18n(): string[] {
     out.push(`dist/lib/client.js: 字面量条数 ${dist.values.length} < 源码 ${src.values.length}——dist 未重建或注入被吞`);
   }
   const distCount = new Map<string, number>();
-  for (const { value } of dist.values) distCount.set(value, (distCount.get(value) ?? 0) + 1);
+  for (const { value, folded } of dist.values) {
+    if (folded) continue;
+    distCount.set(value, (distCount.get(value) ?? 0) + 1);
+  }
   const missing: string[] = [];
-  for (const { value } of src.values) {
+  for (const { value, folded } of src.values) {
+    if (folded) continue;
     const left = distCount.get(value) ?? 0;
     if (left === 0) { missing.push(value); continue; }
     distCount.set(value, left - 1);
@@ -304,7 +402,9 @@ function scanClientI18n(): string[] {
     out.push(`源/lib/client/i18n.js: 金丝雀文案命中 ${canary.length} 条（应为 zh/en 各 1，实测 ${canary.length}）`);
   }
   for (const [label, r] of sides) {
-    for (const { value, line } of r.values) out.push(...scanText(`${label}:${line}`, value));
+    for (const { value, line, folded } of r.values) {
+      out.push(...scanText(`${label}:${line}${folded ? ":folded" : ""}`, value));
+    }
   }
   return out;
 }
@@ -376,10 +476,9 @@ test("g-444 判据3：server-i18n 两侧的字符串值不含本仓库特有路�
 test("g-444 判据3：客户端 i18n（GUI 可见文案，源码 + dist 拼接副本）全部字符串字面量 0 命中", () => {
   const src = scanLiterals(readFileSync(CLIENT_I18N_SRC, "utf8"));
   const dist = scanLiterals(readFileSync(CLIENT_BUNDLE_DIST, "utf8"));
-  // 完备性腿：注释与正则之外不得有游离引号，且不得有解析不了的字面量（宁可判红，不许静默）。
+  // 完备性腿（承重）：不得有解析不了的含引号内容（宁可判红，不许静默）。
   for (const [label, r] of [["源", src], ["dist", dist]] as const) {
     assert.deepEqual(r.unparsed, [], `${label}: 存在无法解析的字面量`);
-    assert.equal((r.codeText.match(/['"`]/g) ?? []).length, 0, `${label}: 注释外仍有游离引号`);
   }
   assert.ok(src.values.length >= CLIENT_I18N_MIN_LITERALS, `源码字面量条数过少（${src.values.length}）`);
   assert.ok(dist.values.length >= src.values.length, `dist 字面量 ${dist.values.length} 少于源码 ${src.values.length}`);
@@ -390,18 +489,16 @@ test("g-444 字面量口径：转义编码 / 非键值行两类形态必须入�
   // 形态①：把 token 写成 \u 转义 —— 必须**解转义后**命中。
   const escaped = scanLiterals("    'live.x': '⚠️ DSH\\u00200.1.6 起默认 8 个活跃子代理',\n");
   assert.deepEqual(escaped.unparsed, []);
-  assert.equal((escaped.codeText.match(/['"`]/g) ?? []).length, 0);
   const escapedHits = escaped.values.flatMap(({ value }) => scanText("fixture", value));
   assert.deepEqual(escapedHits.map((v) => v.match(/\[([a-z-]+)\]/)?.[1]), ["hardcoded-dsh-version", "hardcoded-subagent-slots"], "转义写法必须命中");
 
   // 形态②：token 出现在**非键值行**（赋值右侧）—— 必须入面。
   const assignment = scanLiterals("const G444_LEAK = 'DSH 0.1.6 起默认 8 个活跃子代理';\n");
   assert.deepEqual(assignment.unparsed, []);
-  assert.equal((assignment.codeText.match(/['"`]/g) ?? []).length, 0);
   const assignHits = assignment.values.flatMap(({ value }) => scanText("fixture", value));
   assert.deepEqual(assignHits.map((v) => v.match(/\[([a-z-]+)\]/)?.[1]), ["hardcoded-dsh-version", "hardcoded-subagent-slots"], "非键值行必须入面");
 
-  // 数组元素 / 反引号 / 双引号同样入面；注释与正则字面量不入面（也不产出游离引号）。
+  // 数组元素 / 反引号 / 双引号同样入面；注释与正则字面量不入面。
   const mixed = scanLiterals([
     "const arr = ['dsh-graph-host/', \"prepareAttemptWorktree\", `node --test core/tests/x`];",
     "// 注释里的 dsh-graph-host/ 与 INDEX.md 不计",
@@ -410,17 +507,50 @@ test("g-444 字面量口径：转义编码 / 非键值行两类形态必须入�
     "const s = '安全值 {n}';",
   ].join("\n"));
   assert.deepEqual(mixed.unparsed, [], "不得有无法解析的字面量");
-  assert.equal((mixed.codeText.match(/['"`]/g) ?? []).length, 0, "注释与正则之外不得残留引号");
   const mixedHits = mixed.values.flatMap(({ value }) => scanText("fixture", value));
   assert.deepEqual(mixedHits.map((v) => v.match(/\[([a-z-]+)\]/)?.[1]), [
     "repo-package-path", "internal-fn-name", "repo-test-cmd",
   ], `数组/双引号/反引号入面、注释与正则不入面（实得 ${JSON.stringify(mixedHits)}）`);
   assert.equal(mixed.values.filter(({ value }) => value.includes("{n}")).length, 1, "合法插值仍入面且不误判");
 
-  // 解析不了的含引号内容必须判红（而不是静默漏掉）。
+  // 解析不了的含引号内容必须判红（而不是静默漏掉）——承重完备性腿。
   const broken = scanLiterals("const s = '没有收尾引号\n");
   assert.equal(broken.unparsed.length, 1, "未闭合字面量必须记入 unparsed");
   assert.match(broken.unparsed[0].why, /未闭合/);
+});
+
+test("g-444 字面量口径②：运行时真值必然入面（行继续 / `+` 拼接的差分对照）", () => {
+  /**
+   * 差分对照：右侧用 `new Function` 求**运行时字符串**（真值），左侧要求扫描面必须命中——
+   * 即「运行时会拼出 token 的写法，扫描面不得漏」。list 覆盖复核点名的两类新形态。
+   */
+  const runtime = (expr: string): string => new Function(`return (${expr});`)() as string;
+  const cases: { why: string; expr: string; expect: string[] }[] = [
+    { why: "行继续 LF", expr: "'DSH 0.1.\\\n6 起默认 8 个活跃子代理'", expect: ["hardcoded-dsh-version", "hardcoded-subagent-slots"] },
+    { why: "行继续 CRLF", expr: "'DSH 0.1.\\\r\n6 起默认 8 个活跃子代理'", expect: ["hardcoded-dsh-version", "hardcoded-subagent-slots"] },
+    { why: "unicode 转义", expr: "'DSH\\u00200.1.6'", expect: ["hardcoded-dsh-version"] },
+    { why: "hex 转义", expr: "'DSH\\x200.1.6'", expect: ["hardcoded-dsh-version"] },
+    { why: "相邻字面量拼接", expr: "'DSH ' + '0.1.6 起默认 8 个活跃子代理'", expect: ["hardcoded-dsh-version", "hardcoded-subagent-slots"] },
+    { why: "跨行相邻拼接", expr: "'DSH '\n      + '0.1.6'", expect: ["hardcoded-dsh-version"] },
+    { why: "注释隔开的相邻拼接", expr: "'DSH ' /* 注释 */ + '0.1.6'", expect: ["hardcoded-dsh-version"] },
+    { why: "反引号内嵌拼接", expr: "`${'DSH' + ' 0.1.6'}`", expect: ["hardcoded-dsh-version"] },
+  ];
+  for (const c of cases) {
+    const truth = runtime(c.expr);
+    assert.ok(c.expect.every((id) => RULES.find((r) => r.id === id)!.pattern.test(truth)), `${c.why}: 夹具本身应命中（runtime=${truth}）`);
+    const scan = scanLiterals(c.expr);
+    assert.deepEqual(scan.unparsed, [], `${c.why}: 不得有未解析字面量`);
+    const hits = scan.values.flatMap(({ value }) => scanText("fixture", value));
+    const ids = hits.map((v) => v.match(/\[([a-z-]+)\]/)?.[1]);
+    for (const id of c.expect) assert.ok(ids.includes(id), `${c.why}: 运行时真值命中 ${id}，扫描面却漏了（扫描面=${JSON.stringify(scan.values.map((v) => v.value))}）`);
+  }
+  // 键值行形态（复核要求至少覆盖）：`'k': 'a' + 'b'`。
+  const kv = scanLiterals("    'live.x': 'DSH ' + '0.1.6 起默认 8 个活跃子代理',\n");
+  const kvHits = kv.values.flatMap(({ value }) => scanText("fixture", value)).map((v) => v.match(/\[([a-z-]+)\]/)?.[1]);
+  assert.ok(kvHits.includes("hardcoded-dsh-version") && kvHits.includes("hardcoded-subagent-slots"), `键值行拼接必须命中（实得 ${JSON.stringify(kvHits)}）`);
+  // 反向护栏：不拼出 token 的相邻拼接不得误报。
+  const clean = scanLiterals("const s = '插件' + '包目录';\n");
+  assert.deepEqual(clean.values.flatMap(({ value }) => scanText("fixture", value)), [], "合法拼接不得误报");
 });
 
 test("g-444 逐资产粒度下限：清空/截断任一预期资产即判红（防聚合护栏 fail-open）", () => {
