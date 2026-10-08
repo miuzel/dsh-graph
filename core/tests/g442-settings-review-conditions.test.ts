@@ -1161,6 +1161,74 @@ test("g-442 P1：变异 B3 等价体必红（把畸形分支的 value/malformed 
   });
 });
 
+/**
+ * B4 等价变异（Lane A 增量复核点出的覆盖缺口；该变异当时 **209 用例全绿**）：
+ * 把 `value: raw.filter((item): item is string => typeof item === "string")`
+ * 改成 `value: raw.map((s) => String(s))` ⇒ `regions: [123]` 时投影 / UI 生效值行显示 `123`，
+ * 而引擎消费 `[]`（R1 的 P1「假值」在**非字符串元素**这一支复活）。
+ * 本用例用与实现无关的期望式**字面钉住**该分支，并保留该变异为负向对照（必红）。
+ */
+test("g-442 B4：非字符串元素分支的 value 被字面钉住（filter→map(String) 变异必红）", async () => {
+  // 代表性畸形数组：B4 最小复现 [123]；另补 null 与混合形态
+  const cases: Array<{ label: string; yaml: string; raw: any[] }> = [
+    { label: "regions:[123]", yaml: "review:\n  regions: [123]\n", raw: [123] },
+    { label: 'regions:["a",null]', yaml: 'review:\n  regions: ["a", null]\n', raw: ["a", null] },
+    { label: 'regions:["dist",123,""]', yaml: 'review:\n  regions: ["dist", 123, ""]\n', raw: ["dist", 123, ""] },
+  ];
+  // 变异体（B4）：逐个元素字符串化 ⇒ 非字符串项冒充成条目
+  const mutated = (raw: any[]): string[] => raw.map((s) => String(s));
+  for (const c of cases) {
+    const { root, byName } = setupInstance();
+    writeFileSync(join(root, "project.yaml"), c.yaml, "utf8");
+    const tool: any = await callTool(byName, "graph_get_settings");
+    const proj = tool.config.review.effective.regions;
+
+    // (1) 字面断言（期望式与实现无关）：投影 value = 仅字符串项，绝不字符串化非字符串项
+    assert.deepEqual(plain([...proj.value]), plain(c.raw.filter((x) => typeof x === "string")),
+      `${c.label}: 投影 value 必须只含字符串项（非字符串项对匹配无影响，不得字符串化冒充条目）`);
+    assert.equal(proj.malformed, true, `${c.label}: 含非字符串项 ⇒ 畸形`);
+    assert.equal(proj.source, "explicit", `${c.label}: 字段显式存在（不是缺省）`);
+
+    // (2) 投影 value === 引擎实际遍历/匹配用的列表（**不是**自证中间量）：
+    //     canary 含由非字符串项派生的路径 ⇒ 「被字符串化」必然改变匹配结果，该断言因此能判红。
+    const canaries = [...CANARY_PATHS, ...c.raw.map((x) => `${String(x)}/probe.ts`), "null/probe.ts"];
+    for (const p of canaries) {
+      assert.deepEqual(plain(regionOfPath(p, proj.value as any) as any), plain(regionOfPath(p, c.raw as any) as any),
+        `${c.label}: 引擎消费值在 ${p} 上的匹配结果必须与投影 value 一致`);
+    }
+    // 引擎**真实决策** ↔ 用投影值在测试侧重算的预测（引擎是唯一真源）
+    const canary = "null/probe.ts";
+    const dec = resolveReviewPolicy({ type: "task", policy: "auto", changedPaths: [canary], regions: c.raw } as any);
+    assert.equal(dec.strictReasons.includes("unknown_region"), regionOfPath(canary, proj.value) === null,
+      `${c.label}: 投影 value 必须能预测引擎对 ${canary} 的 unknown_region 决策`);
+
+    // 遍历证据：代理数组记录引擎在该字段上真正读到的元素 ⇒ 投影 value 必须等于其中字符串项的集合
+    const reads: string[] = [];
+    const spy = new Proxy(c.raw, {
+      get(t: any, k: any) { if (typeof k === "string" && /^\d+$/.test(k)) reads.push(k); return t[k]; },
+    });
+    resolveReviewPolicy({ type: "task", policy: "auto", changedPaths: [canary], regions: spy } as any);
+    const readItems = [...new Set(reads)].sort().map((i) => c.raw[Number(i)]);
+    assert.deepEqual(plain([...new Set(reads)].sort()), plain(c.raw.map((_x, i) => String(i))),
+      `${c.label}: 引擎必须读遍该字段每个元素（遍历证据）`);
+    assert.deepEqual(plain([...proj.value]), plain(readItems.filter((x: any) => typeof x === "string")),
+      `${c.label}: 投影 value 必须等于引擎在该字段上实际读到的字符串项集合`);
+
+    // (3) 负向对照：B4 变异体在**同一组断言**下必红
+    const mv = mutated(c.raw);
+    // 红点 1：字面断言（变异体含被字符串化的非字符串项）
+    assert.notDeepEqual(plain(mv), plain(c.raw.filter((x) => typeof x === "string")),
+      `${c.label}: B4 变异体必须被字面断言判红（mutated=${JSON.stringify(mv)}）`);
+    // 红点 2：引擎遍历/匹配一致性（canary 派生自非字符串项时，代理遍历口径与基线遍历口径分叉）
+    const diverging = canaries.filter((p) => JSON.stringify(plain(regionOfPath(p, mv as any) as any)) !== JSON.stringify(plain(regionOfPath(p, c.raw as any) as any)));
+    assert.ok(diverging.length > 0,
+      `${c.label}: B4 变异体必须被「引擎遍历口径」判红（实际零分叉 ⇒ 断言未钉住该分支）`);
+    // 红点 3：遍历证据（代理读到的字符串项集合与变异体不同）
+    assert.notDeepEqual(plain(mv), plain(readItems.filter((x: any) => typeof x === "string")),
+      `${c.label}: B4 变异体必须被遍历证据判红`);
+  }
+});
+
 test("g-442 P2①（UI）：`regions: []` 渲染为非法态（无「显式空列表」标签）+ 畸形字段显示引擎消费值", () => {
   const { root } = setupInstance();
   const { zh, en } = loadClientI18n();
