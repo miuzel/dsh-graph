@@ -18,14 +18,15 @@
 > 再由**负责人手动执行 `npm publish`**。
 > 本文件同时承载 v0.19.8 的 Release Notes 与发布前 / 发布后检查项。
 > 版本线说明：v0.19.8 泳道（16 项目标）承接上一发布版本 `v0.19.7`；开发线版本串为 `0.19.8-alpha`。
-> 集成分支 `v0.19.8-test`（tip **`6d62af6`**）已含 v0.19.8 全部工作，`v0.19.7-test` 为其祖先。
+> 集成分支 `v0.19.8-test`（发布准备合入后 tip **`5f08af4`**；发布准备提交 `1eaad28`，基线 `6d62af6`）已含 v0.19.8 全部工作，`v0.19.7-test` 为其祖先。
+> 合并提交 `5f08af4` 与发布准备提交 `1eaad28` **同树**（`docs/` 不入包）⇒ §4 的 RC 指纹对最终集成 tip 同样成立（已在 `5f08af4` 上重建复核，指纹一致）。
 > 本清单结构对照 [`docs/release-checklist-v0.19.7.md`](release-checklist-v0.19.7.md)。
 
 > **准备阶段未执行任何发布动作**：未 `npm publish`、未打 tag、未创建 GitHub release、未 `git push`、
 > 未合并 `main`、未改写 git 历史、未触碰 `engines` 与 `peerDependencies`。
 > 是否合并 `main` / 打 tag / 发布由负责人在人工 gate 决定。
 
-**本次执行树**：worktree `.worktrees/g-455-att-01`，分支 `g-455-att-01`，基线 **`6d62af6`**（= `v0.19.8-test` HEAD）。
+**本次执行树**：worktree `.worktrees/g-455-att-01`，分支 `g-455-att-01`，基线 **`6d62af6`**（= 合入前的 `v0.19.8-test` HEAD）；发布准备提交 **`1eaad28`**（worktree tip），已并入 `v0.19.8-test`（`5f08af4`）。
 **纪律（准备阶段）**：全部构建 / 测试 / 打包**均在 worktree 内**完成；**未写主树 `dist/`**
 （主树 `dist/` 是运行中宿主的资产来源，历史上有 worker 因主树构建争用而静默死亡；主树 `dist/` mtime 保持 `2026-10-06 12:31:23`）；
 
