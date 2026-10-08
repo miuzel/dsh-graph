@@ -4865,7 +4865,7 @@ export interface HarvestedCard {
   attachments: string[];
   /** g-183：卡片的唯一审计摘要（sha1 前 16 位，供注入段可审计）。 */
   digest: string | null;
-  /** 卡片文件的相对路径（用于预算超限时精确按需查阅）。 */
+  /** 卡片文件的**工作区相对**路径（用于预算超限时精确按需查阅；g-447：以实际解析出的图根为基准）。 */
   path?: string;
 }
 
@@ -4893,8 +4893,20 @@ export function attachmentDigest(root: string, name: string): string | null {
  *  悬空引用与坏卡片跳过（由 validate 报告），不在此抛错。
  *  g-183：共享引用解析到共享池权威内容（各 goal 引用读同一份）；
  *  引用 id 经 assertSafeId 安全解析，恶意/越界 ref 被跳过（统一安全解析）。 */
-/** 将 graph 内部卡片路径转换为相对工作区根的精确路径（以 .dsh-graph/ 开头，供执行者按需读取）。 */
-export function toWorkspaceCardPath(root: string, cardFile: string): string {
+/** 将 graph 内部卡片路径转换为相对工作区根的精确路径（供执行者按需读取）。
+ *  g-447：以**实际解析出的图根**为基准 —— 图根真源是 `core/root.ts` 的
+ *  `resolveCanonicalRoot(config, workspace)`（相对值基于 workspace、绝对值独立覆盖）。调用方把该次
+ *  解析所用的**同一个 workspace** 传进来即可，此处不再自造第二套解析：
+ *  传入 `workspaceRoot` 时直接返回 `relative(workspaceRoot, cardFile)` ⇒ 默认根 `.dsh-graph/…`、
+ *  相对自定义根 `board-a/…`、嵌套 `boards/board-n/…`、工作区内绝对根按 workspace 相对展开，
+ *  均指向**真实卡片文件**。旧写法无条件硬拼 `.dsh-graph`：自定义根下会指向默认根的同名卡片
+ *  （内容/digest 不符＝静默误读）或根本不存在的文件。
+ *  工作区外的绝对根展开为 `../…` 形态（不申请任何额外读取权限；该形态未验证）。
+ *  未传 `workspaceRoot` 时保持 g-429 旧契约（仅默认根形态精确），供既有调用方兼容。 */
+export function toWorkspaceCardPath(root: string, cardFile: string, workspaceRoot?: string): string {
+  if (typeof workspaceRoot === "string" && workspaceRoot !== "") {
+    return normalizeRelPath(relative(resolve(workspaceRoot), resolve(cardFile)));
+  }
   // g-429：走归一化（Windows 上 `relative()` 产出 `\`，旧写法 `startsWith(".dsh-graph/")` 不命中
   // ⇒ 落进 join 分支拼出 `.dsh-graph\.dsh-graph\…` 的重复前缀）。返回值为 POSIX `/` 形态（注入契约）。
   if (basename(root) === ".dsh-graph") {
@@ -4904,7 +4916,7 @@ export function toWorkspaceCardPath(root: string, cardFile: string): string {
   return relPathStartsWithSegments(rel, [".dsh-graph"]) ? rel : join(".dsh-graph", rel);
 }
 
-export function harvestedCards(root: string, goalId: string): HarvestedCard[] {
+export function harvestedCards(root: string, goalId: string, workspaceRoot?: string): HarvestedCard[] {
   const file = findGoalFile(root, goalId);
   const dir = basename(file) === "goal.md" ? dirname(file) : null;
   const doc = loadGoal(file);
@@ -4925,7 +4937,7 @@ export function harvestedCards(root: string, goalId: string): HarvestedCard[] {
       if (existsSync(ownFile)) {
         cardFile = ownFile;
         scope = "goal";
-        relPath = toWorkspaceCardPath(root, ownFile);
+        relPath = toWorkspaceCardPath(root, ownFile, workspaceRoot);
       }
     }
     if (!cardFile) {
@@ -4933,7 +4945,7 @@ export function harvestedCards(root: string, goalId: string): HarvestedCard[] {
       if (!existsSync(sharedFile)) continue; // 悬空引用（validate 管）
       cardFile = sharedFile;
       scope = "shared";
-      relPath = toWorkspaceCardPath(root, sharedFile);
+      relPath = toWorkspaceCardPath(root, sharedFile, workspaceRoot);
     }
     try {
       const card = loadGoal(cardFile);
@@ -4977,15 +4989,18 @@ export interface CardBudgetOptions {
  *  - 超长单卡按单卡预算截断正文并给出精确路径与 digest；
  *  - 多卡超出总预算或条数上限时折叠为摘要+精确路径+digest 按需展开；
  *  - 溢出项明确可见且可定位，不静默丢弃；无 filled/reviewed 卡片时返回带「（无）」说明的短段。
- *  g-241 集成：preHarvestedCards 支持单次快照复用（第 4 参，可选）。 */
+ *  g-241 集成：preHarvestedCards 支持单次快照复用（第 4 参，可选）。
+ *  g-447：第 6 参 workspaceRoot（可选）＝解析该图根所用的同一个 workspace ⇒ 精确路径以**实际图根**
+ *  为基准（默认/相对自定义/嵌套自定义/工作区内绝对根均指向真实卡片文件）；缺省时保持旧契约。 */
 export function formatHarvestedCardsSection(
   root: string,
   goalId: string,
   opts?: CardBudgetOptions,
   preHarvestedCards?: HarvestedCard[],
   language: "zh" | "en" = "zh",
+  workspaceRoot?: string,
 ): string {
-  const cards = preHarvestedCards ?? harvestedCards(root, goalId);
+  const cards = preHarvestedCards ?? harvestedCards(root, goalId, workspaceRoot);
   const isEn = language === "en";
   if (cards.length === 0) {
     return [
@@ -5019,7 +5034,14 @@ export function formatHarvestedCardsSection(
       c.digest ? `digest=${c.digest}` : null,
     ].filter(Boolean).join(isEn ? ", " : "，");
 
-    const exactPath = c.path ? c.path : (c.scope === "shared" ? `.dsh-graph/shared-cards/${c.id}.md` : `.dsh-graph/cards/${c.id}.md`);
+    // g-447：`c.path` 缺失（调用方自带部分卡片）时的兜底同样以**实际图根**为基准，不再硬拼 .dsh-graph。
+    const exactPath = c.path ? c.path : toWorkspaceCardPath(
+      root,
+      c.scope === "shared"
+        ? join(sharedCardsDir(root), `${c.id}.md`)
+        : join(dirname(findGoalFile(root, goalId)), "cards", `${c.id}.md`),
+      workspaceRoot,
+    );
     const atts = c.attachments.length
       ? `\n  ${isEn ? "Attachment references: " : "附件引用："}` + c.attachments.map((a) => `@att/${a}`).join(isEn ? ", " : "，")
       : "";
