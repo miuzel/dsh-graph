@@ -625,7 +625,7 @@ export function generateHandoff(
   const parts: string[] = [];
   parts.push("# HANDOFF（换会话交接）", "");
   parts.push(`> 由 graph_handoff 自动生成于 ${nowIso()}。图根：\`${root}\`。`);
-  parts.push("> 你的职责指南：dsh-graph-host/supervisor-guide.zh.md（注册为 skill `dsh-graph-supervisor`）。", "");
+  parts.push("> 你的职责指南：skill `dsh-graph-supervisor`（dsh-graph 主管工作指南；由插件注册，无需依赖任何文件路径）。", "");
   parts.push("## 目标看板", "");
   for (const v of board.versions) {
     parts.push(`### 版本 ${v.slug}（${v.status}）`, "");
@@ -6198,7 +6198,7 @@ export const ATTEMPT_REPORT_SKELETON = [
   "1. **交付位置**：worktree / 分支 / commit / 基线（一行）。",
   "2. **改了什么**：按能力分组的文件 + 模块清单，每个文件一句「加了什么」。",
   "3. **怎么改的**：关键设计 / 数据流 / 为什么这样做（含被否方案与否决理由）。",
-  "4. **影响面**：谁受影响（宿主、其他目标、发布含义、兼容性、`engines`、配置迁移）。",
+  "4. **影响面**：谁受影响（运行环境 / 其他目标 / 发布含义 / 兼容性 / 配置迁移）。",
   "5. **测过什么 / 没测什么**：命令 + 单行证据（含**负向对照**与**基线对照**）；未验证项及原因。",
   "6. **值得注意的点**：风险 / 残余 / 已知缺陷 / 后续依赖（每条一句）。",
   "7. **与判据的对应**：每条判据 → 达成与否 + 证据指向。",
@@ -6229,7 +6229,7 @@ export const ATTEMPT_REPORT_SKELETON_EN = [
   "1. **Delivery location**: worktree / branch / commit / baseline (one line).",
   "2. **What changed**: files and modules grouped by capability, one sentence per file on what it adds.",
   "3. **How it was changed**: key design, data flow, why this way (including rejected options and why they were rejected).",
-  "4. **Impact surface**: who is affected (host, other goals, release meaning, compatibility, `engines`, config migration).",
+  "4. **Impact surface**: who is affected (runtime environment, other goals, release meaning, compatibility, config migration).",
   "5. **Tested / not tested**: command plus a single-line evidence summary (including **negative controls** and **baseline comparison**); unverified items and why.",
   "6. **Worth noting**: risks, leftovers, known defects, follow-up dependencies (one sentence each).",
   "7. **Criteria mapping**: each criterion to met or not met plus where the evidence is.",
@@ -11629,7 +11629,28 @@ export function resolveSubagentMode(
  *
  * 双向兼容约束：本函数只识别上述新码，**其余错误原样返回 message**——
  * 既有的可追溯性（如 "LLM quota exceeded"、provider 缺失提示）必须逐字保留。
+ *
+ * 上限口径（g-444）：槽位上限由运行环境配置、随版本变化，故文案**只透出实际读到的上限**；
+ * 读不到时保持中性表述，**绝不写死版本号或默认槽位数**。
  */
+
+/** 读取运行环境给出的并发槽位上限：优先 `details` 的数值字段，其次兼容解析引擎消息里的
+ *  `active child limit: N`；两者都读不到返回 null（调用方据此走中性表述）。 */
+function readActivationLimit(e: unknown): number | null {
+  const details = (e as { details?: Record<string, unknown> | null } | null | undefined)?.details;
+  if (details && typeof details === "object") {
+    for (const key of ["limit", "max", "maxActiveSubagents", "capacity"]) {
+      const v = (details as Record<string, unknown>)[key];
+      if (typeof v === "number" && Number.isFinite(v) && v > 0) return Math.floor(v);
+    }
+  }
+  const message = String((e as { message?: unknown } | null | undefined)?.message ?? e);
+  const hit = message.match(/active child limit:\s*(\d+)/i);
+  if (!hit) return null;
+  const n = Number(hit[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export function subagentSpawnErrorText(e: unknown): string {
   const message = String((e as { message?: unknown } | null | undefined)?.message ?? e);
   const err = e as { code?: unknown; details?: { reason?: unknown } | null } | null | undefined;
@@ -11637,7 +11658,11 @@ export function subagentSpawnErrorText(e: unknown): string {
   const reason = typeof err?.details?.reason === "string" ? err.details.reason : "";
   const hay = `${code} ${reason} ${message}`;
   if (hay.includes("ACTIVATION_LIMIT_REACHED")) {
-    return `子代理激活已达上限（DSH 0.1.6 起默认最多 8 个活跃 continuable 子代理）：`
+    const limit = readActivationLimit(e);
+    const cap = limit === null
+      ? "（上限由运行环境配置）"
+      : `（当前上限 ${limit} 个活跃 continuable 子代理）`;
+    return `子代理激活已达上限${cap}：`
       + `请等待现有子代理结算，或先解绑不再需要的子代理后重试。原始错误：${message}`;
   }
   if (hay.includes("subagent/delivery-unavailable")) {

@@ -62,7 +62,7 @@ function codeMatches(source: string, re: RegExp): string[] {
 
 // ---------------------------------------------------------------- 1. 核心层错误映射
 
-test("g-321 subagentSpawnErrorText：ACTIVATION_LIMIT_REACHED（含 code / details.reason / message 三种载体）给出可操作提示", () => {
+test("g-321/g-444 subagentSpawnErrorText：ACTIVATION_LIMIT_REACHED（含 code / details.reason / message 三种载体）给出可操作提示", () => {
   const cases: unknown[] = [
     Object.assign(new Error("subagent limit reached (active child limit: 8)"), { code: "ACTIVATION_LIMIT_REACHED" }),
     { message: "cold resume rejected", details: { reason: "ACTIVATION_LIMIT_REACHED" } },
@@ -71,9 +71,19 @@ test("g-321 subagentSpawnErrorText：ACTIVATION_LIMIT_REACHED（含 code / detai
   for (const e of cases) {
     const text = subagentSpawnErrorText(e);
     assert.match(text, /子代理激活已达上限/);
-    assert.match(text, /8/, "提示应给出默认上限 8");
     assert.match(text, /解绑|等待/, "提示应给出可操作动作");
   }
+  // g-444：上限只来自**错误对象实际携带的信息**——details 数值字段优先，其次引擎消息里的 `active child limit: N`。
+  assert.match(subagentSpawnErrorText(cases[0]), /当前上限 8 个/, "message 载体的实际上限必须透出");
+  assert.match(
+    subagentSpawnErrorText({ code: "ACTIVATION_LIMIT_REACHED", message: "subagent limit reached (active child limit: 8)", details: { maxActiveSubagents: 3 } }),
+    /当前上限 3 个/,
+    "details 数值字段优先于消息文本",
+  );
+  // 运行环境未给出上限 ⇒ 中性表述：不写死版本号，也不凭空编造默认槽位数。
+  const neutral = subagentSpawnErrorText({ code: "ACTIVATION_LIMIT_REACHED", message: "limit reached" });
+  assert.match(neutral, /上限由运行环境配置/);
+  assert.doesNotMatch(neutral, /0\.1\.6|最多\s*8|maxActiveSubagents:\s*8/, "禁止写死版本号或默认槽位数");
 });
 
 test("g-321 subagentSpawnErrorText：subagent/delivery-unavailable 给出可操作提示", () => {

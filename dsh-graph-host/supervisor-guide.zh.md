@@ -134,8 +134,8 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
 - **强制升级 strict 的闭集**（命中任一即 strict，显式 `auto`/`none` 不得推翻）：变更路径含有效契约文件（`project.yaml` 的 `review.contract_paths`，默认未配置时不猜契约 M1 不触发；改 `core/schema.ts` 在已登记项目中触发，即便契约文件为 `.md` 同样严格触发）；产品代码变更 ≥150 行；产品代码变更跨 ≥3 个顶层区域（`review.regions`，普适默认 `src/lib/app/packages/server/client/scripts/tests` 或项目自定义，纯文档/生成物不单独触发 M3）；supervisor 显式声明 `strict_required`（覆盖核心层重写等无法用路径与行数表达的情形）；产品代码落在未登记区域时安全升级为 strict（`unknown_region` 追加在末尾）；`review.regions: []` 显式空列表无可评估区域安全升级为 strict。
 - **项目评审配置校准**：主管应按项目实际架构校准 `project.yaml`（通过 `graph_get_settings` 查询、`graph_update_settings` 写入；必要时向负责人确认）：`review.regions`（按代码边界与顺序登记，最长前缀优先）、`review.contract_paths`（冻结契约路径，显式空列表 `[]` 合法且 M1 不触发）、`review.non_product_prefixes`（排除非产品前缀）。未登记区域的产品代码改动升级为 strict。
 - **机器门禁四项**（逐条可执行，`graph_resolve_accept(fast_track=true, machine_report=…)` 调用前须逐条实测）：
-  1. 全量测试：项目配置的测试命令（如 `node --test core/tests/*.test.ts`）→ `exit_code=0` 且 `fail=0`（双条件，只看文本会被截断误导）；
-  2. 类型检查：项目配置的类型检查命令（如 `./node_modules/.bin/tsc --noEmit -p tsconfig.json`）→ `exit_code=0`；覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内；
+  1. 全量测试：项目配置的测试命令（本项目示例：`node --test core/tests/*.test.ts`）→ `exit_code=0` 且 `fail=0`（双条件，只看文本会被截断误导）；
+  2. 类型检查：项目配置的类型检查命令（本项目示例：`./node_modules/.bin/tsc --noEmit -p tsconfig.json`）→ `exit_code=0`；覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内；
   3. 变更规模：`git diff --numstat <attempt.baseline_commit> HEAD` 的产品代码增删合计 <150 行（按 `review.non_product_prefixes` 排除非产品代码；worktree 模式下须在 attempt 工作树内执行），且 `git status --porcelain` 复核无未跟踪新文件（未跟踪文件不计入 numstat，必须先提交）；
   4. 判据已验：该目标全部判据文本均以 `✅已验` 结尾（由 `goal.md` 自算，不采信调用方自报）。
 - **fail-safe**：任一信号取不到（命令失败、报告缺字段、基线不可用）即不放行，不得把「拿不到证据」当作「证据为真」。
@@ -307,21 +307,21 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   - 冻结脚本路径、验收命令逐条写全；
 - **worktree 隔离（Supervisor 强制默认）**：
   - **main 只读**：`main` 分支只承载已发布版本，任何开发、测试、review 改动不得在 main 上进行；
-  - **版本集成分支与主工作区（main worktree）**：supervisor 为当前推进版本建立 `<version>-test` 集成分支。**默认直接将 main worktree 切换至该 `<version>-test` 分支作为权威集成与人工验证工作区**，统一使用主仓库根下的 `./tmp/test-review` 启动测试环境，避免多 worktree 导致测试环境与数据存储目录碎片化；
-  - **预创建 worktree**：supervisor 预创建并登记子代理 worktree（在 `<version>-test` 基线上预创建专属 `.worktrees/g-xxx-att-xx` 工作树并登记）；子代理直接在给定树工作，**绝不自行拉树/建分支/改分支**；
+  - **版本集成分支与主工作区（main worktree）**：项目可约定一个**版本集成分支**（占位 `<integration-branch>`；实际分支名与是否存在由项目与负责人约定，插件不强制）。**若项目已约定该分支，默认直接将 main worktree 切换至该分支作为权威集成与人工验证工作区**，统一使用主仓库根下的 `./tmp/test-review` 启动测试环境，避免多 worktree 导致测试环境与数据存储目录碎片化；
+  - **预创建 worktree**：supervisor 预创建并登记子代理 worktree（在项目约定的集成分支 / 基线上预创建专属 `.worktrees/g-xxx-att-xx` 工作树并登记）；子代理直接在给定树工作，**绝不自行拉树/建分支/改分支**；
   - **worktree=true**：非平凡源码/测试/生成物/有副作用/并行改动必须隔离；brief 必须写明专属路径、版本分支、基线 commit、禁止自行拉树/建分支/改分支；
   - **worktree=false 快速通道**：仅以下两类可豁免——① 只读审计/静态检查（brief 明确禁止写文件，需构建副作用时复用 audit worktree）；② 特别小的独立文档/记忆修改（supervisor 直接在当前版本分支做，或子代理显式豁免并记录理由）；只写 graph 数据（看板状态、事件流）可显式不建 worktree，改源码仍隔离；
-  - **低风险小改动快速通道**：单个 build 脚本、小工具或一两行的低风险单文件修复，supervisor 可直接在当前 `<version>-test` 集成分支修改、针对性验证后快速请求负责人合并/验收，不派实现/review 子代理往返；须限定单个文件、无生成物/测试/副作用/并发风险；绝不因走此通道而直接改 main 或绕过人工 gate；子代理不得擅自套用；
+  - **低风险小改动快速通道**：单个 build 脚本、小工具或一两行的低风险单文件修复，supervisor 可直接在当前项目集成分支（`<integration-branch>`）修改、针对性验证后快速请求负责人合并/验收，不派实现/review 子代理往返；须限定单个文件、无生成物/测试/副作用/并发风险；绝不因走此通道而直接改 main 或绕过人工 gate；子代理不得擅自套用；
   - **铁律**：`worktree=false` 绝不意味着可直接修改 main；即使豁免，仍禁止修改多文件源码、修改生成物、修改测试、在任意分支直接提交碎提交；
-  -  review 交付阶段由 supervisor 复核通过后合并到当前版本集成分支（`<version>-test`），版本发布前不合并到 main；避免并发子代理互相踩提交、半成品直接落目标分支；
+  -  review 交付阶段由 supervisor 复核通过后合并到当前项目集成分支（`<integration-branch>`），版本发布前不合并到 main；避免并发子代理互相踩提交、半成品直接落目标分支；
   -  worktree 指令由执行派发注入 spawn 提示词；GUI 端点仅在 supervisor 明确批准时才可传 body `worktree: false`；
   -  数据分工：代码改动在 worktree，看板数据 `.dsh-graph/` 仍在主工作树写（graph_*
     工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）；
 - **只在仓库根跑 graph_* 工具**：执行/调研子代理务必以**仓库根**为工作目录跑
-  graph_* 工具，**绝不在包目录（如 `dsh-graph-host/`）下跑**——否则工具会按会话 cwd
+  graph_* 工具，**绝不在插件包目录下跑**——否则工具会按会话 cwd
   在包目录自动 init 出一个 `.dsh-graph/` 骨架，弄乱工作区。**禁止**用 `git add -f`、
   `git rm --cached` 等方式把 `.dsh-graph` 数据纳入父仓库 Git——数据归内层独立仓库管理，
-  迁移由 `scripts/archived/migrate-dsh-graph-repo.sh --apply` 显式执行；
+  迁移由项目自有的迁移脚本显式执行（插件不自动迁移）；
 - **模型路由**：执行子代理**不继承父会话模型**——统一走 project.yaml 的
   `executor.provider/model`，`graph_start_attempt` 的 provider/model 参数可临时覆盖；
   路由结果显示在返回的 `model_route` 字段；
@@ -330,7 +330,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   复核时**逐行读最终代码、逐条件分支验证声明的行为是否真实现**——脚本 PASS 是必要
   非充分。验证前 **sleep 2s 等文件写入稳定**，避免瞬时误报；
 - **并发 Worktree 实施与流水线复核机制**：
-  - **跨版本/并发特性物理隔离（支持前瞻规划）**：支持在新版本规划与并发派发特性；所有并发开发必须在专属 `.worktrees/g-xxx-att-xx` 分支中进行；验证通过后**不合并到 main**，而是**合并到对应版本集成分支（如 `<version>-test`）**，确保 main 分支的稳定与发版不受未来版本影响，实现真正的全异步并行推进；
+  - **跨版本/并发特性物理隔离（支持前瞻规划）**：支持在新版本规划与并发派发特性；所有并发开发必须在专属 `.worktrees/g-xxx-att-xx` 分支中进行；验证通过后**不合并到 main**，而是**合并到项目约定的版本集成分支（`<integration-branch>`）**，确保 main 分支的稳定与发版不受未来版本影响，实现真正的全异步并行推进；
   - **单目标完工即审**：当派发多个并行 worktree 任务时，某个独立任务一完工，supervisor **立即在该独立 worktree 中启动独立测试实例进行代码与实机复核**，无需阻塞等待所有任务全部完工；
   - **并发回报暂存（避免遗忘）**：在复核某一个目标期间，若其他并发子代理发来完成汇报，supervisor 必须**先将回报信息记录/暂存到临时记忆文件（如 `.dsh-graph/memory/review-queue.md`）**；
   - **完成取下一个**：当前目标复核完成并标记后，查阅暂存记忆文件按序取出下一个就绪目标继续独立验证，直至队列全部复核完毕；
@@ -355,7 +355,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 
 ## 环境事实与排查
 
-- **本地 dev 的 root 覆盖必须用相对值 `.dsh-graph`**：绝对路径会被
+- **本地 dev 的 root 覆盖必须用相对值**（如项目配置的图根目录名，默认 `.dsh-graph`）：绝对路径会被
   `path.resolve(workspace, config.root)` 顶掉、破坏 workspace 跟随；
 - **sessions 列表条目 `cwd` 不可靠**：取当前会话 workspace 用 **workspaces 服务**
   `workspaces.list.getSnapshot().items.find(w => w.sessionIds.includes(sid))?.path`；
