@@ -218,6 +218,11 @@ export function detectWorkspaceCleanliness(
     // 发现失败不影响原有探测路径（下面按原逻辑走 git status）
   }
   try {
+    // Git's -z porcelain paths are always relative to the repository top level,
+    // even when status is invoked from a nested workspace directory.
+    const statusPathRoot = graphRoot
+      ? resolve(runner(workspaceDir, ["rev-parse", "--show-toplevel"]))
+      : resolve(workspaceDir);
     const out = runner(workspaceDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
     const entries = out.includes("\0")
       ? out.split("\0").filter(Boolean)
@@ -227,7 +232,7 @@ export function detectWorkspaceCleanliness(
       const graphPath = resolve(graphRoot);
       // Do not let a misconfigured graph root that is an ancestor of the project hide
       // ordinary project files. The graph root must be a strict descendant of this repo.
-      const repoRoot = resolve(runner(workspaceDir, ["rev-parse", "--show-toplevel"]));
+      const repoRoot = statusPathRoot;
       const graphRel = relative(repoRoot, graphPath);
       const graphIsInsideRepo = graphRel !== "" && graphRel !== ".." &&
         !graphRel.startsWith(`..${sep}`) && !isAbsolute(graphRel);
@@ -259,7 +264,7 @@ export function detectWorkspaceCleanliness(
       const status = entry.slice(0, 2);
       if (status !== "??" || ownedUntracked.size === 0) return true;
       const path = entry.slice(3).replace(/[\\/]$/, "");
-      const absolute = resolve(workspaceDir, path);
+      const absolute = resolve(statusPathRoot, path);
       for (const owned of ownedUntracked) {
         const rel = relative(owned, absolute);
         if (rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))) return false;

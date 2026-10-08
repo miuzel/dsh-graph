@@ -76,3 +76,34 @@ test("g-443 real external Git repo: default/custom graph roots and registered wo
   assert.equal(trackedState.clean, false);
   assert.match(trackedState.dirtyReason, /tracked-state\.yaml/);
 });
+
+test("g-443 nested workspace resolves status paths from Git top-level for default graph root", () => {
+  const workspace = gitFixture();
+  const nestedWorkspace = join(workspace, "core");
+  mkdirSync(nestedWorkspace);
+  writeFileSync(join(nestedWorkspace, "tracked.ts"), "tracked\n");
+  git(workspace, ["add", "core/tracked.ts"]);
+  git(workspace, ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "nested workspace"]);
+
+  const graphRoot = join(workspace, ".dsh-graph");
+  mkdirSync(graphRoot);
+  writeFileSync(join(graphRoot, "events.jsonl"), "plugin state\n");
+  assert.deepEqual(detectWorkspaceCleanliness(nestedWorkspace, undefined, graphRoot), { clean: true });
+});
+
+test("g-443 nested workspace does not hide unrelated root .dsh-graph user data under a custom graph root", () => {
+  const workspace = gitFixture();
+  const nestedWorkspace = join(workspace, "core");
+  mkdirSync(nestedWorkspace);
+  writeFileSync(join(nestedWorkspace, "tracked.ts"), "tracked\n");
+  git(workspace, ["add", "core/tracked.ts"]);
+  git(workspace, ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "nested workspace"]);
+
+  const customRoot = join(nestedWorkspace, ".dsh-graph");
+  mkdirSync(customRoot);
+  mkdirSync(join(workspace, ".dsh-graph"));
+  writeFileSync(join(workspace, ".dsh-graph", "user-note.md"), "user content\n");
+  const result = detectWorkspaceCleanliness(nestedWorkspace, undefined, customRoot);
+  assert.equal(result.clean, false);
+  assert.match(result.dirtyReason, /\.dsh-graph\/user-note\.md/);
+});
