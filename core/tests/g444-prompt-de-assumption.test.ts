@@ -6,17 +6,26 @@
 //  · A) 资产扫描（仅模型可读面，**每个预期资产都有粒度下限，防 fail-open**）：
 //      ① `dsh-graph-host/prompts/*.md` 与 `dsh-graph-host/supervisor-guide.{zh,en}.md`（源码 + dist 投递副本）；
 //      ② `dsh-graph-host/lib/server-i18n.js` 的**字符串值**（导入模块取 value ⇒ 键名/注释天然不计）；
-//      ③ `dsh-graph-host/lib/client/i18n.js`（GUI 可见文案）与 `dist/lib/client.js` 里的
-//         **字符串值**——该文件是拼接片段、不可导入，故用「一行恰好是一条 `'key': 'value'`」行式提取：
-//         只取 value、跳过键名；提取完备性由「源码侧 解析数 ≡ 形似行数」+「源码对 ⊆ dist 对」+ 下限断言自证，
+//      ③ `dsh-graph-host/lib/client/i18n.js`（GUI 可见文案）与 `dist/lib/client.js` 的
+//         **全部字符串字面量**（`'…'` / `"…"` / 反引号，含数组元素、赋值右侧、键名；拼接片段不可导入，
+//         故按字符扫描）。四条 fail-closed 不变式：
+//           · **解转义后入面** ⇒ `'…DSH\u00200.1.6…'` 这类编码写法照样命中；
+//           · **字面量普查**：注释（`//`、`/* */`）与正则字面量之外的残留引号必须为 0，
+//             无法解析的字面量必须为 0（宁可判红，不许静默）；
+//           · 源码字面量多重集 ⊆ dist 字面量多重集（兼作 dist 新鲜度）+ 分辨率下限 + 金丝雀。
 //         合法插值（`{n}` 等）不受影响。
+//  · **粒度下限是粗网，精细网在邻居守卫**（复核实测 2026-10-08）：把 `prompts/worktree.{zh,en}.md`
+//    对称截断到 1 长行（179/205 字节）并重建后，本守卫 13/13 仍绿，但整套件 `2142 pass / 8 fail`
+//    （`g239` / `g241` / `g253` / `g283` 三处 + 「zh prompt assets are not stubs」兜住）⇒ **不构成套件级
+//    静默绿**。故本守卫不加「基线一半」「逐资产锚点表」这类会随正常改文误红的阈值（预案保留、未采用），
+//    只留「非空行 ≥1 且字节 ≥100」的粗网与聚合断言（资产数 32、扫描行数 >1000）。
 //  · 显式豁免（各自都有正例与「豁免不过宽」的反例）：
 //      ① 「本项目示例 / 示例（本仓库）」(en: this repository example) 标记——**必须与被豁免的 token 紧邻**
 //         （同括号且标记在前，或标记紧随其后），且**每资产豁免行数 ≤2**；只对 4 个「命令/路径」token 生效；
 //      ② `INDEX.md` 出现在否定语境（不再/已取消/非记忆真源…）时放行；肯定语境（必须维护）仍判红；
-//      ③ `<!-- -->` HTML 注释不计（本测试不解析 JS 注释：③ 走「只取字符串值」口径）。
+//      ③ `<!-- -->` HTML 注释不计；客户端 i18n 侧走「注释与正则字面量不计、其余全部字符串字面量入面」口径。
 //  · B) 行为断言：HANDOFF 只留 skill 名、上限文案（工具侧 + GUI 侧）不写死版本/槽位、骨架无 npm 生态词、zh/en 同步。
-//  · 负向对照：塞回任一 token / 清空任一预期资产 / 滥用示例标记 ⇒ 必红。
+//  · 负向对照：塞回任一 token（含转义编码 / 非键值行两种整形态）/ 清空任一预期资产 / 滥用示例标记 ⇒ 必红。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -40,7 +49,8 @@ const MD_MIN_LINES = 1;
 const MD_MIN_BYTES = 100;
 const MARKER_LINE_CAP = 2;
 const SERVER_I18N_MIN_PER_SIDE = 40;
-const CLIENT_I18N_MIN_PAIRS = 1800;
+/** 客户端 i18n 字面量分辨率下限（实测源码 3962 / dist 10485）。 */
+const CLIENT_I18N_MIN_LITERALS = 3500;
 
 type Rule = {
   id: string;
@@ -148,23 +158,155 @@ function scanServerI18n(label: string, dict: { zh: Record<string, unknown>; en: 
   return out;
 }
 
-type Pair = { key: string; value: string };
-/** 行式提取 `'key': 'value'` 的**值**（键名不入扫描面）；`loose` 为「形似键值对」的行数，用于自证解析完备。 */
-function extractPairs(text: string): { pairs: Pair[]; loose: number } {
-  const PROP = /^\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_$][\w$]*))\s*:\s*(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)")\s*,?\s*$/;
-  const LOOSE = /^\s*(?:'[^']*'|"[^"]*"|[A-Za-z_$][\w$]*)\s*:\s*(?:'|"|`)/;
-  const pairs: Pair[] = [];
-  let loose = 0;
-  for (const line of text.split("\n")) {
-    if (LOOSE.test(line)) loose += 1;
-    const m = PROP.exec(line);
-    if (!m) continue;
-    const key = m[1] ?? m[2] ?? m[3] ?? "";
-    const value = m[4] ?? m[5] ?? "";
-    if (!key.includes(".")) continue;
-    pairs.push({ key, value });
+type LiteralScan = {
+  /** 解转义后的**全部**字符串字面量（单引号 / 双引号 / 反引号；含数组元素、赋值右侧、键名）。 */
+  values: { value: string; line: number }[];
+  /** 注释与正则字面量被空格化后的代码文本：其中残留引号必须为 0（字面量普查腿）。 */
+  codeText: string;
+  /** 含引号却无法安全解析的位置（未闭合字面量 / 未闭合块注释）⇒ 判红，绝不静默。 */
+  unparsed: { line: number; why: string }[];
+};
+
+const ESCAPES: Record<string, string> = {
+  n: "\n", t: "\t", r: "\r", b: "\b", f: "\f", v: "\v", "0": "\0", "\\": "\\", "'": "'", '"': '"', "`": "`",
+};
+
+/** 解 JS 字符串转义（`\n` `\t` `\'` `\"` `\\` `\xNN` `\uNNNN` `\u{…}`）⇒ 编码写法也能被 token 命中。 */
+function decodeEscapes(raw: string): string {
+  return raw.replace(/\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g, (_m, g: string) => {
+    if (g.startsWith("u{")) return String.fromCodePoint(parseInt(g.slice(2, -1), 16));
+    if (g.startsWith("u")) return String.fromCharCode(parseInt(g.slice(1), 16));
+    if (g.startsWith("x")) return String.fromCharCode(parseInt(g.slice(1), 16));
+    return ESCAPES[g] ?? g;
+  });
+}
+
+/**
+ * 按字符扫描 JS 文本，提取**全部字符串字面量**并解转义。
+ * 不进扫描面：`//` 与块注释（源码注释豁免）、正则字面量（其内部引号不代表文案）。
+ * fail-closed：未闭合字面量/注释记入 `unparsed`；其余引号都必须在 `codeText` 中留下 0 个残留。
+ */
+function scanLiterals(text: string): LiteralScan {
+  const values: LiteralScan["values"] = [];
+  const code: string[] = [];
+  const unparsed: LiteralScan["unparsed"] = [];
+  let i = 0;
+  let line = 1;
+  let prev = "";
+  const push = (ch: string) => code.push(ch);
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "\n") line += 1;
+    if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") { push(" "); i += 1; }
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      const stop = end < 0 ? text.length : end + 2;
+      for (; i < stop; i += 1) { if (text[i] === "\n") { push("\n"); line += 1; } else push(" "); }
+      if (end < 0) unparsed.push({ line, why: "未闭合块注释" });
+      continue;
+    }
+    // 正则字面量启发式：前一个有效字符是运算符/开括号等（或行首）时视为正则，整体跳过。
+    if (c === "/" && (prev === "" || /[(,=:[!&|?{};+\-*%~^<>]/.test(prev))) {
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      for (; j < text.length; j += 1) {
+        const d = text[j];
+        if (d === "\\") { j += 1; continue; }
+        if (d === "\n") break;
+        if (d === "[") inClass = true;
+        else if (d === "]") inClass = false;
+        else if (d === "/" && !inClass) { closed = true; break; }
+      }
+      if (closed) { for (; i <= j; i += 1) push(" "); prev = "/"; continue; }
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      const quote = c;
+      const startLine = line;
+      let raw = "";
+      let j = i + 1;
+      let closed = false;
+      for (; j < text.length; j += 1) {
+        const d = text[j];
+        if (d === "\\") {
+          raw += d;
+          if (j + 1 < text.length) {
+            raw += text[j + 1];
+            if (text[j + 1] === "\n") line += 1;
+            j += 1;
+          }
+          continue;
+        }
+        if (d === quote) { closed = true; break; }
+        if (d === "\n" && quote !== "`") break;
+        if (d === "\n") line += 1;
+        raw += d;
+      }
+      if (!closed) {
+        unparsed.push({ line: startLine, why: "未闭合字符串字面量" });
+        for (; i < text.length && text[i] !== "\n"; i += 1) push(" ");
+        continue;
+      }
+      values.push({ value: decodeEscapes(raw), line: startLine });
+      push(" "); push(" ");
+      for (i += 1; i < j; i += 1) push(text[i] === "\n" ? "\n" : " ");
+      i = j + 1;
+      prev = quote;
+      continue;
+    }
+    push(c);
+    if (!/\s/.test(c)) prev = c;
+    i += 1;
   }
-  return { pairs, loose };
+  return { values, codeText: code.join(""), unparsed };
+}
+
+/** 客户端 i18n（GUI 可见文案）：源码与 dist 拼接副本两侧的**全部字符串字面量**。 */
+function scanClientI18n(): string[] {
+  const out: string[] = [];
+  const src = scanLiterals(readFileSync(CLIENT_I18N_SRC, "utf8"));
+  const dist = scanLiterals(readFileSync(CLIENT_BUNDLE_DIST, "utf8"));
+  const sides = [["源/lib/client/i18n.js", src], ["dist/lib/client.js", dist]] as const;
+  // 完备性（fail-closed）：任何「含引号却没被解析」或「注释/正则之外残留引号」都判红。
+  for (const [label, r] of sides) {
+    if (r.unparsed.length > 0) {
+      out.push(`${label}: 有 ${r.unparsed.length} 处字面量无法解析（首个 line ${r.unparsed[0].line}：${r.unparsed[0].why}）——扫描面不可信`);
+    }
+    const leftover = (r.codeText.match(/['"`]/g) ?? []).length;
+    if (leftover !== 0) {
+      out.push(`${label}: 注释与正则之外仍有 ${leftover} 个引号未归属任何字面量——扫描面不可信`);
+    }
+  }
+  // 分辨率下限 + 源码字面量必须落进 dist（兼作 dist 新鲜度）。
+  if (src.values.length < CLIENT_I18N_MIN_LITERALS) {
+    out.push(`源/lib/client/i18n.js: 字面量条数 ${src.values.length} < ${CLIENT_I18N_MIN_LITERALS}——文件被清空/截断`);
+  }
+  if (dist.values.length < src.values.length) {
+    out.push(`dist/lib/client.js: 字面量条数 ${dist.values.length} < 源码 ${src.values.length}——dist 未重建或注入被吞`);
+  }
+  const distCount = new Map<string, number>();
+  for (const { value } of dist.values) distCount.set(value, (distCount.get(value) ?? 0) + 1);
+  const missing: string[] = [];
+  for (const { value } of src.values) {
+    const left = distCount.get(value) ?? 0;
+    if (left === 0) { missing.push(value); continue; }
+    distCount.set(value, left - 1);
+  }
+  if (missing.length > 0) {
+    out.push(`dist/lib/client.js: 有 ${missing.length} 条源码字面量未落进 dist（如 ${missing[0].slice(0, 60)}）——需重建 dist`);
+  }
+  // 金丝雀：GUI 侧上限文案必须仍在扫描面内（防扫描面空洞）。
+  const canary = src.values.filter(({ value }) => /子代理激活已达上限|Subagent activation limit reached/.test(value));
+  if (canary.length !== 2) {
+    out.push(`源/lib/client/i18n.js: 金丝雀文案命中 ${canary.length} 条（应为 zh/en 各 1，实测 ${canary.length}）`);
+  }
+  for (const [label, r] of sides) {
+    for (const { value, line } of r.values) out.push(...scanText(`${label}:${line}`, value));
+  }
+  return out;
 }
 
 /** 收集源码与投递副本两侧的 markdown 资产（含粒度下限与豁免行数上限）。 */
@@ -204,34 +346,6 @@ async function scanAllAssets(): Promise<string[]> {
   return out;
 }
 
-/** 客户端 i18n（GUI 可见文案）：源码与 dist 拼接副本两侧的字符串值。 */
-function scanClientI18n(): string[] {
-  const out: string[] = [];
-  const src = extractPairs(readFileSync(CLIENT_I18N_SRC, "utf8"));
-  const dist = extractPairs(readFileSync(CLIENT_BUNDLE_DIST, "utf8"));
-  // 解析完备性自证：源码侧「形似键值对」的行必须全部被解析（漏解析即判红，避免扫描面静默缩小）。
-  if (src.pairs.length < CLIENT_I18N_MIN_PAIRS) {
-    out.push(`源/lib/client/i18n.js: 取值条数 ${src.pairs.length} < ${CLIENT_I18N_MIN_PAIRS}——字典被清空/截断`);
-  }
-  if (src.pairs.length !== src.loose) {
-    out.push(`源/lib/client/i18n.js: 解析数 ${src.pairs.length} ≠ 形似行数 ${src.loose}——提取器漏行，扫描面不可信`);
-  }
-  if (dist.pairs.length < src.pairs.length) {
-    out.push(`dist/lib/client.js: 取值条数 ${dist.pairs.length} < 源码 ${src.pairs.length}——dist 未重建或注入被吞`);
-  }
-  const distSet = new Set(dist.pairs.map((p) => `${p.key}\u0000${p.value}`));
-  const missing = src.pairs.filter((p) => !distSet.has(`${p.key}\u0000${p.value}`));
-  if (missing.length > 0) {
-    out.push(`dist/lib/client.js: 有 ${missing.length} 条源码取值未落进 dist（如 ${missing[0].key}）——需重建 dist`);
-  }
-  // 金丝雀：GUI 侧上限文案必须仍在扫描面内（防提取器/键名变动导致扫描面空洞）。
-  const canary = src.pairs.filter((p) => p.key === "live.activationLimit");
-  if (canary.length !== 2) out.push(`源/lib/client/i18n.js: 金丝雀键 live.activationLimit 命中 ${canary.length} 条（应为 zh/en 各 1）`);
-  for (const p of src.pairs) out.push(...scanText(`源/lib/client/i18n.js:${p.key}`, p.value));
-  for (const p of dist.pairs) out.push(...scanText(`dist/lib/client.js:${p.key}`, p.value));
-  return out;
-}
-
 // ---------------------------------------------------------------------------
 // A. 资产扫描（真实资产 0 命中 + 逐资产粒度下限）
 // ---------------------------------------------------------------------------
@@ -259,13 +373,54 @@ test("g-444 判据3：server-i18n 两侧的字符串值不含本仓库特有路�
   assert.deepEqual(violations, [], `server-i18n 字符串值命中禁用 token：\n${violations.join("\n")}`);
 });
 
-test("g-444 判据3：客户端 i18n（GUI 可见文案，源码 + dist 拼接副本）字符串值 0 命中", () => {
-  const src = extractPairs(readFileSync(CLIENT_I18N_SRC, "utf8"));
-  const dist = extractPairs(readFileSync(CLIENT_BUNDLE_DIST, "utf8"));
-  assert.equal(src.pairs.length, src.loose, "源码侧形似键值对的行必须全部被解析（否则扫描面不可信）");
-  assert.ok(src.pairs.length >= CLIENT_I18N_MIN_PAIRS, `客户端 i18n 取值条数过少（${src.pairs.length}）`);
-  assert.ok(dist.pairs.length >= src.pairs.length, `dist 取值条数 ${dist.pairs.length} 少于源码 ${src.pairs.length}`);
-  assert.deepEqual(scanClientI18n(), [], "客户端 i18n 字符串值命中禁用 token");
+test("g-444 判据3：客户端 i18n（GUI 可见文案，源码 + dist 拼接副本）全部字符串字面量 0 命中", () => {
+  const src = scanLiterals(readFileSync(CLIENT_I18N_SRC, "utf8"));
+  const dist = scanLiterals(readFileSync(CLIENT_BUNDLE_DIST, "utf8"));
+  // 完备性腿：注释与正则之外不得有游离引号，且不得有解析不了的字面量（宁可判红，不许静默）。
+  for (const [label, r] of [["源", src], ["dist", dist]] as const) {
+    assert.deepEqual(r.unparsed, [], `${label}: 存在无法解析的字面量`);
+    assert.equal((r.codeText.match(/['"`]/g) ?? []).length, 0, `${label}: 注释外仍有游离引号`);
+  }
+  assert.ok(src.values.length >= CLIENT_I18N_MIN_LITERALS, `源码字面量条数过少（${src.values.length}）`);
+  assert.ok(dist.values.length >= src.values.length, `dist 字面量 ${dist.values.length} 少于源码 ${src.values.length}`);
+  assert.deepEqual(scanClientI18n(), [], "客户端 i18n 字符串字面量命中禁用 token");
+});
+
+test("g-444 字面量口径：转义编码 / 非键值行两类形态必须入面（复核 P1 假绿的两种写法）", () => {
+  // 形态①：把 token 写成 \u 转义 —— 必须**解转义后**命中。
+  const escaped = scanLiterals("    'live.x': '⚠️ DSH\\u00200.1.6 起默认 8 个活跃子代理',\n");
+  assert.deepEqual(escaped.unparsed, []);
+  assert.equal((escaped.codeText.match(/['"`]/g) ?? []).length, 0);
+  const escapedHits = escaped.values.flatMap(({ value }) => scanText("fixture", value));
+  assert.deepEqual(escapedHits.map((v) => v.match(/\[([a-z-]+)\]/)?.[1]), ["hardcoded-dsh-version", "hardcoded-subagent-slots"], "转义写法必须命中");
+
+  // 形态②：token 出现在**非键值行**（赋值右侧）—— 必须入面。
+  const assignment = scanLiterals("const G444_LEAK = 'DSH 0.1.6 起默认 8 个活跃子代理';\n");
+  assert.deepEqual(assignment.unparsed, []);
+  assert.equal((assignment.codeText.match(/['"`]/g) ?? []).length, 0);
+  const assignHits = assignment.values.flatMap(({ value }) => scanText("fixture", value));
+  assert.deepEqual(assignHits.map((v) => v.match(/\[([a-z-]+)\]/)?.[1]), ["hardcoded-dsh-version", "hardcoded-subagent-slots"], "非键值行必须入面");
+
+  // 数组元素 / 反引号 / 双引号同样入面；注释与正则字面量不入面（也不产出游离引号）。
+  const mixed = scanLiterals([
+    "const arr = ['dsh-graph-host/', \"prepareAttemptWorktree\", `node --test core/tests/x`];",
+    "// 注释里的 dsh-graph-host/ 与 INDEX.md 不计",
+    "/* 块注释里的 DSH 0.1.6 不计 */",
+    "const re = /[\"'](DSH 0\\.1\\.6)[\"']/;",
+    "const s = '安全值 {n}';",
+  ].join("\n"));
+  assert.deepEqual(mixed.unparsed, [], "不得有无法解析的字面量");
+  assert.equal((mixed.codeText.match(/['"`]/g) ?? []).length, 0, "注释与正则之外不得残留引号");
+  const mixedHits = mixed.values.flatMap(({ value }) => scanText("fixture", value));
+  assert.deepEqual(mixedHits.map((v) => v.match(/\[([a-z-]+)\]/)?.[1]), [
+    "repo-package-path", "internal-fn-name", "repo-test-cmd",
+  ], `数组/双引号/反引号入面、注释与正则不入面（实得 ${JSON.stringify(mixedHits)}）`);
+  assert.equal(mixed.values.filter(({ value }) => value.includes("{n}")).length, 1, "合法插值仍入面且不误判");
+
+  // 解析不了的含引号内容必须判红（而不是静默漏掉）。
+  const broken = scanLiterals("const s = '没有收尾引号\n");
+  assert.equal(broken.unparsed.length, 1, "未闭合字面量必须记入 unparsed");
+  assert.match(broken.unparsed[0].why, /未闭合/);
 });
 
 test("g-444 逐资产粒度下限：清空/截断任一预期资产即判红（防聚合护栏 fail-open）", () => {
@@ -341,26 +496,25 @@ test("g-444 豁免正例②：INDEX.md 的否定语境放行，肯定语境（�
   assert.ok(hits.every((v) => v.includes("[memory-index-file]")));
 });
 
-test("g-444 豁免正例③：HTML 注释不计；i18n 只扫字符串值（键名/注释不判红，值仍判红）", async () => {
+test("g-444 豁免正例③：HTML 注释不计；客户端 i18n 走「注释/正则不计、其余字面量全入面」口径", async () => {
   assert.deepEqual(scanText("fixture", "正文安全。\n<!-- node --test core/tests 与 dsh-graph-host/ 在注释里 -->\n<!--\n多行注释：prepareAttemptWorktree\n-->"), []);
   assert.equal(scanText("fixture", "正文泄露：node --test core/tests").length, 1, "正文同类文本必须判红");
 
-  // i18n：行式提取只取值 ⇒ 键名里的 token 不判红，值里的判红（含 dist 侧同口径）。
+  // i18n：注释（行注释/块注释）不入面，键名与值**都**入面（全字面量口径，宁可判红不静默）。
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g444-i18n-"));
   const file = join(dir, "fixture-i18n.mjs");
   writeFileSync(file, [
     "    // 注释里出现 dsh-graph-host/ 与 node --test core/tests，不应计入扫描面",
     "    const zh = {",
     "      'clean.key': '安全值 {n} 插值合法',",
-    "      'dsh-graph-host/.leak': '键名里出现本仓库路径，不应计入扫描面',",
+    "      'dsh-graph-host/leaky.key': '键名里的本仓库路径同样入面',",
     "      'dirty.key': '泄露 prepareAttemptWorktree',",
     "    };",
   ].join("\n"));
-  const parsed = extractPairs(readFileSync(file, "utf8"));
-  assert.deepEqual(parsed.pairs.map((p) => p.key), ["clean.key", "dsh-graph-host/.leak", "dirty.key"]);
-  const hits = parsed.pairs.flatMap((p) => scanText(`fixture:${p.key}`, p.value));
-  assert.equal(hits.length, 1, `仅 dirty.key 的值应判红（实得 ${hits.length}）`);
-  assert.ok(hits[0].includes("[internal-fn-name]"), hits[0]);
+  const parsed = scanLiterals(readFileSync(file, "utf8"));
+  assert.deepEqual(parsed.unparsed, []);
+  const hits = parsed.values.flatMap(({ value }) => scanText("fixture", value));
+  assert.deepEqual(hits.map((v) => v.match(/\[([a-z-]+)\]/)?.[1]), ["repo-package-path", "internal-fn-name"], "键名与值都入面、注释不入面");
   // 插值 `{n}` 不被误判（合法插值不是禁用 token）。
   assert.deepEqual(scanText("fixture", "队列 {n} 条待处理"), []);
 });
@@ -420,12 +574,14 @@ test("g-444 B②：子代理上限文案（工具侧 + GUI 侧）不写死版本
   );
 
   // GUI 侧：`live.activationLimit` 的 zh/en 值同样不得写死版本号/槽位，且两侧同步。
-  const canary = extractPairs(readFileSync(CLIENT_I18N_SRC, "utf8")).pairs.filter((p) => p.key === "live.activationLimit");
+  const canary = scanLiterals(readFileSync(CLIENT_I18N_SRC, "utf8")).values
+    .map(({ value }) => value)
+    .filter((value) => /子代理激活已达上限|Subagent activation limit reached/.test(value));
   assert.equal(canary.length, 2, "GUI 上限文案应 zh/en 各一条");
-  assert.ok(canary.some((p) => p.value.includes("上限由运行环境配置")), canary.map((p) => p.value).join("\n"));
-  assert.ok(canary.some((p) => /the limit is configured by the runtime environment/.test(p.value)), canary.map((p) => p.value).join("\n"));
-  for (const p of canary) {
-    assert.doesNotMatch(p.value, /0\.1\.6|默认\s*\d+\s*个|defaults to \d+/, `GUI 上限文案不得写死：${p.value}`);
+  assert.ok(canary.some((v) => v.includes("上限由运行环境配置")), canary.join("\n"));
+  assert.ok(canary.some((v) => /the limit is configured by the runtime environment/.test(v)), canary.join("\n"));
+  for (const value of canary) {
+    assert.doesNotMatch(value, /0\.1\.6|默认\s*\d+\s*个|defaults to \d+/, `GUI 上限文案不得写死：${value}`);
   }
 });
 
