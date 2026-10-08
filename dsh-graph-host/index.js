@@ -129,6 +129,8 @@ import {
   versionDetail,
   resolveModelRoute,
   resolveSubagentPrompt,
+  extractAgentTeamsContract,
+  resolveAgentTeamsInjection,
   readProjectConfig,
   writeProjectConfig,
   REVIEW_POLICIES,
@@ -1976,7 +1978,27 @@ export function apply(ctx, config) {
     const subagentPromptSection = (() => {
       // g-333：单一消费者（结构化三态 + 遗留回落 + 全局回落），见 resolveSubagentPrompt。
       // g-390：**小节标题是插件内置文本**，按 promptLanguage 本地化；正文 p 是用户材料，逐字不动。
-      const p = resolveSubagentPrompt(root, globalSettings.subagentPrompt);
+      // g-440：Agent Teams 最小契约——**默认 off**。off 时第四个实参为 null ⇒ 与 g-440 之前逐字一致
+      //（diff=0）；on 时才把 discipline 资产里定界的契约段追加进**同一**「子代理补充提示词」槽位
+      //（不新造提示词拼装通道）。降级是**诚实**的：资产缺契约块 / 宿主不支持扇出 / 已知深度 < 2
+      // ⇒ 不注入且不报错；harness 未暴露「扇出能力 / 子代理深度」查询 ⇒ 如实传 null（未知），
+      // 既不伪称支持也不伪称不支持，深度 < 2 的降级由执行者按契约文本在结果中如实登记。
+      const teamsContract = (() => {
+        let enabled = false;
+        try {
+          enabled = readProjectConfig(root)?.supervisor?.agent_teams === true;
+        } catch {
+          return null; // 配置不可读 ⇒ 按「未配置（off）」处理：不注入、不阻断派发。
+        }
+        const decision = resolveAgentTeamsInjection({
+          enabled,
+          contract: extractAgentTeamsContract(readPromptAsset("discipline", promptLanguage)),
+          supportsFanout: null,
+          subagentDepth: null,
+        });
+        return decision.inject ? decision.contract : null;
+      })();
+      const p = resolveSubagentPrompt(root, globalSettings.subagentPrompt, teamsContract);
       return p ? [isEnPrompt ? "## dsh-graph subagent supplementary prompt (profile global / workspace override)" : "## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join("\n") : null;
     })();
     // g-390：模式标题 + 模式策略片段按 promptLanguage 本地化（片段语言由 resolveSubagentMode 的第 4 参传入）。
@@ -3544,6 +3566,12 @@ export function apply(ctx, config) {
               values: ["human", "ai"],
             },
             "executor.mode": SUBAGENT_MODES,
+            // g-440：Agent Teams 最小契约开关（负责人资格判定；默认未配置/null = off）
+            "supervisor.agent_teams": {
+              type: "boolean",
+              default: false,
+              values: [true, false, null],
+            },
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],
             },
@@ -3569,7 +3597,7 @@ export function apply(ctx, config) {
       def: {
         name: "graph_update_settings",
         description: sT("tool.graph_update_settings"),
-        parameters: params({ patch: { type: "object", description: "配置 patch（部分字段，未传字段保持不变）：可包含 executor、defaults、supervisor.automation、prompt_overrides 等" } }, ["patch"]),
+        parameters: params({ patch: { type: "object", description: "配置 patch（部分字段，未传字段保持不变）：可包含 executor、defaults、supervisor.automation、supervisor.agent_teams、prompt_overrides 等" } }, ["patch"]),
       },
       run: (a, ex) => {
         const r = rootFor(ex);
