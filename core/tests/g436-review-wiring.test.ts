@@ -617,12 +617,14 @@ function renderAcceptFeedback(props: any, zh: Record<string, string>) {
 test("g-436 判据4：GUI 源码/词条齐备，且 vm 真实渲染证明「有标注、接受按钮仍可点」", () => {
   const actions = readFileSync(join(CLIENT_DIR, "goal-actions.js"), "utf8");
   assert.match(actions, /dg-review-missing/, "未独立评审标注的 className 存在");
+  assert.match(actions, /dg-review-sha/, "r3：被评审候选短 SHA 的 className 存在");
+  assert.match(actions, /current_candidate_sha/, "r3：徽标旁显示的是 current_candidate_sha（≠ HEAD）");
   assert.match(actions, /dgT\("exec\.reviewMissing"\)/, "标注文案走 i18n");
   const modal = readFileSync(join(CLIENT_DIR, "goal-modal.js"), "utf8");
   assert.match(modal, /reviewState: d\.review_state/, "目标详情弹窗把 review_state 透传给接受交互");
 
   const { zh, en } = loadClientI18n();
-  for (const key of ["exec.reviewMissing", "exec.reviewMissingTitle", "exec.reviewPass", "exec.reviewBlock", "exec.reviewInProgress", "exec.reviewUnverified"]) {
+  for (const key of ["exec.reviewMissing", "exec.reviewMissingTitle", "exec.reviewPass", "exec.reviewBlock", "exec.reviewInProgress", "exec.reviewUnverified", "exec.reviewCandidateTitle"]) {
     assert.ok(zh[key], `zh 缺失 ${key}`);
     assert.ok(en[key], `en 缺失 ${key}`);
     assert.doesNotMatch(en[key], /[\u3400-\u9fff]/, `en ${key} 不得含 CJK`);
@@ -630,9 +632,10 @@ test("g-436 判据4：GUI 源码/词条齐备，且 vm 真实渲染证明「有�
   assert.equal(zh["exec.reviewMissing"], "⚠️ 未独立评审");
 
   const base = { goalId: "g-9", status: "review", events: [], attempts: [] };
+  const CAND = "abcdef1234567890abcdef1234567890abcdef12";
   const strictNodes = renderAcceptFeedback({
     ...base,
-    reviewState: { policy: "strict", status: "in_progress", independent_ok: false, independent_missing: true },
+    reviewState: { policy: "strict", status: "in_progress", independent_ok: false, independent_missing: true, current_candidate_sha: CAND },
   }, zh);
   const badge = strictNodes.find((n) => n.className === "dg-review-missing");
   assert.ok(badge, "strict 未独立评审必须渲染出标注节点");
@@ -650,10 +653,43 @@ test("g-436 判据4：GUI 源码/词条齐备，且 vm 真实渲染证明「有�
   // 独立评审 PASS ⇒ 显示 PASS 而非「未独立评审」
   const passNodes = renderAcceptFeedback({
     ...base,
-    reviewState: { policy: "strict", status: "pass", independent_ok: true, independent_missing: false },
+    reviewState: { policy: "strict", status: "pass", independent_ok: true, independent_missing: false, current_candidate_sha: CAND },
   }, zh);
   assert.ok(passNodes.find((n) => n.className === "dg-review-pass"), "独立 PASS 显示 PASS 标注");
   assert.equal(passNodes.find((n) => n.className === "dg-review-missing"), undefined);
+
+  // r3（Lane A R2-1）：徽标旁必须**直接可见地**显示「这个 PASS 是对哪个提交的」短 SHA，
+  // 且 tooltip 说明口径是 current_candidate_sha ≠ HEAD（避免读板者误以为 PASS 针对 HEAD）。
+  for (const [label, nodes] of [["未独立评审", strictNodes], ["PASS", passNodes]] as const) {
+    const shaNode = nodes.find((n) => n.className === "dg-review-sha");
+    assert.ok(shaNode, `${label}：必须渲染被评审候选短 SHA 节点`);
+    assert.equal(shaNode!.text, "@abcdef1", `${label}：短 SHA 文案 = @ + 前 7 位`);
+    assert.match(String(shaNode!.title), /current_candidate_sha/, `${label}：tooltip 必须点明 current_candidate_sha`);
+    assert.match(String(shaNode!.title), /abcdef1/);
+  }
+  // 「未独立评审」徽标保留它自己的解释性 tooltip（信息更具体），候选口径由 SHA 节点承载；
+  // 而原本无 tooltip 的 PASS 徽标必须补上候选口径说明（避免被读成「对 HEAD 的 PASS」）。
+  assert.equal(
+    String(strictNodes.find((n) => n.className === "dg-review-missing")!.title),
+    zh["exec.reviewMissingTitle"],
+    "未独立评审徽标保留既有 tooltip（候选口径由 SHA 节点承载）",
+  );
+  assert.match(
+    String(passNodes.find((n) => n.className === "dg-review-pass")!.title),
+    /current_candidate_sha/,
+    "PASS 徽标必须补上候选口径 tooltip",
+  );
+  // 负向对照：无 current_candidate_sha（旧数据）⇒ 不渲染 SHA 节点，其余行为不变
+  const noSha = renderAcceptFeedback({
+    ...base,
+    reviewState: { policy: "strict", status: "pass", independent_ok: true, independent_missing: false },
+  }, zh);
+  assert.equal(noSha.find((n) => n.className === "dg-review-sha"), undefined, "缺 current_candidate_sha 不得渲染 SHA 节点");
+  assert.ok(noSha.find((n) => n.className === "dg-review-pass"), "缺 SHA 不影响 PASS 标注");
+  // 口径文案 zh/en 对称且 en 无 CJK（key 已在上面统一校验）
+  assert.match(zh["exec.reviewCandidateTitle"], /current_candidate_sha/);
+  assert.match(en["exec.reviewCandidateTitle"], /current_candidate_sha/);
+  assert.match(en["exec.reviewCandidateTitle"], /NOT HEAD/);
 });
 
 // =====================================================================================

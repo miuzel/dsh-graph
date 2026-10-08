@@ -340,6 +340,13 @@
       // PASS 记录时，在 accept 交互处如实显示「未独立评审」——但不隐藏/禁用接受按钮，
       // 默认 accept 路径与结果逐字不变（可见化只读 `review_state` 投影，不改任何写入语义）。
       const rs = props.reviewState ?? null;
+      // r3（Lane A R2-1）：徽标与 independent_ok 针对 **current_candidate_sha**（最近一次被请求评审的候选），
+      // **不等于 HEAD** —— 把该候选短 SHA 直接显示在徽标旁（tooltip 说明口径），避免读板者误以为
+      // 「这个 PASS 就是对当前 HEAD 的」。仍是只读可见化：不改任何写入语义、不禁用接受按钮。
+      const rvSha = typeof rs?.current_candidate_sha === "string" && rs.current_candidate_sha.trim()
+        ? rs.current_candidate_sha.trim().slice(0, 7)
+        : null;
+      const rvShaTitle = rvSha ? `${dgT("exec.reviewCandidateTitle")} ${rvSha}` : null;
       const rvBadge = (() => {
         if (!rs) return null;
         if (rs.independent_missing) {
@@ -373,8 +380,16 @@
             ? h("span", {
                 style: { ...S.meta, fontSize: 12, ...(rvBadge.color ? { color: rvBadge.color } : {}) },
                 className: rvBadge.className,
-                ...(rvBadge.title ? { title: rvBadge.title } : {}),
+                ...(rvBadge.title || rvShaTitle ? { title: rvBadge.title ?? rvShaTitle } : {}),
               }, rvBadge.text)
+            : null,
+          // r3：被评审候选短 SHA（可见化口径 —— PASS 是对这个提交的，不是对 HEAD 的）
+          isReview && rvBadge && rvSha
+            ? h("span", {
+                style: { ...S.meta, fontSize: 11, opacity: 0.75 },
+                className: "dg-review-sha",
+                title: rvShaTitle,
+              }, `@${rvSha}`)
             : null,
           !isReview ? h("button", {
             style: { ...S.btn, padding: "4px 12px", fontSize: 13 }, className: "dg-btn",

@@ -455,6 +455,9 @@ const ZH_TOKENS = [
   "`POST /api/dsh-graph/start-review`",
   "（HTTP `POST /api/dsh-graph/start-review`）；评审是**既有执行 attempt 的附属记录**",
   "未派独立评审时看板与事件流如实标注「未独立评审」但**不阻断** accept",
+  // r3（Lane A R2-1）：徽标/independent_ok 的口径必须写清是 current_candidate_sha 而非 HEAD
+  "**不等于 HEAD**",
+  "判读时请直接比对 `current_candidate_sha` 与真实 HEAD",
   "不得绕过 `delivered` 人工 gate",
 ];
 const EN_TOKENS = [
@@ -477,6 +480,8 @@ const EN_TOKENS = [
   "`POST /api/dsh-graph/start-review`",
   "an **attachment record of an existing execution attempt**",
   "**do not block** accept",
+  "**not HEAD**",
+  "compare `current_candidate_sha` with the real HEAD directly",
   "must not bypass the `delivered` human gate",
 ];
 
