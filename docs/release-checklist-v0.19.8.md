@@ -241,6 +241,15 @@ Files tmp/final1-extract/package/README.md and tmp/final2-extract/package/README
 `tmp/release-0198-final2-repro/`，得**同一 sha256** `b98e4934…`，且与第二次终版包 **`cmp` 逐字节一致**
 （**694948 B / 37 成员**）⇒ 发布 worktree 在发布提交上打出的包即此产物，发布前直接比 sha256 即可。
 
+**发布后对账（2026-10-09，已发布）**：
+
+- **发布产物** = 第二次终版包（`tmp/uat-v0198/RELEASE-v0.19.8/dsh-graph-0.19.8.tgz`，**694948 B**，sha256 `b98e4934…`，sha1 `8f9bca42…`）；`npm publish` 由**负责人手动执行**（tarball 直发）。
+- **线上核实**（`npm view dsh-graph@0.19.8 dist --json`）：`shasum` = **`8f9bca420051cafb461f267696b07cd5ae2dbeb3`** —— **与本地发布产物 sha1 逐字节相同**；`fileCount` = **37**；`unpackedSize` = 2359807；`integrity` = `sha512-8bYroGEjMJb9bMYAHvIlD3gOiLcJaq2Zrg7AvEs5Sv05owbOGnVXZFNTpZqfWiBs2U9r+ZMH5SlSA5DoZJoxGQ==`，与本地 `openssl dgst -sha512 -binary … | openssl base64 -A` 复算结果**完全一致**。`npm view dsh-graph version` = **0.19.8**（`latest` 已指向）。
+  ⇒ **本版不存在 v0.19.7 同形的 registry 规范化差异**（当时线上包仅 `package.json` 末尾换行不同、大小略异），**线上包与本地发布产物逐字节一致**，无需解包补偿对账。
+- **版本控制落点**：`main` = merge **`c908309`**（`--no-ff` 合并 `v0.19.8-test`；`HEAD^{tree}` 与集成分支 tip `36a490d` **相等**）+ annotated tag **`v0.19.8`**（tag 对象 `1255d87`）；已由负责人 push 到 `github.com:miuzel/dsh-graph.git`（`main` `05e11ff..c908309`，tag `v0.19.8`）。
+- **tag ↔ 产物绑定实证**：隔离 worktree `checkout v0.19.8` → `bash scripts/build.sh` + `npm pack` ⇒ **同一 sha256** `b98e4934…`（694948 B）⇒ 线上产物可由该 tag 逐字节复现。
+- **留痕（非本版引入）**：`git push --tags` 中 **`v0.18.0` 被远端拒绝**（远端已存在且指向不同对象）；本次推送的 `v0.19.8` 与 `archive/v0.17.0-test-premerge` 均成功。该差异属历史 tag，未影响本版发布。
+
 ## 5. 测试与静态检查（RC：worktree `.worktrees/g-455-att-01` 内；Windows 回填 + 第一次终版包：`.worktrees/g-455-att-02` 内；macOS 回填 + 第二次终版包：`.worktrees/g-455-att-03` 内）
 
 | 项 | 命令 | 结果 |
@@ -316,7 +325,7 @@ T2 安装版本 `0.19.8`；T4 实例启动就绪；T5 路由已注册、看板�
 Windows 行 + macOS 行）、`docs/release-checklist-v0.19.8.md`、`docs/platform-gate.md`（§7.6 Windows + §7.7 macOS + 汇总表两行）；
 **零产品代码 / prompts / 客户端源码 / 测试断言改动**（产品代码与 bundle 与 RC 逐字节相同，由 `diff -rq` 实拍为证）。
 
-**未执行（不可逆动作，均由负责人在人工 gate 执行）**：`npm publish`、annotated tag、GitHub release、`git push`、合并 `main`。
+**已执行（不可逆动作，均由负责人在人工 gate 执行，2026-10-09 完成）**：`main` 合并（merge `c908309`，主管按授权执行）、annotated tag **`v0.19.8`**（tag 对象 `1255d87`，主管按授权执行）、`git push`（`main` + tag，负责人执行）、**`npm publish`（负责人手动执行 ⇒ 线上 `shasum` = `8f9bca42…` 与本地 sha1 逐字节相同）**。发布后对账详见 §4 末段。**GitHub release 未创建**（负责人待办）。
 
 ### 6.1 已执行的命令序列（逐条，供复核 / 重跑）
 
