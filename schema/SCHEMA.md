@@ -360,6 +360,15 @@ supervisor:
     memory_promotion: ai
     skill_proposal: human
     release: human
+review:                     # 分级评审与快速放行策略配置（g-311/g-435）
+  policy: auto              # auto | strict | none；null 为按目标类型派生
+  regions:                  # 模块评估区域列表；普适默认 src/lib/app/packages/server/client/scripts/tests；显式 [] fail-closed
+    - src
+    - lib
+  contract_paths:           # 冻结契约路径；默认 []（不猜契约，未登记时不触发 M1）
+    - core/schema.ts
+  non_product_prefixes:     # 产品代码行数统计排除前缀；默认 dist/ / node_modules/ / .worktrees/
+    - dist/
 ```
 
 ## 9. 待决问题

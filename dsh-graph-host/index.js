@@ -127,6 +127,9 @@ import {
   readProjectConfig,
   writeProjectConfig,
   REVIEW_POLICIES,
+  DEFAULT_REVIEW_REGIONS,
+  DEFAULT_CONTRACT_PATHS,
+  DEFAULT_NON_PRODUCT_PREFIXES,
   listWorktrees,
   cleanWorktree,
   SUBAGENT_MODES,
@@ -2913,9 +2916,14 @@ export function apply(ctx, config) {
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],
             },
-            // g-311：顶层 review.policy 三值；未配置为 null，按目标类型派生策略。
+            // g-311/g-435：顶层 review 配置提示
             "review.policy": {
               values: [...REVIEW_POLICIES],
+            },
+            "review.defaults": {
+              regions: [...DEFAULT_REVIEW_REGIONS],
+              contract_paths: [...DEFAULT_CONTRACT_PATHS],
+              non_product_prefixes: [...DEFAULT_NON_PRODUCT_PREFIXES],
             },
           },
         });

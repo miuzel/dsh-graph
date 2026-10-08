@@ -200,6 +200,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 50 个 `graph_*` 工具）
 内嵌于 DSH Web 界面：
 
 - **二维泳道布局**：清晰展现多个版本的推进节奏，支持灵活查看不同泳道和阶段；
+- **分级评审策略支持**：通过 `graph_get_settings` / `graph_update_settings` 配置项目实际的 `review.regions` / `review.contract_paths` / `review.non_product_prefixes`，未登记区域安全升级 strict，空契约默认 M1 不触发；
 - **实时流式更新**：卡片与顶部状态栏直观反映 Agent 汇报的最新执行状态；外部文件变更触发动画闪烁；
 - **丰富弹窗与抽屉交互**：点击卡片可展开目标详情弹窗，查看质量判据、上下文卡片与 Attempt 历史。
 
@@ -357,6 +358,8 @@ external report and host source code; this README does **not** claim the desktop
   Supports Text, File, Image, and Data cards. Follows a structured lifecycle (`empty → collecting → filled → reviewed`) to seed precise task context for execution subagents.
 - **2D Swimlane Board**:
   Columns represent lifecycle stages, while horizontal swimlanes organize goals by Version, Backlog, and Standalone categories, complete with drag-and-drop scheduling.
+- **Graded Review & Policy Calibration**:
+  Configure project review parameters (`review.regions`, `review.contract_paths`, `review.non_product_prefixes`) via `graph_get_settings` and `graph_update_settings`. Product changes in unregistered regions safely escalate to strict; empty contract paths default to not triggering M1.
 - **Relations Between Goals**:
   Goals can be linked with four relation kinds — supersedes / amends / extends / related — and unlinked again; relations live in exactly one source of truth (the goal's frontmatter). Cards show relation badges, and the goal dialog lists the full inventory under "Goal description" (cross-version and archived peers flagged).
 - **Seamless Session Handoff**:

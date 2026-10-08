@@ -159,6 +159,10 @@ export {
   FAST_TRACK_CHECKS,
   FAST_TRACK_MAX_PRODUCT_LINES,
   CONTRACT_PATHS,
+  DEFAULT_CONTRACT_PATHS,
+  DEFAULT_REVIEW_REGIONS,
+  DEFAULT_NON_PRODUCT_PREFIXES,
+  REVIEW_REGIONS,
   typeDefaultReviewPolicy,
   normalizeReviewPolicy,
   normalizeMachineReport,
@@ -1128,8 +1132,13 @@ export interface ProjectConfig {
   };
   supervisor: { automation: Record<string, string | null> };
   prompt_overrides: { subagent: PromptOverride };
-  /** g-311：顶层 review.policy——未配置/空/非三值一律为 null（由 review-policy 按目标类型派生）。 */
-  review: { policy: ReviewPolicy | null };
+  /** g-311/g-435：顶层 review 配置——policy 未配置/空/非三值一律为 null；三项列表支持未配置(null)与显式列表。 */
+  review: {
+    policy: ReviewPolicy | null;
+    regions?: string[] | null;
+    contract_paths?: string[] | null;
+    non_product_prefixes?: string[] | null;
+  };
 }
 
 const AUTOMATION_KEYS = [
@@ -1269,6 +1278,49 @@ function readScalarByPath(lines: string[], path: string[]): string | null {
   return null;
 }
 
+/** 读取字符串列表（路径如 ["review","regions"]）。未配置/键不存在返回 null；配置为空列表返回 []。 */
+function readListByPath(lines: string[], path: string[]): string[] | null {
+  let start = 0, end = lines.length, indent = 0;
+  let idx = -1;
+  for (let lvl = 0; lvl < path.length; lvl++) {
+    const key = path[lvl];
+    idx = findKeyLine(lines, key, indent, start, end);
+    if (idx < 0) return null;
+    const keyIndent = lineIndent(lines[idx]);
+    if (lvl < path.length - 1) {
+      indent = keyIndent + 2;
+      start = idx + 1;
+      end = blockChildrenEnd(lines, idx, keyIndent);
+    } else {
+      const raw = lines[idx].slice(keyIndent + key.length + 1).trim();
+      // 检查内联形态：[] 或 [ "a", "b" ] 或 null / ~
+      if (raw === "null" || raw === "~") return null;
+      if (raw.startsWith("[") && raw.includes("]")) {
+        const inside = raw.slice(1, raw.indexOf("]")).trim();
+        if (inside === "") return [];
+        return inside.split(",").map((s) => parseYamlScalar(s)).filter((s): s is string => s !== null);
+      }
+      // 多行列表形态：收集子行 `- item`
+      const listEnd = blockChildrenEnd(lines, idx, keyIndent);
+      const out: string[] = [];
+      let foundAnyListItem = false;
+      for (let i = idx + 1; i < listEnd; i++) {
+        const l = lines[i];
+        if (l.trim() === "" || /^[ \t]*#/.test(l)) continue;
+        const itemMatch = /^[ \t]*-[ \t]*(.*)$/.exec(l);
+        if (itemMatch) {
+          foundAnyListItem = true;
+          const parsed = parseYamlScalar(itemMatch[1]);
+          if (parsed !== null) out.push(parsed);
+        }
+      }
+      if (!foundAnyListItem && (raw === "" || raw === "[]")) return raw === "[]" ? [] : null;
+      return out;
+    }
+  }
+  return null;
+}
+
 /** 读取 prompt_overrides.<key> 的三态覆盖。未配置/缺失 → default（继承 profile 全局值）。
  *  编码形态：裸 `default` → default；`disable`/`null`/`~`/`""`/`''`/空 → disable；
  *  其余标量（含 `writeProjectConfig` 用 JSON.stringify 编码的多行文本）→ override 并解码转义。 */
@@ -1314,11 +1366,12 @@ export function readProjectConfig(root: string): ProjectConfig {
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
       supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])) },
       prompt_overrides: { subagent: { state: "default", value: null } },
-      review: { policy: null },
+      review: { policy: null, regions: null, contract_paths: null, non_product_prefixes: null },
     };
   }
   const lines = readFileSync(file, "utf8").split("\n");
   const scal = (path: string[]): string | null => readScalarByPath(lines, path);
+  const list = (path: string[]): string[] | null => readListByPath(lines, path);
   const auto: Record<string, string | null> = {};
   for (const k of AUTOMATION_KEYS) auto[k] = scal(["supervisor", "automation", k]);
   const lanesRaw = scal(["defaults", "pk", "lanes"]);
@@ -1341,7 +1394,12 @@ export function readProjectConfig(root: string): ProjectConfig {
     },
     supervisor: { automation: auto },
     prompt_overrides: { subagent },
-    review: { policy: normalizeReviewPolicy(scal(["review", "policy"])) },
+    review: {
+      policy: normalizeReviewPolicy(scal(["review", "policy"])),
+      regions: list(["review", "regions"]),
+      contract_paths: list(["review", "contract_paths"]),
+      non_product_prefixes: list(["review", "non_product_prefixes"]),
+    },
   };
 }
 export function isMemoryToolsEnabled(root: string): boolean {
@@ -1603,8 +1661,7 @@ function validateConfigPatch(patch: any): void {
       needStr(o.value, `prompt_overrides.${key}.value`, { nullable: true });
     }
   }
-  // g-311：顶层 review.policy 二次校验（schema 已按 enum 拒绝非法值，此处兜住 core 层直调；
-  // 与 schema 同口径为**精确匹配**——读路径的大小写容错只服务历史值，不是写入许可）。
+  // g-311/g-435：顶层 review 配置二次校验（schema 已校验基本结构，此处做业务规则与非法路径拒绝）。
   if ("review" in patch) {
     needObj(patch.review, "review");
     const rv = patch.review ?? {};
@@ -1613,6 +1670,32 @@ function validateConfigPatch(patch: any): void {
         throw new GraphError(`review.policy 只允许 ${REVIEW_POLICIES.join("/")}`);
       }
     }
+    const validateStringList = (list: unknown, fieldName: string, allowEmptyArray = true, allowTrailingSlash = false) => {
+      if (list === undefined || list === null) return;
+      if (!Array.isArray(list)) throw new GraphError(`${fieldName} 必须是数组或 null`);
+      if (list.length === 0) {
+        if (!allowEmptyArray) throw new GraphError(`${fieldName} 不允许为空数组`);
+        return;
+      }
+      const seen = new Set<string>();
+      for (let i = 0; i < list.length; i++) {
+        const item = list[i];
+        if (typeof item !== "string") throw new GraphError(`${fieldName}[${i}] 必须是字符串`);
+        if (item.trim() === "") throw new GraphError(`${fieldName}[${i}] 不能为空字符串`);
+        const norm = item.trim().replace(/\\/g, "/");
+        if (norm.startsWith("/")) throw new GraphError(`${fieldName}[${i}] 不能是绝对路径`);
+        if (!allowTrailingSlash && norm.endsWith("/")) throw new GraphError(`${fieldName}[${i}] 不能有尾随斜杠`);
+        const segments = norm.split("/");
+        if (segments.includes("..")) throw new GraphError(`${fieldName}[${i}] 不能包含 .. 路径段`);
+        // 归一后重复检查（去 ./ 等）
+        const canonical = norm.replace(/^\.\//, "");
+        if (seen.has(canonical)) throw new GraphError(`${fieldName} 包含重复条目: ${item}`);
+        seen.add(canonical);
+      }
+    };
+    if ("regions" in rv) validateStringList(rv.regions, "review.regions", true, false);
+    if ("contract_paths" in rv) validateStringList(rv.contract_paths, "review.contract_paths", true, false);
+    if ("non_product_prefixes" in rv) validateStringList(rv.non_product_prefixes, "review.non_product_prefixes", true, true);
   }
 }
 
@@ -1673,9 +1756,17 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
       setScalar(["prompt_overrides", key], "", () => encoded);
     }
   }
-  // g-311：顶层 review.policy（null/"" 清空 → 读回 null → 按目标类型派生）。
-  if (patch.review && "policy" in patch.review) {
-    setScalar(["review", "policy"], patch.review.policy ?? "");
+  // g-311/g-435：顶层 review 列表写入
+  if (patch.review) {
+    if ("policy" in patch.review) {
+      setScalar(["review", "policy"], patch.review.policy ?? "");
+    }
+    const setList = (field: string, list: string[] | null | undefined) => {
+      setListAtPath(lines, ["review", field], list);
+    };
+    if ("regions" in patch.review) setList("regions", patch.review.regions);
+    if ("contract_paths" in patch.review) setList("contract_paths", patch.review.contract_paths);
+    if ("non_product_prefixes" in patch.review) setList("non_product_prefixes", patch.review.non_product_prefixes);
   }
 
   const updated = lines.join("\n");
@@ -1740,6 +1831,105 @@ function setScalarAtPath(lines: string[], path: string[], value: string | number
     const { comment } = splitValueComment(afterKey);
     const trimmedEnc = encoded.trim();
     lines[leafIdx] = `${leafIndent}${leafKey}: ${trimmedEnc}${comment}`;
+  }
+}
+
+/** 在 lines 上按路径把列表写为 list（null/undefined 则清空/删除子行并置为 null；[] 写为 []；非空写为缩进 - 项）。保留行尾注释与其它键。 */
+function setListAtPath(lines: string[], path: string[], list: string[] | null | undefined): void {
+  const ensureBlock = (parentIdx: number, parentEnd: number, childIndent: string, childKey: string): number => {
+    lines.splice(parentEnd, 0, `${childIndent}${childKey}:`);
+    return parentEnd;
+  };
+  const rootKey = path[0];
+  let rootIdx = findKeyLine(lines, rootKey, 0, 0, lines.length);
+  if (rootIdx < 0) {
+    // 根不存在且待写入值为 null/undefined 时无需创建
+    if (list === null || list === undefined) return;
+    buildMissingListChain(lines, path, list);
+    return;
+  }
+  let parentIdx = rootIdx;
+  let parentIndent = lineIndent(lines[parentIdx]);
+  for (let lvl = 1; lvl < path.length - 1; lvl++) {
+    const key = path[lvl];
+    const childIndent = " ".repeat(parentIndent + 2);
+    const end = blockChildrenEnd(lines, parentIdx, parentIndent);
+    const keyIdx = findKeyLine(lines, key, childIndent.length, parentIdx + 1, end);
+    if (keyIdx < 0) {
+      if (list === null || list === undefined) return;
+      const inserted = ensureBlock(parentIdx, end, childIndent, key);
+      parentIdx = inserted;
+      parentIndent = childIndent.length;
+      continue;
+    }
+    parentIdx = keyIdx;
+    parentIndent = lineIndent(lines[keyIdx]);
+  }
+
+  const leafKey = path[path.length - 1];
+  const leafIndent = " ".repeat(parentIndent + 2);
+  const end = blockChildrenEnd(lines, parentIdx, parentIndent);
+  const leafIdx = findKeyLine(lines, leafKey, leafIndent.length, parentIdx + 1, end);
+
+  if (leafIdx < 0) {
+    // 键不存在
+    if (list === null || list === undefined) return;
+    if (list.length === 0) {
+      lines.splice(end, 0, `${leafIndent}${leafKey}: []`);
+    } else {
+      const newLines: string[] = [`${leafIndent}${leafKey}:`];
+      const itemIndent = " ".repeat(parentIndent + 4);
+      for (const item of list) {
+        newLines.push(`${itemIndent}- ${JSON.stringify(item)}`);
+      }
+      lines.splice(end, 0, ...newLines);
+    }
+    return;
+  }
+
+  // 键已存在：保留其行尾注释
+  const existing = lines[leafIdx];
+  const afterKey = existing.slice(lineIndent(existing) + leafKey.length + 1);
+  const { comment } = splitValueComment(afterKey);
+  const childEnd = blockChildrenEnd(lines, leafIdx, leafIndent.length);
+
+  // 删除既有的列表子行（如果有）
+  if (childEnd > leafIdx + 1) {
+    lines.splice(leafIdx + 1, childEnd - (leafIdx + 1));
+  }
+
+  if (list === null || list === undefined) {
+    lines[leafIdx] = `${leafIndent}${leafKey}:${comment}`;
+  } else if (list.length === 0) {
+    lines[leafIdx] = `${leafIndent}${leafKey}: []${comment}`;
+  } else {
+    lines[leafIdx] = `${leafIndent}${leafKey}:${comment}`;
+    const newItems: string[] = [];
+    const itemIndent = " ".repeat(parentIndent + 4);
+    for (const item of list) {
+      newItems.push(`${itemIndent}- ${JSON.stringify(item)}`);
+    }
+    lines.splice(leafIdx + 1, 0, ...newItems);
+  }
+}
+
+/** 列表路径整条链缺失时在文末补建。 */
+function buildMissingListChain(lines: string[], path: string[], list: string[]): void {
+  while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+  if (lines.length && lines[lines.length - 1] !== "") lines.push("");
+  for (let lvl = 0; lvl < path.length - 1; lvl++) {
+    lines.push(" ".repeat(lvl * 2) + `${path[lvl]}:`);
+  }
+  const leafIndent = " ".repeat((path.length - 1) * 2);
+  const leafKey = path[path.length - 1];
+  if (list.length === 0) {
+    lines.push(`${leafIndent}${leafKey}: []`);
+  } else {
+    lines.push(`${leafIndent}${leafKey}:`);
+    const itemIndent = " ".repeat(path.length * 2);
+    for (const item of list) {
+      lines.push(`${itemIndent}- ${JSON.stringify(item)}`);
+    }
   }
 }
 
@@ -10823,12 +11013,16 @@ export function resolveAccept(
       ? (report as Record<string, unknown>)
       : {};
     const evidence = normalizeMachineReport(report);
+    const projConf = readProjectConfig(root);
     const policy = resolveReviewPolicy({
-      policy: readProjectConfig(root).review.policy,
+      policy: projConf.review.policy,
       type: doc.meta.type,
       changedPaths: evidence.changed_paths,
       productChangedLines: evidence.product_changed_lines,
       strictRequired: raw.strict_required === true,
+      regions: projConf.review.regions,
+      contractPaths: projConf.review.contract_paths,
+      nonProductPrefixes: projConf.review.non_product_prefixes,
     });
     if (policy.policy !== "auto") {
       throw new GraphError(

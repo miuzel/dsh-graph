@@ -131,11 +131,12 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
   - `strict`——必须派发独立（无作者偏见的）评审子代理，禁止 `fast_track`；
   - `none`——既不要求独立评审也不要求机器门禁（仅限纯文档/记忆类零风险改动），仍不得绕过 `delivered` 人工 gate。
 - **未配置时按目标类型派生**：`patch`/`chore` → `auto`；`feature`/`bug`/`task`/`improvement` → `strict`；空/非法类型 → `strict`（安全侧兜底）。
-- **强制升级 strict 的闭集**（命中任一即 strict，显式 `auto`/`none` 不得推翻）：变更路径含 `core/schema.ts` 或 `schema/SCHEMA.md`（契约冻结）；产品代码变更 ≥150 行；变更跨 ≥3 个顶层区域（`core` / `dsh-graph-host` / `lib/client` / `prompts` / `scripts`）；supervisor 显式声明 `strict_required`（覆盖核心层重写等无法用路径与行数表达的情形）。
+- **强制升级 strict 的闭集**（命中任一即 strict，显式 `auto`/`none` 不得推翻）：变更路径含有效契约文件（`project.yaml` 的 `review.contract_paths`，默认未配置时不猜契约 M1 不触发；改 `core/schema.ts` 在已登记项目中触发）；产品代码变更 ≥150 行；变更跨 ≥3 个顶层区域（`review.regions`，普适默认 `src/lib/app/packages/server/client/scripts/tests` 或项目自定义）；supervisor 显式声明 `strict_required`（覆盖核心层重写等无法用路径与行数表达的情形）；产品代码落在未登记区域时安全升级为 strict（`unknown_region` 追加在末尾）；`review.regions: []` 显式空列表无可评估区域安全升级为 strict。
+- **项目评审配置校准**：主管应按项目实际架构校准 `project.yaml`（通过 `graph_get_settings` 查询、`graph_update_settings` 写入；必要时向负责人确认）：`review.regions`（按代码边界与顺序登记，最长前缀优先）、`review.contract_paths`（冻结契约路径，显式空列表 `[]` 合法且 M1 不触发）、`review.non_product_prefixes`（排除非产品前缀）。未登记区域的产品代码改动升级为 strict。
 - **机器门禁四项**（逐条可执行，`graph_resolve_accept(fast_track=true, machine_report=…)` 调用前须逐条实测）：
-  1. 全量测试：`node --test core/tests/*.test.ts` → `exit_code=0` 且 `fail=0`（双条件，只看文本会被截断误导）；
-  2. 类型检查：`./node_modules/.bin/tsc --noEmit -p tsconfig.json` → `exit_code=0`；覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内；
-  3. 变更规模：`git diff --numstat <attempt.baseline_commit> HEAD` 的产品代码增删合计 <150 行（口径排除 `core/tests/**`、`*.md` 与生成物；worktree 模式下须在 attempt 工作树内执行），且 `git status --porcelain` 复核无未跟踪新文件（未跟踪文件不计入 numstat，必须先提交）；
+  1. 全量测试：项目配置的测试命令（如 `node --test core/tests/*.test.ts`）→ `exit_code=0` 且 `fail=0`（双条件，只看文本会被截断误导）；
+  2. 类型检查：项目配置的类型检查命令（如 `./node_modules/.bin/tsc --noEmit -p tsconfig.json`）→ `exit_code=0`；覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内；
+  3. 变更规模：`git diff --numstat <attempt.baseline_commit> HEAD` 的产品代码增删合计 <150 行（按 `review.non_product_prefixes` 排除非产品代码；worktree 模式下须在 attempt 工作树内执行），且 `git status --porcelain` 复核无未跟踪新文件（未跟踪文件不计入 numstat，必须先提交）；
   4. 判据已验：该目标全部判据文本均以 `✅已验` 结尾（由 `goal.md` 自算，不采信调用方自报）。
 - **fail-safe**：任一信号取不到（命令失败、报告缺字段、基线不可用）即不放行，不得把「拿不到证据」当作「证据为真」。
 - **通过后的行为**：`graph_resolve_accept(fast_track=true, …)` 先追加 `review.fast_track` 事件（含四项机器证据与 baseline），再走同一 accept 映射；任一项不满足即拒绝且零副作用（状态不变、无 `review.passed` 事件）。

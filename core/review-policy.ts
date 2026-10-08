@@ -27,25 +27,46 @@ export const FAST_TRACK_MAX_PRODUCT_LINES = 150;
 export const FAST_TRACK_CHECKS = ["tests", "typecheck", "diff_size", "criteria_verified"] as const;
 export type FastTrackCheckId = (typeof FAST_TRACK_CHECKS)[number];
 
-/** M1：契约路径——变更命中即强制 strict（契约冻结不得走快速通道）。 */
+/** M1：默认契约路径（普适默认为空；本项目显式校准在 project.yaml 中登记）。 */
 export const CONTRACT_PATHS = ["core/schema.ts", "schema/SCHEMA.md"] as const;
+export const DEFAULT_CONTRACT_PATHS: readonly string[] = [];
 
-/** M3 判定的顶层区域闭集（照规划补齐的枚举；未登记区域的路径不计入 M3）。 */
+/** M3 判定的默认顶层区域（普适默认，不含本仓库专属 core/dsh-graph-host 闭集）。 */
+export const DEFAULT_REVIEW_REGIONS: readonly string[] = [
+  "src",
+  "lib",
+  "app",
+  "packages",
+  "server",
+  "client",
+  "scripts",
+  "tests",
+] as const;
+
+/** 旧版 M3 判定的顶层区域闭集（兼容保留，已 deprecated，请使用 DEFAULT_REVIEW_REGIONS 或项目配置）。 */
 export const REVIEW_REGIONS = ["core", "dsh-graph-host", "lib/client", "prompts", "scripts"] as const;
-export type ReviewRegion = (typeof REVIEW_REGIONS)[number];
+export type ReviewRegion = string;
+
+/** 默认产品代码排除前缀（通用口径，不含本仓库 core/tests/ 等专属条件）。 */
+export const DEFAULT_NON_PRODUCT_PREFIXES: readonly string[] = [
+  "dist/",
+  "node_modules/",
+  ".worktrees/",
+] as const;
 
 /** 判为 strict 的闭合原因集（固定顺序输出，便于断言与审计）。 */
 export const STRICT_REASONS = [
-  "contract_change", // M1 变更路径含 core/schema.ts 或 schema/SCHEMA.md
+  "contract_change", // M1 变更路径含契约文件
   "product_size", // M2 产品代码变更 ≥ FAST_TRACK_MAX_PRODUCT_LINES 行
   "cross_region", // M3 变更跨 ≥3 个顶层区域
   "declared_strict", // M4 supervisor 显式声明 strict_required
   "type_or_policy_strict", // M5 type ∈ {feature,bug}（或派生为 strict）或项目 policy=strict
   "policy_unrecognized", // 显式值非三值：读路径本应归一为「未配置」，此处安全侧兜底
+  "unknown_region", // 产品代码落在未登记区域（追加在末尾，auto/none 也升级）
 ] as const;
 export type StrictReason = (typeof STRICT_REASONS)[number];
 
-/** 产品代码口径：这些前缀下的改动**不计入** `git diff --numstat` 行数（tests/生成物）。 */
+/** 产品代码口径：这些前缀下的改动**不计入** `git diff --numstat` 行数（旧常量，兼容保留）。 */
 const NON_PRODUCT_PREFIXES = [
   "core/tests/",
   "dist/",
@@ -89,42 +110,84 @@ export function typeDefaultReviewPolicy(rawType: unknown): ReviewPolicy {
 }
 
 /** 归一化路径：去空白、去 `./` 前缀、Windows 分隔符转 `/`、丢空串。 */
+export function normalizePolicyPath(p: unknown): string {
+  if (typeof p !== "string") return "";
+  return p.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+/** 归一化路径列表。 */
 function normalizePaths(raw: readonly unknown[] | null | undefined): string[] {
   if (!Array.isArray(raw)) return [];
   const out: string[] = [];
   for (const item of raw) {
-    if (typeof item !== "string") continue;
-    const p = item.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+    const p = normalizePolicyPath(item);
     if (p !== "") out.push(p);
   }
   return out;
 }
 
-/** 该路径是否命中契约路径（M1）。 */
-export function isContractPath(path: string): boolean {
-  const p = String(path ?? "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
-  return (CONTRACT_PATHS as readonly string[]).includes(p);
+/** 检查路径是否命中某个区域前缀（完整目录段边界匹配，或完全相等）。 */
+export function matchRegionSegment(path: string, region: string): boolean {
+  const normPath = normalizePolicyPath(path).replace(/\\/g, "/");
+  const normReg = normalizePolicyPath(region).replace(/\/+$/, "").replace(/\\/g, "/");
+  if (!normPath || !normReg) return false;
+  if (normPath === normReg) return true;
+  return normPath.startsWith(normReg + "/");
 }
 
-/** 路径 → 顶层区域；未登记区域返回 null（不计入 M3，但契约路径另有 M1 兜底捕获）。 */
-export function regionOfPath(path: string): ReviewRegion | null {
-  const p = String(path ?? "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
-  if (p.startsWith("core/")) return "core";
-  if (p.startsWith("dsh-graph-host/lib/client/")) return "lib/client";
-  if (p.startsWith("dsh-graph-host/prompts/")) return "prompts";
-  if (p.startsWith("dsh-graph-host/")) return "dsh-graph-host";
-  if (p.startsWith("scripts/")) return "scripts";
-  return null;
+/** 该路径是否命中契约路径（M1）。可传入项目配置的 contract_paths。 */
+export function isContractPath(path: string, contractPaths?: readonly string[] | null): boolean {
+  const p = normalizePolicyPath(path);
+  if (!p) return false;
+  const paths = contractPaths !== undefined && contractPaths !== null ? contractPaths : CONTRACT_PATHS;
+  return paths.some((cp) => normalizePolicyPath(cp) === p);
 }
 
-/** 变更路径覆盖的顶层区域集合（固定顺序，去重）。 */
-export function regionsOfPaths(paths: readonly string[]): ReviewRegion[] {
+/**
+ * 路径 → 顶层区域；未登记区域返回 null。
+ * 规则：最长前缀优先；同长度按配置顺序；完整段边界。
+ */
+export function regionOfPath(path: string, configuredRegions?: readonly string[] | null): ReviewRegion | null {
+  const p = normalizePolicyPath(path);
+  if (!p) return null;
+  const regions = Array.isArray(configuredRegions)
+    ? configuredRegions
+    : configuredRegions === null || configuredRegions === undefined
+      ? REVIEW_REGIONS
+      : [];
+
+  // 筛选出所有匹配的区域
+  const matched = regions.filter((r) => typeof r === "string" && matchRegionSegment(p, r));
+  if (matched.length === 0) return null;
+  if (matched.length === 1) return matched[0];
+
+  // 最长前缀优先；同长度保留原配置顺序（稳定的 sort）
+  let best = matched[0];
+  let bestLen = normalizePolicyPath(best).replace(/\/+$/, "").length;
+  for (let i = 1; i < matched.length; i++) {
+    const r = matched[i];
+    const len = normalizePolicyPath(r).replace(/\/+$/, "").length;
+    if (len > bestLen) {
+      best = r;
+      bestLen = len;
+    }
+  }
+  return best;
+}
+
+/** 变更路径覆盖的顶层区域集合（按配置顺序，去重）。 */
+export function regionsOfPaths(paths: readonly string[], configuredRegions?: readonly string[] | null): ReviewRegion[] {
+  const regions = Array.isArray(configuredRegions)
+    ? configuredRegions
+    : configuredRegions === null || configuredRegions === undefined
+      ? REVIEW_REGIONS
+      : [];
   const seen = new Set<ReviewRegion>();
   for (const p of paths) {
-    const r = regionOfPath(p);
+    const r = regionOfPath(p, regions);
     if (r) seen.add(r);
   }
-  return REVIEW_REGIONS.filter((r) => seen.has(r));
+  return regions.filter((r) => seen.has(r));
 }
 
 function normalizeLines(raw: unknown): number | null {
@@ -143,6 +206,12 @@ export interface ReviewPolicyInput {
   productChangedLines?: number | null;
   /** M4：supervisor 显式声明强制 strict（覆盖「核心层重写」等无法用路径/行数表达的场景）。 */
   strictRequired?: boolean | null;
+  /** 项目自定义的区域列表（未配置时为 null）。 */
+  regions?: readonly string[] | null;
+  /** 项目自定义的契约路径列表（未配置时为 null）。 */
+  contractPaths?: readonly string[] | null;
+  /** 项目自定义的产品排除前缀列表（未配置时为 null）。 */
+  nonProductPrefixes?: readonly string[] | null;
 }
 
 export interface ReviewPolicyDecision {
@@ -156,25 +225,34 @@ export interface ReviewPolicyDecision {
   reasons: string[];
 }
 
-const STRICT_REASON_TEXT: Record<StrictReason, string> = {
-  contract_change: `M1 变更路径含契约文件（${CONTRACT_PATHS.join(" / ")}）——契约冻结必须独立评审`,
-  product_size: `M2 产品代码变更 ≥ ${FAST_TRACK_MAX_PRODUCT_LINES} 行——超出快速通道安全阈值`,
-  cross_region: "M3 变更跨 ≥3 个顶层区域——跨模块改动必须独立评审",
-  declared_strict: "M4 supervisor 显式声明 strict_required（核心层重写等）",
-  type_or_policy_strict: "M5 目标类型（feature/bug 等）或项目 policy 本身要求 strict",
-  policy_unrecognized: `显式 policy 值不在 ${REVIEW_POLICIES.join("/")} 内——安全侧按 strict 处理`,
-};
+export function formatStrictReasonText(
+  reason: StrictReason,
+  effectiveContractPaths?: readonly string[],
+): string {
+  switch (reason) {
+    case "contract_change": {
+      const paths = effectiveContractPaths && effectiveContractPaths.length > 0
+        ? effectiveContractPaths.join(" / ")
+        : CONTRACT_PATHS.join(" / ");
+      return `M1 变更路径含契约文件（${paths}）——契约冻结必须独立评审`;
+    }
+    case "product_size":
+      return `M2 产品代码变更 ≥ ${FAST_TRACK_MAX_PRODUCT_LINES} 行——超出快速通道安全阈值`;
+    case "cross_region":
+      return "M3 变更跨 ≥3 个顶层区域——跨模块改动必须独立评审";
+    case "declared_strict":
+      return "M4 supervisor 显式声明 strict_required（核心层重写等）";
+    case "type_or_policy_strict":
+      return "M5 目标类型（feature/bug 等）或项目 policy 本身要求 strict";
+    case "policy_unrecognized":
+      return `显式 policy 值不在 ${REVIEW_POLICIES.join("/")} 内——安全侧按 strict 处理`;
+    case "unknown_region":
+      return "产品代码变更落在未登记区域——安全升级为 strict";
+  }
+}
 
 /**
  * 解析目标应走的评审策略（单一可单测入口）。
- *
- * 规则（自上而下）：
- * - 基础策略：显式 `review.policy` 命中三值 → 用它（source=explicit）；未配置/空 → 按类型派生
- *   （source=type_default）；显式值非三值 → `strict` 兜底（source=type_default）。
- * - 升级闭集 M1–M4：命中**任一**即 `policy="strict"`，对显式 `auto`/`none` 同样生效——
- *   这是「显式声明不得推翻安全侧」的落点，也是本目标自洽代价的来源（本目标改 core/schema.ts）。
- * - 未提供 `changedPaths` / `productChangedLines` 时相应触发条件视为「不命中」——它们只用于
- *   **升级**，缺失不会把 strict 降级为 auto；真正的放行判定在 `evaluateFastTrackGate`（fail-safe）。
  */
 export function resolveReviewPolicy(input: ReviewPolicyInput = {}): ReviewPolicyDecision {
   const reasons: StrictReason[] = [];
@@ -196,12 +274,59 @@ export function resolveReviewPolicy(input: ReviewPolicyInput = {}): ReviewPolicy
     if (base === "strict") reasons.push("type_or_policy_strict");
   }
 
+  // 契约路径解析：未配置（null/undefined）采用 DEFAULT_CONTRACT_PATHS（[]）
+  const effectiveContractPaths = Array.isArray(input.contractPaths)
+    ? input.contractPaths
+    : input.contractPaths === null || input.contractPaths === undefined
+      ? DEFAULT_CONTRACT_PATHS
+      : [];
+
+  // 区域列表解析：未配置（null/undefined）采用 DEFAULT_REVIEW_REGIONS
+  const effectiveRegions = Array.isArray(input.regions)
+    ? input.regions
+    : input.regions === null || input.regions === undefined
+      ? DEFAULT_REVIEW_REGIONS
+      : [];
+
+  // 产品代码排除前缀：未配置（null/undefined）采用 DEFAULT_NON_PRODUCT_PREFIXES
+  const effectiveNonProductPrefixes = Array.isArray(input.nonProductPrefixes)
+    ? input.nonProductPrefixes
+    : input.nonProductPrefixes === null || input.nonProductPrefixes === undefined
+      ? DEFAULT_NON_PRODUCT_PREFIXES
+      : [];
+
+  // 规则 5：regions 为显式空列表 [] 时无可评估区域，fail-closed 安全升级 strict
+  if (Array.isArray(input.regions) && input.regions.length === 0) {
+    reasons.push("cross_region");
+  }
+
   const paths = normalizePaths(input.changedPaths);
-  if (paths.some(isContractPath)) reasons.push("contract_change");
+  if (paths.some((p) => isContractPath(p, effectiveContractPaths))) {
+    reasons.push("contract_change");
+  }
   const lines = normalizeLines(input.productChangedLines);
-  if (lines !== null && lines >= FAST_TRACK_MAX_PRODUCT_LINES) reasons.push("product_size");
-  if (regionsOfPaths(paths).length >= 3) reasons.push("cross_region");
-  if (input.strictRequired === true) reasons.push("declared_strict");
+  if (lines !== null && lines >= FAST_TRACK_MAX_PRODUCT_LINES) {
+    reasons.push("product_size");
+  }
+  if (regionsOfPaths(paths, effectiveRegions).length >= 3) {
+    reasons.push("cross_region");
+  }
+  if (input.strictRequired === true) {
+    reasons.push("declared_strict");
+  }
+
+  // unknown_region 判定：仅当提供了 changedPaths 时评估产品代码文件
+  // 若包含非契约产品代码且未匹配到任何登记区域，追加 unknown_region（排在 STRICT_REASONS 末尾）
+  if (input.changedPaths !== undefined && input.changedPaths !== null && paths.length > 0) {
+    const hasUnknown = paths.some((p) => {
+      if (isContractPath(p, effectiveContractPaths)) return false; // 契约路径已有 M1 专门负责，不作为未知区域产品码
+      if (!isProductCodePath(p, effectiveNonProductPrefixes)) return false; // 非产品代码（文档、生成物等）中性
+      return regionOfPath(p, effectiveRegions) === null; // 产品代码未登记到任何区域
+    });
+    if (hasUnknown) {
+      reasons.push("unknown_region");
+    }
+  }
 
   const strictReasons = STRICT_REASONS.filter((r) => reasons.includes(r));
   const policy: ReviewPolicy = strictReasons.length > 0 ? "strict" : base;
@@ -209,7 +334,7 @@ export function resolveReviewPolicy(input: ReviewPolicyInput = {}): ReviewPolicy
     policy,
     source,
     strictReasons,
-    reasons: strictReasons.map((r) => STRICT_REASON_TEXT[r]),
+    reasons: strictReasons.map((r) => formatStrictReasonText(r, effectiveContractPaths)),
   };
 }
 
@@ -219,13 +344,24 @@ export function resolveReviewPolicy(input: ReviewPolicyInput = {}): ReviewPolicy
 
 /**
  * `git diff --numstat` 口径下该路径是否计入**产品代码**行数。
- * 排除：`core/tests/**`、`*.md`、生成物（`dist/`、`core-dist/`、锁文件）与 worktree 副本。
+ * 排除：`*.md`、通用生成物锁文件，以及配置的 nonProductPrefixes。
  */
-export function isProductCodePath(path: string): boolean {
-  const p = String(path ?? "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
+export function isProductCodePath(
+  path: string,
+  nonProductPrefixes?: readonly string[] | null,
+): boolean {
+  const p = normalizePolicyPath(path);
   if (p === "") return false;
   if ((NON_PRODUCT_EXACT as readonly string[]).includes(p)) return false;
-  if (NON_PRODUCT_PREFIXES.some((prefix) => p.startsWith(prefix))) return false;
+  const prefixes = nonProductPrefixes !== undefined && nonProductPrefixes !== null
+    ? nonProductPrefixes
+    : DEFAULT_NON_PRODUCT_PREFIXES;
+  if (prefixes.some((prefix) => {
+    const normPre = normalizePolicyPath(prefix);
+    return normPre !== "" && p.startsWith(normPre);
+  })) {
+    return false;
+  }
   if (p.toLowerCase().endsWith(".md")) return false;
   return true;
 }
@@ -244,7 +380,10 @@ export interface ProductLineCount {
  * 二进制行（`-\t-\t<path>`）计入文件但贡献 0 行；无法解析的行按 0 行计入其路径
  * （fail-safe：宁可少算行数也要如实列出文件，避免静默丢弃变更）。
  */
-export function countProductChangedLines(numstat: string): ProductLineCount {
+export function countProductChangedLines(
+  numstat: string,
+  nonProductPrefixes?: readonly string[] | null,
+): ProductLineCount {
   const files: string[] = [];
   const skipped: string[] = [];
   let lines = 0;
@@ -255,7 +394,7 @@ export function countProductChangedLines(numstat: string): ProductLineCount {
     if (parts.length < 3) continue;
     const path = parts.slice(2).join("\t").trim();
     if (path === "") continue;
-    if (!isProductCodePath(path)) {
+    if (!isProductCodePath(path, nonProductPrefixes)) {
       skipped.push(path);
       continue;
     }
