@@ -3174,7 +3174,10 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_resolve_accept",
-        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict）且 machine_report 四项门禁全绿——① tests（exit_code=0 且 fail=0）与 ② typecheck（exit_code=0）是**调用方证据**（引擎不复跑，须留痕 command/collected_at/source）；③ 变更规模（产品代码增删 <150 行且无未跟踪新文件）由**引擎 Git 自算**：machine_report.attempt 必填（显式绑定执行树），引擎在该 attempt 的实际工作树采集真源并与报告逐项对账（不一致、未提交 tracked 改动、工作树缺失/已删、git 或基线不可解析一律拒绝），且与策略层 M2 用**同一条 150 行阈值**（≥150 行先被策略层升级 strict）；④ 全部判据以 ✅已验 结尾由引擎自算。任一不满足即拒绝且零副作用，通过则记 review.fast_track 事件（含证据分层与 Git 真源）。",
+        // 注意（g-437 P3-b 措辞纠正）：注册处在 `...t.def` **之后**用 sT 取 i18n 字典值覆盖 `description`
+        // ⇒ **生效面是 lib/server-i18n.js 的 tool.graph_resolve_accept（zh/en）**，本字面量只是**同步副本**
+        // （可读性/兜底）。改文案必须两处同改；prompt-i18n-parity 要求「每个注册工具恰有一把 tool.* 键」⇒ 键不可删。
+        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict）且 machine_report 四项门禁全绿——① tests（exit_code=0 且 fail=0）与 ② typecheck（exit_code=0）是**调用方证据**（引擎不复跑，须留痕 command/collected_at/source）；③ 变更规模（产品代码增删 <150 行且无未跟踪新文件）由**引擎 Git 自算**：machine_report.attempt 必填（显式绑定执行树），引擎在该 attempt 的实际工作树采集真源并与报告逐项对账（不一致、未提交 tracked 改动、工作树缺失/已删、git 或基线不可解析一律拒绝），`machine_report.baseline_commit` 必填且必须**等于**该 attempt 的引擎锚点（派发响应回传的 `baseline_commit`；隔离 attempt 亦可与 `worktree.head` 对照，短 SHA 亦可）——锚点只取自 attempt 记录、**绝不取自报告**，缺失或不等即拒绝（错误文案给出「显式 baseline 重新派发该 attempt」或「改走普通 accept」两条出路）；且与策略层 M2 用**同一条 150 行阈值**（≥150 行先被策略层升级 strict）；④ 全部判据以 ✅已验 结尾由引擎自算。任一不满足即拒绝且零副作用，通过则记 review.fast_track 事件（含证据分层与 Git 真源）。",
         parameters: params({
           goal: str,
           verdict: { type: "string", enum: ["accept", "object"] },
@@ -3186,7 +3189,7 @@ export function apply(ctx, config) {
             type: "object",
             description:
               "机器证据包：{ attempt, baseline_commit, changed_paths[], product_changed_lines, untracked_files, tests:{exit_code,fail,command,collected_at,source}, typecheck:{exit_code,command,collected_at,source}, strict_required? }。" +
-              "attempt 必填（显式绑定实际执行树，引擎不猜）；①② tests/typecheck 为调用方证据并须留痕命令原文/采集时间/来源（引擎不复跑）；" +
+              "attempt 必填（显式绑定实际执行树，引擎不猜）；`baseline_commit` 必填，且必须**等于**该 attempt 的引擎锚点（派发响应回传的 `baseline_commit`；隔离 attempt 的 `worktree.head` 亦可，短 SHA 亦可）——锚点只取自 attempt 记录，绝不取自报告；①② tests/typecheck 为调用方证据并须留痕命令原文/采集时间/来源（引擎不复跑）；" +
               "③ 由引擎在实际 attempt 工作树的 Git 真源自算并与报告逐项对账（报告必须与 `git diff --numstat -z`（rename 含旧新两条路径）及未跟踪用户文件数完全一致）；④ 由引擎自算（全部判据 ✅已验），报告不得自报。",
           },
         }, ["goal", "verdict"]),
