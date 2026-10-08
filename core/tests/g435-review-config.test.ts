@@ -20,6 +20,7 @@ import {
   GraphError,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
+import { apply } from "../../dist/index.js";
 
 import {
   resolveReviewPolicy,
@@ -57,6 +58,66 @@ function greenReport(over: Record<string, unknown> = {}) {
     criteria: { all_verified: true },
     ...over,
   };
+}
+
+// ---------------------------------------------------------------------------
+// host 接线夹具：真实 tool + REST /api/dsh-graph/settings（GET/POST）。
+// 与 g311/g342 同款，读 dist/（运行前需 `bash scripts/build.sh`）。
+// ---------------------------------------------------------------------------
+function hostHarness(root: string) {
+  const registered: any[] = [];
+  const routes = new Map<string, any>();
+  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const ctx: any = {
+    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+    effect: (fn: () => unknown) => fn(),
+    webServer,
+    tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) },
+  };
+  apply(ctx, { root });
+  const byName = new Map(registered.map((d: any) => [d.name, d]));
+  const exec = { agent: undefined, signal: new AbortController().signal };
+  const callTool = (name: string, args: Record<string, unknown> = {}) => byName.get(name)!.execute(args, exec);
+  return { byName, routes, callTool };
+}
+
+function fakeRes() {
+  const res: any = { _code: 0, _body: null };
+  res.writeHead = (code: number) => { res._code = code; };
+  res.end = (s: string) => { res._body = s ? JSON.parse(s) : null; };
+  return res;
+}
+
+/** 真实 HTTP 入口：GET/POST /api/dsh-graph/settings。 */
+async function request(routes: Map<string, any>, method: string, body?: unknown) {
+  const handler = routes.get("/api/dsh-graph/settings");
+  assert.ok(handler, "settings 路由必须已注册");
+  const req: any = {
+    method,
+    url: "/api/dsh-graph/settings",
+    _l: {} as Record<string, (v?: any) => void>,
+    on(ev: string, cb: (v?: any) => void) { req._l[ev] = cb; },
+  };
+  const res = fakeRes();
+  const p = handler(req, res);
+  if (body !== undefined) req._l.data?.(JSON.stringify(body));
+  req._l.end?.();
+  await p;
+  return { code: res._code, body: res._body };
+}
+
+/** 真实 resolveAccept(fast_track) 必须被拒（strict）且零副作用。 */
+function expectFastTrackRejected(root: string, goal: string, paths: string[], label: string) {
+  const events = readEvents(root).length;
+  assert.throws(
+    () => resolveAccept(root, goal, {
+      actor: "supervisor:test", verdict: "accept", fast_track: true,
+      machine_report: greenReport({ changed_paths: paths }),
+    }),
+    (e: unknown) => e instanceof GraphError && /fast_track 被拒/.test(e.message) && /strict/.test(e.message),
+    `${label}：畸形/不可解析配置必须 fail-closed，不得快速放行`,
+  );
+  assert.equal(readEvents(root).length, events, `${label}：拒绝必须零副作用`);
 }
 
 // ---------------------------------------------------------------------------
@@ -151,18 +212,29 @@ test("g-435 判据 1：三项列表写读往返，保留注释与未知键；非
   assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), flowYaml, "flow 写入失败后零副作用");
 
   // 5. 畸形 YAML 经 GET 读回后若原样 POST 提交，必被拒绝且文件不变，绝不出现字面 invalid:
+  //    （F2 修复后读侧不再产出哨兵 ⇒ 该回写由 schema/业务校验拒绝，而不是靠 "invalid:" 前缀报错）
   const malformedYaml = `review:\n  policy: auto\n  regions: [src]\n  contract_paths: 123\n`;
   writeFileSync(join(root, "project.yaml"), malformedYaml, "utf8");
   const readCfg = readProjectConfig(root);
+  assert.equal(readCfg.review.config_malformed, true, "畸形字段必须产出 malformed 信号");
+  assert.equal(JSON.stringify(readCfg.review).includes("invalid:"), false, "读侧绝不产出内部哨兵");
   assert.throws(
     () => writeProjectConfig(root, { review: readCfg.review }, "supervisor:test"),
-    (err: any) =>
-      err instanceof GraphError &&
-      err.message.includes("试图写入内部标记值") &&
-      err.message.includes("请先手工修正 project.yaml"),
+    GraphError,
+    "读取→原样回写必须被拒绝",
   );
   assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), malformedYaml, "畸形回写被拒后文件不变");
   assert.equal(readFileSync(join(root, "project.yaml"), "utf8").includes("invalid:"), false);
+  // 写侧仍对显式 invalid: 前缀给出「指向 project.yaml 取值非法」的报错（内部保留前缀，不可写入）
+  assert.throws(
+    () => writeProjectConfig(root, { review: { contract_paths: ["invalid:123"] } }, "supervisor:test"),
+    (err: any) =>
+      err instanceof GraphError &&
+      err.message.includes("project.yaml") &&
+      err.message.includes("取值非法"),
+    "写侧对 invalid: 前缀的报错语义必须指向配置文件",
+  );
+  assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), malformedYaml, "invalid: 写入被拒后文件不变");
 
   // 6. 连带阻断防护：当存在畸形 review 配置时，只更新不含 review 段的合法 patch 必须成功写入
   writeProjectConfig(root, { executor: { provider: "custom-p", model: "custom-m" } }, "supervisor:test");
@@ -505,4 +577,142 @@ test("g-435 判据 8：纯文档与生成物中性；changedPaths 缺失/[] 中�
   assert.equal(dDistillery.policy, "strict");
   assert.ok(dDistillery.strictReasons.includes("product_size"));
   assert.ok(dDistillery.strictReasons.includes("unknown_region"));
+});
+
+// ---------------------------------------------------------------------------
+// F1（第三轮独立复核必修）：不可解析 YAML / 字段存在但不可判定 ⇒ fail-closed
+//
+// 不变量（写进断言）：**「字段不存在 ⇒ 合法未配置」与「字段存在但不可解析/无法判定 ⇒ 畸形」严格区分**；
+// 后者一律 fail-closed（产出确定 malformed 信号并安全升级 strict），整档不可解析时 policy 标量也不放行。
+// 本轮补的是**不可解析**形态 + **真实入口**（tool/HTTP GET + 真实 resolveAccept(fast_track)）；
+// 此前判据 5 只用可解析畸形值且只断言「不崩」，故 2088 全绿也检不出 F1。
+// ---------------------------------------------------------------------------
+test("g-435 F1：不可解析 YAML 经真实 tool/HTTP 标为畸形，真实 resolveAccept(fast_track) 必拒；闭合对照仍 strict", async () => {
+  const unparsable: Array<[string, string, string[]]> = [
+    ["未闭合 flow list（契约冻结绕过向量）", "review:\n  policy: auto\n  regions: [src, dsh-graph-host]\n  contract_paths: [core/schema.ts\n", ["core/schema.ts"]],
+    ["Tab 缩进（显式 strict 被丢弃向量）", "review:\n\tpolicy: strict\n", ["src/a.ts"]],
+    ["未闭合 flow list 含非法项", "review:\n  policy: auto\n  regions: [src, 123\n", ["src/a.ts"]],
+  ];
+  for (const [label, text, paths] of unparsable) {
+    const { root, goal } = fixture();
+    const { callTool, routes } = hostHarness(root);
+    writeFileSync(join(root, "project.yaml"), text, "utf8");
+
+    // 真实 tool 入口：必须产出确定 malformed 信号，且绝不暴露内部哨兵
+    const toolGet: any = await callTool("graph_get_settings");
+    assert.equal(toolGet.config.review.config_malformed, true, `${label}：读侧必须产出确定 malformed 信号`);
+    assert.ok(toolGet.config.review.invalid_fields, `${label}：读侧必须带 invalid_fields`);
+    assert.equal(JSON.stringify(toolGet.config).includes("invalid:"), false, `${label}：响应不得含内部哨兵`);
+
+    // 真实 HTTP GET：不崩溃、不掉哨兵
+    const httpGet = await request(routes, "GET");
+    assert.equal(httpGet.code, 200, `${label}：GET 不得崩溃`);
+    assert.equal(JSON.stringify(httpGet.body).includes("invalid:"), false, `${label}：HTTP 响应不得含内部哨兵`);
+
+    // 真实 resolveAccept(fast_track)：必拒（M1 契约冻结/显式 strict 不得被绕过）
+    expectFastTrackRejected(root, goal, paths, label);
+  }
+
+  // 闭合对照：同内容闭合后为「确定 strict」（畸形信号来自非法元素），真实 fast_track 同样被拒
+  const closed = fixture();
+  const closedHost = hostHarness(closed.root);
+  writeFileSync(join(closed.root, "project.yaml"), "review:\n  policy: auto\n  regions: [src, 123]\n", "utf8");
+  const closedRead: any = await closedHost.callTool("graph_get_settings");
+  assert.equal(closedRead.config.review.config_malformed, true, "闭合 [src,123] 必须被判畸形");
+  expectFastTrackRejected(closed.root, closed.goal, ["src/a.ts"], "闭合 [src,123]");
+
+  // 合法显式 strict：不得误判为畸形（无假阳性），仍拒放行
+  const ok = fixture();
+  const okHost = hostHarness(ok.root);
+  writeFileSync(join(ok.root, "project.yaml"), "review:\n  policy: strict\n  regions:\n    - scripts\n", "utf8");
+  const okRead: any = await okHost.callTool("graph_get_settings");
+  assert.equal(okRead.config.review.config_malformed, undefined, "合法配置不得被判畸形");
+  assert.equal(okRead.config.review.policy, "strict");
+  expectFastTrackRejected(ok.root, ok.goal, ["scripts/build.sh"], "显式 strict");
+
+  // 空档 / 纯注释档 = 合法未配置，不得假阳性
+  const commentOnly = fixture();
+  const coHost = hostHarness(commentOnly.root);
+  writeFileSync(join(commentOnly.root, "project.yaml"), "# only a comment\n", "utf8");
+  const coRead: any = await coHost.callTool("graph_get_settings");
+  assert.equal(coRead.config.review.config_malformed, undefined, "纯注释档不得被判畸形");
+  assert.equal(coRead.config.review.regions, null);
+  assert.equal(coRead.config.review.policy, null);
+});
+
+// ---------------------------------------------------------------------------
+// F2（第三轮独立复核必修）：内部哨兵 invalid:* 不得经公共读侧暴露，写侧拒收，读取→保存不可物化
+// ---------------------------------------------------------------------------
+test("g-435 F2：读侧不暴露内部哨兵 invalid:*；写侧拒收；读取→保存不可能物化哨兵", async () => {
+  const { root } = fixture();
+  const { callTool, routes } = hostHarness(root);
+  const malformed = "review:\n  policy: auto\n  regions: [src]\n  contract_paths: 123\n";
+  writeFileSync(join(root, "project.yaml"), malformed, "utf8");
+
+  const toolGet: any = await callTool("graph_get_settings");
+  const review = toolGet.config.review;
+  assert.equal(JSON.stringify(toolGet.config).includes("invalid:"), false, "tool 响应不得含内部哨兵");
+  assert.equal(review.config_malformed, true, "字段存在但不可判定 ⇒ malformed 信号");
+  assert.match(String(review.invalid_fields.contract_paths), /contract_paths/);
+  assert.match(String(review.invalid_fields.contract_paths), /project\.yaml/, "报错语义必须指向 project.yaml");
+  assert.equal(
+    Array.isArray(review.contract_paths) && review.contract_paths.some((v: unknown) => String(v).startsWith("invalid:")),
+    false,
+    "读侧不得把内部哨兵当普通条目暴露",
+  );
+
+  const httpGet = await request(routes, "GET");
+  assert.equal(httpGet.code, 200);
+  assert.equal(JSON.stringify(httpGet.body).includes("invalid:"), false, "HTTP 响应不得含内部哨兵");
+
+  // 读取 → 原样回写：必须被写侧拒绝且零副作用（哨兵/原始畸形值绝不物化落盘）
+  const before = readFileSync(join(root, "project.yaml"), "utf8");
+  const eventsBefore = readEvents(root).length;
+  const echoed = JSON.parse(JSON.stringify(review));
+  const echoPost = await request(routes, "POST", { review: echoed });
+  assert.equal(echoPost.code, 400, "原样回写必须被写侧拒绝");
+  assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), before, "拒绝后文件逐字节不变");
+  assert.equal(readEvents(root).length, eventsBefore, "拒绝后零事件");
+
+  // 显式写入 invalid: 前缀同样拒收且零副作用
+  const explicitPost = await request(routes, "POST", { review: { contract_paths: ["invalid:123"] } });
+  assert.equal(explicitPost.code, 400, "写侧必须拒收 invalid: 前缀");
+  assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), before);
+  assert.equal(/invalid:/.test(readFileSync(join(root, "project.yaml"), "utf8")), false, "磁盘绝不出现字面 invalid:");
+
+  // 不含 review 段的合法 patch 在畸形文件上仍成功（校验先于一切持久化副作用）
+  const unrelated = await request(routes, "POST", { executor: { provider: "p", model: "m" } });
+  assert.equal(unrelated.code, 200, "不含 review 段的合法 patch 必须成功");
+  const after = readFileSync(join(root, "project.yaml"), "utf8");
+  assert.match(after, /provider: p/);
+  assert.match(after, /contract_paths: 123/, "畸形行原样保留，不得被静默改写");
+  assert.equal(/invalid:/.test(after), false);
+
+  // 多字段畸形 GET 不抛出且全无哨兵
+  writeFileSync(
+    join(root, "project.yaml"),
+    "review:\n  policy: auto\n  regions: 123\n  contract_paths: [src, null]\n  non_product_prefixes: 5\n",
+    "utf8",
+  );
+  const multi = await request(routes, "GET");
+  assert.equal(multi.code, 200, "多字段畸形 GET 不得崩溃");
+  assert.equal(JSON.stringify(multi.body).includes("invalid:"), false);
+});
+
+// ---------------------------------------------------------------------------
+// F3（第三轮独立复核必修）：schema_hints 广告的默认值与写侧口径一致（无尾随斜杠）且可原样写回
+// ---------------------------------------------------------------------------
+test("g-435 F3：schema_hints 广告的 review 默认值无尾随斜杠且可原样写回", async () => {
+  const { root } = fixture();
+  const { callTool, routes } = hostHarness(root);
+  writeFileSync(join(root, "project.yaml"), "review:\n  policy: auto\n", "utf8");
+
+  const hints: any = (await callTool("graph_get_settings")).schema_hints["review.defaults"];
+  for (const p of hints.non_product_prefixes) {
+    assert.equal(String(p).endsWith("/"), false, `广告默认前缀不得带尾随斜杠: ${p}`);
+  }
+  assert.deepEqual(hints.non_product_prefixes, [...DEFAULT_NON_PRODUCT_PREFIXES], "广告值必须与默认常量同源");
+
+  const post = await request(routes, "POST", { review: { non_product_prefixes: hints.non_product_prefixes } });
+  assert.equal(post.code, 200, `广告默认值必须可写（写侧口径一致）: ${JSON.stringify(post.body)}`);
 });

@@ -207,12 +207,16 @@ export interface ReviewPolicyInput {
   productChangedLines?: number | null;
   /** M4：supervisor 显式声明强制 strict（覆盖「核心层重写」等无法用路径/行数表达的场景）。 */
   strictRequired?: boolean | null;
-  /** 项目自定义的区域列表（未配置时为 null）。 */
-  regions?: readonly string[] | null;
-  /** 项目自定义的契约路径列表（未配置时为 null）。 */
-  contractPaths?: readonly string[] | null;
-  /** 项目自定义的产品排除前缀列表（未配置时为 null）。 */
-  nonProductPrefixes?: readonly string[] | null;
+  /**
+   * 项目自定义的区域列表：`string[]`（合法）/ `null`（未配置）/**其它原始值（字段存在但无法判定 ⇒ 畸形）**。
+   * 读侧畸形时**原样透出文件取值**（绝不使用 `invalid:*` 内部哨兵），此处统一按 `unknown` 接收，
+   * 由 `isMalformedConfigList` fail-closed 判为畸形 → 安全升级 strict（g-435 F1/F2）。
+   */
+  regions?: unknown;
+  /** 项目自定义的契约路径列表（同上：合法 string[] / 未配置 null / 其它原始值 ⇒ 畸形）。 */
+  contractPaths?: unknown;
+  /** 项目自定义的产品排除前缀列表（同上：合法 string[] / 未配置 null / 其它原始值 ⇒ 畸形）。 */
+  nonProductPrefixes?: unknown;
   /** 外部配置解析是否出现结构/格式损坏（整档 YAML 损坏或 review 结构无法解析），损坏时 fail-closed。 */
   configMalformed?: boolean;
 }
