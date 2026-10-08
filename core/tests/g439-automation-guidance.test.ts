@@ -38,6 +38,18 @@ const CLIENT_BUNDLE = join(DIST, "lib", "client.js");
 const AUTOMATION_KEYS = ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"] as const;
 const HAN = /[\u3400-\u9fff\u3000-\u303f\uff00-\uffef]/;
 
+/**
+ * g-439 判据 2 的**反向断言口径**：不得声称「引擎会/将/已 + 强制/拒绝/阻断/停轮」——
+ * 设置弹窗的 i18n 说明与 `index.js` 注入的指导文本**共用同一 token 口径**（两处都是「主管/用户
+ * 会读到的承诺面」，任一处声称引擎强制都违反负责人裁决）。
+ * 结构 = `引擎/engine` + **情态助动词** + 最多一小段宾语（`可以将越权动作阻断` 这类不连续改写也要抓）
+ * + 强制类动词。**合法否定句不匹配**：zh「不构成引擎强制」与 en "is not engine enforcement" 中，
+ * `引擎`/`engine` 之后**没有**情态助动词（`强制`/`enforcement` 不是助动词）⇒ 不误伤；
+ * en 侧另加否定守卫，`the engine does not enforce …` 这类**否定式**同样不匹配。
+ */
+const ENGINE_ENFORCEMENT_ZH = /引擎(?:会|将|已|能|能够|可以|可)[^。；\n]{0,12}(?:强制|拒绝|阻断|停轮|阻止|拦截)/;
+const ENGINE_ENFORCEMENT_EN = /engine\s+(?:will|would|shall|should|does|must|can|may)\s+(?:(?!not\b|n['’]t\b)\w+\s+){0,2}(?:enforce|force|refuse|reject|block|halt|stop|prevent|deny|override)/i;
+
 // ---------------------------------------------------------------------------
 // 夹具：mock ctx（捕获 section 注册）/ workspace / 渲染
 // ---------------------------------------------------------------------------
@@ -160,6 +172,8 @@ test("g-439 验收②：单键只改对应动作文案（其余键不出现）�
   // 不得出现串权表述
   assert.doesNotMatch(out, /允许(首次|先行)? ?start|审核通过|自动 ?交付|自动 ?delivered/);
   assert.doesNotMatch(out, /引擎(会|将)(强制|拒绝|阻断|停轮)/, "不声称引擎能强制 LLM 停轮");
+  // g-439 P2：同一反向口径的**加宽**版本（含 已/能/可以 + 阻止/拦截），与设置说明侧共用常量
+  assert.doesNotMatch(out, ENGINE_ENFORCEMENT_ZH, "不声称引擎会/将/已/能 强制、拒绝、阻断、停轮或拦截");
 });
 
 test("g-439 验收②：混配（human + ai）逐键吃自己的语义，互不覆盖；四类 gate 无键者保留独立指导", () => {
@@ -321,6 +335,10 @@ test("g-439 验收⑦：批量授权与禁令优先级如实注入（zh/en 同�
     "never overridden by a low-risk exemption",
   ]) assert.ok(en.includes(token), `en 缺失优先级口径：${token}`);
 
+  // g-439 P2：注入指导（zh/en 双侧）都不得声称引擎强制/停轮（与设置说明共用同一 token 口径）
+  assert.doesNotMatch(zh, ENGINE_ENFORCEMENT_ZH, "zh 指导文本不得声称引擎强制/停轮");
+  assert.doesNotMatch(en, ENGINE_ENFORCEMENT_EN, "en guidance text must not claim engine enforcement/halt");
+
   // 不得把 Full access / 批量授权写成可推翻明确禁令的业务批准
   assert.doesNotMatch(zh, /Full access[^。；]{0,16}(可以|可)(批准|放行)/);
   assert.doesNotMatch(zh, /批量授权[^。；]{0,24}(覆盖|推翻|豁免)[^。；]{0,12}(push|publish|tag|禁令)/);
@@ -386,6 +404,23 @@ test("g-439 判据4：设置弹窗如实说明「影响主管提示」，去掉�
   for (const token of ["Affects the supervisor prompt", "human", "confirmation", "ai", "autonomously", "unset keeps the existing guidance", "changes no tool permission", "not engine enforcement"]) {
     assert.ok(en[hintKey].includes(token), `en 说明缺失「${token}」`);
   }
+
+  // 2b) g-439 P2 反向断言：说明**不得**声称引擎强制/拒绝/停轮（与注入指导共用同一 token 口径）。
+  //     ——仅正向 token 不足：只在末尾追加一句「引擎会强制主管停轮并拒绝越权动作。」也能保留全部
+  //     被钉 token 而全绿，正是本次复核抓到的守卫缺口。
+  assert.doesNotMatch(zhHint, ENGINE_ENFORCEMENT_ZH, "zh 说明不得声称引擎会/将/已/能 强制、拒绝、阻断、停轮或拦截");
+  assert.doesNotMatch(en[hintKey], ENGINE_ENFORCEMENT_EN, "en 说明不得声称 engine will/would/does enforce, refuse, reject, block or halt");
+  // 合法否定句必须仍然存在（反向断言不得把「不构成引擎强制」也一并误伤/删掉）
+  assert.match(zhHint, /不构成引擎强制/, "zh 说明仍如实声明「不构成引擎强制」");
+  assert.match(en[hintKey], /not engine enforcement/, "en 说明仍如实声明 is not engine enforcement");
+  // 口径自检：这两个正则确实能抓住「声称强制」的改写（不是永真断言），且不误伤合法否定句
+  assert.match("引擎会强制主管停轮并拒绝越权动作。", ENGINE_ENFORCEMENT_ZH, "正向样本必须命中（zh）");
+  assert.match("引擎可以将越权动作阻断。", ENGINE_ENFORCEMENT_ZH, "正向样本必须命中（zh 变体）");
+  assert.doesNotMatch("本指导只影响提示，不改变工具权限，也不构成引擎强制。", ENGINE_ENFORCEMENT_ZH, "合法否定句不得命中（zh）");
+  assert.match("The engine will enforce a halt and reject unauthorized actions.", ENGINE_ENFORCEMENT_EN, "正向样本必须命中（en）");
+  assert.match("The engine will therefore halt the supervisor.", ENGINE_ENFORCEMENT_EN, "正向样本必须命中（en 含短宾语）");
+  assert.doesNotMatch("it changes no tool permission and is not engine enforcement", ENGINE_ENFORCEMENT_EN, "合法否定句不得命中（en）");
+  assert.doesNotMatch("the engine does not enforce the gate", ENGINE_ENFORCEMENT_EN, "否定式（does not enforce）不得命中（en）");
 
   // 3) 说明真的渲染进弹窗（紧随六键网格之后），且仍随高级区开关显示
   const gridIdx = modal.indexOf('["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"]');
