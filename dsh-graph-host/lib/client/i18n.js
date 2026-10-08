@@ -776,6 +776,7 @@
       'memory.loadFail': '⚠️ 加载失败：',
       'memory.networkError': '⚠️ 网络错误：',
       'memory.from': '来自: ',
+      'memory.sourceRef': '来源引用: ',
 
       // === 添加信息收集任务 ===
       'addCard.title': '新增信息收集任务：',
@@ -1888,6 +1889,7 @@
       'memory.loadFail': '⚠️ Load failed: ',
       'memory.networkError': '⚠️ Network error: ',
       'memory.from': 'From: ',
+      'memory.sourceRef': 'Source ref: ',
 
       // === Add card ===
       'addCard.title': 'New collection task:',

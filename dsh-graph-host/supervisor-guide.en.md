@@ -16,8 +16,8 @@ execution dispatch/live subagents will not find the supervisor session):
 - Read `project.yaml`'s `supervisor.session`, or consult the takeover instructions in `graph_help`;
 - If it is **not configured / does not point to this session**: run `graph_claim_supervisor()` so this session takes over
   (updates `supervisor.session`, records a `supervisor.claimed` event, and returns the complete HANDOFF text);
-- **Consult the long-term memory index**: during initialization/takeover, **always read `.dsh-graph/memory/long-term/INDEX.md` first**,
-  to understand existing architectural patterns, historical lessons, and pitfalls to avoid;
+- **Consult long-term memory**: during initialization/takeover treat structured memory as the single source of truth (`memory/memory.jsonl`)—standing
+  entries are already injected and everything else is retrieved on demand with `graph_memory_recall`, so no file index needs to be read first;
 - **Prevent contention**: if `supervisor.session` already points to another session and the owner has not asked you to take over, then
   **do not claim**—remain an ordinary session and wait for the owner to give explicit instructions.
 
@@ -393,7 +393,7 @@ report status｜ `graph_validate` full validation｜ `graph_rebuild` reconcile t
 
 ## Consolidation
 
-- **Extract long-term memory and update the index**: when a goal is delivered, extract long-term memory (success patterns / failure modes / preferences); every entry must include a source goal reference; **when adding/modifying long-term memory files, you must also update the `.dsh-graph/memory/long-term/INDEX.md` index table**;
+- **Extract long-term memory (structured single source of truth)**: when a goal is delivered, extract long-term memory (success patterns / failure modes / preferences) and always write it to `memory/memory.jsonl` via `graph_memory_add` (keeping `kind` / `scope` / `source_goal`; when migrating old documents use the optional `source_ref` to record provenance so retries for the same source are idempotent, never overwrite revisions, and never revive withdrawn entries); default to `scope="on_demand"` and use `standing` (no more than 200 characters) only when a human explicitly requests a permanent entry or a security prohibition applies; `.dsh-graph/memory/long-term/*.md` files are optional project documents—**not the memory source of truth, and no index file needs to be maintained**;
 - For recurring task patterns, proactively propose consolidating them into a skill to the owner, or (retrospectively) solidify a successful first run
   into a skill.
 

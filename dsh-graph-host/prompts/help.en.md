@@ -48,7 +48,7 @@ dsh-graph is a plugin that organizes work into a "goal board". Available graph_*
 - graph_rebuild() rebuild state from event stream and reconcile with frontmatter.
 
 ## Memory management
-- graph_memory_add(kind, text[, scope][, importance][, source_goal]) add a persistent memory (scope: on_demand default / standing for constant rules; source_goal links the source goal);
+- graph_memory_add(kind, text[, scope][, importance][, source_goal][, source_ref]) add a persistent memory (scope: on_demand default / standing for constant rules; source_goal links the source goal; source_ref is a migration source key that makes repeated adds for the same source idempotent, never overwritten or revived);
 - graph_memory_replace(old, text[, kind][, importance][, source_goal]) correct existing memory (old locates, text is the new content, source_goal links the source goal);
 - graph_memory_remove(old[, reason]) delete a memory entry (must confirm obsolete or withdrawn);
 - graph_memory_recall([query][, kind][, limit]) search memories.

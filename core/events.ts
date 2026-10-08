@@ -208,6 +208,10 @@ export interface MemoryEntry {
   text: string;
   importance?: number;
   source_goal?: string;
+  /** g-445：迁移来源引用（如旧 `memory/long-term/*.md` 路径 + 单元标识）。
+   *  仅作可追溯的**来源键**，不是第二条记忆通道；提供它时 `graph_memory_add` 以同一
+   *  `source_ref` 为幂等键（同来源重试不重复追加，见 `core/ops.ts`）。 */
+  source_ref?: string;
   created_at: string;
   updated_at: string;
 }
@@ -313,6 +317,7 @@ export function replayMemory(events: GraphEvent[]): MemoryEntry[] {
         text,
         importance: typeof ev.details?.importance === "number" ? ev.details.importance : undefined,
         source_goal: typeof ev.details?.source_goal === "string" ? ev.details.source_goal : undefined,
+        source_ref: typeof ev.details?.source_ref === "string" ? ev.details.source_ref : undefined,
         created_at: ev.details?.created_at ?? ev.ts,
         updated_at: ev.details?.updated_at ?? ev.ts,
       };
@@ -331,6 +336,8 @@ export function replayMemory(events: GraphEvent[]): MemoryEntry[] {
           id: existing.id, kind, scope, created_by, text,
           importance: typeof ev.details?.importance === "number" ? ev.details.importance : existing.importance,
           source_goal: typeof ev.details?.source_goal === "string" ? ev.details.source_goal : existing.source_goal,
+          // g-445：replace 保留 source_ref（迁移来源可追溯，不因修订而丢失）
+          source_ref: typeof ev.details?.source_ref === "string" ? ev.details.source_ref : existing.source_ref,
           created_at: existing.created_at,
           updated_at: ev.details?.updated_at ?? ev.ts,
         };

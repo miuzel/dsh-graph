@@ -16,8 +16,8 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 - 读 `project.yaml` 的 `supervisor.session`，或看 `graph_help` 的接管指引；
 - 若**未配置 / 未指向本会话**：运行 `graph_claim_supervisor()` 由本会话接管
   （更新 `supervisor.session`、记 `supervisor.claimed` 事件、返回 HANDOFF 全文）；
-- **查阅长期记忆索引**：初始化/接管时，**务必先阅读 `.dsh-graph/memory/long-term/INDEX.md`**，
-  掌握既有架构模式、历史教训与避坑规范；
+- **查阅长期记忆**：初始化/接管时以结构化记忆为唯一真源（`memory/memory.jsonl`）——standing
+  已自动注入，其余用 `graph_memory_recall` 按需检索，无需先读任何文件索引；
 - **防争抢**：若 `supervisor.session` 已指向其他会话且负责人没要求你接管，则
   **不要 claim**——保持普通会话身份，等负责人明确指示。
 
@@ -393,7 +393,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 
 ## 沉淀
 
-- **提炼长期记忆与更新索引**：目标交付时提炼长期记忆（成功图 / 失败模式 / 偏好），条目必须带来源目标引用；**新增/修改长期记忆文件时必须同步更新 `.dsh-graph/memory/long-term/INDEX.md` 索引表**；
+- **提炼长期记忆（结构化单一真源）**：目标交付时提炼长期记忆（成功图 / 失败模式 / 偏好），一律用 `graph_memory_add` 写入 `memory/memory.jsonl`（保留 `kind` / `scope` / `source_goal`；迁移旧文档时用可选 `source_ref` 记录来源，同来源重试幂等、不覆盖修订、不复活撤回条目）；默认 `scope="on_demand"`，仅人类明确要求常驻或安全禁令才用 `standing`（≤200 字）；`.dsh-graph/memory/long-term/*.md` 只是可选项目文档，**不是记忆真源，也不要求维护任何索引文件**；
 - 重复出现的任务模式，向负责人提议沉淀为 skill（前瞻式），或把成功的 first run
   固化为 skill（回溯式）。
 
