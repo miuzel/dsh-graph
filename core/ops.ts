@@ -10535,16 +10535,26 @@ function findUniqueMemoryEntry(entries: MemoryEntry[], target: string): MemoryEn
  *   - 已有同来源 added，但输入既不同于原始 added 也不同于当前内容 ⇒ **明确冲突**（抛错，不自动替换）；
  *   - 无历史 added ⇒ 返回 null，调用方照常追加。
  *
+ *  **owner 隔离（review F1）**：`kind:"user"` 的条目按 owner 隔离（与 recall/replace/remove 同口径
+ *  `owner === actor`）。因此幂等键对 user 类历史条目**只对其 owner 可见**——
+ *  他人 source_ref 命中一律按**无命中**处理（该 actor 写入自己的新条目），
+ *  既不回传他人 ID/正文，也不因冲突报错回显他人条目 ID。project 类（workspace 全局）语义不变：
+ *  仍以 source_ref 为全局面幂等键（任何 actor 都命中同一条目）。
+ *
  *  引擎**不读旧 md、不调 LLM、不截断/拆条**：摘要由主管显式确认后作为 `text` 传入。 */
 function idempotentSourceRefHit(
   root: string,
   sourceRef: string,
+  actor: string,
   input: { kind: MemoryKind; scope: MemoryScope; text: string },
 ): AddMemoryResult | null {
   const events = readMemoryEvents(root);
-  const priorAdd = events.find(
-    (e) => e.event === "memory.added" && e.details?.source_ref === sourceRef && typeof e.details?.id === "string",
-  );
+  const priorAdd = events.find((e) => {
+    if (e.event !== "memory.added" || e.details?.source_ref !== sourceRef || typeof e.details?.id !== "string") return false;
+    // user 类：仅 owner（= added 事件的 actor）可见；不匹配 ⇒ 本条不可用，继续找下一条同来源 added
+    if (e.details?.kind === "user") return e.actor === actor;
+    return true; // project 类：既有语义逐字不变
+  });
   if (!priorAdd) return null;
   const id = priorAdd.details.id as string;
 
@@ -10595,7 +10605,8 @@ function addMemoryUnlocked(root: string, opts: AddMemoryOptions): AddMemoryResul
   const sourceRef = opts.source_ref !== undefined ? validateMemoryText(opts.source_ref, "source_ref") : undefined;
 
   if (sourceRef !== undefined) {
-    const hit = idempotentSourceRefHit(root, sourceRef, { kind, scope, text });
+    // actor 参与幂等判定：user 类条目按 owner 隔离，他人同 source_ref 一律按无命中处理（review F1）
+    const hit = idempotentSourceRefHit(root, sourceRef, actor, { kind, scope, text });
     if (hit) return hit;
   }
 

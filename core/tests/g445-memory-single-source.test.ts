@@ -441,3 +441,113 @@ test("g-445：source_goal 与 source_ref 的输入校验（伪目标 / 空值 / 
   );
   assert.equal(readMemoryEvents(root).length, 0, "非法输入零副作用");
 });
+
+// =====================================================================================
+// review F1：user 类条目的 source_ref 幂等键必须按 owner 隔离（不得绕过 ACL）
+//
+// 三种形态（与复核者 probeE 一一对应），每条都带「不泄露他人 ID/正文」的负向断言：
+//   ① 他人 source_ref + 不同 text ⇒ 不得抛冲突、不得回显他人条目 ID；bob 得到自己的新条目
+//   ② 他人 source_ref + 相同 text ⇒ 不得静默并入他人私有条目；bob 得到自己的新条目
+//   ③ 他人 remove 后同 source_ref 重试 ⇒ 不得返回他人撤回前的私有正文
+// 同时钉住：同 owner 幂等不回归；project 类既有全局幂等语义逐字不变。
+// =====================================================================================
+
+const ALICE = "agent:alice";
+const BOB = "agent:bob";
+const SHARED_REF = "memory/long-term/private.md#unit";
+
+/** 负向断言：结果里不得出现他人条目 ID / 正文（含错误信息）。 */
+function assertNoLeak(result: unknown, other: { id: string; text: string }, label: string) {
+  const dump = JSON.stringify(result);
+  assert.equal(dump.includes(other.id), false, `${label}：不得泄露他人条目 ID`);
+  assert.equal(dump.includes(other.text), false, `${label}：不得泄露他人私有正文`);
+}
+
+test("review F1①：他人 source_ref + 不同 text ⇒ 无命中（不抛冲突、不回显他人 ID），bob 写入自己的条目", () => {
+  const root = freshRoot();
+  const aliceText = "ALICE-私有：仅 alice 可见的迁移摘要";
+  const bobText = "BOB-私有：bob 自己的迁移摘要";
+  const alice = addMemory(root, { kind: "user", text: aliceText, source_ref: SHARED_REF, actor: ALICE });
+
+  let bob: any;
+  assert.doesNotThrow(() => {
+    bob = addMemory(root, { kind: "user", text: bobText, source_ref: SHARED_REF, actor: BOB });
+  }, "他人同来源不得抛冲突（冲突信息会回显他人条目 ID）");
+  assert.notEqual(bob.id, alice.id, "bob 得到自己的新条目，而不是 alice 的");
+  assert.equal(bob.entry.text, bobText);
+  assert.equal(bob.deduped, undefined, "不是幂等命中");
+  assert.equal(bob.skipped, undefined);
+  assertNoLeak(bob, alice, "F1①");
+
+  // 两条各自独立存在，各自 recall 只见自己
+  assert.equal(readMemory(root).length, 2, "alice/bob 各有一条");
+  const aliceSees = recallMemory(root, { actor: ALICE });
+  const bobSees = recallMemory(root, { actor: BOB });
+  assert.deepEqual(aliceSees.matches.map((e) => e.text), [aliceText], "alice 只看到自己的");
+  assert.deepEqual(bobSees.matches.map((e) => e.text), [bobText], "bob 只看到自己的");
+  assert.equal(recallMemory(root).total, 0, "无身份调用看不到任何 user 条目");
+});
+
+test("review F1②：他人 source_ref + 相同 text ⇒ 不静默并入，bob 仍有自己的条目", () => {
+  const root = freshRoot();
+  const sameText = "IMPORTANT-私有：同一段摘要文本";
+  const alice = addMemory(root, { kind: "user", text: sameText, source_ref: SHARED_REF, actor: ALICE });
+  const bob = addMemory(root, { kind: "user", text: sameText, source_ref: SHARED_REF, actor: BOB });
+
+  assert.notEqual(bob.id, alice.id, "bob 不得被并入 alice 的私有条目（否则 bob 拿不到自己的条目）");
+  assert.equal(bob.entry.text, sameText);
+  assert.equal(bob.deduped, undefined);
+  assertNoLeak(bob, alice, "F1②");
+  assert.equal(readMemory(root).length, 2, "两人各一条，互不覆盖");
+  assert.equal(recallMemory(root, { actor: BOB }).total, 1);
+  assert.equal(recallMemory(root, { actor: ALICE }).total, 1);
+  // alice 的条目内容未被 bob 的调用改动
+  const aliceEntry = readMemory(root).find((e) => e.id === alice.id);
+  assert.equal(aliceEntry?.text, sameText);
+  assert.equal(aliceEntry?.owner, ALICE);
+});
+
+test("review F1③：他人 remove 后同 source_ref 重试 ⇒ 不返回他人撤回前正文（无越权读取通道）", () => {
+  const root = freshRoot();
+  const aliceSecret = "ALICE-SECRET：撤回前的私有正文，绝不能被他人读到";
+  const bobText = "BOB-私有：重试写入";
+  const alice = addMemory(root, { kind: "user", text: aliceSecret, source_ref: SHARED_REF, actor: ALICE });
+  removeMemory(root, { old: alice.id, reason: "alice 自己撤回", actor: ALICE });
+
+  const bob = addMemory(root, { kind: "user", text: bobText, source_ref: SHARED_REF, actor: BOB });
+  assert.equal(bob.skipped, undefined, "bob 不该拿到 alice 的「已撤回跳过」结局");
+  assert.notEqual(bob.id, alice.id);
+  assert.equal(bob.entry.text, bobText);
+  assertNoLeak(bob, { id: alice.id, text: aliceSecret }, "F1③");
+
+  // alice 的撤回语义不受影响：她重试仍是 skipped 且拿到自己撤回前的内容（自己的东西）
+  const aliceRetry = addMemory(root, { kind: "user", text: aliceSecret, source_ref: SHARED_REF, actor: ALICE });
+  assert.equal(aliceRetry.skipped, true, "owner 自己的「不复活」语义不变");
+  assert.equal(aliceRetry.id, alice.id);
+  assert.equal(aliceRetry.entry.text, aliceSecret);
+  // bob 的条目已落盘且只有 bob 能看到
+  assert.equal(recallMemory(root, { actor: BOB }).total, 1);
+  assert.equal(recallMemory(root, { actor: ALICE }).total, 0, "alice 自己的条目仍未复活");
+});
+
+test("review F1 回归：同 owner 幂等不回归；project 类全局幂等语义逐字不变", () => {
+  const root = freshRoot();
+  // 同 owner：user 类仍幂等（返回原 ID、不追加事件）
+  const alice1 = addMemory(root, { kind: "user", text: "alice 迁移摘要", source_ref: SHARED_REF, actor: ALICE });
+  const alice2 = addMemory(root, { kind: "user", text: "alice 迁移摘要", source_ref: SHARED_REF, actor: ALICE });
+  assert.equal(alice2.id, alice1.id, "同 owner 同来源仍幂等");
+  assert.equal(alice2.deduped, true);
+  assert.equal(addedEvents(root).length, 1, "同 owner 重试不追加事件");
+
+  // project 类：跨 actor 仍是全局幂等键（既有语义不变）
+  const pRef = "memory/long-term/shared.md#unit";
+  const p1 = addMemory(root, { kind: "project", text: "project 迁移摘要", source_ref: pRef, actor: ALICE });
+  const p2 = addMemory(root, { kind: "project", text: "project 迁移摘要", source_ref: pRef, actor: BOB });
+  assert.equal(p2.id, p1.id, "project 类任何 actor 都命中同一条目");
+  assert.equal(p2.deduped, true);
+  assert.equal(p2.entry.kind, "project");
+  assert.equal(addedEvents(root).length, 2, "project 重试同样不追加事件");
+  // project 冲突语义不变（任何人同来源不同输入 ⇒ 冲突，不回显他人私有 ID）
+  assert.throws(() => addMemory(root, { kind: "project", text: "project 另写", source_ref: pRef, actor: BOB }), /冲突/);
+  assert.equal(addedEvents(root).length, 2, "冲突零副作用");
+});
