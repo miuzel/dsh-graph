@@ -135,6 +135,7 @@ import {
 import {
   REVIEW_POLICIES,
   normalizeReviewPolicy,
+  isUnrecognizedReviewPolicy,
   normalizeMachineReport,
   resolveReviewPolicy,
   evaluateFastTrackGate,
@@ -159,6 +160,10 @@ export {
   FAST_TRACK_CHECKS,
   FAST_TRACK_MAX_PRODUCT_LINES,
   CONTRACT_PATHS,
+  DEFAULT_CONTRACT_PATHS,
+  DEFAULT_REVIEW_REGIONS,
+  DEFAULT_NON_PRODUCT_PREFIXES,
+  REVIEW_REGIONS,
   typeDefaultReviewPolicy,
   normalizeReviewPolicy,
   normalizeMachineReport,
@@ -1120,6 +1125,25 @@ export interface PromptOverride {
   value: string | null;
 }
 
+/**
+ * review 列表字段的**读侧原始值**（g-435 第三轮独立复核 F2）：
+ * - `string[]`：合法显式列表（含 `[]`）；
+ * - `null`：字段不存在或显式 `null` ⇒ **合法「未配置」**；
+ * - 其它（number/boolean/映射/含非字符串元素的数组）：字段**存在但无法判定** ⇒ **畸形**，
+ *   原样透出文件中写入的取值供机读判定，**绝不**使用 `invalid:*` 内部哨兵字符串。
+ *
+ * 不变量：「字段不存在 ⇒ 合法未配置」与「字段存在但不可解析/无法判定 ⇒ 畸形」严格区分；
+ * 后者一律 fail-closed（读侧经 `config_malformed`/`invalid_fields` 标注，策略侧安全升级 strict）。
+ */
+export type ReviewListRawValue =
+  | string[]
+  | null
+  | string
+  | number
+  | boolean
+  | Record<string, unknown>
+  | unknown[];
+
 export interface ProjectConfig {
   executor: { provider: string | null; model: string | null; mode: SubagentMode | null; reasoning_effort?: string | null };
   defaults: {
@@ -1128,8 +1152,21 @@ export interface ProjectConfig {
   };
   supervisor: { automation: Record<string, string | null> };
   prompt_overrides: { subagent: PromptOverride };
-  /** g-311：顶层 review.policy——未配置/空/非三值一律为 null（由 review-policy 按目标类型派生）。 */
-  review: { policy: ReviewPolicy | null };
+  /**
+   * g-311/g-435：顶层 review 配置——policy 未配置/空/非三值一律为 null；三项列表支持未配置(null)与显式列表。
+   * `config_malformed` / `invalid_fields` 是**仅读侧元信息**（非配置项，写侧 schema 明确拒绝），
+   * 用于表达「字段存在但不可解析/无法判定」的畸形态；二者绝不作为配置值参与往返。
+   */
+  review: {
+    policy: ReviewPolicy | null;
+    regions?: ReviewListRawValue;
+    contract_paths?: ReviewListRawValue;
+    non_product_prefixes?: ReviewListRawValue;
+    /** 整档 YAML 不可解析或 review 段结构无法判定 ⇒ fail-closed 信号（读侧元信息，非配置项）。 */
+    config_malformed?: boolean;
+    /** 逐字段畸形原因：字段名 → 指向 project.yaml 的用户可读说明（读侧元信息，非配置项）。 */
+    invalid_fields?: Record<string, string>;
+  };
 }
 
 const AUTOMATION_KEYS = [
@@ -1269,6 +1306,121 @@ function readScalarByPath(lines: string[], path: string[]): string | null {
   return null;
 }
 
+/** 列表字段读侧判定结果：`value` 为原样取值，`malformed` 表示「字段存在但无法判定」。 */
+interface ListReadResult {
+  value: ReviewListRawValue;
+  malformed: boolean;
+}
+
+/**
+ * 逐行读取字符串列表（路径如 ["review","regions"]），**绝不产生内部哨兵**。
+ *
+ * - 未配置/键不存在/显式 `null`/`~` → `{value:null, malformed:false}`（合法未配置）；
+ * - 显式 `[]` → `{value:[], malformed:false}`；
+ * - 字段存在但取值为非列表标量，或列表含 null/纯数字等非字符串元素 → **原样透出取值**并置
+ *   `malformed:true`（fail-closed，绝不返回 null 冒充「未配置」）。
+ *
+ * 本函数只在整档 YAML 不可解析（parsedDoc 为 null，此时整体由 `detectConfigMalformed` 判为畸形）
+ * 或键不在已解析文档中时兜底；可解析文档的字段级判定见 readProjectConfig 内的 `list()`。
+ */
+function readListByPath(lines: string[], path: string[]): ListReadResult {
+  let start = 0, end = lines.length, indent = 0;
+  let idx = -1;
+  for (let lvl = 0; lvl < path.length; lvl++) {
+    const key = path[lvl];
+    idx = findKeyLine(lines, key, indent, start, end);
+    if (idx < 0) return { value: null, malformed: false };
+    const keyIndent = lineIndent(lines[idx]);
+    if (lvl < path.length - 1) {
+      indent = keyIndent + 2;
+      start = idx + 1;
+      end = blockChildrenEnd(lines, idx, keyIndent);
+    } else {
+      const raw = lines[idx].slice(keyIndent + key.length + 1).trim();
+      const { value: valPart } = splitValueComment(raw);
+      // 内联形态：null / ~ ⇒ 合法未配置
+      if (valPart === "null" || valPart === "~") return { value: null, malformed: false };
+      if (valPart.startsWith("[") && valPart.includes("]")) {
+        const inside = valPart.slice(1, valPart.indexOf("]")).trim();
+        if (inside === "") return { value: [], malformed: false };
+        const items: unknown[] = [];
+        let malformed = false;
+        for (const s of inside.split(",")) {
+          const t = s.trim();
+          // 未加引号的 null / 空项 / 纯数字在 YAML 语义下都不是字符串 ⇒ 畸形；原样透出以便机读判定
+          if (t === "null" || t === "~" || t === "") {
+            items.push(null);
+            malformed = true;
+            continue;
+          }
+          if (/^\d+$/.test(t)) {
+            items.push(Number(t));
+            malformed = true;
+            continue;
+          }
+          const parsed = parseYamlScalar(s);
+          if (parsed === null) {
+            items.push(t);
+            malformed = true;
+          } else {
+            items.push(parsed);
+          }
+        }
+        return { value: items, malformed };
+      }
+      // 多行列表形态：收集子行 `- item`
+      const listEnd = blockChildrenEnd(lines, idx, keyIndent);
+      const out: string[] = [];
+      let foundAnyListItem = false;
+      for (let i = idx + 1; i < listEnd; i++) {
+        const l = lines[i];
+        if (l.trim() === "" || /^[ \t]*#/.test(l)) continue;
+        const itemMatch = /^[ \t]*-[ \t]*(.*)$/.exec(l);
+        if (itemMatch) {
+          foundAnyListItem = true;
+          const parsed = parseYamlScalar(itemMatch[1]);
+          if (parsed !== null) out.push(parsed);
+        }
+      }
+      if (foundAnyListItem) return { value: out, malformed: false };
+      if (valPart === "[]") return { value: [], malformed: false };
+      if (valPart === "" || valPart === "null" || valPart === "~") return { value: null, malformed: false };
+      // 手写非列表标量（例如 contract_paths: 123）：原样透出并标为畸形（绝不返回 null 冒充「未配置」）
+      const scalar = parseYamlScalar(valPart);
+      return { value: (scalar ?? valPart) as ReviewListRawValue, malformed: true };
+    }
+  }
+  return { value: null, malformed: false };
+}
+
+/** 是否为「普通映射」（非 null、非数组）。 */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * 整档/结构级畸形判定（fail-closed 信号源）。
+ *
+ * 不变量（g-435 第三轮独立复核 F1）：**「字段不存在 ⇒ 合法未配置」与「字段存在但不可解析/无法判定 ⇒ 畸形」
+ * 严格区分**；仅在后者返回 true，调用方必须安全升级 strict（绝不套默认放行）。
+ *
+ * - 整档 YAML 不可解析（未闭合 flow、Tab 缩进等语法错误）⇒ 畸形（保守做法：无法逐字段判定时整体不可信，
+ *   `policy` 标量同样「读不到就不放行」）；
+ * - 整档是标量/数组（非映射）⇒ 无法判定任何字段 ⇒ 畸形；
+ * - `review` 段存在但不是映射（`review: 123` / `review: []`）⇒ 畸形；缺失或显式 `null` ⇒ 合法未配置；
+ * - 空档 / 纯注释档（解析得 null 且非语法错误）⇒ **合法未配置**，不是畸形。
+ */
+function detectConfigMalformed(parsedDoc: unknown, parseFailed: boolean): boolean {
+  if (parseFailed) return true;
+  if (parsedDoc === null || parsedDoc === undefined) return false;
+  if (!isPlainObject(parsedDoc)) return true;
+  if ("review" in parsedDoc) {
+    const rv = parsedDoc.review;
+    if (rv !== null && rv !== undefined && !isPlainObject(rv)) return true;
+  }
+  return false;
+}
+
 /** 读取 prompt_overrides.<key> 的三态覆盖。未配置/缺失 → default（继承 profile 全局值）。
  *  编码形态：裸 `default` → default；`disable`/`null`/`~`/`""`/`''`/空 → disable；
  *  其余标量（含 `writeProjectConfig` 用 JSON.stringify 编码的多行文本）→ override 并解码转义。 */
@@ -1314,11 +1466,106 @@ export function readProjectConfig(root: string): ProjectConfig {
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
       supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])) },
       prompt_overrides: { subagent: { state: "default", value: null } },
-      review: { policy: null },
+      review: { policy: null, regions: null, contract_paths: null, non_product_prefixes: null },
     };
   }
-  const lines = readFileSync(file, "utf8").split("\n");
-  const scal = (path: string[]): string | null => readScalarByPath(lines, path);
+  const rawText = readFileSync(file, "utf8");
+
+  // 尝试使用完整 YAML 解析器作为备选读取，精准支持包含 flow-style 映射或标量类型判定的合法配置
+  let parsedDoc: any = null;
+  let parseFailed = false;
+  try {
+    parsedDoc = parseYaml(rawText);
+  } catch {
+    parseFailed = true;
+  }
+
+  // 整档/结构级畸形判定（fail-closed 信号源）：
+  // 「字段不存在 ⇒ 合法未配置」与「字段存在但不可解析/无法判定 ⇒ 畸形」严格区分（见 detectConfigMalformed）。
+  const documentMalformed = detectConfigMalformed(parsedDoc, parseFailed);
+
+  const lines = rawText.split("\n");
+  const scal = (path: string[]): string | null => {
+    if (parsedDoc && typeof parsedDoc === "object") {
+      let cur = parsedDoc;
+      for (const p of path) {
+        if (cur && typeof cur === "object" && p in cur) cur = cur[p];
+        else { cur = undefined; break; }
+      }
+      if (cur !== undefined) return cur === null ? null : String(cur);
+    }
+    return readScalarByPath(lines, path);
+  };
+
+  const list = (path: string[]): ListReadResult => {
+    // 优先尝试从 parsedDoc 读取以获取真实的数组结构与元素类型
+    if (isPlainObject(parsedDoc)) {
+      let cur: unknown = parsedDoc;
+      let foundKey = true;
+      for (const p of path) {
+        if (isPlainObject(cur) && p in cur) cur = cur[p];
+        else { foundKey = false; break; }
+      }
+      if (foundKey) {
+        if (cur === null || cur === undefined) return { value: null, malformed: false };
+        if (!Array.isArray(cur)) {
+          // 字段存在但取值不是列表（例如 123、"x"、映射）：原样透出并标为畸形，绝不冒充「未配置」
+          return { value: cur as ReviewListRawValue, malformed: true };
+        }
+        const arr = cur as unknown[];
+        // 元素原样透出（含非字符串元素），由 isMalformedConfigList 逐项判定是否畸形
+        return { value: arr as string[], malformed: arr.some((item) => typeof item !== "string") };
+      }
+    }
+    // 文档不可解析或键不在顶层映射：退回逐行读取（同样不产生哨兵）
+    return readListByPath(lines, path);
+  };
+
+  // review.policy 标量：字段存在但取值无法判定为字符串三值 ⇒ 畸形。
+  // 读侧仍归一为三值/null（保持既有「未配置 → 按类型派生」语义），畸形性由 config_malformed 承担 fail-closed。
+  const policyRead = (): { value: ReviewPolicy | null; malformed: boolean } => {
+    if (isPlainObject(parsedDoc) && "review" in parsedDoc) {
+      const rv = parsedDoc.review;
+      if (isPlainObject(rv) && "policy" in rv) {
+        const rawPolicy = rv.policy;
+        if (rawPolicy === null || rawPolicy === undefined) return { value: null, malformed: false };
+        if (typeof rawPolicy === "string") {
+          return { value: normalizeReviewPolicy(rawPolicy), malformed: isUnrecognizedReviewPolicy(rawPolicy) };
+        }
+        if (typeof rawPolicy === "number" || typeof rawPolicy === "boolean") {
+          return { value: normalizeReviewPolicy(String(rawPolicy)), malformed: true };
+        }
+        return { value: null, malformed: true }; // 映射/数组：无法判定
+      }
+    }
+    return { value: normalizeReviewPolicy(scal(["review", "policy"])), malformed: false };
+  };
+
+  const regionsRead = list(["review", "regions"]);
+  const contractRead = list(["review", "contract_paths"]);
+  const nonProductRead = list(["review", "non_product_prefixes"]);
+  const policyResult = policyRead();
+
+  // 读侧元信息：逐字段标注「存在但不可用」的原因（指向 project.yaml），绝不把内部哨兵当配置条目暴露。
+  const invalidFields: Record<string, string> = {};
+  if (documentMalformed) {
+    invalidFields.review =
+      "project.yaml 的 review 配置无法解析（整档 YAML 语法错误，或 review 段不是映射）——已按不可用处理，请修正 project.yaml";
+  }
+  if (policyResult.malformed) {
+    invalidFields.policy = "review.policy 取值非法（只允许 auto/strict/none 或 null）——已按不可用处理，请修正 project.yaml";
+  }
+  if (regionsRead.malformed) {
+    invalidFields.regions = "review.regions 取值非法（不是合法的字符串路径列表）——已按不可用处理，请修正 project.yaml";
+  }
+  if (contractRead.malformed) {
+    invalidFields.contract_paths = "review.contract_paths 取值非法（不是合法的字符串路径列表）——已按不可用处理，请修正 project.yaml";
+  }
+  if (nonProductRead.malformed) {
+    invalidFields.non_product_prefixes = "review.non_product_prefixes 取值非法（不是合法的字符串路径列表）——已按不可用处理，请修正 project.yaml";
+  }
+  const reviewMalformed = Object.keys(invalidFields).length > 0;
+
   const auto: Record<string, string | null> = {};
   for (const k of AUTOMATION_KEYS) auto[k] = scal(["supervisor", "automation", k]);
   const lanesRaw = scal(["defaults", "pk", "lanes"]);
@@ -1341,7 +1588,14 @@ export function readProjectConfig(root: string): ProjectConfig {
     },
     supervisor: { automation: auto },
     prompt_overrides: { subagent },
-    review: { policy: normalizeReviewPolicy(scal(["review", "policy"])) },
+    review: {
+      policy: policyResult.value,
+      regions: regionsRead.value,
+      contract_paths: contractRead.value,
+      non_product_prefixes: nonProductRead.value,
+      // 仅在畸形时附带元信息，保持合法配置的读回形状不变（无多余键）
+      ...(reviewMalformed ? { config_malformed: true, invalid_fields: invalidFields } : {}),
+    },
   };
 }
 export function isMemoryToolsEnabled(root: string): boolean {
@@ -1603,8 +1857,7 @@ function validateConfigPatch(patch: any): void {
       needStr(o.value, `prompt_overrides.${key}.value`, { nullable: true });
     }
   }
-  // g-311：顶层 review.policy 二次校验（schema 已按 enum 拒绝非法值，此处兜住 core 层直调；
-  // 与 schema 同口径为**精确匹配**——读路径的大小写容错只服务历史值，不是写入许可）。
+  // g-311/g-435：顶层 review 配置二次校验（schema 已校验基本结构，此处做业务规则与非法路径拒绝）。
   if ("review" in patch) {
     needObj(patch.review, "review");
     const rv = patch.review ?? {};
@@ -1613,6 +1866,38 @@ function validateConfigPatch(patch: any): void {
         throw new GraphError(`review.policy 只允许 ${REVIEW_POLICIES.join("/")}`);
       }
     }
+    const validateStringList = (list: unknown, fieldName: string, allowEmptyArray = true, allowTrailingSlash = false) => {
+      if (list === undefined || list === null) return;
+      if (!Array.isArray(list)) throw new GraphError(`${fieldName} 必须是数组或 null`);
+      if (list.length === 0) {
+        if (!allowEmptyArray) throw new GraphError(`${fieldName} 不允许为空数组`);
+        return;
+      }
+      const seen = new Set<string>();
+      for (let i = 0; i < list.length; i++) {
+        const item = list[i];
+        if (typeof item !== "string") throw new GraphError(`${fieldName}[${i}] 必须是字符串`);
+        const trimmed = item.trim();
+        if (trimmed === "") throw new GraphError(`${fieldName}[${i}] 不能为空字符串`);
+        if (trimmed.startsWith("invalid:")) {
+          throw new GraphError(
+            `${fieldName}[${i}] 取值非法："invalid:" 是内部保留前缀，不是合法路径；请修正 project.yaml 中该字段的取值`,
+          );
+        }
+        const norm = trimmed.replace(/\\/g, "/");
+        if (norm.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(trimmed)) throw new GraphError(`${fieldName}[${i}] 不能是绝对路径`);
+        if (!allowTrailingSlash && norm.endsWith("/")) throw new GraphError(`${fieldName}[${i}] 不能有尾随斜杠`);
+        const segments = norm.split("/");
+        if (segments.includes("..")) throw new GraphError(`${fieldName}[${i}] 不能包含 .. 路径段`);
+        // 归一后重复检查（去 ./ 等）
+        const canonical = norm.replace(/^\.\//, "").replace(/\/+$/, "");
+        if (seen.has(canonical)) throw new GraphError(`${fieldName} 包含重复条目: ${item}`);
+        seen.add(canonical);
+      }
+    };
+    if ("regions" in rv) validateStringList(rv.regions, "review.regions", true, false);
+    if ("contract_paths" in rv) validateStringList(rv.contract_paths, "review.contract_paths", true, false);
+    if ("non_product_prefixes" in rv) validateStringList(rv.non_product_prefixes, "review.non_product_prefixes", true, false);
   }
 }
 
@@ -1673,9 +1958,17 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
       setScalar(["prompt_overrides", key], "", () => encoded);
     }
   }
-  // g-311：顶层 review.policy（null/"" 清空 → 读回 null → 按目标类型派生）。
-  if (patch.review && "policy" in patch.review) {
-    setScalar(["review", "policy"], patch.review.policy ?? "");
+  // g-311/g-435：顶层 review 列表写入
+  if (patch.review) {
+    if ("policy" in patch.review) {
+      setScalar(["review", "policy"], patch.review.policy ?? "");
+    }
+    const setList = (field: string, list: string[] | null | undefined) => {
+      setListAtPath(lines, ["review", field], list);
+    };
+    if ("regions" in patch.review) setList("regions", patch.review.regions);
+    if ("contract_paths" in patch.review) setList("contract_paths", patch.review.contract_paths);
+    if ("non_product_prefixes" in patch.review) setList("non_product_prefixes", patch.review.non_product_prefixes);
   }
 
   const updated = lines.join("\n");
@@ -1740,6 +2033,137 @@ function setScalarAtPath(lines: string[], path: string[], value: string | number
     const { comment } = splitValueComment(afterKey);
     const trimmedEnc = encoded.trim();
     lines[leafIdx] = `${leafIndent}${leafKey}: ${trimmedEnc}${comment}`;
+  }
+}
+
+/** 在 lines 上按路径把列表写为 list（null/undefined 则清空/删除子行并置为 null；[] 写为 []；非空写为缩进 - 项）。保留行尾注释与其它键。 */
+function setListAtPath(lines: string[], path: string[], list: string[] | null | undefined): void {
+  const ensureBlock = (parentIdx: number, parentEnd: number, childIndent: string, childKey: string): number => {
+    lines.splice(parentEnd, 0, `${childIndent}${childKey}:`);
+    return parentEnd;
+  };
+  const rootKey = path[0];
+  let rootIdx = findKeyLine(lines, rootKey, 0, 0, lines.length);
+  if (rootIdx >= 0 && lines[rootIdx].includes("{") && lines[rootIdx].includes("}")) {
+    throw new GraphError(`不支持向内联 flow-style YAML 映射中结构化更新列表字段，请使用标准缩进 YAML`);
+  }
+  if (rootIdx < 0) {
+    // 根不存在且待写入值为 null/undefined 时无需创建
+    if (list === null || list === undefined) return;
+    buildMissingListChain(lines, path, list);
+    return;
+  }
+  let parentIdx = rootIdx;
+  let parentIndent = lineIndent(lines[parentIdx]);
+  for (let lvl = 1; lvl < path.length - 1; lvl++) {
+    const key = path[lvl];
+    const childIndent = " ".repeat(parentIndent + 2);
+    const end = blockChildrenEnd(lines, parentIdx, parentIndent);
+    const keyIdx = findKeyLine(lines, key, childIndent.length, parentIdx + 1, end);
+    if (keyIdx >= 0 && lines[keyIdx].includes("{") && lines[keyIdx].includes("}")) {
+      throw new GraphError(`不支持向内联 flow-style YAML 映射中结构化更新列表字段，请使用标准缩进 YAML`);
+    }
+    if (keyIdx < 0) {
+      if (list === null || list === undefined) return;
+      const inserted = ensureBlock(parentIdx, end, childIndent, key);
+      parentIdx = inserted;
+      parentIndent = childIndent.length;
+      continue;
+    }
+    parentIdx = keyIdx;
+    parentIndent = lineIndent(lines[keyIdx]);
+  }
+
+  const leafKey = path[path.length - 1];
+  const leafIndent = " ".repeat(parentIndent + 2);
+  const end = blockChildrenEnd(lines, parentIdx, parentIndent);
+  const leafIdx = findKeyLine(lines, leafKey, leafIndent.length, parentIdx + 1, end);
+
+  if (leafIdx < 0) {
+    // 键不存在
+    if (list === null || list === undefined) return;
+    if (list.length === 0) {
+      lines.splice(end, 0, `${leafIndent}${leafKey}: []`);
+    } else {
+      const newLines: string[] = [`${leafIndent}${leafKey}:`];
+      const itemIndent = " ".repeat(parentIndent + 4);
+      for (const item of list) {
+        newLines.push(`${itemIndent}- ${JSON.stringify(item)}`);
+      }
+      lines.splice(end, 0, ...newLines);
+    }
+    return;
+  }
+
+  // 键已存在：保留其行尾注释
+  const existing = lines[leafIdx];
+  const afterKey = existing.slice(lineIndent(existing) + leafKey.length + 1);
+
+  // 如果已有键采用 flow-style 内联映射形态（如 review: { policy: auto, regions: [src] }），拒绝写坏
+  if (lines[parentIdx].includes("{") && lines[parentIdx].includes("}")) {
+    throw new GraphError(`不支持向内联 flow-style YAML 映射中结构化更新列表字段，请使用标准缩进 YAML`);
+  }
+
+  const { comment } = splitValueComment(afterKey);
+  const commentStr = comment ? (comment.startsWith(" ") ? comment : ` ${comment}`) : "";
+
+  // 严格寻找紧跟在 leafIdx 下面的 - 项行，只删除实际列表项行，绝不误删同级或后续未知键前的注释
+  let firstItemIdx = -1;
+  let lastItemIdx = -1;
+  for (let i = leafIdx + 1; i < end; i++) {
+    const l = lines[i];
+    if (l.trim() === "") continue;
+    if (/^[ \t]*#/.test(l)) {
+      // 如果还没遇到任何列表项，这是写在列表头下方的注释行（如条目关联注释），若已有列表项则可能是条目间的注释
+      continue;
+    }
+    const isListItem = /^[ \t]*-[ \t]/.test(l);
+    if (isListItem) {
+      if (firstItemIdx < 0) firstItemIdx = i;
+      lastItemIdx = i;
+    } else {
+      // 遇到了非列表项行（如另一个同级 key），停止
+      break;
+    }
+  }
+
+  // 如果找到列表项行区间，删除从 firstItemIdx 到 lastItemIdx
+  if (firstItemIdx >= 0 && lastItemIdx >= firstItemIdx) {
+    lines.splice(firstItemIdx, lastItemIdx - firstItemIdx + 1);
+  }
+
+  if (list === null || list === undefined) {
+    lines[leafIdx] = `${leafIndent}${leafKey}:${commentStr ? commentStr : ""}`;
+  } else if (list.length === 0) {
+    lines[leafIdx] = `${leafIndent}${leafKey}: []${commentStr}`;
+  } else {
+    lines[leafIdx] = `${leafIndent}${leafKey}:${commentStr ? commentStr : ""}`;
+    const newItems: string[] = [];
+    const itemIndent = " ".repeat(parentIndent + 4);
+    for (const item of list) {
+      newItems.push(`${itemIndent}- ${JSON.stringify(item)}`);
+    }
+    lines.splice(leafIdx + 1, 0, ...newItems);
+  }
+}
+
+/** 列表路径整条链缺失时在文末补建。 */
+function buildMissingListChain(lines: string[], path: string[], list: string[]): void {
+  while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+  if (lines.length && lines[lines.length - 1] !== "") lines.push("");
+  for (let lvl = 0; lvl < path.length - 1; lvl++) {
+    lines.push(" ".repeat(lvl * 2) + `${path[lvl]}:`);
+  }
+  const leafIndent = " ".repeat((path.length - 1) * 2);
+  const leafKey = path[path.length - 1];
+  if (list.length === 0) {
+    lines.push(`${leafIndent}${leafKey}: []`);
+  } else {
+    lines.push(`${leafIndent}${leafKey}:`);
+    const itemIndent = " ".repeat(path.length * 2);
+    for (const item of list) {
+      lines.push(`${itemIndent}- ${JSON.stringify(item)}`);
+    }
   }
 }
 
@@ -10845,12 +11269,18 @@ export function resolveAccept(
       ? (report as Record<string, unknown>)
       : {};
     const evidence = normalizeMachineReport(report);
+    const projConf = readProjectConfig(root);
     const policy = resolveReviewPolicy({
-      policy: readProjectConfig(root).review.policy,
+      policy: projConf.review.policy,
       type: doc.meta.type,
       changedPaths: evidence.changed_paths,
       productChangedLines: evidence.product_changed_lines,
       strictRequired: raw.strict_required === true,
+      regions: projConf.review.regions,
+      contractPaths: projConf.review.contract_paths,
+      nonProductPrefixes: projConf.review.non_product_prefixes,
+      // F1 fail-closed：字段存在但不可解析/无法判定（含整档 YAML 语法错误）⇒ 安全升级 strict，绝不套默认放行
+      configMalformed: projConf.review.config_malformed === true,
     });
     if (policy.policy !== "auto") {
       throw new GraphError(

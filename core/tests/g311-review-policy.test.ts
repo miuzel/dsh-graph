@@ -73,7 +73,7 @@ const eventsOf = (root: string, goal: string, name: string) =>
 function greenReport(over: Record<string, unknown> = {}) {
   return {
     baseline_commit: "86b2c2b",
-    changed_paths: ["core/ops.ts"],
+    changed_paths: ["scripts/test.sh"],
     product_changed_lines: 12,
     untracked_files: 0,
     tests: { exit_code: 0, fail: 0 },
@@ -180,8 +180,10 @@ test("g-311 判据 1：三类非法值经 schema 拒绝，且零副作用（文�
 // ---------------------------------------------------------------------------
 
 test("g-311 判据 2③：产品代码口径（排除 core/tests/**、*.md 与生成物）", () => {
+  // 显式传入本仓库排除前缀，保留 g311 断言集的意义
+  const repoPrefixes = ["core/tests/", "dist/", "core-dist/", "node_modules/", ".worktrees/"];
   const product = ["core/ops.ts", "core/review-policy.ts", "dsh-graph-host/index.js", "schema/SCHEMA.md".replace("SCHEMA.md", "x.json"), "scripts/build.sh"];
-  for (const p of product) assert.equal(isProductCodePath(p), true, `${p} 应计入产品代码`);
+  for (const p of product) assert.equal(isProductCodePath(p, repoPrefixes), true, `${p} 应计入产品代码`);
   const excluded = [
     "core/tests/g311-review-policy.test.ts",
     "README.md",
@@ -193,7 +195,7 @@ test("g-311 判据 2③：产品代码口径（排除 core/tests/**、*.md 与�
     "pnpm-lock.yaml",
     "",
   ];
-  for (const p of excluded) assert.equal(isProductCodePath(p), false, `${p} 应被口径排除`);
+  for (const p of excluded) assert.equal(isProductCodePath(p, repoPrefixes), false, `${p} 应被口径排除`);
 
   const numstat = [
     "10\t2\tcore/ops.ts",
@@ -202,7 +204,7 @@ test("g-311 判据 2③：产品代码口径（排除 core/tests/**、*.md 与�
     "-\t-\tassets/logo.png",
     "7\t7\tdsh-graph-host/index.js",
   ].join("\n");
-  const counted = countProductChangedLines(numstat);
+  const counted = countProductChangedLines(numstat, repoPrefixes);
   assert.equal(counted.lines, 10 + 2 + 0 + 7 + 7, "仅产品代码行数计入（含二进制 0 行）");
   assert.deepEqual(counted.files, ["core/ops.ts", "assets/logo.png", "dsh-graph-host/index.js"]);
   assert.deepEqual(counted.skipped, ["core/tests/g311-review-policy.test.ts", "dsh-graph-host/supervisor-guide.zh.md"]);
@@ -267,7 +269,14 @@ test("g-311 判据 2：fail-safe——任一信号取不到即不放行（绝不
 // ---------------------------------------------------------------------------
 
 test("g-311 判据 4：契约路径 / 跨 ≥3 顶层区域 / 显式 strict_required 一律判定 strict", () => {
-  const base = { policy: "auto", type: "patch" } as const;
+  // 在显式配置本项目既有闭集参数下保持旧断言集合的精确意义
+  // 保持真实的完整前缀登记，精准保留原 dsh-graph-host/lib/client/board.js 样本
+  const explicitRepoConfig = {
+    contractPaths: ["core/schema.ts", "schema/SCHEMA.md"],
+    regions: ["core", "dsh-graph-host", "dsh-graph-host/lib/client", "dsh-graph-host/prompts", "scripts"],
+    nonProductPrefixes: ["core/tests", "dist", "core-dist", "node_modules", ".worktrees"],
+  } as const;
+  const base = { policy: "auto", type: "patch", ...explicitRepoConfig } as const;
   // M1 契约冻结——显式 auto（甚至 none）不得推翻
   for (const p of ["core/schema.ts", "schema/SCHEMA.md", "./core/schema.ts"]) {
     const d = resolveReviewPolicy({ ...base, changedPaths: [p] });
@@ -275,7 +284,7 @@ test("g-311 判据 4：契约路径 / 跨 ≥3 顶层区域 / 显式 strict_requ
     assert.deepEqual(d.strictReasons, ["contract_change"]);
     assert.equal(d.source, "explicit", "升级不改变基础策略来源标注");
   }
-  assert.equal(resolveReviewPolicy({ policy: "none", type: "patch", changedPaths: ["core/schema.ts"] }).policy, "strict");
+  assert.equal(resolveReviewPolicy({ ...base, policy: "none", type: "patch", changedPaths: ["core/schema.ts"] }).policy, "strict");
   // M2 产品代码规模（149 不触发、150 触发）
   assert.equal(resolveReviewPolicy({ ...base, productChangedLines: 149 }).policy, "auto");
   assert.deepEqual(resolveReviewPolicy({ ...base, productChangedLines: 150 }).strictReasons, ["product_size"]);
@@ -290,16 +299,19 @@ test("g-311 判据 4：契约路径 / 跨 ≥3 顶层区域 / 显式 strict_requ
   assert.equal(resolveReviewPolicy({ ...base, changedPaths: ["docs/a.md", "core/ops.ts", "README.md"] }).policy, "auto");
   assert.equal(resolveReviewPolicy({ ...base, changedPaths: ["schema/SCHEMA.md", "docs/a.md", "README.md"] }).policy, "strict");
   // M4 显式声明（覆盖核心层重写等无法用路径表达的场景）
-  const declared = resolveReviewPolicy({ policy: "none", type: "patch", strictRequired: true });
+  const declared = resolveReviewPolicy({ ...base, policy: "none", type: "patch", strictRequired: true });
   assert.equal(declared.policy, "strict");
   assert.deepEqual(declared.strictReasons, ["declared_strict"]);
 });
 
 test("g-311 判据 4 自洽：用本目标的真实属性解析，结果必须是 strict（不得给自己开快速通道）", () => {
   // 真实属性：type=feature；变更路径含 core/schema.ts（契约）+ core 与 dsh-graph-host 两个区域。
+  // 在显式配置本仓库契约路径与区域下测试自洽性
   const decision = resolveReviewPolicy({
     policy: null,
     type: "feature",
+    contractPaths: ["core/schema.ts", "schema/SCHEMA.md"],
+    regions: ["core", "dsh-graph-host", "lib/client", "prompts", "scripts"],
     changedPaths: [
       "core/review-policy.ts",
       "core/schema.ts",
@@ -408,7 +420,7 @@ test("g-311 判据 3/4：策略非 auto 时拒绝快速放行（契约路径 / f
   for (const [label, opts] of cases) {
     const { root, goal, file } = fixture({ type: opts.type ?? "patch" });
     if (opts.policy) writeProjectConfig(root, { review: { policy: opts.policy } }, "human:gui");
-    const report = greenReport({ changed_paths: opts.paths ?? ["core/ops.ts"], ...(opts.strictRequired ? { strict_required: true } : {}) });
+    const report = greenReport({ changed_paths: opts.paths ?? ["scripts/test.sh"], ...(opts.strictRequired ? { strict_required: true } : {}) });
     assert.throws(
       () => resolveAccept(root, goal, { actor: "supervisor:test", verdict: "accept", fast_track: true, machine_report: report }),
       (e: unknown) => e instanceof GraphError && /策略为 strict/.test((e as Error).message),
