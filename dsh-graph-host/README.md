@@ -369,7 +369,7 @@ external report and host source code; this README does **not** claim the desktop
 
 ### Agent Tools Reference
 
-dsh-graph equips Agents with a comprehensive set of `graph_*` tools (50 in total):
+dsh-graph equips Agents with a comprehensive set of `graph_*` tools (51 in total):
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -421,7 +421,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools (50 in total
 | | `graph_refresh_results` | Regenerate `results.md`: zero-LLM fallback assembly, or a caller-supplied `content` body from the dedicated summarizer subagent / a human (previous version archived; supports a goals[] batch) |
 | | `graph_handoff` | Export cross-session handover document (`HANDOFF.md`) |
 | | `graph_claim_supervisor` | Claim supervisor role in new session & update metadata |
-| | `graph_help` | Display usage instructions and the 50-tool checklist |
+| | `graph_help` | Display usage instructions and the 51-tool checklist |
 | **Validation** | `graph_validate` | Validate full invariants (states, cycles, card refs) |
 | | `graph_rebuild` | Rebuild goal state from `events.jsonl` and reconcile |
 

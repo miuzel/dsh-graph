@@ -67,7 +67,7 @@ dsh-graph is a plugin that organizes work into a "goal board". Available graph_*
 - graph_update_settings(patch) update project config (schema validation, comment preservation, atomic write).
 
 ## Help
-- graph_help() display this help (full 50-tool checklist with parameter reference).
+- graph_help() display this help (full 51-tool checklist with parameter reference).
 
 ## Claim supervisor
 **Execute this only when the person in charge explicitly asks you to take over as supervisor**—by default no session may automatically claim:

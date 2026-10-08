@@ -44,8 +44,12 @@ import {
   isCleanReviewStopReason,
   REVIEW_CONCLUSIONS,
   REVIEW_RECORD_STATUSES,
+  REVIEW_EVENT_NAMES,
+  REVIEW_RECORD_EVENT_NAMES,
+  REVIEW_INDEPENDENT_MISSING_EVENT,
+  formatReviewPrompt,
 } from "../ops.ts";
-import { readEvents } from "../events.ts";
+import { appendEvent, readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
 
 const VERIFIED = "✅已验";
@@ -271,7 +275,15 @@ test("g-436 判据1：工具入口派发独立评审、绑定完整候选 SHA，
   assert.equal(again.review_id, res.review_id);
   assert.equal(again.reviewer_child_id, "child-review-1");
   assert.equal(h.capturedRequests.length, 2, "幂等复用不新增子代理");
-  assert.equal(h.reviewEvs(fx.goal).filter((e) => e.event === "review.dispatched").length, 1, "幂等复用不新增事件");
+  assert.equal(h.reviewEvs(fx.goal).filter((e) => e.event === "review.dispatched").length, 1, "幂等复用不重新派发");
+  // F1 幂等：该候选**已是当前候选且不陈旧** ⇒ 纯 no-op（不写事件、不改记录），只有状态确实改变时才写
+  // 一条 review.reused 审计事件（见下表 A→B→A 用例）。
+  assert.equal(h.reviewEvs(fx.goal).filter((e) => e.event === "review.reused").length, 0, "同候选重复调用为纯幂等 no-op");
+  assert.ok(!/reuse_count/.test(recordOf(h, fx.goal, res.review_id)), "no-op 不得写 reuse_count（记录逐字未变）");
+  assert.equal(again.reused_current, true, "F1：复用当前候选 ⇒ reused_current=true");
+  assert.equal(again.stale, false);
+  assert.equal(again.current_candidate_sha, h.head, "F1：返回值与投影同源（current_candidate_sha）");
+  assert.equal(again.current_candidate_sha, goalReviewState(h.root, fx.goal).current_candidate_sha);
 });
 
 test("g-436 判据1：候选不可解析 / attempt 不存在 / 收集 attempt 一律拒绝（拒绝即零派发）", async () => {
@@ -309,6 +321,14 @@ test("g-436 判据1：HTTP 入口与工具入口共用一套实现（同一候�
   assert.equal(http1.body.reviewer_child_id, "child-review-1");
   assert.equal(http1.body.reused, false);
   assert.equal(h.reviewEvs(fx.goal)[0].details.requested_by, "human:gui", "HTTP 入口身份如实记为 human:gui（不冒充真人）");
+  // F1：HTTP 入口也必须是**同一套可见性字段**（两处手写响应各自登记 ⇒ 用一致性断言钉住漂移）
+  for (const k of ["reused_current", "stale", "current_candidate_sha", "independent_ok", "independent_missing"]) {
+    assert.ok(k in http1.body, `HTTP 响应缺少可见性字段 ${k}（工具入口与 HTTP 入口必须同源）`);
+  }
+  assert.equal(http1.body.current_candidate_sha, h.head, "HTTP 入口的当前候选与请求候选一致");
+  assert.equal(http1.body.reused_current, true);
+  assert.equal(http1.body.stale, false);
+  assert.equal(http1.body.independent_missing, true, "派发瞬间尚无完成的独立评审（保守方向，与投影此刻一致）");
 
   // 工具入口对**同一候选**给出逐字段一致的结果
   const toolSame = await callTool(h, "graph_start_review", { goal: fx.goal, attempt: fx.attempt, candidate_commit: h.head });
@@ -777,4 +797,176 @@ test("g-436 判据5：派发失败（无 provider / spawn 抛错）如实结算�
   const again = await callTool(h, "graph_start_review", { goal: fx.goal, attempt: fx.attempt, candidate_commit: h.head });
   assert.equal(again.reused, false, "failed 记录不参与幂等复用");
   assert.notEqual(again.review_id, res.review_id);
+});
+
+// =====================================================================================
+// 追加项 F1：A→B→A 时「工具返回值」与「看板投影」必须一致（此前两句自相矛盾）
+// =====================================================================================
+
+test("g-436 F1：A→B→A 复用旧记录时，返回值与投影同源一致，且保守方向不变", async () => {
+  const h = createHarness({ policy: "strict" });
+  const fx = await prepareDispatched(h);
+  const shaA = h.head;
+
+  // A：派发并完成独立评审 PASS
+  const rA = await callTool(h, "graph_start_review", { goal: fx.goal, attempt: fx.attempt, candidate_commit: shaA });
+  h.emit("subagent/end", { id: rA.reviewer_child_id, local: true, stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "**总判**：PASS" }] });
+  let st = goalReviewState(h.root, fx.goal);
+  assert.equal(st.current_candidate_sha, shaA);
+  assert.equal(st.independent_ok, true);
+  assert.equal(st.independent_missing, false);
+
+  // B：新候选 → R2；此时 R1(A) 变 stale、当前候选无独立评审（保守方向）
+  writeFileSync(join(h.ws, "b.txt"), "b");
+  execFileSync("git", ["add", "."], { cwd: h.ws });
+  execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "B"], { cwd: h.ws });
+  const shaB = execFileSync("git", ["rev-parse", "HEAD"], { cwd: h.ws }).toString().trim();
+  const rB = await callTool(h, "graph_start_review", { goal: fx.goal, attempt: fx.attempt, candidate_commit: shaB, baseline_commit: shaA });
+  assert.equal(rB.independent_missing, true, "新候选在完成评审前必须标注「未独立评审」");
+  // 保守方向（关键）：B 尚未完成时，A 的 PASS **不得**被算作当前候选的独立通过
+  st = goalReviewState(h.root, fx.goal);
+  assert.equal(st.current_candidate_sha, shaB, "B 成为当前候选");
+  assert.equal(st.independent_ok, false, "旧候选（A）的 PASS 绝不适用于新候选（B）");
+  assert.equal(st.independent_missing, true);
+  assert.equal(st.reviews.find((r) => r.review_id === rA.review_id)!.stale, true, "A 的记录在 B 成为当前候选后 stale");
+  // B 也完成 PASS（两面都有 PASS，仍以「当前候选」为准）
+  h.emit("subagent/end", { id: rB.reviewer_child_id, local: true, stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "**总判**：PASS" }] });
+  st = goalReviewState(h.root, fx.goal);
+  assert.equal(st.current_candidate_sha, shaB);
+  assert.equal(st.independent_ok, true, "B 自身也有独立 PASS");
+
+  // A→B→A：再次请求候选 A ⇒ 复用 R1，且**重新置为当前**（语义裁决①）
+  const back = await callTool(h, "graph_start_review", { goal: fx.goal, attempt: fx.attempt, candidate_commit: shaA });
+  assert.equal(back.reused, true, "复用 R1");
+  assert.equal(back.review_id, rA.review_id);
+  assert.equal(back.reused_current, true, "F1：复用后该候选就是当前候选");
+  assert.equal(back.stale, false, "F1：返回值不再自称 stale");
+
+  const detail = goalDetail(h.root, fx.goal);
+  const after = detail.review_state;
+  // 两面一致：工具返回值 ↔ 看板投影（逐字段）
+  assert.equal(back.current_candidate_sha, after.current_candidate_sha);
+  assert.equal(back.independent_ok, after.independent_ok);
+  assert.equal(back.independent_missing, after.independent_missing);
+  assert.equal(back.stale, after.reviews.find((r: any) => r.review_id === back.review_id)!.stale);
+  assert.equal(back.conclusion, after.reviews.find((r: any) => r.review_id === back.review_id)!.conclusion);
+  // 投影语义：当前候选回到 A；B 的记录转 stale；无「未独立评审」标注
+  assert.equal(after.current_candidate_sha, shaA);
+  assert.equal(after.reviews.find((r: any) => r.review_id === rA.review_id)!.stale, false);
+  assert.equal(after.reviews.find((r: any) => r.review_id === rB.review_id)!.stale, true);
+  assert.equal(after.independent_missing, false);
+  // 事件流留痕（可审计的再请求，不是静默复活）
+  const reuseEvs = h.reviewEvs(fx.goal).filter((e) => e.event === "review.reused");
+  assert.equal(reuseEvs.length, 1);
+  assert.equal(reuseEvs[0].details.candidate_sha, shaA);
+  assert.equal(h.capturedRequests.length, 3, "复用不新增子代理（仅 A/B 两次真实派发）");
+  // 反向不会静默复活：复用 A 之后，B 的记录转为 stale（保留为历史，不再代表当前候选）
+  assert.equal(after.reviews.find((r: any) => r.review_id === rB.review_id)!.stale, true, "B 的记录转为历史（stale）");
+  const bEv = readEvents(h.root).filter((e) => e.goal === fx.goal && e.event === "review.reused");
+  assert.equal(bEv.length, 1, "复用事件只在真实复用时出现（B 的派发是 dispatched 而非 reused）");
+  // 幂等：再来一次「请求 A」——A 已是当前候选且不陈旧 ⇒ 纯 no-op（事件仍 1 条、记录逐字未变）
+  const recordBefore = recordOf(h, fx.goal, back.review_id);
+  const back2 = await callTool(h, "graph_start_review", { goal: fx.goal, attempt: fx.attempt, candidate_commit: shaA });
+  assert.equal(back2.review_id, back.review_id);
+  assert.equal(back2.reused_current, true);
+  assert.equal(back2.stale, false);
+  assert.equal(back2.current_candidate_sha, back.current_candidate_sha);
+  assert.equal(h.reviewEvs(fx.goal).filter((e) => e.event === "review.reused").length, 1, "重复复用为纯 no-op（不写事件）");
+  assert.equal(recordOf(h, fx.goal, back.review_id), recordBefore, "no-op 复用不得改写记录文件（逐字未变）");
+  assert.equal(h.capturedRequests.length, 3, "no-op 复用同样不派发子代理");
+});
+
+// =====================================================================================
+// 追加项 F2：REVIEW_EVENT_NAMES 闭集与实现实际写入的事件名集合一致 + 有真实消费点
+// =====================================================================================
+
+test("g-436 F2：REVIEW_EVENT_NAMES 闭集完整（含第 5 个事件名）且与实现写入集合逐一相等", () => {
+  const names = [...REVIEW_EVENT_NAMES];
+  assert.deepEqual([...new Set(names)], names, "闭集不得有重复项");
+  assert.ok(names.includes("review.independent_missing"), "accept 时的可见化标注事件必须在闭集内（此前注释写 4 项、实现用 5 项）");
+  for (const n of ["review.dispatched", "review.bound", "review.reused", "review.completed", "review.failed"]) {
+    assert.ok(names.includes(n as any), `闭集缺少 ${n}`);
+  }
+  // 记录子集：⊂ 闭集，且不含目标级标注
+  for (const n of REVIEW_RECORD_EVENT_NAMES) assert.ok(names.includes(n), `记录事件 ${n} 必须属于闭集`);
+  assert.ok(!(REVIEW_RECORD_EVENT_NAMES as readonly string[]).includes("review.independent_missing"), "目标级标注不得进入记录重放子集");
+
+  // 与实现源码实际写入的 `event: "review.*"` 集合逐一相等（区块边界缺失 ⇒ 判红，不得静默通过）
+  const src = readFileSync(join(import.meta.dirname, "../ops.ts"), "utf8");
+  const start = src.indexOf("g-436：独立评审（Independent Review）——接线与可见化");
+  const end = src.indexOf("// ---- Attempt（SCHEMA §3） ----", start);
+  assert.ok(start >= 0 && end > start, "找不到评审区块边界（结构已变，请同步本守卫）");
+  const block = src.slice(start, end);
+  // 写入名解析：① 字面量 `event: "review.X"`；② 间接形式 `event: <ident>` ⇒ 解析该标识符在区块内的
+  // 字面量赋值（如 `const eventName = failed ? "review.failed" : "review.completed"`），或导出常量的值。
+  // 解析不出的间接形式一律记为 unresolved ⇒ 判红（fail-closed，新增间接事件名逃不过守卫）。
+  const writtenSet = new Set<string>();
+  const unresolved: string[] = [];
+  for (const m of block.matchAll(/event:\s*"([^"]+)"/g)) writtenSet.add(m[1]);
+  for (const m of block.matchAll(/event:\s*([A-Za-z_$][\w$]*)\s*,/g)) {
+    const ident = m[1];
+    const assign = block.match(new RegExp(`(?:const|let|var)\\s+${ident}\\s*=\\s*([^;]+);`));
+    if (assign) {
+      for (const lit of assign[1].matchAll(/"([^"]+)"/g)) writtenSet.add(lit[1]);
+    } else if (ident === "REVIEW_INDEPENDENT_MISSING_EVENT") {
+      writtenSet.add(REVIEW_INDEPENDENT_MISSING_EVENT);
+    } else {
+      unresolved.push(ident);
+    }
+  }
+  assert.deepEqual(unresolved, [], `评审区块出现无法解析的事件名标识符（请同步本守卫的解析规则）：${unresolved.join(", ")}`);
+  const written = [...writtenSet].filter((n) => n.startsWith("review.")).sort();
+  assert.deepEqual(written, [...names].sort(), "闭集必须与评审区块实际写入的事件名逐一相等（注释说的项数 == 代码用的项数）");
+  assert.ok(written.includes(REVIEW_INDEPENDENT_MISSING_EVENT), "目标级标注事件必须被解析到（此前它在闭集外）");
+  // 消费点（源码级）：重放侧按记录子集过滤
+  assert.match(block, /REVIEW_RECORD_EVENT_NAMES as readonly string\[\]\)\.includes\(ev\.event\)/, "重放必须用记录子集过滤（闭集的真实消费点）");
+  assert.match(block, /assertReviewEventName\("review\.[a-z]+"\)|assertReviewEventName\(eventName\)|assertReviewEventName\(REVIEW_INDEPENDENT_MISSING_EVENT\)/, "写入侧必须有 fail-closed 校验调用");
+});
+
+test("g-436 F2：非闭集事件不参与记录重放（消费点的行为证明）", async () => {
+  const h = createHarness({ policy: "strict" });
+  const fx = await prepareDispatched(h);
+  const res = await callTool(h, "graph_start_review", { goal: fx.goal, attempt: fx.attempt, candidate_commit: h.head });
+  assert.equal(goalReviewState(h.root, fx.goal).reviews.length, 1);
+  // 伪造一个形似评审、但不在闭集内的事件（带 review_id）⇒ 重放必须忽略它
+  appendEvent(h.root, {
+    actor: "test",
+    event: "review.bogus",
+    goal: fx.goal,
+    details: { review_id: "rev-att-001-99", candidate_sha: "deadbeef", status: "completed", conclusion: "PASS" },
+  });
+  const st = goalReviewState(h.root, fx.goal);
+  assert.equal(st.reviews.length, 1, "非闭集事件不得被重放成第 2 条记录");
+  assert.equal(st.reviews[0].review_id, res.review_id);
+  assert.equal(st.independent_ok, false, "伪造事件不得制造独立 PASS");
+});
+
+// =====================================================================================
+// 追加项 F3：prompt 给出 goal.md 路径 ⇒ 显式划界（方案②：保留路径 + 明文排除非审查材料）
+// =====================================================================================
+
+test("g-436 F3：评审 prompt 对 goal.md 的非审查材料显式划界（评论/最近指令/返工 handoff/证据台账）", async () => {
+  const h = createHarness({ policy: "strict" });
+  const fx = await prepareDispatched(h);
+  // 把哨兵放进**评论段**与**最近指令段**（它们在 goal.md 里，从文件侧可读到）
+  await callTool(h, "graph_add_comment", { goal: fx.goal, text: "COMMENT-SECTION-SENTINEL-77" });
+  await callTool(h, "graph_set_directive", { goal: fx.goal, directive: "DIRECTIVE-SECTION-SENTINEL-88" });
+  await callTool(h, "graph_start_review", { goal: fx.goal, attempt: fx.attempt, candidate_commit: h.head });
+  const prompt = String(h.capturedRequests[1].request.prompt[0].text);
+
+  // 方案②：保留路径（供按需复核定义），但必须明文划界
+  assert.ok(prompt.includes(fx.goalFile.replace(`${h.ws}/`, "")), "仍给出目标定义文件路径（按需复核定义/判据）");
+  assert.match(prompt, /\*\*仅供\*\*按需复核目标定义与判据原文/, "路径必须带「仅供定义/判据」的范围限定");
+  assert.match(prompt, /评论 \/ 最近指令 \/ 返工 handoff \/ 证据台账/, "必须逐项点明非审查材料（评论/最近指令/返工 handoff/证据台账）");
+  assert.match(prompt, /均不属审查材料/, "必须明确「不属审查材料」");
+  assert.match(prompt, /不得据以评判候选/, "必须明确禁止据以评判");
+  assert.match(prompt, /若为定位定义而读到，必须在「未验证项」中声明/, "读到非审查材料须声明（可审计）");
+  // 文件侧哨兵仍不得被**内联**注入（载荷面干净）
+  assert.ok(!prompt.includes("COMMENT-SECTION-SENTINEL-77"), "评论内容不得内联注入");
+  assert.ok(!prompt.includes("DIRECTIVE-SECTION-SENTINEL-88"), "最近指令内容不得内联注入");
+  // 英文同款划界（en 分支同源）
+  const en = formatReviewPrompt({ goalId: "g-1", attemptId: "att-001", goalRel: "goal.md", language: "en", candidateSha: "abc", criteria: ["c1"] });
+  assert.match(en, /NOT review material/);
+  assert.match(en, /comments \/ latest directive \/ rework handoff \/ evidence ledger/);
+  assert.match(en, /declare it under Unverified items/);
 });

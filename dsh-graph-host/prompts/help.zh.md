@@ -67,7 +67,7 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_update_settings(patch) 更新项目配置（schema 校验、保留注释、原子写）。
 
 ## 帮助
-- graph_help() 显示本帮助（全部 50 个工具清单与参数速查）。
+- graph_help() 显示本帮助（全部 51 个工具清单与参数速查）。
 
 ## 接管 supervisor
 **仅在负责人明确要求你接管 supervisor 时执行**——默认任何会话都不得自动 claim：

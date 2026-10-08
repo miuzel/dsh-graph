@@ -19,6 +19,10 @@
  *  F. 负向对照：对**内存中的字符串副本**做变异（删 root 表行 / 删 host en 表行 / 工具名改错一字符 /
  *     计数改错 / 追加假记忆上限），同一套判定函数必须报红；合法改写（表格行重排）不得误红。
  *     对照只改副本变量，绝不触碰仓库文件（末尾断言真实文件逐字未变）。
+ *  G.（g-436 增量）计数声明**覆盖面补全**：B 只覆盖「N 个 `graph_*` 工具 / N `graph_*` tools」两条措辞，
+ *     于是 host README `(50 in total)` / `the 50-tool checklist`、help.zh `全部 50 个工具清单`、
+ *     help.en `full 50-tool checklist` 这 4 处漂移**无人覆盖**（独立复核实测：改成 1 仍全绿）。
+ *     现按「逐面必中 + 命中值必须等于期望」+「全局措辞族扫描」双口径判定，并为每面各出一条负向对照。
  *
  * 刻意不做的两件事（见交付说明）：
  *  - 不校验表格行**顺序**（判据只要求名集合相等），故合法重排不误红；
@@ -236,6 +240,82 @@ function countClaimProblems(
   return problems;
 }
 
+/**
+ * g-436（Lane B 实证的漏覆盖面）：工具计数声明措辞族（**全局**扫描口径）。
+ * 只收「足够专指、不会误伤普通文本」的措辞；`N total` / `共 N 个` / `N 个工具` 这类宽泛措辞
+ * 放进 `TOOL_COUNT_FACES` 按面精确钉住（避免未来在无关语境写「3 total」被误红）。
+ */
+const TOOL_COUNT_CLAIM_PATTERNS: RegExp[] = [
+  /(\d+)\s*个\s*`?graph_\*`?\s*工具/g,
+  /(\d+)\s+`?graph_\*`?\s+tools?\b/gi,
+  /(\d+)-tool\b/gi,
+  /(\d+)\s+in total\b/gi,
+];
+
+/**
+ * 工具计数**面**清单：每一面必须至少命中一次（守卫不得退化为恒真／声明被删即红），
+ * 且命中到的数字全部等于引擎注册实数。g-436 新增的 4 面即独立复核实测「无守卫」的漂移点。
+ */
+const TOOL_COUNT_FACES: Array<{ id: string; re: RegExp; why: string }> = [
+  { id: "README.md", re: /(\d+)\s*个\s*`?graph_\*`?\s*工具/g, why: "root README 概览" },
+  { id: "dsh-graph-host/README.md", re: /(\d+)\s*个\s*`?graph_\*`?\s*工具/g, why: "host README zh 概览" },
+  { id: "dsh-graph-host/README.md", re: /共\s*(\d+)\s*个/g, why: "host README zh「共 N 个 graph_* 工具」" },
+  { id: "dsh-graph-host/README.md", re: /\((\d+) in total\)/g, why: "host README en 工具表标题（g-436 前无守卫）" },
+  { id: "dsh-graph-host/README.md", re: /the (\d+)-tool checklist/g, why: "host README en graph_help 行（g-436 前无守卫）" },
+  { id: "dsh-graph-host/README.md", re: /(\d+)\s*个工具/g, why: "host README zh graph_help 行（g-436 前无守卫）" },
+  { id: "dsh-graph-host/prompts/help.zh.md", re: /共\s*(\d+)\s*个/g, why: "help.zh 标题" },
+  { id: "dsh-graph-host/prompts/help.zh.md", re: /全部\s*(\d+)\s*个工具/g, why: "help.zh graph_help 行（g-436 前无守卫）" },
+  { id: "dsh-graph-host/prompts/help.en.md", re: /\((\d+) total\)/g, why: "help.en 标题" },
+  { id: "dsh-graph-host/prompts/help.en.md", re: /full\s+(\d+)-tool checklist/g, why: "help.en graph_help 行（g-436 前无守卫）" },
+];
+
+/** 行号（1-based）：用于把漂移定位到具体行的可复制报文。 */
+function lineOf(text: string, index: number): number {
+  let n = 1;
+  for (let i = 0; i < index && i < text.length; i++) if (text[i] === "\n") n++;
+  return n;
+}
+
+/**
+ * 判据 1（g-436 增量）：工具计数**全部**声明面与引擎注册实数一致。
+ * 双口径：① 逐面必中（命中 0 次 = 声明被删 ⇒ 判红，守卫不得恒真）；② 全局措辞族扫描（防将来新措辞漂移）。
+ */
+function toolCountFaceProblems(docs: Array<{ id: string; text: string }>, expected: number): string[] {
+  const problems: string[] = [];
+  const byId = new Map(docs.map((d) => [d.id, d.text]));
+  for (const face of TOOL_COUNT_FACES) {
+    const text = byId.get(face.id);
+    if (text === undefined) { problems.push(`缺文件：${face.id}`); continue; }
+    const hits = [...text.matchAll(face.re)];
+    if (hits.length === 0) {
+      problems.push(`${face.id} 未命中计数面 ${face.re}（${face.why}）——声明被删或措辞已变，守卫不得退化为恒真`);
+      continue;
+    }
+    for (const m of hits) {
+      if (Number(m[1]) !== expected) {
+        problems.push(`${face.id}:${lineOf(text, m.index ?? 0)} 工具计数声明为 ${m[1]}，应为 ${expected}（${face.why}）`);
+      }
+    }
+  }
+  for (const { id, text } of docs) {
+    for (const re of TOOL_COUNT_CLAIM_PATTERNS) {
+      for (const m of text.matchAll(new RegExp(re.source, re.flags))) {
+        if (Number(m[1]) !== expected) {
+          problems.push(`${id}:${lineOf(text, m.index ?? 0)} 工具计数声明为 ${m[1]}，应为 ${expected}（措辞族 ${re.source}）`);
+        }
+      }
+    }
+  }
+  return problems;
+}
+
+const COUNT_DOCS = () => [
+  { id: "README.md", text: REAL_TEXT.rootReadme },
+  { id: "dsh-graph-host/README.md", text: REAL_TEXT.hostReadme },
+  { id: "dsh-graph-host/prompts/help.zh.md", text: REAL_TEXT.helpZh },
+  { id: "dsh-graph-host/prompts/help.en.md", text: REAL_TEXT.helpEn },
+];
+
 /** 判据 6（M2b）：记忆上限措辞里的数字必须是真源 MEMORY_LIMITS 的取值之一。 */
 function memoryClaimProblems(docs: Array<{ id: string; text: string }>): string[] {
   const allowed = new Set<number>([MEMORY_LIMITS.on_demand, MEMORY_LIMITS.standing]);
@@ -300,6 +380,39 @@ test("g-371 判据1：README 工具计数声明（51）与引擎注册实数一�
     REAL_SCHEMA.length,
   );
   assert.deepEqual(problems, [], `工具计数声明漂移：\n${problems.join("\n")}`);
+});
+
+test("g-371 判据1（g-436 增量）：工具计数声明覆盖面补全——10 个面逐面必中且等于 51", () => {
+  const problems = toolCountFaceProblems(COUNT_DOCS(), REAL_SCHEMA.length);
+  assert.deepEqual(problems, [], `工具计数面漂移：\n${problems.join("\n")}`);
+});
+
+test("g-371 判据1（g-436 增量）负向对照：10 个计数面任一处改错即红（含独立复核「改成 1」的原样复现）", () => {
+  const docs = COUNT_DOCS();
+  assert.deepEqual(toolCountFaceProblems(docs, EXPECTED_TOOL_COUNT), [], "基线（真实文件）必须零问题");
+
+  // 每一面各出一条负向对照：把该面的数字改成 1（独立复核实测的绕过值），同一判定器必须报红。
+  for (const face of TOOL_COUNT_FACES) {
+    const broken = docs.map((d) =>
+      d.id !== face.id
+        ? d
+        : { ...d, text: d.text.replace(face.re, (m: string, n: string) => m.replace(String(n), "1")) },
+    );
+    const target = broken.find((d) => d.id === face.id)!;
+    assert.notEqual(target.text, docs.find((d) => d.id === face.id)!.text, `变异必须生效：${face.id} ${face.re}`);
+    const problems = toolCountFaceProblems(broken, EXPECTED_TOOL_COUNT);
+    expectRed(problems, new RegExp(`${face.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\d+ 工具计数声明为 1`), `${face.id} ${face.why} 计数改成 1`);
+  }
+
+  // 声明被整段删除 ⇒ 逐面必中口径必须报红（不得退化为「无声明即通过」）
+  const noClaim = docs.map((d) => (d.id === "dsh-graph-host/README.md" ? { ...d, text: d.text.replace(/\(51 in total\)/g, "(no total)") } : d));
+  expectRed(toolCountFaceProblems(noClaim, EXPECTED_TOOL_COUNT), /未命中计数面/, "host README en 计数声明被删");
+
+  // hermetic：负向对照只改内存副本，真实文件逐字未变
+  assert.equal(readText(ROOT_README), REAL_TEXT.rootReadme, "负向对照污染了真实 README.md");
+  assert.equal(readText(HOST_README), REAL_TEXT.hostReadme, "负向对照污染了真实 dsh-graph-host/README.md");
+  assert.equal(readText(HELP_ZH), REAL_TEXT.helpZh, "负向对照污染了真实 help.zh.md");
+  assert.equal(readText(HELP_EN), REAL_TEXT.helpEn, "负向对照污染了真实 help.en.md");
 });
 
 test("g-371 判据6（M2b）：README/help 的记忆上限数值声明必须等于真源 MEMORY_LIMITS", () => {

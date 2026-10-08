@@ -11,8 +11,12 @@
  *    `strict`，包括本目标自身（改 `core/schema.ts` 即 M1）。
  *
  * 边界（如实声明，不得声称引擎强制）：门禁是 `resolveAccept(fast_track=true)` 的**准入校验**；
- * 「strict 必须派发独立评审子代理」在本插件层只有**判定 + 指南约束**——reviewer 派发入口
- * 尚未接线（`formatReviewPrompt` 定义在 core、host 未接入）。`delivered` 仍只能经既有
+ * 「strict 必须派发独立评审子代理」在本插件层仍是**判定 + 指南约束**（判定见本模块的
+ * `resolveReviewPolicy`；可见化见 `core/ops.ts` 的 `goalReviewState`）——派发入口**已接线**
+ * （g-436）：工具 `graph_start_review(goal, attempt, candidate_commit)` 与 HTTP
+ * `POST /api/dsh-graph/start-review`（host `dispatchReview` 是 `formatReviewPrompt` 的唯一生产
+ * 调用点）；评审是**既有执行 attempt 的附属记录**——不新建 attempt、不迁移状态、不覆盖作者
+ * `results-att-*.md`，未派独立评审只做可见化标注、**不阻断** accept。`delivered` 仍只能经既有
  * accept / 人工路径达成，快速通道不新增任何绕过 Human Gate 的路径。
  */
 

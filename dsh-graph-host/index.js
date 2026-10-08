@@ -144,10 +144,12 @@ import {
   // core/tests/role-contract-g253.test.ts 的「接线已完成」断言）。
   formatReviewPrompt,
   appendReviewDispatch,
+  appendReviewReused,
   bindReviewChild,
   settleReview,
   failReviewDispatch,
   reviewRecordViews,
+  goalReviewState,
   assertNotReviewerIdentity,
   formatSummaryPrompt,
   formatAttemptReportSkeleton,
@@ -2053,15 +2055,29 @@ export function apply(ctx, config) {
     } catch { return []; }
   };
 
+  // g-436：评审派发的统一返回构造。
+  // 措辞如实（F5）：这里是**行为字段映射**（缺省值 + 条件展开），**不是**手写白名单裁剪 ——
+  // 工具入口直通本函数的返回值，`output.schema = {type:"object"}` 不做字段裁剪；HTTP 入口
+  // 另行手工挑字段（见 /api/dsh-graph/start-review）。
+  // F1：`stale` / `reused_current` / `current_candidate_sha` / `independent_ok` /
+  // `independent_missing` 让「工具返回值」与「看板投影 `goalDetail.review_state`」**同源一致**，
+  // 主管不必自己比对两处（A→B→A 复用场景此前两边说法相反）。注意返回值是**调用时刻的快照**：
+  // 刚派发（评审尚未结束）时 `independent_missing=true` 表示「此刻没有已完成的独立评审」——
+  // 与同一时刻的投影一致；评审结束后再查投影才翻为 false。
   const reviewOutcome = (o) => ({
     review_id: o.review_id,
     reused: o.reused === true,
+    reused_current: o.reused_current !== false,
+    stale: o.stale === true,
     goal: o.goal,
     source_attempt: o.source_attempt,
     candidate_sha: o.candidate_sha,
     baseline_sha: o.baseline_sha ?? null,
     review_workspace: o.review_workspace ?? null,
     changed_paths: Array.isArray(o.changed_paths) ? o.changed_paths : [],
+    current_candidate_sha: o.current_candidate_sha ?? null,
+    independent_ok: o.independent_ok === true,
+    independent_missing: o.independent_missing === true,
     reviewer_child_id: o.reviewer_child_id ?? null,
     child_error: o.child_error ?? null,
     ...(o.status ? { status: o.status } : {}),
@@ -2117,18 +2133,34 @@ export function apply(ctx, config) {
       (r) => r.source_attempt === String(attempt) && r.candidate_sha === candidateSha && REVIEW_REUSE_STATUSES.includes(r.status),
     );
     if (existing) {
+      // F1 语义裁决①：复用 = 一次**新的评审请求** ⇒ 追加 review.reused 把该候选重新置为当前，
+      // 投影随之回落（旧候选的兄弟记录转为 stale）。事件先行，审计留痕，绝不静默复活旧 PASS。
+      appendReviewReused(root, {
+        goalId: goal,
+        reviewId: existing.review_id,
+        candidateSha,
+        requestedBy,
+        actor,
+      });
+      const after = goalReviewState(root, goal);
+      const refreshed = after.reviews.find((r) => r.review_id === existing.review_id) ?? existing;
       return reviewOutcome({
         review_id: existing.review_id,
         reused: true,
+        reused_current: after.current_candidate_sha === candidateSha,
+        stale: refreshed.stale,
         goal,
         source_attempt: String(attempt),
         candidate_sha: candidateSha,
         baseline_sha: baselineSha,
         review_workspace: reviewWorkspace,
         changed_paths: changedPaths,
-        reviewer_child_id: existing.reviewer_child_id,
-        status: existing.status,
-        conclusion: existing.conclusion,
+        current_candidate_sha: after.current_candidate_sha,
+        independent_ok: after.independent_ok,
+        independent_missing: after.independent_missing,
+        reviewer_child_id: refreshed.reviewer_child_id,
+        status: refreshed.status,
+        conclusion: refreshed.conclusion,
       });
     }
 
@@ -2177,15 +2209,21 @@ export function apply(ctx, config) {
       modelRoute: effRoute,
       mode: effMode,
     });
+    const dispatchedState = goalReviewState(root, goal);
     const base = {
       review_id: reviewId,
       reused: false,
+      reused_current: true,
+      stale: false,
       goal,
       source_attempt: String(attempt),
       candidate_sha: candidateSha,
       baseline_sha: baselineSha,
       review_workspace: reviewWorkspace,
       changed_paths: changedPaths,
+      current_candidate_sha: dispatchedState.current_candidate_sha,
+      independent_ok: dispatchedState.independent_ok,
+      independent_missing: dispatchedState.independent_missing,
       model_route: effRoute,
       prompt,
     };
@@ -4483,12 +4521,19 @@ export function apply(ctx, config) {
             ok: true,
             review_id: res2.review_id,
             reused: res2.reused,
+            // F1：与工具入口同源的可见性字段（含 reused_current / stale / current_candidate_sha /
+            // independent_ok / independent_missing），使 HTTP 调用方也能一眼看出「复用的是否当前候选」。
+            reused_current: res2.reused_current,
+            stale: res2.stale,
             goal: res2.goal,
             source_attempt: res2.source_attempt,
             candidate_sha: res2.candidate_sha,
             baseline_sha: res2.baseline_sha,
             review_workspace: res2.review_workspace,
             changed_paths: res2.changed_paths,
+            current_candidate_sha: res2.current_candidate_sha,
+            independent_ok: res2.independent_ok,
+            independent_missing: res2.independent_missing,
             reviewer_child_id: res2.reviewer_child_id,
             status: res2.status ?? null,
             conclusion: res2.conclusion ?? null,
