@@ -1138,6 +1138,7 @@ export interface ProjectConfig {
     regions?: string[] | null;
     contract_paths?: string[] | null;
     non_product_prefixes?: string[] | null;
+    config_malformed?: boolean;
   };
 }
 
@@ -1388,6 +1389,18 @@ export function readProjectConfig(root: string): ProjectConfig {
   try {
     parsedDoc = parseYaml(rawText);
   } catch {}
+
+  // 检查 YAML 是否损坏或包含 review 关键字却不可解析
+  let configMalformed = false;
+  if (rawText.trim() !== "") {
+    if (parsedDoc === null) {
+      configMalformed = true;
+    } else if (typeof parsedDoc !== "object" || Array.isArray(parsedDoc)) {
+      configMalformed = true;
+    } else if (rawText.includes("review:") && (!parsedDoc.review || typeof parsedDoc.review !== "object")) {
+      configMalformed = true;
+    }
+  }
 
   const lines = rawText.split("\n");
   const scal = (path: string[]): string | null => {
@@ -1738,6 +1751,11 @@ function validateConfigPatch(patch: any): void {
         if (typeof item !== "string") throw new GraphError(`${fieldName}[${i}] 必须是字符串`);
         const trimmed = item.trim();
         if (trimmed === "") throw new GraphError(`${fieldName}[${i}] 不能为空字符串`);
+        if (trimmed.startsWith("invalid:")) {
+          throw new GraphError(
+            `${fieldName}[${i}] 试图写入内部标记值（${trimmed}）：配置文件里的该字段取值非法，不可作为配置路径写入；请先手工修正 project.yaml 该字段`,
+          );
+        }
         const norm = trimmed.replace(/\\/g, "/");
         if (norm.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(trimmed)) throw new GraphError(`${fieldName}[${i}] 不能是绝对路径`);
         if (!allowTrailingSlash && norm.endsWith("/")) throw new GraphError(`${fieldName}[${i}] 不能有尾随斜杠`);

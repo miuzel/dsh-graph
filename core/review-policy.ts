@@ -47,11 +47,11 @@ export const DEFAULT_REVIEW_REGIONS: readonly string[] = [
 export const REVIEW_REGIONS = ["core", "dsh-graph-host", "lib/client", "prompts", "scripts"] as const;
 export type ReviewRegion = string;
 
-/** 默认产品代码排除前缀（通用口径，不含本仓库 core/tests/ 等专属条件）。 */
+/** 默认产品代码排除前缀（通用口径，不含本仓库 core/tests 等专属条件；无尾随斜杠）。 */
 export const DEFAULT_NON_PRODUCT_PREFIXES: readonly string[] = [
-  "dist/",
-  "node_modules/",
-  ".worktrees/",
+  "dist",
+  "node_modules",
+  ".worktrees",
 ] as const;
 
 /** 判为 strict 的闭合原因集（固定顺序输出，便于断言与审计）。 */
@@ -213,6 +213,8 @@ export interface ReviewPolicyInput {
   contractPaths?: readonly string[] | null;
   /** 项目自定义的产品排除前缀列表（未配置时为 null）。 */
   nonProductPrefixes?: readonly string[] | null;
+  /** 外部配置解析是否出现结构/格式损坏（整档 YAML 损坏或 review 结构无法解析），损坏时 fail-closed。 */
+  configMalformed?: boolean;
 }
 
 export interface ReviewPolicyDecision {
@@ -284,6 +286,7 @@ export function resolveReviewPolicy(input: ReviewPolicyInput = {}): ReviewPolicy
 
   // 检查是否有非法配置输入（非法输入安全升级为 strict，policy_unrecognized）
   const hasMalformedConfig =
+    input.configMalformed === true ||
     isUnrecognizedReviewPolicy(input.policy) ||
     isMalformedConfigList(input.regions, false) ||
     isMalformedConfigList(input.contractPaths, false) ||

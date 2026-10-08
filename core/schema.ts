@@ -439,7 +439,7 @@ export const projectConfigPatchSchema: ObjectSchema = {
     },
     // g-311/g-435：顶层 review 配置。
     // policy：三值之外一律拒绝（含 "" 与大小写不符），null 表示「未配置」→ 由 core/review-policy.ts 按目标类型派生。
-    // regions / contract_paths / non_product_prefixes：项目自定义列表，支持 null（未配置）。
+    // regions / contract_paths / non_product_prefixes：项目自定义列表，支持 null（未配置）；invalid: 前缀为内部保留，不可写入。
     review: {
       type: "object",
       properties: {

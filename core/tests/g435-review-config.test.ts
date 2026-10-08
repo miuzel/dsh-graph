@@ -112,6 +112,8 @@ test("g-435 判据 1：三项列表写读往返，保留注释与未知键；非
     { review: { contract_paths: ["dup", "dup"] } }, // 重复条目
     { review: { non_product_prefixes: ["./dup", "dup"] } }, // 归一后重复
     { review: { regions: [123 as any] } }, // 非字符串类型
+    { review: { contract_paths: ["invalid:123"] } }, // 保留前缀 invalid:
+    { review: { regions: ["invalid:null"] } }, // 保留前缀 invalid:
   ];
 
   for (const bad of badPatches) {
@@ -147,6 +149,27 @@ test("g-435 判据 1：三项列表写读往返，保留注释与未知键；非
     GraphError,
   );
   assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), flowYaml, "flow 写入失败后零副作用");
+
+  // 5. 畸形 YAML 经 GET 读回后若原样 POST 提交，必被拒绝且文件不变，绝不出现字面 invalid:
+  const malformedYaml = `review:\n  policy: auto\n  regions: [src]\n  contract_paths: 123\n`;
+  writeFileSync(join(root, "project.yaml"), malformedYaml, "utf8");
+  const readCfg = readProjectConfig(root);
+  assert.throws(
+    () => writeProjectConfig(root, { review: readCfg.review }, "supervisor:test"),
+    (err: any) =>
+      err instanceof GraphError &&
+      err.message.includes("试图写入内部标记值") &&
+      err.message.includes("请先手工修正 project.yaml"),
+  );
+  assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), malformedYaml, "畸形回写被拒后文件不变");
+  assert.equal(readFileSync(join(root, "project.yaml"), "utf8").includes("invalid:"), false);
+
+  // 6. 连带阻断防护：当存在畸形 review 配置时，只更新不含 review 段的合法 patch 必须成功写入
+  writeProjectConfig(root, { executor: { provider: "custom-p", model: "custom-m" } }, "supervisor:test");
+  const textAfterUnrelated = readFileSync(join(root, "project.yaml"), "utf8");
+  assert.match(textAfterUnrelated, /provider: custom-p/);
+  assert.match(textAfterUnrelated, /contract_paths: 123/);
+  assert.equal(textAfterUnrelated.includes("invalid:"), false);
 });
 
 // ---------------------------------------------------------------------------
