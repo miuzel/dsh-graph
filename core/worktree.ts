@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync, mkdirSync } from "node:fs";
+import { existsSync, realpathSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, relative, join, sep, dirname, isAbsolute } from "node:path";
 import { appendEvent, readEvents, nowIso } from "./events.ts";
 import { discoverGitWorktree, isScratchWorkspace } from "./root.ts";
@@ -83,6 +83,87 @@ function parseAssociation(tree: GitTree): { assoc: { goal: string; attempt: stri
   return { assoc };
 }
 function candidateId(goal: string, attempt: string, path: string): string { return `${goal}:${attempt}:${path}`; }
+
+/**
+ * g-448：看板归属（board ownership）与**跨看板误复用**防护。
+ *
+ * 问题：同一 Git 仓库内的多块看板（默认 `<repo>/.dsh-graph` 与自定义 `<repo>/boards/board-n/.dsh-graph`）
+ * 由真实 Git 发现解析出**同一个**主工作树 ⇒ 二者的 `.worktrees/g-<goal>-att-<NN>` 路径与分支名逐字相同。
+ * 在 `prepareAttemptWorktree` 的复用分支里，只要路径/分支/目标编号匹配就复用，且把 `canonical_root`
+ * 记为**当前调用方**的看板根 ⇒ B 板会静默把 A 板的工作树当成自己的执行目录，并覆盖旧看板的绑定。
+ *
+ * 归属真源分两级、**读已持久化的真实元信息**，不猜旧命名：
+ *  1. **归属标记**（权威）：建树时写进该工作树自己的 Git 管理目录
+ *     （`<git-common-dir>/worktrees/<name>/dsh-graph-board-owner.json`）。它不进工作区、
+ *     不污染 `git status`、随 `git worktree remove` 一起消失，且**任何看板都能读到同一份**
+ *     ⇒ 跨看板可核验，无需新增调度体系或跨看板共享状态。
+ *  2. **事件 provenance**（仅旧树兼容）：本看板自己的 `attempt.started` 事件是否记录了这棵树的
+ *     精确路径与同号 goal/attempt（与 g-443 `detectWorkspaceCleanliness` 同源口径）。本看板事件流
+ *     读不到别的看板的记录 ⇒ 跨看板必然落空。
+ *
+ * 两者皆无 ⇒ 无归属证明的孤儿/外部工作树：**保守拒绝**，绝不自动接管、改名或删除。
+ */
+const BOARD_OWNER_MARKER = "dsh-graph-board-owner.json";
+interface BoardOwnerMarker {
+  canonical_root: string;
+  goal: string;
+  attempt: string;
+  branch: string | null;
+  created_at: string;
+}
+/** 符号链接稳健的路径归一（比较用；解析失败回落到字面绝对路径）。 */
+function canonicalPath(p: string): string {
+  const resolved = resolve(p);
+  try { return realpathSync(resolved); } catch { return resolved; }
+}
+/** 该工作树自己的 Git 管理目录（link worktree 为 `<common>/worktrees/<name>`）；取不到返回 null。 */
+function worktreeGitDir(worktreePath: string): string | null {
+  try {
+    const dir = git(worktreePath, ["rev-parse", "--absolute-git-dir"]);
+    return dir ? dir : null;
+  } catch { return null; }
+}
+/** 读取已持久化的看板归属标记；缺失/损坏/不可读一律返回 null（按「无归属证明」保守处理）。 */
+export function readBoardOwner(worktreePath: string): BoardOwnerMarker | null {
+  const dir = worktreeGitDir(worktreePath);
+  if (!dir) return null;
+  const file = join(dir, BOARD_OWNER_MARKER);
+  if (!existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<BoardOwnerMarker>;
+    if (!parsed || typeof parsed.canonical_root !== "string" || !parsed.canonical_root.trim()) return null;
+    return parsed as BoardOwnerMarker;
+  } catch { return null; }
+}
+/**
+ * 写入看板归属标记（best-effort）。写失败**不**让派发失败：同看板仍可由事件 provenance 证明归属，
+ * 跨看板仍因读不到本看板事件而被拒绝，故不引入「建树成功却因标记失败而半途硬失败」的副作用。
+ */
+function writeBoardOwner(worktreePath: string, root: string, goalId: string, attemptId: string, branch: string | null): boolean {
+  const dir = worktreeGitDir(worktreePath);
+  if (!dir) return false;
+  try {
+    const marker: BoardOwnerMarker = {
+      canonical_root: resolve(root), goal: goalId, attempt: attemptId, branch, created_at: nowIso(),
+    };
+    writeFileSync(join(dir, BOARD_OWNER_MARKER), `${JSON.stringify(marker)}\n`, "utf8");
+    return true;
+  } catch { return false; }
+}
+/** 本看板事件流是否记录了这棵树（旧树兼容的唯一依据）；事件不可读 ⇒ fail-closed 返回 false。 */
+function boardRecordedProvenance(root: string, worktreePath: string, goalId: string, attemptId: string): boolean {
+  try {
+    const target = canonicalPath(worktreePath);
+    return readEvents(root).some((event) => {
+      if (event.event !== "attempt.started" || event.goal !== goalId) return false;
+      const details: any = event.details;
+      if (details?.attempt !== attemptId) return false;
+      const recorded = details?.worktree;
+      const path = typeof recorded === "string" ? recorded : (typeof recorded?.path === "string" ? recorded.path : null);
+      return !!path && canonicalPath(path) === target;
+    });
+  } catch { return false; }
+}
 
 function resolveCodeWorkspace(root: string): string | null {
   const resolved = resolve(root);
@@ -442,6 +523,31 @@ export function prepareAttemptWorktree(
     const actualBranch = matchedTree.branch?.replace(/^refs\/heads\//, "");
     const assoc = parseAssociation(matchedTree);
     if (actualBranch === expectedBranch && assoc.assoc?.goal === goalId && assoc.assoc?.attempt === attemptId) {
+      // g-448：复用前必须核验**看板归属**——同仓库不同看板的 g-<n>/att-<NN> 路径与分支逐字相同，
+      // 只凭路径/分支/编号匹配就复用会把别的看板的工作树当成本看板执行目录，并用本看板
+      // canonical_root 覆盖旧看板已有绑定。归属只认已持久化的真实元信息，绝不猜旧命名。
+      const callerRoot = resolve(root);
+      const owner = readBoardOwner(matchedTree.path);
+      if (owner) {
+        if (canonicalPath(owner.canonical_root) !== canonicalPath(callerRoot)) {
+          throw new GraphError(
+            `工作树路径已被另一个看板占用（路径: ${matchedTree.path}, 分支: ${actualBranch}）` +
+            `：该树已绑定看板 ${owner.canonical_root}，当前看板 ${callerRoot} 不得跨看板复用同号 worktree；` +
+            `请由所属看板清理该树，或改用独立的代码仓库，拒绝派发`,
+          );
+        }
+      } else if (!boardRecordedProvenance(root, matchedTree.path, goalId, attemptId)) {
+        // 无归属标记且本看板事件流无 provenance ⇒ 无归属证明的孤儿/外部工作树：保守拒绝，
+        // 绝不自动接管、改名或删除（可能是其他看板或用户手工创建的在用目录）。
+        throw new GraphError(
+          `工作树 ${matchedTree.path}（分支: ${actualBranch ?? "无"}）缺少可核验的看板归属证明` +
+          `（既无归属标记，本看板事件流也无对应 attempt.started 记录）；` +
+          `按保守策略拒绝复用与接管（不自动改名、不删除），拒绝派发`,
+        );
+      } else {
+        // 旧树兼容：本目标上线前创建、无标记，但 provenance 证明属本看板 ⇒ 补写标记后幂等复用。
+        writeBoardOwner(matchedTree.path, callerRoot, goalId, attemptId, expectedBranch);
+      }
       let head = "";
       try {
         head = git(matchedTree.path, ["rev-parse", "HEAD"]);
@@ -456,7 +562,8 @@ export function prepareAttemptWorktree(
           path: matchedTree.path,
           relative_path: relative(mainWorktree, matchedTree.path),
           branch: `refs/heads/${expectedBranch}`,
-          canonical_root: resolve(root),
+          // 归属已核验：回传**已持久化**的归属根（与调用方一致），而不是无条件用调用方覆盖绑定。
+          canonical_root: owner ? owner.canonical_root : callerRoot,
           head,
         },
       };
@@ -516,6 +623,9 @@ export function prepareAttemptWorktree(
   } catch {
     head = baseline;
   }
+
+  // g-448：建树即写归属标记（该工作树自己的 Git 管理目录内）——后续任何看板的复用核验都以它为准。
+  writeBoardOwner(chosenPath, root, goalId, attemptId, chosenName);
 
   return {
     enabled: true,
