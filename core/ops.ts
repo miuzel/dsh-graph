@@ -139,6 +139,12 @@ import {
   normalizeMachineReport,
   resolveReviewPolicy,
   evaluateFastTrackGate,
+  REVIEW_LIST_FIELDS,
+  diagnoseConfigList,
+  isMalformedConfigList,
+  reviewEffectiveProjection,
+  type ReviewListEffective,
+  type ReviewListFieldKey,
   type ReviewPolicy,
 } from "./review-policy.ts";
 export { GraphError, GraphConflictError };
@@ -171,9 +177,16 @@ export {
   evaluateFastTrackGate,
   countProductChangedLines,
   isProductCodePath,
+  REVIEW_LIST_FIELDS,
+  diagnoseConfigList,
+  isMalformedConfigList,
+  reviewEffectiveProjection,
 } from "./review-policy.ts";
 export type {
   ReviewPolicy,
+  ReviewListFieldSpec,
+  ReviewListFieldKey,
+  ReviewListEffective,
   ReviewPolicyDecision,
   StrictReason,
   FastTrackCheck,
@@ -1185,6 +1198,11 @@ export interface ProjectConfig {
     config_malformed?: boolean;
     /** 逐字段畸形原因：字段名 → 指向 project.yaml 的用户可读说明（读侧元信息，非配置项）。 */
     invalid_fields?: Record<string, string>;
+    /**
+     * g-442：三项列表字段的**只读投影**（生效值 + 来源 + 畸形态 + 写侧约束）。
+     * 与 `config_malformed`/`invalid_fields` 同为读侧元信息：写侧 schema 明确拒绝，绝不参与往返。
+     */
+    effective?: Record<ReviewListFieldKey, ReviewListEffective>;
   };
 }
 
@@ -1485,7 +1503,14 @@ export function readProjectConfig(root: string): ProjectConfig {
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
       supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])) },
       prompt_overrides: { subagent: { state: "default", value: null } },
-      review: { policy: null, regions: null, contract_paths: null, non_product_prefixes: null },
+      review: {
+        policy: null,
+        regions: null,
+        contract_paths: null,
+        non_product_prefixes: null,
+        // 文件缺省时同样下发只读投影（全部为普适缺省来源），UI 无需自备第二份默认值
+        effective: reviewEffectiveProjection({ regions: null, contract_paths: null, non_product_prefixes: null }),
+      },
     };
   }
   const rawText = readFileSync(file, "utf8");
@@ -1532,12 +1557,15 @@ export function readProjectConfig(root: string): ProjectConfig {
           return { value: cur as ReviewListRawValue, malformed: true };
         }
         const arr = cur as unknown[];
-        // 元素原样透出（含非字符串元素），由 isMalformedConfigList 逐项判定是否畸形
-        return { value: arr as string[], malformed: arr.some((item) => typeof item !== "string") };
+        // 元素原样透出（含非字符串元素）；畸形判定**唯一真源** = 引擎同一条诊断
+        //（非数组/非字符串/空串/绝对路径/尾随斜杠/`..`/重复），读侧不再自持窄口径谓词
+        return { value: arr as string[], malformed: isMalformedConfigList(arr, false) };
       }
     }
-    // 文档不可解析或键不在顶层映射：退回逐行读取（同样不产生哨兵）
-    return readListByPath(lines, path);
+    // 文档不可解析或键不在顶层映射：退回逐行读取（同样不产生哨兵）；
+    // 逐行形态自身的信号（标量解析失败等）保留，并与引擎诊断取并集 ⇒ 只增不减
+    const fallback = readListByPath(lines, path);
+    return { value: fallback.value, malformed: fallback.malformed || isMalformedConfigList(fallback.value, false) };
   };
 
   // review.policy 标量：字段存在但取值无法判定为字符串三值 ⇒ 畸形。
@@ -1612,6 +1640,14 @@ export function readProjectConfig(root: string): ProjectConfig {
       regions: regionsRead.value,
       contract_paths: contractRead.value,
       non_product_prefixes: nonProductRead.value,
+      // g-442：三项列表字段的只读投影（生效值 + 来源：显式配置 / 缺省(普适) + allow_empty），
+      // 与读侧元信息同处 review 段；写侧 schema 的 additionalProperties:false 会拒绝任何回填。
+      effective: reviewEffectiveProjection({
+        regions: regionsRead.value,
+        contract_paths: contractRead.value,
+        non_product_prefixes: nonProductRead.value,
+        invalid_fields: invalidFields,
+      }),
       // 仅在畸形时附带元信息，保持合法配置的读回形状不变（无多余键）
       ...(reviewMalformed ? { config_malformed: true, invalid_fields: invalidFields } : {}),
     },
@@ -1885,6 +1921,8 @@ function validateConfigPatch(patch: any): void {
         throw new GraphError(`review.policy 只允许 ${REVIEW_POLICIES.join("/")}`);
       }
     }
+    // 写侧与引擎/读侧同源：**畸形判定**由 core 的 diagnoseConfigList 唯一决定，
+    // 本循环只把诊断翻译成人读原因（含具体下标与条目），不再重复一套判定规则。
     const validateStringList = (list: unknown, fieldName: string, allowEmptyArray = true, allowTrailingSlash = false) => {
       if (list === undefined || list === null) return;
       if (!Array.isArray(list)) throw new GraphError(`${fieldName} 必须是数组或 null`);
@@ -1892,31 +1930,36 @@ function validateConfigPatch(patch: any): void {
         if (!allowEmptyArray) throw new GraphError(`${fieldName} 不允许为空数组`);
         return;
       }
-      const seen = new Set<string>();
-      for (let i = 0; i < list.length; i++) {
-        const item = list[i];
-        if (typeof item !== "string") throw new GraphError(`${fieldName}[${i}] 必须是字符串`);
-        const trimmed = item.trim();
-        if (trimmed === "") throw new GraphError(`${fieldName}[${i}] 不能为空字符串`);
-        if (trimmed.startsWith("invalid:")) {
+      const problem = diagnoseConfigList(list, allowTrailingSlash);
+      if (!problem) return;
+      const i = problem.index;
+      switch (problem.kind) {
+        case "not_string":
+          throw new GraphError(`${fieldName}[${i}] 必须是字符串`);
+        case "empty_string":
+          throw new GraphError(`${fieldName}[${i}] 不能为空字符串`);
+        case "reserved_prefix":
           throw new GraphError(
             `${fieldName}[${i}] 取值非法："invalid:" 是内部保留前缀，不是合法路径；请修正 project.yaml 中该字段的取值`,
           );
-        }
-        const norm = trimmed.replace(/\\/g, "/");
-        if (norm.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(trimmed)) throw new GraphError(`${fieldName}[${i}] 不能是绝对路径`);
-        if (!allowTrailingSlash && norm.endsWith("/")) throw new GraphError(`${fieldName}[${i}] 不能有尾随斜杠`);
-        const segments = norm.split("/");
-        if (segments.includes("..")) throw new GraphError(`${fieldName}[${i}] 不能包含 .. 路径段`);
-        // 归一后重复检查（去 ./ 等）
-        const canonical = norm.replace(/^\.\//, "").replace(/\/+$/, "");
-        if (seen.has(canonical)) throw new GraphError(`${fieldName} 包含重复条目: ${item}`);
-        seen.add(canonical);
+        case "absolute_path":
+          throw new GraphError(`${fieldName}[${i}] 不能是绝对路径`);
+        case "trailing_slash":
+          throw new GraphError(`${fieldName}[${i}] 不能有尾随斜杠`);
+        case "dotdot_segment":
+          throw new GraphError(`${fieldName}[${i}] 不能包含 .. 路径段`);
+        case "duplicate":
+          throw new GraphError(`${fieldName} 包含重复条目: ${String(problem.item)}`);
+        default:
+          // 兜底（not_array 已在上方拦截）：诊断出而无法解释 ⇒ 明确报错，绝不静默放行
+          throw new GraphError(`${fieldName} 取值非法（${problem.kind}）`);
       }
     };
-    if ("regions" in rv) validateStringList(rv.regions, "review.regions", true, false);
-    if ("contract_paths" in rv) validateStringList(rv.contract_paths, "review.contract_paths", true, false);
-    if ("non_product_prefixes" in rv) validateStringList(rv.non_product_prefixes, "review.non_product_prefixes", true, false);
+    // g-442：三项列表的写侧约束由 REVIEW_LIST_FIELDS 单一真源驱动（`regions` 不允许显式空列表：
+    // 无可评估区域 ⇒ 策略层 fail-closed 升级 strict，写侧一并拒收，UI 与 API 同口径）。
+    for (const spec of REVIEW_LIST_FIELDS) {
+      if (spec.key in rv) validateStringList(rv[spec.key], `review.${spec.key}`, spec.allowEmpty, false);
+    }
   }
 }
 

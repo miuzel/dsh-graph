@@ -17,6 +17,23 @@ import { criteriaItems, replaceSection, sectionText } from "../model.ts";
 import { readEvents } from "../events.ts";
 import { apply, readRawBodyCapped, readBodyCapped, MAX_ATTACHMENT_JSON_BYTES } from "../../dist/index.js";
 
+/** g-442：加载 settings-modal.js 的客户端 payload 段（草稿归一化 + 稀疏 patch + 保存前校验）的**真实源码**，
+ *  供行为断言使用（不再用源码字符串匹配替代「保存写入了哪些叶子」这类行为断言）。 */
+function loadSettingsModalPayload(modal: string): any {
+  const start = modal.indexOf("function normalizeSettingsDraft(");
+  const end = modal.indexOf("function SettingsModal(", start);
+  assert.ok(start > 0 && end > start, "settings-modal.js 含完整 payload 段落");
+  const ctx: any = {};
+  vm.runInNewContext(
+    `(function () {\n${modal.slice(start, end)}\n` +
+      "globalThis.__p = { normalizeSettingsDraft, buildSettingsPatch, settingsPatchIsEmpty, collectReviewListErrors };\n})()",
+    ctx,
+  );
+  return ctx.__p;
+}
+/** vm 沙箱对象与测试 realm prototype 不同：断言前 JSON 往返。 */
+const plainJson = (x: any): any => JSON.parse(JSON.stringify(x));
+
 function fakeRequest(method: string, body: unknown) {
   const req: any = {
     method,
@@ -245,8 +262,24 @@ test("g-133 源契约：workspace 弹窗 executor provider/model 目录化 selec
   // 可收缩布局：父容器 minWidth:0、子列 flex:"1 1 0"+minWidth:0（两列并排各占一半）
   assert.match(modal, /display: "flex", gap: 8, minWidth: 0/);
   assert.match(modal, /flex: "1 1 0", minWidth: 0/);
-  // 保存仍写 form.executor.provider/model 到 workspace project.yaml
-  assert.match(modal, /executor: \{ provider: form\.executor\?\.provider \?\? "", model: form\.executor\?\.model \?\? "", reasoning_effort: form\.executor\?\.reasoning_effort \?\? "", mode: form\.executor\?\.mode \?\? "" \}/);
+  // 保存仍写 form.executor.provider/model 到 workspace project.yaml（g-442：稀疏 patch ⇒ 改为行为断言）
+  const payload = loadSettingsModalPayload(modal);
+  assert.deepEqual(
+    plainJson(payload.buildSettingsPatch(
+      { executor: { provider: "p-1", model: "m-1" } },
+      { executor: { provider: "", model: "" } },
+    )),
+    { executor: { provider: "p-1", model: "m-1" } },
+    "改动 provider/model ⇒ 载荷确实写入这两个叶子",
+  );
+  assert.equal(
+    payload.settingsPatchIsEmpty(payload.buildSettingsPatch(
+      { executor: { provider: "p-1", model: "m-1" } },
+      { executor: { provider: "p-1", model: "m-1" } },
+    )),
+    true,
+    "未改动的 provider/model 不进载荷",
+  );
 });
 
 test("g-231 默认 reasoning effort 控件随精确模型能力目录变化且保留旧配置", () => {
@@ -262,8 +295,17 @@ test("g-231 默认 reasoning effort 控件随精确模型能力目录变化且�
   }
   assert.match(settings, /subagentReasoningEffort/);
   assert.match(settings, /gSettingsScope\.set\("subagentReasoningEffort"/);
-  assert.match(modal, /reasoning_effort: form\.executor\?\.reasoning_effort/);
   assert.match(modal, /set\(\["executor", "reasoning_effort"\]/);
+  // g-442：稀疏 patch ⇒ 「reasoning_effort 会随保存写入」改为行为断言
+  const payload = loadSettingsModalPayload(modal);
+  assert.deepEqual(
+    plainJson(payload.buildSettingsPatch(
+      { executor: { provider: "p", model: "m", reasoning_effort: "high" } },
+      { executor: { provider: "p", model: "m", reasoning_effort: "" } },
+    )),
+    { executor: { reasoning_effort: "high" } },
+    "改动 reasoning_effort ⇒ 载荷写入该叶子且不携带未改叶子",
+  );
 });
 
 test("g-163 判据方块按有序 key 渲染并支持即时同步", () => {
@@ -3855,6 +3897,7 @@ test("g-259 行为模拟：判据 1~4 全覆盖（成功生效、校验失败零
       onClose: 0,
       confirm: [] as any[],
       fetch: [] as any[],
+      setSuggestedRegions: [] as any[],
     };
 
     let form = options.form || {
@@ -3907,6 +3950,9 @@ test("g-259 行为模拟：判据 1~4 全覆盖（成功生效、校验失败零
       setRefreshIntervalInput: (v: any) => { refreshIntervalInput = v; calls.setRefreshIntervalInput.push(v); },
       setIntervalWarn: (v: any) => { calls.setIntervalWarn.push(v); },
       setForm: (v: any) => { form = v; calls.setForm.push(v); },
+      // g-442：组件新增的「目录建议」只读状态（真实组件恒存在；此处按同形 stub，避免 save() 成功路径缺名）
+      suggestedRegions: null,
+      setSuggestedRegions: (v: any) => { calls.setSuggestedRegions.push(v); },
     };
 
     const script = `

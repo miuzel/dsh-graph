@@ -58,6 +58,164 @@ export const DEFAULT_NON_PRODUCT_PREFIXES: readonly string[] = [
   ".worktrees",
 ] as const;
 
+// ---------------------------------------------------------------------------
+// g-442：三项列表字段的描述 + **引擎同源归一化**（读侧投影 / 引擎消费 / 写侧校验共用一条真源）
+// ---------------------------------------------------------------------------
+
+export type ReviewListFieldKey = "regions" | "contract_paths" | "non_product_prefixes";
+
+/** 单个列表字段的约束与缺省值（缺省值即策略层生效值，未配置时使用）。 */
+export interface ReviewListFieldSpec {
+  key: ReviewListFieldKey;
+  /** 是否允许显式空列表。`regions: []` **不允许**（无可评估区域 ⇒ fail-closed 升级 strict，不提供该入口）；
+   *  `contract_paths: []` / `non_product_prefixes: []` 合法，且必须与「未配置(null)」区分。 */
+  allowEmpty: boolean;
+  /** 未配置时策略层采用的普适缺省值（同源常量，绝不另抄一份）。 */
+  defaultValues: readonly string[];
+}
+
+const REGIONS_SPEC: ReviewListFieldSpec = { key: "regions", allowEmpty: false, defaultValues: DEFAULT_REVIEW_REGIONS };
+const CONTRACT_PATHS_SPEC: ReviewListFieldSpec = { key: "contract_paths", allowEmpty: true, defaultValues: DEFAULT_CONTRACT_PATHS };
+const NON_PRODUCT_PREFIXES_SPEC: ReviewListFieldSpec = { key: "non_product_prefixes", allowEmpty: true, defaultValues: DEFAULT_NON_PRODUCT_PREFIXES };
+
+export const REVIEW_LIST_FIELDS: readonly ReviewListFieldSpec[] = [
+  REGIONS_SPEC,
+  CONTRACT_PATHS_SPEC,
+  NON_PRODUCT_PREFIXES_SPEC,
+] as const;
+
+/**
+ * 列表取值问题的**唯一诊断**（g-442 收口）：引擎判定、读侧归因、写侧拒绝理由共用这一条实现。
+ * 任何一处都**不得**另立第二套「畸形」谓词（副本必然漂移：早期读侧只查「非数组/非字符串」，
+ * 引擎却把空串/绝对路径/尾随斜杠/`..`/重复一并判畸形 ⇒ 读侧会把非法值渲染成合法生效态）。
+ * 返回**首个**问题的定位（下标 + 类别 + 原始条目），合法返回 null。
+ */
+export type ConfigListProblemKind =
+  | "not_array"
+  | "not_string"
+  | "empty_string"
+  | "reserved_prefix"
+  | "absolute_path"
+  | "trailing_slash"
+  | "dotdot_segment"
+  | "duplicate";
+
+export interface ConfigListProblem {
+  /** 问题条目下标；`not_array`（整体不是列表）为 -1。 */
+  index: number;
+  kind: ConfigListProblemKind;
+  /** 原始条目（供人读报错引用；`not_array` 为未定义）。 */
+  item?: unknown;
+}
+
+export function diagnoseConfigList(list: unknown, allowTrailingSlash = false): ConfigListProblem | null {
+  if (list === undefined || list === null) return null;
+  if (!Array.isArray(list)) return { index: -1, kind: "not_array", item: list };
+  const seen = new Set<string>();
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
+    if (typeof item !== "string") return { index: i, kind: "not_string", item };
+    const trimmed = item.trim();
+    if (trimmed === "") return { index: i, kind: "empty_string", item };
+    if (trimmed.startsWith("invalid:")) return { index: i, kind: "reserved_prefix", item };
+    const norm = trimmed.replace(/\\/g, "/");
+    if (norm.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(trimmed)) return { index: i, kind: "absolute_path", item };
+    if (!allowTrailingSlash && norm.endsWith("/")) return { index: i, kind: "trailing_slash", item };
+    const segments = norm.split("/");
+    if (segments.includes("..")) return { index: i, kind: "dotdot_segment", item };
+    const canonical = norm.replace(/^\.\//, "").replace(/\/+$/, "");
+    if (seen.has(canonical)) return { index: i, kind: "duplicate", item };
+    seen.add(canonical);
+  }
+  return null;
+}
+
+/** 校验传入的配置列表是否合法（**唯一谓词**：`diagnoseConfigList` 的布尔投影）。若为非法类型、含有非字符串、空串、绝对路径、..段、尾随斜杠或重复项，返回 false。 */
+export function isMalformedConfigList(list: unknown, allowTrailingSlash = false): boolean {
+  return diagnoseConfigList(list, allowTrailingSlash) !== null;
+}
+
+/** 列表字段取值来源：显式登记 / 未配置(缺省) / 字段畸形(fail-closed 空列表)。 */
+export type ReviewListSource = "explicit" | "default" | "malformed";
+
+/** 单字段的**引擎同源归一化**结果（`resolveReviewPolicy` 与读侧投影的唯一取值路径）。 */
+export interface ReviewListResolution {
+  /**
+   * 引擎实际消费的列表——与交给匹配器（`regionOfPath`/`isContractPath`/`isProductCodePath`）的值**等价**：
+   * 数组原样透出，仅剔除对匹配**毫无影响**的非字符串项（匹配器本身 `typeof === "string"` 过滤）。
+   */
+  value: readonly string[];
+  source: ReviewListSource;
+  /** 引擎判定「字段存在但不可判定」⇒ 安全升级 strict（`policy_unrecognized`）。 */
+  malformed: boolean;
+  /** 显式空列表但该字段不允许空（`regions`）⇒ 写侧拒收 + 引擎 `cross_region` 升级 strict。 */
+  illegal_empty: boolean;
+}
+
+/**
+ * **单一真源**：列表输入 → 引擎消费值 / 来源 / 畸形 / 非法空。
+ * 引擎（`resolveReviewPolicy`）、读侧投影（`reviewEffectiveProjection`）、写侧校验都经此派生；
+ * 任何「投影宣称生效、引擎却不这么用」的分歧在结构上不可能出现。
+ */
+export function resolveReviewListInput(
+  spec: ReviewListFieldSpec,
+  raw: unknown,
+  opts: { sectionMalformed?: boolean } = {},
+): ReviewListResolution {
+  const sectionMalformed = opts.sectionMalformed === true;
+  if (Array.isArray(raw)) {
+    return {
+      value: raw.filter((item): item is string => typeof item === "string"),
+      source: "explicit",
+      malformed: isMalformedConfigList(raw, false) || sectionMalformed,
+      illegal_empty: !spec.allowEmpty && raw.length === 0,
+    };
+  }
+  if (raw === null || raw === undefined) {
+    // 字段不存在 = 合法未配置 ⇒ 缺省值；整段不可解析（sectionMalformed）同样回落缺省，但如实标畸形
+    return { value: [...spec.defaultValues], source: "default", malformed: sectionMalformed, illegal_empty: false };
+  }
+  // 字段存在但取值不是列表 ⇒ fail-closed：引擎消费**空列表**（绝不冒充缺省值生效）
+  return { value: [], source: "malformed", malformed: true, illegal_empty: false };
+}
+
+/** 列表字段的只读投影：引擎消费值 + 来源 + 畸形态 + 写侧约束。 */
+export interface ReviewListEffective {
+  /** 引擎实际消费的列表（与 `resolveReviewListInput().value` 同源同值）。 */
+  value: string[];
+  source: ReviewListSource;
+  /** 字段存在但无法判定（畸形）—— UI 必须显示「非法/需修 project.yaml」且不可回填提交。 */
+  malformed: boolean;
+  /** 写侧是否允许显式空列表（`regions` 为 false）。 */
+  allow_empty: boolean;
+  /** 显式空列表但规格不允许（`regions: []`）⇒ UI 必须显示为非法，不得渲染成合法「显式空列表」。 */
+  illegal_empty: boolean;
+}
+
+/** 三项列表字段的只读投影（设置面 GET/POST 与 graph_get_settings 同源下发）。 */
+export function reviewEffectiveProjection(
+  review: unknown,
+): Record<ReviewListFieldKey, ReviewListEffective> {
+  const rv = (review && typeof review === "object" ? review : {}) as Record<string, unknown>;
+  const invalidRaw = rv.invalid_fields;
+  const invalid = (invalidRaw && typeof invalidRaw === "object" ? invalidRaw : {}) as Record<string, unknown>;
+  // 段级畸形（整档 YAML 不可解析 / review 段不是映射）⇒ 三个字段一并按畸形处理
+  const sectionMalformed = Boolean(invalid.review);
+  const out = {} as Record<ReviewListFieldKey, ReviewListEffective>;
+  for (const spec of REVIEW_LIST_FIELDS) {
+    const res = resolveReviewListInput(spec, rv[spec.key], { sectionMalformed });
+    out[spec.key] = {
+      value: [...res.value],
+      source: res.source,
+      // 读侧 invalid_fields 是本诊断的归因产物；取并集保证「元信息」与「投影」绝不互相打架
+      malformed: res.malformed || Boolean(invalid[spec.key]),
+      allow_empty: spec.allowEmpty,
+      illegal_empty: res.illegal_empty,
+    };
+  }
+  return out;
+}
+
 /** 判为 strict 的闭合原因集（固定顺序输出，便于断言与审计）。 */
 export const STRICT_REASONS = [
   "contract_change", // M1 变更路径含契约文件
@@ -262,27 +420,6 @@ export function formatStrictReasonText(
   }
 }
 
-/** 校验传入的配置列表是否合法。若为非法类型、含有非字符串、空串、绝对路径、..段、尾随斜杠或重复项，返回 false。 */
-export function isMalformedConfigList(list: unknown, allowTrailingSlash = false): boolean {
-  if (list === undefined || list === null) return false;
-  if (!Array.isArray(list)) return true;
-  const seen = new Set<string>();
-  for (const item of list) {
-    if (typeof item !== "string") return true;
-    const trimmed = item.trim();
-    if (trimmed === "" || trimmed.startsWith("invalid:")) return true;
-    const norm = trimmed.replace(/\\/g, "/");
-    if (norm.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(trimmed)) return true;
-    if (!allowTrailingSlash && norm.endsWith("/")) return true;
-    const segments = norm.split("/");
-    if (segments.includes("..")) return true;
-    const canonical = norm.replace(/^\.\//, "").replace(/\/+$/, "");
-    if (seen.has(canonical)) return true;
-    seen.add(canonical);
-  }
-  return false;
-}
-
 /**
  * 解析目标应走的评审策略（单一可单测入口）。
  */
@@ -292,13 +429,19 @@ export function resolveReviewPolicy(input: ReviewPolicyInput = {}): ReviewPolicy
   let base: ReviewPolicy;
   let source: "explicit" | "type_default";
 
+  // 三项列表的**唯一归一化**：引擎消费值 / 畸形 / 非法空全部由 resolveReviewListInput 派生
+  //（与读侧投影、写侧校验同一条真源；此处不再自持谓词或 fallback 分支）。
+  const regionsInput = resolveReviewListInput(REGIONS_SPEC, input.regions);
+  const contractPathsInput = resolveReviewListInput(CONTRACT_PATHS_SPEC, input.contractPaths);
+  const nonProductPrefixesInput = resolveReviewListInput(NON_PRODUCT_PREFIXES_SPEC, input.nonProductPrefixes);
+
   // 检查是否有非法配置输入（非法输入安全升级为 strict，policy_unrecognized）
   const hasMalformedConfig =
     input.configMalformed === true ||
     isUnrecognizedReviewPolicy(input.policy) ||
-    isMalformedConfigList(input.regions, false) ||
-    isMalformedConfigList(input.contractPaths, false) ||
-    isMalformedConfigList(input.nonProductPrefixes, false);
+    regionsInput.malformed ||
+    contractPathsInput.malformed ||
+    nonProductPrefixesInput.malformed;
 
   if (hasMalformedConfig) {
     base = "strict";
@@ -314,29 +457,13 @@ export function resolveReviewPolicy(input: ReviewPolicyInput = {}): ReviewPolicy
     if (base === "strict") reasons.push("type_or_policy_strict");
   }
 
-  // 契约路径解析：未配置（null/undefined）采用 DEFAULT_CONTRACT_PATHS（[]）
-  const effectiveContractPaths = Array.isArray(input.contractPaths)
-    ? input.contractPaths
-    : input.contractPaths === null || input.contractPaths === undefined
-      ? DEFAULT_CONTRACT_PATHS
-      : [];
-
-  // 区域列表解析：未配置（null/undefined）采用 DEFAULT_REVIEW_REGIONS
-  const effectiveRegions = Array.isArray(input.regions)
-    ? input.regions
-    : input.regions === null || input.regions === undefined
-      ? DEFAULT_REVIEW_REGIONS
-      : [];
-
-  // 产品代码排除前缀：未配置（null/undefined）采用 DEFAULT_NON_PRODUCT_PREFIXES
-  const effectiveNonProductPrefixes = Array.isArray(input.nonProductPrefixes)
-    ? input.nonProductPrefixes
-    : input.nonProductPrefixes === null || input.nonProductPrefixes === undefined
-      ? DEFAULT_NON_PRODUCT_PREFIXES
-      : [];
+  // 三项列表的生效值 = 上面那条归一化的结果（引擎与投影**同源同值**）
+  const effectiveContractPaths = contractPathsInput.value;
+  const effectiveRegions = regionsInput.value;
+  const effectiveNonProductPrefixes = nonProductPrefixesInput.value;
 
   // 规则 5：regions 为显式空列表 [] 时无可评估区域，fail-closed 安全升级 strict
-  if (Array.isArray(input.regions) && input.regions.length === 0) {
+  if (regionsInput.illegal_empty) {
     reasons.push("cross_region");
   }
 

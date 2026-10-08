@@ -127,6 +127,7 @@ import {
   readProjectConfig,
   writeProjectConfig,
   REVIEW_POLICIES,
+  REVIEW_LIST_FIELDS,
   DEFAULT_REVIEW_REGIONS,
   DEFAULT_CONTRACT_PATHS,
   DEFAULT_NON_PRODUCT_PREFIXES,
@@ -3305,6 +3306,8 @@ export function apply(ctx, config) {
         return losslessJson({
           config,
           config_path: join(r, "project.yaml"),
+          // g-442：按当前项目目录结构的**只读**建议（绝不自动写入 project.yaml）
+          review_suggested_regions: suggestedReviewRegions(r),
           schema_hints: {
             "supervisor.automation": {
               keys: ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"],
@@ -3323,6 +3326,10 @@ export function apply(ctx, config) {
               contract_paths: [...DEFAULT_CONTRACT_PATHS],
               non_product_prefixes: [...DEFAULT_NON_PRODUCT_PREFIXES],
             },
+            // g-442：三项列表的写侧约束（与 core 的 REVIEW_LIST_FIELDS 同源，不是第二份副本）
+            "review.lists": Object.fromEntries(
+              REVIEW_LIST_FIELDS.map((spec) => [spec.key, { allow_empty: spec.allowEmpty, default: [...spec.defaultValues] }]),
+            ),
           },
         });
       },
@@ -3355,6 +3362,20 @@ export function apply(ctx, config) {
       return sp.get("workspace") || sp.get("root") || body?.workspace || body?.root || null;
     } catch {
       return body?.workspace || body?.root || null;
+    }
+  };
+  // ===== g-442：评审条件的「按当前项目目录结构建议」——**只读提示，绝不自动写入 project.yaml** =====
+  // 仅列出 workspace 根下的一级目录名（排除隐藏目录与生成物/依赖目录），供设置面板只读展示；
+  // 任何写入都必须由用户在设置面板里显式登记。扫描失败（目录不可读等）返回 null，不阻断设置面。
+  const REVIEW_SUGGEST_EXCLUDE = new Set(["node_modules", "dist", "core-dist", "tmp"]);
+  const suggestedReviewRegions = (graphRoot) => {
+    try {
+      return readdirSync(dirname(graphRoot), { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith(".") && !REVIEW_SUGGEST_EXCLUDE.has(d.name))
+        .map((d) => d.name)
+        .sort();
+    } catch {
+      return null;
     }
   };
   // g-212 att-005：REST 不自建 auth/allowlist；显式 workspace/root 仅作为
@@ -4599,13 +4620,13 @@ export function apply(ctx, config) {
               return json(res, 400, { error: resp.error, details: resp.details });
             }
             writeProjectConfig(r, body, "human:gui");
-            return json(res, 200, { ok: true, config: readProjectConfig(r) });
+            return json(res, 200, { ok: true, config: readProjectConfig(r), review_suggested_regions: suggestedReviewRegions(r) });
           }
           if (req.method === "GET") {
             // att-002：下发当前 canonical workspace 的 .dsh-graph/project.yaml 绝对路径
             //（客户端只消费服务端路径，禁止自行拼接 graphRoot）
             const meta = rootForReqMeta(req);
-            return json(res, 200, { ...readProjectConfig(meta.root), configFile: join(meta.root, "project.yaml") });
+            return json(res, 200, { ...readProjectConfig(meta.root), configFile: join(meta.root, "project.yaml"), review_suggested_regions: suggestedReviewRegions(meta.root) });
           }
           return json(res, 405, { error: "method not allowed" });
         } catch (e) {

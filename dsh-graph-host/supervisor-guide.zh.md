@@ -133,6 +133,7 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
 - **未配置时按目标类型派生**：`patch`/`chore` → `auto`；`feature`/`bug`/`task`/`improvement` → `strict`；空/非法类型 → `strict`（安全侧兜底）。
 - **强制升级 strict 的闭集**（命中任一即 strict，显式 `auto`/`none` 不得推翻）：变更路径含有效契约文件（`project.yaml` 的 `review.contract_paths`，默认未配置时不猜契约 M1 不触发；改 `core/schema.ts` 在已登记项目中触发，即便契约文件为 `.md` 同样严格触发）；产品代码变更 ≥150 行；产品代码变更跨 ≥3 个顶层区域（`review.regions`，普适默认 `src/lib/app/packages/server/client/scripts/tests` 或项目自定义，纯文档/生成物不单独触发 M3）；supervisor 显式声明 `strict_required`（覆盖核心层重写等无法用路径与行数表达的情形）；产品代码落在未登记区域时安全升级为 strict（`unknown_region` 追加在末尾）；`review.regions: []` 显式空列表无可评估区域安全升级为 strict。
 - **项目评审配置校准**：主管应按项目实际架构校准 `project.yaml`（通过 `graph_get_settings` 查询、`graph_update_settings` 写入；必要时向负责人确认）：`review.regions`（按代码边界与顺序登记，最长前缀优先）、`review.contract_paths`（冻结契约路径，显式空列表 `[]` 合法且 M1 不触发）、`review.non_product_prefixes`（排除非产品前缀）。未登记区域的产品代码改动升级为 strict。
+- **设置面板可视化编辑**：同一份 `project.yaml` 评审条件也可在 workspace 设置面板的「评审条件」区块查看与编辑（显示生效值与来源：显式配置 / 缺省（普适））；未配置时展示的是普适缺省，只有点「改为显式配置」才会写入，`regions` 不允许显式空列表。
 - **机器门禁四项**（逐条可执行，`graph_resolve_accept(fast_track=true, machine_report=…)` 调用前须逐条实测）：
   1. 全量测试：项目配置的测试命令（本项目示例：`node --test core/tests/*.test.ts`）→ `exit_code=0` 且 `fail=0`（双条件，只看文本会被截断误导）；
   2. 类型检查：项目配置的类型检查命令（本项目示例：`./node_modules/.bin/tsc --noEmit -p tsconfig.json`）→ `exit_code=0`；覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内；

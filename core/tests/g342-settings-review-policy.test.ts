@@ -158,8 +158,10 @@ function reviewPolicyOptions(tree: any, zh: Dict) {
   return { select, options: options.map((o: any) => ({ value: o.props.value, label: o.children.join(""), style: o.props.style })) };
 }
 
-/** 运行 settings-modal.js 的 save()（真实源码），返回其 POST 到 /api/dsh-graph/settings 的提交体。 */
-async function runClientSave(modalSrc: string, form: any, zh: Dict): Promise<any> {
+/** 运行 settings-modal.js 的 save()（真实源码），返回其 POST 到 /api/dsh-graph/settings 的提交体。
+ *  g-442：载荷改为**稀疏（叶子级 dirty diff）patch** ⇒ 必须给出加载基线 `opts.baseline`
+ *  （省略时退化为「基线 == 表单」，即无改动 ⇒ 不 POST）；改回原值/无改动一律不 POST。 */
+async function runClientSave(modalSrc: string, form: any, zh: Dict, opts: { baseline?: any; expectNoPost?: boolean } = {}): Promise<any> {
   const helpers = readFileSync(join(clientDir, "helpers.js"), "utf8");
   const helperSrc = helpers.slice(helpers.indexOf("const REFRESH_INTERVAL_KEY"), helpers.indexOf("const LIVE_DISPLAY_KEY"));
   const normSrc = modalSrc.slice(modalSrc.indexOf(NORM_START), modalSrc.indexOf(NORM_END));
@@ -190,15 +192,23 @@ async function runClientSave(modalSrc: string, form: any, zh: Dict): Promise<any
     setRefreshIntervalInput: () => {},
     setIntervalWarn: () => {},
     setForm: () => {},
+    // g-442：组件新增的「目录建议」只读状态（真实组件恒存在；此处按同形 stub）
+    suggestedRegions: null,
+    setSuggestedRegions: () => {},
   };
+  const baselineForm = opts.baseline ?? form;
   vm.runInNewContext(
     `${helperSrc}\n${normSrc}\nlet form = ${JSON.stringify(form)};\nlet saving = false;\n` +
       `let refreshIntervalInput = "15";\n` +
-      `let baselineRef = { current: normalizeSettingsDraft(form, String(getRefreshInterval())) };\n` +
+      `let baselineRef = { current: normalizeSettingsDraft(${JSON.stringify(baselineForm)}, String(getRefreshInterval())) };\n` +
       `${reqCloseSrc}\n${saveSrc}\n;this.__save = save;`,
     sandbox,
   );
   await sandbox.__save();
+  if (opts.expectNoPost) {
+    assert.equal(calls.fetch.length, 0, "改回原值/无改动 ⇒ 不发起 POST（空 patch）");
+    return null;
+  }
   assert.equal(calls.fetch.length, 1, "save() 发起了 1 次 POST");
   assert.equal(calls.fetch[0].url, "/api/dsh-graph/settings", "POST 走既有 settings 通道");
   return JSON.parse(calls.fetch[0].opts.body);
@@ -245,7 +255,7 @@ test("g-342 判据1：客户端副本 REVIEW_POLICY_VALUES 与 core 真源一致
   }
 });
 
-test("g-342 判据1：客户端 save() 提交体——继承写 null、三值直传、未知值回落 null", async () => {
+test("g-342 判据1：客户端 save() 提交体——继承写 null、三值直传、未知值回落 null（g-442 稀疏 patch）", async () => {
   const { zh } = loadClientI18n();
   const base = {
     executor: { provider: "", model: "" },
@@ -253,26 +263,46 @@ test("g-342 判据1：客户端 save() 提交体——继承写 null、三值直
     supervisor: { automation: {} },
     prompt_overrides: { subagent: { state: "default", value: null } },
   };
-  const bodyFor = async (policy: unknown) =>
-    runClientSave(readModal(), { ...base, review: { policy } }, zh);
+  const withPolicy = (policy: unknown) => ({ ...base, review: { policy } });
 
   // 「继承」：客户端下拉空值 → 提交 null（写 "" 会被 schema enum 拒绝）
   for (const inherit of ["", null, undefined]) {
-    const body = await bodyFor(inherit);
+    const body = await runClientSave(readModal(), withPolicy(inherit), zh, { baseline: withPolicy("none") });
     assert.equal(body.review.policy, null, `继承（${JSON.stringify(inherit)}）必须提交 null`);
   }
   // 未知/非法存量值（读路径容错）不得被原样回写
-  assert.equal((await bodyFor("AUTO")).review.policy, null, "大小写不符 → 继承");
-  assert.equal((await bodyFor("fast")).review.policy, null, "未知取值 → 继承");
+  assert.equal((await runClientSave(readModal(), withPolicy("AUTO"), zh, { baseline: withPolicy("none") })).review.policy, null, "大小写不符 → 继承");
+  assert.equal((await runClientSave(readModal(), withPolicy("fast"), zh, { baseline: withPolicy("none") })).review.policy, null, "未知取值 → 继承");
   // 三值直传
   for (const p of REVIEW_POLICIES) {
-    const body = await bodyFor(p);
+    const body = await runClientSave(readModal(), withPolicy(p), zh, { baseline: withPolicy("") });
     assert.equal(body.review.policy, p, `${p} 直传`);
   }
-  // 既有字段仍全量提交（回归：新增字段不得挤掉旧字段）
-  const body = await bodyFor("auto");
-  assert.deepEqual(Object.keys(body).sort(), ["defaults", "executor", "prompt_overrides", "review", "supervisor"]);
-  assert.ok(body.supervisor && body.defaults && body.executor, "旧字段仍在提交体中");
+
+  // g-442 稀疏语义：只改 review.policy ⇒ 载荷只含该叶子；未改段/未改字段一律**不携带**
+  //（旧实现是全表提交，会把未改段一起重写 ⇒ 破坏 project.yaml 注释/未知键的字节级保真）
+  const only = await runClientSave(readModal(), withPolicy("auto"), zh, { baseline: withPolicy("none") });
+  assert.deepEqual(Object.keys(only), ["review"], "只改 policy ⇒ 载荷只含 review 段");
+  assert.deepEqual(Object.keys(only.review), ["policy"], "只改 policy ⇒ 载荷只含 policy 叶子");
+  for (const absent of ["executor", "defaults", "supervisor", "prompt_overrides"]) {
+    assert.equal(absent in only, false, `未改段 ${absent} 不得进入载荷`);
+  }
+
+  // 同一次保存里多个叶子互不挤占（回归：新增字段不得挤掉旧字段）
+  const both = await runClientSave(
+    readModal(),
+    { ...withPolicy("auto"), executor: { provider: "", model: "m-2" } },
+    zh,
+    { baseline: { ...withPolicy("none"), executor: { provider: "", model: "m-1" } } },
+  );
+  assert.deepEqual(both, { executor: { model: "m-2" }, review: { policy: "auto" } }, "改动过的两个叶子同时进入载荷");
+  assert.equal("defaults" in both || "supervisor" in both || "prompt_overrides" in both, false, "未改段仍不携带");
+
+  // 改回原值 ⇒ 空 patch ⇒ 不 POST（零副作用）
+  const back = await runClientSave(readModal(), withPolicy("strict"), zh, { baseline: withPolicy("strict"), expectNoPost: true });
+  assert.equal(back, null, "改回原值不提交");
+  // 注：表单无叶子变化、仅刷新间隔改动时仍必须 POST（g-214/g-259「间隔点保存才持久化」语义）
+  // 由 client.test.ts 的 g-259 行为模拟（initialInterval 10 / 输入 25，表单与基线同源）逐条覆盖。
 });
 
 function fakeRequest(method: string, body: unknown) {
@@ -501,7 +531,7 @@ test("g-342 判据4：node --check dist/lib/client.js 通过，且 bundle 已同
   execFileSync(process.execPath, ["--check", bundlePath], { stdio: "pipe" });
   const bundle = readFileSync(bundlePath, "utf8");
   assert.ok(bundle.startsWith("// ⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY"), "保留 GENERATED header");
-  for (const needle of ['REVIEW_POLICY_VALUES', 'dgT("settings.reviewPolicyLabel")', 'normalizeReviewPolicyDraft', 'review: { policy:']) {
+  for (const needle of ['REVIEW_POLICY_VALUES', 'dgT("settings.reviewPolicyLabel")', 'normalizeReviewPolicyDraft', 'buildSettingsPatch', 'leaf(["review", "policy"]']) {
     assert.ok(bundle.includes(needle), `bundle 缺少 ${needle}（源改完必须 bash scripts/build.sh）`);
   }
   assert.match(bundle, /"auto", "strict", "none"/, "bundle 内含客户端三值副本");
@@ -528,11 +558,16 @@ test("g-342 负向对照：副本漂移 / 选项缺失 / 提交体回流空串 /
 
   // 改坏 2：继承提交体回流空串（去掉 null 映射）→ 服务端必须拒绝，证明该映射不可省
   const badPatch = modalReal.replace(
-    'review: { policy: reviewPolicy === "" ? null : reviewPolicy },',
-    "review: { policy: reviewPolicy },",
+    'leaf(["review", "policy"], (v) => (v === "" ? null : v));',
+    'leaf(["review", "policy"]);',
   );
   assert.notEqual(badPatch, modalReal, "变更确实生效");
-  const badBody = await runClientSave(badPatch, { defaults: { pk: { lanes: 1 } }, review: { policy: "" } }, zh);
+  const badBody = await runClientSave(
+    badPatch,
+    { defaults: { pk: { lanes: 1 } }, review: { policy: "" } },
+    zh,
+    { baseline: { defaults: { pk: { lanes: 1 } }, review: { policy: "none" } } },
+  );
   assert.equal(badBody.review.policy, "", "改坏后提交体退化为空串（正是 schema 拒绝的形态）");
   const { root, routes } = setupInstance();
   writeFileSync(join(root, "project.yaml"), CONFIG_WITH_COMMENTS, "utf8");
