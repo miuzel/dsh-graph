@@ -1,6 +1,6 @@
 # dsh-graph v0.19.8 发布检查清单
 
-> **本文件状态：Windows 真机复验 = 已执行 ⇒ PASS；macOS = 本次未执行（如实登记）。** 发布准备（含真机结论回填与终版包重打）已在隔离 worktree 内完成，只登记**已实测**的结论。
+> **本文件状态：Windows 真机复验 = 已执行 ⇒ PASS；macOS 真机复验 = 已执行 ⇒ PASS（`--tarball` 层）；macOS 台账层未单独执行（Mac 上无仓库源码树、不在该机编译 ⇒ 台账对账由仓库根轮覆盖，2/0/0）。** 发布准备（含真机结论回填与终版包重打）已在隔离 worktree 内完成，只登记**已实测**的结论。
 >
 > **红线 1（Windows）：已执行 ⇒ PASS（2026-10-08，原生 Windows）。** 负责人在**原生 Windows**（`win32/x64`，Node `v24.21.0`，宿主 `0.2.0-rc.2`）上对**被测产物 = §4 的 RC**（`dsh-graph-0.19.8.tgz`，**694847 B**，sha256 `16cbe277…`，与 §4 逐字一致）执行：
 >
@@ -12,6 +12,12 @@
 > ⇒ **通过 2 / 失败 0 / 告警 0**（台账 **66 项 / 258 处命中 / 未登记 0**；**该次运行平台为 Linux，非 Windows，如实标注**）。
 > 唯一告警为**设计内**（`--tarball` 模式发布包内不含 `core/*.ts` ⇒ 台账对账改在仓库根完成），非缺陷。
 > 逐字报告（含两段回传原文）见 `docs/platform-gate.md` **§7.6**。
+>
+> **红线 1（macOS，平台效力轮）：已执行 ⇒ PASS（2026-10-08，原生 macOS）。** 负责人在**原生 macOS**（`darwin/arm64`，Node `v26.8.2`，隔离 DSH_HOME 在 `/private/var/folders/…`、跑完已清理）上对**同一个 RC**（`dsh-graph-0.19.8.tgz`，**694847 B**，sha256 `16cbe277…`，与 §4 逐字一致）执行同一条 `--tarball` 命令
+> ⇒ **通过 15 / 失败 0 / 告警 1**（T3 看板文件系统生命周期 **32/32 步**）；唯一告警与 Windows 轮同一条（`--tarball` 模式不含 `core/*.ts`），**设计内**。
+> **台账层未在 macOS 单独执行**（Mac 上无仓库源码树、也不在该机器上编译 ⇒ 未单独跑 `--static-only .`）⇒ 台账对账由**仓库根轮**覆盖（通过 2 / 失败 0 / 告警 0，台账 66 项 / 258 处命中 / 未登记 0；该轮平台为 Linux，如实标注）。
+> 执行件尾注「发布门禁要求再在原生 Windows 上跑一次」是**给非 Windows 分支的通用提示** ⇒ **macOS 轮的结论就是 macOS 结论**（T3–T5 在真实 POSIX 语义下真跑、具平台效力），Windows 轮另有独立记录（§7.6），两者互不替代。
+> 逐字报告见 `docs/platform-gate.md` **§7.7**。
 > **经过说明（已满足）**：`docs/platform-gate.md` §7.1–§7.4 已登记的历史真机 PASS 覆盖的是 **v0.19.7 及更早的产品代码**（§7.3 = v0.19.7 发布候选包），
 > 而 v0.19.8 含 16 项目标的产品改动 ⇒ 它们**不能替代**本次 RC 门禁 —— 故本清单先如实记为「待回填」，
 > 待负责人对 §4 的 RC 真机执行后才回填为上述结论；**回填现已按 §7 完成**。
@@ -30,6 +36,7 @@
 
 **本次执行树**：（发布准备）worktree `.worktrees/g-455-att-01`，分支 `g-455-att-01`，基线 **`6d62af6`**（= 合入前的 `v0.19.8-test` HEAD）；发布准备提交 **`1eaad28`**（worktree tip），已并入 `v0.19.8-test`（`5f08af4`）。
 **本次执行树**：（真机结论回填 + 终版包重打）worktree `.worktrees/g-455-att-02`，分支 `g-455-att-02`，基线 **`27b0880`**（= `v0.19.8-test` tip；`27b0880` 为 `5f08af4` 之上的 docs-only 提交，故 §4 的 RC 指纹对本基线同样成立，本轮已重建复核一致）。
+**本次执行树**：（macOS 真机结论回填 + **第二次**终版包重打）worktree `.worktrees/g-455-att-03`，分支 `g-455-att-03`，基线 **`2518afd`**（= `v0.19.8-test` tip；`2518afd` 为 att-02 的 Windows 回填提交，同样 **docs-only** ⇒ RC 与第一次终版包的产品代码对本基线成立，本轮已重建复核一致）。
 **纪律（准备阶段）**：全部构建 / 测试 / 打包**均在 worktree 内**完成；**未写主树 `dist/`**
 （主树 `dist/` 是运行中宿主的资产来源，历史上有 worker 因主树构建争用而静默死亡；主树 `dist/` mtime 保持 `2026-10-06 12:31:23`）；
 
@@ -56,8 +63,8 @@ worktree 内**未执行任何 `pnpm` 命令**（`pnpm run` 会先做依赖检查
 > 并把**三处平台状态表的 Windows / macOS 行如实化**（`f5fb6b9` 同形做法）：准备期 Windows 行先如实记为
 > 「**v0.19.8 发布候选包尚未在原生 Windows 上执行门禁，不得读出「已通过」**」，并注明历史真机记录只覆盖
 > v0.19.7 及更早的产品代码、**不能替代本次 RC**；**真机结论回来后已按 §7 回填为实测口径**
-> （Windows = v0.19.8 RC 已在原生 Windows 实测 **PASS**：15/0/1、T3 32 步、台账 2/0/0 与 66 项/258 处命中/未登记 0）；
-> macOS 行保持「本次未执行真机门禁」不变；
+> （Windows = v0.19.8 RC 已在原生 Windows 实测 **PASS**：15/0/1、T3 32 步、台账 2/0/0 与 66 项/258 处命中/未登记 0；
+> **macOS = v0.19.8 RC 已在原生 macOS 实测 PASS（`--tarball` 层）：15/0/1、T3 32 步；台账层未在 macOS 单独执行 ⇒ 由仓库根轮覆盖 2/0/0**）；
 > Linux / WSL2 保持已实测通过。仓库根 `CHANGELOG.md` 新增 `## v0.19.8 — 2026-10-08` 节（5 条要点），
 > 一并把「逐版本门禁结论」链接指向本清单。
 
@@ -83,15 +90,16 @@ worktree 内**未执行任何 `pnpm` 命令**（`pnpm run` 会先做依赖检查
 - [x] 仓库内其余 `0.19.8-alpha` 出现点已核查并说明处置（§3）
 - [x] `g352` 冻结签名 fixture 走 `G352_SIG_ACK=1` 重冻结：仅 provenance（含维护者 note）变化，正文与 `content-sha256` 逐字节不变；
       负向对照双红（手改正文 ⇒ 「内容 hash 与正文不一致」；源码变异 ⇒ 「fixture 与源码不同步」）（§5）
-- [x] README 三处渠道（根 + 包内 zh/en）版本表述与「最新亮点」更新为 v0.19.8；平台状态行**已回填为实测口径**（Windows = v0.19.8 RC 已在原生 Windows 实测 PASS：15/0/1、T3 32 步、台账 2/0/0 与 66 项/258 处命中/未登记 0；macOS = 本次未执行；Linux/WSL2 = 已实测）（§0 引文、§6）
+- [x] README 三处渠道（根 + 包内 zh/en）版本表述与「最新亮点」更新为 v0.19.8；平台状态行**已回填为实测口径**（Windows = v0.19.8 RC 已在原生 Windows 实测 PASS：15/0/1、T3 32 步、台账 2/0/0 与 66 项/258 处命中/未登记 0；**macOS = v0.19.8 RC 已在原生 macOS 实测 PASS（`--tarball` 层）：15/0/1、T3 32 步，台账层未在 macOS 单独执行 ⇒ 由仓库根轮覆盖 2/0/0**；Linux/WSL2 = 已实测）（§0 引文、§6）
 - [x] `CHANGELOG.md` 新增 `## v0.19.8 — 2026-10-08`（5 条用户语言、无过程痕迹）；`g371` 快照补 `{ version: "v0.19.8", bullets: 5 }`；顶部链接指向本清单
-- [x] 本清单建立：状态 / 集成 HEAD / RC 指纹 / 整版门禁数字 / 16 项目标映射 / 待负责人 Windows 命令 / 回填说明（§1 / §4 / §5 / §6 / §7）
+- [x] 本清单建立：状态 / 集成 HEAD / RC 指纹 / 整版门禁数字 / 16 项目标映射 / 待负责人 Windows + macOS 命令 / 回填说明（§1 / §4 / §5 / §6 / §7）
 - [x] RC 产物在隔离 worktree 内构建并记录（§4）
 - [x] **Windows 真机门禁（红线 1）—— 已执行 ⇒ PASS**：负责人在原生 Windows（`win32/x64`，Node `v24.21.0`）上对 §4 的 RC（以 sha256 对账一致）
       执行 `node scripts/win-smoke-test.mjs --tarball dsh-graph-0.19.8.tgz` ⇒ **通过 15 / 失败 0 / 告警 1**，T3 看板文件系统生命周期 **32/32 步**；
       另在仓库根执行 `node scripts/win-smoke-test.mjs --static-only .` ⇒ **通过 2 / 失败 0 / 告警 0**（台账 66 项 / 258 处命中 / 未登记 0；**该次运行平台为 Linux，如实标注**）。逐字报告见 `docs/platform-gate.md` §7.6（§6）
-- [x] 终版包在隔离 worktree 内重建重打并记录（§4 终版产物表）：与 RC 经 `diff -rq` 实拍**仅 `README.md` 不同**（其余 36 个文件逐字节相同）；可复现性复核 sha256 一致（§6）
-- [ ] **macOS 真机门禁** —— **本次未执行**（如实登记，不得读出已通过）
+- [x] **第一次**终版包在隔离 worktree 内重建重打并记录（§4 第一次终版产物表）：与 RC 经 `diff -rq` 实拍**仅 `README.md` 不同**（其余 36 个文件逐字节相同）；可复现性复核 sha256 一致（§6）
+- [x] **第二次（本轮，最终）**终版包在隔离 worktree 内重建重打并记录（§4 第二次终版产物表）：与第一次终版包 `8915d7dd…` 经 `diff -rq` 实拍**仅 `README.md` 不同**（其余 36 个文件逐字节相同）；可复现性复核 sha256 一致（§6）
+- [x] **macOS 真机门禁** —— **已执行 ⇒ PASS**（`--tarball` 层）：负责人在**原生 macOS**（`darwin/arm64`，Node `v26.8.2`）上对**同一 RC**（sha256 对账一致）执行 `node scripts/win-smoke-test.mjs --tarball dsh-graph-0.19.8.tgz` ⇒ **通过 15 / 失败 0 / 告警 1**，T3 看板文件系统生命周期 **32/32 步**；**台账层未在 macOS 单独执行**（Mac 上无仓库源码树、不在该机编译）⇒ 台账对账由**仓库根轮**覆盖（通过 2 / 失败 0 / 告警 0，台账 66 项 / 258 处命中 / 未登记 0）。逐字报告见 `docs/platform-gate.md` §7.7（§6）
 - [ ] 合并 `main` / 打 annotated tag / `npm publish` —— **准备阶段未执行**，由负责人人工 gate 决定
 
 ## 3. 版本号一致性（红线 2）逐处证据
@@ -161,7 +169,7 @@ worktree 内**未执行任何 `pnpm` 命令**（`pnpm run` 会先做依赖检查
 那次构建上打的，`diff -rq` 实拍其 `package/README.md` 仍是旧版文案（1 个文件的 3 处差异）⇒ **已作废**、不入交付；
 定稿后重建（`bash scripts/build.sh`）再打包得到上表的正式 RC（`694847 B` / `16cbe277…`，`package/README.md` 与源
 `dsh-graph-host/README.md` 经 `cmp` 逐字节相同）。
-**终版产物（真机结论回填后重打；本版发布产物）**：
+**第一次终版产物（Windows 真机结论回填后重打）**：
 
 | 项 | 值 |
 |---|---|
@@ -178,8 +186,8 @@ worktree 内**未执行任何 `pnpm` 命令**（`pnpm run` 会先做依赖检查
 与 RC 的 `diff -rq` **实拍输出**（两包各自解包后逐文件对比）：
 
 ```text
-$ diff -rq tmp/rc-extract/package tmp/final-extract/package
-Files tmp/rc-extract/package/README.md and tmp/final-extract/package/README.md differ
+$ diff -rq tmp/rc-extract/package tmp/final1-extract/package
+Files tmp/rc-extract/package/README.md and tmp/final1-extract/package/README.md differ
 ```
 
 ⇒ **差异文件数 = 1（仅 `README.md`），逐字节相同 = 36 / 37**；差异内容**全部是用户可见文案** ——
@@ -187,19 +195,53 @@ Files tmp/rc-extract/package/README.md and tmp/final-extract/package/README.md d
 （含 15 / 0 / 1、T3 32 步、台账 2 / 0 / 0 与 §7.6 指针）。产品代码（`core/*.js`）、客户端 bundle（`lib/client.js`）、
 `prompts` 资产与 `package.json` 均**逐字节相同**。
 
-**被测产物 vs 发布产物（红线 3 口径）**：真机门禁跑在**上表的 RC**（**694847 B**，sha256 `16cbe277…`）上，
-发布用的是**终版包**（**694954 B**，sha256 `8915d7dd…`）。两者差异**仅 `README.md`**（用户可见文案：
-平台状态行 / 版本表述）⇒ 产品代码与客户端 bundle 逐字节相同 ⇒ 真机结论对发布产物**继续有效**
-（与 v0.19.7 同形做法，先例见 §7.5）。若负责人认为需要，可对终版包按 §6 命令再跑一次 `--tarball` 门禁（期望同结果）。
+**第二次终版产物（macOS 真机结论回填后重打；本轮，最终；本版发布产物）**：
 
-> **负责人裁决放置位**：**待负责人裁决：差异仅 `README.md`，是否接受不对终版包重跑门禁。**
-> （v0.19.7 先例裁决为「接受 ⇒ 不重跑」；本版是否照此由负责人决定 —— 本条由负责人填写后 §4 即定稿。）
+| 项 | 值 |
+|---|---|
+| 产物 | `tmp/release-0198-final2/dsh-graph-0.19.8.tgz`（worktree `.worktrees/g-455-att-03` 内，gitignored） |
+| 打包命令 | `bash scripts/build.sh` + `(cd dist && npm pack --pack-destination <worktree>/tmp/release-0198-final2 --cache ../tmp/npm-cache --logs-dir ../tmp/npm-logs)` |
+| 字节数 | **694948** |
+| sha256 | `b98e4934f77c4efb13dd220ee8413d7e329b1f9f1958a52d572a043796660caf` |
+| sha1 | `8f9bca420051cafb461f267696b07cd5ae2dbeb3` |
+| 成员文件数 | **37** |
+| 与**第一次终版包**（`8915d7dd…`）的差异 | `diff -rq` 输出**仅 1 行**：`package/README.md` 不同 ⇒ 其余 **36 个文件逐字节相同**（实拍见下） |
+| 与 RC（`16cbe277…`）的差异 | 同样**仅 `README.md`** ⇒ 其余 **36 个文件逐字节相同** |
+| 包内版本实锤 | `package/package.json` version = `0.19.8`；`package/lib/client.js:2429` `PLUGIN_VERSION = "0.19.8"` |
+| `package/README.md` 与源 | 与源 `dsh-graph-host/README.md` 经 `cmp` **逐字节相同** |
+| `dist/` 内 `.tgz` 残留 | **0** |
 
-**可复现性实证（本次）**：在同一 worktree 内再次 `bash scripts/build.sh` + `npm pack` 到
-`tmp/release-0198-final-repro/`，得**同一 sha256** `8915d7dd…`，且与终版包 **`cmp` 逐字节一致**
-（**694954 B / 37 成员**）⇒ 发布 worktree 在发布提交上打出的包即此产物，发布前直接比 sha256 即可。
+与**第一次终版包**的 `diff -rq` **实拍输出**（两包各自解包后逐文件对比；上一终版包取自**只读**副本
+`tmp/uat-v0198/RC2-v0.19.8/dsh-graph-0.19.8.tgz`，sha256 复核 = `8915d7dd…`，未改动其本体）：
 
-## 5. 测试与静态检查（RC：worktree `.worktrees/g-455-att-01` 内；回填 + 终版包：worktree `.worktrees/g-455-att-02` 内）
+```text
+$ diff -rq tmp/final1-extract/package tmp/final2-extract/package
+Files tmp/final1-extract/package/README.md and tmp/final2-extract/package/README.md differ
+```
+
+⇒ **差异文件数 = 1（仅 `README.md`），逐字节相同 = 36 / 37**（预期与实拍一致）；差异内容**全部是用户可见文案** ——
+两份平台状态表的 macOS 行由「本次未执行真机门禁（发布准备中，待回填）」改为「已在原生 macOS 上实测 PASS」的实测口径
+（含 `darwin/arm64`、15 / 0 / 1、T3 32 步、台账层归属与 §7.7 指针）。链路上逐次对比：
+**RC → 第一次终版 → 第二次终版，每一步差异均仅 `README.md`**。
+
+**被测产物 vs 发布产物（红线 3 口径）**：真机门禁跑在 **§4 的 RC**（**694847 B**，sha256 `16cbe277…`）上，
+发布用的是**第二次终版包**（**694948 B**，sha256 `b98e4934…`）。三者差异**逐次均仅 `README.md`**（用户可见文案：
+平台状态行 / 版本表述）⇒ 产品代码（`core/*.js`）、客户端 bundle（`lib/client.js`）、`prompts` 资产与 `package.json`
+**逐字节相同** ⇒ Windows 与 macOS 两轮真机结论对发布产物**继续有效**（与 v0.19.7 同形做法，先例见 §7.5）。
+若负责人认为需要，可对第二次终版包按 §6 命令再跑一次 `--tarball` 门禁（期望同结果）。
+
+> **负责人裁决放置位（已裁决口径）**：**被测 RC → 第一次终版 → 第二次终版，逐次差异均仅 `README.md`**
+> ⇒ 沿用负责人 2026-10-08 的 **README-only 裁决**（接受该差异 ⇒ **不重跑真机门禁**）；
+> 若负责人要求重跑，则另起一轮、以第二次终版包（`b98e4934…`）为被测产物按 §6 命令执行。
+
+**可复现性实证（全部两轮）**：
+① **第一次终版**：在 att-02 worktree 内再次 `bash scripts/build.sh` + `npm pack` 到 `tmp/release-0198-final-repro/`，
+得**同一 sha256** `8915d7dd…`，且与第一次终版包 **`cmp` 逐字节一致**（**694954 B / 37 成员**）。
+② **第二次终版（本轮）**：在 att-03 worktree 内再次 `bash scripts/build.sh` + `npm pack` 到
+`tmp/release-0198-final2-repro/`，得**同一 sha256** `b98e4934…`，且与第二次终版包 **`cmp` 逐字节一致**
+（**694948 B / 37 成员**）⇒ 发布 worktree 在发布提交上打出的包即此产物，发布前直接比 sha256 即可。
+
+## 5. 测试与静态检查（RC：worktree `.worktrees/g-455-att-01` 内；Windows 回填 + 第一次终版包：`.worktrees/g-455-att-02` 内；macOS 回填 + 第二次终版包：`.worktrees/g-455-att-03` 内）
 
 | 项 | 命令 | 结果 |
 |---|---|---|
@@ -215,14 +257,22 @@ Files tmp/rc-extract/package/README.md and tmp/final-extract/package/README.md d
 | 只读新鲜度 | `node --test core/tests/dist-freshness-g312.test.ts` | **5 / 5 pass，fail 0**（exit 0） |
 | **Windows 真机门禁（`--tarball`，红线 1）** | `node scripts/win-smoke-test.mjs --tarball dsh-graph-0.19.8.tgz`（**负责人，原生 Windows**） | **PASS：通过 15 / 失败 0 / 告警 1**；`覆盖=T3生命周期=32步（…，每步盘面断言）`；`平台=win32/x64 node=v24.21.0`；被测产物指纹 = §4 RC（694847 B / sha256 `16cbe277…`，脚本自报与 §4 完全一致）。唯一告警为设计内（包内无 `core/*.ts`） |
 | **仓库根台账对账（`--static-only .`）** | `node scripts/win-smoke-test.mjs --static-only .`（**主管，仓库根；平台 = Linux/WSL2，非 Windows，如实标注**） | **PASS：通过 2 / 失败 0 / 告警 0**；`覆盖=台账=66项/258处命中（忽略0行，未登记即判红）`；`平台=linux/x64 node=v26.7.0`。脚本自身尾注要求「在原生 Windows 上再跑一次」⇒ 按 v0.19.7 同形登记为**仓库根台账对账**，红线 1 的真机结论以 Windows `--tarball` 轮为准 |
-| **终版**整套件自证闸门（回填 + 终版包后） | `node scripts/run-tests.mjs`（worktree `.worktrees/g-455-att-02`） | **tests=2272 / pass=2272 / fail=0 / skipped=0 / cancelled=0 / todo=0，exit 0**（最终一次自证行：`tests=2272 (>0) skipped=0 fail=0 cancelled=0 todo=0 pass=2272 exit=0 ms=36913 glob=core/tests/*.test.ts`；同一 tree 上两次全量均绿，另一次 ms=36048） |
-| **终版**类型检查 | `./node_modules/.bin/tsc --noEmit -p tsconfig.json` | **exit 0** |
-| **终版**产物语法 | `node --check dist/lib/client.js` | **通过**（exit 0） |
-| **终版**只读新鲜度 | `node --test core/tests/dist-freshness-g312.test.ts` | **5 / 5 pass，fail 0**（exit 0） |
-| **终版**产物重建 / 重打 | `bash scripts/build.sh` + `npm pack`（`tmp/release-0198-final/`；再复算一轮 `-repro/`） | **694954 B / sha256 `8915d7dd…` / sha1 `64bfd8d1…` / 37 成员**；两轮 `cmp` **逐字节一致**（可复现性实证，§4） |
-| **终版**与 RC 逐文件对比 | `diff -rq tmp/rc-extract/package tmp/final-extract/package` | 输出**仅 1 行**（`README.md` 不同）⇒ 其余 **36 个文件逐字节相同**（§4 实拍） |
+| **macOS 真机门禁（`--tarball`，平台效力轮）** | `node scripts/win-smoke-test.mjs --tarball dsh-graph-0.19.8.tgz`（**负责人，原生 macOS**） | **PASS：通过 15 / 失败 0 / 告警 1**；`覆盖=T3生命周期=32步（…，每步盘面断言）`；`平台=darwin/arm64 node=v26.8.2`；被测产物指纹 = §4 **同一个 RC**（694847 B / sha256 `16cbe277…`，脚本自报与 §4 完全一致）；隔离 DSH_HOME 在 `/private/var/folders/…`、跑完已清理。唯一告警同 Windows 轮、**设计内**（包内无 `core/*.ts`） |
+| **macOS 台账层（`--static-only .`）** | **未在 macOS 单独执行**（Mac 上无仓库源码树、也不在该机编译） | **如实登记：未单独执行**；台账对账由**仓库根轮**（上一行）覆盖 ⇒ 该行**不是** macOS 台账结论。逐字报告见 `docs/platform-gate.md` §7.7 |
+| **第一次终版**整套件自证闸门（Windows 回填 + 第一次终版包后） | `node scripts/run-tests.mjs`（worktree `.worktrees/g-455-att-02`） | **tests=2272 / pass=2272 / fail=0 / skipped=0 / cancelled=0 / todo=0，exit 0**（自证行：`tests=2272 (>0) skipped=0 fail=0 cancelled=0 todo=0 pass=2272 exit=0 ms=36913 glob=core/tests/*.test.ts`；同一 tree 上两次全量均绿，另一次 ms=36048） |
+| **第一次终版**类型检查 | `./node_modules/.bin/tsc --noEmit -p tsconfig.json` | **exit 0** |
+| **第一次终版**产物语法 | `node --check dist/lib/client.js` | **通过**（exit 0） |
+| **第一次终版**只读新鲜度 | `node --test core/tests/dist-freshness-g312.test.ts` | **5 / 5 pass，fail 0**（exit 0） |
+| **第一次终版**产物重建 / 重打 | `bash scripts/build.sh` + `npm pack`（`tmp/release-0198-final/`；再复算一轮 `-repro/`） | **694954 B / sha256 `8915d7dd…` / sha1 `64bfd8d1…` / 37 成员**；两轮 `cmp` **逐字节一致**（可复现性实证，§4） |
+| **第一次终版**与 RC 逐文件对比 | `diff -rq tmp/rc-extract/package tmp/final1-extract/package` | 输出**仅 1 行**（`README.md` 不同）⇒ 其余 **36 个文件逐字节相同**（§4 实拍） |
+| **第二次终版**整套件自证闸门（macOS 回填 + 第二次终版包后） | `node scripts/run-tests.mjs`（worktree `.worktrees/g-455-att-03`） | **tests=2272 / pass=2272 / fail=0 / skipped=0 / cancelled=0 / todo=0，exit 0**（自证行见 §6.2） |
+| **第二次终版**类型检查 | `./node_modules/.bin/tsc --noEmit -p tsconfig.json` | **exit 0** |
+| **第二次终版**产物语法 | `node --check dist/lib/client.js` | **通过**（exit 0） |
+| **第二次终版**只读新鲜度 | `node --test core/tests/dist-freshness-g312.test.ts` | **5 / 5 pass，fail 0**（exit 0） |
+| **第二次终版**产物重建 / 重打 | `bash scripts/build.sh` + `npm pack`（`tmp/release-0198-final2/`；再复算一轮 `-repro/`） | **694948 B / sha256 `b98e4934…` / sha1 `8f9bca42…` / 37 成员**；两轮 `cmp` **逐字节一致**（可复现性实证，§4） |
+| **第二次终版**与第一次终版逐文件对比 | `diff -rq tmp/final1-extract/package tmp/final2-extract/package` | 输出**仅 1 行**（`README.md` 不同）⇒ 其余 **36 个文件逐字节相同**（§4 实拍） |
 
-> 一条红线纪律的留痕：两轮（RC 与终版）所有构建 / 测试 / 打包**只在各自 worktree 内**执行；主树 `dist/` mtime 保持 `2026-10-06 12:31:23`、
+> 一条红线纪律的留痕：三轮（RC、第一次终版、第二次终版）所有构建 / 测试 / 打包**只在各自 worktree 内**执行；主树 `dist/` mtime 保持 `2026-10-06 12:31:23`、
 > 主树 `git status --porcelain` 零改动（发布准备禁止写主树资产来源）。
 
 ## 6. 执行与未执行项（如实登记）
@@ -239,25 +289,38 @@ T2 安装版本 `0.19.8`、插件自带 `yaml` 已落地；T4 实例就绪 `http
   红线 1 的真机结论以 Windows `--tarball` 轮为准。
 - 逐字报告（负责人回传原文 + 主管 `--static-only` 原文）见 `docs/platform-gate.md` **§7.6**。
 
-**未执行：macOS 真机门禁。** 负责人本次未在 macOS 上执行 ⇒ 本清单与两份 README 的 macOS 行保持
-「**本次未执行真机门禁**（不得读出『已通过』）」如实口径（最近一次 macOS 真机结论见 `docs/platform-gate.md` §7.4，
-其覆盖的是 **v0.19.7** 产品代码，不能替代本版）。
+**已执行 ⇒ PASS：macOS 真机门禁（平台效力轮）。** 负责人在**原生 macOS**（`darwin/arm64`，Node `v26.8.2`，
+隔离 DSH_HOME 位于 `/private/var/folders/…`、跑完已清理）上对**同一个 RC**（`dsh-graph-0.19.8.tgz`，**694847 B**，
+sha256 `16cbe277…`；脚本自报指纹与 §4 完全一致）执行 6.2 的 `--tarball` 命令
+⇒ **通过 15 / 失败 0 / 告警 1**（`覆盖=T3生命周期=32步（…，每步盘面断言）`；T1 静态门禁扫描 15 个文件无 POSIX 专有常量具名导入；
+T2 安装版本 `0.19.8`；T4 实例启动就绪；T5 路由已注册、看板载荷可读、Web UI 可达）；唯一告警与 Windows 轮同一条、**设计内**。
 
-**被测产物 vs 发布产物（红线 3 口径）**：真机门禁跑在 **§4 的 RC**（694847 B / sha256 `16cbe277…`）上；回填后在同一隔离 worktree 内
-重建重打**终版包**（694954 B / sha256 `8915d7dd…`）。两者 `diff -rq` 实拍**仅 `README.md` 不同**（其余 **36 / 37 逐字节相同**；
-包内 `package.json` / `lib/client.js` / `core/*.js` / `prompts/**` 逐字节相同）⇒ 真机结论对发布产物**继续有效**
-（v0.19.7 先例见 §7.5）。**是否接受该 README-only 差异、不再对终版包重跑门禁：待负责人裁决（§4 裁决放置位）。**
+- **台账层未在 macOS 单独执行（如实登记）**：Mac 上**无仓库源码树、也不在该机器上编译** ⇒ 未在 macOS 上单独跑
+  `node scripts/win-smoke-test.mjs --static-only .`；台账对账由**仓库根轮**覆盖（通过 2 / 失败 0 / 告警 0，
+  台账 66 项 / 258 处命中 / 未登记 0 / 忽略 0 行；**该轮平台为 `linux/x64`，不是一个 macOS 结论**）。
+- 执行件尾注「这是在非 Windows 上取得的 PASS，发布门禁要求再在原生 Windows 上跑一次」是**给非 Windows 分支的通用提示**
+  ⇒ **macOS 轮的结论就是 macOS 结论**（T3–T5 在真实 POSIX 语义下真跑、具平台效力）；Windows 轮另有独立记录（上文），
+  **两者互不替代**。
+- 逐字报告见 `docs/platform-gate.md` **§7.7**。
 
-**可复现性实证**：终版包在同一 worktree 内再 `bash scripts/build.sh` + `npm pack` 一轮，得**同一 sha256** 且 `cmp` **逐字节一致**（§4）。
+**被测产物 vs 发布产物（红线 3 口径）**：真机门禁跑在 **§4 的 RC**（694847 B / sha256 `16cbe277…`）上；Windows 回填后在同一隔离 worktree 内
+重建重打**第一次终版包**（694954 B / sha256 `8915d7dd…`），macOS 回填后再重建重打**第二次终版包**（694948 B / sha256 `b98e4934…`）。
+链路上逐次 `diff -rq` 实拍**每一步均仅 `README.md` 不同**（RC → 第一次终版 → 第二次终版；其余 **36 / 37 逐字节相同**；
+包内 `package.json` / `lib/client.js` / `core/*.js` / `prompts/**` 逐字节相同）⇒ Windows 与 macOS 两轮真机结论对发布产物**继续有效**
+（v0.19.7 先例见 §7.5）。**该 README-only 差异沿用负责人 2026-10-08 裁决：接受 ⇒ 不对终版包重跑门禁**（§4 裁决放置位；若负责人要求重跑则另起一轮）。
 
-**终版相对 RC 的改动面（仅文档）**：两处 `README`（根 + 包内 zh/en 的 Windows 平台行）、`docs/release-checklist-v0.19.8.md`、
-`docs/platform-gate.md`；**零产品代码 / prompts / 客户端源码 / 测试断言改动**（产品代码与 bundle 与 RC 逐字节相同，由 `diff -rq` 实拍为证）。
+**可复现性实证（两轮各自）**：第一次终版包在 att-02 worktree 内、第二次终版包在 att-03 worktree 内**各自**再 `bash scripts/build.sh` + `npm pack` 一轮，
+均得**同一 sha256** 且与对应终版包 `cmp` **逐字节一致**（§4）。
+
+**两轮终版相对 RC 的改动面（仅文档）**：`README.md`（根：Windows 行由 att-02 改、macOS 行由 att-03 改）、`dsh-graph-host/README.md`（包内 zh / en，
+Windows 行 + macOS 行）、`docs/release-checklist-v0.19.8.md`、`docs/platform-gate.md`（§7.6 Windows + §7.7 macOS + 汇总表两行）；
+**零产品代码 / prompts / 客户端源码 / 测试断言改动**（产品代码与 bundle 与 RC 逐字节相同，由 `diff -rq` 实拍为证）。
 
 **未执行（不可逆动作，均由负责人在人工 gate 执行）**：`npm publish`、annotated tag、GitHub release、`git push`、合并 `main`。
 
 ### 6.1 已执行的命令序列（逐条，供复核 / 重跑）
 
-**前提**：在**原生 Windows** 上（PowerShell 或 CMD 均可），Node ≥ 22；把 §4 的 RC tarball 拷到本地盘（跨机器唯一渠道 = tarball）；
+**前提（Windows）**：在**原生 Windows** 上（PowerShell 或 CMD 均可），Node ≥ 22；把 §4 的 RC tarball 拷到本地盘（跨机器唯一渠道 = tarball）；
 执行件 `scripts/win-smoke-test.mjs` 是单文件、无第三方依赖，可单独拷过去。
 
 ```powershell
@@ -273,6 +336,21 @@ node scripts/win-smoke-test.mjs --tarball dsh-graph-0.19.8.tgz
 node scripts/win-smoke-test.mjs --static-only .
 ```
 
+**前提（macOS）**：在**原生 macOS** 上，Node ≥ 22；同样把 §4 的 RC tarball 拷到本地盘（macOS 自带 bash 3.2，
+执行件是 Node 实现、绕开 bashism）。macOS 用 `shasum`（不是 `sha256sum`）：
+
+```sh
+# 6.1 先对账指纹
+shasum -a 256 dsh-graph-0.19.8.tgz
+#     期望 = 16cbe277d9a273bfe8fe82804e6efff66ba0cc058377983f513fe0a170fd43c6（§4），694847 字节
+
+# 6.2 真机门禁（T1–T5，与 Windows 同一条命令；本轮实测 ⇒ 通过 15 / 失败 0 / 告警 1）
+node scripts/win-smoke-test.mjs --tarball dsh-graph-0.19.8.tgz
+
+# 6.3 台账层：本轮未在 macOS 单独执行（Mac 上无仓库源码树、不在该机编译）
+#     ⇒ 台账对账由仓库根轮覆盖（通过 2 / 失败 0 / 告警 0，台账 66 项 / 258 处命中 / 未登记 0）
+```
+
 **判读要求（照 `docs/platform-gate.md` §3.4 / §7）**：
 
 - 6.2 的结论后须带 `覆盖=T3生命周期=32步（…，每步盘面断言）` 一行 ⇒ **回填时必须连同该行一起粘贴**；
@@ -280,7 +358,34 @@ node scripts/win-smoke-test.mjs --static-only .
 - 6.2 的 `--tarball` 模式会（按设计）产生 1 条告警「未找到产品源码 `core/*.ts`」⇒ 由 6.3 补偿，**非缺陷**。
 - 退出码：`0` = 全部通过；`1` = 有失败项；`2` = 用法错误。
 
-## 7. 回填说明（**已按本节完成回填**；以下 1–4 项保留回填前的说明原文作留痕）
+### 6.2 本轮（`att-03`：macOS 回填 + 第二次终版包）实际执行的命令与结果
+
+均在 worktree `.worktrees/g-455-att-03` 内执行（`node_modules` 为指向主树的**符号链接**、只读复用；**未执行任何 `pnpm` 命令**，
+`npm pack` 的 cache / logs 均指向 worktree 内 `tmp/`）：
+
+```text
+# 顺序：先改 README（唯一入包文档）→ build + pack → 再改 docs/（不入包，避免包内 README 落后于源）
+bash scripts/build.sh
+(cd dist && npm pack --pack-destination ../tmp/release-0198-final2 --cache ../tmp/npm-cache --logs-dir ../tmp/npm-logs)
+cmp dsh-graph-host/README.md dist/README.md                 # dist/README.md 与源逐字节相同
+node --check dist/lib/client.js                             # exit 0
+sha256sum tmp/release-0198-final2/dsh-graph-0.19.8.tgz      # b98e4934…（694948 B）
+sha1sum   tmp/release-0198-final2/dsh-graph-0.19.8.tgz      # 8f9bca42…
+tar -xzf <上一终版包> -C tmp/final1-extract; tar -xzf <本轮包> -C tmp/final2-extract
+diff -rq tmp/final1-extract/package tmp/final2-extract/package   # 仅 README.md 不同（36/37 逐字节相同）
+# 可复现性：再 `npm pack` 一轮到 tmp/release-0198-final2-repro/ ⇒ sha256 复算一致、`cmp` 逐字节一致
+
+node scripts/run-tests.mjs                                  # 自证绿（见下行）
+./node_modules/.bin/tsc --noEmit -p tsconfig.json           # exit 0
+node --check dist/lib/client.js                             # exit 0
+node --test core/tests/dist-freshness-g312.test.ts          # 5 / 5 pass, fail 0
+```
+
+**自证行（本轮）**：`tests=2272 (>0) skipped=0 fail=0 cancelled=0 todo=0 pass=2272 exit=0 ms=… glob=core/tests/*.test.ts`
+（同一 tree 上多次全量均绿，`ms` 约 35–37 s；`tsc` 与 `node --check` 均 `exit 0`，新鲜度 `5 / 5 pass`）。
+**上一终版包（只读）**：`tmp/uat-v0198/RC2-v0.19.8/dsh-graph-0.19.8.tgz`，sha256 复核 = `8915d7dd…`（**未改动其本体**；本轮只读取并解包对比）。
+
+## 7. 回填说明（**Windows 与 macOS 均已按本节完成回填**；以下 1–4 项保留回填前的说明原文作留痕）
 
 1. **本清单**：把标题下的**状态行**改为实测结论；§2 的 Windows 复选框勾选并写明
    「通过 N / 失败 N / 告警 N + T3 生命周期 32/32 步」；§5 追加一行真机门禁结果；
@@ -296,23 +401,36 @@ node scripts/win-smoke-test.mjs --static-only .
    并用 `diff -rq` 实拍与 RC 的差异（v0.19.7 先例：仅 `README.md` 不同 ⇒ 其余 36 个文件逐字节相同 ⇒ 真机结论继续有效；
    若差异超出 `README.md`，须重新跑门禁，不得沿用）。
 
-### 7.1 实际改动的文件清单（本轮回填，**docs-only**）
+### 7.1 实际改动的文件清单（两轮回填，**docs-only**）
+
+**第一轮（`att-02`，Windows 回填）**：
 
 | 文件 | 改动 | 落点 |
 |---|---|---|
-| `README.md`（根） | Windows 平台行 → 实测口径（PASS：15/0/1、T3 32 步、台账 2/0/0 与 66 项/258 处/未登记 0、§7.6 指针）；macOS / Linux 行不变 | `README.md:35` |
+| `README.md`（根） | Windows 平台行 → 实测口径（PASS：15/0/1、T3 32 步、台账 2/0/0 与 66 项/258 处/未登记 0、§7.6 指针） | `README.md:35` |
 | `dsh-graph-host/README.md`（包内 **zh**） | 同上（含 GitHub 绝对链接） | `dsh-graph-host/README.md:52` |
-| `dsh-graph-host/README.md`（包内 **en**） | 同上（英文）；macOS / Linux 行不变 | `dsh-graph-host/README.md:285` |
-| `docs/release-checklist-v0.19.8.md` | 状态行 → 「Windows 已执行 ⇒ PASS；macOS = 未执行」；红线 1 提示段 → 结论段（保留历史记录不能替代的说明作为已满足经过）；执行树补 att-02 / 基线 `27b0880`；§2 勾选 Windows + 新增终版行；§4 **终版产物表** + `diff -rq` 实拍 + 被测/发布口径 + 负责人裁决放置位 + 可复现性；§5 补真机门禁 / 台账对账 / 终版自证行；§6 执行与未执行项登记；§7 本文 | 本文件 |
-| `docs/platform-gate.md` | 接续现有编号追加 `### 7.6 v0.19.8 发布候选包真机报告（逐字粘贴，2026-10-08）` 与回填表一行 | `docs/platform-gate.md`（§7.5 之后） |
+| `dsh-graph-host/README.md`（包内 **en**） | 同上（英文） | `dsh-graph-host/README.md:285` |
+| `docs/release-checklist-v0.19.8.md` | 状态行 → 「Windows 已执行 ⇒ PASS；macOS = 未执行」；执行树补 att-02 / 基线 `27b0880`；§2 勾选 Windows + 新增终版行；§4 **第一次终版产物表** + `diff -rq` 实拍 + 被测/发布口径 + 负责人裁决放置位 + 可复现性；§5 补真机门禁 / 台账对账 / 终版自证行；§6 执行与未执行项登记；§7 本文 | 本文件 |
+| `docs/platform-gate.md` | 接续现有编号追加 `### 7.6 v0.19.8 发布候选包真机报告（逐字粘贴，2026-10-08）` 与汇总表 **Windows v0.19.8** 行 | `docs/platform-gate.md`（§7.5 之后） |
+
+**第二轮（`att-03`，macOS 回填 + 第二次终版包重打）**：
+
+| 文件 | 改动 | 落点 |
+|---|---|---|
+| `README.md`（根） | macOS 平台行 → 实测口径（PASS：`darwin/arm64`、15/0/1、T3 32 步、台账层归属、§7.7 指针）；**清掉「（发布准备中，待回填）」**；Windows / Linux 行不变 | `README.md:36` |
+| `dsh-graph-host/README.md`（包内 **zh**） | 同上（含 GitHub 绝对链接） | `dsh-graph-host/README.md:53` |
+| `dsh-graph-host/README.md`（包内 **en**） | 同上（英文）；**清掉 "(release preparation, pending)"** | `dsh-graph-host/README.md:286` |
+| `docs/release-checklist-v0.19.8.md` | 状态行 → 「Windows 与 macOS 均已执行 ⇒ PASS（macOS 仅 `--tarball` 层）；macOS 台账层未单独执行」；顶部补**红线 1（macOS）**段；执行树补 att-03 / 基线 `2518afd`；§2 macOS 勾选 + 第二次终版行；§4 **第二次终版产物表** + 与 `8915d7dd` 的 `diff -rq` 实拍 + RC→终版1→终版2 链路裁决 + 两轮可复现性；§5 补 macOS 真机 / 台账层归属行 + 第二次终版各行；§6 登记 macOS 已执行 + 台账层归属 + 两轮口径；§6.1 补 macOS 命令序列；§6.2 本轮命令与自证行；§7 本文 | 本文件 |
+| `docs/platform-gate.md` | 接续现有编号追加 `### 7.7 macOS v0.19.8 发布候选包真机报告（逐字粘贴，2026-10-08）`；§7 汇总表加 **macOS v0.19.8** 行（**§7.1–§7.6 逐字未动**，`git diff --numstat -- docs/platform-gate.md` = `39 0` 自证 0 删除） | `docs/platform-gate.md`（§7.6 之后） |
 
 **未改动**：产品代码（`core/*.ts` 与编译产物）、客户端源（`dsh-graph-host/lib/**`）、`prompts/**`、测试与断言、
-`CHANGELOG.md`、`docs/release-checklist-v0.19.7.md` 及更早清单、`docs/platform-gate.md` §1–§7.5、主树 `dist/`。
+`CHANGELOG.md`、`docs/release-checklist-v0.19.7.md` 及更早清单、`docs/platform-gate.md` §1–§7.6（第二轮仅在其后追加 §7.7 与汇总表一行）、主树 `dist/`。
 
 **发布剩余步骤（待负责人执行，主管不代做）**：
 ① ~~在原生 Windows 上执行 §6~~ → **已完成 ⇒ PASS**；
-② ~~按本节回填（清单 + `platform-gate.md` + README ×3）~~ → **已完成（见 §7.1）**；
-③ **裁决 §4 的「README-only 差异是否接受、不再对终版包重跑门禁」**（§4 裁决放置位，待负责人填写）→
-④ 合并 `main` + 打 annotated tag `v0.19.8` → ⑤ `npm publish`（负责人手动）→
-⑥ 发布后对账：`npm view dsh-graph@0.19.8 dist.shasum` 与本包 sha1 对账（registry 规范化差异口径见 `docs/release-handbook.md`）→
-⑦ 由负责人在看板决定是否把 v0.19.8 泳道标为 `released`。
+② ~~在原生 macOS 上执行 §6~~ → **已完成 ⇒ PASS（`--tarball` 层；台账层由仓库根轮覆盖，2/0/0）**；
+③ ~~按本节回填（清单 + `platform-gate.md` + README ×3）~~ → **已完成（两轮，见 §7.1）**；
+④ ~~裁决 §4 的「README-only 差异是否接受、不再对终版包重跑门禁」~~ → **已裁决：接受（逐次差异均仅 `README.md`），不重跑** →
+⑤ 合并 `main` + 打 annotated tag `v0.19.8` → ⑥ `npm publish`（负责人手动）→
+⑦ 发布后对账：`npm view dsh-graph@0.19.8 dist.shasum` 与本包 sha1（第二次终版 `8f9bca42…`）对账（registry 规范化差异口径见 `docs/release-handbook.md`）→
+⑧ 由负责人在看板决定是否把 v0.19.8 泳道标为 `released`。
