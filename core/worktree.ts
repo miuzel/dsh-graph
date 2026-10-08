@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, realpathSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve, relative, join, sep, dirname, isAbsolute } from "node:path";
 import { appendEvent, readEvents, nowIso } from "./events.ts";
 import { discoverGitWorktree, isScratchWorkspace } from "./root.ts";
 import { parseNumstatZ, parsePorcelainZ, summarizeProductLinesStrict } from "./review-policy.ts";
-import { findGoalFile, loadGoal } from "./ops.ts";
+import { atomicWrite, findGoalFile, loadGoal } from "./ops.ts";
 import { GraphError } from "./machine.ts";
 
 export interface WorktreeCandidate {
@@ -112,6 +112,20 @@ function candidateId(goal: string, attempt: string, path: string): string { retu
  * 两者皆无 ⇒ 无归属证明的孤儿/外部工作树：**保守拒绝**，绝不自动接管、改名或删除。
  */
 const BOARD_OWNER_MARKER = "dsh-graph-board-owner.json";
+/**
+ * 归属标记的 schema（写入真源 `writeBoardOwner` 已改为**同目录临时文件 + `rename` 原子替换**，
+ * 故磁盘上只可能出现「完整标记」或「根本没有标记」，不会再产出半份标记）。
+ *
+ * **损坏标记的既有语义（g-451 显式记录，只记录、不改语义）**：以下四种形态一律由 `readBoardOwner`
+ * 返回 null，即「无归属证明」——
+ *   ① 空文件（0 字节）；② 半 JSON（被截断 / 语法错）；③ 缺字段（无 `canonical_root`）；
+ *   ④ 空 root（`canonical_root` 只有空白字符）。
+ * 对**清理面**而言「无归属证明 ⇒ 沿用 g-449 既有取舍放行」（`foreignBoardOwnerRoot` 返回 null，
+ * 不 fail-closed）：清理面保守拒绝会把 legacy / 孤儿工作树永久锁死（g-449 判据 2 的兼容约束，
+ * 既有 `core/tests/worktree.test.ts` 即以「无标记树必须可清理」为真源）。
+ * 因此本目标只消除**写入侧**的截断窗口（真实崩溃/断电不再产出 ①–④ 中的任何一种），
+ * **不**把「标记损坏」升级成拒绝理由、**不**新增任何 fail-closed 门禁。
+ */
 interface BoardOwnerMarker {
   canonical_root: string;
   goal: string;
@@ -131,7 +145,15 @@ function worktreeGitDir(worktreePath: string): string | null {
     return dir ? dir : null;
   } catch { return null; }
 }
-/** 读取已持久化的看板归属标记；缺失/损坏/不可读一律返回 null（按「无归属证明」保守处理）。 */
+/**
+ * 读取已持久化的看板归属标记。
+ *
+ * 缺失 / 不可读 / 损坏一律返回 null（按「无归属证明」保守处理）——损坏的四种形态
+ * （① 空文件、② 半 JSON、③ 缺 `canonical_root`、④ `canonical_root` 为空白串，见
+ * `BoardOwnerMarker` 的 schema 注释）与「标记文件不存在」**同值**；复用面
+ * （`prepareAttemptWorktree`）与清理面（`foreignBoardOwnerRoot`）各按已定语义处理。
+ * g-451 只把**写入**改成原子替换（新写入的标记不会再退化成这四形态），读取侧语义逐字不变。
+ */
 export function readBoardOwner(worktreePath: string): BoardOwnerMarker | null {
   const dir = worktreeGitDir(worktreePath);
   if (!dir) return null;
@@ -146,6 +168,12 @@ export function readBoardOwner(worktreePath: string): BoardOwnerMarker | null {
 /**
  * 写入看板归属标记（best-effort）。写失败**不**让派发失败：同看板仍可由事件 provenance 证明归属，
  * 跨看板仍因读不到本看板事件而被拒绝，故不引入「建树成功却因标记失败而半途硬失败」的副作用。
+ *
+ * g-451：改用 `atomicWrite`（**同目录**临时文件 + fsync + `rename` 原子替换）——真实崩溃/断电
+ * 只会留下「旧的完整标记」或「没有标记」，不再留下被截断的半文件/空文件（那会静默退化为
+ * 「无归属证明」，让跨看板保护静默失效）。标记的**文件路径、字段集合与内容字节**
+ * （`JSON.stringify(marker) + "\n"`）逐字不变；写失败时由 `atomicWrite` 自行清掉临时文件，
+ * 本函数只回 false（零残留、不留半文件）。
  */
 function writeBoardOwner(worktreePath: string, root: string, goalId: string, attemptId: string, branch: string | null): boolean {
   const dir = worktreeGitDir(worktreePath);
@@ -154,7 +182,7 @@ function writeBoardOwner(worktreePath: string, root: string, goalId: string, att
     const marker: BoardOwnerMarker = {
       canonical_root: resolve(root), goal: goalId, attempt: attemptId, branch, created_at: nowIso(),
     };
-    writeFileSync(join(dir, BOARD_OWNER_MARKER), `${JSON.stringify(marker)}\n`, "utf8");
+    atomicWrite(join(dir, BOARD_OWNER_MARKER), `${JSON.stringify(marker)}\n`);
     return true;
   } catch { return false; }
 }
