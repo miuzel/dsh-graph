@@ -1335,7 +1335,7 @@
             peers: props.goalOptions, onRelationsChanged: props.onRelationsChanged,
             // rel-display-018：只读关系清单的数据源与跳转入口（均由看板侧传入，见 kanban.js GoalModal props）
             relations: props.relations, onOpenGoal: props.onOpenGoal,
-            extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose, goalType: d.meta.type }) }) : null,
+            extra: h(AcceptFeedback, { goalId: props.id, goalPath: String(d.goalFile ?? "").replace(/^.*?(?=\.dsh-graph[\\/])/, ""), title: d.title ?? props.title, description: desc, criteria: crit, status, events: d.events, attempts: d.attempts, supervisorSession: props.supervisorSession, onRefresh: load, onPmStarted: props.onPmStarted, onPmFinished: props.onPmFinished, onClose: props.onClose, goalType: d.meta.type, reviewState: d.review_state }) }) : null,
           // g-109：判据栏只在 ready 及之后阶段显示 checklist（已确认可勾选），早期阶段只显示纯文本
           // g-170：「✏️ 判据」编辑入口放在小节标题处（负责人 2026-08-25 指示），点击打开判据编辑弹窗
           crit != null ? sectionBlock("c", dgT("section.criteria"), crit,

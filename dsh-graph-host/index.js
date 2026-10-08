@@ -139,6 +139,16 @@ import {
   normalizeSubagentRole,
   toolFilterForRole,
   formatPmPrompt,
+  // g-436：独立评审接线（formatReviewPrompt 的**唯一生产调用点**在本文件的 dispatchReview；
+  // 此前它是 core 侧零调用点的孤立实现。接线由 g-436 完成，相应前置守卫见
+  // core/tests/role-contract-g253.test.ts 的「接线已完成」断言）。
+  formatReviewPrompt,
+  appendReviewDispatch,
+  bindReviewChild,
+  settleReview,
+  failReviewDispatch,
+  reviewRecordViews,
+  assertNotReviewerIdentity,
   formatSummaryPrompt,
   formatAttemptReportSkeleton,
   goalResultsDigest,
@@ -1362,6 +1372,29 @@ export function apply(ctx, config) {
   };
 
   /**
+   * g-436：独立评审子代理的归因索引（与 summarizer 同款隔离，绝不进 childAttemptIndex）。
+   *
+   * 归因红线：reviewer 子代理**不是** attempt 执行者——它
+   *  - 不写 `results-att-*.md`（那是作者结果，写入策略是 last-wins，覆盖即毁证）；
+   *  - 不改 attempt.md 的 `child_id` / `binding_token` / `binding_version`（不得冒充执行绑定）；
+   *  - 不写 `attempt.*` 事件。
+   * 它只把报告正文写进 `<goalDir>/reviews/<review_id>.md`（独立落盘），并记 `review.*` 事件。
+   * 结论只按**真实绑定的 child 身份**归因：Map miss ⇒ 归属未知 ⇒ 不写、不猜（stderr 留痕）。
+   */
+  const reviewerIndex = new Map();
+  const REVIEW_LABEL_PREFIX = "graph:review/";
+  const indexReviewerChild = (childId, entry) => {
+    if (!childId) return;
+    reviewerIndex.delete(childId);
+    reviewerIndex.set(childId, entry);
+    while (reviewerIndex.size > CHILD_ATTEMPT_INDEX_CAP) {
+      const oldest = reviewerIndex.keys().next().value;
+      if (oldest === undefined) break;
+      reviewerIndex.delete(oldest);
+    }
+  };
+
+  /**
    * g-374 F5（复核 BLOCK-1 返工）：把某目标下**全部仍待结束**的 summarizer 项标记为「已落盘正文」。
    *
    * 反例（复核实测）：summarizer 已成功落盘 LLM 正文，但在它结束前历史发生变化（例如一条
@@ -1467,6 +1500,30 @@ export function apply(ctx, config) {
   const captureAttemptResults = (info) => {
     try {
       const childId = typeof info?.id === "string" && info.id ? info.id : null;
+      // g-436 归因红线：独立评审子代理**先**在这里被截住——它不是 attempt 执行者：
+      // 不写 results-att-*.md（作者结果）、不写 attempt.* 事件、不产生看板噪声；
+      // 只按真实 child 身份把报告正文写进 <goalDir>/reviews/<review_id>.md 并结算 review.* 事件。
+      // fail-closed：空输出 / 异常终止 / 载荷缺失一律记 UNVERIFIED（**绝不记 PASS**）。
+      const revEntry = childId ? reviewerIndex.get(childId) : null;
+      if (revEntry) {
+        reviewerIndex.delete(childId);
+        const revStop = typeof info?.stopReason === "string" && info.stopReason ? info.stopReason : null;
+        const revBlocks = Array.isArray(info?.lastAssistantMessage) ? info.lastAssistantMessage : null;
+        const revText = revBlocks
+          ? revBlocks.filter((b) => b && b.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n")
+          : "";
+        try {
+          settleReview(revEntry.root, revEntry.goal, revEntry.reviewId, {
+            text: revText,
+            stopReason: revStop,
+            actor: revEntry.actor ?? "system:subagent/end",
+            childId,
+          });
+        } catch (e) {
+          process.stderr.write(`[dsh-graph] g-436 评审结算失败（已忽略，不影响子代理结算）: ${e?.message ?? e}\n`);
+        }
+        return;
+      }
       // g-374 F5 归因红线：summarizer 子代理**先**在这里被截住——它绝不是 attempt 执行者：
       // 不写 results-att-*.md、不写 attempt.* 事件、不产生任何看板噪声；只在「没落盘 LLM 正文」时降级。
       const sumEntry = childId ? summarizerIndex.get(childId) : null;
@@ -1959,6 +2016,247 @@ export function apply(ctx, config) {
     }
   };
 
+  // ---- g-436：独立评审的统一派发服务（工具 graph_start_review 与 REST start-review 共用一套）----
+  //
+  // 与 dispatchExecutionAttempt 的分工**刻意不同**——评审是「既有执行 attempt 的附属记录」：
+  //  - 不新建 attempt、不迁移目标状态、不写作者的 child_id/binding_token、不写 results-att-*.md；
+  //  - **不新建工作树**（复用作者 attempt 已持久化的 worktree 路径；无隔离树时用调用方 workspace）；
+  //  - 结论只按真实绑定的 reviewer child 身份在 subagent/end 归因结算（空输出/异常 ⇒ 不记 PASS）。
+  // 身份真源：requestedBy 由调用点从真实执行身份取得（工具侧 ex.agent.session.id），
+  // **不接受**调用者自报的 actor/role/child_id。
+
+  /** 同 attempt + 同候选、且未失败的记录直接复用（重复点击不重复派发）。 */
+  const REVIEW_REUSE_STATUSES = ["started", "bound", "completed"];
+
+  /** 评审范围最多记录多少条变更路径（记录体量上限）。 */
+  const REVIEW_MAX_CHANGED_PATHS = 500;
+
+  /** 解析 Git commit：评审必须绑定**明确 commit**，拿不到就拒绝（绝不把不可解析的字符串当候选）。 */
+  const gitResolveCommit = (cwd, ref, label) => {
+    const raw = String(ref ?? "").trim();
+    if (!raw) throw new GraphError(`${label} 必填且非空`);
+    try {
+      return execFileSync("git", ["rev-parse", "--verify", `${raw}^{commit}`], {
+        cwd, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+    } catch {
+      throw new GraphError(`无法解析${label}「${raw}」为 Git commit（需要可解析的 SHA/引用与可用的 Git 工作区）`);
+    }
+  };
+
+  /** 审查范围（基线→候选的变更路径）。取不到时返回空数组——绝不因此让派发失败或伪造范围。 */
+  const gitChangedPaths = (cwd, baseline, candidate) => {
+    try {
+      return execFileSync("git", ["diff", "--name-only", baseline, candidate], {
+        cwd, encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"],
+      }).split("\n").map((s) => s.trim()).filter(Boolean).slice(0, REVIEW_MAX_CHANGED_PATHS);
+    } catch { return []; }
+  };
+
+  const reviewOutcome = (o) => ({
+    review_id: o.review_id,
+    reused: o.reused === true,
+    goal: o.goal,
+    source_attempt: o.source_attempt,
+    candidate_sha: o.candidate_sha,
+    baseline_sha: o.baseline_sha ?? null,
+    review_workspace: o.review_workspace ?? null,
+    changed_paths: Array.isArray(o.changed_paths) ? o.changed_paths : [],
+    reviewer_child_id: o.reviewer_child_id ?? null,
+    child_error: o.child_error ?? null,
+    ...(o.status ? { status: o.status } : {}),
+    ...(o.conclusion ? { conclusion: o.conclusion } : {}),
+    ...(o.model_route ? { model_route: o.model_route } : {}),
+    prompt: o.prompt ?? null,
+  });
+
+  const dispatchReview = async ({
+    root,
+    workspace,
+    goal,
+    attempt,
+    candidate_commit,
+    baseline_commit,
+    guidance,
+    requestedBy,
+    actor,
+    parentAgent,
+    parentSessionId,
+    signal,
+    provider,
+    model,
+    reasoning_effort,
+    mode,
+  }) => {
+    if (!goal) throw new GraphError("missing goal");
+    if (!attempt) throw new GraphError("missing attempt");
+    if (!requestedBy) throw new GraphError("missing requestedBy（真实调用身份）");
+    const goalFile = findGoalFile(root, goal);
+    if (basename(goalFile) !== "goal.md") {
+      throw new GraphError(`暂存目标（backlog）没有目标目录，不能登记独立评审：${goal}`);
+    }
+    const attFile = join(dirname(goalFile), "attempts", String(attempt), "attempt.md");
+    if (!existsSync(attFile)) throw new GraphError(`attempt 不存在：${attempt}（目标 ${goal}）`);
+    const attMeta = loadGoal(attFile).meta ?? {};
+    if (String(attMeta.executor ?? "") === "agent:collect") {
+      throw new GraphError(`收集 attempt（agent:collect）不是执行 attempt，不能作为独立评审对象：${attempt}`);
+    }
+    const authorChildId = attMeta.child_id ? String(attMeta.child_id) : null;
+    // 评审工作区：复用作者既有工作树（绝不新建评审树）；无隔离树时用调用方 workspace。
+    const wt = attMeta.worktree;
+    const reviewWorkspace = (wt && typeof wt === "object" && typeof wt.path === "string" && wt.path)
+      ? wt.path
+      : (workspace ?? dirname(root));
+    const candidateSha = gitResolveCommit(reviewWorkspace, candidate_commit, "候选 commit");
+    const baselineRaw = baseline_commit ?? attMeta.baseline_commit ?? null;
+    const baselineSha = baselineRaw ? gitResolveCommit(reviewWorkspace, baselineRaw, "基线 commit") : null;
+    const changedPaths = baselineSha ? gitChangedPaths(reviewWorkspace, baselineSha, candidateSha) : [];
+
+    // 幂等：同一 attempt + 同一候选的未失败记录直接复用（结果与已派发时逐字一致）。
+    const existing = reviewRecordViews(root, goal).find(
+      (r) => r.source_attempt === String(attempt) && r.candidate_sha === candidateSha && REVIEW_REUSE_STATUSES.includes(r.status),
+    );
+    if (existing) {
+      return reviewOutcome({
+        review_id: existing.review_id,
+        reused: true,
+        goal,
+        source_attempt: String(attempt),
+        candidate_sha: candidateSha,
+        baseline_sha: baselineSha,
+        review_workspace: reviewWorkspace,
+        changed_paths: changedPaths,
+        reviewer_child_id: existing.reviewer_child_id,
+        status: existing.status,
+        conclusion: existing.conclusion,
+      });
+    }
+
+    // 材料包：只含目标定义+负责人约束、判据原文、候选/基线 SHA、审查范围与报告骨架；
+    // 不注入作者对话/结果/自报 PASS/评论/返工叙事（见 formatReviewPrompt 的「评审材料边界」）。
+    const detail = goalDetail(root, goal);
+    const prompt = formatReviewPrompt({
+      goalId: goal,
+      attemptId: String(attempt),
+      goalRel: relative(workspace ?? dirname(root), goalFile),
+      goalTitle: detail.meta?.title ?? null,
+      goalDescription: detail.description ?? null,
+      criteria: Array.isArray(detail.criteria_items) ? detail.criteria_items : [],
+      guidance: guidance ?? null,
+      candidateSha,
+      baselineSha,
+      reviewWorkspace,
+      changedPaths,
+      language: resolvePromptLanguage(readGraphSettings().promptLanguage, ctx),
+    });
+    const eff = resolveModelRoute(
+      { provider, model, reasoning_effort },
+      readExecutorModel(root),
+      readGraphSettings(),
+    );
+    const effProvider = eff.provider;
+    const effModel = eff.model;
+    const effReasoningEffort = eff.reasoning_effort;
+    const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
+    const effMode = normalizeSubagentMode(mode) ?? DEFAULT_SUBAGENT_MODE;
+
+    // 事件先行：先落 review.dispatched + <goalDir>/reviews/<review_id>.md，再启动子代理。
+    // 之后任何失败路径都收敛为 review.failed（绝不留下「进行中」假象，也绝不记 PASS）。
+    const { review_id: reviewId } = appendReviewDispatch(root, {
+      goalId: goal,
+      sourceAttempt: String(attempt),
+      candidateSha,
+      baselineSha,
+      reviewWorkspace,
+      changedPaths,
+      requestedBy,
+      authorChildId,
+      actor,
+      provider: effProvider,
+      model: effModel,
+      modelRoute: effRoute,
+      mode: effMode,
+    });
+    const base = {
+      review_id: reviewId,
+      reused: false,
+      goal,
+      source_attempt: String(attempt),
+      candidate_sha: candidateSha,
+      baseline_sha: baselineSha,
+      review_workspace: reviewWorkspace,
+      changed_paths: changedPaths,
+      model_route: effRoute,
+      prompt,
+    };
+
+    const subagents = ctx.get?.("subagents");
+    if (!subagents || !parentAgent) {
+      const err = "subagents 服务不可用或无调用 agent";
+      failReviewDispatch(root, goal, reviewId, err, actor);
+      return reviewOutcome({ ...base, reviewer_child_id: null, child_error: err });
+    }
+    try {
+      const available = (subagents.list?.() ?? []).filter((n) => {
+        try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
+      });
+      const providerName = available[0];
+      if (!providerName) {
+        throw new Error(`无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`);
+      }
+      const toolFilter = toolFilterForRole("reviewer", effMode);
+      const request = {
+        parent: parentAgent,
+        prompt: text(prompt),
+        ...(toolFilter ? { toolFilter } : {}),
+      };
+      const agentOptions = {};
+      if (effProvider) agentOptions.provider = effProvider;
+      if (effModel) agentOptions.model = effModel;
+      if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
+      if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
+      const started = await subagents.startContinuable({
+        provider: providerName,
+        label: `${REVIEW_LABEL_PREFIX}${goal}/${attempt}/${reviewId}`,
+        request,
+        signal,
+      });
+      try {
+        bindReviewChild(root, goal, reviewId, started.childId, actor, {
+          parentSessionId: parentSessionId ?? started.parentSessionId ?? null,
+          provider: effProvider,
+          model: effModel,
+          modelRoute: effRoute,
+          mode: effMode,
+        });
+      } catch (bindErr) {
+        // 绑定失败必须收敛：中断刚启动的 child，并把记录如实结算为 failed。
+        let note = "";
+        try {
+          const psid = parentAgent?.session?.id ?? parentSessionId ?? started.parentSessionId ?? null;
+          if (psid && typeof subagents.interruptByParent === "function") {
+            subagents.interruptByParent(started.childId, psid, "continuable");
+            note = "，已请求中断该 child";
+          } else {
+            note = "，无法中断该 child（缺少 parent session 或服务能力）";
+          }
+        } catch (ie) {
+          note = `，中断该 child 失败：${ie?.message ?? ie}`;
+        }
+        const msg = `reviewer 绑定失败（child ${started.childId}${note}）：${bindErr?.message ?? bindErr}`;
+        failReviewDispatch(root, goal, reviewId, msg, actor);
+        return reviewOutcome({ ...base, reviewer_child_id: started.childId, child_error: msg });
+      }
+      // 归因登记：只在这里登记——结论结算以该真实 child 身份为唯一凭据。
+      indexReviewerChild(started.childId, { root, goal, reviewId, actor });
+      return reviewOutcome({ ...base, reviewer_child_id: started.childId, child_error: null });
+    } catch (e) {
+      const err = subagentSpawnErrorText(e);
+      failReviewDispatch(root, goal, reviewId, `reviewer 派发失败：${err}`, actor);
+      return reviewOutcome({ ...base, reviewer_child_id: null, child_error: err });
+    }
+  };
+
   /** @type {Array<{def: object, run: (args: any, exec: any) => any}>} */
   const tools = [
     {
@@ -1983,7 +2281,15 @@ export function apply(ctx, config) {
         description: "目标状态迁移。状态机与不变式由核心层强制；进 blocked 必须给 reason。",
         parameters: params({ goal: str, to: str, reason: str }, ["goal", "to"]),
       },
-      run: (a, ex) => { transition(rootFor(ex), a.goal, a.to, { reason: a.reason, actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        // g-436：复核子代理身份不得把目标直接推进 delivered（Human Gate 归于主管/负责人）。
+        if (String(a.to) === "delivered") {
+          assertNotReviewerIdentity(r, [ex?.agent?.id, ex?.agent?.session?.id], "graph_transition(to=delivered)");
+        }
+        transition(r, a.goal, a.to, { reason: a.reason, actor: actorOf(ex) });
+        return { ok: true };
+      },
     },
     {
       def: {
@@ -2759,6 +3065,47 @@ export function apply(ctx, config) {
     },
     {
       def: {
+        name: "graph_start_review",
+        description: "为**既有执行 attempt** 派发独立评审子代理（reviewer，只读审查）。评审是附属记录：不新建 attempt、不迁移目标状态、不覆盖作者 child_id 与 results-att-*.md；复用作者既有工作树（不新建评审树）；结论按真实 reviewer child 身份在结束时独立落盘（<goalDir>/reviews/<review_id>.md）。不注入作者对话/结果/自报 PASS/评论/返工叙事。同一 attempt + 同一候选重复调用为幂等（不重复派发）。reviewer 身份不得自行 accept/force/fast_track/delivered。",
+        parameters: params({
+          goal: str,
+          attempt: str,
+          candidate_commit: str,
+          baseline_commit: str,
+          guidance: str,
+          provider: str,
+          model: str,
+          reasoning_effort: str,
+          mode: str,
+        }, ["goal", "attempt", "candidate_commit"]),
+      },
+      run: async (a, ex) => {
+        const r = rootFor(ex);
+        // 身份真源：只取真实执行身份（会话 id），不接受调用者自报的 actor/role/child_id。
+        const requestedBy = ex?.agent?.session?.id ? `agent:${ex.agent.session.id}` : actorOf(ex);
+        const res = await dispatchReview({
+          root: r,
+          workspace: sessionWorkspace(ex) ?? dirname(r),
+          goal: a.goal,
+          attempt: a.attempt,
+          candidate_commit: a.candidate_commit,
+          baseline_commit: a.baseline_commit,
+          guidance: a.guidance,
+          requestedBy,
+          actor: actorOf(ex),
+          parentAgent: ex?.agent ?? null,
+          parentSessionId: ex?.agent?.session?.id ?? null,
+          signal: ex?.signal,
+          provider: a.provider,
+          model: a.model,
+          reasoning_effort: a.reasoning_effort,
+          mode: a.mode,
+        });
+        return res;
+      },
+    },
+    {
+      def: {
         name: "graph_resolve_accept",
         description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict）且 machine_report 四项门禁全绿（tests exit_code=0 且 fail=0、typecheck exit_code=0、产品代码增删 <150 行且无未跟踪新文件、全部判据以 ✅已验 结尾，由引擎自算）；任一不满足即拒绝且零副作用，通过则记 review.fast_track 事件。",
         parameters: params({
@@ -2775,7 +3122,15 @@ export function apply(ctx, config) {
         }, ["goal", "verdict"]),
       },
       run: (a, ex) => {
-        const r = resolveAccept(rootFor(ex), a.goal, {
+        const r = rootFor(ex);
+        // g-436：复核子代理身份（正常工具通道）不得裁决接受——含 force 与 fast_track 两条旁路。
+        // 匹配只按**持久化的精确 child 身份**（review.bound 事件），不凭报文自称是 reviewer。
+        assertNotReviewerIdentity(
+          r,
+          [ex?.agent?.id, ex?.agent?.session?.id],
+          a.force ? "graph_resolve_accept(force)" : a.fast_track ? "graph_resolve_accept(fast_track)" : "graph_resolve_accept",
+        );
+        const result = resolveAccept(r, a.goal, {
           actor: actorOf(ex),
           verdict: a.verdict,
           objection: a.objection,
@@ -2784,7 +3139,7 @@ export function apply(ctx, config) {
           fast_track: a.fast_track,
           machine_report: a.machine_report,
         });
-        return { ok: true, fast_track: r.fast_track === true };
+        return { ok: true, fast_track: result.fast_track === true };
       },
     },
     {
@@ -4081,6 +4436,64 @@ export function apply(ctx, config) {
             worktree_reason: execRes.worktree_reason ?? null,
             worktree_created: execRes.worktree_created === true,
             worktree_reused: execRes.worktree_reused === true,
+          });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-436：start-review 端点——独立评审派发（与工具 graph_start_review 共用同一实现）。
+    // 身份说明（如实）：HTTP 侧沿用既有 `human:gui`，它**不证明真人**；越权守卫只覆盖
+    // 「可判定真实子代理身份」的正常工具通道，本端点不声称覆盖其它绕行路径。
+    {
+      path: "/api/dsh-graph/start-review",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, attempt, candidate_commit, baseline_commit, guidance, provider, model, reasoning_effort, mode } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          if (!attempt) return json(res, 400, { error: "missing attempt" });
+          if (!candidate_commit) return json(res, 400, { error: "missing candidate_commit" });
+          const rRoot = rootForReq(req, body);
+          const ws = workspaceOf(req, body) ?? dirname(rRoot);
+          const { supervisorId, parent, error: parentError } = resolveSpawnParent(rRoot);
+          const ac = new AbortController();
+          req.on("close", () => ac.abort());
+          const res2 = await dispatchReview({
+            root: rRoot,
+            workspace: ws,
+            goal,
+            attempt,
+            candidate_commit,
+            baseline_commit,
+            guidance,
+            requestedBy: "human:gui",
+            actor: "human:gui",
+            parentAgent: parent,
+            parentSessionId: supervisorId,
+            signal: ac.signal,
+            provider,
+            model,
+            reasoning_effort,
+            mode,
+          });
+          json(res, 200, {
+            ok: true,
+            review_id: res2.review_id,
+            reused: res2.reused,
+            goal: res2.goal,
+            source_attempt: res2.source_attempt,
+            candidate_sha: res2.candidate_sha,
+            baseline_sha: res2.baseline_sha,
+            review_workspace: res2.review_workspace,
+            changed_paths: res2.changed_paths,
+            reviewer_child_id: res2.reviewer_child_id,
+            status: res2.status ?? null,
+            conclusion: res2.conclusion ?? null,
+            model_route: res2.model_route ?? null,
+            child_error: res2.child_error ?? (parent ? null : parentError),
           });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;

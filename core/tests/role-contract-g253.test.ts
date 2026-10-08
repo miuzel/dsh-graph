@@ -89,14 +89,17 @@ test("g-253 判据 2：清理 dsh-graph-host/index.js 未使用导入与死代�
   // 1. 确认 4 个死导入已被彻底移除
   assert.doesNotMatch(hostIndex, /\bformatTargetContext\b/, "formatTargetContext 死导入已清理");
   assert.doesNotMatch(hostIndex, /\bgetRoleProfile\b/, "getRoleProfile 死导入已清理");
-  assert.doesNotMatch(hostIndex, /\bformatReviewPrompt\b/, "formatReviewPrompt 死导入已清理（接线归 g-248）");
+  // g-436：原「formatReviewPrompt 死导入已清理（接线归 g-248）」断言按目标成交状态**反转**为「已接线」——
+  // 断言强度只增不减：另外 3 个死导入仍要求彻底移除，并另加「唯一生产调用点」正断言。
+  assert.match(hostIndex, /\bformatReviewPrompt\b/, "g-436：host 已接线 formatReviewPrompt（原 g-248 前置守卫按成交状态反转）");
   assert.doesNotMatch(hostIndex, /\bSUBAGENT_ROLES\b/, "SUBAGENT_ROLES 死导入已清理");
 
   // 2. toolFilterForMode 也已因接线 toolFilterForRole 而不再被 index.js 导入
   assert.doesNotMatch(hostIndex, /\btoolFilterForMode\b/, "toolFilterForMode 已由 toolFilterForRole 取代并清理导入");
 
   // 3. 验证当前从 ./core/ops.js 导入的所有符号，被清理后无孤立导入
-  const cleanedDeadImports = ["formatTargetContext", "getRoleProfile", "formatReviewPrompt", "SUBAGENT_ROLES", "toolFilterForMode"];
+  // g-436：formatReviewPrompt 已按目标接线（不再是死导入），故从本清单移除；其余 4 个仍必须不在导入列表。
+  const cleanedDeadImports = ["formatTargetContext", "getRoleProfile", "SUBAGENT_ROLES", "toolFilterForMode"];
   for (const name of cleanedDeadImports) {
     assert.equal(hostIndex.includes(` ${name},`) || hostIndex.includes(` ${name} `), false, `${name} 不得出现在 import 列表中`);
   }
@@ -175,8 +178,12 @@ test("g-253 判据 4：角色纪律在 persona 切换与 standard/minimal 下不
   assert.ok(minimalFilter?.allow?.includes("graph_report_status"));
   assert.ok(minimalFilter?.allow?.includes("graph_transition"));
 
-  // 5. g-248 reviewer 边界清晰：formatReviewPrompt 在 core 中定义并导出供 g-248 接线，但 host 未提前耦合
+  // 5. g-248 reviewer 边界清晰 + g-436 接线完成：formatReviewPrompt 由 core 定义/导出，host 现在**已**接线
+  //    （唯一生产调用点在独立评审派发服务 dispatchReview 内；reviewer 的越权守卫见 g-436 套件）。
+  //    原断言「host 未提前接入（由 g-248 承接）」是**接线前**的过渡守卫，按目标成交状态反转为
+  //    「已接入且生产调用点唯一」——判别力只增不减（新增唯一性断言，不放宽任何既有约束）。
   assert.equal(typeof formatReviewPrompt, "function", "formatReviewPrompt 仍由 core 导出");
   const hostIndex = readFileSync(join(import.meta.dirname, "../../dist/index.js"), "utf8");
-  assert.equal(hostIndex.includes("formatReviewPrompt"), false, "host 未提前接入 formatReviewPrompt（由 g-248 承接）");
+  assert.equal(hostIndex.includes("formatReviewPrompt"), true, "g-436：host 已接入 formatReviewPrompt（原 g-248 前置守卫按成交状态反转）");
+  assert.equal((hostIndex.match(/formatReviewPrompt\(/g) ?? []).length, 1, "g-436：formatReviewPrompt 的生产调用点恰好一处（独立评审派发）");
 });

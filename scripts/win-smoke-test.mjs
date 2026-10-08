@@ -567,7 +567,7 @@ const OS_SITE_ROWS = [
   ["core/ops.ts", "lstatSync", 16, ["tryLstat", "renameDirInto", "acquireTagsLock", "releaseTagsLock", "setGoalTags"],
    "锁目录 / 目标目录探测（symlink 与目录判定）",
    "ws:T3.tags_write,ws:T3.tx_lock_reclaim,ws:T3.failure_nonempty_target"],
-  ["core/ops.ts", "mkdirSync", 22, ["init", "writeHandoff", "raiseSeqFloor", "createGoal", "rebuild", "addCard", "createSharedCard", "convertOwnedToShared", "convertSharedToOwned", "ensureAttachmentsRoot", "resolveAttachmentPath", "startAttempt", "renameDirInto", "moveGoal", "archiveGoal", "unarchiveGoal", "postponeGoal", "acquireTagsLock"],
+  ["core/ops.ts", "mkdirSync", 23, ["init", "writeHandoff", "raiseSeqFloor", "createGoal", "rebuild", "addCard", "createSharedCard", "convertOwnedToShared", "convertSharedToOwned", "ensureAttachmentsRoot", "resolveAttachmentPath", "startAttempt", "renameDirInto", "moveGoal", "archiveGoal", "unarchiveGoal", "postponeGoal", "acquireTagsLock", "persistReviewRecord"],
    "板 / 目标 / 卡片 / 附件目录创建（幂等）",
    "ws:T3.init_create,ws:T3.cards_own_and_shared,ws:T3.attachments_store_delete"],
   ["core/ops.ts", "openSync", 4, ["atomicWrite", "acquireTagsLock", "setGoalTags"],

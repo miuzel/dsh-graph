@@ -460,12 +460,13 @@ test("g-321 i18n：新键 zh/en 严格对称，en 无 CJK", () => {
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort(), "client i18n zh/en 键必须完全对称");
 });
 
-test("g-321 host 源契约：四处 startContinuable 捕获全部改走 subagentSpawnErrorText", () => {
+test("g-321 host 源契约：五处 startContinuable 捕获全部改走 subagentSpawnErrorText", () => {
   const host = readFileSync(join(hostRoot, "index.js"), "utf8");
   assert.match(host, /subagentSpawnErrorText,/);
   const uses = host.match(/subagentSpawnErrorText\(e\)/g) ?? [];
-  // 四处 = spawnChild / dispatchExecutionAttempt / 收集入口 / g-374 F5 summarizer 派发（新入口同样必须友好化）
-  assert.equal(uses.length, 4, "四处 startContinuable 捕获均需友好化");
+  // 五处 = spawnChild / dispatchExecutionAttempt / 收集入口 / g-374 F5 summarizer 派发 / g-436 独立评审派发
+  //（每个新入口同样必须友好化——计数断言在此只增不减：新入口未友好化即红）
+  assert.equal(uses.length, 5, "五处 startContinuable 捕获均需友好化");
   // 不得再有裸 String(e?.message ?? e) 作为 startContinuable 失败结果
   assert.doesNotMatch(host, /child_error: String\(e\?\.message \?\? e\)/);
 });
