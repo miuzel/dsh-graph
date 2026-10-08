@@ -325,7 +325,7 @@ T2 安装版本 `0.19.8`；T4 实例启动就绪；T5 路由已注册、看板�
 Windows 行 + macOS 行）、`docs/release-checklist-v0.19.8.md`、`docs/platform-gate.md`（§7.6 Windows + §7.7 macOS + 汇总表两行）；
 **零产品代码 / prompts / 客户端源码 / 测试断言改动**（产品代码与 bundle 与 RC 逐字节相同，由 `diff -rq` 实拍为证）。
 
-**已执行（不可逆动作，均由负责人在人工 gate 执行，2026-10-09 完成）**：`main` 合并（merge `c908309`，主管按授权执行）、annotated tag **`v0.19.8`**（tag 对象 `1255d87`，主管按授权执行）、`git push`（`main` + tag，负责人执行）、**`npm publish`（负责人手动执行 ⇒ 线上 `shasum` = `8f9bca42…` 与本地 sha1 逐字节相同）**。发布后对账详见 §4 末段。**GitHub release 未创建**（负责人待办）。
+**已执行（不可逆动作，均由负责人在人工 gate 执行，2026-10-09 完成）**：`main` 合并（merge `c908309`，主管按授权执行）、annotated tag **`v0.19.8`**（tag 对象 `1255d87`，主管按授权执行）、`git push`（`main` + tag，负责人执行）、**`npm publish`（负责人手动执行 ⇒ 线上 `shasum` = `8f9bca42…` 与本地 sha1 逐字节相同）**、**GitHub release `v0.19.8`**（负责人授权主管创建：<https://github.com/miuzel/dsh-graph/releases/tag/v0.19.8>，附件 `dsh-graph-0.19.8.tgz` 694948 B + `SHA256SUMS`；**下载回验 sha256 = `b98e4934…` 且与本地发布产物 `cmp` 逐字节一致**）。发布后对账详见 §4 末段。
 
 ### 6.1 已执行的命令序列（逐条，供复核 / 重跑）
 
