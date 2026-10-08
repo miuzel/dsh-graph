@@ -11,6 +11,13 @@ export interface WorktreeCandidate {
   head: string | null; target_branch: string | null; merged: boolean; clean: boolean;
   active: boolean; status: "candidate" | "protected" | "unknown" | "cleaned";
   reason: string | null; discovered_at: string;
+  /**
+   * g-449：该树已被**另一个**看板认领时的归属根（跨板冲突的观测字段，可缺省）。
+   * 只在确实读到「归属标记指向他板」时出现；无标记/标记属本板/标记不可读 ⇒ 不出现。
+   * 注意状态与 reason 仍只用既有枚举（`status="protected"` / `reason="protected"`），
+   * 本字段是**加法式**观测通道，不扩充任何枚举集合。
+   */
+  board_owner_root?: string | null;
 }
 
 type GitTree = { path: string; head: string | null; branch: string | null };
@@ -165,6 +172,29 @@ function boardRecordedProvenance(root: string, worktreePath: string, goalId: str
   } catch { return false; }
 }
 
+/**
+ * g-449：**清理面**的跨看板归属核验（复用 g-448 的同一归属真源，不新造第二套解析）。
+ *
+ * 返回「该树已被**另一个**看板认领」的归属根；以下三种情况一律返回 null（即无跨板冲突）：
+ *  1. **无归属标记**（本目标上线前的旧树、手工/外部建树）⇒ null。判据 2 的兼容约束要求这类
+ *     树保持**既有可清理行为**（`core/tests/worktree.test.ts` 既有断言即以「无标记 + 无 provenance
+ *     的树必须可被清理」为真源），故清理面**不得**把「无归属证明」保守升级为拒绝——否则遗留树
+ *     将永久不可清理。这也正是清理面与 `prepareAttemptWorktree` 复用面的**有意差异**：
+ *     复用面保守拒绝只是不派发（零损失），清理面保守拒绝则会把可用工作树锁死。
+ *  2. **标记损坏/不可读** ⇒ `readBoardOwner` 返回 null ⇒ 与 1 同类（无归属证明），保持可清理。
+ *  3. **标记归属就是本看板** ⇒ null（本板自己的树，照常可清理）。
+ *
+ * 归属标记是**权威**且跨看板可读（写在树自己的 Git 管理目录内）；本看板事件 provenance
+ * 只是板内自证（`startAttempt` 无 worktree 选项时不会写入，且历史上被 g-448 误复用的板
+ * 会用它覆盖他板路径），故**绝不**用它去推翻一份指向他板的真实标记。
+ * 只读、无副作用；不自动接管、不改名、不删除任何树。
+ */
+function foreignBoardOwnerRoot(root: string, worktreePath: string): string | null {
+  const owner = readBoardOwner(worktreePath);
+  if (!owner) return null;
+  return canonicalPath(owner.canonical_root) === canonicalPath(resolve(root)) ? null : owner.canonical_root;
+}
+
 function resolveCodeWorkspace(root: string): string | null {
   const resolved = resolve(root);
   // g-149 / 独立数据仓库支持：如果 root 名为 .dsh-graph，且其父目录是 Git 仓库，真正的工程代码库是父目录
@@ -189,6 +219,10 @@ export function listWorktrees(root: string, goalId?: string): WorktreeCandidate[
     const parsed = parseAssociation(tree); const assoc = parsed.assoc;
     if (!assoc || (goalId && assoc.goal !== goalId)) continue;
     const id = candidateId(assoc.goal, assoc.attempt, tree.path);
+    // g-449：跨看板归属核验——同仓库各看板的 `.worktrees/g-<n>-att-<NN>` 路径与分支逐字相同，
+    // 只按路径名解析出的 goal/attempt 会把**别的看板**的树当成本看板的清理候选（实测 B 板据此
+    // 删掉 A 板的树）。故先读该树自己的归属标记：明确指向他板 ⇒ 绝不作为本板候选（保护而非删除）。
+    const foreignRoot = foreignBoardOwnerRoot(root, tree.path);
     const registrations = events.filter(e => e.event === "worktree.candidate_registered" && e.details?.id === id);
     const registered = registrations.at(-1)?.details as any;
     const reused = events.some(e => (e.event === "worktree.cleaned" || e.event === "worktree.external_removed") && e.details?.id === id);
@@ -199,7 +233,10 @@ export function listWorktrees(root: string, goalId?: string): WorktreeCandidate[
     let clean = false; try { clean = git(tree.path, ["status", "--porcelain"]) === ""; } catch { clean = false; }
     const active = isActive(root, assoc.goal, assoc.attempt); const merged = ancestor(main, tree.head, target);
     let status: WorktreeCandidate["status"] = "protected"; let reason: string | null = null;
-    if (!inside) { status = "unknown"; reason = "outside_canonical_worktrees"; }
+    // g-449：归属他板的树优先判为 protected（reuse 既有的 protected 状态与 reason 枚举，
+    // **不扩充** status/reason 集合）；归属根经加法式 board_owner_root 通道下发供观测。
+    if (foreignRoot) { status = "protected"; reason = "protected"; }
+    else if (!inside) { status = "unknown"; reason = "outside_canonical_worktrees"; }
     else if (reused) { status = "unknown"; reason = "reuse_suspected"; }
     else if (snapshotDrift) { status = "unknown"; reason = "snapshot_drift"; }
     else if (parsed.reason) { status = "unknown"; reason = parsed.reason; }
@@ -209,7 +246,7 @@ export function listWorktrees(root: string, goalId?: string): WorktreeCandidate[
     else if (!clean) reason = "worktree_dirty";
     else if (!merged) { status = "unknown"; reason = "not_merged"; }
     else status = "candidate";
-    out.push({ id, ...assoc, path: tree.path, branch: tree.branch, head: tree.head, target_branch: target, merged, clean, active, status, reason, discovered_at: nowIso() });
+    out.push({ id, ...assoc, path: tree.path, branch: tree.branch, head: tree.head, target_branch: target, merged, clean, active, status, reason, discovered_at: nowIso(), ...(foreignRoot ? { board_owner_root: foreignRoot } : {}) });
   }
   const seen = new Set(out.map(x => x.id));
   for (const e of events.filter(e => e.event === "worktree.candidate_registered")) {
@@ -231,6 +268,18 @@ export function cleanWorktree(root: string, id: string, actor = "human:gui", con
   if (!confirm) return { ok: false, ...(c ? { candidate: c } : {}), reason: "confirm_required" };
   const block = (reason: string) => { appendEvent(root, { actor, event: "worktree.clean_blocked", goal: c?.goal, details: { id, reason, candidate: c ?? null } }); return { ok: false, ...(c ? { candidate: c } : {}), reason }; };
   if (!c) return block("unknown_candidate");
+  // g-449：清理面的**权威**跨看板归属闸门（不依赖 listWorktrees 的状态判定，删除前再核验一次）——
+  // 该树已被另一个看板认领 ⇒ 拒绝，零副作用（不删目录、不迁状态、不留半清理残留），
+  // 且理由**点名归属看板根**，便于人工交由其所属看板处置。归属真源与 g-448 复用面同一份
+  // （工作树自身 Git 管理目录内的归属标记 + canonicalPath 归一）。
+  // 无标记 / 标记属本板 / 标记不可读 ⇒ 不拦（判据 2：既有与遗留树的可清理行为不得回归）。
+  const foreignRoot = foreignBoardOwnerRoot(root, c.path);
+  if (foreignRoot) {
+    return block(
+      `跨看板清理被拒绝：工作树 ${c.path} 已绑定看板 ${foreignRoot}，当前看板 ${resolve(root)} 无权清理；` +
+      `请由所属看板处置（不自动删除、不接管、不改名）`,
+    );
+  }
   // g-272 att-002：枚举等值判断（原为对中文 reason 的字符串包含判断），语义不变。
   if (c.status === "cleaned" || (c.status === "unknown" && c.reason === "externally_removed")) return { ok: true, candidate: c, reason: "already_cleaned" };
   if (c.status !== "candidate") return block(c.reason ?? "protected");
