@@ -1627,9 +1627,12 @@ export function apply(ctx, config) {
     // g-402：把本次派发的提示词语言传进合成器 ⇒ auto_from_desc 前缀随语言取值（zh 逐字不变）。
     const resolvedBrief = resolveEffectiveBrief(attempt_brief, currentDirective, desc, promptLanguage);
 
-    const cards = harvestedCards(root, goal);
+    // g-447：把 **解析该图根所用的同一个 workspace** 传下去 ⇒ 卡片「精确路径」以实际解析出的图根为基准
+    //（默认根 `.dsh-graph/…`；相对自定义根 `board-a/…`；工作区内绝对根按 workspace 相对展开），
+    // 与同一 prompt 里 goalRel = relative(workspace, goalFile) 同一基准；不再硬拼 .dsh-graph 而误指默认根同名卡。
+    const cards = harvestedCards(root, goal, workspace);
     const injectedCards = cards.map((c) => c.id);
-    const cardsSection = formatHarvestedCardsSection(root, goal, undefined, cards, promptLanguage);
+    const cardsSection = formatHarvestedCardsSection(root, goal, undefined, cards, promptLanguage, workspace);
 
     const confirmedHandoffs = harvestReviewedAttemptHandoffs(root, goal);
     const injectedHandoffRefs = confirmedHandoffs.map((h) => ({
