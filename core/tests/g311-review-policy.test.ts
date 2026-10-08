@@ -270,10 +270,11 @@ test("g-311 判据 2：fail-safe——任一信号取不到即不放行（绝不
 
 test("g-311 判据 4：契约路径 / 跨 ≥3 顶层区域 / 显式 strict_required 一律判定 strict", () => {
   // 在显式配置本项目既有闭集参数下保持旧断言集合的精确意义
+  // 保持真实的完整前缀登记，精准保留原 dsh-graph-host/lib/client/board.js 样本
   const explicitRepoConfig = {
     contractPaths: ["core/schema.ts", "schema/SCHEMA.md"],
-    regions: ["core", "dsh-graph-host", "lib/client", "prompts", "scripts"],
-    nonProductPrefixes: ["core/tests/", "dist/", "core-dist/", "node_modules/", ".worktrees/"],
+    regions: ["core", "dsh-graph-host", "dsh-graph-host/lib/client", "dsh-graph-host/prompts", "scripts"],
+    nonProductPrefixes: ["core/tests", "dist", "core-dist", "node_modules", ".worktrees"],
   } as const;
   const base = { policy: "auto", type: "patch", ...explicitRepoConfig } as const;
   // M1 契约冻结——显式 auto（甚至 none）不得推翻
@@ -289,7 +290,7 @@ test("g-311 判据 4：契约路径 / 跨 ≥3 顶层区域 / 显式 strict_requ
   assert.deepEqual(resolveReviewPolicy({ ...base, productChangedLines: 150 }).strictReasons, ["product_size"]);
   // M3 跨 ≥3 个顶层区域（2 个不触发）
   const twoRegions = ["core/ops.ts", "dsh-graph-host/index.js"];
-  const threeRegions = [...twoRegions, "scripts/build.sh"];
+  const threeRegions = [...twoRegions, "dsh-graph-host/lib/client/board.js"];
   assert.equal(resolveReviewPolicy({ ...base, changedPaths: twoRegions }).policy, "auto");
   const cross = resolveReviewPolicy({ ...base, changedPaths: threeRegions });
   assert.equal(cross.policy, "strict");

@@ -371,7 +371,7 @@ test("g-435 判据 7：旧样本对拍（在显式配置夹具下保持 policy/s
   const repoExplicit = {
     contractPaths: ["core/schema.ts", "schema/SCHEMA.md"],
     regions: ["core", "dsh-graph-host", "dsh-graph-host/lib/client", "dsh-graph-host/prompts", "scripts"],
-    nonProductPrefixes: ["core/tests/", "dist/", "core-dist/", "node_modules/", ".worktrees/"],
+    nonProductPrefixes: ["core/tests", "dist", "core-dist", "node_modules", ".worktrees"],
   };
 
   // 1. 旧契约命中

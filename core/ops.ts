@@ -1315,7 +1315,12 @@ function readListByPath(lines: string[], path: string[]): string[] | null {
           if (parsed !== null) out.push(parsed);
         }
       }
-      if (!foundAnyListItem && (valPart === "" || valPart === "[]")) return valPart === "[]" ? [] : null;
+      if (!foundAnyListItem) {
+        if (valPart === "[]") return [];
+        if (valPart === "" || valPart === "null" || valPart === "~") return null;
+        // 如果是手写非列表标量（例如 contract_paths: 123），按非法处理返回 null，并在 policy 消费时标记
+        return null;
+      }
       return out;
     }
   }

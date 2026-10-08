@@ -135,17 +135,18 @@ export function matchRegionSegment(path: string, region: string): boolean {
   return normPath.startsWith(normReg + "/");
 }
 
-/** 该路径是否命中契约路径（M1）。可传入项目配置的 contract_paths。 */
+/** 该路径是否命中契约路径（M1）。可传入项目配置的 contract_paths，缺省使用普适默认 DEFAULT_CONTRACT_PATHS（[]）。 */
 export function isContractPath(path: string, contractPaths?: readonly string[] | null): boolean {
   const p = normalizePolicyPath(path);
   if (!p) return false;
-  const paths = contractPaths !== undefined && contractPaths !== null ? contractPaths : CONTRACT_PATHS;
+  const paths = contractPaths !== undefined && contractPaths !== null ? contractPaths : DEFAULT_CONTRACT_PATHS;
   return paths.some((cp) => normalizePolicyPath(cp) === p);
 }
 
 /**
  * 路径 → 顶层区域；未登记区域返回 null。
  * 规则：最长前缀优先；同长度按配置顺序；完整段边界。
+ * 缺省使用普适默认 DEFAULT_REVIEW_REGIONS。
  */
 export function regionOfPath(path: string, configuredRegions?: readonly string[] | null): ReviewRegion | null {
   const p = normalizePolicyPath(path);
@@ -153,7 +154,7 @@ export function regionOfPath(path: string, configuredRegions?: readonly string[]
   const regions = Array.isArray(configuredRegions)
     ? configuredRegions
     : configuredRegions === null || configuredRegions === undefined
-      ? REVIEW_REGIONS
+      ? DEFAULT_REVIEW_REGIONS
       : [];
 
   // 筛选出所有匹配的区域
@@ -175,12 +176,12 @@ export function regionOfPath(path: string, configuredRegions?: readonly string[]
   return best;
 }
 
-/** 变更路径覆盖的顶层区域集合（按配置顺序，去重）。 */
+/** 变更路径覆盖的顶层区域集合（按配置顺序，去重）。缺省使用普适默认 DEFAULT_REVIEW_REGIONS。 */
 export function regionsOfPaths(paths: readonly string[], configuredRegions?: readonly string[] | null): ReviewRegion[] {
   const regions = Array.isArray(configuredRegions)
     ? configuredRegions
     : configuredRegions === null || configuredRegions === undefined
-      ? REVIEW_REGIONS
+      ? DEFAULT_REVIEW_REGIONS
       : [];
   const seen = new Set<ReviewRegion>();
   for (const p of paths) {
@@ -286,7 +287,7 @@ export function resolveReviewPolicy(input: ReviewPolicyInput = {}): ReviewPolicy
     isUnrecognizedReviewPolicy(input.policy) ||
     isMalformedConfigList(input.regions, false) ||
     isMalformedConfigList(input.contractPaths, false) ||
-    isMalformedConfigList(input.nonProductPrefixes, true);
+    isMalformedConfigList(input.nonProductPrefixes, false);
 
   if (hasMalformedConfig) {
     base = "strict";
@@ -336,7 +337,9 @@ export function resolveReviewPolicy(input: ReviewPolicyInput = {}): ReviewPolicy
   if (lines !== null && lines >= FAST_TRACK_MAX_PRODUCT_LINES) {
     reasons.push("product_size");
   }
-  if (regionsOfPaths(paths, effectiveRegions).length >= 3) {
+  // 负责人裁决：M3 跨区域判定只计产品代码覆盖的区域，纯文档/生成物不计入 M3
+  const productPaths = paths.filter((p) => isProductCodePath(p, effectiveNonProductPrefixes));
+  if (regionsOfPaths(productPaths, effectiveRegions).length >= 3) {
     reasons.push("cross_region");
   }
   if (input.strictRequired === true) {
