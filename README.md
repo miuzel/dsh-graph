@@ -15,7 +15,7 @@
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.1--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
-**当前版本 v0.19.7** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 50 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
+**当前版本 v0.19.7** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 51 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
 
 **最新亮点（v0.19.7）**
 
@@ -58,7 +58,7 @@ dsh plugin --profile <name> add dsh-graph
 
 ## 提供的工具
 
-50 个 `graph_*` 工具，按功能分组（逐个说明见 [dsh-graph-host/README.md](dsh-graph-host/README.md) 或 `graph_help`）：
+51 个 `graph_*` 工具，按功能分组（逐个说明见 [dsh-graph-host/README.md](dsh-graph-host/README.md) 或 `graph_help`）：
 
 | 分组 | 工具 |
 |------|------|
@@ -68,7 +68,7 @@ dsh plugin --profile <name> add dsh-graph
 | 上下文卡片 | `graph_add_card` · `graph_fill_card` · `graph_review_card` · `graph_bind_collect_card` · `graph_delete_card` · `graph_convert_card_to_shared` · `graph_convert_card_to_owned` · `graph_attach_shared_card` · `graph_detach_shared_card` · `graph_list_shared_cards` |
 | 附件 | `graph_store_attachment` · `graph_delete_attachment` |
 | 排期 | `graph_move_goal` |
-| 执行派发 | `graph_start_attempt` · `graph_set_directive` · `graph_record_attempt_handoff` · `graph_unbind_goal_child` · `graph_abandon_attempt` |
+| 执行派发 | `graph_start_attempt` · `graph_start_review` · `graph_set_directive` · `graph_record_attempt_handoff` · `graph_unbind_goal_child` · `graph_abandon_attempt` |
 | 记忆 | `graph_memory_add` · `graph_memory_recall` · `graph_memory_remove` · `graph_memory_replace` |
 | 配置管理 | `graph_get_settings` · `graph_update_settings` |
 | 校验 / 对账 | `graph_validate` · `graph_rebuild` |

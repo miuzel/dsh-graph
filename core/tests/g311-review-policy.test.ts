@@ -462,7 +462,14 @@ const ZH_TOKENS = [
   "`review.fast_track`",
   "零副作用",
   "不是引擎强制",
-  "评审子代理的派发入口（尚未接线）",
+  // g-436：派发入口已接线 ⇒ 旧 pin「尚未接线」是假陈述，改为钉住**新入口与附属记录语义**（仍为真断言）
+  "`graph_start_review(goal, attempt, candidate_commit)`",
+  "`POST /api/dsh-graph/start-review`",
+  "（HTTP `POST /api/dsh-graph/start-review`）；评审是**既有执行 attempt 的附属记录**",
+  "未派独立评审时看板与事件流如实标注「未独立评审」但**不阻断** accept",
+  // r3（Lane A R2-1）：徽标/independent_ok 的口径必须写清是 current_candidate_sha 而非 HEAD
+  "**不等于 HEAD**",
+  "判读时请直接比对 `current_candidate_sha` 与真实 HEAD",
   "不得绕过 `delivered` 人工 gate",
 ];
 const EN_TOKENS = [
@@ -480,7 +487,13 @@ const EN_TOKENS = [
   "`review.fast_track`",
   "zero side effects",
   "not engine enforcement",
-  "reviewer-subagent dispatch entry point yet (not wired up)",
+  // g-436：同上（en 侧）
+  "`graph_start_review(goal, attempt, candidate_commit)`",
+  "`POST /api/dsh-graph/start-review`",
+  "an **attachment record of an existing execution attempt**",
+  "**do not block** accept",
+  "**not HEAD**",
+  "compare `current_candidate_sha` with the real HEAD directly",
   "must not bypass the `delivered` human gate",
 ];
 
@@ -525,6 +538,38 @@ test("g-311 判据 4 负向对照：删掉指南任一片段即红（内存定�
     assert.ok(guideGaps(zh, drop(en, token)).length > 0, `en 删掉「${token}」后必须报红`);
   }
   assert.ok(guideGaps(zh, `${en}\nextra line\n`).length > 0, "en 多一行后行数不变量必须报红");
+  assert.equal(readFileSync(ZH_GUIDE, "utf8"), zh, "负向对照不得污染真实指南");
+  assert.equal(readFileSync(EN_GUIDE, "utf8"), en, "负向对照不得污染真实指南");
+});
+
+// ---------------------------------------------------------------------------
+// g-436 增量：指南 142 行的「派发入口」陈述必须与实现一致（旧句「尚未接线」已成假陈述）
+// ---------------------------------------------------------------------------
+
+/** 旧句（g-436 接线前为真、现在为假）：改回它必须判红，否则 pin 只是空断言。 */
+const ZH_WIRED_OLD = "——插件层尚无评审子代理的派发入口（尚未接线）。";
+const EN_WIRED_OLD = "—the plugin layer has no reviewer-subagent dispatch entry point yet (not wired up).";
+/** 新句（g-436 接线后的真陈述）：如实给出工具入口、HTTP 路径与「附属记录」语义。 */
+const ZH_WIRED_NEW =
+  "——派发入口**已接线**：工具 `graph_start_review(goal, attempt, candidate_commit)`（HTTP `POST /api/dsh-graph/start-review`）；评审是**既有执行 attempt 的附属记录**——不新建 attempt、不迁移状态、不覆盖作者 `child_id` 与 `results-att-*.md`，结论独立落盘 `<goalDir>/reviews/<review_id>.md`；未派独立评审时看板与事件流如实标注「未独立评审」但**不阻断** accept。";
+const EN_WIRED_NEW =
+  "—the dispatch entry point **is now wired up**: tool `graph_start_review(goal, attempt, candidate_commit)` (HTTP `POST /api/dsh-graph/start-review`), and a review is an **attachment record of an existing execution attempt**: it creates no new attempt, changes no status, never overwrites the author's `child_id` or `results-att-*.md`, and stores its conclusion separately at `<goalDir>/reviews/<review_id>.md`; when no independent review was dispatched the board and the event stream mark it as not independently reviewed but **do not block** accept.";
+
+test("g-311 判据 4（g-436 增量）：指南的派发入口陈述与实现一致——改回旧句必红", () => {
+  const zh = readFileSync(ZH_GUIDE, "utf8");
+  const en = readFileSync(EN_GUIDE, "utf8");
+  // 真断言：新句必须在，旧句必须不在（不是「文件存在」这类空断言）
+  assert.ok(zh.includes(ZH_WIRED_NEW), "zh 指南必须如实给出已接线的派发入口与附属记录语义");
+  assert.ok(en.includes(EN_WIRED_NEW), "en 指南同上");
+  assert.ok(!zh.includes(ZH_WIRED_OLD), "zh 指南不得再出现「尚未接线」假陈述");
+  assert.ok(!en.includes(EN_WIRED_OLD), "en 指南不得再出现 not wired up 假陈述");
+  // 诚实边界保留（负责人明确要求不得顺手删掉）
+  assert.ok(zh.includes("不是引擎强制") && zh.includes("不得绕过 `delivered` 人工 gate"), "zh 边界声明必须保留");
+  assert.ok(en.includes("not engine enforcement") && en.includes("must not bypass the `delivered` human gate"), "en 边界声明必须保留");
+  // 负向对照（内存定点破坏，真实文件逐字节未变）：改回旧句 ⇒ 同一判定器必红
+  assert.ok(guideGaps(zh.replace(ZH_WIRED_NEW, ZH_WIRED_OLD), en).length > 0, "zh 改回旧句必红");
+  assert.ok(guideGaps(zh, en.replace(EN_WIRED_NEW, EN_WIRED_OLD)).length > 0, "en 改回旧句必红");
+  assert.ok(guideGaps(zh.replace(ZH_WIRED_NEW, ""), en).length > 0, "整段删掉必红");
   assert.equal(readFileSync(ZH_GUIDE, "utf8"), zh, "负向对照不得污染真实指南");
   assert.equal(readFileSync(EN_GUIDE, "utf8"), en, "负向对照不得污染真实指南");
 });

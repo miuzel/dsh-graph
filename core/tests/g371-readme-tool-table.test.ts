@@ -10,7 +10,7 @@
  *
  * 断言面（真源 = 引擎实际注册的 tool def，取自 `apply()`；不硬编码 49 名单）：
  *  A. 集合相等：root README 工具表 / host README zh 表 / host README en 表 / help.zh / help.en
- *     / `dsh-graph-host/index.js` 注册名 —— 六者与引擎注册集合**逐一相等**，且各恰 50；
+ *     / `dsh-graph-host/index.js` 注册名 —— 六者与引擎注册集合**逐一相等**，且各恰 51（g-436 新增 graph_start_review）；
  *  A2. 表内无重复工具行、每行列数与表头一致、工具列 token 全部是已注册工具名；
  *  B. 计数声明：两份 README 里「N 个 `graph_*` 工具 / N `graph_*` tools」的 N 必须等于注册实数，
  *     且至少存在一处声明（守卫不得恒真退化为「无声明即通过」）；
@@ -19,6 +19,10 @@
  *  F. 负向对照：对**内存中的字符串副本**做变异（删 root 表行 / 删 host en 表行 / 工具名改错一字符 /
  *     计数改错 / 追加假记忆上限），同一套判定函数必须报红；合法改写（表格行重排）不得误红。
  *     对照只改副本变量，绝不触碰仓库文件（末尾断言真实文件逐字未变）。
+ *  G.（g-436 增量）计数声明**覆盖面补全**：B 只覆盖「N 个 `graph_*` 工具 / N `graph_*` tools」两条措辞，
+ *     于是 host README `(50 in total)` / `the 50-tool checklist`、help.zh `全部 50 个工具清单`、
+ *     help.en `full 50-tool checklist` 这 4 处漂移**无人覆盖**（独立复核实测：改成 1 仍全绿）。
+ *     现按「逐面必中 + 命中值必须等于期望」+「全局措辞族扫描」双口径判定，并为每面各出一条负向对照。
  *
  * 刻意不做的两件事（见交付说明）：
  *  - 不校验表格行**顺序**（判据只要求名集合相等），故合法重排不误红；
@@ -41,7 +45,7 @@ const HELP_EN = join(repoRoot, "dsh-graph-host", "prompts", "help.en.md");
 const INDEX_JS = join(repoRoot, "dsh-graph-host", "index.js");
 
 /** 判据 1 明文要求的工具数；引擎加工具时必须同步所有文档面并改这一个常量（刻意的防静默漂移门禁）。 */
-const EXPECTED_TOOL_COUNT = 50;
+const EXPECTED_TOOL_COUNT = 51;
 
 /** 工具名 token：容忍大小写与下划线，以便「改错一个字符」也能被完整捕获（而不是当成前缀匹配）。 */
 const TOOL_TOKEN = /graph_[A-Za-z0-9_]+/g;
@@ -178,7 +182,7 @@ function diffOf(a: string[], b: string[]): { onlyA: string[]; onlyB: string[] } 
   return { onlyA: [...sa].filter((x) => !sb.has(x)), onlyB: [...sb].filter((x) => !sa.has(x)) };
 }
 
-/** 判据 1 + 2（工具面）：六处名集合逐一相等、各恰 50、表内无重复、结构完整。 */
+/** 判据 1 + 2（工具面）：六处名集合逐一相等、各恰 51、表内无重复、结构完整。 */
 function toolFaceProblems(input: FaceInput): string[] {
   const problems: string[] = [];
   const reference = [...new Set(input.schemaTools)];
@@ -236,6 +240,116 @@ function countClaimProblems(
   return problems;
 }
 
+/**
+ * g-436（Lane B 实证的漏覆盖面）：工具计数声明措辞族（**全局**扫描口径）。
+ * 只收「足够专指、不会误伤普通文本」的措辞；`N total` / `共 N 个` / `N 个工具` 这类宽泛措辞
+ * 放进 `TOOL_COUNT_FACES` 按面精确钉住（避免未来在无关语境写「3 total」被误红）。
+ */
+/**
+ * r3（Lane B 反例）：`共 N 个` / `N total` 这类**宽泛措辞**若不加语境限定，会把
+ * 「本流程共 3 个阶段」这类合法文案误判成工具计数（实测 host README / help.zh 各追加该句即 fail 2，
+ * 且报文误指「工具计数声明为 3」）。故**所有**计数命中都必须落在「工具计数上下文」的同一行内
+ * —— 行内出现「工具 / 清单 / graph_* / tool(s) / checklist」之一。
+ * 语境不匹配的行**既不计数也不判红**；但「逐面必中」规则仍在 ⇒ 把某面的声明改写成无工具语境的行
+ * 会被判**声明缺失**（fail-closed，不会静默放过）。
+ */
+const TOOL_CONTEXT = /工具|清单|`?graph_\*`?|tools?\b|checklist/i;
+
+const TOOL_COUNT_CLAIM_PATTERNS: RegExp[] = [
+  /(\d+)\s*个\s*`?graph_\*`?\s*工具/g,
+  /(\d+)\s+`?graph_\*`?\s+tools?\b/gi,
+  /(\d+)-tool\b/gi,
+  /(\d+)\s+in total\b/gi,
+];
+
+/**
+ * 工具计数**面**清单：每一面必须至少命中一次（守卫不得退化为恒真／声明被删即红），
+ * 且命中到的数字全部等于引擎注册实数。g-436 新增的 4 面即独立复核实测「无守卫」的漂移点。
+ */
+/**
+ * `共 N 个` 这类宽泛措辞的**紧邻性**补充判定（r3）：数字后必须紧跟计数短语的收束
+ * （`）`/`)`/`：`/`:`），或紧跟 `graph_*` / `工具` —— 否则该句不是工具计数。
+ * 例：help.zh「（共 51 个）：」✓ / host README「（共 51 个 `graph_*` 工具）」✓；
+ * 而「本流程共 3 个阶段」「与工具计数无关，共 2 个示例」✗（不判红、不计数）。
+ * 刻意**不**把裸「工具」当收束词：否则「本页共 3 个工具章节」这类合法句会被误判（裸「工具」与真声明
+ * 在文本上不可区分）；若把真声明改写成裸「工具」而失去 `graph_*`/收束符，会以「声明缺失」判红。
+ * 语境不匹配 ⇒ 既不计入判红，也不计入「逐面必中」⇒ 若真把工具计数面写成这种句子，会以
+ * 「声明缺失」判红（fail-closed，不会静默放过）。
+ */
+const COUNT_PHRASE_TAIL = /^\s*(?:[）)：:]|`?graph_\*`?)/;
+
+const TOOL_COUNT_FACES: Array<{ id: string; re: RegExp; why: string; validate?: (after: string) => boolean }> = [
+  { id: "README.md", re: /(\d+)\s*个\s*`?graph_\*`?\s*工具/g, why: "root README 概览" },
+  { id: "dsh-graph-host/README.md", re: /(\d+)\s*个\s*`?graph_\*`?\s*工具/g, why: "host README zh 概览" },
+  { id: "dsh-graph-host/README.md", re: /共\s*(\d+)\s*个/g, why: "host README zh「共 N 个 graph_* 工具」", validate: (after) => COUNT_PHRASE_TAIL.test(after) },
+  { id: "dsh-graph-host/README.md", re: /\((\d+) in total\)/g, why: "host README en 工具表标题（g-436 前无守卫）" },
+  { id: "dsh-graph-host/README.md", re: /the (\d+)-tool checklist/g, why: "host README en graph_help 行（g-436 前无守卫）" },
+  { id: "dsh-graph-host/README.md", re: /(\d+)\s*个工具/g, why: "host README zh graph_help 行（g-436 前无守卫）" },
+  { id: "dsh-graph-host/prompts/help.zh.md", re: /共\s*(\d+)\s*个/g, why: "help.zh 标题", validate: (after) => COUNT_PHRASE_TAIL.test(after) },
+  { id: "dsh-graph-host/prompts/help.zh.md", re: /全部\s*(\d+)\s*个工具/g, why: "help.zh graph_help 行（g-436 前无守卫）" },
+  { id: "dsh-graph-host/prompts/help.en.md", re: /\((\d+) total\)/g, why: "help.en 标题" },
+  { id: "dsh-graph-host/prompts/help.en.md", re: /full\s+(\d+)-tool checklist/g, why: "help.en graph_help 行（g-436 前无守卫）" },
+];
+
+/** 行号（1-based）：用于把漂移定位到具体行的可复制报文。 */
+function lineOf(text: string, index: number): number {
+  let n = 1;
+  for (let i = 0; i < index && i < text.length; i++) if (text[i] === "\n") n++;
+  return n;
+}
+
+/**
+ * 判据 1（g-436 增量）：工具计数**全部**声明面与引擎注册实数一致。
+ * 双口径：① 逐面必中（命中 0 次 = 声明被删 ⇒ 判红，守卫不得恒真）；② 全局措辞族扫描（防将来新措辞漂移）。
+ */
+/** 命中是否落在工具计数语境的行内（同一行出现 工具 / 清单 / graph_* / tool(s) / checklist 之一）。 */
+function inToolContext(text: string, index: number): boolean {
+  const start = text.lastIndexOf("\n", index) + 1;
+  const nl = text.indexOf("\n", index);
+  const line = text.slice(start, nl < 0 ? text.length : nl);
+  return TOOL_CONTEXT.test(line);
+}
+
+function toolCountFaceProblems(docs: Array<{ id: string; text: string }>, expected: number): string[] {
+  const problems: string[] = [];
+  const byId = new Map(docs.map((d) => [d.id, d.text]));
+  for (const face of TOOL_COUNT_FACES) {
+    const text = byId.get(face.id);
+    if (text === undefined) { problems.push(`缺文件：${face.id}`); continue; }
+    // 只统计「工具计数语境」行内的命中（其余行的数字与工具计数无关，不判红也不计数）
+    const hits = [...text.matchAll(face.re)]
+      .filter((m) => inToolContext(text, m.index ?? 0))
+      .filter((m) => (face.validate ? face.validate(text.slice((m.index ?? 0) + m[0].length)) : true));
+    if (hits.length === 0) {
+      problems.push(`${face.id} 未命中计数面 ${face.re}（${face.why}）——声明被删/措辞已变/失去工具语境，守卫不得退化为恒真`);
+      continue;
+    }
+    for (const m of hits) {
+      if (Number(m[1]) !== expected) {
+        problems.push(`${face.id}:${lineOf(text, m.index ?? 0)} 工具计数声明为 ${m[1]}，应为 ${expected}（${face.why}）`);
+      }
+    }
+  }
+  for (const { id, text } of docs) {
+    for (const re of TOOL_COUNT_CLAIM_PATTERNS) {
+      for (const m of text.matchAll(new RegExp(re.source, re.flags))) {
+        if (!inToolContext(text, m.index ?? 0)) continue;
+        if (Number(m[1]) !== expected) {
+          problems.push(`${id}:${lineOf(text, m.index ?? 0)} 工具计数声明为 ${m[1]}，应为 ${expected}（措辞族 ${re.source}）`);
+        }
+      }
+    }
+  }
+  return problems;
+}
+
+const COUNT_DOCS = () => [
+  { id: "README.md", text: REAL_TEXT.rootReadme },
+  { id: "dsh-graph-host/README.md", text: REAL_TEXT.hostReadme },
+  { id: "dsh-graph-host/prompts/help.zh.md", text: REAL_TEXT.helpZh },
+  { id: "dsh-graph-host/prompts/help.en.md", text: REAL_TEXT.helpEn },
+];
+
 /** 判据 6（M2b）：记忆上限措辞里的数字必须是真源 MEMORY_LIMITS 的取值之一。 */
 function memoryClaimProblems(docs: Array<{ id: string; text: string }>): string[] {
   const allowed = new Set<number>([MEMORY_LIMITS.on_demand, MEMORY_LIMITS.standing]);
@@ -286,12 +400,12 @@ function realInput(): FaceInput {
   return { schemaTools: REAL_SCHEMA, ...REAL_TEXT };
 }
 
-test("g-371 判据1：六处工具名集合逐一相等（root/host-zh/host-en 表 · help.zh/en · index.js 注册 · 引擎 schema），各恰 50", () => {
+test("g-371 判据1：六处工具名集合逐一相等（root/host-zh/host-en 表 · help.zh/en · index.js 注册 · 引擎 schema），各恰 51", () => {
   const problems = toolFaceProblems(realInput());
   assert.deepEqual(problems, [], `工具面漂移：\n${problems.join("\n")}`);
 });
 
-test("g-371 判据1：README 工具计数声明（50）与引擎注册实数一致", () => {
+test("g-371 判据1：README 工具计数声明（51）与引擎注册实数一致", () => {
   const problems = countClaimProblems(
     [
       { id: "README.md", text: REAL_TEXT.rootReadme },
@@ -300,6 +414,69 @@ test("g-371 判据1：README 工具计数声明（50）与引擎注册实数一�
     REAL_SCHEMA.length,
   );
   assert.deepEqual(problems, [], `工具计数声明漂移：\n${problems.join("\n")}`);
+});
+
+test("g-371 判据1（g-436 增量）：工具计数声明覆盖面补全——10 个面逐面必中且等于 51", () => {
+  const problems = toolCountFaceProblems(COUNT_DOCS(), REAL_SCHEMA.length);
+  assert.deepEqual(problems, [], `工具计数面漂移：\n${problems.join("\n")}`);
+});
+
+test("g-371 判据1（g-436 增量）负向对照：10 个计数面任一处改错即红（含独立复核「改成 1」的原样复现）", () => {
+  const docs = COUNT_DOCS();
+  assert.deepEqual(toolCountFaceProblems(docs, EXPECTED_TOOL_COUNT), [], "基线（真实文件）必须零问题");
+
+  // 每一面各出一条负向对照：把该面的数字改成 1（独立复核实测的绕过值），同一判定器必须报红。
+  for (const face of TOOL_COUNT_FACES) {
+    const broken = docs.map((d) =>
+      d.id !== face.id
+        ? d
+        : { ...d, text: d.text.replace(face.re, (m: string, n: string) => m.replace(String(n), "1")) },
+    );
+    const target = broken.find((d) => d.id === face.id)!;
+    assert.notEqual(target.text, docs.find((d) => d.id === face.id)!.text, `变异必须生效：${face.id} ${face.re}`);
+    const problems = toolCountFaceProblems(broken, EXPECTED_TOOL_COUNT);
+    expectRed(problems, new RegExp(`${face.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\d+ 工具计数声明为 1`), `${face.id} ${face.why} 计数改成 1`);
+  }
+
+  // ⑦ r3：追加**与工具计数无关**的合法数字文案 ⇒ 必须仍绿（此前 `共 N 个` 过宽会误红并误指为工具计数）
+  const benign = docs.map((d) =>
+    d.id === "dsh-graph-host/README.md"
+      ? { ...d, text: `${d.text}\n本流程共 3 个阶段（与工具计数无关的合法文案）。\n相关说明见 README，共 2 个示例。\n` }
+      : d.id === "dsh-graph-host/prompts/help.zh.md"
+        ? { ...d, text: `${d.text}\n- 本流程共 3 个阶段；另有 4 个可选步骤。\n` }
+        : d,
+  );
+  assert.notDeepEqual(benign, docs, "变异必须生效");
+  assert.deepEqual(
+    toolCountFaceProblems(benign, EXPECTED_TOOL_COUNT),
+    [],
+    "追加「共 N 个阶段」等**非工具计数**文案不得误红（语境过滤）",
+  );
+  // 诚实残留（刻意保守，不是 bug）：含裸「工具」字样的句子（如「本页共 3 个工具章节」）与真声明在文本上
+  // 不可区分 ⇒ 仍会被当作疑似工具计数判红；此处显式钉住该行为，避免将来被误当「漏覆盖」放宽。
+  const ambiguous = docs.map((d) =>
+    d.id === "dsh-graph-host/README.md" ? { ...d, text: `${d.text}\n本页共 3 个工具章节。\n` } : d,
+  );
+  assert.ok(
+    toolCountFaceProblems(ambiguous, EXPECTED_TOOL_COUNT).length > 0,
+    "含裸「工具」字样的疑似计数仍保守判红（文本不可区分；如有误报请改写该句）",
+  );
+
+  // 同一条负向对照的反面：把工具计数面自身改成「无工具语境」的句子 ⇒ 必须判「声明缺失」（fail-closed）
+  const contextless = docs.map((d) =>
+    d.id === "dsh-graph-host/README.md" ? { ...d, text: d.text.replace("(51 in total)", "(51 altogether)") } : d,
+  );
+  expectRed(toolCountFaceProblems(contextless, EXPECTED_TOOL_COUNT), /未命中计数面/, "计数面失去工具语境 ⇒ 声明缺失必红");
+
+  // 声明被整段删除 ⇒ 逐面必中口径必须报红（不得退化为「无声明即通过」）
+  const noClaim = docs.map((d) => (d.id === "dsh-graph-host/README.md" ? { ...d, text: d.text.replace(/\(51 in total\)/g, "(no total)") } : d));
+  expectRed(toolCountFaceProblems(noClaim, EXPECTED_TOOL_COUNT), /未命中计数面/, "host README en 计数声明被删");
+
+  // hermetic：负向对照只改内存副本，真实文件逐字未变
+  assert.equal(readText(ROOT_README), REAL_TEXT.rootReadme, "负向对照污染了真实 README.md");
+  assert.equal(readText(HOST_README), REAL_TEXT.hostReadme, "负向对照污染了真实 dsh-graph-host/README.md");
+  assert.equal(readText(HELP_ZH), REAL_TEXT.helpZh, "负向对照污染了真实 help.zh.md");
+  assert.equal(readText(HELP_EN), REAL_TEXT.helpEn, "负向对照污染了真实 help.en.md");
 });
 
 test("g-371 判据6（M2b）：README/help 的记忆上限数值声明必须等于真源 MEMORY_LIMITS", () => {
@@ -347,7 +524,7 @@ test("g-371 判据2/6 负向对照：删表行 / 工具名改错字符 / 计数�
   const base = realInput();
   assert.deepEqual(toolFaceProblems(base), [], "基线（真实文件）必须零问题");
 
-  // ① 删 root README 表一行（单工具行「质量判据」）⇒ 49 ≠ 50
+  // ① 删 root README 表一行（单工具行「质量判据」）⇒ 50 ≠ 51
   const dropRoot = { ...base, rootReadme: dropTableRow(base.rootReadme, "## 提供的工具", 2, "`graph_set_criteria`") };
   assert.notEqual(dropRoot.rootReadme, base.rootReadme, "变异确实生效");
   expectRed(toolFaceProblems(dropRoot), /root README 工具表：缺少已注册工具 graph_set_criteria/, "删 root README 表一行");
@@ -383,8 +560,8 @@ test("g-371 判据2/6 负向对照：删表行 / 工具名改错字符 / 计数�
   };
   expectRed(toolFaceProblems(dup), /root README 工具表：存在重复工具名 graph_set_criteria×2/, "表内重复行");
 
-  // ④ 计数声明改错 ⇒ 必红（50 → 51）
-  const badCount = { ...base, rootReadme: base.rootReadme.replace("50 个 `graph_*` 工具", "51 个 `graph_*` 工具") };
+  // ④ 计数声明改错 ⇒ 必红（51 → 52）
+  const badCount = { ...base, rootReadme: base.rootReadme.replace("51 个 `graph_*` 工具", "52 个 `graph_*` 工具") };
   const countProblems = countClaimProblems(
     [
       { id: "README.md", text: badCount.rootReadme },
@@ -392,13 +569,13 @@ test("g-371 判据2/6 负向对照：删表行 / 工具名改错字符 / 计数�
     ],
     base.schemaTools.length,
   );
-  expectRed(countProblems, /README\.md:18 工具计数声明为 51/, "README 工具计数改错");
+  expectRed(countProblems, /README\.md:18 工具计数声明为 52/, "README 工具计数改错");
 
   // ④′ 计数声明被整段删除 ⇒ 守卫不得恒真退化
   const noCount = {
     ...base,
-    rootReadme: base.rootReadme.replace(/50 个 `graph_\*` 工具/g, "全部 `graph_*` 工具"),
-    hostReadme: base.hostReadme.replace(/50 个 `graph_\*` 工具/g, "全部 `graph_*` 工具").replace(/50 `graph_\*` tools/g, "all `graph_*` tools"),
+    rootReadme: base.rootReadme.replace(/51 个 `graph_\*` 工具/g, "全部 `graph_*` 工具"),
+    hostReadme: base.hostReadme.replace(/51 个 `graph_\*` 工具/g, "全部 `graph_*` 工具").replace(/51 `graph_\*` tools/g, "all `graph_*` tools"),
   };
   expectRed(
     countClaimProblems(

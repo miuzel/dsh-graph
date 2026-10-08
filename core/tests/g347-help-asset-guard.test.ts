@@ -8,7 +8,7 @@
  * 本套件把「帮助资产 = 引擎 schema 的投影」变成机器断言：引擎加参数/加工具而帮助没跟 → 必红。
  *
  * 断言面（真源固定为 `apply()` 实际注册的 tool def，不硬编码 49 名单）：
- *  A. 工具集合：schema 50 个 graph_* 工具与 zh/en 两份帮助的条目**逐一相等**（不缺、不多、不重复），
+ *  A. 工具集合：schema 51 个 graph_* 工具（g-436 新增 graph_start_review）与 zh/en 两份帮助的条目**逐一相等**（不缺、不多、不重复），
  *     且两份帮助的条目**顺序一致**；文件头声明的工具计数与 schema 实数一致；
  *  B. 参数面：每个工具帮助行必须提及该工具 schema 的**全部**参数名（zh/en 双向），
  *     且**可选性必须与 schema 一致**（必填不带方括号、可选必须带方括号）；
@@ -416,9 +416,9 @@ const help = {
   en: { text: readFileSync(SOURCE_HELP.en, "utf8"), entries: parseHelp(readFileSync(SOURCE_HELP.en, "utf8")) },
 };
 
-test("A1 schema 恰为 50 个 graph_* 工具，且名字唯一", () => {
-  assert.equal(defs.length, 50, `引擎注册的 graph_* 工具数应为 50，实际 ${defs.length}`);
-  assert.equal(new Set(defs.map((d) => d.name)).size, 50, "引擎工具名存在重复");
+test("A1 schema 恰为 51 个 graph_* 工具，且名字唯一", () => {
+  assert.equal(defs.length, 51, `引擎注册的 graph_* 工具数应为 51（g-436 新增 graph_start_review），实际 ${defs.length}`);
+  assert.equal(new Set(defs.map((d) => d.name)).size, 51, "引擎工具名存在重复");
 });
 
 test("A2 zh/en 帮助条目与 schema 工具集合逐一相等（不缺/不多/不重复），且 zh/en 结构对称", () => {
@@ -426,7 +426,7 @@ test("A2 zh/en 帮助条目与 schema 工具集合逐一相等（不缺/不多/�
     assert.deepEqual(structureProblems(help[lang].entries, defs, lang), [], `help.${lang}.md 结构面不一致`);
     // 原判别力显式保留：条目数、唯一性、集合相等
     const names = help[lang].entries.map((e) => e.name);
-    assert.equal(names.length, 50, `help.${lang}.md 条目数应为 50，实际 ${names.length}`);
+    assert.equal(names.length, 51, `help.${lang}.md 条目数应为 51，实际 ${names.length}`);
     assert.equal(new Set(names).size, names.length, `help.${lang}.md 存在重复条目`);
     assert.deepEqual([...names].sort(), [...defs.map((d) => d.name)].sort(), `help.${lang}.md 与 schema 工具集合不一致`);
   }

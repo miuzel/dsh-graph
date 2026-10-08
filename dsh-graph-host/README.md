@@ -25,7 +25,7 @@
 
 本插件采用**一体化单包分发**（npm 包名 `dsh-graph`），同时集成两大核心能力：
 
-- **Host 端**：向 DSH Agent 提供覆盖目标全生命周期的 50 个 `graph_*` 工具，并暴露 `/api/dsh-graph*` REST API（支持看板投影、目标详情查询与写操作）；
+- **Host 端**：向 DSH Agent 提供覆盖目标全生命周期的 51 个 `graph_*` 工具，并暴露 `/api/dsh-graph*` REST API（支持看板投影、目标详情查询与写操作）；
 - **Client 端**：无缝内嵌于 DSH Web 控制台（`conversation.view` 槽位）的浏览器二维泳道看板，提供直观的可视化交互与实时追踪。
 
 数据以本地纯文本与事件流形式存储于工作区的 `.dsh-graph/` 目录，Git 友好、天然支持协同对账与审计追踪。
@@ -138,7 +138,7 @@ curl -sL -b "" "<URL>" | grep -o '"@deepseek-ai/dsh-client-runtime"' | head -1
 
 ### Agent 工具速查表
 
-dsh-graph 为 Agent 提供了完善的工具链（共 50 个 `graph_*` 工具），按功能划分为以下分类：
+dsh-graph 为 Agent 提供了完善的工具链（共 51 个 `graph_*` 工具），按功能划分为以下分类：
 
 | 分类 | 工具名称 | 核心说明 |
 |------|----------|----------|
@@ -175,6 +175,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 50 个 `graph_*` 工具）
 | | `graph_record_attempt_handoff`| 记录前序 Attempt 的返工约束与排查基线 |
 | | `graph_unbind_goal_child` | 安全解绑目标执行子代理 |
 | | `graph_abandon_attempt` | 放弃陈旧或失联的 Attempt |
+| | `graph_start_review` | 为既有执行 Attempt 派发独立评审子代理（只读；不新建 attempt、不覆盖作者结果；结论独立落盘） |
 | **配置管理** | `graph_get_settings` | 查询当前 workspace 项目配置及合法枚举元信息 |
 | | `graph_update_settings` | 结构化更新当前 workspace 项目配置（支持 patch） |
 | **记忆管理** | `graph_memory_add` | 写入按需/常驻记忆条目 |
@@ -189,7 +190,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 50 个 `graph_*` 工具）
 | | `graph_refresh_results` | 重写 `results.md`：零 LLM 兜底拼装，或采用专用摘要子代理/人工产出的 `content`（旧版自动归档；支持批量 goals[]） |
 | | `graph_handoff` | 生成跨会话交接文档 `HANDOFF.md` |
 | | `graph_claim_supervisor` | 新会话接管 Supervisor 并更新会话元数据 |
-| | `graph_help` | 输出插件功能说明与 50 个工具速查清单 |
+| | `graph_help` | 输出插件功能说明与 51 个工具速查清单 |
 | **数据与校验** | `graph_validate` | 执行全量不变式检查（状态、依赖环、卡片引用） |
 | | `graph_rebuild` | 从事件流完全重建目标状态并与元数据对账 |
 
@@ -244,7 +245,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 50 个 `graph_*` 工具）
 
 Distributed as a **single unified package** (npm package name: `dsh-graph`), it provides both halves out-of-the-box:
 
-- **Host Side**: Exposes 50 `graph_*` tools to DSH Agents covering the entire goal lifecycle, along with `/api/dsh-graph*` REST endpoints for board projections, goal details, and mutations;
+- **Host Side**: Exposes 51 `graph_*` tools to DSH Agents covering the entire goal lifecycle, along with `/api/dsh-graph*` REST endpoints for board projections, goal details, and mutations;
 - **Client Side**: A browser 2D swimlane kanban board integrated into DSH Web (the `conversation.view` slot) for intuitive visualization and real-time tracking.
 
 All data is stored locally as human-readable files and an append-only event log under `.dsh-graph/`, making it Git-friendly, easily auditable, and collaborative.
@@ -371,7 +372,7 @@ external report and host source code; this README does **not** claim the desktop
 
 ### Agent Tools Reference
 
-dsh-graph equips Agents with a comprehensive set of `graph_*` tools (50 in total):
+dsh-graph equips Agents with a comprehensive set of `graph_*` tools (51 in total):
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -408,6 +409,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools (50 in total
 | | `graph_record_attempt_handoff`| Record rework constraints, failure notes, and baseline |
 | | `graph_unbind_goal_child` | Safely detach an execution subagent from a goal |
 | | `graph_abandon_attempt` | Abandon a stale or lost attempt |
+| | `graph_start_review` | Dispatch an independent read-only review subagent for an existing attempt (no new attempt, never overwrites author results; conclusion stored separately) |
 | **Configuration** | `graph_get_settings` | Query workspace project configuration and enum metadata |
 | | `graph_update_settings` | Update workspace project configuration (supports partial patch) |
 | **Memory** | `graph_memory_add` | Write on-demand / standing memory entries |
@@ -422,7 +424,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools (50 in total
 | | `graph_refresh_results` | Regenerate `results.md`: zero-LLM fallback assembly, or a caller-supplied `content` body from the dedicated summarizer subagent / a human (previous version archived; supports a goals[] batch) |
 | | `graph_handoff` | Export cross-session handover document (`HANDOFF.md`) |
 | | `graph_claim_supervisor` | Claim supervisor role in new session & update metadata |
-| | `graph_help` | Display usage instructions and the 50-tool checklist |
+| | `graph_help` | Display usage instructions and the 51-tool checklist |
 | **Validation** | `graph_validate` | Validate full invariants (states, cycles, card refs) |
 | | `graph_rebuild` | Rebuild goal state from `events.jsonl` and reconcile |
 

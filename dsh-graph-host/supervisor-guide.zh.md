@@ -140,7 +140,8 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
   4. 判据已验：该目标全部判据文本均以 `✅已验` 结尾（由 `goal.md` 自算，不采信调用方自报）。
 - **fail-safe**：任一信号取不到（命令失败、报告缺字段、基线不可用）即不放行，不得把「拿不到证据」当作「证据为真」。
 - **通过后的行为**：`graph_resolve_accept(fast_track=true, …)` 先追加 `review.fast_track` 事件（含四项机器证据与 baseline），再走同一 accept 映射；任一项不满足即拒绝且零副作用（状态不变、无 `review.passed` 事件）。
-- **边界（如实标注）**：`strict` 的「必须派发独立评审子代理」在插件层只有判定与指南约束，不是引擎强制——插件层尚无评审子代理的派发入口（尚未接线）。**`delivered` 的人工 gate 同样是「指南约束」而非引擎强制**：`graph_resolve_accept` 与 `graph_transition(to='delivered')` 都不校验任何人类信号（无 token、无 GUI 确认、事件载荷也不记录批准者），引擎无从区分「负责人裁决过」与「主管自放」。⇒ 质量把控由**主管 agent 与负责人共同负责**，刻意保留弹性：**不做机器强制**——强制只会诱发 agent 取巧，徒耗时间与 token。纪律在主管身上，不在引擎里。
+- **边界（如实标注）**：`strict` 的「必须派发独立评审子代理」在插件层只有判定与指南约束，不是引擎强制——派发入口**已接线**：工具 `graph_start_review(goal, attempt, candidate_commit)`（HTTP `POST /api/dsh-graph/start-review`）；评审是**既有执行 attempt 的附属记录**——不新建 attempt、不迁移状态、不覆盖作者 `child_id` 与 `results-att-*.md`，结论独立落盘 `<goalDir>/reviews/<review_id>.md`；未派独立评审时看板与事件流如实标注「未独立评审」但**不阻断** accept。**`delivered` 的人工 gate 同样是「指南约束」而非引擎强制**：`graph_resolve_accept` 与 `graph_transition(to='delivered')` 都不校验任何人类信号（无 token、无 GUI 确认、事件载荷也不记录批准者），引擎无从区分「负责人裁决过」与「主管自放」。⇒ 质量把控由**主管 agent 与负责人共同负责**，刻意保留弹性：**不做机器强制**——强制只会诱发 agent 取巧，徒耗时间与 token。纪律在主管身上，不在引擎里。
+- **徽标口径（r3）**：看板徽标与 `review_state.independent_ok` 针对 **`current_candidate_sha`**（最近一次被请求评审的候选），**不等于 HEAD**——HEAD 之后有新提交但未派评审时，徽标与独立 PASS 不会随之改变；判读时请直接比对 `current_candidate_sha` 与真实 HEAD（徽标旁亦显示该候选短 SHA）。
 - **纯文档/记忆类改动**可设 `review.policy: none` 免除机器门禁；它只免除机器证据收集，不免除负责人对 `delivered` 的最终裁决。
 
 #### 测试力度分级（按改动性质）

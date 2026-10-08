@@ -1,4 +1,4 @@
-dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具（共 50 个）：
+dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具（共 51 个）：
 
 ## 目标生命周期
 - graph_create_goal(title[, version][, type]) 建目标（进 backlog，带 version 则排期；type 可选 feature/bug/task/improvement/patch/chore）；
@@ -41,6 +41,7 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_record_attempt_handoff(goal, source_attempts[], failures, constraints, baseline, verification) 主管登记返工约束；
 - graph_unbind_goal_child(goal, {attempt|child_id}[, token][, reason][, legacy]) 安全解绑执行子代理（token 走严格 CAS；遗留绑定无 token 时须显式 legacy=true 并给 reason）；
 - graph_abandon_attempt(goal, attempt, reason) 标记 attempt 为已放弃；
+- graph_start_review(goal, attempt, candidate_commit[, baseline_commit][, guidance][, provider][, model][, reasoning_effort][, mode]) 为既有执行 attempt 派发独立评审子代理（只读审查；评审是附属记录，不新建 attempt、不覆盖作者 child_id 与 results-att-*.md；复用作者既有工作树；结论按真实 reviewer child 独立落盘）；
 - graph_resolve_accept(goal, verdict[, objection][, force][, reason][, fast_track][, machine_report]) 主管裁决接受请求（accept/object）；fast_track=true 走机器快速放行：须策略判定 auto 且 machine_report 四项门禁全绿（tests/typecheck exit_code=0、产品代码 <150 行且无未跟踪新文件、判据全部 ✅已验，由引擎自算），返回 {ok, fast_track}。
 
 ## 校验对账
@@ -66,7 +67,7 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_update_settings(patch) 更新项目配置（schema 校验、保留注释、原子写）。
 
 ## 帮助
-- graph_help() 显示本帮助（全部 50 个工具清单与参数速查）。
+- graph_help() 显示本帮助（全部 51 个工具清单与参数速查）。
 
 ## 接管 supervisor
 **仅在负责人明确要求你接管 supervisor 时执行**——默认任何会话都不得自动 claim：

@@ -6566,7 +6566,20 @@ export function parsePmReportGoalId(report: string): string | null {
   return match?.[1] ?? null;
 }
 
-/** 生成只读复核子代理 (Reviewer) 提示词（g-242） */
+/**
+ * 生成只读复核子代理 (Reviewer) 提示词（g-242；g-436 扩展为「无作者偏见」的独立评审材料包）。
+ *
+ * g-436 的两条硬约束（负责人裁决：只接线与可见化，不做硬阻断）：
+ * 1. **绑定到明确候选**：`candidateSha` / `baselineSha` / `reviewWorkspace` / `changedPaths` 由调用方
+ *    （真实入口）从 Git 解析后注入——评审对象是**某个 commit**，不是「最新代码」这种无锚点描述。
+ * 2. **不 fork 作者上下文**：只主动注入目标定义与负责人约束原文、判据原文、候选/基线 SHA、审查范围
+ *    与报告骨架。**不注入**作者的 attempt prompt、作者结果（`results-att-*.md`）、作者自报 PASS、
+ *    评论与返工叙事；因此旧版「请读整个 goal.md」的隐含做法被替换为把定义正文内联进来
+ *    （`goal.md` 的评论小节含作者/主管讨论，读取即等于注入作者上下文）。
+ *
+ * 诚实边界：工具白名单（role=reviewer）与本文的纪律文字都是**正常工具通道**的约束，
+ * 不是 bash 沙箱，也不能阻止有本地权限的进程绕行；安全边界遵循单用户 owner-trusted 模型。
+ */
 export function formatReviewPrompt(opts: {
   goalId: string;
   attemptId: string;
@@ -6574,17 +6587,59 @@ export function formatReviewPrompt(opts: {
   criteria?: string[];
   guidance?: string | null;
   language?: "zh" | "en";
+  /** g-436：被审查的候选 commit（完整 SHA 或可解析引用）。 */
+  candidateSha?: string | null;
+  /** g-436：候选的基线 commit（用于 `git diff <baseline> <candidate>`）。 */
+  baselineSha?: string | null;
+  /** g-436：目标标题（目标定义的一部分）。 */
+  goalTitle?: string | null;
+  /** g-436：目标描述原文（本项目约定：负责人约束与裁决写在目标描述里）。 */
+  goalDescription?: string | null;
+  /** g-436：评审工作区绝对路径（复用作者 attempt 的既有工作树，不新建评审树）。 */
+  reviewWorkspace?: string | null;
+  /** g-436：审查范围（`git diff --name-only <baseline> <candidate>` 的文件清单）。 */
+  changedPaths?: string[] | null;
 }): string {
+  const candidate = opts.candidateSha?.trim() || null;
+  const baseline = opts.baselineSha?.trim() || null;
+  const workspace = opts.reviewWorkspace?.trim() || null;
+  const description = opts.goalDescription?.trim() || null;
+  const paths = (opts.changedPaths ?? []).filter((p) => typeof p === "string" && p.trim() !== "");
+  // 判据原文（criteriaItems）通常已带 `1. ` 序号：注入时剥掉，避免出现「1. 1. 判据…」这种失真编号。
+  const stripOrdinal = (s: string) => String(s).replace(/^\s*\d+\s*[.、)]\s*/, "");
   if (opts.language === "en") {
     const lines = [
       `You are a professional code and goal review Agent. Perform a read-only review of goal ${opts.goalId}, execution attempt ${opts.attemptId}.`,
       "",
       `Goal ID: ${opts.goalId}`,
       `Attempt: ${opts.attemptId}`,
-      `Workspace-relative goal.md path: ${opts.goalRel}`,
+      `Scoped goal definition file (read it ONLY to re-check the goal definition / criteria; the material boundary below applies): ${opts.goalRel}`,
     ];
-    if (opts.criteria?.length) lines.push("", "**Acceptance criteria**:", ...opts.criteria.map((item, i) => `${i + 1}. ${item}`));
+    if (opts.goalTitle?.trim()) lines.push(`Goal title: ${opts.goalTitle.trim()}`);
+    if (candidate) lines.push(`Candidate commit under review: ${candidate}`);
+    if (baseline) lines.push(`Baseline commit: ${baseline}`);
+    if (workspace) lines.push(`Review workspace (existing attempt worktree, do not create a new one): ${workspace}`);
+    if (description) lines.push("", "**Goal definition (verbatim; includes the owner's constraints)**:", description);
+    if (opts.criteria?.length) lines.push("", "**Acceptance criteria (verbatim)**:", ...opts.criteria.map((item, i) => `${i + 1}. ${stripOrdinal(item)}`));
+    if (paths.length) lines.push("", `**Review scope (${paths.length} changed path(s) between baseline and candidate)**:`, ...paths.map((p) => `- ${p}`));
     if (opts.guidance?.trim()) lines.push("", `**Review guidance**: ${opts.guidance.trim()}`);
+    lines.push(
+      "",
+      "## Review material boundary",
+      "- This prompt is the complete review material: goal definition, acceptance criteria, candidate/baseline commits and review scope.",
+      "- Do not treat the author's conversation, attempt prompt, result files, self-reported PASS, goal comments or rework narrative as review inputs; they are not injected here.",
+      "- The **comments / latest directive / rework handoff / evidence ledger** sections of goal.md, and any author text, are NOT review material: never judge the candidate by them. If you read them while locating the definition, declare it under Unverified items.",
+      "- If `git rev-parse HEAD` in the review workspace differs from the candidate commit above, any test evidence you gather there MUST be marked UNVERIFIED.",
+    );
+    lines.push(
+      "",
+      "## Report skeleton (all items required)",
+      "- **Verdict**: PASS / BLOCK / UNVERIFIED — exactly one, on its own line.",
+      "- **Per-criterion conclusion and one-line evidence**: criterion → conclusion + evidence (command / file:line / commit).",
+      "- **Minimal rework list when BLOCK**: directly executable items, one per line.",
+      "- **Residual risk**: what remains risky after the fix.",
+      "- **Unverified items**: paths not covered, and why.",
+    );
     lines.push("", "## Review discipline and permissions", "- Read-only review: use read, glob, grep, and read-only tests only; do not edit or write code.", "- Do not call graph_* management write tools.", "- Return PASS or FAIL with concrete evidence; the supervisor/owner performs the final verdict.", "- bash, when available, is limited to local read-only tests and static checks.");
     return lines.join("\n");
   }
@@ -6593,17 +6648,45 @@ export function formatReviewPrompt(opts: {
     ``,
     `目标 ID：${opts.goalId}`,
     `执行 Attempt：${opts.attemptId}`,
-    `goal.md 工作区相对路径：${opts.goalRel}`,
+    `目标定义文件（**仅供**按需复核目标定义与判据原文；下方材料边界同样适用）：${opts.goalRel}`,
   ];
+  if (opts.goalTitle && opts.goalTitle.trim()) lines.push(`目标标题：${opts.goalTitle.trim()}`);
+  if (candidate) lines.push(`被审查的候选 commit：${candidate}`);
+  if (baseline) lines.push(`基线 commit：${baseline}`);
+  if (workspace) lines.push(`评审工作区（复用既有 attempt 工作树，不要新建评审树）：${workspace}`);
+  if (description) {
+    lines.push(``, `**目标定义（原文，含负责人约束）**：`, description);
+  }
   if (opts.criteria && opts.criteria.length > 0) {
-    lines.push(``, `**验收判据**：`);
+    lines.push(``, `**验收判据（原文）**：`);
     for (let i = 0; i < opts.criteria.length; i++) {
-      lines.push(`${i + 1}. ${opts.criteria[i]}`);
+      lines.push(`${i + 1}. ${stripOrdinal(opts.criteria[i])}`);
     }
+  }
+  if (paths.length > 0) {
+    lines.push(``, `**审查范围（基线→候选共 ${paths.length} 个变更路径）**：`);
+    for (const p of paths) lines.push(`- ${p}`);
   }
   if (opts.guidance && opts.guidance.trim()) {
     lines.push(``, `**复核指导**：${opts.guidance.trim()}`);
   }
+  lines.push(
+    ``,
+    `## 评审材料边界`,
+    `- 本提示词即完整评审材料：目标定义、验收判据原文、候选/基线 commit、审查范围；`,
+    `- 不得把作者的对话、作者 attempt prompt、作者结果文件、作者自报 PASS、目标评论或返工叙事当作评审输入——它们**不在**注入范围内；`,
+    `- \`goal.md\` 中的**评论 / 最近指令 / 返工 handoff / 证据台账**与作者文本**均不属审查材料**，不得据以评判候选；若为定位定义而读到，必须在「未验证项」中声明；`,
+    `- 若评审工作区中 \`git rev-parse HEAD\` 不等于上方候选 commit，则在该工作区取得的测试证据**必须**标记为「未验证」。`,
+  );
+  lines.push(
+    ``,
+    `## 报告骨架（逐项必填）`,
+    `- **总判**：PASS / BLOCK / UNVERIFIED（三选一，必须单独一行给出）；`,
+    `- **逐项结论与单行证据**：每条判据 → 结论 + 证据（命令 / 文件:行 / commit）；`,
+    `- **BLOCK 最小返工清单**：可直接执行的返工项（逐条）；`,
+    `- **残余风险**：修完后仍存在的风险；`,
+    `- **未验证项**：未覆盖的路径与原因。`,
+  );
   lines.push(
     ``,
     `## 审查纪律与工具权限`,
@@ -6613,6 +6696,700 @@ export function formatReviewPrompt(opts: {
     `- bash 权限说明：如保留 bash，仅用于运行只读测试（如单元测试 node --test、静态检查、git diff 等），其实际具备当前工作区的本地运行权限；白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。`,
   );
   return lines.join("\n");
+}
+
+/* ============================================================================
+ * g-436：独立评审（Independent Review）——接线与可见化
+ *
+ * 负责人已裁决：**只做接线与可见化，不做硬阻断**。strict 目标未派独立评审时 accept 仍可进行
+ * （看板/事件如实标注「未独立评审」），不新增引擎硬门禁、不新增人类凭据体系。
+ *
+ * 契约（与本目标判据一一对应）：
+ * 1. **不是 attempt**：评审是「既有执行 attempt 的附属记录」——不新建 attempt、不迁移目标状态、
+ *    不覆盖作者的 `child_id` / `binding_token` / `results-att-*.md`（后者是 last-wins，覆盖即毁证）。
+ * 2. **身份真源**：`reviewer_child_id` 只来自真实 spawn 返回的 child 身份；`requested_by` 只来自
+ *    真实调用身份（host 侧 `ex.agent.session.id`）。**不接受**调用者自报的 actor/role/child_id。
+ * 3. **候选绑定**：每条评审记录绑定一个 `candidate_sha`；候选变化后旧记录只作历史（`stale`），
+ *    新候选在完成评审前一律显示「未独立评审」。
+ * 4. **独立结论真源**：结论只由宿主 `subagent/end` 按**真实绑定的 child** 归因写入；空输出、
+ *    异常终止（stopReason 非 completed）、宿主重启后归属不明的 child **一律不得记为 PASS**。
+ * 5. **事件为唯一真相源**（R-02）：状态由 `review.dispatched` / `review.bound` / `review.reused`
+ *    / `review.completed` / `review.failed` 事件重放得出（**闭集**见 `REVIEW_EVENT_NAMES`，
+ *    另有目标级可见化标注 `review.independent_missing`）；`reviews/<review_id>.md` 只是承载
+ *    报告正文的**独立落盘**产物。
+ * 6. **复用 = 一次新的评审请求**（F1）：再次请求同一候选时追加 `review.reused`，把该候选**重新
+ *    置为当前**，使看板投影（`current_candidate_sha` / `stale`）与工具返回值**同源一致**；
+ *    这是显式可审计的再请求，绝不静默复活旧 PASS——未被再次请求的候选，其记录仍然 `stale`。
+ *
+ * 诚实边界：`role=reviewer` 的工具作用域过滤只约束**正常工具通道**，不等于 bash 沙箱；
+ * HTTP 侧既有的 `human:gui` 身份不证明真人。本区块不声称「已强制只读」或「已阻止任意绕行」。
+ * ========================================================================== */
+
+/** 评审记录状态（闭集，事件重放的取值域）。 */
+export const REVIEW_RECORD_STATUSES = ["started", "bound", "completed", "failed"] as const;
+export type ReviewRecordStatus = (typeof REVIEW_RECORD_STATUSES)[number];
+
+/** 评审结论闭集（报告骨架同口径）。 */
+export const REVIEW_CONCLUSIONS = ["PASS", "BLOCK", "UNVERIFIED"] as const;
+export type ReviewConclusion = (typeof REVIEW_CONCLUSIONS)[number];
+
+/** accept 时「strict 但无独立评审」的可见标注事件名（**不阻断** accept）。 */
+export const REVIEW_INDEPENDENT_MISSING_EVENT = "review.independent_missing";
+
+/**
+ * 评审相关事件名**闭集**（g-436；F2 修正：此前注释写 4 项、实现却用了 `review.independent_missing`）。
+ * 这是唯一真源：所有写入点都经 `assertReviewEventName` fail-closed 校验，重放侧按
+ * `REVIEW_RECORD_EVENT_NAMES` 过滤（见 `reviewRecordViews`），测试另比对源码实际写入名集合。
+ */
+export const REVIEW_EVENT_NAMES = [
+  "review.dispatched",
+  "review.bound",
+  "review.reused",
+  "review.completed",
+  "review.failed",
+  REVIEW_INDEPENDENT_MISSING_EVENT,
+] as const;
+export type ReviewEventName = (typeof REVIEW_EVENT_NAMES)[number];
+
+/**
+ * 只作用于**单条评审记录**的事件名子集（`REVIEW_EVENT_NAMES` 去掉目标级标注）。
+ * `review.independent_missing` 是**目标级**可见化标注（无记录语义），不参与记录重放；
+ * accept 路线的 `review.requested` / `review.objected` / `review.passed` / `review.fast_track`
+ * 同样不属于本闭集（它们由既有 accept/复核流程写入，g-436 不改其语义）。
+ */
+export const REVIEW_RECORD_EVENT_NAMES = [
+  "review.dispatched",
+  "review.bound",
+  "review.reused",
+  "review.completed",
+  "review.failed",
+] as const;
+
+/** 写入侧 fail-closed：事件名必须落在闭集内（新增事件名逃逸常量即抛错）。 */
+function assertReviewEventName(name: string): void {
+  if (!(REVIEW_EVENT_NAMES as readonly string[]).includes(name)) {
+    throw new GraphError(`未知的评审事件名（不在 REVIEW_EVENT_NAMES 闭集内）：${name}`);
+  }
+}
+
+const REVIEW_ID_PATTERN = /^rev-att-\d{3,}-\d{2,}$/;
+/** 评审范围最多记录多少条变更路径（仅为记录体量上限，与 g-339 的「注入截断」无关）。 */
+const REVIEW_MAX_CHANGED_PATHS = 500;
+const REVIEW_SEQ_PAD = 2;
+
+/** `<goalDir>/reviews`：评审记录与报告的独立落盘目录（与 attempts/ 并列，绝不写入 attempts/）。 */
+export function reviewsDir(root: string, goalId: string): string {
+  const goalFile = findGoalFile(root, goalId);
+  if (basename(goalFile) !== "goal.md") {
+    throw new GraphError(`暂存目标（backlog）没有目标目录，无法登记独立评审：${goalId}`);
+  }
+  return join(goalDirOf(goalFile), "reviews");
+}
+
+/** 单条评审记录的落盘文件（报告正文 + meta 快照）。 */
+export function reviewRecordFile(root: string, goalId: string, reviewId: string): string {
+  if (!REVIEW_ID_PATTERN.test(String(reviewId ?? ""))) {
+    throw new GraphError(`非法 review_id：${reviewId}`);
+  }
+  return join(reviewsDir(root, goalId), `${reviewId}.md`);
+}
+
+/** 下一个 review_id：`rev-<source_attempt>-<NN>`。序号取**已存在文件的最大值 + 1**（不重用编号）。 */
+export function nextReviewId(root: string, goalId: string, sourceAttempt: string): string {
+  const att = String(sourceAttempt ?? "").trim();
+  if (!/^att-\d{3,}$/.test(att)) throw new GraphError(`非法 source_attempt：${sourceAttempt}`);
+  const dir = reviewsDir(root, goalId);
+  let max = 0;
+  if (existsSync(dir)) {
+    const prefix = `rev-${att}-`;
+    for (const f of readdirSync(dir)) {
+      if (!f.startsWith(prefix) || !f.endsWith(".md")) continue;
+      const n = Number(f.slice(prefix.length, -3));
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+  }
+  return `rev-${att}-${String(max + 1).padStart(REVIEW_SEQ_PAD, "0")}`;
+}
+
+/** 读取单条评审记录的 meta 快照与报告正文；缺失/损坏返回 null（不抛错，读路径必须稳）。 */
+export function readReviewRecord(root: string, goalId: string, reviewId: string): { meta: Record<string, any>; body: string } | null {
+  let file: string;
+  try { file = reviewRecordFile(root, goalId, reviewId); } catch { return null; }
+  if (!existsSync(file)) return null;
+  try {
+    const doc = loadGoal(file);
+    return { meta: doc.meta as Record<string, any>, body: doc.body };
+  } catch { return null; }
+}
+
+/** 报告正文的独立落盘（事件先行由调用方 commitPrepared 保证）。 */
+function persistReviewRecord(
+  root: string,
+  goalId: string,
+  reviewId: string,
+  meta: Record<string, any>,
+  body: string,
+): void {
+  const dir = reviewsDir(root, goalId);
+  mkdirSync(dir, { recursive: true });
+  saveGoal(reviewRecordFile(root, goalId, reviewId), { meta, body });
+}
+
+const REVIEW_REPORT_PLACEHOLDER = "（评审进行中：报告正文由宿主在评审子代理结束时按真实 child 归因写入）\n";
+
+export interface ReviewDispatchInput {
+  goalId: string;
+  sourceAttempt: string;
+  candidateSha: string;
+  baselineSha?: string | null;
+  reviewWorkspace?: string | null;
+  changedPaths?: string[];
+  /** 真实调用身份（host 侧 ex.agent.session.id）；绝不接受调用者自报的 role/child_id。 */
+  requestedBy: string;
+  /** 作者（被评审 attempt）的真实 child 身份；用于「作者不得把自己的输出登记为独立评审」。 */
+  authorChildId?: string | null;
+  actor: string;
+  provider?: string | null;
+  model?: string | null;
+  modelRoute?: string | null;
+  mode?: string | null;
+}
+
+/** 登记一次评审派发（事件先行）：写 `review.dispatched` + `<goalDir>/reviews/<review_id>.md`。
+ *  返回 review_id。**不触碰**源 attempt 的任何字段（不覆盖作者 child_id/results）。 */
+export function appendReviewDispatch(root: string, input: ReviewDispatchInput): { review_id: string } {
+  const goalId = String(input.goalId ?? "").trim();
+  const sourceAttempt = String(input.sourceAttempt ?? "").trim();
+  const candidateSha = String(input.candidateSha ?? "").trim();
+  const requestedBy = String(input.requestedBy ?? "").trim();
+  if (!goalId) throw new GraphError("missing goal");
+  if (!candidateSha) throw new GraphError("候选 commit（candidate_sha）必填且非空");
+  if (!requestedBy) throw new GraphError("requested_by 必填（真实调用身份）");
+  const goalFile = findGoalFile(root, goalId);
+  if (basename(goalFile) !== "goal.md") {
+    throw new GraphError(`暂存目标（backlog）不能登记执行评审，请先排期移入 goals/ 或版本`);
+  }
+  // 源 attempt 必须真实存在——评审是对**既有执行 attempt** 的附属记录，不指向不存在的对象。
+  const attFile = join(goalDirOf(goalFile), "attempts", sourceAttempt, "attempt.md");
+  if (!existsSync(attFile)) throw new GraphError(`attempt 不存在：${sourceAttempt}（目标 ${goalId}）`);
+
+  const authorChildId = input.authorChildId ?? null;
+  const selfRequested = Boolean(authorChildId) && requestedBy === `agent:${authorChildId}`;
+  const reviewId = nextReviewId(root, goalId, sourceAttempt);
+  const meta: Record<string, any> = {
+    id: reviewId,
+    goal: goalId,
+    source_attempt: sourceAttempt,
+    candidate_sha: candidateSha,
+    baseline_sha: input.baselineSha ?? null,
+    review_workspace: input.reviewWorkspace ?? null,
+    changed_paths: Array.isArray(input.changedPaths) ? input.changedPaths.slice(0, REVIEW_MAX_CHANGED_PATHS) : [],
+    reviewer_child_id: null,
+    author_child_id: authorChildId,
+    requested_by: requestedBy,
+    self_requested: selfRequested,
+    status: "started",
+    conclusion: null,
+    report_file: null,
+    created_at: nowIso(),
+    bound_at: null,
+    completed_at: null,
+    failed_at: null,
+    stop_reason: null,
+    failure_reason: null,
+  };
+  if (input.provider) meta.provider = input.provider;
+  if (input.model) meta.model = input.model;
+  if (input.modelRoute) meta.model_route = input.modelRoute;
+  if (input.mode) meta.mode = input.mode;
+
+  assertReviewEventName("review.dispatched");
+  commitPrepared(root, { actor: input.actor, goal: goalId }, {
+    value: { review_id: reviewId },
+    events: [{
+      actor: input.actor,
+      event: "review.dispatched",
+      goal: goalId,
+      details: {
+        review_id: reviewId,
+        source_attempt: sourceAttempt,
+        candidate_sha: candidateSha,
+        baseline_sha: input.baselineSha ?? null,
+        review_workspace: input.reviewWorkspace ?? null,
+        requested_by: requestedBy,
+        author_child_id: authorChildId,
+        self_requested: selfRequested,
+        status: "started",
+      },
+    }],
+    persist: () => persistReviewRecord(root, goalId, reviewId, meta, REVIEW_REPORT_PLACEHOLDER),
+  });
+  return { review_id: reviewId };
+}
+
+/** 绑定真实 review child 身份（事件先行）。child 身份来自真实 spawn 返回，不接受调用者自报。 */
+export function bindReviewChild(
+  root: string,
+  goalId: string,
+  reviewId: string,
+  childId: string,
+  actor: string,
+  opts: { parentSessionId?: string | null; provider?: string | null; model?: string | null; modelRoute?: string | null; mode?: string | null } = {},
+): void {
+  const cid = String(childId ?? "").trim();
+  if (!cid) throw new GraphError("reviewer child 身份不能为空");
+  const rec = readReviewRecord(root, goalId, reviewId);
+  if (!rec) throw new GraphError(`评审记录不存在：${reviewId}（目标 ${goalId}）`);
+  const meta: Record<string, any> = {
+    ...rec.meta,
+    reviewer_child_id: cid,
+    status: "bound",
+    bound_at: nowIso(),
+  };
+  if (opts.parentSessionId) meta.parent_session_id = opts.parentSessionId;
+  if (opts.provider) meta.provider = opts.provider;
+  if (opts.model) meta.model = opts.model;
+  if (opts.modelRoute) meta.model_route = opts.modelRoute;
+  if (opts.mode) meta.mode = opts.mode;
+  assertReviewEventName("review.bound");
+  commitPrepared(root, { actor, goal: goalId }, {
+    value: undefined as void,
+    events: [{
+      actor,
+      event: "review.bound",
+      goal: goalId,
+      details: {
+        review_id: reviewId,
+        source_attempt: String(rec.meta.source_attempt ?? ""),
+        candidate_sha: String(rec.meta.candidate_sha ?? ""),
+        reviewer_child_id: cid,
+        parent_session_id: opts.parentSessionId ?? null,
+      },
+    }],
+    persist: () => persistReviewRecord(root, goalId, reviewId, meta, rec.body),
+  });
+}
+
+/** 结论解析：只认**显式总判行**。识别不到 ⇒ UNVERIFIED（绝不把沉默当 PASS）。 */
+export function parseReviewConclusion(text: unknown): ReviewConclusion {
+  const raw = typeof text === "string" ? text : "";
+  if (!raw.trim()) return "UNVERIFIED";
+  const re = /(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*)?\s*(?:总判|结论|Verdict)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(PASS|BLOCK|UNVERIFIED)\b/i;
+  const m = raw.match(re);
+  if (!m) return "UNVERIFIED";
+  const v = m[1].toUpperCase();
+  return (REVIEW_CONCLUSIONS as readonly string[]).includes(v) ? (v as ReviewConclusion) : "UNVERIFIED";
+}
+
+/** `stopReason` 是否代表「正常结束」。异常终止（error/aborted/diagnostic/缺失）一律不得 PASS。 */
+export function isCleanReviewStopReason(stopReason: unknown): boolean {
+  if (stopReason === null || stopReason === undefined || stopReason === "") return true;
+  return /^completed$/i.test(String(stopReason).trim());
+}
+
+/**
+ * 结算一次评审（宿主 `subagent/end` 按**真实绑定 child** 归因调用）。
+ * fail-closed：空输出 / 异常终止 ⇒ status=failed、conclusion=UNVERIFIED，**绝不记 PASS**。
+ */
+export function settleReview(
+  root: string,
+  goalId: string,
+  reviewId: string,
+  opts: { text: unknown; stopReason?: string | null; actor: string; childId?: string | null },
+): { conclusion: ReviewConclusion; status: ReviewRecordStatus; downgraded: boolean } {
+  const rec = readReviewRecord(root, goalId, reviewId);
+  if (!rec) throw new GraphError(`评审记录不存在：${reviewId}（目标 ${goalId}）`);
+  const boundChild = rec.meta.reviewer_child_id ? String(rec.meta.reviewer_child_id) : null;
+  if (opts.childId && boundChild && String(opts.childId) !== boundChild) {
+    throw new GraphError(`评审结算身份不匹配：child ${opts.childId} 不是该记录的 reviewer（${boundChild}）`);
+  }
+  if (!boundChild) {
+    throw new GraphError(`评审记录 ${reviewId} 尚无真实 reviewer child 绑定，不得结算结论`);
+  }
+  const body = typeof opts.text === "string" ? opts.text : "";
+  const clean = isCleanReviewStopReason(opts.stopReason);
+  let conclusion = parseReviewConclusion(body);
+  let downgraded = false;
+  let failureReason: string | null = null;
+  if (!clean) {
+    failureReason = `异常终止（stop_reason=${String(opts.stopReason)}）：结论降级为 UNVERIFIED，不得记 PASS`;
+    if (conclusion === "PASS") { conclusion = "UNVERIFIED"; downgraded = true; }
+  } else if (!body.trim()) {
+    failureReason = "评审子代理无输出：结论记 UNVERIFIED，不得记 PASS";
+    conclusion = "UNVERIFIED";
+  }
+  const failed = !clean || !body.trim();
+  const status: ReviewRecordStatus = failed ? "failed" : "completed";
+  const meta: Record<string, any> = {
+    ...rec.meta,
+    status,
+    conclusion,
+    stop_reason: opts.stopReason ?? null,
+    failure_reason: failureReason,
+    report_file: reviewRecordFile(root, goalId, reviewId),
+    ...(failed ? { failed_at: nowIso() } : { completed_at: nowIso() }),
+  };
+  const eventName = failed ? "review.failed" : "review.completed";
+  assertReviewEventName(eventName);
+  commitPrepared(root, { actor: opts.actor, goal: goalId }, {
+    value: undefined as void,
+    events: [{
+      actor: opts.actor,
+      event: eventName,
+      goal: goalId,
+      details: {
+        review_id: reviewId,
+        source_attempt: String(rec.meta.source_attempt ?? ""),
+        candidate_sha: String(rec.meta.candidate_sha ?? ""),
+        reviewer_child_id: boundChild,
+        status,
+        conclusion,
+        stop_reason: opts.stopReason ?? null,
+        ...(failureReason ? { reason: failureReason } : {}),
+        report_file: meta.report_file,
+      },
+    }],
+    persist: () => persistReviewRecord(root, goalId, reviewId, meta, body || REVIEW_REPORT_PLACEHOLDER),
+  });
+  return { conclusion, status, downgraded };
+}
+
+/**
+ * F1（g-436 追加）：复用既有评审记录 = 一次**新的评审请求**。
+ *
+ * 语义裁决 ①「重新置为当前」：主管再次请求评审候选 A 时，A 就是「当前候选」——追加
+ * `review.reused`（带 `requested_by` 与 `candidate_sha`），使 `reviewRecordViews` 的
+ * `current_candidate_sha` 与 `stale` 相应回落，**工具返回值与看板投影同源一致**，不再出现
+ * 「刚复用成功」与「该记录已陈旧 / 当前未独立评审」两句自相矛盾。
+ *
+ * 保守方向不变：这是**显式、可审计**的再请求（事件流留痕，非静默复活旧 PASS）；未被再次请求的
+ * 候选，其记录仍然 `stale`、`independent_ok` 仍为 false。幂等语义也不变：不重复派发子代理。
+ */
+export function appendReviewReused(
+  root: string,
+  opts: { goalId: string; reviewId: string; candidateSha: string; requestedBy: string; actor?: string },
+): { review_id: string; wrote: boolean } {
+  const rec = readReviewRecord(root, opts.goalId, opts.reviewId);
+  if (!rec) throw new GraphError(`评审记录不存在：${opts.reviewId}`);
+  const recSha = String(rec.meta.candidate_sha ?? "");
+  if (recSha !== String(opts.candidateSha ?? "")) {
+    throw new GraphError(`复用候选不匹配：记录 ${opts.reviewId} 绑定 ${recSha}，请求 ${opts.candidateSha}`);
+  }
+  if (!String(opts.requestedBy ?? "")) throw new GraphError("appendReviewReused 需要真实请求身份（requestedBy）");
+  const actor = opts.actor ?? opts.requestedBy;
+  // 幂等 no-op：该记录已是当前候选且不陈旧 ⇒ 事件流与记录**一概不动**（重复调用零副作用）。
+  // 只有「复用后状态确实改变」（记录陈旧 or 不是当前候选）才写一条 review.reused 审计事件。
+  const st = goalReviewState(root, opts.goalId);
+  const cur = st.reviews.find((r) => r.review_id === opts.reviewId);
+  if (st.current_candidate_sha === recSha && cur && !cur.stale) {
+    return { review_id: opts.reviewId, wrote: false };
+  }
+  assertReviewEventName("review.reused");
+  const now = nowIso();
+  const meta: Record<string, any> = {
+    ...rec.meta,
+    last_requested_by: opts.requestedBy,
+    last_requested_at: now,
+    reuse_count: Number(rec.meta.reuse_count ?? 0) + 1,
+  };
+  commitPrepared(root, { actor, goal: opts.goalId }, {
+    value: undefined as void,
+    events: [{
+      actor,
+      event: "review.reused",
+      goal: opts.goalId,
+      details: {
+        review_id: opts.reviewId,
+        source_attempt: String(rec.meta.source_attempt ?? ""),
+        candidate_sha: recSha,
+        requested_by: opts.requestedBy,
+        note: "复用既有评审记录：把该候选重新置为当前候选（投影与返回值同源一致，不重复派发）",
+      },
+    }],
+    persist: () => persistReviewRecord(root, opts.goalId, opts.reviewId, meta, rec.body),
+  });
+  return { review_id: opts.reviewId, wrote: true };
+}
+
+/** 派发失败（无 provider / spawn 异常 / 绑定失败）：事件先行记 `review.failed`，绝不留下「进行中」。 */
+export function failReviewDispatch(
+  root: string,
+  goalId: string,
+  reviewId: string,
+  reason: string,
+  actor: string,
+): void {
+  const rec = readReviewRecord(root, goalId, reviewId);
+  if (!rec) return;
+  const meta: Record<string, any> = {
+    ...rec.meta,
+    status: "failed",
+    conclusion: "UNVERIFIED",
+    failure_reason: String(reason ?? "").slice(0, 1000),
+    failed_at: nowIso(),
+  };
+  assertReviewEventName("review.failed");
+  commitPrepared(root, { actor, goal: goalId }, {
+    value: undefined as void,
+    events: [{
+      actor,
+      event: "review.failed",
+      goal: goalId,
+      details: {
+        review_id: reviewId,
+        source_attempt: String(rec.meta.source_attempt ?? ""),
+        candidate_sha: String(rec.meta.candidate_sha ?? ""),
+        reviewer_child_id: rec.meta.reviewer_child_id ?? null,
+        status: "failed",
+        conclusion: "UNVERIFIED",
+        reason: String(reason ?? "").slice(0, 1000),
+      },
+    }],
+    persist: () => persistReviewRecord(root, goalId, reviewId, meta, rec.body),
+  });
+}
+
+/** 事件流中的评审记录视图（顺序 = 派发先后）。 */
+export interface ReviewRecordView {
+  review_id: string;
+  source_attempt: string;
+  candidate_sha: string;
+  baseline_sha: string | null;
+  review_workspace: string | null;
+  reviewer_child_id: string | null;
+  author_child_id: string | null;
+  requested_by: string;
+  self_requested: boolean;
+  status: ReviewRecordStatus;
+  conclusion: ReviewConclusion | null;
+  stop_reason: string | null;
+  failure_reason: string | null;
+  created_at: string;
+  /** 最近一次评审**请求**（首次派发或后续复用）的发起身份与时间（F1 溯源）。 */
+  last_requested_by: string;
+  last_requested_at: string;
+  report_file: string | null;
+  /** 是否针对当前候选（false ⇒ 只作历史，不适用于新候选）。 */
+  stale: boolean;
+  /** 是否构成「可审计的独立评审」（真实 reviewer child、非作者自派、非作者自身 child）。 */
+  independent: boolean;
+}
+
+export type ReviewStateStatus = "none" | "in_progress" | "pass" | "block" | "unverified" | "failed";
+
+export interface GoalReviewState {
+  policy: ReviewPolicy;
+  policy_source: "explicit" | "type_default";
+  strict_reasons: string[];
+  strict_reasons_text: string[];
+  /** 最近一次评审派发针对的候选 SHA（从未派发 ⇒ null）。 */
+  current_candidate_sha: string | null;
+  status: ReviewStateStatus;
+  /** 当前候选是否有可审计的独立评审 PASS 记录。 */
+  independent_ok: boolean;
+  /** 是否应显示「未独立评审」标注：strict 且当前候选无独立评审 PASS。 */
+  independent_missing: boolean;
+  reviews: ReviewRecordView[];
+}
+
+/** 从事件流重放某目标的评审记录（唯一真相源；文件只承载报告正文）。 */
+export function reviewRecordViews(root: string, goalId: string): ReviewRecordView[] {
+  const order: string[] = [];
+  const map = new Map<string, ReviewRecordView>();
+  for (const ev of readEvents(root)) {
+    if (ev.goal !== goalId) continue;
+    // F2 消费点：只有**记录生命周期**事件参与重放（闭集真源 REVIEW_RECORD_EVENT_NAMES）。
+    // 目标级 review.independent_missing 与 accept 路线的 requested/objected/passed/fast_track 一律不在此列。
+    if (!(REVIEW_RECORD_EVENT_NAMES as readonly string[]).includes(ev.event)) continue;
+    const d = ev.details ?? {};
+    const rid = typeof d.review_id === "string" ? d.review_id : "";
+    if (!rid) continue;
+    if (ev.event === "review.dispatched") {
+      const v: ReviewRecordView = {
+        review_id: rid,
+        source_attempt: String(d.source_attempt ?? ""),
+        candidate_sha: String(d.candidate_sha ?? ""),
+        baseline_sha: d.baseline_sha == null ? null : String(d.baseline_sha),
+        review_workspace: d.review_workspace == null ? null : String(d.review_workspace),
+        reviewer_child_id: null,
+        author_child_id: d.author_child_id == null ? null : String(d.author_child_id),
+        requested_by: String(d.requested_by ?? ""),
+        self_requested: d.self_requested === true,
+        status: "started",
+        conclusion: null,
+        stop_reason: null,
+        failure_reason: null,
+        created_at: ev.ts,
+        last_requested_by: String(d.requested_by ?? ""),
+        last_requested_at: ev.ts,
+        report_file: null,
+        stale: false,
+        independent: false,
+      };
+      if (!map.has(rid)) order.push(rid);
+      map.set(rid, v);
+      continue;
+    }
+    const cur = map.get(rid);
+    if (!cur) continue; // 无派发事件的孤儿结算：不猜归属、不重建记录
+    if (ev.event === "review.bound") {
+      cur.reviewer_child_id = d.reviewer_child_id == null ? null : String(d.reviewer_child_id);
+      cur.status = "bound";
+    } else if (ev.event === "review.completed") {
+      cur.status = "completed";
+      cur.conclusion = (REVIEW_CONCLUSIONS as readonly string[]).includes(String(d.conclusion))
+        ? String(d.conclusion) as ReviewConclusion
+        : "UNVERIFIED";
+      cur.stop_reason = d.stop_reason == null ? null : String(d.stop_reason);
+      cur.report_file = d.report_file == null ? null : String(d.report_file);
+    } else if (ev.event === "review.failed") {
+      cur.status = "failed";
+      cur.conclusion = "UNVERIFIED";
+      cur.stop_reason = d.stop_reason == null ? null : String(d.stop_reason);
+      cur.failure_reason = d.reason == null ? null : String(d.reason);
+    } else if (ev.event === "review.reused") {
+      // F1：复用旧记录 = 一次**新的评审请求** ⇒ 该记录重新成为「当前候选」的承载者。
+      // 语义裁决①（重新置为当前）：投影 current_candidate_sha / stale 随之下落，与工具返回值同源一致。
+      cur.last_requested_by = String(d.requested_by ?? cur.last_requested_by ?? "");
+      cur.last_requested_at = ev.ts;
+      const at = order.indexOf(rid);
+      if (at >= 0) order.splice(at, 1);
+      order.push(rid);
+    }
+  }
+  const views = order.map((rid) => map.get(rid)!);
+  const current = views.length > 0 ? views[views.length - 1].candidate_sha : null;
+  for (const v of views) {
+    v.stale = current !== null && v.candidate_sha !== current;
+    v.independent = Boolean(v.reviewer_child_id)
+      && !v.self_requested
+      && (!v.author_child_id || v.reviewer_child_id !== v.author_child_id);
+  }
+  return views;
+}
+
+/** 目标当前的评审可见状态（strict 缺独立评审 ⇒ `independent_missing=true`，但**不阻断** accept）。 */
+export function goalReviewState(
+  root: string,
+  goalId: string,
+  opts: { type?: unknown; policy?: unknown } = {},
+): GoalReviewState {
+  const type = opts.type !== undefined ? opts.type : loadGoal(findGoalFile(root, goalId)).meta.type;
+  const policyRaw = opts.policy !== undefined ? opts.policy : readProjectConfig(root).review.policy;
+  const decision = resolveReviewPolicy({ policy: policyRaw, type });
+  const reviews = reviewRecordViews(root, goalId);
+  const current = reviews.length > 0 ? reviews[reviews.length - 1].candidate_sha : null;
+  const latest = reviews.length > 0 ? reviews[reviews.length - 1] : null;
+  let status: ReviewStateStatus = "none";
+  if (latest) {
+    if (latest.status === "started" || latest.status === "bound") status = "in_progress";
+    else if (latest.status === "failed") status = "failed";
+    else if (latest.conclusion === "PASS") status = "pass";
+    else if (latest.conclusion === "BLOCK") status = "block";
+    else status = "unverified";
+  }
+  const independentOk = reviews.some((r) => !r.stale && r.independent && r.status === "completed" && r.conclusion === "PASS");
+  return {
+    policy: decision.policy,
+    policy_source: decision.source,
+    strict_reasons: decision.strictReasons.slice(),
+    strict_reasons_text: decision.reasons.slice(),
+    current_candidate_sha: current,
+    status,
+    independent_ok: independentOk,
+    independent_missing: decision.policy === "strict" && !independentOk,
+    reviews,
+  };
+}
+
+/** 全部 `review.bound` 的真实 child 身份 → 其评审归属（跨目标；用于越权守卫）。 */
+export function reviewerBindings(root: string): Map<string, { review_id: string; goal: string; source_attempt: string; candidate_sha: string }> {
+  const out = new Map<string, { review_id: string; goal: string; source_attempt: string; candidate_sha: string }>();
+  for (const ev of readEvents(root)) {
+    if (ev.event !== "review.bound") continue;
+    const cid = ev.details?.reviewer_child_id;
+    if (typeof cid !== "string" || !cid) continue;
+    out.set(cid, {
+      review_id: String(ev.details?.review_id ?? ""),
+      goal: String(ev.goal ?? ""),
+      source_attempt: String(ev.details?.source_attempt ?? ""),
+      candidate_sha: String(ev.details?.candidate_sha ?? ""),
+    });
+  }
+  return out;
+}
+
+/** 按**精确 child 身份**匹配评审归属；不匹配返回 null（绝不凭报文自称是 reviewer）。 */
+export function reviewerBindingForIdentity(
+  root: string,
+  ids: Array<string | null | undefined>,
+): { review_id: string; goal: string; source_attempt: string; candidate_sha: string } | null {
+  const table = reviewerBindings(root);
+  if (table.size === 0) return null;
+  for (const id of ids) {
+    if (typeof id !== "string" || !id) continue;
+    const hit = table.get(id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * 复核子代理**正常工具通道**的越权守卫：reviewer 身份不得裁决接受（含 force / fast_track）
+ * 或直接把目标推进 delivered。语义只在宿主工具入口可判定（HTTP 侧 `human:gui` 无真实子代理身份，
+ * 本函数不覆盖、也不声称覆盖那种情形）。
+ */
+export function assertNotReviewerIdentity(
+  root: string,
+  ids: Array<string | null | undefined>,
+  action: string,
+): void {
+  const hit = reviewerBindingForIdentity(root, ids);
+  if (!hit) return;
+  throw new GraphError(
+    `复核子代理身份不得执行「${action}」：review ${hit.review_id}（目标 ${hit.goal}，候选 ${hit.candidate_sha}）` +
+    `是只读评审记录，裁决归属主管/负责人（Human Gate）。`,
+  );
+}
+
+/**
+ * accept 时的可见标注（**不阻断**）：strict 目标若当前候选没有可审计的独立评审 PASS 记录，
+ * 追加一条 `review.independent_missing` 事件如实留痕。默认 accept 映射逐字不变。
+ * 可见化自身失败绝不能影响 accept 结果 —— 但也不静默：写 stderr 留痕。
+ */
+export function markIndependentReviewMissing(
+  root: string,
+  goalId: string,
+  doc: GoalDoc,
+  actor: string,
+): boolean {
+  try {
+    const state = goalReviewState(root, goalId, {
+      type: doc.meta.type,
+      policy: readProjectConfig(root).review.policy,
+    });
+    if (state.policy !== "strict" || state.independent_ok) return false;
+    assertReviewEventName(REVIEW_INDEPENDENT_MISSING_EVENT);
+    appendEvent(root, {
+      actor,
+      event: REVIEW_INDEPENDENT_MISSING_EVENT,
+      goal: goalId,
+      details: {
+        policy: state.policy,
+        policy_source: state.policy_source,
+        strict_reasons: state.strict_reasons,
+        current_candidate_sha: state.current_candidate_sha,
+        review_status: state.status,
+        note: "strict 目标接受时，当前候选没有可审计的独立评审 PASS 记录；按负责人裁决仅作可见标注，不阻断 accept。",
+      },
+    });
+    return true;
+  } catch (e) {
+    try {
+      process.stderr.write(`[dsh-graph] g-436 未独立评审标注失败（已忽略，不影响 accept）: ${(e as Error)?.message ?? e}\n`);
+    } catch { /* 忽略 */ }
+    return false;
+  }
 }
 
 // ---- Attempt（SCHEMA §3） ----
@@ -10408,6 +11185,10 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
     // g-374 F1：完成摘要只读投影（<goalDir>/results.md + results-att-*.md）。
     // 只在此处新增字段——不得改 getCachedBoardPayload（会牵连缓存签名与既有 fixture）。
     results: goalResults(root, goalId),
+    // g-436：独立评审可见状态（只读投影）。strict 且当前候选无可审计独立评审 PASS ⇒
+    // independent_missing=true，GUI 在 accept 交互处如实标注「未独立评审」，**不阻断** accept。
+    // 由事件流重放（R-02），不额外读盘；评审详情（含 stale 历史记录）随 reviews 一并下发。
+    review_state: goalReviewState(root, goalId, { type: doc.meta.type }),
   };
 }
 
@@ -11359,6 +12140,8 @@ export function resolveAccept(
     }
     applyAcceptMapping(root, id, status, opts.actor);
     if (status === "review") registerWorktreeCandidates(root, id, opts.actor);
+    // g-436：可见化标注在映射**之后**追加 —— accept 结果与既有事件前缀逐字不变，仅如实留痕。
+    markIndependentReviewMissing(root, id, doc, opts.actor);
     return { ok: true };
   }
 
@@ -11435,11 +12218,13 @@ export function resolveAccept(
     });
     applyAcceptMapping(root, id, status, opts.actor);
     if (status === "review") registerWorktreeCandidates(root, id, opts.actor);
+    markIndependentReviewMissing(root, id, doc, opts.actor);
     return { ok: true, fast_track: true };
   }
 
   applyAcceptMapping(root, id, status, opts.actor);
   if (status === "review") registerWorktreeCandidates(root, id, opts.actor);
+  markIndependentReviewMissing(root, id, doc, opts.actor);
   return { ok: true };
 }
 
