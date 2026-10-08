@@ -534,7 +534,8 @@ test("g-453：设置 scope 能力探测只用 inject/ctx.get（点分名零属�
   // 保留字符串字面量（断言里的服务名/席位名本身是字符串），只抹注释
   const code = stripNonCode(settings, true);
   // ① 点分服务名 `remote.settings` 只走 optionalServicePath（纯 ctx.get）；经 optionalService 的属性
-  //    回退在 0.2.0-rc.2 上会抛 `cannot get property "remote.settings" without inject`（实测真因）
+  //    回退在 0.2.0-rc.2 上会抛 `cannot get property "remote.settings" without inject`（**基线产物**实测；
+  //    本版 `ctx.inject(["remote.settings"],…)` 声明后可被补偿 ⇒ 承重腿是命名空间发现，见 config-global 守卫）
   assert.match(code, /optionalServicePath\(ctx, "remote\.settings"\)/);
   assert.doesNotMatch(code, /optionalService\([^)]*"remote\.settings"/,
     "点分服务名不得经 optionalService（其属性回退会撞 cordis 注入门禁）");

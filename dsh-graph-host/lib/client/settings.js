@@ -13,10 +13,18 @@
     const GRAPH_SETTINGS_NS_CANDIDATES = [GRAPH_SETTINGS_ENTRY_ID, GRAPH_SETTINGS_NS];
     // g-453：profile 全局设置 scope。绑定**迟到且可订阅**：
     //  - 宿主 0.2.0-rc.2 起客户端设置服务不再叫 `settingsScope`，改为点分服务名 `remote.settings`
-    //    （`ctx.get("remote.settings")` 可取；`ctx.remote.settings` 属性访问会撞 cordis 注入门禁
-    //    `cannot get property "remote.settings" without inject` —— 0.2.0-rc.2 隔离实例实测真因）。
+    //    （`ctx.get("remote.settings")` 可取；属性访问 `ctx.remote.settings` 会撞 cordis 注入门禁
+    //    `cannot get property "remote.settings" without inject` —— 0.2.0-rc.2 隔离实例实测）。
+    //    但该腿**可被补偿**（下方 `ctx.inject(["remote.settings"], …)` 的声明即补偿），故不是承重腿：
+    //    真正的承重腿是**命名空间发现**（=`profile 条目 id`，见 createGraphSettingsApiScope 处注释）。
     //  - 服务可能在 apply 之后才 provide（api-gateway 的 `$mount` 是异步的）⇒ 不能只绑一次。
     //  - 能力判定 = 「服务自身能否取到 / 能否 inject」，任何地方都不比对宿主版本号。
+    //  - **迟到订阅路径的可达性（如实标注）**：本宿主上 `apply` 的绑定**先于**组件挂载（立即绑定已完成、
+    //    `remote.settings` 在设置页打开前已可读）⇒ 「先渲染降级态、再 publish 重渲染」这段端到端序列在
+    //    **真机上不可达**，属**防御路径**（宿主将来把服务 provide 推迟到挂载之后才会走到）。
+    //    该路径的语义由 `core/tests/config-global.test.ts` 的 vm 行为夹具**直接驱动真实源码**覆盖
+    //    （服务缺席 → inject 迟到触发 → 订阅者被唤醒 → 读到可用绑定；退订后不再唤醒），
+    //    组件侧接线（effect 订阅 + `[scope]` 重渲染依赖）另有结构断言 —— 不再声称「真机已覆盖」。
     let gSettingsScope = null;
     // 绑定来源与优先级：同源幂等、高优先级（旧线 `settingsScope`）不被低优先级替换、服务实例更换即重绑。
     let gSettingsScopeSource = null;
@@ -45,9 +53,17 @@
     function createGraphSettingsApiScope(api, ctx = (typeof appCtx !== "undefined" ? appCtx : null), remoteSettingsIn = null) {
       // g-425：受保护读取——`ctx?.remote` 裸回退在 remote 服务缺席时会撞 cordis 注入门禁抛错
       // （被调用方 bindGraphSettingsScope 的 try/catch 吞成「设置页整页降级」）。
-      // g-453：`remote.settings` 是**点分服务名**，只能经 `ctx.get` 读取（optionalServicePath）——
-      // 旧写法 `optionalService(c,"remote")?.settings` 的属性访问在 0.2.0-rc.2 上抛
-      // `cannot get property "remote.settings" without inject`，正是整页降级的真因。
+      // g-453 根因是**两条腿**（Lane A 真机变异核验后的如实表述）：
+      //   腿① 读取口径：`remote.settings` 是**点分服务名**，属性访问撞注入门禁
+      //   `cannot get property "remote.settings" without inject`（0.2.0-rc.2 隔离实例实测：**基线产物**
+      //   apply 后 ≈353ms 即抛、被 catch 吞成 `gSettingsScope = null` ⇒ 整页降级）。**但这条腿可被补偿**：
+      //   本版新增的 `ctx.inject(["remote.settings"], …)` 声明使属性访问在同一注入域内合法 ⇒ Lane A 变异
+      //   n1（把读取改回属性回退）真机**仍可用** ⇒ 腿①**不足单独解释**用户可见缺陷。静态守卫仍钉住它
+      //   （`optionalServicePath` 语义 + 点分名不得走 optionalService），但不声称它单独致命。
+      //   腿② 命名空间发现（**承重腿，无任何补偿**）：新线设置命名空间 = **profile 条目 id**
+      //   `dsh-graph-host`，不是历史 namespace 名 `dsh-graph` —— 写死历史名 ⇒ 0 控件 + 「未暴露命名空间」，
+      //   且当时整套门禁全绿（与 dsh-market 的 `settingsScope`→`settings` 静默失效同型）。
+      //   ⇒ 腿② 必须按 `describe()` 返回的**实际 ns 集合**发现（见下方 GRAPH_SETTINGS_NS_CANDIDATES）。
       const remoteSettings = remoteSettingsIn
         ?? optionalServicePath(ctx, "remote.settings")
         ?? (typeof appCtx !== "undefined" ? optionalServicePath(appCtx, "remote.settings") : null);
