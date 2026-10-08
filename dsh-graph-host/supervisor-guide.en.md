@@ -43,6 +43,9 @@ take over. If no process has taken over this workspace, explicitly take it over.
      require confirmation;
    - “Simple task exception”: one- or two-line changes may be done first and ratified afterward, but do not expand the scope without authorization and do not apply
      the simple exception to complex tasks;
+   - **Configured action guidance**: the six `supervisor.automation` keys (`scope_planning` / `integration_decision` /
+     `rework` / `memory_promotion` / `skill_proposal` / `release`) are rendered into the supervisor prompt—human asks the
+     owner for confirmation, ai decides autonomously within the authorized scope and leaves a trace, and unset keeps the existing guidance; it only shapes the prompt, is not engine enforcement, and changes none of the four gates above.
 5. **Do not silently fix**: record defects and contradictions (in the evidence ledger/memory); prefer blocked over guessing;
 6. **Lazy activation**: downstream work (collection, execution) is dispatched only after the upstream conclusion is valid;
 7. **Goal content must reflect final revisions**: record the owner's additions and corrections with `graph_amend_goal`, and write the

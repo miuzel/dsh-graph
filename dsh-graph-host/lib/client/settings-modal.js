@@ -699,7 +699,7 @@
           // g-342：顶层 review.policy 四态下拉（继承未配置 / auto / strict / none）。
           // 渲染方式（label htmlFor + select + meta 提示）与选项 style 比照上方 executor.mode 与
           // supervisor.automation；脏状态由 normalizeSettingsDraft 统一覆盖（判据 2）。
-          // 归属主区而非「高级/仅存储字段」：该字段被 core/review-policy.ts 的受理门禁真实消费。
+          // 归属主区而非「高级设置」：该字段被 core/review-policy.ts 的受理门禁真实消费。
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
           h("div", { style: { minWidth: 0 } },
             h("label", { htmlFor: reviewPolicyId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reviewPolicyLabel")),
@@ -715,7 +715,7 @@
             h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } }, dgT("settings.reviewPolicyHint"))),
 
           // ===== g-442：评审条件区块（regions / contract_paths / non_product_prefixes）=====
-          // 位置：紧随既有 review.policy 四态下拉之后（同属「真实生效」主区，而非「高级/仅存储字段」）。
+          // 位置：紧随既有 review.policy 四态下拉之后（同属「真实生效」主区，而非「高级设置」）。
           // 未配置时只读展示服务端生效值并标注「缺省（普适）」——绝不让用户误以为已按本项目校准，
           // 也绝不把缺省值物化为显式配置；目录建议为只读提示，不自动写入。
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
@@ -753,6 +753,9 @@
                 h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, k),
                 h("select", { style: { ...S.promptInput, width: "100%" }, value: auto[k] ?? "", onChange: (e) => set(["supervisor", "automation", k], e.target.value === "" ? null : e.target.value) },
                   ...automationOptions(auto[k]))))),
+          // g-439：六键已由主管提示真实消费——如实说明「影响主管提示」（旧的存储字段标注已删除）；
+          // 与 g-436「只可见化、不硬阻断」口径一致：不改变工具权限，也不构成引擎强制。
+          h("div", { style: { display: showAdvanced ? "block" : "none", ...S.meta, marginTop: 4, fontSize: 11, opacity: 0.85 } }, dgT("settings.automationHint")),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
           h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.promptOverride")),
@@ -770,5 +773,5 @@
     // Source-contract compatibility: 保留未知键与注释; legacy inherited option "（继承父会话）".
     // g-246 close guard contract: window.confirm(dgT("settings.discardDirtyConfirm"))
     //   → zh「有未保存的修改，确认放弃？」/ en "You have unsaved changes. Discard them?"
-    // Contract text: 显示高级/仅存储字段; if (saving) { setNote({ kind: "err", text: "正在保存，请稍候…" }); return; }
+    // Contract text: 显示高级设置（g-439 起标注改为如实消费口径）; if (saving) { setNote({ kind: "err", text: "正在保存，请稍候…" }); return; }
     // Contract text: "✅ 已打开 project.yaml"
