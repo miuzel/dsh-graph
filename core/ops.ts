@@ -1293,10 +1293,11 @@ function readListByPath(lines: string[], path: string[]): string[] | null {
       end = blockChildrenEnd(lines, idx, keyIndent);
     } else {
       const raw = lines[idx].slice(keyIndent + key.length + 1).trim();
-      // 检查内联形态：[] 或 [ "a", "b" ] 或 null / ~
-      if (raw === "null" || raw === "~") return null;
-      if (raw.startsWith("[") && raw.includes("]")) {
-        const inside = raw.slice(1, raw.indexOf("]")).trim();
+      const { value: valPart } = splitValueComment(raw);
+      // 检查内联形态：null / ~ / [] 或 [ "a", "b" ]
+      if (valPart === "null" || valPart === "~") return null;
+      if (valPart.startsWith("[") && valPart.includes("]")) {
+        const inside = valPart.slice(1, valPart.indexOf("]")).trim();
         if (inside === "") return [];
         return inside.split(",").map((s) => parseYamlScalar(s)).filter((s): s is string => s !== null);
       }
@@ -1314,7 +1315,7 @@ function readListByPath(lines: string[], path: string[]): string[] | null {
           if (parsed !== null) out.push(parsed);
         }
       }
-      if (!foundAnyListItem && (raw === "" || raw === "[]")) return raw === "[]" ? [] : null;
+      if (!foundAnyListItem && (valPart === "" || valPart === "[]")) return valPart === "[]" ? [] : null;
       return out;
     }
   }
@@ -1681,21 +1682,22 @@ function validateConfigPatch(patch: any): void {
       for (let i = 0; i < list.length; i++) {
         const item = list[i];
         if (typeof item !== "string") throw new GraphError(`${fieldName}[${i}] 必须是字符串`);
-        if (item.trim() === "") throw new GraphError(`${fieldName}[${i}] 不能为空字符串`);
-        const norm = item.trim().replace(/\\/g, "/");
-        if (norm.startsWith("/")) throw new GraphError(`${fieldName}[${i}] 不能是绝对路径`);
+        const trimmed = item.trim();
+        if (trimmed === "") throw new GraphError(`${fieldName}[${i}] 不能为空字符串`);
+        const norm = trimmed.replace(/\\/g, "/");
+        if (norm.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(trimmed)) throw new GraphError(`${fieldName}[${i}] 不能是绝对路径`);
         if (!allowTrailingSlash && norm.endsWith("/")) throw new GraphError(`${fieldName}[${i}] 不能有尾随斜杠`);
         const segments = norm.split("/");
         if (segments.includes("..")) throw new GraphError(`${fieldName}[${i}] 不能包含 .. 路径段`);
         // 归一后重复检查（去 ./ 等）
-        const canonical = norm.replace(/^\.\//, "");
+        const canonical = norm.replace(/^\.\//, "").replace(/\/+$/, "");
         if (seen.has(canonical)) throw new GraphError(`${fieldName} 包含重复条目: ${item}`);
         seen.add(canonical);
       }
     };
     if ("regions" in rv) validateStringList(rv.regions, "review.regions", true, false);
     if ("contract_paths" in rv) validateStringList(rv.contract_paths, "review.contract_paths", true, false);
-    if ("non_product_prefixes" in rv) validateStringList(rv.non_product_prefixes, "review.non_product_prefixes", true, true);
+    if ("non_product_prefixes" in rv) validateStringList(rv.non_product_prefixes, "review.non_product_prefixes", true, false);
   }
 }
 
@@ -1842,6 +1844,9 @@ function setListAtPath(lines: string[], path: string[], list: string[] | null | 
   };
   const rootKey = path[0];
   let rootIdx = findKeyLine(lines, rootKey, 0, 0, lines.length);
+  if (rootIdx >= 0 && lines[rootIdx].includes("{") && lines[rootIdx].includes("}")) {
+    throw new GraphError(`不支持向内联 flow-style YAML 映射中结构化更新列表字段，请使用标准缩进 YAML`);
+  }
   if (rootIdx < 0) {
     // 根不存在且待写入值为 null/undefined 时无需创建
     if (list === null || list === undefined) return;
@@ -1855,6 +1860,9 @@ function setListAtPath(lines: string[], path: string[], list: string[] | null | 
     const childIndent = " ".repeat(parentIndent + 2);
     const end = blockChildrenEnd(lines, parentIdx, parentIndent);
     const keyIdx = findKeyLine(lines, key, childIndent.length, parentIdx + 1, end);
+    if (keyIdx >= 0 && lines[keyIdx].includes("{") && lines[keyIdx].includes("}")) {
+      throw new GraphError(`不支持向内联 flow-style YAML 映射中结构化更新列表字段，请使用标准缩进 YAML`);
+    }
     if (keyIdx < 0) {
       if (list === null || list === undefined) return;
       const inserted = ensureBlock(parentIdx, end, childIndent, key);
@@ -1890,20 +1898,46 @@ function setListAtPath(lines: string[], path: string[], list: string[] | null | 
   // 键已存在：保留其行尾注释
   const existing = lines[leafIdx];
   const afterKey = existing.slice(lineIndent(existing) + leafKey.length + 1);
-  const { comment } = splitValueComment(afterKey);
-  const childEnd = blockChildrenEnd(lines, leafIdx, leafIndent.length);
 
-  // 删除既有的列表子行（如果有）
-  if (childEnd > leafIdx + 1) {
-    lines.splice(leafIdx + 1, childEnd - (leafIdx + 1));
+  // 如果已有键采用 flow-style 内联映射形态（如 review: { policy: auto, regions: [src] }），拒绝写坏
+  if (lines[parentIdx].includes("{") && lines[parentIdx].includes("}")) {
+    throw new GraphError(`不支持向内联 flow-style YAML 映射中结构化更新列表字段，请使用标准缩进 YAML`);
+  }
+
+  const { comment } = splitValueComment(afterKey);
+  const commentStr = comment ? (comment.startsWith(" ") ? comment : ` ${comment}`) : "";
+
+  // 严格寻找紧跟在 leafIdx 下面的 - 项行，只删除实际列表项行，绝不误删同级或后续未知键前的注释
+  let firstItemIdx = -1;
+  let lastItemIdx = -1;
+  for (let i = leafIdx + 1; i < end; i++) {
+    const l = lines[i];
+    if (l.trim() === "") continue;
+    if (/^[ \t]*#/.test(l)) {
+      // 如果还没遇到任何列表项，这是写在列表头下方的注释行（如条目关联注释），若已有列表项则可能是条目间的注释
+      continue;
+    }
+    const isListItem = /^[ \t]*-[ \t]/.test(l);
+    if (isListItem) {
+      if (firstItemIdx < 0) firstItemIdx = i;
+      lastItemIdx = i;
+    } else {
+      // 遇到了非列表项行（如另一个同级 key），停止
+      break;
+    }
+  }
+
+  // 如果找到列表项行区间，删除从 firstItemIdx 到 lastItemIdx
+  if (firstItemIdx >= 0 && lastItemIdx >= firstItemIdx) {
+    lines.splice(firstItemIdx, lastItemIdx - firstItemIdx + 1);
   }
 
   if (list === null || list === undefined) {
-    lines[leafIdx] = `${leafIndent}${leafKey}:${comment}`;
+    lines[leafIdx] = `${leafIndent}${leafKey}:${commentStr ? commentStr : ""}`;
   } else if (list.length === 0) {
-    lines[leafIdx] = `${leafIndent}${leafKey}: []${comment}`;
+    lines[leafIdx] = `${leafIndent}${leafKey}: []${commentStr}`;
   } else {
-    lines[leafIdx] = `${leafIndent}${leafKey}:${comment}`;
+    lines[leafIdx] = `${leafIndent}${leafKey}:${commentStr ? commentStr : ""}`;
     const newItems: string[] = [];
     const itemIndent = " ".repeat(parentIndent + 4);
     for (const item of list) {

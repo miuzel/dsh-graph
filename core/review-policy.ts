@@ -245,10 +245,31 @@ export function formatStrictReasonText(
     case "type_or_policy_strict":
       return "M5 目标类型（feature/bug 等）或项目 policy 本身要求 strict";
     case "policy_unrecognized":
-      return `显式 policy 值不在 ${REVIEW_POLICIES.join("/")} 内——安全侧按 strict 处理`;
+      return `显式配置不合法（非允许值或非法路径列表）——安全侧按 strict 处理`;
     case "unknown_region":
       return "产品代码变更落在未登记区域——安全升级为 strict";
   }
+}
+
+/** 校验传入的配置列表是否合法。若为非法类型、含有非字符串、空串、绝对路径、..段、尾随斜杠或重复项，返回 false。 */
+export function isMalformedConfigList(list: unknown, allowTrailingSlash = false): boolean {
+  if (list === undefined || list === null) return false;
+  if (!Array.isArray(list)) return true;
+  const seen = new Set<string>();
+  for (const item of list) {
+    if (typeof item !== "string") return true;
+    const trimmed = item.trim();
+    if (trimmed === "") return true;
+    const norm = trimmed.replace(/\\/g, "/");
+    if (norm.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(trimmed)) return true;
+    if (!allowTrailingSlash && norm.endsWith("/")) return true;
+    const segments = norm.split("/");
+    if (segments.includes("..")) return true;
+    const canonical = norm.replace(/^\.\//, "").replace(/\/+$/, "");
+    if (seen.has(canonical)) return true;
+    seen.add(canonical);
+  }
+  return false;
 }
 
 /**
@@ -260,7 +281,14 @@ export function resolveReviewPolicy(input: ReviewPolicyInput = {}): ReviewPolicy
   let base: ReviewPolicy;
   let source: "explicit" | "type_default";
 
-  if (isUnrecognizedReviewPolicy(input.policy)) {
+  // 检查是否有非法配置输入（非法输入安全升级为 strict，policy_unrecognized）
+  const hasMalformedConfig =
+    isUnrecognizedReviewPolicy(input.policy) ||
+    isMalformedConfigList(input.regions, false) ||
+    isMalformedConfigList(input.contractPaths, false) ||
+    isMalformedConfigList(input.nonProductPrefixes, true);
+
+  if (hasMalformedConfig) {
     base = "strict";
     source = "type_default";
     reasons.push("policy_unrecognized");
@@ -350,15 +378,17 @@ export function isProductCodePath(
   path: string,
   nonProductPrefixes?: readonly string[] | null,
 ): boolean {
-  const p = normalizePolicyPath(path);
+  const p = normalizePolicyPath(path).replace(/\\/g, "/");
   if (p === "") return false;
   if ((NON_PRODUCT_EXACT as readonly string[]).includes(p)) return false;
   const prefixes = nonProductPrefixes !== undefined && nonProductPrefixes !== null
     ? nonProductPrefixes
     : DEFAULT_NON_PRODUCT_PREFIXES;
   if (prefixes.some((prefix) => {
-    const normPre = normalizePolicyPath(prefix);
-    return normPre !== "" && p.startsWith(normPre);
+    const normPre = normalizePolicyPath(prefix).replace(/\/+$/, "").replace(/\\/g, "/");
+    if (normPre === "") return false;
+    // 完整段边界匹配：自身或子路径
+    return p === normPre || p.startsWith(normPre + "/");
   })) {
     return false;
   }

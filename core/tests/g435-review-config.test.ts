@@ -103,9 +103,11 @@ test("g-435 判据 1：三项列表写读往返，保留注释与未知键；非
   const snapBeforeBad = readFileSync(join(root, "project.yaml"), "utf8");
   const badPatches = [
     { review: { regions: ["/abs/path"] } }, // 绝对路径
+    { review: { regions: ["C:\\Users\\source"] } }, // Windows 绝对路径
     { review: { contract_paths: ["a/../b"] } }, // .. 路径段
     { review: { regions: ["trail/slash/"] } }, // regions 尾随斜杠
     { review: { contract_paths: ["trail/slash/"] } }, // contract_paths 尾随斜杠
+    { review: { non_product_prefixes: ["trail/slash/"] } }, // non_product_prefixes 尾随斜杠
     { review: { regions: ["", "valid"] } }, // 空字符串
     { review: { contract_paths: ["dup", "dup"] } }, // 重复条目
     { review: { non_product_prefixes: ["./dup", "dup"] } }, // 归一后重复
@@ -116,6 +118,35 @@ test("g-435 判据 1：三项列表写读往返，保留注释与未知键；非
     assert.throws(() => writeProjectConfig(root, bad, "supervisor:test"), GraphError);
     assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), snapBeforeBad, "非法写入后文件必须逐字节不变");
   }
+
+  // 3. 注释与未知键保护专项验证
+  const commentYaml = [
+    "review:",
+    "  policy: auto",
+    "  regions: # keep-header",
+    "    - src",
+    "    # item-comment",
+    "    - lib",
+    "  # unknown_sub 前置注释",
+    "  unknown_sub: keep",
+    "",
+  ].join("\n");
+  writeFileSync(join(root, "project.yaml"), commentYaml, "utf8");
+  writeProjectConfig(root, { review: { regions: ["app", "server"] } }, "supervisor:test");
+  const textAfterUpdate = readFileSync(join(root, "project.yaml"), "utf8");
+  assert.match(textAfterUpdate, /regions: # keep-header/);
+  assert.match(textAfterUpdate, /# unknown_sub 前置注释/);
+  assert.match(textAfterUpdate, /unknown_sub: keep/);
+  assert.deepEqual(readProjectConfig(root).review.regions, ["app", "server"]);
+
+  // 4. 不支持的 flow-style 映射在更新时明确拒绝零副作用，不写坏文件
+  const flowYaml = `review: { policy: auto, regions: [src], unknown_sub: keep }\n`;
+  writeFileSync(join(root, "project.yaml"), flowYaml, "utf8");
+  assert.throws(
+    () => writeProjectConfig(root, { review: { regions: ["new"] } }, "supervisor:test"),
+    GraphError,
+  );
+  assert.equal(readFileSync(join(root, "project.yaml"), "utf8"), flowYaml, "flow 写入失败后零副作用");
 });
 
 // ---------------------------------------------------------------------------
@@ -281,7 +312,7 @@ test("g-435 判据 5：regions[] fail-closed；contract_paths[] 与 non_product_
   // 读取必须不抛异常
   const cfg = readProjectConfig(root);
   assert.ok(cfg !== null);
-  // resolveReviewPolicy 传入畸形数据不崩溃
+  // resolveReviewPolicy 传入畸形数据不崩溃，且安全升级为 strict
   const safeDecision = resolveReviewPolicy({
     policy: "auto",
     type: "patch",
@@ -289,6 +320,26 @@ test("g-435 判据 5：regions[] fail-closed；contract_paths[] 与 non_product_
     contractPaths: {} as any,
   });
   assert.ok(safeDecision !== null);
+  assert.equal(safeDecision.policy, "strict");
+  assert.ok(safeDecision.strictReasons.includes("policy_unrecognized"));
+
+  // 5. 重复项、尾随斜杠等非法配置安全升级 strict
+  const dupDecision = resolveReviewPolicy({
+    policy: "auto",
+    type: "patch",
+    regions: ["src", "src"],
+  });
+  assert.equal(dupDecision.policy, "strict");
+  assert.ok(dupDecision.strictReasons.includes("policy_unrecognized"));
+
+  // 6. regions: null # inherit 读为 null，不被误读为 []
+  writeFileSync(
+    join(root, "project.yaml"),
+    `review:\n  policy: auto\n  regions: null # inherit\n`,
+    "utf8",
+  );
+  const cfgNull = readProjectConfig(root);
+  assert.equal(cfgNull.review.regions, null, "null 带注释必须被读为 null 而非 []");
 });
 
 // ---------------------------------------------------------------------------
@@ -347,7 +398,7 @@ test("g-435 判据 7：旧样本对拍（在显式配置夹具下保持 policy/s
 // ---------------------------------------------------------------------------
 // 判据 8：文档 / 生成物中性；changedPaths 缺失与 [] 中性；真实未登记产品代码升级
 // ---------------------------------------------------------------------------
-test("g-435 判据 8：纯文档与生成物中性；changedPaths 缺失/[] 中性；产品码升级", () => {
+test("g-435 判据 8：纯文档与生成物中性；changedPaths 缺失/[] 中性；产品码升级；段边界不误排除相邻前缀", () => {
   // 1. changedPaths 为 undefined 或 null 时中性（不触发 unknown_region）
   const dUnset = resolveReviewPolicy({ policy: "auto", type: "patch" });
   assert.equal(dUnset.policy, "auto");
@@ -375,4 +426,25 @@ test("g-435 判据 8：纯文档与生成物中性；changedPaths 缺失/[] 中�
   });
   assert.equal(dProd.policy, "strict");
   assert.ok(dProd.strictReasons.includes("unknown_region"));
+
+  // 5. 段边界专项：non_product_prefixes: ["dist"] 不得误排除 distillery/a.ts
+  const distCustom = {
+    nonProductPrefixes: ["dist"],
+    regions: ["src"],
+  };
+  assert.equal(isProductCodePath("dist/bundle.js", ["dist"]), false, "dist/bundle.js 应该被排除");
+  assert.equal(isProductCodePath("dist", ["dist"]), false, "dist 自身应该被排除");
+  assert.equal(isProductCodePath("distillery/a.ts", ["dist"]), true, "distillery/a.ts 绝不应被排除");
+
+  // distillery/a.ts 计入 200 行产品代码且未登记区域 → 触发 product_size 与 unknown_region
+  const dDistillery = resolveReviewPolicy({
+    policy: "auto",
+    type: "patch",
+    changedPaths: ["distillery/a.ts"],
+    productChangedLines: 200,
+    ...distCustom,
+  });
+  assert.equal(dDistillery.policy, "strict");
+  assert.ok(dDistillery.strictReasons.includes("product_size"));
+  assert.ok(dDistillery.strictReasons.includes("unknown_region"));
 });
