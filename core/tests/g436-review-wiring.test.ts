@@ -27,7 +27,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import vm from "node:vm";
@@ -528,11 +528,24 @@ test("g-436 判据4：非 strict 目标 accept 零新增事件（默认路径零
  * fast_track 机器报告。判据 4 的两个交互用例**共用同一份**（changed_paths 恒为 `core/ops.ts`），
  * 唯一变量是看板是否把 `core` 登记进 `review.regions`。
  */
-function fastTrackReport(head: string) {
+function fastTrackReport(baseline: string, attempt?: string) {
+  // g-437：①② 是**调用方证据**，必须留痕 command/collected_at/source（引擎不复跑，只按实留痕）；
+  // ③ 的 attempt 也在此显式给出（引擎据此绑定实际执行树，绝不猜工作树）。
+  const trace = { command: "g436 harness command", collected_at: "2026-01-01T00:00:00.000Z", source: "g436:harness" };
   return {
-    baseline_commit: head, changed_paths: ["core/ops.ts"], product_changed_lines: 12,
-    untracked_files: 0, tests: { exit_code: 0, fail: 0 }, typecheck: { exit_code: 0 },
+    ...(attempt ? { attempt } : {}),
+    baseline_commit: baseline, changed_paths: ["core/ops.ts"], product_changed_lines: 12,
+    untracked_files: 0, tests: { exit_code: 0, fail: 0, ...trace }, typecheck: { exit_code: 0, ...trace },
   };
+}
+
+/** g-437：让报告与真源对齐——在（非隔离 attempt 绑定的）工作区仓库里真实提交 12 行产品码。 */
+function commitProductChange(ws: string) {
+  const file = join(ws, "core", "ops.ts");
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, Array.from({ length: 12 }, (_, i) => `export const line${i} = ${i};`).join("\n") + "\n");
+  execFileSync("git", ["add", "--", "core/ops.ts"], { cwd: ws });
+  execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "attempt change"], { cwd: ws });
 }
 
 test("g-436 判据4：fast_track（auto 策略）成功路径的事件序列逐字不变", async () => {
@@ -540,9 +553,15 @@ test("g-436 判据4：fast_track（auto 策略）成功路径的事件序列逐�
   // 该用例的前提是 patch 派生 auto，因此**必须显式登记变更区域**（opt-in，不改全局缺省）。
   const h = createHarness({ regions: ["core"] }); // auto + core 已登记
   const fx = await prepareDispatched(h, { type: "patch" });
+  // g-437 适配：门禁③由**引擎**在 attempt 的实际执行树采集 Git 真源并与报告逐项对账 ⇒
+  // 报告必须是真实的。非隔离 attempt（worktree:false）绑定的就是本工作区仓库，
+  // 故按派发时落盘的引擎侧锚点，真实提交一份 12 行产品码，报告逐项与真源一致。
+  const anchor = String(loadGoal(fx.attFile).meta.baseline_commit ?? "");
+  assert.match(anchor, /^[0-9a-f]{40}$/, "非隔离 attempt 必须落盘引擎侧区间锚点（g-437 P1）");
+  commitProductChange(h.ws);
   await callTool(h, "graph_resolve_accept", {
     goal: fx.goal, verdict: "accept", fast_track: true,
-    machine_report: fastTrackReport(h.head),
+    machine_report: fastTrackReport(anchor, fx.attempt),
   }, h.authExec);
   const names = readEvents(h.root).filter((e) => e.goal === fx.goal).map((e) => e.event);
   const tail = names.slice(-3);

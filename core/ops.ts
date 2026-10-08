@@ -131,6 +131,10 @@ import {
   detectWorkspaceCleanliness,
   resolveWorktreeIsolationDecision,
   prepareAttemptWorktree,
+  // g-437：门禁③的 Git 真源采集（绑定实际 attempt 执行树）
+  collectAttemptGitTruth,
+  // g-437 P1：派发端读取引擎侧区间锚点（非隔离 attempt 无 worktree.head 时用）
+  readRepoHead,
 } from "./worktree.ts";
 import {
   REVIEW_POLICIES,
@@ -145,6 +149,9 @@ import {
   reviewEffectiveProjection,
   type ReviewListEffective,
   type ReviewListFieldKey,
+  // g-437：有效值委托（g-442 唯一归一化）+ 报告↔Git 真源对账
+  effectiveNonProductPrefixesOf,
+  reconcileMachineReportWithGitTruth,
   type ReviewPolicy,
 } from "./review-policy.ts";
 export { GraphError, GraphConflictError };
@@ -157,6 +164,9 @@ export {
   detectWorkspaceCleanliness,
   resolveWorktreeIsolationDecision,
   prepareAttemptWorktree,
+  collectAttemptGitTruth,
+  // g-437 P1：派发端读取「引擎侧区间锚点」（非隔离 attempt 无工作树 head 时用它落盘基线）
+  readRepoHead,
 };
 export type { MemoryScope };
 // g-311：分级评审策略与机器快速放行门禁（纯函数模块 review-policy.ts）经 ops 统一 re-export，
@@ -181,6 +191,15 @@ export {
   diagnoseConfigList,
   isMalformedConfigList,
   reviewEffectiveProjection,
+  // g-437：有效项目配置的单一默认点（委托 g-442 唯一归一化）+ 报告↔Git 真源对账
+  effectiveContractPathsOf,
+  effectiveReviewListValue,
+  effectiveReviewRegionsOf,
+  effectiveNonProductPrefixesOf,
+  parseNumstatZ,
+  parsePorcelainZ,
+  summarizeProductLinesStrict,
+  reconcileMachineReportWithGitTruth,
 } from "./review-policy.ts";
 export type {
   ReviewPolicy,
@@ -192,7 +211,11 @@ export type {
   FastTrackCheck,
   FastTrackEvidence,
   FastTrackGateResult,
+  NumstatEntry,
+  PorcelainEntry,
+  GitTruthFacts,
 } from "./review-policy.ts";
+export type { AttemptGitTruth, AttemptGitTruthResult, AttemptGitTruthTree } from "./worktree.ts";
 export { allCriteriaVerified, verifiedCriteriaItems, CRITERIA_VERIFIED_MARK } from "./model.ts";
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
@@ -12142,13 +12165,92 @@ export function requestAcceptReview(
   return { pending: true, goal: id };
 }
 
+/**
+ * g-437：读取指定 attempt 的持久化 meta —— 门禁③绑定「实际执行树」的**唯一真源**。
+ *
+ * 只按 `meta.worktree`（派发时落盘的实际路径）与 `meta.baseline_commit` 判定，
+ * **不**用命名公式预测路径（`attemptWorktreeEvidence`），也不按目录排序猜「哪个 attempt」：
+ * attempt 由调用方在 `machine_report.attempt` 里显式给出。
+ */
+function readAttemptMetaForFastTrack(root: string, goalId: string, attempt: string): Record<string, any> {
+  // g-437：三条报错都必须是**可操作的**——给出期望形态与「怎么拿到正确值」，
+  // 编号不存在时**枚举该目标现有 attempt**（空目录显式给出「（当前无 attempt）」，绝不回传空串/undefined）。
+  // 报错**不写任何仓库绝对/相对路径**（去本仓库假设；路径信息对调用方无行动价值）。
+  if (!/^att-[0-9]+$/.test(attempt)) {
+    const shown = attempt.length > 60 ? `${attempt.slice(0, 60)}…` : attempt;
+    throw new GraphError(
+      `fast_track 被拒：attempt 取值非法（${shown}）——必须形如 "att-001"（att- + 数字），该值由 graph_start_attempt 的返回给出`,
+    );
+  }
+  const file = join(dirname(findGoalFile(root, goalId)), "attempts", attempt, "attempt.md");
+  if (!existsSync(file)) {
+    const attemptsDir = join(dirname(findGoalFile(root, goalId)), "attempts");
+    let existing: string[] = [];
+    try {
+      existing = readdirSync(attemptsDir).filter((name) => /^att-[0-9]+$/.test(name)).sort();
+    } catch (e) {
+      // 仅「目录不存在」视为 0 项（首次派发前的目标）；其它错误照旧抛出，不静默吞错
+      if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e;
+    }
+    const listText = existing.length > 0 ? existing.join("、") : "（当前无 attempt）";
+    throw new GraphError(
+      `fast_track 被拒：目标 ${goalId} 下不存在 attempt ${attempt}（无法绑定实际执行树）——该目标现有 attempt：${listText}。` +
+        `请改用真实编号（形如 "att-001"，由 graph_start_attempt 的返回给出）`,
+    );
+  }
+  return loadGoal(file).meta as Record<string, any>;
+}
+
+/** 门禁①②的调用方留痕字段（引擎**不复跑**这两条命令，只按调用方实留痕）。 */
+const CALLER_EVIDENCE_GATES: ReadonlyArray<readonly [string, string]> = [
+  ["tests", "① tests"],
+  ["typecheck", "② typecheck"],
+];
+
+/**
+ * g-437：校验并收集门禁①②的调用方留痕（`command` 原文 + `collected_at` 采集时间 + `source` 来源）。
+ *
+ * 为什么要求必填：①② 是**调用方证据**，引擎不重跑；没有来源/时间/命令原文的裸数字无法审计，
+ * 也无法与「引擎自算」区分。缺任一项即拒绝（fail-safe，与门禁③的「取不到即不放行」同向）。
+ */
+function collectCallerEvidenceProvenance(raw: Record<string, unknown>): {
+  problems: string[];
+  trace: Record<string, { command: string | null; collected_at: string | null; source: string | null }>;
+} {
+  const problems: string[] = [];
+  const trace: Record<string, { command: string | null; collected_at: string | null; source: string | null }> = {};
+  for (const [key, label] of CALLER_EVIDENCE_GATES) {
+    const section =
+      raw[key] !== null && typeof raw[key] === "object" && !Array.isArray(raw[key])
+        ? (raw[key] as Record<string, unknown>)
+        : {};
+    const pick = (field: string): string | null => {
+      const value = section[field];
+      return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+    };
+    const entry = { command: pick("command"), collected_at: pick("collected_at"), source: pick("source") };
+    trace[key] = entry;
+    for (const field of ["command", "collected_at", "source"] as const) {
+      if (entry[field] === null) problems.push(`${label} 缺 ${field}`);
+    }
+  }
+  return { problems, trace };
+}
+
 /** 主管裁决接受请求。
  *  verdict="accept" → 按阶段追加 description.confirmed / criteria.confirmed(actor=human) / review.passed+transition delivered
  *  verdict="object" → 追加 review.objected（details.objection=异议内容）
  *  force=true + reason → 记 goal.amended（理由），直接走 accept 分支
  *  g-311 fast_track=true + machine_report → 机器快速放行：策略须为 auto 且四项门禁全绿，
  *  通过则追加 review.fast_track（含四项机器证据与 baseline）再走同一 accept 映射；
- *  任一不满足即抛 GraphError 且**零副作用**（不迁移、不记 review.passed）。缺省路径逐字不变。 */
+ *  任一不满足即抛 GraphError 且**零副作用**（不迁移、不记 review.passed）。缺省路径逐字不变。
+ *  g-437 证据分层（如实，不再声称四项皆「引擎自算」）：
+ *   ① ② 为**调用方证据**（引擎不复跑），要求 `command`/`collected_at`/`source` 留痕并原样入事件；
+ *   ③ 为**引擎 Git 自算**：按 `machine_report.attempt` 绑定的实际 attempt 树（隔离工作树；显式
+ *      `worktree:false` 则绑定其工作区仓库，**绝不**在树缺失时回退主树）采集 numstat/status 真源，
+ *      与报告逐项对账，并对未提交 tracked 改动、未跟踪用户文件、不可解析输出一律拒绝；
+ *   ④ 为**引擎自算**（goal.md 判据文本）。
+ *  采集、对账与留痕校验全部发生在**任何事件之前**；普通（非 fast_track）accept 与 force/object 路径不变。 */
 export function resolveAccept(
   root: string,
   id: string,
@@ -12233,8 +12335,49 @@ export function resolveAccept(
         `fast_track 被拒：目标策略为 ${policy.policy}（${policy.reasons.join("；")}），不得走机器快速放行`,
       );
     }
-    // 门禁 ④ 以引擎自算的权威结果覆盖报告值——绝不采信调用方自报的「判据已验」。
-    const gate = evaluateFastTrackGate({ ...raw, criteria: { all_verified: allCriteriaVerified(doc.body) } });
+    // g-437：门禁③**引擎自算** —— 绑定「本次 attempt 的实际执行树」，采集 Git 真源并与报告逐项对账。
+    // 采集、核对与① ②留痕校验全部发生在**任何事件之前**；任一失败都在零副作用状态下抛错。
+    const attemptId = typeof raw.attempt === "string" ? raw.attempt.trim() : "";
+    if (attemptId === "") {
+      throw new GraphError(
+        'fast_track 被拒：机器报告必须显式给出 attempt（必填）——该字段唯一绑定「本次执行 attempt」，' +
+          '请填 graph_start_attempt 返回的编号（形如 "att-001"；隔离 attempt 还可用返回的 worktree.head 核对）。' +
+          "引擎只在该 attempt 记录指向的执行树里采集真源，不猜工作树、绝不回退主树",
+      );
+    }
+    const attemptMeta = readAttemptMetaForFastTrack(root, id, attemptId);
+    const truthResult = collectAttemptGitTruth({
+      workspaceDir: dirname(root),
+      graphRoot: root,
+      attemptWorktree: attemptMeta.worktree,
+      baseline: evidence.baseline_commit,
+      attemptBaseline: typeof attemptMeta.baseline_commit === "string" ? attemptMeta.baseline_commit : null,
+      // g-435/g-437：与策略解析**同一份**有效排除前缀（单一默认点），不引入第二套默认。
+      nonProductPrefixes: effectiveNonProductPrefixesOf(projConf.review.non_product_prefixes),
+    });
+    if (!truthResult.ok) {
+      throw new GraphError(`fast_track 被拒：${truthResult.reason}`);
+    }
+    const truth = truthResult.truth;
+    const mismatches = reconcileMachineReportWithGitTruth(evidence, truth);
+    if (mismatches.length > 0) {
+      throw new GraphError(`fast_track 被拒：机器报告与 Git 真源不一致（${mismatches.join("；")}）`);
+    }
+    const provenance = collectCallerEvidenceProvenance(raw);
+    if (provenance.problems.length > 0) {
+      throw new GraphError(
+        `fast_track 被拒：门禁①②缺少调用方留痕（${provenance.problems.join("；")}）——引擎不复跑这两条命令，只按实留痕`,
+      );
+    }
+    // 门禁 ④ 以引擎自算的权威结果覆盖报告值——绝不采信调用方自报的「判据已验」；
+    // 门禁 ③ 同样以引擎真源值覆盖（此刻已与报告逐项一致，覆盖只为让事件里的口径唯一）。
+    const gate = evaluateFastTrackGate({
+      ...raw,
+      changed_paths: truth.changed_paths,
+      product_changed_lines: truth.product_changed_lines,
+      untracked_files: truth.untracked_files,
+      criteria: { all_verified: allCriteriaVerified(doc.body) },
+    });
     if (!gate.allowed) {
       const failed = gate.checks.filter((c) => !c.ok).map((c) => c.detail);
       throw new GraphError(`fast_track 被拒：机器门禁未全绿（${failed.join("；")}）`);
@@ -12246,7 +12389,8 @@ export function resolveAccept(
       details: {
         policy: "auto",
         policy_source: policy.source,
-        baseline: gate.evidence.baseline_commit,
+        // g-437 P1：事件里的基线一律是**引擎锚点**（与报告相等已被强制，故这里只留引擎口径）。
+        baseline: truth.baseline_commit,
         checks: Object.fromEntries(gate.checks.map((c) => [c.id, c.ok])),
         evidence: {
           changed_paths: gate.evidence.changed_paths,
@@ -12256,6 +12400,27 @@ export function resolveAccept(
           tests_fail: gate.evidence.tests_fail,
           typecheck_exit_code: gate.evidence.typecheck_exit_code,
           criteria_all_verified: gate.evidence.criteria_all_verified,
+        },
+        // g-437：四项门禁的**证据分层**如实留痕（此前工具描述把四项都说成「引擎自算」）。
+        gate_sources: {
+          tests: "caller_reported",
+          typecheck: "caller_reported",
+          diff_size: "engine_git",
+          criteria_verified: "engine_computed",
+        },
+        // g-437：① ② 的调用方证据原件（命令原文 + 采集时间 + 来源）——引擎**未复跑**。
+        caller_evidence: provenance.trace,
+        // g-437：③ 的引擎 Git 真源（绑定到哪棵树、哪个 HEAD、采到了什么）。
+        git_truth: {
+          tree: truth.tree,
+          baseline_commit: truth.baseline_commit,
+          baseline_resolved: truth.baseline_resolved,
+          anchor_source: truth.anchor_source,
+          head: truth.head,
+          changed_paths: truth.changed_paths,
+          product_changed_lines: truth.product_changed_lines,
+          untracked_files: truth.untracked_files,
+          untracked_paths: truth.untracked_paths,
         },
       },
     });

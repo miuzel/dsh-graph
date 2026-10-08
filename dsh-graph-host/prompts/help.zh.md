@@ -42,7 +42,7 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_unbind_goal_child(goal, {attempt|child_id}[, token][, reason][, legacy]) 安全解绑执行子代理（token 走严格 CAS；遗留绑定无 token 时须显式 legacy=true 并给 reason）；
 - graph_abandon_attempt(goal, attempt, reason) 标记 attempt 为已放弃；
 - graph_start_review(goal, attempt, candidate_commit[, baseline_commit][, guidance][, provider][, model][, reasoning_effort][, mode]) 为既有执行 attempt 派发独立评审子代理（只读审查；评审是附属记录，不新建 attempt、不覆盖作者 child_id 与 results-att-*.md；复用作者既有工作树；结论按真实 reviewer child 独立落盘）；
-- graph_resolve_accept(goal, verdict[, objection][, force][, reason][, fast_track][, machine_report]) 主管裁决接受请求（accept/object）；fast_track=true 走机器快速放行：须策略判定 auto 且 machine_report 四项门禁全绿（tests/typecheck exit_code=0、产品代码 <150 行且无未跟踪新文件、判据全部 ✅已验，由引擎自算），返回 {ok, fast_track}。
+- graph_resolve_accept(goal, verdict[, objection][, force][, reason][, fast_track][, machine_report]) 主管裁决接受请求（accept/object）；fast_track=true 走机器快速放行：须策略判定 auto 且 machine_report 四项门禁全绿（①tests/②typecheck exit_code=0 为调用方证据，须附 command/collected_at/source；③产品代码 <150 行且无未跟踪新文件由引擎按 machine_report.attempt 绑定的实际工作树 Git 自算——该字段必填；④判据全部 ✅已验由引擎自算），返回 {ok, fast_track}。
 
 ## 校验对账
 - graph_validate() 全量校验不变量（状态、归属、判据、依赖环、卡片引用）；

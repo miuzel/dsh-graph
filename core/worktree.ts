@@ -3,6 +3,7 @@ import { existsSync, realpathSync, mkdirSync, readFileSync, writeFileSync } from
 import { resolve, relative, join, sep, dirname, isAbsolute } from "node:path";
 import { appendEvent, readEvents, nowIso } from "./events.ts";
 import { discoverGitWorktree, isScratchWorkspace } from "./root.ts";
+import { parseNumstatZ, parsePorcelainZ, summarizeProductLinesStrict } from "./review-policy.ts";
 import { findGoalFile, loadGoal } from "./ops.ts";
 import { GraphError } from "./machine.ts";
 
@@ -348,58 +349,16 @@ export function detectWorkspaceCleanliness(
     // 发现失败不影响原有探测路径（下面按原逻辑走 git status）
   }
   try {
-    // Git's -z porcelain paths are always relative to the repository top level,
-    // even when status is invoked from a nested workspace directory.
-    const statusPathRoot = graphRoot
-      ? resolve(runner(workspaceDir, ["rev-parse", "--show-toplevel"]))
-      : resolve(workspaceDir);
+    const { statusPathRoot, owned } = resolveOwnedUntrackedRoots(workspaceDir, graphRoot, runner);
     const out = runner(workspaceDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
     const entries = out.includes("\0")
       ? out.split("\0").filter(Boolean)
       : out.split(/\r?\n/).filter((entry) => entry.trim().length > 0);
-    const ownedUntracked = new Set<string>();
-    if (graphRoot) {
-      const graphPath = resolve(graphRoot);
-      // Do not let a misconfigured graph root that is an ancestor of the project hide
-      // ordinary project files. The graph root must be a strict descendant of this repo.
-      const repoRoot = statusPathRoot;
-      const graphRel = relative(repoRoot, graphPath);
-      const graphIsInsideRepo = graphRel !== "" && graphRel !== ".." &&
-        !graphRel.startsWith(`..${sep}`) && !isAbsolute(graphRel);
-      // Only untracked plugin data under the actual configured graph root is ignored.
-      // Tracked modifications are never exempted, even when they live there.
-      if (graphIsInsideRepo) ownedUntracked.add(graphPath);
-
-      // A nested worktree is plugin-owned only when Git currently registers it and
-      // this graph's attempt.started event records that exact path. A name or location
-      // under .worktrees alone is not sufficient evidence of ownership.
-      try {
-        const registered = new Set(runner(workspaceDir, ["worktree", "list", "--porcelain"])
-          .split(/\r?\n/).filter((line) => line.startsWith("worktree "))
-          .map((line) => resolve(line.slice("worktree ".length).trim())));
-        const recorded = new Set(readEvents(graphRoot)
-          .filter((event) => event.event === "attempt.started")
-          .map((event) => {
-            const worktree = (event.details as any)?.worktree;
-            return typeof worktree === "string" ? resolve(worktree) :
-              typeof worktree?.path === "string" ? resolve(worktree.path) : null;
-          }).filter((path): path is string => !!path));
-        for (const path of registered) if (recorded.has(path)) ownedUntracked.add(path);
-      } catch {
-        // Missing or unreadable provenance fails closed: only graph-root data is exempt.
-      }
-    }
-
     const remaining = entries.filter((entry) => {
       const status = entry.slice(0, 2);
-      if (status !== "??" || ownedUntracked.size === 0) return true;
+      if (status !== "??" || owned.size === 0) return true;
       const path = entry.slice(3).replace(/[\\/]$/, "");
-      const absolute = resolve(statusPathRoot, path);
-      for (const owned of ownedUntracked) {
-        const rel = relative(owned, absolute);
-        if (rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))) return false;
-      }
-      return true;
+      return !isOwnedUntrackedPath(resolve(statusPathRoot, path), owned);
     });
     if (remaining.length === 0) return { clean: true };
     const summary = remaining.slice(0, 3).join("; ") + (remaining.length > 3 ? ` ... (+${remaining.length - 3} more)` : "");
@@ -407,6 +366,362 @@ export function detectWorkspaceCleanliness(
   } catch (err: any) {
     return { clean: null, error: String(err?.message ?? err) };
   }
+}
+
+/**
+ * g-443/g-437：插件自有「未跟踪」根的**真实归属**解析——单一实现，两处消费
+ * （{@link detectWorkspaceCleanliness} 的干净度探测；g-437 门禁③的 Git 真源采集）。
+ *
+ * 归属证据两级，都不靠目录名字猜：
+ *  1. **配置的看板根自身**——且必须是本仓库的**严格后代**（防止把「项目根是看板根祖先」
+ *     的误配置当成豁免，从而隐藏普通项目文件）；
+ *  2. **Git 当前注册**且本看板 `attempt.started` 事件记录了**精确路径**的工作树。
+ *
+ * 两者皆不满足 ⇒ 不是插件自有 ⇒ 未跟踪即真实用户文件。
+ * **tracked 状态永不豁免**（调用方按状态码分流，本函数只回答路径归属）。
+ */
+export function resolveOwnedUntrackedRoots(
+  workspaceDir: string,
+  graphRoot?: string | null,
+  gitRunner?: (cwd: string, args: string[]) => string,
+): { statusPathRoot: string; owned: Set<string> } {
+  const runner = gitRunner ?? git;
+  // Git's -z porcelain paths are always relative to the repository top level,
+  // even when status is invoked from a nested workspace directory.
+  const statusPathRoot = graphRoot
+    ? resolve(String(runner(workspaceDir, ["rev-parse", "--show-toplevel"])).trim())
+    : resolve(workspaceDir);
+  const owned = new Set<string>();
+  if (graphRoot) {
+    const graphPath = resolve(graphRoot);
+    // Do not let a misconfigured graph root that is an ancestor of the project hide
+    // ordinary project files. The graph root must be a strict descendant of this repo.
+    const repoRoot = statusPathRoot;
+    const graphRel = relative(repoRoot, graphPath);
+    const graphIsInsideRepo = graphRel !== "" && graphRel !== ".." &&
+      !graphRel.startsWith(`..${sep}`) && !isAbsolute(graphRel);
+    // Only untracked plugin data under the actual configured graph root is ignored.
+    // Tracked modifications are never exempted, even when they live there.
+    if (graphIsInsideRepo) owned.add(graphPath);
+
+    // A nested worktree is plugin-owned only when Git currently registers it and
+    // this graph's attempt.started event records that exact path. A name or location
+    // under .worktrees alone is not sufficient evidence of ownership.
+    try {
+      const registered = new Set(runner(workspaceDir, ["worktree", "list", "--porcelain"])
+        .split(/\r?\n/).filter((line) => line.startsWith("worktree "))
+        .map((line) => resolve(line.slice("worktree ".length).trim())));
+      const recorded = new Set(readEvents(graphRoot)
+        .filter((event) => event.event === "attempt.started")
+        .map((event) => {
+          const worktree = (event.details as any)?.worktree;
+          return typeof worktree === "string" ? resolve(worktree) :
+            typeof worktree?.path === "string" ? resolve(worktree.path) : null;
+        }).filter((path): path is string => !!path));
+      for (const path of registered) if (recorded.has(path)) owned.add(path);
+    } catch {
+      // Missing or unreadable provenance fails closed: only graph-root data is exempt.
+    }
+  }
+  return { statusPathRoot, owned };
+}
+
+/** 该绝对路径是否落在某个插件自有未跟踪根之内（含根自身）。 */
+export function isOwnedUntrackedPath(absolutePath: string, owned: Iterable<string>): boolean {
+  for (const root of owned) {
+    const rel = relative(root, absolutePath);
+    if (rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))) return true;
+  }
+  return false;
+}
+
+/** g-437：**原始** git runner（返回 stdout 原文，绝不 trim——NUL 输出按字节解析）。 */
+export type RawGitRunner = (cwd: string, args: string[]) => string;
+
+function gitRaw(cwd: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 64 * 1024 * 1024,
+  });
+}
+
+/**
+ * g-437 P1：读取某目录所属仓库当前的 `HEAD` commit（**引擎已知事实**，供派发端落盘区间锚点）。
+ *
+ * 非隔离 attempt（`worktree: false`）在工作区仓库根执行，其记录里没有 `worktree.head`，
+ * 若不落盘锚点，门禁③的采集区间就只能由调用方报告给定（= 可把基线取到自己的 HEAD 自我归零）。
+ * 故派发时用本函数取「派发那一刻的 HEAD」作为基线落盘；**只要有一个字节能证明它不是 Git
+ * commit 就返回 null**（非 Git 仓库 / 无提交 / git 不可用）——调用方按「无锚点」处理（fail-closed），
+ * 绝不猜测、绝不抛错中断派发。
+ */
+export function readRepoHead(dir: string, runner: RawGitRunner = gitRaw): string | null {
+  try {
+    const out = String(runner(dir, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]) ?? "").trim();
+    return /^[0-9a-f]{40}$/.test(out) ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/** g-437：门禁③真源采集绑定的执行树。 */
+export interface AttemptGitTruthTree {
+  /** 实际执行 git 的目录（绝对路径）。 */
+  path: string;
+  /** `git rev-parse --show-toplevel`（porcelain/numstat 路径的锚点，等于仓库根）。 */
+  toplevel: string;
+  /** 绑定来源：隔离 attempt 工作树 / 显式记录为非隔离的工作区仓库。 */
+  isolation: "isolated_worktree" | "non_isolated_workspace";
+}
+
+/** g-437：引擎从实际 attempt 树采集到的门禁③真源事实（路径一律 repo-root-relative）。 */
+export interface AttemptGitTruth {
+  tree: AttemptGitTruthTree;
+  /** **引擎侧**区间锚点原文（来自 attempt 记录，绝不来自报告；报告值只用于比对）。 */
+  baseline_commit: string;
+  /** 锚点解析出的 commit SHA。 */
+  baseline_resolved: string;
+  /** 锚点取自 attempt 记录的哪个字段（审计用；不接受「报告给的区间」）。 */
+  anchor_source: "attempt_baseline" | "attempt_worktree_head";
+  head: string;
+  changed_paths: string[];
+  product_changed_lines: number;
+  product_files: string[];
+  untracked_files: number;
+  untracked_paths: string[];
+}
+
+export type AttemptGitTruthResult = { ok: true; truth: AttemptGitTruth } | { ok: false; reason: string };
+
+const shortList = (paths: readonly string[], n = 3) =>
+  paths.slice(0, n).map((p) => (p.length > 80 ? `${p.slice(0, 77)}…` : p)).join(" / ") +
+  (paths.length > n ? ` … (+${paths.length - n})` : "");
+
+/**
+ * g-437：门禁③的 **Git 真源采集 + 绑定**（只读；不写事件、不改文件、不建目录）。
+ *
+ * 绑定规则（fail-safe，全部失败路径都返回 `{ok:false}`，绝不静默回退）：
+ *  1. attempt 持久化了 `worktree.path` ⇒ 只在**该树**采集，并要求它此刻仍是 Git **实时注册**
+ *     的工作树、且其 `--show-toplevel` 就是它自己；缺失/已删/未注册/指向主工作树 ⇒ 拒绝，
+ *     **绝不回退主树**。
+ *  2. attempt 显式记录 `worktree: false`（非隔离）⇒ 绑定其工作区仓库（那是该 attempt **实际**
+ *     运行的位置，非回退），并在事件里标注 `non_isolated_workspace`。
+ *  3. 记录形态未知（既非含 path 的对象也不是 false）⇒ 拒绝（不接受「猜测执行树」）。
+ *  4. Git 不可用 / 基线不可解析 / numstat|porcelain 输出不可解析 ⇒ 拒绝。
+ *  5. 存在**未提交 tracked 改动**（staged/unstaged/deleted/rename）⇒ 拒绝：`baseline..HEAD`
+ *     看不到它们，只数未跟踪会漏。
+ *  6. **区间锚点只来自 attempt 记录**（`baseline_commit`，其次 `worktree.head`）；报告里的
+ *     `baseline_commit` 只用于比对，不一致或锚点缺失/不可解析一律拒绝（P1：否则调用方可把
+ *     基线取到自己的 HEAD，使 diff 恒为空而必然放行）。
+ */
+export function collectAttemptGitTruth(opts: {
+  /** 看板根所在的工作区（`dirname(boardRoot)`）。 */
+  workspaceDir: string;
+  /** 看板根（归属判定用，与 g-443 同一实现）。 */
+  graphRoot: string;
+  /** attempt 持久化的 `meta.worktree` 原值。 */
+  attemptWorktree: unknown;
+  /** 调用方报告的基线原文。 */
+  baseline: string | null;
+  /** attempt 持久化的基线（存在且可解析时用于绑定，防止「基线取 HEAD」自我归零）。 */
+  attemptBaseline?: string | null;
+  nonProductPrefixes?: readonly string[] | null;
+  runner?: RawGitRunner;
+}): AttemptGitTruthResult {
+  const runner = opts.runner ?? gitRaw;
+  const baseline = typeof opts.baseline === "string" ? opts.baseline.trim() : "";
+  if (baseline === "") return { ok: false, reason: "机器报告缺少 baseline_commit（门禁③必填）" };
+  const canonical = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
+
+  const wt = opts.attemptWorktree as any;
+  const recordedPath = wt && typeof wt === "object" && typeof wt.path === "string" && wt.path.trim() !== ""
+    ? resolve(wt.path.trim())
+    : null;
+
+  let tree: string;
+  let isolation: AttemptGitTruthTree["isolation"];
+  if (recordedPath) {
+    let realRecorded: string;
+    try {
+      realRecorded = realpathSync(recordedPath);
+    } catch {
+      return { ok: false, reason: `attempt 工作树不存在或不可读（${recordedPath}）——缺失/已删一律不放行，不回退主树` };
+    }
+    let listing: string;
+    try {
+      listing = runner(opts.workspaceDir, ["worktree", "list", "--porcelain"]);
+    } catch (e: any) {
+      return { ok: false, reason: `Git worktree 列表不可用（${String(e?.message ?? e)}）` };
+    }
+    const registered = listing.split(/\r?\n/)
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => line.slice("worktree ".length).trim())
+      .filter(Boolean);
+    if (registered.length === 0) return { ok: false, reason: "Git worktree 列表为空（无法确认 attempt 树归属）" };
+    const mainWorktree = canonical(registered[0]);
+    if (canonical(realRecorded) === mainWorktree) {
+      return { ok: false, reason: `attempt 记录的 worktree 指向主工作树（${recordedPath}）——门禁③只接受隔离 attempt 树` };
+    }
+    if (!registered.some((p) => canonical(p) === canonical(realRecorded))) {
+      return { ok: false, reason: `attempt 工作树已不在 Git 注册列表中（${recordedPath}）——缺失/已删一律不放行，不回退主树` };
+    }
+    let toplevelRaw: string;
+    try {
+      toplevelRaw = runner(realRecorded, ["rev-parse", "--show-toplevel"]).trim();
+    } catch (e: any) {
+      return { ok: false, reason: `attempt 工作树不可用（${String(e?.message ?? e)}）` };
+    }
+    if (toplevelRaw === "" || canonical(toplevelRaw) !== canonical(realRecorded)) {
+      return { ok: false, reason: `attempt 工作树的 Git 根与记录路径不一致（记录 ${recordedPath} / 实际 ${toplevelRaw || "未知"}）` };
+    }
+    tree = realRecorded;
+    isolation = "isolated_worktree";
+  } else if (wt === false) {
+    try {
+      const toplevelRaw = runner(opts.workspaceDir, ["rev-parse", "--show-toplevel"]).trim();
+      if (toplevelRaw === "") return { ok: false, reason: "工作区不在 Git 仓库内（无法绑定非隔离 attempt 的执行树）" };
+      tree = resolve(toplevelRaw);
+    } catch (e: any) {
+      return { ok: false, reason: `Git 不可用（${String(e?.message ?? e)}）` };
+    }
+    isolation = "non_isolated_workspace";
+  } else {
+    return {
+      ok: false,
+      reason: "attempt 记录缺少可绑定的执行树证据（worktree 既不是含 path 的对象，也不是显式的 false）——拒绝猜测",
+    };
+  }
+
+  const revParse = (rev: string): string | null => {
+    try {
+      const out = runner(tree, ["rev-parse", "--verify", "--quiet", rev]).trim();
+      return out === "" ? null : out;
+    } catch {
+      return null;
+    }
+  };
+
+  // g-437 P1（修复「自我归零」旁路）：**区间锚点只能来自 attempt 记录，绝不来自报告** —— 否则
+  // 调用方只要把报告的 baseline 取到自己的 HEAD，diff 就恒为空（0 行 0 未跟踪）必然放行。
+  // 锚点优先级（都属「引擎已知/派发时落盘」的事实）：
+  //   ① attempt.md 持久化的 `baseline_commit`（主管显式给出，或由派发端按引擎已知事实落盘）；
+  //   ② attempt 记录里的 `worktree.head`（派发时该工作树的实际起点，兼容未持久化基线的旧记录）。
+  // 报告里的 `baseline_commit` **只用于与锚点比对**，任何情况下都不用于确定采集区间。
+  const attemptBaseline = typeof opts.attemptBaseline === "string" ? opts.attemptBaseline.trim() : "";
+  const recordedHead = wt && typeof wt === "object" && typeof (wt as any).head === "string"
+    ? String((wt as any).head).trim()
+    : "";
+  const anchorIsPersisted = attemptBaseline !== "";
+  const anchorSource = anchorIsPersisted ? "attempt.baseline_commit" : "attempt.worktree.head";
+  const engineAnchor = attemptBaseline !== "" ? attemptBaseline : recordedHead;
+  if (engineAnchor === "") {
+    return {
+      ok: false,
+      reason:
+        "该 attempt 未记录任何引擎侧区间锚点（attempt.baseline_commit 与 worktree.head 均缺失）"
+        + "——门禁③不接受由报告自选区间：请用显式 baseline_commit 重新派发该 attempt，或改走普通 accept 路径",
+    };
+  }
+  const anchorResolved = revParse(`${engineAnchor}^{commit}`);
+  if (anchorResolved === null) {
+    return {
+      ok: false,
+      reason: `attempt 记录基线不可解析（${engineAnchor}，来源 ${anchorSource}）——fail-safe 不放行`,
+    };
+  }
+  const baselineResolved = revParse(`${baseline}^{commit}`);
+  if (baselineResolved === null) {
+    return {
+      ok: false,
+      reason: `基线不可解析（机器报告 baseline_commit=${baseline}）——请给与该 attempt 记录一致、且本仓库可解析的 commit`,
+    };
+  }
+  if (baselineResolved !== anchorResolved) {
+    return {
+      ok: false,
+      reason:
+        `机器报告 baseline_commit（${baseline}）与 attempt 持久化基线/工作树 head（${engineAnchor}，来源 ${anchorSource}）不一致`
+        + "——区间锚点只能来自 attempt 记录，不接受把基线取到 HEAD 自我归零",
+    };
+  }
+  const head = revParse("HEAD");
+  if (head === null) return { ok: false, reason: "无法解析 HEAD（Git 不可用或工作树损坏）" };
+
+  let numstatOut: string;
+  let statusOut: string;
+  try {
+    numstatOut = runner(tree, ["diff", "--numstat", "-z", baselineResolved, head]);
+    statusOut = runner(tree, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  } catch (e: any) {
+    return { ok: false, reason: `Git 采集命令失败（${String(e?.message ?? e)}）——fail-safe 不放行` };
+  }
+
+  const numstat = parseNumstatZ(numstatOut);
+  if (numstat.malformed.length > 0) {
+    return { ok: false, reason: `numstat 输出不可解析（${shortList(numstat.malformed)}）——解析不了即不放行` };
+  }
+  const status = parsePorcelainZ(statusOut);
+  if (status.malformed.length > 0) {
+    return { ok: false, reason: `status 输出不可解析（${shortList(status.malformed)}）——解析不了即不放行` };
+  }
+
+  const tracked = status.entries.filter((e) => e.status !== "??");
+  if (tracked.length > 0) {
+    const labels = tracked.map((e) => `${e.status} ${e.paths[0]}`);
+    return {
+      ok: false,
+      reason: `存在未提交的 tracked 改动（${shortList(labels)}）——baseline..HEAD 看不到 staged/unstaged/deleted，必须先提交`,
+    };
+  }
+
+  let ownership: { statusPathRoot: string; owned: Set<string> };
+  try {
+    ownership = resolveOwnedUntrackedRoots(tree, opts.graphRoot, runner as (cwd: string, args: string[]) => string);
+  } catch (e: any) {
+    return { ok: false, reason: `无法解析插件自有目录归属（${String(e?.message ?? e)}）——fail-safe 不放行` };
+  }
+  // 采集树**自身**不是「插件自有目录」：g-443 的归属清单里，本 attempt 的工作树既已注册、
+  // 又在 attempt.started 里留痕，若原样沿用会把树内**全部**未跟踪文件当插件数据豁免
+  // （真实用户文件随之漏计）。故这里只剔除采集树根；树内**嵌套**的其他插件工作树仍按归属排除。
+  const treeRoot = canonical(tree);
+  const ownedRoots = new Set<string>();
+  for (const root of ownership.owned) if (canonical(root) !== treeRoot) ownedRoots.add(root);
+  const untrackedPaths: string[] = [];
+  for (const entry of status.entries) {
+    if (entry.status !== "??") continue;
+    const absolute = resolve(ownership.statusPathRoot, entry.paths[0].replace(/[\\/]$/, ""));
+    if (isOwnedUntrackedPath(absolute, ownedRoots)) continue;
+    untrackedPaths.push(entriesRelPath(ownership.statusPathRoot, absolute));
+  }
+
+  const strict = summarizeProductLinesStrict(numstat.entries, opts.nonProductPrefixes);
+  if (strict.malformed.length > 0) {
+    return { ok: false, reason: `产品码行数不可解析（${shortList(strict.malformed)}）——不得按 0 行放行` };
+  }
+
+  const changed = [...new Set(numstat.entries.flatMap((e) => e.paths))].sort();
+  return {
+    ok: true,
+    truth: {
+      tree: { path: tree, toplevel: ownership.statusPathRoot, isolation },
+      baseline_commit: engineAnchor,
+      baseline_resolved: anchorResolved,
+      anchor_source: anchorIsPersisted ? "attempt_baseline" : "attempt_worktree_head",
+      head,
+      changed_paths: changed,
+      product_changed_lines: strict.lines,
+      product_files: strict.files,
+      untracked_files: untrackedPaths.length,
+      untracked_paths: untrackedPaths,
+    },
+  };
+}
+
+/** 绝对路径 → repo-root-relative（未跟踪路径报告口径与 numstat/porcelain 一致）。 */
+function entriesRelPath(root: string, absolute: string): string {
+  const rel = relative(root, absolute);
+  return rel.split(sep).join("/");
 }
 
 export interface WorktreeIsolationDecision {

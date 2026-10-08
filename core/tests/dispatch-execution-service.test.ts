@@ -683,6 +683,13 @@ test("g-283 默认规则：feature 省略 worktree 默认勾选自动建树，ta
   assert.equal(attMeta.worktree, false);
   // g-289：attempt 记录始终落盘解析出的隔离原因；此处为「按类型默认不隔离」。
   assert.equal(attMeta.worktree_reason, "type_default");
+  // g-437 P1：非隔离 attempt 记录里没有 worktree.head ⇒ 派发时**必须**落盘引擎侧区间锚点
+  // （= 派发那一刻的仓库 HEAD），否则门禁③的采集区间只能由调用方报告给定（可自我归零）。
+  const wsHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ws, encoding: "utf8" }).trim();
+  assert.match(String(attMeta.baseline_commit ?? ""), /^[0-9a-f]{40}$/, "非隔离 attempt 必须落盘引擎侧锚点");
+  assert.equal(attMeta.baseline_commit, wsHead, "锚点必须是派发那一刻的仓库 HEAD");
+  // 白名单两处同时登记：工具响应也要回传同一锚点（主管据此填 machine_report.baseline_commit）
+  assert.equal((r2 as any).baseline_commit, wsHead, "工具响应必须回传落盘的区间锚点");
 });
 
 test("g-283 失败即停：非 git 仓库 + worktree=true 拒绝派发，未创建 attempt 且未启动子代理", async () => {

@@ -30,12 +30,20 @@ import {
   isProductCodePath,
   countProductChangedLines,
   matchRegionSegment,
+  effectiveContractPathsOf,
+  effectiveNonProductPrefixesOf,
+  effectiveReviewRegionsOf,
   DEFAULT_CONTRACT_PATHS,
   DEFAULT_REVIEW_REGIONS,
   DEFAULT_NON_PRODUCT_PREFIXES,
   CONTRACT_PATHS,
   REVIEW_REGIONS,
+  // g-442/g-437：默认值真源（SPEC 表）——用于钉住「不另抄一份默认值」
+  REVIEW_LIST_FIELDS,
 } from "../review-policy.ts";
+// g-437：`resolveAccept(fast_track=true)` 的门禁③改由引擎在 attempt 实际工作树上采集 Git 真源，
+// 故本文件的「快速放行」正向/负向用例统一改用真 Git 夹具（策略级纯函数用例不受影响）。
+import { makeFastTrackFixture } from "./fixtures/fast-track-fixture.ts";
 
 function fixture(opts: { type?: string; criteria?: string[]; status?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g435-"));
@@ -47,7 +55,9 @@ function fixture(opts: { type?: string; criteria?: string[]; status?: string } =
   return { root, goal, file };
 }
 
-function greenReport(over: Record<string, unknown> = {}) {
+/** **策略层**全绿机器报告（仅供策略/门禁判定路径构造入参）。
+ *  同样**不构造** attempt/工作树真源段——真源采集与逐项对账的用例走真 Git 夹具。 */
+function policyStageReport(over: Record<string, unknown> = {}) {
   return {
     baseline_commit: "86b2c2b",
     changed_paths: ["scripts/build.sh"],
@@ -112,7 +122,7 @@ function expectFastTrackRejected(root: string, goal: string, paths: string[], la
   assert.throws(
     () => resolveAccept(root, goal, {
       actor: "supervisor:test", verdict: "accept", fast_track: true,
-      machine_report: greenReport({ changed_paths: paths }),
+      machine_report: policyStageReport({ changed_paths: paths }),
     }),
     (e: unknown) => e instanceof GraphError && /fast_track 被拒/.test(e.message) && /strict/.test(e.message),
     `${label}：畸形/不可解析配置必须 fail-closed，不得快速放行`,
@@ -248,56 +258,105 @@ test("g-435 判据 1：三项列表写读往返，保留注释与未知键；非
 // 判据 2：持久化设置立即被策略消费；未配置与显式列表由单一默认应用点区分
 // ---------------------------------------------------------------------------
 test("g-435 判据 2：持久化设置立即生效，单一默认应用点区分未配置与显式空列表", () => {
-  const { root, goal } = fixture({ type: "patch" });
+  const { root } = fixture({ type: "patch" });
 
-  // 1. 未配置时：regions 为 null，策略消费 DEFAULT_REVIEW_REGIONS
+  // 1. 未配置时：三项为 null，策略消费默认常量（单一默认应用点）
   const cfgUnset = readProjectConfig(root);
   assert.equal(cfgUnset.review.regions, null);
   assert.equal(cfgUnset.review.contract_paths, null);
   assert.equal(cfgUnset.review.non_product_prefixes, null);
+  // g-442/g-437 适配：单一默认应用点现在是 `resolveReviewListInput`（它始终**返回副本**），
+  // 故消费侧只断言**值等价**。但「不另抄一份默认值」这一不变式仍然钉住：底部三条断言证明
+  // g-442 的 SPEC 表 defaultValues 就是这三个 DEFAULT_* 常量**本体**（引用相等）。
+  assert.deepEqual(effectiveReviewRegionsOf(cfgUnset.review.regions), [...DEFAULT_REVIEW_REGIONS]);
+  assert.deepEqual(effectiveContractPathsOf(cfgUnset.review.contract_paths), [...DEFAULT_CONTRACT_PATHS]);
+  assert.deepEqual(
+    effectiveNonProductPrefixesOf(cfgUnset.review.non_product_prefixes),
+    [...DEFAULT_NON_PRODUCT_PREFIXES],
+  );
+  const specDefault = (key: string) => REVIEW_LIST_FIELDS.find((s) => s.key === key)!.defaultValues;
+  assert.equal(specDefault("regions"), DEFAULT_REVIEW_REGIONS, "缺省区域必须是同一个常量本体（不得另抄）");
+  assert.equal(specDefault("contract_paths"), DEFAULT_CONTRACT_PATHS, "缺省契约路径必须是同一个常量本体");
+  assert.equal(specDefault("non_product_prefixes"), DEFAULT_NON_PRODUCT_PREFIXES, "缺省排除前缀必须是同一个常量本体");
 
-  // 未配置下，变更 scripts/build.sh（属于 DEFAULT_REVIEW_REGIONS）可以快速放行
-  const r1 = resolveAccept(root, goal, {
-    actor: "supervisor:test",
-    verdict: "accept",
-    fast_track: true,
-    machine_report: greenReport({ changed_paths: ["scripts/build.sh"] }),
+  // 2. 未配置下，变更 scripts/build.sh（属于 DEFAULT_REVIEW_REGIONS）可以快速放行。
+  //    g-437：改用真 Git 夹具——门禁③由引擎在 attempt 实际工作树上自算，报告须与真源一致。
+  const unset = makeFastTrackFixture({ type: "patch", changed: [{ path: "scripts/build.sh", lines: 12 }] });
+  try {
+    const r1 = resolveAccept(unset.root, unset.goal, {
+      actor: "supervisor:test",
+      verdict: "accept",
+      fast_track: true,
+      machine_report: unset.report(),
+    });
+    assert.equal(r1.ok, true);
+    assert.equal(r1.fast_track, true);
+  } finally {
+    unset.dispose();
+  }
+
+  // 3. 写入自定义配置：立即被 resolveAccept 消费，无需任何重启
+  const narrowed = makeFastTrackFixture({
+    type: "patch",
+    changed: [{ path: "scripts/build.sh", lines: 12 }],
+    projectConfig: { review: { regions: ["src", "pkg"] } }, // 不含 scripts
   });
-  assert.equal(r1.ok, true);
-  assert.equal(r1.fast_track, true);
+  try {
+    // scripts/build.sh 现在变为未登记区域，必须拒绝快速放行（升级为 strict）
+    assert.deepEqual(effectiveReviewRegionsOf(readProjectConfig(narrowed.root).review.regions), ["src", "pkg"]);
+    assert.throws(
+      () =>
+        resolveAccept(narrowed.root, narrowed.goal, {
+          actor: "supervisor:test",
+          verdict: "accept",
+          fast_track: true,
+          machine_report: narrowed.report(),
+        }),
+      /fast_track 被拒/,
+    );
+  } finally {
+    narrowed.dispose();
+  }
 
-  // 2. 写入自定义配置：立即被 resolveAccept 消费，无需任何重启
-  writeProjectConfig(
-    root,
-    {
-      review: {
-        regions: ["src", "pkg"], // 不含 scripts
-      },
-    },
-    "supervisor:test",
-  );
+  // 4. 未配置 ≠ 显式空列表：以 DEFAULT_NON_PRODUCT_PREFIXES 里的 `dist/` 变更区分
+  //    （两项都走真 Git 真源：未配置 ⇒ dist/ 不计产品码；显式 [] ⇒ dist/ 计入产品码）
+  const distDefault = makeFastTrackFixture({ type: "patch", changed: [{ path: "dist/bundle.js", lines: 200 }] });
+  try {
+    assert.equal(distDefault.productLines, 0, "未配置 ⇒ 默认前缀 dist 生效，产品码 0 行");
+    const okDefault = resolveAccept(distDefault.root, distDefault.goal, {
+      actor: "supervisor:test",
+      verdict: "accept",
+      fast_track: true,
+      machine_report: distDefault.report(),
+    });
+    assert.equal(okDefault.fast_track, true);
+  } finally {
+    distDefault.dispose();
+  }
 
-  const f2 = fixture({ type: "patch", status: "review" });
-  writeProjectConfig(
-    f2.root,
-    {
-      review: {
-        regions: ["src", "pkg"], // 不含 scripts
-      },
-    },
-    "supervisor:test",
-  );
-  // scripts/build.sh 现在变为未登记区域，必须拒绝快速放行（升级为 strict）
-  assert.throws(
-    () =>
-      resolveAccept(f2.root, f2.goal, {
-        actor: "supervisor:test",
-        verdict: "accept",
-        fast_track: true,
-        machine_report: greenReport({ changed_paths: ["scripts/build.sh"] }),
-      }),
-    /fast_track 被拒/,
-  );
+  const distExplicitEmpty = makeFastTrackFixture({
+    type: "patch",
+    changed: [{ path: "dist/bundle.js", lines: 200 }],
+    projectConfig: { review: { non_product_prefixes: [] } },
+    nonProductPrefixes: [],
+  });
+  try {
+    assert.deepEqual(effectiveNonProductPrefixesOf(readProjectConfig(distExplicitEmpty.root).review.non_product_prefixes), []);
+    assert.equal(distExplicitEmpty.productLines, 200, "显式空列表 ⇒ 默认前缀不生效，dist/ 计入产品码");
+    assert.throws(
+      () =>
+        resolveAccept(distExplicitEmpty.root, distExplicitEmpty.goal, {
+          actor: "supervisor:test",
+          verdict: "accept",
+          fast_track: true,
+          machine_report: distExplicitEmpty.report(),
+        }),
+      /M2 产品代码变更/,
+      "显式空列表必须真的改变口径（不得回退默认）",
+    );
+  } finally {
+    distExplicitEmpty.dispose();
+  }
 });
 
 // ---------------------------------------------------------------------------
