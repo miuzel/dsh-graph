@@ -222,6 +222,9 @@ test("g-425 判据12：locale 未注册 + 未声明服务属性访问即抛时�
   assert.deepEqual(registeredSlots, [
     "conversation.session.header.actions",
     "conversation.view",
+    // g-453：profile 全局设置页新增两个席位（设置→内置插件 tab / 插件面板组合包配置页）
+    "plugins.bundle.config",
+    "settings.plugins.tab",
     "settings.section",
     "sidebar.right.pane.tab",
     "sidebar.right.pane.tab.title",
@@ -238,6 +241,29 @@ test("g-425 判据12：locale 未注册 + 未声明服务属性访问即抛时�
   assert.ok(settingsSection, "settings.section 必须注册（设置页 section 命中）");
   assert.equal(settingsSection!.meta.id, "dsh-graph-settings");
   assert.equal(typeof settingsSection!.comp, "function");
+
+  // g-453：三个席位**一律经 slots.inject 注册**（宿主只在对应页面挂载时才声明该 slot；
+  // apply 里直接 register 会静默 no-op）。这两个新席位在冷启动夹具里也必须走 inject 回调。
+  for (const seat of ["settings.section", "settings.plugins.tab", "plugins.bundle.config"]) {
+    assert.ok(boot.calls.includes(`slots.inject@root:${seat}`), `${seat} 必须经 ctx.slots.inject 注册`);
+  }
+
+  // g-453 席位②：设置 → 内置插件 的 tab（id/order 稳定，label 与 section 同源 thunk）
+  const pluginsTab = boot.registrations.find((r) => r.slotName === "settings.plugins.tab");
+  assert.ok(pluginsTab, "settings.plugins.tab 必须注册（设置→内置插件 标签页席位）");
+  assert.equal(pluginsTab!.meta.id, "dsh-graph");
+  assert.equal(pluginsTab!.meta.order, 60);
+  assert.equal(typeof pluginsTab!.meta.label, "function", "plugins tab label 必须是 locale-following thunk");
+  assert.equal(pluginsTab!.meta.label(), settingsSection!.meta.label(), "两个席位的标签同源（dgT('settings.title')）");
+  assert.equal(typeof pluginsTab!.comp, "function");
+
+  // g-453 席位③：插件面板 → dsh-graph 组合包配置页（keyed by 包名；summary 按契约返回 null）
+  const bundleConfig = boot.registrations.find((r) => r.slotName === "plugins.bundle.config");
+  assert.ok(bundleConfig, "plugins.bundle.config 必须注册（组合包配置页席位）");
+  assert.equal(bundleConfig!.meta.key, "dsh-graph", "组合包配置页必须按包名 dsh-graph 绑定 key");
+  assert.equal(typeof bundleConfig!.comp, "function");
+  assert.equal(bundleConfig!.comp({ view: "summary" }), null, "summary 视图必须返回 null（列表摘要不渲染配置表单）");
+  assert.ok(bundleConfig!.comp({ view: "page" }), "page 视图必须渲染配置表单");
 
   // 右侧栏 tab：类型面 + 本体 seat + chip 标题 seat
   assert.equal(boot.tabRegistrations.length, 1, "sidebarRightTabs.register 必须调用一次");
@@ -294,7 +320,8 @@ test("g-425 判据12：sidebarRightTabs 缺席（精简 profile/旧宿主）时�
   assert.equal(boot.applyError, null, "右侧栏服务缺席不得拖垮 apply");
   for (const hit of boot.gateHits) assert.ok(CAUGHT_OPTIONAL_PROBES.includes(hit), `门禁命中不得越界：${hit}`);
   assert.deepEqual(boot.registrations.map((r) => r.slotName).sort(),
-    ["conversation.session.header.actions", "conversation.view", "settings.section"]);
+    // g-453：设置页三个席位与右侧栏 tab 无关 ⇒ 右侧栏缺席时照旧全注册
+    ["conversation.session.header.actions", "conversation.view", "plugins.bundle.config", "settings.plugins.tab", "settings.section"]);
   assert.equal(boot.tabRegistrations.length, 0);
 });
 
@@ -405,6 +432,34 @@ test("g-425 判据13 负向对照：守卫对裸回退样本必报红，对声�
   assert.deepEqual(sample("const a = x ?? appCtx?.get;\n"), []);
   assert.deepEqual(sample("const a = x ?? sctx.sessions;\n"), []);
   assert.deepEqual(sample("const a = x ?? scope.on;\n"), []);
+});
+
+test("g-453：设置 scope 能力探测只用 inject/ctx.get（点分名零属性回退、零版本号比较），三席位全走 slots.inject", () => {
+  const settings = readFileSync(join(clientSrcDir, "settings.js"), "utf8");
+  // 保留字符串字面量（断言里的服务名/席位名本身是字符串），只抹注释
+  const code = stripNonCode(settings, true);
+  // ① 点分服务名 `remote.settings` 只走 optionalServicePath（纯 ctx.get）；经 optionalService 的属性
+  //    回退在 0.2.0-rc.2 上会抛 `cannot get property "remote.settings" without inject`（实测真因）
+  assert.match(code, /optionalServicePath\(ctx, "remote\.settings"\)/);
+  assert.doesNotMatch(code, /optionalService\([^)]*"remote\.settings"/,
+    "点分服务名不得经 optionalService（其属性回退会撞 cordis 注入门禁）");
+  // ② helper 语义钉住：optionalServicePath 只有 ctx.get，**没有**属性回退
+  const helpers = stripNonCode(readFileSync(join(clientSrcDir, "helpers.js"), "utf8"), true);
+  const helperStart = helpers.indexOf("function optionalServicePath(ctx, name)");
+  assert.ok(helperStart >= 0, "helpers.js 必须定义 optionalServicePath（点分服务名读取口径）");
+  const helperBody = helpers.slice(helperStart, helpers.indexOf("\n    }", helperStart));
+  assert.ok(helperBody.includes("ctx?.get?.(name)"), "optionalServicePath 必须经 ctx.get 读取");
+  assert.ok(!helperBody.includes("ctx?.[name]"), "optionalServicePath 不得含属性回退");
+  // ③ 迟到绑定：两个服务键各自 inject 探测（宿主没有该服务 ⇒ 回调不触发、零报错）
+  assert.match(code, /const GRAPH_SETTINGS_SERVICE_KEYS = \["settingsScope", "remote\.settings"\]/);
+  assert.match(code, /ctx\?\.inject\?\.\(\[key\]/);
+  // ④ 同一组件的三个席位一律经 ctx.slots.inject（直接 register 在宿主未声明 slot 时静默 no-op）
+  for (const seat of ["settings.section", "settings.plugins.tab", "plugins.bundle.config"]) {
+    assert.match(code, new RegExp(`ctx\\.slots\\.inject\\("${seat.replace(/\./g, "\\.")}"`),
+      `${seat} 必须经 ctx.slots.inject 注册`);
+  }
+  // ⑤ 能力判定禁止比对宿主版本号（dsh-market 的 `settingsScope`→`settings` 改名即静默失效教训）
+  assert.doesNotMatch(code, /\bversion\b/i, "设置能力判定不得出现版本号比较（只允许服务/inject 探测）");
 });
 
 test("g-425 判据13（服务端半边）：resolvePromptLanguage 的 locale 兜底必须 ctx.get 优先且门禁下可用", () => {

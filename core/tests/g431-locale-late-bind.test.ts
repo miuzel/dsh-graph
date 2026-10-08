@@ -350,6 +350,9 @@ function assertColdBootSurvives(boot: Boot): void {
   assert.deepEqual(boot.registeredSlots, [
     "conversation.session.header.actions",
     "conversation.view",
+    // g-453：profile 全局设置页新增两个席位（设置→内置插件 tab / 插件面板组合包配置页）
+    "plugins.bundle.config",
+    "settings.plugins.tab",
     "settings.section",
     "sidebar.right.pane.tab",
     "sidebar.right.pane.tab.title",

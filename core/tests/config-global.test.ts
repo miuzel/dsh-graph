@@ -37,7 +37,14 @@ test("g-133 provider/model 目录 select 源契约：connection.api 捕获 + llm
   // 见 helpers.js），语义不变——仍是从 ctx 取 connection 再取 .api（裸 `ctx?.connection` 在连接服务
   // 缺席时会撞 cordis 注入门禁抛错并中断降级链）。
   assert.match(client, /optionalService\(ctx, "connection"\)/);
-  assert.match(client, /createGraphSettingsApiScope\(connection\?\.api, ctx\)/);
+  assert.match(client, /createGraphSettingsApiScope\(connection\?\.api, ctx, remoteSettings\)/);
+  // g-453：`remote.settings` 是**点分服务名** ⇒ 只能经 optionalServicePath（纯 ctx.get）；属性访问
+  // `ctx.remote.settings` 在 0.2.0-rc.2 上抛 `cannot get property "remote.settings" without inject`
+  // （实测真因：被降级 catch 吞成「设置页整页降级」）。新线命名空间按 describe 实际 ns 集合发现。
+  assert.match(client, /optionalServicePath\(ctx, "remote\.settings"\)/);
+  assert.doesNotMatch(client, /optionalService\([^)]*"remote\.settings"/);
+  assert.match(client, /GRAPH_SETTINGS_NS_CANDIDATES/);
+  assert.match(client, /const pickRow = \(view\) =>/);
   assert.match(client, /api\.llm\.providers/);
   assert.match(client, /api\.llm\.models/);
   // provider/model 是目录 select（非自由文本 input）；首项留空继承
