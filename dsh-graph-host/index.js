@@ -2621,7 +2621,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_start_attempt",
-        description: "为目标派发一个 attempt：派发前先执行准入门禁（backlog/draft/blocked/delivered 及无判据/未确认判据/状态不允许的目标直接拒绝，零副作用：不建 attempt、不启动子代理）；准入通过后先落地 in_progress 迁移，再创建 attempt 目录与记录并启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。隔离解析（g-283/g-289）：worktree 显式传值优先；未传时按目标类型与工作区干净度解析——干净工作区下 patch/chore/task 默认不建树（微小改动快速通道），feature/bug/improvement 默认建树；可靠判脏（clean=false）时任何类型都升级为建树；隔离提示与实际是否建树严格一致。返回隔离语义（g-406）：isolated=是否真的建了独立 worktree 并据此启动子代理；worktree=已建时为 {path,relative_path,branch,head}、未建为 false；worktree_reason=explicit/type_default/dirty_workspace/type_default_unknown；worktree_created/worktree_reused=创建结果。子代理只在工作树创建并注册完成后启动；建树失败一律抛错（零副作用），绝不静默降级为主树执行。attempt_brief 是当前 action 原文；task_type 必须传 merge（合入）、rewrite（重写）或 fix（修复）之一，baseline_commit/source_attempt 是 supervisor 直接提供的当前事实，acceptance_items 是当前验收项 string[]；这些字段不从 brief/handoff 截取。task_type/baseline_commit/source_attempt 的空值传 null 或省略表示未提供；acceptance_items=[] 表示明确无单独验收项，null 或省略表示未提供；空字符串非法。",
+        description: sT("tool.graph_start_attempt"),
         parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, reasoning_effort: str, mode: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
       },
       run: async (a, ex) => {
