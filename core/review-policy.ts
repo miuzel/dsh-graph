@@ -54,6 +54,82 @@ export const DEFAULT_NON_PRODUCT_PREFIXES: readonly string[] = [
   ".worktrees",
 ] as const;
 
+// ---------------------------------------------------------------------------
+// g-442：三项列表字段的描述与**只读投影**（写侧约束 + 设置 UI 的唯一真源）
+// ---------------------------------------------------------------------------
+
+export type ReviewListFieldKey = "regions" | "contract_paths" | "non_product_prefixes";
+
+/** 单个列表字段的约束与缺省值（缺省值即策略层生效值，未配置时使用）。 */
+export interface ReviewListFieldSpec {
+  key: ReviewListFieldKey;
+  /** 是否允许显式空列表。`regions: []` **不允许**（无可评估区域 ⇒ fail-closed 升级 strict，不提供该入口）；
+   *  `contract_paths: []` / `non_product_prefixes: []` 合法，且必须与「未配置(null)」区分。 */
+  allowEmpty: boolean;
+  /** 未配置时策略层采用的普适缺省值（同源常量，绝不另抄一份）。 */
+  defaultValues: readonly string[];
+}
+
+export const REVIEW_LIST_FIELDS: readonly ReviewListFieldSpec[] = [
+  { key: "regions", allowEmpty: false, defaultValues: DEFAULT_REVIEW_REGIONS },
+  { key: "contract_paths", allowEmpty: true, defaultValues: DEFAULT_CONTRACT_PATHS },
+  { key: "non_product_prefixes", allowEmpty: true, defaultValues: DEFAULT_NON_PRODUCT_PREFIXES },
+] as const;
+
+/** 列表字段的只读投影：生效值 + 来源（显式配置 / 缺省）+ 畸形态 + 写侧约束。 */
+export interface ReviewListEffective {
+  /** 策略层实际生效的列表（显式值原样；未配置/畸形时取 defaultValues）。 */
+  value: string[];
+  /** `explicit`＝project.yaml 中显式登记；`default`＝未配置，取普适缺省。 */
+  source: "explicit" | "default";
+  /** 字段存在但无法判定（畸形）—— UI 必须显示「非法/需修 project.yaml」且不可回填提交。 */
+  malformed: boolean;
+  /** 写侧是否允许显式空列表（`regions` 为 false）。 */
+  allow_empty: boolean;
+}
+
+/** 某字段是否为「存在但不可判定」的畸形态（不产生任何内部哨兵）。 */
+export function isMalformedReviewListValue(raw: unknown, flagged?: boolean): boolean {
+  if (flagged === true) return true;
+  if (raw === null || raw === undefined) return false;
+  if (!Array.isArray(raw)) return true;
+  return raw.some((item) => typeof item !== "string");
+}
+
+/**
+ * 单字段只读投影。不变量：
+ * - 显式列表（含 `[]`）⇒ `source: "explicit"`，生效值即原文（**显式值等于缺省值也必须报 explicit**，不得混同 null）；
+ * - 未配置（`null`/`undefined`）⇒ `source: "default"`，生效值取普适缺省；
+ * - 畸形 ⇒ `source: "default"` + `malformed: true`（策略层同样回落缺省值并安全升级 strict），UI 据此禁用编辑。
+ */
+export function effectiveReviewList(
+  spec: ReviewListFieldSpec,
+  raw: unknown,
+  flagged?: boolean,
+): ReviewListEffective {
+  const malformed = isMalformedReviewListValue(raw, flagged);
+  if (!malformed && Array.isArray(raw)) {
+    return { value: raw.map((s) => String(s)), source: "explicit", malformed: false, allow_empty: spec.allowEmpty };
+  }
+  return { value: [...spec.defaultValues], source: "default", malformed, allow_empty: spec.allowEmpty };
+}
+
+/** 三项列表字段的只读投影（设置面 GET/POST 与 graph_get_settings 同源下发）。 */
+export function reviewEffectiveProjection(
+  review: unknown,
+): Record<ReviewListFieldKey, ReviewListEffective> {
+  const rv = (review && typeof review === "object" ? review : {}) as Record<string, unknown>;
+  const invalidRaw = rv.invalid_fields;
+  const invalid = (invalidRaw && typeof invalidRaw === "object" ? invalidRaw : {}) as Record<string, unknown>;
+  const out = {} as Record<ReviewListFieldKey, ReviewListEffective>;
+  for (const spec of REVIEW_LIST_FIELDS) {
+    // 段级畸形（整档 YAML 不可解析 / review 段不是映射）⇒ 三个字段一并按畸形处理
+    const flagged = Boolean(invalid[spec.key]) || Boolean(invalid.review);
+    out[spec.key] = effectiveReviewList(spec, rv[spec.key], flagged);
+  }
+  return out;
+}
+
 /** 判为 strict 的闭合原因集（固定顺序输出，便于断言与审计）。 */
 export const STRICT_REASONS = [
   "contract_change", // M1 变更路径含契约文件

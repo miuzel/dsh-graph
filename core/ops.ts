@@ -139,6 +139,10 @@ import {
   normalizeMachineReport,
   resolveReviewPolicy,
   evaluateFastTrackGate,
+  REVIEW_LIST_FIELDS,
+  reviewEffectiveProjection,
+  type ReviewListEffective,
+  type ReviewListFieldKey,
   type ReviewPolicy,
 } from "./review-policy.ts";
 export { GraphError, GraphConflictError };
@@ -171,9 +175,16 @@ export {
   evaluateFastTrackGate,
   countProductChangedLines,
   isProductCodePath,
+  REVIEW_LIST_FIELDS,
+  isMalformedReviewListValue,
+  effectiveReviewList,
+  reviewEffectiveProjection,
 } from "./review-policy.ts";
 export type {
   ReviewPolicy,
+  ReviewListFieldSpec,
+  ReviewListFieldKey,
+  ReviewListEffective,
   ReviewPolicyDecision,
   StrictReason,
   FastTrackCheck,
@@ -1166,6 +1177,11 @@ export interface ProjectConfig {
     config_malformed?: boolean;
     /** 逐字段畸形原因：字段名 → 指向 project.yaml 的用户可读说明（读侧元信息，非配置项）。 */
     invalid_fields?: Record<string, string>;
+    /**
+     * g-442：三项列表字段的**只读投影**（生效值 + 来源 + 畸形态 + 写侧约束）。
+     * 与 `config_malformed`/`invalid_fields` 同为读侧元信息：写侧 schema 明确拒绝，绝不参与往返。
+     */
+    effective?: Record<ReviewListFieldKey, ReviewListEffective>;
   };
 }
 
@@ -1466,7 +1482,14 @@ export function readProjectConfig(root: string): ProjectConfig {
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
       supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])) },
       prompt_overrides: { subagent: { state: "default", value: null } },
-      review: { policy: null, regions: null, contract_paths: null, non_product_prefixes: null },
+      review: {
+        policy: null,
+        regions: null,
+        contract_paths: null,
+        non_product_prefixes: null,
+        // 文件缺省时同样下发只读投影（全部为普适缺省来源），UI 无需自备第二份默认值
+        effective: reviewEffectiveProjection({ regions: null, contract_paths: null, non_product_prefixes: null }),
+      },
     };
   }
   const rawText = readFileSync(file, "utf8");
@@ -1593,6 +1616,14 @@ export function readProjectConfig(root: string): ProjectConfig {
       regions: regionsRead.value,
       contract_paths: contractRead.value,
       non_product_prefixes: nonProductRead.value,
+      // g-442：三项列表字段的只读投影（生效值 + 来源：显式配置 / 缺省(普适) + allow_empty），
+      // 与读侧元信息同处 review 段；写侧 schema 的 additionalProperties:false 会拒绝任何回填。
+      effective: reviewEffectiveProjection({
+        regions: regionsRead.value,
+        contract_paths: contractRead.value,
+        non_product_prefixes: nonProductRead.value,
+        invalid_fields: invalidFields,
+      }),
       // 仅在畸形时附带元信息，保持合法配置的读回形状不变（无多余键）
       ...(reviewMalformed ? { config_malformed: true, invalid_fields: invalidFields } : {}),
     },
@@ -1895,9 +1926,11 @@ function validateConfigPatch(patch: any): void {
         seen.add(canonical);
       }
     };
-    if ("regions" in rv) validateStringList(rv.regions, "review.regions", true, false);
-    if ("contract_paths" in rv) validateStringList(rv.contract_paths, "review.contract_paths", true, false);
-    if ("non_product_prefixes" in rv) validateStringList(rv.non_product_prefixes, "review.non_product_prefixes", true, false);
+    // g-442：三项列表的写侧约束由 REVIEW_LIST_FIELDS 单一真源驱动（`regions` 不允许显式空列表：
+    // 无可评估区域 ⇒ 策略层 fail-closed 升级 strict，写侧一并拒收，UI 与 API 同口径）。
+    for (const spec of REVIEW_LIST_FIELDS) {
+      if (spec.key in rv) validateStringList(rv[spec.key], `review.${spec.key}`, spec.allowEmpty, false);
+    }
   }
 }
 

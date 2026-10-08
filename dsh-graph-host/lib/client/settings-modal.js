@@ -28,7 +28,15 @@
         },
         supervisor: { automation: auto },
         prompt_overrides: { subagent: normalizePromptOverrideDraft(po) },
-        review: { policy: normalizeReviewPolicyDraft(form?.review?.policy) },
+        review: {
+          policy: normalizeReviewPolicyDraft(form?.review?.policy),
+          // g-442：三项评审条件列表的规范化——畸形（invalid_fields 命中 / 段级 config_malformed /
+          // 含非字符串元素）一律归一为 null（只读展示、绝不回填提交）；未配置 null 保持 null；
+          // 显式列表（**含 `[]`**）原样保留 ⇒ 「显式空列表」与「未配置」天然可区分。
+          regions: normalizeReviewListDraft(form, "regions"),
+          contract_paths: normalizeReviewListDraft(form, "contract_paths"),
+          non_product_prefixes: normalizeReviewListDraft(form, "non_product_prefixes"),
+        },
         refreshInterval: String(refreshIntervalInput ?? ""),
       };
     }
@@ -47,32 +55,152 @@
       if (state === "override" && value === "") return { state: "disable", value: "" };
       return { state, value: state === "override" ? value : "" };
     }
-    // g-333：设置弹窗的提交载荷（从 save 内联构造中抽出为独立函数，使「弹窗草稿 → REST 载荷」
-    // 链路可被测试直接驱动，而不必重写一份等价实现）。字段口径与 save 原实现**逐字一致**
-    //（保存前 save 已 `if (!form) return`，故此处与旧内联代码相同，不对 form 本身做可选链，
-    //  使 g-133/g-231 的既有源契约断言继续绑定真实代码路径）。
-    function buildSettingsPatch(form) {
-      const lanesRaw = form.defaults?.pk?.lanes;
-      const lanes = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
-      const rawAuto = form.supervisor?.automation ?? {};
-      const cleanAuto = {};
-      for (const [k, v] of Object.entries(rawAuto)) {
-        if (v === "human" || v === "ai") cleanAuto[k] = v;
-        else cleanAuto[k] = null;
+    // ===== g-442：评审条件（review.regions / contract_paths / non_product_prefixes）=====
+    // 真源：服务端读侧投影 `review.effective[key] = {value, source, malformed, allow_empty}`
+    //（由 core 的 REVIEW_LIST_FIELDS 同源下发）——客户端**不自备**默认值副本，也就不会与策略层漂移。
+    // 显式性判据是 `Array.isArray(form.review[key])`：显式 `[]` 与未配置 `null` 天然可区分。
+    const REVIEW_LIST_KEYS = ["regions", "contract_paths", "non_product_prefixes"];
+    const REVIEW_LIST_LABEL_KEYS = {
+      regions: "settings.reviewRegionsLabel",
+      contract_paths: "settings.reviewContractPathsLabel",
+      non_product_prefixes: "settings.reviewNonProductPrefixesLabel",
+    };
+    const REVIEW_LIST_ARIA_KEYS = {
+      regions: "settings.reviewRegionsAria",
+      contract_paths: "settings.reviewContractPathsAria",
+      non_product_prefixes: "settings.reviewNonProductPrefixesAria",
+    };
+    const REVIEW_LIST_HINT_KEYS = {
+      regions: "settings.reviewRegionsHint",
+      contract_paths: "settings.reviewContractPathsHint",
+      non_product_prefixes: "settings.reviewNonProductPrefixesHint",
+    };
+    /** 畸形态 ⇒ 只读展示「非法/需修 project.yaml」，既不回填原始值，也不提供任何编辑入口
+     *  （回填提交必被写侧 400 拒绝）。判定口径：
+     *  - `invalid_fields` 有逐字段归因（core 的正常形态）⇒ 只锁命中字段；段级键 `review`（整档
+     *    语法错误 / review 段不是映射）⇒ 三个字段一并锁；
+     *  - 只有段级 `config_malformed` 而无归因（防御性）⇒ 无法判定具体字段，保守地一并锁。 */
+    function isReviewFieldMalformed(form, key) {
+      const rv = form?.review;
+      if (!rv || typeof rv !== "object") return false;
+      const inv = rv.invalid_fields;
+      const hasInvalidMap = !!inv && typeof inv === "object" && Object.keys(inv).length > 0;
+      if (hasInvalidMap) return Boolean(inv[key]) || Boolean(inv.review);
+      return rv.config_malformed === true;
+    }
+    /** 服务端只读投影（唯一真源，客户端不自备默认值副本）。缺失（未下发的宿主/旧响应）时返回 null：
+     *  UI 省略生效值行并回退 core 既有口径（`regions` 不允许空列表），仍可编辑，不伪造生效值。 */
+    function reviewListEffective(form, key) {
+      const eff = form?.review?.effective?.[key];
+      if (!eff || !Array.isArray(eff.value)) return null;
+      return eff;
+    }
+    /** 草稿归一化：畸形/未配置 → null；显式列表（含 `[]`）→ 逐项字符串化。 */
+    function normalizeReviewListDraft(form, key) {
+      if (isReviewFieldMalformed(form, key)) return null;
+      const raw = form?.review?.[key];
+      if (!Array.isArray(raw)) return null;
+      if (raw.some((item) => typeof item !== "string")) return null;
+      return raw.map((item) => String(item));
+    }
+    /**
+     * g-442 保存前校验（与 core `validateStringList` 同口径，由 g-442 套件做行为等价对照）：
+     * 空串 / 绝对路径（含 Windows 盘符）/ `..` 路径段 / 归一后重复 / 尾随斜杠 / 内部保留前缀 `invalid:`，
+     * 以及 `regions: []`（allowEmpty=false）⇒ 可读错误并**拒绝提交**。
+     * 返回错误描述数组（i18n key + params），不抛异常、无任何副作用。
+     */
+    function validateReviewListItems(key, items, allowEmpty) {
+      const errs = [];
+      if (!Array.isArray(items)) return errs;
+      if (items.length === 0) {
+        if (!allowEmpty) errs.push({ key: "settings.reviewEmptyForbidden", params: { field: key } });
+        return errs;
       }
-      // g-342：review.policy 三值直传；「继承/未配置」写 null（schema 的 enum 只认三值与 null，
-      // 写 "" 会被拒；core 侧 setScalar 对 null 清空 → 读回 null → 按目标类型派生）。
-      const reviewPolicy = normalizeReviewPolicyDraft(form.review?.policy);
-      return {
-        executor: { provider: form.executor?.provider ?? "", model: form.executor?.model ?? "", reasoning_effort: form.executor?.reasoning_effort ?? "", mode: form.executor?.mode ?? "" },
-        defaults: {
-          review: { reviewer: form.defaults?.review?.reviewer ?? "", prompt: form.defaults?.review?.prompt ?? null },
-          pk: { lanes, sandbox: form.defaults?.pk?.sandbox ?? "" },
-        },
-        supervisor: { automation: cleanAuto },
-        review: { policy: reviewPolicy === "" ? null : reviewPolicy },
-        prompt_overrides: { subagent: normalizePromptOverrideDraft(form.prompt_overrides?.subagent) },
+      const seen = new Set();
+      for (let i = 0; i < items.length; i++) {
+        const item = String(items[i]);
+        const trimmed = item.trim();
+        const at = { index: i + 1, item: trimmed, field: key };
+        if (trimmed === "") { errs.push({ key: "settings.reviewInvalidEmpty", params: at }); continue; }
+        if (trimmed.startsWith("invalid:")) { errs.push({ key: "settings.reviewInvalidReserved", params: at }); continue; }
+        const norm = trimmed.replace(/\\/g, "/");
+        if (norm.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(trimmed)) { errs.push({ key: "settings.reviewInvalidAbsolute", params: at }); continue; }
+        if (norm.endsWith("/")) { errs.push({ key: "settings.reviewInvalidTrailingSlash", params: at }); continue; }
+        if (norm.split("/").includes("..")) { errs.push({ key: "settings.reviewInvalidDotDot", params: at }); continue; }
+        const canonical = norm.replace(/^\.\//, "").replace(/\/+$/, "");
+        if (seen.has(canonical)) { errs.push({ key: "settings.reviewInvalidDuplicate", params: at }); continue; }
+        seen.add(canonical);
+      }
+      return errs;
+    }
+    /** 全量草稿校验：畸形字段跳过（本就不提交，**不连带阻断**其它字段的合法保存）。 */
+    function collectReviewListErrors(form) {
+      const out = [];
+      for (const key of REVIEW_LIST_KEYS) {
+        if (isReviewFieldMalformed(form, key)) continue;
+        const eff = reviewListEffective(form, key);
+        // 约束来自服务端投影（唯一真源）；投影缺失时退回 core 既有口径（regions 不允许空列表）
+        const allowEmpty = eff ? eff.allow_empty !== false : key !== "regions";
+        const items = normalizeReviewListDraft(form, key);
+        if (items === null) continue; // 未配置：不提交，无需校验
+        for (const e of validateReviewListItems(key, items, allowEmpty)) out.push({ ...e, field: key });
+      }
+      return out;
+    }
+    /** 稀疏 patch 的叶子写入。 */
+    function setLeafPatch(patch, path, value) {
+      let cur = patch;
+      for (let i = 0; i < path.length - 1; i++) {
+        if (!cur[path[i]] || typeof cur[path[i]] !== "object") cur[path[i]] = {};
+        cur = cur[path[i]];
+      }
+      cur[path[path.length - 1]] = value;
+    }
+    function getLeafPath(obj, path) {
+      let cur = obj;
+      for (const p of path) {
+        if (cur === null || cur === undefined || typeof cur !== "object") return undefined;
+        cur = cur[p];
+      }
+      return cur;
+    }
+    // ===== g-442：设置弹窗的提交载荷改为**稀疏（叶子级 dirty diff）patch** =====
+    // 为什么必须稀疏：core 的 `setScalarAtPath` 会重新格式化收到的叶子行、并补建缺失键 ⇒ 全表 payload
+    // 即使值未变也可能重写 project.yaml 的其它段（注释/未知键）。故只提交**相对加载基线变化了的叶子**：
+    //   · 改回原值 ⇒ 无差异 ⇒ 不提交该叶子；
+    //   · 全部无差异 ⇒ 空 patch（save 直接跳过 POST，零副作用）；
+    //   · 只改 review ⇒ 其余段连行都不进 payload ⇒ 逐字节不变。
+    // `baseline` 省略（无已知基线）时所有叶子视为变化，等价旧全表语义（既有 g-333 契约测试仍驱动
+    // 真实函数）；列表叶子仅在确有显式列表时输出，避免无中生有。
+    function buildSettingsPatch(form, baseline) {
+      const draft = normalizeSettingsDraft(form, "");
+      const base = baseline ? normalizeSettingsDraft(baseline, "") : {};
+      const patch = {};
+      const leaf = (path, wire) => {
+        const to = getLeafPath(draft, path);
+        const from = getLeafPath(base, path);
+        if (JSON.stringify(to) === JSON.stringify(from)) return;
+        setLeafPatch(patch, path, wire ? wire(to) : to);
       };
+      for (const f of ["provider", "model", "reasoning_effort", "mode"]) leaf(["executor", f]);
+      leaf(["defaults", "review", "reviewer"]);
+      // 空串与 null 在存储层同义（都清空该字段），统一按 null 提交（与旧实现逐字一致）
+      leaf(["defaults", "review", "prompt"], (v) => (v === "" || v === null || v === undefined ? null : v));
+      leaf(["defaults", "pk", "lanes"]);
+      leaf(["defaults", "pk", "sandbox"]);
+      const autoKeys = new Set([...Object.keys(base.supervisor?.automation ?? {}), ...Object.keys(draft.supervisor?.automation ?? {})]);
+      for (const k of autoKeys) leaf(["supervisor", "automation", k]);
+      leaf(["prompt_overrides", "subagent"]);
+      leaf(["review", "policy"], (v) => (v === "" ? null : v));
+      for (const key of REVIEW_LIST_KEYS) {
+        const to = getLeafPath(draft, ["review", key]);
+        const from = getLeafPath(base, ["review", key]);
+        if (Array.isArray(to) || Array.isArray(from)) leaf(["review", key]);
+      }
+      return patch;
+    }
+    function settingsPatchIsEmpty(patch) {
+      return !patch || Object.keys(patch).length === 0;
     }
     // ===== g-342：顶层 review.policy 四态下拉（继承未配置 / auto / strict / none） =====
     // 合法值真源在 core/review-policy.ts 的 REVIEW_POLICIES；lib/client/*.js 是独立打包的浏览器
@@ -160,6 +288,8 @@
           if (!r.ok) throw new Error(data?.error || (dgT("drag.requestFail") + " " + r.status));
           setForm(data);
           setConfigFile(data.configFile ?? null);
+          // g-442：按当前项目目录结构的**只读**建议（服务端下发；本面板绝不自动写入 project.yaml）
+          setSuggestedRegions(Array.isArray(data.review_suggested_regions) ? data.review_suggested_regions : null);
           baselineRef.current = normalizeSettingsDraft(data, String(getRefreshInterval()));
         } catch (e) {
           setError(dgT("settings.loadFail") + String(e?.message ?? e));
@@ -172,6 +302,8 @@
       // provider 只列 active 且有模型目录的 provider；model 按当前 provider 过滤；
       // 空项代表继承父会话；未列出的已存旧值保留为固定 option。
       const [catalog, setCatalog] = React.useState({ status: "loading" });
+      // g-442：评审条件的只读目录建议（服务端按 workspace 一级目录计算；仅展示，不自动写入）
+      const [suggestedRegions, setSuggestedRegions] = React.useState(null);
       React.useEffect(() => {
         let alive = true;
         loadHostCatalog(gConnectionApi)
@@ -193,8 +325,27 @@
           setNote({ kind: "err", text: dgT("settings.pkLanesError") });
           setSaving(false); return;
         }
-        // g-333：载荷构造抽到模块级 buildSettingsPatch（同上），三态口径与草稿归一化同源。
-        const patch = buildSettingsPatch(form);
+        // g-442：保存前校验评审条件（空串 / 绝对路径 / `..` / 重复 / 尾随斜杠 / regions 显式空列表）。
+        // 失败即拒绝提交：不发 POST、不改基线、不写 localStorage ⇒ 零副作用、不留半保存状态。
+        const reviewErrors = collectReviewListErrors(form);
+        if (reviewErrors.length > 0) {
+          setNote({
+            kind: "err",
+            text: reviewErrors
+              .map((e) => dgT(e.key, { ...e.params, field: dgT(REVIEW_LIST_LABEL_KEYS[e.field] ?? e.field) }))
+              .join("；"),
+          });
+          setSaving(false); return;
+        }
+        // g-442：稀疏 patch——只提交相对加载基线变化了的叶子；改回原值不提交、全部未改则为空 patch。
+        const patch = buildSettingsPatch(form, baselineRef.current);
+        const intervalDirty = String(refreshIntervalInput ?? "") !== String(baselineRef.current?.refreshInterval ?? "");
+        if (settingsPatchIsEmpty(patch) && !intervalDirty) {
+          // 无任何变化：不 POST（空 patch 无意义），也不产生任何本地副作用，直接关闭
+          setSaving(false);
+          props.onClose?.();
+          return;
+        }
         try {
           const r = await fetch(graphUrl("/api/dsh-graph/settings"), {
             method: "POST",
@@ -209,6 +360,7 @@
           setRefreshIntervalInput(String(correctedInterval));
           setIntervalWarn(null);
           setForm(data.config ?? form); // 用服务端回填的最新配置刷新
+          setSuggestedRegions(Array.isArray(data.review_suggested_regions) ? data.review_suggested_regions : suggestedRegions);
           // g-246：保存成功即归位基线（刷新间隔取纠偏后值），随后直接关闭跳过拦截
           baselineRef.current = normalizeSettingsDraft(data.config ?? form, String(correctedInterval));
           props.onSaved?.();
@@ -269,6 +421,71 @@
           h("div", { style: { display: "flex", gap: 6, marginBottom: 4 } },
             ["default", "override", "disable"].map((st) => stateBtn(st))),
           body);
+      };
+      // ===== g-442：单个评审条件列表字段的渲染（查看生效值 + 来源；显式模式可编辑）=====
+      // 三态互斥且可区分：
+      //   ① 未配置（null）：只读展示**服务端下发的生效值**并标注「缺省（普适）」，不写进可写草稿；
+      //      用户主动点「改为显式配置」才把生效值复制为草稿起点（显式值等于缺省值仍报「显式配置」）。
+      //   ② 显式配置（含 `[]`）：可编辑；「清空」得到 `[]`（**不等于** null）；「恢复未配置」提交 null。
+      //   ③ 畸形（invalid_fields 命中）：只显示「非法/需修 project.yaml」，**不回填**原始值、不提供编辑。
+      const reviewListField = (key) => {
+        const eff = reviewListEffective(form, key);
+        const malformed = isReviewFieldMalformed(form, key);
+        const items = malformed ? null : normalizeReviewListDraft(form, key);
+        const explicit = Array.isArray(items);
+        const allowEmpty = eff ? eff.allow_empty !== false : key !== "regions";
+        const label = dgT(REVIEW_LIST_LABEL_KEYS[key]);
+        const aria = dgT(REVIEW_LIST_ARIA_KEYS[key]);
+        const errStyle = { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", fontSize: 11 };
+        const metaStyle = { ...S.meta, fontSize: 11, marginTop: 2 };
+        const smallBtn = (text, onClick, title) => h("button", {
+          className: "dg-btn", style: { ...S.btn, fontSize: 11, padding: "2px 8px", cursor: "pointer" }, title, onClick,
+        }, text);
+        const sourceBadge = malformed
+          ? dgT("settings.reviewSourceMalformed")
+          : (explicit ? dgT("settings.reviewSourceExplicit") : dgT("settings.reviewSourceDefault"));
+        // 生效值行只在服务端给了投影时渲染——缺投影绝不伪造（不写「（空）」冒充生效值）
+        const effectiveView = eff
+          ? h("div", { style: metaStyle },
+              dgT("settings.reviewEffectiveLabel") + "：" +
+                (eff.value.length > 0 ? eff.value.join(", ") : dgT("settings.reviewEffectiveEmpty")))
+          : null;
+        const body = malformed
+          ? h("div", null,
+              h("div", { style: errStyle },
+                dgT("settings.reviewMalformedField") + "：" +
+                  String(form.review?.invalid_fields?.[key] ?? form.review?.invalid_fields?.review ?? "")),
+              effectiveView)
+          : explicit
+            ? h("div", null,
+                h("textarea", {
+                  "aria-label": aria,
+                  style: { ...S.promptInput, width: "100%", minHeight: 54, resize: "vertical", boxSizing: "border-box" },
+                  value: items.join("\n"),
+                  placeholder: dgT("settings.reviewItemsPlaceholder"),
+                  // 逐行一个条目；空行/纯空白行不构成条目（清空全部行 ⇒ 显式空列表 `[]`）
+                  onChange: (e) => set(["review", key], e.target.value.split("\n").map((s) => s.trim()).filter((s) => s !== "")),
+                }),
+                h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 4 } },
+                  items.length === 0 ? h("span", { style: metaStyle }, dgT("settings.reviewExplicitEmpty")) : null,
+                  items.length > 0 ? smallBtn(dgT("settings.reviewClear"), () => set(["review", key], []), dgT("settings.reviewClearTitle")) : null,
+                  smallBtn(dgT("settings.reviewResetUnset"), () => set(["review", key], null), dgT("settings.reviewResetUnsetTitle")),
+                  !allowEmpty ? h("span", { style: metaStyle }, dgT("settings.reviewEmptyForbidden")) : null))
+            : h("div", null,
+                effectiveView,
+                h("div", { style: metaStyle }, dgT("settings.reviewUnsetHint")),
+                h("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 4 } },
+                  smallBtn(dgT("settings.reviewMakeExplicit"), () => set(["review", key], [...(eff?.value ?? [])]), dgT("settings.reviewMakeExplicitTitle")),
+                  key === "regions" && !allowEmpty ? h("span", { style: metaStyle }, dgT("settings.reviewEmptyForbidden")) : null));
+        return h("div", { key, style: { marginBottom: 10 } },
+          h("div", { style: { display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" } },
+            h("span", { style: { fontWeight: 600, fontSize: 12 } }, label),
+            h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("settings.reviewSourceLabel") + "：" + sourceBadge)),
+          body,
+          key === "regions" && Array.isArray(suggestedRegions) && suggestedRegions.length > 0
+            ? h("div", { style: metaStyle }, dgT("settings.reviewSuggestedRegions") + suggestedRegions.join(", "))
+            : null,
+          h("div", { style: metaStyle }, dgT(REVIEW_LIST_HINT_KEYS[key])));
       };
 
       // ===== g-133：provider/model 合法目录派生（与 settings.js 页面同源逻辑，字段换成 executor.*） =====
@@ -484,6 +701,20 @@
               h("option", { value: "", style: policyOptionStyle }, dgT("settings.reviewPolicyInherit")),
               ...REVIEW_POLICY_VALUES.map((p) => h("option", { key: p, value: p, style: policyOptionStyle }, dgT(REVIEW_POLICY_LABEL_KEYS[p])))),
             h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } }, dgT("settings.reviewPolicyHint"))),
+
+          // ===== g-442：评审条件区块（regions / contract_paths / non_product_prefixes）=====
+          // 位置：紧随既有 review.policy 四态下拉之后（同属「真实生效」主区，而非「高级/仅存储字段」）。
+          // 未配置时只读展示服务端生效值并标注「缺省（普适）」——绝不让用户误以为已按本项目校准，
+          // 也绝不把缺省值物化为显式配置；目录建议为只读提示，不自动写入。
+          h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.reviewConditions")),
+          h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11 } }, dgT("settings.reviewConditionsHint")),
+          // 与 g-435 指南《Review 严格度校准（项目专属）》口径一致（指向指南 + 同源工具面）
+          h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11, opacity: 0.85 } }, dgT("settings.reviewCalibrationGuide")),
+          form.review?.config_malformed
+            ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginBottom: 6, fontSize: 11 } }, dgT("settings.reviewConfigMalformed"))
+            : null,
+          ...REVIEW_LIST_KEYS.map((key) => reviewListField(key)),
 
           h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
           h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),
