@@ -18,10 +18,17 @@
 //             分支——已删除，不再并列宣称。）
 //           · 源码字面量多重集 ⊆ dist 字面量多重集（兼作 dist 新鲜度；折叠派生条目不参与）+ 分辨率下限 + 金丝雀。
 //         合法插值（`{n}` 等）不受影响。
-//  · **收口声明（2026-10-08，最后一轮复核后）**：本守卫是**词法绊线**，不是「无本仓假设」的完备证明。
-//    已记录并接受、**不再追修**的局限：① **拼写变体**（`dsh_graph_host/`、反斜杠、大小写、双空格…）；
-//    ② **跨非相邻构造拆分 token**（如 `'DSH' + x + ' 0.1.6'`、变量/别名中转、`String.raw`、`%s` 占位拼接）；
-//    ③ 任何需要**常量折叠 / 别名分析**才能识别的形态。后人不必反复扩张本守卫。
+//  · **收口声明（2026-10-08，末轮复核后）**：本守卫是**词法绊线**，不是「无本仓假设」的完备证明。
+//    已记录并接受、**不再追修**的局限：
+//      ① **拼写变体**（`dsh_graph_host/`、反斜杠、大小写、双空格…）；
+//      ② **跨非相邻构造拆分 token**（如 `'DSH' + x + ' 0.1.6'`、变量/别名中转、`.concat` / `join` /
+//         数组或函数包裹、`%s` 占位拼接）；
+//      ③ 任何需要**常量折叠 / 别名分析**才能识别的形态；
+//      ④ **可能误报（宁红不漏）**：`String.raw` 模板等「源码里不是转义、而本守卫按转义解」的形态会被判红
+//         （如 `String.raw\`DSH\u00200.1.6\``；实测两个真实文件 0 命中、当前无害）——本守卫宁可误红，
+//         也不放过运行时真值。
+//    折叠窗口只做**一层** `(`/`)` 或 `[`/`]` 跳过（`'DSH ' + ('0.1.6')` / `('DSH ') + '0.1.6'`），
+//    不扩张为通用表达式求值。后人不必反复扩张本守卫。
 //  · **粒度下限是粗网，精细网在邻居守卫**（复核实测 2026-10-08）：把 `prompts/worktree.{zh,en}.md`
 //    对称截断到 1 长行（179/205 字节）并重建后，本守卫 13/13 仍绿，但整套件 **8 红** =
 //    `g239`×1 + `g241`×1 + `g253`×1 + `g283`×4 + 「zh prompt assets are not stubs」×1 ⇒ **不构成套件级
@@ -338,16 +345,36 @@ function scanLiterals(text: string): LiteralScan {
       let end = first.end;
       let endLine = first.endLine;
       // 相邻字面量 `+` 拼接：整链折叠后再入面（`'a' + 'b'` 与 `'k': 'a' + 'b'` 同口径）。
+      // 折叠窗口只做**一层** `(`/`)` 或 `[`/`]` 跳过（`'DSH ' + ('0.1.6')`、`('DSH ') + '0.1.6'`），
+      // 不做通用表达式求值（变量中转 / `.concat` / 函数包裹等仍在收口声明里）。
       for (;;) {
         const op = skipTrivia(text, end + 1, endLine);
-        if (text[op.index] !== "+") break;
-        const operand = skipTrivia(text, op.index + 1, op.line);
+        // 本字面量外面套了一层闭括号：允许跳过一次，再看是否紧跟 `+`。
+        let probe = op;
+        if (text[probe.index] === ")" || text[probe.index] === "]") {
+          probe = skipTrivia(text, probe.index + 1, probe.line);
+        }
+        if (text[probe.index] !== "+") break;
+        const afterOp = skipTrivia(text, probe.index + 1, probe.line);
+        let operand = afterOp;
+        let wrapper: string | null = null;
+        if (text[operand.index] === "(") { wrapper = ")"; operand = skipTrivia(text, operand.index + 1, operand.line); }
+        else if (text[operand.index] === "[") { wrapper = "]"; operand = skipTrivia(text, operand.index + 1, operand.line); }
         const next = readLiteral(text, operand.index, operand.line);
         if (next === null) break;
+        // 先验证「字面量 + 其包裹」完整可消费，再落账（避免半消费导致重复入面/回扫）。
+        let nextEnd = next.end;
+        let nextEndLine = next.endLine;
+        if (wrapper !== null) {
+          const close = skipTrivia(text, next.end + 1, next.endLine);
+          if (text[close.index] !== wrapper) break;
+          nextEnd = close.index;
+          nextEndLine = close.line;
+        }
         parts.push(decodeEscapes(next.raw));
         values.push({ value: parts[parts.length - 1], line: next.line });
-        end = next.end;
-        endLine = next.endLine;
+        end = nextEnd;
+        endLine = nextEndLine;
       }
       if (parts.length > 1) values.push({ value: parts.join(""), line: first.line, folded: true });
       i = end + 1;
@@ -534,6 +561,9 @@ test("g-444 字面量口径②：运行时真值必然入面（行继续 / `+` �
     { why: "跨行相邻拼接", expr: "'DSH '\n      + '0.1.6'", expect: ["hardcoded-dsh-version"] },
     { why: "注释隔开的相邻拼接", expr: "'DSH ' /* 注释 */ + '0.1.6'", expect: ["hardcoded-dsh-version"] },
     { why: "反引号内嵌拼接", expr: "`${'DSH' + ' 0.1.6'}`", expect: ["hardcoded-dsh-version"] },
+    { why: "括号包裹右侧操作数", expr: "'DSH ' + ('0.1.6')", expect: ["hardcoded-dsh-version"] },
+    { why: "括号包裹左侧操作数", expr: "('DSH ') + '0.1.6'", expect: ["hardcoded-dsh-version"] },
+    { why: "方括号包裹操作数", expr: "'DSH ' + ['0.1.6']", expect: ["hardcoded-dsh-version"] },
   ];
   for (const c of cases) {
     const truth = runtime(c.expr);
@@ -548,9 +578,16 @@ test("g-444 字面量口径②：运行时真值必然入面（行继续 / `+` �
   const kv = scanLiterals("    'live.x': 'DSH ' + '0.1.6 起默认 8 个活跃子代理',\n");
   const kvHits = kv.values.flatMap(({ value }) => scanText("fixture", value)).map((v) => v.match(/\[([a-z-]+)\]/)?.[1]);
   assert.ok(kvHits.includes("hardcoded-dsh-version") && kvHits.includes("hardcoded-subagent-slots"), `键值行拼接必须命中（实得 ${JSON.stringify(kvHits)}）`);
-  // 反向护栏：不拼出 token 的相邻拼接不得误报。
-  const clean = scanLiterals("const s = '插件' + '包目录';\n");
-  assert.deepEqual(clean.values.flatMap(({ value }) => scanText("fixture", value)), [], "合法拼接不得误报");
+  // 反向护栏：不拼出 token 的相邻拼接不得误报（含真实存在的插值拼接与括号包裹）。
+  for (const cleanText of [
+    "const s = '插件' + '包目录';\n",
+    "const s = '共 ' + '{n}' + ' 个目标完成';\n",
+    "const s = '共 ' + ('{n}') + ' 个目标完成';\n",
+  ]) {
+    const clean = scanLiterals(cleanText);
+    assert.deepEqual(clean.unparsed, [], `合法拼接不得产生未解析字面量：${cleanText.trim()}`);
+    assert.deepEqual(clean.values.flatMap(({ value }) => scanText("fixture", value)), [], `合法拼接不得误报：${cleanText.trim()}`);
+  }
 });
 
 test("g-444 逐资产粒度下限：清空/截断任一预期资产即判红（防聚合护栏 fail-open）", () => {
