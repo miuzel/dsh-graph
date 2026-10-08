@@ -567,7 +567,7 @@ const OS_SITE_ROWS = [
   ["core/ops.ts", "lstatSync", 16, ["tryLstat", "renameDirInto", "acquireTagsLock", "releaseTagsLock", "setGoalTags"],
    "锁目录 / 目标目录探测（symlink 与目录判定）",
    "ws:T3.tags_write,ws:T3.tx_lock_reclaim,ws:T3.failure_nonempty_target"],
-  ["core/ops.ts", "mkdirSync", 22, ["init", "writeHandoff", "raiseSeqFloor", "createGoal", "rebuild", "addCard", "createSharedCard", "convertOwnedToShared", "convertSharedToOwned", "ensureAttachmentsRoot", "resolveAttachmentPath", "startAttempt", "renameDirInto", "moveGoal", "archiveGoal", "unarchiveGoal", "postponeGoal", "acquireTagsLock"],
+  ["core/ops.ts", "mkdirSync", 23, ["init", "writeHandoff", "raiseSeqFloor", "createGoal", "rebuild", "addCard", "createSharedCard", "convertOwnedToShared", "convertSharedToOwned", "ensureAttachmentsRoot", "resolveAttachmentPath", "startAttempt", "renameDirInto", "moveGoal", "archiveGoal", "unarchiveGoal", "postponeGoal", "acquireTagsLock", "persistReviewRecord"],
    "板 / 目标 / 卡片 / 附件目录创建（幂等）",
    "ws:T3.init_create,ws:T3.cards_own_and_shared,ws:T3.attachments_store_delete"],
   ["core/ops.ts", "openSync", 4, ["atomicWrite", "acquireTagsLock", "setGoalTags"],
@@ -699,8 +699,11 @@ const OS_SITE_ROWS = [
   ["core/worktree.ts", "mkdirSync", 1, ["prepareAttemptWorktree"],
    "worktree 目录创建（.worktrees）",
    "exempt:worktree 管理需 git 仓库，不在看板冒烟范围"],
-  ["core/worktree.ts", "realpathSync", 2, ["listWorktrees", "cleanWorktree"],
-   "worktree 路径 realpath（软链保护）",
+  ["core/worktree.ts", "pathSep", 1, ["entriesRelPath"],
+   "g-437 attempt 真源的未跟踪路径归一（绝对路径 → 仓库根相对）",
+   "exempt:纯字符串归一（split(sep).join('/')），无平台分叉；真源采集需 git 仓库，不在看板冒烟范围"],
+  ["core/worktree.ts", "realpathSync", 5, ["canonicalPath", "listWorktrees", "cleanWorktree", "collectAttemptGitTruth"],
+   "worktree 路径 realpath（软链保护 + g-448 看板归属根比较归一 + g-437 attempt 真源绑定实际工作树）",
    "exempt:同上；软链 root 边界另见 pg:P2"],
   ["dsh-graph-host/index.js", "crlf", 1, ["normalizeForDedup"],
    "去重键的 CRLF 归一",
@@ -714,7 +717,8 @@ const OS_SITE_ROWS = [
   ["dsh-graph-host/index.js", "statSync", 1, ["apply"],
    "文件 mtime 探测（REST 载荷）",
    "exempt:只读探测；REST 读路径由 T5 覆盖"],
-// ROWS=65 HITS=253 MISSING=0
+// 台账规模**不写死**：行数与命中数由 buildLedgerRow 汇总后运行时打印（`台账=<rows>项/<hits>处命中`），
+// 未登记即判红。历史教训：此处曾写死 253 / 257，而实际先后是 255 / 258 ⇒ 一律以运行时报数为准。
 ];
 
 /** 展开后的清单（含解析过的映射引用）。 */

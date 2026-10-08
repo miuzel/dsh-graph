@@ -437,12 +437,16 @@ export const projectConfigPatchSchema: ObjectSchema = {
       },
       additionalProperties: false,
     },
-    // g-311：顶层 review.policy（分级评审机制）。三值之外一律拒绝（含 "" 与大小写不符），
-    // null 表示「未配置」→ 由 core/review-policy.ts 按目标类型派生。
+    // g-311/g-435：顶层 review 配置。
+    // policy：三值之外一律拒绝（含 "" 与大小写不符），null 表示「未配置」→ 由 core/review-policy.ts 按目标类型派生。
+    // regions / contract_paths / non_product_prefixes：项目自定义列表，支持 null（未配置）；invalid: 前缀为内部保留，不可写入。
     review: {
       type: "object",
       properties: {
         policy: { type: "string", enum: ["auto", "strict", "none"], nullable: true },
+        regions: { type: "array", items: { type: "string" }, nullable: true },
+        contract_paths: { type: "array", items: { type: "string" }, nullable: true },
+        non_product_prefixes: { type: "array", items: { type: "string" }, nullable: true },
       },
       additionalProperties: false,
     },

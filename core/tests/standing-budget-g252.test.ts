@@ -60,6 +60,24 @@ const injectedCps = (sec: string) => injectedLines(sec).reduce((n, l) => n + [..
 const noticeCps = (sec: string) =>
   sec.split("\n").filter((l) => l.startsWith("> ")).reduce((n, l) => n + [...l].length, 0);
 
+/** g-452：条目在渲染行中的**顺序无关标识**（正文里的序号），用于判定注入/折叠的是哪一条。 */
+const markerOf = (line: string) => (line.match(/普通事实\d+/) ?? ["?"])[0];
+/** g-452：全排列生成器——配合 importance 1..4 作**显式顺序通道**逐一实测。 */
+function permutations(xs: number[]): number[][] {
+  if (xs.length <= 1) return [xs];
+  return xs.flatMap((x, i) => permutations([...xs.slice(0, i), ...xs.slice(i + 1)]).map((rest) => [x, ...rest]));
+}
+/**
+ * g-452：把 `order`（条目序号序列）作为**显式渲染顺序**写入 —— importance 由 4 递减到 1，
+ * 4 个互不相同的取值构成全序（1..4 均 < 5 ⇒ 不触发关键约束分类），故渲染顺序不依赖
+ * `updated_at` 毫秒并列，也不依赖 memory.jsonl 落盘顺序 / 文件系统顺序。
+ */
+function addInOrder(root: string, order: number[], pads: number[]): void {
+  for (let k = 0; k < order.length; k++) {
+    addStanding(root, ordinaryText(order[k], pads[order[k]]), { importance: 4 - k });
+  }
+}
+
 // =====================================================================================
 // 判据 1：全是约束 → 关键禁令不再无界放行条数/字符上限
 // =====================================================================================
@@ -102,13 +120,17 @@ test("g-252 判据1：普通条目边界——正好等于条数上限不报超�
 
 test("g-252 判据1：字符上界边界——正好等于限额全注入，超 1 字符即折叠，按整条渲染行计量", () => {
   const root = freshRoot();
-  for (let i = 0; i < 5; i++) addStanding(root, ordinaryText(i, 20 + i * 7), { importance: 2 });
+  // g-452：改用**渲染行等长**的受控夹具。旧夹具（pad = 20 + i*7）的 sizes[0..2] 随条目顺序变化，
+  // 而此处的字符预算又由 sizes[0..2] 推出 ⇒ 「超 1 字符」的预算本身随顺序漂移（updated_at 毫秒并列时
+  // 顺序不定），断言因此间歇假红。等长行使 cap3 = 3L 与顺序无关，两个边界结论唯一。
+  for (let i = 0; i < 5; i++) addStanding(root, ordinaryText(i, 30), { importance: 2 });
 
   const unlimited = formatStandingMemorySection(root, { maxItems: 1e9, maxChars: 1e9 })!;
   const lines = injectedLines(unlimited);
   assert.equal(lines.length, 5, "无上限时 5 条全注入（用于标定渲染行长度）");
   const sizes = lines.map((l) => [...l].length);
   assert.ok(sizes.every((s) => s > 40), "渲染行含 id/来源前缀 ⇒ 仅按正文计量会低估，必被本用例测出");
+  assert.equal(new Set(sizes).size, 1, "受控夹具：5 条渲染行等长 ⇒ 边界字符预算不随条目顺序漂移（g-452 假红根因）");
 
   const cap3 = sizes[0] + sizes[1] + sizes[2];
   assert.equal(
@@ -116,21 +138,30 @@ test("g-252 判据1：字符上界边界——正好等于限额全注入，超 
     3,
     "正好等于字符上界：3 条全部注入",
   );
+  const over = formatStandingMemorySection(root, { maxItems: 1e9, maxChars: cap3 - 1 })!;
   assert.equal(
-    injectedLines(formatStandingMemorySection(root, { maxItems: 1e9, maxChars: cap3 - 1 })!).length,
+    injectedLines(over).length,
     2,
     "超 1 字符：第 3 条必须折叠",
   );
+  // g-452 追加：等长夹具下贪心没有更短的后续条目可回收 ⇒ 该结论与条目排列无关（结论唯一）。
+  assert.ok(injectedCps(over) <= cap3 - 1, `超限后注入仍不越字符上界（实测 ${injectedCps(over)} ≤ ${cap3 - 1}）`);
+  assert.ok(over.includes("其余 3 条条目已折叠"), "折叠条数诚实（5 - 2）");
 });
 
 test("g-252 判据1：字符计量按码点（代理对夹具）——UTF-16 长度口径会算错", () => {
   const root = freshRoot();
-  for (let i = 0; i < 4; i++) addStanding(root, `${"😀".repeat(i + 2)}事实${i}：` + "填".repeat(20), { importance: 2 });
+  // g-452：emoji 数量递增会把码点长度拉开（cap2 随顺序漂移 ⇒ 同类假红）。改用补白抵消：
+  // 4 条渲染行**码点等长**、但 UTF-16 长度互不相同 ⇒ 边界结论与顺序无关，同时保留 UTF-16 口径判别力。
+  for (let i = 0; i < 4; i++) addStanding(root, `${"😀".repeat(i + 2)}事实${i}：` + "填".repeat(22 - i), { importance: 2 });
 
   const unlimited = formatStandingMemorySection(root, { maxItems: 1e9, maxChars: 1e9 })!;
   const lines = injectedLines(unlimited);
   assert.ok(lines.some((l) => l.length !== [...l].length), "夹具含代理对，能区分码点 / UTF-16 口径");
-  const cap2 = [...lines[0]].length + [...lines[1]].length;
+  const cps = lines.map((l) => [...l].length);
+  assert.equal(new Set(cps).size, 1, "受控夹具：4 条渲染行码点等长 ⇒ 边界预算不随条目顺序漂移（g-452 假红根因）");
+  assert.ok(new Set(lines.map((l) => l.length)).size > 1, "同一批行的 UTF-16 长度互不相同 ⇒ UTF-16 口径仍会被本用例测出");
+  const cap2 = cps[0] + cps[1];
 
   assert.equal(
     injectedLines(formatStandingMemorySection(root, { maxItems: 1e9, maxChars: cap2 })!).length,
@@ -142,6 +173,102 @@ test("g-252 判据1：字符计量按码点（代理对夹具）——UTF-16 长
     1,
     "按码点计量：超 1 码点即折叠（若按 UTF-16 长度会提前折叠 ⇒ 必红）",
   );
+});
+
+test("g-252 判据1（g-452 新增）：贪心填充的可观察语义被显式定序钉死——恰好＝上界 3 条，超 1 字符回收更短的后续条目", () => {
+  const root = freshRoot();
+  // 显式顺序来源：importance 4 > 3 > 2 > 1（均 < 5 ⇒ 非关键约束）⇒ 渲染顺序全序确定，
+  // 不依赖 updated_at 毫秒并列，也不依赖 memory.jsonl 落盘顺序。前三条等长且最长，第 4 条显著更短。
+  const pads = [60, 60, 60, 10];
+  addInOrder(root, [0, 1, 2, 3], pads);
+
+  const sizes = injectedLines(formatStandingMemorySection(root, { maxItems: 1e9, maxChars: 1e9 })!).map((l) => [...l].length);
+  assert.equal(sizes.length, 4, "无上限时 4 条全注入，用于标定每条渲染行长度");
+  assert.ok(sizes[0] === sizes[1] && sizes[1] === sizes[2], "前三条等长（顺序由 importance 显式钉死）");
+  assert.ok(sizes[3] < sizes[0], "第 4 条明显更短 ⇒ 正是贪心可回收的目标");
+
+  const cap3 = sizes[0] + sizes[1] + sizes[2];
+  assert.equal(
+    injectedLines(formatStandingMemorySection(root, { maxItems: 1e9, maxChars: cap3 })!).length,
+    3,
+    "恰好等于字符上界：前 3 条恰好装满，注入 3 条",
+  );
+
+  const over = formatStandingMemorySection(root, { maxItems: 1e9, maxChars: cap3 - 1 })!;
+  const overLines = injectedLines(over);
+  assert.equal(
+    overLines.length,
+    3,
+    "超 1 字符：贪心跳过装不下的第 3 条，并继续装入更短的第 4 条 ⇒ 仍为 3 条（语义已钉死，不再是「无定义」）",
+  );
+  assert.equal(overLines.filter((l) => /普通事实3：/.test(l)).length, 1, "被回收的正是更短的第 4 条");
+  assert.equal(overLines.filter((l) => /普通事实2：/.test(l)).length, 0, "装不下的第 3 条（长）确实被折叠，且正文未被复制进提示");
+  assert.ok(injectedCps(over) <= cap3 - 1, `回收后仍不越字符上界（实测 ${injectedCps(over)} ≤ ${cap3 - 1}）`);
+  assert.ok(over.includes("其余 1 条条目已折叠"), "折叠条数诚实（4 - 3）");
+});
+
+test("g-252 判据1（g-452 新增）：边界选择的不变式对条目排列不变——不越上界，且结果最大（无未注入条目还装得下）", () => {
+  // 长度互不相同的夹具 ⇒ 顺序确实会改变贪心的走向；显式顺序通道 = importance 1..4，穷举 4! 排列。
+  const pads = [50, 49, 99, 20];
+  const budget = 250;
+
+  // 每条夹具条目的渲染行长度与顺序无关（前缀相同、正文固定）：先用无上限渲染标定。
+  const probe = freshRoot();
+  addInOrder(probe, [0, 1, 2, 3], pads);
+  const sizeOf = new Map(
+    injectedLines(formatStandingMemorySection(probe, { maxItems: 1e9, maxChars: 1e9 })!).map(
+      (l) => [markerOf(l), [...l].length] as const,
+    ),
+  );
+  assert.equal(sizeOf.size, 4, "标定出全部 4 条夹具条目的渲染行长度");
+  assert.ok([...sizeOf.values()].every((s) => s <= budget), "预算在单条量级之上 ⇒ 折叠是预算造成而非装不下任何一条");
+
+  const counts: number[] = [];
+  for (const order of permutations([0, 1, 2, 3])) {
+    const root = freshRoot();
+    addInOrder(root, order, pads);
+    const sec = formatStandingMemorySection(root, { maxItems: 1e9, maxChars: budget })!;
+    const lines = injectedLines(sec);
+    const cps = injectedCps(sec);
+    counts.push(lines.length);
+    assert.ok(cps <= budget, `排列 ${order.join("")}：注入总码点 ${cps} 不越预算 ${budget}`);
+    assert.ok(lines.length < 4, `排列 ${order.join("")}：预算 ${budget} 装不下 4 条 ⇒ 确实发生折叠（不变式断言非空洞）`);
+    const injectedText = new Set(lines.map(markerOf));
+    for (let i = 0; i < pads.length; i++) {
+      const mk = markerOf(ordinaryText(i, pads[i]));
+      if (injectedText.has(mk)) continue;
+      assert.ok(cps + sizeOf.get(mk)! > budget, `排列 ${order.join("")}：未注入的 ${mk} 装不进剩余预算（贪心结果最大）`);
+    }
+  }
+  assert.equal(counts.length, 24, "穷举 4! = 24 种排列");
+  assert.equal(new Set(counts).size, 1, "同一夹具 + 同一预算下，注入条数不随条目排列变化 ⇒ 边界结论排列不变");
+  assert.equal(counts[0], 2, `固定预算 ${budget} 下稳定注入 2 条`);
+});
+
+test("g-252 判据1（g-452 新增）：判定口径——固定字符预算下条目顺序可改变注入子集（贪心非最优，只有上界是不变式）", () => {
+  // 同一批正文（pad 50 / 49 / 99）、同一固定字符预算，仅参与顺序不同：
+  //  - 顺序 [50,49,99]：前两条恰好装满预算 ⇒ 注入 2 条；
+  //  - 顺序 [99,50,49]：99 先吃掉大半预算，50 与 49 都装不下 ⇒ 只注入 1 条。
+  // 结论（如实记录）：**精确条数**不是排列不变量，产品保证的只有「条数 ≤ maxItems 且总码点 ≤ maxChars」；
+  // 因此需要精确条数的断言必须显式钉死顺序（上一条）或使用等长夹具（前两条）。
+  const budget = 197;
+  const secFor = (order: number[]) => {
+    const root = freshRoot();
+    addInOrder(root, order, [50, 49, 99, 20]);
+    return formatStandingMemorySection(root, { maxItems: 1e9, maxChars: budget })!;
+  };
+  const a = secFor([0, 1, 2, 3]); // 渲染顺序 50 → 49 → 99
+  const b = secFor([2, 0, 1, 3]); // 渲染顺序 99 → 50 → 49
+  assert.equal(injectedLines(a).length, 2, "顺序 [50,49,99]：前两条恰好装满预算 ⇒ 2 条");
+  assert.equal(injectedLines(b).length, 1, "顺序 [99,50,49]：99 先占位 ⇒ 仅 1 条（同集合、同预算，注入子集不同）");
+  assert.notEqual(
+    injectedLines(a).map(markerOf).join(","),
+    injectedLines(b).map(markerOf).join(","),
+    "注入子集确实随顺序改变 ⇒ 「精确条数对顺序敏感」已钉死",
+  );
+  for (const [name, sec] of [["a", a], ["b", b]] as const) {
+    assert.ok(injectedCps(sec) <= budget, `口径 ${name}：总码点仍 ≤ 预算 ${budget}`);
+  }
 });
 
 // =====================================================================================

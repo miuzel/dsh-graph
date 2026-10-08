@@ -18,7 +18,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -2077,6 +2077,22 @@ function parseSignatureFixture(raw: string): { meta: Map<string, string>; body: 
 
 const bodyHash = (body: string[]) => createHash("sha256").update(body.join("\n") + "\n").digest("hex");
 
+/**
+ * fixture 首行 note（Lane B 复核 P3）：dump 工具**不写死任何一次重冻的历史事实** ——
+ * 若冻结基线已有 note 行则**原样保留**（重冻只更新 provenance，绝不覆盖上一次留下的说明），
+ * 否则写一条不含历史事实的通用说明。note 行以 `# ` 开头 ⇒ 由 `parseSignatureFixture` 当作头部
+ * 丢弃，**不参与** `content-sha256` 与 `source-sha256` 的计算（改本行不动两个 hash）。
+ */
+const SIG_NOTE_PREFIX = "# g352-conv-signature —— ";
+const SIG_NOTE_FALLBACK = `${SIG_NOTE_PREFIX}会话内看板页签元素签名冻结基线（正文逐字冻结；改动头部/泳道结构后按维护者工具重冻，provenance 与 source-sha256 随重冻更新）`;
+
+/** 保留基线既有 note；基线不存在/无 note 行时用通用说明（fail-open 到通用文案，绝不覆写历史）。 */
+function resolveSignatureNoteLine(): string {
+  if (!existsSync(CONV_SIGNATURE_FIXTURE)) return SIG_NOTE_FALLBACK;
+  const first = readFileSync(CONV_SIGNATURE_FIXTURE, "utf8").split("\n", 1)[0];
+  return first.startsWith(SIG_NOTE_PREFIX) ? first : SIG_NOTE_FALLBACK;
+}
+
 test("g-352 att-005：会话内看板页签签名 == 冻结 fixture，且 fixture 的来源 commit/内容 hash 头自校验", async () => {
   // 维护者工具（改动头部/泳道结构后重新冻结）：
   //   G352_SIG_DUMP=1 G352_SIG_ACK=1 node --test --test-name-pattern="会话内看板页签签名" core/tests/g352-narrow-width.test.ts
@@ -2091,7 +2107,7 @@ test("g-352 att-005：会话内看板页签签名 == 冻结 fixture，且 fixtur
       assert.fail("拒绝覆盖冻结基线：需 G352_SIG_ACK=1 显式确认（或 G352_SIG_DUMP=<其他路径> 只导出做 diff）");
     }
     const head = [
-      "# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.19.7：本版仅 constants 的 PLUGIN_VERSION 0.19.0-alpha→0.19.7 变更；0.19.x 全线的客户端改动（g-425 冷启动注入门禁、g-431 宿主语言跟随、g-427/g-429 Windows 文件系统修复等）均未触及签名正文 ⇒ 正文与 content-sha256 逐字节未变（已用 G352_SIG_DUMP 导出并与旧基线 diff 验证 0 行差异），仅 source-sha256 头随源码变更；本次同步更新本说明文字以反映发布线）",
+      resolveSignatureNoteLine(),
       `# source-commit: ${execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot(), encoding: "utf8" }).trim()}`,
       `# source-sha256: ${sourceFingerprint()}`,
       `# source-files: ${SIG_SOURCE_FILES.join(",")}   # 源 hash 覆盖的模块（决定头部/泳道渲染）`,
@@ -2126,6 +2142,14 @@ test("g-352 att-005：签名 fixture 维护者工具需显式 ack，绝不无条
   assert.match(src, /assert\.fail\(/, "未 ack 时必须显式失败，而不是静默写入");
   // dump 到别处（做 diff）不需要 ack，但绝不覆盖冻结基线
   assert.match(src, /G352_SIG_DUMP/);
+  // P3：note 行不得在工具里写死历史事实（否则每次重冻都会覆盖上一次留下的说明）——
+  //     head 里必须走「保留基线既有 note」的派生函数，且工具内不得再出现内联的 note 文案
+  assert.match(src, /resolveSignatureNoteLine\(\)/, "note 行必须由 resolveSignatureNoteLine() 派生");
+  assert.match(src, /const first = readFileSync\(CONV_SIGNATURE_FIXTURE, "utf8"\)\.split\("\\n", 1\)\[0\]/,
+    "必须读取基线首行以原样保留既有 note");
+  assert.match(src, /first\.startsWith\(SIG_NOTE_PREFIX\) \? first : SIG_NOTE_FALLBACK/,
+    "基线已有 note 时必须原样保留，仅在缺失时回落到通用说明");
+  assert.doesNotMatch(src, /`# g352-conv-signature —— [^`]*\$\{/, "note 文案不得在 head 里内联拼接（历史事实会随重冻回退）");
 });
 
 test("g-352 att-004 N1（渲染级）：标签筛选激活时头部「清除筛选」与同行按钮同口径", async () => {

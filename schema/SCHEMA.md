@@ -32,7 +32,8 @@
 │                       ├── attempt.md    # 执行者、沙盒、履历摘要
 │                       └── delivery/     # 该 attempt 的独立交付目录
 ├── memory/
-│   └── long-term/            # 长期记忆条目（§6.2），每条目一个 .md
+│   ├── memory.jsonl          # 结构化长期记忆唯一真源（§6，事件流 memory.added/replaced/removed）
+│   └── long-term/            # 可选项目文档（**非记忆真源**，引擎不读取/不索引），每条目一个 .md
 │       └── <slug>.md
 ├── skills-index.yaml         # 已沉淀技能索引（§7）
 ├── events.jsonl              # 运行履历，append-only，全系统唯一真相源
@@ -270,24 +271,31 @@ version: r-2025-08          # 任何规则变更递增此版本号
 - 目标 planning 时快照 `rules_snapshot`；规则版本前进后，引擎将在途且受影响的
   目标标记"判据需复核"，并写入履历。
 
-## 6. 长期记忆（memory/long-term/<slug>.md）
+## 6. 长期记忆（`memory/memory.jsonl` 为唯一真源）
 
-```markdown
----
-id: mem-01J4Y2C5D9
-type: failure-pattern       # success-graph | failure-pattern | preference | skill-pointer
-source_goal: g-01J4W0AB3C   # 必须携带来源，可审计
-promoted_by: supervisor
-promoted_at: 2025-08-20T15:00:00+08:00
-status: active              # active | stale（证据过期/经验被证伪时标记，不删除）
----
+结构化条目经 `graph_memory_add` / `graph_memory_recall` / `graph_memory_replace` / `graph_memory_remove`
+管理，事件流追加到 `memory.jsonl`（`memory.added` / `memory.replaced` / `memory.removed`）：
 
-## 内容
-限流类目标的判据若只写"返回 429"，容易漏掉 Retry-After 头；review 时应检查……
+```json
+{"ts":"…","actor":"agent:…","event":"memory.added","details":{"id":"mem-1a2b3c4d","kind":"project","scope":"on_demand","created_by":"agent:…","text":"…","importance":3,"source_goal":"g-…","source_ref":"memory/long-term/<slug>.md#单元","created_at":"…","updated_at":"…"}}
 ```
 
-提炼（promotion）由 supervisor 在目标交付时发起，自动化边界按 §5 配置；
-检索在后续目标 planning / review 时按相关性注入，**只提高生成质量，不改变生命周期语义**。
+- `kind`：`project`（全局共享）/ `user`（按 owner 隔离，仅创建身份可见）；
+- `scope`：`standing`（≤200 字，作为系统 Prompt 常驻注入；仅限人类明确要求或安全禁令）
+  / `on_demand`（默认，按需 `graph_memory_recall` 检索）；
+- `source_goal`：真实来源目标（目标不存在即拒绝，**不得为过校验而伪造**）；无来源目标的
+  旧文档迁移留空，来源写进 `source_ref`；
+- `source_ref`（可选）：迁移来源键（如旧文档路径 + 单元标识）。提供它时同来源重复 add
+  **幂等**——同输入返回原 ID 且不重复追加事件、已被 `replace` 保留后续修订、已被 `remove`
+  明确跳过不复活、同来源不同输入判冲突；`replace` 原样保留该字段。**user 类条目的幂等键按
+  owner 隔离**（与 recall/replace/remove 的 `owner === actor` 同口径）：他人 `source_ref` 命中
+  一律按**无命中**处理（该 actor 写入自己的新条目），**绝不回传他人条目 ID 或正文**；
+  project 类为 workspace 全局键，任何 actor 都命中同一条目。
+
+`memory/long-term/*.md` 保留为**可选项目文档**（架构自述等）：引擎不读取其内容、不索引、
+不自动同步，修改/删除这些文件不影响 recall 与自动注入，也不要求维护任何索引文件。
+提炼（promotion）由 supervisor 在目标交付时发起并**显式确认摘要**后逐条 add，
+自动化边界按 §5 配置；**不自动读取旧文档、不调用 LLM、不把长文静默截断为条目**。
 
 ## 7. 状态机与事件
 
@@ -360,6 +368,15 @@ supervisor:
     memory_promotion: ai
     skill_proposal: human
     release: human
+review:                     # 分级评审与快速放行策略配置（g-311/g-435）
+  policy: auto              # auto | strict | none；null 为按目标类型派生
+  regions:                  # 模块评估区域列表；普适默认 src/lib/app/packages/server/client/scripts/tests；显式 [] fail-closed
+    - src
+    - lib
+  contract_paths:           # 冻结契约路径；默认 []（不猜契约，未登记时不触发 M1）
+    - core/schema.ts
+  non_product_prefixes:     # 产品代码行数统计排除前缀；默认 dist/ / node_modules/ / .worktrees/
+    - dist/
 ```
 
 ## 9. 待决问题

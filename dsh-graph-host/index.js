@@ -37,6 +37,8 @@ import {
   detectWorkspaceCleanliness,
   resolveWorktreeIsolationDecision,
   prepareAttemptWorktree,
+  // g-437 P1：非隔离 attempt 的引擎侧区间锚点（派发时的仓库 HEAD）
+  readRepoHead,
   reportStatus,
   reportSupervisorStatus,
   readSupervisorStatus,
@@ -127,6 +129,10 @@ import {
   readProjectConfig,
   writeProjectConfig,
   REVIEW_POLICIES,
+  REVIEW_LIST_FIELDS,
+  DEFAULT_REVIEW_REGIONS,
+  DEFAULT_CONTRACT_PATHS,
+  DEFAULT_NON_PRODUCT_PREFIXES,
   listWorktrees,
   cleanWorktree,
   SUBAGENT_MODES,
@@ -139,6 +145,18 @@ import {
   normalizeSubagentRole,
   toolFilterForRole,
   formatPmPrompt,
+  // g-436：独立评审接线（formatReviewPrompt 的**唯一生产调用点**在本文件的 dispatchReview；
+  // 此前它是 core 侧零调用点的孤立实现。接线由 g-436 完成，相应前置守卫见
+  // core/tests/role-contract-g253.test.ts 的「接线已完成」断言）。
+  formatReviewPrompt,
+  appendReviewDispatch,
+  appendReviewReused,
+  bindReviewChild,
+  settleReview,
+  failReviewDispatch,
+  reviewRecordViews,
+  goalReviewState,
+  assertNotReviewerIdentity,
   formatSummaryPrompt,
   formatAttemptReportSkeleton,
   goalResultsDigest,
@@ -425,6 +443,62 @@ const GUIDE = requirePromptAsset("supervisor-guide", "zh");
 
 // g-131：主管纪律提醒按 locale 整体加载 prompts/discipline.*.md
 
+// ==== g-439 automation guidance: extractable block begin ====
+// g-439：`supervisor.automation` 六键 → 主管动作指导的唯一映射表（消费点 = 下方
+// 「dsh-graph-supervisor-discipline」section）。只把当前 workspace 的 human/ai 选择渲染成
+// **动作指导文本**：不新增工具/API 授权凭据、不新增审批凭据、不做轮次控制，也不新增任何引擎硬门禁。
+// 六键与四类人工 gate **不是一一映射**：`scope_planning` / `integration_decision` 只管
+// 范围排期与候选合入取舍，**不**等于首次 start 授权或 review verdict / delivered 授权；
+// 「开始工作」与「审核」两类 gate **没有对应键**，其既有要求（含 review→delivered 必须等
+// 负责人 verdict）原样保留。六键全 null/非法 ⇒ 渲染空串 ⇒ 该 section 输出与既有逐字一致。
+// 本块自包含（不引用外部符号），测试按 begin/end 标记原文抽取 + 变异求值。
+const AUTOMATION_GUIDANCE_KEYS = ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"];
+const AUTOMATION_GUIDANCE = {
+  zh: {
+    header: "⚠️ **自动化动作指导**（来自本 workspace 的 supervisor.automation 配置）：",
+    confirm: "请就此动作请求负责人确认",
+    autonomous: "在已授权范围内自主判断并留痕",
+    line: (key, value, action, clause, boundary) => `- \`${key}\` = ${value}：${action}，${clause}（${boundary}）。`,
+    actions: {
+      scope_planning: { action: "**范围/排期与版本计划调整**", boundary: "不是首次 start 授权" },
+      integration_decision: { action: "**候选选择与合入取舍**", boundary: "不是 review verdict / delivered 授权" },
+      rework: { action: "**既有目标返工取舍**", boundary: "不授权首次 start、不自动批准扩大范围" },
+      memory_promotion: { action: "**记忆提炼**", boundary: "不绕 standing 特权：仍默认 on_demand，standing 仅限人类常驻指令/安全禁令且 ≤200 字" },
+      skill_proposal: { action: "**是否提出 skill 沉淀建议**", boundary: "不等于安装或发布" },
+      release: { action: "**发布决策**", boundary: "release=ai 也不能单独放行 delivered" },
+    },
+    trailer: "边界与优先级（只增不减）：human 只增加确认要求，绝不被低风险豁免覆盖；负责人明确、范围清楚的批量授权可覆盖其**列明动作**的逐项询问，笼统方向授权不构成覆盖；明确禁 push/publish/tag 永远优先；Full access 不是业务批准。四类 gate 中「开始工作」与「审核」没有对应键，其既有要求（含 review→delivered 必须等负责人 verdict）保持不变。本指导只影响提示，不改变工具权限，也不构成引擎强制。",
+  },
+  en: {
+    header: "⚠️ **Automation action guidance** (from this workspace's supervisor.automation config):",
+    confirm: "request the person in charge's confirmation for this action",
+    autonomous: "decide autonomously within the already authorized scope and leave a trace",
+    line: (key, value, action, clause, boundary) => `- \`${key}\` = ${value}: ${action} — ${clause} (${boundary}).`,
+    actions: {
+      scope_planning: { action: "**scope/scheduling and version-plan adjustments**", boundary: "it is not first-start authorization" },
+      integration_decision: { action: "**candidate selection and merge trade-offs**", boundary: "it is not a review verdict or delivered authorization" },
+      rework: { action: "**rework trade-offs for existing goals**", boundary: "it does not authorize a first start or automatically approve scope expansion" },
+      memory_promotion: { action: "**memory distillation**", boundary: "it does not bypass the standing privilege: the default stays on_demand, and standing is limited to a human standing instruction or safety prohibition with a 200-character cap" },
+      skill_proposal: { action: "**whether to propose a skill**", boundary: "it is not installation or release" },
+      release: { action: "**release decision**", boundary: "an ai setting still cannot approve delivered on its own" },
+    },
+    trailer: "Boundaries and precedence (add-only, never relaxed): human only adds confirmation requirements and is never overridden by a low-risk exemption; an explicit, clearly scoped batch authorization from the person in charge may cover item-by-item confirmation for exactly the listed actions, while a vague directional authorization does not; an explicit prohibition of push/publish/tag always takes precedence; Full access is not business approval. Among the four gates, \"start work\" and \"review\" have no corresponding key, so their existing requirements (including that review→delivered must wait for the person in charge's verdict) stay unchanged. This guidance only affects the prompt: it changes no tool permission and is not engine enforcement.",
+  },
+};
+/** 渲染六键动作指导：只有 human/ai 生效（其余按未配置处理）；无生效键 ⇒ 空串（保持既有文本逐字不变）。 */
+function renderAutomationGuidance(automation, language) {
+  const table = AUTOMATION_GUIDANCE[language === "en" ? "en" : "zh"];
+  const lines = [];
+  for (const key of AUTOMATION_GUIDANCE_KEYS) {
+    const value = automation?.[key];
+    if (value !== "human" && value !== "ai") continue;
+    const spec = table.actions[key];
+    lines.push(table.line(key, value, spec.action, value === "human" ? table.confirm : table.autonomous, spec.boundary));
+  }
+  if (!lines.length) return "";
+  return `\n\n${table.header}\n${lines.join("\n")}\n\n${table.trailer}`;
+}
+// ==== g-439 automation guidance: extractable block end ====
 
 // g-118：dsh-graph help 内容按 locale 整体加载 prompts/help.*.md
 
@@ -1362,6 +1436,29 @@ export function apply(ctx, config) {
   };
 
   /**
+   * g-436：独立评审子代理的归因索引（与 summarizer 同款隔离，绝不进 childAttemptIndex）。
+   *
+   * 归因红线：reviewer 子代理**不是** attempt 执行者——它
+   *  - 不写 `results-att-*.md`（那是作者结果，写入策略是 last-wins，覆盖即毁证）；
+   *  - 不改 attempt.md 的 `child_id` / `binding_token` / `binding_version`（不得冒充执行绑定）；
+   *  - 不写 `attempt.*` 事件。
+   * 它只把报告正文写进 `<goalDir>/reviews/<review_id>.md`（独立落盘），并记 `review.*` 事件。
+   * 结论只按**真实绑定的 child 身份**归因：Map miss ⇒ 归属未知 ⇒ 不写、不猜（stderr 留痕）。
+   */
+  const reviewerIndex = new Map();
+  const REVIEW_LABEL_PREFIX = "graph:review/";
+  const indexReviewerChild = (childId, entry) => {
+    if (!childId) return;
+    reviewerIndex.delete(childId);
+    reviewerIndex.set(childId, entry);
+    while (reviewerIndex.size > CHILD_ATTEMPT_INDEX_CAP) {
+      const oldest = reviewerIndex.keys().next().value;
+      if (oldest === undefined) break;
+      reviewerIndex.delete(oldest);
+    }
+  };
+
+  /**
    * g-374 F5（复核 BLOCK-1 返工）：把某目标下**全部仍待结束**的 summarizer 项标记为「已落盘正文」。
    *
    * 反例（复核实测）：summarizer 已成功落盘 LLM 正文，但在它结束前历史发生变化（例如一条
@@ -1467,6 +1564,30 @@ export function apply(ctx, config) {
   const captureAttemptResults = (info) => {
     try {
       const childId = typeof info?.id === "string" && info.id ? info.id : null;
+      // g-436 归因红线：独立评审子代理**先**在这里被截住——它不是 attempt 执行者：
+      // 不写 results-att-*.md（作者结果）、不写 attempt.* 事件、不产生看板噪声；
+      // 只按真实 child 身份把报告正文写进 <goalDir>/reviews/<review_id>.md 并结算 review.* 事件。
+      // fail-closed：空输出 / 异常终止 / 载荷缺失一律记 UNVERIFIED（**绝不记 PASS**）。
+      const revEntry = childId ? reviewerIndex.get(childId) : null;
+      if (revEntry) {
+        reviewerIndex.delete(childId);
+        const revStop = typeof info?.stopReason === "string" && info.stopReason ? info.stopReason : null;
+        const revBlocks = Array.isArray(info?.lastAssistantMessage) ? info.lastAssistantMessage : null;
+        const revText = revBlocks
+          ? revBlocks.filter((b) => b && b.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n")
+          : "";
+        try {
+          settleReview(revEntry.root, revEntry.goal, revEntry.reviewId, {
+            text: revText,
+            stopReason: revStop,
+            actor: revEntry.actor ?? "system:subagent/end",
+            childId,
+          });
+        } catch (e) {
+          process.stderr.write(`[dsh-graph] g-436 评审结算失败（已忽略，不影响子代理结算）: ${e?.message ?? e}\n`);
+        }
+        return;
+      }
       // g-374 F5 归因红线：summarizer 子代理**先**在这里被截住——它绝不是 attempt 执行者：
       // 不写 results-att-*.md、不写 attempt.* 事件、不产生任何看板噪声；只在「没落盘 LLM 正文」时降级。
       const sumEntry = childId ? summarizerIndex.get(childId) : null;
@@ -1627,9 +1748,12 @@ export function apply(ctx, config) {
     // g-402：把本次派发的提示词语言传进合成器 ⇒ auto_from_desc 前缀随语言取值（zh 逐字不变）。
     const resolvedBrief = resolveEffectiveBrief(attempt_brief, currentDirective, desc, promptLanguage);
 
-    const cards = harvestedCards(root, goal);
+    // g-447：把 **解析该图根所用的同一个 workspace** 传下去 ⇒ 卡片「精确路径」以实际解析出的图根为基准
+    //（默认根 `.dsh-graph/…`；相对自定义根 `board-a/…`；工作区内绝对根按 workspace 相对展开），
+    // 与同一 prompt 里 goalRel = relative(workspace, goalFile) 同一基准；不再硬拼 .dsh-graph 而误指默认根同名卡。
+    const cards = harvestedCards(root, goal, workspace);
     const injectedCards = cards.map((c) => c.id);
-    const cardsSection = formatHarvestedCardsSection(root, goal, undefined, cards, promptLanguage);
+    const cardsSection = formatHarvestedCardsSection(root, goal, undefined, cards, promptLanguage, workspace);
 
     const confirmedHandoffs = harvestReviewedAttemptHandoffs(root, goal);
     const injectedHandoffRefs = confirmedHandoffs.map((h) => ({
@@ -1687,7 +1811,7 @@ export function apply(ctx, config) {
     // 干净度三分：clean=true（干净）/ clean=false（脏，可靠信号）/ clean=null（探测不可靠=unknown）。
     // 关键纪律：探测不可靠（unknown）绝不静默伪称 clean=true，也不凭空翻转为强制隔离；
     // 而是记录 cleanliness=unknown 与回退原因（fallback_to_type_default），仅在「可靠确认脏」时升级隔离。
-    const cleanliness = detectWorkspaceCleanliness(workspace);
+    const cleanliness = detectWorkspaceCleanliness(workspace, undefined, root);
     if (cleanliness.clean === null) {
       process.stderr.write(
         `[dsh-graph-host] g-289 ℹ️ 工作树干净度 cleanliness=unknown（探测不可靠，未伪称干净）：${cleanliness.error}；` +
@@ -1737,6 +1861,18 @@ export function apply(ctx, config) {
     // 位置必须早于真正写入 attempt 目录的时机（startAttempt 的 persist）。
     mkdirSync(attemptsDir, { recursive: true });
 
+    // g-437 P1：**门禁③的区间锚点必须由引擎在派发时落盘**（引擎只信 attempt 记录，绝不信报告）。
+    // 否则「报告把 baseline 取到自己的 HEAD」就能让 diff 恒为空（0 行 0 未跟踪）必然放行。
+    //  - 隔离 attempt：锚点 = 刚建/复用工作树的实际起点（`prepareAttemptWorktree` 已算好并落盘）；
+    //  - 非隔离 attempt：在工作区仓库根执行，recorded 形态里没有 head ⇒ 取派发这一刻的仓库 HEAD；
+    //  - 显式 `baseline_commit` 优先（原样回显，语义不变）；取不到（非 Git 仓库 / 无提交 / git 不可用）
+    //    ⇒ `undefined`/`null`（不写基线；门禁③对这类 attempt fail-closed 拒绝，不退回采信报告）。
+    const engineBaselineCommit = baseline_commit !== undefined && baseline_commit !== null
+      ? baseline_commit
+      : (wtResult.worktree && typeof wtResult.worktree.head === "string" && wtResult.worktree.head
+        ? wtResult.worktree.head
+        : readRepoHead(dirname(root)));
+
     // g-406：派发返回必须**可据以判定隔离**，否则 `worktree:false` 会把两种完全不同的
     // 情形混成同一个值：①解析为「本次不建树」（显式 worktree=false / 干净工作区下
     // patch/chore/task 的类型默认豁免）②建树失败——后者不存在静默降级：prepareAttemptWorktree
@@ -1749,6 +1885,9 @@ export function apply(ctx, config) {
       worktree_reason: wtResult.reason ?? null,
       worktree_created: Boolean(wtResult.created),
       worktree_reused: Boolean(wtResult.reused),
+      // g-437 P1：落盘的区间锚点（fast_track 的 `machine_report.baseline_commit` 必须与之相等）。
+      // null = 取不到锚点（非 Git 仓库等）⇒ 该 attempt 走不了 fast_track，如实回传而不是编一个值。
+      baseline_commit: engineBaselineCommit ?? null,
     };
 
     const prompt = formatAttemptPrompt({
@@ -1759,7 +1898,7 @@ export function apply(ctx, config) {
       briefSource: resolvedBrief.source,
       directive: currentDirective,
       taskType: task_type,
-      baselineCommit: baseline_commit,
+      baselineCommit: engineBaselineCommit,
       sourceAttempt: source_attempt,
       acceptanceItems: acceptance_items,
       handoffSection: handoffsSection,
@@ -1805,7 +1944,7 @@ export function apply(ctx, config) {
       mode: effModeRes.mode,
       modeSource: effModeRes.source,
       taskType: task_type,
-      baselineCommit: baseline_commit,
+      baselineCommit: engineBaselineCommit,
       sourceAttempt: source_attempt,
       acceptanceItems: acceptance_items,
       templateVersion,
@@ -1959,6 +2098,283 @@ export function apply(ctx, config) {
     }
   };
 
+  // ---- g-436：独立评审的统一派发服务（工具 graph_start_review 与 REST start-review 共用一套）----
+  //
+  // 与 dispatchExecutionAttempt 的分工**刻意不同**——评审是「既有执行 attempt 的附属记录」：
+  //  - 不新建 attempt、不迁移目标状态、不写作者的 child_id/binding_token、不写 results-att-*.md；
+  //  - **不新建工作树**（复用作者 attempt 已持久化的 worktree 路径；无隔离树时用调用方 workspace）；
+  //  - 结论只按真实绑定的 reviewer child 身份在 subagent/end 归因结算（空输出/异常 ⇒ 不记 PASS）。
+  // 身份真源：requestedBy 由调用点从真实执行身份取得（工具侧 ex.agent.session.id），
+  // **不接受**调用者自报的 actor/role/child_id。
+
+  /** 同 attempt + 同候选、且未失败的记录直接复用（重复点击不重复派发）。 */
+  const REVIEW_REUSE_STATUSES = ["started", "bound", "completed"];
+
+  /** 评审范围最多记录多少条变更路径（记录体量上限）。 */
+  const REVIEW_MAX_CHANGED_PATHS = 500;
+
+  /** 解析 Git commit：评审必须绑定**明确 commit**，拿不到就拒绝（绝不把不可解析的字符串当候选）。 */
+  const gitResolveCommit = (cwd, ref, label) => {
+    const raw = String(ref ?? "").trim();
+    if (!raw) throw new GraphError(`${label} 必填且非空`);
+    try {
+      return execFileSync("git", ["rev-parse", "--verify", `${raw}^{commit}`], {
+        cwd, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+    } catch {
+      throw new GraphError(`无法解析${label}「${raw}」为 Git commit（需要可解析的 SHA/引用与可用的 Git 工作区）`);
+    }
+  };
+
+  /** 审查范围（基线→候选的变更路径）。取不到时返回空数组——绝不因此让派发失败或伪造范围。 */
+  const gitChangedPaths = (cwd, baseline, candidate) => {
+    try {
+      return execFileSync("git", ["diff", "--name-only", baseline, candidate], {
+        cwd, encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"],
+      }).split("\n").map((s) => s.trim()).filter(Boolean).slice(0, REVIEW_MAX_CHANGED_PATHS);
+    } catch { return []; }
+  };
+
+  // g-436：评审派发的统一返回构造。
+  // 措辞如实（F5）：这里是**行为字段映射**（缺省值 + 条件展开），**不是**手写白名单裁剪 ——
+  // 工具入口直通本函数的返回值，`output.schema = {type:"object"}` 不做字段裁剪；HTTP 入口
+  // 另行手工挑字段（见 /api/dsh-graph/start-review）。
+  // F1：`stale` / `reused_current` / `current_candidate_sha` / `independent_ok` /
+  // `independent_missing` 让「工具返回值」与「看板投影 `goalDetail.review_state`」**同源一致**，
+  // 主管不必自己比对两处（A→B→A 复用场景此前两边说法相反）。注意返回值是**调用时刻的快照**：
+  // 刚派发（评审尚未结束）时 `independent_missing=true` 表示「此刻没有已完成的独立评审」——
+  // 与同一时刻的投影一致；评审结束后再查投影才翻为 false。
+  const reviewOutcome = (o) => ({
+    review_id: o.review_id,
+    reused: o.reused === true,
+    reused_current: o.reused_current !== false,
+    stale: o.stale === true,
+    goal: o.goal,
+    source_attempt: o.source_attempt,
+    candidate_sha: o.candidate_sha,
+    baseline_sha: o.baseline_sha ?? null,
+    review_workspace: o.review_workspace ?? null,
+    changed_paths: Array.isArray(o.changed_paths) ? o.changed_paths : [],
+    current_candidate_sha: o.current_candidate_sha ?? null,
+    independent_ok: o.independent_ok === true,
+    independent_missing: o.independent_missing === true,
+    reviewer_child_id: o.reviewer_child_id ?? null,
+    child_error: o.child_error ?? null,
+    ...(o.status ? { status: o.status } : {}),
+    ...(o.conclusion ? { conclusion: o.conclusion } : {}),
+    ...(o.model_route ? { model_route: o.model_route } : {}),
+    prompt: o.prompt ?? null,
+  });
+
+  const dispatchReview = async ({
+    root,
+    workspace,
+    goal,
+    attempt,
+    candidate_commit,
+    baseline_commit,
+    guidance,
+    requestedBy,
+    actor,
+    parentAgent,
+    parentSessionId,
+    signal,
+    provider,
+    model,
+    reasoning_effort,
+    mode,
+  }) => {
+    if (!goal) throw new GraphError("missing goal");
+    if (!attempt) throw new GraphError("missing attempt");
+    if (!requestedBy) throw new GraphError("missing requestedBy（真实调用身份）");
+    const goalFile = findGoalFile(root, goal);
+    if (basename(goalFile) !== "goal.md") {
+      throw new GraphError(`暂存目标（backlog）没有目标目录，不能登记独立评审：${goal}`);
+    }
+    const attFile = join(dirname(goalFile), "attempts", String(attempt), "attempt.md");
+    if (!existsSync(attFile)) throw new GraphError(`attempt 不存在：${attempt}（目标 ${goal}）`);
+    const attMeta = loadGoal(attFile).meta ?? {};
+    if (String(attMeta.executor ?? "") === "agent:collect") {
+      throw new GraphError(`收集 attempt（agent:collect）不是执行 attempt，不能作为独立评审对象：${attempt}`);
+    }
+    const authorChildId = attMeta.child_id ? String(attMeta.child_id) : null;
+    // 评审工作区：复用作者既有工作树（绝不新建评审树）；无隔离树时用调用方 workspace。
+    const wt = attMeta.worktree;
+    const reviewWorkspace = (wt && typeof wt === "object" && typeof wt.path === "string" && wt.path)
+      ? wt.path
+      : (workspace ?? dirname(root));
+    const candidateSha = gitResolveCommit(reviewWorkspace, candidate_commit, "候选 commit");
+    const baselineRaw = baseline_commit ?? attMeta.baseline_commit ?? null;
+    const baselineSha = baselineRaw ? gitResolveCommit(reviewWorkspace, baselineRaw, "基线 commit") : null;
+    const changedPaths = baselineSha ? gitChangedPaths(reviewWorkspace, baselineSha, candidateSha) : [];
+
+    // 幂等：同一 attempt + 同一候选的未失败记录直接复用（结果与已派发时逐字一致）。
+    const existing = reviewRecordViews(root, goal).find(
+      (r) => r.source_attempt === String(attempt) && r.candidate_sha === candidateSha && REVIEW_REUSE_STATUSES.includes(r.status),
+    );
+    if (existing) {
+      // F1 语义裁决①：复用 = 一次**新的评审请求** ⇒ 追加 review.reused 把该候选重新置为当前，
+      // 投影随之回落（旧候选的兄弟记录转为 stale）。事件先行，审计留痕，绝不静默复活旧 PASS。
+      appendReviewReused(root, {
+        goalId: goal,
+        reviewId: existing.review_id,
+        candidateSha,
+        requestedBy,
+        actor,
+      });
+      const after = goalReviewState(root, goal);
+      const refreshed = after.reviews.find((r) => r.review_id === existing.review_id) ?? existing;
+      return reviewOutcome({
+        review_id: existing.review_id,
+        reused: true,
+        reused_current: after.current_candidate_sha === candidateSha,
+        stale: refreshed.stale,
+        goal,
+        source_attempt: String(attempt),
+        candidate_sha: candidateSha,
+        baseline_sha: baselineSha,
+        review_workspace: reviewWorkspace,
+        changed_paths: changedPaths,
+        current_candidate_sha: after.current_candidate_sha,
+        independent_ok: after.independent_ok,
+        independent_missing: after.independent_missing,
+        reviewer_child_id: refreshed.reviewer_child_id,
+        status: refreshed.status,
+        conclusion: refreshed.conclusion,
+      });
+    }
+
+    // 材料包：只含目标定义+负责人约束、判据原文、候选/基线 SHA、审查范围与报告骨架；
+    // 不注入作者对话/结果/自报 PASS/评论/返工叙事（见 formatReviewPrompt 的「评审材料边界」）。
+    const detail = goalDetail(root, goal);
+    const prompt = formatReviewPrompt({
+      goalId: goal,
+      attemptId: String(attempt),
+      goalRel: relative(workspace ?? dirname(root), goalFile),
+      goalTitle: detail.meta?.title ?? null,
+      goalDescription: detail.description ?? null,
+      criteria: Array.isArray(detail.criteria_items) ? detail.criteria_items : [],
+      guidance: guidance ?? null,
+      candidateSha,
+      baselineSha,
+      reviewWorkspace,
+      changedPaths,
+      language: resolvePromptLanguage(readGraphSettings().promptLanguage, ctx),
+    });
+    const eff = resolveModelRoute(
+      { provider, model, reasoning_effort },
+      readExecutorModel(root),
+      readGraphSettings(),
+    );
+    const effProvider = eff.provider;
+    const effModel = eff.model;
+    const effReasoningEffort = eff.reasoning_effort;
+    const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
+    const effMode = normalizeSubagentMode(mode) ?? DEFAULT_SUBAGENT_MODE;
+
+    // 事件先行：先落 review.dispatched + <goalDir>/reviews/<review_id>.md，再启动子代理。
+    // 之后任何失败路径都收敛为 review.failed（绝不留下「进行中」假象，也绝不记 PASS）。
+    const { review_id: reviewId } = appendReviewDispatch(root, {
+      goalId: goal,
+      sourceAttempt: String(attempt),
+      candidateSha,
+      baselineSha,
+      reviewWorkspace,
+      changedPaths,
+      requestedBy,
+      authorChildId,
+      actor,
+      provider: effProvider,
+      model: effModel,
+      modelRoute: effRoute,
+      mode: effMode,
+    });
+    const dispatchedState = goalReviewState(root, goal);
+    const base = {
+      review_id: reviewId,
+      reused: false,
+      reused_current: true,
+      stale: false,
+      goal,
+      source_attempt: String(attempt),
+      candidate_sha: candidateSha,
+      baseline_sha: baselineSha,
+      review_workspace: reviewWorkspace,
+      changed_paths: changedPaths,
+      current_candidate_sha: dispatchedState.current_candidate_sha,
+      independent_ok: dispatchedState.independent_ok,
+      independent_missing: dispatchedState.independent_missing,
+      model_route: effRoute,
+      prompt,
+    };
+
+    const subagents = ctx.get?.("subagents");
+    if (!subagents || !parentAgent) {
+      const err = "subagents 服务不可用或无调用 agent";
+      failReviewDispatch(root, goal, reviewId, err, actor);
+      return reviewOutcome({ ...base, reviewer_child_id: null, child_error: err });
+    }
+    try {
+      const available = (subagents.list?.() ?? []).filter((n) => {
+        try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
+      });
+      const providerName = available[0];
+      if (!providerName) {
+        throw new Error(`无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`);
+      }
+      const toolFilter = toolFilterForRole("reviewer", effMode);
+      const request = {
+        parent: parentAgent,
+        prompt: text(prompt),
+        ...(toolFilter ? { toolFilter } : {}),
+      };
+      const agentOptions = {};
+      if (effProvider) agentOptions.provider = effProvider;
+      if (effModel) agentOptions.model = effModel;
+      if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
+      if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
+      const started = await subagents.startContinuable({
+        provider: providerName,
+        label: `${REVIEW_LABEL_PREFIX}${goal}/${attempt}/${reviewId}`,
+        request,
+        signal,
+      });
+      try {
+        bindReviewChild(root, goal, reviewId, started.childId, actor, {
+          parentSessionId: parentSessionId ?? started.parentSessionId ?? null,
+          provider: effProvider,
+          model: effModel,
+          modelRoute: effRoute,
+          mode: effMode,
+        });
+      } catch (bindErr) {
+        // 绑定失败必须收敛：中断刚启动的 child，并把记录如实结算为 failed。
+        let note = "";
+        try {
+          const psid = parentAgent?.session?.id ?? parentSessionId ?? started.parentSessionId ?? null;
+          if (psid && typeof subagents.interruptByParent === "function") {
+            subagents.interruptByParent(started.childId, psid, "continuable");
+            note = "，已请求中断该 child";
+          } else {
+            note = "，无法中断该 child（缺少 parent session 或服务能力）";
+          }
+        } catch (ie) {
+          note = `，中断该 child 失败：${ie?.message ?? ie}`;
+        }
+        const msg = `reviewer 绑定失败（child ${started.childId}${note}）：${bindErr?.message ?? bindErr}`;
+        failReviewDispatch(root, goal, reviewId, msg, actor);
+        return reviewOutcome({ ...base, reviewer_child_id: started.childId, child_error: msg });
+      }
+      // 归因登记：只在这里登记——结论结算以该真实 child 身份为唯一凭据。
+      indexReviewerChild(started.childId, { root, goal, reviewId, actor });
+      return reviewOutcome({ ...base, reviewer_child_id: started.childId, child_error: null });
+    } catch (e) {
+      const err = subagentSpawnErrorText(e);
+      failReviewDispatch(root, goal, reviewId, `reviewer 派发失败：${err}`, actor);
+      return reviewOutcome({ ...base, reviewer_child_id: null, child_error: err });
+    }
+  };
+
   /** @type {Array<{def: object, run: (args: any, exec: any) => any}>} */
   const tools = [
     {
@@ -1983,7 +2399,15 @@ export function apply(ctx, config) {
         description: "目标状态迁移。状态机与不变式由核心层强制；进 blocked 必须给 reason。",
         parameters: params({ goal: str, to: str, reason: str }, ["goal", "to"]),
       },
-      run: (a, ex) => { transition(rootFor(ex), a.goal, a.to, { reason: a.reason, actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        // g-436：复核子代理身份不得把目标直接推进 delivered（Human Gate 归于主管/负责人）。
+        if (String(a.to) === "delivered") {
+          assertNotReviewerIdentity(r, [ex?.agent?.id, ex?.agent?.session?.id], "graph_transition(to=delivered)");
+        }
+        transition(r, a.goal, a.to, { reason: a.reason, actor: actorOf(ex) });
+        return { ok: true };
+      },
     },
     {
       def: {
@@ -2528,13 +2952,14 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_memory_add",
-        description: "新增持久事实/记忆。\n【scope 决策铁律】：\n1. 默认法则：一切自发总结、技术经验、方案决策 100% 默认 scope=\"on_demand\"（按需记忆，不占常驻 Prompt）；\n2. 常驻特权法则：仅在「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」时，才允许设 scope=\"standing\"（硬上限 200 字符，超过拒绝；普通记忆上限 1000 字符）。事件先行。",
+        description: "新增持久事实/记忆。\n【scope 决策铁律】：\n1. 默认法则：一切自发总结、技术经验、方案决策 100% 默认 scope=\"on_demand\"（按需记忆，不占常驻 Prompt）；\n2. 常驻特权法则：仅在「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」时，才允许设 scope=\"standing\"（硬上限 200 字符，超过拒绝；普通记忆上限 1000 字符）。\n【source_ref 幂等迁移】：可选 source_ref 是「迁移来源键」（如旧 memory/long-term/*.md 路径 + 单元标识）。提供它时同来源重复 add 幂等——同输入重试返回原 ID 且不重复追加事件；已被 replace 的条目保留后续修订、不覆盖；已被 remove 的条目明确跳过、不复活；同来源不同输入属冲突、不自动替换。引擎不读旧文档、不调 LLM、不截断拆条：摘要须由主管显式确认后作为 text 传入。kind=\"user\" 时幂等键按 owner 隔离：他人同一 source_ref 一律按无命中处理（该 actor 写入自己的新条目），绝不回显他人条目 ID 或正文。事件先行。",
         parameters: params({
           kind: { type: "string", enum: ["project", "user"] },
           scope: { type: "string", enum: ["standing", "on_demand"] },
           text: str,
           importance: { type: "number" },
           source_goal: str,
+          source_ref: str,
         }, ["kind", "text"]),
       },
       run: (a, ex) => {
@@ -2546,9 +2971,10 @@ export function apply(ctx, config) {
           text: a.text,
           importance: a.importance !== undefined ? Number(a.importance) : undefined,
           source_goal: a.source_goal,
+          source_ref: a.source_ref,
           actor: memoryActorOf(ex),
         });
-        return losslessJson({ ok: true, id: res.id, entry: res.entry });
+        return losslessJson({ ok: true, id: res.id, entry: res.entry, deduped: res.deduped, skipped: res.skipped, source_ref: res.source_ref, reason: res.reason });
       },
     },
     {
@@ -2621,7 +3047,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_start_attempt",
-        description: "为目标派发一个 attempt：派发前先执行准入门禁（backlog/draft/blocked/delivered 及无判据/未确认判据/状态不允许的目标直接拒绝，零副作用：不建 attempt、不启动子代理）；准入通过后先落地 in_progress 迁移，再创建 attempt 目录与记录并启动可续轮子 agent 并绑定 childId。provider/model 指定执行子代理的模型（缺省读 project.yaml 的 executor.provider/model，再无则继承父会话）。隔离解析（g-283/g-289）：worktree 显式传值优先；未传时按目标类型与工作区干净度解析——干净工作区下 patch/chore/task 默认不建树（微小改动快速通道），feature/bug/improvement 默认建树；可靠判脏（clean=false）时任何类型都升级为建树；隔离提示与实际是否建树严格一致。返回隔离语义（g-406）：isolated=是否真的建了独立 worktree 并据此启动子代理；worktree=已建时为 {path,relative_path,branch,head}、未建为 false；worktree_reason=explicit/type_default/dirty_workspace/type_default_unknown；worktree_created/worktree_reused=创建结果。子代理只在工作树创建并注册完成后启动；建树失败一律抛错（零副作用），绝不静默降级为主树执行。attempt_brief 是当前 action 原文；task_type 必须传 merge（合入）、rewrite（重写）或 fix（修复）之一，baseline_commit/source_attempt 是 supervisor 直接提供的当前事实，acceptance_items 是当前验收项 string[]；这些字段不从 brief/handoff 截取。task_type/baseline_commit/source_attempt 的空值传 null 或省略表示未提供；acceptance_items=[] 表示明确无单独验收项，null 或省略表示未提供；空字符串非法。",
+        description: sT("tool.graph_start_attempt"),
         parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, reasoning_effort: str, mode: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
       },
       run: async (a, ex) => {
@@ -2746,6 +3172,9 @@ export function apply(ctx, config) {
           worktree_reason: execRes.worktree_reason ?? null,
           worktree_created: execRes.worktree_created === true,
           worktree_reused: execRes.worktree_reused === true,
+          // g-437 P1：区间锚点也必须回传（与上面四件套同一理由——白名单漏登记主管就看不到）。
+          // 主管据此填 `machine_report.baseline_commit`；null = 该 attempt 无锚点（走不了 fast_track）。
+          baseline_commit: execRes.baseline_commit ?? null,
         };
         if (execRes.child_error) result.child_error = execRes.child_error;
         if (execRes.note) result.note = execRes.note;
@@ -2759,8 +3188,52 @@ export function apply(ctx, config) {
     },
     {
       def: {
+        name: "graph_start_review",
+        description: "为**既有执行 attempt** 派发独立评审子代理（reviewer，只读审查）。评审是附属记录：不新建 attempt、不迁移目标状态、不覆盖作者 child_id 与 results-att-*.md；复用作者既有工作树（不新建评审树）；结论按真实 reviewer child 身份在结束时独立落盘（<goalDir>/reviews/<review_id>.md）。不注入作者对话/结果/自报 PASS/评论/返工叙事。同一 attempt + 同一候选重复调用为幂等（不重复派发）。reviewer 身份不得自行 accept/force/fast_track/delivered。",
+        parameters: params({
+          goal: str,
+          attempt: str,
+          candidate_commit: str,
+          baseline_commit: str,
+          guidance: str,
+          provider: str,
+          model: str,
+          reasoning_effort: str,
+          mode: str,
+        }, ["goal", "attempt", "candidate_commit"]),
+      },
+      run: async (a, ex) => {
+        const r = rootFor(ex);
+        // 身份真源：只取真实执行身份（会话 id），不接受调用者自报的 actor/role/child_id。
+        const requestedBy = ex?.agent?.session?.id ? `agent:${ex.agent.session.id}` : actorOf(ex);
+        const res = await dispatchReview({
+          root: r,
+          workspace: sessionWorkspace(ex) ?? dirname(r),
+          goal: a.goal,
+          attempt: a.attempt,
+          candidate_commit: a.candidate_commit,
+          baseline_commit: a.baseline_commit,
+          guidance: a.guidance,
+          requestedBy,
+          actor: actorOf(ex),
+          parentAgent: ex?.agent ?? null,
+          parentSessionId: ex?.agent?.session?.id ?? null,
+          signal: ex?.signal,
+          provider: a.provider,
+          model: a.model,
+          reasoning_effort: a.reasoning_effort,
+          mode: a.mode,
+        });
+        return res;
+      },
+    },
+    {
+      def: {
         name: "graph_resolve_accept",
-        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict）且 machine_report 四项门禁全绿（tests exit_code=0 且 fail=0、typecheck exit_code=0、产品代码增删 <150 行且无未跟踪新文件、全部判据以 ✅已验 结尾，由引擎自算）；任一不满足即拒绝且零副作用，通过则记 review.fast_track 事件。",
+        // 注意（g-437 P3-b 措辞纠正）：注册处在 `...t.def` **之后**用 sT 取 i18n 字典值覆盖 `description`
+        // ⇒ **生效面是 lib/server-i18n.js 的 tool.graph_resolve_accept（zh/en）**，本字面量只是**同步副本**
+        // （可读性/兜底）。改文案必须两处同改；prompt-i18n-parity 要求「每个注册工具恰有一把 tool.* 键」⇒ 键不可删。
+        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict）且 machine_report 四项门禁全绿——① tests（exit_code=0 且 fail=0）与 ② typecheck（exit_code=0）是**调用方证据**（引擎不复跑，须留痕 command/collected_at/source）；③ 变更规模（产品代码增删 <150 行且无未跟踪新文件）由**引擎 Git 自算**：machine_report.attempt 必填（显式绑定执行树），引擎在该 attempt 的实际工作树采集真源并与报告逐项对账（不一致、未提交 tracked 改动、工作树缺失/已删、git 或基线不可解析一律拒绝），`machine_report.baseline_commit` 必填且必须**等于**该 attempt 的引擎锚点（派发响应回传的 `baseline_commit`；隔离 attempt 亦可与 `worktree.head` 对照，短 SHA 亦可）——锚点只取自 attempt 记录、**绝不取自报告**，缺失或不等即拒绝（错误文案给出「显式 baseline 重新派发该 attempt」或「改走普通 accept」两条出路）；且与策略层 M2 用**同一条 150 行阈值**（≥150 行先被策略层升级 strict）；④ 全部判据以 ✅已验 结尾由引擎自算。任一不满足即拒绝且零副作用，通过则记 review.fast_track 事件（含证据分层与 Git 真源）。",
         parameters: params({
           goal: str,
           verdict: { type: "string", enum: ["accept", "object"] },
@@ -2770,12 +3243,23 @@ export function apply(ctx, config) {
           fast_track: { type: "boolean", description: "机器快速放行开关；缺省 false（默认路径逐字不变）。" },
           machine_report: {
             type: "object",
-            description: "机器证据包：{ baseline_commit, changed_paths[], product_changed_lines, untracked_files, tests:{exit_code,fail}, typecheck:{exit_code}, strict_required? }。门禁 ④（全部判据 ✅已验）由引擎自算，报告不得自报。",
+            description:
+              "机器证据包：{ attempt, baseline_commit, changed_paths[], product_changed_lines, untracked_files, tests:{exit_code,fail,command,collected_at,source}, typecheck:{exit_code,command,collected_at,source}, strict_required? }。" +
+              "attempt 必填（显式绑定实际执行树，引擎不猜）；`baseline_commit` 必填，且必须**等于**该 attempt 的引擎锚点（派发响应回传的 `baseline_commit`；隔离 attempt 的 `worktree.head` 亦可，短 SHA 亦可）——锚点只取自 attempt 记录，绝不取自报告；①② tests/typecheck 为调用方证据并须留痕命令原文/采集时间/来源（引擎不复跑）；" +
+              "③ 由引擎在实际 attempt 工作树的 Git 真源自算并与报告逐项对账（报告必须与 `git diff --numstat -z`（rename 含旧新两条路径）及未跟踪用户文件数完全一致）；④ 由引擎自算（全部判据 ✅已验），报告不得自报。",
           },
         }, ["goal", "verdict"]),
       },
       run: (a, ex) => {
-        const r = resolveAccept(rootFor(ex), a.goal, {
+        const r = rootFor(ex);
+        // g-436：复核子代理身份（正常工具通道）不得裁决接受——含 force 与 fast_track 两条旁路。
+        // 匹配只按**持久化的精确 child 身份**（review.bound 事件），不凭报文自称是 reviewer。
+        assertNotReviewerIdentity(
+          r,
+          [ex?.agent?.id, ex?.agent?.session?.id],
+          a.force ? "graph_resolve_accept(force)" : a.fast_track ? "graph_resolve_accept(fast_track)" : "graph_resolve_accept",
+        );
+        const result = resolveAccept(r, a.goal, {
           actor: actorOf(ex),
           verdict: a.verdict,
           objection: a.objection,
@@ -2784,7 +3268,7 @@ export function apply(ctx, config) {
           fast_track: a.fast_track,
           machine_report: a.machine_report,
         });
-        return { ok: true, fast_track: r.fast_track === true };
+        return { ok: true, fast_track: result.fast_track === true };
       },
     },
     {
@@ -2904,6 +3388,8 @@ export function apply(ctx, config) {
         return losslessJson({
           config,
           config_path: join(r, "project.yaml"),
+          // g-442：按当前项目目录结构的**只读**建议（绝不自动写入 project.yaml）
+          review_suggested_regions: suggestedReviewRegions(r),
           schema_hints: {
             "supervisor.automation": {
               keys: ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"],
@@ -2913,10 +3399,19 @@ export function apply(ctx, config) {
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],
             },
-            // g-311：顶层 review.policy 三值；未配置为 null，按目标类型派生策略。
+            // g-311/g-435：顶层 review 配置提示
             "review.policy": {
               values: [...REVIEW_POLICIES],
             },
+            "review.defaults": {
+              regions: [...DEFAULT_REVIEW_REGIONS],
+              contract_paths: [...DEFAULT_CONTRACT_PATHS],
+              non_product_prefixes: [...DEFAULT_NON_PRODUCT_PREFIXES],
+            },
+            // g-442：三项列表的写侧约束（与 core 的 REVIEW_LIST_FIELDS 同源，不是第二份副本）
+            "review.lists": Object.fromEntries(
+              REVIEW_LIST_FIELDS.map((spec) => [spec.key, { allow_empty: spec.allowEmpty, default: [...spec.defaultValues] }]),
+            ),
           },
         });
       },
@@ -2949,6 +3444,20 @@ export function apply(ctx, config) {
       return sp.get("workspace") || sp.get("root") || body?.workspace || body?.root || null;
     } catch {
       return body?.workspace || body?.root || null;
+    }
+  };
+  // ===== g-442：评审条件的「按当前项目目录结构建议」——**只读提示，绝不自动写入 project.yaml** =====
+  // 仅列出 workspace 根下的一级目录名（排除隐藏目录与生成物/依赖目录），供设置面板只读展示；
+  // 任何写入都必须由用户在设置面板里显式登记。扫描失败（目录不可读等）返回 null，不阻断设置面。
+  const REVIEW_SUGGEST_EXCLUDE = new Set(["node_modules", "dist", "core-dist", "tmp"]);
+  const suggestedReviewRegions = (graphRoot) => {
+    try {
+      return readdirSync(dirname(graphRoot), { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith(".") && !REVIEW_SUGGEST_EXCLUDE.has(d.name))
+        .map((d) => d.name)
+        .sort();
+    } catch {
+      return null;
     }
   };
   // g-212 att-005：REST 不自建 auth/allowlist；显式 workspace/root 仅作为
@@ -3143,7 +3652,7 @@ export function apply(ctx, config) {
 
     // g-289：探测工作区/主工作树干净度并下发给客户端，指导 GUI 复选框与提示文案
     const inspectDir = ws || dirname(rootForReq);
-    const cleanliness = detectWorkspaceCleanliness(inspectDir);
+    const cleanliness = detectWorkspaceCleanliness(inspectDir, undefined, rootForReq);
 
     return {
       modelGroups,
@@ -3553,7 +4062,7 @@ export function apply(ctx, config) {
           if (query) {
             const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
             entries = entries.filter((e) => {
-              const haystack = `${e.text} ${e.id} ${e.source_goal ?? ""}`.toLowerCase();
+              const haystack = `${e.text} ${e.id} ${e.source_goal ?? ""} ${e.source_ref ?? ""}`.toLowerCase();
               return tokens.every((tok) => haystack.includes(tok));
             });
           }
@@ -3593,9 +4102,19 @@ export function apply(ctx, config) {
             text: body.text,
             importance: body.importance !== undefined ? Number(body.importance) : undefined,
             source_goal: body.source_goal,
+            source_ref: body.source_ref,
             actor: "human:gui",
           });
-          json(res, 200, { ok: true, id: resEntry.id, entry: resEntry.entry });
+          // g-445：source_ref 幂等命中（deduped/skipped）同样如实回传，供管理面显示「未新增」
+          json(res, 200, {
+            ok: true,
+            id: resEntry.id,
+            entry: resEntry.entry,
+            ...(resEntry.deduped ? { deduped: true } : {}),
+            ...(resEntry.skipped ? { skipped: true } : {}),
+            ...(resEntry.source_ref ? { source_ref: resEntry.source_ref } : {}),
+            ...(resEntry.reason ? { reason: resEntry.reason } : {}),
+          });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
@@ -4081,6 +4600,73 @@ export function apply(ctx, config) {
             worktree_reason: execRes.worktree_reason ?? null,
             worktree_created: execRes.worktree_created === true,
             worktree_reused: execRes.worktree_reused === true,
+            // g-437 P1：同工具入口（白名单两处同时登记）。
+            baseline_commit: execRes.baseline_commit ?? null,
+          });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-436：start-review 端点——独立评审派发（与工具 graph_start_review 共用同一实现）。
+    // 身份说明（如实）：HTTP 侧沿用既有 `human:gui`，它**不证明真人**；越权守卫只覆盖
+    // 「可判定真实子代理身份」的正常工具通道，本端点不声称覆盖其它绕行路径。
+    {
+      path: "/api/dsh-graph/start-review",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal, attempt, candidate_commit, baseline_commit, guidance, provider, model, reasoning_effort, mode } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          if (!attempt) return json(res, 400, { error: "missing attempt" });
+          if (!candidate_commit) return json(res, 400, { error: "missing candidate_commit" });
+          const rRoot = rootForReq(req, body);
+          const ws = workspaceOf(req, body) ?? dirname(rRoot);
+          const { supervisorId, parent, error: parentError } = resolveSpawnParent(rRoot);
+          const ac = new AbortController();
+          req.on("close", () => ac.abort());
+          const res2 = await dispatchReview({
+            root: rRoot,
+            workspace: ws,
+            goal,
+            attempt,
+            candidate_commit,
+            baseline_commit,
+            guidance,
+            requestedBy: "human:gui",
+            actor: "human:gui",
+            parentAgent: parent,
+            parentSessionId: supervisorId,
+            signal: ac.signal,
+            provider,
+            model,
+            reasoning_effort,
+            mode,
+          });
+          json(res, 200, {
+            ok: true,
+            review_id: res2.review_id,
+            reused: res2.reused,
+            // F1：与工具入口同源的可见性字段（含 reused_current / stale / current_candidate_sha /
+            // independent_ok / independent_missing），使 HTTP 调用方也能一眼看出「复用的是否当前候选」。
+            reused_current: res2.reused_current,
+            stale: res2.stale,
+            goal: res2.goal,
+            source_attempt: res2.source_attempt,
+            candidate_sha: res2.candidate_sha,
+            baseline_sha: res2.baseline_sha,
+            review_workspace: res2.review_workspace,
+            changed_paths: res2.changed_paths,
+            current_candidate_sha: res2.current_candidate_sha,
+            independent_ok: res2.independent_ok,
+            independent_missing: res2.independent_missing,
+            reviewer_child_id: res2.reviewer_child_id,
+            status: res2.status ?? null,
+            conclusion: res2.conclusion ?? null,
+            model_route: res2.model_route ?? null,
+            child_error: res2.child_error ?? (parent ? null : parentError),
           });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
@@ -4118,13 +4704,13 @@ export function apply(ctx, config) {
               return json(res, 400, { error: resp.error, details: resp.details });
             }
             writeProjectConfig(r, body, "human:gui");
-            return json(res, 200, { ok: true, config: readProjectConfig(r) });
+            return json(res, 200, { ok: true, config: readProjectConfig(r), review_suggested_regions: suggestedReviewRegions(r) });
           }
           if (req.method === "GET") {
             // att-002：下发当前 canonical workspace 的 .dsh-graph/project.yaml 绝对路径
             //（客户端只消费服务端路径，禁止自行拼接 graphRoot）
             const meta = rootForReqMeta(req);
-            return json(res, 200, { ...readProjectConfig(meta.root), configFile: join(meta.root, "project.yaml") });
+            return json(res, 200, { ...readProjectConfig(meta.root), configFile: join(meta.root, "project.yaml"), review_suggested_regions: suggestedReviewRegions(meta.root) });
           }
           return json(res, 405, { error: "method not allowed" });
         } catch (e) {
@@ -4669,6 +5255,23 @@ export function apply(ctx, config) {
           return value;
         };
         disposers.push(() => sectionRenderCache.clear());
+        // g-439：读本 workspace 的六键 automation 配置数据（纯读、白名单过滤）。
+        // 只认 human/ai；其余（未配置/畸形/非法枚举）一律按 null 处理 ⇒ **fail-closed 不产生任何指导**，
+        // 绝不把无法判定的取值当作授权。读失败同样按全 null（不让配置读取异常吞掉既有纪律注入）。
+        const readAutomationConfig = (canonicalRoot) => {
+          const out = {};
+          let auto = null;
+          try {
+            auto = readProjectConfig(canonicalRoot)?.supervisor?.automation ?? null;
+          } catch {
+            auto = null;
+          }
+          for (const k of AUTOMATION_GUIDANCE_KEYS) {
+            const v = auto?.[k];
+            out[k] = v === "human" || v === "ai" ? v : null;
+          }
+          return out;
+        };
         // g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
         // g-149：使用 resolveCanonicalRoot 确保 worktree 会话也能正确读到主树 project.yaml
         // text(context) 里取 sessionId=context?.agent?.session?.id；
@@ -4689,10 +5292,18 @@ export function apply(ctx, config) {
               if (!cwd) return ""; // cwd 缺失则不注入（避免误注入）
               const canonical = resolveCanonicalRoot(config, cwd);
               // g-238：纯读——不 init；.dsh-graph/project.yaml 不存在时 readSupervisorSession 返回 null
-              const supervisorId = cachedRender(`sup:${canonical.root}`, canonical.root, ["project.yaml"],
-                () => readSupervisorSession(canonical.root));
-              if (!supervisorId || supervisorId !== sessionId) return "";
-              return "\n" + (localizedPrompt("discipline", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)));
+              // g-439：缓存的是**配置数据**（主管身份 + 六键 automation），语言渲染在缓存之外 ⇒
+              // 同一份数据按当前语言现渲染（zh/en 切换立即生效，不冻结语言）；配置更新/删除后
+              // project.yaml 指纹变化 ⇒ 缓存失效 ⇒ 六键回到 null 即恢复既有指导（逐字不变）。
+              const supConfig = cachedRender(`sup:${canonical.root}`, canonical.root, ["project.yaml"],
+                () => ({
+                  supervisorId: readSupervisorSession(canonical.root),
+                  automation: readAutomationConfig(canonical.root),
+                }));
+              if (!supConfig || !supConfig.supervisorId || supConfig.supervisorId !== sessionId) return "";
+              const language = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
+              return "\n" + localizedPrompt("discipline", language)
+                + renderAutomationGuidance(supConfig.automation, language);
             } catch {
               return "";
             }

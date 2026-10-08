@@ -15,25 +15,25 @@
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.1--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
-**当前版本 v0.19.7** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 50 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
+**当前版本 v0.19.8** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 51 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
 
-**最新亮点（v0.19.7）**
+**最新亮点（v0.19.8）**
 
-- **界面文案跟随宿主语言**：宿主切换语言时插件文案当场跟着变，不再需要重载；重启后也以宿主当前语言初始渲染。同时修掉「升级宿主后插件浏览器半边不激活」的冷启动问题。
-- **Windows 上的文件系统操作不再踩坑**：目录形态的目标搬迁不再因为提前建了同名目录而被系统拒绝；看板内的相对路径按平台统一分隔符，归档 / 取消归档与路径校验不再报错或静默失效。
-- **状态与记录不再可能对不上**：状态变更先记事件再落盘，中途失败不会留下「状态已改、记录没写」的中间态；取锁失败不再释放别人的锁，坏掉的锁能自行收敛而不是永久卡住；目标编号不会被删除后重新发出去；解绑只作用于被指定的那一次执行。
-- **英文模式下不再夹带中文**：英文派发时，内置的模式片段、小节标题、空描述兜底材料都按语言渲染，界面与提示词里不再冒出中文。
-- **「成功」不再可能是假的**：向会话投递内容、重新派发子代理等操作改为等待回执，没拿到回执就如实提示并给出复制兜底；仓库自带的整套测试也不再可能「看起来全绿」而实际漏跑文件、跳过用例或提前退出。
+- **设置页修好、也补齐了**：升级宿主后设置页不再变空；全局设置在两处入口（「设置」里的插件页与右侧栏插件入口）都能打开，读写的是同一份配置；评审条件（按项目目录结构登记的区域、冻结契约、哪些算产品改动）可直接查看与编辑，尚未按本项目校准时明确标注为「缺省（普适）」；主管自动化开关也不再只是存着。
+- **「机器快速放行」的证据不再只靠自报**：改动了多少行、还有没有未跟踪文件，改由引擎自己从版本库取，采集不到就不放行；没有登记过的区域自动升级为严格评审；评审子代理可以从正式入口独立派发，缺独立评审的交付会在看板上如实标注（不阻断放行）。
+- **长期记忆只有一个真源**：记忆统一由结构化条目管理（常驻 / 按需两档的语义与权限不变），不再要求手工维护长期记忆索引文件；历史文档保留为可选说明，可一次性、可追溯地迁入，重复执行不会重复导入。
+- **插件不再污染用户项目、也不再假设本仓库的结构**：插件自有的目录与工作树不会再把用户仓库判成「有未提交改动」，也不会再挡住机器快速放行；面向模型与用户的提示词、工具描述去掉了只适用于本仓库的路径、分支与脚本假设。
+- **跨看板更安全、测试结论更可信**：同一仓库存在多块看板时，同号的目标不会互相误复用、也不会误删对方的工作树；自定义图根下的卡片路径指向真正的那张卡片；整套测试不再有间歇性假红，「全绿」不再受概率影响。
 
 变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。
 
 ## 平台状态
 
-| 平台 | 支持情况 |
+| 平台 | 本版状态 |
 |------|----------|
-| Linux / WSL2 | ✅ 支持 |
-| 原生 Windows | ✅ 支持（已在原生 Windows 上实测） |
-| macOS | ✅ 支持（已在 macOS 上实测） |
+| Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0） |
+| 原生 Windows | ✅ **支持（已在原生 Windows 上实测）**：v0.19.8 发布候选包真机门禁 **PASS** —— `win-smoke` 通过 15 / 失败 0 / 告警 1，T3 看板文件系统生命周期 32/32 步，台账对账 2 / 0 / 0（台账 66 项 / 258 处命中、未登记 0）；唯一告警为设计内（发布包不含产品源码 ⇒ 台账对账在仓库根完成）。逐字报告见[平台门禁 §7.6](docs/platform-gate.md)；更早版本的真机记录见同页 §7.3 / §7.4 |
+| macOS | ✅ **支持（已在原生 macOS 上实测）**：v0.19.8 发布候选包真机门禁在原生 macOS（`darwin/arm64`）**PASS** —— `win-smoke` 通过 15 / 失败 0 / 告警 1，T3 看板文件系统生命周期 32 步；唯一告警为设计内（发布包不含产品源码 ⇒ 台账对账在仓库根完成）；台账层未在 macOS 单独执行（Mac 上无源码树、不在该机编译），台账对账由仓库根轮覆盖（通过 2 / 失败 0 / 告警 0，台账 66 项 / 258 处命中、未登记 0）。逐字报告见[平台门禁 §7.7](docs/platform-gate.md)；更早版本的真机记录见同页 §7.4 |
 
 三平台共用同一安装包。已知限制：① macOS 默认文件系统 APFS 大小写不敏感——仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`，由 `process.cwd()` 推导的路径不受影响。
 
@@ -52,12 +52,14 @@ dsh plugin --profile <name> add dsh-graph
 - **判据先于执行**：进入执行前先登记质量判据，评审按逐条判据核验产出物。
 - **上下文卡片**：目标 Runner 的种子上下文，生命周期 `empty → collecting → filled → reviewed`；形态分文本 / 文件 / 图片 / 数据。
 - **排期**：Backlog（暂存池）↔ Version（批量质量管理）↔ 独立目标（standalone）；看板泳道顺序是展示态，可拖拽调整。
+- **分级评审与策略配置**：支持配置项目专属模块区域 `review.regions`、冻结契约 `review.contract_paths` 与排除前缀 `review.non_product_prefixes`，未登记区域自动安全升级 strict，空契约默认 M1 不触发。
 - **换会话交接**：`graph_handoff` 生成交接文档（board 投影 + 长期记忆 + 环境事实），`graph_claim_supervisor` 由新会话幂等接管。
 - **目标间关系**：目标之间可标记「取代 / 调整 / 补充 / 相关」四类关系（`graph_set_relation`，可增可删）；关系只记在目标 frontmatter 这一处真源，看板卡片与目标弹窗直接可见。
+- **Profile 全局设置**：子代理默认 provider / model、推理档位、执行模式、提示词语言与补充提示词，可在「设置 → 看板设置」「右侧栏 → 插件 → dsh-graph」两处任一打开，两处读写同一份 profile 配置（workspace `project.yaml` 明确配置优先）。
 
 ## 提供的工具
 
-50 个 `graph_*` 工具，按功能分组（逐个说明见 [dsh-graph-host/README.md](dsh-graph-host/README.md) 或 `graph_help`）：
+51 个 `graph_*` 工具，按功能分组（逐个说明见 [dsh-graph-host/README.md](dsh-graph-host/README.md) 或 `graph_help`）：
 
 | 分组 | 工具 |
 |------|------|
@@ -67,7 +69,7 @@ dsh plugin --profile <name> add dsh-graph
 | 上下文卡片 | `graph_add_card` · `graph_fill_card` · `graph_review_card` · `graph_bind_collect_card` · `graph_delete_card` · `graph_convert_card_to_shared` · `graph_convert_card_to_owned` · `graph_attach_shared_card` · `graph_detach_shared_card` · `graph_list_shared_cards` |
 | 附件 | `graph_store_attachment` · `graph_delete_attachment` |
 | 排期 | `graph_move_goal` |
-| 执行派发 | `graph_start_attempt` · `graph_set_directive` · `graph_record_attempt_handoff` · `graph_unbind_goal_child` · `graph_abandon_attempt` |
+| 执行派发 | `graph_start_attempt` · `graph_start_review` · `graph_set_directive` · `graph_record_attempt_handoff` · `graph_unbind_goal_child` · `graph_abandon_attempt` |
 | 记忆 | `graph_memory_add` · `graph_memory_recall` · `graph_memory_remove` · `graph_memory_replace` |
 | 配置管理 | `graph_get_settings` · `graph_update_settings` |
 | 校验 / 对账 | `graph_validate` · `graph_rebuild` |

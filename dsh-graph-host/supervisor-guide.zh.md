@@ -16,8 +16,8 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 - 读 `project.yaml` 的 `supervisor.session`，或看 `graph_help` 的接管指引；
 - 若**未配置 / 未指向本会话**：运行 `graph_claim_supervisor()` 由本会话接管
   （更新 `supervisor.session`、记 `supervisor.claimed` 事件、返回 HANDOFF 全文）；
-- **查阅长期记忆索引**：初始化/接管时，**务必先阅读 `.dsh-graph/memory/long-term/INDEX.md`**，
-  掌握既有架构模式、历史教训与避坑规范；
+- **查阅长期记忆**：初始化/接管时以结构化记忆为唯一真源（`memory/memory.jsonl`）——standing
+  已自动注入，其余用 `graph_memory_recall` 按需检索，无需先读任何文件索引；
 - **防争抢**：若 `supervisor.session` 已指向其他会话且负责人没要求你接管，则
   **不要 claim**——保持普通会话身份，等负责人明确指示。
 
@@ -43,6 +43,9 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
      变更需确认；
    - 「简单任务例外」：一两行改动可先做后追认，但不得擅自扩大范围、不得把
      简单例外套用到复杂任务；
+   - **配置化的动作指导**：`supervisor.automation` 六键（`scope_planning` / `integration_decision` /
+     `rework` / `memory_promotion` / `skill_proposal` / `release`）渲染成主管提示——human 请求负责人
+     确认、ai 在已授权范围内自主判断并留痕、未配置保持既有指导；只影响提示、不构成引擎强制，不改上面四类 gate。
 5. **不静默修复**：缺陷与矛盾记录入册（证据台账/记忆），宁可 blocked 不可猜测；
 6. **惰性激活**：下游工作（收集、执行）只有上游结论成立后才派发；
 7. **目标内容体现最终修订**：负责人的补充与修正用 `graph_amend_goal` 记录，并把
@@ -131,15 +134,19 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
   - `strict`——必须派发独立（无作者偏见的）评审子代理，禁止 `fast_track`；
   - `none`——既不要求独立评审也不要求机器门禁（仅限纯文档/记忆类零风险改动），仍不得绕过 `delivered` 人工 gate。
 - **未配置时按目标类型派生**：`patch`/`chore` → `auto`；`feature`/`bug`/`task`/`improvement` → `strict`；空/非法类型 → `strict`（安全侧兜底）。
-- **强制升级 strict 的闭集**（命中任一即 strict，显式 `auto`/`none` 不得推翻）：变更路径含 `core/schema.ts` 或 `schema/SCHEMA.md`（契约冻结）；产品代码变更 ≥150 行；变更跨 ≥3 个顶层区域（`core` / `dsh-graph-host` / `lib/client` / `prompts` / `scripts`）；supervisor 显式声明 `strict_required`（覆盖核心层重写等无法用路径与行数表达的情形）。
+- **强制升级 strict 的闭集**（命中任一即 strict，显式 `auto`/`none` 不得推翻）：变更路径含有效契约文件（`project.yaml` 的 `review.contract_paths`，默认未配置时不猜契约 M1 不触发；改 `core/schema.ts` 在已登记项目中触发，即便契约文件为 `.md` 同样严格触发）；产品代码变更 ≥150 行；产品代码变更跨 ≥3 个顶层区域（`review.regions`，普适默认 `src/lib/app/packages/server/client/scripts/tests` 或项目自定义，纯文档/生成物不单独触发 M3）；supervisor 显式声明 `strict_required`（覆盖核心层重写等无法用路径与行数表达的情形）；产品代码落在未登记区域时安全升级为 strict（`unknown_region` 追加在末尾）；`review.regions: []` 显式空列表无可评估区域安全升级为 strict。
+- **项目评审配置校准**：主管应按项目实际架构校准 `project.yaml`（通过 `graph_get_settings` 查询、`graph_update_settings` 写入；必要时向负责人确认）：`review.regions`（按代码边界与顺序登记，最长前缀优先）、`review.contract_paths`（冻结契约路径，显式空列表 `[]` 合法且 M1 不触发）、`review.non_product_prefixes`（排除非产品前缀）。未登记区域的产品代码改动升级为 strict。
+- **设置面板可视化编辑**：同一份 `project.yaml` 评审条件也可在 workspace 设置面板的「评审条件」区块查看与编辑（显示生效值与来源：显式配置 / 缺省（普适））；未配置时展示的是普适缺省，只有点「改为显式配置」才会写入，`regions` 不允许显式空列表。
 - **机器门禁四项**（逐条可执行，`graph_resolve_accept(fast_track=true, machine_report=…)` 调用前须逐条实测）：
-  1. 全量测试：`node --test core/tests/*.test.ts` → `exit_code=0` 且 `fail=0`（双条件，只看文本会被截断误导）；
-  2. 类型检查：`./node_modules/.bin/tsc --noEmit -p tsconfig.json` → `exit_code=0`；覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内；
-  3. 变更规模：`git diff --numstat <attempt.baseline_commit> HEAD` 的产品代码增删合计 <150 行（口径排除 `core/tests/**`、`*.md` 与生成物；worktree 模式下须在 attempt 工作树内执行），且 `git status --porcelain` 复核无未跟踪新文件（未跟踪文件不计入 numstat，必须先提交）；
-  4. 判据已验：该目标全部判据文本均以 `✅已验` 结尾（由 `goal.md` 自算，不采信调用方自报）。
+  1. 全量测试：项目配置的测试命令（本项目示例：`node --test core/tests/*.test.ts`）→ `exit_code=0` 且 `fail=0`（双条件，只看文本会被截断误导）；**这是调用方证据**——引擎不复跑，报告须附 `command`（命令原文）/`collected_at`（采集时间）/`source`（来源），缺任一项即拒绝，三者原样记入 `review.fast_track` 事件的 `caller_evidence`；
+  2. 类型检查：项目配置的类型检查命令（本项目示例：`./node_modules/.bin/tsc --noEmit -p tsconfig.json`）→ `exit_code=0`（留痕规则同 ①）；覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内；
+  3. 变更规模（**由引擎 Git 自算，不是调用方自报**）：引擎按 `machine_report.attempt`（必填，显式绑定执行树）在**实际 attempt 工作树**上采集真源——记录为 `worktree: false` 的非隔离 attempt 绑定其工作区仓库；工作树缺失/已删/未注册一律拒绝，**绝不回退主树**。采集用 `git diff --numstat -z` 与 `git status --porcelain=v1 -z`：产品代码增删合计须 <150 行（按 `review.non_product_prefixes` 排除非产品代码，rename/copy 的旧新路径都参与分类与契约匹配），且无未跟踪用户文件（插件自有看板/工作树目录按真实归属排除，真实用户文件仍阻断）；报告值须与真源**逐项一致**（普通调用方用 `git diff --name-status -z <attempt.baseline_commit> HEAD` 采集 `changed_paths`——**rename/copy 会给出旧新两条路径**；`git diff --numstat <attempt.baseline_commit> HEAD` 口径亦可，但**非 `-z` 的 rename 会显示成 `old => new` 复合串、`--name-only` 只给新路径**，两者都过不了集合相等对账），存在未提交 tracked 改动（staged/unstaged/deleted）、二进制等非数字列、git 或基线不可解析一律拒绝；注意本门禁与策略层 **M2 用的是同一条 150 行阈值**（≥150 行会先被策略层升级 strict，根本到不了这里）；`machine_report.baseline_commit` 必填且必须**等于**该 attempt 的引擎锚点（派发响应回传的 `baseline_commit`；隔离 attempt 亦可与 `worktree.head` 对照，短 SHA 亦可）——锚点只取自 attempt 记录、**绝不取自报告**，缺失或不等即拒绝（错误文案给出「显式 baseline 重新派发该 attempt」或「改走普通 accept」两条出路）；
+  4. 判据已验：该目标全部判据文本均以 `✅已验` 结尾（**由引擎自算**，不采信调用方自报）。
+- **证据分层（如实）**：① ② 是**调用方证据**（引擎只留痕、不复跑）；③ ④ 是**引擎自算**。`review.fast_track` 事件的 `gate_sources` 逐项标注来源，`git_truth` 记录绑定的工作树、基线解析值、HEAD 与实采结果。
 - **fail-safe**：任一信号取不到（命令失败、报告缺字段、基线不可用）即不放行，不得把「拿不到证据」当作「证据为真」。
 - **通过后的行为**：`graph_resolve_accept(fast_track=true, …)` 先追加 `review.fast_track` 事件（含四项机器证据与 baseline），再走同一 accept 映射；任一项不满足即拒绝且零副作用（状态不变、无 `review.passed` 事件）。
-- **边界（如实标注）**：`strict` 的「必须派发独立评审子代理」在插件层只有判定与指南约束，不是引擎强制——插件层尚无评审子代理的派发入口（尚未接线）。**`delivered` 的人工 gate 同样是「指南约束」而非引擎强制**：`graph_resolve_accept` 与 `graph_transition(to='delivered')` 都不校验任何人类信号（无 token、无 GUI 确认、事件载荷也不记录批准者），引擎无从区分「负责人裁决过」与「主管自放」。⇒ 质量把控由**主管 agent 与负责人共同负责**，刻意保留弹性：**不做机器强制**——强制只会诱发 agent 取巧，徒耗时间与 token。纪律在主管身上，不在引擎里。
+- **边界（如实标注）**：`strict` 的「必须派发独立评审子代理」在插件层只有判定与指南约束，不是引擎强制——派发入口**已接线**：工具 `graph_start_review(goal, attempt, candidate_commit)`（HTTP `POST /api/dsh-graph/start-review`）；评审是**既有执行 attempt 的附属记录**——不新建 attempt、不迁移状态、不覆盖作者 `child_id` 与 `results-att-*.md`，结论独立落盘 `<goalDir>/reviews/<review_id>.md`；未派独立评审时看板与事件流如实标注「未独立评审」但**不阻断** accept。**`delivered` 的人工 gate 同样是「指南约束」而非引擎强制**：`graph_resolve_accept` 与 `graph_transition(to='delivered')` 都不校验任何人类信号（无 token、无 GUI 确认、事件载荷也不记录批准者），引擎无从区分「负责人裁决过」与「主管自放」。⇒ 质量把控由**主管 agent 与负责人共同负责**，刻意保留弹性：**不做机器强制**——强制只会诱发 agent 取巧，徒耗时间与 token。纪律在主管身上，不在引擎里。
+- **徽标口径（r3）**：看板徽标与 `review_state.independent_ok` 针对 **`current_candidate_sha`**（最近一次被请求评审的候选），**不等于 HEAD**——HEAD 之后有新提交但未派评审时，徽标与独立 PASS 不会随之改变；判读时请直接比对 `current_candidate_sha` 与真实 HEAD（徽标旁亦显示该候选短 SHA）。
 - **纯文档/记忆类改动**可设 `review.policy: none` 免除机器门禁；它只免除机器证据收集，不免除负责人对 `delivered` 的最终裁决。
 
 #### 测试力度分级（按改动性质）
@@ -306,21 +313,21 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   - 冻结脚本路径、验收命令逐条写全；
 - **worktree 隔离（Supervisor 强制默认）**：
   - **main 只读**：`main` 分支只承载已发布版本，任何开发、测试、review 改动不得在 main 上进行；
-  - **版本集成分支与主工作区（main worktree）**：supervisor 为当前推进版本建立 `<version>-test` 集成分支。**默认直接将 main worktree 切换至该 `<version>-test` 分支作为权威集成与人工验证工作区**，统一使用主仓库根下的 `./tmp/test-review` 启动测试环境，避免多 worktree 导致测试环境与数据存储目录碎片化；
-  - **预创建 worktree**：supervisor 预创建并登记子代理 worktree（在 `<version>-test` 基线上预创建专属 `.worktrees/g-xxx-att-xx` 工作树并登记）；子代理直接在给定树工作，**绝不自行拉树/建分支/改分支**；
+  - **版本集成分支与主工作区（main worktree）**：项目可约定一个**版本集成分支**（占位 `<integration-branch>`；实际分支名与是否存在由项目与负责人约定，插件不强制）。**若项目已约定该分支，默认直接将 main worktree 切换至该分支作为权威集成与人工验证工作区**，统一使用主仓库根下的 `./tmp/test-review` 启动测试环境，避免多 worktree 导致测试环境与数据存储目录碎片化；
+  - **预创建 worktree**：supervisor 预创建并登记子代理 worktree（在项目约定的集成分支 / 基线上预创建专属 `.worktrees/g-xxx-att-xx` 工作树并登记）；子代理直接在给定树工作，**绝不自行拉树/建分支/改分支**；
   - **worktree=true**：非平凡源码/测试/生成物/有副作用/并行改动必须隔离；brief 必须写明专属路径、版本分支、基线 commit、禁止自行拉树/建分支/改分支；
   - **worktree=false 快速通道**：仅以下两类可豁免——① 只读审计/静态检查（brief 明确禁止写文件，需构建副作用时复用 audit worktree）；② 特别小的独立文档/记忆修改（supervisor 直接在当前版本分支做，或子代理显式豁免并记录理由）；只写 graph 数据（看板状态、事件流）可显式不建 worktree，改源码仍隔离；
-  - **低风险小改动快速通道**：单个 build 脚本、小工具或一两行的低风险单文件修复，supervisor 可直接在当前 `<version>-test` 集成分支修改、针对性验证后快速请求负责人合并/验收，不派实现/review 子代理往返；须限定单个文件、无生成物/测试/副作用/并发风险；绝不因走此通道而直接改 main 或绕过人工 gate；子代理不得擅自套用；
+  - **低风险小改动快速通道**：单个 build 脚本、小工具或一两行的低风险单文件修复，supervisor 可直接在当前项目集成分支（`<integration-branch>`）修改、针对性验证后快速请求负责人合并/验收，不派实现/review 子代理往返；须限定单个文件、无生成物/测试/副作用/并发风险；绝不因走此通道而直接改 main 或绕过人工 gate；子代理不得擅自套用；
   - **铁律**：`worktree=false` 绝不意味着可直接修改 main；即使豁免，仍禁止修改多文件源码、修改生成物、修改测试、在任意分支直接提交碎提交；
-  -  review 交付阶段由 supervisor 复核通过后合并到当前版本集成分支（`<version>-test`），版本发布前不合并到 main；避免并发子代理互相踩提交、半成品直接落目标分支；
+  -  review 交付阶段由 supervisor 复核通过后合并到当前项目集成分支（`<integration-branch>`），版本发布前不合并到 main；避免并发子代理互相踩提交、半成品直接落目标分支；
   -  worktree 指令由执行派发注入 spawn 提示词；GUI 端点仅在 supervisor 明确批准时才可传 body `worktree: false`；
   -  数据分工：代码改动在 worktree，看板数据 `.dsh-graph/` 仍在主工作树写（graph_*
     工具写的是主工作树的看板/事件流，不被 worktree 分支隔离）；
 - **只在仓库根跑 graph_* 工具**：执行/调研子代理务必以**仓库根**为工作目录跑
-  graph_* 工具，**绝不在包目录（如 `dsh-graph-host/`）下跑**——否则工具会按会话 cwd
+  graph_* 工具，**绝不在插件包目录下跑**——否则工具会按会话 cwd
   在包目录自动 init 出一个 `.dsh-graph/` 骨架，弄乱工作区。**禁止**用 `git add -f`、
   `git rm --cached` 等方式把 `.dsh-graph` 数据纳入父仓库 Git——数据归内层独立仓库管理，
-  迁移由 `scripts/archived/migrate-dsh-graph-repo.sh --apply` 显式执行；
+  迁移由项目自有的迁移脚本显式执行（插件不自动迁移）；
 - **模型路由**：执行子代理**不继承父会话模型**——统一走 project.yaml 的
   `executor.provider/model`，`graph_start_attempt` 的 provider/model 参数可临时覆盖；
   路由结果显示在返回的 `model_route` 字段；
@@ -329,7 +336,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   复核时**逐行读最终代码、逐条件分支验证声明的行为是否真实现**——脚本 PASS 是必要
   非充分。验证前 **sleep 2s 等文件写入稳定**，避免瞬时误报；
 - **并发 Worktree 实施与流水线复核机制**：
-  - **跨版本/并发特性物理隔离（支持前瞻规划）**：支持在新版本规划与并发派发特性；所有并发开发必须在专属 `.worktrees/g-xxx-att-xx` 分支中进行；验证通过后**不合并到 main**，而是**合并到对应版本集成分支（如 `<version>-test`）**，确保 main 分支的稳定与发版不受未来版本影响，实现真正的全异步并行推进；
+  - **跨版本/并发特性物理隔离（支持前瞻规划）**：支持在新版本规划与并发派发特性；所有并发开发必须在专属 `.worktrees/g-xxx-att-xx` 分支中进行；验证通过后**不合并到 main**，而是**合并到项目约定的版本集成分支（`<integration-branch>`）**，确保 main 分支的稳定与发版不受未来版本影响，实现真正的全异步并行推进；
   - **单目标完工即审**：当派发多个并行 worktree 任务时，某个独立任务一完工，supervisor **立即在该独立 worktree 中启动独立测试实例进行代码与实机复核**，无需阻塞等待所有任务全部完工；
   - **并发回报暂存（避免遗忘）**：在复核某一个目标期间，若其他并发子代理发来完成汇报，supervisor 必须**先将回报信息记录/暂存到临时记忆文件（如 `.dsh-graph/memory/review-queue.md`）**；
   - **完成取下一个**：当前目标复核完成并标记后，查阅暂存记忆文件按序取出下一个就绪目标继续独立验证，直至队列全部复核完毕；
@@ -354,7 +361,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 
 ## 环境事实与排查
 
-- **本地 dev 的 root 覆盖必须用相对值 `.dsh-graph`**：绝对路径会被
+- **本地 dev 的 root 覆盖必须用相对值**（如项目配置的图根目录名，默认 `.dsh-graph`）：绝对路径会被
   `path.resolve(workspace, config.root)` 顶掉、破坏 workspace 跟随；
 - **sessions 列表条目 `cwd` 不可靠**：取当前会话 workspace 用 **workspaces 服务**
   `workspaces.list.getSnapshot().items.find(w => w.sessionIds.includes(sid))?.path`；
@@ -392,7 +399,7 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 
 ## 沉淀
 
-- **提炼长期记忆与更新索引**：目标交付时提炼长期记忆（成功图 / 失败模式 / 偏好），条目必须带来源目标引用；**新增/修改长期记忆文件时必须同步更新 `.dsh-graph/memory/long-term/INDEX.md` 索引表**；
+- **提炼长期记忆（结构化单一真源）**：目标交付时提炼长期记忆（成功图 / 失败模式 / 偏好），一律用 `graph_memory_add` 写入 `memory/memory.jsonl`（保留 `kind` / `scope` / `source_goal`；迁移旧文档时用可选 `source_ref` 记录来源，同来源重试幂等、不覆盖修订、不复活撤回条目）；默认 `scope="on_demand"`，仅人类明确要求常驻或安全禁令才用 `standing`（≤200 字）；`.dsh-graph/memory/long-term/*.md` 只是可选项目文档，**不是记忆真源，也不要求维护任何索引文件**；
 - 重复出现的任务模式，向负责人提议沉淀为 skill（前瞻式），或把成功的 first run
   固化为 skill（回溯式）。
 

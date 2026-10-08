@@ -25,7 +25,7 @@
 
 本插件采用**一体化单包分发**（npm 包名 `dsh-graph`），同时集成两大核心能力：
 
-- **Host 端**：向 DSH Agent 提供覆盖目标全生命周期的 50 个 `graph_*` 工具，并暴露 `/api/dsh-graph*` REST API（支持看板投影、目标详情查询与写操作）；
+- **Host 端**：向 DSH Agent 提供覆盖目标全生命周期的 51 个 `graph_*` 工具，并暴露 `/api/dsh-graph*` REST API（支持看板投影、目标详情查询与写操作）；
 - **Client 端**：无缝内嵌于 DSH Web 控制台（`conversation.view` 槽位）的浏览器二维泳道看板，提供直观的可视化交互与实时追踪。
 
 数据以本地纯文本与事件流形式存储于工作区的 `.dsh-graph/` 目录，Git 友好、天然支持协同对账与审计追踪。
@@ -40,27 +40,27 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**当前版本**：v0.19.7。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+**当前版本**：v0.19.8（本次发布准备产物；`0.19.8-alpha` 为开发线版本串）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
 **宿主兼容范围**：`engines.dsh` 声明 `>=0.1.5-rc.2 <0.2.1-0`（上界 `-0` 排除 `0.2.1` 的一切预发布与正式版），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
 **平台状态**：
 
-| 平台 | 支持情况 |
+| 平台 | 本版状态 |
 |------|----------|
-| Linux / WSL2 | ✅ 支持 |
-| 原生 Windows | ✅ 支持（已在原生 Windows 上实测） |
-| macOS | ✅ 支持（已在 macOS 上实测） |
+| Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0） |
+| 原生 Windows | ✅ **支持（已在原生 Windows 上实测）**：v0.19.8 发布候选包真机门禁 **PASS** —— `win-smoke` 通过 15 / 失败 0 / 告警 1，T3 看板文件系统生命周期 32/32 步，台账对账 2 / 0 / 0（台账 66 项 / 258 处命中、未登记 0）；唯一告警为设计内（发布包不含产品源码 ⇒ 台账对账在仓库根完成）。逐字报告见 [platform-gate §7.6](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)；更早版本的真机记录见同页 §7.3 / §7.4 |
+| macOS | ✅ **支持（已在原生 macOS 上实测）**：v0.19.8 发布候选包真机门禁在原生 macOS（`darwin/arm64`）**PASS** —— `win-smoke` 通过 15 / 失败 0 / 告警 1，T3 看板文件系统生命周期 32 步；唯一告警为设计内（发布包不含产品源码 ⇒ 台账对账在仓库根完成）；台账层未在 macOS 单独执行（Mac 上无源码树、不在该机编译），台账对账由仓库根轮覆盖（通过 2 / 失败 0 / 告警 0，台账 66 项 / 258 处命中、未登记 0）。逐字报告见 [platform-gate §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)；更早版本的真机记录见同页 §7.4 |
 
 三平台使用同一安装包。**已知限制**：① macOS 默认文件系统 APFS 大小写不敏感 —— 仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
-**最新亮点（v0.19.7）**
+**最新亮点（v0.19.8）**
 
-- **界面文案跟随宿主语言**：宿主切换语言时插件文案当场跟着变，不再需要重载；重启后也以宿主当前语言初始渲染。同时修掉「升级宿主后插件浏览器半边不激活」的冷启动问题。
-- **Windows 上的文件系统操作不再踩坑**：目录形态的目标搬迁不再因为提前建了同名目录而被系统拒绝；看板内的相对路径按平台统一分隔符，归档 / 取消归档与路径校验不再报错或静默失效。
-- **状态与记录不再可能对不上**：状态变更先记事件再落盘，中途失败不会留下「状态已改、记录没写」的中间态；取锁失败不再释放别人的锁，坏掉的锁能自行收敛而不是永久卡住；目标编号不会被删除后重新发出去；解绑只作用于被指定的那一次执行。
-- **英文模式下不再夹带中文**：英文派发时，内置的模式片段、小节标题、空描述兜底材料都按语言渲染，界面与提示词里不再冒出中文。
-- **「成功」不再可能是假的**：向会话投递内容、重新派发子代理等操作改为等待回执，没拿到回执就如实提示并给出复制兜底；仓库自带的整套测试也不再可能「看起来全绿」而实际漏跑文件、跳过用例或提前退出。
+- **设置页修好、也补齐了**：升级宿主后设置页不再变空；全局设置在两处入口（「设置」里的插件页与右侧栏插件入口）都能打开，读写的是同一份配置；评审条件（按项目目录结构登记的区域、冻结契约、哪些算产品改动）可直接查看与编辑，尚未按本项目校准时明确标注为「缺省（普适）」；主管自动化开关也不再只是存着。
+- **「机器快速放行」的证据不再只靠自报**：改动了多少行、还有没有未跟踪文件，改由引擎自己从版本库取，采集不到就不放行；没有登记过的区域自动升级为严格评审；评审子代理可以从正式入口独立派发，缺独立评审的交付会在看板上如实标注（不阻断放行）。
+- **长期记忆只有一个真源**：记忆统一由结构化条目管理（常驻 / 按需两档的语义与权限不变），不再要求手工维护长期记忆索引文件；历史文档保留为可选说明，可一次性、可追溯地迁入，重复执行不会重复导入。
+- **插件不再污染用户项目、也不再假设本仓库的结构**：插件自有的目录与工作树不会再把用户仓库判成「有未提交改动」，也不会再挡住机器快速放行；面向模型与用户的提示词、工具描述去掉了只适用于本仓库的路径、分支与脚本假设。
+- **跨看板更安全、测试结论更可信**：同一仓库存在多块看板时，同号的目标不会互相误复用、也不会误删对方的工作树；自定义图根下的卡片路径指向真正的那张卡片；整套测试不再有间歇性假红，「全绿」不再受概率影响。
 
 完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -138,7 +138,7 @@ curl -sL -b "" "<URL>" | grep -o '"@deepseek-ai/dsh-client-runtime"' | head -1
 
 ### Agent 工具速查表
 
-dsh-graph 为 Agent 提供了完善的工具链（共 50 个 `graph_*` 工具），按功能划分为以下分类：
+dsh-graph 为 Agent 提供了完善的工具链（共 51 个 `graph_*` 工具），按功能划分为以下分类：
 
 | 分类 | 工具名称 | 核心说明 |
 |------|----------|----------|
@@ -175,6 +175,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 50 个 `graph_*` 工具）
 | | `graph_record_attempt_handoff`| 记录前序 Attempt 的返工约束与排查基线 |
 | | `graph_unbind_goal_child` | 安全解绑目标执行子代理 |
 | | `graph_abandon_attempt` | 放弃陈旧或失联的 Attempt |
+| | `graph_start_review` | 为既有执行 Attempt 派发独立评审子代理（只读；不新建 attempt、不覆盖作者结果；结论独立落盘） |
 | **配置管理** | `graph_get_settings` | 查询当前 workspace 项目配置及合法枚举元信息 |
 | | `graph_update_settings` | 结构化更新当前 workspace 项目配置（支持 patch） |
 | **记忆管理** | `graph_memory_add` | 写入按需/常驻记忆条目 |
@@ -189,7 +190,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 50 个 `graph_*` 工具）
 | | `graph_refresh_results` | 重写 `results.md`：零 LLM 兜底拼装，或采用专用摘要子代理/人工产出的 `content`（旧版自动归档；支持批量 goals[]） |
 | | `graph_handoff` | 生成跨会话交接文档 `HANDOFF.md` |
 | | `graph_claim_supervisor` | 新会话接管 Supervisor 并更新会话元数据 |
-| | `graph_help` | 输出插件功能说明与 50 个工具速查清单 |
+| | `graph_help` | 输出插件功能说明与 51 个工具速查清单 |
 | **数据与校验** | `graph_validate` | 执行全量不变式检查（状态、依赖环、卡片引用） |
 | | `graph_rebuild` | 从事件流完全重建目标状态并与元数据对账 |
 
@@ -200,6 +201,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 50 个 `graph_*` 工具）
 内嵌于 DSH Web 界面：
 
 - **二维泳道布局**：清晰展现多个版本的推进节奏，支持灵活查看不同泳道和阶段；
+- **分级评审策略支持**：通过 `graph_get_settings` / `graph_update_settings` 配置项目实际的 `review.regions` / `review.contract_paths` / `review.non_product_prefixes`，未登记区域安全升级 strict，空契约默认 M1 不触发；
 - **实时流式更新**：卡片与顶部状态栏直观反映 Agent 汇报的最新执行状态；外部文件变更触发动画闪烁；
 - **丰富弹窗与抽屉交互**：点击卡片可展开目标详情弹窗，查看质量判据、上下文卡片与 Attempt 历史。
 
@@ -224,6 +226,19 @@ dsh-graph 为 Agent 提供了完善的工具链（共 50 个 `graph_*` 工具）
 
 ---
 
+### Profile 全局设置（子代理默认值）
+
+子代理默认 provider / model、推理档位、执行模式、提示词语言与补充提示词是 **profile 级全局默认** —— 写入当前 DSH profile、**跨 workspace 生效**，且 workspace 的 `project.yaml` 明确配置与单次派发参数都更优先。
+
+同一个设置页在**两个入口**都能打开，两处是**同一份实现**、读写同一份 profile 配置：
+
+- **设置 → 看板设置**：左侧设置导航里的独立设置页；
+- **右侧栏 → 插件 → dsh-graph**：组合包详情页里的配置区（按包名 `dsh-graph` 绑定）。
+
+宿主未提供某个位面时（精简 profile / 旧宿主），对应席位自动不出现，看板与工具不受影响；两处都取不到设置服务时，页面**如实提示**当前 profile 未暴露设置服务，而不是假装已启用。配置文件落在 profile 的设置文档里（0.2.0 系宿主为 profile 的 `cordis.patch.yml` 中 `dsh-graph-host` 条目，0.1.6 系宿主为 `$DSH_HOME/settings.yaml` 的 `dsh-graph` 命名空间）。
+
+---
+
 ### 数据存储说明
 
 插件数据保存在当前工作区下的 `.dsh-graph/` 目录：
@@ -243,7 +258,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 50 个 `graph_*` 工具）
 
 Distributed as a **single unified package** (npm package name: `dsh-graph`), it provides both halves out-of-the-box:
 
-- **Host Side**: Exposes 50 `graph_*` tools to DSH Agents covering the entire goal lifecycle, along with `/api/dsh-graph*` REST endpoints for board projections, goal details, and mutations;
+- **Host Side**: Exposes 51 `graph_*` tools to DSH Agents covering the entire goal lifecycle, along with `/api/dsh-graph*` REST endpoints for board projections, goal details, and mutations;
 - **Client Side**: A browser 2D swimlane kanban board integrated into DSH Web (the `conversation.view` slot) for intuitive visualization and real-time tracking.
 
 All data is stored locally as human-readable files and an append-only event log under `.dsh-graph/`, making it Git-friendly, easily auditable, and collaborative.
@@ -258,27 +273,27 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**Current version**: v0.19.7. **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+**Current version**: v0.19.8 (this release-preparation artifact; `0.19.8-alpha` was the development version string — not yet published to npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
 **Host compatibility range**: `engines.dsh` declares `>=0.1.5-rc.2 <0.2.1-0` (the `-0` upper bound excludes every `0.2.1` prerelease and final release); host-aware markets such as dsh-market read it for card display and install/update pre-flight. **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, and `0.2.0-rc.1`; `0.2.0-rc.2` (verified by the maintainer on 2026-09-30). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
 **Platform status**:
 
-| Platform | Support |
-|----------|---------|
-| Linux / WSL2 | ✅ Supported |
-| Native Windows | ✅ Supported (verified on native Windows) |
-| macOS | ✅ Supported (verified on macOS) |
+| Platform | Status for this release |
+|----------|-------------------------|
+| Linux / WSL2 | ✅ Verified on-device (this release's full test suite: 0 failures) |
+| Native Windows | ✅ **Supported (verified on native Windows)**: the v0.19.8 release candidate **passed** the on-device gate — `win-smoke` 15 passed / 0 failed / 1 warning, T3 board file-system lifecycle 32/32 steps, OS-ledger reconciliation 2 / 0 / 0 (66 ledger items / 258 hits, 0 unregistered); the single warning is by design (the published package ships no product sources, so ledger reconciliation runs from the repository root). Verbatim report in [platform-gate §7.6](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md); earlier on-device records: §7.3 / §7.4 |
+| macOS | ✅ **Supported (verified on native macOS)**: the v0.19.8 release candidate **passed** the on-device gate on native macOS (`darwin/arm64`) — `win-smoke` 15 passed / 0 failed / 1 warning, T3 board file-system lifecycle 32 steps; the single warning is by design (the published package ships no product sources, so ledger reconciliation runs from the repository root); the ledger layer was not run separately on macOS (there is no source tree on that machine and no build happens there), and is covered by the repository-root round (2 passed / 0 failed / 0 warnings; 66 ledger items / 258 hits, 0 unregistered). Verbatim report in [platform-gate §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md); earlier on-device records: §7.4 |
 
 All three platforms share the same package. **Known limitations**: (1) APFS, the macOS default, is case-insensitive — entries that differ only by case resolve to the **same entity**, so do not rely on case alone to distinguish goal ids or version lanes; (2) on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
 
-**What's new (v0.19.7)**
+**What's new (v0.19.8)**
 
-- **Plugin text follows the host language**: switching the host language updates the plugin's wording on the spot — no reload needed — and after a restart it renders in the host's current language from the start. The cold-boot failure where the browser half of the plugin never activated after a host upgrade is fixed as well.
-- **File-system operations no longer stumble on Windows**: moving a goal between directory and flat layouts no longer fails because a same-named directory was created ahead of time; relative paths recorded on the board now use the platform's separator, so archiving / unarchiving and path validation no longer error out or silently do nothing.
-- **State and records can no longer disagree**: a state change is journalled before it is persisted, so a mid-way failure never leaves "status changed, record missing"; losing a lock race no longer releases someone else's lock, a broken lock recovers on its own instead of stalling forever; goal numbers are never handed out twice after a deletion; unbinding only affects the exact execution you named.
-- **English mode no longer leaks Chinese**: built-in mode snippets, section headings and the empty-description fallback material are all rendered per language, so no Chinese shows up in the UI or in prompts.
-- **"Success" can no longer be fake**: delivering content to a session or re-dispatching a subagent now waits for a receipt — without one you get an honest notice plus a copy fallback; and the repo's own test suite can no longer look all-green while files were skipped, cases were skipped, or the process exited early.
+- **The settings page works again — and is more complete**: after a host upgrade the settings page no longer comes up empty; global settings open from both entry points (the plugin page under "Settings" and the right-hand plugin entry) and read/write one and the same configuration; review conditions (registered regions, frozen contracts, what counts as a product change) can be inspected and edited directly, and when they are not yet calibrated for your project they are clearly labelled as defaults; the supervisor-automation switches are no longer just stored.
+- **Fast-track evidence no longer rests on self-reporting**: how many lines changed and whether any untracked files remain are now collected by the engine itself from version control, and if collection fails the fast track is refused; regions that were never registered are escalated to strict review; a review subagent can be dispatched through a first-class entry, and deliveries lacking an independent review are honestly flagged on the board (without blocking acceptance).
+- **Long-term memory has a single source of truth**: memory is managed uniformly as structured entries (the standing / on-demand semantics and permissions are unchanged), and hand-maintaining a long-term memory index file is no longer required; legacy documents remain available as optional notes and can be migrated once, traceably, without re-importing on repeat runs.
+- **The plugin no longer pollutes your project — or assumes this repository's layout**: the plugin's own directories and worktrees no longer make your repository look like it has uncommitted changes, and no longer block the fast track; prompts and tool descriptions aimed at models and users had repository-specific paths, branches and script assumptions removed.
+- **Safer across boards, more trustworthy test verdicts**: with several boards in one repository, goals carrying the same number no longer reuse each other's worktrees or delete them; card paths under a custom graph root point at the actual card; and the flaky intermittent failure in the test suite is fixed, so "all green" no longer depends on chance.
 
 See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history. Official releases are distributed via npm and the dsh-market ecosystem.
 
@@ -357,6 +372,8 @@ external report and host source code; this README does **not** claim the desktop
   Supports Text, File, Image, and Data cards. Follows a structured lifecycle (`empty → collecting → filled → reviewed`) to seed precise task context for execution subagents.
 - **2D Swimlane Board**:
   Columns represent lifecycle stages, while horizontal swimlanes organize goals by Version, Backlog, and Standalone categories, complete with drag-and-drop scheduling.
+- **Graded Review & Policy Calibration**:
+  Configure project review parameters (`review.regions`, `review.contract_paths`, `review.non_product_prefixes`) via `graph_get_settings` and `graph_update_settings`. Product changes in unregistered regions safely escalate to strict; empty contract paths default to not triggering M1.
 - **Relations Between Goals**:
   Goals can be linked with four relation kinds — supersedes / amends / extends / related — and unlinked again; relations live in exactly one source of truth (the goal's frontmatter). Cards show relation badges, and the goal dialog lists the full inventory under "Goal description" (cross-version and archived peers flagged).
 - **Seamless Session Handoff**:
@@ -368,7 +385,7 @@ external report and host source code; this README does **not** claim the desktop
 
 ### Agent Tools Reference
 
-dsh-graph equips Agents with a comprehensive set of `graph_*` tools (50 in total):
+dsh-graph equips Agents with a comprehensive set of `graph_*` tools (51 in total):
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -405,6 +422,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools (50 in total
 | | `graph_record_attempt_handoff`| Record rework constraints, failure notes, and baseline |
 | | `graph_unbind_goal_child` | Safely detach an execution subagent from a goal |
 | | `graph_abandon_attempt` | Abandon a stale or lost attempt |
+| | `graph_start_review` | Dispatch an independent read-only review subagent for an existing attempt (no new attempt, never overwrites author results; conclusion stored separately) |
 | **Configuration** | `graph_get_settings` | Query workspace project configuration and enum metadata |
 | | `graph_update_settings` | Update workspace project configuration (supports partial patch) |
 | **Memory** | `graph_memory_add` | Write on-demand / standing memory entries |
@@ -419,7 +437,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools (50 in total
 | | `graph_refresh_results` | Regenerate `results.md`: zero-LLM fallback assembly, or a caller-supplied `content` body from the dedicated summarizer subagent / a human (previous version archived; supports a goals[] batch) |
 | | `graph_handoff` | Export cross-session handover document (`HANDOFF.md`) |
 | | `graph_claim_supervisor` | Claim supervisor role in new session & update metadata |
-| | `graph_help` | Display usage instructions and the 50-tool checklist |
+| | `graph_help` | Display usage instructions and the 51-tool checklist |
 | **Validation** | `graph_validate` | Validate full invariants (states, cycles, card refs) |
 | | `graph_rebuild` | Rebuild goal state from `events.jsonl` and reconcile |
 
@@ -451,6 +469,19 @@ The sidebar's "**Kanban**" tile and the conversation page's "**Kanban**" tab are
   - **The version selector is rendered only in the single-lane tier**: in the wide tier the board has **no** version selector at all. So an "All versions" string seen in the wide tier can only come from an **opened dropdown option list**, never from the current selection; and in the single-lane tier, before any explicit view choice, the current item is "Standalone" — **not** "All versions".
 
 See [screenshot/sidebar-kanban.png](https://github.com/miuzel/dsh-graph/blob/main/screenshot/sidebar-kanban.png) in the repository for a screenshot (fictional demo data nebula-notes, sidebar width in the `< 480px` single-lane tier); this npm package does not ship the repository's `screenshot/` directory, so only the repository path is given here.
+
+---
+
+### Profile-wide settings (subagent defaults)
+
+The subagent default provider / model, reasoning effort, execution mode, prompt language and supplementary prompt are **profile-wide defaults**: they are written to the current DSH profile, apply **across workspaces**, and an explicit `project.yaml` value or a per-dispatch argument still takes precedence.
+
+The same settings page opens from **two places**, both backed by one implementation reading and writing the same profile configuration:
+
+- **Settings → Kanban Settings**: the standalone page in the settings navigation;
+- **Right sidebar → Plugins → dsh-graph**: the configuration block on the bundle page (bound by the package name `dsh-graph`).
+
+When the host does not expose a given seat (slim profile / older host) that seat simply does not appear and the board and tools are unaffected; when no settings service is reachable from either of them the page **says so** instead of pretending the settings are live. Values live in the profile's settings document (on 0.2.0-line hosts the `dsh-graph-host` entry in the profile's `cordis.patch.yml`; on 0.1.6-line hosts the `dsh-graph` namespace in `$DSH_HOME/settings.yaml`).
 
 ---
 

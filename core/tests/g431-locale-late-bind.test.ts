@@ -350,10 +350,19 @@ function assertColdBootSurvives(boot: Boot): void {
   assert.deepEqual(boot.registeredSlots, [
     "conversation.session.header.actions",
     "conversation.view",
+    // g-453（返工后）：profile 全局设置页**两个**席位（设置 → 看板设置 / 插件面板组合包配置页）；
+    // 「设置 → 内置插件」标签页席位已按负责人裁定取消 ⇒ 不再出现在注册面（反向断言见下）。
+    "plugins.bundle.config",
     "settings.section",
     "sidebar.right.pane.tab",
     "sidebar.right.pane.tab.title",
   ], "slot + settings section + 右侧栏 tab/标题 seat 必须全部注册完成");
+  // g-453 返工反向断言：已取消的 tab 席位在**任一**冷启动/迟到绑定路径下都不得被注册或 inject；
+  // 判别力自证（重加该席位必红）见文件末尾 `g-453 返工判别力自证` 用例。
+  assert.ok(!boot.registeredSlots.includes("settings.plugins.tab"),
+    "settings.plugins.tab 不得被注册（负责人已裁定设置面收敛为两个入口）");
+  assert.ok(!boot.calls.some((c) => c.endsWith(":settings.plugins.tab")),
+    "不得对 settings.plugins.tab 发起 slots.inject / register（无死代码）");
   assert.equal(boot.tabRegistrations.length, 1, "sidebarRightTabs.register 必须调用一次");
 }
 
@@ -554,4 +563,29 @@ test("g-431 判据F：locale 不在硬 inject；迟到绑定回调内零裸服�
   // 负向样本：守卫真的在鉴别（`if (localeService && …)` 形态不得再出现于源码）
   assert.equal(/if\s*\(\s*localeService\s*&&\s*typeof\s+ctx\.on\s*===\s*"function"\s*\)/.test(src), false,
     "源码里不得再有「有值才订阅」的条件订阅形态（这正是 desktop 语言不跟随的形态）");
+});
+
+// ============================================================================
+// g-453 返工：已取消席位（settings.plugins.tab）的判别力自证（g431 面）
+// ============================================================================
+
+test("g-453 返工判别力自证：把 tab 席位重加回产物后，两席位清单与反向断言必红（合成变异对照）", () => {
+  const bundle = readFileSync(bundlePath, "utf8");
+  // 合成变异（仅内存字符串）：锚点是保留席位 plugins.bundle.config 的 inject 调用，与已取消席位同处
+  // `registerGraphSettingsSection(ctx)` 作用域 ⇒ ctx / dgT / h / GraphSettingsSection 均可解析。
+  const anchor = 'ctx.slots.inject("plugins.bundle.config"';
+  const snippet = [
+    'ctx.slots.inject("settings.plugins.tab", () =>',
+    '  ctx.slots.register({ name: "settings.plugins.tab", id: "dsh-graph", order: 60, label: () => dgT("settings.title") },',
+    '    () => h(GraphSettingsSection, {})));',
+    "",
+  ].join("\n") + "        ";
+  assert.ok(bundle.includes(anchor), "变异锚点必须命中产物（改完须 bash scripts/build.sh）");
+  const mutated = bundle.replace(anchor, snippet + anchor);
+  assert.notEqual(mutated, bundle, "变异必须真的改写产物（否则对照空转）");
+  const loaded = loadClientPlugin(mutated);
+  const boot = runColdBoot(loaded.plugin, { dispatched: loaded.dispatched });
+  assert.ok(boot.registeredSlots.includes("settings.plugins.tab"), "变异产物必须真的注册了 tab 席位");
+  const red = captureThrows(() => assertColdBootSurvives(boot));
+  assert.ok(red, "重加 tab 席位后 assertColdBootSurvives（两席位清单 + 反向断言）必须实拍变红");
 });

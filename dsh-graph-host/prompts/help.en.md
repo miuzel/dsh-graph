@@ -1,4 +1,4 @@
-dsh-graph is a plugin that organizes work into a "goal board". Available graph_* tools (50 total):
+dsh-graph is a plugin that organizes work into a "goal board". Available graph_* tools (51 total):
 
 ## Goal lifecycle
 - graph_create_goal(title[, version][, type]) create a goal (enters backlog; with version, schedule it; type: feature/bug/task/improvement/patch/chore);
@@ -41,14 +41,15 @@ dsh-graph is a plugin that organizes work into a "goal board". Available graph_*
 - graph_record_attempt_handoff(goal, source_attempts[], failures, constraints, baseline, verification) supervisor records rework constraints;
 - graph_unbind_goal_child(goal, {attempt|child_id}[, token][, reason][, legacy]) safely detach an execution subagent (token uses strict CAS; legacy bindings without a token require explicit legacy=true plus reason);
 - graph_abandon_attempt(goal, attempt, reason) mark an attempt as abandoned;
-- graph_resolve_accept(goal, verdict[, objection][, force][, reason][, fast_track][, machine_report]) supervisor resolves the acceptance request (accept/object); fast_track=true takes the machine fast path: policy must judge auto and machine_report must be all-green across the four gates (tests/typecheck exit_code=0, <150 product-code lines with no untracked files, all criteria ✅verified, computed by the engine), returning {ok, fast_track}.
+- graph_start_review(goal, attempt, candidate_commit[, baseline_commit][, guidance][, provider][, model][, reasoning_effort][, mode]) dispatch an independent review subagent for an existing attempt (read-only; the review is an attachment record, not a new attempt, and never overwrites the author's child_id or results-att-*.md; reuses the author's existing worktree; the conclusion is stored separately under the real reviewer child);
+- graph_resolve_accept(goal, verdict[, objection][, force][, reason][, fast_track][, machine_report]) supervisor resolves the acceptance request (accept/object); fast_track=true takes the machine fast path: policy must judge auto and machine_report must be all-green across the four gates (gates 1 tests / 2 typecheck exit_code=0 are caller evidence and must carry command/collected_at/source; gate 3 <150 product-code lines with no untracked files is computed by the engine from Git truth in the actual worktree bound by machine_report.attempt, which is required; gate 4 all criteria ✅verified is computed by the engine), returning {ok, fast_track}.
 
 ## Validation & Reconciliation
 - graph_validate() validate all invariants (status, ownership, criteria, dependency cycles, card references);
 - graph_rebuild() rebuild state from event stream and reconcile with frontmatter.
 
 ## Memory management
-- graph_memory_add(kind, text[, scope][, importance][, source_goal]) add a persistent memory (scope: on_demand default / standing for constant rules; source_goal links the source goal);
+- graph_memory_add(kind, text[, scope][, importance][, source_goal][, source_ref]) add a persistent memory (scope: on_demand default / standing for constant rules; source_goal links the source goal; source_ref is a migration source key that makes repeated adds for the same source idempotent, never overwritten or revived);
 - graph_memory_replace(old, text[, kind][, importance][, source_goal]) correct existing memory (old locates, text is the new content, source_goal links the source goal);
 - graph_memory_remove(old[, reason]) delete a memory entry (must confirm obsolete or withdrawn);
 - graph_memory_recall([query][, kind][, limit]) search memories.
@@ -66,7 +67,7 @@ dsh-graph is a plugin that organizes work into a "goal board". Available graph_*
 - graph_update_settings(patch) update project config (schema validation, comment preservation, atomic write).
 
 ## Help
-- graph_help() display this help (full 50-tool checklist with parameter reference).
+- graph_help() display this help (full 51-tool checklist with parameter reference).
 
 ## Claim supervisor
 **Execute this only when the person in charge explicitly asks you to take over as supervisor**—by default no session may automatically claim:

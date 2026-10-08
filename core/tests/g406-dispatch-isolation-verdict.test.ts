@@ -345,6 +345,8 @@ test("g-406 判据 2：HTTP/GUI 入口（第二处响应白名单）同样回传
   assert.equal(res._body.isolated, true, "feature 默认建树");
   assert.equal(res._body.worktree_created, true);
   assert.equal(res._body.worktree_reused, false);
+  // g-437 P1：区间锚点也是「可据以裁决」的字段 ⇒ HTTP/GUI 入口（第二处白名单）必须同样登记。
+  assert.equal(res._body.baseline_commit, res._body.worktree.head, "HTTP 响应必须回传引擎侧区间锚点");
 });
 
 // ============================================================================
@@ -378,9 +380,33 @@ function mutateOnce(source: string, anchor: string, replacement: string): string
 function dispatchRegion(source: string): string {
   const start = source.indexOf("const dispatchExecutionAttempt = async (");
   assert.ok(start >= 0, "未找到 dispatchExecutionAttempt（结构已变，请同步更新本守卫）");
-  const end = source.indexOf("\n  const tools = [", start);
+  // g-436：结束边界收紧到**同级派发服务**（独立评审服务 dispatchReview）之前——后者是另一个入口
+  // （不建工作树、不启动执行子代理），不属于本不变式的取证范围；标记缺失时回退到 tools 数组边界
+  // （保守：区域变大立刻被「恰好 1 处」判红，绝不静默放宽）。
+  const reviewSvc = source.indexOf("\n  // ---- g-436：独立评审的统一派发服务", start);
+  const end = reviewSvc > start ? reviewSvc : source.indexOf("\n  const tools = [", start);
   assert.ok(end > start, "未找到 dispatchExecutionAttempt 的结束边界（结构已变，请同步更新本守卫）");
   return source.slice(start, end);
+}
+
+/**
+ * 结构性守卫 A′（g-436 新增）：独立评审派发服务 `dispatchReview` **不得**创建/准备工作树
+ * —— 评审复用作者 attempt 的既有工作树，绝不新建评审树（新建会与执行 attempt 的隔离归属争用，
+ * 并把评审变成第二个隔离实体）。正断言「复用作者工作树」+ 反断言「零 prepareAttemptWorktree」。
+ */
+function reviewDispatchRegion(source: string): string {
+  const start = source.indexOf("const dispatchReview = async (");
+  assert.ok(start >= 0, "未找到 dispatchReview（结构已变，请同步更新本守卫）");
+  const end = source.indexOf("\n  const tools = [", start);
+  assert.ok(end > start, "未找到 dispatchReview 的结束边界（结构已变，请同步更新本守卫）");
+  return source.slice(start, end);
+}
+
+function reviewWorktreeViolation(region: string): string | null {
+  const prepares = region.split("prepareAttemptWorktree(").length - 1;
+  if (prepares !== 0) return `独立评审派发区域内不得创建工作树，实际 prepareAttemptWorktree 调用点 ${prepares} 处`;
+  if (!region.includes("attMeta.worktree")) return "独立评审派发区域应复用作者 attempt 的既有工作树（未找到 attMeta.worktree 复用逻辑）";
+  return null;
 }
 
 function isolationOrderingViolation(region: string): string | null {
@@ -434,6 +460,15 @@ test("g-406 判据 3 负向对照②：结构性守卫钉住「创建并注册�
     "        });\n\n" + createBlock + "        try {\n          bindAttemptChild(",
   ).replace(createBlock, "");
   assert.match(String(isolationOrderingViolation(dispatchRegion(moved))), /晚于子代理启动/);
+});
+
+test("g-406 判据 3（g-436 增量）：独立评审派发复用作者工作树、绝不新建评审树", () => {
+  const source = readFileSync(DISPATCH_SOURCE, "utf8");
+  assert.equal(reviewWorktreeViolation(reviewDispatchRegion(source)), null, "独立评审派发应复用作者工作树且不建树");
+  // 负向对照：在评审派发区域内插入一次建树调用 ⇒ 必红
+  const region = reviewDispatchRegion(source);
+  const mutated = source.replace(region, region.replace("const wt = attMeta.worktree;", "const wt = prepareAttemptWorktree(root, goal, attempt, { enabled: true });\n    const wt2 = attMeta.worktree;"));
+  assert.match(String(reviewWorktreeViolation(reviewDispatchRegion(mutated))), /不得创建工作树/);
 });
 
 test("g-406 判据 3 负向对照③：两处响应白名单必须登记隔离判定，删掉任一处即红", () => {

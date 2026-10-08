@@ -220,7 +220,9 @@ test("g-339 判据4：4000 总预算保持；长条目挤占时高优先级优�
     handoff.includes(`已达到 ${MEMORY_INJECT_TOTAL_BUDGET} 字符上限`),
     "截断提示可见（不是无声丢弃）",
   );
-  assert.ok(handoff.includes("剩余条目已截断"), "提示说明剩余条目已截断");
+  assert.ok(handoff.includes("剩余条目未展示"), "提示说明剩余条目未展示（不是无声丢弃）");
+  // g-445：截断时必须指引可用 recall 取回被折叠条目（口径从「已截断」升级为「未展示 + 怎么取回」）
+  assert.ok(handoff.includes("graph_memory_recall"), "截断提示指引按需 recall 取回剩余条目");
 });
 
 // =====================================================================================

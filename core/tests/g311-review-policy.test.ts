@@ -46,6 +46,7 @@ import {
 import { allCriteriaVerified, verifiedCriteriaItems, CRITERIA_VERIFIED_MARK } from "../model.ts";
 import { GraphError } from "../machine.ts";
 import { apply } from "../../dist/index.js";
+import { makeFastTrackFixture, type FastTrackFixtureOptions } from "./fixtures/fast-track-fixture.ts";
 
 const repoRoot = join(import.meta.dirname, "../..");
 const VERIFIED = `${CRITERIA_VERIFIED_MARK}`;
@@ -69,11 +70,19 @@ const statusOf = (file: string) => String(loadGoal(file).meta.status ?? "");
 const eventsOf = (root: string, goal: string, name: string) =>
   readEvents(root).filter((e) => e.goal === goal && e.event === name);
 
-/** 全绿机器报告（各用例按需覆盖单个字段构造负向对照）。 */
-function greenReport(over: Record<string, unknown> = {}) {
+// g-437：`resolveAccept(fast_track=true)` 的门禁③**不再采信调用方自报**，改由引擎在 attempt 的
+// **实际工作树**上采集 Git 真源并与报告逐项对账。故本文件里所有 fast_track 放行/拒绝用例统一改用
+// 真 Git 夹具（真仓库 + 真 attempt 工作树 + 真 attempt 记录 + 诚实报告）；策略/门禁纯函数用例
+// 继续用上面的非 git `fixture()`（默认路径与门禁函数本身与 Git 无关）。
+
+/** **门禁层**全绿机器报告（各用例按需覆盖单个字段构造负向对照）。
+ *  本函数的用例只喂 `evaluateFastTrackGate` **纯函数**，不构造也不消费 attempt/工作树**真源段**
+ *  （此处的 `changed_paths` / `product_changed_lines` / `untracked_files` 只是门禁函数的入参，
+ *  与引擎 Git 真源无关）；真源对账用例一律走真 Git 夹具 `makeFastTrackFixture`。 */
+function gateStageReport(over: Record<string, unknown> = {}) {
   return {
     baseline_commit: "86b2c2b",
-    changed_paths: ["core/ops.ts"],
+    changed_paths: ["scripts/test.sh"],
     product_changed_lines: 12,
     untracked_files: 0,
     tests: { exit_code: 0, fail: 0 },
@@ -180,8 +189,10 @@ test("g-311 判据 1：三类非法值经 schema 拒绝，且零副作用（文�
 // ---------------------------------------------------------------------------
 
 test("g-311 判据 2③：产品代码口径（排除 core/tests/**、*.md 与生成物）", () => {
+  // 显式传入本仓库排除前缀，保留 g311 断言集的意义
+  const repoPrefixes = ["core/tests/", "dist/", "core-dist/", "node_modules/", ".worktrees/"];
   const product = ["core/ops.ts", "core/review-policy.ts", "dsh-graph-host/index.js", "schema/SCHEMA.md".replace("SCHEMA.md", "x.json"), "scripts/build.sh"];
-  for (const p of product) assert.equal(isProductCodePath(p), true, `${p} 应计入产品代码`);
+  for (const p of product) assert.equal(isProductCodePath(p, repoPrefixes), true, `${p} 应计入产品代码`);
   const excluded = [
     "core/tests/g311-review-policy.test.ts",
     "README.md",
@@ -193,7 +204,7 @@ test("g-311 判据 2③：产品代码口径（排除 core/tests/**、*.md 与�
     "pnpm-lock.yaml",
     "",
   ];
-  for (const p of excluded) assert.equal(isProductCodePath(p), false, `${p} 应被口径排除`);
+  for (const p of excluded) assert.equal(isProductCodePath(p, repoPrefixes), false, `${p} 应被口径排除`);
 
   const numstat = [
     "10\t2\tcore/ops.ts",
@@ -202,7 +213,7 @@ test("g-311 判据 2③：产品代码口径（排除 core/tests/**、*.md 与�
     "-\t-\tassets/logo.png",
     "7\t7\tdsh-graph-host/index.js",
   ].join("\n");
-  const counted = countProductChangedLines(numstat);
+  const counted = countProductChangedLines(numstat, repoPrefixes);
   assert.equal(counted.lines, 10 + 2 + 0 + 7 + 7, "仅产品代码行数计入（含二进制 0 行）");
   assert.deepEqual(counted.files, ["core/ops.ts", "assets/logo.png", "dsh-graph-host/index.js"]);
   assert.deepEqual(counted.skipped, ["core/tests/g311-review-policy.test.ts", "dsh-graph-host/supervisor-guide.zh.md"]);
@@ -224,7 +235,7 @@ test("g-311 判据 2④：判据「✅已验」判定（allCriteriaVerified / ve
 });
 
 test("g-311 判据 2：门禁四项逐条判定，全绿才放行（含 149/150 边界）", () => {
-  const green = evaluateFastTrackGate(greenReport());
+  const green = evaluateFastTrackGate(gateStageReport());
   assert.equal(green.allowed, true);
   assert.deepEqual(green.checks.map((c) => [c.id, c.ok]), [
     ["tests", true], ["typecheck", true], ["diff_size", true], ["criteria_verified", true],
@@ -232,21 +243,21 @@ test("g-311 判据 2：门禁四项逐条判定，全绿才放行（含 149/150 
   assert.equal(green.evidence.baseline_commit, "86b2c2b", "证据须保留 baseline_commit");
 
   // ① 双条件：exit_code 与 fail 必须同时满足
-  assert.match(evaluateFastTrackGate(greenReport({ tests: { exit_code: 1, fail: 0 } })).failed.join(), /tests/);
-  assert.match(evaluateFastTrackGate(greenReport({ tests: { exit_code: 0, fail: 1 } })).failed.join(), /tests/);
+  assert.match(evaluateFastTrackGate(gateStageReport({ tests: { exit_code: 1, fail: 0 } })).failed.join(), /tests/);
+  assert.match(evaluateFastTrackGate(gateStageReport({ tests: { exit_code: 0, fail: 1 } })).failed.join(), /tests/);
   // ② 类型检查
-  assert.deepEqual(evaluateFastTrackGate(greenReport({ typecheck: { exit_code: 2 } })).failed, ["typecheck"]);
+  assert.deepEqual(evaluateFastTrackGate(gateStageReport({ typecheck: { exit_code: 2 } })).failed, ["typecheck"]);
   // ③ 边界：149 放行、150 拒绝；未跟踪新文件与缺失基线一律拒绝
-  assert.equal(evaluateFastTrackGate(greenReport({ product_changed_lines: FAST_TRACK_MAX_PRODUCT_LINES - 1 })).allowed, true);
+  assert.equal(evaluateFastTrackGate(gateStageReport({ product_changed_lines: FAST_TRACK_MAX_PRODUCT_LINES - 1 })).allowed, true);
   assert.deepEqual(
-    evaluateFastTrackGate(greenReport({ product_changed_lines: FAST_TRACK_MAX_PRODUCT_LINES })).failed,
+    evaluateFastTrackGate(gateStageReport({ product_changed_lines: FAST_TRACK_MAX_PRODUCT_LINES })).failed,
     ["diff_size"],
     `恰好 ${FAST_TRACK_MAX_PRODUCT_LINES} 行必须拒绝（阈值口径为严格小于）`,
   );
-  assert.deepEqual(evaluateFastTrackGate(greenReport({ untracked_files: 1 })).failed, ["diff_size"]);
-  assert.deepEqual(evaluateFastTrackGate(greenReport({ baseline_commit: "" })).failed, ["diff_size"]);
+  assert.deepEqual(evaluateFastTrackGate(gateStageReport({ untracked_files: 1 })).failed, ["diff_size"]);
+  assert.deepEqual(evaluateFastTrackGate(gateStageReport({ baseline_commit: "" })).failed, ["diff_size"]);
   // ④ 判据已验
-  assert.deepEqual(evaluateFastTrackGate(greenReport({ criteria: { all_verified: false } })).failed, ["criteria_verified"]);
+  assert.deepEqual(evaluateFastTrackGate(gateStageReport({ criteria: { all_verified: false } })).failed, ["criteria_verified"]);
 });
 
 test("g-311 判据 2：fail-safe——任一信号取不到即不放行（绝不当成证据为真）", () => {
@@ -257,9 +268,9 @@ test("g-311 判据 2：fail-safe——任一信号取不到即不放行（绝不
     assert.deepEqual(r.failed, allFour, `缺失信号必须逐项计入 failed：${JSON.stringify(empty)}`);
   }
   // 单个字段缺失同样拒绝（不因为其余三项全绿而放行）
-  assert.deepEqual(evaluateFastTrackGate(greenReport({ product_changed_lines: undefined })).failed, ["diff_size"]);
-  assert.deepEqual(evaluateFastTrackGate(greenReport({ tests: { exit_code: 0 } })).failed, ["tests"]);
-  assert.deepEqual(evaluateFastTrackGate(greenReport({ criteria: {} })).failed, ["criteria_verified"]);
+  assert.deepEqual(evaluateFastTrackGate(gateStageReport({ product_changed_lines: undefined })).failed, ["diff_size"]);
+  assert.deepEqual(evaluateFastTrackGate(gateStageReport({ tests: { exit_code: 0 } })).failed, ["tests"]);
+  assert.deepEqual(evaluateFastTrackGate(gateStageReport({ criteria: {} })).failed, ["criteria_verified"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -267,7 +278,14 @@ test("g-311 判据 2：fail-safe——任一信号取不到即不放行（绝不
 // ---------------------------------------------------------------------------
 
 test("g-311 判据 4：契约路径 / 跨 ≥3 顶层区域 / 显式 strict_required 一律判定 strict", () => {
-  const base = { policy: "auto", type: "patch" } as const;
+  // 在显式配置本项目既有闭集参数下保持旧断言集合的精确意义
+  // 保持真实的完整前缀登记，精准保留原 dsh-graph-host/lib/client/board.js 样本
+  const explicitRepoConfig = {
+    contractPaths: ["core/schema.ts", "schema/SCHEMA.md"],
+    regions: ["core", "dsh-graph-host", "dsh-graph-host/lib/client", "dsh-graph-host/prompts", "scripts"],
+    nonProductPrefixes: ["core/tests", "dist", "core-dist", "node_modules", ".worktrees"],
+  } as const;
+  const base = { policy: "auto", type: "patch", ...explicitRepoConfig } as const;
   // M1 契约冻结——显式 auto（甚至 none）不得推翻
   for (const p of ["core/schema.ts", "schema/SCHEMA.md", "./core/schema.ts"]) {
     const d = resolveReviewPolicy({ ...base, changedPaths: [p] });
@@ -275,7 +293,7 @@ test("g-311 判据 4：契约路径 / 跨 ≥3 顶层区域 / 显式 strict_requ
     assert.deepEqual(d.strictReasons, ["contract_change"]);
     assert.equal(d.source, "explicit", "升级不改变基础策略来源标注");
   }
-  assert.equal(resolveReviewPolicy({ policy: "none", type: "patch", changedPaths: ["core/schema.ts"] }).policy, "strict");
+  assert.equal(resolveReviewPolicy({ ...base, policy: "none", type: "patch", changedPaths: ["core/schema.ts"] }).policy, "strict");
   // M2 产品代码规模（149 不触发、150 触发）
   assert.equal(resolveReviewPolicy({ ...base, productChangedLines: 149 }).policy, "auto");
   assert.deepEqual(resolveReviewPolicy({ ...base, productChangedLines: 150 }).strictReasons, ["product_size"]);
@@ -290,16 +308,19 @@ test("g-311 判据 4：契约路径 / 跨 ≥3 顶层区域 / 显式 strict_requ
   assert.equal(resolveReviewPolicy({ ...base, changedPaths: ["docs/a.md", "core/ops.ts", "README.md"] }).policy, "auto");
   assert.equal(resolveReviewPolicy({ ...base, changedPaths: ["schema/SCHEMA.md", "docs/a.md", "README.md"] }).policy, "strict");
   // M4 显式声明（覆盖核心层重写等无法用路径表达的场景）
-  const declared = resolveReviewPolicy({ policy: "none", type: "patch", strictRequired: true });
+  const declared = resolveReviewPolicy({ ...base, policy: "none", type: "patch", strictRequired: true });
   assert.equal(declared.policy, "strict");
   assert.deepEqual(declared.strictReasons, ["declared_strict"]);
 });
 
 test("g-311 判据 4 自洽：用本目标的真实属性解析，结果必须是 strict（不得给自己开快速通道）", () => {
   // 真实属性：type=feature；变更路径含 core/schema.ts（契约）+ core 与 dsh-graph-host 两个区域。
+  // 在显式配置本仓库契约路径与区域下测试自洽性
   const decision = resolveReviewPolicy({
     policy: null,
     type: "feature",
+    contractPaths: ["core/schema.ts", "schema/SCHEMA.md"],
+    regions: ["core", "dsh-graph-host", "lib/client", "prompts", "scripts"],
     changedPaths: [
       "core/review-policy.ts",
       "core/schema.ts",
@@ -322,80 +343,103 @@ test("g-311 判据 4 自洽：用本目标的真实属性解析，结果必须�
 // ---------------------------------------------------------------------------
 
 test("g-311 判据 3：门禁全绿且策略派生为 auto 时快速放行，记 review.fast_track（含四项证据与 baseline）", () => {
-  const { root, goal, file } = fixture({ type: "patch" });
-  const before = readEvents(root).length;
-  const r = resolveAccept(root, goal, {
-    actor: "supervisor:test", verdict: "accept", fast_track: true, machine_report: greenReport(),
-  });
-  assert.equal(r.ok, true);
-  assert.equal(r.fast_track, true);
-  assert.equal(statusOf(file), "delivered", "快速放行后走同一 accept 映射");
+  // g-437：改用真 Git 夹具——门禁③由引擎在该 attempt 的**实际工作树**上自算，报告须与真源逐项一致。
+  const f = makeFastTrackFixture({ type: "patch" });
+  try {
+    const before = readEvents(f.root).length;
+    const r = resolveAccept(f.root, f.goal, {
+      actor: "supervisor:test", verdict: "accept", fast_track: true, machine_report: f.report(),
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.fast_track, true);
 
-  const ft = eventsOf(root, goal, "review.fast_track");
-  assert.equal(ft.length, 1, "必须恰好记一次 review.fast_track");
-  const d = ft[0].details as Record<string, any>;
-  assert.equal(d.policy, "auto");
-  assert.equal(d.baseline, "86b2c2b", "事件必须含 baseline");
-  assert.deepEqual(d.checks, { tests: true, typecheck: true, diff_size: true, criteria_verified: true });
-  assert.deepEqual(Object.keys(d.evidence).sort(), [
-    "changed_paths", "criteria_all_verified", "product_changed_lines",
-    "tests_exit_code", "tests_fail", "typecheck_exit_code", "untracked_files",
-  ].sort(), "事件必须含四项机器证据");
-  assert.equal(d.evidence.criteria_all_verified, true);
-  assert.equal(d.evidence.product_changed_lines, 12);
-  assert.ok(eventsOf(root, goal, "review.passed").length === 1, "仍走既有 review.passed 路径");
-  assert.deepEqual(
-    readEvents(root).slice(before).map((e) => e.event),
-    ["review.fast_track", "goal.transition", "review.passed"],
-    "新增事件序列：机器证据先行 → 迁移 → review.passed",
-  );
+    assert.equal(statusOf(f.file), "delivered", "快速放行后走同一 accept 映射");
+
+    const ft = eventsOf(f.root, f.goal, "review.fast_track");
+    assert.equal(ft.length, 1, "必须恰好记一次 review.fast_track");
+    const d = ft[0].details as Record<string, any>;
+    assert.equal(d.policy, "auto");
+    assert.equal(d.baseline, f.baseline, "事件必须含**真实**基线（不再是假 SHA）");
+    assert.deepEqual(d.checks, { tests: true, typecheck: true, diff_size: true, criteria_verified: true });
+    assert.deepEqual(Object.keys(d.evidence).sort(), [
+      "changed_paths", "criteria_all_verified", "product_changed_lines",
+      "tests_exit_code", "tests_fail", "typecheck_exit_code", "untracked_files",
+    ].sort(), "事件必须含四项机器证据");
+    assert.equal(d.evidence.criteria_all_verified, true);
+    assert.equal(d.evidence.product_changed_lines, f.productLines, "③ 的证据取自 Git 真源");
+    assert.ok(eventsOf(f.root, f.goal, "review.passed").length === 1, "仍走既有 review.passed 路径");
+    const appended = readEvents(f.root).slice(before).map((e) => e.event);
+    assert.deepEqual(
+      appended.slice(0, 3),
+      ["review.fast_track", "goal.transition", "review.passed"],
+      "新增事件序列：机器证据先行 → 迁移 → review.passed",
+    );
+    // 真工作树场景下 accept 映射还会登记 worktree 候选（既有行为，与本次改动无关）
+    assert.deepEqual(appended.slice(3), ["worktree.candidate_registered"], "多出的只能是既有 worktree 候选登记");
+  } finally {
+    f.dispose();
+  }
 });
 
 test("g-311 判据 3 负向对照：门禁任一项失效即拒绝且零副作用（状态不变、无 review.passed/fast_track）", () => {
-  // 门禁 ④ 的信号取自 goal.md（引擎自算），故它的负向对照通过夹具的判据文本失效来构造。
-  const broken: Array<[string, Record<string, unknown>, string[]?]> = [
-    ["① 测试失败非零", { tests: { exit_code: 1, fail: 3 } }],
-    ["① fail 非零", { tests: { exit_code: 0, fail: 1 } }],
-    ["② 类型检查非零", { typecheck: { exit_code: 1 } }],
-    ["③ 变更超阈值", { product_changed_lines: FAST_TRACK_MAX_PRODUCT_LINES }],
-    ["③ 存在未跟踪新文件", { untracked_files: 2 }],
-    ["③ 缺基线", { baseline_commit: "" }],
-    ["④ 判据未全验", {}, ["全量测试全绿", "无回归"]],
+  // g-437：每例都用**诚实报告 + 真 Git 真源**，③ 的对账先过，从而真正落在对应门禁/阈值上；
+  // ④ 的信号取自 goal.md（引擎自算），故它的负向对照通过夹具的判据文本失效来构造。
+  const broken: Array<[string, FastTrackFixtureOptions, (rep: Record<string, any>) => Record<string, unknown>]> = [
+    ["① 测试失败非零", {}, (rep) => ({ tests: { ...rep.tests, exit_code: 1, fail: 3 } })],
+    ["① fail 非零", {}, (rep) => ({ tests: { ...rep.tests, fail: 1 } })],
+    ["② 类型检查非零", {}, (rep) => ({ typecheck: { ...rep.typecheck, exit_code: 1 } })],
+    ["③ 变更达到阈值（真源恰好 150 行）", { changed: [{ path: "scripts/run.sh", lines: 150 }] }, () => ({})],
+    ["③ 存在未跟踪新文件（真源计数 2）", { untracked: ["scratch/a.txt", "b.txt"] }, () => ({})],
+    ["③ 缺基线", {}, () => ({ baseline_commit: "" })],
+    ["④ 判据未全验", { criteria: ["全量测试全绿", "无回归"] }, () => ({})],
   ];
-  for (const [label, over, criteria] of broken) {
-    const { root, goal, file } = fixture({ type: "patch", ...(criteria ? { criteria } : {}) });
-    const before = readEvents(root).length;
-    assert.throws(
-      () => resolveAccept(root, goal, { actor: "supervisor:test", verdict: "accept", fast_track: true, machine_report: greenReport(over) }),
-      (e: unknown) => e instanceof GraphError && /fast_track 被拒/.test((e as Error).message),
-      `${label} 必须被拒绝`,
-    );
-    assert.equal(statusOf(file), "review", `${label}：状态必须不变`);
-    assert.equal(eventsOf(root, goal, "review.passed").length, 0, `${label}：不得出现 review.passed`);
-    assert.equal(eventsOf(root, goal, "review.fast_track").length, 0, `${label}：不得出现 review.fast_track`);
-    assert.equal(readEvents(root).length, before, `${label}：零副作用（事件数不变）`);
+  for (const [label, fixtureOpts, mutate] of broken) {
+    const f = makeFastTrackFixture({ type: "patch", ...fixtureOpts });
+    try {
+      const before = readEvents(f.root).length;
+      const rep = f.report(mutate(f.report() as Record<string, any>));
+      assert.throws(
+        () => resolveAccept(f.root, f.goal, { actor: "supervisor:test", verdict: "accept", fast_track: true, machine_report: rep }),
+        (e: unknown) => e instanceof GraphError && /fast_track 被拒/.test((e as Error).message),
+        `${label} 必须被拒绝`,
+      );
+      assert.equal(statusOf(f.file), "review", `${label}：状态必须不变`);
+      assert.equal(eventsOf(f.root, f.goal, "review.passed").length, 0, `${label}：不得出现 review.passed`);
+      assert.equal(eventsOf(f.root, f.goal, "review.fast_track").length, 0, `${label}：不得出现 review.fast_track`);
+      assert.equal(readEvents(f.root).length, before, `${label}：零副作用（事件数不变）`);
+    } finally {
+      f.dispose();
+    }
   }
   // 报告整体缺失 → fail-safe 拒绝，而不是退回普通 accept
-  const { root, goal, file } = fixture({ type: "patch" });
-  assert.throws(
-    () => resolveAccept(root, goal, { actor: "supervisor:test", verdict: "accept", fast_track: true }),
-    /fast_track 被拒/,
-  );
-  assert.equal(statusOf(file), "review");
+  const f = makeFastTrackFixture({ type: "patch" });
+  try {
+    assert.throws(
+      () => resolveAccept(f.root, f.goal, { actor: "supervisor:test", verdict: "accept", fast_track: true }),
+      /fast_track 被拒/,
+    );
+    assert.equal(statusOf(f.file), "review");
+  } finally {
+    f.dispose();
+  }
 });
 
 test("g-311 判据 3：门禁 ④ 由引擎自算——报告自报「判据已验」无效", () => {
-  const { root, goal, file } = fixture({ type: "patch", criteria: ["全量测试全绿", "无回归"] }); // 均无 ✅已验
-  assert.throws(
-    () => resolveAccept(root, goal, {
-      actor: "supervisor:test", verdict: "accept", fast_track: true,
-      machine_report: greenReport({ criteria: { all_verified: true } }),
-    }),
-    (e: unknown) => e instanceof GraphError && /✅已验 结尾 → false/.test((e as Error).message),
-    "自报 all_verified=true 不得骗过引擎自算",
-  );
-  assert.equal(statusOf(file), "review");
-  assert.equal(eventsOf(root, goal, "review.fast_track").length, 0);
+  const f = makeFastTrackFixture({ type: "patch", criteria: ["全量测试全绿", "无回归"] }); // 均无 ✅已验
+  try {
+    assert.throws(
+      () => resolveAccept(f.root, f.goal, {
+        actor: "supervisor:test", verdict: "accept", fast_track: true,
+        machine_report: f.report({ criteria: { all_verified: true } }),
+      }),
+      (e: unknown) => e instanceof GraphError && /✅已验 结尾 → false/.test((e as Error).message),
+      "自报 all_verified=true 不得骗过引擎自算",
+    );
+    assert.equal(statusOf(f.file), "review");
+    assert.equal(eventsOf(f.root, f.goal, "review.fast_track").length, 0);
+  } finally {
+    f.dispose();
+  }
 });
 
 test("g-311 判据 3/4：策略非 auto 时拒绝快速放行（契约路径 / feature 派生 / 显式声明）", () => {
@@ -408,7 +452,7 @@ test("g-311 判据 3/4：策略非 auto 时拒绝快速放行（契约路径 / f
   for (const [label, opts] of cases) {
     const { root, goal, file } = fixture({ type: opts.type ?? "patch" });
     if (opts.policy) writeProjectConfig(root, { review: { policy: opts.policy } }, "human:gui");
-    const report = greenReport({ changed_paths: opts.paths ?? ["core/ops.ts"], ...(opts.strictRequired ? { strict_required: true } : {}) });
+    const report = gateStageReport({ changed_paths: opts.paths ?? ["scripts/test.sh"], ...(opts.strictRequired ? { strict_required: true } : {}) });
     assert.throws(
       () => resolveAccept(root, goal, { actor: "supervisor:test", verdict: "accept", fast_track: true, machine_report: report }),
       (e: unknown) => e instanceof GraphError && /策略为 strict/.test((e as Error).message),
@@ -450,7 +494,14 @@ const ZH_TOKENS = [
   "`review.fast_track`",
   "零副作用",
   "不是引擎强制",
-  "评审子代理的派发入口（尚未接线）",
+  // g-436：派发入口已接线 ⇒ 旧 pin「尚未接线」是假陈述，改为钉住**新入口与附属记录语义**（仍为真断言）
+  "`graph_start_review(goal, attempt, candidate_commit)`",
+  "`POST /api/dsh-graph/start-review`",
+  "（HTTP `POST /api/dsh-graph/start-review`）；评审是**既有执行 attempt 的附属记录**",
+  "未派独立评审时看板与事件流如实标注「未独立评审」但**不阻断** accept",
+  // r3（Lane A R2-1）：徽标/independent_ok 的口径必须写清是 current_candidate_sha 而非 HEAD
+  "**不等于 HEAD**",
+  "判读时请直接比对 `current_candidate_sha` 与真实 HEAD",
   "不得绕过 `delivered` 人工 gate",
 ];
 const EN_TOKENS = [
@@ -468,7 +519,13 @@ const EN_TOKENS = [
   "`review.fast_track`",
   "zero side effects",
   "not engine enforcement",
-  "reviewer-subagent dispatch entry point yet (not wired up)",
+  // g-436：同上（en 侧）
+  "`graph_start_review(goal, attempt, candidate_commit)`",
+  "`POST /api/dsh-graph/start-review`",
+  "an **attachment record of an existing execution attempt**",
+  "**do not block** accept",
+  "**not HEAD**",
+  "compare `current_candidate_sha` with the real HEAD directly",
   "must not bypass the `delivered` human gate",
 ];
 
@@ -518,6 +575,38 @@ test("g-311 判据 4 负向对照：删掉指南任一片段即红（内存定�
 });
 
 // ---------------------------------------------------------------------------
+// g-436 增量：指南 142 行的「派发入口」陈述必须与实现一致（旧句「尚未接线」已成假陈述）
+// ---------------------------------------------------------------------------
+
+/** 旧句（g-436 接线前为真、现在为假）：改回它必须判红，否则 pin 只是空断言。 */
+const ZH_WIRED_OLD = "——插件层尚无评审子代理的派发入口（尚未接线）。";
+const EN_WIRED_OLD = "—the plugin layer has no reviewer-subagent dispatch entry point yet (not wired up).";
+/** 新句（g-436 接线后的真陈述）：如实给出工具入口、HTTP 路径与「附属记录」语义。 */
+const ZH_WIRED_NEW =
+  "——派发入口**已接线**：工具 `graph_start_review(goal, attempt, candidate_commit)`（HTTP `POST /api/dsh-graph/start-review`）；评审是**既有执行 attempt 的附属记录**——不新建 attempt、不迁移状态、不覆盖作者 `child_id` 与 `results-att-*.md`，结论独立落盘 `<goalDir>/reviews/<review_id>.md`；未派独立评审时看板与事件流如实标注「未独立评审」但**不阻断** accept。";
+const EN_WIRED_NEW =
+  "—the dispatch entry point **is now wired up**: tool `graph_start_review(goal, attempt, candidate_commit)` (HTTP `POST /api/dsh-graph/start-review`), and a review is an **attachment record of an existing execution attempt**: it creates no new attempt, changes no status, never overwrites the author's `child_id` or `results-att-*.md`, and stores its conclusion separately at `<goalDir>/reviews/<review_id>.md`; when no independent review was dispatched the board and the event stream mark it as not independently reviewed but **do not block** accept.";
+
+test("g-311 判据 4（g-436 增量）：指南的派发入口陈述与实现一致——改回旧句必红", () => {
+  const zh = readFileSync(ZH_GUIDE, "utf8");
+  const en = readFileSync(EN_GUIDE, "utf8");
+  // 真断言：新句必须在，旧句必须不在（不是「文件存在」这类空断言）
+  assert.ok(zh.includes(ZH_WIRED_NEW), "zh 指南必须如实给出已接线的派发入口与附属记录语义");
+  assert.ok(en.includes(EN_WIRED_NEW), "en 指南同上");
+  assert.ok(!zh.includes(ZH_WIRED_OLD), "zh 指南不得再出现「尚未接线」假陈述");
+  assert.ok(!en.includes(EN_WIRED_OLD), "en 指南不得再出现 not wired up 假陈述");
+  // 诚实边界保留（负责人明确要求不得顺手删掉）
+  assert.ok(zh.includes("不是引擎强制") && zh.includes("不得绕过 `delivered` 人工 gate"), "zh 边界声明必须保留");
+  assert.ok(en.includes("not engine enforcement") && en.includes("must not bypass the `delivered` human gate"), "en 边界声明必须保留");
+  // 负向对照（内存定点破坏，真实文件逐字节未变）：改回旧句 ⇒ 同一判定器必红
+  assert.ok(guideGaps(zh.replace(ZH_WIRED_NEW, ZH_WIRED_OLD), en).length > 0, "zh 改回旧句必红");
+  assert.ok(guideGaps(zh, en.replace(EN_WIRED_NEW, EN_WIRED_OLD)).length > 0, "en 改回旧句必红");
+  assert.ok(guideGaps(zh.replace(ZH_WIRED_NEW, ""), en).length > 0, "整段删掉必红");
+  assert.equal(readFileSync(ZH_GUIDE, "utf8"), zh, "负向对照不得污染真实指南");
+  assert.equal(readFileSync(EN_GUIDE, "utf8"), en, "负向对照不得污染真实指南");
+});
+
+// ---------------------------------------------------------------------------
 // 插件层接线（工具 + REST 端点）：证明 host 真的把 fast_track/machine_report 透传下去了
 // 本段读 dist/（apply 来自投递副本），运行前需先 `bash scripts/build.sh`（与其余 dist 断言同款）。
 // ---------------------------------------------------------------------------
@@ -559,49 +648,95 @@ async function postRoute(routes: Map<string, any>, path: string, body: unknown) 
 }
 
 test("g-311 判据 3：host graph_resolve_accept 透传 fast_track/machine_report 并回传 fast_track 标记", async () => {
-  const { root, goal, file } = fixture({ type: "patch" });
-  const { byName, callTool } = hostHarness(root);
-  const def = byName.get("graph_resolve_accept")!;
-  assert.deepEqual(
-    Object.keys(def.parameters.properties).sort(),
-    ["fast_track", "force", "goal", "machine_report", "objection", "reason", "verdict"],
-    "工具参数白名单必须含新增的可选参数（additionalProperties=false）",
-  );
-  const out = await callTool("graph_resolve_accept", { goal, verdict: "accept", fast_track: true, machine_report: greenReport() });
-  assert.deepEqual(JSON.parse(JSON.stringify(out)), { ok: true, fast_track: true }, "工具输出必须无损且带 fast_track 标记");
-  assert.equal(statusOf(file), "delivered");
-  const ft = eventsOf(root, goal, "review.fast_track");
-  assert.equal(ft.length, 1);
-  assert.equal((ft[0].details as any).baseline, "86b2c2b");
+  // g-437：工具入口与核心同一路径——用真 Git 夹具证明 host 侧透传后仍走引擎真源对账。
+  const f = makeFastTrackFixture({ type: "patch" });
+  try {
+    const { byName, callTool } = hostHarness(f.root);
+    const def = byName.get("graph_resolve_accept")!;
+    assert.deepEqual(
+      Object.keys(def.parameters.properties).sort(),
+      ["fast_track", "force", "goal", "machine_report", "objection", "reason", "verdict"],
+      "工具参数白名单必须含新增的可选参数（additionalProperties=false）",
+    );
+    const out = await callTool("graph_resolve_accept", { goal: f.goal, verdict: "accept", fast_track: true, machine_report: f.report() });
+    assert.deepEqual(JSON.parse(JSON.stringify(out)), { ok: true, fast_track: true }, "工具输出必须无损且带 fast_track 标记");
+    assert.equal(statusOf(f.file), "delivered");
+    const ft = eventsOf(f.root, f.goal, "review.fast_track");
+    assert.equal(ft.length, 1);
+    assert.equal((ft[0].details as any).baseline, f.baseline, "事件基线取自真实基线");
 
-  // 负向：门禁失效经工具层同样拒绝，且零副作用（工具 execute 为同步包装，异常同步抛出）
-  const bad = fixture({ type: "patch" });
-  const h2 = hostHarness(bad.root);
-  assert.throws(
-    () => h2.callTool("graph_resolve_accept", { goal: bad.goal, verdict: "accept", fast_track: true, machine_report: greenReport({ typecheck: { exit_code: 1 } }) }),
-    /fast_track 被拒/,
-  );
-  assert.equal(statusOf(bad.file), "review");
-  assert.equal(eventsOf(bad.root, bad.goal, "review.fast_track").length, 0);
+    // 负向：门禁失效经工具层同样拒绝，且零副作用（工具 execute 为同步包装，异常同步抛出）
+    const bad = makeFastTrackFixture({ type: "patch" });
+    try {
+      const h2 = hostHarness(bad.root);
+      assert.throws(
+        () => h2.callTool("graph_resolve_accept", { goal: bad.goal, verdict: "accept", fast_track: true, machine_report: bad.report({ typecheck: { ...(bad.report().typecheck as object), exit_code: 1 } }) }),
+        /fast_track 被拒/,
+      );
+      assert.equal(statusOf(bad.file), "review");
+      assert.equal(eventsOf(bad.root, bad.goal, "review.fast_track").length, 0);
+    } finally {
+      bad.dispose();
+    }
+  } finally {
+    f.dispose();
+  }
 });
 
 test("g-311 判据 3：host REST /resolve-accept 同样透传（200 放行 / 400 拒绝）", async () => {
-  const { root, goal, file } = fixture({ type: "patch" });
-  const { routes } = hostHarness(root);
-  const ok = await postRoute(routes, "/api/dsh-graph/resolve-accept", { goal, verdict: "accept", fast_track: true, machine_report: greenReport() });
-  assert.equal(ok.code, 200);
-  assert.deepEqual(ok.body, { ok: true });
-  assert.equal(statusOf(file), "delivered");
+  // g-437：HTTP 入口与工具入口同口径（都落到同一 resolveAccept 真源校验）。
+  const f = makeFastTrackFixture({ type: "patch" });
+  try {
+    const { routes } = hostHarness(f.root);
+    const ok = await postRoute(routes, "/api/dsh-graph/resolve-accept", { goal: f.goal, verdict: "accept", fast_track: true, machine_report: f.report() });
+    assert.equal(ok.code, 200);
+    assert.deepEqual(ok.body, { ok: true });
+    assert.equal(statusOf(f.file), "delivered");
+  } finally {
+    f.dispose();
+  }
 
-  const bad = fixture({ type: "patch" });
-  const h2 = hostHarness(bad.root);
-  const rejected = await postRoute(h2.routes, "/api/dsh-graph/resolve-accept", {
-    goal: bad.goal, verdict: "accept", fast_track: true, machine_report: greenReport({ untracked_files: 1 }),
-  });
-  assert.equal(rejected.code, 400);
-  assert.match(String(rejected.body.error), /fast_track 被拒/);
-  assert.equal(statusOf(bad.file), "review");
-  assert.equal(eventsOf(bad.root, bad.goal, "review.passed").length, 0);
+  const bad = makeFastTrackFixture({ type: "patch", untracked: ["user-scratch.txt"] });
+  try {
+    const h2 = hostHarness(bad.root);
+    const rejected = await postRoute(h2.routes, "/api/dsh-graph/resolve-accept", {
+      goal: bad.goal, verdict: "accept", fast_track: true, machine_report: bad.report(),
+    });
+    assert.equal(rejected.code, 400, "真源里确有未跟踪用户文件 ⇒ 门禁③必须拒绝");
+    assert.match(String(rejected.body.error), /fast_track 被拒/);
+    assert.equal(statusOf(bad.file), "review");
+    assert.equal(eventsOf(bad.root, bad.goal, "review.passed").length, 0);
+  } finally {
+    bad.dispose();
+  }
+});
+
+test("g-437：同一份不诚实报告在工具入口与 HTTP 入口给出同一拒绝（两侧口径一致）", async () => {
+  const f = makeFastTrackFixture({ type: "patch" });
+  try {
+    const dishonest = () => f.report({ product_changed_lines: 0 });
+    let toolError = "";
+    try {
+      await hostHarness(f.root).callTool("graph_resolve_accept", {
+        goal: f.goal, verdict: "accept", fast_track: true, machine_report: dishonest(),
+      });
+    } catch (e) {
+      toolError = String((e as Error).message);
+    }
+    assert.match(toolError, /fast_track 被拒：机器报告与 Git 真源不一致/, "工具入口必须按真源对账拒绝");
+
+    const { routes } = hostHarness(f.root);
+    const rejected = await postRoute(routes, "/api/dsh-graph/resolve-accept", {
+      goal: f.goal, verdict: "accept", fast_track: true, machine_report: dishonest(),
+    });
+    assert.equal(rejected.code, 400);
+    assert.match(String(rejected.body.error), /fast_track 被拒：机器报告与 Git 真源不一致/, "HTTP 入口必须给出同一拒绝口径");
+    assert.equal(statusOf(f.file), "review");
+    assert.equal(eventsOf(f.root, f.goal, "review.fast_track").length, 0);
+    assert.equal(eventsOf(f.root, f.goal, "review.passed").length, 0);
+  } finally {
+    f.dispose();
+  }
 });
 
 test("g-311 判据 1：host graph_get_settings 下发 review.policy 取值提示与读回值", async () => {

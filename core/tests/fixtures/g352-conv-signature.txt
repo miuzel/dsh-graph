@@ -1,6 +1,6 @@
-# g352-conv-signature —— 会话内看板页签元素签名冻结基线（v0.19.7：本版仅 constants 的 PLUGIN_VERSION 0.19.0-alpha→0.19.7 变更；0.19.x 全线的客户端改动（g-425 冷启动注入门禁、g-431 宿主语言跟随、g-427/g-429 Windows 文件系统修复等）均未触及签名正文 ⇒ 正文与 content-sha256 逐字节未变（已用 G352_SIG_DUMP 导出并与旧基线 diff 验证 0 行差异），仅 source-sha256 头随源码变更；本次同步更新本说明文字以反映发布线）
-# source-commit: 0ca63b6c902d717837bf2dc2e291abfa3dd00012
-# source-sha256: 5e80655fcacd7cd7f2ac0599c7cf6c014c7ecbb65a61ab70fe59a8b1fe200117
+# g352-conv-signature —— 会话内看板页签元素签名冻结基线（本行由维护者手工维护，重冻工具会原样保留它、不会覆盖：最近一次变更 g-455 —— v0.19.8 发布准备把 constants.js 的 PLUGIN_VERSION 由 0.19.8-alpha 转正为 0.19.8，命中 source-files 覆盖面（constants）⇒ 仅 source-sha256/provenance 更新；元素签名正文与 content-sha256 经 G352_SIG_DUMP 逐行 diff 确认逐字节未变）
+# source-commit: 6d62af69817682fb6511c14750fb6ca55a5e7afc
+# source-sha256: 727934530eddbac364c9b5684f713ecddc5e053f6de32bb3a81e5c6dfa5dca77
 # source-files: kanban,constants,narrow-width,helpers   # 源 hash 覆盖的模块（决定头部/泳道渲染）
 # content-sha256: 0e6b7094deafa61e0525d617f792a8da30b9aeba1a3c72cb221ee4061f783ed3
 # board-width: 250

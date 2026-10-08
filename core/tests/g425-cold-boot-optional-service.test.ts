@@ -222,6 +222,9 @@ test("g-425 判据12：locale 未注册 + 未声明服务属性访问即抛时�
   assert.deepEqual(registeredSlots, [
     "conversation.session.header.actions",
     "conversation.view",
+    // g-453（返工后）：profile 全局设置页**两个**席位（设置 → 看板设置 / 插件面板组合包配置页）；
+    // 「设置 → 内置插件」标签页席位已按负责人裁定取消 ⇒ 不得再出现在注册面（反向断言见下）。
+    "plugins.bundle.config",
     "settings.section",
     "sidebar.right.pane.tab",
     "sidebar.right.pane.tab.title",
@@ -237,7 +240,33 @@ test("g-425 判据12：locale 未注册 + 未声明服务属性访问即抛时�
   const settingsSection = boot.registrations.find((r) => r.slotName === "settings.section");
   assert.ok(settingsSection, "settings.section 必须注册（设置页 section 命中）");
   assert.equal(settingsSection!.meta.id, "dsh-graph-settings");
+  assert.equal(settingsSection!.meta.order, 60);
   assert.equal(typeof settingsSection!.comp, "function");
+  // g-230（逐字保留的契约，断言强度只增不减）：label 是 locale-following thunk；locale 缺席时走本地
+  // 字典降级 ⇒ 必须真的解析到 `settings.title`（原断言只比对「与 tab 席位同源」，tab 删除后改为钉住取值）。
+  assert.equal(typeof settingsSection!.meta.label, "function", "settings.section label 必须是 locale-following thunk");
+  assert.equal(settingsSection!.meta.label(), "看板设置", "label thunk 必须解析到本地字典的 settings.title");
+
+  // g-453（返工后）：**两个**席位一律经 slots.inject 注册（宿主只在对应页面挂载时才声明该 slot；
+  // apply 里直接 register 会静默 no-op）。
+  for (const seat of ["settings.section", "plugins.bundle.config"]) {
+    assert.ok(boot.calls.includes(`slots.inject@root:${seat}`), `${seat} 必须经 ctx.slots.inject 注册`);
+  }
+
+  // g-453 返工反向断言：负责人裁定取消「设置 → 内置插件」标签页席位 ⇒ 注册面与 inject/register 面
+  // 都不得出现它（未来有人重加该席位时，本节与下方「判别力自证」用例都会必红）。
+  assert.ok(!boot.registrations.some((r) => r.slotName === "settings.plugins.tab"),
+    "settings.plugins.tab 不得被注册（负责人已裁定设置面收敛为两个入口）");
+  assert.ok(!boot.calls.some((c) => c.endsWith(":settings.plugins.tab")),
+    "不得对 settings.plugins.tab 发起 slots.inject / register（无死代码）");
+
+  // g-453 席位②：插件面板 → dsh-graph 组合包配置页（keyed by 包名；summary 按契约返回 null）
+  const bundleConfig = boot.registrations.find((r) => r.slotName === "plugins.bundle.config");
+  assert.ok(bundleConfig, "plugins.bundle.config 必须注册（组合包配置页席位）");
+  assert.equal(bundleConfig!.meta.key, "dsh-graph", "组合包配置页必须按包名 dsh-graph 绑定 key");
+  assert.equal(typeof bundleConfig!.comp, "function");
+  assert.equal(bundleConfig!.comp({ view: "summary" }), null, "summary 视图必须返回 null（列表摘要不渲染配置表单）");
+  assert.ok(bundleConfig!.comp({ view: "page" }), "page 视图必须渲染配置表单");
 
   // 右侧栏 tab：类型面 + 本体 seat + chip 标题 seat
   assert.equal(boot.tabRegistrations.length, 1, "sidebarRightTabs.register 必须调用一次");
@@ -294,8 +323,88 @@ test("g-425 判据12：sidebarRightTabs 缺席（精简 profile/旧宿主）时�
   assert.equal(boot.applyError, null, "右侧栏服务缺席不得拖垮 apply");
   for (const hit of boot.gateHits) assert.ok(CAUGHT_OPTIONAL_PROBES.includes(hit), `门禁命中不得越界：${hit}`);
   assert.deepEqual(boot.registrations.map((r) => r.slotName).sort(),
-    ["conversation.session.header.actions", "conversation.view", "settings.section"]);
+    // g-453（返工后）：设置页两个席位与右侧栏 tab 无关 ⇒ 右侧栏缺席时照旧全注册；
+    // 内置插件 tab 席位已取消，任何 profile 下都不得出现。
+    ["conversation.session.header.actions", "conversation.view", "plugins.bundle.config", "settings.section"]);
   assert.equal(boot.tabRegistrations.length, 0);
+});
+
+// ============================================================================
+// g-453 返工：已取消席位（settings.plugins.tab）的反向守卫 + 判别力自证
+// ============================================================================
+
+/** 两席位策略的**期望注册清单**（与上方主用例逐字同源，变异对照复用同一清单）。 */
+const TWO_SEAT_REGISTERED_SLOTS = [
+  "conversation.session.header.actions",
+  "conversation.view",
+  "plugins.bundle.config",
+  "settings.section",
+  "sidebar.right.pane.tab",
+  "sidebar.right.pane.tab.title",
+];
+
+/**
+ * 合成变异（仅内存字符串，不落盘）：把负责人已裁定取消的「设置 → 内置插件」tab 席位**按旧实现形态
+ * 重新注册**回产物。锚点是保留席位 `plugins.bundle.config` 的 inject 调用 —— 与它同处
+ * `registerGraphSettingsSection(ctx)` 作用域，故 `ctx` / `dgT` / `h` / `GraphSettingsSection` 均可解析。
+ */
+const TAB_SEAT_ANCHOR = 'ctx.slots.inject("plugins.bundle.config"';
+const TAB_SEAT_MUTATION = [
+  'ctx.slots.inject("settings.plugins.tab", () =>',
+  '  ctx.slots.register({ name: "settings.plugins.tab", id: "dsh-graph", order: 60, label: () => dgT("settings.title") },',
+  '    () => h(GraphSettingsSection, {})));',
+  "",
+].join("\n") + "        ";
+
+/** `hideTitle` 静态反向断言的合成变异锚点（该属性仅被已取消的 tab 席位使用）。 */
+const HIDE_TITLE_ANCHOR = 'const titleNode = h("h3"';
+const HIDE_TITLE_MUTATION = `const hideTitle = props?.hideTitle === true;\n      ${HIDE_TITLE_ANCHOR}`;
+
+/** 反向判据的**唯一谓词**：产物求值后不得在注册面与 inject/register 面出现已取消的 tab 席位。 */
+function cancelledTabSeatProblems(bundle: string): string[] {
+  const { plugin } = loadClientPlugin(bundle);
+  const boot = runColdBoot(plugin);
+  const problems: string[] = [];
+  for (const r of boot.registrations) if (r.slotName === "settings.plugins.tab") problems.push(`registered:${r.slotName}`);
+  for (const c of boot.calls) if (c.endsWith(":settings.plugins.tab")) problems.push(`called:${c}`);
+  return problems;
+}
+
+test("g-453 返工判别力自证：重加「设置 → 内置插件」tab 席位后，行为面与静态面反向守卫都必红（合成变异对照）", () => {
+  const bundle = readFileSync(bundlePath, "utf8");
+
+  // ① 真实产物：唯一谓词必须零命中（两席位策略成立）。
+  assert.deepEqual(cancelledTabSeatProblems(bundle), [],
+    "真实产物不得再注册/ inject 已取消的 settings.plugins.tab 席位");
+
+  // ② 行为面判别力：按旧实现把该席位重新注册回去 ⇒ 同一谓词必红；且主用例那条两席位 deepEqual 也必红。
+  assert.ok(bundle.includes(TAB_SEAT_ANCHOR), "变异锚点必须命中产物（否则对照空转）");
+  const regressed = bundle.replace(TAB_SEAT_ANCHOR, TAB_SEAT_MUTATION + TAB_SEAT_ANCHOR);
+  assert.notEqual(regressed, bundle, "变异必须真的改写产物");
+  const problems = cancelledTabSeatProblems(regressed);
+  assert.ok(problems.some((p) => p.startsWith("registered:")),
+    `重加 tab 席位后注册面必须判红，实际 ${JSON.stringify(problems)}`);
+  assert.ok(problems.some((p) => p.startsWith("called:")),
+    `重加 tab 席位后 inject/register 调用面必须判红，实际 ${JSON.stringify(problems)}`);
+  const regressedBoot = runColdBoot(loadClientPlugin(regressed).plugin);
+  assert.throws(
+    () => assert.deepEqual(regressedBoot.registrations.map((r) => r.slotName).sort(), TWO_SEAT_REGISTERED_SLOTS),
+    "主用例的两席位注册清单在「重加 tab」对照下必红（守卫可重加判红）");
+
+  // ③ 静态面判别力：同一条 `doesNotMatch(code, /settings\.plugins\.tab/)` / `hideTitle` 谓词在
+  //    「把旧形态写回源码」的合成变异上必判红（证明它们不是恒真断言）。
+  const settingsSrc = readFileSync(join(clientSrcDir, "settings.js"), "utf8");
+  const settingsCode = stripNonCode(settingsSrc, true);
+  assert.doesNotMatch(settingsCode, /settings\.plugins\.tab/);
+  assert.doesNotMatch(settingsCode, /hideTitle/);
+  const mutatedSeatSrc = settingsSrc.replace(TAB_SEAT_ANCHOR, TAB_SEAT_MUTATION + TAB_SEAT_ANCHOR);
+  const mutatedTitleSrc = settingsSrc.replace(HIDE_TITLE_ANCHOR, HIDE_TITLE_MUTATION);
+  assert.notEqual(mutatedSeatSrc, settingsSrc, "席位源码变异必须真的改写");
+  assert.notEqual(mutatedTitleSrc, settingsSrc, "hideTitle 源码变异必须真的改写");
+  assert.throws(() => assert.doesNotMatch(stripNonCode(mutatedSeatSrc, true), /settings\.plugins\.tab/),
+    "静态面反向断言在「重加 tab 席位」的源码对照下必红");
+  assert.throws(() => assert.doesNotMatch(stripNonCode(mutatedTitleSrc, true), /hideTitle/),
+    "hideTitle 静态反向断言在同型对照下必红（改回旧形态即判红）");
 });
 
 // ============================================================================
@@ -405,6 +514,212 @@ test("g-425 判据13 负向对照：守卫对裸回退样本必报红，对声�
   assert.deepEqual(sample("const a = x ?? appCtx?.get;\n"), []);
   assert.deepEqual(sample("const a = x ?? sctx.sessions;\n"), []);
   assert.deepEqual(sample("const a = x ?? scope.on;\n"), []);
+});
+
+/**
+ * g-453 判据 1/2：「能力判定不得用版本号字符串」的**语义**守卫（Lane B 复核 P2 + 收窄轮）。
+ *
+ * 为什么名字式断言不够（复核给的最小复现）：`const hostVersion = "0.2.0-rc.2"; if (hostVersion >= "0.2") {}`
+ * 是**真实的版本比较**，却不含任何 `compareVersion*` 字样 —— 只按标识符名字（`/\bversion\b/`）判定时它照样全绿。
+ * 故按**语义形态**判定（调用方先抹注释、**保留字符串字面量**——版本号本身就是字符串），命中即点名原因：
+ *   ① **强**版本字面量比较：三段式 `"0.2.0"`、`v` 前缀 `"v1.2.3"`、带预发布后缀 `"0.2.0-rc.1"`；
+ *   ② **两段式** `"0.2"` 比较：**必须与版本样式标识符同行同现**才算命中 —— 否则 `ratio > "1.5"` /
+ *      `price >= "2.0"` 这类与宿主能力无关的普通数值比较会被误红（复核实测）；
+ *   ③ semver 命名空间调用（`semver.satisfies/coerce/gte…`）；
+ *   ④ 版本比较/解析/范围判定调用（`compareVersions(...)` / `parseVersion(...)` / `satisfiesRange(...)` …）；
+ *   ⑤ **手写版本解析**：`parseInt(`/`Number(` 作用于版本样式表达式（`pkg.version.split(".")[0]`、
+ *      `Number(hostVersion)`）—— 手写大版本号比较是最常见的替代写法；
+ *   ⑥ `major/minor/patch` 数值比较（`ver.major >= 2`）；
+ *   ⑦ `switch` 按版本号分派 / `case "0.2":` 版本分支；
+ *   ⑧ 版本前缀判定（`hostVersion.startsWith("0.1")`）。
+ *
+ * **扫描面 = 设置/服务能力路径**：`settings.js` / `helpers.js` / `plugin.js` / `i18n.js`
+ * （`i18n.js` 也做 `optionalService(ctx, "locale")` 服务探测，属同一能力判定面）。
+ * 这不是「全客户端」口径 —— 看板里合法的**展示型**比较（`batch-accept.js` 的 `versionLabel === …`：
+ * 版本泳道标签，与宿主能力无关）刻意不在扫描面内，勿把本口径误读成漏洞。
+ */
+const COMPARISON_OP_RE = String.raw`(?:===|!==|==|!=|>=|<=|>|<)`;
+/** 强版本字面量：三段式 / `v` 前缀两段式 / 任何带预发布（`-rc.1`）或构建（`+x`）后缀者。 */
+const STRONG_VERSION_LITERAL_RE = String.raw`["'](?:v\d+\.\d+(?:\.\d+)*|\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?|\d+\.\d+[-+][0-9A-Za-z.\-]+)["']`;
+/** 弱版本字面量：裸两段式 `"0.2"`（单独出现与普通数值无异，须与版本样式标识符同现才算）。 */
+const WEAK_VERSION_LITERAL_RE = String.raw`["']\d+\.\d+["']`;
+/** 任意版本样式字面量（用于 `case "0.2":` / `startsWith("0.1")` 这类**自身就是版本语义**的位置）。 */
+const ANY_VERSION_LITERAL_RE = String.raw`["']v?\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.\-]+)?["']`;
+/**
+ * 版本样式标识符：`hostVersion` / `PLUGIN_VERSION` / `pkg.version` / `ver` / 裸 `VERSION`。
+ * 刻意**不**匹配 `conversion` 之类：版本后缀必须落在驼峰边界（`[A-Z]ersion`）、下划线/全大写
+ * （`_VERSION`）上，或本身就是 `version`/`ver` 一词。
+ */
+const VERSION_TOKEN_RE = /\b[A-Za-z_$][\w$]*?[a-z0-9_](?:[A-Z]ersion|VERSION)\b|\b[Vv]ersion\w*|\bVERSION\b|\bver\b/;
+/** 版本**数据**形态（即使没有 `version` 字样也说明这行在处理版本号）。 */
+const VERSION_DATA_RE = /\.\s*version\b|\.\s*split\s*\(\s*["']\.["']\s*\)|\bmajor\b|\bminor\b|\bpatch\b/;
+const CAPABILITY_PATH_SOURCES = ["settings.js", "helpers.js", "plugin.js", "i18n.js"];
+
+const VERSION_COMPARISON_SIGNS: Array<{ reason: string; re: RegExp; needsVersionContext?: boolean }> = [
+  { reason: "强版本字面量在比较符右侧", re: new RegExp(`${COMPARISON_OP_RE}\\s*${STRONG_VERSION_LITERAL_RE}`) },
+  { reason: "强版本字面量在比较符左侧", re: new RegExp(`${STRONG_VERSION_LITERAL_RE}\\s*${COMPARISON_OP_RE}`) },
+  {
+    reason: "两段式版本字面量比较（同行有版本样式标识符）",
+    re: new RegExp(`${COMPARISON_OP_RE}\\s*${WEAK_VERSION_LITERAL_RE}|${WEAK_VERSION_LITERAL_RE}\\s*${COMPARISON_OP_RE}`),
+    needsVersionContext: true,
+  },
+  { reason: "semver 命名空间调用", re: /\bsemver\s*\.\s*[A-Za-z_$][\w$]*\s*\(/ },
+  {
+    reason: "版本比较/解析/范围判定调用",
+    re: /\b(?:compareVersions?|compareSemver|versionCompare|versionSatisfies|satisfiesVersion|satisfiesRange|parseVersion|coerceVersion|isVersion(?:Gte|Lte|AtLeast|AtMost)|checkVersion|assertVersion|minVersion)\s*\(/,
+  },
+  {
+    reason: "手写版本解析（parseInt/Number 作用于版本号）",
+    re: /\b(?:parseInt|parseFloat|Number)\s*\(/,
+    needsVersionContext: true,
+  },
+  {
+    reason: "major/minor/patch 数值比较",
+    re: new RegExp(String.raw`\b(?:[A-Za-z_$][\w$]*\s*\.\s*)?(?:major|minor|patch)\b\s*${COMPARISON_OP_RE}`),
+  },
+  { reason: "switch 按版本号分派", re: /\bswitch\s*\(/, needsVersionContext: true },
+  { reason: "switch 的 case 分支按版本字面量分派", re: new RegExp(String.raw`\bcase\s*${ANY_VERSION_LITERAL_RE}\s*:`) },
+  { reason: "版本前缀判定（startsWith 版本字面量）", re: new RegExp(String.raw`\.\s*startsWith\s*\(\s*${ANY_VERSION_LITERAL_RE}`) },
+];
+
+/** 版本样式的**局部变量名**（`const v = pkg.version` / `const major = parseInt(…version…)`）。 */
+function versionishNames(code: string): Set<string> {
+  const names = new Set<string>();
+  for (const m of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^\n;]*)/g)) {
+    if (VERSION_TOKEN_RE.test(m[2]) || VERSION_DATA_RE.test(m[2]) || /["']\d+\.\d+/.test(m[2])) names.add(m[1]);
+  }
+  return names;
+}
+
+/**
+ * 返回命中原因列表（空 = 未发现任何版本号比较的语义形态）。按**行**判定：弱形态（两段式字面量 /
+ * `parseInt|Number` / `switch`）要求该行确有版本上下文（版本样式标识符、版本数据形态或版本携带变量），
+ * 强形态（三段式字面量、semver 调用、`major` 比较、`case "0.2":`、`startsWith("0.1")`）自身即版本语义。
+ */
+function versionComparisonFindings(code: string): string[] {
+  const names = versionishNames(code);
+  const nameRe = names.size > 0 ? new RegExp(`\\b(?:${[...names].join("|")})\\b`) : null;
+  const findings = new Set<string>();
+  for (const line of code.split("\n")) {
+    const versionContext = VERSION_TOKEN_RE.test(line) || VERSION_DATA_RE.test(line) || nameRe?.test(line) === true;
+    for (const { reason, re, needsVersionContext } of VERSION_COMPARISON_SIGNS) {
+      if (!re.test(line)) continue;
+      if (needsVersionContext === true && !versionContext) continue;
+      findings.add(reason);
+    }
+  }
+  return [...findings];
+}
+
+test("g-453：设置 scope 能力探测只用 inject/ctx.get（点分名零属性回退、零版本号比较），两席位全走 slots.inject", () => {
+  const settings = readFileSync(join(clientSrcDir, "settings.js"), "utf8");
+  // 保留字符串字面量（断言里的服务名/席位名本身是字符串），只抹注释
+  const code = stripNonCode(settings, true);
+  // ① 点分服务名 `remote.settings` 只走 optionalServicePath（纯 ctx.get）；经 optionalService 的属性
+  //    回退在 0.2.0-rc.2 上会抛 `cannot get property "remote.settings" without inject`（**基线产物**实测；
+  //    本版 `ctx.inject(["remote.settings"],…)` 声明后可被补偿 ⇒ 承重腿是命名空间发现，见 config-global 守卫）
+  assert.match(code, /optionalServicePath\(ctx, "remote\.settings"\)/);
+  assert.doesNotMatch(code, /optionalService\([^)]*"remote\.settings"/,
+    "点分服务名不得经 optionalService（其属性回退会撞 cordis 注入门禁）");
+  // ② helper 语义钉住：optionalServicePath 只有 ctx.get，**没有**属性回退
+  const helpers = stripNonCode(readFileSync(join(clientSrcDir, "helpers.js"), "utf8"), true);
+  const helperStart = helpers.indexOf("function optionalServicePath(ctx, name)");
+  assert.ok(helperStart >= 0, "helpers.js 必须定义 optionalServicePath（点分服务名读取口径）");
+  const helperBody = helpers.slice(helperStart, helpers.indexOf("\n    }", helperStart));
+  assert.ok(helperBody.includes("ctx?.get?.(name)"), "optionalServicePath 必须经 ctx.get 读取");
+  assert.ok(!helperBody.includes("ctx?.[name]"), "optionalServicePath 不得含属性回退");
+  // ③ 迟到绑定：两个服务键各自 inject 探测（宿主没有该服务 ⇒ 回调不触发、零报错）
+  assert.match(code, /const GRAPH_SETTINGS_SERVICE_KEYS = \["settingsScope", "remote\.settings"\]/);
+  assert.match(code, /ctx\?\.inject\?\.\(\[key\]/);
+  // ④ 同一组件的**两个**席位一律经 ctx.slots.inject（直接 register 在宿主未声明 slot 时静默 no-op）
+  for (const seat of ["settings.section", "plugins.bundle.config"]) {
+    assert.match(code, new RegExp(`ctx\\.slots\\.inject\\("${seat.replace(/\./g, "\\.")}"`),
+      `${seat} 必须经 ctx.slots.inject 注册`);
+  }
+  // ④b g-453 返工：内置插件 tab 席位已取消 ⇒ 源码（去注释）不得再出现该 slot 名，
+  // 也不得残留仅它使用的 `hideTitle` 属性（静态面 fail-closed，判别力自证见下方专用用例）。
+  assert.doesNotMatch(code, /settings\.plugins\.tab/, "settings.js 不得再出现已取消的 tab 席位名");
+  assert.doesNotMatch(code, /hideTitle/, "hideTitle 仅 tab 席位使用 ⇒ 必须随席位一并删除（无死代码残留）");
+  // ⑤ 能力判定禁止比对宿主版本号（dsh-market 的 `settingsScope`→`settings` 改名即静默失效教训）
+  //    5a. 语义判定（新增，覆盖真实版本比较的各种写法）—— 能力判定路径（含 i18n.js 的服务探测面）逐一扫描
+  assert.deepEqual(CAPABILITY_PATH_SOURCES, ["settings.js", "helpers.js", "plugin.js", "i18n.js"],
+    "扫描面 = 设置/服务能力路径（i18n.js 也做 optionalService 服务探测）");
+  for (const name of CAPABILITY_PATH_SOURCES) {
+    const src = readFileSync(join(clientSrcDir, name), "utf8");
+    const findings = versionComparisonFindings(stripNonCode(src, true));
+    assert.deepEqual(findings, [],
+      `${name} 出现版本号比较的语义形态（${findings.join("；")}）—— 能力判定只允许「服务能否取到 / 能否 inject」`);
+  }
+  // 扩面不得误红：i18n.js 现有实现必须真的零命中（不是靠「文件不存在」空转）
+  const i18nSrc = readFileSync(join(clientSrcDir, "i18n.js"), "utf8");
+  assert.ok(i18nSrc.includes("optionalService(ctx"), "i18n.js 必须仍含服务探测（扫描面语义的锚点）");
+  assert.ok(i18nSrc.length > 10_000, `i18n.js 必须真的被读到（实际 ${i18nSrc.length} 字符）`);
+  //    5b. 名字式判定（**原有断言逐字保留，只增不减**）：设置模块连 version 字样都不该有
+  assert.doesNotMatch(code, /\bversion\b/i, "设置能力判定不得出现版本号比较（只允许服务/inject 探测）");
+});
+
+test("g-453 判据1/2 判别力自检：版本比较的语义形态必命中、合法写法不误红（负向对照实测）", () => {
+  const hit = (src: string) => versionComparisonFindings(stripNonCode(src, true));
+
+  // 正向：**必须命中** —— 复核给的最小复现 + 各类真实版本比较写法（含手写大版本解析 / 数值分支 /
+  // switch 版本分派 / 前缀判定 —— 这些是「用版本号做能力判定」最可能的替代写法，原表曾漏掉）
+  const mustHit: Array<[string, string]> = [
+    ["复核最小复现（标识符 + 两段式字面量比较）", `const hostVersion = "0.2.0-rc.2"; if (hostVersion >= "0.2") { }`],
+    ["属性路径版本比较", `if (sctx.settings.version >= "0.1.7") {}`],
+    ["字面量在左侧", `if ("0.2" <= hostVersion) {}`],
+    ["三等号比较带预发布后缀的版本", `if (pkg.version === "0.19.8-alpha") {}`],
+    ["v 前缀版本字面量（独立命中）", `const ok = "v1.2.3" !== apiVersion;`],
+    ["三段式字面量（独立命中）", `if (schemaVersion === "0.2.0") {}`],
+    ["semver.satisfies 范围判定", `if (semver.satisfies(hostVersion, ">=0.2")) {}`],
+    ["semver.coerce 解析", `if (semver.coerce(v)) {}`],
+    ["semver.gte 比较", `if (semver.gte(a, b)) {}`],
+    ["compareVersions 调用", `if (compareVersions(a, b) >= 0) {}`],
+    ["parseVersion 调用", `const ok = parseVersion(host) >= 0;`],
+    ["版本样式标识符参与比较", `if (apiVersion < "0.2") {}`],
+    ["手写大版本解析（parseInt + split + major 比较）", `const major = parseInt(pkg.version.split(".")[0], 10); if (major >= 2) {}`],
+    ["Number(v.split(\".\")[0]) 数值比较", `if (Number(v.split(".")[0]) >= 2) {}`],
+    ["Number(hostVersion) 数值比较", `if (Number(hostVersion) >= 0.2) {}`],
+    ["major/minor/patch 数值比较", `if (ver.major >= 2) {}`],
+    ["switch 按版本号分派", `switch (hostVersion) { default: break; }`],
+    ["switch 的 case 按版本字面量分派", `switch (v) { case "0.2": break; }`],
+    ["版本前缀判定（startsWith）", `if (hostVersion.startsWith("0.1")) {}`],
+  ];
+  for (const [label, src] of mustHit) {
+    assert.ok(hit(src).length > 0, `正向样本必须命中：${label}（实际零命中 = 守卫失效）`);
+  }
+
+  // 合法：**必须不命中** —— 注释里的 version 字样、仅用于展示的 pluginVersion、与版本无关的比较，
+  // 以及**两段式收窄**后必须放行的普通数值比较（`ratio > "1.5"` / `price >= "2.0"`，复核实测的误红）
+  const mustMiss: Array<[string, string]> = [
+    ["注释里的 version 字样", `// host version 0.2.0 不需要比较\nconst a = 1;`],
+    ["仅用于展示的 pluginVersion（不参与比较）", `const pluginVersion = PLUGIN_VERSION;\nrenderLabel(pluginVersion);`],
+    ["普通字符串比较（服务名）", `if (name === "remote.settings") {}`],
+    ["普通数值比较", `if (revision >= 3) {}`],
+    ["字符串包含版本样式片段但不作比较", `if (note.includes("0.2.0")) {}`],
+    ["版本号仅出现在文案里", `const hint = "宿主 0.2.0 起设置服务改名";`],
+    ["两段式误红样例（纯比例阈值）", `if (ratio > "1.5") {}`],
+    ["两段式误红样例（纯价格阈值）", `if (price >= "2.0") {}`],
+    ["含 version 词形的无关标识符（conversion）", `const conversionRate = 0.1; if (conversionRate > "1.5") {}`],
+    ["非版本 switch 分支", `switch (kind) { case "summary": break; }`],
+  ];
+  for (const [label, src] of mustMiss) {
+    assert.deepEqual(hit(src), [], `合法样本不得误红：${label}`);
+  }
+  // 原有的名字式口径对「展示型 pluginVersion / 注释」同样不误红（两个口径在合法样本上一致）
+  for (const [, src] of mustMiss.slice(0, 2)) {
+    assert.doesNotMatch(stripNonCode(src), /\bversion\b/i, "名字式口径对合法样本不得误红");
+  }
+
+  // 负向对照（在**真实源码的副本**上做变异）：插进 `hostVersion >= "0.2"` ⇒ 判定必须报红
+  const real = readFileSync(join(clientSrcDir, "settings.js"), "utf8");
+  assert.deepEqual(versionComparisonFindings(stripNonCode(real, true)), [], "未变异：真实源码零命中");
+  const anchor = "const GRAPH_SETTINGS_NS_CANDIDATES";
+  assert.ok(real.includes(anchor), "变异锚点必须存在（fail-closed：锚点消失即报错，不得静默跳过对照）");
+  const mutated = real.replace(anchor,
+    `const hostVersion = "0.2.0-rc.2";\n  if (hostVersion >= "0.2") { }\n  ${anchor}`);
+  assert.notEqual(mutated, real, "变异必须真的落在源码文本上");
+  assert.ok(versionComparisonFindings(stripNonCode(mutated, true)).length > 0,
+    "把复核的最小复现插进真实源码副本后判定必须报红（否则守卫无判别力）");
 });
 
 test("g-425 判据13（服务端半边）：resolvePromptLanguage 的 locale 兜底必须 ctx.get 优先且门禁下可用", () => {
