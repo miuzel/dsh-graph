@@ -500,7 +500,9 @@ test("g-333 判据 6：非法 state 逐字节不变且无事件；值未变不�
 test("g-333 判据 1：派发侧接线契约——唯一消费者为结构化三态，遗留正则读取器已无调用点", () => {
   assert.match(
     HOST_SRC,
-    /const p = resolveSubagentPrompt\(root, globalSettings\.subagentPrompt\);/,
+    // 第 3 参是 g-440 的 Agent Teams 契约段（默认 null ⇒ 逐字节不变）：**仍走同一个唯一消费者**，
+    // 没有新增第二条提示词装配通道；第 2 参必须仍是 profile 全局值（global 回落由此接线）。
+    /const p = resolveSubagentPrompt\(root, globalSettings\.subagentPrompt(?:, teamsContract)?\);/,
     "派发侧把 profile 全局值交给 core 唯一消费者（global 回落由此接线）",
   );
   assert.doesNotMatch(HOST_SRC, /readPromptOverrideValue\s*\(/, "遗留全文件正则读取器在 host 已无调用点");

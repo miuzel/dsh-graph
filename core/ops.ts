@@ -1205,7 +1205,11 @@ export interface ProjectConfig {
     review: { reviewer: string | null; prompt: string | null };
     pk: { lanes: number | null; sandbox: string | null };
   };
-  supervisor: { automation: Record<string, string | null> };
+  supervisor: {
+    automation: Record<string, string | null>;
+    /** g-440：Agent Teams 最小契约开关（负责人资格判定）。null/未配置 = off。 */
+    agent_teams: boolean | null;
+  };
   prompt_overrides: { subagent: PromptOverride };
   /**
    * g-311/g-435：顶层 review 配置——policy 未配置/空/非三值一律为 null；三项列表支持未配置(null)与显式列表。
@@ -1524,7 +1528,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     return {
       executor: { provider: null, model: null, mode: null },
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
-      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])) },
+      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null },
       prompt_overrides: { subagent: { state: "default", value: null } },
       review: {
         policy: null,
@@ -1562,6 +1566,28 @@ export function readProjectConfig(root: string): ProjectConfig {
       if (cur !== undefined) return cur === null ? null : String(cur);
     }
     return readScalarByPath(lines, path);
+  };
+
+  // g-440：布尔标量读取（fail-safe）。仅接受**真布尔**（YAML `true`/`false`）或行级 `true`/`false`
+  // 字面量；其余（缺失 / null / 字符串 / 数字 / 映射）一律视为**未配置（off）**——绝不把畸形值
+  // 放行为「开启」，也就不会因手写 project.yaml 的 `agent_teams: yes` 之类误开扇出注入。
+  const boolScalar = (path: string[]): boolean | null => {
+    if (parsedDoc && typeof parsedDoc === "object") {
+      let cur: any = parsedDoc;
+      let found = true;
+      for (const p of path) {
+        if (cur && typeof cur === "object" && p in cur) cur = cur[p];
+        else { found = false; break; }
+      }
+      if (found) return typeof cur === "boolean" ? cur : null;
+      return null;
+    }
+    const raw = readScalarByPath(lines, path);
+    if (raw === null) return null;
+    const s = raw.trim().toLowerCase();
+    if (s === "true") return true;
+    if (s === "false") return false;
+    return null;
   };
 
   const list = (path: string[]): ListReadResult => {
@@ -1656,7 +1682,7 @@ export function readProjectConfig(root: string): ProjectConfig {
       review: { reviewer: scal(["defaults", "review", "reviewer"]), prompt: scal(["defaults", "review", "prompt"]) },
       pk: { lanes: lanesRaw === null ? null : parseInt(lanesRaw, 10), sandbox: scal(["defaults", "pk", "sandbox"]) },
     },
-    supervisor: { automation: auto },
+    supervisor: { automation: auto, agent_teams: boolScalar(["supervisor", "agent_teams"]) },
     prompt_overrides: { subagent },
     review: {
       policy: policyResult.value,
@@ -1922,6 +1948,10 @@ function validateConfigPatch(patch: any): void {
         throw new GraphError(`supervisor.automation.${k} 只允许 ${AUTOMATION_VALUES.join("/")}`);
       }
     }
+    // g-440：Agent Teams 开关必须是真布尔或 null（拒绝字符串 "true"/1 等隐式形态）。
+    if ("agent_teams" in s && s.agent_teams !== undefined && s.agent_teams !== null && typeof s.agent_teams !== "boolean") {
+      throw new GraphError("supervisor.agent_teams 只允许 true/false 或 null（未配置）");
+    }
   }
   if ("prompt_overrides" in patch) {
     needObj(patch.prompt_overrides, "prompt_overrides");
@@ -2031,6 +2061,11 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
     for (const k of AUTOMATION_KEYS) {
       if (k in patch.supervisor.automation) setScalar(["supervisor", "automation", k], patch.supervisor.automation[k] ?? "");
     }
+  }
+  // g-440：Agent Teams 开关落盘——true/false 写布尔字面量；null/undefined 清空该叶子（回到未配置=off）。
+  if (patch.supervisor && "agent_teams" in patch.supervisor) {
+    const v = patch.supervisor.agent_teams;
+    setScalar(["supervisor", "agent_teams"], v === true ? "true" : v === false ? "false" : "");
   }
   if (patch.prompt_overrides) {
     for (const key of PROMPT_OVERRIDE_KEYS) {
@@ -7400,6 +7435,189 @@ export function goalReviewState(
   };
 }
 
+/* ==== g-440 fan-out independent-verification guard: extractable block begin ==== */
+// 自包含（不引用模块内任何符号）⇒ 测试可按 begin/end 标记**原文抽取**、在 VM 里求值并做变异对照。
+// fail-closed、无 opt-out：任何「声称独立验证却拿不出可审计留痕」「self_requested / 作者自报冒充独立」
+// 「已放弃/超时计入 PASS」「结论词表越界」都在此判红；**反向边界**（如实标注 self_requested/author 的
+// 合法留痕、无该小节的 off 路径）一律不误红。
+const FANOUT_GUARD = (function () {
+  const HEADINGS = ["## 扇出与独立验证", "## Fan-out and independent verification"];
+  // 与 g-436 统一口径：PASS / BLOCK / UNVERIFIED（**不含** FAIL）。
+  const CONCLUSIONS = ["PASS", "BLOCK", "UNVERIFIED"];
+  const SOURCES = ["independent", "self_requested", "author"];
+  const CLAIM_RE = /^[ \t]*[-*]?[ \t]*(verify|member):[ \t]*(.*)$/i;
+  const KV_RE = /([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S+)/g;
+  const INDEPENDENT_MENTION_RE = /独立验证|独立复核|独立评审|independent verification|independent review|independently verified/i;
+
+  /** 固定小节体（标题行之后、下一个二级标题之前）。无该小节 ⇒ null（off 路径）。 */
+  function sectionBody(text: any) {
+    const lines = String(text == null ? "" : text).split("\n");
+    let start = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (HEADINGS.indexOf(t) >= 0) { start = i + 1; break; }
+    }
+    if (start < 0) return null;
+    const out = [];
+    for (let i = start; i < lines.length; i++) {
+      if (/^##(\s|$)/.test(lines[i])) break; // 下一个二级标题（含 `##` 空标题）
+      out.push(lines[i]);
+    }
+    return out.join("\n");
+  }
+
+  function kv(s: any) {
+    const o: any = {};
+    KV_RE.lastIndex = 0;
+    let m;
+    while ((m = KV_RE.exec(s)) !== null) {
+      o[m[1].toLowerCase()] = m[2].replace(/^["']|["']$/g, "");
+    }
+    return o;
+  }
+
+  function parseClaims(body: any) {
+    const claims: any = [];
+    for (const line of String(body == null ? "" : body).split("\n")) {
+      const m = CLAIM_RE.exec(line);
+      if (!m) continue;
+      claims.push({ kind: m[1].toLowerCase(), raw: line.trim(), fields: kv(m[2]) });
+    }
+    return claims;
+  }
+
+  function problems(text: any, records: any) {
+    const body = sectionBody(text);
+    if (body === null) return [];
+    const claims: any = parseClaims(body);
+    const verify = claims.filter(function (c: any) { return c.kind === "verify"; });
+    const out: any = [];
+    if (verify.length === 0) {
+      // fail-closed：提到了独立验证/独立复核，却给不出可解析的 verify 行 ⇒ 判红。
+      if (INDEPENDENT_MENTION_RE.test(body)) {
+        out.push({ code: "unparsable_independent_claim", message: "扇出与独立验证小节声称了独立验证，但没有可解析的 verify 行（fail-closed）" });
+      }
+      return out;
+    }
+    const byId = new Map();
+    for (const r of Array.isArray(records) ? records : []) {
+      if (r && typeof r.review_id === "string") byId.set(r.review_id, r);
+    }
+    for (const c of claims) {
+      const f = c.fields;
+      if (c.kind === "member") {
+        const conf = String(f.conclusion == null ? "" : f.conclusion).toUpperCase();
+        if (conf && CONCLUSIONS.indexOf(conf) < 0) {
+          out.push({ code: "invalid_conclusion", message: "member 行的 conclusion 不在 PASS/BLOCK/UNVERIFIED 闭集内：" + c.raw });
+        }
+        const st = String(f.status == null ? "" : f.status).toLowerCase();
+        if ((st === "abandoned" || st === "timeout") && conf === "PASS") {
+          out.push({ code: "abandoned_counted_as_pass", message: "已放弃 / 超时的成员不得计入 PASS：" + c.raw });
+        }
+        continue;
+      }
+      const rid = String(f.review == null ? "" : f.review).trim();
+      const source = String(f.source == null ? "" : f.source).trim().toLowerCase();
+      const conf = String(f.conclusion == null ? "" : f.conclusion).trim().toUpperCase();
+      if (!rid) { out.push({ code: "missing_review_record", message: "verify 行未引用 review=<review_id>（无留痕不得声称独立验证）：" + c.raw }); continue; }
+      if (!source) { out.push({ code: "missing_source", message: "verify 行缺少 source=（来源），无法判定独立性（fail-closed）：" + c.raw }); continue; }
+      if (SOURCES.indexOf(source) < 0) { out.push({ code: "invalid_source", message: "verify 行的 source 不在 independent/self_requested/author 闭集内：" + c.raw }); continue; }
+      if (CONCLUSIONS.indexOf(conf) < 0) { out.push({ code: "invalid_conclusion", message: "verify 行的 conclusion 不在 PASS/BLOCK/UNVERIFIED 闭集内：" + c.raw }); continue; }
+      const rec = byId.get(rid);
+      if (!rec) { out.push({ code: "missing_review_record", message: "声称独立验证但没有对应留痕记录 reviews/" + rid + ".md：" + c.raw }); continue; }
+      if (source === "independent") {
+        if (rec.self_requested === true) { out.push({ code: "self_requested_claimed_independent", message: "self_requested（作者自派）不得冒充独立验证：" + c.raw }); continue; }
+        const rc = rec.reviewer_child_id == null ? null : String(rec.reviewer_child_id);
+        const ac = rec.author_child_id == null ? null : String(rec.author_child_id);
+        if (rc && ac && rc === ac) { out.push({ code: "author_self_report_claimed_independent", message: "作者自己的 child 输出不得冒充独立验证：" + c.raw }); continue; }
+        if (rec.independent !== true) { out.push({ code: "record_not_independent", message: "留痕记录不构成可审计的独立评审：" + c.raw }); continue; }
+        if (String(rec.status == null ? "" : rec.status) !== "completed") { out.push({ code: "review_not_completed", message: "留痕评审未完成（status=" + rec.status + "），不得计入 PASS/独立验证：" + c.raw }); continue; }
+        if (String(rec.conclusion == null ? "" : rec.conclusion).toUpperCase() !== conf) { out.push({ code: "conclusion_mismatch", message: "声明结论与留痕记录不一致（记录=" + rec.conclusion + "）：" + c.raw }); continue; }
+      }
+      // source=self_requested/author：**如实标注** ⇒ 不判红（反向边界：合法留痕不误红），但也不构成独立验证。
+    }
+    return out;
+  }
+
+  return { HEADINGS: HEADINGS, CONCLUSIONS: CONCLUSIONS, SOURCES: SOURCES, sectionBody: sectionBody, parseClaims: parseClaims, problems: problems };
+})();
+/* ==== g-440 fan-out independent-verification guard: extractable block end ==== */
+
+/** g-440：可抽取守卫块的定界标记（测试据此刻画源码切片；与块内实现同源，避免测试手抄副本）。 */
+export const FANOUT_GUARD_BLOCK_BEGIN = "/* ==== g-440 fan-out independent-verification guard: extractable block begin ==== */";
+export const FANOUT_GUARD_BLOCK_END = "/* ==== g-440 fan-out independent-verification guard: extractable block end ==== */";
+
+/** 单条评审记录里守卫需要的字段子集（由 g-436 真源 `reviewRecordViews` 投影而来）。 */
+export interface FanoutReviewRecord {
+  review_id: string;
+  independent: boolean;
+  self_requested: boolean;
+  reviewer_child_id: string | null;
+  author_child_id: string | null;
+  conclusion: string | null;
+  status: string;
+}
+
+export interface FanoutGuardProblem {
+  code: string;
+  message: string;
+}
+
+/** g-440：可抽取块的公开句柄（同一实现，供测试/审计消费；不新增任何写路径）。 */
+export const fanoutGuard = FANOUT_GUARD as {
+  HEADINGS: string[];
+  CONCLUSIONS: string[];
+  SOURCES: string[];
+  sectionBody(text: string): string | null;
+  parseClaims(body: string): Array<{ kind: string; raw: string; fields: Record<string, string> }>;
+  problems(text: string, records: FanoutReviewRecord[]): FanoutGuardProblem[];
+};
+
+/** g-440：对一段 attempt 完成摘要文本做「扇出与独立验证」守卫判定（纯函数，无 IO）。 */
+export function fanoutIndependentVerificationProblems(text: string, records: FanoutReviewRecord[]): FanoutGuardProblem[] {
+  return FANOUT_GUARD.problems(text, records);
+}
+
+/** g-440：读取目标目录下全部 attempt 完成摘要（`results-att-<NNN>.md`）。 */
+export function readAttemptResultsTexts(goalDir: string): string[] {
+  if (!existsSync(goalDir)) return [];
+  return readdirSync(goalDir)
+    .filter((f) => /^results-att-\d{3,}\.md$/.test(f))
+    .sort()
+    .map((f) => readFileSync(join(goalDir, f), "utf8"));
+}
+
+/** g-440：结构守卫的审计入口（**只读**，零副作用、非门禁）。
+ *
+ *  交叉核对目标所有 attempt 完成摘要里的「扇出与独立验证」声明与 g-436 真源评审记录：
+ *  缺留痕 / self_requested 冒充独立 / 作者自报顶替独立 / 结论越界或不一致 / 放弃计入 PASS ⇒ 判红。
+ *  按负责人裁决「不做新的强制门禁」，本入口只产出判定结果（供结构守卫测试与主管复核消费），
+ *  **不**阻断 accept、不写事件、不改状态。 */
+export function auditFanoutIndependentVerification(
+  root: string,
+  goalId: string,
+  opts: { resultsTexts?: string[] } = {},
+): { ok: boolean; problems: Array<FanoutGuardProblem & { source: string }> } {
+  const goalFile = findGoalFile(root, goalId);
+  const dir = goalDirOf(goalFile);
+  const texts = Array.isArray(opts.resultsTexts) ? opts.resultsTexts : readAttemptResultsTexts(dir);
+  const records: FanoutReviewRecord[] = reviewRecordViews(root, goalId).map((r) => ({
+    review_id: r.review_id,
+    independent: r.independent,
+    self_requested: r.self_requested,
+    reviewer_child_id: r.reviewer_child_id,
+    author_child_id: r.author_child_id,
+    conclusion: r.conclusion,
+    status: r.status,
+  }));
+  const problems: Array<FanoutGuardProblem & { source: string }> = [];
+  texts.forEach((t, i) => {
+    for (const p of FANOUT_GUARD.problems(t, records)) problems.push({ ...p, source: `results[${i}]` });
+  });
+  return { ok: problems.length === 0, problems };
+}
+
+
 /** 全部 `review.bound` 的真实 child 身份 → 其评审归属（跨目标；用于越权守卫）。 */
 export function reviewerBindings(root: string): Map<string, { review_id: string; goal: string; source_attempt: string; candidate_sha: string }> {
   const out = new Map<string, { review_id: string; goal: string; source_attempt: string; candidate_sha: string }>();
@@ -12612,18 +12830,93 @@ export function composeSubagentPrompt(
   globalPrompt: string,
   override: PromptOverride,
   legacyValue: string,
+  agentTeamsContract: string | null = null,
 ): string | null {
-  if (override.state === "override") return override.value ? override.value : null;
-  if (override.state === "disable") return null;
-  const fallback = resolvePromptOverride(globalPrompt, legacyValue);
-  return fallback ? fallback : null;
+  const base = (() => {
+    if (override.state === "override") return override.value ? override.value : null;
+    if (override.state === "disable") return null;
+    const fallback = resolvePromptOverride(globalPrompt, legacyValue);
+    return fallback ? fallback : null;
+  })();
+  // g-440：启用时才注入的「扇出与独立验证」契约段——与用户材料同槽（同一 `subagentPromptSection`
+  // 注入通道），不新造提示词拼装路径。默认 null ⇒ 逐字等于 g-440 之前的返回值（off 零回归）。
+  const parts = [base, agentTeamsContract].filter((s): s is string => Boolean(s && s.trim()));
+  return parts.length ? parts.join("\n\n") : null;
 }
 
 /** g-333：派发侧**唯一**消费者——从 workspace 根读取 `prompt_overrides.subagent`（结构化三态，
- *  走 `readPromptOverride`）与遗留 `defaults.subagent_prompt`，按闭集优先级合成最终注入文本。 */
-export function resolveSubagentPrompt(root: string, globalPrompt: string): string | null {
-  return composeSubagentPrompt(globalPrompt, readPromptOverride(root, "subagent"), readLegacySubagentPrompt(root));
+ *  走 `readPromptOverride`）与遗留 `defaults.subagent_prompt`，按闭集优先级合成最终注入文本。
+ *  g-440：`agentTeamsContract` 为启用时才注入的契约段（缺省 null ⇒ 与 g-440 之前逐字一致）。 */
+export function resolveSubagentPrompt(root: string, globalPrompt: string, agentTeamsContract: string | null = null): string | null {
+  return composeSubagentPrompt(globalPrompt, readPromptOverride(root, "subagent"), readLegacySubagentPrompt(root), agentTeamsContract);
 }
+
+/* ==========================================================================
+ * g-440：Agent Teams 最小契约（单 attempt 内扇出 + 独立验证者）——启用时的派发注入
+ *
+ * 负责人 2026-10-08 裁决：本版只做**最小契约**——契约文本 + 留痕要求 + 结构守卫 + 默认 off 的开关。
+ * 不引入新调度器、不做一目标多活跃 attempt、不新增强制门禁、不依赖第三方 Agent Teams 插件。
+ *
+ * 契约文本的唯一真源是 `dsh-graph-host/prompts/discipline.{zh,en}.md` 里的**定界块**（HTML 注释
+ * 标记，渲染不可见）。同一文本既出现在主管纪律（常驻文档），也（仅当开关 on）被抽出来注入
+ * **派发提示词**的 `subagentPromptSection` 槽位。默认 off ⇒ 抽取结果为 null ⇒ 派发提示词逐字不变。
+ * ========================================================================== */
+
+/** 契约块在 discipline 资产中的定界标记。 */
+export const AGENT_TEAMS_CONTRACT_BEGIN = "<!-- dsh-graph:agent-teams-contract:begin -->";
+export const AGENT_TEAMS_CONTRACT_END = "<!-- dsh-graph:agent-teams-contract:end -->";
+
+/** 从 discipline 资产抽取契约块（纯函数）。缺标记 / 顺序颠倒 / 空块 ⇒ null（fail-safe：不注入，不报错）。 */
+export function extractAgentTeamsContract(assetText: string): string | null {
+  const text = String(assetText ?? "");
+  const b = text.indexOf(AGENT_TEAMS_CONTRACT_BEGIN);
+  const e = text.indexOf(AGENT_TEAMS_CONTRACT_END);
+  if (b < 0 || e < 0 || e <= b) return null;
+  const inner = text.slice(b + AGENT_TEAMS_CONTRACT_BEGIN.length, e).trim();
+  return inner === "" ? null : inner;
+}
+
+/** 扇出注入决策原因（闭集）。 */
+export type AgentTeamsInjectionReason =
+  | "disabled"
+  | "enabled"
+  | "contract_unavailable"
+  | "unsupported_host"
+  | "shallow_depth";
+
+export interface AgentTeamsInjectionDecision {
+  inject: boolean;
+  reason: AgentTeamsInjectionReason;
+  contract: string | null;
+}
+
+/** g-440：扇出契约注入决策（**纯函数、闭集、fail-safe**）。
+ *
+ *  降级矩阵（不失败、只降级；任一降级都不报错、不阻断）：
+ *  - 未勾选（默认）/ 非布尔真值 ⇒ `disabled`，不注入；
+ *  - 勾选但资产缺契约块 ⇒ `contract_unavailable`，不注入（fail-safe，不编造契约）；
+ *  - 宿主明确不支持扇出（`supportsFanout === false`）⇒ `unsupported_host`，不注入；
+ *  - 已知子代理深度 < 2（`subagentDepth` 为有限数且 < 2）⇒ `shallow_depth`，不注入；
+ *  - 其余（含深度/能力**未知**）⇒ `enabled` 注入，由契约文本自身写明「深度 ≥2 才扇出，否则降级」。
+ *
+ *  诚实边界：harness 未暴露「扇出能力/子代理深度」查询 ⇒ 生产调用点如实传 `null`（未知），
+ *  既不伪称支持也不伪称不支持；`<2` 的降级由执行者按契约文本在结果中如实登记。 */
+export function resolveAgentTeamsInjection(opts: {
+  enabled: boolean;
+  contract?: string | null;
+  supportsFanout?: boolean | null;
+  subagentDepth?: number | null;
+}): AgentTeamsInjectionDecision {
+  if (opts.enabled !== true) return { inject: false, reason: "disabled", contract: null };
+  const contract = opts.contract == null ? null : String(opts.contract).trim();
+  if (!contract) return { inject: false, reason: "contract_unavailable", contract: null };
+  if (opts.supportsFanout === false) return { inject: false, reason: "unsupported_host", contract: null };
+  if (typeof opts.subagentDepth === "number" && Number.isFinite(opts.subagentDepth) && opts.subagentDepth < 2) {
+    return { inject: false, reason: "shallow_depth", contract: null };
+  }
+  return { inject: true, reason: "enabled", contract };
+}
+
 
 /** g-191：子代理模式优先级合成——单次派发 override > workspace project.yaml 明确值 > profile 全局默认 > 系统默认（standard）。
  * 返回生效模式与决策来源，供 attempt 审计。
