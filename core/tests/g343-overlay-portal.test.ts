@@ -42,14 +42,14 @@ test("g-343 契约：浮层统一 portal 到 document.body（逃出看板子树�
     "无 document（vm/SSR 场景）时退化为裸节点，不抛错");
 });
 
-test("g-343 契约：19 个内联浮层调用点全部改走 dgOverlay（无裸 h(\"div\", { style: S.overlay …）)", () => {
+test("g-343 契约：20 个内联浮层调用点全部改走 dgOverlay（无裸 h(\"div\", { style: S.overlay …）)", () => {
   const bare = bundle.match(/h\("div", \{ style: S\.overlay/g) ?? [];
   assert.equal(bare.length, 0, "生成 bundle：不允许残留内联 h(\"div\", { style: S.overlay … 浮层");
   const calls = bundle.match(/dgOverlay\(/g) ?? [];
-  assert.equal(calls.length, 20, "生成 bundle：19 个浮层调用点 + 1 处函数定义 = 20");
+  assert.equal(calls.length, 21, "生成 bundle：20 个浮层调用点 + 1 处函数定义 = 21");
   // g-181 既有契约不回归：guard 仍逐一挂在浮层上
   const guarded = bundle.match(/style: S\.overlay, \.\.\.\w+Guard/g) ?? [];
-  assert.equal(guarded.length, 19, "生成 bundle：19 个父级 overlay 仍全部接 guard");
+  assert.equal(guarded.length, 20, "生成 bundle：20 个父级 overlay 仍全部接 guard");
 });
 
 test("g-343 契约：composerSeat 规则块不得再把 composer 降到 z-index:0（保留 pointer-events 禁用）", () => {

@@ -359,6 +359,17 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
   是负责人刻意为之，**不要刻意恢复/纠正**，按新归属为准；只有非用户改动且与设计冲突
   时才复核/纠正。先核实再行动。
 
+### Agent Teams 最小契约（单 attempt 内扇出与独立验证）
+
+- **默认关闭、负责人资格**：扇出契约由 `project.yaml` 的 `supervisor.agent_teams` 开关控制，**默认 off**；资格判定权在**负责人**（设置面板勾选框），主管与执行者不得自行开启或绕过。off 时派发提示词逐字不变（diff=0），on 时才把 `prompts/discipline.{zh,en}.md` 中的契约段注入**派发提示词**（经既有 `composeSubagentPrompt` / `prompt_overrides.subagent` 通道）。
+- **扇出成员不是 attempt**：单 attempt 内可把只读或互不重叠的工作面并行派给若干**成员**（复用 harness 原生 subagent/workflow）；成员不分配 attempt ID、不建 worktree、不占看板、不改「一目标一活跃 attempt」投影；attempt 生命周期是唯一收口，**不留悬挂成员**（必须已汇总或记为放弃/超时）。
+- **上限与写纪律**：成员数 N ≤ 3；无明显独立并行面时不扇出；写型任务分区（互不重叠文件集）或串行；成员不得自行 commit/branch/push；扇出成本不继承父路由。
+- **独立验证者与词表**：由作者之外的成员复核若干块；**作者自报不得冒充独立验证**（作者自查、作者自派评审（留痕记为 `self_requested`），**不算独立**）；结论词表与评审留痕真源统一为 `PASS` / `BLOCK` / `UNVERIFIED`（不得用 FAIL）。
+- **留痕（A 档）**：执行者在 attempt 完成摘要（`results-att-*.md`）内写固定小节 `## 扇出与独立验证`（en 对偶），逐块登记成员/范围/结论/来源与证据引用；`review` 指向真实 `<goalDir>/reviews/<review_id>.md`（评审留痕真源），**无对应记录不得声称独立验证**；遵守结果面纪律（单行 evidence、禁长文倾倒）。
+- **结构守卫（fail-closed，非门禁）**：`core/ops.ts` 的 `fanoutIndependentVerificationProblems` / `auditFanoutIndependentVerification` 交叉核对声明与留痕——缺记录、`self_requested` 或作者 child 冒充独立、结论越界/不一致、放弃计入 PASS 一律判红；**反向边界**（如实标注 self_requested/author 的合法留痕、未启用时无该小节）不误红。守卫只产出判定，**不阻断 accept、不写事件**（不做新的强制门禁）。
+- **降级（fail-safe：不失败、只降级）**：扇出需子代理深度 ≥ 2；环境不支持或深度 < 2 时静默降级为现有单子代理路径，不报错、不阻断（降级原因落 results）；已勾选但成员失败/超时 ⇒ 如实登记放弃状态，**不得计入 PASS**。宿主未暴露深度/扇出能力查询时如实按「未知」处理，不伪称支持也不伪称不支持。
+- **不做项（逐条）**：不做新调度器；不做一目标多活跃 attempt；不新增强制门禁（不改 `delivered` 人工 gate 与判据门禁）；不依赖第三方 Agent Teams 插件（自研白盒，复用既有 reviewer 留痕真源）。
+
 ## 环境事实与排查
 
 - **本地 dev 的 root 覆盖必须用相对值**（如项目配置的图根目录名，默认 `.dsh-graph`）：绝对路径会被

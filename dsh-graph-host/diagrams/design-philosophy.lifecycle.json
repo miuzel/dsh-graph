@@ -1,0 +1,234 @@
+{
+  "schema_version": 2,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "dsh-graph 目标状态机：8 态与合法迁移",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "dsh-graph-host/diagrams/design-philosophy.lifecycle.html"
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "主链 8 态"
+    },
+    {
+      "id": "gate",
+      "label": "评审与交付"
+    },
+    {
+      "id": "blocked",
+      "label": "阻塞出口"
+    }
+  ],
+  "states": [
+    {
+      "id": "draft",
+      "type": "start",
+      "label": "draft 草稿",
+      "sublabel": "刚建好，还没规划",
+      "lane": "main",
+      "col": 0,
+      "step": "1",
+      "tag": "起点"
+    },
+    {
+      "id": "planning",
+      "type": "active",
+      "label": "planning 规划",
+      "sublabel": "拆任务、定验收标准",
+      "lane": "main",
+      "col": 1,
+      "step": "2",
+      "tag": "规划"
+    },
+    {
+      "id": "collecting",
+      "type": "active",
+      "label": "collecting 收集",
+      "sublabel": "先补齐需要的背景材料",
+      "lane": "main",
+      "col": 2,
+      "step": "3",
+      "tag": "收集"
+    },
+    {
+      "id": "ready",
+      "type": "waiting",
+      "label": "ready 待派发",
+      "sublabel": "标准齐了，等开工许可",
+      "lane": "main",
+      "col": 3,
+      "step": "4",
+      "tag": "门禁已过"
+    },
+    {
+      "id": "in_progress",
+      "type": "active",
+      "label": "in_progress 执行中",
+      "sublabel": "已交给执行子代理动手",
+      "lane": "main",
+      "col": 4,
+      "step": "5",
+      "tag": "执行"
+    },
+    {
+      "id": "review",
+      "type": "decision",
+      "label": "review 待裁决",
+      "sublabel": "产出已交，等人复核",
+      "lane": "gate",
+      "col": 4,
+      "step": "6",
+      "tag": "人工 gate"
+    },
+    {
+      "id": "delivered",
+      "type": "success",
+      "label": "delivered 已交付",
+      "sublabel": "复核通过，正式收下",
+      "lane": "gate",
+      "col": 3,
+      "step": "7",
+      "tag": "交付"
+    },
+    {
+      "id": "blocked",
+      "type": "failure",
+      "label": "blocked 阻塞",
+      "sublabel": "卡住了，必须写明原因",
+      "lane": "blocked",
+      "col": 2,
+      "tag": "必须给原因"
+    },
+    {
+      "id": "blocked_from",
+      "type": "external",
+      "label": "卡住前的状态",
+      "sublabel": "解除后只能回到这里",
+      "lane": "blocked",
+      "col": 3,
+      "tag": "出口由它决定"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "draft",
+      "to": "planning"
+    },
+    {
+      "from": "planning",
+      "to": "collecting"
+    },
+    {
+      "from": "planning",
+      "to": "ready",
+      "label": "不需要收集时直达"
+    },
+    {
+      "from": "planning",
+      "to": "in_progress",
+      "label": "派发后直接进执行"
+    },
+    {
+      "from": "collecting",
+      "to": "ready"
+    },
+    {
+      "from": "collecting",
+      "to": "planning",
+      "label": "回退"
+    },
+    {
+      "from": "collecting",
+      "to": "in_progress",
+      "label": "跳过待派发直接执行"
+    },
+    {
+      "from": "ready",
+      "to": "in_progress",
+      "label": "过三道门槛"
+    },
+    {
+      "from": "ready",
+      "to": "collecting",
+      "label": "退回补充材料"
+    },
+    {
+      "from": "in_progress",
+      "to": "review"
+    },
+    {
+      "from": "in_progress",
+      "to": "collecting",
+      "label": "中断回退"
+    },
+    {
+      "from": "review",
+      "to": "delivered",
+      "label": "裁决通过",
+      "variant": "emphasis"
+    },
+    {
+      "from": "review",
+      "to": "in_progress",
+      "label": "打回返工"
+    },
+    {
+      "from": "delivered",
+      "to": "review",
+      "label": "补充或修 bug"
+    },
+    {
+      "from": "draft",
+      "to": "blocked"
+    },
+    {
+      "from": "planning",
+      "to": "blocked"
+    },
+    {
+      "from": "collecting",
+      "to": "blocked"
+    },
+    {
+      "from": "ready",
+      "to": "blocked"
+    },
+    {
+      "from": "in_progress",
+      "to": "blocked"
+    },
+    {
+      "from": "review",
+      "to": "blocked"
+    },
+    {
+      "from": "blocked",
+      "to": "blocked_from",
+      "label": "解除"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "今天已实现的能力",
+      "items": [
+        "8 个状态与全部允许的状态迁移都是内置的，开箱即用",
+        "每次状态变化都要先过校验：不允许的迁移会当场被拒绝，不会写进看板",
+        "进入执行前要过三道门槛：规则快照已记录、验收标准非空、并经负责人确认",
+        "进入「阻塞」必须写明原因；解除后只能回到卡住前的那个状态",
+        "进入「已交付」需要人裁决通过——这是纪律要求，系统本身不做强制"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "读图口径",
+      "items": [
+        "本图只画今天已实现的流程，不包含产品后续规划",
+        "「阻塞」没有固定出口，它的出口由「卡住前的状态」决定",
+        "「待裁决」有两个去处：裁决通过则交付，打回则回到执行"
+      ]
+    }
+  ]
+}

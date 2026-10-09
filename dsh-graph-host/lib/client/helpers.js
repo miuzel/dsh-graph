@@ -721,6 +721,72 @@
       };
     }
 
+    // ===== g-461：新一轮「正在处理…」占位（**纯显示层派生**：不落盘、不写 status_line/status_state、
+    // 不调 reportStatus、不新增事件）=====
+    // 痛点（负责人 2026-10-09 裁决）：新一轮开始时界面停留在上一轮的**终态词**（如「完成」），
+    // 用户看不出这一轮已经在跑。
+    //
+    // 判定源**唯一**：本区块是卡片/列表 status 行（card.js 的 StatusLine 与内嵌 LiveStrip）与
+    // 看板顶部主管状态栏（supervisor-bar.js 的 LiveStrip）共用的**同一**判定，不允许各写一套。
+    //
+    // 触发可判定、延迟有界：以**会话快照的 running** 为可观测边界（session-hooks.js 的
+    // useLiveStripState 读 snapshot.running；LiveStrip/StatusLine 在渲染期记录本轮起点），
+    // 绝不用「用户输入即认为开始」这类不可验收的口径。最大延迟 = 一个既有刷新节流周期
+    // MIN_REFRESH_INTERVAL（getRefreshInterval，默认 5s；会话快照推送路径更快，≤200ms）。
+    //
+    // 硬门控（g-239/g-247 防线，禁止假运行态回潮）：
+    //  ① running 不为真（idle/终态）⇒ 一律不显示；
+    //  ② 真实报告是 blocked/error ⇒ 一律不显示（structured status 优先语义逐字不变）；
+    //  ③ 真实报告不是终态词（working 长任务）⇒ 保留原文与 g-124 的延续时长 tooltip；
+    //  ④ 本轮已有更晚的真实报告 ⇒ 立即让位。
+    // 故占位**只**覆盖「上一轮遗留的终态词」这一种情形。
+
+    // 占位文案：按 agent 类型固定文案，走 i18n（zh/en 同步）；不显示工具名/目标标题，
+    // 不做自由文本猜测。封闭集合（supervisor | executor），未知类型一律按执行子代理文案。
+    function statusProcessingKey(agentKind) {
+      return agentKind === "supervisor" ? "status.processing.supervisor" : "status.processing.executor";
+    }
+
+    /** g-461：报告身份（statusLine + statusState）——比较「本轮是否出现新的真实报告」的键。 */
+    function statusReportIdentity(statusLine, statusState) {
+      var text = statusLine === null || statusLine === undefined ? "" : String(statusLine).trim();
+      var state = typeof statusState === "string" ? statusState : "";
+      return text + "\u0000" + state;
+    }
+
+    /** g-461：本轮起点观测（**唯一实现**，两处消费共用）。
+     *  本轮起点 = 观测到 running 为真（会话快照 false→true 翻转，或挂载时已在运行）；起点时记下
+     *  当前报告身份，之后身份**一旦变化**即「本轮已有新的真实报告」并**保持**（本轮内不回退）——
+     *  否则同一文本的收尾报告会被误判回「尚无新报告」而再次被占位遮罩。
+     *  渲染期幂等更新：判定与本次 props 同帧，不滞后一个 effect/render 周期（避免多占用真实报告帧）。
+     *  @returns {boolean} 本轮是否已出现更晚的真实报告。 */
+    function useRoundReportBaseline(running, statusLine, statusState) {
+      var reportId = statusReportIdentity(statusLine, statusState);
+      var ref = React.useRef(null);
+      if (!running) ref.current = null;
+      else if (ref.current === null) ref.current = { base: reportId, changed: false };
+      else if (reportId !== ref.current.base) ref.current.changed = true;
+      return ref.current !== null && ref.current.changed === true;
+    }
+
+    /** g-461：占位判定的**唯一真源**（纯函数，无副作用；两处消费共用，不许各写一套）。
+     *  @param statusLine 最近一次真实报告的文本
+     *  @param running 会话/子代理生命周期是否运行中（硬门控）
+     *  @param blocked 生命周期阻塞标志（沿用 formatStatusWithLifecycle 口径）
+     *  @param statusState 结构化状态（working/blocked/done/error；缺失才回退自由文本）
+     *  @param hasNewReportThisRound 本轮是否已出现更晚的真实报告（见 useRoundReportBaseline）
+     *  @param agentKind 'supervisor' 或其它（其它一律用执行子代理文案）
+     *  @returns {null | { key: string, icon: string, isRunning: boolean }} null = 不显示占位，
+     *  既有渲染路径逐字不变。 */
+    function deriveRunningStatusPlaceholder(statusLine, running, blocked, statusState, hasNewReportThisRound, agentKind) {
+      if (running !== true) return null;
+      const formatted = formatStatusWithLifecycle(statusLine, running, blocked, statusState);
+      if (formatted.isBlocked || formatted.isError) return null;
+      if (!formatted.isDone) return null;
+      if (hasNewReportThisRound === true) return null;
+      return { key: statusProcessingKey(agentKind), icon: "⏳ ", isRunning: true };
+    }
+
     // g-283：根据目标类型计算是否默认隔离 worktree 的纯函数（可单测）
     function defaultWorktreeForGoalType(rawType) {
       if (rawType === null || rawType === undefined || rawType === "") {

@@ -420,6 +420,10 @@ export const projectConfigPatchSchema: ObjectSchema = {
           },
           additionalProperties: false,
         },
+        // g-440：Agent Teams 最小契约开关（负责人资格判定）。默认未配置/null = off。
+        // on 时仅在**派发提示词**里注入 discipline 资产中的「扇出与独立验证」契约段；
+        // off 时派发提示词逐字不变（diff=0）。不新增引擎硬门禁、不新建调度器。
+        agent_teams: { type: "boolean", nullable: true },
       },
       additionalProperties: false,
     },

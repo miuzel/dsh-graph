@@ -181,7 +181,18 @@ function compiledPairs(repoRoot: string): FilePair[] {
 test("g-312 判据 4：逐字复制族（build.sh 的 cp 清单）dist 与源逐字节一致", () => {
   // 解析下限校验：清单空掉会让下面的断言变成永真，必须显式防住。
   assert.ok(copyPlan.files.length >= 6, `build.sh 应至少含 6 条 cp 文件拷贝，实际 ${copyPlan.files.length}`);
-  assert.equal(copyPlan.dirs.length, 1, "build.sh 应恰含 1 条 cp -r 目录拷贝（prompts）");
+  // g-462：目录拷贝由 1 条（prompts）增至 2 条（+ diagrams，设计哲学图随包发布）。
+  assert.equal(copyPlan.dirs.length, 2, "build.sh 应恰含 2 条 cp -r 目录拷贝（prompts、diagrams）");
+  assert.deepEqual(
+    copyPlan.dirs.map((d) => d.source).sort(),
+    ["dsh-graph-host/diagrams", "dsh-graph-host/prompts"],
+    "build.sh 的目录拷贝清单发生变化时必须同步复核本断言",
+  );
+  assert.deepEqual(
+    copyPlan.dirs.map((d) => d.target).sort(),
+    ["dist/diagrams", "dist/prompts"],
+    "目录拷贝的目标必须与源一一对应",
+  );
   assert.deepEqual(
     copyPlan.files.map((pair) => pair.source).sort(),
     [

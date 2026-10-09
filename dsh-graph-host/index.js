@@ -17,6 +17,9 @@ import { createHash } from "node:crypto";
 import { relative, join, resolve, dirname, basename, isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+// g-454：读旧 settings.yaml 的 `dsh-graph` 节。`yaml` 是本包**已声明**的运行时依赖
+// （package.json dependencies；core/ops.ts 早已在加载期 import 它，故非新增第三方依赖）。
+import { parse as parseYaml } from "yaml";
 import {
   createGoal,
   normalizeGoalType,
@@ -126,6 +129,8 @@ import {
   versionDetail,
   resolveModelRoute,
   resolveSubagentPrompt,
+  extractAgentTeamsContract,
+  resolveAgentTeamsInjection,
   readProjectConfig,
   writeProjectConfig,
   REVIEW_POLICIES,
@@ -208,6 +213,42 @@ export { boardPayload, versionGoals, backlogGoals, compareVersions } from "./cor
 export const MAX_ATTACHMENT_JSON_BYTES = Math.ceil(MAX_ATTACHMENT_BYTES * 5 / 3) + 1024 * 1024;
 // 普通 JSON REST（add-card/start-collection/unreference/转换/delete 等）统一 body 上限（1MB 足够管理类 payload）。
 export const MAX_JSON_BODY_BYTES = 1024 * 1024;
+
+// ===== g-462：设计哲学交互图的**只读** HTML 路由 =====
+// 现有路由全部返回 JSON；这是第一条 text/html 路由。图的产物由 g-460 定稿在
+// `dsh-graph-host/diagrams/`（自包含 HTML，随包发布到 `dist/diagrams/`）。
+// 安全口径（单一路径入口，**无任何写路径**）：
+//   ① 白名单是**唯一**入口：只有下面这两个文件名可被读取，其余一律拒绝；
+//   ② 未知名 → 404；目录穿越（`../`、绝对路径）、反斜杠、URL 编码变体（`%2e%2e`、`%00`）、
+//      非 `.html` 后缀 → 400。判定只看 **URL 归一化后的 pathname 尾段**，不做任何字符串拼接后
+//      再就读（即使判定失误，也只会在 `diagrams/` 白名单目录里按白名单名读取）。
+export const DESIGN_DIAGRAM_ROUTE = "/api/dsh-graph/diagram";
+export const DESIGN_DIAGRAM_FILES = Object.freeze([
+  "design-philosophy.lifecycle.html",
+  "design-philosophy.workflow.html",
+]);
+/** 合法图名：小写字母/数字起头，只含 `[a-z0-9.-]`，`.html` 结尾。 */
+const DESIGN_DIAGRAM_NAME_RE = /^[a-z0-9][a-z0-9.-]*\.html$/;
+
+/**
+ * 纯函数：把请求 URL 解析为「白名单图名」或一个可上报的拒绝结论。
+ * 不触碰文件系统（只做 URL 归一化 + 白名单判定），故可被单测直接驱动。
+ * @returns {{status: 200, name: string} | {status: 400|404, reason: string}}
+ */
+export function resolveDesignDiagramRequest(rawUrl) {
+  let pathname;
+  try {
+    pathname = new URL(String(rawUrl ?? ""), "http://localhost").pathname;
+  } catch {
+    return { status: 400, reason: "malformed-url" };
+  }
+  if (pathname === DESIGN_DIAGRAM_ROUTE) return { status: 404, reason: "name-required" };
+  if (!pathname.startsWith(DESIGN_DIAGRAM_ROUTE + "/")) return { status: 404, reason: "not-a-diagram" };
+  const name = pathname.slice(DESIGN_DIAGRAM_ROUTE.length + 1);
+  if (!DESIGN_DIAGRAM_NAME_RE.test(name) || name.includes("..")) return { status: 400, reason: "illegal-name" };
+  if (!DESIGN_DIAGRAM_FILES.includes(name)) return { status: 404, reason: "unknown-diagram" };
+  return { status: 200, name };
+}
 
 /** 超限时停止累积（pause/unpipe），但**不销毁 socket**——让 handler 能写出可读的 4xx 响应。
  *  真实 HTTP 下若不 pause 而 destroy，客户端会收到 ECONNRESET 而读不到响应（v6 复现）。 */
@@ -309,6 +350,70 @@ const GRAPH_SETTINGS_DEFAULTS = Object.freeze({
   subagentPrompt: "",
   promptLanguage: "follow",
 });
+
+// ── g-454：宿主代次迁移缺口（旧 settings.yaml 的 `dsh-graph` 节进不了新条目 `dsh-graph-host`）──
+// 只读核实的宿主事实（0.2.0-rc.2，@deepseek-ai/dsh-settings/lib/index.js）：
+//   · `LEGACY_SECTION_ENTRIES` 是该模块内的**模块私有 const 字面量**（:303-308），仅 3 条硬编码
+//     映射（ui-developer-tools→ui-settings、ui-onboarding→ui-settings-general、shell→平台 shell 执行器）；
+//     全模块唯一用法是 :354 `LEGACY_SECTION_ENTRIES[section] ?? section`。
+//   · 该模块**只导出** SettingsForms / SettingsConflictError / redactSecrets（:544）——该表既不导出，
+//     也没有别名、注册或扩展点（标识符全模块只出现 2 次：:303 定义、:354 使用，无 config 读取）。
+//   ⇒ 插件与配置文件**都无法**影响该映射；节名映射不到活动条目时 :355-360 的 update 抛错被 catch 成
+//    一条 warn，值**只留在 settings.yaml.imported** 中（宿主 README.md 亦如此记载）。
+//   本插件 0.1.6 线的设置节名 = 历史 namespace `dsh-graph`，0.2.0 线的条目 id = `dsh-graph-host`
+//   ⇒ 升级用户的旧全局设置（子代理 provider/model/mode/补充提示词、提示词语言）进不了新条目。
+// 补偿（只在**新能力**分支生效，旧能力分支的 namespace 路径本来就按 `dsh-graph` 读，行为不变）：
+//   把旧节的同名字段补进本条目**仅缺失**的字段——一次性、幂等、显式值优先、失败一律降级不阻断。
+const GRAPH_LEGACY_SETTINGS_SECTION = GRAPH_SETTINGS_NS; // "dsh-graph"：旧节的节名
+/** 旧文档的两个候选位置：宿主 rename 之前 / 之后（先命中者优先）。 */
+const GRAPH_LEGACY_SETTINGS_FILES = Object.freeze(["settings.yaml", "settings.yaml.imported"]);
+/** 一次性迁移标记（落 profile 目录，**迁移成功后**才写）：既保证只做一次，也是落盘留痕。 */
+const GRAPH_LEGACY_SETTINGS_MARKER = ".dsh-graph-legacy-settings-migrated";
+const GRAPH_SETTINGS_FIELD_KEYS = Object.freeze(Object.keys(GRAPH_SETTINGS_DEFAULTS));
+
+/**
+ * 只接受**已知字段**的合法非空字符串值；未知键、非字符串、非法枚举、空串一律丢弃（绝不猜测）。
+ * @param section 旧文档里 `dsh-graph` 节的原始值。
+ * @returns 归一化后的可补字段；无可补字段时返回 null。
+ */
+function coerceLegacyGraphSettings(section) {
+  if (!section || typeof section !== "object" || Array.isArray(section)) return null;
+  const out = {};
+  for (const key of GRAPH_SETTINGS_FIELD_KEYS) {
+    if (!Object.hasOwn(section, key)) continue;
+    const value = section[key];
+    if (typeof value !== "string" || value === "") continue;
+    if (key === "subagentMode") {
+      const mode = normalizeSubagentMode(value);
+      if (!mode) continue;
+      out[key] = mode;
+      continue;
+    }
+    if (key === "promptLanguage" && !["follow", "zh", "en"].includes(value)) continue;
+    out[key] = value;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * 「缺失才补」的补丁计算：`user` 是宿主 describe() 给出的 **profile patch 显式值**视图，
+ * 其中**已有该键**即视为用户显式设定（哪怕值是空串）⇒ 绝不覆盖；缺失才取旧值。
+ * 这也是幂等的判定点：无缺失字段 ⇒ 返回 null ⇒ 零写入。
+ * @param user descriptor.user（profile patch 里显式写下的键值）。
+ * @param legacyValues 旧节归一化后的值。
+ * @returns 需补写的字段；无缺失时返回 null。
+ */
+function graphSettingsMissingPatch(user, legacyValues) {
+  if (!legacyValues || typeof legacyValues !== "object") return null;
+  const explicit = user && typeof user === "object" && !Array.isArray(user) ? user : null;
+  const patch = {};
+  for (const [key, value] of Object.entries(legacyValues)) {
+    if (explicit && Object.hasOwn(explicit, key)) continue;
+    patch[key] = value;
+  }
+  return Object.keys(patch).length ? patch : null;
+}
+
 // schema 需 schemastery（@deepseek-ai/*），经守卫式动态 import 构建（见 buildGraphSettingsSchema）。
 function buildGraphSettingsSchema(z) {
   return z.object({
@@ -1272,17 +1377,93 @@ export function apply(ctx, config) {
   // ctx.inject(["settings"], cb) 等待 settings 服务出现（同 dsh-subagent-model-picker 的已上线模式）；
   // settings 服务缺失（无 provider 组合）时不影响看板/工具/模型路由。
   let graphSettingsScope = null;
-  /** 新能力：从设置表单投影里读本插件 entry 的 current 值（entry id 见 cordis.patch.yml）。 */
-  const readGraphSettingsFromForms = (svc) => {
+  // g-454：旧 `settings.yaml(.imported)` 的 `dsh-graph` 节里可补偿的字段（见模块顶部
+  // 「宿主代次迁移缺口」注释）。仅在新能力（表单投影）分支填充。
+  let legacyGraphSettings = null; // { values, sources, home, dir }
+  /** 在设置表单投影里定位本插件条目行（entry id 优先，容忍用户层 patch 改 id）。 */
+  const findGraphSettingsRow = (svc) => {
     try {
       if (typeof svc?.describe !== "function") return null;
       const rows = svc.describe({ redactSecrets: true });
       if (!Array.isArray(rows)) return null;
-      const row = rows.find((r) => r?.ns === GRAPH_SETTINGS_ENTRY_ID || r?.ns === name);
-      return row?.value ?? null;
+      return rows.find((r) => r?.ns === GRAPH_SETTINGS_ENTRY_ID || r?.ns === name) ?? null;
     } catch {
       return null;
     }
+  };
+  /**
+   * g-454 的「显式值优先」判定点：descriptor 必须带 profile patch 视图（`user`）才允许补偿 ——
+   * 拿不到该视图就无法区分「用户显式设定」与「schema 默认」⇒ 宁可不补（fail-safe，绝不蒙写）。
+   */
+  const legacyPatchForRow = (row) => {
+    if (!legacyGraphSettings || !row || !Object.hasOwn(row, "user")) return null;
+    return graphSettingsMissingPatch(row.user, legacyGraphSettings.values);
+  };
+  /** 新能力：从设置表单投影里读本插件 entry 的 current 值（缺失字段用旧节兜底；显式值优先）。 */
+  const readGraphSettingsFromForms = (svc) => {
+    try {
+      const row = findGraphSettingsRow(svc);
+      const value = row?.value ?? null;
+      if (!value) return null;
+      const patch = legacyPatchForRow(row);
+      return patch ? { ...value, ...patch } : value;
+    } catch {
+      return null;
+    }
+  };
+  /**
+   * g-454：读旧 `dsh-graph` 设置节。位置与归属全部**能力探测**（profileContext.home/dir +
+   * 标记文件存在性），不比较任何版本号字面量；无 home、文件缺失、解析失败都只是「没有旧值」。
+   */
+  const readLegacyGraphSettings = () => {
+    const profile = (() => {
+      try { return typeof ctx.get === "function" ? ctx.get("profileContext") : null; } catch { return null; }
+    })();
+    const home = typeof profile?.home === "string" && profile.home ? profile.home : null;
+    if (!home) return null;
+    const dir = typeof profile?.dir === "string" && profile.dir ? profile.dir : home;
+    // 一次性：已成功迁移过（标记已落盘）就不再重读旧文档 ⇒ 用户日后在设置页显式「重置」也不会被复活。
+    try { if (existsSync(join(dir, GRAPH_LEGACY_SETTINGS_MARKER))) return null; } catch { /* 探测失败按「未迁移」处理 */ }
+    const values = {};
+    const sources = [];
+    for (const fileName of GRAPH_LEGACY_SETTINGS_FILES) {
+      const file = join(home, fileName);
+      try {
+        if (!existsSync(file)) continue;
+        const got = coerceLegacyGraphSettings(parseYaml(readFileSync(file, "utf8"))?.[GRAPH_LEGACY_SETTINGS_SECTION]);
+        if (!got) continue;
+        sources.push(file);
+        for (const [key, value] of Object.entries(got)) if (!Object.hasOwn(values, key)) values[key] = value;
+      } catch { /* 单文件不可读/不可解析：跳过，绝不阻断 */ }
+    }
+    return Object.keys(values).length ? { values, sources, home, dir } : null;
+  };
+  /**
+   * g-454：把旧节的**缺失**字段写回本条目（与设置页同一入口：settings.update → profile patch）。
+   * 幂等：写成功后这些键即成为 descriptor.user 的显式值 ⇒ 下次启动无缺失字段（且已落一次性标记）。
+   * 安全：无 update 能力 / 无 user 视图 / 无缺失字段时不写；任何异常只降级告警，绝不阻断看板与工具。
+   */
+  const persistLegacyGraphSettings = async (svc) => {
+    const legacy = legacyGraphSettings;
+    if (!legacy) return;
+    if (typeof svc?.update !== "function") return; // 能力探测：无写入 API ⇒ 只用内存兜底
+    const row = findGraphSettingsRow(svc);
+    if (!row || typeof row.ns !== "string" || row.ns === "") return;
+    const patch = legacyPatchForRow(row);
+    if (!patch) return; // 幂等：无缺失字段 ⇒ 零写入
+    const fields = Object.keys(patch);
+    try {
+      // 带 revision：与用户在设置页的并发编辑冲突时，宿主抛 SettingsConflictError ⇒ 放弃本次写。
+      await svc.update(row.ns, patch, row.revision);
+    } catch (e) {
+      process.stderr.write(`[dsh-graph-host] g-454 旧设置未落盘（已用只读兜底，不影响看板与工具）：${e?.message ?? e}\n`);
+      return;
+    }
+    const trace = `g-454 旧设置已迁移：${GRAPH_LEGACY_SETTINGS_SECTION} 节（来源 ${legacy.sources.join(", ")}）→ 条目 ${row.ns}；字段 ${fields.join(", ")}（均为此前缺失字段，显式值未被覆盖）`;
+    process.stderr.write(`[dsh-graph-host] ${trace}\n`);
+    try {
+      writeFileSync(join(legacy.dir, GRAPH_LEGACY_SETTINGS_MARKER), `${new Date().toISOString()} ${trace}\n`);
+    } catch { /* 标记写不进去：只是下次启动再判定一遍（值幂等 ⇒ 无重复写入） */ }
   };
   const setupGraphSettings = async () => {
     const z = resolveSchemastery();
@@ -1317,11 +1498,16 @@ export function apply(ctx, config) {
       // 新能力：profile 条目 Config 经设置表单投影（0.1.7 线）。值由 `Config` 声明，
       // `configure({ auto: true })` 声明该 entry 允许自动生成设置页（策略可选，失败不致命）。
       if (typeof svc?.describe === "function") {
+        // g-454：宿主内建映射表不含 `dsh-graph` → `dsh-graph-host` 且宿主侧不可影响，故在此
+        // 读旧节：先做**只读兜底**（写入落盘前/失败时读取同样正确），再异步做一次性幂等迁移。
+        try { legacyGraphSettings = readLegacyGraphSettings(); } catch { legacyGraphSettings = null; }
         if (typeof svc.configure === "function") {
           try { sctx.effect(() => svc.configure({ auto: true })); } catch { /* 页面策略可选 */ }
         }
         graphSettingsScope = { get: () => readGraphSettingsFromForms(svc) };
         sctx.effect(() => () => { graphSettingsScope = null; });
+        // 迁移失败不阻断（读取侧已有同源只读兜底），故不 await、只兜住异常。
+        if (legacyGraphSettings) void persistLegacyGraphSettings(svc).catch(() => {});
         return;
       }
       // 两条能力都不可用：如实降级（读取走 project.yaml/继承），不伪装成注册异常。
@@ -1828,7 +2014,27 @@ export function apply(ctx, config) {
     const subagentPromptSection = (() => {
       // g-333：单一消费者（结构化三态 + 遗留回落 + 全局回落），见 resolveSubagentPrompt。
       // g-390：**小节标题是插件内置文本**，按 promptLanguage 本地化；正文 p 是用户材料，逐字不动。
-      const p = resolveSubagentPrompt(root, globalSettings.subagentPrompt);
+      // g-440：Agent Teams 最小契约——**默认 off**。off 时第四个实参为 null ⇒ 与 g-440 之前逐字一致
+      //（diff=0）；on 时才把 discipline 资产里定界的契约段追加进**同一**「子代理补充提示词」槽位
+      //（不新造提示词拼装通道）。降级是**诚实**的：资产缺契约块 / 宿主不支持扇出 / 已知深度 < 2
+      // ⇒ 不注入且不报错；harness 未暴露「扇出能力 / 子代理深度」查询 ⇒ 如实传 null（未知），
+      // 既不伪称支持也不伪称不支持，深度 < 2 的降级由执行者按契约文本在结果中如实登记。
+      const teamsContract = (() => {
+        let enabled = false;
+        try {
+          enabled = readProjectConfig(root)?.supervisor?.agent_teams === true;
+        } catch {
+          return null; // 配置不可读 ⇒ 按「未配置（off）」处理：不注入、不阻断派发。
+        }
+        const decision = resolveAgentTeamsInjection({
+          enabled,
+          contract: extractAgentTeamsContract(readPromptAsset("discipline", promptLanguage)),
+          supportsFanout: null,
+          subagentDepth: null,
+        });
+        return decision.inject ? decision.contract : null;
+      })();
+      const p = resolveSubagentPrompt(root, globalSettings.subagentPrompt, teamsContract);
       return p ? [isEnPrompt ? "## dsh-graph subagent supplementary prompt (profile global / workspace override)" : "## dsh-graph 子代理补充提示词（profile 全局 / workspace 覆盖）", "", p].join("\n") : null;
     })();
     // g-390：模式标题 + 模式策略片段按 promptLanguage 本地化（片段语言由 resolveSubagentMode 的第 4 参传入）。
@@ -3396,6 +3602,12 @@ export function apply(ctx, config) {
               values: ["human", "ai"],
             },
             "executor.mode": SUBAGENT_MODES,
+            // g-440：Agent Teams 最小契约开关（负责人资格判定；默认未配置/null = off）
+            "supervisor.agent_teams": {
+              type: "boolean",
+              default: false,
+              values: [true, false, null],
+            },
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],
             },
@@ -3421,7 +3633,7 @@ export function apply(ctx, config) {
       def: {
         name: "graph_update_settings",
         description: sT("tool.graph_update_settings"),
-        parameters: params({ patch: { type: "object", description: "配置 patch（部分字段，未传字段保持不变）：可包含 executor、defaults、supervisor.automation、prompt_overrides 等" } }, ["patch"]),
+        parameters: params({ patch: { type: "object", description: "配置 patch（部分字段，未传字段保持不变）：可包含 executor、defaults、supervisor.automation、supervisor.agent_teams、prompt_overrides 等" } }, ["patch"]),
       },
       run: (a, ex) => {
         const r = rootFor(ex);
@@ -4361,6 +4573,37 @@ export function apply(ctx, config) {
       },
     },
     // g-183：附件管理端点（列出/读取下载/存储/删除；路径安全与引用守卫由 core 层强制）
+    // g-462：设计哲学交互图只读服务（本插件唯一的 text/html 路由）。
+    // prefix 路由：尾段由 resolveDesignDiagramRequest 按白名单裁决（见模块顶部常量）。
+    // 只读 `readFileSync`，没有任何写路径；命中即内联返回（图是随包发布的静态资产）。
+    {
+      kind: "prefix",
+      path: DESIGN_DIAGRAM_ROUTE,
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "method not allowed" });
+          const decision = resolveDesignDiagramRequest(req.url);
+          if (decision.status !== 200) return json(res, decision.status, { error: decision.reason });
+          let body;
+          try {
+            body = readFileSync(new URL(`./diagrams/${decision.name}`, import.meta.url));
+          } catch {
+            // 白名单名合法但产物未随包发布（构建漏拷）⇒ 404，绝不回落到别的路径。
+            return json(res, 404, { error: "diagram not packaged" });
+          }
+          res.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            "content-length": String(body.length),
+            "cache-control": "no-cache",
+            "x-content-type-options": "nosniff",
+          });
+          if (req.method === "HEAD") { res.end(); return; }
+          res.end(body);
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
     {
       path: "/api/dsh-graph/attachments",
       handler: (req, res) => {

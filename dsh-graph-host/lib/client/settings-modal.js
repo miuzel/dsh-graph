@@ -26,7 +26,12 @@
           review: { reviewer: normStr(form?.defaults?.review?.reviewer), prompt: normStr(form?.defaults?.review?.prompt) },
           pk: { lanes: Number.isInteger(lanesNum) ? lanesNum : normStr(lanesRaw), sandbox: normStr(form?.defaults?.pk?.sandbox) },
         },
-        supervisor: { automation: auto },
+        supervisor: {
+          automation: auto,
+          // g-440：Agent Teams 开关三态归一——真布尔 true/false 保留；null/未配置/畸形一律归一为
+          // null（＝off）。归一后同态不产生假脏（判据 2），且绝不会把畸形值回填成「开启」。
+          agent_teams: form?.supervisor?.agent_teams === true ? true : form?.supervisor?.agent_teams === false ? false : null,
+        },
         prompt_overrides: { subagent: normalizePromptOverrideDraft(po) },
         review: {
           policy: normalizeReviewPolicyDraft(form?.review?.policy),
@@ -190,6 +195,14 @@
       leaf(["defaults", "pk", "sandbox"]);
       const autoKeys = new Set([...Object.keys(base.supervisor?.automation ?? {}), ...Object.keys(draft.supervisor?.automation ?? {})]);
       for (const k of autoKeys) leaf(["supervisor", "automation", k]);
+      // g-440：`null` = 未配置（off）。无基线（旧客户端全表语义）且草稿也是 null ⇒ **无话可说**，
+      // 不提交该叶子（避免把「未配置」实体化进 project.yaml、产生无谓的行改写）；只有在
+      // 「草稿是布尔」或「基线是布尔而草稿回 null（= 显式清空）」时才提交。
+      {
+        const to = getLeafPath(draft, ["supervisor", "agent_teams"]);
+        const from = getLeafPath(base, ["supervisor", "agent_teams"]);
+        if (to === true || to === false || from === true || from === false) leaf(["supervisor", "agent_teams"]);
+      }
       leaf(["prompt_overrides", "subagent"]);
       leaf(["review", "policy"], (v) => (v === "" ? null : v));
       for (const key of REVIEW_LIST_KEYS) {
@@ -649,6 +662,20 @@
             }),
             h("label", { htmlFor: "dg-live-display", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, dgT("settings.liveDisplay")),
             h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.liveDisabledHint"))),
+
+          // g-440：Agent Teams 最小契约开关（负责人资格判定）。**默认 off**；off 时派发提示词逐字
+          // 不变（diff=0），on 才把 discipline 资产中的契约段注入派发提示词。归属主区而非高级设置：
+          // 与 review.policy 同理，该字段被派发链路真实消费（core `resolveAgentTeamsInjection`）。
+          h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0, marginTop: 8 } },
+            h("input", {
+              id: "dg-agent-teams",
+              type: "checkbox",
+              checked: form.supervisor?.agent_teams === true,
+              onChange: (e) => set(["supervisor", "agent_teams"], e.target.checked),
+              style: { flexShrink: 0 },
+            }),
+            h("label", { htmlFor: "dg-agent-teams", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, dgT("settings.agentTeams")),
+            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.agentTeamsHint"))),
 
           h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
 

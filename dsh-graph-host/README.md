@@ -12,7 +12,7 @@
   <a href="https://raw.githubusercontent.com/miuzel/dsh-graph/main/dsh-graph-host/package.json"><img src="https://img.shields.io/node/v/dsh-graph?style=flat-square" alt="node engine"></a>
   <a href="https://awesome-dsh-plugin.com"><img src="https://img.shields.io/badge/awesome--dsh--plugin-listed-2f6feb?style=flat-square" alt="awesome-dsh-plugin listed"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license MIT"></a>
-  <a href="https://raw.githubusercontent.com/miuzel/dsh-graph/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.1--0-2f6feb?style=flat-square" alt="DSH host range"></a>
+  <a href="https://raw.githubusercontent.com/miuzel/dsh-graph/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.2--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
 ---
@@ -40,27 +40,27 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**当前版本**：v0.19.8（本次发布准备产物；`0.19.8-alpha` 为开发线版本串）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+**当前版本**：v0.20.0（本次发布准备产物；`0.20.0-alpha` 为开发线版本串）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
-**宿主兼容范围**：`engines.dsh` 声明 `>=0.1.5-rc.2 <0.2.1-0`（上界 `-0` 排除 `0.2.1` 的一切预发布与正式版），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
+**宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.2-0`（上界 `-0` 排除 `0.2.2` 的一切预发布与正式版；整条 `0.2.1` 线已在范围内），`engines.dsh` 供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。⚠️ 宿主的**安装/启动门禁只读 `peerDependencies`、不读 `engines.dsh`**，故两处必须同步放宽（只改 `engines.dsh` 无效）。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
 **平台状态**：
 
 | 平台 | 本版状态 |
 |------|----------|
 | Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0） |
-| 原生 Windows | ✅ **支持（已在原生 Windows 上实测）**：v0.19.8 发布候选包真机门禁 **PASS** —— `win-smoke` 通过 15 / 失败 0 / 告警 1，T3 看板文件系统生命周期 32/32 步，台账对账 2 / 0 / 0（台账 66 项 / 258 处命中、未登记 0）；唯一告警为设计内（发布包不含产品源码 ⇒ 台账对账在仓库根完成）。逐字报告见 [platform-gate §7.6](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)；更早版本的真机记录见同页 §7.3 / §7.4 |
-| macOS | ✅ **支持（已在原生 macOS 上实测）**：v0.19.8 发布候选包真机门禁在原生 macOS（`darwin/arm64`）**PASS** —— `win-smoke` 通过 15 / 失败 0 / 告警 1，T3 看板文件系统生命周期 32 步；唯一告警为设计内（发布包不含产品源码 ⇒ 台账对账在仓库根完成）；台账层未在 macOS 单独执行（Mac 上无源码树、不在该机编译），台账对账由仓库根轮覆盖（通过 2 / 失败 0 / 告警 0，台账 66 项 / 258 处命中、未登记 0）。逐字报告见 [platform-gate §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)；更早版本的真机记录见同页 §7.4 |
+| 原生 Windows | ✅ **已实测通过**：原生 Windows 真机（`win32/x64`）+ Node `v24.21.0` + 宿主 DSH `0.2.0-rc.2`，本版终版包上 T1–T5 **通过 15 / 失败 0 / 告警 1**、T3 看板文件系统生命周期 **32/32 步**（唯一告警为设计内：`--tarball` 轮包内无产品源码 ⇒ 台账对账另在仓库根完成，**非缺陷**）。执行经 WSL↔Windows 互操作，该链路与纯原生用户场景的差异已如实登记（[platform-gate §7.8](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)）。 |
+| macOS | ⏳ **本版未验证**：`v0.20.0` 发布候选包**尚未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**。历史记录见 [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)，同样只覆盖 v0.19.8 及更早的产品代码。 |
 
 三平台使用同一安装包。**已知限制**：① macOS 默认文件系统 APFS 大小写不敏感 —— 仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
-**最新亮点（v0.19.8）**
+**最新亮点（v0.20.0）**
 
-- **设置页修好、也补齐了**：升级宿主后设置页不再变空；全局设置在两处入口（「设置」里的插件页与右侧栏插件入口）都能打开，读写的是同一份配置；评审条件（按项目目录结构登记的区域、冻结契约、哪些算产品改动）可直接查看与编辑，尚未按本项目校准时明确标注为「缺省（普适）」；主管自动化开关也不再只是存着。
-- **「机器快速放行」的证据不再只靠自报**：改动了多少行、还有没有未跟踪文件，改由引擎自己从版本库取，采集不到就不放行；没有登记过的区域自动升级为严格评审；评审子代理可以从正式入口独立派发，缺独立评审的交付会在看板上如实标注（不阻断放行）。
-- **长期记忆只有一个真源**：记忆统一由结构化条目管理（常驻 / 按需两档的语义与权限不变），不再要求手工维护长期记忆索引文件；历史文档保留为可选说明，可一次性、可追溯地迁入，重复执行不会重复导入。
-- **插件不再污染用户项目、也不再假设本仓库的结构**：插件自有的目录与工作树不会再把用户仓库判成「有未提交改动」，也不会再挡住机器快速放行；面向模型与用户的提示词、工具描述去掉了只适用于本仓库的路径、分支与脚本假设。
-- **跨看板更安全、测试结论更可信**：同一仓库存在多块看板时，同号的目标不会互相误复用、也不会误删对方的工作树；自定义图根下的卡片路径指向真正的那张卡片；整套测试不再有间歇性假红，「全绿」不再受概率影响。
+- **支持 DSH 0.2.1 系宿主**：宿主兼容范围放宽为 `>=0.1.5-rc.2 <0.2.2-0` —— 上界 `-0` 排除 `0.2.2` 的一切预发布与正式版，整条 `0.2.1` 线纳入范围，并已在隔离实例上以 `0.2.1-alpha.2` **未使用**任何版本豁免完成安装与启动。⚠️ 宿主的安装/启动门禁**只读 `peerDependencies`、不读 `engines.dsh`**，两处声明必须**同步**放宽——只改前者无效，安装期仍会被硬拒绝。
+- **升级宿主后旧设置不再丢**：旧 `settings.yaml` 里的 `dsh-graph` 节会一次性、幂等地补进新的 `dsh-graph-host` 条目（重复执行不会重复导入，读取仍保留回退）；该升级路径已在真实宿主上做过端到端验证。
+- **Agent Teams 协作模式（默认关闭）**：同一次执行内可扇出多个成员并行推进，并指定独立验证者对结果交叉核验；开关关闭时提示词与行为与旧版逐字一致。
+- **不再产出坏数据、也不再静默失效**：设置写入的父级不是块式映射时直接拒绝（不再返回成功却写出非法 YAML）；工作树归属标记改为原子写入，中途失败不再留下半个标记、导致清理面保护静默失效。
+- **设计过程看得见、状态不用猜**：看板标题栏新增「Graph 设计」入口，弹窗内嵌两张可交互流程图（随包发布、经只读路由提供），并有中英双语文档说明开发流程；新一轮对话开始时先显示「正在处理…」占位，不必盯着空白等首字。
 
 完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -72,9 +72,9 @@ dsh plugin --profile <profile-name> add dsh-graph
 `web boot: N entry did not activate` / `<插件名>: failed` —— 插件的 host 半边（`graph_*` 工具）正常、热加载也正常，只有浏览器半边不激活。
 
 **成因**：`dsh.client.inject` **不是「名录」，而是加载顺序边**。浏览器端 loader
-（`@deepseek-ai/dsh-client-modules/lib/client.js:655-658`）只对 inject 中**已存在于客户端清单**的包名做前置加载，
+（`@deepseek-ai/dsh-client-modules/lib/client.js`）只对 inject 中**已存在于客户端清单**的包名做前置加载，
 名字不在清单里就**静默跳过**。而 `@deepseek-ai/dsh-client-runtime` 自 dsh 0.2.x 起**不再随宿主分发**
-（在 dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 的安装树里均无此包），但它的包清单**仍声明 `dsh.client`**：
+（在 dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-alpha.2 的安装树里均无此包），但它的包清单**仍声明 `dsh.client`**：
 升级过程中若这个旧条目/旧副本残留在 profile 里，它会**重新变成一条客户端清单行**；该行的加载失败会被级联成
 `client-modules: "<插件>" not loaded because dependency "…" failed`，把**任何仍声明它的插件**一起拖死。
 干净安装没有这一行，所以不复现。**dsh-graph 已删除该声明**（即使残留仍在，本插件也不再是它的消费者）。
@@ -133,6 +133,16 @@ curl -sL -b "" "<URL>" | grep -o '"@deepseek-ai/dsh-client-runtime"' | head -1
   支持生成包含看板投影、长期记忆与关键环境事实的 `HANDOFF.md`，换会话后新 Supervisor 可幂等认领上下文并快速接管。
 - **现代交互与双主题适配**：
   完整适配深色与浅色双套主题（自动跟随 DSH 全局主题变量）；外部数据更新时支持微光动画提醒（支持系统的 `prefers-reduced-motion` 无障碍降级）；弹窗拖拽防误关。
+
+---
+
+### 设计哲学（面向首次接触本插件的用户）
+
+想先弄懂「dsh-graph 为什么这样组织开发」——目标生命周期与状态机、判据门禁与人工 gate、派发与隔离三件套、
+attempt 与结果面、独立复核与留痕真源、版本泳道与发布红线、记忆分级、事件先行——请读
+[设计哲学（中文）](https://github.com/miuzel/dsh-graph/blob/main/docs/design-philosophy.zh.md)：
+它逐条给出代码真源引用，并附 archify 交互式图（内联静态预览 + 可交互 HTML）；图只画今天已实现的
+状态流转与角色分工，图内不含文件、函数或内部产物名，1.0 路线见文档 §13。
 
 ---
 
@@ -273,27 +283,27 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**Current version**: v0.19.8 (this release-preparation artifact; `0.19.8-alpha` was the development version string — not yet published to npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+**Current version**: v0.20.0 (this release-preparation artifact; `0.20.0-alpha` was the development version string — not yet published to npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
-**Host compatibility range**: `engines.dsh` declares `>=0.1.5-rc.2 <0.2.1-0` (the `-0` upper bound excludes every `0.2.1` prerelease and final release); host-aware markets such as dsh-market read it for card display and install/update pre-flight. **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, and `0.2.0-rc.1`; `0.2.0-rc.2` (verified by the maintainer on 2026-09-30). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
+**Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` declare `>=0.1.5-rc.2 <0.2.2-0` in lockstep (the `-0` upper bound excludes every `0.2.2` prerelease and final release; the entire `0.2.1` line is now inside the range); `engines.dsh` is what host-aware markets such as dsh-market read for card display and install/update pre-flight. ⚠️ The host's **install/boot gate reads `peerDependencies` only, never `engines.dsh`**, so both fields must be widened together (widening `engines.dsh` alone has no effect). **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
 **Platform status**:
 
 | Platform | Status for this release |
 |----------|-------------------------|
 | Linux / WSL2 | ✅ Verified on-device (this release's full test suite: 0 failures) |
-| Native Windows | ✅ **Supported (verified on native Windows)**: the v0.19.8 release candidate **passed** the on-device gate — `win-smoke` 15 passed / 0 failed / 1 warning, T3 board file-system lifecycle 32/32 steps, OS-ledger reconciliation 2 / 0 / 0 (66 ledger items / 258 hits, 0 unregistered); the single warning is by design (the published package ships no product sources, so ledger reconciliation runs from the repository root). Verbatim report in [platform-gate §7.6](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md); earlier on-device records: §7.3 / §7.4 |
-| macOS | ✅ **Supported (verified on native macOS)**: the v0.19.8 release candidate **passed** the on-device gate on native macOS (`darwin/arm64`) — `win-smoke` 15 passed / 0 failed / 1 warning, T3 board file-system lifecycle 32 steps; the single warning is by design (the published package ships no product sources, so ledger reconciliation runs from the repository root); the ledger layer was not run separately on macOS (there is no source tree on that machine and no build happens there), and is covered by the repository-root round (2 passed / 0 failed / 0 warnings; 66 ledger items / 258 hits, 0 unregistered). Verbatim report in [platform-gate §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md); earlier on-device records: §7.4 |
+| Native Windows | ✅ **Verified on-device**: native Windows (`win32/x64`) + Node `v24.21.0` + host DSH `0.2.0-rc.2`; on this release's final package T1–T5 **15 passed / 0 failed / 1 warning**, T3 kanban filesystem lifecycle **32/32 steps** (the single warning is by design: the `--tarball` round carries no product sources, so the OS-call-site ledger is reconciled at the repository root instead — **not a defect**). Execution went through WSL↔Windows interop; the differences between that link and a purely native user scenario are recorded honestly in [platform-gate §7.8](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md). |
+| macOS | ⏳ **Not verified for this release**: the `v0.20.0` release candidate has **not** yet run the on-device gate on native macOS ⇒ **must not be read as "passed"**. Earlier records are in [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) and likewise cover v0.19.8 and older product code only. |
 
 All three platforms share the same package. **Known limitations**: (1) APFS, the macOS default, is case-insensitive — entries that differ only by case resolve to the **same entity**, so do not rely on case alone to distinguish goal ids or version lanes; (2) on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
 
-**What's new (v0.19.8)**
+**What's new (v0.20.0)**
 
-- **The settings page works again — and is more complete**: after a host upgrade the settings page no longer comes up empty; global settings open from both entry points (the plugin page under "Settings" and the right-hand plugin entry) and read/write one and the same configuration; review conditions (registered regions, frozen contracts, what counts as a product change) can be inspected and edited directly, and when they are not yet calibrated for your project they are clearly labelled as defaults; the supervisor-automation switches are no longer just stored.
-- **Fast-track evidence no longer rests on self-reporting**: how many lines changed and whether any untracked files remain are now collected by the engine itself from version control, and if collection fails the fast track is refused; regions that were never registered are escalated to strict review; a review subagent can be dispatched through a first-class entry, and deliveries lacking an independent review are honestly flagged on the board (without blocking acceptance).
-- **Long-term memory has a single source of truth**: memory is managed uniformly as structured entries (the standing / on-demand semantics and permissions are unchanged), and hand-maintaining a long-term memory index file is no longer required; legacy documents remain available as optional notes and can be migrated once, traceably, without re-importing on repeat runs.
-- **The plugin no longer pollutes your project — or assumes this repository's layout**: the plugin's own directories and worktrees no longer make your repository look like it has uncommitted changes, and no longer block the fast track; prompts and tool descriptions aimed at models and users had repository-specific paths, branches and script assumptions removed.
-- **Safer across boards, more trustworthy test verdicts**: with several boards in one repository, goals carrying the same number no longer reuse each other's worktrees or delete them; card paths under a custom graph root point at the actual card; and the flaky intermittent failure in the test suite is fixed, so "all green" no longer depends on chance.
+- **Supports the DSH 0.2.1 host line**: the host compatibility range is widened to `>=0.1.5-rc.2 <0.2.2-0` — the `-0` upper bound excludes every `0.2.2` prerelease and final release, bringing the entire `0.2.1` line into range — and was verified by installing and booting on `0.2.1-alpha.2` in an isolated instance with **no** version exemption. ⚠️ The host's install/boot gate **reads `peerDependencies` only, never `engines.dsh`**, so both declarations must be widened **together** — changing the former alone has no effect and installation is still hard-rejected.
+- **Your old settings survive a host upgrade**: the legacy `dsh-graph` section in `settings.yaml` is folded into the new `dsh-graph-host` entry once and idempotently (repeat runs never re-import, and reads keep a fallback); the upgrade path was verified end-to-end on a real host.
+- **Agent Teams collaboration mode (off by default)**: a single run can fan out to several members working in parallel and appoint an independent verifier to cross-check the result; with the switch off, prompts and behaviour are byte-identical to the previous version.
+- **No more bad data, no more silent failures**: a settings write whose parent is not a block mapping is refused outright (instead of reporting success while writing invalid YAML); the worktree ownership marker is now written atomically, so an interrupted write can no longer leave a half marker that silently disables cleanup protection.
+- **The design process is visible and status needs no guessing**: the board title bar gains a "Graph Design" entry whose dialog embeds two interactive process diagrams (shipped with the package, served through a read-only route), alongside bilingual documentation of the development flow; and a new round now shows a "processing…" placeholder immediately, so you are no longer staring at a blank line waiting for the first token.
 
 See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history. Official releases are distributed via npm and the dsh-market ecosystem.
 
@@ -306,9 +316,9 @@ after upgrading the host, a Web GUI cold start reports `web boot: N entry did no
 host half (`graph_*` tools) works and hot reload works, but its browser half never activates.
 
 **Cause**: `dsh.client.inject` is **not a directory listing, it is a load-order edge**. The browser-side loader
-(`@deepseek-ai/dsh-client-modules/lib/client.js:655-658`) preloads only those inject names that **already exist in the client
+(`@deepseek-ai/dsh-client-modules/lib/client.js`) preloads only those inject names that **already exist in the client
 manifest**, and silently skips the rest. `@deepseek-ai/dsh-client-runtime` is **no longer shipped with the host** since dsh 0.2.x
-(absent from the install trees of dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2), yet its package manifest **still declares `dsh.client`**.
+(absent from the install trees of dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-alpha.2), yet its package manifest **still declares `dsh.client`**.
 If an old entry/copy of it survives an upgrade in your profile, it **becomes a client manifest row again**; that row's load failure
 cascades into `client-modules: "<plugin>" not loaded because dependency "…" failed`, dragging down **every plugin that still declares it**.
 A clean install has no such row, which is why it does not reproduce. **dsh-graph has dropped that declaration** — even if the
@@ -380,6 +390,18 @@ external report and host source code; this README does **not** claim the desktop
   Generate `HANDOFF.md` summarizing board projections, long-term memory, and environment facts. A new session can claim the Supervisor role idempotently via `graph_claim_supervisor`.
 - **Modern UI & Dual-Theme Support**:
   Full Dark and Light theme adaptation following DSH variables. Subtle pulse animations highlight external updates (with `prefers-reduced-motion` accessibility support); drag-safe modal text selection.
+
+---
+
+### Design Philosophy (for readers new to this plugin)
+
+To understand *why* dsh-graph organises development the way it does — goal lifecycle and state machine, criteria
+gate and human gate, dispatch and the isolation triad, attempts and the results surface, independent review and
+its source of truth, version lanes and release red lines, memory grading, event-first writes — read
+[Design Philosophy (English)](https://github.com/miuzel/dsh-graph/blob/main/docs/design-philosophy.en.md):
+every behavioural claim carries a code citation, and the document ships archify interactive diagrams — an inline
+static preview plus an explorable HTML page — that draw only what is implemented today (state flow and role
+split, with no file, function or internal artifact names inside the figures; the 1.0 roadmap lives in §13).
 
 ---
 

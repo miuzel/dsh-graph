@@ -44,6 +44,9 @@
       'status.running': '运行中',
       'status.idle': '空闲',
       'status.stale': '状态延续 {duration}',
+      // g-461：新一轮占位（纯显示层派生；按 agent 类型固定文案，不显示工具名/目标标题）
+      'status.processing.supervisor': '⏳ 主管正在处理…',
+      'status.processing.executor': '⏳ 执行子代理正在处理…',
 
       // === 阶段列标题 ===
       'stage.describe': '描述',
@@ -719,6 +722,8 @@
       'settings.intervalMinError': '⚠️ ',
       'settings.liveDisplay': '实时代理输出流式显示',
       'settings.liveDisplayHint': '（关闭后停止输出流订阅，释放资源；livestrip 状态与 status line 保留）',
+      'settings.agentTeams': 'Agent Teams 最小契约（单 attempt 内扇出 + 独立验证）',
+      'settings.agentTeamsHint': '（默认关闭；开启后才向派发提示词注入契约段——成员不是 attempt、作者自报不算独立验证，留痕见 reviews/）',
       'settings.modelRouting': '执行子代理模型路由与模式',
       'settings.inheritSession': '（继承父会话）',
       'settings.legacySuffix': '（已存值，当前目录未列出）',
@@ -785,6 +790,15 @@
       'criteria.feedbackQueuedDepth': '✅ 反馈已排队送达执行会话（当前队列 {n} 条）',
       'criteria.feedbackNotConnected': '⚠️ 执行会话未接入，反馈无法送达',
       'criteria.feedbackSendFail': '⚠️ 反馈发送失败：',
+
+      // === g-462：Graph 设计哲学弹窗（入口与刷新/记忆并列） ===
+      'design.btn': '🧩 Graph 设计',
+      'design.title': 'Graph 设计哲学',
+      'design.tab.lifecycle': '状态机（lifecycle）',
+      'design.tab.workflow': '主链流程（workflow）',
+      'design.openNewTab': '在新标签页打开',
+      'design.notice': '暂不支持自定义：这里展示的是随包发布的固定图。后续将开放 graph 语义调整与可视化自定义。',
+      'design.roadmap': '后续路线（尚未实现）：可视化自定义 · 语义声明式 · 每项目独立 graph。现状：本弹窗只读展示随包发布的固定图，暂不支持调整；未来：将开放上述语义与可视化自定义能力。详见设计哲学文档「1.0 路线（未实现）」一章。',
 
       // === 记忆管理弹窗 ===
       'memory.title': '🧠 记忆管理',
@@ -1209,6 +1223,9 @@
       'status.running': 'Running',
       'status.idle': 'Idle',
       'status.stale': 'Status ongoing for {duration}',
+      // g-461：新一轮占位（与 zh 严格同键；不显示工具名/目标标题）
+      'status.processing.supervisor': '⏳ Supervisor is processing…',
+      'status.processing.executor': '⏳ Executor agent is processing…',
 
       // === Stage column headers ===
       'stage.describe': 'Describe',
@@ -1882,6 +1899,8 @@
       'settings.intervalMinError': '⚠️ ',
       'settings.liveDisplay': 'Live agent output stream display',
       'settings.liveDisplayHint': '(Turning off stops output stream subscription, saves resources; livestrip status & status line preserved)',
+      'settings.agentTeams': 'Agent Teams minimal contract (single-attempt fan-out + independent verification)',
+      'settings.agentTeamsHint': '(Off by default; when on, the contract block is injected into the dispatch prompt — members are not attempts, an author self-report is not independent verification, trace under reviews/)',
       'settings.modelRouting': 'Execution subagent model routing & mode',
       'settings.inheritSession': '(Inherit from parent session)',
       'settings.legacySuffix': '(Saved value, not listed in current catalog)',
@@ -1948,6 +1967,15 @@
       'criteria.feedbackQueuedDepth': '✅ Feedback queued for execution session ({n} in queue)',
       'criteria.feedbackNotConnected': '⚠️ Execution session not connected, feedback cannot be delivered',
       'criteria.feedbackSendFail': '⚠️ Feedback send failed: ',
+
+      // === g-462: Graph design philosophy modal ===
+      'design.btn': '🧩 Graph Design',
+      'design.title': 'Graph Design Philosophy',
+      'design.tab.lifecycle': 'Lifecycle',
+      'design.tab.workflow': 'Workflow',
+      'design.openNewTab': 'Open in new tab',
+      'design.notice': 'Customization is not supported yet: these are the fixed diagrams shipped with the package. Graph semantic tuning and visual customization will be opened up later.',
+      'design.roadmap': 'Roadmap (not implemented yet): visual customization · declarative semantics · per-project graph. Status: this dialog only shows the fixed diagrams shipped with the package and they cannot be adjusted; later we will open up those semantic and visual customization capabilities. See the \'1.0 roadmap (not implemented)\' chapter of the design philosophy document.',
 
       // === Memory management modal ===
       'memory.title': '🧠 Memory Management',

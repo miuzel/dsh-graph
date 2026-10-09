@@ -337,6 +337,10 @@ fi
 [ -f "$PROFILE_MANIFEST" ] || die "插件 profile manifest 缺失：$PROFILE_MANIFEST"
 profile_ready || die "插件 profile/link/bundle 未就绪：$PROFILE_MANIFEST"
 EFFECTIVE_CONFIG="$VERSION_ROOT/effective-config.yml"
+# g-464：宿主把**启动期被跳过的 profile bundle** 报到 stderr（dsh-app-boot 的 reportSkippedBundles；
+# `--dump-config` 与真正的 boot 走同一条 loadProfile 路径 ⇒ 这是启动期的**同源**信号，不是事后猜测）。
+# 旧实现把 stderr 丢进 /dev/null，于是「插件完全缺席」无声无息；现在留档并在下面响铃。
+DUMP_LOG="$VERSION_ROOT/dump-config.log"
 if [ "$SKIP_INSTALL" -eq 1 ]; then
   command -v dsh >/dev/null 2>&1 || die '--skip-install 需要 PATH 中已有 dsh 命令'
   DSH_CMD=(dsh)
@@ -349,10 +353,31 @@ RUNTIME_VERSION="$("${DSH_CMD[@]}" --version 2>/dev/null | head -1 || true)"
 printf '==> 运行时 dsh：%s（版本 %s）\n' "${DSH_CMD[*]}" "${RUNTIME_VERSION:-未知}"
 dump=("${DSH_CMD[@]}" web --dump-config)
 
-if [ "$USE_PROXY" -eq 1 ]; then proxychains4 -q "${dump[@]}" >"$EFFECTIVE_CONFIG" 2>/dev/null || die "无法读取 web effective config：DSH $VERSION"; else "${dump[@]}" >"$EFFECTIVE_CONFIG" 2>/dev/null || die "无法读取 web effective config：DSH $VERSION"; fi
+if [ "$USE_PROXY" -eq 1 ]; then proxychains4 -q "${dump[@]}" >"$EFFECTIVE_CONFIG" 2>"$DUMP_LOG" || die "无法读取 web effective config：DSH ${VERSION}（stderr 见 ${DUMP_LOG}）"; else "${dump[@]}" >"$EFFECTIVE_CONFIG" 2>"$DUMP_LOG" || die "无法读取 web effective config：DSH ${VERSION}（stderr 见 ${DUMP_LOG}）"; fi
+# g-464 判据 2（启动期响铃）：宿主在启动期**静默跳过**本插件的 bundle 时，实例会照常起来但插件完全缺席。
+# 检出该信号即**非零退出**，并点名日志、原始原因行与可能成因，绝不判为就绪。
+SKIPPED_MARK='skipping profile bundle "dsh-graph"'
+if grep -qF "$SKIPPED_MARK" "$DUMP_LOG" 2>/dev/null; then
+  SKIPPED_LINE=$(grep -m1 -F "$SKIPPED_MARK" "$DUMP_LOG")
+  die "插件 dsh-graph 在启动期被跳过（bundle 未加载），该实例里没有这个插件。
+  日志：$DUMP_LOG
+  原始原因：$SKIPPED_LINE
+  可能成因：本插件的声明面（peerDependencies）与运行时 dsh 不兼容、且没有该 精确 name@version 的豁免。
+  处理：换用与 dsh $VERSION 兼容的插件版本，或授予精确版本豁免后重启（dsh plugin allow-version / 插件管理器）。"
+fi
 grep -q "@deepseek-ai/dsh-base" "$EFFECTIVE_CONFIG" || die "web effective config 缺少 dsh-base：DSH $VERSION"
 grep -q "@deepseek-ai/dsh-web-app" "$EFFECTIVE_CONFIG" || die "web effective config 缺少 dsh-web-app：DSH $VERSION"
-grep -q "dsh-graph" "$EFFECTIVE_CONFIG" || die "web effective config 缺少 dsh-graph：DSH $VERSION"
+# g-464 判据 1：旧判据 `grep -q "dsh-graph" "$EFFECTIVE_CONFIG"` 是全文件子串匹配 —— composed tree 的
+# **注释**里带 `# == … patched by /…/dsh-graph/tmp/…` 这类仓库绝对路径，注释命中会让「bundle 已被跳过、
+# 插件完全缺席」的实例判为就绪（g-463 实测）。现改为解析 YAML 结构、按 bundle 名（name）精确匹配真实条目。
+if ! BUNDLE_ENTRY=$(node "$SELF_DIR/effective-config-bundle-entry.mjs" "$EFFECTIVE_CONFIG" dsh-graph dsh-graph-host 2>&1); then
+  die "web effective config 里没有 dsh-graph 的真实 bundle 条目（注释/路径命中的子串不算条目）：DSH $VERSION
+  $BUNDLE_ENTRY
+  composed config：$EFFECTIVE_CONFIG
+  日志：$DUMP_LOG
+  可能成因：插件的 profile bundle 未被列入或加载失败（声明面不兼容 / 豁免缺失）。"
+fi
+printf '==> %s\n' "$BUNDLE_ENTRY"
 cmd=("${DSH_CMD[@]}" web --no-open --port "$PORT")
 [ -n "$HOST" ] && cmd+=(--host "$HOST")
 printf '==> 加载本地 dsh-graph 插件\n'

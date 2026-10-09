@@ -12,18 +12,18 @@
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/node/v/dsh-graph?style=flat-square" alt="node engine"></a>
   <a href="https://awesome-dsh-plugin.com"><img src="https://img.shields.io/badge/awesome--dsh--plugin-listed-2f6feb?style=flat-square" alt="awesome-dsh-plugin listed"></a>
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license MIT"></a>
-  <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.1--0-2f6feb?style=flat-square" alt="DSH host range"></a>
+  <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.2--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
-**当前版本 v0.19.8** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 51 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
+**当前版本 v0.20.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 51 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
 
-**最新亮点（v0.19.8）**
+**最新亮点（v0.20.0）**
 
-- **设置页修好、也补齐了**：升级宿主后设置页不再变空；全局设置在两处入口（「设置」里的插件页与右侧栏插件入口）都能打开，读写的是同一份配置；评审条件（按项目目录结构登记的区域、冻结契约、哪些算产品改动）可直接查看与编辑，尚未按本项目校准时明确标注为「缺省（普适）」；主管自动化开关也不再只是存着。
-- **「机器快速放行」的证据不再只靠自报**：改动了多少行、还有没有未跟踪文件，改由引擎自己从版本库取，采集不到就不放行；没有登记过的区域自动升级为严格评审；评审子代理可以从正式入口独立派发，缺独立评审的交付会在看板上如实标注（不阻断放行）。
-- **长期记忆只有一个真源**：记忆统一由结构化条目管理（常驻 / 按需两档的语义与权限不变），不再要求手工维护长期记忆索引文件；历史文档保留为可选说明，可一次性、可追溯地迁入，重复执行不会重复导入。
-- **插件不再污染用户项目、也不再假设本仓库的结构**：插件自有的目录与工作树不会再把用户仓库判成「有未提交改动」，也不会再挡住机器快速放行；面向模型与用户的提示词、工具描述去掉了只适用于本仓库的路径、分支与脚本假设。
-- **跨看板更安全、测试结论更可信**：同一仓库存在多块看板时，同号的目标不会互相误复用、也不会误删对方的工作树；自定义图根下的卡片路径指向真正的那张卡片；整套测试不再有间歇性假红，「全绿」不再受概率影响。
+- **支持 DSH 0.2.1 系宿主**：宿主兼容范围放宽为 `>=0.1.5-rc.2 <0.2.2-0` —— 上界 `-0` 排除 `0.2.2` 的一切预发布与正式版，整条 `0.2.1` 线纳入范围，并已在隔离实例上以 `0.2.1-alpha.2` **未使用**任何版本豁免完成安装与启动。⚠️ 宿主的安装/启动门禁**只读 `peerDependencies`、不读 `engines.dsh`**，两处声明必须**同步**放宽——只改前者无效，安装期仍会被硬拒绝。
+- **升级宿主后旧设置不再丢**：旧 `settings.yaml` 里的 `dsh-graph` 节会一次性、幂等地补进新的 `dsh-graph-host` 条目（重复执行不会重复导入，读取仍保留回退）；该升级路径已在真实宿主上做过端到端验证。
+- **Agent Teams 协作模式（默认关闭）**：同一次执行内可扇出多个成员并行推进，并指定独立验证者对结果交叉核验；开关关闭时提示词与行为与旧版逐字一致。
+- **不再产出坏数据、也不再静默失效**：设置写入的父级不是块式映射时直接拒绝（不再返回成功却写出非法 YAML）；工作树归属标记改为原子写入，中途失败不再留下半个标记、导致清理面保护静默失效。
+- **设计过程看得见、状态不用猜**：看板标题栏新增「Graph 设计」入口，弹窗内嵌两张可交互流程图（随包发布、经只读路由提供），并有中英双语文档说明开发流程；新一轮对话开始时先显示「正在处理…」占位，不必盯着空白等首字。
 
 变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。
 
@@ -32,8 +32,8 @@
 | 平台 | 本版状态 |
 |------|----------|
 | Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0） |
-| 原生 Windows | ✅ **支持（已在原生 Windows 上实测）**：v0.19.8 发布候选包真机门禁 **PASS** —— `win-smoke` 通过 15 / 失败 0 / 告警 1，T3 看板文件系统生命周期 32/32 步，台账对账 2 / 0 / 0（台账 66 项 / 258 处命中、未登记 0）；唯一告警为设计内（发布包不含产品源码 ⇒ 台账对账在仓库根完成）。逐字报告见[平台门禁 §7.6](docs/platform-gate.md)；更早版本的真机记录见同页 §7.3 / §7.4 |
-| macOS | ✅ **支持（已在原生 macOS 上实测）**：v0.19.8 发布候选包真机门禁在原生 macOS（`darwin/arm64`）**PASS** —— `win-smoke` 通过 15 / 失败 0 / 告警 1，T3 看板文件系统生命周期 32 步；唯一告警为设计内（发布包不含产品源码 ⇒ 台账对账在仓库根完成）；台账层未在 macOS 单独执行（Mac 上无源码树、不在该机编译），台账对账由仓库根轮覆盖（通过 2 / 失败 0 / 告警 0，台账 66 项 / 258 处命中、未登记 0）。逐字报告见[平台门禁 §7.7](docs/platform-gate.md)；更早版本的真机记录见同页 §7.4 |
+| 原生 Windows | ✅ **已实测通过**：原生 Windows 真机（`win32/x64`）+ Node `v24.21.0` + 宿主 DSH `0.2.0-rc.2`，本版终版包上 T1–T5 **通过 15 / 失败 0 / 告警 1**、T3 看板文件系统生命周期 **32/32 步**（唯一告警为设计内：`--tarball` 轮包内无产品源码 ⇒ 台账对账另在仓库根完成，**非缺陷**）。执行经 WSL↔Windows 互操作，该链路与纯原生用户场景的差异已如实登记（[平台门禁](docs/platform-gate.md) §7.8）。 |
+| macOS | ⏳ **本版未验证**：`v0.20.0` 发布候选包**尚未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**。历史记录见[平台门禁](docs/platform-gate.md) §7.4 / §7.7，同样只覆盖 v0.19.8 及更早的产品代码。 |
 
 三平台共用同一安装包。已知限制：① macOS 默认文件系统 APFS 大小写不敏感——仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`，由 `process.cwd()` 推导的路径不受影响。
 
