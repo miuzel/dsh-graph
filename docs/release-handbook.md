@@ -114,6 +114,9 @@ node -p "require('./.worktrees/release-vX.Y.Z/dist/package.json').version"   # �
 
 # 4. 在 dist/ 里发布（发布物必须来自「tag 树构建出的 dist/」）
 (cd .worktrees/release-vX.Y.Z/dist && pnpm publish --registry=https://registry.npmjs.org --no-git-checks)
+# 4'. 或（v0.20.0 起**推荐**）：直发已验 tarball —— registry **不重打**，指纹与本地逐字一致（见下方 v0.20.0 实证）
+npm publish /abs/path/dsh-graph-X.Y.Z.tgz --registry=https://registry.npmjs.org
+#     注意：tarball 必须来自「与 tag 树 tree 逐字相等」的构建树（发布源树），并已记录 sha256
 
 # 5. 核验线上版本 + 内容级对账
 npm view dsh-graph version                       # 期望 X.Y.Z
@@ -150,6 +153,19 @@ git worktree remove .worktrees/release-vX.Y.Z
 > 除此之外的任何差异（含 `package.json` 的其他字段）都必须查清再放行。
 > （本次另一条平行证据：同一提交在隔离 worktree 内独立 build + pack 复算出**同一**本地 sha256 ⇒ 本地侧
 > 字节可复现，唯一变量就是 registry 的重写。）
+>
+> **v0.20.0 第四次实证（2026-10-10）—— 口径再进一步：直发 tarball 时 registry 指纹与本地逐字一致**：
+> 本次**未**在 `dist/` 里 `pnpm publish`，而是 `npm publish <本地终版 tarball>`（步骤 4'）。实测
+> `npm view dsh-graph@0.20.0 dist --json` 得 `shasum` `01590980f4800e5c9c8d442fc62ade11802ef482`、
+> `integrity` `sha512-eVbLFfmqYiZYyK2QHTlesBLJ62icaiG3K6b2btohuYosiJavd0zlaHkNnaY6decCRShEHb40QWUVunG+SaM/nA==`
+> （`fileCount` 43 / `unpackedSize` 4318053），与本地终版包（1,436,959 B）**sha1 与 sha512 双双逐字一致**；
+> GitHub release 附件的**服务端自算 digest** 亦同为 `sha256:51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a`。
+> ⇒ **直发 tarball 不会被 registry 重打**，registry 侧对账因此可升级为**字节级**（sha1 + sha512）；
+> 上文「线上必然差几百 B」只适用于**从目录发布**（npm 重新打包）的旧路径。**推荐直发 tarball**：
+> 它让红线 3 的对账第一次做到字节级，并保证「**被测产物 == 发布产物 == release 附件**」是同一份字节；
+> 内容级 `diff -r` 判据保留为兜底（成员集合 + 逐文件差异）。
+> （本次 tag 树相等性：发布源树 tree 与 `v0.20.0` tag 指向的合并提交 tree **逐字相等**，已核对 `HEAD^{tree}`；
+> 且三条独立构建路径得同一 sha256 ⇒ 与「tag 树构建」等价。）
 
 > 注意：**registry 与登录态（2026-09-21 实测更新）**——早先「`~/.npmrc` 指向 npmmirror 镜像且未登录」
 > 的描述已过时：当前 `npm config get registry` 输出 `https://registry.npmjs.org/`。
@@ -169,6 +185,40 @@ git worktree remove .worktrees/release-vX.Y.Z
 > 另：本机 `/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf` 权限损坏会导致所有 ssh 推送失败
 > （`Bad owner or permissions on ...`），git push 一律加 `GIT_SSH_COMMAND="ssh -F /dev/null"`（v0.9.2、
 > v0.10.0 均以此绕行成功）。
+
+### 4.1 发布正文（release notes）：真源、模板与发布后核对
+
+> **背景（v0.20.0 教训）**：首次发布时正文只由 `CHANGELOG` 要点 + 两个裸链接拼成，**漏掉「验证与产物」整节**
+> （产物 sha1、registry 对账句、真机门禁段落、可复现性），比 v0.19.8 的正文少 4 项。根因是当时 notes
+> 只存在于 `tmp/`（无真源、无守卫、无复核面）；而更早的 v0.6.1–v0.9.1 曾把 notes 作为**版本化文档**
+> `docs/release-notes-v*.md` 入库。本条把这套做法定为**跨版本规则**。
+
+**真源**：`docs/release-notes-v<版本>.md` —— **入 git、随版本评审**，不得只留在 `tmp/`。
+线上正文必须由该文件发布（不手改线上）：
+
+```sh
+gh release create vX.Y.Z -R miuzel/dsh-graph <tarball> SHA256SUMS \
+  --title "vX.Y.Z" --notes-file docs/release-notes-vX.Y.Z.md
+# 已发布后才发现正文不全（可逆，不涉 push/publish）：
+gh release edit vX.Y.Z -R miuzel/dsh-graph --notes-file docs/release-notes-vX.Y.Z.md
+```
+
+**必需小节（缺一即视为不完整）**：
+
+1. `## v<版本> — <日期>` 标题 + **要点**（与 `CHANGELOG.md` 同文，≤5 条，受 `g371` 守卫约束）；
+2. `### 安装 / 升级`：宿主内安装命令 + 本版升级是否需要手工动作；
+3. `### 验证与产物`，含四条：
+   - **平台真机门禁**：已实测平台写通过事实（分层结论 + 指向 `docs/platform-gate.md` 的具体小节）；
+     **未实测平台必须如实标注「本版未验证」**，不得留空、不得读作「已通过」；
+   - **发布产物**：文件名 + **sha256 与 sha1**（+ 成员数），并写明 registry `dist.shasum` / `dist.integrity` 的对账结论；
+   - **发布记录**：指向 `docs/release-checklist-v<版本>.md`；
+   - **可复现性**：从源码构建是否与本 tag 逐字节可复现（含独立构建路径数）。
+
+**发布后核对（必做）**：线上正文与真源**逐字相等**（唯一可接受差异：GitHub 侧对文末换行的归一化）——
+
+```sh
+diff <(gh release view vX.Y.Z -R miuzel/dsh-graph --json body --jq .body) docs/release-notes-vX.Y.Z.md
+```
 
 ## 5. 本地验收（发布后）
 
