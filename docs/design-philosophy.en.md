@@ -32,17 +32,17 @@ Both diagrams below render directly on GitHub and clearly separate **implemented
 
 ### 1.1 States and legal transitions (implemented today)
 
-![dsh-graph goal state machine: 8 states and legal transitions](../dsh-graph-host/diagrams/design-philosophy.lifecycle.png)
+![dsh-graph goal state machine: 8 states and legal transitions](assets/design-philosophy.lifecycle.light.svg)
 
-[Interactive version](../dsh-graph-host/diagrams/design-philosophy.lifecycle.html)
+[Interactive version](../dsh-graph-host/diagrams/design-philosophy.lifecycle.html) · [Dark theme](assets/design-philosophy.lifecycle.dark.svg)
 
 Sources: state set `core/machine.ts:10-19` (`STATUSES`); legal edges `core/machine.ts:24-33` (`EDGES`).
 
 ### 1.2 Roles and gate chain (implemented today vs 1.0 roadmap)
 
-![dsh-graph main chain: roles, gates, and trace](../dsh-graph-host/diagrams/design-philosophy.workflow.png)
+![dsh-graph main chain: roles, gates, and trace](assets/design-philosophy.workflow.light.svg)
 
-[Interactive version](../dsh-graph-host/diagrams/design-philosophy.workflow.html)
+[Interactive version](../dsh-graph-host/diagrams/design-philosophy.workflow.html) · [Dark theme](assets/design-philosophy.workflow.dark.svg)
 
 Sources: admission `core/ops.ts:7771` (`assertExecutionAdmission`); isolation `core/worktree.ts:784`
 (`resolveWorktreeIsolationDecision`); results surface `core/ops.ts:8653` (`writeAttemptResults`);

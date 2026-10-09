@@ -791,6 +791,14 @@
       'criteria.feedbackNotConnected': '⚠️ 执行会话未接入，反馈无法送达',
       'criteria.feedbackSendFail': '⚠️ 反馈发送失败：',
 
+      // === g-462：Graph 设计哲学弹窗（入口与刷新/记忆并列） ===
+      'design.btn': '🧩 Graph 设计',
+      'design.title': 'Graph 设计哲学',
+      'design.tab.lifecycle': '状态机（lifecycle）',
+      'design.tab.workflow': '主链流程（workflow）',
+      'design.openNewTab': '在新标签页打开',
+      'design.notice': '暂不支持自定义：这里展示的是随包发布的固定图（g-460 定稿）。后续将开放 graph 语义调整与可视化自定义。',
+
       // === 记忆管理弹窗 ===
       'memory.title': '🧠 记忆管理',
       'memory.btn': '🧠 记忆',
@@ -1958,6 +1966,14 @@
       'criteria.feedbackQueuedDepth': '✅ Feedback queued for execution session ({n} in queue)',
       'criteria.feedbackNotConnected': '⚠️ Execution session not connected, feedback cannot be delivered',
       'criteria.feedbackSendFail': '⚠️ Feedback send failed: ',
+
+      // === g-462: Graph design philosophy modal ===
+      'design.btn': '🧩 Graph Design',
+      'design.title': 'Graph Design Philosophy',
+      'design.tab.lifecycle': 'Lifecycle',
+      'design.tab.workflow': 'Workflow',
+      'design.openNewTab': 'Open in new tab',
+      'design.notice': 'Customization is not supported yet: these are the fixed diagrams shipped with the package. Graph semantic tuning and visual customization will be opened up later.',
 
       // === Memory management modal ===
       'memory.title': '🧠 Memory Management',

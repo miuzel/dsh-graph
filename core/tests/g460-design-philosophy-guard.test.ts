@@ -29,7 +29,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 
 const repoRoot = join(import.meta.dirname, "../..");
 const ZH_DOC = join(repoRoot, "docs/design-philosophy.zh.md");
@@ -40,7 +40,9 @@ const ZH_DOC_REL = "docs/design-philosophy.zh.md";
 const EN_DOC_REL = "docs/design-philosophy.en.md";
 
 /** 已知的仓库源文件扩展名（用于识别「真源路径」引用）。 */
-const SOURCE_EXT = ["ts", "md", "js", "sh", "json", "mjs", "yml", "yaml"] as const;
+// g-462：补入 png/html/svg —— 设计哲学文档新增的图产物引用（`.png` 静态预览 / `.html` 交互版）
+// 此前不在白名单里，故「引用一张并不存在的图」不会被这条守卫发现（g-460 遗留覆盖缺口）。
+const SOURCE_EXT = ["ts", "md", "js", "sh", "json", "mjs", "yml", "yaml", "png", "html", "svg"] as const;
 
 /** 引号包裹的真源路径；允许尾部 `:行号` 或 `:起-止`。 */
 const PATH_REF = new RegExp(
@@ -79,10 +81,34 @@ export function referencedPaths(text: string): string[] {
   return [...found].sort();
 }
 
+/**
+ * g-462 补齐 g-460 遗留缺口：文档里以 **Markdown 图片/链接** 形式内联的图产物引用（相对 `docs/` 解析）。
+ * 设计哲学文档的 `.png` 静态预览与 `.html` 交互版正是这种形态（不是反引号真源路径），
+ * 旧守卫的 `SOURCE_EXT` 白名单根本看不到它们 ⇒ 引用一张并不存在的图也能全绿。
+ * 这里把「资源类扩展名」的 Markdown 目标也纳入存在性校验。
+ */
+const DOC_ASSET_EXT = ["png", "html", "svg", "jpg", "jpeg", "webp", "gif"] as const;
+const MD_LINK = /!?\[[^\]]*\]\(([^)\s]+)\)/g;
+const DOC_ASSET_RE = new RegExp("\\.(?:" + DOC_ASSET_EXT.join("|") + ")$");
+
+/** Markdown 引用中指向**仓库内**的资源文件（相对文档所在目录 `docs/`），解析为仓库相对路径。 */
+export function referencedDocAssets(text: string): string[] {
+  const found = new Set<string>();
+  for (const m of text.matchAll(MD_LINK)) {
+    const target = m[1]!;
+    if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(target) || target.startsWith("#") || target.startsWith("/")) continue;
+    const bare = target.split("#")[0]!.split("?")[0]!;
+    if (!DOC_ASSET_RE.test(bare)) continue;
+    found.add(posix.normalize(posix.join("docs", bare)));
+  }
+  return [...found].sort();
+}
+
 export interface DocProblems {
   problems: string[];
   pathCount: number;
   anchorCount: number;
+  assetCount: number;
 }
 
 /**
@@ -139,7 +165,16 @@ export function checkDocs(
     if (!exists(rel)) problems.push(`引用的真源路径不存在：${rel}`);
   }
 
-  return { problems, pathCount: paths.size, anchorCount: shared };
+  // g-462：文档内联的图产物引用（Markdown 图片/链接，相对 `docs/`）同样必须真实存在。
+  const assets = new Set<string>([
+    ...referencedDocAssets(zhText),
+    ...referencedDocAssets(enText),
+  ]);
+  for (const rel of [...assets].sort()) {
+    if (!exists(rel)) problems.push(`引用的文档资源不存在：${rel}`);
+  }
+
+  return { problems, pathCount: paths.size, anchorCount: shared, assetCount: assets.size };
 }
 
 function readDoc(file: string, label: string): string {
@@ -184,6 +219,42 @@ test("g-460 判据 6②：文档引用的真源路径全部真实存在，且覆
     assert.ok(referencedPaths(zh).includes(required), `zh 文档必须引用 ${required}`);
     assert.ok(referencedPaths(en).includes(required), `en 文档必须引用 ${required}`);
   }
+});
+
+test("g-462 补齐 g-460 判据 6③：文档内联的图产物引用（.svg/.html）必须真实存在，缺失即必红", () => {
+  const zh = readDoc(ZH_DOC, ZH_DOC_REL);
+  const en = readDoc(EN_DOC, EN_DOC_REL);
+  const { problems, assetCount } = checkDocs(zh, en);
+  assert.deepEqual(problems, [], `基线必须为绿，实际：\n${problems.join("\n")}`);
+
+  // 防「资源引用一条都没解析到」的假绿：两张图各有明/暗两个 chrome-free SVG 规范导出，
+  // 外加交互版 HTML（.html），zh/en 各 6 条、并集 6 条。
+  const expected = [
+    "docs/assets/design-philosophy.lifecycle.light.svg",
+    "docs/assets/design-philosophy.lifecycle.dark.svg",
+    "docs/assets/design-philosophy.workflow.light.svg",
+    "docs/assets/design-philosophy.workflow.dark.svg",
+    "dsh-graph-host/diagrams/design-philosophy.lifecycle.html",
+    "dsh-graph-host/diagrams/design-philosophy.workflow.html",
+  ];
+  assert.ok(assetCount >= 6, `解析到的文档资源过少（${assetCount}），守卫可能已退化`);
+  for (const rel of expected) {
+    assert.ok(referencedDocAssets(zh).includes(rel), `zh 文档必须内联引用 ${rel}`);
+    assert.ok(referencedDocAssets(en).includes(rel), `en 文档必须内联引用 ${rel}`);
+    assert.ok(existsSync(join(repoRoot, rel)), `图产物必须随仓存在：${rel}`);
+  }
+
+  // 负向对照：把图产物「当作不存在」（注入 exists 只对这些资源返回 false）⇒ 守卫必须点名该资源；
+  // 恢复真实 exists 后必须重新全绿。这是 g-460 旧守卫看不到的那一族（扩展名白名单此前无 svg/html）。
+  const missing = new Set(expected);
+  const gone = checkDocs(zh, en, (rel) => (missing.has(rel) ? false : existsSync(join(repoRoot, rel))));
+  for (const rel of expected) {
+    assert.ok(
+      gone.problems.includes(`引用的文档资源不存在：${rel}`),
+      `删/改名图产物后必须点名 ${rel}，实际：${JSON.stringify(gone.problems)}`,
+    );
+  }
+  assert.deepEqual(checkDocs(zh, en).problems, [], "恢复图产物后必须重新全绿");
 });
 
 test("g-460 判据 6（负向对照）：删一节 / 删子节 / 写错引用路径 ⇒ 必红；恢复后绿", () => {

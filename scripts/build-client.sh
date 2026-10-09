@@ -40,6 +40,11 @@ PARTS=(
   "goal-actions"
   "goal-modal"
   "criteria-modal"
+  # g-462：Graph 设计哲学弹窗（内嵌 lifecycle/workflow 两张随包发布的交互图）。
+  # 与 criteria-modal 同理必须在 drag-prompts 之前（工厂作用域），否则会变成
+  # KanbanView 内部的嵌套组件：每次渲染产生新的组件身份 ⇒ 弹窗子树（含 iframe）被卸载重建，
+  # 图会在父级每次重渲染时重新加载。
+  "design-modal"
   # g-255：搜索临时可见性状态机纯函数模块，kanban.js 依赖其导出函数；
   # 必须排在 drag-prompts 之前（drag-prompts 打开 KanbanView 函数体，之后的代码
   # 在 KanbanView 局部作用域内；search-state 函数需在工厂作用域定义以被 KanbanView 引用）

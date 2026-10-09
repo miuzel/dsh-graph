@@ -18,7 +18,7 @@
  *  B. 退化路径（`BUILD_FORCE_TWO_RENAME=1`）：exit 0、stderr 出现注入告警、
  *     且**不**出现 `mv -T --exchange`（证明确实切换了发布方式，而不是静默走原路径）；
  *  C. 行为中性：A 与 B 的 `dist/` 全树（路径 + 尺寸 + sha256）**逐字节一致**，
- *     37 个文件、`node --check dist/lib/client.js` 通过、无暂存残留；
+ *     43 个文件（g-462 起含 6 张设计哲学图）、`node --check dist/lib/client.js` 通过、无暂存残留；
  *  D. 边界 + 负向对照：注入只认字面 "1"（`=0` 仍走 exchange）；把注入条件从
  *     build.sh 里锚点化移除后，同一 `=1` 调用**必须**回到 exchange 路径 ⇒
  *     证明 B 的「不出现 exchange」不是恒真断言，改坏必红。
@@ -53,8 +53,8 @@ const EXCHANGE_RE = /mv -T --exchange/;
 /** 退化路径的口径行（stderr）——两条分支都含「退回两次 rename」。 */
 const FALLBACK_RE = /退回两次 rename/;
 
-/** `dist/` 应有文件数（g-348/g-359 判据里的固定产物面）。 */
-const DIST_FILE_COUNT = 37;
+/** `dist/` 应有文件数（g-348/g-359 判据里的固定产物面；g-462 起 +6 张设计哲学图 = 37 + 6）。 */
+const DIST_FILE_COUNT = 43;
 
 // ============================================================================
 // 沙箱（与 g-348 测试同构：真实仓库布局，但只在 os.tmpdir() 内读写）

@@ -214,6 +214,42 @@ export const MAX_ATTACHMENT_JSON_BYTES = Math.ceil(MAX_ATTACHMENT_BYTES * 5 / 3)
 // 普通 JSON REST（add-card/start-collection/unreference/转换/delete 等）统一 body 上限（1MB 足够管理类 payload）。
 export const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
+// ===== g-462：设计哲学交互图的**只读** HTML 路由 =====
+// 现有路由全部返回 JSON；这是第一条 text/html 路由。图的产物由 g-460 定稿在
+// `dsh-graph-host/diagrams/`（自包含 HTML，随包发布到 `dist/diagrams/`）。
+// 安全口径（单一路径入口，**无任何写路径**）：
+//   ① 白名单是**唯一**入口：只有下面这两个文件名可被读取，其余一律拒绝；
+//   ② 未知名 → 404；目录穿越（`../`、绝对路径）、反斜杠、URL 编码变体（`%2e%2e`、`%00`）、
+//      非 `.html` 后缀 → 400。判定只看 **URL 归一化后的 pathname 尾段**，不做任何字符串拼接后
+//      再就读（即使判定失误，也只会在 `diagrams/` 白名单目录里按白名单名读取）。
+export const DESIGN_DIAGRAM_ROUTE = "/api/dsh-graph/diagram";
+export const DESIGN_DIAGRAM_FILES = Object.freeze([
+  "design-philosophy.lifecycle.html",
+  "design-philosophy.workflow.html",
+]);
+/** 合法图名：小写字母/数字起头，只含 `[a-z0-9.-]`，`.html` 结尾。 */
+const DESIGN_DIAGRAM_NAME_RE = /^[a-z0-9][a-z0-9.-]*\.html$/;
+
+/**
+ * 纯函数：把请求 URL 解析为「白名单图名」或一个可上报的拒绝结论。
+ * 不触碰文件系统（只做 URL 归一化 + 白名单判定），故可被单测直接驱动。
+ * @returns {{status: 200, name: string} | {status: 400|404, reason: string}}
+ */
+export function resolveDesignDiagramRequest(rawUrl) {
+  let pathname;
+  try {
+    pathname = new URL(String(rawUrl ?? ""), "http://localhost").pathname;
+  } catch {
+    return { status: 400, reason: "malformed-url" };
+  }
+  if (pathname === DESIGN_DIAGRAM_ROUTE) return { status: 404, reason: "name-required" };
+  if (!pathname.startsWith(DESIGN_DIAGRAM_ROUTE + "/")) return { status: 404, reason: "not-a-diagram" };
+  const name = pathname.slice(DESIGN_DIAGRAM_ROUTE.length + 1);
+  if (!DESIGN_DIAGRAM_NAME_RE.test(name) || name.includes("..")) return { status: 400, reason: "illegal-name" };
+  if (!DESIGN_DIAGRAM_FILES.includes(name)) return { status: 404, reason: "unknown-diagram" };
+  return { status: 200, name };
+}
+
 /** 超限时停止累积（pause/unpipe），但**不销毁 socket**——让 handler 能写出可读的 4xx 响应。
  *  真实 HTTP 下若不 pause 而 destroy，客户端会收到 ECONNRESET 而读不到响应（v6 复现）。 */
 function stopOversized(req) {
@@ -4537,6 +4573,37 @@ export function apply(ctx, config) {
       },
     },
     // g-183：附件管理端点（列出/读取下载/存储/删除；路径安全与引用守卫由 core 层强制）
+    // g-462：设计哲学交互图只读服务（本插件唯一的 text/html 路由）。
+    // prefix 路由：尾段由 resolveDesignDiagramRequest 按白名单裁决（见模块顶部常量）。
+    // 只读 `readFileSync`，没有任何写路径；命中即内联返回（图是随包发布的静态资产）。
+    {
+      kind: "prefix",
+      path: DESIGN_DIAGRAM_ROUTE,
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "method not allowed" });
+          const decision = resolveDesignDiagramRequest(req.url);
+          if (decision.status !== 200) return json(res, decision.status, { error: decision.reason });
+          let body;
+          try {
+            body = readFileSync(new URL(`./diagrams/${decision.name}`, import.meta.url));
+          } catch {
+            // 白名单名合法但产物未随包发布（构建漏拷）⇒ 404，绝不回落到别的路径。
+            return json(res, 404, { error: "diagram not packaged" });
+          }
+          res.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            "content-length": String(body.length),
+            "cache-control": "no-cache",
+            "x-content-type-options": "nosniff",
+          });
+          if (req.method === "HEAD") { res.end(); return; }
+          res.end(body);
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
     {
       path: "/api/dsh-graph/attachments",
       handler: (req, res) => {

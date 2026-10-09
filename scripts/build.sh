@@ -136,6 +136,9 @@ cp dsh-graph-host/cordis.patch.yml dist/cordis.patch.yml
 cp dsh-graph-host/LICENSE dist/LICENSE
 cp dsh-graph-host/README.md dist/README.md
 cp -r dsh-graph-host/prompts dist/prompts
+# g-462：设计哲学交互图（g-460 定稿的自包含 HTML 产物 + archify 源/静态预览）随包发布；
+# 宿主只读路由 /api/dsh-graph/diagram/<name> 从 dist/diagrams/ 现读（白名单仅两张 HTML）。
+cp -r dsh-graph-host/diagrams dist/diagrams
 cp dsh-graph-host/supervisor-guide.zh.md dist/supervisor-guide.zh.md
 cp dsh-graph-host/supervisor-guide.en.md dist/supervisor-guide.en.md
 

@@ -27,17 +27,17 @@
 
 ### 1.1 状态机与合法迁移（今日已实现）
 
-![dsh-graph 目标状态机：8 态与合法迁移](../dsh-graph-host/diagrams/design-philosophy.lifecycle.png)
+![dsh-graph 目标状态机：8 态与合法迁移](assets/design-philosophy.lifecycle.light.svg)
 
-[交互式版本](../dsh-graph-host/diagrams/design-philosophy.lifecycle.html)
+[交互式版本](../dsh-graph-host/diagrams/design-philosophy.lifecycle.html) · [暗色版](assets/design-philosophy.lifecycle.dark.svg)
 
 真源：状态集合 `core/machine.ts:10-19`（`STATUSES`）；合法边 `core/machine.ts:24-33`（`EDGES`）。
 
 ### 1.2 角色与门禁主链（今日已实现 vs 1.0 路线）
 
-![dsh-graph 主链：角色、门禁与留痕](../dsh-graph-host/diagrams/design-philosophy.workflow.png)
+![dsh-graph 主链：角色、门禁与留痕](assets/design-philosophy.workflow.light.svg)
 
-[交互式版本](../dsh-graph-host/diagrams/design-philosophy.workflow.html)
+[交互式版本](../dsh-graph-host/diagrams/design-philosophy.workflow.html) · [暗色版](assets/design-philosophy.workflow.dark.svg)
 
 真源：准入 `core/ops.ts:7771`（`assertExecutionAdmission`）；隔离 `core/worktree.ts:784`
 （`resolveWorktreeIsolationDecision`）；结果面 `core/ops.ts:8653`（`writeAttemptResults`）；

@@ -149,6 +149,7 @@ const HEAD_PANEL_ICONS = {
   tagfilter: "🏷️",
   tagclear: "✕",
   memory: "🧠",
+  design: "🧩",
   shared: "📇",
   settings: "⚙",
   versionmanage: "🏷️",
