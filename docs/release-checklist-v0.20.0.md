@@ -1,11 +1,13 @@
 # dsh-graph v0.20.0 发布检查清单
 
-> **本文件状态：发布准备 = 已完成（版本串转正 / CHANGELOG / 本清单 / 终版产物与对账 / 自证闸门 全部落地）。**
-> **平台真机结论：原生 Windows = 未执行（待执行）；原生 macOS = 未执行。** 两者**均不得读出「已通过」**（详见 §7）。
-> 本阶段**只做发布准备**：未合并 `main`、未打 annotated tag、未 `npm publish`、未创建 GitHub release、未 `git push`
+> **本文件状态：发布准备 = 已完成（版本串转正 / CHANGELOG / 本清单 / 终版产物与对账 / 自证闸门 全部落地）；
+> Windows 红线 1 真机门禁 = 已完成（原生 Windows 进程，经 WSL↔Windows 互操作；见 §7 / `docs/platform-gate.md` §7.8）。**
+> **平台真机结论：原生 Windows = ✅ 已实测通过（`win32/x64` + Node `v24.21.0` + 宿主 `0.2.0-rc.2`；T1–T5 通过 15 / 失败 0 / 告警 1、T3 生命周期 32/32 步）；原生 macOS = 未执行（不得读出「已通过」）。**（详见 §7）
+> 本阶段**未合并 `main`**、未打 annotated tag、未 `npm publish`、未创建 GitHub release、未 `git push`
 > —— 这些不可逆动作**全部留给负责人人工 gate**（§8）。
 > 负责人 2026-10-09 已裁决：v0.20.0 全部目标 `accept`、**版本号定案 `0.20.0`（直接正式版，非 rc）**；
-> Windows 真机**另起目标**执行，且**必须跑在本清单 §4 的终版 tarball 上**（顺序不可反：先有终版产物，再上真机，否则真机验的不是终版产物）。
+> Windows 真机**另起目标**执行（g-467）：先跑 §5 的候选包，README 回填后**重建重打终版包并对新包再跑一轮**，
+> 使**被测产物 == 发布产物**（闭环已达成，见 §7 与 §5「回填重打」段）。
 > 本清单结构对照 [`docs/release-checklist-v0.19.8.md`](release-checklist-v0.19.8.md)。
 
 **本次执行树**：worktree `.worktrees/g-466-att-01`，分支 `g-466-att-01`，基线 **`1bba546`**（= 打包当时的 `v0.20.0-test` tip；`main` = `916f842`，本线领先 **27 个提交**）。
@@ -75,7 +77,7 @@
 - [x] 本清单建立：状态 / 执行树 / 版本一致性 / 宿主门禁与兼容新事实 / 终版产物表 / 内容清单 / 自证闸门 / 平台诚实性 / 未执行项 / 发布期约束（全文）
 - [x] 终版产物在隔离 worktree 内**重建重打**，记录文件名 + 字节数 + sha256 + sha1 + **43 成员** + 包版本 `0.20.0`；**重复打包两次 sha256 一致**；旧作废 sha256 就地留痕（§5）
 - [x] 自证闸门全绿：`node scripts/run-tests.mjs` + `tsc --noEmit` + 只读 `dist-freshness` + `node --check`（§6）
-- [ ] **原生 Windows 真机门禁（红线 1）** —— **未执行**：另起目标执行，且必须跑在 §5 的终版 tarball 上（§7 / §8）
+- [x] **原生 Windows 真机门禁（红线 1）** —— **已实测通过**：`win32/x64` + Node `v24.21.0` + 宿主 `0.2.0-rc.2`，T1–T5 **通过 15 / 失败 0 / 告警 1**、T3 看板文件系统生命周期 **32/32 步**；两轮真机（① 候选包 → ② README 回填后重建重打的终版包）使**被测产物 == 发布产物**；台账轮 `--static-only` 两平台分记（Windows `win32/x64` 67 项 / 259 处；Linux `linux/x64` 同结论）。执行经 WSL↔Windows 互操作，该链路与纯原生场景的差异已如实登记（§7 / `docs/platform-gate.md` §7.8）
 - [ ] **原生 macOS 真机门禁** —— **未执行**（§7 / §8）
 - [ ] 合并 `main` / 打 annotated tag / `npm publish` / GitHub release —— **准备阶段未执行**，由负责人人工 gate 决定（§8）
 
@@ -194,7 +196,7 @@ curl -s ... dsh-graph/client.js ; node --check <下载的 bundle>      # 期望 
 
 ## 5. 终版产物（红线 3：跨机器传递唯一渠道为 tarball）
 
-**终版发布产物（本版唯一发布产物；**已按 §3「返工记录」重打**）**：
+**候选包（g-466 交付；**已按 §3「返工记录」重打**；Windows 真机**首轮**被测对象）**：
 
 | 项 | 值 |
 |---|---|
@@ -231,6 +233,37 @@ sha1 `3022b2bcb2e92ed7aaeabaa9c3ebb4535ca9598a`（同为 1436632 B / 43 成员�
 
 **被测产物纪律**：Windows 真机门禁（另起目标）与负责人人工发布都必须以**本表这一个 tarball** 为被测 / 发布产物：
 先 `sha256sum` 对账（Windows 用 `certutil -hashfile … SHA256`，macOS 用 `shasum -a 256`），再执行门禁或发布。
+（真机首轮实测用的就是上表候选包 —— 其被拷到 `tmp/uat-v0200/final-verify-20261009T233319/pack/` 的副本 sha256 与上表逐字一致。）
+
+**回填重打（g-467 真机闭环，2026-10-09；**发布产物以本节为准**）**：上表 `5d50aeab…` 是**真机首轮被测的候选包**。
+Windows 真机 PASS 后，按回填要求把两份 README 的平台状态表 Windows 行由「未验证」改为「已通过」+ 实测事实
+（**macOS 行保持不变**），随后在 worktree `.worktrees/g-467-att-01`（基线 `e3a2dba`）内 `bash scripts/build.sh` 重建、
+`(cd dist && npm pack …)` 重打**终版包**，并**在新包上重跑一次真机**：
+
+| 项 | ① 候选包（首轮被测） | ② **终版包（被测 == 发布）** |
+|---|---|---|
+| 路径 | `tmp/uat-v0200/final-verify-20261009T233319/pack/dsh-graph-0.20.0.tgz` | `.worktrees/g-467-att-01/tmp/release-0200-final/dsh-graph-0.20.0.tgz` |
+| 字节数 | 1436632 | **1436959** |
+| sha256 | `5d50aeab7943d678f521e8822b7f716c540b6f9e460950cdcee42b6d418f684d` | **`51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a`** |
+| sha1（`npm publish` 后 `npm view` 对账用） | `2190fee0d459b8c43ccc9b7ad5ba7337b9a056bd` | **`01590980f4800e5c9c8d442fc62ade11802ef482`** |
+| 成员数 | 43 | 43 |
+| 真机结论（原生 Windows） | PASS 15 / 0 / 1（T3 32/32 步） | **PASS 15 / 0 / 1（T3 32/32 步，已重跑）** |
+
+`diff -rq` 实拍（两包各自解包后逐文件对比）：
+
+```text
+$ diff -rq tmp/g467/rc-extract/package tmp/g467/final-extract/package
+Files tmp/g467/rc-extract/package/README.md and tmp/g467/final-extract/package/README.md differ
+```
+
+⇒ **仅 `README.md` 不同，逐字节相同 42 / 43**；产品代码 / 客户端 bundle / `prompts` / `diagrams` 全部逐字节相同
+（与 v0.19.8 的 README-only 裁决先例同形）。两包的 `package/package.json` version 与
+`package/lib/client.js` 的 `PLUGIN_VERSION` 均为 `0.20.0`。**§8 的 `SHA256SUMS` / GitHub release 对账以
+`51d7de25…` 为准**；逐字真机报告（两轮 + 两平台台账轮 + 互操作差异登记）见 `docs/platform-gate.md` §7.8。
+
+**发布取件路径（防 worktree 清理后失效）**：终版包另存一份于**仓库主树**
+`tmp/uat-v0200/g467-final-pack/dsh-graph-0.20.0.tgz` —— sha256 与上表 ② 列**逐字一致**（`51d7de25…`，1436959 B）；
+原始逐字日志全文另存于 `tmp/uat-v0200/g467-evidence/`。两处均在 gitignored `tmp/` 下，**不入 git**。
 
 ## 6. 测试与静态检查（worktree `.worktrees/g-466-att-01` 内）
 
@@ -259,41 +292,65 @@ sha1 `3022b2bcb2e92ed7aaeabaa9c3ebb4535ca9598a`（同为 1436632 B / 43 成员�
 
 **未删除或放宽任何断言与守卫，未手填任何 hash。**
 
-## 7. 平台诚实性（本版**没有**任何真机结论）
+**回填后复跑（g-467，worktree `.worktrees/g-467-att-01`，基线 `e3a2dba`）**：README 平台行回填 + `bash scripts/build.sh`
+重建后复跑整套件自证闸门：
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 整套件自证闸门（回填后） | `node scripts/run-tests.mjs` | **tests=2341 / pass=2341 / fail=0 / skipped=0 / cancelled=0 / todo=0，exit 0**（自证行：`[run-tests] ✔ 自证通过：tests=2341 (>0) skipped=0 fail=0 cancelled=0 todo=0 pass=2341 exit=0 ms=67925 glob=core/tests/*.test.ts`） |
+
+> 计数较上表 `2339` **+2** 的原因：上表那次闸门记录早于 §6「返工新增」的 `g466-readme-host-range-badge.test.ts`
+> （该文件恰含 **2** 个 test）—— 两者相加即 `2341`，**非**本轮新增/删减测试。本轮**未**改任何测试文件。
+
+## 7. 平台诚实性（Windows 已实测通过；macOS 未执行）
 
 | 平台 | 本版状态 | 依据 |
 |---|---|---|
 | Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0；构建 / 打包 / 自证闸门均在本机完成） | §6 |
-| 原生 Windows | ⏳ **未执行 —— 待执行（另起目标，经 interop 尝试）** | 见下 |
-| 原生 macOS | ⏳ **未执行** | 见下 |
+| 原生 Windows | ✅ **已实测通过**（原生 Windows 进程，经 WSL↔Windows 互操作）：`win32/x64` + Node `v24.21.0` + 宿主 `0.2.0-rc.2`；T1–T5 **通过 15 / 失败 0 / 告警 1**、T3 看板文件系统生命周期 **32/32 步**；台账轮 `--static-only` 双平台分记（**67 项 / 259 处命中 / 忽略 0 行**） | §7.8 / platform-gate §7.8 |
+| 原生 macOS | ⏳ **未执行**（**不得读出「已通过」**） | 见下 |
 
-**为什么不得沿用上一版结论**：`docs/platform-gate.md` §7.3 / §7.4 / §7.6 / §7.7 登记的真机 PASS 覆盖的是
+**为什么本版结论必须本次实测、不得沿用上一版**：`docs/platform-gate.md` §7.3 / §7.4 / §7.6 / §7.7 登记的真机 PASS 覆盖的是
 **v0.19.8 及更早的产品代码**，而本版含 10 项目标的产品改动（含新增随包 `diagrams/` 资产与客户端入口）⇒
-**不能替代**本次候选包。`README` 的平台状态表因此**不得读出「已通过」**。
-按发布门禁红线（`AGENTS.md`「发布门禁」段）：**Windows 验证缺失时 README 须如实标注「Windows 未验证」**。
+**不能替代**本次产物。故本轮**对候选包与回填重打后的终版包各跑一次真机**（两轮 sha256 均记录，见 §5 与
+`docs/platform-gate.md` §7.8），**未沿用**任何上一版结论；**macOS 本轮未执行** ⇒ 其行**保持「未执行」**、不得读出「已通过」。
+
+**真机结论的可核对事实（本轮实测，Windows 行）**：原生 Windows `win32/x64`；Node `v24.21.0`；宿主 DSH `0.2.0-rc.2`；
+T1–T5 **通过 15 / 失败 0 / 告警 1**（唯一告警为设计内：`--tarball` 轮包内无 `core/*.ts` ⇒ 台账对账改在仓库根完成，**非缺陷**）；
+T3 看板文件系统生命周期 **32/32 步**（g-427 形态 8 步，每步盘面断言）；台账轮 `--static-only` = 通过 2 / 失败 0 / 告警 0、
+台账 **67 项 / 259 处命中 / 未登记 0 / 忽略 0 行**。按发布门禁红线（`AGENTS.md`「发布门禁」段），
+Windows 已验证 ⇒ README 可写「已通过」，但必须附上述**可核对的事实**。
+
+**诚实性边界（不得读作「与原生完全一致」）**：执行经 **WSL↔Windows 互操作**（Windows `%TEMP%` 上的隔离 `DSH_HOME`、
+被测 tarball 先由 Windows 进程复制到原生路径、环境继承自 WSL 启动的 `cmd.exe`，且 **UNC 路径直喂 `--tarball` 必失败**），
+与纯原生用户场景的 4 点差异**已逐条登记**于 `docs/platform-gate.md` §7.8。**T1–T5 真跑在原生 Windows 进程上**，
+但**不是**「纯原生交互场景的完全等价复验」。
 
 **README 相应表述如何处理（本轮实改）**：
 
 | 文件:行 | 改后表述（摘要） |
 |---|---|
-| `README.md:35` | `⏳ **本版未验证（待执行）**：v0.20.0 发布候选包尚未在原生 Windows 上执行真机门禁 ⇒ 不得读出「已通过」`；指向本清单，并声明历史记录只覆盖 v0.19.8 及更早产品代码 |
-| `README.md:36` | `⏳ **本版未验证**：… 尚未在原生 macOS 上执行真机门禁 ⇒ 不得读出「已通过」`；历史记录 `§7.4 / §7.7` 同样只覆盖旧产品代码 |
-| `dsh-graph-host/README.md:52` / `:53`（zh） | 同上（含 GitHub 绝对链接） |
-| `dsh-graph-host/README.md:295` / `:296`（en） | `⏳ **Not verified for this release (pending)** … ⇒ **must not be read as "passed"**`（英文镜像） |
+| `README.md:35` | `✅ **已实测通过**：原生 Windows 真机（win32/x64）+ Node v24.21.0 + 宿主 DSH 0.2.0-rc.2，T1–T5 通过 15 / 失败 0 / 告警 1、T3 生命周期 32/32 步`；附「唯一告警为设计内」并指向 `platform-gate §7.8` 的互操作差异登记 |
+| `README.md:36` | **未改动**：`⏳ **本版未验证**：… 尚未在原生 macOS 上执行真机门禁 ⇒ 不得读出「已通过」`（macOS 本轮未执行） |
+| `dsh-graph-host/README.md:52`（zh） | 同 `README.md:35`（含 GitHub 绝对链接指向 §7.8） |
+| `dsh-graph-host/README.md:53`（zh） | **未改动**（macOS 行） |
+| `dsh-graph-host/README.md:295`（en） | `✅ **Verified on-device** … T1–T5 **15 passed / 0 failed / 1 warning**, T3 kanban filesystem lifecycle **32/32 steps**`（英文镜像） |
+| `dsh-graph-host/README.md:296`（en） | **未改动**（macOS 行） |
 
-**回填（待真机执行后）**：Windows 真机目标完成后，须按 v0.19.8 先例**接续追加** `docs/platform-gate.md` §7.8（并在 §7 汇总表加一行），
-把上面 3 处表（根 + 包内 zh/en）的 Windows 行改为实测口径，并在 §5 追加终版产物行；
-**若因回填需要重打 tarball，须重新记录 sha256 并对新包重跑门禁或按红旗裁决**（v0.19.8 的 README-only 裁决先例见其 §4）。
+**回填已执行（本轮完成）**：按 v0.19.8 先例**接续追加** `docs/platform-gate.md` **§7.8**（并在其 §7 汇总表加一行）；
+3 处表（根 + 包内 zh/en）的 Windows 行已改为实测口径、**macOS 行逐字未动**；§5 已追加**终版包**行（含新 sha256 与
+`diff -rq` 实拍）。**因回填重打的 tarball 已重新记录 sha256（`51d7de25…`）并对新包重跑真机**
+（结果同 PASS 15/0/1、T3 32/32 步）⇒ **被测产物 == 发布产物**，无需诉诸 README-only 红旗裁决。
 
 ## 8. 未执行项（全部由负责人人工 gate，准备阶段一律不执行）
 
 - [ ] **合并 `main`**：`v0.20.0-test`（打包基线 `1bba546`）→ `main`（`--no-ff` 合并；建议合并后核对 `HEAD^{tree}` 与集成分支 tip 相等）；
 - [ ] **打 annotated tag `v0.20.0`**；
 - [ ] **`git push`**（`main` + tag）；
-- [ ] **`npm publish`**（**负责人手动执行**；tarball 直发，发布后用 `npm view dsh-graph@0.20.0 dist --json` 的 `shasum` 与本清单 §5 的 sha1 `2190fee0…` 对账）；
-- [ ] **GitHub release `v0.20.0`**（附件 `dsh-graph-0.20.0.tgz` + `SHA256SUMS`，下载回验 sha256 = `5d50aeab…`）；
-- [ ] **原生 Windows 真机门禁**（另起目标，被测产物 = §5 终版 tarball）；
-- [ ] **原生 macOS 真机门禁**（如负责人决定执行）；
+- [ ] **`npm publish`**（**负责人手动执行**；tarball 直发**终版包**，发布后用 `npm view dsh-graph@0.20.0 dist --json` 的 `shasum` 与本清单 §5「终版包」列的 sha1 **`01590980f4800e5c9c8d442fc62ade11802ef482`** 对账）；
+- [ ] **GitHub release `v0.20.0`**（附件 = **终版包** `dsh-graph-0.20.0.tgz` + `SHA256SUMS`，下载回验 sha256 = **`51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a`**）；
+- [x] **原生 Windows 真机门禁** —— **已实测通过**（g-467：候选包 + 回填重打的终版包各跑一轮，`win32/x64`、PASS 15/0/1、T3 32/32 步；被测产物 == 发布产物；逐字报告见 `docs/platform-gate.md` §7.8）；
+- [ ] **原生 macOS 真机门禁**（如负责人决定执行 —— 本轮**未执行**）；
 - [ ] 发布后由负责人在看板决定是否把 `v0.20.0` 泳道标为 `released`。
 
 ## 9. 发布期约束（**必须先合 `main`，否则文档与 README 的图链接 404**）
