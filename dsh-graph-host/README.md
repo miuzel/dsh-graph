@@ -72,7 +72,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 `web boot: N entry did not activate` / `<插件名>: failed` —— 插件的 host 半边（`graph_*` 工具）正常、热加载也正常，只有浏览器半边不激活。
 
 **成因**：`dsh.client.inject` **不是「名录」，而是加载顺序边**。浏览器端 loader
-（`@deepseek-ai/dsh-client-modules/lib/client.js:655-658`）只对 inject 中**已存在于客户端清单**的包名做前置加载，
+（`@deepseek-ai/dsh-client-modules/lib/client.js`）只对 inject 中**已存在于客户端清单**的包名做前置加载，
 名字不在清单里就**静默跳过**。而 `@deepseek-ai/dsh-client-runtime` 自 dsh 0.2.x 起**不再随宿主分发**
 （在 dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 的安装树里均无此包），但它的包清单**仍声明 `dsh.client`**：
 升级过程中若这个旧条目/旧副本残留在 profile 里，它会**重新变成一条客户端清单行**；该行的加载失败会被级联成
@@ -316,7 +316,7 @@ after upgrading the host, a Web GUI cold start reports `web boot: N entry did no
 host half (`graph_*` tools) works and hot reload works, but its browser half never activates.
 
 **Cause**: `dsh.client.inject` is **not a directory listing, it is a load-order edge**. The browser-side loader
-(`@deepseek-ai/dsh-client-modules/lib/client.js:655-658`) preloads only those inject names that **already exist in the client
+(`@deepseek-ai/dsh-client-modules/lib/client.js`) preloads only those inject names that **already exist in the client
 manifest**, and silently skips the rest. `@deepseek-ai/dsh-client-runtime` is **no longer shipped with the host** since dsh 0.2.x
 (absent from the install trees of dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2), yet its package manifest **still declares `dsh.client`**.
 If an old entry/copy of it survives an upgrade in your profile, it **becomes a client manifest row again**; that row's load failure
