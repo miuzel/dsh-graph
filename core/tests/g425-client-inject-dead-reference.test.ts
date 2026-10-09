@@ -7,7 +7,7 @@
  *     时**静默跳过** ⇒ 该字段是**加载顺序边**（有目标行才前置加载），不是硬依赖、也不是「纯名录」。
  *  2. `@deepseek-ai/dsh-client-runtime` 的包清单**声明了 `dsh.client`（platform:web、immediately:true）**
  *     （npm 0.0.1-rc.1 / 0.1.1-rc.2 实测）⇒ 升级过程残留的旧副本会**重新变成一条客户端清单行**；
- *     而它在三条受支持宿主线上**都不在安装树里**（dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 实测）。
+ *     而它在四条受支持宿主线上**都不在安装树里**（dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-alpha.2 实测）。
  *     ⇒ 声明它 = 本插件成为「残留坏行」的消费者，坏行失败会被级联成本插件条目失败
  *     （`client-modules: "dsh-graph" not loaded because dependency "…" failed`）；干净安装无该行故不复现。
  *  3. 负责人已在**干净安装的桌面版**上复现 issue#1 ⇒ 真实缺陷。桌面壳真机在本机不可得
@@ -47,8 +47,8 @@ interface InjectEntry {
   required_by?: string;
 }
 
-/** 本包 `engines.dsh` 覆盖的受支持宿主线（验收范围，勿擅自扩表）。 */
-const SUPPORTED_HOSTS = ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2"];
+/** 本包宿主兼容范围覆盖的受支持宿主线（验收范围，勿擅自扩表）。 */
+const SUPPORTED_HOSTS = ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.2"];
 
 /**
  * inject 登记表：源清单里每个名字都必须在此登记，否则 fail-closed 判红。
@@ -57,23 +57,29 @@ const SUPPORTED_HOSTS = ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2"];
 const INJECT_REGISTRY: Record<string, InjectEntry> = {
   "@deepseek-ai/dsh-client-ui-settings": {
     class: "row",
-    hosts: ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2"],
+    hosts: ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.2"],
     evidence:
       "0.1.x：隔离实例 dsh 0.1.5-rc.2 / 0.1.7-rc.2 的 web profile effective-config.yml 客户端清单均含该行；" +
-      "0.2.x：dsh 0.2.0-rc.2 安装树 .pnpm/@deepseek-ai+dsh-client-ui-settings/*/package.json 声明 dsh.client（platform:web）",
+      "0.2.0-rc.2：安装树 .pnpm/@deepseek-ai+dsh-client-ui-settings/*/package.json 声明 dsh.client（platform:web）；" +
+      "0.2.1-alpha.2：实读安装树 .pnpm/@deepseek-ai+dsh-client-ui-settings@0.2.1-alpha.2_*/node_modules/@deepseek-ai/dsh-client-ui-settings/package.json " +
+      "L28-33 声明 dsh.client（inject=[@deepseek-ai/dsh-api-remotes]、platform:\"web\"）；composed 配置 " +
+      "tmp/dsh-test/0.2.1-alpha.2/effective-config.yml L538-539 亦有该 id/name 行",
   },
   "@deepseek-ai/dsh-client-ui-sidebar-right": {
     class: "row",
-    hosts: ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2"],
+    hosts: ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.2"],
     evidence:
-      "同 ui-settings 口径：0.1.x effective-config.yml 客户端清单行 + 0.2.x 安装树 .pnpm/@deepseek-ai+dsh-client-ui-sidebar-right/*/package.json 声明 dsh.client",
+      "同 ui-settings 口径：0.1.x effective-config.yml 客户端清单行 + 0.2.0-rc.2 安装树 .pnpm/@deepseek-ai+dsh-client-ui-sidebar-right/*/package.json 声明 dsh.client；" +
+      "0.2.1-alpha.2：实读安装树 .pnpm/@deepseek-ai+dsh-client-ui-sidebar-right@0.2.1-alpha.2_*/node_modules/@deepseek-ai/dsh-client-ui-sidebar-right/package.json " +
+      "L28-38（dsh.client，platform:\"web\"）；composed 配置 tmp/dsh-test/0.2.1-alpha.2/effective-config.yml L526 该 name 行",
   },
   "@deepseek-ai/dsh-client-ui-primitives": {
     class: "inert-module",
     required_by: "@deepseek-ai/dsh-client-ui-primitives",
     evidence:
-      "该包清单**无 `dsh` 字段** ⇒ 永远成不了客户端清单行；本仓客户端 _wrapper-top.js 以 " +
-      "require(\"@deepseek-ai/dsh-client-ui-primitives\") 当模块用（MarkdownText 原语）",
+      "该包清单**无 `dsh` 字段** ⇒ 永远成不了客户端清单行（0.2.1-alpha.2 安装树 " +
+      ".pnpm/@deepseek-ai+dsh-client-ui-primitives@0.2.1-alpha.2_*/…/package.json 亦 grep \"dsh\" 0 命中）；" +
+      "本仓客户端 _wrapper-top.js 以 require(\"@deepseek-ai/dsh-client-ui-primitives\") 当模块用（MarkdownText 原语）",
   },
 };
 
@@ -81,12 +87,12 @@ const INJECT_REGISTRY: Record<string, InjectEntry> = {
  * 死引用黑名单：出现即判红，**即使有人把它补进 INJECT_REGISTRY 也仍然判红**。
  * `@deepseek-ai/dsh-client-runtime`：最后发布 2026-08-21、未随 dsh 0.2.x 分发；但它的包清单
  * 声明了 `dsh.client`（platform:web、immediately:true）⇒ 升级残留副本会重新变成客户端清单行，
- * 而它在 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 三条受支持线上都不在安装树里 ⇒ 让它成行必级联失败。
+ * 而它在 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-alpha.2 四条受支持线上都不在安装树里 ⇒ 让它成行必级联失败。
  * 机制出处：`@deepseek-ai/dsh-client-modules/lib/client.js:655-658`（只对存在于清单的 inject 名前置加载）。
  */
 const DEAD_REFERENCES: Record<string, string> = {
   "@deepseek-ai/dsh-client-runtime":
-    "死引用 @deepseek-ai/dsh-client-runtime：该包未随 dsh 0.1.5-rc.2/0.1.7-rc.2/0.2.0-rc.2 分发（安装树 0 命中），" +
+    "死引用 @deepseek-ai/dsh-client-runtime：该包未随 dsh 0.1.5-rc.2/0.1.7-rc.2/0.2.0-rc.2/0.2.1-alpha.2 分发（安装树 0 命中），" +
     "但其包清单声明 dsh.client ⇒ 升级残留副本会重新成为客户端清单行并把本插件一起拖死" +
     "（client-modules/lib/client.js:655-658：inject 名存在则前置加载；坏行失败级联）。绝不声明用不到的名字。",
 };

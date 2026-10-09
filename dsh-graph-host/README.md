@@ -42,7 +42,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 **当前版本**：v0.19.8（本次发布准备产物；`0.19.8-alpha` 为开发线版本串）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
-**宿主兼容范围**：`engines.dsh` 声明 `>=0.1.5-rc.2 <0.2.1-0`（上界 `-0` 排除 `0.2.1` 的一切预发布与正式版），供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
+**宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.2-0`（上界 `-0` 排除 `0.2.2` 的一切预发布与正式版；整条 `0.2.1` 线已在范围内），`engines.dsh` 供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。⚠️ 宿主的**安装/启动门禁只读 `peerDependencies`、不读 `engines.dsh`**，故两处必须同步放宽（只改 `engines.dsh` 无效）。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
 **平台状态**：
 
@@ -74,7 +74,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 **成因**：`dsh.client.inject` **不是「名录」，而是加载顺序边**。浏览器端 loader
 （`@deepseek-ai/dsh-client-modules/lib/client.js`）只对 inject 中**已存在于客户端清单**的包名做前置加载，
 名字不在清单里就**静默跳过**。而 `@deepseek-ai/dsh-client-runtime` 自 dsh 0.2.x 起**不再随宿主分发**
-（在 dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 的安装树里均无此包），但它的包清单**仍声明 `dsh.client`**：
+（在 dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-alpha.2 的安装树里均无此包），但它的包清单**仍声明 `dsh.client`**：
 升级过程中若这个旧条目/旧副本残留在 profile 里，它会**重新变成一条客户端清单行**；该行的加载失败会被级联成
 `client-modules: "<插件>" not loaded because dependency "…" failed`，把**任何仍声明它的插件**一起拖死。
 干净安装没有这一行，所以不复现。**dsh-graph 已删除该声明**（即使残留仍在，本插件也不再是它的消费者）。
@@ -285,7 +285,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 **Current version**: v0.19.8 (this release-preparation artifact; `0.19.8-alpha` was the development version string — not yet published to npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
-**Host compatibility range**: `engines.dsh` declares `>=0.1.5-rc.2 <0.2.1-0` (the `-0` upper bound excludes every `0.2.1` prerelease and final release); host-aware markets such as dsh-market read it for card display and install/update pre-flight. **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, and `0.2.0-rc.1`; `0.2.0-rc.2` (verified by the maintainer on 2026-09-30). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
+**Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` declare `>=0.1.5-rc.2 <0.2.2-0` in lockstep (the `-0` upper bound excludes every `0.2.2` prerelease and final release; the entire `0.2.1` line is now inside the range); `engines.dsh` is what host-aware markets such as dsh-market read for card display and install/update pre-flight. ⚠️ The host's **install/boot gate reads `peerDependencies` only, never `engines.dsh`**, so both fields must be widened together (widening `engines.dsh` alone has no effect). **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
 **Platform status**:
 
@@ -318,7 +318,7 @@ host half (`graph_*` tools) works and hot reload works, but its browser half nev
 **Cause**: `dsh.client.inject` is **not a directory listing, it is a load-order edge**. The browser-side loader
 (`@deepseek-ai/dsh-client-modules/lib/client.js`) preloads only those inject names that **already exist in the client
 manifest**, and silently skips the rest. `@deepseek-ai/dsh-client-runtime` is **no longer shipped with the host** since dsh 0.2.x
-(absent from the install trees of dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2), yet its package manifest **still declares `dsh.client`**.
+(absent from the install trees of dsh 0.1.5-rc.2 / 0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-alpha.2), yet its package manifest **still declares `dsh.client`**.
 If an old entry/copy of it survives an upgrade in your profile, it **becomes a client manifest row again**; that row's load failure
 cascades into `client-modules: "<plugin>" not loaded because dependency "…" failed`, dragging down **every plugin that still declares it**.
 A clean install has no such row, which is why it does not reproduce. **dsh-graph has dropped that declaration** — even if the
