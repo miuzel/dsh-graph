@@ -315,6 +315,9 @@ g-408 实测记录在案）。构建本身是**原子发布**的：先组装到�
 只写在各目标 frontmatter 的 `meta.relations`（`core/ops.ts`，`RELATION_TYPES`），
 `meta.depends_on` 独立存放，且会做替代环检测（`core/ops.ts`，`RELATION_CYCLE_TYPES`）。
 
+实践口径：排期在**规划期**确定——草稿目标必须先排进某个版本或独立目标，才能继续做阶段迁移；
+交付期只把成果**合入集成分支**，不再调整排期（此时改动要连带版本归属与集成分支，代价高）。
+
 ### 7.2 `released` 有准入条件
 
 `releaseVersion`（`core/version-lane.ts`）在写任何状态之前做两件事：

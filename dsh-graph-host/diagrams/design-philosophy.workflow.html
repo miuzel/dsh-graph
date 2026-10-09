@@ -4987,7 +4987,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / 图版 04">
-      <svg viewBox="0 0 768 1136" data-reader-fit="intrinsic-height" data-layout-contract="readable-v2" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+      <svg viewBox="0 0 785 1360" data-reader-fit="intrinsic-height" data-layout-contract="readable-v2" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
         <title id="archify-diagram-title">dsh-graph 主链：角色、门禁与留痕</title>
         <desc id="archify-diagram-description">由 Archify 生成的工作流图。</desc>
         <!-- Definitions -->
@@ -5013,24 +5013,24 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Swimlanes -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="712" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="729" height="330" rx="10" class="c-lane" stroke-width="1"/>
         <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / 主管（AI）</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="178" width="712" height="106" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="200" class="t-dim" font-size="10" font-weight="600">02 / 执行子代理（AI）</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="402" width="729" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="424" class="t-dim" font-size="10" font-weight="600">02 / 执行子代理（AI）</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="304" width="712" height="106" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="326" class="t-dim" font-size="10" font-weight="600">03 / 结果与复核留痕</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="528" width="729" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="550" class="t-dim" font-size="10" font-weight="600">03 / 结果与复核留痕</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-3" x="40" y="430" width="712" height="106" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="452" class="t-dim" font-size="10" font-weight="600">04 / 负责人（人）</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-3" x="40" y="654" width="729" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="676" class="t-dim" font-size="10" font-weight="600">04 / 负责人（人）</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-4" x="40" y="556" width="712" height="330" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="578" class="t-dim" font-size="10" font-weight="600">05 / 交付与发布</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-4" x="40" y="780" width="729" height="330" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="802" class="t-dim" font-size="10" font-weight="600">05 / 交付与发布</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-5" x="40" y="906" width="712" height="106" rx="10" class="c-lane" stroke-width="1"/>
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-5-exception" x="46" y="912" width="700" height="94" rx="8" class="c-security-group" stroke-width="1"/>
-        <text x="54" y="928" class="t-security" font-size="10" font-weight="600">EX / 例外路径</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-5" x="40" y="1130" width="729" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-5-exception" x="46" y="1136" width="717" height="94" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="1152" class="t-security" font-size="10" font-weight="600">EX / 例外路径</text>
 
         <!-- Phase headers -->
 
@@ -5039,198 +5039,214 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
         <!-- Edge paths -->
-        <path data-edge-from="admission" data-edge-to="reject" data-edge-label="拒绝" data-edge-key="0" data-edge-id="admission-reject" data-composition-routing="workflow-v2-auto" data-edge-role="error" data-composition-points="221,154;221,974;648,974" d="M 221 154 L 221 974 L 648 974" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="admission" data-edge-to="worktree" data-edge-label="通过" data-edge-key="1" data-edge-id="admission-worktree" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="260,120;334,120;334,212" d="M 260 120 L 334 120 L 334 212" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="attempt" data-edge-to="results" data-edge-key="2" data-edge-id="attempt-results" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="454,280;454,338" d="M 454 280 L 454 338" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="criteria" data-edge-to="admission" data-edge-key="3" data-edge-id="criteria-admission" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="140,120;168,120" d="M 140 120 L 168 120" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="gate1" data-edge-to="criteria" data-edge-key="4" data-edge-id="g1-criteria" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="48,498;32,498;32,120;48,120" d="M 48 498 L 32 498 L 32 120 L 48 120" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="results" data-edge-to="review" data-edge-key="5" data-edge-id="results-review" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="500,372;528,372" d="M 500 372 L 528 372" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="review" data-edge-to="verdict" data-edge-label="提交裁决" data-edge-key="6" data-edge-id="review-verdict" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="574,406;574,464" d="M 574 406 L 574 464" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="verdict" data-edge-to="version" data-edge-label="交付" data-edge-key="7" data-edge-id="verdict-version" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="574,532;574,702" d="M 574 532 L 574 702" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="version" data-edge-to="publish" data-edge-key="8" data-edge-id="version-publish" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="574,770;574,814" d="M 574 770 L 574 814" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="worktree" data-edge-to="attempt" data-edge-key="9" data-edge-id="worktree-attempt" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="380,246;408,246" d="M 380 246 L 408 246" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="admission" data-edge-to="reject" data-edge-label="拒绝" data-edge-key="0" data-edge-id="admission-reject" data-composition-routing="workflow-v2-auto" data-edge-role="error" data-composition-points="238,266;238,1198;665,1198" d="M 238 266 L 238 1198 L 665 1198" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="admission" data-edge-to="worktree" data-edge-label="通过" data-edge-key="1" data-edge-id="admission-worktree" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="277,232;351,232;351,436" d="M 277 232 L 351 232 L 351 436" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="attempt" data-edge-to="results" data-edge-key="2" data-edge-id="attempt-results" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="471,504;471,562" d="M 471 504 L 471 562" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="criteria" data-edge-to="admission" data-edge-key="3" data-edge-id="criteria-admission" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="157,232;185,232" d="M 157 232 L 185 232" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="gate1" data-edge-to="criteria" data-edge-key="4" data-edge-id="g1-criteria" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="65,729;49,729;49,232;65,232" d="M 65 729 L 49 729 L 49 232 L 65 232" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="merge" data-edge-to="publish" data-edge-key="5" data-edge-id="merge-publish" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="591,994;591,1038" d="M 591 994 L 591 1038" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="results" data-edge-to="review" data-edge-key="6" data-edge-id="results-review" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="517,596;545,596" d="M 517 596 L 545 596" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="review" data-edge-to="verdict" data-edge-label="提交裁决" data-edge-key="7" data-edge-id="review-verdict" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="591,630;591,688" d="M 591 630 L 591 688" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="scheduling" data-edge-to="gate1" data-edge-label="排期确定" data-edge-key="8" data-edge-id="scheduling-gate1" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="48,120;32,120;32,776;111,776;111,756" d="M 48 120 L 32 120 L 32 776 L 111 776 L 111 756" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="verdict" data-edge-to="merge" data-edge-label="交付" data-edge-key="9" data-edge-id="verdict-merge" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="591,756;591,926" d="M 591 756 L 591 926" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="worktree" data-edge-to="attempt" data-edge-key="10" data-edge-id="worktree-attempt" data-composition-routing="workflow-v2-auto" data-edge-role="main" data-composition-points="397,470;425,470" d="M 397 470 L 425 470" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
 
         <!-- Nodes -->
         <g id="node-criteria" data-node-id="criteria" data-node-label="登记验收标准" tabindex="0" role="button" aria-label="聚焦登记验收标准，标准先定，再动手, 主管（AI）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="标准先定，再动手" data-node-tag="判据先于执行" data-node-context="主管（AI）">
           <title>登记验收标准 · 标准先定，再动手 · 主管（AI） · 判据先于执行</title>
-          <rect x="48" y="86" width="92" height="68" rx="6" class="c-mask"/>
-          <rect x="48" y="86" width="92" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
+          <rect x="65" y="198" width="92" height="68" rx="6" class="c-mask"/>
+          <rect x="65" y="198" width="92" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(71 204) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="111" y="230.2" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">登记验收标准</text>
+          <text data-detail="context" x="111" y="245.1" class="t-muted" font-size="8" text-anchor="middle">标准先定，再动手</text>
+        <text data-detail="fine" x="111" y="257.9" class="t-backend" font-size="7" text-anchor="middle">判据先于执行</text>
+        </g>
+
+        <g id="node-scheduling" data-node-id="scheduling" data-node-label="排入版本（规划期）" tabindex="0" role="button" aria-label="聚焦排入版本（规划期），先排进版本或独立目标，排期在此定, 主管（AI）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="先排进版本或独立目标，排期在此定" data-node-tag="排期" data-node-context="主管（AI）">
+          <title>排入版本（规划期） · 先排进版本或独立目标，排期在此定 · 主管（AI） · 排期</title>
+          <rect x="48" y="86" width="126" height="68" rx="6" class="c-mask"/>
+          <rect x="48" y="86" width="126" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(54 92) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="94" y="118.2" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">登记验收标准</text>
-          <text data-detail="context" x="94" y="133.1" class="t-muted" font-size="8" text-anchor="middle">标准先定，再动手</text>
-        <text data-detail="fine" x="94" y="145.9" class="t-backend" font-size="7" text-anchor="middle">判据先于执行</text>
+          <text data-node-label="" data-detail-anchor="" x="111" y="118.1" class="t-primary" font-size="10.9" font-weight="600" text-anchor="middle">排入版本（规划期）</text>
+          <text data-detail="context" x="111" y="130.7" class="t-muted" font-size="6.1" text-anchor="middle">先排进版本或独立目标，排期在此定</text>
+        <text data-detail="fine" x="111" y="143" class="t-backend" font-size="7" text-anchor="middle">排期</text>
         </g>
 
         <g id="node-admission" data-node-id="admission" data-node-label="开工前准入检查" tabindex="0" role="button" aria-label="聚焦开工前准入检查，不合格就退回，不留改动, 主管（AI）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="不合格就退回，不留改动" data-node-tag="准入" data-node-context="主管（AI）">
           <title>开工前准入检查 · 不合格就退回，不留改动 · 主管（AI） · 准入</title>
-          <rect x="168" y="86" width="92" height="68" rx="6" class="c-mask"/>
-          <rect x="168" y="86" width="92" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(174 92) scale(0.6875)">
+          <rect x="185" y="198" width="92" height="68" rx="6" class="c-mask"/>
+          <rect x="185" y="198" width="92" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(191 204) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="214" y="117" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">开工前准入检查</text>
-          <text data-detail="context" x="214" y="129.6" class="t-muted" font-size="6.3" text-anchor="middle">不合格就退回，不留改动</text>
-        <text data-detail="fine" x="214" y="142" class="t-backend" font-size="7" text-anchor="middle">准入</text>
+          <text data-node-label="" data-detail-anchor="" x="231" y="229" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">开工前准入检查</text>
+          <text data-detail="context" x="231" y="241.6" class="t-muted" font-size="6.3" text-anchor="middle">不合格就退回，不留改动</text>
+        <text data-detail="fine" x="231" y="254" class="t-backend" font-size="7" text-anchor="middle">准入</text>
         </g>
 
         <g id="node-worktree" data-node-id="worktree" data-node-label="独立工作区" tabindex="0" role="button" aria-label="聚焦独立工作区，每次执行互不干扰, 执行子代理（AI）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="每次执行互不干扰" data-node-tag="隔离" data-node-context="执行子代理（AI）">
           <title>独立工作区 · 每次执行互不干扰 · 执行子代理（AI） · 隔离</title>
-          <rect x="288" y="212" width="92" height="68" rx="6" class="c-mask"/>
-          <rect x="288" y="212" width="92" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(294 218) scale(0.6875)">
+          <rect x="305" y="436" width="92" height="68" rx="6" class="c-mask"/>
+          <rect x="305" y="436" width="92" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(311 442) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="340" y="233" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">独立工作区</text>
-          <text data-detail="context" x="334" y="250" class="t-muted" font-size="8" text-anchor="middle">每次执行互不干扰</text>
-        <text data-detail="fine" x="334" y="268" class="t-backend" font-size="7" text-anchor="middle">隔离</text>
+          <text data-node-label="" data-detail-anchor="" x="357" y="457" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">独立工作区</text>
+          <text data-detail="context" x="351" y="474" class="t-muted" font-size="8" text-anchor="middle">每次执行互不干扰</text>
+        <text data-detail="fine" x="351" y="492" class="t-backend" font-size="7" text-anchor="middle">隔离</text>
         </g>
 
         <g id="node-attempt" data-node-id="attempt" data-node-label="执行实现" tabindex="0" role="button" aria-label="聚焦执行实现，按验收标准动手, 执行子代理（AI）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="按验收标准动手" data-node-tag="执行" data-node-context="执行子代理（AI）">
           <title>执行实现 · 按验收标准动手 · 执行子代理（AI） · 执行</title>
-          <rect x="408" y="212" width="92" height="68" rx="6" class="c-mask"/>
-          <rect x="408" y="212" width="92" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(414 218) scale(0.6875)">
+          <rect x="425" y="436" width="92" height="68" rx="6" class="c-mask"/>
+          <rect x="425" y="436" width="92" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(431 442) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="454" y="233" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">执行实现</text>
-          <text data-detail="context" x="454" y="250" class="t-muted" font-size="8" text-anchor="middle">按验收标准动手</text>
-        <text data-detail="fine" x="454" y="268" class="t-backend" font-size="7" text-anchor="middle">执行</text>
+          <text data-node-label="" data-detail-anchor="" x="471" y="457" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">执行实现</text>
+          <text data-detail="context" x="471" y="474" class="t-muted" font-size="8" text-anchor="middle">按验收标准动手</text>
+        <text data-detail="fine" x="471" y="492" class="t-backend" font-size="7" text-anchor="middle">执行</text>
         </g>
 
         <g id="node-results" data-node-id="results" data-node-label="结果自动留存" tabindex="0" role="button" aria-label="聚焦结果自动留存，子代理产出自动记录, 结果与复核留痕" aria-pressed="false" data-node-kind="database" data-node-sublabel="子代理产出自动记录" data-node-tag="结果" data-node-context="结果与复核留痕">
           <title>结果自动留存 · 子代理产出自动记录 · 结果与复核留痕 · 结果</title>
-          <rect x="408" y="338" width="92" height="68" rx="6" class="c-mask"/>
-          <rect x="408" y="338" width="92" height="68" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(414 344) scale(0.6875)">
+          <rect x="425" y="562" width="92" height="68" rx="6" class="c-mask"/>
+          <rect x="425" y="562" width="92" height="68" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(431 568) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="454" y="370.2" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">结果自动留存</text>
-          <text data-detail="context" x="454" y="384.8" class="t-muted" font-size="7.7" text-anchor="middle">子代理产出自动记录</text>
-        <text data-detail="fine" x="454" y="397.6" class="t-database" font-size="7" text-anchor="middle">结果</text>
+          <text data-node-label="" data-detail-anchor="" x="471" y="594.2" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">结果自动留存</text>
+          <text data-detail="context" x="471" y="608.8" class="t-muted" font-size="7.7" text-anchor="middle">子代理产出自动记录</text>
+        <text data-detail="fine" x="471" y="621.6" class="t-database" font-size="7" text-anchor="middle">结果</text>
         </g>
 
         <g id="node-review" data-node-id="review" data-node-label="独立复核" tabindex="0" role="button" aria-label="聚焦独立复核，复核结论单独留存, 结果与复核留痕" aria-pressed="false" data-node-kind="database" data-node-sublabel="复核结论单独留存" data-node-tag="复核记录" data-node-context="结果与复核留痕">
           <title>独立复核 · 复核结论单独留存 · 结果与复核留痕 · 复核记录</title>
-          <rect x="528" y="338" width="92" height="68" rx="6" class="c-mask"/>
-          <rect x="528" y="338" width="92" height="68" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(534 344) scale(0.6875)">
+          <rect x="545" y="562" width="92" height="68" rx="6" class="c-mask"/>
+          <rect x="545" y="562" width="92" height="68" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(551 568) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="574" y="359" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">独立复核</text>
-          <text data-detail="context" x="574" y="376" class="t-muted" font-size="8" text-anchor="middle">复核结论单独留存</text>
-        <text data-detail="fine" x="574" y="394" class="t-database" font-size="7" text-anchor="middle">复核记录</text>
+          <text data-node-label="" data-detail-anchor="" x="591" y="583" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">独立复核</text>
+          <text data-detail="context" x="591" y="600" class="t-muted" font-size="8" text-anchor="middle">复核结论单独留存</text>
+        <text data-detail="fine" x="591" y="618" class="t-database" font-size="7" text-anchor="middle">复核记录</text>
         </g>
 
         <g id="node-gate1" data-node-id="gate1" data-node-label="人工 gate 1" tabindex="0" role="button" aria-label="聚焦人工 gate 1，同意开工后才派发, 负责人（人）" aria-pressed="false" data-node-kind="security" data-node-sublabel="同意开工后才派发" data-node-tag="人工 gate" data-node-context="负责人（人）">
           <title>人工 gate 1 · 同意开工后才派发 · 负责人（人） · 人工 gate</title>
-          <rect x="48" y="464" width="92" height="68" rx="6" class="c-mask"/>
-          <rect x="48" y="464" width="92" height="68" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="person" class="semantic-sigil s-security" transform="translate(54 470) scale(0.6875)">
+          <rect x="65" y="688" width="92" height="68" rx="6" class="c-mask"/>
+          <rect x="65" y="688" width="92" height="68" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="person" class="semantic-sigil s-security" transform="translate(71 694) scale(0.6875)">
             <circle cx="8" cy="4.5" r="2.5"/><path d="M3 14v-2a5 5 0 0 1 10 0v2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="94" y="496.2" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">人工 gate 1</text>
-          <text data-detail="context" x="94" y="511.1" class="t-muted" font-size="8" text-anchor="middle">同意开工后才派发</text>
-        <text data-detail="fine" x="94" y="523.9" class="t-security" font-size="7" text-anchor="middle">人工 gate</text>
+          <text data-node-label="" data-detail-anchor="" x="111" y="720.2" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">人工 gate 1</text>
+          <text data-detail="context" x="111" y="735.1" class="t-muted" font-size="8" text-anchor="middle">同意开工后才派发</text>
+        <text data-detail="fine" x="111" y="747.9" class="t-security" font-size="7" text-anchor="middle">人工 gate</text>
         </g>
 
         <g id="node-verdict" data-node-id="verdict" data-node-label="人工 gate 2" tabindex="0" role="button" aria-label="聚焦人工 gate 2，通过则交付，打回则返工, 负责人（人）" aria-pressed="false" data-node-kind="security" data-node-sublabel="通过则交付，打回则返工" data-node-tag="人工 gate" data-node-context="负责人（人）">
           <title>人工 gate 2 · 通过则交付，打回则返工 · 负责人（人） · 人工 gate</title>
-          <rect x="528" y="464" width="92" height="68" rx="6" class="c-mask"/>
-          <rect x="528" y="464" width="92" height="68" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="person" class="semantic-sigil s-security" transform="translate(534 470) scale(0.6875)">
+          <rect x="545" y="688" width="92" height="68" rx="6" class="c-mask"/>
+          <rect x="545" y="688" width="92" height="68" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="person" class="semantic-sigil s-security" transform="translate(551 694) scale(0.6875)">
             <circle cx="8" cy="4.5" r="2.5"/><path d="M3 14v-2a5 5 0 0 1 10 0v2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="574" y="496.2" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">人工 gate 2</text>
-          <text data-detail="context" x="574" y="509.1" class="t-muted" font-size="6.3" text-anchor="middle">通过则交付，打回则返工</text>
-        <text data-detail="fine" x="574" y="521.4" class="t-security" font-size="7" text-anchor="middle">人工 gate</text>
+          <text data-node-label="" data-detail-anchor="" x="591" y="720.2" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">人工 gate 2</text>
+          <text data-detail="context" x="591" y="733.1" class="t-muted" font-size="6.3" text-anchor="middle">通过则交付，打回则返工</text>
+        <text data-detail="fine" x="591" y="745.4" class="t-security" font-size="7" text-anchor="middle">人工 gate</text>
+        </g>
+
+        <g id="node-merge" data-node-id="merge" data-node-label="合入集成分支" tabindex="0" role="button" aria-label="聚焦合入集成分支，只合入，不再调整排期, 交付与发布" aria-pressed="false" data-node-kind="backend" data-node-sublabel="只合入，不再调整排期" data-node-tag="合入" data-node-context="交付与发布">
+          <title>合入集成分支 · 只合入，不再调整排期 · 交付与发布 · 合入</title>
+          <rect x="545" y="926" width="92" height="68" rx="6" class="c-mask"/>
+          <rect x="545" y="926" width="92" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(551 932) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="591" y="958.2" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">合入集成分支</text>
+          <text data-detail="context" x="591" y="971.9" class="t-muted" font-size="7" text-anchor="middle">只合入，不再调整排期</text>
+        <text data-detail="fine" x="591" y="984.4" class="t-backend" font-size="7" text-anchor="middle">合入</text>
         </g>
 
         <g id="node-publish" data-node-id="publish" data-node-label="人工 gate 3" tabindex="0" role="button" aria-label="聚焦人工 gate 3，放行后才发布与打标签, 交付与发布" aria-pressed="false" data-node-kind="security" data-node-sublabel="放行后才发布与打标签" data-node-tag="人工 gate" data-node-context="交付与发布">
           <title>人工 gate 3 · 放行后才发布与打标签 · 交付与发布 · 人工 gate</title>
-          <rect x="528" y="814" width="92" height="68" rx="6" class="c-mask"/>
-          <rect x="528" y="814" width="92" height="68" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="person" class="semantic-sigil s-security" transform="translate(534 820) scale(0.6875)">
+          <rect x="545" y="1038" width="92" height="68" rx="6" class="c-mask"/>
+          <rect x="545" y="1038" width="92" height="68" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="person" class="semantic-sigil s-security" transform="translate(551 1044) scale(0.6875)">
             <circle cx="8" cy="4.5" r="2.5"/><path d="M3 14v-2a5 5 0 0 1 10 0v2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="574" y="846.2" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">人工 gate 3</text>
-          <text data-detail="context" x="574" y="859.9" class="t-muted" font-size="7" text-anchor="middle">放行后才发布与打标签</text>
-        <text data-detail="fine" x="574" y="872.4" class="t-security" font-size="7" text-anchor="middle">人工 gate</text>
-        </g>
-
-        <g id="node-version" data-node-id="version" data-node-label="排入版本" tabindex="0" role="button" aria-label="聚焦排入版本，按版本计划归档排期, 交付与发布" aria-pressed="false" data-node-kind="database" data-node-sublabel="按版本计划归档排期" data-node-tag="版本" data-node-context="交付与发布">
-          <title>排入版本 · 按版本计划归档排期 · 交付与发布 · 版本</title>
-          <rect x="528" y="702" width="92" height="68" rx="6" class="c-mask"/>
-          <rect x="528" y="702" width="92" height="68" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(534 708) scale(0.6875)">
-            <ellipse cx="8" cy="4" rx="5" ry="2"/>
-            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="574" y="723" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">排入版本</text>
-          <text data-detail="context" x="574" y="740" class="t-muted" font-size="7.7" text-anchor="middle">按版本计划归档排期</text>
-        <text data-detail="fine" x="574" y="758" class="t-database" font-size="7" text-anchor="middle">版本</text>
+          <text data-node-label="" data-detail-anchor="" x="591" y="1070.2" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">人工 gate 3</text>
+          <text data-detail="context" x="591" y="1083.9" class="t-muted" font-size="7" text-anchor="middle">放行后才发布与打标签</text>
+        <text data-detail="fine" x="591" y="1096.4" class="t-security" font-size="7" text-anchor="middle">人工 gate</text>
         </g>
 
         <g id="node-reject" data-node-id="reject" data-node-label="退回" tabindex="0" role="button" aria-label="聚焦退回，不会创建执行任务, 例外路径" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="不会创建执行任务" data-node-tag="例外" data-node-context="例外路径">
           <title>退回 · 不会创建执行任务 · 例外路径 · 例外</title>
-          <rect x="648" y="940" width="92" height="68" rx="6" class="c-mask"/>
-          <rect x="648" y="940" width="92" height="68" rx="6" class="c-messagebus" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(654 946) scale(0.6875)">
+          <rect x="665" y="1164" width="92" height="68" rx="6" class="c-mask"/>
+          <rect x="665" y="1164" width="92" height="68" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(671 1170) scale(0.6875)">
             <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
             <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
             <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
             <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="694" y="961" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">退回</text>
-          <text data-detail="context" x="694" y="978" class="t-muted" font-size="8" text-anchor="middle">不会创建执行任务</text>
-        <text data-detail="fine" x="694" y="996" class="t-messagebus" font-size="7" text-anchor="middle">例外</text>
+          <text data-node-label="" data-detail-anchor="" x="711" y="1185" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">退回</text>
+          <text data-detail="context" x="711" y="1202" class="t-muted" font-size="8" text-anchor="middle">不会创建执行任务</text>
+        <text data-detail="fine" x="711" y="1220" class="t-messagebus" font-size="7" text-anchor="middle">例外</text>
         </g>
 
         <!-- Edge labels -->
         <g data-detail="context" data-edge-from="admission" data-edge-to="reject" data-edge-label="拒绝" data-edge-key="0" data-edge-id="admission-reject">
-          <rect x="419.5" y="954" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="434.5" y="964" class="t-edge-security" font-size="8" text-anchor="middle">拒绝</text>
+          <rect x="436.5" y="1178" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="451.5" y="1188" class="t-edge-security" font-size="8" text-anchor="middle">拒绝</text>
         </g>
         <g data-detail="context" data-edge-from="admission" data-edge-to="worktree" data-edge-label="通过" data-edge-key="1" data-edge-id="admission-worktree">
-          <rect x="282" y="100" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="297" y="110" class="t-edge-emphasis" font-size="8" text-anchor="middle">通过</text>
+          <rect x="299" y="212" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="314" y="222" class="t-edge-emphasis" font-size="8" text-anchor="middle">通过</text>
         </g>
 
 
 
 
-        <g data-detail="context" data-edge-from="review" data-edge-to="verdict" data-edge-label="提交裁决" data-edge-key="6" data-edge-id="review-verdict">
-          <rect x="549.8" y="425" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="574" y="435" class="t-edge-emphasis" font-size="8" text-anchor="middle">提交裁决</text>
-        </g>
-        <g data-detail="context" data-edge-from="verdict" data-edge-to="version" data-edge-label="交付" data-edge-key="7" data-edge-id="verdict-version">
-          <rect x="559" y="607" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="574" y="617" class="t-edge-default" font-size="8" text-anchor="middle">交付</text>
-        </g>
 
+        <g data-detail="context" data-edge-from="review" data-edge-to="verdict" data-edge-label="提交裁决" data-edge-key="7" data-edge-id="review-verdict">
+          <rect x="566.8" y="649" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="591" y="659" class="t-edge-emphasis" font-size="8" text-anchor="middle">提交裁决</text>
+        </g>
+        <g data-detail="context" data-edge-from="scheduling" data-edge-to="gate1" data-edge-label="排期确定" data-edge-key="8" data-edge-id="scheduling-gate1">
+          <rect x="47.3" y="756" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="71.5" y="766" class="t-edge-default" font-size="8" text-anchor="middle">排期确定</text>
+        </g>
+        <g data-detail="context" data-edge-from="verdict" data-edge-to="merge" data-edge-label="交付" data-edge-key="9" data-edge-id="verdict-merge">
+          <rect x="576" y="831" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="591" y="841" class="t-edge-default" font-size="8" text-anchor="middle">交付</text>
+        </g>
 
 
         <!-- Legend -->
         <g data-legend="" data-legend-bridge="">
-          <text x="20" y="1036" class="t-primary" font-size="12" font-weight="650">图例</text>
-          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="主管（AI）动作" data-legend-x="20" data-legend-baseline="1056" data-legend-width="104">
-            <rect x="20" y="1048" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-            <text x="42" y="1056" class="t-muted" font-size="7.5" font-weight="500">主管（AI）动作</text>
+          <text x="20" y="1260" class="t-primary" font-size="12" font-weight="650">图例</text>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="主管（AI）动作" data-legend-x="20" data-legend-baseline="1280" data-legend-width="104">
+            <rect x="20" y="1272" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+            <text x="42" y="1280" class="t-muted" font-size="7.5" font-weight="500">主管（AI）动作</text>
           </g>
-          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="人工 gate" data-legend-x="131" data-legend-baseline="1056" data-legend-width="83">
-            <rect x="131" y="1048" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-            <text x="153" y="1056" class="t-muted" font-size="7.5" font-weight="500">人工 gate</text>
+          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="人工 gate" data-legend-x="131" data-legend-baseline="1280" data-legend-width="83">
+            <rect x="131" y="1272" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+            <text x="153" y="1280" class="t-muted" font-size="7.5" font-weight="500">人工 gate</text>
           </g>
-          <g data-legend-semantic-kind="messagebus" data-legend-kind="messagebus" data-legend-label="拒绝且不留改动（例外）" data-legend-x="221" data-legend-baseline="1056" data-legend-width="139">
-            <rect x="221" y="1048" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
-            <text x="243" y="1056" class="t-muted" font-size="7.5" font-weight="500">拒绝且不留改动（例外）</text>
+          <g data-legend-semantic-kind="messagebus" data-legend-kind="messagebus" data-legend-label="拒绝且不留改动（例外）" data-legend-x="221" data-legend-baseline="1280" data-legend-width="139">
+            <rect x="221" y="1272" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
+            <text x="243" y="1280" class="t-muted" font-size="7.5" font-weight="500">拒绝且不留改动（例外）</text>
           </g>
-          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="记录留存" data-legend-x="367" data-legend-baseline="1056" data-legend-width="78">
-            <rect x="367" y="1048" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-            <text x="389" y="1056" class="t-muted" font-size="7.5" font-weight="500">记录留存</text>
+          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="记录留存" data-legend-x="367" data-legend-baseline="1280" data-legend-width="78">
+            <rect x="367" y="1272" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+            <text x="389" y="1280" class="t-muted" font-size="7.5" font-weight="500">记录留存</text>
           </g>
         </g>
       </svg>
@@ -5419,6 +5435,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <li>开工前有准入检查：不合格直接退回，不会创建任务、也不会启动执行</li>
           <li>每次执行都在独立工作区进行，执行开始前工作区已经准备好</li>
           <li>执行产出会被自动记录；复核结论单独留存，便于事后回看</li>
+          <li>排期在规划期就定：目标先排进某个版本或独立目标，才继续往下走；交付期只把成果合入集成分支，不再调整排期——此时挪排期要连带版本归属与集成分支，代价高</li>
           <li>三道人工 gate：同意开工、裁决验收、发布放行</li>
         </ul>
       </div>
