@@ -300,6 +300,44 @@ export const name = "dsh-graph-host";
 // （同 dsh-project-kanban 参考实现），保证 headless（仅工具）与 web（工具+端点+看板）两种组合都可用。
 export const inject = ["tools"];
 
+/**
+ * g-469：宿主 subagent 派发 API 的**双版本兼容收口**（唯一入口）。
+ *
+ * 背景：DSH `0.2.1-alpha.2` 把 subagent 服务方法 `startContinuable(spec)` 改名为
+ * `startActivation(spec)`（`0.2.0-rc.2` / `0.2.1-alpha.1` 只有旧名，`0.2.1-alpha.2` 只有新名）。
+ * 不兼容直接表现为 5 处派发点全部 `subagents.startContinuable is not a function`
+ * ——安装+启动可用、**派发完全不可用**。
+ *
+ * 收口要求：`dsh-graph-host/index.js` 内**所有**子代理启动都必须经本 helper，
+ * 禁止任何调用点直连 `subagents.startActivation(...)` / `subagents.startContinuable(...)`。
+ *   · 新宿主（≥ 0.2.1-alpha.2）具备 `startActivation` ⇒ 走新名；
+ *   · 旧宿主（≤ 0.2.1-alpha.1）只具备 `startContinuable` ⇒ 走旧名；
+ *   · 两者皆无 ⇒ **fail-closed**：抛出可追溯、可操作的错误。绝不静默回退到别的路径、
+ *     绝不虚构 childId / 返回「无 child」冒充派发成功。
+ *
+ * `spec` 字段（`provider` / `label` / `request` / `signal` / `childId`）与返回契约（`childId` 必在）
+ * 在三个版本上同形——实测证据见 `core/tests/fixtures/g469-host-subagent-api.json`
+ * （由 `core/tests/fixtures/g469-host-subagent-api.mjs` 从真实宿主包提取）。
+ *
+ * @param subagents 宿主 `ctx.get("subagents")` 服务（可能为 undefined）
+ * @param spec 派发描述（原样透传，语义逐字不变）
+ * @returns 宿主 receipt（含 `childId`）
+ * @throws 两版 API 皆缺时抛错（交由既有 `subagentSpawnErrorText` 映射为可操作文案）
+ */
+export async function startSubagentCompat(subagents, spec) {
+  if (subagents && typeof subagents.startActivation === "function") return subagents.startActivation(spec);
+  if (subagents && typeof subagents.startContinuable === "function") return subagents.startContinuable(spec);
+  let registered = "未知";
+  try {
+    registered = (subagents?.list?.() ?? []).join(",") || "无";
+  } catch { /* 探测失败不影响 fail-closed 结论 */ }
+  throw new Error(
+    "subagents 服务缺少派发 API（需 startActivation（DSH ≥ 0.2.1-alpha.2）"
+    + "或 startContinuable（DSH ≤ 0.2.1-alpha.1）之一，当前两者皆不可用）："
+    + `无法启动子代理，已注册 provider：${registered}`,
+  );
+}
+
 const text = (s) => [{ type: "text", text: s }];
 const objOut = {
   schema: { type: "object" },
@@ -1709,7 +1747,7 @@ export function apply(ctx, config) {
     if (eff.reasoning_effort) agentOptions.reasoningEffort = eff.reasoning_effort;
     if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
     try {
-      const started = await subagents.startContinuable({
+      const started = await startSubagentCompat(subagents, {
         provider, label: `${SUMMARIZER_LABEL_PREFIX}${goal}`, request, signal,
       });
       indexSummarizerChild(started.childId, { root, goal, actor: opts.actor ?? "system:summarizer" });
@@ -2199,7 +2237,7 @@ export function apply(ctx, config) {
         if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
         if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
 
-        const started = await subagents.startContinuable({
+        const started = await startSubagentCompat(subagents, {
           provider: availableProvider,
           label: `graph:${goal}/${attempt}`,
           request,
@@ -2539,7 +2577,7 @@ export function apply(ctx, config) {
       if (effModel) agentOptions.model = effModel;
       if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
       if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
-      const started = await subagents.startContinuable({
+      const started = await startSubagentCompat(subagents, {
         provider: providerName,
         label: `${REVIEW_LABEL_PREFIX}${goal}/${attempt}/${reviewId}`,
         request,
@@ -3317,7 +3355,7 @@ export function apply(ctx, config) {
             if (effModel) agentOptions.model = effModel;
              if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
             if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
-            const started = await subagents.startContinuable({
+            const started = await startSubagentCompat(subagents, {
               provider,
               label: `graph:collect/${a.goal}/${a.card}`,
               request,
@@ -3749,7 +3787,7 @@ export function apply(ctx, config) {
       if (effModel) agentOptions.model = effModel;
              if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
       if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
-      const started = await subagents.startContinuable({ provider, label, request, signal: ac.signal });
+      const started = await startSubagentCompat(subagents, { provider, label, request, signal: ac.signal });
       return { childId: started.childId, parentSessionId: supervisorId, error: null, model_route: `${effProvider ?? "继承"}/${effModel ?? "继承"}` };
     } catch (e) {
       // g-321：0.1.6 起 startContinuable 有并发槽位上限（默认 8），把 ACTIVATION_LIMIT_REACHED

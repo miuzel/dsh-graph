@@ -236,6 +236,32 @@ DSH_HOME=/tmp/dsh-pub-check dsh --profile web "ping"   # 断言插件加载激�
 > 落盘（14 工具注册 + validate PASS）、web 启动 `/api/dsh-graph` 返回正确 JSON 且首页含
 > client.js bundle。正式发布后按本命令复验一次即可。
 
+### 5.1 宿主兼容性判定口径（**必需三维度**，g-469 修正）
+
+宿主（DSH）升级或放宽兼容声明面时，「**安装** + **启动**」**不足以**证明插件可用——它只覆盖
+「加载链路」，覆盖不到「**派发链路**」。兼容性判定必须**同时**包含三个维度，缺一即不得判定兼容：
+
+| # | 维度 | 最小验证 | 失败形态 |
+| --- | --- | --- | --- |
+| 1 | **安装** | 全新 profile（隔离 `DSH_HOME`）+ 真 tarball/registry 安装，`dsh plugin add` 成功 | 依赖/入口解析失败 |
+| 2 | **启动** | headless/web 起得来：工具注册 marker 落盘、`/api/dsh-graph` 返回合法 JSON、首页含 client bundle | profile 冲突、`apply()` 抛错 |
+| 3 | **派发可用** | 在隔离实例上**真正起一个子代理**：`graph_start_attempt` 返回**真实 `child_id`**（非 null、无 `child_error`）并完成绑定；同时覆盖旧宿主回归 | `startContinuable/startActivation is not a function`、provider 能力探测失配、并发槽位文案未被映射 |
+
+- 维度 3 是**独立**维度：宿主对 subagent 服务的方法改名/签名变更（如 DSH `0.2.1-alpha.2` 把
+  `startContinuable(spec)` 改名为 `startActivation(spec)`）不影响维度 1/2，却让**全部派发点**失效
+  ⇒ 只看「可装可跑」会把「派发完全不可用」判成兼容。
+- 维度 3 的实现口径由仓内守卫钉住：`dsh-graph-host/index.js` 的派发**唯一收口** helper
+  `startSubagentCompat(subagents, spec)`（新名优先、旧名回退、两者皆无 fail-closed），
+  回归测试 `core/tests/g469-host-subagent-api-compat.test.ts`（含结构性守卫与真实宿主契约夹具）。
+- 环境约束（沿用 §5）：验收实例的 `DSH_HOME` 与 workspace 必须在项目 `tmp/` 内，端口避开在跑的
+  宿主实例；**不得**把测试替换进正在服务的主实例。
+
+> **历史判定如实记录（g-465）**：v0.20.0 放宽宿主兼容声明面（`<0.2.2-0`）时的兼容性判定
+> **只覆盖了维度 1（安装）+ 维度 2（启动）**，未做维度 3（派发可用）⇒ 该判定**不满足**本节口径，
+> 结论「兼容」在派发维度上**未被验证**。后续实际使用中由 g-469 暴露：`0.2.1-alpha.2` 上
+> 5 处派发点全部报 `subagents.startContinuable is not a function`。本条按事实留痕，**不回改**
+> g-465 的历史结论措辞；后续同类判定一律按本节三维度执行。
+
 ## 6. 打包结构（B7+B8——已实现，方案 B + .js 编译）
 
 ### 6.0 关键 bug（B8）：发布包必须 ship 编译后的 .js

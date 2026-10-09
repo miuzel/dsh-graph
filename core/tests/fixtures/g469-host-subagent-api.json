@@ -1,0 +1,347 @@
+{
+  "schema": "g469-host-subagent-api/v1",
+  "generator": "core/tests/fixtures/g469-host-subagent-api.mjs",
+  "probe_contract": {
+    "provider_capability": "prepareContinuable",
+    "dispatch_methods": [
+      "startActivation",
+      "startContinuable"
+    ],
+    "call_spec_fields": [
+      "provider",
+      "label",
+      "request",
+      "signal"
+    ],
+    "receipt_field": "childId",
+    "optional_receipt_field": "parentSessionId"
+  },
+  "versions": [
+    {
+      "host_version": "0.2.0-rc.2",
+      "tarball": "deepseek-ai-dsh-subagent-0.2.0-rc.2.tgz",
+      "tarball_sha256": "5ac1e9d817767bf5aca679e32e4e89abc9b6e2f718d6d18c7e2ae80eac5adc70",
+      "entry_sha256": "75b50b1c9452a6aeb10d1c859e3f45b05e062ea1fad6ed3bcd9577f2bc912541",
+      "typert_sha256": "3b93da0dad25da812529dde3396ebc540d4a0f5e61d58455470175f836260b47",
+      "methods": {
+        "startActivation": false,
+        "startContinuable": true
+      },
+      "service_method_names": [
+        "resolveMaxDepth",
+        "startContinuable",
+        "sendMessage",
+        "interrupt",
+        "drainContinuableDescendants",
+        "drainContinuableChildren",
+        "listChildren",
+        "listDescendants",
+        "prompt",
+        "interruptByParent",
+        "registerProvider",
+        "getProvider",
+        "list",
+        "start"
+      ],
+      "dispatch_impl": {
+        "name": "startContinuable",
+        "sha256": "6f15a0a0047ff8d087d5eac9495161d2c19002b759f37d9375d17cad8eb6cfe2",
+        "source": "async startContinuable(spec) {\n\t\tconst request = spec.request;\n\t\tconst parent = request.parent;\n\t\tthis.activations.assertAdmitting(parent);\n\t\tconst persistence = this.requirePersistence();\n\t\tassertSubagentMaxDepth(request.maxDepth);\n\t\tconst childId = spec.childId ?? brandString(randomUUID());\n\t\tthis.activations.assertChildIdAvailable(childId);\n\t\tconst childDepth = resolveChildDepth(parent, request.maxDepth);\n\t\tconst agentOptions = resolveChildAgentOptions(parent, request.agentOptions, childDepth);\n\t\tconst agentProvider = agentOptions.provider;\n\t\tconst agentModel = agentOptions.model;\n\t\tconst agentReasoningEffort = agentOptions.reasoningEffort;\n\t\tconst descriptor = snapshotSubagentDescriptor({\n\t\t\tmode: \"continuable\",\n\t\t\tprovider: spec.provider,\n\t\t\tlabel: spec.label,\n\t\t\t...agentProvider !== void 0 ? { agentProvider } : {},\n\t\t\t...agentModel !== void 0 ? { agentModel } : {},\n\t\t\t...agentReasoningEffort !== void 0 ? { agentReasoningEffort } : {},\n\t\t\t...request.persona !== void 0 ? { persona: request.persona } : {},\n\t\t\t...request.toolFilter !== void 0 ? { toolFilter: request.toolFilter } : {}\n\t\t});\n\t\tconst delegatedPolicies = captureDelegatedPolicyOverrides(parent);\n\t\tconst releaseHold = this.activations.holdOwnership(parent, childId);\n\t\ttry {\n\t\t\tconst prepared = await this.host.prepareContinuable(spec.provider, {\n\t\t\t\tsessionId: childId,\n\t\t\t\tparent,\n\t\t\t\tsignal: spec.signal\n\t\t\t});\n\t\t\tspec.signal.throwIfAborted();\n\t\t\tthis.activations.assertAdmitting(parent);\n\t\t\tconst inheritedEventCount = SessionLogOffset(prepared.seed?.length ?? 0);\n\t\t\tconst seed = prepared.seed;\n\t\t\treturn {\n\t\t\t\tchildId,\n\t\t\t\tmessageId: await this.activations.locks.run(childId, async () => {\n\t\t\t\t\tspec.signal.throwIfAborted();\n\t\t\t\t\tthis.activations.assertAdmitting(parent);\n\t\t\t\t\tthis.activations.assertChildIdAvailable(childId);\n\t\t\t\t\tif (spec.childId !== void 0) {\n\t\t\t\t\t\tconst persisted = await persistence.stat(childId, { signal: spec.signal });\n\t\t\t\t\t\tspec.signal.throwIfAborted();\n\t\t\t\t\t\tthis.activations.assertAdmitting(parent);\n\t\t\t\t\t\tthis.activations.assertChildIdAvailable(childId);\n\t\t\t\t\t\tif (persisted !== void 0) throw new SubagentError(`subagent \"${childId}\" already exists`, \"DUPLICATE_CHILD\");\n\t\t\t\t\t}\n\t\t\t\t\tconst activation = await this.activations.materialize({\n\t\t\t\t\t\tchildId,\n\t\t\t\t\t\tprovider: spec.provider,\n\t\t\t\t\t\tparent,\n\t\t\t\t\t\tcreate: {\n\t\t\t\t\t\t\tseed,\n\t\t\t\t\t\t\tmeta: childSessionMeta(parent, childDepth, prepared.seed !== void 0),\n\t\t\t\t\t\t\tinheritedEventCount,\n\t\t\t\t\t\t\tdelegatedPolicies,\n\t\t\t\t\t\t\tdescriptor\n\t\t\t\t\t\t},\n\t\t\t\t\t\tagentOptions,\n\t\t\t\t\t\tcomposition: {\n\t\t\t\t\t\t\tpersona: request.persona,\n\t\t\t\t\t\t\ttoolFilter: request.toolFilter\n\t\t\t\t\t\t},\n\t\t\t\t\t\tsignal: spec.signal\n\t\t\t\t\t});\n\t\t\t\t\tconst childHeader = activation.handle.agent.session.header;\n\t\t\t\t\treturn await this.submitMaterialized(activation, isAdjacentAgentSendMessageTool(this.ctx.get(\"tools\")?.get(\"send_message\", activation.handle.agent)) ? withContinuableReturnGuidance(parent.id, request.prompt) : request.prompt, {\n\t\t\t\t\t\tsource: { kind: \"user\" },\n\t\t\t\t\t\tsignal: spec.signal,\n\t\t\t\t\t\tdelivery: \"queue\"\n\t\t\t\t\t}, parent, () => {\n\t\t\t\t\t\testablishCatalogChild(parent.session, childHeader, descriptor);\n\t\t\t\t\t});\n\t\t\t\t})\n\t\t\t};\n\t\t} catch (error) {\n\t\t\treleaseHold();\n\t\t\tthrow error;\n\t\t}\n\t}"
+      },
+      "manager_impl": {
+        "name": "startContinuable",
+        "sha256": "d5b18704b8dfd4f6f2aa4ded0c4c6a9d4554b88330686b1c03e6dcd40b5aa724",
+        "source": "async startContinuable(spec) {\n        const request = spec.request;\n        const parent = request.parent;\n        this.activations.assertAdmitting(parent);\n        const persistence = this.requirePersistence();\n        assertSubagentMaxDepth(request.maxDepth);\n        const childId = spec.childId ?? brandString(randomUUID());\n        this.activations.assertChildIdAvailable(childId);\n        const childDepth = resolveChildDepth(parent, request.maxDepth);\n        // Snapshot before any await: invalid descriptor JSON rejects the call\n        // before a child exists, and the detached value is what reaches the log.\n        const agentOptions = resolveChildAgentOptions(parent, request.agentOptions, childDepth);\n        const agentProvider = agentOptions.provider;\n        const agentModel = agentOptions.model;\n        const agentReasoningEffort = agentOptions.reasoningEffort;\n        const descriptor = snapshotSubagentDescriptor({\n            mode: 'continuable',\n            provider: spec.provider,\n            label: spec.label,\n            ...agentProvider !== undefined ? { agentProvider } : {},\n            ...agentModel !== undefined ? { agentModel } : {},\n            ...agentReasoningEffort !== undefined ? { agentReasoningEffort } : {},\n            ...request.persona !== undefined ? { persona: request.persona } : {},\n            ...request.toolFilter !== undefined ? { toolFilter: request.toolFilter } : {},\n        });\n        // Capture before the first await: a later parent switch belongs to the\n        // parent's future, not to this child.\n        const delegatedPolicies = captureDelegatedPolicyOverrides(parent);\n        // An idle continuation-managed parent must not settle while a caller is\n        // still creating its child. A turn-scoped delegation does not need this,\n        // but the service is also callable outside a turn.\n        const releaseHold = this.activations.holdOwnership(parent, childId);\n        try {\n            const prepared = await this.host.prepareContinuable(spec.provider, {\n                sessionId: childId,\n                parent,\n                signal: spec.signal,\n            });\n            spec.signal.throwIfAborted();\n            this.activations.assertAdmitting(parent);\n            const inheritedEventCount = SessionLogOffset(prepared.seed?.length ?? 0);\n            const seed = prepared.seed;\n            const messageId = await this.activations.locks.run(childId, async () => {\n                spec.signal.throwIfAborted();\n                this.activations.assertAdmitting(parent);\n                this.activations.assertChildIdAvailable(childId);\n                if (spec.childId !== undefined) {\n                    const persisted = await persistence.stat(childId, { signal: spec.signal });\n                    spec.signal.throwIfAborted();\n                    this.activations.assertAdmitting(parent);\n                    this.activations.assertChildIdAvailable(childId);\n                    if (persisted !== undefined) {\n                        throw new SubagentError(`subagent \"${childId}\" already exists`, 'DUPLICATE_CHILD');\n                    }\n                }\n                const activation = await this.activations.materialize({\n                    childId,\n                    provider: spec.provider,\n                    parent,\n                    create: {\n                        seed,\n                        meta: childSessionMeta(parent, childDepth, prepared.seed !== undefined),\n                        inheritedEventCount,\n                        delegatedPolicies,\n                        descriptor,\n                    },\n                    agentOptions,\n                    composition: { persona: request.persona, toolFilter: request.toolFilter },\n                    signal: spec.signal,\n                });\n                const childHeader = activation.handle.agent.session.header;\n                return await this.submitMaterialized(activation, isAdjacentAgentSendMessageTool(this.ctx.get('tools')?.get('send_message', activation.handle.agent))\n                    ? withContinuableReturnGuidance(parent.id, request.prompt)\n                    : request.prompt, { source: { kind: 'user' }, signal: spec.signal, delivery: 'queue' }, parent, () => { establishCatalogChild(parent.session, childHeader, descriptor); });\n            });\n            return { childId, messageId };\n        }\n        catch (error) {\n            releaseHold();\n            throw error;\n        }\n    }"
+      },
+      "spec_fields": [
+        "childId",
+        "label",
+        "provider",
+        "request",
+        "signal"
+      ],
+      "receipt_keys": [
+        "childId",
+        "messageId"
+      ],
+      "optional_field_defaults": {
+        "delivery": null
+      },
+      "declared_types": {
+        "ContinuableStartSpec": {
+          "sha256": "73b7fdeb4bb2416cb118bc30678957203bbaf68738a77ac336f0a0a76aece814",
+          "fields": [
+            {
+              "name": "provider",
+              "optional": false
+            },
+            {
+              "name": "label",
+              "optional": false
+            },
+            {
+              "name": "childId",
+              "optional": true
+            },
+            {
+              "name": "request",
+              "optional": false
+            },
+            {
+              "name": "signal",
+              "optional": false
+            }
+          ],
+          "source": "export interface ContinuableStartSpec {\n    /** The `ctx.subagents` provider whose continuable-creation capability establishes the child. */\n    readonly provider: string;\n    /** The initial delegation's short `description`, persisted as the child's creation label. */\n    readonly label: string;\n    /**\n     * Optional caller-reserved child identity. Omission preserves the manager's\n     * UUID allocation; supplying one lets a durable parent record provisioning\n     * before child materialization without a second identity handshake.\n     */\n    readonly childId?: SessionId;\n    /**\n     * The delegation request. The manager reserves the stable child id, resolves\n     * the durable descriptor, and composes the child itself.\n     */\n    readonly request: Omit<SubagentStartRequest, 'label' | 'signal' | 'outputSchema'>;\n    /** Caller cancellation, owning the operation only until inbox acceptance. */\n    readonly signal: AbortSignal;\n}"
+        },
+        "ContinuableStart": {
+          "sha256": "e5650a6b5bc1b67ba74f5864377f6c1740bedb158c398593ad87d4f2fc6fb7f4",
+          "fields": [
+            {
+              "name": "childId",
+              "optional": false
+            },
+            {
+              "name": "messageId",
+              "optional": false
+            }
+          ],
+          "source": "export interface ContinuableStart {\n    /** The durable child session id, stable across activations. */\n    readonly childId: SessionId;\n    /** The accepted initial prompt's inbox message id. */\n    readonly messageId: MessageId;\n}"
+        }
+      },
+      "provider_capability": {
+        "name": "prepareContinuable",
+        "present_in_entry": true,
+        "present_in_manager_impls": [
+          {
+            "method": "startContinuable",
+            "has_capability": true
+          }
+        ],
+        "capability_switch_expression": false
+      }
+    },
+    {
+      "host_version": "0.2.1-alpha.1",
+      "tarball": "deepseek-ai-dsh-subagent-0.2.1-alpha.1.tgz",
+      "tarball_sha256": "739f8e12ec02fa1cf24f4a698f3842fd40d84bcd49165208dbea107d952751f7",
+      "entry_sha256": "75b50b1c9452a6aeb10d1c859e3f45b05e062ea1fad6ed3bcd9577f2bc912541",
+      "typert_sha256": "2434f333f8f24df981827c5f15f01e49016eb544a3f6db9908acdce6e188903f",
+      "methods": {
+        "startActivation": false,
+        "startContinuable": true
+      },
+      "service_method_names": [
+        "resolveMaxDepth",
+        "startContinuable",
+        "sendMessage",
+        "interrupt",
+        "drainContinuableDescendants",
+        "drainContinuableChildren",
+        "listChildren",
+        "listDescendants",
+        "prompt",
+        "interruptByParent",
+        "registerProvider",
+        "getProvider",
+        "list",
+        "start"
+      ],
+      "dispatch_impl": {
+        "name": "startContinuable",
+        "sha256": "6f15a0a0047ff8d087d5eac9495161d2c19002b759f37d9375d17cad8eb6cfe2",
+        "source": "async startContinuable(spec) {\n\t\tconst request = spec.request;\n\t\tconst parent = request.parent;\n\t\tthis.activations.assertAdmitting(parent);\n\t\tconst persistence = this.requirePersistence();\n\t\tassertSubagentMaxDepth(request.maxDepth);\n\t\tconst childId = spec.childId ?? brandString(randomUUID());\n\t\tthis.activations.assertChildIdAvailable(childId);\n\t\tconst childDepth = resolveChildDepth(parent, request.maxDepth);\n\t\tconst agentOptions = resolveChildAgentOptions(parent, request.agentOptions, childDepth);\n\t\tconst agentProvider = agentOptions.provider;\n\t\tconst agentModel = agentOptions.model;\n\t\tconst agentReasoningEffort = agentOptions.reasoningEffort;\n\t\tconst descriptor = snapshotSubagentDescriptor({\n\t\t\tmode: \"continuable\",\n\t\t\tprovider: spec.provider,\n\t\t\tlabel: spec.label,\n\t\t\t...agentProvider !== void 0 ? { agentProvider } : {},\n\t\t\t...agentModel !== void 0 ? { agentModel } : {},\n\t\t\t...agentReasoningEffort !== void 0 ? { agentReasoningEffort } : {},\n\t\t\t...request.persona !== void 0 ? { persona: request.persona } : {},\n\t\t\t...request.toolFilter !== void 0 ? { toolFilter: request.toolFilter } : {}\n\t\t});\n\t\tconst delegatedPolicies = captureDelegatedPolicyOverrides(parent);\n\t\tconst releaseHold = this.activations.holdOwnership(parent, childId);\n\t\ttry {\n\t\t\tconst prepared = await this.host.prepareContinuable(spec.provider, {\n\t\t\t\tsessionId: childId,\n\t\t\t\tparent,\n\t\t\t\tsignal: spec.signal\n\t\t\t});\n\t\t\tspec.signal.throwIfAborted();\n\t\t\tthis.activations.assertAdmitting(parent);\n\t\t\tconst inheritedEventCount = SessionLogOffset(prepared.seed?.length ?? 0);\n\t\t\tconst seed = prepared.seed;\n\t\t\treturn {\n\t\t\t\tchildId,\n\t\t\t\tmessageId: await this.activations.locks.run(childId, async () => {\n\t\t\t\t\tspec.signal.throwIfAborted();\n\t\t\t\t\tthis.activations.assertAdmitting(parent);\n\t\t\t\t\tthis.activations.assertChildIdAvailable(childId);\n\t\t\t\t\tif (spec.childId !== void 0) {\n\t\t\t\t\t\tconst persisted = await persistence.stat(childId, { signal: spec.signal });\n\t\t\t\t\t\tspec.signal.throwIfAborted();\n\t\t\t\t\t\tthis.activations.assertAdmitting(parent);\n\t\t\t\t\t\tthis.activations.assertChildIdAvailable(childId);\n\t\t\t\t\t\tif (persisted !== void 0) throw new SubagentError(`subagent \"${childId}\" already exists`, \"DUPLICATE_CHILD\");\n\t\t\t\t\t}\n\t\t\t\t\tconst activation = await this.activations.materialize({\n\t\t\t\t\t\tchildId,\n\t\t\t\t\t\tprovider: spec.provider,\n\t\t\t\t\t\tparent,\n\t\t\t\t\t\tcreate: {\n\t\t\t\t\t\t\tseed,\n\t\t\t\t\t\t\tmeta: childSessionMeta(parent, childDepth, prepared.seed !== void 0),\n\t\t\t\t\t\t\tinheritedEventCount,\n\t\t\t\t\t\t\tdelegatedPolicies,\n\t\t\t\t\t\t\tdescriptor\n\t\t\t\t\t\t},\n\t\t\t\t\t\tagentOptions,\n\t\t\t\t\t\tcomposition: {\n\t\t\t\t\t\t\tpersona: request.persona,\n\t\t\t\t\t\t\ttoolFilter: request.toolFilter\n\t\t\t\t\t\t},\n\t\t\t\t\t\tsignal: spec.signal\n\t\t\t\t\t});\n\t\t\t\t\tconst childHeader = activation.handle.agent.session.header;\n\t\t\t\t\treturn await this.submitMaterialized(activation, isAdjacentAgentSendMessageTool(this.ctx.get(\"tools\")?.get(\"send_message\", activation.handle.agent)) ? withContinuableReturnGuidance(parent.id, request.prompt) : request.prompt, {\n\t\t\t\t\t\tsource: { kind: \"user\" },\n\t\t\t\t\t\tsignal: spec.signal,\n\t\t\t\t\t\tdelivery: \"queue\"\n\t\t\t\t\t}, parent, () => {\n\t\t\t\t\t\testablishCatalogChild(parent.session, childHeader, descriptor);\n\t\t\t\t\t});\n\t\t\t\t})\n\t\t\t};\n\t\t} catch (error) {\n\t\t\treleaseHold();\n\t\t\tthrow error;\n\t\t}\n\t}"
+      },
+      "manager_impl": {
+        "name": "startContinuable",
+        "sha256": "d5b18704b8dfd4f6f2aa4ded0c4c6a9d4554b88330686b1c03e6dcd40b5aa724",
+        "source": "async startContinuable(spec) {\n        const request = spec.request;\n        const parent = request.parent;\n        this.activations.assertAdmitting(parent);\n        const persistence = this.requirePersistence();\n        assertSubagentMaxDepth(request.maxDepth);\n        const childId = spec.childId ?? brandString(randomUUID());\n        this.activations.assertChildIdAvailable(childId);\n        const childDepth = resolveChildDepth(parent, request.maxDepth);\n        // Snapshot before any await: invalid descriptor JSON rejects the call\n        // before a child exists, and the detached value is what reaches the log.\n        const agentOptions = resolveChildAgentOptions(parent, request.agentOptions, childDepth);\n        const agentProvider = agentOptions.provider;\n        const agentModel = agentOptions.model;\n        const agentReasoningEffort = agentOptions.reasoningEffort;\n        const descriptor = snapshotSubagentDescriptor({\n            mode: 'continuable',\n            provider: spec.provider,\n            label: spec.label,\n            ...agentProvider !== undefined ? { agentProvider } : {},\n            ...agentModel !== undefined ? { agentModel } : {},\n            ...agentReasoningEffort !== undefined ? { agentReasoningEffort } : {},\n            ...request.persona !== undefined ? { persona: request.persona } : {},\n            ...request.toolFilter !== undefined ? { toolFilter: request.toolFilter } : {},\n        });\n        // Capture before the first await: a later parent switch belongs to the\n        // parent's future, not to this child.\n        const delegatedPolicies = captureDelegatedPolicyOverrides(parent);\n        // An idle continuation-managed parent must not settle while a caller is\n        // still creating its child. A turn-scoped delegation does not need this,\n        // but the service is also callable outside a turn.\n        const releaseHold = this.activations.holdOwnership(parent, childId);\n        try {\n            const prepared = await this.host.prepareContinuable(spec.provider, {\n                sessionId: childId,\n                parent,\n                signal: spec.signal,\n            });\n            spec.signal.throwIfAborted();\n            this.activations.assertAdmitting(parent);\n            const inheritedEventCount = SessionLogOffset(prepared.seed?.length ?? 0);\n            const seed = prepared.seed;\n            const messageId = await this.activations.locks.run(childId, async () => {\n                spec.signal.throwIfAborted();\n                this.activations.assertAdmitting(parent);\n                this.activations.assertChildIdAvailable(childId);\n                if (spec.childId !== undefined) {\n                    const persisted = await persistence.stat(childId, { signal: spec.signal });\n                    spec.signal.throwIfAborted();\n                    this.activations.assertAdmitting(parent);\n                    this.activations.assertChildIdAvailable(childId);\n                    if (persisted !== undefined) {\n                        throw new SubagentError(`subagent \"${childId}\" already exists`, 'DUPLICATE_CHILD');\n                    }\n                }\n                const activation = await this.activations.materialize({\n                    childId,\n                    provider: spec.provider,\n                    parent,\n                    create: {\n                        seed,\n                        meta: childSessionMeta(parent, childDepth, prepared.seed !== undefined),\n                        inheritedEventCount,\n                        delegatedPolicies,\n                        descriptor,\n                    },\n                    agentOptions,\n                    composition: { persona: request.persona, toolFilter: request.toolFilter },\n                    signal: spec.signal,\n                });\n                const childHeader = activation.handle.agent.session.header;\n                return await this.submitMaterialized(activation, isAdjacentAgentSendMessageTool(this.ctx.get('tools')?.get('send_message', activation.handle.agent))\n                    ? withContinuableReturnGuidance(parent.id, request.prompt)\n                    : request.prompt, { source: { kind: 'user' }, signal: spec.signal, delivery: 'queue' }, parent, () => { establishCatalogChild(parent.session, childHeader, descriptor); });\n            });\n            return { childId, messageId };\n        }\n        catch (error) {\n            releaseHold();\n            throw error;\n        }\n    }"
+      },
+      "spec_fields": [
+        "childId",
+        "label",
+        "provider",
+        "request",
+        "signal"
+      ],
+      "receipt_keys": [
+        "childId",
+        "messageId"
+      ],
+      "optional_field_defaults": {
+        "delivery": null
+      },
+      "declared_types": {
+        "ContinuableStartSpec": {
+          "sha256": "73b7fdeb4bb2416cb118bc30678957203bbaf68738a77ac336f0a0a76aece814",
+          "fields": [
+            {
+              "name": "provider",
+              "optional": false
+            },
+            {
+              "name": "label",
+              "optional": false
+            },
+            {
+              "name": "childId",
+              "optional": true
+            },
+            {
+              "name": "request",
+              "optional": false
+            },
+            {
+              "name": "signal",
+              "optional": false
+            }
+          ],
+          "source": "export interface ContinuableStartSpec {\n    /** The `ctx.subagents` provider whose continuable-creation capability establishes the child. */\n    readonly provider: string;\n    /** The initial delegation's short `description`, persisted as the child's creation label. */\n    readonly label: string;\n    /**\n     * Optional caller-reserved child identity. Omission preserves the manager's\n     * UUID allocation; supplying one lets a durable parent record provisioning\n     * before child materialization without a second identity handshake.\n     */\n    readonly childId?: SessionId;\n    /**\n     * The delegation request. The manager reserves the stable child id, resolves\n     * the durable descriptor, and composes the child itself.\n     */\n    readonly request: Omit<SubagentStartRequest, 'label' | 'signal' | 'outputSchema'>;\n    /** Caller cancellation, owning the operation only until inbox acceptance. */\n    readonly signal: AbortSignal;\n}"
+        },
+        "ContinuableStart": {
+          "sha256": "e5650a6b5bc1b67ba74f5864377f6c1740bedb158c398593ad87d4f2fc6fb7f4",
+          "fields": [
+            {
+              "name": "childId",
+              "optional": false
+            },
+            {
+              "name": "messageId",
+              "optional": false
+            }
+          ],
+          "source": "export interface ContinuableStart {\n    /** The durable child session id, stable across activations. */\n    readonly childId: SessionId;\n    /** The accepted initial prompt's inbox message id. */\n    readonly messageId: MessageId;\n}"
+        }
+      },
+      "provider_capability": {
+        "name": "prepareContinuable",
+        "present_in_entry": true,
+        "present_in_manager_impls": [
+          {
+            "method": "startContinuable",
+            "has_capability": true
+          }
+        ],
+        "capability_switch_expression": false
+      }
+    },
+    {
+      "host_version": "0.2.1-alpha.2",
+      "tarball": "deepseek-ai-dsh-subagent-0.2.1-alpha.2.tgz",
+      "tarball_sha256": "6f237826a51903c70c865cd210bb853a569e29e7ca3bf6ede3014d2f3fa075a9",
+      "entry_sha256": "09da454106ce761ac44137366a03c9fbe485a4d21f23d1aa117b2e38f82150fa",
+      "typert_sha256": "14110d5a4076ff3ab668f6c8cf5442b3a896fa387caa9eca61c78738ffe07174",
+      "methods": {
+        "startActivation": true,
+        "startContinuable": false
+      },
+      "service_method_names": [
+        "resolveMaxDepth",
+        "startActivation",
+        "waitForChildren",
+        "sendMessage",
+        "interrupt",
+        "drainDescendants",
+        "drainChildren",
+        "listChildren",
+        "listDescendants",
+        "prompt",
+        "interruptByParent",
+        "registerProvider",
+        "getProvider",
+        "list"
+      ],
+      "dispatch_impl": {
+        "name": "startActivation",
+        "sha256": "c64277e23aa18ba2d84ad67a7c4d4bb7f1c7a2b77185c37be5ed0e0ce13210e7",
+        "source": "async startActivation(spec) {\n\t\t\tconst provider = this.expectProvider(spec.provider);\n\t\t\tif (spec.childId !== void 0 && provider.prepareContinuable === void 0) throw new SubagentError(\"reserved child ids require a local backend\", \"UNSUPPORTED_CAPABILITY\");\n\t\t\tassertSubagentMaxDepth(spec.request.maxDepth);\n\t\t\tthis.assertCapabilities(provider, {\n\t\t\t\t...spec.request,\n\t\t\t\tsignal: spec.signal\n\t\t\t});\n\t\t\tconst manager = this.requireManager();\n\t\t\tif (this.ctx.get(\"agents\")?.get(spec.request.parent.id) !== spec.request.parent) throw new SubagentError(\"subagent creation requires the exact live parent agent\", \"UNAUTHORIZED\");\n\t\t\tif (spec.request.outputSchema !== void 0) assertObjectJsonSchema(spec.request.outputSchema);\n\t\t\treturn provider.prepareContinuable === void 0 ? manager.startExternal(spec) : manager.startLocal(spec);\n\t\t}"
+      },
+      "manager_impl": {
+        "name": "startLocal",
+        "sha256": "ee8c06704dab2b1832723332141bd3f10ab26f93864ee0aeddf2cdcb5c96d77a",
+        "source": "async startLocal(spec) {\n        const request = spec.request;\n        const parent = request.parent;\n        this.assertAdmitting(parent);\n        const persistence = spec.delivery === 'caller' ? this.ctx.get('sessionPersistence') : this.requirePersistence();\n        assertSubagentMaxDepth(request.maxDepth);\n        const childId = spec.childId ?? brandString(randomUUID());\n        this.assertChildIdAvailable(childId);\n        const childDepth = resolveChildDepth(parent, request.maxDepth);\n        // Snapshot before any await: invalid descriptor JSON rejects the call\n        // before a child exists, and the detached value is what reaches the log.\n        const agentOptions = resolveChildAgentOptions(parent, request.agentOptions, childDepth);\n        const agentProvider = agentOptions.provider;\n        const agentModel = agentOptions.model;\n        const agentReasoningEffort = agentOptions.reasoningEffort;\n        const descriptor = snapshotSubagentDescriptor({\n            mode: 'continuable',\n            provider: spec.provider,\n            label: spec.label,\n            ...agentProvider !== undefined ? { agentProvider } : {},\n            ...agentModel !== undefined ? { agentModel } : {},\n            ...agentReasoningEffort !== undefined ? { agentReasoningEffort } : {},\n            ...request.persona !== undefined ? { persona: request.persona } : {},\n            ...request.toolFilter !== undefined ? { toolFilter: request.toolFilter } : {},\n        });\n        // Capture before the first await: a later parent switch belongs to the\n        // parent's future, not to this child.\n        const delegatedPolicies = captureDelegatedPolicyOverrides(parent);\n        // An idle continuation-managed parent must not settle while a caller is\n        // still creating its child. A turn-scoped delegation does not need this,\n        // but the service is also callable outside a turn.\n        const releaseHold = this.holdOwnership(parent, childId);\n        try {\n            const cwd = await this.resolveDirectory(request, spec.signal);\n            const prepared = await this.host.prepareContinuable(spec.provider, {\n                sessionId: childId,\n                cwd,\n                parent,\n                signal: spec.signal,\n            });\n            spec.signal.throwIfAborted();\n            this.assertAdmitting(parent);\n            const inheritedEventCount = SessionLogOffset(prepared.seed?.length ?? 0);\n            const seed = prepared.seed;\n            let established;\n            const messageId = await this.locks.run(childId, async () => {\n                spec.signal.throwIfAborted();\n                this.assertAdmitting(parent);\n                this.assertChildIdAvailable(childId);\n                if (spec.childId !== undefined) {\n                    const persisted = await persistence?.stat(childId, { signal: spec.signal });\n                    spec.signal.throwIfAborted();\n                    this.assertAdmitting(parent);\n                    this.assertChildIdAvailable(childId);\n                    if (persisted !== undefined) {\n                        throw new SubagentError(`subagent \"${childId}\" already exists`, 'DUPLICATE_CHILD');\n                    }\n                }\n                const activation = await this.materialize({\n                    kind: 'local',\n                    childId,\n                    provider: spec.provider,\n                    parent,\n                    create: {\n                        cwd,\n                        seed,\n                        meta: childSessionMeta(parent, childDepth, prepared.seed !== undefined),\n                        inheritedEventCount,\n                        delegatedPolicies,\n                        descriptor,\n                    },\n                    agentOptions,\n                    composition: { persona: request.persona, toolFilter: request.toolFilter },\n                    signal: spec.signal,\n                    delivery: spec.delivery,\n                    outputSchema: spec.request.outputSchema,\n                });\n                established = activation;\n                const child = requireLocalActivation(activation).handle.agent;\n                const childHeader = child.session.header;\n                return await this.submitMaterialized(activation, spec.delivery !== 'caller' && isAdjacentAgentSendMessageTool(this.ctx.get('tools')?.get('send_message', child))\n                    ? withContinuableReturnGuidance(parent.id, request.prompt)\n                    : request.prompt, { source: { kind: 'user' }, signal: spec.signal, delivery: 'queue' }, parent, () => {\n                    establishCatalogChild(parent.session, childHeader, descriptor);\n                });\n            });\n            return { ...this.receipt(established), childId, messageId };\n        }\n        catch (error) {\n            releaseHold();\n            throw error;\n        }\n    }"
+      },
+      "spec_fields": [
+        "childId",
+        "delivery",
+        "label",
+        "provider",
+        "request",
+        "signal"
+      ],
+      "receipt_keys": [
+        "childId",
+        "dispose",
+        "result"
+      ],
+      "optional_field_defaults": {
+        "delivery": "parent"
+      },
+      "declared_types": {
+        "SubagentActivationSpec": {
+          "sha256": "27c86266938e79bd5c4e4368fa9eed0e8653dac469b079eec71df8f53640d1af",
+          "fields": [
+            {
+              "name": "provider",
+              "optional": false
+            },
+            {
+              "name": "label",
+              "optional": false
+            },
+            {
+              "name": "childId",
+              "optional": true
+            },
+            {
+              "name": "request",
+              "optional": false
+            },
+            {
+              "name": "signal",
+              "optional": false
+            },
+            {
+              "name": "delivery",
+              "optional": false
+            }
+          ],
+          "source": "export interface SubagentActivationSpec {\n    /** Registered backend to use. */\n    readonly provider: string;\n    /** Short task label retained in cataloged child membership. */\n    readonly label: string;\n    /** Optional reserved identity for a local child; external backends allocate their own ids. */\n    readonly childId?: SessionId;\n    /** Task, parent, and backend-supported execution options. */\n    readonly request: Omit<SubagentStartRequest, 'label' | 'signal'>;\n    /** Cancellation before publication; callers own later cancellation through dispose. */\n    readonly signal: AbortSignal;\n    /** Parent delivery notifies the model; caller delivery only returns the result. Local children always enter the parent catalog. */\n    readonly delivery: 'parent' | 'caller';\n}"
+        },
+        "SubagentActivation": {
+          "sha256": "b73f74fe3444e47584400581e1d40257a9d349625d1ef7035877e3fbfca8da81",
+          "fields": [
+            {
+              "name": "childId",
+              "optional": false
+            },
+            {
+              "name": "messageId",
+              "optional": true
+            },
+            {
+              "name": "result",
+              "optional": false
+            }
+          ],
+          "source": "export interface SubagentActivation {\n    /** Stable identity of the child. */\n    readonly childId: SessionId;\n    /** Accepted inbox message, when the backend has a local inbox. */\n    readonly messageId?: MessageId;\n    /**\n     * Execution result after teardown settles and notifications are sent; capture failures reject.\n     * Teardown failures are reported by dispose() without replacing a captured result.\n     */\n    readonly result: Promise<SubagentResult>;\n    /** Stop and release this activation and its owned descendants; rejects on teardown failure. */\n    dispose(): Promise<void>;\n}"
+        }
+      },
+      "provider_capability": {
+        "name": "prepareContinuable",
+        "present_in_entry": true,
+        "present_in_manager_impls": [
+          {
+            "method": "startLocal",
+            "has_capability": true
+          },
+          {
+            "method": "startExternal",
+            "has_capability": false
+          }
+        ],
+        "capability_switch_expression": true
+      }
+    }
+  ]
+}
