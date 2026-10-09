@@ -48,7 +48,7 @@
           { style: S.supervisorBar, className: "dg-supervisor dg-supervisor-narrow" },
           h("span", { style: { fontWeight: 600, flexShrink: 0 } }, dgT('supervisor.label')),
           h("div", { style: { flex: 1, minWidth: 0, overflow: "hidden" } },
-            h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null, statusAt: props.statusAt ?? null, compact: true })),
+            h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null, statusAt: props.statusAt ?? null, compact: true, agentKind: "supervisor" })),
           // 图标按钮与同行按钮等高（rowBtnStyle({ iconOnly: true }) ⇒ 26×26 方形，第 9 项）
           h("button", {
             style: { ...S.btn, ...rowBtnStyle({ iconOnly: true }), flexShrink: 0 },
@@ -64,7 +64,7 @@
         { style: S.supervisorBar, className: "dg-supervisor" },
         h("span", { style: { fontWeight: 600, flexShrink: 0 } }, dgT('supervisor.label')),
         h("div", { style: { flex: 1, minWidth: 0 } },
-          h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null, statusAt: props.statusAt ?? null })),
+          h(LiveStrip, { parentId: null, childId: props.id, statusLine: props.statusLine ?? null, statusAt: props.statusAt ?? null, agentKind: "supervisor" })),
         model
           ? h("div", { style: { ...S.meta, flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", lineHeight: 1.2 } },
               h("span", null, model.provider),

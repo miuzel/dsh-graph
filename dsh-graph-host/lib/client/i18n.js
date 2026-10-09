@@ -44,6 +44,9 @@
       'status.running': '运行中',
       'status.idle': '空闲',
       'status.stale': '状态延续 {duration}',
+      // g-461：新一轮占位（纯显示层派生；按 agent 类型固定文案，不显示工具名/目标标题）
+      'status.processing.supervisor': '⏳ 主管正在处理…',
+      'status.processing.executor': '⏳ 执行子代理正在处理…',
 
       // === 阶段列标题 ===
       'stage.describe': '描述',
@@ -1211,6 +1214,9 @@
       'status.running': 'Running',
       'status.idle': 'Idle',
       'status.stale': 'Status ongoing for {duration}',
+      // g-461：新一轮占位（与 zh 严格同键；不显示工具名/目标标题）
+      'status.processing.supervisor': '⏳ Supervisor is processing…',
+      'status.processing.executor': '⏳ Executor agent is processing…',
 
       // === Stage column headers ===
       'stage.describe': 'Describe',

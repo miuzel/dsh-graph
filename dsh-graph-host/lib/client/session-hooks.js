@@ -733,6 +733,9 @@
       const staleStatus =
         running && props.statusAt != null && runningSinceRef.current != null &&
         props.statusAt < runningSinceRef.current;
+      // g-461：本轮报告基线（与 card.js 的 StatusLine 共用 helpers.js 的**同一**判定源）。
+      // 纯显示层：只读 props 与会话快照，不写任何持久字段、不加事件。
+      const hasNewReportThisRound = useRoundReportBaseline(running, props.statusLine, props.statusState);
       // g-124（负责人 2026-08-22）：staleStatus 不再用等待占位文案——
       // 改为显示当前状态延续时长（statusAt 距今多久，行内 + tooltip）；30s 时钟驱动刷新。
       const [now, setNow] = React.useState(() => Date.now());
@@ -775,11 +778,19 @@
       // 第二行 status_line 内容（stale 时也显示全文，tooltip 补延续时长——g-124）
       // g-239：区分真实生命周期运行态与人工汇报文本，避免空闲时谎报 ✅ 或失实展示运行态
       const formattedStatus = formatStatusWithLifecycle(props.statusLine, running, false, props.statusState);
-      const statusRowText = props.statusLine
-        ? formattedStatus.fullText
-        : (staleStatus ? "⏳ " + dgT("status.stale", { duration: staleDur }) : null);
+      // g-461：新一轮「正在处理…」占位——判定源唯一（helpers.js deriveRunningStatusPlaceholder）；
+      // 硬门控（非 running / blocked / error / 本轮已有新报告 / working 长任务）时返回 null，
+      // 下面三行按既有路径逐字取值。纯显示层：不落盘、不改 status_line/status_state、不加事件。
+      const processingPlaceholder = deriveRunningStatusPlaceholder(
+        props.statusLine, running, false, props.statusState, hasNewReportThisRound, props.agentKind);
+      const statusRowText = processingPlaceholder
+        ? processingPlaceholder.icon + dgT(processingPlaceholder.key)
+        : (props.statusLine
+            ? formattedStatus.fullText
+            : (staleStatus ? "⏳ " + dgT("status.stale", { duration: staleDur }) : null));
       // g-129 & g-239: 仅当真正 running 且无终态/阻塞/失败时带动画
-      const statusRowClass = formattedStatus.isRunning ? "dg-running-flow" : "";
+      //（g-461 占位只在 running 且本轮尚无新报告时出现，属真实运行态）
+      const statusRowClass = (processingPlaceholder || formattedStatus.isRunning) ? "dg-running-flow" : "";
       const lineEl = line
         ? h("span", { style: { ...S.meta, fontSize: 10, overflow: "hidden",
                                 textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 } },
