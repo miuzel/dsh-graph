@@ -52,7 +52,9 @@ bash scripts/dsh-test-web.sh <DSH版本> [--port PORT] [--proxychains] [--host H
 启动前脚本还会：创建 `DSH_HOME` / workspace / cache / pnpm-store 目录，按需
 `plugin --profile web add link:<HOST_DIR>`，导出 `npm_config_cache`、`pnpm_config_store_dir`、
 `XDG_CACHE_HOME`，并用 `web --dump-config` 校验有效配置里同时含 `@deepseek-ai/dsh-base`、
-`@deepseek-ai/dsh-web-app`、`dsh-graph`，最后 exec：
+`@deepseek-ai/dsh-web-app`，以及 `dsh-graph` 的**真实 bundle 条目**（g-464：解析 YAML 结构、按 bundle
+名精确匹配 —— 注释里的仓库路径命中、任意子串都不算条目；`--dump-config` 的 stderr 同时留档到
+`<版本根>/dump-config.log`，出现 `skipping profile bundle "dsh-graph"` 即非零退出），最后 exec：
 
 ```text
 <dsh> web --no-open --port <PORT> [--host <HOST>]
@@ -266,6 +268,8 @@ node --test core/tests/*.test.ts             # 与主树同一命令、同一口
 | `无法 canonicalize 本地插件目录：…` / `--host-dir 必须位于仓库 dist、dsh-graph-host 或 .worktrees 下：…` | `--host-dir` 越界或不存在 |
 | `本地插件 package name 必须为 dsh-graph：…` | `--host-dir` 指错目录 |
 | `--skip-install 要求目标 DSH_HOME 已有可复用的 dsh-graph profile；请先不带该参数运行一次` | `--skip-install` 但 profile 未就绪 |
+| `插件 dsh-graph 在启动期被跳过（bundle 未加载）…` | 宿主在加载 profile 时跳过了该 bundle（声明面 `peerDependencies` 与运行时 dsh 不兼容且无精确版本豁免，g-464）⇒ 实例会起来但**插件完全缺席**，故一律非零退出；日志与原始原因在 `<版本根>/dump-config.log` |
+| `web effective config 里没有 dsh-graph 的真实 bundle 条目（注释/路径命中的子串不算条目）…` | g-464 结构化判据：composed tree 里没有该 bundle 的真实条目（只有注释/子串命中） |
 | `插件安装失败` / `无法读取 web effective config` / `web effective config 缺少 …` | 安装或有效配置校验失败 |
 
 ## 6. 历史脚本（已归档）：`scripts/archived/dev-dsh-instance.sh`
