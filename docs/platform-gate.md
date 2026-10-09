@@ -352,6 +352,7 @@ evidence: suite=core/tests node --test passed=1379 failed=0 skipped=0 exit=0
 | macOS · **v0.19.8**（发布候选包；含 16 项目标改动） | 2026-10-08 | darwin/arm64 | v26.8.2 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（`--tarball` 轮：通过 15 / 失败 0 / 告警 1；**被测产物 = v0.19.8 发布候选包** `dsh-graph-0.19.8.tgz` sha256 `16cbe277d9a273bfe8fe82804e6efff66ba0cc058377983f513fe0a170fd43c6` 694847 B —— **与 Windows 轮同一个 RC**；**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）；隔离 DSH_HOME 在 `/private/var/folders/…`、跑完已清理；唯一告警 = `--tarball` 模式不含 `core/*.ts`（设计而非缺陷）。**台账层未在 macOS 单独执行**（Mac 上无仓库源码树、也不在该机编译 ⇒ 未单独跑 `--static-only .`）；台账对账由**仓库根轮**覆盖（`linux/x64`：通过 2 / 失败 0 / 告警 0，台账 66 项 / 258 处命中 / 未登记 0），如实登记、不冒充 macOS 台账结论。**非 win32 口径**：T3–T5 在真实 POSIX 语义下真跑，对 macOS 具平台效力，**不替代 Windows 真机结论**（Windows 另有独立记录，见同表上行）。逐字报告见 §7.7 | 负责人（真机） |
 
 | macOS · **v0.19.7** | 2026-10-06 | darwin/arm64 | v26.8.2 | WARN | PASS | PASS | PASS | WARN | PASS | PASS | **16/0/0**（`--tarball`） | **PASS**（`--static-only .` = 通过 7 / 失败 0 / 告警 2；`--tarball` = 通过 16 / 失败 0 / 告警 0，被测产物 = 冻结候选包 `dsh-graph-0.19.7.tgz` sha256 `86198a39…` 625760 B，T3 生命周期 32/32 步；宿主 `0.2.0-rc.2`）。**源码构建已实测**：修复 `2c6c5c3` 后 `bash scripts/build.sh` 在原生 macOS 上三步走完并原子就位（首建走「dist 不存在 ⇒ 单次 rename 就位」，**未触及** `mv --exchange` 两次 rename 回退——该回退由 `core/tests/g359-two-rename-fallback.test.ts` 注入真跑覆盖）。两处 WARN 均**非缺陷**：P1 = APFS 默认大小写不敏感（判读表即如此定义，已把该限制写入两份 README 的「已知限制」）；P5 = 无「可写的第二文件系统」，执行件按设计拒绝冒充通过。首轮构建失败（bash 3.2 多字节陷阱）与根因见 §7.4 | 负责人（真机） |
+| Windows · **v0.20.0**（发布终版包；含 10 项目标改动） | 2026-10-09 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（真机 T1–T5：通过 15 / 失败 0 / 告警 1；宿主 `0.2.0-rc.2`，端口 3088；**原生 Windows 进程，经 WSL↔Windows 互操作驱动**）。**被测产物 ①** = g-466 候选包 `dsh-graph-0.20.0.tgz` sha256 `5d50aeab7943d678f521e8822b7f716c540b6f9e460950cdcee42b6d418f684d` 1436632 B；**② = 发布终版包** sha256 `51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a` 1436959 B（README 回填后重建重打 ⇒ **被测产物 == 发布产物**，② 已重跑真机）。**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）+ 步骤清单自证 + 失败路径判据全绿 + 跨进程 CAS 4 抢 1 + 32 步文案无平台错误码。台账轮 `--static-only` **两平台分记、不混记**：Windows 轮 `win32/x64` = 通过2/失败0/告警0（台账 **67 项 / 259 处命中 / 未登记 0 / 忽略 0 行**）；Linux 轮 `linux/x64`（Node v26.7.0）同结论。唯一告警 = `--tarball` 模式不含 `core/*.ts`（设计而非缺陷 ⇒ 台账对账改在仓库根完成）。**一手坑**：UNC 路径直喂 `--tarball` 必失败（pnpm 报 `…0.20.0.tgz" as it does not exist.`，该轮 `通过1/失败2/告警0`）⇒ 须先复制到 `%TEMP%` 原生路径。互操作与纯原生场景的 4 点差异见 §7.8。逐字报告见 §7.8 | agent:g-467-att-001 |
 
 回填时请一并粘贴「可复制回传的报告」整段（执行件在结论后自动打印），并在 `README.md` 平台范围段落更新结论。
 该报告块自 g-428 起额外含 **`覆盖=…`** 一行（台账项数/命中数/忽略处数 + T3 生命周期步数），
@@ -608,6 +609,134 @@ Windows 上跑一次」是**给非 Windows 分支的通用提示** ⇒ **macOS �
 sha256 `b98e4934…`）。链路上逐次 `diff -rq` 实拍**每一步都仅 `README.md` 不同**（RC → 第一次终版 `8915d7dd…` →
 第二次终版 `b98e4934…`，其余 **36 / 37 逐字节相同**；产品代码 / 客户端 bundle / `prompts` 逐字节相同）
 ⇒ 真机结论对发布产物**继续有效**；可复现性：同 worktree 重打一轮 sha256 复算一致。详见发布清单 §4 / §6。
+
+### 7.8 v0.20.0 发布候选包与终版包真机报告（逐字粘贴，2026-10-09）
+
+**执行树**：worktree `.worktrees/g-467-att-01`，分支 `g-467-att-01`，基线 `e3a2dba`（= 打包基线 = `v0.20.0-test` tip）。
+
+**被测产物（两轮，各自钉 sha256）**：
+
+| 轮 | 产物 | 字节数 | sha256 |
+| --- | --- | --- | --- |
+| ① 候选包（回填前） | `tmp/uat-v0200/final-verify-20261009T233319/pack/dsh-graph-0.20.0.tgz`（= g-466 交付的发布候选包；两条独立构建路径同 sha） | 1436632 | `5d50aeab7943d678f521e8822b7f716c540b6f9e460950cdcee42b6d418f684d` |
+| ② 终版包（README 回填后重建重打） | `.worktrees/g-467-att-01/tmp/release-0200-final/dsh-graph-0.20.0.tgz` | 1436959 | `51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a` |
+
+两包均为 **43 成员**；`package/package.json` version = `0.20.0`，`package/lib/client.js` 的 `PLUGIN_VERSION` = `0.20.0`。
+**② 是「被测产物 == 发布产物」的闭环轮** —— 回填 README 后重建重打**并对新包重跑真机**。
+
+**执行形态（WSL↔Windows 互操作）**：由 WSL2（Arch Linux）内的 `cmd.exe` 驱动，**显式给 Windows cwd**
+（Windows `node.exe` **不接受 WSL cwd、会挂起**）：
+
+```sh
+cmd.exe /c "cd /d C:\Users\mingxuan\AppData\Local\Temp && D:\scoop\apps\fnm\current\aliases\default\node.exe \\wsl.localhost\archlinux\…\scripts\win-smoke-test.mjs --tarball <Windows 本地路径>"
+```
+
+**另一处一手事实（如实留痕）**：把 **UNC 路径**直接传给 `--tarball` **必失败** —— `dsh plugin add` 内的 pnpm 报
+`…0.20.0.tgz" as it does not exist.`（exit=1），`T2` 安装与连带 `T1` 定位 `core/ops.js` 双双 FAIL
+（该轮实测 `通过1/失败2/告警0`，总判定 FAIL ❌）。⇒ 被测 tarball 先由 Windows 侧进程复制到 `%TEMP%`
+（**原生 Windows 路径**）再交给 `--tarball`，此后两轮均 PASS。
+
+**环境（两轮相同）**：`win32/x64`（原生 Windows 进程）、Windows Node `v24.21.0`、宿主 DSH `0.2.0-rc.2`
+（经 `npx -y @deepseek-ai/dsh` 取得）、默认端口 3088；隔离 `DSH_HOME` / profile 位于
+Windows `%TEMP%\dsh-graph-win-smoke-<ts>`，两轮均由脚本自动清理。
+
+**① 候选包轮（逐字报告，回填前）**：
+
+```text
+dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.21.0
+安装来源=dsh-graph-0.20.0.tgz (实际版本 0.20.0)
+产物指纹=sha256:5d50aeab7943d678f521e8822b7f716c540b6f9e460950cdcee42b6d418f684d  1436632 B
+结果=PASS 通过15/失败0/告警1
+覆盖=T3生命周期=32步（g-427 形态 8 步，每步盘面断言）
+  WARN T1 OS 调用点覆盖清单（台账层） :: 未找到产品源码（core/*.ts）：本次未做台账对账（发布包内只有编译产物）——请在仓库根用 `node scripts/win-smoke-test.mjs --static-only .` 做台账核对
+启动日志=C:\Users\mingxuan\AppData\Local\Temp\dsh-graph-win-smoke-1791560247294\_smoke\dsh-web.log
+---------------------------
+```
+
+**② 终版包轮（逐字报告；被测产物 == 发布产物）**：
+
+```text
+dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.21.0
+安装来源=dsh-graph-0.20.0.tgz (实际版本 0.20.0)
+产物指纹=sha256:51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a  1436959 B
+结果=PASS 通过15/失败0/告警1
+覆盖=T3生命周期=32步（g-427 形态 8 步，每步盘面断言）
+  WARN T1 OS 调用点覆盖清单（台账层） :: 未找到产品源码（core/*.ts）：本次未做台账对账（发布包内只有编译产物）——请在仓库根用 `node scripts/win-smoke-test.mjs --static-only .` 做台账核对
+启动日志=C:\Users\mingxuan\AppData\Local\Temp\dsh-graph-win-smoke-1791560481739\_smoke\dsh-web.log
+---------------------------
+```
+
+两轮的检查项集合归一（抹掉时间戳 / `sha256` / 隔离目录名）后 **逐行相同（18/18）** —— 回填只改 README 文案，
+未改变任何被检查行为。
+
+**T1–T5 明细（两轮一致）**：**T2** 安装版本 `0.20.0`、插件自带 `yaml` 已随安装落地（真实 pnpm 安装语义）；
+**T1** 静态门禁扫描 15 个文件无 POSIX 专有常量具名导入；**T3** 核心运行时 **32 步全通过**（g-427 形态 8 步，每步盘面断言）
++ 步骤清单自证（清单 ≡ 实跑，32 个 id 完全一致）+ 失败路径（预置非空目标 ⇒ 明确业务错误、无平台错误码、源与阻碍物完好、
+`tx.persist_failed` 恰 +1、重试收敛）+ 盘面总览（目标副本唯一 / 无残留空目录 / 无锁 / `tx.persist_failed=1`）
++ 32 步文案无 `EPERM/ENOTEMPTY/EBUSY/EACCES` + 跨进程并发 CAS（4 抢 1：1 成功、3 冲突被拒）；
+**T4** 实例启动就绪 `http://127.0.0.1:3088/`；**T5** 路由已注册、看板载荷可读、Web UI 可达（HTTP 303）。
+**唯一告警为设计内**：`--tarball` 模式下包内只有编译产物、无 `core/*.ts` ⇒ 台账对账改在仓库根完成，**非缺陷**。
+
+**台账轮（`--static-only`；跨平台脚本，两轮平台如实分记、不混记）**。**Windows 轮**为 `win32/x64` +
+Node `v24.21.0`（UNC 指向上述执行树的仓库根，即 `e3a2dba`）：
+
+```text
+dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.21.0
+安装来源=dsh-graph
+结果=PASS 通过2/失败0/告警0
+覆盖=台账=67项/259处命中（忽略0行，未登记即判红）
+---------------------------
+```
+
+另跑一轮 **Linux 轮**（`linux/x64` + Node `v26.7.0`，同树内 `node scripts/win-smoke-test.mjs --static-only .`）：
+
+```text
+dsh-graph Windows 冒烟 | 平台=linux/x64 node=v26.7.0
+安装来源=dsh-graph
+结果=PASS 通过2/失败0/告警0
+覆盖=台账=67项/259处命中（忽略0行，未登记即判红）
+---------------------------
+```
+
+两轮台账结论相同：**PASS 通过2/失败0/告警0**，台账 **67 项 / 259 处命中 / 未登记 0 / 忽略 0 行**
+（g-428 口径；较 v0.19.8 的 66 项 / 258 处 **+1 项 +1 处**）。**Linux 轮不冒充 Windows 结论，Windows 轮亦不冒充 Linux 结论。**
+
+**互操作路径与纯原生用户场景的差异（如实登记 ⇒ 不得读作「与原生完全一致」）**：
+
+1. Windows 侧 `DSH_HOME` / workspace 位于 Windows `%TEMP%`（**非用户目录**），且由 WSL 内的 `cmd.exe` 驱动
+   ⇒ **不是**用户在自己终端 / 双击直启的纯原生交互会话；
+2. 被测 tarball 需**先由 Windows 进程复制到 `%TEMP%`** 再安装 —— 安装时的路径形态是**原生 Windows 路径**
+   （这一点与原生场景一致），但「先复制」这步是互操作附加物（原生用户通常直接对下载目录里的 tarball 执行，**且 UNC 直喂必失败**，见上）；
+3. 环境变量继承自 WSL 启动的 `cmd.exe`（`TEMP` / `USERPROFILE` 等已是 Windows 原生值，由脚本自报的 `%TEMP%` 隔离目录路径反证）；
+4. **未覆盖**的纯原生场景：Windows 终端直启、非 `%TEMP%` 的用户目录、全新机器首次 `npx` 下载宿主。
+
+⇒ 结论口径：**T1–T5 真跑在原生 Windows 进程上**（`win32/x64` 平台判定、`%TEMP%` 上的真实 NTFS 文件系统语义、
+真实 pnpm 安装与依赖落地、真实 `dsh web` 实例与 REST），**但不是**「纯原生交互场景的完全等价复验」；
+上述 4 点即本结论的边界。
+
+**被测候选包 vs 终版包（差异实拍）**：两包各自解包后逐文件对比：
+
+```text
+$ diff -rq tmp/g467/rc-extract/package tmp/g467/final-extract/package
+Files tmp/g467/rc-extract/package/README.md and tmp/g467/final-extract/package/README.md differ
+```
+
+⇒ **差异文件数 = 1（仅 `README.md`），逐字节相同 = 42 / 43**；产品代码 / 客户端 bundle / `prompts` / `diagrams`
+全部逐字节相同。差异内容**全部是用户可见文案**：两份 README 的平台状态表 Windows 行由「未验证（待执行）」改为
+「已实测通过」并附实测事实（**macOS 行保持不变**）。⇒ ① 的真机结论对 ② 继续有效，且 **② 自身已重新真机验证**。
+
+**平台归属如实标注**：红线 1 的 Windows 真机结论以 ① / ② 两轮（`win32/x64`）为准；台账轮按 Windows / Linux 分记。
+**macOS 本次未执行**（最近一次真机结论见 §7.7，覆盖 v0.19.8 产品代码，**不能替代**本版）。
+
+**Windows 侧临时目录清理**：本轮自建的暂存目录 `%TEMP%\g467win`、`%TEMP%\g467win-final`，以及脚本自建的
+`%TEMP%\dsh-graph-win-smoke-1791560247294` / `-1791560481739`（含 UNC 失败轮 `-1791560136721`）均已删除。
+`%TEMP%` 下另有一个 **2026-10-06** 创建的旧 `dsh-graph-win-smoke-1791228282449`，**非本次 attempt 所建、保持原样未动**（如实登记）。
+仓库内无 Windows 侧残留产物（主树 `git status --porcelain` = 0）。
+
+**证据留存（防 worktree 清理后失效）**：上述 5 份原始逐字日志全文（两轮真机 + UNC 失败轮 + 两平台台账轮）
+与回填后的整套件闸门输出另存于**仓库主树** `tmp/uat-v0200/g467-evidence/`；**回填重打的终版包**另存一份于
+`tmp/uat-v0200/g467-final-pack/dsh-graph-0.20.0.tgz`（sha256 `51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a`，
+与发布清单 §5「终版包」列**逐字一致**）。两处均位于 gitignored `tmp/` 下，**供发布与对账取证，不入 git**。
 
 ---
 
