@@ -1,0 +1,375 @@
+{
+  "schema_version": 2,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "dsh-graph 目标状态机：8 态与合法迁移",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "tmp/archify/lifecycle-design-philosophy-20261009-154528/design-philosophy.lifecycle.html",
+    "repository": {
+      "url": "https://github.com/miuzel/dsh-graph.git",
+      "provider": "github",
+      "revision": "214c4f56614c9adeafdfe57448397fe8956e2606"
+    }
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "主链 8 态（今日已实现 / implemented today）"
+    },
+    {
+      "id": "gate",
+      "label": "评审与交付（今日已实现）"
+    },
+    {
+      "id": "blocked",
+      "label": "阻塞出口（今日已实现）"
+    },
+    {
+      "id": "roadmap",
+      "label": "1.0 路线（未实现 / not implemented）"
+    }
+  ],
+  "states": [
+    {
+      "id": "draft",
+      "type": "start",
+      "label": "draft 草稿",
+      "sublabel": "状态机起点（[*]）",
+      "lane": "main",
+      "col": 0,
+      "step": "1",
+      "tag": "起始",
+      "sources": [
+        {
+          "path": "core/machine.ts",
+          "line": 10,
+          "end_line": 19,
+          "label": "STATUSES"
+        }
+      ]
+    },
+    {
+      "id": "planning",
+      "type": "active",
+      "label": "planning 规划",
+      "sublabel": "拆解目标、登记判据",
+      "lane": "main",
+      "col": 1,
+      "step": "2",
+      "tag": "规划",
+      "sources": [
+        {
+          "path": "core/machine.ts",
+          "line": 10,
+          "end_line": 19,
+          "label": "STATUSES"
+        }
+      ]
+    },
+    {
+      "id": "collecting",
+      "type": "active",
+      "label": "collecting 收集",
+      "sublabel": "收集上下文卡片",
+      "lane": "main",
+      "col": 2,
+      "step": "3",
+      "tag": "收集",
+      "sources": [
+        {
+          "path": "core/machine.ts",
+          "line": 27,
+          "label": "EDGES:collecting"
+        }
+      ]
+    },
+    {
+      "id": "ready",
+      "type": "waiting",
+      "label": "ready 待派发",
+      "sublabel": "判据 + 确认 + 快照",
+      "lane": "main",
+      "col": 3,
+      "step": "4",
+      "tag": "门禁已过",
+      "sources": [
+        {
+          "path": "core/machine.ts",
+          "line": 80,
+          "end_line": 89,
+          "label": "进 in_progress 的三道门槛"
+        },
+        {
+          "path": "core/machine.ts",
+          "line": 28,
+          "label": "EDGES:ready"
+        }
+      ]
+    },
+    {
+      "id": "in_progress",
+      "type": "active",
+      "label": "in_progress 执行中",
+      "sublabel": "已派发 attempt",
+      "lane": "main",
+      "col": 4,
+      "step": "5",
+      "tag": "执行",
+      "sources": [
+        {
+          "path": "core/machine.ts",
+          "line": 29,
+          "label": "EDGES:in_progress"
+        },
+        {
+          "path": "core/ops.ts",
+          "line": 7771,
+          "end_line": 7800,
+          "label": "assertExecutionAdmission"
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "type": "decision",
+      "label": "review 待裁决",
+      "sublabel": "结果面与评审留痕",
+      "lane": "gate",
+      "col": 4,
+      "step": "6",
+      "tag": "人工 gate",
+      "sources": [
+        {
+          "path": "core/machine.ts",
+          "line": 30,
+          "label": "EDGES:review"
+        },
+        {
+          "path": "dsh-graph-host/supervisor-guide.zh.md",
+          "line": 40,
+          "label": "review verdict 由负责人裁决"
+        }
+      ]
+    },
+    {
+      "id": "delivered",
+      "type": "success",
+      "label": "delivered 已交付",
+      "sublabel": "人工 verdict 通过",
+      "lane": "gate",
+      "col": 3,
+      "step": "7",
+      "tag": "交付",
+      "sources": [
+        {
+          "path": "core/machine.ts",
+          "line": 31,
+          "label": "EDGES:delivered"
+        },
+        {
+          "path": "dsh-graph-host/supervisor-guide.zh.md",
+          "line": 148,
+          "label": "delivered 人工 gate 是纪律非强制"
+        }
+      ]
+    },
+    {
+      "id": "blocked",
+      "type": "failure",
+      "label": "blocked 阻塞",
+      "sublabel": "无 reason 即抛错",
+      "lane": "blocked",
+      "col": 2,
+      "tag": "必须给 reason",
+      "sources": [
+        {
+          "path": "core/machine.ts",
+          "line": 32,
+          "label": "blocked 无静态出边"
+        },
+        {
+          "path": "core/machine.ts",
+          "line": 74,
+          "end_line": 78,
+          "label": "无 reason 即抛错"
+        }
+      ]
+    },
+    {
+      "id": "blocked_from",
+      "type": "external",
+      "label": "meta.blocked_from",
+      "sublabel": "解除只能回原状态",
+      "lane": "blocked",
+      "col": 3,
+      "tag": "变量",
+      "sources": [
+        {
+          "path": "core/machine.ts",
+          "line": 64,
+          "end_line": 69,
+          "label": "解除目标校验"
+        }
+      ]
+    },
+    {
+      "id": "declarative",
+      "type": "external",
+      "label": "流程语义声明式化",
+      "sublabel": "取代硬编码状态机",
+      "lane": "roadmap",
+      "col": 0,
+      "tag": "1.0 未实现",
+      "sources": [
+        {
+          "path": "core/machine.ts",
+          "line": 24,
+          "end_line": 33,
+          "label": "将被取代的硬编码 EDGES"
+        },
+        {
+          "path": "docs/design-philosophy.zh.md",
+          "line": 555,
+          "end_line": 560,
+          "label": "§13.2 未实现"
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "from": "draft",
+      "to": "planning"
+    },
+    {
+      "from": "planning",
+      "to": "collecting"
+    },
+    {
+      "from": "planning",
+      "to": "ready",
+      "label": "无收集需求时直达"
+    },
+    {
+      "from": "planning",
+      "to": "in_progress",
+      "label": "派发开发直接进执行"
+    },
+    {
+      "from": "collecting",
+      "to": "ready"
+    },
+    {
+      "from": "collecting",
+      "to": "planning",
+      "label": "回退"
+    },
+    {
+      "from": "collecting",
+      "to": "in_progress",
+      "label": "跳过 ready 直接执行"
+    },
+    {
+      "from": "ready",
+      "to": "in_progress",
+      "label": "三道门槛"
+    },
+    {
+      "from": "ready",
+      "to": "collecting",
+      "label": "回退重新收集"
+    },
+    {
+      "from": "in_progress",
+      "to": "review"
+    },
+    {
+      "from": "in_progress",
+      "to": "collecting",
+      "label": "中断回退"
+    },
+    {
+      "from": "review",
+      "to": "delivered",
+      "label": "verdict 通过",
+      "variant": "emphasis"
+    },
+    {
+      "from": "review",
+      "to": "in_progress",
+      "label": "打回"
+    },
+    {
+      "from": "delivered",
+      "to": "review",
+      "label": "补充 / 修 bug"
+    },
+    {
+      "from": "draft",
+      "to": "blocked"
+    },
+    {
+      "from": "planning",
+      "to": "blocked"
+    },
+    {
+      "from": "collecting",
+      "to": "blocked"
+    },
+    {
+      "from": "ready",
+      "to": "blocked"
+    },
+    {
+      "from": "in_progress",
+      "to": "blocked"
+    },
+    {
+      "from": "review",
+      "to": "blocked"
+    },
+    {
+      "from": "blocked",
+      "to": "blocked_from",
+      "label": "解除"
+    },
+    {
+      "from": "draft",
+      "to": "declarative",
+      "label": "1.0 路线：取代硬编码迁移表",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "今日已实现 / implemented today",
+      "items": [
+        "8 个状态与全部合法迁移硬编码在 core/machine.ts:10-33（STATUSES + EDGES）",
+        "每次迁移先过 assertTransition（core/machine.ts:50-91），非法迁移在写盘之前抛 GraphError",
+        "ready→in_progress 的三道门槛：rules_snapshot 已记录、质量判据小节非空、criteria.confirmed 事件已存在（core/machine.ts:80-89）",
+        "进入 blocked 必须给非空 reason；解除只能回 meta.blocked_from 记录的原状态",
+        "delivered 的人工 verdict 是主管纪律（supervisor-guide.zh.md:40），不是引擎强制"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "1.0 路线（未实现 / not implemented）",
+      "items": [
+        "流程语义声明式化：把状态 / 迁移 / 门禁 / 角色从代码搬进一份声明式流程定义",
+        "候选形态 .dsh-graph/process.yaml + 校验器 + 渲染器；架构级改动，须单独评估",
+        "本图其余部分（含 blocked 出口）全部为今日已实现，没有任何未实现项被画成能力"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "读图口径",
+      "items": [
+        "实线边＝今日已实现；虚线边＝1.0 路线（未实现）",
+        "blocked 没有静态出边（core/machine.ts:32），它的出口由 meta.blocked_from 决定",
+        "review 同时有 review→delivered（人工通过）与 review→in_progress（打回）两条出边"
+      ]
+    }
+  ]
+}

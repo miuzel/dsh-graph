@@ -141,7 +141,7 @@ curl -sL -b "" "<URL>" | grep -o '"@deepseek-ai/dsh-client-runtime"' | head -1
 想先弄懂「dsh-graph 为什么这样组织开发」——目标生命周期与状态机、判据门禁与人工 gate、派发与隔离三件套、
 attempt 与结果面、独立复核与留痕真源、版本泳道与发布红线、记忆分级、事件先行——请读
 [设计哲学（中文）](https://github.com/miuzel/dsh-graph/blob/main/docs/design-philosophy.zh.md)：
-它逐条给出代码真源引用，并附内联 Mermaid 流程图（区分「今日已实现」与「1.0 路线（未实现）」）。
+它逐条给出代码真源引用，并附 archify 交互式图（内联静态预览 + 可交互 HTML，区分「今日已实现」与「1.0 路线（未实现）」）。
 
 ---
 
@@ -398,8 +398,8 @@ To understand *why* dsh-graph organises development the way it does — goal lif
 gate and human gate, dispatch and the isolation triad, attempts and the results surface, independent review and
 its source of truth, version lanes and release red lines, memory grading, event-first writes — read
 [Design Philosophy (English)](https://github.com/miuzel/dsh-graph/blob/main/docs/design-philosophy.en.md):
-every behavioural claim carries a code citation, and the document ships inline Mermaid diagrams that separate
-"implemented today" from the "1.0 roadmap (not implemented)".
+every behavioural claim carries a code citation, and the document ships archify interactive diagrams — an inline
+static preview plus an explorable HTML page — that separate "implemented today" from the "1.0 roadmap (not implemented)".
 
 ---
 
