@@ -1090,6 +1090,11 @@ function renderLiveStrip(rt: unknown, props: Record<string, unknown>, liveDispla
     extractFunction(bundle, "getLiveDisplay"),
     extractFunction(bundle, "useLiveDisplayEnabled"),
     extractFunction(bundle, "formatStatusWithLifecycle"),
+    // g-461：LiveStrip 新增「新一轮正在处理…」占位判定（纯显示层）——补齐沙箱依赖，断言不变。
+    extractFunction(bundle, "statusProcessingKey"),
+    extractFunction(bundle, "statusReportIdentity"),
+    extractFunction(bundle, "useRoundReportBaseline"),
+    extractFunction(bundle, "deriveRunningStatusPlaceholder"),
     "this.api = { LiveStrip, useSessionBinding, retainedBindings, getLiveDisplay };",
     "this.zh = zh;",
   ].join("\n");

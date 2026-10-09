@@ -642,9 +642,22 @@
 
     // g-a92e1406：状态摘要行——运行中带流动背景+图标动画，阻塞行静态
     // g-239：使用 formatStatusWithLifecycle 区分真实生命周期状态
+    // g-461：与 session-hooks.js 的 LiveStrip 共用 helpers.js 的**同一**占位判定源
+    //（deriveRunningStatusPlaceholder + useRoundReportBaseline）；纯显示层，不落盘、不加事件。
     function StatusLine(props) {
-      const { text, statusState, blocked, running } = props;
+      const { text, statusState, blocked, running, agentKind } = props;
+      // React Hook 规则：hook 必须无条件调用，先于任何 early return。
+      const hasNewReportThisRound = useRoundReportBaseline(running, text, statusState);
       if (!text) return null;
+      const processingPlaceholder = deriveRunningStatusPlaceholder(
+        text, running, blocked, statusState, hasNewReportThisRound, agentKind);
+      if (processingPlaceholder) {
+        return h(
+          "div", { className: "dg-running-flow", style: { ...S.statusLine, marginTop: 3 } },
+          h("span", { className: "dg-icon-pulse" }, processingPlaceholder.icon),
+          dgT(processingPlaceholder.key),
+        );
+      }
       const formatted = formatStatusWithLifecycle(text, running, blocked, statusState);
       if (formatted.isBlocked) {
         return h("div", { style: { ...S.statusLine, color: "var(--dsw-alias-state-error-primary, #d66)" } }, "⛔ " + formatted.text);
