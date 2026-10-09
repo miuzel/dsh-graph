@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1143 794" data-reader-fit="intrinsic-height" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase" style="width: 1143px; height: 794px; min-width: 0px;" width="1143" height="794" xmlns="http://www.w3.org/2000/svg" data-theme="light"><style>
+<svg viewBox="0 0 1138 610" data-reader-fit="intrinsic-height" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase" style="width: 1138px; height: 610px; min-width: 0px;" width="1138" height="610" xmlns="http://www.w3.org/2000/svg" data-theme="light"><style>
 /*
 JetBrains Mono variable WOFF2 subsets from Google Fonts service revision v24.
 These fixed bytes are shared by the viewer and its SVG/raster exports.
@@ -403,7 +403,7 @@ svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { ani
   50% { opacity: 0.48; transform: scale(0.78); }
 }
 :root, svg { --bg: #f4f5f7; --grid: #e9edf2; --canvas-dot: #d9dee5; --text: #111827; --text-muted: #5b6474; --text-dim: #9aa3b2; --text-faint: #6b7280; --panel: #ffffff; --panel-border: #e5e7eb; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #94a3b8; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; }
-</style><rect x="0" y="0" width="1143" height="794" fill="#f4f5f7"/>
+</style><rect x="0" y="0" width="1138" height="610" fill="#f4f5f7"/>
         <title id="archify-diagram-title">dsh-graph 目标状态机：8 态与合法迁移</title>
         <desc id="archify-diagram-description">由 Archify 生成的生命周期图。</desc>
         <!-- Definitions -->
@@ -429,10 +429,9 @@ svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { ani
         <rect width="100%" height="100%" fill="url(#grid)"/>
 
         <!-- Lifecycle bands -->
-        <text x="18" y="88" class="t-dim" font-size="10" font-weight="600" writing-mode="vertical-rl" text-anchor="middle">主链 8 态（今日已实现 / implemented today）</text>
-        <text x="18" y="298" class="t-dim" font-size="10" font-weight="600" writing-mode="vertical-rl" text-anchor="middle">评审与交付（今日已实现）</text>
-        <text x="18" y="482" class="t-dim" font-size="10" font-weight="600" writing-mode="vertical-rl" text-anchor="middle">阻塞出口（今日已实现）</text>
-        <text x="18" y="666" class="t-dim" font-size="10" font-weight="600" writing-mode="vertical-rl" text-anchor="middle">1.0 路线（未实现 / not implemented）</text>
+        <text x="18" y="88" class="t-dim" font-size="10" font-weight="600" writing-mode="vertical-rl" text-anchor="middle">主链 8 态</text>
+        <text x="18" y="298" class="t-dim" font-size="10" font-weight="600" writing-mode="vertical-rl" text-anchor="middle">评审与交付</text>
+        <text x="18" y="482" class="t-dim" font-size="10" font-weight="600" writing-mode="vertical-rl" text-anchor="middle">阻塞出口</text>
 
         <!-- Primary lifecycle rail -->
 
@@ -448,11 +447,11 @@ svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { ani
         </g>
         <g data-graph-role="automatic-crossover" style="--step:2">
           <path data-graph-role="automatic-crossover-underlay" d="M 334 120 L 334 172 Q 334 182 344 182 L 748 182 Q 758 182 758 172 L 758 120" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="planning" data-edge-to="ready" data-edge-label="无收集需求时直达" data-edge-key="2" data-composition-points="334,120;334,182;758,182;758,120" data-composition-crossover="halo" d="M 334 120 L 334 172 Q 334 182 344 182 L 748 182 Q 758 182 758 172 L 758 120" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-edge-from="planning" data-edge-to="ready" data-edge-label="不需要收集时直达" data-edge-key="2" data-composition-points="334,120;334,182;758,182;758,120" data-composition-crossover="halo" d="M 334 120 L 334 172 Q 334 182 344 182 L 748 182 Q 758 182 758 172 L 758 120" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:3">
-          <path data-graph-role="automatic-crossover-underlay" d="M 364 120 L 364 194 Q 364 204 374 204 L 949 204 Q 959 204 959 194 L 959 120" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="planning" data-edge-to="in_progress" data-edge-label="派发开发直接进执行" data-edge-key="3" data-composition-points="364,120;364,204;959,204;959,120" data-composition-crossover="halo" d="M 364 120 L 364 194 Q 364 204 374 204 L 949 204 Q 959 204 959 194 L 959 120" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 364 120 L 364 194 Q 364 204 374 204 L 944 204 Q 954 204 954 194 L 954 120" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="planning" data-edge-to="in_progress" data-edge-label="派发后直接进执行" data-edge-key="3" data-composition-points="364,120;364,204;954,204;954,120" data-composition-crossover="halo" d="M 364 120 L 364 194 Q 364 204 374 204 L 944 204 Q 954 204 954 194 L 954 120" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:4">
           <path data-graph-role="automatic-crossover-underlay" d="M 608 73 L 703 73" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
@@ -463,40 +462,40 @@ svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { ani
           <path data-edge-from="collecting" data-edge-to="planning" data-edge-label="回退" data-edge-key="5" data-composition-points="468,103;404,103" data-composition-crossover="halo" d="M 468 103 L 404 103" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:6">
-          <path data-graph-role="automatic-crossover-underlay" d="M 538 120 L 538 129 Q 538 138 547 138 L 971.6 138 Q 980.6 138 980.6 129 L 980.6 120" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="collecting" data-edge-to="in_progress" data-edge-label="跳过 ready 直接执行" data-edge-key="6" data-composition-points="538,120;538,138;980.6,138;980.6,120" data-composition-crossover="halo" d="M 538 120 L 538 129 Q 538 138 547 138 L 971.6 138 Q 980.6 138 980.6 129 L 980.6 120" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 538 120 L 538 129 Q 538 138 547 138 L 966.6 138 Q 975.6 138 975.6 129 L 975.6 120" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="collecting" data-edge-to="in_progress" data-edge-label="跳过待派发直接执行" data-edge-key="6" data-composition-points="538,120;538,138;975.6,138;975.6,120" data-composition-crossover="halo" d="M 538 120 L 538 129 Q 538 138 547 138 L 966.6 138 Q 975.6 138 975.6 129 L 975.6 120" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:7">
-          <path data-graph-role="automatic-crossover-underlay" d="M 843 88 L 943 88" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="ready" data-edge-to="in_progress" data-edge-label="三道门槛" data-edge-key="7" data-composition-points="843,88;943,88" data-composition-crossover="halo" d="M 843 88 L 943 88" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 843 88 L 938 88" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="ready" data-edge-to="in_progress" data-edge-label="过三道门槛" data-edge-key="7" data-composition-points="843,88;938,88" data-composition-crossover="halo" d="M 843 88 L 938 88" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:8">
           <path data-graph-role="automatic-crossover-underlay" d="M 703 103 L 608 103" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="ready" data-edge-to="collecting" data-edge-label="回退重新收集" data-edge-key="8" data-composition-points="703,103;608,103" data-composition-crossover="halo" d="M 703 103 L 608 103" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+          <path data-edge-from="ready" data-edge-to="collecting" data-edge-label="退回补充材料" data-edge-key="8" data-composition-points="703,103;608,103" data-composition-crossover="halo" d="M 703 103 L 608 103" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:9">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1045.4 120 L 1045.4 172 Q 1045.4 182 1035.4 182 L 1008 182 Q 998 182 998 192 L 998 266" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="in_progress" data-edge-to="review" data-edge-key="9" data-composition-points="1045.4,120;1045.4,182;998,182;998,266" data-composition-crossover="halo" d="M 1045.4 120 L 1045.4 172 Q 1045.4 182 1035.4 182 L 1008 182 Q 998 182 998 192 L 998 266" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1040.4 120 L 1040.4 172 Q 1040.4 182 1030.4 182 L 1003 182 Q 993 182 993 192 L 993 266" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="in_progress" data-edge-to="review" data-edge-key="9" data-composition-points="1040.4,120;1040.4,182;993,182;993,266" data-composition-crossover="halo" d="M 1040.4 120 L 1040.4 172 Q 1040.4 182 1030.4 182 L 1003 182 Q 993 182 993 192 L 993 266" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:10">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1023.8 120 L 1023.8 150 Q 1023.8 160 1013.8 160 L 578 160 Q 568 160 568 150 L 568 120" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="in_progress" data-edge-to="collecting" data-edge-label="中断回退" data-edge-key="10" data-composition-points="1023.8,120;1023.8,160;568,160;568,120" data-composition-crossover="halo" d="M 1023.8 120 L 1023.8 150 Q 1023.8 160 1013.8 160 L 578 160 Q 568 160 568 150 L 568 120" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1018.8 120 L 1018.8 150 Q 1018.8 160 1008.8 160 L 578 160 Q 568 160 568 150 L 568 120" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="in_progress" data-edge-to="collecting" data-edge-label="中断回退" data-edge-key="10" data-composition-points="1018.8,120;1018.8,160;568,160;568,120" data-composition-crossover="halo" d="M 1018.8 120 L 1018.8 150 Q 1018.8 160 1008.8 160 L 578 160 Q 568 160 568 150 L 568 120" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:11">
-          <path data-graph-role="automatic-crossover-underlay" d="M 943 313 L 843 313" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="review" data-edge-to="delivered" data-edge-label="verdict 通过" data-edge-key="11" data-composition-points="943,313;843,313" data-composition-crossover="halo" d="M 943 313 L 843 313" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 938 313 L 843 313" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="review" data-edge-to="delivered" data-edge-label="裁决通过" data-edge-key="11" data-composition-points="938,313;843,313" data-composition-crossover="halo" d="M 938 313 L 843 313" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:12">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1028 266 L 1028 214 Q 1028 204 1038 204 L 1057 204 Q 1067 204 1067 194 L 1067 120" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="review" data-edge-to="in_progress" data-edge-label="打回" data-edge-key="12" data-composition-points="1028,266;1028,204;1067,204;1067,120" data-composition-crossover="halo" d="M 1028 266 L 1028 214 Q 1028 204 1038 204 L 1057 204 Q 1067 204 1067 194 L 1067 120" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1023 266 L 1023 214 Q 1023 204 1033 204 L 1052 204 Q 1062 204 1062 194 L 1062 120" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="review" data-edge-to="in_progress" data-edge-label="打回返工" data-edge-key="12" data-composition-points="1023,266;1023,204;1062,204;1062,120" data-composition-crossover="halo" d="M 1023 266 L 1023 214 Q 1023 204 1033 204 L 1052 204 Q 1062 204 1062 194 L 1062 120" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:13">
-          <path data-graph-role="automatic-crossover-underlay" d="M 843 283 L 943 283" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="delivered" data-edge-to="review" data-edge-label="补充 / 修 bug" data-edge-key="13" data-composition-points="843,283;943,283" data-composition-crossover="halo" d="M 843 283 L 943 283" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 843 283 L 938 283" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="delivered" data-edge-to="review" data-edge-label="补充或修 bug" data-edge-key="13" data-composition-points="843,283;938,283" data-composition-crossover="halo" d="M 843 283 L 938 283" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:14">
-          <path data-graph-role="automatic-crossover-underlay" d="M 145 120 L 145 368 Q 145 378 155 378 L 474 378 Q 484 378 484 388 L 484 450" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="draft" data-edge-to="blocked" data-edge-key="14" data-composition-points="145,120;145,378;484,378;484,450" data-composition-crossover="halo" d="M 145 120 L 145 368 Q 145 378 155 378 L 474 378 Q 484 378 484 388 L 484 450" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 130 120 L 130 368 Q 130 378 140 378 L 474 378 Q 484 378 484 388 L 484 450" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="draft" data-edge-to="blocked" data-edge-key="14" data-composition-points="130,120;130,378;484,378;484,450" data-composition-crossover="halo" d="M 130 120 L 130 368 Q 130 378 140 378 L 474 378 Q 484 378 484 388 L 484 450" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:15">
           <path data-graph-role="automatic-crossover-underlay" d="M 304 120 L 304 344 Q 304 354 314 354 L 495.6 354 Q 505.6 354 505.6 364 L 505.6 450" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
@@ -511,25 +510,21 @@ svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { ani
           <path data-edge-from="ready" data-edge-to="blocked" data-edge-key="17" data-composition-points="788,120;788,226;548.8,226;548.8,450" data-composition-crossover="halo" d="M 788 120 L 788 216 Q 788 226 778 226 L 558.8 226 Q 548.8 226 548.8 236 L 548.8 450" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:18">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1002.2 120 L 1002.2 238 Q 1002.2 248 992.2 248 L 580.4 248 Q 570.4 248 570.4 258 L 570.4 450" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="in_progress" data-edge-to="blocked" data-edge-key="18" data-composition-points="1002.2,120;1002.2,248;570.4,248;570.4,450" data-composition-crossover="halo" d="M 1002.2 120 L 1002.2 238 Q 1002.2 248 992.2 248 L 580.4 248 Q 570.4 248 570.4 258 L 570.4 450" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 997.2 120 L 997.2 238 Q 997.2 248 987.2 248 L 580.4 248 Q 570.4 248 570.4 258 L 570.4 450" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="in_progress" data-edge-to="blocked" data-edge-key="18" data-composition-points="997.2,120;997.2,248;570.4,248;570.4,450" data-composition-crossover="halo" d="M 997.2 120 L 997.2 238 Q 997.2 248 987.2 248 L 580.4 248 Q 570.4 248 570.4 258 L 570.4 450" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:19">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1013 330 L 1013 416 Q 1013 426 1003 426 L 602 426 Q 592 426 592 436 L 592 450" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="review" data-edge-to="blocked" data-edge-key="19" data-composition-points="1013,330;1013,426;592,426;592,450" data-composition-crossover="halo" d="M 1013 330 L 1013 416 Q 1013 426 1003 426 L 602 426 Q 592 426 592 436 L 592 450" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1008 330 L 1008 416 Q 1008 426 998 426 L 602 426 Q 592 426 592 436 L 592 450" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="review" data-edge-to="blocked" data-edge-key="19" data-composition-points="1008,330;1008,426;592,426;592,450" data-composition-crossover="halo" d="M 1008 330 L 1008 416 Q 1008 426 998 426 L 602 426 Q 592 426 592 436 L 592 450" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:20">
           <path data-graph-role="automatic-crossover-underlay" d="M 608 482 L 703 482" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
           <path data-edge-from="blocked" data-edge-to="blocked_from" data-edge-label="解除" data-edge-key="20" data-composition-points="608,482;703,482" data-composition-crossover="halo" d="M 608 482 L 703 482" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         </g>
-        <g data-graph-role="automatic-crossover" style="--step:21">
-          <path data-graph-role="automatic-crossover-underlay" d="M 115 120 L 115 634" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="draft" data-edge-to="declarative" data-edge-label="1.0 路线：取代硬编码迁移表" data-edge-key="21" data-composition-points="115,120;115,634" data-composition-crossover="halo" d="M 115 120 L 115 634" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
-        </g>
 
         <!-- States -->
-        <g id="node-draft" data-node-id="draft" data-node-label="draft 草稿" tabindex="0" role="button" aria-label="聚焦draft 草稿，状态机起点（[*]）, 主链 8 态（今日已实现 / implemented today）" aria-pressed="false" data-node-kind="start" data-node-sublabel="状态机起点（[*]）" data-node-tag="起始" data-node-context="主链 8 态（今日已实现 / implemented today）">
-          <title>draft 草稿 · 状态机起点（[*]） · 主链 8 态（今日已实现 / implemented today） · 起始</title>
+        <g id="node-draft" data-node-id="draft" data-node-label="draft 草稿" tabindex="0" role="button" aria-label="聚焦draft 草稿，刚建好，还没规划, 主链 8 态" aria-pressed="false" data-node-kind="start" data-node-sublabel="刚建好，还没规划" data-node-tag="起点" data-node-context="主链 8 态">
+          <title>draft 草稿 · 刚建好，还没规划 · 主链 8 态 · 起点</title>
           <rect x="60" y="56" width="140" height="64" rx="7" class="c-mask"/>
           <rect x="60" y="56" width="140" height="64" rx="7" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-lifecycle-initial-marker="">
@@ -540,106 +535,106 @@ svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { ani
             <path d="m7 5.4 3.6 2.6L7 10.6Z" class="sigil-fill"/>
           </g>
         <text x="83" y="70" class="t-frontend" font-size="8" font-weight="700">1</text>
-          <text data-node-label="" x="125" y="79" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">draft 草稿</text>
-          <text x="130" y="96" class="t-muted" font-size="8" text-anchor="middle">状态机起点（[*]）</text>
-        <text x="130" y="108" class="t-frontend" font-size="8" text-anchor="middle">起始</text>
+          <text data-node-label="" x="130" y="79" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">draft 草稿</text>
+          <text x="130" y="96" class="t-muted" font-size="8" text-anchor="middle">刚建好，还没规划</text>
+        <text x="130" y="108" class="t-frontend" font-size="8" text-anchor="middle">起点</text>
         </g>
 
-        <g id="node-planning" data-node-id="planning" data-node-label="planning 规划" tabindex="0" role="button" aria-label="聚焦planning 规划，拆解目标、登记判据, 主链 8 态（今日已实现 / implemented today）" aria-pressed="false" data-node-kind="active" data-node-sublabel="拆解目标、登记判据" data-node-tag="规划" data-node-context="主链 8 态（今日已实现 / implemented today）">
-          <title>planning 规划 · 拆解目标、登记判据 · 主链 8 态（今日已实现 / implemented today） · 规划</title>
+        <g id="node-planning" data-node-id="planning" data-node-label="planning 规划" tabindex="0" role="button" aria-label="聚焦planning 规划，拆任务、定验收标准, 主链 8 态" aria-pressed="false" data-node-kind="active" data-node-sublabel="拆任务、定验收标准" data-node-tag="规划" data-node-context="主链 8 态">
+          <title>planning 规划 · 拆任务、定验收标准 · 主链 8 态 · 规划</title>
           <rect x="264" y="56" width="140" height="64" rx="7" class="c-mask"/>
           <rect x="264" y="56" width="140" height="64" rx="7" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-frontend" transform="translate(270 62) scale(0.6875)">
             <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14"/>
           </g>
         <text x="287" y="70" class="t-frontend" font-size="8" font-weight="700">2</text>
-          <text data-node-label="" x="334" y="88" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">planning 规划</text>
-          <text x="334" y="100.3" class="t-muted" font-size="8" text-anchor="middle">拆解目标、登记判据</text>
-        <text x="334" y="111.7" class="t-frontend" font-size="8" text-anchor="middle">规划</text>
+          <text data-node-label="" x="337.7" y="79" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">planning 规划</text>
+          <text x="334" y="96" class="t-muted" font-size="8" text-anchor="middle">拆任务、定验收标准</text>
+        <text x="334" y="108" class="t-frontend" font-size="8" text-anchor="middle">规划</text>
         </g>
 
-        <g id="node-collecting" data-node-id="collecting" data-node-label="collecting 收集" tabindex="0" role="button" aria-label="聚焦collecting 收集，收集上下文卡片, 主链 8 态（今日已实现 / implemented today）" aria-pressed="false" data-node-kind="active" data-node-sublabel="收集上下文卡片" data-node-tag="收集" data-node-context="主链 8 态（今日已实现 / implemented today）">
-          <title>collecting 收集 · 收集上下文卡片 · 主链 8 态（今日已实现 / implemented today） · 收集</title>
+        <g id="node-collecting" data-node-id="collecting" data-node-label="collecting 收集" tabindex="0" role="button" aria-label="聚焦collecting 收集，先补齐需要的背景材料, 主链 8 态" aria-pressed="false" data-node-kind="active" data-node-sublabel="先补齐需要的背景材料" data-node-tag="收集" data-node-context="主链 8 态">
+          <title>collecting 收集 · 先补齐需要的背景材料 · 主链 8 态 · 收集</title>
           <rect x="468" y="56" width="140" height="64" rx="7" class="c-mask"/>
           <rect x="468" y="56" width="140" height="64" rx="7" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-frontend" transform="translate(474 62) scale(0.6875)">
             <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14"/>
           </g>
         <text x="491" y="70" class="t-frontend" font-size="8" font-weight="700">3</text>
-          <text data-node-label="" x="538" y="88" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">collecting 收集</text>
-          <text x="538" y="100.3" class="t-muted" font-size="8" text-anchor="middle">收集上下文卡片</text>
-        <text x="538" y="111.7" class="t-frontend" font-size="8" text-anchor="middle">收集</text>
+          <text data-node-label="" x="548.3" y="79" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">collecting 收集</text>
+          <text x="538" y="96" class="t-muted" font-size="8" text-anchor="middle">先补齐需要的背景材料</text>
+        <text x="538" y="108" class="t-frontend" font-size="8" text-anchor="middle">收集</text>
         </g>
 
-        <g id="node-ready" data-node-id="ready" data-node-label="ready 待派发" tabindex="0" role="button" aria-label="聚焦ready 待派发，判据 + 确认 + 快照, 主链 8 态（今日已实现 / implemented today）" aria-pressed="false" data-node-kind="waiting" data-node-sublabel="判据 + 确认 + 快照" data-node-tag="门禁已过" data-node-context="主链 8 态（今日已实现 / implemented today）">
-          <title>ready 待派发 · 判据 + 确认 + 快照 · 主链 8 态（今日已实现 / implemented today） · 门禁已过</title>
+        <g id="node-ready" data-node-id="ready" data-node-label="ready 待派发" tabindex="0" role="button" aria-label="聚焦ready 待派发，标准齐了，等开工许可, 主链 8 态" aria-pressed="false" data-node-kind="waiting" data-node-sublabel="标准齐了，等开工许可" data-node-tag="门禁已过" data-node-context="主链 8 态">
+          <title>ready 待派发 · 标准齐了，等开工许可 · 主链 8 态 · 门禁已过</title>
           <rect x="703" y="56" width="140" height="64" rx="7" class="c-mask"/>
           <rect x="703" y="56" width="140" height="64" rx="7" class="c-cloud" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="waiting" class="semantic-sigil s-cloud" transform="translate(709 62) scale(0.6875)">
             <path d="M4 2.5h8M4 13.5h8M5 3c0 2.8 2 3.2 3 5-1 1.8-3 2.2-3 5M11 3c0 2.8-2 3.2-3 5 1 1.8 3 2.2 3 5"/>
           </g>
         <text x="726" y="70" class="t-cloud" font-size="8" font-weight="700">4</text>
-          <text data-node-label="" x="773" y="88" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">ready 待派发</text>
-          <text x="773" y="100.3" class="t-muted" font-size="8" text-anchor="middle">判据 + 确认 + 快照</text>
-        <text x="773" y="111.7" class="t-cloud" font-size="8" text-anchor="middle">门禁已过</text>
+          <text data-node-label="" x="773.4" y="79" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">ready 待派发</text>
+          <text x="773" y="96" class="t-muted" font-size="8" text-anchor="middle">标准齐了，等开工许可</text>
+        <text x="773" y="108" class="t-cloud" font-size="8" text-anchor="middle">门禁已过</text>
         </g>
 
-        <g id="node-in_progress" data-node-id="in_progress" data-node-label="in_progress 执行中" tabindex="0" role="button" aria-label="聚焦in_progress 执行中，已派发 attempt, 主链 8 态（今日已实现 / implemented today）" aria-pressed="false" data-node-kind="active" data-node-sublabel="已派发 attempt" data-node-tag="执行" data-node-context="主链 8 态（今日已实现 / implemented today）">
-          <title>in_progress 执行中 · 已派发 attempt · 主链 8 态（今日已实现 / implemented today） · 执行</title>
-          <rect x="943" y="56" width="140" height="64" rx="7" class="c-mask"/>
-          <rect x="943" y="56" width="140" height="64" rx="7" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-frontend" transform="translate(949 62) scale(0.6875)">
+        <g id="node-in_progress" data-node-id="in_progress" data-node-label="in_progress 执行中" tabindex="0" role="button" aria-label="聚焦in_progress 执行中，已交给执行子代理动手, 主链 8 态" aria-pressed="false" data-node-kind="active" data-node-sublabel="已交给执行子代理动手" data-node-tag="执行" data-node-context="主链 8 态">
+          <title>in_progress 执行中 · 已交给执行子代理动手 · 主链 8 态 · 执行</title>
+          <rect x="938" y="56" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="938" y="56" width="140" height="64" rx="7" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-frontend" transform="translate(944 57) scale(0.375)">
             <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14"/>
           </g>
-        <text x="966" y="70" class="t-frontend" font-size="8" font-weight="700">5</text>
-          <text data-node-label="" x="1013" y="88" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">in_progress 执行中</text>
-          <text x="1013" y="100.3" class="t-muted" font-size="8" text-anchor="middle">已派发 attempt</text>
-        <text x="1013" y="111.7" class="t-frontend" font-size="8" text-anchor="middle">执行</text>
+        <text x="961" y="70" class="t-frontend" font-size="8" font-weight="700">5</text>
+          <text data-node-label="" x="1008" y="79" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">in_progress 执行中</text>
+          <text x="1008" y="96" class="t-muted" font-size="8" text-anchor="middle">已交给执行子代理动手</text>
+        <text x="1008" y="108" class="t-frontend" font-size="8" text-anchor="middle">执行</text>
         </g>
 
-        <g id="node-review" data-node-id="review" data-node-label="review 待裁决" tabindex="0" role="button" aria-label="聚焦review 待裁决，结果面与评审留痕, 评审与交付（今日已实现）" aria-pressed="false" data-node-kind="decision" data-node-sublabel="结果面与评审留痕" data-node-tag="人工 gate" data-node-context="评审与交付（今日已实现）">
-          <title>review 待裁决 · 结果面与评审留痕 · 评审与交付（今日已实现） · 人工 gate</title>
-          <rect x="943" y="266" width="140" height="64" rx="7" class="c-mask"/>
-          <rect x="943" y="266" width="140" height="64" rx="7" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="neutral" class="semantic-sigil s-database" transform="translate(949 272) scale(0.6875)">
+        <g id="node-review" data-node-id="review" data-node-label="review 待裁决" tabindex="0" role="button" aria-label="聚焦review 待裁决，产出已交，等人复核, 评审与交付" aria-pressed="false" data-node-kind="decision" data-node-sublabel="产出已交，等人复核" data-node-tag="人工 gate" data-node-context="评审与交付">
+          <title>review 待裁决 · 产出已交，等人复核 · 评审与交付 · 人工 gate</title>
+          <rect x="938" y="266" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="938" y="266" width="140" height="64" rx="7" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="neutral" class="semantic-sigil s-database" transform="translate(944 272) scale(0.6875)">
             <rect x="3" y="3" width="10" height="10" rx="2"/>
             <circle cx="8" cy="8" r="1.2" class="sigil-fill"/>
           </g>
-        <text x="966" y="280" class="t-database" font-size="8" font-weight="700">6</text>
-          <text data-node-label="" x="1013" y="298" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">review 待裁决</text>
-          <text x="1013" y="310.3" class="t-muted" font-size="8" text-anchor="middle">结果面与评审留痕</text>
-        <text x="1013" y="321.7" class="t-database" font-size="8" text-anchor="middle">人工 gate</text>
+        <text x="961" y="280" class="t-database" font-size="8" font-weight="700">6</text>
+          <text data-node-label="" x="1011.7" y="289" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">review 待裁决</text>
+          <text x="1008" y="306" class="t-muted" font-size="8" text-anchor="middle">产出已交，等人复核</text>
+        <text x="1008" y="318" class="t-database" font-size="8" text-anchor="middle">人工 gate</text>
         </g>
 
-        <g id="node-delivered" data-node-id="delivered" data-node-label="delivered 已交付" tabindex="0" role="button" aria-label="聚焦delivered 已交付，人工 verdict 通过, 评审与交付（今日已实现）" aria-pressed="false" data-node-kind="success" data-node-sublabel="人工 verdict 通过" data-node-tag="交付" data-node-context="评审与交付（今日已实现）">
-          <title>delivered 已交付 · 人工 verdict 通过 · 评审与交付（今日已实现） · 交付</title>
+        <g id="node-delivered" data-node-id="delivered" data-node-label="delivered 已交付" tabindex="0" role="button" aria-label="聚焦delivered 已交付，复核通过，正式收下, 评审与交付" aria-pressed="false" data-node-kind="success" data-node-sublabel="复核通过，正式收下" data-node-tag="交付" data-node-context="评审与交付">
+          <title>delivered 已交付 · 复核通过，正式收下 · 评审与交付 · 交付</title>
           <rect x="703" y="266" width="140" height="64" rx="7" class="c-mask"/>
           <rect x="703" y="266" width="140" height="64" rx="7" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="success" class="semantic-sigil s-backend" transform="translate(709 272) scale(0.6875)">
+          <g aria-hidden="true" data-semantic-sigil="success" class="semantic-sigil s-backend" transform="translate(709 267) scale(0.375)">
             <circle cx="8" cy="8" r="5.3"/>
             <path d="m5.2 8 1.8 1.8 3.8-4"/>
           </g>
         <text x="726" y="280" class="t-backend" font-size="8" font-weight="700">7</text>
-          <text data-node-label="" x="773" y="298" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">delivered 已交付</text>
-          <text x="773" y="310.3" class="t-muted" font-size="8" text-anchor="middle">人工 verdict 通过</text>
-        <text x="773" y="321.7" class="t-backend" font-size="8" text-anchor="middle">交付</text>
+          <text data-node-label="" x="773" y="289" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">delivered 已交付</text>
+          <text x="773" y="306" class="t-muted" font-size="8" text-anchor="middle">复核通过，正式收下</text>
+        <text x="773" y="318" class="t-backend" font-size="8" text-anchor="middle">交付</text>
         </g>
 
-        <g id="node-blocked" data-node-id="blocked" data-node-label="blocked 阻塞" tabindex="0" role="button" aria-label="聚焦blocked 阻塞，无 reason 即抛错, 阻塞出口（今日已实现）" aria-pressed="false" data-node-kind="failure" data-node-sublabel="无 reason 即抛错" data-node-tag="必须给 reason" data-node-context="阻塞出口（今日已实现）">
-          <title>blocked 阻塞 · 无 reason 即抛错 · 阻塞出口（今日已实现） · 必须给 reason</title>
+        <g id="node-blocked" data-node-id="blocked" data-node-label="blocked 阻塞" tabindex="0" role="button" aria-label="聚焦blocked 阻塞，卡住了，必须写明原因, 阻塞出口" aria-pressed="false" data-node-kind="failure" data-node-sublabel="卡住了，必须写明原因" data-node-tag="必须给原因" data-node-context="阻塞出口">
+          <title>blocked 阻塞 · 卡住了，必须写明原因 · 阻塞出口 · 必须给原因</title>
           <rect x="468" y="450" width="140" height="64" rx="7" class="c-mask"/>
           <rect x="468" y="450" width="140" height="64" rx="7" class="c-security" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="failure" class="semantic-sigil s-security" transform="translate(474 456) scale(0.6875)">
             <circle cx="8" cy="8" r="5.3"/>
             <path d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>
           </g>
-          <text data-node-label="" x="538" y="482" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">blocked 阻塞</text>
-          <text x="538" y="494.3" class="t-muted" font-size="8" text-anchor="middle">无 reason 即抛错</text>
-        <text x="538" y="505.7" class="t-security" font-size="8" text-anchor="middle">必须给 reason</text>
+          <text data-node-label="" x="538" y="473" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">blocked 阻塞</text>
+          <text x="538" y="490" class="t-muted" font-size="8" text-anchor="middle">卡住了，必须写明原因</text>
+        <text x="538" y="502" class="t-security" font-size="8" text-anchor="middle">必须给原因</text>
         </g>
 
-        <g id="node-blocked_from" data-node-id="blocked_from" data-node-label="meta.blocked_from" tabindex="0" role="button" aria-label="聚焦meta.blocked_from，解除只能回原状态, 阻塞出口（今日已实现）" aria-pressed="false" data-node-kind="external" data-node-sublabel="解除只能回原状态" data-node-tag="变量" data-node-context="阻塞出口（今日已实现）">
-          <title>meta.blocked_from · 解除只能回原状态 · 阻塞出口（今日已实现） · 变量</title>
+        <g id="node-blocked_from" data-node-id="blocked_from" data-node-label="卡住前的状态" tabindex="0" role="button" aria-label="聚焦卡住前的状态，解除后只能回到这里, 阻塞出口" aria-pressed="false" data-node-kind="external" data-node-sublabel="解除后只能回到这里" data-node-tag="出口由它决定" data-node-context="阻塞出口">
+          <title>卡住前的状态 · 解除后只能回到这里 · 阻塞出口 · 出口由它决定</title>
           <rect x="703" y="450" width="140" height="64" rx="7" class="c-mask"/>
           <rect x="703" y="450" width="140" height="64" rx="7" class="c-external" stroke-width="1.5"/>
           <rect x="706" y="453" width="134" height="58" rx="4" class="c-external" style="fill: none" stroke-width="1"/>
@@ -647,69 +642,55 @@ svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { ani
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="773" y="482" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">meta.blocked_from</text>
-          <text x="773" y="494.3" class="t-muted" font-size="8" text-anchor="middle">解除只能回原状态</text>
-        <text x="773" y="505.7" class="t-muted" font-size="8" text-anchor="middle">变量</text>
-        </g>
-
-        <g id="node-declarative" data-node-id="declarative" data-node-label="流程语义声明式化" tabindex="0" role="button" aria-label="聚焦流程语义声明式化，取代硬编码状态机, 1.0 路线（未实现 / not implemented）" aria-pressed="false" data-node-kind="external" data-node-sublabel="取代硬编码状态机" data-node-tag="1.0 未实现" data-node-context="1.0 路线（未实现 / not implemented）">
-          <title>流程语义声明式化 · 取代硬编码状态机 · 1.0 路线（未实现 / not implemented） · 1.0 未实现</title>
-          <rect x="60" y="634" width="140" height="64" rx="7" class="c-mask"/>
-          <rect x="60" y="634" width="140" height="64" rx="7" class="c-external" stroke-width="1.5"/>
-          <rect x="63" y="637" width="134" height="58" rx="4" class="c-external" style="fill: none" stroke-width="1"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(66 640) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
-          </g>
-          <text data-node-label="" x="130" y="666" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">流程语义声明式化</text>
-          <text x="130" y="678.3" class="t-muted" font-size="8" text-anchor="middle">取代硬编码状态机</text>
-        <text x="130" y="689.7" class="t-muted" font-size="8" text-anchor="middle">1.0 未实现</text>
+          <text data-node-label="" x="773" y="473" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">卡住前的状态</text>
+          <text x="773" y="490" class="t-muted" font-size="8" text-anchor="middle">解除后只能回到这里</text>
+        <text x="773" y="502" class="t-muted" font-size="8" text-anchor="middle">出口由它决定</text>
         </g>
 
         <!-- Transition labels -->
 
 
-        <g data-edge-from="planning" data-edge-to="ready" data-edge-label="无收集需求时直达" data-edge-key="2">
+        <g data-edge-from="planning" data-edge-to="ready" data-edge-label="不需要收集时直达" data-edge-key="2">
           <rect x="394.8" y="161" width="90.4" height="16" rx="4" class="c-mask"/>
-          <text x="440" y="172" class="t-edge-emphasis" font-size="8" text-anchor="middle">无收集需求时直达</text>
+          <text x="440" y="172" class="t-edge-emphasis" font-size="8" text-anchor="middle">不需要收集时直达</text>
         </g>
-        <g data-edge-from="planning" data-edge-to="in_progress" data-edge-label="派发开发直接进执行" data-edge-key="3">
-          <rect x="370" y="133" width="100.2" height="16" rx="4" class="c-mask"/>
-          <text x="420.1" y="144" class="t-edge-emphasis" font-size="8" text-anchor="middle">派发开发直接进执行</text>
+        <g data-edge-from="planning" data-edge-to="in_progress" data-edge-label="派发后直接进执行" data-edge-key="3">
+          <rect x="370" y="133" width="90.4" height="16" rx="4" class="c-mask"/>
+          <text x="415.2" y="144" class="t-edge-emphasis" font-size="8" text-anchor="middle">派发后直接进执行</text>
         </g>
 
         <g data-edge-from="collecting" data-edge-to="planning" data-edge-label="回退" data-edge-key="5">
           <rect x="420" y="112" width="32" height="16" rx="4" class="c-mask"/>
           <text x="436" y="123" class="t-edge-default" font-size="8" text-anchor="middle">回退</text>
         </g>
-        <g data-edge-from="collecting" data-edge-to="in_progress" data-edge-label="跳过 ready 直接执行" data-edge-key="6">
-          <rect x="596.1" y="130" width="105.10000000000001" height="16" rx="4" class="c-mask"/>
-          <text x="648.65" y="141" class="t-edge-emphasis" font-size="8" text-anchor="middle">跳过 ready 直接执行</text>
+        <g data-edge-from="collecting" data-edge-to="in_progress" data-edge-label="跳过待派发直接执行" data-edge-key="6">
+          <rect x="597.3" y="130" width="100.2" height="16" rx="4" class="c-mask"/>
+          <text x="647.4" y="141" class="t-edge-emphasis" font-size="8" text-anchor="middle">跳过待派发直接执行</text>
         </g>
-        <g data-edge-from="ready" data-edge-to="in_progress" data-edge-label="三道门槛" data-edge-key="7">
-          <rect x="867.4" y="67" width="51.2" height="16" rx="4" class="c-mask"/>
-          <text x="893" y="78" class="t-edge-emphasis" font-size="8" text-anchor="middle">三道门槛</text>
+        <g data-edge-from="ready" data-edge-to="in_progress" data-edge-label="过三道门槛" data-edge-key="7">
+          <rect x="860" y="67" width="61" height="16" rx="4" class="c-mask"/>
+          <text x="890.5" y="78" class="t-edge-emphasis" font-size="8" text-anchor="middle">过三道门槛</text>
         </g>
-        <g data-edge-from="ready" data-edge-to="collecting" data-edge-label="回退重新收集" data-edge-key="8">
+        <g data-edge-from="ready" data-edge-to="collecting" data-edge-label="退回补充材料" data-edge-key="8">
           <rect x="620.1" y="82" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
-          <text x="655.5" y="93" class="t-edge-default" font-size="8" text-anchor="middle">回退重新收集</text>
+          <text x="655.5" y="93" class="t-edge-default" font-size="8" text-anchor="middle">退回补充材料</text>
         </g>
 
         <g data-edge-from="in_progress" data-edge-to="collecting" data-edge-label="中断回退" data-edge-key="10">
-          <rect x="884.2499999999999" y="169" width="51.2" height="16" rx="4" class="c-mask"/>
-          <text x="909.8499999999999" y="180" class="t-edge-default" font-size="8" text-anchor="middle">中断回退</text>
+          <rect x="880.4999999999999" y="169" width="51.2" height="16" rx="4" class="c-mask"/>
+          <text x="906.0999999999999" y="180" class="t-edge-default" font-size="8" text-anchor="middle">中断回退</text>
         </g>
-        <g data-edge-from="review" data-edge-to="delivered" data-edge-label="verdict 通过" data-edge-key="11">
-          <rect x="857.6" y="322" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
-          <text x="893" y="333" class="t-edge-emphasis" font-size="8" text-anchor="middle">verdict 通过</text>
+        <g data-edge-from="review" data-edge-to="delivered" data-edge-label="裁决通过" data-edge-key="11">
+          <rect x="864.9" y="322" width="51.2" height="16" rx="4" class="c-mask"/>
+          <text x="890.5" y="333" class="t-edge-emphasis" font-size="8" text-anchor="middle">裁决通过</text>
         </g>
-        <g data-edge-from="review" data-edge-to="in_progress" data-edge-label="打回" data-edge-key="12">
-          <rect x="1034" y="227" width="32" height="16" rx="4" class="c-mask"/>
-          <text x="1050" y="238" class="t-edge-default" font-size="8" text-anchor="middle">打回</text>
+        <g data-edge-from="review" data-edge-to="in_progress" data-edge-label="打回返工" data-edge-key="12">
+          <rect x="1029" y="227" width="51.2" height="16" rx="4" class="c-mask"/>
+          <text x="1054.6" y="238" class="t-edge-default" font-size="8" text-anchor="middle">打回返工</text>
         </g>
-        <g data-edge-from="delivered" data-edge-to="review" data-edge-label="补充 / 修 bug" data-edge-key="13">
-          <rect x="855.15" y="262" width="75.7" height="16" rx="4" class="c-mask"/>
-          <text x="893" y="273" class="t-edge-default" font-size="8" text-anchor="middle">补充 / 修 bug</text>
+        <g data-edge-from="delivered" data-edge-to="review" data-edge-label="补充或修 bug" data-edge-key="13">
+          <rect x="855.1" y="262" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
+          <text x="890.5" y="273" class="t-edge-default" font-size="8" text-anchor="middle">补充或修 bug</text>
         </g>
 
 
@@ -721,45 +702,41 @@ svg[data-preset="editorial"][data-animation="trace"] [data-animate="node"] { ani
           <rect x="639.5" y="461" width="32" height="16" rx="4" class="c-mask"/>
           <text x="655.5" y="472" class="t-edge-default" font-size="8" text-anchor="middle">解除</text>
         </g>
-        <g data-edge-from="draft" data-edge-to="declarative" data-edge-label="1.0 路线：取代硬编码迁移表" data-edge-key="21">
-          <rect x="120.99999999999999" y="497.5" width="139.4" height="16" rx="4" class="c-mask"/>
-          <text x="190.7" y="508.5" class="t-edge-dashed" font-size="8" text-anchor="middle">1.0 路线：取代硬编码迁移表</text>
-        </g>
 
         <!-- Legend -->
         <g data-legend="">
-          <text x="40" y="738" class="t-primary" font-size="12" font-weight="650">图例</text>
-          <g data-legend-semantic-kind="start" data-legend-x="40" data-legend-baseline="758" data-legend-width="75">
-            <circle cx="44.5" cy="754.5" r="4.5" style="fill: var(--arrow-emphasis)"/><path d="M 49 754.5 L 58 754.5" class="a-emphasis" stroke-width="1.4"/><path d="M 57 751 L 64 754.5 L 57 758 Z" style="fill: var(--arrow-emphasis)"/>
-            <text x="74" y="758" class="t-muted" font-size="10" font-weight="500">起点</text>
+          <text x="40" y="554" class="t-primary" font-size="12" font-weight="650">图例</text>
+          <g data-legend-semantic-kind="start" data-legend-x="40" data-legend-baseline="574" data-legend-width="75">
+            <circle cx="44.5" cy="570.5" r="4.5" style="fill: var(--arrow-emphasis)"/><path d="M 49 570.5 L 58 570.5" class="a-emphasis" stroke-width="1.4"/><path d="M 57 567 L 64 570.5 L 57 574 Z" style="fill: var(--arrow-emphasis)"/>
+            <text x="74" y="574" class="t-muted" font-size="10" font-weight="500">起点</text>
           </g>
-          <g data-legend-semantic-kind="active" data-legend-x="137" data-legend-baseline="758" data-legend-width="73">
-            <rect x="137" y="750" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-            <text x="159" y="758" class="t-muted" font-size="10" font-weight="500">进行中</text>
+          <g data-legend-semantic-kind="active" data-legend-x="137" data-legend-baseline="574" data-legend-width="73">
+            <rect x="137" y="566" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+            <text x="159" y="574" class="t-muted" font-size="10" font-weight="500">进行中</text>
           </g>
-          <g data-legend-semantic-kind="waiting" data-legend-x="232" data-legend-baseline="758" data-legend-width="63">
-            <rect x="232" y="750" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
-            <text x="254" y="758" class="t-muted" font-size="10" font-weight="500">等待</text>
+          <g data-legend-semantic-kind="waiting" data-legend-x="232" data-legend-baseline="574" data-legend-width="63">
+            <rect x="232" y="566" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
+            <text x="254" y="574" class="t-muted" font-size="10" font-weight="500">等待</text>
           </g>
-          <g data-legend-semantic-kind="decision" data-legend-x="317" data-legend-baseline="758" data-legend-width="63">
-            <rect x="317" y="750" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-            <text x="339" y="758" class="t-muted" font-size="10" font-weight="500">决策</text>
+          <g data-legend-semantic-kind="decision" data-legend-x="317" data-legend-baseline="574" data-legend-width="63">
+            <rect x="317" y="566" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+            <text x="339" y="574" class="t-muted" font-size="10" font-weight="500">决策</text>
           </g>
-          <g data-legend-semantic-kind="success" data-legend-x="402" data-legend-baseline="758" data-legend-width="63">
-            <rect x="402" y="750" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-            <text x="424" y="758" class="t-muted" font-size="10" font-weight="500">成功</text>
+          <g data-legend-semantic-kind="success" data-legend-x="402" data-legend-baseline="574" data-legend-width="63">
+            <rect x="402" y="566" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+            <text x="424" y="574" class="t-muted" font-size="10" font-weight="500">成功</text>
           </g>
-          <g data-legend-semantic-kind="failure" data-legend-x="487" data-legend-baseline="758" data-legend-width="98">
-            <rect x="487" y="750" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-            <text x="509" y="758" class="t-muted" font-size="10" font-weight="500">失败 / 退出</text>
+          <g data-legend-semantic-kind="failure" data-legend-x="487" data-legend-baseline="574" data-legend-width="98">
+            <rect x="487" y="566" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+            <text x="509" y="574" class="t-muted" font-size="10" font-weight="500">失败 / 退出</text>
           </g>
-          <g data-legend-semantic-kind="external" data-legend-x="607" data-legend-baseline="758" data-legend-width="83">
-            <rect x="607" y="750" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
-            <text x="629" y="758" class="t-muted" font-size="10" font-weight="500">外部状态</text>
+          <g data-legend-semantic-kind="external" data-legend-x="607" data-legend-baseline="574" data-legend-width="83">
+            <rect x="607" y="566" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+            <text x="629" y="574" class="t-muted" font-size="10" font-weight="500">外部状态</text>
           </g>
-          <g data-legend-semantic-kind="final" data-legend-x="712" data-legend-baseline="758" data-legend-width="44">
-            <rect x="712" y="750" width="14" height="9" rx="2" class="c-external" stroke-width="1"/><rect x="714.5" y="752.5" width="9" height="4" rx="1" class="c-external" style="fill: none" stroke-width="0.8"/>
-            <text x="736" y="758" class="t-muted" font-size="10" font-weight="500">终态</text>
+          <g data-legend-semantic-kind="final" data-legend-x="712" data-legend-baseline="574" data-legend-width="44">
+            <rect x="712" y="566" width="14" height="9" rx="2" class="c-external" stroke-width="1"/><rect x="714.5" y="568.5" width="9" height="4" rx="1" class="c-external" style="fill: none" stroke-width="0.8"/>
+            <text x="736" y="574" class="t-muted" font-size="10" font-weight="500">终态</text>
           </g>
         </g>
       </svg>
