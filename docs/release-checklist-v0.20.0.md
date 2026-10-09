@@ -3,8 +3,9 @@
 > **本文件状态：发布准备 = 已完成（版本串转正 / CHANGELOG / 本清单 / 终版产物与对账 / 自证闸门 全部落地）；
 > Windows 红线 1 真机门禁 = 已完成（原生 Windows 进程，经 WSL↔Windows 互操作；见 §7 / `docs/platform-gate.md` §7.8）。**
 > **平台真机结论：原生 Windows = ✅ 已实测通过（`win32/x64` + Node `v24.21.0` + 宿主 `0.2.0-rc.2`；T1–T5 通过 15 / 失败 0 / 告警 1、T3 生命周期 32/32 步）；原生 macOS = 未执行（不得读出「已通过」）。**（详见 §7）
-> 本阶段**未合并 `main`**、未打 annotated tag、未 `npm publish`、未创建 GitHub release、未 `git push`
-> —— 这些不可逆动作**全部留给负责人人工 gate**（§8）。
+> **发布已实施（2026-10-10 01:25 +08:00）：`main` 已合并（`af72f710…`）、annotated tag `v0.20.0` 已推、`npm publish` 已发布、GitHub release `v0.20.0` 已创建。**
+> 发布事实与逐项外部对账见 §8「发布实施记录」；**三处产物指纹同为 `51d7de25…`（npm `shasum`/`integrity`、GitHub 附件服务端 digest、真机被测包）——被测 == 发布 == 已发布。**
+> 唯一**未执行**项：原生 macOS 真机门禁（README 与 §7 均如实标注「本版未验证」）。
 > 负责人 2026-10-09 已裁决：v0.20.0 全部目标 `accept`、**版本号定案 `0.20.0`（直接正式版，非 rc）**；
 > Windows 真机**另起目标**执行（g-467）：先跑 §5 的候选包，README 回填后**重建重打终版包并对新包再跑一轮**，
 > 使**被测产物 == 发布产物**（闭环已达成，见 §7 与 §5「回填重打」段）。
@@ -345,16 +346,26 @@ Windows 已验证 ⇒ README 可写「已通过」，但必须附上述**可核�
 `diff -rq` 实拍）。**因回填重打的 tarball 已重新记录 sha256（`51d7de25…`）并对新包重跑真机**
 （结果同 PASS 15/0/1、T3 32/32 步）⇒ **被测产物 == 发布产物**，无需诉诸 README-only 红旗裁决。
 
-## 8. 未执行项（全部由负责人人工 gate，准备阶段一律不执行）
+## 8. 人工 gate 执行记录（**全部已执行，2026-10-10**）
 
-- [ ] **合并 `main`**：`v0.20.0-test` → `main`（`--no-ff` 合并；**发布源 tip 以 `git rev-parse v0.20.0-test` 为准**，勿照抄本清单里的历史短 sha；`1bba546` 只是 g-466 打包当时的基线。建议合并后核对 `HEAD^{tree}` 与待合并分支 tip 相等）；
-- [ ] **打 annotated tag `v0.20.0`**；
-- [ ] **`git push`**（`main` + tag）；
-- [ ] **`npm publish`**（**负责人手动执行**；tarball 直发**终版包**，发布后用 `npm view dsh-graph@0.20.0 dist --json` 的 `shasum` 与本清单 §5「终版包」列的 sha1 **`01590980f4800e5c9c8d442fc62ade11802ef482`** 对账）；
-- [ ] **GitHub release `v0.20.0`**（附件 = **终版包** `dsh-graph-0.20.0.tgz` + `SHA256SUMS`，下载回验 sha256 = **`51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a`**）；
+- [x] **合并 `main`**：`v0.20.0-test` → `main`，`--no-ff` 合并提交 **`af72f710a2ea9a0de29df388b1f779a221bf2d16`**（「release: v0.20.0」）；合并后 `HEAD^{tree}` 与分支 tip tree **逐字相等**（`6bba6b5028c1cead1a702b80d5b26f03776319e1`）⇒ 内容零漂移。远端 `main` 已为该提交（`gh api repos/miuzel/dsh-graph/commits/main` 实查）；
+- [x] **打 annotated tag `v0.20.0`**：tag 对象 `1d88d66959cc5eec01fa67d8c7c8ccf68c8c41f9`（`type: tag`）⇒ 解引用到 **`af72f710…`**（`gh api …/git/tags/1d88d669` 实查；非轻量 tag）；
+- [x] **`git push`**（`main` + tag）：均已推达远端（同上两条 API 实查）；
+- [x] **`npm publish`**（负责人手动执行，**直发终版 tarball**）：`npm view dsh-graph@0.20.0 dist --json` 实测 **`shasum` = `01590980f4800e5c9c8d442fc62ade11802ef482`**、**`fileCount` = 43**、`unpackedSize` = 4318053 —— 与本清单 §5「终版包」列的 sha1 **逐字一致**；另本地实算该 tarball 的 `sha512` 标准 base64 编码 = **`sha512-eVbLFfmqYiZYyK2QHTlesBLJ62icaiG3K6b2btohuYosiJavd0zlaHkNnaY6decCRShEHb40QWUVunG+SaM/nA==`**，与注册表 `dist.integrity` **逐字一致** ⇒ 已发布包与被测产物**同一份字节**；
+- [x] **GitHub release `v0.20.0`**（附件 = 终版包 + `SHA256SUMS`）：`isDraft=false` / `isPrerelease=false`，`publishedAt=2026-10-09T17:25:35Z`；**GitHub 服务端自算附件 digest** `sha256:51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a`（size 1436959）= 本清单 §5 终版包 sha256 **逐字一致**；`SHA256SUMS` 附件 digest `sha256:7980dc98808f85cae03f5f8a2a2a25aa0dd2512fb4e3b63081bcac630e943003` = 本地该文件 sha256 逐字一致；负责人另在本机执行 `gh release download` + `sha256sum -c` ⇒ **`dsh-graph-0.20.0.tgz: OK`**；
 - [x] **原生 Windows 真机门禁** —— **已实测通过**（g-467：候选包 + 回填重打的终版包各跑一轮，`win32/x64`、PASS 15/0/1、T3 32/32 步；被测产物 == 发布产物；逐字报告见 `docs/platform-gate.md` §7.8）；
-- [ ] **原生 macOS 真机门禁**（如负责人决定执行 —— 本轮**未执行**）；
+- [ ] **原生 macOS 真机门禁**（如负责人决定执行 —— 本轮**未执行**，README 与 §7 均标注「本版未验证」）；
 - [ ] 发布后由负责人在看板决定是否把 `v0.20.0` 泳道标为 `released`。
+
+**发布实施记录（三处产物指纹同源）**：
+
+| 落点 | 指纹 | 与终版包对账 |
+|---|---|---|
+| 本地被测产物（Windows 真机第二轮被测对象） | sha256 `51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a` / sha1 `01590980f4800e5c9c8d442fc62ade11802ef482` | 基准 |
+| npm registry（`dsh-graph@0.20.0`） | `shasum` `01590980f4800e5c9c8d442fc62ade11802ef482` + `integrity` `sha512-eVbLFfmq…SaM/nA==` | ✅ sha1 与 sha512 均逐字一致 |
+| GitHub release 附件 | 服务端 digest `sha256:51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a` | ✅ 逐字一致（另经本机下载回验 OK） |
+
+⇒ **「Windows 真机验过的包 == npm 上发布的包 == GitHub release 附件」三点闭合**（红线 3：跨机器传递唯一渠道为 tarball + sha256 对账）。
 
 ## 9. 发布期约束（**必须先合 `main`，否则文档与 README 的图链接 404**）
 
@@ -365,8 +376,10 @@ Windows 已验证 ⇒ README 可写「已通过」，但必须附上述**可核�
   与 `assets/design-philosophy.*.svg` —— GitHub 按**文件所在分支**解析相对链接 ⇒ 同样落到 `main`（`design-philosophy.zh.md:35` / `:43`）；
 - 图路由本身（插件自带只读路由 `/api/dsh-graph/diagram/<name>`，从 `dist/diagrams/` 现读）与包内相对资产**不受此约束**。
 
-而 §5 的终版产物当前**只存在于集成分支 `v0.20.0-test`**（`main` 尚未合并）⇒
+而 §5 的终版产物当时只存在于集成分支 `v0.20.0-test`（`main` 尚未合并）⇒
 **发布时必须先合并 `main`**，让 `main` 上确实存在对应的图与文档；否则任何点击这些链接的用户 / 市场页面都会拿到 **404**。
 
+> ✅ **该顺序要求已满足（2026-10-10）**：`main` 已合并到 `af72f710…` 并推达远端 —— 上述图与文档均已存在于 `main`，链接不再 404。
+
 > 该约束来自 `g-460` 判据 15（文档与 README 图链接指向 `blob/main`），是**发布顺序**要求，不是缺陷：
-> 合并 `main` 属负责人的不可逆动作（§8），本轮不执行。
+> 合并 `main` 属负责人的不可逆动作 —— 已由负责人授权并由主管在本地执行，见 §8。
