@@ -16,7 +16,7 @@ dsh plugin --profile <name> add dsh-graph@0.20.0
 
 ### 验证与产物
 
-- **平台真机门禁**：原生 Windows（`win32/x64`，Node `v24.21.0`，宿主 DSH `0.2.0-rc.2`）在**本版终版发布包**上实测通过 —— `win-smoke` T1–T5 **15 通过 / 0 失败 / 1 设计内告警**，看板文件系统生命周期 **32 步全通过**（唯一告警为设计内：`--tarball` 轮包内只有编译产物、无 `core/*.ts`，台账对账改在仓库根完成）；**原生 macOS 本版未验证**（不得读作「已通过」）；Linux / WSL2 整套件自证闸门通过（`tests=2351 / pass=2351 / fail=0 / skipped=0 / todo=0 / cancelled=0`）。Windows 门禁经 WSL↔Windows 互操作执行，与纯原生场景的 4 点差异已逐条登记。逐字报告见 [`docs/platform-gate.md`](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) §7.8。
+- **平台真机门禁**：原生 Windows（`win32/x64`，Node `v24.21.0`，宿主 DSH `0.2.0-rc.2`）在**本版终版发布包**上实测通过 —— `win-smoke` T1–T5 **15 通过 / 0 失败 / 1 设计内告警**，看板文件系统生命周期 **32 步全通过**（唯一告警为设计内：`--tarball` 轮包内只有编译产物、无 `core/*.ts`，台账对账改在仓库根完成）；**原生 macOS 本版未验证**（不得读作「已通过」）；Linux / WSL2 整套件自证闸门通过（`tests=2353 / pass=2353 / fail=0 / skipped=0 / todo=0 / cancelled=0`）。Windows 门禁经 WSL↔Windows 互操作执行，与纯原生场景的 4 点差异已逐条登记。逐字报告见 [`docs/platform-gate.md`](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) §7.8。
 - **发布产物**：`dsh-graph-0.20.0.tgz` — sha256 `51d7de25134725c1955a5d6a177352a2ae53f10c39b1af1678311d714ae86e5a`，sha1 `01590980f4800e5c9c8d442fc62ade11802ef482`（npm 注册表上的 `dist.shasum` 与此 sha1 逐字节一致，`dist.integrity` 亦逐字一致；共 43 个成员）。**Windows 真机测过的包、npm 上发布的包与 GitHub release 附件是同一份字节**（GitHub 附件服务端 digest 同为 `sha256:51d7de25…`）。
 - **发布记录**：[`docs/release-checklist-v0.20.0.md`](https://github.com/miuzel/dsh-graph/blob/main/docs/release-checklist-v0.20.0.md)（含候选包→终版包逐次差异、可复现性、发布后对账）。
 - 从源码构建的版本与本 tag 逐字节可复现（同一 `build.sh` + `npm pack` 得同一 sha256）—— 本版经**三条独立构建路径**（发布准备树 / 真机被测树 / 集成审计树）交叉验证，产物 sha256 完全一致。
