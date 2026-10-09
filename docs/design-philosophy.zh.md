@@ -27,83 +27,17 @@
 
 ### 1.1 状态机与合法迁移（今日已实现）
 
-```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> draft
-    draft --> planning
-    planning --> collecting
-    planning --> ready: 无收集需求时直达
-    planning --> in_progress: 派发开发直接进执行
-    collecting --> ready
-    collecting --> planning
-    collecting --> in_progress: 跳过 ready 直接执行
-    ready --> in_progress: 判据非空 + criteria.confirmed + rules_snapshot
-    in_progress --> review
-    in_progress --> collecting: 中断回退重新收集
-    review --> delivered: 人工 verdict 通过（指南约束）
-    review --> in_progress: 打回
-    delivered --> review
-    draft --> blocked
-    planning --> blocked
-    collecting --> blocked
-    ready --> blocked
-    in_progress --> blocked
-    review --> blocked
-    blocked --> blocked_from: 解除只能回原状态
-    note right of blocked
-      进入 blocked 必须给 reason；
-      解除只能回 meta.blocked_from
-    end note
-    note right of delivered
-      已实现：core/machine.ts:10-33 的硬编码状态机
-      delivered 的人工 gate 是主管纪律，不是引擎强制
-    end note
-```
+![dsh-graph 目标状态机：8 态与合法迁移](../dsh-graph-host/diagrams/design-philosophy.lifecycle.png)
+
+[交互式版本](../dsh-graph-host/diagrams/design-philosophy.lifecycle.html)
 
 真源：状态集合 `core/machine.ts:10-19`（`STATUSES`）；合法边 `core/machine.ts:24-33`（`EDGES`）。
 
 ### 1.2 角色与门禁主链（今日已实现 vs 1.0 路线）
 
-```mermaid
-flowchart TD
-    subgraph TODAY["今日已实现 / implemented today"]
-        direction TB
-        OWNER["负责人 Owner"]
-        SUP["主管 Supervisor：规划 / 派发 / 把关 / 复核"]
-        CRIT["质量判据已登记并确认"]
-        ADM{"执行准入门禁 assertExecutionAdmission"}
-        REJ["零副作用拒绝：不建 attempt、不启子代理"]
-        WT["隔离 worktree .worktrees/g-N-att-NN"]
-        EXEC["执行子代理 attempt"]
-        RES["结果面 results-att-N.md（自动截获）"]
-        RVW["独立评审 reviews/rev-att-NN-01.md"]
-        DL["delivered"]
-        VER["版本泳道 vX.Y.Z"]
-        PUB["npm 发布 + git tag"]
-        OWNER -->|"人工 gate 1 同意开工"| SUP
-        SUP --> CRIT
-        CRIT --> ADM
-        ADM -->|"拒绝"| REJ
-        ADM -->|"通过"| WT
-        WT --> EXEC
-        EXEC --> RES
-        RES --> RVW
-        RVW --> OWNER
-        OWNER -->|"人工 gate 2 verdict 通过"| DL
-        DL --> VER
-        VER --> PUB
-        OWNER -->|"人工 gate 3 发布放行"| PUB
-    end
-    subgraph FUTURE["1.0 路线（未实现 / not implemented）"]
-        F1["表现层可视化：流程 graph + 当前目标在图上的位置"]
-        F2["流程语义声明式化：状态 / 迁移 / 门禁 / 角色"]
-        F3["每项目启用不同 graph"]
-        F1 -.-> F2
-        F2 -.-> F3
-    end
-    F2 -.->|"取代硬编码"| ADM
-```
+![dsh-graph 主链：角色、门禁与留痕](../dsh-graph-host/diagrams/design-philosophy.workflow.png)
+
+[交互式版本](../dsh-graph-host/diagrams/design-philosophy.workflow.html)
 
 真源：准入 `core/ops.ts:7771`（`assertExecutionAdmission`）；隔离 `core/worktree.ts:784`
 （`resolveWorktreeIsolationDecision`）；结果面 `core/ops.ts:8653`（`writeAttemptResults`）；

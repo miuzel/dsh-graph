@@ -32,83 +32,17 @@ Both diagrams below render directly on GitHub and clearly separate **implemented
 
 ### 1.1 States and legal transitions (implemented today)
 
-```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> draft
-    draft --> planning
-    planning --> collecting
-    planning --> ready: direct when nothing to collect
-    planning --> in_progress: dispatch straight into execution
-    collecting --> ready
-    collecting --> planning
-    collecting --> in_progress: skip ready and execute
-    ready --> in_progress: criteria non-empty + criteria.confirmed + rules_snapshot
-    in_progress --> review
-    in_progress --> collecting: interrupt and re-collect
-    review --> delivered: owner verdict passed (guideline constraint)
-    review --> in_progress: sent back
-    delivered --> review
-    draft --> blocked
-    planning --> blocked
-    collecting --> blocked
-    ready --> blocked
-    in_progress --> blocked
-    review --> blocked
-    blocked --> blocked_from: unblock only to the original state
-    note right of blocked
-      entering blocked requires a reason;
-      leaving it may only return to meta.blocked_from
-    end note
-    note right of delivered
-      implemented: the hard-coded state machine in core/machine.ts:10-33
-      the delivered human gate is supervisor discipline, not engine enforcement
-    end note
-```
+![dsh-graph goal state machine: 8 states and legal transitions](../dsh-graph-host/diagrams/design-philosophy.lifecycle.png)
+
+[Interactive version](../dsh-graph-host/diagrams/design-philosophy.lifecycle.html)
 
 Sources: state set `core/machine.ts:10-19` (`STATUSES`); legal edges `core/machine.ts:24-33` (`EDGES`).
 
 ### 1.2 Roles and gate chain (implemented today vs 1.0 roadmap)
 
-```mermaid
-flowchart TD
-    subgraph TODAY["Implemented today"]
-        direction TB
-        OWNER["Owner (human)"]
-        SUP["Supervisor: plan / dispatch / gate / review"]
-        CRIT["Quality criteria registered and confirmed"]
-        ADM{"Execution admission assertExecutionAdmission"}
-        REJ["Zero-side-effect rejection: no attempt, no child"]
-        WT["Isolated worktree .worktrees/g-N-att-NN"]
-        EXEC["Execution subagent attempt"]
-        RES["Results surface results-att-N.md (auto-captured)"]
-        RVW["Independent review reviews/rev-att-NN-01.md"]
-        DL["delivered"]
-        VER["Version lane vX.Y.Z"]
-        PUB["npm publish + git tag"]
-        OWNER -->|"human gate 1 approve start"| SUP
-        SUP --> CRIT
-        CRIT --> ADM
-        ADM -->|"reject"| REJ
-        ADM -->|"pass"| WT
-        WT --> EXEC
-        EXEC --> RES
-        RES --> RVW
-        RVW --> OWNER
-        OWNER -->|"human gate 2 verdict passed"| DL
-        DL --> VER
-        VER --> PUB
-        OWNER -->|"human gate 3 release approval"| PUB
-    end
-    subgraph FUTURE["1.0 roadmap (not implemented)"]
-        F1["Presentation layer: process graph plus current goal position"]
-        F2["Declarative process semantics: states / transitions / gates / roles"]
-        F3["A different graph per project"]
-        F1 -.-> F2
-        F2 -.-> F3
-    end
-    F2 -.->|"replaces hard-coding"| ADM
-```
+![dsh-graph main chain: roles, gates, and trace](../dsh-graph-host/diagrams/design-philosophy.workflow.png)
+
+[Interactive version](../dsh-graph-host/diagrams/design-philosophy.workflow.html)
 
 Sources: admission `core/ops.ts:7771` (`assertExecutionAdmission`); isolation `core/worktree.ts:784`
 (`resolveWorktreeIsolationDecision`); results surface `core/ops.ts:8653` (`writeAttemptResults`);
