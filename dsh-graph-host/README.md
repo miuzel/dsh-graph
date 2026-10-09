@@ -136,6 +136,15 @@ curl -sL -b "" "<URL>" | grep -o '"@deepseek-ai/dsh-client-runtime"' | head -1
 
 ---
 
+### 设计哲学（面向首次接触本插件的用户）
+
+想先弄懂「dsh-graph 为什么这样组织开发」——目标生命周期与状态机、判据门禁与人工 gate、派发与隔离三件套、
+attempt 与结果面、独立复核与留痕真源、版本泳道与发布红线、记忆分级、事件先行——请读
+[设计哲学（中文）](https://github.com/miuzel/dsh-graph/blob/main/docs/design-philosophy.zh.md)：
+它逐条给出代码真源引用，并附内联 Mermaid 流程图（区分「今日已实现」与「1.0 路线（未实现）」）。
+
+---
+
 ### Agent 工具速查表
 
 dsh-graph 为 Agent 提供了完善的工具链（共 51 个 `graph_*` 工具），按功能划分为以下分类：
@@ -380,6 +389,17 @@ external report and host source code; this README does **not** claim the desktop
   Generate `HANDOFF.md` summarizing board projections, long-term memory, and environment facts. A new session can claim the Supervisor role idempotently via `graph_claim_supervisor`.
 - **Modern UI & Dual-Theme Support**:
   Full Dark and Light theme adaptation following DSH variables. Subtle pulse animations highlight external updates (with `prefers-reduced-motion` accessibility support); drag-safe modal text selection.
+
+---
+
+### Design Philosophy (for readers new to this plugin)
+
+To understand *why* dsh-graph organises development the way it does — goal lifecycle and state machine, criteria
+gate and human gate, dispatch and the isolation triad, attempts and the results surface, independent review and
+its source of truth, version lanes and release red lines, memory grading, event-first writes — read
+[Design Philosophy (English)](https://github.com/miuzel/dsh-graph/blob/main/docs/design-philosophy.en.md):
+every behavioural claim carries a code citation, and the document ships inline Mermaid diagrams that separate
+"implemented today" from the "1.0 roadmap (not implemented)".
 
 ---
 
