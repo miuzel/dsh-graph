@@ -51,6 +51,7 @@
     }
   ],
   "mainPath": [
+    "scheduling",
     "gate1",
     "criteria",
     "admission",
@@ -59,10 +60,21 @@
     "results",
     "review",
     "verdict",
-    "version",
+    "merge",
     "publish"
   ],
   "nodes": [
+    {
+      "id": "scheduling",
+      "lane": "supervisor",
+      "col": 0,
+      "type": "backend",
+      "label": "排入版本（规划期）",
+      "sublabel": "先排进版本或独立目标，排期在此定",
+      "tag": "排期",
+      "width": 126,
+      "yOffset": -112
+    },
     {
       "id": "gate1",
       "lane": "owner",
@@ -147,13 +159,14 @@
       "tag": "人工 gate"
     },
     {
-      "id": "version",
+      "id": "merge",
       "lane": "delivery",
       "col": 4,
-      "type": "database",
-      "label": "排入版本",
-      "sublabel": "按版本计划归档排期",
-      "tag": "版本",
+      "type": "backend",
+      "label": "合入集成分支",
+      "sublabel": "只合入，不再调整排期",
+      "tag": "合入",
+      "width": 92,
       "yOffset": 0
     },
     {
@@ -169,6 +182,13 @@
     }
   ],
   "edges": [
+    {
+      "id": "scheduling-gate1",
+      "from": "scheduling",
+      "to": "gate1",
+      "label": "排期确定",
+      "role": "main"
+    },
     {
       "id": "g1-criteria",
       "from": "gate1",
@@ -225,15 +245,15 @@
       "role": "main"
     },
     {
-      "id": "verdict-version",
+      "id": "verdict-merge",
       "from": "verdict",
-      "to": "version",
+      "to": "merge",
       "label": "交付",
       "role": "main"
     },
     {
-      "id": "version-publish",
-      "from": "version",
+      "id": "merge-publish",
+      "from": "merge",
       "to": "publish",
       "role": "main"
     }
@@ -247,6 +267,7 @@
         "开工前有准入检查：不合格直接退回，不会创建任务、也不会启动执行",
         "每次执行都在独立工作区进行，执行开始前工作区已经准备好",
         "执行产出会被自动记录；复核结论单独留存，便于事后回看",
+        "排期在规划期就定：目标先排进某个版本或独立目标，才继续往下走；交付期只把成果合入集成分支，不再调整排期——此时挪排期要连带版本归属与集成分支，代价高",
         "三道人工 gate：同意开工、裁决验收、发布放行"
       ]
     },

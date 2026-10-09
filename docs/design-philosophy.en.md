@@ -350,6 +350,11 @@ standalone goals (`goals/`). `graph_move_goal` is a file move, and the file move
 (`core/ops.ts`, `RELATION_TYPES`); `meta.depends_on` is stored separately and supersede/amend cycles
 are detected (`core/ops.ts`, `RELATION_CYCLE_TYPES`).
 
+Practical rule: scheduling is settled during **planning** — a draft goal must first be moved into a
+version or become a standalone goal before it can change stage; at delivery time the result is only
+**merged into the integration branch**, and scheduling is not adjusted again (doing so would drag the
+version ownership and the integration branch along, which is expensive).
+
 ### 7.2 `released` has admission conditions
 
 `releaseVersion` (`core/version-lane.ts`) does two things before writing any state:
