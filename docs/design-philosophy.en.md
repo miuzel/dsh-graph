@@ -27,10 +27,12 @@ be written, dispatched or declared complete. Every state change is appended to a
 
 ## 1. The main chain at a glance
 
-Both diagrams below render directly on GitHub and clearly separate **implemented today** from
-**1.0 roadmap (not implemented)**.
+Both diagrams below render directly on GitHub and show **only what is implemented today**; the not-yet-built
+product roadmap is not in the figures and lives in [§13](#13-the-10-roadmap-not-implemented). Both are written
+for users — how a goal moves between states, and who does what and when — with no file, function or internal
+artifact names inside the figures.
 
-### 1.1 States and legal transitions (implemented today)
+### 1.1 Goal states and legal transitions
 
 ![dsh-graph goal state machine: 8 states and legal transitions](assets/design-philosophy.lifecycle.light.svg)
 
@@ -38,7 +40,7 @@ Both diagrams below render directly on GitHub and clearly separate **implemented
 
 Sources: state set `core/machine.ts:10-19` (`STATUSES`); legal edges `core/machine.ts:24-33` (`EDGES`).
 
-### 1.2 Roles and gate chain (implemented today vs 1.0 roadmap)
+### 1.2 The human / supervisor / executor role and gate chain
 
 ![dsh-graph main chain: roles, gates, and trace](assets/design-philosophy.workflow.light.svg)
 
@@ -533,7 +535,8 @@ silent state change — file modified, no event, caller sees an error.
 ## 13. The 1.0 roadmap (not implemented)
 
 None of the following exists today. This section describes intentions only and must not be read as current
-capability.
+capability. It is also the single home of the product roadmap: the two design-philosophy figures in §1 draw
+only what is implemented today and never include this section.
 
 ### 13.1 Presentation-layer visualisation (not implemented)
 

@@ -5,29 +5,20 @@
     "title": "dsh-graph 目标状态机：8 态与合法迁移",
     "locale": "zh-CN",
     "quality_profile": "showcase",
-    "output": "tmp/archify/lifecycle-design-philosophy-20261009-154528/design-philosophy.lifecycle.html",
-    "repository": {
-      "url": "https://github.com/miuzel/dsh-graph.git",
-      "provider": "github",
-      "revision": "214c4f56614c9adeafdfe57448397fe8956e2606"
-    }
+    "output": "dsh-graph-host/diagrams/design-philosophy.lifecycle.html"
   },
   "lanes": [
     {
       "id": "main",
-      "label": "主链 8 态（今日已实现 / implemented today）"
+      "label": "主链 8 态"
     },
     {
       "id": "gate",
-      "label": "评审与交付（今日已实现）"
+      "label": "评审与交付"
     },
     {
       "id": "blocked",
-      "label": "阻塞出口（今日已实现）"
-    },
-    {
-      "id": "roadmap",
-      "label": "1.0 路线（未实现 / not implemented）"
+      "label": "阻塞出口"
     }
   ],
   "states": [
@@ -35,206 +26,89 @@
       "id": "draft",
       "type": "start",
       "label": "draft 草稿",
-      "sublabel": "状态机起点（[*]）",
+      "sublabel": "刚建好，还没规划",
       "lane": "main",
       "col": 0,
       "step": "1",
-      "tag": "起始",
-      "sources": [
-        {
-          "path": "core/machine.ts",
-          "line": 10,
-          "end_line": 19,
-          "label": "STATUSES"
-        }
-      ]
+      "tag": "起点"
     },
     {
       "id": "planning",
       "type": "active",
       "label": "planning 规划",
-      "sublabel": "拆解目标、登记判据",
+      "sublabel": "拆任务、定验收标准",
       "lane": "main",
       "col": 1,
       "step": "2",
-      "tag": "规划",
-      "sources": [
-        {
-          "path": "core/machine.ts",
-          "line": 10,
-          "end_line": 19,
-          "label": "STATUSES"
-        }
-      ]
+      "tag": "规划"
     },
     {
       "id": "collecting",
       "type": "active",
       "label": "collecting 收集",
-      "sublabel": "收集上下文卡片",
+      "sublabel": "先补齐需要的背景材料",
       "lane": "main",
       "col": 2,
       "step": "3",
-      "tag": "收集",
-      "sources": [
-        {
-          "path": "core/machine.ts",
-          "line": 27,
-          "label": "EDGES:collecting"
-        }
-      ]
+      "tag": "收集"
     },
     {
       "id": "ready",
       "type": "waiting",
       "label": "ready 待派发",
-      "sublabel": "判据 + 确认 + 快照",
+      "sublabel": "标准齐了，等开工许可",
       "lane": "main",
       "col": 3,
       "step": "4",
-      "tag": "门禁已过",
-      "sources": [
-        {
-          "path": "core/machine.ts",
-          "line": 80,
-          "end_line": 89,
-          "label": "进 in_progress 的三道门槛"
-        },
-        {
-          "path": "core/machine.ts",
-          "line": 28,
-          "label": "EDGES:ready"
-        }
-      ]
+      "tag": "门禁已过"
     },
     {
       "id": "in_progress",
       "type": "active",
       "label": "in_progress 执行中",
-      "sublabel": "已派发 attempt",
+      "sublabel": "已交给执行子代理动手",
       "lane": "main",
       "col": 4,
       "step": "5",
-      "tag": "执行",
-      "sources": [
-        {
-          "path": "core/machine.ts",
-          "line": 29,
-          "label": "EDGES:in_progress"
-        },
-        {
-          "path": "core/ops.ts",
-          "line": 7771,
-          "end_line": 7800,
-          "label": "assertExecutionAdmission"
-        }
-      ]
+      "tag": "执行"
     },
     {
       "id": "review",
       "type": "decision",
       "label": "review 待裁决",
-      "sublabel": "结果面与评审留痕",
+      "sublabel": "产出已交，等人复核",
       "lane": "gate",
       "col": 4,
       "step": "6",
-      "tag": "人工 gate",
-      "sources": [
-        {
-          "path": "core/machine.ts",
-          "line": 30,
-          "label": "EDGES:review"
-        },
-        {
-          "path": "dsh-graph-host/supervisor-guide.zh.md",
-          "line": 40,
-          "label": "review verdict 由负责人裁决"
-        }
-      ]
+      "tag": "人工 gate"
     },
     {
       "id": "delivered",
       "type": "success",
       "label": "delivered 已交付",
-      "sublabel": "人工 verdict 通过",
+      "sublabel": "复核通过，正式收下",
       "lane": "gate",
       "col": 3,
       "step": "7",
-      "tag": "交付",
-      "sources": [
-        {
-          "path": "core/machine.ts",
-          "line": 31,
-          "label": "EDGES:delivered"
-        },
-        {
-          "path": "dsh-graph-host/supervisor-guide.zh.md",
-          "line": 148,
-          "label": "delivered 人工 gate 是纪律非强制"
-        }
-      ]
+      "tag": "交付"
     },
     {
       "id": "blocked",
       "type": "failure",
       "label": "blocked 阻塞",
-      "sublabel": "无 reason 即抛错",
+      "sublabel": "卡住了，必须写明原因",
       "lane": "blocked",
       "col": 2,
-      "tag": "必须给 reason",
-      "sources": [
-        {
-          "path": "core/machine.ts",
-          "line": 32,
-          "label": "blocked 无静态出边"
-        },
-        {
-          "path": "core/machine.ts",
-          "line": 74,
-          "end_line": 78,
-          "label": "无 reason 即抛错"
-        }
-      ]
+      "tag": "必须给原因"
     },
     {
       "id": "blocked_from",
       "type": "external",
-      "label": "meta.blocked_from",
-      "sublabel": "解除只能回原状态",
+      "label": "卡住前的状态",
+      "sublabel": "解除后只能回到这里",
       "lane": "blocked",
       "col": 3,
-      "tag": "变量",
-      "sources": [
-        {
-          "path": "core/machine.ts",
-          "line": 64,
-          "end_line": 69,
-          "label": "解除目标校验"
-        }
-      ]
-    },
-    {
-      "id": "declarative",
-      "type": "external",
-      "label": "流程语义声明式化",
-      "sublabel": "取代硬编码状态机",
-      "lane": "roadmap",
-      "col": 0,
-      "tag": "1.0 未实现",
-      "sources": [
-        {
-          "path": "core/machine.ts",
-          "line": 24,
-          "end_line": 33,
-          "label": "将被取代的硬编码 EDGES"
-        },
-        {
-          "path": "docs/design-philosophy.zh.md",
-          "line": 555,
-          "end_line": 560,
-          "label": "§13.2 未实现"
-        }
-      ]
+      "tag": "出口由它决定"
     }
   ],
   "transitions": [
@@ -249,12 +123,12 @@
     {
       "from": "planning",
       "to": "ready",
-      "label": "无收集需求时直达"
+      "label": "不需要收集时直达"
     },
     {
       "from": "planning",
       "to": "in_progress",
-      "label": "派发开发直接进执行"
+      "label": "派发后直接进执行"
     },
     {
       "from": "collecting",
@@ -268,17 +142,17 @@
     {
       "from": "collecting",
       "to": "in_progress",
-      "label": "跳过 ready 直接执行"
+      "label": "跳过待派发直接执行"
     },
     {
       "from": "ready",
       "to": "in_progress",
-      "label": "三道门槛"
+      "label": "过三道门槛"
     },
     {
       "from": "ready",
       "to": "collecting",
-      "label": "回退重新收集"
+      "label": "退回补充材料"
     },
     {
       "from": "in_progress",
@@ -292,18 +166,18 @@
     {
       "from": "review",
       "to": "delivered",
-      "label": "verdict 通过",
+      "label": "裁决通过",
       "variant": "emphasis"
     },
     {
       "from": "review",
       "to": "in_progress",
-      "label": "打回"
+      "label": "打回返工"
     },
     {
       "from": "delivered",
       "to": "review",
-      "label": "补充 / 修 bug"
+      "label": "补充或修 bug"
     },
     {
       "from": "draft",
@@ -333,42 +207,27 @@
       "from": "blocked",
       "to": "blocked_from",
       "label": "解除"
-    },
-    {
-      "from": "draft",
-      "to": "declarative",
-      "label": "1.0 路线：取代硬编码迁移表",
-      "variant": "dashed"
     }
   ],
   "cards": [
     {
       "dot": "emerald",
-      "title": "今日已实现 / implemented today",
+      "title": "今天已实现的能力",
       "items": [
-        "8 个状态与全部合法迁移硬编码在 core/machine.ts:10-33（STATUSES + EDGES）",
-        "每次迁移先过 assertTransition（core/machine.ts:50-91），非法迁移在写盘之前抛 GraphError",
-        "ready→in_progress 的三道门槛：rules_snapshot 已记录、质量判据小节非空、criteria.confirmed 事件已存在（core/machine.ts:80-89）",
-        "进入 blocked 必须给非空 reason；解除只能回 meta.blocked_from 记录的原状态",
-        "delivered 的人工 verdict 是主管纪律（supervisor-guide.zh.md:40），不是引擎强制"
-      ]
-    },
-    {
-      "dot": "slate",
-      "title": "1.0 路线（未实现 / not implemented）",
-      "items": [
-        "流程语义声明式化：把状态 / 迁移 / 门禁 / 角色从代码搬进一份声明式流程定义",
-        "候选形态 .dsh-graph/process.yaml + 校验器 + 渲染器；架构级改动，须单独评估",
-        "本图其余部分（含 blocked 出口）全部为今日已实现，没有任何未实现项被画成能力"
+        "8 个状态与全部允许的状态迁移都是内置的，开箱即用",
+        "每次状态变化都要先过校验：不允许的迁移会当场被拒绝，不会写进看板",
+        "进入执行前要过三道门槛：规则快照已记录、验收标准非空、并经负责人确认",
+        "进入「阻塞」必须写明原因；解除后只能回到卡住前的那个状态",
+        "进入「已交付」需要人裁决通过——这是纪律要求，系统本身不做强制"
       ]
     },
     {
       "dot": "cyan",
       "title": "读图口径",
       "items": [
-        "实线边＝今日已实现；虚线边＝1.0 路线（未实现）",
-        "blocked 没有静态出边（core/machine.ts:32），它的出口由 meta.blocked_from 决定",
-        "review 同时有 review→delivered（人工通过）与 review→in_progress（打回）两条出边"
+        "本图只画今天已实现的流程，不包含产品后续规划",
+        "「阻塞」没有固定出口，它的出口由「卡住前的状态」决定",
+        "「待裁决」有两个去处：裁决通过则交付，打回则回到执行"
       ]
     }
   ]

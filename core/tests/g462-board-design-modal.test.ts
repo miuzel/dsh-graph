@@ -348,9 +348,30 @@ test("g-462 E1：build.sh 显式复制 diagrams；dist/diagrams 与源逐字节�
     assert.equal(sha256(b), sha256(a), `${name} 必须逐字节一致`);
     assert.ok(statSync(join(diagramsDistDir, name)).size > 0, `${name} 不得为空`);
   }
-  // 零副作用：g-460 定稿的 HTML sha256 未被本目标改动。
-  assert.equal(sha256(readFileSync(join(diagramsSrcDir, LIFECYCLE))).slice(0, 12), "bc71f30263f4", "lifecycle.html 字节必须未变");
-  assert.equal(sha256(readFileSync(join(diagramsSrcDir, WORKFLOW))).slice(0, 12), "18ac73e42853", "workflow.html 字节必须未变");
+  // g-460 att-003：此处原先硬钉 g-460 第一版定稿 HTML 的两个 sha256 字面量（lifecycle
+  // `bc71f30263f4` / workflow `18ac73e42853`，「字节必须未变」）。g-460 按负责人要求重出两张图
+  // （去掉 1.0 路线图内容、并做「去代码化」）⇒ 字面量必然过期；而它本就不表达「产物未被中途篡改/
+  // 静默替换」这一价值——任何合法重出都会红，反而逼迫后来者删断言。改为**自洽性断言**：
+  // 包内 HTML 必须逐条体现**当前源 JSON** 的文案（泳道 / 节点 / 卡片），源与产物一旦对不上即必红。
+  for (const [specName, htmlName] of [
+    ["design-philosophy.lifecycle.json", LIFECYCLE],
+    ["design-philosophy.workflow.json", WORKFLOW],
+  ] as const) {
+    const spec = JSON.parse(readFileSync(join(diagramsSrcDir, specName), "utf8"));
+    const html = readFileSync(join(diagramsSrcDir, htmlName), "utf8");
+    const strings = new Set<string>();
+    for (const lane of spec.lanes ?? []) strings.add(lane.label);
+    for (const node of [...(spec.states ?? []), ...(spec.nodes ?? [])]) {
+      for (const key of ["label", "sublabel", "tag"]) if (node?.[key]) strings.add(node[key]);
+    }
+    for (const card of spec.cards ?? []) {
+      strings.add(card.title);
+      for (const item of card.items ?? []) strings.add(item);
+    }
+    assert.ok(strings.size >= 10, `${specName} 解析出的文案过少（${strings.size}），自洽性断言可能已退化`);
+    const missing = [...strings].filter((s) => s && !html.includes(s));
+    assert.deepEqual(missing, [], `${htmlName} 必须逐条体现 ${specName} 的文案（缺失即产物与源不符/被静默替换）`);
+  }
 });
 
 test("g-462 E2：npm pack --dry-run 的文件清单确实包含两张图 HTML（判据「pack 含图文件」）", () => {

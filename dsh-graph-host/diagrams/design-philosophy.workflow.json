@@ -5,61 +5,48 @@
     "title": "dsh-graph 主链：角色、门禁与留痕",
     "locale": "zh-CN",
     "quality_profile": "showcase",
-    "output": "tmp/archify/workflow-design-philosophy-20261009-154528/design-philosophy.workflow.html",
+    "output": "dsh-graph-host/diagrams/design-philosophy.workflow.html",
     "legend": {
       "entries": {
         "backend": {
-          "label": "主管 / 引擎动作"
+          "label": "主管（AI）动作"
         },
         "database": {
-          "label": "留痕真源"
+          "label": "记录留存"
         },
         "security": {
           "label": "人工 gate"
         },
         "messagebus": {
-          "label": "零副作用拒绝（例外）"
-        },
-        "external": {
-          "label": "1.0 路线（未实现）"
+          "label": "拒绝且不留改动（例外）"
         }
       }
-    },
-    "repository": {
-      "url": "https://github.com/miuzel/dsh-graph.git",
-      "provider": "github",
-      "revision": "214c4f56614c9adeafdfe57448397fe8956e2606"
     }
   },
   "lanes": [
     {
       "id": "supervisor",
-      "label": "主管 Supervisor"
+      "label": "主管（AI）"
     },
     {
       "id": "executor",
-      "label": "执行子代理 Executor"
+      "label": "执行子代理（AI）"
     },
     {
       "id": "evidence",
-      "label": "留痕真源（结果面 / 评审）"
+      "label": "结果与复核留痕"
     },
     {
       "id": "owner",
-      "label": "负责人 Owner（人工 gate）"
+      "label": "负责人（人）"
     },
     {
       "id": "delivery",
-      "label": "交付与发布（人工 gate 3）"
+      "label": "交付与发布"
     },
     {
       "id": "guard",
-      "label": "零副作用拒绝（例外路径）",
-      "variant": "exception"
-    },
-    {
-      "id": "roadmap",
-      "label": "1.0 路线（未实现 / not implemented）",
+      "label": "例外路径",
       "variant": "exception"
     }
   ],
@@ -84,151 +71,70 @@
       "icon": "person",
       "label": "人工 gate 1",
       "sublabel": "同意开工后才派发",
-      "tag": "human gate",
-      "sources": [
-        {
-          "path": "dsh-graph-host/supervisor-guide.zh.md",
-          "line": 36,
-          "end_line": 39,
-          "label": "开始工作人工 gate"
-        }
-      ]
+      "tag": "人工 gate"
     },
     {
       "id": "criteria",
       "lane": "supervisor",
       "col": 0,
       "type": "backend",
-      "label": "判据登记并确认",
-      "sublabel": "criteria 已确认",
-      "tag": "判据先于执行",
-      "sources": [
-        {
-          "path": "core/ops.ts",
-          "line": 2608,
-          "end_line": 2635,
-          "label": "setCriteria + criteria.confirmed"
-        }
-      ]
+      "label": "登记验收标准",
+      "sublabel": "标准先定，再动手",
+      "tag": "判据先于执行"
     },
     {
       "id": "admission",
       "lane": "supervisor",
       "col": 1,
       "type": "backend",
-      "label": "执行准入门禁",
-      "sublabel": "拒绝即零副作用",
-      "tag": "准入",
-      "sources": [
-        {
-          "path": "core/ops.ts",
-          "line": 7771,
-          "end_line": 7800,
-          "label": "assertExecutionAdmission"
-        }
-      ]
+      "label": "开工前准入检查",
+      "sublabel": "不合格就退回，不留改动",
+      "tag": "准入"
     },
     {
       "id": "reject",
       "lane": "guard",
       "col": 5,
       "type": "messagebus",
-      "label": "零副作用拒绝",
-      "sublabel": "不启子代理",
-      "tag": "例外",
-      "sources": [
-        {
-          "path": "core/ops.ts",
-          "line": 7762,
-          "label": "启动 child 之前即拒绝"
-        },
-        {
-          "path": "core/ops.ts",
-          "line": 7791,
-          "end_line": 7801,
-          "label": "抛错早于 mkdir/事件/子代理"
-        }
-      ]
+      "label": "退回",
+      "sublabel": "不会创建执行任务",
+      "tag": "例外"
     },
     {
       "id": "worktree",
       "lane": "executor",
       "col": 2,
       "type": "backend",
-      "label": "隔离 worktree",
-      "sublabel": "每 attempt 独立树",
-      "tag": "派发即隔离",
-      "sources": [
-        {
-          "path": "core/worktree.ts",
-          "line": 784,
-          "label": "隔离判定"
-        },
-        {
-          "path": "core/worktree.ts",
-          "line": 845,
-          "label": "prepareAttemptWorktree"
-        }
-      ]
+      "label": "独立工作区",
+      "sublabel": "每次执行互不干扰",
+      "tag": "隔离"
     },
     {
       "id": "attempt",
       "lane": "executor",
       "col": 3,
       "type": "backend",
-      "label": "执行 attempt",
-      "sublabel": "brief 为唯一来源",
-      "tag": "执行",
-      "sources": [
-        {
-          "path": "core/ops.ts",
-          "line": 7867,
-          "label": "startAttempt"
-        }
-      ]
+      "label": "执行实现",
+      "sublabel": "按验收标准动手",
+      "tag": "执行"
     },
     {
       "id": "results",
       "lane": "evidence",
       "col": 3,
       "type": "database",
-      "label": "结果面",
-      "sublabel": "自动截获",
-      "tag": "results-att-N.md",
-      "sources": [
-        {
-          "path": "core/ops.ts",
-          "line": 8644,
-          "end_line": 8653,
-          "label": "writeAttemptResults（零 LLM）"
-        },
-        {
-          "path": "core/ops.ts",
-          "line": 8483,
-          "label": "subagent/end 来源"
-        }
-      ]
+      "label": "结果自动留存",
+      "sublabel": "子代理产出自动记录",
+      "tag": "结果"
     },
     {
       "id": "review",
       "lane": "evidence",
       "col": 4,
       "type": "database",
-      "label": "独立评审",
-      "sublabel": "reviews/<id>.md",
-      "tag": "附属记录",
-      "sources": [
-        {
-          "path": "core/ops.ts",
-          "line": 6914,
-          "label": "reviewsDir"
-        },
-        {
-          "path": "core/ops.ts",
-          "line": 6923,
-          "label": "reviewRecordFile"
-        }
-      ]
+      "label": "独立复核",
+      "sublabel": "复核结论单独留存",
+      "tag": "复核记录"
     },
     {
       "id": "verdict",
@@ -237,37 +143,17 @@
       "type": "security",
       "icon": "person",
       "label": "人工 gate 2",
-      "sublabel": "review→delivered",
-      "tag": "human gate",
-      "sources": [
-        {
-          "path": "core/ops.ts",
-          "line": 12504,
-          "label": "resolveAccept"
-        },
-        {
-          "path": "dsh-graph-host/supervisor-guide.zh.md",
-          "line": 148,
-          "label": "人工 gate 是纪律非强制"
-        }
-      ]
+      "sublabel": "通过则交付，打回则返工",
+      "tag": "人工 gate"
     },
     {
       "id": "version",
       "lane": "delivery",
       "col": 4,
       "type": "database",
-      "label": "版本泳道",
-      "sublabel": "vX.Y.Z 排期与归档",
-      "tag": "泳道",
-      "sources": [
-        {
-          "path": "core/ops.ts",
-          "line": 477,
-          "end_line": 482,
-          "label": "versions/<v>/goals 扫描"
-        }
-      ],
+      "label": "排入版本",
+      "sublabel": "按版本计划归档排期",
+      "tag": "版本",
       "yOffset": 0
     },
     {
@@ -276,74 +162,10 @@
       "col": 4,
       "type": "security",
       "icon": "person",
-      "label": "npm 发布 + tag",
-      "sublabel": "人工 gate 3 放行",
-      "tag": "human gate",
-      "sources": [
-        {
-          "path": "dsh-graph-host/supervisor-guide.zh.md",
-          "line": 41,
-          "label": "发布人工 gate"
-        },
-        {
-          "path": "AGENTS.md",
-          "line": 227,
-          "end_line": 233,
-          "label": "发布门禁三条红线"
-        }
-      ],
+      "label": "人工 gate 3",
+      "sublabel": "放行后才发布与打标签",
+      "tag": "人工 gate",
       "yOffset": 112
-    },
-    {
-      "id": "f1",
-      "lane": "roadmap",
-      "col": 0,
-      "type": "external",
-      "label": "1.0 · 可视化",
-      "sublabel": "流程 graph + 位置",
-      "tag": "未实现",
-      "sources": [
-        {
-          "path": "docs/design-philosophy.zh.md",
-          "line": 548,
-          "end_line": 553,
-          "label": "§13.1 未实现"
-        }
-      ]
-    },
-    {
-      "id": "f2",
-      "lane": "roadmap",
-      "col": 1,
-      "type": "external",
-      "label": "1.0 · 声明式",
-      "sublabel": "状态与门禁声明化",
-      "tag": "未实现",
-      "sources": [
-        {
-          "path": "docs/design-philosophy.zh.md",
-          "line": 555,
-          "end_line": 560,
-          "label": "§13.2 未实现"
-        }
-      ]
-    },
-    {
-      "id": "f3",
-      "lane": "roadmap",
-      "col": 2,
-      "type": "external",
-      "label": "1.0 · 多 graph",
-      "sublabel": "按项目启用",
-      "tag": "未实现",
-      "sources": [
-        {
-          "path": "docs/design-philosophy.zh.md",
-          "line": 562,
-          "end_line": 567,
-          "label": "§13.3 未实现"
-        }
-      ]
     }
   ],
   "edges": [
@@ -414,58 +236,36 @@
       "from": "version",
       "to": "publish",
       "role": "main"
-    },
-    {
-      "id": "f1-f2",
-      "from": "f1",
-      "to": "f2",
-      "variant": "dashed",
-      "role": "branch"
-    },
-    {
-      "id": "f2-f3",
-      "from": "f2",
-      "to": "f3",
-      "variant": "dashed",
-      "role": "branch"
-    },
-    {
-      "id": "f2-admission",
-      "from": "f2",
-      "to": "admission",
-      "label": "1.0 取代硬编码",
-      "variant": "dashed",
-      "role": "return"
     }
   ],
   "cards": [
     {
       "dot": "emerald",
-      "title": "今日已实现 / implemented today",
+      "title": "今天已实现的能力",
       "items": [
-        "判据先于执行：目标进 in_progress 前判据必须已登记并经负责人确认（supervisor-guide.zh.md:33）",
-        "执行准入门禁 assertExecutionAdmission（core/ops.ts:7771）：拒绝时零副作用——不建 attempt、不启子代理",
-        "派发即隔离：默认建 .worktrees/g-N-att-NN，子代理启动前工作树必已创建（core/worktree.ts:784,845）",
-        "结果面由 subagent/end 自动截获（core/ops.ts:8653）；评审结论独立落盘 reviews/<review_id>.md（core/ops.ts:6923）",
-        "三条人工 gate：同意开工 / verdict 通过 / 发布放行（supervisor-guide.zh.md:36-41）"
+        "标准先于执行：动手前，验收标准必须已登记并经负责人确认",
+        "开工前有准入检查：不合格直接退回，不会创建任务、也不会启动执行",
+        "每次执行都在独立工作区进行，执行开始前工作区已经准备好",
+        "执行产出会被自动记录；复核结论单独留存，便于事后回看",
+        "三道人工 gate：同意开工、裁决验收、发布放行"
       ]
     },
     {
-      "dot": "slate",
-      "title": "1.0 路线（未实现 / not implemented）",
+      "dot": "cyan",
+      "title": "三种角色怎么分工",
       "items": [
-        "图内底部泳道＝1.0 路线；虚线边＝未实现，实线边＝今日已实现",
-        "表现层可视化、流程语义声明式化、每项目启用不同 graph（docs/design-philosophy.zh.md:544-567）",
-        "声明式流程语义将取代硬编码的状态 / 迁移 / 门禁（core/machine.ts:24-33）"
+        "负责人（人）：同意开工、裁决验收、给发布放行——三道关都握在人手里",
+        "主管（AI）：登记验收标准、派发执行、独立复核并把关，自己不动手实现",
+        "执行子代理（AI）：在独立工作区按验收标准实现，产出自动留档"
       ]
     },
     {
       "dot": "amber",
       "title": "人工 gate 的边界（如实标注）",
       "items": [
-        "delivered 的人工 gate 是主管纪律，不是引擎强制：graph_resolve_accept 不校验任何人类信号（supervisor-guide.zh.md:148）",
-        "strict 的「必须派独立评审」同样只有判定与指南约束，未派评审不阻断 accept",
-        "因此质量把控由主管 agent 与负责人共同负责，纪律在主管身上、不在引擎里"
+        "「已交付」的人工裁决是纪律要求，不是系统强制：系统不校验任何人工信号",
+        "「必须派独立复核」同样只是判定与指南约束，未派复核不会阻断验收",
+        "因此质量把控由主管与负责人共同负责：纪律在人身上，不在系统里"
       ]
     }
   ]

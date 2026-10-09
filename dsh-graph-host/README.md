@@ -141,7 +141,8 @@ curl -sL -b "" "<URL>" | grep -o '"@deepseek-ai/dsh-client-runtime"' | head -1
 想先弄懂「dsh-graph 为什么这样组织开发」——目标生命周期与状态机、判据门禁与人工 gate、派发与隔离三件套、
 attempt 与结果面、独立复核与留痕真源、版本泳道与发布红线、记忆分级、事件先行——请读
 [设计哲学（中文）](https://github.com/miuzel/dsh-graph/blob/main/docs/design-philosophy.zh.md)：
-它逐条给出代码真源引用，并附 archify 交互式图（内联静态预览 + 可交互 HTML，区分「今日已实现」与「1.0 路线（未实现）」）。
+它逐条给出代码真源引用，并附 archify 交互式图（内联静态预览 + 可交互 HTML）；图只画今天已实现的
+状态流转与角色分工，图内不含文件、函数或内部产物名，1.0 路线见文档 §13。
 
 ---
 
@@ -399,7 +400,8 @@ gate and human gate, dispatch and the isolation triad, attempts and the results 
 its source of truth, version lanes and release red lines, memory grading, event-first writes — read
 [Design Philosophy (English)](https://github.com/miuzel/dsh-graph/blob/main/docs/design-philosophy.en.md):
 every behavioural claim carries a code citation, and the document ships archify interactive diagrams — an inline
-static preview plus an explorable HTML page — that separate "implemented today" from the "1.0 roadmap (not implemented)".
+static preview plus an explorable HTML page — that draw only what is implemented today (state flow and role
+split, with no file, function or internal artifact names inside the figures; the 1.0 roadmap lives in §13).
 
 ---
 
