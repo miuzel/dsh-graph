@@ -797,7 +797,8 @@
       'design.tab.lifecycle': '状态机（lifecycle）',
       'design.tab.workflow': '主链流程（workflow）',
       'design.openNewTab': '在新标签页打开',
-      'design.notice': '暂不支持自定义：这里展示的是随包发布的固定图（g-460 定稿）。后续将开放 graph 语义调整与可视化自定义。',
+      'design.notice': '暂不支持自定义：这里展示的是随包发布的固定图。后续将开放 graph 语义调整与可视化自定义。',
+      'design.roadmap': '后续路线（尚未实现）：可视化自定义 · 语义声明式 · 每项目独立 graph。现状：本弹窗只读展示随包发布的固定图，暂不支持调整；未来：将开放上述语义与可视化自定义能力。详见设计哲学文档「1.0 路线（未实现）」一章。',
 
       // === 记忆管理弹窗 ===
       'memory.title': '🧠 记忆管理',
@@ -1974,6 +1975,7 @@
       'design.tab.workflow': 'Workflow',
       'design.openNewTab': 'Open in new tab',
       'design.notice': 'Customization is not supported yet: these are the fixed diagrams shipped with the package. Graph semantic tuning and visual customization will be opened up later.',
+      'design.roadmap': 'Roadmap (not implemented yet): visual customization · declarative semantics · per-project graph. Status: this dialog only shows the fixed diagrams shipped with the package and they cannot be adjusted; later we will open up those semantic and visual customization capabilities. See the \'1.0 roadmap (not implemented)\' chapter of the design philosophy document.',
 
       // === Memory management modal ===
       'memory.title': '🧠 Memory Management',

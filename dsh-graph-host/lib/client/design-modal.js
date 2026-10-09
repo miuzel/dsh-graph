@@ -37,6 +37,15 @@
               background: "rgba(224,165,58,.14)", border: "1px solid rgba(224,165,58,.4)",
             },
           }, dgT("design.notice")),
+          // 后续路线（尚未实现）：独立小节 —— 不画进图里、也不新增页签（负责人 2026-10-09 口径）。
+          // 只指路设计哲学文档的**章节名**，不用会随改版漂移的章节序号。
+          h("div", {
+            className: "dg-design-roadmap",
+            style: {
+              marginTop: 6, padding: "6px 8px", borderRadius: 4, fontSize: 12, flexShrink: 0,
+              opacity: 0.85, border: "1px dashed rgba(128,128,128,.4)",
+            },
+          }, dgT("design.roadmap")),
           h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexShrink: 0 } },
             ...DESIGN_DIAGRAM_TABS.map((t) => h("button", {
               key: "design-tab-" + t.key,

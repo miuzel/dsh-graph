@@ -11,7 +11,10 @@
  *  B. 只看板标题栏：入口在 `.dg-head`（与刷新/记忆同容器）+ 折叠弹层同一处派生；`design.btn`
  *     在 kanban 源里**只出现在看板返回体之前**（⇒ 不占看板主区域）；弹窗是 portal 浮层。
  *  C. 弹窗：两张图（lifecycle/workflow）都在，且 iframe 走宿主只读路由；切页签是本地状态。
- *  D. i18n：zh/en 键完全对称、design 键齐全、en 无 CJK、notice 如实声明「暂不支持自定义」。
+ *  D. i18n：zh/en 键完全对称、design 键齐全、en 无 CJK、notice 如实声明「暂不支持自定义」；
+ *     用户可见文案**零内部化**（不得出现目标编号 `g-4xx` / 文件路径 / 行号 / 函数名 / `§` 章节序号），
+ *     且路线图是 notice 下方的**独立小节**、以**章节名**指路（`D2` 负向对照：塞回编号 / `§13` /
+ *     `core/ops.ts` / `renderDiagram()` ⇒ 必红；拿掉小节容器 / 挪到 notice 之上 / 新增页签 ⇒ 必红）。
  *  E. 随包发布：build.sh 显式 `cp -r` diagrams；dist/diagrams 与源 sha256 逐字节一致；
  *     `npm pack --dry-run` 的文件清单确实含两张图（判据「pack 含图文件」）。
  *  F. 离线自包含：图 HTML 无任何外部网络子资源（无 `<link`/`<img`/`src=http`/`@import`/`url(http`），
@@ -247,10 +250,14 @@ function entryProblems(opts: { kanban: string; bundle: string; modal: string }):
   if (!/h\("iframe", \{/.test(modal)) problems.push("弹窗缺少 iframe 内嵌");
   if (!/React\.useState\("lifecycle"\)/.test(modal)) problems.push("弹窗缺少页签本地状态（可切换）");
   if (!/dgT\("design\.notice"\)/.test(modal)) problems.push("弹窗缺少如实声明文案");
+  if (!/className: "dg-design-roadmap"/.test(modal) || !/dgT\("design\.roadmap"\)/.test(modal)) {
+    problems.push("弹窗缺少 notice 下方的独立路线图小节（dg-design-roadmap 走 design.roadmap 文案）");
+  }
   if (!/const DESIGN_DIAGRAM_TABS = \[/.test(modal)) problems.push("弹窗缺少图页签定义");
   // ⑤ 生成物里真的有（防「源改了没重建」的假绿）。
   if (!bundle.includes("function DesignPhilosophyModal(")) problems.push("dist/lib/client.js 未包含 DesignPhilosophyModal（需重建）");
   if (!bundle.includes("dg-design-modal")) problems.push("dist/lib/client.js 未包含弹窗挂载点");
+  if (!bundle.includes("dg-design-roadmap")) problems.push("dist/lib/client.js 未包含路线图小节（需重建）");
   if (!bundle.includes(LIFECYCLE) || !bundle.includes(WORKFLOW)) problems.push("dist/lib/client.js 未内嵌两张图名");
   return problems;
 }
@@ -310,7 +317,7 @@ function loadI18n() {
 
 const DESIGN_KEYS = [
   "design.btn", "design.title", "design.tab.lifecycle", "design.tab.workflow",
-  "design.openNewTab", "design.notice",
+  "design.openNewTab", "design.notice", "design.roadmap",
 ];
 
 test("g-462 D1：design 键 zh/en 双语对称、en 无 CJK、notice 如实声明能力边界", () => {
@@ -329,6 +336,124 @@ test("g-462 D1：design 键 zh/en 双语对称、en 无 CJK、notice 如实声�
   assert.match(en["design.notice"], /semantic/i);
   assert.match(en["design.notice"], /customization/i);
   assert.match(zh["design.title"], /Graph 设计哲学/);
+});
+
+// ---------------------------------------------------------------- 判据 3：用户可见文案零内部化
+
+/**
+ * 用户可见文案的**去内部化**检查器（判据 3）：不得出现内部目标编号（`g-123` 形态）、commit sha、
+ * 文件路径 / 内部产物文件名 / 行号、`§` 章节序号、函数或 API 调用形态（`foo()`）。
+ * 纯函数：文本进、问题清单出 —— 可在内存变异上重放作负向对照。
+ */
+function visibilityProblems(text: string): string[] {
+  const problems: string[] = [];
+  const goals = text.match(/\bg-\d{2,4}\b/g);
+  if (goals) problems.push(`内部目标编号：${[...new Set(goals)].join(",")}`);
+  // sha 形态要求「7–40 个十六进制字符且含数字」⇒ 不会误伤 facade/decade 之类的英文单词。
+  const shas = text.match(/\b(?=[0-9a-f]{7,40}\b)[0-9a-f]*\d[0-9a-f]*\b/g);
+  if (shas) problems.push(`疑似 commit sha：${[...new Set(shas)].join(",")}`);
+  const sections = text.match(/§\s*\d+/g);
+  if (sections) problems.push(`章节序号：${[...new Set(sections)].join(",")}`);
+  const paths = text.match(/(?:[\w.-]+\/)+[\w.-]+|\b[\w.-]+\.(?:ts|js|mjs|cjs|json|html|md|png|svg|yml|yaml)\b/g);
+  if (paths) problems.push(`文件路径 / 产物名：${[...new Set(paths)].join(",")}`);
+  const calls = text.match(/\b[A-Za-z_$][\w$]*\(\)/g);
+  if (calls) problems.push(`函数 / API 名：${[...new Set(calls)].join(",")}`);
+  return problems;
+}
+
+/** 路线图小节检查器：独立小节（notice 之下、页签之上）+ 未实现标注 + 章节名指路 + 文案零内部化。 */
+function roadmapProblems(opts: { modal: string; zh: string; en: string }): string[] {
+  const { modal, zh, en } = opts;
+  const problems: string[] = [];
+  // ① 独立小节：notice 之下、图页签之上的专用容器，且走 i18n（不是图内容、不是新页签）。
+  if (!/className: "dg-design-roadmap"/.test(modal)) problems.push("弹窗缺少独立的路线图小节容器 .dg-design-roadmap");
+  if (!/dgT\("design\.roadmap"\)/.test(modal)) problems.push("路线图小节必须走 i18n 键 design.roadmap");
+  const noticeAt = modal.indexOf('dgT("design.notice")');
+  const roadmapAt = modal.indexOf('dgT("design.roadmap")');
+  const tabsAt = modal.indexOf("DESIGN_DIAGRAM_TABS.map");
+  if (!(noticeAt > 0 && roadmapAt > noticeAt && tabsAt > roadmapAt)) {
+    problems.push("路线图小节必须位于 notice 之下、图页签之上");
+  }
+  // ② 不新增页签：图页签仍恰是 lifecycle/workflow 两张。
+  const tabsStart = modal.indexOf("const DESIGN_DIAGRAM_TABS = [");
+  const tabsEnd = modal.indexOf("];", tabsStart);
+  const tabsBlock = tabsStart >= 0 && tabsEnd > tabsStart ? modal.slice(tabsStart, tabsEnd) : "";
+  const tabKeys = [...tabsBlock.matchAll(/key: "([^"]+)"/g)].map((m) => m[1]!).sort();
+  if (tabKeys.length !== 2 || tabKeys[0] !== "lifecycle" || tabKeys[1] !== "workflow") {
+    problems.push(`图页签必须恰是 lifecycle/workflow 两张，实得 ${JSON.stringify(tabKeys)}`);
+  }
+  // ③ 明确标注「尚未实现」，并列出后续三项能力。
+  if (!/未实现/.test(zh)) problems.push("zh 路线图必须明确标注「未实现」");
+  if (!/not implemented/i.test(en)) problems.push("en 路线图必须明确标注 not implemented");
+  for (const token of ["可视化自定义", "语义声明式", "每项目独立 graph"]) {
+    if (!zh.includes(token)) problems.push(`zh 路线图缺少后续能力「${token}」`);
+  }
+  // ④ 章节名指路（不用会随改版漂移的 § 序号）。
+  if (!zh.includes("1.0 路线（未实现）")) problems.push("zh 路线图必须用章节名「1.0 路线（未实现）」指路");
+  if (!/1\.0 roadmap \(not implemented\)/i.test(en)) problems.push("en 路线图必须用章节名 '1.0 roadmap (not implemented)' 指路");
+  // ⑤ 去内部化：zh/en 两份用户可见文案零编号 / 路径 / 函数名 / 章节序号。
+  for (const [lang, text] of [["zh", zh], ["en", en]] as const) {
+    const bad = visibilityProblems(text);
+    if (bad.length) problems.push(`${lang} 路线图文案内部化：${bad.join("；")}`);
+  }
+  return problems;
+}
+
+/** 变异用：把路线图小节整块搬到 notice 之前（模拟「不是 notice 下方的独立小节」）。 */
+function moveRoadmapAboveNotice(modal: string): string {
+  const start = modal.indexOf("          // 后续路线（尚未实现）");
+  const endMarker = 'dgT("design.roadmap")),';
+  const end = modal.indexOf(endMarker, start);
+  const noticeAt = modal.indexOf("          // 如实声明（醒目）");
+  if (start < 0 || end < 0 || noticeAt < 0 || noticeAt > start) return modal;
+  const block = modal.slice(start, end + endMarker.length) + "\n";
+  const rest = modal.slice(0, start) + modal.slice(start + block.length);
+  const at = rest.indexOf("          // 如实声明（醒目）");
+  return rest.slice(0, at) + block + rest.slice(at);
+}
+
+test("g-462 D2：notice 零内部编号；路线图是独立小节（章节名指路，非 § 序号）—— 各配负向对照", () => {
+  const { zh, en } = loadI18n();
+
+  // ① notice：本轮返工的原始缺陷 —— 用户可见文案里出现内部目标编号。
+  for (const [lang, text] of [["zh", zh["design.notice"]], ["en", en["design.notice"]]] as const) {
+    assert.doesNotMatch(text, /\bg-\d{2,4}\b/, `${lang} design.notice 不得出现内部目标编号`);
+    assert.deepEqual(visibilityProblems(text), [], `${lang} design.notice 必须完全去内部化`);
+  }
+  assert.match(zh["design.notice"], /暂不支持自定义/, "「暂不支持自定义」这句必须保留（如实声明）");
+  // 负向对照：把编号塞回去 ⇒ 检查器必红并点名（真实缺陷复现）。
+  const dirtyZh = zh["design.notice"].replace("的固定图", "的固定图（g-460 定稿）");
+  assert.notEqual(dirtyZh, zh["design.notice"], "负向对照必须命中 zh notice 文案");
+  assert.ok(visibilityProblems(dirtyZh).some((p) => p.includes("内部目标编号")), "zh 塞回编号必须被判红并点名");
+  const dirtyEn = en["design.notice"].replace("the fixed diagrams", "the fixed diagrams (g-460)");
+  assert.notEqual(dirtyEn, en["design.notice"], "负向对照必须命中 en notice 文案");
+  assert.ok(visibilityProblems(dirtyEn).some((p) => p.includes("内部目标编号")), "en 塞回编号同样必红");
+
+  // ② 路线图独立小节：基线绿。
+  const modal = readFileSync(designModalPath, "utf8");
+  const real = { modal, zh: zh["design.roadmap"], en: en["design.roadmap"] };
+  assert.deepEqual(roadmapProblems(real), [], "路线图小节基线必须为绿");
+
+  // 负向对照（全部为内存变异，真实文件逐字节不变）：五类偏离各自必红。
+  const movedModal = moveRoadmapAboveNotice(modal);
+  assert.notEqual(movedModal, modal, "「挪到 notice 之上」变异必须真实改变文本");
+  const mutations: Array<[string, typeof real, string]> = [
+    ["拿掉独立小节容器", { ...real, modal: modal.replace('className: "dg-design-roadmap"', 'className: "dg-design-x"') }, "路线图小节容器"],
+    ["小节挪到 notice 之上", { ...real, modal: movedModal }, "notice 之下"],
+    ["新增第三个页签", { ...real, modal: modal.replace("const DESIGN_DIAGRAM_TABS = [", 'const DESIGN_DIAGRAM_TABS = [{ key: "roadmap", file: "x.html", labelKey: "y" },') }, "图页签"],
+    ["用 § 序号替代章节名", { ...real, zh: real.zh.replace("1.0 路线（未实现）", "§13") }, "章节名"],
+    ["塞入文件路径", { ...real, zh: real.zh + "（见 core/ops.ts）" }, "路径"],
+    ["塞入函数调用名", { ...real, en: real.en + " See renderDiagram()." }, "函数"],
+  ];
+  for (const [label, mutated, expect] of mutations) {
+    assert.notDeepEqual(mutated, real, `负向对照「${label}」必须真实改变输入`);
+    const got = roadmapProblems(mutated);
+    assert.ok(got.some((p) => p.includes(expect)), `变异「${label}」必须报红并点名「${expect}」，实际：${JSON.stringify(got)}`);
+  }
+
+  // 恢复：真实文件重新检查必须全绿，且负向对照是 hermetic 的。
+  assert.deepEqual(roadmapProblems(real), [], "移除变异后必须重新全绿");
+  assert.equal(readFileSync(designModalPath, "utf8"), modal, "负向对照必须 hermetic（真实文件零改动）");
 });
 
 // ================================================================ E. 随包发布
