@@ -4,7 +4,7 @@
 > 本清单 / 独立构建路径产物与对账 / H3 派发可用事实在 Linux 隔离实例跑通 / 自证闸门 全部落地）；
 > 平台回填 = **已完成**（原生 Windows 的 Round A' / Round B / H3 三段由负责人真机执行，**结论已填齐**，见
 > `docs/platform-gate.md` §7.10 / §7.11，**无一项由 agent 预填**）；
-> 发布态动作：**合并 `main` 与打 annotated tag `v0.20.2` 已执行（2026-10-11，本地；合并提交 `912de67`，tag → `912de67`）**；
+> 发布态动作：**合并 `main` 与打 annotated tag `v0.20.2` 已执行（2026-10-11，本地；合并提交 `912de67`；tag 见 §8 —— 因发布前复核修掉 1 条 BLOCK，tag 已按负责人决定**重打到发布态收尾提交**，以 `git rev-parse v0.20.2^{commit}` 为准）**；
 > **`push` / `npm publish` / GitHub release / profile 安装升级 一律未执行**，逐条列于 §8「待负责人执行」。**
 >
 > **平台真机结论（本版如实标注）：原生 Windows = 已实测通过**（候选包 `f39517c3…`：Round A' 静态复跑
@@ -77,7 +77,7 @@
 - [x] **原生 Windows 真机门禁 Round B（完整 tarball 门禁 T1–T5，宿主 `0.2.1-alpha.2`）** —— **已执行 · PASS**：`结果=PASS 通过15/失败0/告警1`（T3 生命周期 32/32；唯一告警=包内无 `core/*.ts` 故台账不对账，设计内）；附测旧代际 `0.2.0-rc.2` 同样 `15/0/1`；产物指纹 `f39517c3…` 双向对账一致；结论见 §7.11
 - [x] **原生 Windows H3（三条派发路径真派发事实）** —— **已执行 · PASS**：三条路径各得非空 `child_id`（`964dd21c…` / `218156f3…` / `391377c4…`）、`errors` 全空、磁盘实体独立佐证；两道门禁消费后 `H3=PASS`（win-smoke `9/0/0`、platform-smoke `13/0/2`）；结论见 §7.11 的 H3 段
 - [ ] **原生 macOS 真机门禁** —— **本版未执行**（§7）
-- [x] 合并 `main` / 打 annotated tag —— **已执行（本地，`912de67`）**；`push` / `npm publish` / GitHub release / profile 安装升级 —— **待负责人执行**（§8，含可复制交接单见 §10）
+- [x] 合并 `main` / 打 annotated tag —— **已执行（本地；合并提交 `912de67`，tag 重打后指向发布态收尾提交）**；`push` / `npm publish` / GitHub release / profile 安装升级 —— **待负责人执行**（§8，含可复制交接单见 §10）
 
 ## 3. 版本号一致性（红线 2）逐处证据
 
@@ -260,9 +260,12 @@
       `HEAD^{tree}` = `v0.20.2-test^{tree}` = `17672def1b9fbabaf1d097fadb6236c196820c2f`（**逐字相等，零内容漂移**）；
       合并带入 23 个文件 / +4945 −159；主树 `porcelain=0`。看板 `.dsh-graph/` 属**内层独立仓库**（外层跟踪 0 文件）⇒ 合并不触碰看板。
       ⚠️ **必须先合 `main` 再发布**：见 §9（README / 文档的图链接解析到 `blob/main`，否则 404）。
-- [x] **打 annotated tag `v0.20.2`**（非轻量 tag）—— **已执行**：`git cat-file -t v0.20.2` = **`tag`**，
-      `v0.20.2^{commit}` = `912de6789bdb2ddf9f700ddb5a92c31d012f4947`，tag 正文含三段真机结论与产物 sha256；`git describe` = `v0.20.2`。
-      ❗本清单的这条勾选与上一行发生在 **tag 之后**（`docs/` 不入包 ⇒ 不影响发布产物；tag 仍指向 `912de67`，未被移动）。
+- [x] **打 annotated tag `v0.20.2`**（非轻量 tag）—— **已执行，并因发布前复核修掉 1 条 BLOCK（发布正文旧稿）按负责人决定重打**：
+  首次打在合并提交 `912de6789bdb2ddf9f700ddb5a92c31d012f4947`；**重打后指向发布态收尾提交**（= 含发布正文修订与本清单的 `main` tip，
+  以 `git rev-parse v0.20.2^{commit}` 为准）。核验口径不变：`git cat-file -t v0.20.2` = **`tag`**、`git describe` = `v0.20.2`、tag 正文含三段真机结论与产物 sha256。
+  **为何重打**：首次 tag 的树内 `docs/release-notes-v0.20.2.md` 还是回填前旧稿（写「Windows 结论尚不存在」），与同树的 §7.10/§7.11 PASS 自相矛盾；
+  重打后 tag 树 == 主树终态，该矛盾消失。**重打安全**：tag 未推送、无外部引用，且**非 `docs/` 改动为 0 文件** ⇒ 与发布产物的同源关系不受影响。
+  ❗本清单的数条勾选与修订发生在首次 tag 之后（`docs/` 不入包 ⇒ 不影响发布产物；产物 sha256 全程未变）。
 - [ ] **`git push`**（`main` + tag）—— **未执行**（负责人不可逆门）。
 - [ ] **`npm publish`**：推荐**直发 §5 的 tarball**（手册步骤 4'，registry 不重打）⇒ `npm view dsh-graph@0.20.2 dist --json`
       的 `shasum` 应 == 本地 sha1 `059fae1b…`、`fileCount` == **43**；`integrity` 与本地 sha512 逐字对账。
@@ -295,14 +298,14 @@
 > **独立复核判出 1 条 BLOCK** —— 发布正文真源 `docs/release-notes-v0.20.2.md` 仍是回填前旧稿，照 §10 的 `gh release create --notes-file` 发布
 > 会把「本版 Windows 无结论」写成公开正文；**已在发布前修好**（正文改用 §7.10/§7.11 真机结论；该文件属 `docs/`、不在包内 ⇒ **产物 sha256 不变**）。
 > 两份记录见 §11。
-> **待发布真值**：`main = e0556dd`（含发布留痕）｜tag `v0.20.2` → 合并提交 `912de67`｜`origin/main = 57a16a7`（**未推送**）｜
+> **待发布真值**（以命令实测为准）：`main` = 发布态收尾提交（`git rev-parse --short main`）｜tag `v0.20.2` → **`main` tip**（重打后；`git rev-parse --short 'v0.20.2^{commit}'`）｜`origin/main = 57a16a7`（**未推送**）｜
 > registry `latest = 0.20.1`（**0.20.2 未发布**）｜产物 sha256 `f39517c3…` / 1,444,792 B / 43 成员。
 
 ```bash
 # 0) 前置复核（四条都应命中）
 cd /home/miuzel/workspace/personal/dsh-graph
-git rev-parse --short main                      # e0556dd
-git rev-parse --short 'v0.20.2^{commit}'        # 912de67（annotated tag）
+git rev-parse --short main                      # 发布态收尾提交
+git rev-parse --short 'v0.20.2^{commit}'        # 应与上一行**相同**（annotated tag 重打后指向 main tip）
 git rev-parse --short origin/main               # 57a16a7（尚未推送）
 sha256sum tmp/uat-v0202/dsh-graph-0.20.2.tgz    # f39517c3aa0470e3aa60d9541a06842f4633523f024fd697b456e68aed0e0703
 
@@ -330,11 +333,11 @@ gh release view v0.20.2 -R miuzel/dsh-graph --json body > body.json   # 与真�
 ```
 
 **出问题时的回退口径**：`npm publish` 后才发现问题 ⇒ **不撤包**，改发 `0.20.2` 的补丁版本（历史约定）；tag 若打错但**尚未推送** ⇒
-`git tag -d v0.20.2` 后可重打（本版 tag 已按 `912de67` 固化为 annotated，未经负责人指示**不得移动**）。
+`git tag -d v0.20.2` 后可重打（本版已按负责人决定重打过一次：**重打后 tag == `main` tip**；此后未经负责人指示**不得再移动**）。
 
 ## 11. 发版前复核记录（2026-10-11）
 
-**A. 主管侧逐条复核（对照仓库真实状态自算，不采信本清单自述；源树 = tag `v0.20.2` / 合并提交 `912de67`）**：
+**A. 主管侧逐条复核（对照仓库真实状态自算，不采信本清单自述；源树 = tag `v0.20.2`（重打后 == `main` tip）/ 合并提交 `912de67`）**：
 
 | 复核点 | 结论 | 证据（单行） |
 |---|---|---|
@@ -344,7 +347,7 @@ gh release view v0.20.2 -R miuzel/dsh-graph --json body > body.json   # 与真�
 | 兼容声明（§2/§3） | ✅ PASS | `engines.dsh` = `>=0.1.5-rc.2 <0.2.2-0`；`peerDependencies["@deepseek-ai/dsh-settings"]` 同区间；`yaml ^2.9.0` 在 `dependencies`（自带运行依赖） |
 | H3 事实通道（§4） | ✅ PASS | `--h3-dispatch-json` / `DSH_GATE_H3_DISPATCH_JSON` 真实存在于 `scripts/win-smoke-test.mjs`（8 处）与 `scripts/platform-smoke-test.mjs`（4 处）并被消费 |
 | 闸门复跑（§6） | ✅ PASS | 在 tree == tag tree 的工作树 `a9812fa`：`run-tests` tests=2411 pass=2411 fail=0 skipped=0 exit=0（45.5 s）+ `tsc --noEmit` exit=0 |
-| 发布态真值（§8） | ✅ PASS | `main = e0556dd`；tag `v0.20.2` → `912de67`（`git cat-file -t` = `tag`）；`origin/main = 57a16a7`（**未推送**，远端无该 tag）；registry `latest = 0.20.1` |
+| 发布态真值（§8） | ✅ PASS | `main` = 发布态收尾提交；tag `v0.20.2` → `main` tip（重打后；`git cat-file -t` = `tag`）；`origin/main = 57a16a7`（**未推送**，远端无该 tag）；registry `latest = 0.20.1` |
 | 树清洁与临时产物 | ✅ PASS | `git status --porcelain` = 0；tag 树无 `tmp/`、`dist/*.tgz`、`.dist-stage.*` / `dist.prev.*` 混入 |
 | 平台结论 ↔ 台账一致性 | ✅ PASS | 本清单 §2/§7 的 `8/0/0`、`12/0/2`、`15/0/1`、`32/32`、`9/0/0`、`13/0/2`、H1–H6、三条 `child_id` 与 `docs/platform-gate.md` §7.10/§7.11 逐项相同 |
 
@@ -361,7 +364,9 @@ gh release view v0.20.2 -R miuzel/dsh-graph --json body > body.json   # 与真�
   `platform-smoke` `13/0/2`；**platform-gate 一侧与回传原文逐字一致，偏差在 release-notes 一侧**。
   **处置**：发布前改写该文件 Windows 段与 H3 段为实测结论（含口径边界「Round A'/B 不含派发维度」与三条 `child_id` 的磁盘佐证），
   并同步 §5/§8 的源树对账口径与末行「发布记录」措辞；另在该行补一句说明**包内 README 为何按轮次无关措辞**（刻意的一轮闭环纪律、判定以台账为准、不是「未验证」），
-  避免公开正文与包内措辞被读作互相矛盾。该文件属 `docs/`、**不在包内**（`docs/` 成员 0）⇒ **产物字节与 sha256 未变**（仍 `f39517c3…`），不触发第 4 轮产物。
+  避免公开正文与包内措辞被读作互相矛盾。**并据此（由负责人决定）把 tag `v0.20.2` 重打到发布态收尾提交** —— 首次 tag 树内的该文件仍是旧稿，
+  与同树的 §7.10/§7.11 PASS 自相矛盾；重打后 tag 树 == 主树终态，矛盾消失（重打安全：未推送、无外部引用、非 `docs/` 改动 0 文件）。
+  该文件属 `docs/`、**不在包内**（`docs/` 成员 0）⇒ **产物字节与 sha256 未变**（仍 `f39517c3…`），不触发第 4 轮产物。
 - **其余 6 条 INFO 的处置**：① §2 待办项未与 §8 同步（合并/tag 已 [x]）⇒ 已改为「已执行（本地 `912de67`）」；
   ② §10 前向引用「独立复核记录」缺失 + 预称「无阻断项」⇒ 由本小节补齐并改写该措辞；③ §7「不写轮次计数与结论数字」字面不精确
   （包内平台行含**上一版历史**数字）⇒ 已改为「不写**本轮的**轮次结论数字」并注明历史数字跨轮稳定；④ §3/§5 `dist/` 作用域 ⇒ 已在修订中增设
