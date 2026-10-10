@@ -346,7 +346,7 @@ gh release view v0.20.2 -R miuzel/dsh-graph --json body > body.json   # 与真�
 | 一轮闭环（包内不含轮次结论） | ✅ PASS | 包内平台行按「结论以台账为准」措辞、无轮次计数与结论数字；三段回填仅改 `docs/`（自打包点起非 `docs/` 改动 **0** 文件）⇒ 产物字节未变 |
 | 兼容声明（§2/§3） | ✅ PASS | `engines.dsh` = `>=0.1.5-rc.2 <0.2.2-0`；`peerDependencies["@deepseek-ai/dsh-settings"]` 同区间；`yaml ^2.9.0` 在 `dependencies`（自带运行依赖） |
 | H3 事实通道（§4） | ✅ PASS | `--h3-dispatch-json` / `DSH_GATE_H3_DISPATCH_JSON` 真实存在于 `scripts/win-smoke-test.mjs`（8 处）与 `scripts/platform-smoke-test.mjs`（4 处）并被消费 |
-| 闸门复跑（§6） | ✅ PASS | 在 tree == tag tree 的工作树 `a9812fa`：`run-tests` tests=2411 pass=2411 fail=0 skipped=0 exit=0（45.5 s）+ `tsc --noEmit` exit=0 |
+| 闸门复跑（§6） | ✅ PASS | 在 **tag 树**（`.worktrees/g-476-att-01` 已快进至 `v0.20.2^{commit}`，其 `dist/` 为 0.20.2 构建）：`run-tests` tests=2411 pass=2411 fail=0 skipped=0 exit=0（42.5 s）+ `tsc --noEmit` exit=0 ｜ 该次是在**发布正文与清单修订之后**复跑，用于确认 `docs/` 改动没打破读取 `docs/` 的守卫（`g362` / `g428` / `g429` 等） |
 | 发布态真值（§8） | ✅ PASS | `main` = 发布态收尾提交；tag `v0.20.2` → `main` tip（重打后；`git cat-file -t` = `tag`）；`origin/main = 57a16a7`（**未推送**，远端无该 tag）；registry `latest = 0.20.1` |
 | 树清洁与临时产物 | ✅ PASS | `git status --porcelain` = 0；tag 树无 `tmp/`、`dist/*.tgz`、`.dist-stage.*` / `dist.prev.*` 混入 |
 | 平台结论 ↔ 台账一致性 | ✅ PASS | 本清单 §2/§7 的 `8/0/0`、`12/0/2`、`15/0/1`、`32/32`、`9/0/0`、`13/0/2`、H1–H6、三条 `child_id` 与 `docs/platform-gate.md` §7.10/§7.11 逐项相同 |
