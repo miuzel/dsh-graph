@@ -83,6 +83,16 @@ import {
 import { basename, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+// g-475：H 系列（harness 组合 / OS 行为差异）探针的**唯一真源**在 win-smoke-test.mjs 里 ——
+// 本文件**只消费**，绝不自行定义（防漂移守卫 auditHarnessProbeConsumers 会对此判红）。
+// 为什么宿主是 win-smoke 而不是 scripts/lib/：win-smoke 的契约是「单文件、可单独拷到 Windows 运行」，
+// 新开共享模块会让那种拷贝失效；而本文件**本来就**依赖同目录的 win-smoke 存在（forwardSmoke 直接 spawn 它）。
+import {
+  HARNESS_PROBE_CONSUMER_FILES, HARNESS_PROBE_DEFINITION_MARKER, HARNESS_PROBE_IDS,
+  HARNESS_PROBE_ROWS, HARNESS_PROBE_RUNNERS,
+  auditHarnessProbeConsumers, auditHarnessProbeManifest, collectHarnessProbeConsumerFiles,
+  runHarnessProbes,
+} from "./win-smoke-test.mjs";
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -1188,6 +1198,8 @@ export function buildForwardArgs(opt) {
   push("--dsh-home", opt.dshHome);
   push("--dsh", opt.dsh);
   push("--timeout", opt.timeout);
+  push("--h3-dispatch-json", opt.h3DispatchJson);
+  for (const r of opt.dshRoots ?? []) push("--dsh-root", r);
   return args;
 }
 
@@ -1382,6 +1394,48 @@ export function selfCheck() {
   // 逐项聚合
   check("聚合：未运行过的项是 SKIP（不冒充 PASS）", itemLevel("P9") === "SKIP");
 
+  // ---- g-475 H 系列：只消费共享清单，绝不自行定义（防漂移守卫，绿基线 + 变异必红）----
+  const selfPath = fileURLToPath(import.meta.url);
+  const selfText = readFileSync(selfPath, "utf8");
+  // 断言文本按片段拼装：写成完整模式会**自我命中**（本条检查自己的正则字面量就在 selfText 里）——
+  // 这正是「用字符串构造判定模式」在本仓库反复踩到的坑（g-422 同类）。
+  const hJudgeNames = ["judgeShellTool" + "Composition", "judgeRoleWhitelist" + "Intersection", "judgeArgv" + "Quoting"];
+  const hDefPatterns = [HARNESS_PROBE_DEFINITION_MARKER, "export const HARNESS_PROBE_" + "RUNNERS"];
+  check("H 单一真源：本文件不含清单/判定/运行器定义（只在 win-smoke 里定义一次）",
+    !hDefPatterns.some((pat) => selfText.includes(pat)) &&
+    !hJudgeNames.some((n) => new RegExp("function\\s+" + n).test(selfText)));
+  const probeRepo = join(import.meta.dirname, "..");
+  const sharedConsumerFiles = collectHarnessProbeConsumerFiles(probeRepo);
+  if (sharedConsumerFiles.every((f) => f.text.length > 0)) {
+    check("H 清单审计：导入的共享清单 H1–H6 齐备、每项有运行器 ⇒ 0 问题",
+      auditHarnessProbeManifest(HARNESS_PROBE_ROWS, HARNESS_PROBE_RUNNERS).problems.length === 0 &&
+      HARNESS_PROBE_ROWS.length === HARNESS_PROBE_IDS.length);
+    check("H 清单审计（变异必红）：漏一项 / 多一项 逐项判红",
+      auditHarnessProbeManifest(HARNESS_PROBE_ROWS.slice(1), HARNESS_PROBE_RUNNERS)
+        .problems.some((p) => p.kind === "missing-probe") &&
+      auditHarnessProbeManifest([...HARNESS_PROBE_ROWS, ["H7", "offline", "多余探针", "这是一个足够长的判定口径说明文字"]], HARNESS_PROBE_RUNNERS)
+        .problems.some((p) => p.kind === "unknown-probe"));
+    const consumerBaseline = auditHarnessProbeConsumers(sharedConsumerFiles);
+    check("H 消费审计：两件执行件都调用共享入口、清单无第二份定义 ⇒ 0 问题",
+      consumerBaseline.problems.length === 0);
+    check("H 消费审计（变异必红）：抹掉任一消费调用 ⇒ 点名该件未消费",
+      auditHarnessProbeConsumers(sharedConsumerFiles.map((f) => ({
+        ...f,
+        text: f.path === HARNESS_PROBE_CONSUMER_FILES[0]
+          ? f.text.split("runHarnessProbes(").join("__removed__") : f.text,
+      }))).problems.some((p) => p.kind === "unconsumed" && p.detail.includes(HARNESS_PROBE_CONSUMER_FILES[0])));
+    check("H 消费审计（变异必红）：本文件里出现第二份 H 判定定义 ⇒ 判红",
+      auditHarnessProbeConsumers(sharedConsumerFiles.map((f) => ({
+        ...f,
+        text: f.path === HARNESS_PROBE_CONSUMER_FILES[1]
+          ? f.text + "\nfunction judge" + "ArgvQuoting() {}\n" : f.text,
+      }))).problems.some((p) => p.kind === "duplicate-definition"));
+  } else {
+    console.log("[INFO] H 消费审计：未找到两件执行件（跳过，不视为通过）");
+  }
+  check("H 清单规模固定为 H1–H6（新增探针必须同步清单+运行器+两件消费）",
+    HARNESS_PROBE_IDS.length === 6 && HARNESS_PROBE_IDS.every((id) => /^H[1-6]$/.test(id)));
+
   console.log("");
   if (bad === 0) {
     console.log("本脚本自检全部通过。");
@@ -1419,6 +1473,33 @@ function usage(msg) {
   process.exit(2);
 }
 
+/**
+ * H 系列层（g-475，平台门禁侧）：跑 win-smoke 里那份**共享**清单（H1–H6）并逐条记进本文件的台账。
+ * 与 win-smoke 的 `harnessProbeLayer` **同源**（同一清单、同一 judge、同一运行器），
+ * 差别只在落账函数与渲染；两件各自打印**同一形状**的矩阵行 ⇒ 可跨平台逐项对比。
+ */
+async function checkHarnessProbes(opt, tmpRoot) {
+  head("H 系列（harness 组合 / OS 行为差异；清单与判定来自 win-smoke-test.mjs 的单一真源）");
+  const run = await runHarnessProbes({
+    repo: opt.repo,
+    coreDir: join(opt.repo, "dist", "core"),
+    platform: process.platform,
+    compositionRoots: opt.dshRoots ?? [],
+    h3DispatchJson: opt.h3DispatchJson ?? null,
+    scratch: join(tmpRoot, "harness-probes"),
+  });
+  for (const v of run.verdicts) {
+    const problems = v.problems.length > 0 ? ` :: ${v.problems.slice(0, 3).join(" ; ")}` : "";
+    record(v.id, v.title, v.level, `${v.detail}${problems}`, v.criterion);
+  }
+  console.log("");
+  console.log(run.matrix);
+  if (run.composition?.roots?.length) {
+    console.log(`组合来源：${run.composition.files.length} 个声明文件（${run.composition.roots.join(", ")}）`);
+  }
+  return run;
+}
+
 function parseCli() {
   let parsed;
   try {
@@ -1438,6 +1519,8 @@ function parseCli() {
         "temp-root": { type: "string" },
         "skip-build": { type: "boolean", default: false },
         "keep-temp": { type: "boolean", default: false },
+        "h3-dispatch-json": { type: "string" },
+        "dsh-root": { type: "string", multiple: true, default: [] },
         json: { type: "boolean", default: false },
         help: { type: "boolean", default: false },
       },
@@ -1452,6 +1535,8 @@ function parseCli() {
     .filter(Boolean);
   if (sources.length > 1) usage(`${sources.join(" 与 ")} 互斥，只能选一个来源（--self-test 可与它们并存）`);
   const repo = v.repo ? resolve(v.repo) : join(import.meta.dirname, "..");
+  const h3Json = v["h3-dispatch-json"] ? resolve(v["h3-dispatch-json"]) : undefined;
+  if (h3Json && !existsSync(h3Json)) usage(`--h3-dispatch-json 指定的文件不存在：${h3Json}`);
   return {
     tarball: v.tarball ? resolve(v.tarball) : undefined,
     spec: v.spec,
@@ -1469,6 +1554,8 @@ function parseCli() {
     tempRoot: v["temp-root"] ? resolve(v["temp-root"]) : undefined,
     skipBuild: v["skip-build"],
     keepTemp: v["keep-temp"],
+    h3DispatchJson: h3Json,
+    dshRoots: (v["dsh-root"] ?? []).flatMap((x) => String(x).split(/[,;]/)).map((x) => x.trim()).filter(Boolean).map((x) => resolve(x)),
     json: v.json,
   };
 }
@@ -1520,8 +1607,10 @@ function summarize(opt, forwardStatus) {
   const warns = results.filter((r) => r.level === "WARN");
   const passes = results.filter((r) => r.level === "PASS");
   const probes = ["P1", "P2", "P3", "P4", "P5", "P6"].map((k) => `${k}=${itemLevel(k)}`);
+  const harness = HARNESS_PROBE_IDS.map((k) => `${k}=${itemLevel(k)}`);
   console.log(`逐项判定（六项平台探针）：${probes.join("  ")}`);
   console.log(`平台无关附加检查：M4=${itemLevel("M4")}（发布脚本可移植性审计，承自 g-359）`);
+  console.log(`harness 组合探针（g-475）：${harness.join("  ")}（H3 需真机/实例，未回传事实时为显式 SKIP）`);
   console.log(`通过 ${passes.length} 项，失败 ${fails.length} 项，告警 ${warns.length} 项。`);
   for (const group of [["失败项", fails], ["告警项", warns]]) {
     const [label, list] = group;
@@ -1531,7 +1620,8 @@ function summarize(opt, forwardStatus) {
   }
   const ownPass = fails.length === 0;
   const pass = ownPass && (forwardStatus === null || forwardStatus === 0);
-  const ran = [...["P1", "P2", "P3", "P4", "P5", "P6"], ...["M4"]].filter((k) => itemLevel(k) !== "SKIP");
+  const ran = [...["P1", "P2", "P3", "P4", "P5", "P6"], ...["M4"], ...HARNESS_PROBE_IDS]
+    .filter((k) => itemLevel(k) !== "SKIP");
   const ranText = ran.length > 0 ? ran.join("/") : "未跑探针";
   console.log(`\n平台专检判定：${ownPass ? "PASS ✅" : "FAIL ❌"}` +
     (ran.length === 0 ? "（--self-test 模式，未跑探针）" : "") +
@@ -1549,14 +1639,20 @@ function summarize(opt, forwardStatus) {
   console.log("\n----- 可复制回传的报告 -----");
   console.log(`dsh-graph 平台门禁 | 平台=${process.platform}/${process.arch} node=${process.version} 标注=${PLATFORM_LABEL}`);
   console.log(`仓库=${opt.repo}`);
-  console.log(`逐项=${probes.join(" ")} M4=${itemLevel("M4")}`);
+  console.log(`逐项=${probes.join(" ")} M4=${itemLevel("M4")} H=${HARNESS_PROBE_IDS.map((k) => `${k}:${itemLevel(k)}`).join(" ")}`);
   console.log(`结果=${pass ? "PASS" : "FAIL"} 通过${passes.length}/失败${fails.length}/告警${warns.length}` +
     (forwardStatus === null ? "" : ` 转发exit=${forwardStatus}`));
   for (const r of results.filter((x) => x.level === "FAIL" || x.level === "WARN")) {
     console.log(`  ${r.level} ${r.id} ${r.name}${r.detail ? " :: " + r.detail.slice(0, 300) : ""}`);
   }
   console.log("---------------------------");
-  if (opt.json) console.log("\n" + JSON.stringify({ pass, platform: process.platform, forwardStatus, probes, m4: itemLevel("M4"), results }, null, 2));
+  if (opt.json) {
+    console.log("\n" + JSON.stringify({
+      pass, platform: process.platform, forwardStatus, probes, m4: itemLevel("M4"),
+      harness: HARNESS_PROBE_IDS.map((k) => ({ id: k, level: itemLevel(k) })),
+      results,
+    }, null, 2));
+  }
   return { pass, ownPass, fails: fails.length };
 }
 
@@ -1586,6 +1682,7 @@ async function main() {
         checkLocaleEncoding(opt, opt.repo, tmpRoot);          // P6
       }
       checkLinuxOnlyAssumptions(opt.repo);                    // M4（平台无关）
+      await checkHarnessProbes(opt, tmpRoot);                 // H1–H6（g-475，清单来自单一真源）
     }
   } finally {
     if (opt.keepTemp) console.log(`\n保留探针临时目录：${tmpRoot}（--keep-temp）`);

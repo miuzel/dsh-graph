@@ -65,7 +65,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync,
+  cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync,
+  writeFileSync,
 } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -138,11 +139,17 @@ function usage(msg) {
     "  --dsh <cmd>          dsh 启动命令（默认 \"npx -y @deepseek-ai/dsh\"）\n" +
     "  --timeout <sec>      等待实例启动的秒数（默认 120）\n" +
     "  --keep               结束后保留隔离 DSH_HOME（默认删除）\n" +
-    "  --static-only <dir>  只跑 T1 静态门禁（POSIX 具名导入 + OS 调用点覆盖清单）后退出\n" +
+    "  --static-only <dir>  只跑 T1 静态门禁（POSIX 具名导入 + OS 调用点覆盖清单 + H 系列组合探针）后退出\n" +
     "  --self-test          离线自检（不联网、不安装）\n" +
     "  --mutation-check     负向对照（g-428）：对已构建包的 core/ops.js 做定向突变\n" +
     "                       （还原 g-427 旧顺序 / 只复制不搬迁），断言对应功能检查必红\n" +
     "  --pkg <dir>          --mutation-check 使用的包目录（默认自动定位 dist/）\n" +
+    "  --h3-dispatch-json <file>\n" +
+    "                       H3 真机/实例事实文件（隔离实例上三条派发路径的 child_id 与错误）；\n" +
+    "                       不给则 H3 显式标注「跳过（需真机/实例）」，不冒充通过。\n" +
+    "                       等价环境变量：DSH_GATE_H3_DISPATCH_JSON\n" +
+    "  --dsh-root <dir>     组合声明来源（DSH 安装目录或其 node_modules），可重复/可逗号分隔；\n" +
+    "                       等价环境变量：DSH_GATE_DSH_ROOT\n" +
     "  --json               额外打印机器可读结果\n",
   );
   process.exit(2);
@@ -165,6 +172,8 @@ function parseCli() {
         "static-only": { type: "string" },
         "self-test": { type: "boolean", default: false },
         "mutation-check": { type: "boolean", default: false },
+        "h3-dispatch-json": { type: "string" },
+        "dsh-root": { type: "string", multiple: true, default: [] },
         pkg: { type: "string" },
         json: { type: "boolean", default: false },
         help: { type: "boolean", default: false },
@@ -179,6 +188,11 @@ function parseCli() {
   const sources = [v.path && "--path", v.tarball && "--tarball", v.spec && "--spec"].filter(Boolean);
   if (sources.length > 1) usage(`${sources.join(" 与 ")} 互斥，只能选一个安装来源`);
   if (v.pkg && !v["mutation-check"]) usage("--pkg 仅与 --mutation-check 一起使用");
+  const h3Json = v["h3-dispatch-json"] ? resolve(v["h3-dispatch-json"]) : null;
+  if (h3Json) {
+    if (!existsSync(h3Json)) usage(`--h3-dispatch-json 指定的文件不存在：${h3Json}`);
+    if (!statSync(h3Json).isFile()) usage(`--h3-dispatch-json 不是文件：${h3Json}`);
+  }
   if (v.tarball) {
     const t = resolve(v.tarball);
     if (!/\.tgz$|\.tar\.gz$/i.test(t)) usage(`--tarball 需要 .tgz 文件：${t}`);
@@ -199,13 +213,43 @@ function parseCli() {
     selfTest: v["self-test"],
     mutationCheck: v["mutation-check"],
     pkg: v.pkg ? resolve(v.pkg) : null,
+    h3DispatchJson: h3Json,
+    dshRoots: (v["dsh-root"] ?? []).flatMap((x) => String(x).split(/[,;]/)).map((x) => x.trim()).filter(Boolean).map((x) => resolve(x)),
     json: v.json,
   };
 }
 
-/** 把 "npx -y @deepseek-ai/dsh" 拆成命令 + 参数（允许 --dsh 写多段）。 */
-function splitCmd(cmd) {
-  return cmd.trim().split(/\s+/);
+/**
+ * 把 `--dsh` 的单串拆成命令 + 参数（允许写多段）。
+ *
+ * g-475（H6）：从「纯空白拆分」升级为**引号感知**拆分 —— 原实现遇到
+ * `"C:\Program Files\node.exe" -y …` 会拆成 `"C:\Program` / `Files\node.exe"` 两段，
+ * 在 Windows 上表现为「node.exe 找不到」（mem-9b910064 记录的正是这条坑：`--dsh` 取一个字符串，
+ * 需靠引号分组把带空格的路径包起来）。引号内的空白不再断词，引号本身被剥掉；
+ * 未闭合的引号按字面处理（保持宽容，不抛错）。既有形态（`npx -y @deepseek-ai/dsh`）逐字不变。
+ */
+export function splitCmd(cmd) {
+  const s = String(cmd ?? "");
+  const out = [];
+  let cur = "";
+  let quote = null;
+  let started = false;
+  for (const ch of s) {
+    if (quote) {
+      if (ch === quote) { quote = null; continue; }
+      cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; started = true; continue; }
+    if (/\s/.test(ch)) {
+      if (started) { out.push(cur); cur = ""; started = false; }
+      continue;
+    }
+    cur += ch;
+    started = true;
+  }
+  if (started) out.push(cur);
+  return out;
 }
 
 /**
@@ -213,7 +257,7 @@ function splitCmd(cmd) {
  * 含空格/中文的路径（例如放在「我的文档」下的 tarball）会被截断 —— 这里显式加引号。
  */
 /** 纯函数形式（便于在非 Windows 上做离线自检）。 */
-function quoteForCmd(args) {
+export function quoteForCmd(args) {
   return args.map((a) =>
     typeof a === "string" && /[\s"&^|<>]/.test(a) && !/^".*"$/.test(a) ? `"${a}"` : a);
 }
@@ -227,7 +271,7 @@ function quoteForCmd(args) {
  *   本函数把「命令 + 参数」拼成一条完整命令行，参数按 cmd.exe 规则加引号（含空格/中文的路径
  *   例如放在「我的文档」下的 tarball 不会被截断）。
  */
-function buildShellCommandLine(cmd, args) {
+export function buildShellCommandLine(cmd, args) {
   return quoteForCmd([cmd, ...args]).join(" ");
 }
 
@@ -1020,7 +1064,7 @@ export function buildOsJsMutant(source, kind) {
 // ---------------------------------------------------------------------------
 
 /** 覆盖摘要（写进可复制回传的报告块，供真机结论引用）。 */
-const coverage = { ledger: null, smokeSteps: 0, smokeFailed: 0, ignoredLines: 0 };
+const coverage = { ledger: null, smokeSteps: 0, smokeFailed: 0, ignoredLines: 0, harness: null };
 
 /**
  * 台账层入口：扫描产品代码里的 OS 调用点并与 OS_SITE_ROWS 逐字段对账。
@@ -1166,6 +1210,1270 @@ function checkDispatchToolPortability(dir) {
   return { ok: audit.problems.length === 0, audit, where };
 }
 
+// ---------------------------------------------------------------------------
+// H 系列（g-475）：harness 组合 / OS 行为差异探针（**单一真源**，两件消费）
+//
+// 病根（g-473 实证）：同一个 harness 在不同 OS / 组合下**行为不同**，而两平台门禁此前只守
+//   「OS API 调用点」（g-428 台账层）与「POSIX 专有常量具名导入」（T1）——**不守 harness 组合依赖**。
+//   ⇒ Windows 上模型面向工具是 `pwsh`（不注册 `bash`），插件把 `bash` 写进角色白名单，
+//   `@deepseek-ai/dsh-tools` 的 `restrict()` 对未知名**硬抛** ⇒ reviewer / collector /
+//   executor-minimal 三条派发路径必挂，而 v0.20.1 的 Windows 真机 T1–T5 **全绿**。
+//
+// 本段是 H1–H6 的**唯一真源**：探针清单（`HARNESS_PROBE_ROWS`）、判定（`judge*`）、运行器
+//   （`HARNESS_PROBE_RUNNERS`）与防漂移审计（`auditHarnessProbeManifest` /
+//   `auditHarnessProbeConsumers`）都**只在这里定义一次**；`scripts/win-smoke-test.mjs` 与
+//   `scripts/platform-smoke-test.mjs` 都调用 `runHarnessProbes()`，并各自渲染**同一行**矩阵结论。
+//
+// **为什么宿主是 win-smoke，而不是新开 `scripts/lib/`**：win-smoke 的既有契约是「单文件、无第三方
+//   依赖、可单独拷到原生 Windows 上运行」（发布红线 1 的执行件，`win-smoke-test.cmd` 双击即用）——
+//   新增本地 import 会让「只拷一个 .mjs」失效。platform-smoke 本来就依赖 win-smoke 在仓库内存在
+//   （`forwardSmoke` 直接 spawn 它，`core/tests/*` 也从它 import），故由它 import **不引入任何新耦合**，
+//   也不产生第二份定义（brief 允许「若仓内已有更合适的共享位则复用」）。
+//
+// 与既有 P1–P6 / M4 / T1 台账的分工（零重复定义）：
+//   H1 shell 名解析   —— 新增：组合声明 × 插件解析（组合依赖面；T1/g-473 只**静态扫产品代码**）
+//   H2 白名单求交     —— 新增：组合工具名台账 × `toolFilterForRole`（把 g-473 的代码在 dist 上真跑一遍）
+//   H3 派发可用       —— 新增：隔离实例真派发**事实**的判定（`--static-only` 一律显式 SKIP，不静默通过）
+//   H4 分隔符/大小写  —— H4.a 断言产品既有拒绝语义；H4.b **新增**（P1 量真实卷语义，H4.b 注引擎语义）
+//   H5 CRLF/编码往返  —— **新增**（P6 是 locale/CJK 逐字节；H5 是换行风格 + 机器头注入折叠）
+//   H6 命令拼接与引号 —— 复用 win-smoke 既有 `splitCmd`/`quoteForCmd`/`buildShellCommandLine`，
+//                        并**新增**真实 argv 传递自检（真机/实例轮靠它回传结论）
+// ---------------------------------------------------------------------------
+
+/** H 探针 id 全集（顺序即报告顺序）；清单穷尽性由 `auditHarnessProbeManifest` 钉住。 */
+export const HARNESS_PROBE_IDS = Object.freeze(["H1", "H2", "H3", "H4", "H5", "H6"]);
+
+/** 负向对照用的**已知不存在**的名字：判定必须判红，证明「补集为空」这条断言不是恒真。 */
+export const HARNESS_ABSENT_TOOL = "__dsh_graph_absent_tool__";
+
+/** 两件执行件（相对仓库根）：**都必须消费**本清单。 */
+export const HARNESS_PROBE_CONSUMER_FILES = Object.freeze([
+  "scripts/win-smoke-test.mjs",
+  "scripts/platform-smoke-test.mjs",
+]);
+
+/** 消费点的唯一形态：调用 `runHarnessProbes(`；未出现即「该件未消费」。 */
+export const HARNESS_PROBE_CONSUMER_MARKER = "runHarnessProbes(";
+
+/** 单一真源的机械标记：`export const HARNESS_PROBE_ROWS` 在两件里必须**恰好出现 1 次**。 */
+export const HARNESS_PROBE_DEFINITION_MARKER = "export const HARNESS_PROBE_ROWS";
+
+/**
+ * H 系列探针清单（**覆盖契约**）。行格式：[id, requires, title, criterion]。
+ * `requires`：`offline`（纯 Node，无需 dist/组合）| `composition`（需 DSH 组合声明）|
+ *             `dist`（需可导入的 core/ops.js）| `instance`（需隔离实例真派发事实）。
+ * 漏一项 / 多一项 / 重复 / 某件未消费 ⇒ 由 `auditHarnessProbeManifest` 与
+ * `auditHarnessProbeConsumers` fail-closed 判红（`--self-test` 与 `core/tests/g475-*.test.ts` 双证）。
+ */
+export const HARNESS_PROBE_ROWS = Object.freeze([
+  [
+    "H1", "composition",
+    "shell 工具名解析（平台条件化组合声明 → 插件解析一致：win32→pwsh / POSIX→bash）",
+    "PASS = 组合声明里 `tool-bash`/`tool-pwsh` 的 `disabled: !!js process.platform …` 按目标平台求值后" +
+      "恰好一个启用，且该名字与 `resolveShellTool()`（探针优先 + 无探针平台回落）**逐平台一致**；" +
+      "FAIL = 组合声明与解析结果不一致 / 出现无法识别的 disabled 形态 / 组合声明了未登记的工具插件；" +
+      "WARN = 找不到 DSH 组合声明（未实测，不冒充通过；可用 DSH_GATE_DSH_ROOT 指定）。",
+  ],
+  [
+    "H2", "dist",
+    "角色白名单求交（组合工具名台账驱动；reviewer / collector / executor-minimal 三路径）",
+    "PASS = 三路径（含 minimal）的 `toolFilterForRole().allow` ⊆ 组合**实际存在**名字集合（以「有探针时逐名求交」" +
+      "的语义驱动）；shell 槽位解析为组合的 shell 名、另一平台的名字不出现；" +
+      "**负向对照**：注入一个已知不存在的名字必须判红（证明「补集为空」不是恒真）；" +
+      "注入「缺 dsh-tool-web」⇒ web_* 静默剔除、注入「缺 shell」⇒ 可读诊断且不派发；" +
+      "FAIL = 出现越界名字 / 组合工具插件未登记 / 求交未生效；WARN = 无可导入的 core/ops.js。",
+  ],
+  [
+    "H3", "instance",
+    "派发可用（隔离实例真派发 reviewer + collector + executor-minimal 各一次）",
+    "PASS = 三条路径都拿到非空 `child_id`、无 `tools.restrict() names unknown`、无「子代理启动失败」/" +
+      "`child_error`；FAIL = 任一条不成立；" +
+      "**SKIP（需真机/实例）** = 未在隔离实例上真实派发时**必须显式标注跳过**，禁止静默通过" +
+      "（真机事实经 `--h3-dispatch-json <file>` / `DSH_GATE_H3_DISPATCH_JSON` 回传后由本探针判定）。",
+  ],
+  [
+    "H4", "dist",
+    "路径分隔符与大小写语义（产品侧拒绝语义 + 卷语义注入下的引擎行为）",
+    "PASS = 反斜杠 / 绝对路径 / `..` 形态的附件名被**可读拒绝**（不静默建目录、不泄漏平台错误码），`a/b.txt` 正常；" +
+      "且注入「大小写不敏感卷」时别名解析命中、注入「大小写敏感」时不命中（判定与真实卷无关，跨平台同结论）；" +
+      "FAIL = 任一不成立；WARN = 无可导入的 core/ops.js 或 core/platform.js。",
+  ],
+  [
+    "H5", "dist",
+    "CRLF/LF 与编码往返（目标正文逐字节 + results 机器头注入折叠）",
+    "PASS = 含 `\\r\\n` 与星平面字符（🙂）的正文写进 goal.md 后逐字节读回一致、UTF-8 往返无损且无孤立 `\\r`；" +
+      "机器头字段里注入 `\\r\\n` 只被折叠进同一行（不新增行、字段齐备），正文换行归一为 LF 且逻辑行不丢；" +
+      "FAIL = 任一不成立；WARN = 无可导入的 core/ops.js。",
+  ],
+  [
+    "H6", "offline",
+    "命令拼接与引号（`--dsh` 单串解析 + cmd.exe 引号 + 真实 argv 传递自检）",
+    "PASS = `splitCmd` 按空白/引号分组解析 `--dsh` 单串（含带空格路径的引号分组）；`quoteForCmd` /" +
+      " `buildShellCommandLine` 按 cmd.exe 元字符集合加引号且不重复加；" +
+      "真实 argv 传递（`shell:false` 与 POSIX `sh -c <组合命令行>`）逐字节一致；FAIL = 任一不成立。",
+  ],
+]);
+
+/** 有意**不登记**进组合工具名台账的产品插件（显式非目标，避免「为什么 X 不在清单里」的隐性口径）。 */
+export const HARNESS_TOOL_REGISTRY_NON_GOALS = Object.freeze([
+  "子代理角色白名单（reviewer/collector/executor/supervisor/pm/summarizer）从不裁剪的工具：",
+  "present / todo / goal / skill / jobs / schedule / workflow / subagent* / ask-user / working-directory /",
+  "terminal* / call-timeout-policy / cordis / plugin-manager 等 —— 它们不在 `allowedTools` 里出现，",
+  "故「组合里有没有」不影响 restrict() 是否抛错；一旦将来被写进角色白名单，本表必须同步登记。",
+]);
+
+/**
+ * 组合工具名台账（**本清单即覆盖契约**）：`@deepseek-ai/dsh-tool-*` 声明 → 模型面向工具名。
+ * 行格式：[插件包名, 工具名数组 | null, 非目标理由]
+ * 工具名数组必须能被该包自己的 `package.json` description 佐证（`auditToolRegistry`，防止凭空编造）；
+ * 组合声明里出现**未登记**的 `@deepseek-ai/dsh-tool-*` ⇒ 判红（fail-closed，与 OS_SITE_ROWS 同范式）。
+ * 键是**包名**：声明里的子路径形态（`@deepseek-ai/dsh-tool-subagent-control/list-agents`）按包名归一。
+ */
+export const DSH_TOOL_PLUGIN_REGISTRY = Object.freeze([
+  ["@deepseek-ai/dsh-tool-bash", ["bash"], ""],
+  ["@deepseek-ai/dsh-tool-pwsh", ["pwsh"], ""],
+  ["@deepseek-ai/dsh-tool-fs", ["read", "write", "edit"], ""],
+  ["@deepseek-ai/dsh-tool-fs-search", ["glob", "grep"], ""],
+  ["@deepseek-ai/dsh-tool-web", ["web_search", "web_fetch"], ""],
+  ["@deepseek-ai/dsh-tool-ask-user", null, "角色白名单不裁剪（仅标准模式全量可用）"],
+  ["@deepseek-ai/dsh-tool-bash-persistent", null, "持久终端，不在角色白名单"],
+  ["@deepseek-ai/dsh-tool-pwsh-persistent", null, "持久终端，不在角色白名单"],
+  ["@deepseek-ai/dsh-tool-call-timeout-policy", null, "策略件，不注册模型面向工具"],
+  ["@deepseek-ai/dsh-tool-cordis", null, "角色白名单不裁剪"],
+  ["@deepseek-ai/dsh-tool-goal", null, "角色白名单不裁剪"],
+  ["@deepseek-ai/dsh-tool-jobs", null, "角色白名单不裁剪"],
+  ["@deepseek-ai/dsh-tool-present", null, "角色白名单不裁剪"],
+  ["@deepseek-ai/dsh-tool-ralph", null, "实验 bundle 专用，不在角色白名单"],
+  ["@deepseek-ai/dsh-tool-schedule", null, "角色白名单不裁剪"],
+  ["@deepseek-ai/dsh-tool-session-query", null, "实验 bundle 专用，不在角色白名单"],
+  ["@deepseek-ai/dsh-tool-skill", null, "角色白名单不裁剪"],
+  ["@deepseek-ai/dsh-tool-subagent", null, "角色白名单不裁剪"],
+  ["@deepseek-ai/dsh-tool-subagent-control", null, "角色白名单不裁剪（含 /list-agents、/model-selection-settings 子路径）"],
+  ["@deepseek-ai/dsh-tool-terminal", null, "实验 bundle 专用，不在角色白名单"],
+  ["@deepseek-ai/dsh-tool-todo", null, "角色白名单不裁剪"],
+  ["@deepseek-ai/dsh-tool-workflow", null, "角色白名单不裁剪"],
+  ["@deepseek-ai/dsh-tool-working-directory", null, "角色白名单不裁剪"],
+  ["@deepseek-ai/dsh-tool-workspace-dependencies", null, "SDK bundle 专用，不在角色白名单"],
+]);
+
+/** `@deepseek-ai/dsh-tool-x/sub/path` → `@deepseek-ai/dsh-tool-x`（台账按包名比对）。 */
+export function toolPluginBaseName(name) {
+  const parts = String(name ?? "").split("/");
+  return parts.length > 2 ? parts.slice(0, 2).join("/") : String(name ?? "");
+}
+
+/** 台账别名（与 OS_SITE_REGISTRY 同形状用法）。 */
+export const DSH_TOOL_REGISTRY = Object.freeze(DSH_TOOL_PLUGIN_REGISTRY.map(([pkg, tools, nonGoal]) => ({
+  pkg, tools: tools ? [...tools] : null, nonGoal: nonGoal || "",
+})));
+
+/** 允许的 `disabled:` 条件形态（只认这些；其余形态**判红**，避免组合声明变了却静默放行）。 */
+export const PLATFORM_CONDITION_FORMS = Object.freeze([
+  { id: "win32-eq", re: /^process\.platform\s*===\s*['"]win32['"]$/ },
+  { id: "win32-neq", re: /^process\.platform\s*!==\s*['"]win32['"]$/ },
+  { id: "platform-in", re: /^\[([^\]]*)\]\.includes\(process\.platform\)$/ },
+  { id: "bool-true", re: /^true$/ },
+  { id: "bool-false", re: /^false$/ },
+]);
+
+/**
+ * 对目标平台求值一条平台条件表达式。
+ * 返回 {ok, value, form, why}；`ok === false` 表示形态无法识别（调用方**必须判红**）。
+ */
+export function evaluatePlatformCondition(rawExpr, platform) {
+  const expr = stripJsPrefix(rawExpr);
+  const platformRelevant = /process\.platform/.test(expr);
+  for (const form of PLATFORM_CONDITION_FORMS) {
+    const m = form.re.exec(expr);
+    if (!m) continue;
+    if (form.id === "win32-eq") return { ok: true, value: platform === "win32", form: form.id, why: "", platformRelevant: true };
+    if (form.id === "win32-neq") return { ok: true, value: platform !== "win32", form: form.id, why: "", platformRelevant: true };
+    if (form.id === "bool-true") return { ok: true, value: true, form: form.id, why: "", platformRelevant };
+    if (form.id === "bool-false") return { ok: true, value: false, form: form.id, why: "", platformRelevant };
+    const names = m[1].split(",").map((s) => s.trim().replace(/^['"]|['"]$/g, "")).filter(Boolean);
+    return { ok: true, value: names.includes(platform), form: form.id, why: "", platformRelevant: true };
+  }
+  return {
+    ok: false, value: null, form: null, platformRelevant,
+    why: `无法识别的${platformRelevant ? "平台" : "非平台"}条件形态：${expr || "(空)"}`,
+  };
+}
+
+/** 去掉 `!!js ` 前缀与包裹的字符串引号（组合声明里两种写法都出现过）。 */
+export function stripJsPrefix(rawExpr) {
+  let expr = String(rawExpr ?? "").trim();
+  if (expr.startsWith("!!js")) expr = expr.slice(4).trim();
+  if (/^".*"$/.test(expr) && expr.length >= 2) expr = expr.slice(1, -1).trim();
+  return expr;
+}
+
+/**
+ * 解析组合声明（cordis patch YAML 的「- id: X / name: 'pkg' / disabled: <expr>」三元组）。
+ * files: [{path, text}]。返回 {declarations, problems}；只认含 `name:` 的条目。
+ */
+export function scanCompositionToolDeclarations(files) {
+  const declarations = [];
+  const problems = [];
+  for (const f of files) {
+    const lines = String(f.text ?? "").split(/\r?\n/);
+    let cur = null;
+    const flush = () => {
+      if (!cur) return;
+      if (cur.name) declarations.push(cur);
+      cur = null;
+    };
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const idm = /^\s*-\s*id:\s*([A-Za-z0-9_$.-]+)\s*$/.exec(line);
+      if (idm) { flush(); cur = { file: f.path, line: i + 1, id: idm[1], name: null, disabled: null }; continue; }
+      if (!cur) continue;
+      const nm = /^\s*name:\s*['"]?([^'"\s]+)['"]?\s*$/.exec(line);
+      if (nm && !cur.name) { cur.name = nm[1]; continue; }
+      const dm = /^\s*disabled:\s*(.+?)\s*$/.exec(line);
+      if (dm && cur.disabled === null) { cur.disabled = dm[1]; continue; }
+    }
+    flush();
+    if (declarations.length === 0) problems.push({ kind: "no-declaration", file: f.path, detail: `${f.path}：未解析出任何 - id/name 组合声明条目` });
+  }
+  return { declarations, problems };
+}
+
+/** 组合声明里出现的 `@deepseek-ai/dsh-tool-*` 包名（去重，保留出现顺序）。 */
+export function compositionToolPackages(declarations) {
+  const out = [];
+  for (const d of declarations) {
+    if (!/^@deepseek-ai\/dsh-tool-/.test(String(d.name ?? ""))) continue;
+    const base = toolPluginBaseName(d.name);
+    if (!out.includes(base)) out.push(base);
+  }
+  return out;
+}
+
+/** 台账查询：包名 → 工具名数组（null = 显式非目标）。未登记返回 undefined。 */
+export function registryEntryFor(pkg, registry = DSH_TOOL_REGISTRY) {
+  return registry.find((r) => r.pkg === pkg);
+}
+
+/**
+ * 组合工具名台账审计（fail-closed）：
+ *  ① 组合声明里出现未登记的 `@deepseek-ai/dsh-tool-*` ⇒ 判红（新增工具插件必须登记）；
+ *  ② 台账里登记为「有工具名」的包，其工具名必须被该包自己的 package.json description 佐证
+ *     （`descriptions` 为 pkg → description 映射；缺失即跳过该包的佐证，但由 ③ 记录）；
+ *  ③ 无法识别的 `disabled:` 形态（若该条目属于已登记的工具包）⇒ 判红。
+ */
+export function auditToolRegistry(declarations, opts = {}) {
+  const registry = opts.registry ?? DSH_TOOL_REGISTRY;
+  const descriptions = opts.descriptions ?? {};
+  const problems = [];
+  const nonPlatform = [];
+  for (const d of declarations) {
+    if (!/^@deepseek-ai\/dsh-tool-/.test(String(d.name ?? ""))) continue;
+    const base = toolPluginBaseName(d.name);
+    const entry = registryEntryFor(base, registry);
+    if (!entry) {
+      problems.push({ kind: "unregistered-tool-plugin", file: d.file, detail: `${d.file}:${d.line} 组合声明了未登记的工具插件 ${d.name}（包名 ${base}；请登记进 DSH_TOOL_PLUGIN_REGISTRY：工具名数组或非目标理由）` });
+      continue;
+    }
+    if (entry.tools) {
+      const desc = descriptions[base];
+      if (typeof desc === "string" && desc.length > 0) {
+        for (const t of entry.tools) {
+          if (!desc.toLowerCase().includes(t.toLowerCase())) {
+            problems.push({ kind: "tool-name-unverified", file: d.file, detail: `${base} 的台账工具名 "${t}" 未出现在该包 package.json description 里（不得凭空编造）` });
+          }
+        }
+      }
+    }
+    if (d.disabled) {
+      const ev = evaluatePlatformCondition(d.disabled, "linux");
+      if (!ev.ok && ev.platformRelevant) {
+        problems.push({ kind: "unknown-platform-condition", file: d.file, detail: `${d.file}:${d.line} ${d.name} 的**平台**条件形态无法识别：${stripJsPrefix(d.disabled)}（组合声明形态变了，必须同步扩展 PLATFORM_CONDITION_FORMS）` });
+      } else if (!ev.ok) {
+        nonPlatform.push({ file: d.file, line: d.line, name: d.name, expr: stripJsPrefix(d.disabled) });
+      }
+    }
+  }
+  for (const r of registry) {
+    if (r.tools && r.tools.length === 0) problems.push({ kind: "registry", detail: `台账 ${r.pkg} 的工具名数组为空` });
+    if (!r.tools && String(r.nonGoal).trim().length < 4) problems.push({ kind: "registry", detail: `台账 ${r.pkg} 既无工具名也无非目标理由` });
+  }
+  const ids = new Set();
+  for (const r of registry) {
+    if (ids.has(r.pkg)) problems.push({ kind: "registry", detail: `台账重复登记 ${r.pkg}` });
+    ids.add(r.pkg);
+  }
+  return { problems, nonPlatform };
+}
+
+/**
+ * 某一平台下组合**实际注册**的 shell 工具名集合。
+ * 判据：`tool-bash` / `tool-pwsh` 声明里 `disabled` 求值为 false（或没写 disabled）⇒ 启用。
+ * 返回 {tools, unknown}；unknown 为非空表示有条目无法判定（调用方判红）。
+ */
+export function compositionShellTools(declarations, platform) {
+  const tools = [];
+  const unknown = [];
+  for (const d of declarations) {
+    if (d.id !== "tool-bash" && d.id !== "tool-pwsh") continue;
+    const name = d.id === "tool-bash" ? "bash" : "pwsh";
+    let disabled = false;
+    if (d.disabled !== null && String(d.disabled).trim() !== "") {
+      const ev = evaluatePlatformCondition(d.disabled, platform);
+      if (!ev.ok) { unknown.push({ id: d.id, expr: d.disabled, why: ev.why }); continue; }
+      disabled = ev.value === true;
+    }
+    if (!disabled && !tools.includes(name)) tools.push(name);
+  }
+  return { tools: tools.sort(), unknown };
+}
+
+/**
+ * 某一平台下组合**实际存在**的模型面向工具名集合（台账驱动）。
+ * 只看「无 disabled 或 disabled 求值为 false」的条目；未登记包 ⇒ 记入 unregistered。
+ */
+export function compositionToolNames(declarations, platform, registry = DSH_TOOL_REGISTRY) {
+  const names = new Set();
+  const unregistered = [];
+  for (const d of declarations) {
+    if (!/^@deepseek-ai\/dsh-tool-/.test(String(d.name ?? ""))) continue;
+    let disabled = false;
+    if (d.disabled !== null && String(d.disabled).trim() !== "") {
+      const ev = evaluatePlatformCondition(d.disabled, platform);
+      if (!ev.ok) continue; // 形态问题由 auditToolRegistry 判红，此处不重复
+      disabled = ev.value === true;
+    }
+    if (disabled) continue;
+    const base = toolPluginBaseName(d.name);
+    const entry = registryEntryFor(base, registry);
+    if (!entry) { unregistered.push(base); continue; }
+    for (const t of entry.tools ?? []) names.add(t);
+  }
+  return { names, unregistered };
+}
+
+/** 在若干候选根里定位 DSH 安装（含 `@deepseek-ai/dsh-tool-bash` 或 `dsh-web-app`）。 */
+export function discoverDshRoots(repo, extra = []) {
+  const roots = [];
+  const push = (p) => {
+    if (!p) return;
+    const abs = resolve(p);
+    if (existsSync(abs) && !roots.includes(abs)) roots.push(abs);
+  };
+  const fromEnv = String(process.env.DSH_GATE_DSH_ROOT ?? "").split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+  for (const e of fromEnv) push(e);
+  for (const e of extra) push(e);
+  const bases = [repo, process.cwd()];
+  for (const b of bases) {
+    push(join(b, "node_modules", "@deepseek-ai", "dsh"));
+    // 隔离 profile 的 node_modules（完整门禁里最有价值的真实来源）
+    push(join(b, "node_modules"));
+  }
+  // 当前 Node 的全局 node_modules（离线、不 spawn 进程）
+  const nodeRoot = process.execPath.replace(/[\\/]bin[\\/]node(\.exe)?$/i, "");
+  if (nodeRoot !== process.execPath) {
+    push(join(nodeRoot, "lib", "node_modules", "@deepseek-ai", "dsh"));
+    push(join(nodeRoot, "node_modules", "@deepseek-ai", "dsh"));
+  }
+  // npm root -g（best-effort；离线可用）
+  try {
+    const r = spawnSync("npm", ["root", "-g"], { encoding: "utf8", timeout: 30_000 });
+    if (r.status === 0 && r.stdout) push(join(String(r.stdout).trim(), "@deepseek-ai", "dsh"));
+  } catch { /* 忽略 */ }
+  return roots.filter((r) => existsSync(join(r, "node_modules", "@deepseek-ai")) || /@deepseek-ai[\\/]dsh$/.test(r));
+}
+
+/** 读取若干包的 package.json description（台账佐证用）。 */
+export function collectPackageDescriptions(roots) {
+  const out = {};
+  for (const root of roots) {
+    const scopeDir = root.includes(`${sep}@deepseek-ai${sep}dsh`) ? join(root, "node_modules", "@deepseek-ai") : join(root, "@deepseek-ai");
+    let names = [];
+    try { names = readdirSync(scopeDir); } catch { continue; }
+    for (const n of names) {
+      if (out[n]) continue;
+      try {
+        const j = JSON.parse(readFileSync(join(scopeDir, n, "package.json"), "utf8"));
+        if (typeof j.description === "string") out[j.name ?? n] = j.description;
+      } catch { /* 忽略 */ }
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// H1：shell 工具名解析（组合声明 × 插件解析）
+// ---------------------------------------------------------------------------
+
+/**
+ * 纯判定。facts = {
+ *   platforms: ["win32","linux","darwin"],
+ *   composition: { <platform>: {tools:[...], unknown:[...]} },
+ *   pluginProbe: { <platform>: {name, source, candidates} },   // 用组合名字集合当探针的解析结果
+ *   pluginFallback: { <platform>: {name, source} },            // 无探针（平台回落）的解析结果
+ *   registryProblems: [...], compositionProblems: [...],
+ *   currentPlatform, currentResolved: {name, source},
+ * }
+ * 返回 {level, problems, detail}。
+ */
+export function judgeShellToolComposition(facts) {
+  const problems = [];
+  const f = facts ?? {};
+  const platforms = f.platforms ?? ["win32", "linux", "darwin"];
+  for (const p of f.compositionProblems ?? []) problems.push(`[composition] ${p.detail ?? JSON.stringify(p)}`);
+  for (const p of f.registryProblems ?? []) problems.push(`[registry] ${p.detail ?? JSON.stringify(p)}`);
+  const expected = {};
+  for (const p of platforms) {
+    const comp = (f.composition ?? {})[p];
+    if (!comp) { problems.push(`组合声明缺少平台 ${p} 的求值结果`); continue; }
+    for (const u of comp.unknown ?? []) problems.push(`平台 ${p}：无法判定 ${u.id} 的 disabled（${u.why}）`);
+    const tools = comp.tools ?? [];
+    if (tools.length !== 1) {
+      problems.push(`平台 ${p}：组合里启用的 shell 工具应为恰好 1 个，实际 [${tools.join(", ")}]`);
+      continue;
+    }
+    expected[p] = tools[0];
+  }
+  const wantShell = { win32: "pwsh", linux: "bash", darwin: "bash" };
+  for (const p of platforms) {
+    if (expected[p] && expected[p] !== wantShell[p]) {
+      problems.push(`平台 ${p}：组合启用的 shell 是 ${expected[p]}，与门禁契约 ${wantShell[p]} 不符`);
+    }
+    const probe = (f.pluginProbe ?? {})[p];
+    if (!probe) { problems.push(`缺少平台 ${p} 的插件探针解析结果`); continue; }
+    if (probe.name !== expected[p]) {
+      problems.push(`平台 ${p}：插件按组合探针解析出 ${probe.name ?? "null"}，组合声明的是 ${expected[p] ?? "(未知)"}`);
+    }
+    const fb = (f.pluginFallback ?? {})[p];
+    if (!fb) { problems.push(`缺少平台 ${p} 的插件平台回落结果`); continue; }
+    if (fb.name !== wantShell[p]) {
+      problems.push(`平台 ${p}：插件无探针时回落到 ${fb.name ?? "null"}，期望 ${wantShell[p]}`);
+    }
+  }
+  const cur = f.currentResolved;
+  if (cur && expected[f.currentPlatform] && cur.name !== expected[f.currentPlatform]) {
+    problems.push(`当前平台 ${f.currentPlatform}：插件解析出 ${cur.name ?? "null"}，组合声明的是 ${expected[f.currentPlatform]}`);
+  }
+  const detail =
+    `组合声明：${platforms.map((p) => `${p}=${expected[p] ?? "?"}`).join(" ")}；` +
+    `插件解析（探针）逐平台一致；回落=${platforms.map((p) => `${p}:${(f.pluginFallback ?? {})[p]?.name ?? "?"}`).join(" ")}` +
+    (cur ? `；当前平台 ${f.currentPlatform}=${cur.name}（来源 ${cur.source}）` : "");
+  return { level: problems.length === 0 ? "PASS" : "FAIL", problems, detail };
+}
+
+// ---------------------------------------------------------------------------
+// H2：角色白名单求交（组合工具名台账驱动 + 负向对照）
+// ---------------------------------------------------------------------------
+
+/** 单条「allow ⊆ existing」判定（纯函数，供正反例与负向对照直接调用）。 */
+export function roleFilterProblems(role, mode, allow, existing) {
+  const problems = [];
+  const set = existing instanceof Set ? existing : new Set(existing ?? []);
+  if (!Array.isArray(allow)) return [`${role}/${mode}：未产出 allow 数组（求交路径没走到）`];
+  const outside = allow.filter((n) => !set.has(n));
+  if (outside.length > 0) {
+    problems.push(`${role}/${mode}：allow 里有 ${outside.length} 个名字不在组合实际存在集合内（${outside.join(", ")}）—— restrict() 必抛`);
+  }
+  return problems;
+}
+
+/**
+ * 纯判定。facts = {
+ *   cases: [{role, mode, platform, allow, existing, shellExpected, shellForbidden}],
+ *   injections: [{id, problems:[...]}],
+ *   negativeControl: {problems: [...]},   // 注入不存在名字时必须非空
+ *   registryProblems: [...],
+ *   absentTool,
+ * }
+ */
+export function judgeRoleWhitelistIntersection(facts) {
+  const problems = [];
+  const f = facts ?? {};
+  for (const p of f.registryProblems ?? []) problems.push(`[registry] ${p.detail ?? JSON.stringify(p)}`);
+  for (const c of f.cases ?? []) {
+    const existing = c.existing instanceof Set ? c.existing : new Set(c.existing ?? []);
+    for (const p of roleFilterProblems(c.role, c.mode, c.allow, existing)) problems.push(p);
+    if (c.allow && !c.allow.includes(c.shellExpected)) {
+      problems.push(`${c.role}/${c.mode}（${c.platform}）：allow 未包含组合的 shell 名 ${c.shellExpected}`);
+    }
+    if (c.allow && c.allow.includes(c.shellForbidden)) {
+      problems.push(`${c.role}/${c.mode}（${c.platform}）：allow 含**另一平台**的 shell 名 ${c.shellForbidden}`);
+    }
+  }
+  for (const inj of f.injections ?? []) {
+    for (const p of inj.problems ?? []) problems.push(`[注入 ${inj.id}] ${p}`);
+  }
+  const nc = f.negativeControl;
+  if (!nc || !Array.isArray(nc.problems) || nc.problems.length === 0) {
+    problems.push(`负向对照失效：注入已知不存在的名字 ${f.absentTool ?? HARNESS_ABSENT_TOOL} 后判定仍全绿（断言可能是恒真的）`);
+  }
+  const shellSummary = (f.cases ?? []).map((c) => `${c.role}/${c.mode}@${c.platform}=${(c.allow ?? []).includes(c.shellExpected) ? c.shellExpected : "缺"}${(c.allow ?? []).includes(c.shellForbidden) ? `+越界${c.shellForbidden}` : ""}`);
+  return {
+    level: problems.length === 0 ? "PASS" : "FAIL",
+    problems,
+    detail: `三路径（含 minimal）+ 注入 ${(f.injections ?? []).length} 组；${shellSummary.join(" ")}；负向对照已判红`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// H3：派发可用（隔离实例端到端事实的判定）
+// ---------------------------------------------------------------------------
+
+export const H3_REQUIRED_ROLES = Object.freeze(["reviewer", "collector", "executor-minimal"]);
+export const H3_FAILURE_SIGNATURES = Object.freeze([
+  { id: "restrict-unknown", re: /tools\.restrict\(\)[^\n]*names unknown|names unknown global tool/ },
+  { id: "spawn-failed", re: /子代理启动失败|child_error|startContinuable is not a function|startActivation is not a function/ },
+]);
+
+/**
+ * 纯判定。facts = { attempted, roles: [{role, mode, childId, errors: [string]}], raw }
+ * attempted=false ⇒ 返回 {level:"SKIP"}（调用方必须把 SKIP 显式标注为「需真机/实例」，禁止静默通过）。
+ */
+export function judgeDispatchAvailability(facts) {
+  const f = facts ?? {};
+  if (!f.attempted) {
+    return {
+      level: "SKIP",
+      problems: [],
+      detail: "跳过（需真机/实例）：未在隔离实例上真实派发 reviewer + collector + executor-minimal —— 不冒充通过",
+    };
+  }
+  const problems = [];
+  const byRole = new Map();
+  for (const r of f.roles ?? []) byRole.set(String(r.role), r);
+  for (const role of H3_REQUIRED_ROLES) {
+    const got = byRole.get(role);
+    if (!got) { problems.push(`未回传 ${role} 的派发事实（该路径本次未真实派发）`); continue; }
+    if (!got.childId) problems.push(`${role}：child_id 为空（派发未真正成功）`);
+    const errs = (got.errors ?? []).map((e) => String(e));
+    for (const sig of H3_FAILURE_SIGNATURES) {
+      const hit = errs.find((e) => sig.re.test(e));
+      if (hit) problems.push(`${role}：命中失败签名 [${sig.id}] ${hit.slice(0, 120)}`);
+    }
+  }
+  const detail = H3_REQUIRED_ROLES
+    .map((r) => {
+      const got = byRole.get(r);
+      return `${r}=${got ? (got.childId ? "child_id✓" : "child_id∅") : "未回传"}`;
+    })
+    .join(" ");
+  return { level: problems.length === 0 ? "PASS" : "FAIL", problems, detail };
+}
+
+// ---------------------------------------------------------------------------
+// H4：路径分隔符与大小写语义
+// ---------------------------------------------------------------------------
+
+/** 纯判定。facts = {cases:[{name, kind:"reject"|"accept", threw, message, created, errnoLeak}], caseInjection:{...}} */
+export function judgePathSeparatorSemantics(facts) {
+  const problems = [];
+  const f = facts ?? {};
+  for (const c of f.cases ?? []) {
+    if (c.kind === "reject") {
+      if (!c.threw) problems.push(`附件名 ${JSON.stringify(c.name)} 未被拒绝（分隔符/越界语义被静默接受）`);
+      if (c.created) problems.push(`附件名 ${JSON.stringify(c.name)} 被拒绝但仍落地了 ${c.created}`);
+      if (c.errnoLeak) problems.push(`附件名 ${JSON.stringify(c.name)} 的拒绝文案泄漏平台错误码 ${c.errnoLeak}（应给可读文案）`);
+      if (c.threw && String(c.message ?? "").trim().length < 6) problems.push(`附件名 ${JSON.stringify(c.name)} 的拒绝文案过短：${c.message}`);
+    } else if (c.kind === "accept" && c.threw) {
+      problems.push(`合法附件名 ${JSON.stringify(c.name)} 被拒绝：${c.message}`);
+    }
+  }
+  const want = (f.cases ?? []).filter((c) => c.kind === "reject").length;
+  if (want < 3) problems.push(`H4.a 拒绝侧用例过少（${want} 条）：判定可能退化`);
+  return { level: problems.length === 0 ? "PASS" : "FAIL", problems, detail: f.detail ?? "" };
+}
+
+/** 纯判定。facts = {requested, actual, insensitive:{result}, sensitive:{result}} */
+export function judgeCaseSemanticsInjection(facts) {
+  const problems = [];
+  const f = facts ?? {};
+  const ins = f.insensitive?.result ?? null;
+  const sen = f.sensitive?.result ?? null;
+  if (f.insensitive?.error) problems.push(`注入大小写不敏感卷时抛错：${f.insensitive.error}`);
+  if (f.sensitive?.error) problems.push(`注入大小写敏感卷时抛错：${f.sensitive.error}`);
+  if (!ins) problems.push("注入「大小写不敏感卷」时未解析出别名（注入通道失效）");
+  else {
+    if (ins.aliased !== true) problems.push(`注入不敏感卷时 aliased=${ins.aliased}（应为 true）`);
+    if (ins.actual !== f.actual) problems.push(`注入不敏感卷时解析到 ${ins.actual}，期望 ${f.actual}`);
+  }
+  if (sen) {
+    if (sen.aliased === true && sen.actual !== f.requested) {
+      problems.push(`注入「大小写敏感卷」时仍把 ${f.requested} 别名到 ${sen.actual}（卷语义注入不生效）`);
+    }
+  }
+  const detail = `请求=${f.requested}；不敏感卷→${ins ? `${ins.actual}(aliased=${ins.aliased})` : "null"}；敏感卷→${sen ? `${sen.actual}(aliased=${sen.aliased})` : "null"}`;
+  return { level: problems.length === 0 ? "PASS" : "FAIL", problems, detail };
+}
+
+// ---------------------------------------------------------------------------
+// H5：CRLF/LF 与编码往返
+// ---------------------------------------------------------------------------
+
+/** 纯判定。facts = {description:{...}, results:{...}}；两个子面都必须成立。 */
+export function judgeCrlfEncodingRoundTrip(facts) {
+  const problems = [];
+  const f = facts ?? {};
+  const d = f.description ?? {};
+  const r = f.results ?? {};
+  if (!d.written) problems.push("目标正文写入失败（createGoal）");
+  if (d.written) {
+    if (d.loneCr) problems.push("goal.md 里出现孤立 \\r（CRLF 与 LF 混用的静默损坏）");
+    if (!d.byteExact) problems.push("含 \\r\\n 与星平面字符的正文未逐字节写入 goal.md");
+    if (!d.utf8Lossless) problems.push("goal.md 的 UTF-8 往返有损（解码后再编码 ≠ 原字节）");
+  }
+  if (!r.written) problems.push(`results 写入失败（writeAttemptResults：${r.reason ?? "未知"}）`);
+  if (r.written) {
+    if (r.loneCr) problems.push("results 文件里出现孤立 \\r");
+    if (!r.headerFolded) problems.push("机器头字段里的 \\r\\n 未被折叠进同一行（存在字段注入/换行逃逸）");
+    if (!r.injectedLineAbsent) problems.push("机器头注入文本在 results 里自成一行的痕迹（注入未被中和）");
+    if (!r.bodyNoCr) problems.push("results 正文里的 \\r\\n 未归一为 LF");
+    if (!r.bodyKeepsLines) problems.push("results 正文归一后丢失了逻辑行");
+  }
+  const detail = `正文：别名=${d.loneCr ? "有" : "无"} 逐字节=${d.byteExact ? "✓" : "✗"} utf8=${d.utf8Lossless ? "✓" : "✗"}；` +
+    `机器头：折叠=${r.headerFolded ? "✓" : "✗"} 注入自成一行的痕迹=${r.injectedLineAbsent ? "无" : "有"} 正文归一=${r.bodyNoCr ? "✓" : "✗"}`;
+  return { level: problems.length === 0 ? "PASS" : "FAIL", problems, detail };
+}
+
+// ---------------------------------------------------------------------------
+// H6：命令拼接与引号（`--dsh` 单串 + cmd.exe 引号 + 真实 argv 传递）
+// ---------------------------------------------------------------------------
+
+/**
+ * 纯判定。facts = {
+ *   splitCases:  [{input, expected, got}],
+ *   quoteCases:  [{args, expected, got}],
+ *   lineCases:   [{cmd, args, expected, got}],
+ *   argvCases:   [{args, got, ok}],      // shell:false 真实传递
+ *   shellCases:  [{command, got, ok}],   // `sh -c <组合命令行>` 真实传递（POSIX 侧的组合命令代理）
+ *   detail,
+ * }
+ */
+export function judgeArgvQuoting(facts) {
+  const problems = [];
+  const f = facts ?? {};
+  for (const p of f.problems ?? []) problems.push(p);
+  const cmp = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  for (const c of f.splitCases ?? []) {
+    if (!cmp(c.got, c.expected)) problems.push(`splitCmd(${JSON.stringify(c.input)}) = ${JSON.stringify(c.got)}，期望 ${JSON.stringify(c.expected)}`);
+  }
+  for (const c of f.quoteCases ?? []) {
+    if (!cmp(c.got, c.expected)) problems.push(`quoteForCmd(${JSON.stringify(c.args)}) = ${JSON.stringify(c.got)}，期望 ${JSON.stringify(c.expected)}`);
+  }
+  for (const c of f.lineCases ?? []) {
+    if (c.got !== c.expected) problems.push(`buildShellCommandLine(${JSON.stringify(c.cmd)}, ${JSON.stringify(c.args)}) = ${JSON.stringify(c.got)}，期望 ${JSON.stringify(c.expected)}`);
+  }
+  for (const c of f.argvCases ?? []) {
+    if (!c.ok) problems.push(`真实 argv 传递不一致：${JSON.stringify(c.args)} → ${JSON.stringify(c.got)}`);
+  }
+  for (const c of f.shellCases ?? []) {
+    if (!c.ok) problems.push(`shell 组合命令传递不一致：${c.command} → ${JSON.stringify(c.got)}`);
+  }
+  if ((f.argvCases ?? []).length === 0) problems.push("缺少 shell:false 的真实 argv 传递用例（判定可能退化为纯字符串比较）");
+  if ((f.shellCases ?? []).length === 0) problems.push("缺少 shell 组合命令的传递用例（cmd.exe/POSIX shell 面未实测）");
+  return {
+    level: problems.length === 0 ? "PASS" : "FAIL",
+    problems,
+    detail: (f.detail ?? "") + `；argv 用例 ${(f.argvCases ?? []).length} 条 / shell 组合 ${(f.shellCases ?? []).length} 条`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// H 系列运行器（两个执行件共用；只看事实，不做渲染）
+// ---------------------------------------------------------------------------
+
+/** 定位「真正会跑起来的那份 core」（已安装包优先，其次仓库 dist）。找不到返回 null。 */
+export function resolveHarnessCoreDir(opts = {}) {
+  const candidates = [];
+  if (opts.coreDir) candidates.push(opts.coreDir);
+  if (opts.pkgDir) candidates.push(join(opts.pkgDir, "core"));
+  if (opts.repo) candidates.push(join(opts.repo, "dist", "core"));
+  candidates.push(join(process.cwd(), "dist", "core"));
+  for (const c of candidates) {
+    if (c && existsSync(join(c, "ops.js"))) return c;
+  }
+  return null;
+}
+
+/**
+ * 定位「仓库根」（H 层用来找 `dist/core`、`dsh-graph-host/index.js` 与两件执行件）。
+ * 顺序：pkgDir 本身 → pkgDir 的父目录（`--static-only dist` 形态）→ cwd → cwd 的父目录。
+ * 判定依据是「含 `scripts/win-smoke-test.mjs` 或 `dsh-graph-host/index.js`」；找不到时退回 cwd。
+ */
+export function resolveHarnessRepoRoot(opt = {}, pkgDir = null) {
+  const candidates = [pkgDir, pkgDir ? dirname(pkgDir) : null, process.cwd(), join(process.cwd(), "..")].filter(Boolean);
+  const seen = new Set();
+  for (const c of candidates) {
+    const abs = resolve(c);
+    if (seen.has(abs)) continue;
+    seen.add(abs);
+    if (existsSync(join(abs, "scripts", "win-smoke-test.mjs")) || existsSync(join(abs, "dsh-graph-host", "index.js"))) return abs;
+  }
+  return resolve(process.cwd());
+}
+
+/** 组合声明发现失败的统一提示（必须能被人直接照着做）。 */
+export const HARNESS_COMPOSITION_HINT =
+  "未找到 DSH 组合声明（presets/*.patch.yml / cordis.patch.yml）——可用 DSH_GATE_DSH_ROOT=<dir> 显式指定 DSH 安装目录（或其 node_modules）";
+
+/** 目录扫描的上限与形状（本函数只走已知布局，不做全树递归 —— 组合文件很多、必须可控）。 */
+export function collectCompositionFiles(roots) {
+  const files = [];
+  const seen = new Set();
+  const add = (abs) => {
+    const key = abs.replace(/\\/g, "/");
+    if (seen.has(key)) return;
+    seen.add(key);
+    try { files.push({ path: key, text: readFileSync(abs, "utf8") }); } catch { /* 忽略 */ }
+  };
+  const scanScope = (scopeDir, depth, maxDepth) => {
+    let names = [];
+    try { names = readdirSync(scopeDir); } catch { return; }
+    for (const n of names.sort()) {
+      const pkgDir = join(scopeDir, n);
+      let presetNames = [];
+      try { presetNames = readdirSync(join(pkgDir, "presets")); } catch { presetNames = []; }
+      for (const f of presetNames) {
+        if (/\.patch\.ya?ml$/.test(f)) add(join(pkgDir, "presets", f));
+      }
+      for (const cand of ["cordis.patch.yml", "cordis.patch.yaml"]) {
+        if (existsSync(join(pkgDir, cand))) add(join(pkgDir, cand));
+      }
+      if (depth < maxDepth) scanScope(join(pkgDir, "node_modules", "@deepseek-ai"), depth + 1, maxDepth);
+    }
+  };
+  for (const r of roots) {
+    for (const scope of [join(r, "node_modules", "@deepseek-ai"), join(r, "@deepseek-ai")]) {
+      if (existsSync(scope)) scanScope(scope, 0, 2);
+    }
+    if (basename(r) === "@deepseek-ai") scanScope(r, 0, 2);
+  }
+  return files;
+}
+
+/** 插件自己注册的模型面向工具名（graph_*）；从宿主源码/编译产物里扫，避免凭空假设。 */
+export function collectPluginToolNames(repo, pkgDir) {
+  const names = new Set();
+  const candidates = [pkgDir ? join(pkgDir, "index.js") : null, repo ? join(repo, "dsh-graph-host", "index.js") : null].filter(Boolean);
+  for (const f of candidates) {
+    let text = "";
+    try { text = readFileSync(f, "utf8"); } catch { continue; }
+    for (const m of text.matchAll(/name:\s*"(graph_[a-z0-9_]+)"/g)) names.add(m[1]);
+    if (names.size > 0) break;
+  }
+  return names;
+}
+
+function loadHarnessComposition(ctx) {
+  const roots = discoverDshRoots(ctx.repo, ctx.compositionRoots ?? []);
+  if (roots.length === 0) return { found: false, roots: [], files: [], declarations: [], problems: [], descriptions: {} };
+  const files = collectCompositionFiles(roots);
+  const scanned = scanCompositionToolDeclarations(files);
+  const descriptions = collectPackageDescriptions(roots);
+  const audit = auditToolRegistry(scanned.declarations, { descriptions });
+  return {
+    found: files.length > 0 && scanned.declarations.length > 0,
+    roots, files, declarations: scanned.declarations, descriptions,
+    problems: [...scanned.problems, ...audit.problems],
+  };
+}
+
+async function loadHarnessRuntime(ctx) {
+  const coreDir = resolveHarnessCoreDir(ctx);
+  if (!coreDir) return null;
+  try {
+    const ops = await import(pathToFileURL(join(coreDir, "ops.js")).href);
+    let platform = null;
+    if (existsSync(join(coreDir, "platform.js"))) {
+      try { platform = await import(pathToFileURL(join(coreDir, "platform.js")).href); } catch { platform = null; }
+    }
+    return { coreDir, ops, platform };
+  } catch (e) {
+    return { coreDir, error: String(e?.message ?? e), ops: null, platform: null };
+  }
+}
+
+const H_WARN = (detail, problems = []) => ({ level: "WARN", detail, problems });
+
+async function runH1(ctx, deps) {
+  if (!deps.runtime || !deps.runtime.ops) {
+    return H_WARN(`未找到可导入的 core/ops.js（H1 需要 resolveShellTool 作为「插件解析」一侧）${deps.runtime?.error ? `：${deps.runtime.error}` : ""}`);
+  }
+  if (!deps.composition.found) return H_WARN(HARNESS_COMPOSITION_HINT, deps.composition.problems ?? []);
+  const platforms = ["win32", "linux", "darwin"];
+  const composition = {};
+  const pluginProbe = {};
+  const pluginFallback = {};
+  for (const p of platforms) {
+    composition[p] = compositionShellTools(deps.composition.declarations, p);
+    const names = compositionToolNames(deps.composition.declarations, p).names;
+    pluginProbe[p] = deps.runtime.ops.resolveShellTool({ platform: p, available: (n) => names.has(n) });
+    pluginFallback[p] = deps.runtime.ops.resolveShellTool({ platform: p });
+  }
+  const currentShellSet = new Set(compositionShellTools(deps.composition.declarations, ctx.platform).tools);
+  const currentResolved = deps.runtime.ops.resolveShellTool({ platform: ctx.platform, available: (n) => currentShellSet.has(n) });
+  const verdict = judgeShellToolComposition({
+    platforms, composition, pluginProbe, pluginFallback,
+    registryProblems: deps.composition.problems, compositionProblems: [],
+    currentPlatform: ctx.platform, currentResolved,
+  });
+  verdict.detail = `${verdict.detail}；组合来源=${deps.composition.files.length} 个声明文件`;
+  return verdict;
+}
+
+async function runH2(ctx, deps) {
+  if (!deps.runtime || !deps.runtime.ops) {
+    return H_WARN(`未找到可导入的 core/ops.js（H2 需要 toolFilterForRole）${deps.runtime?.error ? `：${deps.runtime.error}` : ""}`);
+  }
+  if (!deps.composition.found) return H_WARN(HARNESS_COMPOSITION_HINT, deps.composition.problems ?? []);
+  const ops = deps.runtime.ops;
+  const graphNames = collectPluginToolNames(ctx.repo, ctx.pkgDir);
+  if (graphNames.size === 0) return H_WARN("未扫描到 dsh-graph 自己注册的 graph_* 工具名（host index.js 不在扫描面）");
+  const cases = [];
+  const injections = [];
+  const platforms = ["win32", "linux"];
+  const roleCases = [
+    ["reviewer", "standard"], ["reviewer", "minimal"],
+    ["collector", "standard"], ["collector", "minimal"],
+    ["executor", "minimal"],
+  ];
+  for (const p of platforms) {
+    const derived = compositionToolNames(deps.composition.declarations, p);
+    const existing = new Set([...derived.names, ...graphNames]);
+    for (const [role, mode] of roleCases) {
+      const filter = ops.toolFilterForRole(role, mode, { platform: p, available: (n) => existing.has(n) });
+      const allow = Array.isArray(filter?.allow) ? [...filter.allow] : null;
+      cases.push({
+        role, mode, platform: p, allow, existing,
+        shellExpected: p === "win32" ? "pwsh" : "bash",
+        shellForbidden: p === "win32" ? "bash" : "pwsh",
+      });
+    }
+  }
+  // 注入①：组合缺 dsh-tool-web ⇒ web_* 必须被静默剔除（不炸）
+  {
+    const p = "linux";
+    const derived = compositionToolNames(deps.composition.declarations, p);
+    const noWeb = new Set([...[...derived.names].filter((n) => n !== "web_search" && n !== "web_fetch"), ...graphNames]);
+    const filter = ops.toolFilterForRole("collector", "standard", { platform: p, available: (n) => noWeb.has(n) });
+    const allow = Array.isArray(filter?.allow) ? filter.allow : [];
+    const problems = [];
+    if (allow.includes("web_search") || allow.includes("web_fetch")) problems.push("缺 dsh-tool-web 时 web_* 未被剔除（restrict() 会抛）");
+    if (!allow.includes("read")) problems.push("剔除 web_* 时误伤了 read（求交过宽）");
+    injections.push({ id: "no-tool-web", problems });
+  }
+  // 注入②：组合缺 shell ⇒ requiredTools 缺失必须给出可读诊断且不派发
+  {
+    const diag = ops.diagnoseDispatchCapability("reviewer", "minimal", { platform: "win32", available: () => false });
+    const problems = [];
+    if (diag.ok !== false) problems.push("探针判定 shell 缺失时 diagnoseDispatchCapability 仍返回 ok=true（缺能力被静默放行）");
+    if (!/候选|missing|缺少/.test(String(diag.message ?? ""))) problems.push("缺能力诊断文案未点名缺失项/候选");
+    const allow = ops.expandRoleToolList(["read", "<shell>"], { platform: "win32", available: () => false });
+    if (allow.length !== 0) problems.push(`缺能力时 allow 仍非空：${JSON.stringify(allow)}`);
+    injections.push({ id: "no-shell", problems });
+  }
+  // 注入③：求交本身必须真按探针裁剪（KNOWN-ABSENT 必须被剔除）
+  {
+    const p = "linux";
+    const derived = compositionToolNames(deps.composition.declarations, p);
+    const existing = new Set([...derived.names, ...graphNames]);
+    const expanded = ops.expandRoleToolList(["read", HARNESS_ABSENT_TOOL], { platform: p, available: (n) => existing.has(n) });
+    const problems = [];
+    if (expanded.includes(HARNESS_ABSENT_TOOL)) problems.push(`expandRoleToolList 未剔除已知不存在的名字 ${HARNESS_ABSENT_TOOL}（求交失效）`);
+    if (!expanded.includes("read")) problems.push("求交误伤了存在的名字 read");
+    injections.push({ id: "absent-name-dropped", problems });
+  }
+  // 负向对照：把不存在名字塞进 allow ⇒ 判定必须判红（证明断言非恒真）
+  const sample = cases.find((c) => c.role === "reviewer" && c.mode === "standard") ?? cases[0];
+  const negativeControl = {
+    problems: roleFilterProblems(sample.role, sample.mode, [...(sample.allow ?? []), HARNESS_ABSENT_TOOL], sample.existing),
+  };
+  const verdict = judgeRoleWhitelistIntersection({
+    cases, injections, negativeControl, absentTool: HARNESS_ABSENT_TOOL,
+    registryProblems: deps.composition.problems,
+  });
+  verdict.detail = `${verdict.detail}；组合工具名=${compositionToolNames(deps.composition.declarations, ctx.platform).names.size}+graph_*${graphNames.size}`;
+  return verdict;
+}
+
+async function runH3(ctx) {
+  const file = ctx.h3DispatchJson;
+  if (!file) {
+    return judgeDispatchAvailability({ attempted: false });
+  }
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(file, "utf8"));
+  } catch (e) {
+    return { level: "FAIL", problems: [`H3 事实文件无法解析（${file}）：${String(e?.message ?? e)}`], detail: "" };
+  }
+  const roles = Array.isArray(raw?.roles) ? raw.roles : [];
+  const verdict = judgeDispatchAvailability({ attempted: true, roles, raw });
+  verdict.detail = `${verdict.detail}；事实来源=${file}`;
+  return verdict;
+}
+
+async function runH4(ctx, deps) {
+  if (!deps.runtime || !deps.runtime.ops) {
+    return H_WARN(`未找到可导入的 core/ops.js（H4 需要 storeAttachment）${deps.runtime?.error ? `：${deps.runtime.error}` : ""}`);
+  }
+  if (!deps.runtime.platform) return H_WARN("未找到 dist/core/platform.js（H4.b 需要卷大小写语义注入）");
+  const ops = deps.runtime.ops;
+  const root = mkdtempSync(join(ctx.scratch, "h4-"));
+  const cases = [];
+  for (const [name, kind] of [["a\\b.txt", "reject"], ["/abs.txt", "reject"], ["../esc.txt", "reject"], ["a/b.txt", "accept"], ["ok.txt", "accept"]]) {
+    let threw = false;
+    let message = "";
+    let created = null;
+    try {
+      created = ops.storeAttachment(root, { name, content: "h4", actor: "h4" });
+    } catch (e) {
+      threw = true;
+      message = String(e?.message ?? e);
+    }
+    cases.push({ name, kind, threw, message, created: threw ? null : created, errnoLeak: platformErrorLeak(message) });
+  }
+  const detail = judgePathSeparatorSemantics({ cases, detail: cases.map((c) => `${c.name}=${c.threw ? "拒绝" : "接受"}`).join(" ") });
+  let caseVerdict;
+  try {
+    const dir = mkdtempSync(join(ctx.scratch, "h4-case-"));
+    writeFileSync(join(dir, "A.txt"), "1", "utf8");
+    const requested = "a.txt";
+    const actual = "A.txt";
+    const run = (mode) => {
+      try {
+        return { result: deps.runtime.platform.withCaseInsensitiveVolumeForTesting(mode, () => deps.runtime.platform.resolveExistingEntry(dir, requested)) };
+      } catch (e) {
+        return { error: String(e?.message ?? e) };
+      }
+    };
+    caseVerdict = judgeCaseSemanticsInjection({ requested, actual, insensitive: run(true), sensitive: run(false) });
+  } catch (e) {
+    caseVerdict = { level: "FAIL", problems: [`H4.b 探针异常：${String(e?.message ?? e)}`], detail: "" };
+  }
+  const problems = [...detail.problems, ...caseVerdict.problems];
+  return {
+    level: problems.length === 0 ? "PASS" : "FAIL",
+    problems,
+    detail: `分隔符：${detail.detail}；大小写注入：${caseVerdict.detail}`,
+  };
+}
+
+async function runH5(ctx, deps) {
+  if (!deps.runtime || !deps.runtime.ops) {
+    return H_WARN(`未找到可导入的 core/ops.js（H5 需要 createGoal/writeAttemptResults）${deps.runtime?.error ? `：${deps.runtime.error}` : ""}`);
+  }
+  const ops = deps.runtime.ops;
+  const root = mkdtempSync(join(ctx.scratch, "h5-"));
+  ops.init(root);
+  const description = "L1\r\nL2\r\nL3🙂尾";
+  const goalId = ops.createGoal(root, { title: "H5 · CRLF 往返", version: "v1", description, actor: "h5" });
+  const goalFile = ops.listGoalFiles(root, { includeArchived: true }).find((p) => /goal\.md$/.test(p));
+  const dFacts = { written: false };
+  if (goalFile && existsSync(goalFile)) {
+    const raw = readFileSync(goalFile);
+    const text = raw.toString("utf8");
+    const block = text.slice(text.indexOf("## 目标描述"));
+    dFacts.written = true;
+    dFacts.loneCr = /\r(?!\n)/.test(text);
+    dFacts.byteExact = block.includes(description);
+    dFacts.utf8Lossless = Buffer.from(text, "utf8").equals(raw);
+  }
+  const wr = ops.writeAttemptResults(root, {
+    goal: goalId, attempt: "att-001", source: "manual",
+    actor: "h5\r\nINJECTED: yes", text: "body line1\r\nline2\n",
+  });
+  const rFacts = { written: Boolean(wr?.written), reason: wr?.reason ?? null };
+  if (wr?.written && existsSync(wr.file)) {
+    const rtext = readFileSync(wr.file, "utf8");
+    const lines = rtext.split(/\r?\n/);
+    const headerEnd = lines.findIndex((l) => /^-->\s*$/.test(l));
+    const headerLines = headerEnd >= 0 ? lines.slice(0, headerEnd + 1) : lines.slice(0, 12);
+    const bodyStart = lines.findIndex((l) => /^## att-001 完成摘要/.test(l));
+    const body = bodyStart >= 0 ? lines.slice(bodyStart + 1).join("\n") : "";
+    rFacts.loneCr = /\r(?!\n)/.test(rtext);
+    rFacts.headerFolded = headerLines.some((l) => /^actor:\s/.test(l) && l.includes("INJECTED: yes")) &&
+      headerLines.filter((l) => /^actor:\s/.test(l)).length === 1;
+    rFacts.injectedLineAbsent = !lines.some((l) => /^INJECTED: yes\s*$/.test(l.trim()));
+    rFacts.bodyNoCr = !/\r/.test(body);
+    rFacts.bodyKeepsLines = body.includes("body line1") && body.includes("line2");
+  }
+  const verdict = judgeCrlfEncodingRoundTrip({ description: dFacts, results: rFacts });
+  return verdict;
+}
+
+async function runH6(ctx, deps) {
+  const problems = [];
+  const splitCases = [
+    { input: "npx -y @deepseek-ai/dsh", expected: ["npx", "-y", "@deepseek-ai/dsh"] },
+    { input: "  npx   -y  @deepseek-ai/dsh@0.2.1-alpha.2 ", expected: ["npx", "-y", "@deepseek-ai/dsh@0.2.1-alpha.2"] },
+    { input: '"C:\\Program Files\\node.exe" -y @deepseek-ai/dsh', expected: ["C:\\Program Files\\node.exe", "-y", "@deepseek-ai/dsh"] },
+    { input: "node 'a b' c", expected: ["node", "a b", "c"] },
+    { input: "", expected: [] },
+  ].map((c) => ({ ...c, got: splitCmd(c.input) }));
+  const quoteCases = [
+    { args: ["plugin", "add", "D:\\my docs\\a.tgz"], expected: ["plugin", "add", '"D:\\my docs\\a.tgz"'] },
+    { args: ["add", ".\\a.tgz"], expected: ["add", ".\\a.tgz"] },
+    { args: ["a&b"], expected: ['"a&b"'] },
+    { args: ["has space"], expected: ['"has space"'] },
+    { args: ['"pre-quoted"'], expected: ['"pre-quoted"'] },
+    { args: ["plain"], expected: ["plain"] },
+  ].map((c) => ({ ...c, got: quoteForCmd(c.args) }));
+  const lineCases = [
+    { cmd: "npm", args: ["pack", "--ignore-scripts"], expected: "npm pack --ignore-scripts" },
+    { cmd: "dsh.cmd", args: ["plugin", "add", "D:\\my docs\\a.tgz"], expected: 'dsh.cmd plugin add "D:\\my docs\\a.tgz"' },
+  ].map((c) => ({ ...c, got: buildShellCommandLine(c.cmd, c.args) }));
+  const ARGV_SRC = "process.stdout.write(JSON.stringify(process.argv.slice(1)))";
+  const argvInputs = ["a b", 'a"b', "中 文", "C:\\x\\y", "a&b", "a^b", "$HOME", "line1\nline2", '"C:\\Program Files\\node.exe" -y'];
+  const argvCases = [];
+  for (const args of [argvInputs]) {
+    const r = spawnSync(process.execPath, ["-e", ARGV_SRC, ...args], { encoding: "utf8", shell: false, timeout: 60_000 });
+    let got = null;
+    try { got = JSON.parse(r.stdout ?? "null"); } catch { got = null; }
+    argvCases.push({ args, got, ok: JSON.stringify(got) === JSON.stringify(args) });
+  }
+  // 组合命令行的**真实传递**自检：`buildShellCommandLine` 的产物交给真 shell（win32 = cmd.exe，
+  // POSIX = /bin/sh，与 `runSync` 的 `shell:true` 单字符串路径完全一致），参数必须逐字节到达。
+  // 用「临时脚本文件 + 参数」而不是 `-e <代码>`：代码里含 `(`/`)` 等 POSIX 元字符，那是**被测函数
+  // 的规则之外**（`quoteForCmd` 只按 cmd.exe 元字符集合加引号）—— 用它会把「规则不覆盖 POSIX 元字符」
+  // 误判成失败。这里只问「组合命令行能否把参数原样送达」。
+  const shellCases = [];
+  const shellScript = join(ctx.scratch, "h6-argv-echo.mjs");
+  writeFileSync(shellScript, "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n", "utf8");
+  const shellInputs = ["a b", "中 文", "a&b", "a^b", "a|b", "a<b", "a>b", "plain"];
+  const command = buildShellCommandLine(process.execPath, [shellScript, ...shellInputs]);
+  const shellRun = spawnSync(command, { encoding: "utf8", shell: true, timeout: 60_000 });
+  let shellGot = null;
+  try { shellGot = JSON.parse(shellRun.stdout ?? "null"); } catch { shellGot = null; }
+  shellCases.push({ command, got: shellGot, ok: JSON.stringify(shellGot) === JSON.stringify(shellInputs) });
+  if (!shellCases[0].ok) {
+    problems.push(`shell 组合命令执行/传递失败（shell=${isWin ? "cmd.exe" : "/bin/sh"} exit=${shellRun.status}）：${String(shellRun.stderr ?? "").trim().split("\n")[0] ?? ""}`);
+  }
+  return judgeArgvQuoting({
+    splitCases, quoteCases, lineCases, argvCases, shellCases, problems,
+    detail: `--dsh 单串按空白/引号分组；cmd.exe 元字符集合 [\\s"&^|<>]；argv 逐字节回传（含 ${isWin ? "cmd.exe" : "/bin/sh"} 组合命令行）`,
+  });
+}
+
+/**
+ * H 系列定向突变（g-475 变异对照）：把 g-473 的修复**原地回退**，断言 H 探针必红。
+ * 每个突变都按**精确形状**匹配编译产物；形状不匹配即返回 null（绝不做一次静默无效的对照）。
+ */
+export const HARNESS_MUTANT_KINDS = Object.freeze([
+  {
+    kind: "no-intersection",
+    probe: "H2",
+    name: "突变H①：求交失效（expandRoleToolList 不再按探针裁剪）",
+    apply: (src) => src.replace("if (probeAvailable(cap, name) === false)", "if (false)"),
+  },
+  {
+    kind: "bash-only",
+    probe: "H1",
+    name: "突变H②：候选表退化为只认 bash（复现 g-473 病根）",
+    apply: (src) => src.replace('SHELL_TOOL_CANDIDATES = ["bash", "pwsh"]', 'SHELL_TOOL_CANDIDATES = ["bash"]'),
+  },
+]);
+
+/** 造 H 突变体；形状不匹配 ⇒ null。 */
+export function buildToolCapabilityMutant(source, kind) {
+  const entry = HARNESS_MUTANT_KINDS.find((m) => m.kind === kind);
+  if (!entry || typeof source !== "string" || source.length === 0) return null;
+  const text = entry.apply(source);
+  if (typeof text !== "string" || text === source) return null;
+  return { kind, text, bytes: text.length };
+}
+
+/** H 系列运行器表（清单的每个 id 都必须有运行器；多一个少一个都由审计判红）。 */
+export const HARNESS_PROBE_RUNNERS = Object.freeze({
+  H1: runH1, H2: runH2, H3: runH3, H4: runH4, H5: runH5, H6: runH6,
+});
+
+// ---------------------------------------------------------------------------
+// 防漂移：清单穷尽性 + 「两件都消费」 + 变异对照
+// ---------------------------------------------------------------------------
+
+/** 把清单行规范化成对象（行格式 [id, requires, title, criterion]，也接受对象形式）。 */
+export function harnessProbeRow(row) {
+  if (Array.isArray(row)) return { id: row[0], requires: row[1], title: row[2], criterion: row[3] };
+  return { ...(row ?? {}) };
+}
+
+/** 清单审计：穷尽性（H1..H6 一个不少、不多、不重）、每行齐备、每个 id 都有运行器（反之亦然）。 */
+export function auditHarnessProbeManifest(rows, runners) {
+  const problems = [];
+  const list = (rows ?? []).map(harnessProbeRow);
+  const ids = list.map((r) => r?.id);
+  if (list.length !== HARNESS_PROBE_IDS.length) {
+    problems.push({ kind: "count", detail: `清单 ${list.length} 项 ≠ 应有 ${HARNESS_PROBE_IDS.length} 项` });
+  }
+  for (const id of HARNESS_PROBE_IDS) {
+    if (!ids.includes(id)) problems.push({ kind: "missing-probe", detail: `清单漏项 ${id}（探针清单必须穷尽）` });
+  }
+  for (const id of ids) {
+    if (!HARNESS_PROBE_IDS.includes(id)) problems.push({ kind: "unknown-probe", detail: `清单含未登记的探针 id ${id}` });
+  }
+  const dup = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
+  for (const id of dup) problems.push({ kind: "duplicate-probe", detail: `清单重复登记 ${id}` });
+  const runnerIds = Object.keys(runners ?? {});
+  for (const id of ids) {
+    if (!runnerIds.includes(id)) problems.push({ kind: "missing-runner", detail: `探针 ${id} 没有运行器（清单登记了但跑不了）` });
+  }
+  for (const id of runnerIds) {
+    if (!ids.includes(id)) problems.push({ kind: "orphan-runner", detail: `运行器 ${id} 不在清单里（实现与清单漂移）` });
+  }
+  for (const r of list) {
+    if (!r?.id) continue;
+    if (!r.title || String(r.title).trim().length < 4) problems.push({ kind: "row", detail: `${r.id} 缺少标题` });
+    if (!r.criterion || String(r.criterion).trim().length < 20) problems.push({ kind: "row", detail: `${r.id} 判定口径过短（无法据此判读）` });
+    if (!["offline", "composition", "dist", "instance"].includes(r.requires)) {
+      problems.push({ kind: "row", detail: `${r.id} 的 requires 非法：${r.requires}` });
+    }
+  }
+  return { problems };
+}
+
+/** 消费审计：两件执行件**都**调用 runHarnessProbes；清单定义恰好一份；消费件不得自行实现 H 判定。 */
+export function auditHarnessProbeConsumers(files) {
+  const problems = [];
+  const list = files ?? [];
+  const defs = list.filter((f) => String(f.text ?? "").includes(HARNESS_PROBE_DEFINITION_MARKER));
+  if (defs.length !== 1) {
+    problems.push({
+      kind: "single-source",
+      detail: `${HARNESS_PROBE_DEFINITION_MARKER} 必须恰好出现 1 次（单一真源），实际 ${defs.length} 次：${defs.map((f) => f.path).join(", ") || "（无）"}`,
+    });
+  }
+  for (const path of HARNESS_PROBE_CONSUMER_FILES) {
+    const f = list.find((x) => x.path === path);
+    if (!f) { problems.push({ kind: "consumer-missing", detail: `缺少消费件 ${path}` }); continue; }
+    if (!String(f.text ?? "").includes(HARNESS_PROBE_CONSUMER_MARKER)) {
+      problems.push({ kind: "unconsumed", detail: `${path} 未消费共享清单（缺少 ${HARNESS_PROBE_CONSUMER_MARKER} 调用）` });
+    }
+  }
+  const host = HARNESS_PROBE_CONSUMER_FILES[0];
+  const judgeSymbols = [
+    "judgeShellToolComposition", "judgeRoleWhitelistIntersection", "judgeDispatchAvailability",
+    "judgePathSeparatorSemantics", "judgeCaseSemanticsInjection", "judgeCrlfEncodingRoundTrip",
+    "judgeArgvQuoting", "HARNESS_PROBE_ROWS", "HARNESS_PROBE_RUNNERS",
+  ];
+  for (const f of list) {
+    if (f.path === host) continue;
+    for (const sym of judgeSymbols) {
+      if (new RegExp(`(?:^|\\n)\\s*(?:export\\s+)?(?:async\\s+)?(?:function|const|let|var)\\s+${sym}\\b`).test(String(f.text ?? ""))) {
+        problems.push({ kind: "duplicate-definition", detail: `${f.path} 自行定义了 ${sym}（第二份并行定义 = 漂移）` });
+      }
+    }
+  }
+  return { problems };
+}
+
+/** 从仓库里读两件消费件的源码（供审计与守卫测试使用）。 */
+export function collectHarnessProbeConsumerFiles(repo) {
+  return HARNESS_PROBE_CONSUMER_FILES.map((path) => {
+    try { return { path, text: readFileSync(join(repo, path), "utf8") }; } catch { return { path, text: "" }; }
+  });
+}
+
+/** 一行可跨平台对比的矩阵结论（两件执行件都打印**同一形状**）。 */
+export function formatHarnessProbeMatrix(platform, verdicts) {
+  const cell = (v) => (v.level === "SKIP" ? `${v.id}=SKIP(需真机/实例)` : `${v.id}=${v.level}`);
+  const list = (verdicts ?? []).map(cell).join(" ");
+  return `harness 组合矩阵 | 平台=${platform} | ${list} | 清单=${HARNESS_PROBE_IDS.length} 项（单一真源，win-smoke + platform-smoke 两件消费）`;
+}
+
+/**
+ * 运行 H1–H6（两件执行件共用的唯一入口）。
+ * opts = { repo, pkgDir, coreDir, platform, scratch, compositionRoots, h3DispatchJson }
+ * 返回 { verdicts, matrix, composition, runtime }；verdicts 每项 = 清单行 + {level, detail, problems}。
+ */
+export async function runHarnessProbes(opts = {}) {
+  const repo = resolve(opts.repo ?? process.cwd());
+  const ctx = {
+    repo,
+    pkgDir: opts.pkgDir ?? null,
+    coreDir: opts.coreDir ?? null,
+    platform: opts.platform ?? process.platform,
+    compositionRoots: opts.compositionRoots ?? [],
+    h3DispatchJson: opts.h3DispatchJson ?? process.env.DSH_GATE_H3_DISPATCH_JSON ?? null,
+    scratch: opts.scratch ?? null,
+  };
+  if (!ctx.scratch) ctx.scratch = join(tmpdir(), "dsh-graph-harness-probes");
+  mkdirSync(ctx.scratch, { recursive: true });
+  // 必须 realpath：核心层对 root 含软链是**硬拒绝**（macOS 的 /var、/tmp 都是软链）
+  try { ctx.scratch = realpathSync(ctx.scratch); } catch { /* 保持原路径 */ }
+  const deps = {
+    runtime: await loadHarnessRuntime(ctx),
+    composition: loadHarnessComposition(ctx),
+  };
+  const verdicts = [];
+  for (const row of HARNESS_PROBE_ROWS) {
+    const def = harnessProbeRow(row);
+    let verdict;
+    const runner = HARNESS_PROBE_RUNNERS[def.id];
+    if (typeof runner !== "function") {
+      verdict = { level: "FAIL", problems: [`清单登记了 ${def.id} 但没有运行器`], detail: "" };
+    } else {
+      try {
+        verdict = await runner(ctx, deps);
+      } catch (e) {
+        verdict = { level: "FAIL", problems: [`${def.id} 运行器异常：${String(e?.stack ?? e).split("\n").slice(0, 2).join(" | ")}`], detail: "" };
+      }
+    }
+    verdicts.push({
+      ...def,
+      level: verdict?.level ?? "FAIL",
+      detail: verdict?.detail ?? "",
+      problems: verdict?.problems ?? [],
+    });
+  }
+  return { verdicts, matrix: formatHarnessProbeMatrix(ctx.platform, verdicts), composition: deps.composition, runtime: deps.runtime };
+}
+
+/** 最近一次 H 层结果（供 summarize 打印矩阵行；两件执行件各自持有）。 */
+let lastHarnessProbeRun = null;
+
+/** H 层的机器可读摘要（进 --json）。 */
+export function harnessProbeSummary(run) {
+  if (!run) return null;
+  return {
+    matrix: run.matrix,
+    items: run.verdicts.map((v) => ({ id: v.id, level: v.level, requires: v.requires, title: v.title })),
+    compositionFiles: run.composition?.files?.length ?? 0,
+    compositionRoots: run.composition?.roots ?? [],
+  };
+}
+
+/**
+ * 在门禁流水线里跑 H1–H6 并逐条记为 T1 账（`--static-only` 与完整门禁**共用**本函数 —— 同一实现）。
+ * opts: { repo, pkgDir, coreDir, compositionRoots, scratch }
+ */
+export async function harnessProbeLayer(opt, opts = {}) {
+  head("T1 harness 组合探针层（H1–H6：harness 组合 / OS 行为差异）");
+  const run = await runHarnessProbes({
+    repo: opts.repo ?? process.cwd(),
+    pkgDir: opts.pkgDir ?? null,
+    coreDir: opts.coreDir ?? null,
+    platform: process.platform,
+    compositionRoots: [...(opt?.dshRoots ?? []), ...(opts.compositionRoots ?? [])],
+    h3DispatchJson: opt?.h3DispatchJson ?? null,
+    scratch: opts.scratch ?? null,
+  });
+  for (const v of run.verdicts) {
+    record("T1", `H · ${v.id} ${v.title}`, v.level,
+      `${v.detail}${v.problems.length > 0 ? ` :: ${v.problems.slice(0, 3).join(" ; ")}` : ""}`);
+  }
+  console.log(run.matrix);
+  if (run.composition?.roots?.length) {
+    console.log(`组合来源：${run.composition.files.length} 个声明文件（${run.composition.roots.join(", ")}）`);
+  }
+  coverage.harness = {
+    total: run.verdicts.length,
+    pass: run.verdicts.filter((v) => v.level === "PASS").length,
+    skip: run.verdicts.filter((v) => v.level === "SKIP").length,
+    problems: run.verdicts.filter((v) => v.level === "FAIL").length,
+  };
+  lastHarnessProbeRun = run;
+  return run;
+}
+
 /** 定位已构建包（含 core/ops.js）：--pkg 优先，其次 <仓库根>/dist、<cwd>/dist。 */
 function findBuiltPackage(opt = {}) {
   const candidates = [];
@@ -1301,12 +2609,92 @@ function mutationCheck(opt) {
     }
   }
 
+  // ---- H 系列负向对照（g-475）：把 g-473 的修复回退后，H1/H2 必须判红 ----
+  allOk = mutationCheckHarness(opt, { pkgDir, source, workRoot }) && allOk;
+
   if (!opt.keep) {
     try { rmSync(workRoot, { recursive: true, force: true }); } catch { /* 忽略 */ }
   } else {
     console.log(`保留突变工作目录：${workRoot}（--keep）`);
   }
   return allOk;
+}
+
+/**
+ * H 系列负向对照（g-475）：① 基线（未突变）必须 H1/H2 全绿 —— 否则对照无意义；
+ * ② 每个 H 突变体必须让**指定探针**判红（且红因指向被回退的那条断言）。
+ * 突变形状不匹配即判红（拒绝静默无效对照）。返回是否全部符合。
+ */
+function mutationCheckHarness(opt, ctx) {
+  const { pkgDir, source, workRoot } = ctx;
+  let ok = true;
+  const repo = resolveHarnessRepoRoot(opt, pkgDir);
+
+  // ① 基线：未突变 ⇒ H1/H2 必须 PASS（对照的「绿」半边）
+  const baselineRun = runHarnessProbesSync(repo, pkgDir, join(workRoot, "h-baseline"));
+  const baseBad = ["H1", "H2"].map((id) => baselineRun?.verdicts?.find((v) => v.id === id)).filter((v) => !v || v.level !== "PASS");
+  if (!baselineRun) {
+    ok = false;
+    record("M", "H 突变基线对照（未突变）", "FAIL", "基线未能产出 H 探针结果（runHarnessProbes 抛错）");
+  } else if (baseBad.length > 0) {
+    ok = false;
+    record("M", "H 突变基线对照（未突变）", "FAIL",
+      `基线已红 ⇒ H 突变对照无意义 :: ${baseBad.map((v) => `${v?.id}=${v?.level}${v?.problems?.length ? `（${v.problems[0]}）` : ""}`).join(" ; ")}`);
+  } else {
+    record("M", "H 突变基线对照（未突变）", "PASS", "H1/H2 在未突变包上全绿 —— 突变对照有可比基线");
+  }
+
+  // ② 突变体：指定探针必须判红
+  for (const m of HARNESS_MUTANT_KINDS) {
+    const built = buildToolCapabilityMutant(source, m.kind);
+    if (!built) {
+      ok = false;
+      record("M", m.name, "FAIL",
+        "突变未生效（编译产物形状已变）—— 请同步 buildToolCapabilityMutant 与 core/ops.ts");
+      continue;
+    }
+    const dest = join(workRoot, `pkg-h-${m.kind}`);
+    mkdirSync(join(dest, "core"), { recursive: true });
+    cpSync(join(pkgDir, "core"), join(dest, "core"), { recursive: true });
+    writeFileSync(join(dest, "core", "ops.js"), built.text, "utf8");
+    const run = runHarnessProbesSync(repo, dest, join(workRoot, `h-${m.kind}`));
+    const verdict = run?.verdicts?.find((v) => v.id === m.probe);
+    if (!verdict) {
+      ok = false;
+      record("M", m.name, "FAIL", `突变包未产出 ${m.probe} 结果（子进程/导入异常）`);
+      continue;
+    }
+    if (verdict.level === "FAIL") {
+      const first = verdict.problems[0] ?? "(无红因说明)";
+      record("M", m.name, "PASS", `必红已实拍 —— ${m.probe} 判红，首条红因：${String(first).slice(0, 160)}`);
+    } else {
+      ok = false;
+      record("M", m.name, "FAIL",
+        `突变后 ${m.probe} 仍为 ${verdict.level}（对照没有鉴别力）:: ${verdict.detail}`);
+    }
+  }
+  return ok;
+}
+
+/** 同步阻塞地跑一次 H 探针（`--mutation-check` 是同步流水线，沿用 spawnSync 子进程语义）。 */
+function runHarnessProbesSync(repo, pkgDir, scratch) {
+  try {
+    const r = spawnSync(process.execPath, [
+      "-e",
+      "import(process.argv[1]).then(m=>m.runHarnessProbes({repo:process.argv[2],pkgDir:process.argv[3],scratch:process.argv[4],platform:process.argv[5]})).then(x=>process.stdout.write(JSON.stringify(x.verdicts))).catch(e=>{process.stderr.write(String(e&&e.stack||e));process.exitCode=1;})",
+      pathToFileURL(join(repo, "scripts", "win-smoke-test.mjs")).href,
+      repo, pkgDir, scratch, process.platform,
+    ], { encoding: "utf8", shell: false, timeout: 300_000 });
+    if (r.status !== 0) {
+      console.log(`  （H 突变子进程 exit=${r.status}：${String(r.stderr ?? "").trim().split("\n")[0] ?? ""}）`);
+      return null;
+    }
+    const verdicts = JSON.parse(r.stdout);
+    return { verdicts };
+  } catch (e) {
+    console.log(`  （H 突变子进程异常：${String(e?.message ?? e)}）`);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2242,6 +3630,218 @@ function selfTest() {
     console.log("[INFO] 台账真源核对：当前目录下未找到产品源码（core/*.ts），跳过（不视为通过）");
   }
 
+  // ---- g-475 H 系列：平台条件求值（正反例）----
+  check("H1 条件求值：win32 等/不等在目标平台上互斥",
+    evaluatePlatformCondition("!!js process.platform === 'win32'", "win32").value === true &&
+    evaluatePlatformCondition("!!js process.platform === 'win32'", "linux").value === false &&
+    evaluatePlatformCondition("!!js process.platform !== 'win32'", "linux").value === true &&
+    evaluatePlatformCondition("!!js ['darwin', 'win32'].includes(process.platform)", "darwin").value === true);
+  check("H1 条件求值：字面量 true/false 与字符串包裹形态都能识别",
+    evaluatePlatformCondition("true", "linux").value === true &&
+    evaluatePlatformCondition("!!js \"!(process.env.X)\"", "linux").ok === false &&
+    evaluatePlatformCondition("!!js \"!(process.env.X)\"", "linux").platformRelevant === false);
+  check("H1 条件求值：无法识别的**平台**形态必须判 ok=false（不静默放行）",
+    evaluatePlatformCondition("!!js process.platform.startsWith('win')", "win32").ok === false &&
+    evaluatePlatformCondition("!!js process.platform.startsWith('win')", "win32").platformRelevant === true);
+
+  // ---- g-475 H 系列：组合扫描（正反例）----
+  const compFixture = [
+    "- id: tool-bash",
+    "  name: '@deepseek-ai/dsh-tool-bash'",
+    "  disabled: !!js process.platform === 'win32'",
+    "- id: tool-pwsh",
+    "  name: '@deepseek-ai/dsh-tool-pwsh'",
+    "  disabled: !!js process.platform !== 'win32'",
+    "- id: tool-fs",
+    "  name: '@deepseek-ai/dsh-tool-fs'",
+  ].join("\n");
+  const compScan = scanCompositionToolDeclarations([{ path: "presets/x.patch.yml", text: compFixture }]);
+  check("H1 组合扫描：解析出 3 条声明（含条件）",
+    compScan.declarations.length === 3 && compScan.declarations[2].disabled === null);
+  check("H1 组合扫描：win32 只启用 pwsh、POSIX 只启用 bash",
+    compositionShellTools(compScan.declarations, "win32").tools.join("|") === "pwsh" &&
+    compositionShellTools(compScan.declarations, "linux").tools.join("|") === "bash" &&
+    compositionShellTools(compScan.declarations, "darwin").tools.join("|") === "bash");
+  check("H1 组合扫描：无 name 的条目不算声明（避免把策略件误当工具插件）",
+    scanCompositionToolDeclarations([{ path: "x.patch.yml", text: "- id: foo\n  disabled: true\n" }]).declarations.length === 0);
+  check("H2 组合工具名：win32 组合里 bash 不存在（病根现场）",
+    !compositionToolNames(compScan.declarations, "win32").names.has("bash") &&
+    compositionToolNames(compScan.declarations, "win32").names.has("read") &&
+    compositionToolNames(compScan.declarations, "linux").names.has("bash"));
+  const regFixture = (name, extra = "") =>
+    scanCompositionToolDeclarations([{ path: "x.patch.yml", text: `- id: t\n  name: '${name}'\n${extra}` }]).declarations;
+  check("H2 台账审计：未登记的工具插件判红（fail-closed）",
+    auditToolRegistry(regFixture("@deepseek-ai/dsh-tool-brand-new"), { registry: DSH_TOOL_REGISTRY })
+      .problems.some((p) => p.kind === "unregistered-tool-plugin"));
+  check("H2 台账审计：已登记包不判红，且工具名能被 description 佐证",
+    auditToolRegistry(regFixture("@deepseek-ai/dsh-tool-web"), {
+      registry: DSH_TOOL_REGISTRY,
+      descriptions: { "@deepseek-ai/dsh-tool-web": "Model-facing web tools (web_search, web_fetch)" },
+    }).problems.length === 0 &&
+    auditToolRegistry(regFixture("@deepseek-ai/dsh-tool-web"), {
+      registry: DSH_TOOL_REGISTRY,
+      descriptions: { "@deepseek-ai/dsh-tool-web": "完全无关的描述" },
+    }).problems.some((p) => p.kind === "tool-name-unverified"));
+  check("H2 台账审计：子路径声明按包名归一（/list-agents 不判红）",
+    auditToolRegistry(regFixture("@deepseek-ai/dsh-tool-subagent-control/list-agents"), { registry: DSH_TOOL_REGISTRY })
+      .problems.length === 0 &&
+    toolPluginBaseName("@deepseek-ai/dsh-tool-subagent-control/list-agents") === "@deepseek-ai/dsh-tool-subagent-control");
+  check("H2 台账审计：非平台条件不进平台条件审计（env 条件不误红）",
+    auditToolRegistry(regFixture("@deepseek-ai/dsh-tool-web", '  disabled: !!js "!(process.env.X)"\n'),
+      { registry: DSH_TOOL_REGISTRY }).problems.length === 0 &&
+    auditToolRegistry(regFixture("@deepseek-ai/dsh-tool-web", "  disabled: !!js process.platform.startsWith('win')\n"),
+      { registry: DSH_TOOL_REGISTRY }).problems.some((p) => p.kind === "unknown-platform-condition"));
+  check("H2 台账规模下限：渐进萎缩必红（登记 ≥ 20 包）", DSH_TOOL_REGISTRY.length >= 20);
+
+  // ---- g-475 H2：求交判定（正反例 + 负向对照必须判红）----
+  const h2Existing = new Set(["read", "write", "bash", "glob", "grep"]);
+  check("H2 判定：allow ⊆ existing 判绿",
+    roleFilterProblems("reviewer", "standard", ["read", "bash"], h2Existing).length === 0);
+  check("H2 判定：越界名字判红（restrict() 会抛的那一下）",
+    roleFilterProblems("reviewer", "standard", ["read", HARNESS_ABSENT_TOOL], h2Existing).length === 1);
+  check("H2 负向对照：注入不存在名字后判定必须判红（证明断言非恒真）",
+    judgeRoleWhitelistIntersection({
+      cases: [{ role: "reviewer", mode: "standard", platform: "linux", allow: ["read", "bash"], existing: h2Existing, shellExpected: "bash", shellForbidden: "pwsh" }],
+      injections: [],
+      negativeControl: { problems: roleFilterProblems("reviewer", "standard", ["read", HARNESS_ABSENT_TOOL], h2Existing) },
+      absentTool: HARNESS_ABSENT_TOOL,
+    }).level === "PASS" &&
+    judgeRoleWhitelistIntersection({
+      cases: [{ role: "reviewer", mode: "standard", platform: "linux", allow: ["read", "bash"], existing: h2Existing, shellExpected: "bash", shellForbidden: "pwsh" }],
+      injections: [],
+      negativeControl: { problems: [] },
+      absentTool: HARNESS_ABSENT_TOOL,
+    }).level === "FAIL");
+  check("H2 判定：另一平台的 shell 名出现在 allow 里判红",
+    judgeRoleWhitelistIntersection({
+      cases: [{ role: "reviewer", mode: "standard", platform: "linux", allow: ["read", "bash", "pwsh"], existing: new Set([...h2Existing, "pwsh"]), shellExpected: "bash", shellForbidden: "pwsh" }],
+      injections: [], negativeControl: { problems: ["x"] },
+    }).level === "FAIL");
+
+  // ---- g-475 H3：派发可用判定（SKIP 必须显式，不许静默通过）----
+  check("H3 判定：未派发 ⇒ SKIP 且文案点名「需真机/实例」",
+    judgeDispatchAvailability({ attempted: false }).level === "SKIP" &&
+    /需真机\/实例/.test(judgeDispatchAvailability({ attempted: false }).detail));
+  check("H3 判定：三路径齐备且有 child_id 判绿",
+    judgeDispatchAvailability({
+      attempted: true,
+      roles: H3_REQUIRED_ROLES.map((role) => ({ role, childId: "c-1", errors: [] })),
+    }).level === "PASS");
+  check("H3 判定：缺一条路径 / child_id 为空 / 命中失败签名 逐项判红",
+    judgeDispatchAvailability({ attempted: true, roles: [{ role: "reviewer", childId: "c", errors: [] }] }).level === "FAIL" &&
+    judgeDispatchAvailability({
+      attempted: true,
+      roles: H3_REQUIRED_ROLES.map((role) => ({ role, childId: role === "collector" ? "" : "c", errors: [] })),
+    }).level === "FAIL" &&
+    judgeDispatchAvailability({
+      attempted: true,
+      roles: H3_REQUIRED_ROLES.map((role) => ({
+        role, childId: "c",
+        errors: role === "executor-minimal" ? ["tools.restrict() names unknown global tool: bash"] : [],
+      })),
+    }).level === "FAIL");
+
+  // ---- g-475 H4/H5/H6：判定正反例 ----
+  check("H4 判定：拒绝侧未抛错 / 落地了文件 / 泄漏错误码 逐项判红",
+    judgePathSeparatorSemantics({ cases: [
+      { name: "a\\b.txt", kind: "reject", threw: false, created: null, message: "", errnoLeak: null },
+      { name: "/abs.txt", kind: "reject", threw: true, created: "/abs.txt", message: "不能是绝对路径", errnoLeak: null },
+      { name: "../e.txt", kind: "reject", threw: true, created: null, message: "EPERM: operation not permitted", errnoLeak: "EPERM" },
+    ] }).problems.length === 3);
+  check("H4 判定：合法名被拒判红、全绿样本判绿",
+    judgePathSeparatorSemantics({ cases: [
+      { name: "a\\b.txt", kind: "reject", threw: true, created: null, message: "附件路径含非法反斜杠", errnoLeak: null },
+      { name: "/abs.txt", kind: "reject", threw: true, created: null, message: "附件路径不能是绝对路径", errnoLeak: null },
+      { name: "../e.txt", kind: "reject", threw: true, created: null, message: "附件路径含非法片段", errnoLeak: null },
+      { name: "a/b.txt", kind: "accept", threw: false, created: "a/b.txt", message: "", errnoLeak: null },
+    ] }).level === "PASS" &&
+    judgePathSeparatorSemantics({ cases: [
+      { name: "a\\b.txt", kind: "reject", threw: true, created: null, message: "非法反斜杠", errnoLeak: null },
+      { name: "/abs.txt", kind: "reject", threw: true, created: null, message: "不能是绝对路径", errnoLeak: null },
+      { name: "../e.txt", kind: "reject", threw: true, created: null, message: "非法片段", errnoLeak: null },
+      { name: "a/b.txt", kind: "accept", threw: true, created: null, message: "误拒", errnoLeak: null },
+    ] }).level === "FAIL");
+  check("H4 判定：大小写注入不生效判红",
+    judgeCaseSemanticsInjection({
+      requested: "a.txt", actual: "A.txt",
+      insensitive: { result: { actual: "A.txt", aliased: true } },
+      sensitive: { result: null },
+    }).level === "PASS" &&
+    judgeCaseSemanticsInjection({
+      requested: "a.txt", actual: "A.txt",
+      insensitive: { result: null },
+      sensitive: { result: { actual: "A.txt", aliased: true } },
+    }).level === "FAIL");
+  check("H5 判定：孤立 CR / 头未折叠 / 注入自成一行的痕迹 / 正文未归一 逐项判红",
+    judgeCrlfEncodingRoundTrip({
+      description: { written: true, loneCr: true, byteExact: false, utf8Lossless: true },
+      results: { written: true, loneCr: true, headerFolded: false, injectedLineAbsent: false, bodyNoCr: false, bodyKeepsLines: false },
+    }).problems.length >= 6);
+  check("H5 判定：全绿样本判绿；未写入判红",
+    judgeCrlfEncodingRoundTrip({
+      description: { written: true, loneCr: false, byteExact: true, utf8Lossless: true },
+      results: { written: true, loneCr: false, headerFolded: true, injectedLineAbsent: true, bodyNoCr: true, bodyKeepsLines: true },
+    }).level === "PASS" &&
+    judgeCrlfEncodingRoundTrip({ description: { written: false }, results: { written: false, reason: "x" } }).level === "FAIL");
+  check("H6 判定：缺真实 argv/shell 用例即判红（防止退化成纯字符串比较）",
+    judgeArgvQuoting({ splitCases: [], quoteCases: [], lineCases: [], argvCases: [], shellCases: [] }).problems.length === 2);
+  check("H6 判定：splitCmd/quoteForCmd 正反例",
+    splitCmd('"C:\\Program Files\\node.exe" -y @deepseek-ai/dsh').join("|") === "C:\\Program Files\\node.exe|-y|@deepseek-ai/dsh" &&
+    splitCmd("").length === 0 &&
+    splitCmd("node 'a b' c").join("|") === "node|a b|c" &&
+    quoteForCmd(["a&b"]).join("|") === '"a&b"' &&
+    quoteForCmd(['"pre-quoted"']).join("|") === '"pre-quoted"');
+  check("H6 突变构造：形状不匹配 ⇒ null（拒绝静默无效对照）",
+    buildToolCapabilityMutant("function x() {}\n", "no-intersection") === null &&
+    buildToolCapabilityMutant("", "bash-only") === null &&
+    Boolean(buildToolCapabilityMutant('export const SHELL_TOOL_CANDIDATES = ["bash", "pwsh"];\n', "bash-only")) &&
+    buildToolCapabilityMutant('export const SHELL_TOOL_CANDIDATES = ["bash", "pwsh"];\n', "bash-only").text.includes('["bash"]'));
+
+  // ---- g-475 防漂移：清单穷尽性 + 两件都消费（绿色基线 + 变异必红）----
+  const manifestOk = auditHarnessProbeManifest(HARNESS_PROBE_ROWS, HARNESS_PROBE_RUNNERS);
+  check("H 清单审计：H1–H6 齐备、每项有运行器、运行器不孤儿 ⇒ 0 问题",
+    manifestOk.problems.length === 0 &&
+    HARNESS_PROBE_IDS.length === 6 &&
+    Object.keys(HARNESS_PROBE_RUNNERS).length === HARNESS_PROBE_IDS.length);
+  check("H 清单审计（变异必红）：漏一项 / 多一项 / 重复 / 缺运行器 逐项判红",
+    auditHarnessProbeManifest(HARNESS_PROBE_ROWS.slice(1), HARNESS_PROBE_RUNNERS).problems.some((p) => p.kind === "missing-probe") &&
+    auditHarnessProbeManifest([...HARNESS_PROBE_ROWS, ["H7", "offline", "多余探针", "这是一个足够长的判定口径说明文字"]], HARNESS_PROBE_RUNNERS)
+      .problems.some((p) => p.kind === "unknown-probe") &&
+    auditHarnessProbeManifest([...HARNESS_PROBE_ROWS, HARNESS_PROBE_ROWS[0]], HARNESS_PROBE_RUNNERS)
+      .problems.some((p) => p.kind === "duplicate-probe") &&
+    auditHarnessProbeManifest(HARNESS_PROBE_ROWS, (() => { const r = { ...HARNESS_PROBE_RUNNERS }; delete r.H1; return r; })())
+      .problems.some((p) => p.kind === "missing-runner") &&
+    auditHarnessProbeManifest(HARNESS_PROBE_ROWS, { ...HARNESS_PROBE_RUNNERS, H7: () => {} })
+      .problems.some((p) => p.kind === "orphan-runner"));
+  const selftestRepo = resolveHarnessRepoRoot({}, null);
+  const consumerFiles = collectHarnessProbeConsumerFiles(selftestRepo);
+  const consumerOk = auditHarnessProbeConsumers(consumerFiles);
+  if (consumerFiles.every((f) => f.text.length > 0)) {
+    check("H 消费审计：清单恰好一份定义 + 两件都调用 runHarnessProbes ⇒ 0 问题",
+      consumerOk.problems.length === 0);
+    check("H 消费审计（变异必红）：删掉消费调用 / 制造第二份定义 逐项判红",
+      auditHarnessProbeConsumers(consumerFiles.map((f) => ({
+        ...f, text: f.text.split(HARNESS_PROBE_CONSUMER_MARKER).join("__removed__"),
+      }))).problems.filter((p) => p.kind === "unconsumed").length === HARNESS_PROBE_CONSUMER_FILES.length &&
+      auditHarnessProbeConsumers(consumerFiles.map((f) => ({
+        ...f, text: f.text + `\n${HARNESS_PROBE_DEFINITION_MARKER} = [];\n`,
+      }))).problems.some((p) => p.kind === "single-source"));
+    check("H 消费审计（变异必红）：消费件里出现第二份 H 判定 ⇒ 判红",
+      auditHarnessProbeConsumers(consumerFiles.map((f) => ({
+        ...f,
+        text: f.path === HARNESS_PROBE_CONSUMER_FILES[1] ? f.text + "\nfunction judgeArgvQuoting() {}\n" : f.text,
+      }))).problems.some((p) => p.kind === "duplicate-definition"));
+  } else {
+    console.log("[INFO] H 消费审计：当前目录下未找到两件执行件，跳过（不视为通过）");
+  }
+  check("H 矩阵行：两件执行件渲染同一形状（含平台与全部探针 id）",
+    (() => {
+      const line = formatHarnessProbeMatrix("linux", HARNESS_PROBE_ROWS.map((r) => ({
+        ...harnessProbeRow(r), level: "PASS", detail: "", problems: [],
+      })));
+      return /^harness 组合矩阵 \| 平台=linux \| /.test(line) && HARNESS_PROBE_IDS.every((id) => line.includes(`${id}=`));
+    })());
+
   rmSync(tmp, { recursive: true, force: true });
   console.log(bad === 0 ? "\n自检全部通过。" : `\n自检失败 ${bad} 项。`);
   process.exit(bad === 0 ? 0 : 1);
@@ -2270,6 +3870,9 @@ async function main() {
     if (ledger.audit) printLedgerTable(ledger.audit);
     head("T1 派发可用层（harness 工具名平台无关性：硬编码 shell 名即判红）");
     checkDispatchToolPortability(opt.staticOnly);
+
+    // T1 harness 组合探针层（g-475）：组合声明 / 组合工具名 / 派发端到端 / 分隔符 / 换行 / 引号
+    await harnessProbeLayer(opt, { repo: resolveHarnessRepoRoot(opt, pkgDir), pkgDir });
     return summarize(opt, { pkgDir });
   }
 
@@ -2392,6 +3995,14 @@ async function main() {
   head("T1 派发可用层（harness 工具名平台无关性：硬编码 shell 名即判红）");
   checkDispatchToolPortability(pkgDir);
 
+  // ---- T1 harness 组合探针层（g-475）：装完后拿到**真实**的宿主组合（隔离 profile 的 node_modules）----
+  await harnessProbeLayer(opt, {
+    repo: resolveHarnessRepoRoot(opt, pkgDir),
+    pkgDir,
+    compositionRoots: [join(home, "profiles", profile, "node_modules")],
+    scratch: join(home, "_harness-probes"),
+  });
+
   // ---- T3 核心运行时 ----
   head("T3 核心运行时（完整看板文件系统生命周期 + 每步盘面断言 + 并发 CAS）");
   await tier3Core(smokeDir, opsPath, workspace);
@@ -2467,14 +4078,22 @@ function summarize(opt, extra) {
   if (coverage.dispatch) {
     cov.push(`派发可用=${coverage.dispatch.problems === 0 ? "零硬编码 shell 名（接线齐备）" : `${coverage.dispatch.problems} 项问题`}`);
   }
+  if (coverage.harness) {
+    cov.push(`H组合=${coverage.harness.pass}/${coverage.harness.total} 通过` +
+      (coverage.harness.skip > 0 ? `，${coverage.harness.skip} 项显式跳过（需真机/实例）` : "") +
+      (coverage.harness.problems > 0 ? `，${coverage.harness.problems} 项判红` : ""));
+  }
   if (cov.length > 0) console.log(`覆盖=${cov.join("  ")}`);
   for (const r of results.filter((x) => x.level === "FAIL" || x.level === "WARN")) {
     console.log(`  ${r.level} ${r.tier} ${r.name}${r.detail ? " :: " + r.detail.slice(0, 300) : ""}`);
   }
+  if (lastHarnessProbeRun) console.log(lastHarnessProbeRun.matrix);
   if (extra?.logPath) console.log(`启动日志=${extra.logPath}`);
   console.log("---------------------------");
 
-  if (opt.json) console.log("\n" + JSON.stringify({ pass, results }, null, 2));
+  if (opt.json) {
+    console.log("\n" + JSON.stringify({ pass, results, harness: harnessProbeSummary(lastHarnessProbeRun) }, null, 2));
+  }
   process.exitCode = pass ? 0 : 1;
   return pass;
 }
