@@ -149,6 +149,10 @@ import {
   subagentSpawnErrorText,
   normalizeSubagentRole,
   toolFilterForRole,
+  // g-473：harness 工具名依赖收口（shell 名按宿主探针解析 / 白名单求交 / 缺能力诊断且不派发）
+  resolveShellTool,
+  diagnoseDispatchCapability,
+  appendDispatchCapabilityMissing,
   formatPmPrompt,
   // g-436：独立评审接线（formatReviewPrompt 的**唯一生产调用点**在本文件的 dispatchReview；
   // 此前它是 core 侧零调用点的孤立实现。接线由 g-436 完成，相应前置守卫见
@@ -1714,6 +1718,46 @@ export function apply(ctx, config) {
   // 统一的 summarizer 派发（REST 与工具共用）：材料包零 LLM 生成 → role=summarizer 子代理 → 登记索引。
   // 模型通道：沿用宿主子代理机制与既有模型路由（resolveModelRoute：executor 覆盖 > project.yaml > 全局），
   // **不直连 HTTP、不自带凭据**。
+  /** g-473：宿主能力探针上下文 —— core 不接触宿主对象，只消费「名字是否可用」这一个纯函数。
+   *
+   * 真源：`tools.get(name, agentScope)`。**必须传 agent scope**：DSH 把模型面向工具注册在
+   * agent preset 平面（祖先层），无 scope 的 `get(name)` 只覆盖 global 层 ⇒ 会把 bash/pwsh/read/…
+   * 全判为不可用。Agent 实例本身就是 scope key（dsh-agent-loop: createScope(loopCtx, this)），
+   * dsh-subagent 又用 `composeFrom(childCtx, parent.ctx)` 把 child 绑到 parent 同一 preset scope
+   * ⇒ 用 parent 探针得到的名字集合与 child 的 restrictableNames 一致，探针为真必被 restrict() 接受。
+   * 拿不到 agent 或 tools 服务时不注入探针（core 按平台回落，保持 legacy 行为，绝不误阻断）。 */
+  const toolCapabilityFor = (agentScope) => {
+    const platform = (() => { try { return process.platform; } catch { return undefined; } })();
+    // `ctx.tools` 可能整个服务未注入（测试夹具 / 精简宿主）——取值本身也要兜住，否则会抛在派发路径上。
+    let tools;
+    try { tools = ctx?.tools; } catch { tools = undefined; }
+    if (!tools || typeof tools.get !== "function" || !agentScope) return { platform };
+    return {
+      platform,
+      available: (name) => { try { return Boolean(tools.get(name, agentScope)); } catch { return false; } },
+    };
+  };
+
+  /** g-473：派发前工具能力自检（事件先行，随后由调用方写进返回文案 / child_error）。
+   *  返回 `null` = 通过；否则为可读诊断文本 ⇒ **调用方不得派发**（不启动能力残缺的子代理，
+   *  也不让 dsh-tools 的 `names unknown global tool` 内部错误原样外泄）。 */
+  const capabilityBlock = (rootForWrite, { goal, role, mode, agentScope, label }) => {
+    const diag = diagnoseDispatchCapability(role, mode, toolCapabilityFor(agentScope));
+    if (diag.ok) return null;
+    try {
+      appendDispatchCapabilityMissing(rootForWrite, {
+        goal: goal ?? null,
+        role,
+        mode: diag.mode,
+        missing: diag.missing,
+        shell: diag.shell,
+        label: label ?? null,
+        actor: "system:dispatch",
+      });
+    } catch { /* 事件写失败绝不改变「不派发」的结论 */ }
+    return diag.message;
+  };
+
   const startSummarizerChild = async (root, goal, { parent, signal }, opts = {}) => {
     const goalFile = findGoalFile(root, goal);
     if (basename(goalFile) !== "goal.md") {
@@ -1739,7 +1783,10 @@ export function apply(ctx, config) {
     if (!provider) {
       return { childId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`, digest };
     }
-    const toolFilter = toolFilterForRole("summarizer", opts.mode);
+    // g-473：能力自检（缺必需工具则不派发；summarizer 无 shell 槽位，白名单缺 web_* 时静默剔除）
+    const summarizerCapBlock = capabilityBlock(root, { goal, role: "summarizer", mode: opts.mode, agentScope: parent, label: `${SUMMARIZER_LABEL_PREFIX}${goal}` });
+    if (summarizerCapBlock) return { childId: null, error: summarizerCapBlock, digest };
+    const toolFilter = toolFilterForRole("summarizer", opts.mode, toolCapabilityFor(parent));
     const request = { parent, prompt: text(prompt), ...(toolFilter ? { toolFilter } : {}) };
     const agentOptions = {};
     if (eff.provider) agentOptions.provider = eff.provider;
@@ -1951,6 +1998,24 @@ export function apply(ctx, config) {
     const admission = assertExecutionAdmission(root, goal, { force, requireDescription: entrypoint === "tool" });
     const { goalFile, doc } = admission;
 
+    // 2.5 g-473：工具能力自检（**最早**定位，零副作用）。
+    //     缺必需工具（解析后的 shell / read / write / edit / graph_*）时不建 attempt、不建工作树、
+    //     不迁移状态、不启动子代理 —— 只记 dispatch.capability_missing 事件并回传可读诊断。
+    //     放在隔离决策之前（而非 provider 分支旁）是有意的：那一分支的既有语义已先建树，
+    //     本自检不做「建完树再拒」的重复（避免遗留孤立 worktree）。
+    const executorToolCap = toolCapabilityFor(parentAgent);
+    const executorCapBlock = capabilityBlock(root, { goal, role: "executor", mode, agentScope: parentAgent, label: `executor/${goal}` });
+    if (executorCapBlock) {
+      return {
+        ok: true,
+        attempt: null,
+        child_id: null,
+        child_error: executorCapBlock,
+        note: "派发前工具能力自检未通过：未建 attempt、未建工作树、未迁移状态、未启动子代理",
+        mode: normalizeSubagentMode(mode) ?? DEFAULT_SUBAGENT_MODE,
+      };
+    }
+
     // 3. 一次性上下文快照（保证注入清单与注入内容一致，零二次读取漂移）
     //    小节标签按提示词语言本地化（仅影响 prompt 展示，goal.md 解析仍用中文小节名）。
     const promptLanguage = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
@@ -2012,7 +2077,7 @@ export function apply(ctx, config) {
     const effModel = eff.model;
     const effReasoningEffort = eff.reasoning_effort;
     const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
-    const effModeRes = resolveSubagentMode(mode, projectExec.mode, globalSettings.subagentMode, promptLanguage);
+    const effModeRes = resolveSubagentMode(mode, projectExec.mode, globalSettings.subagentMode, promptLanguage, executorToolCap);
 
     // 6. 统一校验 subagent prepareContinuable 能力（g-241 判据 4：禁止回退虚构 spawn）
     const subagents = ctx.get?.("subagents");
@@ -2225,7 +2290,7 @@ export function apply(ctx, config) {
 
     if (subagents && parentAgent && availableProvider) {
       try {
-        const roleToolFilter = toolFilterForRole("executor", effModeRes.mode);
+        const roleToolFilter = toolFilterForRole("executor", effModeRes.mode, executorToolCap);
         const request = {
           parent: parentAgent,
           prompt: text(prompt),
@@ -2491,6 +2556,7 @@ export function apply(ctx, config) {
     // 材料包：只含目标定义+负责人约束、判据原文、候选/基线 SHA、审查范围与报告骨架；
     // 不注入作者对话/结果/自报 PASS/评论/返工叙事（见 formatReviewPrompt 的「评审材料边界」）。
     const detail = goalDetail(root, goal);
+    const reviewerToolCap = toolCapabilityFor(parentAgent);
     const prompt = formatReviewPrompt({
       goalId: goal,
       attemptId: String(attempt),
@@ -2504,6 +2570,8 @@ export function apply(ctx, config) {
       reviewWorkspace,
       changedPaths,
       language: resolvePromptLanguage(readGraphSettings().promptLanguage, ctx),
+      // g-473：评审只读 shell 权限点名「本组合实际解析出的 shell」，不硬编码 bash。
+      shellTool: resolveShellTool(reviewerToolCap).name,
     });
     const eff = resolveModelRoute(
       { provider, model, reasoning_effort },
@@ -2558,6 +2626,13 @@ export function apply(ctx, config) {
       failReviewDispatch(root, goal, reviewId, err, actor);
       return reviewOutcome({ ...base, reviewer_child_id: null, child_error: err });
     }
+    // g-473：能力自检（reviewer 必需 read + shell）——缺则记 review.failed 且**不派发**，
+    // 而不是让 restrict() 在 Windows 上抛 `names unknown global tool` 把评审变成不可诊断的失败。
+    const reviewerCapBlock = capabilityBlock(root, { goal, role: "reviewer", mode: effMode, agentScope: parentAgent, label: `reviewer/${goal}/${attempt}` });
+    if (reviewerCapBlock) {
+      failReviewDispatch(root, goal, reviewId, reviewerCapBlock, actor);
+      return reviewOutcome({ ...base, reviewer_child_id: null, child_error: reviewerCapBlock });
+    }
     try {
       const available = (subagents.list?.() ?? []).filter((n) => {
         try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
@@ -2566,7 +2641,7 @@ export function apply(ctx, config) {
       if (!providerName) {
         throw new Error(`无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`);
       }
-      const toolFilter = toolFilterForRole("reviewer", effMode);
+      const toolFilter = toolFilterForRole("reviewer", effMode, reviewerToolCap);
       const request = {
         parent: parentAgent,
         prompt: text(prompt),
@@ -3344,7 +3419,12 @@ export function apply(ctx, config) {
               try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
             });
             if (!provider) throw new Error(`无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`);
-            const collectToolFilter = toolFilterForRole("collector", a.mode);
+            const collectorCapBlock = capabilityBlock(r, { goal: a.goal, role: "collector", mode: a.mode, agentScope: ex.agent, label: `collector/${a.card}` });
+          if (collectorCapBlock) {
+            result.child_error = collectorCapBlock;
+            return result;
+          }
+          const collectToolFilter = toolFilterForRole("collector", a.mode, toolCapabilityFor(ex.agent));
             const request = {
               parent: ex.agent,
               prompt: text(fullPrompt),
@@ -3767,7 +3847,10 @@ export function apply(ctx, config) {
         return { childId: null, parentSessionId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）` };
       }
       const effRole = overrides.role ? normalizeSubagentRole(overrides.role) ?? "executor" : "executor";
-      const roleToolFilter = toolFilterForRole(effRole, overrides.mode);
+      // g-473：能力自检（缺必需工具则不派发；error 非空即未派发，与既有 provider 失败同口径）
+      const roleOverrideCapBlock = capabilityBlock(rootForReq, { goal: null, role: effRole, mode: overrides.mode, agentScope: parent, label: `${label}/${effRole}` });
+      if (roleOverrideCapBlock) return { childId: null, parentSessionId: null, error: roleOverrideCapBlock };
+      const roleToolFilter = toolFilterForRole(effRole, overrides.mode, toolCapabilityFor(parent));
       const request = {
         parent,
         prompt: [{ type: "text", text: promptText }],

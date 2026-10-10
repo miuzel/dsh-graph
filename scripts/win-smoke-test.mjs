@@ -576,9 +576,9 @@ const OS_SITE_ROWS = [
   ["core/ops.ts", "pathSep", 3, ["storeAttachment", "deleteAttachment", "attachmentProblems"],
    "附件相对路径的 / 归一（split(sep).join('/')）",
    "ws:T3.attachments_store_delete,ws:T3.lifecycle_move_dir_with_extras"],
-  ["core/ops.ts", "platformBranch", 2, ["acquireTagsLock", "setGoalTags"],
-   "Windows / POSIX 标签锁分支",
-   "ws:T3.tags_write,ws:T3.tx_lock_reclaim"],
+  ["core/ops.ts", "platformBranch", 3, ["acquireTagsLock", "setGoalTags", "resolveShellTool"],
+   "Windows / POSIX 分支：标签锁（文件锁语义）+ shell 工具名的平台回落（g-473；有探针时不走平台）",
+   "ws:T3.tags_write,ws:T3.tx_lock_reclaim,exempt:shell 名平台回落仅是无探针时的默认值、无 FS/错误码语义；判定由 T1 派发可用层（静态、跨平台同结论）覆盖，见 docs/platform-gate.md §3.4.6"],
   ["core/ops.ts", "posixConstants", 3, ["acquireTagsLock", "setGoalTags"],
    "POSIX 专有常量（O_DIRECTORY / O_NOFOLLOW）使用点",
    "ws:T3.tags_write"],
@@ -1070,6 +1070,100 @@ function printLedgerTable(audit) {
   console.log(`  小计：登记 ${OS_SITE_REGISTRY.length} 项（其中豁免 ${exempt} 项，均带理由）` +
     `，命中 ${audit.hits.length} 处，忽略处数 ${audit.ignoredLines}（成对标记 ${OS_LEDGER_IGNORE_BEGIN}）`);
   console.log("  非目标 API（显式口径，不登记）：" + OS_SITE_NON_GOALS.map((n) => n.api).join("；"));
+}
+
+// ---------------------------------------------------------------------------
+// T1 派发可用层（g-473）：harness 工具名平台无关性
+//
+// 缺陷（真实事故）：DSH 在 win32 上**不注册** `bash`（注册 `pwsh`），而
+// `@deepseek-ai/dsh-tools` 的 `restrict()` 对未知名**硬抛错**
+// （`tools.restrict() names unknown global tool "bash"`）。产品代码把 shell 名硬编码进
+// 角色白名单 / 必需清单 / 文案 ⇒ Windows 上 reviewer / collector / executor-minimal
+// 三条派发路径**必然**起不来（T1–T5 全绿也照不出来：它们不含派发维度）。
+//
+// 判定（fail-closed，静态可跑、跨平台同结论）：
+//   A. 产品代码（core/ops.ts 或编译产物 core/ops.js）里**带引号的 "bash" 只允许出现在两处形态**：
+//      候选表 `SHELL_TOOL_CANDIDATES = ["bash", "pwsh"]` 与平台回落 `win32 ? "pwsh" : "bash"`；
+//      其余任何位置（白名单/必需清单/文案）出现即判红 —— 这正是「回退修复」的机器化对照。
+//   B. 解析与诊断接线必须在册：shell 槽位常量、候选表、文案占位符、缺能力诊断函数与事件名。
+// ---------------------------------------------------------------------------
+
+/** 允许出现带引号 shell 名的两处形态（候选表 + 平台回落）；其余命中一律判红。 */
+export const DISPATCH_SHELL_ALLOWED_LINE_RES = Object.freeze([
+  /SHELL_TOOL_CANDIDATES\s*=\s*\[\s*["']bash["']\s*,\s*["']pwsh["']\s*\]/,
+  /["']win32["']\s*\?\s*["']pwsh["']\s*:\s*["']bash["']/,
+]);
+
+/** 派发可用层的存在性自证（缺任一项 ⇒ 修复不在被扫产物里）。 */
+export const DISPATCH_WIRING_REQUIRED = Object.freeze([
+  { id: "shell-slot", re: /SHELL_TOOL_SLOT\s*=\s*["']<shell>["']/, why: "shell 槽位常量缺失（白名单仍在硬编码 shell 名）" },
+  { id: "shell-candidates", re: /SHELL_TOOL_CANDIDATES\s*=\s*\[/, why: "shell 候选表缺失（无从按探针/平台解析）" },
+  { id: "shell-token", re: /\{\{shell\}\}/, why: "文案占位符缺失（prompt / 纪律仍会点名某一个平台的名字）" },
+  { id: "probe-diagnosis", re: /diagnoseDispatchCapability/, why: "缺能力诊断函数缺失（缺工具时会静默派发到 restrict() 抛错）" },
+  { id: "probe-event", re: /dispatch\.capability_missing/, why: "缺能力诊断事件名缺失（失败不可观测）" },
+]);
+
+/** 静态审计派发可用性；`files` = [{path, text}]（与台账层同一形状，便于自检正反例）。 */
+export function auditDispatchToolPortability(files) {
+  const problems = [];
+  const targets = files.filter((f) => /(^|\/)ops\.(ts|js)$/.test(f.path));
+  for (const f of targets) {
+    const lines = String(f.text).split("\n");
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (!line.includes('"bash"') && !line.includes("'bash'")) continue;
+      if (isCommentLine(line)) continue;
+      if (DISPATCH_SHELL_ALLOWED_LINE_RES.some((re) => re.test(line))) continue;
+      problems.push({
+        kind: "hardcoded_shell", path: f.path, line: i + 1,
+        detail: `${f.path}:${i + 1} 出现带引号的 "bash" 但不在候选表/平台回落内：${line.trim().slice(0, 120)}`,
+      });
+    }
+    for (const req of DISPATCH_WIRING_REQUIRED) {
+      if (!req.re.test(String(f.text))) {
+        problems.push({ kind: "missing_wiring", path: f.path, detail: `${f.path}：${req.why}（${req.id}）` });
+      }
+    }
+  }
+  return { problems, scanned: files.length, targets: targets.map((f) => f.path) };
+}
+
+/**
+ * 执行「派发可用」静态核对。
+ * 仓库根（有 core/*.ts）⇒ 扫产品源码；只对着已安装包 ⇒ 扫编译产物 `core/ops.js`
+ * （那才是真正会跑起来的那份代码）。两者都找不到时如实降级为 WARN，**不伪装 PASS**。
+ */
+function checkDispatchToolPortability(dir) {
+  const sourceRoot = resolveProductSourceRoot(dir);
+  let files = null;
+  let where = "";
+  if (sourceRoot) {
+    files = collectProductSourceFiles(sourceRoot).filter((f) => /(^|\/)ops\.(ts|js)$/.test(f.path));
+    where = "产品源码";
+  } else {
+    const pkgDir = resolvePackageDir(dir);
+    const ops = join(pkgDir, "core", "ops.js");
+    if (existsSync(ops)) {
+      files = [{ path: "core/ops.js", text: readFileSync(ops, "utf8") }];
+      where = `已安装包编译产物 ${rel(pkgDir, ops)}`;
+    }
+  }
+  if (!files || files.length === 0) {
+    record("T1", "派发可用（工具名平台无关性）", "WARN",
+      "未找到 core/ops.ts 或 core/ops.js：本次未做派发可用静态核对（请在仓库根用 `--static-only .`，或对着已构建包运行）");
+    return { ok: false, degraded: true, audit: null };
+  }
+  const audit = auditDispatchToolPortability(files);
+  coverage.dispatch = { targets: audit.targets, problems: audit.problems.length };
+  if (audit.problems.length === 0) {
+    record("T1", "派发可用（工具名平台无关性）", "PASS",
+      `${where}（${audit.targets.join(", ")}）：带引号的 "bash" 只出现在候选表与平台回落；槽位/候选/占位符/诊断/事件接线齐备`);
+  } else {
+    record("T1", "派发可用（工具名平台无关性）", "FAIL",
+      `问题 ${audit.problems.length} 项：` + audit.problems.slice(0, 5).map((p) => `[${p.kind}] ${p.detail}`).join(" | ") +
+      (audit.problems.length > 5 ? ` …另有 ${audit.problems.length - 5} 项` : ""));
+  }
+  return { ok: audit.problems.length === 0, audit, where };
 }
 
 /** 定位已构建包（含 core/ops.js）：--pkg 优先，其次 <仓库根>/dist、<cwd>/dist。 */
@@ -2108,6 +2202,31 @@ function selfTest() {
   check("突变构造：形状不匹配 ⇒ 返回 null（拒绝静默做一次无效对照）",
     buildOsJsMutant("function x() {}\n", "old-order") === null && buildOsJsMutant("", "copy-dup") === null);
 
+  // ---- g-473 派发可用层：硬编码 shell 名判红（正反例）+ 接线在册 ----
+  const WIRED_SAMPLE = [
+    'export const SHELL_TOOL_CANDIDATES = ["bash", "pwsh"] as const;',
+    'export const SHELL_TOOL_SLOT = "<shell>";',
+    'export const SHELL_TOOL_TOKEN = "{{shell}}";',
+    '  return { name: platform === "win32" ? "pwsh" : "bash" };',
+    'export function diagnoseDispatchCapability() { /* dispatch.capability_missing */ }',
+  ].join("\n");
+  check("派发可用正例：候选表 + 平台回落 + 接线齐备 ⇒ 0 问题",
+    auditDispatchToolPortability([{ path: "core/ops.ts", text: WIRED_SAMPLE }]).problems.length === 0);
+  check("派发可用反例：白名单里硬编码 bash ⇒ 判红（回退修复的机器化对照）",
+    auditDispatchToolPortability([{
+      path: "core/ops.ts",
+      text: WIRED_SAMPLE + '\nconst HARDCODED = ["read", "bash"];\n',
+    }]).problems.some((p) => p.kind === "hardcoded_shell"));
+  check("派发可用反例：missing 接线（无槽位/无诊断/无事件）⇒ 逐项判红",
+    (() => {
+      const r = auditDispatchToolPortability([{ path: "core/ops.ts", text: 'const x = "pwsh";\n' }]);
+      return r.problems.filter((p) => p.kind === "missing_wiring").length === DISPATCH_WIRING_REQUIRED.length;
+    })());
+  check("派发可用：注释里的 bash 不算命中（口径与台账层一致）",
+    auditDispatchToolPortability([{ path: "core/ops.ts", text: WIRED_SAMPLE + '\n// 旧实现曾写死 "bash"\n' }]).problems.length === 0);
+  check("派发可用：非 ops 文件不在扫描面（避免 host 文案误判）",
+    auditDispatchToolPortability([{ path: "dsh-graph-host/index.js", text: 'const s = ["bash"];\n' }]).targets.length === 0);
+
   // ---- g-428：台账必须与**当前仓库源码**同步（真源核对；非仓库根时跳过而非放行）----
   const selftestSrcRoot = resolveProductSourceRoot(process.cwd());
   if (selftestSrcRoot) {
@@ -2117,6 +2236,8 @@ function selfTest() {
       liveAudit.hits.length >= 200 && liveAudit.scanned >= 15);
     check("台账：g-427 的 renameDirInto 站点在册",
       OS_SITE_REGISTRY.some((r) => r.file === "core/ops.ts" && r.api === "renameSync" && r.sites.includes("renameDirInto")));
+    const liveDispatch = auditDispatchToolPortability(collectProductSourceFiles(selftestSrcRoot));
+    check("派发可用：当前仓库源码零硬编码 shell 名且接线齐备", liveDispatch.problems.length === 0);
   } else {
     console.log("[INFO] 台账真源核对：当前目录下未找到产品源码（core/*.ts），跳过（不视为通过）");
   }
@@ -2147,6 +2268,8 @@ async function main() {
     head("T1 台账层（OS 调用点覆盖清单：未登记即判红）");
     const ledger = checkOsSiteLedger(opt.staticOnly);
     if (ledger.audit) printLedgerTable(ledger.audit);
+    head("T1 派发可用层（harness 工具名平台无关性：硬编码 shell 名即判红）");
+    checkDispatchToolPortability(opt.staticOnly);
     return summarize(opt, { pkgDir });
   }
 
@@ -2265,6 +2388,10 @@ async function main() {
   head("T1 台账层（OS 调用点覆盖清单：未登记即判红）");
   checkOsSiteLedger(opt.path ? resolvePackageDir(opt.path) : process.cwd());
 
+  // ---- T1 派发可用层（g-473）：对**真正会跑起来的**那份代码断言工具名平台无关性 ----
+  head("T1 派发可用层（harness 工具名平台无关性：硬编码 shell 名即判红）");
+  checkDispatchToolPortability(pkgDir);
+
   // ---- T3 核心运行时 ----
   head("T3 核心运行时（完整看板文件系统生命周期 + 每步盘面断言 + 并发 CAS）");
   await tier3Core(smokeDir, opsPath, workspace);
@@ -2336,6 +2463,9 @@ function summarize(opt, extra) {
   }
   if (coverage.smokeSteps > 0) {
     cov.push(`T3生命周期=${coverage.smokeSteps}步（g-427 形态 ${G427_FORM_STEP_IDS.length} 步，每步盘面断言）`);
+  }
+  if (coverage.dispatch) {
+    cov.push(`派发可用=${coverage.dispatch.problems === 0 ? "零硬编码 shell 名（接线齐备）" : `${coverage.dispatch.problems} 项问题`}`);
   }
   if (cov.length > 0) console.log(`覆盖=${cov.join("  ")}`);
   for (const r of results.filter((x) => x.level === "FAIL" || x.level === "WARN")) {

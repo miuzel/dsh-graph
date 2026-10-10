@@ -9,6 +9,9 @@ import {
   buildSubagentDefaultPersona,
   formatReviewPrompt,
   GRAPH_MINIMAL_ALLOWED_TOOLS,
+  // g-473：shell 名是解析结果（不再硬编码），断言按解析语义写。
+  SHELL_TOOL_SLOT,
+  resolveShellTool,
 } from "../ops.ts";
 import { formatAttemptPrompt, resolveWorktreeGuide } from "../../dist/index.js";
 
@@ -282,11 +285,12 @@ function reviewPromptWiringProblems(src: string): string[] {
 test("g-253 判据 3：executor 执行派发接线 toolFilterForRole('executor', mode) 及统一映射测试", () => {
   const hostIndex = readFileSync(join(import.meta.dirname, "../../dist/index.js"), "utf8");
 
-  // 1. dispatchAttempt 中使用 toolFilterForRole("executor", effModeRes.mode)
+  // 1. dispatchAttempt 中使用 toolFilterForRole("executor", effModeRes.mode[, 能力上下文])
+  //    （g-473 起多传一个**能力上下文**参数用于解析 shell 名/求交；接线关系与 executer/mode 口径未变。）
   assert.match(
     hostIndex,
-    /toolFilterForRole\(\s*["']executor["']\s*,\s*effModeRes\.mode\s*\)/,
-    "dispatchAttempt 必须使用 toolFilterForRole('executor', effModeRes.mode)",
+    /toolFilterForRole\(\s*["']executor["']\s*,\s*effModeRes\.mode\s*[,)]/,
+    "dispatchAttempt 必须使用 toolFilterForRole('executor', effModeRes.mode, …)",
   );
   assert.doesNotMatch(
     hostIndex,
@@ -298,23 +302,28 @@ test("g-253 判据 3：executor 执行派发接线 toolFilterForRole('executor',
   const standardFilter = toolFilterForRole("executor", "standard");
   assert.equal(standardFilter, undefined, "executor standard 模式工具过滤为 undefined（全量）");
 
-  // 3. 行为契约：minimal 模式返回 GRAPH_MINIMAL_ALLOWED_TOOLS（受控 6 工具）
+  // 3. 行为契约：minimal 模式返回受控 6 工具（g-473：shell 槽位按解析结果展开）
   const minimalFilter = toolFilterForRole("executor", "minimal");
+  const resolvedShell = resolveShellTool().name;
+  const expectMinimal = (GRAPH_MINIMAL_ALLOWED_TOOLS as readonly string[]).map((n) => (n === SHELL_TOOL_SLOT ? resolvedShell : n));
   assert.deepEqual(
     minimalFilter?.allow,
-    GRAPH_MINIMAL_ALLOWED_TOOLS,
-    "executor minimal 模式工具过滤为受控 6 工具",
+    expectMinimal,
+    "executor minimal 模式工具过滤为受控 6 工具（壳位=解析结果）",
   );
+  assert.equal(expectMinimal.length, 6, "仍是受控 6 项基础工具");
 
   // 4. 容错契约：mode 为 null / undefined / 空串时规范化回退 standard
   assert.equal(toolFilterForRole("executor", null), undefined);
   assert.equal(toolFilterForRole("executor", undefined), undefined);
 
-  // 5. 统一映射：executor 所要求的工具在 standard 与 minimal 下均可访问
+  // 5. 统一映射：executor 所要求的工具在 standard 与 minimal 下均可访问（g-473：slug 槽位解析后比较）
   const profile = getRoleProfile("executor");
-  for (const reqTool of profile.requiredTools) {
+  for (const rawTool of profile.requiredTools) {
+    const reqTool = rawTool === SHELL_TOOL_SLOT ? resolvedShell : rawTool;
+    assert.ok(reqTool, "shell 槽位必须能解析出名字（win32→pwsh，否则 bash）");
     assert.ok(
-      minimalFilter?.allow?.includes(reqTool),
+      minimalFilter?.allow?.includes(reqTool!),
       `executor 核心协同工具 ${reqTool} 在 minimal 模式下必须可见`,
     );
   }

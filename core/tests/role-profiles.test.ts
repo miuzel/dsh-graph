@@ -20,8 +20,17 @@ import {
   getRoleProfile,
   toolFilterForRole,
   GRAPH_MINIMAL_ALLOWED_TOOLS,
+  // g-473：shell 名不再是常量而是「解析结果」——断言必须按解析语义写，否则在 win32 上必红。
+  SHELL_TOOL_CANDIDATES,
+  SHELL_TOOL_SLOT,
+  SHELL_TOOL_TOKEN,
+  resolveShellTool,
+  renderShellToolText,
 } from "../ops.ts";
 import { apply, formatAttemptPrompt } from "../../dist/index.js";
+
+/** g-473：无探针时的解析结果（平台回落）——模块级常量，供多条判据共用。 */
+const resolvedShell = resolveShellTool().name;
 
 // ===== 判据 1：supervisor/executor/collector/reviewer/PM 角色能力与 prompt 要求统一映射测试 =====
 
@@ -56,7 +65,9 @@ test("判据 1 - 角色能力与 Prompt 工具可见性统一映射测试", () =
     const standardFilter = toolFilterForRole(role, "standard");
     const minimalFilter = toolFilterForRole(role, "minimal");
 
-    for (const reqTool of profile.requiredTools) {
+    for (const rawReqTool of profile.requiredTools) {
+      // g-473：必需清单里的 shell 是槽位占位符，比较前按解析结果展开（无探针 ⇒ 平台回落）
+      const reqTool = rawReqTool === SHELL_TOOL_SLOT ? resolvedShell : rawReqTool;
       // standard 模式下：若有白名单，必须包含 reqTool；若为 undefined 则表示全量工具可见
       if (standardFilter?.allow) {
         assert.ok(
@@ -188,7 +199,8 @@ test("判据 3 - reviewer/PM 只读工具白名单拦截与 bash 权限如实说
   const pmStandard = toolFilterForRole("pm", "standard");
   const pmMinimal = toolFilterForRole("pm", "minimal");
 
-  const writeTools = ["edit", "write", "bash", "graph_create_goal", "graph_start_attempt", "graph_transition", "graph_resolve_accept"];
+  // 写工具拦截（g-473：shell 两个候选都点名，断言与平台无关）
+  const writeTools = ["edit", "write", ...SHELL_TOOL_CANDIDATES, "graph_create_goal", "graph_start_attempt", "graph_transition", "graph_resolve_accept"];
   for (const wt of writeTools) {
     assert.ok(!pmStandard?.allow?.includes(wt), `PM standard 模式绝不能包含写工具: ${wt}`);
     assert.ok(!pmMinimal?.allow?.includes(wt), `PM minimal 模式绝不能包含写工具: ${wt}`);
@@ -205,11 +217,33 @@ test("判据 3 - reviewer/PM 只读工具白名单拦截与 bash 权限如实说
   assert.ok(!revStandard?.allow?.includes("graph_create_goal"), "Reviewer 绝不暴露 graph_create_goal");
   assert.ok(!revStandard?.allow?.includes("graph_resolve_accept"), "Reviewer 绝不暴露 graph_resolve_accept (Human Gate)");
 
-  // Reviewer 保留 bash 时必须有如实权限说明，不声称工具白名单是强安全沙箱
-  assert.ok(revStandard?.allow?.includes("bash"), "Reviewer 保留 bash 用于运行只读测试/静态检查/git diff");
-  assert.ok(revProfile.bashPermissionNote, "Reviewer 必须包含 bash 权限说明");
-  assert.ok(revProfile.bashPermissionNote.includes("owner-trusted"), "明确符合 owner-trusted 单机单用户模型");
-  assert.ok(revProfile.bashPermissionNote.includes("非强安全沙箱"), "不声称工具白名单是强安全沙箱");
+  // Reviewer 保留 shell 时必须有如实权限说明，不声称工具白名单是强安全沙箱。
+  // g-473：断言按**解析语义**（不再硬编码 bash）——壳名恒为候选之一，且白名单里恰有一个候选。
+  assert.ok(resolvedShell, "无探针时必须按平台回落解析出 shell 名（win32→pwsh，否则 bash）");
+  assert.ok(revStandard?.allow?.includes(resolvedShell!), `Reviewer 保留解析出的 shell（${resolvedShell}）用于运行只读测试/静态检查/git diff`);
+  assert.equal(
+    (revStandard?.allow ?? []).filter((n) => (SHELL_TOOL_CANDIDATES as readonly string[]).includes(n)).length,
+    1,
+    "Reviewer standard 白名单里应恰有一个 shell 候选（不得两个都留）",
+  );
+  assert.equal(
+    (revMinimal?.allow ?? []).filter((n) => (SHELL_TOOL_CANDIDATES as readonly string[]).includes(n)).length,
+    1,
+    "Reviewer minimal 白名单里应恰有一个 shell 候选",
+  );
+  // 白名单里不得出现未解析的槽位占位符：声明表（GRAPH_MINIMAL_ALLOWED_TOOLS）用槽位表达，
+  // 但**过滤器输出**必须在构造期已替换。
+  for (const list of [revStandard?.allow ?? [], revMinimal?.allow ?? []]) {
+    assert.ok(!list.includes(SHELL_TOOL_SLOT), "角色过滤器输出不得残留未解析槽位");
+  }
+  assert.ok((GRAPH_MINIMAL_ALLOWED_TOOLS as readonly string[]).includes(SHELL_TOOL_SLOT), "声明表应以槽位表达 shell（单一真源）");
+  assert.ok(revProfile.bashPermissionNote, "Reviewer 必须包含 shell 权限说明");
+  // g-473：说明正文用 {{shell}} 占位符，渲染后必须无残留且点名解析结果
+  const revNote = renderShellToolText(revProfile.bashPermissionNote!, resolvedShell);
+  assert.ok(!revNote.includes(SHELL_TOOL_TOKEN), "渲染后的权限说明不得残留占位符");
+  assert.ok(revNote.includes(resolvedShell!), "渲染后的权限说明必须点名本组合解析出的 shell");
+  assert.ok(revNote.includes("owner-trusted"), "明确符合 owner-trusted 单机单用户模型");
+  assert.ok(revNote.includes("非强安全沙箱"), "不声称工具白名单是强安全沙箱");
 
   // Reviewer prompt 中同样体现该说明
   const revPrompt = formatReviewPrompt({
@@ -225,12 +259,18 @@ test("判据 3 - reviewer/PM 只读工具白名单拦截与 bash 权限如实说
 
 test("判据 4 - 切换 persona 与 standard/minimal 模式不丢失框架纪律与 Human Gate", () => {
   // 1. minimal 模式保留 6 项基础工具，包含完整框架协同工具
+  // g-473：声明表用 shell 槽位表达，过滤器输出是**解析后**的名字（win32→pwsh，否则 bash）。
   const minimalFilter = toolFilterForRole("executor", "minimal");
+  const expectMinimal = (GRAPH_MINIMAL_ALLOWED_TOOLS as readonly string[]).map((n) =>
+    n === SHELL_TOOL_SLOT ? resolveShellTool().name : n,
+  );
   assert.deepEqual(
     minimalFilter?.allow,
-    GRAPH_MINIMAL_ALLOWED_TOOLS,
-    "minimal 模式工具集与既有受控 6 工具契约严格一致",
+    expectMinimal,
+    "minimal 模式工具集与既有受控 6 工具契约严格一致（壳位=解析结果）",
   );
+  assert.equal(expectMinimal.length, 6, "仍是受控 6 项基础工具");
+  assert.ok(!(minimalFilter?.allow ?? []).includes(SHELL_TOOL_SLOT), "过滤器输出不得残留 shell 槽位");
 
   // 2. formatAttemptPrompt 统一模板无论任何输入，均无条件内联框架协同纪律段
   const prompt = formatAttemptPrompt({
