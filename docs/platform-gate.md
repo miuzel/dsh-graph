@@ -50,14 +50,17 @@ node scripts/macos-smoke-test.mjs …                                     # 旧�
 | `--temp-root <dir>` | 探测沙箱根（默认 `<repo>/tmp/platform-gate`） |
 | `--skip-build` | 跳过依赖已构建 `dist/core/*.js` 的 P4/P5/P6（未 `pnpm build` 时）；**如实降级为 WARN，不伪装 PASS** |
 | `--keep-temp` / `--json` | 保留探针临时目录 / 额外打印机器可读结果 |
+| `--h3-dispatch-json <file>` | **H3 真机/实例事实**（g-475）：隔离实例上三条派发路径的 `child_id` 与错误；不给则 H3 显式 `SKIP`（见 §3.5.2）。等价环境变量 `DSH_GATE_H3_DISPATCH_JSON` |
+| `--dsh-root <dir>` | 组合声明来源（DSH 安装目录或其 `node_modules`），可重复 / 可逗号分隔；等价环境变量 `DSH_GATE_DSH_ROOT`。不给则自动发现（仓库/工作目录 `node_modules`、当前 Node 的全局 `node_modules`、`npm root -g`（Windows 经 `npm.cmd` + shell）、Windows 的 `%APPDATA%\npm\node_modules` 与 `%LOCALAPPDATA%\npm-cache\_npx\**\node_modules`、DSH 自己的 `~/.dsh/profiles/**/node_modules`；g-477 补全） |
 
 **转发的执行件 `win-smoke-test.mjs` 另有自己的入口**（g-428 新增两项；Windows 真机门禁按第 1 行执行）：
 
 ```text
-node scripts/win-smoke-test.mjs --self-test            # 秒级：判定逻辑 + 台账 + 步骤清单的自检（必须打印「自检全部通过。」）
-node scripts/win-smoke-test.mjs --static-only .        # 秒级：T1 静态门禁 + T1 台账层，并打印完整覆盖清单
-node scripts/win-smoke-test.mjs --mutation-check       # 分钟级：负向对照（需已构建 dist/），实拍「定向突变必红」
-node scripts/win-smoke-test.mjs --tarball <tgz>        # 完整门禁（含 Windows 真机门禁的 T1–T5 + 32 步生命周期）
+node scripts/win-smoke-test.mjs --self-test            # 秒级：判定逻辑 + 台账 + 步骤清单 + H 系列判定的自检（必须打印「自检全部通过。」）
+node scripts/win-smoke-test.mjs --static-only .        # 秒级：T1 静态门禁 + T1 台账层 + T1 派发可用层 + T1 H 系列组合探针层，并打印完整覆盖清单
+node scripts/win-smoke-test.mjs --mutation-check       # 分钟级：负向对照（需已构建 dist/），实拍「定向突变必红」（g-428 三条 + g-475 H 突变①②）
+node scripts/win-smoke-test.mjs --tarball <tgz>        # 完整门禁（含 Windows 真机门禁的 T1–T5 + 32 步生命周期 + H 系列）
+node scripts/win-smoke-test.mjs --static-only . --h3-dispatch-json <facts.json>   # 带真机派发事实的 H3（见 §3.5.2）
 ```
 
 **退出码**：`0` = 无 FAIL 且转发的执行件通过；`1` = 有 FAIL 项（或 `--self-test` 失败）；`2` = 用法错误
@@ -113,13 +116,14 @@ g-427 —— **目录形态的目标移入版本泳道在 Windows 上必然 EPER
 根因不在判定口径，而在**覆盖面**：旧 T3 只调 `init / createGoal / setCriteria / setGoalTags / validate`，
 看板的**文件系统生命周期零覆盖**，而缺陷正落在那条无人走过的路径上。
 
-故 `win-smoke-test.mjs` 现在由三层组成，**任一层不成立即判红**：
+故 `win-smoke-test.mjs` 现在由四层组成，**任一层不成立即判红**：
 
 | 层 | 内容 | 判红条件 |
 | --- | --- | --- |
-| **T1 台账层**（新） | 静态枚举产品代码（`core/*.ts`、`dsh-graph-host/index.js`、`lib/**/*.js`）里的每一个 OS 相关调用点，逐项登记「风险面 + 映射（`ws:<冒烟步骤>` / `pg:<平台探针>`）或豁免理由」 | **未登记 ⇒ 红**；命中数或顶层函数集合与清单不一致（漂移）⇒ 红；清单项在实现里消失（幽灵项）⇒ 红；映射指向不存在的步骤/探针 ⇒ 红；豁免理由过短 ⇒ 红 |
-| **T3 清单式生命周期**（新） | 真跑安装包的 `core/ops.js`：32 步看板文件系统生命周期，每步都断言**磁盘最终状态** | 任一步失败；步骤清单与实跑集合不一致；失败路径文案泄漏平台错误码；盘面出现双份/残留空目标目录/锁残留；`tx.persist_failed` 计数不符 |
-| **负向对照** `--mutation-check`（新） | 对已构建包的 `core/ops.js` 做定向突变，实拍「对应检查必红」 | 突变后仍全绿（对照无鉴别力）；基线（未突变）已红；旧顺序突变未泄漏 EPERM（说明「不泄漏错误码」这条断言没有鉴别力） |
+| **T1 台账层** | 静态枚举产品代码（`core/*.ts`、`dsh-graph-host/index.js`、`lib/**/*.js`）里的每一个 OS 相关调用点，逐项登记「风险面 + 映射（`ws:<冒烟步骤>` / `pg:<平台探针>`）或豁免理由」 | **未登记 ⇒ 红**；命中数或顶层函数集合与清单不一致（漂移）⇒ 红；清单项在实现里消失（幽灵项）⇒ 红；映射指向不存在的步骤/探针 ⇒ 红；豁免理由过短 ⇒ 红 |
+| **T1 派发可用层**（g-473，新） | 对**真正会跑起来的**那份代码静态断言「harness 工具名平台无关性」：`core/ops.ts`（仓库根）或编译产物 `core/ops.js`（已安装包）里**带引号的 `"bash"` 只允许出现在两处**——候选表 `SHELL_TOOL_CANDIDATES = ["bash", "pwsh"]` 与平台回落 `win32 ? "pwsh" : "bash"`；并自证解析/诊断接线在册（`SHELL_TOOL_SLOT`、`SHELL_TOOL_CANDIDATES`、`{{shell}}` 占位符、`diagnoseDispatchCapability`、`dispatch.capability_missing`）。风险面与事故留痕见 §3.4.6 | 白名单 / 必需清单 / 文案里出现硬编码 shell 名（= 回退修复）⇒ 红；接线缺失 ⇒ 逐项红；既无 `core/*.ts` 也无 `core/ops.js` ⇒ **WARN 降级**（不伪装 PASS） |
+| **T3 清单式生命周期** | 真跑安装包的 `core/ops.js`：32 步看板文件系统生命周期，每步都断言**磁盘最终状态** | 任一步失败；步骤清单与实跑集合不一致；失败路径文案泄漏平台错误码；盘面出现双份/残留空目标目录/锁残留；`tx.persist_failed` 计数不符 |
+| **负向对照** `--mutation-check` | 对已构建包的 `core/ops.js` 做定向突变，实拍「对应检查必红」 | 突变后仍全绿（对照无鉴别力）；基线（未突变）已红；旧顺序突变未泄漏 EPERM（说明「不泄漏错误码」这条断言没有鉴别力） |
 
 #### 3.4.1 T1 台账层：按文件的风险面与覆盖方式
 
@@ -237,6 +241,157 @@ node scripts/win-smoke-test.mjs --mutation-check            # 需要已构建 di
    **正确的**业务错误判成「未包含目标路径」（2026-10-06 真机实测过一次假红，现场修正提交 `e313233`，见 §7.1）。
    `--self-test` 与 `core/tests/g428-win-os-ledger.test.ts` 各有一条**正例**（反斜杠文案 + 斜杠期望路径 ⇒ 判绿）
    与一条**反例**（确实缺路径 ⇒ 仍判红）钉住；归一化**不得**演变为放宽判定（缺路径必须仍判红）。
+6. **改动派发可用层**（§3.4.6）⇒ 判定逻辑在 `auditDispatchToolPortability` / `DISPATCH_WIRING_REQUIRED`：
+   新增 shell 候选或新增「必须存在」的接线项时同步登记该表，并在 `selfTest()` 的
+   「派发可用正例/反例」两组样本上复查（反例必须判红：白名单里硬编码 shell 名、接线缺失各一）；
+   另有一条**真源核对**：`--self-test` 会用当前仓库源码重扫一次，硬编码 shell 名或接线缺失即判红。
+   所有消费点：`--static-only <repo>`（扫产品源码）、完整门禁（扫**已安装包**的 `core/ops.js`，即真正会跑的那份代码）。
+   产品代码侧的对应断言在 `core/tests/g473-tool-capability-probe.test.ts`（四组合 × 三路径 + 负向对照）。
+
+#### 3.4.6 「harness 工具名依赖」风险面（g-473，必须留痕）
+
+**这是与 g-427 并列的第二类真实漏检，且同样「Linux/WSL2 全绿照不出来」。**
+
+| 项 | 内容 |
+| --- | --- |
+| 现象 | Windows 上 `reviewer`（独立评审）、`collector`（上下文收集）、`executor-minimal`（极简模式执行）三条派发路径**必然失败**：子代理起不来，工具调用报 `tools.restrict() names unknown global tool "bash"` |
+| 根因 | ① DSH 在 win32 上**不注册** `bash`，注册的是 `pwsh`（`dsh-tool-pwsh`；preset 里 `tool-bash` 被 `disabled: process.platform === 'win32'` 关掉）；② `@deepseek-ai/dsh-tools` 的 `restrict(filter)` 对**未知名硬抛错**（不是静默忽略）。产品代码把 shell 名硬编码进角色白名单 / 必需清单 / 文案 ⇒ 两个事实相乘即必然炸 |
+| 为什么 T1–T5 全绿也照不出来 | T1–T5 只覆盖**安装 / 启动 / REST**层，**不含派发维度**（§7 回填表里 v0.20.1 三行均如实标注「Windows 上『派发可用』维度未覆盖」）⇒ 该维度此前只有 Linux/WSL2 隔离实例上的验证 |
+| 天然不可复现 | POSIX 上 `bash` 就在注册表里 ⇒ 硬编码「恰好正确」，本地怎么跑都是绿的；只有 win32 注册表能让它变红 |
+| 修复（g-473） | shell 名**不再硬编码**：候选表 `["bash","pwsh"]` + 宿主探针 `tools.get(name, <parent agent>)` 解析（`probe` 优先，无探针回落 `win32 ? "pwsh" : "bash"`）；白名单/必需清单里用槽位常量、按解析结果展开并**与当前 scope 实际存在的名字求交**（缺 `dsh-tool-web` ⇒ `web_*` 静默剔除，不炸）；必需工具缺失 ⇒ 记 `dispatch.capability_missing` 事件 + 可读诊断（点名缺失项/探针来源/候选与回落值）并**不派发**；文案改用解析结果或中性表述 |
+| 防再犯（本层） | `auditDispatchToolPortability`：产品代码（或已安装包的 `core/ops.js`）里带引号的 `"bash"` **只允许**出现在候选表与平台回落两处，其余任何位置（白名单/必需清单/文案）出现即判红；并自证解析/诊断接线在册。负向对照实测：把白名单改回硬编码 `bash` ⇒ 本层必红（`--self-test` 的「白名单里硬编码 bash」样本即是该对照） |
+| 映射 | 本层不是 OS 调用点，故**不进** `OS_SITE_ROWS`（台账层映射仍是 `ws:` / `pg:` / `exempt:` 三类）；本层的机器可读身份是 `auditDispatchToolPortability` 的判定结果与 `覆盖=` 报告里的 `派发可用=` 段 |
+| **仍未关闭** | **Windows 原生真机结论未取得**：本层是**静态**断言（跨平台同结论，Linux 上即可跑），它证明「不会提交未知名给 `restrict()`」，**不替代**真机上的端到端派发验证；真机结论由负责人在原生 Windows 上跑一次后回填 |
+| **后续（g-475）** | 本层只问「产品代码有没有硬编码 shell 名」；**「产品与今天的 harness 组合是否一致」由 §3.5 的 H1–H6 探针接管**（含 H3 的端到端派发事实回传通道），本节不再重复 |
+
+---
+
+### 3.5 「harness 组合 / OS 行为差异」风险面（g-475，必须留痕）
+
+**第三类真实漏检**，与 §3.4.4（g-427 目录形态搬迁）和 §3.4.6（g-473 harness 工具名依赖）并列：
+前两类分别漏在「看板 FS 生命周期零覆盖」与「派发维度零覆盖」上，本类漏在**覆盖面本身没有盯住
+「harness 组合」这个输入面** —— 组合变了（平台条件化 profile 段、装了哪些 `dsh-tool-*`），
+门禁却仍在断言产品代码「自己跟自己一致」。
+
+#### 3.5.1 探针清单（H1–H6：单一真源，两件消费）
+
+清单、判定与运行器的**唯一真源**在 [`scripts/win-smoke-test.mjs`](../scripts/win-smoke-test.mjs)
+（`HARNESS_PROBE_ROWS` / `judge*` / `HARNESS_PROBE_RUNNERS`）；
+[`scripts/platform-smoke-test.mjs`](../scripts/platform-smoke-test.mjs) 只 `import` 并消费，**不定义第二份**。
+为什么宿主是 win-smoke 而不是新开 `scripts/lib/`：win-smoke 的契约是「单文件、纯 Node、可单独拷到原生
+Windows 上运行」（发布红线 1 的执行件，`win-smoke-test.cmd` 双击即用），新增本地共享模块会让那种拷贝失效；
+而 platform-smoke **本来就**依赖同目录的 win-smoke 存在（`forwardSmoke` 直接 spawn 它）。
+
+| 探针 | 覆盖什么 | 判定口径（PASS / FAIL / 降级） | 与既有层的关系（零重复） |
+| --- | --- | --- | --- |
+| **H1** | shell 工具名解析：平台条件化组合声明 → 插件解析 | PASS = 组合声明里 `tool-bash`/`tool-pwsh` 的 `disabled: !!js process.platform …` 按目标平台求值后**恰好一个启用**，且与 `resolveShellTool()`（探针优先 + 无探针平台回落）**逐平台一致**（win32→pwsh / linux、darwin→bash）；FAIL = 不一致、`disabled` 出现**无法识别的平台形态**、组合声明了未登记的工具插件；WARN = 找不到 DSH 组合声明（未实测，不冒充通过） | g-473 的 §3.4.6 是**静态扫产品代码**（`auditDispatchToolPortability`：带引号的 `"bash"` 只许出现在候选表与回落）；H1 是**读真实组合声明**再与解析结果对账 —— 一个问「代码有没有硬编码」，一个问「代码与今天的组合是否一致」 |
+| **H2** | 角色白名单求交（组合工具名台账驱动） | PASS = `reviewer` / `collector` / `executor-minimal`（含 minimal 变体）的 `toolFilterForRole().allow` ⊆ 组合**实际存在**名字集合；shell 槽位解析为组合的 shell 名、另一平台的名字不出现；**负向对照**：注入一个已知不存在的名字必须判红（证明断言非恒真）；注入「缺 `dsh-tool-web`」⇒ `web_*` 静默剔除、注入「缺 shell」⇒ 可读诊断且不派发；FAIL = 越界名字 / 工具插件未登记 / 求交未生效；WARN = 无可导入的 `core/ops.js` | g-473 的产品侧断言在 `core/tests/g473-tool-capability-probe.test.ts`（四组合 × 三路径，**合成探针**）；H2 用**真实组合的工具名台账**驱动同一组 API，并在门禁里跑，故组合一变就红 |
+| **H3** | 派发可用（端到端） | PASS = 隔离实例上真实派发三条路径都拿到非空 `child_id`、无 `tools.restrict() names unknown`、无「子代理启动失败」/`child_error`；**SKIP（需真机/实例）** = 未回传真机事实时**显式标注跳过**，禁止静默通过 | §3.4.6 表格里「Windows 上『派发可用』维度未覆盖」这一行的**收口点**：H3 把该维度变成一个可回传、可判定的探针（不再靠人读日志） |
+| **H4** | 路径分隔符与大小写语义 | PASS = 反斜杠 / 绝对路径 / `..` 形态的附件名被**可读拒绝**（不静默建目录、不泄漏平台错误码），`a/b.txt` 正常；且**注入**「大小写不敏感卷」时别名解析命中、注入「大小写敏感」时不命中（与真实卷无关，跨平台同结论）；**判定前置条件（g-477 真机发现后新增）**：注入三态必须全部忠实 —— 注入「敏感卷」时引擎**不得咨询真实 FS**，见 §3.5.4；WARN = 无可导入的 `core/ops.js` / `core/platform.js` | **H4.a** 断言产品既有拒绝语义（`storeAttachment`），不同于 T1 台账（那是**静态**登记调用点）；**H4.b** 用 `withCaseInsensitiveVolumeForTesting` **注入**卷语义，P1 量的是**真实**卷 ⇒ 一个测「引擎在两种卷语义下都正确」，一个测「今日本机是哪种卷」 |
+| **H5** | CRLF/LF 与编码往返 | PASS = 含 `\r\n` 与星平面字符（🙂）的正文写进 `goal.md` 后**逐字节**读回一致、UTF-8 往返无损且无孤立 `\r`；`results` 机器头字段里注入 `\r\n` 只被**折叠进同一行**（不新增行、字段齐备），正文换行归一为 LF 且逻辑行不丢；WARN = 无可导入的 `core/ops.js` | **P6** 是 locale（`LANG=C`）下 CJK/prompt 的逐字节往返；**H5** 是换行风格（CRLF/LF 混用）+ 机器头**注入折叠** + 星平面字符 —— 正交的两组编码风险 |
+| **H6** | 命令拼接与引号 | PASS = `splitCmd` 按空白/**引号分组**解析 `--dsh` 单串（含带空格路径）；`quoteForCmd` / `buildShellCommandLine` 按 cmd.exe 元字符集合 `[\s"&^\|<>]` 加引号且不重复加；**真实 argv 传递**（`shell:false` 与 shell:true 组合命令行）逐字节一致 | 复用 win-smoke 既有的三个函数（不新写一份引号规则）；**新增**的是真实 argv 传递自检 —— 真机/实例轮靠它回传结论（mem 记录的 `--dsh` 引号坑：`--dsh` 取**一个**字符串，带空格路径必须靠引号分组） |
+
+**一行跨平台矩阵结论**（两件执行件都打印**同一形状**，可直接逐项对比）：
+
+```text
+harness 组合矩阵 | 平台=<win32|linux|darwin> | H1=… H2=… H3=SKIP(需真机/实例) H4=… H5=… H6=… | 清单=6 项（单一真源，win-smoke + platform-smoke 两件消费）
+```
+
+#### 3.5.2 真机/实例事实怎么回传（H3）
+
+H3 需要**真实派发事实**，不接受自报。执行件提供了单一回传通道：
+
+```bash
+# 隔离实例上跑完三条派发（reviewer / collector / executor-minimal）后，把事实写成 JSON：
+#   { "roles": [ { "role": "reviewer", "childId": "<真实 child id>", "errors": [] }, … ] }
+node scripts/win-smoke-test.mjs --static-only . --h3-dispatch-json <facts.json>
+node scripts/platform-smoke-test.mjs --static-only . --h3-dispatch-json <facts.json>   # 两件都会判定并与转发的 win-smoke 一致
+# 等价环境变量（不想改命令时）：DSH_GATE_H3_DISPATCH_JSON=<facts.json>
+```
+
+**不给事实文件时 H3 一律是 `SKIP`，文案逐字为「跳过（需真机/实例）… 不冒充通过」** ——
+既不会把「没测」读成 PASS，也不会因为缺事实而把整条门禁判红（真机结论按 §7 回填表留痕）。
+
+#### 3.5.3 维护指令（改了组合、加了工具插件、加了探针怎么办）
+
+1. **新增工具插件**（组合声明里出现新的 `@deepseek-ai/dsh-tool-*`）⇒ H2 会打印
+   `[FAIL] … H2 … :: [registry] … 组合声明了未登记的工具插件 …`；
+   在 `DSH_TOOL_PLUGIN_REGISTRY` 里补一行 `["@deepseek-ai/<pkg>", ["<工具名>…"] | null, "<非目标理由>"]`。
+   登记为「有工具名」时，工具名必须能被该包自己的 `package.json` description 佐证（否则判红 `tool-name-unverified`）；
+   声明里的子路径形态（`@deepseek-ai/dsh-tool-subagent-control/list-agents`）按**包名**归一，不必单独登记。
+2. **组合声明换了平台条件写法** ⇒ H1 判红 `unknown-platform-condition`；在 `PLATFORM_CONDITION_FORMS`
+   里补该形态并同步 `--self-test` 的正反例（`env` 等**非平台**条件明确不在平台条件审计面内，不判红）。
+3. **新增 H 探针** ⇒ 三处必须同步（缺一处由 `auditHarnessProbeManifest` / `auditHarnessProbeConsumers` 判红）：
+   `HARNESS_PROBE_IDS` + `HARNESS_PROBE_ROWS`（清单）+ `HARNESS_PROBE_RUNNERS`（运行器）；
+   两件执行件**自动**消费（`runHarnessProbes` 遍历清单），无需改文件名列表。
+4. **改动 H 判定逻辑** ⇒ 在 `win-smoke-test.mjs --self-test` 与
+   `core/tests/g475-harness-combo-probes.test.ts` 各补**正反例**（真问题必红 + 干净样本必绿）；
+   产品侧修复回退的机器化对照在 `--mutation-check` 的 **H 突变①②**（求交失效 / 候选表退化为只认 `bash`），
+   基线未突变时必须 H1/H2 全绿、突变体必须让指定探针判红。
+5. **每次改动后**跑四入口（见 §3.4.5 第 4 条）+ §4 的 Linux 序列；Windows 真机按 §5 之外的
+   红线 1 流程执行，并把 H 层矩阵行逐字回填 §7。
+
+#### 3.5.4 H4 的判定前置条件：注入三态必须忠实、判定与真实卷解耦（g-477 真机发现）
+
+**第四类真实漏检**：既不是「覆盖面为零」，也不是「判定口径写错」，而是**判定赖以成立的 seam 在真机上
+静默失真** —— 口径写着「与真实卷无关，跨平台同结论」，实现却在真机上**落回了真实卷语义**。
+
+**真机现象（Windows Round A，win32/x64 + Node v24.21.0，2026-10-10）**：
+`大小写注入：请求=a.txt；不敏感卷→A.txt(aliased=true)；敏感卷→A.txt(aliased=true)` ⇒ H4 **判红**
+（H1/H2 另因组合声明发现失效而 WARN，本轮一并修复，见 §3.5.5）。
+
+**根因**：`core/platform.ts` 的 `resolveExistingEntry` 只处理 `caseInsensitiveVolumeOverride === true`，
+对 `=== false`（注入「敏感卷」）**没有分支** ⇒ 落到真实 FS 的 `lstatSync(请求名)` 探测；NTFS/APFS 等
+**真实不敏感卷**上该探测大小写不敏感地成功 ⇒ 仍返回 `aliased: true` ⇒ **注入语义失效**。
+Linux（ext4）之所以「绿」，是因为 `lstat('a.txt')` 恰好 ENOENT ⇒ 返回 `null` —— 用的是**真实卷语义**
+而非注入语义，属**碰巧对**；树上测试此前**只注入 `true`**，故该缺陷长期未被发现。
+
+**修复与钉法（最小、零生产行为变更）**：
+- `=== false` 补**短路**：只认逐字节同名，其后一律 `null`，**不再咨询真实 FS**；`lstat` 探测**仅**保留给
+  `override === null`（生产/未注入）。
+- 判定抽成**纯函数** `decideCaseAliasEntry(entries, requested, present, override)`（`resolveExistingEntry`
+  退化为薄 FS 包装、只负责采集真实输入）—— **这是本条的机器化关键**：Linux 上「跑一遍探针」**无法区分
+  新旧实现**（ext4 上旧实现也返回 `null`），只有把 `present`（真实 FS 是否命中）从判定里显式抽出来，
+  才能在敏感卷开发机上把「注入敏感 ∧ 真实命中 ∧ 拼写不同」这一 Windows 真机形态钉死。
+- 守卫 `core/tests/g477-case-alias-injection-and-win-discovery.test.ts`：**穷尽决策表**（三态 × present ×
+  拼写，含 `false ∧ present=true ∧ 拼写不同 ⇒ null` 与 `null ∧ present=true ∧ 拼写不同 ⇒ 别名命中` 两侧）、
+  **负向对照**（旧实现逐字复刻在同一输入上必然判别名 ⇒ 回退修复即红）、以及**结构守卫**（`false` 短路
+  必须存在且 `lstat` 只在 `override === null` 分支内）。T1 台账 `core/platform.ts | caseAlias` 行如实同步
+  函数集合（`decideCaseAliasEntry`），命中数不变。
+
+**判定前置条件（回填前必须成立）**：任何平台上的 H4 结论，都以「注入三态全部忠实且判定与真实卷解耦」
+为前提 —— 该前提由上条纯函数决策表在**每次** `run-tests` 中机器复核，不依赖真机重跑。
+
+#### 3.5.5 H1/H2 的前置条件：组合声明发现必须跨平台可用（g-477 真机发现）
+
+**真机现象**：H1/H2 均 `[WARN] 未找到 DSH 组合声明（presets/*.patch.yml / cordis.patch.yml）——可用
+DSH_GATE_DSH_ROOT=<dir> 显式指定`（真机上「自动发现」从来没能成功，且文案没告诉用户去哪儿找）。
+
+**根因**：`scripts/win-smoke-test.mjs` 的 `discoverDshRoots`
+1. `spawnSync("npm", ["root", "-g"])` —— Windows 上 `npm` 是 `npm.cmd`，**不经 shell 直接 spawn 必然失败**
+   ⇒ 该回退在 Windows 上**恒失效**（Linux 上有效，掩盖了问题）；
+2. 候选面缺 Windows 的 `%APPDATA%\npm\node_modules`、`%LOCALAPPDATA%\npm-cache\_npx\**\node_modules`
+   与 DSH 自己的 `~/.dsh/profiles/**/node_modules`；
+3. 失败时只给变量名，没给**定位命令**。
+
+**修复**：命令构造抽成可注入的 `npmGlobalRootInvocation`（Windows：`process.execPath` 同目录的
+`npm.cmd` + `shell: true`，并按 DEP0190 只传**单条命令行字符串**；POSIX 保持 `npm` + args + `shell:false`），
+配 `npmGlobalRootInvocationProblems` **fail-closed**（`{file:"npm", shell:false}` 在 win32 上被拒且**不启动进程**）；
+候选枚举抽成可注入 `env`/`homedir`/`platform`/`execPath` 的 `dshRootCandidates`（补齐上述三类 Windows 目录，
+并修正「含 `@deepseek-ai` 直接子项的根」（如 `<profile>/node_modules`）此前被形状过滤器丢弃的问题）；
+WARN 文案附**可复制**的定位命令（Windows PowerShell `Get-ChildItem` / `where.exe dsh` / `npm root -g`，
+POSIX `npm root -g` / `ls ~/.dsh/profiles/*/node_modules/@deepseek-ai` / `which -a dsh`）。
+守卫：`--self-test` 新正反例 + `core/tests/g477-*`（伪造 `%APPDATA%`/`_npx`/`profiles` 树必须命中；
+裸 `spawnSync("npm")` 必红）。
+
+**与 §3.4.6 的边界（不重复）**：§3.4.6 记录的是 **g-473 的缺陷面与产品修复的静态防再犯**；
+本节记录的是 **g-475 新增的「组合依赖」覆盖面本身**（H1–H6 探针、单一真源、防漂移守卫与真机回传通道）。
+两者共用同一组产品 API（`resolveShellTool` / `toolFilterForRole` / `diagnoseDispatchCapability`），
+但断言对象不同：前者断言「产品代码里没有硬编码」，后者断言「产品与今天的组合一致」。
+
+**仍未关闭**：**Windows / macOS 原生真机上的 H3 端到端派发结论未取得**（本目标只在 Linux 上验证了
+执行件、判定力与变异对照）。H1/H2/H4–H6 是跨平台同结论的静态/离线探针（Linux 上即可跑，Windows 上会
+读 Windows 的组合声明与卷语义），**不替代**真机上的端到端派发验证。
 
 ---
 
@@ -259,7 +414,16 @@ node scripts/platform-smoke-test.mjs --tarball "$PWD/tmp/dsh-graph-<ver>.tgz"
 
 # 4.4 离线自检（确认执行件自身没坏；不装插件、不起实例）
 node scripts/platform-smoke-test.mjs --self-test
+
+# 4.5 H 系列（g-475）：上面的 --static-only / --tarball 已自动带上；单独复现某一件时：
+node scripts/win-smoke-test.mjs --static-only .        # H1/H2/H4–H6 需已构建 dist + 能发现 DSH 组合声明
+node scripts/win-smoke-test.mjs --static-only . --h3-dispatch-json tmp/h3-facts.json   # H3 真机派发事实（见 §3.5.2）
+node scripts/win-smoke-test.mjs --mutation-check       # H 突变①②：求交失效 / 候选表退化为只认 bash ⇒ 必须判红
 ```
+
+**H 系列的两个降级口径（如实登记，不伪装 PASS）**：
+① 找不到 DSH 组合声明 ⇒ `H1`/`H2` 为 `WARN`（可用 `--dsh-root` 指定安装目录）；
+② 未回传真机派发事实 ⇒ `H3` 逐字标注 `SKIP(需真机/实例)`。其余 H 探针在 Linux 侧应全为 `PASS`。
 
 **sha256 对账**（产物传递纪律：跨机器唯一渠道是 tarball）：`sha256sum tmp/dsh-graph-<ver>.tgz`，
 与发布清单对账（v0.16.0 = `fe852e23…`；**本目标零发布物影响**：改造前后同一份源码重建 + `pnpm pack`
@@ -356,6 +520,7 @@ evidence: suite=core/tests node --test passed=1379 failed=0 skipped=0 exit=0
 | Windows · **v0.20.1**（发布候选包轮 = 第 1 轮；含 1 项目标改动：g-469 派发 API 双版本兼容） | 2026-10-10 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（真机 T1–T5：通过 15 / 失败 0 / 告警 1；宿主 `0.2.0-rc.2`，端口 3088；**原生 Windows 进程，经 WSL↔Windows 互操作驱动**）。**被测产物 = v0.20.1 候选包** `dsh-graph-0.20.1.tgz` sha256 `9b3e3e37afec42e40ebdce0c567f75c69e383b512fe8a3d37e7409fd4c83709b` 1437282 B。**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）+ 步骤清单自证 32/32 + 失败路径（业务错误、`tx.persist_failed=1`、重试收敛）+ 盘面总览 + 32 步文案无平台错误码 + 跨进程并发 CAS 4 抢 1。**唯一告警 = T1 台账层 WARN**（`--tarball` 模式发布包内无 `core/*.ts` ⇒ 未对账，**设计而非缺陷** ⇒ 台账对账改在仓库根完成）。**本轮记作「候选包轮」**：README 平台表回填后重建重打 ⇒ 第 2 轮（被测产物 == 发布产物 闭环轮）**已由负责人于 2026-10-10 执行并 PASS**（宿主 **`@deepseek-ai/dsh@0.2.1-alpha.2`**，见下一行）；本轮 `npx -y @deepseek-ai/dsh` 解析到 `latest` = `0.2.0-rc.2`，**未覆盖本版真正要修的 `0.2.1` 宿主代际**（该代际缺口已由第 2 轮补上）。⚠️ **Windows 上「派发可用」维度未覆盖**（T1–T5 不含派发）：本行结论只覆盖**安装 / 启动 / REST**层；派发可用维度本版在 Linux/WSL2 隔离实例上验证，**Windows 未经真机验证** —— 不得读作 Windows 三维度齐全。互操作形态与纯原生场景的 4 点差异同 §7.8；逐字报告见 §7.9 | 负责人（真机） |
 | Windows · **v0.20.1**（第 2 轮 = **闭环轮**，被测产物 == 当轮发布产物；含 1 项目标改动：g-469 派发 API 双版本兼容） | 2026-10-10 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（真机 T1–T5：通过 15 / 失败 0 / 告警 1；宿主 DSH **`0.2.1-alpha.2`**（经 `--dsh` 显式锁定），默认端口 3088；**原生 Windows 进程，经 WSL↔Windows 互操作驱动**；执行时刻 `2026-10-10T07:05:09.850Z`）。**被测产物 = 终态发布候选** `dsh-graph-0.20.1.tgz` sha256 `94459a16ae7d8dd378230d4c8daaf0f7885d2cd68b08e67b743d28d3b2d9c22c` 1437660 B，**== 当轮发布产物 ⇒ 该轮闭环成立**（其后 att-004 重建重打 ⇒ 终态见下一行）。**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）+ 步骤清单自证 32/32 + 失败路径（业务错误、`tx.persist_failed=1`、重试收敛）+ 盘面总览 + 32 步文案无平台错误码 + 跨进程并发 CAS 4 抢 1。**唯一告警 = T1 台账层 WARN**（`--tarball` 模式发布包内无 `core/*.ts` ⇒ 未对账，**设计而非缺陷** ⇒ 台账对账改在仓库根完成，与第 1 轮同）。⚠️ **Windows 上「派发可用」维度未覆盖**（T1–T5 不含派发）：本行结论只覆盖**安装 / 启动 / REST**层；派发可用维度本版在 Linux/WSL2 隔离实例上验证，**Windows 未经真机验证** —— 不得读作 Windows 三维度齐全。互操作形态与纯原生场景的 4 点差异同 §7.8；逐字报告见 §7.9 | 负责人（真机） |
 | Windows · **v0.20.1**（第 3 轮 = **终轮 / 闭环轮**，被测产物 == 终态发布产物；含 1 项目标改动：g-469 派发 API 双版本兼容） | 2026-10-10 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（真机 T1–T5：通过 15 / 失败 0 / 告警 1；宿主 DSH **`0.2.1-alpha.2`**（经 `--dsh` 显式锁定），端口 3088；**原生 Windows 进程，经 WSL↔Windows 互操作驱动**；执行时刻 `2026-10-10T08:38:52.827Z`）。**被测产物 = 终态发布产物** `dsh-graph-0.20.1.tgz` sha256 `44dc4473940d41a7f1141e7b9b96f1e89e49788c7f070a818c8913a5e716f6ee` 1437812 B，**== 发布产物 ⇒ 闭环成立**。**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）+ 步骤清单自证 32/32 + 失败路径（业务错误、`tx.persist_failed=1`、重试收敛）+ 盘面总览 + 32 步文案无平台错误码 + 跨进程并发 CAS 4 抢 1。**唯一告警 = T1 台账层 WARN**（`--tarball` 模式发布包内无 `core/*.ts` ⇒ 未对账，**设计而非缺陷** ⇒ 台账对账改在仓库根完成，与第 1/2 轮同）。⚠️ **Windows 上「派发可用」维度未覆盖**（T1–T5 不含派发）：本行结论只覆盖**安装 / 启动 / REST**层；派发可用维度本版在 Linux/WSL2 隔离实例上验证，**Windows 未经真机验证** —— 不得读作 Windows 三维度齐全。互操作形态与纯原生场景的 4 点差异同 §7.8；逐字报告见 §7.9 | 负责人（真机） |
+| Linux (WSL2) · **v0.20.2**（发布准备轮：候选包静态层 + H3 事实通道实证） | 2026-10-10 | linux/x64 | v26.7.0 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | `exit=0`（转发件） | **PASS**（`platform-smoke-test.mjs --static-only .` = **通过 15 / 失败 0 / 告警 0**，含 H1–H6 全 PASS —— 其中 **H3 由隔离实例真派发事实判定**；`win-smoke-test.mjs --static-only . --h3-dispatch-json <facts>` = **通过 9 / 失败 0 / 告警 0**；转发执行件 `exit=0`；整套件自证闸门 2411/2411。**H3 的实例侧证据**：隔离实例装候选 `dist`（`link:`）→ 两轮独立真派发 `collector` / `executor-minimal` / `reviewer` 三条路径 → 真 `child_id` 落事实文件 → 磁盘侧独立核对命中（详见 §7.11 的 Linux 段）。**本行只对 Linux 具平台效力**，不替代 Windows 真机结论） | agent:g-476-att-001 |
 
 回填时请一并粘贴「可复制回传的报告」整段（执行件在结论后自动打印），并在 `README.md` 平台范围段落更新结论。
 该报告块自 g-428 起额外含 **`覆盖=…`** 一行（台账项数/命中数/忽略处数 + T3 生命周期步数），
@@ -953,6 +1118,232 @@ T1–T5 **均 15/0/1**、T3 **均 32/32 步**）为准；**② 的被测产物�
 
 ---
 
+### 7.10 v0.20.2 Round A' 真机结论（**已回填：负责人真机实测 2026-10-10 · 全绿**）
+
+**为什么需要这一轮**：Windows Round A（2026-10-10，win32/x64 + Node v24.21.0）在 v0.20.2 候选前
+暴露了 **H4 判红**与 **H1/H2 WARN**（两处均只在真机暴露，Linux 上全绿；根因与修复见 §3.5.4 / §3.5.5）。
+修复轮在 Linux 上已全绿，但**修复的真机有效性必须由负责人重跑 Round A 才能定论**。
+
+**回填前必须成立的前置条件**（由自动化守卫保证，与真机无关）：
+- §3.5.4 的注入三态忠实性（`false ∧ present=true ∧ 拼写不同 ⇒ null`）由 `core/tests/g477-*` 穷尽决策表
+  + 结构守卫在每次 `run-tests` 中复核；
+- §3.5.5 的发现命令构造/候选面由 `--self-test` 与 `core/tests/g477-*` 夹具复核。
+
+**如何在真机上取证**（负责人执行，逐字粘贴回本小节）：
+
+```text
+# ① 自检（离线、秒级；应打印「自检全部通过。」）
+node scripts/win-smoke-test.mjs --self-test
+# ② 静态门禁 + 台账 + H 系列组合探针（应打印完整覆盖清单与 harness 组合矩阵）
+node scripts/win-smoke-test.mjs --static-only .
+node scripts/platform-smoke-test.mjs --static-only .
+```
+**预期判读（回填时逐项核对）**：H4 = `PASS`，且 H4 详情里的「大小写注入」一段必须是
+`不敏感卷→A.txt(aliased=true)；敏感卷→null`（**敏感侧必须是 `null`**，这是本轮的判定点）；
+H1/H2 = `PASS`（组合声明被发现）或至少 WARN 文案给出可复制的定位命令；矩阵行与「可复制回传的报告」
+整段（含 `覆盖=…` 行）一并粘贴。
+
+| 平台 | 执行日期 | 平台/架构 | Node | H1 | H2 | H3 | H4 | H5 | H6 | T1–T5 | 结论 | 执行人 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Windows · **v0.20.2**（Round A' = **修复后静态复跑**） | 2026-10-10 | win32/x64 | v24.21.0 | **PASS** | **PASS** | SKIP（需真机/实例） | **PASS** | **PASS** | **PASS** | —（Round A' 不跑 T1–T5，见 §7.11） | **PASS**（win-smoke **8/0/0** 全绿；platform-smoke **12/0/2**，两条 WARN 见下） | 负责人（miuzel） |
+
+> ✅ **本小节已由负责人真机实测回填**（2026-10-10，win32/x64 + Node v24.21.0）：**agent 未预填任何 PASS/FAIL、
+> 未把 Linux 结论抄成 Windows 结论**（发布红线 1 保持）—— 独立性的证据是「判红在前、转绿在后」：
+> Round A 的判红原始记录仍逐字保留在 §3.5.4 / §3.5.5 的「真机现象」段，与本轮构成
+> 「**真机判红 → 修复 → 真机复验转绿**」闭环（若为预填/抄录，§3.5.4 的 `984,000 B` 等真机细节无从产生）。
+
+**本轮两件执行件分别取证（各自对应一个必须的测量面）**：
+
+| 命令 | 被测树 | 为何必须这样跑 |
+| --- | --- | --- |
+| `win-smoke-test.mjs --static-only <仓库>`（**UNC 直跑**，cwd 在 `%TEMP%`） | `.worktrees/g-476-att-01` = `v0.20.2-test` 提交 `6a1d5e5` | H1/H2/H4/H5 要真 import 产品模块 ⇒ 依赖经 WSL 侧 `node_modules` 解析即可判定；代价：cwd 不在树内 ⇒ `--self-test` 的 **H 消费审计打 INFO 跳过**（**不算通过**），同一守卫另由 `core/tests/g475-*` 在 Linux 门禁逐次复核 |
+| `win-smoke-test.mjs --static-only .` + `platform-smoke-test.mjs --static-only .`（**解到 Windows 本地盘 NTFS** 的树包 `windows-gate-tree.tgz`，sha256 `6d806ced…`） | 同上（树包内容 = `6a1d5e5` 树 + 已构建 `dist/` + 产品运行时依赖 `node_modules/yaml`） | P1/P4/P5/P6 是**在目标 FS 上实测**（大小写别名 / 并发 CAS / 跨 FS rename / locale 往返）⇒ 走 UNC 等于在测 WSL 侧文件系统，结论对 NTFS 无效 |
+
+**逐字回传（负责人粘贴；`覆盖=…` 行与矩阵行原样，未改写任何判定字符）**：
+
+```text
+dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.21.0
+结果=PASS 通过8/失败0/告警0
+覆盖=台账=67项/260处命中（忽略0行，未登记即判红）  派发可用=零硬编码 shell 名（接线齐备）  H组合=5/6 通过，1 项显式跳过（需真机/实例）
+harness 组合矩阵 | 平台=win32 | H1=PASS H2=PASS H3=SKIP(需真机/实例) H4=PASS H5=PASS H6=PASS | 清单=6 项（单一真源，win-smoke + platform-smoke 两件消费）
+组合来源：92 个声明文件（…\npm-cache\_npx\…\node_modules ×6, C:\Users\mingxuan\.dsh\profiles, …\profiles\node_modules）
+
+dsh-graph 平台门禁 | 平台=win32/x64 node=v24.21.0 标注=非支持平台(win32)
+逐项=P1=WARN P2=PASS P3=PASS P4=PASS P5=WARN P6=PASS M4=PASS H=H1:PASS H2:PASS H3:SKIP H4:PASS H5:PASS H6:PASS
+结果=PASS 通过12/失败0/告警2 转发exit=0
+  WARN P1 大小写敏感性 :: 大小写敏感=false fileAliased=true sameInode=true dirAliased=true
+  WARN P5 跨 FS rename(EXDEV) :: 未找到可写的第二文件系统（候选：/dev/shm, /tmp, /var/tmp）
+```
+
+**本轮判定点逐项核对（三条关键点全中）**：
+
+1. **修复的真机有效性（g-477①）**：H4 详情为
+   `分隔符：a\b.txt=拒绝 /abs.txt=拒绝 ../esc.txt=拒绝 a/b.txt=接受 ok.txt=接受；大小写注入：请求=a.txt；不敏感卷→A.txt(aliased=true)；敏感卷→null`
+   ⇒ **敏感侧已是 `null`**，与 Round A 的「敏感卷下 `a.txt` 仍被别名到 `A.txt`」**正相反** ⇒
+   注入三态在**真实不敏感卷（NTFS）**上忠实（Round A 之所以判红，正是因为它退到 `lstatSync` 而 NTFS 大小写不敏感地找到了文件）。
+2. **原始缺陷的真机闭环（g-473）**：H1 =
+   `组合声明：win32=pwsh linux=bash darwin=bash；插件解析（探针）逐平台一致；回落=win32:pwsh linux:bash darwin:bash；当前平台 win32=pwsh（来源 probe）；组合来源=92 个声明文件`；
+   H2 = 三路径（`reviewer` / `collector` / `executor-minimal`，standard 与 minimal 两种模式）在 `@win32` 全部解析为 `pwsh`、
+   在 `@linux` 全部为 `bash`，且 `负向对照已判红`、`组合工具名=8+graph_*51`
+   ⇒ **win32 组合里不再出现 `bash`**、白名单求交按组合实际存在名字驱动 ⇒ 「Windows 上派发必然起不来」那条病根获得**真机反证**。
+3. **发现链路真机可用（g-477②）**：`组合来源=92 个声明文件`（含 `_npx\…` 与 `\.dsh\profiles`）
+   ⇒ Windows 上组合声明**被发现**，H1/H2 不再因「找不到声明」退化为 WARN（Round A 的病根之一即发现不到）。
+
+**告警与边界（如实登记，不读作通过）**：
+
+- `P1` WARN = **NTFS 大小写不敏感**（设计内、已附影响说明）：仅大小写不同的 goal id / version slug 会落到**同一实体**
+  （后写覆盖前者）、`A`/`a` 目录互相别名。**该风险是否要在引擎侧加护栏（拒绝创建仅大小写不同的新实体）属负责人决策**，
+  本轮只报告（口径同 P1 的「本项只报告风险」）。
+  ⇒ **负责人裁决（2026-10-10）：记为已知限制、不改引擎**（单机单用户场景下，为「仅大小写不同的 id 互相别名」
+  引入创建期拒绝逻辑收益低、复杂度高）。**本条即该限制的权威登记位置** —— 排查「看板串档 / 目标莫名被覆盖」时
+  先按此口径核对 goal id 与 version slug 的**大小写拼写**是否与他人重复（引擎不会替你拒绝）。
+- `P5` WARN = Windows 上无第二个可写文件系统 ⇒ **跨 FS `rename(EXDEV)` 在 win32 上未实测**（代码侧缓解：临时文件与目标同目录）；不影响本轮结论。
+- `H3=SKIP(需真机/实例)` **逐字保留** ⇒ **「Windows 上真派发 reviewer + collector + executor-minimal」尚未被回答**，
+  须由 §7.11 的 H3 段回传事实后才能定论；本节不得据此声称派发端到端可用。
+- 本轮**不跑 T1–T5**（安装 / 启动 / REST）⇒ 表内 `T1–T5` 列记 `—（见 §7.11 Round B）`；
+  platform-smoke 的「本机平台是 win32（非 macOS/Linux）⇒ 平台效力声明不成立」边界原样保留。
+
+> 📌 **过程留痕（同一轮的第一次尝试失败，已废弃、勿引用其数字）**：首次本地树包**排除了全部 `node_modules`**，
+> 而 H1/H2/H4/H5 与 P4.a/P6 会真 import 产品模块（`dist/core/ops.js` ⇒ `yaml`）⇒ 真机上
+> `Cannot find package 'yaml'`：H1/H2/H4/H5 退化为 **WARN（= 本轮没测到，H4 结论未取得）**、P4.a/P6 连带 FAIL。
+> 该次尝试同时暴露**验证方法缺陷**：树解在**仓库内部**自验会因 Node 解析沿父目录上溯而**捡到主树 `node_modules`** ⇒ 假绿。
+> 树包已修（单独追加零依赖的 `node_modules/yaml`），并在**无任何祖先 `node_modules`** 的目录复验后才上机；
+> 上表为修复后的复跑结果。**教训（已写入 Windows 取证食谱）**：①「解在仓库内」不构成验证；② H1/H2/H4/H5 出现 `WARN` 一律视为本轮没测到。
+
+---
+
+### 7.11 v0.20.2 Round B（完整 tarball 门禁）与 H3（派发可用）真机结论（**已回填：负责人真机实测 2026-10-10 · 两项全绿 PASS**）
+
+**为什么需要这两项**：
+
+- **Round B = T1–T5 全量**（安装 / 启动 / REST 层；链接宿主 **`@deepseek-ai/dsh@0.2.1-alpha.2`**，即本版修复目标代际）。
+  ⚠️ **口径边界**：T1–T5 **不含「派发可用」维度** ⇒ Round B 的 PASS 只能读作安装 / 启动 / REST 已通过。
+- **H3 = 派发可用**（三条路径：`reviewer` / `collector` / `executor-minimal`）。**v0.20.1 的教训**是本版新增 H 系列探针的直接原因：
+  那一轮的 T1–T5 在 Windows 上**全绿**，却漏掉了「Windows 上派发根本起不来」这一类问题（根因与修复见 §3.5.4 / §3.5.5）
+  ⇒ 只有 H3 才能真正回答「Windows 上派得出去吗」。H3 **不是** T1–T5 的替代，两项都必须有。
+
+**被测产物（两轮共用，即本版发布候选）**：`dsh-graph-0.20.2.tgz` —— sha256
+`f39517c3aa0470e3aa60d9541a06842f4633523f024fd697b456e68aed0e0703`、1,444,792 B、**43 成员**、包内不含 `docs/`、
+包内 `package.json` version 与 `PLUGIN_VERSION` = `0.20.2`（见 `docs/release-checklist-v0.20.2.md` §5）。
+
+**如何在真机上取证**（负责人执行；三段可复制命令与两条一手互操作事实见本地产物
+`tmp/uat-v0202/WINDOWS-GATE-RECIPE.md`，`tmp/` 不入版本控制）：
+
+```text
+# Round B（%TEMP% 内、原生 Windows 路径；UNC 直喂 --tarball 必失败）
+Copy-Item \\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\uat-v0202\dsh-graph-0.20.2.tgz $env:TEMP\dsh-graph-0.20.2.tgz
+(Get-FileHash $env:TEMP\dsh-graph-0.20.2.tgz -Algorithm SHA256).Hash   # 应 == F39517C3…E0703
+Set-Location $env:TEMP
+& <node.exe> \\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\scripts\win-smoke-test.mjs --dsh "npx -y @deepseek-ai/dsh@0.2.1-alpha.2" --tarball "$env:TEMP\dsh-graph-0.20.2.tgz"
+
+# H3（Windows 隔离实例；DSH_HOME 与 workspace 都在 %TEMP% 下，端口 3093）
+# ① 装候选并起实例 ② GUI 新建会话 → graph_claim_supervisor 接管（唯一人工一步）
+# ③ 采集三条真派发事实 ④ 两道门禁消费事实 —— 完整命令见配方 §段 3
+```
+
+**回填时逐项核对（Round B）**：`结果=PASS 通过15/失败0/告警1`、**T3 生命周期 32/32 步**、唯一告警 =
+`--tarball` 模式发布包内无 `core/*.ts`（设计而非缺陷 ⇒ 台账对账改在仓库根完成）；
+并把「可复制回传的报告」**整段**（含 `覆盖=…` 行）粘贴回本小节。
+
+**回填表 · Round B（T1–T5）**
+
+| 平台 | 执行日期 | 平台/架构 | Node | 宿主 DSH | 被测产物 sha256 | T1–T5 | T3 步数 | 结论 | 执行人 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Windows · **v0.20.2**（Round B，完整 tarball 门禁） | 2026-10-10 | win32/x64 | v24.21.0 | `0.2.1-alpha.2`（配方锁定代际） | `f39517c3…`（**实测对账一致**，1,444,792 B） | **15/0/1** | **32/32** | **PASS**（仅读作安装 / 启动 / REST 已通过；**不含派发维度**） | 负责人（miuzel） |
+| Windows · **v0.20.2**（Round B **附测**：旧代际宿主兼容） | 2026-10-10 | win32/x64 | v24.21.0 | `0.2.0-rc.2`（**非**配方锁定代际，属附加证据） | `f39517c3…`（**同一产物**） | **15/0/1** | **32/32** | **PASS**（同一候选产物在更旧的宿主代际上同样通过 ⇒ 未见宿主代际回归） | 负责人（miuzel） |
+
+**逐字回传（Round B；`覆盖=…` 行与 T2/T3/T4/T5 关键行原样）**：
+
+```text
+dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.21.0
+安装来源=dsh-graph-0.20.2.tgz (实际版本 0.20.2)
+产物指纹=sha256:f39517c3aa0470e3aa60d9541a06842f4633523f024fd697b456e68aed0e0703  1444792 B
+结果=PASS 通过15/失败0/告警1
+覆盖=T3生命周期=32步（g-427 形态 8 步，每步盘面断言）
+  WARN T1 OS 调用点覆盖清单（台账层） :: 未找到产品源码（core/*.ts）：本次未做台账对账（发布包内只有编译产物）
+
+T2 · 全新隔离 profile 安装 — dsh 版本 0.2.1-alpha.2；[ OK ] 安装 tarball；[ OK ] 插件自带依赖已随安装落地 — yaml 已安装；已安装 dsh-graph 版本 0.20.2
+T3 · 建目标/判据/标签锁/CAS/validate — goal=g-001，32 步全通过，validate 返回空
+T3 · 看板文件系统生命周期（清单式 32 步） + 步骤清单自证（清单 ≡ 实跑，32/32）
+T3 · 失败路径：预置非空目标 ⇒ 明确业务错误（含路径与「已存在/非空」语义、无平台错误码、源与阻碍物完好、tx.persist_failed 恰好 +1）
+T3 · 盘面总览（副本数唯一 / 无残留空目录 / 无锁与临时产物 / tx.persist_failed=1）
+T3 · 用户可见文案不泄漏平台错误码 — 已核 32 步文案，无 EPERM/ENOTEMPTY/EBUSY/EACCES
+T3 · 跨进程并发 CAS（4 抢 1） — 恰好 1 个成功、3 个冲突被拒
+T4 · 实例启动 / 插件加载 — 就绪 http://127.0.0.1:3088/?token=***
+T5 · dsh-graph 路由已注册 / 看板载荷可读 / Web UI 可达 — HTTP 303
+（两次运行均在结束时自动清理隔离 DSH_HOME）
+```
+
+**Round B 的三点判读（逐项核对通过）**：
+
+1. **产物传递纪律成立**：`Get-FileHash` 与实跑打印的指纹**双向一致** = `f39517c3…`/1,444,792 B，且包内实际版本 `0.20.2` ⇒ 跨机器传递的唯一渠道（tarball + sha256 对账）无缺口。
+2. **运行依赖在真实安装上闭合**：T2 `[ OK ] 插件自带依赖已随安装落地 — yaml 已安装` ⇒ 发布包**自带声明**了运行时依赖
+   `yaml`（全新隔离 profile 安装后即可解析）—— 这正是 Round A' 首轮手搓源码树时必须显式补 `yaml` 的**产品侧答案**（真实安装不受该问题影响）。
+3. **唯一告警是设计而非缺陷**：`--tarball` 模式被测物是**发布包**（只有编译产物、无 `core/*.ts`）⇒ 台账层不对账；
+   该维度由 **Round A' 在同一棵树上的 `--static-only .`** 覆盖（清单 67 项 / 命中 260 处 / 忽略 0 行）⇒ 两轮合并后台账维度无缺口。
+
+**回填表 · H3（派发可用；三条路径各一次真派发）**
+
+| 平台 | 执行日期 | `reviewer` child_id | `collector` child_id | `executor-minimal` child_id | 事实文件 | 判定 | 执行人 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Windows · **v0.20.2**（隔离实例，端口 3093） | 2026-10-10 | `964dd21c…` | `218156f3…` | `391377c4…` | `%TEMP%\h3-dispatch-facts.json` | **PASS** | 负责人（miuzel） |
+
+**逐字回传（H3；两条门禁消费后的判定输出 + 事实文件三行实体）**：
+
+```text
+harness 组合矩阵 | 平台=win32 | H1=PASS H2=PASS H3=PASS H4=PASS H5=PASS H6=PASS | 清单=6 项（单一真源，win-smoke + platform-smoke 两件消费）
+T1 · H · H3 派发可用（隔离实例真派发 reviewer + collector + executor-minimal 各一次） — reviewer=child_id✓ collector=child_id✓ executor-minimal=child_id✓；事实来源=C:\Users\mingxuan\AppData\Local\Temp\h3-dispatch-facts.json
+win-smoke（--static-only . --h3-dispatch-json <facts>）: 结果=PASS 通过9/失败0/告警0
+platform-smoke（--static-only . --h3-dispatch-json <facts>）: 逐项=P1=WARN P2=PASS P3=PASS P4=PASS P5=WARN P6=PASS M4=PASS H=H1:PASS H2:PASS H3:PASS H4:PASS H5:PASS H6:PASS → 结果=PASS 通过13/失败0/告警2 转发exit=0
+
+facts.json: attempted=true  collected_at=2026-10-10T16:16:56.738Z  base=http://127.0.0.1:3093  workspace=%TEMP%\dsh-h3-v0202\ws
+  collector        / standard → 218156f3-da0d-452d-9c3e-c783d7ec4387  (goal=g-003, card=card-932963c4, errors=[])
+  executor-minimal / minimal  → 391377c4-b190-4424-98e3-df44f2703b26  (goal=g-004, att-001, baseline_commit=59ce20bd…, errors=[])
+  reviewer         / standard → 964dd21c-244a-441a-9d1a-1d3c0e949030  (goal=g-004, att-001, review_id=rev-att-001-01, candidate_commit=59ce20bd…, errors=[])
+
+磁盘侧独立佐证（隔离实例自己的看板，非采集器自述）：
+  …\ws\.dsh-graph\goals\g-003\cards\card-932963c4.md
+  …\ws\.dsh-graph\goals\g-004\attempts\att-001\attempt.md
+  …\ws\.dsh-graph\goals\g-004\reviews\rev-att-001-01.md
+```
+
+**H3 的四点判读（含两条防误读）**：
+
+1. **派发真的发生了**：三条路径各得**非空 UUID**、`errors` 全空、`child_error=null`；且三份实体文件在**隔离实例自己的磁盘**上独立存在
+   （与 Linux 轮同一取证口径：不接受采集器自述，必须落到实例看板文件上）。
+2. **⚠️ 控制台中文乱码 ≠ 产品缺陷**：回传的 `raw.steps` 里中文标题显示为乱码（如 `H3 鎺㈤拡 …`），成因是
+   **Windows PowerShell `Get-Content` 默认按 ANSI/GBK 解码 UTF-8 文件**（取证显示层）。同一实例上 **H5（CRLF/LF 与编码往返）探针 PASS**、
+   判据也不依赖控制台中文显示 ⇒ 两者不矛盾。回传/复核时用 `Get-Content -Encoding utf8`。
+3. **⚠️ `independent_ok=false` / `independent_missing=true` 属本口径内的预期**：H3 只回答「**派发是否起得来**」（非空 `child_id` + 无失败签名），
+   **不**回答「评审是否完成了独立验证」；后者由 g-436 的留痕规范另行承载。不得据此读作 H3 不完整，也不得读作独立验证已通过。
+4. **隔离判定字段形态正确**：`worktree=false / isolated=false / worktree_reason=type_default`（task 类型默认快速通道）与 g-406 语义一致 —— 顺带证明该判定字段在 win32 上形态正确。
+   另注：**H3 的 PASS 不替代 T1–T5**（§「为什么需要这两项」已写明），本版两者都在场。
+
+**H3 判定口径（与两道执行件同源，不是本小节的自由解释）**：事实文件形状
+`{ "attempted": true, "roles": [ { "role": …, "mode": …, "childId": …, "errors": [] } ] }`；
+**PASS** 要求三条路径**均有非空 `childId`** 且 `errors` 未命中失败签名
+（`tools.restrict() … names unknown` / 子代理启动失败 / 兼容层缺接口）；**未回传事实**时 H3 必须逐字打印
+`SKIP(需真机/实例)`（这是「不冒充通过」的正确形态，**不是失败**）。
+
+**Linux 侧已实证（H3 事实通道跑通；**只对 Linux 具平台效力**，不得当作 Windows 结论）**：
+隔离实例 `bash scripts/dsh-test-web.sh 0.2.1-alpha.2 --port 3092 --host-dir <worktree>/dist`（插件 `link:` 指向候选
+`dist`）→ GUI 内 `graph_claim_supervisor` 接管 → `node tmp/uat-v0202/h3-collect-facts.mjs --base http://127.0.0.1:3092
+--workspace <隔离 workspace> --out <facts.json>`（走产品 REST 端点 `start-collection` / `start-execution`（`mode=minimal`）
+/ `start-review`）⇒ **两轮独立采集**各得三条真 `child_id`（`collector` `0130c587…` / `b82a58be…`、
+`executor-minimal` `aaa63717…` / `2985c648…`、`reviewer` `69057991…` / `bb76ee09…`），且同一 `child_id` 在隔离实例
+自己的 `cards/*.md` / `attempts/att-001/attempt.md` / `reviews/rev-att-001-01.md` 里**独立核对命中** ⇒ 派发确实发生；
+两道门禁消费后 `win-smoke` = 通过 9/失败 0/告警 0、`platform-smoke` = 通过 15/失败 0/告警 0（`H3=PASS`）。
+逐字证据（实例启动、link 目标、两次 child_id、门禁输出、磁盘核对）见 `tmp/uat-v0202/h3-linux-evidence.md`。
+
+> ✅ **本小节两项（Round B / H3）均已回填**（2026-10-10，负责人真机实测；agent 未预填 PASS/FAIL、未把 Linux 结论抄成 Windows 结论）。
+> **Round B = PASS**（`15/0/1` × 两个宿主代际：配方锁定的 `0.2.1-alpha.2` + 附测 `0.2.0-rc.2`）；
+> **H3 = PASS**（三条路径真派发、非空 `child_id`、磁盘实体独立佐证）。Round A' 的回填位是上一小节 **§7.10**（同样已回填）。
+> ⇒ 本版**可**声称的 Windows 结论（三个维度都到场）：**安装 / 启动 / REST（T1–T5）**、**静态 harness 组合矩阵 H1–H6**、**真派发可用（H3）**。
+> ⇒ 本版**不可**声称的：原生 macOS 的任何结论（本版未验证）、以及 win32 上 P1/P5 两个恒定 WARN 所指的跨 FS 行为（未实测）。
+> 🔴 红线作为**流程纪律**保留：任何未回传项一律 `SKIP/待回填`，不得由 agent 预填结论、不得跨平台搬运结论（发布红线 1）。
+
+---
+
 ## 8. 取消项及其理由（g-362 范围收窄，必须留痕）
 
 | 项 | 原设想 | 取消理由（负责人裁决） | 处置 |
@@ -973,5 +1364,6 @@ T1–T5 **均 15/0/1**、T3 **均 32/32 步**）为准；**② 的被测产物�
 - 转发的既有门禁：[`scripts/win-smoke-test.mjs`](../scripts/win-smoke-test.mjs)（T1–T5；Windows 真机门禁执行件；
   g-428 起另含 **T1 台账层**（`OS_SITE_ROWS` / `OS_SITE_REGISTRY` / `auditOsSiteLedger`）、**32 步清单式 T3 生命周期**、
   负向对照 `--mutation-check`）
-- 测试守卫：[`core/tests/g362-platform-gate.test.ts`](../core/tests/g362-platform-gate.test.ts)（本次新增）、[`core/tests/g359-macos-gate.test.ts`](../core/tests/g359-macos-gate.test.ts)（用例零削减，仅改 import）、[`core/tests/g428-win-os-ledger.test.ts`](../core/tests/g428-win-os-ledger.test.ts)（g-428：台账与实现同步、未登记即判红、步骤清单≡实跑、判定力正反例、`--mutation-check` 必红实拍）
+- H 系列（g-475）守卫：[`core/tests/g475-harness-combo-probes.test.ts`](../core/tests/g475-harness-combo-probes.test.ts)（清单穷尽 + 两件消费防漂移 + H1–H6 判定力正反例 + H2 负向对照必红 + H3 未派发必 `SKIP` + 既有导出点零削减）
+- 测试守卫：[`core/tests/g362-platform-gate.test.ts`](../core/tests/g362-platform-gate.test.ts)（本次新增）、[`core/tests/g359-macos-gate.test.ts`](../core/tests/g359-macos-gate.test.ts)（用例零削减，仅改 import）、[`core/tests/g428-win-os-ledger.test.ts`](../core/tests/g428-win-os-ledger.test.ts)（g-428：台账与实现同步、未登记即判红、步骤清单≡实跑、判定力正反例、`--mutation-check` 必红实拍）、[`core/tests/g477-case-alias-injection-and-win-discovery.test.ts`](../core/tests/g477-case-alias-injection-and-win-discovery.test.ts)（g-477：注入三态穷尽决策表 + 回退必红负向对照 + 结构守卫 + 附件链路旁证 + 组合声明发现夹具/WARN 文案）
 - P1 的下游影响面：[`docs/case-alias-naming.md`](case-alias-naming.md)（g-364：真实命名入口在大小写不敏感卷上的保护现状、注入复现方式与平台实测状态）

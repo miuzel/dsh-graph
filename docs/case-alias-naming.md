@@ -50,6 +50,12 @@
 - `lstat` 是「该卷是否认为此名存在」的权威；
 - **精确名优先**：逐字节同名永远不是别名 —— 大小写敏感卷上只有异名条目时返回 `null`
   （照常新建独立条目），这就是「敏感卷 + 精确名不误伤」的保障。
+- **注入三态全部忠实（g-477 修正）**：`false`（注入**敏感卷**）只认逐字节同名，其后一律 `null`，
+  **绝不咨询真实 FS**；`lstat` 真实探测**只在** `null`（生产/未注入）保留。此前 `false` 无分支 ⇒
+  在真实不敏感卷（NTFS/APFS）上 `lstat` 大小写不敏感地成功 ⇒ 仍判别名（注入失效；Linux ext4 碰巧
+  ENOENT 才「看起来对」）。判定逻辑现抽为纯函数 `decideCaseAliasEntry`（`resolveExistingEntry` 只做
+  薄 FS 包装），由 `core/tests/g477-case-alias-injection-and-win-discovery.test.ts` 的**穷尽决策表**
+  钉住（含「注入敏感 ∧ 真实命中 ∧ 拼写不同 ⇒ null」的 Windows 真机形态与回退必红的负向对照）。
 
 产物：`core/tests/g364-case-alias-entry.test.ts`（敏感/不敏感 × 同内容/异内容 × 精确名/别名 × 回退负向对照）。
 

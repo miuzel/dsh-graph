@@ -26,6 +26,8 @@ import {
 } from "node:fs";
 import {
   isWindows,
+  // g-473：shell 名解析的平台回落必须走**唯一平台判定注入点**（g-284 结构守卫禁止 core 里散落平台判定）
+  getPlatform,
   FS_CONSTANTS,
   replaceFileAtomic,
   syncDirectorySafely,
@@ -882,16 +884,214 @@ export const SUBAGENT_MODE_SPECS: Record<SubagentMode, { id: SubagentMode; name:
   minimal: {
     id: "minimal",
     name: "极简模式 (minimal)",
-    description: "受控轻量工具 Agent，仅提供受控 bash、edit、read、write、graph_report_status、graph_transition 6 项基础工具，物理拦截冗余工具与死循环误导。",
+    // g-473：能力声明不再点名某一个平台的 shell 工具名（DSH 在 win32 注册 pwsh、其余平台注册 bash），
+    // 中性表述 + 派发时按探针解析（见 resolveShellTool）。
+    description: "受控轻量工具 Agent，仅提供受控 shell（按平台解析，任一平台恰一个：bash/pwsh）、edit、read、write、graph_report_status、graph_transition 6 项基础工具，物理拦截冗余工具与死循环误导。",
     order: 2,
   },
 };
 
 export const DEFAULT_SUBAGENT_MODE: SubagentMode = "standard";
 
-/** g-191：graph-minimal 极简模式下的严格工具白名单过滤器 */
+/* ============================================================================
+ * g-473：harness 工具名依赖收口（shell 名解析 / 白名单求交 / 缺能力诊断）
+ *
+ * 缺陷背景：DSH 在 win32 上**不注册** `bash`（注册 `pwsh`；见 dsh-tool-pwsh 与 profile 的
+ * `preset-standard`），而 `@deepseek-ai/dsh-tools` 的 `restrict()` 对未知名**硬抛错**
+ * （`names unknown global tool`）。本插件曾把 shell 工具名硬编码进角色白名单 / 必需清单 / 文案，
+ * 于是 Windows 上 reviewer、collector、executor-minimal 三条派发路径**必然**起不来。
+ *
+ * 收口口径：
+ *  1. shell 名由**宿主探针**在派发时解析（候选表中的首个可用者），core 不 import 任何宿主模块，
+ *     只消费 {@link ToolCapabilityContext} 的两个纯量（函数 + 平台字符串）。
+ *  2. 白名单整体与「当前 scope 实际存在的名字」求交（缺 dsh-tool-web 时 web_* 静默剔除，不炸）；
+ *     **无探针时不裁剪**（保持既有语义，兼容非宿主调用方）。
+ *  3. 必需工具缺失 ⇒ 产出点名缺失项 + 探针来源 + 候选与回落值的可读诊断，**调用方不得派发**。
+ * ========================================================================== */
+
+/** shell 工具名候选（按优先级）；解析结果必是其一首个被探针判定可用者。 */
+export const SHELL_TOOL_CANDIDATES = ["bash", "pwsh"] as const;
+
+/** 白名单 / 必需清单里的 shell **槽位占位符**：构造过滤器与必需清单时替换为解析结果。 */
+export const SHELL_TOOL_SLOT = "<shell>";
+
+/** 提示词 / 纪律文案里的 shell **占位符**：渲染时用 {@link renderShellToolText} 替换为解析结果。 */
+export const SHELL_TOOL_TOKEN = "{{shell}}";
+
+/** 宿主能力探针上下文。
+ *
+ *  - `available(name)`：该名在**当前 agent scope**下是否可用。宿主用
+ *    `tools.get(name, parentAgent)` 探测（Agent 实例即 scope key）——为真 ⇒ 该名必在
+ *    `restrictableNames` 内（`visible ⊆ restrictableNames`）⇒ `restrict()` 必接受。
+ *    **不能用无 scope 的 `tools.get(name)`**：那只覆盖 global 层，而模型面向工具注册在
+ *    agent preset 平面（祖先层），会全判 false。
+ *  - `platform`：探针不可用时的平台回落（`win32` ⇒ pwsh，否则 bash）；缺省读
+ *    `platform.ts` 的 `getPlatform()`（平台判定的**唯一注入点**，可用 `setPlatformForTesting` 模拟 win32）。 */
+export interface ToolCapabilityContext {
+  available?: (name: string) => boolean;
+  platform?: string;
+}
+
+/** shell 名解析结果。`name === null` 表示**探针在场但候选全不可用**（缺 shell ⇒ 诊断 + 不派发）。 */
+export interface ShellToolResolution {
+  name: string | null;
+  source: "probe" | "probe-missing" | "platform-fallback";
+  candidates: readonly string[];
+  platform: string | null;
+}
+
+/** 解析当前组合的 shell 工具名：候选里首个 `available === true` 者；无探针回落平台默认。 */
+export function resolveShellTool(cap?: ToolCapabilityContext): ShellToolResolution {
+  const platform = (() => {
+    const explicit = cap?.platform;
+    if (typeof explicit === "string" && explicit) return explicit;
+    // g-284：平台判定只经 platform.ts 的 getPlatform()（`setPlatformForTesting` 可模拟 win32）。
+    try {
+      const p = getPlatform();
+      return typeof p === "string" && p ? p : null;
+    } catch {
+      return null;
+    }
+  })();
+  const probe = cap?.available;
+  if (typeof probe === "function") {
+    for (const candidate of SHELL_TOOL_CANDIDATES) {
+      let ok = false;
+      try {
+        ok = probe(candidate) === true;
+      } catch {
+        ok = false;
+      }
+      if (ok) return { name: candidate, source: "probe", candidates: SHELL_TOOL_CANDIDATES, platform };
+    }
+    return { name: null, source: "probe-missing", candidates: SHELL_TOOL_CANDIDATES, platform };
+  }
+  return {
+    name: platform === "win32" ? "pwsh" : "bash",
+    source: "platform-fallback",
+    candidates: SHELL_TOOL_CANDIDATES,
+    platform,
+  };
+}
+
+/** 探针判定：`true`/`false` 为判定结果；**无探针返回 `null`（无法判定，不得据此收紧或阻断）**。 */
+function probeAvailable(cap: ToolCapabilityContext | undefined, name: string): boolean | null {
+  const probe = cap?.available;
+  if (typeof probe !== "function") return null;
+  try {
+    return probe(name) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** 缺 shell 时的诊断标签（点名候选，说明任一即可）。 */
+function shellSlotLabel(shell: ShellToolResolution): string {
+  return `shell(${shell.candidates.join(" | ")})`;
+}
+
+/** 文案占位符渲染：`{{shell}}` → 解析出的 shell 名；缺 shell 时用中性的「shell」。 */
+export function renderShellToolText(text: string, shell: ShellToolResolution | string | null | undefined): string {
+  const name = typeof shell === "string" ? shell : shell?.name ?? null;
+  return text.split(SHELL_TOOL_TOKEN).join(name ?? "shell");
+}
+
+/** 展开 shell 槽位并按需与可用名求交。
+ *
+ *  - 槽位：替换为解析出的 shell 名；**缺 shell（`name === null`）⇒ 整条剔除**（是否派发由诊断决定）。
+ *  - 求交：**仅在有探针时**裁剪（探针为真 ⇒ 必被 `restrict()` 接受）；无探针时原样保留，不无谓收紧。 */
+export function expandRoleToolList(list: readonly string[], cap?: ToolCapabilityContext): string[] {
+  const shell = resolveShellTool(cap);
+  const out: string[] = [];
+  for (const raw of list) {
+    const name = raw === SHELL_TOOL_SLOT ? shell.name : raw;
+    if (!name || out.includes(name)) continue;
+    if (probeAvailable(cap, name) === false) continue;
+    out.push(name);
+  }
+  return out;
+}
+
+/** 派发前能力自检失败事件名（宿主记事件 + 把诊断写进返回文案 / child_error）。 */
+export const DISPATCH_CAPABILITY_MISSING_EVENT = "dispatch.capability_missing";
+
+/** 缺必需能力诊断：`ok=false` ⇒ **不得派发**（调用方负责记事件与回传文案）。 */
+export interface DispatchCapabilityDiagnosis {
+  ok: boolean;
+  role: SubagentRole;
+  mode: SubagentMode;
+  missing: string[];
+  shell: ShellToolResolution;
+  message: string | null;
+}
+
+/** 必需工具（`role.requiredTools`，含 shell 槽位）在当前能力下的缺失诊断。
+ *
+ *  判据：仅当**探针明确判定为不可用**时才算缺失——无探针（`available` 缺省）返回 `ok=true`，
+ *  保持 legacy 行为不被误阻断；唯一例外是探针在场但候选全不可用（`probe-missing`）⇒ 点名缺 shell。 */
+export function diagnoseDispatchCapability(
+  role: SubagentRole,
+  mode?: SubagentMode | null,
+  cap?: ToolCapabilityContext,
+): DispatchCapabilityDiagnosis {
+  const shell = resolveShellTool(cap);
+  const normalizedMode: SubagentMode = mode ? normalizeSubagentMode(mode) ?? DEFAULT_SUBAGENT_MODE : DEFAULT_SUBAGENT_MODE;
+  const profile = getRoleProfile(role);
+  const missing: string[] = [];
+  for (const raw of profile.requiredTools) {
+    if (raw === SHELL_TOOL_SLOT) {
+      if (shell.name === null) missing.push(shellSlotLabel(shell));
+      continue;
+    }
+    if (probeAvailable(cap, raw) === false) missing.push(raw);
+  }
+  if (missing.length === 0) {
+    return { ok: true, role, mode: normalizedMode, missing, shell, message: null };
+  }
+  const probeSource = cap?.available
+    ? "tools.get(name, parentAgent)（当前 agent scope 的可用名；真 ⇒ restrict() 必接受）"
+    : "无（未注入探针，按平台回落解析）";
+  const message = [
+    `派发前工具能力自检未通过：role=${role}（mode=${normalizedMode}）缺少必需工具 ${missing.map((m) => `"${m}"`).join(", ")}。`,
+    `探针来源=${probeSource}；候选=[${shell.candidates.join(", ")}]；平台回落=win32→pwsh，否则 bash；platform=${shell.platform ?? "unknown"}；解析来源=${shell.source}。`,
+    "未启动子代理：既不派发能力残缺的子 agent，也不把 dsh-tools 的内部错误原样外泄给用户（缺能力时先补组合/工具再派发）。",
+  ].join("\n");
+  return { ok: false, role, mode: normalizedMode, missing, shell, message };
+}
+
+/** 记录一次派发前能力自检失败（事件先行；宿主随后把诊断写进返回文案 / child_error）。 */
+export function appendDispatchCapabilityMissing(
+  root: string,
+  input: {
+    goal?: string | null;
+    role: string;
+    mode?: string | null;
+    missing: readonly string[];
+    shell: ShellToolResolution;
+    label?: string | null;
+    actor?: string | null;
+  },
+): GraphEvent {
+  return appendEvent(root, {
+    actor: input.actor || "system:dispatch",
+    event: DISPATCH_CAPABILITY_MISSING_EVENT,
+    ...(input.goal ? { goal: input.goal } : {}),
+    details: {
+      role: input.role,
+      mode: input.mode ?? null,
+      label: input.label ?? null,
+      missing: [...input.missing],
+      shell_source: input.shell.source,
+      shell_candidates: [...input.shell.candidates],
+      shell_resolved: input.shell.name,
+      platform: input.shell.platform,
+    },
+  });
+}
+
+/** g-191：graph-minimal 极简模式下的严格工具白名单过滤器（shell 走槽位，构造时解析）。 */
 export const GRAPH_MINIMAL_ALLOWED_TOOLS = [
-  "bash",
+  SHELL_TOOL_SLOT,
   "edit",
   "read",
   "write",
@@ -901,7 +1101,7 @@ export const GRAPH_MINIMAL_ALLOWED_TOOLS = [
 
 export function toolFilterForMode(mode: SubagentMode): { allow?: readonly string[] } | undefined {
   if (mode === "minimal") {
-    return { allow: GRAPH_MINIMAL_ALLOWED_TOOLS };
+    return { allow: expandRoleToolList(GRAPH_MINIMAL_ALLOWED_TOOLS) };
   }
   return undefined;
 }
@@ -931,6 +1131,8 @@ export interface RoleProfile {
     standard?: readonly string[]; // undefined 表示无裁剪（所有可用工具）
     minimal: readonly string[];
   };
+  // g-473：字段名沿用历史契约（不改名以免破坏既有角色契约断言）；**值**里的 shell 名一律走
+  // {{shell}} 占位符，渲染时用 renderShellToolText 解析，不再硬编码某一个平台的工具名。
   bashPermissionNote?: string;
 }
 
@@ -975,12 +1177,12 @@ export const ROLE_PROFILES: Record<SubagentRole, RoleProfile> = {
       // prompt 必须是同一套证据规范（真源在此，prompt 侧是投递副本）。
       "7. 证据形式：交付证据只写单行结构化概要（一套件一行、单条 ≤160 字符），格式为 `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`，并给出断言命令与结论；禁止向证据台账、评论区或回复倾倒多行 JSON、DOM dump、切片数据、原始日志与围栏代码块；运行态不变式一律沉淀为自动化断言，仅 UI 视觉层不可代码化的部分保留轻量截图核验。",
     ],
-    requiredTools: ["graph_report_status", "graph_transition", "read", "write", "edit", "bash"],
+    requiredTools: ["graph_report_status", "graph_transition", "read", "write", "edit", SHELL_TOOL_SLOT],
     allowedTools: {
       standard: undefined,
       minimal: GRAPH_MINIMAL_ALLOWED_TOOLS,
     },
-    bashPermissionNote: "bash 具备当前环境真实执行权限，受当前工作区与沙盒策略约束。",
+    bashPermissionNote: `${SHELL_TOOL_TOKEN} 具备当前环境真实执行权限，受当前工作区与沙盒策略约束。`,
   },
   collector: {
     id: "collector",
@@ -997,10 +1199,10 @@ export const ROLE_PROFILES: Record<SubagentRole, RoleProfile> = {
     ],
     requiredTools: ["graph_fill_card", "graph_store_attachment", "read"],
     allowedTools: {
-      standard: ["read", "glob", "grep", "bash", "web_search", "web_fetch", "graph_fill_card", "graph_store_attachment", "graph_memory_recall"],
-      minimal: ["read", "bash", "web_search", "web_fetch", "graph_fill_card", "graph_store_attachment"],
+      standard: ["read", "glob", "grep", SHELL_TOOL_SLOT, "web_search", "web_fetch", "graph_fill_card", "graph_store_attachment", "graph_memory_recall"],
+      minimal: ["read", SHELL_TOOL_SLOT, "web_search", "web_fetch", "graph_fill_card", "graph_store_attachment"],
     },
-    bashPermissionNote: "bash 具备当前环境执行权限（供信息收集、代码检索与本地命令调研）；白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。",
+    bashPermissionNote: `${SHELL_TOOL_TOKEN} 具备当前环境执行权限（供信息收集、代码检索与本地命令调研）；白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。`,
   },
   reviewer: {
     id: "reviewer",
@@ -1012,14 +1214,14 @@ export const ROLE_PROFILES: Record<SubagentRole, RoleProfile> = {
       "1. 只读审查职责：专注代码审阅、测试验证与质量判据核对，仅输出客观评审报告与建议；",
       "2. 不篡改代码与管理状态：不暴露且不调用 edit/write 修改代码，不调用任何 graph_* 管理写工具（如 graph_create_goal, graph_start_attempt, graph_transition, graph_resolve_accept 等）；",
       "3. 裁决归属 Human Gate：评审通过与否由主管/负责人根据审查报告进行 verdict 裁决，reviewer 绝不越权自行通过或关闭目标；",
-      "4. bash 权限说明：如保留 bash，仅用于运行只读测试（如单元测试、静态检查、git diff 等），其实际拥有当前工作区的本地执行权限；工具过滤非强安全沙箱，遵循单用户 owner-trusted 安全基线。",
+      `4. ${SHELL_TOOL_TOKEN} 权限说明：如保留 ${SHELL_TOOL_TOKEN}，仅用于运行只读测试（如单元测试、静态检查、git diff 等），其实际拥有当前工作区的本地执行权限；工具过滤非强安全沙箱，遵循单用户 owner-trusted 安全基线。`,
     ],
-    requiredTools: ["read", "bash"],
+    requiredTools: ["read", SHELL_TOOL_SLOT],
     allowedTools: {
-      standard: ["read", "glob", "grep", "bash", "graph_memory_recall", "web_search", "web_fetch"],
-      minimal: ["read", "bash"],
+      standard: ["read", "glob", "grep", SHELL_TOOL_SLOT, "graph_memory_recall", "web_search", "web_fetch"],
+      minimal: ["read", SHELL_TOOL_SLOT],
     },
-    bashPermissionNote: "bash 具备当前环境真实执行权限（用于运行单元测试、类型检查与 git diff 等只读验证）；工具白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。",
+    bashPermissionNote: `${SHELL_TOOL_TOKEN} 具备当前环境真实执行权限（用于运行单元测试、类型检查与 git diff 等只读验证）；工具白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。`,
   },
   pm: {
     id: "pm",
@@ -1030,7 +1232,7 @@ export const ROLE_PROFILES: Record<SubagentRole, RoleProfile> = {
     disciplineLines: [
       "1. 只读建议职责：只向主管 Agent 返回“目标定义/润色建议”，不直接修改目标文件；",
       "2. 物理拦截管理写工具：不暴露且不调用任何 graph_* 管理写工具，不改变状态、版本、判据或执行语义；",
-      "3. 不暴露代码修改与执行工具：不暴露 edit、write 与 bash，物理防止篡改源码或产生非预期执行副作用；",
+      "3. 不暴露代码修改与执行工具：不暴露 edit、write 与 shell 执行工具（bash、pwsh 均不暴露），物理防止篡改源码或产生非预期执行副作用；",
       "4. 保留原意：围绕价值、背景、范围、可验证判据与风险给出简洁润色，供人工或主管决策采纳。",
     ],
     requiredTools: ["read"],
@@ -1073,16 +1275,18 @@ export function getRoleProfile(role: SubagentRole): RoleProfile {
 export function toolFilterForRole(
   role: SubagentRole,
   mode?: SubagentMode | null,
+  cap?: ToolCapabilityContext,
 ): { allow?: readonly string[] } | undefined {
   const profile = getRoleProfile(role);
   const normalizedMode = mode ? normalizeSubagentMode(mode) : "standard";
   if (normalizedMode === "minimal") {
-    return { allow: profile.allowedTools.minimal };
+    return { allow: expandRoleToolList(profile.allowedTools.minimal, cap) };
   }
+  // g-473：`standard: undefined` 语义**必须保持不裁剪**（executor 标准模式 = 所有可用工具）。
   if (profile.allowedTools.standard === undefined) {
     return undefined;
   }
-  return { allow: profile.allowedTools.standard };
+  return { allow: expandRoleToolList(profile.allowedTools.standard, cap) };
 }
 
 /** g-191：构建 dsh-graph 默认子代理专属 Persona，将通用执行纪律沉淀为系统级 Persona（单一真源来自 ROLE_PROFILES.executor.disciplineLines） */
@@ -1117,7 +1321,7 @@ export function normalizeSubagentMode(mode: unknown): SubagentMode | null {
  *  英文对照见 SUBAGENT_MODE_PROMPTS_EN；两条来源必须同义、逐 mode 对称。 */
 export const SUBAGENT_MODE_PROMPTS: Record<SubagentMode, string> = {
   standard: "",
-  minimal: "【极简模式执行策略】仅提供受控 6 项基础工具（bash、edit、read、write、graph_report_status、graph_transition），保持紧凑输出，不展开冗余高级调用。",
+  minimal: `【极简模式执行策略】仅提供受控 6 项基础工具（${SHELL_TOOL_TOKEN}、edit、read、write、graph_report_status、graph_transition），保持紧凑输出，不展开冗余高级调用。`,
 };
 
 /** g-390：SUBAGENT_MODE_PROMPTS 的英文对照（与 zh 版**同义**，逐 mode 一一对应）。
@@ -1126,17 +1330,24 @@ export const SUBAGENT_MODE_PROMPTS: Record<SubagentMode, string> = {
  *  与 zh 版一致，standard 为空串（standard 不注入模式段）。 */
 export const SUBAGENT_MODE_PROMPTS_EN: Record<SubagentMode, string> = {
   standard: "",
-  minimal: "[Minimal mode execution strategy] Only the controlled 6 base tools are provided (bash, edit, read, write, graph_report_status, graph_transition); keep the output compact and do not expand redundant advanced calls.",
+  minimal: `[Minimal mode execution strategy] Only the controlled 6 base tools are provided (${SHELL_TOOL_TOKEN}, edit, read, write, graph_report_status, graph_transition); keep the output compact and do not expand redundant advanced calls.`,
 };
 
 /** g-390：按提示词语言取模式策略片段。
  *
  *  language 只认字面量 "en"；其余（含 undefined/null/"follow"/未知值）一律回落 zh——
  *  与 host 侧 normalizePromptLanguage / resolvePromptLanguage 的默认一致，保证向后兼容：
- *  未显式声明语言的既有调用方得到与修复前**逐字相同**的中文片段。 */
-export function subagentModePrompt(mode: SubagentMode, language?: string | null): string {
+ *  未显式声明语言的既有调用方得到与修复前**逐字相同**的中文片段。
+ *
+ *  g-473：片段里的 shell 名走 `{{shell}}` 占位符，渲染时按 `cap` 解析（无 cap ⇒ 平台回落默认，
+ *  在非 win32 上与修复前逐字相同）。 */
+export function subagentModePrompt(
+  mode: SubagentMode,
+  language?: string | null,
+  cap?: ToolCapabilityContext,
+): string {
   const table = language === "en" ? SUBAGENT_MODE_PROMPTS_EN : SUBAGENT_MODE_PROMPTS;
-  return table[mode] ?? "";
+  return renderShellToolText(table[mode] ?? "", resolveShellTool(cap));
 }
 
 /** 读取 project.yaml 的 executor.provider/model/mode。
@@ -6711,7 +6922,7 @@ export function parsePmReportGoalId(report: string): string | null {
  *    （`goal.md` 的评论小节含作者/主管讨论，读取即等于注入作者上下文）。
  *
  * 诚实边界：工具白名单（role=reviewer）与本文的纪律文字都是**正常工具通道**的约束，
- * 不是 bash 沙箱，也不能阻止有本地权限的进程绕行；安全边界遵循单用户 owner-trusted 模型。
+ * 不是 shell 沙箱，也不能阻止有本地权限的进程绕行；安全边界遵循单用户 owner-trusted 模型。
  */
 export function formatReviewPrompt(opts: {
   goalId: string;
@@ -6720,6 +6931,9 @@ export function formatReviewPrompt(opts: {
   criteria?: string[];
   guidance?: string | null;
   language?: "zh" | "en";
+  /** g-473：解析出的 shell 工具名（reviewer 的只读 shell 权限与纪律文案点名它）；
+   *  缺省按平台回落解析（win32→pwsh，否则 bash）——绝不硬编码某一个平台的名字。 */
+  shellTool?: string | null;
   /** g-436：被审查的候选 commit（完整 SHA 或可解析引用）。 */
   candidateSha?: string | null;
   /** g-436：候选的基线 commit（用于 `git diff <baseline> <candidate>`）。 */
@@ -6738,6 +6952,8 @@ export function formatReviewPrompt(opts: {
   const workspace = opts.reviewWorkspace?.trim() || null;
   const description = opts.goalDescription?.trim() || null;
   const paths = (opts.changedPaths ?? []).filter((p) => typeof p === "string" && p.trim() !== "");
+  // g-473：文案里的 shell 名一律走解析结果（无显式值时按平台回落），不再硬编码 bash。
+  const shellTool = opts.shellTool?.trim() || resolveShellTool().name || "shell";
   // 判据原文（criteriaItems）通常已带 `1. ` 序号：注入时剥掉，避免出现「1. 1. 判据…」这种失真编号。
   const stripOrdinal = (s: string) => String(s).replace(/^\s*\d+\s*[.、)]\s*/, "");
   if (opts.language === "en") {
@@ -6773,7 +6989,7 @@ export function formatReviewPrompt(opts: {
       "- **Residual risk**: what remains risky after the fix.",
       "- **Unverified items**: paths not covered, and why.",
     );
-    lines.push("", "## Review discipline and permissions", "- Read-only review: use read, glob, grep, and read-only tests only; do not edit or write code.", "- Do not call graph_* management write tools.", "- Return PASS or FAIL with concrete evidence; the supervisor/owner performs the final verdict.", "- bash, when available, is limited to local read-only tests and static checks.");
+    lines.push("", "## Review discipline and permissions", "- Read-only review: use read, glob, grep, and read-only tests only; do not edit or write code.", "- Do not call graph_* management write tools.", "- Return PASS or FAIL with concrete evidence; the supervisor/owner performs the final verdict.", `- ${shellTool}, when available, is limited to local read-only tests and static checks.`);
     return lines.join("\n");
   }
   const lines = [
@@ -6826,7 +7042,7 @@ export function formatReviewPrompt(opts: {
     `- 纯只读审查：仅使用 read、glob、grep 审查代码与变更，不暴露且不调用 edit/write 修改代码；`,
     `- 绝不调用管理写工具：不暴露任何 graph_* 管理写工具（如 graph_create_goal, graph_start_attempt, graph_transition, graph_resolve_accept 等）；`,
     `- 裁决归属主管/人工 Gate：仅输出审查报告与建议（PASS / FAIL 及具体证据），最终 verdict 裁决由主管/负责人通过 graph_resolve_accept 执行，reviewer 绝不自行通过；`,
-    `- bash 权限说明：如保留 bash，仅用于运行只读测试（如单元测试 node --test、静态检查、git diff 等），其实际具备当前工作区的本地运行权限；白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。`,
+    `- ${shellTool} 权限说明：如保留 ${shellTool}，仅用于运行只读测试（如单元测试 node --test、静态检查、git diff 等），其实际具备当前工作区的本地运行权限；白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。`,
   );
   return lines.join("\n");
 }
@@ -6854,7 +7070,7 @@ export function formatReviewPrompt(opts: {
  *    置为当前**，使看板投影（`current_candidate_sha` / `stale`）与工具返回值**同源一致**；
  *    这是显式可审计的再请求，绝不静默复活旧 PASS——未被再次请求的候选，其记录仍然 `stale`。
  *
- * 诚实边界：`role=reviewer` 的工具作用域过滤只约束**正常工具通道**，不等于 bash 沙箱；
+ * 诚实边界：`role=reviewer` 的工具作用域过滤只约束**正常工具通道**，不等于 shell 沙箱；
  * HTTP 侧既有的 `human:gui` 身份不证明真人。本区块不声称「已强制只读」或「已阻止任意绕行」。
  * ========================================================================== */
 
@@ -12928,14 +13144,15 @@ export function resolveSubagentMode(
   projectMode?: string | null,
   globalMode?: string | null,
   language?: string | null,
+  cap?: ToolCapabilityContext,
 ): { mode: SubagentMode; source: "override" | "project" | "global" | "default"; prompt: string } {
   const ov = normalizeSubagentMode(overrideMode);
-  if (ov) return { mode: ov, source: "override", prompt: subagentModePrompt(ov, language) };
+  if (ov) return { mode: ov, source: "override", prompt: subagentModePrompt(ov, language, cap) };
   const pr = normalizeSubagentMode(projectMode);
-  if (pr) return { mode: pr, source: "project", prompt: subagentModePrompt(pr, language) };
+  if (pr) return { mode: pr, source: "project", prompt: subagentModePrompt(pr, language, cap) };
   const gl = normalizeSubagentMode(globalMode);
-  if (gl) return { mode: gl, source: "global", prompt: subagentModePrompt(gl, language) };
-  return { mode: DEFAULT_SUBAGENT_MODE, source: "default", prompt: subagentModePrompt(DEFAULT_SUBAGENT_MODE, language) };
+  if (gl) return { mode: gl, source: "global", prompt: subagentModePrompt(gl, language, cap) };
+  return { mode: DEFAULT_SUBAGENT_MODE, source: "default", prompt: subagentModePrompt(DEFAULT_SUBAGENT_MODE, language, cap) };
 }
 
 /** g-321：把 subagents.startContinuable 抛出的异常翻译成可操作的提示文案。

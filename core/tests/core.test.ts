@@ -43,6 +43,8 @@ import {
   resolveSubagentMode,
   normalizeSubagentMode,
   toolFilterForMode,
+  // g-473：shell 名是解析结果（探针优先 / 平台回落），断言必须按解析语义写
+  resolveShellTool,
   buildSubagentDefaultPersona,
   GraphError,
 } from "../ops.ts";
@@ -58,7 +60,9 @@ function tmpRoot(): string {
 test("g-191 模式枚举与优先级：单次覆盖 > workspace > profile > 系统默认", () => {
   assert.equal(normalizeSubagentMode(" MINIMAL "), "minimal");
   assert.equal(normalizeSubagentMode("arbitrary-command"), null);
-  assert.deepEqual(resolveSubagentMode("minimal", "standard", "minimal"), { mode: "minimal", source: "override", prompt: "【极简模式执行策略】仅提供受控 6 项基础工具（bash、edit、read、write、graph_report_status、graph_transition），保持紧凑输出，不展开冗余高级调用。" });
+  // g-473：显式探针（bash 可用）下渲染结果与修复前逐字相同 ⇒ 文案零漂移由机器证明，
+  // 且断言不再依赖运行平台（无探针时 win32 会解析成 pwsh）。
+  assert.deepEqual(resolveSubagentMode("minimal", "standard", "minimal", "zh", { available: (n) => n === "bash", platform: "win32" }), { mode: "minimal", source: "override", prompt: "【极简模式执行策略】仅提供受控 6 项基础工具（bash、edit、read、write、graph_report_status、graph_transition），保持紧凑输出，不展开冗余高级调用。" });
   assert.equal(resolveSubagentMode(null, "minimal", "standard").source, "project");
   assert.equal(resolveSubagentMode(null, null, "minimal").source, "global");
   assert.equal(resolveSubagentMode("invalid", "also-invalid", "bad").mode, "standard");
@@ -74,7 +78,8 @@ test("g-191 project.yaml 模式只接受受控值，非法值安全回退且写�
 });
 
 test("g-191: minimal 模式生成受控工具过滤，不影响 standard 模式", () => {
-  assert.deepEqual(toolFilterForMode("minimal"), { allow: ["bash", "edit", "read", "write", "graph_report_status", "graph_transition"] });
+  // g-473：壳位按平台回落解析（win32→pwsh，否则 bash）⇒ 断言与运行平台无关
+  assert.deepEqual(toolFilterForMode("minimal"), { allow: [resolveShellTool().name, "edit", "read", "write", "graph_report_status", "graph_transition"] });
   assert.equal(toolFilterForMode("standard"), undefined);
 
 });

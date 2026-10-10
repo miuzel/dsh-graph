@@ -51,12 +51,17 @@ import {
   SUBAGENT_MODE_PROMPTS,
   SUBAGENT_MODE_PROMPTS_EN,
   SUBAGENT_MODES,
+  // g-473：模式片段里的 shell 名是占位符（不再是常量）⇒ 断言按解析/渲染语义写。
+  SHELL_TOOL_TOKEN,
+  SHELL_TOOL_SLOT,
   addCard,
   createGoal,
   fillCard,
   init,
   loadGoal,
   normalizeSubagentMode,
+  renderShellToolText,
+  resolveShellTool,
   resolveSubagentMode,
   reviewCard,
   setCriteria,
@@ -69,6 +74,16 @@ import { apply } from "../../dist/index.js";
 const HAN = /[\u3400-\u9fff]/;
 /** CJK 标点/符号区（含全角括号、。、「」『』等）——用于把「豁免标记」与「汉字泄漏」分开断言。 */
 const CJK_PUNCT = /[\u3000-\u303f]/;
+
+/**
+ * g-473：**显式 bash 探针**（`platform: "win32"` 是刻意的反例：探针在场时探针优先，
+ * 绝不按平台硬编码）。所有「文案零漂移」断言都挂在这份确定性渲染上 ⇒ 与运行平台无关。
+ */
+const BASH_CAP = { available: (n: string) => n === "bash", platform: "win32" } as const;
+/** 派发链路（harness 的 `tools.get` 恒返回对象）解析出的 shell：候选表首个 = bash。 */
+const PROBED_SHELL = "bash";
+const PROBED_MIN_ZH = renderShellToolText(SUBAGENT_MODE_PROMPTS.minimal, PROBED_SHELL);
+const PROBED_MIN_EN = renderShellToolText(SUBAGENT_MODE_PROMPTS_EN.minimal, PROBED_SHELL);
 
 const ZH_MODE_TITLE = (mode: string) => `## 子代理执行模式（${mode}）`;
 const EN_MODE_TITLE = (mode: string) => `## Subagent execution mode (${mode})`;
@@ -188,18 +203,29 @@ test("g-390 判据 3/4：模式片段 zh/en 逐 mode 对称、英文零汉字、
   assert.doesNotMatch(SUBAGENT_MODE_PROMPTS_EN.minimal, HAN, "英文 minimal 片段不得含汉字");
   assert.notEqual(SUBAGENT_MODE_PROMPTS_EN.minimal, SUBAGENT_MODE_PROMPTS.minimal);
 
-  // zh 真源逐字未动（既有断言与既有 zh 渲染产物按它锁定）。
+  // g-473：真源以 `{{shell}}` 占位符表达 shell 名（不再锚定某一个平台的名字）；
+  // 「文案零漂移」改由**显式探针**下的确定性渲染证明（既有 zh/en 字面量逐字保留为期望值）。
+  assert.ok(SUBAGENT_MODE_PROMPTS.minimal.includes(SHELL_TOOL_TOKEN), "zh minimal 片段应以 {{shell}} 占位符表达 shell 名");
+  assert.ok(SUBAGENT_MODE_PROMPTS_EN.minimal.includes(SHELL_TOOL_TOKEN), "en minimal 片段应以 {{shell}} 占位符表达 shell 名");
+  assert.ok(
+    !SUBAGENT_MODE_PROMPTS.minimal.includes("bash") && !SUBAGENT_MODE_PROMPTS.minimal.includes("pwsh"),
+    "zh 片段真源不得硬编码任一平台的 shell 名",
+  );
   assert.equal(
-    SUBAGENT_MODE_PROMPTS.minimal,
+    subagentModePrompt("minimal", "zh", BASH_CAP),
     "【极简模式执行策略】仅提供受控 6 项基础工具（bash、edit、read、write、graph_report_status、graph_transition），保持紧凑输出，不展开冗余高级调用。",
+  );
+  assert.equal(
+    subagentModePrompt("minimal", "en", BASH_CAP),
+    "[Minimal mode execution strategy] Only the controlled 6 base tools are provided (bash, edit, read, write, graph_report_status, graph_transition); keep the output compact and do not expand redundant advanced calls.",
   );
 
   // 取值函数：language 只认字面量 "en"，其余一律回落 zh（向后兼容）。
-  assert.equal(subagentModePrompt("minimal", "en"), SUBAGENT_MODE_PROMPTS_EN.minimal);
-  assert.equal(subagentModePrompt("minimal", "zh"), SUBAGENT_MODE_PROMPTS.minimal);
-  assert.equal(subagentModePrompt("minimal"), SUBAGENT_MODE_PROMPTS.minimal, "缺省语言必须回落 zh");
-  assert.equal(subagentModePrompt("minimal", null), SUBAGENT_MODE_PROMPTS.minimal);
-  assert.equal(subagentModePrompt("minimal", "follow"), SUBAGENT_MODE_PROMPTS.minimal, "未知/follow 必须回落 zh");
+  assert.equal(subagentModePrompt("minimal", "en", BASH_CAP), PROBED_MIN_EN);
+  assert.equal(subagentModePrompt("minimal", "zh", BASH_CAP), PROBED_MIN_ZH);
+  assert.equal(subagentModePrompt("minimal"), renderShellToolText(SUBAGENT_MODE_PROMPTS.minimal, resolveShellTool()), "缺省语言必须回落 zh（shell 按平台回落解析）");
+  assert.equal(subagentModePrompt("minimal", null), renderShellToolText(SUBAGENT_MODE_PROMPTS.minimal, resolveShellTool()));
+  assert.equal(subagentModePrompt("minimal", "follow"), renderShellToolText(SUBAGENT_MODE_PROMPTS.minimal, resolveShellTool()), "未知/follow 必须回落 zh");
   assert.equal(subagentModePrompt("standard", "en"), "");
 
   // 判据 4「无新增提示词框架」：新增面只有两张常量表 + 一个 4 行纯函数（无模板引擎、无规则集、无新配置项）。
@@ -208,29 +234,29 @@ test("g-390 判据 3/4：模式片段 zh/en 逐 mode 对称、英文零汉字、
 });
 
 test("g-390 判据 3/4：四来源（override/project/global/default）按语言渲染，未传语言与修复前逐字相同", () => {
-  const ZH_MIN = SUBAGENT_MODE_PROMPTS.minimal;
-  const EN_MIN = SUBAGENT_MODE_PROMPTS_EN.minimal;
+  const ZH_MIN = PROBED_MIN_ZH;
+  const EN_MIN = PROBED_MIN_EN;
 
   // 四条来源 × en：模式与来源判定不变，只有 prompt 走英文。
-  assert.deepEqual(resolveSubagentMode("minimal", "standard", "standard", "en"), { mode: "minimal", source: "override", prompt: EN_MIN });
-  assert.deepEqual(resolveSubagentMode(null, "minimal", "standard", "en"), { mode: "minimal", source: "project", prompt: EN_MIN });
-  assert.deepEqual(resolveSubagentMode(null, null, "minimal", "en"), { mode: "minimal", source: "global", prompt: EN_MIN });
-  assert.equal(resolveSubagentMode("standard", "standard", "standard", "en").prompt, "", "default 来源 = standard ⇒ 两语言都为空");
+  assert.deepEqual(resolveSubagentMode("minimal", "standard", "standard", "en", BASH_CAP), { mode: "minimal", source: "override", prompt: EN_MIN });
+  assert.deepEqual(resolveSubagentMode(null, "minimal", "standard", "en", BASH_CAP), { mode: "minimal", source: "project", prompt: EN_MIN });
+  assert.deepEqual(resolveSubagentMode(null, null, "minimal", "en", BASH_CAP), { mode: "minimal", source: "global", prompt: EN_MIN });
+  assert.equal(resolveSubagentMode("standard", "standard", "standard", "en", BASH_CAP).prompt, "", "default 来源 = standard ⇒ 两语言都为空");
 
   // 四条来源 × zh：与 en 只差 prompt 文本，mode/source 逐字相同。
-  assert.deepEqual(resolveSubagentMode("minimal", "standard", "standard", "zh"), { mode: "minimal", source: "override", prompt: ZH_MIN });
-  assert.deepEqual(resolveSubagentMode(null, "minimal", "standard", "zh"), { mode: "minimal", source: "project", prompt: ZH_MIN });
-  assert.deepEqual(resolveSubagentMode(null, null, "minimal", "zh"), { mode: "minimal", source: "global", prompt: ZH_MIN });
+  assert.deepEqual(resolveSubagentMode("minimal", "standard", "standard", "zh", BASH_CAP), { mode: "minimal", source: "override", prompt: ZH_MIN });
+  assert.deepEqual(resolveSubagentMode(null, "minimal", "standard", "zh", BASH_CAP), { mode: "minimal", source: "project", prompt: ZH_MIN });
+  assert.deepEqual(resolveSubagentMode(null, null, "minimal", "zh", BASH_CAP), { mode: "minimal", source: "global", prompt: ZH_MIN });
 
-  // 基线对照（向后兼容的硬约束）：**不传第 4 参**必须与修复前逐字相同。
-  assert.deepEqual(resolveSubagentMode("minimal", "standard", "minimal"), { mode: "minimal", source: "override", prompt: ZH_MIN });
-  assert.equal(resolveSubagentMode(null, "minimal", "standard").prompt, ZH_MIN);
-  assert.equal(resolveSubagentMode(null, null, "minimal").prompt, ZH_MIN);
+  // 基线对照（向后兼容的硬约束）：**不传第 4 参**（也不传能力上下文）时，语言与文案语义与修复前一致。
+  assert.deepEqual(resolveSubagentMode("minimal", "standard", "minimal"), { mode: "minimal", source: "override", prompt: renderShellToolText(SUBAGENT_MODE_PROMPTS.minimal, resolveShellTool()) });
+  assert.equal(resolveSubagentMode(null, "minimal", "standard").prompt, renderShellToolText(SUBAGENT_MODE_PROMPTS.minimal, resolveShellTool()));
+  assert.equal(resolveSubagentMode(null, null, "minimal").prompt, renderShellToolText(SUBAGENT_MODE_PROMPTS.minimal, resolveShellTool()));
   assert.equal(resolveSubagentMode("bad", "bad", "bad").prompt, "");
 
   // 语言参数不改变规范化语义（无效 mode 仍安全回落 null）。
   assert.equal(normalizeSubagentMode(" MINIMAL "), "minimal");
-  assert.equal(resolveSubagentMode("invalid", "invalid", "invalid", "en").mode, "standard");
+  assert.equal(resolveSubagentMode("invalid", "invalid", "invalid", "en", BASH_CAP).mode, "standard");
 });
 
 // ============================================================================
@@ -249,8 +275,8 @@ test("g-390 判据 1：zh/en × standard/minimal 最终派发 prompt 的内置�
       const expectSection = mode === "minimal";
       assert.equal(prompt.includes(ZH_MODE_TITLE(mode)), expectSection && lang === "zh", `${lang}/${mode}：中文模式标题存在性不符`);
       assert.equal(prompt.includes(EN_MODE_TITLE(mode)), expectSection && lang === "en", `${lang}/${mode}：英文模式标题存在性不符`);
-      assert.equal(prompt.includes(SUBAGENT_MODE_PROMPTS.minimal), expectSection && lang === "zh", `${lang}/${mode}：中文策略片段存在性不符`);
-      assert.equal(prompt.includes(SUBAGENT_MODE_PROMPTS_EN.minimal), expectSection && lang === "en", `${lang}/${mode}：英文策略片段存在性不符`);
+      assert.equal(prompt.includes(PROBED_MIN_ZH), expectSection && lang === "zh", `${lang}/${mode}：中文策略片段存在性不符`);
+      assert.equal(prompt.includes(PROBED_MIN_EN), expectSection && lang === "en", `${lang}/${mode}：英文策略片段存在性不符`);
 
       // 英文侧：内置文本零汉字（这是本次缺陷的判定口径——不是数行数）。
       if (lang === "en") {
@@ -327,10 +353,15 @@ test("g-390 判据 3：zh/en 下 mode 路由与真实工具白名单逐字相同
   const zhStd = await dispatch(h, { lang: "zh", mode: "standard" });
   const enStd = await dispatch(h, { lang: "en", mode: "standard" });
 
-  // 真实工具白名单：minimal 只放 6 项，且与 ROLE_PROFILES 真源逐字一致；standard 无裁剪。
-  assert.deepEqual(zhMin.toolFilter, { allow: ROLE_PROFILES.executor.allowedTools.minimal });
+  // 真实工具白名单：minimal 只放 6 项，且与 ROLE_PROFILES 真源（shell 槽位按探针解析）一致；standard 无裁剪。
+  // g-473：harness 的 `tools.get` 恒返回对象 ⇒ 探针判定「候选表首个（bash）可用」，与平台无关。
+  const probedShell = resolveShellTool({ available: () => true }).name;
+  const expectedMinimalAllow = (ROLE_PROFILES.executor.allowedTools.minimal as readonly string[]).map((n) =>
+    n === SHELL_TOOL_SLOT ? probedShell : n,
+  );
+  assert.deepEqual(zhMin.toolFilter, { allow: expectedMinimalAllow });
   assert.deepEqual(enMin.toolFilter, zhMin.toolFilter, "工具白名单不得随语言变化");
-  assert.deepEqual(zhMin.toolFilter.allow, ["bash", "edit", "read", "write", "graph_report_status", "graph_transition"]);
+  assert.deepEqual(zhMin.toolFilter.allow, [probedShell, "edit", "read", "write", "graph_report_status", "graph_transition"]);
   assert.equal(zhStd.toolFilter, undefined, "standard 不裁剪工具");
   assert.equal(enStd.toolFilter, undefined, "standard 不裁剪工具（与语言无关）");
 
@@ -354,9 +385,15 @@ test("g-390 判据 1：project.yaml 来源的 minimal 在英文派发中同样�
   const { prompt, toolFilter, attemptMeta } = await dispatch(h, { lang: "en", projectMode: "minimal" });
 
   assert.equal(attemptMeta.mode, "minimal", "project.yaml executor.mode 生效（非语言路径）");
-  assert.deepEqual(toolFilter, { allow: ROLE_PROFILES.executor.allowedTools.minimal }, "project 来源的 minimal 工具白名单不变");
+  // g-473：白名单真源含 shell 槽位，派发时按探针解析展开（harness 探针恒真 ⇒ 候选表首个 bash）。
+  assert.deepEqual(
+    toolFilter,
+    { allow: (ROLE_PROFILES.executor.allowedTools.minimal as readonly string[]).map((n) => (n === SHELL_TOOL_SLOT ? PROBED_SHELL : n)) },
+    "project 来源的 minimal 工具白名单不变（仅 shell 槽位按解析结果展开）",
+  );
+  assert.ok(!(toolFilter?.allow ?? []).includes(SHELL_TOOL_SLOT), "派发过滤器中不得残留槽位占位符");
   assert.ok(prompt.includes(EN_MODE_TITLE("minimal")), "project 来源的 minimal 也必须渲染英文模式标题");
-  assert.ok(prompt.includes(SUBAGENT_MODE_PROMPTS_EN.minimal), "project 来源的 minimal 也必须渲染英文策略片段");
+  assert.ok(prompt.includes(PROBED_MIN_EN), "project 来源的 minimal 也必须渲染英文策略片段（shell 名为解析结果）");
   assert.ok(!prompt.includes(ZH_MODE_TITLE("minimal")) && !prompt.includes("极简模式执行策略"), "project 来源不得残留中文模式段");
   assert.doesNotMatch(prompt, HAN, "project 来源的英文派发 prompt 内置文本零汉字");
 });
