@@ -1,13 +1,16 @@
 # dsh-graph v0.20.1 发布检查清单
 
 > **本文件状态：发布准备 = 已完成（版本串转正 / g352 夹具复冻 / CHANGELOG 与守卫 / 发布正文真源 / 本清单 /
-> 独立构建路径产物与对账 / 自证闸门 全部落地）；发布态动作（合并 `main`、打 tag、`push`、`npm publish`、
-> GitHub release、profile 安装升级、真机门禁）一律**未执行**，逐条列于 §8「待负责人执行」。**
-> **平台真机结论：原生 Windows = 本版未验证；原生 macOS = 本版未验证** ⇒ 两份 README 的平台状态表与发布正文
-> 均按「本版未验证」如实标注（**不得读出「已通过」**）。最近一次真机结论（`v0.20.0`）只覆盖 v0.20.0 的产品代码。
+> 独立构建路径产物与对账 / 自证闸门 全部落地）；平台回填 + 重建重打 = 已完成（第 1 轮 Windows 真机门禁结论回填、
+> 产物重建重打并使「被测 == 发布」（§5 / §7））；发布态动作（合并 `main`、打 tag、`push`、`npm publish`、
+> GitHub release、profile 安装升级）一律**未执行**，逐条列于 §8「待负责人执行」。**
+> **平台真机结论：原生 Windows = 第 1 轮（候选包轮）已实测通过，但只覆盖安装 / 启动 / REST 层，不覆盖
+> 「派发可用」维度（T1–T5 不含派发）；原生 macOS = 本版未验证** ⇒ 两份 README 的平台状态表与发布正文已按此如实
+> 标注（**macOS 不得读出「已通过」；Windows 不得读作三维度齐全**）。**第 2 轮（被测产物 == 发布产物 闭环轮）待
+> 负责人执行**，且须锁定宿主 `@deepseek-ai/dsh@0.2.1-alpha.2`（第 1 轮拿到的是 npm `latest` = `0.2.0-rc.2`）。
 > 结构对照 [`docs/release-checklist-v0.20.0.md`](release-checklist-v0.20.0.md)。
 
-**本次执行树**：worktree `.worktrees/g-471-att-01`，分支 `g-471-att-01`，基线 **`499805cf0010d2e6b453ee64effd5ff8dbfcbfbe`**（= `v0.20.1-test` 顶点 = g-469 派发修复合入点）。
+**本次执行树**：发布准备 = worktree `.worktrees/g-471-att-01`，分支 `g-471-att-01`，基线 **`499805cf0010d2e6b453ee64effd5ff8dbfcbfbe`**（= `v0.20.1-test` 顶点 = g-469 派发修复合入点）；**平台门禁回填 + 重建重打 = worktree `.worktrees/g-471-att-02`**，分支 `g-471-att-02`，基线 **`39a47c81be7917d897c37c700c7aa4f30680ae13`**（= att-001 候选包合入后的 `v0.20.1-test` 顶点）。
 
 **发布源**：`v0.20.1-test` 分支（**发布时以 `git rev-parse v0.20.1-test` 为准**，不要照抄本行短 sha —— 本清单自身的补正提交也会推进该 tip）。发布时由负责人合入 `main`。
 
@@ -31,7 +34,7 @@
 2. **兼容性结论从此必须验「派得出去」**：新宿主上「装得上、起得来」不等于可用；宿主兼容判定固定为
    **安装 / 启动 / 派发可用**三个维度，缺一不得判定兼容。
 3. **本版这样验证**：用与用户相同的安装包在干净环境里装上后实测派发 —— 新宿主与旧宿主各成功派发一次并
-   拿到真实子代理标识。原生 Windows 与 macOS 真机门禁**本版未执行**，如实标注为「未验证」，不得读作「已通过」。
+   拿到真实子代理标识。原生 Windows 真机门禁已在本版候选包上执行，覆盖**安装 / 启动 / REST 层**（**不含「派发可用」维度**）；原生 macOS 真机门禁**本版未执行**，如实标注为「未验证」，不得读作「已通过」。
 4. **配置与行为零变化**：宿主兼容声明范围、设置项与看板行为均未改动；从 v0.20.0 升级无需任何手工动作。
 
 ## 1. 目标与范围
@@ -45,7 +48,7 @@
 
 - [x] 版本串转正三处一致：`package.json` version / `PLUGIN_VERSION` / 两份 README 的版本表述，全部 = `0.20.1`（§3）
 - [x] `engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` **未动**（保持 `>=0.1.5-rc.2 <0.2.2-0`，§3）
-- [x] README 平台状态表按「本版未验证」如实标注（Windows 行由 v0.20.0 的「已实测通过」改为「未验证」并标注历史结论归属，§7）
+- [x] README 平台状态表按本轮真机结论回填：**Windows 行改为「✅ 已实测通过」**并写明实测事实与 caveat（**只覆盖安装 / 启动 / REST 层，不覆盖「派发可用」维度**）；**macOS 行保持「本版未验证」**（§7）
 - [x] README 三处「最新亮点 / What's new」随本版更新为 `v0.20.1`（沿用每次发版替换该节的既有惯例）
 - [x] `CHANGELOG.md` 新增 `## v0.20.1 — 2026-10-10` 节（**4 条**、用户语言、无过程痕迹）；`g371` 快照同步 `{ version: "v0.20.1", bullets: 4 }`（§6）
 - [x] 发布正文真源 `docs/release-notes-v0.20.1.md` 入库（结构同 v0.20.0 模板：要点 + 安装/升级 + 验证与产物，§6）
@@ -53,8 +56,10 @@
 - [x] 发布手册补 g-470 条目：`cd dist && npm pack` 会把 tgz 留在 `dist/` ⇒ 同树跑闸门必红，应先跑闸门再打包或打包后移除（§6）
 - [x] 本清单建立：状态 / 执行树 / 版本一致性 / 三维度兼容口径 / 独立构建路径产物对账 / 闸门 / 平台诚实性 / 待负责人执行（全文）
 - [x] 产物在隔离 worktree 内构建并打包：记录文件名 + 字节数 + sha256 + sha1 + **43 成员** + `docs/` 成员 0 + 包版本 `0.20.1`；**两次重复打包 sha256 逐字一致**；打包后移除 `dist/*.tgz`（§5）
+- [x] **平台门禁回填 + 重建重打**（att-002）：第 1 轮 Windows 真机结论回填两份 README / 发布正文 / 本清单 / `docs/platform-gate.md`（新增 §7.9），随后 `bash scripts/build.sh` + `dist/` 内 `npm pack` 重建重打；旧候选包另存 `tmp/uat-v0201/dsh-graph-0.20.1.round1-9b3e3e37.tgz`，新包指纹回填 §5（§5 / §7）
 - [x] 自证闸门全绿：`node scripts/run-tests.mjs` + `tsc --noEmit` + `node --check dist/lib/client.js`（§6）
-- [ ] **原生 Windows 真机门禁（红线 1）** —— **本版未执行**（§7）
+- [x] **原生 Windows 真机门禁（红线 1）第 1 轮（候选包轮）** —— 已由负责人执行（2026-10-10，`win32/x64` + Node `v24.21.0` + 宿主 `0.2.0-rc.2`，T1–T5 = **15/0/1 PASS**，逐字报告见 `docs/platform-gate.md` §7.9）；**只覆盖安装 / 启动 / REST 层，不覆盖「派发可用」维度**（§7）
+- [ ] **原生 Windows 真机门禁 第 2 轮（被测产物 == 发布产物 闭环轮）** —— **待负责人执行**，须锁定宿主 `@deepseek-ai/dsh@0.2.1-alpha.2`（§8）
 - [ ] **原生 macOS 真机门禁** —— **本版未执行**（§7）
 - [ ] 合并 `main` / 打 annotated tag / `push` / `npm publish` / GitHub release / profile 安装升级 —— **待负责人执行**（§8）
 
@@ -109,21 +114,28 @@
 
 ## 5. 发布产物与独立构建路径对账
 
-**本次产物由隔离 worktree 的独立构建路径产出**（`bash scripts/build.sh` → `dist/` 内 `npm pack`）：
+**本次产物由隔离 worktree 的独立构建路径产出**（`bash scripts/build.sh` → `dist/` 内 `npm pack`）。
+**下表为第 2 轮起生效的「发布产物」指纹**（att-002 在 README 平台表回填后**重建重打**；构建树 `.worktrees/g-471-att-02`）：
 
 | 项 | 值 |
 |---|---|
 | 文件名 | `dsh-graph-0.20.1.tgz` |
-| 本地绝对路径 | `.worktrees/g-471-att-01/tmp/uat-v0201/dsh-graph-0.20.1.tgz`（gitignored，不入 git） |
-| 字节数 | **1,437,282** |
-| sha256 | `9b3e3e37afec42e40ebdce0c567f75c69e383b512fe8a3d37e7409fd4c83709b` |
-| sha1 | `eae514760eab054bfa0e596e50050744c3ad3d86` |
+| 本地绝对路径 | `tmp/uat-v0201/dsh-graph-0.20.1.tgz`（仓库主树，gitignored，不入 git；由 worktree `.worktrees/g-471-att-02` 内构建 + `npm pack` 后另存） |
+| 字节数 | **1,437,660** |
+| sha256 | `94459a16ae7d8dd378230d4c8daaf0f7885d2cd68b08e67b743d28d3b2d9c22c` |
+| sha1 | `e000fc324e3537669c45551a5a983b87e80ae4e1` |
 | 成员数 | **43** |
 | `docs/` 成员数 | **0**（`docs/` 不随包发布） |
 | 包内 `package.json` version | `0.20.1` |
 | 包内 `lib/client.js` `PLUGIN_VERSION` | `0.20.1` |
-| 重复打包 | 同一构建树内**两次 `npm pack` 得同一 sha256**（逐字节可复现） |
+| 重复打包 | 同一构建树内**两次 `npm pack` 得同一 sha256**（逐字节可复现，实测两次均为 `94459a16…`） |
 | 校验和文件 | `tmp/uat-v0201/SHA256SUMS`（`sha256sum` 格式，随 release 附件上传） |
+
+**第 1 轮 Windows 真机门禁的被测产物（回填前候选包，已另存）**：`dsh-graph-0.20.1.tgz` sha256
+`9b3e3e37afec42e40ebdce0c567f75c69e383b512fe8a3d37e7409fd4c83709b` / 1,437,282 B，另存为
+`tmp/uat-v0201/dsh-graph-0.20.1.round1-9b3e3e37.tgz`。**⇒ 第 1 轮被测候选 sha 为 `9b3e3e37…`；README 回填后已重建重打
+⇒ 自第 2 轮起「被测产物 == 发布产物」**（候选包 vs 新包逐文件差异实拍 = 仅 `README.md`、42/43 逐字节相同，
+见 [`docs/platform-gate.md`](platform-gate.md) §7.9）。
 
 **构建 / 打包过程的两条实测纪律（对应手册 g-470 条目）**：
 
@@ -175,27 +187,40 @@ sha512 可做**字节级**对账，保证「被测产物 == 发布产物 == rele
 | 类型检查 | `./node_modules/.bin/tsc --noEmit -p tsconfig.json` | **exit 0**（零错） |
 | 产物语法 | `node --check dist/lib/client.js` | **exit 0** |
 
+**att-002（平台回填 + 重建重打）后的复跑**：在 worktree `.worktrees/g-471-att-02` 的全部文档回填**之后**（且已移除
+`dist/*.tgz`）复跑同一套件 —— **tests=2369 / pass=2369 / fail=0 / skipped=0 / cancelled=0 / todo=0，exit 0**
+（自证行：`tests=2369 (>0) skipped=0 fail=0 cancelled=0 todo=0 pass=2369 exit=0`）；`tsc --noEmit` **exit 0**；
+`node --check dist/lib/client.js` **exit 0**。**未复冻夹具**（本 attempt 不动 `constants.js` 与看板源码 ⇒ `g352` 签名未失配，63/63 绿）。
+
 ## 7. 平台门禁（**如实标注**）
 
 | 平台 | 本版（`v0.20.1`）状态 | README 落点 |
 |---|---|---|
 | Linux / WSL2 | ✅ 已实测通过（本版整套件自证闸门 fail 0） | 两份 README 平台表首行 |
-| 原生 Windows（红线 1） | ⏳ **本版未验证** —— `v0.20.1` **未**在原生 Windows 上执行真机门禁 | `README.md:34` / `dsh-graph-host/README.md:52` / 英文镜像 `:294` |
+| 原生 Windows（红线 1） | ✅ **已实测通过（第 1 轮 = 候选包轮，2026-10-10）** —— 真机 T1–T5 通过 15 / 失败 0 / 告警 1、T3 生命周期 32/32 步；**只覆盖安装 / 启动 / REST 层，不覆盖「派发可用」维度**（T1–T5 不含派发）；**第 2 轮（被测 == 发布 闭环轮）待跑** | `README.md:34` / `dsh-graph-host/README.md:52` / 英文镜像 `:294` |
 | 原生 macOS | ⏳ **本版未验证** —— `v0.20.1` **未**在原生 macOS 上执行真机门禁 | `README.md:35` / `dsh-graph-host/README.md:53` / 英文镜像 `:295` |
 
-两点必须写死、不得误读：
+三条必须写死、不得误读：
 
-- **不得沿用 `v0.20.0` 的「已通过」表述**：README 的 Windows 行由原来的「✅ **已实测通过** … 本版终版包」
-  改为「⏳ **本版未验证**（`v0.20.1` 未在原生 Windows 执行真机门禁）」，并把既有结论明确标注为
-  「**最近一次真机结论为 `v0.20.0` … 只覆盖 v0.20.0 的产品代码**」；发布正文同口径。
-- 红线 1 要求「每个版本发布前必须在原生 Windows 上做一次兼容性测试；Windows 验证缺失时 README 须如实标注
-  「Windows 未验证」」⇒ **本版缺该项真机结论**，故 README 与发布正文一律按「未验证」呈现；
-  若负责人在发布前补跑真机门禁，须在 README / 发布正文 / 本清单三处同步回填，并**重建重打产物**使被测 == 发布。
+- **历史处置（已执行）**：发布准备阶段 README 的 Windows 行曾由 `v0.20.0` 的「✅ 已实测通过」改为
+  「⏳ 本版未验证」（当时 `v0.20.1` 未在原生 Windows 执行真机门禁），并把既有结论明确标注为「最近一次真机结论为
+  `v0.20.0` … 只覆盖 v0.20.0 的产品代码」。
+- **本轮回填（已执行）**：负责人于 **2026-10-10** 补跑第 1 轮真机门禁（候选包轮）⇒ 两份 README 的 Windows 行改为
+  「✅ **已实测通过**」并写死 caveat：**只覆盖安装 / 启动 / REST 层，不覆盖「派发可用」维度**（该维度本版在
+  Linux/WSL2 隔离实例上验证）；**不得**把该行读作 Windows 三维度（安装 / 启动 / 派发可用）齐全。
+  **macOS 行保持「本版未验证」**（未执行真机门禁，不得顺带改读作已通过）。
+- **红线 1 的闭环还差第 2 轮**：第 1 轮被测产物是**回填前**候选包（`9b3e3e37…`）；README 回填后 att-002 已
+  **重建重打**（§5）⇒ **第 2 轮「被测产物 == 发布产物」待负责人执行**，且须锁定
+  `@deepseek-ai/dsh@0.2.1-alpha.2`（第 1 轮经 `npx -y @deepseek-ai/dsh` 拿到的是 npm `latest` = `0.2.0-rc.2`，
+  **未覆盖本版真正要修的宿主代际**）。
 
 ## 8. 待负责人执行（发布态动作 —— **本清单准备阶段一律未执行**）
 
-- [ ] **（可选，先决）原生 Windows 真机门禁**：用 §5 的 tarball 跑 `scripts/win-smoke-test.mjs`（T1–T5）+ 看板文件系统
-      生命周期检查（红线 1）；若执行，回填 README / 发布正文 / 本清单并重建重打（被测 == 发布）。
+- [ ] **原生 Windows 真机门禁 第 2 轮（被测产物 == 发布产物 闭环轮）**：用 §5 的**新** tarball（sha256 `94459a16…`）
+      跑 `scripts/win-smoke-test.mjs`（T1–T5）+ 看板文件系统生命周期检查（红线 1），并**锁定宿主
+      `@deepseek-ai/dsh@0.2.1-alpha.2`**（第 1 轮拿到的是 npm `latest` = `0.2.0-rc.2`）。第 1 轮（候选包轮，
+      `9b3e3e37…`）已于 2026-10-10 由负责人完成，逐字报告见 [`docs/platform-gate.md`](platform-gate.md) §7.9；
+      第 2 轮结论须回填 README / 发布正文 / 本清单三处。
 - [ ] **（可选）原生 macOS 真机门禁**：按 [`docs/platform-gate.md`](platform-gate.md) §5 命令序列执行；
       未执行则维持「本版未验证」。
 - [ ] **合并 `main`**：`v0.20.1-test` → `main`（`--no-ff`），并核对 `HEAD^{tree}` 与分支 tip tree 逐字相等。
@@ -203,7 +228,7 @@ sha512 可做**字节级**对账，保证「被测产物 == 发布产物 == rele
 - [ ] **打 annotated tag `v0.20.1`**（非轻量 tag），并核对 tag 对象解引用到合并提交。
 - [ ] **`git push`**（`main` + tag）。
 - [ ] **`npm publish`**：推荐**直发 §5 的 tarball**（手册步骤 4'，registry 不重打）⇒ `npm view dsh-graph@0.20.1 dist --json`
-      的 `shasum` 应 == 本地 sha1 `eae51476…`、`fileCount` == **43**；`integrity` 与本地 sha512 逐字对账。
+      的 `shasum` 应 == 本地 sha1 `e000fc32…`、`fileCount` == **43**；`integrity` 与本地 sha512 逐字对账。
 - [ ] **GitHub release `v0.20.1`**：附件 = tarball + `SHA256SUMS`；正文用
       `gh release create v0.20.1 -R miuzel/dsh-graph <tarball> SHA256SUMS --title "v0.20.1" --notes-file docs/release-notes-v0.20.1.md`；
       发布后以 `gh release view --json body` 与真源**逐字比对**（唯一可接受差异：文末换行归一化）。
