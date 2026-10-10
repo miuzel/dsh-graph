@@ -40,7 +40,7 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**当前版本**：v0.20.0（本次发布准备产物；`0.20.0-alpha` 为开发线版本串）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+**当前版本**：v0.20.1（本次发布准备产物；`0.20.1-alpha` 为开发线版本串）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
 **宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.2-0`（上界 `-0` 排除 `0.2.2` 的一切预发布与正式版；整条 `0.2.1` 线已在范围内），`engines.dsh` 供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。⚠️ 宿主的**安装/启动门禁只读 `peerDependencies`、不读 `engines.dsh`**，故两处必须同步放宽（只改 `engines.dsh` 无效）。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
@@ -49,18 +49,17 @@ dsh plugin --profile <profile-name> add dsh-graph
 | 平台 | 本版状态 |
 |------|----------|
 | Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0） |
-| 原生 Windows | ✅ **已实测通过**：原生 Windows 真机（`win32/x64`）+ Node `v24.21.0` + 宿主 DSH `0.2.0-rc.2`，本版终版包上 T1–T5 **通过 15 / 失败 0 / 告警 1**、T3 看板文件系统生命周期 **32/32 步**（唯一告警为设计内：`--tarball` 轮包内无产品源码 ⇒ 台账对账另在仓库根完成，**非缺陷**）。执行经 WSL↔Windows 互操作，该链路与纯原生用户场景的差异已如实登记（[platform-gate §7.8](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)）。 |
-| macOS | ⏳ **本版未验证**：`v0.20.0` 发布候选包**尚未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**。历史记录见 [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)，同样只覆盖 v0.19.8 及更早的产品代码。 |
+| 原生 Windows | ⏳ **本版未验证**：`v0.20.1` **未**在原生 Windows 上执行真机门禁 ⇒ **不得读出「已通过」**。最近一次真机结论为 `v0.20.0`（原生 Windows `win32/x64` + Node `v24.21.0` + 宿主 DSH `0.2.0-rc.2`，T1–T5 通过 15 / 失败 0 / 告警 1、T3 生命周期 32/32 步），**只覆盖 v0.20.0 的产品代码**，见 [platform-gate §7.8](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)。 |
+| macOS | ⏳ **本版未验证**：`v0.20.1` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**。历史记录见 [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)，只覆盖 v0.19.8 及更早的产品代码。 |
 
 三平台使用同一安装包。**已知限制**：① macOS 默认文件系统 APFS 大小写不敏感 —— 仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
-**最新亮点（v0.20.0）**
+**最新亮点（v0.20.1）**
 
-- **支持 DSH 0.2.1 系宿主**：宿主兼容范围放宽为 `>=0.1.5-rc.2 <0.2.2-0` —— 上界 `-0` 排除 `0.2.2` 的一切预发布与正式版，整条 `0.2.1` 线纳入范围，并已在隔离实例上以 `0.2.1-alpha.2` **未使用**任何版本豁免完成安装与启动。⚠️ 宿主的安装/启动门禁**只读 `peerDependencies`、不读 `engines.dsh`**，两处声明必须**同步**放宽——只改前者无效，安装期仍会被硬拒绝。
-- **升级宿主后旧设置不再丢**：旧 `settings.yaml` 里的 `dsh-graph` 节会一次性、幂等地补进新的 `dsh-graph-host` 条目（重复执行不会重复导入，读取仍保留回退）；该升级路径已在真实宿主上做过端到端验证。
-- **Agent Teams 协作模式（默认关闭）**：同一次执行内可扇出多个成员并行推进，并指定独立验证者对结果交叉核验；开关关闭时提示词与行为与旧版逐字一致。
-- **不再产出坏数据、也不再静默失效**：设置写入的父级不是块式映射时直接拒绝（不再返回成功却写出非法 YAML）；工作树归属标记改为原子写入，中途失败不再留下半个标记、导致清理面保护静默失效。
-- **设计过程看得见、状态不用猜**：看板标题栏新增「Graph 设计」入口，弹窗内嵌两张可交互流程图（随包发布、经只读路由提供），并有中英双语文档说明开发流程；新一轮对话开始时先显示「正在处理…」占位，不必盯着空白等首字。
+- **在 DSH 0.2.1 系宿主上派发不再失效**：宿主把子代理启动接口换了名字后，新宿主上任何派发都会直接失败（报 `startContinuable is not a function`）；本版把全部派发入口收口到同一处兼容层 —— 新宿主走新接口、旧宿主自动回退旧接口，两者都没有时明确报错，不再静默失败。
+- **兼容性结论从此必须验「派得出去」**：新宿主上「装得上、起得来」不等于可用；宿主兼容判定固定为**安装 / 启动 / 派发可用**三个维度，缺一不得判定兼容。
+- **本版这样验证**：用与用户相同的安装包在干净环境里装上后实测派发 —— 新宿主与旧宿主各成功派发一次并拿到真实子代理标识。原生 Windows 与 macOS 真机门禁**本版未执行**，如实标注为「未验证」，不得读作「已通过」。
+- **配置与行为零变化**：宿主兼容声明范围、设置项与看板行为均未改动；从 v0.20.0 升级无需任何手工动作。
 
 完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -283,7 +282,7 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**Current version**: v0.20.0 (this release-preparation artifact; `0.20.0-alpha` was the development version string — not yet published to npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+**Current version**: v0.20.1 (this release-preparation artifact; `0.20.1-alpha` was the development version string — not yet published to npm). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
 **Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` declare `>=0.1.5-rc.2 <0.2.2-0` in lockstep (the `-0` upper bound excludes every `0.2.2` prerelease and final release; the entire `0.2.1` line is now inside the range); `engines.dsh` is what host-aware markets such as dsh-market read for card display and install/update pre-flight. ⚠️ The host's **install/boot gate reads `peerDependencies` only, never `engines.dsh`**, so both fields must be widened together (widening `engines.dsh` alone has no effect). **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
@@ -292,18 +291,17 @@ dsh plugin --profile <profile-name> add dsh-graph
 | Platform | Status for this release |
 |----------|-------------------------|
 | Linux / WSL2 | ✅ Verified on-device (this release's full test suite: 0 failures) |
-| Native Windows | ✅ **Verified on-device**: native Windows (`win32/x64`) + Node `v24.21.0` + host DSH `0.2.0-rc.2`; on this release's final package T1–T5 **15 passed / 0 failed / 1 warning**, T3 kanban filesystem lifecycle **32/32 steps** (the single warning is by design: the `--tarball` round carries no product sources, so the OS-call-site ledger is reconciled at the repository root instead — **not a defect**). Execution went through WSL↔Windows interop; the differences between that link and a purely native user scenario are recorded honestly in [platform-gate §7.8](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md). |
-| macOS | ⏳ **Not verified for this release**: the `v0.20.0` release candidate has **not** yet run the on-device gate on native macOS ⇒ **must not be read as "passed"**. Earlier records are in [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) and likewise cover v0.19.8 and older product code only. |
+| Native Windows | ⏳ **Not verified for this release**: `v0.20.1` has **not** run the on-device gate on native Windows ⇒ **must not be read as "passed"**. The most recent on-device result is `v0.20.0` (native Windows `win32/x64` + Node `v24.21.0` + host DSH `0.2.0-rc.2`; T1–T5 15 passed / 0 failed / 1 warning, T3 kanban filesystem lifecycle 32/32 steps) and **covers v0.20.0 product code only** — see [platform-gate §7.8](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md). |
+| macOS | ⏳ **Not verified for this release**: `v0.20.1` has **not** run the on-device gate on native macOS ⇒ **must not be read as "passed"**. Earlier records are in [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) and likewise cover v0.19.8 and older product code only. |
 
 All three platforms share the same package. **Known limitations**: (1) APFS, the macOS default, is case-insensitive — entries that differ only by case resolve to the **same entity**, so do not rely on case alone to distinguish goal ids or version lanes; (2) on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
 
-**What's new (v0.20.0)**
+**What's new (v0.20.1)**
 
-- **Supports the DSH 0.2.1 host line**: the host compatibility range is widened to `>=0.1.5-rc.2 <0.2.2-0` — the `-0` upper bound excludes every `0.2.2` prerelease and final release, bringing the entire `0.2.1` line into range — and was verified by installing and booting on `0.2.1-alpha.2` in an isolated instance with **no** version exemption. ⚠️ The host's install/boot gate **reads `peerDependencies` only, never `engines.dsh`**, so both declarations must be widened **together** — changing the former alone has no effect and installation is still hard-rejected.
-- **Your old settings survive a host upgrade**: the legacy `dsh-graph` section in `settings.yaml` is folded into the new `dsh-graph-host` entry once and idempotently (repeat runs never re-import, and reads keep a fallback); the upgrade path was verified end-to-end on a real host.
-- **Agent Teams collaboration mode (off by default)**: a single run can fan out to several members working in parallel and appoint an independent verifier to cross-check the result; with the switch off, prompts and behaviour are byte-identical to the previous version.
-- **No more bad data, no more silent failures**: a settings write whose parent is not a block mapping is refused outright (instead of reporting success while writing invalid YAML); the worktree ownership marker is now written atomically, so an interrupted write can no longer leave a half marker that silently disables cleanup protection.
-- **The design process is visible and status needs no guessing**: the board title bar gains a "Graph Design" entry whose dialog embeds two interactive process diagrams (shipped with the package, served through a read-only route), alongside bilingual documentation of the development flow; and a new round now shows a "processing…" placeholder immediately, so you are no longer staring at a blank line waiting for the first token.
+- **Dispatching works again on the DSH 0.2.1 host line**: after the host renamed its subagent-launch API, *every* dispatch on the new host failed outright (with `startContinuable is not a function`); this release routes all dispatch entry points through a single compatibility layer — the new host uses the new API, older hosts automatically fall back to the old one, and when neither exists the plugin fails loudly instead of silently.
+- **A compatibility verdict must now prove it can actually dispatch**: "installs and boots" on a new host does not mean "usable"; host compatibility is judged on three mandatory dimensions — **install / boot / dispatch** — and missing any one of them means incompatible.
+- **How this release was verified**: installed in a clean environment from the same package users get, then dispatching was exercised for real — once on the new host and once on an older host, each obtaining a real subagent identifier. The native Windows and macOS on-device gates were **not run for this release** and are honestly marked "not verified" — never to be read as "passed".
+- **Zero config or behaviour change**: the host compatibility range, settings and kanban behaviour are unchanged; upgrading from v0.20.0 requires no manual action.
 
 See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history. Official releases are distributed via npm and the dsh-market ecosystem.
 
