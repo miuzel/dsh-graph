@@ -411,11 +411,13 @@ function reviewWorktreeViolation(region: string): string | null {
 
 function isolationOrderingViolation(region: string): string | null {
   const creates = region.split("const wtResult = prepareAttemptWorktree(").length - 1;
-  const spawns = region.split("await subagents.startContinuable(").length - 1;
+  // g-469：派发统一经 startSubagentCompat 收口（内部再分流 startActivation / startContinuable）；
+  // 判据不变——派发区域内**恰好 1 处**启动调用，且工作树创建早于它、中间无 await。
+  const spawns = region.split("await startSubagentCompat(subagents, ").length - 1;
   if (creates !== 1) return `派发区域内 prepareAttemptWorktree 调用点应恰好 1 处，实际 ${creates} 处（结构已变，请同步更新本守卫）`;
-  if (spawns !== 1) return `派发区域内 startContinuable 调用点应恰好 1 处，实际 ${spawns} 处（结构已变，请同步更新本守卫）`;
+  if (spawns !== 1) return `派发区域内派发收口 helper 调用点应恰好 1 处，实际 ${spawns} 处（结构已变，请同步更新本守卫）`;
   const create = region.indexOf("const wtResult = prepareAttemptWorktree(");
-  const spawn = region.indexOf("await subagents.startContinuable(");
+  const spawn = region.indexOf("await startSubagentCompat(subagents, ");
   if (create > spawn) return "工作树创建晚于子代理启动 ⇒ 存在主树运行窗口";
   if (/\bawait\b/.test(region.slice(create, spawn))) return "工作树创建与子代理启动之间存在 await ⇒ 并发下可被交错";
   return null;

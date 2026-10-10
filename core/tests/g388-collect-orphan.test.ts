@@ -278,7 +278,7 @@ test("g-388 ⑥核心层：assertCollectAdmission 与 bindCardChild 拒绝条件
 // ---------------------------------------------------------------- ⑦ 负向对照（源序守卫）
 
 test("g-388 ⑦负向对照：两入口均为「先准入后 spawn」，收集路径不得回退成直连 bindCardChild", () => {
-  // 工具入口：准入必须早于 startContinuable；绑定必须走收敛 helper
+  // 工具入口：准入必须早于派发（g-469 起派发统一经 startSubagentCompat 收口）；绑定必须走收敛 helper
   const toolBranch = HOST_SRC.slice(
     HOST_SRC.indexOf("if (a.card !== undefined && a.card !== null) {"),
     HOST_SRC.indexOf("const ws = sessionWorkspace(ex) ?? dirname(r)"),
@@ -286,8 +286,8 @@ test("g-388 ⑦负向对照：两入口均为「先准入后 spawn」，收集�
   assert.ok(toolBranch.length > 0, "工具入口收集分支应可见");
   assert.ok(toolBranch.includes("collectAdmissionBlock(r, a.goal, a.card)"), "工具入口必须有 spawn 前准入");
   assert.ok(
-    toolBranch.indexOf("collectAdmissionBlock(r, a.goal, a.card)") < toolBranch.indexOf("startContinuable({"),
-    "准入必须早于 startContinuable（否则先启动 child 再被拒 = 孤儿 worker）",
+    toolBranch.indexOf("collectAdmissionBlock(r, a.goal, a.card)") < toolBranch.indexOf("startSubagentCompat(subagents, {"),
+    "准入必须早于派发（否则先启动 child 再被拒 = 孤儿 worker）",
   );
   assert.ok(toolBranch.includes("bindCollectWithConvergence(r, a.goal, a.card"), "工具入口绑定必须走共用收敛 helper");
   assert.ok(!/bindCardChild\(r, a\.goal, a\.card/.test(toolBranch), "收集分支不得回退成直连 bindCardChild");

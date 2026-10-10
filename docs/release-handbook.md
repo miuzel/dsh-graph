@@ -182,6 +182,11 @@ git worktree remove .worktrees/release-vX.Y.Z
 > 污染发布物。发布前固定核对两项：
 > `find dist -type f | wc -l`（**v0.18.0 起期望 37**：g-381 新增 `lib/client/search-match.js`；此前为 36）与 `find dist -name '*.tgz' | wc -l`（期望 **0**）。
 >
+> ⚠️ **打包与整套件自证闸门的先后顺序（g-470）**：`cd dist && npm pack` 会把
+> `dsh-graph-X.Y.Z.tgz` **留在 `dist/` 内** ⇒ 之后在**同一棵树**跑整套件自证闸门**必红**：
+> `g-348` 判据 2 会报该 tgz 在原子发布期间缺失（ENOENT），`g-353` 会报 dist 树 hash 前后不一致。
+> ⇒ 应**先跑闸门再打包**；或打包后**先移除 `dist/*.tgz`**（tarball 另存 `tmp/`）再跑闸门。
+>
 > 另：本机 `/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf` 权限损坏会导致所有 ssh 推送失败
 > （`Bad owner or permissions on ...`），git push 一律加 `GIT_SSH_COMMAND="ssh -F /dev/null"`（v0.9.2、
 > v0.10.0 均以此绕行成功）。
@@ -235,6 +240,32 @@ DSH_HOME=/tmp/dsh-pub-check dsh --profile web "ping"   # 断言插件加载激�
 > att-003 已用**真实全新 profile（隔离 DSH_HOME）+ tgz 安装**验证加载链路：headless 启动 marker
 > 落盘（14 工具注册 + validate PASS）、web 启动 `/api/dsh-graph` 返回正确 JSON 且首页含
 > client.js bundle。正式发布后按本命令复验一次即可。
+
+### 5.1 宿主兼容性判定口径（**必需三维度**，g-469 修正）
+
+宿主（DSH）升级或放宽兼容声明面时，「**安装** + **启动**」**不足以**证明插件可用——它只覆盖
+「加载链路」，覆盖不到「**派发链路**」。兼容性判定必须**同时**包含三个维度，缺一即不得判定兼容：
+
+| # | 维度 | 最小验证 | 失败形态 |
+| --- | --- | --- | --- |
+| 1 | **安装** | 全新 profile（隔离 `DSH_HOME`）+ 真 tarball/registry 安装，`dsh plugin add` 成功 | 依赖/入口解析失败 |
+| 2 | **启动** | headless/web 起得来：工具注册 marker 落盘、`/api/dsh-graph` 返回合法 JSON、首页含 client bundle | profile 冲突、`apply()` 抛错 |
+| 3 | **派发可用** | 在隔离实例上**真正起一个子代理**：`graph_start_attempt` 返回**真实 `child_id`**（非 null、无 `child_error`）并完成绑定；同时覆盖旧宿主回归 | `startContinuable/startActivation is not a function`、provider 能力探测失配、并发槽位文案未被映射 |
+
+- 维度 3 是**独立**维度：宿主对 subagent 服务的方法改名/签名变更（如 DSH `0.2.1-alpha.2` 把
+  `startContinuable(spec)` 改名为 `startActivation(spec)`）不影响维度 1/2，却让**全部派发点**失效
+  ⇒ 只看「可装可跑」会把「派发完全不可用」判成兼容。
+- 维度 3 的实现口径由仓内守卫钉住：`dsh-graph-host/index.js` 的派发**唯一收口** helper
+  `startSubagentCompat(subagents, spec)`（新名优先、旧名回退、两者皆无 fail-closed），
+  回归测试 `core/tests/g469-host-subagent-api-compat.test.ts`（含结构性守卫与真实宿主契约夹具）。
+- 环境约束（沿用 §5）：验收实例的 `DSH_HOME` 与 workspace 必须在项目 `tmp/` 内，端口避开在跑的
+  宿主实例；**不得**把测试替换进正在服务的主实例。
+
+> **历史判定如实记录（g-465）**：v0.20.0 放宽宿主兼容声明面（`<0.2.2-0`）时的兼容性判定
+> **只覆盖了维度 1（安装）+ 维度 2（启动）**，未做维度 3（派发可用）⇒ 该判定**不满足**本节口径，
+> 结论「兼容」在派发维度上**未被验证**。后续实际使用中由 g-469 暴露：`0.2.1-alpha.2` 上
+> 5 处派发点全部报 `subagents.startContinuable is not a function`。本条按事实留痕，**不回改**
+> g-465 的历史结论措辞；后续同类判定一律按本节三维度执行。
 
 ## 6. 打包结构（B7+B8——已实现，方案 B + .js 编译）
 

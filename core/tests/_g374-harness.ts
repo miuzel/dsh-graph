@@ -11,29 +11,64 @@ import { init, createGoal, setCriteria, findGoalFile } from "../ops.ts";
 import { apply } from "../../dist/index.js";
 
 export function createHarness() {
+  return createHarnessWith({});
+}
+
+/**
+ * g-469：同宿主桩的**可参数化**入口——用于把「派发 API 形态」当自变量。
+ *
+ * 宿主 `@deepseek-ai/dsh-subagent` 在 `0.2.1-alpha.2` 把 `startContinuable` 改名为
+ * `startActivation`，故派发口径必须两版可测：
+ *   · `legacy`（默认，= g-374 以来的既有桩行为）：只有 `startContinuable`；
+ *   · `activation`：只有 `startActivation`（**且 receipt 刻意不带 `parentSessionId`**，
+ *     与真实新宿主一致 ⇒ 顺带钉住 `?? null` 兜底）；
+ *   · `both`：两版同时挂着（用于断言「新名优先」）；
+ *   · `none`：两版皆无（用于断言 fail-closed，不得静默回退）。
+ *
+ * `capturedRequests` 的既有元素形状（原始 spec，`.request.prompt` / `.label` 可直接读）**逐字不变**；
+ * 新增的 `capturedVia` 平行记录本次实际走的是哪个方法名。
+ */
+export type HarnessDispatchApi = "legacy" | "activation" | "both" | "none";
+
+export function createHarnessWith(opts: { dispatchApi?: HarnessDispatchApi; dispatchError?: unknown }) {
+  const dispatchApi: HarnessDispatchApi = opts.dispatchApi ?? "legacy";
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-h-"));
   const root = join(ws, ".dsh-graph");
   init(root);
   const capturedRequests: any[] = [];
+  const capturedVia: string[] = [];
   const registeredTools: any[] = [];
   const routes: any[] = [];
   const handlers = new Map<string, Array<(info: any) => void>>();
   const webServer = { register: (r: any) => { routes.push(r); return () => {}; } };
+  const service: any = {
+    list: () => ["spawn"],
+    getProvider: (n: string) => (n === "spawn" ? { prepareContinuable: () => {} } : {}),
+  };
+  const record = (via: string, spec: any, receipt: any) => {
+    capturedRequests.push(spec);
+    capturedVia.push(via);
+    return { childId: `child-${capturedRequests.length}`, ...receipt };
+  };
+  if (dispatchApi === "legacy" || dispatchApi === "both") {
+    service.startContinuable = async (spec: any) => {
+      if (opts.dispatchError) throw opts.dispatchError;
+      return record("startContinuable", spec, { parentSessionId: "sess-super" });
+    };
+  }
+  if (dispatchApi === "activation" || dispatchApi === "both") {
+    service.startActivation = async (spec: any) => {
+      if (opts.dispatchError) throw opts.dispatchError;
+      // 真实新宿主 receipt = { childId, result, dispose }（无 parentSessionId，g-469 夹具实测）。
+      return record("startActivation", spec, {});
+    };
+  }
   const ctx: any = {
     get: (name: string) => {
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "webServer") return webServer;
-      if (name === "subagents") {
-        return {
-          list: () => ["spawn"],
-          getProvider: (n: string) => (n === "spawn" ? { prepareContinuable: () => {} } : {}),
-          startContinuable: async (opts: any) => {
-            capturedRequests.push(opts);
-            return { childId: `child-${capturedRequests.length}`, parentSessionId: "sess-super" };
-          },
-        };
-      }
+      if (name === "subagents") return service;
       return undefined;
     },
     effect: (fn: () => unknown) => fn(),
@@ -63,7 +98,7 @@ export function createHarness() {
   };
   /** 子代理派发的 label 列表（用于「谁被派发了」的精确断言）。 */
   const labels = () => capturedRequests.map((r) => r?.label ?? "");
-  return { ws, root, toolsByName, routes, call, emit, labels, capturedRequests, execContext, handlers };
+  return { ws, root, toolsByName, routes, call, emit, labels, capturedRequests, capturedVia, execContext, handlers };
 }
 
 export function prepare(h: ReturnType<typeof createHarness>, opts: { title?: string; description?: string } = {}) {

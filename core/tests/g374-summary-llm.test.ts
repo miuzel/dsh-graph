@@ -480,7 +480,9 @@ test("g-374 F5 通道：插件不直连模型 API——summarizer 走宿主子�
   const start = host.indexOf("const startSummarizerChild");
   assert.ok(start > 0, "必须存在统一的 summarizer 派发函数（REST 与工具共用）");
   const block = host.slice(start, host.indexOf("\n  const summarizeFallbackWrite", start));
-  assert.match(block, /subagents\.startContinuable/, "必须走宿主子代理机制");
+  // g-469：派发已收口到唯一 helper（新名 startActivation / 旧名 startContinuable 由它分流），
+  // 断言意图不变——仍必须是「走宿主子代理机制」而不是直连模型 API。
+  assert.match(block, /startSubagentCompat\(subagents,/, "必须走宿主子代理机制（经 g-469 派发收口 helper）");
   assert.match(block, /role: "summarizer"|toolFilterForRole\("summarizer"/, "必须绑定 summarizer 角色");
   for (const forbidden of [/fetch\(/, /https?:\/\//, /api[_-]?key/i, /Bearer /, /openai|anthropic|deepseek\.com/i]) {
     assert.doesNotMatch(block, forbidden, `不得在派发函数里直连模型/自带凭据：${forbidden}`);
