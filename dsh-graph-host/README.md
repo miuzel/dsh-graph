@@ -49,7 +49,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 | 平台 | 本版状态 |
 |------|----------|
 | Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0） |
-| 原生 Windows | ⏳ **本版未验证**：`v0.20.1` **未**在原生 Windows 上执行真机门禁 ⇒ **不得读出「已通过」**。最近一次真机结论为 `v0.20.0`（原生 Windows `win32/x64` + Node `v24.21.0` + 宿主 DSH `0.2.0-rc.2`，T1–T5 通过 15 / 失败 0 / 告警 1、T3 生命周期 32/32 步），**只覆盖 v0.20.0 的产品代码**，见 [platform-gate §7.8](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)。 |
+| 原生 Windows | ✅ **已实测通过**（`v0.20.1` 候选包真机门禁：原生 Windows `win32/x64` + Node `v24.21.0` + 宿主 DSH `0.2.0-rc.2`，端口 3088；T1–T5 通过 15 / 失败 0 / 告警 1、T3 看板文件系统生命周期 32/32 步；唯一告警 = 发布包内无 `core/*.ts` ⇒ 台账层未对账，属设计内；见 [platform-gate §7.9](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)）。⚠️ 该行结论**只覆盖安装 / 启动 / REST 层**，**不覆盖「派发可用」维度** —— 派发可用维度本版在 Linux/WSL2 隔离实例上验证（新宿主与旧宿主各成功派发一次），**Windows 未经真机验证**。 |
 | macOS | ⏳ **本版未验证**：`v0.20.1` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**。历史记录见 [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)，只覆盖 v0.19.8 及更早的产品代码。 |
 
 三平台使用同一安装包。**已知限制**：① macOS 默认文件系统 APFS 大小写不敏感 —— 仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
@@ -58,7 +58,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 - **在 DSH 0.2.1 系宿主上派发不再失效**：宿主把子代理启动接口换了名字后，新宿主上任何派发都会直接失败（报 `startContinuable is not a function`）；本版把全部派发入口收口到同一处兼容层 —— 新宿主走新接口、旧宿主自动回退旧接口，两者都没有时明确报错，不再静默失败。
 - **兼容性结论从此必须验「派得出去」**：新宿主上「装得上、起得来」不等于可用；宿主兼容判定固定为**安装 / 启动 / 派发可用**三个维度，缺一不得判定兼容。
-- **本版这样验证**：用与用户相同的安装包在干净环境里装上后实测派发 —— 新宿主与旧宿主各成功派发一次并拿到真实子代理标识。原生 Windows 与 macOS 真机门禁**本版未执行**，如实标注为「未验证」，不得读作「已通过」。
+- **本版这样验证**：用与用户相同的安装包在干净环境里装上后实测派发 —— 新宿主与旧宿主各成功派发一次并拿到真实子代理标识。原生 Windows 真机门禁已在本版候选包上执行，覆盖**安装 / 启动 / REST 层**（**不含「派发可用」维度**）；原生 macOS 真机门禁**本版未执行**，如实标注为「未验证」，不得读作「已通过」。
 - **配置与行为零变化**：宿主兼容声明范围、设置项与看板行为均未改动；从 v0.20.0 升级无需任何手工动作。
 
 完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
@@ -291,7 +291,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 | Platform | Status for this release |
 |----------|-------------------------|
 | Linux / WSL2 | ✅ Verified on-device (this release's full test suite: 0 failures) |
-| Native Windows | ⏳ **Not verified for this release**: `v0.20.1` has **not** run the on-device gate on native Windows ⇒ **must not be read as "passed"**. The most recent on-device result is `v0.20.0` (native Windows `win32/x64` + Node `v24.21.0` + host DSH `0.2.0-rc.2`; T1–T5 15 passed / 0 failed / 1 warning, T3 kanban filesystem lifecycle 32/32 steps) and **covers v0.20.0 product code only** — see [platform-gate §7.8](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md). |
+| Native Windows | ✅ **Verified on-device** (the `v0.20.1` release candidate ran the on-device gate on native Windows `win32/x64` + Node `v24.21.0` + host DSH `0.2.0-rc.2`, port 3088; T1–T5 15 passed / 0 failed / 1 warning, T3 kanban filesystem lifecycle 32/32 steps; the only warning is the designed-in "no `core/*.ts` inside the released tarball" ledger notice — see [platform-gate §7.9](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)). ⚠️ That row **covers the install / boot / REST layers only** and does **not** cover the **dispatch** dimension — dispatch was verified for this release in an isolated Linux/WSL2 instance (one successful dispatch on the new host and one on the old host), **not on real Windows hardware**. |
 | macOS | ⏳ **Not verified for this release**: `v0.20.1` has **not** run the on-device gate on native macOS ⇒ **must not be read as "passed"**. Earlier records are in [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) and likewise cover v0.19.8 and older product code only. |
 
 All three platforms share the same package. **Known limitations**: (1) APFS, the macOS default, is case-insensitive — entries that differ only by case resolve to the **same entity**, so do not rely on case alone to distinguish goal ids or version lanes; (2) on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
@@ -300,7 +300,7 @@ All three platforms share the same package. **Known limitations**: (1) APFS, the
 
 - **Dispatching works again on the DSH 0.2.1 host line**: after the host renamed its subagent-launch API, *every* dispatch on the new host failed outright (with `startContinuable is not a function`); this release routes all dispatch entry points through a single compatibility layer — the new host uses the new API, older hosts automatically fall back to the old one, and when neither exists the plugin fails loudly instead of silently.
 - **A compatibility verdict must now prove it can actually dispatch**: "installs and boots" on a new host does not mean "usable"; host compatibility is judged on three mandatory dimensions — **install / boot / dispatch** — and missing any one of them means incompatible.
-- **How this release was verified**: installed in a clean environment from the same package users get, then dispatching was exercised for real — once on the new host and once on an older host, each obtaining a real subagent identifier. The native Windows and macOS on-device gates were **not run for this release** and are honestly marked "not verified" — never to be read as "passed".
+- **How this release was verified**: installed in a clean environment from the same package users get, then dispatching was exercised for real — once on the new host and once on an older host, each obtaining a real subagent identifier. The native Windows on-device gate **has** been run for this release's candidate package and covers the **install / boot / REST layers** (it does **not** cover the **dispatch** dimension); the native macOS on-device gate was **not run for this release** and is honestly marked "not verified" — never to be read as "passed".
 - **Zero config or behaviour change**: the host compatibility range, settings and kanban behaviour are unchanged; upgrading from v0.20.0 requires no manual action.
 
 See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history. Official releases are distributed via npm and the dsh-market ecosystem.
