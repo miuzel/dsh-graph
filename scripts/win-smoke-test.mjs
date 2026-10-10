@@ -653,8 +653,8 @@ const OS_SITE_ROWS = [
   ["core/platform.ts", "atomicReplace", 3, ["replaceFileAtomic", "syncDirectorySafely", "applyModeSafely"],
    "POSIX rename / Windows 备份-替换-回滚（原子替换实现）",
    "pg:P4.b"],
-  ["core/platform.ts", "caseAlias", 5, ["isCaseInsensitiveVolumeInjected", "setCaseInsensitiveVolumeForTesting", "foldEntryName", "resolveExistingEntry"],
-   "卷大小写别名解析实现（readdir 权威 + 测试注入）",
+  ["core/platform.ts", "caseAlias", 5, ["isCaseInsensitiveVolumeInjected", "setCaseInsensitiveVolumeForTesting", "foldEntryName", "decideCaseAliasEntry", "resolveExistingEntry"],
+   "卷大小写别名解析实现（readdir 权威 + 测试注入；g-477：注入三态纯决策 + 薄 FS 包装）",
    "pg:P1"],
   ["core/platform.ts", "chmodSync", 2, ["applyModeSafely"],
    "POSIX fchmod / chmod（Windows 安全跳过）",
@@ -1272,7 +1272,8 @@ export const HARNESS_PROBE_ROWS = Object.freeze([
     "PASS = 组合声明里 `tool-bash`/`tool-pwsh` 的 `disabled: !!js process.platform …` 按目标平台求值后" +
       "恰好一个启用，且该名字与 `resolveShellTool()`（探针优先 + 无探针平台回落）**逐平台一致**；" +
       "FAIL = 组合声明与解析结果不一致 / 出现无法识别的 disabled 形态 / 组合声明了未登记的工具插件；" +
-      "WARN = 找不到 DSH 组合声明（未实测，不冒充通过；可用 DSH_GATE_DSH_ROOT 指定）。",
+      "WARN = 找不到 DSH 组合声明（未实测，不冒充通过；可用 DSH_GATE_DSH_ROOT / --dsh-root 指定，" +
+      "WARN 文案另附可复制的定位命令 —— g-477）。",
   ],
   [
     "H2", "dist",
@@ -1551,35 +1552,174 @@ export function compositionToolNames(declarations, platform, registry = DSH_TOOL
   return { names, unregistered };
 }
 
-/** 在若干候选根里定位 DSH 安装（含 `@deepseek-ai/dsh-tool-bash` 或 `dsh-web-app`）。 */
-export function discoverDshRoots(repo, extra = []) {
-  const roots = [];
-  const push = (p) => {
-    if (!p) return;
-    const abs = resolve(p);
-    if (existsSync(abs) && !roots.includes(abs)) roots.push(abs);
+/** 目录的直接子目录名（有界、静默失败：用于 profiles / _npx 这类通配形态）。 */
+function subdirNames(dir) {
+  try { return readdirSync(dir).sort(); } catch { return []; }
+}
+
+/**
+ * 在 base 下有界枚举 `node_modules` 目录（深度 ≤ depth；**不再深入 node_modules 内部**）。
+ * 覆盖 `_npx\<hash>\node_modules`、`~/.dsh/profiles\<名>\node_modules` 这类「中间层是通配名」的形态。
+ */
+export function nodeModulesDirsUnder(base, depth = 2) {
+  const out = [];
+  const walk = (dir, level) => {
+    for (const name of subdirNames(dir)) {
+      const child = join(dir, name);
+      if (name === "node_modules") out.push(child);
+      else if (level < depth) walk(child, level + 1);
+    }
   };
-  const fromEnv = String(process.env.DSH_GATE_DSH_ROOT ?? "").split(/[,;]/).map((s) => s.trim()).filter(Boolean);
-  for (const e of fromEnv) push(e);
-  for (const e of extra) push(e);
-  const bases = [repo, process.cwd()];
-  for (const b of bases) {
-    push(join(b, "node_modules", "@deepseek-ai", "dsh"));
-    // 隔离 profile 的 node_modules（完整门禁里最有价值的真实来源）
-    push(join(b, "node_modules"));
+  walk(base, 1);
+  return out;
+}
+
+/**
+ * npm 全局根回退的**命令构造**（纯：platform / execPath / timeout 全部可注入 ⇒ 离线夹具可跑）。
+ *
+ * 为什么需要（g-477 真机缺陷）：Windows 上 `npm` 是 `npm.cmd` 批处理包装，`spawnSync("npm", …)`
+ * **不经 shell 必然失败**（ENOENT，且 Node ≥ 18.20 对 `.cmd` 非 shell spawn 直接 EINVAL）⇒
+ * 旧实现的回退在 Windows 上**恒失效**（Linux 上有效，掩盖了问题）。
+ * 修法：Windows 走 `process.execPath` 同目录的 `npm.cmd` + `shell: true`，且按 DEP0190 口径只传
+ * **完整命令行字符串**（不传 args 数组）；POSIX 保持 `npm` + args、`shell: false`（语义更窄）。
+ */
+export function npmGlobalRootInvocation(opts = {}) {
+  const platform = opts.platform ?? process.platform;
+  const execPath = opts.execPath ?? process.execPath;
+  const args = ["root", "-g"];
+  const options = { encoding: "utf8", timeout: opts.timeout ?? 30_000 };
+  if (platform === "win32") {
+    const cmd = join(dirname(execPath), "npm.cmd"); // 官方安装器 / nvm-windows 都把 npm.cmd 放在 node.exe 同目录
+    return { file: cmd, args, shell: true, commandLine: buildShellCommandLine(cmd, args), options };
   }
-  // 当前 Node 的全局 node_modules（离线、不 spawn 进程）
-  const nodeRoot = process.execPath.replace(/[\\/]bin[\\/]node(\.exe)?$/i, "");
-  if (nodeRoot !== process.execPath) {
-    push(join(nodeRoot, "lib", "node_modules", "@deepseek-ai", "dsh"));
-    push(join(nodeRoot, "node_modules", "@deepseek-ai", "dsh"));
+  return { file: "npm", args, shell: false, commandLine: buildShellCommandLine("npm", args), options };
+}
+
+/**
+ * 命令构造的**可判定性**（fail-closed）：不可用形状一律**拒绝启动**，绝不让回退「静默恒失效」。
+ * 判据即 g-477 真机缺陷的机器化形态：`{file:"npm", shell:false}` 在 win32 上必须被拒。
+ */
+export function npmGlobalRootInvocationProblems(inv, platform = process.platform) {
+  const problems = [];
+  const file = String(inv?.file ?? "").trim();
+  if (!file) return ["缺少可执行文件名（npm 回退无法启动）"];
+  if (platform === "win32") {
+    if (!/\.(?:cmd|bat|exe)$/i.test(file)) {
+      problems.push(`Windows 上 npm 回退必须指向 npm.cmd（实际 ${file}）：非 shell spawn 打不到 .cmd 包装`);
+    } else if (inv.shell !== true) {
+      problems.push(`Windows 上 ${basename(file)} 必须经 shell 启动（否则 ENOENT/EINVAL）`);
+    }
+    if (inv.shell === true && !String(inv.commandLine ?? "").trim()) {
+      problems.push("shell 形态必须给完整命令行字符串（DEP0190：不得同时传 args 数组）");
+    }
+  } else if (inv.shell === true) {
+    problems.push("POSIX 上 npm 回退不应经 shell（静默失败语义与注入面都会被放大）");
   }
-  // npm root -g（best-effort；离线可用）
+  return problems;
+}
+
+/**
+ * 执行 `npm root -g` 回退（best-effort：超时、静默失败）。形状不可用（见
+ * `npmGlobalRootInvocationProblems`）时**不启动进程**直接返回 null；`opts.spawnSync` / `opts.invocation`
+ * 可注入，供离线夹具断言「命令构造真的走了 shell」与「裸 npm 形态被拒」。
+ */
+export function queryNpmGlobalRoot(opts = {}) {
+  const platform = opts.platform ?? process.platform;
+  const inv = opts.invocation ?? npmGlobalRootInvocation({ platform, execPath: opts.execPath, timeout: opts.timeout });
+  if (npmGlobalRootInvocationProblems(inv, platform).length > 0) return null;
+  const spawn = opts.spawnSync ?? spawnSync;
   try {
-    const r = spawnSync("npm", ["root", "-g"], { encoding: "utf8", timeout: 30_000 });
-    if (r.status === 0 && r.stdout) push(join(String(r.stdout).trim(), "@deepseek-ai", "dsh"));
-  } catch { /* 忽略 */ }
-  return roots.filter((r) => existsSync(join(r, "node_modules", "@deepseek-ai")) || /@deepseek-ai[\\/]dsh$/.test(r));
+    const r = inv.shell
+      ? spawn(inv.commandLine, { ...inv.options, shell: true })
+      : spawn(inv.file, inv.args, inv.options);
+    if (r && r.status === 0 && String(r.stdout ?? "").trim()) return String(r.stdout).trim();
+  } catch { /* 静默失败：回退只是 best-effort */ }
+  return null;
+}
+
+/**
+ * DSH 安装根候选目录（**纯枚举 + 真实存在的目录过滤**；env / homedir / platform / execPath 全部可注入
+ * ⇒ 可在 Linux 上用伪造的 `%APPDATA%` / `_npx` / `profiles` 树做夹具）。
+ *
+ * 候选面（g-477 补全 Windows 形态）：
+ *   ① 显式指定（`DSH_GATE_DSH_ROOT` / `extra`，可逗号分隔）；
+ *   ② 仓库根 / 工作目录的 `node_modules` 与 `node_modules/@deepseek-ai/dsh`；
+ *   ③ 当前 Node 的全局 `node_modules`（`<node>/lib/node_modules`、`<node>/node_modules`，离线不 spawn）；
+ *   ④ Windows 的 `%APPDATA%\npm\node_modules`（官方安装器的全局根）；
+ *   ⑤ Windows 的 npx 缓存 `%LOCALAPPDATA%\npm-cache\_npx\<hash>\node_modules`（`npx` / `npm exec` 形态）；
+ *   ⑥ DSH 自己的 profile 目录 `~/.dsh/profiles/**\/node_modules`（隔离 profile 的真实来源）。
+ */
+export function dshRootCandidates(opts = {}) {
+  const env = opts.env ?? process.env;
+  const platform = opts.platform ?? process.platform;
+  const cwd = opts.cwd ?? process.cwd();
+  const execPath = opts.execPath ?? process.execPath;
+  const home = opts.homedir ?? (platform === "win32" ? env.USERPROFILE : env.HOME) ?? env.HOME ?? env.USERPROFILE ?? null;
+  const raw = [];
+  const add = (p) => { if (p) raw.push(resolve(String(p))); };
+  // ① 显式指定优先（--dsh-root / DSH_GATE_DSH_ROOT，可逗号/分号分隔）
+  for (const e of String(env.DSH_GATE_DSH_ROOT ?? "").split(/[,;]/).map((s) => s.trim()).filter(Boolean)) add(e);
+  for (const e of opts.extra ?? []) add(e);
+  // ② 仓库根 / 工作目录
+  for (const b of [opts.repo, cwd].filter(Boolean)) {
+    add(join(b, "node_modules", "@deepseek-ai", "dsh"));
+    add(join(b, "node_modules"));
+  }
+  // ③ 当前 Node 的全局 node_modules（离线、不 spawn 进程）；同时覆盖 Windows 的 <nodejs>\node_modules
+  const nodeDir = dirname(execPath);
+  add(join(nodeDir, "node_modules", "@deepseek-ai", "dsh"));
+  add(join(nodeDir, "node_modules"));
+  add(join(nodeDir, "..", "lib", "node_modules", "@deepseek-ai", "dsh"));
+  add(join(nodeDir, "..", "lib", "node_modules"));
+  add(join(nodeDir, "..", "node_modules", "@deepseek-ai", "dsh"));
+  // ④ Windows：%APPDATA%\npm\node_modules（全局安装的默认落点）
+  if (platform === "win32") {
+    const appData = env.APPDATA ?? (home ? join(home, "AppData", "Roaming") : null);
+    if (appData) {
+      add(join(appData, "npm", "node_modules", "@deepseek-ai", "dsh"));
+      add(join(appData, "npm", "node_modules"));
+    }
+    // ⑤ Windows：npx / npm exec 的缓存树（%LOCALAPPDATA%\npm-cache\_npx\<hash>\node_modules）
+    const localAppData = env.LOCALAPPDATA ?? (home ? join(home, "AppData", "Local") : null);
+    const npxBases = [localAppData, appData].filter(Boolean).map((b) => join(b, "npm-cache", "_npx"));
+    for (const base of npxBases) {
+      for (const nm of nodeModulesDirsUnder(base, 2)) add(nm);
+    }
+  }
+  // ⑥ DSH 自己的 profile 目录（~/.dsh/profiles/**\/node_modules）
+  if (home) {
+    const profiles = join(home, ".dsh", "profiles");
+    add(profiles);
+    for (const nm of nodeModulesDirsUnder(profiles, 2)) add(nm);
+  }
+  const out = [];
+  for (const p of raw) if (existsSync(p) && !out.includes(p)) out.push(p);
+  return out;
+}
+
+/** 候选根是否可被 `collectCompositionFiles` 消费（`<root>/@deepseek-ai` 或 `<root>/node_modules/@deepseek-ai`）。 */
+export function isDshRootShape(root) {
+  return existsSync(join(root, "node_modules", "@deepseek-ai"))
+    || existsSync(join(root, "@deepseek-ai"))
+    || /@deepseek-ai[\\/]dsh$/.test(root)
+    || basename(root) === "@deepseek-ai";
+}
+
+/**
+ * 在若干候选根里定位 DSH 安装（含 `@deepseek-ai/dsh-tool-bash` 或 `dsh-web-app`）。
+ * 全部入参可经 `opts`（env / platform / execPath / spawnSync / invocation）注入，便于离线夹具。
+ */
+export function discoverDshRoots(repo, extra = [], opts = {}) {
+  const roots = dshRootCandidates({ ...opts, repo, extra }).filter(isDshRootShape);
+  // npm root -g（跨平台 best-effort；Windows 经 npm.cmd + shell，形状不可用则拒绝启动）
+  const npmRoot = queryNpmGlobalRoot(opts);
+  if (npmRoot) {
+    for (const cand of [join(npmRoot, "@deepseek-ai", "dsh"), npmRoot]) {
+      const abs = resolve(cand);
+      if (existsSync(abs) && !roots.includes(abs)) roots.push(abs);
+    }
+  }
+  return roots.filter(isDshRootShape);
 }
 
 /** 读取若干包的 package.json description（台账佐证用）。 */
@@ -1910,9 +2050,19 @@ export function resolveHarnessRepoRoot(opt = {}, pkgDir = null) {
   return resolve(process.cwd());
 }
 
-/** 组合声明发现失败的统一提示（必须能被人直接照着做）。 */
+/**
+ * 组合声明发现失败的统一提示（必须能被人直接照着做 —— g-477 真机教训：旧文案只给一个变量名，
+ * 没告诉用户「去哪儿找」，真机上只能人肉摸索）。故附**可直接复制**的定位命令（Windows + POSIX）。
+ * 保持**单行**（WARN 详情与「可复制回传的报告」都按单行渲染，多行会破坏粘贴块的可解析性）。
+ */
 export const HARNESS_COMPOSITION_HINT =
-  "未找到 DSH 组合声明（presets/*.patch.yml / cordis.patch.yml）——可用 DSH_GATE_DSH_ROOT=<dir> 显式指定 DSH 安装目录（或其 node_modules）";
+  "未找到 DSH 组合声明（presets/*.patch.yml / cordis.patch.yml）——可用 DSH_GATE_DSH_ROOT=<dir>（或 --dsh-root <dir>）显式指定 DSH 安装目录（或其 node_modules）。" +
+  "先定位安装目录（可直接复制）——" +
+  "Windows PowerShell：Get-ChildItem \"$env:APPDATA\\npm\\node_modules\\@deepseek-ai\"；" +
+  "Get-ChildItem \"$env:LOCALAPPDATA\\npm-cache\\_npx\\*\\node_modules\\@deepseek-ai\"；" +
+  "where.exe dsh；npm root -g。" +
+  "POSIX：npm root -g；ls ~/.dsh/profiles/*/node_modules/@deepseek-ai；which -a dsh。" +
+  "把命中的目录（或它的 node_modules）接到 --dsh-root / DSH_GATE_DSH_ROOT 上重跑。";
 
 /** 目录扫描的上限与形状（本函数只走已知布局，不做全树递归 —— 组合文件很多、必须可控）。 */
 export function collectCompositionFiles(roots) {
@@ -3796,6 +3946,76 @@ function selfTest() {
     buildToolCapabilityMutant("", "bash-only") === null &&
     Boolean(buildToolCapabilityMutant('export const SHELL_TOOL_CANDIDATES = ["bash", "pwsh"];\n', "bash-only")) &&
     buildToolCapabilityMutant('export const SHELL_TOOL_CANDIDATES = ["bash", "pwsh"];\n', "bash-only").text.includes('["bash"]'));
+
+  // ---- g-477：组合声明发现（H1/H2 的前置）—— 命令构造 + 候选面 + 负向对照 ----
+  // 真机缺陷：`spawnSync("npm")` 在 Windows 上打不到 npm.cmd（回退恒失效），候选面缺 %APPDATA%/_npx/profile。
+  const dshTree = join(tmp, "g477-fake");
+  const fakeAppData = join(dshTree, "AppData", "Roaming");
+  const fakeLocalAppData = join(dshTree, "AppData", "Local");
+  const fakeNpxBase = join(fakeLocalAppData, "npm-cache", "_npx");
+  const fakeHome = join(dshTree, "home");
+  const fakeRepo = join(dshTree, "repo");
+  /** 伪造一个「含 @deepseek-ai/dsh + presets/*.patch.yml」的安装树。 */
+  const mkDshTree = (dir, preset) => {
+    const pkg = join(dir, "node_modules", "@deepseek-ai", "dsh");
+    mkdirSync(join(pkg, "presets"), { recursive: true });
+    writeFileSync(join(pkg, "presets", preset), "plugins:\n  '@deepseek-ai/dsh-tool-bash': {}\n");
+  };
+  mkDshTree(join(fakeAppData, "npm"), "appdata.patch.yml");            // ④ %APPDATA%\npm\node_modules
+  mkDshTree(join(fakeNpxBase, "abc123"), "npx.patch.yml");             // ⑤ _npx\<hash>\node_modules
+  mkDshTree(join(fakeHome, ".dsh", "profiles", "win-smoke"), "profile.patch.yml"); // ⑥ ~/.dsh/profiles\<名>\node_modules
+  mkDshTree(join(dshTree, "npm-global"), "npm-global.patch.yml");      // npm root -g 回退命中面
+  const fakeEnv = {
+    APPDATA: fakeAppData, LOCALAPPDATA: fakeLocalAppData,
+    USERPROFILE: fakeHome, HOME: fakeHome,
+  };
+  const discOpts = {
+    env: fakeEnv, platform: "win32", repo: fakeRepo, cwd: fakeRepo,
+    execPath: join(dshTree, "nodejs", "node.exe"), spawnSync: () => ({ status: 1, stdout: "" }),
+  };
+  const found = discoverDshRoots(fakeRepo, [], discOpts);
+  const wantRoots = [
+    join(fakeAppData, "npm", "node_modules"),
+    join(fakeNpxBase, "abc123", "node_modules"),
+    join(fakeHome, ".dsh", "profiles", "win-smoke", "node_modules"),
+  ].map((p) => resolve(p));
+  check("g-477 候选面：伪造 %APPDATA% / _npx / profiles 树全部命中（Windows 形态）",
+    wantRoots.every((w) => found.includes(w)) && found.length >= wantRoots.length);
+  check("g-477 候选面：命中的候选真的能扫出组合声明",
+    ["appdata.patch.yml", "npx.patch.yml", "profile.patch.yml"].every((p) =>
+      collectCompositionFiles(found).some((f) => f.path.endsWith(`presets/${p}`))));
+  const winInv = npmGlobalRootInvocation({ platform: "win32", execPath: join(dshTree, "nodejs", "node.exe") });
+  const posixInv = npmGlobalRootInvocation({ platform: "linux", execPath: "/usr/bin/node" });
+  check("g-477 npm 回退：Windows 构造为 npm.cmd + shell + 单条命令行（不再裸 spawn npm）",
+    /npm\.cmd$/i.test(winInv.file) && winInv.shell === true &&
+    winInv.commandLine === buildShellCommandLine(winInv.file, ["root", "-g"]) &&
+    npmGlobalRootInvocationProblems(winInv, "win32").length === 0);
+  check("g-477 npm 回退：POSIX 保持 npm + args + shell:false（不回退成 shell 形态）",
+    posixInv.file === "npm" && posixInv.shell === false && posixInv.args.join(" ") === "root -g" &&
+    npmGlobalRootInvocationProblems(posixInv, "linux").length === 0);
+  const spawnCalls = [];
+  const foundNpm = discoverDshRoots(fakeRepo, [], {
+    ...discOpts,
+    spawnSync: (cmd, opts) => { spawnCalls.push({ cmd, opts }); return { status: 0, stdout: `${join(dshTree, "npm-global")}\n` }; },
+  });
+  check("g-477 npm 回退：win32 经 shell 单条命令行启动并消费结果（args 数组不得同时传）",
+    foundNpm.includes(resolve(join(dshTree, "npm-global"))) &&
+    collectCompositionFiles(foundNpm).some((f) => f.path.endsWith("presets/npm-global.patch.yml")) &&
+    spawnCalls.length === 1 && typeof spawnCalls[0].cmd === "string" && /npm\.cmd/.test(spawnCalls[0].cmd) &&
+    spawnCalls[0].opts?.shell === true && spawnCalls[0].opts?.args === undefined);
+  const bareCalls = [];
+  const bareShape = { file: "npm", args: ["root", "-g"], shell: false, commandLine: "npm root -g" };
+  const bareRoot = queryNpmGlobalRoot({
+    platform: "win32", invocation: bareShape,
+    spawnSync: (...a) => { bareCalls.push(a); return { status: 0, stdout: "/nope\n" }; },
+  });
+  check("g-477 npm 回退（负向对照）：裸 npm 形态在 win32 上被拒且**未启动进程**",
+    bareRoot === null && bareCalls.length === 0 &&
+    npmGlobalRootInvocationProblems(bareShape, "win32").length > 0);
+  check("g-477 WARN 文案：给出可复制的定位命令（Windows PowerShell + POSIX），且仍是单行",
+    /Get-ChildItem/.test(HARNESS_COMPOSITION_HINT) && /where\.exe dsh/.test(HARNESS_COMPOSITION_HINT) &&
+    /npm root -g/.test(HARNESS_COMPOSITION_HINT) && /ls ~\/\.dsh\/profiles/.test(HARNESS_COMPOSITION_HINT) &&
+    !/[\r\n]/.test(HARNESS_COMPOSITION_HINT));
 
   // ---- g-475 防漂移：清单穷尽性 + 两件都消费（绿色基线 + 变异必红）----
   const manifestOk = auditHarnessProbeManifest(HARNESS_PROBE_ROWS, HARNESS_PROBE_RUNNERS);

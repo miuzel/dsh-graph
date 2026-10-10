@@ -51,7 +51,7 @@ node scripts/macos-smoke-test.mjs …                                     # 旧�
 | `--skip-build` | 跳过依赖已构建 `dist/core/*.js` 的 P4/P5/P6（未 `pnpm build` 时）；**如实降级为 WARN，不伪装 PASS** |
 | `--keep-temp` / `--json` | 保留探针临时目录 / 额外打印机器可读结果 |
 | `--h3-dispatch-json <file>` | **H3 真机/实例事实**（g-475）：隔离实例上三条派发路径的 `child_id` 与错误；不给则 H3 显式 `SKIP`（见 §3.5.2）。等价环境变量 `DSH_GATE_H3_DISPATCH_JSON` |
-| `--dsh-root <dir>` | 组合声明来源（DSH 安装目录或其 `node_modules`），可重复 / 可逗号分隔；等价环境变量 `DSH_GATE_DSH_ROOT`。不给则自动发现（仓库 `node_modules`、当前 Node 的全局 `node_modules`、`npm root -g`） |
+| `--dsh-root <dir>` | 组合声明来源（DSH 安装目录或其 `node_modules`），可重复 / 可逗号分隔；等价环境变量 `DSH_GATE_DSH_ROOT`。不给则自动发现（仓库/工作目录 `node_modules`、当前 Node 的全局 `node_modules`、`npm root -g`（Windows 经 `npm.cmd` + shell）、Windows 的 `%APPDATA%\npm\node_modules` 与 `%LOCALAPPDATA%\npm-cache\_npx\**\node_modules`、DSH 自己的 `~/.dsh/profiles/**/node_modules`；g-477 补全） |
 
 **转发的执行件 `win-smoke-test.mjs` 另有自己的入口**（g-428 新增两项；Windows 真机门禁按第 1 行执行）：
 
@@ -287,7 +287,7 @@ Windows 上运行」（发布红线 1 的执行件，`win-smoke-test.cmd` 双击
 | **H1** | shell 工具名解析：平台条件化组合声明 → 插件解析 | PASS = 组合声明里 `tool-bash`/`tool-pwsh` 的 `disabled: !!js process.platform …` 按目标平台求值后**恰好一个启用**，且与 `resolveShellTool()`（探针优先 + 无探针平台回落）**逐平台一致**（win32→pwsh / linux、darwin→bash）；FAIL = 不一致、`disabled` 出现**无法识别的平台形态**、组合声明了未登记的工具插件；WARN = 找不到 DSH 组合声明（未实测，不冒充通过） | g-473 的 §3.4.6 是**静态扫产品代码**（`auditDispatchToolPortability`：带引号的 `"bash"` 只许出现在候选表与回落）；H1 是**读真实组合声明**再与解析结果对账 —— 一个问「代码有没有硬编码」，一个问「代码与今天的组合是否一致」 |
 | **H2** | 角色白名单求交（组合工具名台账驱动） | PASS = `reviewer` / `collector` / `executor-minimal`（含 minimal 变体）的 `toolFilterForRole().allow` ⊆ 组合**实际存在**名字集合；shell 槽位解析为组合的 shell 名、另一平台的名字不出现；**负向对照**：注入一个已知不存在的名字必须判红（证明断言非恒真）；注入「缺 `dsh-tool-web`」⇒ `web_*` 静默剔除、注入「缺 shell」⇒ 可读诊断且不派发；FAIL = 越界名字 / 工具插件未登记 / 求交未生效；WARN = 无可导入的 `core/ops.js` | g-473 的产品侧断言在 `core/tests/g473-tool-capability-probe.test.ts`（四组合 × 三路径，**合成探针**）；H2 用**真实组合的工具名台账**驱动同一组 API，并在门禁里跑，故组合一变就红 |
 | **H3** | 派发可用（端到端） | PASS = 隔离实例上真实派发三条路径都拿到非空 `child_id`、无 `tools.restrict() names unknown`、无「子代理启动失败」/`child_error`；**SKIP（需真机/实例）** = 未回传真机事实时**显式标注跳过**，禁止静默通过 | §3.4.6 表格里「Windows 上『派发可用』维度未覆盖」这一行的**收口点**：H3 把该维度变成一个可回传、可判定的探针（不再靠人读日志） |
-| **H4** | 路径分隔符与大小写语义 | PASS = 反斜杠 / 绝对路径 / `..` 形态的附件名被**可读拒绝**（不静默建目录、不泄漏平台错误码），`a/b.txt` 正常；且**注入**「大小写不敏感卷」时别名解析命中、注入「大小写敏感」时不命中（与真实卷无关，跨平台同结论）；WARN = 无可导入的 `core/ops.js` / `core/platform.js` | **H4.a** 断言产品既有拒绝语义（`storeAttachment`），不同于 T1 台账（那是**静态**登记调用点）；**H4.b** 用 `withCaseInsensitiveVolumeForTesting` **注入**卷语义，P1 量的是**真实**卷 ⇒ 一个测「引擎在两种卷语义下都正确」，一个测「今日本机是哪种卷」 |
+| **H4** | 路径分隔符与大小写语义 | PASS = 反斜杠 / 绝对路径 / `..` 形态的附件名被**可读拒绝**（不静默建目录、不泄漏平台错误码），`a/b.txt` 正常；且**注入**「大小写不敏感卷」时别名解析命中、注入「大小写敏感」时不命中（与真实卷无关，跨平台同结论）；**判定前置条件（g-477 真机发现后新增）**：注入三态必须全部忠实 —— 注入「敏感卷」时引擎**不得咨询真实 FS**，见 §3.5.4；WARN = 无可导入的 `core/ops.js` / `core/platform.js` | **H4.a** 断言产品既有拒绝语义（`storeAttachment`），不同于 T1 台账（那是**静态**登记调用点）；**H4.b** 用 `withCaseInsensitiveVolumeForTesting` **注入**卷语义，P1 量的是**真实**卷 ⇒ 一个测「引擎在两种卷语义下都正确」，一个测「今日本机是哪种卷」 |
 | **H5** | CRLF/LF 与编码往返 | PASS = 含 `\r\n` 与星平面字符（🙂）的正文写进 `goal.md` 后**逐字节**读回一致、UTF-8 往返无损且无孤立 `\r`；`results` 机器头字段里注入 `\r\n` 只被**折叠进同一行**（不新增行、字段齐备），正文换行归一为 LF 且逻辑行不丢；WARN = 无可导入的 `core/ops.js` | **P6** 是 locale（`LANG=C`）下 CJK/prompt 的逐字节往返；**H5** 是换行风格（CRLF/LF 混用）+ 机器头**注入折叠** + 星平面字符 —— 正交的两组编码风险 |
 | **H6** | 命令拼接与引号 | PASS = `splitCmd` 按空白/**引号分组**解析 `--dsh` 单串（含带空格路径）；`quoteForCmd` / `buildShellCommandLine` 按 cmd.exe 元字符集合 `[\s"&^\|<>]` 加引号且不重复加；**真实 argv 传递**（`shell:false` 与 shell:true 组合命令行）逐字节一致 | 复用 win-smoke 既有的三个函数（不新写一份引号规则）；**新增**的是真实 argv 传递自检 —— 真机/实例轮靠它回传结论（mem 记录的 `--dsh` 引号坑：`--dsh` 取**一个**字符串，带空格路径必须靠引号分组） |
 
@@ -330,6 +330,59 @@ node scripts/platform-smoke-test.mjs --static-only . --h3-dispatch-json <facts.j
    基线未突变时必须 H1/H2 全绿、突变体必须让指定探针判红。
 5. **每次改动后**跑四入口（见 §3.4.5 第 4 条）+ §4 的 Linux 序列；Windows 真机按 §5 之外的
    红线 1 流程执行，并把 H 层矩阵行逐字回填 §7。
+
+#### 3.5.4 H4 的判定前置条件：注入三态必须忠实、判定与真实卷解耦（g-477 真机发现）
+
+**第四类真实漏检**：既不是「覆盖面为零」，也不是「判定口径写错」，而是**判定赖以成立的 seam 在真机上
+静默失真** —— 口径写着「与真实卷无关，跨平台同结论」，实现却在真机上**落回了真实卷语义**。
+
+**真机现象（Windows Round A，win32/x64 + Node v24.21.0，2026-10-10）**：
+`大小写注入：请求=a.txt；不敏感卷→A.txt(aliased=true)；敏感卷→A.txt(aliased=true)` ⇒ H4 **判红**
+（H1/H2 另因组合声明发现失效而 WARN，本轮一并修复，见 §3.5.5）。
+
+**根因**：`core/platform.ts` 的 `resolveExistingEntry` 只处理 `caseInsensitiveVolumeOverride === true`，
+对 `=== false`（注入「敏感卷」）**没有分支** ⇒ 落到真实 FS 的 `lstatSync(请求名)` 探测；NTFS/APFS 等
+**真实不敏感卷**上该探测大小写不敏感地成功 ⇒ 仍返回 `aliased: true` ⇒ **注入语义失效**。
+Linux（ext4）之所以「绿」，是因为 `lstat('a.txt')` 恰好 ENOENT ⇒ 返回 `null` —— 用的是**真实卷语义**
+而非注入语义，属**碰巧对**；树上测试此前**只注入 `true`**，故该缺陷长期未被发现。
+
+**修复与钉法（最小、零生产行为变更）**：
+- `=== false` 补**短路**：只认逐字节同名，其后一律 `null`，**不再咨询真实 FS**；`lstat` 探测**仅**保留给
+  `override === null`（生产/未注入）。
+- 判定抽成**纯函数** `decideCaseAliasEntry(entries, requested, present, override)`（`resolveExistingEntry`
+  退化为薄 FS 包装、只负责采集真实输入）—— **这是本条的机器化关键**：Linux 上「跑一遍探针」**无法区分
+  新旧实现**（ext4 上旧实现也返回 `null`），只有把 `present`（真实 FS 是否命中）从判定里显式抽出来，
+  才能在敏感卷开发机上把「注入敏感 ∧ 真实命中 ∧ 拼写不同」这一 Windows 真机形态钉死。
+- 守卫 `core/tests/g477-case-alias-injection-and-win-discovery.test.ts`：**穷尽决策表**（三态 × present ×
+  拼写，含 `false ∧ present=true ∧ 拼写不同 ⇒ null` 与 `null ∧ present=true ∧ 拼写不同 ⇒ 别名命中` 两侧）、
+  **负向对照**（旧实现逐字复刻在同一输入上必然判别名 ⇒ 回退修复即红）、以及**结构守卫**（`false` 短路
+  必须存在且 `lstat` 只在 `override === null` 分支内）。T1 台账 `core/platform.ts | caseAlias` 行如实同步
+  函数集合（`decideCaseAliasEntry`），命中数不变。
+
+**判定前置条件（回填前必须成立）**：任何平台上的 H4 结论，都以「注入三态全部忠实且判定与真实卷解耦」
+为前提 —— 该前提由上条纯函数决策表在**每次** `run-tests` 中机器复核，不依赖真机重跑。
+
+#### 3.5.5 H1/H2 的前置条件：组合声明发现必须跨平台可用（g-477 真机发现）
+
+**真机现象**：H1/H2 均 `[WARN] 未找到 DSH 组合声明（presets/*.patch.yml / cordis.patch.yml）——可用
+DSH_GATE_DSH_ROOT=<dir> 显式指定`（真机上「自动发现」从来没能成功，且文案没告诉用户去哪儿找）。
+
+**根因**：`scripts/win-smoke-test.mjs` 的 `discoverDshRoots`
+1. `spawnSync("npm", ["root", "-g"])` —— Windows 上 `npm` 是 `npm.cmd`，**不经 shell 直接 spawn 必然失败**
+   ⇒ 该回退在 Windows 上**恒失效**（Linux 上有效，掩盖了问题）；
+2. 候选面缺 Windows 的 `%APPDATA%\npm\node_modules`、`%LOCALAPPDATA%\npm-cache\_npx\**\node_modules`
+   与 DSH 自己的 `~/.dsh/profiles/**/node_modules`；
+3. 失败时只给变量名，没给**定位命令**。
+
+**修复**：命令构造抽成可注入的 `npmGlobalRootInvocation`（Windows：`process.execPath` 同目录的
+`npm.cmd` + `shell: true`，并按 DEP0190 只传**单条命令行字符串**；POSIX 保持 `npm` + args + `shell:false`），
+配 `npmGlobalRootInvocationProblems` **fail-closed**（`{file:"npm", shell:false}` 在 win32 上被拒且**不启动进程**）；
+候选枚举抽成可注入 `env`/`homedir`/`platform`/`execPath` 的 `dshRootCandidates`（补齐上述三类 Windows 目录，
+并修正「含 `@deepseek-ai` 直接子项的根」（如 `<profile>/node_modules`）此前被形状过滤器丢弃的问题）；
+WARN 文案附**可复制**的定位命令（Windows PowerShell `Get-ChildItem` / `where.exe dsh` / `npm root -g`，
+POSIX `npm root -g` / `ls ~/.dsh/profiles/*/node_modules/@deepseek-ai` / `which -a dsh`）。
+守卫：`--self-test` 新正反例 + `core/tests/g477-*`（伪造 `%APPDATA%`/`_npx`/`profiles` 树必须命中；
+裸 `spawnSync("npm")` 必红）。
 
 **与 §3.4.6 的边界（不重复）**：§3.4.6 记录的是 **g-473 的缺陷面与产品修复的静态防再犯**；
 本节记录的是 **g-475 新增的「组合依赖」覆盖面本身**（H1–H6 探针、单一真源、防漂移守卫与真机回传通道）。
@@ -1064,6 +1117,40 @@ T1–T5 **均 15/0/1**、T3 **均 32/32 步**）为准；**② 的被测产物�
 
 ---
 
+### 7.10 v0.20.2 Round A' 真机结论（**待回填 —— 负责人回传前不得预填任何结论**）
+
+**为什么需要这一轮**：Windows Round A（2026-10-10，win32/x64 + Node v24.21.0）在 v0.20.2 候选前
+暴露了 **H4 判红**与 **H1/H2 WARN**（两处均只在真机暴露，Linux 上全绿；根因与修复见 §3.5.4 / §3.5.5）。
+修复轮在 Linux 上已全绿，但**修复的真机有效性必须由负责人重跑 Round A 才能定论**。
+
+**回填前必须成立的前置条件**（由自动化守卫保证，与真机无关）：
+- §3.5.4 的注入三态忠实性（`false ∧ present=true ∧ 拼写不同 ⇒ null`）由 `core/tests/g477-*` 穷尽决策表
+  + 结构守卫在每次 `run-tests` 中复核；
+- §3.5.5 的发现命令构造/候选面由 `--self-test` 与 `core/tests/g477-*` 夹具复核。
+
+**如何在真机上取证**（负责人执行，逐字粘贴回本小节）：
+
+```text
+# ① 自检（离线、秒级；应打印「自检全部通过。」）
+node scripts/win-smoke-test.mjs --self-test
+# ② 静态门禁 + 台账 + H 系列组合探针（应打印完整覆盖清单与 harness 组合矩阵）
+node scripts/win-smoke-test.mjs --static-only .
+node scripts/platform-smoke-test.mjs --static-only .
+```
+**预期判读（回填时逐项核对）**：H4 = `PASS`，且 H4 详情里的「大小写注入」一段必须是
+`不敏感卷→A.txt(aliased=true)；敏感卷→null`（**敏感侧必须是 `null`**，这是本轮的判定点）；
+H1/H2 = `PASS`（组合声明被发现）或至少 WARN 文案给出可复制的定位命令；矩阵行与「可复制回传的报告」
+整段（含 `覆盖=…` 行）一并粘贴。
+
+| 平台 | 执行日期 | 平台/架构 | Node | H1 | H2 | H3 | H4 | H5 | H6 | T1–T5 | 结论 | 执行人 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Windows · **v0.20.2**（Round A'） | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | **_待回填_** | _待回填_ |
+
+> ⚠️ **本小节在负责人回传真机事实之前一律为待回填**：不得由 agent 预填 PASS/FAIL、不得把 Linux 结论
+> 抄成 Windows 结论（发布红线 1）。Round A 的**判红原始记录**已逐字保留在 §3.5.4 / §3.5.5 的「真机现象」段。
+
+---
+
 ## 8. 取消项及其理由（g-362 范围收窄，必须留痕）
 
 | 项 | 原设想 | 取消理由（负责人裁决） | 处置 |
@@ -1085,5 +1172,5 @@ T1–T5 **均 15/0/1**、T3 **均 32/32 步**）为准；**② 的被测产物�
   g-428 起另含 **T1 台账层**（`OS_SITE_ROWS` / `OS_SITE_REGISTRY` / `auditOsSiteLedger`）、**32 步清单式 T3 生命周期**、
   负向对照 `--mutation-check`）
 - H 系列（g-475）守卫：[`core/tests/g475-harness-combo-probes.test.ts`](../core/tests/g475-harness-combo-probes.test.ts)（清单穷尽 + 两件消费防漂移 + H1–H6 判定力正反例 + H2 负向对照必红 + H3 未派发必 `SKIP` + 既有导出点零削减）
-- 测试守卫：[`core/tests/g362-platform-gate.test.ts`](../core/tests/g362-platform-gate.test.ts)（本次新增）、[`core/tests/g359-macos-gate.test.ts`](../core/tests/g359-macos-gate.test.ts)（用例零削减，仅改 import）、[`core/tests/g428-win-os-ledger.test.ts`](../core/tests/g428-win-os-ledger.test.ts)（g-428：台账与实现同步、未登记即判红、步骤清单≡实跑、判定力正反例、`--mutation-check` 必红实拍）
+- 测试守卫：[`core/tests/g362-platform-gate.test.ts`](../core/tests/g362-platform-gate.test.ts)（本次新增）、[`core/tests/g359-macos-gate.test.ts`](../core/tests/g359-macos-gate.test.ts)（用例零削减，仅改 import）、[`core/tests/g428-win-os-ledger.test.ts`](../core/tests/g428-win-os-ledger.test.ts)（g-428：台账与实现同步、未登记即判红、步骤清单≡实跑、判定力正反例、`--mutation-check` 必红实拍）、[`core/tests/g477-case-alias-injection-and-win-discovery.test.ts`](../core/tests/g477-case-alias-injection-and-win-discovery.test.ts)（g-477：注入三态穷尽决策表 + 回退必红负向对照 + 结构守卫 + 附件链路旁证 + 组合声明发现夹具/WARN 文案）
 - P1 的下游影响面：[`docs/case-alias-naming.md`](case-alias-naming.md)（g-364：真实命名入口在大小写不敏感卷上的保护现状、注入复现方式与平台实测状态）

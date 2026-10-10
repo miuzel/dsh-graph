@@ -71,6 +71,11 @@ export function withPlatformForTesting<T>(platform: string, fn: () => T): T {
  *   - `lstat` 是「该卷是否认为此名存在」的权威。
  * 测试可注入 `true`，在**大小写敏感的开发卷**上复现不敏感卷的别名行为（不依赖真实挂载、
  * 不往生产看板写探针）。注入不改变「精确名优先」：逐字节同名永远是精确名，绝不被判为别名。
+ *
+ * g-477：**注入三态必须全部忠实，判定与真实卷解耦**。此前 `false`（注入**敏感**卷）没有分支 ⇒
+ * 落到真实 FS 探测，在 NTFS/APFS 等真实不敏感卷上 `lstat(请求名)` 大小写不敏感地成功 ⇒ 仍判
+ * `aliased=true`（注入语义失效；Linux ext4 碰巧 ENOENT 才「看起来对」）。现 `false` 只认逐字节
+ * 同名，其后一律 `null`，**绝不咨询真实 FS**；`lstat` 探测仅在 `null`（生产/未注入）保留。
  */
 let caseInsensitiveVolumeOverride: boolean | null = null;
 
@@ -99,15 +104,48 @@ export function foldEntryName(name: string): string {
 }
 
 /**
- * 在父目录的**真实条目**中定位请求名，返回磁盘实际拼写：
+ * 纯决策（g-477）：由「目录条目列表 + 请求名 + 真实 FS 是否命中（present）+ 注入三态」决定别名解析
+ * 结果，**不接触文件系统** —— 因此可以在 Linux 上把「注入敏感卷 + 真实卷不敏感」这一 Windows 真机
+ * 形态穷尽钉住（跑真实探针无法区分新旧实现：ext4 上旧实现也恰好返回 null）。
+ *
+ * 三态语义（**注入即权威**；`override === null` 才是「看真实卷」）：
+ *   - `true`（注入**不敏感**）：折叠同名条目即命中 ⇒ `{actual: 磁盘条目, aliased: true}`；否则 `null`。
+ *   - `false`（注入**敏感**）：**只认逐字节同名**（上方已短路），其后一律 `null`；**绝不咨询真实 FS**
+ *     （否则真实不敏感卷上的 `lstat` 会把请求名重新别名回既有条目 ⇒ 注入失效，g-477 真机缺陷）。
+ *   - `null`（生产/未注入）：判定来自真实卷 —— `present` 由调用方用 `lstat` 采集；请求名真实命中而
+ *     磁盘拼写不同 ⇒ 该卷把它折叠到了既有条目 ⇒ `{actual: 磁盘条目, aliased: true}`。
+ *
+ * 精确名优先：逐字节同名永远是精确名（`aliased: false`），三态下一律不得被判为别名。
+ * 多条目折叠同名（人为构造的矛盾状态）时按名字排序取首个，保证判定确定性（本函数自带排序）。
+ */
+export function decideCaseAliasEntry(
+  entries: readonly string[],
+  requested: string,
+  present: boolean,
+  override: boolean | null,
+): { actual: string; aliased: boolean } | null {
+  const sorted = [...entries].sort();
+  if (sorted.includes(requested)) return { actual: requested, aliased: false };
+  const folded = sorted.find((e) => foldEntryName(e) === foldEntryName(requested));
+  if (override === true) return folded ? { actual: folded, aliased: true } : null;
+  // 注入「敏感卷」：只认逐字节同名，其余一律 null —— 判定必须与真实卷解耦（不得回落到 lstat 探测）。
+  if (override === false) return null;
+  if (!present) return null;
+  // 请求名在真实卷上确实命中，但磁盘拼写不是逐字节同名 ⇒ 该卷把它折叠到了既有条目。
+  return folded ? { actual: folded, aliased: true } : { actual: requested, aliased: false };
+}
+
+/**
+ * 在父目录的**真实条目**中定位请求名，返回磁盘实际拼写（薄 FS 包装：只负责采集真实输入）：
  *   - 逐字节同名 ⇒ `{ actual: 请求名, aliased: false }`（**精确名优先**，永不被判为别名）；
  *   - 只有折叠同名的条目（大小写/规范化差异）：仅当**注入不敏感语义**、或 `lstat` 命中
  *     （真实不敏感卷上该请求名确实解析到既有条目）⇒ `{ actual: 磁盘条目, aliased: true }`；
+ *   - 注入**敏感**语义（`override === false`）⇒ 一律 `null`：**不咨询真实 FS**；
  *   - 其余（含**大小写敏感卷上只有异名条目**）⇒ `null`：调用方按「不存在」新建，
  *     **不产生假别名**（这正是「大小写敏感卷 + 精确名不得误伤」的保障）。
  *
  * 不抛错：父目录不存在/不可读、条目为悬空软链等一律按无法判定处理（保守返回 null 或原名）。
- * 多条目折叠同名（人为构造的矛盾状态）时按名字排序取首个，保证判定确定性。
+ * 判定全部委托给纯函数 `decideCaseAliasEntry`（可穷尽单测）。
  */
 export function resolveExistingEntry(
   parentDir: string,
@@ -115,25 +153,22 @@ export function resolveExistingEntry(
 ): { actual: string; aliased: boolean } | null {
   let entries: string[];
   try {
-    entries = readdirSync(parentDir).sort();
+    entries = readdirSync(parentDir);
   } catch {
     return null;
   }
   if (entries.includes(requested)) return { actual: requested, aliased: false };
-  const folded = entries.find((e) => foldEntryName(e) === foldEntryName(requested));
-  if (caseInsensitiveVolumeOverride === true) {
-    return folded ? { actual: folded, aliased: true } : null;
-  }
+  // `lstat` 真实探测**只服务于生产路径**（`override === null`）：注入三态下判定必须与真实卷解耦。
   let present = false;
-  try {
-    lstatSync(join(parentDir, requested));
-    present = true;
-  } catch {
-    present = false;
+  if (caseInsensitiveVolumeOverride === null) {
+    try {
+      lstatSync(join(parentDir, requested));
+      present = true;
+    } catch {
+      present = false;
+    }
   }
-  if (!present) return null;
-  // 请求名在真实卷上确实命中，但磁盘拼写不是逐字节同名 ⇒ 该卷把它折叠到了既有条目。
-  return folded ? { actual: folded, aliased: true } : { actual: requested, aliased: false };
+  return decideCaseAliasEntry(entries, requested, present, caseInsensitiveVolumeOverride);
 }
 
 /**
