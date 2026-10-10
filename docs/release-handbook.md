@@ -182,6 +182,11 @@ git worktree remove .worktrees/release-vX.Y.Z
 > 污染发布物。发布前固定核对两项：
 > `find dist -type f | wc -l`（**v0.18.0 起期望 37**：g-381 新增 `lib/client/search-match.js`；此前为 36）与 `find dist -name '*.tgz' | wc -l`（期望 **0**）。
 >
+> ⚠️ **打包与整套件自证闸门的先后顺序（g-470）**：`cd dist && npm pack` 会把
+> `dsh-graph-X.Y.Z.tgz` **留在 `dist/` 内** ⇒ 之后在**同一棵树**跑整套件自证闸门**必红**：
+> `g-348` 判据 2 会报该 tgz 在原子发布期间缺失（ENOENT），`g-353` 会报 dist 树 hash 前后不一致。
+> ⇒ 应**先跑闸门再打包**；或打包后**先移除 `dist/*.tgz`**（tarball 另存 `tmp/`）再跑闸门。
+>
 > 另：本机 `/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf` 权限损坏会导致所有 ssh 推送失败
 > （`Bad owner or permissions on ...`），git push 一律加 `GIT_SSH_COMMAND="ssh -F /dev/null"`（v0.9.2、
 > v0.10.0 均以此绕行成功）。
