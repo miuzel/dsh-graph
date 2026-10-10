@@ -2,15 +2,16 @@
 
 > **本文件状态：发布准备 = 已完成（版本串转正 / g352 夹具复冻 / CHANGELOG 与守卫 / 发布正文真源 / 本清单 /
 > 独立构建路径产物与对账 / 自证闸门 全部落地）；平台回填 + 重建重打 = 已完成（第 1 轮 Windows 真机门禁结论回填、
-> 产物重建重打并使「被测 == 发布」（§5 / §7））；发布态动作（合并 `main`、打 tag、`push`、`npm publish`、
-> GitHub release、profile 安装升级）一律**未执行**，逐条列于 §8「待负责人执行」。**
-> **平台真机结论：原生 Windows = 第 1 轮（候选包轮）已实测通过，但只覆盖安装 / 启动 / REST 层，不覆盖
-> 「派发可用」维度（T1–T5 不含派发）；原生 macOS = 本版未验证** ⇒ 两份 README 的平台状态表与发布正文已按此如实
-> 标注（**macOS 不得读出「已通过」；Windows 不得读作三维度齐全**）。**第 2 轮（被测产物 == 发布产物 闭环轮）待
-> 负责人执行**，且须锁定宿主 `@deepseek-ai/dsh@0.2.1-alpha.2`（第 1 轮拿到的是 npm `latest` = `0.2.0-rc.2`）。
+> 产物重建重打并使「被测 == 发布」（§5 / §7））；**Windows 闭环轮 = 已完成**（第 2 轮真机门禁 PASS、被测产物 ==
+> 发布产物 ⇒ 闭环成立；该轮只改 `docs/` 回填、**未重建 / 未重打发布产物**，产物指纹只读复算逐字未变，§7 / §7.9）；发布态动作
+> （合并 `main`、打 tag、`push`、`npm publish`、GitHub release、profile 安装升级）一律**未执行**，逐条列于 §8「待负责人执行」。**
+> **平台真机结论：原生 Windows = 两轮均 PASS（第 1 轮候选包轮宿主 `0.2.0-rc.2` + 第 2 轮闭环轮宿主
+> `0.2.1-alpha.2`，T1–T5 均 15/0/1、T3 32/32 步）⇒「被测产物 == 发布产物」闭环成立；两轮都只覆盖安装 / 启动 / REST 层，
+> 不覆盖「派发可用」维度（T1–T5 不含派发）；原生 macOS = 本版未验证** ⇒ 两份 README 的平台状态表与发布正文已按此如实
+> 标注（**macOS 不得读出「已通过」；Windows 不得读作三维度齐全**）。
 > 结构对照 [`docs/release-checklist-v0.20.0.md`](release-checklist-v0.20.0.md)。
 
-**本次执行树**：发布准备 = worktree `.worktrees/g-471-att-01`，分支 `g-471-att-01`，基线 **`499805cf0010d2e6b453ee64effd5ff8dbfcbfbe`**（= `v0.20.1-test` 顶点 = g-469 派发修复合入点）；**平台门禁回填 + 重建重打 = worktree `.worktrees/g-471-att-02`**，分支 `g-471-att-02`，基线 **`39a47c81be7917d897c37c700c7aa4f30680ae13`**（= att-001 候选包合入后的 `v0.20.1-test` 顶点）。
+**本次执行树**：发布准备 = worktree `.worktrees/g-471-att-01`，分支 `g-471-att-01`，基线 **`499805cf0010d2e6b453ee64effd5ff8dbfcbfbe`**（= `v0.20.1-test` 顶点 = g-469 派发修复合入点）；**平台门禁回填 + 重建重打 = worktree `.worktrees/g-471-att-02`**，分支 `g-471-att-02`，基线 **`39a47c81be7917d897c37c700c7aa4f30680ae13`**（= att-001 候选包合入后的 `v0.20.1-test` 顶点）；**闭环轮结论回填（只改 `docs/`）= worktree `.worktrees/g-471-att-03`**，分支 `g-471-att-03`，基线 **`a95721998898a21d89ae2f7c10681f0b01c65d3b`**（= att-002 终态发布候选合入后的 `v0.20.1-test` 顶点）。
 
 **发布源**：`v0.20.1-test` 分支（**发布时以 `git rev-parse v0.20.1-test` 为准**，不要照抄本行短 sha —— 本清单自身的补正提交也会推进该 tip）。发布时由负责人合入 `main`。
 
@@ -59,7 +60,8 @@
 - [x] **平台门禁回填 + 重建重打**（att-002）：第 1 轮 Windows 真机结论回填两份 README / 发布正文 / 本清单 / `docs/platform-gate.md`（新增 §7.9），随后 `bash scripts/build.sh` + `dist/` 内 `npm pack` 重建重打；旧候选包另存 `tmp/uat-v0201/dsh-graph-0.20.1.round1-9b3e3e37.tgz`，新包指纹回填 §5（§5 / §7）
 - [x] 自证闸门全绿：`node scripts/run-tests.mjs` + `tsc --noEmit` + `node --check dist/lib/client.js`（§6）
 - [x] **原生 Windows 真机门禁（红线 1）第 1 轮（候选包轮）** —— 已由负责人执行（2026-10-10，`win32/x64` + Node `v24.21.0` + 宿主 `0.2.0-rc.2`，T1–T5 = **15/0/1 PASS**，逐字报告见 `docs/platform-gate.md` §7.9）；**只覆盖安装 / 启动 / REST 层，不覆盖「派发可用」维度**（§7）
-- [ ] **原生 Windows 真机门禁 第 2 轮（被测产物 == 发布产物 闭环轮）** —— **待负责人执行**，须锁定宿主 `@deepseek-ai/dsh@0.2.1-alpha.2`（§8）
+- [x] **原生 Windows 真机门禁 第 2 轮（被测产物 == 发布产物 闭环轮）** —— 已由负责人执行（2026-10-10，`win32/x64` + Node `v24.21.0` + 宿主 **`@deepseek-ai/dsh@0.2.1-alpha.2`**（经 `--dsh` 显式锁定），T1–T5 = **15/0/1 PASS**、T3 32/32 步；被测产物 = 终态发布候选 `dsh-graph-0.20.1.tgz` sha256 `94459a16…`）⇒ **「被测产物 == 发布产物」闭环成立**（§7；逐字报告见 `docs/platform-gate.md` §7.9）
+- [x] **闭环轮结论回填**（att-003，**只改 `docs/`**）：第 2 轮结论回填 `docs/platform-gate.md`（回填表新增闭环轮行 + §7.9 闭环轮小节）、`docs/release-notes-v0.20.1.md`、本清单 §7 / §8；**未改任何入包文件、未重建 / 未重打发布产物**，产物指纹只读复算逐字未变（§5 / §7）
 - [ ] **原生 macOS 真机门禁** —— **本版未执行**（§7）
 - [ ] 合并 `main` / 打 annotated tag / `push` / `npm publish` / GitHub release / profile 安装升级 —— **待负责人执行**（§8）
 
@@ -134,8 +136,10 @@
 **第 1 轮 Windows 真机门禁的被测产物（回填前候选包，已另存）**：`dsh-graph-0.20.1.tgz` sha256
 `9b3e3e37afec42e40ebdce0c567f75c69e383b512fe8a3d37e7409fd4c83709b` / 1,437,282 B，另存为
 `tmp/uat-v0201/dsh-graph-0.20.1.round1-9b3e3e37.tgz`。**⇒ 第 1 轮被测候选 sha 为 `9b3e3e37…`；README 回填后已重建重打
-⇒ 自第 2 轮起「被测产物 == 发布产物」**（候选包 vs 新包逐文件差异实拍 = 仅 `README.md`、42/43 逐字节相同，
-见 [`docs/platform-gate.md`](platform-gate.md) §7.9）。
+⇒ 第 2 轮（闭环轮）被测产物 == 发布产物 == 上表产物**（候选包 vs 新包逐文件差异实拍 = 仅 `README.md`、42/43 逐字节相同，
+见 [`docs/platform-gate.md`](platform-gate.md) §7.9）。**第 2 轮已于 2026-10-10 在该新包上真跑并 PASS**
+（宿主 `@deepseek-ai/dsh@0.2.1-alpha.2`、T1–T5 = 15/0/1、T3 32/32 步）⇒ **闭环成立**；att-003 只改 `docs/` 回填、
+**未重建 / 未重打发布产物**（上表指纹为只读复算结果，逐字未变）。
 
 **构建 / 打包过程的两条实测纪律（对应手册 g-470 条目）**：
 
@@ -192,12 +196,21 @@ sha512 可做**字节级**对账，保证「被测产物 == 发布产物 == rele
 （自证行：`tests=2369 (>0) skipped=0 fail=0 cancelled=0 todo=0 pass=2369 exit=0`）；`tsc --noEmit` **exit 0**；
 `node --check dist/lib/client.js` **exit 0**。**未复冻夹具**（本 attempt 不动 `constants.js` 与看板源码 ⇒ `g352` 签名未失配，63/63 绿）。
 
+**att-003（闭环轮结论回填，只改 `docs/`）后的复跑**：在 `docs/` 回填**之后**复跑同一套件（worktree `.worktrees/g-471-att-03`）
+—— **tests=2369 / pass=2369 / fail=0 / skipped=0 / cancelled=0 / todo=0，exit 0**（自证行：
+`tests=2369 (>0) skipped=0 fail=0 cancelled=0 todo=0 pass=2369 exit=0 glob=core/tests/*.test.ts`）；
+`./node_modules/.bin/tsc --noEmit -p tsconfig.json` **exit 0**（零错）。本 attempt **未改任何入包文件、未打包**；
+因 `dist/` 是 gitignored 生成物、新 worktree 内本不存在（闸门自身的失败提示即要求 `bash scripts/build.sh` 先建 dist），
+故在 att-03 worktree 内执行了一次**本地** `bash scripts/build.sh`（只写 worktree 内 `dist/`；**不打包、不触碰主树 `dist/`、
+不改动任何入包文件**）：产出 `dist/` 树 hash `9318c2159ad9d898` 与产出发布候选 `94459a16…` 的 att-02 构建树**逐字相同**，
+`dist/package.json` version = `0.20.1`、`dist/` 内 `*.tgz` = 0。
+
 ## 7. 平台门禁（**如实标注**）
 
 | 平台 | 本版（`v0.20.1`）状态 | README 落点 |
 |---|---|---|
 | Linux / WSL2 | ✅ 已实测通过（本版整套件自证闸门 fail 0） | 两份 README 平台表首行 |
-| 原生 Windows（红线 1） | ✅ **已实测通过（第 1 轮 = 候选包轮，2026-10-10）** —— 真机 T1–T5 通过 15 / 失败 0 / 告警 1、T3 生命周期 32/32 步；**只覆盖安装 / 启动 / REST 层，不覆盖「派发可用」维度**（T1–T5 不含派发）；**第 2 轮（被测 == 发布 闭环轮）待跑** | `README.md:34` / `dsh-graph-host/README.md:52` / 英文镜像 `:294` |
+| 原生 Windows（红线 1） | ✅ **两轮均实测通过（2026-10-10）** —— **第 1 轮 = 候选包轮**（宿主 `0.2.0-rc.2`）+ **第 2 轮 = 闭环轮**（宿主 `@deepseek-ai/dsh@0.2.1-alpha.2`，经 `--dsh` 显式锁定）；两轮真机 T1–T5 均通过 15 / 失败 0 / 告警 1、T3 生命周期均 32/32 步 ⇒ **被测产物 == 发布产物 闭环成立**（第 2 轮被测产物 = 终态发布候选 `94459a16…`）。**两轮都只覆盖安装 / 启动 / REST 层，不覆盖「派发可用」维度**（T1–T5 不含派发）。出处：`docs/platform-gate.md` §7.9（① 候选包轮 / ② 闭环轮） | `README.md:34` / `dsh-graph-host/README.md:52` / 英文镜像 `:294` |
 | 原生 macOS | ⏳ **本版未验证** —— `v0.20.1` **未**在原生 macOS 上执行真机门禁 | `README.md:35` / `dsh-graph-host/README.md:53` / 英文镜像 `:295` |
 
 三条必须写死、不得误读：
@@ -209,18 +222,20 @@ sha512 可做**字节级**对账，保证「被测产物 == 发布产物 == rele
   「✅ **已实测通过**」并写死 caveat：**只覆盖安装 / 启动 / REST 层，不覆盖「派发可用」维度**（该维度本版在
   Linux/WSL2 隔离实例上验证）；**不得**把该行读作 Windows 三维度（安装 / 启动 / 派发可用）齐全。
   **macOS 行保持「本版未验证」**（未执行真机门禁，不得顺带改读作已通过）。
-- **红线 1 的闭环还差第 2 轮**：第 1 轮被测产物是**回填前**候选包（`9b3e3e37…`）；README 回填后 att-002 已
-  **重建重打**（§5）⇒ **第 2 轮「被测产物 == 发布产物」待负责人执行**，且须锁定
-  `@deepseek-ai/dsh@0.2.1-alpha.2`（第 1 轮经 `npx -y @deepseek-ai/dsh` 拿到的是 npm `latest` = `0.2.0-rc.2`，
-  **未覆盖本版真正要修的宿主代际**）。
+- **红线 1 闭环已成立（第 2 轮 = 闭环轮，已执行）**：第 1 轮被测产物是**回填前**候选包（`9b3e3e37…`）；README
+  回填后 att-002 已**重建重打**（§5）⇒ 负责人于 2026-10-10 在**新包**（`94459a16…`）上补跑**第 2 轮（闭环轮）**：
+  宿主锁定 **`@deepseek-ai/dsh@0.2.1-alpha.2`**（补上第 1 轮 `npx -y @deepseek-ai/dsh` 拿到 npm `latest` =
+  `0.2.0-rc.2` 的**代际缺口**），T1–T5 = **15/0/1 PASS**、T3 32/32 步 ⇒ **被测产物 == 发布产物 闭环成立**。
+  逐字报告见 [`docs/platform-gate.md`](platform-gate.md) §7.9（① 候选包轮 / ② 闭环轮）。
 
 ## 8. 待负责人执行（发布态动作 —— **本清单准备阶段一律未执行**）
 
-- [ ] **原生 Windows 真机门禁 第 2 轮（被测产物 == 发布产物 闭环轮）**：用 §5 的**新** tarball（sha256 `94459a16…`）
-      跑 `scripts/win-smoke-test.mjs`（T1–T5）+ 看板文件系统生命周期检查（红线 1），并**锁定宿主
-      `@deepseek-ai/dsh@0.2.1-alpha.2`**（第 1 轮拿到的是 npm `latest` = `0.2.0-rc.2`）。第 1 轮（候选包轮，
-      `9b3e3e37…`）已于 2026-10-10 由负责人完成，逐字报告见 [`docs/platform-gate.md`](platform-gate.md) §7.9；
-      第 2 轮结论须回填 README / 发布正文 / 本清单三处。
+- [x] **原生 Windows 真机门禁 第 2 轮（被测产物 == 发布产物 闭环轮）** —— **已完成（2026-10-10，负责人）**：用 §5 的
+      **新** tarball（sha256 `94459a16…`）跑 `scripts/win-smoke-test.mjs`（T1–T5）+ 32 步看板文件系统生命周期检查
+      （红线 1），宿主**锁定 `@deepseek-ai/dsh@0.2.1-alpha.2`**（第 1 轮拿到的是 npm `latest` = `0.2.0-rc.2`）⇒
+      T1–T5 = **15/0/1 PASS**、T3 **32/32 步**、**被测产物 == 发布产物 闭环成立**。第 1 轮（候选包轮，`9b3e3e37…`）
+      同样已于 2026-10-10 完成；两轮逐字报告见 [`docs/platform-gate.md`](platform-gate.md) §7.9。第 2 轮结论已回填
+      `docs/platform-gate.md` / 发布正文 / 本清单 §7 三处（att-003，仅 `docs/`；**未改入包文件**）。
 - [ ] **（可选）原生 macOS 真机门禁**：按 [`docs/platform-gate.md`](platform-gate.md) §5 命令序列执行；
       未执行则维持「本版未验证」。
 - [ ] **合并 `main`**：`v0.20.1-test` → `main`（`--no-ff`），并核对 `HEAD^{tree}` 与分支 tip tree 逐字相等。
