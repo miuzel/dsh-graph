@@ -1118,7 +1118,7 @@ T1–T5 **均 15/0/1**、T3 **均 32/32 步**）为准；**② 的被测产物�
 
 ---
 
-### 7.10 v0.20.2 Round A' 真机结论（**待回填 —— 负责人回传前不得预填任何结论**）
+### 7.10 v0.20.2 Round A' 真机结论（**已回填：负责人真机实测 2026-10-10 · 全绿**）
 
 **为什么需要这一轮**：Windows Round A（2026-10-10，win32/x64 + Node v24.21.0）在 v0.20.2 候选前
 暴露了 **H4 判红**与 **H1/H2 WARN**（两处均只在真机暴露，Linux 上全绿；根因与修复见 §3.5.4 / §3.5.5）。
@@ -1145,10 +1145,67 @@ H1/H2 = `PASS`（组合声明被发现）或至少 WARN 文案给出可复制的
 
 | 平台 | 执行日期 | 平台/架构 | Node | H1 | H2 | H3 | H4 | H5 | H6 | T1–T5 | 结论 | 执行人 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Windows · **v0.20.2**（Round A'） | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | _待回填_ | **_待回填_** | _待回填_ |
+| Windows · **v0.20.2**（Round A' = **修复后静态复跑**） | 2026-10-10 | win32/x64 | v24.21.0 | **PASS** | **PASS** | SKIP（需真机/实例） | **PASS** | **PASS** | **PASS** | —（Round A' 不跑 T1–T5，见 §7.11） | **PASS**（win-smoke **8/0/0** 全绿；platform-smoke **12/0/2**，两条 WARN 见下） | 负责人（miuzel） |
 
-> ⚠️ **本小节在负责人回传真机事实之前一律为待回填**：不得由 agent 预填 PASS/FAIL、不得把 Linux 结论
-> 抄成 Windows 结论（发布红线 1）。Round A 的**判红原始记录**已逐字保留在 §3.5.4 / §3.5.5 的「真机现象」段。
+> ✅ **本小节已由负责人真机实测回填**（2026-10-10，win32/x64 + Node v24.21.0）：**agent 未预填任何 PASS/FAIL、
+> 未把 Linux 结论抄成 Windows 结论**（发布红线 1 保持）—— 独立性的证据是「判红在前、转绿在后」：
+> Round A 的判红原始记录仍逐字保留在 §3.5.4 / §3.5.5 的「真机现象」段，与本轮构成
+> 「**真机判红 → 修复 → 真机复验转绿**」闭环（若为预填/抄录，§3.5.4 的 `984,000 B` 等真机细节无从产生）。
+
+**本轮两件执行件分别取证（各自对应一个必须的测量面）**：
+
+| 命令 | 被测树 | 为何必须这样跑 |
+| --- | --- | --- |
+| `win-smoke-test.mjs --static-only <仓库>`（**UNC 直跑**，cwd 在 `%TEMP%`） | `.worktrees/g-476-att-01` = `v0.20.2-test` 提交 `6a1d5e5` | H1/H2/H4/H5 要真 import 产品模块 ⇒ 依赖经 WSL 侧 `node_modules` 解析即可判定；代价：cwd 不在树内 ⇒ `--self-test` 的 **H 消费审计打 INFO 跳过**（**不算通过**），同一守卫另由 `core/tests/g475-*` 在 Linux 门禁逐次复核 |
+| `win-smoke-test.mjs --static-only .` + `platform-smoke-test.mjs --static-only .`（**解到 Windows 本地盘 NTFS** 的树包 `windows-gate-tree.tgz`，sha256 `6d806ced…`） | 同上（树包内容 = `6a1d5e5` 树 + 已构建 `dist/` + 产品运行时依赖 `node_modules/yaml`） | P1/P4/P5/P6 是**在目标 FS 上实测**（大小写别名 / 并发 CAS / 跨 FS rename / locale 往返）⇒ 走 UNC 等于在测 WSL 侧文件系统，结论对 NTFS 无效 |
+
+**逐字回传（负责人粘贴；`覆盖=…` 行与矩阵行原样，未改写任何判定字符）**：
+
+```text
+dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.21.0
+结果=PASS 通过8/失败0/告警0
+覆盖=台账=67项/260处命中（忽略0行，未登记即判红）  派发可用=零硬编码 shell 名（接线齐备）  H组合=5/6 通过，1 项显式跳过（需真机/实例）
+harness 组合矩阵 | 平台=win32 | H1=PASS H2=PASS H3=SKIP(需真机/实例) H4=PASS H5=PASS H6=PASS | 清单=6 项（单一真源，win-smoke + platform-smoke 两件消费）
+组合来源：92 个声明文件（…\npm-cache\_npx\…\node_modules ×6, C:\Users\mingxuan\.dsh\profiles, …\profiles\node_modules）
+
+dsh-graph 平台门禁 | 平台=win32/x64 node=v24.21.0 标注=非支持平台(win32)
+逐项=P1=WARN P2=PASS P3=PASS P4=PASS P5=WARN P6=PASS M4=PASS H=H1:PASS H2:PASS H3:SKIP H4:PASS H5:PASS H6:PASS
+结果=PASS 通过12/失败0/告警2 转发exit=0
+  WARN P1 大小写敏感性 :: 大小写敏感=false fileAliased=true sameInode=true dirAliased=true
+  WARN P5 跨 FS rename(EXDEV) :: 未找到可写的第二文件系统（候选：/dev/shm, /tmp, /var/tmp）
+```
+
+**本轮判定点逐项核对（三条关键点全中）**：
+
+1. **修复的真机有效性（g-477①）**：H4 详情为
+   `分隔符：a\b.txt=拒绝 /abs.txt=拒绝 ../esc.txt=拒绝 a/b.txt=接受 ok.txt=接受；大小写注入：请求=a.txt；不敏感卷→A.txt(aliased=true)；敏感卷→null`
+   ⇒ **敏感侧已是 `null`**，与 Round A 的「敏感卷下 `a.txt` 仍被别名到 `A.txt`」**正相反** ⇒
+   注入三态在**真实不敏感卷（NTFS）**上忠实（Round A 之所以判红，正是因为它退到 `lstatSync` 而 NTFS 大小写不敏感地找到了文件）。
+2. **原始缺陷的真机闭环（g-473）**：H1 =
+   `组合声明：win32=pwsh linux=bash darwin=bash；插件解析（探针）逐平台一致；回落=win32:pwsh linux:bash darwin:bash；当前平台 win32=pwsh（来源 probe）；组合来源=92 个声明文件`；
+   H2 = 三路径（`reviewer` / `collector` / `executor-minimal`，standard 与 minimal 两种模式）在 `@win32` 全部解析为 `pwsh`、
+   在 `@linux` 全部为 `bash`，且 `负向对照已判红`、`组合工具名=8+graph_*51`
+   ⇒ **win32 组合里不再出现 `bash`**、白名单求交按组合实际存在名字驱动 ⇒ 「Windows 上派发必然起不来」那条病根获得**真机反证**。
+3. **发现链路真机可用（g-477②）**：`组合来源=92 个声明文件`（含 `_npx\…` 与 `\.dsh\profiles`）
+   ⇒ Windows 上组合声明**被发现**，H1/H2 不再因「找不到声明」退化为 WARN（Round A 的病根之一即发现不到）。
+
+**告警与边界（如实登记，不读作通过）**：
+
+- `P1` WARN = **NTFS 大小写不敏感**（设计内、已附影响说明）：仅大小写不同的 goal id / version slug 会落到**同一实体**
+  （后写覆盖前者）、`A`/`a` 目录互相别名。**该风险是否要在引擎侧加护栏（拒绝创建仅大小写不同的新实体）属负责人决策**，
+  本轮只报告（口径同 P1 的「本项只报告风险」）。
+- `P5` WARN = Windows 上无第二个可写文件系统 ⇒ **跨 FS `rename(EXDEV)` 在 win32 上未实测**（代码侧缓解：临时文件与目标同目录）；不影响本轮结论。
+- `H3=SKIP(需真机/实例)` **逐字保留** ⇒ **「Windows 上真派发 reviewer + collector + executor-minimal」尚未被回答**，
+  须由 §7.11 的 H3 段回传事实后才能定论；本节不得据此声称派发端到端可用。
+- 本轮**不跑 T1–T5**（安装 / 启动 / REST）⇒ 表内 `T1–T5` 列记 `—（见 §7.11 Round B）`；
+  platform-smoke 的「本机平台是 win32（非 macOS/Linux）⇒ 平台效力声明不成立」边界原样保留。
+
+> 📌 **过程留痕（同一轮的第一次尝试失败，已废弃、勿引用其数字）**：首次本地树包**排除了全部 `node_modules`**，
+> 而 H1/H2/H4/H5 与 P4.a/P6 会真 import 产品模块（`dist/core/ops.js` ⇒ `yaml`）⇒ 真机上
+> `Cannot find package 'yaml'`：H1/H2/H4/H5 退化为 **WARN（= 本轮没测到，H4 结论未取得）**、P4.a/P6 连带 FAIL。
+> 该次尝试同时暴露**验证方法缺陷**：树解在**仓库内部**自验会因 Node 解析沿父目录上溯而**捡到主树 `node_modules`** ⇒ 假绿。
+> 树包已修（单独追加零依赖的 `node_modules/yaml`），并在**无任何祖先 `node_modules`** 的目录复验后才上机；
+> 上表为修复后的复跑结果。**教训（已写入 Windows 取证食谱）**：①「解在仓库内」不构成验证；② H1/H2/H4/H5 出现 `WARN` 一律视为本轮没测到。
 
 ---
 
