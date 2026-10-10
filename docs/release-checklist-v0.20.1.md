@@ -117,29 +117,37 @@
 ## 5. 发布产物与独立构建路径对账
 
 **本次产物由隔离 worktree 的独立构建路径产出**（`bash scripts/build.sh` → `dist/` 内 `npm pack`）。
-**下表为第 2 轮起生效的「发布产物」指纹**（att-002 在 README 平台表回填后**重建重打**；构建树 `.worktrees/g-471-att-02`）：
+**下表为第 3 轮起生效的「发布产物」指纹**（att-004 把包内 README 平台行改为**按宿主代际陈述的跨轮稳定措辞**后**重建重打**；构建树 `.worktrees/g-471-att-04`，基线 `69d1e9cd…`）：
 
 | 项 | 值 |
 |---|---|
 | 文件名 | `dsh-graph-0.20.1.tgz` |
-| 本地绝对路径 | `tmp/uat-v0201/dsh-graph-0.20.1.tgz`（仓库主树，gitignored，不入 git；由 worktree `.worktrees/g-471-att-02` 内构建 + `npm pack` 后另存） |
-| 字节数 | **1,437,660** |
-| sha256 | `94459a16ae7d8dd378230d4c8daaf0f7885d2cd68b08e67b743d28d3b2d9c22c` |
-| sha1 | `e000fc324e3537669c45551a5a983b87e80ae4e1` |
+| 本地绝对路径 | `tmp/uat-v0201/dsh-graph-0.20.1.tgz`（仓库主树，gitignored，不入 git；由 worktree `.worktrees/g-471-att-04` 内构建 + `npm pack` 后另存） |
+| 字节数 | **1,437,812** |
+| sha256 | `44dc4473940d41a7f1141e7b9b96f1e89e49788c7f070a818c8913a5e716f6ee` |
+| sha1 | `9c3762046271b36021e81bb376ba93fd8346d3dc` |
 | 成员数 | **43** |
 | `docs/` 成员数 | **0**（`docs/` 不随包发布） |
 | 包内 `package.json` version | `0.20.1` |
 | 包内 `lib/client.js` `PLUGIN_VERSION` | `0.20.1` |
-| 重复打包 | 同一构建树内**两次 `npm pack` 得同一 sha256**（逐字节可复现，实测两次均为 `94459a16…`） |
+| 包内 `README.md` == 提交源码 `dsh-graph-host/README.md` | **逐字节相同**，双方 sha256 `490686f7dc00236e0fd0086164daec662d5a3abed9230ce696a94780a951909c` |
+| 包内 `index.js` == 源码（代码零变化） | **逐字节相同**，双方 sha256 `d24c5e1f8493bf88c93956384b621ff85eff48fdfdbc92f535e039aeae97b213`（与第 2 轮包同值） |
+| 重复打包 | 同一构建树内**两次 `npm pack` 得同一 sha256**（逐字节可复现，实测两次均为 `44dc4473…`） |
 | 校验和文件 | `tmp/uat-v0201/SHA256SUMS`（`sha256sum` 格式，随 release 附件上传） |
 
-**第 1 轮 Windows 真机门禁的被测产物（回填前候选包，已另存）**：`dsh-graph-0.20.1.tgz` sha256
-`9b3e3e37afec42e40ebdce0c567f75c69e383b512fe8a3d37e7409fd4c83709b` / 1,437,282 B，另存为
-`tmp/uat-v0201/dsh-graph-0.20.1.round1-9b3e3e37.tgz`。**⇒ 第 1 轮被测候选 sha 为 `9b3e3e37…`；README 回填后已重建重打
-⇒ 第 2 轮（闭环轮）被测产物 == 发布产物 == 上表产物**（候选包 vs 新包逐文件差异实拍 = 仅 `README.md`、42/43 逐字节相同，
-见 [`docs/platform-gate.md`](platform-gate.md) §7.9）。**第 2 轮已于 2026-10-10 在该新包上真跑并 PASS**
-（宿主 `@deepseek-ai/dsh@0.2.1-alpha.2`、T1–T5 = 15/0/1、T3 32/32 步）⇒ **闭环成立**；att-003 只改 `docs/` 回填、
-**未重建 / 未重打发布产物**（上表指纹为只读复算结果，逐字未变）。
+**历史轮次被测产物（均已另存）**：第 1 轮（候选包轮，回填前候选）sha256
+`9b3e3e37afec42e40ebdce0c567f75c69e383b512fe8a3d37e7409fd4c83709b` / 1,437,282 B ⇒
+`tmp/uat-v0201/dsh-graph-0.20.1.round1-9b3e3e37.tgz`；第 2 轮（闭环轮，被测 == 当轮发布产物）sha256
+`94459a16ae7d8dd378230d4c8daaf0f7885d2cd68b08e67b743d28d3b2d9c22c` / 1,437,660 B ⇒
+`tmp/uat-v0201/dsh-graph-0.20.1.round2-94459a16.tgz`。两轮 Windows 真机门禁均 PASS
+（宿主代际分别 `0.2.0-rc.2` / `0.2.1-alpha.2`，T1–T5 = 15/0/1、T3 32/32 步）。
+
+**第 3 轮（本轮）⇒ 上表新产物的由来与待办**：包内 README 平台行由「候选包 + 单一宿主代际」措辞改为
+**按宿主代际陈述的跨轮稳定措辞**（覆盖 `0.2.0-rc.2` 与 `0.2.1-alpha.2`；**不写轮次计数** ⇒ 后续轮次通过后无需再改包内文件）
+⇒ **重建重打**得上表新产物。新包相对第 2 轮包**逐文件差异实拍 = 仅 `README.md`（两处 hunk `52c52` / `294c294`）**、
+其余 **42/43 逐字节相同**，产品代码 / 客户端 bundle 零变化（包内 `index.js` 仍 `d24c5e1f…b213`），
+见 [`docs/platform-gate.md`](platform-gate.md) §7.9。**第 3 轮真机门禁待负责人执行**（见 §8）⇒ 回填前**不得**读作
+新产物的「被测产物 == 发布产物」闭环已成立；att-003 及更早只改 `docs/`、**未重建 / 未重打发布产物**。
 
 **构建 / 打包过程的两条实测纪律（对应手册 g-470 条目）**：
 
@@ -210,7 +218,7 @@ sha512 可做**字节级**对账，保证「被测产物 == 发布产物 == rele
 | 平台 | 本版（`v0.20.1`）状态 | README 落点 |
 |---|---|---|
 | Linux / WSL2 | ✅ 已实测通过（本版整套件自证闸门 fail 0） | 两份 README 平台表首行 |
-| 原生 Windows（红线 1） | ✅ **两轮均实测通过（2026-10-10）** —— **第 1 轮 = 候选包轮**（宿主 `0.2.0-rc.2`）+ **第 2 轮 = 闭环轮**（宿主 `@deepseek-ai/dsh@0.2.1-alpha.2`，经 `--dsh` 显式锁定）；两轮真机 T1–T5 均通过 15 / 失败 0 / 告警 1、T3 生命周期均 32/32 步 ⇒ **被测产物 == 发布产物 闭环成立**（第 2 轮被测产物 = 终态发布候选 `94459a16…`）。**两轮都只覆盖安装 / 启动 / REST 层，不覆盖「派发可用」维度**（T1–T5 不含派发）。出处：`docs/platform-gate.md` §7.9（① 候选包轮 / ② 闭环轮） | `README.md:34` / `dsh-graph-host/README.md:52` / 英文镜像 `:294` |
+| 原生 Windows（红线 1） | ✅ **已实测通过（2026-10-10）** —— **第 1 轮 = 候选包轮**（宿主 `0.2.0-rc.2`）+ **第 2 轮 = 闭环轮**（宿主 `@deepseek-ai/dsh@0.2.1-alpha.2`，经 `--dsh` 显式锁定）；两轮真机 T1–T5 均通过 15 / 失败 0 / 告警 1、T3 生命周期均 32/32 步 ⇒ **`0.2.0-rc.2` 与 `0.2.1-alpha.2` 两个宿主代际均已覆盖**；第 2 轮被测产物 == 当轮发布产物（`94459a16…`）⇒ **该轮闭环成立**。**第 3 轮（跨轮稳定措辞后重建重打的新产物 `44dc4473…`）待负责人执行**（见 §8）。**各轮都只覆盖安装 / 启动 / REST 层，不覆盖「派发可用」维度**（T1–T5 不含派发）。出处：`docs/platform-gate.md` §7.9（① 候选包轮 / ② 闭环轮 / ③ 第 3 轮待执行） | `README.md:34` / `dsh-graph-host/README.md:52` / 英文镜像 `:294` |
 | 原生 macOS | ⏳ **本版未验证** —— `v0.20.1` **未**在原生 macOS 上执行真机门禁 | `README.md:35` / `dsh-graph-host/README.md:53` / 英文镜像 `:295` |
 
 三条必须写死、不得误读：
@@ -227,6 +235,10 @@ sha512 可做**字节级**对账，保证「被测产物 == 发布产物 == rele
   宿主锁定 **`@deepseek-ai/dsh@0.2.1-alpha.2`**（补上第 1 轮 `npx -y @deepseek-ai/dsh` 拿到 npm `latest` =
   `0.2.0-rc.2` 的**代际缺口**），T1–T5 = **15/0/1 PASS**、T3 32/32 步 ⇒ **被测产物 == 发布产物 闭环成立**。
   逐字报告见 [`docs/platform-gate.md`](platform-gate.md) §7.9（① 候选包轮 / ② 闭环轮）。
+- **第 3 轮（跨轮稳定措辞后重建重打，待负责人执行）**：包内 README 的 Windows 行已改为**按宿主代际陈述**（覆盖
+  `0.2.0-rc.2` 与 `0.2.1-alpha.2`，**不写轮次计数** ⇒ 后续轮次通过后无需再改包内文件）；att-004 据此**重建重打**得
+  上表新发布产物 `44dc4473…`，新包相对第 2 轮包**只改 `README.md` 两处 hunk（`52c52` / `294c294`）**、42/43 逐字节相同
+  （产品代码零变化）。**第 3 轮真机门禁待负责人执行**（§8）；执行前**不得**读作新产物的「被测产物 == 发布产物」闭环成立。
 
 ## 8. 待负责人执行（发布态动作 —— **本清单准备阶段一律未执行**）
 
@@ -236,6 +248,12 @@ sha512 可做**字节级**对账，保证「被测产物 == 发布产物 == rele
       T1–T5 = **15/0/1 PASS**、T3 **32/32 步**、**被测产物 == 发布产物 闭环成立**。第 1 轮（候选包轮，`9b3e3e37…`）
       同样已于 2026-10-10 完成；两轮逐字报告见 [`docs/platform-gate.md`](platform-gate.md) §7.9。第 2 轮结论已回填
       `docs/platform-gate.md` / 发布正文 / 本清单 §7 三处（att-003，仅 `docs/`；**未改入包文件**）。
+- [ ] **原生 Windows 真机门禁 第 3 轮（跨轮稳定措辞后重建重打的新产物，sha256 `44dc4473…`）** —— **待负责人执行**：
+      用 §5 的**新** tarball（sha256 `44dc4473940d41a7f1141e7b9b96f1e89e49788c7f070a818c8913a5e716f6ee` / 1,437,812 B）
+      跑 `scripts/win-smoke-test.mjs`（T1–T5）+ 32 步看板文件系统生命周期检查（红线 1）；建议**沿用第 2 轮的显式锁定宿主形态**
+      （`--dsh "npx -y @deepseek-ai/dsh@0.2.1-alpha.2"`）以维持宿主代际覆盖（`0.2.0-rc.2` + `0.2.1-alpha.2`）。
+      预期 T1–T5 = 15/0/1、T3 32/32 步（与第 1/2 轮同值；新包相对第 2 轮包**只改 `README.md` 两处 hunk**，被检查行为不变）。
+      执行后回填 [`docs/platform-gate.md`](platform-gate.md) §7.9 的「被测产物」表第 3 轮行（结果列）与本节。
 - [ ] **（可选）原生 macOS 真机门禁**：按 [`docs/platform-gate.md`](platform-gate.md) §5 命令序列执行；
       未执行则维持「本版未验证」。
 - [ ] **合并 `main`**：`v0.20.1-test` → `main`（`--no-ff`），并核对 `HEAD^{tree}` 与分支 tip tree 逐字相等。
@@ -243,7 +261,7 @@ sha512 可做**字节级**对账，保证「被测产物 == 发布产物 == rele
 - [ ] **打 annotated tag `v0.20.1`**（非轻量 tag），并核对 tag 对象解引用到合并提交。
 - [ ] **`git push`**（`main` + tag）。
 - [ ] **`npm publish`**：推荐**直发 §5 的 tarball**（手册步骤 4'，registry 不重打）⇒ `npm view dsh-graph@0.20.1 dist --json`
-      的 `shasum` 应 == 本地 sha1 `e000fc32…`、`fileCount` == **43**；`integrity` 与本地 sha512 逐字对账。
+      的 `shasum` 应 == 本地 sha1 `9c376204…`、`fileCount` == **43**；`integrity` 与本地 sha512 逐字对账。
 - [ ] **GitHub release `v0.20.1`**：附件 = tarball + `SHA256SUMS`；正文用
       `gh release create v0.20.1 -R miuzel/dsh-graph <tarball> SHA256SUMS --title "v0.20.1" --notes-file docs/release-notes-v0.20.1.md`；
       发布后以 `gh release view --json body` 与真源**逐字比对**（唯一可接受差异：文末换行归一化）。
