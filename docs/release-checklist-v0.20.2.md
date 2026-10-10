@@ -4,8 +4,8 @@
 > 本清单 / 独立构建路径产物与对账 / H3 派发可用事实在 Linux 隔离实例跑通 / 自证闸门 全部落地）；
 > 平台回填 = **已完成**（原生 Windows 的 Round A' / Round B / H3 三段由负责人真机执行，**结论已填齐**，见
 > `docs/platform-gate.md` §7.10 / §7.11，**无一项由 agent 预填**）；
-> 发布态动作（合并 `main`、打 tag、`push`、`npm publish`、GitHub release、profile 安装升级）一律**未执行**，
-> 逐条列于 §8「待负责人执行」。**
+> 发布态动作：**合并 `main` 与打 annotated tag `v0.20.2` 已执行（2026-10-11，本地；合并提交 `912de67`，tag → `912de67`）**；
+> **`push` / `npm publish` / GitHub release / profile 安装升级 一律未执行**，逐条列于 §8「待负责人执行」。**
 >
 > **平台真机结论（本版如实标注）：原生 Windows = 已实测通过**（候选包 `f39517c3…`：Round A' 静态复跑
 > win-smoke `8/0/0` + platform-smoke `12/0/2`；Round B 完整 tarball 门禁 `通过15/失败0/告警1`、T3 生命周期 32/32；
@@ -247,10 +247,14 @@ sha256 与上表逐字比对（仍是发布时点动作，见 §8）。
       **不把带 `--flag` 的命令包进 PowerShell 函数**（`--profile` 到不了 CLI）、装包用**单条 cmd.exe 命令行**形态。
 - [ ] **（可选）原生 macOS 真机门禁**：按 [`docs/platform-gate.md`](platform-gate.md) §5 命令序列执行；
       未执行则维持「本版未验证」。
-- [ ] **合并 `main`**：`v0.20.2-test` → `main`（`--no-ff`），并核对 `HEAD^{tree}` 与分支 tip tree 逐字相等。
+- [x] **合并 `main`**：`v0.20.2-test` → `main`（`--no-ff`）—— **已执行 2026-10-11（本地）**：合并提交 **`912de67`**，
+      `HEAD^{tree}` = `v0.20.2-test^{tree}` = `17672def1b9fbabaf1d097fadb6236c196820c2f`（**逐字相等，零内容漂移**）；
+      合并带入 23 个文件 / +4945 −159；主树 `porcelain=0`。看板 `.dsh-graph/` 属**内层独立仓库**（外层跟踪 0 文件）⇒ 合并不触碰看板。
       ⚠️ **必须先合 `main` 再发布**：见 §9（README / 文档的图链接解析到 `blob/main`，否则 404）。
-- [ ] **打 annotated tag `v0.20.2`**（非轻量 tag），并核对 tag 对象解引用到合并提交。
-- [ ] **`git push`**（`main` + tag）。
+- [x] **打 annotated tag `v0.20.2`**（非轻量 tag）—— **已执行**：`git cat-file -t v0.20.2` = **`tag`**，
+      `v0.20.2^{commit}` = `912de6789bdb2ddf9f700ddb5a92c31d012f4947`，tag 正文含三段真机结论与产物 sha256；`git describe` = `v0.20.2`。
+      ❗本清单的这条勾选与上一行发生在 **tag 之后**（`docs/` 不入包 ⇒ 不影响发布产物；tag 仍指向 `912de67`，未被移动）。
+- [ ] **`git push`**（`main` + tag）—— **未执行**（负责人不可逆门）。
 - [ ] **`npm publish`**：推荐**直发 §5 的 tarball**（手册步骤 4'，registry 不重打）⇒ `npm view dsh-graph@0.20.2 dist --json`
       的 `shasum` 应 == 本地 sha1 `059fae1b…`、`fileCount` == **43**；`integrity` 与本地 sha512 逐字对账。
 - [ ] **GitHub release `v0.20.2`**：附件 = tarball + `SHA256SUMS`；正文用
@@ -258,7 +262,11 @@ sha256 与上表逐字比对（仍是发布时点动作，见 §8）。
       发布后以 `gh release view --json body` 与真源**逐字比对**（唯一可接受差异：文末换行归一化）。
 - [ ] **profile 安装 / 升级验证**：全新 profile（隔离 `DSH_HOME`）按用户方式安装 `dsh-graph@0.20.2`，
       复核三维度（安装 / 启动 / **派发可用**：派发返回真实 `child_id`；Linux 与原生 Windows 均已实证，见 §7.11 H3 段）。
-- [ ] **发布源树对账**：在 `v0.20.2` tag 树上重建重打，sha256 与 §5 逐字比对（跨树可复现性）。
+- [x] **发布源树对账**（跨树可复现性）—— **已按零构建论证闭合**：tag 树 == 发布线 tip 树（同一 tree hash `17672def…`），
+      且自打包点 `6a1d5e5` 到该树的**非 `docs/` 改动 = 0 个文件**（同期仅 `docs/platform-gate.md` / `docs/release-checklist-v0.20.2.md` 变动，
+      两者都不在包内）⇒ **包相关输入与打包时逐字节相同**；再叠加此前已证的「重建重打 ≡ 本产物」（`cmp` 逐字节一致，§2）与构建确定性
+      ⇒ tag 树产出的包 ≡ §5 产物（sha256 `f39517c3…`）。**未做额外的第二次重建**（避免无谓构建）；
+      如需字面复现，可在 tag 树的隔离 worktree 内 `bash scripts/build.sh` + `dist/` 内 `npm pack` 后与 §5 对账（**不得在主树构建**）。
 - [ ] 在看板决定 `v0.20.2` 泳道状态（`released` 与否），并归档本轮临时产物（`tmp/uat-v0202/`）。
 
 ## 9. 发布期约束（**必须先合 `main`，否则文档与 README 的图链接 404**）
