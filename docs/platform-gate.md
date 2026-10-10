@@ -520,6 +520,7 @@ evidence: suite=core/tests node --test passed=1379 failed=0 skipped=0 exit=0
 | Windows · **v0.20.1**（发布候选包轮 = 第 1 轮；含 1 项目标改动：g-469 派发 API 双版本兼容） | 2026-10-10 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（真机 T1–T5：通过 15 / 失败 0 / 告警 1；宿主 `0.2.0-rc.2`，端口 3088；**原生 Windows 进程，经 WSL↔Windows 互操作驱动**）。**被测产物 = v0.20.1 候选包** `dsh-graph-0.20.1.tgz` sha256 `9b3e3e37afec42e40ebdce0c567f75c69e383b512fe8a3d37e7409fd4c83709b` 1437282 B。**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）+ 步骤清单自证 32/32 + 失败路径（业务错误、`tx.persist_failed=1`、重试收敛）+ 盘面总览 + 32 步文案无平台错误码 + 跨进程并发 CAS 4 抢 1。**唯一告警 = T1 台账层 WARN**（`--tarball` 模式发布包内无 `core/*.ts` ⇒ 未对账，**设计而非缺陷** ⇒ 台账对账改在仓库根完成）。**本轮记作「候选包轮」**：README 平台表回填后重建重打 ⇒ 第 2 轮（被测产物 == 发布产物 闭环轮）**已由负责人于 2026-10-10 执行并 PASS**（宿主 **`@deepseek-ai/dsh@0.2.1-alpha.2`**，见下一行）；本轮 `npx -y @deepseek-ai/dsh` 解析到 `latest` = `0.2.0-rc.2`，**未覆盖本版真正要修的 `0.2.1` 宿主代际**（该代际缺口已由第 2 轮补上）。⚠️ **Windows 上「派发可用」维度未覆盖**（T1–T5 不含派发）：本行结论只覆盖**安装 / 启动 / REST**层；派发可用维度本版在 Linux/WSL2 隔离实例上验证，**Windows 未经真机验证** —— 不得读作 Windows 三维度齐全。互操作形态与纯原生场景的 4 点差异同 §7.8；逐字报告见 §7.9 | 负责人（真机） |
 | Windows · **v0.20.1**（第 2 轮 = **闭环轮**，被测产物 == 当轮发布产物；含 1 项目标改动：g-469 派发 API 双版本兼容） | 2026-10-10 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（真机 T1–T5：通过 15 / 失败 0 / 告警 1；宿主 DSH **`0.2.1-alpha.2`**（经 `--dsh` 显式锁定），默认端口 3088；**原生 Windows 进程，经 WSL↔Windows 互操作驱动**；执行时刻 `2026-10-10T07:05:09.850Z`）。**被测产物 = 终态发布候选** `dsh-graph-0.20.1.tgz` sha256 `94459a16ae7d8dd378230d4c8daaf0f7885d2cd68b08e67b743d28d3b2d9c22c` 1437660 B，**== 当轮发布产物 ⇒ 该轮闭环成立**（其后 att-004 重建重打 ⇒ 终态见下一行）。**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）+ 步骤清单自证 32/32 + 失败路径（业务错误、`tx.persist_failed=1`、重试收敛）+ 盘面总览 + 32 步文案无平台错误码 + 跨进程并发 CAS 4 抢 1。**唯一告警 = T1 台账层 WARN**（`--tarball` 模式发布包内无 `core/*.ts` ⇒ 未对账，**设计而非缺陷** ⇒ 台账对账改在仓库根完成，与第 1 轮同）。⚠️ **Windows 上「派发可用」维度未覆盖**（T1–T5 不含派发）：本行结论只覆盖**安装 / 启动 / REST**层；派发可用维度本版在 Linux/WSL2 隔离实例上验证，**Windows 未经真机验证** —— 不得读作 Windows 三维度齐全。互操作形态与纯原生场景的 4 点差异同 §7.8；逐字报告见 §7.9 | 负责人（真机） |
 | Windows · **v0.20.1**（第 3 轮 = **终轮 / 闭环轮**，被测产物 == 终态发布产物；含 1 项目标改动：g-469 派发 API 双版本兼容） | 2026-10-10 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（真机 T1–T5：通过 15 / 失败 0 / 告警 1；宿主 DSH **`0.2.1-alpha.2`**（经 `--dsh` 显式锁定），端口 3088；**原生 Windows 进程，经 WSL↔Windows 互操作驱动**；执行时刻 `2026-10-10T08:38:52.827Z`）。**被测产物 = 终态发布产物** `dsh-graph-0.20.1.tgz` sha256 `44dc4473940d41a7f1141e7b9b96f1e89e49788c7f070a818c8913a5e716f6ee` 1437812 B，**== 发布产物 ⇒ 闭环成立**。**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）+ 步骤清单自证 32/32 + 失败路径（业务错误、`tx.persist_failed=1`、重试收敛）+ 盘面总览 + 32 步文案无平台错误码 + 跨进程并发 CAS 4 抢 1。**唯一告警 = T1 台账层 WARN**（`--tarball` 模式发布包内无 `core/*.ts` ⇒ 未对账，**设计而非缺陷** ⇒ 台账对账改在仓库根完成，与第 1/2 轮同）。⚠️ **Windows 上「派发可用」维度未覆盖**（T1–T5 不含派发）：本行结论只覆盖**安装 / 启动 / REST**层；派发可用维度本版在 Linux/WSL2 隔离实例上验证，**Windows 未经真机验证** —— 不得读作 Windows 三维度齐全。互操作形态与纯原生场景的 4 点差异同 §7.8；逐字报告见 §7.9 | 负责人（真机） |
+| Linux (WSL2) · **v0.20.2**（发布准备轮：候选包静态层 + H3 事实通道实证） | 2026-10-10 | linux/x64 | v26.7.0 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | `exit=0`（转发件） | **PASS**（`platform-smoke-test.mjs --static-only .` = **通过 15 / 失败 0 / 告警 0**，含 H1–H6 全 PASS —— 其中 **H3 由隔离实例真派发事实判定**；`win-smoke-test.mjs --static-only . --h3-dispatch-json <facts>` = **通过 9 / 失败 0 / 告警 0**；转发执行件 `exit=0`；整套件自证闸门 2411/2411。**H3 的实例侧证据**：隔离实例装候选 `dist`（`link:`）→ 两轮独立真派发 `collector` / `executor-minimal` / `reviewer` 三条路径 → 真 `child_id` 落事实文件 → 磁盘侧独立核对命中（详见 §7.11 的 Linux 段）。**本行只对 Linux 具平台效力**，不替代 Windows 真机结论） | agent:g-476-att-001 |
 
 回填时请一并粘贴「可复制回传的报告」整段（执行件在结论后自动打印），并在 `README.md` 平台范围段落更新结论。
 该报告块自 g-428 起额外含 **`覆盖=…`** 一行（台账项数/命中数/忽略处数 + T3 生命周期步数），
@@ -1148,6 +1149,72 @@ H1/H2 = `PASS`（组合声明被发现）或至少 WARN 文案给出可复制的
 
 > ⚠️ **本小节在负责人回传真机事实之前一律为待回填**：不得由 agent 预填 PASS/FAIL、不得把 Linux 结论
 > 抄成 Windows 结论（发布红线 1）。Round A 的**判红原始记录**已逐字保留在 §3.5.4 / §3.5.5 的「真机现象」段。
+
+---
+
+### 7.11 v0.20.2 Round B（完整 tarball 门禁）与 H3（派发可用）真机结论（**待回填 —— 负责人回传前不得预填任何结论**）
+
+**为什么需要这两项**：
+
+- **Round B = T1–T5 全量**（安装 / 启动 / REST 层；链接宿主 **`@deepseek-ai/dsh@0.2.1-alpha.2`**，即本版修复目标代际）。
+  ⚠️ **口径边界**：T1–T5 **不含「派发可用」维度** ⇒ Round B 的 PASS 只能读作安装 / 启动 / REST 已通过。
+- **H3 = 派发可用**（三条路径：`reviewer` / `collector` / `executor-minimal`）。**v0.20.1 的教训**是本版新增 H 系列探针的直接原因：
+  那一轮的 T1–T5 在 Windows 上**全绿**，却漏掉了「Windows 上派发根本起不来」这一类问题（根因与修复见 §3.5.4 / §3.5.5）
+  ⇒ 只有 H3 才能真正回答「Windows 上派得出去吗」。H3 **不是** T1–T5 的替代，两项都必须有。
+
+**被测产物（两轮共用，即本版发布候选）**：`dsh-graph-0.20.2.tgz` —— sha256
+`f39517c3aa0470e3aa60d9541a06842f4633523f024fd697b456e68aed0e0703`、1,444,792 B、**43 成员**、包内不含 `docs/`、
+包内 `package.json` version 与 `PLUGIN_VERSION` = `0.20.2`（见 `docs/release-checklist-v0.20.2.md` §5）。
+
+**如何在真机上取证**（负责人执行；三段可复制命令与两条一手互操作事实见本地产物
+`tmp/uat-v0202/WINDOWS-GATE-RECIPE.md`，`tmp/` 不入版本控制）：
+
+```text
+# Round B（%TEMP% 内、原生 Windows 路径；UNC 直喂 --tarball 必失败）
+Copy-Item \\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\tmp\uat-v0202\dsh-graph-0.20.2.tgz $env:TEMP\dsh-graph-0.20.2.tgz
+(Get-FileHash $env:TEMP\dsh-graph-0.20.2.tgz -Algorithm SHA256).Hash   # 应 == F39517C3…E0703
+Set-Location $env:TEMP
+& <node.exe> \\wsl.localhost\archlinux\home\miuzel\workspace\personal\dsh-graph\scripts\win-smoke-test.mjs --dsh "npx -y @deepseek-ai/dsh@0.2.1-alpha.2" --tarball "$env:TEMP\dsh-graph-0.20.2.tgz"
+
+# H3（Windows 隔离实例；DSH_HOME 与 workspace 都在 %TEMP% 下，端口 3093）
+# ① 装候选并起实例 ② GUI 新建会话 → graph_claim_supervisor 接管（唯一人工一步）
+# ③ 采集三条真派发事实 ④ 两道门禁消费事实 —— 完整命令见配方 §段 3
+```
+
+**回填时逐项核对（Round B）**：`结果=PASS 通过15/失败0/告警1`、**T3 生命周期 32/32 步**、唯一告警 =
+`--tarball` 模式发布包内无 `core/*.ts`（设计而非缺陷 ⇒ 台账对账改在仓库根完成）；
+并把「可复制回传的报告」**整段**（含 `覆盖=…` 行）粘贴回本小节。
+
+**回填表 · Round B（T1–T5）**
+
+| 平台 | 执行日期 | 平台/架构 | Node | 宿主 DSH | 被测产物 sha256 | T1–T5 | T3 步数 | 结论 | 执行人 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Windows · **v0.20.2**（Round B，完整 tarball 门禁） | _待回填_ | _待回填_ | _待回填_ | `0.2.1-alpha.2`（配方已锁） | `f39517c3…`（配方已核） | _待回填_ | _待回填_ | **_待回填_** | _待回填_ |
+
+**回填表 · H3（派发可用；三条路径各一次真派发）**
+
+| 平台 | 执行日期 | `reviewer` child_id | `collector` child_id | `executor-minimal` child_id | 事实文件 | 判定 | 执行人 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Windows · **v0.20.2**（隔离实例，端口 3093） | _待回填_ | _待回填_ | _待回填_ | _待回填_ | `%TEMP%\h3-dispatch-facts.json` | **_待回填_** | _待回填_ |
+
+**H3 判定口径（与两道执行件同源，不是本小节的自由解释）**：事实文件形状
+`{ "attempted": true, "roles": [ { "role": …, "mode": …, "childId": …, "errors": [] } ] }`；
+**PASS** 要求三条路径**均有非空 `childId`** 且 `errors` 未命中失败签名
+（`tools.restrict() … names unknown` / 子代理启动失败 / 兼容层缺接口）；**未回传事实**时 H3 必须逐字打印
+`SKIP(需真机/实例)`（这是「不冒充通过」的正确形态，**不是失败**）。
+
+**Linux 侧已实证（H3 事实通道跑通；**只对 Linux 具平台效力**，不得当作 Windows 结论）**：
+隔离实例 `bash scripts/dsh-test-web.sh 0.2.1-alpha.2 --port 3092 --host-dir <worktree>/dist`（插件 `link:` 指向候选
+`dist`）→ GUI 内 `graph_claim_supervisor` 接管 → `node tmp/uat-v0202/h3-collect-facts.mjs --base http://127.0.0.1:3092
+--workspace <隔离 workspace> --out <facts.json>`（走产品 REST 端点 `start-collection` / `start-execution`（`mode=minimal`）
+/ `start-review`）⇒ **两轮独立采集**各得三条真 `child_id`（`collector` `0130c587…` / `b82a58be…`、
+`executor-minimal` `aaa63717…` / `2985c648…`、`reviewer` `69057991…` / `bb76ee09…`），且同一 `child_id` 在隔离实例
+自己的 `cards/*.md` / `attempts/att-001/attempt.md` / `reviews/rev-att-001-01.md` 里**独立核对命中** ⇒ 派发确实发生；
+两道门禁消费后 `win-smoke` = 通过 9/失败 0/告警 0、`platform-smoke` = 通过 15/失败 0/告警 0（`H3=PASS`）。
+逐字证据（实例启动、link 目标、两次 child_id、门禁输出、磁盘核对）见 `tmp/uat-v0202/h3-linux-evidence.md`。
+
+> ⚠️ **本小节在负责人回传真机事实之前一律为待回填**：不得由 agent 预填 PASS/FAIL、不得把 Linux 结论抄成
+> Windows 结论（发布红线 1）。Round A' 的回填位是**上一小节 §7.10**（同样保持未预填）。
 
 ---
 
