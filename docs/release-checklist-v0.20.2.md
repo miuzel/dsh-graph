@@ -77,7 +77,7 @@
 - [x] **原生 Windows 真机门禁 Round B（完整 tarball 门禁 T1–T5，宿主 `0.2.1-alpha.2`）** —— **已执行 · PASS**：`结果=PASS 通过15/失败0/告警1`（T3 生命周期 32/32；唯一告警=包内无 `core/*.ts` 故台账不对账，设计内）；附测旧代际 `0.2.0-rc.2` 同样 `15/0/1`；产物指纹 `f39517c3…` 双向对账一致；结论见 §7.11
 - [x] **原生 Windows H3（三条派发路径真派发事实）** —— **已执行 · PASS**：三条路径各得非空 `child_id`（`964dd21c…` / `218156f3…` / `391377c4…`）、`errors` 全空、磁盘实体独立佐证；两道门禁消费后 `H3=PASS`（win-smoke `9/0/0`、platform-smoke `13/0/2`）；结论见 §7.11 的 H3 段
 - [ ] **原生 macOS 真机门禁** —— **本版未执行**（§7）
-- [ ] 合并 `main` / 打 annotated tag / `push` / `npm publish` / GitHub release / profile 安装升级 —— **待负责人执行**（§8）
+- [x] 合并 `main` / 打 annotated tag —— **已执行（本地，`912de67`）**；`push` / `npm publish` / GitHub release / profile 安装升级 —— **待负责人执行**（§8，含可复制交接单见 §10）
 
 ## 3. 版本号一致性（红线 2）逐处证据
 
@@ -87,8 +87,8 @@
 |---|---|---|
 | 包清单（真源） | `dsh-graph-host/package.json:3` | `"version": "0.20.2",` |
 | 客户端常量（源） | `dsh-graph-host/lib/client/constants.js:12` | `const PLUGIN_VERSION = "0.20.2";` |
-| 客户端常量（构建产物） | `dist/lib/client.js:2457` | `const PLUGIN_VERSION = "0.20.2";` |
-| 构建产物包清单 | `dist/package.json:3` | `"version": "0.20.2",`（`scripts` = `null`） |
+| 客户端常量（构建产物） | `dist/lib/client.js:2457`（**打包时那棵树**，见 §5 作用域注） | `const PLUGIN_VERSION = "0.20.2";` |
+| 构建产物包清单 | `dist/package.json:3`（**打包时那棵树**） | `"version": "0.20.2",`（`scripts` = `null`） |
 | 根 `package.json` | `package.json:3` | `"private": true`，**无 `version` 字段（未动，符合预期）** |
 | README（根，中）当前版本 | `README.md:18` | `**当前版本 v0.20.2**` |
 | README（根，中）最新亮点 | `README.md:20` | `**最新亮点（v0.20.2）**` |
@@ -166,7 +166,13 @@
 | 包内成员顶层集合 | `cordis.patch.yml` / `core` / `diagrams` / `index.js` / `lib` / `LICENSE` / `package.json` / `prompts` / `README.md` / `supervisor-guide.en.md` / `supervisor-guide.zh.md` |
 | 重打包对账 | 同一构建树内**重建 + 重打**，与本产物 `cmp` **逐字节一致**（同一 sha256 `f39517c3…`） |
 | 校验和文件 | `tmp/uat-v0202/SHA256SUMS`（`sha256sum` 格式，随 release 附件上传） |
-| 构建树 `dist/` 树 hash | `37576f858ca29cd8`（口径：`find dist -type f -print0 \| sort -z \| xargs -0 sha256sum \| sha256sum \| cut -c1-16`） |
+| 构建树 `dist/` 树 hash | `37576f858ca29cd8`（**指打包时那棵树** = worktree `.worktrees/g-476-att-01/dist`；口径：`find dist -type f -print0 \| sort -z \| xargs -0 sha256sum \| sha256sum \| cut -c1-16`） |
+
+> ⚠️ **`dist/` 的作用域（复核时最容易踩的一条）**：`dist/` **不被 Git 跟踪**，因此「哪个树里的 `dist/`」决定它显示什么版本。
+> 本清单 §3 / §5 中一切 `dist/...` 行号与树 hash 都指**打包时那棵树**（worktree `.worktrees/g-476-att-01`，`PLUGIN_VERSION = "0.20.2"`）。
+> **主树（仓库根）的 `dist/` 是旧构建**（`PLUGIN_VERSION = "0.19.7"`，mtime `2026-10-06 12:31:23`），且**刻意未动** —— 它是运行中宿主的资产来源，
+> 按 `AGENTS.md`「构建隔离」纪律不在主树构建；因此**在主树直接读 `dist/lib/client.js` 会读到 0.19.7，这不是版本漂移，也不是缺陷**。
+> 合并 `main` 后主树源码已是 0.20.2、`dist/` 仍为旧构建属**预期状态**；若要让主树 GUI 跑 0.20.2，需在选定时刻单独构建（**发布后动作，非发布前置**）。
 
 **构建 / 打包过程的两条实测纪律（沿用手册 g-470 条目）**：
 
@@ -174,8 +180,9 @@
   `find dist -name '*.tgz' | wc -l` 实测 **0**；`dist/` 必须干净后再跑闸门、再打包。
 - 本沙盒 `~/.npm` 只读 ⇒ `npm pack` 必须 `npm_config_cache=<worktree>/tmp/npm-cache`，否则报 `EROFS`。
 
-**跨树可复现性**：本版在**同一构建树内**的重建重打已逐字节一致（上表）；发布时由负责人在 tag 树上重建重打，
-sha256 与上表逐字比对（仍是发布时点动作，见 §8）。
+**跨树可复现性**：本版在**同一构建树内**的重建重打已逐字节一致（上表）；tag 树一侧已按**零构建论证**闭合
+（tag 树 == 发布线 tip 树，且自打包点以来非 `docs/` 改动 = 0 文件 ⇒ 包相关输入逐字节相同），明细见 §8「发布源树对账」。
+如需**字面复现**，可在 tag 树的隔离 worktree 内重建重打后与上表比对（可选；**不得在主树构建**）。
 
 ## 6. 夹具复冻 / CHANGELOG 与守卫 / 发布正文 / 测试与静态检查
 
@@ -224,13 +231,15 @@ sha256 与上表逐字比对（仍是发布时点动作，见 §8）。
 | 原生 macOS | ⏳ **本版未验证** —— `v0.20.2` **未**在原生 macOS 上执行真机门禁 | `README.md:35` / `dsh-graph-host/README.md:53` / 英文镜像 `:295` |
 
 **一轮闭环核验（本版纪律，已按实测结果验证）**：包内文件（含 `dsh-graph-host/README.md`）**不含任何随本轮真机结论变化的表述** ——
-平台表按「结论以台账为准」+ 宿主代际陈述，**不写轮次计数与结论数字**；`docs/` 与 `CHANGELOG.md` **不在包内**
+平台表按「结论以台账为准」+ 宿主代际陈述，**不写本轮的轮次结论数字**（包内平台行里唯一的数字是**上一版 `v0.20.1` 的历史记录**
+「T1–T5 通过 15 / 失败 0 / 告警 1、T3 32/32 步」，它跨轮稳定、不由本轮结论改变）；`docs/` 与 `CHANGELOG.md` **不在包内**
 ⇒ Round A' / Round B / H3 三段跑完后**只回填了 `docs/`**（§7.10 / §7.11 / 本清单），
 **候选产物字节与 sha256 全程未变**（仍为 `f39517c3…` / 1,444,792 B / 43 成员），**未触发第 4 轮产物**
-（v0.20.1 曾因包内 README 写入轮次计数而多跑一轮；本版已避免）。§7.10 / §7.11 在准备阶段保持「待回填」原文，
-**结论全部来自负责人真机回传，agent 未预填**。**⇒ 被测产物 ≡ 待发布产物**（同一 sha256）。
+（v0.20.1 曾因包内 README 写入轮次计数而多跑一轮；本版已避免）。§7.10 / §7.11 在**准备阶段**保持「待回填」原文，
+**结论全部来自负责人真机回传，agent 未预填**（回填后的正文已无「待回填」字样；本节所述「保持未预填」是对准备阶段的记述）。
+**⇒ 被测产物 ≡ 待发布产物**（同一 sha256）。
 
-## 8. 待负责人执行（发布态动作 —— **本清单准备阶段一律未执行**）
+## 8. 发布态动作（合并 `main` 与打 tag **已完成**；`push` / `publish` / GitHub release / profile 安装升级 **待负责人执行**）
 
 - [x] **原生 Windows 真机门禁 Round A'**（静态复跑）—— **已执行 · PASS**（win-smoke `8/0/0`、platform-smoke `12/0/2`、
       矩阵 `H1/H2/H4/H5/H6=PASS`、`H3=SKIP`；`H4` 在真实 NTFS 上由 FAIL 反转）；明细回填 `docs/platform-gate.md` **§7.10**
@@ -279,3 +288,93 @@ sha256 与上表逐字比对（仍是发布时点动作，见 §8）。
 
 图路由本身（插件自带只读路由 `/api/dsh-graph/diagram/<name>`，从 `dist/diagrams/` 现读）与包内相对资产**不受此约束**。
 该约束来自 `g-460` 判据 15，是**发布顺序**要求，不是缺陷。
+
+## 10. 负责人发布交接单（可复制；**agent 未执行、不代执行**）
+
+> **发版前复核已完成（2026-10-11）**：主管侧逐条复核 §1–§7 通过，并修正 3 处**措辞不精确**（`dist/` 作用域、源树对账口径、§8 时态）；
+> **独立复核判出 1 条 BLOCK** —— 发布正文真源 `docs/release-notes-v0.20.2.md` 仍是回填前旧稿，照 §10 的 `gh release create --notes-file` 发布
+> 会把「本版 Windows 无结论」写成公开正文；**已在发布前修好**（正文改用 §7.10/§7.11 真机结论；该文件属 `docs/`、不在包内 ⇒ **产物 sha256 不变**）。
+> 两份记录见 §11。
+> **待发布真值**：`main = e0556dd`（含发布留痕）｜tag `v0.20.2` → 合并提交 `912de67`｜`origin/main = 57a16a7`（**未推送**）｜
+> registry `latest = 0.20.1`（**0.20.2 未发布**）｜产物 sha256 `f39517c3…` / 1,444,792 B / 43 成员。
+
+```bash
+# 0) 前置复核（四条都应命中）
+cd /home/miuzel/workspace/personal/dsh-graph
+git rev-parse --short main                      # e0556dd
+git rev-parse --short 'v0.20.2^{commit}'        # 912de67（annotated tag）
+git rev-parse --short origin/main               # 57a16a7（尚未推送）
+sha256sum tmp/uat-v0202/dsh-graph-0.20.2.tgz    # f39517c3aa0470e3aa60d9541a06842f4633523f024fd697b456e68aed0e0703
+
+# 1) 推送 main 与 tag（§9：先合 main 已完成；本版 main 已在 tag 之上）
+git push origin main
+git push origin v0.20.2
+
+# 2) 发布 npm —— 直发 §5 的 tarball（registry 不重打，产物与本地逐字节相同）
+npm_config_cache="$PWD/tmp/npm-cache" npm publish tmp/uat-v0202/dsh-graph-0.20.2.tgz
+#   注：本沙盒 ~/.npm 只读 ⇒ 必须给 npm_config_cache；如账号启用 2FA，追加 --otp=<code>
+
+# 3) 发布后立即对账（三个值必须逐字相等）
+npm_config_cache="$PWD/tmp/npm-cache" npm view dsh-graph@0.20.2 dist --json
+#    shasum    == 059fae1b6393a1d5c5c35442d10e8a24406e5683
+#    fileCount == 43
+#    integrity == sha512-L8HdagJWaUuq4gpHTp8EN5xVg2vNUPVtnRZ0F1lqUPcnQtSVCwicAW4fkSDDkzKgXovSDc6Sw/nsU0eAFxa5AQ==
+
+# 4) GitHub release（附件 = tarball + SHA256SUMS，正文用真源）
+cd tmp/uat-v0202
+gh release create v0.20.2 -R miuzel/dsh-graph dsh-graph-0.20.2.tgz SHA256SUMS \
+  --title "v0.20.2" --notes-file ../../docs/release-notes-v0.20.2.md
+gh release view v0.20.2 -R miuzel/dsh-graph --json body > body.json   # 与真源逐字比对（唯一可接受差异：文末换行归一化）
+
+# 5) profile 安装 / 升级验证（全新隔离 DSH_HOME）；派发维度应返回真实 child_id
+```
+
+**出问题时的回退口径**：`npm publish` 后才发现问题 ⇒ **不撤包**，改发 `0.20.2` 的补丁版本（历史约定）；tag 若打错但**尚未推送** ⇒
+`git tag -d v0.20.2` 后可重打（本版 tag 已按 `912de67` 固化为 annotated，未经负责人指示**不得移动**）。
+
+## 11. 发版前复核记录（2026-10-11）
+
+**A. 主管侧逐条复核（对照仓库真实状态自算，不采信本清单自述；源树 = tag `v0.20.2` / 合并提交 `912de67`）**：
+
+| 复核点 | 结论 | 证据（单行） |
+|---|---|---|
+| 版本号一致性（红线 2） | ✅ PASS | `dsh-graph-host/package.json` = `0.20.2`；`lib/client/constants.js:12` `PLUGIN_VERSION` = `0.20.2`；`README.md:18/20`、`dsh-graph-host/README.md:43/57/285/299` = `v0.20.2`；根 `package.json` 无 `version` 字段（符合预期） |
+| 产物对账（§5） | ✅ PASS | 自算 sha256 `f39517c3…` / 1,444,792 B / 成员 **43** / `docs/` 成员 **0** / 包内 `version` `0.20.2` / sha1 `059fae1b…`；包内含 `package/README.md`、**不含** `CHANGELOG.md` |
+| 一轮闭环（包内不含轮次结论） | ✅ PASS | 包内平台行按「结论以台账为准」措辞、无轮次计数与结论数字；三段回填仅改 `docs/`（自打包点起非 `docs/` 改动 **0** 文件）⇒ 产物字节未变 |
+| 兼容声明（§2/§3） | ✅ PASS | `engines.dsh` = `>=0.1.5-rc.2 <0.2.2-0`；`peerDependencies["@deepseek-ai/dsh-settings"]` 同区间；`yaml ^2.9.0` 在 `dependencies`（自带运行依赖） |
+| H3 事实通道（§4） | ✅ PASS | `--h3-dispatch-json` / `DSH_GATE_H3_DISPATCH_JSON` 真实存在于 `scripts/win-smoke-test.mjs`（8 处）与 `scripts/platform-smoke-test.mjs`（4 处）并被消费 |
+| 闸门复跑（§6） | ✅ PASS | 在 tree == tag tree 的工作树 `a9812fa`：`run-tests` tests=2411 pass=2411 fail=0 skipped=0 exit=0（45.5 s）+ `tsc --noEmit` exit=0 |
+| 发布态真值（§8） | ✅ PASS | `main = e0556dd`；tag `v0.20.2` → `912de67`（`git cat-file -t` = `tag`）；`origin/main = 57a16a7`（**未推送**，远端无该 tag）；registry `latest = 0.20.1` |
+| 树清洁与临时产物 | ✅ PASS | `git status --porcelain` = 0；tag 树无 `tmp/`、`dist/*.tgz`、`.dist-stage.*` / `dist.prev.*` 混入 |
+| 平台结论 ↔ 台账一致性 | ✅ PASS | 本清单 §2/§7 的 `8/0/0`、`12/0/2`、`15/0/1`、`32/32`、`9/0/0`、`13/0/2`、H1–H6、三条 `child_id` 与 `docs/platform-gate.md` §7.10/§7.11 逐项相同 |
+
+**复核中发现并修正的 3 处措辞不精确（均非结论性缺陷）**：① §3/§5 的 `dist/...` 未写明「哪个树的 `dist/`」（主树 `dist/` 是旧构建 `0.19.7`，按字面复核会被误判为版本漂移）⇒ 新增 §5「`dist/` 作用域」注；② §5「发布时在 tag 树重建重打」与 §8「按零构建论证闭合」口径不一致 ⇒ 对齐；③ §8 标题时态（合并 / tag 已完成但标题仍写「一律未执行」）⇒ 改写。
+
+**B. 独立复核记录（另一执行者，只读；复核基线 = 本清单 blob `0300e4b1`，2026-10-11）**：
+
+- **总判**：`audit: BLOCK | checked=7 items | discrepancies=7` —— 7 个复核点 **6 PASS + 1 BLOCK**，另 6 条为 INFO 级；复核者在报告里明确
+  「**阻塞点在发布正文真源，不在产物本身**」。
+- **BLOCK（唯一阻断项，已修复）**：`docs/release-notes-v0.20.2.md:19-20` 仍写「**本版结论尚不存在**…§7.10 保持未预填」与
+  「**Windows 侧 H3 仍待负责人按配方在真机上回传**…未经真机验证」，与 §7.10/§7.11 的真机回传原文直接冲突；而 §8/§10 明令用该文件作
+  `gh release create --notes-file` ⇒ **照此发布将产出否认本版 Windows 结论的公开正文**。独立复核给出的对照口径：回传原文 Round A' =
+  `H1=PASS H2=PASS H3=SKIP H4=PASS H5=PASS H6=PASS`、H3 三条 `child_id` `964dd21c`/`218156f3`/`391377c4`、`win-smoke` `9/0/0`、
+  `platform-smoke` `13/0/2`；**platform-gate 一侧与回传原文逐字一致，偏差在 release-notes 一侧**。
+  **处置**：发布前改写该文件 Windows 段与 H3 段为实测结论（含口径边界「Round A'/B 不含派发维度」与三条 `child_id` 的磁盘佐证），
+  并同步 §5/§8 的源树对账口径与末行「发布记录」措辞；另在该行补一句说明**包内 README 为何按轮次无关措辞**（刻意的一轮闭环纪律、判定以台账为准、不是「未验证」），
+  避免公开正文与包内措辞被读作互相矛盾。该文件属 `docs/`、**不在包内**（`docs/` 成员 0）⇒ **产物字节与 sha256 未变**（仍 `f39517c3…`），不触发第 4 轮产物。
+- **其余 6 条 INFO 的处置**：① §2 待办项未与 §8 同步（合并/tag 已 [x]）⇒ 已改为「已执行（本地 `912de67`）」；
+  ② §10 前向引用「独立复核记录」缺失 + 预称「无阻断项」⇒ 由本小节补齐并改写该措辞；③ §7「不写轮次计数与结论数字」字面不精确
+  （包内平台行含**上一版历史**数字）⇒ 已改为「不写**本轮的**轮次结论数字」并注明历史数字跨轮稳定；④ §3/§5 `dist/` 作用域 ⇒ 已在修订中增设
+  §5 作用域注，独立复核确认 worktree `.worktrees/g-476-att-01/dist` = 0.20.2 且树 hash `37576f858ca29cd8` 相符；
+  ⑤ 复核期间主树 `porcelain=1`（本清单自身在编辑中）⇒ 复核后已提交、`porcelain` 归 0；⑥ `DSH_GATE_H3_DISPATCH_JSON` 字面量只在
+  `scripts/win-smoke-test.mjs` 出现（`platform-smoke-test.mjs` 经同一 `runHarnessProbes` 入口 + `opts.h3DispatchJson ?? process.env…`
+  + 子进程继承 env 等价获得）⇒ 属措辞层面，等价性成立。
+- **独立复核**未验证项（如实保留，**不得读作 PASS**）：① §6 运行期数字未由复核者复跑（其无原生 Windows 主机、不做构建）——
+  其中 `run-tests` 2411/2411 与 `tsc --noEmit` 0 错由主管在 tree == tag tree 的工作树复跑（§11 A），Windows 侧数字来源为**负责人真机回传**；
+  ② §5「同一构建树内重建重打 `cmp` 一致」未复跑（复核者只核对构建树 dist 树 hash 与 sha512 与文档一致）⇒ 发布侧以 §8 的**零构建论证**替代字面复现；
+  ③ §8「profile 安装/升级未执行」无正向证据，但与 registry `latest = 0.20.1` 自洽（现时确实无法安装 `dsh-graph@0.20.2`）。
+- **协作留痕（如实）**：独立复核期间本清单正被主管**并发编辑**（其基线 `0300e4b1` 为编辑中途版本）—— 这是**协调瑕疵**：该文件应先冻结再交复核。
+  BLOCK 结论不受影响（`release-notes` 当时未被编辑），INFO 第 4/5/6 条即由此产生。
+- **收口结论**：`BLOCK` 已闭合（发布正文与台账一致）；**产物指纹、tag 树版本串、远端未推送状态**三项独立确认为与清单一致；
+  发布前剩余风险仅剩**操作正确性**（`push` / `npm publish` / GitHub release / profile 验证），§10 已给出可复制命令与逐项对账期望值。
+
