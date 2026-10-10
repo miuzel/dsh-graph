@@ -1212,7 +1212,7 @@ dsh-graph 平台门禁 | 平台=win32/x64 node=v24.21.0 标注=非支持平台(w
 
 ---
 
-### 7.11 v0.20.2 Round B（完整 tarball 门禁）与 H3（派发可用）真机结论（**Round B 已回填：负责人真机实测 2026-10-10 · PASS；H3 仍待回填**）
+### 7.11 v0.20.2 Round B（完整 tarball 门禁）与 H3（派发可用）真机结论（**已回填：负责人真机实测 2026-10-10 · 两项全绿 PASS**）
 
 **为什么需要这两项**：
 
@@ -1286,7 +1286,38 @@ T5 · dsh-graph 路由已注册 / 看板载荷可读 / Web UI 可达 — HTTP 30
 
 | 平台 | 执行日期 | `reviewer` child_id | `collector` child_id | `executor-minimal` child_id | 事实文件 | 判定 | 执行人 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Windows · **v0.20.2**（隔离实例，端口 3093） | _待回填_ | _待回填_ | _待回填_ | _待回填_ | `%TEMP%\h3-dispatch-facts.json` | **_待回填_** | _待回填_ |
+| Windows · **v0.20.2**（隔离实例，端口 3093） | 2026-10-10 | `964dd21c…` | `218156f3…` | `391377c4…` | `%TEMP%\h3-dispatch-facts.json` | **PASS** | 负责人（miuzel） |
+
+**逐字回传（H3；两条门禁消费后的判定输出 + 事实文件三行实体）**：
+
+```text
+harness 组合矩阵 | 平台=win32 | H1=PASS H2=PASS H3=PASS H4=PASS H5=PASS H6=PASS | 清单=6 项（单一真源，win-smoke + platform-smoke 两件消费）
+T1 · H · H3 派发可用（隔离实例真派发 reviewer + collector + executor-minimal 各一次） — reviewer=child_id✓ collector=child_id✓ executor-minimal=child_id✓；事实来源=C:\Users\mingxuan\AppData\Local\Temp\h3-dispatch-facts.json
+win-smoke（--static-only . --h3-dispatch-json <facts>）: 结果=PASS 通过9/失败0/告警0
+platform-smoke（--static-only . --h3-dispatch-json <facts>）: 逐项=P1=WARN P2=PASS P3=PASS P4=PASS P5=WARN P6=PASS M4=PASS H=H1:PASS H2:PASS H3:PASS H4:PASS H5:PASS H6:PASS → 结果=PASS 通过13/失败0/告警2 转发exit=0
+
+facts.json: attempted=true  collected_at=2026-10-10T16:16:56.738Z  base=http://127.0.0.1:3093  workspace=%TEMP%\dsh-h3-v0202\ws
+  collector        / standard → 218156f3-da0d-452d-9c3e-c783d7ec4387  (goal=g-003, card=card-932963c4, errors=[])
+  executor-minimal / minimal  → 391377c4-b190-4424-98e3-df44f2703b26  (goal=g-004, att-001, baseline_commit=59ce20bd…, errors=[])
+  reviewer         / standard → 964dd21c-244a-441a-9d1a-1d3c0e949030  (goal=g-004, att-001, review_id=rev-att-001-01, candidate_commit=59ce20bd…, errors=[])
+
+磁盘侧独立佐证（隔离实例自己的看板，非采集器自述）：
+  …\ws\.dsh-graph\goals\g-003\cards\card-932963c4.md
+  …\ws\.dsh-graph\goals\g-004\attempts\att-001\attempt.md
+  …\ws\.dsh-graph\goals\g-004\reviews\rev-att-001-01.md
+```
+
+**H3 的四点判读（含两条防误读）**：
+
+1. **派发真的发生了**：三条路径各得**非空 UUID**、`errors` 全空、`child_error=null`；且三份实体文件在**隔离实例自己的磁盘**上独立存在
+   （与 Linux 轮同一取证口径：不接受采集器自述，必须落到实例看板文件上）。
+2. **⚠️ 控制台中文乱码 ≠ 产品缺陷**：回传的 `raw.steps` 里中文标题显示为乱码（如 `H3 鎺㈤拡 …`），成因是
+   **Windows PowerShell `Get-Content` 默认按 ANSI/GBK 解码 UTF-8 文件**（取证显示层）。同一实例上 **H5（CRLF/LF 与编码往返）探针 PASS**、
+   判据也不依赖控制台中文显示 ⇒ 两者不矛盾。回传/复核时用 `Get-Content -Encoding utf8`。
+3. **⚠️ `independent_ok=false` / `independent_missing=true` 属本口径内的预期**：H3 只回答「**派发是否起得来**」（非空 `child_id` + 无失败签名），
+   **不**回答「评审是否完成了独立验证」；后者由 g-436 的留痕规范另行承载。不得据此读作 H3 不完整，也不得读作独立验证已通过。
+4. **隔离判定字段形态正确**：`worktree=false / isolated=false / worktree_reason=type_default`（task 类型默认快速通道）与 g-406 语义一致 —— 顺带证明该判定字段在 win32 上形态正确。
+   另注：**H3 的 PASS 不替代 T1–T5**（§「为什么需要这两项」已写明），本版两者都在场。
 
 **H3 判定口径（与两道执行件同源，不是本小节的自由解释）**：事实文件形状
 `{ "attempted": true, "roles": [ { "role": …, "mode": …, "childId": …, "errors": [] } ] }`；
@@ -1304,11 +1335,12 @@ T5 · dsh-graph 路由已注册 / 看板载荷可读 / Web UI 可达 — HTTP 30
 两道门禁消费后 `win-smoke` = 通过 9/失败 0/告警 0、`platform-smoke` = 通过 15/失败 0/告警 0（`H3=PASS`）。
 逐字证据（实例启动、link 目标、两次 child_id、门禁输出、磁盘核对）见 `tmp/uat-v0202/h3-linux-evidence.md`。
 
-> ✅ **Round B 已回填**（2026-10-10，负责人真机实测 `15/0/1` × 两个宿主代际；agent 未预填 PASS/FAIL、未抄 Linux 结论）。
-> ⏳ **H3 仍为待回填** ⇒ **本版尚不能声称「Windows 上派发可用」**：T1–T5 全绿 + H1/H2 静态求交通过，
-> 都**不等于**三条路径真能起来（v0.20.1 的教训正是 T1–T5 全绿却漏掉派发问题）。
-> Round A' 的**回填位是上一小节 §7.10**（已由负责人真机实测回填）。
-> 🔴 红线保持：任何未回传项一律 `SKIP/待回填`；**不得由 agent 预填 PASS/FAIL、不得把 Linux 结论抄成 Windows 结论**（发布红线 1）。
+> ✅ **本小节两项（Round B / H3）均已回填**（2026-10-10，负责人真机实测；agent 未预填 PASS/FAIL、未把 Linux 结论抄成 Windows 结论）。
+> **Round B = PASS**（`15/0/1` × 两个宿主代际：配方锁定的 `0.2.1-alpha.2` + 附测 `0.2.0-rc.2`）；
+> **H3 = PASS**（三条路径真派发、非空 `child_id`、磁盘实体独立佐证）。Round A' 的回填位是上一小节 **§7.10**（同样已回填）。
+> ⇒ 本版**可**声称的 Windows 结论（三个维度都到场）：**安装 / 启动 / REST（T1–T5）**、**静态 harness 组合矩阵 H1–H6**、**真派发可用（H3）**。
+> ⇒ 本版**不可**声称的：原生 macOS 的任何结论（本版未验证）、以及 win32 上 P1/P5 两个恒定 WARN 所指的跨 FS 行为（未实测）。
+> 🔴 红线作为**流程纪律**保留：任何未回传项一律 `SKIP/待回填`，不得由 agent 预填结论、不得跨平台搬运结论（发布红线 1）。
 
 ---
 

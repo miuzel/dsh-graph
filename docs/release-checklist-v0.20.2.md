@@ -2,15 +2,19 @@
 
 > **本文件状态：发布准备 = 已完成（版本串转正三处 / `g352` 夹具复冻 / `CHANGELOG` 与守卫快照 / 发布正文真源 /
 > 本清单 / 独立构建路径产物与对账 / H3 派发可用事实在 Linux 隔离实例跑通 / 自证闸门 全部落地）；
-> 平台回填 = **未开始**（原生 Windows 的 Round A' / Round B / H3 三段由负责人执行，**结论一律未预填**）；
+> 平台回填 = **已完成**（原生 Windows 的 Round A' / Round B / H3 三段由负责人真机执行，**结论已填齐**，见
+> `docs/platform-gate.md` §7.10 / §7.11，**无一项由 agent 预填**）；
 > 发布态动作（合并 `main`、打 tag、`push`、`npm publish`、GitHub release、profile 安装升级）一律**未执行**，
 > 逐条列于 §8「待负责人执行」。**
 >
-> **平台真机结论（本版如实标注）：原生 Windows = 尚无结论**（候选包的 Round A' / Round B / H3 待负责人回传；
-> 在回传之前**不得读出任何「Windows 已通过」**，更不得读作三维度齐全）；**Linux / WSL2 = 已实测通过**
-> （整套件自证闸门全绿 + 两道门禁静态层全绿 + H3 三条派发路径真派发事实已回传）；**原生 macOS = 本版未验证**
-> ⇒ 两份 README 的平台状态表已按此如实标注（Windows 行**按「结论以台账为准」措辞、不预称任何轮次结果**，
-> macOS 行「本版未验证」）。
+> **平台真机结论（本版如实标注）：原生 Windows = 已实测通过**（候选包 `f39517c3…`：Round A' 静态复跑
+> win-smoke `8/0/0` + platform-smoke `12/0/2`；Round B 完整 tarball 门禁 `通过15/失败0/告警1`、T3 生命周期 32/32；
+> H3 三条派发路径真派发 ⇒ 矩阵 `H1–H6` **6/6**、win-smoke `9/0/0`、platform-smoke `13/0/2`；详见 §7.10 / §7.11）；
+> **Linux / WSL2 = 已实测通过**（整套件自证闸门全绿 + 两道门禁静态层全绿 + H3 三条派发路径真派发事实已回传）；
+> **原生 macOS = 本版未验证**；win32 上 `P1`（大小写不敏感卷）与 `P5`（无第二可写 FS）为**恒定 WARN**，
+> P1 已由负责人裁决**记为已知限制、不改引擎**（§7.10）。
+> ⇒ 两份 README 的平台状态表按 **「结论以台账为准」措辞**（**不写轮次计数与结论数字** —— 包内文件保持跨轮稳定；
+> 三段回填全部只落在 `docs/` ⇒ **未触发第 4 轮产物**，§7「一轮闭环」核验成立）。
 >
 > 结构对照 [`docs/release-checklist-v0.20.1.md`](release-checklist-v0.20.1.md)。
 
@@ -63,15 +67,15 @@
 - [x] `CHANGELOG.md` 首部「逐版本门禁结论」链接改指 `docs/release-checklist-v0.20.2.md`（§6）
 - [x] 发布正文真源 `docs/release-notes-v0.20.2.md` 入库（结构同 v0.20.1 模板：要点 + 安装/升级 + 验证与产物，§6）
 - [x] `g352` 冻结签名 fixture 按维护者通道复冻：**仅** `source-commit` / `source-sha256` 变化（hunk `2,3c2,3`），正文与 `content-sha256` 逐字节未变（§6）
-- [x] `docs/platform-gate.md`：**§7.10（Round A' 回填位）保持未预填**；新建 **§7.11** 作为本版 Round B 与 H3 的回填位（§7）
-- [x] Windows 三段执行配方 `tmp/uat-v0202/WINDOWS-GATE-RECIPE.md`（Round A' 静态复跑 / Round B 完整 tarball 门禁 / H3 三派发事实采集）落地，含两条一手互操作事实与「组合声明发现是加法式的」判读要点（tmp/，不入 git）
+- [x] `docs/platform-gate.md`：**§7.10（Round A' 回填位）保持未预填**；新建 **§7.11** 作为本版 Round B 与 H3 的回填位（§7）；**(回填后) §7.10 / §7.11 均由负责人真机实测数据填齐**（§7）
+- [x] Windows 三段执行配方 `tmp/uat-v0202/WINDOWS-GATE-RECIPE.md`（Round A' 静态复跑 / Round B 完整 tarball 门禁 / H3 三派发事实采集）落地，含两条一手互操作事实与「组合声明发现是加法式的」判读要点（tmp/，不入 git）；**(执行后修正)** 树包须含 `node_modules/yaml`（解在仓库内=假绿）、`platform-smoke` 在 win32 的期望为 `13/0/2`、Windows 侧不用裸 `dsh` 名字/不把带 `--flag` 的命令包进 PowerShell 函数
 - [x] **H3 派发可用在 Linux 隔离实例上跑通**：隔离实例装候选 `dist`（`link:`）→ 真派发 `collector` / `executor-minimal` / `reviewer` 三条路径 → 真 `child_id` 收成事实文件 → 两道门禁消费后 `H3=PASS`；磁盘侧独立核对命中（§4；证据 `tmp/uat-v0202/h3-linux-evidence.md`）
 - [x] 本清单建立：状态 / 执行树 / 版本一致性 / 三维度兼容口径 / 独立构建路径产物对账 / 闸门 / 平台诚实性 / 待负责人执行（全文）
 - [x] 产物在隔离 worktree 内构建并打包：记录文件名 + 字节数 + sha256 + sha1 + **43 成员** + `docs/` 成员 0 + 包版本 `0.20.2`；**重建重打与本产物 `cmp` 逐字节一致**；打包后移除 `dist/*.tgz`（§5）
-- [x] 自证闸门全绿：`node scripts/run-tests.mjs`（2411/2411）+ `tsc --noEmit`（0 错）+ `node --check dist/lib/client.js`（§6）
-- [ ] **原生 Windows 真机门禁 Round A'（静态复跑：复验 H1/H2/H4 修复）** —— **待负责人执行**，配方 §段 1；结论回填 `docs/platform-gate.md` **§7.10**
-- [ ] **原生 Windows 真机门禁 Round B（完整 tarball 门禁 T1–T5，宿主 `0.2.1-alpha.2`）** —— **待负责人执行**，配方 §段 2；结论回填 `docs/platform-gate.md` **§7.11**
-- [ ] **原生 Windows H3（三条派发路径真派发事实）** —— **待负责人执行**，配方 §段 3（Windows 隔离实例 + 同一采集器）；结论回填 `docs/platform-gate.md` §7.11 的 H3 段
+- [x] 自证闸门全绿：`node scripts/run-tests.mjs`（2411/2411）+ `tsc --noEmit`（0 错）+ `node --check dist/lib/client.js`（§6）；三段真机回填后于 tip 复跑同样全绿
+- [x] **原生 Windows 真机门禁 Round A'（静态复跑：复验 H1/H2/H4 修复）** —— **已执行 · PASS**：win-smoke `8/0/0`、platform-smoke `12/0/2`、矩阵 `H1..H6 = PASS/PASS/SKIP/PASS/PASS/PASS`（H4 在真实 NTFS 上由 FAIL 反转）；结论见 `docs/platform-gate.md` **§7.10**
+- [x] **原生 Windows 真机门禁 Round B（完整 tarball 门禁 T1–T5，宿主 `0.2.1-alpha.2`）** —— **已执行 · PASS**：`结果=PASS 通过15/失败0/告警1`（T3 生命周期 32/32；唯一告警=包内无 `core/*.ts` 故台账不对账，设计内）；附测旧代际 `0.2.0-rc.2` 同样 `15/0/1`；产物指纹 `f39517c3…` 双向对账一致；结论见 §7.11
+- [x] **原生 Windows H3（三条派发路径真派发事实）** —— **已执行 · PASS**：三条路径各得非空 `child_id`（`964dd21c…` / `218156f3…` / `391377c4…`）、`errors` 全空、磁盘实体独立佐证；两道门禁消费后 `H3=PASS`（win-smoke `9/0/0`、platform-smoke `13/0/2`）；结论见 §7.11 的 H3 段
 - [ ] **原生 macOS 真机门禁** —— **本版未执行**（§7）
 - [ ] 合并 `main` / 打 annotated tag / `push` / `npm publish` / GitHub release / profile 安装升级 —— **待负责人执行**（§8）
 
@@ -134,9 +138,16 @@
      ⇒ 派发确实发生，不是响应字段自报；
   6. 门禁消费后：`win-smoke --static-only . --h3-dispatch-json <facts>` ⇒ `H3=PASS`、**通过 9 / 失败 0 / 告警 0**；
      `platform-smoke --static-only . --h3-dispatch-json <facts>` ⇒ `H3=PASS`、**通过 15 / 失败 0 / 告警 0**。
-- **Windows 侧 H3 仍待负责人回传** ⇒ 在回传之前，Windows 的**派发可用维度未经真机验证**，不得读作已通过。
+- **Windows 侧 H3 = 已由负责人真机回传并判 PASS**（`docs/platform-gate.md` §7.11 的 H3 段）：
+  三条路径真派发得非空 `child_id`（`reviewer` `964dd21c…` / `collector` `218156f3…` / `executor-minimal` `391377c4…`），
+  `errors` 全空，且同一实例磁盘上 `goals/g-003/cards/card-932963c4.md`、`goals/g-004/attempts/att-001/attempt.md`、
+  `goals/g-004/reviews/rev-att-001-01.md` 真实存在（与 Linux 轮同口径的磁盘侧独立核对）；
+  两道门禁消费后 `win-smoke --static-only . --h3-dispatch-json <facts>` ⇒ `H3=PASS`、**通过 9 / 失败 0 / 告警 0**；
+  `platform-smoke …` ⇒ `H3=PASS`、**通过 13 / 失败 0 / 告警 2**（`P1`/`P5` 为 win32 恒定 WARN，与 H3 无关）。
   配方见 `tmp/uat-v0202/WINDOWS-GATE-RECIPE.md` §段 3（含 `--init-git-if-needed`：reviewer 路径要求候选 commit
   可 `git rev-parse`，非 git workspace 时只建一个仅含标记文件的 scratch 仓库）。
+  ⚠️ 回传文件在中文 Windows 控制台可能显示乱码（`Get-Content` 默认 ANSI 解码 UTF-8 文件）—— 属取证显示层，
+  非产品缺陷（同实例上 H5 编码往返探针 PASS）；复核用 `Get-Content -Encoding utf8`。
 
 ## 5. 发布产物与独立构建路径对账
 
@@ -197,8 +208,8 @@ sha256 与上表逐字比对（仍是发布时点动作，见 §8）。
 | 类型检查 | `./node_modules/.bin/tsc --noEmit -p tsconfig.json` | **exit 0**（零错） |
 | 产物语法 | `node --check dist/lib/client.js` | **exit 0** |
 | 门禁自检（静态） | `node scripts/win-smoke-test.mjs --self-test` | **全通过**（H 清单审计 + H 消费审计 + 变体必红 + 矩阵行） |
-| Windows 执行件（静态层） | `node scripts/win-smoke-test.mjs --static-only .` | **通过 8 / 失败 0 / 告警 0**（`H3=SKIP(需真机/实例)`）；回传 H3 事实后 **通过 9 / 失败 0 / 告警 0** |
-| 跨平台执行件（静态层） | `node scripts/platform-smoke-test.mjs --static-only .` | **通过 14 / 失败 0 / 告警 0**（`P1–P6` 全 PASS、`M4` PASS、`H3=SKIP`）；回传 H3 事实后 **通过 15 / 失败 0 / 告警 0** |
+| Windows 执行件（静态层） | `node scripts/win-smoke-test.mjs --static-only .` | **Linux：通过 8 / 失败 0 / 告警 0**（`H3=SKIP(需真机/实例)`）；**原生 Windows Round A'：通过 8 / 失败 0 / 告警 0**；回传 H3 事实后（Linux 与 Windows **均为通过 9 / 失败 0 / 告警 0**、`H3=PASS`、矩阵 `H1–H6` 6/6） |
+| 跨平台执行件（静态层） | `node scripts/platform-smoke-test.mjs --static-only .` | **Linux：通过 14 / 失败 0 / 告警 0**（`P1–P6` 全 PASS、`M4` PASS、`H3=SKIP`）→ 回传 H3 事实后 **通过 15 / 失败 0 / 告警 0**；**原生 Windows（Round A'）：通过 12 / 失败 0 / 告警 2** → 回传 H3 事实后 **通过 13 / 失败 0 / 告警 2**（`P1`/`P5` 为 win32 恒定 WARN；两平台数字不同属预期，不是回归） |
 
 **一次过程留痕（如实）**：本 attempt 首轮跑自证闸门时出现 2 条失败，均来自**同一时点**的
 「源码已改 0.20.2、`dist/` 还是 0.20.1」新鲜度检查（`g353` / `g312` 的负向对照项）——即我自己的编辑与
@@ -209,25 +220,31 @@ sha256 与上表逐字比对（仍是发布时点动作，见 §8）。
 | 平台 | 本版（`v0.20.2`）状态 | README 落点 |
 |---|---|---|
 | Linux / WSL2 | ✅ 已实测通过（本版整套件自证闸门 2411/2411 `fail=0`；两道门禁静态层全绿；H3 三条派发路径真派发事实已回传并判 PASS） | 两份 README 平台表首行 |
-| 原生 Windows（红线 1） | ⏳ **本版尚无结论** —— 候选包（sha256 `f39517c3…`）的 **Round A'（静态复跑）/ Round B（T1–T5，宿主 `0.2.1-alpha.2`）/ H3（三条派发路径）** 由负责人执行；配方见 `tmp/uat-v0202/WINDOWS-GATE-RECIPE.md`（三段）。**在回传前不得读出「Windows 已通过」**；回填位 = `docs/platform-gate.md` **§7.10**（Round A'，保持未预填）与 **§7.11**（Round B 与 H3，本轮新建）。**Round A' / Round B 都只覆盖安装 / 启动 / REST 层，派发维度只由 H3 回答** | `README.md:34` / `dsh-graph-host/README.md:52` / 英文镜像 `:294`（**按台账指向措辞，不预称轮次结果**） |
+| 原生 Windows（红线 1） | ✅ **已实测通过**（负责人真机，2026-10-10，针对候选包 sha256 `f39517c3…`）：**Round A'** 静态复跑 win-smoke `8/0/0` + platform-smoke `12/0/2`、矩阵 `H1/H2/H4/H5/H6=PASS`（`H4` 在真实 NTFS 上由 FAIL 反转）；**Round B** 完整 tarball 门禁 `通过15/失败0/告警1`、T3 生命周期 `32/32`（附测旧代际宿主 `0.2.0-rc.2` 同样 `15/0/1`）；**H3** 三条派发路径真派发（非空 `child_id` + 磁盘实体佐证）⇒ `H3=PASS`、win-smoke `9/0/0`、platform-smoke `13/0/2`。结论见 `docs/platform-gate.md` **§7.10 / §7.11**（**无一项由 agent 预填**）。⚠️ 口径边界：Round A' / Round B 只覆盖安装 / 启动 / REST 层，**派发维度只由 H3 回答**；`P1`（大小写不敏感卷）已裁决为**已知限制、不改引擎**，`P5`（无第二可写 FS）未实测 | `README.md:34` / `dsh-graph-host/README.md:52` / 英文镜像 `:294`（**按台账指向措辞，不写轮次计数与结论数字**） |
 | 原生 macOS | ⏳ **本版未验证** —— `v0.20.2` **未**在原生 macOS 上执行真机门禁 | `README.md:35` / `dsh-graph-host/README.md:53` / 英文镜像 `:295` |
 
-**一轮闭环核验（本版纪律）**：包内文件（含 `dsh-graph-host/README.md`）**不含任何随本轮真机结论变化的表述** ——
+**一轮闭环核验（本版纪律，已按实测结果验证）**：包内文件（含 `dsh-graph-host/README.md`）**不含任何随本轮真机结论变化的表述** ——
 平台表按「结论以台账为准」+ 宿主代际陈述，**不写轮次计数与结论数字**；`docs/` 与 `CHANGELOG.md` **不在包内**
-⇒ Round A' / Round B / H3 跑完后**只需回填 `docs/`**，**不会触发第 4 轮产物**（v0.20.1 曾因包内 README 写入轮次计数
-而多跑一轮；本版已避免）。§7.10 在准备阶段保持「待回填」原文，**未预填任何结论**。
+⇒ Round A' / Round B / H3 三段跑完后**只回填了 `docs/`**（§7.10 / §7.11 / 本清单），
+**候选产物字节与 sha256 全程未变**（仍为 `f39517c3…` / 1,444,792 B / 43 成员），**未触发第 4 轮产物**
+（v0.20.1 曾因包内 README 写入轮次计数而多跑一轮；本版已避免）。§7.10 / §7.11 在准备阶段保持「待回填」原文，
+**结论全部来自负责人真机回传，agent 未预填**。**⇒ 被测产物 ≡ 待发布产物**（同一 sha256）。
 
 ## 8. 待负责人执行（发布态动作 —— **本清单准备阶段一律未执行**）
 
-- [ ] **原生 Windows 真机门禁 Round A'**（静态复跑）：按 `tmp/uat-v0202/WINDOWS-GATE-RECIPE.md` §段 1 执行
-      （`--self-test` + `--static-only .`，复验 H1/H2/H4 修复；H3 无事实时为显式 `SKIP`）；报告与逐项明细回填
-      `docs/platform-gate.md` **§7.10**（**在该节原文之后追加**，不要改写「待回填」之前的既有轮次记录）。
-- [ ] **原生 Windows 真机门禁 Round B**（完整 tarball 门禁）：复制 §5 的 tarball 到 `%TEMP%` 并核对 sha256
-      `f39517c3…`，按配方 §段 2 用 `--dsh "npx -y @deepseek-ai/dsh@0.2.1-alpha.2" --tarball …` 跑 T1–T5；
-      报告回填 `docs/platform-gate.md` **§7.11**。⚠️ **口径边界**：只覆盖安装 / 启动 / REST 层，**不覆盖派发维度**。
-- [ ] **原生 Windows H3**（派发可用）：按配方 §段 3 起 Windows 隔离实例（`%TEMP%` 下 `DSH_HOME` + workspace，
-      端口 3093）→ GUI 新建会话 `graph_claim_supervisor` 接管 → `h3-collect-facts.mjs` 采集三条真 `child_id`
-      → 两道门禁 `--h3-dispatch-json` 消费；报告回填 §7.11 的 H3 段。
+- [x] **原生 Windows 真机门禁 Round A'**（静态复跑）—— **已执行 · PASS**（win-smoke `8/0/0`、platform-smoke `12/0/2`、
+      矩阵 `H1/H2/H4/H5/H6=PASS`、`H3=SKIP`；`H4` 在真实 NTFS 上由 FAIL 反转）；明细回填 `docs/platform-gate.md` **§7.10**
+      （追加在该节原文之后，既有轮次记录未改写）。❗执行中修正了两处配方问题：首轮手搓源码树缺 `node_modules/yaml`
+      ⇒ H1/H2/H4/H5 退化为 WARN（=没测到）且 P4.a/P6 FAIL，属**假绿环境的连带**，重建含 `yaml` 的树包并在无祖先
+      `node_modules` 的目录复跑后全绿（该次数字已在 §7.10 标为废弃，不得引用）。
+- [x] **原生 Windows 真机门禁 Round B**（完整 tarball 门禁）—— **已执行 · PASS**：`结果=PASS 通过15/失败0/告警1`、
+      T3 生命周期 `32/32`、产物指纹 `f39517c3…` 双向对账一致；附测旧代际宿主 `0.2.0-rc.2` 同样 `15/0/1`；回填 §7.11。
+      ⚠️ **口径边界**：只覆盖安装 / 启动 / REST 层，**不覆盖派发维度**。
+- [x] **原生 Windows H3**（派发可用）—— **已执行 · PASS**：`reviewer` `964dd21c…` / `collector` `218156f3…` /
+      `executor-minimal` `391377c4…` 三条真派发、`errors` 全空、实例磁盘实体佐证；两道门禁消费后 `H3=PASS`
+      （win-smoke `9/0/0`、platform-smoke `13/0/2`）；回填 §7.11 的 H3 段。
+      ❗执行中的三条环境修正（已写入配方）：Windows 侧**不用裸 `dsh` 名字**（PATH 上有 Desktop 的 `dsh.cmd`）、
+      **不把带 `--flag` 的命令包进 PowerShell 函数**（`--profile` 到不了 CLI）、装包用**单条 cmd.exe 命令行**形态。
 - [ ] **（可选）原生 macOS 真机门禁**：按 [`docs/platform-gate.md`](platform-gate.md) §5 命令序列执行；
       未执行则维持「本版未验证」。
 - [ ] **合并 `main`**：`v0.20.2-test` → `main`（`--no-ff`），并核对 `HEAD^{tree}` 与分支 tip tree 逐字相等。
@@ -240,7 +257,7 @@ sha256 与上表逐字比对（仍是发布时点动作，见 §8）。
       `gh release create v0.20.2 -R miuzel/dsh-graph <tarball> SHA256SUMS --title "v0.20.2" --notes-file docs/release-notes-v0.20.2.md`；
       发布后以 `gh release view --json body` 与真源**逐字比对**（唯一可接受差异：文末换行归一化）。
 - [ ] **profile 安装 / 升级验证**：全新 profile（隔离 `DSH_HOME`）按用户方式安装 `dsh-graph@0.20.2`，
-      复核三维度（安装 / 启动 / **派发可用**：派发返回真实 `child_id`；Linux 侧已实证，Windows 侧以 H3 报告为准）。
+      复核三维度（安装 / 启动 / **派发可用**：派发返回真实 `child_id`；Linux 与原生 Windows 均已实证，见 §7.11 H3 段）。
 - [ ] **发布源树对账**：在 `v0.20.2` tag 树上重建重打，sha256 与 §5 逐字比对（跨树可复现性）。
 - [ ] 在看板决定 `v0.20.2` 泳道状态（`released` 与否），并归档本轮临时产物（`tmp/uat-v0202/`）。
 
