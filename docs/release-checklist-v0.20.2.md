@@ -4,8 +4,9 @@
 > 本清单 / 独立构建路径产物与对账 / H3 派发可用事实在 Linux 隔离实例跑通 / 自证闸门 全部落地）；
 > 平台回填 = **已完成**（原生 Windows 的 Round A' / Round B / H3 三段由负责人真机执行，**结论已填齐**，见
 > `docs/platform-gate.md` §7.10 / §7.11，**无一项由 agent 预填**）；
-> 发布态动作：**合并 `main` 与打 annotated tag `v0.20.2` 已执行（2026-10-11，本地；合并提交 `912de67`；tag 见 §8 —— 因发布前复核修掉 1 条 BLOCK，tag 已按负责人决定**重打到发布态收尾提交**，以 `git rev-parse v0.20.2^{commit}` 为准）**；
-> **`push` / `npm publish` / GitHub release / profile 安装升级 一律未执行**，逐条列于 §8「待负责人执行」。**
+> 发布态动作：**已由负责人全部执行完毕** —— 合并 `main`（`912de67`）、annotated tag `v0.20.2`（重打后 `254d3ce`）、`git push`、`npm publish`、GitHub release `v0.20.2`
+> 均已完成并**逐字对账通过**（详见 §8 与 §11 C：npm `shasum`/`fileCount`/`integrity` 三项与本地期望值相符 ⇒ **发布产物 ≡ 被测产物**）；
+> **仅剩 `profile 安装 / 升级验证` 未执行**（§8 末）。**
 >
 > **平台真机结论（本版如实标注）：原生 Windows = 已实测通过**（候选包 `f39517c3…`：Round A' 静态复跑
 > win-smoke `8/0/0` + platform-smoke `12/0/2`；Round B 完整 tarball 门禁 `通过15/失败0/告警1`、T3 生命周期 32/32；
@@ -266,12 +267,13 @@
   **为何重打**：首次 tag 的树内 `docs/release-notes-v0.20.2.md` 还是回填前旧稿（写「Windows 结论尚不存在」），与同树的 §7.10/§7.11 PASS 自相矛盾；
   重打后 tag 树 == 主树终态，该矛盾消失。**重打安全**：tag 未推送、无外部引用，且**非 `docs/` 改动为 0 文件** ⇒ 与发布产物的同源关系不受影响。
   ❗本清单的数条勾选与修订发生在首次 tag 之后（`docs/` 不入包 ⇒ 不影响发布产物；产物 sha256 全程未变）。
-- [ ] **`git push`**（`main` + tag）—— **未执行**（负责人不可逆门）。
-- [ ] **`npm publish`**：推荐**直发 §5 的 tarball**（手册步骤 4'，registry 不重打）⇒ `npm view dsh-graph@0.20.2 dist --json`
-      的 `shasum` 应 == 本地 sha1 `059fae1b…`、`fileCount` == **43**；`integrity` 与本地 sha512 逐字对账。
-- [ ] **GitHub release `v0.20.2`**：附件 = tarball + `SHA256SUMS`；正文用
-      `gh release create v0.20.2 -R miuzel/dsh-graph <tarball> SHA256SUMS --title "v0.20.2" --notes-file docs/release-notes-v0.20.2.md`；
-      发布后以 `gh release view --json body` 与真源**逐字比对**（唯一可接受差异：文末换行归一化）。
+- [x] **`git push`**（`main` + tag）—— **已由负责人执行**：GitHub `main` = `254d3ce`；`refs/tags/v0.20.2` → tag 对象 `f159b5fd5ef353d0c259b5e9696c3dac0460815c` → **commit `254d3ce`**（`gh api` 核）。
+- [x] **`npm publish`**（直发 §5 tarball）—— **已由负责人执行并逐字对账通过**：`npm view dsh-graph@0.20.2 dist --json` ⇒
+      `shasum` = **`059fae1b6393a1d5c5c35442d10e8a24406e5683`**、`fileCount` = **43**、`integrity` = **`sha512-L8HdagJWaUuq4gpHTp8EN5xVg2vNUPVtnRZ0F1lqUPcnQtSVCwicAW4fkSDDkzKgXovSDc6Sw/nsU0eAFxa5AQ==`**
+      —— 三项与本地期望值**逐字相符**；`dist-tags.latest` = `0.20.2` ⇒ **发布产物 ≡ 被测产物**。
+- [x] **GitHub release `v0.20.2`** —— **已由负责人创建**（`2026-10-10T17:51:54Z`），附件 = `dsh-graph-0.20.2.tgz` + `SHA256SUMS`；
+      附件 `SHA256SUMS` 下载复核 = `f39517c3…`（与 §5 一致）；正文与 `docs/release-notes-v0.20.2.md` 逐字比对通过
+      （`diff` 仅 1 行：GitHub 追加的文末空行，属约定内唯一差异）⇒ **正文用的是修好 BLOCK 之后的那份**。
 - [ ] **profile 安装 / 升级验证**：全新 profile（隔离 `DSH_HOME`）按用户方式安装 `dsh-graph@0.20.2`，
       复核三维度（安装 / 启动 / **派发可用**：派发返回真实 `child_id`；Linux 与原生 Windows 均已实证，见 §7.11 H3 段）。
 - [x] **发布源树对账**（跨树可复现性）—— **已按零构建论证闭合**：tag 树 == 发布线 tip 树（同一 tree hash `17672def…`），
@@ -279,7 +281,10 @@
       两者都不在包内）⇒ **包相关输入与打包时逐字节相同**；再叠加此前已证的「重建重打 ≡ 本产物」（`cmp` 逐字节一致，§2）与构建确定性
       ⇒ tag 树产出的包 ≡ §5 产物（sha256 `f39517c3…`）。**未做额外的第二次重建**（避免无谓构建）；
       如需字面复现，可在 tag 树的隔离 worktree 内 `bash scripts/build.sh` + `dist/` 内 `npm pack` 后与 §5 对账（**不得在主树构建**）。
-- [ ] 在看板决定 `v0.20.2` 泳道状态（`released` 与否），并归档本轮临时产物（`tmp/uat-v0202/`）。
+- [x] 看板 `v0.20.2` 泳道状态置 **`released`**（`2026-10-11`，发布完成后；与 `v0.20.1`/`v0.20.0`/`v0.19.8` 等既有已发布泳道同口径）。
+- [ ] 归档 / 清理本轮临时产物（`tmp/uat-v0202/`）—— **未执行**：其中 `WINDOWS-GATE-RECIPE.md`、`h3-linux-evidence.md`、`h3-dispatch-facts.json`
+      被本清单 / 发布正文引用为证据落点，且 `dsh-graph-0.20.2.tgz` 是已发布产物（本地留一份可离线复核）⇒ 建议**保留证据与产物**，
+      仅当负责人明确要求时再清理（`tmp/` 本就不入版本控制）。
 
 ## 9. 发布期约束（**必须先合 `main`，否则文档与 README 的图链接 404**）
 
@@ -292,14 +297,16 @@
 图路由本身（插件自带只读路由 `/api/dsh-graph/diagram/<name>`，从 `dist/diagrams/` 现读）与包内相对资产**不受此约束**。
 该约束来自 `g-460` 判据 15，是**发布顺序**要求，不是缺陷。
 
-## 10. 负责人发布交接单（可复制；**agent 未执行、不代执行**）
+## 10. 负责人发布交接单（**已执行完毕**，2026-10-10/11；命令与对账期望值保留备查）
 
 > **发版前复核已完成（2026-10-11）**：主管侧逐条复核 §1–§7 通过，并修正 3 处**措辞不精确**（`dist/` 作用域、源树对账口径、§8 时态）；
-> **独立复核判出 1 条 BLOCK** —— 发布正文真源 `docs/release-notes-v0.20.2.md` 仍是回填前旧稿，照 §10 的 `gh release create --notes-file` 发布
+> **独立复核判出 1 条 BLOCK** —— 发布正文真源 `docs/release-notes-v0.20.2.md` 仍是回填前旧稿，照本节的 `gh release create --notes-file` 发布
 > 会把「本版 Windows 无结论」写成公开正文；**已在发布前修好**（正文改用 §7.10/§7.11 真机结论；该文件属 `docs/`、不在包内 ⇒ **产物 sha256 不变**）。
 > 两份记录见 §11。
-> **待发布真值**（以命令实测为准）：`main` = 发布态收尾提交（`git rev-parse --short main`）｜tag `v0.20.2` → **`main` tip**（重打后；`git rev-parse --short 'v0.20.2^{commit}'`）｜`origin/main = 57a16a7`（**未推送**）｜
-> registry `latest = 0.20.1`（**0.20.2 未发布**）｜产物 sha256 `f39517c3…` / 1,444,792 B / 43 成员。
+> **发布后真值（实测）**：GitHub `main` = **`254d3ce`**｜`refs/tags/v0.20.2` → tag 对象 `f159b5fd…` → **commit `254d3ce`**｜
+> GitHub release `v0.20.2` 建于 `2026-10-10T17:51:54Z`（附件 tarball + `SHA256SUMS`）｜npm `dist-tags.latest` = **`0.20.2`**，
+> `dist` 对账 `shasum 059fae1b…` / `fileCount 43` / `integrity sha512-L8Hdag…` **三项逐字相符** ⇒ 发布产物 ≡ 被测产物（sha256 `f39517c3…` / 1,444,792 B / 43 成员）。
+> 本节保留为**可复制交接单与对账依据**（含期望值），便于复核与回溯；`profile 安装 / 升级验证` 仍待执行（见 §8 末）。
 
 ```bash
 # 0) 前置复核（四条都应命中）
@@ -382,4 +389,17 @@ gh release view v0.20.2 -R miuzel/dsh-graph --json body > body.json   # 与真�
   BLOCK 结论不受影响（`release-notes` 当时未被编辑），INFO 第 4/5/6 条即由此产生。
 - **收口结论**：`BLOCK` 已闭合（发布正文与台账一致）；**产物指纹、tag 树版本串、远端未推送状态**三项独立确认为与清单一致；
   发布前剩余风险仅剩**操作正确性**（`push` / `npm publish` / GitHub release / profile 验证），§10 已给出可复制命令与逐项对账期望值。
+
+**C. 发布后核验（2026-10-11，负责人执行完发布动作后由主管实测）**：
+
+| 核验点 | 结果 | 证据（单行） |
+|---|---|---|
+| tag 对象 → commit | ✅ | `gh api …/git/tags/f159b5fd…` → `v0.20.2 -> 254d3ce (commit)` |
+| GitHub `main` | ✅ | `gh api …/commits/main` → `254d3ce`（与本地一致） |
+| release 附件 | ✅ | `gh release download … SHA256SUMS` → `f39517c3… dsh-graph-0.20.2.tgz`（与 §5 一致） |
+| release 正文 | ✅ | 与 `docs/release-notes-v0.20.2.md` 逐字比对，`diff` 仅 1 行（GitHub 追加文末空行）；旧稿断言 `结论尚不存在` = 0 处 |
+| npm 产物对账 | ✅ | `shasum 059fae1b…` / `fileCount 43` / `integrity sha512-L8Hdag…` 三项与本地期望值**逐字相符**；`dist-tags.latest = 0.20.2` |
+| 被测 ≡ 发布 | ✅ | 上述 npm 三项 + release 附件 sha256 均指向同一候选产物 ⇒ **「被测产物 ≡ 发布产物」在发布后仍成立** |
+| 看板泳道 | ✅ | `v0.20.2` 置 `released`（`.dsh-graph/versions/v0.20.2/version.md`） |
+| 仍待执行 | ⏳ | `profile 安装 / 升级验证`（隔离 `DSH_HOME` 实装 `dsh-graph@0.20.2` 并复核三维度）；`tmp/uat-v0202/` 清理（建议保留证据与产物，见 §8 末） |
 
