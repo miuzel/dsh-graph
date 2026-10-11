@@ -764,6 +764,14 @@
       'settings.defaultTooltip': '继承当前 DSH profile 全局值',
       'settings.overrideTooltip': '自定义文本覆盖全局',
       'settings.disableTooltip': '显式禁用全局提示词',
+      // g-479：设置弹窗分类页签（labels/aria）+ 「界面与刷新」页签的本地偏好如实标注
+      'settings.tabsAria': '设置分类页签',
+      'settings.tab.executor': '模型与执行',
+      'settings.tab.review': '评审与质量',
+      'settings.tab.ui': '界面与刷新',
+      'settings.tab.advanced': '高级',
+      'settings.tab.about': '关于',
+      'settings.tabLocalNote': '本页两项为本地偏好：只保存在浏览器 localStorage，不写入 project.yaml，也不随项目配置同步。',
 
       // === 判据编辑弹窗 ===
       'criteria.editTitle': '✏️ 编辑质量判据',
@@ -1941,6 +1949,14 @@
       'settings.defaultTooltip': 'Inherit from current DSH profile global value',
       'settings.overrideTooltip': 'Custom text overrides global',
       'settings.disableTooltip': 'Explicitly disable global prompt',
+      // g-479：settings modal category tabs (labels/aria) + the local-preference note of the UI tab
+      'settings.tabsAria': 'Settings category tabs',
+      'settings.tab.executor': 'Model & execution',
+      'settings.tab.review': 'Review & quality',
+      'settings.tab.ui': 'UI & refresh',
+      'settings.tab.advanced': 'Advanced',
+      'settings.tab.about': 'About',
+      'settings.tabLocalNote': 'Both items on this tab are local preferences: stored in browser localStorage only, never written to project.yaml and never synced with project config.',
 
       // === Criteria modal ===
       'criteria.editTitle': '✏️ Edit Quality Criteria',

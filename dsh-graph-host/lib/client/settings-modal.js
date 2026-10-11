@@ -229,6 +229,51 @@
       none: "settings.reviewPolicyNone",
     };
     const normalizeReviewPolicyDraft = (v) => (REVIEW_POLICY_VALUES.includes(v) ? v : "");
+
+    // ===== g-479：分类页签（唯一真源）=====
+    // 现状单列滚动 + 「高级设置」折叠 → 分类页签结构。这里把**页签集合**与**配置项归属**写在一处，
+    // 供渲染（页签栏/面板）与结构守卫（core/tests/g479-settings-tabs.test.ts）共用：
+    // 每个可编辑配置项**恰好**归属一个页签，漏项（任何配置项无归属）与重复（多项挂同一键或
+    // 同一项出现在两个页签）都必须判红——这就是「配置项 → 页签归属」结构守卫的真源。
+    // 键名与 project.yaml / localStorage 的叶子路径同名；`local.*` 前缀明确标注为**本地偏好**
+    // （只写 localStorage，不写 project.yaml）。
+    const SETTINGS_TAB_KEYS = ["executor", "review", "ui", "advanced", "about"];
+    const SETTINGS_DEFAULT_TAB = "executor";
+    const SETTINGS_TAB_LABEL_KEYS = {
+      executor: "settings.tab.executor",
+      review: "settings.tab.review",
+      ui: "settings.tab.ui",
+      advanced: "settings.tab.advanced",
+      about: "settings.tab.about",
+    };
+    const SETTINGS_TAB_ITEMS = {
+      executor: ["executor.provider", "executor.model", "executor.reasoning_effort", "executor.mode"],
+      review: ["review.policy", "review.regions", "review.contract_paths", "review.non_product_prefixes", "supervisor.agent_teams"],
+      ui: ["local.refresh_interval", "local.live_display"],
+      advanced: [
+        "defaults.review.reviewer",
+        "defaults.review.prompt",
+        "defaults.pk.lanes",
+        "defaults.pk.sandbox",
+        "supervisor.automation.scope_planning",
+        "supervisor.automation.integration_decision",
+        "supervisor.automation.rework",
+        "supervisor.automation.memory_promotion",
+        "supervisor.automation.skill_proposal",
+        "supervisor.automation.release",
+        "prompt_overrides.subagent",
+      ],
+      about: ["config.project_yaml"],
+    };
+
+    /** g-479：评审条件校验错误文案的**唯一**构造点——save 的拒绝提交与「错误定位到所属页签」
+     *  共用它，避免两处各写一遍（也就不会再漂移）。 */
+    function reviewConditionErrorText(form) {
+      return collectReviewListErrors(form)
+        .map((e) => dgT(e.key, { ...e.params, field: dgT(REVIEW_LIST_LABEL_KEYS[e.field] ?? e.field) }))
+        .join("；");
+    }
+
     function SettingsModal(props) {
       useLocaleRevision();
       const modeIdRef = React.useRef(null);
@@ -243,7 +288,10 @@
       const [saving, setSaving] = React.useState(false);
       const [note, setNote] = React.useState(null); // {kind:"ok"|"err", text}
       const [error, setError] = React.useState(null);
-      const [showAdvanced, setShowAdvanced] = React.useState(false);
+      // g-479：第 5 个 useState 槽位由「高级折叠开关」升级为「当前激活页签」——**槽位数与顺序一字不变**
+      // （既有 vm 渲染测试按 hook 调用序覆写 0..10 槽位；新状态只能追加在第 10 槽位之后）。
+      // `showAdvanced`（原折叠是否展开）作为它的派生读法保留，语义等价：高级页签激活 ≡ 高级区可见。
+      const [activeTab, setActiveTab] = React.useState(SETTINGS_DEFAULT_TAB);
       // att-002：服务端下发的 canonical .dsh-graph/project.yaml 绝对路径（只消费，不自行猜 graphRoot）
       const [configFile, setConfigFile] = React.useState(null);
       // g-214：刷新间隔配置（localStorage 持久化，下限 5s）
@@ -329,6 +377,14 @@
       // g-246：backdrop 关闭走统一 requestClose 拦截（脏草稿先确认）
       const backdropGuard = useBackdropClose(requestClose);
 
+      // g-479：错误定位到所属页签——save 因评审条件校验拒绝提交时，note.text 正是
+      // reviewConditionErrorText(form)（同一个字符串，非文本匹配猜测）；此时把「评审与质量」
+      // 页签切到前台，使用户在当前可见页面上就能看到出错字段。只在**保存被拒**后触发
+      // （note 是保存路径的产物，输入期不触发，不会在编辑时把用户从别的页签拽走）。
+      React.useEffect(() => {
+        if (note?.kind === "err" && note.text === reviewConditionErrorText(form)) setActiveTab("review");
+      }, [note]);
+
       const save = async () => {
         if (!form) return;
         setSaving(true); setNote(null); setError(null);
@@ -342,12 +398,9 @@
         // 失败即拒绝提交：不发 POST、不改基线、不写 localStorage ⇒ 零副作用、不留半保存状态。
         const reviewErrors = collectReviewListErrors(form);
         if (reviewErrors.length > 0) {
-          setNote({
-            kind: "err",
-            text: reviewErrors
-              .map((e) => dgT(e.key, { ...e.params, field: dgT(REVIEW_LIST_LABEL_KEYS[e.field] ?? e.field) }))
-              .join("；"),
-          });
+          // g-479：文案走唯一构造点 reviewConditionErrorText——它与渲染期「错误定位到所属页签」
+          // 共用同一个字符串，页签切换只依赖既有 note 状态，绝不改本函数的副作用与提交语义。
+          setNote({ kind: "err", text: reviewConditionErrorText(form) });
           setSaving(false); return;
         }
         // g-442：稀疏 patch——只提交相对加载基线变化了的叶子；改回原值不提交、全部未改则为空 patch。
@@ -604,191 +657,246 @@
       // 选项 style 与 automationOptions / mode select 同源（g-176 主题变量，不硬编码暗色）
       const policyOptionStyle = { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" };
 
+      // ===== g-479：分类页签（页签 → 面板；配置项归属表见模块级 SETTINGS_TAB_ITEMS）=====
+      // ① `showAdvanced` 的语义位（第 5 个 useState 槽）已由 `activeTab` 承接：高级页签激活 ≡ 原
+      //    「显示高级设置」折叠展开 ⇒ 既有 `display: showAdvanced ? "flex"/"grid"/"block" : "none"`
+      //    表达式逐字保留、且仍是诚实的（保锚点与本改造的正确性不冲突）。
+      const showAdvanced = activeTab === "advanced";
+      // ② 页签按钮：选中页签与下方面板同底色、下移 1px 覆盖分隔线（沿用 goal-modal 的页签视觉）。
+      const tabButton = (tabKey) => h("button", {
+        key: tabKey,
+        className: "dg-btn dg-settings-tab" + (activeTab === tabKey ? " dg-settings-tab-active" : ""),
+        role: "tab",
+        "aria-selected": activeTab === tabKey,
+        style: {
+          fontSize: 12, padding: "4px 12px", cursor: "pointer",
+          marginBottom: -1, borderRadius: "6px 6px 0 0",
+          border: "1px solid " + (activeTab === tabKey ? "rgba(128,128,128,.35)" : "transparent"),
+          borderBottom: "none",
+          background: activeTab === tabKey ? "rgba(128,128,128,.10)" : "transparent",
+          fontWeight: activeTab === tabKey ? 700 : 400,
+          color: activeTab === tabKey ? "var(--dsw-alias-label-primary, #8ab4ff)" : "inherit",
+          opacity: activeTab === tabKey ? 1 : 0.7,
+        },
+        onClick: () => setActiveTab(tabKey),
+      }, dgT(SETTINGS_TAB_LABEL_KEYS[tabKey]));
+      // ③ 面板**无条件渲染**、只用 display 切可见性：所有编辑态共用同一个 `form` 草稿 ⇒ 跨页签不丢
+      //    编辑、脏状态与关闭拦截（baselineRef + settingsDraftIsDirty）零改动；同时既有 vm 渲染树
+      //    测试（nodesOfType / textareaByAria 遍历全树）仍能找到每个控件——条件渲染会让非当前页签
+      //    的控件整棵消失，直接打断 8 个测试文件的结构锚点。
+      const tabPanel = (tabKey, items) => h("div", {
+        key: tabKey,
+        className: "dg-settings-panel dg-settings-panel-" + tabKey,
+        role: "tabpanel",
+        style: { display: activeTab === tabKey ? "block" : "none" },
+      }, ...items);
+
       return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
           h("div", { style: S.modalH }, dgT("settings.title")),
           h("div", { style: S.meta }, dgT("settings.editHint")),
-          // att-002：配置文件操作入口——复用 goal-modal 的 Host openPath/copyText/toast/fallback 机制
-          configFile
-            ? h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginTop: 4 } },
-                h("span", { style: { fontSize: 11, opacity: 0.7 } }, dgT("settings.projectYaml")),
-                h("button", {
-                  style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-                  className: "dg-btn",
-                  title: dgT("settings.openConfigTooltip"),
-                  onClick: async (e) => {
-                    e.stopPropagation();
-                    // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
-                    const r = await openHostPath(configFile);
-                    if (r.opened) { showToast(dgT("settings.openedProjectYaml")); return; }
-                    await copyText(configFile);
-                    if (r.error) { showToast(dgT("tab.openFailed") + openErrorText(r.error)); }
-                    else { showToast(dgT("tab.pathCopiedNoOpen")); }
-                  },
-                }, dgT("tab.openFile")),
-                h("button", {
-                  style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-                  className: "dg-btn",
-                  title: dgT("settings.copyProjectPath"),
-                  onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast(dgT("tab.pathCopied")); },
-                }, dgT("tab.copyPath")))
-            : null,
-           h("button", { className: "dg-btn", style: { ...S.btn, marginTop: 6, fontSize: 12 }, onClick: () => setShowAdvanced((v) => !v) }, showAdvanced ? dgT("settings.hideAdvanced") : dgT("settings.showAdvanced")),
-          h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0 } },
-            h("span", { style: { fontWeight: 700, fontSize: 12, flexShrink: 0 } }, dgT("settings.autoRefresh")),
-            h("input", {
-              style: { ...S.promptInput, width: 38, flex: "none", padding: "2px 4px", textAlign: "center", fontSize: 12, boxSizing: "border-box" },
-              type: "number",
-              min: MIN_REFRESH_INTERVAL,
-              step: 1,
-              value: refreshIntervalInput,
-              onChange: (e) => handleIntervalChange(e.target.value),
-            }),
-            h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } }, dgT("settings.seconds")),
-            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.minInterval"))),
-          intervalWarn ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2 } }, "⚠️ " + intervalWarn) : null,
-
-          // g-224：实时代理输出流式显示开关——关闭后停止高频输出流订阅（释放网络/内存/CPU），
-          // 保留低频状态数据（livestrip 子代理状态、status line、token/ctx 占用）
-          h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0, marginTop: 8 } },
-            h("input", {
-              id: "dg-live-display",
-              type: "checkbox",
-              checked: liveDisplayOn,
-              onChange: (e) => setLiveDisplay(e.target.checked),
-              style: { flexShrink: 0 },
-            }),
-            h("label", { htmlFor: "dg-live-display", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, dgT("settings.liveDisplay")),
-            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.liveDisabledHint"))),
-
-          // g-440：Agent Teams 最小契约开关（负责人资格判定）。**默认 off**；off 时派发提示词逐字
-          // 不变（diff=0），on 才把 discipline 资产中的契约段注入派发提示词。归属主区而非高级设置：
-          // 与 review.policy 同理，该字段被派发链路真实消费（core `resolveAgentTeamsInjection`）。
-          h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0, marginTop: 8 } },
-            h("input", {
-              id: "dg-agent-teams",
-              type: "checkbox",
-              checked: form.supervisor?.agent_teams === true,
-              onChange: (e) => set(["supervisor", "agent_teams"], e.target.checked),
-              style: { flexShrink: 0 },
-            }),
-            h("label", { htmlFor: "dg-agent-teams", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, dgT("settings.agentTeams")),
-            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.agentTeamsHint"))),
-
-          h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-
-          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.modelRouting")),
-          // g-133：两列并排各占一半的可收缩 flex 布局——父容器 minWidth:0、子列 flex:"1 1 0"+minWidth:0、
-          // 控件 boxSizing:"border-box"，避免 provider/model 两列在窄容器下重叠/溢出。
-          h("div", { style: { display: "flex", gap: 8, minWidth: 0, marginBottom: 8 } },
-            h("div", { style: { flex: "1 1 0", minWidth: 0 } },
-              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "provider"),
-              h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curProvider, onChange: (e) => onProviderChange(e.target.value) },
-                ...providerOptions)),
-            h("div", { style: { flex: "1 1 0", minWidth: 0 } },
-              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "model"),
-              h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curModel, onChange: (e) => set(["executor", "model"], e.target.value) },
-                ...modelOptions))),
-          h("div", { style: { minWidth: 0, marginBottom: 6 } },
-            h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reasoningEffort")),
-            h("select", {
-              "aria-label": dgT("settings.reasoningEffortAria"),
-              style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
-              value: curEffort,
-              onChange: (e) => set(["executor", "reasoning_effort"], e.target.value),
-            }, ...effortOptions),
-            h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } },
+          // g-479：分类页签切换栏——用页签取代原「单列滚动 + 高级设置折叠」。点击只切 activeTab，
+          // 面板内容常驻（同一 form 草稿）⇒ 跨页签不丢编辑；保存链路/关闭确认一字未改。
+          h("div", {
+            className: "dg-tab dg-settings-tabs",
+            role: "tablist",
+            "aria-label": dgT("settings.tabsAria"),
+            style: { display: "flex", alignItems: "flex-end", flexWrap: "wrap", gap: 2, marginTop: 10, borderBottom: "1px solid rgba(128,128,128,.35)" },
+          },
+            ...SETTINGS_TAB_KEYS.map((k) => tabButton(k)),
+            // g-479：原「显示高级设置」按钮的等价物——同一开关（高级页签是否激活）的显式入口，
+            // 使既有双语键 settings.showAdvanced / settings.hideAdvanced 继续有真实归属。
+            h("button", {
+              className: "dg-btn dg-settings-advanced-toggle",
+              style: { ...S.btn, fontSize: 11, padding: "2px 8px", marginLeft: "auto", marginBottom: 2 },
+              onClick: () => setActiveTab(showAdvanced ? SETTINGS_DEFAULT_TAB : "advanced"),
+            }, showAdvanced ? dgT("settings.hideAdvanced") : dgT("settings.showAdvanced"))),
+          tabPanel("executor", [
+            h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.modelRouting")),
+            // g-133：两列并排各占一半的可收缩 flex 布局——父容器 minWidth:0、子列 flex:"1 1 0"+minWidth:0、
+            // 控件 boxSizing:"border-box"，避免 provider/model 两列在窄容器下重叠/溢出。
+            h("div", { style: { display: "flex", gap: 8, minWidth: 0, marginBottom: 8 } },
+              h("div", { style: { flex: "1 1 0", minWidth: 0 } },
+                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "provider"),
+                h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curProvider, onChange: (e) => onProviderChange(e.target.value) },
+                  ...providerOptions)),
+              h("div", { style: { flex: "1 1 0", minWidth: 0 } },
+                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "model"),
+                h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curModel, onChange: (e) => set(["executor", "model"], e.target.value) },
+                  ...modelOptions))),
+            h("div", { style: { minWidth: 0, marginBottom: 6 } },
+              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reasoningEffort")),
+              h("select", {
+                "aria-label": dgT("settings.reasoningEffortAria"),
+                style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+                value: curEffort,
+                onChange: (e) => set(["executor", "reasoning_effort"], e.target.value),
+              }, ...effortOptions),
+              h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } },
+                catReady
+                  ? (effortChoices.length > 0
+                    ? dgT("settings.effortHint")
+                    : dgT("settings.effortHintNone"))
+                  : dgT("profileSettings.effortHintWaiting"))),
+            // g-191：执行模式受控下拉
+            h("div", { style: { minWidth: 0, marginBottom: 6 } },
+              h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
+              h("select", {
+                id: modeId,
+                "aria-label": dgT("settings.modeAria"),
+                style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+                value: form.executor?.mode ?? "",
+                onChange: (e) => set(["executor", "mode"], e.target.value),
+              },
+                h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeInherited")),
+                h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeStandard")),
+                h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeMinimal")))),
+            h("div", { style: { ...S.meta, marginTop: 4 } },
               catReady
-                ? (effortChoices.length > 0
-                  ? dgT("settings.effortHint")
-                  : dgT("settings.effortHintNone"))
-                : dgT("profileSettings.effortHintWaiting"))),
-          // g-191：执行模式受控下拉
-          h("div", { style: { minWidth: 0, marginBottom: 6 } },
-            h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
-            h("select", {
-              id: modeId,
-              "aria-label": dgT("settings.modeAria"),
-              style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
-              value: form.executor?.mode ?? "",
-              onChange: (e) => set(["executor", "mode"], e.target.value),
-            },
-              h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeInherited")),
-              h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeStandard")),
-              h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeMinimal")))),
-          h("div", { style: { ...S.meta, marginTop: 4 } },
-            catReady
-              ? dgT("settings.catalogReady")
-              : (catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg"))),
+                ? dgT("settings.catalogReady")
+                : (catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg"))),
+          ]),
+          tabPanel("review", [
+            // g-440：Agent Teams 最小契约开关（负责人资格判定）。**默认 off**；off 时派发提示词逐字
+            // 不变（diff=0），on 才把 discipline 资产中的契约段注入派发提示词。归属主区而非高级设置：
+            // 与 review.policy 同理，该字段被派发链路真实消费（core `resolveAgentTeamsInjection`）。
+            h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0, marginTop: 8 } },
+              h("input", {
+                id: "dg-agent-teams",
+                type: "checkbox",
+                checked: form.supervisor?.agent_teams === true,
+                onChange: (e) => set(["supervisor", "agent_teams"], e.target.checked),
+                style: { flexShrink: 0 },
+              }),
+              h("label", { htmlFor: "dg-agent-teams", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, dgT("settings.agentTeams")),
+              h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.agentTeamsHint"))),
+            // g-342：顶层 review.policy 四态下拉（继承未配置 / auto / strict / none）。
+            // 渲染方式（label htmlFor + select + meta 提示）与选项 style 比照上方 executor.mode 与
+            // supervisor.automation；脏状态由 normalizeSettingsDraft 统一覆盖（判据 2）。
+            // 归属主区而非「高级设置」：该字段被 core/review-policy.ts 的受理门禁真实消费。
+            h("div", { style: { minWidth: 0 } },
+              h("label", { htmlFor: reviewPolicyId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reviewPolicyLabel")),
+              h("select", {
+                id: reviewPolicyId,
+                "aria-label": dgT("settings.reviewPolicyAria"),
+                style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+                value: curReviewPolicy,
+                onChange: (e) => set(["review", "policy"], e.target.value),
+              },
+                h("option", { value: "", style: policyOptionStyle }, dgT("settings.reviewPolicyInherit")),
+                ...REVIEW_POLICY_VALUES.map((p) => h("option", { key: p, value: p, style: policyOptionStyle }, dgT(REVIEW_POLICY_LABEL_KEYS[p])))),
+              h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } }, dgT("settings.reviewPolicyHint"))),
 
-          // g-342：顶层 review.policy 四态下拉（继承未配置 / auto / strict / none）。
-          // 渲染方式（label htmlFor + select + meta 提示）与选项 style 比照上方 executor.mode 与
-          // supervisor.automation；脏状态由 normalizeSettingsDraft 统一覆盖（判据 2）。
-          // 归属主区而非「高级设置」：该字段被 core/review-policy.ts 的受理门禁真实消费。
-          h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { minWidth: 0 } },
-            h("label", { htmlFor: reviewPolicyId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reviewPolicyLabel")),
-            h("select", {
-              id: reviewPolicyId,
-              "aria-label": dgT("settings.reviewPolicyAria"),
-              style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
-              value: curReviewPolicy,
-              onChange: (e) => set(["review", "policy"], e.target.value),
-            },
-              h("option", { value: "", style: policyOptionStyle }, dgT("settings.reviewPolicyInherit")),
-              ...REVIEW_POLICY_VALUES.map((p) => h("option", { key: p, value: p, style: policyOptionStyle }, dgT(REVIEW_POLICY_LABEL_KEYS[p])))),
-            h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } }, dgT("settings.reviewPolicyHint"))),
+            // ===== g-442：评审条件区块（regions / contract_paths / non_product_prefixes）=====
+            // 位置：紧随既有 review.policy 四态下拉之后（同属「真实生效」主区，而非「高级设置」）。
+            // 未配置时只读展示服务端生效值并标注「缺省（普适）」——绝不让用户误以为已按本项目校准，
+            // 也绝不把缺省值物化为显式配置；目录建议为只读提示，不自动写入。
+            h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+            h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.reviewConditions")),
+            h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11 } }, dgT("settings.reviewConditionsHint")),
+            // 与 g-435 指南《Review 严格度校准（项目专属）》口径一致（指向指南 + 同源工具面）
+            h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11, opacity: 0.85 } }, dgT("settings.reviewCalibrationGuide")),
+            form.review?.config_malformed
+              ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginBottom: 6, fontSize: 11 } }, dgT("settings.reviewConfigMalformed"))
+              : null,
+            ...REVIEW_LIST_KEYS.map((key) => reviewListField(key)),
+          ]),
+          tabPanel("ui", [
+            // g-479：本页两项都是**浏览器本地偏好**（只写 localStorage），不写 project.yaml、
+            // 不随配置同步——如实标注，避免用户误以为它们会随项目配置共享。
+            h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11, opacity: 0.85 } }, dgT("settings.tabLocalNote")),
+            h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0 } },
+              h("span", { style: { fontWeight: 700, fontSize: 12, flexShrink: 0 } }, dgT("settings.autoRefresh")),
+              h("input", {
+                style: { ...S.promptInput, width: 38, flex: "none", padding: "2px 4px", textAlign: "center", fontSize: 12, boxSizing: "border-box" },
+                type: "number",
+                min: MIN_REFRESH_INTERVAL,
+                step: 1,
+                value: refreshIntervalInput,
+                onChange: (e) => handleIntervalChange(e.target.value),
+              }),
+              h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } }, dgT("settings.seconds")),
+              h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.minInterval"))),
+            intervalWarn ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2 } }, "⚠️ " + intervalWarn) : null,
 
-          // ===== g-442：评审条件区块（regions / contract_paths / non_product_prefixes）=====
-          // 位置：紧随既有 review.policy 四态下拉之后（同属「真实生效」主区，而非「高级设置」）。
-          // 未配置时只读展示服务端生效值并标注「缺省（普适）」——绝不让用户误以为已按本项目校准，
-          // 也绝不把缺省值物化为显式配置；目录建议为只读提示，不自动写入。
-          h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.reviewConditions")),
-          h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11 } }, dgT("settings.reviewConditionsHint")),
-          // 与 g-435 指南《Review 严格度校准（项目专属）》口径一致（指向指南 + 同源工具面）
-          h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11, opacity: 0.85 } }, dgT("settings.reviewCalibrationGuide")),
-          form.review?.config_malformed
-            ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginBottom: 6, fontSize: 11 } }, dgT("settings.reviewConfigMalformed"))
-            : null,
-          ...REVIEW_LIST_KEYS.map((key) => reviewListField(key)),
+            // g-224：实时代理输出流式显示开关——关闭后停止高频输出流订阅（释放网络/内存/CPU），
+            // 保留低频状态数据（livestrip 子代理状态、status line、token/ctx 占用）
+            h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0, marginTop: 8 } },
+              h("input", {
+                id: "dg-live-display",
+                type: "checkbox",
+                checked: liveDisplayOn,
+                onChange: (e) => setLiveDisplay(e.target.checked),
+                style: { flexShrink: 0 },
+              }),
+              h("label", { htmlFor: "dg-live-display", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, dgT("settings.liveDisplay")),
+              h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.liveDisabledHint"))),
+          ]),
+          tabPanel("advanced", [
+            h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),
+            h("div", { style: { display: showAdvanced ? "flex" : "none", gap: 8, flexWrap: "wrap" } },
+              h("div", { style: { flex: "1 1 120px" } },
+                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "review.reviewer"),
+                h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.review?.reviewer ?? "", onChange: (e) => set(["defaults", "review", "reviewer"], e.target.value) })),
+              h("div", { style: { flex: "1 1 120px" } },
+                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "review.prompt"),
+                h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.review?.prompt ?? "", onChange: (e) => set(["defaults", "review", "prompt"], e.target.value === "" ? null : e.target.value) })),
+              h("div", { style: { flex: "1 1 90px" } },
+                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "pk.lanes"),
+                h("input", { style: { ...S.promptInput, width: "100%" }, type: "number", min: 1, value: form.defaults?.pk?.lanes ?? 1, onChange: (e) => set(["defaults", "pk", "lanes"], e.target.value) })),
+              h("div", { style: { flex: "1 1 120px" } },
+                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "pk.sandbox"),
+                h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.pk?.sandbox ?? "", onChange: (e) => set(["defaults", "pk", "sandbox"], e.target.value) }))),
 
-          h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),
-          h("div", { style: { display: showAdvanced ? "flex" : "none", gap: 8, flexWrap: "wrap" } },
-            h("div", { style: { flex: "1 1 120px" } },
-              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "review.reviewer"),
-              h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.review?.reviewer ?? "", onChange: (e) => set(["defaults", "review", "reviewer"], e.target.value) })),
-            h("div", { style: { flex: "1 1 120px" } },
-              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "review.prompt"),
-              h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.review?.prompt ?? "", onChange: (e) => set(["defaults", "review", "prompt"], e.target.value === "" ? null : e.target.value) })),
-            h("div", { style: { flex: "1 1 90px" } },
-              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "pk.lanes"),
-              h("input", { style: { ...S.promptInput, width: "100%" }, type: "number", min: 1, value: form.defaults?.pk?.lanes ?? 1, onChange: (e) => set(["defaults", "pk", "lanes"], e.target.value) })),
-            h("div", { style: { flex: "1 1 120px" } },
-              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "pk.sandbox"),
-              h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.pk?.sandbox ?? "", onChange: (e) => set(["defaults", "pk", "sandbox"], e.target.value) }))),
+            h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+            h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.supervisorAutomation")),
+            h("div", { style: { display: showAdvanced ? "grid" : "none", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 } },
+              // g-272 att-002：原 Object.keys({...中文标签}) 的中文值从未被渲染（label 直接用 key），改为纯 key 数组消除死代码中文残留。
+              ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"].map((k) =>
+                h("div", { key: k },
+                  h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, k),
+                  h("select", { style: { ...S.promptInput, width: "100%" }, value: auto[k] ?? "", onChange: (e) => set(["supervisor", "automation", k], e.target.value === "" ? null : e.target.value) },
+                    ...automationOptions(auto[k]))))),
+            // g-439：六键已由主管提示真实消费——如实说明「影响主管提示」（旧的存储字段标注已删除）；
+            // 与 g-436「只可见化、不硬阻断」口径一致：不改变工具权限，也不构成引擎强制。
+            h("div", { style: { display: showAdvanced ? "block" : "none", ...S.meta, marginTop: 4, fontSize: 11, opacity: 0.85 } }, dgT("settings.automationHint")),
 
-          h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.supervisorAutomation")),
-          h("div", { style: { display: showAdvanced ? "grid" : "none", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 } },
-            // g-272 att-002：原 Object.keys({...中文标签}) 的中文值从未被渲染（label 直接用 key），改为纯 key 数组消除死代码中文残留。
-            ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"].map((k) =>
-              h("div", { key: k },
-                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, k),
-                h("select", { style: { ...S.promptInput, width: "100%" }, value: auto[k] ?? "", onChange: (e) => set(["supervisor", "automation", k], e.target.value === "" ? null : e.target.value) },
-                  ...automationOptions(auto[k]))))),
-          // g-439：六键已由主管提示真实消费——如实说明「影响主管提示」（旧的存储字段标注已删除）；
-          // 与 g-436「只可见化、不硬阻断」口径一致：不改变工具权限，也不构成引擎强制。
-          h("div", { style: { display: showAdvanced ? "block" : "none", ...S.meta, marginTop: 4, fontSize: 11, opacity: 0.85 } }, dgT("settings.automationHint")),
-
-          h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-          h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.promptOverride")),
-          promptOverride("subagent", dgT("settings.subagentPrompt")),
-
-
+            h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+            h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.promptOverride")),
+            promptOverride("subagent", dgT("settings.subagentPrompt")),
+          ]),
+          tabPanel("about", [
+            // att-002：配置文件操作入口——复用 goal-modal 的 Host openPath/copyText/toast/fallback 机制
+            // g-479「关于」页签：除打开/复制入口外，把服务端下发的 canonical 绝对路径**明文**展示出来
+            // （只消费 data.configFile，不自行拼接），使「配置落在哪」一眼可见。
+            configFile
+              ? h("div", { style: { marginTop: 4 } },
+                h("div", { style: { display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" } },
+                  h("span", { style: { fontSize: 11, opacity: 0.7 } }, dgT("settings.projectYaml")),
+                  h("button", {
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                    className: "dg-btn",
+                    title: dgT("settings.openConfigTooltip"),
+                    onClick: async (e) => {
+                      e.stopPropagation();
+                      // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
+                      const r = await openHostPath(configFile);
+                      if (r.opened) { showToast(dgT("settings.openedProjectYaml")); return; }
+                      await copyText(configFile);
+                      if (r.error) { showToast(dgT("tab.openFailed") + openErrorText(r.error)); }
+                      else { showToast(dgT("tab.pathCopiedNoOpen")); }
+                    },
+                  }, dgT("tab.openFile")),
+                  h("button", {
+                    style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                    className: "dg-btn",
+                    title: dgT("settings.copyProjectPath"),
+                    onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast(dgT("tab.pathCopied")); },
+                  }, dgT("tab.copyPath"))),
+                h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11, opacity: 0.7, wordBreak: "break-all" } }, configFile))
+              : null,
+          ]),
           h("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 6 } },
             h("button", { style: { ...S.btn, padding: "6px 16px", fontSize: 13 }, className: "dg-btn", disabled: saving, onClick: save },
               saving ? dgT("common.saving") : dgT("settings.saveBtn")),
