@@ -4,11 +4,16 @@
  * g-462（v0.20.0 泳道）：看板标题栏「Graph 设计」入口 + 「Graph 设计哲学」弹窗
  * （内嵌 g-460 定稿的 lifecycle/workflow 两张 archify 交互图）+ 宿主**只读** HTML 路由 + 随包发布。
  *
+ * g-481 同步改写（本文件 B/C/D2 与入口相关的断言）：入口已升格为「使用说明」（`help.btn` /
+ * `HelpModal` / `dg-help-modal`），原独立设计弹窗**不再是独立入口**，两张图成为「使用说明」弹窗
+ * 的第 5 个页签（`help.tab.design`）；本文件继续钉住「两张图 + 只读路由 + 如实声明 + 路线图小节」
+ * 这些 g-462 判据本身（A/D1/E/F 原样保留，图页签结构改由 help-modal.js 承载）。
+ *
  * 六族断言（全部打在**真实产物**上：dist/index.js、dist/lib/client.js、dist/diagrams/、build.sh）：
  *  A. 只读路由：白名单仅两张图；未知名 / 目录穿越（`../`、绝对路径、编码变体、反斜杠）/ 非 `.html`
  *     一律拒绝；GET/HEAD 命中即 `text/html; charset=utf-8` 且与源产物**逐字节一致**；POST 405；
  *     **路由块内不得出现任何写文件 API**。
- *  B. 只看板标题栏：入口在 `.dg-head`（与刷新/记忆同容器）+ 折叠弹层同一处派生；`design.btn`
+ *  B. 只看板标题栏：入口在 `.dg-head`（与刷新/记忆同容器）+ 折叠弹层同一处派生；`help.btn`
  *     在 kanban 源里**只出现在看板返回体之前**（⇒ 不占看板主区域）；弹窗是 portal 浮层。
  *  C. 弹窗：两张图（lifecycle/workflow）都在，且 iframe 走宿主只读路由；切页签是本地状态。
  *  D. i18n：zh/en 键完全对称、design 键齐全、en 无 CJK、notice 如实声明「暂不支持自定义」；
@@ -23,7 +28,7 @@
  * 负向对照（证明断言非空转）：
  *  - 路由：把 dist/index.js 复制到仓库内 tmp 镜像（`node_modules` 仍可解析）后**真跑一次文本变异**
  *    （白名单放宽成「任意名字」）⇒ 未知名请求从 404 变 200 ⇒ 本套件的 404 断言必红；
- *  - 入口：对真实 client bundle 做**文本变异**（拿掉「Graph 设计」入口）⇒ 入口结构断言必红；
+ *  - 入口：对真实 client bundle 做**文本变异**（拿掉「使用说明」入口 / 把设计图移出页签）⇒ 入口结构断言必红；
  *    变异只在内存里重放，真实文件逐字节不变。
  */
 
@@ -46,7 +51,7 @@ const distRoot = join(repoRoot, "dist");
 const hostIndex = join(repoRoot, "dsh-graph-host/index.js");
 const buildScript = join(repoRoot, "scripts/build.sh");
 const kanbanSrcPath = join(repoRoot, "dsh-graph-host/lib/client/kanban.js");
-const designModalPath = join(repoRoot, "dsh-graph-host/lib/client/design-modal.js");
+const helpModalPath = join(repoRoot, "dsh-graph-host/lib/client/help-modal.js");
 const i18nSrcPath = join(repoRoot, "dsh-graph-host/lib/client/i18n.js");
 const bundlePath = join(distRoot, "lib/client.js");
 const diagramsSrcDir = join(repoRoot, "dsh-graph-host/diagrams");
@@ -220,29 +225,36 @@ function entryProblems(opts: { kanban: string; bundle: string; modal: string }):
   if (!/h\("div", \{ style: S\.head, className: "dg-head", ref: headRef \}/.test(kanban)) {
     problems.push("找不到看板标题栏容器 .dg-head");
   }
-  if (!/toolbarCollapsed \? null : h\("button", \{\s*style: tbBtnStyle,\s*className: "dg-btn dg-design-btn",\s*title: dgT\("design\.title"\),\s*onClick: \(\) => setShowDesignModal\(true\),\s*\}, dgT\("design\.btn"\),?/.test(kanban)) {
-    problems.push("平铺工具条缺少「Graph 设计」按钮（必须与刷新/记忆并列、走 tbBtnStyle）");
+  if (!/toolbarCollapsed \? null : h\("button", \{\s*style: tbBtnStyle,\s*className: "dg-btn dg-help-btn",\s*title: dgT\("help\.title"\),\s*onClick: \(\) => setShowHelpModal\(true\),\s*\}, dgT\("help\.btn"\),?/.test(kanban)) {
+    problems.push("平铺工具条缺少「使用说明」按钮（必须与刷新/记忆并列、走 tbBtnStyle）");
   }
-  // ② 折叠弹层：同一处派生（headPanelRows 里必须有 design 行）。
+  // ② 折叠弹层：同一处派生（headPanelRows 里必须有 help 行）。
   const rowStart = kanban.indexOf("const headPanelRows = [");
   const rowEnd = kanban.indexOf("const headPanelItems", rowStart);
   const rows = rowStart >= 0 && rowEnd > rowStart ? kanban.slice(rowStart, rowEnd) : "";
-  if (!/key: "design", label: dgT\("design\.btn"\), title: dgT\("design\.title"\), action: \(\) => setShowDesignModal\(true\)/.test(rows)) {
-    problems.push("折叠弹层候选缺少 design 行（窄档必须同样可达）");
+  if (!/key: "help", label: dgT\("help\.btn"\), title: dgT\("help\.title"\), action: \(\) => setShowHelpModal\(true\)/.test(rows)) {
+    problems.push("折叠弹层候选缺少 help 行（窄档必须同样可达）");
   }
-  // ③ 不占看板主区域：`design.btn` 的所有出现都必须在**泳道网格**（看板主区域）之前。
+  // ③ 不占看板主区域：`help.btn` 的所有出现都必须在**泳道网格**（看板主区域）之前。
   const boardBodyAt = kanban.indexOf('h("div", { style: { ...S.grid, gridTemplateColumns: gridCols } }');
-  const btnUses = [...kanban.matchAll(/dgT\("design\.btn"\)/g)].map((m) => m.index ?? -1);
-  if (btnUses.length !== 2) problems.push(`dgT("design.btn") 应恰好 2 处（平铺 + 弹层），实得 ${btnUses.length}`);
+  const btnUses = [...kanban.matchAll(/dgT\("help\.btn"\)/g)].map((m) => m.index ?? -1);
+  if (btnUses.length !== 2) problems.push(`dgT("help.btn") 应恰好 2 处（平铺 + 弹层），实得 ${btnUses.length}`);
   if (boardBodyAt < 0) problems.push("找不到看板主区域（泳道网格）锚点");
   else if (btnUses.some((i) => i > boardBodyAt)) problems.push("入口出现在看板主区域（泳道网格）之内/之后 —— 不得占用看板主区域");
   // ④ 弹窗：portal 浮层 + 稳定 key + 两张图 + 只读路由 + 本地切页签。
-  if (!/showDesignModal\s*\n?\s*\? h\(DesignPhilosophyModal, \{\s*key: "dg-design-modal",\s*onClose: \(\) => setShowDesignModal\(false\),/.test(kanban)) {
-    problems.push("看板未挂载 DesignPhilosophyModal（或缺少稳定 key）");
+  if (!/showHelpModal\s*\n?\s*\? h\(HelpModal, \{\s*key: "dg-help-modal",\s*onClose: \(\) => setShowHelpModal\(false\),/.test(kanban)) {
+    problems.push("看板未挂载 HelpModal（或缺少稳定 key）");
   }
-  const hasModalFlag = /showMemoryModal \|\| showDesignModal \|\| showTagFilterModal/.test(kanban);
-  if (!hasModalFlag) problems.push("hasModal 未纳入 showDesignModal（弹窗打开时看板遮罩语义会漂移）");
+  const hasModalFlag = /showMemoryModal \|\| showHelpModal \|\| showTagFilterModal/.test(kanban);
+  if (!hasModalFlag) problems.push("hasModal 未纳入 showHelpModal（弹窗打开时看板遮罩语义会漂移）");
   if (!/dgOverlay\(\{ style: S\.overlay, \.\.\.backdropGuard \}/.test(modal)) problems.push("弹窗必须是 dgOverlay portal");
+  // g-481：原独立的「Graph 设计」入口/组件已并入「使用说明」弹窗的**页签**（不得再留独立组件）。
+  if (!/const HELP_TABS = \[/.test(modal) || !/labelKey: "help\.tab\.design"/.test(modal)) {
+    problems.push("设计图必须是「使用说明」弹窗的一个页签（HELP_TABS 含 help.tab.design）");
+  }
+  if (modal.includes("DesignPhilosophyModal") || kanban.includes("DesignPhilosophyModal")) {
+    problems.push("原独立设计弹窗组件不得再存在（已并入「使用说明」弹窗）");
+  }
   for (const f of [LIFECYCLE, WORKFLOW]) {
     if (!modal.includes(f)) problems.push(`弹窗缺少图产物引用 ${f}`);
   }
@@ -255,8 +267,8 @@ function entryProblems(opts: { kanban: string; bundle: string; modal: string }):
   }
   if (!/const DESIGN_DIAGRAM_TABS = \[/.test(modal)) problems.push("弹窗缺少图页签定义");
   // ⑤ 生成物里真的有（防「源改了没重建」的假绿）。
-  if (!bundle.includes("function DesignPhilosophyModal(")) problems.push("dist/lib/client.js 未包含 DesignPhilosophyModal（需重建）");
-  if (!bundle.includes("dg-design-modal")) problems.push("dist/lib/client.js 未包含弹窗挂载点");
+  if (!bundle.includes("function HelpModal(")) problems.push("dist/lib/client.js 未包含 HelpModal（需重建）");
+  if (!bundle.includes("dg-help-modal")) problems.push("dist/lib/client.js 未包含弹窗挂载点");
   if (!bundle.includes("dg-design-roadmap")) problems.push("dist/lib/client.js 未包含路线图小节（需重建）");
   if (!bundle.includes(LIFECYCLE) || !bundle.includes(WORKFLOW)) problems.push("dist/lib/client.js 未内嵌两张图名");
   return problems;
@@ -265,33 +277,33 @@ function entryProblems(opts: { kanban: string; bundle: string; modal: string }):
 const readAll = () => ({
   kanban: readFileSync(kanbanSrcPath, "utf8"),
   bundle: readFileSync(bundlePath, "utf8"),
-  modal: readFileSync(designModalPath, "utf8"),
+  modal: readFileSync(helpModalPath, "utf8"),
 });
 
 test("g-462 B/C1：标题栏入口（与刷新/记忆并列）+ 弹窗（两张图、只读路由、如实声明）结构齐全", () => {
   assert.deepEqual(entryProblems(readAll()), [], "入口与弹窗结构断言必须全绿");
 });
 
-test("g-462 B/C2（负向对照·内存变异）：拿掉「Graph 设计」入口 ⇒ 入口断言必红；恢复后绿", () => {
+test("g-462 B/C2（负向对照·内存变异）：拿掉「使用说明」入口 ⇒ 入口断言必红；恢复后绿", () => {
   const real = readAll();
   assert.deepEqual(entryProblems(real), [], "基线必须为绿");
   // 变异 ①：删掉平铺按钮块（模拟「入口被拿掉」）。
-  const FLAT_BLOCK = /          \/\/ g-462：Graph 设计入口[\s\S]*?\}, dgT\("design\.btn"\)\),\n/;
+  const FLAT_BLOCK = /          \/\/ g-481：使用说明入口[\s\S]*?\}, dgT\("help\.btn"\)\),\n/;
   const noFlat = real.kanban.replace(FLAT_BLOCK, "");
   assert.notEqual(noFlat, real.kanban, "变异 ① 必须命中平铺入口块");
   assert.ok(entryProblems({ ...real, kanban: noFlat }).length > 0, "拿掉平铺入口后必须报红");
   // 变异 ②：把入口从折叠弹层拿掉。
   const noPanel = real.kanban.replace(
-    /\s*\{ key: "design", label: dgT\("design\.btn"\), title: dgT\("design\.title"\), action: \(\) => setShowDesignModal\(true\) \},/,
+    /\s*\{ key: "help", label: dgT\("help\.btn"\), title: dgT\("help\.title"\), action: \(\) => setShowHelpModal\(true\) \},/,
     "",
   );
-  assert.notEqual(noPanel, real.kanban, "变异 ② 必须命中弹层 design 行");
+  assert.notEqual(noPanel, real.kanban, "变异 ② 必须命中弹层 help 行");
   assert.ok(entryProblems({ ...real, kanban: noPanel }).length > 0, "拿掉弹层入口后必须报红");
   // 变异 ③：把入口挪进看板主区域（泳道网格之内）⇒ 「不占主区域」断言必红。
   const noFlatAgain = real.kanban.replace(FLAT_BLOCK, "");
   const movedIntoBody = noFlatAgain.replace(
     'h("div", { style: { ...S.grid, gridTemplateColumns: gridCols } },',
-    '$& h("button", { style: tbBtnStyle, className: "dg-btn dg-design-btn", title: dgT("design.title"), onClick: () => setShowDesignModal(true) }, dgT("design.btn")),',
+    '$& h("button", { style: tbBtnStyle, className: "dg-btn dg-help-btn", title: dgT("help.title"), onClick: () => setShowHelpModal(true) }, dgT("help.btn")),',
   );
   assert.notEqual(movedIntoBody, noFlatAgain, "变异 ③ 必须命中看板主区域锚点");
   assert.ok(
@@ -299,8 +311,14 @@ test("g-462 B/C2（负向对照·内存变异）：拿掉「Graph 设计」入�
     "入口挪进看板主区域后必须报红",
   );
   // 变异 ④：生成物里没有该组件（源改了不重建）。
-  assert.ok(entryProblems({ ...real, bundle: real.bundle.replace(/function DesignPhilosophyModal\(/g, "function XDesignPhilosophyModal(") }).length > 0,
+  assert.ok(entryProblems({ ...real, bundle: real.bundle.replace(/function HelpModal\(/g, "function XHelpModal(") }).length > 0,
     "bundle 缺组件时必须报红");
+  // 变异 ⑤：把设计图从「使用说明」弹窗里拆回去（模拟「独立设计入口又回来了」）⇒ 必红。
+  assert.ok(
+    entryProblems({ ...real, modal: real.modal.replace(/labelKey: "help\.tab\.design"/, 'labelKey: "help.tab.x"') })
+      .some((p) => p.includes("页签")),
+    "设计图不再是页签时必须报红",
+  );
   // 恢复：真实文件重新检查必须全绿，且真实文件逐字节未变。
   assert.deepEqual(entryProblems(real), [], "恢复后必须重新全绿");
   assert.deepEqual(readAll(), real, "负向对照必须是 hermetic 的（真实文件零改动）");
@@ -399,16 +417,18 @@ function roadmapProblems(opts: { modal: string; zh: string; en: string }): strin
   return problems;
 }
 
-/** 变异用：把路线图小节整块搬到 notice 之前（模拟「不是 notice 下方的独立小节」）。 */
+/** 变异用：把路线图小节整块搬到 notice 之前（模拟「不是 notice 下方的独立小节」）。
+ *  标记只按**注释正文**匹配（不绑缩进）—— g-481 把设计图并入「使用说明」弹窗的一个页签后
+ *  该段整体缩进了一级，绑缩进会让变异静默不命中（假绿）。 */
 function moveRoadmapAboveNotice(modal: string): string {
-  const start = modal.indexOf("          // 后续路线（尚未实现）");
+  const start = modal.indexOf("// 后续路线（尚未实现）");
   const endMarker = 'dgT("design.roadmap")),';
   const end = modal.indexOf(endMarker, start);
-  const noticeAt = modal.indexOf("          // 如实声明（醒目）");
+  const noticeAt = modal.indexOf("// 如实声明（醒目）");
   if (start < 0 || end < 0 || noticeAt < 0 || noticeAt > start) return modal;
   const block = modal.slice(start, end + endMarker.length) + "\n";
   const rest = modal.slice(0, start) + modal.slice(start + block.length);
-  const at = rest.indexOf("          // 如实声明（醒目）");
+  const at = rest.indexOf("// 如实声明（醒目）");
   return rest.slice(0, at) + block + rest.slice(at);
 }
 
@@ -430,7 +450,7 @@ test("g-462 D2：notice 零内部编号；路线图是独立小节（章节名�
   assert.ok(visibilityProblems(dirtyEn).some((p) => p.includes("内部目标编号")), "en 塞回编号同样必红");
 
   // ② 路线图独立小节：基线绿。
-  const modal = readFileSync(designModalPath, "utf8");
+  const modal = readFileSync(helpModalPath, "utf8");
   const real = { modal, zh: zh["design.roadmap"], en: en["design.roadmap"] };
   assert.deepEqual(roadmapProblems(real), [], "路线图小节基线必须为绿");
 
@@ -453,7 +473,7 @@ test("g-462 D2：notice 零内部编号；路线图是独立小节（章节名�
 
   // 恢复：真实文件重新检查必须全绿，且负向对照是 hermetic 的。
   assert.deepEqual(roadmapProblems(real), [], "移除变异后必须重新全绿");
-  assert.equal(readFileSync(designModalPath, "utf8"), modal, "负向对照必须 hermetic（真实文件零改动）");
+  assert.equal(readFileSync(helpModalPath, "utf8"), modal, "负向对照必须 hermetic（真实文件零改动）");
 });
 
 // ================================================================ E. 随包发布
