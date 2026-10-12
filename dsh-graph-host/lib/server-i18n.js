@@ -60,6 +60,67 @@ const zh = Object.freeze({
   "tool.graph_abandon_attempt": "放弃陈旧/失联 attempt：把指定 attempt 标记为已放弃（result=cancelled、detached=true），清除绑定；仅授权主管或目标 owner 可执行；子代理仍运行（live registry）或状态不可确认时拒绝；事件先行（attempt.abandoned 含 reason/actor）。放弃后该 attempt 不再被判为活跃，目标可正常暂缓/归档/删除。",
   "tool.graph_get_settings": "读取当前 workspace 的项目配置（基于 readProjectConfig）。返回解析后的配置对象（executor、defaults、supervisor.automation、prompt_overrides、review）、配置文件路径及合法枚举/字段元信息（如 supervisor.automation 的 6 个合法键 scope_planning/integration_decision/rework/memory_promotion/skill_proposal/release 及 human/ai 枚举值，executor.mode 的 standard/minimal，review.policy 的 auto/strict/none 及默认区域/契约/产品排除列表）。只读操作，不修改任何文件。",
   "tool.graph_update_settings": "更新当前 workspace 的项目配置（基于 writeProjectConfig）。支持传入部分 patch（包含 executor、defaults、supervisor.automation、prompt_overrides、review 等），享受现有的 schema 校验、非法枚举拒绝、保留未知键与 YAML 注释、原子写，以及记录 project.config_set 事件。patch 中仅传入需要更新的字段，未传字段保持不变。",
+  // === g-489：「使用说明 → 工具清单」的分类标签与工具简称（zh/en 必须对称）===
+  // 分类归属表见文件末尾的 TOOL_TAXONOMY；与注册真源的一致性由 helpToolTaxonomyProblems 守卫。
+  "toolCategory.goal": "目标与判据",
+  "toolCategory.card": "卡片与附件",
+  "toolCategory.exec": "派发与执行",
+  "toolCategory.memory": "记忆",
+  "toolCategory.handoff": "协同交接",
+  "toolCategory.ops": "工作树与状态",
+  "toolCategory.settings": "设置",
+  "toolCategory.diag": "校验与帮助",
+  "toolShort.graph_create_goal": "建目标",
+  "toolShort.graph_set_criteria": "写判据",
+  "toolShort.graph_transition": "迁移状态",
+  "toolShort.graph_move_goal": "排期归属",
+  "toolShort.graph_rename_goal": "改标题",
+  "toolShort.graph_set_goal_type": "设类型",
+  "toolShort.graph_set_goal_tags": "设标签",
+  "toolShort.graph_set_relation": "目标关系",
+  "toolShort.graph_amend_goal": "记录修订",
+  "toolShort.graph_set_description": "写描述",
+  "toolShort.graph_set_directive": "写指令",
+  "toolShort.graph_add_comment": "加评论",
+  "toolShort.graph_archive_goal": "归档目标",
+  "toolShort.graph_unarchive_goal": "取消归档",
+  "toolShort.graph_delete_goal": "删除目标",
+  "toolShort.graph_postpone_goal": "暂缓目标",
+  "toolShort.graph_add_card": "建卡片",
+  "toolShort.graph_fill_card": "填卡片",
+  "toolShort.graph_review_card": "复核卡片",
+  "toolShort.graph_delete_card": "删卡片",
+  "toolShort.graph_convert_card_to_shared": "转共享卡",
+  "toolShort.graph_convert_card_to_owned": "收回自有",
+  "toolShort.graph_attach_shared_card": "挂共享卡",
+  "toolShort.graph_detach_shared_card": "解挂共享卡",
+  "toolShort.graph_list_shared_cards": "共享卡列表",
+  "toolShort.graph_store_attachment": "存附件",
+  "toolShort.graph_delete_attachment": "删附件",
+  "toolShort.graph_bind_collect_card": "绑定收集",
+  "toolShort.graph_start_attempt": "派发执行",
+  "toolShort.graph_start_review": "派发评审",
+  "toolShort.graph_resolve_accept": "裁决接受",
+  "toolShort.graph_record_attempt_handoff": "登记返工",
+  "toolShort.graph_unbind_goal_child": "解绑执行",
+  "toolShort.graph_abandon_attempt": "放弃执行",
+  "toolShort.graph_write_results": "写结果",
+  "toolShort.graph_refresh_results": "刷新结果",
+  "toolShort.graph_memory_add": "加记忆",
+  "toolShort.graph_memory_replace": "改记忆",
+  "toolShort.graph_memory_remove": "删记忆",
+  "toolShort.graph_memory_recall": "查记忆",
+  "toolShort.graph_handoff": "交接文档",
+  "toolShort.graph_claim_supervisor": "接管主管",
+  "toolShort.graph_list_worktrees": "工作树列表",
+  "toolShort.graph_clean_worktree": "清理工作树",
+  "toolShort.graph_report_status": "报执行状态",
+  "toolShort.graph_report_supervisor_status": "报主管状态",
+  "toolShort.graph_get_settings": "读设置",
+  "toolShort.graph_update_settings": "改设置",
+  "toolShort.graph_validate": "校验不变量",
+  "toolShort.graph_rebuild": "重建状态",
+  "toolShort.graph_help": "工具速查",
 });
 const en = Object.freeze({
   reportStatus: "Report the latest attempt status shown on the board; state must be working/blocked/done/error. Keep it one short human sentence (at most 40 characters); do not put full test evidence in the status - use the single-line structured summary evidence: suite=... passed=... failed=... exit=... ms=... diff=... commit=... instead (one suite per line, at most 160 characters each).",
@@ -119,6 +180,67 @@ const en = Object.freeze({
   "tool.graph_abandon_attempt": "Abandon a stale or lost attempt: mark the specified attempt as abandoned (result=cancelled, detached=true) and clear its binding; only the authorized supervisor or goal owner can execute this; rejected if the subagent is still running (live registry) or its status cannot be confirmed; event-first (attempt.abandoned records reason/actor). After being abandoned, the attempt is no longer considered active, allowing the goal to be postponed, archived, or deleted normally.",
   "tool.graph_get_settings": "Read the current workspace project configuration (based on readProjectConfig). Returns the parsed config object (executor, defaults, supervisor.automation, prompt_overrides, review), the config file path, and valid enum/field metadata (e.g. the 6 valid supervisor.automation keys—scope_planning/integration_decision/rework/memory_promotion/skill_proposal/release—and their human/ai enum values; executor.mode standard/minimal; review.policy auto/strict/none and default regions/contracts/non-product prefixes). Read-only; no files are modified.",
   "tool.graph_update_settings": "Update the current workspace project configuration (based on writeProjectConfig). Accepts a partial patch (including executor, defaults, supervisor.automation, prompt_overrides, review, etc.) with existing schema validation, illegal-enum rejection, preservation of unknown keys and YAML comments, atomic writes, and recording a project.config_set event. Include only the fields you want to change in the patch; omitted fields remain unchanged.",
+  // === g-489: category labels and tool short names for "Help -> Tools" (zh/en stay symmetric) ===
+  // The category assignment table is TOOL_TAXONOMY at the end of this file; helpToolTaxonomyProblems guards it against the registration source.
+  "toolCategory.goal": "Goals & criteria",
+  "toolCategory.card": "Cards & attachments",
+  "toolCategory.exec": "Dispatch & execution",
+  "toolCategory.memory": "Memory",
+  "toolCategory.handoff": "Handoff",
+  "toolCategory.ops": "Worktrees & status",
+  "toolCategory.settings": "Settings",
+  "toolCategory.diag": "Validation & help",
+  "toolShort.graph_create_goal": "New goal",
+  "toolShort.graph_set_criteria": "Set criteria",
+  "toolShort.graph_transition": "Transition",
+  "toolShort.graph_move_goal": "Schedule",
+  "toolShort.graph_rename_goal": "Rename",
+  "toolShort.graph_set_goal_type": "Set type",
+  "toolShort.graph_set_goal_tags": "Set tags",
+  "toolShort.graph_set_relation": "Relations",
+  "toolShort.graph_amend_goal": "Amend",
+  "toolShort.graph_set_description": "Description",
+  "toolShort.graph_set_directive": "Directive",
+  "toolShort.graph_add_comment": "Add comment",
+  "toolShort.graph_archive_goal": "Archive",
+  "toolShort.graph_unarchive_goal": "Unarchive",
+  "toolShort.graph_delete_goal": "Delete goal",
+  "toolShort.graph_postpone_goal": "Postpone",
+  "toolShort.graph_add_card": "New card",
+  "toolShort.graph_fill_card": "Fill card",
+  "toolShort.graph_review_card": "Review card",
+  "toolShort.graph_delete_card": "Delete card",
+  "toolShort.graph_convert_card_to_shared": "To shared",
+  "toolShort.graph_convert_card_to_owned": "To owned",
+  "toolShort.graph_attach_shared_card": "Attach shared",
+  "toolShort.graph_detach_shared_card": "Detach shared",
+  "toolShort.graph_list_shared_cards": "List shared",
+  "toolShort.graph_store_attachment": "Add file",
+  "toolShort.graph_delete_attachment": "Delete file",
+  "toolShort.graph_bind_collect_card": "Bind collect",
+  "toolShort.graph_start_attempt": "Dispatch",
+  "toolShort.graph_start_review": "Start review",
+  "toolShort.graph_resolve_accept": "Resolve accept",
+  "toolShort.graph_record_attempt_handoff": "Rework brief",
+  "toolShort.graph_unbind_goal_child": "Unbind child",
+  "toolShort.graph_abandon_attempt": "Abandon",
+  "toolShort.graph_write_results": "Write results",
+  "toolShort.graph_refresh_results": "Refresh results",
+  "toolShort.graph_memory_add": "Remember",
+  "toolShort.graph_memory_replace": "Revise memory",
+  "toolShort.graph_memory_remove": "Forget",
+  "toolShort.graph_memory_recall": "Recall",
+  "toolShort.graph_handoff": "Handoff",
+  "toolShort.graph_claim_supervisor": "Claim supervisor",
+  "toolShort.graph_list_worktrees": "List worktrees",
+  "toolShort.graph_clean_worktree": "Clean worktree",
+  "toolShort.graph_report_status": "Report status",
+  "toolShort.graph_report_supervisor_status": "Report supervisor",
+  "toolShort.graph_get_settings": "Get settings",
+  "toolShort.graph_update_settings": "Update settings",
+  "toolShort.graph_validate": "Validate",
+  "toolShort.graph_rebuild": "Rebuild",
+  "toolShort.graph_help": "Tool help",
 });
 
 export const SERVER_I18N = Object.freeze({ zh, en });
@@ -133,4 +255,127 @@ export function assertServerI18nParity() {
   const b = Object.keys(en).sort();
   if (a.length !== b.length || a.some((key, i) => key !== b[i])) throw new Error("server i18n dictionaries are not symmetric");
   return true;
+}
+
+// ===== g-489：「使用说明 → 工具清单」的分类表（唯一分类真源）=====
+// 类别顺序 = 页签里的展示顺序；类别标签 = `toolCategory.<key>`，工具简称 = `toolShort.<name>`（zh/en 对称）。
+// 分类表与**注册真源**（apply() 里 tools 数组实收的名字）的相等关系由 helpToolTaxonomyProblems 守卫：
+// 漏一个 / 多一个 / 重名 / 缺简称 / 非法类别 / 无主简称键 一律返回红因，将来新增工具必然被判红。
+export const TOOL_CATEGORIES = Object.freeze([
+  "goal", "card", "exec", "memory", "handoff", "ops", "settings", "diag",
+]);
+
+export const TOOL_TAXONOMY = Object.freeze({
+  graph_create_goal: "goal",
+  graph_set_criteria: "goal",
+  graph_transition: "goal",
+  graph_move_goal: "goal",
+  graph_rename_goal: "goal",
+  graph_set_goal_type: "goal",
+  graph_set_goal_tags: "goal",
+  graph_set_relation: "goal",
+  graph_amend_goal: "goal",
+  graph_set_description: "goal",
+  graph_set_directive: "goal",
+  graph_add_comment: "goal",
+  graph_archive_goal: "goal",
+  graph_unarchive_goal: "goal",
+  graph_delete_goal: "goal",
+  graph_postpone_goal: "goal",
+  graph_add_card: "card",
+  graph_fill_card: "card",
+  graph_review_card: "card",
+  graph_delete_card: "card",
+  graph_convert_card_to_shared: "card",
+  graph_convert_card_to_owned: "card",
+  graph_attach_shared_card: "card",
+  graph_detach_shared_card: "card",
+  graph_list_shared_cards: "card",
+  graph_store_attachment: "card",
+  graph_delete_attachment: "card",
+  graph_bind_collect_card: "card",
+  graph_start_attempt: "exec",
+  graph_start_review: "exec",
+  graph_resolve_accept: "exec",
+  graph_record_attempt_handoff: "exec",
+  graph_unbind_goal_child: "exec",
+  graph_abandon_attempt: "exec",
+  graph_write_results: "exec",
+  graph_refresh_results: "exec",
+  graph_memory_add: "memory",
+  graph_memory_replace: "memory",
+  graph_memory_remove: "memory",
+  graph_memory_recall: "memory",
+  graph_handoff: "handoff",
+  graph_claim_supervisor: "handoff",
+  graph_list_worktrees: "ops",
+  graph_clean_worktree: "ops",
+  graph_report_status: "ops",
+  graph_report_supervisor_status: "ops",
+  graph_get_settings: "settings",
+  graph_update_settings: "settings",
+  graph_validate: "diag",
+  graph_rebuild: "diag",
+  graph_help: "diag",
+});
+
+const TOOL_SHORT_PREFIX = "toolShort.";
+const TOOL_CATEGORY_PREFIX = "toolCategory.";
+const SHORT_MAX_ZH = 6;   // 负责人要求：简称 2–6 字
+const SHORT_MAX_EN = 24;  // 英文同为短标签（不设「字」口径，只防长句）
+const CJK_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+
+/**
+ * g-489 结构守卫（纯函数）：分类表 + 简称/类别文案 与**注册真源**必须精确相等。
+ * 输入是 `apply()` 时 `ctx.tools.register` 的实收工具名 —— 不读本文件的任何第二份清单。
+ * `opts` 只用于**负向对照**（注入被变异的字典/分类表），生产调用一律省略。
+ * @param {string[]} registeredNames 注册真源里的工具名
+ * @param {{dicts?: {zh: Record<string,string>, en: Record<string,string>}, categories?: readonly string[], taxonomy?: Record<string,string>}} [opts]
+ * @returns {string[]} 问题清单（空数组 = 全绿）
+ */
+export function helpToolTaxonomyProblems(registeredNames, opts = {}) {
+  const problems = [];
+  const zhDict = (opts.dicts && opts.dicts.zh) || zh;
+  const enDict = (opts.dicts && opts.dicts.en) || en;
+  const categoriesList = opts.categories || TOOL_CATEGORIES;
+  const taxonomy = opts.taxonomy || TOOL_TAXONOMY;
+  const names = Array.isArray(registeredNames) ? registeredNames.map((n) => String(n)) : [];
+  const seen = new Set();
+  for (const n of names) {
+    if (seen.has(n)) problems.push(`注册真源里工具名重复：${n}`);
+    seen.add(n);
+  }
+  const table = Object.keys(taxonomy);
+  const missing = [...new Set(names)].filter((n) => !table.includes(n)).sort();
+  if (missing.length) problems.push(`分类表漏掉注册工具（漏一）：${missing.join(",")}`);
+  const extra = table.filter((n) => !names.includes(n)).sort();
+  if (extra.length) problems.push(`分类表含注册真源之外的工具（多一/残留）：${extra.join(",")}`);
+  const catKeys = new Set(categoriesList);
+  if (catKeys.size !== categoriesList.length) problems.push(`TOOL_CATEGORIES 有重复类别键：${categoriesList.join(",")}`);
+  for (const key of categoriesList) {
+    for (const lang of ["zh", "en"]) {
+      const dict = lang === "zh" ? zhDict : enDict;
+      const value = String(dict[`${TOOL_CATEGORY_PREFIX}${key}`] ?? "").trim();
+      if (!value) problems.push(`类别 ${key} 缺 ${lang} 标签`);
+      else if (lang === "en" && CJK_RE.test(value)) problems.push(`类别 ${key} 的 en 标签含 CJK`);
+    }
+  }
+  for (const name of table) {
+    const cat = taxonomy[name];
+    if (!catKeys.has(cat)) problems.push(`工具 ${name} 的类别非法：${JSON.stringify(cat)}`);
+    const shortZh = String(zhDict[`${TOOL_SHORT_PREFIX}${name}`] ?? "").trim();
+    const shortEn = String(enDict[`${TOOL_SHORT_PREFIX}${name}`] ?? "").trim();
+    if (!shortZh) problems.push(`工具 ${name} 缺 zh 简称`);
+    else if (shortZh.length > SHORT_MAX_ZH) problems.push(`工具 ${name} 的 zh 简称超过 ${SHORT_MAX_ZH} 字：${shortZh}`);
+    if (!shortEn) problems.push(`工具 ${name} 缺 en 简称`);
+    else if (shortEn.length > SHORT_MAX_EN) problems.push(`工具 ${name} 的 en 简称超过 ${SHORT_MAX_EN} 字符：${shortEn}`);
+    else if (CJK_RE.test(shortEn)) problems.push(`工具 ${name} 的 en 简称含 CJK`);
+  }
+  // i18n 侧「多一」：简称键必须都有分类条目，否则是残留键（改名/删工具后忘记同步）。
+  for (const key of Object.keys(zhDict)) {
+    if (!key.startsWith(TOOL_SHORT_PREFIX)) continue;
+    const name = key.slice(TOOL_SHORT_PREFIX.length);
+    if (!table.includes(name)) problems.push(`简称键无对应分类条目（多一/残留）：${key}`);
+  }
+  return problems;
 }

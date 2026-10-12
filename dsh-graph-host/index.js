@@ -202,7 +202,7 @@ import {
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 import { readEvents, appendEvent } from "./core/events.js";
-import { sT } from "./lib/server-i18n.js";
+import { sT, TOOL_CATEGORIES, TOOL_TAXONOMY, helpToolTaxonomyProblems } from "./lib/server-i18n.js";
 // g-133：接入 DSH profile 级用户设置（dsh-settings）。为避免在 @deepseek-ai/* 不可解析的上下文
 // （工作树 link、仅 headless、无 settings 供应商的组合）导致整个插件加载失败、拖垮 GUI，
 // 这里不静态 import @deepseek-ai/*；改为在 apply() 内**守卫式动态 import** schemastery（仅 schema），
@@ -324,6 +324,25 @@ export function helpPromptAssetEntries() {
     const m = /^([a-z0-9][a-z0-9.-]*)\.(zh|en)\.md$/.exec(name);
     return { name, base: m ? m[1] : name, lang: m ? m[2] : "zh" };
   });
+}
+
+/** g-489：工具清单的**分类**投影（顺序即展示顺序；标签 zh/en 成对取自 server-i18n）。 */
+export function helpToolCategoryEntries() {
+  return TOOL_CATEGORIES.map((key) => ({
+    key,
+    label: { zh: sT(`toolCategory.${key}`, "zh"), en: sT(`toolCategory.${key}`, "en") },
+  }));
+}
+
+/** g-489：工具清单条目 = 注册真源名字 + 分类表归属 + `toolShort.*` 简称 + `tool.*` 用途。
+ *  客户端只按这份投影渲染，**不硬编码任何工具名/分类名**（新增工具自动出现；漏配则被结构守卫判红）。 */
+export function helpToolCatalogEntries(names) {
+  return (Array.isArray(names) ? names : []).map((name) => ({
+    name,
+    category: TOOL_TAXONOMY[name] ?? "",
+    short: { zh: sT(`toolShort.${name}`, "zh"), en: sT(`toolShort.${name}`, "en") },
+    description: { zh: sT(`tool.${name}`, "zh"), en: sT(`tool.${name}`, "en") },
+  }));
 }
 
 /** 超限时停止累积（pause/unpipe），但**不销毁 socket**——让 handler 能写出可读的 4xx 响应。
@@ -4905,15 +4924,15 @@ export function apply(ctx, config) {
       handler: (req, res) => {
         try {
           if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
-          // 工具名从注册真源 `tools` 枚举（不硬编码），说明取 `tool.<name>` 键（zh/en 成对）。
-          const toolEntries = tools.map((t) => ({
-            name: t.def.name,
-            description: { zh: sT(`tool.${t.def.name}`, "zh"), en: sT(`tool.${t.def.name}`, "en") },
-          }));
+          // 工具名从注册真源 `tools` 枚举（不硬编码），分类/简称/说明全部由 server-i18n 投影（zh/en 成对）。
+          const names = tools.map((t) => t.def.name);
           return json(res, 200, {
             prompt_language: resolvePromptLanguage(readGraphSettings().promptLanguage, ctx),
             prompts: helpPromptAssetEntries(),
-            tools: toolEntries,
+            categories: helpToolCategoryEntries(),
+            tools: helpToolCatalogEntries(names),
+            // g-489 结构守卫的**运行期**投影：分类表 ≡ 注册真源被破坏时非空，前端据此把工具清单页签判红。
+            taxonomy_problems: helpToolTaxonomyProblems(names),
           });
         } catch (e) {
           return json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) });
