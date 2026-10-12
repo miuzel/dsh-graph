@@ -76,6 +76,11 @@
       automation_prompts: "settings.moduleHint.automationPrompts",
       attachments: "settings.moduleHint.attachments",
     };
+    /** g-480（att-002）：宿主**不支持真裁剪**（缺 `agent/created` 事件或 `tools.restrict`）时的
+     *  唯一一行提示键。服务端 `/api/dsh-graph/settings` 的 `trim_supported === false` 才渲染 →
+     *  支持真裁剪的宿主（当前本机）上**该行不存在**，绝不改变既有页面的默认可见性；zh/en 对称、
+     *  en 侧零 CJK（由 core/tests/g480-modules.test.ts 的对账断言钉住）。 */
+    const MODULE_TRIM_UNSUPPORTED_HINT_KEY = "settings.modulesTrimUnsupported";
     // ===== g-333：override + 空文本 ≡ disable =====
     // core 已显式定义该语义（writeProjectConfig 用 JSON.stringify 编码：空串写回 `""`，结构化读取器
     // 读回即 disable；「空 override」在存储层不可表示）。这里把同一语义前移到**草稿归一化**与
@@ -393,6 +398,9 @@
           if (!r.ok) throw new Error(data?.error || (dgT("drag.requestFail") + " " + r.status));
           setForm(data);
           setConfigFile(data.configFile ?? null);
+          // g-480（att-002）：宿主是否支持真裁剪（服务端 apply 期能力探测的唯一结果）——
+          // 明确 false 才渲染「本版本 DSH 不支持真裁剪」那一行；true/缺失 ⇒ null（不渲染）。
+          setTrimSupported(data.trim_supported === true ? true : data.trim_supported === false ? false : null);
           // g-442：按当前项目目录结构的**只读**建议（服务端下发；本面板绝不自动写入 project.yaml）
           setSuggestedRegions(Array.isArray(data.review_suggested_regions) ? data.review_suggested_regions : null);
           baselineRef.current = normalizeSettingsDraft(data, String(getRefreshInterval()));
@@ -409,6 +417,11 @@
       const [catalog, setCatalog] = React.useState({ status: "loading" });
       // g-442：评审条件的只读目录建议（服务端按 workspace 一级目录计算；仅展示，不自动写入）
       const [suggestedRegions, setSuggestedRegions] = React.useState(null);
+      // g-480（att-002）：宿主真裁剪能力（服务端 `trim_supported`）——**三态** true/false/null。
+      // 只有服务端**明确**为 false 才在「模块」页签渲染那一行提示；true/缺失（未知）一律**不渲染**
+      // （缺字段不等于「不支持」，绝不据此对用户谎报能力）。
+      // 位置要求（g-479）：必须**追加**在既有 useState 槽位之后——测试夹具按 0..10 槽位覆写初值。
+      const [trimSupported, setTrimSupported] = React.useState(null);
       React.useEffect(() => {
         let alive = true;
         loadHostCatalog(gConnectionApi)
@@ -898,6 +911,15 @@
                     h("label", { htmlFor: `dg-module-${k}`, style: { fontWeight: 700, fontSize: 12, cursor: "pointer", display: "block" } }, dgT(MODULE_LABEL_KEYS[k])),
                     h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT(MODULE_HINT_KEYS[k])))))),
             h("div", { style: { ...S.meta, marginTop: 8, fontSize: 11, opacity: 0.85 } }, dgT("settings.modulesScopeNote")),
+            // g-480（att-002）：宿主**不支持真裁剪**时（服务端 `trim_supported === false`）的**唯一一行**
+            // 提示——如实说明「开关只记录配置、不改变工具与提示词面」。支持真裁剪的宿主上该行**不存在**；
+            // 文案 zh/en 对称、en 侧零 CJK（对账断言在 core/tests/g480-modules.test.ts）。
+            trimSupported === false
+              ? h("div", {
+                "data-dg-module-trim-unsupported": "1",
+                style: { ...S.meta, marginTop: 6, fontSize: 11, color: "var(--dsw-alias-state-warn-primary, #e0b060)" },
+              }, dgT(MODULE_TRIM_UNSUPPORTED_HINT_KEY))
+              : null,
           ]),
           tabPanel("advanced", [
             h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),

@@ -47,12 +47,17 @@ import {
   toolFilterForRole,
   getRoleProfile,
   diagnoseDispatchCapability,
+  // g-480（att-002 裁决）：角色档案随模块自适应 —— core 单点真源 + 派生的受影响角色清单
+  moduleAwareRoleProfile,
+  rolesAdaptedByModule,
   writeSupervisorSession,
   createGoal,
   appendGoalComment,
   addCard,
   fillCard,
   formatHarvestedCardsSection,
+  // g-480（att-002）：collector 派发提示词的模块投影（工具面 + REST 面同一函数）
+  formatCollectPrompt,
   storeAttachment,
   readAttachment,
   parseAttachmentRefs,
@@ -515,13 +520,18 @@ test("g-480 ②：监听器的 workspace 口径**与工具侧/提示面同源**�
   // sessionWorkspace()），三个 section 也读 header.cwd ⇒ 裁剪必须用**同一个**口径，否则会出现
   // 「工具面裁了、提示词面没裁」或「裁剪 workspace ≠ board root」的分歧。本用例把口径钉在源码层。
   const src = readFileSync(join(HOST, "index.js"), "utf8");
-  const START = 'if (typeof ctx?.on === "function" && typeof ctx?.tools?.restrict === "function") {';
+  // att-002：能力探测已收口为**单一常量** `moduleTrimSupported`（监听器注册与设置状态面共用同一次判定）
+  // ⇒ 结构守卫锚点随实现更新（语义不变：定位裁剪监听器块），并额外钉住「常量就是原探测表达式」。
+  const PROBE = 'const moduleTrimSupported = typeof ctx?.on === "function" && typeof ctx?.tools?.restrict === "function";';
+  assert.ok(src.includes(PROBE), "能力探测必须仍是同一表达式（唯一真源，不得改写语义）");
+  const START = "if (moduleTrimSupported) {";
   const END = "// g-118：supervisor 守则自动注入";
   const i = src.indexOf(START);
   const j = src.indexOf(END, i + 1);
   assert.ok(i >= 0, "监听器注册锚点必须存在（结构性守卫的前提）");
   assert.ok(j > i, "监听器块必须以 g-118 注释为结束锚点");
   const block = src.slice(i, j);
+  assert.ok(block.includes("ctx.on(\"agent/created\""), "锚点块必须仍是 agent/created 裁剪监听器（防锚点漂移到别处）");
 
   // ① 读法唯一：agent.session.header.cwd
   assert.ok(block.includes("agent?.session?.header?.cwd"), "workspace 必须取自 agent.session.header.cwd");
@@ -747,23 +757,44 @@ test("g-480 ①：graph_get_settings 端到端 —— modules 段 + schema_hints
       assert.ok(sectionNames.has(sname), `${id} 声明的 section ${sname} 必须真实注册`);
       assert.equal(part, "automation-guidance", "唯一已知的 section-part 是 automation-guidance（新增须同步本用例）");
     } else if (face.startsWith("role-prompt:")) {
-      // 「可达提及只在某子代理角色的 persona/提示词与 requiredTools 里」⇒ 必须用**真实**派发前能力自检
-      // 证明该角色在模块关闭时被拒绝派发（否则这条元数据就是空话，提示词面实际可达且引用了不存在的工具）。
+      // 「可达提及只在某_子代理角色的**档案**与派发提示词里」⇒ 用**真实**口径证明两件事（att-002 裁决后）：
+      //   ① 模块关闭时该角色**仍可派发**（自检通过）——**不再**用「拒绝派发」当裁剪手段；
+      //   ② 该角色的档案面（`requiredTools`/`allowedTools`/persona 文本）**不再引用**该模块的受管工具名
+      //      （单一真源 = `moduleAwareRoleProfile`，宿主只消费；派发提示词的投影见 ⑨ 与 e2e）。
       const role = face.slice("role-prompt:".length) as SubagentRole;
+      const denied = new Set(MODULE_TOOL_NAMES[id]);
       const on = diagnoseDispatchCapability(role, "standard", { available: () => true });
       assert.equal(on.ok, true, `${role} 全开时必须可派发`);
-      const denied = new Set(MODULE_TOOL_NAMES[id]);
+      // 元数据前置条件：该角色档案里**确实**提及其受管工具（否则这条元数据是空话）
       assert.ok(
-        getRoleProfile(role).requiredTools.some((t) => denied.has(t)),
-        `${id} 声明 role-prompt:${role} ⇒ 该角色 requiredTools 必须含其受管工具（否则元数据不成立）`,
+        [...denied].some((n) => JSON.stringify(getRoleProfile(role)).includes(n)),
+        `${id} 声明 role-prompt:${role} ⇒ 该角色档案必须真实提及 ${[...denied].join("/")}（否则元数据不成立）`,
       );
-      const off = diagnoseDispatchCapability(role, "standard", { available: (n: string) => !denied.has(n) });
-      assert.equal(off.ok, false, `${id} 关闭 ⇒ ${role} 派发前能力自检必须失败（不派发能力残缺的子代理）`);
-      assert.ok(
-        off.missing.some((n) => denied.has(n)),
-        `${id} 关闭 ⇒ 诊断必须点名缺失的受管工具，实际 missing=${JSON.stringify(off.missing)}`,
+      // ① 关闭 ⇒ 能力自检**通过**：角色随模块自适应，而不是被拒派发
+      const idOff = resolveModuleSwitches({ modules: { [id]: false } });
+      const offDiag = diagnoseDispatchCapability(role, "standard", { available: () => true }, idOff);
+      assert.equal(
+        offDiag.ok,
+        true,
+        `${id} 关闭 ⇒ ${role} 必须**仍可派发**（档案随模块自适应，不得再以「拒绝派发」当裁剪），实际 message=${String(offDiag.message)}`,
       );
-      assert.match(String(off.message), /未启动子代理/, "诊断必须明示未启动子代理（fail-closed，不是静默降级）");
+      // ② 关闭 ⇒ 档案面逐项剔除（工具面 + persona 文本面）
+      const adapted = moduleAwareRoleProfile(role, idOff);
+      for (const n of denied) {
+        assert.ok(!adapted.requiredTools.includes(n), `${id} 关闭 ⇒ ${role}.requiredTools 不得再含 ${n}`);
+        assert.ok(!(adapted.allowedTools.standard ?? []).includes(n), `${id} 关闭 ⇒ ${role}.allowedTools.standard 不得再含 ${n}`);
+        assert.ok(!(adapted.allowedTools.minimal ?? []).includes(n), `${id} 关闭 ⇒ ${role}.allowedTools.minimal 不得再含 ${n}`);
+        const faceText = [adapted.description, adapted.disciplineTitle, ...adapted.disciplineLines, adapted.bashPermissionNote ?? ""].join("\n");
+        assert.ok(!faceText.includes(n), `${id} 关闭 ⇒ ${role} 的 persona 文本面不得再提及 ${n}（stripModuleToolMentions 单点收口）`);
+      }
+      // 单点真源派生：受影响角色清单必须点名该角色
+      assert.ok(rolesAdaptedByModule(id).includes(role), `${id} ⇒ rolesAdaptedByModule 必须列出 ${role}（schema_hints.per_module.roles 同源）`);
+      // 全开 / 未配置 ⇒ **同一对象**（零拷贝，逐字节一致）
+      assert.equal(moduleAwareRoleProfile(role, resolveModuleSwitches(null)), getRoleProfile(role), `${role} 全开 ⇒ 直接返回原档案对象（未配置路径零 diff）`);
+      // **区分**「模块关」与「宿主真缺工具」：探针点名缺 `read` ⇒ 仍 fail-closed 拒绝派发（g-473 语义原样保留）
+      const hostMissing = diagnoseDispatchCapability(role, "standard", { available: (n: string) => n !== "read" }, idOff);
+      assert.equal(hostMissing.ok, false, `${id} 关闭 + 宿主真缺 read ⇒ 仍必须拒绝派发（g-473 fail-closed 不变）`);
+      assert.match(String(hostMissing.message), /未启动子代理/, "宿主真缺工具时必须明示未启动子代理（不是静默降级）");
     } else {
       assert.ok(face.startsWith("section:"), `${id} 的 prompt_face 不在闭集内：${face}`);
       assert.ok(sectionNames.has(face.slice("section:".length)), `${id} 声明的 section 必须真实注册`);
@@ -775,16 +806,29 @@ test("g-480 ①：graph_get_settings 端到端 —— modules 段 + schema_hints
   assert.equal(
     m.per_module.attachments.prompt_face,
     "role-prompt:collector",
-    "附件工具名只在 collector 角色的 persona/提示词/requiredTools 里 ⇒ 如实登记为角色面（关闭后该角色被自检拒绝派发）",
+    "附件工具名只在 collector 角色的档案与派发提示词里 ⇒ 如实登记为角色面（关闭后该**档案自适应**、角色仍可派发）",
   );
-  // 交互面冻结：五模块关闭**只**影响 collector（附件），其余角色（executor/supervisor/summarizer…）的
-  // requiredTools 与受管工具名**不相交** ⇒ 关模块不会误伤常见派发路径（越界收紧必红）。
+  assert.deepEqual(m.per_module.attachments.roles, ["collector"], "attachments ⇒ 只有 collector 的档案会被自适应（如实登记，不是声称裁了所有角色）");
+  for (const id of HARNESS_MODULE_IDS) {
+    assert.deepEqual(
+      m.per_module[id].roles,
+      rolesAdaptedByModule(id),
+      `${id} 的 roles 必须来自 core 单点真源 rolesAdaptedByModule（宿主不另抄一份映射）`,
+    );
+  }
+  // 空工具集 / 无角色提及的模块：如实登记为「不影响任何角色档案」
+  for (const id of ["tags", "shared_cards", "automation_prompts"] as const) {
+    assert.deepEqual(m.per_module[id].roles, [], `${id} 不在任何角色档案里 ⇒ roles 必须为空（不假装裁了角色面）`);
+  }
+  // 交互面冻结：五模块全关**不阻断任何角色派发**（含 collector——它随 attachments 自适应，而非被拒派发）；
+  // 受管工具名与自适应后的 requiredTools 必须不相交（越界收紧必红）。
   const allManaged = new Set(Object.values(MODULE_TOOL_NAMES).flat() as string[]);
-  for (const role of ["supervisor", "executor", "summarizer", "reviewer"] as SubagentRole[]) {
-    const blocked = getRoleProfile(role).requiredTools.filter((t) => allManaged.has(t));
-    assert.deepEqual(blocked, [], `模块开关不得阻断 ${role} 的派发（requiredTools 与受管工具名必须不相交）`);
-    const d = diagnoseDispatchCapability(role, "standard", { available: (n: string) => !allManaged.has(n) });
-    assert.equal(d.ok, true, `${role} 在五模块全关时仍必须可派发（缺能力时先补组合/工具再派发）`);
+  const allOff = resolveModuleSwitches({ modules: Object.fromEntries(HARNESS_MODULE_IDS.map((k) => [k, false])) });
+  for (const role of ["supervisor", "executor", "summarizer", "reviewer", "collector", "pm"] as SubagentRole[]) {
+    const blocked = moduleAwareRoleProfile(role, allOff).requiredTools.filter((t) => allManaged.has(t));
+    assert.deepEqual(blocked, [], `模块开关不得阻断 ${role} 的派发（自适应后 requiredTools 与受管工具名必须不相交）`);
+    const d = diagnoseDispatchCapability(role, "standard", { available: (n: string) => !allManaged.has(n) }, allOff);
+    assert.equal(d.ok, true, `${role} 在五模块全关时仍必须可派发（缺能力时先补组合/工具再派发），实际 message=${String(d.message)}`);
   }
 });
 
@@ -1055,4 +1099,249 @@ test("g-480 ⑤：attachments 关闭后既有 @att/ 资产仍可读、引用仍�
   // 全开/关闭两态下该段逐字节相同（与模块开关无关，结构上不可被误裁）
   writeProjectConfig(root, { modules: { attachments: true, shared_cards: true, tags: true } }, "t");
   assert.equal(formatHarvestedCardsSection(root, cardGoal), cardsSec, "模块开关不改变卡片段一个字节");
+});
+
+// ---------------------------------------------------------------------------
+// ⑨ att-002 裁决①：关闭模块 ⇒ **角色档案自适应**（core 单点真源），绝不拒绝派发
+// ---------------------------------------------------------------------------
+
+test("g-480 ⑨：moduleAwareRoleProfile —— 单点真源、全开同一对象、关闭逐项剔除（工具面 + persona 文本面）", () => {
+  const offAttach = resolveModuleSwitches({ modules: { attachments: false } });
+  const base = getRoleProfile("collector");
+  const adapted = moduleAwareRoleProfile("collector", offAttach);
+  // 工具面
+  assert.deepEqual(base.requiredTools, ["graph_fill_card", "graph_store_attachment", "read"], "改坏基线即红：collector 的必需工具含附件工具");
+  assert.deepEqual(adapted.requiredTools, ["graph_fill_card", "read"], "关闭 attachments ⇒ requiredTools 去掉附件工具（不再算必需）");
+  assert.ok((base.allowedTools.standard ?? []).includes("graph_store_attachment"), "基线 standard 白名单含附件工具");
+  assert.ok(!(adapted.allowedTools.standard ?? []).includes("graph_store_attachment"), "关闭 ⇒ standard 白名单同步剔除");
+  assert.ok(!(adapted.allowedTools.minimal ?? []).includes("graph_store_attachment"), "关闭 ⇒ minimal 白名单同步剔除");
+  // persona 文本面（persona 单一真源 = disciplineLines）
+  const baseText = [base.description, base.disciplineTitle, ...base.disciplineLines].join("\n");
+  const adaptedText = [adapted.description, adapted.disciplineTitle, ...adapted.disciplineLines].join("\n");
+  assert.ok(baseText.includes("graph_store_attachment"), "基线 persona 文本里确有附件工具名（否则本用例失去意义）");
+  assert.ok(!adaptedText.includes("graph_store_attachment"), "关闭 ⇒ persona 文本面不得再提及附件工具名（stripModuleToolMentions 单点收口）");
+  assert.equal(adapted.disciplineLines.length, base.disciplineLines.length, "自适应只**去掉含工具名的整行**，不得改变行数（不重排、不合并）");
+  assert.ok(!adaptedText.includes("graph_delete_attachment"), "同模块的另一个受管工具名一并剔除");
+  assert.equal(typeof adapted.readOnly, "boolean", "非文本/非工具字段（readOnly 等）原样透传");
+  assert.equal(adapted.readOnly, base.readOnly);
+  assert.equal(adapted.name, base.name);
+  // 全开 / 未配置 / 读失败口径 ⇒ **同一对象**（零拷贝 ⇒ 未配置路径逐字节一致，diff=0）
+  for (const s of [null, undefined, resolveModuleSwitches(null), resolveModuleSwitches({})]) {
+    assert.equal(moduleAwareRoleProfile("collector", s), base, "全开/未配置 ⇒ 返回原档案对象（不是拷贝，逐字节一致）");
+  }
+  // 只裁「该模块自己的」工具：其它模块工具名与无关行原样保留
+  assert.ok(adaptedText.includes("graph_fill_card"), "同角色的**非受管**工具名不受影响");
+  assert.ok(!adaptedText.includes("3."), "被剔除的是**含工具名的整行**（附件安全条目整行消失，不做词语替换/改写）");
+  assert.equal(base.disciplineLines.length, 5, "改坏基线即红：collector 有 5 条纪律");
+  assert.equal(adapted.disciplineLines[2], "", "被剔除行变成空串（**行数与顺序不变**，其余条目逐字保留）");
+  for (const keep of ["1. ", "2. ", "4. ", "5. "]) {
+    assert.ok(adaptedText.includes(keep), `其余纪律条目 ${keep} 必须逐字保留（只删含工具名的行）`);
+  }
+  assert.deepEqual(
+    adapted.disciplineLines.filter((l) => l !== ""),
+    base.disciplineLines.filter((l) => !l.includes("graph_store_attachment")),
+    "保留集必须恰为「不含受管工具名的行」（单一真源，不做额外改写）",
+  );
+  // 未知角色安全回退（与 getRoleProfile 同口径）
+  assert.deepEqual(moduleAwareRoleProfile("nope" as SubagentRole, offAttach).requiredTools, moduleAwareRoleProfile("executor", offAttach).requiredTools);
+});
+
+test("g-480 ⑨：rolesAdaptedByModule —— 由真实档案 diff 派生（不是第二份映射）；schema_hints 与之同源", () => {
+  // 只有档案里**真的**出现受管工具名的角色才会被列出
+  assert.deepEqual(rolesAdaptedByModule("attachments"), ["collector"], "附件工具名只在 collector 档案里");
+  for (const id of ["tags", "shared_cards"] as const) {
+    assert.deepEqual(rolesAdaptedByModule(id), [], `${id} 的工具名不在任何角色档案里 ⇒ 空清单（不假装裁了角色面）`);
+  }
+  assert.deepEqual(rolesAdaptedByModule("automation_prompts"), [], "空工具集 ⇒ 无角色档案受影响");
+  // 自洽性（逐模块、逐角色）：清单里 ⟺ 档案形状真的变了 —— 单一真源，不新增平行真源
+  const ALL_ROLES: SubagentRole[] = ["supervisor", "executor", "collector", "reviewer", "pm", "summarizer"];
+  for (const id of HARNESS_MODULE_IDS) {
+    const off = resolveModuleSwitches({ modules: { [id]: false } });
+    const listed = new Set(rolesAdaptedByModule(id));
+    for (const role of ALL_ROLES) {
+      const changed = JSON.stringify(getRoleProfile(role)) !== JSON.stringify(moduleAwareRoleProfile(role, off));
+      assert.equal(listed.has(role), changed, `${id}/${role}：清单必须与真实档案形状变化严格一致`);
+    }
+  }
+  // 未知名模块（防御）：空清单，不抛错
+  assert.deepEqual(rolesAdaptedByModule("nope" as any), [], "未知模块安全返回空清单");
+});
+
+test("g-480 ⑨：collector 派发提示词面随模块自适应 —— 关闭剔除附件工具提及，全开**同一字符串**", () => {
+  const { root } = makeWorkspace("");
+  init(root);
+  const goal = createGoal(root, { title: "g-480 提示词投影", version: "v-t", actor: "t" });
+  const card = addCard(root, goal, { title: "g480 投影卡", kind: "text", actor: "t", scope: "goal" });
+  const off = resolveModuleSwitches({ modules: { attachments: false } });
+  // 两种读法必须同源（宿主用已解析的 `disabledTools`；纯函数入口接受原始 config）
+  assert.deepEqual(off.disabledTools, disabledModuleTools({ modules: { attachments: false } }), "已解析开关与纯函数入口必须给出同一禁用清单");
+  for (const lang of ["zh", "en"] as const) {
+    const prompt = formatCollectPrompt(root, goal, card, "收集这个", lang);
+    assert.ok(prompt.includes("graph_store_attachment"), `${lang} 基线提示词里确有附件工具名（否则本用例失去意义）`);
+    const trimmed = stripModuleToolMentions(prompt, off.disabledTools);
+    assert.ok(!trimmed.includes("graph_store_attachment"), `${lang} 关闭 attachments ⇒ 派发提示词不得再提及附件工具`);
+    assert.ok(!trimmed.includes("graph_delete_attachment"), `${lang} 同模块另一工具名一并剔除`);
+    assert.ok(trimmed.includes("@att/"), `${lang} @att/ 引用行**不含工具名** ⇒ 必须原样保留（数据可读性不受裁剪影响）`);
+    assert.ok(trimmed.includes("graph_fill_card"), `${lang} 非受管工具（graph_fill_card）不受影响`);
+    // 全开：stripModuleToolMentions 必须返回**同一字符串**（未配置/全开路径逐字节一致）
+    const same = stripModuleToolMentions(prompt, resolveModuleSwitches(null).disabledTools);
+    assert.equal(same, prompt, `${lang} 全开 ⇒ 返回同一字符串（diff=0）`);
+    assert.equal(stripModuleToolMentions(prompt, []), prompt, `${lang} 空禁用清单 ⇒ 同一字符串`);
+  }
+});
+
+test("g-480 ⑨：宿主的三个派发点全部走同一自适应口径（无一处漏传 switches / 漏做提示词投影）", () => {
+  const src = readFileSync(join(HOST, "index.js"), "utf8");
+  // ① 能力自检：唯一入口 capabilityBlock 必须把模块开关传进 diagnoseDispatchCapability
+  const capSites = [...src.matchAll(/diagnoseDispatchCapability\(/g)].map((m) => src.slice(m.index!, m.index! + 400));
+  assert.equal(capSites.length, 1, "diagnoseDispatchCapability 只允许在 capabilityBlock 一处调用（漏改/多改即红）");
+  assert.ok(capSites[0].includes("readModuleSwitchesForRoot("), "能力自检必须按本 board root 的模块开关自适应（否则工具面裁了、自检却点名缺工具）");
+  // ② 工具过滤：**每一个** toolFilterForRole 调用点都必须传第 4 参数（新增派发点漏传即红）
+  const filterSites = [...src.matchAll(/toolFilterForRole\(/g)].map((m) => src.slice(m.index!, m.index! + 260));
+  assert.ok(filterSites.length >= 5, `toolFilterForRole 调用点数应 ≥5（实得 ${filterSites.length}）`);
+  filterSites.forEach((s, i) => assert.ok(s.includes("readModuleSwitchesForRoot("), `toolFilterForRole 第 ${i + 1} 处必须传模块开关`));
+  for (const role of ['"executor"', '"collector"', '"reviewer"', '"summarizer"']) {
+    assert.ok(filterSites.some((s) => s.includes(role)), `真实派发角色 ${role} 的工具过滤点必须存在且已接线`);
+  }
+  // ③ 派发提示词：**两个** collector 入口（工具面 + REST 面）都必须做同一投影
+  const promptSites = [...src.matchAll(/formatCollectPrompt\(/g)].map((m) => src.slice(Math.max(0, m.index! - 120), m.index! + 400));
+  assert.equal(promptSites.length, 2, `formatCollectPrompt 调用点应恰为 2（工具面 + REST 面），实得 ${promptSites.length}`);
+  promptSites.forEach((s, i) => {
+    assert.ok(s.includes("stripModuleToolMentions("), `第 ${i + 1} 个 collector 入口必须用 stripModuleToolMentions 做提示词投影`);
+    assert.ok(s.includes("readModuleSwitchesForRoot("), `第 ${i + 1} 个 collector 入口必须读取本 root 的模块开关`);
+  });
+  // ④ 提示词面元数据不再声称「拒绝派发」（语义已由裁决改写为「档案自适应」）
+  const faceAt = src.indexOf("const MODULE_PROMPT_FACE = {");
+  assert.ok(faceAt > 0, "MODULE_PROMPT_FACE 必须存在（提示词面元数据真源）");
+  const faceComment = src.slice(Math.max(0, faceAt - 1800), faceAt);
+  assert.ok(faceComment.includes("档案自适应"), "注释必须如实登记新语义：档案随模块自适应");
+  assert.ok(faceComment.includes("照常可派发"), "注释必须明示「关闭模块不拒绝派发」");
+  assert.ok(faceComment.includes("moduleAwareRoleProfile"), "注释必须点名 core 单点真源（宿主只消费、不另抄一份映射）");
+  const refusalLines = faceComment.split("\n").filter((l) => l.includes("拒绝派发"));
+  assert.ok(refusalLines.length > 0, "注释必须显式说明为何**不再**用「拒绝派发」当裁剪手段（留下裁决痕迹）");
+  for (const l of refusalLines) assert.ok(l.includes("不再"), `不得残留「关闭模块 ⇒ 拒绝派发」的旧语义：${l.trim()}`);
+});
+
+
+// ---------------------------------------------------------------------------
+// ⑩ att-002 裁决②：宿主**不支持真裁剪**时如实显示一行（支持时该行不存在）
+// ---------------------------------------------------------------------------
+
+const TRIM_HINT_KEY = "settings.modulesTrimUnsupported";
+
+/** 真实渲染 settings-modal（与 g479 渲染夹具同口径）：按 useState 槽位序覆写初值。
+ *  槽位 11 = `trimSupported`（新增状态**追加**在既有 0..10 之后，故既有夹具语义不受影响）。 */
+function renderModulesTab(trimSupportedValue: any, dict: Record<string, string>): { nodes: any[] } {
+  const h = (type: any, props: any, ...children: any[]) => ({
+    type,
+    props: props || {},
+    children: children.flat(Infinity).filter((c: any) => c !== null && c !== undefined && c !== false),
+  });
+  const overrides: any[] = [false, {}, false, null, null, "modules", "/abs/project.yaml", 15, null, { status: "loading" }, null, trimSupportedValue];
+  let idx = 0;
+  const sandbox: any = {
+    console,
+    h,
+    dgOverlay: (props: any, ...children: any[]) => h("div", props, ...children),
+    settingsModalModeInstanceSeq: 0,
+    dgT: (k: string) => dict[k] ?? k,
+    S: new Proxy({}, { get: () => ({}) }),
+    graphUrl: (u: string) => u,
+    gConnectionApi: null,
+    loadHostCatalog: async () => ({ status: "unavailable" }),
+    openHostPath: async () => ({ opened: false }),
+    copyText: async () => true,
+    showToast: () => {},
+    openErrorText: (e: any) => String(e),
+    getRefreshInterval: () => 15,
+    setRefreshInterval: () => 15,
+    MIN_REFRESH_INTERVAL: 5,
+    useLocaleRevision: () => {},
+    useBackdropClose: () => ({}),
+    useLiveDisplayEnabled: () => false,
+    window: { confirm: () => true },
+    localStorage: { getItem: () => null, setItem: () => {} },
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    React: {
+      createElement: h,
+      useRef: (init: any) => ({ current: init }),
+      useState: (init: any) => {
+        const i = idx++;
+        const v = i < overrides.length ? overrides[i] : (typeof init === "function" ? init() : init);
+        return [v, () => {}];
+      },
+      useEffect: () => {},
+    },
+  };
+  const a = MODAL_SRC.indexOf("function normalizeSettingsDraft(");
+  const b = MODAL_SRC.indexOf("function SettingsModal(");
+  assert.ok(a > 0 && b > a, "settings-modal.js 切片锚点漂移");
+  vm.runInNewContext(`${MODAL_SRC.slice(a, b)}\n${MODAL_SRC.slice(b)}\n;globalThis.__m = SettingsModal;`, sandbox);
+  const tree = sandbox.__m({ onClose: () => {}, onSaved: () => {} });
+  const nodes: any[] = [];
+  (function walk(n: any) {
+    if (!n || typeof n !== "object") return;
+    nodes.push(n);
+    for (const c of n.children ?? []) walk(c);
+  })(tree);
+  return { nodes };
+}
+
+const trimHintNodes = (nodes: any[]): any[] => nodes.filter((n) => n?.props?.["data-dg-module-trim-unsupported"] === "1");
+
+test("g-480 ⑩：trim_supported 三段真值 —— 能力缺失（无 ctx.on / 无 tools.restrict）⇒ false；具备 ⇒ true", () => {
+  const { ws } = makeWorkspace("modules:\n  attachments: false\n");
+  const read = (h: HostMock): any => {
+    applyHost(h);
+    const def = h.registeredDefs.get("graph_get_settings");
+    assert.ok(def?.execute, "graph_get_settings 必须已注册且可执行");
+    return def.execute({}, { agent: { session: { header: { cwd: ws } } } });
+  };
+  const ok = read(makeHostMock(ws));
+  assert.equal(ok.trim_supported, true, "宿主同时提供 agent/created 与 tools.restrict ⇒ trim_supported=true（真裁剪生效）");
+  const noOn = read(makeHostMock(ws, { on: false }));
+  assert.equal(noOn.trim_supported, false, "无 ctx.on ⇒ 不支持真裁剪（如实下发 false，不得谎报 true）");
+  const noRestrict = read(makeHostMock(ws, { restrict: false }));
+  assert.equal(noRestrict.trim_supported, false, "无 tools.restrict ⇒ 不支持真裁剪");
+  // 能力缺失时**配置与数据面完全不受影响**（只记录配置）：读到的 modules 段照样回传
+  assert.equal(noOn.config.modules.attachments, false, "无真裁剪能力时仍如实回传已记录的配置");
+  // 单一探测点：同一次判定同时驱动「监听器是否注册」与「设置状态面下发」，绝不两处各判一次
+  const src = readFileSync(join(HOST, "index.js"), "utf8");
+  const probe = "const moduleTrimSupported = typeof ctx?.on === \"function\" && typeof ctx?.tools?.restrict === \"function\";";
+  assert.equal(src.split(probe).length - 1, 1, "能力探测必须**恰好一处**（两处判定 = 监听器与设置面可能分歧）");
+  assert.equal(src.split("trim_supported: moduleTrimSupported").length - 1, 3, "设置状态面三处下发（工具面 + GET + POST）必须同源");
+  assert.equal(src.split("if (moduleTrimSupported)").length - 1, 1, "监听器注册必须复用同一探测结果");
+});
+
+test("g-480 ⑩：真裁剪不可用时，GUI「模块」页签**只**多渲染一行提示；可用/未知时该行不存在", () => {
+  const { zh, en } = loadI18nDicts();
+  assert.ok(zh[TRIM_HINT_KEY] && en[TRIM_HINT_KEY], "提示文案键必须 zh/en 双份");
+  assert.ok(!HAN.test(en[TRIM_HINT_KEY]), "en 侧零 CJK");
+  assert.ok(zh[TRIM_HINT_KEY].includes("不支持真裁剪") && en[TRIM_HINT_KEY].includes("does not support real trimming"), "两侧同义：如实说明本版本不支持真裁剪");
+  assert.ok(zh[TRIM_HINT_KEY].includes("不生效") && en[TRIM_HINT_KEY].includes("no effect"), "两侧同义：开关不生效（只记录配置）");
+  assert.ok(zh[TRIM_HINT_KEY].includes("记录配置") && en[TRIM_HINT_KEY].includes("recorded only"), "两侧同义：只记录配置");
+  const keyRefs = MODAL_SRC.split("MODULE_TRIM_UNSUPPORTED_HINT_KEY").length - 1;
+  assert.equal(keyRefs, 2, "常量定义 + 渲染引用各一次（按键取值，不硬编码文案）");
+  assert.ok(MODAL_SRC.includes("trimSupported === false"), "只有**明确** false 才渲染该行");
+  assert.ok(MODAL_SRC.includes("data.trim_supported === true ? true : data.trim_supported === false ? false : null"), "服务端缺字段 ⇒ null（未知不等于不支持，绝不谎报能力）");
+
+  // 不支持 ⇒ 恰好一行，文案与字典同源
+  const bad = trimHintNodes(renderModulesTab(false, zh).nodes);
+  assert.equal(bad.length, 1, "不支持真裁剪 ⇒ 「模块」页签恰好多一行提示");
+  assert.equal(bad[0].children.filter((c: any) => typeof c === "string").join(""), zh[TRIM_HINT_KEY], "渲染文案必须取自同一 i18n 键");
+  const badEn = trimHintNodes(renderModulesTab(false, en).nodes);
+  assert.equal(badEn.length, 1, "en 侧同样渲染一行");
+  assert.equal(badEn[0].children.filter((c: any) => typeof c === "string").join(""), en[TRIM_HINT_KEY]);
+  assert.ok(!HAN.test(badEn[0].children.filter((c: any) => typeof c === "string").join("")), "en 渲染结果零 CJK");
+
+  // 支持 / 未知（缺字段）⇒ **不渲染该行**（真机上默认不可见，不改变既有页面）
+  for (const v of [true, null, undefined, "yes"]) {
+    assert.equal(trimHintNodes(renderModulesTab(v, zh).nodes).length, 0, `trim_supported=${JSON.stringify(v)} ⇒ 不得渲染该行`);
+  }
+  // 五个开关照常在（提示行是**追加**一行，不是替换面板）
+  const switchKeys: string[] = [...loadClientSlice().MODULE_SWITCH_KEYS];
+  const boxes = renderModulesTab(false, zh).nodes
+    .map((n) => n?.props?.id)
+    .filter((id: any) => typeof id === "string" && id.startsWith("dg-module-"));
+  assert.deepEqual([...boxes].sort(), switchKeys.map((k) => `dg-module-${k}`).sort(), "五个模块开关仍在（提示行只追加一行）");
 });

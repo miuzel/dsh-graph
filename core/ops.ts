@@ -1028,15 +1028,21 @@ export interface DispatchCapabilityDiagnosis {
 /** 必需工具（`role.requiredTools`，含 shell 槽位）在当前能力下的缺失诊断。
  *
  *  判据：仅当**探针明确判定为不可用**时才算缺失——无探针（`available` 缺省）返回 `ok=true`，
- *  保持 legacy 行为不被误阻断；唯一例外是探针在场但候选全不可用（`probe-missing`）⇒ 点名缺 shell。 */
+ *  保持 legacy 行为不被误阻断；唯一例外是探针在场但候选全不可用（`probe-missing`）⇒ 点名缺 shell。
+ *
+ *  g-480：必需清单取自 `moduleAwareRoleProfile(role, switches)` —— 模块关闭时该模块的受管工具名
+ *  **不再算必需**（角色随模块自适应，不因我们自己裁掉的工具而拒绝派发）。`switches` 缺省/全开时
+ *  与改造前逐字节一致；**宿主真缺工具**（探针对该名返回 false）的 fail-closed 语义原样保留。
+ */
 export function diagnoseDispatchCapability(
   role: SubagentRole,
   mode?: SubagentMode | null,
   cap?: ToolCapabilityContext,
+  switches?: ModuleSwitches | null,
 ): DispatchCapabilityDiagnosis {
   const shell = resolveShellTool(cap);
   const normalizedMode: SubagentMode = mode ? normalizeSubagentMode(mode) ?? DEFAULT_SUBAGENT_MODE : DEFAULT_SUBAGENT_MODE;
-  const profile = getRoleProfile(role);
+  const profile = moduleAwareRoleProfile(role, switches);
   const missing: string[] = [];
   for (const raw of profile.requiredTools) {
     if (raw === SHELL_TOOL_SLOT) {
@@ -1272,12 +1278,71 @@ export function getRoleProfile(role: SubagentRole): RoleProfile {
   return ROLE_PROFILES[role] ?? ROLE_PROFILES.executor;
 }
 
+/** g-480（负责人裁决）：**模块关闭 ⇒ 角色档案自适应**（唯一真源；宿主只消费，不另抄一份映射）。
+ *
+ *  背景：关闭 `attachments` 时，collector 的 `requiredTools` 里仍有 `graph_store_attachment`，
+ *  于是「工具面已裁、能力自检却点名缺工具」⇒ 旧语义只能**拒绝派发** collector（fail-closed）。
+ *  裁决改为：角色**随模块自适应** —— 模块关 ⇒ 该模块的受管工具名从该角色档案里同步消去，
+ *  档案面（persona 文本）也不再提及它 ⇒ 角色照常可派发、且不会去调用不存在的工具。
+ *
+ *  收口（**必须**在任何「能力自检 / 工具过滤 / persona 渲染」处统一走本函数）：
+ *   · 工具面：`requiredTools` 与 `allowedTools.{standard,minimal}` 去掉受管工具名；
+ *   · 文本面：`description` / `disciplineTitle` / `disciplineLines` / `bashPermissionNote` 复用
+ *     `stripModuleToolMentions` **按行**剔除 —— 无可剔时该方法返回**同一字符串** ⇒ 未配置/全开
+ *     路径逐字节不变（且此时直接返回原对象，连拷贝都不发生）。
+ *
+ *  与「宿主真缺工具」严格区分：后者（g-473 的 `probeAvailable(cap, name) === false`）是**宿主能力**
+ *  缺失 ⇒ 仍然 fail-closed 拒绝派发；本函数只改变「该模块的工具是否算必需/可用」，不吞任何探针结论。
+ */
+export function moduleAwareRoleProfile(
+  role: SubagentRole,
+  switches?: ModuleSwitches | null,
+): RoleProfile {
+  const base = getRoleProfile(role);
+  const disabled = switches?.disabledTools ?? [];
+  if (!disabled.length) return base; // 全开 / 未配置 / 读失败（resolveModuleSwitches(null)）⇒ 原对象
+  const keep = (list?: readonly string[]): readonly string[] | undefined =>
+    (list === undefined ? undefined : list.filter((n) => !disabled.includes(n)));
+  return {
+    ...base,
+    description: stripModuleToolMentions(base.description, disabled),
+    disciplineTitle: stripModuleToolMentions(base.disciplineTitle, disabled),
+    disciplineLines: base.disciplineLines.map((line) => stripModuleToolMentions(line, disabled)),
+    bashPermissionNote:
+      base.bashPermissionNote === undefined ? undefined : stripModuleToolMentions(base.bashPermissionNote, disabled),
+    requiredTools: keep(base.requiredTools) ?? [],
+    allowedTools: { standard: keep(base.allowedTools.standard), minimal: keep(base.allowedTools.minimal) ?? [] },
+  };
+}
+
+/** g-480：某模块关闭时**档案会随之自适应**的角色清单（按 `SUBAGENT_ROLES` 顺序）。
+ *
+ *  由**真实档案 diff** 推出（不是第二份映射副本）⇒ 谁往某角色档案里加了受管工具名，本清单自动跟随；
+ *  `schema_hints.modules.per_module[*].roles` 据此如实登记「谁的档案面会被裁」（空 = 只影响工具面）。
+ */
+export function rolesAdaptedByModule(module: HarnessModuleId): SubagentRole[] {
+  if (!(HARNESS_MODULE_IDS as readonly string[]).includes(module)) return [];
+  if ((MODULE_TOOL_NAMES[module] ?? []).length === 0) return []; // 空工具集（automation_prompts）⇒ 无档案受影响
+  const switches = resolveModuleSwitches({ modules: { [module]: false } });
+  const shape = (p: RoleProfile) => JSON.stringify([
+    p.requiredTools,
+    p.allowedTools.standard ?? null,
+    p.allowedTools.minimal,
+    p.description,
+    p.disciplineTitle,
+    p.disciplineLines,
+    p.bashPermissionNote ?? null,
+  ]);
+  return SUBAGENT_ROLES.filter((role) => shape(ROLE_PROFILES[role]) !== shape(moduleAwareRoleProfile(role, switches)));
+}
+
 export function toolFilterForRole(
   role: SubagentRole,
   mode?: SubagentMode | null,
   cap?: ToolCapabilityContext,
+  switches?: ModuleSwitches | null,
 ): { allow?: readonly string[] } | undefined {
-  const profile = getRoleProfile(role);
+  const profile = moduleAwareRoleProfile(role, switches);
   const normalizedMode = mode ? normalizeSubagentMode(mode) : "standard";
   if (normalizedMode === "minimal") {
     return { allow: expandRoleToolList(profile.allowedTools.minimal, cap) };
