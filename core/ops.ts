@@ -12100,7 +12100,32 @@ export function boardPayload(root: string, opts?: { includeArchived?: boolean; l
     supervisorStatusAt: readSupervisorStatusAt(events),
     // g-183：共享卡面板数据源（创建/查看/删除/引用计数）
     sharedCards: sharedCards(root),
+    // g-494：**模块开关的界面呈现裁剪**所需的下发字段 —— 与「服务端真裁剪」读**同一份**
+    // `project.yaml` 的 `modules` 段、经**同一个** `resolveModuleSwitches` 纯函数解析（单一真源）。
+    // 客户端据此隐藏已关闭模块的界面入口（隐藏 ≠ 置灰）。只下发「生效开关」这一最小面：
+    // 未配置/畸形一律 fail-safe 为开启（与 `resolveModuleSwitches` 同口径），绝不让界面比能力更严。
+    modules: moduleSwitchPayload(root),
   };
+}
+
+/**
+ * g-494：看板载荷里的模块开关投影（**与真裁剪同源**，供客户端呈现层裁剪用）。
+ *
+ * - 真源：`<root>/project.yaml` 的 `modules` 段 ⇒ `resolveModuleSwitches`（全仓唯一判定）；
+ * - 读失败/异常 ⇒ `resolveModuleSwitches(null)`（全开）——与宿主 `readModuleSwitchesForRoot`
+ *   的降级口径**逐字一致**，绝不因配置读取异常把界面入口静默砍掉；
+ * - `enabled` = 五模块「是否可用」的布尔映射（true=可用）；形状极简，客户端零解析负担。
+ */
+export function moduleSwitchPayload(root: string): Record<string, boolean> {
+  let switches: ModuleSwitches;
+  try {
+    switches = resolveModuleSwitches(readProjectConfig(root));
+  } catch {
+    switches = resolveModuleSwitches(null);
+  }
+  const out: Record<string, boolean> = {};
+  for (const id of HARNESS_MODULE_IDS) out[id] = switches.switches[id]?.on !== false;
+  return out;
 }
 
 /** 目标的上下文卡片摘要列表（看板子卡片）。

@@ -1226,12 +1226,18 @@
             },
           },
             h("span", null, bits.join(" ｜ ")),
-            h("span", { style: { opacity: 0.5, userSelect: "none" } }, "｜"),
-            h(GoalTagsEditor, {
-              goalId: props.id,
-              tags: meta.tags ?? props.tags,
-              onChange: () => { load(); props.onTagsChanged?.(); },
-            })
+            // g-494：tags 模块关闭 ⇒ 标签编辑器入口从界面移除（隐藏，不是置灰）。
+            // 判据 4（不留孤儿 UI）：与编辑器**成对**的那个 `｜` 分隔符必须一并消失 ——
+            // 两者同处一个条件分支，绝不留下悬空分隔符或空占位。
+            moduleEnabled(props.modules, "tags")
+              ? h(React.Fragment, null,
+                  h("span", { style: { opacity: 0.5, userSelect: "none" } }, "｜"),
+                  h(GoalTagsEditor, {
+                    goalId: props.id,
+                    tags: meta.tags ?? props.tags,
+                    onChange: () => { load(); props.onTagsChanged?.(); },
+                  }))
+              : null
           ),
           // g-223：归属版本在看板中被隐藏时的友好提示与恢复显示入口
           isVersionHidden
