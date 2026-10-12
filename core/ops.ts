@@ -1028,15 +1028,21 @@ export interface DispatchCapabilityDiagnosis {
 /** 必需工具（`role.requiredTools`，含 shell 槽位）在当前能力下的缺失诊断。
  *
  *  判据：仅当**探针明确判定为不可用**时才算缺失——无探针（`available` 缺省）返回 `ok=true`，
- *  保持 legacy 行为不被误阻断；唯一例外是探针在场但候选全不可用（`probe-missing`）⇒ 点名缺 shell。 */
+ *  保持 legacy 行为不被误阻断；唯一例外是探针在场但候选全不可用（`probe-missing`）⇒ 点名缺 shell。
+ *
+ *  g-480：必需清单取自 `moduleAwareRoleProfile(role, switches)` —— 模块关闭时该模块的受管工具名
+ *  **不再算必需**（角色随模块自适应，不因我们自己裁掉的工具而拒绝派发）。`switches` 缺省/全开时
+ *  与改造前逐字节一致；**宿主真缺工具**（探针对该名返回 false）的 fail-closed 语义原样保留。
+ */
 export function diagnoseDispatchCapability(
   role: SubagentRole,
   mode?: SubagentMode | null,
   cap?: ToolCapabilityContext,
+  switches?: ModuleSwitches | null,
 ): DispatchCapabilityDiagnosis {
   const shell = resolveShellTool(cap);
   const normalizedMode: SubagentMode = mode ? normalizeSubagentMode(mode) ?? DEFAULT_SUBAGENT_MODE : DEFAULT_SUBAGENT_MODE;
-  const profile = getRoleProfile(role);
+  const profile = moduleAwareRoleProfile(role, switches);
   const missing: string[] = [];
   for (const raw of profile.requiredTools) {
     if (raw === SHELL_TOOL_SLOT) {
@@ -1272,12 +1278,71 @@ export function getRoleProfile(role: SubagentRole): RoleProfile {
   return ROLE_PROFILES[role] ?? ROLE_PROFILES.executor;
 }
 
+/** g-480（负责人裁决）：**模块关闭 ⇒ 角色档案自适应**（唯一真源；宿主只消费，不另抄一份映射）。
+ *
+ *  背景：关闭 `attachments` 时，collector 的 `requiredTools` 里仍有 `graph_store_attachment`，
+ *  于是「工具面已裁、能力自检却点名缺工具」⇒ 旧语义只能**拒绝派发** collector（fail-closed）。
+ *  裁决改为：角色**随模块自适应** —— 模块关 ⇒ 该模块的受管工具名从该角色档案里同步消去，
+ *  档案面（persona 文本）也不再提及它 ⇒ 角色照常可派发、且不会去调用不存在的工具。
+ *
+ *  收口（**必须**在任何「能力自检 / 工具过滤 / persona 渲染」处统一走本函数）：
+ *   · 工具面：`requiredTools` 与 `allowedTools.{standard,minimal}` 去掉受管工具名；
+ *   · 文本面：`description` / `disciplineTitle` / `disciplineLines` / `bashPermissionNote` 复用
+ *     `stripModuleToolMentions` **按行**剔除 —— 无可剔时该方法返回**同一字符串** ⇒ 未配置/全开
+ *     路径逐字节不变（且此时直接返回原对象，连拷贝都不发生）。
+ *
+ *  与「宿主真缺工具」严格区分：后者（g-473 的 `probeAvailable(cap, name) === false`）是**宿主能力**
+ *  缺失 ⇒ 仍然 fail-closed 拒绝派发；本函数只改变「该模块的工具是否算必需/可用」，不吞任何探针结论。
+ */
+export function moduleAwareRoleProfile(
+  role: SubagentRole,
+  switches?: ModuleSwitches | null,
+): RoleProfile {
+  const base = getRoleProfile(role);
+  const disabled = switches?.disabledTools ?? [];
+  if (!disabled.length) return base; // 全开 / 未配置 / 读失败（resolveModuleSwitches(null)）⇒ 原对象
+  const keep = (list?: readonly string[]): readonly string[] | undefined =>
+    (list === undefined ? undefined : list.filter((n) => !disabled.includes(n)));
+  return {
+    ...base,
+    description: stripModuleToolMentions(base.description, disabled),
+    disciplineTitle: stripModuleToolMentions(base.disciplineTitle, disabled),
+    disciplineLines: base.disciplineLines.map((line) => stripModuleToolMentions(line, disabled)),
+    bashPermissionNote:
+      base.bashPermissionNote === undefined ? undefined : stripModuleToolMentions(base.bashPermissionNote, disabled),
+    requiredTools: keep(base.requiredTools) ?? [],
+    allowedTools: { standard: keep(base.allowedTools.standard), minimal: keep(base.allowedTools.minimal) ?? [] },
+  };
+}
+
+/** g-480：某模块关闭时**档案会随之自适应**的角色清单（按 `SUBAGENT_ROLES` 顺序）。
+ *
+ *  由**真实档案 diff** 推出（不是第二份映射副本）⇒ 谁往某角色档案里加了受管工具名，本清单自动跟随；
+ *  `schema_hints.modules.per_module[*].roles` 据此如实登记「谁的档案面会被裁」（空 = 只影响工具面）。
+ */
+export function rolesAdaptedByModule(module: HarnessModuleId): SubagentRole[] {
+  if (!(HARNESS_MODULE_IDS as readonly string[]).includes(module)) return [];
+  if ((MODULE_TOOL_NAMES[module] ?? []).length === 0) return []; // 空工具集（automation_prompts）⇒ 无档案受影响
+  const switches = resolveModuleSwitches({ modules: { [module]: false } });
+  const shape = (p: RoleProfile) => JSON.stringify([
+    p.requiredTools,
+    p.allowedTools.standard ?? null,
+    p.allowedTools.minimal,
+    p.description,
+    p.disciplineTitle,
+    p.disciplineLines,
+    p.bashPermissionNote ?? null,
+  ]);
+  return SUBAGENT_ROLES.filter((role) => shape(ROLE_PROFILES[role]) !== shape(moduleAwareRoleProfile(role, switches)));
+}
+
 export function toolFilterForRole(
   role: SubagentRole,
   mode?: SubagentMode | null,
   cap?: ToolCapabilityContext,
+  switches?: ModuleSwitches | null,
 ): { allow?: readonly string[] } | undefined {
-  const profile = getRoleProfile(role);
+  const profile = moduleAwareRoleProfile(role, switches);
   const normalizedMode = mode ? normalizeSubagentMode(mode) : "standard";
   if (normalizedMode === "minimal") {
     return { allow: expandRoleToolList(profile.allowedTools.minimal, cap) };
@@ -1410,6 +1475,127 @@ export type ReviewListRawValue =
   | Record<string, unknown>
   | unknown[];
 
+// ===== g-480：harness 模块可选开关（workspace 级单层；未配置 = 全开）=====
+// 范围（负责人钦定，本期固定）：`project.yaml` 的 `modules` 段，**不**做 profile 默认 + workspace 覆盖两层。
+// 五个模块、默认全开；**未配置时与改造前行为逐字节一致**（提示词段 diff=0、工具面 51 个不变）。
+export const HARNESS_MODULE_IDS = ["tags", "memory", "shared_cards", "automation_prompts", "attachments"] as const;
+export type HarnessModuleId = (typeof HARNESS_MODULE_IDS)[number];
+
+/**
+ * 模块 → 受管 `graph_*` 工具名（**唯一映射表**，全仓只此一份；宿主不得另抄一份字面量）。
+ *
+ * - `automation_prompts` 是**纯提示词面**模块（六键自动化指导段），没有受管工具 ⇒ 空数组。
+ * - `shared_cards` 只受管**共享池专属**的五个工具；**不含** `graph_add_card` —— 目标自有卡片是组装
+ *   目标的部件（`scope:"goal"`），与共享池是两个不同能力，本期开关不越界禁用后者。
+ * - 映射表的**正确性由测试从注册真源校验**（`dsh-graph-host/index.js` 里真实的 `graph_*` 注册清单）：
+ *   表里出现未注册的名字、或某个受管工具同时归两个模块，都判红。
+ */
+export const MODULE_TOOL_NAMES: Record<HarnessModuleId, readonly string[]> = {
+  tags: ["graph_set_goal_tags"],
+  memory: ["graph_memory_add", "graph_memory_replace", "graph_memory_remove", "graph_memory_recall"],
+  shared_cards: [
+    "graph_list_shared_cards",
+    "graph_attach_shared_card",
+    "graph_detach_shared_card",
+    "graph_convert_card_to_shared",
+    "graph_convert_card_to_owned",
+  ],
+  automation_prompts: [],
+  attachments: ["graph_store_attachment", "graph_delete_attachment"],
+};
+
+/** 模块开关的判定原因（闭集，供机读）。未配置/畸形都**不抛错**。 */
+export type ModuleSwitchReason = "explicit_on" | "explicit_off" | "default_on" | "invalid_value";
+
+export interface ModuleSwitchDecision {
+  module: HarnessModuleId;
+  /** 生效值：`true` = 该模块可用。 */
+  on: boolean;
+  /** 是否有**显式**合法布尔配置（含从旧键迁移来的值）。 */
+  configured: boolean;
+  reason: ModuleSwitchReason;
+}
+
+export interface ModuleSwitches {
+  switches: Record<HarnessModuleId, ModuleSwitchDecision>;
+  /** 被关闭的模块 id（按 HARNESS_MODULE_IDS 顺序）。 */
+  disabled: HarnessModuleId[];
+  /** 被关闭模块名下的工具名（按 HARNESS_MODULE_IDS 顺序，已去重）。 */
+  disabledTools: string[];
+}
+
+/** 受管工具名：不传模块 ⇒ 全部受管工具名（按模块顺序、去重）。 */
+export function moduleToolNames(module?: HarnessModuleId): string[] {
+  if (module !== undefined) {
+    if (!(HARNESS_MODULE_IDS as readonly string[]).includes(module)) return [];
+    return [...MODULE_TOOL_NAMES[module]];
+  }
+  const out: string[] = [];
+  for (const id of HARNESS_MODULE_IDS) for (const n of MODULE_TOOL_NAMES[id]) if (!out.includes(n)) out.push(n);
+  return out;
+}
+
+/**
+ * 纯函数：由项目配置计算五个模块的生效开关。
+ *
+ * 不变量（fail-safe、绝不抛错）：
+ * - 只有**真布尔** `true`/`false` 算显式配置；`null`/缺失 ⇒ 未配置 ⇒ **默认开启**（与改造前一致）；
+ * - 其它任何取值（字符串 `"true"`、数字、映射……）⇒ `invalid_value`，且**按默认开启**处理 ——
+ *   绝不从畸形值里猜出「关闭」（也就不会因手写 YAML 的手滑把整块能力静默关掉）；
+ * - 关闭值只用于**隐藏能力**，从不删除任何数据（判据 5）。
+ */
+export function resolveModuleSwitches(config: unknown): ModuleSwitches {
+  const modules = (config && typeof config === "object" ? (config as any).modules : null) ?? null;
+  const switches = {} as Record<HarnessModuleId, ModuleSwitchDecision>;
+  const disabled: HarnessModuleId[] = [];
+  const disabledTools: string[] = [];
+  for (const id of HARNESS_MODULE_IDS) {
+    const raw = modules && typeof modules === "object" ? (modules as any)[id] : undefined;
+    let on = true;
+    let configured = false;
+    let reason: ModuleSwitchReason = "default_on";
+    if (raw === true) { on = true; configured = true; reason = "explicit_on"; }
+    else if (raw === false) { on = false; configured = true; reason = "explicit_off"; }
+    else if (raw !== undefined && raw !== null) { on = true; configured = false; reason = "invalid_value"; }
+    switches[id] = { module: id, on, configured, reason };
+    if (!on) {
+      disabled.push(id);
+      for (const n of MODULE_TOOL_NAMES[id]) if (!disabledTools.includes(n)) disabledTools.push(n);
+    }
+  }
+  return { switches, disabled, disabledTools };
+}
+
+/** 便捷入口：直接取「被关闭模块名下的工具名」（关闭名单即 restrict 的 deny 名单来源）。 */
+export function disabledModuleTools(config: unknown): string[] {
+  return resolveModuleSwitches(config).disabledTools;
+}
+
+/** 便捷入口：单模块是否生效（默认开启）。 */
+export function isModuleEnabled(config: unknown, module: HarnessModuleId): boolean {
+  return resolveModuleSwitches(config).switches[module]?.on !== false;
+}
+
+/**
+ * 纯函数：把**被关闭模块**的工具名从一段提示词文本里抹掉（按行删除），用于保证
+ * 「模块关闭后，我们注册的 systemPrompt section 不再引用该模块的工具名」（判据 3）。
+ *
+ * - 关闭名单为空 / 文本为空 ⇒ **原样返回同一字符串**（未配置全开路径 diff=0 的结构性保证）；
+ * - 删除整行而不是替换词：避免把句子削成残句（「用 记录」）；
+ * - 只作用于**提示词投影**，绝不改动任何落盘数据（判据 5：关闭 = 隐藏，不删数据）。
+ */
+export function stripModuleToolMentions(text: string, disabledTools: readonly string[]): string {
+  if (!text || !disabledTools || disabledTools.length === 0) return text;
+  const lines = text.split("\n");
+  let dropped = 0;
+  const kept = lines.filter((line) => {
+    const hit = disabledTools.some((n) => n && line.includes(n));
+    if (hit) dropped += 1;
+    return !hit;
+  });
+  return dropped === 0 ? text : kept.join("\n");
+}
+
 export interface ProjectConfig {
   executor: { provider: string | null; model: string | null; mode: SubagentMode | null; reasoning_effort?: string | null };
   defaults: {
@@ -1422,6 +1608,16 @@ export interface ProjectConfig {
     agent_teams: boolean | null;
   };
   prompt_overrides: { subagent: PromptOverride };
+  /**
+   * g-480：harness 模块可选开关（workspace 级单层）。未配置/缺失 = `null` = **开启**（与改造前逐字节一致）。
+   * 读侧只暴露五个键的真值；旧键 `memory.tools_enabled` 的迁移痕迹见 `modules_legacy_keys`。
+   */
+  modules: Record<HarnessModuleId, boolean | null>;
+  /**
+   * g-480 **仅读侧元信息**（非配置项，写侧 schema 明确拒绝）：哪些模块的生效值来自**已弃用**的旧键。
+   * 用于「明确弃用 + 旧值迁移」的可追溯性；一旦写侧写入 `modules.<id>`，对应旧键即被删除。
+   */
+  modules_legacy_keys?: Partial<Record<HarnessModuleId, string>>;
   /**
    * g-311/g-435：顶层 review 配置——policy 未配置/空/非三值一律为 null；三项列表支持未配置(null)与显式列表。
    * `config_malformed` / `invalid_fields` 是**仅读侧元信息**（非配置项，写侧 schema 明确拒绝），
@@ -1741,6 +1937,8 @@ export function readProjectConfig(root: string): ProjectConfig {
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
       supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null },
       prompt_overrides: { subagent: { state: "default", value: null } },
+      // g-480：文件缺省 ⇒ 五个模块全部 null（未配置 = 全开），无旧键可迁移。
+      modules: Object.fromEntries(HARNESS_MODULE_IDS.map((k) => [k, null])) as Record<HarnessModuleId, boolean | null>,
       review: {
         policy: null,
         regions: null,
@@ -1875,6 +2073,16 @@ export function readProjectConfig(root: string): ProjectConfig {
 
   const auto: Record<string, string | null> = {};
   for (const k of AUTOMATION_KEYS) auto[k] = scal(["supervisor", "automation", k]);
+  // g-480：模块开关读取（真布尔或 null；fail-safe 见 boolScalar 注释）。旧键迁移见下方 memory 分支。
+  const moduleValues = Object.fromEntries(HARNESS_MODULE_IDS.map((k) => [k, boolScalar(["modules", k])])) as Record<HarnessModuleId, boolean | null>;
+  const moduleLegacyKeys: Partial<Record<HarnessModuleId, string>> = {};
+  if (moduleValues.memory === null) {
+    const legacy = boolScalar(["memory", "tools_enabled"]);
+    if (legacy !== null) {
+      moduleValues.memory = legacy;
+      moduleLegacyKeys.memory = "memory.tools_enabled";
+    }
+  }
   const lanesRaw = scal(["defaults", "pk", "lanes"]);
   const subagent = readPromptOverrideConfig(lines, "subagent").value ?? { state: "default", value: null };
   const modeRaw = scal(["executor", "mode"]);
@@ -1894,6 +2102,11 @@ export function readProjectConfig(root: string): ProjectConfig {
       pk: { lanes: lanesRaw === null ? null : parseInt(lanesRaw, 10), sandbox: scal(["defaults", "pk", "sandbox"]) },
     },
     supervisor: { automation: auto, agent_teams: boolScalar(["supervisor", "agent_teams"]) },
+    // g-480：五个模块开关（真布尔或 null=未配置）；旧键 `memory.tools_enabled` 只作为 **memory 模块
+    // 的读侧默认**保留一次，并在 `modules.memory` 落盘时被删除（见 writeProjectConfig）⇒ 同一时刻
+    // 只有一个生效真源，且旧值不会被静默丢弃（判据 5）。
+    modules: moduleValues,
+    ...(Object.keys(moduleLegacyKeys).length > 0 ? { modules_legacy_keys: moduleLegacyKeys } : {}),
     prompt_overrides: { subagent },
     review: {
       policy: policyResult.value,
@@ -1913,29 +2126,30 @@ export function readProjectConfig(root: string): ProjectConfig {
     },
   };
 }
+/**
+ * g-480：记忆工具开关——**真源已扶正到 `modules.memory`**。
+ *
+ * 改造前这里是「裸 YAML 键 `memory.tools_enabled`」的直读，与 `modules.memory` 并存即两套真源。
+ * 现在的口径：
+ * - 读：`readProjectConfig(root).modules.memory`（未配置 ⇒ `true`）；`modules.memory` 未配置而旧键
+ *   存在时，`readProjectConfig` 已把旧值作为该模块的**读侧默认**折进来（一次性兼容，见
+ *   `modules_legacy_keys`）；
+ * - 写：`setMemoryToolsEnabled` 改写 `modules.memory`（走 schema + `project.config_set` 事件），
+ *   并删除旧键 ⇒ 迁移后**只剩一套真源**，旧键不再被任何写路径产生。
+ */
 export function isMemoryToolsEnabled(root: string): boolean {
-  const file = join(root, "project.yaml");
-  if (!existsSync(file)) return true;
   try {
-    const lines = readFileSync(file, "utf8").split("\n");
-    const val = readScalarByPath(lines, ["memory", "tools_enabled"]);
-    if (val === "false") return false;
-  } catch {}
-  return true;
+    const cfg = readProjectConfig(root);
+    return resolveModuleSwitches(cfg).switches.memory.on;
+  } catch {
+    // 配置不可读：fail-safe 按「开启」（与改造前 readScalarByPath 异常路径一致的默认）
+    return true;
+  }
 }
 
+/** g-480：写入 `modules.memory`（旧键 `memory.tools_enabled` 在同一次原子写里被删除 = 迁移）。 */
 export function setMemoryToolsEnabled(root: string, enabled: boolean, actor = "human:gui"): void {
-  const file = join(root, "project.yaml");
-  let content = existsSync(file) ? readFileSync(file, "utf8") : "";
-  // 简易 YAML 写入 memory.tools_enabled
-  if (!content.includes("memory:")) {
-    content += `\nmemory:\n  tools_enabled: ${enabled}\n`;
-  } else if (/tools_enabled:\s*(true|false)/.test(content)) {
-    content = content.replace(/tools_enabled:\s*(true|false)/, `tools_enabled: ${enabled}`);
-  } else {
-    content = content.replace(/memory:/, `memory:\n  tools_enabled: ${enabled}`);
-  }
-  writeFileSync(file, content, "utf8");
+  writeProjectConfig(root, { modules: { memory: enabled === true } }, actor);
 }
 
 export interface FormatStandingMemoryOptions {
@@ -2176,6 +2390,24 @@ function validateConfigPatch(patch: any): void {
       needStr(o.value, `prompt_overrides.${key}.value`, { nullable: true });
     }
   }
+  // g-480：模块开关二次校验——只允许五个已知模块，取值只允许真布尔或 null（拒绝 "true"/1 等隐式形态）；
+  // 未知键在此**显式点名**（schema 的 additionalProperties:false 也会拒，这里是第二道且文案更可读）。
+  if ("modules" in patch) {
+    needObj(patch.modules, "modules");
+    const m = patch.modules ?? {};
+    for (const k of Object.keys(m)) {
+      if (!(HARNESS_MODULE_IDS as readonly string[]).includes(k)) {
+        throw new GraphError(`modules.${k} 不是已知模块（只允许 ${HARNESS_MODULE_IDS.join("/")}）`);
+      }
+    }
+    for (const id of HARNESS_MODULE_IDS) {
+      if (!(id in m)) continue;
+      const v = m[id];
+      if (v !== undefined && v !== null && typeof v !== "boolean") {
+        throw new GraphError(`modules.${id} 只允许 true/false 或 null（未配置=开启）`);
+      }
+    }
+  }
   // g-311/g-435：顶层 review 配置二次校验（schema 已校验基本结构，此处做业务规则与非法路径拒绝）。
   if ("review" in patch) {
     needObj(patch.review, "review");
@@ -2231,6 +2463,30 @@ function validateConfigPatch(patch: any): void {
  *  整读 → schema 校验 → 行编辑 → 原子写（tmp + rename）；校验失败抛 GraphError 不落盘。
  *  仅当确有值变化时记 project.config_set 事件（幂等/防噪音）。
  *  g-207：新增 schema 校验入口，拒绝未知字段与隐式 coercion。 */
+/**
+ * g-480：删除**已弃用**的旧键 `memory.tools_enabled`（旧值已被 `readProjectConfig` 折进 `modules.memory`）。
+ * 与 `modules.memory` 的写入同处一次原子写 ⇒ 迁移后 project.yaml 里**只剩一套真源**。
+ *
+ * 只处理行级可编辑的块映射形态（`memory:` 头 + 缩进 2 的 `tools_enabled:` 子行）；inline/flow-style
+ * （`memory: {tools_enabled: false}`）行级不可编辑，此时**不动 YAML**：但 `modules.memory` 一旦存在即胜出，
+ * 旧值不再参与任何判定，因此不构成第二真源。子块删空后连头行一并清掉（不留 `memory:` 空壳），
+ * 头行带注释时保留头行。
+ *
+ * @returns 是否真的删掉了 `tools_enabled` 行。
+ */
+function deleteLegacyMemoryToolsKey(lines: string[]): boolean {
+  const head = findKeyLine(lines, "memory", 0, 0, lines.length);
+  if (head < 0) return false;
+  const after = lines[head].slice(lineIndent(lines[head]) + "memory".length + 1);
+  if (splitValueComment(after).value.trim() !== "") return false; // 非块映射头 ⇒ 行级不可编辑
+  const childIdx = findKeyLine(lines, "tools_enabled", 2, head + 1, blockChildrenEnd(lines, head, 0));
+  if (childIdx < 0) return false;
+  lines.splice(childIdx, 1);
+  const rest = lines.slice(head + 1, blockChildrenEnd(lines, head, 0)).some((l) => l.trim() !== "");
+  if (!rest && !lines[head].includes("#")) lines.splice(head, 1);
+  return true;
+}
+
 export function writeProjectConfig(root: string, patch: any, actor: string): void {
   // g-207：schema 严格校验（拒绝未知字段、类型不匹配、隐式 coercion）
   const schemaResult = validateSchema(patch, settingsPostSchema);
@@ -2301,6 +2557,17 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
     if ("contract_paths" in patch.review) setList("contract_paths", patch.review.contract_paths);
     if ("non_product_prefixes" in patch.review) setList("non_product_prefixes", patch.review.non_product_prefixes);
   }
+  // g-480：模块开关落盘——true/false 写布尔字面量；null/undefined 清空该叶子（回到未配置=开启）。
+  // 写入 `modules.memory` 的**同一次原子写**里删除已弃用旧键 `memory.tools_enabled`（旧值迁移，
+  // 不留两套真源）。写其它模块不触碰旧键（那时旧键仍是 memory 的读侧默认，尚未被取代）。
+  if (patch.modules) {
+    for (const id of HARNESS_MODULE_IDS) {
+      if (!(id in patch.modules)) continue;
+      const v = patch.modules[id];
+      setScalar(["modules", id], v === true ? "true" : v === false ? "false" : "");
+      if (id === "memory") deleteLegacyMemoryToolsKey(lines);
+    }
+  }
 
   const updated = lines.join("\n");
   if (updated === original) {
@@ -2310,7 +2577,14 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
   writeFileSync(`${file}.tmp`, updated, "utf8");
   replaceFileAtomic(`${file}.tmp`, file);
   const changed: string[] = [];
-  for (const k of Object.keys(patch ?? {})) changed.push(k);
+  for (const k of Object.keys(patch ?? {})) {
+    // g-480：模块开关逐项登记（`modules.memory` 而非笼统的 `modules`），使「谁被改了」在事件流里可判。
+    if (k === "modules" && patch.modules && typeof patch.modules === "object") {
+      for (const id of HARNESS_MODULE_IDS) if (id in patch.modules) changed.push(`modules.${id}`);
+      continue;
+    }
+    changed.push(k);
+  }
   appendEvent(root, {
     actor,
     event: "project.config_set",

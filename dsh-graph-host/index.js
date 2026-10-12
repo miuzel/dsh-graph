@@ -133,6 +133,16 @@ import {
   resolveAgentTeamsInjection,
   readProjectConfig,
   writeProjectConfig,
+  // g-480：harness 模块可选开关（唯一映射表 + 纯判定函数都在 core，宿主不另抄一份字面量）
+  HARNESS_MODULE_IDS,
+  MODULE_TOOL_NAMES,
+  moduleToolNames,
+  resolveModuleSwitches,
+  disabledModuleTools,
+  stripModuleToolMentions,
+  // g-480：角色档案自适应（模块关 ⇒ 该模块工具不再算必需/可用）的**唯一真源**在 core，
+  // 这里只消费它算出的「受影响角色清单」用于 schema_hints 如实登记。
+  rolesAdaptedByModule,
   REVIEW_POLICIES,
   REVIEW_LIST_FIELDS,
   DEFAULT_REVIEW_REGIONS,
@@ -708,6 +718,36 @@ function renderAutomationGuidance(automation, language) {
   return `\n\n${table.header}\n${lines.join("\n")}\n\n${table.trailer}`;
 }
 // ==== g-439 automation guidance: extractable block end ====
+
+// ==== g-480：模块在**提示词面**的裁剪位置（描述性元数据，随 schema_hints 下发给调用方）====
+// 工具面的唯一真源是 core 的 `MODULE_TOOL_NAMES`（本表**不**重复任何工具名，避免第二份副本漂移）。
+// 取值**闭集**（g480 用例把本表与真实注册 / 真实裁剪行为对账，写错即红）：
+//   · `none` = 没有可达的提示词面（只有工具面）；
+//   · `section:<name>` = 该模块关闭时，这个我们注册的 systemPrompt section **整体**不再注入；
+//   · `section-part:<name>#<part>` = 只裁掉该 section 的**一段**（正文保留）；
+//   · `tool-name-mentions:none` = 该模块关闭时其受管工具名会被从**所有**我们注册的 section 文本里
+//     按行剔除（`stripModuleToolMentions`），且当前三个 section 的**静态**资产里没有它们的可达提及；
+//   · `tool-name-mentions:dynamic-memory` = 同上机制，但可达提及只在**动态**正文里（常驻记忆逐条文本），
+//     静态资产里没有；
+//   · `role-prompt:<role>` = 可达提及只在该**子代理角色**的档案与派发提示词里（persona 文本 /
+//     `requiredTools` / `allowedTools`）。模块关闭 ⇒ **角色档案自适应**（g-480 裁决，唯一真源
+//     `core.moduleAwareRoleProfile`）：persona 文本按行剔除受管工具名、`requiredTools`/`allowedTools`
+//     同步去掉该名，宿主再把 collector 的**派发提示词**按同一 `stripModuleToolMentions` 投影
+//     ⇒ 该角色**照常可派发**，且档案面/提示词面不再引用该工具（不再用「拒绝派发」当裁剪手段）。
+// 已知不可达（如实登记，不假装已裁）：`skills.register` 与 `prompts/*.md` 资产是 **apply 期一次性**
+// 全局面，无法按 workspace 裁剪 ⇒ help/usage 资产里对该模块的**文字**说明保留，但能力已从模型可选集移除。
+// 同类**非模型面**（如实登记，不假装已裁）：GUI 卡片抽屉的「收集提示词预览」（client 侧
+// `prompt.collect.attachments` 文案）是**人类可见的模板预览**，不是模型可见的派发提示词；
+// client bundle 是 apply 期一次性全局资产、渲染期没有 per-workspace 模块状态 ⇒ 不随开关裁剪。
+const MODULE_PROMPT_FACE = {
+  tags: "none",
+  memory: "section:dsh-graph-standing-memory",
+  shared_cards: "tool-name-mentions:dynamic-memory",
+  automation_prompts: "section-part:dsh-graph-supervisor-discipline#automation-guidance",
+  // 附件：可达提及只在 collector 角色的 persona/收集提示词与 requiredTools/allowedTools（`graph_store_attachment`）。
+  // 关闭附件 ⇒ collector 档案与派发提示词随模块自适应（不再提及该工具）⇒ 仍可派发、且不会调用不存在的工具。
+  attachments: "role-prompt:collector",
+};
 
 // g-118：dsh-graph help 内容按 locale 整体加载 prompts/help.*.md
 
@@ -1468,6 +1508,19 @@ export function apply(ctx, config) {
   // 绝对 config.root 时跳过 workspace 要求（root 完全由配置决定）。
   const isAbsoluteConfig = !!(config?.root && isAbsolute(config.root));
   const sessionWorkspace = (ex) => ex?.agent?.session?.header?.cwd ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? null;
+  // g-480：**真裁剪能力探测**（apply 期一次判定；同一结果同时驱动「监听器是否注册」与「设置状态面下发」，
+  // 绝不两处各判一次而分歧）。语义：本版本宿主是否**同时**提供 `agent/created` 生命周期事件与
+  // `tools.restrict()` ⇒ 模块开关能否把受管工具从模型可见面真正移除。
+  //   · true  = 模块开关**真裁剪**生效（工具面 + 提示词面 + 角色档案面）；
+  //   · false = 本版本 DSH 不支持真裁剪 ⇒ 模块开关**不生效**，只把配置记录下来（GUI 在「模块」页签
+  //     如实显示一行提示）；插件绝不因此抛错、也不改注册面（51 个工具照常注册可见）。
+  const moduleTrimSupported = typeof ctx?.on === "function" && typeof ctx?.tools?.restrict === "function";
+  // g-480：派发路径（能力自检 / 工具过滤 / collector 提示词）读模块开关的入口 —— 与工具面监听器、
+  // 三个 section **读同一份** `<board root>/project.yaml`；读失败一律按「全开」
+  // （`resolveModuleSwitches(null)`），绝不因配置读取异常静默砍掉能力或提示词。
+  const readModuleSwitchesForRoot = (rootForRead) => {
+    try { return resolveModuleSwitches(readProjectConfig(rootForRead)); } catch { return resolveModuleSwitches(null); }
+  };
   // g-133 起 profile 级全局默认由宿主 settings 服务承载；g-351 起改为**能力探测分流**
   // （零版本号字面量比较），因为该服务的形态在宿主上换过代：
   //   ① 旧能力：服务暴露 namespace 注册 API `settings.register(ns, schema, { base })`，
@@ -1804,7 +1857,9 @@ export function apply(ctx, config) {
    *  返回 `null` = 通过；否则为可读诊断文本 ⇒ **调用方不得派发**（不启动能力残缺的子代理，
    *  也不让 dsh-tools 的 `names unknown global tool` 内部错误原样外泄）。 */
   const capabilityBlock = (rootForWrite, { goal, role, mode, agentScope, label }) => {
-    const diag = diagnoseDispatchCapability(role, mode, toolCapabilityFor(agentScope));
+    // g-480：必需工具清单按**本 board root 的模块开关**自适应（模块关 ⇒ 其受管工具不再算必需，
+    // 角色随模块自适应而**不再被拒派发**）；宿主真缺工具（探针 false）的 fail-closed 语义不变。
+    const diag = diagnoseDispatchCapability(role, mode, toolCapabilityFor(agentScope), readModuleSwitchesForRoot(rootForWrite));
     if (diag.ok) return null;
     try {
       appendDispatchCapabilityMissing(rootForWrite, {
@@ -1848,7 +1903,7 @@ export function apply(ctx, config) {
     // g-473：能力自检（缺必需工具则不派发；summarizer 无 shell 槽位，白名单缺 web_* 时静默剔除）
     const summarizerCapBlock = capabilityBlock(root, { goal, role: "summarizer", mode: opts.mode, agentScope: parent, label: `${SUMMARIZER_LABEL_PREFIX}${goal}` });
     if (summarizerCapBlock) return { childId: null, error: summarizerCapBlock, digest };
-    const toolFilter = toolFilterForRole("summarizer", opts.mode, toolCapabilityFor(parent));
+    const toolFilter = toolFilterForRole("summarizer", opts.mode, toolCapabilityFor(parent), readModuleSwitchesForRoot(root));
     const request = { parent, prompt: text(prompt), ...(toolFilter ? { toolFilter } : {}) };
     const agentOptions = {};
     if (eff.provider) agentOptions.provider = eff.provider;
@@ -2352,7 +2407,7 @@ export function apply(ctx, config) {
 
     if (subagents && parentAgent && availableProvider) {
       try {
-        const roleToolFilter = toolFilterForRole("executor", effModeRes.mode, executorToolCap);
+        const roleToolFilter = toolFilterForRole("executor", effModeRes.mode, executorToolCap, readModuleSwitchesForRoot(root));
         const request = {
           parent: parentAgent,
           prompt: text(prompt),
@@ -2703,7 +2758,7 @@ export function apply(ctx, config) {
       if (!providerName) {
         throw new Error(`无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`);
       }
-      const toolFilter = toolFilterForRole("reviewer", effMode, reviewerToolCap);
+      const toolFilter = toolFilterForRole("reviewer", effMode, reviewerToolCap, readModuleSwitchesForRoot(root));
       const request = {
         parent: parentAgent,
         prompt: text(prompt),
@@ -3453,7 +3508,10 @@ export function apply(ctx, config) {
         // g-202：传 card 时统一走上下文收集派发，不创建 Goal execution attempt。
         // 先生成 prompt（同时校验 goal/card），再尝试启动；只有成功启动后才绑定卡片。
         if (a.card !== undefined && a.card !== null) {
-          const fullPrompt = formatCollectPrompt(r, a.goal, a.card, a.attempt_brief, resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
+          // g-480：collector 的**派发提示词面**随模块自适应——`attachments` 关闭时按行剔除
+          // `graph_store_attachment` 的提及（`stripModuleToolMentions` 无可剔时返回**同一字符串**
+          // ⇒ 未配置/全开路径逐字节不变）。注意只做**提示词投影**，`@att/` 既有资产不受影响（判据 5）。
+          const fullPrompt = stripModuleToolMentions(formatCollectPrompt(r, a.goal, a.card, a.attempt_brief, resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)), readModuleSwitchesForRoot(r).disabledTools);
           const eff = resolveModelRoute(
             { provider: a.provider, model: a.model, reasoning_effort: a.reasoning_effort },
             readExecutorModel(r),
@@ -3486,7 +3544,7 @@ export function apply(ctx, config) {
             result.child_error = collectorCapBlock;
             return result;
           }
-          const collectToolFilter = toolFilterForRole("collector", a.mode, toolCapabilityFor(ex.agent));
+          const collectToolFilter = toolFilterForRole("collector", a.mode, toolCapabilityFor(ex.agent), readModuleSwitchesForRoot(r));
             const request = {
               parent: ex.agent,
               prompt: text(fullPrompt),
@@ -3774,6 +3832,10 @@ export function apply(ctx, config) {
         return losslessJson({
           config,
           config_path: join(r, "project.yaml"),
+          // g-480：**宿主真裁剪能力**如实下发（与监听器注册、GUI 提示同一判定，apply 期一次探测）：
+          // true = 本版本 DSH 同时有 `agent/created` 与 `tools.restrict` ⇒ 模块开关真裁剪生效；
+          // false = 不支持 ⇒ 模块开关只记录配置、不改变工具面（GUI「模块」页签显示一行提示）。
+          trim_supported: moduleTrimSupported,
           // g-442：按当前项目目录结构的**只读**建议（绝不自动写入 project.yaml）
           review_suggested_regions: suggestedReviewRegions(r),
           schema_hints: {
@@ -3790,6 +3852,25 @@ export function apply(ctx, config) {
             },
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],
+            },
+            // g-480：harness 模块可选开关（workspace 级单层）。未配置/null = **开启**（与改造前一致）；
+            // `tools` 与该模块绑定的受管工具名同源下发（MODULE_TOOL_NAMES 是唯一映射表，宿主不另抄）。
+            // `scope` = "workspace"，`prompt_face` 说明该模块在提示词面的裁剪位置。
+            // `roles` = 该模块关闭时**档案会自适应**的子代理角色（由 `rolesAdaptedByModule` 从真实
+            // 角色档案 diff 推出，不是第二份副本）——空数组 = 只影响工具面、无角色档案被裁。
+            "modules": {
+              type: "boolean",
+              scope: "workspace",
+              default: true,
+              values: [true, false, null],
+              keys: [...HARNESS_MODULE_IDS],
+              per_module: Object.fromEntries(
+                HARNESS_MODULE_IDS.map((id) => [id, {
+                  tools: [...MODULE_TOOL_NAMES[id]],
+                  prompt_face: MODULE_PROMPT_FACE[id],
+                  roles: rolesAdaptedByModule(id),
+                }]),
+              ),
             },
             // g-311/g-435：顶层 review 配置提示
             "review.policy": {
@@ -3813,7 +3894,7 @@ export function apply(ctx, config) {
       def: {
         name: "graph_update_settings",
         description: sT("tool.graph_update_settings"),
-        parameters: params({ patch: { type: "object", description: "配置 patch（部分字段，未传字段保持不变）：可包含 executor、defaults、supervisor.automation、supervisor.agent_teams、prompt_overrides 等" } }, ["patch"]),
+        parameters: params({ patch: { type: "object", description: "配置 patch（部分字段，未传字段保持不变）：可包含 executor、defaults、supervisor.automation、supervisor.agent_teams、modules、prompt_overrides 等" } }, ["patch"]),
       },
       run: (a, ex) => {
         const r = rootFor(ex);
@@ -3912,7 +3993,7 @@ export function apply(ctx, config) {
       // g-473：能力自检（缺必需工具则不派发；error 非空即未派发，与既有 provider 失败同口径）
       const roleOverrideCapBlock = capabilityBlock(rootForReq, { goal: null, role: effRole, mode: overrides.mode, agentScope: parent, label: `${label}/${effRole}` });
       if (roleOverrideCapBlock) return { childId: null, parentSessionId: null, error: roleOverrideCapBlock };
-      const roleToolFilter = toolFilterForRole(effRole, overrides.mode, toolCapabilityFor(parent));
+      const roleToolFilter = toolFilterForRole(effRole, overrides.mode, toolCapabilityFor(parent), readModuleSwitchesForRoot(rootForReq));
       const request = {
         parent,
         prompt: [{ type: "text", text: promptText }],
@@ -4957,7 +5038,8 @@ export function apply(ctx, config) {
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
           // g-183 返工 F：先完整校验（resolveCard 成员关系/backlog/卡状态权限）生成提示词，
           //  再创建 attempt/子代理——校验失败不得留下 attempt/事件副作用。
-          const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt, resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
+          // g-480：同工具入口口径——collector 派发提示词面随模块自适应（attachments 关 ⇒ 剔除附件工具提及）
+          const fullPrompt = stripModuleToolMentions(formatCollectPrompt(rRoot, goal, card, prompt, resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)), readModuleSwitchesForRoot(rRoot).disabledTools);
           // g-388：spawn 前准入——共享卡已在 collecting 时直接拒绝，绝不启动 child（与工具入口同一判定）。
           const admissionErr = collectAdmissionBlock(rRoot, goal, card);
           if (admissionErr) {
@@ -5182,13 +5264,15 @@ export function apply(ctx, config) {
               return json(res, 400, { error: resp.error, details: resp.details });
             }
             writeProjectConfig(r, body, "human:gui");
-            return json(res, 200, { ok: true, config: readProjectConfig(r), review_suggested_regions: suggestedReviewRegions(r) });
+            return json(res, 200, { ok: true, config: readProjectConfig(r), trim_supported: moduleTrimSupported, review_suggested_regions: suggestedReviewRegions(r) });
           }
           if (req.method === "GET") {
             // att-002：下发当前 canonical workspace 的 .dsh-graph/project.yaml 绝对路径
             //（客户端只消费服务端路径，禁止自行拼接 graphRoot）
             const meta = rootForReqMeta(req);
-            return json(res, 200, { ...readProjectConfig(meta.root), configFile: join(meta.root, "project.yaml"), review_suggested_regions: suggestedReviewRegions(meta.root) });
+            // g-480：`trim_supported` = 本版本宿主是否支持真裁剪（见 apply 期能力探测注释）。
+            // GUI 据此在「模块」页签如实显示一行提示（不支持时）；支持时**不渲染该行**。
+            return json(res, 200, { ...readProjectConfig(meta.root), configFile: join(meta.root, "project.yaml"), trim_supported: moduleTrimSupported, review_suggested_regions: suggestedReviewRegions(meta.root) });
           }
           return json(res, 405, { error: "method not allowed" });
         } catch (e) {
@@ -5667,6 +5751,73 @@ export function apply(ctx, config) {
       } catch { /* 事件名不被宿主支持 ⇒ 静默（特性探测） */ }
     }
 
+    // ==== g-480：模块开关的**工具面真裁剪** ====
+    // 目标：关闭某模块后，该模块的受管工具**从模型可见的工具清单里真正消失**（不是 UI 隐藏）。
+    //
+    // 机制（g-482 实证，已在真实 GUI 会话上量到 82→81）：
+    //   `ctx.on("agent/created", ({ agent }) => agent.ctx.tools.restrict({ deny }))`
+    //   —— `restrict` 的语义是「限制**调用 agent scope** 继承到的 global 工具」。它**不沿 scope 链继承**
+    //   ⇒ 本插件在插件层注册一个 `agent/created` 监听即可覆盖**宿主创建的每一个会话**（含主管会话与
+    //   `dsh-subagent` 派发的每个子代理会话，因为后者也是经 `agents.create({ setup })` 建的 agent）。
+    //   量测口 = `ctx.tools.schemas(agent)`（criterion 2 的可验证面）。
+    //
+    // 三条硬约束（缺一即事故）：
+    //   ① **作用域过滤**：deny 名单里出现**祖先层（agent 平面）自有**的工具名时，restrict 会抛
+    //      `unknown global tool`；而 setup 抛错会让**整个会话创建回滚**。因此候选名必须逐个用
+    //      `tools.get(name)`（**全局视图**）与 `tools.get(name, agent)`（**该 agent 视图**）双向确认：
+    //      只有「全局存在且对该 agent 可见」的名字才放进 deny。作用域自有注册永不出现在全局视图 ⇒ 被排除。
+    //   ② **特性探测 + 静默降级**：旧宿主（或测试夹具）没有 `ctx.on` / `tools.restrict` ⇒ **不注册监听**、
+    //      不抛错、不改变任何东西（51 个工具照常注册可见）。engines 下界维持 >=0.1.5-rc.2，**不得抬高**。
+    //   ③ **注册期无条件**：apply 期 51 个 `graph_*` 工具**照常全部注册**（判据 4 的 51 红线），
+    //      裁剪只发生在**会话可见面**，绝不写成「按配置跳过注册」——否则工具计数会随配置漂移。
+    //
+    // 开关读的是**会话自己 workspace** 的 project.yaml（per-session 读，跨 workspace 不串）。
+    //   ④ **workspace 口径唯一**：一律 `agent.session.header.cwd` —— 与工具侧 `sessionWorkspace()`
+    //      （:1440）以及三个 section 的读法**同源**（g-113 会话 workspace 跟随）。无 header.cwd ⇒
+    //      **不裁剪**，也不兜底 `sandboxPolicy.workspaceRoot` / `process.cwd()`：三个 section 在渲染期
+    //      同样只认 header.cwd，兜底会造成「工具面裁了、提示词面没裁」的新分歧。实测（真机 e2e）：
+    //      `dsh-subagent` 的 `cwd` 参数只改**有效工作目录**，不改子会话 header.cwd ⇒ 子会话的开关与
+    //      其 graph_* 工具落在**同一个** board root，二者一致。
+    if (moduleTrimSupported) {
+      try {
+        const off = ctx.on("agent/created", (info) => {
+          try {
+            const agent = info?.agent ?? (info?.ctx?.tools ? info : null);
+            const at = agent?.ctx?.tools;
+            if (!agent || !at || typeof at.restrict !== "function") return;
+            // 会话 workspace：优先 session.header.cwd（其它 section 同源口径）
+            const cwd = agent?.session?.header?.cwd;
+            if (!cwd) return;
+            let switches = null;
+            try {
+              switches = resolveModuleSwitches(readProjectConfig(resolveCanonicalRoot(config, cwd).root));
+            } catch {
+              return; // 配置不可读 ⇒ 不裁剪（fail-safe：与未配置全开一致）
+            }
+            if (!switches.disabledTools.length) return; // 全开：一次 restrict 都不调（行为逐字节不变）
+            // 作用域过滤（约束①）：只保留「全局存在 且 对该 agent 可见」的名字
+            const deny = switches.disabledTools.filter((name) => {
+              try {
+                return typeof at.get === "function" && at.get(name) !== undefined && at.get(name, agent) !== undefined;
+              } catch {
+                return false;
+              }
+            });
+            if (!deny.length) return;
+            const dispose = at.restrict({ deny });
+            if (typeof dispose === "function" && typeof agent.ctx?.effect === "function") {
+              // 会话结束即撤销限制（restrict 的 disposer 精确还原，g-482 实证）
+              try { agent.ctx.effect(() => dispose); } catch { /* 无法挂载 ⇒ 由会话销毁兜底 */ }
+            }
+          } catch (e) {
+            // 绝不因裁剪失败影响会话创建（deny 名单已作用域过滤；此处兜底并留痕）
+            process.stderr.write(`[dsh-graph-host] g-480 模块裁剪跳过: ${e?.message ?? e}\n`);
+          }
+        });
+        if (typeof off === "function") disposers.push(off);
+      } catch { /* 事件名/能力不被宿主支持 ⇒ 静默降级（特性探测，51 个工具不受影响） */ }
+    }
+
     // g-118：supervisor 守则自动注入（不依赖显式 skill 调用）——
     // g-118（负责人 2026-08-22 设计转向）：在所有会话注入**简短引导提示词**（非完整守则）。
     // systemPrompt.section 注册一个恒定渲染 GUIDE_HINT 的提示词段落：所有会话（主管/普通/
@@ -5707,7 +5858,18 @@ export function apply(ctx, config) {
           name: "dsh-graph-guide-hint",
           order: 10,
           interpolate: false, // g-389：字面量 section（本地化资产），逐字保留、不参与 {{变量}} 插值
-          text: () => localizedPrompt("guide-hint", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)),
+          // g-480：按会话 workspace 的模块开关做工具名剔除（无 cwd 时**原样返回**——所有会话仍照常
+          // 注入引导，g-118 的「无 agent/无 session 也渲染」语义不变）。
+          text: (context) => {
+            const hint = localizedPrompt("guide-hint", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
+            try {
+              const cwd = context?.agent?.session?.header?.cwd;
+              if (!cwd) return hint;
+              return moduleTrimmedText(resolveCanonicalRoot(config, cwd).root, hint);
+            } catch {
+              return hint;
+            }
+          },
         }));
         // g-238：system prompt 渲染纯读化——section.text 渲染路径绝不 init（不创建目录/文件、
         // 不追加事件、不改变 supervisor 绑定）；初始化仅保留在显式 apply/写操作路径。
@@ -5750,6 +5912,19 @@ export function apply(ctx, config) {
           }
           return out;
         };
+        // g-480：按**当前会话 workspace** 读模块开关（纯读；按 project.yaml 指纹失效缓存 ⇒ 关/开即时
+        // 生效、跨 workspace 不串）。读失败一律按「全开」（`resolveModuleSwitches(null)`）——
+        // 绝不因配置读取异常静默砍掉能力或提示词。
+        const readModuleSwitchesFor = (canonicalRoot) => cachedRender(
+          `mod:${canonicalRoot}`, canonicalRoot, ["project.yaml"],
+          () => {
+            try { return resolveModuleSwitches(readProjectConfig(canonicalRoot)); } catch { return resolveModuleSwitches(null); }
+          },
+        );
+        // 本插件自有 section 的**统一出口**：关闭模块的受管工具名按行剔除（对**动态**记忆正文里的
+        // 提及同样生效）；全开时 `stripModuleToolMentions` 原样返回**同一字符串** ⇒ diff=0。
+        const moduleTrimmedText = (canonicalRoot, text) =>
+          stripModuleToolMentions(text, readModuleSwitchesFor(canonicalRoot).disabledTools);
         // g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
         // g-149：使用 resolveCanonicalRoot 确保 worktree 会话也能正确读到主树 project.yaml
         // text(context) 里取 sessionId=context?.agent?.session?.id；
@@ -5780,8 +5955,12 @@ export function apply(ctx, config) {
                 }));
               if (!supConfig || !supConfig.supervisorId || supConfig.supervisorId !== sessionId) return "";
               const language = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
-              return "\n" + localizedPrompt("discipline", language)
-                + renderAutomationGuidance(supConfig.automation, language);
+              // g-480：`automation_prompts` 关闭 ⇒ **不追加**六键自动化指导段（纪律正文原样保留）；
+              // 全开/未配置 ⇒ 拼接方式与改造前逐字相同（diff=0）。
+              const automationOn = readModuleSwitchesFor(canonical.root).switches.automation_prompts.on !== false;
+              return moduleTrimmedText(canonical.root,
+                "\n" + localizedPrompt("discipline", language)
+                + (automationOn ? renderAutomationGuidance(supConfig.automation, language) : ""));
             } catch {
               return "";
             }
@@ -5801,12 +5980,15 @@ export function apply(ctx, config) {
               const cwd = context?.agent?.session?.header?.cwd;
               if (!cwd) return "";
               const canonical = resolveCanonicalRoot(config, cwd);
+              // g-480：`memory` 关闭 ⇒ 常驻记忆段**整段不注入**（不删任何记忆数据；`graph_memory_*`
+              // 工具同时已从模型可选集移除）。全开/未配置 ⇒ 与改造前逐字相同。
+              if (readModuleSwitchesFor(canonical.root).switches.memory.on === false) return "";
               // g-252：此路径**不传 actor**（host 侧此处无可靠会话身份）⇒ recallMemory 会过滤掉
               // 全部 kind:"user" 条目（owner 隔离）：user 常驻记忆在本路径等价「仅按需 recall」，
               // 这是有意语义。若将来要按 actor 注入，必须同时把 actor 纳入下方 cachedRender 的
               // 缓存键（现在是 `mem:${root}`），否则同一 root 的不同 actor 会拿到同一份渲染结果 ⇒ 跨 actor 泄漏。
-              return cachedRender(`mem:${canonical.root}`, canonical.root, ["memory/memory.jsonl"],
-                () => formatStandingMemorySection(canonical.root) ?? "");
+              return moduleTrimmedText(canonical.root, cachedRender(`mem:${canonical.root}`, canonical.root, ["memory/memory.jsonl"],
+                () => formatStandingMemorySection(canonical.root) ?? ""));
             } catch {
               return "";
             }

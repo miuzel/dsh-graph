@@ -33,6 +33,7 @@
           agent_teams: form?.supervisor?.agent_teams === true ? true : form?.supervisor?.agent_teams === false ? false : null,
         },
         prompt_overrides: { subagent: normalizePromptOverrideDraft(po) },
+        modules: Object.fromEntries(MODULE_SWITCH_KEYS.map((k) => [k, normalizeModuleSwitchDraft(form?.modules?.[k])])),
         review: {
           policy: normalizeReviewPolicyDraft(form?.review?.policy),
           // g-442：三项评审条件列表的规范化——畸形（invalid_fields 命中 / 段级 config_malformed /
@@ -49,6 +50,37 @@
       if (!baseline || !form) return false;
       return JSON.stringify(normalizeSettingsDraft(form, refreshIntervalInput)) !== JSON.stringify(baseline);
     }
+    // ===== g-480：harness 模块开关（workspace 级，五个模块默认全开）=====
+    // 与 core `HARNESS_MODULE_IDS` 同源同序（客户端是独立打包的浏览器 bundle，无法 import core 常量，
+    // 故此处是**副本**；两边一致性由 core/tests/g480-modules.test.ts 的前后端对账断言钉住，
+    // 改一边不改另一边必红）。
+    // 位置要求：本段必须落在 `function normalizeSettingsDraft(` 之后 —— 既有 vm 渲染测试从该函数起
+    // 截取源码求值（g479-settings-tabs.test.ts 的 sandbox 切片），声明放在切片之前会 ReferenceError。
+    const MODULE_SWITCH_KEYS = ["tags", "memory", "shared_cards", "automation_prompts", "attachments"];
+    // 三态归一（与 core 同口径）：只有**真布尔**算显式；未配置/缺失/畸形一律归一为 null（＝开启）。
+    // 归一后同态不产生假脏，也绝不会把畸形值回填成「关闭」。
+    const normalizeModuleSwitchDraft = (v) => (v === true ? true : v === false ? false : null);
+    /** g-480：模块开关的展示文案键（标签 + 一句话说明）。与 MODULE_SWITCH_KEYS 同序、同长，由
+     *  core/tests/g480-modules.test.ts 的对账断言钉住（缺一个键或两语不对称即红）。 */
+    const MODULE_LABEL_KEYS = {
+      tags: "settings.module.tags",
+      memory: "settings.module.memory",
+      shared_cards: "settings.module.sharedCards",
+      automation_prompts: "settings.module.automationPrompts",
+      attachments: "settings.module.attachments",
+    };
+    const MODULE_HINT_KEYS = {
+      tags: "settings.moduleHint.tags",
+      memory: "settings.moduleHint.memory",
+      shared_cards: "settings.moduleHint.sharedCards",
+      automation_prompts: "settings.moduleHint.automationPrompts",
+      attachments: "settings.moduleHint.attachments",
+    };
+    /** g-480（att-002）：宿主**不支持真裁剪**（缺 `agent/created` 事件或 `tools.restrict`）时的
+     *  唯一一行提示键。服务端 `/api/dsh-graph/settings` 的 `trim_supported === false` 才渲染 →
+     *  支持真裁剪的宿主（当前本机）上**该行不存在**，绝不改变既有页面的默认可见性；zh/en 对称、
+     *  en 侧零 CJK（由 core/tests/g480-modules.test.ts 的对账断言钉住）。 */
+    const MODULE_TRIM_UNSUPPORTED_HINT_KEY = "settings.modulesTrimUnsupported";
     // ===== g-333：override + 空文本 ≡ disable =====
     // core 已显式定义该语义（writeProjectConfig 用 JSON.stringify 编码：空串写回 `""`，结构化读取器
     // 读回即 disable；「空 override」在存储层不可表示）。这里把同一语义前移到**草稿归一化**与
@@ -204,6 +236,13 @@
         if (to === true || to === false || from === true || from === false) leaf(["supervisor", "agent_teams"]);
       }
       leaf(["prompt_overrides", "subagent"]);
+      // g-480：模块开关同 agent_teams 口径——「无基线且草稿为 null」= 无话可说（不把「未配置」实体化
+      // 进 project.yaml）；只有草稿是布尔、或基线是布尔而草稿回 null（显式清空回到默认开启）时才提交。
+      for (const k of MODULE_SWITCH_KEYS) {
+        const to = getLeafPath(draft, ["modules", k]);
+        const from = getLeafPath(base, ["modules", k]);
+        if (to === true || to === false || from === true || from === false) leaf(["modules", k]);
+      }
       leaf(["review", "policy"], (v) => (v === "" ? null : v));
       for (const key of REVIEW_LIST_KEYS) {
         const to = getLeafPath(draft, ["review", key]);
@@ -237,12 +276,13 @@
     // 同一项出现在两个页签）都必须判红——这就是「配置项 → 页签归属」结构守卫的真源。
     // 键名与 project.yaml / localStorage 的叶子路径同名；`local.*` 前缀明确标注为**本地偏好**
     // （只写 localStorage，不写 project.yaml）。
-    const SETTINGS_TAB_KEYS = ["executor", "review", "ui", "advanced", "about"];
+    const SETTINGS_TAB_KEYS = ["executor", "review", "ui", "modules", "advanced", "about"];
     const SETTINGS_DEFAULT_TAB = "executor";
     const SETTINGS_TAB_LABEL_KEYS = {
       executor: "settings.tab.executor",
       review: "settings.tab.review",
       ui: "settings.tab.ui",
+      modules: "settings.tab.modules",
       advanced: "settings.tab.advanced",
       about: "settings.tab.about",
     };
@@ -250,6 +290,15 @@
       executor: ["executor.provider", "executor.model", "executor.reasoning_effort", "executor.mode"],
       review: ["review.policy", "review.regions", "review.contract_paths", "review.non_product_prefixes", "supervisor.agent_teams"],
       ui: ["local.refresh_interval", "local.live_display"],
+      // g-480：harness 模块开关（workspace 级）——五个模块默认全开，关闭 = 真裁剪（工具从模型可选集
+      // 移除 + 相关 systemPrompt 段不再注入），只隐藏能力、**不删除任何数据**。
+      modules: [
+        "modules.tags",
+        "modules.memory",
+        "modules.shared_cards",
+        "modules.automation_prompts",
+        "modules.attachments",
+      ],
       advanced: [
         "defaults.review.reviewer",
         "defaults.review.prompt",
@@ -349,6 +398,9 @@
           if (!r.ok) throw new Error(data?.error || (dgT("drag.requestFail") + " " + r.status));
           setForm(data);
           setConfigFile(data.configFile ?? null);
+          // g-480（att-002）：宿主是否支持真裁剪（服务端 apply 期能力探测的唯一结果）——
+          // 明确 false 才渲染「本版本 DSH 不支持真裁剪」那一行；true/缺失 ⇒ null（不渲染）。
+          setTrimSupported(data.trim_supported === true ? true : data.trim_supported === false ? false : null);
           // g-442：按当前项目目录结构的**只读**建议（服务端下发；本面板绝不自动写入 project.yaml）
           setSuggestedRegions(Array.isArray(data.review_suggested_regions) ? data.review_suggested_regions : null);
           baselineRef.current = normalizeSettingsDraft(data, String(getRefreshInterval()));
@@ -365,6 +417,11 @@
       const [catalog, setCatalog] = React.useState({ status: "loading" });
       // g-442：评审条件的只读目录建议（服务端按 workspace 一级目录计算；仅展示，不自动写入）
       const [suggestedRegions, setSuggestedRegions] = React.useState(null);
+      // g-480（att-002）：宿主真裁剪能力（服务端 `trim_supported`）——**三态** true/false/null。
+      // 只有服务端**明确**为 false 才在「模块」页签渲染那一行提示；true/缺失（未知）一律**不渲染**
+      // （缺字段不等于「不支持」，绝不据此对用户谎报能力）。
+      // 位置要求（g-479）：必须**追加**在既有 useState 槽位之后——测试夹具按 0..10 槽位覆写初值。
+      const [trimSupported, setTrimSupported] = React.useState(null);
       React.useEffect(() => {
         let alive = true;
         loadHostCatalog(gConnectionApi)
@@ -832,6 +889,37 @@
               }),
               h("label", { htmlFor: "dg-live-display", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, dgT("settings.liveDisplay")),
               h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.liveDisabledHint"))),
+          ]),
+          // g-480：harness 模块开关（**workspace 级**：写 project.yaml 的 `modules` 段，随项目配置共享）。
+          // 关闭 = **真裁剪**：该模块的 `graph_*` 工具从模型可见的工具清单里移除，且相关 systemPrompt
+          // 段不再注入；只隐藏能力、**不删除任何数据**（记忆/卡片/附件一律原样保留，重新开启即恢复）。
+          // 五个模块**默认全开**：未配置时与改造前逐字节一致。
+          tabPanel("modules", [
+            h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11, opacity: 0.85 } }, dgT("settings.modulesNote")),
+            h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 } },
+              MODULE_SWITCH_KEYS.map((k) =>
+                h("div", { key: k, style: { display: "flex", alignItems: "flex-start", gap: 6, minWidth: 0 } },
+                  h("input", {
+                    id: `dg-module-${k}`,
+                    type: "checkbox",
+                    // 未配置/null ⇒ 勾选（默认开启）；只有显式 false 才取消勾选
+                    checked: form.modules?.[k] !== false,
+                    onChange: (e) => set(["modules", k], e.target.checked),
+                    style: { flexShrink: 0, marginTop: 2 },
+                  }),
+                  h("div", { style: { minWidth: 0 } },
+                    h("label", { htmlFor: `dg-module-${k}`, style: { fontWeight: 700, fontSize: 12, cursor: "pointer", display: "block" } }, dgT(MODULE_LABEL_KEYS[k])),
+                    h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT(MODULE_HINT_KEYS[k])))))),
+            h("div", { style: { ...S.meta, marginTop: 8, fontSize: 11, opacity: 0.85 } }, dgT("settings.modulesScopeNote")),
+            // g-480（att-002）：宿主**不支持真裁剪**时（服务端 `trim_supported === false`）的**唯一一行**
+            // 提示——如实说明「开关只记录配置、不改变工具与提示词面」。支持真裁剪的宿主上该行**不存在**；
+            // 文案 zh/en 对称、en 侧零 CJK（对账断言在 core/tests/g480-modules.test.ts）。
+            trimSupported === false
+              ? h("div", {
+                "data-dg-module-trim-unsupported": "1",
+                style: { ...S.meta, marginTop: 6, fontSize: 11, color: "var(--dsw-alias-state-warn-primary, #e0b060)" },
+              }, dgT(MODULE_TRIM_UNSUPPORTED_HINT_KEY))
+              : null,
           ]),
           tabPanel("advanced", [
             h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),

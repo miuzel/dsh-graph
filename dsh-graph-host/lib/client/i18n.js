@@ -769,9 +769,26 @@
       'settings.tab.executor': '模型与执行',
       'settings.tab.review': '评审与质量',
       'settings.tab.ui': '界面与刷新',
+      'settings.tab.modules': '模块',
       'settings.tab.advanced': '高级',
       'settings.tab.about': '关于',
       'settings.tabLocalNote': '本页两项为本地偏好：只保存在浏览器 localStorage，不写入 project.yaml，也不随项目配置同步。',
+      // g-480：harness 模块可选开关（workspace 级；关闭 = 真裁剪工具面 + 相关提示词段，不删除数据）
+      'settings.modulesNote': '关闭某模块会真正裁剪该模块的能力：其工具从模型可见的工具清单中移除，相关系统提示词段也不再注入。数据不会被删除，重新开启即恢复。',
+      'settings.modulesScopeNote': '作用范围：当前 workspace（写入本项目的 project.yaml）。未配置 = 全部开启，行为与改造前一致。',
+      // g-480：宿主**不支持真裁剪**（无 agent/created 或 tools.restrict）时的唯一一行提示；
+      // 服务端 `trim_supported === false` 才渲染（支持时**不渲染**该行）。
+      'settings.modulesTrimUnsupported': '⚠️ 本版本 DSH 不支持真裁剪：模块开关不生效，只会记录配置（工具与提示词均不受影响）。',
+      'settings.module.tags': '目标标签',
+      'settings.module.memory': '记忆',
+      'settings.module.sharedCards': '项目知识库（共享卡片）',
+      'settings.module.automationPrompts': '自动化任务提示词',
+      'settings.module.attachments': '附件',
+      'settings.moduleHint.tags': '目标标签的读写工具（graph_set_goal_tags）',
+      'settings.moduleHint.memory': '记忆的增删改查工具与常驻记忆段（graph_memory_*）',
+      'settings.moduleHint.sharedCards': '共享卡片池的工具（graph_*_shared_card / graph_convert_card_to_*）',
+      'settings.moduleHint.automationPrompts': '主管提示词里的自动化动作指导段（supervisor.automation 六键）',
+      'settings.moduleHint.attachments': '附件的存取与删除工具（graph_store_attachment / graph_delete_attachment）',
 
       // === 判据编辑弹窗 ===
       'criteria.editTitle': '✏️ 编辑质量判据',
@@ -2003,9 +2020,27 @@
       'settings.tab.executor': 'Model & execution',
       'settings.tab.review': 'Review & quality',
       'settings.tab.ui': 'UI & refresh',
+      'settings.tab.modules': 'Modules',
       'settings.tab.advanced': 'Advanced',
       'settings.tab.about': 'About',
       'settings.tabLocalNote': 'Both items on this tab are local preferences: stored in browser localStorage only, never written to project.yaml and never synced with project config.',
+      // g-480: optional harness module switches (workspace level; off = real trimming of the tool face
+      // plus the related prompt sections, and never any data deletion)
+      'settings.modulesNote': 'Turning a module off really trims its capability: its tools are removed from the tool list the model can see, and the related system prompt sections are no longer injected. No data is deleted; turning it back on restores everything.',
+      'settings.modulesScopeNote': 'Scope: the current workspace (written to this project\'s project.yaml). Unconfigured means all modules on, matching the previous behavior.',
+      // g-480: single hint line rendered only when the host reports `trim_supported === false`
+      // (no agent/created event or no tools.restrict); never rendered on supporting hosts.
+      'settings.modulesTrimUnsupported': '⚠️ This DSH version does not support real trimming: module switches have no effect and are recorded only (tools and prompts stay unchanged).',
+      'settings.module.tags': 'Goal tags',
+      'settings.module.memory': 'Memory',
+      'settings.module.sharedCards': 'Project knowledge base (shared cards)',
+      'settings.module.automationPrompts': 'Automation task guidance',
+      'settings.module.attachments': 'Attachments',
+      'settings.moduleHint.tags': 'Read/write tools for goal tags (graph_set_goal_tags)',
+      'settings.moduleHint.memory': 'Create/replace/remove/recall tools plus the standing-memory section (graph_memory_*)',
+      'settings.moduleHint.sharedCards': 'Shared card pool tools (graph_*_shared_card / graph_convert_card_to_*)',
+      'settings.moduleHint.automationPrompts': 'The automation action guidance section in the supervisor prompt (the six supervisor.automation keys)',
+      'settings.moduleHint.attachments': 'Tools to store and delete attachments (graph_store_attachment / graph_delete_attachment)',
 
       // === Criteria modal ===
       'criteria.editTitle': '✏️ Edit Quality Criteria',
