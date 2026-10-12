@@ -673,11 +673,14 @@ function localizedPrompt(name, language) {
   return requirePromptAsset(name, language);
 }
 
-/** g-493：`graph_help(topic)` 的主题抽取（纯函数，返回 null 表示该主题不存在）。
+/** g-493 / g-495：`graph_help(topic)` 的主题抽取（纯函数，返回 null 表示该主题不存在）。
  *  主题口径（与 prompts/help.*.md 的章节标题同源，不做第二份目录）：
  *   · `usage` / `使用说明`          ⇒ 从文首到第一个二级标题（整份使用说明）；
  *   · `graph_engineering` / `图工程` ⇒ 「为什么叫 dsh-graph…」章节；
- *   · 任一已登记工具名              ⇒ 该工具那一条（`- <name>(…)` 起、到下一个 `- ` 或空行为止）。
+ *   · 任一**功能模块名**            ⇒ 该模块那一行（`| <名> | … |` 表格行）。
+ *  g-495：工具名主题**已移除**（负责人 2026-10-13 选 (c)：schema 注入已提供足够信息，
+ *  没必要按工具名查）。模块名真源 = `HARNESS_MODULE_IDS`（core/ops.ts 单一真源，
+ *  此处不另抄一份字面量），别名走 `MODULE_TOPIC_ALIASES`。
  *  章节名按 `## ` 切分 ⇒ 资产改标题时必须同步本函数（守卫 core/tests/g493-help-topic.test.ts 钉住）。 */
 function helpTopicText(text, topic) {
   const src = typeof text === "string" ? text : "";
@@ -698,6 +701,9 @@ function helpTopicText(text, topic) {
     }
     return null;
   }
+  // g-495：功能模块主题 —— 命中资产里该模块的表格行（含所属章节标题）。
+  const moduleId = helpTopicModuleId(key);
+  if (moduleId) return helpModuleTopicText(src, moduleId);
   const toolMatch = new RegExp(`^- ${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\(`, "m").exec(src);
   if (!toolMatch) return null;
   const rest = src.slice(toolMatch.index);
@@ -705,6 +711,70 @@ function helpTopicText(text, topic) {
   const blank = rest.indexOf("\n\n", 1);
   const cuts = [nextLine, blank].filter((n) => n > 0);
   return (cuts.length ? rest.slice(0, Math.min(...cuts)) : rest).trimEnd();
+}
+
+/** g-495：功能模块名 topic 的别名表（真源 = `HARNESS_MODULE_IDS`，此处只加人类可读别名）。
+ *  键为 `HARNESS_MODULE_IDS` 的成员，值为额外可命中的别名（小写比较）。
+ *  结构性约束由守卫 `core/tests/g493-help-topic.test.ts` 钉住：键集合必须**恰等于**
+ *  `HARNESS_MODULE_IDS`（引擎加模块而此处漏登记 ⇒ 必红）。 */
+const MODULE_TOPIC_ALIASES = {
+  tags: ["标签", "tag", "goal_tags", "目标标签"],
+  memory: ["记忆", "mem", "记忆管理"],
+  shared_cards: ["共享卡", "共享卡片", "shared_cards", "shared-cards", "共享池"],
+  automation_prompts: ["自动化提示词", "自动化", "automation", "automation_prompts", "automation-prompts"],
+  attachments: ["附件", "attachment", "att"],
+};
+
+/** g-495：把 topic 归一成 `HARNESS_MODULE_IDS` 成员；非模块名返回 null。 */
+function helpTopicModuleId(key) {
+  for (const id of HARNESS_MODULE_IDS) {
+    if (key === id) return id;
+    const aliases = MODULE_TOPIC_ALIASES[id] ?? [];
+    if (aliases.some((a) => String(a).toLowerCase() === key)) return id;
+  }
+  return null;
+}
+
+/** g-495：取资产里某模块的**单行**（连同所属二级章节标题与表头），供 `topic=<模块名>` 返回。
+ *  解析口径与资产结构同源：模块表在 `## ` 章节内，每行形如 `| <显示名> | … |`。
+ *  行的**定位**不依赖显示名（显示名是给人看的措辞，可能改），而依赖行内出现的
+ *  `{moduleId}` 状态占位符 —— 那是渲染期才替换的稳定标记。
+ *  只返回该模块自己的行（+ 章节标题 + 表头两行），**不**连带整张表 —— 否则 `topic=<模块>`
+ *  与整份 help 的信息量几无差别，渐进式披露退化。 */
+function helpModuleTopicText(src, moduleId) {
+  const lines = String(src || "").split("\n");
+  const rowIdx = lines.findIndex((l) => l.startsWith("|") && l.includes(`{${moduleId}}`));
+  if (rowIdx < 0) return null;
+  let headIdx = -1;
+  for (let i = rowIdx; i >= 0; i--) {
+    if (lines[i].startsWith("## ")) { headIdx = i; break; }
+  }
+  // 表头两行（`| 模块 | 作用 | 状态 |` + 分隔行）紧随章节标题。
+  const tableHead = lines.slice(headIdx + 1, headIdx + 3).filter((l) => l.startsWith("|"));
+  const title = headIdx < 0 ? [] : [lines[headIdx]];
+  return [...title, ...tableHead, lines[rowIdx]].join("\n").trimEnd();
+}
+
+/** g-495：把 help 资产里的 `{moduleId}` 占位符渲染成当前生效开关。
+ *
+ *  - 资产里每个受管模块一行，行内以 `{<moduleId>}` 标记该行的状态列 ⇒ **资产与模块表同源**，
+ *    引擎加模块而资产漏行时 `renderHelpModules` 会留下未替换的占位符（守卫据此判红）。
+ *  - `switches` 为 null / 缺该模块 ⇒ 按**开启**（fail-safe，与 `resolveModuleSwitches` 同口径）。
+ *  - 渲染结果只是文本；**不**改配置、**不**改注册面，也不删除任何数据。
+ *  - 状态词按语言取（`language`）：zh 用「开启 / 关闭」，en 用「enabled / disabled」——
+ *    与资产语言一致，避免英文资产里混入 CJK（prompt-i18n-parity 守卫会判红）。 */
+function renderHelpModules(text, switches, language = "zh") {
+  if (typeof text !== "string" || !text) return text;
+  const zh = normalizePromptLanguage(language) === "zh";
+  const onWord = zh ? "开启" : "enabled";
+  const offWord = zh ? "关闭" : "disabled";
+  let out = text;
+  for (const id of HARNESS_MODULE_IDS) {
+    const decision = switches?.switches?.[id];
+    const on = decision ? decision.on !== false : true;
+    out = out.split(`{${id}}`).join(on ? onWord : offWord);
+  }
+  return out;
 }
 
 const GUIDE = requirePromptAsset("supervisor-guide", "zh");
@@ -3341,22 +3411,40 @@ export function apply(ctx, config) {
       },
     },
     {
-      // g-118：dsh-graph help 命令——输出使用说明 + supervisor 接管（claim）指引。
+      // g-118：dsh-graph help 命令——输出**功能模块清单 + 当前开关状态** + supervisor 接管（claim）指引。
       // 与引导提示词（systemPrompt section GUIDE_HINT）呼应：提示词告知 help 命令存在，
-      // help 给出完整工具清单与换会话步骤。不含主管守则（完整守则走 skill 显式调用）。
+      // help 给出模块清单与换会话步骤。不含主管守则（完整守则走 skill 显式调用）。
       // g-493：新增**可选** topic —— 让使用说明/图工程点题章节可被按名查询（也是可被守卫断言
       // 的机械真源）。省略 topic 时**逐字返回整份资产**（g-347 的端到端断言不变）。
+      // g-495（负责人 2026-10-13 裁定）：help 改为 **agent 面向的渐进式披露** ——
+      //   · 删去 51 条逐工具参数速查（与 harness 注入的工具定义重复），只留①一句用途
+      //     ②功能模块清单（名/作用/**当前开关状态**）③接管指引；
+      //   · `topic` 的工具名分支移除（选 (c)：schema 注入已提供足够信息，没必要按工具名查），
+      //     改支持**模块名**；`usage` / `graph_engineering` 保留；
+      //   · 「当前开启哪些模块」取**既有只读投影** `readModuleSwitchesForRoot`（g-480 的
+      //     `resolveModuleSwitches` 单一真源），**不**另接 GUI 用的 `moduleSwitchPayload`；
+      //     读失败一律按**全开**（fail-safe，与 g-480 同口径）。
+      // 本工具仍是**只读**：开关状态只影响渲染文本，不写配置、不改注册面（51 个工具照常注册）。
       def: {
         name: "graph_help",
-        description: "输出 dsh-graph 使用说明与 supervisor 接管（claim）指引：graph_* 工具清单、graph_handoff/graph_claim_supervisor 换会话步骤；可选 topic 查询单个主题（usage / graph_engineering / 某个工具名）。",
+        description: "输出 dsh-graph 功能模块清单（各模块作用 + 当前开关状态）与 supervisor 接管（claim）指引（graph_handoff/graph_claim_supervisor 换会话步骤）；可选 topic 查询单个主题（usage / graph_engineering / 某个模块名）。",
         parameters: params({ topic: str }, []),
       },
-      run: (a) => {
-        const text = localizedPrompt("help", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
+      run: (a, ex) => {
+        const language = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
+        const raw = localizedPrompt("help", language);
+        // g-495：把资产里的 `{moduleId}` 占位符渲染成当前生效开关（开 / 关）。
+        // root 解析与其它工具同源（`rootFor`）；解析/读取失败一律按**全开** —— 与
+        // `readModuleSwitchesForRoot` 的 fail-safe 同口径，绝不因读配置异常谎报「关闭」。
+        let switches = null;
+        try { switches = readModuleSwitchesForRoot(rootFor(ex)); } catch { switches = null; }
         const topic = typeof a?.topic === "string" ? a.topic.trim() : "";
-        if (!topic) return { help: text };
-        const topicText = helpTopicText(text, topic);
-        return topicText === null ? { help: text, topic, found: false } : { help: topicText, topic, found: true };
+        if (!topic) return { help: renderHelpModules(raw, switches, language) };
+        // 主题抽取在**渲染前**的资产上做：模块行靠 `{moduleId}` 稳定标记定位，
+        // 渲染后该标记已被替换成「开启/关闭」而无法定位 ⇒ 顺序不可颠倒。
+        const topicText = helpTopicText(raw, topic);
+        if (topicText === null) return { help: renderHelpModules(raw, switches, language), topic, found: false };
+        return { help: renderHelpModules(topicText, switches, language), topic, found: true };
       },
     },
     {

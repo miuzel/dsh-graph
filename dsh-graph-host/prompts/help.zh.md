@@ -1,80 +1,21 @@
-dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工具（共 51 个）：
+dsh-graph 把工作组织成「目标看板」。共 5 个功能模块：
 
-## 目标生命周期
-- graph_create_goal(title[, version][, type]) 建目标（进 backlog，带 version 则排期；type 可选 feature/bug/task/improvement/patch/chore）；
-- graph_transition(goal, to[, reason]) 迁移状态；生命周期 draft→planning→collecting→ready→in_progress→review→delivered，另有 blocked（进 blocked 必须 reason）；
-- graph_archive_goal(goal) 归档目标（仅 draft/planning/delivered 可归档）；
-- graph_unarchive_goal(goal) 取消归档；
-- graph_delete_goal(goal) 删除已归档目标（含卡片/attempts）；
-- graph_postpone_goal(goal[, reason]) 暂缓目标（移回 backlog，置为 draft）；
-- graph_rename_goal(goal, title) 重命名目标。
+## 功能模块
 
-## 目标内容
-- graph_amend_goal(goal, note[, append]) 记录修订/人工反馈；note 为修订备注，append 追加进描述正文；
-- graph_set_description(goal, description) 就地编辑目标描述（description 空则清空）；
-- graph_set_directive(goal, directive) 设置下一次 attempt 的补充指令（空则清空）；
-- graph_set_relation(goal, action, type, target) 标记/解除目标间关系（action: add 建立 / remove 解除；type: supersedes 取代 / amends 调整 / extends 补充 / related 相关；target 为对端目标 id）；幂等，拒绝替代环，depends_on 请改用 meta.depends_on；
-- graph_set_goal_tags(goal, tags[, base_tags][, force]) 设置标签（≤20 个；base_tags 为乐观并发基线，force 强制覆盖）；
-- graph_set_goal_type(goal, type) 设置类型 feature/bug/task/improvement/patch/chore；
-- graph_move_goal(goal, to[, version]) 移动目标：backlog ↔ 独立 goals/ ↔ 版本；
-- graph_add_comment(goal, text) 追加评论/反馈到 Comments 小节。
-- graph_write_results(goal, attempt, text[, source][, actor]) 人工写入一次 attempt 的完成摘要（默认 source=manual + 写入者标注）；**主管自做 chore/patch 等无子代理改动、或 attempt 未截获到输出时须主动补写**（零 LLM 调用，与自动截获同格式/同路径/同覆盖策略）；
-- graph_refresh_results([goal][, goals][, content][, source][, llm][, force][, actor]) 重写 results.md（结论/改动与影响/判据达成/证据引用/关键决策/时间线/来源）；`llm:true` 派专用摘要子代理（role=summarizer）按目标详情写「具体改了什么/影响面/值得注意」（source=llm，以 source_hash 为缓存键、历史未变不重复调用，force:true 强制重写；不可用则降级 source=deterministic）；省略 content/llm 时由目标历史零 LLM 拼装；传 content 时采用调用方正文（manual=人工）；旧版自动归档为 results-archive-YYYYMMDDTHHMMSS.md；支持单目标与批量 goals[]（content 仅限单目标），逐目标报告写入/跳过/失败/等待/缓存。
+| 模块 | 作用 | 状态 |
+| --- | --- | --- |
+| 标签 | 给目标打标签（≤20 个），用于筛选与分组 | {tags} |
+| 记忆 | 跨会话持久事实：项目记忆与用户偏好，分按需 / 常驻两级 | {memory} |
+| 共享卡 | 多目标复用的上下文：共享池挂载、引用计数、自有卡互转 | {shared_cards} |
+| 自动化提示词 | 六键自动化指导段；**无专属工具**，只影响提示词 | {automation_prompts} |
+| 附件 | 卡片正文可引用的文件（文本 / 二进制） | {attachments} |
 
-## 判据·卡片·附件
-- graph_set_criteria(goal, criteria[]) 先登记质量判据（判据先于执行，硬规则）；
-- graph_add_card(goal, title[, kind][, scope]) 创建上下文卡片（默认 shared；scope="goal" 为自有卡）；
-- graph_fill_card(goal, card[, text][, content_ref][, summary]) 填充卡片正文（可用 @att/<name> 引用附件；content_ref 仅兼容读取）；
-- graph_review_card(goal, card) 复核已填充卡片（filled → reviewed）；
-- graph_delete_card(goal, card) 删除卡片（collecting 状态不可删）；
-- graph_convert_card_to_shared(goal, card) 自有卡 → 共享卡；
-- graph_convert_card_to_owned(goal, card) 共享卡 → 自有卡（引用计数须为 1）；
-- graph_attach_shared_card(goal, card) 把共享池既有共享卡挂载到目标（复用已收集上下文，引用计数 +1，幂等；仅 owner/主管）；
-- graph_detach_shared_card(goal, card) 解除目标对共享卡的引用（卡仍留池；collecting 拒绝；仅 owner/主管）；
-- graph_list_shared_cards() 只读列出共享池（id/title/status/refs，不含正文）；
-- graph_store_attachment(name[, content][, base64]) 存储附件（text 用 content，二进制用 base64）；
-- graph_delete_attachment(name) 删除附件（仍被引用则拒绝）；
-- graph_bind_collect_card(goal, card, child_id[, parent_session_id][, provider][, model]) 绑定收集子代理到卡片。
+模块 = 宿主按 `<board root>/project.yaml` 的 `modules` 段裁剪的工具组；关闭的模块其工具**不暴露**（数据不删除）。未配置 / 配置不可读一律按**全部开启**。上表「状态」为**本会话当前生效值**。
 
-## 执行与返工
-- graph_start_attempt(goal[, card][, executor][, provider][, model][, reasoning_effort][, mode][, worktree][, attempt_brief][, task_type][, baseline_commit][, source_attempt][, acceptance_items]) 派发执行子代理；
-- graph_record_attempt_handoff(goal, source_attempts[], failures, constraints, baseline, verification) 主管登记返工约束；
-- graph_unbind_goal_child(goal, {attempt|child_id}[, token][, reason][, legacy]) 安全解绑执行子代理（token 走严格 CAS；遗留绑定无 token 时须显式 legacy=true 并给 reason）；
-- graph_abandon_attempt(goal, attempt, reason) 标记 attempt 为已放弃；
-- graph_start_review(goal, attempt, candidate_commit[, baseline_commit][, guidance][, provider][, model][, reasoning_effort][, mode]) 为既有执行 attempt 派发独立评审子代理（只读审查；评审是附属记录，不新建 attempt、不覆盖作者 child_id 与 results-att-*.md；复用作者既有工作树；结论按真实 reviewer child 独立落盘）；
-- graph_resolve_accept(goal, verdict[, objection][, force][, reason][, fast_track][, machine_report]) 主管裁决接受请求（accept/object）；fast_track=true 走机器快速放行：须策略判定 auto 且 machine_report 四项门禁全绿（①tests/②typecheck exit_code=0 为调用方证据，须附 command/collected_at/source；③产品代码 <150 行且无未跟踪新文件由引擎按 machine_report.attempt 绑定的实际工作树 Git 自算——该字段必填；④判据全部 ✅已验由引擎自算），返回 {ok, fast_track}。
+各工具的名称、参数与用途以 harness 注入的工具定义为准，此处不重复。
 
-## 校验对账
-- graph_validate() 全量校验不变量（状态、归属、判据、依赖环、卡片引用）；
-- graph_rebuild() 从事件流重建状态并与 frontmatter 对账。
-
-## 记忆管理
-- graph_memory_add(kind, text[, scope][, importance][, source_goal][, source_ref]) 新增记忆（scope: on_demand 默认 / standing 常驻；source_goal 关联来源目标；source_ref 为迁移来源键，提供后同来源重试幂等、不会被覆盖或复活）；
-- graph_memory_replace(old, text[, kind][, importance][, source_goal]) 修正已有记忆（old 定位，text 为新内容，source_goal 关联来源目标）；
-- graph_memory_remove(old[, reason]) 删除记忆（须确认过时或撤回）；
-- graph_memory_recall([query][, kind][, limit]) 检索记忆。
-
-## 协同交接
-- graph_handoff([query][, memory_limit]) 换会话交接（生成 HANDOFF.md：board 投影 + 记忆 + 环境事实）；
-- graph_claim_supervisor() 新会话接管 supervisor（幂等，返回 HANDOFF 全文）。
-
-## 工作树·状态·配置
-- graph_list_worktrees([goal]) 查询 worktree 清理候选（只读）；
-- graph_clean_worktree(id, confirm) 清理已验证的 worktree（默认保留分支）；
-- graph_report_status(goal, attempt, status[, state]) 上报 attempt 状态（state: working/blocked/done/error，可选）；
-- graph_report_supervisor_status(status) 主管自报状态（看板顶部状态栏）；
-- graph_get_settings() 只读查询项目配置及合法枚举元信息；
-- graph_update_settings(patch) 更新项目配置（schema 校验、保留注释、原子写）。
-
-## 帮助
-- graph_help([topic]) 显示本帮助（全部 51 个工具清单与参数速查）；带 topic 时只返回该主题：`usage`（使用说明口径）、`graph_engineering`（图工程点题章节，见下）或某个工具名（该工具的详细用法）。
-
-## 为什么叫 dsh-graph：图工程与看板视图
-插件名 dsh-graph 取自 **Graph Engineering（图工程）** 的启发。mcp.so 上《Graph Engineering（图工程）的理解》一文的定义（逐字引用）：「Graph Engineering（图工程）就是把多智能体系统设计成一张显式的图——节点（各自只负责一件事的智能体或步骤）、边（顺序、条件或并行的路由）、共享状态——而不是依赖单个智能体跑单条循环」。
-
-实际上这个插件是**任务 / 目标状态机**的维护系统，对 AI 而言像一套**简易的 Jira + Confluence**（也可以理解成禅道）。主管（supervisor）、worker（子代理）、reviewer（评审）、definer（定义者）、collector（收集者）与 user（用户）这几个角色，是在**主管工作指南 + 目标状态机**的约束下**自然形成**的。状态沿着 new request → define goal and criteria → collect → implement → review → verdict → deliver 推进，有两条回路：返工回到 implement，分支出新的 goal。
-
-状态机由 **dsh-graph core** 定义并组织，本插件是这种图分工下的**监控管理看板视图**；等它稳定好用且足够简洁之后，可用同一套 core 产出 dsh TUI、pi-ai 插件。需要强调的是：**看板只是视图**，核心是 AI 工作的全过程约束、智能体之间的分工、以及从用户到主管到 worker 的逐层审批控制。图工程让智能体的组织方式**可编程**，但这种编程**不是用 DSL 规定节点和边**，而是人类与 AI、Agent 与 Agent 之间合作干活的**软件工程实践**，用自然语言说清楚即可。**重要的是用户心中有图**——这张图不是固定图。看板解决两件事：让人类用户直观搞懂智能体运行、任务分拆、阶段推进、回退、返工、分支出新需求/新目标的全过程；以及随时在一些细节上插嘴干预、随时与主管 Agent 讨论方向、方法、目标变化与版本计划。图的自定义功能将在后续版本陆续开放，当前版本以过程可视化 + 任务状态机机制为主。
+## 为什么叫 dsh-graph：图工程
+插件名取自 **Graph Engineering（图工程）**。mcp.so《Graph Engineering（图工程）的理解》的定义（逐字引用）：「Graph Engineering（图工程）就是把多智能体系统设计成一张显式的图——节点（各自只负责一件事的智能体或步骤）、边（顺序、条件或并行的路由）、共享状态——而不是依赖单个智能体跑单条循环」。本插件是这套图分工下的**监控管理看板视图**；完整点题见使用说明。
 
 ## 接管 supervisor
 **仅在负责人明确要求你接管 supervisor 时执行**——默认任何会话都不得自动 claim：

@@ -1,85 +1,26 @@
-dsh-graph is a plugin that organizes work into a "goal board". Available graph_* tools (51 total):
+dsh-graph organizes work into a "goal board". 5 feature modules:
 
-## Goal lifecycle
-- graph_create_goal(title[, version][, type]) create a goal (enters backlog; with version, schedule it; type: feature/bug/task/improvement/patch/chore);
-- graph_transition(goal, to[, reason]) transition status; lifecycle draft→planning→collecting→ready→in_progress→review→delivered, plus blocked (entering blocked requires reason);
-- graph_archive_goal(goal) archive a goal (only draft/planning/delivered may be archived);
-- graph_unarchive_goal(goal) unarchive a goal;
-- graph_delete_goal(goal) delete an archived goal (including cards/attempts);
-- graph_postpone_goal(goal[, reason]) postpone a goal (move back to backlog, set to draft);
-- graph_rename_goal(goal, title) rename a goal.
+## Feature modules
 
-## Goal content
-- graph_amend_goal(goal, note[, append]) record revisions/human feedback; note is the revision note, append writes into the goal description;
-- graph_set_description(goal, description) edit the goal description in place (empty clears it);
-- graph_set_directive(goal, directive) set supplemental directive for the next attempt (empty clears it);
-- graph_set_relation(goal, action, type, target) mark or unmark a relation between goals (action: add / remove; type: supersedes / amends / extends / related; target is the peer goal id); idempotent, rejects supersede cycles, use meta.depends_on for depends_on;
-- graph_set_goal_tags(goal, tags[, base_tags][, force]) set tags (≤20; base_tags is the optimistic-concurrency baseline, force overwrites);
-- graph_set_goal_type(goal, type) set type feature/bug/task/improvement/patch/chore;
-- graph_move_goal(goal, to[, version]) move goal between backlog / standalone goals/ / version;
-- graph_add_comment(goal, text) append a comment/feedback to the Comments section.
-- graph_write_results(goal, attempt, text[, source][, actor]) manually write one attempt's completion summary (source=manual and the writer are recorded by default); **after a lightweight change with no subagent (chore/patch), or an attempt that captured no output, the supervisor must write it proactively** (zero LLM calls, same format/path/overwrite policy as auto capture);
-- graph_refresh_results([goal][, goals][, content][, source][, llm][, force][, actor]) rewrite results.md (conclusion / changes and impact / criteria status / evidence references / key decisions / timeline / sources); `llm:true` dispatches the dedicated summarizer subagent (role=summarizer) to write what specifically changed, the impact surface and what deserves attention (source=llm, keyed by source_hash so an unchanged history never re-calls the LLM; force:true rewrites anyway; falls back to source=deterministic when unavailable); without content/llm the body is assembled from goal history with zero LLM calls; with content the caller-supplied body is used (manual for humans); the previous version is archived as results-archive-YYYYMMDDTHHMMSS.md; accepts a single goal or a goals[] batch (content is single-goal only) and reports written/skipped/failed/pending/cached per goal.
+| Module | Purpose | Status |
+| --- | --- | --- |
+| Tags | Tag goals (≤20 each) for filtering and grouping | {tags} |
+| Memory | Persistent cross-session facts: project memory and user preferences, on-demand / standing | {memory} |
+| Shared cards | Context reused across goals: pool attach, ref counting, owned↔shared conversion | {shared_cards} |
+| Automation prompts | Six-key automation guidance; **no dedicated tools**, affects prompts only | {automation_prompts} |
+| Attachments | Files referenced from card bodies (text / binary) | {attachments} |
 
-## Criteria · Cards · Attachments
-- graph_set_criteria(goal, criteria[]) register quality criteria first (criteria precede execution; hard rule);
-- graph_add_card(goal, title[, kind][, scope]) create a context card (shared by default; scope="goal" for owned);
-- graph_fill_card(goal, card[, text][, content_ref][, summary]) fill card body (may reference @att/<name> for attachments; content_ref is legacy read-only);
-- graph_review_card(goal, card) review a filled card (filled → reviewed);
-- graph_delete_card(goal, card) delete a card (cannot delete while collecting);
-- graph_convert_card_to_shared(goal, card) convert owned card → shared card;
-- graph_convert_card_to_owned(goal, card) convert shared card → owned card (ref count must be 1);
-- graph_attach_shared_card(goal, card) attach an existing shared card to a goal (reuse collected context, ref count +1, idempotent; owner/supervisor only);
-- graph_detach_shared_card(goal, card) remove a goal's reference to a shared card (card stays in the pool; rejected while collecting; owner/supervisor only);
-- graph_list_shared_cards() list the shared pool read-only (id/title/status/refs, without bodies);
-- graph_store_attachment(name[, content][, base64]) store an attachment (text uses content, binary uses base64);
-- graph_delete_attachment(name) delete an attachment (rejected if still referenced);
-- graph_bind_collect_card(goal, card, child_id[, parent_session_id][, provider][, model]) bind a collection subagent to a card.
+A module is a tool group the host trims per the `modules` section of `<board root>/project.yaml`; tools of a disabled module are **not exposed** (no data is deleted). Unconfigured or unreadable config means **all enabled**. The Status column shows the value in effect for this session.
 
-## Execution & Rework
-- graph_start_attempt(goal[, card][, executor][, provider][, model][, reasoning_effort][, mode][, worktree][, attempt_brief][, task_type][, baseline_commit][, source_attempt][, acceptance_items]) dispatch an execution subagent;
-- graph_record_attempt_handoff(goal, source_attempts[], failures, constraints, baseline, verification) supervisor records rework constraints;
-- graph_unbind_goal_child(goal, {attempt|child_id}[, token][, reason][, legacy]) safely detach an execution subagent (token uses strict CAS; legacy bindings without a token require explicit legacy=true plus reason);
-- graph_abandon_attempt(goal, attempt, reason) mark an attempt as abandoned;
-- graph_start_review(goal, attempt, candidate_commit[, baseline_commit][, guidance][, provider][, model][, reasoning_effort][, mode]) dispatch an independent review subagent for an existing attempt (read-only; the review is an attachment record, not a new attempt, and never overwrites the author's child_id or results-att-*.md; reuses the author's existing worktree; the conclusion is stored separately under the real reviewer child);
-- graph_resolve_accept(goal, verdict[, objection][, force][, reason][, fast_track][, machine_report]) supervisor resolves the acceptance request (accept/object); fast_track=true takes the machine fast path: policy must judge auto and machine_report must be all-green across the four gates (gates 1 tests / 2 typecheck exit_code=0 are caller evidence and must carry command/collected_at/source; gate 3 <150 product-code lines with no untracked files is computed by the engine from Git truth in the actual worktree bound by machine_report.attempt, which is required; gate 4 all criteria ✅verified is computed by the engine), returning {ok, fast_track}.
+Tool names, parameters and purposes are defined by the harness-injected tool definitions; they are not repeated here.
 
-## Validation & Reconciliation
-- graph_validate() validate all invariants (status, ownership, criteria, dependency cycles, card references);
-- graph_rebuild() rebuild state from event stream and reconcile with frontmatter.
-
-## Memory management
-- graph_memory_add(kind, text[, scope][, importance][, source_goal][, source_ref]) add a persistent memory (scope: on_demand default / standing for constant rules; source_goal links the source goal; source_ref is a migration source key that makes repeated adds for the same source idempotent, never overwritten or revived);
-- graph_memory_replace(old, text[, kind][, importance][, source_goal]) correct existing memory (old locates, text is the new content, source_goal links the source goal);
-- graph_memory_remove(old[, reason]) delete a memory entry (must confirm obsolete or withdrawn);
-- graph_memory_recall([query][, kind][, limit]) search memories.
-
-## Coordination & Handoff
-- graph_handoff([query][, memory_limit]) session handoff (generates HANDOFF.md: board projection + memory + environment facts);
-- graph_claim_supervisor() new session takes over as supervisor (idempotent, returns full HANDOFF).
-
-## Worktree · Status · Settings
-- graph_list_worktrees([goal]) list worktree cleanup candidates (read-only);
-- graph_clean_worktree(id, confirm) clean a verified worktree (keeps branch by default);
-- graph_report_status(goal, attempt, status[, state]) report attempt status (state: working/blocked/done/error, optional);
-- graph_report_supervisor_status(status) supervisor reports status (board top status bar);
-- graph_get_settings() read-only query of project config and valid enum metadata;
-- graph_update_settings(patch) update project config (schema validation, comment preservation, atomic write).
-
-## Help
-- graph_help([topic]) display this help (full 51-tool checklist with parameter reference); with topic, return only that subject: `usage` (what the usage guide covers), `graph_engineering` (the Graph Engineering chapter, below) or a tool name (that tool's detailed usage).
-
-## Why it is called dsh-graph: Graph Engineering and the board as a view
-The name dsh-graph comes from **Graph Engineering**. The definition given by the article on mcp.so (quoted verbatim in the Chinese original) is: designing a multi-agent system as an explicit graph - nodes (agents or steps that each do exactly one thing), edges (sequential, conditional or parallel routing) and shared state - rather than relying on a single agent running one loop.
-
-Concretely, this plugin is a **task / goal state machine** maintenance system; for an AI it works like a **lightweight Jira + Confluence** (or a ZenTao-style tracker, if you prefer). The roles - supervisor, workers (subagents), reviewers, definers, collectors and the user - **emerge naturally** under the constraints of the **supervisor guide plus the goal state machine**. Work moves along new request → define goal and criteria → collect → implement → review → verdict → deliver, with two loops: rework goes back to implement, and a new goal can branch off.
-
-The state machine is defined and organized by **dsh-graph core**, and this plugin is the **monitoring board view** of that division of labour; once the core is stable, pleasant to use and simple enough, the same core can produce a dsh TUI or a pi-ai plugin. One thing must be stressed: **the board is only a view**. The real core is the constraint on the AI's whole process, the division of labour between agents, and the layered approval control running from user to supervisor to worker. Graph Engineering makes the organization of agents **programmable**, but that programming is **not** about specifying nodes and edges in a DSL - it is a software engineering practice of humans and AIs, and agents and agents, working together, and natural language is enough to describe it. **What matters is that the user holds the graph in their head** - and that graph is not a fixed one. The board solves two things: making the whole process visible (what agents run, how tasks are broken up, how stages advance, where it fell back, was reworked, or branched into new requirements and goals), and letting you cut in on any detail or discuss direction, method, goal changes and version plans with the supervisor agent at any time. Graph customization will open up in later versions; the current version focuses on process visualization plus the task state machine.
+## Why it is called dsh-graph: Graph Engineering
+The name comes from **Graph Engineering**. The definition in mcp.so's "Understanding Graph Engineering" (quoted verbatim): "Graph Engineering（图工程）就是把多智能体系统设计成一张显式的图——节点（各自只负责一件事的智能体或步骤）、边（顺序、条件或并行的路由）、共享状态——而不是依赖单个智能体跑单条循环". This plugin is the **monitoring kanban view** over that division of the graph; see the usage guide for the full rationale.
 
 ## Claim supervisor
-**Execute this only when the person in charge explicitly asks you to take over as supervisor**—by default no session may automatically claim:
-1. Old session: graph_handoff() —— generate HANDOFF.md;
-2. New session: graph_claim_supervisor() —— update supervisor.session, return full HANDOFF.
+**Do this only when the person in charge explicitly asks you to take over as supervisor**—by default no session may automatically claim:
+1. Old session: graph_handoff() — generate HANDOFF.md;
+2. New session: graph_claim_supervisor() — update supervisor.session, return full HANDOFF.
 
 The complete supervisor work discipline is in the skill dsh-graph-supervisor; explicitly call it to load.
 Principle: deliverables are evidence; proactively transition cards and report status at key stages; throttle heartbeats for long tasks; ask first when uncertain.
