@@ -12,7 +12,7 @@ dsh-graph organizes work into a "goal board". 5 feature modules:
 
 A module is a tool group the host trims per the `modules` section of `<board root>/project.yaml`; tools of a disabled module are **not exposed** (no data is deleted). Unconfigured or unreadable config means **all enabled**. The Status column shows the value in effect for this session.
 
-Tool names, parameters and purposes are defined by the harness-injected tool definitions; they are not repeated here.
+Tool names, parameters and purposes are defined by the harness-injected tool definitions; they are not repeated here. For operational detail (signatures, required/optional marks, evidence layering), read the usage guide: `graph_help(topic="usage")`.
 
 ## Why it is called dsh-graph: Graph Engineering
 The name comes from **Graph Engineering**. The definition in mcp.so's "Understanding Graph Engineering" (quoted verbatim): "Graph Engineering（图工程）就是把多智能体系统设计成一张显式的图——节点（各自只负责一件事的智能体或步骤）、边（顺序、条件或并行的路由）、共享状态——而不是依赖单个智能体跑单条循环". This plugin is the **monitoring kanban view** over that division of the graph; see the usage guide for the full rationale.

@@ -1117,8 +1117,16 @@ test("g-437 判据 6：工具描述/指南/帮助如实标注「① ② 调用�
   assert.match(guideEn, /Evidence layering/);
   assert.match(guideZh, /调用方证据/);
   assert.match(guideEn, /caller evidence/);
-  assert.match(helpZh, /调用方证据/);
-  assert.match(helpEn, /caller evidence/);
+  // g-495 改判：help.zh/en 已不再逐条列工具（改判为功能模块清单 + 当前开关状态），
+  // 参数级口径（fast_track 的证据分层）随之落到**按需面** usage —— agent 需要细则时读的那一面。
+  // 判据强度不变：zh/en 都必须说到同一件事，只是载体换了。
+  const usageZh = readFileSync(join(repoRoot, "dsh-graph-host", "prompts", "usage.zh.md"), "utf8");
+  const usageEn = readFileSync(join(repoRoot, "dsh-graph-host", "prompts", "usage.en.md"), "utf8");
+  assert.match(usageZh, /调用方证据/);
+  assert.match(usageEn, /caller evidence/);
+  // help 侧改判为「必须把细则指向按需面」，否则 agent 读 help 后不知道细则在哪。
+  assert.match(helpZh, /使用说明|usage/, "help.zh.md 必须把工具细则指向按需面");
+  assert.match(helpEn, /usage/i, "help.en.md 必须把工具细则指向按需面");
   // zh/en 指南仍逐行对齐（新增分层说明必须两侧同步）
   assert.equal(guideZh.split("\n").length, guideEn.split("\n").length, "zh/en 指南行数必须仍相等");
 });

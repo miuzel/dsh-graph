@@ -26,6 +26,7 @@ import {
   resolveCard,
   authorizeSharedCardLink,
   GraphError,
+  MODULE_TOOL_NAMES,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { SERVER_I18N } from "../../dist/lib/server-i18n.js";
@@ -96,11 +97,19 @@ test("g-369 判据1：三工具已注册，description 逐字取自 server-i18n�
   }
   assert.deepEqual(Object.keys(paramsOf("graph_list_shared_cards").properties), [], "graph_list_shared_cards 无参");
   // 帮助资产（zh/en 成对）必须含三条新条目且形态合规（`- graph_xxx(`）
+  // 帮助资产（zh/en 成对）（g-495 改判）：help 已不再逐条列工具（改判为功能模块清单 + 当前
+  // 开关状态），故原「必须含三条 `- graph_xxx(` 条目」改判为「必须声明承载这三条工具的
+  // **模块**（shared_cards）」—— agent 侧仍能据此知道该能力受哪个开关管辖。
+  // 工具级真源改由上面的 schema/description 断言 + harness 注入承担。
   for (const lang of ["zh", "en"] as const) {
     const text = readFileSync(join(repoRoot, "dsh-graph-host", "prompts", `help.${lang}.md`), "utf8");
-    for (const n of NEW_TOOLS) {
-      assert.match(text, new RegExp(`^- ${n}\\(`, "m"), `help.${lang}.md 缺条目 ${n}`);
-    }
+    assert.match(text, /\{shared_cards\}/, `help.${lang}.md 缺 shared_cards 模块行（三工具无归属模块）`);
+    // 负向对照（内存变异）：模块占位被改坏时判据必红。
+    assert.doesNotMatch(text.replace("{shared_cards}", "{shared_card}"), /\{shared_cards\}/, "模块占位改坏时判据必须变红");
+  }
+  // 三条工具确实归属 shared_cards 模块（真源 = 引擎模块注册表，非文案）。
+  for (const n of NEW_TOOLS) {
+    assert.ok(MODULE_TOOL_NAMES.shared_cards.includes(n), `${n} 必须归属 shared_cards 模块`);
   }
 });
 

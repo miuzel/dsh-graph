@@ -3564,7 +3564,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_memory_add",
-        description: "新增持久事实/记忆。scope 默认 on_demand（按需，不占常驻 Prompt）；仅「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」才可设 standing（硬上限 200 字符，普通记忆 1000）。可选 source_ref 是迁移来源键，提供时同来源重复 add 幂等（返回原 ID、不重复记事件）；kind=\"user\" 时幂等键按 owner 隔离。事件先行。细则见 help(topic=\"usage\")。",
+        description: "新增持久事实/记忆。scope 默认 on_demand（按需，不占常驻 Prompt）；仅「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」才可设 standing（硬上限 200 字符，普通记忆上限 1000 字符）。可选 source_ref 是迁移来源键：提供时同来源重复 add 幂等（返回原 ID、不重复记事件）。",
         parameters: params({
           kind: { type: "string", enum: ["project", "user"] },
           scope: { type: "string", enum: ["standing", "on_demand"] },

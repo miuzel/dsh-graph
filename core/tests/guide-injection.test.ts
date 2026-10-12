@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { init } from "../ops.ts";
+import { init, HARNESS_MODULE_IDS } from "../ops.ts";
 import { resolveRoot } from "../root.ts";
 import { apply } from "../../dist/index.js";
 
@@ -114,7 +114,17 @@ test("g-118：graph_help 工具注册，输出使用说明 + claim 指引（不�
   const out = help.execute({}, { agent: undefined, signal: new AbortController().signal });
   assert.ok(out.help.includes("graph_claim_supervisor"), "help 含 claim 指引");
   assert.ok(out.help.includes("graph_handoff"), "help 含换会话步骤");
-  assert.ok(out.help.includes("graph_create_goal"), "help 含工具清单");
+  // g-495 改判：help 不再逐条列工具（改判为**功能模块清单** + 当前开关状态），
+  // 故「含工具清单」改判为「含模块清单」——agent 侧仍须知道有哪些能力模块、各自开关。
+  assert.ok(out.help.includes("graph_help(topic=\"usage\")"), "help 必须把工具细则指向按需面");
+  for (const mod of HARNESS_MODULE_IDS) {
+    assert.ok(out.help.includes(`{${mod}}`) || out.help.includes("开启"), `help 含模块清单（缺 ${mod}）`);
+  }
+  // 负向对照（内存变异）：模块占位被改坏时判据必红。
+  assert.ok(
+    !out.help.replace("{memory}", "{memry}").includes("{memory}"),
+    "模块占位改坏时判据必须变红",
+  );
   assert.ok(out.help.includes("仅在负责人明确要求"), "help 限定 claim 仅在负责人明确要求时");
   assert.ok(!out.help.includes("绝不自己实现"), "help 不含主管铁律（完整守则走 skill）");
 });

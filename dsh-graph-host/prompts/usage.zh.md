@@ -12,7 +12,7 @@ dsh-graph 是把工作组织成「目标看板」的插件。你有 graph_* 工�
 
 **graph_start_attempt** —— 字段口径：`attempt_brief` 是当前 action 原文；`task_type` 取 merge/rewrite/fix；`baseline_commit`/`source_attempt` 由 supervisor 直接提供、不从 brief/handoff 推断；`acceptance_items` 为验收项 string[]（`[]`=明确无单独验收项，null/省略=未提供），空字符串非法。`baseline_commit` 省略时引擎按自身已知事实落盘区间锚点（隔离 attempt 取工作树起点，非隔离取派发那刻 HEAD）并回传，`fast_track` 的 `machine_report.baseline_commit` 必须与之相等。isolated=false 不必然是隔离失败：按类型默认在工作区根运行（patch/chore/task 干净工作区不建树），确需隔离应显式传 `worktree:true`。
 
-**graph_resolve_accept** —— `fast_track` 的不变式：`machine_report.baseline_commit` 必填且必须等于该 attempt 的引擎锚点（锚点只取自 attempt 记录，**绝不取自报告**；隔离 attempt 亦可与 `worktree.head` 对照，短 SHA 亦可），缺失或不等即拒绝。引擎在 attempt 的实际工作树采集 Git 真源并与报告逐项对账：不一致、未提交 tracked 改动、工作树缺失/已删、git 或基线不可解析一律拒绝；rename 展开两条路径。策略层 M2 与快速放行共用同一条 150 行阈值（≥150 行先升级 strict）。
+**graph_resolve_accept** —— `fast_track` 的**证据分层**：① tests（`exit_code=0` 且 `fail=0`）与 ② typecheck（`exit_code=0`）是**调用方证据**（引擎不复跑，须留痕 `command` / `collected_at` / `source`）；③ 变更规模由**引擎 Git 自算**。`machine_report.attempt` 必填（显式绑定执行树）。`fast_track` 的不变式：`machine_report.baseline_commit` 必填且必须等于该 attempt 的引擎锚点（锚点只取自 attempt 记录，**绝不取自报告**；隔离 attempt 亦可与 `worktree.head` 对照，短 SHA 亦可），缺失或不等即拒绝。引擎在 attempt 的实际工作树采集 Git 真源并与报告逐项对账：不一致、未提交 tracked 改动、工作树缺失/已删、git 或基线不可解析一律拒绝；rename 展开两条路径。策略层 M2 与快速放行共用同一条 150 行阈值（≥150 行先升级 strict）。
 
 **graph_refresh_results** —— 正文由 summarizer 子代理结合目标详情写「具体改了什么（文件/模块/行为/接口）/ 影响面（谁受影响、兼容性、发布含义）/ 值得注意（风险、关键裁决、未验证项、残余）」；`source_hash`（历史指纹）为缓存键，历史未变且已有 llm 摘要即命中缓存，`force:true` 强制重来；子代理不可用/失败降级为机器摘要并标注 `source=deterministic`（不抛错）。批量时逐目标报告 written/skipped/failed/pending/cached，单目标失败不牵连其它目标；无评论/无指令/无 attempt 且无 content 时优雅跳过。
 
