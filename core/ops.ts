@@ -4471,7 +4471,12 @@ export function validate(root: string): string[] {
   return problems;
 }
 
-/** 从事件流重建状态并与 frontmatter 比对；返回 drift 列表。 */
+/**
+ * 从事件流重建状态并与 frontmatter 比对；返回 drift 列表。
+ * g-487：并**幂等**回填「评审报告正文已给出合规结论行、而 `reviews/<id>.md` 快照仍是
+ * UNVERIFIED」的历史误记（追加 `review.conclusion_reconciled` 事件后刷新快照；报告正文逐字节不变）。
+ * 该回填是「显式回填入口」，只读预演用 `reconcileReviewConclusions(root, { apply: false })`。
+ */
 export function rebuild(root: string): string[] {
   const events = readEvents(root);
   const replayed = replayStatuses(events);
@@ -4510,6 +4515,17 @@ export function rebuild(root: string): string[] {
       const doc: GoalDoc = { meta: lane.meta, body };
       writeFileSync(vfile, serializeDoc(doc), "utf8");
     }
+  }
+
+  // g-487：评审结论误记回填（幂等）——正文已给出合规结论行、`reviews/<id>.md` 快照却仍是
+  // UNVERIFIED 的历史记录，按正文重算后修正（先记 review.conclusion_reconciled 留痕，再刷快照；
+  // 报告正文逐字节不变）。这是本目标的**显式回填入口**；只读预演见 `reconcileReviewConclusions(apply:false)`。
+  for (const item of reconcileReviewConclusions(root, { actor: "system:graph_rebuild", apply: true })) {
+    if (!item.changed) continue;
+    drift.push(
+      `${item.goal}/${item.review_id}: 评审结论误记回填 机器面 ${item.event_conclusion} → ${item.reparsed}` +
+      `（已记 review.conclusion_reconciled；报告正文未改）`,
+    );
   }
 
   invalidateGeneration(root);
@@ -6806,6 +6822,22 @@ export const ATTEMPT_REPORT_SKELETON_END = "<!-- dsh-graph:report-skeleton:end -
 const promptLangIsEn = (language: unknown): boolean =>
   typeof language === "string" && language.trim().toLowerCase().startsWith("en");
 
+/* ---- 评审结论行契约（g-487）：骨架 / 提示词与解析实现共用的**单一真源** ------------
+ * 事故：报文骨架曾把结论行登记为 `1. **总判**：PASS / BLOCK / UNVERIFIED（附一句话理由）`
+ * （有序列表前缀 + 三值**枚举**），而 `parseReviewConclusion` 只认同行、行首 `-`/`*`/`**` 的
+ * **单值**形态 ⇒ 评审者照抄骨架，结论被记成 UNVERIFIED（本批 5 处历史误记的直接触发面）。
+ * 因此：可接受形态只在此处登记，示例由解析实现的守卫测试直接喂给 `parseReviewConclusion`
+ * 断言可解析 —— 骨架再也不可能给出解析器拒绝的形式。
+ * （定义位置在骨架之前：模块加载期即以模板字面量插值，`const` 存在 TDZ，不能后置。）
+ * ---------------------------------------------------------------------------------- */
+
+/** 结论行**标签**（同义，大小写不敏感）：中文「总判」/「结论」、英文 `Verdict`。 */
+export const REVIEW_CONCLUSION_LABELS = ["总判", "结论", "Verdict"] as const;
+
+/** 登记进骨架 / 提示词的标准结论行（zh / en）；守卫断言二者都能被解析为 PASS。 */
+export const REVIEW_CONCLUSION_EXAMPLE_ZH = "- **总判**：PASS";
+export const REVIEW_CONCLUSION_EXAMPLE_EN = "- **Verdict**: PASS";
+
 /** executor 报文骨架（8 项逐项必填；缺失即视为交付不完整）+ reviewer 报文骨架（6 项）。 */
 export const ATTEMPT_REPORT_SKELETON = [
   "## 交回报文骨架（尾注·逐项必填：缺项即视为交付不完整）",
@@ -6823,7 +6855,7 @@ export const ATTEMPT_REPORT_SKELETON = [
   "8. **需主管裁决事项**：逐条列出（附默认建议）。",
   "",
   "### B. reviewer 报文（6 项逐项必填）",
-  "1. **总判**：PASS / BLOCK / UNVERIFIED（附一句话理由）。",
+  `1. **总判**：单独一行、只写一个裁决词（PASS / BLOCK / UNVERIFIED 三选一），例如 ${REVIEW_CONCLUSION_EXAMPLE_ZH}（附一句话理由）。`,
   "2. **逐项结论与单行证据**：判据逐条 → 结论 + 证据。",
   "3. **BLOCK 最小返工清单**：可直接执行的返工项（逐条）。",
   "4. **非阻塞注记**：可带着走但需留痕的问题。",
@@ -6854,7 +6886,7 @@ export const ATTEMPT_REPORT_SKELETON_EN = [
   "8. **Decisions needed from the supervisor**: listed one by one, each with a default recommendation.",
   "",
   "### B. reviewer report (6 required items)",
-  "1. **Overall verdict**: PASS / BLOCK / UNVERIFIED (with a one-line reason).",
+  `1. **Overall verdict**: one verdict word only, on its own line (PASS / BLOCK / UNVERIFIED - pick one), e.g. ${REVIEW_CONCLUSION_EXAMPLE_EN} (with a one-line reason).`,
   "2. **Per-item conclusion and single-line evidence**: each criterion to its conclusion plus evidence.",
   "3. **BLOCK minimal rework list**: directly actionable rework items, one by one.",
   "4. **Non-blocking notes**: issues that can ship but must be recorded.",
@@ -7257,7 +7289,7 @@ export function formatReviewPrompt(opts: {
     lines.push(
       "",
       "## Report skeleton (all items required)",
-      "- **Verdict**: PASS / BLOCK / UNVERIFIED — exactly one, on its own line.",
+      `- **Verdict**: exactly one verdict word (PASS / BLOCK / UNVERIFIED) on its own line; accepted forms: ${REVIEW_CONCLUSION_EXAMPLE_EN} / \`## Verdict: PASS\` / \`**Verdict**: PASS\` / \`Verdict: PASS\` (a lone \`Verdict\` line whose verdict word sits on the next non-empty line is accepted as well);`,
       "- **Per-criterion conclusion and one-line evidence**: criterion → conclusion + evidence (command / file:line / commit).",
       "- **Minimal rework list when BLOCK**: directly executable items, one per line.",
       "- **Residual risk**: what remains risky after the fix.",
@@ -7304,7 +7336,7 @@ export function formatReviewPrompt(opts: {
   lines.push(
     ``,
     `## 报告骨架（逐项必填）`,
-    `- **总判**：PASS / BLOCK / UNVERIFIED（三选一，必须单独一行给出）；`,
+    `- **总判**：必须单独一行、只写一个裁决词（PASS / BLOCK / UNVERIFIED 三选一）；可接受形态：${REVIEW_CONCLUSION_EXAMPLE_ZH} / \`## 总判：PASS\` / \`**总判：PASS**\` / 无前缀 \`总判：PASS\`（也接受「总判」独占一行、裁决词写在其后首个非空行）；`,
     `- **逐项结论与单行证据**：每条判据 → 结论 + 证据（命令 / 文件:行 / commit）；`,
     `- **BLOCK 最小返工清单**：可直接执行的返工项（逐条）；`,
     `- **残余风险**：修完后仍存在的风险；`,
@@ -7370,6 +7402,9 @@ export const REVIEW_EVENT_NAMES = [
   "review.reused",
   "review.completed",
   "review.failed",
+  // g-487：误记回填（幂等）——把「正文已给出合规结论行、快照却仍是 UNVERIFIED」的历史记录
+  // 按正文重算后修正，并为修正本身留痕（结论字段的每次变更都可从事件流追溯）。
+  "review.conclusion_reconciled",
   REVIEW_INDEPENDENT_MISSING_EVENT,
 ] as const;
 export type ReviewEventName = (typeof REVIEW_EVENT_NAMES)[number];
@@ -7386,6 +7421,7 @@ export const REVIEW_RECORD_EVENT_NAMES = [
   "review.reused",
   "review.completed",
   "review.failed",
+  "review.conclusion_reconciled",
 ] as const;
 
 /** 写入侧 fail-closed：事件名必须落在闭集内（新增事件名逃逸常量即抛错）。 */
@@ -7593,15 +7629,65 @@ export function bindReviewChild(
   });
 }
 
-/** 结论解析：只认**显式总判行**。识别不到 ⇒ UNVERIFIED（绝不把沉默当 PASS）。 */
+/* 结论行的可接受形态（登记处：上方 `REVIEW_CONCLUSION_LABELS` / `REVIEW_CONCLUSION_EXAMPLE_*`）。 */
+
+/** 行首**结构前缀**（标题 / 引用 / 无序列表 / 有序列表）：只剥离结构标记，不承载语义。 */
+const REVIEW_LINE_PREFIX_RE = /^(?:#{1,6}\s*|>\s*|[-*+]\s+|\d+[.)]\s+)+/;
+const REVIEW_LABEL_ALT = REVIEW_CONCLUSION_LABELS.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+/** 同行形态：`[前缀] [**]标签[**] [:：] [**]值`；值后可跟随正文（但不得是三值枚举）。 */
+const REVIEW_CONCLUSION_SAME_LINE_RE = new RegExp(
+  `^(?:\\*\\*)?\\s*(?:${REVIEW_LABEL_ALT})\\s*(?:\\*\\*)?\\s*[:：]\\s*(?:\\*\\*)?\\s*(PASS|BLOCK|UNVERIFIED)\\b([\\s\\S]*)$`,
+  "i",
+);
+/** 值后紧跟 `/` 或 `|` 再接另一个裁决词 ⇒ 这是**选项枚举**（骨架/模板原样照抄），不是裁决。 */
+const REVIEW_CONCLUSION_ENUM_TAIL_RE = /^\s*(?:\*\*)?\s*[/|]\s*(?:\*\*)?\s*(?:PASS|BLOCK|UNVERIFIED)\b/i;
+/** 标签独占一行（可带冒号但不带值）⇒ 值在**其后首个非空行**。 */
+const REVIEW_CONCLUSION_LABEL_ONLY_RE = new RegExp(
+  `^(?:\\*\\*)?\\s*(?:${REVIEW_LABEL_ALT})\\s*(?:\\*\\*)?\\s*[:：]?\\s*$`,
+  "i",
+);
+/** 跨行形态的值行：只含裁决词 + 可选加粗/标点（夹带其它文字即不成形，绝不把段落正文当裁决）。 */
+const REVIEW_CONCLUSION_VALUE_ONLY_RE =
+  /^(?:\*\*)?\s*(PASS|BLOCK|UNVERIFIED)\s*(?:\*\*)?\s*[。.；;，,、！!？?~～—–-]*$/i;
+
+/** 扫描全部结论行并取其裁决（形态登记处同上）。 */
+function scanReviewConclusions(raw: string): ReviewConclusion[] {
+  const lines = raw.split(/\r?\n/);
+  const found: ReviewConclusion[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].replace(REVIEW_LINE_PREFIX_RE, "").trim();
+    if (!line) continue;
+    const same = line.match(REVIEW_CONCLUSION_SAME_LINE_RE);
+    if (same) {
+      // 枚举行只是「选项列表」，不构成裁决（否则骨架里的三值枚举会被读成 PASS）。
+      if (!REVIEW_CONCLUSION_ENUM_TAIL_RE.test(same[2])) found.push(same[1].toUpperCase() as ReviewConclusion);
+      continue;
+    }
+    if (!REVIEW_CONCLUSION_LABEL_ONLY_RE.test(line)) continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      const next = lines[j].trim();
+      if (!next) continue; // 跳过空行：取其后**首个非空行**
+      const v = next.match(REVIEW_CONCLUSION_VALUE_ONLY_RE);
+      if (v) found.push(v[1].toUpperCase() as ReviewConclusion);
+      break; // 首个非空行不是「只含裁决词」⇒ 该标签不成形（不猜）
+    }
+  }
+  return found;
+}
+
+/**
+ * 结论解析：只认**显式结论行**（可接受形态与骨架/提示词登记处**同源**：`REVIEW_CONCLUSION_LABELS`
+ * 与 `REVIEW_CONCLUSION_EXAMPLE_ZH` 由守卫测试直接喂给本函数断言可解析）。
+ * **fail-closed**：识别不到、值不在闭集、跨行值行夹带正文、或结论行**互相矛盾**（如同时出现
+ * PASS 与 BLOCK）⇒ 一律 UNVERIFIED —— 绝不把沉默当 PASS，也绝不把 BLOCK 升格为 PASS。
+ */
 export function parseReviewConclusion(text: unknown): ReviewConclusion {
   const raw = typeof text === "string" ? text : "";
   if (!raw.trim()) return "UNVERIFIED";
-  const re = /(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*)?\s*(?:总判|结论|Verdict)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(PASS|BLOCK|UNVERIFIED)\b/i;
-  const m = raw.match(re);
-  if (!m) return "UNVERIFIED";
-  const v = m[1].toUpperCase();
-  return (REVIEW_CONCLUSIONS as readonly string[]).includes(v) ? (v as ReviewConclusion) : "UNVERIFIED";
+  const found = scanReviewConclusions(raw);
+  if (found.length === 0) return "UNVERIFIED";
+  const distinct = [...new Set(found)];
+  return distinct.length === 1 ? distinct[0] : "UNVERIFIED";
 }
 
 /** `stopReason` 是否代表「正常结束」。异常终止（error/aborted/diagnostic/缺失）一律不得 PASS。 */
@@ -7870,6 +7956,12 @@ export function reviewRecordViews(root: string, goalId: string): ReviewRecordVie
       cur.conclusion = "UNVERIFIED";
       cur.stop_reason = d.stop_reason == null ? null : String(d.stop_reason);
       cur.failure_reason = d.reason == null ? null : String(d.reason);
+    } else if (ev.event === "review.conclusion_reconciled") {
+      // g-487：误记回填（留痕）。只修正**结论**，不改动记录生命周期状态；非 completed 记录不受影响。
+      const to = (REVIEW_CONCLUSIONS as readonly string[]).includes(String(d.to))
+        ? String(d.to) as ReviewConclusion
+        : "UNVERIFIED";
+      if (cur.status === "completed") cur.conclusion = to;
     } else if (ev.event === "review.reused") {
       // F1：复用旧记录 = 一次**新的评审请求** ⇒ 该记录重新成为「当前候选」的承载者。
       // 语义裁决①（重新置为当前）：投影 current_candidate_sha / stale 随之下落，与工具返回值同源一致。
@@ -8196,6 +8288,172 @@ export function markIndependentReviewMissing(
     } catch { /* 忽略 */ }
     return false;
   }
+}
+
+/** 单条评审记录的「结论误记回填」对账项（只读模式报告 / apply 模式回填结果**同形**）。 */
+export interface ReviewConclusionReconcileItem {
+  goal: string;
+  review_id: string;
+  status: ReviewRecordStatus;
+  /** 事件流里的结论 = **机器面实际取值**（`reviewRecordViews` / `independentOk` 的来源）；failed / 闭集外一律 UNVERIFIED。 */
+  event_conclusion: ReviewConclusion;
+  /** `reviews/<review_id>.md` frontmatter 快照的现值（缺失 / 非闭集 ⇒ null）；**仅供审计**，不是判定依据。 */
+  snapshot: ReviewConclusion | null;
+  /** 按**报告正文**重算的结论（与 `settleReview` 同一解析真源 `parseReviewConclusion`）。 */
+  reparsed: ReviewConclusion;
+  /** apply 时是否真的回填；只读模式下表示「将会回填」。 */
+  changed: boolean;
+  /** 处置说明（未回填的原因 / 已回填动作），供审计与 drift 文案。 */
+  note: string;
+}
+
+/**
+ * 评审结论**误记回填/重算**（g-487 判据 3）：把「报告正文已给出合规结论行、而事件流里的
+ * 结论却是 UNVERIFIED」的历史误记**幂等**修正 —— 回填后 `reviewRecordViews` 与
+ * `independentOk` 立即取到正确裁决（这是机器面真正读到的值；只改 `reviews/*.md` 的
+ * frontmatter 快照**不改变**机器面裁决，故判据与写入都以事件流为准）。
+ *
+ * - `apply=false`（默认）：**只读重算**——零文件写入、零事件写入，返回逐条对账（可直接当「只读重算命令」用）。
+ * - `apply=true`：对**确需修正**的记录先追加 `review.conclusion_reconciled`（事件先行、留痕），
+ *   再刷新 frontmatter 快照；**报告正文逐字节原样回写**（`body_bytes` 一并入事件便于对账），绝不改写/删除。
+ *
+ * 方向约束与 fail-closed：只做「机器面为 UNVERIFIED → 正文重算出**确定**裁决」这一个方向；
+ * `failed`（异常终止 / 空输出）记录一律不参与；反向不一致（机器面已记 PASS/BLOCK 而正文重算不同，
+ * 或已记确定裁决而快照不同）**只报告不改写**，绝不用解析结果反向覆盖既有裁决，也绝不留第二真源。
+ * 重复调用幂等（第二次起 `changed=false`）。
+ */
+export function reconcileReviewConclusions(
+  root: string,
+  opts: { goalId?: string; actor?: string; apply?: boolean } = {},
+): ReviewConclusionReconcileItem[] {
+  const goalFilter = opts.goalId == null ? null : String(opts.goalId).trim() || null;
+  const actor = String(opts.actor ?? "").trim() || "system:reconcile-review-conclusions";
+  const apply = opts.apply === true;
+
+  // 先按事件流取每条记录的真实终态（无派发事件的孤儿结算不猜归属——与 reviewRecordViews 同口径）。
+  const records = new Map<string, { goal: string; reviewId: string; status: ReviewRecordStatus; eventConclusion: ReviewConclusion }>();
+  for (const ev of readEvents(root)) {
+    const goal = typeof ev.goal === "string" ? ev.goal : "";
+    if (!goal) continue;
+    if (goalFilter && goal !== goalFilter) continue;
+    const d = ev.details ?? {};
+    const reviewId = typeof d.review_id === "string" ? d.review_id : "";
+    if (!reviewId) continue;
+    const key = `${goal}\u0000${reviewId}`;
+    if (ev.event === "review.dispatched") {
+      records.set(key, { goal, reviewId, status: "started", eventConclusion: "UNVERIFIED" });
+      continue;
+    }
+    const cur = records.get(key);
+    if (!cur) continue;
+    if (ev.event === "review.bound") {
+      cur.status = "bound";
+    } else if (ev.event === "review.completed") {
+      cur.status = "completed";
+      cur.eventConclusion = (REVIEW_CONCLUSIONS as readonly string[]).includes(String(d.conclusion))
+        ? String(d.conclusion) as ReviewConclusion
+        : "UNVERIFIED";
+    } else if (ev.event === "review.failed") {
+      cur.status = "failed";
+      cur.eventConclusion = "UNVERIFIED";
+    }
+  }
+
+  // **单一真源**：逐条记录的「机器面结论」直接取自 `reviewRecordViews` 的同一次重放 ——
+  // 也就是 `independentOk` 读到的那个值。回填判据、回填后复查都走这一条路（不再自建第二套
+  // 结论重放规则，避免「回填了但机器面没变」或「重复回填」这类双规则漂移）。
+  const viewCache = new Map<string, Map<string, ReviewConclusion>>();
+  const machineConclusion = (goal: string, reviewId: string): ReviewConclusion | null => {
+    let byId = viewCache.get(goal);
+    if (!byId) {
+      // 视图 conclusion 为 null（理论不可达：仅未结算记录如此）时 fail-closed 记 UNVERIFIED。
+      byId = new Map(reviewRecordViews(root, goal).map((v) => [v.review_id, v.conclusion ?? "UNVERIFIED" as ReviewConclusion]));
+      viewCache.set(goal, byId);
+    }
+    return byId.get(reviewId) ?? null;
+  };
+
+  const items: ReviewConclusionReconcileItem[] = [];
+  for (const rec of records.values()) {
+    if (rec.status !== "completed" && rec.status !== "failed") continue; // 未结算记录不参与回填
+    // 视图缺失（理论不可达：两者读同一事件流）时 fail-closed 回落本循环重放值，绝不臆造结论。
+    const machine = machineConclusion(rec.goal, rec.reviewId) ?? rec.eventConclusion;
+    const stored = readReviewRecord(root, rec.goal, rec.reviewId);
+    if (!stored) {
+      items.push({
+        goal: rec.goal, review_id: rec.reviewId, status: rec.status,
+        event_conclusion: machine, snapshot: null, reparsed: "UNVERIFIED",
+        changed: false, note: "记录文件缺失，跳过（不猜结论）",
+      });
+      continue;
+    }
+    const snapshot = (REVIEW_CONCLUSIONS as readonly string[]).includes(String(stored.meta.conclusion))
+      ? String(stored.meta.conclusion) as ReviewConclusion
+      : null;
+    const reparsed = rec.status === "completed" ? parseReviewConclusion(stored.body) : "UNVERIFIED";
+    const item: ReviewConclusionReconcileItem = {
+      goal: rec.goal, review_id: rec.reviewId, status: rec.status,
+      event_conclusion: machine, snapshot, reparsed, changed: false, note: "",
+    };
+    // 回填判据**以机器面（事件流重放）为准**：它才是 `reviewRecordViews` / `independentOk`
+    // 的取值来源（`reviews/*.md` 的 frontmatter 只是快照，改它不改变机器面裁决）。只有
+    // 「机器面结论 UNVERIFIED 而正文重算出确定裁决」才回填；已记 PASS/BLOCK 一律不动 ——
+    // 既防 BLOCK 被升格为 PASS，也防解析结果反向覆盖已记裁决。
+    const needs = rec.status === "completed" && reparsed !== "UNVERIFIED" && machine === "UNVERIFIED";
+    if (!needs) {
+      if (rec.status !== "completed") {
+        item.note = "非正常完成（failed）：结论按 fail-closed 保持 UNVERIFIED，不回填";
+      } else if (reparsed === "UNVERIFIED") {
+        item.note = "正文无可解析结论行：保持 UNVERIFIED（不改写）";
+      } else if (machine === reparsed) {
+        item.note = snapshot === reparsed
+          ? "机器面与正文重算一致：无需回填"
+          : `机器面与正文一致（${reparsed}），但 frontmatter 快照=${snapshot ?? "缺失"}：只报告不改写（机器面已正确，不留第二真源）`;
+      } else {
+        item.note = `机器面已记 ${machine} 而正文重算=${reparsed}：只报告不改写（避免用解析结果覆盖已记裁决）`;
+      }
+      items.push(item);
+      continue;
+    }
+    if (!apply) {
+      item.changed = true;
+      item.note = `只读重算：将会回填 机器面 ${machine} → ${reparsed}（未写入）`;
+      items.push(item);
+      continue;
+    }
+    const meta: Record<string, any> = {
+      ...stored.meta,
+      conclusion: reparsed,
+      status: "completed",
+      conclusion_reconciled_from: machine,
+      conclusion_reconciled_at: nowIso(),
+      conclusion_reconciled_by: actor,
+      conclusion_reconcile_note: "按报告正文重算回填（g-487 结论解析容错）；评审正文逐字节未改",
+    };
+    assertReviewEventName("review.conclusion_reconciled");
+    commitPrepared(root, { actor, goal: rec.goal }, {
+      value: undefined,
+      events: [{
+        actor,
+        event: "review.conclusion_reconciled",
+        goal: rec.goal,
+        details: {
+          review_id: rec.reviewId,
+          from: machine,
+          to: reparsed,
+          snapshot_before: snapshot ?? null,
+          body_bytes: Buffer.byteLength(stored.body, "utf8"),
+          note: "误记回填：仅修正结论字段（含 frontmatter 快照），报告正文逐字节不变。",
+        },
+      }],
+      persist: () => persistReviewRecord(root, rec.goal, rec.reviewId, meta, stored.body),
+    });
+    item.changed = true;
+    item.note = `已回填 机器面 ${machine} → ${reparsed}` +
+      `（事件 review.conclusion_reconciled；快照 ${snapshot ?? "缺失"} → ${reparsed}；正文未改）`;
+    items.push(item);
+  }
+  return items;
 }
 
 // ---- Attempt（SCHEMA §3） ----
