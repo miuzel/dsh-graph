@@ -215,14 +215,49 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.doesNotMatch(modal, /tabPanel\("about", \[/);
   assert.match(modal, /const SETTINGS_TAB_KEYS = \["executor", "review", "ui", "modules", "advanced"\]/);
   assert.match(modal, /\.\.\.SETTINGS_TAB_KEYS\.map\(\(k\) => tabButton\(k\)\)/);
-  // g-488：说明性文字 tooltip 化的唯一入口——`(?)` 必须键盘可达（tabIndex=0）且语义可读
-  // （aria-label 与 title 同为说明全文）。
-  assert.match(modal, /const settingsHintIcon = \(text\) => h\("span", \{/);
-  assert.match(modal, /role: "img",\n\s+tabIndex: 0,\n\s+"aria-label": text,\n\s+title: text,/);
+  // g-490：`(?)` 说明由**原生 title** 改为**自绘浮层**。原「title 属性」正向断言换成**逐条等价**的
+  // 浮层契约断言（悬停即时显示 / 点击·触屏切换 / 键盘可达 / 读屏语义 / 至多一个 / 不被裁剪 /
+  // 边界翻转 / 四条关闭路径），并补**负向**断言（回退 title、删浮层即必红）。断言只增不减。
+  assert.match(modal, /const settingsHintIdFor = \(text\) => \{/);
+  assert.match(modal, /const settingsHintIcon = \(text\) => \{/);
   assert.match(modal, /className: "dg-settings-hint"/);
+  assert.match(modal, /role: "img",\n\s+tabIndex: 0,\n\s+"aria-label": text,\n\s+"aria-describedby": open \? tipId : undefined,/);
+  // 悬停即时显示 / 离开关闭
+  assert.match(modal, /onMouseEnter: \(e\) => \{ hintLastEnterRef\.current = Date\.now\(\); openHintAt\(tipId, e\.currentTarget\); \}/);
+  assert.match(modal, /onMouseLeave: \(\) => closeHintIf\(tipId\)/);
+  // 点击 / 触屏切换（含 emulated mouseenter→click 抑制）
+  assert.match(modal, /onClick: \(e\) => \{\n\s+e\.stopPropagation\(\);/);
+  assert.match(modal, /if \(open && Date\.now\(\) - \(hintLastEnterRef\.current \|\| 0\) < 700\) return;/);
+  // 键盘：Tab 聚焦即显示；Esc 关闭
+  assert.match(modal, /onFocus: \(e\) => openHintAt\(tipId, e\.currentTarget\)/);
+  assert.match(modal, /onBlur: \(\) => closeHintIf\(tipId\)/);
+  assert.match(modal, /onKeyDown: \(e\) => \{ if \(e\.key === "Escape"\) setOpenHint\(null\); \}/);
+  // 语义关联：浮层 role="tooltip" + 稳定 id；被 aria-describedby 引用
+  assert.match(modal, /role: "tooltip",\n\s+id: tipId,/);
+  assert.match(modal, /aria-describedby": open \? tipId : undefined/);
+  // 至多一个浮层：唯一 `openHint` 状态（同一时刻只能有一个 id）
+  assert.match(modal, /const \[openHint, setOpenHint\] = React\.useState\(null\)/);
+  // 不被弹窗裁剪：fixed 定位 + 触发器矩形 + 视口边界翻转
+  assert.match(modal, /position: "fixed", zIndex: 100001, left: geom \? geom\.left : 8/);
+  assert.match(modal, /const above = geom \? \(geom\.top > 180 \|\| vh === 0\) : true;/);
+  // 关闭路径：浮层外点击 / 滚动
+  assert.match(modal, /t\.closest\("\.dg-settings-tip"\)/);
+  assert.match(modal, /window\.addEventListener\("scroll", onScroll, true\)/);
+  // 负向（回退即必红）：`(?)` 构造点与整份 modal **都不得**再输出原生 `title` 说明。
+  const hintFnStart = modal.indexOf("const settingsHintIcon = (text) => {");
+  const hintFnEnd = modal.indexOf("React.useEffect(", hintFnStart);
+  assert.ok(hintFnStart > 0 && hintFnEnd > hintFnStart, "必须能定位 settingsHintIcon 函数体");
+  const hintFnSrc = modal.slice(hintFnStart, hintFnEnd);
+  assert.doesNotMatch(hintFnSrc, /\btitle:/, "`(?)` 浮层构造点不得回退原生 title");
+  assert.doesNotMatch(modal, /"aria-label": text,\n\s+title: text,/, "旧的 aria-label+title 同文锚点必须消失");
+  assert.doesNotMatch(hintFnSrc, /createPortal/, "不引入 portal（不需要 ReactDOM 依赖即可不裁剪）");
   // g-488：六键自动化**逐键**说明（每键一条，讲清「管什么 + human/ai 含义」）
   assert.match(modal, /settingsHintIcon\(dgT\(AUTOMATION_HINT_KEYS\[k\]\)\)/);
   assert.match(modal, /const AUTOMATION_HINT_KEYS = \{/);
+  // g-490（判据 6）：六键未配置时下拉显示引擎解析默认值——前缀键 + 服务端单一真源消费
+  assert.match(modal, /dgT\("settings\.automationDefaultPrefix"\) \+ defVal/);
+  assert.match(modal, /const automationDefaults = form\.automation_defaults \?\? \{\}/);
+  assert.match(modal, /automationOptions\(auto\[k\], automationDefaults\[k\] \?\? null\)/);
   // g-488：四项默认值键只从界面移除，配置读兼容（归一/稀疏 patch 叶子清单）必须保留
   assert.doesNotMatch(modal, /set\(\["defaults", "review", "reviewer"\]/);
   assert.doesNotMatch(modal, /set\(\["defaults", "pk", "lanes"\]/);
@@ -254,6 +289,34 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.match(modal, /title: dgT\("settings\.copyProjectPath"\)/);
   assert.match(modal, /\}, dgT\("tab\.openFile"\)\)/);
   assert.match(modal, /\}, dgT\("tab\.copyPath"\)\)/);
+  // g-490（判据 7）：project.yaml 行从**页脚**迁到**标题栏右侧（关闭按钮左边）**——位置断言 +
+  // 「页脚不得留第二份」负向断言（双份即红）；窄宽度/长路径保护（flexWrap + break-all + 关闭按钮让位）。
+  assert.equal(
+    (modal.match(/className: "dg-settings-configfile"/g) || []).length,
+    1,
+    "project.yaml 行必须恰好一处（迁移而非复制）",
+  );
+  const titleBarIdx = modal.indexOf('{ ...S.modalH, marginBottom: 0, flex: "0 0 auto" } }, dgT("settings.title")');
+  const cfgRowIdx = modal.indexOf("projectYamlRow)");
+  const editHintIdx = modal.indexOf('h("div", { style: S.meta }, dgT("settings.editHint"))');
+  assert.ok(titleBarIdx > 0 && cfgRowIdx > titleBarIdx, "标题栏 = 标题 + 右端 project.yaml 行（关闭按钮左侧）");
+  assert.ok(editHintIdx > cfgRowIdx, "editHint 仍在标题栏下方一行");
+  assert.match(modal, /gap: 8, flexWrap: "wrap", paddingRight: 34 \}/, "标题栏为绝对定位的关闭按钮留出 34px");
+  assert.match(modal, /justifyContent: "flex-end", marginLeft: "auto", minWidth: 0 \}/, "配置行顶到右端且可收缩（窄宽度不撑破）");
+  assert.match(modal, /fontSize: 11, opacity: 0\.7, wordBreak: "break-all", minWidth: 0 \}/, "绝对路径可断行（长路径不撑破）");
+  // 页脚第二份已删除：页脚行之后不得再出现 projectYaml 行（负向：搬回去/留双份即红）
+  const footerIdx = modal.indexOf('h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: requestClose }, dgT("settings.closeBtn"))');
+  assert.ok(footerIdx > 0 && footerIdx > cfgRowIdx, "页脚关闭按钮行在标题栏之后");
+  assert.doesNotMatch(
+    modal.slice(footerIdx),
+    /settings\.projectYaml/,
+    "页脚不得再有 project.yaml 行（信息零丢失但不得双份）",
+  );
+  // g-490（判据 6）：六键默认值的**引擎单一真源** + 设置接口下发（客户端只消费，不留副本）
+  assert.match(host, /const AUTOMATION_DEFAULTS = \{/);
+  assert.match(host, /defaults: AUTOMATION_DEFAULTS,/);
+  assert.match(host, /automation_defaults: AUTOMATION_DEFAULTS/);
+  assert.doesNotMatch(modal, /scope_planning: "human"/, "客户端不得硬编码默认值副本（必须来自服务端）");
   const bundle = readFileSync(join(process.cwd(), "dist/lib/client.js"), "utf8");
   assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
   assert.match(bundle, /function SettingsModal/);

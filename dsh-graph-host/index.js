@@ -704,6 +704,24 @@ const AUTOMATION_GUIDANCE = {
     trailer: "Boundaries and precedence (add-only, never relaxed): human only adds confirmation requirements and is never overridden by a low-risk exemption; an explicit, clearly scoped batch authorization from the person in charge may cover item-by-item confirmation for exactly the listed actions, while a vague directional authorization does not; an explicit prohibition of push/publish/tag always takes precedence; Full access is not business approval. Among the four gates, \"start work\" and \"review\" have no corresponding key, so their existing requirements (including that review→delivered must wait for the person in charge's verdict) stay unchanged. This guidance only affects the prompt: it changes no tool permission and is not engine enforcement.",
   },
 };
+/** g-490：六键在**未配置/非法**时的解析默认值 —— **单一真源**（GUI 只经 `/api/dsh-graph/settings`
+ *  与 `graph_get_settings` 的 `automation_defaults` 消费，客户端**不得**留任何硬编码副本）。
+ *  推导依据（`supervisor-guide` 的四类人工 gate，逐键可对照）：
+ *    · `release` = 「发布」gate 的对应键、`scope_planning` = 「调整版本计划」gate 的对应键
+ *      ⇒ 既有默认即「需负责人确认」⇒ `human`；
+ *    · 其余四键**不在**四类 gate 内（`integration_decision` 明确**不等于** review verdict /
+ *      delivered 授权，`rework` / `memory_promotion` / `skill_proposal` 亦无对应 gate）
+ *      ⇒ 既有默认即「主管在已授权范围内自主判断并留痕」⇒ `ai`。
+ *  语义边界：本表**只描述**「未配置时的既有指导」，**不**改变 `renderAutomationGuidance` 的输出
+ *  （六键全未配置仍渲染空串、既有纪律文本逐字不变），也不新增任何引擎硬门禁/审批凭据。 */
+const AUTOMATION_DEFAULTS = {
+  scope_planning: "human",
+  integration_decision: "ai",
+  rework: "ai",
+  memory_promotion: "ai",
+  skill_proposal: "ai",
+  release: "human",
+};
 /** 渲染六键动作指导：只有 human/ai 生效（其余按未配置处理）；无生效键 ⇒ 空串（保持既有文本逐字不变）。 */
 function renderAutomationGuidance(automation, language) {
   const table = AUTOMATION_GUIDANCE[language === "en" ? "en" : "zh"];
@@ -3842,6 +3860,9 @@ export function apply(ctx, config) {
             "supervisor.automation": {
               keys: ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"],
               values: ["human", "ai"],
+              // g-490：未配置/非法时的**解析默认值**（与 `automation_defaults` 同一真源
+              // `AUTOMATION_DEFAULTS`；GUI 据此把选项「无」显示为「默认：<value>」）。
+              defaults: AUTOMATION_DEFAULTS,
             },
             "executor.mode": SUBAGENT_MODES,
             // g-440：Agent Teams 最小契约开关（负责人资格判定；默认未配置/null = off）
@@ -5264,7 +5285,7 @@ export function apply(ctx, config) {
               return json(res, 400, { error: resp.error, details: resp.details });
             }
             writeProjectConfig(r, body, "human:gui");
-            return json(res, 200, { ok: true, config: readProjectConfig(r), trim_supported: moduleTrimSupported, review_suggested_regions: suggestedReviewRegions(r) });
+            return json(res, 200, { ok: true, config: readProjectConfig(r), trim_supported: moduleTrimSupported, review_suggested_regions: suggestedReviewRegions(r), automation_defaults: AUTOMATION_DEFAULTS });
           }
           if (req.method === "GET") {
             // att-002：下发当前 canonical workspace 的 .dsh-graph/project.yaml 绝对路径
@@ -5272,7 +5293,7 @@ export function apply(ctx, config) {
             const meta = rootForReqMeta(req);
             // g-480：`trim_supported` = 本版本宿主是否支持真裁剪（见 apply 期能力探测注释）。
             // GUI 据此在「模块」页签如实显示一行提示（不支持时）；支持时**不渲染该行**。
-            return json(res, 200, { ...readProjectConfig(meta.root), configFile: join(meta.root, "project.yaml"), trim_supported: moduleTrimSupported, review_suggested_regions: suggestedReviewRegions(meta.root) });
+            return json(res, 200, { ...readProjectConfig(meta.root), configFile: join(meta.root, "project.yaml"), trim_supported: moduleTrimSupported, review_suggested_regions: suggestedReviewRegions(meta.root), automation_defaults: AUTOMATION_DEFAULTS });
           }
           return json(res, 405, { error: "method not allowed" });
         } catch (e) {

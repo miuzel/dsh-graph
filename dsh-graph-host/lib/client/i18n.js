@@ -658,6 +658,9 @@
       'settings.supervisorAutomation': '主管自动化指导（supervisor.automation）',
       // g-439：六键已由主管提示真实消费——如实说明消费方式（只影响提示，不改变工具权限、不构成引擎强制）
       'settings.automationHint': '影响主管提示：human 请求负责人确认、ai 在已授权范围内自主判断并留痕、未配置保持既有指导；不改变工具权限，也不构成引擎强制（不改变「开始工作」「审核」「发布」等既有 gate 要求）。',
+      // g-490：六键未配置时下拉里的**默认值前缀**（值本身由引擎 `AUTOMATION_DEFAULTS` 经
+      // `/api/dsh-graph/settings` 的 `automation_defaults` 下发；客户端不留 human/ai 副本）。
+      'settings.automationDefaultPrefix': '默认：',
       // g-488：六键**逐键**说明（每键一个标题右侧 `(?)`）——讲清「这一键管什么」+「human / ai 两种取值
       // 在本键上的含义」+「未配置 = 保持既有指导」。总口径（只影响提示、不构成引擎强制）见上一行的总说明。
       'settings.automationWhat.scope_planning': '范围规划：是否先把目标拆成执行范围与判据再开工。human = 开工前请负责人确认范围与判据；ai = 在目标描述与既有授权范围内自行拆解并留痕；未配置 = 沿用既有指导。',
@@ -1922,6 +1925,9 @@
       'settings.supervisorAutomation': 'Supervisor automation guidance (supervisor.automation)',
       // g-439: the six keys are genuinely consumed by the supervisor prompt — state how, truthfully
       'settings.automationHint': 'Affects the supervisor prompt: human asks the person in charge for confirmation, ai decides autonomously within the already authorized scope and leaves a trace, and unset keeps the existing guidance; it changes no tool permission and is not engine enforcement (it changes no existing gate such as start work, review, or release).',
+      // g-490: prefix of the resolved default shown in the select when a key is unset (the value itself is
+      // supplied by the engine's single source AUTOMATION_DEFAULTS via /api/dsh-graph/settings).
+      'settings.automationDefaultPrefix': 'Default: ',
       // g-488: per-key explanations for the six automation keys (one title-row `(?)` each): what the key
       // governs + what human / ai mean for it + unset keeps the existing guidance. The cross-key caveat
       // (prompt-only, no engine enforcement) lives in settings.automationHint above.
