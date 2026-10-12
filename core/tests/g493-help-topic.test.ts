@@ -28,6 +28,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
 import { apply } from "../../dist/index.js";
+import { HARNESS_MODULE_IDS } from "../ops.ts";
 
 const repoRoot = join(import.meta.dirname, "../..");
 const helpModalPath = join(repoRoot, "dsh-graph-host/lib/client/help-modal.js");
@@ -250,8 +251,13 @@ test("g-493 A1：开篇点题章节由清单驱动、渲染在原有段落之前
   assert.deepEqual(modalProblems(readModal()), [], "客户端结构断言必须全绿");
   // 生成物里真的有（防「源改了没重建」的假绿）。
   const bundle = readFileSync(bundlePath, "utf8");
-  for (const needle of ["function HelpUsageTab(", "HELP_USAGE_TOPIC_KEYS", "dg-help-topic", "help.topic.designCrossref", "dg-help-tool-detail", 'dgT("help.tools.accordion")']) {
+  for (const needle of ["function HelpUsageTab(", "HELP_USAGE_TOPIC_KEYS", "dg-help-topic", "help.topic.designCrossref"]) {
     if (!bundle.includes(needle)) assert.fail(`dist/lib/client.js 未包含 ${needle}（需重建）`);
+  }
+  // g-495 E：逐行「展开说明」折叠面板已移除（其首行只是把同列的 description 再渲染一遍）。
+  // 负向钉住：这些符号**不得**再出现在生成物里（人为回退即红）。
+  for (const gone of ["dg-help-tool-detail", 'dgT("help.tools.accordion")', "help.tools.accordion"]) {
+    if (bundle.includes(gone)) assert.fail(`dist/lib/client.js 仍包含已移除的 ${gone}（折叠面板回退）`);
   }
 });
 
@@ -260,14 +266,22 @@ test("g-493 B1：九子项逐项落在可见文案里；定义逐字引用并标
   assert.deepEqual(topicCopyProblems(zh, en), [], "点题文案断言必须全绿");
   // 逐字红线：九个子项里的定义串必须与真源**逐字**相等（不是「差不多」）。
   assert.ok(String(zh["help.topic.definition"]).includes(GRAPH_ENGINEERING_DEFINITION), "定义必须逐字引用");
-  // 「共 51 个」计数红线：注册数未变（51）⇒ prompts/help.*.md 的两处计数表述不得被本目标改动。
+  // 「共 51 个」计数红线（g-495 改判）：help.*.md 不再声明**工具**数（改为功能模块清单 +
+  // 当前开关状态），故原「必须保留两处 51」口径改判为「必须声明**模块**数 == 引擎模块注册表长度」。
+  // 工具侧真源不变：注册数仍须恰为 51（本目标不碰注册面）。
   assert.equal(registeredToolNames.length, 51, "g-493 基线：注册真源应恰有 51 个工具");
   const zhPrompt = readFileSync(helpZhPromptPath, "utf8");
   const enPrompt = readFileSync(helpEnPromptPath, "utf8");
-  const zhCounts = [...zhPrompt.matchAll(/共\s*(\d+)\s*个/g), ...zhPrompt.matchAll(/全部\s*(\d+)\s*个\s*工具/g)].map((m) => Number(m[1]));
-  const enCounts = [...enPrompt.matchAll(/\((\d+) total\)/g), ...enPrompt.matchAll(/(\d+)-tool checklist/g)].map((m) => Number(m[1]));
-  assert.deepEqual(zhCounts, [51, 51], "help.zh.md 必须保留两处 51 计数表述（本目标不得改动该口径）");
-  assert.deepEqual(enCounts, [51, 51], "help.en.md 必须保留两处 51 计数表述");
+  const zhModules = [...zhPrompt.matchAll(/共\s*(\d+)\s*个功能模块/g)].map((m) => Number(m[1]));
+  const enModules = [...enPrompt.matchAll(/(\d+)\s+feature modules/g)].map((m) => Number(m[1]));
+  assert.deepEqual(zhModules, [HARNESS_MODULE_IDS.length], "help.zh.md 必须声明模块数 == 模块注册表长度");
+  assert.deepEqual(enModules, [HARNESS_MODULE_IDS.length], "help.en.md 必须声明模块数 == 模块注册表长度");
+  // 负向对照：模块数写错必红（守卫不得恒真）。
+  assert.notDeepEqual(
+    [...zhPrompt.replace(/共\s*\d+\s*个功能模块/, "共 4 个功能模块").matchAll(/共\s*(\d+)\s*个功能模块/g)].map((m) => Number(m[1])),
+    [HARNESS_MODULE_IDS.length],
+    "模块数被改成 4 时判据必须变红",
+  );
   // 点题必须**同步进 agent 侧资产**（否则 graph_help 仍不点题）。
   assert.ok(zhPrompt.includes(GRAPH_ENGINEERING_DEFINITION), "help.zh.md 必须含逐字定义（agent 侧点题）");
   assert.ok(zhPrompt.includes("mcp.so"), "help.zh.md 必须标注来源 mcp.so");
@@ -392,9 +406,14 @@ test("g-493 C1（负向对照·内存变异）：点题章节缺失 / 定义被�
 
 // ================================================================ D. graph_help(topic)
 
-test("g-493 D1：graph_help 省略 topic 逐字返回整份资产；usage / graph_engineering / 工具名各自取到切片；未知名不伪造", () => {
+test("g-493 D1（g-495 改判）：graph_help 省略 topic 返回渲染后全文；usage / graph_engineering / 模块名各自取到切片；未知名不伪造", () => {
+  const raw = readFileSync(helpZhPromptPath, "utf8");
   const full = String(runHelp({}).help ?? "");
-  assert.equal(full, readFileSync(helpZhPromptPath, "utf8"), "省略 topic 必须逐字返回源资产（g-347 口径不变）");
+  // g-495 A：全文不再与源资产逐字相等 —— 模块状态位由 `{moduleId}` 渲染为当前生效值。
+  // 其余正文仍须逐字一致（用占位归一后比对；负向对照见 g-347 D）。
+  const norm = (t: string) => t.replace(/\{(tags|memory|shared_cards|automation_prompts|attachments)\}/g, "{M}").replace(/(\|\s*)开启(\s*\|)/g, "$1{M}$2");
+  assert.equal(norm(full), norm(raw), "省略 topic 必须返回「源资产 + 状态位渲染」的全文");
+  assert.doesNotMatch(full, /\{[a-z_]+\}/, "全文不得残留未渲染占位");
 
   const usage = runHelp({ topic: "usage" });
   assert.equal(usage.found, true, "topic=usage 必须命中");
@@ -408,15 +427,19 @@ test("g-493 D1：graph_help 省略 topic 逐字返回整份资产；usage / grap
   assert.ok(!ge.help.includes("## 目标生命周期"), "图工程主题不得夹带别的章节");
   assert.equal(ge.help, runHelp({ topic: "图工程" }).help, "zh 别名与英文主题名必须取到同一段");
 
-  const one = runHelp({ topic: "graph_help" });
-  assert.equal(one.found, true, "工具名主题必须命中");
-  assert.ok(one.help.startsWith("- graph_help("), "工具主题必须恰好是该工具那一条");
-  assert.ok(!one.help.includes("graph_handoff"), "工具主题不得越界到别条");
-  // 每个已注册工具名都必须是可查主题（主题面 ≠ 断裂的清单）。
-  for (const name of registeredToolNames) {
-    const r = runHelp({ topic: name });
-    assert.equal(r.found, true, `已注册工具 ${name} 必须是可查主题`);
+  // g-495 B（改判）：topic 的口径从**工具名**改为**模块名**（help 已不再逐条列工具）。
+  // 每个模块名都必须可查，且切片恰好是该模块那一行（表头 + 该行，不含别的模块行）。
+  for (const mod of HARNESS_MODULE_IDS) {
+    const r = runHelp({ topic: mod });
+    assert.equal(r.found, true, `模块 ${mod} 必须是可查主题`);
+    assert.ok(r.help.includes(`{${mod}}`) || /\|\s*(?:开启|关闭)\s*\|/.test(r.help), `模块 ${mod} 切片必须含其状态列`);
+    assert.ok(r.help.includes("| 模块 |"), `模块 ${mod} 切片必须含表头`);
+    for (const other of HARNESS_MODULE_IDS) {
+      if (other !== mod) assert.ok(!r.help.includes(`{${other}}`), `模块 ${mod} 切片不得越界到 ${other}`);
+    }
   }
+  // 模块名的 zh 别名也须命中（如「标签」「共享卡」）。
+  assert.equal(runHelp({ topic: "标签" }).found, true, "模块 zh 别名「标签」必须命中");
 
   const unknown = runHelp({ topic: "graph_not_a_tool" });
   assert.equal(unknown.found, false, "未知名不得被判为命中（不许伪造内容）");

@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { apply, HELP_CATALOG_ROUTE } from "../../dist/index.js";
+import { HARNESS_MODULE_IDS } from "../ops.ts";
 
 const repoRoot = join(import.meta.dirname, "../..");
 const distRoot = join(repoRoot, "dist");
@@ -297,22 +298,23 @@ test("g-489 B2：文案 zh/en 对称、真实（锚点指向现存界面标签�
   const [zh, en] = readDicts();
   const problems = copyProblems(zh, en, new Set(registeredToolNames), new Set(registeredSkillNames));
   assert.deepEqual(problems, [], "文案断言必须全绿");
-  // 红线条：prompts/help.*.md 的「51 个」计数必须与注册真源一致（本目标不得改动该口径）。
+  // 红线条（g-495 改判）：help.*.md 不再声明**工具**数（改为功能模块清单 + 当前开关状态），
+  // 故计数真源从「注册工具数」改判为「引擎模块注册表长度」。工具侧不变：注册真源仍须 == 51。
   const zhPrompt = readFileSync(helpZhPromptPath, "utf8");
   const enPrompt = readFileSync(helpEnPromptPath, "utf8");
-  // 只取「工具全量」语境下的计数（文件里还有标签数一类的其它数字，不参与本口径）。
-  const zhCounts = [
-    ...zhPrompt.matchAll(/共\s*(\d+)\s*个/g),
-    ...zhPrompt.matchAll(/全部\s*(\d+)\s*个\s*工具/g),
-  ].map((m) => Number(m[1]));
-  assert.equal(zhCounts.length, 2, "help.zh.md 必须保留两处工具计数表述（共 N 个 / 全部 N 个工具）");
-  for (const n of zhCounts) assert.equal(n, registeredToolNames.length, `help.zh.md 的工具计数必须是 ${registeredToolNames.length}`);
-  const enCounts = [
-    ...enPrompt.matchAll(/\((\d+) total\)/g),
-    ...enPrompt.matchAll(/(\d+)-tool checklist/g),
-  ].map((m) => Number(m[1]));
-  assert.equal(enCounts.length, 2, "help.en.md 必须保留两处工具计数表述");
-  for (const n of enCounts) assert.equal(n, registeredToolNames.length, `help.en.md 的工具计数必须是 ${registeredToolNames.length}`);
+  assert.equal(registeredToolNames.length, 51, "g-489 基线：注册真源应恰有 51 个工具");
+  const zhModules = [...zhPrompt.matchAll(/共\s*(\d+)\s*个功能模块/g)].map((m) => Number(m[1]));
+  assert.equal(zhModules.length, 1, "help.zh.md 必须保留一处模块计数表述（共 N 个功能模块）");
+  for (const n of zhModules) assert.equal(n, HARNESS_MODULE_IDS.length, `help.zh.md 的模块计数必须是 ${HARNESS_MODULE_IDS.length}`);
+  const enModules = [...enPrompt.matchAll(/(\d+)\s+feature modules/g)].map((m) => Number(m[1]));
+  assert.equal(enModules.length, 1, "help.en.md 必须保留一处模块计数表述");
+  for (const n of enModules) assert.equal(n, HARNESS_MODULE_IDS.length, `help.en.md 的模块计数必须是 ${HARNESS_MODULE_IDS.length}`);
+  // 负向对照（内存变异）：模块数写错必红（守卫不得恒真）。
+  assert.notEqual(
+    Number(zhPrompt.replace(/共\s*\d+\s*个功能模块/, "共 4 个功能模块").match(/共\s*(\d+)\s*个功能模块/)![1]),
+    HARNESS_MODULE_IDS.length,
+    "模块数改成 4 时判据必须变红",
+  );
 });
 
 test("g-489 B2b（负向对照·内存变异）：占位行 / 缺三要素 / 编造工具名 / 编造技能名 / en 混 CJK ⇒ 文案断言逐条必红", () => {
