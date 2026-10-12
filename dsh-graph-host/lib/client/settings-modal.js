@@ -220,6 +220,9 @@
         setLeafPatch(patch, path, wire ? wire(to) : to);
       };
       for (const f of ["provider", "model", "reasoning_effort", "mode"]) leaf(["executor", f]);
+      // g-488：以下四键**界面上已不可编辑**（原「高级设置」的四个输入框已移除），但叶子清单**保留** ——
+      // 配置读兼容：文件里既有的值照样归一、照样参与 diff（不可编辑 ⇒ 恒等于基线 ⇒ 永不出现在 patch），
+      // 从而「不是我们改的键，一个字节都不动」，也不会误伤其它叶子。
       leaf(["defaults", "review", "reviewer"]);
       // 空串与 null 在存储层同义（都清空该字段），统一按 null 提交（与旧实现逐字一致）
       leaf(["defaults", "review", "prompt"], (v) => (v === "" || v === null || v === undefined ? null : v));
@@ -276,7 +279,10 @@
     // 同一项出现在两个页签）都必须判红——这就是「配置项 → 页签归属」结构守卫的真源。
     // 键名与 project.yaml / localStorage 的叶子路径同名；`local.*` 前缀明确标注为**本地偏好**
     // （只写 localStorage，不写 project.yaml）。
-    const SETTINGS_TAB_KEYS = ["executor", "review", "ui", "modules", "advanced", "about"];
+    // g-488：删「关于」页签（tab 集合 6 → 5）。配置文件路径展示移入页脚一行（见文末 footer），
+    // 故 `config.project_yaml` 不再是「页签归属的配置项」——它是**只读展示**，不是可编辑配置项，
+    // 从归属表中移除（其渲染与双语键由 g479 的专门断言钉住）。
+    const SETTINGS_TAB_KEYS = ["executor", "review", "ui", "modules", "advanced"];
     const SETTINGS_DEFAULT_TAB = "executor";
     const SETTINGS_TAB_LABEL_KEYS = {
       executor: "settings.tab.executor",
@@ -284,11 +290,13 @@
       ui: "settings.tab.ui",
       modules: "settings.tab.modules",
       advanced: "settings.tab.advanced",
-      about: "settings.tab.about",
     };
     const SETTINGS_TAB_ITEMS = {
-      executor: ["executor.provider", "executor.model", "executor.reasoning_effort", "executor.mode"],
-      review: ["review.policy", "review.regions", "review.contract_paths", "review.non_product_prefixes", "supervisor.agent_teams"],
+      // g-488：`supervisor.agent_teams` 自「评审与质量」归位到「模型与执行」——它与 executor.mode
+      // 同属**派发链路真实消费**的执行面（core `resolveAgentTeamsInjection`），归属页签只影响
+      // 渲染位置：默认 off / 三态归一 / 派发语义（off 时提示词 diff=0）**逐字未动**。
+      executor: ["executor.provider", "executor.model", "executor.reasoning_effort", "executor.mode", "supervisor.agent_teams"],
+      review: ["review.policy", "review.regions", "review.contract_paths", "review.non_product_prefixes"],
       ui: ["local.refresh_interval", "local.live_display"],
       // g-480：harness 模块开关（workspace 级）——五个模块默认全开，关闭 = 真裁剪（工具从模型可选集
       // 移除 + 相关 systemPrompt 段不再注入），只隐藏能力、**不删除任何数据**。
@@ -299,11 +307,12 @@
         "modules.automation_prompts",
         "modules.attachments",
       ],
+      // g-488：四项默认值键（`defaults.review.reviewer` / `defaults.review.prompt` /
+      // `defaults.pk.lanes` / `defaults.pk.sandbox`）**只从界面移除**，配置读兼容全部保留：
+      // schema / `readProjectConfig` / `normalizeSettingsDraft` / `buildSettingsPatch` 的叶子清单
+      // 一字未动（不可编辑 ⇒ 永不判脏，也不会误伤其它键）；故这里不再登记归属 ——
+      // 「页签归属表」只描述**界面上可编辑的配置项**。
       advanced: [
-        "defaults.review.reviewer",
-        "defaults.review.prompt",
-        "defaults.pk.lanes",
-        "defaults.pk.sandbox",
         "supervisor.automation.scope_planning",
         "supervisor.automation.integration_decision",
         "supervisor.automation.rework",
@@ -312,7 +321,6 @@
         "supervisor.automation.release",
         "prompt_overrides.subagent",
       ],
-      about: ["config.project_yaml"],
     };
 
     /** g-479：评审条件校验错误文案的**唯一**构造点——save 的拒绝提交与「错误定位到所属页签」
@@ -322,6 +330,34 @@
         .map((e) => dgT(e.key, { ...e.params, field: dgT(REVIEW_LIST_LABEL_KEYS[e.field] ?? e.field) }))
         .join("；");
     }
+
+    // ===== g-488：说明性文字 tooltip 化（标题行只留主体）=====
+    // 小标题右侧的 `(?)` 图标：说明性文字从正文搬进 tooltip（复用既有 `title:` 用法，纯移动、不删改），
+    // 图标**键盘可达**（tabIndex=0，可 Tab 聚焦）且**语义可读**（aria-label 与 title 同为说明全文，
+    // role="img" 保证读屏把它当有名字的元素播报，而不是无意义的 "(?)"）。
+    // 分界（柱石）：进 tooltip 的只有**静态说明**（这个控件/小节是什么、怎么用、作用范围）；
+    // **状态类读数**（生效值、来源徽标「显式/缺省」、加载/不可用状态、校验错误、只读目录建议、
+    // 能力告警、未保存提示）一律留在正文——它们必须一眼可见，且随状态变化，塞进 tooltip 会撒谎。
+    const SETTINGS_HINT_ICON = "(?)";
+    const settingsHintIcon = (text) => h("span", {
+      className: "dg-settings-hint",
+      role: "img",
+      tabIndex: 0,
+      "aria-label": text,
+      title: text,
+      style: { fontSize: 11, cursor: "help", opacity: 0.75, flexShrink: 0, lineHeight: 1.2 },
+    }, SETTINGS_HINT_ICON);
+
+    /** g-488：`supervisor.automation` 六键的**逐键**说明键（与键名一一对应：管什么 + human/ai 含义）。
+     *  键集完整性由 g479 结构守卫逐个对上键名（漏一键即红）。 */
+    const AUTOMATION_HINT_KEYS = {
+      scope_planning: "settings.automationWhat.scope_planning",
+      integration_decision: "settings.automationWhat.integration_decision",
+      rework: "settings.automationWhat.rework",
+      memory_promotion: "settings.automationWhat.memory_promotion",
+      skill_proposal: "settings.automationWhat.skill_proposal",
+      release: "settings.automationWhat.release",
+    };
 
     function SettingsModal(props) {
       useLocaleRevision();
@@ -339,7 +375,7 @@
       const [error, setError] = React.useState(null);
       // g-479：第 5 个 useState 槽位由「高级折叠开关」升级为「当前激活页签」——**槽位数与顺序一字不变**
       // （既有 vm 渲染测试按 hook 调用序覆写 0..10 槽位；新状态只能追加在第 10 槽位之后）。
-      // `showAdvanced`（原折叠是否展开）作为它的派生读法保留，语义等价：高级页签激活 ≡ 高级区可见。
+      // `showAdvanced`（原折叠是否展开）在 g-488 已删除：高级设置本身即页签，页签内不再有第二层显隐。
       const [activeTab, setActiveTab] = React.useState(SETTINGS_DEFAULT_TAB);
       // att-002：服务端下发的 canonical .dsh-graph/project.yaml 绝对路径（只消费，不自行猜 graphRoot）
       const [configFile, setConfigFile] = React.useState(null);
@@ -445,12 +481,9 @@
       const save = async () => {
         if (!form) return;
         setSaving(true); setNote(null); setError(null);
-        const lanesRaw = form.defaults?.pk?.lanes;
-        const lanes = lanesRaw === null || lanesRaw === "" || lanesRaw === undefined ? 1 : Number(lanesRaw);
-        if (!Number.isInteger(lanes) || lanes < 1) {
-          setNote({ kind: "err", text: dgT("settings.pkLanesError") });
-          setSaving(false); return;
-        }
+        // g-488：原 `defaults.pk.lanes` 整数前置校验随该输入框一并移除——它不是「放宽校验」而是
+        // 「校验对象已不存在」：界面上再无 lanes 输入，而文件里既有的非法值不该**永久阻断保存**
+        // （否则一个手改坏的 project.yaml 会让整个设置面板只读）。core 侧读取/规整语义未动。
         // g-442：保存前校验评审条件（空串 / 绝对路径 / `..` / 重复 / 尾随斜杠 / regions 显式空列表）。
         // 失败即拒绝提交：不发 POST、不改基线、不写 localStorage ⇒ 零副作用、不留半保存状态。
         const reviewErrors = collectReviewListErrors(form);
@@ -615,12 +648,14 @@
         return h("div", { key, style: { marginBottom: 10 } },
           h("div", { style: { display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap" } },
             h("span", { style: { fontWeight: 600, fontSize: 12 } }, label),
+            // g-488：逐列表的说明（每行一个条目 / 允许的写法）搬到标题行右侧 `(?)`，文案一字未改；
+            // 相邻的「来源：显式/缺省」是**状态读数**，仍留在正文。
+            settingsHintIcon(dgT(REVIEW_LIST_HINT_KEYS[key])),
             h("span", { style: { ...S.meta, fontSize: 11 } }, dgT("settings.reviewSourceLabel") + "：" + sourceBadge)),
           body,
           key === "regions" && Array.isArray(suggestedRegions) && suggestedRegions.length > 0
             ? h("div", { style: metaStyle }, dgT("settings.reviewSuggestedRegions") + suggestedRegions.join(", "))
-            : null,
-          h("div", { style: metaStyle }, dgT(REVIEW_LIST_HINT_KEYS[key])));
+            : null);
       };
 
       // ===== g-133：provider/model 合法目录派生（与 settings.js 页面同源逻辑，字段换成 executor.*） =====
@@ -715,10 +750,9 @@
       const policyOptionStyle = { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" };
 
       // ===== g-479：分类页签（页签 → 面板；配置项归属表见模块级 SETTINGS_TAB_ITEMS）=====
-      // ① `showAdvanced` 的语义位（第 5 个 useState 槽）已由 `activeTab` 承接：高级页签激活 ≡ 原
-      //    「显示高级设置」折叠展开 ⇒ 既有 `display: showAdvanced ? "flex"/"grid"/"block" : "none"`
-      //    表达式逐字保留、且仍是诚实的（保锚点与本改造的正确性不冲突）。
-      const showAdvanced = activeTab === "advanced";
+      // g-488：原「折叠是否展开」派生显示开关（及其一族 inline `display` 三元表达式）**已删除**
+      // ——「高级设置」本身就是一个页签，页签内再挂一层「显示/隐藏高级设置」既是重复控件，也让
+      // 「高级页签激活但内容被隐藏」成为可能。高级页签内容现在**恒显**（可见性只由页签选择决定）。
       // ② 页签按钮：选中页签与下方面板同底色、下移 1px 覆盖分隔线（沿用 goal-modal 的页签视觉）。
       const tabButton = (tabKey) => h("button", {
         key: tabKey,
@@ -761,14 +795,7 @@
             "aria-label": dgT("settings.tabsAria"),
             style: { display: "flex", alignItems: "flex-end", flexWrap: "wrap", gap: 2, marginTop: 10, borderBottom: "1px solid rgba(128,128,128,.35)" },
           },
-            ...SETTINGS_TAB_KEYS.map((k) => tabButton(k)),
-            // g-479：原「显示高级设置」按钮的等价物——同一开关（高级页签是否激活）的显式入口，
-            // 使既有双语键 settings.showAdvanced / settings.hideAdvanced 继续有真实归属。
-            h("button", {
-              className: "dg-btn dg-settings-advanced-toggle",
-              style: { ...S.btn, fontSize: 11, padding: "2px 8px", marginLeft: "auto", marginBottom: 2 },
-              onClick: () => setActiveTab(showAdvanced ? SETTINGS_DEFAULT_TAB : "advanced"),
-            }, showAdvanced ? dgT("settings.hideAdvanced") : dgT("settings.showAdvanced"))),
+            ...SETTINGS_TAB_KEYS.map((k) => tabButton(k))),
           tabPanel("executor", [
             h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.modelRouting")),
             // g-133：两列并排各占一半的可收缩 flex 布局——父容器 minWidth:0、子列 flex:"1 1 0"+minWidth:0、
@@ -783,19 +810,21 @@
                 h("select", { style: { ...S.promptInput, width: "100%", boxSizing: "border-box" }, value: curModel, onChange: (e) => set(["executor", "model"], e.target.value) },
                   ...modelOptions))),
             h("div", { style: { minWidth: 0, marginBottom: 6 } },
-              h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reasoningEffort")),
+              h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 2 } },
+                h("label", { style: { fontSize: 11, opacity: 0.8 } }, dgT("settings.reasoningEffort")),
+                // g-488：说明性文字 tooltip 化——文案本身（含目录三态各自的说法）一字未改，只换承载位置。
+                settingsHintIcon(
+                  catReady
+                    ? (effortChoices.length > 0
+                      ? dgT("settings.effortHint")
+                      : dgT("settings.effortHintNone"))
+                    : dgT("profileSettings.effortHintWaiting"))),
               h("select", {
                 "aria-label": dgT("settings.reasoningEffortAria"),
                 style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
                 value: curEffort,
                 onChange: (e) => set(["executor", "reasoning_effort"], e.target.value),
-              }, ...effortOptions),
-              h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } },
-                catReady
-                  ? (effortChoices.length > 0
-                    ? dgT("settings.effortHint")
-                    : dgT("settings.effortHintNone"))
-                  : dgT("profileSettings.effortHintWaiting"))),
+              }, ...effortOptions)),
             // g-191：执行模式受控下拉
             h("div", { style: { minWidth: 0, marginBottom: 6 } },
               h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
@@ -813,12 +842,12 @@
               catReady
                 ? dgT("settings.catalogReady")
                 : (catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg"))),
-          ]),
-          tabPanel("review", [
-            // g-440：Agent Teams 最小契约开关（负责人资格判定）。**默认 off**；off 时派发提示词逐字
-            // 不变（diff=0），on 才把 discipline 资产中的契约段注入派发提示词。归属主区而非高级设置：
-            // 与 review.policy 同理，该字段被派发链路真实消费（core `resolveAgentTeamsInjection`）。
-            h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0, marginTop: 8 } },
+            // ===== g-488：Agent Teams 契约开关（自「评审与质量」页签**归位**到「模型与执行」）=====
+            // g-440 契约逐字不变：**默认 off**；off 时派发提示词逐字不变（diff=0），on 才把 discipline
+            // 资产中的契约段注入派发提示词（core `resolveAgentTeamsInjection`）。三态归一（null/未配置
+            // = off）与派发链路的双态注入语义均由 core 侧守卫，归位只改渲染页签，不动任何读写路径。
+            h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+            h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0 } },
               h("input", {
                 id: "dg-agent-teams",
                 type: "checkbox",
@@ -827,13 +856,18 @@
                 style: { flexShrink: 0 },
               }),
               h("label", { htmlFor: "dg-agent-teams", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, dgT("settings.agentTeams")),
-              h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.agentTeamsHint"))),
+              settingsHintIcon(dgT("settings.agentTeamsHint"))),
+          ]),
+          tabPanel("review", [
             // g-342：顶层 review.policy 四态下拉（继承未配置 / auto / strict / none）。
             // 渲染方式（label htmlFor + select + meta 提示）与选项 style 比照上方 executor.mode 与
             // supervisor.automation；脏状态由 normalizeSettingsDraft 统一覆盖（判据 2）。
             // 归属主区而非「高级设置」：该字段被 core/review-policy.ts 的受理门禁真实消费。
             h("div", { style: { minWidth: 0 } },
-              h("label", { htmlFor: reviewPolicyId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.reviewPolicyLabel")),
+              h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 2 } },
+                h("label", { htmlFor: reviewPolicyId, style: { fontSize: 11, opacity: 0.8 } }, dgT("settings.reviewPolicyLabel")),
+                // g-488：四态含义说明（含「未配置时怎么推导」）搬进标题右侧 `(?)`，文案一字未改。
+                settingsHintIcon(dgT("settings.reviewPolicyHint"))),
               h("select", {
                 id: reviewPolicyId,
                 "aria-label": dgT("settings.reviewPolicyAria"),
@@ -842,18 +876,18 @@
                 onChange: (e) => set(["review", "policy"], e.target.value),
               },
                 h("option", { value: "", style: policyOptionStyle }, dgT("settings.reviewPolicyInherit")),
-                ...REVIEW_POLICY_VALUES.map((p) => h("option", { key: p, value: p, style: policyOptionStyle }, dgT(REVIEW_POLICY_LABEL_KEYS[p])))),
-              h("div", { style: { ...S.meta, marginTop: 3, fontSize: 11 } }, dgT("settings.reviewPolicyHint"))),
+                ...REVIEW_POLICY_VALUES.map((p) => h("option", { key: p, value: p, style: policyOptionStyle }, dgT(REVIEW_POLICY_LABEL_KEYS[p]))))),
 
             // ===== g-442：评审条件区块（regions / contract_paths / non_product_prefixes）=====
             // 位置：紧随既有 review.policy 四态下拉之后（同属「真实生效」主区，而非「高级设置」）。
             // 未配置时只读展示服务端生效值并标注「缺省（普适）」——绝不让用户误以为已按本项目校准，
             // 也绝不把缺省值物化为显式配置；目录建议为只读提示，不自动写入。
             h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-            h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.reviewConditions")),
-            h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11 } }, dgT("settings.reviewConditionsHint")),
-            // 与 g-435 指南《Review 严格度校准（项目专属）》口径一致（指向指南 + 同源工具面）
-            h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11, opacity: 0.85 } }, dgT("settings.reviewCalibrationGuide")),
+            // g-488：小节说明（「主管按项目目录结构设置」）与 g-435 指南指引（《Review 严格度校准》）
+            // 两条静态说明合并挂到小节标题的 `(?)`，文案逐字保留（两者都是「怎么用」，非状态读数）。
+            h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 6 } },
+              h("div", { style: { fontWeight: 700 } }, dgT("settings.reviewConditions")),
+              settingsHintIcon(dgT("settings.reviewConditionsHint") + " " + dgT("settings.reviewCalibrationGuide"))),
             form.review?.config_malformed
               ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginBottom: 6, fontSize: 11 } }, dgT("settings.reviewConfigMalformed"))
               : null,
@@ -862,9 +896,14 @@
           tabPanel("ui", [
             // g-479：本页两项都是**浏览器本地偏好**（只写 localStorage），不写 project.yaml、
             // 不随配置同步——如实标注，避免用户误以为它们会随项目配置共享。
-            h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11, opacity: 0.85 } }, dgT("settings.tabLocalNote")),
+            // g-488：这条页级说明搬进页首标题右侧的 `(?)`（页首标题复用页签标签键，不新增文案）。
+            h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 6 } },
+              h("div", { style: { fontWeight: 700 } }, dgT(SETTINGS_TAB_LABEL_KEYS.ui)),
+              settingsHintIcon(dgT("settings.tabLocalNote"))),
             h("div", { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0 } },
               h("span", { style: { fontWeight: 700, fontSize: 12, flexShrink: 0 } }, dgT("settings.autoRefresh")),
+              // g-488：「（下限 5 秒）」是静态规则说明 ⇒ 标题行 `(?)`。
+              settingsHintIcon(dgT("settings.minInterval")),
               h("input", {
                 style: { ...S.promptInput, width: 38, flex: "none", padding: "2px 4px", textAlign: "center", fontSize: 12, boxSizing: "border-box" },
                 type: "number",
@@ -873,8 +912,7 @@
                 value: refreshIntervalInput,
                 onChange: (e) => handleIntervalChange(e.target.value),
               }),
-              h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } }, dgT("settings.seconds")),
-              h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.minInterval"))),
+              h("span", { style: { ...S.meta, fontSize: 11, flexShrink: 0 } }, dgT("settings.seconds"))),
             intervalWarn ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2 } }, "⚠️ " + intervalWarn) : null,
 
             // g-224：实时代理输出流式显示开关——关闭后停止高频输出流订阅（释放网络/内存/CPU），
@@ -888,14 +926,18 @@
                 style: { flexShrink: 0 },
               }),
               h("label", { htmlFor: "dg-live-display", style: { fontWeight: 700, fontSize: 12, flexShrink: 0, cursor: "pointer" } }, dgT("settings.liveDisplay")),
-              h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT("settings.liveDisabledHint"))),
+              settingsHintIcon(dgT("settings.liveDisabledHint"))),
           ]),
           // g-480：harness 模块开关（**workspace 级**：写 project.yaml 的 `modules` 段，随项目配置共享）。
           // 关闭 = **真裁剪**：该模块的 `graph_*` 工具从模型可见的工具清单里移除，且相关 systemPrompt
           // 段不再注入；只隐藏能力、**不删除任何数据**（记忆/卡片/附件一律原样保留，重新开启即恢复）。
           // 五个模块**默认全开**：未配置时与改造前逐字节一致。
           tabPanel("modules", [
-            h("div", { style: { ...S.meta, marginBottom: 6, fontSize: 11, opacity: 0.85 } }, dgT("settings.modulesNote")),
+            // g-488：两条页级说明（本页写 project.yaml / 作用范围与默认全开）合并挂到页首标题的 `(?)`，
+            // 文案逐字保留（`settings.modulesNote` + `settings.modulesScopeNote`，顺序与改造前一致）。
+            h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 6 } },
+              h("div", { style: { fontWeight: 700 } }, dgT(SETTINGS_TAB_LABEL_KEYS.modules)),
+              settingsHintIcon(dgT("settings.modulesNote") + " " + dgT("settings.modulesScopeNote"))),
             h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 } },
               MODULE_SWITCH_KEYS.map((k) =>
                 h("div", { key: k, style: { display: "flex", alignItems: "flex-start", gap: 6, minWidth: 0 } },
@@ -908,12 +950,14 @@
                     style: { flexShrink: 0, marginTop: 2 },
                   }),
                   h("div", { style: { minWidth: 0 } },
-                    h("label", { htmlFor: `dg-module-${k}`, style: { fontWeight: 700, fontSize: 12, cursor: "pointer", display: "block" } }, dgT(MODULE_LABEL_KEYS[k])),
-                    h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7 } }, dgT(MODULE_HINT_KEYS[k])))))),
-            h("div", { style: { ...S.meta, marginTop: 8, fontSize: 11, opacity: 0.85 } }, dgT("settings.modulesScopeNote")),
+                    h("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
+                      h("label", { htmlFor: `dg-module-${k}`, style: { fontWeight: 700, fontSize: 12, cursor: "pointer" } }, dgT(MODULE_LABEL_KEYS[k])),
+                      // g-488：逐模块说明（关闭后会发生什么）搬到标签右侧 `(?)`，文案一字未改。
+                      settingsHintIcon(dgT(MODULE_HINT_KEYS[k]))))))),
             // g-480（att-002）：宿主**不支持真裁剪**时（服务端 `trim_supported === false`）的**唯一一行**
             // 提示——如实说明「开关只记录配置、不改变工具与提示词面」。支持真裁剪的宿主上该行**不存在**；
             // 文案 zh/en 对称、en 侧零 CJK（对账断言在 core/tests/g480-modules.test.ts）。
+            // g-488：这是**能力状态读数**（随服务端 `trim_supported` 变化），不进 tooltip、仍留正文。
             trimSupported === false
               ? h("div", {
                 "data-dg-module-trim-unsupported": "1",
@@ -922,79 +966,77 @@
               : null,
           ]),
           tabPanel("advanced", [
-            h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),
-            h("div", { style: { display: showAdvanced ? "flex" : "none", gap: 8, flexWrap: "wrap" } },
-              h("div", { style: { flex: "1 1 120px" } },
-                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "review.reviewer"),
-                h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.review?.reviewer ?? "", onChange: (e) => set(["defaults", "review", "reviewer"], e.target.value) })),
-              h("div", { style: { flex: "1 1 120px" } },
-                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "review.prompt"),
-                h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.review?.prompt ?? "", onChange: (e) => set(["defaults", "review", "prompt"], e.target.value === "" ? null : e.target.value) })),
-              h("div", { style: { flex: "1 1 90px" } },
-                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "pk.lanes"),
-                h("input", { style: { ...S.promptInput, width: "100%" }, type: "number", min: 1, value: form.defaults?.pk?.lanes ?? 1, onChange: (e) => set(["defaults", "pk", "lanes"], e.target.value) })),
-              h("div", { style: { flex: "1 1 120px" } },
-                h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, "pk.sandbox"),
-                h("input", { style: { ...S.promptInput, width: "100%" }, value: form.defaults?.pk?.sandbox ?? "", onChange: (e) => set(["defaults", "pk", "sandbox"], e.target.value) }))),
-
-            h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
-            h("div", { style: { display: showAdvanced ? "block" : "none", fontWeight: 700, marginBottom: 4 } }, dgT("settings.supervisorAutomation")),
-            h("div", { style: { display: showAdvanced ? "grid" : "none", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 } },
+            // g-488：本页内容**恒显**（原「折叠是否展开」一族 inline `display` 三元已删——高级设置
+            // 本身即页签，页签内再挂折叠开关是重复控件）。
+            h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.advanced")),
+            // g-488：原 `defaults.review.reviewer` / `defaults.review.prompt` / `defaults.pk.lanes` /
+            // `defaults.pk.sandbox` 四个输入框**只从界面移除**：四键均已被主管提示词与派发链路按固定
+            // 缺省真实消费，界面上可编辑反而制造「改了也没用」的错觉。配置读兼容（core/ops.ts 的
+            // needStr/整数校验、readProjectConfig、normalize/patch 叶子清单）**全部保留**。
+            h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+            h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 4 } },
+              h("div", { style: { fontWeight: 700 } }, dgT("settings.supervisorAutomation")),
+              // g-488：六键的**总说明**（只影响主管提示、不构成引擎强制）搬到小节标题 `(?)`；
+              // g-439 口径逐字保留（六键由主管提示真实消费）。
+              settingsHintIcon(dgT("settings.automationHint"))),
+            h("div", { style: { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 } },
               // g-272 att-002：原 Object.keys({...中文标签}) 的中文值从未被渲染（label 直接用 key），改为纯 key 数组消除死代码中文残留。
               ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"].map((k) =>
                 h("div", { key: k },
-                  h("label", { style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, k),
+                  h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 2 } },
+                    h("label", { style: { fontSize: 11, opacity: 0.8 } }, k),
+                    // g-488：**逐键** `(?)`——每键一条，讲清「管什么 + human/ai 两种取值的含义」。
+                    settingsHintIcon(dgT(AUTOMATION_HINT_KEYS[k]))),
                   h("select", { style: { ...S.promptInput, width: "100%" }, value: auto[k] ?? "", onChange: (e) => set(["supervisor", "automation", k], e.target.value === "" ? null : e.target.value) },
                     ...automationOptions(auto[k]))))),
-            // g-439：六键已由主管提示真实消费——如实说明「影响主管提示」（旧的存储字段标注已删除）；
-            // 与 g-436「只可见化、不硬阻断」口径一致：不改变工具权限，也不构成引擎强制。
-            h("div", { style: { display: showAdvanced ? "block" : "none", ...S.meta, marginTop: 4, fontSize: 11, opacity: 0.85 } }, dgT("settings.automationHint")),
 
-            h("hr", { style: { display: showAdvanced ? "block" : "none", border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+            h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
             h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.promptOverride")),
             promptOverride("subagent", dgT("settings.subagentPrompt")),
-          ]),
-          tabPanel("about", [
-            // att-002：配置文件操作入口——复用 goal-modal 的 Host openPath/copyText/toast/fallback 机制
-            // g-479「关于」页签：除打开/复制入口外，把服务端下发的 canonical 绝对路径**明文**展示出来
-            // （只消费 data.configFile，不自行拼接），使「配置落在哪」一眼可见。
-            configFile
-              ? h("div", { style: { marginTop: 4 } },
-                h("div", { style: { display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" } },
-                  h("span", { style: { fontSize: 11, opacity: 0.7 } }, dgT("settings.projectYaml")),
-                  h("button", {
-                    style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-                    className: "dg-btn",
-                    title: dgT("settings.openConfigTooltip"),
-                    onClick: async (e) => {
-                      e.stopPropagation();
-                      // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
-                      const r = await openHostPath(configFile);
-                      if (r.opened) { showToast(dgT("settings.openedProjectYaml")); return; }
-                      await copyText(configFile);
-                      if (r.error) { showToast(dgT("tab.openFailed") + openErrorText(r.error)); }
-                      else { showToast(dgT("tab.pathCopiedNoOpen")); }
-                    },
-                  }, dgT("tab.openFile")),
-                  h("button", {
-                    style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-                    className: "dg-btn",
-                    title: dgT("settings.copyProjectPath"),
-                    onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast(dgT("tab.pathCopied")); },
-                  }, dgT("tab.copyPath"))),
-                h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11, opacity: 0.7, wordBreak: "break-all" } }, configFile))
-              : null,
           ]),
           h("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 6 } },
             h("button", { style: { ...S.btn, padding: "6px 16px", fontSize: 13 }, className: "dg-btn", disabled: saving, onClick: save },
               saving ? dgT("common.saving") : dgT("settings.saveBtn")),
             h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: requestClose }, dgT("settings.closeBtn")),
             note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "var(--dsw-alias-label-primary, #6ee7a0)" : "var(--dsw-alias-state-error-primary, #f08080)", marginLeft: 8 } }, note.text) : null),
+          // ===== g-488：原「关于」页签的**唯一实质内容**（配置文件在哪 + 打开/复制入口）迁到页脚一行 =====
+          // 研判：`config.project_yaml` 的展示**只**存在于「关于」页签（`configFile` 由服务端下发、
+          // 无第二处消费点），工具栏虽也有「打开/复制路径」入口但那是**卡片/目标文件**（card-drawer /
+          // goal-modal 的 `tab.openFile` / `tab.copyPath`），不能替代「本项目 project.yaml 在哪」——
+          // 故按判据 6 的第二种处置：**搬到页脚一行**（信息零丢失，双语键与 openHostPath/copyText/
+          // toast/fallback 机制逐字复用；`configFile` 状态与其 useState 槽位不变）。
+          configFile
+            ? h("div", { style: { display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginTop: 6 } },
+              h("span", { style: { fontSize: 11, opacity: 0.7 } }, dgT("settings.projectYaml")),
+              h("button", {
+                style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                className: "dg-btn",
+                title: dgT("settings.openConfigTooltip"),
+                onClick: async (e) => {
+                  e.stopPropagation();
+                  // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
+                  const r = await openHostPath(configFile);
+                  if (r.opened) { showToast(dgT("settings.openedProjectYaml")); return; }
+                  await copyText(configFile);
+                  if (r.error) { showToast(dgT("tab.openFailed") + openErrorText(r.error)); }
+                  else { showToast(dgT("tab.pathCopiedNoOpen")); }
+                },
+              }, dgT("tab.openFile")),
+              h("button", {
+                style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+                className: "dg-btn",
+                title: dgT("settings.copyProjectPath"),
+                onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast(dgT("tab.pathCopied")); },
+              }, dgT("tab.copyPath")),
+              h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7, wordBreak: "break-all" } }, configFile))
+            : null,
           error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 6 } }, error) : null));
     }
 
     // Source-contract compatibility: 保留未知键与注释; legacy inherited option "（继承父会话）".
     // g-246 close guard contract: window.confirm(dgT("settings.discardDirtyConfirm"))
     //   → zh「有未保存的修改，确认放弃？」/ en "You have unsaved changes. Discard them?"
-    // Contract text: 显示高级设置（g-439 起标注改为如实消费口径）; if (saving) { setNote({ kind: "err", text: "正在保存，请稍候…" }); return; }
+    // g-488: 原「显示高级设置」折叠按钮及其 showAdvanced / hideAdvanced 两个 i18n 键已删除
+    //   （高级设置本身即页签，页签内不再有第二层显隐开关）。
+    // Contract text: if (saving) { setNote({ kind: "err", text: "正在保存，请稍候…" }); return; }
     // Contract text: "✅ 已打开 project.yaml"

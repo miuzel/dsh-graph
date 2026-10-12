@@ -205,10 +205,29 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.match(modal, /method: "POST"/);
   assert.match(modal, /"default", "override", "disable"/);
   assert.match(modal, /dgT\("settings\.editHint"\)/);
-  assert.match(modal, /dgT\("settings\.showAdvanced"\)/);
-  assert.match(modal, /display: showAdvanced \? "flex" : "none"/);
-  assert.match(modal, /display: showAdvanced \? "grid" : "none"/);
-  assert.match(modal, /h\("hr", \{ style: \{ display: showAdvanced \? "block" : "none"/);
+  // g-488：原「显示高级设置」折叠按钮 + `showAdvanced` 派生显示开关已删除（高级设置本身即页签，
+  // 页签内不再有第二层显隐开关）⇒ 原三条正向锚点换成**等价负向断言**（键/表达式/按钮 class 都不得
+  // 再出现），并补上等价的**正向**结构锚点（页签集合真源里没有 about、页签栏仍按真源渲染）。
+  assert.doesNotMatch(modal, /settings\.showAdvanced/);
+  assert.doesNotMatch(modal, /settings\.hideAdvanced/);
+  assert.doesNotMatch(modal, /showAdvanced \?/);
+  assert.doesNotMatch(modal, /dg-settings-advanced-toggle/);
+  assert.doesNotMatch(modal, /tabPanel\("about", \[/);
+  assert.match(modal, /const SETTINGS_TAB_KEYS = \["executor", "review", "ui", "modules", "advanced"\]/);
+  assert.match(modal, /\.\.\.SETTINGS_TAB_KEYS\.map\(\(k\) => tabButton\(k\)\)/);
+  // g-488：说明性文字 tooltip 化的唯一入口——`(?)` 必须键盘可达（tabIndex=0）且语义可读
+  // （aria-label 与 title 同为说明全文）。
+  assert.match(modal, /const settingsHintIcon = \(text\) => h\("span", \{/);
+  assert.match(modal, /role: "img",\n\s+tabIndex: 0,\n\s+"aria-label": text,\n\s+title: text,/);
+  assert.match(modal, /className: "dg-settings-hint"/);
+  // g-488：六键自动化**逐键**说明（每键一条，讲清「管什么 + human/ai 含义」）
+  assert.match(modal, /settingsHintIcon\(dgT\(AUTOMATION_HINT_KEYS\[k\]\)\)/);
+  assert.match(modal, /const AUTOMATION_HINT_KEYS = \{/);
+  // g-488：四项默认值键只从界面移除，配置读兼容（归一/稀疏 patch 叶子清单）必须保留
+  assert.doesNotMatch(modal, /set\(\["defaults", "review", "reviewer"\]/);
+  assert.doesNotMatch(modal, /set\(\["defaults", "pk", "lanes"\]/);
+  assert.match(modal, /leaf\(\["defaults", "review", "reviewer"\]\);/);
+  assert.match(modal, /leaf\(\["defaults", "pk", "lanes"\]\);/);
   assert.match(modal, /if \(!cur\[path\[i\]\].*typeof cur\[path\[i\]\] !== "object"/s);
   assert.doesNotMatch(modal, /主管补充提示词/);
   assert.doesNotMatch(modal, /prompt_overrides.*supervisor/);
@@ -3855,10 +3874,15 @@ test("g-259 源契约：settings-modal.js 与 client.js 将 setRefreshInterval �
   assert.ok(okIndex > postIndex, "save 内存在 if (!r.ok) 校验");
   assert.ok(setRefreshIndex > okIndex, "setRefreshInterval 必须在 if (!r.ok) 成功分支内调用（后置生效）");
 
-  // 前置校验（lanes 检查）必须在 fetch 之前且在此之前不得调用 setRefreshInterval
-  const precheckIndex = saveCode.indexOf("settings.pkLanesError");
+  // 前置校验必须在 fetch 之前且在此之前不得调用 setRefreshInterval。
+  // g-488：原 `defaults.pk.lanes` 整数前置校验随该输入框一并删除（校验对象已不存在）⇒ 锚点改指
+  // **仍然存在**的评审条件前置校验（`collectReviewListErrors`）：同一位置、同一「拒绝提交 + 零副作用」
+  // 语义，断言强度不变；并**追加**负向断言钉住 lanes 前置校验确实已随 UI 移除。
+  const precheckIndex = saveCode.indexOf("collectReviewListErrors(form)");
   assert.ok(precheckIndex > 0 && precheckIndex < postIndex, "前置校验位于 fetch 之前");
   assert.ok(setRefreshIndex > precheckIndex, "setRefreshInterval 必须位于前置校验之后");
+  assert.equal(saveCode.includes("settings.pkLanesError"), false, "pk.lanes 前置校验已随输入框移除");
+  assert.equal(saveCode.includes("defaults?.pk?.lanes"), false, "save 不再读取已下架的 lanes 输入");
 
   // 确保在 fetch 之前的代码段内没有任何 setRefreshInterval 调用
   const preFetchCode = saveCode.slice(0, postIndex);
@@ -4013,7 +4037,29 @@ test("g-259 行为模拟：判据 1~4 全覆盖（成功生效、校验失败零
     assert.equal(h.harness.getBaseline().refreshInterval, "5");
   }
 
-  // 判据 3：前置校验拦截时零副作用——pk lanes 等非法值被拦截并提示错误、不发起 POST，localStorage 与广播事件均未触发
+  // 判据 3：前置校验拦截时零副作用——评审条件非法值被拦截并提示错误、不发起 POST，localStorage 与广播事件均未触发
+  // g-488：原用例注入 `defaults.pk.lanes = -1`（该输入框与它的整数前置校验已随判据 3 一并下架）⇒ 改用
+  // **仍然存在**的前置校验对象：`regions: []`（显式空列表被 core 写侧拒收）——同一「拒绝提交 + 零副作用」
+  // 语义，断言强度不变；并另加一个子用例钉住 lanes 下架后的新语义（不再阻断保存）。
+  {
+    const h = createHarness({
+      initialInterval: 10,
+      refreshIntervalInput: "30",
+      form: { review: { regions: [] } },
+    });
+    await h.harness.save();
+    assert.equal(h.calls.fetch.length, 0, "前置校验失败未发起 fetch");
+    assert.equal(h.store.get("dsh-graph.refresh-interval"), "10", "localStorage 保持原值 10 完全不变");
+    assert.equal(h.events.length, 0, "未触发任何广播事件");
+    assert.equal(h.calls.onClose, 0, "弹窗未关闭");
+    assert.ok(
+      h.calls.setNote.some((n: any) => n?.kind === "err" && String(n?.text).includes("settings.reviewEmptyForbidden")),
+      "提示评审条件错误（regions 显式空列表被拒收）",
+    );
+  }
+
+  // 判据 3 补充（g-488）：`defaults.pk.lanes` 已从界面下架 ⇒ 文件里既有的非法值**不再永久阻断保存**
+  // （否则一个手改坏的 project.yaml 会让整个设置面板只读）；core 侧读取/规整语义未动。
   {
     const h = createHarness({
       initialInterval: 10,
@@ -4021,11 +4067,11 @@ test("g-259 行为模拟：判据 1~4 全覆盖（成功生效、校验失败零
       form: { defaults: { pk: { lanes: -1 } } },
     });
     await h.harness.save();
-    assert.equal(h.calls.fetch.length, 0, "前置校验失败未发起 fetch");
-    assert.equal(h.store.get("dsh-graph.refresh-interval"), "10", "localStorage 保持原值 10 完全不变");
-    assert.equal(h.events.length, 0, "未触发任何广播事件");
-    assert.equal(h.calls.onClose, 0, "弹窗未关闭");
-    assert.ok(h.calls.setNote.some((n: any) => n?.kind === "err" && n?.text === "settings.pkLanesError"), "提示 pkLanesError");
+    assert.equal(h.calls.fetch.length, 1, "lanes 非法值不再构成前置校验，保存照常发起 fetch");
+    assert.ok(
+      h.calls.setNote.every((n: any) => !String(n?.text ?? "").includes("settings.pkLanesError")),
+      "不再出现 pkLanesError（该键与其校验路径均已移除）",
+    );
   }
 
   // 判据 2：POST 非 2xx (如 500) 时零副作用——弹窗提示保存失败且不关闭，localStorage 保持原值完全不变，不广播事件

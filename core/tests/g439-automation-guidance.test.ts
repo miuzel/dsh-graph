@@ -422,11 +422,21 @@ test("g-439 判据4：设置弹窗如实说明「影响主管提示」，去掉�
   assert.doesNotMatch("it changes no tool permission and is not engine enforcement", ENGINE_ENFORCEMENT_EN, "合法否定句不得命中（en）");
   assert.doesNotMatch("the engine does not enforce the gate", ENGINE_ENFORCEMENT_EN, "否定式（does not enforce）不得命中（en）");
 
-  // 3) 说明真的渲染进弹窗（紧随六键网格之后），且仍随高级区开关显示
+  // 3) 说明真的渲染进弹窗，且**恰好一次**——g-488：说明从「六键网格之后的一段正文」改为区块标题
+  //    右侧的 `(?)` tooltip（纯移动、文案逐字未变）⇒ 位置断言随之翻转（标题 → (?) → 六键网格），
+  //    「随高级区开关显隐」改为「不再有任何显隐三元」（原开关与 showAdvanced 已删除，内容恒显）。
   const gridIdx = modal.indexOf('["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"]');
   const hintIdx = modal.indexOf('dgT("settings.automationHint")');
-  assert.ok(gridIdx > 0 && hintIdx > gridIdx, "说明必须渲染在六键网格之后");
-  assert.match(modal.slice(Math.max(0, hintIdx - 220), hintIdx), /display: showAdvanced \? "block" : "none"/, "说明随高级区开关显示");
+  const titleIdx = modal.indexOf('dgT("settings.supervisorAutomation")');
+  assert.ok(gridIdx > 0 && hintIdx > 0 && titleIdx > 0, "区块标题 / 说明 / 六键网格三处实现都必须在源码中");
+  assert.ok(titleIdx < hintIdx && hintIdx < gridIdx, "说明必须挂在区块标题右侧（标题 → (?) → 六键网格）");
+  assert.match(modal, /settingsHintIcon\(dgT\("settings\.automationHint"\)\)/, "说明经唯一 `(?)` 构造点渲染（tooltip）");
+  assert.equal(
+    modal.split('dgT("settings.automationHint")').length - 1,
+    1,
+    "说明文案必须恰好渲染一次（不得 tooltip 与正文双份）",
+  );
+  assert.doesNotMatch(modal, /display: showAdvanced/, "说明不再随「高级区开关」显隐（该开关已删除，内容恒显）");
 
   // 4) 已构建的客户端产物同样携带新文案（不是只改了源码）
   const bundle = readFileSync(CLIENT_BUNDLE, "utf8");
