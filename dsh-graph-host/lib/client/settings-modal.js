@@ -619,10 +619,11 @@
           setRefreshIntervalInput(String(correctedInterval));
           setIntervalWarn(null);
           // g-490：POST 回填的 `config` 是**项目配置本体**，不含服务端下发的展示元数据
-          // `automation_defaults`——必须显式保留，否则保存一次后「未配置」项的默认值标签会退回「无」
-          // （纯显示层回归）。`normalizeSettingsDraft` 只取已知叶子，多出的顶层键不参与判脏。
+          // `automation_unset_scope`——必须显式保留，否则保存一次后「未配置」项的默认值/口径来源标注
+          // 会退回「未配置：保持既有指导」（纯显示层回归）。`normalizeSettingsDraft` 只取已知叶子，
+          // 多出的顶层键不参与判脏。
           setForm(data.config
-            ? { ...data.config, automation_defaults: data.automation_defaults ?? form.automation_defaults }
+            ? { ...data.config, automation_unset_scope: data.automation_unset_scope ?? form.automation_unset_scope }
             : form); // 用服务端回填的最新配置刷新
           setSuggestedRegions(Array.isArray(data.review_suggested_regions) ? data.review_suggested_regions : suggestedRegions);
           // g-246：保存成功即归位基线（刷新间隔取纠偏后值），随后直接关闭跳过拦截
@@ -651,16 +652,31 @@
       }
 
       const auto = form.supervisor?.automation ?? {};
-      // g-490：六键在**未配置**时的解析默认值——**只**消费服务端下发的 `automation_defaults`
-      //（引擎 `AUTOMATION_DEFAULTS` 是唯一真源；客户端**不留** human/ai 的硬编码副本）。
-      // 缺失（旧服务端/无该字段）时退化为既有 `common.none`，不伪造默认值。
-      const automationDefaults = form.automation_defaults ?? {};
-      const automationOptions = (val, defVal) => [
+      // g-490（负责人 2026-10-12 裁决：**诚实口径、不编默认值**）：六键**未配置**时的**显示口径来源**
+      // ——**只**消费服务端下发的 `automation_unset_scope`（引擎 `AUTOMATION_UNSET_SCOPE` 是唯一真源；
+      // 客户端**不留** human/ai 的键级副本）。该表**不是**引擎解析默认值：它只登记「哪两键的**动作**
+      // 落在既有某类人工 gate 的**范围**内」+ 该 gate 的既有要求，面板显示「默认：<gate 要求>」时
+      // **必须**同屏标注 `settings.automationDefaultScopeNote*` 的口径来源与「非引擎解析默认值」。
+      // 表外键（含缺该字段的旧服务端）唯一口径 = `settings.automationUnsetKeep`
+      //（引擎未配置即返回 null、不输出该键指导行 ⇒「未配置：保持既有指导」）——**绝不**编出 human/ai。
+      const automationUnsetScope = form.automation_unset_scope ?? {};
+      const automationOptions = (val, unsetScope) => [
         h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } },
-          defVal ? dgT("settings.automationDefaultPrefix") + defVal : dgT("common.none")),
+          unsetScope ? dgT("settings.automationDefaultPrefix") + unsetScope.gate_requires : dgT("settings.automationUnsetKeep")),
         h("option", { value: "human", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "human (" + dgT("settings.human") + ")"),
         h("option", { value: "ai", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "ai (" + dgT("settings.ai") + ")"),
       ];
+      // g-490：**同屏口径来源标注**（恰好一处构造点，只读文本、非控件）——只要该键的未配置项显示
+      // 具体 human/ai（= 服务端下发了它的 gate 范围来源），就**无条件**紧邻渲染这条标注；
+      // 它把「默认：<gate 要求>」与 `(?)` 里的「未配置 = 沿用既有指导」显式对齐（不是两套口径），
+      // 并点明「非引擎解析默认值」。
+      const automationUnsetScopeNote = (unsetScope) => h(
+        "div",
+        { className: "dg-settings-automation-scope-note", style: { ...S.meta, fontSize: 10, marginTop: 2 } },
+        dgT("settings.automationDefaultScopeNotePrefix")
+          + dgT("settings.gateScope." + unsetScope.gate_scope)
+          + dgT("settings.automationDefaultScopeNoteSuffix"),
+      );
       const promptOverride = (key, label) => {
         const ov = form.prompt_overrides?.[key] ?? { state: "default", value: null };
         const body =
@@ -1151,7 +1167,10 @@
                     // g-488：**逐键** `(?)`——每键一条，讲清「管什么 + human/ai 两种取值的含义」。
                     settingsHintIcon(dgT(AUTOMATION_HINT_KEYS[k]))),
                   h("select", { style: { ...S.promptInput, width: "100%" }, value: auto[k] ?? "", onChange: (e) => set(["supervisor", "automation", k], e.target.value === "" ? null : e.target.value) },
-                    ...automationOptions(auto[k], automationDefaults[k] ?? null))))),
+                    ...automationOptions(auto[k], automationUnsetScope[k] ?? null)),
+                  // g-490：只要该键的未配置项显示具体 human/ai（= 服务端下发了它的 gate 范围来源），
+                  // 就必须**同屏**渲染口径来源标注——绝不出现无来源的具体 human/ai。
+                  automationUnsetScope[k] ? automationUnsetScopeNote(automationUnsetScope[k]) : null))),
 
             h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
             h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.promptOverride")),

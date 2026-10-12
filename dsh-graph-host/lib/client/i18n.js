@@ -658,9 +658,22 @@
       'settings.supervisorAutomation': '主管自动化指导（supervisor.automation）',
       // g-439：六键已由主管提示真实消费——如实说明消费方式（只影响提示，不改变工具权限、不构成引擎强制）
       'settings.automationHint': '影响主管提示：human 请求负责人确认、ai 在已授权范围内自主判断并留痕、未配置保持既有指导；不改变工具权限，也不构成引擎强制（不改变「开始工作」「审核」「发布」等既有 gate 要求）。',
-      // g-490：六键未配置时下拉里的**默认值前缀**（值本身由引擎 `AUTOMATION_DEFAULTS` 经
-      // `/api/dsh-graph/settings` 的 `automation_defaults` 下发；客户端不留 human/ai 副本）。
+      // g-490：六键**未配置**时的显示口径（负责人 2026-10-12 裁决：**诚实口径、不编默认值**）。
+      // 「默认：」前缀**只**用于两键的动作落在既有某类人工 gate 范围内的情形，且**必须**紧跟
+      // `settings.automationDefaultScopeNotePrefix/Suffix` 的口径来源标注（见下方两键 + gate 名）。
+      // 键级 human/ai 取值由引擎 `AUTOMATION_UNSET_SCOPE` 经 `/api/dsh-graph/settings` 的
+      // `automation_unset_scope` 下发（**不是**解析默认值）；客户端不留 human/ai 副本。
       'settings.automationDefaultPrefix': '默认：',
+      // g-490：其余四键（以及缺 `automation_unset_scope` 的旧服务端）的**唯一**未配置口径：
+      // 引擎未配置即返回 null 且不输出该键指导行（`supervisor-guide.zh.md`「未配置保持既有指导」）
+      // ⇒ 面板如实显示这句话，**绝不**编出 human/ai。
+      'settings.automationUnsetKeep': '未配置：保持既有指导',
+      'settings.automationDefaultScopeNotePrefix': '未配置口径：这里显示的「默认：human」并非引擎解析默认值，其依据是《主管指南》四类人工 gate「',
+      'settings.automationDefaultScopeNoteSuffix': '」——该动作仍在该人工 gate 范围内，需负责人确认；未配置亦沿用既有指导。',
+      // g-490：四类人工 gate 中**与本面板相关**的两个 gate 名（口径来源标注用；稳定 id 由引擎下发，
+      // 展示名走 i18n，避免面板内出现未本地化的中文 gate 名）。
+      'settings.gateScope.version_plan': '调整版本计划',
+      'settings.gateScope.release': '发布',
       // g-488：六键**逐键**说明（每键一个标题右侧 `(?)`）——讲清「这一键管什么」+「human / ai 两种取值
       // 在本键上的含义」+「未配置 = 保持既有指导」。总口径（只影响提示、不构成引擎强制）见上一行的总说明。
       'settings.automationWhat.scope_planning': '范围规划：是否先把目标拆成执行范围与判据再开工。human = 开工前请负责人确认范围与判据；ai = 在目标描述与既有授权范围内自行拆解并留痕；未配置 = 沿用既有指导。',
@@ -1925,9 +1938,22 @@
       'settings.supervisorAutomation': 'Supervisor automation guidance (supervisor.automation)',
       // g-439: the six keys are genuinely consumed by the supervisor prompt — state how, truthfully
       'settings.automationHint': 'Affects the supervisor prompt: human asks the person in charge for confirmation, ai decides autonomously within the already authorized scope and leaves a trace, and unset keeps the existing guidance; it changes no tool permission and is not engine enforcement (it changes no existing gate such as start work, review, or release).',
-      // g-490: prefix of the resolved default shown in the select when a key is unset (the value itself is
-      // supplied by the engine's single source AUTOMATION_DEFAULTS via /api/dsh-graph/settings).
+      // g-490: unset display wording (owner ruling 2026-10-12: honest wording, never invent a default).
+      // The "Default:" prefix applies ONLY to the two keys whose action falls inside an existing human
+      // gate's scope, and it must always be accompanied by the source note below. The per-key human/ai
+      // value comes from the engine's AUTOMATION_UNSET_SCOPE via automation_unset_scope (it is NOT a
+      // resolved default); the client keeps no human/ai copy.
       'settings.automationDefaultPrefix': 'Default: ',
+      // g-490: the ONLY unset wording for the other four keys (and for older servers lacking
+      // automation_unset_scope): the engine returns null and emits no guidance line for that key
+      // ("unset keeps the existing guidance" in supervisor-guide.zh.md) — so say exactly that.
+      'settings.automationUnsetKeep': 'Unset: keeps the existing guidance',
+      'settings.automationDefaultScopeNotePrefix': 'Unset wording: the "Default: human" shown here is not an engine-resolved default; it is grounded in one of the four human gates in the Supervisor Guide — "',
+      'settings.automationDefaultScopeNoteSuffix': '" — the action still sits inside that human gate and needs the owner\'s confirmation; when unset it keeps the existing guidance.',
+      // g-490: display names of the two gates relevant to this panel (the stable id is sent by the
+      // engine; the name is localized here so the panel never shows an untranslated gate name).
+      'settings.gateScope.version_plan': 'adjusting the version plan',
+      'settings.gateScope.release': 'release',
       // g-488: per-key explanations for the six automation keys (one title-row `(?)` each): what the key
       // governs + what human / ai mean for it + unset keeps the existing guidance. The cross-key caveat
       // (prompt-only, no engine enforcement) lives in settings.automationHint above.

@@ -254,10 +254,16 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   // g-488：六键自动化**逐键**说明（每键一条，讲清「管什么 + human/ai 含义」）
   assert.match(modal, /settingsHintIcon\(dgT\(AUTOMATION_HINT_KEYS\[k\]\)\)/);
   assert.match(modal, /const AUTOMATION_HINT_KEYS = \{/);
-  // g-490（判据 6）：六键未配置时下拉显示引擎解析默认值——前缀键 + 服务端单一真源消费
-  assert.match(modal, /dgT\("settings\.automationDefaultPrefix"\) \+ defVal/);
-  assert.match(modal, /const automationDefaults = form\.automation_defaults \?\? \{\}/);
-  assert.match(modal, /automationOptions\(auto\[k\], automationDefaults\[k\] \?\? null\)/);
+  // g-490（判据 6，负责人 2026-10-12 裁决「诚实口径、不编默认值」）：六键未配置时的显示口径**只能**
+  // 来自服务端下发的 `automation_unset_scope`（口径来源引用表，**不是**解析默认值）：
+  // 两键可显示「默认：<该 gate 既有要求>」但必须同屏标注来源；其余四键唯一显示「未配置：保持既有指导」。
+  assert.match(modal, /dgT\("settings\.automationDefaultPrefix"\) \+ unsetScope\.gate_requires/);
+  assert.match(modal, /const automationUnsetScope = form\.automation_unset_scope \?\? \{\}/);
+  assert.match(modal, /automationOptions\(auto\[k\], automationUnsetScope\[k\] \?\? null\)/);
+  assert.match(modal, /dgT\("settings\.automationUnsetKeep"\)/, "无 gate 范围的键必须有「未配置：保持既有指导」文案");
+  assert.match(modal, /automationUnsetScope\[k\] \? automationUnsetScopeNote\(automationUnsetScope\[k\]\) : null/, "出现具体 human/ai 时必须同屏渲染口径来源标注");
+  assert.match(modal, /dgT\("settings\.automationDefaultScopeNotePrefix"\)/, "口径来源标注必须走 i18n（可本地化、可审计）");
+  assert.doesNotMatch(modal, /automation_defaults|AUTOMATION_DEFAULTS/, "旧的「解析默认值」命名必须从客户端彻底消失");
   // g-488：四项默认值键只从界面移除，配置读兼容（归一/稀疏 patch 叶子清单）必须保留
   assert.doesNotMatch(modal, /set\(\["defaults", "review", "reviewer"\]/);
   assert.doesNotMatch(modal, /set\(\["defaults", "pk", "lanes"\]/);
@@ -312,11 +318,14 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
     /settings\.projectYaml/,
     "页脚不得再有 project.yaml 行（信息零丢失但不得双份）",
   );
-  // g-490（判据 6）：六键默认值的**引擎单一真源** + 设置接口下发（客户端只消费，不留副本）
-  assert.match(host, /const AUTOMATION_DEFAULTS = \{/);
-  assert.match(host, /defaults: AUTOMATION_DEFAULTS,/);
-  assert.match(host, /automation_defaults: AUTOMATION_DEFAULTS/);
-  assert.doesNotMatch(modal, /scope_planning: "human"/, "客户端不得硬编码默认值副本（必须来自服务端）");
+  // g-490（判据 6，改判后）：引擎**口径来源引用表**单一真源 + 设置接口下发（客户端只消费，不留副本）；
+  // 该表**不是**解析默认值（六键在 schema 里 nullable 且无 default），故不得再出现「默认值」命名。
+  assert.match(host, /const AUTOMATION_UNSET_SCOPE = \{/);
+  assert.match(host, /unset_scope: AUTOMATION_UNSET_SCOPE,/);
+  assert.match(host, /automation_unset_scope: AUTOMATION_UNSET_SCOPE/);
+  assert.doesNotMatch(host, /AUTOMATION_DEFAULTS|automation_defaults/, "「解析默认值」命名必须整体消失（含 schema_hints 与两个 settings 响应）");
+  assert.doesNotMatch(modal, /scope_planning: "human"/, "客户端不得硬编码键级 human/ai 副本（必须来自服务端）");
+  assert.doesNotMatch(modal, /AUTOMATION_DEFAULTS|automation_defaults/, "客户端不得再消费「解析默认值」字段");
   const bundle = readFileSync(join(process.cwd(), "dist/lib/client.js"), "utf8");
   assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
   assert.match(bundle, /function SettingsModal/);

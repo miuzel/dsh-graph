@@ -32,16 +32,21 @@ const readHost = (): string => readFileSync(hostPath, "utf8");
 type Dict = Record<string, string>;
 const countOccurrences = (hay: string, needle: string): number => hay.split(needle).length - 1;
 
-/** 引擎侧唯一真源：六键在未配置时的解析默认值（与 dsh-graph-host/index.js 的 AUTOMATION_DEFAULTS 同源）。 */
+/** 引擎侧唯一真源 `AUTOMATION_UNSET_SCOPE` 的**口径**（负责人 2026-10-12 裁决：诚实口径，**不是**
+ *  解析默认值）：六键里只有两键的**动作**落在既有某类人工 gate 的**范围**内 ⇒ 未配置时可显示
+ *  「默认：<该 gate 的既有要求>」，且**必须同屏标注口径来源**；其余四键未配置只显示「保持既有指导」。
+ *  与 `dsh-graph-host/index.js` 的 `AUTOMATION_UNSET_SCOPE` 同源（由「真源一致性」用例逐字对账）。 */
 const AUTOMATION_KEYS = ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"];
-const AUTOMATION_DEFAULTS: Dict = {
-  scope_planning: "human",
-  integration_decision: "ai",
-  rework: "ai",
-  memory_promotion: "ai",
-  skill_proposal: "ai",
-  release: "human",
+const AUTOMATION_UNSET_SCOPE: Record<string, { gate_scope: string; gate_requires: string }> = {
+  scope_planning: { gate_scope: "version_plan", gate_requires: "human" },
+  release: { gate_scope: "release", gate_requires: "human" },
 };
+/** 有 gate 范围来源的两键（引擎表恰含这两键，不增不减）。 */
+const AUTOMATION_SCOPE_KEYS = ["scope_planning", "release"];
+/** 其余四键：**不对应任何** gate ⇒ 未配置的唯一口径 = 「保持既有指导」，不得出现任何 human/ai。 */
+const AUTOMATION_KEEP_GUIDANCE_KEYS = ["integration_decision", "rework", "memory_promotion", "skill_proposal"];
+/** 「具体 human/ai 值」的判定（不分中英文侧）。 */
+const HUMAN_AI_RE = /\b(human|ai)\b/i;
 
 function loadClientI18n(src = readFileSync(i18nPath, "utf8")): { zh: Dict; en: Dict } {
   const sandbox: any = { React: {} };
@@ -317,71 +322,111 @@ test("g-490 判据2：评审条件生效值以「输入框同构」呈现（边�
 
 // ========== 判据 3：自动化指导默认值 ==========
 
-test("g-490 判据3：未配置的自动化键显示「默认：<解析默认值>」，默认值只来自引擎下发（零客户端硬编码）", () => {
+test("g-490 判据6：未配置口径诚实——两键显示「默认：human」并同屏标注来源，其余四键只显示「未配置：保持既有指导」", () => {
   const src = readModal();
   const { zh, en } = loadClientI18n();
   assert.equal(zh["settings.automationDefaultPrefix"], "默认：", "zh 默认值前缀键必须存在");
   assert.equal(en["settings.automationDefaultPrefix"], "Default: ", "en 默认值前缀键必须存在（对称）");
-  // 客户端不得硬编码 human/ai 的键级默认值副本（唯一真源是服务端下发的 automation_defaults）
-  for (const k of AUTOMATION_KEYS) {
-    assert.doesNotMatch(src, new RegExp(`${k}\\s*:\\s*"(human|ai)"`), `客户端不得硬编码 ${k} 的默认值`);
+  assert.equal(zh["settings.automationUnsetKeep"], "未配置：保持既有指导", "zh 未配置口径键必须存在（权威口径逐字）");
+  assert.equal(en["settings.automationUnsetKeep"], "Unset: keeps the existing guidance", "en 未配置口径键必须存在（对称）");
+  for (const k of AUTOMATION_SCOPE_KEYS) {
+    const gate = AUTOMATION_UNSET_SCOPE[k].gate_scope;
+    assert.ok(zh["settings.gateScope." + gate], `zh 必须本地化 gate 名：${gate}`);
+    assert.ok(en["settings.gateScope." + gate], `en 必须本地化 gate 名：${gate}`);
+    assert.doesNotMatch(en["settings.gateScope." + gate], /[\u3400-\u9fff\u3000-\u303f\uff00-\uffef]/, `en gate 名不得含 CJK：${gate}`);
   }
-  assert.match(src, /const automationDefaults = form\.automation_defaults \?\? \{\};/, "默认值只能取自服务端下发的 automation_defaults");
-  // 保存后回填必须保留该展示元数据（否则保存一次后退回「无」）
-  assert.match(src, /setForm\(data\.config\s*\n?\s*\? \{ \.\.\.data\.config, automation_defaults: data\.automation_defaults \?\? form\.automation_defaults \}/, "POST 回填必须保留 automation_defaults（显示层不得因保存而退化）");
+  assert.doesNotMatch(en["settings.automationUnsetKeep"] + en["settings.automationDefaultScopeNotePrefix"] + en["settings.automationDefaultScopeNoteSuffix"], /[\u3400-\u9fff\u3000-\u303f\uff00-\uffef]/, "en 未配置口径与来源标注不得含 CJK");
+  // 客户端不得硬编码 human/ai 的键级副本（唯一真源是服务端下发的 automation_unset_scope）
+  for (const k of AUTOMATION_KEYS) {
+    assert.doesNotMatch(src, new RegExp(`${k}\\s*:\\s*"(human|ai)"`), `客户端不得硬编码 ${k} 的键级 human/ai`);
+  }
+  assert.doesNotMatch(src, /automationDefaultPrefix"\)\s*\+\s*"human"/, "客户端不得把「默认：human」写死（取值必须来自服务端的 gate_requires）");
+  assert.doesNotMatch(src, /\b(engineDefaults|AUTOMATION_DEFAULTS|automation_defaults)\b/, "客户端不得再引用「解析默认值」命名（口径已改判为来源引用）");
+  assert.match(src, /const automationUnsetScope = form\.automation_unset_scope \?\? \{\};/, "口径来源只能取自服务端下发的 automation_unset_scope");
+  // 保存后回填必须保留该展示元数据（否则保存一次后退回「未配置：保持既有指导」，属显示层退化）
+  assert.match(src, /setForm\(data\.config\s*\n?\s*\? \{ \.\.\.data\.config, automation_unset_scope: data\.automation_unset_scope \?\? form\.automation_unset_scope \}/, "POST 回填必须保留 automation_unset_scope（显示层不得因保存而退化）");
 
-  // 双向：缺键 ⇒ 默认；已设 ⇒ 当前值（六键逐一）
+  // 未配置态：两键 ⇒ 「默认：human」+ 同屏来源；其余四键 ⇒ 唯一「保持既有指导」
   const formUnset = JSON.parse(JSON.stringify(SNAPSHOT));
   formUnset.supervisor.automation = {};
-  formUnset.automation_defaults = { ...AUTOMATION_DEFAULTS };
+  formUnset.automation_unset_scope = JSON.parse(JSON.stringify(AUTOMATION_UNSET_SCOPE));
   const unset = renderModal(src, formUnset, zh, { tab: "supervisor" });
   for (const k of AUTOMATION_KEYS) {
     const row = automationRow(unset.nodes, k);
     assert.ok(row, `必须能定位自动化键 ${k} 的行`);
     assert.equal(row.select.props.value, "", `${k} 未配置时 select 必须停在占位项（值为空串）`);
-    assert.equal(deepTextOf(row.select.children[0]), zh["settings.automationDefaultPrefix"] + AUTOMATION_DEFAULTS[k], `${k} 未配置时必须显示「默认：<解析默认值>」`);
-    assert.notEqual(deepTextOf(row.select.children[0]), zh["common.none"], `${k} 未配置时不得再显示「无」`);
+    const placeholder = deepTextOf(row.select.children[0]);
+    assert.notEqual(placeholder, zh["common.none"], `${k} 未配置时不得再显示「无」（无信息的空对话术已废弃）`);
+    if (AUTOMATION_SCOPE_KEYS.includes(k)) {
+      const scope = AUTOMATION_UNSET_SCOPE[k];
+      assert.equal(placeholder, zh["settings.automationDefaultPrefix"] + scope.gate_requires, `${k} 未配置时必须显示「默认：<该 gate 的既有要求>」`);
+      assert.ok(row.note, `${k} 出现具体 human/ai ⇒ 必须**同屏**渲染口径来源标注`);
+      const note = deepTextOf(row.note);
+      for (const [needle, why] of [
+        ["《主管指南》", "须点明来源权威文档"],
+        [zh["settings.gateScope." + scope.gate_scope], `须点明所属 gate「${zh["settings.gateScope." + scope.gate_scope]}」`],
+        ["非引擎解析默认值", "须声明这不是引擎解析默认值"],
+        ["沿用既有指导", "须与 `(?)` 提示的「未配置 = 沿用既有指导」同口径"],
+        ["需负责人确认", "须说明该动作仍在该人工 gate 范围内"],
+      ] as Array<[string, string]>) {
+        assert.ok(note.includes(needle), `${k} 的口径来源标注${why}：${note}`);
+      }
+    } else {
+      assert.equal(placeholder, zh["settings.automationUnsetKeep"], `${k} 不对应任何 gate ⇒ 未配置时只能显示「未配置：保持既有指导」`);
+      assert.ok(!HUMAN_AI_RE.test(placeholder), `${k} 的未配置文案不得出现任何 human/ai`);
+      assert.equal(row.note ?? null, null, `${k} 无对应 gate 范围 ⇒ 不得伪造口径来源标注`);
+    }
   }
 
+  // 已配置态：select 显示当前值；未配置项口径不因已配置而变形（占位项不丢、不换口径）
   const formSet = JSON.parse(JSON.stringify(SNAPSHOT));
-  formSet.supervisor.automation = Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, AUTOMATION_DEFAULTS[k] === "human" ? "ai" : "human"]));
-  formSet.automation_defaults = { ...AUTOMATION_DEFAULTS };
+  formSet.supervisor.automation = Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, AUTOMATION_UNSET_SCOPE[k] ? "ai" : "human"]));
+  formSet.automation_unset_scope = JSON.parse(JSON.stringify(AUTOMATION_UNSET_SCOPE));
   const set = renderModal(src, formSet, zh, { tab: "supervisor" });
   for (const k of AUTOMATION_KEYS) {
     const row = automationRow(set.nodes, k);
     assert.ok(row, `必须能定位自动化键 ${k} 的行（已配置）`);
     assert.equal(row.select.props.value, formSet.supervisor.automation[k], `${k} 已配置时必须显示当前值`);
-    assert.equal(deepTextOf(row.select.children[0]), zh["settings.automationDefaultPrefix"] + AUTOMATION_DEFAULTS[k], `${k} 已配置时仍须能看到解析默认值（占位项不丢）`);
+    const want = AUTOMATION_SCOPE_KEYS.includes(k)
+      ? zh["settings.automationDefaultPrefix"] + AUTOMATION_UNSET_SCOPE[k].gate_requires
+      : zh["settings.automationUnsetKeep"];
+    assert.equal(deepTextOf(row.select.children[0]), want, `${k} 已配置时占位项口径不变（占位项不丢）`);
   }
 
-  // 旧服务端（缺 automation_defaults）：退化为既有「无」，绝不伪造默认值
+  // 旧服务端（缺 automation_unset_scope）：六键一律「未配置：保持既有指导」，绝不伪造 human/ai
   const formLegacy = JSON.parse(JSON.stringify(SNAPSHOT));
   formLegacy.supervisor.automation = {};
   const legacy = renderModal(src, formLegacy, zh, { tab: "supervisor" });
   for (const k of AUTOMATION_KEYS) {
     const row = automationRow(legacy.nodes, k);
-    assert.ok(row, `必须能定位自动化键 ${k} 的行（缺 automation_defaults）`);
-    assert.equal(deepTextOf(row.select.children[0]), zh["common.none"], `缺 automation_defaults 时必须退化为「无」（不得伪造默认值）：${k}`);
+    assert.ok(row, `必须能定位自动化键 ${k} 的行（缺 automation_unset_scope）`);
+    assert.equal(deepTextOf(row.select.children[0]), zh["settings.automationUnsetKeep"], `缺 automation_unset_scope 时必须退化为「未配置：保持既有指导」（不得伪造 human/ai）：${k}`);
+    assert.equal(row.note ?? null, null, `缺 automation_unset_scope 时不得渲染来源标注：${k}`);
   }
 
-  // en 侧同样按服务端默认值渲染（不是硬编码中文/固定 human）
+  // en 侧同口径（gate 要求来自服务端，gate 名走本地化，非硬编码中文/固定 human）
   const enUnset = renderModal(src, formUnset, en, { tab: "supervisor" });
-  const enRow = automationRow(enUnset.nodes, "release");
-  assert.ok(enRow, "必须能定位自动化键 release 的行（en）");
-  assert.equal(deepTextOf(enRow.select.children[0]), en["settings.automationDefaultPrefix"] + "human", "en 侧同样显示解析默认值");
+  const enScope = automationRow(enUnset.nodes, "release");
+  assert.ok(enScope, "必须能定位自动化键 release 的行（en）");
+  assert.equal(deepTextOf(enScope.select.children[0]), en["settings.automationDefaultPrefix"] + AUTOMATION_UNSET_SCOPE.release.gate_requires, "en 侧两键同样显示「Default: human」");
+  assert.ok(deepTextOf(enScope.note).includes("Supervisor Guide") && deepTextOf(enScope.note).includes(en["settings.gateScope.release"]), "en 侧同屏标注口径来源（含本地化 gate 名）");
+  const enKeep = automationRow(enUnset.nodes, "rework");
+  assert.equal(deepTextOf(enKeep.select.children[0]), en["settings.automationUnsetKeep"], "en 侧其余四键只显示未配置口径");
+  assert.ok(!HUMAN_AI_RE.test(deepTextOf(enKeep.select.children[0])), "en 侧其余四键的未配置文案不得出现 human/ai");
 });
 
 /** 在渲染树里定位「自动化键 k」那一行：行内同时含 select 与仅含键名的标签容器。
  *  标签容器是 `h("div", …, h("label", …, k), settingsHintIcon(…))` ⇒ 其递归文本为 `k + "(?)"`，
- *  故用 includes 判定；键名之间无子串关系（逐个核对过），不会互相误配。 */
-function automationRow(nodes: any[], k: string): { select: any } | null {
+ *  故用 includes 判定；键名之间无子串关系（逐个核对过），不会互相误配。
+ *  `note` = 该行的**同屏口径来源标注**节点（`dg-settings-automation-scope-note`，无则 null）。 */
+function automationRow(nodes: any[], k: string): { select: any; note?: any } | null {
   for (const n of nodes) {
     if (n.type !== "div") continue;
     const kids = n.children ?? [];
     const sel = kids.find((c: any) => c?.type === "select");
     if (!sel) continue;
     const labelled = kids.some((c: any) => c?.type !== "select" && deepTextOf(c).includes(k));
-    if (labelled) return { select: sel };
+    if (labelled) return { select: sel, note: kids.find((c: any) => String(c?.props?.className ?? "") === "dg-settings-automation-scope-note") };
   }
   return null;
 }
@@ -427,26 +472,43 @@ test("g-490 判据4：`project.yaml` 行位于标题栏右侧（关闭按钮左�
 
 // ========== 引擎真源 ↔ 客户端消费 一致性 ==========
 
-test("g-490 真源一致性：AUTOMATION_DEFAULTS（引擎）↔ settings API 下发 ↔ schema_hints ↔ 客户端消费", () => {
+test("g-490 真源一致性：AUTOMATION_UNSET_SCOPE（引擎口径来源）↔ settings API 下发 ↔ schema_hints ↔ 客户端消费", () => {
   const host = readHost();
-  const decl = host.slice(host.indexOf("const AUTOMATION_DEFAULTS = {"), host.indexOf("};", host.indexOf("const AUTOMATION_DEFAULTS = {")) + 2);
-  const engineDefaults: Dict = new Function(`${decl}\nreturn AUTOMATION_DEFAULTS;`)();
-  assert.deepEqual(Object.keys(engineDefaults).sort(), [...AUTOMATION_KEYS].sort(), "引擎默认值必须六键齐备（不增不减）");
-  assert.deepEqual(engineDefaults, AUTOMATION_DEFAULTS, "测试侧登记的默认值必须与引擎真源逐键一致（本断言即对账）");
-  for (const k of AUTOMATION_KEYS) {
-    assert.ok(["human", "ai"].includes(engineDefaults[k]), `${k} 的默认值必须是 human/ai 之一`);
+  const { zh: zh0 } = loadClientI18n();
+  const decl = host.slice(host.indexOf("const AUTOMATION_UNSET_SCOPE = {"), host.indexOf("};", host.indexOf("const AUTOMATION_UNSET_SCOPE = {")) + 2);
+  const engineScope: Record<string, { gate_scope: string; gate_requires: string }> = new Function(`${decl}\nreturn AUTOMATION_UNSET_SCOPE;`)();
+  // ① 引擎表**不是**解析默认值：只登记两键的 gate 范围来源，不增不减（其余四键**没有** human/ai 值）
+  assert.deepEqual(Object.keys(engineScope).sort(), [...AUTOMATION_SCOPE_KEYS].sort(), "引擎口径来源表恰含两键（其余四键不得有 human/ai 值）");
+  assert.deepEqual(engineScope, AUTOMATION_UNSET_SCOPE, "测试侧登记的口径必须与引擎真源逐字一致（本断言即对账）");
+  for (const k of AUTOMATION_SCOPE_KEYS) {
+    assert.ok(engineScope[k].gate_scope, `${k} 必须登记所属 gate 的稳定 id（口径来源可追溯）`);
+    assert.ok(["human", "ai"].includes(engineScope[k].gate_requires), `${k} 的 gate_requires 必须是该人工 gate 的既有要求`);
+    assert.ok(zh0[`settings.gateScope.${engineScope[k].gate_scope}`], `${k} 的 gate id 必须有本地化展示名：${engineScope[k].gate_scope}`);
   }
-  // 下发：GET / POST 两个响应都必须带上该字段（缺一个 ⇒ 打开面板/保存后行为不一致）
-  assert.equal(countOccurrences(host, "automation_defaults: AUTOMATION_DEFAULTS"), 2, "GET 与 POST 响应必须都下发 automation_defaults");
-  assert.equal(countOccurrences(host, "defaults: AUTOMATION_DEFAULTS,"), 1, "schema_hints 必须复用同一真源（不复制一份字面量）");
-  // 引擎不得把默认值写进配置本体（读侧仍返回 null ⇒ 既有 deepEqual 契约与「未配置保持既有指导」语义不变）
+  for (const k of AUTOMATION_KEEP_GUIDANCE_KEYS) {
+    assert.ok(!(k in engineScope), `${k} 不对应任何 gate ⇒ 引擎表不得登记它的任何 human/ai 值`);
+  }
+  // ② 权威注释不回退：仍然明说「不是一一映射」，且口径来源不得被写成「键 = gate」
+  assert.match(host, /六键与四类人工 gate \*\*不是一一映射\*\*/, "权威注释（六键 ≠ 四类 gate）不得回退");
+  assert.match(host, /\*\*弱\*\*关系/, "口径来源必须自述为「**弱**关系」（不得写成「键 = gate」）");
+  assert.doesNotMatch(host, /gate 的对应键/, "不得把键写成「某 gate 的对应键」（弱关系 ≠ 等同；旧自推注释回退即红）");
+  assert.doesNotMatch(host, /AUTOMATION_DEFAULTS|automation_defaults/, "「解析默认值」命名必须整体消失（engine/下发/schema_hints）");
+  assert.match(host, /\*\*不是\*\*引擎解析默认值/, "引擎必须显式声明该表**不是**引擎解析默认值（诚实口径）");
+  assert.doesNotMatch(host, /时的解析默认值|解析默认值 —— \*\*单一真源\*\*/, "引擎不得再自称存在「解析默认值」");
+  // ③ 下发：GET / POST 两个响应都必须带上该字段（缺一个 ⇒ 打开面板/保存后行为不一致）
+  assert.equal(countOccurrences(host, "automation_unset_scope: AUTOMATION_UNSET_SCOPE"), 2, "GET 与 POST 响应必须都下发 automation_unset_scope");
+  assert.equal(countOccurrences(host, "unset_scope: AUTOMATION_UNSET_SCOPE,"), 1, "schema_hints 必须复用同一真源（不复制一份字面量）");
+  // ④ 引擎不得把「默认值」写进配置本体（读侧仍返回 null ⇒ 既有 deepEqual 契约与「未配置保持既有指导」语义不变）
   const modal = readModal();
-  assert.doesNotMatch(modal, /scope_planning: "human"/, "客户端不得内联六键默认值字面量");
+  assert.doesNotMatch(modal, /scope_planning: "human"/, "客户端不得内联六键 human/ai 字面量");
+  assert.doesNotMatch(modal, /automation_unset_scope:\s*\{\s*scope_planning/, "客户端不得内联口径来源表");
 });
 
-// ========== 末节：hermetic 负向对照（在内存副本上变异，四项都必须「改坏即红」） ==========
+// ========== 末节：hermetic 负向对照（在内存副本上变异，逐项都必须「改坏即红」） ==========
 
-/** 四项改动的契约检查（同一组谓词同时用于正向与负向：正向必须无问题、变异体必须报出问题）。 */
+/** 各判据的契约检查（同一组谓词同时用于正向与负向：正向必须无问题、变异体必须报出问题）。
+ *  判据 6（未配置口径）的谓词含**两条新增负例**：①未配置文案出现无来源的具体 human/ai ⇒ 报红；
+ *  ②把「保持既有指导」渲染成 human/ai ⇒ 报红。 */
 function presentationProblems(modalSrc: string, zh: Dict): string[] {
   const problems: string[] = [];
   // ---- 判据 1：`(?)` 浮层契约 ----
@@ -485,17 +547,40 @@ function presentationProblems(modalSrc: string, zh: Dict): string[] {
     if (!/monospace/.test(String(st.fontFamily ?? ""))) problems.push("判据2：生效值非等宽字体（与输入框不同构）");
     if (!deepTextOf(box).startsWith(zh["settings.reviewEffectiveLabel"] + "：")) problems.push("判据2：生效值文案形状不对");
   }
-  // ---- 判据 3：未配置键显示解析默认值、客户端零硬编码 ----
+  // ---- 判据 6：未配置口径诚实（两键可显示「默认：human」但必须同屏标注来源；其余四键不得出现 human/ai）----
   for (const k of AUTOMATION_KEYS) {
-    if (new RegExp(`${k}\\s*:\\s*"(human|ai)"`).test(modalSrc)) problems.push(`判据3：客户端硬编码了 ${k} 的默认值`);
+    if (new RegExp(`${k}\\s*:\\s*"(human|ai)"`).test(modalSrc)) problems.push(`判据6：客户端硬编码了 ${k} 的键级 human/ai`);
   }
   const form = unsetAllAutomation();
   const tree = renderModal(modalSrc, form, zh, { tab: "supervisor" });
   for (const k of AUTOMATION_KEYS) {
     const row = automationRow(tree.nodes, k);
-    if (!row) { problems.push(`判据3：找不到自动化键 ${k} 的行`); continue; }
-    const want = zh["settings.automationDefaultPrefix"] + AUTOMATION_DEFAULTS[k];
-    if (deepTextOf(row.select.children[0]) !== want) problems.push(`判据3：${k} 未配置时未显示「${want}」，实得「${deepTextOf(row.select.children[0])}」`);
+    if (!row) { problems.push(`判据6：找不到自动化键 ${k} 的行`); continue; }
+    const placeholder = deepTextOf(row.select.children[0]);
+    const note = row.note ? deepTextOf(row.note) : "";
+    if (AUTOMATION_SCOPE_KEYS.includes(k)) {
+      const scope = AUTOMATION_UNSET_SCOPE[k];
+      const want = zh["settings.automationDefaultPrefix"] + scope.gate_requires;
+      if (placeholder !== want) problems.push(`判据6：${k} 未配置时未显示「${want}」，实得「${placeholder}」`);
+      if (!note) problems.push(`判据6：${k} 的「${want}」无口径来源标注（未配置文案出现无来源的具体 human/ai）`);
+      else {
+        for (const [needle, why] of [
+          ["《主管指南》", "未点明来源权威文档"],
+          [zh["settings.gateScope." + scope.gate_scope], `未点明所属 gate「${zh["settings.gateScope." + scope.gate_scope]}」`],
+          ["非引擎解析默认值", "未声明这不是引擎解析默认值"],
+          ["沿用既有指导", "与 `(?)` 提示的「未配置 = 沿用既有指导」口径不一致"],
+        ] as Array<[string, string]>) {
+          if (!note.includes(needle)) problems.push(`判据6：${k} 的口径来源标注${why}`);
+        }
+      }
+    } else {
+      const want = zh["settings.automationUnsetKeep"];
+      if (placeholder !== want) problems.push(`判据6：${k} 无对应 gate，未配置时未显示「${want}」，实得「${placeholder}」`);
+      if (HUMAN_AI_RE.test(placeholder) || HUMAN_AI_RE.test(note)) {
+        problems.push(`判据6：${k} 无对应 gate，未配置文案不得出现任何 human/ai（实得「${placeholder}${note}」）`);
+      }
+      if (note) problems.push(`判据6：${k} 无对应 gate，不得伪造口径来源标注`);
+    }
   }
   // ---- 判据 4：project.yaml 行在标题栏右侧、页脚无残留 ----
   const rendered = renderModal(modalSrc, SNAPSHOT, zh, { tab: "executor" });
@@ -511,14 +596,14 @@ function presentationProblems(modalSrc: string, zh: Dict): string[] {
 const unsetAllAutomation = () => {
   const f: any = JSON.parse(JSON.stringify(SNAPSHOT));
   f.supervisor.automation = {};
-  f.automation_defaults = { ...AUTOMATION_DEFAULTS };
+  f.automation_unset_scope = JSON.parse(JSON.stringify(AUTOMATION_UNSET_SCOPE));
   return f;
 };
 
-test("g-490 改坏即红：四项契约在内存变异下逐项报红，且真实源文件零改动", () => {
+test("g-490 改坏即红：各判据契约在内存变异下逐项报红（含两条未配置口径新增负例），且真实源文件零改动", () => {
   const before = readFileSync(modalPath, "utf8");
   const { zh } = loadClientI18n();
-  assert.deepEqual(presentationProblems(before, zh), [], "正向：真实源码四项契约必须全部成立（谓词本身不作假红）");
+  assert.deepEqual(presentationProblems(before, zh), [], "正向：真实源码各判据契约必须全部成立（谓词本身不作假红）");
 
   const mutants: Array<{ name: string; src: string; expect: RegExp }> = [
     { name: "回退原生 title", src: before.replace('"aria-label": text', "title: text"), expect: /回退原生 title/ },
@@ -527,10 +612,15 @@ test("g-490 改坏即红：四项契约在内存变异下逐项报红，且真�
     { name: "删掉浮层状态（不再至多一个）", src: before.replace("const [openHint, setOpenHint] = React.useState(null)", "const openHint = null"), expect: /缺少唯一浮层状态/ },
     { name: "生效值退回弱化文本（去边框）", src: before.replace('border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.4))",', ""), expect: /生效值缺边框/ },
     { name: "生效值退回弱化文本（加 opacity）", src: before.replace('fontSize: 11, marginTop: 2, padding: "3px 7px", borderRadius: 4, display: "block",', 'fontSize: 11, marginTop: 2, padding: "3px 7px", borderRadius: 4, display: "block", opacity: 0.65,'), expect: /生效值带 opacity/ },
-    { name: "未配置键不显示默认值", src: before.replace("automationOptions(auto[k], automationDefaults[k] ?? null)", "automationOptions(auto[k], null)"), expect: /未配置时未显示/ },
-    { name: "客户端硬编码默认值副本", src: before.replace("const automationDefaults = form.automation_defaults ?? {};", 'const automationDefaults = form.automation_defaults ?? {};\n      const HARDCODED = { scope_planning: "human" };'), expect: /硬编码了 scope_planning/ },
+    { name: "未配置键不显示口径来源默认值", src: before.replace("automationOptions(auto[k], automationUnsetScope[k] ?? null)", "automationOptions(auto[k], null)"), expect: /未配置时未显示/ },
+    { name: "客户端硬编码键级 human/ai 副本", src: before.replace("const automationUnsetScope = form.automation_unset_scope ?? {};", 'const automationUnsetScope = form.automation_unset_scope ?? {};\n      const HARDCODED = { scope_planning: "human" };'), expect: /硬编码了 scope_planning/ },
+    // g-490 负例①：抽掉同屏口径来源标注 ⇒ 未配置文案里出现**无来源**的具体 human/ai
+    { name: "未配置文案出现无来源的具体 human/ai", src: before.replace("automationUnsetScope[k] ? automationUnsetScopeNote(automationUnsetScope[k]) : null", "null"), expect: /无口径来源标注/ },
+    // g-490 负例②：把「保持既有指导」渲染成 human/ai（无 gate 范围的键不得出现任何 human/ai）
+    { name: "把「保持既有指导」渲染成 human/ai", src: before.replace('unsetScope ? dgT("settings.automationDefaultPrefix") + unsetScope.gate_requires : dgT("settings.automationUnsetKeep")', 'dgT("settings.automationUnsetKeep") + " (human)"'), expect: /不得出现任何 human\/ai/ },
     { name: "project.yaml 行搬离标题栏", src: before.replace("            projectYamlRow),\n", "            ),\n"), expect: /不在标题栏/ },
   ];
+  assert.ok(mutants.length >= 11, `变异负向对照只增不减（实得 ${mutants.length} 项：9 项既有 + 2 项未配置口径新增）`);
   for (const m of mutants) {
     assert.notEqual(m.src, before, `变异体「${m.name}」必须真的改动了源码（否则是空变异）`);
     const got = presentationProblems(m.src, zh).join(" | ");
