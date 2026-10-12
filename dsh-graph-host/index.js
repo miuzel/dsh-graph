@@ -674,43 +674,53 @@ function localizedPrompt(name, language) {
 }
 
 /** g-493 / g-495：`graph_help(topic)` 的主题抽取（纯函数，返回 null 表示该主题不存在）。
- *  主题口径（与 prompts/help.*.md 的章节标题同源，不做第二份目录）：
+ *  主题口径（与 prompts/*.{zh,en}.md 的章节标题同源，不做第二份目录）：
  *   · `usage` / `使用说明`          ⇒ 从文首到第一个二级标题（整份使用说明）；
- *   · `graph_engineering` / `图工程` ⇒ 「为什么叫 dsh-graph…」章节；
+ *   · `graph_engineering` / `图工程` ⇒ 「为什么叫 dsh-graph…」章节（**跨资产**查找，见下）；
  *   · 任一**功能模块名**            ⇒ 该模块那一行（`| <名> | … |` 表格行）。
- *  g-495：工具名主题**已移除**（负责人 2026-10-13 选 (c)：schema 注入已提供足够信息，
- *  没必要按工具名查）。模块名真源 = `HARNESS_MODULE_IDS`（core/ops.ts 单一真源，
+ *  g-495：工具名主题**已删除**（负责人 2026-10-13 选 (c)：schema 注入已提供足够信息，
+ *  没必要按工具名查）—— `topic` 只认 `usage` / `graph_engineering` / 模块名；未知名（含工具名）
+ *  ⇒ `null` ⇒ 全文 + `found=false`。模块名真源 = `HARNESS_MODULE_IDS`（core/ops.ts 单一真源，
  *  此处不另抄一份字面量），别名走 `MODULE_TOPIC_ALIASES`。
- *  章节名按 `## ` 切分 ⇒ 资产改标题时必须同步本函数（守卫 core/tests/g493-help-topic.test.ts 钉住）。 */
-function helpTopicText(text, topic) {
+ *  g-495 返工（负责人 2026-10-13 裁决·出路 1）：点题段已从 agent 面向的 `help.*.md` **迁到**
+ *  按需面 `usage.*.md`（help 不再介绍项目背景与命名缘由）⇒ `graph_engineering` 分支改为
+ *  **跨资产**查找：先在 help 正文里找该章节，找不到再到 usage 正文里找。两条路径共用同一
+ *  章节判定（标题含 `dsh-graph` 且含「图工程 / Graph Engineering」），不另立第二套口径。
+ *  章节名按 `## ` 切分 ⇒ 资产改标题时必须同步本函数（守卫 core/tests/g493-help-topic.test.ts 钉住）。
+ *  `extraTexts` 为可选的**追加查找面**（缺省 `[]` 时行为与单资产版逐字一致）。 */
+function helpTopicText(text, topic, extraTexts = []) {
   const src = typeof text === "string" ? text : "";
   const key = String(topic || "").trim().toLowerCase();
-  if (!src || !key) return null;
+  if (!key) return null;
   const usageAlias = ["usage", "使用说明", "getting started", "使用指引"];
   const graphAlias = ["graph_engineering", "graph-engineering", "图工程", "graph engineering"];
   if (usageAlias.includes(key)) {
+    if (!src) return null;
     const firstSection = src.indexOf("\n## ");
     return (firstSection < 0 ? src : src.slice(0, firstSection)).trimEnd();
   }
   if (graphAlias.includes(key)) {
-    for (const section of src.split(/\n(?=## )/)) {
-      if (!section.startsWith("## ")) continue;
-      if (/dsh-graph/.test(section.split("\n")[0]) && /图工程|Graph Engineering/i.test(section.split("\n")[0])) {
-        return section.trimEnd();
+    // 跨资产：help 正文优先，其次各追加面（usage）。命中即返回，未命中一律 null。
+    const faces = [src, ...(Array.isArray(extraTexts) ? extraTexts : [])];
+    for (const face of faces) {
+      if (typeof face !== "string" || !face) continue;
+      for (const section of face.split(/\n(?=## )/)) {
+        if (!section.startsWith("## ")) continue;
+        if (/dsh-graph/.test(section.split("\n")[0]) && /图工程|Graph Engineering/i.test(section.split("\n")[0])) {
+          return section.trimEnd();
+        }
       }
     }
     return null;
   }
+  if (!src) return null;
   // g-495：功能模块主题 —— 命中资产里该模块的表格行（含所属章节标题）。
+  // 模块名之后**没有别的分支**：`usage` / `graph_engineering` / 模块名之外的一切名
+  //（含**工具名**）一律 `null` ⇒ 调用方回落全文 + `found=false`（负责人 2026-10-13 裁定：
+  //  schema 注入时已提供足够信息，没必要按工具名查）。负向钉住见 g493 D1/D2。
   const moduleId = helpTopicModuleId(key);
   if (moduleId) return helpModuleTopicText(src, moduleId);
-  const toolMatch = new RegExp(`^- ${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\(`, "m").exec(src);
-  if (!toolMatch) return null;
-  const rest = src.slice(toolMatch.index);
-  const nextLine = rest.indexOf("\n- ", 1);
-  const blank = rest.indexOf("\n\n", 1);
-  const cuts = [nextLine, blank].filter((n) => n > 0);
-  return (cuts.length ? rest.slice(0, Math.min(...cuts)) : rest).trimEnd();
+  return null;
 }
 
 /** g-495：功能模块名 topic 的别名表（真源 = `HARNESS_MODULE_IDS`，此处只加人类可读别名）。
@@ -3419,8 +3429,8 @@ export function apply(ctx, config) {
       // g-495（负责人 2026-10-13 裁定）：help 改为 **agent 面向的渐进式披露** ——
       //   · 删去 51 条逐工具参数速查（与 harness 注入的工具定义重复），只留①一句用途
       //     ②功能模块清单（名/作用/**当前开关状态**）③接管指引；
-      //   · `topic` 的工具名分支移除（选 (c)：schema 注入已提供足够信息，没必要按工具名查），
-      //     改支持**模块名**；`usage` / `graph_engineering` 保留；
+      //   · `topic` 的工具名分支**删除**（选 (c)：schema 注入已提供足够信息，没必要按工具名查），
+      //     `topic` 只认 `usage` / `graph_engineering` / **模块名**；未知名（含工具名）⇒ 全文 + `found=false`；
       //   · 「当前开启哪些模块」取**既有只读投影** `readModuleSwitchesForRoot`（g-480 的
       //     `resolveModuleSwitches` 单一真源），**不**另接 GUI 用的 `moduleSwitchPayload`；
       //     读失败一律按**全开**（fail-safe，与 g-480 同口径）。
@@ -3442,7 +3452,11 @@ export function apply(ctx, config) {
         if (!topic) return { help: renderHelpModules(raw, switches, language) };
         // 主题抽取在**渲染前**的资产上做：模块行靠 `{moduleId}` 稳定标记定位，
         // 渲染后该标记已被替换成「开启/关闭」而无法定位 ⇒ 顺序不可颠倒。
-        const topicText = helpTopicText(raw, topic);
+        // g-495 返工（裁决·出路 1）：点题段已迁到按需面 `usage.*.md` ⇒ 把 usage 正文作为
+        // **追加查找面**传入（help 正文优先）。usage 读失败不影响其余主题：按「该面缺席」处理。
+        let usageRaw = "";
+        try { usageRaw = localizedPrompt("usage", language); } catch { usageRaw = ""; }
+        const topicText = helpTopicText(raw, topic, [usageRaw]);
         if (topicText === null) return { help: renderHelpModules(raw, switches, language), topic, found: false };
         return { help: renderHelpModules(topicText, switches, language), topic, found: true };
       },

@@ -25,3 +25,8 @@ dsh-graph is a plugin that organizes work into a "goal board". You have graph_* 
 **graph_get_settings** — The returned enum metadata includes the six valid `supervisor.automation` keys (scope_planning/integration_decision/rework/memory_promotion/skill_proposal/release, values human/ai), `executor.mode` (standard/minimal), `review.policy` (auto/strict/none), and the default regions/contracts/non-product prefixes.
 
 Principle: status is not evidence; deliverables are; proactively transition cards and report status at key stages; throttle heartbeats for long tasks; ask first when uncertain.
+
+## Why it is called dsh-graph: Graph Engineering
+The name comes from **Graph Engineering**. An article on mcp.so defining Graph Engineering puts it this way (the Chinese original is quoted verbatim; this English rendering is a translation): "Graph Engineering means designing a multi-agent system as an explicit graph - nodes (agents or steps that each do exactly one thing), edges (sequential, conditional or parallel routing) and shared state - rather than relying on a single agent running one loop".
+
+This plugin is the **monitoring kanban view** over that division of the graph: what matters in Graph Engineering is constraining the whole process of AI work, the division of labour between agents, and the layer-by-layer approval control from the user to the supervisor to the worker; the board is only **one view** of that graph - what matters is that the user holds the graph in mind, not that the interface shows one fixed graph.
