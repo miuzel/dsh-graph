@@ -67,7 +67,14 @@ dsh-graph is a plugin that organizes work into a "goal board". Available graph_*
 - graph_update_settings(patch) update project config (schema validation, comment preservation, atomic write).
 
 ## Help
-- graph_help() display this help (full 51-tool checklist with parameter reference).
+- graph_help([topic]) display this help (full 51-tool checklist with parameter reference); with topic, return only that subject: `usage` (what the usage guide covers), `graph_engineering` (the Graph Engineering chapter, below) or a tool name (that tool's detailed usage).
+
+## Why it is called dsh-graph: Graph Engineering and the board as a view
+The name dsh-graph comes from **Graph Engineering**. The definition given by the article on mcp.so (quoted verbatim in the Chinese original) is: designing a multi-agent system as an explicit graph - nodes (agents or steps that each do exactly one thing), edges (sequential, conditional or parallel routing) and shared state - rather than relying on a single agent running one loop.
+
+Concretely, this plugin is a **task / goal state machine** maintenance system; for an AI it works like a **lightweight Jira + Confluence** (or a ZenTao-style tracker, if you prefer). The roles - supervisor, workers (subagents), reviewers, definers, collectors and the user - **emerge naturally** under the constraints of the **supervisor guide plus the goal state machine**. Work moves along new request → define goal and criteria → collect → implement → review → verdict → deliver, with two loops: rework goes back to implement, and a new goal can branch off.
+
+The state machine is defined and organized by **dsh-graph core**, and this plugin is the **monitoring board view** of that division of labour; once the core is stable, pleasant to use and simple enough, the same core can produce a dsh TUI or a pi-ai plugin. One thing must be stressed: **the board is only a view**. The real core is the constraint on the AI's whole process, the division of labour between agents, and the layered approval control running from user to supervisor to worker. Graph Engineering makes the organization of agents **programmable**, but that programming is **not** about specifying nodes and edges in a DSL - it is a software engineering practice of humans and AIs, and agents and agents, working together, and natural language is enough to describe it. **What matters is that the user holds the graph in their head** - and that graph is not a fixed one. The board solves two things: making the whole process visible (what agents run, how tasks are broken up, how stages advance, where it fell back, was reworked, or branched into new requirements and goals), and letting you cut in on any detail or discuss direction, method, goal changes and version plans with the supervisor agent at any time. Graph customization will open up in later versions; the current version focuses on process visualization plus the task state machine.
 
 ## Claim supervisor
 **Execute this only when the person in charge explicitly asks you to take over as supervisor**—by default no session may automatically claim:

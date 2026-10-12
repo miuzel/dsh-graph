@@ -25,13 +25,25 @@
     ];
     const HELP_ASSET_URL = "/api/dsh-graph/help/asset/";
     const HELP_CATALOG_URL = "/api/dsh-graph/help/catalog";
+    // g-493：**开篇点题章节**（「为什么叫 dsh-graph：图工程与看板视图」）的正文键，顺序即阅读顺序。
+    // 本清单渲染在 HELP_USAGE_KEYS **之前**（点题在先、原有使用说明在后），九个子项逐条落在这些
+    // 可见段落里：命名由来 / 逐字定义 + mcp.so 来源 / 任务状态机（简易 Jira + Confluence）/ 角色
+    // 自然形成 / 生命周期链与两条回路 / dsh-graph core 与同一套 core 的后续视图 / 看板只是视图与
+    // 「不是 DSL」的可编程 / 心中有图 + 看板解决的两件事 / 如实路线图。
+    const HELP_USAGE_TOPIC_KEYS = [
+      "help.topic.naming", "help.topic.definition", "help.topic.definitionSource",
+      "help.topic.stateMachine", "help.topic.roles", "help.topic.lifecycle",
+      "help.topic.core", "help.topic.kanbanIsView", "help.topic.programmable",
+      "help.topic.stateOfMind", "help.topic.solves", "help.topic.roadmap",
+    ];
     // 「使用说明」页签的段落（顺序即阅读顺序；文案全部走 i18n，zh/en 对称）。
     const HELP_USAGE_KEYS = [
       "help.usage.what", "help.usage.board", "help.usage.flow",
       "help.usage.dispatch", "help.usage.review", "help.usage.tabs",
     ];
     // FAQ 项编号（只用于取 i18n 键与 React key，界面上不显示编号）。
-    const HELP_FAQ_ITEMS = [1, 2, 3, 4, 5, 6, 7];
+    // g-493 追加第 8 条：点题问答（问答正文即负责人原话口径，键在 i18n 里）。
+    const HELP_FAQ_ITEMS = [1, 2, 3, 4, 5, 6, 7, 8];
     // g-489：使用说明页签的**分模块章节**（顺序即展示顺序：看板/目标/版本管理/泳道/侧边栏/
     // 上下文卡片与项目知识库/记忆系统/子代理与 agent teams/常用设置）。每章三要素缺一即判红
     //（core/tests/g489-help-content.test.ts）。
@@ -157,6 +169,18 @@
           className: "dg-help-version",
           style: { ...S.meta, marginBottom: 8 },
         }, dgT("help.version", { version: PLUGIN_VERSION })),
+        // g-493：开篇点题章节（命名由来 / 图工程定义逐字引用 / 看板只是视图 / 看板解决的两件事 /
+        // 如实路线图）。数据驱动、渲染在原有使用说明段落之前 —— 「点题」必须开篇可见。
+        h("div", { className: "dg-help-topic", key: "help-topic" },
+          h("div", {
+            className: "dg-help-topic-title",
+            style: { fontWeight: 700, fontSize: 14, marginBottom: 6 },
+          }, dgT("help.topic.title")),
+          ...HELP_USAGE_TOPIC_KEYS.map((key) => h("p", {
+            key: "help-topic-" + key,
+            className: "dg-help-p dg-help-topic-p " + key.replace(/\./g, "-"),
+            style: { margin: "0 0 8px", fontSize: 13, lineHeight: 1.75 },
+          }, dgT(key)))),
         ...HELP_USAGE_KEYS.map((key) => h("p", {
           key: "help-usage-" + key,
           className: "dg-help-p",
@@ -238,7 +262,9 @@
 
     /** g-489 工具清单页签：按宿主分类真源分**表格**呈现（简称 / 工具名 / 用途），每类一张表。
      *  分类、简称、用途全部来自 `/help/catalog`（本模块零硬编码工具名/分类名/简称）；
-     *  宿主的结构守卫（分类表 ≡ 注册真源）报红时，页签顶部显示红条并列出红因。 */
+     *  宿主的结构守卫（分类表 ≡ 注册真源）报红时，页签顶部显示红条并列出红因。
+     *  g-493：每行加一个「展开说明」的**点击/hover 自绘浮层**（原生 title 之外的可发现路径），
+     *  内容 = 该工具的完整注册说明 + i18n 里 `help.toolTopic.<name>` 的补充（无则只显示注册说明）。 */
     function HelpToolsTab(props) {
       const state = props.catalogState || {};
       const catalog = state.catalog;
@@ -248,6 +274,12 @@
       const lang = helpCatalogLanguage(catalog);
       const thStyle = { textAlign: "left", fontSize: 12, fontWeight: 600, padding: "4px 8px 4px 0", borderBottom: "1px solid rgba(128,128,128,.35)" };
       const tdStyle = { fontSize: 12, lineHeight: 1.6, padding: "5px 8px 5px 0", verticalAlign: "top" };
+      // 逐行展开态（点击切换）；hover 只做高亮，不改状态 ⇒ 不引入原生 title。
+      const [openTool, setOpenTool] = React.useState("");
+      const toolDetail = (t) => {
+        const extra = dgT("help.toolTopic." + t.name);
+        return extra === "help.toolTopic." + t.name ? "" : extra;
+      };
       // 分类顺序来自宿主（不重排）；每类的行取自同一份 tools 投影。
       const groups = categories.map((c) => ({
         key: c.key,
@@ -306,7 +338,27 @@
                   h("td", {
                     className: "dg-help-tool-desc",
                     style: { ...tdStyle, opacity: 0.9 },
-                  }, helpCatalogText(t.description, lang)))))))),
+                  },
+                    helpCatalogText(t.description, lang),
+                    h("div", { style: { marginTop: 2 } },
+                      h("button", {
+                        className: "dg-btn dg-help-tool-detail-btn",
+                        style: { ...S.btn, padding: "1px 8px", fontSize: 11 },
+                        onClick: () => setOpenTool(openTool === t.name ? "" : t.name),
+                      }, dgT("help.tools.accordion")),
+                      openTool !== t.name ? null : h("div", {
+                        className: "dg-help-tool-detail",
+                        style: {
+                          marginTop: 4, padding: "6px 8px", borderRadius: 4, fontSize: 12, lineHeight: 1.7,
+                          background: "rgba(76,141,255,.10)", border: "1px solid rgba(76,141,255,.30)",
+                        },
+                      },
+                        h("div", { className: "dg-help-tool-detail-full" }, helpCatalogText(t.description, lang)),
+                        toolDetail(t)
+                          ? h("div", { className: "dg-help-tool-detail-topic", style: { marginTop: 4 } },
+                            h("code", { style: { fontSize: 12, fontWeight: 600 } }, "topic=" + t.name),
+                            " · " + toolDetail(t))
+                          : null))))))))),
           ];
       return h("div", { className: "dg-help-tools" },
         h("div", { style: { ...S.meta, marginBottom: 8 } },
@@ -317,13 +369,21 @@
     function HelpFaqTab() {
       return h("div", { className: "dg-help-faq" },
         h("div", { style: { ...S.meta, marginBottom: 8 } }, dgT("help.faq.intro")),
-        ...HELP_FAQ_ITEMS.map((n) => h("div", {
-          key: "help-faq-" + n,
-          className: "dg-help-faq-item",
-          style: { marginBottom: 10 },
-        },
-          h("div", { style: { fontWeight: 600, fontSize: 13 } }, dgT("help.faq.q" + n)),
-          h("div", { style: { fontSize: 12, lineHeight: 1.7, marginTop: 3, opacity: 0.9 } }, dgT("help.faq.a" + n)))));
+        ...HELP_FAQ_ITEMS.map((n) => {
+          // g-493：第 8 条是**点题问答**（问答正文由 i18n 提供）。为避免同一句话两处维护而漂移，
+          // 这一条从 help.topic.faqQ / help.topic.faqA 取；两条 i18n 键都必须在 zh/en 存在。
+          const key = n === 8 ? "help.topic.faq" : "help.faq.";
+          const q = n === 8 ? dgT("help.topic.faqQ") : dgT("help.faq.q" + n);
+          const a = n === 8 ? dgT("help.topic.faqA") : dgT("help.faq.a" + n);
+          if (n === 8 && (!String(q).trim() || !String(a).trim())) return null;
+          return h("div", {
+            key: "help-faq-" + n,
+            className: "dg-help-faq-item" + (n === 8 ? " dg-help-faq-topic" : ""),
+            style: { marginBottom: 10 },
+          },
+            h("div", { style: { fontWeight: 600, fontSize: 13 } }, q),
+            h("div", { style: { fontSize: 12, lineHeight: 1.7, marginTop: 3, opacity: 0.9 } }, a));
+        }));
     }
 
     /** Graph 页签：g-462 的设计哲学弹窗内容（notice → roadmap → 图页签 → iframe），只读展示。 */
@@ -343,6 +403,15 @@
             background: "rgba(224,165,58,.14)", border: "1px solid rgba(224,165,58,.4)",
           },
         }, dgT("design.notice")),
+        // g-493 去重归属：命名由来与「看板只是视图」**详述在使用说明页签开篇**，本页签只保留一处
+        // **引用**（可见正文 + 可点击跳到「使用说明」页签），两处不得互相矛盾。
+        h("div", {
+          className: "dg-design-crossref",
+          style: {
+            marginTop: 6, padding: "6px 8px", borderRadius: 4, fontSize: 12, flexShrink: 0,
+            opacity: 0.9, background: "rgba(128,128,128,.08)",
+          },
+        }, dgT("help.topic.designCrossref")),
         // 后续路线（尚未实现）：独立小节 —— 不画进图里、也不新增页签。只指路设计哲学文档的
         // **章节名**，不用会随改版漂移的章节序号。
         h("div", {
@@ -372,10 +441,13 @@
             border: "1px solid rgba(128,128,128,.35)", background: "#fff",
           },
         },
+          // g-493 顺手收口：此处原有原生 `title` 提示（g-489 评审残余，负责人批 2 裁决
+          // 「不要用 title、用点击/hover 自绘浮层」）已**删除** —— iframe 的 `name` 属性
+          // 不属于原生提示（不产生悬停 tooltip），仅用于 iframe 可访问名。
           h("iframe", {
             key: "design-frame-" + active.key,
             className: "dg-design-frame",
-            title: dgT("design.title") + " · " + dgT(active.labelKey),
+            name: dgT("design.title") + " · " + dgT(active.labelKey),
             src,
             style: { display: "block", width: "100%", height: "100%", border: "none" },
           })));
