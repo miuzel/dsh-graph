@@ -177,11 +177,40 @@ function topicCopyProblems(zh: Record<string, string>, en: Record<string, string
   if (!zhDefinition.includes(GRAPH_ENGINEERING_DEFINITION)) {
     problems.push("help.topic.definition 必须逐字包含 mcp.so 的图工程定义原文（改写后不得仍标称逐字引用）");
   }
+  // ②′ 逐字节强比对（主管 2026-10-13 裁决要求加强）：不只断言「包含」——把 `「…」` 引号内的
+  //     整段**取出来**与负责人原文逐字符比对（长度 + 全等 + 首个差异位）。任何一字改写（哪怕是
+  //     近义替换、少/多一个字）都必须判红，而不是靠子串包含侥幸过关。
+  const quoted = (zhDefinition.match(/「([\s\S]*)」/) ?? [])[1];
+  if (quoted === undefined) {
+    problems.push("help.topic.definition 必须以「」标出逐字引文（否则无法判定引用范围）");
+  } else if (quoted !== GRAPH_ENGINEERING_DEFINITION) {
+    const owner = [...GRAPH_ENGINEERING_DEFINITION];
+    const got = [...quoted];
+    let at = 0;
+    while (at < owner.length && at < got.length && owner[at] === got[at]) at += 1;
+    problems.push(
+      `help.topic.definition 的「」引文必须与负责人原文逐字节相同（期望 ${owner.length} 字、实得 ${got.length} 字，首个差异 @${at}：` +
+        `期望 ${JSON.stringify(owner.slice(at, at + 12).join(""))} / 实得 ${JSON.stringify(got.slice(at, at + 12).join(""))}）`,
+    );
+  }
   const sourceKey = "help.topic.definitionSource";
   if (!(zh[sourceKey] ?? "").includes("mcp.so")) problems.push("必须标注定义来源为 mcp.so");
   if (!/逐字引用/.test(zh[sourceKey] ?? "")) problems.push("来源标注必须写明是逐字引用");
   if (!(zh[sourceKey] ?? "").includes("逐字") || !/mcp\.so/.test(zh[sourceKey] ?? "")) {
     problems.push("定义来源必须同时含「逐字」与 mcp.so");
+  }
+  // ②″ 两侧口径自洽：zh 声称逐字引用（中文原文），en 是**译文** ⇒ en 只能声称「中文原文的逐字
+  //     引用」，不得声称自身逐字（en 文本本就与原文不同）；且 zh 一旦不再标称逐字，en 也不得标称。
+  const zhSaysVerbatim = /逐字/.test(zh[sourceKey] ?? "");
+  const enSource = en[sourceKey] ?? "";
+  if (zhSaysVerbatim && !/verbatim/i.test(enSource)) {
+    problems.push("zh 标称逐字引用时 en 来源标注必须同样写明 verbatim（两侧口径自洽）");
+  }
+  if (zhSaysVerbatim && !/translat|Chinese|original/i.test(enSource)) {
+    problems.push("en 来源标注必须写明逐字引用的是**中文原文**（en 是译文，不得声称自身逐字）");
+  }
+  if (!zhSaysVerbatim && /verbatim/i.test(enSource)) {
+    problems.push("zh 不再标称逐字引用时 en 不得单独标称 verbatim");
   }
   // ③ 括注禅道 + Jira/Confluence 同现。
   const stateMachine = zh["help.topic.stateMachine"] ?? "";
@@ -298,6 +327,38 @@ test("g-493 C1（负向对照·内存变异）：点题章节缺失 / 定义被�
   assert.ok(
     topicCopyProblems({ ...zh, "help.topic.definitionSource": "以上为逐字引用。" }, en).some((p) => p.includes("mcp.so")),
     "来源标注丢 mcp.so 必须判红",
+  );
+  // ②′ 逐字节强比对：**一字之差**（近义替换、少一字、多一字）都必须判红 —— 不只是「子串找不到」。
+  const nearMiss = [
+    ["近义替换", "而不是让单个智能体一直跑下去"],
+    ["少一个字", "而不是依赖单个智能体跑单循环"],
+    ["多一个字", "而不是依赖单个智能体跑单条的循环"],
+  ] as const;
+  for (const [kind, ending] of nearMiss) {
+    const mutated = String(zh["help.topic.definition"]).replace("而不是依赖单个智能体跑单条循环", ending);
+    assert.notEqual(mutated, zh["help.topic.definition"], `负向对照（${kind}）必须真实改变输入`);
+    const problems = topicCopyProblems({ ...zh, "help.topic.definition": mutated }, en);
+    assert.ok(problems.some((p) => p.includes("逐字节相同")), `${kind}：引文与原文不符必须判红（且点名逐字节比对）`);
+    assert.ok(problems.some((p) => /首个差异 @\d+/.test(p)), `${kind}：判红信息必须给出首个差异位`);
+  }
+  // 引文范围无法判定（去掉「」引号）也必须判红。
+  assert.ok(
+    topicCopyProblems({ ...zh, "help.topic.definition": "mcp.so 把它定义为：" + GRAPH_ENGINEERING_DEFINITION + "。" }, en).some((p) =>
+      p.includes("必须以「」标出逐字引文"),
+    ),
+    "无法判定引用范围必须判红",
+  );
+  // ②″ 两侧口径自洽：en 单独声称 verbatim（zh 不声称）必须判红；en 声称 verbatim 却未写明是中文原文
+  //     的逐字引用（读起来像 en 自身逐字）也必须判红。
+  assert.ok(
+    topicCopyProblems(zh, { ...en, "help.topic.definitionSource": "This English text is quoted verbatim; source: mcp.so." }).some((p) =>
+      p.includes("中文原文"),
+    ),
+    "en 声称 verbatim 却未写明引用的是中文原文必须判红",
+  );
+  assert.ok(
+    topicCopyProblems({ ...zh, "help.topic.definitionSource": "以上为意译，来源：mcp.so。" }, en).some((p) => p.includes("不得单独标称 verbatim")),
+    "zh 不标称逐字时 en 不得单独标称 verbatim 必须判红",
   );
 
   // ③ 把「后续版本开放」写成已具备 ⇒ 必红。
