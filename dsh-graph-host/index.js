@@ -3203,7 +3203,7 @@ export function apply(ctx, config) {
       // 写入前用 core 的唯一 DFS 做替代环探测（host 侧不另造环检测实现）。
       def: {
         name: "graph_set_relation",
-        description: "标记/解除目标间关系（可增可删）：action=add|remove；type 限 supersedes（取代）/amends（调整）/extends（补充）/related（相关）；target 为对端目标 id。复用 g-379 既有关系写入路径，只写 goal frontmatter 的 meta.relations；幂等（重复调用不重复写事件、不改字节）。depends_on 请改用 meta.depends_on（本工具拒绝写入 relations）；会形成替代环的标记被拒绝。",
+        description: "标记/解除目标间关系：action=add|remove；type 限 supersedes/amends/extends/related；target 为对端目标 id。只写 goal frontmatter 的 meta.relations，幂等。depends_on 请改用 meta.depends_on（本工具拒绝）；会形成替代环的标记被拒绝。",
         parameters: params({ goal: str, action: str, type: str, target: str }, ["goal", "action", "type", "target"]),
       },
       run: (a, ex) => {
@@ -3260,7 +3260,7 @@ export function apply(ctx, config) {
       // 主管自己做完成摘要 ⇒ 与 F1 自动截获**同一写入器**（同格式/同路径/同覆盖策略），零 LLM 调用。
       def: {
         name: "graph_write_results",
-        description: "写入一次 attempt 的完成摘要（<goalDir>/results-att-<attempt>.md）：供主管/用户在**无子代理**的轻量改动（chore/patch、一两行修改、文档或看板数据修订）后主动补写结果，避免结果真空。与自动截获同一写入器/同一格式/同一路径；文件头标注 source（默认 manual）与写入者。零 LLM 调用（纯文本落盘）。同一 attempt 重复调用 = last-wins 覆盖同一文件（每次写入都追加 attempt.results_written 事件）。",
+        description: "写入一次 attempt 的完成摘要（<goalDir>/results-att-<attempt>.md）：主管/用户在**无子代理**的轻量改动（chore/patch、文档或看板数据修订）后主动补写，避免结果真空。与自动截获同一写入器/路径/格式，零 LLM（纯文本落盘），文件头标注 source（默认 manual）与写入者；重复调用为 last-wins 覆盖。attempt 必须真实存在。",
         parameters: params({ goal: str, attempt: str, text: str, source: str, actor: str }, ["goal", "attempt", "text"]),
       },
       run: (a, ex) => {
@@ -3291,7 +3291,7 @@ export function apply(ctx, config) {
       // g-374 F2/F3：从目标历史零 LLM 重写 results.md（旧版归档）+ 批量。UI「更新摘要」按钮走同一实现。
       def: {
         name: "graph_refresh_results",
-        description: "重写 <goalDir>/results.md（规范化完成摘要）；旧版先归档为 results-archive-YYYYMMDDTHHMMSS.md（保留历史，不删不覆盖），每次调用都重写 + 归档；写入器**自身零 LLM 调用**（LLM 正文由专用 summarizer 子代理产出后经 content 传入）。四种用法：①`llm:true` ⇒ 派发**专用摘要子代理**（role=summarizer）结合目标详情写「具体改了什么 / 影响面 / 值得注意」，落盘后 `source=llm`；以 `source_hash`（历史指纹）为缓存键，历史未变且已有 llm 摘要 ⇒ 直接命中缓存不再调用（`force:true` 强制重来）；子代理不可用/失败 ⇒ 自动降级为机器摘要并标注 `source=deterministic`；②省略 content/llm ⇒ 由目标历史（评论 / 最近指令 / attempt 与其结果文件 / 事件流 + 目标描述要点）**零 LLM 拼装**兜底正文；③传 content ⇒ 采用调用方产出的正文（source=manual：人工手写）；④支持单目标（goal）与批量（goals[]），批量逐目标报告 written/skipped/failed/pending/cached，单目标失败不中断整批。目标无评论/无指令/无 attempt 且无 content 时优雅跳过（不写空文件）。**主管自做 chore/patch 等无子代理改动后应主动调用；要 LLM 详情级摘要时传 llm:true**。",
+        description: "重写 <goalDir>/results.md 完成摘要；旧版先归档为 results-archive-*.md（保留历史，不删不覆盖）。写入器自身零 LLM：①`llm:true` 派 summarizer 子代理写正文（source=llm，按 source_hash 缓存，`force:true` 强制重来，失败降级 source=deterministic）；②省略 content/llm 则零 LLM 从目标历史拼装；③传 content 用调用方正文（source=manual）；④支持单目标 goal 或批量 goals[]。**主管自做 chore/patch 等无子代理改动后应主动调用**。细则见 help(topic=\"usage\")。",
         parameters: params({ goal: str, goals: strArr, content: str, source: str, llm: { type: "boolean" }, force: { type: "boolean" }, actor: str }, []),
       },
       run: (a, ex) => {
@@ -3564,7 +3564,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_memory_add",
-        description: "新增持久事实/记忆。\n【scope 决策铁律】：\n1. 默认法则：一切自发总结、技术经验、方案决策 100% 默认 scope=\"on_demand\"（按需记忆，不占常驻 Prompt）；\n2. 常驻特权法则：仅在「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」时，才允许设 scope=\"standing\"（硬上限 200 字符，超过拒绝；普通记忆上限 1000 字符）。\n【source_ref 幂等迁移】：可选 source_ref 是「迁移来源键」（如旧 memory/long-term/*.md 路径 + 单元标识）。提供它时同来源重复 add 幂等——同输入重试返回原 ID 且不重复追加事件；已被 replace 的条目保留后续修订、不覆盖；已被 remove 的条目明确跳过、不复活；同来源不同输入属冲突、不自动替换。引擎不读旧文档、不调 LLM、不截断拆条：摘要须由主管显式确认后作为 text 传入。kind=\"user\" 时幂等键按 owner 隔离：他人同一 source_ref 一律按无命中处理（该 actor 写入自己的新条目），绝不回显他人条目 ID 或正文。事件先行。",
+        description: "新增持久事实/记忆。scope 默认 on_demand（按需，不占常驻 Prompt）；仅「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」才可设 standing（硬上限 200 字符，普通记忆 1000）。可选 source_ref 是迁移来源键，提供时同来源重复 add 幂等（返回原 ID、不重复记事件）；kind=\"user\" 时幂等键按 owner 隔离。事件先行。细则见 help(topic=\"usage\")。",
         parameters: params({
           kind: { type: "string", enum: ["project", "user"] },
           scope: { type: "string", enum: ["standing", "on_demand"] },
@@ -3809,7 +3809,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_start_review",
-        description: "为**既有执行 attempt** 派发独立评审子代理（reviewer，只读审查）。评审是附属记录：不新建 attempt、不迁移目标状态、不覆盖作者 child_id 与 results-att-*.md；复用作者既有工作树（不新建评审树）；结论按真实 reviewer child 身份在结束时独立落盘（<goalDir>/reviews/<review_id>.md）。不注入作者对话/结果/自报 PASS/评论/返工叙事。同一 attempt + 同一候选重复调用为幂等（不重复派发）。reviewer 身份不得自行 accept/force/fast_track/delivered。",
+        description: "为**既有执行 attempt** 派发独立评审子代理（reviewer，只读审查）。评审是附属记录：不新建 attempt、不迁移状态、不覆盖作者 child_id 与结果文件；复用作者工作树；结论落盘 <goalDir>/reviews/<review_id>.md。同一 attempt + 同一候选幂等。reviewer 不得自行 accept/force/fast_track/delivered。",
         parameters: params({
           goal: str,
           attempt: str,
@@ -3853,7 +3853,7 @@ export function apply(ctx, config) {
         // 注意（g-437 P3-b 措辞纠正）：注册处在 `...t.def` **之后**用 sT 取 i18n 字典值覆盖 `description`
         // ⇒ **生效面是 lib/server-i18n.js 的 tool.graph_resolve_accept（zh/en）**，本字面量只是**同步副本**
         // （可读性/兜底）。改文案必须两处同改；prompt-i18n-parity 要求「每个注册工具恰有一把 tool.* 键」⇒ 键不可删。
-        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict）且 machine_report 四项门禁全绿——① tests（exit_code=0 且 fail=0）与 ② typecheck（exit_code=0）是**调用方证据**（引擎不复跑，须留痕 command/collected_at/source）；③ 变更规模（产品代码增删 <150 行且无未跟踪新文件）由**引擎 Git 自算**：machine_report.attempt 必填（显式绑定执行树），引擎在该 attempt 的实际工作树采集真源并与报告逐项对账（不一致、未提交 tracked 改动、工作树缺失/已删、git 或基线不可解析一律拒绝），`machine_report.baseline_commit` 必填且必须**等于**该 attempt 的引擎锚点（派发响应回传的 `baseline_commit`；隔离 attempt 亦可与 `worktree.head` 对照，短 SHA 亦可）——锚点只取自 attempt 记录、**绝不取自报告**，缺失或不等即拒绝（错误文案给出「显式 baseline 重新派发该 attempt」或「改走普通 accept」两条出路）；且与策略层 M2 用**同一条 150 行阈值**（≥150 行先被策略层升级 strict）；④ 全部判据以 ✅已验 结尾由引擎自算。任一不满足即拒绝且零副作用，通过则记 review.fast_track 事件（含证据分层与 Git 真源）。",
+        description: "主管裁决目标的接受请求（review.requested 出现后调用）：verdict=accept 通过 / object 提出异议；force=true 强制接受并记理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict），且 ①tests（exit_code=0 且 fail=0）②typecheck（exit_code=0）为**调用方证据**（引擎不复跑，须留痕 command/collected_at/source）、③变更规模由**引擎 Git 自算**（machine_report.attempt 必填）、④全部判据以 ✅已验 结尾，四项全绿方可。详见 i18n tool.graph_resolve_accept。",
         parameters: params({
           goal: str,
           verdict: { type: "string", enum: ["accept", "object"] },
@@ -3949,7 +3949,7 @@ export function apply(ctx, config) {
       // 遗留绑定缺失 binding_token 时支持显式声明 legacy: true 并给出 reason 进行受控解绑。
       def: {
         name: "graph_unbind_goal_child",
-        description: "从目标解绑执行子代理（安全 detach）：按 goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 精确定位；仅授权主管或目标 owner 可执行；子代理不能自我解绑。解绑只清理绑定（attempt/事件/日志保留可审计），解绑后目标可暂缓/转移/重新派发；子代理仍运行（live registry）或状态不可确认时拒绝；token 未知/过期/并发冲突拒绝且不改数据；重复解绑幂等。对早期缺失 binding_token 的遗留绑定，支持显式声明 legacy: true 并给出 reason 进行受控解绑（写 attempt.detached 事件；若存在 token 则禁止用 legacy 绕过）。",
+        description: "从目标安全解绑执行子代理：按 goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 定位；仅授权主管或目标 owner 可执行（子代理不能自我解绑）。只清理绑定，attempt/事件/日志保留可审计；幂等。遗留缺 token 的绑定可显式 legacy: true 并给 reason 受控解绑（若存在 token 则禁止绕过）。",
         parameters: params(
           { goal: str, attempt: str, child_id: str, token: str, reason: str, legacy: { type: "boolean" } },
           ["goal"],
