@@ -1,5 +1,6 @@
     // 质量判据 checklist（确认阶段）：每条一个勾选框（localStorage 按目标持久化，仅前端评审草稿）
-    // + 「💬 反馈」按钮——展开输入框，经 session.prompt 排队送达该目标的执行会话（复用 g-107 通路）。
+    // + 「💬 反馈」按钮——展开输入框，经 session.prompt 排队送达该目标的执行会话（复用 g-107 通路）；
+    //   无活执行会话时按 g-478 回退直发主管会话（promptSessionQueue），不再丢弃反馈。
     function CriteriaChecklist(props) {
       // 与 core/model.ts criteriaItems 同源：先移除跨行 HTML 注释，再按行 trim。
       const items = String(props.crit ?? "").replace(/<!--[\s\S]*?-->/g, "").split("\n")
@@ -24,7 +25,39 @@
       const sendFb = async (criterion) => {
         const t = fbText.trim();
         if (!t) return;
-        if (!session?.prompt) { setFbNote(dgT("criteria.feedbackNotConnected")); return; }
+        // g-478（负责人 2026-10-11 钦定）：**无活执行会话时不再丢弃反馈，改回退直发主管会话**。
+        // 该分支命中的场景：目标当前没有在跑的 attempt / 执行子代理已结束·已解绑·已删除 /
+        // 任务由主管自做或由别的子代理完成 —— 此时 useBoundSession 必然为空。
+        // 三段式：①有活执行会话 → 下方原逻辑逐字不变；②无活执行会话 → 转主管（本分支）；
+        // ③主管会话也不可用/投递未获正向回执 → 明确报错，绝不谎报成功。
+        if (!session?.prompt) {
+          const rt = sessionsRt ?? appCtx?.get?.("sessions");
+          if (!rt || !props.supervisorSession) { setFbNote(dgT("criteria.feedbackNotConnected")); return; }
+          try {
+            // 投递裁决一律交给共享 helper promptSessionQueue（session-hooks.js，全仓唯一裁决点）：
+            // 能力探测（using / retain / 0.1.5 被动回退）由它内部分流，本处**绝不**写第二份探测或版本号分支。
+            // i18n-keep(category-b)：发往主管会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
+            const delivered = await promptSessionQueue(rt, props.supervisorSession,
+              [{ type: "text", text: `【${props.goalId} 判据反馈（该目标无执行会话 → 转主管）】${criterion}\n${t}` }],
+              "[dsh-graph-host] criteria feedback: prompt supervisorSession failed:");
+            // 仅正向回执（res.ok === true，已由 helper 收口）算送达；负回执 / 空回执 / 取不到会话一律未送达。
+            if (!delivered) { setFbNote(dgT("criteria.feedbackNotConnected")); return; }
+            setFbNote(dgT("criteria.feedbackSupervisorDelivered"));
+            setFbText("");
+            setFbIdx(-1);
+            // 与既有主管直发 UX（AcceptFeedback.openSupervisor）一致：打开主管会话并切到对话页便于跟进；
+            // 不关弹窗 —— 区分性提示需留在原地可见（g-478 与既有 g-109 关弹窗行为的差异点）。
+            openSessionTarget(props.supervisorSession,
+              typeof rt.open === "function" ? () => rt.open(props.supervisorSession) : null);
+            activateChatTab();
+            showToast(dgT("criteria.feedbackSupervisorDelivered"));
+          } catch (e) {
+            // promptSessionQueue 自身绝不抛（内部兜底）；此处仅最后一道防线：明示未送达，绝不谎报成功。
+            console.warn("[dsh-graph-host] criteria feedback: prompt supervisorSession failed:", e);
+            setFbNote(dgT("criteria.feedbackNotConnected"));
+          }
+          return;
+        }
         try {
           // i18n-keep(category-b)：发往目标执行会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
           const res = await session.prompt(

@@ -1340,7 +1340,9 @@
           // g-170：「✏️ 判据」编辑入口放在小节标题处（负责人 2026-08-25 指示），点击打开判据编辑弹窗
           crit != null ? sectionBlock("c", dgT("section.criteria"), crit,
             !isPlaceholder(crit) && ["ready", "in_progress", "review", "delivered"].includes(status)
-              ? h(CriteriaChecklist, { goalId: props.id, crit, att, onClose: props.onClose })
+              // g-478：判据反馈在「无活执行会话」时回退直发主管会话，故补传 supervisorSession
+              //（与上方 AcceptFeedback 同一来源 props.supervisorSession，见 kanban.js GoalModal props）。
+              ? h(CriteriaChecklist, { goalId: props.id, crit, att, supervisorSession: props.supervisorSession, onClose: props.onClose })
               : null, true,
             h("button", {
               style: { ...S.btnPrimary, fontSize: 11, padding: "1px 6px", marginLeft: 6, verticalAlign: "middle", opacity: 1 },

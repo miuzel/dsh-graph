@@ -813,7 +813,10 @@
       'criteria.feedbackSend': '发送',
       'criteria.feedbackQueued': '✅ 反馈已排队送达执行会话',
       'criteria.feedbackQueuedDepth': '✅ 反馈已排队送达执行会话（当前队列 {n} 条）',
-      'criteria.feedbackNotConnected': '⚠️ 执行会话未接入，反馈无法送达',
+      // g-478：该键语义修订 —— 仅在「执行会话与主管会话都不可达/投递未获正向回执」时使用（原值把
+      // 「该目标当前无执行会话」误报成「未接入」，现已改为如实陈述两条通路都未送达）。
+      'criteria.feedbackNotConnected': '⚠️ 执行会话未接入，且主管会话不可达，反馈未送达',
+      'criteria.feedbackSupervisorDelivered': '✅ 已送达主管会话（该目标当前无执行会话）',
       'criteria.feedbackSendFail': '⚠️ 反馈发送失败：',
 
       // === g-462：Graph 设计哲学弹窗（入口与刷新/记忆并列） ===
@@ -2065,7 +2068,10 @@
       'criteria.feedbackSend': 'Send',
       'criteria.feedbackQueued': '✅ Feedback queued for execution session',
       'criteria.feedbackQueuedDepth': '✅ Feedback queued for execution session ({n} in queue)',
-      'criteria.feedbackNotConnected': '⚠️ Execution session not connected, feedback cannot be delivered',
+      // g-478: meaning revised — used only when neither the execution session nor the supervisor
+      // session is reachable (the old wording misreported "no execution session" as "not connected").
+      'criteria.feedbackNotConnected': '⚠️ Execution session not connected and supervisor session unreachable; feedback was not delivered',
+      'criteria.feedbackSupervisorDelivered': '✅ Delivered to the supervisor session (this goal has no active execution session)',
       'criteria.feedbackSendFail': '⚠️ Feedback send failed: ',
 
       // === g-462: Graph design philosophy modal ===
