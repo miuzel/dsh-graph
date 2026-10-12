@@ -222,6 +222,12 @@ export { resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 // board 载荷含 supervisorSession 字段（project.yaml 的 supervisor.session，g-108），由 host 端点 /api/dsh-graph 下发。
 export { boardPayload, versionGoals, backlogGoals, compareVersions } from "./core/ops.js";
 
+// g-495 返工项 B：把 `helpTopicText` 与点题**章节判定**导出为**测试钩子** —— 负向对照必须把
+// 变异后的 help/usage 文本送进**真实实现**得出裁决，而不是用本地纯谓词自证（同义反复）。
+// 导出的是**同一函数引用**（非副本），故经此入口的裁决与 `graph_help` 运行时逐字同源；
+// 生产代码不消费这两个导出，注册面与行为均不变。
+export { helpTopicText as _helpTopicText, isGraphEngineeringSectionTitle as _isGraphEngineeringSectionTitle };
+
 // g-183 返工 v4：流式上限（防无 header/伪造 Content-Length/chunked 的超大请求先进内存被拒）。
 // JSON/base64 envelope 上限需容纳 50MB 二进制 base64 编码开销（~4/3）+ JSON 键，但拒绝更大。
 export const MAX_ATTACHMENT_JSON_BYTES = Math.ceil(MAX_ATTACHMENT_BYTES * 5 / 3) + 1024 * 1024;
@@ -688,6 +694,14 @@ function localizedPrompt(name, language) {
  *  章节判定（标题含 `dsh-graph` 且含「图工程 / Graph Engineering」），不另立第二套口径。
  *  章节名按 `## ` 切分 ⇒ 资产改标题时必须同步本函数（守卫 core/tests/g493-help-topic.test.ts 钉住）。
  *  `extraTexts` 为可选的**追加查找面**（缺省 `[]` 时行为与单资产版逐字一致）。 */
+
+/** g-495 返工项 B/C：点题章节标题判定 —— **唯一真源**，被 `helpTopicText` 的跨资产查找与
+ *  测试钩子 `_isGraphEngineeringSectionTitle` 共用（不另立第二套口径）。标题须同时含
+ *  `dsh-graph` 与「图工程 / Graph Engineering」。 */
+function isGraphEngineeringSectionTitle(title) {
+  return /dsh-graph/.test(String(title)) && /图工程|Graph Engineering/i.test(String(title));
+}
+
 function helpTopicText(text, topic, extraTexts = []) {
   const src = typeof text === "string" ? text : "";
   const key = String(topic || "").trim().toLowerCase();
@@ -701,12 +715,14 @@ function helpTopicText(text, topic, extraTexts = []) {
   }
   if (graphAlias.includes(key)) {
     // 跨资产：help 正文优先，其次各追加面（usage）。命中即返回，未命中一律 null。
+    // g-495 返工项 C：**help 优先、usage 兜底**是本分支的既定优先级语义（两面都有同形章节时
+    // 返回 help 版本）。该语义由守卫钉住，不留「未定义行为 + 无断言」。
     const faces = [src, ...(Array.isArray(extraTexts) ? extraTexts : [])];
     for (const face of faces) {
       if (typeof face !== "string" || !face) continue;
       for (const section of face.split(/\n(?=## )/)) {
         if (!section.startsWith("## ")) continue;
-        if (/dsh-graph/.test(section.split("\n")[0]) && /图工程|Graph Engineering/i.test(section.split("\n")[0])) {
+        if (isGraphEngineeringSectionTitle(section.split("\n")[0])) {
           return section.trimEnd();
         }
       }
@@ -3453,9 +3469,12 @@ export function apply(ctx, config) {
         // 主题抽取在**渲染前**的资产上做：模块行靠 `{moduleId}` 稳定标记定位，
         // 渲染后该标记已被替换成「开启/关闭」而无法定位 ⇒ 顺序不可颠倒。
         // g-495 返工（裁决·出路 1）：点题段已迁到按需面 `usage.*.md` ⇒ 把 usage 正文作为
-        // **追加查找面**传入（help 正文优先）。usage 读失败不影响其余主题：按「该面缺席」处理。
-        let usageRaw = "";
-        try { usageRaw = localizedPrompt("usage", language); } catch { usageRaw = ""; }
+        // **追加查找面**传入（help 正文优先）。
+        // g-495 返工项 A（**消除 fail-open**）：这里**不得** catch。`localizedPrompt` 在资产缺失/
+        // 不可读时抛错（见 `requirePromptAsset`），若在此吞掉就等价于把「资产不可读」折叠成
+        // 「该面不存在」⇒ `topic=graph_engineering` 会静默返回 `found:false`，把真实故障伪装成
+        // 「没有这个主题」。故让异常**直接上抛**，故障显性可观察（选项 (a)，最小实现）。
+        const usageRaw = localizedPrompt("usage", language);
         const topicText = helpTopicText(raw, topic, [usageRaw]);
         if (topicText === null) return { help: renderHelpModules(raw, switches, language), topic, found: false };
         return { help: renderHelpModules(topicText, switches, language), topic, found: true };

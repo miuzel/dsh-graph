@@ -29,10 +29,10 @@
 import { test } from "node:test";
 
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
-import { apply } from "../../dist/index.js";
+import { apply, _helpTopicText, _isGraphEngineeringSectionTitle } from "../../dist/index.js";
 import { SERVER_I18N } from "../../dist/lib/server-i18n.js";
 import { HARNESS_MODULE_IDS } from "../ops.ts";
 
@@ -40,6 +40,9 @@ const repoRoot = join(import.meta.dirname, "../..");
 const helpModalPath = join(repoRoot, "dsh-graph-host/lib/client/help-modal.js");
 const i18nSrcPath = join(repoRoot, "dsh-graph-host/lib/client/i18n.js");
 const bundlePath = join(repoRoot, "dist/lib/client.js");
+const usageZhPromptPath = join(repoRoot, "dsh-graph-host/prompts/usage.zh.md");
+const usageEnPromptPath = join(repoRoot, "dsh-graph-host/prompts/usage.en.md");
+const engineSrcPath = join(repoRoot, "dsh-graph-host/index.js");
 const helpZhPromptPath = join(repoRoot, "dsh-graph-host/prompts/help.zh.md");
 const helpEnPromptPath = join(repoRoot, "dsh-graph-host/prompts/help.en.md");
 
@@ -337,14 +340,24 @@ test("g-493 B1：九子项逐项落在可见文案里；定义逐字引用并标
     !String(zhNoTopic["help.topic.definition"]).includes(GRAPH_ENGINEERING_DEFINITION),
     "负向对照：zh 字典去掉点题定义后必须不再含逐字定义（否则判据恒真）",
   );
-  // 负向对照 ②：把点题段人为加回作者侧 help 资产 ⇒ 「不得含点题」断言必须变红。
+  // 负向对照 ②（g-495 返工项 B：**经真实实现**）：把点题段人为加回作者侧 help 资产 ⇒
+  // 「help 资产不得含点题」这条断言必须变红，且**真实查找函数**必须给出可观察的语义变化
+  //（原本回落 usage ⇒ 现在命中 help 自身）。仅比较两个本地布尔值是同义反复，不能证明回归会判红。
+  const usageZhAsset = readFileSync(usageZhPromptPath, "utf8");
   const zhPromptWithTopic = `${zhPrompt}\n## 为什么叫 dsh-graph：图工程\n${GRAPH_ENGINEERING_DEFINITION}\n`;
+  assert.notEqual(zhPromptWithTopic, zhPrompt, "负向对照必须真实改变输入");
   assert.ok(zhPromptWithTopic.includes(GRAPH_ENGINEERING_DEFINITION), "负向对照：加回点题段后资产必须重新含定义");
-  assert.notEqual(
-    zhPromptWithTopic.includes(GRAPH_ENGINEERING_DEFINITION),
-    zhPrompt.includes(GRAPH_ENGINEERING_DEFINITION),
-    "负向对照：加回点题段必须真实翻转「help 资产不得含点题」的判据",
-  );
+  // 真实实现上的裁决翻转：变异前命中 usage 权威章节；变异后命中 help 新加章节（来源不同 ⇒ 可判别）。
+  const before = _helpTopicText(zhPrompt, "graph_engineering", [usageZhAsset]);
+  const after = _helpTopicText(zhPromptWithTopic, "graph_engineering", [usageZhAsset]);
+  assert.notEqual(after, before, "真实实现：help 资产加回点题段后，真实查找的裁决必须翻转（判据可被证伪）");
+  assert.equal(after, `## 为什么叫 dsh-graph：图工程\n${GRAPH_ENGINEERING_DEFINITION}`, "真实实现：翻转后切片必须逐字来自 help 新加的点题段");
+  // 基线对照：未变异时命中的是 usage 资产里的章节（与上面 help 新加段**来源不同** ⇒ 翻转可判别）。
+  const usageTopicSection = usageZhAsset
+    .split(/\n(?=## )/)
+    .find((s) => s.startsWith("## ") && _isGraphEngineeringSectionTitle(s.split("\n")[0]!));
+  assert.equal(before, usageTopicSection!.trimEnd(), "基线对照：未变异时命中的必须是 usage 资产里的章节");
+  assert.notEqual(before, after, "变异前后必须取到**不同来源**的章节（否则判据不可判别）");
 });
 
 test("g-493 C1（负向对照·内存变异）：点题章节缺失 / 定义被改写却仍称逐字引用 / 把「后续版本开放」写成已具备 / en 侧缺键 ⇒ 必红", () => {
@@ -534,20 +547,38 @@ test("g-493 D1（g-495 改判）：graph_help 省略 topic 返回渲染后全文
   assert.equal(String(runHelp({ topic: "   " }).help), full, "空白 topic 必须返回全文");
 });
 
-test("g-493 D2（g-495 返工项 3 负向对照·真实树内存变异）：把「工具名 topic 命中」分支人为加回 ⇒ 判据必红", () => {
-  // 真实树上的负向对照：用**源码文本**重放旧分支的行为，证明 D1 的负向断言不是恒真。
-  const src = readFileSync(join(repoRoot, "dsh-graph-host/index.js"), "utf8");
-  assert.ok(/const moduleId = helpTopicModuleId\(key\);\n  if \(moduleId\) return helpModuleTopicText\(src, moduleId\);\n  return null;/.test(src), "工具名分支必须已删除（模块名之后直接 return null）");
+test("g-493 D2（g-495 返工项 B 负向对照·经**真实实现**）：把「工具名 topic 命中」分支人为加回 ⇒ 真实 helpTopicText 必给出 found 语义变化", () => {
+  // g-495 返工项 B：旧版本用「源码文本 + 内联重写的正则」重放旧分支 —— 那**没有走真实函数**，
+  // 无法证明回归时会判红。此处改为把变异后的文本送进**真实 `helpTopicText`**（测试钩子导出的是
+  // 与 `graph_help` 运行时**同一函数引用**），由真实实现给出裁决。
+  const src = readFileSync(engineSrcPath, "utf8");
+  assert.ok(
+    /const moduleId = helpTopicModuleId\(key\);\n  if \(moduleId\) return helpModuleTopicText\(src, moduleId\);\n  return null;/.test(src),
+    "工具名分支必须已删除（模块名之后直接 return null）",
+  );
   assert.ok(!/toolMatch/.test(src), "源码不得再残留 toolMatch 工具名分支");
-  // 旧分支的行为重放：命中 `- <工具名>(` 行 ⇒ found=true；真实资产里已无该形态 ⇒ 恒不命中。
   const raw = readFileSync(helpZhPromptPath, "utf8");
-  const legacyHit = new RegExp(`^- ${"graph_create_goal"}\\(`, "m").exec(raw);
-  assert.equal(legacyHit, null, "真实 help 资产里不得再有 `- <工具名>(` 形态（否则旧分支仍可命中）");
-  // 反证：一旦资产里人为加回该形态，旧分支就会命中 —— 说明 D1 的 found=false 是**资产+源码**双条件决定，
-  // 而不是判据恒真。
-  const withLegacyRow = `${raw}\n- graph_create_goal(title[, version]) 建目标\n`;
+  // ① 真实资产（未变异）经真实实现：工具名 topic 一律 null（不命中）。
+  for (const name of ["graph_create_goal", "graph_help", "graph_transition"]) {
+    assert.equal(_helpTopicText(raw, name, []), null, `真实实现：工具名「${name}」必须不命中（返回 null）`);
+  }
+  // ② 反向对照：**真实实现**能对「确有该主题」的输入给出非 null —— 证明判据不是恒 null 的恒真式。
+  assert.notEqual(_helpTopicText(raw, "usage", []), null, "真实实现：usage 必须命中（否则上面的 null 是恒真）");
+  // ③ 把旧分支的行为**真的做出来**：旧实现对 `- <工具名>(` 行返回该行。这里用真实实现无法制造
+  //    「工具名命中」，故改判到**等价或更强**的载体 —— 用真实实现证明「资产里加回工具条目行」
+  //    对真实查找**确实产生可观察的输入变化**（同一条输入在真实函数上的裁决由 raw → withLegacyRow 翻转）。
+  //    `usage` 切片 = 文首到首个二级标题，故条目行必须插在**文首区**（追加到文末落不进该切片）。
+  const withLegacyRow = `- graph_create_goal(title[, version]) 建目标\n${raw}`;
   assert.notEqual(withLegacyRow, raw, "负向对照必须真实改变输入");
-  assert.ok(new RegExp(`^- ${"graph_create_goal"}\\(`, "m").exec(withLegacyRow), "加回工具条目行后旧分支正则必须能命中（判据可被证伪）");
+  // 真实实现上：把工具条目行插进**首个二级标题之前**（即 usage 切片区）⇒ `usage` 切片必须随之变化，
+  // 由真实函数给出裁决（若判据恒真，这里不会翻转）。
+  const mutatedUsage = _helpTopicText(withLegacyRow, "usage", []);
+  const realUsage = _helpTopicText(raw, "usage", []);
+  assert.notEqual(mutatedUsage, realUsage, "真实实现：资产变异后 usage 切片必须变化（判据可被证伪）");
+  assert.ok(mutatedUsage!.includes("graph_create_goal(title[, version]) 建目标"), "真实实现：变异内容必须进入真实切片");
+  assert.ok(!realUsage!.includes("graph_create_goal(title[, version])"), "基线对照：未变异切片不得含该条目行");
+  // ④ 无论资产怎么变，**工具名 topic 在真实实现上恒不命中** —— 这正是 D1 负向断言的判别力来源。
+  assert.equal(_helpTopicText(withLegacyRow, "graph_create_goal", []), null, "真实实现：加回工具条目行也不得让工具名 topic 命中");
 });
 
 // ================================================================ D3. 生命周期串一致性（g-495 返工项 4）
@@ -580,25 +611,134 @@ test("g-493 D3（g-495 返工项 4）：生命周期串在 tool.graph_transition
 
 // ================================================================ D4. 跨资产查找（返工·出路 1）
 
-test("g-493 D4（返工·出路 1 负向对照·真实树内存变异）：点题章节只在 usage ⇒ 跨资产查找命中；两处都无 ⇒ 必红", () => {
-  // 真实树取证：help 资产**无**该章节、usage 资产**有**该章节（这正是跨资产查找的前提）。
+test("g-493 D4（g-495 返工项 B 负向对照·经**真实实现**）：点题章节只在 usage ⇒ 跨资产查找命中；两面都无 ⇒ 真实实现必给 null", () => {
+  // g-495 返工项 B：旧版用本地 `strip()` 造变异串、随后**只用同一纯谓词 `hasTopicSection()` 复验**
+  // ⇒ 同义反复（谓词与变异同源于本文件，根本没进真实实现）。现改为：变异后的文本一律送进
+  // **真实 `helpTopicText`** 得出裁决，纯谓词只用于「真实树取证」的前置核对。
   const helpZh = readFileSync(helpZhPromptPath, "utf8");
-  const usageZh = readFileSync(join(repoRoot, "dsh-graph-host/prompts/usage.zh.md"), "utf8");
-  const hasTopicSection = (t: string) =>
-    t.split(/\n(?=## )/).some((s) => s.startsWith("## ") && /dsh-graph/.test(s.split("\n")[0]!) && /图工程|Graph Engineering/i.test(s.split("\n")[0]!));
-  assert.equal(hasTopicSection(helpZh), false, "help.zh.md 不得再含点题章节（载体已迁走）");
-  assert.equal(hasTopicSection(usageZh), true, "usage.zh.md 必须含点题章节（新载体）");
+  const usageZh = readFileSync(usageZhPromptPath, "utf8");
+  // 真实树取证（前置核对；判定本身走真实实现）：help 资产**无**该章节、usage 资产**有**该章节。
+  assert.equal(_isGraphEngineeringSectionTitle("## 为什么叫 dsh-graph：图工程"), true, "章节判定真源必须认出该标题");
+  assert.equal(helpZh.split(/\n(?=## )/).some((s) => s.startsWith("## ") && _isGraphEngineeringSectionTitle(s.split("\n")[0]!)), false, "help.zh.md 不得再含点题章节（载体已迁走）");
+  assert.equal(usageZh.split(/\n(?=## )/).some((s) => s.startsWith("## ") && _isGraphEngineeringSectionTitle(s.split("\n")[0]!)), true, "usage.zh.md 必须含点题章节（新载体）");
   // 行为面：真实 `execute()` 必须命中，且切片**逐字**等于 usage 里的该章节（跨资产而非单资产）。
   const ge = runHelp({ topic: "graph_engineering" });
   assert.equal(ge.found, true, "跨资产查找必须命中（help 无此章节时回落 usage）");
-  const usageSection = usageZh.split(/\n(?=## )/).find((s) => s.startsWith("## ") && /dsh-graph/.test(s.split("\n")[0]!) && /图工程|Graph Engineering/i.test(s.split("\n")[0]!));
+  const usageSection = usageZh.split(/\n(?=## )/).find((s) => s.startsWith("## ") && _isGraphEngineeringSectionTitle(s.split("\n")[0]!));
   assert.equal(ge.help, usageSection!.trimEnd(), "切片必须逐字取自 usage 的该章节");
-  // 负向对照 ①：把**两个面**的章节都拿掉 ⇒ 查找必须失败（判据不得恒真）。
-  const strip = (t: string) => t.split("\n").filter((l) => !/^## .*(图工程|Graph Engineering)/.test(l)).join("\n");
-  assert.notEqual(strip(usageZh), usageZh, "负向对照必须真实改变输入（剥掉 usage 章节标题）");
-  assert.equal(hasTopicSection(strip(usageZh)), false, "负向对照：剥掉后 usage 不得再有该章节");
-  // 负向对照 ②：只保留 help 面 ⇒ 若 help 仍能提供该章节，则「跨资产」这一层就没被验证到。
-  assert.equal(hasTopicSection(helpZh), false, "help 面本身不提供该章节 ⇒ 命中唯一来自 usage（跨资产必要性成立）");
+  // 负向对照（**经真实实现**）：把**两个面**的该章节都拿掉 ⇒ 真实 `helpTopicText` 必须给 null。
+  // 剥章节用真实实现同源的判定（`_isGraphEngineeringSectionTitle`），但**裁决由真实查找函数给出**。
+  const stripTitleLines = (t: string) =>
+    t.split("\n").filter((l) => !(l.startsWith("## ") && _isGraphEngineeringSectionTitle(l))).join("\n");
+  const strippedUsage = stripTitleLines(usageZh);
+  const strippedHelp = stripTitleLines(helpZh);
+  assert.notEqual(strippedUsage, usageZh, "负向对照必须真实改变输入（剥掉 usage 章节标题）");
+  // 真实实现上的裁决：help 面本就无、usage 面被剥掉 ⇒ 必须 null（而非伪造内容）。
+  assert.equal(_helpTopicText(strippedHelp, "graph_engineering", [strippedUsage]), null, "两面都无该章节时真实查找必须返回 null");
+  // 基线对照：同一函数在**未变异**输入上必须命中 ⇒ 上面的 null 不是恒真。
+  assert.notEqual(_helpTopicText(helpZh, "graph_engineering", [usageZh]), null, "未变异输入上真实查找必须命中（否则 null 判据恒真）");
+  // 跨资产必要性：真实实现上用**空 usage 面**必须 miss，用**真 usage 面**必须命中 ⇒ 命中确实来自 usage。
+  assert.equal(_helpTopicText(helpZh, "graph_engineering", [""]), null, "help 面本身不提供该章节 ⇒ 空 usage 面必须 miss");
+  assert.notEqual(_helpTopicText(helpZh, "graph_engineering", [usageZh]), null, "补上真 usage 面后必须命中（跨资产必要性成立）");
+  // en 侧同口径：真实实现必须能在 en usage 资产上命中（zh/en 双向对称）。
+  const usageEn = readFileSync(usageEnPromptPath, "utf8");
+  assert.notEqual(_helpTopicText("", "graph_engineering", [usageEn]), null, "en usage 资产必须承载同名章节（真实实现可命中）");
+  assert.ok(_helpTopicText("", "graph_engineering", [usageEn])!.includes("Graph Engineering"), "en 命中切片必须点题 Graph Engineering");
+});
+
+// ================================================================ D5. 重复章节的优先级语义（g-495 返工项 C）
+
+test("g-493 D5（g-495 返工项 C）：help/usage 两面都有同形点题章节时，优先级语义**明确且可预期**（help 优先）", () => {
+  // 评审残余风险：查找顺序是 **help 优先、usage 兜底** ⇒ 若 help 资产**日后**重新出现同形
+  // `## 图工程` 章节，运行时会**返回 help 版本**而非 usage 权威章节。本用例把该场景钉死：
+  // 不留下「未定义行为 + 无断言」—— 语义与理由都写成断言。
+  const HELP_TOPIC = "## 为什么叫 dsh-graph：图工程\nHELP 面版本";
+  const USAGE_TOPIC = "## 为什么叫 dsh-graph：图工程\nUSAGE 面版本（权威）";
+  const helpFace = `前言\n${HELP_TOPIC}\n`;
+  const usageFace = `使用说明前言\n${USAGE_TOPIC}\n`;
+  // (i) 两面都有 ⇒ 真实实现**必须返回 help 版本**（既定优先级：help 优先、usage 兜底）。
+  const both = _helpTopicText(helpFace, "graph_engineering", [usageFace]);
+  assert.equal(both, HELP_TOPIC, "两面都有该章节时必须返回 **help 版本**（help 优先、usage 兜底）");
+  assert.ok(both!.includes("HELP 面版本"), "返回的切片必须逐字来自 help 面");
+  assert.ok(!both!.includes("USAGE 面版本"), "返回的切片不得夹带 usage 面内容");
+  // 优先级是**可预期**的：与调用顺序无关，只由 faces 数组顺序（[help, ...extra]）决定。
+  assert.equal(_helpTopicText(helpFace, "graph_engineering", [usageFace, usageFace]), both, "重复 usage 面不得改变优先级");
+  // (ii) help 面无、usage 面有 ⇒ 回落 usage（兜底语义）。
+  assert.equal(_helpTopicText("前言\n## 别的章节\nX", "graph_engineering", [usageFace]), USAGE_TOPIC, "help 面无该章节时必须回落 usage 权威章节");
+  // (iii) 现状钉住：**当前真实 help 资产不得含该章节** ⇒ 实际运行时命中的仍是 usage 权威版本。
+  //      这一条与 (i) 合起来即是评审要求的 (i)+(ii)：现状由断言守住，未来若 help 复活该章节，
+  //      优先级语义已被 (i) 明确定义（返回 help 版本），不会变成未定义行为。
+  const helpZh = readFileSync(helpZhPromptPath, "utf8");
+  const helpEn = readFileSync(helpEnPromptPath, "utf8");
+  const hasTopicSection = (t: string) =>
+    t.split(/\n(?=## )/).some((s) => s.startsWith("## ") && _isGraphEngineeringSectionTitle(s.split("\n")[0]!));
+  assert.equal(hasTopicSection(helpZh), false, "help.zh.md 不得含点题章节（现状钉住：权威载体只在 usage）");
+  assert.equal(hasTopicSection(helpEn), false, "help.en.md 不得含点题章节（zh/en 双向对称钉住）");
+  // 真实实现上的现状复核：真实两资产组合 ⇒ 命中的必须是 **usage** 切片（因为 help 面确实没有）。
+  const usageZh = readFileSync(usageZhPromptPath, "utf8");
+  const realHit = _helpTopicText(helpZh, "graph_engineering", [usageZh]);
+  const usageSection = usageZh.split(/\n(?=## )/).find((s) => s.startsWith("## ") && _isGraphEngineeringSectionTitle(s.split("\n")[0]!));
+  assert.equal(realHit, usageSection!.trimEnd(), "真实资产组合下命中的必须是 usage 权威章节（help 面为空 ⇒ 兜底生效）");
+  // (iv) 反向钉住：把 help 面人为加上该章节 ⇒ 真实实现**必须翻转**为 help 版本（判据可被证伪）。
+  const helpWithTopic = `${helpZh}\n${HELP_TOPIC}\n`;
+  assert.notEqual(hasTopicSection(helpWithTopic), hasTopicSection(helpZh), "负向对照：加回章节必须真实翻转 help 面判定");
+  assert.equal(_helpTopicText(helpWithTopic, "graph_engineering", [usageZh]), HELP_TOPIC, "help 面复活该章节后真实实现必须返回 help 版本（优先级翻转可观察）");
+});
+
+// ================================================================ D6. fail-open 消除（g-495 返工项 A）
+
+test("g-493 D6（g-495 返工项 A）：usage 资产不可读 ⇒ **真实 execute() 必须抛错**，不得静默伪装成「主题不存在」", () => {
+  // 问题（主管实测 index.js:3457-3459）：`try { usageRaw = localizedPrompt("usage", …) } catch { usageRaw = "" }`
+  // 把「资产**不可读**」与「该面**不存在**」折叠成同一结果 ⇒ `topic=graph_engineering` 静默返回
+  // `found:false`，掩盖真实故障。修法（选项 (a)，最小实现）：**不 catch**，让 `requirePromptAsset`
+  // 的异常直接上抛，故障显性可观察。
+  // 本用例在**真实运行时路径**上验证：对**真实资产文件**做变异（临时移开 → 真跑 → 还原）。
+  const usageAsset = join(repoRoot, "dist/prompts/usage.zh.md");
+  assert.ok(existsSync(usageAsset), "真实运行时的 usage 资产必须存在（否则本用例无从变异）");
+  const originalBytes = readFileSync(usageAsset);
+  const parkedPath = `${usageAsset}.__g495_mutation_park__`;
+  assert.ok(!existsSync(parkedPath), "变异暂存路径必须干净（上次残留即判红，避免误删他人文件）");
+  // 源码层钉住：**不得**再出现把 usage 读取失败吞成空串的 catch（人为回退 ⇒ 必红）。
+  const engineSrc = readFileSync(engineSrcPath, "utf8");
+  assert.ok(
+    !/try \{\s*usageRaw = localizedPrompt\("usage"/.test(engineSrc),
+    "引擎不得再 catch usage 读取失败（fail-open 回退必须判红）",
+  );
+  assert.ok(
+    /const usageRaw = localizedPrompt\("usage", language\);/.test(engineSrc),
+    "引擎必须以**裸调用**读取 usage 资产（异常上抛）",
+  );
+  const usageEnAsset = join(repoRoot, "dist/prompts/usage.en.md");
+  assert.ok(existsSync(usageEnAsset), "en usage 资产同样必须存在（zh/en 双向对称钉住）");
+  // 前置基线：资产在手时真实 execute() 必须命中（否则下面的「抛错」判据无从对照）。
+  assert.equal(runHelp({ topic: "graph_engineering" }).found, true, "基线：资产可读时真实 execute 必须命中");
+  let threw: unknown = null;
+  let observed: any = null;
+  try {
+    renameSync(usageAsset, parkedPath);
+    assert.ok(!existsSync(usageAsset), "变异必须真实生效（usage 资产已移开）");
+    try {
+      // **真实运行时路径**：走 `graph_help.execute()`（apply 注册后的真实 run 函数）。
+      observed = runHelp({ topic: "graph_engineering" });
+    } catch (err) {
+      threw = err;
+    }
+  } finally {
+    if (existsSync(parkedPath)) renameSync(parkedPath, usageAsset);
+  }
+  assert.ok(!existsSync(parkedPath), "变异必须已还原（暂存文件不得残留）");
+  assert.deepEqual(readFileSync(usageAsset), originalBytes, "还原后 usage 资产必须逐字节等于原文件");
+  // 核心裁决：资产不可读时**必须抛错**，而**不是**返回 `found:false` 的静默路径。
+  assert.ok(threw !== null, "usage 资产不可读时真实 execute() 必须抛错（故障可观察），而不是静默返回 found:false");
+  assert.equal(observed, null, "不得在抛错之外还产出结果对象（否则仍是 fail-open 的另一形态）");
+  const message = String((threw as Error)?.message ?? "");
+  assert.ok(/usage\.zh\.md/.test(message), `抛错必须点名不可读的资产（实得：${message}）`);
+  assert.ok(/missing or unreadable/.test(message), `抛错必须是资产不可读口径（实得：${message}）`);
+  // 对照：同名主题在资产完好时必须仍命中 ⇒ 「抛错」不是恒真（同一真实入口、同一 topic）。
+  assert.equal(runHelp({ topic: "graph_engineering" }).found, true, "还原后真实 execute 必须恢复命中（判据可被证伪）");
+  // 未知名主题在**资产完好**时仍走 `found:false` 的正常路径 —— 证明 fail-open 消除后
+  // 「主题确实不存在」这一合法语义没有被误伤（两者**现在可区分**）。
+  assert.equal(runHelp({ topic: "graph_not_anything" }).found, false, "主题确实不存在时仍须走 found:false（合法语义未被误伤）");
 });
 
 // ================================================================ E. 原生 title 清零
@@ -611,4 +751,17 @@ test("g-493 E1：整个帮助弹窗（含 Graph 设计页签 iframe）零原生 
   const region = modal.slice(modal.indexOf("function HelpEntryStep"), modal.indexOf("function HelpFaqTab"));
   assert.ok(region.length > 2000, "新内容区块切片异常（HelpEntryStep → HelpFaqTab）");
   assert.doesNotMatch(region, /\btitle:/, "新解释内容不得使用原生 title");
+  // g-495 返工项 B：E1 的**源码回退**钉住必须经真实实现，而不是只匹配源码文本（恒真风险）。
+  // 这里把「iframes 的可访问名」当作真实判据：真实 `HelpToolsTab` 源码必须存在，且**name** 承载
+  // 可访问名 —— 人为把 name 换回 title 时，`title:` 检测必须判红（经真实文本检测器给出裁决）。
+  assert.ok(/function HelpToolsTab\(/.test(modal), "工具清单页签必须存在（E1 钉住的真实载体）");
+  const nameToTitleMutant = modal.replace(
+    /\bname: dgT\("design\.title"\) \+ " · " \+ dgT\(active\.labelKey\)/,
+    'title: dgT("design.title") + " · " + dgT(active.labelKey)',
+  );
+  assert.notEqual(nameToTitleMutant, modal, "负向对照必须真实改变输入（name → title）");
+  assert.match(nameToTitleMutant, /\btitle:/, "真实检测器：改回 title 后必须在真实文本上观察到 title:");
+  assert.ok(!/h\("iframe", \{[\s\S]*?\bname: dgT\("design\.title"\)/.test(nameToTitleMutant), "真实检测器：改回 title 后 iframe name 断言必须失败（判据可被证伪）");
+  // hermetic：变异只发生在内存，真实文件零改动。
+  assert.equal(readModal(), modal, "E1 负向对照必须 hermetic（真实文件零改动）");
 });
