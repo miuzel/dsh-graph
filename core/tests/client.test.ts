@@ -215,14 +215,55 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.doesNotMatch(modal, /tabPanel\("about", \[/);
   assert.match(modal, /const SETTINGS_TAB_KEYS = \["executor", "review", "ui", "modules", "advanced"\]/);
   assert.match(modal, /\.\.\.SETTINGS_TAB_KEYS\.map\(\(k\) => tabButton\(k\)\)/);
-  // g-488：说明性文字 tooltip 化的唯一入口——`(?)` 必须键盘可达（tabIndex=0）且语义可读
-  // （aria-label 与 title 同为说明全文）。
-  assert.match(modal, /const settingsHintIcon = \(text\) => h\("span", \{/);
-  assert.match(modal, /role: "img",\n\s+tabIndex: 0,\n\s+"aria-label": text,\n\s+title: text,/);
+  // g-490：`(?)` 说明由**原生 title** 改为**自绘浮层**。原「title 属性」正向断言换成**逐条等价**的
+  // 浮层契约断言（悬停即时显示 / 点击·触屏切换 / 键盘可达 / 读屏语义 / 至多一个 / 不被裁剪 /
+  // 边界翻转 / 四条关闭路径），并补**负向**断言（回退 title、删浮层即必红）。断言只增不减。
+  assert.match(modal, /const settingsHintIdFor = \(text\) => \{/);
+  assert.match(modal, /const settingsHintIcon = \(text\) => \{/);
   assert.match(modal, /className: "dg-settings-hint"/);
+  assert.match(modal, /role: "img",\n\s+tabIndex: 0,\n\s+"aria-label": text,\n\s+"aria-describedby": open \? tipId : undefined,/);
+  // 悬停即时显示 / 离开关闭
+  assert.match(modal, /onMouseEnter: \(e\) => \{ hintLastEnterRef\.current = Date\.now\(\); openHintAt\(tipId, e\.currentTarget\); \}/);
+  assert.match(modal, /onMouseLeave: \(\) => closeHintIf\(tipId\)/);
+  // 点击 / 触屏切换（含 emulated mouseenter→click 抑制）
+  assert.match(modal, /onClick: \(e\) => \{\n\s+e\.stopPropagation\(\);/);
+  assert.match(modal, /if \(open && Date\.now\(\) - \(hintLastEnterRef\.current \|\| 0\) < 700\) return;/);
+  // 键盘：Tab 聚焦即显示；Esc 关闭
+  assert.match(modal, /onFocus: \(e\) => openHintAt\(tipId, e\.currentTarget\)/);
+  assert.match(modal, /onBlur: \(\) => closeHintIf\(tipId\)/);
+  assert.match(modal, /onKeyDown: \(e\) => \{ if \(e\.key === "Escape"\) setOpenHint\(null\); \}/);
+  // 语义关联：浮层 role="tooltip" + 稳定 id；被 aria-describedby 引用
+  assert.match(modal, /role: "tooltip",\n\s+id: tipId,/);
+  assert.match(modal, /aria-describedby": open \? tipId : undefined/);
+  // 至多一个浮层：唯一 `openHint` 状态（同一时刻只能有一个 id）
+  assert.match(modal, /const \[openHint, setOpenHint\] = React\.useState\(null\)/);
+  // 不被弹窗裁剪：fixed 定位 + 触发器矩形 + 视口边界翻转
+  assert.match(modal, /position: "fixed", zIndex: 100001, left: geom \? geom\.left : 8/);
+  assert.match(modal, /const above = geom \? \(geom\.top > 180 \|\| vh === 0\) : true;/);
+  // 关闭路径：浮层外点击 / 滚动
+  assert.match(modal, /t\.closest\("\.dg-settings-tip"\)/);
+  assert.match(modal, /window\.addEventListener\("scroll", onScroll, true\)/);
+  // 负向（回退即必红）：`(?)` 构造点与整份 modal **都不得**再输出原生 `title` 说明。
+  const hintFnStart = modal.indexOf("const settingsHintIcon = (text) => {");
+  const hintFnEnd = modal.indexOf("React.useEffect(", hintFnStart);
+  assert.ok(hintFnStart > 0 && hintFnEnd > hintFnStart, "必须能定位 settingsHintIcon 函数体");
+  const hintFnSrc = modal.slice(hintFnStart, hintFnEnd);
+  assert.doesNotMatch(hintFnSrc, /\btitle:/, "`(?)` 浮层构造点不得回退原生 title");
+  assert.doesNotMatch(modal, /"aria-label": text,\n\s+title: text,/, "旧的 aria-label+title 同文锚点必须消失");
+  assert.doesNotMatch(hintFnSrc, /createPortal/, "不引入 portal（不需要 ReactDOM 依赖即可不裁剪）");
   // g-488：六键自动化**逐键**说明（每键一条，讲清「管什么 + human/ai 含义」）
   assert.match(modal, /settingsHintIcon\(dgT\(AUTOMATION_HINT_KEYS\[k\]\)\)/);
   assert.match(modal, /const AUTOMATION_HINT_KEYS = \{/);
+  // g-490（判据 6，负责人 2026-10-12 裁决「诚实口径、不编默认值」）：六键未配置时的显示口径**只能**
+  // 来自服务端下发的 `automation_unset_scope`（口径来源引用表，**不是**解析默认值）：
+  // 两键可显示「默认：<该 gate 既有要求>」但必须同屏标注来源；其余四键唯一显示「未配置：保持既有指导」。
+  assert.match(modal, /dgT\("settings\.automationDefaultPrefix"\) \+ unsetScope\.gate_requires/);
+  assert.match(modal, /const automationUnsetScope = form\.automation_unset_scope \?\? \{\}/);
+  assert.match(modal, /automationOptions\(auto\[k\], automationUnsetScope\[k\] \?\? null\)/);
+  assert.match(modal, /dgT\("settings\.automationUnsetKeep"\)/, "无 gate 范围的键必须有「未配置：保持既有指导」文案");
+  assert.match(modal, /automationUnsetScope\[k\] \? automationUnsetScopeNote\(automationUnsetScope\[k\]\) : null/, "出现具体 human/ai 时必须同屏渲染口径来源标注");
+  assert.match(modal, /dgT\("settings\.automationDefaultScopeNotePrefix"\)/, "口径来源标注必须走 i18n（可本地化、可审计）");
+  assert.doesNotMatch(modal, /automation_defaults|AUTOMATION_DEFAULTS/, "旧的「解析默认值」命名必须从客户端彻底消失");
   // g-488：四项默认值键只从界面移除，配置读兼容（归一/稀疏 patch 叶子清单）必须保留
   assert.doesNotMatch(modal, /set\(\["defaults", "review", "reviewer"\]/);
   assert.doesNotMatch(modal, /set\(\["defaults", "pk", "lanes"\]/);
@@ -251,9 +292,79 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.ok((modal.match(/copyText\(configFile\)/g) || []).length >= 2, "打开回退 + 复制按钮均应复制绝对路径");
   assert.match(modal, /dgT\("settings\.projectYaml"\)/);
   assert.match(modal, /title: dgT\("settings\.openConfigTooltip"\)/);
-  assert.match(modal, /title: dgT\("settings\.copyProjectPath"\)/);
+  // 改判 2（负责人 2026-10-12 批 2）：「不要用 title……延时和触屏不友好」⇒ 路径**不得**再挂原生
+  // title（触屏无 hover ⇒ 等于不可达），title 回到**不含路径的短形式**（与「打开」同形）；
+  // 全文改由该行 `(?)` 浮层内另起一行承载（正向锚点在下方 editHint 折叠块内）。
+  assert.match(modal, /title: dgT\("settings\.copyProjectPath"\),/, "复制路径按钮 title 必须是不含路径的短形式");
+  assert.doesNotMatch(modal, /title: dgT\("settings\.copyProjectPath"\) \+ "：" \+ configFile/, "绝对路径不得再挂原生 title（触屏不可达 ⇒ 回退即红）");
   assert.match(modal, /\}, dgT\("tab\.openFile"\)\)/);
   assert.match(modal, /\}, dgT\("tab\.copyPath"\)\)/);
+  // g-490（判据 7）：project.yaml 行从**页脚**迁到**标题栏右侧（关闭按钮左边）**——位置断言 +
+  // 「页脚不得留第二份」负向断言（双份即红）；窄宽度保护（flexWrap + 关闭按钮让位）。
+  // 改判（负责人 2026-10-12 现场反馈）：绝对路径**不再平铺**（「反正可以点击复制」）⇒ 旧
+  // 「break-all 长路径折行」断言改为**负向**（不得回退平铺形态）+ 正向（全文经该行 `(?)` 浮层可达，
+  // 见下方 editHint 折叠块；改判 2 起不再经按钮 title）。
+  assert.doesNotMatch(modal, /wordBreak: "break-all", minWidth: 0 \}/, "绝对路径不得再平铺正文（负责人反馈：可点击复制即可；回退平铺即红）");
+  assert.equal(
+    (modal.match(/className: "dg-settings-configfile"/g) || []).length,
+    1,
+    "project.yaml 行必须恰好一处（迁移而非复制）",
+  );
+  const titleBarIdx = modal.indexOf('{ ...S.modalH, marginBottom: 0, flex: "0 0 auto" } }, dgT("settings.title")');
+  const cfgRowIdx = modal.indexOf("projectYamlRow)");
+  assert.ok(titleBarIdx > 0 && cfgRowIdx > titleBarIdx, "标题栏 = 标题 + 右端 project.yaml 行（关闭按钮左侧）");
+  // g-490（判据 7 扩写 + 改判 2）：editHint 说明由「标题下方常驻一行」**折叠进该行内的 `(?)`** ——
+  // 正向锚点（恰好一处、经唯一构造点 `settingsHintIcon` 承载）+ 负向锚点（常驻平铺形状必须消失）。
+  // 改判 2 起该调用带**第二段**（`"\n" + settings.currentPath + configFile`：浮层内另起一行的路径全文）
+  // ⇒ 锚点由「整调用字面量」放宽为「调用前缀」，同时新增**路径必须在浮层内**的正向锚点（断言只增不减）。
+  assert.equal(
+    (modal.match(/settingsHintIcon\(dgT\("settings\.editHint"\)/g) || []).length,
+    1,
+    "editHint 必须恰好经 `(?)` 承载一次（零丢失且不重复）",
+  );
+  assert.match(
+    modal,
+    /settingsHintIcon\(dgT\("settings\.editHint"\) \+ "\\n" \+ dgT\("settings\.currentPath"\) \+ configFile\)/,
+    "绝对路径全文必须在本行 `(?)` 浮层内另起一行（改判 2：不得平铺正文、也不得只挂原生 title）",
+  );
+  assert.doesNotMatch(modal, /h\("div", \{ style: S\.meta \}, dgT\("settings\.editHint"\)\)/, "editHint 不得再作为常驻平铺行渲染（回退即红）");
+  assert.doesNotMatch(modal, /,\s*dgT\("settings\.editHint"\)\)/, "editHint 不得作为 h(...) 子节点实参常驻正文（须仅在 `(?)` 浮层内）");
+  assert.doesNotMatch(modal, /[?:]\s*dgT\("settings\.editHint"\)/, "editHint 不得作为三元分支常驻正文（须仅在 `(?)` 浮层内）");
+  const editHintRowIdx = modal.indexOf("const projectYamlRow = configFile");
+  const editHintRowEndIdx = modal.indexOf(": null;", editHintRowIdx);
+  const editHintIconIdx = modal.indexOf('settingsHintIcon(dgT("settings.editHint")');
+  assert.ok(
+    editHintRowIdx > 0 && editHintRowEndIdx > editHintRowIdx && editHintIconIdx > editHintRowIdx && editHintIconIdx < editHintRowEndIdx,
+    "editHint 的 `(?)` 必须挂在 project.yaml 行内（该行已含 打开/复制路径）",
+  );
+  // g-490（判据 7 扩写）：目录来源长句（catalogReady）同样折叠进「执行模式」标签右侧 `(?)`，且**状态门控**
+  // （非就绪态不渲染该 `(?)`，加载中/不可用读数仍留正文）——负向：改回常驻平铺即红。
+  assert.equal(
+    (modal.match(/settingsHintIcon\(dgT\("settings\.catalogReady"\)\)/g) || []).length,
+    1,
+    "目录就绪说明必须恰好经 `(?)` 承载一次",
+  );
+  assert.match(modal, /catReady \? settingsHintIcon\(dgT\("settings\.catalogReady"\)\) : null/, "目录就绪说明的 `(?)` 必须状态门控（仅就绪态渲染）");
+  assert.doesNotMatch(modal, /[?:]\s*dgT\("settings\.catalogReady"\)/, "目录就绪说明不得再平铺正文（回退即红）");
+  assert.match(modal, /catalog\.status === "loading" \? dgT\("settings\.catalogLoadingMsg"\) : dgT\("settings\.catalogUnavailableMsg"\)/, "瞬态/降级读数仍留正文（一眼可见）");
+  assert.match(modal, /gap: 8, flexWrap: "wrap", paddingRight: 34 \}/, "标题栏为绝对定位的关闭按钮留出 34px");
+  assert.match(modal, /justifyContent: "flex-end", marginLeft: "auto", minWidth: 0 \}/, "配置行顶到右端且可收缩（窄宽度不撑破）");
+  // 页脚第二份已删除：页脚行之后不得再出现 projectYaml 行（负向：搬回去/留双份即红）
+  const footerIdx = modal.indexOf('h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: requestClose }, dgT("settings.closeBtn"))');
+  assert.ok(footerIdx > 0 && footerIdx > cfgRowIdx, "页脚关闭按钮行在标题栏之后");
+  assert.doesNotMatch(
+    modal.slice(footerIdx),
+    /settings\.projectYaml/,
+    "页脚不得再有 project.yaml 行（信息零丢失但不得双份）",
+  );
+  // g-490（判据 6，改判后）：引擎**口径来源引用表**单一真源 + 设置接口下发（客户端只消费，不留副本）；
+  // 该表**不是**解析默认值（六键在 schema 里 nullable 且无 default），故不得再出现「默认值」命名。
+  assert.match(host, /const AUTOMATION_UNSET_SCOPE = \{/);
+  assert.match(host, /unset_scope: AUTOMATION_UNSET_SCOPE,/);
+  assert.match(host, /automation_unset_scope: AUTOMATION_UNSET_SCOPE/);
+  assert.doesNotMatch(host, /AUTOMATION_DEFAULTS|automation_defaults/, "「解析默认值」命名必须整体消失（含 schema_hints 与两个 settings 响应）");
+  assert.doesNotMatch(modal, /scope_planning: "human"/, "客户端不得硬编码键级 human/ai 副本（必须来自服务端）");
+  assert.doesNotMatch(modal, /AUTOMATION_DEFAULTS|automation_defaults/, "客户端不得再消费「解析默认值」字段");
   const bundle = readFileSync(join(process.cwd(), "dist/lib/client.js"), "utf8");
   assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
   assert.match(bundle, /function SettingsModal/);

@@ -332,21 +332,30 @@
     }
 
     // ===== g-488：说明性文字 tooltip 化（标题行只留主体）=====
-    // 小标题右侧的 `(?)` 图标：说明性文字从正文搬进 tooltip（复用既有 `title:` 用法，纯移动、不删改），
-    // 图标**键盘可达**（tabIndex=0，可 Tab 聚焦）且**语义可读**（aria-label 与 title 同为说明全文，
-    // role="img" 保证读屏把它当有名字的元素播报，而不是无意义的 "(?)"）。
-    // 分界（柱石）：进 tooltip 的只有**静态说明**（这个控件/小节是什么、怎么用、作用范围）；
+    // 小标题右侧的 `(?)` 图标：说明性文字从正文搬进 `(?)` 承载层。
+    // ===== g-490：承载层由**原生 `title`** 改为**自绘浮层**（负责人原话：「不要用title，用点击或
+    // hover后显示的类title浮层显示。title的延时和触屏不友好不适合这个场景」）：
+    //   · hover（mouseenter）即时显示（无原生 title 的 ~1s 延时）、离开关闭；
+    //   · 点击/触摸可**切换**显示与关闭（触屏是重点）；
+    //   · 键盘 Tab 聚焦（focus）即可见；
+    //   · Esc / 点击浮层外 / 失焦（blur）/ 滚动 关闭；
+    //   · 同一时刻**至多一个**浮层（唯一 `openHint` 状态）；
+    //   · 浮层 `position: fixed` + 触发器矩形定位 + 视口边界翻转 ⇒ **不被弹窗的
+    //     `overflowY:auto` / `maxHeight` 裁剪**（fixed 盒子不参与祖先 overflow 裁剪）；
+    //   · **保留 `aria-label`**（说明全文＝可读名，说明信息零丢失）并建立语义关联：
+    //     浮层 `role="tooltip"` + 稳定 id，触发器在打开时挂 `aria-describedby`；
+    //     浮层自身 `aria-hidden="true"` ⇒ 不再被读屏**重复朗读**（文案已在可读名上）。
+    // 分界（柱石，g-488 未变）：进浮层的只有**静态说明**（这个控件/小节是什么、怎么用、作用范围）；
     // **状态类读数**（生效值、来源徽标「显式/缺省」、加载/不可用状态、校验错误、只读目录建议、
-    // 能力告警、未保存提示）一律留在正文——它们必须一眼可见，且随状态变化，塞进 tooltip 会撒谎。
+    // 能力告警、未保存提示）一律留在正文——它们必须一眼可见，且随状态变化，塞进浮层会撒谎。
     const SETTINGS_HINT_ICON = "(?)";
-    const settingsHintIcon = (text) => h("span", {
-      className: "dg-settings-hint",
-      role: "img",
-      tabIndex: 0,
-      "aria-label": text,
-      title: text,
-      style: { fontSize: 11, cursor: "help", opacity: 0.75, flexShrink: 0, lineHeight: 1.2 },
-    }, SETTINGS_HINT_ICON);
+    /** g-490：说明全文 → **稳定**浮层 id（同一文案跨次渲染得到同一 id ⇒ `aria-describedby` 可靠；
+     *  不依赖渲染顺序/计数器，条件渲染导致的顺序漂移也不会换 id）。 */
+    const settingsHintIdFor = (text) => {
+      let hash = 0;
+      for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0;
+      return "dg-settings-tip-" + (hash >>> 0).toString(36);
+    };
 
     /** g-488：`supervisor.automation` 六键的**逐键**说明键（与键名一一对应：管什么 + human/ai 含义）。
      *  键集完整性由 g479 结构守卫逐个对上键名（漏一键即红）。 */
@@ -458,6 +467,100 @@
       // （缺字段不等于「不支持」，绝不据此对用户谎报能力）。
       // 位置要求（g-479）：必须**追加**在既有 useState 槽位之后——测试夹具按 0..10 槽位覆写初值。
       const [trimSupported, setTrimSupported] = React.useState(null);
+      // ===== g-490：`(?)` 自绘浮层的唯一状态与几何 =====
+      // 位置要求（与既有一致）：**追加**在既有 useState 槽位之后（0..11 已被既有夹具覆写）。
+      // `openHint` 是**唯一**的浮层状态 ⇒ 同一时刻至多一个浮层；`hintGeomRef` 存触发器的
+      // viewport 矩形（fixed 定位 + 边界翻转依据），`hintLastEnterRef` 记录最近一次 mouseenter
+      // 时刻（抑制触屏上 emulated mouseenter→click 的「开了又立刻被切关」）。
+      const [openHint, setOpenHint] = React.useState(null);
+      const hintGeomRef = React.useRef(null);
+      const hintLastEnterRef = React.useRef(0);
+      /** 触发器矩形 → 浮层定位（fixed；上方空间不足则**翻到下方**，左侧不越出视口）。 */
+      const hintGeometryOf = (el) => {
+        const rect = el && typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect() : null;
+        if (!rect) return null;
+        const vw = (typeof window !== "undefined" && window.innerWidth) || 0;
+        const left = Math.max(8, Math.min(rect.left, vw > 16 ? vw - 16 : rect.left));
+        return { left, top: rect.top, bottom: rect.bottom };
+      };
+      const hintPlacementStyle = (open) => {
+        const geom = hintGeomRef.current;
+        const vh = (typeof window !== "undefined" && window.innerHeight) || 0;
+        // 边界翻转：触发器上方空间足够（>180px）⇒ 浮层放上方，否则放下方。
+        const above = geom ? (geom.top > 180 || vh === 0) : true;
+        const base = {
+          position: "fixed", zIndex: 100001, left: geom ? geom.left : 8, maxWidth: 320,
+          background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)",
+          border: "1px solid rgba(128,128,128,.45)", borderRadius: 6, padding: "6px 8px",
+          fontSize: 11, lineHeight: 1.5, fontWeight: 400, whiteSpace: "pre-wrap", wordBreak: "break-word",
+          boxShadow: "0 4px 16px rgba(0,0,0,.45)", display: open ? "block" : "none", pointerEvents: "none",
+        };
+        if (!geom) return { ...base, top: 0, bottom: undefined };
+        return above
+          ? { ...base, bottom: Math.max(0, vh - geom.top + 6), top: undefined }
+          : { ...base, top: geom.bottom + 6, bottom: undefined };
+      };
+      const openHintAt = (id, el) => { hintGeomRef.current = hintGeometryOf(el); setOpenHint(id); };
+      const closeHintIf = (id) => { if (openHint === id) setOpenHint(null); };
+      /** Esc / 点击浮层外 / 滚动 ⇒ 关闭（只在有浮层打开时挂监听，卸载即摘除）。 */
+      React.useEffect(() => {
+        if (!openHint) return undefined;
+        const onKey = (e) => { if (e && e.key === "Escape") setOpenHint(null); };
+        const onDown = (e) => {
+          const t = e && e.target;
+          if (t && typeof t.closest === "function" && t.closest(".dg-settings-tip")) return;
+          setOpenHint(null);
+        };
+        const onScroll = () => setOpenHint(null);
+        if (typeof document !== "undefined" && document.addEventListener) {
+          document.addEventListener("keydown", onKey);
+          document.addEventListener("mousedown", onDown);
+        }
+        if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("scroll", onScroll, true);
+        return () => {
+          if (typeof document !== "undefined" && document.removeEventListener) {
+            document.removeEventListener("keydown", onKey);
+            document.removeEventListener("mousedown", onDown);
+          }
+          if (typeof window !== "undefined" && window.removeEventListener) window.removeEventListener("scroll", onScroll, true);
+        };
+      }, [openHint]);
+      /** g-490：`(?)` 图标——**唯一构造点**。返回「触发器 + 可选浮层」的包裹层。
+       *  触发器保留 `aria-label`（说明全文，零丢失）与 `tabIndex=0`（键盘可达）；**绝不输出 `title`**。 */
+      const settingsHintIcon = (text) => {
+        const tipId = settingsHintIdFor(text);
+        const open = openHint === tipId;
+        return h("span", { className: "dg-settings-tip", style: { display: "inline-flex", flexShrink: 0 } },
+          h("span", {
+            className: "dg-settings-hint",
+            role: "img",
+            tabIndex: 0,
+            "aria-label": text,
+            "aria-describedby": open ? tipId : undefined,
+            style: { fontSize: 11, cursor: "help", opacity: 0.75, flexShrink: 0, lineHeight: 1.2 },
+            onMouseEnter: (e) => { hintLastEnterRef.current = Date.now(); openHintAt(tipId, e.currentTarget); },
+            onMouseLeave: () => closeHintIf(tipId),
+            onClick: (e) => {
+              e.stopPropagation();
+              // 触屏（触屏点击会先派发 emulated mouseenter）刚被 hover 打开 ⇒ 同一次轻触不再切关。
+              if (open && Date.now() - (hintLastEnterRef.current || 0) < 700) return;
+              if (open) { setOpenHint(null); return; }
+              openHintAt(tipId, e.currentTarget);
+            },
+            onFocus: (e) => openHintAt(tipId, e.currentTarget),
+            onBlur: () => closeHintIf(tipId),
+            onKeyDown: (e) => { if (e.key === "Escape") setOpenHint(null); },
+          }, SETTINGS_HINT_ICON),
+          open
+            ? h("span", {
+                className: "dg-settings-tip-popover",
+                role: "tooltip",
+                id: tipId,
+                "aria-hidden": "true",
+                style: hintPlacementStyle(true),
+              }, text)
+            : null);
+      };
       React.useEffect(() => {
         let alive = true;
         loadHostCatalog(gConnectionApi)
@@ -515,7 +618,13 @@
           const correctedInterval = setRefreshInterval(refreshIntervalInput);
           setRefreshIntervalInput(String(correctedInterval));
           setIntervalWarn(null);
-          setForm(data.config ?? form); // 用服务端回填的最新配置刷新
+          // g-490：POST 回填的 `config` 是**项目配置本体**，不含服务端下发的展示元数据
+          // `automation_unset_scope`——必须显式保留，否则保存一次后「未配置」项的默认值/口径来源标注
+          // 会退回「未配置：保持既有指导」（纯显示层回归）。`normalizeSettingsDraft` 只取已知叶子，
+          // 多出的顶层键不参与判脏。
+          setForm(data.config
+            ? { ...data.config, automation_unset_scope: data.automation_unset_scope ?? form.automation_unset_scope }
+            : form); // 用服务端回填的最新配置刷新
           setSuggestedRegions(Array.isArray(data.review_suggested_regions) ? data.review_suggested_regions : suggestedRegions);
           // g-246：保存成功即归位基线（刷新间隔取纠偏后值），随后直接关闭跳过拦截
           baselineRef.current = normalizeSettingsDraft(data.config ?? form, String(correctedInterval));
@@ -543,11 +652,31 @@
       }
 
       const auto = form.supervisor?.automation ?? {};
-      const automationOptions = (val) => [
-        h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("common.none")),
+      // g-490（负责人 2026-10-12 裁决：**诚实口径、不编默认值**）：六键**未配置**时的**显示口径来源**
+      // ——**只**消费服务端下发的 `automation_unset_scope`（引擎 `AUTOMATION_UNSET_SCOPE` 是唯一真源；
+      // 客户端**不留** human/ai 的键级副本）。该表**不是**引擎解析默认值：它只登记「哪两键的**动作**
+      // 落在既有某类人工 gate 的**范围**内」+ 该 gate 的既有要求，面板显示「默认：<gate 要求>」时
+      // **必须**同屏标注 `settings.automationDefaultScopeNote*` 的口径来源与「非引擎解析默认值」。
+      // 表外键（含缺该字段的旧服务端）唯一口径 = `settings.automationUnsetKeep`
+      //（引擎未配置即返回 null、不输出该键指导行 ⇒「未配置：保持既有指导」）——**绝不**编出 human/ai。
+      const automationUnsetScope = form.automation_unset_scope ?? {};
+      const automationOptions = (val, unsetScope) => [
+        h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } },
+          unsetScope ? dgT("settings.automationDefaultPrefix") + unsetScope.gate_requires : dgT("settings.automationUnsetKeep")),
         h("option", { value: "human", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "human (" + dgT("settings.human") + ")"),
         h("option", { value: "ai", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, "ai (" + dgT("settings.ai") + ")"),
       ];
+      // g-490：**同屏口径来源标注**（恰好一处构造点，只读文本、非控件）——只要该键的未配置项显示
+      // 具体 human/ai（= 服务端下发了它的 gate 范围来源），就**无条件**紧邻渲染这条标注；
+      // 它把「默认：<gate 要求>」与 `(?)` 里的「未配置 = 沿用既有指导」显式对齐（不是两套口径），
+      // 并点明「非引擎解析默认值」。
+      const automationUnsetScopeNote = (unsetScope) => h(
+        "div",
+        { className: "dg-settings-automation-scope-note", style: { ...S.meta, fontSize: 10, marginTop: 2 } },
+        dgT("settings.automationDefaultScopeNotePrefix")
+          + dgT("settings.gateScope." + unsetScope.gate_scope)
+          + dgT("settings.automationDefaultScopeNoteSuffix"),
+      );
       const promptOverride = (key, label) => {
         const ov = form.prompt_overrides?.[key] ?? { state: "default", value: null };
         const body =
@@ -607,9 +736,19 @@
             : (explicit ? dgT("settings.reviewSourceExplicit") : dgT("settings.reviewSourceDefault"));
         // 生效值逐条可见；空串条目如实标注（畸形数组原样透出时可能出现）
         const showValue = (list) => list.map((v) => (v === "" ? dgT("settings.reviewEffectiveBlank") : v)).join(", ");
+        // g-490：生效值**输入框同构**的呈现（与 S.promptInput 同一组边框/底色 token、全不透明、
+        // 等宽字体），与相邻说明文字（S.meta，opacity .65）在视觉上一眼可分——负责人原话：
+        // 「review条件中的生效值没有可视化，要突出显示或增加输入框同构的边框底色」。
+        const effectiveStyle = {
+          fontSize: 11, marginTop: 2, padding: "3px 7px", borderRadius: 4, display: "block",
+          background: "var(--dsw-alias-bg-layer-2, rgba(0,0,0,.25))",
+          border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.4))",
+          color: "inherit", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+          wordBreak: "break-all", whiteSpace: "pre-wrap",
+        };
         // 生效值行只在服务端给了投影时渲染——缺投影绝不伪造（不写「（空）」冒充生效值）
         const effectiveView = eff
-          ? h("div", { style: metaStyle },
+          ? h("div", { className: "dg-settings-effective-value", style: effectiveStyle },
               dgT("settings.reviewEffectiveLabel") + "：" +
                 (eff.value.length > 0 ? showValue(eff.value) : dgT("settings.reviewEffectiveEmpty")))
           : null;
@@ -782,11 +921,67 @@
         style: { display: activeTab === tabKey ? "block" : "none" },
       }, ...items);
 
+      // ===== g-490：`project.yaml` 行从**页脚**迁到**标题栏右侧（关闭按钮左侧）** =====
+      // 负责人原话：「project.yaml这块放到标题栏右侧，关闭按钮左边」。信息与入口逐字复用
+      //（📄 project.yaml 标签 + 打开 + 复制路径 + **绝对路径全文在 `(?)` 浮层内**），位置与呈现分两步定稿：
+      //   · 迁移（原裁决）：行 `marginLeft:auto` 顶到标题栏右端、`justifyContent:flex-end`；
+      //     外层标题栏 `paddingRight:34` 给**绝对定位**的 `.dg-close`（top:14/right:16/26px）留位；
+      //   · 呈现（负责人 2026-10-12 两次现场反馈，见下方 projectYamlRow 内注释）：绝对路径
+      //     既**不再平铺正文**（路径过长），也**不进原生 `title`**（触屏无 hover ⇒ 等于不可达），
+      //     改由该行 `(?)` 浮层承载 ⇒ 该行恒为单行「📄 project.yaml (?) 打开 复制路径」，
+      //     超长路径在浮层内按 `wordBreak:"break-word"` 折行，不撑破弹窗。
+      const projectYamlRow = configFile
+        ? h("div", {
+            className: "dg-settings-configfile",
+            style: { display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", justifyContent: "flex-end", marginLeft: "auto", minWidth: 0 },
+          },
+            h("span", { style: { fontSize: 11, opacity: 0.7, whiteSpace: "nowrap" } }, dgT("settings.projectYaml")),
+            // g-490 增量（判据 7 扩写）：本行说明（settings.editHint）原为标题下方**常驻平铺**的一行，
+            // 现收进本行内的**自绘 `(?)` 浮层**（与其余 `(?)` 同一交互契约：悬停/点击/键盘聚焦、
+            // Esc·浮层外点击·滚动关闭、同屏至多一个、`aria-label` 保留全文）。文案**一字未改** ⇒
+            // 信息零丢失，只是不再占常驻正文。落点选在 📄 project.yaml 标签旁（紧邻其描述对象）。
+            // g-490 增量（负责人 2026-10-12 批 2）：绝对路径全文**同屏**放进本浮层另起一行
+            //（`settings.currentPath` + 路径）—— 权威口径是「不要用 title……延时和触屏不友好」，
+            // 触屏无 hover ⇒ 路径挂在 title 上等于不可达。浮层 style 已是 `whiteSpace:"pre-wrap"`
+            // ⇒ 这里的 "\n" 就是真换行；同一串同时进 `aria-label`（读屏/键盘同样可达）。
+            settingsHintIcon(dgT("settings.editHint") + "\n" + dgT("settings.currentPath") + configFile),
+            h("button", {
+              style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+              className: "dg-btn",
+              title: dgT("settings.openConfigTooltip"),
+              onClick: async (e) => {
+                e.stopPropagation();
+                // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
+                const r = await openHostPath(configFile);
+                if (r.opened) { showToast(dgT("settings.openedProjectYaml")); return; }
+                await copyText(configFile);
+                if (r.error) { showToast(dgT("tab.openFailed") + openErrorText(r.error)); }
+                else { showToast(dgT("tab.pathCopiedNoOpen")); }
+              },
+            }, dgT("tab.openFile")),
+            h("button", {
+              style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
+              className: "dg-btn",
+              // g-490 增量（负责人 2026-10-12 两次反馈）：绝对路径太长，正文**不再平铺**（可一键复制）；
+              // 也**不得**改挂本按钮的原生 `title`（批 2 裁决：title 有延时、触屏不友好 ⇒ 触屏上等于
+              // 路径不可达）。title 保持**不含路径的短形式**（与「打开」同形）；路径全文由本行的
+              // `(?)` 浮层承载（见上方 settingsHintIcon 调用）。
+              title: dgT("settings.copyProjectPath"),
+              onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast(dgT("tab.pathCopied")); },
+            }, dgT("tab.copyPath")))
+        : null;
+
       return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
-          h("div", { style: S.modalH }, dgT("settings.title")),
-          h("div", { style: S.meta }, dgT("settings.editHint")),
+          // g-490：标题栏 = 标题 + （右端）project.yaml 行。增量（判据 7 扩写）：原先「标题下方常驻
+          // 一行」的 editHint 说明已折叠进该行内的 `(?)` ⇒ 正文里**不再有**这一行（负向守卫钉住，
+          // 回退成常驻平铺即判红）。增量（负责人 2026-10-12 两次反馈）：绝对路径既不平铺正文、也不挂
+          // 按钮 title，改由该行 `(?)` 浮层内另起一行承载（见 projectYamlRow 注释）⇒ 标题栏恒为单行
+          //「标题 + 📄 project.yaml (?) 打开 复制路径」，路径对触屏/键盘用户同样可达。
+          h("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", paddingRight: 34 } },
+            h("div", { style: { ...S.modalH, marginBottom: 0, flex: "0 0 auto" } }, dgT("settings.title")),
+            projectYamlRow),
           // g-479：分类页签切换栏——用页签取代原「单列滚动 + 高级设置折叠」。点击只切 activeTab，
           // 面板内容常驻（同一 form 草稿）⇒ 跨页签不丢编辑；保存链路/关闭确认一字未改。
           h("div", {
@@ -827,7 +1022,13 @@
               }, ...effortOptions)),
             // g-191：执行模式受控下拉
             h("div", { style: { minWidth: 0, marginBottom: 6 } },
-              h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
+              h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 2 } },
+                h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
+                // g-490 增量（判据 7 扩写）：本面板最长的一段常驻平铺说明（catalogReady，讲目录来源与
+                // 三项派生规则）折叠进标签右侧 `(?)`——与相邻「推理档位」同一承载方式。**状态门控**：
+                // 只有目录就绪态才渲染该 `(?)`；加载中/不可用仍按原文案常驻正文（见下方状态行）⇒
+                // 不存在「静态 tooltip 撒谎」，降级读数依旧一眼可见。
+                catReady ? settingsHintIcon(dgT("settings.catalogReady")) : null),
               h("select", {
                 id: modeId,
                 "aria-label": dgT("settings.modeAria"),
@@ -838,10 +1039,11 @@
                 h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeInherited")),
                 h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeStandard")),
                 h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeMinimal")))),
-            h("div", { style: { ...S.meta, marginTop: 4 } },
-              catReady
-                ? dgT("settings.catalogReady")
-                : (catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg"))),
+            // g-490 增量：就绪态的长句说明已进上方 `(?)`；正文只留**瞬态/降级**状态读数（必读警示）。
+            catReady
+              ? null
+              : h("div", { style: { ...S.meta, marginTop: 4 } },
+                  catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg")),
             // ===== g-488：Agent Teams 契约开关（自「评审与质量」页签**归位**到「模型与执行」）=====
             // g-440 契约逐字不变：**默认 off**；off 时派发提示词逐字不变（diff=0），on 才把 discipline
             // 资产中的契约段注入派发提示词（core `resolveAgentTeamsInjection`）。三态归一（null/未配置
@@ -988,7 +1190,10 @@
                     // g-488：**逐键** `(?)`——每键一条，讲清「管什么 + human/ai 两种取值的含义」。
                     settingsHintIcon(dgT(AUTOMATION_HINT_KEYS[k]))),
                   h("select", { style: { ...S.promptInput, width: "100%" }, value: auto[k] ?? "", onChange: (e) => set(["supervisor", "automation", k], e.target.value === "" ? null : e.target.value) },
-                    ...automationOptions(auto[k]))))),
+                    ...automationOptions(auto[k], automationUnsetScope[k] ?? null)),
+                  // g-490：只要该键的未配置项显示具体 human/ai（= 服务端下发了它的 gate 范围来源），
+                  // 就必须**同屏**渲染口径来源标注——绝不出现无来源的具体 human/ai。
+                  automationUnsetScope[k] ? automationUnsetScopeNote(automationUnsetScope[k]) : null))),
 
             h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
             h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.promptOverride")),
@@ -999,37 +1204,8 @@
               saving ? dgT("common.saving") : dgT("settings.saveBtn")),
             h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: requestClose }, dgT("settings.closeBtn")),
             note ? h("span", { style: { ...S.meta, color: note.kind === "ok" ? "var(--dsw-alias-label-primary, #6ee7a0)" : "var(--dsw-alias-state-error-primary, #f08080)", marginLeft: 8 } }, note.text) : null),
-          // ===== g-488：原「关于」页签的**唯一实质内容**（配置文件在哪 + 打开/复制入口）迁到页脚一行 =====
-          // 研判：`config.project_yaml` 的展示**只**存在于「关于」页签（`configFile` 由服务端下发、
-          // 无第二处消费点），工具栏虽也有「打开/复制路径」入口但那是**卡片/目标文件**（card-drawer /
-          // goal-modal 的 `tab.openFile` / `tab.copyPath`），不能替代「本项目 project.yaml 在哪」——
-          // 故按判据 6 的第二种处置：**搬到页脚一行**（信息零丢失，双语键与 openHostPath/copyText/
-          // toast/fallback 机制逐字复用；`configFile` 状态与其 useState 槽位不变）。
-          configFile
-            ? h("div", { style: { display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginTop: 6 } },
-              h("span", { style: { fontSize: 11, opacity: 0.7 } }, dgT("settings.projectYaml")),
-              h("button", {
-                style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-                className: "dg-btn",
-                title: dgT("settings.openConfigTooltip"),
-                onClick: async (e) => {
-                  e.stopPropagation();
-                  // g-222：统一走共享 openHostPath，失败透出可理解错误（C3/C4）
-                  const r = await openHostPath(configFile);
-                  if (r.opened) { showToast(dgT("settings.openedProjectYaml")); return; }
-                  await copyText(configFile);
-                  if (r.error) { showToast(dgT("tab.openFailed") + openErrorText(r.error)); }
-                  else { showToast(dgT("tab.pathCopiedNoOpen")); }
-                },
-              }, dgT("tab.openFile")),
-              h("button", {
-                style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
-                className: "dg-btn",
-                title: dgT("settings.copyProjectPath"),
-                onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast(dgT("tab.pathCopied")); },
-              }, dgT("tab.copyPath")),
-              h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7, wordBreak: "break-all" } }, configFile))
-            : null,
+          // g-490：`project.yaml` 行**已迁到标题栏右侧（关闭按钮左边）**——见 `projectYamlRow`。
+          // 页脚不再有第二份（信息与入口零丢失，只是位置变更；绝不留双份）。
           error ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 6 } }, error) : null));
     }
 

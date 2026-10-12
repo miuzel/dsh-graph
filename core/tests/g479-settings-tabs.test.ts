@@ -239,14 +239,90 @@ function tabStructureProblems(modalSrc: string, tabs: TabTable): string[] {
   return problems;
 }
 
-/** g-488：说明性文字 tooltip（`(?)`）契约不变式——真实源码 / 变异副本共用（负向对照同口径）。
+/** g-490：`settingsHintIcon` 函数体源码区间（从唯一构造点到其后的第一个 React.useEffect）。
+ *  负向断言（不得回退原生 title）只在这一段里判，避免误伤**非 `(?)`** 的既有按钮 `title:`。 */
+function hintFnRegion(modalSrc: string): string {
+  const start = modalSrc.indexOf("const settingsHintIcon = (text) => {");
+  if (start < 0) return "";
+  const end = modalSrc.indexOf("React.useEffect(", start);
+  return modalSrc.slice(start, end < 0 ? modalSrc.length : end);
+}
+
+/** g-490：从**真实源码**里取出 `settingsHintIdFor` 并求值（不复制算法 ⇒ 不会与实现漂移）。 */
+function settingsHintIdForSrc(modalSrc: string, text: string): string {
+  const start = modalSrc.indexOf("const settingsHintIdFor = (text) => {");
+  assert.ok(start > 0, "源码必须含 settingsHintIdFor（说明 → 稳定浮层 id）");
+  const end = modalSrc.indexOf("};", start);
+  assert.ok(end > start, "能定位 settingsHintIdFor 函数体结束");
+  const fn: any = new Function(`${modalSrc.slice(start, end + 2)}\nreturn settingsHintIdFor;`)();
+  return fn(text);
+}
+
+/** g-490：`project.yaml` 行必须落在**标题栏插槽**（标题行之后、页签栏之前、页脚按钮行之前），
+ *  恰好一处、不得复制到页脚。真实源码 / 变异副本共用（负向对照同口径）。
+ *  g-490 判据 7 扩写**改判**：原下界锚点是与旧呈现形状绑定的「editHint 常驻平铺行」，该行已折叠进
+ *  行内 `(?)` ⇒ 下界改用**语义等价且更强**的页签栏锚点（页签栏同样紧跟标题栏、且必须晚于该行），
+ *  并新增「editHint 不得再常驻平铺」的负向断言（断言只增不减）。 */
+function configFileRowProblems(modalSrc: string): string[] {
+  const problems: string[] = [];
+  const headerAt = modalSrc.indexOf('{ ...S.modalH, marginBottom: 0, flex: "0 0 auto" } }, dgT("settings.title")');
+  // 渲染点 = `projectYamlRow,` / `projectYamlRow),`（定义点 `const projectYamlRow =` 不算）——
+  // 缩进无关，双份/搬回页脚都能抓住。
+  const slotSites = modalSrc.match(/projectYamlRow[,)]/g) || [];
+  const slotAt = modalSrc.search(/projectYamlRow[,)]/);
+  const tabsAt = modalSrc.indexOf('"aria-label": dgT("settings.tabsAria")');
+  const footerAt = modalSrc.indexOf(FOOTER_ANCHOR);
+  if (slotSites.length !== 1) {
+    problems.push(`project.yaml 行必须恰好渲染一处（标题栏插槽 projectYamlRow），实得 ${slotSites.length} 处`);
+  }
+  if (headerAt < 0 || slotAt < 0) {
+    problems.push("project.yaml 行必须放在标题栏（找不到标题行或标题栏插槽）");
+  } else if (slotAt < headerAt) {
+    problems.push("project.yaml 行必须在标题行之后");
+  }
+  if (tabsAt > 0 && slotAt > tabsAt) {
+    problems.push("project.yaml 行必须在页签栏之前（留在标题栏内，不下沉正文）");
+  }
+  if (countOccurrences(modalSrc, 'h("div", { style: S.meta }, dgT("settings.editHint"))') !== 0
+    || /,\s*dgT\("settings\.editHint"\)\)/.test(modalSrc)) {
+    problems.push("editHint 不得再作为常驻平铺行渲染（须仅在 project.yaml 行内 `(?)` 浮层内）");
+  }
+  // 改判 2（负责人 2026-10-12 批 2）：editHint 的 `(?)` 调用带上「另起一行的路径全文」第二段 ⇒
+  // 锚点由整调用字面量放宽为**调用前缀**（仍是「恰好一处」同一不变式），并新增「路径必须在该浮层内、
+  // 且不得只挂原生 title」的正向/负向断言（断言只增不减，见本函数末尾）。
+  if (countOccurrences(modalSrc, 'settingsHintIcon(dgT("settings.editHint")') !== 1) {
+    problems.push("editHint 必须恰好经 `(?)` 承载一次（零丢失且不重复）");
+  }
+  if (!modalSrc.includes('settingsHintIcon(dgT("settings.editHint") + "\\n" + dgT("settings.currentPath") + configFile)')) {
+    problems.push("绝对路径全文必须在 project.yaml 行内 `(?)` 浮层内另起一行（改判 2：不得平铺正文、也不得只挂原生 title）");
+  }
+  if (/title:\s*dgT\("settings\.copyProjectPath"\)\s*\+/.test(modalSrc)) {
+    problems.push("绝对路径不得再挂原生 title（触屏无 hover ⇒ 等于不可达；回退即红）");
+  }
+  if (footerAt > 0 && slotAt > footerAt) {
+    problems.push("project.yaml 行不得位于页脚按钮行之后（回迁即红）");
+  }
+  if (countOccurrences(modalSrc, 'dgT("settings.projectYaml")') !== 1) {
+    problems.push("project.yaml 行必须恰好一处（迁移而非复制）");
+  }
+  if (footerAt > 0 && /settings\.projectYaml/.test(modalSrc.slice(footerAt))) {
+    problems.push("页脚不得残留第二份 project.yaml 行");
+  }
+  return problems;
+}
+
+/** g-488 / g-490：说明性文字 tooltip（`(?)`）契约不变式——真实源码 / 变异副本共用（负向对照同口径）。
  *  ① `(?)` 必须由**唯一构造点** `settingsHintIcon` 产出，且该构造点自带完整可读性契约
- *     （role=img / tabIndex=0 / aria-label=title=说明全文）——scoped span 必须只有 `(?)` 这一个字面量，
+ *     （role=img / tabIndex=0 / aria-label=说明全文）——scoped span 必须只有 `(?)` 这一个字面量，
  *     说明文字只能走属性通道，不得又内联回正文（否则「tooltip 化」名不副实）；
- *  ② 六键自动化必须**逐键**一条说明映射（漏一键即红），键名与 AUTOMATION_KEYS 逐个对上。 */
+ *  ② g-490：说明浮层必须是**自绘浮层**而非原生 `title`（悬停即时显示 / 离开隐藏 / 点击·触屏切换 /
+ *     Tab 聚焦可见 / Esc·浮层外点击·滚动关闭 / 至多一个 / 不被弹窗裁剪 + 边界翻转 / role=tooltip +
+ *     aria-describedby 语义关联）——原「`title: text` 悬停说明」断言按**逐条等价**替换，且新增
+ *     「构造点内不得再出现 title:」的**负向**断言（回退即必红）；
+ *  ③ 六键自动化必须**逐键**一条说明映射（漏一键即红），键名与 AUTOMATION_KEYS 逐个对上。 */
 function hintContractProblems(modalSrc: string): string[] {
   const problems: string[] = [];
-  if (countOccurrences(modalSrc, 'const settingsHintIcon = (text) => h("span", {') !== 1) {
+  if (countOccurrences(modalSrc, 'const settingsHintIcon = (text) => {') !== 1) {
     problems.push("`(?)` 图标必须有且只有一个构造点 settingsHintIcon");
   }
   if (countOccurrences(modalSrc, 'className: "dg-settings-hint"') !== 1) {
@@ -255,16 +331,49 @@ function hintContractProblems(modalSrc: string): string[] {
   const contract: Array<[string, string]> = [
     ['role: "img"', "读屏须按「有名字的元素」播报（不是无意义的 (?)）"],
     ["tabIndex: 0", "图标必须键盘可达（可 Tab 聚焦）"],
-    ['"aria-label": text', "图标必须有可读名（说明全文）"],
-    ["title: text", "图标必须有悬停说明（说明全文）"],
+    ['"aria-label": text', "图标必须有可读名（说明全文，零信息丢失）"],
+    // g-490：浮层契约（替代原 `title: text`）——逐条对应负责人列出的交互要求
+    ['"aria-describedby": open ? tipId : undefined', "浮层打开时须与触发器建立 aria-describedby 关联"],
+    ['role: "tooltip"', "浮层必须声明 role=tooltip（读屏语义）"],
+    ['onMouseEnter: (e) => { hintLastEnterRef.current = Date.now(); openHintAt(tipId, e.currentTarget); }', "悬停必须即时显示浮层"],
+    ["onMouseLeave: () => closeHintIf(tipId)", "鼠标离开必须关闭浮层"],
+    ["onFocus: (e) => openHintAt(tipId, e.currentTarget)", "Tab 聚焦必须显示浮层（键盘可见）"],
+    ["onBlur: () => closeHintIf(tipId)", "失焦必须关闭浮层"],
+    ['onKeyDown: (e) => { if (e.key === "Escape") setOpenHint(null); }', "Esc 必须关闭浮层（聚焦态）"],
+    ['if (e && e.key === "Escape") setOpenHint(null);', "Esc 必须关闭浮层（全局兜底）"],
+    ['t.closest(".dg-settings-tip")', "浮层外点击必须关闭浮层"],
+    ['window.addEventListener("scroll", onScroll, true)', "滚动必须关闭浮层（浮层不跟随时不留错位残影）"],
+    ['position: "fixed", zIndex: 100001', "浮层必须固定定位（不被弹窗 overflow 裁剪）"],
+    ["const above = geom ? (geom.top > 180 || vh === 0) : true;", "浮层必须在视口边界处翻转（不越出上边界）"],
+    ["const [openHint, setOpenHint] = React.useState(null)", "至多一个浮层：唯一 openHint 状态（同屏只允许一个）"],
   ];
   for (const [needle, why] of contract) {
     if (countOccurrences(modalSrc, needle) !== 1) {
       problems.push(`\`(?)\` 图标契约缺失或重复：${needle}（${why}）`);
     }
   }
-  if (countOccurrences(modalSrc, "}, SETTINGS_HINT_ICON);") !== 1) {
+  // 点击/触屏切换（两行锚点分开判：回调体较长，逐行钉住语义）
+  if (countOccurrences(modalSrc, "onClick: (e) => {\n              e.stopPropagation();") !== 1) {
+    problems.push('`(?)` 图标契约缺失或重复：点击/触屏切换处理器（onClick + stopPropagation）');
+  }
+  if (countOccurrences(modalSrc, "if (open && Date.now() - (hintLastEnterRef.current || 0) < 700) return;") !== 1) {
+    problems.push("`(?)` 图标契约缺失或重复：点击切换必须抑制 mouseenter→click 双触发（700ms 窗口）");
+  }
+  if (countOccurrences(modalSrc, 'const tipId = settingsHintIdFor(text);') !== 1) {
+    problems.push("`(?)` 浮层 id 必须由说明文本派生（settingsHintIdFor，稳定可复现）");
+  }
+  if (countOccurrences(modalSrc, "}, SETTINGS_HINT_ICON)") !== 1) {
     problems.push("`(?)` 的可视字面量必须恰好一处（SETTINGS_HINT_ICON）");
+  }
+  // g-490 负向：`(?)` 构造点内**不得**回退原生 title（回退即「自绘浮层」名不副实 ⇒ 必红）
+  const hintFn = hintFnRegion(modalSrc);
+  if (hintFn === "") {
+    problems.push("`(?)` 构造点源码区间不可定位（无法核对「不得回退原生 title」）");
+  } else if (/\btitle:/.test(hintFn)) {
+    problems.push("`(?)` 构造点内不得出现原生 `title:`（必须用自绘浮层承载说明）");
+  }
+  if (countOccurrences(modalSrc, '"aria-label": text,\n      title: text,') !== 0) {
+    problems.push("`(?)` 不得回退「aria-label + title 同文」的旧契约（原生 title 已被自绘浮层取代）");
   }
   if (countOccurrences(modalSrc, "const AUTOMATION_HINT_KEYS = {") !== 1) {
     problems.push("AUTOMATION_HINT_KEYS（六键逐键说明映射）必须恰好定义一次");
@@ -286,17 +395,21 @@ function loadClientI18n(src = readI18n()): { zh: Dict; en: Dict } {  const sandb
 
 type Rendered = { tree: any; nodes: any[]; calls: Record<number, any>; closeCalls: () => number };
 
-function renderSettingsModal(modalSrc: string, form: any, zh: Dict, opts: { tab?: string; configFile?: string | null } = {}): Rendered {
+function renderSettingsModal(modalSrc: string, form: any, zh: Dict, opts: { tab?: string; configFile?: string | null; openHint?: string | null } = {}): Rendered {
   const h = (type: any, props: any, ...children: any[]) => ({
     type,
     props: props || {},
     children: children.flat(Infinity).filter((c: any) => c !== null && c !== undefined && c !== false),
   });
   // useState 槽位序（与源码一致）：0 loading, 1 form, 2 saving, 3 note, 4 error, 5 activeTab,
-  // 6 configFile, 7 refreshIntervalInput, 8 intervalWarn, 9 catalog, 10 suggestedRegions
+  // 6 configFile, 7 refreshIntervalInput, 8 intervalWarn, 9 catalog, 10 suggestedRegions,
+  // 11 trimSupported, 12 openHint（g-490 新增；打开态由 opts.openHint 注入）
+  // ⚠️ 稀疏赋值（overrides[12] = …）会在 7..11 留"洞"——useState stub 以 hasOwnProperty 判定
+  //    "是否被覆盖"，洞视为未覆盖（回落到组件自身的初始值），不得把 undefined 当覆盖值注入。
   const overrides: any[] = [false, form, false, null, null];
   overrides[5] = opts.tab ?? "executor";
   overrides[6] = opts.configFile === undefined ? "/abs/path/project.yaml" : opts.configFile;
+  if (opts.openHint !== undefined) overrides[12] = opts.openHint;
   let idx = 0;
   const calls: Record<number, any> = {};
   let closes = 0;
@@ -328,7 +441,7 @@ function renderSettingsModal(modalSrc: string, form: any, zh: Dict, opts: { tab?
       useRef: (init: any) => ({ current: init }),
       useState: (init: any) => {
         const i = idx++;
-        const v = i < overrides.length ? overrides[i] : (typeof init === "function" ? init() : init);
+        const v = Object.prototype.hasOwnProperty.call(overrides, i) ? overrides[i] : (typeof init === "function" ? init() : init);
         return [v, (nv: any) => { calls[i] = nv; }];
       },
       useEffect: () => {},
@@ -355,6 +468,14 @@ function textOf(node: any): string {
   return (node?.children ?? []).filter((c: any) => typeof c === "string").join("");
 }
 
+/** g-490：**递归**取文本——容器节点的直接子节点是元素（textOf 只取直接字符串子节点），
+ *  结构定位断言（「这个容器里有没有这段文本」）必须用递归版。 */
+function deepTextOf(node: any): string {
+  if (node === null || node === undefined || node === false) return "";
+  if (typeof node === "string") return node;
+  return (node.children ?? []).map(deepTextOf).join("");
+}
+
 const SNAPSHOT = {
   executor: { provider: "prov-a", model: "mod-a", reasoning_effort: "high", mode: "standard" },
   review: { policy: "auto", regions: ["core"], contract_paths: [], non_product_prefixes: [] },
@@ -367,6 +488,7 @@ const SNAPSHOT = {
 
 test("g-479 判据1：设置弹窗改为分类页签——每个配置项恰好归属一个页签（漏项/重复即红）", () => {
   const src = readModal();
+  const { zh } = loadClientI18n();
   const tabs = loadTabTable(src);
   const problems = tabStructureProblems(src, tabs);
   assert.deepEqual(problems, [], "页签结构不变式必须全绿：\n" + problems.join("\n"));
@@ -400,13 +522,50 @@ test("g-479 判据1：设置弹窗改为分类页签——每个配置项恰好�
   ]) {
     assert.ok(src.includes(leaf), `配置读兼容不得丢失叶子：${leaf}`);
   }
-  // g-488：「关于」页签删除，配置文件只读展示迁到**页脚一行**——必须在页脚按钮行之后，且不属于
-  // 任何页签面板区间（否则「搬到页脚」只是换了说法，实际仍寄生在某个页签里）。
+  // g-490：配置文件行从**页脚一行**再迁到**标题栏右侧（关闭按钮左边）**——位置判据按新落点重判
+  // （源码落点：标题行之后 / editHint 之前 / 页脚之前；恰好一处；页脚无残留），并由**渲染树**独立复核。
   assert.equal(countOccurrences(src, 'tabPanel("about", ['), 0, "「关于」页签面板必须已删除");
-  const yamlAt = src.indexOf('dgT("settings.projectYaml")');
-  const footerAt = src.indexOf(FOOTER_ANCHOR);
-  assert.ok(yamlAt > 0 && footerAt > 0 && yamlAt > footerAt, "project.yaml 入口必须位于页脚按钮行之后");
+  const rowProblems = configFileRowProblems(src);
+  assert.deepEqual(rowProblems, [], "project.yaml 行必须落在标题栏：\n" + rowProblems.join("\n"));
+  // 渲染树复核（结构证据，非源码文本）：标题栏行的直接子节点里含 project.yaml 行；整棵树里路径**恰好一次**；
+  // 页脚按钮行内**不含**该路径（负向：留双份 / 只改了顺序都会红）。
+  const { nodes: rowNodes } = renderSettingsModal(src, SNAPSHOT, zh, { tab: "executor" });
+  const yamlLabel = zh["settings.projectYaml"];
+  const cfgFile = "/abs/path/project.yaml";
+  // 直接字符串子节点计数（叶子级）：容器祖先不应被算成"多份"
+  const titled = rowNodes.filter((n) => textOf(n).includes(yamlLabel));
+  assert.equal(titled.length, 1, "渲染树里 project.yaml 行必须恰好一处（迁移而非复制）");
+  const headerSlot = rowNodes.filter(
+    (n) => n.type === "div" && (n.children || []).some((c: any) => String(c?.props?.className ?? "") === "dg-settings-configfile"),
+  );
+  assert.equal(headerSlot.length, 1, "project.yaml 行必须是某个容器 div 的直接子节点（标题栏插槽）");
+  assert.ok(deepTextOf(headerSlot[0]).includes(zh["settings.title"]), "承载 project.yaml 行的容器必须是标题栏（同容器含标题）");
+  // 改判（负责人 2026-10-12 现场反馈）：绝对路径不再平铺 ⇒ 旧「标题栏须显示路径全文」改为
+  // 「正文零残留 + 标题栏仍含该行标签 + 全文经行内 `(?)` 可达」。
+  // 改判 2（负责人 2026-10-12 批 2）：「不要用 title……延时和触屏不友好」⇒ 承载点由**按钮 title**
+  // 改为**同一浮层**：负向「无任何按钮 title 含路径」+ 正向「触发器 aria-label 含路径、展开后浮层正文
+  // 含路径」三条渲染树证据（断言只增不减）。
+  assert.ok(!deepTextOf(headerSlot[0]).includes(cfgFile), "标题栏行不得再平铺绝对路径（负责人反馈：路径过长，可点击复制即可）");
+  assert.ok(
+    !rowNodes.some((n) => String(n.props?.title ?? "").includes(cfgFile)),
+    "绝对路径不得再挂原生 title（改判 2：触屏无 hover ⇒ 等于不可达；回退即红）",
+  );
+  assert.ok(
+    rowNodes.some((n) => n.props?.className === "dg-settings-hint" && String(n.props?.["aria-label"] ?? "").includes(cfgFile)),
+    "路径全文必须经项目行 `(?)` 触发器可达（aria-label ⇒ 触屏/键盘同样可达）",
+  );
+  const editHintFull = zh["settings.editHint"] + "\n" + zh["settings.currentPath"] + cfgFile;
+  const openedRow = renderSettingsModal(src, SNAPSHOT, zh, { tab: "executor", openHint: settingsHintIdForSrc(src, editHintFull) });
+  const rowPops = openedRow.nodes.filter((n) => n.props?.role === "tooltip");
+  assert.equal(rowPops.length, 1, "project.yaml 行 `(?)` 展开态必须恰好一个浮层");
+  assert.ok(deepTextOf(rowPops[0]).includes(cfgFile), "绝对路径全文必须能在浮层正文内读到（另起一行；改判 2 的承载点）");
+  const footerRow = rowNodes.find(
+    (n) => n.type === "div" && (n.children || []).some((c: any) => textOf(c) === zh["settings.closeBtn"]),
+  );
+  assert.ok(footerRow, "必须能找到页脚按钮行");
+  assert.ok(!deepTextOf(footerRow).includes(yamlLabel), "页脚按钮行内不得再出现 project.yaml 行（不得留第二份）");
   const regionsForFooter = panelRegions(src, tabs.keys, []);
+  const yamlAt = src.search(/projectYamlRow[,)]/);
   for (const [k, [s0, e0]] of regionsForFooter) {
     assert.ok(!(yamlAt >= s0 && yamlAt < e0), `project.yaml 入口不得落在「${k}」页签面板内`);
   }
@@ -461,9 +620,20 @@ test("g-479 判据2：真实渲染树里每个配置项的控件都在（与激�
   assert.ok(nodes.some((n) => textOf(n) === zh["settings.projectYaml"]), "project.yaml 标签可达（页脚一行）");
   assert.equal(nodes.filter((n) => n.type === "button" && textOf(n) === zh["tab.openFile"]).length, 1, "打开入口可达");
   assert.equal(nodes.filter((n) => n.type === "button" && textOf(n) === zh["tab.copyPath"]).length, 1, "复制入口可达");
+  // 改判（负责人 2026-10-12 现场反馈「具体路径很长，反正可以点击复制，就不用显示出来了」）：绝对路径
+  // **不再作为正文 children 明文展示** ⇒ 旧正向断言改为负向 + 可达性正向。改判 2（批 2）起可达点
+  // **不是**按钮 title（触屏无 hover）而是行内 `(?)` 浮层 ⇒ 两条都保留并各自加负向（断言只增不减）。
   assert.ok(
-    nodes.some((n) => (n.children ?? []).includes("/abs/path/project.yaml")),
-    "project.yaml 绝对路径明文展示（仍是 children 字符串，未降级为 tooltip）",
+    !nodes.some((n) => (n.children ?? []).includes("/abs/path/project.yaml")),
+    "project.yaml 绝对路径不得再平铺正文（负责人反馈：路径过长，可点击复制即可；回退平铺即红）",
+  );
+  assert.ok(
+    !nodes.some((n) => n.type === "button" && String(n.props?.title ?? "").includes("/abs/path/project.yaml")),
+    "绝对路径不得只挂按钮原生 title（改判 2：触屏不可达；回退即红）",
+  );
+  assert.ok(
+    nodes.some((n) => n.props?.className === "dg-settings-hint" && String(n.props?.["aria-label"] ?? "").includes("/abs/path/project.yaml")),
+    "绝对路径全文必须仍可获取（行内 `(?)` 触发器 aria-label + 浮层正文 ⇒ 信息零丢失）",
   );
 });
 
@@ -585,11 +755,28 @@ test("g-488 判据5：说明文字 tooltip 化——`(?)` 键盘可达且语义�
     assert.equal(node.props.tabIndex, 0, "`(?)` 必须键盘可达");
     assert.equal(typeof node.props["aria-label"], "string", "`(?)` 必须有 aria-label");
     assert.ok(String(node.props["aria-label"]).length > 0, "`(?)` 的 aria-label 不得为空");
-    assert.equal(node.props.title, node.props["aria-label"], "title 与 aria-label 必须同为说明全文");
+    // g-490：原「title 属性 = 说明全文」的悬停通道改为**自绘浮层** —— 说明全文仍零丢失地挂在
+    // aria-label（读屏可读），且**未打开时不得**残留原生 title（回退即红）。
+    assert.equal(node.props.title, undefined, "`(?)` 不得再有原生 title（说明由自绘浮层承载）");
+    assert.equal(node.props["aria-describedby"], undefined, "未打开的 `(?)` 不应有 aria-describedby 悬空引用");
     assert.equal(node.children.length, 1, "`(?)` 只承载可视字面量，说明文字只走属性通道");
     // 说明不得又内联回正文（否则「tooltip 化」名不副实、正文重复）
     assert.equal(typeof node.props["aria-label"], "string");
   }
+  // g-490：浮层契约的**渲染树**证据（打开态）——强制 openHint = 该说明的派生 id，
+  // 断言同屏恰好一个 role=tooltip 浮层、id 与 aria-describedby 互指、正文即说明全文。
+  const probeText = zh["settings.automationHint"];
+  const probeId = settingsHintIdForSrc(src, probeText);
+  const opened = renderSettingsModal(src, SNAPSHOT, zh, { tab: "executor", openHint: probeId });
+  const popovers = opened.nodes.filter((n) => n.props?.role === "tooltip");
+  assert.equal(popovers.length, 1, "打开一个 (?) 时同屏必须恰好一个浮层，实得 " + popovers.length);
+  assert.equal(popovers[0].props.id, probeId, "浮层 id 必须是该说明派生出的稳定 id");
+  assert.equal(textOf(popovers[0]), probeText, "浮层正文必须是说明全文（零信息丢失）");
+  const openedTrigger = opened.nodes.filter((n) => n.props?.["aria-describedby"] === probeId);
+  assert.equal(openedTrigger.length, 1, "打开态的触发器必须恰好一处 aria-describedby 指向该浮层");
+  // 至多一个：另一个说明即使被"同时"请求也只渲染唯一浮层（openHint 是单值状态）
+  const otherOpened = renderSettingsModal(src, SNAPSHOT, zh, { tab: "executor", openHint: settingsHintIdForSrc(src, zh["settings.reviewPolicyHint"]) });
+  assert.equal(otherOpened.nodes.filter((n) => n.props?.role === "tooltip").length, 1, "同屏浮层数恒 ≤ 1");
 
   // 六键自动化：**逐键**一条说明，且互不相同（不得六键共用一条泛泛而谈）
   for (const k of AUTOMATION_KEYS) {
@@ -600,7 +787,7 @@ test("g-488 判据5：说明文字 tooltip 化——`(?)` 键盘可达且语义�
   assert.equal(new Set(automationTexts).size, automationTexts.length, "六键说明不得互相重复");
 
   // 零信息丢失：搬进 tooltip 的**每一条**说明都能在渲染树里找到（属性通道），且文案逐字保留
-  const titles = hints.map((n) => String(n.props.title));
+  const titles = hints.map((n) => String(n.props["aria-label"]));
   const movedKeys = [
     "settings.reviewPolicyHint",
     "settings.reviewConditionsHint",
@@ -640,12 +827,15 @@ test("g-488 判据5：说明文字 tooltip 化——`(?)` 键盘可达且语义�
   assert.ok(bodyText.includes(zh["settings.reviewSourceLabel"]), "来源徽标必须留在正文（状态读数不进 tooltip）");
   // 状态类读数**逐键**钉住「不得进 tooltip」——它们随状态变化，塞进 tooltip 会撒谎。
   // （「某读数在正文里确实可见」的正面腿由 g442 的正文专用收集器断言，两处同口径、互不替代。）
+  // g-490 判据 7 扩写**改判**（`settings.catalogReady` 一项）：该项原属「状态类读数」清单，现按负责人
+  // 增量裁决折叠进「执行模式」标签右侧 `(?)`——**状态门控**（仅 `catReady` 态渲染该 `(?)`）⇒ 不会对
+  // 非就绪态撒谎；本渲染（目录不可用）下它根本不出现。原清单项此处**换成更强的一对断言**
+  // （源码层：恰好经 `(?)` 承载一次 + 不得平铺正文），其余 8 项一条不减。
   for (const key of [
     "settings.reviewUnsetHint",
     "settings.reviewIllegalEmpty",
     "settings.reviewSourceIllegalEmpty",
     "settings.reviewEffectiveBlank",
-    "settings.catalogReady",
     "settings.catalogLoadingMsg",
     "settings.catalogUnavailableMsg",
     "settings.intervalWarn",
@@ -653,6 +843,10 @@ test("g-488 判据5：说明文字 tooltip 化——`(?)` 键盘可达且语义�
   ]) {
     assert.ok(!titles.some((t) => t.includes(zh[key])), `状态读数 ${key} 不得进 tooltip（必须留在正文）`);
   }
+  assert.equal(countOccurrences(src, 'settingsHintIcon(dgT("settings.catalogReady"))'), 1, "目录就绪说明必须恰好经 `(?)` 承载一次");
+  assert.equal(countOccurrences(src, '? dgT("settings.catalogReady")'), 0, "目录就绪说明不得再平铺正文（回退即红）");
+  assert.match(src, /catReady \? settingsHintIcon\(dgT\("settings\.catalogReady"\)\) : null/, "目录就绪说明的 `(?)` 必须状态门控（仅就绪态渲染）");
+  assert.ok(!titles.some((t) => t.includes(zh["settings.catalogReady"])), "本渲染（目录不可用）下不得出现就绪说明（状态门控不撒谎）");
   // 禁用按钮残留检查：`(?)` 不得把整段说明同时留在正文（双份即信息重复）
   assert.equal(countOccurrences(src, "settingsHintIcon(dgT(\"settings.tabLocalNote\"))"), 1, "页级说明只经 tooltip 承载一次");
 });
@@ -725,6 +919,45 @@ test("g-479 负向对照：搬走页签面板 / 删归属项 / 跨页签重复�
   // ⑧ g-488：六键自动化漏掉一键的逐键说明 ⇒ 必红且点名该键
   const h3 = hintMut('      rework: "settings.automationWhat.rework",\n', "", "删掉 rework 的逐键说明映射");
   assert.ok(h3.some((s) => s.includes("rework")), `应点名缺失的逐键说明，实得：${h3.join(" / ")}`);
+
+  // ⑨ g-490：`(?)` 回退原生 `title`（自绘浮层删除/退化）⇒ 必红且点名「不得回退 title」
+  const h4 = hintMut('            "aria-label": text,\n', '            "aria-label": text,\n            title: text,\n', "把 `(?)` 退回原生 title");
+  assert.ok(h4.some((s) => s.includes("不得出现原生")), `应点名回退原生 title，实得：${h4.join(" / ")}`);
+  // ⑩ g-490：删掉浮层的 tooltip 语义 ⇒ 必红（浮层存在性有判别力）
+  const h5 = hintMut('                role: "tooltip",\n', "", "删掉浮层的 role=tooltip");
+  assert.ok(h5.some((s) => s.includes('role: "tooltip"')), `应点名浮层语义缺失，实得：${h5.join(" / ")}`);
+  // ⑪ g-490：删掉「悬停即时显示」⇒ 必红（交互契约不是只靠 role 撑住）
+  const h6 = hintMut(
+    "            onMouseEnter: (e) => { hintLastEnterRef.current = Date.now(); openHintAt(tipId, e.currentTarget); },\n",
+    "",
+    "删掉悬停即时显示处理器",
+  );
+  assert.ok(h6.some((s) => s.includes("onMouseEnter")), `应点名悬停显示缺失，实得：${h6.join(" / ")}`);
+  // ⑫ g-490：删掉「至多一个浮层」的唯一状态 ⇒ 必红
+  const h7 = hintMut("      const [openHint, setOpenHint] = React.useState(null);\n", "", "删掉唯一 openHint 状态");
+  assert.ok(h7.some((s) => s.includes("openHint")), `应点名唯一浮层状态缺失，实得：${h7.join(" / ")}`);
+
+  // ⑬ g-490：把 project.yaml 行**搬回页脚** ⇒ 标题栏落点判据必红（回迁即红）
+  const footerMut = (from: string, to: string, label: string) => {
+    const src = real.replace(from, to);
+    assert.notEqual(src, real, `变异未生效（找不到锚点）：${label}`);
+    const problems = configFileRowProblems(src);
+    assert.ok(problems.length > 0, `变异「${label}」必须报红，实得 0 个问题`);
+    return problems;
+  };
+  const f1 = footerMut("            projectYamlRow),\n", "", "把 project.yaml 行从标题栏摘掉（= 搬回页脚）");
+  assert.ok(f1.some((s) => s.includes("恰好渲染一处")), `应点名标题栏插槽缺失，实得：${f1.join(" / ")}`);
+  // 真正「双份」的形态：标题栏 + 页脚各渲染一次 ⇒ 必红（迁移而非复制）
+  const dupSrc = real.replace(
+    "          error ? h(\"div\", { style: { ...S.meta,",
+    "          projectYamlRow,\n          error ? h(\"div\", { style: { ...S.meta,",
+  );
+  assert.notEqual(dupSrc, real, "变异未生效：页脚再渲染一份");
+  const f2 = configFileRowProblems(dupSrc);
+  assert.ok(
+    f2.some((s) => s.includes("恰好渲染一处")),
+    `页脚留双份必须判红（迁移≠复制），实得：${f2.join(" / ") || "（无问题）"}`,
+  );
 
   assert.deepEqual(readFileSync(modalPath), before, "负向对照不得改动真实仓库文件");
 });
