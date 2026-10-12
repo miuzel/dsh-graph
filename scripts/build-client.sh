@@ -80,6 +80,12 @@ PARTS=(
   # 与 search-state、board-retain、narrow-width、search-groups 同理必须在 drag-prompts 之前
   # （工厂作用域），否则会变成 KanbanView 内部的嵌套函数——每次渲染产生新身份，
   # 且 goal-modal / card-drawer 等更早的模块无法引用。
+  # ⚠️ 顺序前提（rev-att-004-01 残余风险，非阻塞）：goal-modal 在 PARTS 中更早，会引用本模块的
+  #    moduleEnabled。当前安全，是因为它以**函数声明**导出（声明提升 ⇒ 工厂入口即可见），且
+  #    goal-modal 只在**组件体内**（渲染期）取用、不在模块求值期取用。
+  #    若将来把它改成 `const moduleEnabled = () => …`（箭头函数无提升），或让更早的模块在
+  #    **模块求值期**（顶层）就取用该符号，将触发 TDZ（Cannot access before initialization）。
+  #    届时请把本模块**上移**到所有引用方之前，或同步调整取用时机。
   "module-gate"
   "drag-prompts"
   "kanban"
