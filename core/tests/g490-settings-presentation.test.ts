@@ -1,5 +1,5 @@
 /**
- * g-490 判据机器断言：设置弹窗**呈现层**四项改动的专用守卫（与 g479 / g488 / g132 / g442 的既有守卫
+ * g-490 判据机器断言：设置弹窗**呈现层**各项改动的专用守卫（与 g479 / g488 / g132 / g442 的既有守卫
  * **并存**——本次只替换「与旧呈现形状绑定」的那几条，其余一条不减）。
  *
  *  1. `(?)` 说明浮层化（替代原生 `title`）：自绘浮层 + 交互契约（悬停即时显示/离开隐藏/点击·触屏切换/
@@ -8,10 +8,18 @@
  *     删掉浮层/任一处理器 ⇒ 必红。
  *  2. 评审条件「生效值」可视化：不再是与说明文字同色的弱化文本，而是**输入框同构**的边框+底色+等宽字体
  *     （全不透明）；给出该面板全部生效值展示位清单并逐个核对。
- *  3. 自动化指导默认值：**未显式配置**的键显示 `默认：<解析默认值>`（不再显示「无」），默认值只来自
- *     引擎下发的 `automation_defaults`（客户端零硬编码副本）；六键逐一核对「缺键 ⇒ 默认」「已设 ⇒ 当前值」。
+ *  3. 主管自动化六键的**未配置**表达（负责人 2026-10-12 裁决：诚实口径、不编默认值）：只有**动作落在
+ *     既有某类人工 gate 范围内**的两键（`scope_planning` / `release`）显示 `默认：human` 且**同屏**
+ *     标注口径来源；其余四键只显示「未配置：保持既有指导」，不得出现任何 human/ai；客户端零硬编码副本
+ *     （来源值只能来自引擎下发的 `unset_scope`）。负向：无来源的具体 human/ai、把「保持既有指导」渲染成
+ *     human/ai ⇒ 必红。
  *  4. `project.yaml` 行从页脚迁到**标题栏右侧（关闭按钮左边）**：绝对路径 / 可打开 / 可复制，窄宽度与
  *     长路径下不断行错位；负向：搬回页脚或留双份 ⇒ 必红。
+ *  5. （扩写）判据 7「project.yaml 行归位与说明折叠」：`editHint` 与目录来源长句（`catalogReady`）等
+ *     **常驻平铺的说明性长句**一律折叠进自绘 `(?)`（文案一字未改 ⇒ 浮层正文 ≡ i18n 原文），常驻正文只留
+ *     短字段提示与必读警示 / 瞬态状态读数（`FOLDED_HINT_KEYS` / `FLAT_BODY_KEEP_KEYS` 两份清单逐条钉住）；
+ *     `(?)` 默认挂在 project.yaml 行内；目录说明 `(?)` **状态门控**（非就绪态不渲染，避免静态 tooltip 撒谎）。
+ *     负向：`editHint` 改回常驻平铺、`(?)` 移出该行、目录说明改回平铺、必读警示被悄悄折叠 ⇒ 必红。
  */
 
 import { test } from "node:test";
@@ -48,6 +56,24 @@ const AUTOMATION_KEEP_GUIDANCE_KEYS = ["integration_decision", "rework", "memory
 /** 「具体 human/ai 值」的判定（不分中英文侧）。 */
 const HUMAN_AI_RE = /\b(human|ai)\b/i;
 
+/** ===== 判据 7（扩写）：常驻平铺说明的**两份清单**（负责人 2026-10-12 增量裁决）=====
+ *  设置弹窗内「常驻平铺的说明性长句」一律折叠进自绘 `(?)` 浮层（同一交互契约；`aria-label` 保留全文；
+ *  文案一字未改 ⇒ 信息零丢失），常驻正文只留 ①**短字段提示** ②**必读警示 / 瞬态状态读数**。
+ *  `FOLDED_HINT_KEYS` = 已折叠清单（键名 + 落点）；`FLAT_BODY_KEEP_KEYS` = 仍留正文清单（逐条附理由）。
+ *  两份清单都由本文件断言逐条钉住（折叠项正文零残留；留正文项未被悄悄搬进浮层、也未从界面消失）。 */
+const FOLDED_HINT_KEYS: Array<{ key: string; site: string }> = [
+  { key: "settings.editHint", site: "标题栏 project.yaml 行内（📄 project.yaml 标签右侧）" },
+  { key: "settings.catalogReady", site: "「执行模式」标签右侧（**仅目录就绪态**渲染该 `(?)`）" },
+];
+const FLAT_BODY_KEEP_KEYS: Array<{ key: string; why: string }> = [
+  { key: "settings.reviewUnsetHint", why: "必读警示：缺省值并非按本项目校准（g479 亦钉住「未配置提示须一眼可见」）" },
+  { key: "settings.catalogLoadingMsg", why: "瞬态状态读数（目录加载中）" },
+  { key: "settings.catalogUnavailableMsg", why: "降级警示（目录不可用，已存值仍可保存）" },
+  { key: "settings.reviewSuggestedRegions", why: "数据行引导语（后接只读建议值，非说明性长句）" },
+  { key: "settings.inheritPrompt", why: "短字段提示（15 字）" },
+  { key: "settings.disabledPrompt", why: "短字段提示（9 字）" },
+];
+
 function loadClientI18n(src = readFileSync(i18nPath, "utf8")): { zh: Dict; en: Dict } {
   const sandbox: any = { React: {} };
   vm.runInNewContext(`${src}\n;this.zh = zh; this.en = en;`, sandbox);
@@ -83,7 +109,7 @@ function braceBlock(src: string, openIdx: number): string {
 
 type Rendered = { nodes: any[] };
 
-function renderModal(modalSrc: string, form: any, zh: Dict, opts: { tab?: string; openHint?: string | null } = {}): Rendered {
+function renderModal(modalSrc: string, form: any, zh: Dict, opts: { tab?: string; openHint?: string | null; catalog?: any } = {}): Rendered {
   const h = (type: any, props: any, ...children: any[]) => ({
     type,
     props: props || {},
@@ -93,6 +119,9 @@ function renderModal(modalSrc: string, form: any, zh: Dict, opts: { tab?: string
   overrides[5] = opts.tab ?? "executor";
   overrides[6] = "/abs/path/project.yaml";
   if (opts.openHint !== undefined) overrides[12] = opts.openHint;
+  // 判据 7 扩写：目录三态（loading / ready / unavailable）驱动 `catalogReady` 的**状态门控**折叠 ⇒
+  // 夹具必须能直接给定该状态（useState 序：9 = catalog）。
+  if (opts.catalog !== undefined) overrides[9] = opts.catalog;
   let idx = 0;
   const sandbox: any = {
     console,
@@ -470,6 +499,64 @@ test("g-490 判据4：`project.yaml` 行位于标题栏右侧（关闭按钮左�
   assert.doesNotMatch(src.slice(footerAt), /settings\.projectYaml/, "页脚之后不得再出现 project.yaml 文案");
 });
 
+// ========== 判据 7（扩写）：常驻平铺说明折叠 ==========
+
+/** 目录**就绪**态夹具（`catalog.status === "ready"` ⇒ 渲染就绪说明的 `(?)`；空 providers/groups 即可）。 */
+const READY_CATALOG = { status: "ready", providers: [], groups: [] };
+
+test("g-490 判据7（扩写）：editHint / catalogReady 折叠进 (?)——正文零残留、浮层正文 ≡ i18n 原文、目录态门控不撒谎", () => {
+  const src = readModal();
+  const { zh } = loadClientI18n();
+  const idFor = extractFn(src, "const settingsHintIdFor = (text) => {", "\n    };", "settingsHintIdFor");
+  // ① 已折叠清单：源码层「恰好一处 `(?)`」+ 常驻正文零残留（谓词与负向对照同源）
+  for (const { key, site } of FOLDED_HINT_KEYS) {
+    assert.deepEqual(foldedHintProblems(src, key), [], `已折叠项 ${key}（落点：${site}）`);
+  }
+  assert.deepEqual(editHintSiteProblems(src), [], "editHint 的 `(?)` 必须挂在 project.yaml 行内");
+  // ② 仍留正文清单：未被悄悄折叠、且仍在界面里（零丢失）
+  for (const { key, why } of FLAT_BODY_KEEP_KEYS) {
+    assert.equal(countOccurrences(src, `settingsHintIcon(dgT("${key}"))`), 0, `仍留正文项 ${key} 不得折叠（理由：${why}）`);
+    assert.ok(countOccurrences(src, `dgT("${key}")`) >= 1, `仍留正文项 ${key} 不得从界面消失`);
+  }
+  // ③ 渲染树（关闭态）：触发器保留说明全文（aria-label）；常驻正文里**找不到**该全文（已折叠）
+  const closed = renderModal(src, SNAPSHOT, zh, { tab: "executor" });
+  const editText = zh["settings.editHint"];
+  const editTriggers = closed.nodes.filter((n) => n.props?.["aria-label"] === editText);
+  assert.equal(editTriggers.length, 1, "`(?)` 触发器必须保留 editHint 全文（aria-label，零信息丢失）");
+  assert.equal(editTriggers[0].props.className, "dg-settings-hint", "该触发器必须是 `(?)` 图标本体");
+  assert.ok(!closed.nodes.map((n) => deepTextOf(n)).join("\n").includes(editText), "关闭态常驻正文不得出现 editHint（须仅在 `(?)` 浮层内）");
+  // ④ 渲染树（展开态）：浮层正文 ≡ i18n 原文（逐字）
+  const opened = renderModal(src, SNAPSHOT, zh, { tab: "executor", openHint: idFor(editText) });
+  const pops = opened.nodes.filter((n) => n.props?.role === "tooltip");
+  assert.equal(pops.length, 1, "展开态恰好一个浮层（至多一个）");
+  assert.equal(deepTextOf(pops[0]), editText, "折叠后浮层正文必须与 i18n 真源逐字一致（信息零丢失、不得悄悄改字）");
+  // 「≡」断言必须有牙（非空对照）：折叠文案改字后，同一断言必须不再成立
+  const mutatedText = editText + "（已简化）";
+  const tampered = src.replace('settingsHintIcon(dgT("settings.editHint"))', 'settingsHintIcon(dgT("settings.editHint") + "（已简化）")');
+  assert.notEqual(tampered, src, "改字变异必须真的改动源码");
+  assert.notDeepEqual(foldedHintProblems(tampered, "settings.editHint"), [], "改字后「恰好经 (?) 承载一次」谓词必须报红");
+  const tamperedPop = renderModal(tampered, SNAPSHOT, zh, { tab: "executor", openHint: idFor(mutatedText) })
+    .nodes.filter((n) => n.props?.role === "tooltip");
+  assert.equal(tamperedPop.length, 1, "改字变异体仍能打开其浮层（对照有效）");
+  assert.notEqual(deepTextOf(tamperedPop[0]), editText, "改字后「浮层正文 ≡ i18n 原文」必须判红（断言非空）");
+  // ⑤ 目录态门控：非就绪态**不得**渲染就绪说明的 `(?)`（静态 tooltip 会撒谎），降级读数仍在正文
+  const unavailable = renderModal(src, SNAPSHOT, zh, { tab: "executor", catalog: { status: "unavailable" } });
+  assert.equal(unavailable.nodes.filter((n) => n.props?.["aria-label"] === zh["settings.catalogReady"]).length, 0, "目录非就绪态不得渲染就绪说明的 `(?)`");
+  assert.ok(unavailable.nodes.map((n) => deepTextOf(n)).join("\n").includes(zh["settings.catalogUnavailableMsg"]), "目录不可用读数必须留在正文（一眼可见）");
+  const loading = renderModal(src, SNAPSHOT, zh, { tab: "executor", catalog: { status: "loading" } });
+  assert.equal(loading.nodes.filter((n) => n.props?.["aria-label"] === zh["settings.catalogReady"]).length, 0, "目录加载中态同样不得渲染就绪说明的 `(?)`");
+  assert.ok(loading.nodes.map((n) => deepTextOf(n)).join("\n").includes(zh["settings.catalogLoadingMsg"]), "目录加载中读数必须留在正文");
+  // ⑥ 就绪态：长句说明进 `(?)`（正文零残留），浮层正文 ≡ i18n 原文
+  const ready = renderModal(src, SNAPSHOT, zh, { tab: "executor", catalog: READY_CATALOG });
+  const readyText = zh["settings.catalogReady"];
+  assert.equal(ready.nodes.filter((n) => n.props?.["aria-label"] === readyText).length, 1, "就绪态必须渲染目录说明的 `(?)`");
+  assert.ok(!ready.nodes.map((n) => deepTextOf(n)).join("\n").includes(readyText), "就绪态正文不得再出现目录说明长句");
+  const readyPop = renderModal(src, SNAPSHOT, zh, { tab: "executor", catalog: READY_CATALOG, openHint: idFor(readyText) })
+    .nodes.filter((n) => n.props?.role === "tooltip");
+  assert.equal(readyPop.length, 1, "就绪态展开后恰好一个浮层");
+  assert.equal(deepTextOf(readyPop[0]), readyText, "目录说明浮层正文 ≡ i18n 原文");
+});
+
 // ========== 引擎真源 ↔ 客户端消费 一致性 ==========
 
 test("g-490 真源一致性：AUTOMATION_UNSET_SCOPE（引擎口径来源）↔ settings API 下发 ↔ schema_hints ↔ 客户端消费", () => {
@@ -509,6 +596,37 @@ test("g-490 真源一致性：AUTOMATION_UNSET_SCOPE（引擎口径来源）↔ 
 /** 各判据的契约检查（同一组谓词同时用于正向与负向：正向必须无问题、变异体必须报出问题）。
  *  判据 6（未配置口径）的谓词含**两条新增负例**：①未配置文案出现无来源的具体 human/ai ⇒ 报红；
  *  ②把「保持既有指导」渲染成 human/ai ⇒ 报红。 */
+/** 判据 7（扩写）：给定 i18n 键的说明文案「**只经 `(?)` 浮层承载一次、常驻正文零残留**」不变式
+ *  （正向与负向对照共用同一组谓词）。常驻正文渲染面 = 作为 `h(...)` 的**子节点实参**直接渲染
+ *  （`…, dgT("key"))`）、作为三元分支直接渲染（`? / : dgT("key")`），或既有专用平铺行形状。 */
+function foldedHintProblems(modalSrc: string, key: string): string[] {
+  const problems: string[] = [];
+  const esc = key.replace(/\./g, "\\.");
+  const call = `settingsHintIcon(dgT("${key}"))`;
+  const n = countOccurrences(modalSrc, call);
+  if (n !== 1) problems.push(`判据7：${key} 必须恰好经 (?) 承载一次（零丢失且不重复），实得 ${n} 次`);
+  if (new RegExp(`,\\s*dgT\\("${esc}"\\)\\)`).test(modalSrc) || new RegExp(`[?:]\\s*dgT\\("${esc}"\\)`).test(modalSrc)) {
+    problems.push(`判据7：${key} 不得出现在常驻正文渲染面（须仅在 (?) 浮层内）`);
+  }
+  if (modalSrc.includes(`h("div", { style: S.meta }, dgT("${key}"))`)) {
+    problems.push(`判据7：${key} 不得作为常驻平铺行渲染（须仅在 (?) 浮层内）`);
+  }
+  return problems;
+}
+
+/** 判据 7（扩写）：`editHint` 的 `(?)` 必须落在 `projectYamlRow` 定义块内（不孤挂在标题旁、不下沉正文）。 */
+function editHintSiteProblems(modalSrc: string): string[] {
+  const problems: string[] = [];
+  const rowAt = modalSrc.indexOf("const projectYamlRow = configFile");
+  const rowEndAt = rowAt >= 0 ? modalSrc.indexOf(": null;", rowAt) : -1;
+  const iconAt = modalSrc.indexOf('settingsHintIcon(dgT("settings.editHint"))');
+  if (rowAt < 0 || rowEndAt < 0) problems.push("判据7：找不到 project.yaml 行定义块");
+  else if (iconAt < 0 || !(iconAt > rowAt && iconAt < rowEndAt)) {
+    problems.push("判据7：editHint 的 (?) 必须挂在 project.yaml 行内（不得移出该行或下沉正文）");
+  }
+  return problems;
+}
+
 function presentationProblems(modalSrc: string, zh: Dict): string[] {
   const problems: string[] = [];
   // ---- 判据 1：`(?)` 浮层契约 ----
@@ -590,6 +708,17 @@ function presentationProblems(modalSrc: string, zh: Dict): string[] {
   if (!titleBar || !deepTextOf(titleBar).includes("/abs/path/project.yaml")) problems.push("判据4：project.yaml 行不在标题栏（可能被搬回页脚）");
   const footer = rendered.nodes.find((n) => n.type === "div" && (n.children ?? []).some((c: any) => deepTextOf(c) === zh["settings.closeBtn"]));
   if (footer && deepTextOf(footer).includes("/abs/path/project.yaml")) problems.push("判据4：页脚仍残留 project.yaml（迁移≠复制）");
+  // ---- 判据 7（扩写）：常驻平铺说明折叠 + project.yaml 行内 `(?)` 落点 ----
+  for (const { key } of FOLDED_HINT_KEYS) problems.push(...foldedHintProblems(modalSrc, key));
+  problems.push(...editHintSiteProblems(modalSrc));
+  for (const { key, why } of FLAT_BODY_KEEP_KEYS) {
+    if (countOccurrences(modalSrc, `settingsHintIcon(dgT("${key}"))`) !== 0) {
+      problems.push(`判据7：${key} 属「仍留正文」清单（${why}），不得折叠进 (?)`);
+    }
+    if (countOccurrences(modalSrc, `dgT("${key}")`) < 1) {
+      problems.push(`判据7：${key} 在「仍留正文」清单里却已从界面消失（信息丢失）`);
+    }
+  }
   return problems;
 }
 
@@ -619,8 +748,16 @@ test("g-490 改坏即红：各判据契约在内存变异下逐项报红（含�
     // g-490 负例②：把「保持既有指导」渲染成 human/ai（无 gate 范围的键不得出现任何 human/ai）
     { name: "把「保持既有指导」渲染成 human/ai", src: before.replace('unsetScope ? dgT("settings.automationDefaultPrefix") + unsetScope.gate_requires : dgT("settings.automationUnsetKeep")', 'dgT("settings.automationUnsetKeep") + " (human)"'), expect: /不得出现任何 human\/ai/ },
     { name: "project.yaml 行搬离标题栏", src: before.replace("            projectYamlRow),\n", "            ),\n"), expect: /不在标题栏/ },
+    // g-490 判据 7（扩写）负例①：editHint 改回**常驻平铺**渲染 ⇒ 必红（说明必须只经 `(?)` 承载）
+    { name: "editHint 改回常驻平铺", src: before.replace('settingsHintIcon(dgT("settings.editHint"))', 'h("span", { style: S.meta }, dgT("settings.editHint"))'), expect: /不得出现在常驻正文渲染面/ },
+    // g-490 判据 7（扩写）负例②：`(?)` 移出 project.yaml 行（孤挂在标题旁）⇒ 必红
+    { name: "editHint 的 (?) 移出 project.yaml 行", src: before.replace('settingsHintIcon(dgT("settings.editHint"))', "null").replace("            projectYamlRow),\n", "            projectYamlRow),\n          settingsHintIcon(dgT(\"settings.editHint\")),\n"), expect: /必须挂在 project.yaml 行内/ },
+    // g-490 判据 7（扩写）负例③：目录就绪说明改回常驻平铺 ⇒ 必红
+    { name: "目录就绪说明改回常驻平铺", src: before.replace('catReady ? settingsHintIcon(dgT("settings.catalogReady")) : null', 'catReady ? dgT("settings.catalogReady") : null'), expect: /不得出现在常驻正文渲染面/ },
+    // g-490 判据 7（扩写）负例④：把「仍留正文」的必读警示（reviewUnsetHint）悄悄折叠 ⇒ 必红
+    { name: "必读警示 reviewUnsetHint 被悄悄折叠", src: before.replace('h("div", { style: metaStyle }, dgT("settings.reviewUnsetHint")),', 'settingsHintIcon(dgT("settings.reviewUnsetHint")),'), expect: /属「仍留正文」清单/ },
   ];
-  assert.ok(mutants.length >= 11, `变异负向对照只增不减（实得 ${mutants.length} 项：9 项既有 + 2 项未配置口径新增）`);
+  assert.ok(mutants.length >= 15, `变异负向对照只增不减（实得 ${mutants.length} 项：11 项既有 + 4 项判据 7 扩写新增）`);
   for (const m of mutants) {
     assert.notEqual(m.src, before, `变异体「${m.name}」必须真的改动了源码（否则是空变异）`);
     const got = presentationProblems(m.src, zh).join(" | ");

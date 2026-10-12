@@ -935,6 +935,12 @@
             style: { display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", justifyContent: "flex-end", marginLeft: "auto", minWidth: 0 },
           },
             h("span", { style: { fontSize: 11, opacity: 0.7, whiteSpace: "nowrap" } }, dgT("settings.projectYaml")),
+            // g-490 增量（判据 7 扩写）：本行说明（settings.editHint）原为标题下方**常驻平铺**的一行，
+            // 现收进本行内的**自绘 `(?)` 浮层**（与其余 `(?)` 同一交互契约：悬停/点击/键盘聚焦、
+            // Esc·浮层外点击·滚动关闭、同屏至多一个、`aria-label` 保留全文）。文案**一字未改** ⇒
+            // 信息零丢失，只是不再占常驻正文。落点选在 📄 project.yaml 标签旁（紧邻其描述对象），
+            // 不跟在可换行的绝对路径之后（窄宽度换行时才不会与图标分离）。
+            settingsHintIcon(dgT("settings.editHint")),
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
               className: "dg-btn",
@@ -961,11 +967,12 @@
       return dgOverlay({ style: S.overlay, ...backdropGuard },
         h("div", { style: { ...S.modal, maxWidth: 640 }, onClick: (e) => e.stopPropagation() },
           h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
-          // g-490：标题栏 = 标题 + （右端）project.yaml 行；editHint 仍在标题下方一行。
+          // g-490：标题栏 = 标题 + （右端）project.yaml 行。增量（判据 7 扩写）：原先「标题下方常驻
+          // 一行」的 editHint 说明已折叠进该行内的 `(?)` ⇒ 正文里**不再有**这一行（负向守卫钉住，
+          // 回退成常驻平铺即判红）。
           h("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", paddingRight: 34 } },
             h("div", { style: { ...S.modalH, marginBottom: 0, flex: "0 0 auto" } }, dgT("settings.title")),
             projectYamlRow),
-          h("div", { style: S.meta }, dgT("settings.editHint")),
           // g-479：分类页签切换栏——用页签取代原「单列滚动 + 高级设置折叠」。点击只切 activeTab，
           // 面板内容常驻（同一 form 草稿）⇒ 跨页签不丢编辑；保存链路/关闭确认一字未改。
           h("div", {
@@ -1006,7 +1013,13 @@
               }, ...effortOptions)),
             // g-191：执行模式受控下拉
             h("div", { style: { minWidth: 0, marginBottom: 6 } },
-              h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
+              h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 2 } },
+                h("label", { htmlFor: modeId, style: { display: "block", marginBottom: 2, fontSize: 11, opacity: 0.8 } }, dgT("settings.modeLabel")),
+                // g-490 增量（判据 7 扩写）：本面板最长的一段常驻平铺说明（catalogReady，讲目录来源与
+                // 三项派生规则）折叠进标签右侧 `(?)`——与相邻「推理档位」同一承载方式。**状态门控**：
+                // 只有目录就绪态才渲染该 `(?)`；加载中/不可用仍按原文案常驻正文（见下方状态行）⇒
+                // 不存在「静态 tooltip 撒谎」，降级读数依旧一眼可见。
+                catReady ? settingsHintIcon(dgT("settings.catalogReady")) : null),
               h("select", {
                 id: modeId,
                 "aria-label": dgT("settings.modeAria"),
@@ -1017,10 +1030,11 @@
                 h("option", { value: "", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeInherited")),
                 h("option", { value: "standard", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeStandard")),
                 h("option", { value: "minimal", style: { background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)" } }, dgT("settings.modeMinimal")))),
-            h("div", { style: { ...S.meta, marginTop: 4 } },
-              catReady
-                ? dgT("settings.catalogReady")
-                : (catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg"))),
+            // g-490 增量：就绪态的长句说明已进上方 `(?)`；正文只留**瞬态/降级**状态读数（必读警示）。
+            catReady
+              ? null
+              : h("div", { style: { ...S.meta, marginTop: 4 } },
+                  catalog.status === "loading" ? dgT("settings.catalogLoadingMsg") : dgT("settings.catalogUnavailableMsg")),
             // ===== g-488：Agent Teams 契约开关（自「评审与质量」页签**归位**到「模型与执行」）=====
             // g-440 契约逐字不变：**默认 off**；off 时派发提示词逐字不变（diff=0），on 才把 discipline
             // 资产中的契约段注入派发提示词（core `resolveAgentTeamsInjection`）。三态归一（null/未配置

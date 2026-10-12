@@ -258,8 +258,11 @@ function settingsHintIdForSrc(modalSrc: string, text: string): string {
   return fn(text);
 }
 
-/** g-490：`project.yaml` 行必须落在**标题栏插槽**（标题行之后、editHint 之前、页脚按钮行之前），
- *  恰好一处、不得复制到页脚。真实源码 / 变异副本共用（负向对照同口径）。 */
+/** g-490：`project.yaml` 行必须落在**标题栏插槽**（标题行之后、页签栏之前、页脚按钮行之前），
+ *  恰好一处、不得复制到页脚。真实源码 / 变异副本共用（负向对照同口径）。
+ *  g-490 判据 7 扩写**改判**：原下界锚点是与旧呈现形状绑定的「editHint 常驻平铺行」，该行已折叠进
+ *  行内 `(?)` ⇒ 下界改用**语义等价且更强**的页签栏锚点（页签栏同样紧跟标题栏、且必须晚于该行），
+ *  并新增「editHint 不得再常驻平铺」的负向断言（断言只增不减）。 */
 function configFileRowProblems(modalSrc: string): string[] {
   const problems: string[] = [];
   const headerAt = modalSrc.indexOf('{ ...S.modalH, marginBottom: 0, flex: "0 0 auto" } }, dgT("settings.title")');
@@ -267,7 +270,7 @@ function configFileRowProblems(modalSrc: string): string[] {
   // 缩进无关，双份/搬回页脚都能抓住。
   const slotSites = modalSrc.match(/projectYamlRow[,)]/g) || [];
   const slotAt = modalSrc.search(/projectYamlRow[,)]/);
-  const editHintAt = modalSrc.indexOf('h("div", { style: S.meta }, dgT("settings.editHint"))');
+  const tabsAt = modalSrc.indexOf('"aria-label": dgT("settings.tabsAria")');
   const footerAt = modalSrc.indexOf(FOOTER_ANCHOR);
   if (slotSites.length !== 1) {
     problems.push(`project.yaml 行必须恰好渲染一处（标题栏插槽 projectYamlRow），实得 ${slotSites.length} 处`);
@@ -277,8 +280,15 @@ function configFileRowProblems(modalSrc: string): string[] {
   } else if (slotAt < headerAt) {
     problems.push("project.yaml 行必须在标题行之后");
   }
-  if (editHintAt > 0 && slotAt > editHintAt) {
-    problems.push("project.yaml 行必须在 editHint 之前（留在标题栏内，不下沉正文）");
+  if (tabsAt > 0 && slotAt > tabsAt) {
+    problems.push("project.yaml 行必须在页签栏之前（留在标题栏内，不下沉正文）");
+  }
+  if (countOccurrences(modalSrc, 'h("div", { style: S.meta }, dgT("settings.editHint"))') !== 0
+    || /,\s*dgT\("settings\.editHint"\)\)/.test(modalSrc)) {
+    problems.push("editHint 不得再作为常驻平铺行渲染（须仅在 project.yaml 行内 `(?)` 浮层内）");
+  }
+  if (countOccurrences(modalSrc, 'settingsHintIcon(dgT("settings.editHint"))') !== 1) {
+    problems.push("editHint 必须恰好经 `(?)` 承载一次（零丢失且不重复）");
   }
   if (footerAt > 0 && slotAt > footerAt) {
     problems.push("project.yaml 行不得位于页脚按钮行之后（回迁即红）");
@@ -779,12 +789,15 @@ test("g-488 判据5：说明文字 tooltip 化——`(?)` 键盘可达且语义�
   assert.ok(bodyText.includes(zh["settings.reviewSourceLabel"]), "来源徽标必须留在正文（状态读数不进 tooltip）");
   // 状态类读数**逐键**钉住「不得进 tooltip」——它们随状态变化，塞进 tooltip 会撒谎。
   // （「某读数在正文里确实可见」的正面腿由 g442 的正文专用收集器断言，两处同口径、互不替代。）
+  // g-490 判据 7 扩写**改判**（`settings.catalogReady` 一项）：该项原属「状态类读数」清单，现按负责人
+  // 增量裁决折叠进「执行模式」标签右侧 `(?)`——**状态门控**（仅 `catReady` 态渲染该 `(?)`）⇒ 不会对
+  // 非就绪态撒谎；本渲染（目录不可用）下它根本不出现。原清单项此处**换成更强的一对断言**
+  // （源码层：恰好经 `(?)` 承载一次 + 不得平铺正文），其余 8 项一条不减。
   for (const key of [
     "settings.reviewUnsetHint",
     "settings.reviewIllegalEmpty",
     "settings.reviewSourceIllegalEmpty",
     "settings.reviewEffectiveBlank",
-    "settings.catalogReady",
     "settings.catalogLoadingMsg",
     "settings.catalogUnavailableMsg",
     "settings.intervalWarn",
@@ -792,6 +805,10 @@ test("g-488 判据5：说明文字 tooltip 化——`(?)` 键盘可达且语义�
   ]) {
     assert.ok(!titles.some((t) => t.includes(zh[key])), `状态读数 ${key} 不得进 tooltip（必须留在正文）`);
   }
+  assert.equal(countOccurrences(src, 'settingsHintIcon(dgT("settings.catalogReady"))'), 1, "目录就绪说明必须恰好经 `(?)` 承载一次");
+  assert.equal(countOccurrences(src, '? dgT("settings.catalogReady")'), 0, "目录就绪说明不得再平铺正文（回退即红）");
+  assert.match(src, /catReady \? settingsHintIcon\(dgT\("settings\.catalogReady"\)\) : null/, "目录就绪说明的 `(?)` 必须状态门控（仅就绪态渲染）");
+  assert.ok(!titles.some((t) => t.includes(zh["settings.catalogReady"])), "本渲染（目录不可用）下不得出现就绪说明（状态门控不撒谎）");
   // 禁用按钮残留检查：`(?)` 不得把整段说明同时留在正文（双份即信息重复）
   assert.equal(countOccurrences(src, "settingsHintIcon(dgT(\"settings.tabLocalNote\"))"), 1, "页级说明只经 tooltip 承载一次");
 });

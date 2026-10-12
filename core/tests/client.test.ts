@@ -304,9 +304,34 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   );
   const titleBarIdx = modal.indexOf('{ ...S.modalH, marginBottom: 0, flex: "0 0 auto" } }, dgT("settings.title")');
   const cfgRowIdx = modal.indexOf("projectYamlRow)");
-  const editHintIdx = modal.indexOf('h("div", { style: S.meta }, dgT("settings.editHint"))');
   assert.ok(titleBarIdx > 0 && cfgRowIdx > titleBarIdx, "标题栏 = 标题 + 右端 project.yaml 行（关闭按钮左侧）");
-  assert.ok(editHintIdx > cfgRowIdx, "editHint 仍在标题栏下方一行");
+  // g-490（判据 7 扩写）：editHint 说明由「标题下方常驻一行」**折叠进该行内的 `(?)`** ——
+  // 正向锚点（恰好一处、经唯一构造点 `settingsHintIcon` 承载）+ 负向锚点（常驻平铺形状必须消失）。
+  assert.equal(
+    (modal.match(/settingsHintIcon\(dgT\("settings\.editHint"\)\)/g) || []).length,
+    1,
+    "editHint 必须恰好经 `(?)` 承载一次（零丢失且不重复）",
+  );
+  assert.doesNotMatch(modal, /h\("div", \{ style: S\.meta \}, dgT\("settings\.editHint"\)\)/, "editHint 不得再作为常驻平铺行渲染（回退即红）");
+  assert.doesNotMatch(modal, /,\s*dgT\("settings\.editHint"\)\)/, "editHint 不得作为 h(...) 子节点实参常驻正文（须仅在 `(?)` 浮层内）");
+  assert.doesNotMatch(modal, /[?:]\s*dgT\("settings\.editHint"\)/, "editHint 不得作为三元分支常驻正文（须仅在 `(?)` 浮层内）");
+  const editHintRowIdx = modal.indexOf("const projectYamlRow = configFile");
+  const editHintRowEndIdx = modal.indexOf(": null;", editHintRowIdx);
+  const editHintIconIdx = modal.indexOf('settingsHintIcon(dgT("settings.editHint"))');
+  assert.ok(
+    editHintRowIdx > 0 && editHintRowEndIdx > editHintRowIdx && editHintIconIdx > editHintRowIdx && editHintIconIdx < editHintRowEndIdx,
+    "editHint 的 `(?)` 必须挂在 project.yaml 行内（该行已含 打开/复制路径）",
+  );
+  // g-490（判据 7 扩写）：目录来源长句（catalogReady）同样折叠进「执行模式」标签右侧 `(?)`，且**状态门控**
+  // （非就绪态不渲染该 `(?)`，加载中/不可用读数仍留正文）——负向：改回常驻平铺即红。
+  assert.equal(
+    (modal.match(/settingsHintIcon\(dgT\("settings\.catalogReady"\)\)/g) || []).length,
+    1,
+    "目录就绪说明必须恰好经 `(?)` 承载一次",
+  );
+  assert.match(modal, /catReady \? settingsHintIcon\(dgT\("settings\.catalogReady"\)\) : null/, "目录就绪说明的 `(?)` 必须状态门控（仅就绪态渲染）");
+  assert.doesNotMatch(modal, /[?:]\s*dgT\("settings\.catalogReady"\)/, "目录就绪说明不得再平铺正文（回退即红）");
+  assert.match(modal, /catalog\.status === "loading" \? dgT\("settings\.catalogLoadingMsg"\) : dgT\("settings\.catalogUnavailableMsg"\)/, "瞬态/降级读数仍留正文（一眼可见）");
   assert.match(modal, /gap: 8, flexWrap: "wrap", paddingRight: 34 \}/, "标题栏为绝对定位的关闭按钮留出 34px");
   assert.match(modal, /justifyContent: "flex-end", marginLeft: "auto", minWidth: 0 \}/, "配置行顶到右端且可收缩（窄宽度不撑破）");
   assert.match(modal, /fontSize: 11, opacity: 0\.7, wordBreak: "break-all", minWidth: 0 \}/, "绝对路径可断行（长路径不撑破）");
