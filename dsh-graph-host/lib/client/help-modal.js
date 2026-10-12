@@ -32,6 +32,18 @@
     ];
     // FAQ 项编号（只用于取 i18n 键与 React key，界面上不显示编号）。
     const HELP_FAQ_ITEMS = [1, 2, 3, 4, 5, 6, 7];
+    // g-489：使用说明页签的**分模块章节**（顺序即展示顺序：看板/目标/版本管理/泳道/侧边栏/
+    // 上下文卡片与项目知识库/记忆系统/子代理与 agent teams/常用设置）。每章三要素缺一即判红
+    //（core/tests/g489-help-content.test.ts）。
+    const HELP_MODULE_CHAPTERS = [
+      "board", "goal", "version", "lane", "sidebar", "cards", "memory", "subagents", "settings",
+    ];
+    // 章内三要素：是什么 / 怎么用 / 关键操作（后缀 → 展示标签键）。
+    const HELP_CHAPTER_FIELDS = [
+      { key: "what", labelKey: "help.mod.what" },
+      { key: "how", labelKey: "help.mod.how" },
+      { key: "ops", labelKey: "help.mod.ops" },
+    ];
 
     /** 资产展示标签：优先 i18n（`help.asset.<base>`）；缺键时回退到资产基名 ⇒ 新资产仍可见。 */
     function helpAssetLabel(base) {
@@ -59,6 +71,86 @@
       return catalog && catalog.prompt_language === "en" ? "en" : "zh";
     }
 
+    /** 目录条目里的双语字段取值（生效语言优先，缺该语言回落 zh；两者都缺给空串）。 */
+    function helpCatalogText(field, lang) {
+      if (!field || typeof field !== "object") return "";
+      return field[lang] || field.zh || field.en || "";
+    }
+
+    /** g-489 入门第一步：先指定主管 Agent（技能名 + 接管这一步 + 可直接复制的示例提示词）。
+     *  说明文案与示例提示词全部走 i18n（本模块不得出现任何工具名字面量）。 */
+    function HelpEntryStep() {
+      const [note, setNote] = React.useState("");
+      const prompt = dgT("help.entry.prompt");
+      React.useEffect(() => {
+        if (!note) return undefined;
+        const timer = setTimeout(() => setNote(""), 2400);
+        return () => clearTimeout(timer);
+      }, [note]);
+      return h("div", {
+        className: "dg-help-entry",
+        style: {
+          marginTop: 12, padding: "10px 12px", borderRadius: 6,
+          background: "rgba(76,141,255,.10)", border: "1px solid rgba(76,141,255,.35)",
+        },
+      },
+        h("div", { className: "dg-help-entry-title", style: { fontWeight: 700, fontSize: 13 } }, dgT("help.entry.title")),
+        h("p", {
+          className: "dg-help-p dg-help-entry-body",
+          style: { margin: "6px 0 0", fontSize: 12.5, lineHeight: 1.75 },
+        }, dgT("help.entry.body")),
+        h("div", {
+          style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 8 },
+        },
+          h("div", { className: "dg-help-entry-label", style: { ...S.meta, marginRight: "auto" } }, dgT("help.entry.promptLabel")),
+          h("button", {
+            className: "dg-btn dg-help-entry-copy",
+            style: { ...S.btn, padding: "2px 10px", fontSize: 12 },
+            onClick: async () => {
+              // 复用工厂作用域既有的复制实现（Clipboard API + execCommand 回退），不新增第二套。
+              const ok = await copyText(prompt);
+              setNote(ok ? dgT("help.entry.copied") : dgT("help.entry.copyFail"));
+            },
+          }, dgT("help.entry.copy")),
+          note
+            ? h("span", { className: "dg-help-entry-note", style: S.meta }, note)
+            : null),
+        h("pre", {
+          className: "dg-help-entry-prompt",
+          style: {
+            margin: "6px 0 0", padding: "8px 10px", borderRadius: 6, fontSize: 12, lineHeight: 1.7,
+            whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit",
+            background: "rgba(128,128,128,.10)",
+          },
+        }, prompt));
+    }
+
+    /** g-489 分模块章节：一章一块，三要素逐行标出（是什么 / 怎么用 / 关键操作）。 */
+    function HelpModuleChapter(props) {
+      const chapter = props.chapter;
+      return h("div", {
+        className: "dg-help-chapter",
+        style: { marginTop: 10, paddingTop: 8, borderTop: "1px solid rgba(128,128,128,.22)" },
+      },
+        h("div", {
+          className: "dg-help-chapter-title",
+          style: { fontWeight: 700, fontSize: 13 },
+        }, dgT("help.mod." + chapter + ".title")),
+        ...HELP_CHAPTER_FIELDS.map((f) => h("div", {
+          key: "help-mod-" + chapter + "-" + f.key,
+          className: "dg-help-chapter-row dg-help-chapter-" + f.key,
+          style: { display: "flex", gap: 8, marginTop: 4, fontSize: 12, lineHeight: 1.75 },
+        },
+          h("span", {
+            className: "dg-help-chapter-label",
+            style: { ...S.meta, flex: "0 0 56px", whiteSpace: "nowrap" },
+          }, dgT(f.labelKey)),
+          h("span", {
+            className: "dg-help-chapter-text",
+            style: { flex: "1 1 auto", minWidth: 0, opacity: 0.92 },
+          }, dgT("help.mod." + chapter + "." + f.key)))));
+    }
+
     function HelpUsageTab() {
       return h("div", { className: "dg-help-usage" },
         h("div", {
@@ -69,7 +161,20 @@
           key: "help-usage-" + key,
           className: "dg-help-p",
           style: { margin: "0 0 8px", fontSize: 13, lineHeight: 1.7 },
-        }, dgT(key))));
+        }, dgT(key))),
+        h(HelpEntryStep, { key: "help-entry-step" }),
+        h("div", {
+          className: "dg-help-mod-title",
+          style: { fontWeight: 700, fontSize: 14, marginTop: 16 },
+        }, dgT("help.mod.title")),
+        h("p", {
+          className: "dg-help-p dg-help-mod-intro",
+          style: { margin: "4px 0 0", fontSize: 13, lineHeight: 1.7 },
+        }, dgT("help.mod.intro")),
+        ...HELP_MODULE_CHAPTERS.map((chapter) => h(HelpModuleChapter, {
+          key: "help-chapter-" + chapter,
+          chapter,
+        })));
     }
 
     function HelpPromptsTab(props) {
@@ -131,29 +236,78 @@
                 }, h(GoalMarkdown, { text: asset.text })))));
     }
 
+    /** g-489 工具清单页签：按宿主分类真源分**表格**呈现（简称 / 工具名 / 用途），每类一张表。
+     *  分类、简称、用途全部来自 `/help/catalog`（本模块零硬编码工具名/分类名/简称）；
+     *  宿主的结构守卫（分类表 ≡ 注册真源）报红时，页签顶部显示红条并列出红因。 */
     function HelpToolsTab(props) {
       const state = props.catalogState || {};
       const catalog = state.catalog;
       const tools = (catalog && Array.isArray(catalog.tools)) ? catalog.tools : [];
+      const categories = (catalog && Array.isArray(catalog.categories)) ? catalog.categories : [];
+      const problems = (catalog && Array.isArray(catalog.taxonomy_problems)) ? catalog.taxonomy_problems : [];
       const lang = helpCatalogLanguage(catalog);
-      // 三态各自成数组，渲染处统一展开（避免三元里插 spread）。
+      const thStyle = { textAlign: "left", fontSize: 12, fontWeight: 600, padding: "4px 8px 4px 0", borderBottom: "1px solid rgba(128,128,128,.35)" };
+      const tdStyle = { fontSize: 12, lineHeight: 1.6, padding: "5px 8px 5px 0", verticalAlign: "top" };
+      // 分类顺序来自宿主（不重排）；每类的行取自同一份 tools 投影。
+      const groups = categories.map((c) => ({
+        key: c.key,
+        label: helpCatalogText(c.label, lang),
+        rows: tools.filter((t) => t.category === c.key),
+      }));
+      // 未归类（分类键缺失/未登记）也必须可见 —— 不许静默丢项。
+      const orphan = tools.filter((t) => !categories.some((c) => c.key === t.category));
+      if (orphan.length) groups.push({ key: "__orphan__", label: dgT("help.tools.orphan"), rows: orphan });
       const body = state.status === "loading"
         ? [h("div", { key: "help-tools-loading", className: "dg-help-loading", style: { ...S.meta, padding: "8px 0" } }, dgT("help.tools.loading"))]
         : state.status === "error"
           ? [h("div", { key: "help-tools-error", className: "dg-help-error", style: { fontSize: 12, padding: "8px 0" } }, dgT("help.tools.error", { error: String(state.error ?? "") }))]
-          : tools.map((t) => h("div", {
-            key: "help-tool-" + t.name,
-            className: "dg-help-tool",
-            style: { padding: "6px 0", borderTop: "1px solid rgba(128,128,128,.22)" },
-          },
-            h("code", {
-              className: "dg-help-tool-name",
-              style: { fontSize: 12, fontWeight: 600 },
-            }, t.name),
-            h("div", {
-              className: "dg-help-tool-desc",
-              style: { fontSize: 12, lineHeight: 1.6, marginTop: 2, opacity: 0.9 },
-            }, (t.description && (t.description[lang] || t.description.zh)) || "")));
+          : [
+            problems.length
+              ? h("div", {
+                key: "help-tools-problems",
+                className: "dg-help-tools-problems",
+                style: {
+                  fontSize: 12, lineHeight: 1.7, marginBottom: 8, padding: "6px 8px", borderRadius: 4,
+                  color: "var(--dsw-alias-state-error-primary, #ff6b6b)",
+                  background: "rgba(255,107,107,.12)", border: "1px solid rgba(255,107,107,.45)",
+                },
+              }, dgT("help.tools.problems") + " " + problems.join("；"))
+              : null,
+            ...groups.map((g) => h("div", {
+              key: "help-tools-group-" + g.key,
+              className: "dg-help-tools-group",
+              style: { marginBottom: 12 },
+            },
+              h("div", {
+                className: "dg-help-tools-group-title",
+                style: { fontWeight: 600, fontSize: 12.5, marginBottom: 4, opacity: 0.95 },
+              }, g.label + "（" + g.rows.length + "）"),
+              h("table", {
+                className: "dg-help-tools-table",
+                style: { width: "100%", borderCollapse: "collapse" },
+              },
+                h("thead", null, h("tr", null,
+                  h("th", { style: { ...thStyle, width: 96 } }, dgT("help.tools.colShort")),
+                  h("th", { style: { ...thStyle, width: 210 } }, dgT("help.tools.colName")),
+                  h("th", { style: thStyle }, dgT("help.tools.colUse")))),
+                h("tbody", null, ...g.rows.map((t) => h("tr", {
+                  key: "help-tool-" + t.name,
+                  className: "dg-help-tool",
+                },
+                  h("td", {
+                    className: "dg-help-tool-short",
+                    style: { ...tdStyle, fontWeight: 600 },
+                  }, helpCatalogText(t.short, lang)),
+                  h("td", { style: tdStyle },
+                    h("code", {
+                      className: "dg-help-tool-name",
+                      style: { fontSize: 12, fontWeight: 600 },
+                    }, t.name)),
+                  h("td", {
+                    className: "dg-help-tool-desc",
+                    style: { ...tdStyle, opacity: 0.9 },
+                  }, helpCatalogText(t.description, lang)))))))),
+          ];
       return h("div", { className: "dg-help-tools" },
         h("div", { style: { ...S.meta, marginBottom: 8 } },
           dgT("help.tools.intro", { count: String(tools.length) }) + " " + dgT("help.tools.langHint", { lang: dgT("help.lang." + lang) })),
