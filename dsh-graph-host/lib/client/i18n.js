@@ -736,6 +736,9 @@
       'settings.projectYaml': '📄 project.yaml',
       'settings.openProjectYaml': '用系统默认编辑器打开 project.yaml',
       'settings.copyProjectPath': '复制 project.yaml 路径',
+      // g-490 增量（负责人 2026-10-12 批 2）：project.yaml 的**绝对路径全文**在设置弹窗内只经该行 `(?)`
+      // 浮层承载（浮层内另起一行），原生 title 只留短提示 —— 触屏无 hover，title 等于不可达。
+      'settings.currentPath': '当前路径：',
       'settings.openedProjectYaml': '✅ 已打开 project.yaml',
       // g-488：settings.showAdvanced / settings.hideAdvanced 已删除——折叠按钮与页签内显隐开关一并移除。
       'settings.autoRefresh': '看板数据自动刷新：',
@@ -2017,6 +2020,9 @@
       'settings.projectYaml': '📄 project.yaml',
       'settings.openProjectYaml': 'Open project.yaml with system editor',
       'settings.copyProjectPath': 'Copy project.yaml path',
+      // g-490 increment (owner 2026-10-12, round 2): the full absolute path is carried **only** by this
+      // row's `(?)` popover (as its own line); the native title keeps a short hint — touch has no hover.
+      'settings.currentPath': 'Current path:',
       'settings.openedProjectYaml': '✅ Opened project.yaml',
       // g-488: settings.showAdvanced / settings.hideAdvanced removed together with the toggle button.
       'settings.autoRefresh': 'Board auto-refresh interval:',

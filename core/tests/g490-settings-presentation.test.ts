@@ -15,13 +15,17 @@
  *     human/ai ⇒ 必红。
  *  4. `project.yaml` 行从页脚迁到**标题栏右侧（关闭按钮左边）**：可打开 / 可复制；**改判**（负责人
  *     2026-10-12 现场反馈「具体路径很长，反正可以点击复制，就不用显示出来了」）：绝对路径**不再平铺**
- *     进正文（该行恒为单行「📄 project.yaml (?) 打开 复制路径」），全文改由**复制路径按钮的既有 title**
- *     承载（悬停可见 ⇒ 信息零丢失）。负向：绝对路径又平铺回正文、搬回页脚或留双份 ⇒ 必红。
+ *     进正文（该行恒为单行「📄 project.yaml (?) 打开 复制路径」）；**改判 2**（负责人同日批 2：
+ *     「不要用 title……延时和触屏不友好」）：全文也**不得**只挂按钮原生 `title`（触屏无 hover ⇒ 等于
+ *     不可达），改由该行 `(?)` 浮层内**另起一行**（`settings.currentPath` + 路径）承载 ⇒ 触屏/键盘
+ *     同样可达。负向：路径又平铺回正文、路径只存在于按钮 `title`（浮层内不可达）、搬回页脚或留双份 ⇒ 必红。
  *  5. （扩写）判据 7「project.yaml 行归位与说明折叠」：`editHint` 与目录来源长句（`catalogReady`）等
- *     **常驻平铺的说明性长句**一律折叠进自绘 `(?)`（文案一字未改 ⇒ 浮层正文 ≡ i18n 原文），常驻正文只留
- *     短字段提示与必读警示 / 瞬态状态读数（`FOLDED_HINT_KEYS` / `FLAT_BODY_KEEP_KEYS` 两份清单逐条钉住）；
- *     `(?)` 默认挂在 project.yaml 行内；目录说明 `(?)` **状态门控**（非就绪态不渲染，避免静态 tooltip 撒谎）。
- *     负向：`editHint` 改回常驻平铺、`(?)` 移出该行、目录说明改回平铺、必读警示被悄悄折叠 ⇒ 必红。
+ *     **常驻平铺的说明性长句**一律折叠进自绘 `(?)`（文案一字未改 ⇒ 浮层正文**逐字包含** i18n 原文，另
+ *     一行携带绝对路径全文），常驻正文只留短字段提示与必读警示 / 瞬态状态读数（`FOLDED_HINT_KEYS` /
+ *     `FLAT_BODY_KEEP_KEYS` 两份清单逐条钉住）；`(?)` 默认挂在 project.yaml 行内；目录说明 `(?)`
+ *     **状态门控**（非就绪态不渲染，避免静态 tooltip 撒谎）。
+ *     负向：`editHint` 改回常驻平铺、`(?)` 移出该行、目录说明改回平铺、必读警示被悄悄折叠、
+ *     路径只挂 `title` ⇒ 必红。
  */
 
 import { test } from "node:test";
@@ -63,6 +67,10 @@ const HUMAN_AI_RE = /\b(human|ai)\b/i;
  *  文案一字未改 ⇒ 信息零丢失），常驻正文只留 ①**短字段提示** ②**必读警示 / 瞬态状态读数**。
  *  `FOLDED_HINT_KEYS` = 已折叠清单（键名 + 落点）；`FLAT_BODY_KEEP_KEYS` = 仍留正文清单（逐条附理由）。
  *  两份清单都由本文件断言逐条钉住（折叠项正文零残留；留正文项未被悄悄搬进浮层、也未从界面消失）。 */
+/** 改判 2（负责人 2026-10-12 批 2）：`editHint` 的 `(?)` **调用原文**——浮层正文 = editHint 原文
+ *  + 另起一行的「当前路径：<绝对路径>」。用整调用字面量作变异锚点（去路径 / 换键变异都据此改写），
+ *  并保证「源码形状漂移」时变异对照会因 `notEqual(src)` 立即报红，而不是静默变成空变异。 */
+const EDIT_HINT_ICON_CALL = 'settingsHintIcon(dgT("settings.editHint") + "\\n" + dgT("settings.currentPath") + configFile)';
 const FOLDED_HINT_KEYS: Array<{ key: string; site: string }> = [
   { key: "settings.editHint", site: "标题栏 project.yaml 行内（📄 project.yaml 标签右侧）" },
   { key: "settings.catalogReady", site: "「执行模式」标签右侧（**仅目录就绪态**渲染该 `(?)`）" },
@@ -475,15 +483,19 @@ test("g-490 判据4：`project.yaml` 行位于标题栏右侧（关闭按钮左�
   assert.ok(titleBar, "标题栏必须承载 project.yaml 行（同一容器）");
   assert.ok(deepTextOf(titleBar).includes(zh["settings.title"]), "承载行必须就是标题栏（同容器含标题）");
   const row = (titleBar!.children ?? []).find((c: any) => String(c?.props?.className ?? "") === "dg-settings-configfile");
-  // g-490 增量（负责人 2026-10-12 现场反馈）：绝对路径过长 ⇒ 正文**不再平铺**（恒单行）；但必须
-  // 仍可获取（复制路径按钮的既有 title 提示 ⇒ 信息零丢失）。旧断言「必须显示绝对路径全文」改判为
-  // 「正文零残留 + 按钮 title 携带全文」这一对（负向 + 正向，断言只增不减）。
+  // g-490 增量（负责人 2026-10-12 现场反馈）：绝对路径过长 ⇒ 正文**不再平铺**（恒单行）。
+  // 改判 2（负责人同日批 2：「不要用 title……延时和触屏不友好」）：全文也**不得**只挂按钮原生 title
+  // （触屏无 hover ⇒ 等于不可达）⇒ 承载点改判为「该行 `(?)` 浮层内另起一行」，断言为
+  // 负向①正文零残留 + 负向②无任何按钮 title 携带路径 + 正向③浮层正文（展开态）含全文。
   assert.ok(!deepTextOf(row).includes("/abs/path/project.yaml"), "正文不得再平铺绝对路径（负责人反馈：路径过长，可点击复制即可）");
   const buttons = (row.children ?? []).filter((c: any) => c?.type === "button");
   assert.equal(buttons.length, 2, "必须有「打开」与「复制路径」两个按钮");
   assert.equal(buttons[0].props.title, zh["settings.openConfigTooltip"], "打开按钮必须有提示（按钮 title 属既有形态，不在 `(?)` 路径内）");
-  assert.ok(String(buttons[1].props.title).startsWith(zh["settings.copyProjectPath"]), "复制按钮必须有提示");
-  assert.ok(String(buttons[1].props.title).includes("/abs/path/project.yaml"), "绝对路径全文必须仍可获取（复制路径按钮 title 悬停可见）");
+  assert.equal(buttons[1].props.title, zh["settings.copyProjectPath"], "复制按钮 title 必须是不含路径的短形式（改判 2：与「打开」同形）");
+  assert.ok(
+    !buttons.some((b: any) => String(b.props?.title ?? "").includes("/abs/path/project.yaml")),
+    "绝对路径不得再挂按钮原生 title（改判 2：触屏无 hover ⇒ 等于不可达；回退即红）",
+  );
   const style = row.props.style ?? {};
   assert.equal(style.minWidth, 0, "窄宽度：行内容必须允许收缩（minWidth:0）");
   assert.equal(style.flexWrap, "wrap", "窄宽度：必须允许换行而不是溢出裁切");
@@ -498,6 +510,14 @@ test("g-490 判据4：`project.yaml` 行位于标题栏右侧（关闭按钮左�
     !(row.children ?? []).some((c: any) => String(c?.props?.style?.wordBreak ?? "") === "break-all"),
     "行内不得再出现 break-all 长文本（路径平铺形态不得回退）",
   );
+  // 正向③（改判 2 的承载点）：展开该行 `(?)` ⇒ 浮层正文内必须能读到绝对路径全文（触屏/键盘同样可达）
+  const idForHint = extractFn(src, "const settingsHintIdFor = (text) => {", "\n    };", "settingsHintIdFor");
+  const fullHintText = zh["settings.editHint"] + "\n" + zh["settings.currentPath"] + "/abs/path/project.yaml";
+  const openedRow = renderModal(src, SNAPSHOT, zh, { tab: "executor", openHint: idForHint(fullHintText) });
+  const rowPops = openedRow.nodes.filter((n) => n.props?.role === "tooltip");
+  assert.equal(rowPops.length, 1, "展开项目行 `(?)` 必须恰好一个浮层");
+  assert.ok(deepTextOf(rowPops[0]).includes("/abs/path/project.yaml"), "绝对路径全文必须在浮层正文内可达（改判 2：不得只挂原生 title）");
+  assert.ok(deepTextOf(rowPops[0]).includes(zh["settings.editHint"]), "浮层正文必须同屏逐字含 editHint 原文（说明与路径同浮层，零丢失）");
   // 页脚不得再有第二份
   const footer = nodes.find((n) => n.type === "div" && (n.children ?? []).some((c: any) => deepTextOf(c) === zh["settings.closeBtn"]));
   assert.ok(footer, "必须能找到页脚按钮行");
@@ -516,7 +536,7 @@ test("g-490 判据4：`project.yaml` 行位于标题栏右侧（关闭按钮左�
 /** 目录**就绪**态夹具（`catalog.status === "ready"` ⇒ 渲染就绪说明的 `(?)`；空 providers/groups 即可）。 */
 const READY_CATALOG = { status: "ready", providers: [], groups: [] };
 
-test("g-490 判据7（扩写）：editHint / catalogReady 折叠进 (?)——正文零残留、浮层正文 ≡ i18n 原文、目录态门控不撒谎", () => {
+test("g-490 判据7（扩写）：editHint / catalogReady 折叠进 (?)——正文零残留、浮层正文逐字含 i18n 原文 + 路径另起一行、目录态门控不撒谎", () => {
   const src = readModal();
   const { zh } = loadClientI18n();
   const idFor = extractFn(src, "const settingsHintIdFor = (text) => {", "\n    };", "settingsHintIdFor");
@@ -533,24 +553,36 @@ test("g-490 判据7（扩写）：editHint / catalogReady 折叠进 (?)——正
   // ③ 渲染树（关闭态）：触发器保留说明全文（aria-label）；常驻正文里**找不到**该全文（已折叠）
   const closed = renderModal(src, SNAPSHOT, zh, { tab: "executor" });
   const editText = zh["settings.editHint"];
-  const editTriggers = closed.nodes.filter((n) => n.props?.["aria-label"] === editText);
+  const pathLine = zh["settings.currentPath"] + "/abs/path/project.yaml";
+  // 改判 2：aria-label = editHint 原文 + "\n" + 路径行（同一浮层同屏承载）⇒ 谓词由「逐字相等」改为
+  // 「逐字包含」，并**新增**「必须同时含路径行」一条（断言只增不减）。
+  const editTriggers = closed.nodes.filter((n) => String(n.props?.["aria-label"] ?? "").includes(editText));
   assert.equal(editTriggers.length, 1, "`(?)` 触发器必须保留 editHint 全文（aria-label，零信息丢失）");
   assert.equal(editTriggers[0].props.className, "dg-settings-hint", "该触发器必须是 `(?)` 图标本体");
+  assert.ok(String(editTriggers[0].props["aria-label"]).includes(pathLine), "触发器 aria-label 必须同屏含「当前路径：<绝对路径>」（触屏/读屏可达）");
   assert.ok(!closed.nodes.map((n) => deepTextOf(n)).join("\n").includes(editText), "关闭态常驻正文不得出现 editHint（须仅在 `(?)` 浮层内）");
-  // ④ 渲染树（展开态）：浮层正文 ≡ i18n 原文（逐字）
-  const opened = renderModal(src, SNAPSHOT, zh, { tab: "executor", openHint: idFor(editText) });
+  // ④ 渲染树（展开态）：浮层正文 = editHint 原文（逐字）+ 另起一行的绝对路径全文（改判 2）
+  const opened = renderModal(src, SNAPSHOT, zh, { tab: "executor", openHint: idFor(editText + "\n" + pathLine) });
   const pops = opened.nodes.filter((n) => n.props?.role === "tooltip");
   assert.equal(pops.length, 1, "展开态恰好一个浮层（至多一个）");
-  assert.equal(deepTextOf(pops[0]), editText, "折叠后浮层正文必须与 i18n 真源逐字一致（信息零丢失、不得悄悄改字）");
-  // 「≡」断言必须有牙（非空对照）：折叠文案改字后，同一断言必须不再成立
-  const mutatedText = editText + "（已简化）";
-  const tampered = src.replace('settingsHintIcon(dgT("settings.editHint"))', 'settingsHintIcon(dgT("settings.editHint") + "（已简化）")');
-  assert.notEqual(tampered, src, "改字变异必须真的改动源码");
-  assert.notDeepEqual(foldedHintProblems(tampered, "settings.editHint"), [], "改字后「恰好经 (?) 承载一次」谓词必须报红");
-  const tamperedPop = renderModal(tampered, SNAPSHOT, zh, { tab: "executor", openHint: idFor(mutatedText) })
+  const popText = deepTextOf(pops[0]);
+  assert.ok(popText.includes(editText), "折叠后浮层正文必须逐字包含 i18n 真源（信息零丢失、不得悄悄改字）");
+  assert.ok(popText.includes(pathLine), "浮层正文必须含「当前路径：<绝对路径>」整行（改判 2：路径承载点，触屏可达）");
+  assert.ok(popText.startsWith(editText), "editHint 原文必须在浮层正文首位（说明在前、路径随后另起一行）");
+  // 「包含」断言必须有牙（非空对照）：①换成别的键 ⇒ 不再含 editHint 原文；②去掉路径行 ⇒ 不再含路径
+  const wrongKey = src.replace(EDIT_HINT_ICON_CALL, 'settingsHintIcon(dgT("settings.projectYaml") + "\\n" + dgT("settings.currentPath") + configFile)');
+  assert.notEqual(wrongKey, src, "换键变异必须真的改动源码");
+  assert.notDeepEqual(foldedHintProblems(wrongKey, "settings.editHint"), [], "换键后「恰好经 (?) 承载一次」谓词必须报红（说明不可从界面消失）");
+  const wrongPops = renderModal(wrongKey, SNAPSHOT, zh, { tab: "executor", openHint: idFor(zh["settings.projectYaml"] + "\n" + pathLine) })
     .nodes.filter((n) => n.props?.role === "tooltip");
-  assert.equal(tamperedPop.length, 1, "改字变异体仍能打开其浮层（对照有效）");
-  assert.notEqual(deepTextOf(tamperedPop[0]), editText, "改字后「浮层正文 ≡ i18n 原文」必须判红（断言非空）");
+  assert.equal(wrongPops.length, 1, "换键变异体仍能打开其浮层（对照有效）");
+  assert.ok(!deepTextOf(wrongPops[0]).includes(editText), "换成别的键后「浮层逐字含 editHint 原文」必须判红（断言非空）");
+  const noPath = src.replace(EDIT_HINT_ICON_CALL, 'settingsHintIcon(dgT("settings.editHint"))');
+  assert.notEqual(noPath, src, "去路径变异必须真的改动源码");
+  const noPathPops = renderModal(noPath, SNAPSHOT, zh, { tab: "executor", openHint: idFor(editText) })
+    .nodes.filter((n) => n.props?.role === "tooltip");
+  assert.equal(noPathPops.length, 1, "去路径变异体仍能打开其浮层（对照有效）");
+  assert.ok(!deepTextOf(noPathPops[0]).includes(pathLine), "去掉路径行后「浮层含绝对路径」必须判红（断言非空）");
   // ⑤ 目录态门控：非就绪态**不得**渲染就绪说明的 `(?)`（静态 tooltip 会撒谎），降级读数仍在正文
   const unavailable = renderModal(src, SNAPSHOT, zh, { tab: "executor", catalog: { status: "unavailable" } });
   assert.equal(unavailable.nodes.filter((n) => n.props?.["aria-label"] === zh["settings.catalogReady"]).length, 0, "目录非就绪态不得渲染就绪说明的 `(?)`");
@@ -614,7 +646,9 @@ test("g-490 真源一致性：AUTOMATION_UNSET_SCOPE（引擎口径来源）↔ 
 function foldedHintProblems(modalSrc: string, key: string): string[] {
   const problems: string[] = [];
   const esc = key.replace(/\./g, "\\.");
-  const call = `settingsHintIcon(dgT("${key}"))`;
+  // 改判 2：`editHint` 的调用带上「另起一行的路径全文」第二段 ⇒ 锚点由整调用放宽为**调用前缀**
+  // （同一「恰好一处」不变式；浮层正文的逐字包含与路径可达由渲染树用例独立判定）。
+  const call = `settingsHintIcon(dgT("${key}")`;
   const n = countOccurrences(modalSrc, call);
   if (n !== 1) problems.push(`判据7：${key} 必须恰好经 (?) 承载一次（零丢失且不重复），实得 ${n} 次`);
   if (new RegExp(`,\\s*dgT\\("${esc}"\\)\\)`).test(modalSrc) || new RegExp(`[?:]\\s*dgT\\("${esc}"\\)`).test(modalSrc)) {
@@ -631,7 +665,7 @@ function editHintSiteProblems(modalSrc: string): string[] {
   const problems: string[] = [];
   const rowAt = modalSrc.indexOf("const projectYamlRow = configFile");
   const rowEndAt = rowAt >= 0 ? modalSrc.indexOf(": null;", rowAt) : -1;
-  const iconAt = modalSrc.indexOf('settingsHintIcon(dgT("settings.editHint"))');
+  const iconAt = modalSrc.indexOf('settingsHintIcon(dgT("settings.editHint")');
   if (rowAt < 0 || rowEndAt < 0) problems.push("判据7：找不到 project.yaml 行定义块");
   else if (iconAt < 0 || !(iconAt > rowAt && iconAt < rowEndAt)) {
     problems.push("判据7：editHint 的 (?) 必须挂在 project.yaml 行内（不得移出该行或下沉正文）");
@@ -721,7 +755,23 @@ function presentationProblems(modalSrc: string, zh: Dict): string[] {
   // 改判（负责人 2026-10-12 反馈）：行位判定不再借用「绝对路径在正文里」作代理，改用行自身 +
   // 标签文案；并把「路径又平铺回正文」立成**独立负向**（否则旧代理一失效，两侧都变成真空断言）。
   if (!titleBar || !yamlRow || !deepTextOf(titleBar).includes(zh["settings.projectYaml"])) problems.push("判据4：project.yaml 行不在标题栏（可能被搬回页脚）");
-  if (yamlRow && deepTextOf(yamlRow).includes("/abs/path/project.yaml")) problems.push("判据4：绝对路径又平铺进正文（负责人反馈：路径过长，只应经复制按钮 title 可见）");
+  if (yamlRow && deepTextOf(yamlRow).includes("/abs/path/project.yaml")) problems.push("判据4：绝对路径又平铺进正文（负责人反馈：路径过长；改判 2：承载点是行内 `(?)` 浮层）");
+  // 改判 2（负责人 2026-10-12 批 2）：「不要用 title……延时和触屏不友好」⇒ 路径**不得**只挂原生 title；
+  // 且必须能在该行 `(?)` 浮层内读到（两条互为对照：只改 title 承载 ⇒ 两条同时报红）。
+  if (/title:[^\n]*settings\.copyProjectPath"\)\s*\+/.test(modalSrc)) {
+    problems.push("判据4：绝对路径只挂在按钮原生 title 上（触屏无 hover ⇒ 浮层内不可达；改判 2）");
+  }
+  try {
+    const idForPath = extractFn(modalSrc, "const settingsHintIdFor = (text) => {", "\n    };", "settingsHintIdFor");
+    const fullHint = zh["settings.editHint"] + "\n" + zh["settings.currentPath"] + "/abs/path/project.yaml";
+    const openedForPath = renderModal(modalSrc, SNAPSHOT, zh, { tab: "executor", openHint: idForPath(fullHint) });
+    const pathPops = openedForPath.nodes.filter((n) => n.props?.role === "tooltip");
+    if (pathPops.length !== 1 || !deepTextOf(pathPops[0]).includes("/abs/path/project.yaml")) {
+      problems.push("判据4：绝对路径在该行 `(?)` 浮层内不可达（改判 2：路径必须与说明同浮层另起一行）");
+    }
+  } catch (e) {
+    problems.push(`判据4：无法核对行内 (?) 浮层的路径承载（${(e as Error).message}）`);
+  }
   const footer = rendered.nodes.find((n) => n.type === "div" && (n.children ?? []).some((c: any) => deepTextOf(c) === zh["settings.closeBtn"]));
   if (footer && deepTextOf(footer).includes(zh["settings.projectYaml"])) problems.push("判据4：页脚仍残留 project.yaml（迁移≠复制）");
   // ---- 判据 7（扩写）：常驻平铺说明折叠 + project.yaml 行内 `(?)` 落点 ----
@@ -767,15 +817,17 @@ test("g-490 改坏即红：各判据契约在内存变异下逐项报红（含�
     // g-490 负例（判据 4 改判配套）：绝对路径又平铺回正文 ⇒ 必红（负责人 2026-10-12 反馈：路径过长）
     { name: "绝对路径又平铺回正文", src: before.replace('h("span", { style: { fontSize: 11, opacity: 0.7, whiteSpace: "nowrap" } }, dgT("settings.projectYaml")),', 'h("span", { style: { fontSize: 11, opacity: 0.7, whiteSpace: "nowrap" } }, dgT("settings.projectYaml")),\n            h("span", { style: { ...S.meta, fontSize: 11, wordBreak: "break-all", minWidth: 0 } }, configFile),'), expect: /绝对路径又平铺进正文/ },
     // g-490 判据 7（扩写）负例①：editHint 改回**常驻平铺**渲染 ⇒ 必红（说明必须只经 `(?)` 承载）
-    { name: "editHint 改回常驻平铺", src: before.replace('settingsHintIcon(dgT("settings.editHint"))', 'h("span", { style: S.meta }, dgT("settings.editHint"))'), expect: /不得出现在常驻正文渲染面/ },
+    { name: "editHint 改回常驻平铺", src: before.replace(EDIT_HINT_ICON_CALL, 'h("span", { style: S.meta }, dgT("settings.editHint"))'), expect: /不得出现在常驻正文渲染面/ },
     // g-490 判据 7（扩写）负例②：`(?)` 移出 project.yaml 行（孤挂在标题旁）⇒ 必红
-    { name: "editHint 的 (?) 移出 project.yaml 行", src: before.replace('settingsHintIcon(dgT("settings.editHint"))', "null").replace("            projectYamlRow),\n", "            projectYamlRow),\n          settingsHintIcon(dgT(\"settings.editHint\")),\n"), expect: /必须挂在 project.yaml 行内/ },
+    { name: "editHint 的 (?) 移出 project.yaml 行", src: before.replace(EDIT_HINT_ICON_CALL, "null").replace("            projectYamlRow),\n", "            projectYamlRow),\n          settingsHintIcon(dgT(\"settings.editHint\")),\n"), expect: /必须挂在 project.yaml 行内/ },
+    // g-490 判据 4 改判 2 负例③（负责人 2026-10-12 批 2）：路径**只**存在于按钮原生 title、浮层内不可达 ⇒ 必红
+    { name: "路径只挂在按钮 title（浮层内不可达）", src: before.replace(EDIT_HINT_ICON_CALL, 'settingsHintIcon(dgT("settings.editHint"))').replace('title: dgT("settings.copyProjectPath"),', 'title: dgT("settings.copyProjectPath") + "：" + configFile,'), expect: /只挂在按钮原生 title|浮层内不可达/ },
     // g-490 判据 7（扩写）负例③：目录就绪说明改回常驻平铺 ⇒ 必红
     { name: "目录就绪说明改回常驻平铺", src: before.replace('catReady ? settingsHintIcon(dgT("settings.catalogReady")) : null', 'catReady ? dgT("settings.catalogReady") : null'), expect: /不得出现在常驻正文渲染面/ },
     // g-490 判据 7（扩写）负例④：把「仍留正文」的必读警示（reviewUnsetHint）悄悄折叠 ⇒ 必红
     { name: "必读警示 reviewUnsetHint 被悄悄折叠", src: before.replace('h("div", { style: metaStyle }, dgT("settings.reviewUnsetHint")),', 'settingsHintIcon(dgT("settings.reviewUnsetHint")),'), expect: /属「仍留正文」清单/ },
   ];
-  assert.ok(mutants.length >= 16, `变异负向对照只增不减（实得 ${mutants.length} 项：11 项既有 + 4 项判据 7 扩写新增 + 1 项判据 4 改判新增）`);
+  assert.ok(mutants.length >= 17, `变异负向对照只增不减（实得 ${mutants.length} 项：11 项既有 + 4 项判据 7 扩写新增 + 1 项判据 4 改判新增 + 1 项判据 4 改判 2 新增）`);
   for (const m of mutants) {
     assert.notEqual(m.src, before, `变异体「${m.name}」必须真的改动了源码（否则是空变异）`);
     const got = presentationProblems(m.src, zh).join(" | ");

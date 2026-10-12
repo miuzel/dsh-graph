@@ -287,8 +287,17 @@ function configFileRowProblems(modalSrc: string): string[] {
     || /,\s*dgT\("settings\.editHint"\)\)/.test(modalSrc)) {
     problems.push("editHint 不得再作为常驻平铺行渲染（须仅在 project.yaml 行内 `(?)` 浮层内）");
   }
-  if (countOccurrences(modalSrc, 'settingsHintIcon(dgT("settings.editHint"))') !== 1) {
+  // 改判 2（负责人 2026-10-12 批 2）：editHint 的 `(?)` 调用带上「另起一行的路径全文」第二段 ⇒
+  // 锚点由整调用字面量放宽为**调用前缀**（仍是「恰好一处」同一不变式），并新增「路径必须在该浮层内、
+  // 且不得只挂原生 title」的正向/负向断言（断言只增不减，见本函数末尾）。
+  if (countOccurrences(modalSrc, 'settingsHintIcon(dgT("settings.editHint")') !== 1) {
     problems.push("editHint 必须恰好经 `(?)` 承载一次（零丢失且不重复）");
+  }
+  if (!modalSrc.includes('settingsHintIcon(dgT("settings.editHint") + "\\n" + dgT("settings.currentPath") + configFile)')) {
+    problems.push("绝对路径全文必须在 project.yaml 行内 `(?)` 浮层内另起一行（改判 2：不得平铺正文、也不得只挂原生 title）");
+  }
+  if (/title:\s*dgT\("settings\.copyProjectPath"\)\s*\+/.test(modalSrc)) {
+    problems.push("绝对路径不得再挂原生 title（触屏无 hover ⇒ 等于不可达；回退即红）");
   }
   if (footerAt > 0 && slotAt > footerAt) {
     problems.push("project.yaml 行不得位于页脚按钮行之后（回迁即红）");
@@ -532,12 +541,24 @@ test("g-479 判据1：设置弹窗改为分类页签——每个配置项恰好�
   assert.equal(headerSlot.length, 1, "project.yaml 行必须是某个容器 div 的直接子节点（标题栏插槽）");
   assert.ok(deepTextOf(headerSlot[0]).includes(zh["settings.title"]), "承载 project.yaml 行的容器必须是标题栏（同容器含标题）");
   // 改判（负责人 2026-10-12 现场反馈）：绝对路径不再平铺 ⇒ 旧「标题栏须显示路径全文」改为
-  // 「正文零残留 + 标题栏仍含该行标签 + 全文经复制按钮 title 可见」三条（断言只增不减）。
+  // 「正文零残留 + 标题栏仍含该行标签 + 全文经行内 `(?)` 可达」。
+  // 改判 2（负责人 2026-10-12 批 2）：「不要用 title……延时和触屏不友好」⇒ 承载点由**按钮 title**
+  // 改为**同一浮层**：负向「无任何按钮 title 含路径」+ 正向「触发器 aria-label 含路径、展开后浮层正文
+  // 含路径」三条渲染树证据（断言只增不减）。
   assert.ok(!deepTextOf(headerSlot[0]).includes(cfgFile), "标题栏行不得再平铺绝对路径（负责人反馈：路径过长，可点击复制即可）");
   assert.ok(
-    rowNodes.some((n) => n.type === "button" && String(n.props?.title ?? "").includes(cfgFile)),
-    "绝对路径全文必须仍可获取（复制路径按钮 title 悬停可见 ⇒ 信息零丢失）",
+    !rowNodes.some((n) => String(n.props?.title ?? "").includes(cfgFile)),
+    "绝对路径不得再挂原生 title（改判 2：触屏无 hover ⇒ 等于不可达；回退即红）",
   );
+  assert.ok(
+    rowNodes.some((n) => n.props?.className === "dg-settings-hint" && String(n.props?.["aria-label"] ?? "").includes(cfgFile)),
+    "路径全文必须经项目行 `(?)` 触发器可达（aria-label ⇒ 触屏/键盘同样可达）",
+  );
+  const editHintFull = zh["settings.editHint"] + "\n" + zh["settings.currentPath"] + cfgFile;
+  const openedRow = renderSettingsModal(src, SNAPSHOT, zh, { tab: "executor", openHint: settingsHintIdForSrc(src, editHintFull) });
+  const rowPops = openedRow.nodes.filter((n) => n.props?.role === "tooltip");
+  assert.equal(rowPops.length, 1, "project.yaml 行 `(?)` 展开态必须恰好一个浮层");
+  assert.ok(deepTextOf(rowPops[0]).includes(cfgFile), "绝对路径全文必须能在浮层正文内读到（另起一行；改判 2 的承载点）");
   const footerRow = rowNodes.find(
     (n) => n.type === "div" && (n.children || []).some((c: any) => textOf(c) === zh["settings.closeBtn"]),
   );
@@ -600,15 +621,19 @@ test("g-479 判据2：真实渲染树里每个配置项的控件都在（与激�
   assert.equal(nodes.filter((n) => n.type === "button" && textOf(n) === zh["tab.openFile"]).length, 1, "打开入口可达");
   assert.equal(nodes.filter((n) => n.type === "button" && textOf(n) === zh["tab.copyPath"]).length, 1, "复制入口可达");
   // 改判（负责人 2026-10-12 现场反馈「具体路径很长，反正可以点击复制，就不用显示出来了」）：绝对路径
-  // **不再作为正文 children 明文展示** ⇒ 旧正向断言改为负向 + 可达性正向（全文仍在复制按钮的
-  // 既有 title 上）—— 两条都保留，断言数只增不减。
+  // **不再作为正文 children 明文展示** ⇒ 旧正向断言改为负向 + 可达性正向。改判 2（批 2）起可达点
+  // **不是**按钮 title（触屏无 hover）而是行内 `(?)` 浮层 ⇒ 两条都保留并各自加负向（断言只增不减）。
   assert.ok(
     !nodes.some((n) => (n.children ?? []).includes("/abs/path/project.yaml")),
     "project.yaml 绝对路径不得再平铺正文（负责人反馈：路径过长，可点击复制即可；回退平铺即红）",
   );
   assert.ok(
-    nodes.some((n) => n.type === "button" && String(n.props?.title ?? "").includes("/abs/path/project.yaml")),
-    "绝对路径全文必须仍可获取（复制路径按钮 title 悬停可见 ⇒ 信息零丢失）",
+    !nodes.some((n) => n.type === "button" && String(n.props?.title ?? "").includes("/abs/path/project.yaml")),
+    "绝对路径不得只挂按钮原生 title（改判 2：触屏不可达；回退即红）",
+  );
+  assert.ok(
+    nodes.some((n) => n.props?.className === "dg-settings-hint" && String(n.props?.["aria-label"] ?? "").includes("/abs/path/project.yaml")),
+    "绝对路径全文必须仍可获取（行内 `(?)` 触发器 aria-label + 浮层正文 ⇒ 信息零丢失）",
   );
 });
 

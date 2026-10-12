@@ -292,13 +292,18 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.ok((modal.match(/copyText\(configFile\)/g) || []).length >= 2, "打开回退 + 复制按钮均应复制绝对路径");
   assert.match(modal, /dgT\("settings\.projectYaml"\)/);
   assert.match(modal, /title: dgT\("settings\.openConfigTooltip"\)/);
-  assert.match(modal, /title: dgT\("settings\.copyProjectPath"\) \+ "：" \+ configFile/, "绝对路径全文改由复制按钮的既有 title 承载（悬停可见）");
+  // 改判 2（负责人 2026-10-12 批 2）：「不要用 title……延时和触屏不友好」⇒ 路径**不得**再挂原生
+  // title（触屏无 hover ⇒ 等于不可达），title 回到**不含路径的短形式**（与「打开」同形）；
+  // 全文改由该行 `(?)` 浮层内另起一行承载（正向锚点在下方 editHint 折叠块内）。
+  assert.match(modal, /title: dgT\("settings\.copyProjectPath"\),/, "复制路径按钮 title 必须是不含路径的短形式");
+  assert.doesNotMatch(modal, /title: dgT\("settings\.copyProjectPath"\) \+ "：" \+ configFile/, "绝对路径不得再挂原生 title（触屏不可达 ⇒ 回退即红）");
   assert.match(modal, /\}, dgT\("tab\.openFile"\)\)/);
   assert.match(modal, /\}, dgT\("tab\.copyPath"\)\)/);
   // g-490（判据 7）：project.yaml 行从**页脚**迁到**标题栏右侧（关闭按钮左边）**——位置断言 +
   // 「页脚不得留第二份」负向断言（双份即红）；窄宽度保护（flexWrap + 关闭按钮让位）。
   // 改判（负责人 2026-10-12 现场反馈）：绝对路径**不再平铺**（「反正可以点击复制」）⇒ 旧
-  // 「break-all 长路径折行」断言改为**负向**（不得回退平铺形态）+ 正向（全文经按钮 title 可见）。
+  // 「break-all 长路径折行」断言改为**负向**（不得回退平铺形态）+ 正向（全文经该行 `(?)` 浮层可达，
+  // 见下方 editHint 折叠块；改判 2 起不再经按钮 title）。
   assert.doesNotMatch(modal, /wordBreak: "break-all", minWidth: 0 \}/, "绝对路径不得再平铺正文（负责人反馈：可点击复制即可；回退平铺即红）");
   assert.equal(
     (modal.match(/className: "dg-settings-configfile"/g) || []).length,
@@ -308,19 +313,26 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   const titleBarIdx = modal.indexOf('{ ...S.modalH, marginBottom: 0, flex: "0 0 auto" } }, dgT("settings.title")');
   const cfgRowIdx = modal.indexOf("projectYamlRow)");
   assert.ok(titleBarIdx > 0 && cfgRowIdx > titleBarIdx, "标题栏 = 标题 + 右端 project.yaml 行（关闭按钮左侧）");
-  // g-490（判据 7 扩写）：editHint 说明由「标题下方常驻一行」**折叠进该行内的 `(?)`** ——
+  // g-490（判据 7 扩写 + 改判 2）：editHint 说明由「标题下方常驻一行」**折叠进该行内的 `(?)`** ——
   // 正向锚点（恰好一处、经唯一构造点 `settingsHintIcon` 承载）+ 负向锚点（常驻平铺形状必须消失）。
+  // 改判 2 起该调用带**第二段**（`"\n" + settings.currentPath + configFile`：浮层内另起一行的路径全文）
+  // ⇒ 锚点由「整调用字面量」放宽为「调用前缀」，同时新增**路径必须在浮层内**的正向锚点（断言只增不减）。
   assert.equal(
-    (modal.match(/settingsHintIcon\(dgT\("settings\.editHint"\)\)/g) || []).length,
+    (modal.match(/settingsHintIcon\(dgT\("settings\.editHint"\)/g) || []).length,
     1,
     "editHint 必须恰好经 `(?)` 承载一次（零丢失且不重复）",
+  );
+  assert.match(
+    modal,
+    /settingsHintIcon\(dgT\("settings\.editHint"\) \+ "\\n" \+ dgT\("settings\.currentPath"\) \+ configFile\)/,
+    "绝对路径全文必须在本行 `(?)` 浮层内另起一行（改判 2：不得平铺正文、也不得只挂原生 title）",
   );
   assert.doesNotMatch(modal, /h\("div", \{ style: S\.meta \}, dgT\("settings\.editHint"\)\)/, "editHint 不得再作为常驻平铺行渲染（回退即红）");
   assert.doesNotMatch(modal, /,\s*dgT\("settings\.editHint"\)\)/, "editHint 不得作为 h(...) 子节点实参常驻正文（须仅在 `(?)` 浮层内）");
   assert.doesNotMatch(modal, /[?:]\s*dgT\("settings\.editHint"\)/, "editHint 不得作为三元分支常驻正文（须仅在 `(?)` 浮层内）");
   const editHintRowIdx = modal.indexOf("const projectYamlRow = configFile");
   const editHintRowEndIdx = modal.indexOf(": null;", editHintRowIdx);
-  const editHintIconIdx = modal.indexOf('settingsHintIcon(dgT("settings.editHint"))');
+  const editHintIconIdx = modal.indexOf('settingsHintIcon(dgT("settings.editHint")');
   assert.ok(
     editHintRowIdx > 0 && editHintRowEndIdx > editHintRowIdx && editHintIconIdx > editHintRowIdx && editHintIconIdx < editHintRowEndIdx,
     "editHint 的 `(?)` 必须挂在 project.yaml 行内（该行已含 打开/复制路径）",

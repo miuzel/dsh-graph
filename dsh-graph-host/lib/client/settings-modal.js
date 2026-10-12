@@ -923,12 +923,13 @@
 
       // ===== g-490：`project.yaml` 行从**页脚**迁到**标题栏右侧（关闭按钮左侧）** =====
       // 负责人原话：「project.yaml这块放到标题栏右侧，关闭按钮左边」。信息与入口逐字复用
-      //（📄 project.yaml 标签 + 打开 + 复制路径 + 绝对路径全文），**只改位置**：
-      //   · 行 `marginLeft:auto` 顶到标题栏右端、`justifyContent:flex-end`；
-      //   · 外层标题栏 `paddingRight:34` 给**绝对定位**的 `.dg-close`（top:14/right:16/26px）留位，
-      //     窄宽度换行后第二行同样内缩 ⇒ 不会压在 ✕ 上；
-      //   · 行 `flexWrap:wrap` + 路径 span `wordBreak:break-all` + `minWidth:0` ⇒ 窄宽度/超长路径
-      //     换行而不撑破弹窗（绝不省略号截断隐藏信息）。
+      //（📄 project.yaml 标签 + 打开 + 复制路径 + **绝对路径全文在 `(?)` 浮层内**），位置与呈现分两步定稿：
+      //   · 迁移（原裁决）：行 `marginLeft:auto` 顶到标题栏右端、`justifyContent:flex-end`；
+      //     外层标题栏 `paddingRight:34` 给**绝对定位**的 `.dg-close`（top:14/right:16/26px）留位；
+      //   · 呈现（负责人 2026-10-12 两次现场反馈，见下方 projectYamlRow 内注释）：绝对路径
+      //     既**不再平铺正文**（路径过长），也**不进原生 `title`**（触屏无 hover ⇒ 等于不可达），
+      //     改由该行 `(?)` 浮层承载 ⇒ 该行恒为单行「📄 project.yaml (?) 打开 复制路径」，
+      //     超长路径在浮层内按 `wordBreak:"break-word"` 折行，不撑破弹窗。
       const projectYamlRow = configFile
         ? h("div", {
             className: "dg-settings-configfile",
@@ -939,7 +940,11 @@
             // 现收进本行内的**自绘 `(?)` 浮层**（与其余 `(?)` 同一交互契约：悬停/点击/键盘聚焦、
             // Esc·浮层外点击·滚动关闭、同屏至多一个、`aria-label` 保留全文）。文案**一字未改** ⇒
             // 信息零丢失，只是不再占常驻正文。落点选在 📄 project.yaml 标签旁（紧邻其描述对象）。
-            settingsHintIcon(dgT("settings.editHint")),
+            // g-490 增量（负责人 2026-10-12 批 2）：绝对路径全文**同屏**放进本浮层另起一行
+            //（`settings.currentPath` + 路径）—— 权威口径是「不要用 title……延时和触屏不友好」，
+            // 触屏无 hover ⇒ 路径挂在 title 上等于不可达。浮层 style 已是 `whiteSpace:"pre-wrap"`
+            // ⇒ 这里的 "\n" 就是真换行；同一串同时进 `aria-label`（读屏/键盘同样可达）。
+            settingsHintIcon(dgT("settings.editHint") + "\n" + dgT("settings.currentPath") + configFile),
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
               className: "dg-btn",
@@ -957,10 +962,11 @@
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
               className: "dg-btn",
-              // g-490 增量（负责人 2026-10-12 现场反馈）：绝对路径过长，正文**不再平铺**该路径
-              // （反正可一键复制）⇒ 该行恒为单行；全文仍在**本按钮的既有 title 提示**里（悬停可见，
-              // 不在 `(?)` 路径内）⇒ 信息零丢失，只是不再占常驻空间。
-              title: dgT("settings.copyProjectPath") + "：" + configFile,
+              // g-490 增量（负责人 2026-10-12 两次反馈）：绝对路径太长，正文**不再平铺**（可一键复制）；
+              // 也**不得**改挂本按钮的原生 `title`（批 2 裁决：title 有延时、触屏不友好 ⇒ 触屏上等于
+              // 路径不可达）。title 保持**不含路径的短形式**（与「打开」同形）；路径全文由本行的
+              // `(?)` 浮层承载（见上方 settingsHintIcon 调用）。
+              title: dgT("settings.copyProjectPath"),
               onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast(dgT("tab.pathCopied")); },
             }, dgT("tab.copyPath")))
         : null;
@@ -970,8 +976,9 @@
           h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
           // g-490：标题栏 = 标题 + （右端）project.yaml 行。增量（判据 7 扩写）：原先「标题下方常驻
           // 一行」的 editHint 说明已折叠进该行内的 `(?)` ⇒ 正文里**不再有**这一行（负向守卫钉住，
-          // 回退成常驻平铺即判红）。增量（负责人 2026-10-12 现场反馈）：绝对路径也不再平铺（见
-          // projectYamlRow 注释）⇒ 标题栏恒为单行「标题 + 📄 project.yaml (?) 打开 复制路径」。
+          // 回退成常驻平铺即判红）。增量（负责人 2026-10-12 两次反馈）：绝对路径既不平铺正文、也不挂
+          // 按钮 title，改由该行 `(?)` 浮层内另起一行承载（见 projectYamlRow 注释）⇒ 标题栏恒为单行
+          //「标题 + 📄 project.yaml (?) 打开 复制路径」，路径对触屏/键盘用户同样可达。
           h("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", paddingRight: 34 } },
             h("div", { style: { ...S.modalH, marginBottom: 0, flex: "0 0 auto" } }, dgT("settings.title")),
             projectYamlRow),
