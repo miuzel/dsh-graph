@@ -76,6 +76,11 @@ PARTS=(
   # （工厂作用域），与 version-drawer 同理——夹在 drag-prompts 与 kanban 之间会变成
   # KanbanView 内部嵌套函数，每次渲染产生新组件身份导致 React 卸载重建弹窗子树。
   "batch-accept"
+  # g-494：模块开关的界面呈现裁剪纯函数模块（入口是否渲染的唯一实现）。
+  # 与 search-state、board-retain、narrow-width、search-groups 同理必须在 drag-prompts 之前
+  # （工厂作用域），否则会变成 KanbanView 内部的嵌套函数——每次渲染产生新身份，
+  # 且 goal-modal / card-drawer 等更早的模块无法引用。
+  "module-gate"
   "drag-prompts"
   "kanban"
   "shared-panel"
