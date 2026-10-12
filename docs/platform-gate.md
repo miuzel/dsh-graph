@@ -1342,6 +1342,58 @@ facts.json: attempted=true  collected_at=2026-10-10T16:16:56.738Z  base=http://1
 > ⇒ 本版**不可**声称的：原生 macOS 的任何结论（本版未验证）、以及 win32 上 P1/P5 两个恒定 WARN 所指的跨 FS 行为（未实测）。
 > 🔴 红线作为**流程纪律**保留：任何未回传项一律 `SKIP/待回填`，不得由 agent 预填结论、不得跨平台搬运结论（发布红线 1）。
 
+### 7.12 v0.21.0 完整 tarball 门禁真机结论（**已回填：2026-10-12 · PASS 22/0/0**）
+
+| 平台 | 执行日期 | 平台/架构 | Node | 宿主 DSH | 被测产物 | T1–T5 | T3 步数 | H1–H6 | 结论 | 执行人 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Windows · **v0.21.0**（完整 tarball 门禁） | 2026-10-12 | win32/x64 | v24.21.0 | `0.2.0-rc.2` | `dsh-graph-0.21.0.tgz`（**实测对账一致**，1,499,147 B，sha256 `d92838d31eec60b89bbde40c44fc2ad0a1ea9be815d389d792ab9487f3cb3175`） | **22/0/0** | **32/32** | H1=PASS H2=PASS **H3=SKIP** H4=PASS H5=PASS H6=PASS | **PASS** | 主管（agent，经 WSL interop 调 Windows 原生 node） |
+
+**执行方式（本版特有，须留痕）**：本机 Windows 侧**未独立安装 Node**，故经 WSL2 interop 调用
+**DSH 桌面自带运行时**中的 Windows 原生 node：
+`/mnt/c/Users/mingxuan/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin/node.exe`
+（`process.platform` 自报 **`win32`**/x64，`runtime.json` 记 `node 24.21.0` / `platform win32`）
+⇒ 为**真·Windows 原生进程**，非 WSL Node。
+
+⚠️ **路径传递坑（复现须知）**：直接把 WSL 形态路径（`/home/...`）交给 `--tarball` 时，执行件会将其转成
+`\\wsl.localhost\<distro>\...` UNC 形态，而 **pnpm 解析不了该形态**（T2 报 `does not exist`、
+`pnpm add "\\wsl.localhost\archlinux\..."` 失败）——**这是路径传递问题，非产品缺陷**。
+解法：先用 Windows 原生 node 把 tarball 读进来、写到 Windows 侧 `%TEMP%`（中转件
+`tmp/win-gate-stage.mjs`，纯 Node 无依赖），再把 **Windows 原生路径**交给 `--tarball`；
+中转前后 **sha256 逐字节一致**（已对账）。
+
+**逐字回传（可复制回传行）**：
+
+```text
+dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.21.0
+安装来源=dsh-graph-0.21.0.tgz (实际版本 0.21.0)
+产物指纹=sha256:d92838d31eec60b89bbde40c44fc2ad0a1ea9be815d389d792ab9487f3cb3175  1499147 B
+结果=PASS 通过22/失败0/告警0
+覆盖=台账=67项/260处命中（忽略0行，未登记即判红）  T3生命周期=32步（g-427 形态 8 步，每步盘面断言）  派发可用=零硬编码 shell 名（接线齐备）  H组合=5/6 通过，1 项显式跳过（需真机/实例）
+harness 组合矩阵 | 平台=win32 | H1=PASS H2=PASS H3=SKIP(需真机/实例) H4=PASS H5=PASS H6=PASS | 清单=6 项（单一真源，win-smoke + platform-smoke 两件消费）
+```
+
+**本版实测覆盖到的关键层**（含历史上漏检过的 g-427 面）：
+
+- **T1 台账层**：清单 **67 项 / 命中 260 处 / 扫 16 文件 / 忽略 0 行**（未登记即判红）；派发可用层零硬编码 shell 名。
+- **T1 H 系列**：`win32→pwsh`、`linux/darwin→bash` 逐平台一致（组合来源 92 个声明文件）；H4 分隔符拒绝语义 + 卷大小写注入；H5 目标正文逐字节 + CRLF/UTF-8 往返；H6 命令拼接与引号（含 `cmd.exe` 元字符集合与 argv 逐字节回传）。
+- **T3 核心运行时（本版重点）**：**32 步清单式看板文件系统生命周期全通过**（建/移/归档/取消归档/暂缓/删除 + 卡片/附件/attempts + 锁与陈旧回收；**每步核对磁盘最终状态**）；失败路径「预置非空目标 ⇒ 明确业务错误、**无平台错误码泄漏**、`tx.persist_failed` 恰好 +1、重试收敛」；盘面总览「目标副本数唯一、**无残留空目标目录**（g-427 典型症状）、无锁/临时产物」；**跨进程并发 CAS 4 抢 1**「恰好 1 成功、3 冲突被拒」。
+- **T4/T5**：Windows 上真实启动 `dsh web`、插件加载、`dsh-graph` 路由注册、看板载荷可读、Web UI 可达。
+
+**未覆盖 / 显式跳过（不得据此声称已覆盖）**：
+
+- **H3（隔离实例真派发 reviewer + collector + executor-minimal）** = `SKIP`（执行件显式标注「需真机/实例」、
+  **不冒充通过**）。补齐方式：在 Windows 隔离实例上真派发三条路径后，以 `--h3-dispatch-json <facts>` 复用
+  §7.11 同一事实文件契约再跑一次。**本版尚未补齐**。
+- **H 组合矩阵 5/6**：6 项中 1 项即上述 H3，其余 5 项 PASS。
+- 原生 **macOS** 的任何结论：本版未验证。
+- **GUI 画面语义**：本门禁不含视觉判读（无图像通道）；v0.21.0 的界面目视证据由集成评审的渲染树/DOM 断言承担，
+  其「画面语义未判读」已在 `reviews/rev-att-003-01.md` 如实登记。
+
+> ✅ **agent 未预填 PASS/FAIL**：本节结论来自**实测输出逐字回传**（执行件自身判定 + 可复制回传行），
+> 非 agent 推断；产物 sha256/字节数经**独立对账**（中转前后一致）。
+> 🔴 红线仍作为流程纪律保留：**Linux/WSL2 全绿不能替代 Windows 真机结论**（发布红线 1），
+> 而本版 Windows 结论**仅覆盖上表所列维度**，H3 与 macOS 仍为未验证项。
+
 ---
 
 ## 8. 取消项及其理由（g-362 范围收窄，必须留痕）
