@@ -40,7 +40,7 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**当前版本**：v0.20.2（本次发布准备产物；开发线沿用的版本串为 `0.20.1`）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+**当前版本**：v0.21.0（本版发布候选串；开发线此前沿用的版本串为 `0.20.2`）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
 **宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.2-0`（上界 `-0` 排除 `0.2.2` 的一切预发布与正式版；整条 `0.2.1` 线已在范围内），`engines.dsh` 供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。⚠️ 宿主的**安装/启动门禁只读 `peerDependencies`、不读 `engines.dsh`**，故两处必须同步放宽（只改 `engines.dsh` 无效）。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
@@ -282,7 +282,7 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**Current version**: v0.20.2 (this release-preparation artifact; `0.20.1` was the development version string carried by the dev line). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+**Current version**: v0.21.0 (this release-candidate string; `0.20.2` was the development version string carried by the dev line). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
 **Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` declare `>=0.1.5-rc.2 <0.2.2-0` in lockstep (the `-0` upper bound excludes every `0.2.2` prerelease and final release; the entire `0.2.1` line is now inside the range); `engines.dsh` is what host-aware markets such as dsh-market read for card display and install/update pre-flight. ⚠️ The host's **install/boot gate reads `peerDependencies` only, never `engines.dsh`**, so both fields must be widened together (widening `engines.dsh` alone has no effect). **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 

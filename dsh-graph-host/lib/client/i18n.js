@@ -1243,7 +1243,7 @@
       'help.tools.langHint': '说明语言：{lang}（跟随提示词语言设置）',
       'help.tools.loading': '读取中…',
       'help.tools.error': '读取失败：{error}',
-      'help.faq.intro': '常见问题（覆盖范围、判据、执行与数据存放）。',
+      'help.faq.intro': '常见问题（覆盖范围、判据、执行、模块开关与数据存放）。',
       'help.faq.q1': '这个插件是做什么的？',
       'help.faq.a1': '它给 Agent 一套「目标看板」工作方式：把要做的事写成目标与判据，把执行派发出去，再由你复核结果。',
       'help.faq.q2': '目标、判据、卡片有什么区别？',
@@ -1256,6 +1256,8 @@
       'help.faq.a5': '开始工作、接受结果、发布版本这几个节点是人工 gate：Agent 只能提交请求，通过与否由你决定。',
       'help.faq.q6': '数据放在哪里？',
       'help.faq.a6': '看板数据保存在当前工作区的 .dsh-graph 目录下，随工作区走；换工作区就是另一块看板。',
+      'help.faq.q7': '能不能关掉用不上的模块？',
+      'help.faq.a7': '可以。看板设置的「模块」页签里有标签、记忆、共享卡片、自动化提示词、附件五个开关，按工作区保存在 project.yaml；关掉某个模块后，对应的 graph_* 工具与投递给 Agent 的提示词段都会真实消失（不是只隐藏按钮）。',
     };
 
     // --- 英文字典 ---
@@ -2496,7 +2498,7 @@
       'help.tools.langHint': 'Description language: {lang} (follows the prompt language setting)',
       'help.tools.loading': 'Loading…',
       'help.tools.error': 'Failed to load: {error}',
-      'help.faq.intro': 'Frequently asked questions (scope, criteria, execution, and where data lives).',
+      'help.faq.intro': 'Frequently asked questions (scope, criteria, execution, module switches, and where data lives).',
       'help.faq.q1': 'What does this plugin do?',
       'help.faq.a1': 'It gives agents a "goal board" way of working: you write down what to achieve and how it will be judged, dispatch the work, then review the outcome.',
       'help.faq.q2': 'How do goals, criteria and cards differ?',
@@ -2509,6 +2511,8 @@
       'help.faq.a5': 'Starting work, accepting a result and releasing a version are human gates: the agent can only ask, and you decide whether it passes.',
       'help.faq.q6': 'Where is the data stored?',
       'help.faq.a6': 'Board data lives in the .dsh-graph directory of the current workspace, so it travels with that workspace; a different workspace is a different board.',
+      'help.faq.q7': 'Can I turn off modules I do not use?',
+      'help.faq.a7': 'Yes. The "Modules" tab of the board settings has five switches — tags, memory, shared cards, automation prompts and attachments — stored per workspace in project.yaml. Turning a module off really removes the matching graph_* tools and the prompt sections delivered to agents (it does not merely hide buttons).',
     };
 
     // --- locale 集成辅助函数 ---

@@ -31,7 +31,7 @@
       "help.usage.dispatch", "help.usage.review", "help.usage.tabs",
     ];
     // FAQ 项编号（只用于取 i18n 键与 React key，界面上不显示编号）。
-    const HELP_FAQ_ITEMS = [1, 2, 3, 4, 5, 6];
+    const HELP_FAQ_ITEMS = [1, 2, 3, 4, 5, 6, 7];
 
     /** 资产展示标签：优先 i18n（`help.asset.<base>`）；缺键时回退到资产基名 ⇒ 新资产仍可见。 */
     function helpAssetLabel(base) {
