@@ -67,7 +67,14 @@ dsh-graph 是把工作组织成「目标看板」的插件。可用 graph_* 工�
 - graph_update_settings(patch) 更新项目配置（schema 校验、保留注释、原子写）。
 
 ## 帮助
-- graph_help() 显示本帮助（全部 51 个工具清单与参数速查）。
+- graph_help([topic]) 显示本帮助（全部 51 个工具清单与参数速查）；带 topic 时只返回该主题：`usage`（使用说明口径）、`graph_engineering`（图工程点题章节，见下）或某个工具名（该工具的详细用法）。
+
+## 为什么叫 dsh-graph：图工程与看板视图
+插件名 dsh-graph 取自 **Graph Engineering（图工程）** 的启发。mcp.so 上《Graph Engineering（图工程）的理解》一文的定义（逐字引用）：「Graph Engineering（图工程）就是把多智能体系统设计成一张显式的图——节点（各自只负责一件事的智能体或步骤）、边（顺序、条件或并行的路由）、共享状态——而不是依赖单个智能体跑单条循环」。
+
+实际上这个插件是**任务 / 目标状态机**的维护系统，对 AI 而言像一套**简易的 Jira + Confluence**（也可以理解成禅道）。主管（supervisor）、worker（子代理）、reviewer（评审）、definer（定义者）、collector（收集者）与 user（用户）这几个角色，是在**主管工作指南 + 目标状态机**的约束下**自然形成**的。状态沿着 new request → define goal and criteria → collect → implement → review → verdict → deliver 推进，有两条回路：返工回到 implement，分支出新的 goal。
+
+状态机由 **dsh-graph core** 定义并组织，本插件是这种图分工下的**监控管理看板视图**；等它稳定好用且足够简洁之后，可用同一套 core 产出 dsh TUI、pi-ai 插件。需要强调的是：**看板只是视图**，核心是 AI 工作的全过程约束、智能体之间的分工、以及从用户到主管到 worker 的逐层审批控制。图工程让智能体的组织方式**可编程**，但这种编程**不是用 DSL 规定节点和边**，而是人类与 AI、Agent 与 Agent 之间合作干活的**软件工程实践**，用自然语言说清楚即可。**重要的是用户心中有图**——这张图不是固定图。看板解决两件事：让人类用户直观搞懂智能体运行、任务分拆、阶段推进、回退、返工、分支出新需求/新目标的全过程；以及随时在一些细节上插嘴干预、随时与主管 Agent 讨论方向、方法、目标变化与版本计划。图的自定义功能将在后续版本陆续开放，当前版本以过程可视化 + 任务状态机机制为主。
 
 ## 接管 supervisor
 **仅在负责人明确要求你接管 supervisor 时执行**——默认任何会话都不得自动 claim：

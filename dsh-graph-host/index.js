@@ -673,6 +673,40 @@ function localizedPrompt(name, language) {
   return requirePromptAsset(name, language);
 }
 
+/** g-493：`graph_help(topic)` 的主题抽取（纯函数，返回 null 表示该主题不存在）。
+ *  主题口径（与 prompts/help.*.md 的章节标题同源，不做第二份目录）：
+ *   · `usage` / `使用说明`          ⇒ 从文首到第一个二级标题（整份使用说明）；
+ *   · `graph_engineering` / `图工程` ⇒ 「为什么叫 dsh-graph…」章节；
+ *   · 任一已登记工具名              ⇒ 该工具那一条（`- <name>(…)` 起、到下一个 `- ` 或空行为止）。
+ *  章节名按 `## ` 切分 ⇒ 资产改标题时必须同步本函数（守卫 core/tests/g493-help-topic.test.ts 钉住）。 */
+function helpTopicText(text, topic) {
+  const src = typeof text === "string" ? text : "";
+  const key = String(topic || "").trim().toLowerCase();
+  if (!src || !key) return null;
+  const usageAlias = ["usage", "使用说明", "getting started", "使用指引"];
+  const graphAlias = ["graph_engineering", "graph-engineering", "图工程", "graph engineering"];
+  if (usageAlias.includes(key)) {
+    const firstSection = src.indexOf("\n## ");
+    return (firstSection < 0 ? src : src.slice(0, firstSection)).trimEnd();
+  }
+  if (graphAlias.includes(key)) {
+    for (const section of src.split(/\n(?=## )/)) {
+      if (!section.startsWith("## ")) continue;
+      if (/dsh-graph/.test(section.split("\n")[0]) && /图工程|Graph Engineering/i.test(section.split("\n")[0])) {
+        return section.trimEnd();
+      }
+    }
+    return null;
+  }
+  const toolMatch = new RegExp(`^- ${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\(`, "m").exec(src);
+  if (!toolMatch) return null;
+  const rest = src.slice(toolMatch.index);
+  const nextLine = rest.indexOf("\n- ", 1);
+  const blank = rest.indexOf("\n\n", 1);
+  const cuts = [nextLine, blank].filter((n) => n > 0);
+  return (cuts.length ? rest.slice(0, Math.min(...cuts)) : rest).trimEnd();
+}
+
 const GUIDE = requirePromptAsset("supervisor-guide", "zh");
 
 // g-113：普通 agent 的 dsh-graph 使用指引（按 locale 整体加载 prompts/*.md）
@@ -3310,12 +3344,20 @@ export function apply(ctx, config) {
       // g-118：dsh-graph help 命令——输出使用说明 + supervisor 接管（claim）指引。
       // 与引导提示词（systemPrompt section GUIDE_HINT）呼应：提示词告知 help 命令存在，
       // help 给出完整工具清单与换会话步骤。不含主管守则（完整守则走 skill 显式调用）。
+      // g-493：新增**可选** topic —— 让使用说明/图工程点题章节可被按名查询（也是可被守卫断言
+      // 的机械真源）。省略 topic 时**逐字返回整份资产**（g-347 的端到端断言不变）。
       def: {
         name: "graph_help",
-        description: "输出 dsh-graph 使用说明与 supervisor 接管（claim）指引：graph_* 工具清单、graph_handoff/graph_claim_supervisor 换会话步骤。",
-        parameters: params({}, []),
+        description: "输出 dsh-graph 使用说明与 supervisor 接管（claim）指引：graph_* 工具清单、graph_handoff/graph_claim_supervisor 换会话步骤；可选 topic 查询单个主题（usage / graph_engineering / 某个工具名）。",
+        parameters: params({ topic: str }, []),
       },
-      run: () => ({ help: localizedPrompt("help", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)) }),
+      run: (a) => {
+        const text = localizedPrompt("help", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
+        const topic = typeof a?.topic === "string" ? a.topic.trim() : "";
+        if (!topic) return { help: text };
+        const topicText = helpTopicText(text, topic);
+        return topicText === null ? { help: text, topic, found: false } : { help: topicText, topic, found: true };
+      },
     },
     {
       def: {

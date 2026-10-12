@@ -1339,6 +1339,29 @@
       'help.tools.colUse': '用途',
       'help.tools.orphan': '未归类',
       'help.tools.problems': '⚠️ 结构守卫未通过：分类表与注册真源不一致（请补齐分类表或简称）',
+
+      // === g-493：「使用说明」开篇点题 —— 为什么叫 dsh-graph：图工程与看板视图 ===
+      // 负责人 2026-10-12 原话口径的逐条落地（九个子项）。本段为**追加**（不改动、不重排既有键），
+      // 但「为什么叫 dsh-graph」是开篇章节 ⇒ 由客户端 HELP_USAGE_TOPIC_KEYS 驱动、渲染在既有段落之前。
+      'help.topic.title': '为什么叫 dsh-graph：图工程与看板视图',
+      'help.topic.naming': 'dsh-graph 这个名字取自**Graph Engineering（图工程）**的启发：把多智能体系统设计成一张显式的**图**，而不是依赖单个智能体跑单条循环。',
+      'help.topic.definition': 'mcp.so 上《Graph Engineering（图工程）的理解》一文把它定义为：「Graph Engineering（图工程）就是把多智能体系统设计成一张显式的图——节点（各自只负责一件事的智能体或步骤）、边（顺序、条件或并行的路由）、共享状态——而不是依赖单个智能体跑单条循环」。',
+      'help.topic.definitionSource': '以上为逐字引用，来源：mcp.so（《Graph Engineering（图工程）的理解》）。',
+      'help.topic.stateMachine': '落到实现上，这个插件其实是一套**任务 / 目标状态机**的维护系统：对 AI 来说，它像一套**简易的 Jira + Confluence**（换个熟悉的说法，也可以理解成禅道）——我把要做的事写成目标与判据，AI 去执行、我来裁决，过程和结论都留在同一处。',
+      'help.topic.roles': '在这套状态机里，角色不是预先分配好的岗位，而是**自然形成**的：主管（supervisor）负责登记目标与判据、派发与裁决，worker（子代理）干具体的活，reviewer（评审）独立复核结果，definer（定义者）把需求说清楚成目标，collector（收集者）先把上下文查明白，user（用户，也就是你）守人工关口。约束它们的只有两样东西：**主管工作指南**（技能 dsh-graph-supervisor）与**目标状态机**自身——谁在什么时候能做什么，由状态与指南决定，而不是由人在会话里临时指派。',
+      'help.topic.lifecycle': '一次工作顺着一条生命周期链推进：new request → define goal and criteria → collect → implement → review → verdict → deliver。它有两个回路：**返工**会从 verdict 回到 implement，**分支出新目标**则从需要拆开的那一步分出一条新的 goal 链，各自独立推进。',
+      'help.topic.core': '这条状态机由 **dsh-graph core**（core/ 目录）定义并组织：状态迁移、判据门禁、派发与裁决的规则都在 core 里。本插件是这套 core 之上**这种图分工下的监控管理看板视图**。等它足够稳定好用、也足够简洁之后，同一套 core 还可以产出别的视图——比如 dsh TUI，或 pi-ai 的插件。',
+      'help.topic.kanbanIsView': '所以有个问题值得先问自己：**你真的需要一直看到这张图么？需要很多张不一样的图么？需要为每个任务定制一张图么？**看板只是这张图的一个视图。真正的核心是三件事：AI 工作的**全过程约束**、智能体之间的**分工**，以及从用户到主管再到 worker 的**逐层审批控制**。',
+      'help.topic.programmable': '图工程的意义在于让智能体的组织方式**可编程**。但这种编程**不是**用一个 DSL 去规定节点和边——它更像一种软件工程实践：人类和 AI、Agent 和 Agent 之间怎么合作干活。把它说清楚就够了，用自然语言告诉自己和 Agent，这种「编程」就完成了。',
+      'help.topic.stateOfMind': '**重要的是用户心中有图，而不是界面上有一张固定的图。**这张图不是固定图：它随任务变化，不预先固定，也不需要你为每个任务去定制。当你和 AI 合作开发进入心流，闭上眼睛你会看到这张图：谁在做什么、走到哪一步、哪里可能需要返工。这也正是插件名字的用意——它同时提醒我（负责人）和 AI：看板只是视图。',
+      'help.topic.solves': '那看板在这里解决什么？主要是两件事。一是**全过程直观**：让你一眼看懂智能体在做什么、任务怎么被拆开、阶段怎么推进、哪里回退或返工、哪里分支出新的需求与新目标。二是**随时插嘴**：你可以在任何一个细节上介入，也可以随时跟主管 Agent 讨论方向、方法、目标变化与版本计划——这些讨论会被登记进目标，而不是散在对话里。',
+      'help.topic.roadmap': '路线图如实说明：**图的自定义功能将在后续版本陆续开放**（图语义调整、可视化自定义等）；**当前版本以过程可视化 + 任务状态机机制为主**，本弹窗里的图是随包发布的固定图，暂时不可调整。',
+      'help.topic.faqQ': '看板就是那张「图」吗？',
+      'help.topic.faqA': '不是。看板只是那张图的一个**视图**：它把状态机当前的样子画给你看。图本身在协作过程中形成——节点是各司其职的 Agent 或步骤，边是顺序、条件或并行的路由，共享状态就是目标、判据、卡片与记忆。它随任务变化，不需要你为每个任务定制一张固定图，也不需要你一直盯着它。真正的核心是全过程约束、智能体分工与逐层审批控制；看板负责把这一切变直观，并给你留好随时插嘴的入口。图的自定义功能会在后续版本陆续开放。',
+      'help.topic.designCrossref': '命名与「看板只是视图」的完整说明见「使用说明」页签开篇的《为什么叫 dsh-graph：图工程与看板视图》一节；本页签只讲设计哲学的落地形态——下面这两张图就是这套图分工在**当前版本**的固定画法。',
+      'help.tools.accordion': '展开说明',
+      'help.toolTopic.graph_help': '显示本帮助；按 topic 查询单个工具的详细用法（topic=usage 显示使用说明的口径）。',
+      'help.toolTopic.list': '只读列出可用于查看的帮助主题（使用说明、图工程点题章节与各工具名）。',
     };
 
     // --- 英文字典 ---
@@ -2675,6 +2698,29 @@
       'help.tools.colUse': 'Purpose',
       'help.tools.orphan': 'Unclassified',
       'help.tools.problems': 'Structure guard failed: the classification table and the registration source disagree (add the missing category or short name)',
+
+      // === g-493: opening "why the name" chapter of the Help dialog - Graph Engineering and the board as a view ===
+      // Mirrors the zh block key by key (zh/en must stay symmetric). The quoted Graph Engineering definition is
+      // reproduced verbatim in zh; English readers get the source term and the same quoted structure.
+      'help.topic.title': 'Why it is called dsh-graph: Graph Engineering and the board as a view',
+      'help.topic.naming': 'The name dsh-graph comes from **Graph Engineering**: designing a multi-agent system as an explicit **graph**, instead of relying on a single agent running one loop.',
+      'help.topic.definition': 'An article on mcp.so defining Graph Engineering puts it this way: "Graph Engineering means designing a multi-agent system as an explicit graph - nodes (agents or steps that each do exactly one thing), edges (sequential, conditional or parallel routing) and shared state - rather than relying on a single agent running one loop".',
+      'help.topic.definitionSource': 'The definition above is quoted verbatim; source: mcp.so (the article on Graph Engineering).',
+      'help.topic.stateMachine': 'Concretely, this plugin is a **task / goal state machine** maintenance system: for an AI it works like a **lightweight Jira + Confluence** (or, if you prefer, a ZenTao-style tracker) - I write down what to achieve and how it will be judged, the AI executes it, I decide the verdict, and both the process and the conclusions stay in one place.',
+      'help.topic.roles': 'Inside that state machine the roles are not pre-assigned positions; they **emerge naturally**: the supervisor records goals and criteria and dispatches and rules on them, workers (subagents) do the actual work, reviewers check results independently, definers turn a request into a clear goal, collectors gather the context first, and the user (you) holds the human gates. Only two things constrain them: the **supervisor guide** (the dsh-graph-supervisor skill) and the **goal state machine** itself - what may happen when is decided by the state and the guide, not by someone handing out assignments mid-conversation.',
+      'help.topic.lifecycle': 'A piece of work moves along one lifecycle chain: new request → define goal and criteria → collect → implement → review → verdict → deliver. It has two loops: **rework** goes from verdict back to implement, and **branching out a new goal** splits a fresh goal chain off the step that needs to be broken up, each progressing on its own.',
+      'help.topic.core': 'That state machine is defined and organized by **dsh-graph core** (the core/ directory): transitions, criteria gates, dispatch and verdict rules all live there. This plugin is the **monitoring board view** of that division of labour. Once the core is stable, pleasant to use and simple enough, the same core can produce other views - a dsh TUI, or a pi-ai plugin, for instance.',
+      'help.topic.kanbanIsView': 'So one question is worth asking first: **do you really need to see this graph all the time? Do you need many different graphs? Do you need to customize one graph per task?** The board is only one view of that graph. The real core is three things: the constraint on the AI\'s whole process, the division of labour between agents, and the layered approval control that runs from user to supervisor to worker.',
+      'help.topic.programmable': 'What Graph Engineering adds is making the organization of agents **programmable**. But that programming is **not** about specifying nodes and edges in a DSL - it is closer to a software engineering practice: how humans and AIs, and agents and agents, work together. Describing it clearly is enough; tell yourself and the agent in natural language and the "programming" is done.',
+      'help.topic.stateOfMind': '**What matters is that you hold the graph in your head, not that the UI shows one fixed graph.** Once you and the AI are in flow, you can close your eyes and see it: who is doing what, how far along it is, where rework may be needed. It changes with the task, it is not fixed in advance, and you never have to customize one per task. That is also what the plugin name is there for - it reminds both me (the owner) and the AI that the board is only a view.',
+      'help.topic.solves': 'So what does the board solve here? Mainly two things. First, **making the whole process visible**: at a glance you can tell what the agents are doing, how the task was broken up, how stages advance, where it fell back or was reworked, and where new requirements and new goals branched off. Second, **letting you cut in at any time**: you can step into any detail, or discuss direction, method, goal changes and version plans with the supervisor agent whenever you like - and those discussions are recorded on the goal instead of being scattered across the conversation.',
+      'help.topic.roadmap': 'The roadmap, stated honestly: **graph customization will open up in later versions** (graph semantics tuning, visual customization and so on), while **the current version focuses on process visualization plus the task state machine**. The diagrams in this dialog are the fixed ones shipped with the package and cannot be adjusted yet.',
+      'help.topic.faqQ': 'Is the board that "graph"?',
+      'help.topic.faqA': 'No. The board is only one **view** of that graph: it draws the current state of the state machine for you. The graph itself takes shape while you work together - its nodes are the agents or steps that each do one job, its edges are sequential, conditional or parallel routing, and its shared state is the goals, criteria, cards and memory. It changes with the task, so you never have to customize one fixed graph per task, and you do not have to watch it all the time. The real core is the whole-process constraint, the division of labour between agents and the layered approval control; the board makes all of that visible and keeps an entry point ready for you to cut in. Graph customization will open up in later versions.',
+      'help.topic.designCrossref': 'For the naming and the full "the board is only a view" explanation, see the opening chapter of the Getting started tab, "Why it is called dsh-graph: Graph Engineering and the board as a view"; this tab covers only how the design philosophy lands in practice - the two diagrams below are the fixed rendering of that division of labour in the **current version**.',
+      'help.tools.accordion': 'Show details',
+      'help.toolTopic.graph_help': 'Display this help; query one tool in detail by topic (topic=usage shows what the usage guide covers).',
+      'help.toolTopic.list': 'Read-only: list the help topics available for lookup (the usage guide, the Graph Engineering chapter and each tool name).',
     };
 
     // --- locale 集成辅助函数 ---
