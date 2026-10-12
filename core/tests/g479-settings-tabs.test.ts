@@ -531,12 +531,18 @@ test("g-479 判据1：设置弹窗改为分类页签——每个配置项恰好�
   );
   assert.equal(headerSlot.length, 1, "project.yaml 行必须是某个容器 div 的直接子节点（标题栏插槽）");
   assert.ok(deepTextOf(headerSlot[0]).includes(zh["settings.title"]), "承载 project.yaml 行的容器必须是标题栏（同容器含标题）");
-  assert.ok(deepTextOf(headerSlot[0]).includes(cfgFile), "标题栏行必须显示绝对路径全文");
+  // 改判（负责人 2026-10-12 现场反馈）：绝对路径不再平铺 ⇒ 旧「标题栏须显示路径全文」改为
+  // 「正文零残留 + 标题栏仍含该行标签 + 全文经复制按钮 title 可见」三条（断言只增不减）。
+  assert.ok(!deepTextOf(headerSlot[0]).includes(cfgFile), "标题栏行不得再平铺绝对路径（负责人反馈：路径过长，可点击复制即可）");
+  assert.ok(
+    rowNodes.some((n) => n.type === "button" && String(n.props?.title ?? "").includes(cfgFile)),
+    "绝对路径全文必须仍可获取（复制路径按钮 title 悬停可见 ⇒ 信息零丢失）",
+  );
   const footerRow = rowNodes.find(
     (n) => n.type === "div" && (n.children || []).some((c: any) => textOf(c) === zh["settings.closeBtn"]),
   );
   assert.ok(footerRow, "必须能找到页脚按钮行");
-  assert.ok(!deepTextOf(footerRow).includes(cfgFile), "页脚按钮行内不得再出现 project.yaml 路径（不得留第二份）");
+  assert.ok(!deepTextOf(footerRow).includes(yamlLabel), "页脚按钮行内不得再出现 project.yaml 行（不得留第二份）");
   const regionsForFooter = panelRegions(src, tabs.keys, []);
   const yamlAt = src.search(/projectYamlRow[,)]/);
   for (const [k, [s0, e0]] of regionsForFooter) {
@@ -593,9 +599,16 @@ test("g-479 判据2：真实渲染树里每个配置项的控件都在（与激�
   assert.ok(nodes.some((n) => textOf(n) === zh["settings.projectYaml"]), "project.yaml 标签可达（页脚一行）");
   assert.equal(nodes.filter((n) => n.type === "button" && textOf(n) === zh["tab.openFile"]).length, 1, "打开入口可达");
   assert.equal(nodes.filter((n) => n.type === "button" && textOf(n) === zh["tab.copyPath"]).length, 1, "复制入口可达");
+  // 改判（负责人 2026-10-12 现场反馈「具体路径很长，反正可以点击复制，就不用显示出来了」）：绝对路径
+  // **不再作为正文 children 明文展示** ⇒ 旧正向断言改为负向 + 可达性正向（全文仍在复制按钮的
+  // 既有 title 上）—— 两条都保留，断言数只增不减。
   assert.ok(
-    nodes.some((n) => (n.children ?? []).includes("/abs/path/project.yaml")),
-    "project.yaml 绝对路径明文展示（仍是 children 字符串，未降级为 tooltip）",
+    !nodes.some((n) => (n.children ?? []).includes("/abs/path/project.yaml")),
+    "project.yaml 绝对路径不得再平铺正文（负责人反馈：路径过长，可点击复制即可；回退平铺即红）",
+  );
+  assert.ok(
+    nodes.some((n) => n.type === "button" && String(n.props?.title ?? "").includes("/abs/path/project.yaml")),
+    "绝对路径全文必须仍可获取（复制路径按钮 title 悬停可见 ⇒ 信息零丢失）",
   );
 });
 

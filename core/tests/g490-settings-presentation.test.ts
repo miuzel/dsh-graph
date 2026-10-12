@@ -13,8 +13,10 @@
  *     标注口径来源；其余四键只显示「未配置：保持既有指导」，不得出现任何 human/ai；客户端零硬编码副本
  *     （来源值只能来自引擎下发的 `unset_scope`）。负向：无来源的具体 human/ai、把「保持既有指导」渲染成
  *     human/ai ⇒ 必红。
- *  4. `project.yaml` 行从页脚迁到**标题栏右侧（关闭按钮左边）**：绝对路径 / 可打开 / 可复制，窄宽度与
- *     长路径下不断行错位；负向：搬回页脚或留双份 ⇒ 必红。
+ *  4. `project.yaml` 行从页脚迁到**标题栏右侧（关闭按钮左边）**：可打开 / 可复制；**改判**（负责人
+ *     2026-10-12 现场反馈「具体路径很长，反正可以点击复制，就不用显示出来了」）：绝对路径**不再平铺**
+ *     进正文（该行恒为单行「📄 project.yaml (?) 打开 复制路径」），全文改由**复制路径按钮的既有 title**
+ *     承载（悬停可见 ⇒ 信息零丢失）。负向：绝对路径又平铺回正文、搬回页脚或留双份 ⇒ 必红。
  *  5. （扩写）判据 7「project.yaml 行归位与说明折叠」：`editHint` 与目录来源长句（`catalogReady`）等
  *     **常驻平铺的说明性长句**一律折叠进自绘 `(?)`（文案一字未改 ⇒ 浮层正文 ≡ i18n 原文），常驻正文只留
  *     短字段提示与必读警示 / 瞬态状态读数（`FOLDED_HINT_KEYS` / `FLAT_BODY_KEEP_KEYS` 两份清单逐条钉住）；
@@ -462,7 +464,7 @@ function automationRow(nodes: any[], k: string): { select: any; note?: any } | n
 
 // ========== 判据 4：project.yaml 行迁到标题栏右侧 ==========
 
-test("g-490 判据4：`project.yaml` 行位于标题栏右侧（关闭按钮左边）——绝对路径 + 可打开 + 可复制", () => {
+test("g-490 判据4：`project.yaml` 行位于标题栏右侧（关闭按钮左边）——单行紧凑 + 可打开 + 可复制（改判：路径不再平铺）", () => {
   const src = readModal();
   const { zh } = loadClientI18n();
   const { nodes } = renderModal(src, SNAPSHOT, zh, { tab: "executor" });
@@ -472,24 +474,34 @@ test("g-490 判据4：`project.yaml` 行位于标题栏右侧（关闭按钮左�
   );
   assert.ok(titleBar, "标题栏必须承载 project.yaml 行（同一容器）");
   assert.ok(deepTextOf(titleBar).includes(zh["settings.title"]), "承载行必须就是标题栏（同容器含标题）");
-  assert.ok(deepTextOf(titleBar).includes("/abs/path/project.yaml"), "必须显示绝对路径全文");
   const row = (titleBar!.children ?? []).find((c: any) => String(c?.props?.className ?? "") === "dg-settings-configfile");
+  // g-490 增量（负责人 2026-10-12 现场反馈）：绝对路径过长 ⇒ 正文**不再平铺**（恒单行）；但必须
+  // 仍可获取（复制路径按钮的既有 title 提示 ⇒ 信息零丢失）。旧断言「必须显示绝对路径全文」改判为
+  // 「正文零残留 + 按钮 title 携带全文」这一对（负向 + 正向，断言只增不减）。
+  assert.ok(!deepTextOf(row).includes("/abs/path/project.yaml"), "正文不得再平铺绝对路径（负责人反馈：路径过长，可点击复制即可）");
   const buttons = (row.children ?? []).filter((c: any) => c?.type === "button");
   assert.equal(buttons.length, 2, "必须有「打开」与「复制路径」两个按钮");
   assert.equal(buttons[0].props.title, zh["settings.openConfigTooltip"], "打开按钮必须有提示（按钮 title 属既有形态，不在 `(?)` 路径内）");
-  assert.equal(buttons[1].props.title, zh["settings.copyProjectPath"], "复制按钮必须有提示");
+  assert.ok(String(buttons[1].props.title).startsWith(zh["settings.copyProjectPath"]), "复制按钮必须有提示");
+  assert.ok(String(buttons[1].props.title).includes("/abs/path/project.yaml"), "绝对路径全文必须仍可获取（复制路径按钮 title 悬停可见）");
   const style = row.props.style ?? {};
   assert.equal(style.minWidth, 0, "窄宽度：行内容必须允许收缩（minWidth:0）");
   assert.equal(style.flexWrap, "wrap", "窄宽度：必须允许换行而不是溢出裁切");
   assert.equal(style.marginLeft, "auto", "必须靠右（关闭按钮左边）");
   assert.equal(style.justifyContent, "flex-end", "内容右对齐");
-  const pathSpan = (row.children ?? []).find((c: any) => String(c?.props?.style?.wordBreak ?? "") === "break-all");
-  assert.ok(pathSpan, "路径必须以 break-all 呈现（长路径不撑破布局）");
-  assert.equal(pathSpan.props.style.minWidth, 0, "路径必须允许收缩到 0（长路径场景）");
+  assert.equal((row.children ?? []).length, 4, "行内恒为四件：📄 标签 + 说明 (?) + 打开 + 复制路径（路径已不再平铺）");
+  assert.ok(
+    (row.children ?? []).some((c: any) => String(c?.props?.className ?? "") === "dg-settings-tip"),
+    "说明 (?) 必须仍在行内（判据 7 扩写的承载点）",
+  );
+  assert.ok(
+    !(row.children ?? []).some((c: any) => String(c?.props?.style?.wordBreak ?? "") === "break-all"),
+    "行内不得再出现 break-all 长文本（路径平铺形态不得回退）",
+  );
   // 页脚不得再有第二份
   const footer = nodes.find((n) => n.type === "div" && (n.children ?? []).some((c: any) => deepTextOf(c) === zh["settings.closeBtn"]));
   assert.ok(footer, "必须能找到页脚按钮行");
-  assert.ok(!deepTextOf(footer).includes("/abs/path/project.yaml"), "页脚不得残留 project.yaml（迁移≠复制）");
+  assert.ok(!deepTextOf(footer).includes(zh["settings.projectYaml"]), "页脚不得残留 project.yaml（迁移≠复制；改判：以标签文案而非路径为残留标记）");
   // 标题栏必须给右上角关闭按钮留出空间（否则窄宽度下会被盖住）
   const header = nodes.find((n) => n.props?.style?.paddingRight === 34);
   assert.ok(header, "标题栏必须预留 paddingRight:34（给右上角关闭按钮让位）");
@@ -705,9 +717,13 @@ function presentationProblems(modalSrc: string, zh: Dict): string[] {
   const titleBar = rendered.nodes.find(
     (n) => n.type === "div" && (n.children ?? []).some((c: any) => String(c?.props?.className ?? "") === "dg-settings-configfile"),
   );
-  if (!titleBar || !deepTextOf(titleBar).includes("/abs/path/project.yaml")) problems.push("判据4：project.yaml 行不在标题栏（可能被搬回页脚）");
+  const yamlRow = rendered.nodes.find((n) => String(n?.props?.className ?? "") === "dg-settings-configfile");
+  // 改判（负责人 2026-10-12 反馈）：行位判定不再借用「绝对路径在正文里」作代理，改用行自身 +
+  // 标签文案；并把「路径又平铺回正文」立成**独立负向**（否则旧代理一失效，两侧都变成真空断言）。
+  if (!titleBar || !yamlRow || !deepTextOf(titleBar).includes(zh["settings.projectYaml"])) problems.push("判据4：project.yaml 行不在标题栏（可能被搬回页脚）");
+  if (yamlRow && deepTextOf(yamlRow).includes("/abs/path/project.yaml")) problems.push("判据4：绝对路径又平铺进正文（负责人反馈：路径过长，只应经复制按钮 title 可见）");
   const footer = rendered.nodes.find((n) => n.type === "div" && (n.children ?? []).some((c: any) => deepTextOf(c) === zh["settings.closeBtn"]));
-  if (footer && deepTextOf(footer).includes("/abs/path/project.yaml")) problems.push("判据4：页脚仍残留 project.yaml（迁移≠复制）");
+  if (footer && deepTextOf(footer).includes(zh["settings.projectYaml"])) problems.push("判据4：页脚仍残留 project.yaml（迁移≠复制）");
   // ---- 判据 7（扩写）：常驻平铺说明折叠 + project.yaml 行内 `(?)` 落点 ----
   for (const { key } of FOLDED_HINT_KEYS) problems.push(...foldedHintProblems(modalSrc, key));
   problems.push(...editHintSiteProblems(modalSrc));
@@ -748,6 +764,8 @@ test("g-490 改坏即红：各判据契约在内存变异下逐项报红（含�
     // g-490 负例②：把「保持既有指导」渲染成 human/ai（无 gate 范围的键不得出现任何 human/ai）
     { name: "把「保持既有指导」渲染成 human/ai", src: before.replace('unsetScope ? dgT("settings.automationDefaultPrefix") + unsetScope.gate_requires : dgT("settings.automationUnsetKeep")', 'dgT("settings.automationUnsetKeep") + " (human)"'), expect: /不得出现任何 human\/ai/ },
     { name: "project.yaml 行搬离标题栏", src: before.replace("            projectYamlRow),\n", "            ),\n"), expect: /不在标题栏/ },
+    // g-490 负例（判据 4 改判配套）：绝对路径又平铺回正文 ⇒ 必红（负责人 2026-10-12 反馈：路径过长）
+    { name: "绝对路径又平铺回正文", src: before.replace('h("span", { style: { fontSize: 11, opacity: 0.7, whiteSpace: "nowrap" } }, dgT("settings.projectYaml")),', 'h("span", { style: { fontSize: 11, opacity: 0.7, whiteSpace: "nowrap" } }, dgT("settings.projectYaml")),\n            h("span", { style: { ...S.meta, fontSize: 11, wordBreak: "break-all", minWidth: 0 } }, configFile),'), expect: /绝对路径又平铺进正文/ },
     // g-490 判据 7（扩写）负例①：editHint 改回**常驻平铺**渲染 ⇒ 必红（说明必须只经 `(?)` 承载）
     { name: "editHint 改回常驻平铺", src: before.replace('settingsHintIcon(dgT("settings.editHint"))', 'h("span", { style: S.meta }, dgT("settings.editHint"))'), expect: /不得出现在常驻正文渲染面/ },
     // g-490 判据 7（扩写）负例②：`(?)` 移出 project.yaml 行（孤挂在标题旁）⇒ 必红
@@ -757,7 +775,7 @@ test("g-490 改坏即红：各判据契约在内存变异下逐项报红（含�
     // g-490 判据 7（扩写）负例④：把「仍留正文」的必读警示（reviewUnsetHint）悄悄折叠 ⇒ 必红
     { name: "必读警示 reviewUnsetHint 被悄悄折叠", src: before.replace('h("div", { style: metaStyle }, dgT("settings.reviewUnsetHint")),', 'settingsHintIcon(dgT("settings.reviewUnsetHint")),'), expect: /属「仍留正文」清单/ },
   ];
-  assert.ok(mutants.length >= 15, `变异负向对照只增不减（实得 ${mutants.length} 项：11 项既有 + 4 项判据 7 扩写新增）`);
+  assert.ok(mutants.length >= 16, `变异负向对照只增不减（实得 ${mutants.length} 项：11 项既有 + 4 项判据 7 扩写新增 + 1 项判据 4 改判新增）`);
   for (const m of mutants) {
     assert.notEqual(m.src, before, `变异体「${m.name}」必须真的改动了源码（否则是空变异）`);
     const got = presentationProblems(m.src, zh).join(" | ");

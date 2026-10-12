@@ -938,8 +938,7 @@
             // g-490 增量（判据 7 扩写）：本行说明（settings.editHint）原为标题下方**常驻平铺**的一行，
             // 现收进本行内的**自绘 `(?)` 浮层**（与其余 `(?)` 同一交互契约：悬停/点击/键盘聚焦、
             // Esc·浮层外点击·滚动关闭、同屏至多一个、`aria-label` 保留全文）。文案**一字未改** ⇒
-            // 信息零丢失，只是不再占常驻正文。落点选在 📄 project.yaml 标签旁（紧邻其描述对象），
-            // 不跟在可换行的绝对路径之后（窄宽度换行时才不会与图标分离）。
+            // 信息零丢失，只是不再占常驻正文。落点选在 📄 project.yaml 标签旁（紧邻其描述对象）。
             settingsHintIcon(dgT("settings.editHint")),
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
@@ -958,10 +957,12 @@
             h("button", {
               style: { ...S.btn, fontSize: 11, padding: "1px 6px" },
               className: "dg-btn",
-              title: dgT("settings.copyProjectPath"),
+              // g-490 增量（负责人 2026-10-12 现场反馈）：绝对路径过长，正文**不再平铺**该路径
+              // （反正可一键复制）⇒ 该行恒为单行；全文仍在**本按钮的既有 title 提示**里（悬停可见，
+              // 不在 `(?)` 路径内）⇒ 信息零丢失，只是不再占常驻空间。
+              title: dgT("settings.copyProjectPath") + "：" + configFile,
               onClick: async (e) => { e.stopPropagation(); const ok = await copyText(configFile); if (ok) showToast(dgT("tab.pathCopied")); },
-            }, dgT("tab.copyPath")),
-            h("span", { style: { ...S.meta, fontSize: 11, opacity: 0.7, wordBreak: "break-all", minWidth: 0 } }, configFile))
+            }, dgT("tab.copyPath")))
         : null;
 
       return dgOverlay({ style: S.overlay, ...backdropGuard },
@@ -969,7 +970,8 @@
           h("span", { className: "dg-close", style: S.close, onClick: requestClose }, "✕"),
           // g-490：标题栏 = 标题 + （右端）project.yaml 行。增量（判据 7 扩写）：原先「标题下方常驻
           // 一行」的 editHint 说明已折叠进该行内的 `(?)` ⇒ 正文里**不再有**这一行（负向守卫钉住，
-          // 回退成常驻平铺即判红）。
+          // 回退成常驻平铺即判红）。增量（负责人 2026-10-12 现场反馈）：绝对路径也不再平铺（见
+          // projectYamlRow 注释）⇒ 标题栏恒为单行「标题 + 📄 project.yaml (?) 打开 复制路径」。
           h("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", paddingRight: 34 } },
             h("div", { style: { ...S.modalH, marginBottom: 0, flex: "0 0 auto" } }, dgT("settings.title")),
             projectYamlRow),

@@ -292,11 +292,14 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.ok((modal.match(/copyText\(configFile\)/g) || []).length >= 2, "打开回退 + 复制按钮均应复制绝对路径");
   assert.match(modal, /dgT\("settings\.projectYaml"\)/);
   assert.match(modal, /title: dgT\("settings\.openConfigTooltip"\)/);
-  assert.match(modal, /title: dgT\("settings\.copyProjectPath"\)/);
+  assert.match(modal, /title: dgT\("settings\.copyProjectPath"\) \+ "：" \+ configFile/, "绝对路径全文改由复制按钮的既有 title 承载（悬停可见）");
   assert.match(modal, /\}, dgT\("tab\.openFile"\)\)/);
   assert.match(modal, /\}, dgT\("tab\.copyPath"\)\)/);
   // g-490（判据 7）：project.yaml 行从**页脚**迁到**标题栏右侧（关闭按钮左边）**——位置断言 +
-  // 「页脚不得留第二份」负向断言（双份即红）；窄宽度/长路径保护（flexWrap + break-all + 关闭按钮让位）。
+  // 「页脚不得留第二份」负向断言（双份即红）；窄宽度保护（flexWrap + 关闭按钮让位）。
+  // 改判（负责人 2026-10-12 现场反馈）：绝对路径**不再平铺**（「反正可以点击复制」）⇒ 旧
+  // 「break-all 长路径折行」断言改为**负向**（不得回退平铺形态）+ 正向（全文经按钮 title 可见）。
+  assert.doesNotMatch(modal, /wordBreak: "break-all", minWidth: 0 \}/, "绝对路径不得再平铺正文（负责人反馈：可点击复制即可；回退平铺即红）");
   assert.equal(
     (modal.match(/className: "dg-settings-configfile"/g) || []).length,
     1,
@@ -334,7 +337,6 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.match(modal, /catalog\.status === "loading" \? dgT\("settings\.catalogLoadingMsg"\) : dgT\("settings\.catalogUnavailableMsg"\)/, "瞬态/降级读数仍留正文（一眼可见）");
   assert.match(modal, /gap: 8, flexWrap: "wrap", paddingRight: 34 \}/, "标题栏为绝对定位的关闭按钮留出 34px");
   assert.match(modal, /justifyContent: "flex-end", marginLeft: "auto", minWidth: 0 \}/, "配置行顶到右端且可收缩（窄宽度不撑破）");
-  assert.match(modal, /fontSize: 11, opacity: 0\.7, wordBreak: "break-all", minWidth: 0 \}/, "绝对路径可断行（长路径不撑破）");
   // 页脚第二份已删除：页脚行之后不得再出现 projectYaml 行（负向：搬回去/留双份即红）
   const footerIdx = modal.indexOf('h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: requestClose }, dgT("settings.closeBtn"))');
   assert.ok(footerIdx > 0 && footerIdx > cfgRowIdx, "页脚关闭按钮行在标题栏之后");
