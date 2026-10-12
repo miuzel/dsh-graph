@@ -656,19 +656,27 @@ function renderAutomationGuidance(automation, language) {
 
 // ==== g-480：模块在**提示词面**的裁剪位置（描述性元数据，随 schema_hints 下发给调用方）====
 // 工具面的唯一真源是 core 的 `MODULE_TOOL_NAMES`（本表**不**重复任何工具名，避免第二份副本漂移）。
-// 取值说明：
-//   · `section:<name>` = 该模块关闭时，这个我们注册的 systemPrompt section 整体不再注入；
-//   · `tool-name-mentions` = 该模块关闭时，其受管工具名会被从**所有**我们注册的 section 文本里按行剔除
-//     （`stripModuleToolMentions`，对**动态**记忆正文里的提及同样生效）；
-//   · `none` = 该模块没有可达的提示词面（只有工具面）。
+// 取值**闭集**（g480 用例把本表与真实注册 / 真实裁剪行为对账，写错即红）：
+//   · `none` = 没有可达的提示词面（只有工具面）；
+//   · `section:<name>` = 该模块关闭时，这个我们注册的 systemPrompt section **整体**不再注入；
+//   · `section-part:<name>#<part>` = 只裁掉该 section 的**一段**（正文保留）；
+//   · `tool-name-mentions:none` = 该模块关闭时其受管工具名会被从**所有**我们注册的 section 文本里
+//     按行剔除（`stripModuleToolMentions`），且当前三个 section 的**静态**资产里没有它们的可达提及；
+//   · `tool-name-mentions:dynamic-memory` = 同上机制，但可达提及只在**动态**正文里（常驻记忆逐条文本），
+//     静态资产里没有；
+//   · `role-prompt:<role>` = 可达提及只在该**子代理角色**的 persona/prompt 与 `requiredTools` 里，
+//     而该角色的派发前能力自检（`diagnoseDispatchCapability`）会因缺少该模块工具而**拒绝派发**
+//     ⇒ 该提示词面在模块关闭时**不可达**（不假装已改写文案，也不派发能力残缺的子代理）。
 // 已知不可达（如实登记，不假装已裁）：`skills.register` 与 `prompts/*.md` 资产是 **apply 期一次性**
 // 全局面，无法按 workspace 裁剪 ⇒ help/usage 资产里对该模块的**文字**说明保留，但能力已从模型可选集移除。
 const MODULE_PROMPT_FACE = {
   tags: "none",
   memory: "section:dsh-graph-standing-memory",
-  shared_cards: "tool-name-mentions",
-  automation_prompts: "section:dsh-graph-supervisor-discipline",
-  attachments: "none",
+  shared_cards: "tool-name-mentions:dynamic-memory",
+  automation_prompts: "section-part:dsh-graph-supervisor-discipline#automation-guidance",
+  // 附件：可达提及只在 collector 角色的 persona/收集提示词与 `requiredTools`（`graph_store_attachment`）。
+  // 关闭附件 ⇒ 派发前能力自检缺该工具 ⇒ **拒绝派发 collector**（不派发能力残缺的子代理）⇒ 该提示词面不可达。
+  attachments: "role-prompt:collector",
 };
 
 // g-118：dsh-graph help 内容按 locale 整体加载 prompts/help.*.md
@@ -5614,6 +5622,12 @@ export function apply(ctx, config) {
     //      裁剪只发生在**会话可见面**，绝不写成「按配置跳过注册」——否则工具计数会随配置漂移。
     //
     // 开关读的是**会话自己 workspace** 的 project.yaml（per-session 读，跨 workspace 不串）。
+    //   ④ **workspace 口径唯一**：一律 `agent.session.header.cwd` —— 与工具侧 `sessionWorkspace()`
+    //      （:1440）以及三个 section 的读法**同源**（g-113 会话 workspace 跟随）。无 header.cwd ⇒
+    //      **不裁剪**，也不兜底 `sandboxPolicy.workspaceRoot` / `process.cwd()`：三个 section 在渲染期
+    //      同样只认 header.cwd，兜底会造成「工具面裁了、提示词面没裁」的新分歧。实测（真机 e2e）：
+    //      `dsh-subagent` 的 `cwd` 参数只改**有效工作目录**，不改子会话 header.cwd ⇒ 子会话的开关与
+    //      其 graph_* 工具落在**同一个** board root，二者一致。
     if (typeof ctx?.on === "function" && typeof ctx?.tools?.restrict === "function") {
       try {
         const off = ctx.on("agent/created", (info) => {

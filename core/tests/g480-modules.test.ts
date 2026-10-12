@@ -24,7 +24,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import vm from "node:vm";
@@ -44,7 +44,23 @@ import {
   isMemoryToolsEnabled,
   setMemoryToolsEnabled,
   addMemory,
+  toolFilterForRole,
+  getRoleProfile,
+  diagnoseDispatchCapability,
+  writeSupervisorSession,
+  createGoal,
+  appendGoalComment,
+  addCard,
+  fillCard,
+  formatHarvestedCardsSection,
+  storeAttachment,
+  readAttachment,
+  parseAttachmentRefs,
+  attachmentProblems,
+  attachmentsDir,
+  validate,
 } from "../ops.ts";
+import type { SubagentRole } from "../ops.ts";
 import { apply } from "../../dist/index.js";
 
 const repoRoot = join(import.meta.dirname, "../..");
@@ -270,30 +286,65 @@ test("g-480 ⑤：memory 单一真源 —— 旧键只作读侧默认，写入�
 // 宿主模拟：真裁剪（②）、提示词面（③）、51 红线与降级（④）
 // ---------------------------------------------------------------------------
 
+type RestrictCall = { agentId: string; deny: string[]; allow?: string[] };
+
 type HostMock = {
   ws: string;
   events: Map<string, Function[]>;
-  restrictCalls: Array<{ agentId: string; deny: string[] }>;
+  restrictCalls: RestrictCall[];
   ctx: any;
   globalSet: () => Set<string>;
   registered: string[];
+  registeredDefs: Map<string, any>;
   sections: any[];
 };
 
-/** 模拟宿主：`tools.register`（apply 期注册面）+ `on`（生命周期事件）+ 每个 agent 自己的 tools 服务。 */
-function makeHostMock(ws: string, opts: { on?: boolean; restrict?: boolean; hostPlane?: string[] } = {}): HostMock {
+/**
+ * 模拟宿主：`tools.register`（apply 期注册面）+ `on`（生命周期事件）+ 每个 agent 自己的 `tools` 服务。
+ *
+ * ⚠️ 本夹具**刻意不宽松**：分层语义与真源 `dsh-tools/lib/index.js` 的 `view()` 同构（`knownNames` /
+ * `restrictableNames` / `visible` 三个集合），因为「deny 名单作用域过滤」这条硬约束的全部价值就在于
+ * **夹具会像真宿主一样抛错**：
+ *   · global 平面（本插件 `ctx.tools.register` 的 51 个工具 + `opts.hostTools` 的宿主自带工具）；
+ *   · ancestor 平面（`opts.ancestor`：祖先层 / agent 平面自有工具）⇒ **后代**可点名，全局视图里没有；
+ *   · own 平面（`opts.own`：本会话自己层注册）⇒ `restrictableNames` **不含**它 ⇒ 点名必抛 `unknown global tool`。
+ * `restrict` 与真源一样**先全量校验再落地**（空过滤 / 保留名 `run_code` / 未知名 ⇒ 抛错且**零副作用**，
+ * 因为真源的校验发生在 `layers.effect` 之前）。
+ */
+function makeHostMock(
+  ws: string,
+  opts: {
+    on?: boolean;
+    restrict?: boolean;
+    hostTools?: string[];
+    onThrows?: boolean;
+    hideGlobal?: string[];
+    refuseRegister?: string[];
+  } = {},
+): HostMock {
   const sections: any[] = [];
   const registered: string[] = [];
+  const registeredDefs = new Map<string, any>();
   const events = new Map<string, Function[]>();
-  const restrictCalls: Array<{ agentId: string; deny: string[] }> = [];
-  const globalSet = new Set<string>();
-  const hostPlane = new Set(opts.hostPlane ?? []);
+  const restrictCalls: RestrictCall[] = [];
+  const globalSet = new Set<string>(opts.hostTools ?? []);
+  // `hideGlobal`：模拟宿主**漂移**（该工具被挪出全局层：改成会话/agent 平面注册，或本版本根本没有）
+  // ⇒ 插件照常注册（计数红线），但 `tools.get(name)`（全局视图）读不到它。
+  const hideGlobal = new Set<string>(opts.hideGlobal ?? []);
+  // `refuseRegister`：模拟宿主**拒收/去重**某个注册（注册面少一个工具）⇒ 用于 51 红线的负向对照
+  const refuseRegister = new Set<string>(opts.refuseRegister ?? []);
   const ctx: any = {
     get: (key: string) => (key === "systemPrompt" ? { section: (s: any) => { sections.push(s); return () => {}; } } : undefined),
     effect: (fn: any) => { if (typeof fn === "function") fn(); return () => {}; },
     tools: {
-      register: (def: any) => { registered.push(def.name); globalSet.add(def.name); return () => {}; },
-      // 全局视图（不传 scope）：本插件注册的 51 个工具
+      register: (def: any) => {
+        if (refuseRegister.has(def.name)) return () => {};
+        registered.push(def.name);
+        registeredDefs.set(def.name, def);
+        if (!hideGlobal.has(def.name)) globalSet.add(def.name);
+        return () => {};
+      },
+      // 全局视图（不传 scope）：本插件注册的 51 个工具（+ 宿主自带）
       get: (name: string) => (globalSet.has(name) ? { name } : undefined),
     },
   };
@@ -303,27 +354,33 @@ function makeHostMock(ws: string, opts: { on?: boolean; restrict?: boolean; host
   }
   if (opts.on !== false) {
     ctx.on = (ev: string, fn: Function) => {
+      if (opts.onThrows) throw new Error("event not supported by this host");
       const arr = events.get(ev) ?? [];
       arr.push(fn);
       events.set(ev, arr);
       return () => {};
     };
   }
-  return { ws, events, restrictCalls, ctx, globalSet: () => globalSet, registered, sections };
+  return { ws, events, restrictCalls, ctx, globalSet: () => globalSet, registered, registeredDefs, sections };
 }
 
 function applyHost(h: HostMock): void {
   apply(h.ctx, {});
 }
 
-/** 建一个 agent（模拟宿主 `agents.create({ setup })` 后触发 `agent/created`）。 */
+/** 建一个 agent（模拟宿主 `agents.create({ setup })`；再由 `createAgent` 触发 `agent/created`）。 */
 function makeAgent(
   h: HostMock,
-  opts: { id?: string; cwd?: string | null; local?: string[]; hidden?: string[] } = {},
+  opts: { id?: string; cwd?: string | null; own?: string[]; ancestor?: string[]; hidden?: string[] } = {},
 ) {
-  const visible = new Set<string>([...h.globalSet(), ...(opts.local ?? [])]);
-  for (const n of opts.hidden ?? []) visible.delete(n);
-  const denied = new Set<string>();
+  const ownPlane = new Set<string>(opts.own ?? []);
+  const ancestorPlane = new Set<string>(opts.ancestor ?? []);
+  // view().restrictableNames = global + 祖先层（**不含** own 层）⇒ 点 own 名必抛 unknown global tool
+  const restrictable = new Set<string>([...h.globalSet(), ...ancestorPlane]);
+  // view().visible = 继承面里被每一层放行的名字 + own 层（own 注册不受 restriction 影响）
+  const visible = new Set<string>([...h.globalSet(), ...ancestorPlane, ...ownPlane]);
+  for (const n of opts.hidden ?? []) visible.delete(n); // 祖先层已限制掉的（仍可点名，不抛错）
+  const layers: Array<{ allow: Set<string> | null; deny: Set<string> }> = [];
   const agent: any = { session: { id: opts.id ?? "s-x", header: {} } };
   if (opts.cwd !== null) agent.session.header.cwd = opts.cwd ?? h.ws;
   agent.__visible = visible;
@@ -333,15 +390,27 @@ function makeAgent(
       get: (name: string, scope?: any) =>
         (scope ? (scope.__visible.has(name) ? { name } : undefined) : (h.globalSet().has(name) ? { name } : undefined)),
       restrict: (filter: any) => {
-        for (const n of filter?.deny ?? []) {
-          // 真实语义：deny 里出现对该 agent **不可见**的名字 ⇒ 抛 `unknown global tool`
-          if (!visible.has(n)) throw new Error(`unknown global tool: ${n}`);
-          denied.add(n);
+        const allowNames: string[] | undefined = filter?.allow;
+        const denyNames: string[] | undefined = filter?.deny;
+        // 真源：空过滤 / 保留名 / 未知名 ⇒ 抛错；校验先于 layers.effect ⇒ 抛错时**零副作用**
+        if (allowNames === undefined && denyNames === undefined) {
+          throw new Error("tools.restrict({}) is a no-op: pass `allow` and/or `deny`");
         }
-        h.restrictCalls.push({ agentId: agent.session.id, deny: [...(filter?.deny ?? [])] });
-        return () => { denied.clear(); };
+        for (const n of [...(allowNames ?? []), ...(denyNames ?? [])]) {
+          if (n === "run_code") throw new Error('tools.restrict() cannot name reserved PTC mode presentation transport "run_code"');
+          if (!restrictable.has(n)) throw new Error(`tools.restrict() names unknown global tool "${n}"`);
+        }
+        const layer = { allow: allowNames === undefined ? null : new Set(allowNames), deny: new Set(denyNames ?? []) };
+        layers.push(layer);
+        const rec: RestrictCall = { agentId: agent.session.id, deny: [...layer.deny] };
+        if (allowNames !== undefined) rec.allow = [...allowNames];
+        h.restrictCalls.push(rec);
+        return () => { const at = layers.indexOf(layer); if (at >= 0) layers.splice(at, 1); };
       },
-      schemas: () => [...visible].filter((n) => !denied.has(n)).map((n) => ({ name: n })),
+      schemas: () => [...visible]
+        // own 层注册不受 restriction 影响；继承面上的名字须被每一层同时放行
+        .filter((n) => (ownPlane.has(n) ? true : layers.every((l) => (!l.allow || l.allow.has(n)) && !l.deny.has(n))))
+        .map((n) => ({ name: n })),
     },
   };
   return agent;
@@ -394,27 +463,82 @@ test("g-480 ②：真裁剪 —— 关闭模块的工具从模型可见清单消
   assert.equal(h.restrictCalls.length, 2, "无 cwd 不产生 restrict 调用");
 });
 
-test("g-480 ②：deny 名单**作用域过滤** —— 对某会话不可见的候选名不得进 deny（否则 restrict 抛错并回滚会话）", () => {
+test("g-480 ②：deny 名单**作用域过滤**（硬约束②）—— 不可点名 / 不可解析候选名永不进 deny", () => {
   const { ws } = makeWorkspace("modules:\n  memory: false\n");
-  const h = makeHostMock(ws);
+  const MEM = [...MODULE_TOOL_NAMES.memory];
+  assert.equal(MEM.length, 4, "memory 受管工具 4 个（本用例的算术前提）");
+
+  // (a) 宿主漂移 / agent 平面：该工具**不在全局视图**（注册被挪到会话层），但对该 agent 可见。
+  //     真源语义：`restrict` 校验的是 `view(scope).restrictableNames`（全局层 + 祖先层，**不含** own 层）
+  //     ⇒ 点名这种名字必抛 `unknown global tool`，而在 setup / 会话创建路径上抛错会**回滚整个会话**。
+  const h = makeHostMock(ws, { hideGlobal: ["graph_memory_remove"] });
   applyHost(h);
-  // 该 agent 看不到 graph_memory_remove（模拟被其它作用域限制/不在其继承面内）
-  const a = createAgent(h, { id: "s-hidden", hidden: ["graph_memory_remove"] });
-  assert.equal(h.restrictCalls.length, 1, "依然完成裁剪（不因不可见候选而抛错）");
-  assert.deepEqual(h.restrictCalls[0].deny, ["graph_memory_add", "graph_memory_replace", "graph_memory_recall"], "不可见候选被过滤掉");
-  assert.equal(schemaNames(a).length, 51 - 3, "可见面按**过滤后**的名单裁剪");
+  assert.equal(h.registered.length, 51, "注册面不受影响（判据 4 的 51 红线：漂移只影响可见性解析）");
+  const a = createAgent(h, { id: "s-drift", own: ["graph_memory_remove"] });
+  assert.equal(h.restrictCalls.length, 1, "漂移候选被剔除后仍有 3 个候选 ⇒ 照常完成一次裁剪（不抛错）");
+  assert.deepEqual(h.restrictCalls[0].deny, MEM.filter((n) => n !== "graph_memory_remove"), "漂移候选不进 deny");
+  assert.equal(schemaNames(a).length, 51 - 3, "可见面 = 51 − 3；own 层那个名字不在 deny 内 ⇒ 仍可见");
+  assert.ok(schemaNames(a).includes("graph_memory_remove"), "own 层注册不受 restriction 影响（不误删会话自有工具）");
+  // 反证：本夹具**不宽松** —— 直接点名该名字确实抛 `unknown global tool`，
+  // ⇒ 上面的绿灯来自我们的作用域过滤（`tools.get(name)` 全局视图判定），而不是夹具对未知名的宽容。
+  assert.throws(() => a.ctx.tools.restrict({ deny: ["graph_memory_remove"] }), /unknown global tool/);
+  assert.equal(schemaNames(a).length, 51 - 3, "抛错零副作用（真源校验先于落地，不留半截限制）");
 
-  // 全部候选都不可见 ⇒ 一次 restrict 都不调（空名单不调用，避免 no-op 调用与抛错风险）
-  const h2 = makeHostMock(ws);
+  // (b) 该名字在任何平面都解析不到（宿主版本已移除）⇒ 两个条件都不过 ⇒ 同样被过滤，不抛错
+  const h2 = makeHostMock(ws, { hideGlobal: ["graph_memory_recall"] });
   applyHost(h2);
-  const b = createAgent(h2, { id: "s-allhidden", hidden: [...MODULE_TOOL_NAMES.memory] });
-  assert.deepEqual(h2.restrictCalls, [], "过滤后名单为空 ⇒ 不调用 restrict");
-  assert.equal(schemaNames(b).length, 51, "不可见的候选本来就不在可见面上 ⇒ 结果一致");
+  const b = createAgent(h2, { id: "s-gone" });
+  assert.deepEqual(h2.restrictCalls[0].deny, MEM.filter((n) => n !== "graph_memory_recall"));
+  assert.equal(schemaNames(b).length, 50 - 3, "可见面 = 50 − 3");
 
-  // 边界如实登记：候选集恒为**本插件全局注册**的工具名 ⇒ `tools.get(name)`（全局视图）恒有定义；
-  // 过滤的第二项条件（对该 agent 可见）防的正是上面的抛错/回滚。若将来出现「scope 自有同名工具
-  // 遮蔽全局同名」的病态配置，`get` 无法区分可见性来源，需另加探针——今天不可达，不提前加复杂度。
-  assert.ok(true);
+  // (c) own 层同名遮蔽全局同名：**全局同名仍在** ⇒ 仍可点名（restrictableNames 含它），
+  //     且 deny 只作用于继承面 ⇒ 不误删会话自有工具。
+  const h3 = makeHostMock(ws);
+  applyHost(h3);
+  const c = createAgent(h3, { id: "s-own", own: ["graph_memory_add"] });
+  assert.equal(h3.restrictCalls.length, 1);
+  assert.deepEqual(h3.restrictCalls[0].deny, MEM, "全局同名仍进 deny（known 集含全局名）");
+  assert.ok(schemaNames(c).includes("graph_memory_add"), "own 层注册不受 restriction 影响");
+  assert.equal(schemaNames(c).length, 51 - 3, "另外 3 个受管工具照常从可见面消失");
+
+  // (d) 候选全部被祖先层遮蔽（可见面里已无）⇒ 过滤后名单为空 ⇒ 一次 restrict 都不调（不做空调用）
+  const h4 = makeHostMock(ws);
+  applyHost(h4);
+  const d = createAgent(h4, { id: "s-hidden", hidden: MEM });
+  assert.deepEqual(h4.restrictCalls, [], "过滤后名单为空 ⇒ 不调用 restrict");
+  assert.equal(schemaNames(d).length, 51 - MEM.length, "候选本就被祖先层遮蔽（可见面已少 4）⇒ 不再重复 deny");
+});
+
+test("g-480 ②：监听器的 workspace 口径**与工具侧/提示面同源**（header.cwd，无兜底）+ 监听器结构不变式", () => {
+  // 真机上 `dsh-subagent` 的 cwd 参数只改「有效工作目录」，**不改**子会话 header.cwd（e2e 实拍），
+  // 而工具侧 rootFor 用的是 `session.header.cwd ?? sandboxPolicy.workspaceRoot`（index.js:1440 同源
+  // sessionWorkspace()），三个 section 也读 header.cwd ⇒ 裁剪必须用**同一个**口径，否则会出现
+  // 「工具面裁了、提示词面没裁」或「裁剪 workspace ≠ board root」的分歧。本用例把口径钉在源码层。
+  const src = readFileSync(join(HOST, "index.js"), "utf8");
+  const START = 'if (typeof ctx?.on === "function" && typeof ctx?.tools?.restrict === "function") {';
+  const END = "// g-118：supervisor 守则自动注入";
+  const i = src.indexOf(START);
+  const j = src.indexOf(END, i + 1);
+  assert.ok(i >= 0, "监听器注册锚点必须存在（结构性守卫的前提）");
+  assert.ok(j > i, "监听器块必须以 g-118 注释为结束锚点");
+  const block = src.slice(i, j);
+
+  // ① 读法唯一：agent.session.header.cwd
+  assert.ok(block.includes("agent?.session?.header?.cwd"), "workspace 必须取自 agent.session.header.cwd");
+  // ② 不得兜底到别的 workspace 来源（避免与 section 面分歧 + 避免错 workspace 误裁）
+  for (const forbidden of ["effectiveCwd", "process.cwd()", "sandboxPolicy", "workingDirectory"]) {
+    assert.ok(!block.includes(forbidden), `监听器不得使用 ${forbidden} 作为 workspace 来源（口径必须唯一）`);
+  }
+  // ③ 硬约束②的作用域过滤必须双条件（全局视图 + 该 agent 视图）
+  assert.ok(/at\.get\(name\)\s*!==\s*undefined/.test(block), "必须用全局视图 tools.get(name) 判定可点名");
+  assert.ok(/at\.get\(name,\s*agent\)\s*!==\s*undefined/.test(block), "必须用该 agent 视图 tools.get(name, agent) 判定可解析");
+  // ④ 硬约束①的 try/catch 兜底 + 留痕（抛错不得逃逸到会话创建路径）
+  assert.ok(/catch \(e\) \{\s*\n\s*\/\/[^\n]*\n\s*process\.stderr\.write\(`\[dsh-graph-host\] g-480/.test(block), "裁剪体必须有兜底 catch 并写 stderr 留痕");
+  // ⑤ 未配置/全开路径**一次 restrict 都不调**（行为逐字节不变的结构保证）
+  assert.ok(block.includes("if (!switches.disabledTools.length) return;"), "全开必须提前返回（零 restrict 调用）");
+  assert.ok(block.includes("if (!cwd) return;"), "无 cwd ⇒ 提前返回（fail-safe：不裁剪）");
+  // ⑥ 视图口径必须与工具侧同一表达式（防将来只改一边）
+  assert.ok(src.includes("ex?.agent?.session?.header?.cwd ?? ctx.get?.(\"sandboxPolicy\")?.workspaceRoot ?? null"), "工具侧 sessionWorkspace() 的既有口径不得被改动（两边同源）");
 });
 
 test("g-480 ④：能力缺失静默降级 —— 无 ctx.on / 无 tools.restrict 时零报错、零裁剪、51 个工具照常可见", () => {
@@ -444,4 +568,491 @@ test("g-480 ④：apply 期注册无条件 —— 五模块全关时注册清单
   assert.equal(names.length, 51 - moduleToolNames().length, `全关后可见面 = 51 − ${moduleToolNames().length} 个受管工具`);
   for (const n of moduleToolNames()) assert.ok(!names.includes(n), `${n} 应不可见`);
   for (const n of hf.registered) if (!moduleToolNames().includes(n)) assert.ok(names.includes(n), `${n} 不受模块开关管理，必须仍可见`);
+});
+
+// ---------------------------------------------------------------------------
+// ② 硬约束①：接线永不抛错（restrict 抛错不得回滚会话创建）
+// ---------------------------------------------------------------------------
+
+/** 捕获 `process.stderr.write`（监听器的 fail-safe 留痕走这里）。 */
+function captureStderr(fn: () => void): string {
+  const chunks: string[] = [];
+  const orig = (process.stderr as any).write;
+  (process.stderr as any).write = (chunk: any) => { chunks.push(String(chunk)); return true; };
+  try { fn(); } finally { (process.stderr as any).write = orig; }
+  return chunks.join("");
+}
+
+test("g-480 ②：接线永不抛错（硬约束①）—— restrict 抛错被吞并留痕、不毒化后续会话、事件面不可用即静默降级", () => {
+  const { ws } = makeWorkspace(OFF_TAGS_ATTACH);
+  const h = makeHostMock(ws);
+  applyHost(h);
+  const a = makeAgent(h, { id: "s-throw" });
+  // 让该会话的 restrict 无条件抛错：这正是「setup / 会话创建路径上抛错」的形状
+  // （`dsh-agent-loop` 的 publish :1789 与 initializeAgent :1944 在同一个 try 里 ⇒ 抛出去就是会话创建回滚）
+  a.ctx.tools.restrict = () => { throw new Error("simulated restrict failure"); };
+  const notes = captureStderr(() => { for (const fn of h.events.get("agent/created") ?? []) fn({ agent: a }); });
+  assert.match(notes, /g-480 模块裁剪跳过[\s\S]*simulated restrict failure/, "必须 try/catch 并留痕（可诊断，不静默）");
+  assert.equal(schemaNames(a).length, 51, "裁剪失败 ⇒ 可见面保持原状（fail-open 到「全开」= 等价降级）");
+  assert.equal(h.restrictCalls.length, 0, "抛错的 restrict 不记账");
+
+  // 接线无残留状态：一次抛错不得毒化后续会话
+  const b = createAgent(h, { id: "s-after" });
+  assert.equal(schemaNames(b).length, 48, "前一会话抛错不影响后一会话的裁剪（48 = 51 − 3）");
+  assert.deepEqual(h.restrictCalls.map((c) => c.agentId), ["s-after"]);
+
+  // 事件注册本身抛错（旧宿主 / 事件名不支持）⇒ 特性探测静默降级，注册面不漂移
+  const h2 = makeHostMock(ws, { onThrows: true });
+  assert.doesNotThrow(() => applyHost(h2), "ctx.on 抛错必须被吞掉（特性探测）");
+  assert.equal(h2.registered.length, 51, "降级路径不改变注册面");
+  const c = createAgent(h2, { id: "s-nolisten" });
+  assert.equal(schemaNames(c).length, 51, "无监听 ⇒ 零裁剪（与改造前一致）");
+
+  // info 形状退化（无 agent.ctx.tools）/ 无 cwd：监听器只 return，不抛错
+  const h3 = makeHostMock(ws);
+  applyHost(h3);
+  assert.doesNotThrow(() => {
+    for (const fn of h3.events.get("agent/created") ?? []) fn({ agent: { session: { id: "s-bare", header: { cwd: ws } } } });
+  }, "无 agent.ctx.tools ⇒ 静默 return");
+  assert.deepEqual(h3.restrictCalls, []);
+});
+
+test("g-480 ②：与 dsh-subagent 自身 setup 的 toolFilter 叠加（硬约束①/②）—— 两层过滤**相交**、不抛错", () => {
+  const { ws } = makeWorkspace("modules:\n  memory: false\n");
+  const filter = toolFilterForRole("summarizer", "standard");
+  assert.ok(filter?.allow, "summarizer 标准模式有 allow 名单（本用例的前提）");
+  const allow = [...filter!.allow!];
+  assert.ok(allow.includes("graph_memory_recall"), "真实 allow 含 graph_memory_recall ⇒ 与 memory 模块的 deny 相交（否则用例失去意义）");
+  const h = makeHostMock(ws, { hostTools: ["read", "glob", "grep", "graph_refresh_results"] });
+  applyHost(h);
+  const child = makeAgent(h, { id: "sub-1" });
+  // dsh-subagent 形状：applyChildComposition(childCtx, parent, composition) → childCtx.tools.restrict(composition.toolFilter)
+  assert.doesNotThrow(() => child.ctx.tools.restrict({ allow }), "子代理自己的 allow 层先落地（dsh-subagent setup 形状）");
+  // 随后宿主 publish `agent/created` ⇒ 本插件在**同一个** agent 上追加 deny
+  assert.doesNotThrow(() => { for (const fn of h.events.get("agent/created") ?? []) fn({ agent: child }); }, "叠加本插件的 deny 不得抛错（否则会话创建回滚）");
+  assert.deepEqual(schemaNames(child).sort(), ["glob", "graph_refresh_results", "grep", "read"], "allow ∩ ¬deny：memory 关闭把 graph_memory_recall 从**子代理**允许集里也移除（相交，不是覆盖）");
+  assert.deepEqual(h.restrictCalls, [
+    { agentId: "sub-1", deny: [], allow },
+    { agentId: "sub-1", deny: [...MODULE_TOOL_NAMES.memory] },
+  ], "两层各自独立记账：本插件只下 deny，绝不改写子代理的 allow");
+});
+
+// ---------------------------------------------------------------------------
+// ③ 提示词面裁剪（按会话 workspace 现读；全开 diff=0）
+// ---------------------------------------------------------------------------
+
+function sectionByName(h: HostMock, name: string): any {
+  const s = h.sections.find((x: any) => x.name === name);
+  assert.ok(s, `section ${name} 必须已注册（实得 [${h.sections.map((x: any) => x.name).join(", ")}]）`);
+  return s;
+}
+
+function promptAsset(file: string): string {
+  return readFileSync(join(DIST, "prompts", file), "utf8");
+}
+
+test("g-480 ③：三个自有 section 的注册形状不变（name/order/interpolate）+ 全开逐字等同资产", () => {
+  const { ws } = makeWorkspace("");
+  const h = makeHostMock(ws);
+  applyHost(h);
+  assert.deepEqual(h.sections.map((s: any) => s.name), ["dsh-graph-guide-hint", "dsh-graph-supervisor-discipline", "dsh-graph-standing-memory"], "本插件只注册这 3 个 section（g-389 审计面不变）");
+  assert.deepEqual(h.sections.map((s: any) => s.order), [10, 11, 92], "order 不变");
+  for (const s of h.sections) assert.equal(s.interpolate, false, `${s.name} 必须字面量（g-389：不参与 {{}} 插值）`);
+  const c = { agent: { session: { id: "s-1", header: { cwd: ws } } } };
+  const hint = sectionByName(h, "dsh-graph-guide-hint").text(c);
+  assert.ok(hint === promptAsset("guide-hint.zh.md") || hint === promptAsset("guide-hint.en.md"), "全开 ⇒ 引导段逐字来自本地化资产（无改写、无追加）");
+});
+
+test("g-480 ③：关闭模块 ⇒ 该模块的提示词面不再出现（记忆段整段 / 六键段不追加 / 工具名按行剔除）", () => {
+  // —— 常驻记忆段（order 92）：动态正文里的受管工具名按行剔除 ——
+  const { ws, root } = makeWorkspace("");
+  init(root);
+  addMemory(root, { kind: "project", scope: "standing", text: "KEEP-STANDING-LINE 该行必须保留", actor: "human:gui" });
+  addMemory(root, { kind: "project", scope: "standing", text: "需要项目知识库时调用 graph_list_shared_cards 列出卡片", actor: "human:gui" });
+  const h = makeHostMock(ws);
+  applyHost(h);
+  const c = { agent: { session: { id: "s-1", header: { cwd: ws } } } };
+  const memOn = sectionByName(h, "dsh-graph-standing-memory").text(c);
+  assert.ok(memOn.includes("KEEP-STANDING-LINE"), "全开 ⇒ 常驻记忆正文注入");
+  assert.ok(memOn.includes("graph_list_shared_cards"), "全开 ⇒ 记忆正文里的工具名提及原样保留（不裁剪）");
+
+  writeProjectConfig(root, { modules: { shared_cards: false } }, "human:gui");
+  const cardsOff = sectionByName(h, "dsh-graph-standing-memory").text(c);
+  assert.ok(!cardsOff.includes("graph_list_shared_cards"), "关 shared_cards ⇒ 动态记忆正文里该工具名所在**行**被剔除");
+  assert.ok(cardsOff.includes("KEEP-STANDING-LINE"), "只剔受管工具名所在行，其它记忆正文逐字保留（不整段丢失）");
+
+  writeProjectConfig(root, { modules: { memory: false } }, "human:gui");
+  assert.equal(sectionByName(h, "dsh-graph-standing-memory").text(c), "", "关 memory ⇒ 常驻记忆段**整段不注入**");
+  assert.ok(readFileSync(join(root, "memory", "memory.jsonl"), "utf8").includes("KEEP-STANDING-LINE"), "只隐藏注入面：记忆数据文件逐字未动（判据 5：关闭不删数据）");
+
+  // —— 主管纪律段（order 11，仅主管会话）：automation_prompts 关 ⇒ **只不追加**六键指导段 ——
+  const { ws: wsSup, root: rootSup } = makeWorkspace("executor:\n  mode: minimal\n");
+  init(rootSup);
+  writeSupervisorSession(rootSup, "sup-1", "t");
+  writeProjectConfig(rootSup, { supervisor: { automation: { scope_planning: "human", release: "ai" } } }, "t");
+  const hs = makeHostMock(wsSup);
+  applyHost(hs);
+  const cs = { agent: { session: { id: "sup-1", header: { cwd: wsSup } } } };
+  const autoOn = sectionByName(hs, "dsh-graph-supervisor-discipline").text(cs);
+  const asset = autoOn.includes(promptAsset("discipline.zh.md")) ? promptAsset("discipline.zh.md") : promptAsset("discipline.en.md");
+  assert.ok(autoOn.startsWith("\n" + asset), "全开 ⇒ 拼接形状与改造前一致（\\n + 本地化纪律资产 + 六键指导段）");
+  const guidance = autoOn.slice(1 + asset.length);
+  assert.ok(guidance.trim().length > 0, "六键生效 ⇒ 必须追加指导段（否则本用例失去意义）");
+
+  writeProjectConfig(rootSup, { modules: { automation_prompts: false } }, "t");
+  const autoOff = sectionByName(hs, "dsh-graph-supervisor-discipline").text(cs);
+  assert.equal(autoOff, "\n" + asset, "关 automation_prompts ⇒ 只**不追加**六键段；纪律正文逐字保留（差异面 = 追加段）");
+  assert.ok(!autoOff.includes(guidance.slice(0, 24)), "六键指导段不得以任何形式残留");
+
+  // 既有语义不变：非主管会话 / 无 cwd ⇒ 纪律段为空串
+  writeProjectConfig(rootSup, { modules: { automation_prompts: true } }, "t");
+  assert.equal(sectionByName(hs, "dsh-graph-supervisor-discipline").text({ agent: { session: { id: "someone-else", header: { cwd: wsSup } } } }), "", "非主管会话不注入（g-131 语义不变）");
+  assert.equal(sectionByName(hs, "dsh-graph-supervisor-discipline").text({ agent: { session: { id: "sup-1", header: {} } } }), "", "无 cwd ⇒ 不注入（避免错 workspace 误判）");
+});
+
+// ---------------------------------------------------------------------------
+// ① graph_get_settings 端到端 + prompt_face 元数据与真实面对账
+// ---------------------------------------------------------------------------
+
+test("g-480 ①：graph_get_settings 端到端 —— modules 段 + schema_hints 与真实注册/prompt_face 闭集对账", () => {
+  const { ws, root } = makeWorkspace("modules:\n  tags: false\n");
+  const h = makeHostMock(ws);
+  applyHost(h);
+  const def = h.registeredDefs.get("graph_get_settings");
+  assert.ok(def?.execute, "graph_get_settings 必须已注册且可执行");
+  const res: any = def.execute({}, { agent: { session: { header: { cwd: ws } } } });
+  assert.equal(res.config.modules.tags, false, "工具读到的 config 反映 project.yaml 的 modules 段");
+  assert.equal(res.config_path, join(root, "project.yaml"));
+  const m = res.schema_hints.modules;
+  assert.ok(m, "schema_hints 必须含 modules（调用方据此渲染模块开关）");
+  assert.equal(m.scope, "workspace", "只允许工作区级一层（负责人已定）");
+  assert.equal(m.default, true, "未配置 = 开启");
+  assert.deepEqual(m.values, [true, false, null]);
+  assert.deepEqual(m.keys, [...HARNESS_MODULE_IDS], "五模块键序与 core 同源");
+  const real = new Set(registeredToolNames());
+  const sectionNames = new Set(h.sections.map((s: any) => s.name));
+  const assetText = ["guide-hint.zh.md", "guide-hint.en.md", "discipline.zh.md", "discipline.en.md"].map(promptAsset).join("\n");
+  for (const id of HARNESS_MODULE_IDS) {
+    const pm = m.per_module[id];
+    assert.ok(pm, `per_module 必须含 ${id}`);
+    assert.deepEqual(pm.tools, [...MODULE_TOOL_NAMES[id]], `${id} 的 tools 与 core 的 MODULE_TOOL_NAMES 同源（不是第二份副本）`);
+    for (const n of pm.tools) assert.ok(real.has(n), `${n} 必须在真实注册清单里`);
+    const face: string = pm.prompt_face;
+    if (face === "none" || face === "tool-name-mentions:none") {
+      for (const n of pm.tools) assert.ok(!assetText.includes(n), `${id} 声明 ${face} ⇒ 四个 section 资产里不得出现其工具名（对账失败请如实改元数据）`);
+    } else if (face === "tool-name-mentions:dynamic-memory") {
+      assert.ok(pm.tools.some((n: string) => n.startsWith("graph_list_shared") || n.startsWith("graph_convert_card")), `${id} 声明 dynamic-memory ⇒ 其受管工具名确有可能出现在动态记忆正文里`);
+    } else if (face.startsWith("section-part:")) {
+      const [sname, part] = face.slice("section-part:".length).split("#");
+      assert.ok(sectionNames.has(sname), `${id} 声明的 section ${sname} 必须真实注册`);
+      assert.equal(part, "automation-guidance", "唯一已知的 section-part 是 automation-guidance（新增须同步本用例）");
+    } else if (face.startsWith("role-prompt:")) {
+      // 「可达提及只在某子代理角色的 persona/提示词与 requiredTools 里」⇒ 必须用**真实**派发前能力自检
+      // 证明该角色在模块关闭时被拒绝派发（否则这条元数据就是空话，提示词面实际可达且引用了不存在的工具）。
+      const role = face.slice("role-prompt:".length) as SubagentRole;
+      const on = diagnoseDispatchCapability(role, "standard", { available: () => true });
+      assert.equal(on.ok, true, `${role} 全开时必须可派发`);
+      const denied = new Set(MODULE_TOOL_NAMES[id]);
+      assert.ok(
+        getRoleProfile(role).requiredTools.some((t) => denied.has(t)),
+        `${id} 声明 role-prompt:${role} ⇒ 该角色 requiredTools 必须含其受管工具（否则元数据不成立）`,
+      );
+      const off = diagnoseDispatchCapability(role, "standard", { available: (n: string) => !denied.has(n) });
+      assert.equal(off.ok, false, `${id} 关闭 ⇒ ${role} 派发前能力自检必须失败（不派发能力残缺的子代理）`);
+      assert.ok(
+        off.missing.some((n) => denied.has(n)),
+        `${id} 关闭 ⇒ 诊断必须点名缺失的受管工具，实际 missing=${JSON.stringify(off.missing)}`,
+      );
+      assert.match(String(off.message), /未启动子代理/, "诊断必须明示未启动子代理（fail-closed，不是静默降级）");
+    } else {
+      assert.ok(face.startsWith("section:"), `${id} 的 prompt_face 不在闭集内：${face}`);
+      assert.ok(sectionNames.has(face.slice("section:".length)), `${id} 声明的 section 必须真实注册`);
+    }
+  }
+  assert.equal(m.per_module.shared_cards.prompt_face, "tool-name-mentions:dynamic-memory", "静态资产里无可达提及、可达提及只在动态记忆正文 ⇒ 如实登记（不假装裁掉了不存在的文字）");
+  assert.equal(m.per_module.automation_prompts.prompt_face, "section-part:dsh-graph-supervisor-discipline#automation-guidance", "六键段是**部分**裁剪（纪律正文保留）");
+  assert.equal(m.per_module.memory.prompt_face, "section:dsh-graph-standing-memory", "记忆段是整段裁剪");
+  assert.equal(
+    m.per_module.attachments.prompt_face,
+    "role-prompt:collector",
+    "附件工具名只在 collector 角色的 persona/提示词/requiredTools 里 ⇒ 如实登记为角色面（关闭后该角色被自检拒绝派发）",
+  );
+  // 交互面冻结：五模块关闭**只**影响 collector（附件），其余角色（executor/supervisor/summarizer…）的
+  // requiredTools 与受管工具名**不相交** ⇒ 关模块不会误伤常见派发路径（越界收紧必红）。
+  const allManaged = new Set(Object.values(MODULE_TOOL_NAMES).flat() as string[]);
+  for (const role of ["supervisor", "executor", "summarizer", "reviewer"] as SubagentRole[]) {
+    const blocked = getRoleProfile(role).requiredTools.filter((t) => allManaged.has(t));
+    assert.deepEqual(blocked, [], `模块开关不得阻断 ${role} 的派发（requiredTools 与受管工具名必须不相交）`);
+    const d = diagnoseDispatchCapability(role, "standard", { available: (n: string) => !allManaged.has(n) });
+    assert.equal(d.ok, true, `${role} 在五模块全关时仍必须可派发（缺能力时先补组合/工具再派发）`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ⑥ GUI：「模块」页签（前后端键集同源 / i18n 对称 / 稀疏提交 / 写回 actor）
+// ---------------------------------------------------------------------------
+
+const CLIENT_DIR = join(HOST, "lib", "client");
+const MODAL_SRC = readFileSync(join(CLIENT_DIR, "settings-modal.js"), "utf8");
+const I18N_SRC = readFileSync(join(CLIENT_DIR, "i18n.js"), "utf8");
+
+/** vm 载入 settings-modal.js 的 `normalizeSettingsDraft…SettingsModal` 切片（与 g479 渲染测试同一切片口径）。
+ *  该切片在**空 sandbox** 里可求值（已实证），故此处只需取出模块开关相关的常量与稀疏提交函数。 */
+function loadClientSlice(): any {
+  const a = MODAL_SRC.indexOf("function normalizeSettingsDraft(");
+  const b = MODAL_SRC.indexOf("function SettingsModal(");
+  assert.ok(a > 0 && b > a, "settings-modal.js 缺少归一化段或 SettingsModal（切片锚点漂移）");
+  const sandbox: any = {};
+  vm.runInNewContext(
+    `${MODAL_SRC.slice(a, b)}\n;globalThis.__c = { buildSettingsPatch, MODULE_SWITCH_KEYS, MODULE_LABEL_KEYS, MODULE_HINT_KEYS, SETTINGS_TAB_KEYS };`,
+    sandbox,
+  );
+  return sandbox.__c;
+}
+
+function loadI18nDicts(): { zh: Record<string, string>; en: Record<string, string> } {
+  const sandbox: any = { React: {} };
+  vm.runInNewContext(`${I18N_SRC}\n;globalThis.__d = { zh: zh, en: en };`, sandbox);
+  return sandbox.__d;
+}
+
+test("g-480 ⑥：GUI 模块页签 —— 前后端键集同源、i18n zh/en 对称（en 零 CJK）、稀疏提交只发变化的模块叶子", () => {
+  const c = loadClientSlice();
+  // 注意：vm 跨 realm 取值 ⇒ 一律展开成本地数组再比（strict deepEqual 会比较原型）
+  assert.deepEqual([...c.MODULE_SWITCH_KEYS], [...HARNESS_MODULE_IDS], "前端 MODULE_SWITCH_KEYS 与 core HARNESS_MODULE_IDS 同源同序（副本漂移即红）");
+  assert.ok(c.SETTINGS_TAB_KEYS.includes("modules"), "模块开关归属 modules 页签（g-479 页签结构内）");
+  assert.deepEqual(Object.keys(c.MODULE_LABEL_KEYS), [...c.MODULE_SWITCH_KEYS], "标签键与开关一一对应");
+  assert.deepEqual(Object.keys(c.MODULE_HINT_KEYS), [...c.MODULE_SWITCH_KEYS], "说明键与开关一一对应");
+
+  // i18n：模块相关键 zh/en 齐备、en 零 CJK、zh 为中文文案
+  const d = loadI18nDicts();
+  const moduleKeys = [
+    "settings.tab.modules",
+    "settings.modulesNote",
+    "settings.modulesScopeNote",
+    ...Object.values(c.MODULE_LABEL_KEYS),
+    ...Object.values(c.MODULE_HINT_KEYS),
+  ] as string[];
+  for (const k of moduleKeys) {
+    assert.ok(typeof d.zh[k] === "string" && d.zh[k].length > 0, `zh 缺模块文案键 ${k}`);
+    assert.ok(typeof d.en[k] === "string" && d.en[k].length > 0, `en 缺模块文案键 ${k}（两语必须对称）`);
+    assert.ok(!HAN.test(d.en[k]), `en 的 ${k} 不得含中日韩全角字符：${d.en[k]}`);
+    assert.ok(HAN.test(d.zh[k]), `zh 的 ${k} 应当是中文文案：${d.zh[k]}`);
+  }
+
+  // 稀疏提交（与 agent_teams 同口径）：模块叶子只在「草稿是布尔」或「基线是布尔而草稿回 null」时进 payload
+  const allNull = { modules: { tags: null, memory: null, shared_cards: null, automation_prompts: null, attachments: null } };
+  assert.equal(c.buildSettingsPatch(allNull, allNull).modules, undefined, "未配置 + 未动 ⇒ 不提交 modules（不把「未配置」实体化进 project.yaml）");
+  const offTags = { modules: { ...allNull.modules, tags: false } };
+  assert.deepEqual({ ...c.buildSettingsPatch(offTags, allNull).modules }, { tags: false }, "显式关闭 ⇒ 只提交该叶子（其余模块连键都不进 payload）");
+  assert.equal(c.buildSettingsPatch(offTags, offTags).modules, undefined, "同态不产生假脏（不重写他人段落）");
+  assert.deepEqual({ ...c.buildSettingsPatch(allNull, offTags).modules }, { tags: null }, "false → 未配置（显式清空回默认开启）⇒ 提交 null");
+  assert.equal(c.buildSettingsPatch({ modules: { ...allNull.modules, memory: "off" } }, allNull).modules, undefined, "畸形值归一为未配置 ⇒ 无差异 ⇒ 不提交（绝不回填成「关闭」）");
+
+  // 写侧：GUI 路由 actor 恒为 human:gui（可信身份），且 POST 必先过 settingsPostSchema
+  const routeSrc = readFileSync(join(HOST, "index.js"), "utf8");
+  const routeAt = routeSrc.indexOf('path: "/api/dsh-graph/settings"');
+  assert.ok(routeAt > 0, "设置路由 /api/dsh-graph/settings 必须存在");
+  const route = routeSrc.slice(routeAt, routeAt + 1600);
+  assert.match(route, /validateSchema\(body, settingsPostSchema\)/, "POST 必须先过 settingsPostSchema（未知键/非布尔 ⇒ 400）");
+  assert.match(route, /writeProjectConfig\(r, body, "human:gui"\)/, "写回 actor 恒为 human:gui（不由请求体自报）");
+
+  const { root } = makeWorkspace("");
+  init(root);
+  writeProjectConfig(root, { modules: { tags: false } }, "human:gui");
+  const events = readFileSync(join(root, "events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const last = events[events.length - 1];
+  assert.equal(last.event, "project.config_set", "写入必须有可追溯事件");
+  assert.equal(last.actor, "human:gui", "事件 actor 为 GUI 身份");
+  assert.deepEqual(last.details.fields, ["modules.tags"], "事件点名被改的叶子");
+  assert.match(readFileSync(join(root, "project.yaml"), "utf8"), /modules:\n  tags: false/, "落盘形态为行级 modules 段");
+});
+
+// ---------------------------------------------------------------------------
+// ⑧ 负向对照：同一组不变式在**变异体**上必须报红
+// ---------------------------------------------------------------------------
+
+/** 不变式 A：deny 映射表 ≡ 真实注册清单里的受管命名面（漏一个 / 多一个 / 重复归属 ⇒ 非空）。 */
+function mappingProblems(map: Record<string, readonly string[]>, real: string[]): string[] {
+  const problems: string[] = [];
+  const realSet = new Set(real);
+  const seen = new Map<string, string>();
+  for (const [id, names] of Object.entries(map)) {
+    for (const n of names) {
+      if (!realSet.has(n)) problems.push(`${id} 的 ${n} 不在真实注册清单里`);
+      if (seen.has(n)) problems.push(`${n} 同时归属 ${seen.get(n)} 与 ${id}`);
+      seen.set(n, id);
+    }
+  }
+  const expected: Record<string, string[]> = {
+    tags: real.filter((n) => n === "graph_set_goal_tags"),
+    memory: real.filter((n) => n.startsWith("graph_memory_")),
+    shared_cards: real.filter((n) => /_shared_cards?$/.test(n) || n.startsWith("graph_convert_card_to_")),
+    attachments: real.filter((n) => n.startsWith("graph_store_attachment") || n.startsWith("graph_delete_attachment")),
+  };
+  for (const [id, want] of Object.entries(expected)) {
+    const got = [...(map[id] ?? [])].sort();
+    const w = [...want].sort();
+    if (got.join(",") !== w.join(",")) problems.push(`${id} 映射表 ${got.join("/") || "(空)"} ≠ 命名面 ${w.join("/") || "(空)"}`);
+  }
+  if ((map.automation_prompts ?? []).length) problems.push("automation_prompts 是纯提示词面模块，不应有受管工具");
+  if (seen.has("graph_add_card")) problems.push("shared_cards 不得越界管理目标自有卡片工具 graph_add_card");
+  return problems;
+}
+
+/** 不变式 B：`settingsPostSchema` 的 modules 段裁决（只收真布尔/null，拒未知键与非布尔）。 */
+function modulesSchemaProblems(validate: (v: unknown, s: unknown) => { valid: boolean }, schema: unknown): string[] {
+  const cases: Array<[unknown, boolean]> = [
+    [{ modules: { tags: true } }, true],
+    [{ modules: { tags: false, memory: null } }, true],
+    [{ modules: {} }, true],
+    [{ modules: { automation_prompts: false, attachments: true, shared_cards: null } }, true],
+    [{ modules: { nope: true } }, false],
+    [{ modules: { tags: "false" } }, false],
+    [{ modules: { tags: 1 } }, false],
+    [{ modules: [] }, false],
+  ];
+  const problems: string[] = [];
+  for (const [value, want] of cases) {
+    const got = validate(value, schema).valid;
+    if (got !== want) problems.push(`schema 对 ${JSON.stringify(value)} 的裁决 ${got} ≠ 期望 ${want}`);
+  }
+  return problems;
+}
+
+/** 不变式 C：51 红线（注册面不多不少、无重名、受管工具都在注册面里）。 */
+function registrationProblems(registered: string[], map: Record<string, readonly string[]>): string[] {
+  const problems: string[] = [];
+  if (registered.length !== 51) problems.push(`注册数 ${registered.length} ≠ 51（判据 4 红线）`);
+  if (registered.length !== new Set(registered).size) problems.push("注册清单有重复项");
+  const set = new Set(registered);
+  for (const names of Object.values(map)) for (const n of names) if (!set.has(n)) problems.push(`${n} 未被无条件注册`);
+  return problems;
+}
+
+/** 漂移场景量测：宿主把 `graph_memory_remove` 挪出全局层（插件**仍注册**它）。
+ *  期望：候选被作用域过滤 ⇒ 其余 3 个真被裁掉、零错误留痕。 */
+function driftTrim(applyFn: (ctx: any, cfg: any) => void, ws: string) {
+  const h = makeHostMock(ws, { hideGlobal: ["graph_memory_remove"] });
+  applyFn(h.ctx, {});
+  const a = makeAgent(h, { id: "s-drift", own: ["graph_memory_remove"] });
+  const notes = captureStderr(() => { for (const fn of h.events.get("agent/created") ?? []) fn({ agent: a }); });
+  return { trimmed: 51 - schemaNames(a).length, deny: h.restrictCalls[0]?.deny ?? [], notes, registered: h.registered.length };
+}
+
+test("g-480 ⑧：负向对照 —— 四条变异（漏工具 / 去作用域过滤 / 放宽 schema / 注册少一个）都必须报红", async () => {
+  const { ws } = makeWorkspace("modules:\n  memory: false\n");
+  const real = registeredToolNames();
+
+  // —— 正向：真输入下三条不变式全绿，真 dist 的漂移裁剪确实发生 ——
+  assert.deepEqual(mappingProblems(MODULE_TOOL_NAMES, real), []);
+  assert.deepEqual(modulesSchemaProblems(validateSchema as any, settingsPostSchema), []);
+  const hOn = makeHostMock(ws);
+  applyHost(hOn);
+  assert.deepEqual(registrationProblems(hOn.registered, MODULE_TOOL_NAMES), []);
+  const good = driftTrim((ctx, cfg) => apply(ctx, cfg), ws);
+  assert.deepEqual([good.trimmed, good.deny.length, good.notes], [3, 3, ""], "真 dist：漂移候选被过滤、3 个工具真被裁掉、零错误留痕");
+  assert.equal(good.registered, 51, "漂移不影响注册面");
+
+  // —— 变异 ①：映射表漏一个受管工具（模拟「漏 deny 映射」）——
+  const leaked: Record<string, readonly string[]> = {
+    ...MODULE_TOOL_NAMES,
+    memory: MODULE_TOOL_NAMES.memory.filter((n) => n !== "graph_memory_recall"),
+  };
+  assert.ok(mappingProblems(leaked, real).length > 0, "漏一个受管工具必须报红");
+
+  // —— 变异 ④：注册面少一个工具（夹具层：宿主拒收一个注册）——
+  const hRefuse = makeHostMock(ws, { refuseRegister: ["graph_set_goal_tags"] });
+  applyHost(hRefuse);
+  assert.ok(registrationProblems(hRefuse.registered, MODULE_TOOL_NAMES).length > 0, "注册面少一个工具必须报红（51 红线）");
+
+  // —— 变异 ②/③：在 dist **私有副本**上真实变异后实跑（不碰真 dist）——
+  const copy = mkdtempSync(join(TMP_ROOT, "g480-mut-"));
+  try {
+    cpSync(DIST, copy, { recursive: true });
+    const idxPath = join(copy, "index.js");
+    const schPath = join(copy, "core", "schema.js");
+    const idx = readFileSync(idxPath, "utf8");
+    const sch = readFileSync(schPath, "utf8");
+    const guard = "at.get(name) !== undefined && at.get(name, agent) !== undefined";
+    const boolAnchor = 'tags: { type: "boolean", nullable: true },';
+    assert.equal(idx.split(guard).length - 1, 1, "变异锚点 1（作用域过滤的全局视图判定）必须在 dist/index.js 里恰好出现一次");
+    assert.equal(sch.split(boolAnchor).length - 1, 1, "变异锚点 2（modules.tags 的布尔约束）必须在 dist/core/schema.js 里恰好出现一次");
+    // 两次变异都必须在**首次 import 之前**落盘（ESM 模块缓存）
+    writeFileSync(idxPath, idx.replace(guard, "at.get(name, agent) !== undefined"));
+    writeFileSync(schPath, sch.replace(boolAnchor, 'tags: { type: "string", nullable: true },'));
+
+    const mutated = await import(pathToFileURL(idxPath).href);
+    const bad = driftTrim((ctx, cfg) => mutated.apply(ctx, cfg), ws);
+    assert.equal(bad.trimmed, 0, "去掉全局视图判定 ⇒ restrict 抛 unknown global tool ⇒ 被吞掉 ⇒ 该会话**零裁剪**（过滤器缺失的代价）");
+    assert.match(bad.notes, /模块裁剪跳过[\s\S]*unknown global tool/, "留痕点名真因（可诊断，不静默）");
+    assert.equal(bad.registered, 51, "裁剪失效不改变注册面");
+
+    const mutatedSchema: any = await import(pathToFileURL(schPath).href);
+    assert.ok(
+      modulesSchemaProblems(mutatedSchema.validateSchema, mutatedSchema.settingsPostSchema).length > 0,
+      "放宽 modules.tags 类型（boolean → string）必须报红",
+    );
+  } finally {
+    const resolved = resolve(copy);
+    assert.ok(resolved.startsWith(resolve(TMP_ROOT) + sep), `拒绝删除 TMP_ROOT 之外的路径：${resolved}`);
+    rmSync(resolved, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ⑤ 数据安全：关闭 = 只隐藏入口，绝不删数据（附件仍可读、校验仍通过）
+// ---------------------------------------------------------------------------
+
+test("g-480 ⑤：attachments 关闭后既有 @att/ 资产仍可读、引用仍可解析、graph_validate 不因开关报错", async () => {
+  const { ws, root } = makeWorkspace("modules:\n  attachments: false\n  shared_cards: false\n  tags: false\n");
+  init(root);
+  const cfg = readProjectConfig(root);
+  const off = resolveModuleSwitches(cfg);
+  assert.equal(off.switches.attachments.on, false, "配置读回为关闭");
+
+  // 关闭状态下**写入仍在**（写路径是 core 的，不受模块开关门禁；开关只做可见面裁剪）
+  const name = storeAttachment(root, { name: "g480-note.txt", content: "模块关闭不删数据", actor: "t" });
+  const goal = createGoal(root, { title: "g-480 数据安全", actor: "t" });
+  appendGoalComment(root, goal, "见 @att/" + name + " 与 @att/" + name, "t");
+  const readBack = readAttachment(root, name);
+  assert.equal(readBack.buffer.toString("utf8"), "模块关闭不删数据", "关闭模块后既有附件仍逐字节可读");
+  assert.deepEqual(parseAttachmentRefs("见 @att/" + name + " 与 @att/" + name), [name], "引用仍可解析（同名去重）");
+
+  // 目标正文里的 @att/ 引用仍解析到存在的文件（读侧不受开关影响）
+  const goalFile = [join(root, "backlog", `${goal}.md`), join(root, "goals", goal, "goal.md")].find((p) => existsSync(p));
+  assert.ok(goalFile, "目标文件必须存在（backlog 单文件或 goals/ 目录形态）");
+  const goalText = readFileSync(goalFile as string, "utf8");
+  assert.ok(goalText.includes("@att/" + name), "目标正文里的 @att/ 引用仍在");
+  assert.ok(existsSync(join(attachmentsDir(root), name)), "@att/ 物理文件仍在");
+  assert.deepEqual(attachmentProblems(root), [], "附件面自检无问题（孤立/缺失引用都没有）");
+  assert.deepEqual(validate(root), [], "graph_validate 全量不变式校验通过（模块开关不引入违规）");
+
+  // 真裁剪仍然生效：附件/标签工具从可见面消失（隐藏入口 ≠ 删数据）
+  const h = makeHostMock(ws);
+  applyHost(h);
+  const a = makeAgent(h, { id: "s-data" });
+  for (const fn of h.events.get("agent/created") ?? []) fn({ agent: a });
+  const visible = schemaNames(a);
+  for (const n of ["graph_store_attachment", "graph_delete_attachment", "graph_set_goal_tags", ...MODULE_TOOL_NAMES.shared_cards]) {
+    assert.ok(!visible.includes(n), `${n} 应从可见面消失`);
+  }
+  assert.ok(visible.includes("graph_add_card"), "目标自有卡片工具不受 shared_cards 关闭影响（边界如实）");
+  assert.equal(readAttachment(root, name).buffer.toString("utf8"), "模块关闭不删数据", "裁剪后仍可读");
+
+  // —— 判据③点名的「卡片段」边界如实冻结 ——
+  // 派发提示词里的**已收集卡片成果段**（formatHarvestedCardsSection）只出现 `@att/` **数据引用**，
+  // 从不出现任何受管工具名 ⇒ 该段**没有可裁的工具名提及**（无需裁剪，也不该被裁剪：@att/ 引用必须保持可读）。
+  // 目标自有卡片工具（graph_add_card/graph_fill_card）不归属任何模块（见 MODULE_TOOL_NAMES 边界注释）。
+  const cardGoal = createGoal(root, { title: "g-480 卡片段边界", version: "v-t", actor: "t" });
+  const card = addCard(root, cardGoal, { title: "g480 边界卡", kind: "text", actor: "t", scope: "goal" });
+  fillCard(root, cardGoal, card, { text: `证据见 @att/${name}`, summary: "边界", by: "human:a", actor: "t" });
+  const cardsSec = formatHarvestedCardsSection(root, cardGoal);
+  assert.ok(cardsSec.includes(`@att/${name}`), "卡片段仍渲染 @att/ 数据引用（关闭 attachments 不影响可读性）");
+  const managed = moduleToolNames();
+  for (const n of managed) assert.ok(!cardsSec.includes(n), `卡片段不得出现受管工具名 ${n}（无提及即无裁剪面）`);
+  assert.ok(!cardsSec.includes("graph_add_card"), "卡片段不出现目标自有卡片工具名（边界如实）");
+  // 全开/关闭两态下该段逐字节相同（与模块开关无关，结构上不可被误裁）
+  writeProjectConfig(root, { modules: { attachments: true, shared_cards: true, tags: true } }, "t");
+  assert.equal(formatHarvestedCardsSection(root, cardGoal), cardsSec, "模块开关不改变卡片段一个字节");
 });
