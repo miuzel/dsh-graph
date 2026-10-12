@@ -274,12 +274,8 @@
       const lang = helpCatalogLanguage(catalog);
       const thStyle = { textAlign: "left", fontSize: 12, fontWeight: 600, padding: "4px 8px 4px 0", borderBottom: "1px solid rgba(128,128,128,.35)" };
       const tdStyle = { fontSize: 12, lineHeight: 1.6, padding: "5px 8px 5px 0", verticalAlign: "top" };
-      // 逐行展开态（点击切换）；hover 只做高亮，不改状态 ⇒ 不引入原生 title。
-      const [openTool, setOpenTool] = React.useState("");
-      const toolDetail = (t) => {
-        const extra = dgT("help.toolTopic." + t.name);
-        return extra === "help.toolTopic." + t.name ? "" : extra;
-      };
+      // g-495：逐行「展开说明」折叠面板已移除 —— 展开面板首行只是把同列的 description
+      // 再渲染一遍（与折叠列重复），且工具用法以 harness 注入的工具定义为准。
       // 分类顺序来自宿主（不重排）；每类的行取自同一份 tools 投影。
       const groups = categories.map((c) => ({
         key: c.key,
@@ -339,26 +335,7 @@
                     className: "dg-help-tool-desc",
                     style: { ...tdStyle, opacity: 0.9 },
                   },
-                    helpCatalogText(t.description, lang),
-                    h("div", { style: { marginTop: 2 } },
-                      h("button", {
-                        className: "dg-btn dg-help-tool-detail-btn",
-                        style: { ...S.btn, padding: "1px 8px", fontSize: 11 },
-                        onClick: () => setOpenTool(openTool === t.name ? "" : t.name),
-                      }, dgT("help.tools.accordion")),
-                      openTool !== t.name ? null : h("div", {
-                        className: "dg-help-tool-detail",
-                        style: {
-                          marginTop: 4, padding: "6px 8px", borderRadius: 4, fontSize: 12, lineHeight: 1.7,
-                          background: "rgba(76,141,255,.10)", border: "1px solid rgba(76,141,255,.30)",
-                        },
-                      },
-                        h("div", { className: "dg-help-tool-detail-full" }, helpCatalogText(t.description, lang)),
-                        toolDetail(t)
-                          ? h("div", { className: "dg-help-tool-detail-topic", style: { marginTop: 4 } },
-                            h("code", { style: { fontSize: 12, fontWeight: 600 } }, "topic=" + t.name),
-                            " · " + toolDetail(t))
-                          : null))))))))),
+                    helpCatalogText(t.description, lang)))))))),
           ];
       return h("div", { className: "dg-help-tools" },
         h("div", { style: { ...S.meta, marginBottom: 8 } },

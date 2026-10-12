@@ -1359,8 +1359,7 @@
       'help.topic.faqQ': '看板就是那张「图」吗？',
       'help.topic.faqA': '不是。看板只是那张图的一个**视图**：它把状态机当前的样子画给你看。图本身在协作过程中形成——节点是各司其职的 Agent 或步骤，边是顺序、条件或并行的路由，共享状态就是目标、判据、卡片与记忆。它随任务变化，不需要你为每个任务定制一张固定图，也不需要你一直盯着它。真正的核心是全过程约束、智能体分工与逐层审批控制；看板负责把这一切变直观，并给你留好随时插嘴的入口。图的自定义功能会在后续版本陆续开放。',
       'help.topic.designCrossref': '命名与「看板只是视图」的完整说明见「使用说明」页签开篇的《为什么叫 dsh-graph：图工程与看板视图》一节；本页签只讲设计哲学的落地形态——下面这两张图就是这套图分工在**当前版本**的固定画法。',
-      'help.tools.accordion': '展开说明',
-      'help.toolTopic.graph_help': '显示本帮助；按 topic 查询单个工具的详细用法（topic=usage 显示使用说明的口径）。',
+      'help.toolTopic.graph_help': '显示本帮助；按 topic 查询单个主题（usage / graph_engineering / 某个模块名）。',
       'help.toolTopic.list': '只读列出可用于查看的帮助主题（使用说明、图工程点题章节与各工具名）。',
     };
 
@@ -2718,8 +2717,7 @@
       'help.topic.faqQ': 'Is the board that "graph"?',
       'help.topic.faqA': 'No. The board is only one **view** of that graph: it draws the current state of the state machine for you. The graph itself takes shape while you work together - its nodes are the agents or steps that each do one job, its edges are sequential, conditional or parallel routing, and its shared state is the goals, criteria, cards and memory. It changes with the task, so you never have to customize one fixed graph per task, and you do not have to watch it all the time. The real core is the whole-process constraint, the division of labour between agents and the layered approval control; the board makes all of that visible and keeps an entry point ready for you to cut in. Graph customization will open up in later versions.',
       'help.topic.designCrossref': 'For the naming and the full "the board is only a view" explanation, see the opening chapter of the Getting started tab, "Why it is called dsh-graph: Graph Engineering and the board as a view"; this tab covers only how the design philosophy lands in practice - the two diagrams below are the fixed rendering of that division of labour in the **current version**.',
-      'help.tools.accordion': 'Show details',
-      'help.toolTopic.graph_help': 'Display this help; query one tool in detail by topic (topic=usage shows what the usage guide covers).',
+      'help.toolTopic.graph_help': 'Display this help; query one topic by name (usage / graph_engineering / a module name).',
       'help.toolTopic.list': 'Read-only: list the help topics available for lookup (the usage guide, the Graph Engineering chapter and each tool name).',
     };
 
