@@ -1920,7 +1920,7 @@ test("g-179 生成 bundle 契约：client.js 标题同步为 🔎 信息收集�
 // ===== g-181：父级 overlay backdrop 误关保护（内容起点文本选择/拖拽到弹窗外松开不误关）=====
 
 // 五个受影响模块 + g-183 共享面板（shared-panel.js）+ g-273 批量接受弹窗（batch-accept.js）
-// + g-462 Graph 设计哲学弹窗（design-modal.js）的 guard 接入预期
+// + g-462 设计哲学图 / g-481 「使用说明」弹窗（help-modal.js）的 guard 接入预期
 // （每处 style: S.overlay 都必须走 useBackdropClose guard，禁止裸 style: S.overlay, onClick:；panel stopPropagation 保留）。
 const G181_MODULES: Record<string, number> = {
   "goal-modal.js": 1,
@@ -1930,7 +1930,7 @@ const G181_MODULES: Record<string, number> = {
   "kanban.js": 6,
   "shared-panel.js": 1,
   "batch-accept.js": 1,
-  "design-modal.js": 1,
+  "help-modal.js": 1,
 };
 const G181_TOTAL = Object.values(G181_MODULES).reduce((a, b) => a + b, 0); // 20
 

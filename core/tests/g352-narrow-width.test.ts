@@ -1244,7 +1244,7 @@ test("g-352 C3/判据2：min-width:0 的门控是纯函数契约（宽档返回�
 
 test("g-352 att-005 B3（渲染级）：七项工具条折叠由「<480 断点 OR 头部实测装不下」驱动，且只折叠这七项", async () => {
   const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
-  const flat = ["Refresh", "Tag Filter", "Memory", "Graph Design", "Knowledge", "⚙"];
+  const flat = ["Refresh", "Tag Filter", "Memory", "Help", "Knowledge", "⚙"];
   const headOf = (els: any[]) => els.filter((e) => elClass(e) === "dg-head").pop();
   // ① 宽档 + 头部实测装得下（7 个子项 × 50px + 间隙 = 420px ≤ 900px）⇒ 平铺、无折叠触发
   const hFit = createRenderHarness({ boardWidth: 900, headChildWidth: 50, headChildCount: 7, payload: payload() });
@@ -1263,7 +1263,7 @@ test("g-352 att-005 B3（渲染级）：七项工具条折叠由「<480 断点 O
   tightEls = (await hTight.settle({ sessionId: "s1", host: "sidebar" })).passElements();
   const rows = withClass(tightEls, "dg-narrow-panel-btn");
   const keys = rows.map((r) => String(r.props.key).replace(/^ov-/, ""));
-  assert.deepEqual(keys, ["refresh", "tagfilter", "memory", "design", "shared", "settings"], "默认（无标签筛选）弹层恰好 6 行 + 已归档开关");
+  assert.deepEqual(keys, ["refresh", "tagfilter", "memory", "help", "shared", "settings"], "默认（无标签筛选）弹层恰好 6 行 + 已归档开关");
   for (const row of rows) {
     const text = treeText(row);
     assert.ok(/^\S+ \S/.test(text), `弹层行必须「图标 + 文字」：${text}`);
@@ -1290,7 +1290,7 @@ test("g-352 att-003 第1/5/9项（纯函数口径）：图标 + 文字、选项�
     ["tagfilter", "🏷️ 标签筛选", "🏷️ 标签筛选"],
     ["tagclear", "清除筛选", "✕ 清除筛选"],
     ["memory", "🧠 记忆", "🧠 记忆"],
-    ["design", "🧩 Graph 设计", "🧩 Graph 设计"],
+    ["help", "📖 使用说明", "📖 使用说明"],
     ["shared", "📇 项目知识库（共享条目）", "📇 项目知识库"],
     ["settings", "看板设置", "⚙ 看板设置"],
     ["versionmanage", "🏷️ 版本管理", "🏷️ 版本管理"],
@@ -1349,9 +1349,9 @@ test("g-352 att-003 第1项（渲染级）：折叠工具条下拉每一行都�
   trigger.props.onClick({ stopPropagation() {} });
   els = (await h.settle({ sessionId: "s1", host: "sidebar" })).passElements();
   const rows = withClass(els, "dg-narrow-panel-btn");
-  assert.equal(rows.length, 6, "默认（无标签筛选）应有 6 行：刷新/标签筛选/记忆/Graph 设计/知识库/设置（att-005：版本管理/创建版本回网格左上角，不再进弹层）");
+  assert.equal(rows.length, 6, "默认（无标签筛选）应有 6 行：刷新/标签筛选/记忆/使用说明/知识库/设置（att-005：版本管理/创建版本回网格左上角，不再进弹层）");
   const iconOf: Record<string, string> = {
-    refresh: "⟳", tagfilter: "🏷️", memory: "🧠", design: "🧩", shared: "📇", settings: "⚙",
+    refresh: "⟳", tagfilter: "🏷️", memory: "🧠", help: "📖", shared: "📇", settings: "⚙",
   };
   for (const row of rows) {
     const key = String(row.props.key).replace(/^ov-/, "");
@@ -1515,7 +1515,7 @@ test("g-352 att-007（纯函数 + 真机几何固化）：容器纵向堆叠是�
 
 test("g-352 att-007（渲染级/两侧）：弹层容器纵向堆叠、行是块级子项、位置级判据全成立", async () => {
   const payload = () => ({ board: boardFixture(), backlogGoals: backlogGoalsFixture });
-  const EXPECTED = ["refresh", "tagfilter", "memory", "design", "shared", "settings"];
+  const EXPECTED = ["refresh", "tagfilter", "memory", "help", "shared", "settings"];
   const sides: Array<{ label: string; host: string | undefined; sig?: any }> = [
     { label: "会话页看板页签", host: undefined },
     { label: "右侧栏", host: "sidebar" },
@@ -1538,7 +1538,7 @@ test("g-352 att-007（渲染级/两侧）：弹层容器纵向堆叠、行是块
     assert.equal(menuEl.props.style.left, "auto");
     assert.equal(menuEl.props.style.right, 0, "假节点触发按钮与看板同矩形 ⇒ 偏移 0");
     assert.equal(menuEl.props.style.minWidth, 226, "菜单宽度按板宽收敛（250-24）");
-    // ② 行数 = 期望项数（默认无标签筛选：刷新/标签筛选/记忆/Graph 设计/知识库/设置）
+    // ② 行数 = 期望项数（默认无标签筛选：刷新/标签筛选/记忆/使用说明/知识库/设置）
     const rows = withClass(els, "dg-narrow-panel-btn");
     assert.deepEqual(rows.map((x) => String(x.props.key).replace(/^ov-/, "")), EXPECTED, `${side.label}：弹层行数与项数一致`);
     // ③ 行是容器的**直接子项**（不是头部子项、也不与容器并列）—— 结构级，抓「搬到容器外」这类改动

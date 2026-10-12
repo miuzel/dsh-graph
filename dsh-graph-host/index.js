@@ -254,6 +254,68 @@ export function resolveDesignDiagramRequest(rawUrl) {
   return { status: 200, name };
 }
 
+// ===== g-481：「使用说明」弹窗的**只读**提示词资产路由 + 帮助目录端点 =====
+// 「提示词模板」页签把**随包发布**的 `prompts/*.md` 逐个只读展示给用户 —— 展示的内容与引擎
+// 实际投递给 Agent 的资产是**同一份产物**（`dist/prompts/`），不复制、不改写、不新增第二份文案。
+// 安全口径（与 g-462 图路由同一形状：单一路径入口、**无任何写路径**）：
+//   ① 白名单是**唯一**入口：只有下面这 14 个文件名（7 个资产 × zh/en）可被读取，其余一律拒绝；
+//   ② 未知名 → 404；目录穿越（`../`、绝对路径）、反斜杠、URL 编码变体（`%2e%2e`、`%00`）、
+//      非 `.md` 后缀 → 400。判定只看 **URL 归一化后的 pathname 尾段**，不做字符串拼接后再就读
+//      （即使判定失误，也只会在 `prompts/` 白名单目录里按白名单名读取）。
+export const HELP_ASSET_ROUTE = "/api/dsh-graph/help/asset";
+export const HELP_PROMPT_ASSETS = Object.freeze([
+  "discipline.en.md",
+  "discipline.zh.md",
+  "guide-hint.en.md",
+  "guide-hint.zh.md",
+  "help.en.md",
+  "help.zh.md",
+  "minor-task.en.md",
+  "minor-task.zh.md",
+  "no-isolation.en.md",
+  "no-isolation.zh.md",
+  "usage.en.md",
+  "usage.zh.md",
+  "worktree.en.md",
+  "worktree.zh.md",
+]);
+/** 合法资产名：小写字母/数字起头，只含 `[a-z0-9.-]`，`.md` 结尾。 */
+const HELP_ASSET_NAME_RE = /^[a-z0-9][a-z0-9.-]*\.md$/;
+
+/**
+ * 纯函数：把请求 URL 解析为「白名单资产名」或一个可上报的拒绝结论。
+ * 不触碰文件系统（只做 URL 归一化 + 白名单判定），故可被单测直接驱动。
+ * @returns {{status: 200, name: string} | {status: 400|404, reason: string}}
+ */
+export function resolveHelpAssetRequest(rawUrl) {
+  let pathname;
+  try {
+    pathname = new URL(String(rawUrl ?? ""), "http://localhost").pathname;
+  } catch {
+    return { status: 400, reason: "malformed-url" };
+  }
+  if (pathname === HELP_ASSET_ROUTE) return { status: 404, reason: "name-required" };
+  if (!pathname.startsWith(HELP_ASSET_ROUTE + "/")) return { status: 404, reason: "not-a-help-asset" };
+  const name = pathname.slice(HELP_ASSET_ROUTE.length + 1);
+  if (!HELP_ASSET_NAME_RE.test(name) || name.includes("..")) return { status: 400, reason: "illegal-name" };
+  if (!HELP_PROMPT_ASSETS.includes(name)) return { status: 404, reason: "unknown-asset" };
+  return { status: 200, name };
+}
+
+/** g-481：帮助目录端点 —— 客户端「工具清单 / 提示词模板」两个页签的**服务端唯一真源**。
+ *  工具名与说明取自**注册真源**（`apply` 内的 `tools` 数组 + lib/server-i18n.js 的 `tool.*` 键，
+ *  zh/en 成对），资产清单取自上方白名单常量 ⇒ 引擎增删工具或资产改名时客户端清单自动跟随，
+ *  客户端**不硬编码任何工具名/资产名**。只读投影，无参数、无写路径。 */
+export const HELP_CATALOG_ROUTE = "/api/dsh-graph/help/catalog";
+
+/** 纯函数：白名单资产名 → `{name, base, lang}` 清单（`base` 供客户端配 i18n 展示标签）。 */
+export function helpPromptAssetEntries() {
+  return HELP_PROMPT_ASSETS.map((name) => {
+    const m = /^([a-z0-9][a-z0-9.-]*)\.(zh|en)\.md$/.exec(name);
+    return { name, base: m ? m[1] : name, lang: m ? m[2] : "zh" };
+  });
+}
+
 /** 超限时停止累积（pause/unpipe），但**不销毁 socket**——让 handler 能写出可读的 4xx 响应。
  *  真实 HTTP 下若不 pause 而 destroy，客户端会收到 ECONNRESET 而读不到响应（v6 复现）。 */
 function stopOversized(req) {
@@ -4722,6 +4784,58 @@ export function apply(ctx, config) {
           res.end(body);
         } catch (e) {
           json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-481：使用说明弹窗的只读服务（提示词资产 md）。本插件第二条非 JSON 路由。
+    // prefix 路由：尾段由 resolveHelpAssetRequest 按白名单裁决（见模块顶部常量）。
+    // 只读 `readFileSync`，没有任何写路径；命中即内联返回（资产随包发布在 prompts/）。
+    {
+      kind: "prefix",
+      path: HELP_ASSET_ROUTE,
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "method not allowed" });
+          const decision = resolveHelpAssetRequest(req.url);
+          if (decision.status !== 200) return json(res, decision.status, { error: decision.reason });
+          let body;
+          try {
+            body = readFileSync(new URL(`./prompts/${decision.name}`, import.meta.url));
+          } catch {
+            // 白名单名合法但产物未随包发布（构建漏拷）⇒ 404，绝不回落到别的路径。
+            return json(res, 404, { error: "help asset not packaged" });
+          }
+          res.writeHead(200, {
+            "content-type": "text/markdown; charset=utf-8",
+            "content-length": String(body.length),
+            "cache-control": "no-cache",
+            "x-content-type-options": "nosniff",
+          });
+          if (req.method === "HEAD") { res.end(); return; }
+          res.end(body);
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-481：帮助目录（工具清单 + 提示词资产清单）—— 注册真源投影，客户端零硬编码。
+    {
+      path: HELP_CATALOG_ROUTE,
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          // 工具名从注册真源 `tools` 枚举（不硬编码），说明取 `tool.<name>` 键（zh/en 成对）。
+          const toolEntries = tools.map((t) => ({
+            name: t.def.name,
+            description: { zh: sT(`tool.${t.def.name}`, "zh"), en: sT(`tool.${t.def.name}`, "en") },
+          }));
+          return json(res, 200, {
+            prompt_language: resolvePromptLanguage(readGraphSettings().promptLanguage, ctx),
+            prompts: helpPromptAssetEntries(),
+            tools: toolEntries,
+          });
+        } catch (e) {
+          return json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) });
         }
       },
     },
