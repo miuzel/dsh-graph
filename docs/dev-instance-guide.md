@@ -26,6 +26,46 @@ web 实例，在本地插件产物上做开发/验证，而不会碰主 GUI（`d
 - 插件通过 `link:` 指向 `--host-dir`（默认 `$REPO_ROOT/dist`，即**发布产物目录**，不是
   `dsh-graph-host/`），所以改完源码必须先 `pnpm build` 才会被实例看到。
 
+### 1.1 并行验证：`DSH_HOME` 按**稳定版本**共享（g-483）
+
+`DSH_HOME` 是隔离边界，但它是**按稳定版本共享**的（§1：同一预发布族只装一次 profile）——
+`v0.21.0-rc.1` 与 `v0.21.0-rc.2` 用的是**同一个** `./tmp/dsh-test/v0.21.0/home`。于是
+`$DSH_HOME/profiles/web/package.json` 里的 `dsh-graph: link:<HOST_DIR>` **只有一个槽位**：
+
+- 两个并行实例若给不同的 `--host-dir`（例如两个 worktree 各自的 `dist/`），**后启动者会把既有
+  link 改写成自己解析出的目标**；
+- 先启动的那个实例若仍在运行，它在**重启插件 / 惰性解析插件**时会读到被改写的 link ⇒ 它的
+  **目视证据可能指向错误构建**（实测：g-479 的评审实例把 g-481 的 link 改写掉，而当时 g-481 的
+  实例正在运行）。
+
+⇒ **并行验证的正确姿势：在目标 worktree 内运行本脚本** —— 脚本按**自身位置**推导 `REPO_ROOT`，
+于是 `tmp/dsh-test` 也随之落在该 worktree 内，天然拿到**独立的 `DSH_HOME`**，两个实例互不改写：
+
+```bash
+# ✅ 正确：在（目标 worktree 内的）私有一份脚本上启动 ⇒ REPO_ROOT/tmp 都是该 worktree 的
+cd .worktrees/g-<目标>-att-<NN>
+bash scripts/dsh-test-web.sh v0.21.0-rc.1 --port 3083 --host-dir "$PWD/dist"
+
+# ❌ 错误：在共享的（主树 / 别人的 worktree）脚本上改 --host-dir 去指另一个 worktree 的产物
+#    ⇒ DSH_HOME 仍按稳定版本共享，本次启动会把既有的 link 改写成 $PWD/dist
+bash scripts/dsh-test-web.sh v0.21.0-rc.1 --port 3083 --host-dir ../g-<另一个>-att-01/dist
+```
+
+脚本对这种情况现在**不再静默**（g-483，守卫 `core/tests/g483-instance-link-guard.test.ts`）：
+
+| 既有 link 状态 | 行为 |
+|---|---|
+| 不存在（或不是 `link:`） | 首次安装，静默通过（与今天逐字相同） |
+| 等于本次解析出的 `--host-dir` | 无冲突，静默通过（与今天逐字相同） |
+| 存在且**不同** | **醒目多行警告**（stderr）：共享 `DSH_HOME` 绝对路径、既有目标、本次目标、后果与出路；**不改变成功路径退出码** |
+| 不同 **且**本 `DSH_HOME` 内有存活实例状态文件记录着**别处**目标 | **fail-closed 拒绝启动**（`exit 2`，先于任何 `mkdir`/安装/改写/启动），并打印出路 |
+
+判定所需的实例状态文件是 `$DSH_HOME/.dsh-test-web-instance.json`（**只**在本 `DSH_HOME` 内、**只**
+在真正进入启动路径、即将 `exec` 前写一次；PID 已退出即视为陈旧而忽略；`--dry-run` 仍**零写入**）。
+`--dry-run` 会把检测结论打进报告的「共享 `DSH_HOME` 的 link 冲突检测」段：仅冲突时 `exit 0`（警告
+面），疑似活跃实例冲突时 `exit 1`（阻塞项）。出路只有两条：**在目标 worktree 内跑**（拿独立
+`DSH_HOME`），或**先停掉那个实例**再启动。
+
 ## 2. 用法
 
 脚本的 `usage()` 原文：
@@ -104,8 +144,10 @@ bash scripts/dsh-test-web.sh <DSH版本> [--port PORT] [--proxychains] [--host H
 
 报告内容：平台与平台范围、生效参数、`TEST_ROOT`/`DSH_HOME`/`WORKSPACE`/cache/pnpm-store 的
 **实际状态**（`缺失` / `目录` / `非目录(!)`）、工具可用性与绝对路径、端口探测结论、候选
-`host-dir` 与**实际 link 目标**（`link:<canonical host-dir>`）、`RUNTIME_DSH` / profile manifest /
-`pnpm-workspace.yaml` 的存在性与 profile 诊断明细，最后是**阻塞项**与**缺项**两张清单。
+`host-dir` 与**实际 link 目标**（`link:<canonical host-dir>`）、**共享 `DSH_HOME` 的 link 冲突检测
+结论**（§1.1：无 manifest / 非 `link:` / 与本次一致 / 与本次不同 + 是否疑似仍有活跃实例指向别处）、
+`RUNTIME_DSH` / profile manifest / `pnpm-workspace.yaml` 的存在性与 profile 诊断明细，最后是
+**阻塞项**与**缺项**两张清单。
 「目录存在 ≠ 环境正确」：就绪与否看 profile/link/`bundle.patch` 是否与实际 `link:` 一致，而不是看目录在不在。
 
 退出码：
@@ -113,7 +155,7 @@ bash scripts/dsh-test-web.sh <DSH版本> [--port PORT] [--proxychains] [--host H
 | 退出码 | 含义 |
 |---|---|
 | `0` | 按当前参数**可以启动**（无阻塞项；缺项会在启动时创建/安装，故缺项不单独判失败） |
-| `1` | 存在**阻塞项**（缺工具、端口被占用、`host-dir` 无有效插件、隔离根存在但不是目录、`--skip-install` 而 profile 未就绪等） |
+| `1` | 存在**阻塞项**（缺工具、端口被占用、`host-dir` 无有效插件、隔离根存在但不是目录、`--skip-install` 而 profile 未就绪、共享 `DSH_HOME` 上疑似仍有活跃实例指向别处（§1.1）等） |
 | `2` | **非法/危险输入**：非法端口（越界/前导零/空值/非数字）、3080、非法 `--host`、空值、生产 `HOME` 或看板路径、受管参数透传、未知参数 |
 
 `--dry-run` 下的危险输入**同样先拒绝**（`exit 2`，先于一切 `mkdir`/install/配置写入/启动/端口探测之外的动作）。
@@ -268,6 +310,8 @@ node --test core/tests/*.test.ts             # 与主树同一命令、同一口
 | `无法 canonicalize 本地插件目录：…` / `--host-dir 必须位于仓库 dist、dsh-graph-host 或 .worktrees 下：…` | `--host-dir` 越界或不存在 |
 | `本地插件 package name 必须为 dsh-graph：…` | `--host-dir` 指错目录 |
 | `--skip-install 要求目标 DSH_HOME 已有可复用的 dsh-graph profile；请先不带该参数运行一次` | `--skip-install` 但 profile 未就绪 |
+| `警告：共享 DSH_HOME 里的 dsh-graph link 与本次目标不同（并行实例冲突）`（醒目多行，stderr） | 同稳定版本的并行实例用了不同 `--host-dir`：本次启动会改写既有 link（§1.1）。警告本身**不**改变成功路径退出码，但在跑实例的目视证据可能因此指向错误构建 |
+| `拒绝启动 —— 共享 DSH_HOME 上疑似仍有活跃实例指向既有 link…` | 上一条 + 本 `DSH_HOME` 的实例状态文件里 PID 仍存活且记录的目标 ≠ 本次目标 ⇒ fail-closed（`exit 2`，先于任何 `mkdir`/安装/改写/启动）；按报文的出路在目标 worktree 内跑，或先停掉那个实例 |
 | `插件 dsh-graph 在启动期被跳过（bundle 未加载）…` | 宿主在加载 profile 时跳过了该 bundle（声明面 `peerDependencies` 与运行时 dsh 不兼容且无精确版本豁免，g-464）⇒ 实例会起来但**插件完全缺席**，故一律非零退出；日志与原始原因在 `<版本根>/dump-config.log` |
 | `web effective config 里没有 dsh-graph 的真实 bundle 条目（注释/路径命中的子串不算条目）…` | g-464 结构化判据：composed tree 里没有该 bundle 的真实条目（只有注释/子串命中） |
 | `插件安装失败` / `无法读取 web effective config` / `web effective config 缺少 …` | 安装或有效配置校验失败 |
