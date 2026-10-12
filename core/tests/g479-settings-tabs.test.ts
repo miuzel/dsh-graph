@@ -43,12 +43,14 @@ const MODAL_START = "function SettingsModal(";
 const FOOTER_ANCHOR = 'h("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 6 } },';
 const TABBAR_ANCHOR = "...SETTINGS_TAB_KEYS.map((k) => tabButton(k)),";
 
-/** g-479：需要归属的唯一 i18n 新键（页签栏 aria + 5 个页签标签 + 本地偏好如实标注）。 */
+/** g-479：需要归属的唯一 i18n 新键（页签栏 aria + 6 个页签标签 + 本地偏好如实标注）。
+ *  g-480 新增「模块」页签 ⇒ 标签键与源码真源同步扩展（只增不减）。 */
 const TAB_I18N_KEYS = [
   "settings.tabsAria",
   "settings.tab.executor",
   "settings.tab.review",
   "settings.tab.ui",
+  "settings.tab.modules",
   "settings.tab.advanced",
   "settings.tab.about",
   "settings.tabLocalNote",
@@ -59,6 +61,8 @@ const TAB_I18N_KEYS = [
  *  覆盖多项——它们同属一个页签，唯一性断言因此等价于「这一处实现只属于一个页签」。 */
 const REVIEW_LIST_ANCHOR = "...REVIEW_LIST_KEYS.map((key) => reviewListField(key))";
 const AUTOMATION_ANCHOR = 'set(["supervisor", "automation", k], e.target.value === "" ? null : e.target.value)';
+/** g-480：五个模块开关的共享渲染锚点（映射行内的唯一写入点）。 */
+const MODULE_SWITCH_ANCHOR = 'onChange: (e) => set(["modules", k], e.target.checked)';
 const KEY_ANCHORS: Record<string, string> = {
   "executor.provider": "onChange: (e) => onProviderChange(e.target.value)",
   "executor.model": 'set(["executor", "model"], e.target.value)',
@@ -83,6 +87,13 @@ const KEY_ANCHORS: Record<string, string> = {
   "supervisor.automation.release": AUTOMATION_ANCHOR,
   "prompt_overrides.subagent": 'promptOverride("subagent", dgT("settings.subagentPrompt"))',
   "config.project_yaml": 'dgT("settings.projectYaml")',
+  // g-480：「模块」页签的五个开关由同一个映射行渲染（与三列表 / 六键自动化同款共享实现）⇒
+  // 共享同一锚点；锚点唯一且必须落在 modules 面板内，逐模块的可达性与绑定由 g480 专项用例覆盖。
+  "modules.tags": MODULE_SWITCH_ANCHOR,
+  "modules.memory": MODULE_SWITCH_ANCHOR,
+  "modules.shared_cards": MODULE_SWITCH_ANCHOR,
+  "modules.automation_prompts": MODULE_SWITCH_ANCHOR,
+  "modules.attachments": MODULE_SWITCH_ANCHOR,
 };
 
 /** 六键自动化的键名数组（页签归属之外，还要与**真实**审计过的键名逐个对上）。 */
@@ -317,7 +328,7 @@ test("g-479 判据1：设置弹窗改为分类页签——每个配置项恰好�
   const items = tabs.keys.flatMap((k) => tabs.items[k]);
   assert.deepEqual([...items].sort(), Object.keys(KEY_ANCHORS).sort(), "归属表与锚点表必须逐项一致");
   // 模块级真源与渲染实现同源
-  assert.match(src, /const SETTINGS_TAB_KEYS = \["executor", "review", "ui", "advanced", "about"\]/);
+  assert.match(src, /const SETTINGS_TAB_KEYS = \["executor", "review", "ui", "modules", "advanced", "about"\]/);
   assert.match(src, /const \(activeTab, setActiveTab\) = React\.useState\(SETTINGS_DEFAULT_TAB\)|const \[activeTab, setActiveTab\] = React\.useState\(SETTINGS_DEFAULT_TAB\)/);
   assert.equal(countOccurrences(src, 'const showAdvanced = activeTab === "advanced";'), 1, "showAdvanced 必须由激活页签派生");
 });

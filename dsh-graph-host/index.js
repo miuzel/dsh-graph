@@ -133,6 +133,13 @@ import {
   resolveAgentTeamsInjection,
   readProjectConfig,
   writeProjectConfig,
+  // g-480：harness 模块可选开关（唯一映射表 + 纯判定函数都在 core，宿主不另抄一份字面量）
+  HARNESS_MODULE_IDS,
+  MODULE_TOOL_NAMES,
+  moduleToolNames,
+  resolveModuleSwitches,
+  disabledModuleTools,
+  stripModuleToolMentions,
   REVIEW_POLICIES,
   REVIEW_LIST_FIELDS,
   DEFAULT_REVIEW_REGIONS,
@@ -646,6 +653,23 @@ function renderAutomationGuidance(automation, language) {
   return `\n\n${table.header}\n${lines.join("\n")}\n\n${table.trailer}`;
 }
 // ==== g-439 automation guidance: extractable block end ====
+
+// ==== g-480：模块在**提示词面**的裁剪位置（描述性元数据，随 schema_hints 下发给调用方）====
+// 工具面的唯一真源是 core 的 `MODULE_TOOL_NAMES`（本表**不**重复任何工具名，避免第二份副本漂移）。
+// 取值说明：
+//   · `section:<name>` = 该模块关闭时，这个我们注册的 systemPrompt section 整体不再注入；
+//   · `tool-name-mentions` = 该模块关闭时，其受管工具名会被从**所有**我们注册的 section 文本里按行剔除
+//     （`stripModuleToolMentions`，对**动态**记忆正文里的提及同样生效）；
+//   · `none` = 该模块没有可达的提示词面（只有工具面）。
+// 已知不可达（如实登记，不假装已裁）：`skills.register` 与 `prompts/*.md` 资产是 **apply 期一次性**
+// 全局面，无法按 workspace 裁剪 ⇒ help/usage 资产里对该模块的**文字**说明保留，但能力已从模型可选集移除。
+const MODULE_PROMPT_FACE = {
+  tags: "none",
+  memory: "section:dsh-graph-standing-memory",
+  shared_cards: "tool-name-mentions",
+  automation_prompts: "section:dsh-graph-supervisor-discipline",
+  attachments: "none",
+};
 
 // g-118：dsh-graph help 内容按 locale 整体加载 prompts/help.*.md
 
@@ -3729,6 +3753,22 @@ export function apply(ctx, config) {
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],
             },
+            // g-480：harness 模块可选开关（workspace 级单层）。未配置/null = **开启**（与改造前一致）；
+            // `tools` 与该模块绑定的受管工具名同源下发（MODULE_TOOL_NAMES 是唯一映射表，宿主不另抄）。
+            // `scope` = "workspace"，`prompt_face` 说明该模块在提示词面的裁剪位置。
+            "modules": {
+              type: "boolean",
+              scope: "workspace",
+              default: true,
+              values: [true, false, null],
+              keys: [...HARNESS_MODULE_IDS],
+              per_module: Object.fromEntries(
+                HARNESS_MODULE_IDS.map((id) => [id, {
+                  tools: [...MODULE_TOOL_NAMES[id]],
+                  prompt_face: MODULE_PROMPT_FACE[id],
+                }]),
+              ),
+            },
             // g-311/g-435：顶层 review 配置提示
             "review.policy": {
               values: [...REVIEW_POLICIES],
@@ -3751,7 +3791,7 @@ export function apply(ctx, config) {
       def: {
         name: "graph_update_settings",
         description: sT("tool.graph_update_settings"),
-        parameters: params({ patch: { type: "object", description: "配置 patch（部分字段，未传字段保持不变）：可包含 executor、defaults、supervisor.automation、supervisor.agent_teams、prompt_overrides 等" } }, ["patch"]),
+        parameters: params({ patch: { type: "object", description: "配置 patch（部分字段，未传字段保持不变）：可包含 executor、defaults、supervisor.automation、supervisor.agent_teams、modules、prompt_overrides 等" } }, ["patch"]),
       },
       run: (a, ex) => {
         const r = rootFor(ex);
@@ -5553,6 +5593,67 @@ export function apply(ctx, config) {
       } catch { /* 事件名不被宿主支持 ⇒ 静默（特性探测） */ }
     }
 
+    // ==== g-480：模块开关的**工具面真裁剪** ====
+    // 目标：关闭某模块后，该模块的受管工具**从模型可见的工具清单里真正消失**（不是 UI 隐藏）。
+    //
+    // 机制（g-482 实证，已在真实 GUI 会话上量到 82→81）：
+    //   `ctx.on("agent/created", ({ agent }) => agent.ctx.tools.restrict({ deny }))`
+    //   —— `restrict` 的语义是「限制**调用 agent scope** 继承到的 global 工具」。它**不沿 scope 链继承**
+    //   ⇒ 本插件在插件层注册一个 `agent/created` 监听即可覆盖**宿主创建的每一个会话**（含主管会话与
+    //   `dsh-subagent` 派发的每个子代理会话，因为后者也是经 `agents.create({ setup })` 建的 agent）。
+    //   量测口 = `ctx.tools.schemas(agent)`（criterion 2 的可验证面）。
+    //
+    // 三条硬约束（缺一即事故）：
+    //   ① **作用域过滤**：deny 名单里出现**祖先层（agent 平面）自有**的工具名时，restrict 会抛
+    //      `unknown global tool`；而 setup 抛错会让**整个会话创建回滚**。因此候选名必须逐个用
+    //      `tools.get(name)`（**全局视图**）与 `tools.get(name, agent)`（**该 agent 视图**）双向确认：
+    //      只有「全局存在且对该 agent 可见」的名字才放进 deny。作用域自有注册永不出现在全局视图 ⇒ 被排除。
+    //   ② **特性探测 + 静默降级**：旧宿主（或测试夹具）没有 `ctx.on` / `tools.restrict` ⇒ **不注册监听**、
+    //      不抛错、不改变任何东西（51 个工具照常注册可见）。engines 下界维持 >=0.1.5-rc.2，**不得抬高**。
+    //   ③ **注册期无条件**：apply 期 51 个 `graph_*` 工具**照常全部注册**（判据 4 的 51 红线），
+    //      裁剪只发生在**会话可见面**，绝不写成「按配置跳过注册」——否则工具计数会随配置漂移。
+    //
+    // 开关读的是**会话自己 workspace** 的 project.yaml（per-session 读，跨 workspace 不串）。
+    if (typeof ctx?.on === "function" && typeof ctx?.tools?.restrict === "function") {
+      try {
+        const off = ctx.on("agent/created", (info) => {
+          try {
+            const agent = info?.agent ?? (info?.ctx?.tools ? info : null);
+            const at = agent?.ctx?.tools;
+            if (!agent || !at || typeof at.restrict !== "function") return;
+            // 会话 workspace：优先 session.header.cwd（其它 section 同源口径）
+            const cwd = agent?.session?.header?.cwd;
+            if (!cwd) return;
+            let switches = null;
+            try {
+              switches = resolveModuleSwitches(readProjectConfig(resolveCanonicalRoot(config, cwd).root));
+            } catch {
+              return; // 配置不可读 ⇒ 不裁剪（fail-safe：与未配置全开一致）
+            }
+            if (!switches.disabledTools.length) return; // 全开：一次 restrict 都不调（行为逐字节不变）
+            // 作用域过滤（约束①）：只保留「全局存在 且 对该 agent 可见」的名字
+            const deny = switches.disabledTools.filter((name) => {
+              try {
+                return typeof at.get === "function" && at.get(name) !== undefined && at.get(name, agent) !== undefined;
+              } catch {
+                return false;
+              }
+            });
+            if (!deny.length) return;
+            const dispose = at.restrict({ deny });
+            if (typeof dispose === "function" && typeof agent.ctx?.effect === "function") {
+              // 会话结束即撤销限制（restrict 的 disposer 精确还原，g-482 实证）
+              try { agent.ctx.effect(() => dispose); } catch { /* 无法挂载 ⇒ 由会话销毁兜底 */ }
+            }
+          } catch (e) {
+            // 绝不因裁剪失败影响会话创建（deny 名单已作用域过滤；此处兜底并留痕）
+            process.stderr.write(`[dsh-graph-host] g-480 模块裁剪跳过: ${e?.message ?? e}\n`);
+          }
+        });
+        if (typeof off === "function") disposers.push(off);
+      } catch { /* 事件名/能力不被宿主支持 ⇒ 静默降级（特性探测，51 个工具不受影响） */ }
+    }
+
     // g-118：supervisor 守则自动注入（不依赖显式 skill 调用）——
     // g-118（负责人 2026-08-22 设计转向）：在所有会话注入**简短引导提示词**（非完整守则）。
     // systemPrompt.section 注册一个恒定渲染 GUIDE_HINT 的提示词段落：所有会话（主管/普通/
@@ -5593,7 +5694,18 @@ export function apply(ctx, config) {
           name: "dsh-graph-guide-hint",
           order: 10,
           interpolate: false, // g-389：字面量 section（本地化资产），逐字保留、不参与 {{变量}} 插值
-          text: () => localizedPrompt("guide-hint", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)),
+          // g-480：按会话 workspace 的模块开关做工具名剔除（无 cwd 时**原样返回**——所有会话仍照常
+          // 注入引导，g-118 的「无 agent/无 session 也渲染」语义不变）。
+          text: (context) => {
+            const hint = localizedPrompt("guide-hint", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
+            try {
+              const cwd = context?.agent?.session?.header?.cwd;
+              if (!cwd) return hint;
+              return moduleTrimmedText(resolveCanonicalRoot(config, cwd).root, hint);
+            } catch {
+              return hint;
+            }
+          },
         }));
         // g-238：system prompt 渲染纯读化——section.text 渲染路径绝不 init（不创建目录/文件、
         // 不追加事件、不改变 supervisor 绑定）；初始化仅保留在显式 apply/写操作路径。
@@ -5636,6 +5748,19 @@ export function apply(ctx, config) {
           }
           return out;
         };
+        // g-480：按**当前会话 workspace** 读模块开关（纯读；按 project.yaml 指纹失效缓存 ⇒ 关/开即时
+        // 生效、跨 workspace 不串）。读失败一律按「全开」（`resolveModuleSwitches(null)`）——
+        // 绝不因配置读取异常静默砍掉能力或提示词。
+        const readModuleSwitchesFor = (canonicalRoot) => cachedRender(
+          `mod:${canonicalRoot}`, canonicalRoot, ["project.yaml"],
+          () => {
+            try { return resolveModuleSwitches(readProjectConfig(canonicalRoot)); } catch { return resolveModuleSwitches(null); }
+          },
+        );
+        // 本插件自有 section 的**统一出口**：关闭模块的受管工具名按行剔除（对**动态**记忆正文里的
+        // 提及同样生效）；全开时 `stripModuleToolMentions` 原样返回**同一字符串** ⇒ diff=0。
+        const moduleTrimmedText = (canonicalRoot, text) =>
+          stripModuleToolMentions(text, readModuleSwitchesFor(canonicalRoot).disabledTools);
         // g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
         // g-149：使用 resolveCanonicalRoot 确保 worktree 会话也能正确读到主树 project.yaml
         // text(context) 里取 sessionId=context?.agent?.session?.id；
@@ -5666,8 +5791,12 @@ export function apply(ctx, config) {
                 }));
               if (!supConfig || !supConfig.supervisorId || supConfig.supervisorId !== sessionId) return "";
               const language = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
-              return "\n" + localizedPrompt("discipline", language)
-                + renderAutomationGuidance(supConfig.automation, language);
+              // g-480：`automation_prompts` 关闭 ⇒ **不追加**六键自动化指导段（纪律正文原样保留）；
+              // 全开/未配置 ⇒ 拼接方式与改造前逐字相同（diff=0）。
+              const automationOn = readModuleSwitchesFor(canonical.root).switches.automation_prompts.on !== false;
+              return moduleTrimmedText(canonical.root,
+                "\n" + localizedPrompt("discipline", language)
+                + (automationOn ? renderAutomationGuidance(supConfig.automation, language) : ""));
             } catch {
               return "";
             }
@@ -5687,12 +5816,15 @@ export function apply(ctx, config) {
               const cwd = context?.agent?.session?.header?.cwd;
               if (!cwd) return "";
               const canonical = resolveCanonicalRoot(config, cwd);
+              // g-480：`memory` 关闭 ⇒ 常驻记忆段**整段不注入**（不删任何记忆数据；`graph_memory_*`
+              // 工具同时已从模型可选集移除）。全开/未配置 ⇒ 与改造前逐字相同。
+              if (readModuleSwitchesFor(canonical.root).switches.memory.on === false) return "";
               // g-252：此路径**不传 actor**（host 侧此处无可靠会话身份）⇒ recallMemory 会过滤掉
               // 全部 kind:"user" 条目（owner 隔离）：user 常驻记忆在本路径等价「仅按需 recall」，
               // 这是有意语义。若将来要按 actor 注入，必须同时把 actor 纳入下方 cachedRender 的
               // 缓存键（现在是 `mem:${root}`），否则同一 root 的不同 actor 会拿到同一份渲染结果 ⇒ 跨 actor 泄漏。
-              return cachedRender(`mem:${canonical.root}`, canonical.root, ["memory/memory.jsonl"],
-                () => formatStandingMemorySection(canonical.root) ?? "");
+              return moduleTrimmedText(canonical.root, cachedRender(`mem:${canonical.root}`, canonical.root, ["memory/memory.jsonl"],
+                () => formatStandingMemorySection(canonical.root) ?? ""));
             } catch {
               return "";
             }
