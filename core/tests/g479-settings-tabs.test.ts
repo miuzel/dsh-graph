@@ -9,11 +9,19 @@
  *  2. 可达/可编辑：真实渲染树里每个配置项的控件都在（整棵树上找得到，与当前激活页签无关），
  *     值来自同一 form 草稿 ⇒ 跨页签编辑共享同一份草稿（不丢编辑）。
  *  3. 页签行为：每个页签恰有一个面板、默认只显示默认页签的面板；点页签按钮只切 activeTab，
- *     不触发 onClose；`showAdvanced` 由「高级页签是否激活」派生（既有表达式语义不变）。
+ *     不触发 onClose。
  *  4. i18n：新键 zh/en 齐备、键集对称、en 侧零 CJK。
  *
+ * g-488 追加（同一套件的第 5 节，与上列判据同口径）：
+ *  5. 说明性文字 tooltip 化：`(?)` 由 `settingsHintIcon` **唯一构造点**产出、键盘可达（tabIndex=0）、
+ *     语义可读（role="img" + aria-label 与 title 同为说明全文）；六键自动化**逐键**一条说明；搬进
+ *     tooltip 的说明**零丢失**（都能在渲染树的 title/aria-label 通道里找到）。原「显示/隐藏高级设置」
+ *     折叠按钮与 `showAdvanced` 派生开关已删除 ⇒ 原正向断言一律换成**等价负向断言**（键/表达式/按钮
+ *     class 都不得再出现）+ 恒显结构断言。
+ *
  * 「改坏即红」：末节是 hermetic 负向对照——在**内存中的副本源码**上做变异（搬走页签面板 / 删归属项 /
- * 跨页签重复登记 / 删标签键），同一套检查函数必须报出问题，并断言真实仓库文件逐字未变。
+ * 跨页签重复登记 / 删标签键 / 搬走控件 / 破坏 `(?)` 契约），同一套检查函数必须报出问题，并断言真实
+ * 仓库文件逐字未变。
  */
 
 import { test } from "node:test";
@@ -41,10 +49,14 @@ type TabTable = {
 const TABLE_START = "const SETTINGS_TAB_KEYS = [";
 const MODAL_START = "function SettingsModal(";
 const FOOTER_ANCHOR = 'h("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 6 } },';
-const TABBAR_ANCHOR = "...SETTINGS_TAB_KEYS.map((k) => tabButton(k)),";
+// g-488：页签栏锚点用**映射表达式本身**（不含尾随逗号）——原锚点带尾随逗号，是「映射之后还挂着
+// 「显示/隐藏高级设置」按钮」这一旧形状的产物；按钮删除后表达式仍必须**恰好出现一次**（唯一真源），
+// 断言强度不降（两种形状都能命中）。
+const TABBAR_ANCHOR = "...SETTINGS_TAB_KEYS.map((k) => tabButton(k))";
 
-/** g-479：需要归属的唯一 i18n 新键（页签栏 aria + 6 个页签标签 + 本地偏好如实标注）。
- *  g-480 新增「模块」页签 ⇒ 标签键与源码真源同步扩展（只增不减）。 */
+/** g-479：需要归属的唯一 i18n 新键（页签栏 aria + 页签标签 + 本地偏好如实标注）。
+ *  g-480 新增「模块」页签 ⇒ 标签键与源码真源同步扩展（只增不减）。
+ *  g-488 删除「关于」页签 ⇒ `settings.tab.about` 退出清单（其标签键已从 i18n 双语删除）。 */
 const TAB_I18N_KEYS = [
   "settings.tabsAria",
   "settings.tab.executor",
@@ -52,7 +64,6 @@ const TAB_I18N_KEYS = [
   "settings.tab.ui",
   "settings.tab.modules",
   "settings.tab.advanced",
-  "settings.tab.about",
   "settings.tabLocalNote",
 ];
 
@@ -75,10 +86,10 @@ const KEY_ANCHORS: Record<string, string> = {
   "supervisor.agent_teams": 'set(["supervisor", "agent_teams"], e.target.checked)',
   "local.refresh_interval": "onChange: (e) => handleIntervalChange(e.target.value)",
   "local.live_display": "setLiveDisplay(e.target.checked)",
-  "defaults.review.reviewer": 'set(["defaults", "review", "reviewer"], e.target.value)',
-  "defaults.review.prompt": 'set(["defaults", "review", "prompt"], e.target.value === "" ? null : e.target.value)',
-  "defaults.pk.lanes": 'set(["defaults", "pk", "lanes"], e.target.value)',
-  "defaults.pk.sandbox": 'set(["defaults", "pk", "sandbox"], e.target.value)',
+  // g-488：`defaults.review.reviewer` / `defaults.review.prompt` / `defaults.pk.lanes` /
+  // `defaults.pk.sandbox` 四项**只从界面移除**（配置读兼容保留）⇒ 不再登记页签归属，其源码锚点
+  // 也随之下架；「界面里确实没有这四个控件」与「归一/稀疏 patch 叶子清单仍在」由判据 1 的等价
+  // 负向 + 正向断言钉住（见 §1 的 g-488 段）。
   "supervisor.automation.scope_planning": AUTOMATION_ANCHOR,
   "supervisor.automation.integration_decision": AUTOMATION_ANCHOR,
   "supervisor.automation.rework": AUTOMATION_ANCHOR,
@@ -86,7 +97,8 @@ const KEY_ANCHORS: Record<string, string> = {
   "supervisor.automation.skill_proposal": AUTOMATION_ANCHOR,
   "supervisor.automation.release": AUTOMATION_ANCHOR,
   "prompt_overrides.subagent": 'promptOverride("subagent", dgT("settings.subagentPrompt"))',
-  "config.project_yaml": 'dgT("settings.projectYaml")',
+  // g-488：`config.project_yaml` 不再是「页签归属的配置项」——「关于」页签已删，它是**只读展示**，
+  // 迁到弹窗页脚一行（在所有面板区间之外）；其渲染/双语键/页脚位置由 §1 的专门断言钉住。
   // g-480：「模块」页签的五个开关由同一个映射行渲染（与三列表 / 六键自动化同款共享实现）⇒
   // 共享同一锚点；锚点唯一且必须落在 modules 面板内，逐模块的可达性与绑定由 g480 专项用例覆盖。
   "modules.tags": MODULE_SWITCH_ANCHOR,
@@ -227,8 +239,45 @@ function tabStructureProblems(modalSrc: string, tabs: TabTable): string[] {
   return problems;
 }
 
-function loadClientI18n(src = readI18n()): { zh: Dict; en: Dict } {
-  const sandbox: any = { React: {} };
+/** g-488：说明性文字 tooltip（`(?)`）契约不变式——真实源码 / 变异副本共用（负向对照同口径）。
+ *  ① `(?)` 必须由**唯一构造点** `settingsHintIcon` 产出，且该构造点自带完整可读性契约
+ *     （role=img / tabIndex=0 / aria-label=title=说明全文）——scoped span 必须只有 `(?)` 这一个字面量，
+ *     说明文字只能走属性通道，不得又内联回正文（否则「tooltip 化」名不副实）；
+ *  ② 六键自动化必须**逐键**一条说明映射（漏一键即红），键名与 AUTOMATION_KEYS 逐个对上。 */
+function hintContractProblems(modalSrc: string): string[] {
+  const problems: string[] = [];
+  if (countOccurrences(modalSrc, 'const settingsHintIcon = (text) => h("span", {') !== 1) {
+    problems.push("`(?)` 图标必须有且只有一个构造点 settingsHintIcon");
+  }
+  if (countOccurrences(modalSrc, 'className: "dg-settings-hint"') !== 1) {
+    problems.push("`(?)` 图标的 class 必须恰好出现一次（构造点唯一）");
+  }
+  const contract: Array<[string, string]> = [
+    ['role: "img"', "读屏须按「有名字的元素」播报（不是无意义的 (?)）"],
+    ["tabIndex: 0", "图标必须键盘可达（可 Tab 聚焦）"],
+    ['"aria-label": text', "图标必须有可读名（说明全文）"],
+    ["title: text", "图标必须有悬停说明（说明全文）"],
+  ];
+  for (const [needle, why] of contract) {
+    if (countOccurrences(modalSrc, needle) !== 1) {
+      problems.push(`\`(?)\` 图标契约缺失或重复：${needle}（${why}）`);
+    }
+  }
+  if (countOccurrences(modalSrc, "}, SETTINGS_HINT_ICON);") !== 1) {
+    problems.push("`(?)` 的可视字面量必须恰好一处（SETTINGS_HINT_ICON）");
+  }
+  if (countOccurrences(modalSrc, "const AUTOMATION_HINT_KEYS = {") !== 1) {
+    problems.push("AUTOMATION_HINT_KEYS（六键逐键说明映射）必须恰好定义一次");
+  }
+  for (const k of AUTOMATION_KEYS) {
+    if (!modalSrc.includes(`      ${k}: "settings.automationWhat.${k}",`)) {
+      problems.push(`自动化键 ${k} 缺逐键说明映射（AUTOMATION_HINT_KEYS）`);
+    }
+  }
+  return problems;
+}
+
+function loadClientI18n(src = readI18n()): { zh: Dict; en: Dict } {  const sandbox: any = { React: {} };
   vm.runInNewContext(`${src}\n;this.zh = zh; this.en = en;`, sandbox);
   return { zh: sandbox.zh, en: sandbox.en };
 }
@@ -328,9 +377,39 @@ test("g-479 判据1：设置弹窗改为分类页签——每个配置项恰好�
   const items = tabs.keys.flatMap((k) => tabs.items[k]);
   assert.deepEqual([...items].sort(), Object.keys(KEY_ANCHORS).sort(), "归属表与锚点表必须逐项一致");
   // 模块级真源与渲染实现同源
-  assert.match(src, /const SETTINGS_TAB_KEYS = \["executor", "review", "ui", "modules", "advanced", "about"\]/);
+  assert.match(src, /const SETTINGS_TAB_KEYS = \["executor", "review", "ui", "modules", "advanced"\]/);
   assert.match(src, /const \(activeTab, setActiveTab\) = React\.useState\(SETTINGS_DEFAULT_TAB\)|const \[activeTab, setActiveTab\] = React\.useState\(SETTINGS_DEFAULT_TAB\)/);
-  assert.equal(countOccurrences(src, 'const showAdvanced = activeTab === "advanced";'), 1, "showAdvanced 必须由激活页签派生");
+  // g-488：原 `showAdvanced` 派生开关 + 「显示/隐藏高级设置」折叠按钮已删除（高级设置本身即页签，
+  // 页签内不再有第二层显隐开关）⇒ 原正向断言换成**等价负向断言**（表达式/按钮 class 都不得再出现）
+  // + **恒显**结构断言（高级页签内容不因折叠状态被隐藏）。
+  assert.equal(countOccurrences(src, 'const showAdvanced = activeTab === "advanced";'), 0, "showAdvanced 派生开关必须已删除");
+  assert.equal(countOccurrences(src, 'display: showAdvanced ?'), 0, "不得再有 showAdvanced 显隐三元");
+  assert.equal(countOccurrences(src, "dg-settings-advanced-toggle"), 0, "折叠按钮 class 必须已删除");
+  assert.ok(
+    !/display: (activeTab === "advanced"|showAdvanced)/.test(src),
+    "高级页签内容必须恒显（可见性只由页签选择决定）",
+  );
+  // g-488：四项默认值键**只从界面移除**、配置读兼容保留：不得再有编辑入口，但归一/稀疏 patch 的
+  // 叶子清单（`leaf([...])`）必须逐字仍在（不可编辑 ⇒ 恒等于基线 ⇒ 永不出现在 patch，也不会误伤其它键）。
+  assert.equal(countOccurrences(src, 'set(["defaults",'), 0, "四项默认值键不得再有界面编辑入口");
+  for (const leaf of [
+    'leaf(["defaults", "review", "reviewer"]);',
+    'leaf(["defaults", "review", "prompt"], (v) =>',
+    'leaf(["defaults", "pk", "lanes"]);',
+    'leaf(["defaults", "pk", "sandbox"]);',
+  ]) {
+    assert.ok(src.includes(leaf), `配置读兼容不得丢失叶子：${leaf}`);
+  }
+  // g-488：「关于」页签删除，配置文件只读展示迁到**页脚一行**——必须在页脚按钮行之后，且不属于
+  // 任何页签面板区间（否则「搬到页脚」只是换了说法，实际仍寄生在某个页签里）。
+  assert.equal(countOccurrences(src, 'tabPanel("about", ['), 0, "「关于」页签面板必须已删除");
+  const yamlAt = src.indexOf('dgT("settings.projectYaml")');
+  const footerAt = src.indexOf(FOOTER_ANCHOR);
+  assert.ok(yamlAt > 0 && footerAt > 0 && yamlAt > footerAt, "project.yaml 入口必须位于页脚按钮行之后");
+  const regionsForFooter = panelRegions(src, tabs.keys, []);
+  for (const [k, [s0, e0]] of regionsForFooter) {
+    assert.ok(!(yamlAt >= s0 && yamlAt < e0), `project.yaml 入口不得落在「${k}」页签面板内`);
+  }
 });
 
 // ===== 判据 2：可达 / 可编辑 =====
@@ -364,20 +443,28 @@ test("g-479 判据2：真实渲染树里每个配置项的控件都在（与激�
   // 界面与刷新（2，本地偏好）
   assert.equal(byId("dg-live-display").length, 1, "live display 开关可达");
   assert.equal(nodes.filter((n) => n.type === "input" && n.props.type === "number" && n.props.min === 5).length, 1, "刷新间隔输入可达");
-  assert.ok(nodes.some((n) => n.props?.style?.fontSize === 11 && textOf(n) === zh["settings.tabLocalNote"]), "本地偏好如实标注必须渲染");
-  // 高级（11）
-  assert.equal(inputByValue("rev-1").length, 1, "defaults.review.reviewer 输入可达");
-  assert.equal(inputByValue("prm-1").length, 1, "defaults.review.prompt 输入可达");
-  assert.equal(inputByValue(3).length, 1, "defaults.pk.lanes 输入可达");
-  assert.equal(inputByValue("sdbx").length, 1, "defaults.pk.sandbox 输入可达");
+  // g-488：本地偏好如实标注改用 `(?)` tooltip 承载（正文只留主体）⇒ 断言改走属性通道，仍在树上。
+  assert.ok(
+    nodes.some((n) => n.props?.["aria-label"] === zh["settings.tabLocalNote"]),
+    "本地偏好如实标注必须渲染（g-488 起由 `(?)` tooltip 承载）",
+  );
+  // 高级（7）
+  // g-488：原四个 defaults.* 输入框已下架 ⇒ 等价负向断言（值仍出现在 SNAPSHOT 里，界面不得再渲染它们）。
+  assert.equal(inputByValue("rev-1").length, 0, "defaults.review.reviewer 输入必须已从界面移除");
+  assert.equal(inputByValue("prm-1").length, 0, "defaults.review.prompt 输入必须已从界面移除");
+  assert.equal(inputByValue(3).length, 0, "defaults.pk.lanes 输入必须已从界面移除");
+  assert.equal(inputByValue("sdbx").length, 0, "defaults.pk.sandbox 输入必须已从界面移除");
   for (const k of AUTOMATION_KEYS) assert.ok(labelTexts.includes(k), `supervisor.automation.${k} 选择器可达`);
   assert.ok(nodes.some((n) => n.type === "textarea" && n.props.value === "OVERRIDE_TEXT"), "prompt_overrides.subagent 覆盖文本框可达");
   assert.ok(selects.length >= 11, `下拉总数应 ≥11（4 主下拉 + 6 自动化 + 1 评审策略），实得 ${selects.length}`);
-  // 关于（1）
-  assert.ok(nodes.some((n) => textOf(n) === zh["settings.projectYaml"]), "project.yaml 标签可达");
+  // 页脚（1，g-488：自「关于」页签迁入的**只读**展示——与激活页签无关，恒在树上）
+  assert.ok(nodes.some((n) => textOf(n) === zh["settings.projectYaml"]), "project.yaml 标签可达（页脚一行）");
   assert.equal(nodes.filter((n) => n.type === "button" && textOf(n) === zh["tab.openFile"]).length, 1, "打开入口可达");
   assert.equal(nodes.filter((n) => n.type === "button" && textOf(n) === zh["tab.copyPath"]).length, 1, "复制入口可达");
-  assert.ok(nodes.some((n) => n.children?.includes("/abs/path/project.yaml")), "project.yaml 绝对路径明文展示");
+  assert.ok(
+    nodes.some((n) => (n.children ?? []).includes("/abs/path/project.yaml")),
+    "project.yaml 绝对路径明文展示（仍是 children 字符串，未降级为 tooltip）",
+  );
 });
 
 // ===== 判据 3：页签行为 =====
@@ -413,27 +500,35 @@ test("g-479 判据3：每个页签恰一个面板、默认只显示默认页签�
     assert.equal(r.closeCalls(), 0, "切页签不得触发 onClose");
   }
 
-  // 高级：showAdvanced 由激活页签派生——既有 showAdvanced 表达式语义不变
+  // 高级（g-488）：内容**恒显**——原 `showAdvanced` 显隐三元已删，故改为「与激活页签无关」断言：
+  // 只要在树上，就不得带任何 display 隐藏；且原「显示/隐藏高级设置」按钮与双语键都已下架。
   const advanced = renderSettingsModal(src, SNAPSHOT, zh, { tab: "advanced" });
-  const adv = advanced.nodes.filter((n) => textOf(n) === zh["settings.automationHint"]);
-  assert.equal(adv.length, 1, "自动化提示可达");
-  assert.equal(adv[0].props.style.display, "block", "高级页签激活时 showAdvanced 表达式的取值为 block");
+  const adv = advanced.nodes.filter((n) => n.props?.["aria-label"] === zh["settings.automationHint"]);
+  assert.equal(adv.length, 1, "自动化总说明 `(?)` 可达");
+  assert.equal(adv[0].props.style.display, undefined, "自动化说明不再受 showAdvanced 显隐三元控制");
   const grid = advanced.nodes.filter((n) => n.props?.style?.gridTemplateColumns === "repeat(2, 1fr)");
   assert.equal(grid.length, 1, "自动化六键网格可达");
-  assert.equal(grid[0].props.style.display, "grid", "高级页签激活时自动化网格可见");
+  assert.equal(grid[0].props.style.display, "grid", "自动化网格是 grid 布局（layout display，非显隐开关）");
   const other = renderSettingsModal(src, SNAPSHOT, zh, { tab: "review" });
-  assert.equal(other.nodes.filter((n) => textOf(n) === zh["settings.automationHint"])[0].props.style.display, "none", "非高级页签时高级区不可见");
+  const advOther = other.nodes.filter((n) => n.props?.["aria-label"] === zh["settings.automationHint"]);
+  assert.equal(advOther.length, 1, "非激活页签时高级区内容仍在树上（面板常驻，不卸载）");
+  assert.equal(advOther[0].props.style.display, undefined, "非激活页签也不得用 showAdvanced 三元隐藏内容");
+  // 关键：非激活页签下网格**依然可见**（旧实现的 showAdvanced 三元在此处会取 "none"）⇒ 恒显已被钉住
+  const gridOther = other.nodes.filter((n) => n.props?.style?.gridTemplateColumns === "repeat(2, 1fr)");
+  assert.equal(gridOther.length, 1, "非激活页签时自动化网格仍在树上");
+  assert.equal(gridOther[0].props.style.display, "grid", "非激活页签时网格 display 仍为 grid（不再被 showAdvanced 置 none）");
 
-  // 高级开关按钮：双语键继续有真实归属，点击在「高级 ↔ 默认页签」之间切换
-  const advBtn = (r: Rendered) => r.nodes.find((n) => String(n.props?.className ?? "").includes("dg-settings-advanced-toggle"));
+  // g-488：折叠按钮与它的双语键都已删除 ⇒ 原「点击在高级 ↔ 默认页签之间切换」的正向用例换成
+  // **等价负向断言**（源码 + 渲染树两条腿都不得再出现该按钮）。
   const normal = renderSettingsModal(src, SNAPSHOT, zh, { tab: "executor" });
-  assert.equal(textOf(advBtn(normal)!), zh["settings.showAdvanced"], "非高级页签显示「显示高级设置」");
-  advBtn(normal)!.props.onClick();
-  assert.equal(normal.calls[5], "advanced");
-  assert.equal(textOf(advBtn(advanced)!), zh["settings.hideAdvanced"], "高级页签显示「隐藏高级设置」");
-  advBtn(advanced)!.props.onClick();
-  assert.equal(advanced.calls[5], tabs.def);
-  assert.equal(normal.closeCalls() + advanced.closeCalls(), 0, "高级开关不得触发 onClose");
+  const advBtnNodes = (r: Rendered) => r.nodes.filter((n) => String(n.props?.className ?? "").includes("dg-settings-advanced-toggle"));
+  assert.equal(advBtnNodes(normal).length, 0, "渲染树上不得再有「显示/隐藏高级设置」按钮");
+  assert.equal(advBtnNodes(advanced).length, 0, "高级页签内同样不得再有折叠按钮");
+  assert.equal(countOccurrences(src, "dg-settings-advanced-toggle"), 0, "源码不得再有折叠按钮");
+  // 页签按钮数仍恒等于页签数（折叠按钮此前混在页签栏里，删除后页签栏必须刚好只有页签）
+  const tabButtonsNormal = normal.nodes.filter((n) => n.type === "button" && String(n.props?.className ?? "").includes("dg-settings-tab"));
+  assert.equal(tabButtonsNormal.length, tabs.keys.length, "页签栏必须恰好只有页签按钮（无折叠按钮残留）");
+  assert.equal(normal.closeCalls() + advanced.closeCalls(), 0, "页签切换不得触发 onClose");
 });
 
 // ===== 判据 4：i18n =====
@@ -453,11 +548,118 @@ test("g-479 判据4：页签 i18n 键 zh/en 齐备、键集对称、en 零 CJK",
   for (const k of tabs.keys) assert.ok(TAB_I18N_KEYS.includes(tabs.labels[k]), `页签 ${k} 的标签键 ${tabs.labels[k]} 未登记在 i18n 清单`);
   // 源码只经 dgT 取文案（不得内联中文）
   assert.match(readModal(), /dgT\(SETTINGS_TAB_LABEL_KEYS\[tabKey\]\)/);
+  // g-488：随控件一起下架的键必须在**双语**里一并删除（残留 = 死键，且会掩盖「已删除」的事实）
+  for (const k of ["settings.tab.about", "settings.showAdvanced", "settings.hideAdvanced", "settings.pkLanesError"]) {
+    assert.equal(k in zh, false, `zh 不得再含已下架键 ${k}`);
+    assert.equal(k in en, false, `en 不得再含已下架键 ${k}`);
+  }
+  // g-488：六键自动化的**逐键**说明键 zh/en 齐备、对称、en 零 CJK、且不退化为键名
+  for (const k of AUTOMATION_KEYS) {
+    const key = `settings.automationWhat.${k}`;
+    assert.ok(typeof zh[key] === "string" && zh[key] !== "", `zh 缺键 ${key}`);
+    assert.ok(typeof en[key] === "string" && en[key] !== "", `en 缺键 ${key}`);
+    assert.doesNotMatch(en[key], /[\u4e00-\u9fff]/, `en 侧不得含中文：${key}`);
+    assert.notEqual(en[key], key, `en 侧不得退化为键名：${key}`);
+    assert.notEqual(zh[key], en[key], `zh/en 文案不得逐字相同（未翻译）：${key}`);
+    // 「管什么 + human/ai 两种取值的含义」：两种取值都必须被讲到
+    assert.match(zh[key], /human/, `zh 说明须讲清 human 的含义：${key}`);
+    assert.match(zh[key], /ai/, `zh 说明须讲清 ai 的含义：${key}`);
+    assert.match(en[key], /human/, `en 说明须讲清 human 的含义：${key}`);
+    assert.match(en[key], /\bai\b/, `en 说明须讲清 ai 的含义：${key}`);
+  }
+});
+
+// ===== 判据 5（g-488）：说明性文字 tooltip 化 =====
+
+test("g-488 判据5：说明文字 tooltip 化——`(?)` 键盘可达且语义可读、六键逐键说明、零信息丢失", () => {
+  const src = readModal();
+  const { zh } = loadClientI18n();
+  const problems = hintContractProblems(src);
+  assert.deepEqual(problems, [], "`(?)` tooltip 契约必须全绿：\n" + problems.join("\n"));
+
+  const { nodes } = renderSettingsModal(src, SNAPSHOT, zh, { tab: "executor" });
+  const hints = nodes.filter((n) => String(n.props?.className ?? "").includes("dg-settings-hint"));
+  assert.ok(hints.length >= 10, `\`(?)\` 图标应覆盖各小节标题（≥10），实得 ${hints.length}`);
+  for (const node of hints) {
+    assert.equal(node.props.role, "img", "`(?)` 必须是 role=img（读屏播报其名字而非字面量）");
+    assert.equal(node.props.tabIndex, 0, "`(?)` 必须键盘可达");
+    assert.equal(typeof node.props["aria-label"], "string", "`(?)` 必须有 aria-label");
+    assert.ok(String(node.props["aria-label"]).length > 0, "`(?)` 的 aria-label 不得为空");
+    assert.equal(node.props.title, node.props["aria-label"], "title 与 aria-label 必须同为说明全文");
+    assert.equal(node.children.length, 1, "`(?)` 只承载可视字面量，说明文字只走属性通道");
+    // 说明不得又内联回正文（否则「tooltip 化」名不副实、正文重复）
+    assert.equal(typeof node.props["aria-label"], "string");
+  }
+
+  // 六键自动化：**逐键**一条说明，且互不相同（不得六键共用一条泛泛而谈）
+  for (const k of AUTOMATION_KEYS) {
+    const text = zh[`settings.automationWhat.${k}`];
+    assert.equal(hints.filter((n) => n.props["aria-label"] === text).length, 1, `自动化键 ${k} 应恰有一个专属 \`(?)\``);
+  }
+  const automationTexts = AUTOMATION_KEYS.map((k) => zh[`settings.automationWhat.${k}`]);
+  assert.equal(new Set(automationTexts).size, automationTexts.length, "六键说明不得互相重复");
+
+  // 零信息丢失：搬进 tooltip 的**每一条**说明都能在渲染树里找到（属性通道），且文案逐字保留
+  const titles = hints.map((n) => String(n.props.title));
+  const movedKeys = [
+    "settings.reviewPolicyHint",
+    "settings.reviewConditionsHint",
+    "settings.reviewCalibrationGuide",
+    "settings.tabLocalNote",
+    "settings.minInterval",
+    "settings.liveDisabledHint",
+    "settings.modulesNote",
+    "settings.modulesScopeNote",
+    "settings.automationHint",
+    "settings.agentTeamsHint",
+    "settings.reviewRegionsHint",
+    "settings.reviewContractPathsHint",
+    "settings.reviewNonProductPrefixesHint",
+    "settings.moduleHint.tags",
+    "settings.moduleHint.memory",
+    "settings.moduleHint.sharedCards",
+    "settings.moduleHint.automationPrompts",
+    "settings.moduleHint.attachments",
+  ];
+  for (const key of movedKeys) {
+    const text = zh[key];
+    assert.ok(typeof text === "string" && text !== "", `缺少待搬迁说明文案：${key}`);
+    assert.ok(titles.some((t) => t.includes(text)), `说明 ${key} 在 tooltip 化后丢失（渲染树里找不到其文案）`);
+  }
+  // 目录三态说明随状态切换仍走 tooltip（本渲染下目录不可用 ⇒ 等的是 Waiting 文案）
+  assert.ok(
+    titles.some((t) => t.includes(zh["profileSettings.effortHintWaiting"])),
+    "推理档位说明（等待目录态）必须随状态进入 tooltip，而非被静态写死",
+  );
+  // 状态类读数**不得**进 tooltip：生效值来源徽标、未配置提示仍须在正文（一眼可见）
+  // 正文 = 渲染树里所有节点的直接字符串子节点（含 span/div 的文本），排除 `(?)` 的说明通道。
+  const bodyText = nodes
+    .filter((n) => !String(n.props?.className ?? "").includes("dg-settings-hint"))
+    .map((n) => textOf(n))
+    .join("\n");
+  assert.ok(bodyText.includes(zh["settings.reviewSourceLabel"]), "来源徽标必须留在正文（状态读数不进 tooltip）");
+  // 状态类读数**逐键**钉住「不得进 tooltip」——它们随状态变化，塞进 tooltip 会撒谎。
+  // （「某读数在正文里确实可见」的正面腿由 g442 的正文专用收集器断言，两处同口径、互不替代。）
+  for (const key of [
+    "settings.reviewUnsetHint",
+    "settings.reviewIllegalEmpty",
+    "settings.reviewSourceIllegalEmpty",
+    "settings.reviewEffectiveBlank",
+    "settings.catalogReady",
+    "settings.catalogLoadingMsg",
+    "settings.catalogUnavailableMsg",
+    "settings.intervalWarn",
+    "settings.reviewSuggestedRegions",
+  ]) {
+    assert.ok(!titles.some((t) => t.includes(zh[key])), `状态读数 ${key} 不得进 tooltip（必须留在正文）`);
+  }
+  // 禁用按钮残留检查：`(?)` 不得把整段说明同时留在正文（双份即信息重复）
+  assert.equal(countOccurrences(src, "settingsHintIcon(dgT(\"settings.tabLocalNote\"))"), 1, "页级说明只经 tooltip 承载一次");
 });
 
 // ===== 改坏即红（hermetic 负向对照）=====
 
-test("g-479 负向对照：搬走页签面板 / 删归属项 / 跨页签重复登记 / 删标签键 均必红且真实文件未变", () => {
+test("g-479 负向对照：搬走页签面板 / 删归属项 / 跨页签重复登记 / 删标签键 / 破坏 `(?)` 契约 均必红且真实文件未变", () => {
   const real = readModal();
   const before = readFileSync(modalPath);
   const mut = (from: string, to: string, label: string) => {
@@ -492,7 +694,8 @@ test("g-479 负向对照：搬走页签面板 / 删归属项 / 跨页签重复�
   );
   assert.ok(p5.some((s) => s.includes("supervisor.agent_teams")), "应点名复制导致的锚点不唯一");
 
-  // ⑥ 把某配置项的控件**搬到**另一个页签（剪切粘贴：锚点仍唯一，但落到别的页签面板内）⇒ 越界判红
+  // ⑥ 把某配置项的控件**搬到**另一个页签（剪切粘贴：锚点仍唯一，但落到别的页签面板内）⇒ 越界判红。
+  //    g-488：agent_teams 已归位「模型与执行」⇒ 越界点名必须是「executor」（不再容忍指向旧页签）。
   const movedSrc = real
     .replace(/ *onChange: \(e\) => set\(\["supervisor", "agent_teams"\], e\.target\.checked\),\n/, "")
     .replace(
@@ -502,9 +705,26 @@ test("g-479 负向对照：搬走页签面板 / 删归属项 / 跨页签重复�
   assert.notEqual(movedSrc, real, "变异未生效：搬迁 agent_teams 控件");
   const p6 = tabStructureProblems(movedSrc, loadTabTable(movedSrc));
   assert.ok(
-    p6.some((s) => s.includes("supervisor.agent_teams") && s.includes("不在「review」页签面板内")),
-    `把 agent_teams 搬到高级页签必须判红并点名越界，实得：${p6.join(" / ") || "（无问题）"}`,
+    p6.some((s) => s.includes("supervisor.agent_teams") && s.includes("不在「executor」页签面板内")),
+    `把 agent_teams 搬到高级页签必须判红并点名越界到 executor，实得：${p6.join(" / ") || "（无问题）"}`,
   );
+
+  // ⑦ g-488：破坏 `(?)` 的可读性契约（删掉 aria-label）⇒ tooltip 契约检查必红且点名该属性
+  const hintMut = (from: string, to: string, label: string) => {
+    const src = real.replace(from, to);
+    assert.notEqual(src, real, `变异未生效（找不到锚点）：${label}`);
+    const problems = hintContractProblems(src);
+    assert.ok(problems.length > 0, `变异「${label}」必须报红，实得 0 个问题`);
+    return problems;
+  };
+  const h1 = hintMut('      "aria-label": text,\n', "", "删掉 `(?)` 的 aria-label");
+  assert.ok(h1.some((s) => s.includes('"aria-label": text')), `应点名缺失的可读名契约，实得：${h1.join(" / ")}`);
+  const h2 = hintMut("      tabIndex: 0,\n", "", "删掉 `(?)` 的键盘可达性");
+  assert.ok(h2.some((s) => s.includes("tabIndex: 0")), `应点名键盘可达性缺失，实得：${h2.join(" / ")}`);
+
+  // ⑧ g-488：六键自动化漏掉一键的逐键说明 ⇒ 必红且点名该键
+  const h3 = hintMut('      rework: "settings.automationWhat.rework",\n', "", "删掉 rework 的逐键说明映射");
+  assert.ok(h3.some((s) => s.includes("rework")), `应点名缺失的逐键说明，实得：${h3.join(" / ")}`);
 
   assert.deepEqual(readFileSync(modalPath), before, "负向对照不得改动真实仓库文件");
 });

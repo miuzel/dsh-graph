@@ -658,6 +658,14 @@
       'settings.supervisorAutomation': '主管自动化指导（supervisor.automation）',
       // g-439：六键已由主管提示真实消费——如实说明消费方式（只影响提示，不改变工具权限、不构成引擎强制）
       'settings.automationHint': '影响主管提示：human 请求负责人确认、ai 在已授权范围内自主判断并留痕、未配置保持既有指导；不改变工具权限，也不构成引擎强制（不改变「开始工作」「审核」「发布」等既有 gate 要求）。',
+      // g-488：六键**逐键**说明（每键一个标题右侧 `(?)`）——讲清「这一键管什么」+「human / ai 两种取值
+      // 在本键上的含义」+「未配置 = 保持既有指导」。总口径（只影响提示、不构成引擎强制）见上一行的总说明。
+      'settings.automationWhat.scope_planning': '范围规划：是否先把目标拆成执行范围与判据再开工。human = 开工前请负责人确认范围与判据；ai = 在目标描述与既有授权范围内自行拆解并留痕；未配置 = 沿用既有指导。',
+      'settings.automationWhat.integration_decision': '集成裁决：候选实现是否合入、以及合入前要不要人工放行。human = 合入决定请负责人拍板；ai = 依据已核验证据自行裁决并记入事件流；未配置 = 沿用既有指导。',
+      'settings.automationWhat.rework': '返工判定：验收不过时，是退回重做还是转人工。human = 返工前请负责人确认口径与约束；ai = 按已核验失败自行登记返工 handoff 并重派；未配置 = 沿用既有指导。',
+      'settings.automationWhat.memory_promotion': '记忆提升：把本轮经验沉淀为长期记忆、以及是否升为常驻。human = 提升/升级常驻前请负责人确认；ai = 自行按分级铁律沉淀（默认按需记忆，常驻仍受硬上限约束）；未配置 = 沿用既有指导。',
+      'settings.automationWhat.skill_proposal': '技能提案：是否把可复用的工作流整理成 skill 提案并提交。human = 提案内容与提交请负责人确认；ai = 自行起草提案并留痕待批；未配置 = 沿用既有指导。',
+      'settings.automationWhat.release': '发布：版本号、发布门禁与发布动作由谁放行。human = 发布动作必须请负责人确认；ai = 在已授权范围内完成发布前检查并留痕，最终发布仍受既有 gate 约束；未配置 = 沿用既有指导。',
       'settings.reviewPolicyLabel': '分级评审策略 (review.policy)',
       'settings.reviewPolicyAria': 'workspace 分级评审策略',
       'settings.reviewPolicyInherit': '继承（未配置，按目标类型派生）',
@@ -713,8 +721,7 @@
       'settings.openProjectYaml': '用系统默认编辑器打开 project.yaml',
       'settings.copyProjectPath': '复制 project.yaml 路径',
       'settings.openedProjectYaml': '✅ 已打开 project.yaml',
-      'settings.showAdvanced': '显示高级设置',
-      'settings.hideAdvanced': '隐藏高级设置',
+      // g-488：settings.showAdvanced / settings.hideAdvanced 已删除——折叠按钮与页签内显隐开关一并移除。
       'settings.autoRefresh': '看板数据自动刷新：',
       'settings.seconds': '秒',
       'settings.minInterval': '（下限 5 秒）',
@@ -754,7 +761,8 @@
       'settings.discardDirtyConfirm': '有未保存的修改，确认放弃？',
       'settings.saveFail': '保存失败：',
       'settings.loadFail': '加载配置失败：',
-      'settings.pkLanesError': 'pk.lanes 必须是 >=1 的整数',
+      // g-488：settings.pkLanesError 已删除——pk.lanes 输入框与其保存前整数校验一并移除
+      // （core 侧读取/规整语义未动，文件里的非法值不再永久阻断保存）。
       'settings.promptInheritHint': '（继承当前 profile 全局提示词）',
       'settings.promptDisableHint': '（全局提示词被禁用）',
       'settings.promptOverridePlaceholder': '输入覆盖文本（支持空格/引号/#/多行）…',
@@ -771,7 +779,7 @@
       'settings.tab.ui': '界面与刷新',
       'settings.tab.modules': '模块',
       'settings.tab.advanced': '高级',
-      'settings.tab.about': '关于',
+      // g-488：settings.tab.about 已删除（「关于」页签移除，配置文件入口迁到弹窗页脚一行）。
       'settings.tabLocalNote': '本页两项为本地偏好：只保存在浏览器 localStorage，不写入 project.yaml，也不随项目配置同步。',
       // g-480：harness 模块可选开关（workspace 级；关闭 = 真裁剪工具面 + 相关提示词段，不删除数据）
       'settings.modulesNote': '关闭某模块会真正裁剪该模块的能力：其工具从模型可见的工具清单中移除，相关系统提示词段也不再注入。数据不会被删除，重新开启即恢复。',
@@ -1860,6 +1868,15 @@
       'settings.supervisorAutomation': 'Supervisor automation guidance (supervisor.automation)',
       // g-439: the six keys are genuinely consumed by the supervisor prompt — state how, truthfully
       'settings.automationHint': 'Affects the supervisor prompt: human asks the person in charge for confirmation, ai decides autonomously within the already authorized scope and leaves a trace, and unset keeps the existing guidance; it changes no tool permission and is not engine enforcement (it changes no existing gate such as start work, review, or release).',
+      // g-488: per-key explanations for the six automation keys (one title-row `(?)` each): what the key
+      // governs + what human / ai mean for it + unset keeps the existing guidance. The cross-key caveat
+      // (prompt-only, no engine enforcement) lives in settings.automationHint above.
+      'settings.automationWhat.scope_planning': 'Scope planning: whether the goal is broken into execution scope and criteria before work starts. human = confirm scope and criteria with the owner first; ai = split it autonomously within the goal description and existing authorization, leaving a trace; unset = keep the existing guidance.',
+      'settings.automationWhat.integration_decision': 'Integration decision: whether a candidate implementation is merged, and whether a human must approve it first. human = the owner makes the merge call; ai = decide from verified evidence and record it in the event stream; unset = keep the existing guidance.',
+      'settings.automationWhat.rework': 'Rework: when acceptance fails, send it back for another attempt or escalate to a human. human = confirm the criteria and constraints with the owner first; ai = register the rework handoff from verified failures and dispatch again; unset = keep the existing guidance.',
+      'settings.automationWhat.memory_promotion': 'Memory promotion: turn this round experience into long-term memory, and whether it becomes standing. human = confirm promotion or standing status with the owner; ai = persist it by the tiering rules (on-demand by default; standing still obeys the hard cap); unset = keep the existing guidance.',
+      'settings.automationWhat.skill_proposal': 'Skill proposal: whether a reusable workflow is written up as a skill proposal and submitted. human = confirm the content and submission with the owner; ai = draft the proposal and leave it pending approval; unset = keep the existing guidance.',
+      'settings.automationWhat.release': 'Release: who clears the version number, the release gate, and the release action. human = the owner must confirm the release action; ai = complete pre-release checks within the authorized scope and leave a trace, while the final release still obeys the existing gates; unset = keep the existing guidance.',
       'settings.reviewPolicyLabel': 'Graded review policy (review.policy)',
       'settings.reviewPolicyAria': 'Workspace graded review policy',
       'settings.reviewPolicyInherit': 'Inherit (unset; derived from goal type)',
@@ -1915,8 +1932,7 @@
       'settings.openProjectYaml': 'Open project.yaml with system editor',
       'settings.copyProjectPath': 'Copy project.yaml path',
       'settings.openedProjectYaml': '✅ Opened project.yaml',
-      'settings.showAdvanced': 'Show advanced settings',
-      'settings.hideAdvanced': 'Hide advanced settings',
+      // g-488: settings.showAdvanced / settings.hideAdvanced removed together with the toggle button.
       'settings.autoRefresh': 'Board auto-refresh interval:',
       'settings.seconds': 's',
       'settings.minInterval': '(min 5s)',
@@ -1956,7 +1972,7 @@
       'settings.discardDirtyConfirm': 'You have unsaved changes. Discard them?',
       'settings.saveFail': 'Save failed: ',
       'settings.loadFail': 'Failed to load config: ',
-      'settings.pkLanesError': 'pk.lanes must be an integer >= 1',
+      // g-488: settings.pkLanesError removed together with the pk.lanes input and its pre-save check.
       'settings.promptInheritHint': '(Inherits current profile global prompt)',
       'settings.promptDisableHint': '(Global prompt disabled)',
       'settings.promptOverridePlaceholder': 'Enter override text (supports spaces/quotes/#/multiline)…',
@@ -1973,7 +1989,7 @@
       'settings.tab.ui': 'UI & refresh',
       'settings.tab.modules': 'Modules',
       'settings.tab.advanced': 'Advanced',
-      'settings.tab.about': 'About',
+      // g-488: settings.tab.about removed (About tab gone; config file entry moved to one footer line).
       'settings.tabLocalNote': 'Both items on this tab are local preferences: stored in browser localStorage only, never written to project.yaml and never synced with project config.',
       // g-480: optional harness module switches (workspace level; off = real trimming of the tool face
       // plus the related prompt sections, and never any data deletion)
