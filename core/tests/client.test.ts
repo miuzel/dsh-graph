@@ -34,6 +34,10 @@ function loadSettingsModalPayload(modal: string): any {
 /** vm 沙箱对象与测试 realm prototype 不同：断言前 JSON 往返。 */
 const plainJson = (x: any): any => JSON.parse(JSON.stringify(x));
 
+/** 去掉 `//` 行注释后的**可执行代码**面（g-490 判据 3 收口）：源码注释里说明性地提到旧式样
+ *  （如「旧式只钳 `vw - 16` …」）不得被误判成回退；只有代码里真的复活旧式样才算回退。 */
+const stripLineComments = (src: string): string => src.split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+
 function fakeRequest(method: string, body: unknown) {
   const req: any = {
     method,
@@ -238,8 +242,18 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   // 至多一个浮层：唯一 `openHint` 状态（同一时刻只能有一个 id）
   assert.match(modal, /const \[openHint, setOpenHint\] = React\.useState\(null\)/);
   // 不被弹窗裁剪：fixed 定位 + 触发器矩形 + 视口边界翻转
-  assert.match(modal, /position: "fixed", zIndex: 100001, left: geom \? geom\.left : 8/);
+  assert.match(modal, /position: "fixed", zIndex: 100001, left, maxWidth: HINT_MAX_WIDTH/);
   assert.match(modal, /const above = geom \? \(geom\.top > 180 \|\| vh === 0\) : true;/);
+  // g-490（判据 3 收口，负责人 2026-10-12 裁决「现在就补」）：左右边界必须按**浮层自身宽度**钳位 ——
+  // 旧式只钳 `vw - 16`（未计浮层宽 ≤320）在窄视口（≲1240px）下右缘被视口裁掉。此处把
+  // 「浮层宽上界 + 两侧 8px 安全边距」的算式与 CSS `maxWidth` 的**同一份数字来源**逐条钉住
+  // （同位置改判、语义更强；旧算式一旦回退即被下方负向断言逮住）。
+  assert.match(modal, /const HINT_MAX_WIDTH = 320;/);
+  assert.match(modal, /return Math\.max\(8, n - 8 - HINT_MAX_WIDTH\);/);
+  assert.match(modal, /const left = Math\.max\(8, Math\.min\(rect\.left, hintMaxLeftFor\(vw\)\)\);/);
+  // 判定只看**可执行代码**（去 `//` 行注释）：源码注释里说明性地提到旧式 `vw - 16` 不算回退，
+  // 只有代码里真的复活旧式样才判红。
+  assert.doesNotMatch(stripLineComments(modal), /vw - 16/, "浮层左边界不得再只钳到 vw-16（忽略浮层宽度 ⇒ 窄视口右缘被裁）");
   // 关闭路径：浮层外点击 / 滚动
   assert.match(modal, /t\.closest\("\.dg-settings-tip"\)/);
   assert.match(modal, /window\.addEventListener\("scroll", onScroll, true\)/);
