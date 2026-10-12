@@ -133,6 +133,99 @@ RUNTIME_DIR="$VERSION_ROOT"
 RUNTIME_DSH="$RUNTIME_DIR/node_modules/.bin/dsh"
 ALLOW_BUILDS=()
 HOST_LINK="link:$HOST_DIR"
+# ── g-483：共享 DSH_HOME 的插件 link 冲突检测（并行实例）──────────────────────
+# DSH_HOME 按**稳定版本**共享（同一预发布族只装一次 profile，见 :94/:129 的注释），因此同一
+# 稳定版本的并行实例共用 $PROFILE_MANIFEST 里的 `dsh-graph: link:<HOST_DIR>`：后启动者会在
+# 就绪对账/安装时把它改写成当前解析出的目标。若先启动的实例仍在运行（重启插件或惰性解析插件
+# 时会重新读该 link），它的目视证据就可能指向**错误构建**（2026-10-12 实测：g-479 的实例把
+# g-481 的 link 改写掉，而当时 g-481 的实例正在运行）。故在就绪对账与改写（安装）之前先做
+# **只读**检测：
+#   ① 无既有 link（或非 link:）⇒ 首次安装，静默通过（与今天逐字相同）；
+#   ② 既有 link 目标 == 本次 HOST_DIR ⇒ 无冲突，静默通过（与今天逐字相同）；
+#   ③ 存在且不同 ⇒ 醒目多行警告（见 warn_shared_link_conflict），不改变成功路径退出码；
+#   ④ 另有存活实例状态文件证明「同 DSH_HOME 上仍有活跃实例指向别处」⇒ fail-closed 拒绝启动。
+# 检测本身零写入；状态文件（INSTANCE_STATE）只在**真正进入启动路径、即将 exec** 前写一次，
+# 故 --dry-run 仍是零副作用。
+INSTANCE_STATE="$DSH_HOME/.dsh-test-web-instance.json"
+EXISTING_HOST_DIR=""; LINK_DEP_KNOWN=0; LINK_CONFLICT=0; LINK_ACTIVE_ELSEWHERE=0
+if [ -f "$PROFILE_MANIFEST" ] && command -v node >/dev/null 2>&1; then
+  LINK_DEP_KNOWN=1
+  EXISTING_HOST_DIR=$(node -e 'try{const m=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const d=m&&m.dependencies?m.dependencies["dsh-graph"]:void 0;process.stdout.write(typeof d==="string"?d:"")}catch{}' "$PROFILE_MANIFEST" 2>/dev/null || true)
+  case "$EXISTING_HOST_DIR" in
+    link:*) EXISTING_HOST_DIR="${EXISTING_HOST_DIR#link:}";;
+    *) EXISTING_HOST_DIR="";;
+  esac
+  if [ -n "$EXISTING_HOST_DIR" ]; then
+    EXISTING_HOST_DIR=$(realpath -m "$EXISTING_HOST_DIR" 2>/dev/null || printf '%s' "$EXISTING_HOST_DIR")
+    [ "$EXISTING_HOST_DIR" = "$HOST_DIR" ] || LINK_CONFLICT=1
+  fi
+fi
+# $1: PID、$2: 该实例记录的端口 → 该 PID 是否仍像一个存活的本脚本实例。状态文件可能陈旧
+# （实例已退出）：PID 不存活即视为未检出；PID 复用由 cmdline 兜底（能读到 /proc 时要求它确实
+# 像 dsh web；读不到 /proc（非 Linux）时不额外要求）。
+instance_pid_alive() {
+  local pid=$1 port=$2 cmd=""
+  case "$pid" in ''|*[!0-9]*) return 1;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [ -r "/proc/$pid/cmdline" ]; then
+    cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+    case "$cmd" in
+      *dsh*web*|*"--port $port"*) return 0;;
+      *) return 1;;
+    esac
+  fi
+  return 0
+}
+# 「疑似仍有活跃实例指向别处」：本次 link 有冲突，且上次启动留在本 DSH_HOME 内的状态文件里
+# PID 仍存活、记录的目标 ≠ 本次目标。判定不出即按「未检出」处理（只警告、不阻拦）。
+shared_home_active_elsewhere() {
+  [ "$LINK_CONFLICT" -eq 1 ] || return 1
+  [ -f "$INSTANCE_STATE" ] || return 1
+  command -v node >/dev/null 2>&1 || return 1
+  local rec="" pid="" host="" port=""
+  rec=$(node -e 'try{const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write([r.pid,r.host_dir,r.port].join("\t"))}catch{}' "$INSTANCE_STATE" 2>/dev/null || true)
+  [ -n "$rec" ] || return 1
+  IFS=$'\t' read -r pid host port <<<"$rec" || true
+  [ -n "$host" ] || return 1
+  host=$(realpath -m "$host" 2>/dev/null || printf '%s' "$host")
+  [ "$host" != "$HOST_DIR" ] || return 1
+  instance_pid_alive "$pid" "$port"
+}
+if shared_home_active_elsewhere; then LINK_ACTIVE_ELSEWHERE=1; fi
+# 醒目多行警告（stderr）：共享 DSH_HOME 绝对路径、既有目标、本次目标、后果与可执行出路。
+warn_shared_link_conflict() {
+  printf '\n' >&2
+  printf '!!========================================================================!!\n' >&2
+  printf '!! 警告：共享 DSH_HOME 里的 dsh-graph link 与本次目标不同（并行实例冲突）!!\n' >&2
+  printf '!!========================================================================!!\n' >&2
+  printf '  共享 DSH_HOME  ：%s\n' "$DSH_HOME" >&2
+  printf '  profile        ：%s\n' "$PROFILE_MANIFEST" >&2
+  printf '  既有 link 目标 ：%s\n' "$EXISTING_HOST_DIR" >&2
+  printf '  本次 link 目标 ：%s\n' "$HOST_DIR" >&2
+  printf '  为何共享       ：DSH_HOME 按稳定版本 %s 共享（同一预发布族只装一次 profile），\n' "$STABLE_VERSION" >&2
+  printf '                   故同一稳定版本的并行实例共用这一份 profile。\n' >&2
+  printf '  后果           ：本次启动会把既有 link 改写成上面「本次 link 目标」。若那个实例仍在\n' >&2
+  printf '                   运行，它在重启插件/惰性解析插件时会读到被改写的 link ⇒ 目视证据可能\n' >&2
+  printf '                   指向错误构建。\n' >&2
+  printf '  出路           ：在目标 worktree 内运行本脚本 —— REPO_ROOT 落在该 worktree、\n' >&2
+  printf '                   tmp/dsh-test 随之独立，天然拿到独立 DSH_HOME：\n' >&2
+  printf '                     cd <目标 worktree> && bash scripts/dsh-test-web.sh %s\n' "$FULL_VERSION" >&2
+  printf '                   （或先停掉那个实例，再以本次目标启动。）\n' >&2
+  printf '\n' >&2
+}
+# fail-closed：疑似仍有活跃实例指向别处 ⇒ 拒绝启动，不写 profile、不启动实例，非零退出。
+die_shared_link_conflict() {
+  printf '\n' >&2
+  printf '错误：拒绝启动 —— 共享 DSH_HOME 上疑似仍有活跃实例指向既有 link，本次启动会把它改写成\n' >&2
+  printf '      %s（不写 profile、不启动实例）。\n' "$HOST_DIR" >&2
+  printf '  共享 DSH_HOME  ：%s\n' "$DSH_HOME" >&2
+  printf '  既有 link 目标 ：%s\n' "$EXISTING_HOST_DIR" >&2
+  printf '  实例状态文件   ：%s（其中 PID 仍存活且记录的目标 ≠ 本次目标）\n' "$INSTANCE_STATE" >&2
+  printf '  出路           ：在目标 worktree 内运行本脚本以获得独立 DSH_HOME\n' >&2
+  printf '                     （cd <目标 worktree> && bash scripts/dsh-test-web.sh %s）；\n' "$FULL_VERSION" >&2
+  printf '                   或先停掉那个实例、或改用独立 DSH_HOME；只读预检 --dry-run 不受影响。\n' >&2
+  exit 2
+}
 # $1: pnpm project dir; remaining args: packages whose build scripts are allowed.
 write_pnpm_root() {
   local dir=$1 pkg; shift
@@ -264,6 +357,26 @@ doctor() {
   else
     printf 'host package  ：缺失(!)：%s/package.json\n' "$HOST_DIR"; blockers+=("本地插件缺失：$HOST_DIR/package.json（需先构建 dist 或指向 dsh-graph-host）")
   fi
+  printf -- '--- 共享 DSH_HOME 的 link 冲突检测（并行实例，g-483）---\n'
+  printf '共享 DSH_HOME  ：%s（按稳定版本 %s 共享 profile）\n' "$DSH_HOME" "$STABLE_VERSION"
+  if [ ! -f "$PROFILE_MANIFEST" ]; then
+    printf '既有 link 目标 ：无 profile manifest（首次安装；本次将写入 link:%s）\n' "$HOST_DIR"
+  elif [ "$LINK_DEP_KNOWN" -eq 0 ]; then
+    printf '既有 link 目标 ：无法解析（缺 node；仅启动路径保证有 node）⇒ 预检不判定冲突\n'
+  elif [ -z "$EXISTING_HOST_DIR" ]; then
+    printf '既有 link 目标 ：非 link:（首次安装；本次将写入 link:%s）\n' "$HOST_DIR"
+  elif [ "$LINK_CONFLICT" -eq 0 ]; then
+    printf '既有 link 目标 ：%s（与本次一致 ⇒ 无冲突，行为与今天逐字相同）\n' "$EXISTING_HOST_DIR"
+  else
+    printf '既有 link 目标 ：%s（≠ 本次目标 ⇒ 启动时会改写，并给出醒目多行警告）\n' "$EXISTING_HOST_DIR"
+    printf '本次 link 目标 ：%s\n' "$HOST_DIR"
+    if [ "$LINK_ACTIVE_ELSEWHERE" -eq 1 ]; then
+      printf '活跃实例冲突   ：疑似仍有活跃实例指向别处(!)（状态文件 %s）⇒ 启动路径将 fail-closed 拒绝\n' "$INSTANCE_STATE"
+      blockers+=("共享 DSH_HOME 上疑似仍有活跃实例指向别处（link 冲突）：$DSH_HOME —— 启动会被拒绝；请在目标 worktree 内运行以获得独立 DSH_HOME")
+    else
+      printf '活跃实例冲突   ：未检出（无存活实例状态文件；启动前会给出醒目警告）\n'
+    fi
+  fi
   printf -- '--- 已安装 profile / 运行时（复用启动路径判定）---\n'
   if [ -x "$RUNTIME_DSH" ]; then printf 'RUNTIME_DSH  ：%s（可执行）\n' "$RUNTIME_DSH"
   else printf 'RUNTIME_DSH  ：%s  [%s]\n' "$RUNTIME_DSH" "$(dir_state "$RUNTIME_DSH")"; missing+=("DSH 运行时（启动时将 pnpm add，需 registry）:$RUNTIME_DSH"); fi
@@ -303,6 +416,12 @@ doctor() {
 }
 if [ "$DRY_RUN" -eq 1 ]; then
   if doctor; then exit 0; else exit 1; fi
+fi
+# g-483 启动路径：先响铃（警告路径不改变成功路径退出码），再按「疑似活跃实例指向别处」fail-closed。
+# 两者都在任何 mkdir / install / profile 改写 / 启动**之前**发生。
+if [ "$LINK_CONFLICT" -eq 1 ]; then
+  warn_shared_link_conflict
+  if [ "$LINK_ACTIVE_ELSEWHERE" -eq 1 ]; then die_shared_link_conflict; fi
 fi
 [ -d "$TMP_PATH" ] || mkdir -p "$TMP_PATH"
 TMP_ROOT=$(realpath -e "$TMP_PATH") || die "无法 canonicalize 测试根：$TMP_PATH"
@@ -380,5 +499,14 @@ fi
 printf '==> %s\n' "$BUNDLE_ENTRY"
 cmd=("${DSH_CMD[@]}" web --no-open --port "$PORT")
 [ -n "$HOST" ] && cmd+=(--host "$HOST")
+# g-483：把本次实例登记进**本 DSH_HOME 内**的状态文件（只供下一次启动做「疑似活跃实例指向
+# 别处」判定）。写在 exec 之前：脚本用 exec 替换自身进程、PID 不变 ⇒ 实例存活期间该 PID 一直
+# 可被 kill -0 命中。此写入位于预检 return 之后，故 --dry-run 仍是零副作用。
+if command -v node >/dev/null 2>&1; then
+  if ! node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({pid:Number(process.argv[2]),host_dir:process.argv[3],port:Number(process.argv[4]),script:process.argv[5],started_at:new Date().toISOString()})+"\n")' \
+      "$INSTANCE_STATE" "$$" "$HOST_DIR" "$PORT" "$SELF_DIR/dsh-test-web.sh"; then
+    printf '警告：无法写入实例状态文件 %s（并行实例冲突将无从判定）\n' "$INSTANCE_STATE" >&2
+  fi
+fi
 printf '==> 加载本地 dsh-graph 插件\n'
 if [ "$USE_PROXY" -eq 1 ]; then exec proxychains4 -q "${cmd[@]}"; else exec "${cmd[@]}"; fi
