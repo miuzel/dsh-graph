@@ -122,6 +122,12 @@ function countOccurrences(hay: string, needle: string): number {
   return n;
 }
 
+/** 去掉 `//` 行注释后的**可执行代码**面：注释里说明性地提到旧式样（例如「旧式 `vw - 16` 只钳到 …」）
+ *  不得被误判成回退；只有代码里真的出现旧式样才算回退（g-490 判据 3 收口负向对照用）。 */
+function codeOnly(src: string): string {
+  return src.split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+}
+
 /** 从**真实源码**求值页签归属表（不是测试里另抄一份），使表本身也被守卫。 */
 function loadTabTable(modalSrc: string): TabTable {
   const start = modalSrc.indexOf(TABLE_START);
@@ -343,8 +349,15 @@ function hintContractProblems(modalSrc: string): string[] {
     ['if (e && e.key === "Escape") setOpenHint(null);', "Esc 必须关闭浮层（全局兜底）"],
     ['t.closest(".dg-settings-tip")', "浮层外点击必须关闭浮层"],
     ['window.addEventListener("scroll", onScroll, true)', "滚动必须关闭浮层（浮层不跟随时不留错位残影）"],
-    ['position: "fixed", zIndex: 100001', "浮层必须固定定位（不被弹窗 overflow 裁剪）"],
+    ['position: "fixed", zIndex: 100001, left, maxWidth: HINT_MAX_WIDTH', "浮层必须固定定位（不被弹窗 overflow 裁剪）+ 宽度取自唯一常量"],
     ["const above = geom ? (geom.top > 180 || vh === 0) : true;", "浮层必须在视口边界处翻转（不越出上边界）"],
+    // g-490（判据 3 收口，负责人 2026-10-12 裁决「现在就补」）：左右边界按**浮层自身宽度**钳位。
+    // 原位置是「floating 定位 + 边界翻转」，此处**同位置改判**为逐条等价且更强的钳位契约
+    // （旧式只钳 vw-16、未计浮层宽 ⇒ 窄视口右缘被裁；回退即被下方负向断言与 g490 变异对照逮住）。
+    ["const HINT_MAX_WIDTH = 320;", "浮层宽上界必须显式声明（= CSS 最大宽，与 maxWidth 同源）"],
+    ["const hintMaxLeftFor = (vw) => {", "右缘安全落点必须由单一算式给出（左右各 8px，计入浮层宽）"],
+    ["const left = Math.max(8, Math.min(rect.left, hintMaxLeftFor(vw)));", "触发器几何必须按浮层宽度钳位左右边界（left ≥ 8 且 left + 浮层宽 ≤ vw − 8）"],
+    ["const left = Math.max(8, Math.min(Number(geom?.left) || 0, hintMaxLeftFor(vw)));", "定位样式必须按当前视口宽重算钳位（resize 后右缘不得被裁）"],
     ["const [openHint, setOpenHint] = React.useState(null)", "至多一个浮层：唯一 openHint 状态（同屏只允许一个）"],
   ];
   for (const [needle, why] of contract) {
@@ -374,6 +387,12 @@ function hintContractProblems(modalSrc: string): string[] {
   }
   if (countOccurrences(modalSrc, '"aria-label": text,\n      title: text,') !== 0) {
     problems.push("`(?)` 不得回退「aria-label + title 同文」的旧契约（原生 title 已被自绘浮层取代）");
+  }
+  // g-490（判据 3 收口）负向：左边界**不得**只钳到 `vw-16`（忽略浮层宽 ≤320 ⇒ 窄视口右缘被视口裁掉）。
+  // 旧式 `Math.min(rect.left, vw - 16)` 一旦回退即在此判红，与 g490 变异负向对照同口径。
+  // 判定只看**可执行代码**（`codeOnly`）：源码注释里说明性提到旧式样不算回退。
+  if (countOccurrences(codeOnly(modalSrc), "vw - 16") !== 0) {
+    problems.push("`(?)` 浮层左边界不得只钳到 vw-16（未计浮层宽 ⇒ 窄视口右缘被视口裁掉）");
   }
   if (countOccurrences(modalSrc, "const AUTOMATION_HINT_KEYS = {") !== 1) {
     problems.push("AUTOMATION_HINT_KEYS（六键逐键说明映射）必须恰好定义一次");
@@ -936,6 +955,28 @@ test("g-479 负向对照：搬走页签面板 / 删归属项 / 跨页签重复�
   // ⑫ g-490：删掉「至多一个浮层」的唯一状态 ⇒ 必红
   const h7 = hintMut("      const [openHint, setOpenHint] = React.useState(null);\n", "", "删掉唯一 openHint 状态");
   assert.ok(h7.some((s) => s.includes("openHint")), `应点名唯一浮层状态缺失，实得：${h7.join(" / ")}`);
+  // ⑭ g-490（判据 3 收口，负责人 2026-10-12 裁决「现在就补」）：左边界回退为**只钳 vw-16**（忽略浮层宽）
+  //    ⇒ 必红（窄视口右缘被视口裁掉）。
+  const h8 = hintMut(
+    "        const left = Math.max(8, Math.min(rect.left, hintMaxLeftFor(vw)));\n",
+    "        const left = Math.max(8, Math.min(rect.left, vw - 16));\n",
+    "浮层左边界回退为只钳 vw-16（忽略浮层宽）",
+  );
+  assert.ok(h8.some((s) => s.includes("vw-16")), `应点名「只钳 vw-16」，实得：${h8.join(" / ")}`);
+  // ⑮ g-490（判据 3 收口）：**左右边界钳位被整体移除**（几何直取触发器 left）⇒ 必红
+  const h9 = hintMut(
+    "        const left = Math.max(8, Math.min(rect.left, hintMaxLeftFor(vw)));\n",
+    "        const left = rect.left;\n",
+    "移除浮层左右边界钳位",
+  );
+  assert.ok(h9.some((s) => s.includes("按浮层宽度钳位左右边界")), `应点名钳位算式缺失，实得：${h9.join(" / ")}`);
+  // ⑯ g-490（判据 3 收口）：定位样式不再按当前视口重算（resize 后右缘被裁）⇒ 必红
+  const h10 = hintMut(
+    "        const left = Math.max(8, Math.min(Number(geom?.left) || 0, hintMaxLeftFor(vw)));\n",
+    "        const left = geom ? geom.left : 8;\n",
+    "定位样式不再重算钳位（resize 后右缘被裁）",
+  );
+  assert.ok(h10.some((s) => s.includes("按当前视口宽重算钳位")), `应点名 resize 重算缺失，实得：${h10.join(" / ")}`);
 
   // ⑬ g-490：把 project.yaml 行**搬回页脚** ⇒ 标题栏落点判据必红（回迁即红）
   const footerMut = (from: string, to: string, label: string) => {

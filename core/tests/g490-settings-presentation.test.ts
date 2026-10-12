@@ -601,6 +601,53 @@ test("g-490 判据7（扩写）：editHint / catalogReady 折叠进 (?)——正
   assert.equal(deepTextOf(readyPop[0]), readyText, "目录说明浮层正文 ≡ i18n 原文");
 });
 
+// ========== 判据 3（收口）：窄视口右缘按浮层自身宽度钳位 ==========
+
+test("g-490 判据3（收口）：浮层定位按**浮层自身宽度**钳位左右边界——800/1024/1280 逐档验算 + resize 重算", () => {
+  const src = readModal();
+  const { zh } = loadClientI18n();
+
+  // 谓词正向（与负向对照同口径）：真实源码必须零问题
+  assert.deepEqual(hintClampProblems(src), [], "判据3 钳位契约必须全绿：\n" + hintClampProblems(src).join("\n"));
+
+  // 浮层宽上界 = CSS 最大宽（二择一：**取上界**，不实测 —— 理由见源码 HINT_MAX_WIDTH 注释）
+  assert.equal(hintMaxWidthOf(src), HINT_MAX_WIDTH_USED, "浮层宽上界必须取自 CSS maxWidth 的同一常量");
+  assert.equal(countOccurrences(src, "maxWidth: HINT_MAX_WIDTH"), 1, "定位样式的 maxWidth 必须与钳位算式同源（不得各写一份数字）");
+
+  // 逐档验算「left ≥ 8 且 left + 浮层宽 ≤ vw − 8」（题面逐字：800 / 1024 / 1280）
+  const maxLeft = hintMaxLeftFn(src);
+  for (const vw of VIEWPORT_WIDTHS) {
+    const left = maxLeft(vw);
+    assert.equal(left, Math.max(8, vw - 8 - HINT_MAX_WIDTH_USED), `vw=${vw}：安全落点必须是 vw − 8 − 浮层宽上界`);
+    assert.ok(left >= 8, `vw=${vw}：left ≥ 8`);
+    assert.ok(left + HINT_MAX_WIDTH_USED <= vw - 8, `vw=${vw}：right ≤ vw − 8（右缘不得被视口裁掉）`);
+  }
+  // 具体数值（防止算式被等价重写时静默漂移）
+  assert.equal(maxLeft(800), 472, "vw=800 ⇒ left 472（472+320 ≤ 792；旧式只钳 vw−16=784 ⇒ 右缘溢出 312px）");
+  assert.equal(maxLeft(1024), 696, "vw=1024 ⇒ left 696");
+  assert.equal(maxLeft(1280), 952, "vw=1280 ⇒ left 952（宽视口下才与触发器原位重合）");
+  assert.equal(maxLeft(400), 72, "极窄视口（vw=400）⇒ 仍满足左右安全边距");
+
+  // 触发器几何：贴右缘触发器（标题栏 `(?)` 的窄视口实况）在三档视口下都被钳进安全区
+  for (const vw of VIEWPORT_WIDTHS) {
+    const geom = hintGeometryFn(src, vw)(elStub({ left: vw - 4, top: 300, bottom: 316 }));
+    assert.ok(geom.left + HINT_MAX_WIDTH_USED <= vw - 8, `vw=${vw}：贴右缘触发器必须被钳进 vw − 8 安全区`);
+    assert.equal(geom.left, Math.max(8, vw - 8 - HINT_MAX_WIDTH_USED), `vw=${vw}：贴右缘触发器的落点 = 安全落点`);
+  }
+  // 左边界钳位与「不误钳」两侧都钉住
+  const g = hintGeometryFn(src, 800);
+  assert.equal(g(elStub({ left: -120, top: 300, bottom: 316 })).left, 8, "触发器越出左缘 ⇒ left 钳到 8");
+  assert.equal(g(elStub({ left: 148, top: 300, bottom: 316 })).left, 148, "未越界 ⇒ left 原样保留（钳位不误伤常规落点）");
+  assert.equal(g(elStub({ left: 600, top: 300, bottom: 316 })).left, 472, "触发器越过安全区 ⇒ 钳到 vw − 8 − 浮层宽");
+
+  // resize 重算：定位样式分支按**当前**视口宽再钳一次；并与几何算式同源（不产生第二套口径）
+  const styleStart = src.indexOf("const hintPlacementStyle = (open) => {");
+  const styleSrc = src.slice(styleStart, src.indexOf("\n      };", styleStart));
+  assert.match(styleSrc, /const vw = \(typeof window !== "undefined" && window\.innerWidth\) \|\| 0;/, "定位样式必须读取当前视口宽");
+  assert.match(styleSrc, /hintMaxLeftFor\(vw\)/, "定位样式必须复用同一钳位算式（resize 后重算）");
+  assert.doesNotMatch(styleSrc, /vw - 16/, "定位样式不得再只钳 vw-16（忽略浮层宽 ⇒ 窄视口右缘被裁）");
+});
+
 // ========== 引擎真源 ↔ 客户端消费 一致性 ==========
 
 test("g-490 真源一致性：AUTOMATION_UNSET_SCOPE（引擎口径来源）↔ settings API 下发 ↔ schema_hints ↔ 客户端消费", () => {
@@ -673,6 +720,136 @@ function editHintSiteProblems(modalSrc: string): string[] {
   return problems;
 }
 
+/** ===== 判据 3（收口，负责人 2026-10-12 裁决「现在就补」）：窄视口右缘按**浮层自身宽度**钳位 =====
+ *  契约（题面逐字）：`left ≥ 8` 且 `left + 浮层宽 ≤ vw − 8`，浮层宽取 **CSS 最大宽 320 作上界**
+ *  （不实测：打开前 `offsetWidth` 恒 0/取不到节点 ⇒ 首帧仍溢出，详见源码 `HINT_MAX_WIDTH` 注释）。
+ *  本组谓词**从真实源码取算式求值**（不复制算法 ⇒ 与实现不漂移），并对 800/1024/1280 三档视口
+ *  逐一验算左右边界；滚动/resize 重算由「定位样式里也钳一次」的断言钉住。 */
+const HINT_MAX_WIDTH_USED = 320;
+/** 期望的浮层宽上界（从源码里的 `HINT_MAX_WIDTH` 常量读回，与 CSS `maxWidth` 同源）。 */
+function hintMaxWidthOf(modalSrc: string): number {
+  const m = /const HINT_MAX_WIDTH = (\d+);/.exec(modalSrc);
+  return m ? Number(m[1]) : NaN;
+}
+/** 从**真实源码**取 `hintMaxLeftFor` 求值（算式不复制 ⇒ 断言不会与实现漂移）。
+ *  `HINT_MAX_WIDTH` 是组件内常量 ⇒ 按**源码里读回的值**作为依赖注入（与 CSS maxWidth 同源，
+ *  源码把上界改成别的数字时，本断言会连同 `hintMaxWidthOf` 一起报红，不会静默跟随）。 */
+function hintMaxLeftFn(modalSrc: string): (vw: number) => number {
+  return extractFn(modalSrc, "const hintMaxLeftFor = (vw) => {", "\n      };", "hintMaxLeftFor", {
+    HINT_MAX_WIDTH: hintMaxWidthOf(modalSrc),
+  }) as (vw: number) => number;
+}
+/** 从**真实源码**取 `hintGeometryOf` 求值（桩入最小 `window`；只走几何分支，不依赖 DOM 布局引擎）。
+ *  源码按 `el.getBoundingClientRect()` 取矩形（真实 DOM 契约）⇒ 这里用**最小元素桩**喂入矩形，
+ *  与浏览器调用形状一致（不把矩形直接当元素传，否则会走「取不到矩形 ⇒ null」分支而失去判别力）。 */
+function hintGeometryFn(modalSrc: string, vw: number): (rect: any) => any {
+  const sandboxWindow = { innerWidth: vw };
+  return extractFn(
+    modalSrc,
+    "const hintGeometryOf = (el) => {",
+    "\n      };",
+    "hintGeometryOf",
+    {
+      window: sandboxWindow,
+      hintMaxLeftFor: hintMaxLeftFn(modalSrc),
+    },
+  ) as (rect: any) => any;
+}
+/** 把「矩形」包成最小元素桩（与源码 `el.getBoundingClientRect()` 的调用形状一致）。 */
+const elStub = (rect: any) => ({ getBoundingClientRect: () => rect });
+
+/** 去掉 `//` 行注释后再做「旧式样是否复活」的源码面判定：注释里**说明性地**提到旧式
+ *  `vw - 16`（例如「旧式 Math.min(rect.left, vw - 16) 只钳到 …」）不得被误判成回退；
+ *  只有**可执行代码里**真的出现旧式样才算回退。（字符串字面量不在本组判定的关注面内。） */
+function stripLineComments(src: string): string {
+  return src.split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+}
+
+/** 判据 3 的契约检查（真实源码 / 内存变异副本共用 ⇒ 负向对照与正向裁决同口径）。 */
+function hintClampProblems(modalSrc: string): string[] {
+  const problems: string[] = [];
+  const code = stripLineComments(modalSrc);
+  const W = hintMaxWidthOf(modalSrc);
+  if (W !== HINT_MAX_WIDTH_USED) {
+    problems.push(`判据3：浮层宽上界必须是 CSS 最大宽 ${HINT_MAX_WIDTH_USED}（实得 ${Number.isNaN(W) ? "缺失" : W}）`);
+  }
+  // 「钳位被整体移除 / 又退回只钳 vw-16」——两条独立负例的源码级腿（留痕、不只是求值副作用）。
+  if (/vw\s*-\s*16/.test(code)) {
+    problems.push("判据3：浮层左边界不得只钳到 vw-16（忽略浮层宽度 ⇒ 窄视口右缘被视口裁掉）");
+  }
+  let maxLeft: (vw: number) => number;
+  try {
+    maxLeft = hintMaxLeftFn(modalSrc);
+  } catch (e) {
+    return problems.concat([`判据3：无法核对浮层右缘钳位（${(e as Error).message}）`]);
+  }
+  if (typeof maxLeft !== "function") return problems.concat(["判据3：hintMaxLeftFor 不可求值（右缘钳位算式缺失）"]);
+  // ① 视口宽 → 右缘安全落点，逐档验算「left + 浮层宽 ≤ vw − 8」（宽视口下等于 vw − 328）。
+  for (const vw of VIEWPORT_WIDTHS) {
+    const got = maxLeft(vw);
+    const want = Math.max(8, vw - 8 - HINT_MAX_WIDTH_USED);
+    if (got !== want) {
+      problems.push(`判据3：vw=${vw} 时右缘安全落点应为 ${want}（vm − 8 − ${HINT_MAX_WIDTH_USED}），实得 ${got}`);
+    }
+    if (!Number.isFinite(got) || got < 8) problems.push(`判据3：vw=${vw} 时安全落点不得小于左边界 8（实得 ${got}）`);
+    if (got + HINT_MAX_WIDTH_USED > vw - 8) {
+      problems.push(`判据3：vw=${vw} 时 left + 浮层宽 = ${got + HINT_MAX_WIDTH_USED} 超出 vw − 8 = ${vw - 8}（右缘被裁）`);
+    }
+  }
+  for (const bad of [0, -1, NaN, undefined, null]) {
+    if (maxLeft(bad as any) !== 8) problems.push(`判据3：视口宽不可用（${String(bad)}）时必须退化为左边界 8`);
+  }
+  // ② 触发器几何：贴着视口右缘的触发器在三档视口下都必须被钳进安全区。
+  for (const vw of VIEWPORT_WIDTHS) {
+    let geom: any;
+    try {
+      geom = hintGeometryFn(modalSrc, vw)(elStub({ left: vw - 4, top: 300, bottom: 316 }));
+    } catch (e) {
+      problems.push(`判据3：无法核对 vw=${vw} 的触发器几何（${(e as Error).message}）`);
+      continue;
+    }
+    if (!geom || typeof geom.left !== "number") { problems.push(`判据3：vw=${vw} 时触发器几何不可求值`); continue; }
+    if (geom.left + HINT_MAX_WIDTH_USED > vw - 8) {
+      problems.push(`判据3：vw=${vw} 贴右缘触发器下 left + 浮层宽 = ${geom.left + HINT_MAX_WIDTH_USED} 超出 vw − 8 = ${vw - 8}`);
+    }
+    if (geom.left < 8) problems.push(`判据3：vw=${vw} 时 left=${geom.left} 小于左安全边距 8`);
+  }
+  // ③ 左边界：触发器在视口左侧之外（横向滚动容器）⇒ 仍须钳到 8；正常位置原样保留（不误钳）；
+  //    越过右安全区（vw=800 ⇒ 安全落点 472）⇒ 钳到安全落点。
+  const g800 = hintGeometryFn(modalSrc, 800);
+  if (g800(elStub({ left: -120, top: 300, bottom: 316 }))?.left !== 8) problems.push("判据3：触发器在视口左侧之外时 left 必须钳到 8");
+  if (g800(elStub({ left: 148, top: 300, bottom: 316 }))?.left !== 148) problems.push("判据3：未越界时 left 不得被改写（左边界钳位不得误伤常规落点）");
+  if (g800(elStub({ left: 700, top: 300, bottom: 316 }))?.left !== 472) {
+    problems.push("判据3：触发器越出右安全区时 left 必须钳到 vw − 8 − 浮层宽（vw=800 ⇒ 472）");
+  }
+  if (g800(elStub({ left: 472, top: 300, bottom: 316 }))?.left !== 472) {
+    problems.push("判据3：恰好落在安全落点上时 left 不得被进一步改写");
+  }
+  // ④ 滚动/resize 重算：定位样式分支必须**再钳一次**（几何是打开那一刻的快照，窗口变窄后须重算）。
+  const styleStart = modalSrc.indexOf("const hintPlacementStyle = (open) => {");
+  const styleSrc = styleStart < 0 ? "" : modalSrc.slice(styleStart, modalSrc.indexOf("\n      };", styleStart));
+  if (!styleSrc) problems.push("判据3：找不到 `(?)` 定位样式分支（无法核对 resize 重算）");
+  else {
+    if (!/Math\.max\(8, Math\.min\([\s\S]{0,80}?hintMaxLeftFor\(vw\)\)\)/.test(styleSrc)) {
+      problems.push("判据3：定位样式分支必须按当前视口宽重算左右钳位（resize 时右缘不得被裁）");
+    }
+    if (!/const vw = \(typeof window !== "undefined" && window\.innerWidth\) \|\| 0;/.test(styleSrc)) {
+      problems.push("判据3：定位样式分支必须读取当前视口宽（否则 resize 后无法重算）");
+    }
+    if (!/maxWidth: HINT_MAX_WIDTH/.test(styleSrc)) {
+      problems.push("判据3：定位样式分支的 maxWidth 必须取自同一常量 HINT_MAX_WIDTH（与钳位算式同源）");
+    }
+    // 负向：样式分支若退回「直接用几何 left」，则 resize 后不再重钳 ⇒ 必红
+    if (/left: geom \? geom\.left : 8/.test(styleSrc)) {
+      problems.push("判据3：定位样式不得直接用几何 left（原地钳位已移除 ⇒ resize 后右缘被裁）");
+    }
+  }
+  return problems;
+}
+
+/** 判据 3 验算用的视口宽度（题面逐字：800 / 1024 / 1280）。 */
+const VIEWPORT_WIDTHS = [800, 1024, 1280];
+
 function presentationProblems(modalSrc: string, zh: Dict): string[] {
   const problems: string[] = [];
   // ---- 判据 1：`(?)` 浮层契约 ----
@@ -699,6 +876,8 @@ function presentationProblems(modalSrc: string, zh: Dict): string[] {
     }
   }
   if (!modalSrc.includes("const [openHint, setOpenHint] = React.useState(null)")) problems.push("判据1：缺少唯一浮层状态");
+  // ---- 判据 3（收口）：窄视口右缘必须按**浮层自身宽度**钳位 ----
+  problems.push(...hintClampProblems(modalSrc));
   // ---- 判据 2：生效值输入框同构 ----
   const unset = renderModal(modalSrc, unsetReviewForm(), zh, { tab: "review" });
   const boxes = unset.nodes.filter((n) => String(n.props?.className ?? "") === "dg-settings-effective-value");
@@ -826,8 +1005,16 @@ test("g-490 改坏即红：各判据契约在内存变异下逐项报红（含�
     { name: "目录就绪说明改回常驻平铺", src: before.replace('catReady ? settingsHintIcon(dgT("settings.catalogReady")) : null', 'catReady ? dgT("settings.catalogReady") : null'), expect: /不得出现在常驻正文渲染面/ },
     // g-490 判据 7（扩写）负例④：把「仍留正文」的必读警示（reviewUnsetHint）悄悄折叠 ⇒ 必红
     { name: "必读警示 reviewUnsetHint 被悄悄折叠", src: before.replace('h("div", { style: metaStyle }, dgT("settings.reviewUnsetHint")),', 'settingsHintIcon(dgT("settings.reviewUnsetHint")),'), expect: /属「仍留正文」清单/ },
+    // g-490 判据 3（收口）负例①：左边界只钳到 `vw-16`（**忽略浮层宽**）⇒ 必红。
+    // 这正是 att-002 评审残余①的旧式样：窄视口下 left 可达 vw-16，右缘再溢出浮层宽 −16 ⇒ 被视口裁掉。
+    { name: "浮层左边界只钳 vw-16（忽略浮层宽）", src: before.replace("        const left = Math.max(8, Math.min(rect.left, hintMaxLeftFor(vw)));", "        const left = Math.max(8, Math.min(rect.left, vw - 16));"), expect: /只钳到 vw-16/ },
+    // g-490 判据 3（收口）负例②：**左右边界钳位被整体移除**（直接用触发器 left，或安全落点退化）⇒ 必红。
+    { name: "左右边界钳位被移除（几何直取触发器 left）", src: before.replace("        const left = Math.max(8, Math.min(rect.left, hintMaxLeftFor(vw)));", "        const left = rect.left;"), expect: /超出 vw − 8|右缘安全落点应为|不得被改写|必须钳到/ },
+    { name: "左右边界钳位被移除（安全落点不再计浮层宽）", src: before.replace("        return Math.max(8, n - 8 - HINT_MAX_WIDTH);", "        return Math.max(8, n);"), expect: /右缘安全落点应为/ },
+    // g-490 判据 3（收口）负例③：定位样式不再按当前视口重算（几何原地快照 ⇒ resize 后右缘被裁）⇒ 必红
+    { name: "resize 后不再重算右缘钳位", src: before.replace("        const left = Math.max(8, Math.min(Number(geom?.left) || 0, hintMaxLeftFor(vw)));", "        const left = geom ? geom.left : 8;"), expect: /resize 后右缘被裁|不得直接用几何 left|重算左右钳位/ },
   ];
-  assert.ok(mutants.length >= 17, `变异负向对照只增不减（实得 ${mutants.length} 项：11 项既有 + 4 项判据 7 扩写新增 + 1 项判据 4 改判新增 + 1 项判据 4 改判 2 新增）`);
+  assert.ok(mutants.length >= 21, `变异负向对照只增不减（实得 ${mutants.length} 项：17 项既有 + 4 项判据 3 收口新增：仅钳 vw-16 / 钳位移除（两种形态）/ resize 不重算）`);
   for (const m of mutants) {
     assert.notEqual(m.src, before, `变异体「${m.name}」必须真的改动了源码（否则是空变异）`);
     const got = presentationProblems(m.src, zh).join(" | ");

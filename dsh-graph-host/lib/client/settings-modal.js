@@ -475,21 +475,41 @@
       const [openHint, setOpenHint] = React.useState(null);
       const hintGeomRef = React.useRef(null);
       const hintLastEnterRef = React.useRef(0);
-      /** 触发器矩形 → 浮层定位（fixed；上方空间不足则**翻到下方**，左侧不越出视口）。 */
+      /** g-490（判据 3 收口，负责人 2026-10-12 裁决「现在就补」）：浮层宽度**上界** = CSS 最大宽。
+       *  现行两条定位分支都按 `maxWidth: 320` 渲染（打开态；未测量态与无 JS 测量能力时的几何都走同一
+       *  上界）⇒ 以 320 作上界**不会低估**，配合左右各 8px 安全边距即得「右缘钳位」的保守落点。
+       *  之所以取上界而不是 `offsetWidth` 实测：①实测在**打开前**（首次 hover）恒为 0 或取不到节点，
+       *  算出来的 `left` 会低估宽度 ⇒ 首帧仍会溢出（正是本项要修的现象）；②上界是**纯函数**，正向/负向
+       *  对照可逐视口宽度逐字验算，不依赖 DOM 布局引擎；③与 CSS 是同一份数字来源（`maxWidth`），
+       *  改动其一会让下方契约断言（`HINT_MAX_WIDTH_USED`）立即报红。 */
+      const HINT_MAX_WIDTH = 320;
+      /** 视口宽度 → 右缘安全落点（左右各留 8px；视口过窄时退化为 8 = 左边界）。 */
+      const hintMaxLeftFor = (vw) => {
+        const n = Number(vw);
+        if (!Number.isFinite(n) || n <= 0) return 8;
+        return Math.max(8, n - 8 - HINT_MAX_WIDTH);
+      };
+      /** 触发器矩形 → 浮层定位（fixed；上方空间不足则**翻到下方**；**左右边界都按浮层宽度钳位**）。 */
       const hintGeometryOf = (el) => {
         const rect = el && typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect() : null;
         if (!rect) return null;
         const vw = (typeof window !== "undefined" && window.innerWidth) || 0;
-        const left = Math.max(8, Math.min(rect.left, vw > 16 ? vw - 16 : rect.left));
+        // left ≥ 8（左安全边距）且 left + 浮层宽 ≤ vw − 8（右安全边距，按**浮层自身宽度**的 320 上界）：
+        // 旧式 `Math.min(rect.left, vw - 16)` 只钳到 vw−16、未计浮层宽 ⇒ 窄视口（≲1240px）下右缘被视口裁掉。
+        const left = Math.max(8, Math.min(rect.left, hintMaxLeftFor(vw)));
         return { left, top: rect.top, bottom: rect.bottom };
       };
       const hintPlacementStyle = (open) => {
         const geom = hintGeomRef.current;
+        const vw = (typeof window !== "undefined" && window.innerWidth) || 0;
         const vh = (typeof window !== "undefined" && window.innerHeight) || 0;
         // 边界翻转：触发器上方空间足够（>180px）⇒ 浮层放上方，否则放下方。
         const above = geom ? (geom.top > 180 || vh === 0) : true;
+        // g-490（判据 3 收口）：resize 时按**当前视口宽**重算左右钳位（`hintGeomRef` 存的是打开那一刻的
+        // 几何；窗口变窄后必须重新钳，否则右缘会被裁）。与 `hintGeometryOf` 共用同一算式 ⇒ 不产生第二套口径。
+        const left = Math.max(8, Math.min(Number(geom?.left) || 0, hintMaxLeftFor(vw)));
         const base = {
-          position: "fixed", zIndex: 100001, left: geom ? geom.left : 8, maxWidth: 320,
+          position: "fixed", zIndex: 100001, left, maxWidth: HINT_MAX_WIDTH,
           background: "var(--dsw-alias-bg-layer-3, #2a2b31)", color: "var(--dsw-alias-label-primary, #e6e6e6)",
           border: "1px solid rgba(128,128,128,.45)", borderRadius: 6, padding: "6px 8px",
           fontSize: 11, lineHeight: 1.5, fontWeight: 400, whiteSpace: "pre-wrap", wordBreak: "break-word",
