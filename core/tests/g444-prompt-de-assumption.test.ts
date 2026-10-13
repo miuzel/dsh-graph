@@ -480,7 +480,12 @@ async function scanAllAssets(): Promise<string[]> {
 test("g-444 判据3：模型可读资产（源码 + dist 投递副本）不含本仓库特有路径/命令/文件", async () => {
   const assets = markdownAssets();
   // 非恒真护栏：资产必须真被读到（清空/删减任一资产由每资产下限与文件枚举兜住）。
-  assert.equal(assets.length, 32, `应扫到 14 个 prompts × 2 侧 + 2 份指南 × 2 侧（实得 ${assets.length}）`);
+  // g-496：不再钉死「14 个 prompts」魔法数字，改为按目录实际名数派生（× 2 侧 + 2 份指南 × 2 侧），
+  // 并就地核对源/随包两侧 prompts 同集 ⇒ 派生基准本身可信、无法靠删资产静默少扫。
+  const promptNames = readdirSync(join(HOST, "prompts")).filter((n) => n.endsWith(".md")).sort();
+  const distPromptNames = readdirSync(join(DIST, "prompts")).filter((n) => n.endsWith(".md")).sort();
+  assert.deepEqual(promptNames, distPromptNames, "源 prompts 与随包副本必须同集（派生基准可信）");
+  assert.equal(assets.length, promptNames.length * 2 + 4, `应扫到 ${promptNames.length} 个 prompts × 2 侧 + 2 份指南 × 2 侧（实得 ${assets.length}）`);
   const violations = await scanAllAssets();
   assert.deepEqual(violations, [], `资产命中禁用 token（应 0 命中）：\n${violations.join("\n")}`);
 });

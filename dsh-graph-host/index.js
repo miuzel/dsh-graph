@@ -274,7 +274,7 @@ export function resolveDesignDiagramRequest(rawUrl) {
 // 「提示词模板」页签把**随包发布**的 `prompts/*.md` 逐个只读展示给用户 —— 展示的内容与引擎
 // 实际投递给 Agent 的资产是**同一份产物**（`dist/prompts/`），不复制、不改写、不新增第二份文案。
 // 安全口径（与 g-462 图路由同一形状：单一路径入口、**无任何写路径**）：
-//   ① 白名单是**唯一**入口：只有下面这 14 个文件名（7 个资产 × zh/en）可被读取，其余一律拒绝；
+//   ① 白名单是**唯一**入口：只有下面这 16 个文件名（8 个资产 × zh/en）可被读取，其余一律拒绝；
 //   ② 未知名 → 404；目录穿越（`../`、绝对路径）、反斜杠、URL 编码变体（`%2e%2e`、`%00`）、
 //      非 `.md` 后缀 → 400。判定只看 **URL 归一化后的 pathname 尾段**，不做字符串拼接后再就读
 //      （即使判定失误，也只会在 `prompts/` 白名单目录里按白名单名读取）。
@@ -282,6 +282,8 @@ export const HELP_ASSET_ROUTE = "/api/dsh-graph/help/asset";
 export const HELP_PROMPT_ASSETS = Object.freeze([
   "discipline.en.md",
   "discipline.zh.md",
+  "executor-discipline.en.md",
+  "executor-discipline.zh.md",
   "guide-hint.en.md",
   "guide-hint.zh.md",
   "help.en.md",
@@ -677,6 +679,20 @@ function requirePromptAsset(name, language = "zh") {
 
 function localizedPrompt(name, language) {
   return requirePromptAsset(name, language);
+}
+
+/** g-496：执行者纪律的**静态散文**（测试力度分级 + 证据形式）唯一真源 =
+ *  `prompts/executor-discipline.<lang>.md`（随构建拷入 `dist/prompts/`，运行期现读、无启动缓存）。
+ *  代码只保留 `## ` 标题、开场句、看板协同块等**含 goal/attempt 插值**的动态部分 ⇒ 不再有第二副本。
+ *  读取失败 fail-closed（`requirePromptAsset` 抛错，绝不静默降级为内置文本或空串）。
+ *
+ *  ⚠️ 该资产必须与其对偶语言保持 **parity 四重相等**（行数 / `##` 标题数 / 占位符集合 / 技术 token
+ *  集合，见 core/tests/prompt-i18n-parity.test.ts —— 对 `prompts/` 顶层每个 `.zh.md` 自动生效）。
+ *  这正是「看板协同与状态流转」块**不能**搬进资产的原因：zh 侧含 `graph_transition` 与 `{attempt}`，
+ *  en 侧无对偶行，两侧纪律段行数亦不对称（zh 20 行 / en 9 行）⇒ 任何整块搬入都会立刻判红。
+ *  该块仍只有代码一处真源（无重复副本），后续若要把整段搬入资产，须先裁决 parity 口径。 */
+function executorDisciplineLines(language = "zh") {
+  return requirePromptAsset("executor-discipline", language).replace(/\n+$/, "").split("\n");
 }
 
 /** g-493 / g-495：`graph_help(topic)` 的主题抽取（纯函数，返回 null 表示该主题不存在）。
@@ -1287,25 +1303,13 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
     "   - 汇报触发点：仅在【开始开工】、【阶段转变/转向新任务】、【遇到阻塞】、【本轮完成待命】4类有限关键节点调用 graph_report_status(goal=\"" + goalValue + "\", attempt=\"" + attemptValue + "\", status=<一句话简短人话，≤20字>)；",
     "   - 长任务节流心跳：长耗时任务（如大型构建、多步批量排查）适度按心跳汇报进展，普通轻量读取/单步调试切忌每步机械追加汇报；不再要求每个 read/bash 动作机械调用状态；",
     "   - 迁移与状态同步：同步更新 status_line；迁移被引擎拒绝（如判据未登记）时不得继续实现，立即上报停止；",
-    // g-326 新增条目（精简版分级规则）：纪律段是分级规则的**唯一**投递渠道。
-    // 负责人去重裁决（v0.16.0）：att-001 的独立分级区块及其常量/格式化函数已一并删除——同一份 prompt
-    // 出现两份表述与 g-239 压缩 prompt 的方向相反；护栏见 core/tests/test-intensity-tiers.test.ts 的
-    // 「去重护栏」用例（全篇恰好一次且落在纪律段切片内）。
-    // 关于 g-239 收缩断言：core/tests/prompt-discipline-g239.test.ts 判据 3 的四个阈值一律未动，
-    // 本次增量为**已登记增量**——该测试在测量收缩比例前按稳定标记精确剔除本条目
-    // （见其 DISCIPLINE_INCREMENT_MARKER 与 subtractRegisteredIncrement）。
-    // ⇒ 后续再向纪律段新增内容，必须在该测试同样登记增量或做等量删减，否则它会如实变红。
-    "3. 测试力度按改动性质分级（不为不值得单测的改动凑断言）：",
-    "   - 一档｜零行为逻辑改动（文案/标签/i18n 字符串、注释、文档、纯样式）：不要求新增单测，但必须给出既有测试全绿 + 构建/语法检查通过（或真机目视）的实际证据；",
-    "   - 二档｜小幅逻辑改动（分支/数据变换/边界错误处理）：针对性单测覆盖被改分支，且原行为不回归；",
-    "   - 三档｜新增功能/契约变更/核心层重写/并发与状态机：完整单测 + 边界与负向用例，必要时做「改坏就会红」的负向对照；",
-    "   - 绝不因「轻量/文案」跳过、删改或削弱既有测试，也不降低判据门禁与人工 gate。",
-    // g-312 新增条目（断言化证据）：与真源 core/ops.ts 的 ROLE_PROFILES.executor.disciplineLines[6] 同口径
-    // （那里是 persona 侧，这里是 attempt prompt 侧投递副本，两处必须同一套口径）。
-    // ⚠️ 本条同样属于 g-239 收缩断言的**已登记增量**：core/tests/prompt-discipline-g239.test.ts 的
-    // DISCIPLINE_INCREMENT_MARKERS 已登记本条目首行；四个阈值（状态段 ≥20%/≥20%、整体 ≥8%/≥10%）
-    // 一律未动。后续再向纪律段新增内容，必须在该测试同样登记增量，否则它会如实变红。
-    "4. 证据形式：交付证据只写单行结构化概要（一套件一行、单条 ≤160 字符），格式为 `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`，并给出断言命令与结论；禁止倾倒多行 JSON、DOM dump、切片数据、原始日志与围栏代码块；运行态不变式一律沉淀为自动化断言，仅 UI 视觉层保留轻量截图核验。",
+    // g-496：条目 3/4 的正文已**等价搬迁**到唯一真源 `prompts/executor-discipline.zh.md`
+    //（本函数只按既有注入顺序展开，不再持有字面量副本）。g-326 的「纪律段是分级规则唯一投递渠道」
+    // 去重裁决（护栏 core/tests/test-intensity-tiers.test.ts「去重护栏」）与 g-239 的**已登记增量**
+    // 登记（DISCIPLINE_INCREMENT_MARKERS；该测试按**渲染产物**中的稳定标记剔除，与正文存放位置无关）
+    // 均不受影响；四个收缩阈值（状态段 ≥20%/≥20%、整体 ≥8%/≥10%）一律未动。
+    // ⚠️ 后续再向纪律段新增内容，仍须在该测试登记增量或做等量删减，否则它会如实变红。
+    ...executorDisciplineLines("zh"),
   );
   return lines.join("\n");
 }
@@ -1359,17 +1363,13 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, brie
     "## Execution discipline",
     "Use the assigned worktree only; main is read-only. Report state with graph_report_status using state=working, blocked, done, or error.",
     `At start migrate ${promptText(goal) || missing} to in_progress; on a blocker use blocked with a reason; when done migrate to review and stop. Never migrate to delivered.`,
-    // g-326 新增条目（精简版分级规则，与 zh 纪律条目 3 语义一致）：纪律段是分级规则的正式投递渠道。
-    "Tier test intensity by the nature of the change (never manufacture an assertion for a change that does not warrant one):",
-    "  - Tier 1 | zero behavioral-logic change (copy/labels/i18n strings, comments, docs, pure styling): no new unit tests required, but you must provide real evidence such as the full existing suite still green plus build/syntax checks passing (or real-machine visual verification);",
-    "  - Tier 2 | small logic change (branches, data transformation, boundary and error handling): targeted unit tests covering the changed branches, with the original behavior not regressing;",
-    "  - Tier 3 | new feature / contract change / core-layer rewrite / concurrency and state machines: complete unit tests plus boundary and negative cases, and a \"breaking it turns it red\" negative control when necessary;",
-    "  - Iron rule: never skip, delete, or weaken existing tests because a change is \"lightweight/copy-only\", and never lower criteria gates or human gates.",
-    // g-312 new entry (assertion-as-evidence): same standard as the Chinese entry 4 and as the single
-    // source ROLE_PROFILES.executor.disciplineLines in core/ops.ts. Keep this line CJK-free: the English
-    // render path asserts the whole prompt contains no CJK. It is also a registered g-239 increment
-    // (see DISCIPLINE_INCREMENT_MARKERS in core/tests/prompt-discipline-g239.test.ts).
-    "Evidence form: report deliverables only as a single-line structured summary (one suite per line, at most 160 characters each), formatted as `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`, together with the assertion command and its conclusion; never dump multi-line JSON, DOM dumps, sliced data, raw logs, or fenced code blocks; turn runtime invariants into automated assertions and keep lightweight screenshot verification only for the non-codifiable UI/visual layer.",
+    // g-496: entries 3/4 moved verbatim to the single source `prompts/executor-discipline.en.md`,
+    // kept in lockstep with `prompts/executor-discipline.zh.md` (parity: line count / `##` headings /
+    // placeholder set / technical-token set — core/tests/prompt-i18n-parity.test.ts). Keep both assets
+    // CJK-free: the English render path asserts the whole prompt contains no CJK. Still a registered
+    // g-239 increment (DISCIPLINE_INCREMENT_MARKERS — subtracted from the **rendered** discipline slice,
+    // so relocating the literal does not change the measurement).
+    ...executorDisciplineLines("en"),
     promptText(subagentPromptSection) ? protectSectionBody(subagentPromptSection, "en") : "",
     promptText(modeStrategySection) ? protectSectionBody(modeStrategySection, "en") : "",
     promptText(worktreeBlock) ? protectSectionBody(worktreeBlock, "en") : "",

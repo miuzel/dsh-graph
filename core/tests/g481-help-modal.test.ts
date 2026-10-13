@@ -130,7 +130,6 @@ test("g-481 A1：白名单 ≡ 随包 prompts/*.md，命中即 md + nosniff，�
   assert.deepEqual([...HELP_PROMPT_ASSETS].sort(), distNames, "白名单必须与随包 dist/prompts 逐项一致（无漂移、无死条目）");
   assert.deepEqual(srcNames, distNames, "源 prompts 与随包副本必须同集");
   assert.equal(new Set(HELP_PROMPT_ASSETS).size, HELP_PROMPT_ASSETS.length, "白名单不得有重复项");
-  assert.equal(HELP_PROMPT_ASSETS.length, 14, "g-481 白名单应恰是 7 组 zh/en 提示词资产（14 个）");
   const digests = new Set<string>();
   for (const name of HELP_PROMPT_ASSETS) {
     assert.match(name, /^[a-z0-9][a-z0-9.-]*\.(zh|en)\.md$/, `${name} 必须是 <base>.<lang>.md 形态`);
@@ -290,7 +289,9 @@ test("g-481 B1：工具清单逐项等于注册真源、说明 zh/en 成对（en
   const assets = helpPromptAssetEntries();
   assert.equal(assets.length, HELP_PROMPT_ASSETS.length, "资产投影必须与白名单等长");
   assert.deepEqual(assets.map((a) => a.name).sort(), [...HELP_PROMPT_ASSETS].sort(), "资产投影必须与白名单同集");
-  assert.equal(new Set(assets.map((a) => a.base)).size, 7, "7 组资产基名");
+  // g-496：不再钉死「7 组」魔法数字，改为与随包目录投影**同集对账**（既防漂移，也防资产改名后残留死基名）。
+  const packagedBases = [...new Set(packagedNames(promptsDistDir).map((n) => n.replace(/\.(zh|en)\.md$/, "")))].sort();
+  assert.deepEqual([...new Set(assets.map((a) => a.base))].sort(), packagedBases, "资产基名集合必须等于随包目录投影（无漂移、无死基名）");
   for (const base of new Set(assets.map((a) => a.base))) {
     const langs = assets.filter((a) => a.base === base).map((a) => a.lang).sort();
     assert.deepEqual(langs, ["en", "zh"], `${base} 必须 zh/en 成对`);
