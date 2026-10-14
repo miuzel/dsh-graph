@@ -18,7 +18,8 @@
  *  B. 退化路径（`BUILD_FORCE_TWO_RENAME=1`）：exit 0、stderr 出现注入告警、
  *     且**不**出现 `mv -T --exchange`（证明确实切换了发布方式，而不是静默走原路径）；
  *  C. 行为中性：A 与 B 的 `dist/` 全树（路径 + 尺寸 + sha256）**逐字节一致**，
- *     45 个文件（g-462 起含 6 张设计哲学图；g-496 起随包 prompts 增 2 个资产）、
+ *     47 个文件（g-462 起含 6 张设计哲学图；g-496 起随包 prompts 增 4 个资产：
+ *     executor-discipline 与 agent-teams-contract 各 zh/en 一份）、
  *     `node --check dist/lib/client.js` 通过、无暂存残留；
  *  D. 边界 + 负向对照：注入只认字面 "1"（`=0` 仍走 exchange）；把注入条件从
  *     build.sh 里锚点化移除后，同一 `=1` 调用**必须**回到 exchange 路径 ⇒
@@ -58,7 +59,7 @@ const FALLBACK_RE = /退回两次 rename/;
  *  g-496 起随包 `prompts/` 增 `executor-discipline.{zh,en}.md` 两个资产 = 43 + 2）。
  *  刻意用**精确计数**而不是派生：派生需要在测试里再持有一份 build.sh 的资产清单（第二副本），
  *  与本包「单一真源」口径冲突；清单漂移由本常量的精确比较如实判红。 */
-const DIST_FILE_COUNT = 45;
+const DIST_FILE_COUNT = 47;
 
 // ============================================================================
 // 沙箱（与 g-348 测试同构：真实仓库布局，但只在 os.tmpdir() 内读写）

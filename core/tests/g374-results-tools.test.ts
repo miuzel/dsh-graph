@@ -379,16 +379,19 @@ test("g-374 F3-b：四个提示面 + 文档镜像都告知两个新工具，且�
   for (const n of ["graph_write_results", "graph_refresh_results"]) {
     assert.ok(!allModuleTools.has(n), `${n} 不应归属任何可裁剪模块（它是常驻工具，不受模块开关影响）`);
   }
-  // discipline 的 zh/en 必须**逐条对称**（行数一致 + 两个工具都出现），且文档镜像同步
+  // discipline 的 zh/en 必须**逐条对称**（行数一致 + 两个工具都出现）
   const zh = readFileSync(promptPath("discipline.zh.md"), "utf8").split("\n").filter((l) => l.trim());
   const en = readFileSync(promptPath("discipline.en.md"), "utf8").split("\n").filter((l) => l.trim());
   assert.equal(zh.length, en.length, "discipline zh/en 必须逐条对称");
+  // g-496 改判（负责人批准）：docs 不再持正文副本 ⇒ 原「镜像逐条一致」**反转**为「不得含副本」；
+  // 告知义务**前移到真源**（下方对 discipline.zh 本身的断言，与上面 [discipline.zh.md, "无子代理"] 同源）。
   const mirror = readFileSync(join(repoRoot, "docs", "guide-auto-injection.md"), "utf8");
-  const matched = zh.filter((l) => mirror.includes(l.replace(/"/g, '\\"')));
-  assert.equal(matched.length, zh.length, "docs/guide-auto-injection.md 的 SUPERVISOR_DISCIPLINE 镜像必须逐条一致");
+  assert.doesNotMatch(mirror, /SUPERVISOR_DISCIPLINE/, "docs 不得再含 SUPERVISOR_DISCIPLINE 副本（g-496 去镜像）");
+  const zhText = readFileSync(promptPath("discipline.zh.md"), "utf8");
   for (const need of ["graph_write_results", "graph_refresh_results"]) {
-    assert.ok(mirror.includes(need), `文档镜像必须包含 ${need}（否则镜像落后于资产）`);
+    assert.ok(zhText.includes(need), `纪律真源必须包含 ${need}（承载面已从 docs 副本前移到真源）`);
   }
+  assert.ok(zhText.includes("无子代理"), "纪律真源必须点明「无子代理」场景（原 docs 副本的同一条语义）");
   // 主管守则（skill 资产，主管显式加载后的主要依据）也必须指路
   for (const [label, path, scenarioNeedle] of [
     ["supervisor-guide.zh.md", join(repoRoot, "dsh-graph-host", "supervisor-guide.zh.md"), "无子代理"],

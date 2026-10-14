@@ -66,6 +66,10 @@ const repoRoot = join(import.meta.dirname, "../..");
 const clientDir = join(repoRoot, "dsh-graph-host/lib/client");
 const sourceDiscipline = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dsh-graph-host/prompts", `discipline.${lang}.md`), "utf8");
 const distDiscipline = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dist/prompts", `discipline.${lang}.md`), "utf8");
+// g-496：契约正文真源从 discipline 迁出到**独立资产**（主管每 turn 注入面不再常驻该段）。
+// 抽取函数与全部关键句/变异负向对照判据**不变**，只把「读取源」指向新资产。
+const sourceContract = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dsh-graph-host/prompts", `agent-teams-contract.${lang}.md`), "utf8");
+const distContract = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dist/prompts", `agent-teams-contract.${lang}.md`), "utf8");
 const sourceGuide = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dsh-graph-host", `supervisor-guide.${lang}.md`), "utf8");
 const sourceOps = () => readFileSync(join(repoRoot, "core/ops.ts"), "utf8");
 const sourceModal = () => readFileSync(join(clientDir, "settings-modal.js"), "utf8");
@@ -115,25 +119,36 @@ function contractPasses(assetText: string, lang: "zh" | "en", keys: string[]): b
   return keys.every((k) => block.includes(k));
 }
 
-test("g-440 判据 1：契约块在 disciplines 双语里都真实存在且关键句齐备（交付资产 ≠ 摆设）", () => {
+test("g-440 判据 1：契约块在独立契约资产双语里都真实存在且关键句齐备（交付资产 ≠ 摆设）", () => {
   for (const lang of ["zh", "en"] as const) {
-    const text = sourceDiscipline(lang);
+    const text = sourceContract(lang);
     const keys = lang === "zh" ? KEYS_ZH : KEYS_EN;
     const block = extractAgentTeamsContract(text);
-    assert.ok(block, `${lang} discipline 必须含定界契约块`);
+    assert.ok(block, `${lang} agent-teams-contract 必须含定界契约块`);
     for (const k of keys) assert.ok(block.includes(k), `${lang} 契约块缺关键句：${k}`);
     // 生产注入读的是 dist 资产：逐字节等于源（否则注入的是过期文本）。
-    assert.equal(distDiscipline(lang), text, `dist/prompts/discipline.${lang}.md 必须与源逐字节一致`);
+    assert.equal(distContract(lang), text, `dist/prompts/agent-teams-contract.${lang}.md 必须与源逐字节一致`);
     // 结论词表与 g-436 统一（**闭集**）：三值都在场。
     for (const c of ["PASS", "BLOCK", "UNVERIFIED"]) assert.ok(block.includes(c), `${lang} 契约块必须点名结论词 ${c}`);
   }
-  assert.ok(contractPasses(sourceDiscipline("zh"), "zh", KEYS_ZH), "谓词对真实 zh 资产必须为真");
-  assert.ok(contractPasses(sourceDiscipline("en"), "en", KEYS_EN), "谓词对真实 en 资产必须为真");
+  assert.ok(contractPasses(sourceContract("zh"), "zh", KEYS_ZH), "谓词对真实 zh 契约资产必须为真");
+  assert.ok(contractPasses(sourceContract("en"), "en", KEYS_EN), "谓词对真实 en 契约资产必须为真");
+  // g-496 新增反向断言（契约已迁出 discipline）：主管每 turn 注入面**不得**再常驻契约块。
+  for (const lang of ["zh", "en"] as const) {
+    assert.equal(
+      extractAgentTeamsContract(sourceDiscipline(lang)),
+      null,
+      `${lang} discipline 不得再含契约块（g-496 已迁出到 agent-teams-contract，主管面不再常驻）`,
+    );
+    for (const k of lang === "zh" ? KEYS_ZH : KEYS_EN) {
+      assert.ok(!sourceDiscipline(lang).includes(k), `${lang} discipline 不得残留契约关键句：${k}`);
+    }
+  }
 });
 
 test("g-440 判据 1（负向对照）：删改任一关键句 / 摘掉定界标记 ⇒ 同一谓词必红", () => {
-  const zh = sourceDiscipline("zh");
-  const en = sourceDiscipline("en");
+  const zh = sourceContract("zh");
+  const en = sourceContract("en");
   // ① 逐条删除关键句 ⇒ 谓词转假（证明每条断言都承重，删改契约即红）。
   for (const k of KEYS_ZH) {
     const mutated = zh.replace(k, "");
@@ -154,10 +169,27 @@ test("g-440 判据 1（负向对照）：删改任一关键句 / 摘掉定界标
     "空块 ⇒ null（fail-safe：不注入）",
   );
   assert.equal(extractAgentTeamsContract(""), null, "无资产文本 ⇒ null（宿主缺资产时诚实降级）");
+  // ③ g-496 新增反向对照：把契约块**塞回 discipline** ⇒ 上面的「discipline 不含契约」断言必须转红
+  //（证明该反向断言不是恒真，契约真被迁出而非复制两份）。
+  // 注意：抽取函数返回的是**块内正文**（不含定界标记），故重组时须自补 begin/end 两个标记。
+  const reinserted = `${sourceDiscipline("zh")}\n${AGENT_TEAMS_CONTRACT_BEGIN}\n${extractAgentTeamsContract(zh)!}\n${AGENT_TEAMS_CONTRACT_END}\n`;
+  assert.equal(
+    extractAgentTeamsContract(sourceDiscipline("zh")),
+    null,
+    "前提：原 discipline 不含契约（否则本对照无意义）",
+  );
+  assert.notEqual(
+    extractAgentTeamsContract(reinserted),
+    null,
+    "把契约塞回 discipline 后，抽取必须能命中 ⇒ 证明「discipline 不含契约」是承重断言而非恒真",
+  );
+  for (const k of KEYS_ZH) {
+    assert.ok(reinserted.includes(k), `重组夹具必须含关键句 ${k}（否则对照无效）`);
+  }
 });
 
-test("g-440 判据 1：双语对称（guide/discipline 行数与 docs 镜像）+ 两份文档都写明契约", () => {
-  for (const name of ["supervisor-guide", "prompts/discipline"]) {
+test("g-440 判据 1：双语对称（guide/discipline/契约资产行数）+ docs 去镜像 + 两份指南都写明契约", () => {
+  for (const name of ["supervisor-guide", "prompts/discipline", "prompts/agent-teams-contract"]) {
     const zh = lines(readFileSync(join(repoRoot, "dsh-graph-host", `${name}.zh.md`), "utf8"));
     const en = lines(readFileSync(join(repoRoot, "dsh-graph-host", `${name}.en.md`), "utf8"));
     assert.equal(zh.length, en.length, `${name}：zh/en 总行数必须相等`);
@@ -176,12 +208,23 @@ test("g-440 判据 1：双语对称（guide/discipline 行数与 docs 镜像）+
   ] as const) {
     for (const n of needles) assert.ok(text.includes(n), `guide 缺契约语义：${n}`);
   }
-  // docs 镜像（g-312 的 SUPERVISOR_DISCIPLINE 副本）必须把契约块整段同步（否则文档漂移）。
+  // g-496 改判（负责人批准）：docs 不再持纪律正文副本 ⇒ 原「docs 逐行镜像」**反转**为「不得含副本」，
+  // 并**新增**「正文完整性直接施于真源与真实渲染产物」两条更强断言（保护目的不减、覆盖面扩大）。
   const mirror = readDocsMirror();
-  for (const l of lines(sourceDiscipline("zh"))) {
+  assert.doesNotMatch(mirror, /SUPERVISOR_DISCIPLINE/, "docs 不得再含 SUPERVISOR_DISCIPLINE 副本（g-496 去镜像）");
+  assert.match(mirror, /唯一真源/, "docs 必须写明纪律正文的唯一真源");
+  assert.ok(
+    mirror.includes("agent-teams-contract"),
+    "docs 必须指向契约新资产的路径（否则读者找不到契约真源）",
+  );
+  // 正文完整性**直接施于真源**：契约关键句必须逐条在契约资产里（载体从 docs 副本前移到真源）。
+  const contractZh = sourceContract("zh");
+  for (const l of lines(contractZh)) {
     if (l.trim() === "") continue;
-    assert.ok(mirror.includes(`"${l}"`), `docs 镜像缺纪律行：${l.slice(0, 40)}…`);
+    assert.ok(contractZh.includes(l), `契约真源自包含失败：${l.slice(0, 40)}…`);
   }
+  for (const k of KEYS_ZH) assert.ok(contractZh.includes(k), `契约真源缺承重关键句：${k}`);
+  // 且**不再**要求 docs 含这些行（反向：若 docs 仍逐行复制契约，上面的 doesNotMatch 会先红）。
 });
 
 // =====================================================================================
@@ -591,7 +634,7 @@ test("g-440 判据 4：composeSubagentPrompt / resolveSubagentPrompt 的 off 逐
   assert.equal(composeSubagentPrompt("GLOBAL-PROMPT", { state: "disable", value: null }, "default"), null);
   assert.equal(composeSubagentPrompt("GLOBAL-PROMPT", { state: "disable", value: null }, "default", "CONTRACT"), "CONTRACT");
   // 双语对偶：en 契约块经同一通道合成时同样**逐字**追加（装配是 locale 无关的同一段代码）。
-  const enContract = extractAgentTeamsContract(sourceDiscipline("en"))!;
+  const enContract = extractAgentTeamsContract(sourceContract("en"))!;
   assert.ok(enContract && enContract.includes("Fan-out members are not attempts"));
   const enOn = composeSubagentPrompt("GLOBAL-PROMPT", { state: "default", value: null }, "default", enContract)!;
   assert.equal(enOn, `GLOBAL-PROMPT\n\n${enContract}`);
@@ -717,6 +760,7 @@ interface HostHarness {
   toolsByName: Map<string, any>;
   capturedRequests: any[];
   execContext: any;
+  sections: any[];
 }
 
 function createHarness(projectYaml: string): HostHarness {
@@ -733,9 +777,13 @@ function createHarness(projectYaml: string): HostHarness {
   const registeredTools: any[] = [];
   const events: Record<string, Function[]> = {};
   const webServer = { register: () => () => {} };
+  // g-496：捕获 systemPrompt 段落注册 ⇒ 可对**主管纪律 section 的真实渲染**断言（而非只看资产文本）。
+  const sections: any[] = [];
+  const systemPrompt = { section: (def: any) => { sections.push(def); return () => {}; } };
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "systemPrompt") return systemPrompt;
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "subagents") {
@@ -762,6 +810,7 @@ function createHarness(projectYaml: string): HostHarness {
     root,
     toolsByName: new Map(registeredTools.map((t: any) => [t.name, t])),
     capturedRequests,
+    sections,
     execContext: { agent: { id: "a1", session: { header: { cwd: ws }, id: "sess-exec" } }, signal: new AbortController().signal },
   };
 }
@@ -805,8 +854,8 @@ test("g-440 判据 4（双态注入断言）：off 三态派发提示词逐字�
   assert.ok(on.includes(USER_SENTINEL), "on 也必须保留用户材料（不得覆盖）");
   assert.ok(on.includes("扇出成员不是 attempt"), "on 必须注入契约段");
   // 注入的正文 = 交付资产里的定界块（逐字；不是第二份手抄副本）。
-  const contract = extractAgentTeamsContract(distDiscipline("zh"));
-  assert.ok(contract, "dist 资产必须能抽出契约块");
+  const contract = extractAgentTeamsContract(distContract("zh"));
+  assert.ok(contract, "dist 契约资产必须能抽出契约块");
   assert.ok(on.includes(contract!), "注入的契约正文必须与资产逐字一致");
   assert.equal(on.replace("\n\n" + contract!, ""), off, "on = off + 纯追加契约段（diff 仅为契约段）");
 });
@@ -818,7 +867,7 @@ test("g-440 判据 4：无用户补充提示词时，off 完全不注入；on �
   const on = await dispatchPrompt(ON_YAML);
   assert.ok(on.includes("子代理补充提示词"), "on 必须为该槽位提供内容");
   assert.ok(on.includes("扇出成员不是 attempt"));
-  assert.ok(on.includes(extractAgentTeamsContract(distDiscipline("zh"))!), "on 注入的仍是资产原文");
+  assert.ok(on.includes(extractAgentTeamsContract(distContract("zh"))!), "on 注入的仍是契约资产原文");
 });
 
 test("g-440 判据 4：契约只进既有槽位（不新增框架小节标题，无新强制门禁）", async () => {
@@ -828,10 +877,82 @@ test("g-440 判据 4：契约只进既有槽位（不新增框架小节标题，
   const headings = (t: string) => t.split("\n").filter((l) => l.startsWith("## ")).sort();
   assert.deepEqual(headings(on), headings(off), "on 不得新增任何 `## ` 框架小节标题");
   // 契约紧跟在「子代理补充提示词」槽位内（用户材料之后），与 g-333 单一注入通道同源。
-  const contract = extractAgentTeamsContract(distDiscipline("zh"))!;
+  const contract = extractAgentTeamsContract(distContract("zh"))!;
   assert.ok(on.indexOf("子代理补充提示词") < on.indexOf(contract), "契约必须位于既有槽位之内");
-  // 主管每轮纪律仍逐字渲染资产本身（g-439 口径）：契约块作为资产的一部分出现在纪律里。
+  // g-496 改判（负责人批准）：契约已迁出纪律资产 ⇒ 原「纪律资产含契约（常驻）」**反转**为
+  // 「纪律资产**不得**含契约」，并**新增**「主管 section 真实渲染不含契约、且判据 4 语义由新资产承载」。
   const asset = sourceDiscipline("zh");
-  assert.ok(asset.includes("扇出成员不是 attempt"), "纪律资产本身含契约（常驻文档）");
+  assert.ok(!asset.includes("扇出成员不是 attempt"), "g-496：纪律资产不得再含契约（主管每 turn 面不再常驻）");
+  assert.equal(extractAgentTeamsContract(asset), null, "g-496：纪律资产不得含契约块");
   assert.equal(distDiscipline("zh"), asset, "dist 与源一致（渲染读的是交付资产）");
+  const contractAsset = sourceContract("zh");
+  assert.ok(contractAsset.includes("扇出成员不是 attempt"), "契约资产本身含契约（判据 4 语义的新载体）");
+  assert.equal(distContract("zh"), contractAsset, "契约资产 dist 与源一致");
+});
+
+// =====================================================================================
+// g-496：主管纪律 section 的**真实渲染**断言（契约迁出后不得只靠「资产含」冒充投递）
+// =====================================================================================
+
+/** 取项目内置 section 的真实渲染文本（主管会话上下文）。 */
+function renderSupervisorSection(projectYaml: string): { discipline: string; hint: string } {
+  const hh = createHarness(projectYaml);
+  const find = (name: string) => hh.sections.find((s: any) => s.name === name);
+  const disciplineSec = find("dsh-graph-supervisor-discipline");
+  const hintSec = find("dsh-graph-guide-hint");
+  assert.ok(disciplineSec, "必须注册 dsh-graph-supervisor-discipline section");
+  assert.ok(hintSec, "必须注册 dsh-graph-guide-hint section");
+  const c = { agent: { session: { id: "sess-super", header: { cwd: hh.ws } } } };
+  return { discipline: disciplineSec.text(c), hint: hintSec.text(c) };
+}
+
+test("g-496：主管每 turn 纪律 section 的真实渲染不含契约，且精简后仍保留全部承重语义", () => {
+  const { discipline } = renderSupervisorSection(OFF_YAML);
+  // ① 真实渲染**不含**契约块与任何承重关键句（每 turn 常驻面确实瘦身，不是只改了资产文本）。
+  assert.equal(extractAgentTeamsContract(discipline), null, "主管纪律渲染不得含契约块");
+  for (const k of [...KEYS_ZH, ...KEYS_EN]) {
+    assert.ok(!discipline.includes(k), `主管纪律渲染不得残留契约关键句：${k}`);
+  }
+  for (const c of ["self_requested", "## 扇出与独立验证", "Fan-out and independent verification"]) {
+    assert.ok(!discipline.includes(c), `主管纪律渲染不得残留契约痕迹：${c}`);
+  }
+  // ② 精简后**必须保留**的纪律语义（逐条在真实渲染里核，而不是把整个正文抄进测试）。
+  const mustKeep = [
+    "绝不自己实现",              // 铁律 1：不自实现（guide-injection 引用的承重句）
+    "graph_report_supervisor_status",
+    "绝不自行 delivered",
+    "测试力度按改动性质分级",
+    "不强制新增单测",
+    "全量既有测试全绿",
+    "绝不因「轻量/文案」跳过、删改或削弱既有测试",
+    "证据形式（断言化，禁长文倾倒）",
+    "evidence: suite=<id>",
+    "无子代理",
+    "graph_write_results",
+    "graph_refresh_results",
+    "完整守则见 skill dsh-graph-supervisor",
+  ];
+  for (const n of mustKeep) assert.ok(discipline.includes(n), `主管纪律渲染必须保留承重语义：${n}`);
+  // ③ 渲染确实来自真源资产（而非测试内联的第二份副本）。
+  assert.ok(discipline.includes(sourceDiscipline("zh").replace(/\n+$/, "").split("\n")[0]), "渲染首行须来自真源资产");
+  assert.ok(discipline.includes("⚙️") === false, "占位符式污染不应出现在渲染里");
+  // ④ 引导段（所有会话）不得因变更而含契约（它本来就不含，此处钉住防回归）。
+  const { hint } = renderSupervisorSection(OFF_YAML);
+  assert.equal(extractAgentTeamsContract(hint), null, "引导段不得含契约");
+  assert.ok(!hint.includes("扇出成员不是 attempt"), "引导段不得含契约正文");
+});
+
+test("g-496：契约只在 on 时进入**真实投递**，off 时派发与纪律面都不含契约", async () => {
+  // 真实派发路径（非资产文本断言）：off ⇒ 不含；on ⇒ 含且逐字等于契约资产正文。
+  const off = await dispatchPrompt(OFF_YAML, { subagentPrompt: USER_SENTINEL });
+  assert.ok(!off.includes("扇出成员不是 attempt"), "off 真实派发不得含契约（语义不变）");
+  const on = await dispatchPrompt(ON_YAML, { subagentPrompt: USER_SENTINEL });
+  const contract = extractAgentTeamsContract(distContract("zh"))!;
+  assert.ok(on.includes(contract), "on 真实派发必须逐字含契约资产正文（不靠「资产含」冒充投递）");
+  // 与「读的是新源」交叉验证：dist 的**纪律**资产里已无契约 ⇒ 若仍读 discipline 必注入失败。
+  assert.equal(extractAgentTeamsContract(distDiscipline("zh")), null, "前提：dist 纪律资产已无契约（否则本用例无区分度）");
+  // 同名反向：把旧源（discipline）给决策函数 ⇒ 诚实降级为 contract_unavailable（不注入、不报错）。
+  const legacy = resolveAgentTeamsInjection({ enabled: true, contract: extractAgentTeamsContract(distDiscipline("zh")) });
+  assert.equal(legacy.inject, false, "读旧源（无契约的 discipline）必须 fail-safe 不注入");
+  assert.equal(legacy.reason, "contract_unavailable", "读旧源必须给出 contract_unavailable（诚实降级原因）");
 });

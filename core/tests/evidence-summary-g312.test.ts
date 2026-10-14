@@ -403,23 +403,42 @@ test("g-312 判据 1：graph_report_status / graph_add_comment / graph_fill_card
   assert.doesNotMatch(Object.values(en).join("\n"), /[\u3400-\u9fff]/, "SERVER_I18N.en 必须零 CJK");
 });
 
-test("g-312 判据 1：docs/guide-auto-injection.md 的纪律副本与真源逐条一致（防再次漂移）", () => {
-  // 该副本此前已漂移（缺记忆管理纪律与测试力度分级）；本断言把它钉在真源上。
-  const source = readAsset(sourceRoot, "prompts", "discipline.zh.md").split("\n").filter((line) => line.length > 0);
+test("g-312 判据 1：g-496 起纪律正文只有唯一真源（docs 不再持副本），完整性直接施于真源", () => {
+  // g-496 改判（负责人批准）：原「docs 逐字镜像副本」被**移除**——它是第二份正文副本，正是漂移之源。
+  // 保护目的不减反增，改为**三条更强**的断言：
+  //   ① docs 不得再持任何形态的正文副本（含换名数组 / 大段逐字复制逃逸）；
+  //   ② docs 必须指向真源路径（读者仍能找到正文）；
+  //   ③ 正文完整性**直接施于真源**（原「副本含证据条目」等价迁移，且不再受副本同步影响）。
+  const sourceText = readAsset(sourceRoot, "prompts", "discipline.zh.md");
+  const source = sourceText.split("\n").filter((line) => line.length > 0);
   const docs = readFileSync(join(import.meta.dirname, "../../docs/guide-auto-injection.md"), "utf8");
-  const block = /const SUPERVISOR_DISCIPLINE = \[([\s\S]*?)\]\.join\("\\n"\)/.exec(docs);
-  assert.ok(block, "docs/guide-auto-injection.md 应含 SUPERVISOR_DISCIPLINE 数组");
-  const mirrored = block![1]
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('"'))
-    .map((line) => line.replace(/^"/, "").replace(/",?$/, ""));
-  assert.deepEqual(
-    mirrored,
-    source,
-    "docs 副本必须与 prompts/discipline.zh.md 真源逐条一致；改了真源请同步副本（勿只补最后一条）",
+
+  // ① 去镜像：旧数组名必须消失（按名断言，挡住「原样保留」）。
+  assert.doesNotMatch(docs, /SUPERVISOR_DISCIPLINE/, "docs 不得再含 SUPERVISOR_DISCIPLINE 数组（g-496 已移除第二份副本）");
+  assert.doesNotMatch(
+    docs,
+    /const\s+\w+\s*=\s*\[\s*\n\s*"⚠️ \*\*主管纪律提醒\*\*/,
+    "docs 不得以**换名数组**逃逸：任何 `const <任意名> = [\"⚠️ **主管纪律提醒**…` 形态都判红",
   );
-  assert.ok(mirrored.some((line) => line.includes("证据形式（断言化，禁长文倾倒）")), "docs 副本应含 g-312 证据条目");
+  // ①-b 大段逐字复制逃逸：真源的承重长句不得在 docs 里成段复现（逐条计数，非全文包含）。
+  const longLines = source.filter((line) => line.length >= 60);
+  const copied = longLines.filter((line) => docs.includes(line));
+  assert.equal(
+    copied.length,
+    0,
+    `docs 不得大段逐字复制纪律正文（逐字复现 ${copied.length} 条长句，首条：${copied[0]?.slice(0, 40) ?? "-"}…）`,
+  );
+
+  // ② docs 必须指向真源路径（正文的唯一去向可被读者找到）。
+  assert.ok(
+    docs.includes("dsh-graph-host/prompts/discipline.") || docs.includes("prompts/discipline.<lang>.md"),
+    "docs 必须指向纪律真源路径（否则读者无从找到正文）",
+  );
+  assert.match(docs, /唯一真源/, "docs 必须写明资产文件是唯一真源");
+
+  // ③ 正文完整性直接施于真源（原 `mirrored.some(...)` 的同一条语义，载体换成真源）。
+  assert.ok(source.some((line) => line.includes("证据形式（断言化，禁长文倾倒）")), "纪律真源应含 g-312 证据条目");
+  assert.ok(sourceText.includes("evidence: suite=<id>"), "纪律真源应含结构化证据样例");
 });
 
 test("g-312 判据 1 防删除反向断言：旧「详尽长文」口径不得回归，新规范任何一处删掉即红", () => {

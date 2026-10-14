@@ -280,6 +280,8 @@ export function resolveDesignDiagramRequest(rawUrl) {
 //      （即使判定失误，也只会在 `prompts/` 白名单目录里按白名单名读取）。
 export const HELP_ASSET_ROUTE = "/api/dsh-graph/help/asset";
 export const HELP_PROMPT_ASSETS = Object.freeze([
+  "agent-teams-contract.en.md",
+  "agent-teams-contract.zh.md",
   "discipline.en.md",
   "discipline.zh.md",
   "executor-discipline.en.md",
@@ -2419,8 +2421,10 @@ export function apply(ctx, config) {
       // g-333：单一消费者（结构化三态 + 遗留回落 + 全局回落），见 resolveSubagentPrompt。
       // g-390：**小节标题是插件内置文本**，按 promptLanguage 本地化；正文 p 是用户材料，逐字不动。
       // g-440：Agent Teams 最小契约——**默认 off**。off 时第四个实参为 null ⇒ 与 g-440 之前逐字一致
-      //（diff=0）；on 时才把 discipline 资产里定界的契约段追加进**同一**「子代理补充提示词」槽位
-      //（不新造提示词拼装通道）。降级是**诚实**的：资产缺契约块 / 宿主不支持扇出 / 已知深度 < 2
+      //（diff=0）；on 时才把**独立契约资产**里定界的契约段追加进**同一**「子代理补充提示词」槽位
+      //（不新造提示词拼装通道）。g-496：契约正文真源 = `prompts/agent-teams-contract.<lang>.md`
+      // （从 discipline 迁出，主管每 turn 注入面不再常驻该段；抽取函数与门控逻辑一字未动）。
+      // 降级是**诚实**的：资产缺契约块 / 宿主不支持扇出 / 已知深度 < 2
       // ⇒ 不注入且不报错；harness 未暴露「扇出能力 / 子代理深度」查询 ⇒ 如实传 null（未知），
       // 既不伪称支持也不伪称不支持，深度 < 2 的降级由执行者按契约文本在结果中如实登记。
       const teamsContract = (() => {
@@ -2432,7 +2436,7 @@ export function apply(ctx, config) {
         }
         const decision = resolveAgentTeamsInjection({
           enabled,
-          contract: extractAgentTeamsContract(readPromptAsset("discipline", promptLanguage)),
+          contract: extractAgentTeamsContract(readPromptAsset("agent-teams-contract", promptLanguage)),
           supportsFanout: null,
           subagentDepth: null,
         });
