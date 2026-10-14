@@ -681,18 +681,26 @@ function localizedPrompt(name, language) {
   return requirePromptAsset(name, language);
 }
 
-/** g-496：执行者纪律的**静态散文**（测试力度分级 + 证据形式）唯一真源 =
+/** g-496：执行者纪律的**模板正文**（看板协同块 + 测试力度分级 + 证据形式）唯一真源 =
  *  `prompts/executor-discipline.<lang>.md`（随构建拷入 `dist/prompts/`，运行期现读、无启动缓存）。
- *  代码只保留 `## ` 标题、开场句、看板协同块等**含 goal/attempt 插值**的动态部分 ⇒ 不再有第二副本。
+ *  正文中的动态 id 写成 `{goal}` / `{attempt}` 占位符，由调用方回填 ⇒ 模板只有一份、两语言对偶。
  *  读取失败 fail-closed（`requirePromptAsset` 抛错，绝不静默降级为内置文本或空串）。
  *
- *  ⚠️ 该资产必须与其对偶语言保持 **parity 四重相等**（行数 / `##` 标题数 / 占位符集合 / 技术 token
- *  集合，见 core/tests/prompt-i18n-parity.test.ts —— 对 `prompts/` 顶层每个 `.zh.md` 自动生效）。
- *  这正是「看板协同与状态流转」块**不能**搬进资产的原因：zh 侧含 `graph_transition` 与 `{attempt}`，
- *  en 侧无对偶行，两侧纪律段行数亦不对称（zh 20 行 / en 9 行）⇒ 任何整块搬入都会立刻判红。
- *  该块仍只有代码一处真源（无重复副本），后续若要把整段搬入资产，须先裁决 parity 口径。 */
-function executorDisciplineLines(language = "zh") {
+ *  ⚠️ 该资产与其对偶语言受 core/tests/prompt-i18n-parity.test.ts 的**四重相等**约束：
+ *  行数 / `##` 标题数 / **占位符多重集** / 技术 token 集合。这正是「看板协同块」（含
+ *  `graph_transition` 与 `{attempt}`）必须在**两种语言里都出现**的原因——只搬 zh 会让 en 侧缺
+ *  3 个 `{goal}`、1 个 `{attempt}` 与 `graph_transition`，parity 立刻判红；故 en 资产自带对偶的
+ *  看板协同块（英文重写）。代码只保留**标题 / 空行 / 前言**三类结构脚手架，使注入载荷的位点
+ *  恰好落在资产**边界**上（zh 落在首行之前、en 落在末行之后），不需要任何行内哨兵标记。 */
+function executorDisciplineTemplate(language = "zh") {
   return requirePromptAsset("executor-discipline", language).replace(/\n+$/, "").split("\n");
+}
+
+/** g-496：把模板里的 `{goal}` / `{attempt}` 回填为本次 attempt 的实际 id（其余花括号原样保留，
+ *  不猜、不吞、不做通用插值）。占位符形态 `{name}` 与 parity 的识别口径同形，
+ *  故两侧占位符**多重集**可被自动逐项比对。 */
+function fillExecutorDisciplineTemplate(lines, { goal, attempt }) {
+  return lines.map((line) => line.replace(/\{goal\}/g, goal).replace(/\{attempt\}/g, attempt));
 }
 
 /** g-493 / g-495：`graph_help(topic)` 的主题抽取（纯函数，返回 null 表示该主题不存在）。
@@ -1291,25 +1299,16 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
   if (worktree) lines.push("", protectPromptMarkers(worktree));
   const goalValue = promptText(goal) || ATTEMPT_PROMPT_MISSING;
   const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
+  // g-496：纪律条目正文（看板协同块 + 分级规则 + 证据形式）唯一真源 = `prompts/executor-discipline.zh.md`，
+  // 本次只保留「标题 / 空行 / 前言」三行结构脚手架 —— 载荷注入位点落在资产**首行之前**（zh 口径：
+  // 前言之后、看板块之前），与搬迁前逐字节同位；动态 id 由模板 `{goal}`/`{attempt}` 占位符回填。
+  // 正文仍逐行过反伪装（保护强度不因搬迁减弱）。
+  // ⚠️ 后续再向纪律段新增内容，仍须在 core/tests/prompt-discipline-g239.test.ts 登记增量或做等量删减
+  //（该测试按**渲染产物**中的稳定标记剔除，与正文存放位置无关）；四个收缩阈值一律未动。
   lines.push(
     "",
-    "【看板协同与状态流转】看板列与状态摘要（status_line）由你维护，反映真实执行进展：",
-    "1. 泳道迁移（Human Gate 约束）：",
-    "   - 开工时（若当前非 in_progress）：调用 graph_transition(goal=\"" + goalValue + "\", to=\"in_progress\")；",
-    "   - 遇到阻塞：调用 graph_transition(goal=\"" + goalValue + "\", to=\"blocked\", reason=<一句话原因>)；",
-    "   - 本轮完成：调用 graph_transition(goal=\"" + goalValue + "\", to=\"review\") 停轮等待裁决；",
-    "   - 【禁区】绝不自行 graph_transition 到 \"delivered\"——delivered 是负责人/supervisor 的 human gate，最多到 review 就停。",
-    "2. 状态汇报（有限阶段触发，严禁每动作机械追加）：",
-    "   - 汇报触发点：仅在【开始开工】、【阶段转变/转向新任务】、【遇到阻塞】、【本轮完成待命】4类有限关键节点调用 graph_report_status(goal=\"" + goalValue + "\", attempt=\"" + attemptValue + "\", status=<一句话简短人话，≤20字>)；",
-    "   - 长任务节流心跳：长耗时任务（如大型构建、多步批量排查）适度按心跳汇报进展，普通轻量读取/单步调试切忌每步机械追加汇报；不再要求每个 read/bash 动作机械调用状态；",
-    "   - 迁移与状态同步：同步更新 status_line；迁移被引擎拒绝（如判据未登记）时不得继续实现，立即上报停止；",
-    // g-496：条目 3/4 的正文已**等价搬迁**到唯一真源 `prompts/executor-discipline.zh.md`
-    //（本函数只按既有注入顺序展开，不再持有字面量副本）。g-326 的「纪律段是分级规则唯一投递渠道」
-    // 去重裁决（护栏 core/tests/test-intensity-tiers.test.ts「去重护栏」）与 g-239 的**已登记增量**
-    // 登记（DISCIPLINE_INCREMENT_MARKERS；该测试按**渲染产物**中的稳定标记剔除，与正文存放位置无关）
-    // 均不受影响；四个收缩阈值（状态段 ≥20%/≥20%、整体 ≥8%/≥10%）一律未动。
-    // ⚠️ 后续再向纪律段新增内容，仍须在该测试登记增量或做等量删减，否则它会如实变红。
-    ...executorDisciplineLines("zh"),
+    ...fillExecutorDisciplineTemplate(executorDisciplineTemplate("zh"), { goal: goalValue, attempt: attemptValue })
+      .map((line) => protectPromptMarkers(line)),
   );
   return lines.join("\n");
 }
@@ -1361,15 +1360,24 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, brie
   ].join("\n");
   const discipline = [
     "## Execution discipline",
+    // g-496: this single preamble line is the EN counterpart of the zh 前言 — the **structure scaffolding**
+    // that keeps the injected payloads at the END of this section (below). The former
+    // `At start migrate …; never migrate to delivered.` line was dropped because the asset's board block
+    // now states the same lane-migration protocol (keeping it would be a second copy of template prose).
     "Use the assigned worktree only; main is read-only. Report state with graph_report_status using state=working, blocked, done, or error.",
-    `At start migrate ${promptText(goal) || missing} to in_progress; on a blocker use blocked with a reason; when done migrate to review and stop. Never migrate to delivered.`,
-    // g-496: entries 3/4 moved verbatim to the single source `prompts/executor-discipline.en.md`,
-    // kept in lockstep with `prompts/executor-discipline.zh.md` (parity: line count / `##` headings /
-    // placeholder set / technical-token set — core/tests/prompt-i18n-parity.test.ts). Keep both assets
-    // CJK-free: the English render path asserts the whole prompt contains no CJK. Still a registered
-    // g-239 increment (DISCIPLINE_INCREMENT_MARKERS — subtracted from the **rendered** discipline slice,
-    // so relocating the literal does not change the measurement).
-    ...executorDisciplineLines("en"),
+    // g-496: the discipline template body (board coordination + tier rules + evidence form) has a single
+    // source: `prompts/executor-discipline.en.md`, held in lockstep with the Chinese asset by
+    // core/tests/prompt-i18n-parity.test.ts (line count / `##` headings / placeholder multiset /
+    // technical-token set) — which is exactly why the English asset carries its own board block.
+    // Only the heading / blank line / preamble scaffolding stays here, so the injected payloads below
+    // keep their byte position at the END of this section. Keep both assets CJK-free: this render path
+    // asserts the whole prompt contains no CJK. Still a registered g-239 increment
+    // (DISCIPLINE_INCREMENT_MARKERS — subtracted from the **rendered** discipline slice, so relocating
+    // the literal does not change the measurement).
+    ...fillExecutorDisciplineTemplate(executorDisciplineTemplate("en"), {
+      goal: promptText(goal) || missing,
+      attempt: promptText(attempt) || missing,
+    }).map((line) => protectPromptMarkers(line, "en")),
     promptText(subagentPromptSection) ? protectSectionBody(subagentPromptSection, "en") : "",
     promptText(modeStrategySection) ? protectSectionBody(modeStrategySection, "en") : "",
     promptText(worktreeBlock) ? protectSectionBody(worktreeBlock, "en") : "",
