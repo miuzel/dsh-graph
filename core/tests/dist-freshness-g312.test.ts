@@ -35,6 +35,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const repoRoot = join(import.meta.dirname, "../..");
 const buildScriptPath = join(repoRoot, "scripts", "build.sh");
@@ -158,6 +159,62 @@ function collectVerbatimDrift(opts: { repoRoot: string; files: FilePair[]; dirs:
   return drift;
 }
 
+/** g-496：发布态 `dsh.promptAssets` 的**确切期望对象** —— 逐字段严格对账的唯一真源。
+ *
+ *  与 `scripts/build.sh` 写出的值、以及 `dsh-graph-host/index.js` 的 `MERGED_PROMPT_ASSET_DIR`
+ *  运行时常量必须一字不差（后者由 g496 回归用例断言，避免三处漂移）。 */
+export const EXPECTED_MERGED_PROMPT_ASSETS = Object.freeze({ layout: "merged", dir: "./prompts" });
+/** 源码态 `dsh.promptAssets` 的确切期望对象。 */
+export const EXPECTED_SOURCE_PROMPT_ASSETS = Object.freeze({
+  layout: "source", publicDir: "../prompts", hostDir: "./prompts",
+});
+
+/** g-496：发布态 `dsh.promptAssets` 的**逐字段严格对账**（不笼统放行）。
+ *
+ *  必须**恰好**等于 `EXPECTED_MERGED_PROMPT_ASSETS`：
+ *   · 字段集合**精确相等** ⇒ 源形态遗留的 `publicDir`/`hostDir`、以及任何**未知字段**都判红；
+ *   · `layout` 必须是 `merged`（源形态值 `source` 判红：说明构建没跑或标记没改写）；
+ *   · `dir` 必须是**确切构建常量** `./prompts` ⇒ 被篡改为 `../prompts`（包外源码！）或任何
+ *     其它值一律判红（这正是运行态紧锁的同一条不变量，此处做静态对账）。
+ *
+ *  额外校验源侧形状，防止「源写成 merged 后构建再改 merged」这类同义反复让两边都不红。 */
+export function reconcilePromptAssets(srcPromptAssets: unknown, builtPromptAssets: unknown): string[] {
+  const drift: string[] = [];
+  const srcPa = (srcPromptAssets ?? {}) as Record<string, unknown>;
+  const builtPa = (builtPromptAssets ?? {}) as Record<string, unknown>;
+
+  // 源侧必须恰为 source 期望对象（字段集合精确相等）。
+  const srcKeys = Object.keys(srcPa).sort();
+  const expectSrcKeys = Object.keys(EXPECTED_SOURCE_PROMPT_ASSETS).sort();
+  if (JSON.stringify(srcKeys) !== JSON.stringify(expectSrcKeys)) {
+    drift.push(`源 dsh.promptAssets 字段集合必须恰为 ${JSON.stringify(expectSrcKeys)}，实际 ${JSON.stringify(srcKeys)}`);
+  }
+  for (const [k, v] of Object.entries(EXPECTED_SOURCE_PROMPT_ASSETS)) {
+    if (JSON.stringify(srcPa[k]) !== JSON.stringify(v)) {
+      drift.push(`源 dsh.promptAssets.${k} 应为 ${JSON.stringify(v)}，实际 ${JSON.stringify(srcPa[k])}`);
+    }
+  }
+
+  // 发布侧必须**逐字段严格等于** merged 期望对象 —— 字段集合精确相等，多一个少一个都判红。
+  const builtKeys = Object.keys(builtPa).sort();
+  const expectBuiltKeys = Object.keys(EXPECTED_MERGED_PROMPT_ASSETS).sort();
+  if (JSON.stringify(builtKeys) !== JSON.stringify(expectBuiltKeys)) {
+    drift.push(
+      `dist/package.json dsh.promptAssets 字段集合必须恰为 ${JSON.stringify(expectBuiltKeys)}，`
+      + `实际 ${JSON.stringify(builtKeys)}（源形态遗留的 publicDir/hostDir 与任何未知字段都不得存在）`,
+    );
+  }
+  for (const [k, v] of Object.entries(EXPECTED_MERGED_PROMPT_ASSETS)) {
+    if (JSON.stringify(builtPa[k]) !== JSON.stringify(v)) {
+      drift.push(
+        `dist/package.json dsh.promptAssets.${k} 必须恰为 ${JSON.stringify(v)}，实际 ${JSON.stringify(builtPa[k])}`
+        + (k === "dir" ? "（发布态资产根只能是包内 ./prompts，绝不允许指向包外源码）" : ""),
+      );
+    }
+  }
+  return drift;
+}
+
 /** B 族：dist/package.json 与源 package.json 的字段级漂移（scripts 应被移除，main/exports 应被补上）。 */
 function collectPackageDrift(repoRoot: string): string[] {
   const source = JSON.parse(readFileSync(join(repoRoot, "dsh-graph-host", "package.json"), "utf8")) as Record<string, unknown>;
@@ -177,31 +234,37 @@ function collectPackageDrift(repoRoot: string): string[] {
   for (const key of Object.keys(source)) {
     if (key === "scripts" || key === "main" || key === "exports") continue;
     // g-496：`dsh.promptAssets` 是 build **有意改写**的字段（source → merged 布局标记），
-    // 不是「源改了没重建」的漂移面。此处仍**逐字段**核对：除 layout/dir 外其余必须与源一致，
-    // 且版本号漂移检测（本用例核心）不受影响 —— 只是不把文档化的构建变换误判为陈旧。
+    // 不是「源改了没重建」的漂移面。但它**不是放行区**：发布态必须与**确切期望对象**
+    // 逐字段严格相等（见 reconcilePromptAssets），任何偏离都判红 —— 包括源形态遗留的
+    // `publicDir`/`hostDir`、`dir` 被篡改、以及任何**未知字段**。
     if (key === "dsh") {
       const srcDsh = (source.dsh ?? {}) as Record<string, unknown>;
       const builtDsh = (built.dsh ?? {}) as Record<string, unknown>;
       for (const dshKey of Object.keys(srcDsh)) {
         if (dshKey === "promptAssets") {
-          const srcPa = (srcDsh.promptAssets ?? {}) as Record<string, unknown>;
-          const builtPa = (builtDsh.promptAssets ?? {}) as Record<string, unknown>;
-          if (builtPa.layout !== "merged") {
-            drift.push(`dist/package.json dsh.promptAssets.layout 必须被改写为 merged，实际 ${JSON.stringify(builtPa.layout)}`);
-          }
-          if (typeof srcPa.layout === "string" && srcPa.layout !== "source") {
-            drift.push(`源 dsh.promptAssets.layout 应为 source，实际 ${JSON.stringify(srcPa.layout)}`);
-          }
+          drift.push(...reconcilePromptAssets(srcDsh.promptAssets, builtDsh.promptAssets));
           continue;
         }
         if (JSON.stringify(builtDsh[dshKey]) !== JSON.stringify(srcDsh[dshKey])) {
           drift.push(`dist/package.json dsh.${dshKey} 与源不一致（源改了不重建必红）`);
         }
       }
+      // `dsh` 层同样不得出现源里没有的**未知子字段**（否则发布配置可被悄悄扩面）。
+      for (const dshKey of Object.keys(builtDsh)) {
+        if (!(dshKey in srcDsh)) {
+          drift.push(`dist/package.json dsh.${dshKey} 是源中没有的未知字段（build 不得新增 dsh 子字段）`);
+        }
+      }
       continue;
     }
     if (JSON.stringify(built[key]) !== JSON.stringify(source[key])) {
       drift.push(`dist/package.json 字段 ${key} 与源不一致（源改了不重建必红）：${JSON.stringify(built[key])} != ${JSON.stringify(source[key])}`);
+    }
+  }
+  // 发布态不得出现源里没有的**顶层未知字段**（构建只做删/补，不引入新顶层键）。
+  for (const key of Object.keys(built)) {
+    if (!(key in source)) {
+      drift.push(`dist/package.json 顶层字段 ${key} 是源中没有的未知字段（build 不得新增顶层键）`);
     }
   }
   return drift;
@@ -414,5 +477,92 @@ test("g-312 判据 4 负向对照：在 tmp 镜像里手改源不重建，三族
     assert.deepEqual(readFileSync(join(repoRoot, mutatedRel)), realBefore, "负向对照绝不允许改动真实仓库文件");
   } finally {
     rmSync(mirror, { recursive: true, force: true });
+  }
+});
+
+// ============================================================================
+// g-496 返工：发布态 dsh.promptAssets 的**逐字段严格对账**（正向不误红 + 负向必红）
+// ============================================================================
+
+test("g-496 P1（正向）：真实源/产物两态的 dsh.promptAssets 都恰为期望对象 ⇒ 不误红", () => {
+  const source = JSON.parse(readFileSync(join(repoRoot, "dsh-graph-host", "package.json"), "utf8"));
+  const built = JSON.parse(readFileSync(join(repoRoot, "dist", "package.json"), "utf8"));
+
+  assert.deepEqual(source?.dsh?.promptAssets, EXPECTED_SOURCE_PROMPT_ASSETS,
+    "源码清单必须恰为 source 期望对象");
+  assert.deepEqual(built?.dsh?.promptAssets, EXPECTED_MERGED_PROMPT_ASSETS,
+    "发布清单必须恰为 merged 期望对象");
+
+  // 合法两态必须**零红**（这是所有负向对照的前提：证明判红来自变异而非恒真）。
+  assert.deepEqual(reconcilePromptAssets(source?.dsh?.promptAssets, built?.dsh?.promptAssets), [],
+    "合法 source→merged 变换不得被误判为漂移");
+  assert.deepEqual(collectPackageDrift(repoRoot), [], "真实仓库不得有任何包漂移");
+});
+
+test("g-496 P2（负向）：发布态 dir 被篡改（含 ../prompts 包外源码）⇒ 必红", () => {
+  const src = EXPECTED_SOURCE_PROMPT_ASSETS;
+  const bad = ["../prompts", "./prompts/", "prompts", "./prompts/../prompts", ".", "", "../", "/tmp/prompts", "..\\prompts"];
+  for (const dir of bad) {
+    const drift = reconcilePromptAssets(src, { layout: "merged", dir });
+    assert.ok(drift.length > 0, `发布态 dir=${JSON.stringify(dir)} 必须判红`);
+    assert.ok(drift.some((d) => d.includes("dir")), `判红必须点名 dir 字段：${JSON.stringify(drift)}`);
+  }
+  // 反向对照：确切常量必须零红（证明上面的判红不是恒真）。
+  assert.deepEqual(reconcilePromptAssets(src, { layout: "merged", dir: "./prompts" }), [],
+    "确切构建常量 ./prompts 不得判红");
+});
+
+test("g-496 P3（负向）：发布态 layout 非 merged、或残留 source 字段 / 未知字段 ⇒ 必红", () => {
+  const src = EXPECTED_SOURCE_PROMPT_ASSETS;
+  const cases: Array<[string, any]> = [
+    ["layout 仍是 source（构建没跑/没改写）", { layout: "source", dir: "./prompts" }],
+    ["layout 取值非法", { layout: "whatever", dir: "./prompts" }],
+    ["layout 缺失", { dir: "./prompts" }],
+    ["残留源形态 publicDir", { layout: "merged", dir: "./prompts", publicDir: "../prompts" }],
+    ["残留源形态 hostDir", { layout: "merged", dir: "./prompts", hostDir: "./prompts" }],
+    ["残留 publicDir + hostDir", { layout: "merged", dir: "./prompts", publicDir: "../prompts", hostDir: "./prompts" }],
+    ["未知字段注入", { layout: "merged", dir: "./prompts", extra: "x" }],
+    ["dir 缺失", { layout: "merged" }],
+  ];
+  for (const [what, builtPa] of cases) {
+    const drift = reconcilePromptAssets(src, builtPa);
+    assert.ok(drift.length > 0, `${what} 必须判红`);
+  }
+  // 源侧形状同样严核：源写成 merged、或缺字段、或未知字段 ⇒ 必红。
+  for (const [what, srcPa] of [
+    ["源侧写成 merged", { layout: "merged", dir: "./prompts" }],
+    ["源侧缺 hostDir", { layout: "source", publicDir: "../prompts" }],
+    ["源侧未知字段", { layout: "source", publicDir: "../prompts", hostDir: "./prompts", extra: "x" }],
+  ] as Array<[string, any]>) {
+    assert.ok(reconcilePromptAssets(srcPa, EXPECTED_MERGED_PROMPT_ASSETS).length > 0, `${what} 必须判红`);
+  }
+});
+
+test("g-496 P4（负向·端到端）：发布态配置包外目录或未知字段 ⇒ 运行态 reader 直接 fail-closed", async () => {
+  const tmpBase = join(repoRoot, "tmp");
+  mkdirSync(tmpBase, { recursive: true });
+  const root = mkdtempSync(join(tmpBase, "g312-p4-"));
+  try {
+    for (const [what, marker] of [
+      ["dir 指向包外源码 ../prompts（邻接源码完整）", { layout: "merged", dir: "../prompts" }],
+      ["dir 为 './prompts/' 等非确切常量", { layout: "merged", dir: "./prompts/" }],
+      ["dir 缺省", { layout: "merged" }],
+      ["layout 取值非法", { layout: "whatever", dir: "./prompts" }],
+    ] as Array<[string, any]>) {
+      const pkg = join(root, `pkg-${Math.random().toString(36).slice(2)}`);
+      cpSync(join(repoRoot, "dist"), pkg, { recursive: true, dereference: true });
+      // 邻接源码完整：若 reader 误信 `../prompts` 就会**成功**，从而被这里抓住。
+      cpSync(join(repoRoot, "prompts"), join(root, "prompts"), { recursive: true, force: true });
+      const pkgJson = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8"));
+      pkgJson.dsh.promptAssets = marker;
+      writeFileSync(join(pkg, "package.json"), JSON.stringify(pkgJson, null, 2) + "\n");
+      await assert.rejects(
+        () => import(pathToFileURL(join(pkg, "index.js")).href),
+        /layout invalid|prompt asset/i,
+        `${what}：运行态必须 fail-closed，绝不回读包外源码`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

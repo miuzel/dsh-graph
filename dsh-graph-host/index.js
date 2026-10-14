@@ -722,10 +722,17 @@ export function resolvePromptLanguage(override = "follow", ctx = null) {
 // 归属的**唯一真源**是 `HELP_ASSET_REGISTRY`（见下）—— 注册表按资产登记所有权，
 // reader / catalog / HTTP 处理器全部从它取根取路径，**不存在第二份清单**。
 
+/** 发布形态的**唯一合法资产根**（构建常量，与 `scripts/build.sh` 写出的 `dir` 一字不差）。
+ *
+ *  g-496 返工（运行态紧锁）：merged 分支**只接受这个确切值**，不做路径归一、不判定「是否在包内」、
+ *  不提供任何通用路径框架 —— 任何其它取值（尤其 `../prompts` 这类误配置）一律 `layout invalid`。
+ *  导出供守卫断言「运行时常量与构建常量一致」，避免两处漂移。 */
+export const MERGED_PROMPT_ASSET_DIR = "./prompts";
+
 /** 读取并校验布局标记；配置损坏 ⇒ 抛错（**不**静默回落 source）。
  *
- *  返回 `{ layout, dir }`：`dir` 是**待拼接资产名的根 URL**。
- *  源形态按归属分层（`dirs` 提供两层的根），发布形态单一根。 */
+ *  返回 `{ layout, dirs }`：`dirs` 提供**待拼接资产名的根**（相对 `import.meta.url`）。
+ *  源形态按归属分层（public/host 两层），发布形态两层同为 `MERGED_PROMPT_ASSET_DIR`。 */
 function resolvePromptAssetRoots() {
   const manifestUrl = new URL("./package.json", import.meta.url);
   let manifest;
@@ -741,11 +748,17 @@ function resolvePromptAssetRoots() {
   const { layout } = marker;
   if (layout === "merged") {
     const dir = marker.dir;
-    if (typeof dir !== "string" || dir.length === 0) {
-      throw new Error('dsh-graph prompt asset layout invalid: dsh.promptAssets.dir required when layout is "merged"');
+    // 发布形态：**唯一根必须等于构建常量 `./prompts`**（g-496 返工：运行态紧锁）。
+    // 不解析、不归一、不做「包内判定」的通用路径框架 —— 只要不等于确切常量就判非法。
+    // 理由：`dir` 是 build **写死**的包内常量，任何其它取值（尤其 `../prompts` 这类
+    // 误配置）都会把发布态引回**包外源码**，直接破坏「发布态绝不回读源码」的铁律。
+    // 因此这里不是「配置校验」，而是**发布形态的不可协商不变量**。
+    if (dir !== MERGED_PROMPT_ASSET_DIR) {
+      throw new Error(
+        `dsh-graph prompt asset layout invalid: dsh.promptAssets.dir must be exactly ${JSON.stringify(MERGED_PROMPT_ASSET_DIR)} when layout is "merged" (got ${JSON.stringify(dir)})`,
+      );
     }
-    // 发布形态：唯一根，**绝不**回看源码层（dir 由 build 写死为包内 ./prompts）。
-    return { layout, dirs: { public: dir, host: dir } };
+    return { layout, dirs: { public: MERGED_PROMPT_ASSET_DIR, host: MERGED_PROMPT_ASSET_DIR } };
   }
   if (layout === "source") {
     const { publicDir, hostDir } = marker;

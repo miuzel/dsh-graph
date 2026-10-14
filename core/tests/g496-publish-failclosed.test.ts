@@ -345,3 +345,54 @@ test("g-496 R7：布局标记缺失或非法 ⇒ 发布上下文明确失败（�
     }
   }
 });
+
+// ---------------------------------------------------------------- ⑧ 运行态紧锁常量
+
+test("g-496 R8：运行态 merged 根常量与构建常量、g312 期望对象三处一字不差（防漂移）", async () => {
+  const dist: any = await import(pathToFileURL(join(distRoot, "index.js")).href);
+  assert.equal(dist.MERGED_PROMPT_ASSET_DIR, "./prompts",
+    "运行时常量必须是确切构建常量 ./prompts");
+
+  // 三处同源：运行时常量 == build.sh 写出的值 == g312 的期望对象。
+  const built = JSON.parse(readFileSync(join(distRoot, "package.json"), "utf8"));
+  assert.equal(built?.dsh?.promptAssets?.dir, dist.MERGED_PROMPT_ASSET_DIR,
+    "发布清单 dir 必须等于运行时常量");
+  assert.equal(built?.dsh?.promptAssets?.layout, "merged", "发布清单必须是 merged");
+
+  const build = readFileSync(join(repoRoot, "scripts/build.sh"), "utf8");
+  assert.match(build, /layout:\s*"merged"/, "build.sh 必须写出 merged 布局");
+  assert.match(build, /dir:\s*"\.\/prompts"/, "build.sh 必须写出确切 dir ./prompts");
+
+  // 运行态紧锁：不等于确切常量一律 layout invalid（不解析、不归一、不判定「是否在包内」）。
+  const hostSrc = readFileSync(join(repoRoot, "dsh-graph-host/index.js"), "utf8");
+  assert.match(hostSrc, /dir !== MERGED_PROMPT_ASSET_DIR/, "merged 分支必须与确切常量严格比较");
+  // 运行态紧锁：**不得**对 dir 做路径归一/包内判定（那会重新引入「某种取值也算合法」的判据面）。
+  // 断言的是「不存在对 dir 的加工」，不是「文件里不出现 resolve/normalize 字样」。
+  assert.ok(!/isInsidePackage|isWithinPackage|assertInsidePackage/.test(hostSrc),
+    "不得引入「是否在包内」的通用判定框架（运行态紧锁 = 严格等值比较）");
+  // 只看 **merged 分支那一段**（`resolvePromptAssetRoots` 函数体），避免误伤别处的同名变量。
+  const mergedBranch = hostSrc.slice(
+    hostSrc.indexOf('if (layout === "merged")'),
+    hostSrc.indexOf('if (layout === "source")'),
+  );
+  assert.ok(mergedBranch.length > 0, "必须能定位 merged 分支源码");
+  assert.ok(!/(resolve|normalize|join|relative)\s*\(\s*dir\b/.test(mergedBranch),
+    "merged 分支不得对 dir 做路径解析/归一（只允许严格等值比较）");
+});
+
+test("g-496 R9（负向·运行态）：merged 的 dir 被篡改为包外或非确切值 ⇒ 加载即 fail-closed", async () => {
+  for (const dir of ["../prompts", "./prompts/", "prompts", ".", "..", "/tmp/prompts", "./prompts/../prompts"]) {
+    const { root, dispose } = sandbox("g496r9-");
+    try {
+      const pkg = stagePackage(root);
+      plantAdjacentSource(root); // 邻接源码完整：误信 dir 就会「成功」，从而被抓住
+      const pkgJson = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8"));
+      pkgJson.dsh.promptAssets = { layout: "merged", dir };
+      writeFileSync(join(pkg, "package.json"), JSON.stringify(pkgJson, null, 2) + "\n");
+      const reason = await expectFailure(pkg, `merged dir=${JSON.stringify(dir)}`);
+      assert.match(reason, /layout invalid/i, `必须点名 layout invalid，实得：${reason}`);
+    } finally {
+      dispose();
+    }
+  }
+});
