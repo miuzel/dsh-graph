@@ -94,19 +94,39 @@
     // 而回落到首项（负责人目视到的「切 zh/en 跳回首条」）。选中态改存 base 后，切换语言只是
     // 换一份同 base 的资产正文，选择**不丢**。
     /** 按基名 + 当前语言解析完整资产名（维护提示词**语言优先级**）。 */
+    /** 语言候选顺序：请求语言优先，其余语言**透明回落**（缺译文时不至于丢项或空白）。
+     *  这是提示词语言优先级的**唯一**真源 —— `helpAssetNameOf` 与 `helpPromptAssetRows`
+     *  都经它取序，避免两处各写一遍回落顺序。 */
+    function helpAssetLangOrder(lang) {
+      const all = ["zh", "en"];
+      return [lang].concat(all.filter((c) => c !== lang));
+    }
+
     function helpAssetNameOf(list, base, lang) {
       if (!base) return "";
       const rows = (Array.isArray(list) ? list : []).filter((e) => e && e.base === base);
       if (!rows.length) return "";
       const byLang = (code) => rows.find((e) => e.lang === code);
-      const hit = byLang(lang) || byLang("zh") || byLang("en") || rows[0];
+      const hit = helpAssetLangOrder(lang).map(byLang).find(Boolean) || rows[0];
       return hit ? hit.name : "";
     }
 
-    /** 语言候选顺序：请求语言优先，其余语言**透明回落**（缺译文时不至于丢项或空白）。 */
-    function helpAssetLangOrder(lang) {
-      const all = ["zh", "en"];
-      return [lang].concat(all.filter((c) => c !== lang));
+    /** g-498：**当前语言展示投影** —— 每个基名恰一行。
+     *  名字优先当前语言；该基名缺当前语言时退到现存的那一份（与 `helpAssetNameOf` **同序**），
+     *  并带上 `shownLang` ⇒ 缺译文项**仍在列表里可见、可高亮**（正文用回落那份 + 如实标注），
+     *  而不是静默从列表消失、把选择挤到别的 base。按 `base` 去重保证「每项恰一次」。 */
+    function helpPromptAssetRows(list, lang) {
+      const rows = Array.isArray(list) ? list : [];
+      const seen = new Set();
+      const out = [];
+      for (const e of rows) {
+        if (!e || typeof e.base !== "string" || !e.base || seen.has(e.base)) continue;
+        seen.add(e.base);
+        const hit = rows.find((r) => r && r.name === helpAssetNameOf(rows, e.base, lang));
+        if (!hit) continue;
+        out.push({ name: hit.name, base: e.base, lang: hit.lang, category: hit.category, shownLang: hit.lang });
+      }
+      return out;
     }
 
     /** g-498：把目录投影按**注册元数据**里的分类分组（客户端不新增文件清单）。
@@ -226,7 +246,9 @@
       { key: "roadmap", labelKey: "help.topic.section.roadmap", keys: ["help.topic.roadmap"] },
     ];
 
-    /** g-498：**引文单独呈现**的键（blockquote 引用块，而不是混在正文段落里）。 */
+    /** g-498：**引文单独呈现**的键（blockquote 引用块，而不是混在正文段落里）。
+     *  它是「这段正文必须以引用块呈现」的**声明**；实际分块由 `HelpRichText` 按 `> ` 前缀切分，
+     *  两者由 g498 回归测试对账（声明集的正文必须真的产出 blockquote）。 */
     const HELP_TOPIC_QUOTE_KEYS = ["help.topic.definition"];
 
     /** g-498：点题段落的分组视图。
@@ -248,6 +270,12 @@
      *  引文用独立 blockquote（左竖线 + 缩进）与正文分开呈现。 */
     function HelpRichText(props) {
       const text = String(props.text ?? "");
+      // g-498 返工②：`className` / `data-topic-key` 必须**转发到真实渲染根**。此前只取 `props.text`，
+      // 调用点传的 `dg-help-topic-p help-topic-<key>` 全被丢掉 ⇒ 真实 DOM 段落只有
+      // `dg-help-p dg-help-rich-p`，11 条 topic 标识落空（复核 rev-att-001-01 实测）。
+      // 这里按 `paragraph` / `quote` 分别加后缀，标识始终落在**条目**上（不是分组/标题容器）。
+      const extra = String(props.className ?? "").trim();
+      const topicKey = props.topicKey ? String(props.topicKey) : "";
       const blocks = [];
       let paragraph = [];
       const flush = () => {
@@ -260,11 +288,14 @@
         if (quote) { flush(); blocks.push({ type: "quote", text: quote[1] }); } else if (!line.trim()) { flush(); } else { paragraph.push(line); }
       }
       flush();
-      return h("div", { className: "dg-help-rich" },
+      return h("div", { className: ("dg-help-rich " + extra).trim() },
         ...blocks.map((b, i) => (b.type === "quote"
           ? h("blockquote", {
             key: `help-quote-${i}`,
-            className: "dg-help-quote",
+            // 引文块同样带上调用点的语义类（`dg-help-topic-p help-topic-<key>`）——
+            // 标识与条目类要**同时**落在真实渲染根上，引文条目不能被漏掉。
+            className: ("dg-help-quote " + extra).trim(),
+            "data-topic-key": topicKey,
             style: {
               margin: "8px 0", padding: "6px 12px", fontSize: 13, lineHeight: 1.8,
               borderLeft: "3px solid rgba(128,128,128,.45)", background: "rgba(128,128,128,.07)",
@@ -273,7 +304,8 @@
           }, parseInlineMarkdown(b.text))
           : h("p", {
             key: `help-paragraph-${i}`,
-            className: "dg-help-p dg-help-rich-p",
+            className: ("dg-help-p dg-help-rich-p " + extra).trim(),
+            "data-topic-key": topicKey,
             style: { margin: "0 0 8px", fontSize: 13, lineHeight: 1.75 },
           }, parseInlineMarkdown(b.text)))));
     }
@@ -303,16 +335,14 @@
               className: "dg-help-topic-section-title",
               style: { fontWeight: 600, fontSize: 13.5, margin: "12px 0 5px", opacity: 0.95 },
             }, dgT(section.labelKey)),
-            ...section.keys.map((key) => (HELP_TOPIC_QUOTE_KEYS.includes(key)
-              ? h("div", {
-                key: "help-topic-" + key,
-                className: "dg-help-quote-wrap dg-help-topic-p " + key.replace(/\./g, "-"),
-              }, h(HelpRichText, { text: dgT(key) }))
-              : h(HelpRichText, {
-                key: "help-topic-" + key,
-                className: "dg-help-topic-p " + key.replace(/\./g, "-"),
-                text: dgT(key),
-              })))))),
+            ...section.keys.map((key) => h(HelpRichText, {
+              // g-498 返工②：条目标识由 `HelpRichText` 转发到**真实**渲染根（段落 / 引文块），
+              // 不再靠一个硬编码包装 div ⇒ 12 条点题条目在真实 DOM 里各自带 `help-topic-<key>`。
+              key: "help-topic-" + key,
+              className: "dg-help-topic-p " + key.replace(/\./g, "-"),
+              topicKey: key,
+              text: dgT(key),
+            }))))),
         ...HELP_USAGE_KEYS.map((key) => h("p", {
           key: "help-usage-" + key,
           className: "dg-help-p",
@@ -344,20 +374,32 @@
       const [pickedBase, setPickedBase] = React.useState("");
       const [asset, setAsset] = React.useState({ status: "idle", text: "", error: "", lang: "" });
       const lang = pickedLang ?? hostLang;
-      const visible = entries.filter((e) => e.lang === lang);
-      // 当前语言**有**条目时，选中项必须留在该语言集合内（首开 / 该语言缺此资产 ⇒ 回落到该语言首项）。
-      // 该语言**完全没有**条目时（整批缺译文）不把选择清空 —— 退到全量清单的首项，由
-      // `helpAssetNameOf` 按「请求语言 → zh → en」取到实际存在的那一份，并如实标注实际语言。
-      const pool = visible.length ? visible : entries;
-      const base = pool.some((e) => e.base === pickedBase) ? pickedBase : ((pool[0] && pool[0].base) || "");
-      // g-498：清单只展示**当前语言**的条目（`visible`）；分组同样只对 `visible` 分组，
-      // 否则两种语言的条目会一起出现（每项不止一次）。总量守恒 = 当前语言资产数。
+      // g-498 返工①：稳定身份的判定一律对**全量清单** `entries` 做 —— 若拿当前语言集合判定，
+      // 「仅该模板缺当前语言」会被误判成「该 base 不存在」而跳回首项，`helpAssetNameOf` 的
+      // 「请求语言 → 现存项」回落**结构上不可达**（复核 rev-att-001-01 实测：discipline 切 en
+      // 跳 agent-teams 且无标注）。选择只在该 base 真的不在目录里时才回落到首项。
+      const base = entries.some((e) => e && e.base === pickedBase)
+        ? pickedBase
+        : ((entries[0] && entries[0].base) || "");
+      // 列表按**当前语言投影**渲染：每个 base 恰一行；缺当前语言的行退到现存那份（正文回落 + 如实标注），
+      // 因此缺译文项**仍有同 base 的可见行与高亮**，不会静默消失。
+      const visible = helpPromptAssetRows(entries, lang);
       const groups = helpPromptGroups(visible, categories, lang);
-      // 请求路径永远与界面语言一致：`<base>.<当前语言>.md`（列表项、按钮高亮与正文据此三者一致）。
       const selected = helpAssetNameOf(entries, base, lang);
       const selectedEntry = entries.find((e) => e.name === selected) || null;
       // 正文里的实际语言 = 完整名后缀（缺译文时宿主回落，UI 如实标注，不假装是请求语言）。
       const shownLang = selectedEntry && selectedEntry.lang ? selectedEntry.lang : lang;
+      // g-498 新增要求：**左列表与右预览各自独立滚动**，切换模板只把**右侧预览**复位到顶部。
+      // 这里用真实 DOM ref（不是变量名占位）：`previewRef` 指向右侧滚动承载元素，
+      // 正文变化后只重置它，左侧列表的 `scrollTop` 原样保留 ⇒ 选列表后部的模板不会把整页/列表顶回去。
+      const previewRef = React.useRef(null);
+      // 左侧列表的 scrollTop **刻意不重置** —— 这里持有真实 DOM 节点是为了让该不变量可被实测
+      // （回归测试断言「切模板后列表 scrollTop 原样保留、只有预览归零」）。
+      const listRef = React.useRef(null);
+      React.useEffect(() => {
+        const el = previewRef.current;
+        if (el && typeof el.scrollTop === "number") el.scrollTop = 0;
+      }, [selected]);
       React.useEffect(() => {
         if (!selected) { setAsset({ status: "idle", text: "", error: "", lang: "" }); return undefined; }
         let alive = true;
@@ -382,10 +424,23 @@
           ? h("div", { className: "dg-help-loading", style: { ...S.meta, padding: "8px 0" } }, dgT("help.prompts.loading"))
           : state.status === "error"
             ? h("div", { className: "dg-help-error", style: { fontSize: 12, padding: "8px 0" } }, dgT("help.prompts.error", { error: String(state.error ?? "") }))
-            : h("div", { style: { display: "flex", gap: 12, alignItems: "flex-start", minHeight: 0 } },
+            // g-498：两栏**各自独立滚动**的承载布局。外层给定受限高度（`min(60vh, 460px)`）并
+            // `minHeight: 0` —— 否则 flex 子项的最小内容高度会把容器撑开，滚动条跑到外层 body 上，
+            // 出现「只有整页在滚、标题与列表随外层一起跑走」。两栏各自 `overflow: auto` + `minHeight: 0`。
+            : h("div", {
+              className: "dg-help-prompts-split",
+              style: {
+                display: "flex", gap: 12, alignItems: "stretch",
+                height: "min(60vh, 460px)", minHeight: 220, minWidth: 0,
+              },
+            },
           h("div", {
+            ref: listRef,
             className: "dg-help-prompt-list",
-            style: { flex: "0 0 190px", display: "flex", flexDirection: "column", gap: 4 },
+            style: {
+              flex: "0 0 190px", minWidth: 130, display: "flex", flexDirection: "column",
+              gap: 4, minHeight: 0, overflowY: "auto", overflowX: "hidden", paddingRight: 4,
+            },
           }, ...groups.map((g) => h("div", {
             key: "help-prompt-group-" + g.key,
             className: "dg-help-prompt-group",
@@ -402,20 +457,30 @@
               style: { ...(e.base === base ? S.btnPrimary : S.btn), textAlign: "left", padding: "4px 10px", fontSize: 12 },
               onClick: () => setPickedBase(e.base),
             }, helpAssetLabel(e.base)))))),
-          h("div", { className: "dg-help-prompt-body", style: { flex: "1 1 auto", minWidth: 0 } },
-            h("div", { style: { ...S.meta, marginBottom: 6 } },
+          h("div", {
+            className: "dg-help-prompt-body",
+            style: { flex: "1 1 auto", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" },
+          },
+            // 右侧标题条**固定**（不参与滚动），只有下面的预览区滚动 ⇒ 标题不会随预览滚走。
+            h("div", { className: "dg-help-prompt-caption", style: { ...S.meta, marginBottom: 6, flex: "0 0 auto" } },
               (selectedEntry ? helpAssetLabel(selectedEntry.base) + " · " : "")
                 + dgT("help.prompts.source")
                 // 缺译文透明回落：实际展示的不是请求语言时**如实标注**，不假装。
                 + (shownLang !== lang ? " " + dgT("help.prompts.langFallback", { lang: dgT("help.lang." + shownLang) }) : "")),
-            asset.status === "loading"
-              ? h("div", { className: "dg-help-loading", style: { ...S.meta, padding: "8px 0" } }, dgT("help.prompts.loading"))
-              : asset.status === "error"
-                ? h("div", { className: "dg-help-error", style: { fontSize: 12, padding: "8px 0" } }, dgT("help.prompts.error", { error: asset.error }))
-                : h("div", {
-                  className: "dg-help-prompt-md",
-                  style: { padding: "8px 10px", borderRadius: 6, background: "rgba(128,128,128,.06)" },
-                }, h(GoalMarkdown, { text: asset.text })))));
+            h("div", {
+              // 右侧预览的**独立滚动承载**：`previewRef` 指向它，切换模板时只把它复位到顶部。
+              ref: previewRef,
+              className: "dg-help-prompt-preview",
+              style: { flex: "1 1 auto", minHeight: 0, overflowY: "auto", overflowX: "hidden", paddingRight: 4 },
+            },
+              asset.status === "loading"
+                ? h("div", { className: "dg-help-loading", style: { ...S.meta, padding: "8px 0" } }, dgT("help.prompts.loading"))
+                : asset.status === "error"
+                  ? h("div", { className: "dg-help-error", style: { fontSize: 12, padding: "8px 0" } }, dgT("help.prompts.error", { error: asset.error }))
+                  : h("div", {
+                    className: "dg-help-prompt-md",
+                    style: { padding: "8px 10px", borderRadius: 6, background: "rgba(128,128,128,.06)" },
+                  }, h(GoalMarkdown, { text: asset.text }))))));
     }
 
     /** g-489 工具清单页签：按宿主分类真源分**表格**呈现（简称 / 工具名 / 用途），每类一张表。

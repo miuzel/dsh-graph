@@ -443,6 +443,8 @@
         helpTopicSections,
         helpPromptGroups,
         helpAssetNameOf,
+        helpPromptAssetRows,
+        helpAssetLangOrder,
       },
     };
   },

@@ -35,6 +35,16 @@ const pluginPath = join(repoRoot, "dsh-graph-host/lib/client/plugin.js");
 const BUNDLE_SRC = readFileSync(bundlePath, "utf8");
 const HELP_MODAL_SRC = readFileSync(helpModalPath, "utf8");
 
+/** 从**真实源码**里读出点题键清单（不手工复制一份 —— 复制件会与实现漂移，
+ *  守恒判据必须在「清单真源 vs 渲染产物」之间对账才有意义）。 */
+const readStringArray = (declName: string): string[] => {
+  const m = new RegExp(`const\\s+${declName}\\s*=\\s*\\[([^\\]]*)\\]`, "s").exec(HELP_MODAL_SRC);
+  assert.ok(m, `源码里必须能读到 ${declName}`);
+  return [...m![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
+};
+const HELP_USAGE_TOPIC_KEYS = readStringArray("HELP_USAGE_TOPIC_KEYS");
+const HELP_TOPIC_QUOTE_KEYS = readStringArray("HELP_TOPIC_QUOTE_KEYS");
+
 /** 宿主目录端点（`/help/catalog`）的真实投影：与 dist/index.js 的导出**同源**取数。 */
 async function hostCatalog(): Promise<any> {
   const mod: any = await import(new URL("../../dist/index.js", import.meta.url).href);
@@ -49,15 +59,29 @@ async function hostCatalog(): Promise<any> {
  *  与组件渲染时用的是同一份文案 ⇒ 测试可以用可见标签反查被点的到底是哪个资产。 */
 async function assetLabelToBase(): Promise<Map<string, string>> {
   const catalog = await hostCatalog();
+  return buildLabelToBase(catalog);
+}
+
+/** 上面的**同步**内核：给定目录，返回「可见标签 → 基名」。 */
+function buildLabelToBase(catalog: any): Map<string, string> {
   const sandbox: any = { React: {} };
   vm.runInNewContext(`${readFileSync(i18nSrcPath, "utf8")}; this.dict = zh;`, sandbox);
   const zh: Record<string, string> = sandbox.dict;
   const out = new Map<string, string>();
-  for (const base of new Set(catalog.prompts.map((p: any) => p.base))) {
+  for (const base of new Set((catalog.prompts as any[]).map((p: any) => p.base))) {
     const label = zh[`help.asset.${base}`];
-    if (label) out.set(label, base);
+    if (label) out.set(label as string, base as string);
   }
   return out;
+}
+
+/** 基名 → 该 base 在列表里显示的**可见标签**（与组件同源：真实客户端 zh 字典）。
+ *  用它按可见文本定位按钮，避免依赖渲染顺序。 */
+function helpAssetLabelOf(base: string): string {
+  const sandbox: any = { React: {} };
+  vm.runInNewContext(`${readFileSync(i18nSrcPath, "utf8")}; this.dict = zh;`, sandbox);
+  const zh: Record<string, string> = sandbox.dict;
+  return zh[`help.asset.${base}`] || base;
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +121,8 @@ function makeHarness(): Harness {
     RealError.prepareStackTrace = undefined;
     return frames?.[1]?.getFunction?.() ?? null;
   };
+  /** ref 身份 → 宿主节点（模拟真实 DOM 节点在重渲染间复用）。 */
+  const hostByRef = new Map<any, any>();
   const slots = new Map<any, any[]>();
   const cursor = new Map<any, number>();
   let effects: any[] = [];
@@ -114,6 +140,23 @@ function makeHarness(): Harness {
     createElement(type: any, props: any, ...children: any[]) {
       const p = props ? { ...props } : {};
       const el: any = { type, props: p, children, key: p.key ?? null };
+      // `ref` 走**真实 DOM 语义**：给元素挂一个带可变 `scrollTop` 的宿主节点，
+      // 并把该节点写进 `ref.current` —— 于是「切换模板只复位右侧预览」可以被实测，
+      // 而不是断言「源码里有个叫 previewRef 的变量」。
+      if (p.ref && typeof p.ref === "object") {
+        // 真实 React 在重渲染时**复用同一个 DOM 节点**（滚动位置因此得以保留）。
+        // 迷你 harness 每趟都重建 vnode，故按「ref 身份」缓存宿主节点 —— 否则每次 mount 都会
+        // 换一个新的 scrollTop 对象，「列表位置保留」这条不变量就无法在 harness 里被实测。
+        const key = p.ref;
+        let host = hostByRef.get(key);
+        if (!host) {
+          host = { scrollTop: 0, scrollHeight: 1000, clientHeight: 300, className: p.className ?? "" };
+          hostByRef.set(key, host);
+        }
+        host.className = p.className ?? "";
+        el.__host = host;
+        p.ref.current = host;
+      }
       // `__v` 标记真实 vnode（与字符串/数字子节点区分），供可见文本遍历使用。
       Object.defineProperty(el, "__v", { value: true, enumerable: false });
       nodes.push(el);
@@ -302,6 +345,14 @@ const textsWithClass = (els: any[], needle: string) => withClass(els, needle).ma
 const listButtons = (els: any[]) => withClass(els, "dg-help-asset-btn");
 /** 语言切换按钮（zh/en）。 */
 const langButtons = (els: any[]) => withClass(els, "dg-help-lang-btn");
+
+/** 独立滚动的**承载元素**（带真实宿主节点者）：只认真正带 `overflow` 语义类的元素，
+ *  不看变量名。列表 / 预览两个承载必须各自存在且互不相同。 */
+const scrollCarriers = (els: any[]) => withClass(els, "dg-help-prompt-list")
+  .concat(withClass(els, "dg-help-prompt-preview"))
+  .filter((e) => e.__host);
+const listCarrier = (els: any[]) => withClass(els, "dg-help-prompt-list").filter((e) => e.__host)[0];
+const previewCarrier = (els: any[]) => withClass(els, "dg-help-prompt-preview").filter((e) => e.__host)[0];
 
 /** 正文容器里实际喂给 Markdown 渲染器的文本（`GoalMarkdown` 的 `text` prop）。
  *  不展开 `GoalMarkdown`（那是全局 Markdown 框架的另一套实现），直接读它的输入 ——
@@ -549,23 +600,81 @@ test("g-498 E2：四个语义小标题齐备且有序；点题章节渲染在原
   assert.ok(plainAt > topicAt, "点题章节必须渲染在原有使用说明段落之前");
 });
 
-test("g-498 E3：点题条目集合守恒 —— 清单里的每条恰渲染一次（分组不丢项、不重复）", async () => {
+test("g-498 E3：点题条目集合守恒 —— 与 HELP_USAGE_TOPIC_KEYS **双向**对账，每个恰一次", async () => {
   const h = makeHarness();
   await h.mount("HelpUsageTab", {});
   const els = h.nodes();
-  const topicKeys = [...HELP_MODAL_SRC.matchAll(/"help\.topic\.[a-zA-Z]+"/g)].map((m) => m[0].replace(/"/g, ""));
-  const sections = withClass(els, "dg-help-topic-section");
-  assert.ok(sections.length >= 4, `点题章节必须渲染出全部语义分组（实得 ${sections.length}）`);
-  // 分组容器里渲染出的「段落/引文块」总数必须 > 0 且不超过清单键数（每条至多一次）。
-  const rendered = sections.flatMap((s) => treeOf(s).filter((e) => elClass(e).includes("dg-help-topic-p") || elClass(e).includes("help-topic-")));
-  assert.ok(rendered.length > 0, "点题章节必须渲染出正文条目");
-  const byKey = new Map<string, number>();
-  for (const e of rendered) {
-    const k = (e.props?.key ?? "").toString();
-    if (k) byKey.set(k, (byKey.get(k) ?? 0) + 1);
+  // 真实渲染出的条目标识：`data-topic-key` 是 `HelpRichText` 转发到**真实渲染根**的属性。
+  // 不复用 `includes("help-topic-")` 这类子串计数 —— 分组容器/标题容器的类名里也有该子串，
+  // 会把容器当条目数进来（复核 rev-att-001-01 指出的空真）。
+  const topicKeyedEls = els.filter((e) => typeof e.props?.["data-topic-key"] === "string" && e.props["data-topic-key"]);
+  const renderedKeys = topicKeyedEls.map((e) => e.props["data-topic-key"]);
+  // 只统计**条目**（段落 / 引文块），显式排除分组与标题容器。
+  const itemEls = topicKeyedEls.filter((e) => e.type === "p" || e.type === "blockquote");
+  const itemKeys = itemEls.map((e) => e.props["data-topic-key"]);
+  assert.ok(itemEls.length > 0, "点题章节必须渲染出正文条目");
+  // ① 渲染集 ⊆ 清单集：不得凭空多出条目。
+  const extra = [...new Set(itemKeys)].filter((k) => !HELP_USAGE_TOPIC_KEYS.includes(k));
+  assert.deepEqual(extra, [], `渲染出的点题条目必须都在 HELP_USAGE_TOPIC_KEYS 内（多出 ${JSON.stringify(extra)}）`);
+  // ② 清单集 ⊆ 渲染集：不得丢项（双向对账）。
+  const missing = HELP_USAGE_TOPIC_KEYS.filter((k) => !itemKeys.includes(k));
+  assert.deepEqual(missing, [], `HELP_USAGE_TOPIC_KEYS 的每条都必须渲染（缺失 ${JSON.stringify(missing)}）`);
+  // ③ 每个恰 1 次（既不多也不少）。
+  const counts = new Map<string, number>();
+  for (const k of itemKeys) counts.set(k, (counts.get(k) ?? 0) + 1);
+  for (const k of HELP_USAGE_TOPIC_KEYS) assert.equal(counts.get(k), 1, `点题条目 ${k} 必须恰渲染一次（实得 ${counts.get(k)} 次）`);
+  // ④ 容器**不得**被计入条目（否则本判据又会退化成容器计数）：分组/标题容器的 type 不是 p/blockquote。
+  const containerKeys = topicKeyedEls.filter((e) => e.type !== "p" && e.type !== "blockquote");
+  assert.deepEqual(containerKeys, [], `标识必须只落在条目上，不得落在分组/标题容器（实得多出 ${containerKeys.length} 个）`);
+  void renderedKeys;
+});
+
+test("g-498 E3b（负向对照·删段）：真实删掉某条正文 ⇒ 守恒断言必红", async () => {
+  // 变异：模拟「清单里有、渲染时漏掉」—— 从渲染树里摘掉一条，守恒判据必须报缺失。
+  const h = makeHarness();
+  await h.mount("HelpUsageTab", {});
+  const pruned = h.nodes().filter((e) => e.props?.["data-topic-key"] !== HELP_USAGE_TOPIC_KEYS[0]);
+  const itemKeys = pruned.filter((e) => e.type === "p" || e.type === "blockquote")
+    .map((e) => e.props?.["data-topic-key"]).filter(Boolean);
+  const missing = HELP_USAGE_TOPIC_KEYS.filter((k) => !itemKeys.includes(k));
+  assert.ok(missing.length > 0, `删段后必须判出缺失（实得 ${JSON.stringify(missing)}）`);
+  assert.deepEqual(missing, [HELP_USAGE_TOPIC_KEYS[0]!], "缺失集必须精确指向被删的那条");
+});
+
+test("g-498 E3c（负向对照·重复段）：某条渲染两次 ⇒ 「恰一次」断言必红", async () => {
+  const h = makeHarness();
+  await h.mount("HelpUsageTab", {});
+  const items = h.nodes().filter((e) => (e.type === "p" || e.type === "blockquote") && e.props?.["data-topic-key"]);
+  const dupe = items[0]!;
+  const duplicated = [...items, dupe];
+  const counts = new Map<string, number>();
+  for (const e of duplicated) counts.set(e.props["data-topic-key"], (counts.get(e.props["data-topic-key"]) ?? 0) + 1);
+  const k = dupe.props["data-topic-key"];
+  assert.equal(counts.get(k), 2, "重复段后计数必须为 2（判据可判别性自证）");
+  assert.notEqual(counts.get(k), 1, "重复段必须被「恰一次」判据抓住");
+});
+
+test("g-498 E3d（负向对照·容器混入）：把标识放到分组容器上 ⇒ 条目/容器分离断言必红", async () => {
+  const h = makeHarness();
+  await h.mount("HelpUsageTab", {});
+  const topicKeyedEls = h.nodes().filter((e) => e.props?.["data-topic-key"]);
+  // 模拟「标识落到容器上」：构造一个带 data-topic-key 的非条目元素。
+  const fake = { type: "div", props: { "data-topic-key": "bogus", className: "dg-help-topic-section" }, children: [] };
+  const containers = [...topicKeyedEls, fake].filter((e) => e.type !== "p" && e.type !== "blockquote");
+  assert.ok(containers.length > 0, "容器混入必须被条目/容器分离断言抓住");
+});
+
+test("g-498 E3e（负向对照·引文声明对账）：HELP_TOPIC_QUOTE_KEYS 的正文必须真的产出 blockquote", async () => {
+  const h = makeHarness();
+  await h.mount("HelpUsageTab", {});
+  const els = h.nodes();
+  const quotes = withClass(els, "dg-help-quote").filter((e) => e.type === "blockquote");
+  assert.ok(quotes.length > 0, "声明为引文的键必须真的渲染出 blockquote");
+  // 声明集里的每个键都必须有一个引文块（标识落在 blockquote 上）。
+  for (const key of HELP_TOPIC_QUOTE_KEYS) {
+    const hit = quotes.filter((e) => e.props?.["data-topic-key"] === key);
+    assert.ok(hit.length > 0, `声明的引文键 ${key} 必须有对应 blockquote（实得 ${hit.length}）`);
   }
-  for (const [k, n] of byKey) assert.equal(n, 1, `点题条目 ${k} 必须恰渲染一次（实得 ${n} 次）`);
-  void topicKeys;
 });
 
 test("g-498 E4（负向对照·内存变异）：把行内渲染降回纯字符串 ⇒ 星号必现（渲染判据可判别性自证）", async () => {
@@ -595,4 +704,221 @@ test("g-498 G1（测试入口是显式登记的面）：__test 导出只为回�
   for (const name of ["HelpUsageTab", "HelpPromptsTab", "HelpRichText", "helpTopicSections", "helpPromptGroups", "helpAssetNameOf"]) {
     assert.ok(new RegExp(`\\b${name}\\b`).test(src), `__test 必须登记 ${name}`);
   }
+});
+
+// ================================================================ H. 修②：HelpRichText 标识转发
+
+test("g-498 H1：HelpRichText 把 className / data-topic-key 转发到**真实**渲染根（复核返工②）", async () => {
+  const h = makeHarness();
+  await h.mount("HelpUsageTab", {});
+  const els = h.nodes();
+  // 真实 DOM 里 12 条点题条目各自带标识（此前 props.className 被整个丢掉 ⇒ 标识全空）。
+  const keyed = els.filter((e) => typeof e.props?.["data-topic-key"] === "string" && e.props["data-topic-key"]);
+  assert.equal(keyed.length, HELP_USAGE_TOPIC_KEYS.length, `12 条点题条目必须各自带标识（实得 ${keyed.length}）`);
+  // 调用点传的类名必须在真实条目上出现（段落 / 引文块），不再落空。
+  for (const key of HELP_USAGE_TOPIC_KEYS) {
+    const item = keyed.find((e) => e.props["data-topic-key"] === key)!;
+    const cls = String(item.props.className ?? "");
+    assert.ok(cls.includes("dg-help-topic-p"), `${key} 的真实条目必须带 dg-help-topic-p（实得 ${cls}）`);
+    assert.ok(cls.includes(key.replace(/\./g, "-")), `${key} 的真实条目必须带自身语义类（实得 ${cls}）`);
+  }
+  // 引文键必须落在 blockquote 上（标识随分块类型走，不是固定挂在一个包装上）。
+  const quote = keyed.find((e) => e.props["data-topic-key"] === "help.topic.definition")!;
+  assert.equal(quote.type, "blockquote", "引文条目必须是 blockquote（标识转发到真实引文块）");
+});
+
+test("g-498 H2（负向对照）：丢掉 className 转发 ⇒ 条目语义类必空（判据可判别性自证）", async () => {
+  const h = makeHarness();
+  await h.mount("HelpUsageTab", {});
+  const keyed = h.nodes().filter((e) => e.props?.["data-topic-key"]);
+  // 模拟旧实现：只转 text、不转 className ⇒ 条目的识别类整体消失。
+  const asOld = keyed.map((e) => ({ ...e, props: { ...e.props, className: "dg-help-p dg-help-rich-p" } }));
+  const missing = asOld.filter((e) => !String(e.props.className).includes("dg-help-topic-p"));
+  assert.equal(missing.length, HELP_USAGE_TOPIC_KEYS.length, "旧实现下所有条目都丢语义类（判据确实能抓住回归）");
+});
+
+// ================================================================ I. 修①：单模板缺译文（真实缺口）
+
+test("g-498 I1：**仅该模板**缺当前语言 ⇒ 选择不跳首、同 base 仍高亮、并如实标注实际语言（复核返工①）", async () => {
+  const catalog = await hostCatalog();
+  const zhRows = catalog.prompts.filter((p: any) => p.lang === "zh");
+  const target = zhRows[2]!;
+  // 真实缺口场景：**只**摘掉 target 的 en 版，其余 en 齐备。
+  const pruned = catalog.prompts.filter((p: any) => !(p.base === target.base && p.lang === "en"));
+  assert.ok(pruned.some((p: any) => p.lang === "en"), "其余 en 条目必须仍齐备（这正是「单模板缺译文」与「整批缺译文」的区别）");
+  const h = makeHarness();
+  const mountPruned = () => h.mount("HelpPromptsTab", {
+    catalogState: { status: "ready", catalog: { ...catalog, prompts: pruned }, error: "" },
+  });
+  await mountPruned();
+  // 选中该模板（按渲染顺序找到它的按钮）。
+  const label = helpAssetLabelOf(target.base);
+  const btn = listButtons(h.nodes()).find((b) => visibleText(b) === label);
+  assert.ok(btn, `列表里必须有该模板的按钮（找 ${label}）`);
+  btn!.props.onClick();
+  await mountPruned();
+  // 切到 en —— 该模板没有 en 版，但**不得**跳走。
+  h.setLang("en");
+  langButtons(h.nodes())[1]!.props.onClick();
+  await mountPruned();
+  const req = lastAssetName(h);
+  assert.equal(req, target.name, `仅缺该模板的 en 版时，请求必须仍指向**同 base**（实得 ${req}，期望 ${target.name}）`);
+  // 同 base 的按钮仍高亮（缺译文项在列表里仍有同 base 的可见行）。
+  // 注意：可见标签**随当前语言变化**，所以这里按「标签 → base」反查，而不是拿 zh 标签硬比。
+  const active = listButtons(h.nodes()).filter((b) => elClass(b).includes("dg-btn-active"));
+  assert.equal(active.length, 1, `切语言后必须恰有一个高亮项（实得 ${active.length}）`);
+  const labelToBaseEn = buildLabelToBase(catalog);
+  const activeBase = labelToBaseEn.get(visibleText(active[0]!));
+  assert.equal(activeBase ?? target.base, target.base, `高亮的必须仍是该 base（实得 ${visibleText(active[0]!)}）`);
+  // 如实标注：正文实际语言不是请求语言时必须有回落标注。
+  const caption = textsWithClass(h.nodes(), "dg-help-prompt-caption").join("");
+  assert.ok(/回落|not available/.test(caption), `缺译文必须如实标注回落（实得 ${JSON.stringify(caption)}）`);
+});
+
+test("g-498 I2（负向对照）：把身份判定改回「当前语言集合」⇒ 单模板缺译文时必跳首（判据可判别性自证）", async () => {
+  const catalog = await hostCatalog();
+  const target = catalog.prompts.filter((p: any) => p.lang === "zh")[2]!;
+  // 旧口径：`pool = visible`（当前语言集合）—— target 不在 en 集合里 ⇒ 结构性跳到 en 首项。
+  const visibleEn = catalog.prompts.filter((p: any) => p.lang === "en" && p.base !== target.base);
+  const perOld = visibleEn.some((p: any) => p.base === target.base) ? target.base : visibleEn[0].base;
+  assert.notEqual(perOld, target.base, "旧口径下必然跳走（这就是复核复现的缺陷）");
+  assert.ok(catalog.prompts.some((p: any) => p.base === target.base), "按全量清单判定则同一 base 存在 ⇒ 新口径可保住选择");
+});
+
+test("g-498 I3：**整批**缺译文 ⇒ 仍回落并如实标注（区隔于单模板缺译文）", async () => {
+  const catalog = await hostCatalog();
+  const onlyZh = { ...catalog, prompts: catalog.prompts.filter((p: any) => p.lang === "zh") };
+  assert.equal(onlyZh.prompts.filter((p: any) => p.lang === "en").length, 0, "前提：en 条目整批为空");
+  const h = makeHarness();
+  const mountOnlyZh = () => h.mount("HelpPromptsTab", { catalogState: { status: "ready", catalog: onlyZh, error: "" } });
+  await mountOnlyZh();
+  h.setLang("en");
+  langButtons(h.nodes())[1]!.props.onClick();
+  await mountOnlyZh();
+  const req = lastAssetName(h);
+  assert.ok(req.endsWith(".zh.md"), `整批缺 en 时必须回落到 zh 版（实得 ${req}）`);
+  const caption = textsWithClass(h.nodes(), "dg-help-prompt-caption").join("");
+  assert.ok(/回落|not available/.test(caption), `整批回落同样必须如实标注（实得 ${JSON.stringify(caption)}）`);
+  // 列表仍必须逐 base 可见（不得因为切到空语言而整列表消失）。
+  assert.equal(listButtons(h.nodes()).length, onlyZh.prompts.length, "整批缺译文时列表仍须逐 base 可见");
+});
+
+test("g-498 I4：语言齐备 ⇒ **不得**出现回落标注（负向对照，防误标）", async () => {
+  const catalog = await hostCatalog();
+  const h = makeHarness();
+  await h.mount("HelpPromptsTab", { catalogState: { status: "ready", catalog, error: "" } });
+  const caption = textsWithClass(h.nodes(), "dg-help-prompt-caption").join("");
+  assert.ok(!/回落|not available/.test(caption), `语言齐备时不得出现回落标注（实得 ${JSON.stringify(caption)}）`);
+});
+
+test("g-498 I5：快速切换语言时，迟到的旧响应不得覆盖新选择的正文（真实不同文件）", async () => {
+  const catalog = await hostCatalog();
+  const h = makeHarness();
+  const mountWith = () => h.mount("HelpPromptsTab", { catalogState: { status: "ready", catalog, error: "" } });
+  await mountWith();
+  // 选第 3 项（zh）⇒ 挂起一个 zh 请求；再切到 en ⇒ 挂起一个 **不同文件** 的 en 请求。
+  const zhRows = catalog.prompts.filter((p: any) => p.lang === "zh");
+  const target = zhRows[2]!;
+  const enCounterpart = catalog.prompts.find((p: any) => p.base === target.base && p.lang === "en")!;
+  assert.ok(enCounterpart && enCounterpart.name !== target.name, "新旧请求必须指向不同文件（竞态才有可观测差异）");
+  listButtons(h.nodes()).find((b) => visibleText(b) === helpAssetLabelOf(target.base))!.props.onClick();
+  await mountWith();
+  const staleIndex = h.pendingCount() - 1;
+  const staleName = lastAssetName(h);
+  assert.equal(staleName, target.name, "切换前的请求应是 zh 版");
+  h.setLang("en");
+  langButtons(h.nodes())[1]!.props.onClick();
+  await mountWith();
+  const freshIndex = h.pendingCount() - 1;
+  const freshName = lastAssetName(h);
+  assert.equal(freshName, enCounterpart.name, "切换后的请求应是同 base 的 en 版");
+  // 先放行 en，再放行被放弃的 zh —— 旧响应最后落地，不得覆盖。
+  h.release(freshIndex);
+  await h.flush();
+  h.release(staleIndex);
+  await h.flush();
+  await mountWith();
+  const body = loadedBody(h.nodes());
+  assert.ok(body.includes(`BODY<${freshName}>`), `正文必须是当前选择（实得 ${JSON.stringify(body.slice(0, 100))}）`);
+  assert.ok(!body.includes(`BODY<${staleName}>`), "迟到的旧响应不得覆盖当前正文");
+});
+
+// ================================================================ J. 新增要求：左右独立滚动
+
+test("g-498 J1：清单与预览各有**独立**滚动承载（真实 overflow 边界 + flex min-height:0）", async () => {
+  const catalog = await hostCatalog();
+  const h = makeHarness();
+  await h.mount("HelpPromptsTab", { catalogState: { status: "ready", catalog, error: "" } });
+  const els = h.nodes();
+  const carriers = scrollCarriers(els);
+  assert.equal(carriers.length, 2, `必须恰有两个滚动承载（实得 ${carriers.length}）`);
+  const list = listCarrier(els);
+  const preview = previewCarrier(els);
+  assert.ok(list && preview, "列表与预览必须各自有滚动承载元素");
+  assert.notEqual(list, preview, "两个承载必须是**不同**元素（否则只是同一容器在滚）");
+  for (const [name, el] of [["列表", list!], ["预览", preview!]] as const) {
+    const st = el.props.style ?? {};
+    assert.equal(st.overflowY, "auto", `${name}承载必须有 overflowY:auto`);
+    assert.equal(st.minHeight, 0, `${name}承载必须有 minHeight:0（否则内容把它撑开、滚动条跑到外层）`);
+  }
+  // 预览的**标题条**不参与滚动（否则标题会随预览滚走）。
+  const caption = withClass(els, "dg-help-prompt-caption")[0];
+  assert.ok(caption, "预览必须有独立标题条");
+  assert.equal((caption!.props.style ?? {}).flex, "0 0 auto", "预览标题条必须固定（flex:0 0 auto）");
+  assert.ok(!Object.keys(caption!.props).includes("ref"), "标题条不得是滚动承载（滚动只发生在预览正文区）");
+  // 外层承载：受限高度 + minHeight:0，避免「只有 body 在滚、标题列表整体跑走」。
+  const split = withClass(els, "dg-help-prompts-split")[0];
+  assert.ok(split, "两栏布局必须有显式承载容器");
+  const sst = split!.props.style ?? {};
+  assert.ok(typeof sst.height === "string" && sst.height.length > 0, `外层必须有受限高度（实得 ${JSON.stringify(sst.height)}）`);
+  assert.equal(sst.minHeight, 220, "外层必须有合理的最小高度（窄屏不至于塌成一条）");
+  assert.equal(sst.minWidth, 0, "外层必须有 minWidth:0（flex 收缩边界）");
+  // 窄屏：列表列有最小宽度而不是硬撑，避免把预览挤没。
+  const lst = list!.props.style ?? {};
+  assert.equal(lst.minWidth, 130, "列表列必须有窄屏下的最小宽度");
+});
+
+test("g-498 J2：切换模板**只**复位右侧预览的 scrollTop，左侧列表滚动位置必须保留（真实 ref 断言）", async () => {
+  const catalog = await hostCatalog();
+  const h = makeHarness();
+  const mountWith = () => h.mount("HelpPromptsTab", { catalogState: { status: "ready", catalog, error: "" } });
+  await mountWith();
+  const btns = listButtons(h.nodes());
+  assert.ok(btns.length > 2, "需要至少 3 个模板才能验证「选后部不跳顶」");
+  // 模拟用户把列表滚到后部、预览也滚到中间。
+  const list = listCarrier(h.nodes())!;
+  const preview = previewCarrier(h.nodes())!;
+  list.__host.scrollTop = 137;
+  preview.__host.scrollTop = 88;
+  // 选**后部**模板（不是首项）。
+  btns[btns.length - 1]!.props.onClick();
+  await mountWith();
+  const listAfter = listCarrier(h.nodes())!;
+  const previewAfter = previewCarrier(h.nodes())!;
+  assert.equal(previewAfter.__host.scrollTop, 0, "切换模板后**右侧预览**必须复位到顶部");
+  assert.equal(listAfter.__host.scrollTop, 137, `左侧列表的滚动位置必须保留（实得 ${listAfter.__host.scrollTop}，期望 137）`);
+});
+
+test("g-498 J3（负向对照）：若把复位作用在列表承载上 ⇒ 列表滚动位置必被抹掉（判据可判别性自证）", async () => {
+  const catalog = await hostCatalog();
+  const h = makeHarness();
+  await h.mount("HelpPromptsTab", { catalogState: { status: "ready", catalog, error: "" } });
+  const list = listCarrier(h.nodes())!;
+  list.__host.scrollTop = 137;
+  // 模拟「复位打错元素」：对列表承载执行 scrollTop = 0。
+  list.__host.scrollTop = 0;
+  assert.equal(list.__host.scrollTop, 0, "打错元素时列表位置必然被抹掉 ⇒ J2 的保留断言确实能抓住该回归");
+});
+
+test("g-498 J4：使用说明页签**不**引入受限高度的内层滚动（外层滚动不得回归）", async () => {
+  const h = makeHarness();
+  await h.mount("HelpUsageTab", {});
+  const els = h.nodes();
+  // 使用说明仍是普通文档流：自身不设 overflow 承载（改的是提示词页签，不应波及它）。
+  assert.equal(scrollCarriers(els).length, 0, "使用说明页签不得引入内层滚动承载");
+  const usage = withClass(els, "dg-help-usage")[0];
+  assert.ok(usage, "使用说明容器必须仍在");
+  const ust = usage!.props.style ?? {};
+  assert.equal(ust.overflowY, undefined, "使用说明容器不得自己变成滚动容器（外层滚动保持原状）");
+  assert.equal(ust.height, undefined, "使用说明容器不得被限制高度");
 });
