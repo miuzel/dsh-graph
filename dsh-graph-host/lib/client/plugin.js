@@ -432,6 +432,18 @@
         }
         console.log("[dsh-graph-host] client apply: kanban view registered (i18n enabled)");
       },
+      // g-498：**仅供回归测试**的渲染/翻译入口（`core/tests/g498-help-ui-regression.test.ts`）。
+      // 它让测试渲染**真实组件**（而不是对源码文本做正则），从而能断言交互与渲染语义：
+      // 切换语言后选择是否保持、星号是否真的变成 `strong` 节点、分组是否守恒。
+      // 运行时零影响：宿主只读取 `name` / `inject` / `apply`，本字段不被消费、不改变任何行为。
+      __test: {
+        HelpUsageTab,
+        HelpPromptsTab,
+        HelpRichText,
+        helpTopicSections,
+        helpPromptGroups,
+        helpAssetNameOf,
+      },
     };
   },
 });

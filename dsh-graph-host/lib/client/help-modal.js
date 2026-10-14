@@ -89,6 +89,42 @@
       return field[lang] || field.zh || field.en || "";
     }
 
+    // g-498：提示词模板的**稳定身份**是资产基名（`base`，如 `discipline`），不是完整文件名。
+    // 完整名（`<基名>.<语言>.md`）随语言变化 ⇒ 若拿它当选中态，切语言就会被判成「不在当前集合」
+    // 而回落到首项（负责人目视到的「切 zh/en 跳回首条」）。选中态改存 base 后，切换语言只是
+    // 换一份同 base 的资产正文，选择**不丢**。
+    /** 按基名 + 当前语言解析完整资产名（维护提示词**语言优先级**）。 */
+    function helpAssetNameOf(list, base, lang) {
+      if (!base) return "";
+      const rows = (Array.isArray(list) ? list : []).filter((e) => e && e.base === base);
+      if (!rows.length) return "";
+      const byLang = (code) => rows.find((e) => e.lang === code);
+      const hit = byLang(lang) || byLang("zh") || byLang("en") || rows[0];
+      return hit ? hit.name : "";
+    }
+
+    /** 语言候选顺序：请求语言优先，其余语言**透明回落**（缺译文时不至于丢项或空白）。 */
+    function helpAssetLangOrder(lang) {
+      const all = ["zh", "en"];
+      return [lang].concat(all.filter((c) => c !== lang));
+    }
+
+    /** g-498：把目录投影按**注册元数据**里的分类分组（客户端不新增文件清单）。
+     *  分类顺序取自宿主 `prompt_categories`（不重排）；未分类条目归入「未分类」且**仍然可见**；
+     *  每个资产**恰出现一次**（分组键唯一 ⇒ 由构造保证，见 g498 回归测试）。 */
+    function helpPromptGroups(entries, categories, lang) {
+      const rows = Array.isArray(entries) ? entries : [];
+      const cats = Array.isArray(categories) ? categories : [];
+      const groups = cats.map((c) => ({
+        key: c.key,
+        label: helpCatalogText(c.label, lang) || String(c.key),
+        rows: rows.filter((e) => e && e.category === c.key),
+      })).filter((g) => g.rows.length);
+      const orphan = rows.filter((e) => !e || !cats.some((c) => c.key === e.category));
+      if (orphan.length) groups.push({ key: "help-prompts-orphan", label: dgT("help.prompts.orphan"), rows: orphan });
+      return groups;
+    }
+
     /** g-489 入门第一步：先指定主管 Agent（技能名 + 接管这一步 + 可直接复制的示例提示词）。
      *  g-496：**示例提示词正文**改由宿主只读资产提供（`gui-help-takeover-example.*.md`），
      *  i18n 字典只留展示标签（`help.entry.promptLabel`）。读取失败**不得**静默显示空示例：
@@ -180,24 +216,103 @@
           }, dgT("help.mod." + chapter + "." + f.key)))));
     }
 
+    /** g-498：点题章节的**语义小标题分组**（「命名与定义 / 当前工作机制 / 看板定位 / 未来路线图」）。
+     *  组名走 i18n（zh/en 对称）；组内顺序即 `HELP_USAGE_TOPIC_KEYS` 的顺序。
+     *  未列入任何组的键**不会消失** —— 渲染时归入末尾的「未分组」兜底组（不静默丢项）。 */
+    const HELP_TOPIC_SECTIONS = [
+      { key: "naming", labelKey: "help.topic.section.naming", keys: ["help.topic.naming", "help.topic.definition", "help.topic.definitionSource"] },
+      { key: "mechanism", labelKey: "help.topic.section.mechanism", keys: ["help.topic.stateMachine", "help.topic.roles", "help.topic.lifecycle", "help.topic.core"] },
+      { key: "board", labelKey: "help.topic.section.board", keys: ["help.topic.kanbanIsView", "help.topic.programmable", "help.topic.stateOfMind", "help.topic.solves"] },
+      { key: "roadmap", labelKey: "help.topic.section.roadmap", keys: ["help.topic.roadmap"] },
+    ];
+
+    /** g-498：**引文单独呈现**的键（blockquote 引用块，而不是混在正文段落里）。 */
+    const HELP_TOPIC_QUOTE_KEYS = ["help.topic.definition"];
+
+    /** g-498：点题段落的分组视图。
+     *  组内顺序沿用传入清单的顺序；清单里**未登记**的键追加到末尾兜底组（保证每条恰一次、不丢项）。 */
+    function helpTopicSections(topKeys) {
+      const keys = Array.isArray(topKeys) ? topKeys : [];
+      const assigned = new Set(HELP_TOPIC_SECTIONS.flatMap((s) => s.keys));
+      const sections = HELP_TOPIC_SECTIONS
+        .map((s) => ({ key: s.key, labelKey: s.labelKey, keys: keys.filter((k) => s.keys.includes(k)) }))
+        .filter((s) => s.keys.length);
+      const rest = keys.filter((k) => !assigned.has(k));
+      if (rest.length) sections.push({ key: "more", labelKey: "help.topic.section.more", keys: rest });
+      return sections;
+    }
+
+    /** g-498：三段式 Markdown 渲染 —— 段落 + `>` 引用块，行内一律走**安全的 React 节点**。
+     *  正文（i18n 字符串）里的 `**粗体**` / `` `代码` `` / 链接由 `parseInlineMarkdown` 解析成
+     *  React 元素（`strong` / `code` / `a`），**不用 innerHTML / dangerouslySetInnerHTML**；
+     *  引文用独立 blockquote（左竖线 + 缩进）与正文分开呈现。 */
+    function HelpRichText(props) {
+      const text = String(props.text ?? "");
+      const blocks = [];
+      let paragraph = [];
+      const flush = () => {
+        if (!paragraph.length) return;
+        blocks.push({ type: "p", text: paragraph.join("\n") });
+        paragraph = [];
+      };
+      for (const line of text.split("\n")) {
+        const quote = /^>\s?(.*)$/.exec(line);
+        if (quote) { flush(); blocks.push({ type: "quote", text: quote[1] }); } else if (!line.trim()) { flush(); } else { paragraph.push(line); }
+      }
+      flush();
+      return h("div", { className: "dg-help-rich" },
+        ...blocks.map((b, i) => (b.type === "quote"
+          ? h("blockquote", {
+            key: `help-quote-${i}`,
+            className: "dg-help-quote",
+            style: {
+              margin: "8px 0", padding: "6px 12px", fontSize: 13, lineHeight: 1.8,
+              borderLeft: "3px solid rgba(128,128,128,.45)", background: "rgba(128,128,128,.07)",
+              borderRadius: 4, opacity: 0.95,
+            },
+          }, parseInlineMarkdown(b.text))
+          : h("p", {
+            key: `help-paragraph-${i}`,
+            className: "dg-help-p dg-help-rich-p",
+            style: { margin: "0 0 8px", fontSize: 13, lineHeight: 1.75 },
+          }, parseInlineMarkdown(b.text)))));
+    }
+
     function HelpUsageTab() {
-      return h("div", { className: "dg-help-usage" },
+      const sections = helpTopicSections(HELP_USAGE_TOPIC_KEYS);
+      const bodyStyle = { maxWidth: 760, margin: "0 auto" };
+      return h("div", { className: "dg-help-usage", style: bodyStyle },
         h("div", {
           className: "dg-help-version",
           style: { ...S.meta, marginBottom: 8 },
         }, dgT("help.version", { version: PLUGIN_VERSION })),
         // g-493：开篇点题章节（命名由来 / 图工程定义逐字引用 / 看板只是视图 / 看板解决的两件事 /
         // 如实路线图）。数据驱动、渲染在原有使用说明段落之前 —— 「点题」必须开篇可见。
+        // g-498：正文按语义分小标题呈现，行内 Markdown 走**安全 React 节点**（不再原样显示星号）；
+        // 逐字引文单独用 blockquote 呈现，原文与来源逐字不变。
         h("div", { className: "dg-help-topic", key: "help-topic" },
           h("div", {
             className: "dg-help-topic-title",
             style: { fontWeight: 700, fontSize: 14, marginBottom: 6 },
           }, dgT("help.topic.title")),
-          ...HELP_USAGE_TOPIC_KEYS.map((key) => h("p", {
-            key: "help-topic-" + key,
-            className: "dg-help-p dg-help-topic-p " + key.replace(/\./g, "-"),
-            style: { margin: "0 0 8px", fontSize: 13, lineHeight: 1.75 },
-          }, dgT(key)))),
+          ...sections.map((section) => h("div", {
+            key: "help-topic-section-" + section.key,
+            className: "dg-help-topic-section dg-help-topic-section-" + section.key,
+          },
+            h("div", {
+              className: "dg-help-topic-section-title",
+              style: { fontWeight: 600, fontSize: 13.5, margin: "12px 0 5px", opacity: 0.95 },
+            }, dgT(section.labelKey)),
+            ...section.keys.map((key) => (HELP_TOPIC_QUOTE_KEYS.includes(key)
+              ? h("div", {
+                key: "help-topic-" + key,
+                className: "dg-help-quote-wrap dg-help-topic-p " + key.replace(/\./g, "-"),
+              }, h(HelpRichText, { text: dgT(key) }))
+              : h(HelpRichText, {
+                key: "help-topic-" + key,
+                className: "dg-help-topic-p " + key.replace(/\./g, "-"),
+                text: dgT(key),
+              })))))),
         ...HELP_USAGE_KEYS.map((key) => h("p", {
           key: "help-usage-" + key,
           className: "dg-help-p",
@@ -222,23 +337,36 @@
       const state = props.catalogState || {};
       const catalog = state.catalog;
       const entries = (catalog && Array.isArray(catalog.prompts)) ? catalog.prompts : [];
+      const categories = (catalog && Array.isArray(catalog.prompt_categories)) ? catalog.prompt_categories : [];
       const hostLang = helpCatalogLanguage(catalog);
       const [pickedLang, setPickedLang] = React.useState(null);
-      const [pickedAsset, setPickedAsset] = React.useState("");
-      const [asset, setAsset] = React.useState({ status: "idle", text: "", error: "" });
+      // g-498：选中态是**基名**（稳定身份），不是完整资产名 ⇒ 切换语言不再丢选择。
+      const [pickedBase, setPickedBase] = React.useState("");
+      const [asset, setAsset] = React.useState({ status: "idle", text: "", error: "", lang: "" });
       const lang = pickedLang ?? hostLang;
       const visible = entries.filter((e) => e.lang === lang);
-      // 选中项若不在当前语言集合内（首次打开 / 切换语言后）⇒ 回落到该语言的第一项。
-      const selected = visible.some((e) => e.name === pickedAsset) ? pickedAsset : ((visible[0] && visible[0].name) || "");
-      const selectedEntry = visible.find((e) => e.name === selected) || null;
+      // 当前语言**有**条目时，选中项必须留在该语言集合内（首开 / 该语言缺此资产 ⇒ 回落到该语言首项）。
+      // 该语言**完全没有**条目时（整批缺译文）不把选择清空 —— 退到全量清单的首项，由
+      // `helpAssetNameOf` 按「请求语言 → zh → en」取到实际存在的那一份，并如实标注实际语言。
+      const pool = visible.length ? visible : entries;
+      const base = pool.some((e) => e.base === pickedBase) ? pickedBase : ((pool[0] && pool[0].base) || "");
+      // g-498：清单只展示**当前语言**的条目（`visible`）；分组同样只对 `visible` 分组，
+      // 否则两种语言的条目会一起出现（每项不止一次）。总量守恒 = 当前语言资产数。
+      const groups = helpPromptGroups(visible, categories, lang);
+      // 请求路径永远与界面语言一致：`<base>.<当前语言>.md`（列表项、按钮高亮与正文据此三者一致）。
+      const selected = helpAssetNameOf(entries, base, lang);
+      const selectedEntry = entries.find((e) => e.name === selected) || null;
+      // 正文里的实际语言 = 完整名后缀（缺译文时宿主回落，UI 如实标注，不假装是请求语言）。
+      const shownLang = selectedEntry && selectedEntry.lang ? selectedEntry.lang : lang;
       React.useEffect(() => {
-        if (!selected) return;
+        if (!selected) { setAsset({ status: "idle", text: "", error: "", lang: "" }); return undefined; }
         let alive = true;
-        setAsset({ status: "loading", text: "", error: "" });
+        setAsset({ status: "loading", text: "", error: "", lang: "" });
         fetch(HELP_ASSET_URL + selected, { headers: { accept: "text/markdown" } })
           .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.text(); })
-          .then((text) => { if (alive) setAsset({ status: "ready", text, error: "" }); })
-          .catch((e) => { if (alive) setAsset({ status: "error", text: "", error: String(e?.message ?? e) }); });
+          .then((text) => { if (alive) setAsset({ status: "ready", text, error: "", lang: shownLang }); })
+          .catch((e) => { if (alive) setAsset({ status: "error", text: "", error: String(e?.message ?? e), lang: "" }); });
+        // alive 守卫：快速切换语言时，**旧请求的响应不得覆盖**新选择的结果。
         return () => { alive = false; };
       }, [selected]);
       return h("div", { className: "dg-help-prompts" },
@@ -246,7 +374,7 @@
           h("div", { style: { ...S.meta, marginRight: "auto" } }, dgT("help.prompts.intro")),
           ...["zh", "en"].map((code) => h("button", {
             key: "help-lang-" + code,
-            className: "dg-btn" + (code === lang ? " dg-btn-active" : ""),
+            className: "dg-help-lang-btn dg-btn" + (code === lang ? " dg-btn-active" : ""),
             style: { ...(code === lang ? S.btnPrimary : S.btn), padding: "2px 10px", fontSize: 12 },
             onClick: () => setPickedLang(code),
           }, dgT("help.lang." + code)))),
@@ -257,16 +385,29 @@
             : h("div", { style: { display: "flex", gap: 12, alignItems: "flex-start", minHeight: 0 } },
           h("div", {
             className: "dg-help-prompt-list",
-            style: { flex: "0 0 170px", display: "flex", flexDirection: "column", gap: 4 },
-          }, ...visible.map((e) => h("button", {
-            key: "help-asset-" + e.name,
-            className: "dg-btn" + (e.name === selected ? " dg-btn-active" : ""),
-            style: { ...(e.name === selected ? S.btnPrimary : S.btn), textAlign: "left", padding: "4px 10px", fontSize: 12 },
-            onClick: () => setPickedAsset(e.name),
-          }, helpAssetLabel(e.base)))),
+            style: { flex: "0 0 190px", display: "flex", flexDirection: "column", gap: 4 },
+          }, ...groups.map((g) => h("div", {
+            key: "help-prompt-group-" + g.key,
+            className: "dg-help-prompt-group",
+            style: { display: "flex", flexDirection: "column", gap: 4, marginBottom: 6 },
+          },
+            h("div", {
+              className: "dg-help-prompt-group-title",
+              style: { ...S.meta, fontWeight: 600, marginBottom: 2, opacity: 0.95 },
+            }, g.label + "（" + g.rows.length + "）"),
+            ...g.rows.map((e) => h("button", {
+              key: "help-asset-" + e.name,
+              // g-498：高亮按**语言无关的基名**判定 —— 切语言后当前项仍然高亮（不再跳回首条）。
+              className: "dg-help-asset-btn dg-btn" + (e.base === base ? " dg-btn-active" : ""),
+              style: { ...(e.base === base ? S.btnPrimary : S.btn), textAlign: "left", padding: "4px 10px", fontSize: 12 },
+              onClick: () => setPickedBase(e.base),
+            }, helpAssetLabel(e.base)))))),
           h("div", { className: "dg-help-prompt-body", style: { flex: "1 1 auto", minWidth: 0 } },
             h("div", { style: { ...S.meta, marginBottom: 6 } },
-              (selectedEntry ? helpAssetLabel(selectedEntry.base) + " · " : "") + dgT("help.prompts.source")),
+              (selectedEntry ? helpAssetLabel(selectedEntry.base) + " · " : "")
+                + dgT("help.prompts.source")
+                // 缺译文透明回落：实际展示的不是请求语言时**如实标注**，不假装。
+                + (shownLang !== lang ? " " + dgT("help.prompts.langFallback", { lang: dgT("help.lang." + shownLang) }) : "")),
             asset.status === "loading"
               ? h("div", { className: "dg-help-loading", style: { ...S.meta, padding: "8px 0" } }, dgT("help.prompts.loading"))
               : asset.status === "error"

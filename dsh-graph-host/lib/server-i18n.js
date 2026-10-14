@@ -70,6 +70,14 @@ const zh = Object.freeze({
   "toolCategory.ops": "工作树与状态",
   "toolCategory.settings": "设置",
   "toolCategory.diag": "校验与帮助",
+  // g-498：提示词资产按**语义**分类的分组标签（分类键本身是 HELP_ASSET_REGISTRY 的注册元数据，
+  // 顺序见 HELP_PROMPT_CATEGORY_KEYS）。仅展示用标签，不含任何文件名清单。
+  "promptCategory.supervisor": "主管通用纪律",
+  "promptCategory.execution": "执行与隔离",
+  "promptCategory.reporting": "执行与报告",
+  "promptCategory.subagents": "专项代理",
+  "promptCategory.gui": "GUI 动作",
+  "promptCategory.help": "帮助与策略参考",
   "toolShort.graph_create_goal": "建目标",
   "toolShort.graph_set_criteria": "写判据",
   "toolShort.graph_transition": "迁移状态",
@@ -190,6 +198,13 @@ const en = Object.freeze({
   "toolCategory.ops": "Worktrees & status",
   "toolCategory.settings": "Settings",
   "toolCategory.diag": "Validation & help",
+  // g-498: group labels for prompt assets grouped by semantics (keys are registry metadata).
+  "promptCategory.supervisor": "Supervisor discipline",
+  "promptCategory.execution": "Execution & isolation",
+  "promptCategory.reporting": "Execution & reporting",
+  "promptCategory.subagents": "Specialist agents",
+  "promptCategory.gui": "GUI actions",
+  "promptCategory.help": "Help & policy reference",
   "toolShort.graph_create_goal": "New goal",
   "toolShort.graph_set_criteria": "Set criteria",
   "toolShort.graph_transition": "Transition",

@@ -287,69 +287,73 @@ export const HELP_ASSET_ROUTE = "/api/dsh-graph/help/asset";
  *  （此前 `supervisor-guide.{zh,en}.md` 位于包根，故注册需相对路径以表达两类位置；合并后
  *  该特例消失，但注册表作为**唯一 name → path 真源**的职责不变。）
  *
- *  注册同时是**白名单**、**目录投影**与**所有权归属**的单一来源（g-496 返工）：
+ *  注册同时是**白名单**、**目录投影**、**所有权归属**与**展示分类**的单一来源（g-496 返工 / g-498）：
  *  `HELP_PROMPT_ASSETS` 由它投影（顺序即展示顺序），处理器按 `relativePath` 读取，
  *  reader 按 `ownership` 决定源形态取根。**不持有第二份清单** —— 新增一份资产 = 在此加一行。
+ *
+ *  g-498：`category` 是按语义分组用的分类键（投影进 `/help/catalog` 的 `prompt_categories`），
+ *  取值限 `HELP_PROMPT_CATEGORY_KEYS`。客户端只按投影分组、**不另抄文件名清单**；分类**可选** ——
+ *  旧形态条目缺 `category` 也照常工作，缺/未登记即归入「未分类」并**仍然可见**（不静默丢项）。
  *  安全口径不变：`relativePath` 只允许**受控的两类形态**（`<name>` 或 `prompts/<name>`），
  *  且 `<name>` 仍须过 `HELP_ASSET_NAME_RE`；`..` / 绝对路径 / 反斜杠一律拒绝（结构性守卫断言）。 */
 const HELP_ASSET_REGISTRY = Object.freeze([
-  { name: "agent-teams-contract.en.md", ownership: "public", relativePath: "prompts/agent-teams-contract.en.md" },
-  { name: "agent-teams-contract.zh.md", ownership: "public", relativePath: "prompts/agent-teams-contract.zh.md" },
-  { name: "attempt-instructions.en.md", ownership: "public", relativePath: "prompts/attempt-instructions.en.md" },
-  { name: "attempt-instructions.zh.md", ownership: "public", relativePath: "prompts/attempt-instructions.zh.md" },
-  { name: "attempt-report-skeleton.en.md", ownership: "public", relativePath: "prompts/attempt-report-skeleton.en.md" },
-  { name: "attempt-report-skeleton.zh.md", ownership: "public", relativePath: "prompts/attempt-report-skeleton.zh.md" },
-  { name: "automation-guidance.en.md", ownership: "public", relativePath: "prompts/automation-guidance.en.md" },
-  { name: "automation-guidance.zh.md", ownership: "public", relativePath: "prompts/automation-guidance.zh.md" },
-  { name: "collect-task.en.md", ownership: "public", relativePath: "prompts/collect-task.en.md" },
-  { name: "collect-task.zh.md", ownership: "public", relativePath: "prompts/collect-task.zh.md" },
-  { name: "discipline.en.md", ownership: "public", relativePath: "prompts/discipline.en.md" },
-  { name: "discipline.zh.md", ownership: "public", relativePath: "prompts/discipline.zh.md" },
-  { name: "executor-discipline.en.md", ownership: "public", relativePath: "prompts/executor-discipline.en.md" },
-  { name: "executor-discipline.zh.md", ownership: "public", relativePath: "prompts/executor-discipline.zh.md" },
-  { name: "guide-hint.en.md", ownership: "public", relativePath: "prompts/guide-hint.en.md" },
-  { name: "guide-hint.zh.md", ownership: "public", relativePath: "prompts/guide-hint.zh.md" },
+  { name: "agent-teams-contract.en.md", ownership: "public", category: "subagents", relativePath: "prompts/agent-teams-contract.en.md" },
+  { name: "agent-teams-contract.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/agent-teams-contract.zh.md" },
+  { name: "attempt-instructions.en.md", ownership: "public", category: "execution", relativePath: "prompts/attempt-instructions.en.md" },
+  { name: "attempt-instructions.zh.md", ownership: "public", category: "execution", relativePath: "prompts/attempt-instructions.zh.md" },
+  { name: "attempt-report-skeleton.en.md", ownership: "public", category: "reporting", relativePath: "prompts/attempt-report-skeleton.en.md" },
+  { name: "attempt-report-skeleton.zh.md", ownership: "public", category: "reporting", relativePath: "prompts/attempt-report-skeleton.zh.md" },
+  { name: "automation-guidance.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/automation-guidance.en.md" },
+  { name: "automation-guidance.zh.md", ownership: "public", category: "supervisor", relativePath: "prompts/automation-guidance.zh.md" },
+  { name: "collect-task.en.md", ownership: "public", category: "subagents", relativePath: "prompts/collect-task.en.md" },
+  { name: "collect-task.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/collect-task.zh.md" },
+  { name: "discipline.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/discipline.en.md" },
+  { name: "discipline.zh.md", ownership: "public", category: "supervisor", relativePath: "prompts/discipline.zh.md" },
+  { name: "executor-discipline.en.md", ownership: "public", category: "execution", relativePath: "prompts/executor-discipline.en.md" },
+  { name: "executor-discipline.zh.md", ownership: "public", category: "execution", relativePath: "prompts/executor-discipline.zh.md" },
+  { name: "guide-hint.en.md", ownership: "public", category: "help", relativePath: "prompts/guide-hint.en.md" },
+  { name: "guide-hint.zh.md", ownership: "public", category: "help", relativePath: "prompts/guide-hint.zh.md" },
   // g-496：GUI 提示词模板（9 类 × zh/en）—— **宿主专属层**所有权：这些正文绑定 DSH 会话
   // `session.prompt` 载荷与看板 GUI 动作语义（发往主管/执行会话的提示词），跨宿主插件不复用。
   // 正文的唯一事实源是 `dsh-graph-host/prompts/gui-*.{zh,en}.md`（构建合并进包内 prompts/）。
-  { name: "gui-accept-review-request.en.md", ownership: "host", relativePath: "prompts/gui-accept-review-request.en.md" },
-  { name: "gui-accept-review-request.zh.md", ownership: "host", relativePath: "prompts/gui-accept-review-request.zh.md" },
-  { name: "gui-backward-reason.en.md", ownership: "host", relativePath: "prompts/gui-backward-reason.en.md" },
-  { name: "gui-backward-reason.zh.md", ownership: "host", relativePath: "prompts/gui-backward-reason.zh.md" },
-  { name: "gui-batch-accept-review-request.en.md", ownership: "host", relativePath: "prompts/gui-batch-accept-review-request.en.md" },
-  { name: "gui-batch-accept-review-request.zh.md", ownership: "host", relativePath: "prompts/gui-batch-accept-review-request.zh.md" },
-  { name: "gui-criteria-feedback-executor.en.md", ownership: "host", relativePath: "prompts/gui-criteria-feedback-executor.en.md" },
-  { name: "gui-criteria-feedback-executor.zh.md", ownership: "host", relativePath: "prompts/gui-criteria-feedback-executor.zh.md" },
-  { name: "gui-criteria-feedback-supervisor.en.md", ownership: "host", relativePath: "prompts/gui-criteria-feedback-supervisor.en.md" },
-  { name: "gui-criteria-feedback-supervisor.zh.md", ownership: "host", relativePath: "prompts/gui-criteria-feedback-supervisor.zh.md" },
-  { name: "gui-define-polish-request.en.md", ownership: "host", relativePath: "prompts/gui-define-polish-request.en.md" },
-  { name: "gui-define-polish-request.zh.md", ownership: "host", relativePath: "prompts/gui-define-polish-request.zh.md" },
-  { name: "gui-deliver-notice.en.md", ownership: "host", relativePath: "prompts/gui-deliver-notice.en.md" },
-  { name: "gui-deliver-notice.zh.md", ownership: "host", relativePath: "prompts/gui-deliver-notice.zh.md" },
-  { name: "gui-help-takeover-example.en.md", ownership: "host", relativePath: "prompts/gui-help-takeover-example.en.md" },
-  { name: "gui-help-takeover-example.zh.md", ownership: "host", relativePath: "prompts/gui-help-takeover-example.zh.md" },
-  { name: "gui-reexecute.en.md", ownership: "host", relativePath: "prompts/gui-reexecute.en.md" },
-  { name: "gui-reexecute.zh.md", ownership: "host", relativePath: "prompts/gui-reexecute.zh.md" },
-  { name: "help.en.md", ownership: "public", relativePath: "prompts/help.en.md" },
-  { name: "help.zh.md", ownership: "public", relativePath: "prompts/help.zh.md" },
-  { name: "minor-task.en.md", ownership: "public", relativePath: "prompts/minor-task.en.md" },
-  { name: "minor-task.zh.md", ownership: "public", relativePath: "prompts/minor-task.zh.md" },
-  { name: "no-isolation.en.md", ownership: "public", relativePath: "prompts/no-isolation.en.md" },
-  { name: "no-isolation.zh.md", ownership: "public", relativePath: "prompts/no-isolation.zh.md" },
-  { name: "pm-task.en.md", ownership: "public", relativePath: "prompts/pm-task.en.md" },
-  { name: "pm-task.zh.md", ownership: "public", relativePath: "prompts/pm-task.zh.md" },
-  { name: "review-task.en.md", ownership: "public", relativePath: "prompts/review-task.en.md" },
-  { name: "review-task.zh.md", ownership: "public", relativePath: "prompts/review-task.zh.md" },
-  { name: "subagent-mode.en.md", ownership: "public", relativePath: "prompts/subagent-mode.en.md" },
-  { name: "subagent-mode.zh.md", ownership: "public", relativePath: "prompts/subagent-mode.zh.md" },
-  { name: "summary-task.en.md", ownership: "public", relativePath: "prompts/summary-task.en.md" },
-  { name: "summary-task.zh.md", ownership: "public", relativePath: "prompts/summary-task.zh.md" },
-  { name: "supervisor-guide.en.md", ownership: "public", relativePath: "prompts/supervisor-guide.en.md" },
-  { name: "supervisor-guide.zh.md", ownership: "public", relativePath: "prompts/supervisor-guide.zh.md" },
-  { name: "usage.en.md", ownership: "public", relativePath: "prompts/usage.en.md" },
-  { name: "usage.zh.md", ownership: "public", relativePath: "prompts/usage.zh.md" },
-  { name: "worktree.en.md", ownership: "public", relativePath: "prompts/worktree.en.md" },
-  { name: "worktree.zh.md", ownership: "public", relativePath: "prompts/worktree.zh.md" },
+  { name: "gui-accept-review-request.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-accept-review-request.en.md" },
+  { name: "gui-accept-review-request.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-accept-review-request.zh.md" },
+  { name: "gui-backward-reason.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-backward-reason.en.md" },
+  { name: "gui-backward-reason.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-backward-reason.zh.md" },
+  { name: "gui-batch-accept-review-request.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-batch-accept-review-request.en.md" },
+  { name: "gui-batch-accept-review-request.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-batch-accept-review-request.zh.md" },
+  { name: "gui-criteria-feedback-executor.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-criteria-feedback-executor.en.md" },
+  { name: "gui-criteria-feedback-executor.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-criteria-feedback-executor.zh.md" },
+  { name: "gui-criteria-feedback-supervisor.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-criteria-feedback-supervisor.en.md" },
+  { name: "gui-criteria-feedback-supervisor.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-criteria-feedback-supervisor.zh.md" },
+  { name: "gui-define-polish-request.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-define-polish-request.en.md" },
+  { name: "gui-define-polish-request.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-define-polish-request.zh.md" },
+  { name: "gui-deliver-notice.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-deliver-notice.en.md" },
+  { name: "gui-deliver-notice.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-deliver-notice.zh.md" },
+  { name: "gui-help-takeover-example.en.md", ownership: "host", category: "help", relativePath: "prompts/gui-help-takeover-example.en.md" },
+  { name: "gui-help-takeover-example.zh.md", ownership: "host", category: "help", relativePath: "prompts/gui-help-takeover-example.zh.md" },
+  { name: "gui-reexecute.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-reexecute.en.md" },
+  { name: "gui-reexecute.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-reexecute.zh.md" },
+  { name: "help.en.md", ownership: "public", category: "help", relativePath: "prompts/help.en.md" },
+  { name: "help.zh.md", ownership: "public", category: "help", relativePath: "prompts/help.zh.md" },
+  { name: "minor-task.en.md", ownership: "public", category: "execution", relativePath: "prompts/minor-task.en.md" },
+  { name: "minor-task.zh.md", ownership: "public", category: "execution", relativePath: "prompts/minor-task.zh.md" },
+  { name: "no-isolation.en.md", ownership: "public", category: "execution", relativePath: "prompts/no-isolation.en.md" },
+  { name: "no-isolation.zh.md", ownership: "public", category: "execution", relativePath: "prompts/no-isolation.zh.md" },
+  { name: "pm-task.en.md", ownership: "public", category: "subagents", relativePath: "prompts/pm-task.en.md" },
+  { name: "pm-task.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/pm-task.zh.md" },
+  { name: "review-task.en.md", ownership: "public", category: "subagents", relativePath: "prompts/review-task.en.md" },
+  { name: "review-task.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/review-task.zh.md" },
+  { name: "subagent-mode.en.md", ownership: "public", category: "subagents", relativePath: "prompts/subagent-mode.en.md" },
+  { name: "subagent-mode.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/subagent-mode.zh.md" },
+  { name: "summary-task.en.md", ownership: "public", category: "reporting", relativePath: "prompts/summary-task.en.md" },
+  { name: "summary-task.zh.md", ownership: "public", category: "reporting", relativePath: "prompts/summary-task.zh.md" },
+  { name: "supervisor-guide.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/supervisor-guide.en.md" },
+  { name: "supervisor-guide.zh.md", ownership: "public", category: "supervisor", relativePath: "prompts/supervisor-guide.zh.md" },
+  { name: "usage.en.md", ownership: "public", category: "help", relativePath: "prompts/usage.en.md" },
+  { name: "usage.zh.md", ownership: "public", category: "help", relativePath: "prompts/usage.zh.md" },
+  { name: "worktree.en.md", ownership: "public", category: "execution", relativePath: "prompts/worktree.en.md" },
+  { name: "worktree.zh.md", ownership: "public", category: "execution", relativePath: "prompts/worktree.zh.md" },
 ]);
 
 /** 白名单（名字清单，投影自注册表；**不是**第二份清单）。 */
@@ -398,11 +402,33 @@ export function resolveHelpAssetRequest(rawUrl) {
  *  客户端**不硬编码任何工具名/资产名**。只读投影，无参数、无写路径。 */
 export const HELP_CATALOG_ROUTE = "/api/dsh-graph/help/catalog";
 
-/** 纯函数：白名单资产名 → `{name, base, lang}` 清单（`base` 供客户端配 i18n 展示标签）。 */
+/** g-498：提示词资产的**语义分类键**（顺序即分组展示顺序；标签 zh/en 成对取自 server-i18n）。
+ *  分类本身是**注册元数据**（`HELP_ASSET_REGISTRY` 每条目的 `category`）⇒ 客户端不新增文件清单，
+ *  只按本表顺序把目录投影分组；未登记分类的条目落进「未分类」并**仍然可见**。 */
+export const HELP_PROMPT_CATEGORY_KEYS = Object.freeze(["supervisor", "execution", "reporting", "subagents", "gui", "help"]);
+
+/** g-498：提示词资产的分类投影（顺序即展示顺序；标签 zh/en 成对取自 server-i18n）。 */
+export function helpPromptCategoryEntries() {
+  return HELP_PROMPT_CATEGORY_KEYS.map((key) => ({
+    key,
+    label: { zh: sT(`promptCategory.${key}`, "zh"), en: sT(`promptCategory.${key}`, "en") },
+  }));
+}
+
+/** 纯函数：某个资产条目的分类键 —— **未登记/未注册**时回退为空串（客户端据此归入「未分类」）。 */
+export function helpPromptCategoryOf(base) {
+  const hit = HELP_ASSET_REGISTRY.find((e) => e.name.startsWith(`${base}.`));
+  return (hit && typeof hit.category === "string" && HELP_PROMPT_CATEGORY_KEYS.includes(hit.category)) ? hit.category : "";
+}
+
+/** 纯函数：白名单资产名 → `{name, base, lang, category}` 清单。
+ *  `base` 供客户端配 i18n 展示标签（也是**选中的稳定身份**：切语言时基名不变）；
+ *  `category` 是注册元数据投影，供客户端按语义分组（`""` = 未分类，仍须可见）。 */
 export function helpPromptAssetEntries() {
   return HELP_PROMPT_ASSETS.map((name) => {
     const m = /^([a-z0-9][a-z0-9.-]*)\.(zh|en)\.md$/.exec(name);
-    return { name, base: m ? m[1] : name, lang: m ? m[2] : "zh" };
+    const base = m ? m[1] : name;
+    return { name, base, lang: m ? m[2] : "zh", category: helpPromptCategoryOf(base) };
   });
 }
 
@@ -5411,6 +5437,9 @@ export function apply(ctx, config) {
           return json(res, 200, {
             prompt_language: resolvePromptLanguage(readGraphSettings().promptLanguage, ctx),
             prompts: helpPromptAssetEntries(),
+            // g-498：提示词资产的语义分类投影（顺序 + zh/en 标签）——客户端分组只依据这一份
+            // 注册真源投影，不另抄文件清单；条目上的 `category` 为空串即「未分类」（仍须可见）。
+            prompt_categories: helpPromptCategoryEntries(),
             categories: helpToolCategoryEntries(),
             tools: helpToolCatalogEntries(names),
             // g-489 结构守卫的**运行期**投影：分类表 ≡ 注册真源被破坏时非空，前端据此把工具清单页签判红。

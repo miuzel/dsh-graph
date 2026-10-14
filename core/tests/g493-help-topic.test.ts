@@ -126,10 +126,17 @@ function modalProblems(modal: string): string[] {
   if (!topicKeys.length) problems.push("缺少 HELP_USAGE_TOPIC_KEYS（开篇点题章节的正文清单）");
   else {
     // 点题章节必须在 HELP_USAGE_KEYS **之前**渲染（「点题」= 开篇；排在后面等于没点题）。
-    const topicAt = modal.indexOf("HELP_USAGE_TOPIC_KEYS.map(");
+    // g-498：清单消费点由「`.map(` 调用」升级为「`helpTopicSections(HELP_USAGE_TOPIC_KEYS)` 分组」
+    //（正文按语义分小标题，每条仍恰渲染一次）；因此判据改判为**清单必须被消费**（二者之一），
+    // 而不是钉死 `.map(` 这一种写法 —— 写死子集/丢清单照旧判红。
+    const topicConsumed = /helpTopicSections\(\s*HELP_USAGE_TOPIC_KEYS\s*\)/.test(modal) || /HELP_USAGE_TOPIC_KEYS\.map\(/.test(modal);
+    // **渲染位置**以「点题一级容器」为准：g-498 起清单的消费点（`helpTopicSections(...)`）位于
+    // 函数开头、容器在其后展开，故用消费点排序会把「整体后移」误判为未移动。容器标记则始终
+    // 与真实渲染顺序一致（旧写法 `.map(` 作为兜底，兼容尚未迁移的形态）。
+    const topicAt = Math.max(modal.indexOf('className: "dg-help-topic"'), modal.indexOf("HELP_USAGE_TOPIC_KEYS.map("));
     const usageAt = modal.indexOf("HELP_USAGE_KEYS.map(");
-    if (topicAt < 0) problems.push("点题章节必须由 HELP_USAGE_TOPIC_KEYS 驱动（写死子集 ⇒ 新增段落界面不显示）");
-    if (topicAt < 0 || usageAt < 0) problems.push("使用说明页签必须同时渲染点题章节与原有段落");
+    if (!topicConsumed) problems.push("点题章节必须由 HELP_USAGE_TOPIC_KEYS 驱动（写死子集 ⇒ 新增段落界面不显示）");
+    if (!topicConsumed || usageAt < 0) problems.push("使用说明页签必须同时渲染点题章节与原有段落");
     else if (topicAt > usageAt) problems.push("点题章节必须渲染在原有使用说明段落**之前**（开篇）");
     if (!/dgT\("help\.topic\.title"\)/.test(modal)) problems.push("点题章节缺标题（help.topic.title）");
     if (!/className: "dg-help-topic"/.test(modal)) problems.push("点题章节缺可见容器 dg-help-topic");
@@ -371,15 +378,28 @@ test("g-493 C1（负向对照·内存变异）：点题章节缺失 / 定义被�
   assert.notEqual(dropTopic, real, "负向对照必须真实改变输入");
   assert.ok(modalProblems(dropTopic).some((p) => p.includes("dg-help-topic")), "拿掉点题章节容器必须判红");
   // 点题章节不再由清单驱动（段落被写死/丢清单）⇒ 必红。
-  const undriven = real.replace(/HELP_USAGE_TOPIC_KEYS\.map\(/g, "SOME_OTHER_KEYS.map(");
-  assert.notEqual(undriven, real, "负向对照必须真实改变输入");
-  assert.ok(modalProblems(undriven).some((p) => p.includes("HELP_USAGE_TOPIC_KEYS")), "点题章节不再由清单驱动必须判红");
+  // g-498：清单消费点现为 `helpTopicSections(HELP_USAGE_TOPIC_KEYS)` 分组调用（旧写法 `.map(` 亦被接受）；
+  // 两种写法**都必须**被同一负向对照关住 ⇒ 各自独立变异一次。
+  for (const [label, from, to] of [
+    ["分组调用被换掉", "helpTopicSections(HELP_USAGE_TOPIC_KEYS)", "helpTopicSections(SOME_OTHER_KEYS)"],
+    ["旧式 .map( 调用被换掉", "HELP_USAGE_TOPIC_KEYS.map(", "SOME_OTHER_KEYS.map("],
+  ] as Array<[string, string, string]>) {
+    const mutated = real.replace(from, to);
+    if (mutated === real) continue; // 该写法本版本不存在（两种写法只需存在其一）
+    assert.ok(modalProblems(mutated).some((p) => p.includes("HELP_USAGE_TOPIC_KEYS")), `点题章节不再由清单驱动必须判红（${label}）`);
+  }
   // 点题被排到原有段落**之后**（等于没点题）⇒ 必红。
-  // 变异构造：把「点题段落」整块剪下来，插到「原有段落」那一块之后（两处均用**非贪婪**定位，
-  // 不用跨函数的贪婪切片 —— 否则会把 HELP_USAGE_KEYS.map( 一并吞掉、变异形同没变）。
-  const topicBlock = real.match(/h\("div", \{ className: "dg-help-topic", key: "help-topic" \}[\s\S]*?dgT\(key\)\)\)\),\n/)![0];
+  // 变异构造：把「点题章节一级容器」整块剪下来，插到「原有段落」那一块之后。
+  // g-498：一级容器内已是「分组 → 组标题 + 逐键渲染」两层结构，故切片按**一级容器的开始标记**
+  // 与「原有段落块」的开始标记切分（不跨函数贪婪匹配）⇒ 变异真实、且新结构下仍然可判别。
+  // 「由清单驱动」在切片内**必然**成立（容器正是 `sections.map(...)` 展开的），故实例侧只断言
+  // 容器与原有段落两块都真的取到；「写死子集 ⇒ 判红」由上面 undriven 两条负向对照独立关住。
+  const topicStart = real.indexOf('h("div", { className: "dg-help-topic", key: "help-topic" },');
+  const usageStart = real.indexOf("...HELP_USAGE_KEYS.map(");
+  assert.ok(topicStart >= 0 && usageStart > topicStart, "变异切片必须真的取到两块");
+  const topicBlock = real.slice(topicStart, usageStart);
   const usageBlock = real.match(/\.\.\.HELP_USAGE_KEYS\.map\([\s\S]*?dgT\(key\)\)\),\n/)![0];
-  assert.ok(topicBlock.includes("HELP_USAGE_TOPIC_KEYS.map(") && usageBlock.includes("HELP_USAGE_KEYS.map("), "变异切片必须真的取到两块");
+  assert.ok(topicBlock.includes('className: "dg-help-topic"') && usageBlock.includes("HELP_USAGE_KEYS.map("), "变异切片必须真的取到两块");
   const movedAfter = real.replace(topicBlock, "").replace(usageBlock, usageBlock + topicBlock);
   assert.notEqual(movedAfter, real, "负向对照必须真实改变输入");
   assert.ok(modalProblems(movedAfter).some((p) => p.includes("之前")), "点题章节排到原有段落之后必须判红");

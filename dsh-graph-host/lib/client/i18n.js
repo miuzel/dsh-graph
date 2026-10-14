@@ -1261,6 +1261,10 @@
       'help.usage.tabs': '本弹窗其余页签：提示词模板（引擎实际投递给 Agent 的资产，只读）、工具清单（引擎当前注册的全部工具）、常见问题、Graph 设计（两张交互图）。',
       'help.prompts.intro': '以下资产与引擎实际投递给 Agent 的提示词是同一份（只读展示，此处不可编辑）。',
       'help.prompts.source': '内容随包发布，按语言各一份；可用右侧按钮切换语言查看对应版本。',
+      // g-498：清单按宿主注册元数据的语义分类分组（客户端不新增文件清单）；未分类项仍可见。
+      'help.prompts.orphan': '未分类',
+      // g-498：缺对应语言时透明回落 —— 如实标注实际展示的语言，不假装就是请求的那一份。
+      'help.prompts.langFallback': '（该语言暂无此模板，已回落到{lang}版）',
       'help.prompts.loading': '读取中…',
       'help.prompts.error': '读取失败：{error}',
       'help.asset.usage': '使用指引',
@@ -1370,9 +1374,14 @@
       // === g-493：「使用说明」开篇点题 —— 为什么叫 dsh-graph：图工程与看板视图 ===
       // 负责人 2026-10-12 原话口径的逐条落地（九个子项）。本段为**追加**（不改动、不重排既有键），
       // 但「为什么叫 dsh-graph」是开篇章节 ⇒ 由客户端 HELP_USAGE_TOPIC_KEYS 驱动、渲染在既有段落之前。
+      'help.topic.section.naming': '命名与定义',
+      'help.topic.section.mechanism': '当前工作机制',
+      'help.topic.section.board': '看板定位',
+      'help.topic.section.roadmap': '未来路线图',
+      'help.topic.section.more': '其他',
       'help.topic.title': '为什么叫 dsh-graph：图工程与看板视图',
       'help.topic.naming': 'dsh-graph 这个名字取自**Graph Engineering（图工程）**的启发：把多智能体系统设计成一张显式的**图**，而不是依赖单个智能体跑单条循环。',
-      'help.topic.definition': 'mcp.so 上《Graph Engineering（图工程）的理解》一文把它定义为：「Graph Engineering（图工程）就是把多智能体系统设计成一张显式的图——节点（各自只负责一件事的智能体或步骤）、边（顺序、条件或并行的路由）、共享状态——而不是依赖单个智能体跑单条循环」。',
+      'help.topic.definition': '> mcp.so 上《Graph Engineering（图工程）的理解》一文把它定义为：「Graph Engineering（图工程）就是把多智能体系统设计成一张显式的图——节点（各自只负责一件事的智能体或步骤）、边（顺序、条件或并行的路由）、共享状态——而不是依赖单个智能体跑单条循环」。',
       'help.topic.definitionSource': '以上为逐字引用，来源：mcp.so（《Graph Engineering（图工程）的理解》）。',
       'help.topic.stateMachine': '落到实现上，这个插件其实是一套**任务 / 目标状态机**的维护系统：对 AI 来说，它像一套**简易的 Jira + Confluence**（换个熟悉的说法，也可以理解成禅道）——我把要做的事写成目标与判据，AI 去执行、我来裁决，过程和结论都留在同一处。',
       'help.topic.roles': '在这套状态机里，角色不是预先分配好的岗位，而是**自然形成**的：主管（supervisor）负责登记目标与判据、派发与裁决，worker（子代理）干具体的活，reviewer（评审）独立复核结果，definer（定义者）把需求说清楚成目标，collector（收集者）先把上下文查明白，user（用户，也就是你）守人工关口。约束它们的只有两样东西：**主管工作指南**（技能 dsh-graph-supervisor）与**目标状态机**自身——谁在什么时候能做什么，由状态与指南决定，而不是由人在会话里临时指派。',
@@ -2645,6 +2654,10 @@
       'help.usage.tabs': 'Other tabs in this dialog: prompt templates (the assets actually delivered to agents, read-only), tools (everything currently registered), FAQ, and graph design (two interactive diagrams).',
       'help.prompts.intro': 'These assets are the very same ones delivered to agents (read-only here; not editable).',
       'help.prompts.source': 'Shipped with the package, one copy per language; use the buttons above to switch languages.',
+      // g-498: grouped by the host registry metadata (the client keeps no file list of its own).
+      'help.prompts.orphan': 'Uncategorised',
+      // g-498: transparent fallback when the requested language is missing (the label says which one is shown).
+      'help.prompts.langFallback': ' (not available in this language yet; showing the {lang} version)',
       'help.prompts.loading': 'Loading…',
       'help.prompts.error': 'Failed to load: {error}',
       'help.asset.usage': 'Usage guide',
@@ -2754,9 +2767,14 @@
       // === g-493: opening "why the name" chapter of the Help dialog - Graph Engineering and the board as a view ===
       // Mirrors the zh block key by key (zh/en must stay symmetric). The quoted Graph Engineering definition is
       // reproduced verbatim in zh; English readers get the source term and the same quoted structure.
+      'help.topic.section.naming': 'Naming and definition',
+      'help.topic.section.mechanism': 'How it works today',
+      'help.topic.section.board': 'What the board is for',
+      'help.topic.section.roadmap': 'Roadmap',
+      'help.topic.section.more': 'More',
       'help.topic.title': 'Why it is called dsh-graph: Graph Engineering and the board as a view',
       'help.topic.naming': 'The name dsh-graph comes from **Graph Engineering**: designing a multi-agent system as an explicit **graph**, instead of relying on a single agent running one loop.',
-      'help.topic.definition': 'An article on mcp.so defining Graph Engineering puts it this way: "Graph Engineering means designing a multi-agent system as an explicit graph - nodes (agents or steps that each do exactly one thing), edges (sequential, conditional or parallel routing) and shared state - rather than relying on a single agent running one loop".',
+      'help.topic.definition': '> An article on mcp.so defining Graph Engineering puts it this way: "Graph Engineering means designing a multi-agent system as an explicit graph - nodes (agents or steps that each do exactly one thing), edges (sequential, conditional or parallel routing) and shared state - rather than relying on a single agent running one loop".',
       'help.topic.definitionSource': 'The Chinese text above is quoted verbatim from the original; this English rendering is a translation. Source: mcp.so (the article on Graph Engineering).',
       'help.topic.stateMachine': 'Concretely, this plugin is a **task / goal state machine** maintenance system: for an AI it works like a **lightweight Jira + Confluence** (or, if you prefer, a ZenTao-style tracker) - I write down what to achieve and how it will be judged, the AI executes it, I decide the verdict, and both the process and the conclusions stay in one place.',
       'help.topic.roles': 'Inside that state machine the roles are not pre-assigned positions; they **emerge naturally**: the supervisor records goals and criteria and dispatches and rules on them, workers (subagents) do the actual work, reviewers check results independently, definers turn a request into a clear goal, collectors gather the context first, and the user (you) holds the human gates. Only two things constrain them: the **supervisor guide** (the dsh-graph-supervisor skill) and the **goal state machine** itself - what may happen when is decided by the state and the guide, not by someone handing out assignments mid-conversation.',
