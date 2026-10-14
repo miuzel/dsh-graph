@@ -1,0 +1,1 @@
+[Minimal mode execution strategy] Only the controlled 6 base tools are provided ({{shell}}, edit, read, write, graph_report_status, graph_transition); keep the output compact and do not expand redundant advanced calls.

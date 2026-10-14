@@ -201,6 +201,12 @@ test("g-355 B 负向对照：卡片定位回退到 goal 自有目录 ⇒ seed �
     for (const f of readdirSync(join(REPO, "core"))) {
       if (f.endsWith(".ts")) cpSync(join(REPO, "core", f), join(mirror, "core", f));
     }
+    // g-496：core 现在会在**模块加载期**读取提示词正文资产（`attempt-report-skeleton.<lang>.md` 等），
+    // 按模块位置解析 ⇒ 本镜像的 `core/ops.ts` 走源形态 `../dsh-graph-host/prompts/`。
+    // 必须把 prompts 一并复制，否则 seed 会在 import 期 fail-closed 抛错（错误签名变成
+    // «prompt asset missing»，掩盖本用例真正要验的 ENOENT 回退缺陷）。只补依赖，不放宽裁决。
+    mkdirSync(join(mirror, "dsh-graph-host"), { recursive: true });
+    cpSync(join(REPO, "dsh-graph-host", "prompts"), join(mirror, "dsh-graph-host", "prompts"), { recursive: true });
     assert.ok(linkDependencies(mirror), "未找到 node_modules，无法在 tmp 镜像里解析 yaml 等依赖");
 
     const r = runSeed(join(mirror, "scripts", "dsh-graph-mock-seed.mjs"), join(sandbox, "mock-broken"));

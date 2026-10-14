@@ -44,7 +44,7 @@ import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 import {
   apply, DESIGN_DIAGRAM_ROUTE, HELP_ASSET_ROUTE, HELP_CATALOG_ROUTE, HELP_PROMPT_ASSETS,
-  helpPromptAssetEntries, resolveHelpAssetRequest,
+  helpAssetRelativePath, helpPromptAssetEntries, resolveHelpAssetRequest,
 } from "../../dist/index.js";
 
 const repoRoot = join(import.meta.dirname, "../..");
@@ -122,23 +122,43 @@ const jsonOf = (res: any) => { try { return JSON.parse(String(res.body)); } catc
 const packagedNames = (dir: string) =>
   readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
 
+/** g-496：可达资产的**位置真源** —— 注册表把「名字 → 包内相对路径」冻结下来；资产不再只住在
+ *  `prompts/`（`supervisor-guide.{zh,en}.md` 在包根）。本 helper 由**注册投影**给出每个名字的
+ *  源/包**绝对路径**，供 A1 做「源 ↔ 包 ↔ 真实响应字节」三方对账。 */
+const registryPath = (name: string, root: "src" | "dist") => {
+  const rel = helpAssetRelativePath(name);
+  assert.ok(rel, `${name} 必须在注册表内（白名单不得含未注册名字）`);
+  return root === "dist"
+    ? join(distRoot, rel!)
+    : join(repoRoot, "dsh-graph-host", rel!);
+};
+
 // ================================================================ A. 宿主只读资产路由
 
-test("g-481 A1：白名单 ≡ 随包 prompts/*.md，命中即 md + nosniff，且与产物逐字节一致", async () => {
-  const distNames = packagedNames(promptsDistDir);
-  const srcNames = packagedNames(promptsSrcDir);
-  assert.deepEqual([...HELP_PROMPT_ASSETS].sort(), distNames, "白名单必须与随包 dist/prompts 逐项一致（无漂移、无死条目）");
-  assert.deepEqual(srcNames, distNames, "源 prompts 与随包副本必须同集");
+test("g-481 A1：白名单 ≡ 注册表投影的随包资产（源 ↔ 包 ↔ 真实响应字节三方一致）", async () => {
+  // g-496 口径扩展（负责人 2026-10-14 批准）：白名单从「仅 prompts/ 集合」改为
+  // 「**完整注册映射**」投影 —— 既有 prompts 项仍是精确路径，guide.zh/en 为包根精确路径。
   assert.equal(new Set(HELP_PROMPT_ASSETS).size, HELP_PROMPT_ASSETS.length, "白名单不得有重复项");
-  const digests = new Set<string>();
+  // ① 每条注册项：路径形态受控（`<name>` 或 `prompts/<name>`），且名字过形态闸
   for (const name of HELP_PROMPT_ASSETS) {
     assert.match(name, /^[a-z0-9][a-z0-9.-]*\.(zh|en)\.md$/, `${name} 必须是 <base>.<lang>.md 形态`);
+    const rel = helpAssetRelativePath(name);
+    assert.ok(rel === name || rel === `prompts/${name}`, `${name} 的注册路径必须是受控两类形态之一，实际 ${rel}`);
+    assert.ok(!rel!.includes("..") && !rel!.includes("\\"), `${name} 的注册路径不得含穿越/反斜杠`);
+  }
+  // ② 注册项逐一真实存在（源 + 包），且响应字节与产物逐字节一致
+  const digests = new Set<string>();
+  for (const name of HELP_PROMPT_ASSETS) {
+    const srcAbs = registryPath(name, "src");
+    const distAbs = registryPath(name, "dist");
+    assert.ok(existsSync(srcAbs), `${name} 必须存在于源（${srcAbs}）`);
+    assert.ok(existsSync(distAbs), `${name} 必须随包发布（${distAbs}）`);
     const res = await callAsset(`${HELP_ASSET_ROUTE}/${name}`);
     assert.equal(res.code, 200, `${name} 必须 200`);
     assert.equal(res.headers["content-type"], MARKDOWN_CT, `${name} 必须是 text/markdown; charset=utf-8`);
     assert.equal(res.headers["x-content-type-options"], "nosniff", `${name} 必须带 nosniff（不被嗅探成 HTML）`);
-    const srcBuf = readFileSync(join(promptsSrcDir, name));
-    const distBuf = readFileSync(join(promptsDistDir, name));
+    const srcBuf = readFileSync(srcAbs);
+    const distBuf = readFileSync(distAbs);
     assert.equal(sha256(distBuf), sha256(srcBuf), `${name} 随包副本必须与源逐字节一致`);
     assert.equal(res.body.length, distBuf.length, `${name} 响应长度必须等于产物字节数`);
     assert.equal(sha256(bodyOf(res)), sha256(distBuf), `${name} 响应必须与随包产物逐字节一致`);
@@ -149,12 +169,26 @@ test("g-481 A1：白名单 ≡ 随包 prompts/*.md，命中即 md + nosniff，�
     assert.ok(!digests.has(sha256(distBuf)), `${name} 内容与其他资产重复（疑似复制粘贴占位）`);
     digests.add(sha256(distBuf));
   }
+  // ③ 目录派生（不放弱）：白名单覆盖 `prompts/` 下**全部** md（新增资产自动纳入）
+  const distNames = packagedNames(promptsDistDir);
+  const srcNames = packagedNames(promptsSrcDir);
+  assert.deepEqual(srcNames, distNames, "源 prompts 与随包副本必须同集");
+  const projected = [...HELP_PROMPT_ASSETS].filter((n) => helpAssetRelativePath(n) === `prompts/${n}`).sort();
+  assert.deepEqual(projected, distNames, "白名单必须覆盖随包 dist/prompts 的全部 md（目录派生，无死条目）");
+  // ④ 根级注册项（supervisor-guide）必须**不在** prompts/ 目录内 —— 证明两类位置都在用
+  assert.ok(HELP_PROMPT_ASSETS.includes("supervisor-guide.zh.md"), "根级 supervisor-guide 必须可达（g-496）");
+  assert.ok(HELP_PROMPT_ASSETS.includes("supervisor-guide.en.md"), "根级 supervisor-guide.en 必须可达（g-496）");
+  assert.ok(!distNames.includes("supervisor-guide.zh.md"), "supervisor-guide 应位于包根而非 prompts/");
 });
 
-test("g-481 A2：未知名 / 穿越 / 非 md / 大小写变体一律拒绝，GET/HEAD 之外 405，白名单不覆盖 dist/ 根下 md", async () => {
+test("g-481 A2：未知名 / 穿越 / 非 md / 大小写变体一律拒绝，GET/HEAD 之外 405，白名单不覆盖未注册根名", async () => {
   const rejected: Array<[string, number, string]> = [
     [`${HELP_ASSET_ROUTE}/unknown.zh.md`, 404, "未知名"],
-    [`${HELP_ASSET_ROUTE}/supervisor-guide.zh.md`, 404, "名字合法但**不在白名单**（dist/ 根下的 md 不得经本路由外溢）"],
+    // g-496：负例从「dist/ 根下的 md 一律不可达」改为「**未注册**的根名仍不可达」——
+    // 根级 `supervisor-guide.{zh,en}.md` 已按批准纳入注册表（可达），故负例改用同为根级、
+    // 形态合法但**未注册**的名字；「白名单不外溢」这条断言口径本身不弱化。
+    [`${HELP_ASSET_ROUTE}/supervisor-guide.md`, 404, "名字合法但**不在白名单**（未注册的根级名不得经本路由外溢）"],
+    [`${HELP_ASSET_ROUTE}/readme.zh.md`, 404, "未注册的根级形态名（形态合法仍须 404）"],
     [`${HELP_ASSET_ROUTE}/README.md`, 400, "大写不合规（形态闸先拒；`README.md` 虽随包在 dist/ 根下，也不得经本路由外溢）"],
     [`${HELP_ASSET_ROUTE}`, 404, "缺名字"],
     [`${HELP_ASSET_ROUTE}/`, 400, "空名字"],
@@ -188,6 +222,17 @@ test("g-481 A2：未知名 / 穿越 / 非 md / 大小写变体一律拒绝，GET
   assert.equal(head.headers["content-type"], MARKDOWN_CT);
   assert.equal(head.body, null, "HEAD 不得回 body");
 
+  // g-496 反向对照：注册表里的**根级**名字（非 prompts/ 目录内）必须真实可达 —— 证明
+  // 「未注册根名 404」不是因为根级整体不可达，而是白名单确实在那一层起作用（防恒真断言）。
+  for (const rootName of ["supervisor-guide.zh.md", "supervisor-guide.en.md"]) {
+    assert.equal(resolveHelpAssetRequest(`${HELP_ASSET_ROUTE}/${rootName}`).status, 200, `${rootName} 已注册 ⇒ 策略层必须 200`);
+    const res = await callAsset(`${HELP_ASSET_ROUTE}/${rootName}`);
+    assert.equal(res.code, 200, `${rootName}（根级已注册）必须可达`);
+    assert.equal(res.headers["content-type"], MARKDOWN_CT, `${rootName} 必须是 text/markdown; charset=utf-8`);
+    assert.equal(res.headers["x-content-type-options"], "nosniff", `${rootName} 必须带 nosniff`);
+    assert.equal(sha256(bodyOf(res)), sha256(readFileSync(join(distRoot, rootName))), `${rootName} 响应必须与包根产物逐字节一致`);
+  }
+
   // 结构性：路由块内**零写文件 API**（只读是断言，不是散文）。
   const src = readFileSync(hostIndex, "utf8");
   const start = src.indexOf("// g-481：使用说明弹窗的只读服务");
@@ -196,8 +241,14 @@ test("g-481 A2：未知名 / 穿越 / 非 md / 大小写变体一律拒绝，GET
   const block = src.slice(start, end);
   assert.match(block, /kind: "prefix"/, "资产路由必须是 prefix 路由");
   assert.match(block, /resolveHelpAssetRequest\(req\.url\)/, "尾段裁决必须走白名单解析器（单一真源）");
-  assert.match(block, /readFileSync\(new URL\(`\.\/prompts\/\$\{decision\.name\}`, import\.meta\.url\)\)/,
-    "路由必须以 readFileSync 现读随包 prompts/");
+  // g-496：路径**只能来自冻结注册表**（`helpAssetRelativePath`），不得再把请求内容拼进路径；
+  // 且必须显式处理「未注册 ⇒ null」（否则白名单放宽后可能拼出任意路径）。
+  assert.match(block, /helpAssetRelativePath\(decision\.name\)/, "路由必须按冻结注册表解析相对路径（不得拼接请求内容）");
+  assert.match(block, /if \(!relativePath\)/, "未注册名必须显式拒绝（不得回落到任一位置）");
+  assert.match(block, /readFileSync\(new URL\(`\.\/\$\{relativePath\}`, import\.meta\.url\)\)/,
+    "路由必须以 readFileSync 现读注册表给出的随包路径");
+  assert.doesNotMatch(block, /readFileSync\(new URL\(`\.\/prompts\/\$\{/,
+    "路由不得再把名字硬拼到 ./prompts/ 下（根级资产无法表达）");
   assert.doesNotMatch(
     block,
     /writeFileSync|appendFileSync|mkdirSync|rmSync|unlinkSync|renameSync|copyFileSync|createWriteStream|truncateSync|chmodSync/,
@@ -221,14 +272,21 @@ test("g-481 A3（负向对照·真实可执行变异）：白名单放宽成「�
     writeFileSync(mirrorIndex, widened, "utf8");
 
     const mod: any = await import(pathToFileURL(mirrorIndex).href);
-    // 基线（真实产物）—— 策略层与路由层都拒绝白名单外的名字。
-    assert.equal(resolveHelpAssetRequest(`${HELP_ASSET_ROUTE}/supervisor-guide.zh.md`).status, 404, "真实产物策略层必须拒绝白名单外名字");
-    assert.equal((await callAsset(`${HELP_ASSET_ROUTE}/supervisor-guide.zh.md`)).code, 404, "真实产物路由层必须拒绝白名单外名字");
-    // 放宽白名单后：策略层放行（判别力来源）；路由层仍回落 404，只因 dist/prompts/ 下没有该文件。
-    assert.equal(mod.resolveHelpAssetRequest(`${HELP_ASSET_ROUTE}/supervisor-guide.zh.md`).status, 200,
-      "放宽白名单后白名单外名字必须在策略层被放行");
+    // 基线（真实产物）—— 策略层与路由层都拒绝**未注册**的根级名字。
+    // g-496：根级 `supervisor-guide.{zh,en}.md` 已纳入注册表（可达），故负例改用同为根级、
+    // 形态合法但**未注册**的名字；判别力（放宽白名单 ⇒ 策略层从 404 变 200）不变。
+    assert.equal(resolveHelpAssetRequest(`${HELP_ASSET_ROUTE}/supervisor-guide.md`).status, 404, "真实产物策略层必须拒绝未注册名字");
+    assert.equal((await callAsset(`${HELP_ASSET_ROUTE}/supervisor-guide.md`)).code, 404, "真实产物路由层必须拒绝未注册名字");
+    // 放宽白名单后：策略层放行（判别力来源）；路由层仍回落 404，只因包内没有该文件。
+    assert.equal(mod.resolveHelpAssetRequest(`${HELP_ASSET_ROUTE}/supervisor-guide.md`).status, 200,
+      "放宽白名单后未注册名字必须在策略层被放行");
     assert.equal(mod.resolveHelpAssetRequest(`${HELP_ASSET_ROUTE}/whatever.zh.md`).status, 200,
       "放宽白名单后任何合法名字都必须在策略层被放行");
+    // g-496 追加：注册表驱动的**路径解析**不得成为新的外溢面 —— 未注册名必须解析为 null
+    // （路由据此明确 404，绝不拼接请求内容、也不回落到任一位置）。
+    assert.equal(mod.helpAssetRelativePath("supervisor-guide.md"), null, "未注册名必须解析为 null（不得回落到任一位置）");
+    assert.equal(mod.helpAssetRelativePath("supervisor-guide.zh.md"), "supervisor-guide.zh.md", "注册名必须解析为冻结的根级路径");
+    assert.equal(mod.helpAssetRelativePath("usage.zh.md"), "prompts/usage.zh.md", "注册名必须解析为冻结的 prompts 路径");
     // 语法闸未动：穿越/非 md 仍被拒。
     assert.equal(mod.resolveHelpAssetRequest(`${HELP_ASSET_ROUTE}/%2e%2e%2findex.js`).status, 400);
     assert.equal(mod.resolveHelpAssetRequest(`${HELP_ASSET_ROUTE}/usage.zh.json`).status, 400);
@@ -289,9 +347,16 @@ test("g-481 B1：工具清单逐项等于注册真源、说明 zh/en 成对（en
   const assets = helpPromptAssetEntries();
   assert.equal(assets.length, HELP_PROMPT_ASSETS.length, "资产投影必须与白名单等长");
   assert.deepEqual(assets.map((a) => a.name).sort(), [...HELP_PROMPT_ASSETS].sort(), "资产投影必须与白名单同集");
-  // g-496：不再钉死「7 组」魔法数字，改为与随包目录投影**同集对账**（既防漂移，也防资产改名后残留死基名）。
-  const packagedBases = [...new Set(packagedNames(promptsDistDir).map((n) => n.replace(/\.(zh|en)\.md$/, "")))].sort();
-  assert.deepEqual([...new Set(assets.map((a) => a.base))].sort(), packagedBases, "资产基名集合必须等于随包目录投影（无漂移、无死基名）");
+  // g-496：基名集合 = 「随包 `prompts/` 目录投影」∪「注册表里的根级项」——
+  // 资产已有两类位置，只看目录会漏掉根级 guide。既防漂移，也防资产改名后残留死基名。
+  const rootBases = [...new Set([...HELP_PROMPT_ASSETS]
+    .filter((n) => helpAssetRelativePath(n) === n)
+    .map((n) => n.replace(/\.(zh|en)\.md$/, "")))];
+  const packagedBases = [...new Set([
+    ...packagedNames(promptsDistDir).map((n) => n.replace(/\.(zh|en)\.md$/, "")),
+    ...rootBases,
+  ])].sort();
+  assert.deepEqual([...new Set(assets.map((a) => a.base))].sort(), packagedBases, "资产基名集合必须等于随包目录 + 根级注册投影（无漂移、无死基名）");
   for (const base of new Set(assets.map((a) => a.base))) {
     const langs = assets.filter((a) => a.base === base).map((a) => a.lang).sort();
     assert.deepEqual(langs, ["en", "zh"], `${base} 必须 zh/en 成对`);

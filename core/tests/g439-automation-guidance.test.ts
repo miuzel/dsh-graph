@@ -583,20 +583,45 @@ test("g-439 负向对照（hermetic）：四个变异各自让对应验收断言
   assert.ok(existsSync(join(DIST, "prompts", "discipline.zh.md")), "真实 dist 资产仍在");
 });
 
-test("g-439：可抽取块自包含（变异锚点齐备），且渲染函数对未配置/非法输入返回空串", () => {
+test("g-439/g-496：块内只留结构，正文真源在 md；渲染函数对未配置/非法输入返回空串", () => {
   const src = readFileSync(join(DIST, "index.js"), "utf8");
   const a = src.indexOf(G439_BLOCK_BEGIN);
   const b = src.indexOf(G439_BLOCK_END);
   assert.ok(a > 0 && b > a, "dist/index.js 含 g-439 可抽取块标记");
   const block = src.slice(a, b);
-  assert.ok(block.includes("const AUTOMATION_GUIDANCE_KEYS"), "块内含键清单");
-  assert.ok(block.includes("function renderAutomationGuidance"), "块内含渲染函数");
-  const fn: any = new Function(`${block}\nreturn renderAutomationGuidance;`)();
-  for (const bad of [null, undefined, {}, { release: null }, { release: "robot" }, { release: 1 }]) {
-    assert.equal(fn(bad, "zh"), "", `未配置/非法输入(${JSON.stringify(bad)}) 必须返回空串`);
-    assert.equal(fn(bad, "en"), "", `未配置/非法输入(${JSON.stringify(bad)}) 必须返回空串（en）`);
+  assert.ok(block.includes("const AUTOMATION_GUIDANCE_KEYS"), "块内含键清单（结构）");
+  assert.ok(block.includes("function renderAutomationGuidance"), "块内含渲染函数（结构）");
+  // g-496：自包含口径变迁 —— 正文（header/confirm/autonomous/action/boundary/trailer）迁到
+  // `prompts/automation-guidance.<lang>.md`，块内**引用**读取与解析两个外部符号（不再 new Function 求值）。
+  // 故此处改为对**真实资产**做行为断言：正文只在资产里、块内不留第二副本。
+  assert.ok(block.includes("requirePromptAsset"), "块内必须从资产读取正文（g-496 单一真源）");
+  assert.ok(block.includes("parseAutomationGuidanceAsset"), "块内必须解析资产（结构留逻辑）");
+
+  // ① 正文真源 = 资产，块内/宿主源代码不得再内联正文（逐字段对账）
+  const zhAsset = readFileSync(join(HOST, "prompts", "automation-guidance.zh.md"), "utf8");
+  const enAsset = readFileSync(join(HOST, "prompts", "automation-guidance.en.md"), "utf8");
+  const hostSrc = readFileSync(join(DIST, "index.js"), "utf8");
+  for (const [label, asset] of [["zh", zhAsset], ["en", enAsset]] as const) {
+    assert.ok(asset.includes("@@header") && asset.includes("@@trailer"), `${label} 资产必须含 header/trailer 块`);
+    for (const key of ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"]) {
+      assert.ok(asset.includes(`@@action.${key}`), `${label} 资产必须含 @@action.${key}`);
+      assert.ok(asset.includes(`@@boundary.${key}`), `${label} 资产必须含 @@boundary.${key}`);
+    }
   }
-  // 语言归一：未知语言按 zh（fail-safe，不产出空/半成品）
-  assert.ok(fn({ release: "human" }, "fr").includes("自动化动作指导"));
-  assert.ok(fn({ release: "human" }, undefined).includes("自动化动作指导"));
+  // 正文句子不得在 dist/index.js 里再出现一次（唯一真源；注释除外 —— 注释行不含 @@ 标记以外的正文）
+  const zhTrailer = zhAsset.split("@@trailer")[1].split("<!--")[0].trim();
+  assert.ok(zhTrailer.length > 50, "zh trailer 资产内容必须非空");
+  assert.ok(!hostSrc.includes(zhTrailer), "dist/index.js 不得内联 zh trailer 正文（唯一真源约束）");
+
+  // ② 未配置/非法输入 ⇒ 不产出指导段（引擎事实不因迁资产而改变）
+  const yamlNull = yamlWith("session-super");
+  const outNull = runMutant([], { session: "session-super", yamls: [yamlNull] });
+  assert.ok(!outNull[0].includes("自动化动作指导"), "六键全未配置 ⇒ 不注入指导段（与既有逐字一致）");
+  assert.ok(!outNull[0].includes("- `release` ="), "全未配置不得产出任何键指导行");
+  for (const bad of ["robot", 1, true, "HUMAN", "Human"]) {
+    const literal = typeof bad === "string" ? bad : JSON.stringify(bad);
+    const out = runMutant([], { session: "session-super", yamls: [yamlWith("session-super", `  automation:\n    release: ${literal}\n`)] });
+    assert.ok(!out[0].includes("发布决策"), `非法值 ${literal} 必须按未配置处理（不产出该键指导行）`);
+    assert.ok(!out[0].includes("自动化动作指导"), `非法值 ${literal} 不得产出指导段`);
+  }
 });

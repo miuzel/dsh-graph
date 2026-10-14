@@ -15,6 +15,7 @@ import {
   ATTEMPT_REPORT_SKELETON_BEGIN, ATTEMPT_REPORT_SKELETON_END,
   ATTEMPT_REPORT_SOFT_MAX_BYTES, ATTEMPT_REPORT_SECTION_BUDGETS,
   SUMMARY_INPUT_ATTEMPT_MAX_BYTES, SUMMARY_INPUT_TOTAL_MAX_BYTES,
+  REVIEW_CONCLUSION_EXAMPLE_ZH,
 } from "../ops.ts";
 import { formatAttemptPrompt } from "../../dist/index.js";
 
@@ -34,13 +35,32 @@ const strip = (text: string) => stripAttemptReportSkeleton(text);
 // ① 单一真源 + 逐项必填
 // ============================================================================
 
-test("g-374 F6：骨架是单一真源——只在 core/ops.ts 定义，提示面/文档不得各抄一份", () => {
-  const ops = readFileSync(join(import.meta.dirname, "../ops.ts"), "utf8");
-  assert.ok(ops.includes("ATTEMPT_REPORT_SKELETON"), "真源必须在 core/ops.ts");
-  // 骨架独有句式（executor 8 项 + reviewer 6 项的标题行）不得出现在任何提示面资产里
+test("g-374 F6：骨架是单一真源——正文只在 prompts/attempt-report-skeleton.*.md，代码只做装配", () => {
+  // g-496 口径变更（负责人 2026-10-14 批准）：正文真源从 `core/ops.ts` 的模板字面量
+  // **迁到随包 md 资产**；core 只保留装配（读取 + 两处占位符插值 + begin/end 包裹）。
+  // 故本用例断言的不变量从「真源在 ops.ts」改为「真源在 md、且代码侧不留第二副本」。
+  const assetNames = ["attempt-report-skeleton.zh.md", "attempt-report-skeleton.en.md"];
+  for (const name of assetNames) {
+    const text = readFileSync(promptPath(name), "utf8");
+    assert.ok(text.includes("## "), `${name} 必须含骨架正文`);
+    // 资产里**不得**含 begin/end 机器标记（标记仍由逻辑提供）
+    assert.ok(!text.includes(ATTEMPT_REPORT_SKELETON_BEGIN), `${name} 不得含骨架 begin 标记（标记由逻辑提供）`);
+    assert.ok(!text.includes(ATTEMPT_REPORT_SKELETON_END), `${name} 不得含骨架 end 标记（标记由逻辑提供）`);
+    // 资产里以**占位符**引用「预算」与「结论示例」，二者仍由逻辑提供
+    assert.ok(text.includes("{{soft_max_kib}}"), `${name} 必须用占位符引用预算（不得写死数字）`);
+    assert.ok(text.includes("{{conclusion_example}}"), `${name} 必须用占位符引用结论示例`);
+  }
+  // 骨架独有句式（executor 8 项 + reviewer 6 项的标题行）：必须**恰好**在真源资产里出现一次，
+  // 且不得出现在**其它**任何提示面资产里（单一真源约束，方向与 g-496 之前相反）。
   const skeletonLines = ATTEMPT_REPORT_SKELETON.split("\n").filter((l) => /^\d+\. \*\*/.test(l));
   assert.equal(skeletonLines.length, 14, "executor 8 项 + reviewer 6 项 = 14 条逐项必填");
-  const assets = readdirSync(promptPath(".")).filter((n) => n.endsWith(".md"));
+  const zhAsset = readFileSync(promptPath("attempt-report-skeleton.zh.md"), "utf8");
+  for (const line of skeletonLines) {
+    // 资产里用 `{{conclusion_example}}` 占位符引用结论示例 ⇒ 比对时把插值结果还原成占位符形态。
+    const assetForm = line.split(REVIEW_CONCLUSION_EXAMPLE_ZH).join("{{conclusion_example}}");
+    assert.ok(zhAsset.includes(assetForm), `真源资产必须逐条含骨架项：${assetForm.slice(0, 30)}`);
+  }
+  const assets = readdirSync(promptPath(".")).filter((n) => n.endsWith(".md") && !assetNames.includes(n));
   assert.ok(assets.length > 0, "提示面资产必须存在");
   for (const name of assets) {
     const text = readFileSync(promptPath(name), "utf8");
@@ -49,6 +69,14 @@ test("g-374 F6：骨架是单一真源——只在 core/ops.ts 定义，提示�
     }
     assert.ok(!text.includes(ATTEMPT_REPORT_SKELETON_BEGIN), `${name} 不得复制骨架标记`);
   }
+  // 代码侧（core/ops.ts）**不得**再内联骨架条目正文 —— 只允许读取 + 装配。
+  const ops = readFileSync(join(import.meta.dirname, "../ops.ts"), "utf8");
+  assert.ok(ops.includes("readCorePromptAsset(\"attempt-report-skeleton\""), "core 必须从资产读取骨架正文");
+  for (const line of skeletonLines) assert.ok(!ops.includes(line), `core/ops.ts 不得内联骨架条目：${line.slice(0, 30)}`);
+  // begin/end 标记仍**由逻辑提供**（常量声明），但不是正文：除两个常量声明行外不得再出现标记字面量。
+  const markerOccurrences = ops.split(ATTEMPT_REPORT_SKELETON_BEGIN).length - 1;
+  assert.equal(markerOccurrences, 1, "core/ops.ts 只应在常量声明处出现一次 begin 标记（标记由逻辑提供）");
+  assert.ok(ops.includes(`ATTEMPT_REPORT_SKELETON_BEGIN = "${ATTEMPT_REPORT_SKELETON_BEGIN}"`), "标记必须由常量声明提供");
   // 宿主侧只允许 import + 调用（不得内联骨架文本）
   const host = readFileSync(join(repoRoot, "dsh-graph-host/index.js"), "utf8");
   assert.match(host, /formatAttemptReportSkeleton\("zh"\)|formatAttemptReportSkeleton\("en"\)|formatAttemptReportSkeleton\(/,

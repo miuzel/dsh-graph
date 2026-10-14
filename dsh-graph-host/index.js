@@ -279,26 +279,53 @@ export function resolveDesignDiagramRequest(rawUrl) {
 //      非 `.md` 后缀 → 400。判定只看 **URL 归一化后的 pathname 尾段**，不做字符串拼接后再就读
 //      （即使判定失误，也只会在 `prompts/` 白名单目录里按白名单名读取）。
 export const HELP_ASSET_ROUTE = "/api/dsh-graph/help/asset";
-export const HELP_PROMPT_ASSETS = Object.freeze([
-  "agent-teams-contract.en.md",
-  "agent-teams-contract.zh.md",
-  "discipline.en.md",
-  "discipline.zh.md",
-  "executor-discipline.en.md",
-  "executor-discipline.zh.md",
-  "guide-hint.en.md",
-  "guide-hint.zh.md",
-  "help.en.md",
-  "help.zh.md",
-  "minor-task.en.md",
-  "minor-task.zh.md",
-  "no-isolation.en.md",
-  "no-isolation.zh.md",
-  "usage.en.md",
-  "usage.zh.md",
-  "worktree.en.md",
-  "worktree.zh.md",
+/** g-496：帮助可达资产的**唯一 name → relativePath 注册**（冻结真源）。
+ *
+ *  为什么需要相对路径：资产不再全在 `prompts/` 下 —— `supervisor-guide.{zh,en}.md` 位于包根
+ *  （`build.sh` 逐字复制到 `dist/` 根），而注入式提示词在 `prompts/`。此前白名单只存名字、
+ *  处理器把名字硬拼到 `./prompts/` 下 ⇒ 根级资产根本无法通过白名单表达。
+ *
+ *  注册同时是**白名单**与**目录投影**的单一来源：`HELP_PROMPT_ASSETS` 由它投影（顺序即展示顺序），
+ *  处理器按 `relativePath` 读取。**不持有第二份清单** —— 新增一份资产 = 在此加一行。
+ *  安全口径不变：`relativePath` 只允许**受控的两类形态**（`<name>` 或 `prompts/<name>`），
+ *  且 `<name>` 仍须过 `HELP_ASSET_NAME_RE`；`..` / 绝对路径 / 反斜杠一律拒绝（结构性守卫断言）。 */
+const HELP_ASSET_REGISTRY = Object.freeze([
+  { name: "agent-teams-contract.en.md", relativePath: "prompts/agent-teams-contract.en.md" },
+  { name: "agent-teams-contract.zh.md", relativePath: "prompts/agent-teams-contract.zh.md" },
+  { name: "attempt-report-skeleton.en.md", relativePath: "prompts/attempt-report-skeleton.en.md" },
+  { name: "attempt-report-skeleton.zh.md", relativePath: "prompts/attempt-report-skeleton.zh.md" },
+  { name: "automation-guidance.en.md", relativePath: "prompts/automation-guidance.en.md" },
+  { name: "automation-guidance.zh.md", relativePath: "prompts/automation-guidance.zh.md" },
+  { name: "discipline.en.md", relativePath: "prompts/discipline.en.md" },
+  { name: "discipline.zh.md", relativePath: "prompts/discipline.zh.md" },
+  { name: "executor-discipline.en.md", relativePath: "prompts/executor-discipline.en.md" },
+  { name: "executor-discipline.zh.md", relativePath: "prompts/executor-discipline.zh.md" },
+  { name: "guide-hint.en.md", relativePath: "prompts/guide-hint.en.md" },
+  { name: "guide-hint.zh.md", relativePath: "prompts/guide-hint.zh.md" },
+  { name: "help.en.md", relativePath: "prompts/help.en.md" },
+  { name: "help.zh.md", relativePath: "prompts/help.zh.md" },
+  { name: "minor-task.en.md", relativePath: "prompts/minor-task.en.md" },
+  { name: "minor-task.zh.md", relativePath: "prompts/minor-task.zh.md" },
+  { name: "no-isolation.en.md", relativePath: "prompts/no-isolation.en.md" },
+  { name: "no-isolation.zh.md", relativePath: "prompts/no-isolation.zh.md" },
+  { name: "subagent-mode.en.md", relativePath: "prompts/subagent-mode.en.md" },
+  { name: "subagent-mode.zh.md", relativePath: "prompts/subagent-mode.zh.md" },
+  { name: "supervisor-guide.en.md", relativePath: "supervisor-guide.en.md" },
+  { name: "supervisor-guide.zh.md", relativePath: "supervisor-guide.zh.md" },
+  { name: "usage.en.md", relativePath: "prompts/usage.en.md" },
+  { name: "usage.zh.md", relativePath: "prompts/usage.zh.md" },
+  { name: "worktree.en.md", relativePath: "prompts/worktree.en.md" },
+  { name: "worktree.zh.md", relativePath: "prompts/worktree.zh.md" },
 ]);
+
+/** 白名单（名字清单，投影自注册表；**不是**第二份清单）。 */
+export const HELP_PROMPT_ASSETS = Object.freeze(HELP_ASSET_REGISTRY.map((e) => e.name));
+
+/** 纯函数：白名单资产名 → 其在包内的相对路径（未注册 ⇒ null）。 */
+export function helpAssetRelativePath(name) {
+  const hit = HELP_ASSET_REGISTRY.find((e) => e.name === name);
+  return hit ? hit.relativePath : null;
+}
 /** 合法资产名：小写字母/数字起头，只含 `[a-z0-9.-]`，`.md` 结尾。 */
 const HELP_ASSET_NAME_RE = /^[a-z0-9][a-z0-9.-]*\.md$/;
 
@@ -852,39 +879,58 @@ const GUIDE = requirePromptAsset("supervisor-guide", "zh");
 // 其余四键**不对应任何** gate（与「开始工作」「审核」两类 gate **没有对应键**同理）⇒ 未配置一律
 // 显示「未配置：保持既有指导」。引擎侧六键仍是 `nullable` **且无 `default`**，未配置时
 // `readProjectConfig` 返回 null、本块的渲染函数**不输出该键指导行** —— 与上面逐字一致。
-// 本块自包含（不引用外部符号），测试按 begin/end 标记原文抽取 + 变异求值。
+// g-496：正文（header/confirm/autonomous/action/boundary/trailer）真源 = `prompts/automation-guidance.<lang>.md`，
+// 代码只留**结构与门控**（键清单、行模板、human/ai 判断、空串语义、语言回落）。故本块**引用外部符号**
+// `requirePromptAsset`（读取）与 `parseAutomationGuidanceAsset`（解析）—— 守卫据此断言「正文不在代码里」，
+// 并对**真实资产读取 + 渲染输出 + 模块开关**做行为断言（不再用 `new Function` 抽块求值）。
 const AUTOMATION_GUIDANCE_KEYS = ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"];
+
+/** g-496：把 `prompts/automation-guidance.<lang>.md` 的 `@@<字段>` 分块解析成正文表。
+ *
+ *  资产是**唯一真源**（正文不再在代码里留第二副本）；本函数只做**解析**，不含任何门控判断。
+ *  fail-closed：资产缺失由 `requirePromptAsset` 抛错；**任一必需字段缺失/重复**同样抛错
+ *  （绝不静默降级为空串 —— 否则「资产漏字段」会被伪装成「该键无指导」）。
+ *  解析规则：行首 `@@<field>` 起一块，直到下一个 `@@` 行；HTML 注释与空行天然落在块外/块内被裁剪。 */
+function parseAutomationGuidanceAsset(text, lang) {
+  const fields = new Map();
+  let current = null;
+  for (const raw of String(text).split("\n")) {
+    // 定界注释行（begin/end 标记）不是正文，遇到即结束当前块（避免尾部标记被并入最后一段）。
+    if (/^\s*<!--/.test(raw) || /^\s*-->/.test(raw)) { current = null; continue; }
+    const m = /^@@([A-Za-z0-9_.]+)\s*$/.exec(raw);
+    if (m) {
+      if (fields.has(m[1])) throw new Error(`dsh-graph automation guidance asset has duplicate field: ${m[1]} (${lang})`);
+      current = m[1];
+      fields.set(current, []);
+      continue;
+    }
+    if (current) fields.get(current).push(raw);
+  }
+  const get = (field) => {
+    const lines = fields.get(field);
+    if (!lines) throw new Error(`dsh-graph automation guidance asset is missing field: ${field} (${lang})`);
+    return lines.join("\n").trim();
+  };
+  const table = {
+    header: get("header"),
+    confirm: get("confirm"),
+    autonomous: get("autonomous"),
+    line: (key, value, action, clause, boundary) =>
+      lang === "en"
+        ? `- \`${key}\` = ${value}: ${action} — ${clause} (${boundary}).`
+        : `- \`${key}\` = ${value}：${action}，${clause}（${boundary}）。`,
+    actions: {},
+    trailer: get("trailer"),
+  };
+  for (const key of AUTOMATION_GUIDANCE_KEYS) {
+    table.actions[key] = { action: get(`action.${key}`), boundary: get(`boundary.${key}`) };
+  }
+  return table;
+}
+
 const AUTOMATION_GUIDANCE = {
-  zh: {
-    header: "⚠️ **自动化动作指导**（来自本 workspace 的 supervisor.automation 配置）：",
-    confirm: "请就此动作请求负责人确认",
-    autonomous: "在已授权范围内自主判断并留痕",
-    line: (key, value, action, clause, boundary) => `- \`${key}\` = ${value}：${action}，${clause}（${boundary}）。`,
-    actions: {
-      scope_planning: { action: "**范围/排期与版本计划调整**", boundary: "不是首次 start 授权" },
-      integration_decision: { action: "**候选选择与合入取舍**", boundary: "不是 review verdict / delivered 授权" },
-      rework: { action: "**既有目标返工取舍**", boundary: "不授权首次 start、不自动批准扩大范围" },
-      memory_promotion: { action: "**记忆提炼**", boundary: "不绕 standing 特权：仍默认 on_demand，standing 仅限人类常驻指令/安全禁令且 ≤200 字" },
-      skill_proposal: { action: "**是否提出 skill 沉淀建议**", boundary: "不等于安装或发布" },
-      release: { action: "**发布决策**", boundary: "release=ai 也不能单独放行 delivered" },
-    },
-    trailer: "边界与优先级（只增不减）：human 只增加确认要求，绝不被低风险豁免覆盖；负责人明确、范围清楚的批量授权可覆盖其**列明动作**的逐项询问，笼统方向授权不构成覆盖；明确禁 push/publish/tag 永远优先；Full access 不是业务批准。四类 gate 中「开始工作」与「审核」没有对应键，其既有要求（含 review→delivered 必须等负责人 verdict）保持不变。本指导只影响提示，不改变工具权限，也不构成引擎强制。",
-  },
-  en: {
-    header: "⚠️ **Automation action guidance** (from this workspace's supervisor.automation config):",
-    confirm: "request the person in charge's confirmation for this action",
-    autonomous: "decide autonomously within the already authorized scope and leave a trace",
-    line: (key, value, action, clause, boundary) => `- \`${key}\` = ${value}: ${action} — ${clause} (${boundary}).`,
-    actions: {
-      scope_planning: { action: "**scope/scheduling and version-plan adjustments**", boundary: "it is not first-start authorization" },
-      integration_decision: { action: "**candidate selection and merge trade-offs**", boundary: "it is not a review verdict or delivered authorization" },
-      rework: { action: "**rework trade-offs for existing goals**", boundary: "it does not authorize a first start or automatically approve scope expansion" },
-      memory_promotion: { action: "**memory distillation**", boundary: "it does not bypass the standing privilege: the default stays on_demand, and standing is limited to a human standing instruction or safety prohibition with a 200-character cap" },
-      skill_proposal: { action: "**whether to propose a skill**", boundary: "it is not installation or release" },
-      release: { action: "**release decision**", boundary: "an ai setting still cannot approve delivered on its own" },
-    },
-    trailer: "Boundaries and precedence (add-only, never relaxed): human only adds confirmation requirements and is never overridden by a low-risk exemption; an explicit, clearly scoped batch authorization from the person in charge may cover item-by-item confirmation for exactly the listed actions, while a vague directional authorization does not; an explicit prohibition of push/publish/tag always takes precedence; Full access is not business approval. Among the four gates, \"start work\" and \"review\" have no corresponding key, so their existing requirements (including that review→delivered must wait for the person in charge's verdict) stay unchanged. This guidance only affects the prompt: it changes no tool permission and is not engine enforcement.",
-  },
+  zh: parseAutomationGuidanceAsset(requirePromptAsset("automation-guidance", "zh"), "zh"),
+  en: parseAutomationGuidanceAsset(requirePromptAsset("automation-guidance", "en"), "en"),
 };
 /** g-490：六键**未配置**时的**显示口径来源引用表** —— 这是「口径来源」，**不是**引擎解析默认值。
  *  引擎事实：六键在 `core/schema.ts` 里是 `nullable` 且**无 `default`**；未配置时 `readProjectConfig`
@@ -5096,7 +5142,10 @@ export function apply(ctx, config) {
     },
     // g-481：使用说明弹窗的只读服务（提示词资产 md）。本插件第二条非 JSON 路由。
     // prefix 路由：尾段由 resolveHelpAssetRequest 按白名单裁决（见模块顶部常量）。
-    // 只读 `readFileSync`，没有任何写路径；命中即内联返回（资产随包发布在 prompts/）。
+    // 只读 `readFileSync`，没有任何写路径；命中即内联返回。
+    // g-496：路径取自**冻结注册表**（`helpAssetRelativePath`）—— 资产既可能在 `prompts/`
+    //（注入式提示词），也可能在包根（`supervisor-guide.{zh,en}.md`）。**不拼接请求内容**，
+    // 路径只能来自注册表（未注册 ⇒ 白名单已在上一行拦掉 ⇒ 此处必非 null）。
     {
       kind: "prefix",
       path: HELP_ASSET_ROUTE,
@@ -5105,9 +5154,11 @@ export function apply(ctx, config) {
           if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "method not allowed" });
           const decision = resolveHelpAssetRequest(req.url);
           if (decision.status !== 200) return json(res, decision.status, { error: decision.reason });
+          const relativePath = helpAssetRelativePath(decision.name);
+          if (!relativePath) return json(res, 404, { error: "unknown-asset" });
           let body;
           try {
-            body = readFileSync(new URL(`./prompts/${decision.name}`, import.meta.url));
+            body = readFileSync(new URL(`./${relativePath}`, import.meta.url));
           } catch {
             // 白名单名合法但产物未随包发布（构建漏拷）⇒ 404，绝不回落到别的路径。
             return json(res, 404, { error: "help asset not packaged" });

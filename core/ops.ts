@@ -870,6 +870,60 @@ export function readSupervisorStatusAt(rootOrEvents: string | GraphEvent[]): num
   return latest;
 }
 
+// ===== g-496：core 层提示词正文资产读取（唯一事实源 = .md，代码不留第二副本） =====
+//
+// 背景：提示词正文（模式策略片段、报文骨架）此前以模板字面量硬编码在 `core/ops.ts` 里 ——
+// 同一段正文一旦在文档/资产里再出现一次，就形成「代码一份、文档一份」的双源，手工同步必然漂移。
+// 负责人 2026-10-14 批准：正文迁到 `dsh-graph-host/prompts/*.{zh,en}.md`，由 core **运行时现读**；
+// 只允许**两项明确静态定位**（不做 cwd 探测、不搜目录、不新增依赖、不在构建期生成）：
+//   · 源形态：本模块位于 `core/` ⇒ 资产在 `../dsh-graph-host/prompts/`；
+//   · 发布形态：本模块位于 `dist/core/` ⇒ 资产在 `../prompts/`（构建把 prompts/ 拷进 dist/）。
+//
+// 两形态的**判别**只看本模块自身所在目录名是否为 `dist`（其余一律按源形态）—— 这是**位置事实**，
+// 不是猜测。关键约束（brief 明令）：**发布形态资产缺失时必须明确失败，绝不回读仓库源**掩盖漏包；
+// 因此 resolvePromptAssetDir 按形态**取单一目录**、不做「失败即换目录」的回落。缺资产 ⇒ 抛错。
+//
+// 读取失败一律 fail-closed（抛 GraphError，绝不静默降级为空串或内置文本）—— 与 host 侧
+// `requirePromptAsset` 同口径，保证「资产没随包发布」不会被伪装成「正文为空」。
+
+/** 本模块在包内的位置事实：源形态 `<repo>/core/ops.ts`、发布形态 `<root>/dist/core/ops.js`。
+ *
+ *  返回 `true` ⟺ 本文件位于一个名为 `dist` 的目录之下的 `core/` 内（即祖父目录名为 `dist`）。
+ *  这是**位置事实**（来自 `import.meta.url`），不是对 cwd / 环境变量的猜测。 */
+/** 两项**明确静态定位**（负责人批准）：源形态与发布形态各一个候选，二选一。
+ *
+ *  · 发布形态（`dist/core/ops.js`）⇒ `<root>/dist/prompts/`；
+ *  · 源形态（`core/ops.ts`）⇒ `<repo>/dsh-graph-host/prompts/`。
+ *
+ *  判别只看**这两个候选目录本身是否存在**（不做 cwd 探测、不做目录搜索、不新增依赖）：
+ *  发布产物里 `../prompts/` 存在、`../dsh-graph-host/prompts/` 不存在；源码树里反之。
+ *  这样 `dist/` 被整体复制到任意名字的目录（如 hermetic 测试副本）后**仍然自洽**，
+ *  不依赖父目录恰好叫 `dist`。 */
+export function resolvePromptAssetDirUrl(): URL {
+  const distForm = new URL("../prompts/", import.meta.url);
+  const srcForm = new URL("../dsh-graph-host/prompts/", import.meta.url);
+  try {
+    if (statSync(distForm).isDirectory()) return distForm;
+  } catch { /* 不存在 ⇒ 试源形态 */ }
+  return srcForm;
+}
+
+/** 读取一份 core 侧提示词资产正文（`<name>.<lang>.md`）；缺资产/不可读 ⇒ fail-closed 抛错。
+ *
+ *  language 只认字面量 "en"，其余（含 undefined/null/未知值）一律回落 zh —— 与
+ *  `subagentModePrompt` / host `normalizePromptLanguage` 的既有口径一致，不另立第二套语言状态。 */
+export function readCorePromptAsset(name: string, language?: string | null): string {
+  const lang = language === "en" ? "en" : "zh";
+  const file = new URL(`${name}.${lang}.md`, resolvePromptAssetDirUrl());
+  try {
+    const text = readFileSync(file, "utf8");
+    if (!text.trim()) throw new Error("empty");
+    return text;
+  } catch {
+    throw new GraphError(`dsh-graph prompt asset missing or unreadable: ${name}.${lang}.md`);
+  }
+}
+
 // ===== g-191：受控子代理模式枚举与策略定义 =====
 export const SUBAGENT_MODES = ["standard", "minimal"] as const;
 export type SubagentMode = typeof SUBAGENT_MODES[number];
@@ -1382,12 +1436,20 @@ export function normalizeSubagentMode(mode: unknown): SubagentMode | null {
 
 /** 模式策略提示词片段（仅影响执行策略/提示参数，不越过凭据/provider边界，不接受命令注入）
  *
- *  g-390：本常量是**中文真源**，保持逐字不变（既有断言与 zh 渲染产物按其锁定）。
- *  英文对照见 SUBAGENT_MODE_PROMPTS_EN；两条来源必须同义、逐 mode 对称。 */
+ *  g-496：正文真源 = `dsh-graph-host/prompts/subagent-mode.{zh,en}.md`（**唯一事实源**，
+ *  代码不再持有第二副本）。本常量仍是**导出的可变表**、键集合仍恰为 SUBAGENT_MODES、
+ *  `standard` 仍为空串（standard 不注入模式段）—— 既有 API 与断言口径不变；
+ *  `minimal` 正文改为**按需从资产现读**（`readCorePromptAsset`，缺资产 fail-closed 抛错）。
+ *
+ *  为什么用 getter：资产读取是**运行期现读**（与 host 对 prompts/*.md 的口径一致，无启动缓存），
+ *  而导出形状必须与修复前**同形**（`Record<SubagentMode, string>`、可枚举键、可 JSON 化）。
+ *  getter 同时保留了「测试可写入该表做变异对照」的能力（可赋值属性覆盖 getter）。 */
 export const SUBAGENT_MODE_PROMPTS: Record<SubagentMode, string> = {
   standard: "",
-  minimal: `【极简模式执行策略】仅提供受控 6 项基础工具（${SHELL_TOOL_TOKEN}、edit、read、write、graph_report_status、graph_transition），保持紧凑输出，不展开冗余高级调用。`,
-};
+  get minimal(): string {
+    return readCorePromptAsset("subagent-mode", "zh").replace(/\n+$/, "");
+  },
+} as Record<SubagentMode, string>;
 
 /** g-390：SUBAGENT_MODE_PROMPTS 的英文对照（与 zh 版**同义**，逐 mode 一一对应）。
  *
@@ -1395,8 +1457,10 @@ export const SUBAGENT_MODE_PROMPTS: Record<SubagentMode, string> = {
  *  与 zh 版一致，standard 为空串（standard 不注入模式段）。 */
 export const SUBAGENT_MODE_PROMPTS_EN: Record<SubagentMode, string> = {
   standard: "",
-  minimal: `[Minimal mode execution strategy] Only the controlled 6 base tools are provided (${SHELL_TOOL_TOKEN}, edit, read, write, graph_report_status, graph_transition); keep the output compact and do not expand redundant advanced calls.`,
-};
+  get minimal(): string {
+    return readCorePromptAsset("subagent-mode", "en").replace(/\n+$/, "");
+  },
+} as Record<SubagentMode, string>;
 
 /** g-390：按提示词语言取模式策略片段。
  *
@@ -6838,67 +6902,30 @@ export const REVIEW_CONCLUSION_LABELS = ["总判", "结论", "Verdict"] as const
 export const REVIEW_CONCLUSION_EXAMPLE_ZH = "- **总判**：PASS";
 export const REVIEW_CONCLUSION_EXAMPLE_EN = "- **Verdict**: PASS";
 
-/** executor 报文骨架（8 项逐项必填；缺失即视为交付不完整）+ reviewer 报文骨架（6 项）。 */
-export const ATTEMPT_REPORT_SKELETON = [
-  "## 交回报文骨架（尾注·逐项必填：缺项即视为交付不完整）",
-  "",
-  "本报文是完成摘要（results.md）的主要素材：**越规范，摘要越可信**。请逐项作答，标题逐字使用（便于机读）。",
-  "",
-  "### A. executor 报文（8 项逐项必填）",
-  "1. **交付位置**：worktree / 分支 / commit / 基线（一行）。",
-  "2. **改了什么**：按能力分组的文件 + 模块清单，每个文件一句「加了什么」。",
-  "3. **怎么改的**：关键设计 / 数据流 / 为什么这样做（含被否方案与否决理由）。",
-  "4. **影响面**：谁受影响（运行环境 / 其他目标 / 发布含义 / 兼容性 / 配置迁移）。",
-  "5. **测过什么 / 没测什么**：命令 + 单行证据（含**负向对照**与**基线对照**）；未验证项及原因。",
-  "6. **值得注意的点**：风险 / 残余 / 已知缺陷 / 后续依赖（每条一句）。",
-  "7. **与判据的对应**：每条判据 → 达成与否 + 证据指向。",
-  "8. **需主管裁决事项**：逐条列出（附默认建议）。",
-  "",
-  "### B. reviewer 报文（6 项逐项必填）",
-  `1. **总判**：单独一行、只写一个裁决词（PASS / BLOCK / UNVERIFIED 三选一），例如 ${REVIEW_CONCLUSION_EXAMPLE_ZH}（附一句话理由）。`,
-  "2. **逐项结论与单行证据**：判据逐条 → 结论 + 证据。",
-  "3. **BLOCK 最小返工清单**：可直接执行的返工项（逐条）。",
-  "4. **非阻塞注记**：可带着走但需留痕的问题。",
-  "5. **残余风险**：修完后仍存在的风险。",
-  "6. **未验证项**：未覆盖的路径与原因。",
-  "",
-  "### C. 报文长度预算（软上限；超限不算交付失败，但必须自报）",
-  `- 报文本体软上限 ${ATTEMPT_REPORT_SOFT_MAX_BYTES / 1024} KiB（落盘仍为 64 KiB、读取 1 MiB：**历史留档完整，只省喂给 LLM 的那一份**）；`,
-  "- 分预算：**改了什么 ≤1.5 KiB**；**怎么改的 ≤1 KiB**；**影响面 / 测过什么没测什么 / 值得注意的点 / 与判据的对应 各 ≤0.5 KiB**；其余每项一行；",
-  "- 超出软上限时，在报文**末尾**自报一行：`已超预算：<实际字节>/4 KiB`（**不删证据、不省略未验证项、不砍判据对应**）；",
-  "- 送 LLM 摘要的输入有硬上限：每 attempt 8 KiB（头 4 KiB + 尾 2 KiB + 中段省略标记）、单次总预算 256 KiB ⇒ 写得紧凑才不丢信息；被省略的字节数会由写入器标注在摘要里。",
-].join("\n");
+/** executor 报文骨架（8 项逐项必填；缺失即视为交付不完整）+ reviewer 报文骨架（6 项）。
+ *
+ *  g-496：**正文真源 = `dsh-graph-host/prompts/attempt-report-skeleton.{zh,en}.md`**（唯一事实源，
+ *  代码不再持有第二副本）。逻辑侧只保留「预算常量 / 结论示例 / begin-end 机器标记 / 占位符插值」——
+ *  资产里以 `{{conclusion_example}}` 与 `{{soft_max_kib}}` 两处占位符引用它们，读取时由本模块替换，
+ *  保证「预算与结论示例仍由逻辑提供」而正文不留第二份。
+ *
+ *  占位符替换是**纯字符串**替换（非模板求值）：资产文本不可执行，也不引入新依赖。
+ *  缺资产 ⇒ `readCorePromptAsset` fail-closed 抛错（绝不回落内置正文掩盖漏包）。 */
+const fillSkeletonPlaceholders = (body: string, conclusionExample: string): string =>
+  body
+    .split("{{conclusion_example}}").join(conclusionExample)
+    .split("{{soft_max_kib}}").join(String(ATTEMPT_REPORT_SOFT_MAX_BYTES / 1024));
+
+export const ATTEMPT_REPORT_SKELETON = fillSkeletonPlaceholders(
+  readCorePromptAsset("attempt-report-skeleton", "zh").replace(/\n+$/, ""),
+  REVIEW_CONCLUSION_EXAMPLE_ZH,
+);
 
 /** 英文同源骨架（en 文案零 CJK；条目与中文一一对应）。 */
-export const ATTEMPT_REPORT_SKELETON_EN = [
-  "## Hand-back report skeleton (tail note - every item required; a missing item means the delivery is incomplete)",
-  "",
-  "This report is the main material for the completion summary (results.md): the more disciplined it is, the more trustworthy the summary. Answer item by item and keep the headings verbatim so they stay machine-readable.",
-  "",
-  "### A. executor report (8 required items)",
-  "1. **Delivery location**: worktree / branch / commit / baseline (one line).",
-  "2. **What changed**: files and modules grouped by capability, one sentence per file on what it adds.",
-  "3. **How it was changed**: key design, data flow, why this way (including rejected options and why they were rejected).",
-  "4. **Impact surface**: who is affected (runtime environment, other goals, release meaning, compatibility, config migration).",
-  "5. **Tested / not tested**: command plus a single-line evidence summary (including **negative controls** and **baseline comparison**); unverified items and why.",
-  "6. **Worth noting**: risks, leftovers, known defects, follow-up dependencies (one sentence each).",
-  "7. **Criteria mapping**: each criterion to met or not met plus where the evidence is.",
-  "8. **Decisions needed from the supervisor**: listed one by one, each with a default recommendation.",
-  "",
-  "### B. reviewer report (6 required items)",
-  `1. **Overall verdict**: one verdict word only, on its own line (PASS / BLOCK / UNVERIFIED - pick one), e.g. ${REVIEW_CONCLUSION_EXAMPLE_EN} (with a one-line reason).`,
-  "2. **Per-item conclusion and single-line evidence**: each criterion to its conclusion plus evidence.",
-  "3. **BLOCK minimal rework list**: directly actionable rework items, one by one.",
-  "4. **Non-blocking notes**: issues that can ship but must be recorded.",
-  "5. **Residual risks**: what still remains after the fix.",
-  "6. **Unverified items**: paths not covered and why.",
-  "",
-  "### C. Report length budget (soft cap; exceeding it is not a failed delivery, but you must self-report)",
-  `- Soft cap for the report body: ${ATTEMPT_REPORT_SOFT_MAX_BYTES / 1024} KiB (storage stays at 64 KiB and reads at 1 MiB: the archive stays complete and only the copy fed to the LLM is trimmed);`,
-  "- Per-section budget: **what changed <= 1.5 KiB**; **how it changed <= 1 KiB**; **impact surface / tested-not-tested / worth noting / criteria mapping <= 0.5 KiB each**; every other item stays one line;",
-  "- When you exceed the soft cap, add one self-report line at the **end** of the report: `over budget: <actual bytes>/4 KiB` (never delete evidence, never drop unverified items, never trim the criteria mapping);",
-  "- The input sent to the LLM summary is hard-capped: 8 KiB per attempt (head 4 KiB + tail 2 KiB + a middle omission marker) and 256 KiB in total, so writing compactly is what keeps information from being dropped; the writer records the omitted byte count inside the summary.",
-].join("\n");
+export const ATTEMPT_REPORT_SKELETON_EN = fillSkeletonPlaceholders(
+  readCorePromptAsset("attempt-report-skeleton", "en").replace(/\n+$/, ""),
+  REVIEW_CONCLUSION_EXAMPLE_EN,
+);
 
 /**
  * 尾注块（含 begin/end 标记）。
