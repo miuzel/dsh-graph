@@ -71,7 +71,7 @@ if (sp) {
 //   dsh-graph-host/prompts/agent-teams-contract.<lang>.md —— Agent Teams 契约段（默认 off，
 //                                                           on 时注入派发提示词）
 // 读取方式（宿主实际实现，语言取 resolvePromptLanguage）：
-const localizedPrompt = (base, lang) => readPromptAsset(base, lang);   // 经 dist/prompts/<base>.<lang>.md
+const localizedPrompt = (base, lang) => requirePromptAsset(base, lang); // 经 dist/prompts/<base>.<lang>.md；不可读即抛错
 const disciplineText = localizedPrompt("discipline", language);        // 直接返回资产逐字正文
 const contractRaw    = localizedPrompt("agent-teams-contract", language);
 const teamsContract  = extractAgentTeamsContract(contractRaw);         // 取定界块（无块 ⇒ null）
