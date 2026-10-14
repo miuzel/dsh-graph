@@ -229,7 +229,9 @@ test("g-440 判据 1：双语对称（guide/discipline/契约资产行数）+ do
   );
   const nonEmpty = lines(contractZh).filter((l) => l.trim() !== "");
   assert.ok(nonEmpty.length >= 7, "契约资产行数下限（防被掏空成空壳）");
-  // 逐条承重句：每一条都必须在真源里真实存在，且**删掉任一条**后真源确实变化（证明不是恒真）。
+  // 逐条承重句必须在真源里真实存在；`replace` 断言的真实增量是**堵住「掏空成空壳」**这一类
+  // `includes` 单独看不见的变异（诚实边界：删除型变异上它与上面的 includes 同真同假，
+  // 会由 :128 的 `block.includes(k)` 与 :156 的负向对照先红 —— 此处不宣称更强）。
   for (const k of KEYS_ZH) {
     assert.ok(contractZh.includes(k), `契约真源缺承重关键句：${k}`);
     assert.notEqual(contractZh.replace(k, ""), contractZh, `关键句必须是可删除的实体：${k}`);
