@@ -1003,7 +1003,7 @@ const PROMPT_MARKER_REPLACEMENTS = {
     [/## Quality criteria/g, "## in-text: Quality criteria"],
     [/## Override declaration/g, "## in-text: Override declaration"],
     [/## Historical handoff/g, "## in-text: Historical handoff"],
-    [/## Confirmed handoff from previous attempts \(rework constraints confirmed by the supervisor\/owner, not an agent's self-report\)/g, "## in-text: Confirmed handoff from previous attempts (rework constraints confirmed by the supervisor/owner, not an agent's self-report)"],
+    [/## Confirmed handoff from previous attempts \(rework constraints confirmed by the supervisor\/owner, not an agent\x27s self-report\)/g, "## in-text: Confirmed handoff from previous attempts (rework constraints confirmed by the supervisor/owner, not an agent's self-report)"],
     [/## Historical cards/g, "## in-text: Historical cards"],
     [/## Harvested context card results \(ordered by context_cards; directly usable by subagents without guessing card paths\)/g, "## in-text: Harvested context card results (ordered by context_cards; directly usable by subagents without guessing card paths)"],
     [/## Harvested context card results/g, "## in-text: Harvested context card results"],
