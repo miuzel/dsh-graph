@@ -803,11 +803,14 @@ test("g-444 B④：zh/en 同步（骨架条目、指南行数、示例标记行�
   assert.equal(markerLines(zh), markerLines(en), "「本项目示例」标记行 zh/en 必须成对");
   assert.equal(markerLines(zh), MARKER_LINE_CAP, `指南豁免行数应恰为 ${MARKER_LINE_CAP}（实得 ${markerLines(zh)}）`);
   const promptNames = readdirSync(PUBLIC_PROMPTS).filter((n) => n.endsWith(".zh.md"));
-  // g-496（att-009 返工）：`attempt-instructions` 的行差是**结构基线固有**的 —— 英文派发路径的
-  // `## Task positioning` 框架标题由 g401 强制保留，中文对应行是 `【本次任务定位】` 内文标记（无标题，
-  // 且 attempt-prompt.test.ts 断言中文产物以它开头）。两侧改动都会改变真实产物语义，故仅此一份资产
-  // 允许**恰好 2 行**的结构性行差（英文框架标题 1 行 + 英文验收项列表独立成行 1 行）；其余资产仍要求逐字相等，超出上限即判红。
-  const STRUCTURAL_LINE_EXCEPTIONS: Record<string, number> = { "attempt-instructions": 2 };
+  // g-496（att-009 返工）：两份资产的行差是**结构基线固有**的，不是抽取自由：
+  //  ① `attempt-instructions`：英文 `## Task positioning` 框架标题由 g401 强制保留，中文对应行是
+  //     `【本次任务定位】` 内文标记（无标题，且 attempt-prompt.test.ts 断言中文产物以它开头）；
+  //     另有英文验收项列表按基线独立成行 ⇒ 允许恰好 2 行。
+  //  ② `collect-task`（rev-att-009-02 复核）：中文基线含「附件安全与边界」整节及附件类型细则，
+  //     英文基线本就是 31 行简版 ⇒ 允许恰好 −8 行（口径 en − zh）；**不得**把中文独有规范句翻译追加进英文（判据 8）。
+  // 其余资产仍要求逐字相等，超出上限即判红。
+  const STRUCTURAL_LINE_EXCEPTIONS: Record<string, number> = { "attempt-instructions": 2, "collect-task": -8 };
   for (const name of promptNames) {
     const base = name.slice(0, -6);
     const pzh = readFileSync(join(PUBLIC_PROMPTS, `${base}.zh.md`), "utf8");

@@ -48,6 +48,22 @@ const STRUCTURAL_PARITY_EXCEPTIONS: Record<
     reason:
       "中文基线权限说明点名具体管理写工具；英文基线为简洁措辞（抽取不得改写英文语义）",
   },
+  // `collect-task`：**中文基线比英文基线多 8 行正文** —— 中文版含「附件安全与边界」整节
+  // （绝对路径/`..` 遍历/反斜杠/NUL 拒绝、SSRF 约束）与更细的附件类型说明（Text/Binary/Excel、
+  // `@att/` 回引），而基线英文分支本就是 31 行简版（`Store discovered attachments with
+  // graph_store_attachment under the canonical attachment root.`）。复核 rev-att-009-02 判定：
+  // 把中文独有的规范句**翻译追加**进英文资产属未授权扩写（判据 8 语义漂移）⇒ 英文必须逐字保持
+  // 31 行简版。多出的 8 行与 `@att/` 示例记号是**基线固有**的中英差异，故如此登记。
+  // 中文基线含「附件安全与边界」整节及附件类型细则（英文基线为 31 行简版；不得翻译追加进英文）。
+  // 注意 `lines` 口径为 **en − zh**（英文 31 行 < 中文 39 行）⇒ 取 **−8**。
+  "collect-task": {
+    lines: -8,
+    headings: 0,
+    zhOnlyPlaceholders: [],
+    zhOnlyTechnicalTokens: ["@att/<name>>", "@att/docs/report.md"],
+    reason:
+      "中文基线含「附件安全与边界」整节及附件类型细则（英文基线为 31 行简版；不得翻译追加进英文）",
+  },
 };
 
 test("prompt markdown zh/en assets keep heading and placeholder parity", () => {

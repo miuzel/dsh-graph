@@ -74,7 +74,17 @@ test("formatCollectPrompt 生成完整的收集提示词", () => {
   assert.equal(prompt.includes("{{"), false, "产物不得残留未替换占位符");
   assert.equal(prompt.includes("}}"), false, "产物不得残留未替换占位符");
   const enPrompt = formatCollectPrompt(root, goalId, cardId, undefined, "en");
-  assert.ok(enPrompt.includes("@att/<name>"), "英文产物应含 @att 引用规则");
+  // g-496（att-009 返工）：英文基线的回引措辞是 `@att/<relative-name>`（逐字抽取，不得改写为
+  // 中文侧的 `@att/<name>`）；断言同时钉住**资产**与**产物**，防止英文侧再被翻译式改写。
+  assert.ok(
+    readCorePromptAsset("collect-task", "en").includes("@att/<relative-name>"),
+    "英文资产必须逐字保留基线的 @att 回引规则",
+  );
+  assert.ok(enPrompt.includes("@att/<relative-name>"), "英文产物应含 @att 引用规则");
+  assert.ok(
+    !readCorePromptAsset("collect-task", "en").includes("**Attachment safety"),
+    "英文资产不得夹带中文基线独有的「附件安全与边界」整节（未授权扩写）",
+  );
   assert.equal(/[\u3400-\u9fff]/.test(readCorePromptAsset("collect-task", "en")), false, "英文资产不得含 CJK");
 });
 
