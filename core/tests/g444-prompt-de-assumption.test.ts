@@ -803,11 +803,18 @@ test("g-444 B④：zh/en 同步（骨架条目、指南行数、示例标记行�
   assert.equal(markerLines(zh), markerLines(en), "「本项目示例」标记行 zh/en 必须成对");
   assert.equal(markerLines(zh), MARKER_LINE_CAP, `指南豁免行数应恰为 ${MARKER_LINE_CAP}（实得 ${markerLines(zh)}）`);
   const promptNames = readdirSync(PUBLIC_PROMPTS).filter((n) => n.endsWith(".zh.md"));
+  // g-496（att-009 返工）：`attempt-instructions` 的行差是**结构基线固有**的 —— 英文派发路径的
+  // `## Task positioning` 框架标题由 g401 强制保留，中文对应行是 `【本次任务定位】` 内文标记（无标题，
+  // 且 attempt-prompt.test.ts 断言中文产物以它开头）。两侧改动都会改变真实产物语义，故仅此一份资产
+  // 允许**恰好 2 行**的结构性行差（英文框架标题 1 行 + 英文验收项列表独立成行 1 行）；其余资产仍要求逐字相等，超出上限即判红。
+  const STRUCTURAL_LINE_EXCEPTIONS: Record<string, number> = { "attempt-instructions": 2 };
   for (const name of promptNames) {
     const base = name.slice(0, -6);
     const pzh = readFileSync(join(PUBLIC_PROMPTS, `${base}.zh.md`), "utf8");
     const pen = readFileSync(join(PUBLIC_PROMPTS, `${base}.en.md`), "utf8");
-    assert.equal(pzh.split("\n").length, pen.split("\n").length, `${base} 行数必须 zh/en 相等`);
+    const delta = pen.split("\n").length - pzh.split("\n").length;
+    const allowed = STRUCTURAL_LINE_EXCEPTIONS[base] ?? 0;
+    assert.equal(delta, allowed, `${base} 行数必须 zh/en 相等（结构性豁免上限 ${allowed} 行）`);
   }
   assert.equal(
     ATTEMPT_REPORT_SKELETON.split("\n").length,

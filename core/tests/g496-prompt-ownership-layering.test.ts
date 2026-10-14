@@ -340,16 +340,28 @@ test("g-496 att-009 F②：代码侧不得留固定正文第二副本（措辞�
       .map((l) => l.trim())
       .filter((l) => l.length >= 18 && !l.startsWith("#") && !l.startsWith("<!--") && !l.includes("{{"));
 
-  // 中文资产回查 core/ops.ts 与宿主；英文资产只回查 core（宿主英文渲染器本就不含这些长句）。
+  // 中文资产回查 core/ops.ts 与宿主；英文资产回查 core **与宿主**（att-009 返工：英文侧同样不得留第二副本）。
   for (const name of ["collect-task", "pm-task", "review-task", "summary-task"] as const) {
-    for (const line of proseLines(`${name}.zh.md`)) {
-      assert.ok(!opsSrc.includes(line), `${name}.zh.md 的正文在 core/ops.ts 中仍有副本：${line.slice(0, 48)}`);
+    for (const lang of ["zh", "en"] as const) {
+      for (const line of proseLines(`${name}.${lang}.md`)) {
+        assert.ok(!opsSrc.includes(line),
+          `${name}.${lang}.md 的正文在 core/ops.ts 中仍有副本：${line.slice(0, 48)}`);
+      }
+    }
+  }
+  // 英文侧同样不得把固定正文内联在宿主源码（原先只有 zh 侧断言 ⇒ 英文代码第二副本可蒙混过关）。
+  for (const name of ["collect-task", "pm-task", "review-task", "summary-task"] as const) {
+    for (const line of proseLines(`${name}.en.md`)) {
+      assert.ok(!hostSrc.includes(line),
+        `${name}.en.md 的正文在宿主源码中仍有第二副本：${line.slice(0, 48)}`);
     }
   }
   // attempt-instructions：短语由代码按 marker 取用（合法引用），但**整行字面量**不得再出现在宿主源码里。
-  for (const line of proseLines("attempt-instructions.zh.md")) {
-    assert.ok(!hostSrc.includes(line),
-      `attempt-instructions.zh.md 的正文在宿主源码中仍有第二副本：${line.slice(0, 48)}`);
+  for (const lang of ["zh", "en"] as const) {
+    for (const line of proseLines(`attempt-instructions.${lang}.md`)) {
+      assert.ok(!hostSrc.includes(line),
+        `attempt-instructions.${lang}.md 的正文在宿主源码中仍有第二副本：${line.slice(0, 48)}`);
+    }
   }
 });
 
@@ -377,4 +389,18 @@ test("g-496 att-009 F③：attempt-instructions 短语表齐备 —— 资产 ma
   const enKeys = [...readFileSync(join(publicPrompts, "attempt-instructions.en.md"), "utf8")
     .matchAll(/^<!--\s*dsh-graph:phrase:([A-Za-z0-9_.-]+)\s*-->\s*$/gm)].map((m) => m[1]);
   assert.deepEqual(enKeys, assetKeys, "attempt-instructions 中英短语键与顺序必须一致");
+
+  // att-009 返工：英文侧短语同样必须**全部被消费**，且英文渲染器的取用点存在 ——
+  // 否则 `attempt-instructions.en.md` 会退化成无人读取的死资产（英文代码留第二副本也无人发现）。
+  // 唯一被授权「只服务中文渲染器」的三个短语（briefOnlySource / briefPriority / overrideProvenance）
+  // 是**逐字**基线中文独有条目，英文基线无对应行 ⇒ 英文路径不注入它们（不得凭空补写改变产物）。
+  const ZH_ONLY_PHRASES = new Set(["briefOnlySource", "briefPriority", "overrideProvenance"]);
+  for (const key of enKeys) {
+    if (ZH_ONLY_PHRASES.has(key)) continue;
+    assert.ok(hostSrc.includes(`instructions.${key}`),
+      `英文资产短语 ${key} 必须有代码消费点（instructions.${key}）—— 否则是无人读取的死短语`);
+  }
+  // 英文渲染器必须真的从英文短语表取用（而非另留硬编码英文正文）。
+  assert.ok(/attemptInstructionsPhrases\("en"\)/.test(hostSrc),
+    "英文派发路径必须经 attemptInstructionsPhrases(\"en\") 读取英文资产");
 });

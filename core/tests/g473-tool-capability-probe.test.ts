@@ -346,9 +346,10 @@ test("g-473 判据 6：模式片段 / 评审 prompt 渲染后零 {{shell}} 残�
       shellTool: shell,
     });
     // g-496：英文权限说明的措辞真源在 `prompts/review-task.en.md`（不再内联在 ops.ts）。
-    // 断言锚定资产：产物必须点名解析出的 shell，且**资产里确有该渲染位点**
-    // —— 半条一起证明「渲染后点名」不是产物凭空长出该词，而是资产位点被正确替换。
-    assert.ok(revEn.includes(`${shell} permissions`), `${combo.id}/review-en：英文权限说明必须点名解析出的 shell`);
+    // 断言**回到基线原句逐字形态**：抽取不得改写英文权限语义（弱化为「含 ${shell}」会让措辞漂移失去守卫）。
+    assert.ok(revEn.includes(`- ${shell}, when available, is limited to local read-only tests and static checks.`),
+      `${combo.id}/review-en：英文权限说明必须逐字保留基线原句并点名解析出的 shell`);
+    // 资产侧位点断言（证明「渲染后点名」来自资产占位符替换，而非产物凭空长出该词）。
     assert.ok(
       readCorePromptAsset("review-task", "en").includes(REVIEW_SHELL_FILL_TOKEN),
       `${combo.id}/review-en：英文资产必须以占位符表达 shell 名（${REVIEW_SHELL_FILL_TOKEN}）`,

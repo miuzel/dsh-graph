@@ -18,7 +18,7 @@ Never restate card fields (title / status / version / attempt counts) as the sub
 The section headings above are **always the canonical Chinese literals** shown here: they are a machine format contract of `results.md` (identical across deterministic / llm / manual sources and independent of UI language). Do not translate or reword them; write the body text in the goal's language.
 
 ## How to write it to disk (mandatory)
-After writing the body you **must** call `graph_refresh_results`: { goal: "{{goalId}}", content: "<the full body>", actor: "agent:summarizer" }.
+Call `graph_refresh_results` with { goal: "{{goalId}}", content: "<the full body>", actor: "agent:summarizer" }.
 The writer archives the previous version, sanitizes the machine header, truncates oversized bodies, and fires the audit event - never write results.md directly with write/edit.
 Read goal.md (and results-att-*.md when you need the full delivered text) before writing; add facts only.
 

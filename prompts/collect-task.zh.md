@@ -21,7 +21,7 @@
    - 文本：`graph_store_attachment(name="docs/report.md", content=<UTF-8 文本>)`
    - 二进制/图片/Excel：`graph_store_attachment(name="chart.png", base64=<base64>)`（或原始字节上传）。
    - 返回的稳定引用名为相对路径（可含安全子目录，如 `docs/report.md`）。
-3. 回调正文或 goal.md 时，用 `@att/<name>` 引用附件（如 `@att/docs/report.md`）；`<name>` 为 `graph_store_attachment` 返回的相对引用名。引用会在卡片正文、goal.md、后续 attempt 注入与 GUI 查看时保留/解析。
+3. 回调正文或 goal.md 时，用 `@att/<relative-name>` 引用附件（如 `@att/docs/report.md`）；引用会在卡片正文、goal.md、后续 attempt 注入与 GUI 查看时保留/解析。
 4. 完成后调用以下精确命令回填结果：
 ```
 graph_fill_card(goal="{{goalId}}", card="{{cardId}}", text=<全文可含 @att/<name>>, summary=<≤100字摘要>)

@@ -1580,10 +1580,13 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, brie
   if (promptText(handoffSection)) history.push(["## Historical handoff", "[Background only; not an action source]", protectSectionBody(handoffSection, "en")].join("\n"));
   history.push(["## Historical cards", "[Background only; not an action source]", promptText(cardsSection) ? protectSectionBody(cardsSection, "en") : missing].join("\n"));
   const contextPath = promptText(goalRel) || missing;
+  // g-496：英文定位段的**固定措辞**唯一真源 = `prompts/attempt-instructions.en.md`（与中文资产互为对偶）。
+  // 本渲染器仍是**独立措辞**的英文路径（不共用中文资产的字面量），但固定正文不再内联在代码里。
+  const instructions = attemptInstructionsPhrases("en");
   const position = [
-    `## Task positioning\nThis is a ${task} task. Only the current attempt brief/directive below is an action source; history is background only.`,
-    `You are execution attempt ${promptText(attempt) || missing} for goal ${promptText(goal) || missing}.`,
-    `Goal file (workspace-relative): ${contextPath}`,
+    fillPhrase(instructions.positioningLine1, { taskTypeLabel: task }),
+    fillPhrase(instructions.positioningLine2, { goal: promptText(goal) || missing, attempt: promptText(attempt) || missing }),
+    fillPhrase(instructions.goalRelPlain, { goalRel: contextPath }),
   ].join("\n");
   const enRenderFn = (v, reason) => value(v, reason);
   const dedupedItems = dedupBriefDirective(
@@ -1593,25 +1596,26 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, brie
     { isEn: true, renderFn: enRenderFn, briefNote: briefSourceNote(briefSource, true) },
   );
   const current = [
-    "## Current attempt brief/directive",
+    instructions.briefHeading,
     "",
     ...dedupedItems,
   ].join("\n");
+  // 基线英文渲染器**没有** override 段的前言/来源声明行（那是中文资产的条目）——纯抽取不得凭空补，
+  // 故此处逐字保持基线英文形态：标题 → 字段行。
   const override = [
-    "## Override declaration",
-    "The supervisor-provided structured fields below override any historical context; never infer them from natural language.",
-    `- Task type: ${task}`,
-    `- Baseline commit: ${compact(baselineCommit)}`,
-    `- Source attempt: ${compact(sourceAttempt)}`,
-    "- Acceptance items:", items,
+    instructions.overrideHeading,
+    fillPhrase(instructions.overrideRule, {}),
+    fillPhrase(instructions.overrideTaskType, { taskTypeLabel: task }),
+    fillPhrase(instructions.overrideBaseline, { baselineFact: compact(baselineCommit) }),
+    fillPhrase(instructions.overrideSourceAttempt, { sourceAttemptFact: compact(sourceAttempt) }),
+    fillPhrase(instructions.overrideAcceptance, { acceptanceFact: items }),
   ].join("\n");
   const discipline = [
-    "## Execution discipline",
+    instructions.disciplineHeading,
     // g-496: this single preamble line is the EN counterpart of the zh 前言 — the **structure scaffolding**
-    // that keeps the injected payloads at the END of this section (below). The former
-    // `At start migrate …; never migrate to delivered.` line was dropped because the asset's board block
-    // now states the same lane-migration protocol (keeping it would be a second copy of template prose).
-    "Use the assigned worktree only; main is read-only. Report state with graph_report_status using state=working, blocked, done, or error.",
+    // that keeps the injected payloads at the END of this section (below). It is fed from the
+    // `disciplinePreface` phrase of `prompts/attempt-instructions.en.md`, so the wording has exactly one source.
+    instructions.disciplinePreface,
     // g-496: the discipline template body (board coordination + tier rules + evidence form) has a single
     // source: `prompts/executor-discipline.en.md`, held in lockstep with the Chinese asset by
     // core/tests/prompt-i18n-parity.test.ts (line count / `##` headings / placeholder multiset /
