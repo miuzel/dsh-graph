@@ -1,6 +1,6 @@
 <!-- dsh-graph:automation-guidance:begin -->
 <!--
-  g-496: the single source of truth (en) for the six-key automation action guidance body.
+  The single source of truth (en) for the six-key automation action guidance body.
   This file is a data asset: the host `renderAutomationGuidance` reads it and parses the
   `@@<field>` blocks. Structure, gating, language fallback and the empty-string rule all stay
   in code; this file carries prose only and no judgment logic.

@@ -1438,29 +1438,28 @@ export function normalizeSubagentMode(mode: unknown): SubagentMode | null {
  *
  *  g-496：正文真源 = `dsh-graph-host/prompts/subagent-mode.{zh,en}.md`（**唯一事实源**，
  *  代码不再持有第二副本）。本常量仍是**导出的可变表**、键集合仍恰为 SUBAGENT_MODES、
- *  `standard` 仍为空串（standard 不注入模式段）—— 既有 API 与断言口径不变；
- *  `minimal` 正文改为**按需从资产现读**（`readCorePromptAsset`，缺资产 fail-closed 抛错）。
+ *  `standard` 仍为空串（standard 不注入模式段）—— 既有 API 与断言口径不变。
  *
- *  为什么用 getter：资产读取是**运行期现读**（与 host 对 prompts/*.md 的口径一致，无启动缓存），
- *  而导出形状必须与修复前**同形**（`Record<SubagentMode, string>`、可枚举键、可 JSON 化）。
- *  getter 同时保留了「测试可写入该表做变异对照」的能力（可赋值属性覆盖 getter）。 */
+ *  `minimal` 是**普通数据属性**（可写、可枚举、可配置），初值在**模块加载时**从资产读入
+ *  （`readCorePromptAsset`，缺资产 fail-closed 抛错）。刻意**不用 getter**：getter 是访问器
+ *  属性，无 setter 时严格模式（ESM/`tsc` 产物）下写入即抛
+ *  `TypeError: Cannot set property minimal of #<Object> which has only a getter`，
+ *  会破坏「测试可写入该表做变异对照 / 调用方可覆盖」的既有可变 API。
+ *  模式表原本就是**加载期常量正文**，故此处也不需要额外的运行期现读；亦不引入 setter
+ *  或 override 状态。 */
 export const SUBAGENT_MODE_PROMPTS: Record<SubagentMode, string> = {
   standard: "",
-  get minimal(): string {
-    return readCorePromptAsset("subagent-mode", "zh").replace(/\n+$/, "");
-  },
-} as Record<SubagentMode, string>;
+  minimal: readCorePromptAsset("subagent-mode", "zh").replace(/\n+$/, ""),
+};
 
 /** g-390：SUBAGENT_MODE_PROMPTS 的英文对照（与 zh 版**同义**，逐 mode 一一对应）。
  *
  *  约束：en 值必须零汉字——英文派发正文出现内置汉字即本次修复的目标缺陷。
- *  与 zh 版一致，standard 为空串（standard 不注入模式段）。 */
+ *  与 zh 版一致，standard 为空串（standard 不注入模式段）；同样用普通数据属性。 */
 export const SUBAGENT_MODE_PROMPTS_EN: Record<SubagentMode, string> = {
   standard: "",
-  get minimal(): string {
-    return readCorePromptAsset("subagent-mode", "en").replace(/\n+$/, "");
-  },
-} as Record<SubagentMode, string>;
+  minimal: readCorePromptAsset("subagent-mode", "en").replace(/\n+$/, ""),
+};
 
 /** g-390：按提示词语言取模式策略片段。
  *

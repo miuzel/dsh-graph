@@ -29,7 +29,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 
-import { readCorePromptAsset, resolvePromptAssetDirUrl, SUBAGENT_MODE_PROMPTS, SUBAGENT_MODE_PROMPTS_EN } from "../ops.ts";
+import {
+  readCorePromptAsset, resolvePromptAssetDirUrl, resolveSubagentMode, subagentModePrompt,
+  SUBAGENT_MODE_PROMPTS, SUBAGENT_MODE_PROMPTS_EN,
+} from "../ops.ts";
 
 const repoRoot = join(import.meta.dirname, "../..");
 const distRoot = join(repoRoot, "dist");
@@ -112,8 +115,9 @@ test("g-496 C：只带 core/ 的裸拷贝 ⇒ import 即抛 GraphError（不回�
       (e: any) => {
         assert.match(String(e?.message ?? ""), /prompt asset missing or unreadable/,
           `失败必须点名缺失资产，实得：${e?.message}`);
-        assert.match(String(e?.message ?? ""), /attempt-report-skeleton\.zh\.md/,
-          "失败必须点名具体资产文件");
+        // 不硬编码具体文件名（加载顺序会随实现调整）：只要求点名**某个** core 侧 .md 资产。
+        assert.match(String(e?.message ?? ""), /[a-z0-9-]+\.(zh|en)\.md/,
+          `失败必须点名具体资产文件，实得：${e?.message}`);
         return true;
       },
       "资产缺失必须 fail-closed（import 期抛错），绝不静默回落",
@@ -174,4 +178,65 @@ test("g-496 D2：模式策略表仍是可变导出、standard 为空、minimal �
   assert.equal(SUBAGENT_MODE_PROMPTS_EN.minimal, enFile, "minimal（en）必须等于源资产正文");
   // 导出形态仍是可写表（`Record<SubagentMode, string>`），不是冻结对象。
   assert.equal(Object.isFrozen(SUBAGENT_MODE_PROMPTS), false, "导出表不得被冻结（保持既有可变 API）");
+});
+
+/**
+ * g-496 返工核心断言：`minimal` 必须是**普通数据属性**（可写/可枚举/可配置），
+ * 而**不是**无 setter 的访问器 —— 后者在严格模式（ESM / `tsc` 产物）下写入即抛
+ * `TypeError: Cannot set property minimal of #<Object> which has only a getter`，
+ * 破坏「测试可写入该表做变异对照 / 调用方可覆盖」的既有可变 API。
+ *
+ * 两语言**都**真跑：赋值成功 → `subagentModePrompt`/`resolveSubagentMode` 实际吃到覆盖值
+ * → 恢复原值；并核对枚举/JSON/standard 空与原行为一致。只改注释不算通过。
+ */
+test("g-496 D3：minimal 是可写数据属性（非 getter）—— 覆盖值被实际使用，两语言各自成立", () => {
+  for (const lang of ["zh", "en"] as const) {
+    const table = lang === "en" ? SUBAGENT_MODE_PROMPTS_EN : SUBAGENT_MODE_PROMPTS;
+    const original = table.minimal;
+
+    // ① 属性形态：数据属性（有 value、无 get/set），且可写/可枚举/可配置。
+    const desc = Object.getOwnPropertyDescriptor(table, "minimal")!;
+    assert.ok("value" in desc, `${lang}: minimal 必须是数据属性（不得是 getter）`);
+    assert.equal(desc.get, undefined, `${lang}: minimal 不得有 getter`);
+    assert.equal(desc.set, undefined, `${lang}: minimal 不得有 setter（不引入 override 状态）`);
+    assert.equal(desc.writable, true, `${lang}: minimal 必须可写`);
+    assert.equal(desc.enumerable, true, `${lang}: minimal 必须可枚举（JSON 化口径不变）`);
+    assert.equal(desc.configurable, true, `${lang}: minimal 必须可配置`);
+
+    const mutate = (v: string) => { (table as unknown as Record<string, string>).minimal = v; };
+    const probe = `PROBE-${lang}-1F2E3D`;
+    try {
+      // ② 赋值必须成功且**读回即覆盖值**（严格模式下 getter 会在此抛 TypeError）。
+      mutate(probe);
+      assert.equal(table.minimal, probe, `${lang}: 赋值后读回必须是覆盖值（getter 会抛 TypeError）`);
+
+      // ③ 覆盖值必须被**真实消费路径**吃到（不是只有表本身变了）。
+      assert.ok(
+        subagentModePrompt("minimal", lang).includes(probe),
+        `${lang}: subagentModePrompt 必须使用覆盖值`,
+      );
+      assert.equal(resolveSubagentMode("minimal", null, null, lang).mode, "minimal", `${lang}: resolveSubagentMode 仍认该 mode`);
+      assert.ok(
+        resolveSubagentMode("minimal", null, null, lang).prompt.includes(probe),
+        `${lang}: 经 resolveSubagentMode 的完整链路必须使用覆盖值`,
+      );
+      // 另一语言**不受影响**（证明覆盖不是全局串味）。
+      const other = lang === "en" ? SUBAGENT_MODE_PROMPTS : SUBAGENT_MODE_PROMPTS_EN;
+      assert.ok(!other.minimal.includes(probe), `${lang}: 覆盖不得串到另一语言表`);
+    } finally {
+      // ④ 恢复原值，且恢复后逐字节回到资产正文。
+      mutate(original);
+    }
+    assert.equal(table.minimal, original, `${lang}: 必须能恢复原值`);
+    assert.ok(!subagentModePrompt("minimal", lang).includes(probe), `${lang}: 恢复后不得残留探针`);
+  }
+
+  // ⑤ 枚举 / JSON / standard 空 —— 与原行为一致。
+  assert.deepEqual(Object.keys(SUBAGENT_MODE_PROMPTS).sort(), ["minimal", "standard"], "zh 键集合必须恰为 {minimal,standard}");
+  assert.deepEqual(Object.keys(SUBAGENT_MODE_PROMPTS_EN).sort(), ["minimal", "standard"], "en 键集合必须恰为 {minimal,standard}");
+  const roundTripped = JSON.parse(JSON.stringify(SUBAGENT_MODE_PROMPTS));
+  assert.ok(roundTripped.minimal.length > 0, "JSON 化必须带上 minimal 正文（可枚举）");
+  assert.ok(!JSON.stringify(SUBAGENT_MODE_PROMPTS).includes("PROBE-"), "JSON 化不得残留探针");
+  assert.equal(SUBAGENT_MODE_PROMPTS.standard, "", "standard 仍为空串（zh）");
+  assert.equal(SUBAGENT_MODE_PROMPTS_EN.standard, "", "standard 仍为空串（en）");
 });
