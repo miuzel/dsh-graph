@@ -46,6 +46,7 @@ import {
   getRoleProfile,
   init,
   isWindows,
+  readCorePromptAsset,
   renderShellToolText,
   resolveShellTool,
   setCriteria,
@@ -55,6 +56,12 @@ import {
   type ToolCapabilityContext,
 } from "../ops.ts";
 import { apply } from "../../dist/index.js";
+
+/** g-496：评审资产里 shell 名的**渲染位点**占位符。
+ *  与角色 profile 的 `SHELL_TOOL_TOKEN`（`{{shell}}`）是**两个不同位点**：评审 prompt 由
+ *  `formatReviewPrompt` 以 `{ shellTool }` 回填，故其资产用 `{{shellTool}}`。此处断言的是
+ *  「资产确有该位点、渲染后确被替换」，两种记号各自与其渲染器配对，不互相顶替。 */
+const REVIEW_SHELL_FILL_TOKEN = "{{shellTool}}";
 
 /** 真实 preset 平面（非 shell 部分）：两条平台分支共有的模型面向工具 + 本插件全局工具 + dsh-tool-web。 */
 const BASE_TOOLS = [
@@ -338,7 +345,18 @@ test("g-473 判据 6：模式片段 / 评审 prompt 渲染后零 {{shell}} 残�
       language: "en",
       shellTool: shell,
     });
-    assert.ok(revEn.includes(`- ${shell}, when available`), `${combo.id}/review-en：英文权限说明必须点名解析出的 shell`);
+    // g-496：英文权限说明的措辞真源在 `prompts/review-task.en.md`（不再内联在 ops.ts）。
+    // 断言锚定资产：产物必须点名解析出的 shell，且**资产里确有该渲染位点**
+    // —— 半条一起证明「渲染后点名」不是产物凭空长出该词，而是资产位点被正确替换。
+    assert.ok(revEn.includes(`${shell} permissions`), `${combo.id}/review-en：英文权限说明必须点名解析出的 shell`);
+    assert.ok(
+      readCorePromptAsset("review-task", "en").includes(REVIEW_SHELL_FILL_TOKEN),
+      `${combo.id}/review-en：英文资产必须以占位符表达 shell 名（${REVIEW_SHELL_FILL_TOKEN}）`,
+    );
+    assert.ok(
+      readCorePromptAsset("review-task", "zh").includes(REVIEW_SHELL_FILL_TOKEN),
+      `${combo.id}/review-zh：中文资产必须以占位符表达 shell 名（${REVIEW_SHELL_FILL_TOKEN}）`,
+    );
   }
   // 角色 profile 文案：占位符渲染后不得残留，且点名解析结果
   for (const role of ["executor", "collector", "reviewer"] as const) {

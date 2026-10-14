@@ -38,10 +38,12 @@ const hostPrompts = join(repoRoot, "dsh-graph-host/prompts");
 const readMd = (dir: string) =>
   existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith(".md")).sort() : [];
 
-/** 期望的**公共层**资产数（24 提示词 + 2 主管指南，两语言对偶）。
- *  g-496 att-007：GUI 提示词模板（9 类 × zh/en = 18 份）迁入**宿主专属层** ⇒ 公共层仍是 26，
- *  随包总量 = 26 + 18 = 44。两个数各自独立断言（见下），不得互相顶替。 */
-const EXPECTED_ASSET_COUNT = 26;
+/** 期望的**公共层**资产数（24 提示词 + 2 主管指南 + g-496 att-009 五类运行期固定正文
+ *  × zh/en = 10，两语言对偶）。
+ *  g-496 att-007：GUI 提示词模板（9 类 × zh/en = 18 份）迁入**宿主专属层** ⇒ 公共层当时仍是 26；
+ *  att-009 追加 collect/summary/pm/review/attempt-instructions 五对 ⇒ 36。
+ *  随包总量 = 36 + 18 = 54。两个数各自独立断言（见下），不得互相顶替。 */
+const EXPECTED_ASSET_COUNT = 36;
 /** 宿主专属层资产数（g-496 att-007：9 类 GUI 提示词模板 × zh/en）。 */
 const EXPECTED_HOST_ASSET_COUNT = 18;
 /** 随包合并总量（公共层 + 宿主专属层）——**由两层清单相加得出，不硬编码**，
@@ -50,7 +52,7 @@ const EXPECTED_MERGED_ASSET_COUNT = EXPECTED_ASSET_COUNT + EXPECTED_HOST_ASSET_C
 
 // ============================================================ A. 布局不变量
 
-test("g-496 L-A：公共层 26 份 / 宿主专属层 18 份，各自单一源码副本、两层无重名、zh/en 对偶", () => {
+test("g-496 L-A：公共层 36 份 / 宿主专属层 18 份，各自单一源码副本、两层无重名、zh/en 对偶", () => {
   const pub = readMd(publicPrompts);
   const host = readMd(hostPrompts);
 
@@ -161,7 +163,7 @@ test("g-496 L-C：宿主读取按归属分根；宿主专属资产不回落公�
   assert.ok(typeof mod.helpAssetRelativePath === "function", "注册表投影必须可读");
   // 全部注册项都指向合并后的 prompts/ 布局（不再有根级特例）。
   const { HELP_PROMPT_ASSETS } = mod;
-  // g-496 att-007：白名单覆盖**两层合并后的全部**随包资产（公共 26 + 宿主 18 = 44）。
+  // g-496 att-007：白名单覆盖**两层合并后的全部**随包资产（公共 36 + 宿主 18 = 54）。
   assert.equal(HELP_PROMPT_ASSETS.length, EXPECTED_MERGED_ASSET_COUNT,
     `白名单必须覆盖全部 ${EXPECTED_MERGED_ASSET_COUNT} 份随包资产（公共层 + 宿主专属层），实得 ${HELP_PROMPT_ASSETS.length}`);
   for (const name of HELP_PROMPT_ASSETS) {
@@ -267,7 +269,7 @@ test("g-496 L-E：随包 dist/prompts 与两层源码逐字节一致（复制是
   const pubNames = readMd(publicPrompts);
   const hostNames = readMd(hostPrompts);
 
-  // g-496 att-007：随包资产 = 两层合并（公共 26 + 宿主 18 = 44）。
+  // g-496 att-007：随包资产 = 两层合并（公共 36 + 宿主 18 = 54）。
   assert.equal(distNames.length, EXPECTED_MERGED_ASSET_COUNT,
     `随包资产必须恰 ${EXPECTED_MERGED_ASSET_COUNT} 份（公共层 + 宿主专属层），实得 ${distNames.length}`);
   // 合并后的集合必须**精确等于**两层并集（既不漏层，也不多出无源资产）。
@@ -305,4 +307,74 @@ test("g-496 L-E2：发布包脱仓库可运行——任意目录名下读取公�
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ============================================ F. att-009 五类运行期固定正文：单源 + 无双副本
+
+/** att-009 抽出的五类运行期固定正文（公共层，zh/en 对偶）。 */
+const ATT009_ASSETS = ["attempt-instructions", "collect-task", "pm-task", "review-task", "summary-task"] as const;
+
+test("g-496 att-009 F①：五对新资产落在公共层，且与源码逐字节一致（复制是产物、不是第二份维护源）", () => {
+  for (const name of ATT009_ASSETS) {
+    for (const lang of ["zh", "en"] as const) {
+      const file = `${name}.${lang}.md`;
+      assert.ok(existsSync(join(publicPrompts, file)), `公共层必须含 ${file}`);
+      assert.ok(!existsSync(join(hostPrompts, file)), `${file} 不得同时存在于宿主专属层（重复所有权）`);
+      assert.equal(
+        readFileSync(join(distRoot, "prompts", file), "utf8"),
+        readFileSync(join(publicPrompts, file), "utf8"),
+        `${file}：随包产物必须与其公共层源码逐字节一致`,
+      );
+    }
+  }
+});
+
+test("g-496 att-009 F②：代码侧不得留固定正文第二副本（措辞真源唯一 = 公共层 .md）", async () => {
+  const opsSrc = readFileSync(join(repoRoot, "core", "ops.ts"), "utf8");
+  const hostSrc = readFileSync(join(repoRoot, "dsh-graph-host", "index.js"), "utf8");
+
+  /** 取资产里「非标题、非空、非占位符行」的正文行，逐行回查代码是否仍有同字面量副本。 */
+  const proseLines = (file: string) =>
+    readFileSync(join(publicPrompts, file), "utf8")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length >= 18 && !l.startsWith("#") && !l.startsWith("<!--") && !l.includes("{{"));
+
+  // 中文资产回查 core/ops.ts 与宿主；英文资产只回查 core（宿主英文渲染器本就不含这些长句）。
+  for (const name of ["collect-task", "pm-task", "review-task", "summary-task"] as const) {
+    for (const line of proseLines(`${name}.zh.md`)) {
+      assert.ok(!opsSrc.includes(line), `${name}.zh.md 的正文在 core/ops.ts 中仍有副本：${line.slice(0, 48)}`);
+    }
+  }
+  // attempt-instructions：短语由代码按 marker 取用（合法引用），但**整行字面量**不得再出现在宿主源码里。
+  for (const line of proseLines("attempt-instructions.zh.md")) {
+    assert.ok(!hostSrc.includes(line),
+      `attempt-instructions.zh.md 的正文在宿主源码中仍有第二副本：${line.slice(0, 48)}`);
+  }
+});
+
+test("g-496 att-009 F③：attempt-instructions 短语表齐备 —— 资产 marker 与代码键一一对应", () => {
+  const hostSrc = readFileSync(join(repoRoot, "dsh-graph-host", "index.js"), "utf8");
+  const assetKeys = [...readFileSync(join(publicPrompts, "attempt-instructions.zh.md"), "utf8")
+    .matchAll(/^<!--\s*dsh-graph:phrase:([A-Za-z0-9_.-]+)\s*-->\s*$/gm)].map((m) => m[1]);
+
+  assert.ok(assetKeys.length >= 19, `attempt-instructions 短语数应 ≥19，实得 ${assetKeys.length}`);
+  assert.equal(new Set(assetKeys).size, assetKeys.length, `短语键不得重复：${assetKeys.join(", ")}`);
+
+  for (const key of assetKeys) {
+    assert.ok(hostSrc.includes(`instructions.${key}`),
+      `资产短语 ${key} 必须有代码消费点（instructions.${key}）—— 否则是无人读取的死短语`);
+  }
+  // 纪律段的两个短语走 formatAttemptDiscipline 的局部别名 `instructions`（另一消费点，同样必须存在）。
+  const disciplineKeys = assetKeys.filter((k) => k.startsWith("discipline"));
+  assert.ok(disciplineKeys.length >= 2,
+    `纪律段短语应至少含 disciplineHeading / disciplinePreface，实得 ${disciplineKeys.join(", ")}`);
+  for (const key of disciplineKeys) {
+    assert.ok(new RegExp(`\\binstructions\\.${key}\\b`).test(hostSrc),
+      `纪律段短语 ${key} 必须有消费点（否则是无人读取的死短语）`);
+  }
+  // 中英短语键必须完全一致（双语对偶的机器可核部分）。
+  const enKeys = [...readFileSync(join(publicPrompts, "attempt-instructions.en.md"), "utf8")
+    .matchAll(/^<!--\s*dsh-graph:phrase:([A-Za-z0-9_.-]+)\s*-->\s*$/gm)].map((m) => m[1]);
+  assert.deepEqual(enKeys, assetKeys, "attempt-instructions 中英短语键与顺序必须一致");
 });

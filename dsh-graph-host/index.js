@@ -274,7 +274,7 @@ export function resolveDesignDiagramRequest(rawUrl) {
 // 「提示词模板」页签把**随包发布**的 `prompts/*.md` 逐个只读展示给用户 —— 展示的内容与引擎
 // 实际投递给 Agent 的资产是**同一份产物**（`dist/prompts/`），不复制、不改写、不新增第二份文案。
 // 安全口径（与 g-462 图路由同一形状：单一路径入口、**无任何写路径**）：
-//   ① 白名单是**唯一**入口：只有 `HELP_ASSET_REGISTRY` 登记的文件名（g-496 起 44 个 = 22 个资产
+//   ① 白名单是**唯一**入口：只有 `HELP_ASSET_REGISTRY` 登记的文件名（g-496 起 54 个 = 27 个资产
 //      × zh/en）可被读取，其余一律拒绝；清单**不在此处硬编码**（注册表是唯一真源）；
 //   ② 未知名 → 404；目录穿越（`../`、绝对路径）、反斜杠、URL 编码变体（`%2e%2e`、`%00`）、
 //      非 `.md` 后缀 → 400。判定只看 **URL 归一化后的 pathname 尾段**，不做字符串拼接后再就读
@@ -295,10 +295,14 @@ export const HELP_ASSET_ROUTE = "/api/dsh-graph/help/asset";
 const HELP_ASSET_REGISTRY = Object.freeze([
   { name: "agent-teams-contract.en.md", ownership: "public", relativePath: "prompts/agent-teams-contract.en.md" },
   { name: "agent-teams-contract.zh.md", ownership: "public", relativePath: "prompts/agent-teams-contract.zh.md" },
+  { name: "attempt-instructions.en.md", ownership: "public", relativePath: "prompts/attempt-instructions.en.md" },
+  { name: "attempt-instructions.zh.md", ownership: "public", relativePath: "prompts/attempt-instructions.zh.md" },
   { name: "attempt-report-skeleton.en.md", ownership: "public", relativePath: "prompts/attempt-report-skeleton.en.md" },
   { name: "attempt-report-skeleton.zh.md", ownership: "public", relativePath: "prompts/attempt-report-skeleton.zh.md" },
   { name: "automation-guidance.en.md", ownership: "public", relativePath: "prompts/automation-guidance.en.md" },
   { name: "automation-guidance.zh.md", ownership: "public", relativePath: "prompts/automation-guidance.zh.md" },
+  { name: "collect-task.en.md", ownership: "public", relativePath: "prompts/collect-task.en.md" },
+  { name: "collect-task.zh.md", ownership: "public", relativePath: "prompts/collect-task.zh.md" },
   { name: "discipline.en.md", ownership: "public", relativePath: "prompts/discipline.en.md" },
   { name: "discipline.zh.md", ownership: "public", relativePath: "prompts/discipline.zh.md" },
   { name: "executor-discipline.en.md", ownership: "public", relativePath: "prompts/executor-discipline.en.md" },
@@ -332,8 +336,14 @@ const HELP_ASSET_REGISTRY = Object.freeze([
   { name: "minor-task.zh.md", ownership: "public", relativePath: "prompts/minor-task.zh.md" },
   { name: "no-isolation.en.md", ownership: "public", relativePath: "prompts/no-isolation.en.md" },
   { name: "no-isolation.zh.md", ownership: "public", relativePath: "prompts/no-isolation.zh.md" },
+  { name: "pm-task.en.md", ownership: "public", relativePath: "prompts/pm-task.en.md" },
+  { name: "pm-task.zh.md", ownership: "public", relativePath: "prompts/pm-task.zh.md" },
+  { name: "review-task.en.md", ownership: "public", relativePath: "prompts/review-task.en.md" },
+  { name: "review-task.zh.md", ownership: "public", relativePath: "prompts/review-task.zh.md" },
   { name: "subagent-mode.en.md", ownership: "public", relativePath: "prompts/subagent-mode.en.md" },
   { name: "subagent-mode.zh.md", ownership: "public", relativePath: "prompts/subagent-mode.zh.md" },
+  { name: "summary-task.en.md", ownership: "public", relativePath: "prompts/summary-task.en.md" },
+  { name: "summary-task.zh.md", ownership: "public", relativePath: "prompts/summary-task.zh.md" },
   { name: "supervisor-guide.en.md", ownership: "public", relativePath: "prompts/supervisor-guide.en.md" },
   { name: "supervisor-guide.zh.md", ownership: "public", relativePath: "prompts/supervisor-guide.zh.md" },
   { name: "usage.en.md", ownership: "public", relativePath: "prompts/usage.en.md" },
@@ -881,6 +891,41 @@ function executorDisciplineTemplate(language = "zh") {
  *  故两侧占位符**多重集**可被自动逐项比对。 */
 function fillExecutorDisciplineTemplate(lines, { goal, attempt }) {
   return lines.map((line) => line.replace(/\{goal\}/g, goal).replace(/\{attempt\}/g, attempt));
+}
+
+/** g-496：attempt 定位固定正文的唯一真源 = `prompts/attempt-instructions.<lang>.md`。
+ *
+ *  该资产以 `<!-- dsh-graph:phrase:<key> -->` 定界注释把**同一条正文**切成若干命名片段，
+ *  使代码可以**逐片段**取用（定位三行 / 覆盖声明的固定句 / 状态字段契约 / 通用纪律前言），
+ *  而不必把整段拼装顺序搬进资产、也不必在代码里留第二份中文副本。
+ *
+ *  为什么用注释定界而不是整段模板：attempt prompt 的**区块顺序与条件逻辑**（哪些段有值、
+ *  何时插入 modeStrategy / history / 骨架）是**装配逻辑**，按 brief 须留在代码；只有「措辞」
+ *  下沉。定界注释对 prompt 产物**不可见**（读取时按标记切分并丢弃标记行）。
+ *
+ *  读取失败 fail-closed（`requirePromptAsset` 抛错，绝不静默降级为内置文本）。 */
+function attemptInstructionsPhrases(language = "zh") {
+  const lang = normalizePromptLanguage(language);
+  if (_attemptInstructionPhrases[lang]) return _attemptInstructionPhrases[lang];
+  const raw = requirePromptAsset("attempt-instructions", lang).replace(/\r\n/g, "\n");
+  const phrases = {};
+  const re = /^<!--\s*dsh-graph:phrase:([A-Za-z0-9_.-]+)\s*-->\s*$/gm;
+  const marks = [...raw.matchAll(re)];
+  for (let i = 0; i < marks.length; i++) {
+    const key = marks[i][1];
+    const start = marks[i].index + marks[i][0].length;
+    const end = i + 1 < marks.length ? marks[i + 1].index : raw.length;
+    phrases[key] = raw.slice(start, end).replace(/^\n+/, "").replace(/\n+$/, "");
+  }
+  _attemptInstructionPhrases[lang] = phrases;
+  return phrases;
+}
+const _attemptInstructionPhrases = {};
+
+/** g-496：phrase 片段里的 `{{name}}` 回填（只认双花括号、不递归展开、未提供键替换为空串）。 */
+function fillPhrase(text, vars) {
+  return String(text ?? "").replace(/\{\{([A-Za-z0-9_.-]+)\}\}/g, (whole, name) =>
+    Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : "");
 }
 
 /** g-493 / g-495：`graph_help(topic)` 的主题抽取（纯函数，返回 null 表示该主题不存在）。
@@ -1484,10 +1529,13 @@ function historicalPromptBlock(title, section) {
 }
 
 function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection }) {
+  // g-496：本段「标题 + 空行 + 前言」的措辞唯一真源 = `prompts/attempt-instructions.zh.md`
+  //（disciplineHeading / disciplinePreface 两个短语片段）；代码不再留第二份副本。
+  const instructions = attemptInstructionsPhrases("zh");
   const lines = [
-    "## 通用执行纪律",
+    instructions.disciplineHeading,
     "",
-    "以下内容是通用纪律与环境约束，不产生本次任务 action；本次 action 只来自当前 brief/directive。",
+    instructions.disciplinePreface,
   ];
   const extra = promptText(subagentPromptSection);
   if (extra) {
@@ -1625,12 +1673,16 @@ export function formatAttemptPrompt({
   const goalValue = promptText(goal) || ATTEMPT_PROMPT_MISSING;
   const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
   const context = promptText(targetContext);
+  // g-496：attempt 定位段的**固定措辞**唯一真源 = `prompts/attempt-instructions.zh.md`；
+  // 代码只注入变量（任务类型标签、history 提名、目标/attempt id、goalRel 与两种尾注）。
+  const instructions = attemptInstructionsPhrases("zh");
   const positioning = [
-    "【本次任务定位】这是一次 " + taskTypeLabel + " 任务；以下仅『本次 attempt brief/directive』为唯一 action 来源；" + historyNotice + "为约束/背景，仅供理解候选设计与禁项，不产生新任务。",
-    "你是 dsh-graph 目标 " + goalValue + " 的执行 attempt " + attemptValue + "。",
-    context
-      ? "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "（目标描述与质量判据已在下方基于当前快照内联，请直接依据执行；如需历史评论/台账可按需查阅，无需无条件重读全文）。"
-      : "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "——用 read 工具读它，不要自己猜路径。",
+    fillPhrase(instructions.positioningLine1, { taskTypeLabel, historyNotice }),
+    fillPhrase(instructions.positioningLine2, { goal: goalValue, attempt: attemptValue }),
+    fillPhrase(
+      context ? instructions.goalRelInlined : instructions.goalRelPlain,
+      { goalRel: promptText(goalRel) || ATTEMPT_PROMPT_MISSING },
+    ),
   ].join("\n");
 
   const dedupedItems = dedupBriefDirective(
@@ -1640,25 +1692,25 @@ export function formatAttemptPrompt({
     { briefNote: briefSourceNote(briefSource) },
   );
   const current = [
-    "## 本次 attempt brief/directive",
+    instructions.briefHeading,
     "",
-    "唯一 action 来源：以下两项当前数据；历史 handoff、卡片和通用纪律均不产生新任务。",
-    "brief 优先于 directive：brief 是当前任务的直接描述，directive 是目标文件中的背景指令；两者冲突以 brief 为准。",
+    instructions.briefOnlySource,
+    instructions.briefPriority,
     "",
     ...dedupedItems,
   ];
-  if (context) current.push("", "目标背景（来自当前 goal.md，仅供理解，不产生 action）", protectPromptMarkers(context));
+  if (context) current.push("", instructions.briefContextLabel, protectPromptMarkers(context));
 
   const override = [
-    "## 覆盖声明",
+    instructions.overrideHeading,
     "",
-    "覆盖声明：本段与上文 handoff 不一致处，一律以本段为准（列出覆盖点：task_type、baseline_commit、source_attempt、acceptance_items）。",
-    "- 任务类型（当前 attempt 数据）：" + taskTypeFact(taskType),
-    currentFactLine("- 权威基线 commit（当前 attempt 数据）：", baselineCommit, "baseline_commit", "没有可用基线 commit"),
-    currentFactLine("- 真正前序 attempt 身份（当前 attempt 数据）：", sourceAttempt, "source_attempt", "没有可用的候选/来源 attempt；当前 attempt 不计为前序来源"),
-    acceptanceFactLine(acceptanceItems),
-    "以上字段由 supervisor 通过独立参数直接传入；不从 brief/directive、handoff 或卡片截取/推断。",
-    "- 历史 handoff：" + (handoff ? "已提供（下方仅作背景）" : "未提供（当前目标没有已确认 handoff，故不注入历史 handoff 区块）"),
+    instructions.overrideRule,
+    fillPhrase(instructions.overrideTaskType, { taskTypeLabel: taskTypeFact(taskType) }),
+    fillPhrase(instructions.overrideBaseline, { baselineFact: factValue(currentFactLine("", baselineCommit, "baseline_commit", "没有可用基线 commit")) }),
+    fillPhrase(instructions.overrideSourceAttempt, { sourceAttemptFact: factValue(currentFactLine("", sourceAttempt, "source_attempt", "没有可用的候选/来源 attempt；当前 attempt 不计为前序来源")) }),
+    fillPhrase(instructions.overrideAcceptance, { acceptanceFact: factValue(acceptanceFactLine(acceptanceItems)) }),
+    instructions.overrideProvenance,
+    fillPhrase(instructions.overrideHandoff, { handoffState: handoff ? "已提供（下方仅作背景）" : "未提供（当前目标没有已确认 handoff，故不注入历史 handoff 区块）" }),
   ].join("\n");
 
   const history = [];
@@ -1666,11 +1718,28 @@ export function formatAttemptPrompt({
   if (handoffBlock) history.push(handoffBlock);
   history.push(historicalPromptBlock("## 历史卡片", cards));
   const discipline = formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection });
-  const structuredStateInstruction = "【结构化状态字段】每次调用 graph_report_status 除 status 外必须传 state，且只能是 working、blocked、done、error；看板状态判定优先读取该字段，status 文本仅供展示。";
+  const structuredStateInstruction = instructions.structuredState;
   // g-374 F6：交回报文骨架 = 注入文本的**尾注**（单一真源 core/ops.ts；剥离本块后其余字节与基线全同）。
   return [positioning, current.join("\n"), modeStrategySection, override, ...history, structuredStateInstruction, discipline, ATTEMPT_PROMPT_WARNING, formatAttemptReportSkeleton("zh")]
     .filter((section) => section && section.trim())
     .join("\n\n");
+}
+
+/** g-496：把 `currentFactLine` / `acceptanceFactLine` 渲染出的「标签 + 值」块拆成**纯值块**
+ *  —— 标签措辞已下沉到资产（`{{baselineFact}}` 等占位符所在行自带标签），代码只提供事实值。
+ *  行不存在（空串）时返回空串，占位符随之留空，不产生悬空标签。
+ *
+ *  **保留换行**：这两族渲染器的产物本就可含续行（`未提供原因：…`、逐条验收项），
+ *  故只剥离首行标签、**原样保留**其余行与缩进 —— 不得压缩为单行。 */
+function factValue(line) {
+  const text = String(line ?? "");
+  if (!text) return "";
+  const nl = text.indexOf("\n");
+  const head = nl >= 0 ? text.slice(0, nl) : text;
+  const rest = nl >= 0 ? text.slice(nl + 1) : "";
+  const idx = head.indexOf("：");
+  const value = idx >= 0 ? head.slice(idx + 1) : head;
+  return rest ? value + "\n" + rest : value;
 }
 
 // g-189：只读发现当前 canonical workspace 下约定的 attempt worktree。
