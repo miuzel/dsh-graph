@@ -179,20 +179,40 @@ _merge_prompts_layer "prompts" "公共层" "required"
 _merge_prompts_layer "dsh-graph-host/prompts" "宿主专属层" "optional"
 unset -f _merge_prompts_layer
 
-# 资产总数守卫（g-496）：合并后必须恰为 26 份（24 提示词 + 2 主管指南，两语言对偶）。
-# 若仅移动归属则总数不变；增删资产必须是有意为之并同步更新此数与相关守卫。
-_prompt_asset_count="$(ls dist/prompts/*.md 2>/dev/null | wc -l | tr -d ' ')"
-if [ "$_prompt_asset_count" != "26" ]; then
-  echo "❌ 提示词资产数异常：合并后 dist/prompts/ 有 $_prompt_asset_count 份 .md，期望 26。" >&2
+# 完整性对账（g-496 返工：**不再固定 26**）：合并结果必须与「两层来源文件集合的并集」
+# **逐一相等**（双向）—— 既不得丢资产（包内少），也不得多出无来源的文件（包内多）。
+# 用集合对账取代硬编码计数：后续合并**新合法 host 资产**（如插件层 GUI 模板正文）时
+# 无需再改本脚本里的数字，而任何来源与产物不一致仍必然判红。
+# 注意：同名冲突已在上面 fail-closed，故此处并集不会掩盖重复所有权。
+_prompt_src_list="$(mktemp)"
+{
+  ls "$REPO_ROOT/prompts"/*.md 2>/dev/null || true
+  ls "$REPO_ROOT/dsh-graph-host/prompts"/*.md 2>/dev/null || true
+} | while IFS= read -r p; do [ -e "$p" ] && basename "$p"; done | LC_ALL=C sort > "$_prompt_src_list"
+_prompt_dist_list="$(mktemp)"
+ls dist/prompts/*.md 2>/dev/null | while IFS= read -r p; do basename "$p"; done | LC_ALL=C sort > "$_prompt_dist_list"
+if ! diff -u "$_prompt_src_list" "$_prompt_dist_list" > /dev/null; then
+  echo "❌ 提示词资产完整性对账失败：产物 dist/prompts/ 与「公共层 + 宿主专属层」来源集合不一致。" >&2
+  diff -u "$_prompt_src_list" "$_prompt_dist_list" | sed 's/^/   /' >&2
+  rm -f "$_prompt_src_list" "$_prompt_dist_list"
   exit 1
 fi
+if [ ! -s "$_prompt_src_list" ]; then
+  echo "❌ 提示词资产完整性对账失败：来源集合为空（两层均无 .md）。" >&2
+  rm -f "$_prompt_src_list" "$_prompt_dist_list"
+  exit 1
+fi
+rm -f "$_prompt_src_list" "$_prompt_dist_list"
 
 # g-462：设计哲学交互图（g-460 定稿的自包含 HTML 产物 + archify 源/静态预览）随包发布；
 # 宿主只读路由 /api/dsh-graph/diagram/<name> 从 dist/diagrams/ 现读（白名单仅两张 HTML）。
 cp -r dsh-graph-host/diagrams dist/diagrams
 
 # 从 dsh-graph-host/package.json 生成 dist/package.json：
-# 移除 scripts（构建已在仓库根完成），添加 main 和 exports（指向 dist 内产物）
+# 移除 scripts（构建已在仓库根完成），添加 main 和 exports（指向 dist 内产物），
+# 并把 `dsh.promptAssets.layout` 从 `source` 改写为 **`merged`** —— 这是发布形态的
+# **显式布局标记**（g-496 返工）：运行期只读该标记取根，**不以任何资产/目录的存在性**推断
+# 形态（存在性判别是 fail-open 来源：包内缺资产时会被邻接源码树掩盖）。
 node -e '
   const src = JSON.parse(require("fs").readFileSync("dsh-graph-host/package.json", "utf8"));
   delete src.scripts;
@@ -203,6 +223,8 @@ node -e '
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   };
+  // 发布形态标记：公共层与宿主专属层已由本脚本**合并**进包内单一 `./prompts/`。
+  src.dsh = Object.assign({}, src.dsh, { promptAssets: { layout: "merged", dir: "./prompts" } });
   require("fs").writeFileSync("dist/package.json", JSON.stringify(src, null, 2) + "\n");
 '
 cd "$REPO_ROOT"

@@ -279,44 +279,45 @@ export function resolveDesignDiagramRequest(rawUrl) {
 //      非 `.md` 后缀 → 400。判定只看 **URL 归一化后的 pathname 尾段**，不做字符串拼接后再就读
 //      （即使判定失误，也只会在 `prompts/` 白名单目录里按白名单名读取）。
 export const HELP_ASSET_ROUTE = "/api/dsh-graph/help/asset";
-/** g-496：帮助可达资产的**唯一 name → relativePath 注册**（冻结真源）。
+/** g-496：帮助可达资产的**唯一 name → relativePath 注册**（冻结真源），并**携带所有权**。
  *
  *  发布布局（g-496 起）：**全部**提示词资产（公共层 + 宿主专属层）由 `build.sh` 合并进单一的
  *  包内 `prompts/` 目录 ⇒ 注册路径统一为 `prompts/<name>`。不再有根级资产。
  *  （此前 `supervisor-guide.{zh,en}.md` 位于包根，故注册需相对路径以表达两类位置；合并后
  *  该特例消失，但注册表作为**唯一 name → path 真源**的职责不变。）
  *
- *  注册同时是**白名单**与**目录投影**的单一来源：`HELP_PROMPT_ASSETS` 由它投影（顺序即展示
- *  顺序），处理器按 `relativePath` 读取。**不持有第二份清单** —— 新增一份资产 = 在此加一行。
+ *  注册同时是**白名单**、**目录投影**与**所有权归属**的单一来源（g-496 返工）：
+ *  `HELP_PROMPT_ASSETS` 由它投影（顺序即展示顺序），处理器按 `relativePath` 读取，
+ *  reader 按 `ownership` 决定源形态取根。**不持有第二份清单** —— 新增一份资产 = 在此加一行。
  *  安全口径不变：`relativePath` 只允许**受控的两类形态**（`<name>` 或 `prompts/<name>`），
  *  且 `<name>` 仍须过 `HELP_ASSET_NAME_RE`；`..` / 绝对路径 / 反斜杠一律拒绝（结构性守卫断言）。 */
 const HELP_ASSET_REGISTRY = Object.freeze([
-  { name: "agent-teams-contract.en.md", relativePath: "prompts/agent-teams-contract.en.md" },
-  { name: "agent-teams-contract.zh.md", relativePath: "prompts/agent-teams-contract.zh.md" },
-  { name: "attempt-report-skeleton.en.md", relativePath: "prompts/attempt-report-skeleton.en.md" },
-  { name: "attempt-report-skeleton.zh.md", relativePath: "prompts/attempt-report-skeleton.zh.md" },
-  { name: "automation-guidance.en.md", relativePath: "prompts/automation-guidance.en.md" },
-  { name: "automation-guidance.zh.md", relativePath: "prompts/automation-guidance.zh.md" },
-  { name: "discipline.en.md", relativePath: "prompts/discipline.en.md" },
-  { name: "discipline.zh.md", relativePath: "prompts/discipline.zh.md" },
-  { name: "executor-discipline.en.md", relativePath: "prompts/executor-discipline.en.md" },
-  { name: "executor-discipline.zh.md", relativePath: "prompts/executor-discipline.zh.md" },
-  { name: "guide-hint.en.md", relativePath: "prompts/guide-hint.en.md" },
-  { name: "guide-hint.zh.md", relativePath: "prompts/guide-hint.zh.md" },
-  { name: "help.en.md", relativePath: "prompts/help.en.md" },
-  { name: "help.zh.md", relativePath: "prompts/help.zh.md" },
-  { name: "minor-task.en.md", relativePath: "prompts/minor-task.en.md" },
-  { name: "minor-task.zh.md", relativePath: "prompts/minor-task.zh.md" },
-  { name: "no-isolation.en.md", relativePath: "prompts/no-isolation.en.md" },
-  { name: "no-isolation.zh.md", relativePath: "prompts/no-isolation.zh.md" },
-  { name: "subagent-mode.en.md", relativePath: "prompts/subagent-mode.en.md" },
-  { name: "subagent-mode.zh.md", relativePath: "prompts/subagent-mode.zh.md" },
-  { name: "supervisor-guide.en.md", relativePath: "prompts/supervisor-guide.en.md" },
-  { name: "supervisor-guide.zh.md", relativePath: "prompts/supervisor-guide.zh.md" },
-  { name: "usage.en.md", relativePath: "prompts/usage.en.md" },
-  { name: "usage.zh.md", relativePath: "prompts/usage.zh.md" },
-  { name: "worktree.en.md", relativePath: "prompts/worktree.en.md" },
-  { name: "worktree.zh.md", relativePath: "prompts/worktree.zh.md" },
+  { name: "agent-teams-contract.en.md", ownership: "public", relativePath: "prompts/agent-teams-contract.en.md" },
+  { name: "agent-teams-contract.zh.md", ownership: "public", relativePath: "prompts/agent-teams-contract.zh.md" },
+  { name: "attempt-report-skeleton.en.md", ownership: "public", relativePath: "prompts/attempt-report-skeleton.en.md" },
+  { name: "attempt-report-skeleton.zh.md", ownership: "public", relativePath: "prompts/attempt-report-skeleton.zh.md" },
+  { name: "automation-guidance.en.md", ownership: "public", relativePath: "prompts/automation-guidance.en.md" },
+  { name: "automation-guidance.zh.md", ownership: "public", relativePath: "prompts/automation-guidance.zh.md" },
+  { name: "discipline.en.md", ownership: "public", relativePath: "prompts/discipline.en.md" },
+  { name: "discipline.zh.md", ownership: "public", relativePath: "prompts/discipline.zh.md" },
+  { name: "executor-discipline.en.md", ownership: "public", relativePath: "prompts/executor-discipline.en.md" },
+  { name: "executor-discipline.zh.md", ownership: "public", relativePath: "prompts/executor-discipline.zh.md" },
+  { name: "guide-hint.en.md", ownership: "public", relativePath: "prompts/guide-hint.en.md" },
+  { name: "guide-hint.zh.md", ownership: "public", relativePath: "prompts/guide-hint.zh.md" },
+  { name: "help.en.md", ownership: "public", relativePath: "prompts/help.en.md" },
+  { name: "help.zh.md", ownership: "public", relativePath: "prompts/help.zh.md" },
+  { name: "minor-task.en.md", ownership: "public", relativePath: "prompts/minor-task.en.md" },
+  { name: "minor-task.zh.md", ownership: "public", relativePath: "prompts/minor-task.zh.md" },
+  { name: "no-isolation.en.md", ownership: "public", relativePath: "prompts/no-isolation.en.md" },
+  { name: "no-isolation.zh.md", ownership: "public", relativePath: "prompts/no-isolation.zh.md" },
+  { name: "subagent-mode.en.md", ownership: "public", relativePath: "prompts/subagent-mode.en.md" },
+  { name: "subagent-mode.zh.md", ownership: "public", relativePath: "prompts/subagent-mode.zh.md" },
+  { name: "supervisor-guide.en.md", ownership: "public", relativePath: "prompts/supervisor-guide.en.md" },
+  { name: "supervisor-guide.zh.md", ownership: "public", relativePath: "prompts/supervisor-guide.zh.md" },
+  { name: "usage.en.md", ownership: "public", relativePath: "prompts/usage.en.md" },
+  { name: "usage.zh.md", ownership: "public", relativePath: "prompts/usage.zh.md" },
+  { name: "worktree.en.md", ownership: "public", relativePath: "prompts/worktree.en.md" },
+  { name: "worktree.zh.md", ownership: "public", relativePath: "prompts/worktree.zh.md" },
 ]);
 
 /** 白名单（名字清单，投影自注册表；**不是**第二份清单）。 */
@@ -694,69 +695,115 @@ export function resolvePromptLanguage(override = "follow", ctx = null) {
 }
 
 // ===== g-496：提示词资产读取（**按所有权分目录**，无跨目录静默回落）=====
-// 负责人 2026-10-14 跨宿主资产所有权裁定：提示词按**语义归属**分层，不按「谁当前投递」划分。
+// 负责人 2026-10-14 跨宿主资产所有权裁定，2026-10-15 返工细化：提示词按**语义归属**分层，
+// 不按「谁当前投递」划分，也**不以任何资产/目录的存在性**推断当前形态。
 //
 //   · **公共层** `<repo>/prompts/` —— 跨宿主共用正文（目标/attempt 纪律、人工 gate、证据/报告
-//     格式、Agent Teams 契约、模式策略、自动化指导、主管技能指南）。适配器（本插件、未来的
-//     Claude / pi-ai / Codex 插件、独立 MCP）都依赖它，它**不反向依赖任何宿主**。
-//   · **宿主专属层** `dsh-graph-host/prompts/` —— DSH 会话/section/GUI 动作语义专属正文。
+//     格式、Agent Teams 契约、模式策略、自动化指导、主管技能指南、通用 graph 模块说明）。
+//     适配器（本插件、未来的 Claude / pi-ai / Codex 插件、独立 MCP）都依赖它，它**不反向依赖
+//     任何宿主**。
+//   · **宿主专属层** `dsh-graph-host/prompts/` —— 仅真正绑定 DSH 会话/section/GUI 模板语义的正文。
 //
-// 发布形态下两层由 `build.sh` **合并**为单一 `dist/prompts/`（见该脚本的同名冲突 fail-closed
-// 检测）。因此运行期的读取根只有**一个**：`./prompts/`（包内）。
+// **形态由显式布局标记决定**（`package.json` 的 `dsh.promptAssets.layout`，无新依赖）：
+//   · `"source"`（`dsh-graph-host/package.json`，即仓库内直跑）—— 两层物理分离，按归属取根：
+//     公共资产走 `publicDir`（`../prompts`）、宿主专属走 `hostDir`（`./prompts`）；
+//   · `"merged"`（`build.sh` 生成到 `dist/package.json`）—— 两层已合并进包内单一 `dir`
+//     （`./prompts`），**所有**资产都从该根读。
 //
-// **源形态**（直接在仓库内跑 `dsh-graph-host/index.js`）两层物理分离 ⇒ 按归属取对应根：
-// 公共资产走 `../prompts/`、宿主专属资产走 `./prompts/`。宿主专属资产**不回落到公共层**
-// （那会把「漏了宿主资产」伪装成「读到了公共资产」，掩盖所有权错误）。
-/** 本模块是否处于**发布形态**（`dist/` 包内的合并副本）。
+// ⚠️ 两条铁律（g-496 返工核心，均由回归用例钉住）：
+//   ① **发布上下文绝不回读源码**：标记为 `merged` 时，包内缺文件、整个 `prompts/` 缺失、
+//      乃至用于判别的文件缺失，都**只**导致读取失败 ⇒ 由 `requirePromptAsset` fail-closed 抛错；
+//      绝不回落到邻接的源码树（把 `dist/` 放在仓库内时 `../prompts/` 会命中源码 ⇒ 曾把
+//      「包内漏资产」伪装成「读到了」）。
+//   ② **标记缺失或非法即明确失败**：解析不到（无清单 / 无 `dsh.promptAssets`）、`layout` 取值
+//      非 `source`/`merged`、或该形态所需目录字段缺失 —— 一律视为**发布上下文中的配置损坏**，
+//      抛错暴露，**绝不静默偷归 source**（否则删一个字段就能把发布形态降级成读源码）。
+//
+// 归属的**唯一真源**是 `HELP_ASSET_REGISTRY`（见下）—— 注册表按资产登记所有权，
+// reader / catalog / HTTP 处理器全部从它取根取路径，**不存在第二份清单**。
+
+/** 读取并校验布局标记；配置损坏 ⇒ 抛错（**不**静默回落 source）。
  *
- *  判据是**单一、确定的**构造事实，不是目录搜索、也不是 cwd 探测：发布形态下
- *  `./prompts/` 是构建**合并**两层后的完整资产层，其中必然含公共层资产
- *  `agent-teams-contract.zh.md`；源形态下 `dsh-graph-host/prompts/` 只放宿主专属资产，
- *  该文件必然**不在**。（`agent-teams-contract` 属公共层，任何归属调整都会让本判据先红，
- *  不会静默漂移。）
- *
- *  ⚠️ 这**不是**「回落到源码仓库」的开关：发布形态一旦判真，公共资产只读包内
- *  `./prompts/`，**绝不**再去看 `../prompts/` —— 否则把 `dist/` 放在源码仓库内时，
- *  `../prompts/` 会命中源码树，使「包内缺资产」被源码掩盖（fail-open）。缺资产必须
- *  fail-closed 暴露。 */
-function isPublishedPromptLayout() {
+ *  返回 `{ layout, dir }`：`dir` 是**待拼接资产名的根 URL**。
+ *  源形态按归属分层（`dirs` 提供两层的根），发布形态单一根。 */
+function resolvePromptAssetRoots() {
+  const manifestUrl = new URL("./package.json", import.meta.url);
+  let manifest;
   try {
-    return existsSync(new URL("./prompts/agent-teams-contract.zh.md", import.meta.url));
-  } catch {
-    return false;
+    manifest = JSON.parse(readFileSync(manifestUrl, "utf8"));
+  } catch (cause) {
+    throw new Error(`dsh-graph prompt asset layout unreadable: package.json (${manifestUrl.href})`);
   }
+  const marker = manifest?.dsh?.promptAssets;
+  if (!marker || typeof marker !== "object") {
+    throw new Error("dsh-graph prompt asset layout marker missing: dsh.promptAssets in package.json");
+  }
+  const { layout } = marker;
+  if (layout === "merged") {
+    const dir = marker.dir;
+    if (typeof dir !== "string" || dir.length === 0) {
+      throw new Error('dsh-graph prompt asset layout invalid: dsh.promptAssets.dir required when layout is "merged"');
+    }
+    // 发布形态：唯一根，**绝不**回看源码层（dir 由 build 写死为包内 ./prompts）。
+    return { layout, dirs: { public: dir, host: dir } };
+  }
+  if (layout === "source") {
+    const { publicDir, hostDir } = marker;
+    if (typeof publicDir !== "string" || typeof hostDir !== "string" || !publicDir || !hostDir) {
+      throw new Error('dsh-graph prompt asset layout invalid: dsh.promptAssets.publicDir/hostDir required when layout is "source"');
+    }
+    return { layout, dirs: { public: publicDir, host: hostDir } };
+  }
+  throw new Error(`dsh-graph prompt asset layout invalid: unknown layout ${JSON.stringify(layout)}`);
+}
+
+/** 资产根解析结果（进程内缓存——布局标记是**包级常量**，运行期不会变）。
+ *  缓存使每次读取不必重解析 JSON；损坏标记仍会抛错（失败不被缓存掩盖）。 */
+let _promptAssetRootsCache = null;
+function promptAssetRoots() {
+  if (_promptAssetRootsCache === null) _promptAssetRootsCache = resolvePromptAssetRoots();
+  return _promptAssetRootsCache;
+}
+
+/** 某资产名在**当前形态**下的根目录（相对 `import.meta.url`）。
+ *
+ *  归属取自注册表（唯一真源）；未登记的名字按**公共层**处理（公共层是默认归属）。
+ *  源形态下按归属选 `publicDir` / `hostDir`；发布形态下两层同根。 */
+function promptAssetDirFor(name) {
+  const roots = promptAssetRoots();
+  if (roots.layout === "merged") return roots.dirs.public;
+  return assetOwnership(name) === "host" ? roots.dirs.host : roots.dirs.public;
 }
 
 function readPromptAsset(name, language = "zh") {
   const lang = normalizePromptLanguage(language);
-  // 归属决定根：宿主专属资产只在插件内 `./prompts/`（**不回落**公共层，否则漏装会被
-  // 「读到了公共资产」掩盖）；公共资产按形态取根 —— 发布形态 `./prompts/`（合并层），
-  // 源形态 `../prompts/`（插件外的公共层）。
-  const candidates = isHostOwnedPromptAsset(name)
-    ? [`./prompts/${name}.${lang}.md`]
-    : isPublishedPromptLayout()
-      ? [`./prompts/${name}.${lang}.md`]
-      : [`../prompts/${name}.${lang}.md`];
-  for (const candidate of candidates) {
-    try { return readFileSync(new URL(candidate, import.meta.url), "utf8"); } catch { /* 试下一个 */ }
+  // 单根、单候选：形态与归属共同决定唯一路径，**没有**「失败就换另一个根」的回落链
+  // （那正是 fail-open 的来源）。
+  const dir = promptAssetDirFor(name);
+  const rel = `${dir.replace(/\/+$/, "")}/${name}.${lang}.md`;
+  try {
+    return readFileSync(new URL(rel, import.meta.url), "utf8");
+  } catch {
+    return ""; // 由 requirePromptAsset fail-closed 抛错（含包内缺资产 / 目录缺失）
   }
-  return "";
 }
 
-/** 宿主专属提示词资产名（**唯一清单**，非第二份白名单）。
+/** 某资产名的**所有权**（`"public"` | `"host"`）—— 取自**唯一注册表** `HELP_ASSET_REGISTRY`。
  *
- *  这些正文按负责人裁定归 DSH 宿主适配器层：其内容绑定 DSH 的会话/模块/section 语义。
- *  未登记的名字一律视为**公共层**资产（公共层是默认归属，新增公共资产无需改这里）。
+ *  g-496 返工：所有权不再另持第二份清单（原 `HOST_OWNED_PROMPT_ASSETS` 已删除）——
+ *  reader / catalog / HTTP 处理器与所有权**同源**，任何归属调整只改注册表一处，
+ *  不可能出现「清单说 host、注册表说 public」的分裂。
  *
- *  布局不变量：源形态下公共层位于插件**外**（`<repo>/prompts/`）、宿主专属在插件**内**
- *  （`dsh-graph-host/prompts/`）。若宿主专属资产被误放进公共层，读取会失败 ⇒ fail-closed
- *  暴露归属错误，而不是静默读到。 */
-function isHostOwnedPromptAsset(name) {
-  return HOST_OWNED_PROMPT_ASSETS.has(name);
+ *  未登记的名字一律视为**公共层**资产（公共层是默认归属，新增公共资产无需登记归属；
+ *  只有真正绑定 DSH 宿主语义的资产才需要登记为 host）。
+ *
+ *  当前**没有任何资产是 host**：`help` 内容是通用 graph 模块说明（工具表/主题索引），
+ *  并非 DSH 会话 API 专属，按负责人 2026-10-15 裁定统一归**公共层**。后续真正属于
+ *  插件层的 GUI 模板正文再登记为 host。 */
+function assetOwnership(name) {
+  const hit = HELP_ASSET_REGISTRY.find((e) => e.name === `${name}.zh.md` || e.name === `${name}.en.md`);
+  return hit?.ownership === "host" ? "host" : "public";
 }
-const HOST_OWNED_PROMPT_ASSETS = new Set(Object.freeze([
-  "help",
-]));
 
 function requirePromptAsset(name, language = "zh") {
   const content = readPromptAsset(name, language);

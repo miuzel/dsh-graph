@@ -131,15 +131,23 @@ test("g-496 L-B：core 只依赖公共层——源码无宿主插件路径，且
 test("g-496 L-C：宿主读取按归属分根；宿主专属资产不回落公共层（漏包即暴露）", async () => {
   const hostSrc = readFileSync(join(repoRoot, "dsh-graph-host/index.js"), "utf8");
 
-  // ① 归属清单存在且可读（唯一清单，非第二份白名单）。
-  assert.match(hostSrc, /HOST_OWNED_PROMPT_ASSETS\s*=\s*new Set\(/,
-    "宿主必须有明确的宿主专属资产清单");
-  // ② 公共资产在源形态走插件外的 `../prompts/`。
-  assert.ok(hostSrc.includes("`../prompts/${name}.${lang}.md`"),
-    "宿主读取公共资产必须走 ../prompts/（公共层在插件外）");
-  // ③ 宿主专属走插件内 `./prompts/`，且**不得**并列给出公共层回落 —— 回落会把
-  //    「漏了宿主资产」伪装成「读到了公共资产」，掩盖所有权错误。
-  assert.ok(hostSrc.includes("`./prompts/${name}.${lang}.md`"), "宿主专属资产必须走 ./prompts/");
+  // ① g-496 返工：所有权**只**由唯一注册表携带，**不得**再另持第二份清单。
+  assert.ok(!/HOST_OWNED_PROMPT_ASSETS\s*=\s*new Set\(/.test(hostSrc),
+    "不得再持有第二份宿主专属清单（所有权必须与注册表同源）");
+  assert.match(hostSrc, /ownership\s*===\s*"host"/,
+    "reader 的归属判定必须读注册表条目的 ownership 字段");
+  // ② g-496 返工：形态由**显式布局标记**决定，**不得**以资产/目录存在性推断形态
+  //    （存在性判别是 fail-open 来源：包内缺资产会被邻接源码树掩盖）。
+  assert.ok(!/isPublishedPromptLayout/.test(hostSrc),
+    "不得再用资产存在性判别发布形态（必须以显式布局标记判别）");
+  assert.ok(!/existsSync\(new URL\("\.\/prompts/.test(hostSrc),
+    "不得以包内资产存在性作为形态判据");
+  assert.match(hostSrc, /dsh\.promptAssets|promptAssets/, "读取必须依赖显式布局标记");
+  assert.match(hostSrc, /"merged"/, "必须识别发布态 merged 布局");
+  assert.match(hostSrc, /"source"/, "必须识别源码态 source 布局");
+  // ③ 读取必须**单根单候选**：形态+归属决定唯一路径，不得有「失败就换另一个根」的回落链。
+  assert.ok(!/for \(const candidate of candidates\)/.test(hostSrc),
+    "读取不得保留多候选回落链（g-496 返工：发布上下文绝不回读源码）");
 
   // ④ 真实行为：在**发布合并布局**（单一 prompts/）下，宿主读取两类资产都成功。
   const mod: any = await import(pathToFileURL(join(distRoot, "index.js")).href);

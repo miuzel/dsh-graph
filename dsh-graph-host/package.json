@@ -59,6 +59,11 @@
         "@deepseek-ai/dsh-client-ui-primitives",
         "@deepseek-ai/dsh-client-ui-sidebar-right"
       ]
+    },
+    "promptAssets": {
+      "layout": "source",
+      "publicDir": "../prompts",
+      "hostDir": "./prompts"
     }
   }
 }

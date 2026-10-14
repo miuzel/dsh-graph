@@ -176,6 +176,30 @@ function collectPackageDrift(repoRoot: string): string[] {
   }
   for (const key of Object.keys(source)) {
     if (key === "scripts" || key === "main" || key === "exports") continue;
+    // g-496：`dsh.promptAssets` 是 build **有意改写**的字段（source → merged 布局标记），
+    // 不是「源改了没重建」的漂移面。此处仍**逐字段**核对：除 layout/dir 外其余必须与源一致，
+    // 且版本号漂移检测（本用例核心）不受影响 —— 只是不把文档化的构建变换误判为陈旧。
+    if (key === "dsh") {
+      const srcDsh = (source.dsh ?? {}) as Record<string, unknown>;
+      const builtDsh = (built.dsh ?? {}) as Record<string, unknown>;
+      for (const dshKey of Object.keys(srcDsh)) {
+        if (dshKey === "promptAssets") {
+          const srcPa = (srcDsh.promptAssets ?? {}) as Record<string, unknown>;
+          const builtPa = (builtDsh.promptAssets ?? {}) as Record<string, unknown>;
+          if (builtPa.layout !== "merged") {
+            drift.push(`dist/package.json dsh.promptAssets.layout 必须被改写为 merged，实际 ${JSON.stringify(builtPa.layout)}`);
+          }
+          if (typeof srcPa.layout === "string" && srcPa.layout !== "source") {
+            drift.push(`源 dsh.promptAssets.layout 应为 source，实际 ${JSON.stringify(srcPa.layout)}`);
+          }
+          continue;
+        }
+        if (JSON.stringify(builtDsh[dshKey]) !== JSON.stringify(srcDsh[dshKey])) {
+          drift.push(`dist/package.json dsh.${dshKey} 与源不一致（源改了不重建必红）`);
+        }
+      }
+      continue;
+    }
     if (JSON.stringify(built[key]) !== JSON.stringify(source[key])) {
       drift.push(`dist/package.json 字段 ${key} 与源不一致（源改了不重建必红）：${JSON.stringify(built[key])} != ${JSON.stringify(source[key])}`);
     }
